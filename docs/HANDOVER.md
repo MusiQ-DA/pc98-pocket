@@ -32,29 +32,73 @@ PC-98 for Analogue Pocket プロジェクトの引き継ぎ資料。
 - **SDカード `/Volumes/ANALOGUE` に投入済み**:
   `Cores/hiroya.PCXT-dev/` (全JSON + bitstream.rbf_r)、`Platforms/pcxt.json`
 
-#### 2026-09-07 に修正した不備(投入時に抜けていた点)
+#### B0 第1回 実機テスト: ❌ Load error in core: General error
 
-1. **必須アセット boot.bin が未配置だった。**
-   data.json のスロット1「PCXT BIOS」は `required: true` / `parameters: 0x203`
-   (bit1 = core specific)で、**コア固有アセットディレクトリ**を参照する。
-   純正は `Assets/pcxt/desaster.PCXT/boot.bin` にあるが、我々のコア用は皆無だった。
-   → `Assets/pcxt/hiroya.PCXTDEV/boot.bin` と
-     `Assets/pcxt/hiroya.PCXT-dev/boot.bin` の**両方**に配置した
-     (author.shortname 派生かフォルダ名派生かが未確定のため両建て)。
-   **これ自体がロードエラーの原因になり得るので、以前の実機テスト結果は
-   このアセット欠落込みの結果である可能性がある。**
-2. **SD上の core.json が手編集され、LF・末尾改行なしになっていた。**
-   → `dist/testB0/.../core.json` を正規化して再生成し、SDへ再コピー。
-   なお **純正 desaster.PCXT の JSON も LF**(CRLFではない)。
-   `scripts/package.sh` は CRLF で出力するが TestA で実証済みなのでどちらでも可。
+そして**原因はビットストリームではなくパッケージ側だった**ことが判明した。
+以下3件の不備が同時に存在していた(いずれもロード失敗を説明しうる)。
+
+1. **フォルダ名が `<author>.<shortname>` と一致していなかった(最有力)**
+   - フォルダ `hiroya.PCXT-dev` に対し core.json は author=hiroya /
+     shortname=PCXTDEV → 導出名 `hiroya.PCXTDEV` で**不一致**
+   - **SD内の全278コアを検査した結果、277コアがこの規約を厳守しており、
+     破っていたのは我々のB0コアだけだった**
+   - エラーが出なかった TestA は `hiroya.PC98` / author=hiroya /
+     shortname=PC98 で**一致**していた
+   - → **Pocketはコア識別とアセット解決に `<author>.<shortname>` を使う。
+     フォルダ名を必ずこれに一致させること。**
+2. **必須アセット boot.bin が未配置だった**
+   data.json スロット1「PCXT BIOS」は `required: true` /
+   `parameters: 0x203`(bit1 = core specific)で**コア固有アセットディレクトリ**
+   を参照する。純正は `Assets/pcxt/desaster.PCXT/boot.bin`。我々のコア用は皆無。
+   なお `Assets/pcxt/common/` は**空**で、core specific 指定なので common では届かない。
+3. **data.json の IDE スロット `size_maximum` が `0x80000000`(2GiB)だった**
+   純正リリース版は `0x40000000`(1GiB)。0x80000000 は符号付き32bitで負値になるため、
+   パーサ次第でロード時バリデーションを落としうる。上流 main の新しい値を
+   拾ってしまったものと思われる。**ベースライン検証には不要な差分**。
+
+加えて、SD上の core.json が手編集で LF・末尾改行なしになっていた
+(純正 desaster.PCXT の JSON も LF なので改行コード自体は問題ない)。
+
+#### 対処: testB0b(単一変数化した再パッケージ)
+
+`dist/testB0b/` として作り直し、SDへ投入済み(2026-09-07 01:07)。
+
+- コア名を **`hiroya.PCXTDEV`** に統一(フォルダ名 = author.shortname)
+- **JSONは純正 desaster.PCXT からそのままコピー**し、core.json の
+  `shortname` / `author` / `description` の3行のみ最小編集
+  → data.json の 0x80000000 問題も自動的に解消
+- `Assets/pcxt/hiroya.PCXTDEV/boot.bin` を配置
+- 旧 `hiroya.PCXT-dev`(Cores / Assets 両方)は撤去
+
+**検証済み**:
+- SD全コアで フォルダ名 == author.shortname → 不一致 0 件
+- 純正 desaster.PCXT との差分は **bitstream.rbf_r と core.json の3行のみ**
+  → 実質**ビットストリームだけが変数**の理想的なA/Bになった
+- SD上の rbf_r は dist と byte 一致(コピー健全)
+
+#### B0 のビルド自体は健全(CIレポートで確認済み)
+
+`/private/tmp/bitstream_b0/ap_core.fit.rpt` より:
+
+- Fitter Status: **Successful**、Quartus Prime 18.1.1 Build 646 Lite
+- Logic utilization 12,049 / 18,480 ALM (65%)、RAM 193/308 (63%)、
+  DSP 16/66 (24%)、pins 224/224
+- **Error 0 件 / Critical Warning 0 件**
+- raetroイメージの Quartus は `/opt/intelFPGA/quartus` の**1つだけ**
+  (バージョン取り違えの余地はない)
+
+また、過去の Test 1–3 は「Core not ready to run」「RS: Host commands ignored」
+= **ビットストリームのロードには成功していた**段階のエラーである。
+つまり **raetroビルドのbitstreamは実機でロードできる**ことが既に示されており、
+「raetroイメージが悪い」という仮説の根拠は弱い。
 
 ### B0 実機テストの判定基準
 
 - ✅ BIOS POST 表示 → **我々のビルドパイプラインは健全** → 自作機械層のRTLを
   疑って部分ビセクト → P1へ
-- ❌ 同じエラー(Load error / RS: Host commands ignored)
-  → raetroイメージのQuartus設定・ビルド環境の問題
-  → MacLCソースを raetro でビルドして実機テストする A/B が最短
+- ❌ testB0b でも Load error → パッケージ要因は出し切ったので、
+  次はビルド環境を疑う。MacLCソースを raetro でビルドして実機テストする
+  A/B が最短(MacLCの純正rbfは TestA で動作実績があるため差分が取れる)
 
 ---
 
@@ -134,6 +178,12 @@ PC-98 for Analogue Pocket プロジェクトの引き継ぎ資料。
    検証方法: 先頭非FFバイトが `56 56 56 56 6c 2f` になっていること。
 5. **/Cores/ ルートにファイルが散落するとフレームワークエラーの原因になる**
    (実測: `cp -R dir/ dst/` の書き方ミスで発生)。
+5b. **コアのフォルダ名は `<author>.<shortname>`(core.json の値)と
+   完全一致させること。** 不一致だと "Load error in core: General error" になる。
+   SD内278コア中277コアがこの規約を厳守している(実測)。
+   アセットも `Assets/<platform>/<author>.<shortname>/` で解決される。
+5c. **data.json の `size_maximum` に `0x80000000` 以上を書かない。**
+   符号付き32bitで負値になる。純正PCXTのIDEスロットは `0x40000000`。
 6. **openfpga-PCXTの picorv32 ファームウェア(firmware.vh)はリポジトリ未同梱**。
    RISC-Vツールチェーンで src/firmware/*.c をコンパイルして生成する。
    ベースライン検証用のNOPスタブ(6144×0x00000013)は作成済み
@@ -145,11 +195,11 @@ PC-98 for Analogue Pocket プロジェクトの引き継ぎ資料。
 
 ## 5. 次のセッションの作業リスト(優先順)
 
-1. **B0の実機テスト**(ビルド・パッケージ・SD投入は完了済み。§1参照)
-   - Pocket で `PCXTDEV` を起動し、BIOS POST が出るか確認
+1. **testB0b の実機テスト**(パッケージ修正版。SD投入済み。§1参照)
+   - Pocket で **`PCXTDEV`** を起動し、BIOS POST が出るか確認
+   - 第1回テストは Load error だったが、原因はパッケージ側の不備3件と判明。
+     修正済みなので**この再テストが本来のB0判定**になる
    - 判定基準は §1「B0 実機テストの判定基準」を参照
-   - **注意**: 2026-09-07 に boot.bin 配置漏れを修正した。それ以前に
-     テスト済みなら、修正後に**再テスト**すること
 2. **P1: PC-98メモリマップ**(CPU+SDRAM+BIOSフェッチ)
 3. **P2: TVRAM+テキスト表示**(Phase 3資産: tvram.sv/text_render.sv 移植)
 4. **P3: GDC** / **P4: FDD→DOS** / **P5: BEEP→OPNA** / **P6: EGC**
