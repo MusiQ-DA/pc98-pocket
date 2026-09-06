@@ -354,27 +354,17 @@ apf_bridge_loader #(
 //   setup_done rises once the BIOS stream finished AND the font stream
 //              finished (or a hold-off expires when no font.rom is present)
 
+// NOTE: setup_done must rise UNCONDITIONALLY, independent of data-slot
+// streaming. The OS only starts streaming data slots once the core reports
+// idle (3); gating setup_done on stream completion deadlocks the launch
+// (core waits for streams, OS waits for idle -> "Core not ready to run").
+// The machine (pc98_top) still holds ITS CPU in reset until the BIOS stream
+// arrives - that part is internal and unrelated to the framework handshake.
+
 reg [25:0] boot_cnt = 26'd0;
-reg        bios_loaded = 1'b0;
-reg        ldr_dl_d = 1'b0;
-reg        font_loaded = 1'b0;
-reg        fnt_dl_d = 1'b0;
-reg [25:0] bios_age = 26'd0;
 
-wire boot_done_r  = (boot_cnt >= 26'd64);                    // ~0.9 us
-wire setup_done_r = bios_loaded &&
-                    (font_loaded || (bios_age >= 26'd134_217_728)); // ~1.8 s
-
-always @(posedge clk_74a) begin
-    if (boot_cnt != 26'h3FF_FFFF) boot_cnt <= boot_cnt + 26'd1;
-
-    ldr_dl_d <= ldr_dio_download;
-    if (ldr_dl_d && !ldr_dio_download) bios_loaded <= 1'b1;
-    if (bios_loaded && bios_age != 26'h3FF_FFFF) bios_age <= bios_age + 26'd1;
-
-    fnt_dl_d <= fnt_dio_download;
-    if (fnt_dl_d && !fnt_dio_download) font_loaded <= 1'b1;
-end
+wire boot_done_r  = (boot_cnt >= 26'd64);      // ~0.9 us after configuration
+wire setup_done_r = (boot_cnt >= 26'd4096);    // ~55 us after boot_done
 
 wire [23:0] mach_rgb;
 wire        mach_de;
