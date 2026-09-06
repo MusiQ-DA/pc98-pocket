@@ -6,8 +6,8 @@
 //   0x0800-0x17FF  ANK 8x16  (codes 0x00-0xFF, 16 bytes each)
 //   0x1800-        kanji blocks (JIS block-ordered; rendered in a later phase)
 //
-// Physically 32768 x 16 (loader writes words, video reads bytes):
-// 512 Kbit = 50 M10K blocks.
+// Physically two 32768 x 8 banks (even/odd bytes of the file), mirroring the
+// bios_rom structure that infers cleanly: 512 Kbit = 50 M10K blocks.
 // ============================================================================
 
 `default_nettype none
@@ -25,15 +25,18 @@ module font_rom (
     output reg  [7:0]  rd_data
 );
 
-(* ramstyle = "M10K" *) reg [15:0] mem [0:32767];
+(* ramstyle = "M10K" *) reg [7:0] mem_lo [0:32767];  // even file bytes
+(* ramstyle = "M10K" *) reg [7:0] mem_hi [0:32767];  // odd file bytes
 
 wire [14:0] rd_waddr = rd_addr[15:1];
 wire        rd_lane  = rd_addr[0];
 
 always @(posedge clk74) begin
-    if (wr_en)
-        mem[wr_waddr] <= wr_data;
-    rd_data <= rd_lane ? mem[rd_waddr][15:8] : mem[rd_waddr][7:0];
+    if (wr_en) begin
+        mem_lo[wr_waddr] <= wr_data[7:0];
+        mem_hi[wr_waddr] <= wr_data[15:8];
+    end
+    rd_data <= rd_lane ? mem_hi[rd_waddr] : mem_lo[rd_waddr];
 end
 
 endmodule
