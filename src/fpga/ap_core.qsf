@@ -750,6 +750,9 @@ set_global_assignment -name VERILOG_FILE core/i2s.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_top.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/bios_rom.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/ram64k.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/tvram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/font_rom.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/text_render.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl8088/mcl86_eu_core.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl8088/mcl86_biu_min.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl8088/mcl86_adder.sv

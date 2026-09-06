@@ -307,7 +307,45 @@ apf_bridge_loader #(
     .busy           (                    )
 );
 
-wire [7:0] dbg_info;
+// ---- font data slot (second streamed slot) --------------------------------
+localparam [15:0] SLOT_FONT = 16'd201;
+wire        font_loader_active;
+wire        fnt_dio_download;
+wire [7:0]  fnt_dio_index;
+wire [24:0] fnt_dio_addr;
+wire [15:0] fnt_dio_data;
+wire        fnt_dio_wr;
+
+always @(posedge clk_74a) begin
+    if (dataslot_requestwrite)
+        font_loader_active <= (dataslot_requestwrite_id == SLOT_FONT);
+    else if (dataslot_allcomplete)
+        font_loader_active <= 1'b0;
+end
+
+apf_bridge_loader #(
+    .ADDR_BASE ( 32'h2000_0000 ),   // FONT.ROM window (data.json slot 201)
+    .ADDR_MASK ( 32'hF000_0000 )
+) font_loader (
+    .clk_74a        ( clk_74a            ),
+    .bridge_addr    ( bridge_addr        ),
+    .bridge_wr      ( bridge_wr          ),
+    .bridge_wr_data ( bridge_wr_data     ),
+    .slot_id        ( 16'd1              ),
+    .slot_active    ( font_loader_active ),
+    .clk_sys        ( clk_74a            ),
+    .reset          ( 1'b0               ),
+    .dio_download   ( fnt_dio_download   ),
+    .dio_index      ( fnt_dio_index      ),
+    .dio_addr       ( fnt_dio_addr       ),
+    .dio_data       ( fnt_dio_data       ),
+    .dio_wr         ( fnt_dio_wr         ),
+    .dio_ack        ( 1'b1               ),
+    .busy           (                    )
+);
+
+wire [23:0] mach_rgb;
+wire        mach_de;
 
 pc98_top machine (
     .clk_74a       ( clk_74a          ),
@@ -316,7 +354,15 @@ pc98_top machine (
     .dio_data      ( ldr_dio_data     ),
     .dio_wr        ( ldr_dio_wr       ),
     .dio_ack       ( dio_ack          ),
-    .dbg_info      ( dbg_info         )
+    .fnt_download  ( fnt_dio_download ),
+    .fnt_addr      ( fnt_dio_addr     ),
+    .fnt_data      ( fnt_dio_data     ),
+    .fnt_wr        ( fnt_dio_wr       ),
+    .pix_ce        ( pix_ce           ),
+    .hcount        ( hcount           ),
+    .vcount        ( vcount           ),
+    .video_rgb     ( mach_rgb         ),
+    .video_de      ( mach_de          )
 );
 
 core_bridge_cmd bridge_cmds (
@@ -400,8 +446,7 @@ core_bridge_cmd bridge_cmds (
 
 );
 
-// ---- video: 640x400 test pattern, pixel clock enable from 74.25 MHz -------
-// pixel rate 24.75 MHz (74.25/3). VESA 640x400@70-ish timings:
+// ---- video timing: 640x400, pixel rate 24.75 MHz (74.25/3) ----------------
 //   H: 640 vis, sync 96 @ 656..751, total 800
 //   V: 400 vis, sync 2  @ 401..402, total 449
 
@@ -412,37 +457,16 @@ always @(posedge clk_74a) pix_div <= pix_div + 2'd1;
 
 reg [9:0] hcount = 10'd0;
 reg [8:0] vcount = 9'd0;
-reg       hsync_r = 1'b0, vsync_r = 1'b0, de_r = 1'b0;
-reg [23:0] rgb_r = 24'd0;
-reg [7:0]  frame = 8'd0;
+reg       hsync_r = 1'b0, vsync_r = 1'b0;
 
 wire hsync_on = (hcount >= 10'd656) && (hcount < 10'd752);
 wire vsync_on = (vcount >=  9'd401) && (vcount <  9'd403);
-wire visible  = (hcount < 10'd640)  && (vcount <  9'd400);
-
-// colour bars: 8 bars across, gradient down, moving white marker
-reg [7:0] bar_r, bar_g, bar_b;
-always @* begin
-    case (hcount[8:6])
-        3'd0: begin bar_r = 8'hFF; bar_g = 8'hFF; bar_b = 8'hFF; end
-        3'd1: begin bar_r = 8'hFF; bar_g = 8'hFF; bar_b = 8'h00; end
-        3'd2: begin bar_r = 8'h00; bar_g = 8'hFF; bar_b = 8'hFF; end
-        3'd3: begin bar_r = 8'h00; bar_g = 8'hFF; bar_b = 8'h00; end
-        3'd4: begin bar_r = 8'hFF; bar_g = 8'h00; bar_b = 8'hFF; end
-        3'd5: begin bar_r = 8'hFF; bar_g = 8'h00; bar_b = 8'h00; end
-        3'd6: begin bar_r = 8'h00; bar_g = 8'h00; bar_b = 8'hFF; end
-        default: begin bar_r = 8'h00; bar_g = 8'h00; bar_b = 8'h00; end
-    endcase
-end
-
-wire marker = ((hcount[3:0] + frame[3:0]) == 4'd0) && (vcount[3:0] == 4'd0);
 
 always @(posedge clk_74a) if (pix_ce) begin
     if (hcount == 10'd799) begin
         hcount <= 10'd0;
         if (vcount == 9'd448) begin
             vcount <= 9'd0;
-            frame  <= frame + 8'd1;
         end else begin
             vcount <= vcount + 9'd1;
         end
@@ -450,20 +474,15 @@ always @(posedge clk_74a) if (pix_ce) begin
         hcount <= hcount + 10'd1;
     end
 
-    de_r    <= visible;
     hsync_r <= ~hsync_on;   // negative sync
     vsync_r <= ~vsync_on;
-    rgb_r   <= visible ? ((marker ? 24'hFFFFFF
-                                  : {bar_r, bar_g, bar_b})
-                                  ^ {16'd0, dbg_info[1:0], 6'd0})
-                       : 24'h000000;
 end
 
 assign video_rgb_clock    = clk_74a;
 // NOTE: proper 90-degree clock forward via PLL/DDIO comes in Phase 2.
 assign video_rgb_clock_90 = ~clk_74a;
-assign video_rgb          = rgb_r;
-assign video_de           = de_r;
+assign video_rgb          = mach_rgb;
+assign video_de           = mach_de;
 assign video_hs           = hsync_r;
 assign video_vs           = vsync_r;
 assign video_skip         = 1'b0;
