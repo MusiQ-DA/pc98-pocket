@@ -55,6 +55,17 @@ NEC PC-9800シリーズ(PC-9801VX級)を Analogue Pocket openFPGA で動かす�
 | 8 | EGC | EGC使用タイトルが正速で動く |
 | 9 | マウス/拡張RAM/細部詰め | — |
 
+## 進捗サマリ(2026-09-06)
+
+| Phase | 状態 | ALM | 備考 |
+|---|---|---|---|
+| 1 スケルトン | ✅ | 373 (2%) | CIビルド確立 |
+| 2 CPU+メモリ | ✅ | 1,561 (8%) | MCL86+BIOS ROM+RAM |
+| 3 テキストVRAM | ✅ コンパイル | 1,646 (9%) / **M10K 173/308 (56%)** | TVRAM+FONT.ROM+レンダラ |
+| 4 GDC 16色 | 次 | — | VRAMバスにEGC織り込み |
+
+全RAMがM10Kへ正常推論。実機表示確認は BIOS/font ROMダンプ+SDカード準備後に実施。
+
 ## Phase 1 の現状(2026-09-06 達成)
 
 - [x] リポジトリ雛形(ap_core.qsf / core_top.sv テストパターン / apf ラッパー / JSON定義)
