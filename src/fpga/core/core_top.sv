@@ -250,9 +250,14 @@ assign cart_tran_pin31_dir = 1'b0;
 assign dbg_tx              = 1'b0;
 assign user1               = 1'b0;
 
-// little-endian bridge: the PC-98 (V30 family) is little-endian, so file bytes
-// stay in file order all the way into ROM/RAM.
-assign bridge_endian_little = 1'b1;
+// bridge_endian_little is the FRAMEWORK BRIDGE word-order convention, NOT the
+// guest CPU endianness: every working core (including the x86-based
+// desaster.PCXT) sets 0, and core_bridge_cmd matches its "CM" command marker
+// against the big-endian word. Setting 1 made the framework report
+// "RS: Host commands ignored". The apf_bridge_loader splits each 32-bit write
+// high-word-first, which keeps little-endian ROM files in byte order for the
+// 8-bit CPU fetches once the ROM lane mux below is matched to it.
+assign bridge_endian_little = 1'b0;
 
 // ---- core_bridge_cmd: standard Analogue command processor -----------------
 wire        br_reset_n;

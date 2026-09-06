@@ -31,7 +31,7 @@ module bios_rom (
 always @(posedge clk74) begin
     if (wr_en)
         mem[wr_waddr] <= wr_data;
-    rd_data <= rd_selhi ? mem[rd_waddr][15:8] : mem[rd_waddr][7:0];
+    rd_data <= rd_selhi ? mem[rd_waddr][7:0] : mem[rd_waddr][15:8];
 end
 
 endmodule
