@@ -128,7 +128,10 @@ assign dio_ack = 1'b1;              // BRAM keeps up with the stream
 // FONT.ROM
 // ---------------------------------------------------------------------------
 wire [7:0] font_byte;
-wire font_loader_wr = fnt_download && fnt_wr;
+// FONT.ROM BRAM holds the first 64 KB (ANK). Kanji blocks beyond 64 KB in the
+// dump would wrap the 15-bit word address and overwrite the ANK region, so
+// ignore those writes until the font moves to SDRAM.
+wire font_loader_wr = fnt_download && fnt_wr && (fnt_addr < 25'd65536);
 
 font_rom font (
     .clk74    ( clk_74a        ),
