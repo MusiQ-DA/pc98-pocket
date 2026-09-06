@@ -27,8 +27,11 @@ module pc98_top (
     input  wire        dio_wr,
     output wire        dio_ack,
 
-    // debug heartbeat: toggles on every bus read (visible on future probes)
-    output reg         dbg_cpu_fetch
+    // debug: observable machine state — keeps synthesis from pruning the CPU.
+    // [7]   fetch toggle (bus read activity)
+    // [6:3] low bits of the latched bus address
+    // [2:0] low bits of the last BIOS ROM byte read
+    output wire [7:0]  dbg_info
 );
 
 // ---------------------------------------------------------------------------
@@ -132,12 +135,15 @@ assign cpu_din = rom_sel ? rom_byte :
                  ram_sel ? ram_q    : 8'hFF;
 
 // ---------------------------------------------------------------------------
-// debug: toggle on every memory read
+// debug: fetch toggle + observable slices of live machine state
 // ---------------------------------------------------------------------------
+reg dbg_toggle = 1'b0;
 always @(posedge clk_74a) begin
     if (bus_rd && (clkdiv == 3'd0))
-        dbg_cpu_fetch <= ~dbg_cpu_fetch;
+        dbg_toggle <= ~dbg_toggle;
 end
+
+assign dbg_info = {dbg_toggle, bus_addr[3:0], rom_byte[2:0]};
 
 endmodule
 

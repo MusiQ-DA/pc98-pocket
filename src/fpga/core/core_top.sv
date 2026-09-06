@@ -307,7 +307,7 @@ apf_bridge_loader #(
     .busy           (                    )
 );
 
-wire dbg_cpu_fetch;
+wire [7:0] dbg_info;
 
 pc98_top machine (
     .clk_74a       ( clk_74a          ),
@@ -316,7 +316,7 @@ pc98_top machine (
     .dio_data      ( ldr_dio_data     ),
     .dio_wr        ( ldr_dio_wr       ),
     .dio_ack       ( dio_ack          ),
-    .dbg_cpu_fetch ( dbg_cpu_fetch    )
+    .dbg_info      ( dbg_info         )
 );
 
 core_bridge_cmd bridge_cmds (
@@ -453,8 +453,9 @@ always @(posedge clk_74a) if (pix_ce) begin
     de_r    <= visible;
     hsync_r <= ~hsync_on;   // negative sync
     vsync_r <= ~vsync_on;
-    rgb_r   <= visible ? (marker ? 24'hFFFFFF
-                                 : {bar_r, bar_g, bar_b})
+    rgb_r   <= visible ? ((marker ? 24'hFFFFFF
+                                  : {bar_r, bar_g, bar_b})
+                                  ^ {16'd0, dbg_info[1:0], 6'd0})
                        : 24'h000000;
 end
 
