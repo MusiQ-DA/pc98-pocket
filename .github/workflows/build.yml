@@ -2,12 +2,13 @@ name: build
 
 on:
   push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   quartus:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -22,30 +23,29 @@ jobs:
 
       - name: Compile (quartus_sh --flow compile)
         run: |
-          cd src/fpga
-          docker run --rm -v "$PWD":/work -w /work raetro/quartus:pocket bash -lc '
-            set -e
-            Q=""
-            for p in /opt/intelFPGA/quartus /opt/quartus /usr/local/quartus /opt/intelFPGA_lite /opt/altera; do
-              if [ -x "$p/bin/quartus_sh" ]; then Q="$p/bin"; break; fi
-              if [ -x "$p/bin64/quartus_sh" ]; then Q="$p/bin64"; break; fi
-              f=$(find "$p" -maxdepth 3 -name quartus_sh 2>/dev/null | head -1)
-              if [ -n "$f" ]; then Q=$(dirname "$f"); break; fi
-            done
-            if [ -z "$Q" ]; then echo "quartus_sh not found:"; find / -name "quartus_sh" 2>/dev/null | head; exit 1; fi
-            echo "using quartus at $Q"
-            export PATH="$Q:$PATH"
-            export LD_LIBRARY_PATH="$Q:${LD_LIBRARY_PATH:-}"
-            quartus_sh --version
-            quartus_sh --flow compile ap_core
-          '
+          docker run --rm \
+            -v "${{ github.workspace }}/pcxt-base":/work \
+            -w /work/src/fpga \
+            raetro/quartus:pocket bash -lc '
+              set -e
+              Q=""
+              for p in /opt/intelFPGA/quartus /opt/quartus /usr/local/quartus; do
+                f=$(find "$p" -maxdepth 3 -name quartus_sh 2>/dev/null | head -1)
+                if [ -n "$f" ]; then Q=$(dirname "$f"); break; fi
+              done
+              if [ -z "$Q" ]; then echo "ERROR: quartus_sh not found"; exit 1; fi
+              echo "using quartus at $Q"
+              export PATH="$Q:$PATH"
+              export LD_LIBRARY_PATH="$Q:${LD_LIBRARY_PATH:-}"
+              quartus_sh --version
+              quartus_sh --flow compile ap_core
+            '
 
       - name: Show fit summary
         if: always()
         run: |
-          grep -A14 "Logic utilization" src/fpga/output_files/ap_core.fit.rpt 2>/dev/null | head -4 || true
-          grep -A4 "Fmax " src/fpga/output_files/ap_core.sta.rpt 2>/dev/null | head -6 || true
-          ls -la src/fpga/output_files/ 2>/dev/null || true
+          grep -A14 "Logic utilization" pcxt-base/src/fpga/output_files/ap_core.fit.rpt 2>/dev/null | head -4 || true
+          ls -la pcxt-base/src/fpga/output_files/ 2>/dev/null || true
 
       - name: Upload bitstream
         uses: actions/upload-artifact@v4
@@ -53,6 +53,6 @@ jobs:
           name: bitstream
           if-no-files-found: error
           path: |
-            src/fpga/output_files/*.rbf
-            src/fpga/output_files/*.fit.rpt
-            src/fpga/output_files/*.sta.rpt
+            pcxt-base/src/fpga/output_files/*.rbf
+            pcxt-base/src/fpga/output_files/*.fit.rpt
+            pcxt-base/src/fpga/output_files/*.sta.rpt

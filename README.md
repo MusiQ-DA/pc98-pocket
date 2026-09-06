@@ -3,36 +3,23 @@
 NEC PC-9800シリーズ(PC-9801VX級: V30、640×400 16色、OPNA)を
 Analogue Pocket の openFPGA で動かすプロジェクト。
 
-**現状: Phase 1(ビルド基盤+テストパターン)** — 詳細は [docs/PORT_PLAN.md](docs/PORT_PLAN.md)
-
-## 背景
-
-MiSTerにはPC-9800系コアが存在しないため、PC-98固有のシステムRTL
-(GDC、テキストVRAM、EGC、OPNA、FDC、PIT/PIC/8255系)を新規に設計する。
-挙動のリファレンスには np2(Neko Project 2 kai)のソースを用いる。
+**ベース**: [desaster/openfpga-PCXT](https://github.com/desaster/openfpga-PCXT)
+(実機でDOSブート実績のあるx86コア。MCL86 CPU、SDRAM、CGAビデオ、仮想キーボードを流用し、
+機械層をPC-98に入れ替えていく)。元のMacLCテンプレート検討は git history 参照。
 
 ## 構成
 
 ```
-src/fpga/
-  ap_core.qsf      Quartus プロジェクト(デバイス 5CEBA4F23C8)
-  apf/             Analogue openFPGA テンプレートのラッパー
-  core/
-    core_top.sv    シャーシ(bridge/video/audio契約) — 現在はテストパターン
-    core_bridge_cmd.v, i2s.v, core_constraints.sdc  インフラ
+pcxt-base/          PCXTコアの作業ツリー(ここをPC-98化していく)
+  src/fpga/         Quartusプロジェクト
+docs/               設計ドキュメント(PIVOT.md, PC98_MACHINE_SPEC.md, PORT_PLAN.md)
 ```
 
-## ビルド(docker)
+## ビルド
 
-```bash
-docker pull raetro/quartus:pocket   # 約6.4GB
-bash scripts/build-docker.sh
-# → src/fpga/output_files/ に bitstream.rbf
-```
+- **CI**: pushで自動ビルド → Actionsのartifactにrbf
+- **ローカル**: `pcxt-base/scripts/build-docker.sh`(raetro/quartus:pocketイメージ、Rosetta)
 
-## 謝辞 / ライセンス
+## ロードマップ
 
-- インフラ部分は [danifunker/MacLC_pocket](https://github.com/danifunker/MacLC_pocket)
-  (系譜: MacLC_MiSTer → Sorgelig/MacPlus → Plus Too、Analogue openFPGA テンプレート)を
-  雛形として利用。MiSTerエコシステムの慣行に従い **GPL-3.0** で公開する予定です。
-- PC-98の挙動リファレンスとして NP2kai の開発者の皆様の成果に大きく依存します。
+docs/PC98_MACHINE_SPEC.md 参照(B0 ベースライン→P1 メモリマップ→P2 テキスト→P3 GDC→P4 FDD/DOS→P5 OPNA→P6 EGC)
