@@ -92,6 +92,40 @@ PC-98 for Analogue Pocket プロジェクトの引き継ぎ資料。
 つまり **raetroビルドのbitstreamは実機でロードできる**ことが既に示されており、
 「raetroイメージが悪い」という仮説の根拠は弱い。
 
+#### B0 第2回 実機テスト(testB0b): ✅ ロード成功・画面表示
+
+**"Load error in core: General error" は解消。** 上記パッケージ不備3件が原因だったと確定。
+→ **我々のビルドパイプライン(raetro/quartus:pocket + CI + パッケージ手順)は健全。**
+
+ただし **BIOSに進まない。これは想定どおりの挙動**で、原因は firmware.vh の NOPスタブ。
+
+RTL上の根拠(`src/fpga/core/`):
+- `softcpu_subsystem.sv:220` `reg soft_guest_hold_r = 1'b1;`
+  — **ゲスト(8088)は電源投入時リセット保持で起動する**
+- 解除できるのは picorv32 のファームウェアだけ:
+  `main.c` の `*SOFT_GUEST_HOLD = 0;`(MMIO 0x2000001C, bit0)
+- `core_top.sv:473` `reset_wire = ... | soft_guest_hold;`
+- `core_top.sv:1506` スプラッシュも `bios_ever_loaded_28 & ~soft_guest_hold_28` 待ち
+
+NOPスタブ(6144×0x00000013)は一度もこのストアを実行しないので、
+**8088は永久にリセット保持のまま**。BIOSに進まないのは必然。
+
+#### firmware を実ビルドした(2026-09-07)
+
+- **RISC-V GNUツールチェーンは不要。上流の Makefile は LLVM を使う**
+  (`clang --target=riscv32 -march=rv32im` + `ld.lld` + `llvm-objcopy`)。
+- ローカルに **Homebrew LLVM 23(riscv32対応)+ lld が導入済み**。
+  `export PATH=/opt/homebrew/opt/llvm/bin:$PATH` で `make` が通る。
+  ※ Apple の `/usr/bin/clang` は riscv ターゲット非対応なので使えない。
+- **要修正点1件**: LLVM 23 では `vkb_layout.c` の文字列長ループを
+  LoopIdiomRecognize が `strlen` 呼び出しに書き換えてしまい、
+  ベアメタルリンクで `undefined symbol: strlen` になる。
+  → Makefile の CFLAGS に **`-ffreestanding`** を追加して解決(コミット済み)。
+- 成果物: text 17,442 + data 184 = 17,626 B → **4,407 / 6144 ワード**(ROM 24KB に収まる)
+  先頭ワード `1580006f` = `jal x0,+0x158`(リセットベクタ)で NOP埋めではないことを確認。
+
+**次のビルドで 8088 が解放され、FDD/IDEサービスと OSD も動くようになるはず。**
+
 ### B0 実機テストの判定基準
 
 - ✅ BIOS POST 表示 → **我々のビルドパイプラインは健全** → 自作機械層のRTLを
@@ -185,9 +219,14 @@ PC-98 for Analogue Pocket プロジェクトの引き継ぎ資料。
 5c. **data.json の `size_maximum` に `0x80000000` 以上を書かない。**
    符号付き32bitで負値になる。純正PCXTのIDEスロットは `0x40000000`。
 6. **openfpga-PCXTの picorv32 ファームウェア(firmware.vh)はリポジトリ未同梱**。
-   RISC-Vツールチェーンで src/firmware/*.c をコンパイルして生成する。
-   ベースライン検証用のNOPスタブ(6144×0x00000013)は作成済み
-   (`pcxt-base/src/firmware/firmware.vh`)。
+   **LLVM(clang --target=riscv32 + ld.lld + llvm-objcopy)でビルドする。GNUツールチェーンは不要。**
+   ローカルは Homebrew LLVM 23 でビルド可:
+   `export PATH=/opt/homebrew/opt/llvm/bin:$PATH && make -C pcxt-base/src/firmware`
+   (Apple clang は riscv 非対応。LLVM 23 では `-ffreestanding` が必須 → Makefile に追加済み)
+6b. **picorv32 は「ブートマスタ」である。** `soft_guest_hold` は 1 で起動し、
+   ファームウェアが `*SOFT_GUEST_HOLD = 0`(0x2000001C)を書くまで
+   **ゲストCPU(8088)はリセット保持のまま**。firmware.vh をスタブにすると
+   コアはロードできてもゲストが一切動かない。PC-98機械層でも同じ制約がかかる。
 7. **np2のI/Oマップは np2ソースの `iocore_attach*` 呼び出しから機械抽出可能**
    (低域0x00-0xF0は抽出済み: PC98_MACHINE_SPEC.md 参照)。
 
