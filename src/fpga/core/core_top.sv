@@ -344,6 +344,38 @@ apf_bridge_loader #(
     .busy           (                    )
 );
 
+// ---- boot handshake --------------------------------------------------------
+// The OS polls "Request Status" (host cmd 0x0000) and needs to observe the
+// progression  1:booting -> 2:setup (slots streaming) -> 3:idle (all loaded)
+//              -> 4:running (after Reset Exit)
+// Constant-1 statuses never transition and the framework fails with
+// "Core not ready to run". So:
+//   boot_done  rises ~1 us after configuration
+//   setup_done rises once the BIOS stream finished AND the font stream
+//              finished (or a hold-off expires when no font.rom is present)
+
+reg [25:0] boot_cnt = 26'd0;
+reg        bios_loaded = 1'b0;
+reg        ldr_dl_d = 1'b0;
+reg        font_loaded = 1'b0;
+reg        fnt_dl_d = 1'b0;
+reg [25:0] bios_age = 26'd0;
+
+wire boot_done_r  = (boot_cnt >= 26'd64);                    // ~0.9 us
+wire setup_done_r = bios_loaded &&
+                    (font_loaded || (bios_age >= 26'd134_217_728)); // ~1.8 s
+
+always @(posedge clk_74a) begin
+    if (boot_cnt != 26'h3FF_FFFF) boot_cnt <= boot_cnt + 26'd1;
+
+    ldr_dl_d <= ldr_dio_download;
+    if (ldr_dl_d && !ldr_dio_download) bios_loaded <= 1'b1;
+    if (bios_loaded && bios_age != 26'h3FF_FFFF) bios_age <= bios_age + 26'd1;
+
+    fnt_dl_d <= fnt_dio_download;
+    if (fnt_dl_d && !fnt_dio_download) font_loaded <= 1'b1;
+end
+
 wire [23:0] mach_rgb;
 wire        mach_de;
 
@@ -377,9 +409,9 @@ core_bridge_cmd bridge_cmds (
     .bridge_wr               ( bridge_wr       ),
     .bridge_wr_data          ( bridge_wr_data  ),
 
-    .status_boot_done        ( 1'b1            ),
-    .status_setup_done       ( 1'b1            ),
-    .status_running          ( 1'b1            ),
+    .status_boot_done        ( boot_done_r     ),
+    .status_setup_done       ( setup_done_r    ),
+    .status_running          ( br_reset_n      ),
 
     .dataslot_requestread    ( dataslot_requestread    ),
     .dataslot_requestread_id ( dataslot_requestread_id ),
