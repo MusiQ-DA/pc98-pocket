@@ -284,6 +284,7 @@ wire [7:0]  ldr_dio_index;
 wire [24:0] ldr_dio_addr;
 wire [15:0] ldr_dio_data;
 wire        ldr_dio_wr;
+wire        dio_ack;            // driven by the machine (always 1 in phase 2)
 
 apf_bridge_loader #(
     .ADDR_BASE ( 32'h1000_0000 ),   // BIOS ROM window (data.json slot 200)
@@ -302,7 +303,7 @@ apf_bridge_loader #(
     .dio_addr       ( ldr_dio_addr       ),
     .dio_data       ( ldr_dio_data       ),
     .dio_wr         ( ldr_dio_wr         ),
-    .dio_ack        ( 1'b1               ),
+    .dio_ack        ( dio_ack            ),
     .busy           (                    )
 );
 
