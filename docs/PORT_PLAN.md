@@ -1,5 +1,8 @@
 # PC-98 for Analogue Pocket — ポート計画(凍結版 2026-09-06)
 
+> **ゴール定義と最新の容量予算は `docs/GOAL.md` を参照(こちらが優先)。**
+> 本書はベース選定前の計画で、ロードマップは GOAL.md §6 に置き換わっている。
+
 NEC PC-9800シリーズ(PC-9801VX級)を Analogue Pocket openFPGA で動かすプロジェクト。
 
 ## 参照実装
@@ -37,7 +40,12 @@ NEC PC-9800シリーズ(PC-9801VX級)を Analogue Pocket openFPGA で動かす�
    - リズム/ADPCM辞書はYM2608内蔵ROMダンプ(np2の sound.rom、ユーザー供給。data.json済み)
    - リファレンス: nukeykt/YM2608-LLE(サイクル精度) > np2 fmgen > mtrberzi/ym2608(VHDL試作)
 7. **ディスク**: FDD優先(**1024バイト/セクタの1.2MB対応が必須**)、HDDイメージ(HDI等)
-8. **ROM類**: BIOS/font/sound ROM は **np2互換のユーザー供給ダンプ**(bios.rom=96KB, font.rom, sound.rom=128KB)
+8. **ROM類**: BIOS/font/sound ROM は **np2互換のユーザー供給ダンプ**
+   — 実測(2026-09-07, `~/Documents/lodemnc/np2rom/`):
+   `BIOS.ROM` 98,304B / `FONT.ROM` 288,768B / `ITF.ROM` 32,768B / `sound.rom` **16,384B**
+   ※ 旧記載の「sound.rom=128KB」は誤り。かつ sound.rom は YM2608 のリズムROMではなく
+     -26/-86 ボードの BIOS ROM。**YM2608 リズムROMのダンプは存在せず、np2 は
+     `2608_*.WAV`(計約82KB)で代用している** → 実機実装は別途設計が要る(GOAL.md R3)
 9. **入力**: ゲームパッド→キーマップ + Dock実キーボード/マウス + 仮想キーボード
 10. TH04/05など486必須級タイトルは対象外(V30 スコープ)
 
