@@ -91,7 +91,7 @@ always @(posedge clk74) begin
         char_r <= tvram_char_q;
         attr_r <= tvram_attr_q;
     end
-    if (ph == 5'd4) begin
+    if (ph == 5'd6) begin              // font read latency: 2 cycles
         next_glyph   <= font_q;
         next_reverse <= attr_r[1];    // bit 1: reverse video
     end

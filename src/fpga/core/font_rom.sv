@@ -28,15 +28,18 @@ module font_rom (
 (* ramstyle = "M10K" *) reg [7:0] mem_lo [0:32767];  // even file bytes
 (* ramstyle = "M10K" *) reg [7:0] mem_hi [0:32767];  // odd file bytes
 
-wire [14:0] rd_waddr = rd_addr[15:1];
-wire        rd_lane  = rd_addr[0];
+// registered address stage: guarantees a synchronous-read RAM inference
+reg [14:0] ra;
+reg        rl;
 
 always @(posedge clk74) begin
     if (wr_en) begin
         mem_lo[wr_waddr] <= wr_data[7:0];
         mem_hi[wr_waddr] <= wr_data[15:8];
     end
-    rd_data <= rd_lane ? mem_hi[rd_waddr] : mem_lo[rd_waddr];
+    ra      <= rd_addr[15:1];
+    rl      <= rd_addr[0];
+    rd_data <= rl ? mem_hi[ra] : mem_lo[ra];
 end
 
 endmodule
