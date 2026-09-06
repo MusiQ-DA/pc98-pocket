@@ -55,9 +55,17 @@ NEC PC-9800シリーズ(PC-9801VX級)を Analogue Pocket openFPGA で動かす�
 | 8 | EGC | EGC使用タイトルが正速で動く |
 | 9 | マウス/拡張RAM/細部詰め | — |
 
-## Phase 1 の現状
+## Phase 1 の現状(2026-09-06 達成)
 
 - [x] リポジトリ雛形(ap_core.qsf / core_top.sv テストパターン / apf ラッパー / JSON定義)
-- [x] docker ビルドスクリプト(Quartus: raetro/quartus:pocket イメージ)
-- [ ] Quartusコンパイル通過(RBF生成)← Phase 1の出口基準
-- [ ] Pocket実機でテストパターン表示確認
+- [x] CI ビルド: **GitHub Actions で Quartus 18.1.1 Lite(raetro/quartus:pocket イメージ)によるコンパイル成功**
+  - リポジトリ: https://github.com/MusiQ-DA/pc98-pocket
+  - 成果物: `ap_core.rbf` (785,868 bytes)
+- [x] リソース実測: **373 / 18,480 ALM (2%), M10K ほぼ未使用** — 容量予算の98%がPC-98本体設計に利用可能
+- [x] タイミング実測: clk_74aドメイン Fmax 137MHz(制約74.25MHzに対し十分な余裕)
+- [ ] Pocket実機でテストパターン表示確認(要: 実機、SDカード)
+
+### 備考
+- ローカルDockerDesktopは本体欠損のため起動不可。CIビルドが主経路。
+- `scripts/build-docker.sh` はDocker Desktop復活時用に保持。
+- Intelの直リンク(akdlm)は403になったため、イメージ経由のビルドが現実解。

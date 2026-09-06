@@ -1,0 +1,45 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  quartus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Quartus Prime Lite 20.1.1 + Cyclone V
+        run: |
+          set -e
+          sudo mkdir -p /opt/quartus && sudo chown "$USER" /opt/quartus
+          BASE=https://download.altera.com/akdlm/software/acdsinst/20.1.1/720/ib_installers
+          curl -fsSL -o q.run  "$BASE/QuartusLiteSetup-20.1.1.720-linux.run"
+          curl -fsSL -o cv.qdz "$BASE/cyclonev-20.1.1.720.qdz"
+          chmod +x q.run
+          ./q.run --mode unattended --accept_eula 1 --installdir /opt/quartus
+          /opt/quartus/bin/quartus_sh --version
+
+      - name: Compile (quartus_sh --flow compile)
+        run: |
+          export PATH=/opt/quartus/bin:$PATH
+          cd src/fpga
+          quartus_sh --flow compile ap_core
+
+      - name: Show fit summary
+        if: always()
+        run: |
+          cat src/fpga/output_files/ap_core.fit.rpt 2>/dev/null | grep -A12 "Fitter Resource Usage" || true
+          ls -la src/fpga/output_files/ 2>/dev/null || true
+
+      - name: Upload bitstream
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitstream
+          if-no-files-found: error
+          path: |
+            src/fpga/output_files/*.rbf
+            src/fpga/output_files/*.fit.rpt
+            src/fpga/output_files/*.sta.rpt
