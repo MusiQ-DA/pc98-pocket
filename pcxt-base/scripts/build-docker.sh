@@ -12,7 +12,13 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="${IMAGE:-raetro/quartus:pocket}"
 DOCKER_BIN="${DOCKER_BIN:-docker}"
 [ -x "$DOCKER_BIN" ] || DOCKER_BIN="/Applications/Docker.app/Contents/Resources/bin/docker"
-FLOW="${1:-compile}"
+# --fast (default): disable physical synthesis in the build-dir copy of the
+# qsf (big Fitter speedup, slight QoR cost). Use --qor to keep it (releases).
+MODE="${1:-fast}"
+QOR=0
+[ "$MODE" = "--qor" ] && QOR=1
+FAST=1
+[ "$MODE" = "--qor" ] && FAST=0
 
 BUILD_DIR="$(mktemp -d /tmp/pcxtbuild.XXXXXX)"
 KEEP="${KEEP:-0}"
@@ -23,6 +29,17 @@ mkdir -p "$BUILD_DIR/src"
 tar -C "$REPO/src" --exclude='fpga/output_files' --exclude='fpga/db' \
     --exclude='fpga/greybox_tmp' --exclude='fpga/incremental_db' \
     -cf - . | tar -C "$BUILD_DIR/src" -xf -
+
+if [ "$FAST" = "1" ]; then
+    # iteration build: strip physical synthesis (expensive Fitter stage)
+    python3 - "$BUILD_DIR/src/fpga/ap_core.qsf" <<'PY'
+import sys
+p = sys.argv[1]
+lines = [l for l in open(p) if 'PHYSICAL_SYNTHESIS' not in l]
+open(p, 'w').writelines(lines)
+print("physical synthesis disabled (fast mode)")
+PY
+fi
 
 echo ">> building in $BUILD_DIR ($FLOW)"
 "$DOCKER_BIN" run --rm -v "$BUILD_DIR":/work -w /work/src/fpga "$IMAGE" bash -lc '
