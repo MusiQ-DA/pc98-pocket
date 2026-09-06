@@ -15,15 +15,46 @@ PC-98 for Analogue Pocket プロジェクトの引き継ぎ資料。
   ベースをそちらに変更した。
 - 詳細: `docs/PIVOT.md`, `docs/PC98_MACHINE_SPEC.md`
 
-### B0(ベースライン)ビルド: 進行中または完了
+### B0(ベースライン)ビルド: **完了済み・SD投入済み**(2026-09-07 確認)
 
-- `pcxt-base/` ツリーをローカルDocker(raetro/quartus:pocket)でコンパイル中だった。
-- **再開時の最初の作業**: ビルド状態の確認
-  ```bash
-  tail -5 /tmp/pcxtbase_build.log   # または再実行
-  cd ~/repo/pc98-pocket/pcxt-base && bash scripts/build-docker.sh
-  ```
-- 完了していれば `pcxt-base/src/fpga/output_files/ap_core.rbf` が生成されている。
+- ローカルDocker(raetro/quartus:pocket)ビルドは 22:45 に**途中で中断**しており
+  (`/tmp/pcxtbase_build.log` は Analysis&Synthesis 途中で切れている)、
+  `pcxt-base/**/output_files/` は存在しない。**ローカルビルドの成果物はない。**
+- 実際に成功したのは **GitHub Actions CI**(`.github/workflows/build.yml`、
+  `pcxt-base/` をマウントしてコンパイル)。アーティファクトを
+  `scripts/tools/getart2.py` で取得し、00:14 に testB0 としてパッケージ済み。
+- 成果物:
+  - `dist/testB0/Cores/hiroya.PCXT-dev/bitstream.rbf_r` (1,744,436 B)
+    ※ 純正 desaster.PCXT の rbf_r は 1,741,140 B ─ **サイズが違う=別ビルド**、
+      流用ではなく我々のパイプライン産であることが確認できる
+  - 先頭非FFバイト = `56 56 56 56 6c 2f`(反転済み、検証OK)
+  - `dist/hiroya.PCXT-dev.zip`
+- **SDカード `/Volumes/ANALOGUE` に投入済み**:
+  `Cores/hiroya.PCXT-dev/` (全JSON + bitstream.rbf_r)、`Platforms/pcxt.json`
+
+#### 2026-09-07 に修正した不備(投入時に抜けていた点)
+
+1. **必須アセット boot.bin が未配置だった。**
+   data.json のスロット1「PCXT BIOS」は `required: true` / `parameters: 0x203`
+   (bit1 = core specific)で、**コア固有アセットディレクトリ**を参照する。
+   純正は `Assets/pcxt/desaster.PCXT/boot.bin` にあるが、我々のコア用は皆無だった。
+   → `Assets/pcxt/hiroya.PCXTDEV/boot.bin` と
+     `Assets/pcxt/hiroya.PCXT-dev/boot.bin` の**両方**に配置した
+     (author.shortname 派生かフォルダ名派生かが未確定のため両建て)。
+   **これ自体がロードエラーの原因になり得るので、以前の実機テスト結果は
+   このアセット欠落込みの結果である可能性がある。**
+2. **SD上の core.json が手編集され、LF・末尾改行なしになっていた。**
+   → `dist/testB0/.../core.json` を正規化して再生成し、SDへ再コピー。
+   なお **純正 desaster.PCXT の JSON も LF**(CRLFではない)。
+   `scripts/package.sh` は CRLF で出力するが TestA で実証済みなのでどちらでも可。
+
+### B0 実機テストの判定基準
+
+- ✅ BIOS POST 表示 → **我々のビルドパイプラインは健全** → 自作機械層のRTLを
+  疑って部分ビセクト → P1へ
+- ❌ 同じエラー(Load error / RS: Host commands ignored)
+  → raetroイメージのQuartus設定・ビルド環境の問題
+  → MacLCソースを raetro でビルドして実機テストする A/B が最短
 
 ---
 
@@ -114,11 +145,11 @@ PC-98 for Analogue Pocket プロジェクトの引き継ぎ資料。
 
 ## 5. 次のセッションの作業リスト(優先順)
 
-1. **B0ビルド完了確認** → rbfをパッケージ(`scripts/package.sh` 相当で
-   バイト反転+CRLF JSON+zip)→ SDへ → 実機テスト
-   - ✅ BIOS POST表示 → パイプライン確定 → P1へ
-   - ❌ 同エラー → raetroイメージのQuartus検証(MacLCソースをraetroで
-     ビルドして実機テストするA/Bテストが最短)
+1. **B0の実機テスト**(ビルド・パッケージ・SD投入は完了済み。§1参照)
+   - Pocket で `PCXTDEV` を起動し、BIOS POST が出るか確認
+   - 判定基準は §1「B0 実機テストの判定基準」を参照
+   - **注意**: 2026-09-07 に boot.bin 配置漏れを修正した。それ以前に
+     テスト済みなら、修正後に**再テスト**すること
 2. **P1: PC-98メモリマップ**(CPU+SDRAM+BIOSフェッチ)
 3. **P2: TVRAM+テキスト表示**(Phase 3資産: tvram.sv/text_render.sv 移植)
 4. **P3: GDC** / **P4: FDD→DOS** / **P5: BEEP→OPNA** / **P6: EGC**
@@ -128,7 +159,8 @@ PC-98 for Analogue Pocket プロジェクトの引き継ぎ資料。
 - Pocketファームウェア 2.7(pocket_firmware_2_7.bin)
 - SDカード: 15GB、多数のコア導入済み(pupdate管理)
 - desaster.PCXT がインストール済みでDOSブート実績あり
-  (Assets/pcxt/common/boot.bin 配置済み)
+  (実配置は `Assets/pcxt/desaster.PCXT/boot.bin`。`Assets/pcxt/common/` は**空**。
+   PCXTのBIOSスロットは core specific 指定なので common には置けない)
 - **PC-98用ROM資産あり**: `~/Documents/lodemnc/np2rom/`
   (bios.rom 96KB ✓ / font.rom 288KB ✓ / sound.rom 16KB / ITF.ROM)
   → PC-98コアのAssetsは `Assets/pc98/common/` に置く想定
