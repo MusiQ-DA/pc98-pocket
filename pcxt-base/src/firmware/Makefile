@@ -18,7 +18,11 @@ HW_DEFINES := $(addprefix -D,$(shell sed -n 's/.*VERILOG_MACRO "\(.*\)"/\1/p' $(
 
 # -MMD -MP write per-object header dependencies (.d), pulled in by -include below, so
 # editing a header rebuilds every object that includes it.
-CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Os -mno-relax -Wall -Werror -Wundef -MMD -MP $(HW_DEFINES)
+# -ffreestanding is required on newer LLVM (verified on 23.x): with a hosted
+# TargetLibraryInfo, LoopIdiomRecognize rewrites the string-measuring loop in
+# vkb_layout.c into a call to strlen, which does not exist in this bare-metal
+# link (ld.lld: undefined symbol: strlen). Freestanding disables that rewrite.
+CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Os -mno-relax -ffreestanding -Wall -Werror -Wundef -MMD -MP $(HW_DEFINES)
 ASFLAGS = --target=riscv32 -march=rv32im -mno-relax -Wall -Werror -MMD -MP
 
 all: firmware.vh
