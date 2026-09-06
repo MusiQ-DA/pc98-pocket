@@ -1,0 +1,148 @@
+// Floppy service loop for the PicoRV32 disk softcore.
+//
+// The controller (floppy.v) raises a request whenever it needs to move a sector,
+// and this code answers it over the management bus. A read request: fetch the LBA
+// and drive, pull that sector from the selected drive's image dataslot into the
+// bridge RAM over the APF target-dataslot handshake, then stream the 512 bytes into
+// the controller's management FIFO. A write request is the mirror: drain the 512
+// bytes the controller has queued in that FIFO into the bridge RAM, then persist
+// them to the dataslot. Each pass moves one sector and runs again while the request
+// holds.
+//
+// Written sectors reach the SD file through target-dataslot writes.
+//
+// The geometry table and the register protocol follow MiSTer's x86 support
+// (Main_MiSTer support/x86/x86.cpp), retargeted from the HPS to this softcore.
+
+#include "softcpu_regs.h"
+
+// One management-bus write: latch drive + register + 16-bit data, then trigger.
+static void mgmt_write(uint32_t drive, uint32_t reg, uint32_t data)
+{
+    *FDD_MGMT_ADDR = (drive << 4) | (reg & 0xF);
+    *FDD_MGMT_WDATA = data & 0xFFFF;
+    *FDD_MGMT_TRIG = FDD_MGMT_WR;
+}
+
+// One management-bus read: trigger, then return the captured value. The trigger
+// and the readback are separate instructions, so the single-cycle bus strobe and
+// its capture have completed by the time the readback executes.
+static uint32_t mgmt_read(uint32_t drive, uint32_t reg)
+{
+    *FDD_MGMT_ADDR = (drive << 4) | (reg & 0xF);
+    *FDD_MGMT_TRIG = FDD_MGMT_RD;
+    return *FDD_MGMT_RDATA & 0xFFFF;
+}
+
+// Stream the 512 bytes now in the bridge RAM into the controller FIFO, in order.
+// The bridge RAM holds the sector little-endian, so the low byte of each word is
+// the earlier file byte. The FIFO register address is set once for the whole run.
+static void push_sector(uint32_t drive)
+{
+    *FDD_BRAM_ADDR = 0;
+    *FDD_MGMT_ADDR = (drive << 4) | FMGMT_FIFO;
+    for (int i = 0; i < SECTOR_WORDS; i++) {
+        uint32_t w = *FDD_BRAM_RDATA;
+        for (int b = 0; b < 4; b++) {
+            *FDD_MGMT_WDATA = (w >> (b * 8)) & 0xFF;
+            *FDD_MGMT_TRIG = FDD_MGMT_WR;
+        }
+    }
+}
+
+// Drain the 512 bytes the controller has queued for a write out of its FIFO and
+// into the bridge RAM, in order. Mirror of push_sector: the first byte popped is
+// the earliest file byte, so it lands in the low byte of the first RAM word. The
+// FIFO register address is set once for the whole run.
+static void pull_fifo(uint32_t drive)
+{
+    *FDD_BRAM_ADDR = 0;
+    *FDD_MGMT_ADDR = (drive << 4) | FMGMT_FIFO;
+    for (int i = 0; i < SECTOR_WORDS; i++) {
+        uint32_t w = 0;
+        for (int b = 0; b < 4; b++) {
+            *FDD_MGMT_TRIG = FDD_MGMT_RD;
+            w |= (*FDD_MGMT_RDATA & 0xFF) << (b * 8);
+        }
+        *FDD_BRAM_WDATA = w;
+    }
+}
+
+// Standard PC floppy geometries, largest first; the first whose sector count the
+// image meets wins. Matches the size thresholds MiSTer's x86 support uses.
+struct fdd_geom {
+    uint32_t min_sectors;
+    uint32_t cyls;
+    uint32_t spt;
+    uint32_t heads;
+};
+
+static const struct fdd_geom fdd_geoms[] = {
+    { 5760, 80, 36, 2 }, // 2.88 MB
+    { 3360, 80, 21, 2 }, // 1.68 MB
+    { 2880, 80, 18, 2 }, // 1.44 MB
+    { 2400, 80, 15, 2 }, // 1.2 MB
+    { 1440, 80, 9, 2 },  // 720 KB
+    { 720, 40, 9, 2 },   // 360 KB
+    { 640, 40, 8, 2 },   // 320 KB
+    { 360, 40, 9, 1 },   // 180 KB
+    { 0, 40, 8, 1 },     // 160 KB
+};
+
+// Crude busy-wait, long enough to separate the eject from the insert below.
+static void spin(uint32_t n)
+{
+    for (volatile uint32_t i = 0; i < n; i++) {
+    }
+}
+
+// Derive a drive's geometry from its image size (in sectors) and push it to the
+// controller, ejecting first so the controller flags a media change, then marking
+// the media present and writable. drive selects the controller's drive A (0) or B
+// (1) via the management-bus drive bit.
+void fdd_mount(uint32_t drive, uint32_t sectors)
+{
+    const struct fdd_geom *g = &fdd_geoms[0];
+    for (int i = 0; i < (int) (sizeof(fdd_geoms) / sizeof(fdd_geoms[0])); i++) {
+        if (sectors >= fdd_geoms[i].min_sectors) {
+            g = &fdd_geoms[i];
+            break;
+        }
+    }
+
+    mgmt_write(drive, FMGMT_PRESENT, 0);
+    spin(100000);
+    mgmt_write(drive, FMGMT_CYLS, g->cyls);
+    mgmt_write(drive, FMGMT_SPT, g->spt);
+    mgmt_write(drive, FMGMT_TOTAL, g->cyls * g->spt * g->heads);
+    mgmt_write(drive, FMGMT_HEADS, g->heads);
+    mgmt_write(drive, FMGMT_WRPROT, 0);
+    mgmt_write(drive, FMGMT_PRESENT, 1);
+}
+
+// Answer one pending controller request. Register 0 reports the active request's
+// drive in bit 15 and the LBA in the low bits, so it selects which image dataslot
+// the sector is moved to or from. A read pulls the sector from that dataslot and
+// streams it to the controller FIFO; a write drains the FIFO and persists it to that
+// dataslot. The reg-0 read and the FIFO are drive-agnostic in floppy.v, so only the
+// slot id is keyed on the drive. Writes reach the SD file directly, so nothing else
+// is needed here.
+void fdd_poll(void)
+{
+    uint32_t req = *FDD_REQUEST;
+    if (req & FDD_REQ_READ) {
+        uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);
+        uint32_t slot = (reg0 & FDD_LBA_DRIVE) ? FDD1_SLOT_ID : FDD0_SLOT_ID;
+        // Push only on a good read; a failed transfer must not stream stale bytes.
+        if (tds_transfer(slot, reg0 & FDD_LBA_MASK, FDD_TDS_READ)) {
+            push_sector(0);
+        }
+    } else if (req & FDD_REQ_WRITE) {
+        uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);
+        uint32_t slot = (reg0 & FDD_LBA_DRIVE) ? FDD1_SLOT_ID : FDD0_SLOT_ID;
+        // pull_fifo already completes the controller's write; a failed persist has no
+        // path back to the guest, so the result is not acted on here.
+        pull_fifo(0);
+        tds_transfer(slot, reg0 & FDD_LBA_MASK, FDD_TDS_WRITE);
+    }
+}
