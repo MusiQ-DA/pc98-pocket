@@ -4,11 +4,11 @@
 // Renders the 80x25 text screen (8x16 cells on 640x400) from TVRAM + FONT.ROM.
 //
 // Pipeline (sys clock 74.25 MHz, one pixel every 3rd cycle via pix_ce):
-//   each character cell spans 24 sys cycles:
-//     ph 0        : pixel 0 out; TVRAM read address switched to the NEXT cell
-//     ph 1        : char/attribute of the next cell registered
+//   each character cell_idx spans 24 sys cycles:
+//     ph 0        : pixel 0 out; TVRAM read address switched to the NEXT cell_idx
+//     ph 1        : char/attribute of the next cell_idx registered
 //     ph 2        : char/attr latched; FONT.ROM byte address driven
-//     ph 4        : glyph for the next cell latched
+//     ph 4        : glyph for the next cell_idx latched
 //     ph 3p (p=0..7): pixel p output from the current glyph register
 //     cell_start  : glyph/attr registers roll over
 //
@@ -25,7 +25,7 @@ module text_render (
     input  wire [9:0]  vcount,          // 0..448
 
     // TVRAM video port
-    output wire [10:0] tvram_addr,      // cell index
+    output wire [10:0] tvram_addr,      // cell_idx index
     input  wire [7:0]  tvram_char_q,
     input  wire [7:0]  tvram_attr_q,
 
@@ -39,18 +39,18 @@ module text_render (
 
 wire visible = (hcount < 10'd640) && (vcount < 10'd400);
 
-// cell geometry: 80 cols x 25 rows
+// cell_idx geometry: 80 cols x 25 rows
 wire [6:0] col = hcount[9:3];         // 0..79
 wire [4:0] row = vcount[8:4];         // 0..24
 wire [12:0] rowbase = {3'd0, row, 6'd0} + {5'd0, row, 4'd0};   // row*80
-wire [10:0] cell = rowbase[10:0] + {1'b0, col};
+wire [10:0] cell_idx = rowbase[10:0] + {1'b0, col};
 
-// next cell (fetch-ahead); clamps to start-of-row at the end
+// next cell_idx (fetch-ahead); clamps to start-of-row at the end
 wire [6:0] next_col = (col == 7'd79) ? 7'd0 : col + 7'd1;
-wire [10:0] next_cell = rowbase[10:0] + {1'b0, next_col};
+wire [10:0] next_cell_idx = rowbase[10:0] + {1'b0, next_col};
 
 // ---------------------------------------------------------------------------
-// cell phase: counts 24 sys cycles per cell, reset at cell_start
+// cell_idx phase: counts 24 sys cycles per cell_idx, reset at cell_start
 // ---------------------------------------------------------------------------
 reg [4:0] ph = 5'd23;
 wire cell_start = pix_ce && (hcount[2:0] == 3'd0);
@@ -59,8 +59,8 @@ always @(posedge clk74) begin
     else if (ph != 5'd23)    ph <= ph + 5'd1;
 end
 
-// TVRAM address: point at the next cell during the fetch window
-assign tvram_addr = (ph <= 5'd2) ? next_cell : cell;
+// TVRAM address: point at the next cell_idx during the fetch window
+assign tvram_addr = (ph <= 5'd2) ? next_cell_idx : cell_idx;
 
 // ---------------------------------------------------------------------------
 // font addressing: char code -> glyph row byte
@@ -75,18 +75,18 @@ assign font_addr = fbyte;
 // ---------------------------------------------------------------------------
 // pipeline registers
 // ---------------------------------------------------------------------------
-reg [7:0] glyph_reg = 8'h00;       // glyph byte of the cell being rendered
+reg [7:0] glyph_reg = 8'h00;       // glyph byte of the cell_idx being rendered
 reg       reverse_reg = 1'b0;
 reg [7:0] next_glyph = 8'h00;
 reg       next_reverse = 1'b0;
 reg [7:0] char_r = 8'h00;
 reg [7:0] attr_r = 8'h00;
-reg [2:0] pix_r = 3'd0;            // pixel index within the cell
+reg [2:0] pix_r = 3'd0;            // pixel index within the cell_idx
 
 wire [2:0] pix_in_cell = hcount[2:0];
 
 always @(posedge clk74) begin
-    // --- fetch pipeline for the NEXT cell ---
+    // --- fetch pipeline for the NEXT cell_idx ---
     if (ph == 5'd2) begin
         char_r <= tvram_char_q;
         attr_r <= tvram_attr_q;
@@ -111,7 +111,7 @@ always @(posedge clk74) begin
         end
     end
 
-    // --- roll the pipeline at the cell boundary ---
+    // --- roll the pipeline at the cell_idx boundary ---
     if (cell_start) begin
         glyph_reg   <= next_glyph;
         reverse_reg <= next_reverse;
