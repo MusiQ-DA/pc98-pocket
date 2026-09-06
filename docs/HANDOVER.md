@@ -243,22 +243,41 @@ NOPスタブ(6144×0x00000013)は一度もこのストアを実行しないの�
 > **ゴールと完了条件は `docs/GOAL.md`(確定版)を参照。** 「本命」= 実機で
 > PC-98 ソフトが GDC グラフィック + FM音源つきで実用速度で動くこと。
 
-1. **testB0b の実機テスト**(パッケージ修正版。SD投入済み。§1参照)
-   - Pocket で **`PCXTDEV`** を起動し、BIOS POST が出るか確認
-   - 第1回テストは Load error だったが、原因はパッケージ側の不備3件と判明。
-     修正済みなので**この再テストが本来のB0判定**になる
-   - 判定基準は §1「B0 実機テストの判定基準」を参照
-2. **B1: 実 firmware 入りビットストリームで DOS ブート確認**(要CIビルド)
-3. **P0: 決定済み → `docs/P0_MEMORY.md`**(G-RAM は BRAM 一択。SDRAM は
-   16bit/42.95MHz/単一ポート/アクセス毎PRECHARGE で EGC に耐えない)
-   残作業2件:
-   - **D-4: OSD フレームバッファの縮小**(640×200×4bpp → 320×200×4bpp、
-     +32 M10K)。機械層を書く前に余裕を作る。単独で実機確認でき切り戻しも容易
-   - **2ページ要否の確認**(np2 ソースが必要 = ネットワーク作業)。
-     2ページ必須なら D5 か D7 を諦める再交渉が要る
-4. **P1: PC-98メモリマップ**(CPU+SDRAM+BIOSフェッチ)
-5. **P2: TVRAM+テキスト表示**(Phase 3資産: tvram.sv/text_render.sv 移植)
-6. **P3: GDC** / **P4: FDC→DOS** / **P5: BEEP→OPN→OPNA** / **P6: EGC** / **P7: 入力・詰め**
+1. **P0 手順2: SDRAM コントローラの置換**(← いま着手する作業)
+   - 移植元: `~/repo/_refs/x68-memory/SDRAMC.vhd`(X68000_MiSTer, GPL,
+     80MHz / 16bit / ロウ内バースト)。**pcxt-base は GPLv3 なので移植可**
+   - 置換対象: `pcxt-base/src/fpga/core/KFPC-XT/HDL/KFSDRAM/HDL/KFSDRAM.sv`
+     (アクセス毎PRECHARGE・4バンク未使用・CPU と単一ポート共有)
+   - マルチポート化する(CPU メインRAM / G-RAM / 表示フェッチ)
+2. **P0 手順3: 帯域の実測** ← **分水嶺**
+   - 要求: 表示 7.7 MB/s(シーケンシャル)+ EGC 約 15 MB/s(ランダム)+ CPU
+   - **届かなければ C を諦めて A(1ページ)に後退し、D2/D5/D6 を再交渉する**
+     (`docs/P0_MEMORY.md` §7 の撤退ライン)
+3. **B1 の確認**: CI run#39(sha `da7f4164`、実 firmware 入り)の結果を見て、
+   実機で BIOS POST → DOS ブートするか確認。SDRAM を差し替える前に
+   ベースの健全性を押さえておくと切り分けが楽になる
+4. **P0 手順4**: BRAM キャッシュ設計(表示ラインバッファ / EGC ワーキングセット)
+5. **P1: PC-98メモリマップ**(CPU+SDRAM+BIOSフェッチ)
+6. **P2: TVRAM+テキスト表示** / **P3: GDC** / **P4: FDC→DOS** /
+   **P5: BEEP→OPN→OPNA** / **P6: EGC** / **P7: 入力・詰め**
+
+### 参照ソースの置き場所(重要)
+
+`/tmp` は再起動で消えるため `~/repo/_refs/` に永続化済み:
+
+| パス | 内容 |
+|---|---|
+| `~/repo/_refs/x68-memory/` | X68000_MiSTer の `rtl/memory/` 一式(SDRAMC/cachecont/gvram_*) |
+| `~/repo/_refs/X68000_MiSTer-master.tar.gz` | 同リポジトリ全体 |
+| `~/repo/_refs/NP2kai-master.tar.gz` | np2 ソース(**挙動リファレンス専用。コード移植はしない**) |
+
+再取得する場合(DNS 故障中なので dig ピン留めが必要):
+
+```bash
+IP=$(dig +short codeload.github.com @1.1.1.1 | tail -1)
+curl -sS -L --resolve "codeload.github.com:443:$IP" \
+  -o out.tar.gz https://codeload.github.com/<owner>/<repo>/tar.gz/refs/heads/<branch>
+```
 
 ## 6. ユーザー環境メモ
 
