@@ -743,6 +743,7 @@ set_global_assignment -name SDC_FILE core/core_constraints.sdc
 # ---------------------------------------------------------------------------
 # Pocket glue (core/) — the APF-facing edges of the port.
 # ---------------------------------------------------------------------------
+set_global_assignment -name VERILOG_FILE core/apf_bridge_loader.v
 set_global_assignment -name VERILOG_FILE core/i2s.v
 
 # ---- PC-98 machine (Phase 2) ----
