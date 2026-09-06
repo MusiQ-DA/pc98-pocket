@@ -745,6 +745,18 @@ set_global_assignment -name SDC_FILE core/core_constraints.sdc
 # ---------------------------------------------------------------------------
 set_global_assignment -name VERILOG_FILE core/i2s.v
 
+# ---- PC-98 machine (Phase 2) ----
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_top.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/bios_rom.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/ram64k.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl8088/mcl86_eu_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl8088/mcl86_biu_min.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl8088/mcl86_adder.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl8088/mcl86_ucode.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl8088/cpu_type_latch.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl8088/i8088_min.sv
+
+
 # ---------------------------------------------------------------------------
 # Macintosh LC core RTL.
 #

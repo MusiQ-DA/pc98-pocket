@@ -11,7 +11,8 @@
                 "extensions": [
                     "rom"
                 ],
-                "size_maximum": 98304
+                "size_maximum": 98304,
+                "address": "0x10000000"
             },
             {
                 "name": "Font ROM",

@@ -250,12 +250,73 @@ assign cart_tran_pin31_dir = 1'b0;
 assign dbg_tx              = 1'b0;
 assign user1               = 1'b0;
 
-// little-endian bridge (PC-98 is a little-endian x86 family machine)
+// little-endian bridge: the PC-98 (V30 family) is little-endian, so file bytes
+// stay in file order all the way into ROM/RAM.
 assign bridge_endian_little = 1'b1;
 
 // ---- core_bridge_cmd: standard Analogue command processor -----------------
 wire        br_reset_n;
 wire [31:0] datatable_q;
+
+// dataslot plumbing (BIOS ROM slot for now)
+localparam [15:0] SLOT_BIOS = 16'd200;
+
+wire        dataslot_requestread;
+wire [15:0] dataslot_requestread_id;
+wire        dataslot_requestwrite;
+wire [15:0] dataslot_requestwrite_id;
+wire [31:0] dataslot_requestwrite_size;
+wire        dataslot_update;
+wire [15:0] dataslot_update_id;
+wire [31:0] dataslot_update_size;
+wire        dataslot_allcomplete;
+
+reg         loader_active;
+always @(posedge clk_74a) begin
+    if (dataslot_requestwrite)
+        loader_active <= (dataslot_requestwrite_id == SLOT_BIOS);
+    else if (dataslot_allcomplete)
+        loader_active <= 1'b0;
+end
+
+wire        ldr_dio_download;
+wire [7:0]  ldr_dio_index;
+wire [24:0] ldr_dio_addr;
+wire [15:0] ldr_dio_data;
+wire        ldr_dio_wr;
+
+apf_bridge_loader #(
+    .ADDR_BASE ( 32'h1000_0000 ),   // BIOS ROM window (data.json slot 200)
+    .ADDR_MASK ( 32'hF000_0000 )
+) loader (
+    .clk_74a        ( clk_74a            ),
+    .bridge_addr    ( bridge_addr        ),
+    .bridge_wr      ( bridge_wr          ),
+    .bridge_wr_data ( bridge_wr_data     ),
+    .slot_id        ( 16'd0              ),
+    .slot_active    ( loader_active      ),
+    .clk_sys        ( clk_74a            ),
+    .reset          ( 1'b0               ),
+    .dio_download   ( ldr_dio_download   ),
+    .dio_index      ( ldr_dio_index      ),
+    .dio_addr       ( ldr_dio_addr       ),
+    .dio_data       ( ldr_dio_data       ),
+    .dio_wr         ( ldr_dio_wr         ),
+    .dio_ack        ( 1'b1               ),
+    .busy           (                    )
+);
+
+wire dbg_cpu_fetch;
+
+pc98_top machine (
+    .clk_74a       ( clk_74a          ),
+    .dio_download  ( ldr_dio_download ),
+    .dio_addr      ( ldr_dio_addr     ),
+    .dio_data      ( ldr_dio_data     ),
+    .dio_wr        ( ldr_dio_wr       ),
+    .dio_ack       ( dio_ack          ),
+    .dbg_cpu_fetch ( dbg_cpu_fetch    )
+);
 
 core_bridge_cmd bridge_cmds (
 
@@ -273,10 +334,68 @@ core_bridge_cmd bridge_cmds (
     .status_setup_done       ( 1'b1            ),
     .status_running          ( 1'b1            ),
 
-    .savestate_supported     ( 1'b0            ),
-    .savestate_addr          ( 32'd0           ),
-    .savestate_size          ( 32'd0           ),
-    .savestate_maxloadsize   ( 32'd0           )
+    .dataslot_requestread    ( dataslot_requestread    ),
+    .dataslot_requestread_id ( dataslot_requestread_id ),
+    .dataslot_requestread_ack( 1'b0                    ),
+    .dataslot_requestread_ok ( 1'b0                    ),
+
+    .dataslot_requestwrite     ( dataslot_requestwrite     ),
+    .dataslot_requestwrite_id  ( dataslot_requestwrite_id  ),
+    .dataslot_requestwrite_size( dataslot_requestwrite_size),
+    .dataslot_requestwrite_ack ( 1'b1                      ),
+    .dataslot_requestwrite_ok  ( 1'b1                      ),
+
+    .dataslot_update        ( dataslot_update        ),
+    .dataslot_update_id     ( dataslot_update_id     ),
+    .dataslot_update_size   ( dataslot_update_size   ),
+
+    .dataslot_allcomplete   ( dataslot_allcomplete   ),
+
+    .rtc_epoch_seconds      ( 32'd0                  ),
+    .rtc_date_bcd           ( 32'd0                  ),
+    .rtc_time_bcd           ( 32'd0                  ),
+    .rtc_valid              ( 1'b0                   ),
+
+    .savestate_supported    ( 1'b0                   ),
+    .savestate_addr         ( 32'd0                  ),
+    .savestate_size         ( 32'd0                  ),
+    .savestate_maxloadsize  ( 32'd0                  ),
+
+    .osnotify_inmenu        (                        ),
+
+    .savestate_start        (                        ),
+    .savestate_start_ack    ( 1'b0                   ),
+    .savestate_start_busy   ( 1'b0                   ),
+    .savestate_start_ok     ( 1'b0                   ),
+    .savestate_start_err    ( 1'b0                   ),
+
+    .savestate_load         (                        ),
+    .savestate_load_ack     ( 1'b0                   ),
+    .savestate_load_busy    ( 1'b0                   ),
+    .savestate_load_ok      ( 1'b0                   ),
+    .savestate_load_err     ( 1'b0                   ),
+
+    .target_dataslot_read        ( 1'b0                 ),
+    .target_dataslot_write       ( 1'b0                 ),
+    .target_dataslot_getfile     ( 1'b0                 ),
+    .target_dataslot_openfile    ( 1'b0                 ),
+
+    .target_dataslot_ack         (                      ),
+    .target_dataslot_done        (                      ),
+    .target_dataslot_err         (                      ),
+
+    .target_dataslot_id          ( 16'd0                ),
+    .target_dataslot_slotoffset  ( 32'd0                ),
+    .target_dataslot_bridgeaddr  ( 32'd0                ),
+    .target_dataslot_length      ( 32'd0                ),
+
+    .target_buffer_param_struct  ( 32'd0                ),
+    .target_buffer_resp_struct   ( 32'd0                ),
+
+    .datatable_addr           ( 10'd0                   ),
+    .datatable_wren           ( 1'b0                    ),
+    .datatable_data           ( 32'd0                   ),
+    .datatable_q              ( datatable_q             )
 
 );
 
