@@ -8,3 +8,4 @@ incremental_db/
 *.summary
 .DS_Store
 scripts/local.env
+dist/
