@@ -1,0 +1,58 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  quartus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune -a -f || true
+          df -h /
+
+      - name: Pull Quartus image (Cyclone V capable)
+        run: docker pull raetro/quartus:pocket
+
+      - name: Compile (quartus_sh --flow compile)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/pcxt-base":/work \
+            -w /work/src/fpga \
+            raetro/quartus:pocket bash -lc '
+              set -e
+              Q=""
+              for p in /opt/intelFPGA/quartus /opt/quartus /usr/local/quartus; do
+                f=$(find "$p" -maxdepth 3 -name quartus_sh 2>/dev/null | head -1)
+                if [ -n "$f" ]; then Q=$(dirname "$f"); break; fi
+              done
+              if [ -z "$Q" ]; then echo "ERROR: quartus_sh not found"; exit 1; fi
+              echo "using quartus at $Q"
+              export PATH="$Q:$PATH"
+              export LD_LIBRARY_PATH="$Q:${LD_LIBRARY_PATH:-}"
+              quartus_sh --version
+              quartus_sh --flow compile ap_core
+            '
+
+      - name: Show fit summary
+        if: always()
+        run: |
+          grep -A14 "Logic utilization" pcxt-base/src/fpga/output_files/ap_core.fit.rpt 2>/dev/null | head -4 || true
+          ls -la pcxt-base/src/fpga/output_files/ 2>/dev/null || true
+
+      - name: Upload bitstream
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitstream
+          if-no-files-found: error
+          path: |
+            pcxt-base/src/fpga/output_files/*.rbf
+            pcxt-base/src/fpga/output_files/*.fit.rpt
+            pcxt-base/src/fpga/output_files/*.sta.rpt

@@ -1,0 +1,108 @@
+{
+    "data": {
+        "magic": "APF_VER_1",
+        "data_slots": [
+            {
+                "name": "BIOS ROM",
+                "id": "200",
+                "required": true,
+                "parameters": 0,
+                "filename": "bios.rom",
+                "extensions": [
+                    "rom"
+                ],
+                "size_maximum": 98304,
+                "address": "0x10000000"
+            },
+            {
+                "name": "Font ROM",
+                "id": "201",
+                "required": true,
+                "parameters": 0,
+                "filename": "font.rom",
+                "extensions": [
+                    "rom",
+                    "bin"
+                ],
+                "size_maximum": 1048576,
+                "address": "0x20000000"
+            },
+            {
+                "name": "Sound ROM",
+                "id": "202",
+                "required": false,
+                "parameters": 0,
+                "filename": "sound.rom",
+                "extensions": [
+                    "rom",
+                    "bin"
+                ],
+                "size_maximum": 131072
+            },
+            {
+                "name": "Floppy 1",
+                "id": "210",
+                "required": false,
+                "parameters": 1,
+                "extensions": [
+                    "d88",
+                    "d98",
+                    "fdi",
+                    "fdd",
+                    "2hd",
+                    "tfd",
+                    "hdm",
+                    "xdf"
+                ],
+                "size_maximum": 8388608,
+                "deferload": true
+            },
+            {
+                "name": "Floppy 2",
+                "id": "211",
+                "required": false,
+                "parameters": 1,
+                "extensions": [
+                    "d88",
+                    "d98",
+                    "fdi",
+                    "fdd",
+                    "2hd",
+                    "tfd",
+                    "hdm",
+                    "xdf"
+                ],
+                "size_maximum": 8388608,
+                "deferload": true
+            },
+            {
+                "name": "Hard Disk 1",
+                "id": "310",
+                "required": false,
+                "parameters": 1,
+                "extensions": [
+                    "hdi",
+                    "nhd",
+                    "thd",
+                    "hdd",
+                    "hdn"
+                ],
+                "deferload": true
+            },
+            {
+                "name": "Hard Disk 2",
+                "id": "311",
+                "required": false,
+                "parameters": 1,
+                "extensions": [
+                    "hdi",
+                    "nhd",
+                    "thd",
+                    "hdd",
+                    "hdn"
+                ],
+                "deferload": true
+            }
+        ]
+    }
+}

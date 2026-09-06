@@ -1,0 +1,15 @@
+output_files/
+db/
+greybox_tmp/
+incremental_db/
+*.qws
+*.rpt
+*.sof
+*.summary
+.DS_Store
+scripts/local.env
+dist/
+pcxt-base/games/
+pcxt-base/hdd/
+pcxt-base/SW/
+pcxt-base/dist/
