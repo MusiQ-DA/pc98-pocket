@@ -366,6 +366,30 @@ reg [25:0] boot_cnt = 26'd0;
 wire boot_done_r  = (boot_cnt >= 26'd64);      // ~0.9 us after configuration
 wire setup_done_r = (boot_cnt >= 26'd4096);    // ~55 us after boot_done
 
+// ---- bridge diagnostics: which host commands has the OS issued? -----------
+// 8-bit sticky mask, rendered as blocks on the bottom screen edge:
+//  [0]=status poll(0x0000) [1]=slot read(0x0081) [2]=slot write(0x0082)
+//  [3]=allcomplete(0x008F) [4]=reset exit(0x0011) [5]=reset enter(0x0010)
+//  [6]=target window write [7]=datatable write
+reg [7:0] cmd_seen = 8'd0;
+always @(posedge clk_74a) begin
+    if (bridge_wr && bridge_addr[31:24] == 8'hF8) begin
+        if (bridge_addr[15:8] == 8'h00 && bridge_wr_data[31:16] == 16'h434D) begin
+            case (bridge_wr_data[15:0])
+                16'h0000: cmd_seen[0] <= 1'b1;
+                16'h0081: cmd_seen[1] <= 1'b1;
+                16'h0082: cmd_seen[2] <= 1'b1;
+                16'h008F: cmd_seen[3] <= 1'b1;
+                16'h0011: cmd_seen[4] <= 1'b1;
+                16'h0010: cmd_seen[5] <= 1'b1;
+                default:  cmd_seen[6] <= 1'b1;
+            endcase
+        end
+        if (bridge_addr[15:8] == 8'h10)    cmd_seen[5] <= 1'b1;
+        if (bridge_addr[15:8] == 8'h2x || (bridge_addr[15:8] == 8'h20)) cmd_seen[7] <= 1'b1;
+    end
+end
+
 wire [23:0] mach_rgb;
 wire        mach_de;
 
@@ -503,7 +527,15 @@ end
 assign video_rgb_clock    = clk_74a;
 // NOTE: proper 90-degree clock forward via PLL/DDIO comes in Phase 2.
 assign video_rgb_clock_90 = ~clk_74a;
-assign video_rgb          = mach_rgb;
+// bottom-edge diagnostic strip: 8 blocks, lit = command seen
+reg [2:0] dbg_block;
+always @(posedge clk_74a) if (pix_ce && vcount >= 9'd396)
+    dbg_block <= hcount[9:3] / 3'd10;
+wire [2:0] dbg_block_r = dbg_block;
+
+assign video_rgb          = (vcount >= 9'd396)
+                            ? (cmd_seen[dbg_block_r] ? 24'hFFFFFF : 24'h303030)
+                            : mach_rgb;
 assign video_de           = mach_de;
 assign video_hs           = hsync_r;
 assign video_vs           = vsync_r;
