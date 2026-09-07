@@ -802,6 +802,7 @@ set_global_assignment -name QIP_FILE core/8088/8088.qip
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFSDRAM/HDL/KFSDRAM.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_mp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_selftest_master.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/post_monitor.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_kf_shim.sv
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFPS2KB/HDL/KFPS2KB_Byte_Accept.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFPS2KB/HDL/KFPS2KB.sv"
