@@ -33,6 +33,13 @@ module post_monitor #(
     // 8088's dout removes the ambiguity.
     input  wire  [7:0] cpu_data,
     input  wire        io_write_n,
+    // AEN. During a DMA cycle the bus carries a 20-bit MEMORY address while
+    // IOW is asserted, so every memory address whose low 16 bits happen to be
+    // 0x0080 looks like a write to the POST port -- and an XT refreshes RAM
+    // through DMA channel 0 continuously, so it never stops. This is the same
+    // qualifier Peripherals.sv puts on cga_mem_select, and leaving it out is
+    // what produced MAX C0 and RESTARTS 13 on testB18.
+    input  wire        address_enable_n,
     input  wire        memory_read_n,
     input  wire        memory_write_n,
 
@@ -58,7 +65,8 @@ module post_monitor #(
     // Port 0x80 is decoded on the low 16 bits; the BIOS uses out 0x80,al.
     wire io_write   = ~io_write_n;
     wire mem_access = ~memory_read_n | ~memory_write_n;
-    wire is_post    = io_write && (address[15:0] == 16'h0080);
+    wire is_post    = io_write && ~address_enable_n
+                               && (address[15:0] == 16'h0080);
 
     // Require the decode to hold for two cycles before believing it: the
     // address and command lines do not change together, so a transition through

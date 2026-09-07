@@ -21,6 +21,7 @@ module tb_post_monitor;
     logic [19:0] address = 20'h0;
     logic  [7:0] cpu_data = 8'h00;
     logic        io_write_n = 1, memory_read_n = 1, memory_write_n = 1;
+    logic        aen_n = 0;   // address_enable_n: 0 = normal CPU cycle, 1 = DMA
 
     wire  [7:0] post_code, post_prev, post_max;
     wire [63:0] post_hist;
@@ -30,7 +31,7 @@ module tb_post_monitor;
     post_monitor u_dut (
         .clk(clk), .rst(rst),
         .address(address), .cpu_data(cpu_data),
-        .io_write_n(io_write_n),
+        .io_write_n(io_write_n), .address_enable_n(aen_n),
         .memory_read_n(memory_read_n), .memory_write_n(memory_write_n),
         .post_code(post_code), .post_prev(post_prev), .post_hist(post_hist),
         .last_mem_addr(last_mem_addr), .post_count(post_count),
@@ -116,6 +117,25 @@ module tb_post_monitor;
             post_hist[31:24] !== 8'h02 || post_hist[23:16] !== 8'h03 ||
             post_hist[15:8]  !== 8'h04 || post_hist[7:0]   !== 8'h54)
             begin $display("  FAIL hist"); errors++; end
+
+        // A DMA cycle: AEN high, IOW asserted, and a MEMORY address whose low
+        // 16 bits are 0x0080. An XT refreshes RAM this way continuously, so if
+        // this counts the readout is buried -- testB18 showed MAX C0 and
+        // RESTARTS 13 for exactly this reason.
+        aen_n = 1;                   // DMA owns the bus
+        address = 20'h30080;         // memory address, low 16 bits look like the port
+        cpu_data = 8'hC0;
+        io_write_n = 0;
+        repeat (6) @(posedge clk);
+        io_write_n = 1;
+        address = 20'h0;
+        aen_n = 0;
+        repeat (4) @(posedge clk);
+        if (post_count !== 16'd6) begin
+            $display("  FAIL DMA cycle counted (count=%0d, want 6)", post_count); errors++;
+        end
+        if (post_max === 8'hC0) begin $display("  FAIL DMA reached max"); errors++; end
+        $display("  DMA cycle ignored: count=%0d max=%02h", post_count, post_max);
 
         // A one-cycle sweep through 0x0080 must be ignored entirely.
         out_other_glitch(8'h63);
