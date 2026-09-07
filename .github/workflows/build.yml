@@ -61,6 +61,14 @@ jobs:
             grep -q "RESULT: PASS" ram_$mode.log
           done
 
+      - name: POST monitor captures what the guest wrote
+        run: |
+          S=pcxt-base/src/fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_post_monitor \
+            -Isim -I$S sim/tb_post_monitor.sv $S/post_monitor.sv -o p --Mdir obj_pm
+          ./obj_pm/p | tee pm.log
+          grep -q "RESULT: PASS" pm.log
+
       - name: 8088 read timing (the check every other bench was missing)
         run: |
           S=pcxt-base/src/fpga/core
