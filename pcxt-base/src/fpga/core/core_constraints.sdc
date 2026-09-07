@@ -108,8 +108,24 @@ set dram_chip_clk "ic|pll|altera_pll_i|general[2].gpll~PLL_OUTPUT_COUNTER|divclk
 # -max = tAC + max trace flight; -min = tOH + min trace flight.
 # -add_delay on the SECOND of each min/max pair is required: without it Quartus
 # REPLACES the previous delay on the port instead of adding to it.
+#
+# ★ 2026-09-07, CALIBRATED AGAINST THE BOOTING REFERENCE. The sibling core's
+# 5.9 ns was tried first and is too pessimistic here. Proof: run#59 built pure
+# KFSDRAM -- which boots this board -- against these constraints and it missed
+# the 5.9 ns read path by 2.357 ns, essentially the same as sdram_mp's 2.408.
+# A constraint that the known-good configuration cannot meet is not measuring
+# the interface, it is just miscalibrated, and an unreachable goal also makes
+# the Fitter give up ground elsewhere (the CGA domain went -0.386 -> -0.905
+# between #57 and #58).
+#
+# 5.9 - 2.357 = 3.54 ns is therefore an upper bound on the real tAC + flight
+# that this interface actually achieves, so 3.5 is used. It is an INFERENCE
+# from one build, not a measurement: it is the largest value the booting
+# configuration is known to satisfy. If the SDRAM part number and its tAC are
+# ever confirmed, replace this with the datasheet figure plus trace flight.
+# The -min side is unchanged; nothing has bounded it.
 set_input_delay -clock $dram_chip_clk -reference_pin [get_ports {dram_clk}] \
-    -max 5.9 [get_ports {dram_dq[*]}]
+    -max 3.5 [get_ports {dram_dq[*]}]
 set_input_delay -clock $dram_chip_clk -reference_pin [get_ports {dram_clk}] \
     -min 0.9 -add_delay [get_ports {dram_dq[*]}]
 

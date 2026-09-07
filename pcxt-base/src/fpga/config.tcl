@@ -25,21 +25,10 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 #          regression; the antiphase clock puts mid-window on the POSEDGE
 #   testB7/7b (sdram_mp, posedge restored, dram_* finally constrained)
 #
-#   ---- MEASUREMENT BUILD, 2026-09-07: testB7ref ----------------------------
-#   SDRAM_USE_MP is commented out ON PURPOSE for one build. This is NOT a
-#   hardware test and must not be flashed; it exists to read one number.
-#
-#   Constraining the dram_* pins (they had been unconstrained for the whole
-#   project history) finally made STA analyse the SDRAM, and it reports the
-#   read path at -2.408 ns. IO-cell packing does not move that, so it is not
-#   routing. What we cannot tell from the sdram_mp build alone is whether the
-#   number is specific to sdram_mp or common to the interface:
-#
-#     KFSDRAM also ~= -2.408  -> the 5.9 ns input delay is pessimistic for this
-#                                part/board; the read path is not the culprit
-#     KFSDRAM positive        -> sdram_mp's read path really is worse, and that
-#                                is the bug
-#
-#   KFSDRAM boots this board, so it is the only valid yardstick. Re-enable the
-#   macro below immediately after this build.
-# set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
+#   testB7ref (#59, measurement only): pure KFSDRAM against the new SDRAM
+#          constraints. ANSWERED the question it was built for -- KFSDRAM, which
+#          boots this board, reports the SAME read-path violation as sdram_mp
+#          (-2.357 / TNS -17.784 vs -2.408 / TNS -17.914). So the -2.4 ns is a
+#          property of the constraint values, not of sdram_mp, and the read path
+#          is NOT the culprit. See docs/HANDOVER.md 1.8.
+set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
