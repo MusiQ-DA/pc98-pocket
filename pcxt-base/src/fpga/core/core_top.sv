@@ -1477,67 +1477,27 @@ module core_top (
     wire  [7:0] st_wdata;
     wire        st_we;
     wire        st_req;
-    reg         st_done = 1'b0;
-    reg   [7:0] st_rdata = 8'h00;
+    wire        st_done;
+    wire  [7:0] st_rdata;
+    wire        st_run, st_wr_n, st_rd_n;
 
-    reg         st_run   = 1'b0;   // this master owns the ext port
-    reg         st_wr_n  = 1'b1;
-    reg         st_rd_n  = 1'b1;
-    reg   [7:0] st_guard = 8'd0;
-    reg   [1:0] st_state = 2'd0;
-
-    wire        st_grant = st_req & ~ioctl_download;
-
-    always @(posedge clk_chipset, posedge reset_sdram) begin
-        if (reset_sdram) begin
-            st_state <= 2'd0;
-            st_run   <= 1'b0;
-            st_wr_n  <= 1'b1;
-            st_rd_n  <= 1'b1;
-            st_done  <= 1'b0;
-            st_rdata <= 8'h00;
-            st_guard <= 8'd0;
-        end else begin
-            case (st_state)
-            2'd0: begin
-                st_run  <= 1'b0;
-                st_wr_n <= 1'b1;
-                st_rd_n <= 1'b1;
-                st_done <= 1'b0;
-                if (st_grant && initilized_sdram) begin
-                    st_run   <= 1'b1;
-                    st_wr_n  <= ~st_we;
-                    st_rd_n  <=  st_we;
-                    st_guard <= 8'd0;
-                    st_state <= 2'd1;
-                end
-            end
-            // Hold the command until RAM.sv reports the access finished. The
-            // guard mirrors the BIOS loader's: a stuck controller must not wedge
-            // the softcore, it must return a wrong answer we can see.
-            2'd1: begin
-                st_guard <= st_guard + 8'd1;
-                if (ram_rw_complete || (st_guard == 8'd200)) begin
-                    st_rdata <= st_we ? 8'h00 : chipset_ext_rdata;
-                    st_wr_n  <= 1'b1;
-                    st_rd_n  <= 1'b1;
-                    st_done  <= 1'b1;
-                    st_state <= 2'd2;
-                end
-            end
-            // Drop the bus, then wait for the firmware to see done and lower
-            // its request, so one write cannot start two accesses.
-            2'd2: begin
-                st_run <= 1'b0;
-                if (~st_req) begin
-                    st_done  <= 1'b0;
-                    st_state <= 2'd0;
-                end
-            end
-            default: st_state <= 2'd0;
-            endcase
-        end
-    end
+    sdram_selftest_master u_selftest (
+        .clk              (clk_chipset),
+        .rst              (reset_sdram),
+        .req              (st_req),
+        .we               (st_we),
+        .addr             (st_addr),
+        .wdata            (st_wdata),
+        .done             (st_done),
+        .rdata            (st_rdata),
+        .initilized_sdram (initilized_sdram),
+        .loader_busy      (ioctl_download),
+        .run              (st_run),
+        .write_n          (st_wr_n),
+        .read_n           (st_rd_n),
+        .ram_rw_complete  (ram_rw_complete),
+        .ext_rdata        (chipset_ext_rdata)
+    );
 
     //
     // SPLASH
