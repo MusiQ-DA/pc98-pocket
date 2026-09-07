@@ -23,7 +23,14 @@ SIZE    = llvm-size
 # code always compiles against the feature set of the bitstream it runs in.
 # -Wundef makes an #if on a macro that failed to arrive a hard error, not a silent 0.
 HW_CONFIG   = ../fpga/config.tcl
-HW_DEFINES := $(addprefix -D,$(shell sed -n 's/.*VERILOG_MACRO "\(.*\)"/\1/p' $(HW_CONFIG)))
+# Anchored at the start of the line so a COMMENTED-OUT macro is not picked up.
+# The old pattern was '.*VERILOG_MACRO', which matched
+#     # set_global_assignment -name VERILOG_MACRO "SDRAM_SELFTEST=1"
+# just as happily as the live line, so commenting a macro out in config.tcl
+# disabled it for Quartus and left it defined for the firmware. That is how a
+# build ended up with the self-test compiled in after it had been switched off,
+# and it applies equally to SDRAM_USE_MP.
+HW_DEFINES := $(addprefix -D,$(shell sed -n 's/^[[:space:]]*set_global_assignment.*VERILOG_MACRO "\(.*\)"/\1/p' $(HW_CONFIG)))
 
 # -MMD -MP write per-object header dependencies (.d), pulled in by -include below, so
 # editing a header rebuilds every object that includes it.

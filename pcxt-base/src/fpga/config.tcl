@@ -36,10 +36,17 @@ set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
 #   ---- DIAGNOSTIC BUILD: SDRAM_SELFTEST -----------------------------------
 #   Turns the core into an SDRAM test rig: the softcore walks guest memory with
 #   the 8088 held in reset and leaves the first mismatching address on the OSD,
-#   then stops. It NEVER releases the guest, so this build does not boot -- that
-#   is the point. See docs/P0_SELFTEST_SPEC.md.
+#   then stops. It NEVER releases the guest, so that build does not boot.
+#
+#   OFF now: it did its job. testB14 reported PILOT A5/A5, PILOT2 5A/5A (bank 1)
+#   and PASS 64K on hardware, which proved the SDRAM was never the problem and
+#   pointed at the CPU handshake instead -- see docs/HANDOVER.md and
+#   sim/tb_cpu_timing.sv.
 #
 #   The firmware Makefile reads its -D flags out of this file, so this one macro
 #   arms both the RTL and the C. Comment it out to get a normal core back, and
 #   REBUILD THE FIRMWARE (firmware.vh is committed, CI does not rebuild it).
-set_global_assignment -name VERILOG_MACRO "SDRAM_SELFTEST=1"
+#   Re-enable to turn the core back into a test rig. Rebuild the firmware after
+#   flipping it (firmware.vh is committed; CI checks it against the sources but
+#   does not regenerate it).
+# set_global_assignment -name VERILOG_MACRO "SDRAM_SELFTEST=1"
