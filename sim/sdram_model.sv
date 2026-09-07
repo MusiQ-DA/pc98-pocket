@@ -27,7 +27,13 @@ module sdram_model #(
     parameter int T_RAS     = 2,      // ACTIVATE -> PRECHARGE, same bank
     parameter int T_RC      = 3,      // ACTIVATE -> ACTIVATE, same bank
     parameter int T_REF     = 0,      // cycles a row may go unrefreshed (0 = off)
-    parameter bit CHECK     = 1
+    parameter bit CHECK     = 1,
+    // DQ window fidelity. 0 = the zero-delay functional convention (data is
+    // already settled BEFORE the sampling edge, and held generously either
+    // side); 1 = the physical one, where the datum occupies exactly its own
+    // clock period and nothing else. See the DQ timing block below. Only a
+    // model with real launch/flight delays around it may use 1.
+    parameter bit PHYSICAL_DQ = 0
 ) (
     input  wire                   clk,
     input  wire [ROW_BITS-1:0]    a,
@@ -206,25 +212,43 @@ module sdram_model #(
     // N+CL is rd_vld[cas_lat-1]. Using rd_vld[cas_lat] puts the window a full
     // cycle late, which is what made this model reject KFSDRAM.
     //
-    // A real part drives the datum from its launch edge until the NEXT datum
-    // replaces it (burst data is continuous; after the last datum of a burst
-    // the bus stays driven for roughly one more cycle before tri-stating at
-    // tHZ). So the datum is held from slot CL-1 through slot CL+1. With an
-    // in-phase controller clock only the first slot matters; with a device
-    // clock out of phase (sdram_board_model) or real tAC in play, the
-    // controller's sampling edge can fall in any of the three slots, and
-    // truncating early would falsely reject controllers the hardware accepts
-    // (or bless one the hardware rejects -- the launch edge of the datum under
-    // the antiphase clock sits at T+58.2 ns, so a T+3 sample only works while
-    // tAC+flight < ~6 ns while a T+4 sample is robust from ~2 ns on).
+    // Two conventions, selected by PHYSICAL_DQ.
+    //
+    // PHYSICAL_DQ = 0 (default, zero-delay functional model, tb_ram_ab):
+    //   the datum is presented from slot CL-1 through slot CL+1. In a model
+    //   with no launch or flight delay the controller samples on the same edge
+    //   the part would launch on, so the data has to be settled BEFORE that
+    //   edge -- hence the early start. The extra held slots keep the model from
+    //   falsely rejecting controllers the hardware accepts.
+    //
+    // PHYSICAL_DQ = 1 (sdram_board_model, which supplies real delays):
+    //   the datum occupies EXACTLY its own clock period, slot CL, and nothing
+    //   else -- which is what a real part does, because the next word of the
+    //   burst replaces it on the following edge. The surrounding board model
+    //   then adds tAC + flight (T_RET_NS) on the way back, so the window seen
+    //   by the controller is [launch + tAC, launch + 1 period + tAC].
+    //
+    //   ★ 2026-09-07: this mode exists because the 3-slot window made the
+    //   board testbench UNABLE TO FAIL on the question it was built to answer.
+    //   It passed both the posedge sampler (correct, matches KFSDRAM, boots)
+    //   and testB6's negedge sampler (half a cycle early, black on hardware).
+    //   A window three times wider than the real one blesses everything. With
+    //   PHYSICAL_DQ the negedge sampler lands before the data arrives and the
+    //   testbench fails it, as it should.
     wire hold1 = (cas_lat     <= PIPE - 1) && rd_vld[cas_lat];
     wire hold2 = (cas_lat + 1 <= PIPE - 1) && rd_vld[cas_lat + 1];
 
     always_comb begin
-        if (cas_lat >= 1 && rd_vld[cas_lat-1]) dq_in = rd_data[cas_lat-1];
-        else if (hold1)                         dq_in = rd_data[cas_lat];
-        else if (hold2)                         dq_in = rd_data[cas_lat+1];
-        else                                    dq_in = 16'hZZZZ;
+        if (PHYSICAL_DQ) begin
+            // Exactly one period, starting at the launch edge.
+            if (hold1) dq_in = rd_data[cas_lat];
+            else       dq_in = 16'hZZZZ;
+        end else begin
+            if (cas_lat >= 1 && rd_vld[cas_lat-1]) dq_in = rd_data[cas_lat-1];
+            else if (hold1)                        dq_in = rd_data[cas_lat];
+            else if (hold2)                        dq_in = rd_data[cas_lat+1];
+            else                                   dq_in = 16'hZZZZ;
+        end
     end
 
     // Test hooks.

@@ -53,9 +53,13 @@ IDLE→READ 遷移サイクル C0 で ACT、state=READ の cycle0 で READ コ�
 **testB5(posedge 版)も P+3 で完全一致していた。** つまり読み出し点は元から正しく、
 testB6 が半サイクル早めて壊した。testB5 の失敗原因は別のところにある(→ §1.2)。
 
-> ⚠️ `sim/sdram_board_model.sv`(T_CO=7ns / T_RET=8ns)は **posedge 版と negedge 版の
-> 両方を PASS させる**。この半サイクルを判別する分解能が無い。board model の緑は
-> 「DQ サンプル点が正しい」の証拠にならない。
+> ⚠️ だった問題: `sim/sdram_board_model.sv` は **posedge 版と negedge 版の両方を PASS
+> させていた**。原因は `sdram_model.sv` が1ワードを CL-1〜CL+1 の**3スロット**保持して
+> いたこと(実部品は自分の1周期だけ)。窓が3倍広ければ何でも祝福する。
+> **修正済み**: `PHYSICAL_DQ` パラメータを追加し、board model 側は 1(= スロット CL のみ、
+> 実周期ぴったり)で駆動する。ゼロ遅延の `tb_ram_ab` 側は従来どおり 0。
+> 検証: KFSDRAM 参照 PASS / posedge mp PASS / **negedge(testB6)版は全 read が 00 で FAIL**。
+> これでこの TB は「DQ サンプル点」に対する判別能力を持つ。
 
 ### 1.2 真因: **dram_* ピンにタイミング制約が1つも無かった**
 
