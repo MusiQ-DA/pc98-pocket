@@ -61,6 +61,23 @@ jobs:
             grep -q "RESULT: PASS" ram_$mode.log
           done
 
+      - name: 8088 read timing (the check every other bench was missing)
+        run: |
+          S=pcxt-base/src/fpga/core
+          H=$S/KFPC-XT/HDL
+          for mode in ref mp mp_kfref; do
+            DEF="+define+SDRAM_USE_MP"
+            [ "$mode" = ref ] && DEF=""
+            [ "$mode" = mp_kfref ] && DEF="+define+SDRAM_USE_MP+SDRAM_MP_KF_REF"
+            verilator --binary --timing -Wno-fatal --top-module tb_cpu_timing $DEF \
+              -Isim -I$S -I$H -I$H/KFSDRAM/HDL \
+              sim/tb_cpu_timing.sv sim/sdram_board_model.sv sim/sdram_model.sv \
+              $H/RAM.sv $H/KFSDRAM/HDL/KFSDRAM.sv $S/sdram_kf_shim.sv $S/sdram_mp.sv \
+              -o c --Mdir obj_ct_$mode
+            ./obj_ct_$mode/c | tee ct_$mode.log
+            grep -q "RESULT: PASS" ct_$mode.log
+          done
+
       - name: RAM.sv integration at board timing (antiphase device clock)
         run: |
           S=pcxt-base/src/fpga/core
