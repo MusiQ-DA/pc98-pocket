@@ -47,6 +47,13 @@ module post_monitor #(
     output logic [7:0] post_prev,         // the one before it
     output logic [DEPTH*8-1:0] post_hist, // FROZEN: the first DEPTH codes, oldest first
     output logic [19:0] last_mem_addr,    // memory address at the last recorded code
+    // LIVE, never frozen. The guest stops rather than restarting, so this
+    // settles on whatever it is spinning in -- which is the one thing the
+    // frozen snapshot cannot say. testB19 gave ADDR FE1DD, the prefetch at the
+    // moment POST 08 was written, and that is simply where it was, not where it
+    // ended up.
+    output logic [19:0] live_mem_addr,
+    output logic [19:0] live_mem_max,     // highest address touched, ever
     output logic [15:0] post_count,       // how many codes have been seen, ever
     output logic [7:0] post_max,          // highest code seen
     output logic [15:0] restart_count     // times the guest went back to POST 00
@@ -84,6 +91,8 @@ module post_monitor #(
             post_prev     <= 8'h00;
             post_hist     <= '0;
             last_mem_addr <= 20'h0;
+            live_mem_addr <= 20'h0;
+            live_mem_max  <= 20'h0;
             post_count    <= 16'd0;
             post_max      <= 8'h00;
             restart_count <= 16'd0;
@@ -108,8 +117,11 @@ module post_monitor #(
             // POST code says where the guest was working. Qualified with "not
             // an I/O cycle", or the port number itself lands here -- testB16
             // reported ADDR 00080, which is the port, not a memory address.
-            if (mem_access && ~io_write)
-                mem_addr_q <= address;
+            if (mem_access && ~io_write) begin
+                mem_addr_q    <= address;
+                live_mem_addr <= address;
+                if (address > live_mem_max) live_mem_max <= address;
+            end
 
             // Record at the END of the write cycle, when the data is settled.
             if (is_post_q && ~is_post_stable) begin

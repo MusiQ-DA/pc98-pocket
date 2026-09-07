@@ -9,13 +9,15 @@
 #define POST_HIST_L ((volatile uint32_t *) 0x50000018) // newest four codes
 #define POST_HIST_H ((volatile uint32_t *) 0x5000001C) // oldest four
 #define POST_MAXRST ((volatile uint32_t *) 0x50000020) // {max[23:16], restarts[15:0]}
+#define POST_LIVE   ((volatile uint32_t *) 0x50000024) // live guest memory address
+#define POST_LIVEMX ((volatile uint32_t *) 0x50000028) // highest address ever touched
 
 // A strip along the top. Everything outside it stays palette 0 (transparent),
 // so the guest's picture shows through and this does not hide a working POST.
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
-#define PANEL_H 38
+#define PANEL_H 48
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -56,12 +58,17 @@ void post_mon_tick(void)
     // the counters below keep moving and are what show a reboot loop.
     uint32_t status = *POST_STATUS;
     uint32_t maxrst = *POST_MAXRST;
+    uint32_t live   = *POST_LIVE;
     static uint32_t last_maxrst = 0xFFFFFFFFu;
-    if (status == last_status && maxrst == last_maxrst) {
+    static uint32_t last_live = 0xFFFFFFFFu;
+    // LIVE is the point of this build: when the guest stops, it settles on
+    // whatever the CPU is spinning in. Redraw whenever it moves.
+    if (status == last_status && maxrst == last_maxrst && live == last_live) {
         return; // nothing new; do not spend GPU time
     }
     last_status = status;
     last_maxrst = maxrst;
+    last_live = live;
 
     if (!placed) {
         // vkb_ui writes the origin from the presented raster before it raises
@@ -93,6 +100,11 @@ void post_mon_tick(void)
     hex(4 + 4 * 8, 22, (maxrst >> 16) & 0xFFu, 2);
     osd_draw_string(&fb, 4 + 7 * 8, 22, "RESTARTS", OSD_LABEL);
     dec(4 + 16 * 8, 22, maxrst & 0xFFFFu);
+
+    osd_draw_string(&fb, 4, 32, "LIVE", OSD_LABEL);
+    hex(4 + 5 * 8, 32, live & 0xFFFFFu, 5);
+    osd_draw_string(&fb, 4 + 12 * 8, 32, "HIGH", OSD_LABEL);
+    hex(4 + 17 * 8, 32, *POST_LIVEMX & 0xFFFFFu, 5);
 
     // History, oldest first, so the path through POST is visible at a glance.
     uint32_t hi = *POST_HIST_H, lo = *POST_HIST_L;

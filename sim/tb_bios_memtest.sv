@@ -152,6 +152,48 @@ module tb_bios_memtest;
         $display("  %s: %0d / %0d words wrong", name, errors - base_err, WORDS);
     endtask
 
+    // POST 05's interrupt-vector setup, which is the pattern nothing has tested:
+    //
+    //     mov si,0xd855 ; mov cx,0x20 ; mov ax,0xf000 ; movsw
+    //
+    // a read from F000:D855 and a write to 0000:0000, alternating. Two
+    // addresses 0xFD855 apart, so every access changes row -- and under
+    // sdram_mp's {row, bank, col} mapping, bank as well. Every other bench
+    // here writes a block and then reads a block; none of them alternate
+    // between distant rows.
+    //
+    // It matters because the guest stops at POST 08 (hardware, testB19), whose
+    // first real work is int 0x16 -- the first use of a vector out of the table
+    // this loop builds. A table written wrong sends the CPU into the weeds.
+    task automatic ivt_copy(input int words);
+        logic [7:0] lo, hi, glo, ghi;
+        int bad = 0;
+        for (int i = 0; i < words; i++) begin
+            // Seed the source in high memory, then copy it down like movsw.
+            bus_byte(1'b1, 20'(20'hFD855 + i * 2),     8'(i),       lo);
+            bus_byte(1'b1, 20'(20'hFD855 + i * 2 + 1), 8'(i ^ 8'hA5), hi);
+        end
+        for (int i = 0; i < words; i++) begin
+            bus_byte(1'b0, 20'(20'hFD855 + i * 2),     8'h00, lo);
+            bus_byte(1'b1, 20'(i * 2),                 lo,    glo);
+            bus_byte(1'b0, 20'(20'hFD855 + i * 2 + 1), 8'h00, hi);
+            bus_byte(1'b1, 20'(i * 2 + 1),             hi,    ghi);
+        end
+        for (int i = 0; i < words; i++) begin
+            bus_byte(1'b0, 20'(i * 2),     8'h00, glo);
+            bus_byte(1'b0, 20'(i * 2 + 1), 8'h00, ghi);
+            if (glo !== 8'(i) || ghi !== 8'(i ^ 8'hA5)) begin
+                if (bad < 4)
+                    $display("  IVT MISMATCH vector %0d: got %02h %02h want %02h %02h",
+                             i, glo, ghi, 8'(i), 8'(i ^ 8'hA5));
+                bad++;
+                errors++;
+            end
+        end
+        $display("  IVT copy (alternating F000:D855 <-> 0000:0000): %0d / %0d wrong",
+                 bad, words);
+    endtask
+
     initial begin
 `ifdef SDRAM_USE_MP
         $display("=== BIOS base-64K memory test through sdram_mp ===");
@@ -165,6 +207,7 @@ module tb_bios_memtest;
 
         pass(16'h55AA, "55AA");
         pass(16'hAA55, "AA55");
+        ivt_copy(32);          // mov cx,0x20 -- the BIOS copies 32 vectors
 
         $display("\n=== summary ===");
         $display("  word errors        : %0d", errors);
