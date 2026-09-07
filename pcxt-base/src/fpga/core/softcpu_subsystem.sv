@@ -108,6 +108,8 @@ module softcpu_subsystem (
     input  [63:0] post_hist,
     input  [19:0] post_mem_addr,
     input  [15:0] post_count,
+    input   [7:0] post_max,
+    input  [15:0] post_restarts,
     output        osd_active,
     output        osd_credits_req,
     output        osd_video_req,
@@ -844,6 +846,7 @@ module softcpu_subsystem (
             32'h5000_0014: cpu_mem_rdata = {12'd0, post_mem_addr};
             32'h5000_0018: cpu_mem_rdata = post_hist[31:0];    // newest four
             32'h5000_001C: cpu_mem_rdata = post_hist[63:32];   // oldest four
+            32'h5000_0020: cpu_mem_rdata = {8'd0, post_max, post_restarts};
             default:       cpu_mem_rdata = 32'd0;
         endcase
     end
