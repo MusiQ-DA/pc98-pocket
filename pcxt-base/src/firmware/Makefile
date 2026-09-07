@@ -5,6 +5,15 @@ OBJS = start.o main.o disk_tds.o fdd_service.o ide_service.o vkb_draw.o vkb_layo
        settings_ui.o key_bind.o dpad.o sdramtest.o
 DEPS = $(OBJS:.o=.d)
 
+# Everything that can change the built image. Hashed into firmware.srchash so CI
+# can tell a genuinely stale firmware.vh from a mere toolchain difference:
+# different clang versions lay identical sources out differently, so rebuilding
+# in CI and byte-comparing the image is pure noise. What actually needs catching
+# is someone editing the C and not re-running make, and a source hash catches
+# exactly that -- with no compiler needed on the checking side.
+SRC_FINGERPRINT = $(sort $(wildcard *.c) $(wildcard *.h) $(wildcard *.S)) \
+                  system.ld Makefile ../fpga/config.tcl
+
 CC      = clang
 LD      = ld.lld
 OBJCOPY = llvm-objcopy
@@ -25,7 +34,7 @@ HW_DEFINES := $(addprefix -D,$(shell sed -n 's/.*VERILOG_MACRO "\(.*\)"/\1/p' $(
 CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Os -mno-relax -ffreestanding -Wall -Werror -Wundef -MMD -MP $(HW_DEFINES)
 ASFLAGS = --target=riscv32 -march=rv32im -mno-relax -Wall -Werror -MMD -MP
 
-all: firmware.vh
+all: firmware.vh firmware.srchash
 
 # The -D values are baked into every object, so a config change rebuilds them all.
 $(OBJS): $(HW_CONFIG)
@@ -46,8 +55,30 @@ firmware.bin: firmware.elf
 firmware.vh: firmware.bin
 	hexdump -v -e '4/4 "%08x " "\n"' $< > $@
 
+firmware.srchash: $(SRC_FINGERPRINT)
+	@shasum -a 256 $(SRC_FINGERPRINT) | shasum -a 256 | cut -d' ' -f1 > $@
+	@echo "source fingerprint: $$(cat $@)"
+
+# The single definition of the fingerprint, so CI cannot drift from the build.
+# Computing the file list in a shell instead invites exactly that: an unquoted
+# $(ls ...) word-splits in bash and does not in zsh, which is how the first
+# attempt at this silently hashed one long filename.
+.PHONY: srchash-print srchash-verify
+srchash-print:
+	@shasum -a 256 $(SRC_FINGERPRINT) | shasum -a 256 | cut -d' ' -f1
+
+srchash-verify:
+	@want=$$(shasum -a 256 $(SRC_FINGERPRINT) | shasum -a 256 | cut -d' ' -f1); \
+	 have=$$(cat firmware.srchash 2>/dev/null || echo "<missing>"); \
+	 echo "sources  : $$want"; echo "committed: $$have"; \
+	 if [ "$$want" != "$$have" ]; then \
+	   echo "firmware.vh is stale for these sources -- run make and commit firmware.vh + firmware.srchash"; \
+	   exit 1; \
+	 fi; \
+	 echo "firmware.vh matches its sources"
+
 clean:
-	rm -f *.o *.d firmware.elf firmware.bin firmware.vh
+	rm -f *.o *.d firmware.elf firmware.bin firmware.vh firmware.srchash
 
 check-format:
 	clang-format --dry-run --Werror $(wildcard *.c *.h)

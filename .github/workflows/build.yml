@@ -79,32 +79,24 @@ jobs:
   firmware:
     # firmware.vh is committed and the Quartus build $readmemh's it, so nothing
     # rebuilds it automatically: edit the C, forget to run make, and the
-    # bitstream silently ships a stale softcore ROM. Rebuild it here and fail if
-    # it differs from what is committed. (The macros come from config.tcl, so
-    # this also catches a config change that the firmware was never rebuilt for.)
+    # bitstream silently ships a stale softcore ROM.
+    #
+    # The first version of this job rebuilt the firmware here and diffed the
+    # image. That does not work -- run#61 failed it on 1012 of 1179 lines, which
+    # was not staleness but Ubuntu's clang laying the same sources out
+    # differently from the Homebrew LLVM the committed image was built with.
+    #
+    # So compare a fingerprint of the SOURCES instead. make writes
+    # firmware.srchash next to firmware.vh; if it still matches the sources in
+    # the tree, the committed image came from these sources. Toolchain
+    # independent, and it needs no compiler, so the job takes seconds.
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install LLVM cross toolchain
-        run: sudo apt-get update && sudo apt-get install -y clang lld llvm
-
-      - name: Rebuild firmware
-        run: |
-          cd pcxt-base/src/firmware
-          make clean
-          make
-
-      - name: firmware.vh matches the committed one
-        run: |
-          cd pcxt-base/src/firmware
-          if ! git diff --quiet -- firmware.vh; then
-            echo "::error::firmware.vh is stale -- rebuild it (make in pcxt-base/src/firmware) and commit"
-            git diff --stat -- firmware.vh
-            exit 1
-          fi
-          echo "firmware.vh is up to date"
+      - name: firmware.vh was built from the committed sources
+        run: make -C pcxt-base/src/firmware srchash-verify
 
   quartus:
     runs-on: ubuntu-latest
