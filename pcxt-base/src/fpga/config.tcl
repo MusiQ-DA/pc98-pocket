@@ -15,8 +15,12 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # Route SDRAM through sdram_mp (via sdram_kf_shim) instead of KFSDRAM.
 # RAM.sv tests this with `ifdef, so setting it to 0 would still select the shim
 # -- COMMENT THE LINE OUT to fall back to the stock controller for a hardware A/B.
-# TEMPORARILY COMMENTED OUT (2026-09-07): hardware regression build. testB2 (run#46,
-# both bug fixes) still fails to reach BIOS on hardware while all sims pass.
-# This build isolates: current tree + stock KFSDRAM. If it boots, the failure is
-# inside sdram_mp/shim on real hardware; if not, the integration path regressed.
-# set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
+#
+# BISECTION RUNG 1 (2026-09-07, testB4): SDRAM_MP_KF_REF swaps the far end of
+# the shim to the STOCK KFSDRAM (translated to sdram_mp's interface) while the
+# glue stays this file's. testB2 (sdram_mp) fails on hardware and testB3 (pure
+# KFSDRAM) boots, both passing every simulation, so this build decides:
+#   boots  -> failure is inside sdram_mp
+#   fails  -> failure is in the shim glue / RAM.sv-facing handshake
+set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
+set_global_assignment -name VERILOG_MACRO "SDRAM_MP_KF_REF"

@@ -3,10 +3,9 @@
 //
 // Exists to get sdram_mp onto real hardware underneath a system whose correct
 // behaviour is already known. Our simulation coverage is good (0 protocol
-// violations, verified read-back) but both the controller and the SDRAM model
-// it is checked against are ours, so a shared misreading of the part would pass
-// simulation and fail on the board. Booting the unmodified PCXT through
-// sdram_mp is the independent check.
+// violations, verified read-back, even with the board's antiphase device
+// clock modelled) but both testB2 builds failed on hardware while every
+// simulation passed, so the gap is being closed by bisection on real hardware.
 //
 // The port list is KFSDRAM's, so this is a drop-in replacement in RAM.sv:
 // select it with `SDRAM_USE_MP` (see config.tcl).
@@ -16,20 +15,25 @@
 //
 //   write_request/read_request  ->  p_req + p_we, one word (p_len = 0)
 //   write_flag / read_flag      ->  held while the transaction is in flight
-//   idle                        ->  init_done and nothing in flight
+//   idle                        ->  "a command can be accepted now", low
+//                                   during refresh, like KFSDRAM's own idle
 //   data_out                    ->  latched from p_rdata on p_rvalid
 //
 // `enable_refresh` is ignored: sdram_mp refreshes on its own interval counter
 // rather than being told when the bus is quiet. `refresh_mode` still has to be
 // reported, because RAM.sv drops access_ready when a command collides with a
-// refresh -- and `idle` has to mean "a command can be accepted now", not merely
-// "no transaction in flight", or RAM.sv will tell the CPU an access completed
-// while the controller is still refreshing.
+// refresh.
 //
-// Clocking: this runs sdram_mp at whatever `sdram_clock` the chipset supplies
-// (clk_chipset, 42.95 MHz) rather than at clk_core. Raising the clock is a
-// separate change with its own timing closure; keeping it here means the
+// Clocking: this runs the controller at whatever `sdram_clock` the chipset
+// supplies (clk_chipset, 42.95 MHz) rather than at clk_core. Raising the clock
+// is a separate change with its own timing closure; keeping it here means the
 // hardware A/B has exactly one variable, the controller itself.
+//
+// Bisection rung 1 (`SDRAM_MP_KF_REF`, 2026-09-07): define it and the far end
+// becomes the STOCK KFSDRAM translated onto sdram_mp's request interface,
+// with this file's glue otherwise unchanged. KFSDRAM boots the board, so:
+//   boots   -> the failure is inside sdram_mp
+//   fails   -> the failure is in this glue / the RAM.sv-facing handshake
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -88,18 +92,23 @@ module sdram_kf_shim #(
     // the address never has to be checked against a column boundary.
     localparam int BURST_MAX = 1;
 
-    // Unused: sdram_mp schedules its own refresh.
+    // sdram_mp schedules its own refresh; the KF_REF far end is stock KFSDRAM
+    // and consumes enable_refresh directly (see its instantiation below).
     wire _unused_refresh = enable_refresh;
-    // The Pocket has no CS pin; KFSDRAM drove this and core_top left it open.
-    assign sdram_cs = 1'b0;
+`ifndef SDRAM_MP_KF_REF
+    assign sdram_cs = 1'b0;      // stock KFSDRAM drives its own cs in the KF_REF build
+`endif
 
     logic        req, we_r, busy;
     logic [ADDR_BITS-1:0] addr_r;
-    logic        p_ack, p_done, p_rvalid, init_done, stat_idle, stat_refresh;
+    logic        p_ack, p_done, p_rvalid, stat_idle, stat_refresh;
     logic [sdram_data_width-1:0] p_rdata;
     logic [0:0]  grant;
 
-    // sdram_mp's request side is a one-entry command; hold it until acked.
+    // Request latch, shared by both far ends. A request is taken only when the
+    // far end can actually accept a command this cycle (stat_idle), which for
+    // both far ends also means "not before initialisation" and "not while
+    // refreshing".
     always_ff @(posedge sdram_clock or posedge sdram_reset) begin
         if (sdram_reset) begin
             req      <= 1'b0;
@@ -111,7 +120,7 @@ module sdram_kf_shim #(
             if (p_rvalid) data_out <= p_rdata;
 
             if (!busy) begin
-                if (init_done && (write_request || read_request)) begin
+                if (stat_idle && (write_request || read_request)) begin
                     req    <= 1'b1;
                     we_r   <= write_request;
                     addr_r <= address[ADDR_BITS-1:0];
@@ -133,6 +142,78 @@ module sdram_kf_shim #(
     assign idle         = stat_idle & ~busy;
     assign refresh_mode = stat_refresh;
 
+`ifdef SDRAM_MP_KF_REF
+    // ---------------------------------------------------------------------
+    // Bisection rung 1: stock KFSDRAM on sdram_mp's interface. Level protocol
+    // translated 1:1; refresh via KFSDRAM's own force backstop (exactly what
+    // boots the board as testB3).
+    // ---------------------------------------------------------------------
+    logic        kf_idle, kf_write_flag, kf_read_flag, kf_refresh_mode;
+    logic        kf_idle_q;
+    logic        kf_seen_idle;
+    logic [sdram_data_width-1:0] kf_data_out;
+
+    // stat_idle mirrors KFSDRAM's own idle, qualified by "initialisation has
+    // finished" so requests are not taken during the init sequence.
+    assign stat_idle    = kf_idle & kf_seen_idle;
+    assign stat_refresh = kf_refresh_mode;
+    // mp-interface view of KFSDRAM: a request is accepted in the cycle it is
+    // seen while idle; the transaction is complete once the FSM parks in IDLE
+    // again; read data is valid exactly while read_flag pulses.
+    assign p_ack     = stat_idle & req;
+    assign p_rvalid  = kf_read_flag;
+    assign p_rdata   = kf_data_out;
+    assign p_done    = kf_idle & ~kf_idle_q;
+    assign grant     = 1'b0;
+
+    always_ff @(posedge sdram_clock or posedge sdram_reset) begin
+        if (sdram_reset) begin
+            kf_idle_q    <= 1'b0;
+            kf_seen_idle <= 1'b0;
+        end else begin
+            kf_idle_q <= kf_idle;
+            if (kf_idle) kf_seen_idle <= 1'b1;
+        end
+    end
+
+    KFSDRAM #(
+        .sdram_col_width    (sdram_col_width),
+        .sdram_row_width    (sdram_row_width),
+        .sdram_bank_width   (sdram_bank_width),
+        .sdram_data_width   (sdram_data_width)
+    ) u_KFSDRAM (
+        .sdram_clock        (sdram_clock),
+        .sdram_reset        (sdram_reset),
+        .address            (addr_r),
+        .access_num         (sdram_col_width'(1)),
+        .data_in            (data_in),
+        .data_out           (kf_data_out),
+        .write_request      (req &  we_r),
+        .read_request       (req & ~we_r),
+        .enable_refresh     (enable_refresh),
+        .write_flag         (kf_write_flag),
+        .read_flag          (kf_read_flag),
+        .refresh_mode       (kf_refresh_mode),
+        .idle               (kf_idle),
+        .sdram_address      (sdram_address),
+        .sdram_cke          (sdram_cke),
+        .sdram_cs           (sdram_cs),
+        .sdram_ras          (sdram_ras),
+        .sdram_cas          (sdram_cas),
+        .sdram_we           (sdram_we),
+        .sdram_ba           (sdram_ba),
+        .sdram_dq_in        (sdram_dq_in),
+        .sdram_dq_out       (sdram_dq_out),
+        .sdram_dq_io        (sdram_dq_io)
+    );
+
+    wire _unused_mp_if = &{1'b0, kf_write_flag, grant, 1'b0};
+
+`else
+    // ---------------------------------------------------------------------
+    // Shipping far end: sdram_mp.
+    // ---------------------------------------------------------------------
+    logic init_done;
     logic [MASK_BITS-1:0] dqm_unused;
 
     sdram_mp #(
@@ -178,6 +259,9 @@ module sdram_kf_shim #(
         .sdram_dq_out (sdram_dq_out),
         .sdram_dq_io  (sdram_dq_io)
     );
+
+    wire _unused_init_done = init_done;
+`endif
 
 endmodule
 
