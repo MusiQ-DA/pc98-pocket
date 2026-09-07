@@ -18,3 +18,5 @@ pcxt-base/src/firmware/*.o
 pcxt-base/src/firmware/*.d
 pcxt-base/src/firmware/firmware.elf
 pcxt-base/src/firmware/firmware.bin
+__pycache__/
+*.pyc
