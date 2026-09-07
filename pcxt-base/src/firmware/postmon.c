@@ -69,17 +69,6 @@ static void dec(int x, int y, uint32_t v)
     osd_draw_string(&fb, x, y, out, OSD_LABEL);
 }
 
-// One interrupt vector as the guest currently holds it, printed seg:off.
-static void show_vector(int x, int y, uint32_t vec)
-{
-    uint32_t a = vec * 4u;
-    uint32_t off = guest_peek(a) | ((uint32_t) guest_peek(a + 1) << 8);
-    uint32_t seg = guest_peek(a + 2) | ((uint32_t) guest_peek(a + 3) << 8);
-    hex(x, y, seg, 4);
-    osd_draw_string(&fb, x + 4 * 8, y, ":", OSD_LABEL);
-    hex(x + 5 * 8, y, off, 4);
-}
-
 void post_mon_tick(void)
 {
     static uint32_t last_status = 0xFFFFFFFFu;
@@ -99,7 +88,7 @@ void post_mon_tick(void)
     static uint32_t idle_ticks = 0;
     if (status == last_status && maxrst == last_maxrst && live == last_live) {
         if (idle_ticks < 100000u) idle_ticks++;
-        if (idle_ticks != 3000u) return;   // redraw once, when it has settled
+        if (idle_ticks != 3000u) return;   // redraw once when it settles
     } else {
         idle_ticks = 0;
     }
@@ -143,33 +132,35 @@ void post_mon_tick(void)
     osd_draw_string(&fb, 4 + 12 * 8, 32, "HIGH", OSD_LABEL);
     hex(4 + 17 * 8, 32, *POST_LIVEMX & 0xFFFFFu, 5);
 
-    // Vectors are read ONLY once the guest has stopped moving.
+    // Vectors are read ONCE, after the guest has already restarted at least
+    // once.
     //
-    // testB21 read them every tick, and testB21/22/23 all fail the BIOS memory
-    // test while testB19/20 -- the same lineage without this read -- passed it.
-    // guest_peek takes the bus through hold acknowledge, so polling it during
-    // POST means the instrument is competing with the code it is measuring.
-    // That also undermines the "intermittent, therefore physical" conclusion
-    // drawn from comparing those runs: they were different builds, not the
-    // same build behaving differently.
-    //
-    // So: wait for the POST count to stop changing, then read once.
-    uint32_t stall_ticks = idle_ticks;
+    // testB24 never showed them because the guest is not stalling -- it keeps
+    // writing POST codes, so the "has it been still for a while" gate never
+    // fired. It is in a reset loop, not a hang. Waiting for RESTARTS to reach 1
+    // means the first pass through POST is left completely alone (which is what
+    // testB21-23 got wrong), and by then one disturbed pass costs nothing.
     static int vectors_read = 0;
-
-    // The two vectors that matter here. testB20 showed the guest looping on
-    // 0x00069/0x0006A, which is inside INT 1Ah's vector at 0x68-0x6B, and the
-    // code that fails to get past POST 08 calls int 0x16 (vector at 0x58).
-    // POST 05 installs both as F000:offset -- 16h should be F000:E82E and 1Ah
-    // should be F000:FE6E. Reading them says whether the table is intact.
-    if (stall_ticks >= 3000u && !vectors_read) {
+    static uint32_t v16_seg = 0, v16_off = 0, v1a_seg = 0, v1a_off = 0;
+    if (!vectors_read && (maxrst & 0xFFFFu) >= 1u) {
+        v16_off = guest_peek(0x58) | ((uint32_t) guest_peek(0x59) << 8);
+        v16_seg = guest_peek(0x5A) | ((uint32_t) guest_peek(0x5B) << 8);
+        v1a_off = guest_peek(0x68) | ((uint32_t) guest_peek(0x69) << 8);
+        v1a_seg = guest_peek(0x6A) | ((uint32_t) guest_peek(0x6B) << 8);
         vectors_read = 1;
+    }
+
+    if (vectors_read) {
         osd_draw_string(&fb, 4, 42, "16h", OSD_LABEL);
-        show_vector(4 + 4 * 8, 42, 0x16);
+        hex(4 + 4 * 8, 42, v16_seg, 4);
+        osd_draw_string(&fb, 4 + 8 * 8, 42, ":", OSD_LABEL);
+        hex(4 + 9 * 8, 42, v16_off, 4);
         osd_draw_string(&fb, 4 + 15 * 8, 42, "1Ah", OSD_LABEL);
-        show_vector(4 + 19 * 8, 42, 0x1A);
-    } else if (!vectors_read) {
-        osd_draw_string(&fb, 4, 42, "VEC -- RUNNING", OSD_LABEL);
+        hex(4 + 19 * 8, 42, v1a_seg, 4);
+        osd_draw_string(&fb, 4 + 23 * 8, 42, ":", OSD_LABEL);
+        hex(4 + 24 * 8, 42, v1a_off, 4);
+    } else {
+        osd_draw_string(&fb, 4, 42, "VEC -- WAITING RESTART", OSD_LABEL);
     }
 
     // History, oldest first, so the path through POST is visible at a glance.
