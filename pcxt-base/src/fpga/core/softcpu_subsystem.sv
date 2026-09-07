@@ -92,6 +92,15 @@ module softcpu_subsystem (
     input   [9:0] raster_h,
     input         dataslots_ready, // APF has finished the initial dataslot load
     output        soft_guest_hold, // boot-master guest reset: held until settings are staged
+    // SDRAM self-test window (docs/P0_SELFTEST_SPEC.md). The firmware drives
+    // guest SDRAM through core_top's ext-port master while the 8088 is held,
+    // so a failing address can be reported instead of inferred from a beep.
+    output [19:0] st_addr,
+    output  [7:0] st_wdata,
+    output        st_we,    // 1 = write, 0 = read
+    output        st_req,   // level; held until st_done comes back
+    input         st_done,
+    input   [7:0] st_rdata,
     output        osd_active,
     output        osd_credits_req,
     output        osd_video_req,
@@ -185,6 +194,11 @@ module softcpu_subsystem (
     wire sel_status = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h2);
     wire sel_fdd    = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h3);
     wire sel_fb     = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h4);
+    // Region 0x5: SDRAM self-test. It gets a region of its own rather than a
+    // few spare words in 0x2, because every decode there matches on
+    // cpu_mem_addr[4:2] and ignores bit 5 -- 0x20000030 would also have fired
+    // OSD_ACTION at 0x20000010, 0x34 the compositor origin, and so on.
+    wire sel_st     = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h5);
 
     // OSD control at 0x20000004: bit0 = overlay shown.
     reg osd_active_r = 1'b0;
@@ -225,6 +239,47 @@ module softcpu_subsystem (
             soft_guest_hold_r <= cpu_mem_wdata[0];
     end
     assign soft_guest_hold = soft_guest_hold_r;
+
+    // SDRAM self-test registers, 0x50000000/04/08/0C.
+    //   00 W  address[19:0]
+    //   04 W  write data[7:0]
+    //   08 W  bit0 = start a write, bit1 = start a read
+    //   0C R  {busy, rdata[7:0]}
+    // clk_pico is clk_chipset gated one-in-six, so st_req is stable for six
+    // chipset cycles and core_top's sequencer can sample it directly; the
+    // request stays up until st_done returns, which is what stops one firmware
+    // write from launching several accesses.
+    reg [19:0] st_addr_r  = 20'd0;
+    reg  [7:0] st_wdata_r = 8'd0;
+    reg        st_we_r    = 1'b0;
+    reg        st_req_r   = 1'b0;
+    wire       st_trig    = sel_st && cpu_mem_wstrb[0] && cpu_mem_ready
+                                   && cpu_mem_addr[3:2] == 2'd2;
+
+    always @(posedge clk_pico) begin
+        if (reset) begin
+            st_addr_r  <= 20'd0;
+            st_wdata_r <= 8'd0;
+            st_we_r    <= 1'b0;
+            st_req_r   <= 1'b0;
+        end else begin
+            if (sel_st && cpu_mem_wstrb[0] && cpu_mem_ready && cpu_mem_addr[3:2] == 2'd0)
+                st_addr_r <= cpu_mem_wdata[19:0];
+            if (sel_st && cpu_mem_wstrb[0] && cpu_mem_ready && cpu_mem_addr[3:2] == 2'd1)
+                st_wdata_r <= cpu_mem_wdata[7:0];
+            if (st_trig && !st_req_r && (cpu_mem_wdata[1:0] != 2'b00)) begin
+                st_we_r  <= cpu_mem_wdata[0];
+                st_req_r <= 1'b1;
+            end else if (st_req_r && st_done) begin
+                st_req_r <= 1'b0;
+            end
+        end
+    end
+
+    assign st_addr  = st_addr_r;
+    assign st_wdata = st_wdata_r;
+    assign st_we    = st_we_r;
+    assign st_req   = st_req_r;
 
     // Compositor origin at 0x20000014: {y[25:16], x[9:0]}, the raster position of
     // the framebuffer's top-left; the firmware derives it from the presented
@@ -773,8 +828,10 @@ module softcpu_subsystem (
             32'h1???_????: cpu_mem_rdata = ram_rdata;
             32'h2000_0000: cpu_mem_rdata = {3'd0, dock_key_stb, dock_key_ext, dataslots_ready, osd_open_req, credits_active, dock_key_code, cont1_key};
             32'h2000_0018: cpu_mem_rdata = {6'd0, raster_h, 6'd0, raster_w};
+
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
             32'h4???_????: cpu_mem_rdata = gpu_status;
+            32'h5000_000C: cpu_mem_rdata = {23'd0, st_req_r, st_rdata};
             default:       cpu_mem_rdata = 32'd0;
         endcase
     end

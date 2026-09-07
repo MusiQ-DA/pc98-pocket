@@ -80,14 +80,16 @@ assign ext_access_request   = st_active ? 1'b1           : bios_access_request;
 
 ### 3.3 `softcpu_subsystem.sv` — MMIO 4本
 
-`0x2` 領域の空きに追加(既存は `0x20000020` まで使用):
+**`0x5` 領域を新設する(実装時に変更)。** `0x2` の空きを使う案だったが、既存デコードが
+すべて `cpu_mem_addr[4:2]`(bit5を無視)なので `0x20000030` が `0x20000010`(OSD_ACTION)、
+`0x34` が OSD_ORIGIN に**エイリアスする**。独立領域なら衝突しない:
 
 | アドレス | 方向 | 内容 |
 |---|---|---|
-| `0x20000030` | W | `st_addr[19:0]` — ゲスト物理アドレス |
-| `0x20000034` | W | `st_wdata[7:0]` |
-| `0x20000038` | W | bit0 = write 起動、bit1 = read 起動(1サイクルパルス) |
-| `0x2000003C` | R | `{busy, rdata[7:0]}` — bit8 busy、bit[7:0] が読めた値 |
+| `0x50000000` | W | `st_addr[19:0]` — ゲスト物理アドレス |
+| `0x50000004` | W | `st_wdata[7:0]` |
+| `0x50000008` | W | bit0 = write 起動、bit1 = read 起動 |
+| `0x5000000C` | R | `{busy, rdata[7:0]}` — bit8 busy、bit[7:0] が読めた値 |
 
 起動から `access_complete` までを `busy` で覆う。**`access_complete` は
 `clk_chipset` ドメイン、`clk_pico` は `clk_chipset` の 1/6 ゲートクロックなので
