@@ -35,19 +35,7 @@ module pll (
         .phase_shift1              ("0 ps"),
         .duty_cycle1               (50),
         .output_clock_frequency2   ("42.954545 MHz"),
-        // VARIANT E: 14550 ps instead of 11640 (225 deg instead of 180).
-        //
-        // The other side of the bracket from variant C. C advanced the device
-        // clock to 135 deg on the theory that launching read data earlier hands
-        // time to setup, and STA got WORSE (-2.408 -> -4.434), so the direction
-        // was backwards. This retards it by the same 2.91 ns.
-        //
-        // Together C (135), A (180) and E (225) are a three-point sweep of the
-        // one knob that physically moves the sampling point inside the part's
-        // data window. STA has been a poor predictor here -- it reports the same
-        // -2.4 ns for KFSDRAM, which boots -- so the sweep is worth running on
-        // hardware regardless of what the report says.
-        .phase_shift2              ("14550 ps"),
+        .phase_shift2              ("11640 ps"),
         .duty_cycle2               (50),
         .output_clock_frequency3   ("28.636360 MHz"),
         .phase_shift3              ("0 ps"),
