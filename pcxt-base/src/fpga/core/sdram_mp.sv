@@ -176,16 +176,26 @@ module sdram_mp #(
 
     assign refresh_due = (refresh_cnt >= 16'(REFRESH_INT));
 
-    // Read data timing. cmd is registered, so a READ issued at edge T reaches
-    // the part at T+1 and its data is samplable at T+1+CAS_LATENCY. rd_pipe[0]
-    // is set at T, so the slot to gate p_rvalid on is rd_pipe[CAS_LATENCY],
-    // giving RD_DELAY = CAS_LATENCY + 1.
+    // Read data timing. The device clock is half a period out of phase with
+    // this controller (pll.v outclk_2), so the part launches each datum
+    // around our falling edge: with CL=2 a READ registered at posedge T puts
+    // the datum on the pins from ~T+59 ns until the next datum replaces it.
+    // A posedge-only sampler has to gamble one whole cycle of grain: the T+3
+    // edge only works while tAC+flight < ~6 ns, T+4 only for single words.
+    // KFSDRAM survives because it free-runs its sampler and consumes late.
     //
-    // This was CAS_LATENCY + 2, which sampled a cycle late and read zeros on
-    // hardware. It passed simulation only because the model drove DQ a cycle
-    // late in the same way -- the model rejected KFSDRAM, which is the tell.
+    // The robust fix is the classic one: capture DQ on the FALLING edge -- the
+    // edge-aligned instant the part itself launches on -- which lands
+    // mid-window for both single reads and back-to-back bursts, then
+    // re-register on posedge. The datum for word k occupies negedge
+    // T_k+CL+1/2, so p_rvalid pairs with the posedge capture one cycle later:
+    // RD_DELAY = CAS_LATENCY + 1.
     localparam int RD_DELAY = CAS_LATENCY + 1;
     logic [RD_DELAY:0] rd_pipe;
+    logic [DQ_BITS-1:0] dq_neg;
+
+    // Mid-window capture on the falling edge (see above).
+    always_ff @(negedge clk) dq_neg <= sdram_dq_in;
 
     wire [ROW_BITS-1:0]  act_row  = p_addr[winner][ADDR_BITS-1 -: ROW_BITS];
     wire [BANK_BITS-1:0] act_bank = p_addr[winner][COL_BITS +: BANK_BITS];
@@ -340,15 +350,15 @@ module sdram_mp #(
         end
     end
 
-    // Read data is registered off the bus one cycle behind the pipeline tag so
-    // p_rdata and p_rvalid present together.
+    // Read data is re-registered off the negedge capture so p_rdata and
+    // p_rvalid present together.
     always_ff @(posedge clk) begin
         if (rst) begin
             p_rvalid <= 1'b0;
             p_rdata  <= '0;
         end else begin
             p_rvalid <= rd_pipe[RD_DELAY-1];
-            p_rdata  <= sdram_dq_in;
+            p_rdata  <= dq_neg;
         end
     end
 

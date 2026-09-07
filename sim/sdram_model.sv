@@ -207,17 +207,23 @@ module sdram_model #(
     // cycle late, which is what made this model reject KFSDRAM.
     //
     // A real part drives the datum from its launch edge until the NEXT datum
-    // replaces it (burst data is continuous; there is no high-Z gap between
-    // pipelined words). So the datum is held for the slot ending at N+CL AND
-    // the following slot. With an in-phase controller clock only the first
-    // slot matters; with a device clock out of phase (sdram_board_model) the
-    // controller's sampling edge can fall in either slot, and dropping to Z
-    // after one slot would falsely reject controllers the hardware accepts.
-    wire hold = (cas_lat + 1 <= PIPE - 1) && rd_vld[cas_lat];
+    // replaces it (burst data is continuous; after the last datum of a burst
+    // the bus stays driven for roughly one more cycle before tri-stating at
+    // tHZ). So the datum is held from slot CL-1 through slot CL+1. With an
+    // in-phase controller clock only the first slot matters; with a device
+    // clock out of phase (sdram_board_model) or real tAC in play, the
+    // controller's sampling edge can fall in any of the three slots, and
+    // truncating early would falsely reject controllers the hardware accepts
+    // (or bless one the hardware rejects -- the launch edge of the datum under
+    // the antiphase clock sits at T+58.2 ns, so a T+3 sample only works while
+    // tAC+flight < ~6 ns while a T+4 sample is robust from ~2 ns on).
+    wire hold1 = (cas_lat     <= PIPE - 1) && rd_vld[cas_lat];
+    wire hold2 = (cas_lat + 1 <= PIPE - 1) && rd_vld[cas_lat + 1];
 
     always_comb begin
         if (cas_lat >= 1 && rd_vld[cas_lat-1]) dq_in = rd_data[cas_lat-1];
-        else if (hold)                          dq_in = rd_data[cas_lat];
+        else if (hold1)                         dq_in = rd_data[cas_lat];
+        else if (hold2)                         dq_in = rd_data[cas_lat+1];
         else                                    dq_in = 16'hZZZZ;
     end
 
