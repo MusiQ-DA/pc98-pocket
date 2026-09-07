@@ -937,7 +937,9 @@ module core_top (
         .post_prev                  (post_prev),
         .post_hist                  (post_hist),
         .post_mem_addr              (post_mem_addr),
-        .post_count                 (post_count)
+        .post_count                 (post_count),
+        .post_max                   (post_max),
+        .post_restarts              (post_restarts)
     );
 
     //
@@ -1517,6 +1519,8 @@ module core_top (
     wire [63:0] post_hist;
     wire [19:0] post_mem_addr;
     wire [15:0] post_count;
+    wire  [7:0] post_max;
+    wire [15:0] post_restarts;
 
     post_monitor u_post (
         .clk            (clk_chipset),
@@ -1530,7 +1534,9 @@ module core_top (
         .post_prev      (post_prev),
         .post_hist      (post_hist),
         .last_mem_addr  (post_mem_addr),
-        .post_count     (post_count)
+        .post_count     (post_count),
+        .post_max       (post_max),
+        .restart_count  (post_restarts)
     );
 
     //

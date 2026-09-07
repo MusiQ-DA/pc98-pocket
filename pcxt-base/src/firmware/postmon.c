@@ -8,13 +8,14 @@
 #define POST_ADDR   ((volatile uint32_t *) 0x50000014) // last guest memory address
 #define POST_HIST_L ((volatile uint32_t *) 0x50000018) // newest four codes
 #define POST_HIST_H ((volatile uint32_t *) 0x5000001C) // oldest four
+#define POST_MAXRST ((volatile uint32_t *) 0x50000020) // {max[23:16], restarts[15:0]}
 
 // A strip along the top. Everything outside it stays palette 0 (transparent),
 // so the guest's picture shows through and this does not hide a working POST.
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
-#define PANEL_H 28
+#define PANEL_H 38
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -51,11 +52,16 @@ void post_mon_tick(void)
     static uint32_t last_status = 0xFFFFFFFFu;
     static int placed = 0;
 
+    // POST_STATUS freezes after the first pass through POST, so this settles;
+    // the counters below keep moving and are what show a reboot loop.
     uint32_t status = *POST_STATUS;
-    if (status == last_status) {
+    uint32_t maxrst = *POST_MAXRST;
+    static uint32_t last_maxrst = 0xFFFFFFFFu;
+    if (status == last_status && maxrst == last_maxrst) {
         return; // nothing new; do not spend GPU time
     }
     last_status = status;
+    last_maxrst = maxrst;
 
     if (!placed) {
         // vkb_ui writes the origin from the presented raster before it raises
@@ -82,6 +88,11 @@ void post_mon_tick(void)
 
     osd_draw_string(&fb, 4, 12, "ADDR", OSD_LABEL);
     hex(4 + 5 * 8, 12, *POST_ADDR & 0xFFFFFu, 5);
+
+    osd_draw_string(&fb, 4, 22, "MAX", OSD_LABEL);
+    hex(4 + 4 * 8, 22, (maxrst >> 16) & 0xFFu, 2);
+    osd_draw_string(&fb, 4 + 7 * 8, 22, "RESTARTS", OSD_LABEL);
+    dec(4 + 16 * 8, 22, maxrst & 0xFFFFu);
 
     // History, oldest first, so the path through POST is visible at a glance.
     uint32_t hi = *POST_HIST_H, lo = *POST_HIST_L;
