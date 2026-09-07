@@ -56,7 +56,7 @@ module tb_selftest_soc;
         .osd_palette_idx(osd_palette_idx), .osd_in_area(osd_in_area),
         .cont1_key(16'd0), .dock_key_code(8'd0), .dock_key_ext(1'b0),
         .dock_key_stb(1'b0), .credits_active(1'b0), .osd_open_req(1'b0),
-        .raster_w(10'd640), .raster_h(10'd200),
+        .raster_w(osd_raster_w), .raster_h(osd_raster_h),
         .dataslots_ready(1'b1),           // pretend APF finished the load
         .soft_guest_hold(soft_guest_hold),
         .st_addr(st_addr), .st_wdata(st_wdata), .st_we(st_we), .st_req(st_req),
@@ -121,32 +121,59 @@ module tb_selftest_soc;
         .dq_out(s_dq_out), .dq_io(s_dq_io), .dq_in(s_dq_in)
     );
 
-    // ---- OSD raster
+    // ---- the real compositor, closing the last unsimulated link
     //
-    // testB9 and testB10 reported through the overlay and showed nothing, and
-    // at the time that was indistinguishable from the test not running. It IS
-    // running (proved above), so the overlay has to be checked directly: sweep
-    // a 640x200 raster past the compositor and see whether any lit pixel comes
-    // back. osd_active is what the firmware raises through VKB_CTRL.
-    logic [9:0] osd_hcnt = 0, osd_vcnt = 0;
+    // testB12 reported through the OSD with every input to the mix verified,
+    // and hardware still showed nothing. pocket_video's final step is what is
+    // left, so put it in the loop: it generates osd_hcnt/osd_vcnt itself from
+    // the raster, softcpu_subsystem answers with osd_in_area/palette, and the
+    // question is simply whether video_rgb ever carries an overlay colour.
+    //
+    // The raster is a plain 640x200 CGA-like frame; the picture behind it is
+    // deliberately black so any non-black output pixel is the overlay.
+    wire  [9:0] osd_hcnt, osd_vcnt;
+    wire  [9:0] osd_raster_w, osd_raster_h;
     wire  [3:0] osd_palette_idx;
     wire        osd_in_area;
+    wire [23:0] video_rgb;
+    wire        video_de;
 
+    localparam int H_ACT = 640, H_TOT = 800;
+    localparam int V_ACT = 200, V_TOT = 262;
+    int hc = 0, vc = 0;
+    logic hb = 0, vb = 0, hs = 0, vs = 0;
     always @(posedge clk_pix) begin
-        if (osd_hcnt == 10'd639) begin
-            osd_hcnt <= 0;
-            osd_vcnt <= (osd_vcnt == 10'd199) ? 10'd0 : osd_vcnt + 10'd1;
-        end else begin
-            osd_hcnt <= osd_hcnt + 10'd1;
-        end
+        hc <= (hc == H_TOT-1) ? 0 : hc + 1;
+        if (hc == H_TOT-1) vc <= (vc == V_TOT-1) ? 0 : vc + 1;
+        hb <= (hc >= H_ACT);
+        vb <= (vc >= V_ACT);
+        hs <= (hc >= H_ACT+16) && (hc < H_ACT+80);
+        vs <= (vc >= V_ACT+8)  && (vc < V_ACT+12);
     end
 
-    int lit_pixels = 0, in_area_cycles = 0;
+    pocket_video u_video (
+        .clk_pix(clk_pix), .clk_pix_90(clk_pix), .RESET(reset),
+        .r(6'd0), .g(6'd0), .b(6'd0),          // black picture: overlay only
+        .HSync(hs), .VSync(vs), .HBlank(hb), .VBlank(vb),
+        .palette_cfg(3'd0), .credits_mode_pix(1'b0),
+        .pix_sel(1'b0), .vid_blank(1'b0),
+        .osd_active(u_soft.osd_active_r),
+        .osd_palette_idx(osd_palette_idx), .osd_in_area(osd_in_area),
+        .osd_hcnt(osd_hcnt), .osd_vcnt(osd_vcnt),
+        .osd_raster_w(osd_raster_w), .osd_raster_h(osd_raster_h),
+        .video_rgb(video_rgb), .video_de(video_de),
+        .video_hs(), .video_vs(), .video_skip(),
+        .video_rgb_clock(), .video_rgb_clock_90()
+    );
+
+    int lit_pixels = 0, in_area_cycles = 0, shown_pixels = 0;
     always @(posedge clk_pix) begin
         if (osd_in_area) begin
             in_area_cycles++;
             if (osd_palette_idx != 4'd0) lit_pixels++;
         end
+        // The thing that actually reaches the screen.
+        if (video_de && (video_rgb != 24'd0)) shown_pixels++;
     end
 
     // ---- observation
@@ -210,7 +237,11 @@ module tb_selftest_soc;
         $display("  osd_active           : %0d", u_soft.osd_active_r);
         $display("  osd in-area cycles   : %0d", in_area_cycles);
         $display("  osd LIT pixels       : %0d", lit_pixels);
-        if (lit_pixels == 0)
+        $display("  pixels ON SCREEN     : %0d  <-- what the panel would show",
+                 shown_pixels);
+        if (shown_pixels == 0)
+            $display("  RESULT: FAIL -- nothing reaches the screen");
+        else if (lit_pixels == 0)
             $display("  RESULT: FAIL -- the overlay never produced a lit pixel");
         else if (reqs == 0)
             $display("  RESULT: FAIL -- the firmware never drove the MMIO window");
