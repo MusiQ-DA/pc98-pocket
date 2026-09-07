@@ -5,6 +5,7 @@
 #include "key_bind.h"
 #include "settings_ui.h"
 #include "sdramtest.h"
+#include "postmon.h"
 #include "softcpu_regs.h"
 #include "vkb_ui.h"
 
@@ -94,6 +95,12 @@ int main(void)
             }
         }
         rebind_seen = rebind;
+
+#ifdef POST_MONITOR
+        // Diagnostic overlay: how far the guest BIOS has got. Redraws only when
+        // the POST code changes, so it costs nothing in the steady state.
+        post_mon_tick();
+#endif
         if (!mounted_hdd) {
             uint32_t sectors = slot_bytes(HDD0_SLOT_ID) / SECTOR_BYTES;
             if (sectors != 0) {

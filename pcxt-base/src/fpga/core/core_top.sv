@@ -932,7 +932,12 @@ module core_top (
         .st_we                      (st_we),
         .st_req                     (st_req),
         .st_done                    (st_done),
-        .st_rdata                   (st_rdata)
+        .st_rdata                   (st_rdata),
+        .post_code                  (post_code),
+        .post_prev                  (post_prev),
+        .post_hist                  (post_hist),
+        .post_mem_addr              (post_mem_addr),
+        .post_count                 (post_count)
     );
 
     //
@@ -1500,6 +1505,35 @@ module core_top (
     );
 
     //
+    // POST MONITOR
+    //
+    // The BIOS reports progress on I/O port 0x80. Surfacing it turns hardware
+    // debugging from "it stops between two boot sounds" into "it stops at POST
+    // 04" -- the base 64 KB memory test at F000:E11A. Observational only.
+    //
+    wire [19:0] chipset_address;
+    wire        chipset_io_write_n, chipset_memory_read_n, chipset_memory_write_n;
+    wire  [7:0] post_code, post_prev;
+    wire [63:0] post_hist;
+    wire [19:0] post_mem_addr;
+    wire [15:0] post_count;
+
+    post_monitor u_post (
+        .clk            (clk_chipset),
+        .rst            (reset_sdram),
+        .address        (chipset_address),
+        .data_bus       (data_bus),
+        .io_write_n     (chipset_io_write_n),
+        .memory_read_n  (chipset_memory_read_n),
+        .memory_write_n (chipset_memory_write_n),
+        .post_code      (post_code),
+        .post_prev      (post_prev),
+        .post_hist      (post_hist),
+        .last_mem_addr  (post_mem_addr),
+        .post_count     (post_count)
+    );
+
+    //
     // SPLASH
     //
 
@@ -1711,7 +1745,7 @@ module core_top (
         .VGA_HBlank                         (HBlank),
         .VGA_VBlank                         (VBlank),
         .VGA_VBlank_border                  (VGA_VBlank_border),
-    //  .address                            (address),
+        .address                            (chipset_address),
         .address_ext                        (st_run ? st_addr : bios_access_address),
         .ext_access_request                 (st_run | bios_access_request),
         .data_bus_ext_out                   (chipset_ext_rdata),
@@ -1726,13 +1760,13 @@ module core_top (
     //  .io_read_n                          (io_read_n),
         .io_read_n_ext                      (1'b1),
     //  .io_read_n_direction                (io_read_n_direction),
-    //  .io_write_n                         (io_write_n),
+        .io_write_n                         (chipset_io_write_n),
         .io_write_n_ext                     (1'b1),
     //  .io_write_n_direction               (io_write_n_direction),
-    //  .memory_read_n                      (memory_read_n),
+        .memory_read_n                      (chipset_memory_read_n),
         .memory_read_n_ext                  (st_rd_n),
     //  .memory_read_n_direction            (memory_read_n_direction),
-    //  .memory_write_n                     (memory_write_n),
+        .memory_write_n                     (chipset_memory_write_n),
         .memory_write_n_ext                 (st_run ? st_wr_n : bios_write_n),
     //  .memory_write_n_direction           (memory_write_n_direction),
         .dma_request                        (0),    // use? -> I don't know if it will ever be necessary, at least not during testing.

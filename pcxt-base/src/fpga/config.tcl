@@ -50,3 +50,11 @@ set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
 #   flipping it (firmware.vh is committed; CI checks it against the sources but
 #   does not regenerate it).
 # set_global_assignment -name VERILOG_MACRO "SDRAM_SELFTEST=1"
+
+#   ---- DIAGNOSTIC: POST_MONITOR -------------------------------------------
+#   Puts the guest's POST progress (I/O port 0x80) on a strip at the top of the
+#   screen, with the last guest memory address and the last eight codes. The
+#   core still boots normally; this only observes. See docs/HANDOVER.md 1.5 for
+#   the POST map -- the build under investigation is expected to stop at 04,
+#   the base 64 KB memory test at F000:E11A.
+set_global_assignment -name VERILOG_MACRO "POST_MONITOR=1"

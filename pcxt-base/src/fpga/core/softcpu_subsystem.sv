@@ -101,6 +101,13 @@ module softcpu_subsystem (
     output        st_req,   // level; held until st_done comes back
     input         st_done,
     input   [7:0] st_rdata,
+    // POST monitor (post_monitor.sv): the guest's progress on I/O port 0x80,
+    // so the firmware can put "where the BIOS got to" on screen.
+    input   [7:0] post_code,
+    input   [7:0] post_prev,
+    input  [63:0] post_hist,
+    input  [19:0] post_mem_addr,
+    input  [15:0] post_count,
     output        osd_active,
     output        osd_credits_req,
     output        osd_video_req,
@@ -832,6 +839,11 @@ module softcpu_subsystem (
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
             32'h4???_????: cpu_mem_rdata = gpu_status;
             32'h5000_000C: cpu_mem_rdata = {23'd0, st_req_r, st_rdata};
+            // POST monitor, read-only.
+            32'h5000_0010: cpu_mem_rdata = {post_count, post_prev, post_code};
+            32'h5000_0014: cpu_mem_rdata = {12'd0, post_mem_addr};
+            32'h5000_0018: cpu_mem_rdata = post_hist[31:0];    // newest four
+            32'h5000_001C: cpu_mem_rdata = post_hist[63:32];   // oldest four
             default:       cpu_mem_rdata = 32'd0;
         endcase
     end
