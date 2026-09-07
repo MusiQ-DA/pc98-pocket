@@ -52,19 +52,12 @@ module sdram_kf_shim #(
     parameter int T_RP             = 2,
     parameter int T_WR             = 2,
     parameter int T_RFC            = 4,
-    // CL=3, not KFSDRAM's 2.
-    //
-    // The hardware fault is INTERMITTENT: the same bitstream sometimes clears
-    // the BIOS's base 64 KB test and reaches POST 08, and sometimes fails it and
-    // reports POST 54 (testB19/B20 vs testB21). Nothing in simulation is
-    // intermittent, so this is margin, and the read path is where the margin is
-    // thin -- STA puts it 2.4 ns short once the dram_* pins are constrained at
-    // all.
-    //
-    // CL=3 buys a whole extra clock, 23.3 ns, on exactly that path, for one
-    // cycle of latency. KFSDRAM survives at CL=2 because its read path is
-    // shallow; sdram_mp's is not, and it does not have to be as fast.
-    parameter int CAS_LATENCY      = 3,
+    // Back to CL=2. CL=3 was tried (testB22) on the theory that it would buy a
+    // clock of read margin; STA did not move (-2.357 vs -2.408) and neither did
+    // the hardware. It was the wrong lever: the constraint measures the pin-to-
+    // pin relationship between the part launching data and the FPGA capturing
+    // it, and CL changes when the data comes out, not how it is caught.
+    parameter int CAS_LATENCY      = 2,
     parameter int INIT_NOP         = 10000,  // 233 us: matches the KFSDRAM the board boots with
     parameter int REFRESH_INT      = 320     // <= 7.8 us at 42.95 MHz
 ) (
