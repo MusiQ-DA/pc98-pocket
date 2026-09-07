@@ -178,8 +178,9 @@ NOPスタブ(6144×0x00000013)は一度もこのストアを実行しないの�
 - イメージ `raetro/quartus:pocket` プル済み(18.2GB展開)
 - **ファイル共有キャッシュが古いファイルを返すことがある**
   → ビルドスクリプトは毎回新規tempディレクトリにツリーをコピーする方式([_pcxtbase/build-docker.sh参照])
-- SSHセッションから `diskutil eject` / `umount` が権限エラーになる
-  → Finder/ejectはユーザーに依頼
+- SSHセッションから `diskutil eject` / `umount` が権限エラーになる場合がある
+  → **2026-09-07 12:20 頃のセッションでは `diskutil eject /dev/disk4` が成功した**
+  (環境により可否が変わる模様。失敗したら Finder/eject をユーザーに依頼)
 
 ### 3.3 ヘルパースクリプト
 
