@@ -1526,7 +1526,7 @@ module core_top (
         .clk            (clk_chipset),
         .rst            (reset_sdram),
         .address        (chipset_address),
-        .data_bus       (data_bus),
+        .cpu_data       (cpu_data_bus),
         .io_write_n     (chipset_io_write_n),
         .memory_read_n  (chipset_memory_read_n),
         .memory_write_n (chipset_memory_write_n),

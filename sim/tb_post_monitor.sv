@@ -19,7 +19,7 @@ module tb_post_monitor;
     always #11.64 clk = ~clk;
 
     logic [19:0] address = 20'h0;
-    logic  [7:0] data_bus = 8'h00;
+    logic  [7:0] cpu_data = 8'h00;
     logic        io_write_n = 1, memory_read_n = 1, memory_write_n = 1;
 
     wire  [7:0] post_code, post_prev, post_max;
@@ -29,7 +29,7 @@ module tb_post_monitor;
 
     post_monitor u_dut (
         .clk(clk), .rst(rst),
-        .address(address), .data_bus(data_bus),
+        .address(address), .cpu_data(cpu_data),
         .io_write_n(io_write_n),
         .memory_read_n(memory_read_n), .memory_write_n(memory_write_n),
         .post_code(post_code), .post_prev(post_prev), .post_hist(post_hist),
@@ -52,11 +52,26 @@ module tb_post_monitor;
     // captures the garbage that is on the bus beforehand.
     task automatic out80(input logic [7:0] v);
         address = 20'h00080;
-        data_bus = 8'hC3;          // stale bus content, deliberately wrong
+        cpu_data = 8'hC3;          // stale bus content, deliberately wrong
         io_write_n = 0;
         repeat (2) @(posedge clk);
-        data_bus = v;              // real data settles mid-cycle
+        cpu_data = v;              // real data settles mid-cycle
         repeat (3) @(posedge clk);
+        io_write_n = 1;
+        address = 20'h0;
+        repeat (3) @(posedge clk);
+    endtask
+
+    // An I/O write to a DIFFERENT port whose address happens to sweep through
+    // 0x0080 for one cycle on the way. testB17 recorded MAX 63, a value the
+    // BIOS never writes to port 0x80, so a transient like this must not count.
+    task automatic out_other_glitch(input logic [7:0] v);
+        io_write_n = 0;
+        address = 20'h00080;       // one cycle only, in transit
+        cpu_data = v;
+        @(posedge clk);
+        address = 20'h00081;       // settles on the real port
+        repeat (4) @(posedge clk);
         io_write_n = 1;
         address = 20'h0;
         repeat (3) @(posedge clk);
@@ -101,6 +116,15 @@ module tb_post_monitor;
             post_hist[31:24] !== 8'h02 || post_hist[23:16] !== 8'h03 ||
             post_hist[15:8]  !== 8'h04 || post_hist[7:0]   !== 8'h54)
             begin $display("  FAIL hist"); errors++; end
+
+        // A one-cycle sweep through 0x0080 must be ignored entirely.
+        out_other_glitch(8'h63);
+        repeat (4) @(posedge clk);
+        if (post_count !== 16'd6) begin
+            $display("  FAIL glitch counted (count=%0d, want 6)", post_count); errors++;
+        end
+        if (post_max === 8'h63) begin $display("  FAIL glitch reached max"); errors++; end
+        $display("  glitch ignored: count=%0d max=%02h", post_count, post_max);
 
         // A restart. The history holds DEPTH=8 entries, and six are used so far,
         // so these two fill it -- the freeze is only expected after that.

@@ -26,7 +26,12 @@ module post_monitor #(
 
     // Guest bus, as CHIPSET presents it.
     input  wire [19:0] address,
-    input  wire  [7:0] data_bus,
+    // The CPU's own write data, not the shared bus. CHIPSET's data_bus is a mux
+    // whose source depends on who is driving, and testB17 recorded MAX 63 with
+    // it -- a value the BIOS never writes to this port (a linear disassembly
+    // shows every one of its writes is a constant: 01-12, 52, 54). Taking the
+    // 8088's dout removes the ambiguity.
+    input  wire  [7:0] cpu_data,
     input  wire        io_write_n,
     input  wire        memory_read_n,
     input  wire        memory_write_n,
@@ -55,7 +60,11 @@ module post_monitor #(
     wire mem_access = ~memory_read_n | ~memory_write_n;
     wire is_post    = io_write && (address[15:0] == 16'h0080);
 
-    logic io_write_q, is_post_q;
+    // Require the decode to hold for two cycles before believing it: the
+    // address and command lines do not change together, so a transition through
+    // 0x0080 on the way to another port would otherwise register as a write.
+    logic io_write_q, is_post_q, is_post_d;
+    wire  is_post_stable = is_post & is_post_d;
     logic [7:0]  data_q;
     logic [19:0] mem_addr_q;
 
@@ -73,17 +82,19 @@ module post_monitor #(
             filled        <= '0;
             io_write_q    <= 1'b0;
             is_post_q     <= 1'b0;
+            is_post_d     <= 1'b0;
             data_q        <= 8'h00;
             mem_addr_q    <= 20'h0;
         end else begin
             io_write_q <= io_write;
-            is_post_q  <= is_post;
+            is_post_d  <= is_post;
+            is_post_q  <= is_post_stable;
             // Write data is valid throughout the command and guaranteed at its
             // END; sample it continuously while the cycle is active and use the
             // last value. testB16 latched on the LEADING edge instead and
             // returned garbage -- FF 53 74 C3 6F where the BIOS only ever
             // writes 00-12, 21-25, 30-32, 40-43, 52, 54, 55.
-            if (is_post) data_q <= data_bus;
+            if (is_post_stable) data_q <= cpu_data;
 
             // Track the most recent MEMORY access, so the snapshot taken with a
             // POST code says where the guest was working. Qualified with "not
@@ -93,7 +104,7 @@ module post_monitor #(
                 mem_addr_q <= address;
 
             // Record at the END of the write cycle, when the data is settled.
-            if (is_post_q && ~is_post) begin
+            if (is_post_q && ~is_post_stable) begin
                 // Always live: how much has happened, and how far it ever got.
                 post_count <= post_count + 16'd1;
                 if (data_q > post_max) post_max <= data_q;
