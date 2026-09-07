@@ -87,7 +87,13 @@ module sdram_board_model #(
         .T_RAS     (T_RAS),
         .T_RC      (T_RC),
         .T_REF     (T_REF),
-        .CHECK     (CHECK)
+        .CHECK     (CHECK),
+        // This wrapper supplies the real launch/flight delays, so the part
+        // inside it must present an honest one-period DQ window. Without this
+        // the model's window is 3x too wide and the testbench cannot tell a
+        // correct DQ sample point from one half a cycle early -- which is
+        // exactly how testB6 passed here and went black on hardware.
+        .PHYSICAL_DQ (1'b1)
     ) u_part (
         .clk   (dev_clk),
         .a     (d_a),
