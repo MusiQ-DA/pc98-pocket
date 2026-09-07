@@ -206,11 +206,19 @@ module sdram_model #(
     // N+CL is rd_vld[cas_lat-1]. Using rd_vld[cas_lat] puts the window a full
     // cycle late, which is what made this model reject KFSDRAM.
     //
-    // Two adjacent slots are driven because real DQ is valid around the
-    // sampling edge, and controllers differ by a cycle in where they latch.
+    // A real part drives the datum from its launch edge until the NEXT datum
+    // replaces it (burst data is continuous; there is no high-Z gap between
+    // pipelined words). So the datum is held for the slot ending at N+CL AND
+    // the following slot. With an in-phase controller clock only the first
+    // slot matters; with a device clock out of phase (sdram_board_model) the
+    // controller's sampling edge can fall in either slot, and dropping to Z
+    // after one slot would falsely reject controllers the hardware accepts.
+    wire hold = (cas_lat + 1 <= PIPE - 1) && rd_vld[cas_lat];
+
     always_comb begin
         if (cas_lat >= 1 && rd_vld[cas_lat-1]) dq_in = rd_data[cas_lat-1];
-        else                                   dq_in = 16'hZZZZ;
+        else if (hold)                          dq_in = rd_data[cas_lat];
+        else                                    dq_in = 16'hZZZZ;
     end
 
     // Test hooks.
