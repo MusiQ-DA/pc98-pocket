@@ -87,6 +87,12 @@ module sdram_mp #(
     output logic [PORTS-1:0]                 p_done,    // one cycle, burst complete
 
     output logic                             init_done,
+    // FSM visibility for wrappers that must tell a caller "not ready now".
+    // stat_idle is asserted only when a command can be accepted this cycle;
+    // it is low during refresh, which a "no transaction in flight" signal
+    // would miss.
+    output logic                             stat_idle,
+    output logic                             stat_refresh,
 
     // SDRAM device
     output logic [ROW_BITS-1:0]              sdram_a,
@@ -125,6 +131,11 @@ module sdram_mp #(
 
     logic [2:0] cmd;
     always_comb {sdram_ras_n, sdram_cas_n, sdram_we_n} = cmd;
+
+    always_comb begin
+        stat_idle    = init_done & (state == S_IDLE) & (timer == 0) & ~refresh_due;
+        stat_refresh = (state == S_REF);
+    end
 
     // ---------------------------------------------------------------- arbiter
 

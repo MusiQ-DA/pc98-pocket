@@ -19,9 +19,12 @@
 //   idle                        ->  init_done and nothing in flight
 //   data_out                    ->  latched from p_rdata on p_rvalid
 //
-// `enable_refresh` and `refresh_mode` are vestigial here: sdram_mp refreshes on
-// its own interval counter rather than being told when the bus is quiet, so the
-// input is ignored and refresh_mode reports the controller's own state.
+// `enable_refresh` is ignored: sdram_mp refreshes on its own interval counter
+// rather than being told when the bus is quiet. `refresh_mode` still has to be
+// reported, because RAM.sv drops access_ready when a command collides with a
+// refresh -- and `idle` has to mean "a command can be accepted now", not merely
+// "no transaction in flight", or RAM.sv will tell the CPU an access completed
+// while the controller is still refreshing.
 //
 // Clocking: this runs sdram_mp at whatever `sdram_clock` the chipset supplies
 // (clk_chipset, 42.95 MHz) rather than at clk_core. Raising the clock is a
@@ -92,7 +95,7 @@ module sdram_kf_shim #(
 
     logic        req, we_r, busy;
     logic [ADDR_BITS-1:0] addr_r;
-    logic        p_ack, p_done, p_rvalid, init_done;
+    logic        p_ack, p_done, p_rvalid, init_done, stat_idle, stat_refresh;
     logic [sdram_data_width-1:0] p_rdata;
     logic [0:0]  grant;
 
@@ -125,8 +128,10 @@ module sdram_kf_shim #(
     // the word has landed; RAM.sv's state machine edges on both transitions.
     assign write_flag   = busy &  we_r;
     assign read_flag    = busy & ~we_r;
-    assign idle         = init_done & ~busy;
-    assign refresh_mode = 1'b0;
+    // KFSDRAM's idle is (state == IDLE), which is low during refresh. Matching
+    // that matters: RAM.sv latches access_ready from it.
+    assign idle         = stat_idle & ~busy;
+    assign refresh_mode = stat_refresh;
 
     logic [MASK_BITS-1:0] dqm_unused;
 
@@ -160,6 +165,8 @@ module sdram_kf_shim #(
         .p_rdata      (p_rdata),
         .p_done       (p_done),
         .init_done    (init_done),
+        .stat_idle    (stat_idle),
+        .stat_refresh (stat_refresh),
         .sdram_a      (sdram_address),
         .sdram_ba     (sdram_ba),
         .sdram_cke    (sdram_cke),

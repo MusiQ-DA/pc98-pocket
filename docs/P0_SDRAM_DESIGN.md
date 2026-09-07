@@ -126,3 +126,66 @@ protocol violations: 0   data errors: 0   RESULT: PASS
    - `KFSDRAM` を `sdram_mp` に差し替え、PCXT が引き続き DOS ブートするか確認
      (既知動作との A/B が取れるうちにやる)
 3. その後 P1 へ
+
+
+---
+
+## 7. 実機 A/B 失敗と、そこから判明したこと(2026-09-07)
+
+`SDRAM_USE_MP=1` のビルド(CI run#42)は **実機で BIOS が出なかった**。
+KFSDRAM 版(run#39)は同じ SD・同じ JSON で BIOS に到達するので、
+**差分はコントローラだけ**。
+
+### 特定したバグ: `idle` と `refresh_mode` の意味を取り違えていた
+
+`RAM.sv` は SDRAM コントローラの状態を2つの経路で使っている:
+
+```systemverilog
+// RAM.sv:374 付近
+else if (state == IDLE)                        access_ready <= idle;
+else if ((write_command) && (refresh_mode))    access_ready <= 1'b0;
+else if ((read_command)  && (refresh_mode))    access_ready <= 1'b0;
+```
+
+- **KFSDRAM**: `idle = (state == IDLE)` — **リフレッシュ中は 0**。
+  `refresh_mode = (state == REFRESH_PALL) || (state == REFRESH)`
+- **旧 `sdram_kf_shim`**: `idle = init_done & ~busy`(リフレッシュ中も **1**)、
+  `refresh_mode = 1'b0` **固定**
+
+つまりリフレッシュ中に来た CPU アクセスに対し「**いつでも受け付けられる / 待つ必要なし**」
+と答えていた。RAM.sv はウェイトを入れずにバスサイクルを終わらせるので、
+**データが動く前にアクセスが完了したことになる**。リフレッシュは 7.45µs ごとに
+走るので、BIOS ロード中に確実に踏む。
+
+**修正**: `sdram_mp` に `stat_idle` / `stat_refresh` を追加し、
+シムは `idle = stat_idle & ~busy` / `refresh_mode = stat_refresh` を返す。
+`stat_idle` は「**このサイクルにコマンドを受け付けられる**」の意味で、
+リフレッシュ中とリフレッシュ待ち中は 0。
+
+### なぜシミュレーションで検出できなかったか
+
+**テストベンチが `access_complete` を待っていて、`memory_access_ready` の経路を
+一度も踏んでいなかった。** RAM.sv が唯一ウェイトを入れるのが
+`refresh_mode` 衝突なので、そこを踏まないテストは
+このバグに対して**構造的に盲目**だった。
+
+→ `tb_ram_ab.sv` は **CPU バスサイクルを模して `memory_access_ready` を見る**
+方式に書き直した(8088 @4.77MHz は 1 バスサイクル ≒ 36 チップセットクロック)。
+
+### モデルの誤りも2件見つかった
+
+1. **tRCD を 2 サイクル必須にしていた。** KFSDRAM は ACTIVATE の
+   1サイクル後に CAS を出す。42.95MHz(23.3ns)なら tRCD 15-20ns は
+   1サイクルで足りるので **KFSDRAM が正しく、モデルが厳しすぎた**
+2. **リードデータ窓が1サイクルしかなかった。** 実部品の DQ はサンプリング縁の
+   前後で有効で、コントローラによって latch する位置が1サイクル違う。
+   2サイクルに広げた
+
+### 未解決: テストベンチがまだオラクルになっていない
+
+**`tb_ram_ab` は参照の KFSDRAM を PASS させられていない**(765 データ誤り)。
+シム側は PASS するが、**参照が落ちる以上この PASS は信用できない**。
+
+→ **`idle`/`refresh_mode` の修正が実機で効くかは、実機でしか確認できていない。**
+TB を先に妥当化する(KFSDRAM を PASS させる)のが本筋だが、
+リードデータの latch 位置の詰めが残っている。
