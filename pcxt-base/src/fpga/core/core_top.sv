@@ -1515,6 +1515,7 @@ module core_top (
     //
     wire [19:0] chipset_address;
     wire        chipset_io_write_n, chipset_memory_read_n, chipset_memory_write_n;
+    wire        chipset_aen;
     wire  [7:0] post_code, post_prev;
     wire [63:0] post_hist;
     wire [19:0] post_mem_addr;
@@ -1528,6 +1529,7 @@ module core_top (
         .address        (chipset_address),
         .cpu_data       (cpu_data_bus),
         .io_write_n     (chipset_io_write_n),
+        .address_enable_n (chipset_aen),
         .memory_read_n  (chipset_memory_read_n),
         .memory_write_n (chipset_memory_write_n),
         .post_code      (post_code),
@@ -1777,7 +1779,7 @@ module core_top (
     //  .memory_write_n_direction           (memory_write_n_direction),
         .dma_request                        (0),    // use? -> I don't know if it will ever be necessary, at least not during testing.
         .dma_acknowledge_n                  (dma_acknowledge_n),
-    //  .address_enable_n                   (address_enable_n),
+        .address_enable_n                   (chipset_aen),
     //  .terminal_count_n                   (terminal_count_n)
         .port_b_out                         (port_b_out),
         .port_c_in                          (port_c_in),
