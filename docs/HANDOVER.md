@@ -251,10 +251,16 @@ NOPスタブ(6144×0x00000013)は一度もこのストアを実行しないの�
 2. ~~**P0 手順5: 実機統合の下準備**~~ ✅ **完了**
    - `sdram_kf_shim.sv`(KFSDRAM と同一ポート)経由で `sdram_mp` を
      RAM.sv に差し込めるようにした。`config.tcl` の `SDRAM_USE_MP` で切替
-   - **A/B ビルド(CI run#42, sha `29f34d5048`)完了 → SD 投入済み。実機テスト待ち**
-     - Fitter Successful / Error 0 / Critical Warning 0
-     - **12,105 ALM(KFSDRAM 版 12,049 に対し +56 のみ)**、M10K は同一 193
-     - `dist/testAB/` としてパッケージ
+   - **A/B(run#42)は実機で BIOS が出なかった。** 原因を特定して修正済み:
+     シムが `idle` を「転送が無い」の意味で返していたが、KFSDRAM の `idle` は
+     「コントローラが IDLE 状態」= **リフレッシュ中は 0**。加えて `refresh_mode` を
+     0 固定にしていた。RAM.sv はこの2つで CPU にウェイトを入れるので、
+     **リフレッシュ中のアクセスがデータ転送前に完了扱いになっていた**
+     (詳細 `docs/P0_SDRAM_DESIGN.md` §7)
+   - **SD は動作する B1(KFSDRAM 版)に復旧済み**
+   - **未解決: `tb_ram_ab` がまだ参照 KFSDRAM を PASS させられない**(765誤り)。
+     参照が落ちる TB は判定に使えないので、**修正の検証は実機頼み**の状態。
+     TB の妥当化(リードデータの latch 位置)が次の課題
    - シムは 42.95MHz 据え置き。85.9MHz 化はクロック配線が CHIPSET〜core_top まで
      波及して検証の変数が増えるため分離した(Fmax は Fitter で別途評価)
 2. ~~**P0 手順2: SDRAM コントローラの置換**~~ ✅ **完了**
