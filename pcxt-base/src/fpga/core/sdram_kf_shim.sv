@@ -185,7 +185,7 @@ module sdram_kf_shim #(
     //
     // It is a small lie -- we are busy, not refreshing -- but refresh_mode has
     // exactly one consumer in RAM.sv and this is what it is for.
-    assign refresh_mode = stat_refresh;   // VARIANT D: the |busy hack removed
+    assign refresh_mode = stat_refresh | busy;
 
 `ifdef SDRAM_MP_KF_REF
     // ---------------------------------------------------------------------
