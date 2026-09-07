@@ -166,14 +166,19 @@ module tb_selftest_soc;
         .video_rgb_clock(), .video_rgb_clock_90()
     );
 
-    int lit_pixels = 0, in_area_cycles = 0, shown_pixels = 0;
+    int lit_pixels = 0, in_area_cycles = 0, shown_pixels = 0, any_overlay_pixels = 0;
     always @(posedge clk_pix) begin
         if (osd_in_area) begin
             in_area_cycles++;
             if (osd_palette_idx != 4'd0) lit_pixels++;
         end
-        // The thing that actually reaches the screen.
-        if (video_de && (video_rgb != 24'd0)) shown_pixels++;
+        // The thing that actually reaches the screen -- and it has to be
+        // VISIBLE, not merely non-zero. testB13 passed a "video_rgb != 0"
+        // check while drawing OSD_LABEL (0x101010, near black) over the
+        // splash, which renders exactly as simulated and cannot be read.
+        // Count only pixels bright enough to see against a picture.
+        if (video_de && (video_rgb[23:16] > 8'h40)) shown_pixels++;
+        if (video_de && (video_rgb != 24'd0)) any_overlay_pixels++;
     end
 
     // ---- observation
@@ -237,7 +242,8 @@ module tb_selftest_soc;
         $display("  osd_active           : %0d", u_soft.osd_active_r);
         $display("  osd in-area cycles   : %0d", in_area_cycles);
         $display("  osd LIT pixels       : %0d", lit_pixels);
-        $display("  pixels ON SCREEN     : %0d  <-- what the panel would show",
+        $display("  overlay pixels       : %0d (any non-black)", any_overlay_pixels);
+        $display("  VISIBLE pixels       : %0d  <-- bright enough to read",
                  shown_pixels);
         if (shown_pixels == 0)
             $display("  RESULT: FAIL -- nothing reaches the screen");
