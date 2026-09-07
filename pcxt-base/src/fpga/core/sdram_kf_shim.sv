@@ -139,8 +139,48 @@ module sdram_kf_shim #(
     assign read_flag    = busy & ~we_r;
     // KFSDRAM's idle is (state == IDLE), which is low during refresh. Matching
     // that matters: RAM.sv latches access_ready from it.
-    assign idle         = stat_idle & ~busy;
-    assign refresh_mode = stat_refresh;
+    //
+    // ...and it matters far more than "matching" suggests. RAM.sv's CPU-facing
+    // ready is OPEN LOOP:
+    //
+    //     else if (state == IDLE) access_ready <= idle;
+    //
+    // taken in the very cycle the command appears, and then held. Nothing waits
+    // for the access to finish. What protects the 8088 is only the length of
+    // its bus cycle: it asserts MEMR in T2 and latches at the end of T3, one CPU
+    // clock later, which at 4.77 MHz is nine chipset cycles. KFSDRAM answers in
+    // five, so it fits; sdram_mp answers in ten, so it does not, and the CPU
+    // latches the PREVIOUS access's byte every single time (tb_cpu_timing:
+    // 64/64 wrong on CPU timing, 0/64 when the same reads wait for completion).
+    // That is the whole bisection: every testbench passed because every
+    // testbench waited.
+    //
+    // Dropping idle in the same cycle the request is seen turns that open loop
+    // into a real handshake. access_ready latches 0 at the start of the access,
+    // holds 0 through RAM_READ_1/2, and only returns in COMPLETE_RAM_RW, so the
+    // CPU inserts wait states until the data is genuinely there. Correctness
+    // then does not depend on the controller being fast enough -- which matters,
+    // because bursts and extra ports will only make it slower.
+    //
+    // Safe against RAM.sv's other users of idle: initilized_sdram latches on the
+    // first idle, long before any command, and the WAIT state is only entered
+    // after the command has dropped.
+    assign idle         = stat_idle & ~busy & ~(write_request | read_request);
+    // RAM.sv's only mechanism for "the controller cannot serve you yet" is:
+    //
+    //     else if ((read_command) && (refresh_mode)) access_ready <= 1'b0;
+    //
+    // and unlike the IDLE-cycle latch above, that branch fires in ANY state, so
+    // it does not depend on which value of RAM.sv's `state` the access_ready
+    // block happens to see (RAM.sv assigns state with a BLOCKING assignment
+    // inside always_ff, so that ordering is not even well defined in
+    // simulation). Holding it through the transaction makes the 8088 insert
+    // wait states until COMPLETE_RAM_RW puts access_ready back up -- a real
+    // handshake instead of a race against the bus-cycle length.
+    //
+    // It is a small lie -- we are busy, not refreshing -- but refresh_mode has
+    // exactly one consumer in RAM.sv and this is what it is for.
+    assign refresh_mode = stat_refresh | busy;
 
 `ifdef SDRAM_MP_KF_REF
     // ---------------------------------------------------------------------
