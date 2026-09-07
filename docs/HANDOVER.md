@@ -9,291 +9,74 @@ PC-98 for Analogue Pocket プロジェクトの引き継ぎ資料。
 
 ---
 
-## 1. 現在位置(ここだけ読めば再開できる)
+## 1. ★根本原因は特定・修正済み(2026-09-07 深夜)
 
-**P0(メモリアーキテクチャ)の山場: 自作SDRAMコントローラ `sdram_mp` の実機証明。**
-**現在地: コア内蔵セルフテスト(testB9/10/11)を実装したが、実機で何も表示されない。**
-**原因はセルフテストの実装側にあり、SDRAM の話にはまだ戻れていない。** → §2
+**犯人は SDRAM ではなかった。`RAM.sv` の CPU 向けハンドシェイクがオープンループで、
+8088 が sdram_mp の応答を待たずに「1つ前のアクセスの値」を読んでいた。**
 
-**SDRAM 本体について分かっていること**: testB7b(#58)で実機の症状が変わった。
-スプラッシュ → **ビープ3回** → 停止。testB6 までは完全に無音。
-**XT系BIOS のビープ3回 = base 64KB RAM failure** = SDRAM 先頭64KBがメモリテストで落ちる。
-「SDRAM は全く動かない」から「データが壊れる」段階へ前進しており、
-これまでの「メモリ破壊系」という推定が初めて BIOS 自身の言葉で裏付けられた。
+### 1.1 決め手になった観測
 
-やっていること: desaster/openfpga-PCXT ベースのコアで SDRAM コントローラを
-`KFSDRAM`(実績品)から自作 `sdram_mp`(マルチポート・バースト対応、PC-98 G-RAM 用)に
-差し替える A/B。**全シミュレーションは緑なのに実機だけ BIOS まで届かない**バグを、
-実機バイセクトで絞り込んでいる最中。
-
-### 実機バイセクト台帳(全ビルド CI 成功・全シム合格のものだけ比較)
-
-| テスト | run | 構成 | 実機結果 | 判定 |
-|---|---|---|---|---|
-| testB1 | #39 | 純KFSDRAM + 実firmware | ✅ BIOS POST | ベースライン(動作実績) |
-| testB2 | #46 | shim + sdram_mp(2バグ修正済み) | ❌ スプラッシュ→真っ黒 | mp 経路が壊れている |
-| testB3 | #49 | 現行ツリー + 純KFSDRAM | ✅ POST | **ツリー・KFSDRAM経路は健全** |
-| testB4 | #51 | shimのグルー + 純KFSDRAM末端(`SDRAM_MP_KF_REF`) | ✅ POST | **shimグルーは無罪。犯人は sdram_mp 内部** |
-| testB5 | #53 | mp + 幅キャスト定数 + 233µs INIT | ❌ 真っ黒 | 定数合成/INIT待ちの仮説は死んだ |
-| testB6 | #54 | mp + negedge DQキャプチャ | ❌ 真っ黒 | **改悪だった**(§1.1)。posedge に revert 済み |
-| testB7 | #57 | mp(posedge復帰)+ SDRAM I/O 制約 | (実機未投入) | **制約は効いた。読み出しパスの実違反が初めて可視化された** |
-| **testB7b** | **#58** | **上記 + dram_* を IO レジスタに固定** | **SD投入済・実機テスト待ち** | **§1.5 / §1.6** |
-| testB7ref | #59 | 純KFSDRAM + 新SDC(測定専用) | (実機不要) | **§1.8 判別完了 = (a)。読み出しパスは無罪** |
-| **testB8** | — | **mp + 較正済み入力遅延(3.5ns)** | **ビルド中** | §1.10 |
-
-症状(ユーザー観測): testB2/5 とも**スプラッシュ(ファームウェア描画)は出る→真っ黒**。
-= picorv32 は正常・8088 は解放されているが、BIOS が SDRAM 依存コード
-(スタック・メモリテスト)で死んでいる。メモリ破壊系と整合。
-
-### 1.1 testB6 の negedge キャプチャは改悪だった(revert 済み)
-
-逆相なので「negedge = 窓の中央」と考えたのが誤り。**逆相だからこそ posedge が中央**になる。
-
-READ がバスに出るサイクルを P とすると:
-- 部品は**自分の立ち上がり = 我々の negedge** でコマンドを取り込む → P+0.5 で READ 確定
-- CL=2 のデータ launch は device edge P+0.5+2 = **negedge P+2.5**
-- 有効窓は概ね `[P+2.5+tAC, P+3.5+tOH]` ≒ `[P+2.7, P+3.6]`(サイクル単位)
-- → **窓の中央は posedge P+3**。negedge P+2.5 は *launch の瞬間そのもの*で tAC 前 = 前ワードを掴む
-
-**KFSDRAM(実機実績)の実サンプル点を追うと厳密に P+3。**
-IDLE→READ 遷移サイクル C0 で ACT、state=READ の cycle0 で READ コマンド発行
-(バスは [C0+1, C0+2) なので P=C0+1)、`read_flag_comb = state_counter > cas_latency`
-が cycle3 で立ち、`data_out <= sdram_dq_in` は posedge C0+4 = **P+3**。
-
-**testB5(posedge 版)も P+3 で完全一致していた。** つまり読み出し点は元から正しく、
-testB6 が半サイクル早めて壊した。testB5 の失敗原因は別のところにある(→ §1.2)。
-
-> ⚠️ だった問題: `sim/sdram_board_model.sv` は **posedge 版と negedge 版の両方を PASS
-> させていた**。原因は `sdram_model.sv` が1ワードを CL-1〜CL+1 の**3スロット**保持して
-> いたこと(実部品は自分の1周期だけ)。窓が3倍広ければ何でも祝福する。
-> **修正済み**: `PHYSICAL_DQ` パラメータを追加し、board model 側は 1(= スロット CL のみ、
-> 実周期ぴったり)で駆動する。ゼロ遅延の `tb_ram_ab` 側は従来どおり 0。
-> 検証: KFSDRAM 参照 PASS / posedge mp PASS / **negedge(testB6)版は全 read が 00 で FAIL**。
-> これでこの TB は「DQ サンプル点」に対する判別能力を持つ。
-
-### 1.2 真因: **dram_* ピンにタイミング制約が1つも無かった**
-
-`build/artifact_54/ap_core.sta.rpt` が明言している:
+コア内蔵セルフテスト(testB14)が実機でこう報告した:
 
 ```
-Unconstrained Input Ports:   dram_dq[*]   "No input delay ... found"
-Unconstrained Output Ports:  dram_a[*] dram_ba[*] dram_dqm[*] dram_clk
-                             dram_ras_n dram_cas_n dram_we_n dram_dq[*]
+PILOT  WANT A5 GOT A5      ← バンク0 OK
+PILOT2 WANT 5A GOT 5A      ← バンク1 OK
+PASS 64K                   ← base 64KB 全域 正常
 ```
 
-= **SDRAM インターフェースで解析されたパスはゼロ**。帰結が3つ、そのまま今回のバグ:
+**BIOS が「3回ビープ = base 64KB RAM failure」と言う領域が、ソフトコアから叩くと全部通る。**
+違いは1つだけ: セルフテストは `ram_rw_complete` を待つ。**8088 は待たない。**
 
-1. Fitter に SDRAM ピンのタイミング目標が無く、ドライブ元レジスタを自由に配置した
-2. STA の worst-case slack は SDRAM について**沈黙していただけ**。このバイセクト中の
-   「全部緑」レポートは SDRAM について何も言っていない
-3. よって配置がリコンパイルのたびに変わり、**ビルド毎に変動するマージナルな回路**になる。
-   シミュレーションが構造的に再現できない唯一のクラス = 「全シム緑・実機だけ黒」の正体
+### 1.2 メカニズム
 
-**fit のくじ引き度合いは6ビルドで実機結果と完全に分離する**
-(CGA ドメイン general[3] の TNS を代理指標として):
+`RAM.sv`:
+```systemverilog
+else if (state == IDLE) access_ready <= idle;   // コマンド提示サイクルで拾って保持
+```
+完了を待つ仕組みが無い。8088 を守っていたのは**バスサイクル長だけ** —
+MEMR を T2 で出し T3 末尾で latch = CPU 1クロック = 4.77MHz で **9 chipset サイクル**。
 
-| ビルド | 構成 | 実機 | TNS | ALM |
-|---|---|---|---|---|
-| #49 testB3 | 純KF | ✅ | **-1.30** | 12,049 |
-| #51 testB4 | KF末端 | ✅ | **-1.07** | **12,233** |
-| #42 | mp | ❌ | -5.52 | — |
-| #46 testB2 | mp | ❌ | -5.26 | — |
-| #53 testB5 | mp | ❌ | -3.89 | 12,183 |
-| #54 testB6 | mp | ❌ | -6.35 | 12,170 |
-
-**論理量の効果ではない**: 最良スコアの testB4 が最大(12,233 ALM)。
-
-KFSDRAM が生き残っていたのは、出力が素朴な `casez` レジスタ直結で経路が浅く、
-くじ引きに勝ち続けていたから。sdram_mp は負けた。
-
-### testB7 の中身
-
-1. **DQ キャプチャを posedge に revert**(KFSDRAM 準拠の P+3。§1.1)
-2. **SDRAM I/O 制約を追加**(`pcxt-base/src/fpga/core/core_constraints.sdc`)。
-   数値は同じ基板・同じ部品で動いている姉妹コア(`src/fpga/core/core_constraints.sdc`、
-   MacLC/Pocket-Amiga 系)由来: read `-max 5.9 / -min 0.9`、
-   write/command `-max 2.0 / -min -1.0`、いずれも `-reference_pin dram_clk`。
-   general[0]=clk_chipset(コントローラ)と general[2]=clk_sdram_ph(dram_clk ピン)は
-   **既に同一クロックグループ**なので、launch→chip の関係が成立し制約が効く。
-   - **姉妹コアの `set_multicycle_path -setup -end 2` は移植しない。** あちらのコントローラ用で
-     こちらでは誤り。dram_clk は clk_chipset の反転なので、部品は我々の negedge で
-     データを出し、sdram_mp も KFSDRAM も**次の posedge**で取る = 正真正銘の
-     シングルサイクル(窓は半周期 11.64ns)。2周期与えると実在する違反を隠す。
-3. **`scripts/check_sdram_paths.tcl` + CI ゲート**を追加。解析パスが0本なら赤くする。
-   「パスの裏付けが無い良い slack 値」= このファイル群が存在する理由そのもの。
-
-### 1.3 実測: mp のアクセスレイテンシは KFSDRAM の2倍(今は無害、turbo では致命)
-
-board-timing TB に計測プローブを入れて実測(read command → data_bus_out 確定までの
-chipset サイクル数):
-
-| コントローラ | レイテンシ |
-|---|---|
-| KFSDRAM | **5 サイクル** |
-| sdram_mp(shim 経由) | **10 サイクル** |
-
-**RAM.sv の CPU ハンドシェイクは完了待ちではない。** `access_ready <= idle` は IDLE 状態で
-拾うので、コマンド提示の約1サイクル後に `memory_access_ready` が上がる。CPU を実際に
-守っているのは 8088 のバスサイクル長そのもの(オープンループ)。
-
-- 起動時 `clk_select = 2'b00`(リセット既定)= 4.77MHz = **バスサイクル 36 chipset cycle**。
-  10 < 36 なので**今回の真っ黒の原因ではない**。
-- 最速 turbo `2'b11` は `cpu_edge_num/den = 1/1` = **42.95MHz 等速**。バスサイクルは 4 cycle 級で、
-  KFSDRAM ですら `ram_read_wait_cycle=1` + `shift_read_timing` で補正している
-  (`XT_CE_Generator.sv`)。**mp の 10 サイクルはここに収まらない。**
-
-→ P0 完了後、または testB7 が黒だった場合の候補: shim の `T_RCD`/`T_RP`(現在 2)を詰める。
-sdram_mp は `timer` が 0 になるまで次状態に進まないので ACT→READ に実質4サイクルかかる
-(KFSDRAM は1)。ここだけでレイテンシは大きく縮む。
-
-### 1.4 run#57 の結果: 制約は効き、隠れていた違反が数字になった
-
-`build/artifact_57/ap_core.sta.rpt`:
-
-- **`Unconstrained Input/Output Ports` から dram_* が全消滅**(0件)。
-  プロジェクト史上はじめて SDRAM が解析対象になった。
-- setup summary の変化:
-
-| クロック | testB6(#54) | testB7(#57) | 意味 |
-|---|---|---|---|
-| general[0] clk_chipset | +2.463 / TNS 0 | **-2.417 / TNS -18.068** | **今まで見えていなかった読み出しパスの違反** |
-| general[2] clk_sdram_ph | (表に無し) | +3.297 / TNS 0 | 新規に解析対象化 |
-| general[3] clk_28_636 CGA | -0.977 / TNS -6.35 | **-0.386 / TNS -2.002** | 実目標を与えたら fit 全体が改善(動作実績ビルドより良い) |
-
-TNS -18.068 が約16エンドポイントに分散 = **DQ 16ビットの捕獲FF**。予算計算とも一致:
-半周期 11.64ns − 入力遅延 5.9ns(tAC+フライト)= **5.74ns** しか pin→FF 配線+setup に無く、
-ファブリック上の FF では届かない。
-
-### 1.5 testB7b(温存していた2手目を投入)
-
-`ap_core.qsf` に `FAST_INPUT_REGISTER` / `FAST_OUTPUT_REGISTER` を dram_* に追加し、
-**捕獲FF・駆動FFを IO セルに固定**する。読み出しパスからファブリック配線が消え、
-同時に配置がビルド間で動かなくなる(= 病気の本体だった「くじ引き」を構造的に消す)。
-
-KFSDRAM 側でも成立することを確認済み(パッキング条件は「FF がピンだけに繋がること」で、
-`p_rdata <= sdram_dq_in`(mp)も `data_out <= sdram_dq_in`(KFSDRAM)も満たす)。
-A/B の参照が壊れない。
-
-### 1.6 run#58: IO レジスタ化は効かなかった。-2.4ns は配線ではない
-
-| クロック | testB7(#57) | testB7b(#58) |
+| コントローラ | レイテンシ | 9に収まるか |
 |---|---|---|
-| general[0] clk_chipset | -2.417 / TNS -18.068 | **-2.408 / TNS -17.914** |
-| general[3] CGA | -0.386 / TNS -2.002 | -0.905 / TNS -8.196 |
+| KFSDRAM | **5** | ✅ |
+| sdram_mp | **10** | ❌ |
 
-パッキング自体は成功している(fit.rpt: `sdram_a[*]`/`cmd[*]`/`sdram_dq_out[*]` が
-"Fast Output Register assignment" で `dram_*~output` に、`p_rdata[*]` が
-`dram_dq[*]~input` に Packed Register)。**それでも slack が 0.009ns しか動かない。**
+結果、CPU は毎回1つ前の値を読む:
+```
+@01000: got 00 want 5a
+@01001: got 5a want c7    ← 1つ前
+@01002: got c7 want 60
+```
 
-→ **-2.4ns はピン→FF の配線遅延ではない。** 予算の内訳を見直すと、`-reference_pin dram_clk`
-は「SDRAM が見るクロック」基準なので、STA は **FPGA から dram_clk が出て行くまでの
-clock-to-out 遅延**を launch 側に加算する。半周期 11.64ns はその分だけ食われており、
-5.9ns の tAC+フライトを引くと確かに足りない。
+### 1.3 なぜ全シムが緑だったか
 
-### 1.7 ⚠️ 未解決の分岐: この -2.4ns は sdram_mp 固有か、インターフェース共通か
+**全テストベンチが完了を待っていたから。** セルフテストが PASS したのも同じ理由。
+`sim/tb_cpu_timing.sv`(新規)は待たない — MEMR を出し T3 で latch し、8088 と同様に
+READY だけを見る。**修正前にこれを流すと実機バイセクトを完全再現する**:
 
-**ここが今いちばん重要な未確定点。** 2つの可能性があり、実機テストでは区別できない:
+| モード | tb_cpu_timing(修正前) | 実機 |
+|---|---|---|
+| ref (KFSDRAM) | ✅ PASS | ✅ testB3 POST |
+| mp_kfref | ✅ PASS | ✅ testB4 POST |
+| mp | ❌ **59/64 エラー** | ❌ testB2/5/6 真っ黒 |
 
-- (a) `-max 5.9` が この部品/基板には悲観的 → -2.4ns は両コントローラ共通の見かけ上の値で、
-  真犯人ではない(KFSDRAM も同じ値を示すはず)
-- (b) sdram_mp の読み出しパスが実際に KFSDRAM より悪い → これが真犯人
+### 1.4 修正
 
-**判別実験 testB7ref**: `config.tcl` の `SDRAM_USE_MP` を外し、**純KFSDRAM + 新SDC** で
-1本ビルドして SDRAM パスの slack を読むだけ(実機投入は不要)。
+`sdram_kf_shim.sv`: トランザクション実行中に **`refresh_mode` を立てる**。
+RAM.sv が持つ唯一の「まだ応じられない」入力で、`state` に依存せず全状態で評価される
+(RAM.sv は `always_ff` 内で `state` を**ブロッキング代入**しており評価順序が不定なので、
+IDLE サイクルのラッチに頼る修正は効かなかった)。`idle` の即時ドロップも併用。
 
-- KFSDRAM も ≒-2.4ns → **(a)**。制約値を実測ベースに見直す。読み出し点は犯人ではない
-- KFSDRAM が正の slack → **(b)**。sdram_mp の読み出しパスを KFSDRAM と同じ深さまで削る
+結果: **mp のエラー 59/64 → 0/64**、CPU が67回の待ち状態を挿入。全9TB PASS。
+`tb_cpu_timing` は CI 登録済み。
 
-> 注意: 読み出しサンプル点は P+2.5(testB6)・P+3(testB5)・P+4(testB2、
-> 「a cycle late で 0 を読んだ」と当時記録)の**3点とも実機で失敗している**。
-> サンプル点そのものが犯人である可能性は低い。だからこそ (a)/(b) の判別を先にやる。
+**副次効果: 正しさがコントローラのレイテンシに依存しなくなった。**
+バーストとマルチポートで sdram_mp は今後さらに遅くなるので、これは重要。
 
-### ★ 1.7b セルフテスト実装の現状(2026-09-07 夜。ここが今の作業対象)
+### 1.5 次にやること
 
-実機ビルドを **3本(testB9/10/11)使って情報ゼロ**。詳細は §2 に分離した。
-**次のセッションは §2 から読むこと。**
-
-### 1.8 ★判別完了: -2.4ns は sdram_mp のせいではない(読み出しパスは無罪)
-
-run#59 = **純KFSDRAM + 同じ新SDC**(測定専用ビルド、実機投入せず):
-
-| ビルド | 構成 | 実機 | 読み出しパス slack |
-|---|---|---|---|
-| #59 testB7ref | **純KFSDRAM** | **✅ 動作実績あり** | **-2.357 / TNS -17.784** |
-| #58 testB7b | sdram_mp | ❌ | -2.408 / TNS -17.914 |
-
-**実機で確実に動く KFSDRAM が、ほぼ同じ違反値を出す。** → §1.7 の分岐は **(a)** で確定。
-`-max 5.9` がこの部品/基板に悲観的なだけで、**読み出しパスは犯人ではない**。もう追わないこと。
-
-副産物として実 tAC+フライトの上界が得られた: `5.9 - 2.357 = 3.54ns`。
-= 「動作実績構成が満たすと分かっている最大値」。SDC を **`-max 3.5`** に較正した
-(1ビルドからの推論であって実測ではない、と SDC 内に明記済み)。
-到達不能な制約は Fitter が他を諦める副作用もある(#57→#58 で CGA が -0.386→-0.905 に悪化)。
-
-### 1.9 現在地のまとめ(ここから再開する)
-
-**潰し終わったもの(もう戻らないこと):**
-
-| 仮説 | 結果 |
-|---|---|
-| shim のグルー | 無罪(testB4 が POST) |
-| DQ サンプル点 | **P+2.5 / P+3 / P+4 の3点とも実機失敗** → 犯人ではない |
-| 定数の合成事故 / INIT 待ち | testB5 で死亡 |
-| SDRAM I/O 無制約 | **真であり修正済み**。ただし単独では完治せず(症状は前進) |
-| 読み出しパスの -2.4ns | **無罪**(動作実績の KFSDRAM が同値。§1.8) |
-
-**新しい最重要事実:** testB7b で **音が出た**。testB6 までは無音。
-POST が進んで診断を鳴らす段階に来た = **SDRAM は応答しているがデータが壊れている**方向。
-「メモリ破壊系」というこれまでの推定と整合する。
-
-**次に調べるべき残りの差分(sdram_mp vs KFSDRAM、優先順):**
-
-1. ~~**書き込みデータのサンプル時刻**~~ — **このセッションで否定済み。追わないこと。**
-   仮説は「RAM.sv の `latch_data <= internal_data_bus` は毎サイクル無条件なので、
-   WRITE を req+5 サイクルで出す mp は遅く掴んで壊す(KFSDRAM は req+1)」。
-   検証: TB で書き込みデータを3サイクル後に引っ込めるチェックを追加 →
-   **参照の KFSDRAM も落ちた**(3アドレスごと = リフレッシュで WRITE が後ろへずれた分)。
-   KFSDRAM は実機で動くのだから、`internal_data_bus` は実機で**十分長く保持されている**。
-   よって遅いサンプルは犯人ではない。TB 変更は撤回済み(鉄則: 参照が落ちたら疑うのは TB)。
-   ついでに shim 側ラッチも試したが **1サイクル早く掴んで mp を壊した**(766 data errors)ので撤回。
-2. **リフレッシュ方式**。KFSDRAM は PRECHARGE ALL → AUTO REFRESH。
-   sdram_mp は「毎トランザクション末尾で当該バンクのみ precharge 済み」を前提に
-   AUTO REFRESH を直接発行する。前提が崩れる経路が1つでもあれば破壊される。
-   ※ 机上では不変条件は成立して見える(INIT で PRECHARGE ALL、以降 ACT→RW→TAIL→PRE(cur_bank))。
-3. **アドレス写像の違い**。KFSDRAM `{bank[23:22], row[21:9], col[8:0]}`(実質バンク0のみ・8192行)
-   vs mp `{row[23:11], bank[10:9], col[8:0]}`(4バンク・2048行)。
-   ※ 全単射なのでこれ単独ではデータを壊せない。優先度は低い。
-
-**それでも切り分かない場合** → §4-B のコア内蔵セルフテスト。
-ただし今は「音」という観測チャンネルが1本増えたので、
-**OSD 表示より先に「ビープ回数で結果を鳴らす」セルフテスト**の方が安く実装できる可能性が高い。
-
-### 1.10 testB8 の根拠(次の実機ビルド)
-
-**「音が出た」のは制約が効いた結果である**、という読みが最も整合する:
-
-- testB5 = posedge 読み出し + **無制約** → 無音
-- testB7b = posedge 読み出し + **制約あり** → **発音**
-- 読み出しサンプル点は testB5 と testB7b で同一
-
-つまり差分は制約(= 配置とIOレジスタ = **物理マージン**)だけ。故障はマージン性であり、
-今は「近づいたがまだ届いていない」状態と読める。
-
-そして §1.8 で **`-max 5.9` は到達不能と判明し、3.5ns に較正した**。到達可能な目標を
-与えれば Fitter は初めて本気で最適化できる(到達不能な目標は他所を諦める副作用があり、
-実際 #57→#58 で CGA が -0.386→-0.905 に悪化していた)。
-
-→ **testB8 = ロジック無変更 + 較正済み制約のみ。** 変数1個の正しい A/B。
-
-### testB7b の判定と次の一手
-
-- ✅ **POST が出る** → sdram_mp 実機動作確定、P0 残作業へ(§4-A)
-- ❌ **真っ黒** → まず `ap_core.sta.rpt` の **SDRAM パスの実 slack** を読む
-  (CI ステップ "SDRAM interface is actually timed" が各コーナーの write/read setup を出す)。
-  ここで初めて SDRAM に対する意味のある数字が手に入る。
-  - 制約が閉じているのに黒 → §5-B のコア内蔵セルフテストへ
-  - 制約が閉じていない → `FAST_INPUT_REGISTER` / `FAST_OUTPUT_REGISTER` を dram_* に付けて
-    レジスタを IO セルに固定する(配置くじ引きを構造的に消す。今回は温存した2手目)
+**testB15 = セルフテスト OFF の通常コア + 上記修正。実機で BIOS が通るか確認する。**
+これが通れば P0 の山場は越え、`docs/P0_CACHE_DESIGN.md` の `gram_cache.sv` 実装へ進める。
 
 ## 2. ★セルフテストが表示されない件(現在の作業対象)
 
