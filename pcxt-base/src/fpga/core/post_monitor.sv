@@ -51,10 +51,12 @@ module post_monitor #(
     // says where it turns around, and let the counters show the looping.
 
     // Port 0x80 is decoded on the low 16 bits; the BIOS uses out 0x80,al.
-    wire io_write = ~io_write_n;
-    wire is_post  = io_write && (address[15:0] == 16'h0080);
+    wire io_write   = ~io_write_n;
+    wire mem_access = ~memory_read_n | ~memory_write_n;
+    wire is_post    = io_write && (address[15:0] == 16'h0080);
 
-    logic io_write_q;
+    logic io_write_q, is_post_q;
+    logic [7:0]  data_q;
     logic [19:0] mem_addr_q;
 
     logic [$clog2(DEPTH+1)-1:0] filled;
@@ -70,28 +72,39 @@ module post_monitor #(
             restart_count <= 16'd0;
             filled        <= '0;
             io_write_q    <= 1'b0;
+            is_post_q     <= 1'b0;
+            data_q        <= 8'h00;
             mem_addr_q    <= 20'h0;
         end else begin
             io_write_q <= io_write;
+            is_post_q  <= is_post;
+            // Write data is valid throughout the command and guaranteed at its
+            // END; sample it continuously while the cycle is active and use the
+            // last value. testB16 latched on the LEADING edge instead and
+            // returned garbage -- FF 53 74 C3 6F where the BIOS only ever
+            // writes 00-12, 21-25, 30-32, 40-43, 52, 54, 55.
+            if (is_post) data_q <= data_bus;
 
             // Track the most recent MEMORY access, so the snapshot taken with a
-            // POST code says where the guest was working.
-            if (~memory_read_n || ~memory_write_n)
+            // POST code says where the guest was working. Qualified with "not
+            // an I/O cycle", or the port number itself lands here -- testB16
+            // reported ADDR 00080, which is the port, not a memory address.
+            if (mem_access && ~io_write)
                 mem_addr_q <= address;
 
-            // Edge, so one bus cycle records one code however long it is held.
-            if (is_post && ~io_write_q) begin
+            // Record at the END of the write cycle, when the data is settled.
+            if (is_post_q && ~is_post) begin
                 // Always live: how much has happened, and how far it ever got.
                 post_count <= post_count + 16'd1;
-                if (data_bus > post_max) post_max <= data_bus;
-                if (post_count != 16'd0 && data_bus == 8'h00)
+                if (data_q > post_max) post_max <= data_q;
+                if (post_count != 16'd0 && data_q == 8'h00)
                     restart_count <= restart_count + 16'd1;
 
                 // Frozen after the first pass, so the screen can be read.
                 if (filled != DEPTH[$clog2(DEPTH+1)-1:0]) begin
-                    post_code     <= data_bus;
+                    post_code     <= data_q;
                     post_prev     <= post_code;
-                    post_hist     <= {post_hist[(DEPTH-1)*8-1:0], data_bus};
+                    post_hist     <= {post_hist[(DEPTH-1)*8-1:0], data_q};
                     last_mem_addr <= mem_addr_q;
                     filled        <= filled + 1'b1;
                 end
