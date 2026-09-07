@@ -1,4 +1,4 @@
-# 引継ぎドキュメント(2026-09-07 午後セッション)
+# 引継ぎドキュメント(2026-09-07 夜セッション)
 
 PC-98 for Analogue Pocket プロジェクトの引き継ぎ資料。
 次のセッション(人/AI問わず)は**この文書を読んでから作業を再開すること**。
@@ -12,7 +12,7 @@ PC-98 for Analogue Pocket プロジェクトの引き継ぎ資料。
 ## 1. 現在位置(ここだけ読めば再開できる)
 
 **P0(メモリアーキテクチャ)の山場: 自作SDRAMコントローラ `sdram_mp` の実機証明。**
-**testB6 を SD に投入済み・イジェクト済み。実機テスト待ち**(§2 の台帳参照)。
+**testB6 は ❌ 真っ黒。原因を特定した(下記)。testB7 を準備中。**
 
 やっていること: desaster/openfpga-PCXT ベースのコアで SDRAM コントローラを
 `KFSDRAM`(実績品)から自作 `sdram_mp`(マルチポート・バースト対応、PC-98 G-RAM 用)に
@@ -28,33 +28,95 @@ PC-98 for Analogue Pocket プロジェクトの引き継ぎ資料。
 | testB3 | #49 | 現行ツリー + 純KFSDRAM | ✅ POST | **ツリー・KFSDRAM経路は健全** |
 | testB4 | #51 | shimのグルー + 純KFSDRAM末端(`SDRAM_MP_KF_REF`) | ✅ POST | **shimグルーは無罪。犯人は sdram_mp 内部** |
 | testB5 | #53 | mp + 幅キャスト定数 + 233µs INIT | ❌ 真っ黒 | 定数合成/INIT待ちの仮説は死んだ |
-| **testB6** | **#54** | **mp + negedge DQキャプチャ** | **実機テスト待ち** | §2 の物理的根拠参照 |
+| testB6 | #54 | mp + negedge DQキャプチャ | ❌ 真っ黒 | **改悪だった**(§1.1)。posedge に revert 済み |
+| **testB7** | — | **mp(posedge復帰)+ SDRAM I/O 制約** | **ビルド待ち** | **§1.2 = 真因** |
 
 症状(ユーザー観測): testB2/5 とも**スプラッシュ(ファームウェア描画)は出る→真っ黒**。
 = picorv32 は正常・8088 は解放されているが、BIOS が SDRAM 依存コード
 (スタック・メモリテスト)で死んでいる。メモリ破壊系と整合。
 
-### testB6 の中身(現在最有力仮説の実装)
+### 1.1 testB6 の negedge キャプチャは改悪だった(revert 済み)
 
-**デバイスクロックは逆相(180°)** — `pll.v` outclk_2 = 42.954545MHz + phase_shift 11640ps
-(= 半周期)。SDRAM がリードデータを出す瞬間は**我々の falling edge と同相**。
-posedge のみのサンプラは「1サイクル粒度の賭け」になり、実 tAC(最大~5.4ns)+ピン→FF
-配線遅延次第で T+CL+1 も T+CL+2 も外れる(testB5 の失敗と tb_sdram_mp の1ワードずれで実証)。
-KFSDRAM が同じピンで生きているのは、フリーランサンプラ+遅いフラグ消費でこの賭けを
-回避しているから。
+逆相なので「negedge = 窓の中央」と考えたのが誤り。**逆相だからこそ posedge が中央**になる。
 
-→ 修正: SDRAM コントローラの定石どおり **DQ を negedge で捕獲 → posedge で再登録**
-(単発・バースト両方で窓の中央をサンプル)、`RD_DELAY = CAS_LATENCY + 1` のペアリング。
+READ がバスに出るサイクルを P とすると:
+- 部品は**自分の立ち上がり = 我々の negedge** でコマンドを取り込む → P+0.5 で READ 確定
+- CL=2 のデータ launch は device edge P+0.5+2 = **negedge P+2.5**
+- 有効窓は概ね `[P+2.5+tAC, P+3.5+tOH]` ≒ `[P+2.7, P+3.6]`(サイクル単位)
+- → **窓の中央は posedge P+3**。negedge P+2.5 は *launch の瞬間そのもの*で tAC 前 = 前ワードを掴む
 
-### testB6 の判定と次の一手
+**KFSDRAM(実機実績)の実サンプル点を追うと厳密に P+3。**
+IDLE→READ 遷移サイクル C0 で ACT、state=READ の cycle0 で READ コマンド発行
+(バスは [C0+1, C0+2) なので P=C0+1)、`read_flag_comb = state_counter > cas_latency`
+が cycle3 で立ち、`data_out <= sdram_dq_in` は posedge C0+4 = **P+3**。
+
+**testB5(posedge 版)も P+3 で完全一致していた。** つまり読み出し点は元から正しく、
+testB6 が半サイクル早めて壊した。testB5 の失敗原因は別のところにある(→ §1.2)。
+
+> ⚠️ `sim/sdram_board_model.sv`(T_CO=7ns / T_RET=8ns)は **posedge 版と negedge 版の
+> 両方を PASS させる**。この半サイクルを判別する分解能が無い。board model の緑は
+> 「DQ サンプル点が正しい」の証拠にならない。
+
+### 1.2 真因: **dram_* ピンにタイミング制約が1つも無かった**
+
+`build/artifact_54/ap_core.sta.rpt` が明言している:
+
+```
+Unconstrained Input Ports:   dram_dq[*]   "No input delay ... found"
+Unconstrained Output Ports:  dram_a[*] dram_ba[*] dram_dqm[*] dram_clk
+                             dram_ras_n dram_cas_n dram_we_n dram_dq[*]
+```
+
+= **SDRAM インターフェースで解析されたパスはゼロ**。帰結が3つ、そのまま今回のバグ:
+
+1. Fitter に SDRAM ピンのタイミング目標が無く、ドライブ元レジスタを自由に配置した
+2. STA の worst-case slack は SDRAM について**沈黙していただけ**。このバイセクト中の
+   「全部緑」レポートは SDRAM について何も言っていない
+3. よって配置がリコンパイルのたびに変わり、**ビルド毎に変動するマージナルな回路**になる。
+   シミュレーションが構造的に再現できない唯一のクラス = 「全シム緑・実機だけ黒」の正体
+
+**fit のくじ引き度合いは6ビルドで実機結果と完全に分離する**
+(CGA ドメイン general[3] の TNS を代理指標として):
+
+| ビルド | 構成 | 実機 | TNS | ALM |
+|---|---|---|---|---|
+| #49 testB3 | 純KF | ✅ | **-1.30** | 12,049 |
+| #51 testB4 | KF末端 | ✅ | **-1.07** | **12,233** |
+| #42 | mp | ❌ | -5.52 | — |
+| #46 testB2 | mp | ❌ | -5.26 | — |
+| #53 testB5 | mp | ❌ | -3.89 | 12,183 |
+| #54 testB6 | mp | ❌ | -6.35 | 12,170 |
+
+**論理量の効果ではない**: 最良スコアの testB4 が最大(12,233 ALM)。
+
+KFSDRAM が生き残っていたのは、出力が素朴な `casez` レジスタ直結で経路が浅く、
+くじ引きに勝ち続けていたから。sdram_mp は負けた。
+
+### testB7 の中身
+
+1. **DQ キャプチャを posedge に revert**(KFSDRAM 準拠の P+3。§1.1)
+2. **SDRAM I/O 制約を追加**(`pcxt-base/src/fpga/core/core_constraints.sdc`)。
+   数値は同じ基板・同じ部品で動いている姉妹コア(`src/fpga/core/core_constraints.sdc`、
+   MacLC/Pocket-Amiga 系)由来: read `-max 5.9 / -min 0.9`、
+   write/command `-max 2.0 / -min -1.0`、いずれも `-reference_pin dram_clk`。
+   general[0]=clk_chipset(コントローラ)と general[2]=clk_sdram_ph(dram_clk ピン)は
+   **既に同一クロックグループ**なので、launch→chip の関係が成立し制約が効く。
+   - **姉妹コアの `set_multicycle_path -setup -end 2` は移植しない。** あちらのコントローラ用で
+     こちらでは誤り。dram_clk は clk_chipset の反転なので、部品は我々の negedge で
+     データを出し、sdram_mp も KFSDRAM も**次の posedge**で取る = 正真正銘の
+     シングルサイクル(窓は半周期 11.64ns)。2周期与えると実在する違反を隠す。
+3. **`scripts/check_sdram_paths.tcl` + CI ゲート**を追加。解析パスが0本なら赤くする。
+   「パスの裏付けが無い良い slack 値」= このファイル群が存在する理由そのもの。
+
+### testB7 の判定と次の一手
 
 - ✅ **POST が出る** → sdram_mp 実機動作確定、P0 残作業へ(§5-A)
-- ❌ **真っ黒** → ケーブル不要のデバッグ環境 **コア内蔵セルフテスト**を実装(§5-B)
-  - 補足: Pocket は JTAG を外部に出していないので「デバッグケーブルを買う」は成立しない。
-    ロジアナも BGA 内部配線に届かない。有償なら DE10-Nano+MiSTer SDRAM ボード
-    (SignalTap が使える同じ Cyclone V。将来の G-RAM 開発用としての価値は大)
-
----
+- ❌ **真っ黒** → まず `ap_core.sta.rpt` の **SDRAM パスの実 slack** を読む
+  (CI ステップ "SDRAM interface is actually timed" が各コーナーの write/read setup を出す)。
+  ここで初めて SDRAM に対する意味のある数字が手に入る。
+  - 制約が閉じているのに黒 → §5-B のコア内蔵セルフテストへ
+  - 制約が閉じていない → `FAST_INPUT_REGISTER` / `FAST_OUTPUT_REGISTER` を dram_* に付けて
+    レジスタを IO セルに固定する(配置くじ引きを構造的に消す。今回は温存した2手目)
 
 ## 2. 技術知見(今回のセッションで確定したもの)
 
@@ -65,8 +127,10 @@ KFSDRAM が同じピンで生きているのは、フリーランサンプラ+�
    **全 1,741,492 バイト一致**(実機 BIOS 動作実績ペア)。XOR 0xFF に読み替えると
    `00×128` 始まりになり Load error。変換コードは `scripts/package.sh`。
    パッケージ手順: `dist/testB1` をコピーして bitstream.rbf_r だけ差し替え(過去実績あり)。
-2. **dram_clk は clk_chipset と半周期(180°)逆相。** リードデータの起動は negedge 同相。
-   SDRAM 入出力のタイミング設計はこの前提で行うこと(§1 の testB6 参照)。
+2. **dram_clk は clk_chipset と半周期(180°)逆相。** リードデータの *launch* が negedge 同相
+   ということは、**有効窓の中央は posedge** という意味。「逆相だから negedge で取る」は
+   逆向きの誤り(testB6 で1ビルド失った)。KFSDRAM の実サンプル点 P+CL+1 posedge に
+   合わせるのが唯一の正。導出は §1.1。
 3. **KFSDRAM(実績品)の設計値**: CL=2・BL=1・毎サイクルパイプラインREAD・
    リフレッシュは enable_refresh 駆動(バスアイドル時)+ 1024サイクル(23.8µs)強制。
    23.8µs は規格違反だが実機で動く = リフレッシュ間隔は致命要因になりにくい。
@@ -77,17 +141,25 @@ KFSDRAM が同じピンで生きているのは、フリーランサンプラ+�
      参照が落ちるなら疑うべきはモデル/ TB 側
    - 同相クロックのモデルはこの基板では位相が違う。逆相+フライト遅延込みが
      `sim/sdram_board_model.sv`(T_CO=7ns / T_RET=8ns。実測値ではないので過信しない)
-5. **シミュレーション環境**: Docker `pc98-sim` イメージ(Verilator 5.020)。
+5. **SDC は `pcxt-base/src/fpga/core/core_constraints.sdc` が唯一の正**(47行→現在)。
+   `apf/apf_constraints.sdc` が `read_sdc` で読む。リポジトリ直下の
+   `src/fpga/core/core_constraints.sdc`(185行)は**姉妹プロジェクト由来でビルドされない**
+   — PLL インスタンス名が `ic|mp1|mf_pllbase_inst|...` でこの設計には存在しない。
+   数値の参照元としては有用(同一基板・同一 SDRAM 部品)だが、そのままコピーしないこと。
+6. **STA の "worst-case slack" は制約したパスについてしか語らない。**
+   `Unconstrained Input/Output Ports` セクションを必ず見ること。今回 SDRAM 全ピンが
+   そこに並んでいた = 解析パス0本。`scripts/check_sdram_paths.tcl` が CI でこれを見張る。
+7. **シミュレーション環境**: Docker `pc98-sim` イメージ(Verilator 5.020)。
    `bash sim/run_ph.sh` で tb_ram_ab を ref / mp / mp_kfref の3モード実行。
    CI(`.github/workflows/build.yml`)に全TB+ボードタイミング版を回帰登録済み。
    落とし穴: Verilator 5.020 の `fork/join` は SIGSEGV。コメント内に "verilator"
    という単語を書くとディレクティブ誤解析でエラー。
-6. **ビルドは CI 一択**(13〜15分)。ローカル Docker は45分以上かかる(検証済み、使わない)。
+8. **ビルドは CI 一択**(13〜15分)。ローカル Docker は45分以上かかる(検証済み、使わない)。
    DNS 故障中は `scripts/tools/ghpush2.py` で push(履歴維持)、`getartifact.py <run> <dest>`
    で成果物取得、`ghpoll2.py` で状況(たまにタイムアウトするので `ghlib` 直叩きも可)。
    `diskutil eject /dev/disk4` は今回のセッションでは成功した(以前は権限エラーだった。
    失敗したら Finder をユーザーに依頼)。
-7. **`SDRAM_USE_MP`(config.tcl)** = shim 経由で mp を有効化。
+9. **`SDRAM_USE_MP`(config.tcl)** = shim 経由で mp を有効化。
    `SDRAM_MP_KF_REF` も追加すると shim の末端が純KFSDRAM に変わる(バイセクト用。
    testB4 の構成。enable_refresh を KFSDRAM に直結しないとリフレッシュ間隔違反になる)。
    コメントアウトで完全にKFSDRAMに戻る(testB3 の構成)。
@@ -104,7 +176,7 @@ KFSDRAM が同じピンで生きているのは、フリーランサンプラ+�
 
 ## 4. 次セッションの作業リスト(優先順)
 
-### A. testB6 が ✅ の場合(P0 完了へ)
+### A. testB7 が ✅ の場合(P0 完了へ)
 
 1. HANDOVER に結果を記録・commit → **P0 手順4: `gram_cache.sv` の実装**
    (設計済み: `docs/P0_CACHE_DESIGN.md`。プレーンインターリーブ配置、
@@ -112,8 +184,10 @@ KFSDRAM が同じピンで生きているのは、フリーランサンプラ+�
 2. その後 85.9MHz 化(クロック配線が CHIPSET〜core_top に波及する別変更)、
    PCXT が引き続き DOS ブートするか確認 → P1(PC-98メモリマップ)へ
 
-### B. testB6 が ❌ の場合(セルフテストを実装)
+### B. testB7 が ❌ の場合(SDRAM の実 slack を読んでから、セルフテストへ)
 
+0. **先に `ap_core.sta.rpt` の SDRAM パス slack を読む**(§1.2 で初めて数字が出るようになった)。
+   閉じていないなら `FAST_INPUT_REGISTER`/`FAST_OUTPUT_REGISTER` を dram_* に付けるのが先。
 1. **コア内蔵 SDRAM セルフテスト**: 起動時にパターン書き→読み戻しを mp 経路で実行し、
    **OSD(スプラッシュ描画と同じ経路)に「最初の不一致アドレス/got/want」を表示**。
    実装先の候補: softcpu firmware(`pcxt-base/src/firmware/`、MMIO 経路は

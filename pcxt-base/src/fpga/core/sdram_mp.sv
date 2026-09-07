@@ -176,26 +176,29 @@ module sdram_mp #(
 
     assign refresh_due = (refresh_cnt >= 16'(REFRESH_INT));
 
-    // Read data timing. The device clock is half a period out of phase with
-    // this controller (pll.v outclk_2), so the part launches each datum
-    // around our falling edge: with CL=2 a READ registered at posedge T puts
-    // the datum on the pins from ~T+59 ns until the next datum replaces it.
-    // A posedge-only sampler has to gamble one whole cycle of grain: the T+3
-    // edge only works while tAC+flight < ~6 ns, T+4 only for single words.
-    // KFSDRAM survives because it free-runs its sampler and consumes late.
+    // Read data timing, derived from KFSDRAM -- the controller that boots this
+    // board -- rather than from first principles, because the device clock is
+    // antiphase (pll.v outclk_2 = clk_chipset + 180 deg) and the intuition
+    // about which edge is "mid-window" inverts with it.
     //
-    // The robust fix is the classic one: capture DQ on the FALLING edge -- the
-    // edge-aligned instant the part itself launches on -- which lands
-    // mid-window for both single reads and back-to-back bursts, then
-    // re-register on posedge. The datum for word k occupies negedge
-    // T_k+CL+1/2, so p_rvalid pairs with the posedge capture one cycle later:
-    // RD_DELAY = CAS_LATENCY + 1.
+    // The part samples commands on ITS rising edge, which is our FALLING edge.
+    // So a READ driven out at posedge P is captured by the part at P+1/2, and
+    // with CL=2 the datum is launched at the device edge P+CL+1/2 = P+2.5 --
+    // again our falling edge. It is valid from P+2.5+tAC until roughly the
+    // next device edge, i.e. the window is about [P+2.7, P+3.6] in cycles.
+    //
+    // The MIDDLE of that window is our POSEDGE P+3. The falling edge P+2.5 is
+    // the launch instant itself, before tAC has elapsed -- sampling there
+    // returns the previous word. (That was testB6, and it failed on hardware.)
+    //
+    // KFSDRAM lands on exactly P+3: its READ reaches the bus one cycle after
+    // the request, its read_flag/data_out register fires three cycles later
+    // (state_counter > cas_latency), and that pairing is what boots the board.
+    // So: sample DQ on the posedge, RD_DELAY = CAS_LATENCY + 1, and rd_pipe[0]
+    // is set in the same cycle the READ is driven -- p_rvalid then gates on
+    // rd_pipe[RD_DELAY-1] and presents alongside the P+3 capture.
     localparam int RD_DELAY = CAS_LATENCY + 1;
     logic [RD_DELAY:0] rd_pipe;
-    logic [DQ_BITS-1:0] dq_neg;
-
-    // Mid-window capture on the falling edge (see above).
-    always_ff @(negedge clk) dq_neg <= sdram_dq_in;
 
     wire [ROW_BITS-1:0]  act_row  = p_addr[winner][ADDR_BITS-1 -: ROW_BITS];
     wire [BANK_BITS-1:0] act_bank = p_addr[winner][COL_BITS +: BANK_BITS];
@@ -350,15 +353,16 @@ module sdram_mp #(
         end
     end
 
-    // Read data is re-registered off the negedge capture so p_rdata and
-    // p_rvalid present together.
+    // Read data is registered straight off the bus at the posedge that sits in
+    // the middle of the part's data window (see RD_DELAY above), one cycle
+    // behind the pipeline tag so p_rdata and p_rvalid present together.
     always_ff @(posedge clk) begin
         if (rst) begin
             p_rvalid <= 1'b0;
             p_rdata  <= '0;
         end else begin
             p_rvalid <= rd_pipe[RD_DELAY-1];
-            p_rdata  <= dq_neg;
+            p_rdata  <= sdram_dq_in;
         end
     end
 
