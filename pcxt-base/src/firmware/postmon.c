@@ -94,8 +94,14 @@ void post_mon_tick(void)
     static uint32_t last_live = 0xFFFFFFFFu;
     // LIVE is the point of this build: when the guest stops, it settles on
     // whatever the CPU is spinning in. Redraw whenever it moves.
+    // NOTE: this early-out must not stop the stall counter below from
+    // advancing, so the counter is updated before it.
+    static uint32_t idle_ticks = 0;
     if (status == last_status && maxrst == last_maxrst && live == last_live) {
-        return; // nothing new; do not spend GPU time
+        if (idle_ticks < 100000u) idle_ticks++;
+        if (idle_ticks != 3000u) return;   // redraw once, when it has settled
+    } else {
+        idle_ticks = 0;
     }
     last_status = status;
     last_maxrst = maxrst;
@@ -137,15 +143,34 @@ void post_mon_tick(void)
     osd_draw_string(&fb, 4 + 12 * 8, 32, "HIGH", OSD_LABEL);
     hex(4 + 17 * 8, 32, *POST_LIVEMX & 0xFFFFFu, 5);
 
+    // Vectors are read ONLY once the guest has stopped moving.
+    //
+    // testB21 read them every tick, and testB21/22/23 all fail the BIOS memory
+    // test while testB19/20 -- the same lineage without this read -- passed it.
+    // guest_peek takes the bus through hold acknowledge, so polling it during
+    // POST means the instrument is competing with the code it is measuring.
+    // That also undermines the "intermittent, therefore physical" conclusion
+    // drawn from comparing those runs: they were different builds, not the
+    // same build behaving differently.
+    //
+    // So: wait for the POST count to stop changing, then read once.
+    uint32_t stall_ticks = idle_ticks;
+    static int vectors_read = 0;
+
     // The two vectors that matter here. testB20 showed the guest looping on
     // 0x00069/0x0006A, which is inside INT 1Ah's vector at 0x68-0x6B, and the
     // code that fails to get past POST 08 calls int 0x16 (vector at 0x58).
     // POST 05 installs both as F000:offset -- 16h should be F000:E82E and 1Ah
     // should be F000:FE6E. Reading them says whether the table is intact.
-    osd_draw_string(&fb, 4, 42, "16h", OSD_LABEL);
-    show_vector(4 + 4 * 8, 42, 0x16);
-    osd_draw_string(&fb, 4 + 15 * 8, 42, "1Ah", OSD_LABEL);
-    show_vector(4 + 19 * 8, 42, 0x1A);
+    if (stall_ticks >= 3000u && !vectors_read) {
+        vectors_read = 1;
+        osd_draw_string(&fb, 4, 42, "16h", OSD_LABEL);
+        show_vector(4 + 4 * 8, 42, 0x16);
+        osd_draw_string(&fb, 4 + 15 * 8, 42, "1Ah", OSD_LABEL);
+        show_vector(4 + 19 * 8, 42, 0x1A);
+    } else if (!vectors_read) {
+        osd_draw_string(&fb, 4, 42, "VEC -- RUNNING", OSD_LABEL);
+    }
 
     // History, oldest first, so the path through POST is visible at a glance.
     uint32_t hi = *POST_HIST_H, lo = *POST_HIST_L;
