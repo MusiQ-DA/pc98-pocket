@@ -34,8 +34,11 @@ update_timing_netlist
 set out_ports {dram_a* dram_ba* dram_dqm* dram_dq* dram_cke dram_ras_n dram_cas_n dram_we_n}
 set in_ports  {dram_dq[*]}
 
-set n_wr [llength [get_timing_paths -to   [get_ports $out_ports] -npaths 2000 -setup]]
-set n_rd [llength [get_timing_paths -from [get_ports $in_ports]  -npaths 2000 -setup]]
+# get_timing_paths returns a Quartus COLLECTION, not a Tcl list. llength on it
+# gives the size of its internal representation (2), and lindex hands back a
+# fragment that get_path_info rejects. Use the collection API.
+set n_wr [get_collection_size [get_timing_paths -to   [get_ports $out_ports] -npaths 2000 -setup]]
+set n_rd [get_collection_size [get_timing_paths -from [get_ports $in_ports]  -npaths 2000 -setup]]
 
 puts "== SDRAM interface path census =="
 puts [format "  write/command -> dram_*   %5d paths" $n_wr]
@@ -46,9 +49,12 @@ if {$n_wr == 0} { puts "FAIL: no analysed paths TO the SDRAM pins"; set fail 1 }
 if {$n_rd == 0} { puts "FAIL: no analysed paths FROM dram_dq";      set fail 1 }
 
 proc worst {args} {
-    set p [eval get_timing_paths $args -npaths 1 -setup]
-    if {[llength $p] == 0} { return "n/a" }
-    return [format "%7.3f" [get_path_info [lindex $p 0] -slack]]
+    set col [eval get_timing_paths $args -npaths 1 -setup]
+    if {[get_collection_size $col] == 0} { return "n/a" }
+    foreach_in_collection path $col {
+        return [format "%7.3f" [get_path_info $path -slack]]
+    }
+    return "n/a"
 }
 puts "== worst setup slack on those paths =="
 puts [format "  write/command %s   read %s" \
