@@ -17,12 +17,16 @@
 
 project_open [lindex $quartus(args) 0]
 
-# Quartus wants an explicit corner here on some versions and derives an invalid
-# one on others; fall back rather than failing the build on flag spelling.
-if {[catch {create_timing_netlist -post_fit -model slow -speed 8 \
+# NOTE: this Quartus (18.1.1 Lite) has NO -post_fit flag -- post-fit is the
+# default, and the usage list offers only -post_map for the other direction.
+# Passing -post_fit makes it the positional <operating_conditions> argument,
+# which then collides with -voltage and fails with a misleading message.
+# Corner named explicitly because the tool otherwise derives an invalid one:
+#   available here = 8_slow_1100mv_85c, 8_slow_1100mv_0c, MIN_fast_1100mv_*
+if {[catch {create_timing_netlist -model slow -speed 8 \
                                   -temperature 85 -voltage 1100} err]} {
     puts "note: explicit corner rejected ($err); retrying with defaults"
-    create_timing_netlist -post_fit
+    create_timing_netlist
 }
 read_sdc
 update_timing_netlist

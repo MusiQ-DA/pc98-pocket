@@ -30,7 +30,8 @@ PC-98 for Analogue Pocket プロジェクトの引き継ぎ資料。
 | testB5 | #53 | mp + 幅キャスト定数 + 233µs INIT | ❌ 真っ黒 | 定数合成/INIT待ちの仮説は死んだ |
 | testB6 | #54 | mp + negedge DQキャプチャ | ❌ 真っ黒 | **改悪だった**(§1.1)。posedge に revert 済み |
 | testB7 | #57 | mp(posedge復帰)+ SDRAM I/O 制約 | (実機未投入) | **制約は効いた。読み出しパスの実違反が初めて可視化された** |
-| **testB7b** | — | **上記 + dram_* を IO レジスタに固定** | **ビルド待ち** | **§1.4** |
+| **testB7b** | **#58** | **上記 + dram_* を IO レジスタに固定** | **SD投入済・実機テスト待ち** | **§1.5 / §1.6** |
+| testB7ref | — | 純KFSDRAM + 新SDC(**測定専用・実機不要**) | ビルド待ち | §1.6 の判別実験 |
 
 症状(ユーザー観測): testB2/5 とも**スプラッシュ(ファームウェア描画)は出る→真っ黒**。
 = picorv32 は正常・8088 は解放されているが、BIOS が SDRAM 依存コード
@@ -164,6 +165,40 @@ TNS -18.068 が約16エンドポイントに分散 = **DQ 16ビットの捕獲FF
 KFSDRAM 側でも成立することを確認済み(パッキング条件は「FF がピンだけに繋がること」で、
 `p_rdata <= sdram_dq_in`(mp)も `data_out <= sdram_dq_in`(KFSDRAM)も満たす)。
 A/B の参照が壊れない。
+
+### 1.6 run#58: IO レジスタ化は効かなかった。-2.4ns は配線ではない
+
+| クロック | testB7(#57) | testB7b(#58) |
+|---|---|---|
+| general[0] clk_chipset | -2.417 / TNS -18.068 | **-2.408 / TNS -17.914** |
+| general[3] CGA | -0.386 / TNS -2.002 | -0.905 / TNS -8.196 |
+
+パッキング自体は成功している(fit.rpt: `sdram_a[*]`/`cmd[*]`/`sdram_dq_out[*]` が
+"Fast Output Register assignment" で `dram_*~output` に、`p_rdata[*]` が
+`dram_dq[*]~input` に Packed Register)。**それでも slack が 0.009ns しか動かない。**
+
+→ **-2.4ns はピン→FF の配線遅延ではない。** 予算の内訳を見直すと、`-reference_pin dram_clk`
+は「SDRAM が見るクロック」基準なので、STA は **FPGA から dram_clk が出て行くまでの
+clock-to-out 遅延**を launch 側に加算する。半周期 11.64ns はその分だけ食われており、
+5.9ns の tAC+フライトを引くと確かに足りない。
+
+### 1.7 ⚠️ 未解決の分岐: この -2.4ns は sdram_mp 固有か、インターフェース共通か
+
+**ここが今いちばん重要な未確定点。** 2つの可能性があり、実機テストでは区別できない:
+
+- (a) `-max 5.9` が この部品/基板には悲観的 → -2.4ns は両コントローラ共通の見かけ上の値で、
+  真犯人ではない(KFSDRAM も同じ値を示すはず)
+- (b) sdram_mp の読み出しパスが実際に KFSDRAM より悪い → これが真犯人
+
+**判別実験 testB7ref**: `config.tcl` の `SDRAM_USE_MP` を外し、**純KFSDRAM + 新SDC** で
+1本ビルドして SDRAM パスの slack を読むだけ(実機投入は不要)。
+
+- KFSDRAM も ≒-2.4ns → **(a)**。制約値を実測ベースに見直す。読み出し点は犯人ではない
+- KFSDRAM が正の slack → **(b)**。sdram_mp の読み出しパスを KFSDRAM と同じ深さまで削る
+
+> 注意: 読み出しサンプル点は P+2.5(testB6)・P+3(testB5)・P+4(testB2、
+> 「a cycle late で 0 を読んだ」と当時記録)の**3点とも実機で失敗している**。
+> サンプル点そのものが犯人である可能性は低い。だからこそ (a)/(b) の判別を先にやる。
 
 ### testB7b の判定と次の一手
 
