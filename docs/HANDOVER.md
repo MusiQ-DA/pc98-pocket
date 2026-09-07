@@ -243,23 +243,41 @@ NOPスタブ(6144×0x00000013)は一度もこのストアを実行しないの�
 > **ゴールと完了条件は `docs/GOAL.md`(確定版)を参照。** 「本命」= 実機で
 > PC-98 ソフトが GDC グラフィック + FM音源つきで実用速度で動くこと。
 
-1. **P0 手順2: SDRAM コントローラの置換**(← いま着手する作業)
-   - 移植元: `~/repo/_refs/x68-memory/SDRAMC.vhd`(X68000_MiSTer, GPL,
-     80MHz / 16bit / ロウ内バースト)。**pcxt-base は GPLv3 なので移植可**
-   - 置換対象: `pcxt-base/src/fpga/core/KFPC-XT/HDL/KFSDRAM/HDL/KFSDRAM.sv`
-     (アクセス毎PRECHARGE・4バンク未使用・CPU と単一ポート共有)
-   - マルチポート化する(CPU メインRAM / G-RAM / 表示フェッチ)
-2. **P0 手順3: 帯域の実測** ← **分水嶺**
-   - 要求: 表示 7.7 MB/s(シーケンシャル)+ EGC 約 15 MB/s(ランダム)+ CPU
-   - **届かなければ C を諦めて A(1ページ)に後退し、D2/D5/D6 を再交渉する**
-     (`docs/P0_MEMORY.md` §7 の撤退ライン)
-3. **B1 の確認**: CI run#39(sha `da7f4164`、実 firmware 入り)の結果を見て、
-   実機で BIOS POST → DOS ブートするか確認。SDRAM を差し替える前に
-   ベースの健全性を押さえておくと切り分けが楽になる
-4. **P0 手順4**: BRAM キャッシュ設計(表示ラインバッファ / EGC ワーキングセット)
-5. **P1: PC-98メモリマップ**(CPU+SDRAM+BIOSフェッチ)
-6. **P2: TVRAM+テキスト表示** / **P3: GDC** / **P4: FDC→DOS** /
+1. **B1 実機テスト待ち**(SD 投入済み、ユーザー実施)
+   - CI run#39(sha `da7f4164`、**実 firmware 入り**)が成功 → `dist/testB1/` として
+     パッケージし `/Volumes/ANALOGUE/Cores/hiroya.PCXTDEV/` に投入済み
+   - Pocket で `PCXTDEV` を起動し、**BIOS POST → DOS ブート**まで進むか確認
+   - Fitter Successful / Error 0 / Critical Warning 0 / ALM 65% は確認済み
+2. ~~**P0 手順2: SDRAM コントローラの置換**~~ ✅ **完了**
+   → `pcxt-base/src/fpga/core/sdram_mp.sv`(新規実装。詳細 `docs/P0_SDRAM_DESIGN.md`)
+   - SDRAMC.vhd は KFSDRAM と同アーキテクチャ階級だったため**移植せず新規実装**。
+     マルチポート化とクロック 85.909 MHz 化が実質的な差分
+3. ~~**P0 手順3: 帯域の実測**~~ ✅ **ゲート通過**
+   - 3ポート競合 **109.7 MB/s**(要求 30 MB/s の **3.6倍**)、プロトコル違反 0
+   - **撤退ライン(A への後退)は発動しない。C を続行**
+4. **P0 手順4: BRAM キャッシュ層の設計**(← いま着手する作業)
+   - 表示ラインバッファ(4プレーン)/ EGC ワーキングセット / CPU アクセスキャッシュ
+   - 見積り 20 M10K(`P0_MEMORY.md` §6 の C 試算)
+5. **実機統合**: PLL outclk_2 を 85.909 MHz 位相シフト版へ変更 →
+   `KFSDRAM` を `sdram_mp` に差し替え → **PCXT が引き続き DOS ブートするか A/B 確認**
+   (既知動作と比較できるうちにやる)
+6. **P1: PC-98メモリマップ** / **P2: TVRAM** / **P3: GDC** / **P4: FDC→DOS** /
    **P5: BEEP→OPN→OPNA** / **P6: EGC** / **P7: 入力・詰め**
+
+### シミュレーション環境(重要)
+
+**ローカルで Verilator が動く。** ホストの DNS は壊れているが
+**Docker Desktop はコンテナに独自リゾルバを提供するので apt が通る**。
+
+```bash
+docker build -t pc98-sim sim/     # 一度だけ
+bash sim/run.sh tb_sdram_mp       # 整合性 + 単ポート帯域
+bash sim/run.sh tb_sdram_load     # 3ポート競合帯域
+```
+
+CI(`.github/workflows/build.yml` の `sim` ジョブ)でも回帰実行する。
+落とし穴は `docs/P0_SDRAM_DESIGN.md` §4 を参照
+(Verilator 5.020 の `fork/join` は SIGSEGV する、など)。
 
 ### 参照ソースの置き場所(重要)
 

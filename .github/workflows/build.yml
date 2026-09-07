@@ -6,6 +6,35 @@ on:
   workflow_dispatch:
 
 jobs:
+
+  sim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Verilator
+        run: sudo apt-get update && sudo apt-get install -y verilator
+
+      - name: SDRAM controller — integrity and single-port bandwidth
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_sdram_mp \
+            -Isim -Ipcxt-base/src/fpga/core \
+            sim/tb_sdram_mp.sv sim/sdram_model.sv \
+            pcxt-base/src/fpga/core/sdram_mp.sv \
+            -o tb --Mdir obj_mp
+          ./obj_mp/tb | tee mp.log
+          grep -q "RESULT: PASS" mp.log
+
+      - name: SDRAM controller — three-port contention bandwidth
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_sdram_load \
+            -Isim -Ipcxt-base/src/fpga/core \
+            sim/tb_sdram_load.sv sim/sdram_model.sv \
+            pcxt-base/src/fpga/core/sdram_mp.sv \
+            -o tbl --Mdir obj_load
+          ./obj_load/tbl | tee load.log
+          grep -q "RESULT: PASS" load.log
   quartus:
     runs-on: ubuntu-latest
     timeout-minutes: 120
