@@ -111,6 +111,26 @@ jobs:
               quartus_sh --flow compile ap_core
             '
 
+      - name: SDRAM interface is actually timed (not just "green")
+        if: always()
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/pcxt-base":/work \
+            -v "${{ github.workspace }}/scripts":/repo-scripts:ro \
+            -w /work/src/fpga \
+            raetro/quartus:pocket bash -lc '
+              set -e
+              Q=""
+              for p in /opt/intelFPGA/quartus /opt/quartus /usr/local/quartus; do
+                f=$(find "$p" -maxdepth 3 -name quartus_sta 2>/dev/null | head -1)
+                if [ -n "$f" ]; then Q=$(dirname "$f"); break; fi
+              done
+              if [ -z "$Q" ]; then echo "ERROR: quartus_sta not found"; exit 1; fi
+              export PATH="$Q:$PATH"
+              export LD_LIBRARY_PATH="$Q:${LD_LIBRARY_PATH:-}"
+              quartus_sta -t /repo-scripts/check_sdram_paths.tcl ap_core
+            '
+
       - name: Show fit summary
         if: always()
         run: |
@@ -118,6 +138,9 @@ jobs:
           ls -la pcxt-base/src/fpga/output_files/ 2>/dev/null || true
 
       - name: Upload bitstream
+        # always(): the SDRAM timing gate above runs first, and a red gate must
+        # still hand us the reports that explain why.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bitstream
