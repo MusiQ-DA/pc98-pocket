@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include "softcpu_regs.h"
+#include "vkb_draw.h"
 #include "sdramtest.h"
 
 // Self-test window into guest SDRAM (region 0x5). core_top's ext-port master
@@ -56,52 +57,48 @@ static uint8_t pat(uint32_t a)
     return (uint8_t) (((a * 0x9Du) ^ 0x5Au) & 0xFFu);
 }
 
-// ------------------------------------------------- reporting via CGA text VRAM
+// ---------------------------------------------------------------- reporting
 //
-// run#61 and run#63 both came back "splash, nothing else" -- not even the
-// banner that is drawn before any SDRAM access. So the OSD overlay is not a
-// usable output channel here, and two hardware runs were spent learning only
-// that.
+// NOT CGA text VRAM. testB11 wrote there and nothing appeared, and simulation
+// then showed why: an ext-port access runs under BUS_ARBITER's hold
+// acknowledge, Bus_Arbiter.sv drives address_enable_n from it, and
+// Peripherals.sv gates cga_mem_select on ~address_enable_n. So the CGA never
+// claims those cycles. External masters can write SDRAM -- RAM.sv does not
+// look at address_enable_n, which is why the BIOS loader works -- but they
+// cannot write CGA VRAM at all. That channel is architecturally dead.
 //
-// CGA text VRAM is. The splash itself is a text-mode screen copied into it
-// (Peripherals.sv: SPLASH_COPY / TEXT_CLEAR_SIZE 16384), so we know for a fact
-// it is on screen right now. Writing character/attribute pairs there needs no
-// OSD compositor, no origin register and no overlay enable.
-//
-// It also splits the remaining question by itself: 0xB0000-0xBFFFF is excluded
-// from SDRAM in RAM.sv, so these writes exercise the ext-port master WITHOUT
-// touching the SDRAM controller. Text appearing means the firmware runs and the
-// master works, and anything wrong after that is the SDRAM's.
+// So: the OSD overlay, whose pixel path is now verified in tb_selftest_soc.
 
-#define CGA_TEXT 0xB8000u
-#define CGA_ATTR 0x0Fu // white on black
+static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
-static void vram_putc(uint32_t row, uint32_t col, char c)
+// vkb_ui owns this normally: the origin comes from the presented raster and is
+// written BEFORE the overlay is enabled.
+static void osd_show(void)
 {
-    uint32_t off = CGA_TEXT + (row * 80u + col) * 2u;
-    sd_poke(off, (uint8_t) c);
-    sd_poke(off + 1u, CGA_ATTR);
+    uint32_t raster = *OSD_RASTER;
+    uint32_t w = raster & 0x3FFu;
+    uint32_t h = (raster >> 16) & 0x3FFu;
+    uint32_t x = (w > OSD_FB_WIDTH) ? (w - OSD_FB_WIDTH) / 2u : 0u;
+    uint32_t y = (h > OSD_FB_HEIGHT) ? (h - OSD_FB_HEIGHT) / 2u : 0u;
+    *OSD_ORIGIN = (y << 16) | x;
+    *VKB_CTRL = 1u;
 }
 
-static void vram_puts(uint32_t row, uint32_t col, const char *s)
+static void put_hex(int x, int y, uint32_t v, int digits)
 {
-    for (uint32_t i = 0; s[i] && (col + i) < 80u; i++)
-        vram_putc(row, col + i, s[i]);
-}
-
-static void vram_hex(uint32_t row, uint32_t col, uint32_t v, int digits)
-{
+    char buf[9];
     for (int i = digits - 1; i >= 0; i--) {
         uint32_t nib = v & 0xFu;
-        vram_putc(row, col + (uint32_t) i,
-                  (char) (nib < 10 ? '0' + nib : 'A' + (nib - 10)));
+        buf[i] = (char) (nib < 10 ? '0' + nib : 'A' + (nib - 10));
         v >>= 4;
     }
+    buf[digits] = 0;
+    osd_draw_string(&fb, x, y, buf, OSD_LABEL);
 }
 
-static void vram_dec(uint32_t row, uint32_t col, uint32_t v)
+static void put_dec(int x, int y, uint32_t v)
 {
-    char buf[11];
+    char buf[11], out[11];
     int n = 0;
     if (v == 0)
         buf[n++] = '0';
@@ -110,8 +107,12 @@ static void vram_dec(uint32_t row, uint32_t col, uint32_t v)
         v /= 10u;
     }
     for (int i = 0; i < n; i++)
-        vram_putc(row, col + (uint32_t) i, buf[n - 1 - i]);
+        out[i] = buf[n - 1 - i];
+    out[n] = 0;
+    osd_draw_string(&fb, x, y, out, OSD_LABEL);
 }
+
+static void say(int row, const char *s) { osd_draw_string(&fb, 8, row * 10 + 8, s, OSD_LABEL); }
 
 // ---------------------------------------------------------------------- test
 
@@ -119,105 +120,66 @@ static void vram_dec(uint32_t row, uint32_t col, uint32_t v)
 
 void sdram_selftest_run(void)
 {
-    // First thing, before anything can go wrong: prove the firmware got here
-    // and the ext-port master can write. If this line does not appear, nothing
-    // below matters and the two candidates are "firmware never reaches this
-    // function" and "the ext master does not work at all".
-    vram_puts(2, 2, "SELFTEST START");
+    // Overlay up and a banner drawn before any SDRAM access, so "nothing on
+    // screen" and "the test stalled" can never look the same again.
+    osd_clear_screen();
+    osd_show();
+    say(0, "SDRAM SELFTEST");
 
-    // Pilot on real SDRAM. Separate line so it is obvious whether we got past
-    // the VRAM write. GOT should read A5.
     sd_poke(0x00040u, 0xA5u);
-    vram_puts(3, 2, "PILOT WANT A5 GOT");
-    vram_hex(3, 20, sd_peek(0x00040u), 2);
+    say(1, "PILOT  WANT A5 GOT");
+    put_hex(8 + 19 * 8, 1 * 10 + 8, sd_peek(0x00040u), 2);
 
-    // A second pilot in a different bank: bank = addr[10:9] for sdram_mp, so
-    // 0x00240 is bank 1 where 0x00040 is bank 0. KFSDRAM keeps this whole
-    // region in bank 0, which is the difference we are hunting.
+    // Bank 1 under sdram_mp's addr[10:9] mapping; KFSDRAM keeps this whole
+    // region in bank 0, which is the difference being hunted.
     sd_poke(0x00240u, 0x5Au);
-    vram_puts(4, 2, "PILOT2 WANT 5A GOT");
-    vram_hex(4, 21, sd_peek(0x00240u), 2);
+    say(2, "PILOT2 WANT 5A GOT");
+    put_hex(8 + 19 * 8, 2 * 10 + 8, sd_peek(0x00240u), 2);
 
-    uint32_t errors = 0;
-    uint32_t first_addr = 0;
+    uint32_t errors = 0, first_addr = 0;
     uint8_t first_got = 0, first_want = 0;
     int failed = 0;
 
-    // Write the whole region, then read the whole region. Interleaving would
-    // hide damage a later write does to an earlier address, which is the shape
-    // of most SDRAM faults.
+    // Write the whole region before reading any of it: interleaving would hide
+    // damage a later write does to an earlier address.
     for (uint32_t a = 0; a < BASE_LEN; a++) {
-        if ((a & 0xFFFu) == 0) {
-            vram_puts(6, 2, "WRITE");
-            vram_hex(6, 8, a, 5);
-        }
+        if ((a & 0xFFFu) == 0) { say(4, "WRITE"); put_hex(8 + 6 * 8, 4 * 10 + 8, a, 5); }
         sd_poke(a, pat(a));
     }
-
     for (uint32_t a = 0; a < BASE_LEN; a++) {
-        if ((a & 0xFFFu) == 0) {
-            vram_puts(6, 2, "READ ");
-            vram_hex(6, 8, a, 5);
-        }
+        if ((a & 0xFFFu) == 0) { say(4, "READ "); put_hex(8 + 6 * 8, 4 * 10 + 8, a, 5); }
         uint8_t got = sd_peek(a);
         if (got != pat(a)) {
-            if (!failed) {
-                failed = 1;
-                first_addr = a;
-                first_got = got;
-                first_want = pat(a);
-            }
+            if (!failed) { failed = 1; first_addr = a; first_got = got; first_want = pat(a); }
             errors++;
         }
     }
 
-    if (!failed) {
-        vram_puts(8, 2, "PASS 64K");
-    } else {
-        vram_puts(8, 2, "FAIL @");
-        vram_hex(8, 9, first_addr, 5);
-        vram_puts(8, 16, "GOT");
-        vram_hex(8, 20, first_got, 2);
-        vram_puts(8, 24, "WANT");
-        vram_hex(8, 29, first_want, 2);
-
-        // sdram_mp maps {row, bank, col} = addr[19:11], addr[10:9], addr[8:0].
-        // Printing the decode is the point: KFSDRAM's mapping keeps this whole
-        // region in bank 0 while sdram_mp spreads it over all four.
-        vram_puts(9, 2, "BANK");
-        vram_dec(9, 7, (first_addr >> 9) & 3u);
-        vram_puts(9, 10, "ROW");
-        vram_hex(9, 14, first_addr >> 11, 4);
-        vram_puts(9, 20, "COL");
-        vram_hex(9, 24, first_addr & 0x1FFu, 3);
-
-        // One bad byte and total garbage have completely different causes.
-        vram_puts(10, 2, "ERRORS");
-        vram_dec(10, 9, errors);
-        vram_puts(10, 20, "OF 65536");
-    }
-
-    // Redraw forever: if the splash timer expires it clears text VRAM
-    // (Peripherals.sv splash_clear), and the result must survive that.
     for (;;) {
         if (!failed) {
-            vram_puts(8, 2, "PASS 64K");
+            say(6, "PASS 64K");
         } else {
-            vram_puts(8, 2, "FAIL @");
-            vram_hex(8, 9, first_addr, 5);
-            vram_puts(8, 16, "GOT");
-            vram_hex(8, 20, first_got, 2);
-            vram_puts(8, 24, "WANT");
-            vram_hex(8, 29, first_want, 2);
-            vram_puts(9, 2, "BANK");
-            vram_dec(9, 7, (first_addr >> 9) & 3u);
-            vram_puts(9, 10, "ROW");
-            vram_hex(9, 14, first_addr >> 11, 4);
-            vram_puts(9, 20, "COL");
-            vram_hex(9, 24, first_addr & 0x1FFu, 3);
-            vram_puts(10, 2, "ERRORS");
-            vram_dec(10, 9, errors);
-            vram_puts(10, 20, "OF 65536");
+            say(6, "FAIL @");
+            put_hex(8 + 7 * 8, 6 * 10 + 8, first_addr, 5);
+            say(6, "");
+            osd_draw_string(&fb, 8 + 14 * 8, 6 * 10 + 8, "GOT", OSD_LABEL);
+            put_hex(8 + 18 * 8, 6 * 10 + 8, first_got, 2);
+            osd_draw_string(&fb, 8 + 22 * 8, 6 * 10 + 8, "WANT", OSD_LABEL);
+            put_hex(8 + 27 * 8, 6 * 10 + 8, first_want, 2);
+
+            // The decode is the point: sdram_mp spreads this region over four
+            // banks where KFSDRAM keeps it in bank 0.
+            say(7, "BANK");
+            put_dec(8 + 5 * 8, 7 * 10 + 8, (first_addr >> 9) & 3u);
+            osd_draw_string(&fb, 8 + 8 * 8, 7 * 10 + 8, "ROW", OSD_LABEL);
+            put_hex(8 + 12 * 8, 7 * 10 + 8, first_addr >> 11, 4);
+            osd_draw_string(&fb, 8 + 18 * 8, 7 * 10 + 8, "COL", OSD_LABEL);
+            put_hex(8 + 22 * 8, 7 * 10 + 8, first_addr & 0x1FFu, 3);
+
+            // One bad byte and total garbage have different causes.
+            say(8, "ERRORS");
+            put_dec(8 + 7 * 8, 8 * 10 + 8, errors);
+            osd_draw_string(&fb, 8 + 18 * 8, 8 * 10 + 8, "OF 65536", OSD_LABEL);
         }
     }
 }

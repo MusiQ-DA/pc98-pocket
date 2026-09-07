@@ -52,8 +52,8 @@ module tb_selftest_soc;
         .target_dataslot_bridgeaddr(), .target_dataslot_length(),
         .target_dataslot_ack(1'b1), .target_dataslot_done(1'b1),
         .target_dataslot_err(3'd0), .bridge_rd_data_out(),
-        .clk_pix(clk_pix), .osd_hcnt(10'd0), .osd_vcnt(10'd0),
-        .osd_palette_idx(), .osd_in_area(),
+        .clk_pix(clk_pix), .osd_hcnt(osd_hcnt), .osd_vcnt(osd_vcnt),
+        .osd_palette_idx(osd_palette_idx), .osd_in_area(osd_in_area),
         .cont1_key(16'd0), .dock_key_code(8'd0), .dock_key_ext(1'b0),
         .dock_key_stb(1'b0), .credits_active(1'b0), .osd_open_req(1'b0),
         .raster_w(10'd640), .raster_h(10'd200),
@@ -121,6 +121,34 @@ module tb_selftest_soc;
         .dq_out(s_dq_out), .dq_io(s_dq_io), .dq_in(s_dq_in)
     );
 
+    // ---- OSD raster
+    //
+    // testB9 and testB10 reported through the overlay and showed nothing, and
+    // at the time that was indistinguishable from the test not running. It IS
+    // running (proved above), so the overlay has to be checked directly: sweep
+    // a 640x200 raster past the compositor and see whether any lit pixel comes
+    // back. osd_active is what the firmware raises through VKB_CTRL.
+    logic [9:0] osd_hcnt = 0, osd_vcnt = 0;
+    wire  [3:0] osd_palette_idx;
+    wire        osd_in_area;
+
+    always @(posedge clk_pix) begin
+        if (osd_hcnt == 10'd639) begin
+            osd_hcnt <= 0;
+            osd_vcnt <= (osd_vcnt == 10'd199) ? 10'd0 : osd_vcnt + 10'd1;
+        end else begin
+            osd_hcnt <= osd_hcnt + 10'd1;
+        end
+    end
+
+    int lit_pixels = 0, in_area_cycles = 0;
+    always @(posedge clk_pix) begin
+        if (osd_in_area) begin
+            in_area_cycles++;
+            if (osd_palette_idx != 4'd0) lit_pixels++;
+        end
+    end
+
     // ---- observation
     int  reqs = 0, accesses = 0;
     logic st_req_d = 0, st_run_d = 0;
@@ -179,7 +207,12 @@ module tb_selftest_soc;
         $display("  st_run  rising edges : %0d", accesses);
         $display("  region-5 bus cycles  : %0d", region5);
         $display("  last fetch pc        : %08h (max %08h)", pc_last, pc_max);
-        if (reqs == 0)
+        $display("  osd_active           : %0d", u_soft.osd_active_r);
+        $display("  osd in-area cycles   : %0d", in_area_cycles);
+        $display("  osd LIT pixels       : %0d", lit_pixels);
+        if (lit_pixels == 0)
+            $display("  RESULT: FAIL -- the overlay never produced a lit pixel");
+        else if (reqs == 0)
             $display("  RESULT: FAIL -- the firmware never drove the MMIO window");
         else if (accesses == 0)
             $display("  RESULT: FAIL -- requests arrive but the master never runs");
