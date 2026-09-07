@@ -12,12 +12,32 @@
 #define POST_LIVE   ((volatile uint32_t *) 0x50000024) // live guest memory address
 #define POST_LIVEMX ((volatile uint32_t *) 0x50000028) // highest address ever touched
 
+// The self-test master, reused to read guest memory while the guest runs. It
+// takes the bus through hold acknowledge, which is what the BIOS loader does.
+#define ST_ADDR   ((volatile uint32_t *) 0x50000000)
+#define ST_TRIG   ((volatile uint32_t *) 0x50000008)
+#define ST_STATUS ((volatile uint32_t *) 0x5000000C)
+#define ST_BUSY   (1u << 8)
+
+static uint8_t guest_peek(uint32_t addr)
+{
+    uint32_t s = 0;
+    *ST_ADDR = addr;
+    *ST_TRIG = 2u;                       // read
+    for (uint32_t i = 0; i < 2000u; i++) {
+        s = *ST_STATUS;
+        if (!(s & ST_BUSY))
+            break;
+    }
+    return (uint8_t) (s & 0xFFu);
+}
+
 // A strip along the top. Everything outside it stays palette 0 (transparent),
 // so the guest's picture shows through and this does not hide a working POST.
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
-#define PANEL_H 48
+#define PANEL_H 58
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -47,6 +67,17 @@ static void dec(int x, int y, uint32_t v)
         out[i] = buf[n - 1 - i];
     out[n] = 0;
     osd_draw_string(&fb, x, y, out, OSD_LABEL);
+}
+
+// One interrupt vector as the guest currently holds it, printed seg:off.
+static void show_vector(int x, int y, uint32_t vec)
+{
+    uint32_t a = vec * 4u;
+    uint32_t off = guest_peek(a) | ((uint32_t) guest_peek(a + 1) << 8);
+    uint32_t seg = guest_peek(a + 2) | ((uint32_t) guest_peek(a + 3) << 8);
+    hex(x, y, seg, 4);
+    osd_draw_string(&fb, x + 4 * 8, y, ":", OSD_LABEL);
+    hex(x + 5 * 8, y, off, 4);
 }
 
 void post_mon_tick(void)
@@ -105,6 +136,16 @@ void post_mon_tick(void)
     hex(4 + 5 * 8, 32, live & 0xFFFFFu, 5);
     osd_draw_string(&fb, 4 + 12 * 8, 32, "HIGH", OSD_LABEL);
     hex(4 + 17 * 8, 32, *POST_LIVEMX & 0xFFFFFu, 5);
+
+    // The two vectors that matter here. testB20 showed the guest looping on
+    // 0x00069/0x0006A, which is inside INT 1Ah's vector at 0x68-0x6B, and the
+    // code that fails to get past POST 08 calls int 0x16 (vector at 0x58).
+    // POST 05 installs both as F000:offset -- 16h should be F000:E82E and 1Ah
+    // should be F000:FE6E. Reading them says whether the table is intact.
+    osd_draw_string(&fb, 4, 42, "16h", OSD_LABEL);
+    show_vector(4 + 4 * 8, 42, 0x16);
+    osd_draw_string(&fb, 4 + 15 * 8, 42, "1Ah", OSD_LABEL);
+    show_vector(4 + 19 * 8, 42, 0x1A);
 
     // History, oldest first, so the path through POST is visible at a glance.
     uint32_t hi = *POST_HIST_H, lo = *POST_HIST_L;
