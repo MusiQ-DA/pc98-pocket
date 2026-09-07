@@ -32,3 +32,14 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 #          property of the constraint values, not of sdram_mp, and the read path
 #          is NOT the culprit. See docs/HANDOVER.md 1.8.
 set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
+
+#   ---- DIAGNOSTIC BUILD: SDRAM_SELFTEST -----------------------------------
+#   Turns the core into an SDRAM test rig: the softcore walks guest memory with
+#   the 8088 held in reset and leaves the first mismatching address on the OSD,
+#   then stops. It NEVER releases the guest, so this build does not boot -- that
+#   is the point. See docs/P0_SELFTEST_SPEC.md.
+#
+#   The firmware Makefile reads its -D flags out of this file, so this one macro
+#   arms both the RTL and the C. Comment it out to get a normal core back, and
+#   REBUILD THE FIRMWARE (firmware.vh is committed, CI does not rebuild it).
+set_global_assignment -name VERILOG_MACRO "SDRAM_SELFTEST=1"

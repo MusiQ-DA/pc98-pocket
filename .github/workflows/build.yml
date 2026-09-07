@@ -76,6 +76,36 @@ jobs:
             grep -q "RESULT: PASS" ram_ph_$mode.log
           done
 
+  firmware:
+    # firmware.vh is committed and the Quartus build $readmemh's it, so nothing
+    # rebuilds it automatically: edit the C, forget to run make, and the
+    # bitstream silently ships a stale softcore ROM. Rebuild it here and fail if
+    # it differs from what is committed. (The macros come from config.tcl, so
+    # this also catches a config change that the firmware was never rebuilt for.)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM cross toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm
+
+      - name: Rebuild firmware
+        run: |
+          cd pcxt-base/src/firmware
+          make clean
+          make
+
+      - name: firmware.vh matches the committed one
+        run: |
+          cd pcxt-base/src/firmware
+          if ! git diff --quiet -- firmware.vh; then
+            echo "::error::firmware.vh is stale -- rebuild it (make in pcxt-base/src/firmware) and commit"
+            git diff --stat -- firmware.vh
+            exit 1
+          fi
+          echo "firmware.vh is up to date"
+
   quartus:
     runs-on: ubuntu-latest
     timeout-minutes: 120

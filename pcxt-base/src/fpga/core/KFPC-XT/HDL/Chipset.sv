@@ -68,6 +68,11 @@ module CHIPSET #(
         input   logic           memory_write_n_ext,
         output  logic           memory_write_n_direction,
         input   logic           ext_access_request,
+        // Read data for the external-access port. RAM.sv's read byte is
+        // otherwise consumed only by the internal bus mux below, so an external
+        // master (the BIOS loader, and now the SDRAM self-test) could write but
+        // never read back. See docs/P0_SELFTEST_SPEC.md.
+        output  logic   [7:0]   data_bus_ext_out,
         input   logic   [3:0]   dma_request,
         output  logic   [3:0]   dma_acknowledge_n,
         output  logic           address_enable_n,
@@ -445,6 +450,10 @@ module CHIPSET #(
     );
 
     assign  data_bus = internal_data_bus;
+
+    // Straight tap on RAM.sv's read byte, valid while the RAM read is in
+    // flight; the external master latches it on ram_rw_complete.
+    assign  data_bus_ext_out = internal_data_bus_ram;
 
     always_comb
     begin

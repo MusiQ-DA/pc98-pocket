@@ -926,7 +926,13 @@ module core_top (
         .osd_hgc_gfx                (osd_hgc_gfx),
         .osd_splash                 (osd_splash),
         .osd_gamepad                (osd_gamepad),
-        .key_cfg_flat               (key_cfg)
+        .key_cfg_flat               (key_cfg),
+        .st_addr                    (st_addr),
+        .st_wdata                   (st_wdata),
+        .st_we                      (st_we),
+        .st_req                     (st_req),
+        .st_done                    (st_done),
+        .st_rdata                   (st_rdata)
     );
 
     //
@@ -1450,6 +1456,90 @@ module core_top (
     end
 
     //
+    // SDRAM SELF-TEST MASTER  (docs/P0_SELFTEST_SPEC.md)
+    //
+    // sdram_mp does not boot the board and every logical hypothesis is spent,
+    // with all simulation green; the only signal from hardware has been a POST
+    // beep count. This lets the softcore read and write guest SDRAM directly
+    // while the 8088 is held in reset, so the firmware can report the first
+    // mismatching address instead of us guessing from a beep.
+    //
+    // It borrows CHIPSET's external-access port -- the one the BIOS loader
+    // already uses, so the write direction is proven. The read direction is
+    // the same port's memory_read_n_ext, which existed but was tied off.
+    //
+    // Arbitration is strictly time-sliced and the loader always wins: a slot
+    // download and a self-test cannot overlap in practice (the test runs after
+    // the load, before the guest is released), but nothing here relies on that.
+
+    wire  [7:0] chipset_ext_rdata;   // RAM.sv read byte, tapped out of CHIPSET
+    wire [19:0] st_addr;
+    wire  [7:0] st_wdata;
+    wire        st_we;
+    wire        st_req;
+    reg         st_done = 1'b0;
+    reg   [7:0] st_rdata = 8'h00;
+
+    reg         st_run   = 1'b0;   // this master owns the ext port
+    reg         st_wr_n  = 1'b1;
+    reg         st_rd_n  = 1'b1;
+    reg   [7:0] st_guard = 8'd0;
+    reg   [1:0] st_state = 2'd0;
+
+    wire        st_grant = st_req & ~ioctl_download;
+
+    always @(posedge clk_chipset, posedge reset_sdram) begin
+        if (reset_sdram) begin
+            st_state <= 2'd0;
+            st_run   <= 1'b0;
+            st_wr_n  <= 1'b1;
+            st_rd_n  <= 1'b1;
+            st_done  <= 1'b0;
+            st_rdata <= 8'h00;
+            st_guard <= 8'd0;
+        end else begin
+            case (st_state)
+            2'd0: begin
+                st_run  <= 1'b0;
+                st_wr_n <= 1'b1;
+                st_rd_n <= 1'b1;
+                st_done <= 1'b0;
+                if (st_grant && initilized_sdram) begin
+                    st_run   <= 1'b1;
+                    st_wr_n  <= ~st_we;
+                    st_rd_n  <=  st_we;
+                    st_guard <= 8'd0;
+                    st_state <= 2'd1;
+                end
+            end
+            // Hold the command until RAM.sv reports the access finished. The
+            // guard mirrors the BIOS loader's: a stuck controller must not wedge
+            // the softcore, it must return a wrong answer we can see.
+            2'd1: begin
+                st_guard <= st_guard + 8'd1;
+                if (ram_rw_complete || (st_guard == 8'd200)) begin
+                    st_rdata <= st_we ? 8'h00 : chipset_ext_rdata;
+                    st_wr_n  <= 1'b1;
+                    st_rd_n  <= 1'b1;
+                    st_done  <= 1'b1;
+                    st_state <= 2'd2;
+                end
+            end
+            // Drop the bus, then wait for the firmware to see done and lower
+            // its request, so one write cannot start two accesses.
+            2'd2: begin
+                st_run <= 1'b0;
+                if (~st_req) begin
+                    st_done  <= 1'b0;
+                    st_state <= 2'd0;
+                end
+            end
+            default: st_state <= 2'd0;
+            endcase
+        end
+    end
+
+    //
     // SPLASH
     //
 
@@ -1662,11 +1752,12 @@ module core_top (
         .VGA_VBlank                         (VBlank),
         .VGA_VBlank_border                  (VGA_VBlank_border),
     //  .address                            (address),
-        .address_ext                        (bios_access_address),
-        .ext_access_request                 (bios_access_request),
+        .address_ext                        (st_run ? st_addr : bios_access_address),
+        .ext_access_request                 (st_run | bios_access_request),
+        .data_bus_ext_out                   (chipset_ext_rdata),
         .address_direction                  (address_direction),
         .data_bus                           (data_bus),
-        .data_bus_ext                       (bios_write_data[7:0]),
+        .data_bus_ext                       (st_run ? st_wdata : bios_write_data[7:0]),
     //  .data_bus_direction                 (data_bus_direction),
         .address_latch_enable               (address_latch_enable),
     //  .io_channel_check                   (),
@@ -1679,10 +1770,10 @@ module core_top (
         .io_write_n_ext                     (1'b1),
     //  .io_write_n_direction               (io_write_n_direction),
     //  .memory_read_n                      (memory_read_n),
-        .memory_read_n_ext                  (1'b1),
+        .memory_read_n_ext                  (st_rd_n),
     //  .memory_read_n_direction            (memory_read_n_direction),
     //  .memory_write_n                     (memory_write_n),
-        .memory_write_n_ext                 (bios_write_n),
+        .memory_write_n_ext                 (st_run ? st_wr_n : bios_write_n),
     //  .memory_write_n_direction           (memory_write_n_direction),
         .dma_request                        (0),    // use? -> I don't know if it will ever be necessary, at least not during testing.
         .dma_acknowledge_n                  (dma_acknowledge_n),

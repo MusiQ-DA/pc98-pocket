@@ -4,6 +4,7 @@
 
 #include "key_bind.h"
 #include "settings_ui.h"
+#include "sdramtest.h"
 #include "softcpu_regs.h"
 #include "vkb_ui.h"
 
@@ -41,6 +42,17 @@ int main(void)
     key_bind_init(); // stage the default button map, which settings_load then overrides from the
                      // save
     settings_load();
+
+#ifdef SDRAM_SELFTEST
+    // Diagnostic build (docs/P0_SELFTEST_SPEC.md): walk guest SDRAM from here,
+    // with the 8088 still held, and leave the verdict on screen. Deliberately
+    // never releases the guest -- the point of this build is the readout, and
+    // letting a machine with broken RAM run would only overwrite it.
+    sdram_selftest_run();
+    for (;;)
+        ;
+#endif
+
     *SOFT_GUEST_HOLD = 0;
 
     // Arm the timer and enable only its interrupt (bit 0); the fault interrupts stay

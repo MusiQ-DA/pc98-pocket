@@ -118,14 +118,19 @@ set dram_chip_clk "ic|pll|altera_pll_i|general[2].gpll~PLL_OUTPUT_COUNTER|divclk
 # the Fitter give up ground elsewhere (the CGA domain went -0.386 -> -0.905
 # between #57 and #58).
 #
-# 5.9 - 2.357 = 3.54 ns is therefore an upper bound on the real tAC + flight
-# that this interface actually achieves, so 3.5 is used. It is an INFERENCE
-# from one build, not a measurement: it is the largest value the booting
-# configuration is known to satisfy. If the SDRAM part number and its tAC are
-# ever confirmed, replace this with the datasheet figure plus trace flight.
-# The -min side is unchanged; nothing has bounded it.
+# 5.9 - 2.357 = 3.54 ns is an upper bound on the real tAC + flight that this
+# interface achieves. 3.5 was tried on that reasoning in run#60 and WITHDRAWN:
+# relaxing the input delay should only ever help setup, but the chipset domain
+# went from -2.408 / TNS -17.914 (run#58, -max 5.9) to -5.222 / TNS -31.923,
+# with roughly twice as many failing endpoints. Whatever the Fitter did with
+# the slack it was handed, it did not spend it here, and the net result was
+# worse. Do not re-apply the number without understanding that first.
+#
+# Back to 5.9 -- the value the hardware build that finally produced a POST beep
+# (testB7b / run#58) was built with, and the value the KFSDRAM reference was
+# measured against, so the two stay comparable.
 set_input_delay -clock $dram_chip_clk -reference_pin [get_ports {dram_clk}] \
-    -max 3.5 [get_ports {dram_dq[*]}]
+    -max 5.9 [get_ports {dram_dq[*]}]
 set_input_delay -clock $dram_chip_clk -reference_pin [get_ports {dram_clk}] \
     -min 0.9 -add_delay [get_ports {dram_dq[*]}]
 

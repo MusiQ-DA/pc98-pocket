@@ -124,7 +124,7 @@ module sdram_mp #(
 
     typedef enum logic [3:0] {
         S_INIT_NOP, S_INIT_PRE, S_INIT_REF, S_INIT_MRS,
-        S_IDLE, S_ACT, S_RW, S_TAIL, S_PRE, S_REF
+        S_IDLE, S_ACT, S_RW, S_TAIL, S_PRE, S_REF_PRE, S_REF
     } state_t;
 
     state_t state;
@@ -134,7 +134,7 @@ module sdram_mp #(
 
     always_comb begin
         stat_idle    = init_done & (state == S_IDLE) & (timer == 0) & ~refresh_due;
-        stat_refresh = (state == S_REF);
+        stat_refresh = (state == S_REF) | (state == S_REF_PRE);
     end
 
     // ---------------------------------------------------------------- arbiter
@@ -284,12 +284,28 @@ module sdram_mp #(
             // ---- steady state --------------------------------------------
             S_IDLE: if (timer == 0) begin
                 if (refresh_due) begin
-                    // Every transaction ends precharged, so AUTO REFRESH is
-                    // safe to issue without a preceding PRECHARGE ALL.
-                    cmd         <= CMD_REF;
-                    timer       <= 16'(T_RFC);
+                    // PRECHARGE ALL first, then AUTO REFRESH -- exactly what
+                    // KFSDRAM does (REFRESH_PALL -> REFRESH).
+                    //
+                    // This controller used to issue AUTO REFRESH on its own,
+                    // reasoning that every transaction ends with a PRECHARGE of
+                    // its bank so nothing can be open. That invariant does look
+                    // sound on paper, but AUTO REFRESH with any bank still open
+                    // is illegal and corrupts memory, and the cost of not
+                    // relying on the argument is one state and a few cycles on
+                    // an event that happens every 7.45 us. PRECHARGE ALL when
+                    // everything is already precharged is a legal no-op.
+                    //
+                    // It matters more here than the invariant suggests: this
+                    // controller puts addr[10:9] in the bank field, so the
+                    // BIOS's base 64 KB test -- the one reporting three beeps
+                    // on hardware -- spans all four banks, where KFSDRAM's
+                    // mapping keeps that region entirely in bank 0.
+                    cmd         <= CMD_PRE;
+                    sdram_a     <= ROW_BITS'(1) << 10;   // A10 = all banks
+                    timer       <= 16'(T_RP);
                     refresh_cnt <= '0;
-                    state       <= S_REF;
+                    state       <= S_REF_PRE;
                 end else if (have_req) begin
                     cmd           <= CMD_ACT;
                     sdram_a       <= act_row;
@@ -306,6 +322,12 @@ module sdram_mp #(
                     timer         <= 16'(T_RCD);
                     state         <= S_ACT;
                 end
+            end
+
+            S_REF_PRE: if (timer == 0) begin
+                cmd   <= CMD_REF;
+                timer <= 16'(T_RFC);
+                state <= S_REF;
             end
 
             S_REF: if (timer == 0) state <= S_IDLE;
