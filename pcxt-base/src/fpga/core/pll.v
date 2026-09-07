@@ -35,7 +35,15 @@ module pll (
         .phase_shift1              ("0 ps"),
         .duty_cycle1               (50),
         .output_clock_frequency2   ("42.954545 MHz"),
-        .phase_shift2              ("11640 ps"),
+        // VARIANT C: 8730 ps instead of 11640 (135 deg instead of 180).
+        //
+        // dram_clk drives the SDRAM, which launches read data on its rising
+        // edge; we capture on ours. STA says that path is 2.4 ns short on
+        // setup. Advancing the device clock launches the data earlier and hands
+        // that 2.91 ns straight to setup. Command setup is unaffected in any
+        // way that matters -- the part still gets 8.73 ns to latch a command we
+        // launched, against a requirement near 2 ns.
+        .phase_shift2              ("8730 ps"),
         .duty_cycle2               (50),
         .output_clock_frequency3   ("28.636360 MHz"),
         .phase_shift3              ("0 ps"),
