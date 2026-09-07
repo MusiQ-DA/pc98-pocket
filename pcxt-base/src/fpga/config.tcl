@@ -31,7 +31,12 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 #          (-2.357 / TNS -17.784 vs -2.408 / TNS -17.914). So the -2.4 ns is a
 #          property of the constraint values, not of sdram_mp, and the read path
 #          is NOT the culprit. See docs/HANDOVER.md 1.8.
-set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
+#   ---- VARIANT B: pure KFSDRAM reference WITH the POST monitor ------------
+#   Never built before. Every KFSDRAM run predates the monitor, so we have no
+#   idea what a WORKING boot's POST sequence looks like -- which codes it
+#   passes, where it ends up, what LIVE settles to. Without that baseline there
+#   is nothing to compare the sdram_mp trace against.
+# set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
 
 #   ---- DIAGNOSTIC BUILD: SDRAM_SELFTEST -----------------------------------
 #   Turns the core into an SDRAM test rig: the softcore walks guest memory with
