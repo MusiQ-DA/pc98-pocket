@@ -35,6 +35,17 @@ jobs:
             -o tbl --Mdir obj_load
           ./obj_load/tbl | tee load.log
           grep -q "RESULT: PASS" load.log
+      - name: SDRAM controller — KFSDRAM shim handshake
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_sdram_shim \
+            -Isim -Ipcxt-base/src/fpga/core \
+            sim/tb_sdram_shim.sv sim/sdram_model.sv \
+            pcxt-base/src/fpga/core/sdram_kf_shim.sv \
+            pcxt-base/src/fpga/core/sdram_mp.sv \
+            -o tbs --Mdir obj_shim
+          ./obj_shim/tbs | tee shim.log
+          grep -q "RESULT: PASS" shim.log
+
   quartus:
     runs-on: ubuntu-latest
     timeout-minutes: 120

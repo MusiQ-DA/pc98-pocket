@@ -56,7 +56,7 @@ module sdram_mp #(
 
     // Derived. Do not override.
     parameter int ADDR_BITS   = ROW_BITS + BANK_BITS + COL_BITS,
-    parameter int LEN_BITS    = $clog2(BURST_MAX),
+    parameter int LEN_BITS    = (BURST_MAX > 1) ? $clog2(BURST_MAX) : 1,
     parameter int GRANT_BITS  = (PORTS > 1) ? $clog2(PORTS) : 1,
     parameter int MASK_BITS   = DQ_BITS/8
 ) (

@@ -152,6 +152,36 @@ module RAM (
     logic           idle;
     logic           refresh_mode;
 
+`ifdef SDRAM_USE_MP
+    // sdram_kf_shim presents KFSDRAM's port list on top of sdram_mp, so the
+    // unmodified PCXT can be booted through the new controller as an A/B check
+    // before the PC-98 machine layer depends on it. See docs/P0_SDRAM_DESIGN.md.
+    sdram_kf_shim u_KFSDRAM (
+        .sdram_clock        (clock),
+        .sdram_reset        (reset),
+        .address            (access_address),
+        .access_num         (access_num),
+        .data_in            (access_data_in),
+        .data_out           (access_data_out),
+        .write_request      (write_request),
+        .read_request       (read_request),
+        .enable_refresh     (enable_refresh),
+        .write_flag         (write_flag),
+        .read_flag          (read_flag),
+        .idle               (idle),
+        .refresh_mode       (refresh_mode),
+        .sdram_address      (sdram_address),
+        .sdram_cke          (sdram_cke),
+        .sdram_cs           (sdram_cs),
+        .sdram_ras          (sdram_ras),
+        .sdram_cas          (sdram_cas),
+        .sdram_we           (sdram_we),
+        .sdram_ba           (sdram_ba),
+        .sdram_dq_in        (sdram_dq_in),
+        .sdram_dq_out       (sdram_dq_out),
+        .sdram_dq_io        (sdram_dq_io)
+    );
+`else
     KFSDRAM u_KFSDRAM (
         .sdram_clock        (clock),
         .sdram_reset        (reset),
@@ -177,6 +207,7 @@ module RAM (
         .sdram_dq_out       (sdram_dq_out),
         .sdram_dq_io        (sdram_dq_io)
     );
+`endif
 
 
     //

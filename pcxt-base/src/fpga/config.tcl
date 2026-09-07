@@ -12,3 +12,7 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_EMS=1"
 set_global_assignment -name VERILOG_MACRO "ENABLE_A000_UMB=1"
 # Chipset clock rate in Hz: drives cur_rate (Verilog) and the softcore clock (firmware, /6).
 set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
+# Route SDRAM through sdram_mp (via sdram_kf_shim) instead of KFSDRAM.
+# RAM.sv tests this with `ifdef, so setting it to 0 would still select the shim
+# -- COMMENT THE LINE OUT to fall back to the stock controller for a hardware A/B.
+set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"

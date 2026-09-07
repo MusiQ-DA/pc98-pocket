@@ -243,11 +243,17 @@ NOPスタブ(6144×0x00000013)は一度もこのストアを実行しないの�
 > **ゴールと完了条件は `docs/GOAL.md`(確定版)を参照。** 「本命」= 実機で
 > PC-98 ソフトが GDC グラフィック + FM音源つきで実用速度で動くこと。
 
-1. **B1 実機テスト待ち**(SD 投入済み、ユーザー実施)
-   - CI run#39(sha `da7f4164`、**実 firmware 入り**)が成功 → `dist/testB1/` として
-     パッケージし `/Volumes/ANALOGUE/Cores/hiroya.PCXTDEV/` に投入済み
-   - Pocket で `PCXTDEV` を起動し、**BIOS POST → DOS ブート**まで進むか確認
-   - Fitter Successful / Error 0 / Critical Warning 0 / ALM 65% は確認済み
+1. ~~**B1 実機テスト**~~ ✅ **2026-09-07 BIOS 到達を確認**
+   - 実 firmware(CI run#39)で **BIOS が動作**。NOPスタブ時に 8088 が
+     リセット保持だった件は解消 = **picorv32 のブートマスタ経路が実機で通った**
+   - ※ DOS ブートは**未確認**。データスロット3/4(FDD)は deferload で
+     イメージ未投入のため。PC-98 側の作業には影響しない
+2. ~~**P0 手順5: 実機統合の下準備**~~ ✅ **完了**
+   - `sdram_kf_shim.sv`(KFSDRAM と同一ポート)経由で `sdram_mp` を
+     RAM.sv に差し込めるようにした。`config.tcl` の `SDRAM_USE_MP` で切替
+   - **次のCIビルドで PCXT が引き続き BIOS 到達するかが A/B 判定**
+   - シムは 42.95MHz 据え置き。85.9MHz 化はクロック配線が CHIPSET〜core_top まで
+     波及して検証の変数が増えるため分離した(Fmax は Fitter で別途評価)
 2. ~~**P0 手順2: SDRAM コントローラの置換**~~ ✅ **完了**
    → `pcxt-base/src/fpga/core/sdram_mp.sv`(新規実装。詳細 `docs/P0_SDRAM_DESIGN.md`)
    - SDRAMC.vhd は KFSDRAM と同アーキテクチャ階級だったため**移植せず新規実装**。
