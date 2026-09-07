@@ -251,7 +251,10 @@ NOPスタブ(6144×0x00000013)は一度もこのストアを実行しないの�
 2. ~~**P0 手順5: 実機統合の下準備**~~ ✅ **完了**
    - `sdram_kf_shim.sv`(KFSDRAM と同一ポート)経由で `sdram_mp` を
      RAM.sv に差し込めるようにした。`config.tcl` の `SDRAM_USE_MP` で切替
-   - **次のCIビルドで PCXT が引き続き BIOS 到達するかが A/B 判定**
+   - **A/B ビルド(CI run#42, sha `29f34d5048`)完了 → SD 投入済み。実機テスト待ち**
+     - Fitter Successful / Error 0 / Critical Warning 0
+     - **12,105 ALM(KFSDRAM 版 12,049 に対し +56 のみ)**、M10K は同一 193
+     - `dist/testAB/` としてパッケージ
    - シムは 42.95MHz 据え置き。85.9MHz 化はクロック配線が CHIPSET〜core_top まで
      波及して検証の変数が増えるため分離した(Fmax は Fitter で別途評価)
 2. ~~**P0 手順2: SDRAM コントローラの置換**~~ ✅ **完了**
@@ -274,6 +277,34 @@ NOPスタブ(6144×0x00000013)は一度もこのストアを実行しないの�
    (既知動作と比較できるうちにやる)
 6. **P1: PC-98メモリマップ** / **P2: TVRAM** / **P3: GDC** / **P4: FDC→DOS** /
    **P5: BEEP→OPN→OPNA** / **P6: EGC** / **P7: 入力・詰め**
+
+### ビルド時間の実測(2026-09-07)
+
+**CI(GitHub Actions)は 13〜14分で完了する。** 「1〜2時間かかる」は誤り。
+
+| run | 内容 | 所要 |
+|---|---|---:|
+| #39 | quartus のみ | 13.4 分 |
+| #40, #41 | sim + quartus | 13.5 / 14.2 分 |
+
+- **sim ジョブは CI で通っている**(run#40, #41 とも `sim: success`)
+**ローカル Docker ビルドは CI より遅い。CI を主経路にすること。**
+
+| 経路 | 所要 |
+|---|---|
+| CI(GitHub Actions) | **12.8〜14.2 分**(全工程) |
+| ローカル Docker `--fast` | **45分でまだ Analysis & Synthesis 中**(打ち切り) |
+
+- 単純な CPU ベンチでは amd64 エミュレーションはネイティブ比 **約2倍**
+  (0.476s vs 0.237s)で、QEMU にしては速い(実質 Rosetta 相当)。
+  **にもかかわらず Quartus では 3.5倍以上の差が出る。**
+  ベンチが軽すぎて実態を表していない(Quartus はメモリ常駐量が大きい)
+- **Docker VM のメモリが 8GB しかない**(ホストは 64GB / 20コア)。これが最有力。
+  VM リソースは `settings-store.json` に無く `docker desktop` CLI にも設定コマンドが
+  ないため、**変更は Docker Desktop の GUI(Settings → Resources)から**。
+  24GB 程度に上げれば改善する可能性がある(**未検証**)
+- ローカル化の価値は速度ではなく **push 不要 / キュー待ちなし**。
+  実際 run#42/43 は直列待ちしていた
 
 ### シミュレーション環境(重要)
 
