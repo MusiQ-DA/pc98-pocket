@@ -16,10 +16,13 @@
 
 #define ST_BUSY (1u << 8)
 
-// The master has its own 200-cycle guard, so a stuck controller returns a wrong
-// answer rather than hanging. This bound only covers the bus handshake itself
-// and exists so a broken build cannot wedge the softcore before it can draw.
-#define ST_SPIN 100000u
+// The master has its own 200-cycle guard, so an access that never completes
+// still returns. This bound only covers the bus handshake and is deliberately
+// SMALL: run#61 showed nothing at all on screen, and one of the two candidate
+// causes was every access spinning here, which at the old 100000 would have
+// taken hours over 64 KB. A stuck access must degrade to a wrong answer we can
+// read, never to a hang.
+#define ST_SPIN 2000u
 
 static uint32_t st_wait(void)
 {
@@ -58,6 +61,20 @@ static uint8_t pat(uint32_t a)
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
+// Put the overlay on screen. vkb_ui owns this normally and writes the origin
+// from the presented raster before raising VKB_CTRL; run#61 raised VKB_CTRL
+// alone, and only after the test, so a hang meant nothing was ever shown.
+static void osd_show(void)
+{
+    uint32_t raster = *OSD_RASTER;
+    uint32_t w = raster & 0x3FFu;
+    uint32_t h = (raster >> 16) & 0x3FFu;
+    uint32_t x = (w > OSD_FB_WIDTH) ? (w - OSD_FB_WIDTH) / 2u : 0u;
+    uint32_t y = (h > OSD_FB_HEIGHT) ? (h - OSD_FB_HEIGHT) / 2u : 0u;
+    *OSD_ORIGIN = (y << 16) | x;
+    *VKB_CTRL = 1u;
+}
+
 static void put_hex(int x, int y, uint32_t v, int digits, uint8_t color)
 {
     char buf[9];
@@ -93,6 +110,25 @@ static void put_dec(int x, int y, uint32_t v, uint8_t color)
 
 void sdram_selftest_run(void)
 {
+    // Draw FIRST, before touching SDRAM. run#61 came back "splash, nothing
+    // else", which fits both "the OSD never appears" and "the test hangs".
+    // Getting a banner up before any SDRAM access separates them: no banner
+    // means the drawing path is wrong, banner but no result means the accesses
+    // hang, and the progress counter below says where.
+    osd_clear_screen();
+    osd_show();
+    osd_draw_string(&fb, 8, 8, "SDRAM SELFTEST", OSD_LABEL);
+    osd_draw_string(&fb, 8, 24, "RUNNING", OSD_LABEL);
+
+    // Pilot: one byte, then 256. If the bus works at all this lands in
+    // milliseconds, so a result appears even if the full sweep is hopeless.
+    sd_poke(0x00040u, 0xA5u);
+    {
+        uint8_t got = sd_peek(0x00040u);
+        osd_draw_string(&fb, 8, 40, "PILOT A5 GOT", OSD_LABEL);
+        put_hex(8 + 13 * 8, 40, got, 2, OSD_LABEL);
+    }
+
     uint32_t errors = 0;
     uint32_t first_addr = 0;
     uint8_t first_got = 0, first_want = 0;
@@ -101,10 +137,19 @@ void sdram_selftest_run(void)
     // Pass 1: write the whole region, then read the whole region. Interleaving
     // write and read per address would hide damage that a later write inflicts
     // on an earlier one, which is the shape of most SDRAM faults.
-    for (uint32_t a = 0; a < BASE_LEN; a++)
+    for (uint32_t a = 0; a < BASE_LEN; a++) {
+        if ((a & 0xFFFu) == 0) {
+            osd_draw_string(&fb, 8, 56, "WRITE", OSD_LABEL);
+            put_hex(8 + 6 * 8, 56, a, 5, OSD_LABEL);
+        }
         sd_poke(a, pat(a));
+    }
 
     for (uint32_t a = 0; a < BASE_LEN; a++) {
+        if ((a & 0xFFFu) == 0) {
+            osd_draw_string(&fb, 8, 56, "READ ", OSD_LABEL);
+            put_hex(8 + 6 * 8, 56, a, 5, OSD_LABEL);
+        }
         uint8_t got = sd_peek(a);
         if (got != pat(a)) {
             if (!failed) {
@@ -139,6 +184,7 @@ void sdram_selftest_run(void)
 
     osd_clear_screen();
     osd_draw_string(&fb, 8, 8, "SDRAM SELFTEST", OSD_LABEL);
+    osd_show();
 
     if (!failed) {
         osd_draw_string(&fb, 8, 24, "PASS  BYTES ", OSD_LABEL);
