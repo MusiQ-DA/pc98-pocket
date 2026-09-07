@@ -112,6 +112,30 @@ KFSDRAM が生き残っていたのは、出力が素朴な `casez` レジスタ
 3. **`scripts/check_sdram_paths.tcl` + CI ゲート**を追加。解析パスが0本なら赤くする。
    「パスの裏付けが無い良い slack 値」= このファイル群が存在する理由そのもの。
 
+### 1.3 実測: mp のアクセスレイテンシは KFSDRAM の2倍(今は無害、turbo では致命)
+
+board-timing TB に計測プローブを入れて実測(read command → data_bus_out 確定までの
+chipset サイクル数):
+
+| コントローラ | レイテンシ |
+|---|---|
+| KFSDRAM | **5 サイクル** |
+| sdram_mp(shim 経由) | **10 サイクル** |
+
+**RAM.sv の CPU ハンドシェイクは完了待ちではない。** `access_ready <= idle` は IDLE 状態で
+拾うので、コマンド提示の約1サイクル後に `memory_access_ready` が上がる。CPU を実際に
+守っているのは 8088 のバスサイクル長そのもの(オープンループ)。
+
+- 起動時 `clk_select = 2'b00`(リセット既定)= 4.77MHz = **バスサイクル 36 chipset cycle**。
+  10 < 36 なので**今回の真っ黒の原因ではない**。
+- 最速 turbo `2'b11` は `cpu_edge_num/den = 1/1` = **42.95MHz 等速**。バスサイクルは 4 cycle 級で、
+  KFSDRAM ですら `ram_read_wait_cycle=1` + `shift_read_timing` で補正している
+  (`XT_CE_Generator.sv`)。**mp の 10 サイクルはここに収まらない。**
+
+→ P0 完了後、または testB7 が黒だった場合の候補: shim の `T_RCD`/`T_RP`(現在 2)を詰める。
+sdram_mp は `timer` が 0 になるまで次状態に進まないので ACT→READ に実質4サイクルかかる
+(KFSDRAM は1)。ここだけでレイテンシは大きく縮む。
+
 ### testB7 の判定と次の一手
 
 - ✅ **POST が出る** → sdram_mp 実機動作確定、P0 残作業へ(§5-A)
