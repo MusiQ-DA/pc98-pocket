@@ -122,7 +122,14 @@ void sdram_selftest_run(void)
 {
     // Overlay up and a banner drawn before any SDRAM access, so "nothing on
     // screen" and "the test stalled" can never look the same again.
+    //
+    // The panel fill is NOT decoration. OSD_LABEL is palette 5, 0x101010 --
+    // near black. testB13 cleared to OSD_CLEAR (palette 0, transparent) and
+    // drew that straight over the splash, so the text was rendered exactly as
+    // simulated and invisible on the panel. settings_ui fills with a light
+    // colour first for this reason; do the same.
     osd_clear_screen();
+    osd_fill_rect(&fb, 0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT, OSD_KEYFACE);
     osd_show();
     say(0, "SDRAM SELFTEST");
 
