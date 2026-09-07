@@ -4,9 +4,13 @@
 Supersedes getart2.py, which had a single artifact id baked into the source and
 had to be edited for every build.
 
-    python3 scripts/tools/getartifact.py [run_number] [dest_dir]
+    python3 scripts/tools/getartifact.py [run_number] [dest_dir] [--allow-failed]
 
-With no run_number the newest successful run is used. Everything goes through
+With no run_number the newest successful run is used. --allow-failed unpacks a
+run whose overall conclusion is failure -- use it only when you have READ the
+job list and know the compile itself succeeded (e.g. only a post-compile
+report/gate step went red). Shipping a bitstream from a genuinely failed
+compile is what the default guard exists to prevent. Everything goes through
 ghlib.http, which pins hosts to dig-resolved addresses because the machine's
 system DNS is broken.
 """
@@ -34,14 +38,21 @@ def pick_run(run_number):
 
 
 def main():
-    run_number = int(sys.argv[1]) if len(sys.argv) > 1 else None
-    dest = sys.argv[2] if len(sys.argv) > 2 else "build/artifact"
+    argv = [a for a in sys.argv[1:] if a != "--allow-failed"]
+    allow_failed = "--allow-failed" in sys.argv[1:]
+    run_number = int(argv[0]) if len(argv) > 0 else None
+    dest = argv[1] if len(argv) > 1 else "build/artifact"
 
     run = pick_run(run_number)
     print(f"run#{run['run_number']} {run['status']}/{run['conclusion']} "
           f"sha={run['head_sha'][:10]}")
     if run["conclusion"] != "success":
-        sys.exit("that run did not succeed; refusing to unpack its artifact")
+        if not allow_failed:
+            sys.exit("that run did not succeed; refusing to unpack its artifact "
+                     "(pass --allow-failed if you have checked that the COMPILE "
+                     "succeeded and only a later step went red)")
+        print("  !! run conclusion is not success -- unpacking anyway "
+              "(--allow-failed)")
 
     arts = ghlib.gh(f"/repos/{REPO}/actions/runs/{run['id']}/artifacts")["artifacts"]
     if not arts:

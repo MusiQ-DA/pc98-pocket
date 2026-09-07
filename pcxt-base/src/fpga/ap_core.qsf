@@ -838,5 +838,41 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/Peripherals.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/Chipset.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/Bus_Arbiter.sv"
 
+# ---------------------------------------------------------------------------
+# SDRAM registers in the IO cells  (added 2026-09-07, testB7b)
+# ---------------------------------------------------------------------------
+# Once core_constraints.sdc started actually constraining the dram_* pins (they
+# had been unconstrained for the whole project history), STA finally measured
+# the read path and it fails: on the testB7 build, general[0] (clk_chipset)
+# goes to -2.417 ns setup with a total negative slack of -18.068 ns spread over
+# about sixteen endpoints -- i.e. the sixteen DQ capture flops.
+#
+# The budget explains it. dram_clk is clk_chipset inverted, so the part launches
+# read data on our falling edge and we capture it on the next rising edge: a
+# half period, 11.64 ns. Subtract the 5.9 ns of tAC + flight declared as the
+# input delay and only 5.74 ns is left for pin -> flop routing plus setup. A
+# flop sitting out in the fabric cannot make that.
+#
+# FAST_INPUT_REGISTER moves the capture flop into the IO cell, which removes
+# the fabric route from that path. FAST_OUTPUT_REGISTER does the same on the
+# command/write side; those paths already pass, but pinning them stops the
+# placement from drifting between builds -- the build-to-build variability is
+# the actual disease here, not any single build's number.
+#
+# This works for BOTH arms of the hardware A/B, which matters because the
+# KFSDRAM reference has to stay valid: packing requires the flop to be fed only
+# by the pin, and both `p_rdata <= sdram_dq_in` (sdram_mp) and
+# `data_out <= sdram_dq_in` (KFSDRAM) qualify.
+set_instance_assignment -name FAST_INPUT_REGISTER ON -to dram_dq[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_dq[*]
+set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to dram_dq[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_a[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_ba[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_dqm[*]
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_cke
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_ras_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_cas_n
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_we_n
+
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
 set_global_assignment -name SEED 3
