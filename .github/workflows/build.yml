@@ -76,6 +76,28 @@ jobs:
             grep -q "RESULT: PASS" ram_ph_$mode.log
           done
 
+  firmware:
+    # firmware.vh is committed and the Quartus build $readmemh's it, so nothing
+    # rebuilds it automatically: edit the C, forget to run make, and the
+    # bitstream silently ships a stale softcore ROM.
+    #
+    # The first version of this job rebuilt the firmware here and diffed the
+    # image. That does not work -- run#61 failed it on 1012 of 1179 lines, which
+    # was not staleness but Ubuntu's clang laying the same sources out
+    # differently from the Homebrew LLVM the committed image was built with.
+    #
+    # So compare a fingerprint of the SOURCES instead. make writes
+    # firmware.srchash next to firmware.vh; if it still matches the sources in
+    # the tree, the committed image came from these sources. Toolchain
+    # independent, and it needs no compiler, so the job takes seconds.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: firmware.vh was built from the committed sources
+        run: make -C pcxt-base/src/firmware srchash-verify
+
   quartus:
     runs-on: ubuntu-latest
     timeout-minutes: 120
