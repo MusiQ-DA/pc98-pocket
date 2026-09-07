@@ -61,6 +61,21 @@ jobs:
             grep -q "RESULT: PASS" ram_$mode.log
           done
 
+      - name: RAM.sv integration at board timing (antiphase device clock)
+        run: |
+          S=pcxt-base/src/fpga/core
+          for mode in ref mp; do
+            DEF=""; [ "$mode" = "mp" ] && DEF="+define+SDRAM_USE_MP"
+            verilator --binary --timing -Wno-fatal --top-module tb_ram_ab_ph $DEF \
+              -Isim -I$S -I$S/KFPC-XT/HDL -I$S/KFPC-XT/HDL/KFSDRAM/HDL \
+              sim/tb_ram_ab_ph.sv sim/sdram_model.sv sim/sdram_board_model.sv \
+              $S/KFPC-XT/HDL/RAM.sv $S/KFPC-XT/HDL/KFSDRAM/HDL/KFSDRAM.sv \
+              $S/sdram_kf_shim.sv $S/sdram_mp.sv \
+              -o p --Mdir obj_ph_$mode
+            ./obj_ph_$mode/p | tee ram_ph_$mode.log
+            grep -q "RESULT: PASS" ram_ph_$mode.log
+          done
+
   quartus:
     runs-on: ubuntu-latest
     timeout-minutes: 120
