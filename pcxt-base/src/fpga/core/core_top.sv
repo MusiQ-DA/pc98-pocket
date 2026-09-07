@@ -926,7 +926,13 @@ module core_top (
         .osd_hgc_gfx                (osd_hgc_gfx),
         .osd_splash                 (osd_splash),
         .osd_gamepad                (osd_gamepad),
-        .key_cfg_flat               (key_cfg)
+        .key_cfg_flat               (key_cfg),
+        .st_addr                    (st_addr),
+        .st_wdata                   (st_wdata),
+        .st_we                      (st_we),
+        .st_req                     (st_req),
+        .st_done                    (st_done),
+        .st_rdata                   (st_rdata)
     );
 
     //
@@ -1450,6 +1456,50 @@ module core_top (
     end
 
     //
+    // SDRAM SELF-TEST MASTER  (docs/P0_SELFTEST_SPEC.md)
+    //
+    // sdram_mp does not boot the board and every logical hypothesis is spent,
+    // with all simulation green; the only signal from hardware has been a POST
+    // beep count. This lets the softcore read and write guest SDRAM directly
+    // while the 8088 is held in reset, so the firmware can report the first
+    // mismatching address instead of us guessing from a beep.
+    //
+    // It borrows CHIPSET's external-access port -- the one the BIOS loader
+    // already uses, so the write direction is proven. The read direction is
+    // the same port's memory_read_n_ext, which existed but was tied off.
+    //
+    // Arbitration is strictly time-sliced and the loader always wins: a slot
+    // download and a self-test cannot overlap in practice (the test runs after
+    // the load, before the guest is released), but nothing here relies on that.
+
+    wire  [7:0] chipset_ext_rdata;   // RAM.sv read byte, tapped out of CHIPSET
+    wire [19:0] st_addr;
+    wire  [7:0] st_wdata;
+    wire        st_we;
+    wire        st_req;
+    wire        st_done;
+    wire  [7:0] st_rdata;
+    wire        st_run, st_wr_n, st_rd_n;
+
+    sdram_selftest_master u_selftest (
+        .clk              (clk_chipset),
+        .rst              (reset_sdram),
+        .req              (st_req),
+        .we               (st_we),
+        .addr             (st_addr),
+        .wdata            (st_wdata),
+        .done             (st_done),
+        .rdata            (st_rdata),
+        .initilized_sdram (initilized_sdram),
+        .loader_busy      (ioctl_download),
+        .run              (st_run),
+        .write_n          (st_wr_n),
+        .read_n           (st_rd_n),
+        .ram_rw_complete  (ram_rw_complete),
+        .ext_rdata        (chipset_ext_rdata)
+    );
+
+    //
     // SPLASH
     //
 
@@ -1662,11 +1712,12 @@ module core_top (
         .VGA_VBlank                         (VBlank),
         .VGA_VBlank_border                  (VGA_VBlank_border),
     //  .address                            (address),
-        .address_ext                        (bios_access_address),
-        .ext_access_request                 (bios_access_request),
+        .address_ext                        (st_run ? st_addr : bios_access_address),
+        .ext_access_request                 (st_run | bios_access_request),
+        .data_bus_ext_out                   (chipset_ext_rdata),
         .address_direction                  (address_direction),
         .data_bus                           (data_bus),
-        .data_bus_ext                       (bios_write_data[7:0]),
+        .data_bus_ext                       (st_run ? st_wdata : bios_write_data[7:0]),
     //  .data_bus_direction                 (data_bus_direction),
         .address_latch_enable               (address_latch_enable),
     //  .io_channel_check                   (),
@@ -1679,10 +1730,10 @@ module core_top (
         .io_write_n_ext                     (1'b1),
     //  .io_write_n_direction               (io_write_n_direction),
     //  .memory_read_n                      (memory_read_n),
-        .memory_read_n_ext                  (1'b1),
+        .memory_read_n_ext                  (st_rd_n),
     //  .memory_read_n_direction            (memory_read_n_direction),
     //  .memory_write_n                     (memory_write_n),
-        .memory_write_n_ext                 (bios_write_n),
+        .memory_write_n_ext                 (st_run ? st_wr_n : bios_write_n),
     //  .memory_write_n_direction           (memory_write_n_direction),
         .dma_request                        (0),    // use? -> I don't know if it will ever be necessary, at least not during testing.
         .dma_acknowledge_n                  (dma_acknowledge_n),
