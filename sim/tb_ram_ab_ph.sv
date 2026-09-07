@@ -147,6 +147,49 @@ module tb_ram_ab_ph;
             end
         end
 
+        // ---------------------------------------------------------------
+        // Bank crossing. The two passes above sit inside ONE 512-word column
+        // block each, so with sdram_mp's {row, bank, col} mapping they land
+        // entirely in bank 0 -- which is also the only bank KFSDRAM's mapping
+        // ever uses. The testbench therefore never exercised sdram_mp's
+        // multi-bank behaviour at all: bank switching, per-bank precharge, and
+        // refresh while several banks have seen traffic.
+        //
+        // The BIOS's base 64 KB test -- the one that reports three beeps on
+        // hardware -- covers 0x00000-0x0FFFF, which under that mapping spans
+        // ALL FOUR banks and 32 rows. So this is exactly the gap between what
+        // simulation covered and where the hardware fails.
+        //
+        // Two shapes, because they stress different things: a contiguous sweep
+        // that walks bank 0,1,2,3 and rolls the row, and a strided pass that
+        // changes bank on every single access.
+        for (int i = 0; i < 2048; i++) bus_write(32'h00000 + i, pat(i + 3));
+        for (int i = 0; i < 2048; i++) begin
+            bus_read(32'h00000 + i, got);
+            if (got !== pat(i + 3)) begin
+                if (errors < 24)
+                    $display("  BANK-SWEEP MISMATCH @%05h bank %0d row %0d: got %02h want %02h",
+                             i, (i >> 9) & 3, i >> 11, got, pat(i + 3));
+                errors++;
+            end
+        end
+
+        for (int i = 0; i < 128; i++)
+            for (int b = 0; b < 4; b++)
+                bus_write(32'h04000 + (b << 9) + i, pat(i * 4 + b));
+        for (int i = 0; i < 128; i++)
+            for (int b = 0; b < 4; b++) begin
+                bus_read(32'h04000 + (b << 9) + i, got);
+                if (got !== pat(i * 4 + b)) begin
+                    if (errors < 32)
+                        $display("  BANK-STRIDE MISMATCH @%05h bank %0d: got %02h want %02h",
+                                 32'h04000 + (b << 9) + i,
+                                 ((32'h04000 + (b << 9) + i) >> 9) & 3,
+                                 got, pat(i * 4 + b));
+                    errors++;
+                end
+            end
+
         $display("\n=== summary ===");
         $display("  protocol violations : %0d", sdr.u_part.violations);
         $display("  data errors         : %0d", errors);
