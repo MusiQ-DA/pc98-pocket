@@ -170,11 +170,15 @@ module sdram_mp #(
 
     assign refresh_due = (refresh_cnt >= REFRESH_INT[15:0]);
 
-    // Read data returns CAS_LATENCY cycles after the READ command reaches the
-    // part, plus one cycle because cmd is registered on the way out and one
-    // more because sdram_dq_in is registered on the way in. Track which pipeline
-    // slots carry real data so p_rvalid lines up with p_rdata.
-    localparam int RD_DELAY = CAS_LATENCY + 2;
+    // Read data timing. cmd is registered, so a READ issued at edge T reaches
+    // the part at T+1 and its data is samplable at T+1+CAS_LATENCY. rd_pipe[0]
+    // is set at T, so the slot to gate p_rvalid on is rd_pipe[CAS_LATENCY],
+    // giving RD_DELAY = CAS_LATENCY + 1.
+    //
+    // This was CAS_LATENCY + 2, which sampled a cycle late and read zeros on
+    // hardware. It passed simulation only because the model drove DQ a cycle
+    // late in the same way -- the model rejected KFSDRAM, which is the tell.
+    localparam int RD_DELAY = CAS_LATENCY + 1;
     logic [RD_DELAY:0] rd_pipe;
 
     wire [ROW_BITS-1:0]  act_row  = p_addr[winner][ADDR_BITS-1 -: ROW_BITS];

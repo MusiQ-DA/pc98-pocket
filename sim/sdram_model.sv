@@ -200,16 +200,17 @@ module sdram_model #(
         end
     end
 
-    // The part drives DQ cas_lat cycles after the READ command. Real DQ is valid
-    // around the sampling edge rather than for one tidy cycle, and controllers
-    // differ by a cycle in where they latch it (KFSDRAM registers dq_in
-    // unconditionally and gates with its own flag), so the window spans two
-    // cycles. A one-cycle window made this model reject KFSDRAM, which is known
-    // good on hardware -- i.e. the model was wrong, not the controller.
+    // DQ timing. The part captures READ at edge N and the data must be
+    // samplable at edge N+CL. rd_vld[0] is set after the edge the command is
+    // seen, so the bit that must be driving during the interval ending at
+    // N+CL is rd_vld[cas_lat-1]. Using rd_vld[cas_lat] puts the window a full
+    // cycle late, which is what made this model reject KFSDRAM.
+    //
+    // Two adjacent slots are driven because real DQ is valid around the
+    // sampling edge, and controllers differ by a cycle in where they latch.
     always_comb begin
-        if      (rd_vld[cas_lat])                       dq_in = rd_data[cas_lat];
-        else if (cas_lat+1 < PIPE && rd_vld[cas_lat+1]) dq_in = rd_data[cas_lat+1];
-        else                                            dq_in = 16'hZZZZ;
+        if (cas_lat >= 1 && rd_vld[cas_lat-1]) dq_in = rd_data[cas_lat-1];
+        else                                   dq_in = 16'hZZZZ;
     end
 
     // Test hooks.
