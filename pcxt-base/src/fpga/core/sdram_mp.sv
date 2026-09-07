@@ -233,9 +233,22 @@ module sdram_mp #(
             cur_col      <= '0;
         end else begin
             // Defaults; the states below override what they need.
+            //
+            // sdram_a and sdram_ba are deliberately NOT cleared here. They used
+            // to be, which drove the address bus row -> 0 -> col -> 0 on every
+            // access: thirteen address lines plus two bank lines switching
+            // together, twice per transaction, for no reason. KFSDRAM holds its
+            // address across a state instead, and KFSDRAM is the one that runs
+            // reliably on this board.
+            //
+            // The hardware fault is intermittent (testB19/20 pass the BIOS
+            // memory test, testB21/22 fail it) and no simulation reproduces it,
+            // so it is physical. Simultaneous switching on the address bus is
+            // exactly the kind of thing that corrupts a marginal data capture
+            // and that no RTL simulation can see. Holding the address costs
+            // nothing: the part latches it with the command, and NOP cycles do
+            // not care what is on those pins.
             cmd         <= CMD_NOP;
-            sdram_a     <= '0;
-            sdram_ba    <= '0;
             sdram_dqm   <= '0;
             sdram_dq_io <= 1'b1;
             p_ack       <= '0;
