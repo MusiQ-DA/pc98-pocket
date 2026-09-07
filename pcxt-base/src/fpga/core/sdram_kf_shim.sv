@@ -53,7 +53,7 @@ module sdram_kf_shim #(
     parameter int T_WR             = 2,
     parameter int T_RFC            = 4,
     parameter int CAS_LATENCY      = 2,
-    parameter int INIT_NOP         = 4300,   // >= 100 us at 42.95 MHz
+    parameter int INIT_NOP         = 10000,  // 233 us: matches the KFSDRAM the board boots with
     parameter int REFRESH_INT      = 320     // <= 7.8 us at 42.95 MHz
 ) (
     input  wire                               sdram_clock,

@@ -164,11 +164,17 @@ module sdram_mp #(
     logic [LEN_BITS:0]    left;        // words still to command
     logic                 cur_we;
     logic [15:0]          timer;
+    // Timer constants below use width casts rather than parameter bit-selects
+    // (T_RP[15:0] etc). Bit-selecting a parameter is legal SystemVerilog that
+    // simulators honour, but it is a classic synthesis-hazard construct: if the
+    // tool mangles one constant the FSM still fits and passes STA while timing
+    // out on real hardware in a way no RTL simulation can reproduce. The casts
+    // make the intent unambiguous for any tool.
     logic [15:0]          init_left;
     logic [15:0]          refresh_cnt;
     logic                 refresh_due;
 
-    assign refresh_due = (refresh_cnt >= REFRESH_INT[15:0]);
+    assign refresh_due = (refresh_cnt >= 16'(REFRESH_INT));
 
     // Read data timing. cmd is registered, so a READ issued at edge T reaches
     // the part at T+1 and its data is samplable at T+1+CAS_LATENCY. rd_pipe[0]
@@ -205,7 +211,7 @@ module sdram_mp #(
             rr_ptr       <= '0;
             init_done    <= 1'b0;
             timer        <= '0;
-            init_left    <= INIT_NOP[15:0];
+            init_left    <= 16'(INIT_NOP);
             refresh_cnt  <= '0;
             rd_pipe      <= '0;
             left         <= '0;
@@ -238,7 +244,7 @@ module sdram_mp #(
             S_INIT_PRE: begin
                 cmd       <= CMD_PRE;
                 sdram_a   <= ROW_BITS'(1) << 10;   // A10 = precharge all banks
-                timer     <= T_RP[15:0];
+                timer     <= 16'(T_RP);
                 init_left <= 16'd8;                // eight refreshes before MRS
                 state     <= S_INIT_REF;
             end
@@ -246,12 +252,12 @@ module sdram_mp #(
             S_INIT_REF: if (timer == 0) begin
                 if (init_left != 0) begin
                     cmd       <= CMD_REF;
-                    timer     <= T_RFC[15:0];
+                    timer     <= 16'(T_RFC);
                     init_left <= init_left - 16'd1;
                 end else begin
                     cmd     <= CMD_MRS;
                     sdram_a <= MODE_REG;
-                    timer   <= T_MRD[15:0];
+                    timer   <= 16'(T_MRD);
                     state   <= S_INIT_MRS;
                 end
             end
@@ -268,7 +274,7 @@ module sdram_mp #(
                     // Every transaction ends precharged, so AUTO REFRESH is
                     // safe to issue without a preceding PRECHARGE ALL.
                     cmd         <= CMD_REF;
-                    timer       <= T_RFC[15:0];
+                    timer       <= 16'(T_RFC);
                     refresh_cnt <= '0;
                     state       <= S_REF;
                 end else if (have_req) begin
@@ -284,7 +290,7 @@ module sdram_mp #(
                     p_wcnt        <= '0;
                     rr_ptr        <= (winner == GRANT_BITS'(PORTS-1)) ? '0
                                                                      : winner + 1'b1;
-                    timer         <= T_RCD[15:0];
+                    timer         <= 16'(T_RCD);
                     state         <= S_ACT;
                 end
             end
@@ -309,7 +315,7 @@ module sdram_mp #(
                 cur_col <= cur_col + 1'b1;
                 left    <= left - 1'b1;
                 if (left == 1) begin
-                    timer <= cur_we ? T_WR[15:0] : RD_DELAY[15:0];
+                    timer <= cur_we ? 16'(T_WR) : 16'(RD_DELAY);
                     state <= S_TAIL;
                 end
             end
@@ -319,7 +325,7 @@ module sdram_mp #(
                 cmd      <= CMD_PRE;
                 sdram_ba <= cur_bank;
                 sdram_a  <= '0;                   // A10 low: this bank only
-                timer    <= T_RP[15:0];
+                timer    <= 16'(T_RP);
                 state    <= S_PRE;
             end
 
