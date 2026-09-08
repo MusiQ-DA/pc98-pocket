@@ -1540,7 +1540,17 @@ module core_top (
                     bios_access_address <= bios_access_address;
                     bios_write_data     <= bios_write_data;
                     bios_write_byte_cnt <= bios_write_byte_cnt;
-                    tandy_bios_write    <= select_shadow;
+                    // HOLD it, do not re-read select_shadow here.
+                    //
+                    // select_shadow comes from the live ioctl_addr, and by the
+                    // time this state runs the copier has usually popped the
+                    // FIFO -- so it reflects the NEXT entry, not the word being
+                    // written. Inside a slot that is harmless because the
+                    // neighbouring word belongs to the same slot, but the LAST
+                    // word of a slot gets judged by the next slot's address and
+                    // lands in the wrong bank. The shadow decision belongs with
+                    // the address, and the address is latched in state 01.
+                    tandy_bios_write    <= tandy_bios_write;
                     ioctl_wait          <= 1'b1;
 
                     // Hold the external write until ram_rw_complete, or a safety

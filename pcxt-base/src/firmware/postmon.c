@@ -389,7 +389,13 @@ void post_mon_tick(void)
         // What MEM and RD0 should both be, so the screen carries its own key.
         osd_draw_string(&fb, 4 + 15 * 8, 42, "WANT EA 00 00 00 F8", OSD_LABEL);
     } else {
+        // Not on PC-98. This whole branch is gated on post_max >= 0x08, a
+        // port-0x80 progress code that machine never writes, so the line would
+        // read "WAITING" forever -- a permanent PC/AT leftover on a PC-98
+        // screen, which reads as a symptom and is not one.
+#ifndef MACHINE_PC98
         osd_draw_string(&fb, 4, 42, "VEC -- WAITING (MAX<08)", OSD_LABEL);
+#endif
     }
 
     // History, oldest first, so the path through POST is visible at a glance.
