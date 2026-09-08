@@ -34,8 +34,29 @@ module pll (
         .output_clock_frequency1   ("85.909091 MHz"),
         .phase_shift1              ("0 ps"),
         .duty_cycle1               (50),
+        // outclk_2 leaves the chip as dram_clk and is used nowhere else, so its
+        // phase is purely an interface knob: it sets both when the SDRAM
+        // samples our commands and when it launches read data at us.
+        //
+        // It was 11640 ps = 180 deg of the 23280 ps period. STA on run#101
+        // measured the two directions:
+        //
+        //     write/command -> dram_*   setup  +4.395 ns
+        //     read: dram_dq -> core     setup  -2.357 ns
+        //
+        // Moving this phase trades one against the other 1:1 -- earlier means
+        // the part launches read data sooner (more setup for our capture) and
+        // samples our commands sooner (less setup for them). The failing side
+        // was the read, and 6.75 ns of total budget was sitting lopsided in the
+        // write side, so split it evenly: 11640 - 3376 = 8264 ps, which puts
+        // both at roughly +1.0 ns.
+        //
+        // This is the same failure the hardware shows directly: the CPU reads
+        // F8 2E 41 D6 at F000:D880 where the image holds F8 2E E8 D2, with the
+        // low word correct and the next word wrong -- a marginal capture, not a
+        // mapping or protocol fault (docs/HANDOVER.md §1).
         .output_clock_frequency2   ("42.954545 MHz"),
-        .phase_shift2              ("11640 ps"),
+        .phase_shift2              ("8264 ps"),
         .duty_cycle2               (50),
         .output_clock_frequency3   ("28.636360 MHz"),
         .phase_shift3              ("0 ps"),

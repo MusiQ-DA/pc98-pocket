@@ -48,17 +48,29 @@ set fail 0
 if {$n_wr == 0} { puts "FAIL: no analysed paths TO the SDRAM pins"; set fail 1 }
 if {$n_rd == 0} { puts "FAIL: no analysed paths FROM dram_dq";      set fail 1 }
 
-proc worst {args} {
-    set col [eval get_timing_paths $args -npaths 1 -setup]
-    if {[get_collection_size $col] == 0} { return "n/a" }
+proc worst {mode args} {
+    set col [eval get_timing_paths $args -npaths 1 -$mode]
+    if {[get_collection_size $col] == 0} { return "    n/a" }
     foreach_in_collection path $col {
         return [format "%7.3f" [get_path_info $path -slack]]
     }
-    return "n/a"
+    return "    n/a"
 }
-puts "== worst setup slack on those paths =="
-puts [format "  write/command %s   read %s" \
-        [worst -to [get_ports $out_ports]] [worst -from [get_ports $in_ports]]]
+
+# Both edges of both directions.
+#
+# Setup alone is half the picture, and the two directions are COUPLED: they are
+# measured against dram_clk, which is pll.v's phase_shift2 (11640 ps = 180 deg).
+# Moving that phase trades margin between them 1:1 -- earlier helps the read and
+# hurts the write, later the reverse -- so any phase change has to be judged on
+# all four numbers at once, not on the one that was failing.
+puts "== worst slack on those paths =="
+puts [format "  setup:  write/command %s   read %s" \
+        [worst setup -to [get_ports $out_ports]] \
+        [worst setup -from [get_ports $in_ports]]]
+puts [format "  hold :  write/command %s   read %s" \
+        [worst hold  -to [get_ports $out_ports]] \
+        [worst hold  -from [get_ports $in_ports]]]
 
 delete_timing_netlist
 project_close
