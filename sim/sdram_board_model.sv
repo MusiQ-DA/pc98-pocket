@@ -27,7 +27,7 @@ module sdram_board_model #(
     parameter real CLK_MHZ   = 42.954545,
     // Device clock phase, in ns after the controller clock edge. Must track
     // pll.v's phase_shift2, which is what physically generates dram_clk.
-    parameter real PHASE_NS  = 8.264,
+    parameter real PHASE_NS  = 8.730,
     parameter real T_CO_NS   = 7.0,    // controller FF -> device pin
     parameter real T_RET_NS  = 8.0,    // device pin -> controller FF (incl. tAC)
     parameter int  ROW_BITS  = 13,

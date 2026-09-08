@@ -48,15 +48,29 @@ module pll (
         // the part launches read data sooner (more setup for our capture) and
         // samples our commands sooner (less setup for them). The failing side
         // was the read, and 6.75 ns of total budget was sitting lopsided in the
-        // write side, so split it evenly: 11640 - 3376 = 8264 ps, which puts
-        // both at roughly +1.0 ns.
+        // write side. An even split would be 11640 - 3376 = 8264 ps, but the
+        // phase is QUANTISED: this PLL runs a 687.2727 MHz VCO (85.909091 x 8),
+        // so a VCO period is 1455.03 ps and only multiples of 1455 ps land on a
+        // whole number of picoseconds. 8264 is rejected outright --
+        //   Error: PLL Output Counter parameter 'phase_shift' is set to an
+        //   illegal value of '8264 ps'
+        // -- which is why the existing shifts are 11640 (8 VCO periods) and
+        // 17460 (12). The nearest legal step down is 8730 ps, 6 VCO periods,
+        // moving 2910 ps:
+        //
+        //     read           -2.357 + 2.910 = +0.553 ns
+        //     write/command  +4.395 - 2.910 = +1.485 ns
+        //
+        // Both positive. Not the even split, but the finest the hardware
+        // offers without going to 7275 ps, which would put the write side at
+        // +0.030 and simply move the cliff.
         //
         // This is the same failure the hardware shows directly: the CPU reads
         // F8 2E 41 D6 at F000:D880 where the image holds F8 2E E8 D2, with the
         // low word correct and the next word wrong -- a marginal capture, not a
         // mapping or protocol fault (docs/HANDOVER.md §1).
         .output_clock_frequency2   ("42.954545 MHz"),
-        .phase_shift2              ("8264 ps"),
+        .phase_shift2              ("8730 ps"),
         .duty_cycle2               (50),
         .output_clock_frequency3   ("28.636360 MHz"),
         .phase_shift3              ("0 ps"),

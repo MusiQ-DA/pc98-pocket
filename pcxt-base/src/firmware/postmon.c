@@ -31,6 +31,7 @@
 #define ST_STATUS ((volatile uint32_t *) 0x5000000C)
 #define ST_BUSY   (1u << 8)
 
+__attribute__((unused))
 static void guest_poke(uint32_t addr, uint8_t v)
 {
     *ST_ADDR = addr;
@@ -179,9 +180,10 @@ void post_mon_tick(void)
     // "VEC -- WAITING RESTART" indefinitely. Quiet means POST is over and
     // taking the bus for a few reads disturbs nothing.
     static int vectors_read = 0;
-    static uint32_t v16_seg = 0, v16_off = 0, v1a_seg = 0, v1a_off = 0;
+    static uint32_t v16_seg = 0, v16_off = 0;
     static uint32_t v16b_seg = 0, v16b_off = 0;
-    static int scratch_bad = 0;
+    // F000:D880-D885 as the EXT PORT sees it -- a different path from the CPU's.
+    static uint8_t  mem_peek[6] = {0, 0, 0, 0, 0, 0};
     // MUST be past the memory test before taking the bus.
     //
     // The gate used to be "the POST count has been still for a while", and POST
@@ -206,18 +208,36 @@ void post_mon_tick(void)
         v16_seg = guest_peek(0x5A) | ((uint32_t) guest_peek(0x5B) << 8);
         v16b_off = guest_peek(0x58) | ((uint32_t) guest_peek(0x59) << 8);
         v16b_seg = guest_peek(0x5A) | ((uint32_t) guest_peek(0x5B) << 8);
-        v1a_off = guest_peek(0x68) | ((uint32_t) guest_peek(0x69) << 8);
-        v1a_seg = guest_peek(0x6A) | ((uint32_t) guest_peek(0x6B) << 8);
 
-        // And a write/read of our own into a scratch byte the BIOS is done
-        // with, to see whether a fresh round trip survives at all.
-        for (uint32_t i = 0; i < 8; i++) {
-            guest_poke(0x00300u + i, (uint8_t) (0x5Au ^ (i * 0x9Du)));
-        }
-        for (uint32_t i = 0; i < 8; i++) {
-            if (guest_peek(0x00300u + i) != (uint8_t) (0x5Au ^ (i * 0x9Du)))
-                scratch_bad++;
-        }
+        // THE question this build is here to answer.
+        //
+        // The CPU read F8 2E 41 D6 at F000:D880 where the image holds
+        // F8 2E E8 D2, and the other twelve bytes of the window came back
+        // perfect. Exactly one 16-bit word is wrong, reproducibly. Two things
+        // produce that and they need opposite fixes:
+        //
+        //   memory HOLDS 41 D6  -> the BIOS load put it there. The loader
+        //                          writes in 16-bit units and shifts the high
+        //                          byte down, so a lost loader word is exactly
+        //                          this shape.
+        //   memory holds E8 D2  -> the load is fine and the CPU's read path
+        //                          corrupts it.
+        //
+        // Read through the ext port, which is a different path from the CPU's,
+        // so the two cannot both be wrong in the same way by accident. Six
+        // bytes, not four: D884/D885 are known-good on the CPU side, so if
+        // those also come back wrong here the instrument is what is broken, not
+        // the memory. (The self-test master's own sweep of this region returned
+        // a constant 11, which is why that check is worth paying for.)
+        for (uint32_t i = 0; i < 6; i++)
+            mem_peek[i] = guest_peek(0xFD880u + i);
+
+        // Dropped to pay for those six: the INT 1Ah vector, which is not
+        // displayed any more, and the eight-byte scratch round trip, which has
+        // reported 0/8 on every run since it was added. guest_peek TAKES THE
+        // BUS -- adding eight reads for the ROM window is what reproduced the
+        // POST 54 contamination in testB21-23 -- so this build ends up making
+        // fourteen FEWER accesses than the one before it.
         vectors_read = 1;
     }
 
@@ -262,8 +282,9 @@ void post_mon_tick(void)
         hex(4 + 6 * 8, 52, v16b_seg, 4);
         osd_draw_string(&fb, 4 + 10 * 8, 52, ":", OSD_LABEL);
         hex(4 + 11 * 8, 52, v16b_off, 4);
-        osd_draw_string(&fb, 4 + 17 * 8, 52, "SCR", OSD_LABEL);
-        dec(4 + 21 * 8, 52, (uint32_t) scratch_bad);
+        osd_draw_string(&fb, 4 + 17 * 8, 52, "MEM", OSD_LABEL);
+        for (int i = 0; i < 6; i++)
+            hex(4 + (21 + i * 3) * 8, 52, mem_peek[i], 2);
 
         // What the guest actually PUT there, snooped off the bus as POST 05's
         // install loop wrote it. Reading the vector back after the hang shows
@@ -304,10 +325,8 @@ void post_mon_tick(void)
         hex(4 + 4 * 8, 42, v16_seg, 4);
         osd_draw_string(&fb, 4 + 8 * 8, 42, ":", OSD_LABEL);
         hex(4 + 9 * 8, 42, v16_off, 4);
-        osd_draw_string(&fb, 4 + 15 * 8, 42, "1Ah", OSD_LABEL);
-        hex(4 + 19 * 8, 42, v1a_seg, 4);
-        osd_draw_string(&fb, 4 + 23 * 8, 42, ":", OSD_LABEL);
-        hex(4 + 24 * 8, 42, v1a_off, 4);
+        // What MEM and RD0 should both be, so the screen carries its own key.
+        osd_draw_string(&fb, 4 + 15 * 8, 42, "WANT F8 2E E8 D2", OSD_LABEL);
     } else {
         osd_draw_string(&fb, 4, 42, "VEC -- WAITING (MAX<08)", OSD_LABEL);
     }
