@@ -63,6 +63,14 @@ module RAM (
      output logic           font_rd_valid,
      output logic   [15:0]  font_rd_data,
      output logic           font_rd_done,
+    // Second video-side reader: the character generator window.
+     input  logic           cg_rd_req,
+     input  logic   [23:0]  cg_rd_addr,
+     input  logic    [3:0]  cg_rd_len,
+     output logic           cg_rd_ack,
+     output logic           cg_rd_valid,
+     output logic   [15:0]  cg_rd_data,
+     output logic           cg_rd_done,
      input  logic           tandy_bios_flag,
     // Optional flags
     input  logic           enable_a000h,
@@ -231,7 +239,14 @@ module RAM (
         .b_ack              (font_rd_ack),
         .b_rvalid           (font_rd_valid),
         .b_rdata            (font_rd_data),
-        .b_done             (font_rd_done)
+        .b_done             (font_rd_done),
+        .c_req              (cg_rd_req),
+        .c_addr             (cg_rd_addr),
+        .c_len              (cg_rd_len),
+        .c_ack              (cg_rd_ack),
+        .c_rvalid           (cg_rd_valid),
+        .c_rdata            (cg_rd_data),
+        .c_done             (cg_rd_done)
     );
 `else
     KFSDRAM u_KFSDRAM (
@@ -264,6 +279,10 @@ module RAM (
     assign font_rd_valid = 1'b0;
     assign font_rd_data  = 16'h0000;
     assign font_rd_done  = 1'b0;
+    assign cg_rd_ack     = 1'b0;
+    assign cg_rd_valid   = 1'b0;
+    assign cg_rd_data    = 16'h0000;
+    assign cg_rd_done    = 1'b0;
 `endif
 
 

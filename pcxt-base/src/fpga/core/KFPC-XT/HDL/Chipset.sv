@@ -304,6 +304,10 @@ module CHIPSET #(
     wire [23:0] font_rd_addr;
     wire  [3:0] font_rd_len;
     wire [15:0] font_rd_data;
+    wire        cg_rd_req, cg_rd_ack, cg_rd_valid, cg_rd_done;
+    wire [23:0] cg_rd_addr;
+    wire  [3:0] cg_rd_len;
+    wire [15:0] cg_rd_data;
 
     PERIPHERALS #(.clk_rate(clk_rate)) u_PERIPHERALS 
     (
@@ -314,6 +318,13 @@ module CHIPSET #(
         .font_rd_valid                      (font_rd_valid),
         .font_rd_data                       (font_rd_data),
         .font_rd_done                       (font_rd_done),
+        .cg_rd_req                          (cg_rd_req),
+        .cg_rd_addr                         (cg_rd_addr),
+        .cg_rd_len                          (cg_rd_len),
+        .cg_rd_ack                          (cg_rd_ack),
+        .cg_rd_valid                        (cg_rd_valid),
+        .cg_rd_data                         (cg_rd_data),
+        .cg_rd_done                         (cg_rd_done),
         .font_wr_clk                        (font_wr_clk),
         .font_wr_en                         (font_wr_en),
         .font_wr_addr                       (font_wr_addr),
@@ -444,6 +455,13 @@ module CHIPSET #(
         .font_rd_valid                      (font_rd_valid),
         .font_rd_data                       (font_rd_data),
         .font_rd_done                       (font_rd_done),
+        .cg_rd_req                          (cg_rd_req),
+        .cg_rd_addr                         (cg_rd_addr),
+        .cg_rd_len                          (cg_rd_len),
+        .cg_rd_ack                          (cg_rd_ack),
+        .cg_rd_valid                        (cg_rd_valid),
+        .cg_rd_data                         (cg_rd_data),
+        .cg_rd_done                         (cg_rd_done),
         .clock                              (sdram_clock),
         .reset                              (sdram_reset),
         .enable_sdram                       (enable_sdram),
