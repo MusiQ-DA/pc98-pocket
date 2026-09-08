@@ -1528,6 +1528,8 @@ module core_top (
     wire  [7:0] ivt16_wr_count;
     wire [15:0] wr_any_count, rd_any_count, ivt_touch_count;
     wire [19:0] wr_last_addr;
+    wire  [3:0] raw_strobes;
+    wire [15:0] wr_low_cycles, rd_low_cycles;
 
     post_monitor u_post (
         .clk            (clk_chipset),
@@ -1553,7 +1555,10 @@ module core_top (
         .wr_any_count   (wr_any_count),
         .rd_any_count   (rd_any_count),
         .ivt_touch_count(ivt_touch_count),
-        .wr_last_addr   (wr_last_addr)
+        .wr_last_addr   (wr_last_addr),
+        .raw_strobes    (raw_strobes),
+        .wr_low_cycles  (wr_low_cycles),
+        .rd_low_cycles  (rd_low_cycles)
     );
 
     //
