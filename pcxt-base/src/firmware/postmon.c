@@ -177,7 +177,18 @@ void post_mon_tick(void)
     static uint32_t v16_seg = 0, v16_off = 0, v1a_seg = 0, v1a_off = 0;
     static uint32_t v16b_seg = 0, v16b_off = 0;
     static int scratch_bad = 0;
-    if (!vectors_read && idle_ticks >= 4000u) {
+    // MUST be past the memory test before taking the bus.
+    //
+    // The gate used to be "the POST count has been still for a while", and POST
+    // 04 -- the base 64 KB memory test -- is by far the longest step, so the
+    // condition came true in the middle of it and guest_peek started competing
+    // with the test it was meant to observe. That is what turned testB21-23
+    // into POST 54, and adding eight more reads for the ROM window reproduced
+    // it immediately.
+    //
+    // post_max >= 0x08 means POST 04 is finished and passed. Until then this
+    // build touches nothing.
+    if (!vectors_read && idle_ticks >= 4000u && ((maxrst >> 16) & 0xFFu) >= 0x08u) {
         // Read INT 16h TWICE. testB26 came back 7044:FC36 where F000:E82E was
         // written, and 5000:FE56 where F000:FE6E was -- bit errors, not
         // misplaced table entries. Two reads separate the two possible causes
@@ -276,7 +287,7 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4 + 23 * 8, 42, ":", OSD_LABEL);
         hex(4 + 24 * 8, 42, v1a_off, 4);
     } else {
-        osd_draw_string(&fb, 4, 42, "VEC -- POST STILL RUNNING", OSD_LABEL);
+        osd_draw_string(&fb, 4, 42, "VEC -- WAITING (MAX<08)", OSD_LABEL);
     }
 
     // History, oldest first, so the path through POST is visible at a glance.
