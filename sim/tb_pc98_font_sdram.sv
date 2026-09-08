@@ -8,8 +8,8 @@
 //
 // The font slice in font_slice.hex was cut from a real font.rom: ANK 'A' at
 // 0x0C10 and hiragana A at 0x3C40, both halves. Its lines are
-// "<word address> <value>", the address already divided by two, because the
-// font is packed two bytes per SDRAM word.
+// "<byte offset> <value>" with one byte per SDRAM word, which is how RAM.sv
+// stores everything and therefore how the loader will write it.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -81,7 +81,7 @@ module tb_pc98_font_sdram;
     wire init_done, stat_idle, stat_refresh;
     wire [0:0] grant;
 
-    sdram_mp #(.PORTS(1), .BURST_MAX(32), .CAS_LATENCY(2),
+    sdram_mp #(.PORTS(1), .BURST_MAX(16), .CAS_LATENCY(2),
                .INIT_NOP(64), .REFRESH_INT(320)) u_sdram (
         .clk(clk), .rst(rst),
         .p_req(p_req), .p_we(1'b0), .p_addr(p_addr), .p_len(p_len),
@@ -128,7 +128,9 @@ module tb_pc98_font_sdram;
                 $display("  FAIL cannot open sim/font_slice.hex"); errors++;
             end
             while ($fscanf(fh, "%h %h\n", waddr, wval) == 2) begin
-                sdr.poke(FONT_BASE + waddr, 16'(wval));
+                // One byte per word: the file gives words, so split them.
+                sdr.poke(FONT_BASE + waddr*2,     16'(wval & 8'hFF));
+                sdr.poke(FONT_BASE + waddr*2 + 1, 16'((wval >> 8) & 8'hFF));
                 want[waddr*2]     = 8'(wval & 8'hFF);
                 want[waddr*2 + 1] = 8'((wval >> 8) & 8'hFF);
                 lines++;

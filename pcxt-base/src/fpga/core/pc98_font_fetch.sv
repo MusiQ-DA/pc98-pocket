@@ -5,14 +5,15 @@
 // sdram_mp wants a word address, a length and a held request. This is the
 // adapter between them.
 //
-// The font is packed two bytes per 16-bit word, which is the natural layout and
-// twice the density RAM.sv uses for guest memory (one PC byte per word, because
-// the PC/AT machine layer needs byte addressing it cannot get any other way).
-// So sixteen bytes is EIGHT words, and the burst is p_len = 7.
+// One byte per 16-bit word, which is how RAM.sv stores everything -- the PC/AT
+// machine layer needs byte addressing and cannot get it any other way. Packing
+// the font two-to-a-word would halve the space and the burst, but then the
+// loader could not write it through the path that already exists, and a second
+// write path is a worse trade than sixteen words instead of eight.
 //
-// That packing is also why this is worth doing as a burst at all: eight words
-// of one transaction cost roughly ACT + tRCD + eight, against eight separate
-// transactions of about seven clocks each.
+// So a glyph is SIXTEEN words, p_len = 15, and still ONE transaction: roughly
+// ACT + tRCD + sixteen, against sixteen separate transactions of about seven
+// clocks each. That is the whole reason to burst.
 //
 // FONT_BASE is where the image was loaded, as a WORD address. It sits above the
 // guest's megabyte so nothing the guest does can reach it -- the font is a ROM
@@ -49,14 +50,8 @@ module pc98_font_fetch #(
     input  wire                  p_done
 );
 
-    // Sixteen bytes is eight words; a glyph always starts on a word boundary
-    // because every glyph is sixteen bytes long and the regions they live in
-    // are aligned, so the low bit of the byte address is not needed.
-    localparam int WORDS = 8;
-
-    // Glyphs are sixteen bytes and their regions are aligned, so a request
-    // never starts on an odd byte and bit 0 has nothing to say.
-    wire _unused_addr0 = f_addr[0];
+    // Sixteen bytes, one per word.
+    localparam int WORDS = 16;
 
     // Collect the burst, then hand it over.
     //
@@ -68,8 +63,8 @@ module pc98_font_fetch #(
     //
     // Sixteen bytes is one glyph and the row buffer wants them one per cycle
     // anyway, so take the whole burst into a register file and play it out.
-    logic [15:0] words [0:WORDS-1];
-    logic  [2:0] wr_idx;
+    logic  [7:0] bytes_q [0:WORDS-1];
+    logic  [3:0] wr_idx;
     logic  [4:0] rd_idx;
     logic        draining;
 
@@ -79,18 +74,18 @@ module pc98_font_fetch #(
             f_busy   <= 1'b0;
             f_valid  <= 1'b0;
             draining <= 1'b0;
-            wr_idx   <= 3'd0;
+            wr_idx   <= 4'd0;
             rd_idx   <= 5'd0;
             p_len    <= LEN_BITS'(WORDS - 1);
         end else begin
             f_valid <= 1'b0;
 
             if (f_req && !f_busy) begin
-                p_addr   <= FONT_BASE + {5'd0, f_addr[19:1]};
+                p_addr   <= FONT_BASE + {4'd0, f_addr};
                 p_len    <= LEN_BITS'(WORDS - 1);
                 p_req    <= 1'b1;
                 f_busy   <= 1'b1;
-                wr_idx   <= 3'd0;
+                wr_idx   <= 4'd0;
                 rd_idx   <= 5'd0;
                 draining <= 1'b0;
             end
@@ -98,8 +93,8 @@ module pc98_font_fetch #(
             if (p_ack) p_req <= 1'b0;
 
             if (p_rvalid) begin
-                words[wr_idx] <= p_rdata;
-                wr_idx        <= wr_idx + 3'd1;
+                bytes_q[wr_idx] <= p_rdata[7:0];
+                wr_idx          <= wr_idx + 4'd1;
             end
 
             // p_done is one cycle and can share it with the last p_rvalid, so
@@ -108,12 +103,9 @@ module pc98_font_fetch #(
 
             if (draining) begin
                 f_valid <= 1'b1;
-                // Low byte of a word first: that is the order the loader wrote
-                // them and the order the glyph's lines run.
-                f_data  <= rd_idx[0] ? words[rd_idx[3:1]][15:8]
-                                     : words[rd_idx[3:1]][7:0];
+                f_data  <= bytes_q[rd_idx[3:0]];
                 rd_idx  <= rd_idx + 5'd1;
-                if (rd_idx == 5'(WORDS*2 - 1)) begin
+                if (rd_idx == 5'(WORDS - 1)) begin
                     draining <= 1'b0;
                     f_busy   <= 1'b0;
                 end
