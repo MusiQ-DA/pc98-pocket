@@ -71,6 +71,14 @@ module tb_ram_ab;
 
     int errors = 0;
     int timeouts = 0;
+    // How many clocks one loader byte costs, start of strobe to ready for the
+    // next. APF delivers a 32-bit word about every 75 clk_74a cycles, which at
+    // 42.95 MHz is ~43 chipset clocks for TWO 16-bit words -- so the budget is
+    // ~21.7 clocks per word, ~10.9 per byte. Anything slower overflows the load
+    // FIFO, and run#107 measured 4682 words dropped.
+    int ld_clocks = 0;
+    int ld_bytes  = 0;
+    bit ld_timing = 0;
     int bios_errors = 0;
     int load_errors = 0;
 
@@ -133,6 +141,8 @@ module tb_ram_ab;
     // revealing.
     task automatic bus_write_loader(input int addr, input logic [7:0] d);
         int guard;
+        int t0;
+        t0 = ld_clocks;
         address = 20'(addr);
         internal_data_bus = d;
         no_command_state = 0;
@@ -146,7 +156,8 @@ module tb_ram_ab;
         end
         memory_write_n = 1;
         no_command_state = 1;
-        repeat (5) @(posedge clock);
+        repeat (2) @(posedge clock);
+        if (ld_timing) ld_bytes++;
     endtask
 
     function automatic logic [7:0] pat(input int a);
@@ -154,6 +165,8 @@ module tb_ram_ab;
     endfunction
 
     logic [7:0] got;
+
+    always @(posedge clock) if (ld_timing) ld_clocks++;
 
     initial begin
 `ifdef SDRAM_USE_MP
@@ -231,8 +244,16 @@ module tb_ram_ab;
         // than the model's T_RP=2 or a corner the reference has always cut. It
         // is not a finding about sdram_mp and must not gate this bench.
 `ifdef SDRAM_USE_MP
+        ld_timing = 1;
         for (int i = 0; i < 2048; i++)
             bus_write_loader(32'hFC000 + i, pat(i + 33));
+        ld_timing = 0;
+        // The number this whole change exists to move. KFSDRAM, measured the
+        // same way before any of it, costs 8.08 clocks/byte; sdram_mp cost
+        // 19.11, and APF's delivery rate allows about 10.9.
+        $display("  loader cost: %0d clocks for %0d bytes = %0d.%02d clocks/byte (budget 10.9)",
+                 ld_clocks, ld_bytes, ld_clocks / ld_bytes,
+                 ((ld_clocks * 100) / ld_bytes) % 100);
         for (int i = 0; i < 2048; i++) begin
             bus_read(32'hFC000 + i, got);
             if (got !== pat(i + 33)) begin

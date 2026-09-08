@@ -1464,7 +1464,15 @@ module core_top (
 
                     // Short settle so the RAM controller returns to IDLE (and
                     // ram_rw_complete drops) before the next byte write.
-                    if (bios_write_wait_cnt >= 8'd4)
+                    //
+                    // Was 4 (five clocks). RAM.sv leaves COMPLETE_RAM_RW as
+                    // soon as write_command drops, which is the cycle after
+                    // bios_write_n goes high, so one clock is all this needs --
+                    // and it is per BYTE, so four of them was most of a tenth
+                    // of the load budget. APF gives about 10.9 chipset clocks
+                    // per byte and run#107 measured 4682 words dropped for
+                    // being slower than that.
+                    if (bios_write_wait_cnt >= 8'd1)
                         bios_load_state     <= 4'h04;
                     else
                         bios_load_state     <= 4'h03;

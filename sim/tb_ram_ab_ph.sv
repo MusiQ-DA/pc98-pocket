@@ -135,7 +135,7 @@ module tb_ram_ab_ph;
         end
         memory_write_n = 1;
         no_command_state = 1;
-        repeat (5) @(posedge clock);
+        repeat (2) @(posedge clock);
     endtask
 
     task automatic bus_read(input int addr, output logic [7:0] d);

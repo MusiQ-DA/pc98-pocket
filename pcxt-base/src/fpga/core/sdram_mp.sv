@@ -124,7 +124,7 @@ module sdram_mp #(
 
     typedef enum logic [3:0] {
         S_INIT_NOP, S_INIT_PRE, S_INIT_REF, S_INIT_MRS,
-        S_IDLE, S_ACT, S_RW, S_TAIL, S_PRE, S_REF_PRE, S_REF
+        S_IDLE, S_ACT, S_RW, S_TAIL, S_REF_PRE, S_REF, S_PRE_MISS
     } state_t;
 
     state_t state;
@@ -205,6 +205,45 @@ module sdram_mp #(
     wire [COL_BITS-1:0]  act_col  = p_addr[winner][COL_BITS-1:0];
     wire [BANK_BITS-1:0] cur_bank = cur_addr[COL_BITS +: BANK_BITS];
 
+    // ------------------------------------------------------- open-row policy
+    //
+    // Every transaction used to be ACTIVATE / access / PRECHARGE, which costs
+    // four clocks before the access (ACT plus T_RCD) and four after (T_WR is
+    // owed anyway, then PRE plus T_RP) whether or not the row was already
+    // there. Measured against RAM.sv on the BIOS loader's cadence that made a
+    // byte cost 19.11 clocks where KFSDRAM costs 8.08.
+    //
+    // That is not a performance nicety, it is the bug. data_loader cannot be
+    // backpressured -- APF delivers a 32-bit word roughly every 75 clk_74a
+    // cycles, about 21.7 chipset clocks per 16-bit word or 10.9 per byte, and
+    // core_top's load FIFO drops silently when it fills. At 19.11 the consumer
+    // loses by 1.75x and the BIOS image arrives full of holes: run#107
+    // measured 4682 words thrown away, and run#106 caught two of them as
+    // F000:D882-D883 and D88E-D88F never being written at all.
+    //
+    // So leave the row open. A hit skips both halves; a miss on the same bank
+    // pays one PRECHARGE it would have paid anyway. The loader writes
+    // consecutive addresses, and with {row,bank,col} = addr[23:11],
+    // addr[10:9], addr[8:0] that is 511 hits in every 512.
+    //
+    // Correctness rests on three things:
+    //   * a row that is open must be PRECHARGEd before a different row in the
+    //     same bank is ACTIVATEd (S_PRE_MISS),
+    //   * AUTO REFRESH is illegal with any bank open, so the refresh path
+    //     still does PRECHARGE ALL and clears every flag (S_REF_PRE), and
+    //   * tWR is still owed after the last write before any precharge, which
+    //     S_TAIL continues to pay before returning to S_IDLE.
+    // tWR is owed between the last write and a PRECHARGE of that bank -- and
+    // with the row left open, that precharge no longer happens on the way out.
+    // So the write transaction does not have to sit through it: report done
+    // immediately and let this guard hold off the only two things that can
+    // precharge (a row miss, and the refresh path's PRECHARGE ALL).
+    logic [15:0]                pre_guard;
+    logic [(1<<BANK_BITS)-1:0]  row_open;
+    logic [ROW_BITS-1:0]        open_row [(1<<BANK_BITS)];
+    wire row_hit  = row_open[act_bank] && (open_row[act_bank] == act_row);
+    wire row_miss = row_open[act_bank] && (open_row[act_bank] != act_row);
+
     // ------------------------------------------------------------- sequencer
 
     always_ff @(posedge clk) begin
@@ -231,6 +270,8 @@ module sdram_mp #(
             cur_we       <= 1'b0;
             cur_addr     <= '0;
             cur_col      <= '0;
+            row_open     <= '0;
+            pre_guard    <= '0;
         end else begin
             // Defaults; the states below override what they need.
             //
@@ -257,6 +298,7 @@ module sdram_mp #(
             rd_pipe <= {rd_pipe[RD_DELAY-1:0], 1'b0};
             if (refresh_cnt != 16'hFFFF) refresh_cnt <= refresh_cnt + 16'd1;
             if (timer != 0)              timer       <= timer - 16'd1;
+            if (pre_guard != 0)          pre_guard   <= pre_guard - 16'd1;
 
             case (state)
 
@@ -296,7 +338,7 @@ module sdram_mp #(
 
             // ---- steady state --------------------------------------------
             S_IDLE: if (timer == 0) begin
-                if (refresh_due) begin
+                if (refresh_due && pre_guard == 0) begin
                     // PRECHARGE ALL first, then AUTO REFRESH -- exactly what
                     // KFSDRAM does (REFRESH_PALL -> REFRESH).
                     //
@@ -318,11 +360,9 @@ module sdram_mp #(
                     sdram_a     <= ROW_BITS'(1) << 10;   // A10 = all banks
                     timer       <= 16'(T_RP);
                     refresh_cnt <= '0;
+                    row_open    <= '0;                   // nothing is open now
                     state       <= S_REF_PRE;
-                end else if (have_req) begin
-                    cmd           <= CMD_ACT;
-                    sdram_a       <= act_row;
-                    sdram_ba      <= act_bank;
+                end else if (have_req && !(row_miss && pre_guard != 0)) begin
                     cur_addr      <= p_addr[winner];
                     cur_col       <= act_col;
                     cur_we        <= p_we[winner];
@@ -332,8 +372,27 @@ module sdram_mp #(
                     p_wcnt        <= '0;
                     rr_ptr        <= (winner == GRANT_BITS'(PORTS-1)) ? '0
                                                                      : winner + 1'b1;
-                    timer         <= 16'(T_RCD);
-                    state         <= S_ACT;
+                    if (row_hit) begin
+                        // Already there: straight to the access, no command
+                        // and no T_RCD.
+                        state <= S_RW;
+                    end else if (row_miss && pre_guard == 0) begin
+                        // Wrong row in this bank -- close it, then activate.
+                        cmd      <= CMD_PRE;
+                        sdram_ba <= act_bank;
+                        sdram_a  <= '0;              // A10 low: this bank only
+                        timer    <= 16'(T_RP);
+                        row_open[act_bank] <= 1'b0;
+                        state    <= S_PRE_MISS;
+                    end else begin
+                        cmd      <= CMD_ACT;
+                        sdram_a  <= act_row;
+                        sdram_ba <= act_bank;
+                        row_open[act_bank] <= 1'b1;
+                        open_row[act_bank] <= act_row;
+                        timer    <= 16'(T_RCD);
+                        state    <= S_ACT;
+                    end
                 end
             end
 
@@ -344,6 +403,18 @@ module sdram_mp #(
             end
 
             S_REF: if (timer == 0) state <= S_IDLE;
+
+            // The bank was open on the wrong row; T_RP has been paid, so
+            // activate the one that was asked for.
+            S_PRE_MISS: if (timer == 0) begin
+                cmd      <= CMD_ACT;
+                sdram_a  <= cur_addr[ADDR_BITS-1 -: ROW_BITS];
+                sdram_ba <= cur_bank;
+                row_open[cur_bank] <= 1'b1;
+                open_row[cur_bank] <= cur_addr[ADDR_BITS-1 -: ROW_BITS];
+                timer    <= 16'(T_RCD);
+                state    <= S_ACT;
+            end
 
             S_ACT: if (timer == 0) state <= S_RW;
 
@@ -363,21 +434,24 @@ module sdram_mp #(
                 cur_col <= cur_col + 1'b1;
                 left    <= left - 1'b1;
                 if (left == 1) begin
-                    timer <= cur_we ? 16'(T_WR) : 16'(RD_DELAY);
-                    state <= S_TAIL;
+                    if (cur_we) begin
+                        // The write is committed the moment the command is on
+                        // the bus. Nothing downstream needs tWR -- only a
+                        // later PRECHARGE does -- so finish here and let
+                        // pre_guard carry the obligation.
+                        p_done[grant] <= 1'b1;
+                        pre_guard     <= 16'(T_WR);
+                        state         <= S_IDLE;
+                    end else begin
+                        timer <= 16'(RD_DELAY);
+                        state <= S_TAIL;
+                    end
                 end
             end
 
-            // Drain the read pipeline, or honour tWR, before precharging.
+            // Reads only: drain the pipeline so p_rvalid has presented before
+            // the transaction is declared done. Writes never come here.
             S_TAIL: if (timer == 0) begin
-                cmd      <= CMD_PRE;
-                sdram_ba <= cur_bank;
-                sdram_a  <= '0;                   // A10 low: this bank only
-                timer    <= 16'(T_RP);
-                state    <= S_PRE;
-            end
-
-            S_PRE: if (timer == 0) begin
                 p_done[grant] <= 1'b1;
                 state         <= S_IDLE;
             end
