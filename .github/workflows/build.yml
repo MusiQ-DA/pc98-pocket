@@ -77,6 +77,15 @@ jobs:
           ./obj_tv/v | tee tv.log
           grep -q "RESULT: PASS" tv.log
 
+      - name: glyph addresses match a real FONT.ROM
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_glyph_addr \
+            -Isim -Ipcxt-base/src/fpga/core \
+            sim/tb_pc98_glyph_addr.sv pcxt-base/src/fpga/core/pc98_glyph_addr.sv \
+            -o g --Mdir obj_ga
+          ./obj_ga/g | tee ga.log
+          grep -q "RESULT: PASS" ga.log
+
       - name: raster is the 640x400 one PC-98 software expects
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_timing \
