@@ -54,7 +54,7 @@ static uint8_t guest_peek(uint32_t addr)
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
-#define PANEL_H 98
+#define PANEL_H 108
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -209,6 +209,21 @@ void post_mon_tick(void)
     // a null pointer at 0x67, so there is no stray 55 AA signature and that
     // hypothesis is closed. The line is reused for a second read instead.)
     if (vectors_read) {
+        // The BIOS image in SDRAM, at the exact words the IVT loop copies from.
+        //
+        // testB31 caught the guest WRITING F000:412E where the table holds
+        // E82E -- the low byte right, the high byte wrong. That loop is a plain
+        // movsw, so the value was already wrong when it was READ out of
+        // F000:D881. Reading the same bytes ourselves says whether SDRAM is
+        // holding the wrong image or handing the CPU a bad read of a good one.
+        //
+        // Expected, straight out of boot.bin:
+        //   D87E E7   D87F 59   D880 F8   D881 2E
+        //   D882 E8   D883 D2   D884 EF   D885 50
+        osd_draw_string(&fb, 4, 92, "ROM", OSD_LABEL);
+        for (int i = 0; i < 8; i++)
+            hex(4 + (4 + i * 3) * 8, 92, guest_peek(0xFD87Eu + (uint32_t) i), 2);
+
         // Second read of 16h, and our own scratch round trip.
         osd_draw_string(&fb, 4, 52, "16h#2", OSD_LABEL);
         hex(4 + 6 * 8, 52, v16b_seg, 4);
