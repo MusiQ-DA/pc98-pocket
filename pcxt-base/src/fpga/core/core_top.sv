@@ -1526,7 +1526,7 @@ module core_top (
     wire [15:0] post_restarts;
     wire [15:0] ivt16_off, ivt16_seg;
     wire  [7:0] ivt16_wr_count;
-    wire [15:0] wr_any_count, wr_aen_count;
+    wire [15:0] wr_any_count, rd_any_count, ivt_touch_count;
     wire [19:0] wr_last_addr;
 
     post_monitor u_post (
@@ -1551,7 +1551,8 @@ module core_top (
         .ivt16_seg      (ivt16_seg),
         .ivt16_wr_count (ivt16_wr_count),
         .wr_any_count   (wr_any_count),
-        .wr_aen_count   (wr_aen_count),
+        .rd_any_count   (rd_any_count),
+        .ivt_touch_count(ivt_touch_count),
         .wr_last_addr   (wr_last_addr)
     );
 
