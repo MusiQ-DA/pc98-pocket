@@ -68,6 +68,13 @@ module PERIPHERALS #(
         input   logic           font_rd_valid,
         input   logic   [15:0]  font_rd_data,
         input   logic           font_rd_done,
+        output  logic           cg_rd_req,
+        output  logic   [23:0]  cg_rd_addr,
+        output  logic    [3:0]  cg_rd_len,
+        input   logic           cg_rd_ack,
+        input   logic           cg_rd_valid,
+        input   logic   [15:0]  cg_rd_data,
+        input   logic           cg_rd_done,
         input   logic           font_wr_clk,
         input   logic           font_wr_en,
         input   logic   [10:0]  font_wr_addr,
@@ -256,8 +263,13 @@ module PERIPHERALS #(
     // matching address cannot reach it.
     wire    tvram_mem_select        = ~iorq && ~address_enable_n
                                     && (address[19:14] == 6'b101000);
+    // A4000-A4FFF: the character generator window. RAM.sv already keeps SDRAM
+    // out of A0000-A7FFF, so this only has to claim the read.
+    wire    cgwin_mem_select        = ~iorq && ~address_enable_n
+                                    && (address[19:12] == 8'b10100100);
 `else
     wire    tvram_mem_select        = 1'b0;
+    wire    cgwin_mem_select        = 1'b0;
 `endif
     wire    hgc_mem_select          = `ENABLE_HGC ? (~iorq && ~address_enable_n && hgc_enable & (address[19:15] == {5'b1011, hgc_grph_page})) : 1'b0; // B0000 - BFFFF (32KB / 64 KB)
     wire    uart_chip_select        = (~address_enable_n && {address[15:3], 3'd0} == 16'h03F8);
@@ -1241,6 +1253,64 @@ end
         .rd_byte(pc98_font_row), .kanji_seen(pc98_kanji_seen)
     );
 
+    // ------------------------------------------------------- CG window
+    //
+    // The guest reads glyphs through A4000-A4FFF, having set the code on ports
+    // 0x00A1/0x00A3/0x00A5. Its own SDRAM port, because it is idle almost all
+    // the time -- one prefetch per character asked for -- while the row buffer
+    // runs for the whole visible frame.
+    //
+    // The port decode is qualified the way every other one here had to be, and
+    // for the same reason: address and command lines do not change together, so
+    // a write on its way to another port sweeps through these for a cycle. A
+    // corrupted window makes the guest draw the wrong character, which is
+    // harder to notice than a corrupted POST code.
+    wire cg_io_hit = ~io_write_n & ~address_enable_n
+                   & ((address[15:0] == 16'h00A1)
+                   |  (address[15:0] == 16'h00A3)
+                   |  (address[15:0] == 16'h00A5));
+    logic cg_io_q, cg_io_qq;
+    logic  [7:0] cg_io_data;
+    logic [15:0] cg_io_port;
+    logic        cg_io_commit;
+
+    always_ff @(posedge clock) begin
+        cg_io_commit <= 1'b0;
+        if (reset) begin
+            cg_io_q <= 1'b0; cg_io_qq <= 1'b0;
+        end else begin
+            cg_io_q  <= cg_io_hit;
+            cg_io_qq <= cg_io_q;
+            if (cg_io_hit) begin
+                cg_io_data <= internal_data_bus;
+                cg_io_port <= address[15:0];
+            end
+            if (cg_io_q && cg_io_qq && ~cg_io_hit) cg_io_commit <= 1'b1;
+        end
+    end
+
+    wire [7:0] cgwin_q;
+    wire       cg_f_req, cg_f_busy, cg_f_valid;
+    wire [19:0] cg_f_addr;
+    wire  [7:0] cg_f_data;
+
+    pc98_cgwindow u_pc98_cgwin (
+        .clk(clock), .rst(reset),
+        .io_wr(cg_io_commit), .io_port(cg_io_port), .io_data(cg_io_data),
+        .rd_addr(address[11:0]), .rd_data(cgwin_q),
+        .f_req(cg_f_req), .f_addr(cg_f_addr), .f_busy(cg_f_busy),
+        .f_valid(cg_f_valid), .f_data(cg_f_data), .busy()
+    );
+
+    pc98_font_fetch u_pc98_cgfetch (
+        .clk(clock), .rst(reset),
+        .f_req(cg_f_req), .f_addr(cg_f_addr), .f_busy(cg_f_busy),
+        .f_valid(cg_f_valid), .f_data(cg_f_data),
+        .p_req(cg_rd_req), .p_addr(cg_rd_addr), .p_len(cg_rd_len),
+        .p_ack(cg_rd_ack), .p_rvalid(cg_rd_valid), .p_rdata(cg_rd_data),
+        .p_done(cg_rd_done)
+    );
+
     pc98_font_fetch u_pc98_fetch (
         .clk(clock), .rst(reset),
         .f_req(pc98_f_req), .f_addr(pc98_f_addr), .f_busy(pc98_f_busy),
@@ -1930,6 +2000,11 @@ end
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= tvram_cpu_q;
+        end
+        else if (cgwin_mem_select && (~memory_read_n))
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= cgwin_q;
         end
 `endif
         else if (`ENABLE_CGA && cga_mem_select && (~memory_read_n))

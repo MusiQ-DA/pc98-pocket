@@ -110,7 +110,21 @@ module sdram_kf_shim #(
     output logic                              b_ack,
     output logic                              b_rvalid,
     output logic [sdram_data_width-1:0]       b_rdata,
-    output logic                              b_done
+    output logic                              b_done,
+
+    // ---------------------------------------------------------------- port C
+    //
+    // The character generator window, which the guest reads glyphs through. It
+    // is idle almost all the time -- one prefetch per character the guest asks
+    // for -- so it gets a port of its own rather than a priority scheme against
+    // the row buffer, which runs for the whole visible frame.
+    input  wire                               c_req,
+    input  wire  [ADDR_BITS_PUB-1:0]          c_addr,
+    input  wire  [LEN_BITS_PUB-1:0]           c_len,
+    output logic                              c_ack,
+    output logic                              c_rvalid,
+    output logic [sdram_data_width-1:0]       c_rdata,
+    output logic                              c_done
 );
 
     localparam int ADDR_BITS = sdram_col_width + sdram_row_width + sdram_bank_width;
@@ -122,7 +136,7 @@ module sdram_kf_shim #(
     // word, so that is one transaction instead of sixteen.
     localparam int BURST_MAX = 16;
     localparam int LEN_BITS  = (BURST_MAX > 1) ? $clog2(BURST_MAX) : 1;
-    localparam int PORTS     = 2;
+    localparam int PORTS     = 3;
 
     // sdram_mp schedules its own refresh; the KF_REF far end is stock KFSDRAM
     // and consumes enable_refresh directly (see its instantiation below).
@@ -285,7 +299,11 @@ module sdram_kf_shim #(
     assign b_done   = 1'b0;
     assign b_rvalid = 1'b0;
     assign b_rdata  = '0;
-    wire _unused_b  = &{1'b0, b_req, b_addr, b_len, 1'b0};
+    assign c_ack    = 1'b0;
+    assign c_done   = 1'b0;
+    assign c_rvalid = 1'b0;
+    assign c_rdata  = '0;
+    wire _unused_b  = &{1'b0, b_req, b_addr, b_len, c_req, c_addr, c_len, 1'b0};
 
     wire _unused_mp_if = &{1'b0, kf_write_flag, 1'b0};
 
@@ -298,12 +316,14 @@ module sdram_kf_shim #(
 
     // Port A is the guest (KFSDRAM's protocol, one word at a time), port B the
     // font fetch. Packed so the widths follow the controller's parameters.
-    wire [PORTS-1:0] mp_req  = {b_req, req};
-    wire [PORTS-1:0] mp_we   = {1'b0,  we_r};
-    wire [PORTS-1:0][ADDR_BITS-1:0] mp_addr  = {b_addr, addr_r};
-    wire [PORTS-1:0][LEN_BITS-1:0]  mp_len   = {b_len,  LEN_BITS'(0)};
-    wire [PORTS-1:0][sdram_data_width-1:0] mp_wdata = {{sdram_data_width{1'b0}}, data_in};
-    wire [PORTS-1:0][MASK_BITS-1:0] mp_wmask = {{MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}};
+    wire [PORTS-1:0] mp_req  = {c_req, b_req, req};
+    wire [PORTS-1:0] mp_we   = {1'b0,  1'b0,  we_r};
+    wire [PORTS-1:0][ADDR_BITS-1:0] mp_addr  = {c_addr, b_addr, addr_r};
+    wire [PORTS-1:0][LEN_BITS-1:0]  mp_len   = {c_len,  b_len,  LEN_BITS'(0)};
+    wire [PORTS-1:0][sdram_data_width-1:0] mp_wdata =
+        {{sdram_data_width{1'b0}}, {sdram_data_width{1'b0}}, data_in};
+    wire [PORTS-1:0][MASK_BITS-1:0] mp_wmask =
+        {{MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}};
     wire [PORTS-1:0] mp_ack, mp_done;
     wire [$clog2(PORTS)-1:0] mp_grant;
 
@@ -311,11 +331,15 @@ module sdram_kf_shim #(
     assign p_done   = mp_done[0];
     assign b_ack    = mp_ack[1];
     assign b_done   = mp_done[1];
+    assign c_ack    = mp_ack[2];
+    assign c_done   = mp_done[2];
     // Read data is tagged with the owning port, so each master sees only its own.
-    assign p_rvalid = mp_rvalid & (mp_grant == 1'b0);
-    assign b_rvalid = mp_rvalid & (mp_grant == 1'b1);
+    assign p_rvalid = mp_rvalid & (mp_grant == 2'd0);
+    assign b_rvalid = mp_rvalid & (mp_grant == 2'd1);
+    assign c_rvalid = mp_rvalid & (mp_grant == 2'd2);
     assign p_rdata  = mp_rdata;
     assign b_rdata  = mp_rdata;
+    assign c_rdata  = mp_rdata;
 
     sdram_mp #(
         .PORTS       (PORTS),
