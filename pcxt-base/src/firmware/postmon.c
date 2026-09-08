@@ -296,11 +296,13 @@ void post_mon_tick(void)
         // Words the BIOS-load FIFO threw away, and how deep it ever got. A
         // nonzero DROP means the image in memory is incomplete before the CPU
         // ever runs, and nothing downstream of it is worth debugging.
+        // The panel is 320 px = 40 columns of the 8 px font, so anything past
+        // column 40 is simply not on screen -- HW at column 38 ran off the
+        // right edge. DROP stays here, HW moves to the spare half of the WROTE
+        // row below.
         uint32_t rlf = *POST_RLF;
-        osd_draw_string(&fb, 4 + 25 * 8, 52, "DROP", OSD_LABEL);
-        dec(4 + 30 * 8, 52, rlf & 0xFFFFu);
-        osd_draw_string(&fb, 4 + 35 * 8, 52, "HW", OSD_LABEL);
-        dec(4 + 38 * 8, 52, rlf >> 16);
+        osd_draw_string(&fb, 4 + 24 * 8, 52, "DROP", OSD_LABEL);
+        dec(4 + 29 * 8, 52, rlf & 0xFFFFu);
 
         // What the guest actually PUT there, snooped off the bus as POST 05's
         // install loop wrote it. Reading the vector back after the hang shows
@@ -312,6 +314,8 @@ void post_mon_tick(void)
         hex(4 + 11 * 8, 62, *POST_IVT16B & 0xFFFFu, 4);
         osd_draw_string(&fb, 4 + 17 * 8, 62, "NW", OSD_LABEL);
         dec(4 + 20 * 8, 62, a >> 24);
+        osd_draw_string(&fb, 4 + 24 * 8, 62, "HW", OSD_LABEL);
+        dec(4 + 27 * 8, 62, rlf >> 16);
 
         // Which term of the snoop filter is wrong: writes seen at all, writes
         // seen with AEN low, and where the last one went.
