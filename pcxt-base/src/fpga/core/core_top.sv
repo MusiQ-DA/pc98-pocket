@@ -1524,6 +1524,8 @@ module core_top (
     wire [15:0] post_count;
     wire  [7:0] post_max;
     wire [15:0] post_restarts;
+    wire [15:0] ivt16_off, ivt16_seg;
+    wire  [7:0] ivt16_wr_count;
 
     post_monitor u_post (
         .clk            (clk_chipset),
@@ -1542,7 +1544,10 @@ module core_top (
         .live_mem_max   (post_live_max),
         .post_count     (post_count),
         .post_max       (post_max),
-        .restart_count  (post_restarts)
+        .restart_count  (post_restarts),
+        .ivt16_off      (ivt16_off),
+        .ivt16_seg      (ivt16_seg),
+        .ivt16_wr_count (ivt16_wr_count)
     );
 
     //

@@ -56,7 +56,14 @@ module post_monitor #(
     output logic [19:0] live_mem_max,     // highest address touched, ever
     output logic [15:0] post_count,       // how many codes have been seen, ever
     output logic [7:0] post_max,          // highest code seen
-    output logic [15:0] restart_count     // times the guest went back to POST 00
+    output logic [15:0] restart_count,    // times the guest went back to POST 00
+    // What the guest WROTE to INT 16h's vector, caught on the bus as it went
+    // past. Reading that vector back after the hang shows the aftermath: by
+    // then the runaway CPU has been scribbling. This is the value at the moment
+    // POST 05's install loop stored it.
+    output logic [15:0] ivt16_off,
+    output logic [15:0] ivt16_seg,
+    output logic  [7:0] ivt16_wr_count
 );
 
     // The history FREEZES once it holds DEPTH codes.
@@ -85,6 +92,12 @@ module post_monitor #(
 
     logic [$clog2(DEPTH+1)-1:0] filled;
 
+    // Snoop guest writes to 0x58-0x5B. Purely passive -- it watches the same
+    // bus the POST codes come from and never asks for it.
+    wire mem_write = ~memory_write_n & ~address_enable_n;
+    wire in_ivt16  = (address[19:2] == 18'h00016);   // 0x58..0x5B
+    logic mem_write_q;
+
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             post_code     <= 8'h00;
@@ -98,11 +111,26 @@ module post_monitor #(
             restart_count <= 16'd0;
             filled        <= '0;
             io_write_q    <= 1'b0;
+            mem_write_q   <= 1'b0;
+            ivt16_off     <= 16'h0;
+            ivt16_seg     <= 16'h0;
+            ivt16_wr_count<= 8'd0;
             is_post_q     <= 1'b0;
             is_post_d     <= 1'b0;
             data_q        <= 8'h00;
             mem_addr_q    <= 20'h0;
         end else begin
+            mem_write_q <= mem_write;
+            if (mem_write && ~mem_write_q && in_ivt16) begin
+                case (address[1:0])
+                    2'd0: ivt16_off[7:0]   <= cpu_data;
+                    2'd1: ivt16_off[15:8]  <= cpu_data;
+                    2'd2: ivt16_seg[7:0]   <= cpu_data;
+                    2'd3: ivt16_seg[15:8]  <= cpu_data;
+                endcase
+                if (ivt16_wr_count != 8'hFF) ivt16_wr_count <= ivt16_wr_count + 8'd1;
+            end
+
             io_write_q <= io_write;
             is_post_d  <= is_post;
             is_post_q  <= is_post_stable;

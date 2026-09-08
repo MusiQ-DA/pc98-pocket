@@ -112,6 +112,9 @@ module softcpu_subsystem (
     input  [15:0] post_count,
     input   [7:0] post_max,
     input  [15:0] post_restarts,
+    input  [15:0] ivt16_off,
+    input  [15:0] ivt16_seg,
+    input   [7:0] ivt16_wr_count,
     output        osd_active,
     output        osd_credits_req,
     output        osd_video_req,
@@ -851,6 +854,8 @@ module softcpu_subsystem (
             32'h5000_0020: cpu_mem_rdata = {8'd0, post_max, post_restarts};
             32'h5000_0024: cpu_mem_rdata = {12'd0, post_live_addr};
             32'h5000_0028: cpu_mem_rdata = {12'd0, post_live_max};
+            32'h5000_002C: cpu_mem_rdata = {ivt16_wr_count, ivt16_seg, ivt16_off[15:8]};
+            32'h5000_0030: cpu_mem_rdata = {16'd0, ivt16_off};
             default:       cpu_mem_rdata = 32'd0;
         endcase
     end
