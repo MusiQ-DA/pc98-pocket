@@ -25,6 +25,9 @@
 
 module sdram_board_model #(
     parameter real CLK_MHZ   = 42.954545,
+    // Device clock phase, in ns after the controller clock edge. Must track
+    // pll.v's phase_shift2, which is what physically generates dram_clk.
+    parameter real PHASE_NS  = 8.264,
     parameter real T_CO_NS   = 7.0,    // controller FF -> device pin
     parameter real T_RET_NS  = 8.0,    // device pin -> controller FF (incl. tAC)
     parameter int  ROW_BITS  = 13,
@@ -55,10 +58,31 @@ module sdram_board_model #(
 
     localparam real HALF_NS = 500.0 / CLK_MHZ;   // half period (11.64 ns)
 
-    // Device clock: controller clock delayed by half a period == 180 degrees,
-    // which is what pll.v's phase_shift2 = "11640 ps" produces on the board.
-    logic dev_clk = 1'b1;
-    always #(HALF_NS) dev_clk = ~dev_clk;
+    // Device clock: the controller clock delayed by PHASE_NS, which is exactly
+    // what pll.v's phase_shift2 does to outclk_2 before it leaves as dram_clk.
+    //
+    // It was hard-coded to half a period (180 deg) back when phase_shift2 was
+    // 11640 ps. That phase is now an interface knob -- STA showed the read and
+    // write directions trading margin against it 1:1 -- so the model has to
+    // follow it, or the bench stops describing the board.
+    //
+    // Generated explicitly rather than as `assign #(PHASE_NS) dev_clk = clk`:
+    // a net delay is inertial, and with a delay near the half period it eats
+    // the very edges being modelled. That version logged 3584 tRP violations
+    // for the KFSDRAM reference at EVERY phase, including the 11.64 ns it was
+    // replacing -- a modelling artefact that would have read as a finding.
+    //
+    // Note this gives the bench a real floor: commands reach the part T_CO_NS
+    // after the controller's edge, so a PHASE_NS at or below that would have
+    // the part sampling the previous cycle's command, and it would fail loudly.
+    logic dev_clk = 1'b0;
+    initial begin
+        #(HALF_NS + PHASE_NS);      // clk's first posedge, plus the phase
+        forever begin
+            dev_clk = 1'b1; #(HALF_NS);
+            dev_clk = 1'b0; #(HALF_NS);
+        end
+    end
 
     // Controller outputs reach the part after T_CO_NS.
     wire [ROW_BITS-1:0]  d_a    ; assign #(T_CO_NS) d_a     = a;
