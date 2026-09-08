@@ -68,6 +68,15 @@ jobs:
           ./obj_map/m | tee map.log
           grep -q "RESULT: PASS" map.log
 
+      - name: TVRAM keeps characters and attributes apart
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_tvram \
+            -Isim -Ipcxt-base/src/fpga/core \
+            sim/tb_pc98_tvram.sv pcxt-base/src/fpga/core/pc98_tvram.sv \
+            -o v --Mdir obj_tv
+          ./obj_tv/v | tee tv.log
+          grep -q "RESULT: PASS" tv.log
+
       - name: ITF bank switches on 0x043D and not on a glitch
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_itf_bank \
