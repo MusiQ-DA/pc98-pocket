@@ -955,6 +955,13 @@ module core_top (
         .rom_read_data              (rom_read_data),
         .rom_load_data              (rom_load_data),
         .rom_load_count             (rom_load_count),
+        .io_port_hist               (io_port_hist),
+        .io_wr_count                (io_wr_count),
+`ifdef MACHINE_PC98
+        .itf_bank                   (itf_bank),
+`else
+        .itf_bank                   (1'b0),
+`endif
         .rlf_drops                  (rlf_drops),
         .rlf_level_max              ({{(16-(RLF_AW+1)){1'b0}}, rlf_level_max}),
         .rom_read_count             (rom_read_count)
@@ -1296,13 +1303,7 @@ module core_top (
 
     // Copier: present the FIFO head to the BIOS FSM as ioctl, honoring ioctl_wait.
     assign ioctl_download = load_active;
-`ifdef MACHINE_PC98
-    // Slot ids come from data.json: 1 = bios.rom, 2 = itf.rom. The FIFO carries
-    // one tag bit, which is enough because PC-98 loads exactly two ROMs.
-    assign ioctl_index    = rlf_head[41] ? 8'd1 : 8'd0;  // itf.rom->1, bios.rom->0
-`else
     assign ioctl_index    = rlf_head[41] ? 8'd2 : 8'd0;  // EC00 (XT-IDE)->2, BIOS->0
-`endif
     assign ioctl_addr     = rlf_head[40:16];
     assign ioctl_data     = rlf_head[15:0];
     reg ioctl_wr_r = 1'b0;
@@ -1340,12 +1341,20 @@ module core_top (
     // over the bottom.
     localparam [19:0] PC98_BIOS_BASE = 20'h E8000;
     localparam [19:0] PC98_ITF_BASE  = 20'h F8000;
-    wire select_pcxt  = (ioctl_index[5:0] == 0) && (ioctl_addr[24:17] == 8'h00);
-    // Slot 1 is the ITF, 32 KB. It occupies the SAME guest addresses as the
-    // top of the system BIOS (F8000-FFFFF), so it goes to the shadow bank --
-    // the loader asserts select_itf while writing and RAM.sv routes it there,
-    // exactly the mechanism the Tandy BIOS shadow already uses.
-    wire select_itf   = (ioctl_index[5:0] == 1) && (ioctl_addr[24:15] == 10'h000);
+    // Which ROM a word belongs to is decided by the slot's bridge ADDRESS
+    // alone, not by the slot id as well. data.json puts bios.rom at
+    // 0x10000000 and itf.rom at 0x10020000, so the two never overlap and there
+    // is one discriminator rather than two that have to agree.
+    //
+    //   bios.rom  0x00000-0x17FFF (96 KB) -> E8000-FFFFF
+    //   itf.rom   0x20000-0x27FFF (32 KB) -> F8000-FFFFF, in the shadow bank
+    //
+    // The ITF occupies the SAME guest addresses as the top of the system BIOS,
+    // which is why it goes to the shadow: the loader asserts select_itf while
+    // writing and RAM.sv routes it there, the mechanism the Tandy BIOS shadow
+    // already uses.
+    wire select_pcxt  = (ioctl_addr[24:17] == 8'h00);
+    wire select_itf   = (ioctl_addr[24:15] == 10'h004);
     wire select_tandy = 1'b0;
     wire select_xtide = 1'b0;
     wire select_shadow = select_itf;
@@ -1644,6 +1653,8 @@ module core_top (
     wire [127:0] rom_load_data;
     wire   [7:0] rom_load_count;
     wire  [7:0] rom_read_count;
+    wire [63:0] io_port_hist;
+    wire [15:0] io_wr_count;
 
     post_monitor u_post (
         .clk            (clk_chipset),
@@ -1680,7 +1691,9 @@ module core_top (
         .ld_data        (bios_write_data[7:0]),
         .ld_we_n        (bios_write_n),
         .rom_load_data  (rom_load_data),
-        .rom_load_count (rom_load_count)
+        .rom_load_count (rom_load_count),
+        .io_port_hist   (io_port_hist),
+        .io_wr_count    (io_wr_count)
     );
 
     //

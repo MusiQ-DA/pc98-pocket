@@ -31,6 +31,8 @@ module tb_post_monitor;
 
     wire [127:0] rom_read_data, rom_load_data;
     wire   [7:0] rom_read_count, rom_load_count;
+    wire  [63:0] io_port_hist;
+    wire  [15:0] io_wr_count;
     wire  [7:0] post_code, post_prev, post_max;
     wire [63:0] post_hist;
     wire [19:0] last_mem_addr;
@@ -46,10 +48,12 @@ module tb_post_monitor;
         .post_max(post_max), .restart_count(restart_count),
         .rom_read_data(rom_read_data), .rom_read_count(rom_read_count),
         .ld_addr(ld_addr), .ld_data(ld_data), .ld_we_n(ld_we_n),
-        .rom_load_data(rom_load_data), .rom_load_count(rom_load_count)
+        .rom_load_data(rom_load_data), .rom_load_count(rom_load_count),
+        .io_port_hist(io_port_hist), .io_wr_count(io_wr_count)
     );
 
     int errors = 0;
+    logic [15:0] io_after_glitch;
 
     // A CPU read out of the snooped ROM window. Data is valid at the END of the
     // cycle: the bus carries the PREVIOUS transfer's byte while the strobe goes
@@ -185,6 +189,14 @@ module tb_post_monitor;
         end
         if (post_max === 8'h63) begin $display("  FAIL glitch reached max"); errors++; end
         $display("  glitch ignored: count=%0d max=%02h", post_count, post_max);
+        // The write itself was real -- it just went to 0x0081, not 0x0080. The
+        // port trace must say so, and must say it while the entry is still in
+        // the four-deep window.
+        io_after_glitch = io_port_hist[15:0];
+        $display("  port after glitch: %04h (want 0081)", io_after_glitch);
+        if (io_after_glitch !== 16'h0081) begin
+            $display("  FAIL glitch recorded against the wrong port"); errors++;
+        end
 
         // A restart. The history holds DEPTH=8 entries, and six are used so far,
         // so these two fill it -- the freeze is only expected after that.
@@ -271,6 +283,20 @@ module tb_post_monitor;
                     errors++;
                 end
             end
+        end
+
+        // The I/O port trace. Every out80() above was an I/O write, and the
+        // glitch and the DMA cycle must not have counted.
+        $display("  io ports = %04h %04h %04h %04h  N %0d",
+                 io_port_hist[15:0], io_port_hist[31:16],
+                 io_port_hist[47:32], io_port_hist[63:48], io_wr_count);
+        if (io_port_hist[15:0] !== 16'h0080) begin
+            $display("  FAIL newest I/O port is not 0080"); errors++;
+        end
+        // Eleven writes: six out80, four more after the freeze, and the glitch
+        // -- which went to its real port. The DMA cycle is not among them.
+        if (io_wr_count !== 16'd11) begin
+            $display("  FAIL io write count %0d, want 11", io_wr_count); errors++;
         end
 
         $display("\n  errors: %0d", errors);
