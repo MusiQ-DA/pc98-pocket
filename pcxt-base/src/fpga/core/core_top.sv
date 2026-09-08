@@ -1339,6 +1339,33 @@ module core_top (
 
     wire [19:0] bios_access_address_wire =
          select_pcxt ? (PC98_BIOS_BASE + {3'b000, ioctl_addr[16:0]}) : 20'hFFFFF;
+
+    // Restore the reset vector.
+    //
+    // A real PC-98's system BIOS holds a far jump to its own entry point at
+    // FFFF:0000. Checked against a genuine PC-9821Ce2 dump (BANK7, the system
+    // BIOS at F8000):
+    //
+    //     BANK7      EA 00 00 80 FD      JMP FD80:0000
+    //     BIOS.ROM   CD 19 00 80 FD      INT 19h, with 00 80 FD left behind
+    //
+    // The trailing three bytes are identical, so the image circulating as
+    // BIOS.ROM is that same vector with its first TWO bytes patched over. The
+    // real entry survives untouched at FD80:0000 -- our dump has
+    // EB 02 EB 5D FA 33 C0 8E D8 E4 35 (CLI, clear DS, IN AL,35h: the PC-98
+    // system port), 8086 code throughout, matching BANK7 almost instruction
+    // for instruction.
+    //
+    // So this is not a workaround, it is undoing someone else's edit, and it
+    // is what makes a faithful boot possible without an ITF: the ITF's job is
+    // to size memory and bank-switch, and mapping the post-ITF image does that
+    // for us. np2 writes exactly the same five bytes (bios.c: mem[0xffff0] =
+    // 0xea, then 0xfd800000) -- it restores the vector too.
+    //
+    // Only the word at FFFF0 differs, so one address needs intercepting.
+    wire        rom_patch_reset = select_pcxt
+                                & (bios_access_address_wire == 20'hFFFF0);
+    wire [15:0] rom_data_in     = rom_patch_reset ? 16'h00EA : ioctl_data;
 `else
     wire select_pcxt  = (ioctl_index[5:0] == 0) && (ioctl_addr[24:16] == 9'b000000000);
     wire select_tandy = `ROM_IS_TANDY ? (ioctl_index[5:0] == 1) && (ioctl_addr[24:16] == 9'b000000000) : 1'b0;
@@ -1348,6 +1375,8 @@ module core_top (
          select_tandy ? { 4'b1111, ioctl_addr[15:0]} :
          select_xtide ? { 6'b111011, ioctl_addr[13:0]} :
          20'hFFFFF;
+
+    wire [15:0] rom_data_in = ioctl_data;
 `endif
 
     wire bios_load_n = ~(ioctl_download & (select_pcxt | select_tandy | select_xtide));
@@ -1434,7 +1463,7 @@ module core_top (
                     else
                     begin
                         bios_access_address <= bios_access_address_wire;
-                        bios_write_data     <= ioctl_data;
+                        bios_write_data     <= rom_data_in;
                         bios_write_n        <= 1'b1;
                         bios_write_wait_cnt <= 'h0;
                         ioctl_wait          <= 1'b1;

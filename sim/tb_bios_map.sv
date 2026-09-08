@@ -71,6 +71,29 @@ module tb_bios_map;
             $display("  FAIL reset vector offset misplaced"); errors++;
         end
 
+        // The reset vector patch: exactly one word, and it is the right one.
+        //
+        // BIOS.ROM ships with CD 19 where a real PC-98 system BIOS has
+        // EA 00 00 80 FD (JMP FD80:0000) -- verified against a PC-9821Ce2
+        // BANK7 dump, whose trailing 00 80 FD is byte-identical. Restoring it
+        // is what lets the real BIOS entry at FD80:0000 run without an ITF.
+        begin
+            int patched;
+            patched = 0;
+            for (int i = 0; i < PC98_SIZE; i += 2)
+                if (map_pc98(25'(i)) == 20'hFFFF0) patched++;
+            $display("  reset-vector words intercepted: %0d (want 1)", patched);
+            if (patched != 1) begin
+                $display("  FAIL patch does not hit exactly one word"); errors++;
+            end
+            // It must be the LAST word but one of the image, not something in
+            // the middle: FFFF0 is 0x10 from the end.
+            if (map_pc98(25'(PC98_SIZE - 'h10)) !== 20'hFFFF0) begin
+                $display("  FAIL FFFF0 is not 0x10 from the end of the image");
+                errors++;
+            end
+        end
+
         // And the PC/AT form must be shown to be unusable here, so nobody
         // "simplifies" this back: it folds 96 KB into 64 KB.
         seen.delete();
