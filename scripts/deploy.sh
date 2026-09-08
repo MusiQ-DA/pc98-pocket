@@ -85,10 +85,25 @@ print('yes' if q and q[0]['conclusion'] == 'success' else 'no')
 PY
 }
 
-# Wait for a run whose commit is the one we are sitting on. Started right after
-# a push, "the latest run" is still the PREVIOUS one -- it reports completed
-# within seconds and the old bitstream goes to the card looking like a fresh
-# build. That nearly cost a hardware test.
+# Wait for a run built from what is actually ON THE REMOTE.
+#
+# Two traps here, both hit for real. Asking for "the newest run" right after a
+# push returns the PREVIOUS one, because CI has not created the new one yet: it
+# reports completed in two seconds and a stale bitstream goes to the card
+# looking like a fresh build. And matching on local HEAD does not work either,
+# because scripts/tools/ghpush2.py creates commits through the API, so the
+# remote sha differs from the local one and no run ever matches.
+#
+# So ask the remote what main points at, and wait for a run on that.
+remote_head() {
+    python3 - <<'PY'
+import sys
+sys.path.insert(0, 'scripts/tools')
+import ghlib
+print(ghlib.gh('/repos/MusiQ-DA/pc98-pocket/commits/main')['sha'])
+PY
+}
+
 run_for_head() {
     python3 - "$1" <<'PY'
 import sys
@@ -96,7 +111,7 @@ sys.path.insert(0, 'scripts/tools')
 import ghlib
 head = sys.argv[1]
 for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=20')['workflow_runs']:
-    if r['head_sha'].startswith(head):
+    if r['head_sha'] == head:
         print(r['run_number'])
         break
 else:
@@ -105,12 +120,13 @@ PY
 }
 
 if [ -z "$RUN" ]; then
-    HEAD_SHA=$(git rev-parse HEAD)
+    HEAD_SHA=$(remote_head)
+    say "remote main is at ${HEAD_SHA:0:10}"
     waited=0
     while :; do
         RUN=$(run_for_head "$HEAD_SHA")
         [ "$RUN" != "none" ] && break
-        [ $waited -eq 0 ] && say "waiting for CI to pick up ${HEAD_SHA:0:10}"
+        [ $waited -eq 0 ] && say "waiting for CI to pick it up"
         [ $waited -ge 600 ] && { say "no run appeared for ${HEAD_SHA:0:10}"; exit 1; }
         sleep 20; waited=$((waited + 20))
     done
