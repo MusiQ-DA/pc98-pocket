@@ -29,7 +29,7 @@ done
 say() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 
 [ -n "$ROMS" ] || { say "set PC98_ROMS (or --roms) to a dir with bios.rom and itf.rom"; exit 2; }
-for f in bios.rom itf.rom; do
+for f in bios.rom itf.rom font.rom; do
     [ -f "$ROMS/$f" ] || { say "missing $ROMS/$f"; exit 2; }
 done
 
@@ -104,7 +104,7 @@ fi
 say "have $(stat -f%z "$ART/ap_core.rbf") bytes of bitstream"
 
 bash scripts/package_pc98.sh "$ART" || exit 1
-cp "$ROMS/bios.rom" "$ROMS/itf.rom" dist/pc98/Assets/pc98/hiroya.PC98/
+cp "$ROMS/bios.rom" "$ROMS/itf.rom" "$ROMS/font.rom" dist/pc98/Assets/pc98/hiroya.PC98/
 say "packaged with ROMs"
 
 # ---- 3. write --------------------------------------------------------------
@@ -139,7 +139,8 @@ fi
 fail=0
 for f in Cores/hiroya.PC98/bitstream.rbf_r Cores/hiroya.PC98/core.json \
          Cores/hiroya.PC98/data.json Assets/pc98/hiroya.PC98/bios.rom \
-         Assets/pc98/hiroya.PC98/itf.rom Platforms/pc98.json; do
+         Assets/pc98/hiroya.PC98/itf.rom Assets/pc98/hiroya.PC98/font.rom \
+         Platforms/pc98.json; do
     if cmp -s "dist/pc98/$f" "$VOL/$f"; then
         say "  ok  $f"
     else

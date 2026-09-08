@@ -6,6 +6,9 @@
 #
 #   id 1  bios.rom  96 KB  bridge 0x10000000  -> guest E8000-FFFFF
 #   id 2  itf.rom   32 KB  bridge 0x10020000  -> guest F8000-FFFFF (shadow bank)
+#   id 3  font.rom 282 KB  bridge 0x10030000  -> the 8x16 ANK set at file offset
+#                                                0x0800-0x17FF goes to BRAM;
+#                                                the kanji is not read yet
 #
 # The bridge addresses are what core_top decodes on -- the slot id is not used
 # for the decision -- so they must match PC98_BIOS_BASE / PC98_ITF_BASE there.
@@ -66,6 +69,9 @@ def data(j):
         {"name": "PC-98 ITF",   "id": 2, "required": True,  "parameters": "0x203",
          "filename": "itf.rom",  "extensions": ["rom", "bin"],
          "address": "0x10020000", "size_maximum": "0x8000"},
+        {"name": "PC-98 Font",  "id": 3, "required": True,  "parameters": "0x203",
+         "filename": "font.rom", "extensions": ["rom", "bin"],
+         "address": "0x10030000", "size_maximum": "0x46800"},
         {"name": "Settings",    "id": 7, "required": False, "parameters": "0x03",
          "filename": "settings.dat", "extensions": ["dat"],
          "address": "0x10030000", "size_maximum": "0x1000"},
@@ -85,4 +91,4 @@ print("  %s: bit-reversed %d bytes" % (dst, len(d)))
 PY
 
 echo "packaged hiroya.PC98"
-echo "  put bios.rom (96KB) and itf.rom (32KB) in $DIR/Assets/pc98/hiroya.PC98/"
+echo "  put bios.rom, itf.rom and font.rom in $DIR/Assets/pc98/hiroya.PC98/"

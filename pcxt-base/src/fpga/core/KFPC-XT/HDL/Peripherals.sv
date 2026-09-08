@@ -59,6 +59,11 @@ module PERIPHERALS #(
         input   logic           enable_hgc,
         input   logic   [1:0]   hgc_rgb,
         output  logic           de_o,
+        // PC-98 ANK font load, straight off the loader (core_top's dl_wr).
+        input   logic           font_wr_clk,
+        input   logic           font_wr_en,
+        input   logic   [10:0]  font_wr_addr,
+        input   logic   [15:0]  font_wr_data,
         output  logic   [5:0]   VGA_R,
         output  logic   [5:0]   VGA_G,
         output  logic   [5:0]   VGA_B,
@@ -1127,6 +1132,75 @@ end
 
     wire swap_video_sel = `ENABLE_HGC ? (`ENABLE_CGA ? (swap_video & ~tandy_video_en) : ~tandy_video_en) : 1'b0;
 
+`ifdef MACHINE_PC98
+    // ---------------------------------------------------------- PC-98 video
+    //
+    // One plane, one mode: 640x400 text on the 21.0526 MHz dot clock, which
+    // core_top routes in as clk_vga_cga. The CGA and HGC generators are still
+    // instanced below -- they are the PC/AT machine layer and go when it does
+    // -- but nothing downstream of here looks at them.
+    wire [11:0] tvram_vid_cell_w;   // renderer -> TVRAM, instanced further down
+    wire [9:0] pc98_h, pc98_v;
+    wire       pc98_hs, pc98_vs, pc98_hb, pc98_vb, pc98_de, pc98_fs;
+
+    pc98_video_timing u_pc98_timing (
+        .clk(clk_vga_cga), .ce(1'b1), .rst(reset),
+        .hcount(pc98_h), .vcount(pc98_v),
+        .hsync(pc98_hs), .vsync(pc98_vs),
+        .hblank(pc98_hb), .vblank(pc98_vb), .de(pc98_de), .frame_start(pc98_fs)
+    );
+
+    // Blink, about 2 Hz: one toggle every 32 frames of 56.4 Hz is 1.76 Hz.
+    logic [5:0] pc98_blink_cnt;
+    logic       pc98_blink;
+    always_ff @(posedge clk_vga_cga) begin
+        if (reset) begin
+            pc98_blink_cnt <= 6'd0;
+            pc98_blink     <= 1'b1;
+        end else if (pc98_fs) begin
+            pc98_blink_cnt <= pc98_blink_cnt + 6'd1;
+            if (pc98_blink_cnt == 6'd31) begin
+                pc98_blink_cnt <= 6'd0;
+                pc98_blink     <= ~pc98_blink;
+            end
+        end
+    end
+
+    wire [7:0] pc98_font_row;
+    wire [7:0] pc98_font_code;
+    wire [3:0] pc98_font_line;
+    wire [2:0] pc98_grb;
+    wire       pc98_pixel, pc98_kanji_seen;
+
+    pc98_text_render u_pc98_text (
+        .clk(clk_vga_cga), .pix_ce(1'b1),
+        .hcount(pc98_h), .vcount(pc98_v), .blink_on(pc98_blink),
+        .tv_cell(tvram_vid_cell_w),
+        .tv_char_lo(tvram_vid_char_lo), .tv_char_hi(tvram_vid_char_hi),
+        .tv_attr(tvram_vid_attr),
+        .font_code(pc98_font_code), .font_line(pc98_font_line),
+        .font_row(pc98_font_row),
+        .grb(pc98_grb), .pixel(pc98_pixel), .kanji_seen(pc98_kanji_seen)
+    );
+
+    pc98_font_ank u_pc98_font (
+        .wr_clk(font_wr_clk), .wr_en(font_wr_en),
+        .wr_addr(font_wr_addr), .wr_data(font_wr_data),
+        .rd_clk(clk_vga_cga),
+        .code(pc98_font_code), .line(pc98_font_line), .row(pc98_font_row)
+    );
+
+    // The attribute's colour field is G R B, so it maps to the output that way
+    // round. Full intensity: PC-98 text has no half-bright.
+    assign VGA_R     = (pc98_pixel & pc98_grb[1]) ? 6'h3F : 6'h00;
+    assign VGA_G     = (pc98_pixel & pc98_grb[2]) ? 6'h3F : 6'h00;
+    assign VGA_B     = (pc98_pixel & pc98_grb[0]) ? 6'h3F : 6'h00;
+    assign VGA_HSYNC = pc98_hs;
+    assign VGA_VSYNC = pc98_vs;
+    assign VGA_HBlank = pc98_hb;
+    assign VGA_VBlank = pc98_vb;
+    assign de_o      = pc98_de;
+`else
     assign VGA_R = swap_video_sel ? R_HGC : (`ENABLE_CGA ? R_CGA : 6'd0);
     assign VGA_G = swap_video_sel ? G_HGC : (`ENABLE_CGA ? G_CGA : 6'd0);
     assign VGA_B = swap_video_sel ? B_HGC : (`ENABLE_CGA ? B_CGA : 6'd0);
@@ -1137,6 +1211,7 @@ end
     assign VGA_VBlank = swap_video_sel ? VBLANK_HGC : (`ENABLE_CGA ? VBLANK_CGA : 1'b0);
 
     assign de_o = swap_video_sel ? de_o_hgc : (`ENABLE_CGA ? de_o_cga : 1'b0);
+`endif
     assign HSYNC_CGA = cga_scandouble_en ? hsync_cga_sd : hsync_cga_raw;
     assign video_cga = cga_scandouble_en ? video_cga_sd : video_cga_raw;
 
@@ -1325,7 +1400,7 @@ end
     defparam hgc1.BLINK_MAX = 24'd5166000;
 `ifdef MACHINE_PC98
     wire [7:0]  tvram_cpu_q;
-    wire [11:0] tvram_vid_cell = 12'd0;   // renderer not connected yet
+    wire [11:0] tvram_vid_cell = tvram_vid_cell_w;
     wire [7:0]  tvram_vid_char_lo, tvram_vid_char_hi, tvram_vid_attr;
 
     pc98_tvram u_tvram (

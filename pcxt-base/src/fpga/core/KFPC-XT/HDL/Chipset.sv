@@ -108,6 +108,10 @@ module CHIPSET #(
         // TANDY
         input   logic           tandy_video,
         input   logic           tandy_bios_flag,
+        input   logic           font_wr_clk,
+        input   logic           font_wr_en,
+        input   logic   [10:0]  font_wr_addr,
+        input   logic   [15:0]  font_wr_data,
         output  logic   [10:0]  tandy_snd_e,
         output  logic           tandy_16_gfx,
         output  logic           tandy_color_16,
@@ -293,6 +297,10 @@ module CHIPSET #(
 
     PERIPHERALS #(.clk_rate(clk_rate)) u_PERIPHERALS 
     (
+        .font_wr_clk                        (font_wr_clk),
+        .font_wr_en                         (font_wr_en),
+        .font_wr_addr                       (font_wr_addr),
+        .font_wr_data                       (font_wr_data),
         .clock                              (clock),
         .clk_sys                            (clk_sys),
         .cpu_ce_posedge                     (cpu_ce_posedge),
