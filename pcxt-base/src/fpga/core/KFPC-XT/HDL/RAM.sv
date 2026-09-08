@@ -51,6 +51,18 @@ module RAM (
      input   logic           ems_b4,
      // BIOS
      input  logic    [1:0]  bios_protect_flag,
+    // Font bank: while set, guest addresses are redirected above the machine's
+    // megabyte so the loader can write FONT.ROM somewhere the guest cannot see.
+    // The same trick as the ITF shadow, one bit further up.
+     input  logic           font_bank_flag,
+    // Video-side read port, straight through to the controller's port B.
+     input  logic           font_rd_req,
+     input  logic   [23:0]  font_rd_addr,
+     input  logic    [3:0]  font_rd_len,
+     output logic           font_rd_ack,
+     output logic           font_rd_valid,
+     output logic   [15:0]  font_rd_data,
+     output logic           font_rd_done,
      input  logic           tandy_bios_flag,
     // Optional flags
     input  logic           enable_a000h,
@@ -64,7 +76,7 @@ module RAM (
 
     state_t         state;
     state_t         next_state;
-    logic   [21:0]  latch_address;
+    logic   [22:0]  latch_address;
     logic   [7:0]   latch_data;
     logic           write_command;
     logic           read_command;
@@ -130,15 +142,18 @@ module RAM (
     // Address
     always_comb begin
         if (ems_b1)
-            latch_address   = {1'b1, map_ems[0], address[13:0]};
+            latch_address   = {1'b0, 1'b1, map_ems[0], address[13:0]};
         else if (ems_b2)
-            latch_address   = {1'b1, map_ems[1], address[13:0]};
+            latch_address   = {1'b0, 1'b1, map_ems[1], address[13:0]};
         else if (ems_b3)
-            latch_address   = {1'b1, map_ems[2], address[13:0]};
+            latch_address   = {1'b0, 1'b1, map_ems[2], address[13:0]};
         else if (ems_b4)
-            latch_address   = {1'b1, map_ems[3], address[13:0]};
+            latch_address   = {1'b0, 1'b1, map_ems[3], address[13:0]};
+        else if (font_bank_flag)
+            // 0x400000 upward: past EMS, which owns bit 21.
+            latch_address   = {1'b1, 2'b00, address};
         else
-            latch_address   = {1'b0, tandy_bios_select, address};
+            latch_address   = {2'b00, tandy_bios_select, address};
     end
 
     // Data
@@ -209,7 +224,14 @@ module RAM (
         .sdram_ba           (sdram_ba),
         .sdram_dq_in        (sdram_dq_in),
         .sdram_dq_out       (sdram_dq_out),
-        .sdram_dq_io        (sdram_dq_io)
+        .sdram_dq_io        (sdram_dq_io),
+        .b_req              (font_rd_req),
+        .b_addr             (font_rd_addr),
+        .b_len              (font_rd_len),
+        .b_ack              (font_rd_ack),
+        .b_rvalid           (font_rd_valid),
+        .b_rdata            (font_rd_data),
+        .b_done             (font_rd_done)
     );
 `else
     KFSDRAM u_KFSDRAM (
@@ -237,6 +259,11 @@ module RAM (
         .sdram_dq_out       (sdram_dq_out),
         .sdram_dq_io        (sdram_dq_io)
     );
+    // Stock KFSDRAM has no second master.
+    assign font_rd_ack   = 1'b0;
+    assign font_rd_valid = 1'b0;
+    assign font_rd_data  = 16'h0000;
+    assign font_rd_done  = 1'b0;
 `endif
 
 
@@ -310,7 +337,7 @@ module RAM (
     always_comb begin
         casez (state)
             IDLE: begin
-                access_address  = {7'h00, latch_address};
+                access_address  = {6'h00, latch_address};
                 access_num      = 10'h001;
                 access_data_in  = {8'h00, latch_data};
                 write_request   = write_command ? 1'b1 : 1'b0;
@@ -319,7 +346,7 @@ module RAM (
                 sdram_udqm      = 1'b0;
             end
             RAM_WRITE_1: begin
-                access_address  = {7'h00, latch_address};
+                access_address  = {6'h00, latch_address};
                 access_num      = 10'h001;
                 access_data_in  = {8'h00, latch_data};
                 write_request   = 1'b1;
@@ -328,7 +355,7 @@ module RAM (
                 sdram_udqm      = 1'b0;
             end
             RAM_WRITE_2: begin
-                access_address  = {7'h00, latch_address};
+                access_address  = {6'h00, latch_address};
                 access_num      = 10'h001;
                 access_data_in  = {8'h00, latch_data};
                 write_request   = 1'b0;
@@ -337,7 +364,7 @@ module RAM (
                 sdram_udqm      = 1'b0;
             end
             RAM_READ_1: begin
-                access_address  = {7'h00, latch_address};
+                access_address  = {6'h00, latch_address};
                 access_num      = 10'h001;
                 access_data_in  = 16'h0000;
                 write_request   = 1'b0;
@@ -346,7 +373,7 @@ module RAM (
                 sdram_udqm      = 1'b0;
             end
             RAM_READ_2: begin
-                access_address  = {7'h00, latch_address};
+                access_address  = {6'h00, latch_address};
                 access_num      = 10'h001;
                 access_data_in  = 16'h0000;
                 write_request   = 1'b0;

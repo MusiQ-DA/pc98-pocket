@@ -108,6 +108,10 @@ module CHIPSET #(
         // TANDY
         input   logic           tandy_video,
         input   logic           tandy_bios_flag,
+        // FONT.ROM load: while font_bank_flag is set, RAM.sv redirects guest
+        // addresses above the machine's megabyte, so the loader can write the
+        // font where the guest cannot reach it.
+        input   logic           font_bank_flag,
         input   logic           font_wr_clk,
         input   logic           font_wr_en,
         input   logic   [10:0]  font_wr_addr,
@@ -295,8 +299,21 @@ module CHIPSET #(
         .terminal_count_n                   (terminal_count_n)
     );
 
+    // Video-side glyph reads, RAM.sv's port B out to PERIPHERALS.
+    wire        font_rd_req, font_rd_ack, font_rd_valid, font_rd_done;
+    wire [23:0] font_rd_addr;
+    wire  [3:0] font_rd_len;
+    wire [15:0] font_rd_data;
+
     PERIPHERALS #(.clk_rate(clk_rate)) u_PERIPHERALS 
     (
+        .font_rd_req                        (font_rd_req),
+        .font_rd_addr                       (font_rd_addr),
+        .font_rd_len                        (font_rd_len),
+        .font_rd_ack                        (font_rd_ack),
+        .font_rd_valid                      (font_rd_valid),
+        .font_rd_data                       (font_rd_data),
+        .font_rd_done                       (font_rd_done),
         .font_wr_clk                        (font_wr_clk),
         .font_wr_en                         (font_wr_en),
         .font_wr_addr                       (font_wr_addr),
@@ -419,6 +436,14 @@ module CHIPSET #(
 
     RAM u_RAM 
     (
+        .font_bank_flag                     (font_bank_flag),
+        .font_rd_req                        (font_rd_req),
+        .font_rd_addr                       (font_rd_addr),
+        .font_rd_len                        (font_rd_len),
+        .font_rd_ack                        (font_rd_ack),
+        .font_rd_valid                      (font_rd_valid),
+        .font_rd_data                       (font_rd_data),
+        .font_rd_done                       (font_rd_done),
         .clock                              (sdram_clock),
         .reset                              (sdram_reset),
         .enable_sdram                       (enable_sdram),

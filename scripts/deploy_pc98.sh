@@ -105,6 +105,11 @@ say "have $(stat -f%z "$ART/ap_core.rbf") bytes of bitstream"
 
 bash scripts/package_pc98.sh "$ART" || exit 1
 cp "$ROMS/bios.rom" "$ROMS/itf.rom" "$ROMS/font.rom" dist/pc98/Assets/pc98/hiroya.PC98/
+# The softcore's firmware rides along as a slot, so a change to an on-screen
+# readout is a file copy rather than a Quartus compile. Built here rather than
+# assumed present: firmware.bin is gitignored, being a build product.
+make -C pcxt-base/src/firmware >/dev/null || { say "firmware build failed"; exit 1; }
+cp pcxt-base/src/firmware/firmware.bin dist/pc98/Assets/pc98/hiroya.PC98/
 say "packaged with ROMs"
 
 # ---- 3. write --------------------------------------------------------------
@@ -140,7 +145,7 @@ fail=0
 for f in Cores/hiroya.PC98/bitstream.rbf_r Cores/hiroya.PC98/core.json \
          Cores/hiroya.PC98/data.json Assets/pc98/hiroya.PC98/bios.rom \
          Assets/pc98/hiroya.PC98/itf.rom Assets/pc98/hiroya.PC98/font.rom \
-         Platforms/pc98.json; do
+         Assets/pc98/hiroya.PC98/firmware.bin Platforms/pc98.json; do
     if cmp -s "dist/pc98/$f" "$VOL/$f"; then
         say "  ok  $f"
     else

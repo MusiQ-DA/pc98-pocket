@@ -61,6 +61,13 @@ module pc98_glyph_rowbuf #(
     input  wire  [7:0]  f_data,
 
     // Renderer side: the row NOT being filled.
+    //
+    // On its OWN clock. The fill runs on the chipset clock, because that is
+    // where the TVRAM and the SDRAM port are; the renderer runs on the dot
+    // clock. The store is a dual-port BRAM, so the two sides need share nothing
+    // but the bank bit -- and that only changes between rows, which is why the
+    // buffer is double-buffered in the first place.
+    input  wire         rd_clk,
     input  wire  [6:0]  rd_cell,
     input  wire  [3:0]  rd_line,
     output logic [7:0]  rd_byte
@@ -92,7 +99,10 @@ module pc98_glyph_rowbuf #(
         .addr       (ga_addr)
     );
 
-    assign rd_byte = store[{~bank, rd_cell, rd_line}];
+    // Registered, so it infers a BRAM port rather than a wide mux. One cycle of
+    // latency, which the renderer's cell pipeline already allows for.
+    always_ff @(posedge rd_clk)
+        rd_byte <= store[{~bank, rd_cell, rd_line}];
 
     always_ff @(posedge clk) begin
         if (rst) begin

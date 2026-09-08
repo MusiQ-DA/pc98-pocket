@@ -60,6 +60,14 @@ module PERIPHERALS #(
         input   logic   [1:0]   hgc_rgb,
         output  logic           de_o,
         // PC-98 ANK font load, straight off the loader (core_top's dl_wr).
+        // Glyph reads from SDRAM, the controller's second port.
+        output  logic           font_rd_req,
+        output  logic   [23:0]  font_rd_addr,
+        output  logic    [3:0]  font_rd_len,
+        input   logic           font_rd_ack,
+        input   logic           font_rd_valid,
+        input   logic   [15:0]  font_rd_data,
+        input   logic           font_rd_done,
         input   logic           font_wr_clk,
         input   logic           font_wr_en,
         input   logic   [10:0]  font_wr_addr,

@@ -21,6 +21,12 @@ module softcpu_subsystem (
     input clk_sys,   // clk_chipset, 50 MHz
     input clk_74a,   // APF bridge clock
     input reset,     // softcore reset: FPGA infrastructure not ready, independent of the guest reset
+    // Firmware image load, from an SD data slot. The ROM's $readmemh contents
+    // are the default; this overwrites them when a slot supplies a file.
+    input        fw_wr_clk,
+    input        fw_wr_en,
+    input [12:0] fw_wr_addr,
+    input [31:0] fw_wr_data,
 
     // Softcore clock, exported so core_top can clock the datatable's port A with it.
     output reg clk_pico,
@@ -482,7 +488,11 @@ module softcpu_subsystem (
         .ce   (sel_rom),
         .oe   (1'b1),
         .addr (cpu_mem_addr[14:2]),
-        .dout (rom_rdata)
+        .dout (rom_rdata),
+        .wr_clk  (fw_wr_clk),
+        .wr_en   (fw_wr_en),
+        .wr_addr (fw_wr_addr),
+        .wr_data (fw_wr_data)
     );
 
     //

@@ -528,11 +528,32 @@ module core_top (
     // The softcore is reset on PLL lock (RESET) only, so it comes up while the guest is still
     // held and can stage settings before releasing it. It is deliberately not held by the guest
     // terms (BIOS load, splash, the guest reset, or its own soft_guest_hold), which would deadlock.
+    // The softcore must not run while its own ROM is being written. reset_soft
+    // was a fixed 65535-cycle delay -- about 1.5 ms, far shorter than a slot
+    // load -- so it would have started on the baked-in image and had the code
+    // replaced underneath it.
+    //
+    // Latch "the boot-time downloads have finished" once, the first time
+    // load_active falls after having been high, and hold reset until then.
+    // One-shot, so a deferred slot mounted later (a floppy, say) cannot put the
+    // softcore back into reset and take the OSD away.
+    logic boot_dl_seen = 1'b0;
+    logic boot_dl_done = 1'b0;
+    always @(posedge clk_chipset) begin
+        if (load_active)                   boot_dl_seen <= 1'b1;
+        if (boot_dl_seen && !load_active)  boot_dl_done <= 1'b1;
+    end
+
     logic reset_soft = 1'b1;
     logic [15:0] reset_soft_count = 16'h0000;
     always @(posedge clk_chipset, posedge RESET)
     begin
         if (RESET)
+        begin
+            reset_soft <= 1'b1;
+            reset_soft_count <= 16'h0000;
+        end
+        else if (!boot_dl_done)
         begin
             reset_soft <= 1'b1;
             reset_soft_count <= 16'h0000;
@@ -866,6 +887,10 @@ module core_top (
     wire       dock_key_stb;
 
     softcpu_subsystem u_softcpu (
+        .fw_wr_clk                  (clk_chipset),
+        .fw_wr_en                   (fw_wr_en_r),
+        .fw_wr_addr                 (fw_wr_addr_r),
+        .fw_wr_data                 (fw_wr_data_r),
         .clk_sys                    (clk_chipset),
         .clk_74a                    (clk_74a),
         .reset                      (reset_soft),
@@ -1352,11 +1377,45 @@ module core_top (
     // is the contiguous 0x0800-0x17FF of the file (np2 font/fontv98.c), so the
     // window is dl_addr 0x30800-0x317FF and the BRAM address is the offset
     // within it.
-    wire        font_dl_hit  = dl_wr && (dl_addr[27:16] == 12'h003)
+    wire        font_dl_hit  = dl_wr && (dl_addr[27:16] == 12'h010)
                                      && (dl_addr[15:0] >= 16'h0800)
                                      && (dl_addr[15:0] <  16'h1800);
     wire [10:0] font_dl_addr = dl_addr[11:1] - 11'h400;   // word index from 0x800
 `endif
+
+    // ---------------------------------------------------------- firmware slot
+    //
+    // The softcore's ROM is $readmemh'd from firmware.vh at synthesis, which
+    // means a one-line change to an on-screen readout costs a fifteen-to-twenty
+    // minute Quartus compile. Several of this session's builds were exactly
+    // that. A data slot lets the image be replaced by copying a file.
+    //
+    // The baked-in contents stay as the default: with no file in the slot,
+    // nothing is written and the core behaves as it always did. So this cannot
+    // brick a card that is missing the file.
+    //
+    // data.json puts firmware.bin at bridge 0x10040000. data_loader hands over
+    // sixteen bits at a time and the ROM is 32 bits wide, so two transfers make
+    // a word -- low half first, matching the little-endian image.
+    wire        fw_dl_hit  = dl_wr && (dl_addr[27:16] == 12'h004);
+    wire [12:0] fw_word    = dl_addr[14:2];
+    reg  [15:0] fw_lo;
+    reg         fw_wr_en_r;
+    reg  [12:0] fw_wr_addr_r;
+    reg  [31:0] fw_wr_data_r;
+
+    always @(posedge clk_chipset) begin
+        fw_wr_en_r <= 1'b0;
+        if (fw_dl_hit) begin
+            if (!dl_addr[1]) begin
+                fw_lo <= dl_data;
+            end else begin
+                fw_wr_addr_r <= fw_word;
+                fw_wr_data_r <= {dl_data, fw_lo};
+                fw_wr_en_r   <= 1'b1;
+            end
+        end
+    end
 
     reg [4:0]  bios_load_state = 4'h0;
     reg [1:0]  bios_protect_flag;
@@ -1367,6 +1426,7 @@ module core_top (
     reg [7:0]  bios_write_wait_cnt;
     reg        bios_write_byte_cnt;
     reg        tandy_bios_write;
+    reg        font_bank_write;
 `ifdef MACHINE_PC98
     // PC-98: BIOS.ROM is 0x18000 bytes at physical 0x0E8000, which is where np2
     // reads it to and what the file size says (docs/PC98_MACHINE_SPEC.md F1).
@@ -1390,13 +1450,19 @@ module core_top (
     // already uses.
     wire select_pcxt  = (ioctl_addr[24:17] == 8'h00);
     wire select_itf   = (ioctl_addr[24:15] == 10'h004);
+    // font.rom, 0x46800 bytes at bridge 0x10100000. The slot's address is
+    // chosen so the low twenty bits ARE the file offset: the font bank
+    // redirects those to 0x400000 upward inside RAM.sv, so the loader needs no
+    // arithmetic and the ext port's twenty bits are enough for a 282 KB image.
+    wire select_font  = (ioctl_addr[24:20] == 5'h01);
     wire select_tandy = 1'b0;
     wire select_xtide = 1'b0;
     wire select_shadow = select_itf;
 
     wire [19:0] bios_access_address_wire =
          select_pcxt ? (PC98_BIOS_BASE + {3'b000, ioctl_addr[16:0]}) :
-         select_itf  ? (PC98_ITF_BASE  + {5'b00000, ioctl_addr[14:0]}) : 20'hFFFFF;
+         select_itf  ? (PC98_ITF_BASE  + {5'b00000, ioctl_addr[14:0]}) :
+         select_font ? ioctl_addr[19:0] : 20'hFFFFF;
 
     // Restore the reset vector.
     //
@@ -1439,7 +1505,7 @@ module core_top (
 `endif
 
 `ifdef MACHINE_PC98
-    wire bios_load_n = ~(ioctl_download & (select_pcxt | select_itf));
+    wire bios_load_n = ~(ioctl_download & (select_pcxt | select_itf | select_font));
 `else
     wire bios_load_n = ~(ioctl_download & (select_pcxt | select_tandy | select_xtide));
 `endif
@@ -1456,6 +1522,7 @@ module core_top (
             bios_write_wait_cnt <= 'h0;
             bios_write_byte_cnt <= 1'h0;
             tandy_bios_write    <= 1'b0;
+            font_bank_write     <= 1'b0;
             ioctl_wait          <= 1'b1;
             bios_load_state     <= 4'h00;
         end
@@ -1540,7 +1607,7 @@ module core_top (
                     bios_access_address <= bios_access_address;
                     bios_write_data     <= bios_write_data;
                     bios_write_byte_cnt <= bios_write_byte_cnt;
-                    // HOLD it, do not re-read select_shadow here.
+                    // HOLD both, do not re-read the selects here.
                     //
                     // select_shadow comes from the live ioctl_addr, and by the
                     // time this state runs the copier has usually popped the
@@ -1551,6 +1618,7 @@ module core_top (
                     // lands in the wrong bank. The shadow decision belongs with
                     // the address, and the address is latched in state 01.
                     tandy_bios_write    <= tandy_bios_write;
+                    font_bank_write     <= font_bank_write;
                     ioctl_wait          <= 1'b1;
 
                     // Hold the external write until ram_rw_complete, or a safety
@@ -1942,6 +2010,8 @@ module core_top (
     // while the loader writes it routes the ITF image in, and at all other
     // times it decides which of the two ROMs the guest sees at F8000.
     wire tandy_bios_flag = bios_write_n ? itf_bank : tandy_bios_write;
+    // Only ever set during a loader write: the guest has no font bank to see.
+    wire font_bank_load  = ~bios_write_n & font_bank_write;
 `else
     wire tandy_bios_flag = bios_write_n ? `ROM_IS_TANDY : tandy_bios_write;
 `endif
@@ -2066,11 +2136,13 @@ module core_top (
         .tandy_video                        (tandy_video_mode),
         .tandy_bios_flag                    (tandy_bios_flag),
 `ifdef MACHINE_PC98
+        .font_bank_flag                     (font_bank_load),
         .font_wr_clk                        (clk_chipset),
         .font_wr_en                         (font_dl_hit),
         .font_wr_addr                       (font_dl_addr),
         .font_wr_data                       (dl_data),
 `else
+        .font_bank_flag                     (1'b0),
         .font_wr_clk                        (1'b0),
         .font_wr_en                         (1'b0),
         .font_wr_addr                       (11'd0),
