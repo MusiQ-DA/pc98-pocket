@@ -951,7 +951,9 @@ module core_top (
         .wr_last_addr               (wr_last_addr),
         .raw_strobes                (raw_strobes),
         .wr_low_cycles              (wr_low_cycles),
-        .rd_low_cycles              (rd_low_cycles)
+        .rd_low_cycles              (rd_low_cycles),
+        .rom_read_data              (rom_read_data),
+        .rom_read_count             (rom_read_count)
     );
 
     //
@@ -1540,12 +1542,15 @@ module core_top (
     wire [19:0] wr_last_addr;
     wire  [3:0] raw_strobes;
     wire [15:0] wr_low_cycles, rd_low_cycles;
+    wire [31:0] rom_read_data;
+    wire  [7:0] rom_read_count;
 
     post_monitor u_post (
         .clk            (clk_chipset),
         .rst            (reset_sdram),
         .address        (chipset_address),
         .cpu_data       (cpu_data_bus),
+        .bus_data       (data_bus),
         .io_write_n     (chipset_io_write_n),
         .address_enable_n (chipset_aen),
         .memory_read_n  (chipset_memory_read_n),
@@ -1568,7 +1573,9 @@ module core_top (
         .wr_last_addr   (wr_last_addr),
         .raw_strobes    (raw_strobes),
         .wr_low_cycles  (wr_low_cycles),
-        .rd_low_cycles  (rd_low_cycles)
+        .rd_low_cycles  (rd_low_cycles),
+        .rom_read_data  (rom_read_data),
+        .rom_read_count (rom_read_count)
     );
 
     //

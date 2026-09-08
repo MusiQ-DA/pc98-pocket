@@ -17,6 +17,8 @@
 #define POST_WRADDR ((volatile uint32_t *) 0x50000038) // last memory write address
 #define POST_IVTTCH ((volatile uint32_t *) 0x5000003C) // {raw_strobes, ivt_touch}
 #define POST_LOWCYC ((volatile uint32_t *) 0x50000040) // {rd_low, wr_low}
+#define POST_ROMRD  ((volatile uint32_t *) 0x50000044) // bytes the CPU read at F000:D880
+#define POST_ROMRDN ((volatile uint32_t *) 0x50000048) // how many of them were seen
 
 // The self-test master, reused to read guest memory while the guest runs. It
 // takes the bus through hold acknowledge, which is what the BIOS loader does.
@@ -220,20 +222,23 @@ void post_mon_tick(void)
     // a null pointer at 0x67, so there is no stray 55 AA signature and that
     // hypothesis is closed. The line is reused for a second read instead.)
     if (vectors_read) {
-        // The BIOS image in SDRAM, at the exact words the IVT loop copies from.
+        // What the CPU actually READ at F000:D880-D883, snooped off the bus.
         //
-        // testB31 caught the guest WRITING F000:412E where the table holds
-        // E82E -- the low byte right, the high byte wrong. That loop is a plain
-        // movsw, so the value was already wrong when it was READ out of
-        // F000:D881. Reading the same bytes ourselves says whether SDRAM is
-        // holding the wrong image or handing the CPU a bad read of a good one.
+        // Reading that region with the self-test master returned
+        // 11 11 11 11 11 11 11 11 -- a constant, not memory -- so the master's
+        // read of the BIOS region is broken and its answer is worthless here.
+        // The bus snoop is passive and is the same mechanism that caught the
+        // write, which reproduces exactly (F000:412E on two runs).
         //
-        // Expected, straight out of boot.bin:
-        //   D87E E7   D87F 59   D880 F8   D881 2E
-        //   D882 E8   D883 D2   D884 EF   D885 50
-        osd_draw_string(&fb, 4, 92, "ROM", OSD_LABEL);
-        for (int i = 0; i < 8; i++)
-            hex(4 + (4 + i * 3) * 8, 92, guest_peek(0xFD87Eu + (uint32_t) i), 2);
+        // The BIOS image holds F8 2E E8 D2 at D880-D883. The guest wrote 412E,
+        // so it saw 2E then 41: expect this to read F8 2E 41 D2 if the CPU's
+        // read is what is corrupt.
+        uint32_t rr = *POST_ROMRD;
+        osd_draw_string(&fb, 4, 92, "CPURD", OSD_LABEL);
+        for (int i = 0; i < 4; i++)
+            hex(4 + (6 + i * 3) * 8, 92, (rr >> (i * 8)) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 19 * 8, 92, "N", OSD_LABEL);
+        dec(4 + 21 * 8, 92, *POST_ROMRDN & 0xFFu);
 
         // Second read of 16h, and our own scratch round trip.
         osd_draw_string(&fb, 4, 52, "16h#2", OSD_LABEL);
