@@ -77,6 +77,15 @@ jobs:
           ./obj_tv/v | tee tv.log
           grep -q "RESULT: PASS" tv.log
 
+      - name: raster is the 640x400 one PC-98 software expects
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_timing \
+            -Isim -Ipcxt-base/src/fpga/core \
+            sim/tb_pc98_timing.sv pcxt-base/src/fpga/core/pc98_video_timing.sv \
+            -o r --Mdir obj_ti
+          ./obj_ti/r | tee ti.log
+          grep -q "RESULT: PASS" ti.log
+
       - name: text plane draws what TVRAM says
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_text \

@@ -441,6 +441,21 @@ module core_top (
         end
     end
 
+`ifdef MACHINE_PC98
+    // One video mode, so no switch: the dot clock goes straight out. The CGA
+    // and HGC pairs and the swap machinery above are PC/AT things that this
+    // machine has no equivalent of.
+    wire clk_pc98_dot, clk_pc98_dot_90, pll_pc98_locked;
+    pll_video_pc98 u_pll_pc98 (
+        .refclk   (clk_74b),
+        .rst      (1'b0),
+        .outclk_0 (clk_pc98_dot),
+        .outclk_1 (clk_pc98_dot_90),
+        .locked   (pll_pc98_locked)
+    );
+    assign clk_pix    = clk_pc98_dot;
+    assign clk_pix_90 = clk_pc98_dot_90;
+`else
     cyclonev_clkselect u_pixclk_sw
     (
         .clkselect ({1'b1, pix_sel}),
@@ -453,13 +468,18 @@ module core_top (
         .inclk     ({clk_pix_hgc_90, clk_pix_cga_90, 2'b00}),
         .outclk    (clk_pix_90)
     );
+`endif
 
     //
     // RESET
     //
 
     // Global power-on reset until all PLLs lock.
+`ifdef MACHINE_PC98
+    wire RESET = ~pll_locked | ~pll_pc98_locked;
+`else
     wire RESET = ~pll_locked | ~pll_video_locked | ~pll_video_hgc_locked;
+`endif
 
     // The disk/OSD softcore is the boot master; it drives this hold (declared here so the guest
     // reset can use it, sourced from u_softcpu below).
@@ -1323,6 +1343,21 @@ module core_top (
             ioctl_wr_r <= 1'b1;
     end
 
+`ifdef MACHINE_PC98
+    // ANK font load, straight off data_loader rather than through the ROM FIFO
+    // and the ext port. It is a 4 KB BRAM with no handshake, so queueing it
+    // behind the BIOS load would buy nothing.
+    //
+    // data.json puts font.rom at bridge 0x10030000, and FONT.ROM's 8x16 ANK set
+    // is the contiguous 0x0800-0x17FF of the file (np2 font/fontv98.c), so the
+    // window is dl_addr 0x30800-0x317FF and the BRAM address is the offset
+    // within it.
+    wire        font_dl_hit  = dl_wr && (dl_addr[27:16] == 12'h003)
+                                     && (dl_addr[15:0] >= 16'h0800)
+                                     && (dl_addr[15:0] <  16'h1800);
+    wire [10:0] font_dl_addr = dl_addr[11:1] - 11'h400;   // word index from 0x800
+`endif
+
     reg [4:0]  bios_load_state = 4'h0;
     reg [1:0]  bios_protect_flag;
     reg        bios_access_request;
@@ -1952,7 +1987,11 @@ module core_top (
         .std_hsyncwidth                     (std_hsyncwidth),
         .composite                          (composite),
         .video_output                       (video_output_sel),
+`ifdef MACHINE_PC98
+        .clk_vga_cga                        (clk_pc98_dot),
+`else
         .clk_vga_cga                        (clk_28_636),
+`endif
         .enable_cga                         (`ENABLE_CGA),
         .clk_vga_hgc                        (clk_32_514),
         .enable_hgc                         (enable_hgc_sel),
@@ -2016,6 +2055,17 @@ module core_top (
         .o_cms_r                            (cms_r_snd_e),
         .tandy_video                        (tandy_video_mode),
         .tandy_bios_flag                    (tandy_bios_flag),
+`ifdef MACHINE_PC98
+        .font_wr_clk                        (clk_chipset),
+        .font_wr_en                         (font_dl_hit),
+        .font_wr_addr                       (font_dl_addr),
+        .font_wr_data                       (dl_data),
+`else
+        .font_wr_clk                        (1'b0),
+        .font_wr_en                         (1'b0),
+        .font_wr_addr                       (11'd0),
+        .font_wr_data                       (16'd0),
+`endif
         .tandy_16_gfx                       (tandy_16_gfx),
         .tandy_color_16                     (tandy_color_16),
         .clk_uart                           (clk_uart2_en),

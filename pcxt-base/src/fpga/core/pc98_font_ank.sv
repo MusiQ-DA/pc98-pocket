@@ -24,26 +24,37 @@
 `default_nettype none
 
 module pc98_font_ank (
-    // Load side, on the loader's clock.
+    // Load side, on the loader's clock. data_loader hands over sixteen bits at
+    // a time -- the low byte belongs to the even address -- so the store is
+    // sixteen bits wide and the read side picks a half. Writing one byte per
+    // transfer would drop every second byte of the font.
     input  wire        wr_clk,
     input  wire        wr_en,
-    input  wire [11:0] wr_addr,        // 0..4095, already offset from 0x0800
-    input  wire  [7:0] wr_data,
+    input  wire [10:0] wr_addr,        // word index, 0..2047
+    input  wire [15:0] wr_data,
 
     // Render side.
     input  wire        rd_clk,
     input  wire  [7:0] code,           // character code
     input  wire  [3:0] line,           // scanline within the cell, 0..15
-    output logic [7:0] row             // eight pixels, MSB leftmost
+    output wire  [7:0] row             // eight pixels, MSB leftmost
 );
 
-    (* ramstyle = "M10K" *) logic [7:0] glyphs [0:4095];
+    (* ramstyle = "M10K" *) logic [15:0] glyphs [0:2047];
 
     always_ff @(posedge wr_clk)
         if (wr_en) glyphs[wr_addr] <= wr_data;
 
-    always_ff @(posedge rd_clk)
-        row <= glyphs[{code, line}];
+    wire [11:0] rd_byte = {code, line};
+    logic [15:0] rd_word;
+    logic        rd_hi;
+
+    always_ff @(posedge rd_clk) begin
+        rd_word <= glyphs[rd_byte[11:1]];
+        rd_hi   <= rd_byte[0];
+    end
+
+    assign row = rd_hi ? rd_word[15:8] : rd_word[7:0];
 
 endmodule
 

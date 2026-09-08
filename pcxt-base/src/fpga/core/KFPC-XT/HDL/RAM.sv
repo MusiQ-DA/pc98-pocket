@@ -80,8 +80,18 @@ module RAM (
     //
     // RAM Address Select (0x00000-0xAFFFF and 0xC0000-0xFFFFF)
     //
+`ifdef MACHINE_PC98
+    // A0000-A3FFF is text VRAM and A4000-A4FFF the character generator window;
+    // both answer from outside SDRAM, so this must NOT also answer for them or
+    // two drivers fight over the bus. A0000-A7FFF is excluded wholesale --
+    // A5000-A7FFF is unused on this machine.
+    assign ram_address_select_n = ~(enable_sdram
+                                 && ~(address[19:16] == 4'b1011)     // B0000: video
+                                 && ~(address[19:15] == 5'b10100));  // A0000-A7FFF
+`else
     assign ram_address_select_n = ~(enable_sdram && ~(address[19:16] == 4'b1011) &&  // B0000h reserved for VRAM
 	                               ~(~enable_a000h && address[19:16] == 4'b1010));    // A0000h is optional
+`endif
 	 
 
 `ifdef MACHINE_PC98

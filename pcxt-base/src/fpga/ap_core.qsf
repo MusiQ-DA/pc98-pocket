@@ -803,6 +803,11 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFSDRAM/HDL/KFS
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_mp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_selftest_master.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/post_monitor.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_tvram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_font_ank.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_text_render.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_video_timing.sv
+set_global_assignment -name VERILOG_FILE core/pll_video_pc98.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_kf_shim.sv
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFPS2KB/HDL/KFPS2KB_Byte_Accept.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFPS2KB/HDL/KFPS2KB.sv"
