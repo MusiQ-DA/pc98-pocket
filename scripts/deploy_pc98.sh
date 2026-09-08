@@ -109,6 +109,28 @@ cp "$ROMS/bios.rom" "$ROMS/itf.rom" "$ROMS/font.rom" dist/pc98/Assets/pc98/hiroy
 # readout is a file copy rather than a Quartus compile. Built here rather than
 # assumed present: firmware.bin is gitignored, being a build product.
 make -C pcxt-base/src/firmware >/dev/null || { say "firmware build failed"; exit 1; }
+
+# And check that what came out is actually current.
+#
+# The first PC-98 deploy shipped a STALE firmware.bin: make had nothing to do
+# by its own dependency rules, but the binary on disk predated changes that had
+# since been compiled into firmware.vh. The core came up showing a mixture of
+# fields that no single build produces -- PC/AT-only rows next to PC-98-only
+# ones -- and that took a photograph and twenty minutes to work out.
+#
+# firmware.vh is committed and CI verifies it against its sources, so it is the
+# trustworthy copy: if the binary disagrees with it, the binary is stale.
+python3 - <<'PY' || { say "firmware.bin is stale against firmware.vh -- run make"; exit 1; }
+import sys
+b = open('pcxt-base/src/firmware/firmware.bin', 'rb').read()
+v = open('pcxt-base/src/firmware/firmware.vh').read().split()
+vb = bytearray()
+for w in v:
+    vb += int(w, 16).to_bytes(4, 'little')
+sys.exit(0 if b == bytes(vb[:len(b)]) else 1)
+PY
+say "firmware.bin matches firmware.vh"
+
 cp pcxt-base/src/firmware/firmware.bin dist/pc98/Assets/pc98/hiroya.PC98/
 say "packaged with ROMs"
 

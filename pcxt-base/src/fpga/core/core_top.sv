@@ -1301,6 +1301,30 @@ module core_top (
     // Decoupling FIFO, entry = {xtide, addr[24:0], data[15:0]}: the slot tag rides each
     // entry so a later stream can't retag a draining tail. 256 deep; the handshake loader
     // keeps it shallow and load_active holds reset until it drains, so it never overflows.
+    // The firmware slot's whole window, not just the part copied into the ROM:
+    // every word of it has to stay out of the FIFO, including the parts outside
+    // the 8x16 ANK range.
+    wire fw_dl_slot = (dl_addr[27:16] == 12'h004);
+
+    // Which words the BIOS loader will actually consume.
+    //
+    // Anything else that reaches the FIFO stays there forever, because the FSM
+    // only drains slots it recognises -- and a FIFO that never empties holds
+    // load_active high, which holds the softcore in reset. A settings slot, or
+    // any future one with its own consumer, would deadlock the same way the
+    // firmware slot did.
+    //
+    // PC-98's slots are decided purely by address, so the predicate is exact.
+    // The PC/AT build also selects by index (XT-IDE), which is not available
+    // here, so it keeps its old behaviour minus the firmware window.
+`ifdef MACHINE_PC98
+    wire rom_dl_wanted = (dl_addr[24:17] == 8'h00)      // bios.rom
+                       | (dl_addr[24:15] == 10'h004)    // itf.rom
+                       | (dl_addr[24:20] == 5'h01);     // font.rom
+`else
+    wire rom_dl_wanted = ~fw_dl_slot;
+`endif
+
     localparam RLF_AW = 8;
     reg  [41:0]     romfifo [0:(1<<RLF_AW)-1];
     reg  [RLF_AW:0] rlf_wptr = 0;
@@ -1333,8 +1357,18 @@ module core_top (
     reg [RLF_AW:0] rlf_level_max = '0;
     wire [RLF_AW:0] rlf_level = rlf_wptr - rlf_rptr;
 
+    // Only words the BIOS loader will actually CONSUME go in here.
+    //
+    // The firmware slot has its own path -- a direct tap on dl_wr into the
+    // softcore's ROM -- and putting its words in this FIFO as well was a
+    // deadlock: the loader FSM only drains slots it recognises, so they sat
+    // here forever, rlf_empty never came true, load_active never fell, and the
+    // softcore (held in reset until the boot downloads finish) never started.
+    // No OSD, ever, on a machine that was otherwise running.
+    //
+    // Any future slot with its own consumer has to be excluded here too.
     always @(posedge clk_chipset) begin
-        if (dl_wr && ~rlf_full) begin
+        if (dl_wr && ~rlf_full && rom_dl_wanted) begin
             romfifo[rlf_wptr[RLF_AW-1:0]] <= {download_id == 16'd2, dl_addr[24:0], dl_data};
             rlf_wptr <= rlf_wptr + 1'b1;
         end
@@ -1397,7 +1431,7 @@ module core_top (
     // data.json puts firmware.bin at bridge 0x10040000. data_loader hands over
     // sixteen bits at a time and the ROM is 32 bits wide, so two transfers make
     // a word -- low half first, matching the little-endian image.
-    wire        fw_dl_hit  = dl_wr && (dl_addr[27:16] == 12'h004);
+    wire        fw_dl_hit  = dl_wr && fw_dl_slot;
     wire [12:0] fw_word    = dl_addr[14:2];
     reg  [15:0] fw_lo;
     reg         fw_wr_en_r;
