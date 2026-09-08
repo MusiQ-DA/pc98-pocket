@@ -15,9 +15,20 @@
 // The self-test master, reused to read guest memory while the guest runs. It
 // takes the bus through hold acknowledge, which is what the BIOS loader does.
 #define ST_ADDR   ((volatile uint32_t *) 0x50000000)
+#define ST_WDATA  ((volatile uint32_t *) 0x50000004)
 #define ST_TRIG   ((volatile uint32_t *) 0x50000008)
 #define ST_STATUS ((volatile uint32_t *) 0x5000000C)
 #define ST_BUSY   (1u << 8)
+
+static void guest_poke(uint32_t addr, uint8_t v)
+{
+    *ST_ADDR = addr;
+    *ST_WDATA = v;
+    *ST_TRIG = 1u;                       // write
+    for (uint32_t i = 0; i < 2000u; i++)
+        if (!(*ST_STATUS & ST_BUSY))
+            break;
+}
 
 static uint8_t guest_peek(uint32_t addr)
 {
@@ -158,38 +169,48 @@ void post_mon_tick(void)
     // taking the bus for a few reads disturbs nothing.
     static int vectors_read = 0;
     static uint32_t v16_seg = 0, v16_off = 0, v1a_seg = 0, v1a_off = 0;
+    static uint32_t v16b_seg = 0, v16b_off = 0;
+    static int scratch_bad = 0;
     if (!vectors_read && idle_ticks >= 4000u) {
+        // Read INT 16h TWICE. testB26 came back 7044:FC36 where F000:E82E was
+        // written, and 5000:FE56 where F000:FE6E was -- bit errors, not
+        // misplaced table entries. Two reads separate the two possible causes
+        // in one hardware run:
+        //
+        //   the pair differs  -> the READ is unstable
+        //   the pair agrees   -> memory is holding wrong data, so the write
+        //                        (or retention) is at fault
         v16_off = guest_peek(0x58) | ((uint32_t) guest_peek(0x59) << 8);
         v16_seg = guest_peek(0x5A) | ((uint32_t) guest_peek(0x5B) << 8);
+        v16b_off = guest_peek(0x58) | ((uint32_t) guest_peek(0x59) << 8);
+        v16b_seg = guest_peek(0x5A) | ((uint32_t) guest_peek(0x5B) << 8);
         v1a_off = guest_peek(0x68) | ((uint32_t) guest_peek(0x69) << 8);
         v1a_seg = guest_peek(0x6A) | ((uint32_t) guest_peek(0x6B) << 8);
+
+        // And a write/read of our own into a scratch byte the BIOS is done
+        // with, to see whether a fresh round trip survives at all.
+        for (uint32_t i = 0; i < 8; i++) {
+            guest_poke(0x00300u + i, (uint8_t) (0x5Au ^ (i * 0x9Du)));
+        }
+        for (uint32_t i = 0; i < 8; i++) {
+            if (guest_peek(0x00300u + i) != (uint8_t) (0x5Au ^ (i * 0x9Du)))
+                scratch_bad++;
+        }
         vectors_read = 1;
     }
 
-    // The option-ROM window, read at the same time.
-    //
-    // POST 11 means the BIOS scanned C000-C800, believed it found an option
-    // ROM, and called into it -- and did not come back. But nothing loads a ROM
-    // there: the BIOS memory test only covers 0x00000-0x07FFF, so C0000 is
-    // uninitialised SDRAM. If it happens to read 55 AA, the signature check
-    // passes and the machine calls into whatever garbage follows.
-    //
-    // So print the four bytes the scanner looked at, and the far pointer it
-    // stored at 0x67. 55 AA there is the whole explanation.
-    static uint32_t c0[4] = {0, 0, 0, 0};
-    static uint32_t romptr_off = 0, romptr_seg = 0;
-    if (!vectors_read && idle_ticks >= 4000u) {
-        for (int i = 0; i < 4; i++) c0[i] = guest_peek(0xC0000u + (uint32_t) i);
-        romptr_off = guest_peek(0x67) | ((uint32_t) guest_peek(0x68) << 8);
-        romptr_seg = guest_peek(0x69) | ((uint32_t) guest_peek(0x6A) << 8);
-    }
-
+    // (The option-ROM window is answered: testB26 read C000 as 00 00 00 00 with
+    // a null pointer at 0x67, so there is no stray 55 AA signature and that
+    // hypothesis is closed. The line is reused for a second read instead.)
     if (vectors_read) {
-        osd_draw_string(&fb, 4, 52, "C000", OSD_LABEL);
-        for (int i = 0; i < 4; i++) hex(4 + (5 + i * 3) * 8, 52, c0[i], 2);
-        osd_draw_string(&fb, 4 + 18 * 8, 52, "PTR", OSD_LABEL);
-        hex(4 + 22 * 8, 52, romptr_seg, 4);
-        hex(4 + 27 * 8, 52, romptr_off, 4);
+        // Second read of 16h, and our own scratch round trip.
+        osd_draw_string(&fb, 4, 52, "16h#2", OSD_LABEL);
+        hex(4 + 6 * 8, 52, v16b_seg, 4);
+        osd_draw_string(&fb, 4 + 10 * 8, 52, ":", OSD_LABEL);
+        hex(4 + 11 * 8, 52, v16b_off, 4);
+        osd_draw_string(&fb, 4 + 17 * 8, 52, "SCRATCH", OSD_LABEL);
+        dec(4 + 25 * 8, 52, (uint32_t) scratch_bad);
+        osd_draw_string(&fb, 4 + 27 * 8, 52, "/8", OSD_LABEL);
 
         osd_draw_string(&fb, 4, 42, "16h", OSD_LABEL);
         hex(4 + 4 * 8, 42, v16_seg, 4);
