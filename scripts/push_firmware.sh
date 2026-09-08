@@ -17,6 +17,18 @@ DST="$VOL/Assets/pc98/hiroya.PC98"
 make -C pcxt-base/src/firmware >/dev/null
 echo "built $(stat -f%z pcxt-base/src/firmware/firmware.bin) bytes"
 
+# Same check the deploy makes: firmware.vh is committed and CI verifies it
+# against its sources, so a binary that disagrees with it is stale.
+python3 - <<'PY' || { echo "firmware.bin is stale against firmware.vh"; exit 1; }
+import sys
+b = open('pcxt-base/src/firmware/firmware.bin', 'rb').read()
+v = open('pcxt-base/src/firmware/firmware.vh').read().split()
+vb = bytearray()
+for w in v:
+    vb += int(w, 16).to_bytes(4, 'little')
+sys.exit(0 if b == bytes(vb[:len(b)]) else 1)
+PY
+
 python3 scripts/check_osd_layout.py
 
 [ -d "$DST" ] || { echo "no $DST -- put the Pocket into USB access mode"; exit 1; }
