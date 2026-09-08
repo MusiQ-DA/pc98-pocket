@@ -528,11 +528,32 @@ module core_top (
     // The softcore is reset on PLL lock (RESET) only, so it comes up while the guest is still
     // held and can stage settings before releasing it. It is deliberately not held by the guest
     // terms (BIOS load, splash, the guest reset, or its own soft_guest_hold), which would deadlock.
+    // The softcore must not run while its own ROM is being written. reset_soft
+    // was a fixed 65535-cycle delay -- about 1.5 ms, far shorter than a slot
+    // load -- so it would have started on the baked-in image and had the code
+    // replaced underneath it.
+    //
+    // Latch "the boot-time downloads have finished" once, the first time
+    // load_active falls after having been high, and hold reset until then.
+    // One-shot, so a deferred slot mounted later (a floppy, say) cannot put the
+    // softcore back into reset and take the OSD away.
+    logic boot_dl_seen = 1'b0;
+    logic boot_dl_done = 1'b0;
+    always @(posedge clk_chipset) begin
+        if (load_active)                   boot_dl_seen <= 1'b1;
+        if (boot_dl_seen && !load_active)  boot_dl_done <= 1'b1;
+    end
+
     logic reset_soft = 1'b1;
     logic [15:0] reset_soft_count = 16'h0000;
     always @(posedge clk_chipset, posedge RESET)
     begin
         if (RESET)
+        begin
+            reset_soft <= 1'b1;
+            reset_soft_count <= 16'h0000;
+        end
+        else if (!boot_dl_done)
         begin
             reset_soft <= 1'b1;
             reset_soft_count <= 16'h0000;
@@ -866,6 +887,10 @@ module core_top (
     wire       dock_key_stb;
 
     softcpu_subsystem u_softcpu (
+        .fw_wr_clk                  (clk_chipset),
+        .fw_wr_en                   (fw_wr_en_r),
+        .fw_wr_addr                 (fw_wr_addr_r),
+        .fw_wr_data                 (fw_wr_data_r),
         .clk_sys                    (clk_chipset),
         .clk_74a                    (clk_74a),
         .reset                      (reset_soft),
@@ -1357,6 +1382,40 @@ module core_top (
                                      && (dl_addr[15:0] <  16'h1800);
     wire [10:0] font_dl_addr = dl_addr[11:1] - 11'h400;   // word index from 0x800
 `endif
+
+    // ---------------------------------------------------------- firmware slot
+    //
+    // The softcore's ROM is $readmemh'd from firmware.vh at synthesis, which
+    // means a one-line change to an on-screen readout costs a fifteen-to-twenty
+    // minute Quartus compile. Several of this session's builds were exactly
+    // that. A data slot lets the image be replaced by copying a file.
+    //
+    // The baked-in contents stay as the default: with no file in the slot,
+    // nothing is written and the core behaves as it always did. So this cannot
+    // brick a card that is missing the file.
+    //
+    // data.json puts firmware.bin at bridge 0x10040000. data_loader hands over
+    // sixteen bits at a time and the ROM is 32 bits wide, so two transfers make
+    // a word -- low half first, matching the little-endian image.
+    wire        fw_dl_hit  = dl_wr && (dl_addr[27:16] == 12'h004);
+    wire [12:0] fw_word    = dl_addr[14:2];
+    reg  [15:0] fw_lo;
+    reg         fw_wr_en_r;
+    reg  [12:0] fw_wr_addr_r;
+    reg  [31:0] fw_wr_data_r;
+
+    always @(posedge clk_chipset) begin
+        fw_wr_en_r <= 1'b0;
+        if (fw_dl_hit) begin
+            if (!dl_addr[1]) begin
+                fw_lo <= dl_data;
+            end else begin
+                fw_wr_addr_r <= fw_word;
+                fw_wr_data_r <= {dl_data, fw_lo};
+                fw_wr_en_r   <= 1'b1;
+            end
+        end
+    end
 
     reg [4:0]  bios_load_state = 4'h0;
     reg [1:0]  bios_protect_flag;

@@ -18,8 +18,14 @@
  */
 
 // 20250301 - Changed combinational read to registered read to infer block RAM - desaster
+//
+// 2026-09-09 - Added a write port so the image can be replaced from an SD data
+// slot at boot. The $readmemh contents remain the default, so a core with no
+// firmware file behaves exactly as before; a slot simply overwrites it. That
+// turns a firmware-only change from a fifteen-to-twenty minute Quartus
+// compile into copying a file onto the card.
 
-module sprom(clk, rst, ce, oe, addr, dout);
+module sprom(clk, rst, ce, oe, addr, dout, wr_clk, wr_en, wr_addr, wr_data);
 	//
 	// Default address and data buses width (1024*32)
 	//
@@ -38,6 +44,11 @@ module sprom(clk, rst, ce, oe, addr, dout);
 	input  [aw-1:0] addr; // address bus inputs
 	output reg [dw-1:0] dout;   // output data bus
 
+	input           wr_clk;  // write port, for loading an image at boot
+	input           wr_en;
+	input  [aw-1:0] wr_addr;
+	input  [dw-1:0] wr_data;
+
 	//
 	// Module body
 	//
@@ -45,6 +56,10 @@ module sprom(clk, rst, ce, oe, addr, dout);
 	reg [dw-1:0] mem [numwords-1:0];
 	reg [aw-1:0] ra;
 	reg oe_r;
+
+	always @(posedge wr_clk)
+		if (wr_en)
+			mem[wr_addr] <= wr_data;
 
 	always @(posedge clk)
 		oe_r <= oe;

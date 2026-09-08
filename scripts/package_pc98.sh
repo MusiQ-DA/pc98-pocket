@@ -9,6 +9,10 @@
 #   id 3  font.rom 282 KB  bridge 0x10030000  -> the 8x16 ANK set at file offset
 #                                                0x0800-0x17FF goes to BRAM;
 #                                                the kanji is not read yet
+#   id 4  firmware.bin 24 KB bridge 0x10040000 -> overwrites the softcore's ROM.
+#                                                OPTIONAL: without it the core
+#                                                runs the image built into the
+#                                                bitstream.
 #
 # The bridge addresses are what core_top decodes on -- the slot id is not used
 # for the decision -- so they must match PC98_BIOS_BASE / PC98_ITF_BASE there.
@@ -72,6 +76,9 @@ def data(j):
         {"name": "PC-98 Font",  "id": 3, "required": True,  "parameters": "0x203",
          "filename": "font.rom", "extensions": ["rom", "bin"],
          "address": "0x10030000", "size_maximum": "0x46800"},
+        {"name": "Firmware",    "id": 4, "required": False, "parameters": "0x203",
+         "filename": "firmware.bin", "extensions": ["bin"],
+         "address": "0x10040000", "size_maximum": "0x6000"},
         {"name": "Settings",    "id": 7, "required": False, "parameters": "0x03",
          "filename": "settings.dat", "extensions": ["dat"],
          "address": "0x10030000", "size_maximum": "0x1000"},
