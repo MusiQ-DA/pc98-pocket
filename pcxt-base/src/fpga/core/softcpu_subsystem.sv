@@ -119,6 +119,9 @@ module softcpu_subsystem (
     input  [15:0] rd_any_count,
     input  [15:0] ivt_touch_count,
     input  [19:0] wr_last_addr,
+    input   [3:0] raw_strobes,
+    input  [15:0] wr_low_cycles,
+    input  [15:0] rd_low_cycles,
     output        osd_active,
     output        osd_credits_req,
     output        osd_video_req,
@@ -861,7 +864,8 @@ module softcpu_subsystem (
             32'h5000_002C: cpu_mem_rdata = {ivt16_wr_count, ivt16_seg, ivt16_off[15:8]};
             32'h5000_0030: cpu_mem_rdata = {16'd0, ivt16_off};
             32'h5000_0034: cpu_mem_rdata = {rd_any_count, wr_any_count};
-            32'h5000_003C: cpu_mem_rdata = {16'd0, ivt_touch_count};
+            32'h5000_003C: cpu_mem_rdata = {12'd0, raw_strobes, ivt_touch_count};
+            32'h5000_0040: cpu_mem_rdata = {rd_low_cycles, wr_low_cycles};
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;
         endcase

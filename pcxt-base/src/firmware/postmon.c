@@ -15,7 +15,8 @@
 #define POST_IVT16B ((volatile uint32_t *) 0x50000030) // off
 #define POST_WRCNT  ((volatile uint32_t *) 0x50000034) // {aen_count, any_count}
 #define POST_WRADDR ((volatile uint32_t *) 0x50000038) // last memory write address
-#define POST_IVTTCH ((volatile uint32_t *) 0x5000003C) // accesses landing in 0x58-0x5B
+#define POST_IVTTCH ((volatile uint32_t *) 0x5000003C) // {raw_strobes, ivt_touch}
+#define POST_LOWCYC ((volatile uint32_t *) 0x50000040) // {rd_low, wr_low}
 
 // The self-test master, reused to read guest memory while the guest runs. It
 // takes the bus through hold acknowledge, which is what the BIOS loader does.
@@ -53,7 +54,7 @@ static uint8_t guest_peek(uint32_t addr)
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
-#define PANEL_H 88
+#define PANEL_H 98
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -234,8 +235,20 @@ void post_mon_tick(void)
         dec(4 + 3 * 8, 72, w & 0xFFFFu);
         osd_draw_string(&fb, 4 + 9 * 8, 72, "RD", OSD_LABEL);
         dec(4 + 12 * 8, 72, w >> 16);
+        uint32_t tt = *POST_IVTTCH;
         osd_draw_string(&fb, 4 + 26 * 8, 72, "T", OSD_LABEL);
-        dec(4 + 28 * 8, 72, *POST_IVTTCH & 0xFFFFu);
+        dec(4 + 28 * 8, 72, tt & 0xFFFFu);
+
+        // The raw strobes and how long they sit low. RAW is
+        // {mem_rd_n, mem_wr_n, io_wr_n, aen_n}: F means all idle-high, and a
+        // bit stuck at 0 is the answer on its own.
+        uint32_t lc = *POST_LOWCYC;
+        osd_draw_string(&fb, 4, 82, "RAW", OSD_LABEL);
+        hex(4 + 4 * 8, 82, (tt >> 16) & 0xFu, 1);
+        osd_draw_string(&fb, 4 + 7 * 8, 82, "WLO", OSD_LABEL);
+        dec(4 + 11 * 8, 82, lc & 0xFFFFu);
+        osd_draw_string(&fb, 4 + 18 * 8, 82, "RLO", OSD_LABEL);
+        dec(4 + 22 * 8, 82, lc >> 16);
         osd_draw_string(&fb, 4 + 18 * 8, 72, "AT", OSD_LABEL);
         hex(4 + 21 * 8, 72, *POST_WRADDR & 0xFFFFFu, 5);
 

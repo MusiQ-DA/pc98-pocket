@@ -74,7 +74,15 @@ module post_monitor #(
     output logic [15:0] wr_any_count,     // memory WRITE strobes
     output logic [15:0] rd_any_count,     // memory READ strobes
     output logic [15:0] ivt_touch_count,  // any access with address in 0x58-0x5B
-    output logic [19:0] wr_last_addr      // address of the last memory write
+    output logic [19:0] wr_last_addr,     // address of the last memory write
+    // The raw strobes, and how many cycles each spends asserted. Edge counting
+    // came back 0 for reads AND writes while LIVE looked busy, and both facts
+    // fit one explanation: the strobes sit LOW permanently, so mem_access is
+    // always true (LIVE just follows the address bus) and no rising edge ever
+    // happens. Levels cannot lie about that.
+    output logic  [3:0] raw_strobes,       // {mem_rd_n, mem_wr_n, io_wr_n, aen_n}
+    output logic [15:0] wr_low_cycles,     // cycles memory_write_n was low
+    output logic [15:0] rd_low_cycles      // cycles memory_read_n was low
 );
 
     // The history FREEZES once it holds DEPTH codes.
@@ -128,6 +136,9 @@ module post_monitor #(
             rd_any_count  <= 16'd0;
             ivt_touch_count <= 16'd0;
             mem_read_q_raw <= 1'b0;
+            raw_strobes   <= 4'hF;
+            wr_low_cycles <= 16'd0;
+            rd_low_cycles <= 16'd0;
             wr_last_addr  <= 20'd0;
             ivt16_off     <= 16'h0;
             ivt16_seg     <= 16'h0;
@@ -150,6 +161,12 @@ module post_monitor #(
                     ivt_touch_count <= ivt_touch_count + 16'd1;
             mem_write_q_raw <= ~memory_write_n;
             mem_read_q_raw  <= ~memory_read_n;
+
+            raw_strobes <= {memory_read_n, memory_write_n, io_write_n, address_enable_n};
+            if (~memory_write_n && wr_low_cycles != 16'hFFFF)
+                wr_low_cycles <= wr_low_cycles + 16'd1;
+            if (~memory_read_n && rd_low_cycles != 16'hFFFF)
+                rd_low_cycles <= rd_low_cycles + 16'd1;
 
             if (~memory_write_n && ~mem_write_q_raw && in_ivt16) begin
                 case (address[1:0])
