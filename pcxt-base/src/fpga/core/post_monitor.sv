@@ -32,6 +32,9 @@ module post_monitor #(
     // shows every one of its writes is a constant: 01-12, 52, 54). Taking the
     // 8088's dout removes the ambiguity.
     input  wire  [7:0] cpu_data,
+    // The shared data bus, which carries READ data back to the CPU. cpu_data is
+    // the 8088's own output and only means anything on writes.
+    input  wire  [7:0] bus_data,
     input  wire        io_write_n,
     // AEN. During a DMA cycle the bus carries a 20-bit MEMORY address while
     // IOW is asserted, so every memory address whose low 16 bits happen to be
@@ -82,7 +85,14 @@ module post_monitor #(
     // happens. Levels cannot lie about that.
     output logic  [3:0] raw_strobes,       // {mem_rd_n, mem_wr_n, io_wr_n, aen_n}
     output logic [15:0] wr_low_cycles,     // cycles memory_write_n was low
-    output logic [15:0] rd_low_cycles      // cycles memory_read_n was low
+    output logic [15:0] rd_low_cycles,     // cycles memory_read_n was low
+    // What the CPU READ out of F000:D880-D883 -- the two words POST 05's movsw
+    // copies into INT 16h's vector. Passive, like the write snoop: reading that
+    // region with the self-test master came back 11 11 11 11 11 11 11 11, which
+    // is not memory content, so the master's read of the BIOS region is broken
+    // and only a bus snoop can be trusted here.
+    output logic [31:0] rom_read_data,
+    output logic  [7:0] rom_read_count
 );
 
     // The history FREEZES once it holds DEPTH codes.
@@ -139,6 +149,8 @@ module post_monitor #(
             raw_strobes   <= 4'hF;
             wr_low_cycles <= 16'd0;
             rd_low_cycles <= 16'd0;
+            rom_read_data <= 32'd0;
+            rom_read_count<= 8'd0;
             wr_last_addr  <= 20'd0;
             ivt16_off     <= 16'h0;
             ivt16_seg     <= 16'h0;
@@ -161,6 +173,18 @@ module post_monitor #(
                     ivt_touch_count <= ivt_touch_count + 16'd1;
             mem_write_q_raw <= ~memory_write_n;
             mem_read_q_raw  <= ~memory_read_n;
+
+            // Snoop the CPU's read of the vector table entry. The BIOS holds
+            // 2E E8 at D881/D882; the guest wrote 412E, so it saw 2E then 41.
+            if (~memory_read_n && ~mem_read_q_raw && (address[19:2] == 18'h3F620)) begin
+                case (address[1:0])
+                    2'd0: rom_read_data[7:0]   <= bus_data;
+                    2'd1: rom_read_data[15:8]  <= bus_data;
+                    2'd2: rom_read_data[23:16] <= bus_data;
+                    2'd3: rom_read_data[31:24] <= bus_data;
+                endcase
+                if (rom_read_count != 8'hFF) rom_read_count <= rom_read_count + 8'd1;
+            end
 
             raw_strobes <= {memory_read_n, memory_write_n, io_write_n, address_enable_n};
             if (~memory_write_n && wr_low_cycles != 16'hFFFF)
