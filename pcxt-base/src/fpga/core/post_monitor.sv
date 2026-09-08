@@ -165,12 +165,28 @@ module post_monitor #(
     // this window and they landed in these slots -- N went 16 to 22 and the
     // first six bytes came back as the ext port's answer, not the CPU's,
     // destroying the measurement. This window is the CPU's alone.
+`ifdef MACHINE_PC98
+    // The reset vector and the fifteen bytes with it. On PC-98 this is the one
+    // window that matters: a genuine ITF holds EA 00 00 00 F8 there (jump to
+    // F800:0000, itself), and a genuine system BIOS holds EA 00 00 80 FD. Any
+    // other content means the CPU is executing whatever happened to be in
+    // memory, which is what "LIVE 07E83, stopped" looks like from outside.
+    wire  in_rom_win = (address[19:4] == 16'hFFFF) & ~address_enable_n;
+`else
     wire  in_rom_win = (address[19:4] == 16'hFD88) & ~address_enable_n;
+`endif
 
     // The loader writes each byte with the strobe held until the RAM controller
     // completes, so address and data are stable throughout and no edge games
     // are needed -- unlike the bus snoops, this one can just take what it sees.
+`ifdef MACHINE_PC98
+    // And what the LOADER put there, so the two halves separate the same way
+    // they did for the PC/AT BIOS: LD right and RD wrong means the memory did
+    // not keep it, LD wrong means it was never written.
+    wire  in_ld_win  = (ld_addr[19:4] == 16'hFFFF) & ~ld_we_n;
+`else
     wire  in_ld_win  = (ld_addr[19:4] == 16'hFD88) & ~ld_we_n;
+`endif
     logic ld_seen_q;
 
     always_ff @(posedge clk or posedge rst) begin
