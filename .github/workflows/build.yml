@@ -77,6 +77,15 @@ jobs:
           ./obj_tv/v | tee tv.log
           grep -q "RESULT: PASS" tv.log
 
+      - name: text plane draws what TVRAM says
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_text \
+            -Isim -Ipcxt-base/src/fpga/core \
+            sim/tb_pc98_text.sv pcxt-base/src/fpga/core/pc98_text_render.sv \
+            -o x --Mdir obj_tx
+          ./obj_tx/x | tee tx.log
+          grep -q "RESULT: PASS" tx.log
+
       - name: ITF bank switches on 0x043D and not on a glitch
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_itf_bank \
