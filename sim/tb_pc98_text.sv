@@ -28,6 +28,7 @@ module tb_pc98_text;
     wire [11:0] tv_cell;
     logic [7:0] tv_char_lo, tv_char_hi, tv_attr;
     wire  [7:0] font_code;
+    wire  [6:0] font_cell;
     wire  [3:0] font_line;
     logic [7:0] font_row;
     wire  [2:0] grb;
@@ -38,7 +39,8 @@ module tb_pc98_text;
         .blink_on(blink_on),
         .tv_cell(tv_cell), .tv_char_lo(tv_char_lo), .tv_char_hi(tv_char_hi),
         .tv_attr(tv_attr),
-        .font_code(font_code), .font_line(font_line), .font_row(font_row),
+        .font_cell(font_cell), .font_code(font_code), .font_line(font_line),
+        .font_row(font_row),
         .grb(grb), .pixel(pixel), .kanji_seen(kanji_seen)
     );
 
@@ -127,17 +129,16 @@ module tb_pc98_text;
         goto(8*10 + 0, 0);
         if (grb !== 3'b010) begin $display("  FAIL red"); errors++; end
 
-        // A kanji cell must not be drawn through the ANK font. With the glyph
-        // row all zeros an ANK render would be blank; the kanji marker is not.
+        // Kanji now comes from the font like anything else -- the row buffer
+        // fetches both halves and hands over bytes, so the renderer draws what
+        // it is given. What must still hold is that the fact is REPORTED, so
+        // "is the guest using kanji" stays measurable.
         scr_attr    = 8'hE1;
         scr_char_hi = 8'h30;              // non-zero high byte = kanji
-        glyph_row   = 8'h00;
-        goto(8*10 + 0, 0);
-        if (pixel === 1'b0 && kanji_seen === 1'b0) begin
-            $display("  FAIL kanji cell rendered as blank ANK"); errors++;
-        end
-        $display("  kanji cell: pixel=%0d kanji_seen=%0d (must be flagged)",
-                 pixel, kanji_seen);
+        glyph_row   = 8'b1010_0000;
+        expect_pixel(8*10 + 0, 0, 1'b1, "kanji glyph bit 7");
+        expect_pixel(8*10 + 1, 0, 1'b0, "kanji glyph bit 6");
+        $display("  kanji cell: kanji_seen=%0d (must be flagged)", kanji_seen);
         if (kanji_seen !== 1'b1) begin
             $display("  FAIL kanji not flagged"); errors++;
         end
