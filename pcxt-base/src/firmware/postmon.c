@@ -83,14 +83,25 @@ void post_mon_tick(void)
     static uint32_t last_live = 0xFFFFFFFFu;
     // LIVE is the point of this build: when the guest stops, it settles on
     // whatever the CPU is spinning in. Redraw whenever it moves.
-    // NOTE: this early-out must not stop the stall counter below from
-    // advancing, so the counter is updated before it.
+    // Staleness is judged on the POST COUNT ALONE.
+    //
+    // It used to include `live`, and live is the guest's last memory address --
+    // it changes on every access, so "nothing has changed" was never true and
+    // the gate never fired. That is why testB24 showed no vectors, and it is
+    // also why I read that run as a reset loop: the symptom was my gate, not
+    // the guest.
     static uint32_t idle_ticks = 0;
-    if (status == last_status && maxrst == last_maxrst && live == last_live) {
-        if (idle_ticks < 100000u) idle_ticks++;
-        if (idle_ticks != 3000u) return;   // redraw once when it settles
+    uint32_t count_now = status >> 16;
+    static uint32_t last_count = 0xFFFFFFFFu;
+    if (count_now == last_count) {
+        if (idle_ticks < 1000000u) idle_ticks++;
     } else {
+        last_count = count_now;
         idle_ticks = 0;
+    }
+    if (status == last_status && maxrst == last_maxrst && live == last_live
+        && idle_ticks != 4000u) {
+        return;                            // nothing worth redrawing
     }
     last_status = status;
     last_maxrst = maxrst;
@@ -140,9 +151,14 @@ void post_mon_tick(void)
     // fired. It is in a reset loop, not a hang. Waiting for RESTARTS to reach 1
     // means the first pass through POST is left completely alone (which is what
     // testB21-23 got wrong), and by then one disturbed pass costs nothing.
+    // Read the vectors once the POST count has been still for a while. The
+    // guest hangs rather than restarting (RESTARTS stays 0 on hardware), so
+    // waiting for a restart never fires either -- testB25 sat on
+    // "VEC -- WAITING RESTART" indefinitely. Quiet means POST is over and
+    // taking the bus for a few reads disturbs nothing.
     static int vectors_read = 0;
     static uint32_t v16_seg = 0, v16_off = 0, v1a_seg = 0, v1a_off = 0;
-    if (!vectors_read && (maxrst & 0xFFFFu) >= 1u) {
+    if (!vectors_read && idle_ticks >= 4000u) {
         v16_off = guest_peek(0x58) | ((uint32_t) guest_peek(0x59) << 8);
         v16_seg = guest_peek(0x5A) | ((uint32_t) guest_peek(0x5B) << 8);
         v1a_off = guest_peek(0x68) | ((uint32_t) guest_peek(0x69) << 8);
@@ -160,7 +176,7 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4 + 23 * 8, 42, ":", OSD_LABEL);
         hex(4 + 24 * 8, 42, v1a_off, 4);
     } else {
-        osd_draw_string(&fb, 4, 42, "VEC -- WAITING RESTART", OSD_LABEL);
+        osd_draw_string(&fb, 4, 42, "VEC -- POST STILL RUNNING", OSD_LABEL);
     }
 
     // History, oldest first, so the path through POST is visible at a glance.
