@@ -236,6 +236,16 @@ module PERIPHERALS #(
     wire    cms_220_chip_select     = `ENABLE_CMS ? (iorq && ~address_enable_n && address[15:4] == (16'h0220 >> 4)) : 1'b0; // 0x220 .. 0x22F (C/MS Audio)
     wire    video_mem_select        = `ENABLE_TANDY_VIDEO ? (tandy_video_en && ~iorq && ~address_enable_n & (address[19:17] == nmi_mask_register_data[3:1])) : 1'b0; // 128KB
     wire    cga_mem_select          = `ENABLE_CGA ? (~iorq && ~address_enable_n && enable_cga & (address[19:15] == 5'b10111)) : 1'b0; // B8000 - BFFFF (16 KB / 32 KB)
+`ifdef MACHINE_PC98
+    // PC-98 text VRAM, A0000-A3FFF: characters at A0000 (two bytes per cell)
+    // and attributes at A2000. Same shape as the CGA window above -- a BRAM in
+    // the guest's address space, qualified with AEN so a DMA cycle carrying a
+    // matching address cannot reach it.
+    wire    tvram_mem_select        = ~iorq && ~address_enable_n
+                                    && (address[19:14] == 6'b101000);
+`else
+    wire    tvram_mem_select        = 1'b0;
+`endif
     wire    hgc_mem_select          = `ENABLE_HGC ? (~iorq && ~address_enable_n && hgc_enable & (address[19:15] == {5'b1011, hgc_grph_page})) : 1'b0; // B0000 - BFFFF (32KB / 64 KB)
     wire    uart_chip_select        = (~address_enable_n && {address[15:3], 3'd0} == 16'h03F8);
     wire    uart2_chip_select       = (~address_enable_n && {address[15:3], 3'd0} == 16'h02F8);
@@ -1313,6 +1323,24 @@ end
 
     defparam cga1.BLINK_MAX = 24'd4772727;
     defparam hgc1.BLINK_MAX = 24'd5166000;
+`ifdef MACHINE_PC98
+    wire [7:0]  tvram_cpu_q;
+    wire [11:0] tvram_vid_cell = 12'd0;   // renderer not connected yet
+    wire [7:0]  tvram_vid_char_lo, tvram_vid_char_hi, tvram_vid_attr;
+
+    pc98_tvram u_tvram (
+        .clk         (clock),
+        .cpu_addr    (address[13:0]),
+        .cpu_wren    (tvram_mem_select & ~memory_write_n),
+        .cpu_wdata   (internal_data_bus),
+        .cpu_q       (tvram_cpu_q),
+        .vid_cell    (tvram_vid_cell),
+        .vid_char_lo (tvram_vid_char_lo),
+        .vid_char_hi (tvram_vid_char_hi),
+        .vid_attr    (tvram_vid_attr)
+    );
+`endif
+
     wire [7:0] cga_vram_cpu_dout;
     wire [7:0] hgc_vram_cpu_dout;
 
@@ -1745,6 +1773,13 @@ end
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= ppi_data_bus_out;
         end
+`ifdef MACHINE_PC98
+        else if (tvram_mem_select && (~memory_read_n))
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= tvram_cpu_q;
+        end
+`endif
         else if (`ENABLE_CGA && cga_mem_select && (~memory_read_n))
         begin
             data_bus_out_from_chipset <= 1'b1;
