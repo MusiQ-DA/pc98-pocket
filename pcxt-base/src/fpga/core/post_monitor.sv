@@ -92,7 +92,17 @@ module post_monitor #(
     // is not memory content, so the master's read of the BIOS region is broken
     // and only a bus snoop can be trusted here.
     output logic [127:0] rom_read_data,
-    output logic  [7:0] rom_read_count
+    output logic  [7:0] rom_read_count,
+    // The BIOS LOADER's own write of the same sixteen bytes, taken straight
+    // off core_top's loader FSM rather than decoded from the bus. Together
+    // with rom_read_data this splits the one question left: run#102 showed the
+    // CPU taking in 41 D6 where the image holds E8 D2, and either the loader
+    // wrote the wrong bytes or the memory did not keep what it was given.
+    input  wire  [19:0] ld_addr,
+    input  wire   [7:0] ld_data,
+    input  wire         ld_we_n,
+    output logic [127:0] rom_load_data,
+    output logic  [7:0] rom_load_count
 );
 
     // The history FREEZES once it holds DEPTH codes.
@@ -133,7 +143,21 @@ module post_monitor #(
     // not to show its SHAPE: D880/D881 came back right and D882/D883 wrong,
     // which is one bad 16-bit word next to one good one. Sixteen bytes says
     // whether that alternates, runs, or is a single word.
-    wire  in_rom_win = (address[19:4] == 16'hFD88);
+    //
+    // ~address_enable_n matters here for the same reason it does on the POST
+    // port: the arbiter sets address_enable_n from hold_acknowledge, and
+    // hold_request is (dma_hold_request | ext_access_request), so an EXT access
+    // drives this very bus with AEN high. run#105 added six guest_peek reads of
+    // this window and they landed in these slots -- N went 16 to 22 and the
+    // first six bytes came back as the ext port's answer, not the CPU's,
+    // destroying the measurement. This window is the CPU's alone.
+    wire  in_rom_win = (address[19:4] == 16'hFD88) & ~address_enable_n;
+
+    // The loader writes each byte with the strobe held until the RAM controller
+    // completes, so address and data are stable throughout and no edge games
+    // are needed -- unlike the bus snoops, this one can just take what it sees.
+    wire  in_ld_win  = (ld_addr[19:4] == 16'hFD88) & ~ld_we_n;
+    logic ld_seen_q;
 
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -158,6 +182,9 @@ module post_monitor #(
             wr_low_cycles <= 16'd0;
             rd_low_cycles <= 16'd0;
             rom_read_data <= 128'd0;
+            rom_load_data <= 128'd0;
+            rom_load_count<= 8'd0;
+            ld_seen_q     <= 1'b0;
             rom_read_count<= 8'd0;
             rom_slot_q    <= 2'd0;
             rom_byte_q    <= 8'd0;
@@ -202,6 +229,14 @@ module post_monitor #(
                 rom_read_data[{rom_slot_q, 3'd0} +: 8] <= rom_byte_q;
                 if (rom_read_count != 8'hFF) rom_read_count <= rom_read_count + 8'd1;
                 rom_hold_q <= 1'b0;
+            end
+
+            // One count per write, not one per cycle the strobe is held.
+            ld_seen_q <= in_ld_win;
+            if (in_ld_win) begin
+                rom_load_data[{ld_addr[3:0], 3'd0} +: 8] <= ld_data;
+                if (~ld_seen_q && rom_load_count != 8'hFF)
+                    rom_load_count <= rom_load_count + 8'd1;
             end
 
             raw_strobes <= {memory_read_n, memory_write_n, io_write_n, address_enable_n};

@@ -25,8 +25,12 @@ module tb_post_monitor;
 
     logic  [7:0] bus_data = 8'h00;
 
-    wire [127:0] rom_read_data;
-    wire   [7:0] rom_read_count;
+    logic [19:0] ld_addr = 20'h0;
+    logic  [7:0] ld_data = 8'h00;
+    logic        ld_we_n = 1'b1;
+
+    wire [127:0] rom_read_data, rom_load_data;
+    wire   [7:0] rom_read_count, rom_load_count;
     wire  [7:0] post_code, post_prev, post_max;
     wire [63:0] post_hist;
     wire [19:0] last_mem_addr;
@@ -40,7 +44,9 @@ module tb_post_monitor;
         .post_code(post_code), .post_prev(post_prev), .post_hist(post_hist),
         .last_mem_addr(last_mem_addr), .post_count(post_count),
         .post_max(post_max), .restart_count(restart_count),
-        .rom_read_data(rom_read_data), .rom_read_count(rom_read_count)
+        .rom_read_data(rom_read_data), .rom_read_count(rom_read_count),
+        .ld_addr(ld_addr), .ld_data(ld_data), .ld_we_n(ld_we_n),
+        .rom_load_data(rom_load_data), .rom_load_count(rom_load_count)
     );
 
     int errors = 0;
@@ -51,6 +57,15 @@ module tb_post_monitor;
     // that produced SEQ FF 53 74 C3 6F on the POST port and then, after that was
     // fixed, CPURD 59 FC 2E FC on this one -- the same mistake twice, so the
     // stale byte here is deliberately the previous slot's value.
+    // The BIOS loader's write of one byte: strobe held until the RAM
+    // controller completes, address and data stable throughout.
+    task automatic loader_write(input logic [19:0] a, input logic [7:0] v);
+        ld_addr = a; ld_data = v; ld_we_n = 1'b0;
+        repeat (6) @(posedge clk);
+        ld_we_n = 1'b1; ld_addr = 20'h0;
+        repeat (3) @(posedge clk);
+    endtask
+
     task automatic rom_read(input logic [19:0] a,
                             input logic  [7:0] stale,
                             input logic  [7:0] val);
@@ -205,6 +220,15 @@ module tb_post_monitor;
 
             // A read just OUTSIDE the window must not land in it.
             rom_read(20'hFD890, 8'hA4, 8'h11);
+            // An EXT read of the window itself must not land in it either.
+            // The arbiter drives address_enable_n from hold_acknowledge and
+            // hold_request includes ext_access_request, so an ext access looks
+            // exactly like this. run#105's six guest_peek reads of these very
+            // addresses overwrote the first six slots and took N from 16 to 22.
+            aen_n = 1;
+            rom_read(20'hFD880, 8'h00, 8'h51);
+            rom_read(20'hFD881, 8'h51, 8'h51);
+            aen_n = 0;
             // And one inside the window during a DMA cycle is still a real
             // memory read, so it is allowed -- but a read at a wholly unrelated
             // address must not be.
@@ -229,6 +253,24 @@ module tb_post_monitor;
                      rom_read_data[71:64], rom_read_data[79:72], rom_read_data[87:80],
                      rom_read_data[95:88], rom_read_data[103:96], rom_read_data[111:104],
                      rom_read_data[119:112], rom_read_data[127:120]);
+
+            // The loader window: sixteen writes off the loader's own FSM,
+            // plus one outside it.
+            for (int i = 0; i < 16; i++)
+                loader_write(20'hFD880 + i[19:0], img[i]);
+            loader_write(20'hFD890, 8'h99);
+
+            $display("  loadN    = %0d (want 16)", rom_load_count);
+            if (rom_load_count !== 8'd16) begin
+                $display("  FAIL load count"); errors++;
+            end
+            for (int i = 0; i < 16; i++) begin
+                got = rom_load_data[i*8 +: 8];
+                if (got !== img[i]) begin
+                    $display("  FAIL load byte %0d: got %02h want %02h", i, got, img[i]);
+                    errors++;
+                end
+            end
         end
 
         $display("\n  errors: %0d", errors);

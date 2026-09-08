@@ -123,6 +123,8 @@ module softcpu_subsystem (
     input  [15:0] wr_low_cycles,
     input  [15:0] rd_low_cycles,
     input [127:0] rom_read_data,
+    input [127:0] rom_load_data,
+    input   [7:0] rom_load_count,
     input   [7:0] rom_read_count,
     output        osd_active,
     output        osd_credits_req,
@@ -872,6 +874,11 @@ module softcpu_subsystem (
             32'h5000_004C: cpu_mem_rdata = rom_read_data[63:32];
             32'h5000_0050: cpu_mem_rdata = rom_read_data[95:64];
             32'h5000_0054: cpu_mem_rdata = rom_read_data[127:96];
+            32'h5000_0058: cpu_mem_rdata = rom_load_data[31:0];
+            32'h5000_005C: cpu_mem_rdata = rom_load_data[63:32];
+            32'h5000_0060: cpu_mem_rdata = rom_load_data[95:64];
+            32'h5000_0064: cpu_mem_rdata = rom_load_data[127:96];
+            32'h5000_0068: cpu_mem_rdata = {24'd0, rom_load_count};
             32'h5000_0048: cpu_mem_rdata = {24'd0, rom_read_count};
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;

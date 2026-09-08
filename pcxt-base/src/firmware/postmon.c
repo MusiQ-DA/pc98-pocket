@@ -21,6 +21,11 @@
 #define POST_ROMRD1 ((volatile uint32_t *) 0x5000004C)
 #define POST_ROMRD2 ((volatile uint32_t *) 0x50000050)
 #define POST_ROMRD3 ((volatile uint32_t *) 0x50000054)
+#define POST_ROMLD0 ((volatile uint32_t *) 0x50000058) // what the BIOS LOADER wrote there
+#define POST_ROMLD1 ((volatile uint32_t *) 0x5000005C)
+#define POST_ROMLD2 ((volatile uint32_t *) 0x50000060)
+#define POST_ROMLD3 ((volatile uint32_t *) 0x50000064)
+#define POST_ROMLDN ((volatile uint32_t *) 0x50000068)
 #define POST_ROMRDN ((volatile uint32_t *) 0x50000048) // how many of them were seen
 
 // The self-test master, reused to read guest memory while the guest runs. It
@@ -60,7 +65,7 @@ static uint8_t guest_peek(uint32_t addr)
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
-#define PANEL_H 118
+#define PANEL_H 132
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -182,8 +187,7 @@ void post_mon_tick(void)
     static int vectors_read = 0;
     static uint32_t v16_seg = 0, v16_off = 0;
     static uint32_t v16b_seg = 0, v16b_off = 0;
-    // F000:D880-D885 as the EXT PORT sees it -- a different path from the CPU's.
-    static uint8_t  mem_peek[6] = {0, 0, 0, 0, 0, 0};
+
     // MUST be past the memory test before taking the bus.
     //
     // The gate used to be "the POST count has been still for a while", and POST
@@ -209,35 +213,21 @@ void post_mon_tick(void)
         v16b_off = guest_peek(0x58) | ((uint32_t) guest_peek(0x59) << 8);
         v16b_seg = guest_peek(0x5A) | ((uint32_t) guest_peek(0x5B) << 8);
 
-        // THE question this build is here to answer.
+        // The ext-port readback that used to be here is GONE. run#105 tried it
+        // and it failed twice over:
         //
-        // The CPU read F8 2E 41 D6 at F000:D880 where the image holds
-        // F8 2E E8 D2, and the other twelve bytes of the window came back
-        // perfect. Exactly one 16-bit word is wrong, reproducibly. Two things
-        // produce that and they need opposite fixes:
+        //   it does not work -- MEM came back F8 51 51 51 51 51, the first
+        //   access right and the rest a constant, the same shape as the
+        //   self-test master's own sweep returning 11 11 11 ...
         //
-        //   memory HOLDS 41 D6  -> the BIOS load put it there. The loader
-        //                          writes in 16-bit units and shifts the high
-        //                          byte down, so a lost loader word is exactly
-        //                          this shape.
-        //   memory holds E8 D2  -> the load is fine and the CPU's read path
-        //                          corrupts it.
+        //   and it destroyed the measurement it was meant to support. An ext
+        //   access drives the guest bus with AEN high, so those six reads
+        //   landed in the ROM window's slots: N went 16 to 22 and RD0's first
+        //   six bytes became the ext port's answer instead of the CPU's.
         //
-        // Read through the ext port, which is a different path from the CPU's,
-        // so the two cannot both be wrong in the same way by accident. Six
-        // bytes, not four: D884/D885 are known-good on the CPU side, so if
-        // those also come back wrong here the instrument is what is broken, not
-        // the memory. (The self-test master's own sweep of this region returned
-        // a constant 11, which is why that check is worth paying for.)
-        for (uint32_t i = 0; i < 6; i++)
-            mem_peek[i] = guest_peek(0xFD880u + i);
-
-        // Dropped to pay for those six: the INT 1Ah vector, which is not
-        // displayed any more, and the eight-byte scratch round trip, which has
-        // reported 0/8 on every run since it was added. guest_peek TAKES THE
-        // BUS -- adding eight reads for the ROM window is what reproduced the
-        // POST 54 contamination in testB21-23 -- so this build ends up making
-        // fourteen FEWER accesses than the one before it.
+        // Both are fixed at the source now -- the window is qualified with
+        // ~address_enable_n, and the question is answered by snooping the BIOS
+        // LOADER's writes instead, which needs no working ext read at all.
         vectors_read = 1;
     }
 
@@ -277,14 +267,31 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4 + 28 * 8, 102, "N", OSD_LABEL);
         dec(4 + 30 * 8, 102, *POST_ROMRDN & 0xFFu);
 
+        // And what the BIOS LOADER put there in the first place, taken off its
+        // own FSM rather than the bus. RD is what the CPU took in; LD is what
+        // was written. The two together say which half is broken:
+        //
+        //   LD E8 D2, RD 41 D6  -> written correctly, not kept or not read
+        //   LD 41 D6            -> the loader delivered the wrong bytes
+        uint32_t ld[4];
+        ld[0] = *POST_ROMLD0;
+        ld[1] = *POST_ROMLD1;
+        ld[2] = *POST_ROMLD2;
+        ld[3] = *POST_ROMLD3;
+        osd_draw_string(&fb, 4, 112, "LD0", OSD_LABEL);
+        for (int i = 0; i < 8; i++)
+            hex(4 + (4 + i * 3) * 8, 112, (ld[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
+        osd_draw_string(&fb, 4, 122, "LD8", OSD_LABEL);
+        for (int i = 8; i < 16; i++)
+            hex(4 + (4 + (i - 8) * 3) * 8, 122, (ld[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
+
         // Second read of 16h, and our own scratch round trip.
         osd_draw_string(&fb, 4, 52, "16h#2", OSD_LABEL);
         hex(4 + 6 * 8, 52, v16b_seg, 4);
         osd_draw_string(&fb, 4 + 10 * 8, 52, ":", OSD_LABEL);
         hex(4 + 11 * 8, 52, v16b_off, 4);
-        osd_draw_string(&fb, 4 + 17 * 8, 52, "MEM", OSD_LABEL);
-        for (int i = 0; i < 6; i++)
-            hex(4 + (21 + i * 3) * 8, 52, mem_peek[i], 2);
+        osd_draw_string(&fb, 4 + 17 * 8, 52, "LDN", OSD_LABEL);
+        dec(4 + 21 * 8, 52, *POST_ROMLDN & 0xFFu);
 
         // What the guest actually PUT there, snooped off the bus as POST 05's
         // install loop wrote it. Reading the vector back after the hang shows
