@@ -151,6 +151,11 @@ module tb_pc98_font_sdram;
         wait (init_done);
         repeat (4) @(posedge clk);
 
+        // Twice: the renderer reads the bank NOT being filled, so a single
+        // fill leaves it looking at the other one. Two is the steady state.
+        fill_start = 1'b1; @(posedge clk); fill_start = 1'b0;
+        wait (busy == 1'b0);
+        repeat (4) @(posedge clk);
         fill_start = 1'b1; @(posedge clk); fill_start = 1'b0;
         wait (busy == 1'b0);
         repeat (4) @(posedge clk);
