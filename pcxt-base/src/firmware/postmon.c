@@ -26,6 +26,7 @@
 #define POST_ROMLD2 ((volatile uint32_t *) 0x50000060)
 #define POST_ROMLD3 ((volatile uint32_t *) 0x50000064)
 #define POST_ROMLDN ((volatile uint32_t *) 0x50000068)
+#define POST_RLF    ((volatile uint32_t *) 0x5000006C) // {fifo high water, words dropped}
 #define POST_ROMRDN ((volatile uint32_t *) 0x50000048) // how many of them were seen
 
 // The self-test master, reused to read guest memory while the guest runs. It
@@ -292,6 +293,14 @@ void post_mon_tick(void)
         hex(4 + 11 * 8, 52, v16b_off, 4);
         osd_draw_string(&fb, 4 + 17 * 8, 52, "LDN", OSD_LABEL);
         dec(4 + 21 * 8, 52, *POST_ROMLDN & 0xFFu);
+        // Words the BIOS-load FIFO threw away, and how deep it ever got. A
+        // nonzero DROP means the image in memory is incomplete before the CPU
+        // ever runs, and nothing downstream of it is worth debugging.
+        uint32_t rlf = *POST_RLF;
+        osd_draw_string(&fb, 4 + 25 * 8, 52, "DROP", OSD_LABEL);
+        dec(4 + 30 * 8, 52, rlf & 0xFFFFu);
+        osd_draw_string(&fb, 4 + 35 * 8, 52, "HW", OSD_LABEL);
+        dec(4 + 38 * 8, 52, rlf >> 16);
 
         // What the guest actually PUT there, snooped off the bus as POST 05's
         // install loop wrote it. Reading the vector back after the hang shows
