@@ -63,7 +63,13 @@ module post_monitor #(
     // POST 05's install loop stored it.
     output logic [15:0] ivt16_off,
     output logic [15:0] ivt16_seg,
-    output logic  [7:0] ivt16_wr_count
+    output logic  [7:0] ivt16_wr_count,
+    // Diagnostics for the snoop itself. NW came back 0 on hardware, so one of
+    // the terms in the filter is wrong; counting them separately says which,
+    // instead of another round of guessing.
+    output logic [15:0] wr_any_count,     // any memory write at all
+    output logic [15:0] wr_aen_count,     // ... with AEN low (a CPU cycle)
+    output logic [19:0] wr_last_addr      // address of the last memory write
 );
 
     // The history FREEZES once it holds DEPTH codes.
@@ -96,7 +102,7 @@ module post_monitor #(
     // bus the POST codes come from and never asks for it.
     wire mem_write = ~memory_write_n & ~address_enable_n;
     wire in_ivt16  = (address[19:2] == 18'h00016);   // 0x58..0x5B
-    logic mem_write_q;
+    logic mem_write_q, mem_write_q_raw;
 
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -112,6 +118,10 @@ module post_monitor #(
             filled        <= '0;
             io_write_q    <= 1'b0;
             mem_write_q   <= 1'b0;
+            mem_write_q_raw <= 1'b0;
+            wr_any_count  <= 16'd0;
+            wr_aen_count  <= 16'd0;
+            wr_last_addr  <= 20'd0;
             ivt16_off     <= 16'h0;
             ivt16_seg     <= 16'h0;
             ivt16_wr_count<= 8'd0;
@@ -121,6 +131,14 @@ module post_monitor #(
             mem_addr_q    <= 20'h0;
         end else begin
             mem_write_q <= mem_write;
+            if (~memory_write_n && mem_write_q_raw == 1'b0) begin
+                if (wr_any_count != 16'hFFFF) wr_any_count <= wr_any_count + 16'd1;
+                wr_last_addr <= address;
+                if (~address_enable_n && wr_aen_count != 16'hFFFF)
+                    wr_aen_count <= wr_aen_count + 16'd1;
+            end
+            mem_write_q_raw <= ~memory_write_n;
+
             if (mem_write && ~mem_write_q && in_ivt16) begin
                 case (address[1:0])
                     2'd0: ivt16_off[7:0]   <= cpu_data;
