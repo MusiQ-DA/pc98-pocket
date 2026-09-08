@@ -77,6 +77,16 @@ jobs:
           ./obj_tv/v | tee tv.log
           grep -q "RESULT: PASS" tv.log
 
+      - name: a text row's glyphs land in the buffer, kanji paired
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_rowbuf \
+            -Isim -Ipcxt-base/src/fpga/core sim/tb_pc98_rowbuf.sv \
+            pcxt-base/src/fpga/core/pc98_glyph_rowbuf.sv \
+            pcxt-base/src/fpga/core/pc98_glyph_addr.sv \
+            -o b --Mdir obj_rb
+          ./obj_rb/b | tee rb.log
+          grep -q "RESULT: PASS" rb.log
+
       - name: glyph addresses match a real FONT.ROM
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_glyph_addr \
