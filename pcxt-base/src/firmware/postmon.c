@@ -11,6 +11,8 @@
 #define POST_MAXRST ((volatile uint32_t *) 0x50000020) // {max[23:16], restarts[15:0]}
 #define POST_LIVE   ((volatile uint32_t *) 0x50000024) // live guest memory address
 #define POST_LIVEMX ((volatile uint32_t *) 0x50000028) // highest address ever touched
+#define POST_IVT16A ((volatile uint32_t *) 0x5000002C) // {wr_count, seg, off_hi}
+#define POST_IVT16B ((volatile uint32_t *) 0x50000030) // off
 
 // The self-test master, reused to read guest memory while the guest runs. It
 // takes the bus through hold acknowledge, which is what the BIOS loader does.
@@ -48,7 +50,7 @@ static uint8_t guest_peek(uint32_t addr)
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
-#define PANEL_H 68
+#define PANEL_H 78
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -208,9 +210,19 @@ void post_mon_tick(void)
         hex(4 + 6 * 8, 52, v16b_seg, 4);
         osd_draw_string(&fb, 4 + 10 * 8, 52, ":", OSD_LABEL);
         hex(4 + 11 * 8, 52, v16b_off, 4);
-        osd_draw_string(&fb, 4 + 17 * 8, 52, "SCRATCH", OSD_LABEL);
-        dec(4 + 25 * 8, 52, (uint32_t) scratch_bad);
-        osd_draw_string(&fb, 4 + 27 * 8, 52, "/8", OSD_LABEL);
+        osd_draw_string(&fb, 4 + 17 * 8, 52, "SCR", OSD_LABEL);
+        dec(4 + 21 * 8, 52, (uint32_t) scratch_bad);
+
+        // What the guest actually PUT there, snooped off the bus as POST 05's
+        // install loop wrote it. Reading the vector back after the hang shows
+        // the aftermath instead; this shows the cause.
+        uint32_t a = *POST_IVT16A;
+        osd_draw_string(&fb, 4, 62, "WROTE", OSD_LABEL);
+        hex(4 + 6 * 8, 62, (a >> 8) & 0xFFFFu, 4);
+        osd_draw_string(&fb, 4 + 10 * 8, 62, ":", OSD_LABEL);
+        hex(4 + 11 * 8, 62, *POST_IVT16B & 0xFFFFu, 4);
+        osd_draw_string(&fb, 4 + 17 * 8, 62, "NW", OSD_LABEL);
+        dec(4 + 20 * 8, 62, a >> 24);
 
         osd_draw_string(&fb, 4, 42, "16h", OSD_LABEL);
         hex(4 + 4 * 8, 42, v16_seg, 4);
