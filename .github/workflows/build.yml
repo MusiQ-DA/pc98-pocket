@@ -132,6 +132,9 @@ jobs:
           ./obj_itf/t | tee itf.log
           grep -q "RESULT: PASS" itf.log
 
+      - name: no two OSD fields overlap
+        run: python3 scripts/check_osd_layout.py
+
       - name: no module input left dangling in core_top
         run: python3 scripts/check_unconnected.py
 
