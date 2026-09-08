@@ -105,6 +105,8 @@ module pc98_glyph_rowbuf #(
 
     // Registered, so it infers a BRAM port rather than a wide mux. One cycle of
     // latency, which the renderer's cell pipeline already allows for.
+    // The renderer reads the bank NOT being filled. bank flips on the row
+    // boundary, so this is the row on screen for the whole of that row.
     always_ff @(posedge rd_clk)
         rd_byte <= store[{~bank, rd_cell, rd_line}];
 
@@ -124,9 +126,18 @@ module pc98_glyph_rowbuf #(
 
             case (state)
             S_IDLE: if (fill_start) begin
-                col        <= 7'd0;
+                col         <= 7'd0;
                 pair_second <= 1'b0;
                 busy        <= 1'b1;
+                // Flip HERE, at the start of a row, not when the fill finishes.
+                //
+                // The fill completes early in the row -- eighty cells against
+                // sixteen scanlines -- so flipping on completion switches the
+                // renderer to the NEXT row's glyphs partway down the row it is
+                // still drawing. Flipping on the row boundary keeps the two
+                // banks meaning "the row on screen" and "the row being fetched"
+                // for the whole of every row.
+                bank        <= ~bank;
                 state       <= S_TV_REQ;
             end
 
@@ -174,7 +185,6 @@ module pc98_glyph_rowbuf #(
 
                 if (col == 7'(COLS - 1)) begin
                     busy  <= 1'b0;
-                    bank  <= ~bank;
                     state <= S_IDLE;
                 end else begin
                     col  <= col + 7'd1;

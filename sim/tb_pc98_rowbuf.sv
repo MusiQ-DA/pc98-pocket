@@ -79,7 +79,9 @@ module tb_pc98_rowbuf;
         f_valid <= 1'b0;
         if (f_req && !f_busy) begin
             burst_addr <= f_addr;
-            seen_addr[fetches[6:0]] <= f_addr;
+            // Only the FIRST fill's addresses: later fills reuse the indices
+            // and would overwrite what the checks below are reading.
+            if (fetches < COLS) seen_addr[fetches[6:0]] <= f_addr;
             fetches    <= fetches + 1;
             burst_n    <= 0;
             f_busy     <= 1'b1;
@@ -115,12 +117,19 @@ module tb_pc98_rowbuf;
         rst = 0;
         repeat (2) @(posedge clk);
 
+        // TWICE, with the same content. The renderer reads the bank NOT being
+        // filled, so after a single fill it is looking at the other one -- which
+        // is right, and is why the buffer is double-buffered. Two fills is the
+        // steady state a running display is always in.
+        fill_start = 1'b1; @(posedge clk); fill_start = 1'b0;
+        wait (busy == 1'b0);
+        repeat (4) @(posedge clk);
         fill_start = 1'b1; @(posedge clk); fill_start = 1'b0;
         wait (busy == 1'b0);
         repeat (4) @(posedge clk);
 
-        $display("  fetches: %0d (want %0d)", fetches, COLS);
-        if (fetches !== COLS) begin $display("  FAIL fetch count"); errors++; end
+        $display("  fetches: %0d (want %0d, two fills)", fetches, 2*COLS);
+        if (fetches !== 2*COLS) begin $display("  FAIL fetch count"); errors++; end
 
         // Column 0: ANK 0x41 -> 0x0800 + 0x41*16 = 0x0C10.
         $display("  col 0 addr %05h (want 00C10)", seen_addr[0]);
@@ -154,6 +163,45 @@ module tb_pc98_rowbuf;
             end
         end
         $display("  buffer contents match the fetched addresses");
+
+        // The bank must flip on the ROW BOUNDARY, not on fill completion.
+        //
+        // The fill finishes early in a row -- eighty cells against sixteen
+        // scanlines -- so flipping at completion would switch what the renderer
+        // reads partway down the row it is still drawing. Flipping on the
+        // boundary means the renderer always shows the row filled by the
+        // PREVIOUS fill, for the whole of that row.
+        //
+        // So: fill with X, then Y, then Z, and the renderer should show X after
+        // the Y fill and Y after the Z fill -- always one behind.
+        begin
+            logic [7:0] after_y, after_z;
+            logic [7:0] want_x, want_y;
+
+            // col 9's line-0 byte is the low byte of 0x0800 + code*16, so pick
+            // contents whose code&0x0F differ or the check proves nothing.
+            want_x = 8'((8'h4A & 8'h0F) << 4);      // 0x41 + 9
+            want_y = 8'((8'h89 & 8'h0F) << 4);      // 0x80 + 9
+
+            for (int i = 0; i < 128; i++) scr_lo[i] = 8'(8'h80 + i[7:0]);
+            fill_start = 1'b1; @(posedge clk); fill_start = 1'b0;
+            wait (busy == 1'b0); repeat (4) @(posedge clk);
+            rd(9, 0, after_y);
+
+            for (int i = 0; i < 128; i++) scr_lo[i] = 8'(8'hC3 + i[7:0]);
+            fill_start = 1'b1; @(posedge clk); fill_start = 1'b0;
+            wait (busy == 1'b0); repeat (4) @(posedge clk);
+            rd(9, 0, after_z);
+
+            $display("  after the Y fill %02h (want %02h, still X)", after_y, want_x);
+            $display("  after the Z fill %02h (want %02h, now Y)",  after_z, want_y);
+            if (after_y !== want_x) begin
+                $display("  FAIL the renderer saw the row being filled"); errors++;
+            end
+            if (after_z !== want_y) begin
+                $display("  FAIL the renderer did not advance a row"); errors++;
+            end
+        end
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");
