@@ -77,6 +77,15 @@ jobs:
           ./obj_tv/v | tee tv.log
           grep -q "RESULT: PASS" tv.log
 
+      - name: a pulse survives the clock crossing
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pulse_cdc \
+            -Isim -Ipcxt-base/src/fpga/core \
+            sim/tb_pulse_cdc.sv pcxt-base/src/fpga/core/pulse_cdc.sv \
+            -o p --Mdir obj_cdc
+          ./obj_cdc/p | tee cdc.log
+          grep -q "RESULT: PASS" cdc.log
+
       - name: glyphs come back out of SDRAM intact
         run: |
           S=pcxt-base/src/fpga/core
