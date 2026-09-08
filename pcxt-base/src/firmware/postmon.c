@@ -27,6 +27,9 @@
 #define POST_ROMLD3 ((volatile uint32_t *) 0x50000064)
 #define POST_ROMLDN ((volatile uint32_t *) 0x50000068)
 #define POST_RLF    ((volatile uint32_t *) 0x5000006C) // {fifo high water, words dropped}
+#define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
+#define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
+#define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
 #define POST_ROMRDN ((volatile uint32_t *) 0x50000048) // how many of them were seen
 
 // The self-test master, reused to read guest memory while the guest runs. It
@@ -66,7 +69,7 @@ static uint8_t guest_peek(uint32_t addr)
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
-#define PANEL_H 132
+#define PANEL_H 142
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -267,6 +270,24 @@ void post_mon_tick(void)
             hex(4 + (4 + (i - 8) * 3) * 8, 102, (rr[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
         osd_draw_string(&fb, 4 + 28 * 8, 102, "N", OSD_LABEL);
         dec(4 + 30 * 8, 102, *POST_ROMRDN & 0xFFu);
+
+        // Which I/O ports the guest has written, newest first, and whether the
+        // ITF has handed over yet.
+        //
+        // On PC-98 there is no port 0x80 progress code: what says how far the
+        // ITF got is WHICH ports it has touched. Its route to the hand-over
+        // runs 0x0461 then 0x043D (MOV DX,043D / MOV AL,12 / OUT at F8A98), so
+        // seeing 043D arrive and BANK go 0 is the whole of P1 in two fields.
+        uint32_t io0 = *POST_IOH0, io1 = *POST_IOH1, ios = *POST_IOST;
+        osd_draw_string(&fb, 4, 132, "IO", OSD_LABEL);
+        hex(4 + 3 * 8, 132, io0 & 0xFFFFu, 4);
+        hex(4 + 8 * 8, 132, io0 >> 16, 4);
+        hex(4 + 13 * 8, 132, io1 & 0xFFFFu, 4);
+        hex(4 + 18 * 8, 132, io1 >> 16, 4);
+        osd_draw_string(&fb, 4 + 23 * 8, 132, "N", OSD_LABEL);
+        dec(4 + 25 * 8, 132, ios & 0xFFFFu);
+        osd_draw_string(&fb, 4 + 31 * 8, 132, "BANK", OSD_LABEL);
+        dec(4 + 36 * 8, 132, (ios >> 16) & 1u);
 
         // And what the BIOS LOADER put there in the first place, taken off its
         // own FSM rather than the bus. RD is what the CPU took in; LD is what

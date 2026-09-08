@@ -84,14 +84,34 @@ module RAM (
 	                               ~(~enable_a000h && address[19:16] == 4'b1010));    // A0000h is optional
 	 
 
+`ifdef MACHINE_PC98
+    // The ITF bank. F8000-FFFFF, 32 KB, mapped to the shadow copy at 1F8000
+    // through latch_address's spare bit -- the same bit and the same mechanism
+    // the Tandy BIOS shadow uses, reused rather than duplicated because the
+    // PC/AT machine layer this file belongs to is going away anyway.
+    //
+    // Set: the guest sees the ITF (power-on, and after port 0x043D gets 0x10).
+    // Clear: it sees the system BIOS's own F8000-FFFFF (after 0x043D gets 0x12).
+    // core_top owns the flag; during the ITF load it is driven by the loader so
+    // the image is written into the shadow instead of over the BIOS.
+    assign tandy_bios_select    = tandy_bios_flag & (address[19:15] == 5'b11111);
+`else
     assign tandy_bios_select    = `ROM_IS_TANDY ? (tandy_bios_flag & (address[19:16] == 4'b1111)) : 1'b0;
+`endif
 
 
     //
     // Write protect
     //
+`ifdef MACHINE_PC98
+    // PC-98's ROM is E8000-FFFFF (96 KB), not the PC/AT's F0000-FFFFF plus the
+    // EC00 option-ROM window. bios_protect_flag[1] covers the whole of it.
+    assign write_protect = bios_protect_flag[1] & ((address[19:16] == 4'b1111)
+                                                |  (address[19:15] == 5'b11101));
+`else
     assign write_protect = bios_protect_flag[1] & (address[19:16] == 4'b1111)
                          | bios_protect_flag[0] & (address[19:14] == 6'b111011);
+`endif
 
 
     //

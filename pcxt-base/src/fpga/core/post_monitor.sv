@@ -102,7 +102,17 @@ module post_monitor #(
     input  wire   [7:0] ld_data,
     input  wire         ld_we_n,
     output logic [127:0] rom_load_data,
-    output logic  [7:0] rom_load_count
+    output logic  [7:0] rom_load_count,
+    // Which I/O PORTS the guest has written, newest first, and how many writes
+    // there have been. On PC/AT the interesting port is 0x80 and the data is
+    // the progress code; on PC-98 there is no such port and progress shows in
+    // WHICH ports get touched -- the ITF's route to the ROM bank switch runs
+    // through 0x0461 and then 0x043D, so seeing those in order says it got
+    // there. Same two qualifiers as the POST decode: AEN, and two cycles of
+    // stability so an address sweeping through a port on its way to another
+    // one is not recorded as a write to it.
+    output logic [63:0] io_port_hist,
+    output logic [15:0] io_wr_count
 );
 
     // The history FREEZES once it holds DEPTH codes.
@@ -136,6 +146,10 @@ module post_monitor #(
     wire mem_write = ~memory_write_n & ~address_enable_n;
     wire in_ivt16  = (address[19:2] == 18'h00016);   // 0x58..0x5B
     logic mem_write_q, mem_write_q_raw, mem_read_q_raw;
+    logic [15:0] io_port_q;
+    logic        io_wr_q, io_wr_qq;
+    wire         io_wr_any = io_write & ~address_enable_n;
+
     logic [3:0] rom_slot_q;
     logic [7:0] rom_byte_q;
     logic rom_hold_q;
@@ -182,6 +196,11 @@ module post_monitor #(
             wr_low_cycles <= 16'd0;
             rd_low_cycles <= 16'd0;
             rom_read_data <= 128'd0;
+            io_port_hist  <= 64'd0;
+            io_wr_count   <= 16'd0;
+            io_port_q     <= 16'd0;
+            io_wr_q       <= 1'b0;
+            io_wr_qq      <= 1'b0;
             rom_load_data <= 128'd0;
             rom_load_count<= 8'd0;
             ld_seen_q     <= 1'b0;
@@ -229,6 +248,18 @@ module post_monitor #(
                 rom_read_data[{rom_slot_q, 3'd0} +: 8] <= rom_byte_q;
                 if (rom_read_count != 8'hFF) rom_read_count <= rom_read_count + 8'd1;
                 rom_hold_q <= 1'b0;
+            end
+
+            // Any I/O write, by port. Commit on the trailing edge, after two
+            // cycles of the same decode -- a port number latched while the
+            // address bus is still moving is the transient that produced POST
+            // codes the BIOS never wrote.
+            io_wr_q  <= io_wr_any;
+            io_wr_qq <= io_wr_q;
+            if (io_wr_any) io_port_q <= address[15:0];
+            if (io_wr_q && io_wr_qq && ~io_wr_any) begin
+                io_port_hist <= {io_port_hist[47:0], io_port_q};
+                if (io_wr_count != 16'hFFFF) io_wr_count <= io_wr_count + 16'd1;
             end
 
             // One count per write, not one per cycle the strobe is held.

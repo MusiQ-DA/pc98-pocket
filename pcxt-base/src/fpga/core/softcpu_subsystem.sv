@@ -127,6 +127,11 @@ module softcpu_subsystem (
     input   [7:0] rom_load_count,
     // BIOS-load FIFO health: words the FIFO had to throw away, and how deep it
     // ever got. See core_top -- there is no backpressure to the APF bridge.
+    // Which I/O ports the guest has written, and the ITF bank state. On PC-98
+    // the ITF's progress is visible only through the ports it touches.
+    input  [63:0] io_port_hist,
+    input  [15:0] io_wr_count,
+    input         itf_bank,
     input  [15:0] rlf_drops,
     input  [15:0] rlf_level_max,
     input   [7:0] rom_read_count,
@@ -884,6 +889,9 @@ module softcpu_subsystem (
             32'h5000_0064: cpu_mem_rdata = rom_load_data[127:96];
             32'h5000_0068: cpu_mem_rdata = {24'd0, rom_load_count};
             32'h5000_006C: cpu_mem_rdata = {rlf_level_max, rlf_drops};
+            32'h5000_0070: cpu_mem_rdata = io_port_hist[31:0];    // newest two
+            32'h5000_0074: cpu_mem_rdata = io_port_hist[63:32];   // older two
+            32'h5000_0078: cpu_mem_rdata = {15'd0, itf_bank, io_wr_count};
             32'h5000_0048: cpu_mem_rdata = {24'd0, rom_read_count};
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;
