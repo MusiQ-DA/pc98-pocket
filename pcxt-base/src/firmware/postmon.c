@@ -178,15 +178,20 @@ void post_mon_tick(void)
     // going 0 is the whole of P1.
     {
         uint32_t io0 = *POST_IOH0, io1 = *POST_IOH1, ios = *POST_IOST;
+        // Two ports, not four. The row ran to column 37 with four of them and
+        // BANK -- the field this build exists to show -- came out unreadable
+        // on the actual screen. The two oldest entries are worth less than
+        // being able to read the newest ones.
         osd_draw_string(&fb, 4, 12, "IO", OSD_LABEL);
         hex(4 + 3 * 8, 12, io0 & 0xFFFFu, 4);
         hex(4 + 8 * 8, 12, io0 >> 16, 4);
-        hex(4 + 13 * 8, 12, io1 & 0xFFFFu, 4);
-        hex(4 + 18 * 8, 12, io1 >> 16, 4);
-        osd_draw_string(&fb, 4 + 23 * 8, 12, "N", OSD_LABEL);
-        dec(4 + 25 * 8, 12, ios & 0xFFFFu);
-        osd_draw_string(&fb, 4 + 31 * 8, 12, "BANK", OSD_LABEL);
-        dec(4 + 36 * 8, 12, (ios >> 16) & 1u);
+        osd_draw_string(&fb, 4 + 14 * 8, 12, "N", OSD_LABEL);
+        dec(4 + 16 * 8, 12, ios & 0xFFFFu);
+        osd_draw_string(&fb, 4 + 23 * 8, 12, "BANK", OSD_LABEL);
+        dec(4 + 28 * 8, 12, (ios >> 16) & 1u);
+        // Older two ports on their own row rather than squeezed onto this one.
+        osd_draw_string(&fb, 4 + 31 * 8, 12, "P", OSD_LABEL);
+        hex(4 + 33 * 8, 12, io1 & 0xFFFFu, 4);
     }
 
     osd_draw_string(&fb, 4, 22, "ADDR", OSD_LABEL);
@@ -212,6 +217,48 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4 + 35 * 8, 32, "HW", OSD_LABEL);
         dec(4 + 38 * 8, 32, rlf >> 16);
     }
+
+    // testB27 answered it: F8 2E 41 D6 against F8 2E E8 D2 in the image.
+    // The read IS corrupt, and the pair 41 D6 appears nowhere in the 64 KB
+    // image, so it is not one address aliasing onto another. Word D880 came
+    // back perfect and word D882 came back with BOTH bytes wrong, which
+    // also rules out a swapped DQ lane. Sixteen bytes now, to see whether
+    // the damage alternates by word, runs, or is a single word.
+    uint32_t rr[4];
+    rr[0] = *POST_ROMRD;
+    rr[1] = *POST_ROMRD1;
+    rr[2] = *POST_ROMRD2;
+    rr[3] = *POST_ROMRD3;
+    osd_draw_string(&fb, 4, 92, "RD0", OSD_LABEL);
+    for (int i = 0; i < 8; i++)
+        hex(4 + (4 + i * 3) * 8, 92, (rr[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
+    osd_draw_string(&fb, 4, 102, "RD8", OSD_LABEL);
+    for (int i = 8; i < 16; i++)
+        hex(4 + (4 + (i - 8) * 3) * 8, 102, (rr[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
+    osd_draw_string(&fb, 4 + 28 * 8, 102, "N", OSD_LABEL);
+    dec(4 + 30 * 8, 102, *POST_ROMRDN & 0xFFu);
+
+    // And what the BIOS LOADER put there in the first place, taken off its
+    // own FSM rather than the bus. RD is what the CPU took in; LD is what
+    // was written. The two together say which half is broken:
+    //
+    //   LD E8 D2, RD 41 D6  -> written correctly, not kept or not read
+    //   LD 41 D6            -> the loader delivered the wrong bytes
+    uint32_t ld[4];
+    ld[0] = *POST_ROMLD0;
+    ld[1] = *POST_ROMLD1;
+    ld[2] = *POST_ROMLD2;
+    ld[3] = *POST_ROMLD3;
+    osd_draw_string(&fb, 4, 112, "LD0", OSD_LABEL);
+    for (int i = 0; i < 8; i++)
+        hex(4 + (4 + i * 3) * 8, 112, (ld[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
+    osd_draw_string(&fb, 4, 122, "LD8", OSD_LABEL);
+    for (int i = 8; i < 16; i++)
+        hex(4 + (4 + (i - 8) * 3) * 8, 122, (ld[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
+
+
+    osd_draw_string(&fb, 4 + 17 * 8, 22, "LDN", OSD_LABEL);
+    dec(4 + 21 * 8, 22, *POST_ROMLDN & 0xFFu);
 
     osd_draw_string(&fb, 4, 32, "LIVE", OSD_LABEL);
     hex(4 + 5 * 8, 32, live & 0xFFFFFu, 5);
@@ -294,51 +341,11 @@ void post_mon_tick(void)
         // so it saw 2E then 41: expect this to read F8 2E 41 D2 if the CPU's
         // read is what is corrupt.
         //
-        // testB27 answered it: F8 2E 41 D6 against F8 2E E8 D2 in the image.
-        // The read IS corrupt, and the pair 41 D6 appears nowhere in the 64 KB
-        // image, so it is not one address aliasing onto another. Word D880 came
-        // back perfect and word D882 came back with BOTH bytes wrong, which
-        // also rules out a swapped DQ lane. Sixteen bytes now, to see whether
-        // the damage alternates by word, runs, or is a single word.
-        uint32_t rr[4];
-        rr[0] = *POST_ROMRD;
-        rr[1] = *POST_ROMRD1;
-        rr[2] = *POST_ROMRD2;
-        rr[3] = *POST_ROMRD3;
-        osd_draw_string(&fb, 4, 92, "RD0", OSD_LABEL);
-        for (int i = 0; i < 8; i++)
-            hex(4 + (4 + i * 3) * 8, 92, (rr[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
-        osd_draw_string(&fb, 4, 102, "RD8", OSD_LABEL);
-        for (int i = 8; i < 16; i++)
-            hex(4 + (4 + (i - 8) * 3) * 8, 102, (rr[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 28 * 8, 102, "N", OSD_LABEL);
-        dec(4 + 30 * 8, 102, *POST_ROMRDN & 0xFFu);
-
-        // And what the BIOS LOADER put there in the first place, taken off its
-        // own FSM rather than the bus. RD is what the CPU took in; LD is what
-        // was written. The two together say which half is broken:
-        //
-        //   LD E8 D2, RD 41 D6  -> written correctly, not kept or not read
-        //   LD 41 D6            -> the loader delivered the wrong bytes
-        uint32_t ld[4];
-        ld[0] = *POST_ROMLD0;
-        ld[1] = *POST_ROMLD1;
-        ld[2] = *POST_ROMLD2;
-        ld[3] = *POST_ROMLD3;
-        osd_draw_string(&fb, 4, 112, "LD0", OSD_LABEL);
-        for (int i = 0; i < 8; i++)
-            hex(4 + (4 + i * 3) * 8, 112, (ld[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
-        osd_draw_string(&fb, 4, 122, "LD8", OSD_LABEL);
-        for (int i = 8; i < 16; i++)
-            hex(4 + (4 + (i - 8) * 3) * 8, 122, (ld[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
-
         // Second read of 16h, and our own scratch round trip.
         osd_draw_string(&fb, 4, 52, "16h#2", OSD_LABEL);
         hex(4 + 6 * 8, 52, v16b_seg, 4);
         osd_draw_string(&fb, 4 + 10 * 8, 52, ":", OSD_LABEL);
         hex(4 + 11 * 8, 52, v16b_off, 4);
-        osd_draw_string(&fb, 4 + 17 * 8, 52, "LDN", OSD_LABEL);
-        dec(4 + 21 * 8, 52, *POST_ROMLDN & 0xFFu);
 
         // What the guest actually PUT there, snooped off the bus as POST 05's
         // install loop wrote it. Reading the vector back after the hang shows
@@ -380,7 +387,7 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4 + 8 * 8, 42, ":", OSD_LABEL);
         hex(4 + 9 * 8, 42, v16_off, 4);
         // What MEM and RD0 should both be, so the screen carries its own key.
-        osd_draw_string(&fb, 4 + 15 * 8, 42, "WANT F8 2E E8 D2", OSD_LABEL);
+        osd_draw_string(&fb, 4 + 15 * 8, 42, "WANT EA 00 00 00 F8", OSD_LABEL);
     } else {
         osd_draw_string(&fb, 4, 42, "VEC -- WAITING (MAX<08)", OSD_LABEL);
     }
