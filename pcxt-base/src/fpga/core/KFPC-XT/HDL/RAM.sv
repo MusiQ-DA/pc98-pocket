@@ -90,8 +90,15 @@ module RAM (
     //
     // Write protect
     //
+`ifdef MACHINE_PC98
+    // PC-98's ROM is E8000-FFFFF (96 KB), not the PC/AT's F0000-FFFFF plus the
+    // EC00 option-ROM window. bios_protect_flag[1] covers the whole of it.
+    assign write_protect = bios_protect_flag[1] & ((address[19:16] == 4'b1111)
+                                                |  (address[19:15] == 5'b11101));
+`else
     assign write_protect = bios_protect_flag[1] & (address[19:16] == 4'b1111)
                          | bios_protect_flag[0] & (address[19:14] == 6'b111011);
+`endif
 
 
     //

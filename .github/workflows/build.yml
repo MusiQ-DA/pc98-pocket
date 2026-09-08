@@ -61,6 +61,13 @@ jobs:
             grep -q "RESULT: PASS" ram_$mode.log
           done
 
+      - name: ROM image lands where it should (no address folding)
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_bios_map \
+            -Isim sim/tb_bios_map.sv -o m --Mdir obj_map
+          ./obj_map/m | tee map.log
+          grep -q "RESULT: PASS" map.log
+
       - name: no module input left dangling in core_top
         run: python3 scripts/check_unconnected.py
 

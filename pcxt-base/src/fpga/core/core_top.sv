@@ -1325,6 +1325,21 @@ module core_top (
     reg [7:0]  bios_write_wait_cnt;
     reg        bios_write_byte_cnt;
     reg        tandy_bios_write;
+`ifdef MACHINE_PC98
+    // PC-98: BIOS.ROM is 0x18000 bytes at physical 0x0E8000, which is where np2
+    // reads it to and what the file size says (docs/PC98_MACHINE_SPEC.md F1).
+    // Ninety-six KB, so the slot's address needs seventeen bits, not sixteen --
+    // the PC/AT form below masks addr[24:16] to zero and lands everything in
+    // one 64 KB page at F0000, which would fold the top third of the image back
+    // over the bottom.
+    localparam [19:0] PC98_BIOS_BASE = 20'h E8000;
+    wire select_pcxt  = (ioctl_index[5:0] == 0) && (ioctl_addr[24:17] == 8'h00);
+    wire select_tandy = 1'b0;
+    wire select_xtide = 1'b0;
+
+    wire [19:0] bios_access_address_wire =
+         select_pcxt ? (PC98_BIOS_BASE + {3'b000, ioctl_addr[16:0]}) : 20'hFFFFF;
+`else
     wire select_pcxt  = (ioctl_index[5:0] == 0) && (ioctl_addr[24:16] == 9'b000000000);
     wire select_tandy = `ROM_IS_TANDY ? (ioctl_index[5:0] == 1) && (ioctl_addr[24:16] == 9'b000000000) : 1'b0;
     wire select_xtide = ioctl_index == 2;
@@ -1333,6 +1348,7 @@ module core_top (
          select_tandy ? { 4'b1111, ioctl_addr[15:0]} :
          select_xtide ? { 6'b111011, ioctl_addr[13:0]} :
          20'hFFFFF;
+`endif
 
     wire bios_load_n = ~(ioctl_download & (select_pcxt | select_tandy | select_xtide));
 
