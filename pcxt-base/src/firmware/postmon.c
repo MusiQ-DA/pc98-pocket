@@ -18,6 +18,9 @@
 #define POST_IVTTCH ((volatile uint32_t *) 0x5000003C) // {raw_strobes, ivt_touch}
 #define POST_LOWCYC ((volatile uint32_t *) 0x50000040) // {rd_low, wr_low}
 #define POST_ROMRD  ((volatile uint32_t *) 0x50000044) // bytes the CPU read at F000:D880
+#define POST_ROMRD1 ((volatile uint32_t *) 0x5000004C)
+#define POST_ROMRD2 ((volatile uint32_t *) 0x50000050)
+#define POST_ROMRD3 ((volatile uint32_t *) 0x50000054)
 #define POST_ROMRDN ((volatile uint32_t *) 0x50000048) // how many of them were seen
 
 // The self-test master, reused to read guest memory while the guest runs. It
@@ -56,7 +59,7 @@ static uint8_t guest_peek(uint32_t addr)
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
-#define PANEL_H 108
+#define PANEL_H 118
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -233,12 +236,26 @@ void post_mon_tick(void)
         // The BIOS image holds F8 2E E8 D2 at D880-D883. The guest wrote 412E,
         // so it saw 2E then 41: expect this to read F8 2E 41 D2 if the CPU's
         // read is what is corrupt.
-        uint32_t rr = *POST_ROMRD;
-        osd_draw_string(&fb, 4, 92, "CPURD", OSD_LABEL);
-        for (int i = 0; i < 4; i++)
-            hex(4 + (6 + i * 3) * 8, 92, (rr >> (i * 8)) & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 19 * 8, 92, "N", OSD_LABEL);
-        dec(4 + 21 * 8, 92, *POST_ROMRDN & 0xFFu);
+        //
+        // testB27 answered it: F8 2E 41 D6 against F8 2E E8 D2 in the image.
+        // The read IS corrupt, and the pair 41 D6 appears nowhere in the 64 KB
+        // image, so it is not one address aliasing onto another. Word D880 came
+        // back perfect and word D882 came back with BOTH bytes wrong, which
+        // also rules out a swapped DQ lane. Sixteen bytes now, to see whether
+        // the damage alternates by word, runs, or is a single word.
+        uint32_t rr[4];
+        rr[0] = *POST_ROMRD;
+        rr[1] = *POST_ROMRD1;
+        rr[2] = *POST_ROMRD2;
+        rr[3] = *POST_ROMRD3;
+        osd_draw_string(&fb, 4, 92, "RD0", OSD_LABEL);
+        for (int i = 0; i < 8; i++)
+            hex(4 + (4 + i * 3) * 8, 92, (rr[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
+        osd_draw_string(&fb, 4, 102, "RD8", OSD_LABEL);
+        for (int i = 8; i < 16; i++)
+            hex(4 + (4 + (i - 8) * 3) * 8, 102, (rr[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 28 * 8, 102, "N", OSD_LABEL);
+        dec(4 + 30 * 8, 102, *POST_ROMRDN & 0xFFu);
 
         // Second read of 16h, and our own scratch round trip.
         osd_draw_string(&fb, 4, 52, "16h#2", OSD_LABEL);

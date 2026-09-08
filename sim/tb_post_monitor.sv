@@ -23,6 +23,10 @@ module tb_post_monitor;
     logic        io_write_n = 1, memory_read_n = 1, memory_write_n = 1;
     logic        aen_n = 0;   // address_enable_n: 0 = normal CPU cycle, 1 = DMA
 
+    logic  [7:0] bus_data = 8'h00;
+
+    wire [127:0] rom_read_data;
+    wire   [7:0] rom_read_count;
     wire  [7:0] post_code, post_prev, post_max;
     wire [63:0] post_hist;
     wire [19:0] last_mem_addr;
@@ -30,15 +34,36 @@ module tb_post_monitor;
 
     post_monitor u_dut (
         .clk(clk), .rst(rst),
-        .address(address), .cpu_data(cpu_data),
+        .address(address), .cpu_data(cpu_data), .bus_data(bus_data),
         .io_write_n(io_write_n), .address_enable_n(aen_n),
         .memory_read_n(memory_read_n), .memory_write_n(memory_write_n),
         .post_code(post_code), .post_prev(post_prev), .post_hist(post_hist),
         .last_mem_addr(last_mem_addr), .post_count(post_count),
-        .post_max(post_max), .restart_count(restart_count)
+        .post_max(post_max), .restart_count(restart_count),
+        .rom_read_data(rom_read_data), .rom_read_count(rom_read_count)
     );
 
     int errors = 0;
+
+    // A CPU read out of the snooped ROM window. Data is valid at the END of the
+    // cycle: the bus carries the PREVIOUS transfer's byte while the strobe goes
+    // active and only settles later. Latching on the leading edge is the bug
+    // that produced SEQ FF 53 74 C3 6F on the POST port and then, after that was
+    // fixed, CPURD 59 FC 2E FC on this one -- the same mistake twice, so the
+    // stale byte here is deliberately the previous slot's value.
+    task automatic rom_read(input logic [19:0] a,
+                            input logic  [7:0] stale,
+                            input logic  [7:0] val);
+        address = a;
+        bus_data = stale;
+        memory_read_n = 0;
+        repeat (2) @(posedge clk);
+        bus_data = val;
+        repeat (3) @(posedge clk);
+        memory_read_n = 1;
+        address = 20'h0;
+        repeat (3) @(posedge clk);
+    endtask
 
     // A guest memory access, the thing ADDR is supposed to report.
     task automatic mem_read(input logic [19:0] a);
@@ -162,6 +187,49 @@ module tb_post_monitor;
         if (post_code !== 8'h01)      begin $display("  FAIL freeze");         errors++; end
         if (post_count !== 16'd10)    begin $display("  FAIL live count");     errors++; end
         if (restart_count !== 16'd2)  begin $display("  FAIL live restarts");  errors++; end
+
+        // The ROM window: sixteen bytes at F000:D880, read in order, each one
+        // preceded on the bus by the byte before it.
+        begin
+            logic [7:0] img [0:15];
+            logic [7:0] got;
+            img[0]='hF8; img[1]='h2E; img[2]='hE8; img[3]='hD2;
+            img[4]='hEF; img[5]='h50; img[6]='hE3; img[7]='hF2;
+            img[8]='hE6; img[9]='h6E; img[10]='hFE; img[11]='h53;
+            img[12]='hFF; img[13]='h53; img[14]='hFF; img[15]='hA4;
+            got = 8'h59;   // whatever the bus carried before the first read
+            for (int i = 0; i < 16; i++) begin
+                rom_read(20'hFD880 + i[19:0], got, img[i]);
+                got = img[i];
+            end
+
+            // A read just OUTSIDE the window must not land in it.
+            rom_read(20'hFD890, 8'hA4, 8'h11);
+            // And one inside the window during a DMA cycle is still a real
+            // memory read, so it is allowed -- but a read at a wholly unrelated
+            // address must not be.
+            rom_read(20'h0ABCD, 8'h00, 8'h77);
+
+            $display("  romN     = %0d (want 16)", rom_read_count);
+            if (rom_read_count !== 8'd16) begin
+                $display("  FAIL rom count"); errors++;
+            end
+            for (int i = 0; i < 16; i++) begin
+                got = rom_read_data[i*8 +: 8];
+                if (got !== img[i]) begin
+                    $display("  FAIL rom byte %0d: got %02h want %02h", i, got, img[i]);
+                    errors++;
+                end
+            end
+            $display("  rom      = %02h %02h %02h %02h %02h %02h %02h %02h",
+                     rom_read_data[7:0], rom_read_data[15:8], rom_read_data[23:16],
+                     rom_read_data[31:24], rom_read_data[39:32], rom_read_data[47:40],
+                     rom_read_data[55:48], rom_read_data[63:56]);
+            $display("             %02h %02h %02h %02h %02h %02h %02h %02h",
+                     rom_read_data[71:64], rom_read_data[79:72], rom_read_data[87:80],
+                     rom_read_data[95:88], rom_read_data[103:96], rom_read_data[111:104],
+                     rom_read_data[119:112], rom_read_data[127:120]);
+        end
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");

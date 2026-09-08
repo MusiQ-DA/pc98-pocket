@@ -91,7 +91,7 @@ module post_monitor #(
     // region with the self-test master came back 11 11 11 11 11 11 11 11, which
     // is not memory content, so the master's read of the BIOS region is broken
     // and only a bus snoop can be trusted here.
-    output logic [31:0] rom_read_data,
+    output logic [127:0] rom_read_data,
     output logic  [7:0] rom_read_count
 );
 
@@ -126,10 +126,14 @@ module post_monitor #(
     wire mem_write = ~memory_write_n & ~address_enable_n;
     wire in_ivt16  = (address[19:2] == 18'h00016);   // 0x58..0x5B
     logic mem_write_q, mem_write_q_raw, mem_read_q_raw;
-    logic [1:0] rom_slot_q;
+    logic [3:0] rom_slot_q;
     logic [7:0] rom_byte_q;
     logic rom_hold_q;
-    wire  in_rom_win = (address[19:2] == 18'h3F620);   // F000:D880-D883
+    // F000:D880-D88F. Four bytes was enough to prove the read is corrupt but
+    // not to show its SHAPE: D880/D881 came back right and D882/D883 wrong,
+    // which is one bad 16-bit word next to one good one. Sixteen bytes says
+    // whether that alternates, runs, or is a single word.
+    wire  in_rom_win = (address[19:4] == 16'hFD88);
 
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -153,7 +157,7 @@ module post_monitor #(
             raw_strobes   <= 4'hF;
             wr_low_cycles <= 16'd0;
             rd_low_cycles <= 16'd0;
-            rom_read_data <= 32'd0;
+            rom_read_data <= 128'd0;
             rom_read_count<= 8'd0;
             rom_slot_q    <= 2'd0;
             rom_byte_q    <= 8'd0;
@@ -190,17 +194,12 @@ module post_monitor #(
             // the address and the bus while the read is active, and commit when
             // the strobe releases.
             if (~memory_read_n && in_rom_win) begin
-                rom_slot_q <= address[1:0];
+                rom_slot_q <= address[3:0];
                 rom_byte_q <= bus_data;
                 rom_hold_q <= 1'b1;
             end
             if (memory_read_n && rom_hold_q) begin
-                case (rom_slot_q)
-                    2'd0: rom_read_data[7:0]   <= rom_byte_q;
-                    2'd1: rom_read_data[15:8]  <= rom_byte_q;
-                    2'd2: rom_read_data[23:16] <= rom_byte_q;
-                    2'd3: rom_read_data[31:24] <= rom_byte_q;
-                endcase
+                rom_read_data[{rom_slot_q, 3'd0} +: 8] <= rom_byte_q;
                 if (rom_read_count != 8'hFF) rom_read_count <= rom_read_count + 8'd1;
                 rom_hold_q <= 1'b0;
             end

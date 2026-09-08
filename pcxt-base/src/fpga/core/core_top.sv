@@ -1542,7 +1542,7 @@ module core_top (
     wire [19:0] wr_last_addr;
     wire  [3:0] raw_strobes;
     wire [15:0] wr_low_cycles, rd_low_cycles;
-    wire [31:0] rom_read_data;
+    wire [127:0] rom_read_data;
     wire  [7:0] rom_read_count;
 
     post_monitor u_post (
