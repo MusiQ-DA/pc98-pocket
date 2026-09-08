@@ -14,8 +14,8 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_A000_UMB=1"
 set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # Machine layer: define MACHINE_PC98 to build the PC-98 memory map instead of
 # the PC/AT one (BIOS.ROM 96KB at 0xE8000, ROM write-protect E8000-FFFFF).
-# Commented out = the proven PCXT build. See docs/PC98_MACHINE_SPEC.md.
-# set_global_assignment -name VERILOG_MACRO "MACHINE_PC98=1"
+# Comment it out to fall back to the PCXT build that reached POST (run#109).
+set_global_assignment -name VERILOG_MACRO "MACHINE_PC98=1"
 
 # Route SDRAM through sdram_mp (via sdram_kf_shim) instead of KFSDRAM.
 # RAM.sv tests this with `ifdef, so setting it to 0 would still select the shim
