@@ -126,6 +126,10 @@ module post_monitor #(
     wire mem_write = ~memory_write_n & ~address_enable_n;
     wire in_ivt16  = (address[19:2] == 18'h00016);   // 0x58..0x5B
     logic mem_write_q, mem_write_q_raw, mem_read_q_raw;
+    logic [1:0] rom_slot_q;
+    logic [7:0] rom_byte_q;
+    logic rom_hold_q;
+    wire  in_rom_win = (address[19:2] == 18'h3F620);   // F000:D880-D883
 
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -151,6 +155,9 @@ module post_monitor #(
             rd_low_cycles <= 16'd0;
             rom_read_data <= 32'd0;
             rom_read_count<= 8'd0;
+            rom_slot_q    <= 2'd0;
+            rom_byte_q    <= 8'd0;
+            rom_hold_q    <= 1'b0;
             wr_last_addr  <= 20'd0;
             ivt16_off     <= 16'h0;
             ivt16_seg     <= 16'h0;
@@ -174,16 +181,28 @@ module post_monitor #(
             mem_write_q_raw <= ~memory_write_n;
             mem_read_q_raw  <= ~memory_read_n;
 
-            // Snoop the CPU's read of the vector table entry. The BIOS holds
-            // 2E E8 at D881/D882; the guest wrote 412E, so it saw 2E then 41.
-            if (~memory_read_n && ~mem_read_q_raw && (address[19:2] == 18'h3F620)) begin
-                case (address[1:0])
-                    2'd0: rom_read_data[7:0]   <= bus_data;
-                    2'd1: rom_read_data[15:8]  <= bus_data;
-                    2'd2: rom_read_data[23:16] <= bus_data;
-                    2'd3: rom_read_data[31:24] <= bus_data;
+            // Snoop the CPU's read of the vector table entry.
+            //
+            // Read data is valid at the END of the cycle, not its start.
+            // Latching on the LEADING edge returned 59 FC 2E FC where the image
+            // holds F8 2E E8 D2 -- the whole thing shifted by one, 59 being the
+            // byte fetched just before. Same mistake as the POST port, so: hold
+            // the address and the bus while the read is active, and commit when
+            // the strobe releases.
+            if (~memory_read_n && in_rom_win) begin
+                rom_slot_q <= address[1:0];
+                rom_byte_q <= bus_data;
+                rom_hold_q <= 1'b1;
+            end
+            if (memory_read_n && rom_hold_q) begin
+                case (rom_slot_q)
+                    2'd0: rom_read_data[7:0]   <= rom_byte_q;
+                    2'd1: rom_read_data[15:8]  <= rom_byte_q;
+                    2'd2: rom_read_data[23:16] <= rom_byte_q;
+                    2'd3: rom_read_data[31:24] <= rom_byte_q;
                 endcase
                 if (rom_read_count != 8'hFF) rom_read_count <= rom_read_count + 8'd1;
+                rom_hold_q <= 1'b0;
             end
 
             raw_strobes <= {memory_read_n, memory_write_n, io_write_n, address_enable_n};
