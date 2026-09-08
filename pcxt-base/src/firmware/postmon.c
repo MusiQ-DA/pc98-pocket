@@ -13,6 +13,8 @@
 #define POST_LIVEMX ((volatile uint32_t *) 0x50000028) // highest address ever touched
 #define POST_IVT16A ((volatile uint32_t *) 0x5000002C) // {wr_count, seg, off_hi}
 #define POST_IVT16B ((volatile uint32_t *) 0x50000030) // off
+#define POST_WRCNT  ((volatile uint32_t *) 0x50000034) // {aen_count, any_count}
+#define POST_WRADDR ((volatile uint32_t *) 0x50000038) // last memory write address
 
 // The self-test master, reused to read guest memory while the guest runs. It
 // takes the bus through hold acknowledge, which is what the BIOS loader does.
@@ -50,7 +52,7 @@ static uint8_t guest_peek(uint32_t addr)
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
-#define PANEL_H 78
+#define PANEL_H 88
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -223,6 +225,16 @@ void post_mon_tick(void)
         hex(4 + 11 * 8, 62, *POST_IVT16B & 0xFFFFu, 4);
         osd_draw_string(&fb, 4 + 17 * 8, 62, "NW", OSD_LABEL);
         dec(4 + 20 * 8, 62, a >> 24);
+
+        // Which term of the snoop filter is wrong: writes seen at all, writes
+        // seen with AEN low, and where the last one went.
+        uint32_t w = *POST_WRCNT;
+        osd_draw_string(&fb, 4, 72, "WR", OSD_LABEL);
+        dec(4 + 3 * 8, 72, w & 0xFFFFu);
+        osd_draw_string(&fb, 4 + 9 * 8, 72, "AEN", OSD_LABEL);
+        dec(4 + 13 * 8, 72, w >> 16);
+        osd_draw_string(&fb, 4 + 19 * 8, 72, "AT", OSD_LABEL);
+        hex(4 + 22 * 8, 72, *POST_WRADDR & 0xFFFFFu, 5);
 
         osd_draw_string(&fb, 4, 42, "16h", OSD_LABEL);
         hex(4 + 4 * 8, 42, v16_seg, 4);
