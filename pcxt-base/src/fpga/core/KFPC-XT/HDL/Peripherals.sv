@@ -1174,8 +1174,9 @@ end
         end
     end
 
-    wire [7:0] pc98_font_row;
+    wire [7:0] pc98_font_row;      // driven by the row buffer below
     wire [7:0] pc98_font_code;
+    wire [6:0] pc98_font_cell;
     wire [3:0] pc98_font_line;
     wire [2:0] pc98_grb;
     wire       pc98_pixel, pc98_kanji_seen;
@@ -1186,16 +1187,82 @@ end
         .tv_cell(tvram_vid_cell_w),
         .tv_char_lo(tvram_vid_char_lo), .tv_char_hi(tvram_vid_char_hi),
         .tv_attr(tvram_vid_attr),
+        .font_cell(pc98_font_cell),
         .font_code(pc98_font_code), .font_line(pc98_font_line),
         .font_row(pc98_font_row),
         .grb(pc98_grb), .pixel(pc98_pixel), .kanji_seen(pc98_kanji_seen)
     );
 
+    // ------------------------------------------------- glyphs, out of SDRAM
+    //
+    // The ANK font in BRAM covers 256 characters; the kanji is 282 KB and
+    // lives in SDRAM. Rather than two sources in the renderer, EVERY glyph now
+    // comes through the row buffer, which fetches a text row's worth at a time
+    // over the controller's second port.
+    //
+    // The fill runs on the chipset clock -- that is where the TVRAM and the
+    // SDRAM port are -- and the renderer reads on the dot clock, so the start
+    // of a row crosses domains as a toggle rather than a synchronised pulse
+    // (pulse_cdc).
+    wire       pc98_row_fill;
+    wire       pc98_fill_busy;
+
+    // One pulse at the top of each text row, on the dot clock: line 0 of the
+    // cell, first dot. The row FETCHED is the NEXT one, because the buffer is
+    // double-buffered and the renderer is reading the row being displayed.
+    wire pc98_row_tick = pc98_de && (pc98_h == 10'd0) && (pc98_v[3:0] == 4'd0);
+    logic pc98_row_tick_q;
+    always_ff @(posedge clk_vga_cga) pc98_row_tick_q <= pc98_row_tick;
+    wire pc98_row_start = pc98_row_tick & ~pc98_row_tick_q;
+
+    pulse_cdc u_pc98_rowsync (
+        .src_clk(clk_vga_cga), .src_rst(reset), .src_pulse(pc98_row_start),
+        .src_busy(),
+        .dst_clk(clock), .dst_rst(reset), .dst_pulse(pc98_row_fill)
+    );
+
+    // row * 80 for the row after the one on screen.
+    wire [4:0]  pc98_next_row  = (pc98_v[8:4] == 5'd24) ? 5'd0 : pc98_v[8:4] + 5'd1;
+    wire [11:0] pc98_row_base  = {1'b0, pc98_next_row, 6'd0}
+                              + {3'd0, pc98_next_row, 4'd0};
+
+    wire        pc98_f_req, pc98_f_busy, pc98_f_valid;
+    wire [19:0] pc98_f_addr;
+    wire  [7:0] pc98_f_data;
+
+    pc98_glyph_rowbuf u_pc98_rowbuf (
+        .clk(clock), .rst(reset),
+        .fill_start(pc98_row_fill), .row_base(pc98_row_base),
+        .bitac(8'hFF), .busy(pc98_fill_busy),
+        .tv_cell(tvram_vid_cell_w),
+        .tv_char_lo(tvram_vid_char_lo), .tv_char_hi(tvram_vid_char_hi),
+        .f_req(pc98_f_req), .f_addr(pc98_f_addr), .f_busy(pc98_f_busy),
+        .f_valid(pc98_f_valid), .f_data(pc98_f_data),
+        // Indexed by the cell the renderer is FETCHING, not the one it is
+        // drawing: it runs one cell ahead, and using the current column here
+        // would shift every line by one.
+        .rd_clk(clk_vga_cga), .rd_cell(pc98_font_cell), .rd_line(pc98_font_line),
+        .rd_byte(pc98_font_row)
+    );
+
+    pc98_font_fetch u_pc98_fetch (
+        .clk(clock), .rst(reset),
+        .f_req(pc98_f_req), .f_addr(pc98_f_addr), .f_busy(pc98_f_busy),
+        .f_valid(pc98_f_valid), .f_data(pc98_f_data),
+        .p_req(font_rd_req), .p_addr(font_rd_addr), .p_len(font_rd_len),
+        .p_ack(font_rd_ack), .p_rvalid(font_rd_valid), .p_rdata(font_rd_data),
+        .p_done(font_rd_done)
+    );
+
+    // The ANK BRAM stays for the CG window at A4000-A4FFF, which the guest
+    // reads directly and which does not want to wait on a burst.
+    wire [7:0] pc98_ank_row_unused;
     pc98_font_ank u_pc98_font (
         .wr_clk(font_wr_clk), .wr_en(font_wr_en),
         .wr_addr(font_wr_addr), .wr_data(font_wr_data),
         .rd_clk(clk_vga_cga),
-        .code(pc98_font_code), .line(pc98_font_line), .row(pc98_font_row)
+        .code(pc98_font_code), .line(pc98_font_line),
+        .row(pc98_ank_row_unused)
     );
 
     // The attribute's colour field is G R B, so it maps to the output that way

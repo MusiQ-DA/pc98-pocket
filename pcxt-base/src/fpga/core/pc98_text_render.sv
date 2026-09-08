@@ -39,7 +39,11 @@ module pc98_text_render (
     input  wire  [7:0] tv_char_hi,
     input  wire  [7:0] tv_attr,
 
-    // ANK font port (one cycle of latency).
+    // Glyph port (one cycle of latency). font_cell says WHICH cell is being
+    // fetched, which is the one ahead of the one being drawn -- the row buffer
+    // is indexed by it, and addressing that buffer with the current column
+    // instead would shift the whole line by one cell.
+    output wire  [6:0] font_cell,
     output wire  [7:0] font_code,
     output wire  [3:0] font_line,
     input  wire  [7:0] font_row,
@@ -67,6 +71,7 @@ module pc98_text_render (
     logic [7:0] q_char_lo, q_char_hi, q_attr;
     assign font_code = q_char_lo;
     assign font_line = line;
+    assign font_cell = next_col;
 
     // The glyph and attribute in use for the cell being shifted out.
     logic [7:0] cur_row, cur_attr;
@@ -122,10 +127,10 @@ module pc98_text_render (
         else if (blink & ~blink_on) lit = 1'b0;
         if (reverse)               lit = ~lit;
 
-        // A kanji cell is drawn as a solid block rather than as whatever the
-        // ANK font holds at that code, so it reads as "not implemented" and
-        // not as text.
-        if (cur_kanji) lit = line[0] ^ dot[0];
+        // Kanji is drawn from the font now: the row buffer fetches both halves
+        // of a pair and hands over the bytes, so there is nothing here to
+        // special-case. cur_kanji stays only to drive kanji_seen, which says
+        // whether the guest is using kanji at all.
 
         pixel = visible & lit;
         grb   = cur_attr[7:5];
