@@ -77,6 +77,17 @@ jobs:
           ./obj_tv/v | tee tv.log
           grep -q "RESULT: PASS" tv.log
 
+      - name: glyphs come back out of SDRAM intact
+        run: |
+          S=pcxt-base/src/fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_font_sdram \
+            -Isim -I$S sim/tb_pc98_font_sdram.sv sim/sdram_model.sv \
+            $S/pc98_glyph_rowbuf.sv $S/pc98_glyph_addr.sv \
+            $S/pc98_font_fetch.sv $S/sdram_mp.sv \
+            -o f --Mdir obj_fs
+          ./obj_fs/f | tee fs.log
+          grep -q "RESULT: PASS" fs.log
+
       - name: a text row's glyphs land in the buffer, kanji paired
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_rowbuf \
