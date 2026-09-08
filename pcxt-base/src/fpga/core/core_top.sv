@@ -1296,7 +1296,13 @@ module core_top (
 
     // Copier: present the FIFO head to the BIOS FSM as ioctl, honoring ioctl_wait.
     assign ioctl_download = load_active;
+`ifdef MACHINE_PC98
+    // Slot ids come from data.json: 1 = bios.rom, 2 = itf.rom. The FIFO carries
+    // one tag bit, which is enough because PC-98 loads exactly two ROMs.
+    assign ioctl_index    = rlf_head[41] ? 8'd1 : 8'd0;  // itf.rom->1, bios.rom->0
+`else
     assign ioctl_index    = rlf_head[41] ? 8'd2 : 8'd0;  // EC00 (XT-IDE)->2, BIOS->0
+`endif
     assign ioctl_addr     = rlf_head[40:16];
     assign ioctl_data     = rlf_head[15:0];
     reg ioctl_wr_r = 1'b0;
@@ -1333,12 +1339,20 @@ module core_top (
     // one 64 KB page at F0000, which would fold the top third of the image back
     // over the bottom.
     localparam [19:0] PC98_BIOS_BASE = 20'h E8000;
+    localparam [19:0] PC98_ITF_BASE  = 20'h F8000;
     wire select_pcxt  = (ioctl_index[5:0] == 0) && (ioctl_addr[24:17] == 8'h00);
+    // Slot 1 is the ITF, 32 KB. It occupies the SAME guest addresses as the
+    // top of the system BIOS (F8000-FFFFF), so it goes to the shadow bank --
+    // the loader asserts select_itf while writing and RAM.sv routes it there,
+    // exactly the mechanism the Tandy BIOS shadow already uses.
+    wire select_itf   = (ioctl_index[5:0] == 1) && (ioctl_addr[24:15] == 10'h000);
     wire select_tandy = 1'b0;
     wire select_xtide = 1'b0;
+    wire select_shadow = select_itf;
 
     wire [19:0] bios_access_address_wire =
-         select_pcxt ? (PC98_BIOS_BASE + {3'b000, ioctl_addr[16:0]}) : 20'hFFFFF;
+         select_pcxt ? (PC98_BIOS_BASE + {3'b000, ioctl_addr[16:0]}) :
+         select_itf  ? (PC98_ITF_BASE  + {5'b00000, ioctl_addr[14:0]}) : 20'hFFFFF;
 
     // Restore the reset vector.
     //
@@ -1370,6 +1384,7 @@ module core_top (
     wire select_pcxt  = (ioctl_index[5:0] == 0) && (ioctl_addr[24:16] == 9'b000000000);
     wire select_tandy = `ROM_IS_TANDY ? (ioctl_index[5:0] == 1) && (ioctl_addr[24:16] == 9'b000000000) : 1'b0;
     wire select_xtide = ioctl_index == 2;
+    wire select_shadow = select_tandy;
 
     wire [19:0] bios_access_address_wire = select_pcxt  ? { 4'b1111, ioctl_addr[15:0]} :
          select_tandy ? { 4'b1111, ioctl_addr[15:0]} :
@@ -1379,7 +1394,11 @@ module core_top (
     wire [15:0] rom_data_in = ioctl_data;
 `endif
 
+`ifdef MACHINE_PC98
+    wire bios_load_n = ~(ioctl_download & (select_pcxt | select_itf));
+`else
     wire bios_load_n = ~(ioctl_download & (select_pcxt | select_tandy | select_xtide));
+`endif
 
     always @(posedge clk_chipset, posedge reset_sdram)
     begin
@@ -1441,7 +1460,7 @@ module core_top (
                     bios_protect_flag   <= 2'b00;
                     bios_access_request <= 1'b1;
                     bios_write_byte_cnt <= 1'h0;
-                    tandy_bios_write    <= select_tandy;
+                    tandy_bios_write    <= select_shadow;
                     if (~ioctl_download)
                     begin
                         bios_access_address <= 20'hFFFFF;
@@ -1477,7 +1496,7 @@ module core_top (
                     bios_access_address <= bios_access_address;
                     bios_write_data     <= bios_write_data;
                     bios_write_byte_cnt <= bios_write_byte_cnt;
-                    tandy_bios_write    <= select_tandy;
+                    tandy_bios_write    <= select_shadow;
                     ioctl_wait          <= 1'b1;
 
                     // Hold the external write until ram_rw_complete, or a safety
@@ -1809,7 +1828,65 @@ module core_top (
     assign  sw = {sw_floppy, sw_base}; // DIP switches (display type and floppy count)
     assign  port_c_in[3:0] = port_b_out[3] ? sw[7:4] : sw[3:0];
 
+`ifdef MACHINE_PC98
+    // ---------------------------------------------------------------- ITF bank
+    //
+    // F8000-FFFFF is 32 KB of ROM that is the ITF at power-on and the system
+    // BIOS afterwards. The ITF switches it itself, through port 0x043D:
+    // 0x10 selects the ITF, 0x12 selects the BIOS (np2 io/necio.c, and the real
+    // instructions are in the ROM -- BA 3D 04 B0 12 EE at F8A98).
+    //
+    // The hand-over at F988D is worth knowing, because it says the switch must
+    // take effect on the very next fetch:
+    //
+    //     C7 06 FC 04 80 FD   MOV WORD [04FC], FD80    ; target segment, in RAM
+    //     BA 3D 04 B0 12      MOV DX,043D / MOV AL,12
+    //     EA F8 04 00 00      JMP 0000:04F8            ; stub in RAM does the OUT
+    //
+    // It cannot OUT and keep executing from ROM, because the ROM changes under
+    // it -- so it jumps to a stub in RAM, switches there, and far-jumps into
+    // FD80:xxxx. All 8086 instructions.
+    //
+    // Reset value is 1: the reset vector that makes sense at power-on is the
+    // ITF's (EA 00 00 00 F8, jump to itself), not the system BIOS's
+    // (EA 00 00 80 FD, which would skip the ITF entirely). np2 clears it
+    // instead, but np2 never runs an ITF.
+    reg  itf_bank = 1'b1;
+    reg  itf_io_q, itf_io_qq;
+    reg  [7:0] itf_io_data;
+    wire itf_port_write = ~chipset_io_write_n & ~chipset_aen
+                        & (chipset_address[15:0] == 16'h043D);
+
+    always @(posedge clk_chipset or posedge reset_sdram) begin
+        if (reset_sdram) begin
+            itf_bank    <= 1'b1;
+            itf_io_q    <= 1'b0;
+            itf_io_qq   <= 1'b0;
+            itf_io_data <= 8'h00;
+        end else begin
+            // Two-cycle qualification, and take the data at the END of the
+            // cycle. Address and command lines do not change together, so a
+            // write on its way to another port sweeps through 0x043D for a
+            // cycle -- the same transient that logged POST codes the BIOS never
+            // wrote (see post_monitor). Switching the ROM out from under the
+            // CPU on a glitch would be considerably worse than a bad readout.
+            itf_io_q  <= itf_port_write;
+            itf_io_qq <= itf_io_q;
+            if (itf_port_write) itf_io_data <= cpu_data_bus;
+            if (itf_io_q && itf_io_qq && ~itf_port_write) begin
+                if      (itf_io_data == 8'h10) itf_bank <= 1'b1;
+                else if (itf_io_data == 8'h12) itf_bank <= 1'b0;
+            end
+        end
+    end
+
+    // One flag drives both directions of the shadow, as the Tandy path does:
+    // while the loader writes it routes the ITF image in, and at all other
+    // times it decides which of the two ROMs the guest sees at F8000.
+    wire tandy_bios_flag = bios_write_n ? itf_bank : tandy_bios_write;
+`else
     wire tandy_bios_flag = bios_write_n ? `ROM_IS_TANDY : tandy_bios_write;
+`endif
 
     // Displayed card = the boot card XOR the Select-button CGA/HGC toggle. The toggle
     // clears at machine reset, so a fresh POST always shows the 1st Video card.
