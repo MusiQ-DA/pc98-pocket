@@ -26,37 +26,30 @@ module tb_pc98_text;
     logic        blink_on = 1'b1;
 
     wire [11:0] tv_cell;
-    logic [7:0] tv_char_lo, tv_char_hi, tv_attr;
-    wire  [7:0] font_code;
+    logic [7:0] tv_attr;
     wire  [6:0] font_cell;
     wire  [3:0] font_line;
     logic [7:0] font_row;
     wire  [2:0] grb;
-    wire        pixel, kanji_seen;
+    wire        pixel;
 
     pc98_text_render dut (
         .clk(clk), .pix_ce(pix_ce), .hcount(hcount), .vcount(vcount),
         .blink_on(blink_on),
-        .tv_cell(tv_cell), .tv_char_lo(tv_char_lo), .tv_char_hi(tv_char_hi),
-        .tv_attr(tv_attr),
-        .font_cell(font_cell), .font_code(font_code), .font_line(font_line),
-        .font_row(font_row),
-        .grb(grb), .pixel(pixel), .kanji_seen(kanji_seen)
+        .tv_cell(tv_cell), .tv_attr(tv_attr),
+        .font_cell(font_cell), .font_line(font_line), .font_row(font_row),
+        .grb(grb), .pixel(pixel)
     );
 
     // A screen: every cell holds the same character and attribute, which is
     // enough to check the pixel path without modelling a whole TVRAM.
-    logic [7:0] scr_char_lo = 8'h41;
-    logic [7:0] scr_char_hi = 8'h00;
     logic [7:0] scr_attr    = 8'hE1;   // white (G,R,B all set), not secret
     logic [7:0] glyph_row   = 8'b1010_0000;
 
     // Model the one-cycle latencies the real memories have.
     always_ff @(posedge clk) begin
-        tv_char_lo <= scr_char_lo;
-        tv_char_hi <= scr_char_hi;
-        tv_attr    <= scr_attr;
-        font_row   <= glyph_row;
+        tv_attr  <= scr_attr;
+        font_row <= glyph_row;
     end
 
     int errors = 0;
@@ -129,19 +122,9 @@ module tb_pc98_text;
         goto(8*10 + 0, 0);
         if (grb !== 3'b010) begin $display("  FAIL red"); errors++; end
 
-        // Kanji now comes from the font like anything else -- the row buffer
-        // fetches both halves and hands over bytes, so the renderer draws what
-        // it is given. What must still hold is that the fact is REPORTED, so
-        // "is the guest using kanji" stays measurable.
-        scr_attr    = 8'hE1;
-        scr_char_hi = 8'h30;              // non-zero high byte = kanji
-        glyph_row   = 8'b1010_0000;
-        expect_pixel(8*10 + 0, 0, 1'b1, "kanji glyph bit 7");
-        expect_pixel(8*10 + 1, 0, 1'b0, "kanji glyph bit 6");
-        $display("  kanji cell: kanji_seen=%0d (must be flagged)", kanji_seen);
-        if (kanji_seen !== 1'b1) begin
-            $display("  FAIL kanji not flagged"); errors++;
-        end
+        // Kanji is no longer this module's business: the row buffer fetches
+        // both halves and hands over bytes, and it reports kanji_seen. Covered
+        // by tb_pc98_rowbuf instead.
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");

@@ -31,13 +31,15 @@ module tb_pc98_tvram;
 
     logic [11:0] vid_cell = 12'h0;
     wire   [7:0] vid_char_lo, vid_char_hi, vid_attr;
+    logic [11:0] fil_cell = 12'h0;
 
     pc98_tvram dut (
         .clk(clk),
         .cpu_addr(cpu_addr), .cpu_wren(cpu_wren), .cpu_wdata(cpu_wdata),
         .cpu_q(cpu_q),
-        .vid_cell(vid_cell),
-        .vid_char_lo(vid_char_lo), .vid_char_hi(vid_char_hi), .vid_attr(vid_attr)
+        .fil_clk(clk), .fil_cell(fil_cell),
+        .fil_char_lo(vid_char_lo), .fil_char_hi(vid_char_hi),
+        .vid_clk(clk), .vid_cell(vid_cell), .vid_attr(vid_attr)
     );
 
     int errors = 0;
@@ -91,7 +93,7 @@ module tb_pc98_tvram;
 
         // The renderer's view: one cell index must give all three bytes at once.
         for (int i = 0; i < 2000; i += 37) begin
-            vid_cell = 12'(i);
+            vid_cell = 12'(i); fil_cell = 12'(i);
             @(posedge clk); @(posedge clk);
             if (vid_char_lo !== 8'(i & 8'hFF) ||
                 vid_char_hi !== 8'((i >> 8) & 8'hFF) ||

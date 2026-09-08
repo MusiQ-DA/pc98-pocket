@@ -1175,7 +1175,6 @@ end
     end
 
     wire [7:0] pc98_font_row;      // driven by the row buffer below
-    wire [7:0] pc98_font_code;
     wire [6:0] pc98_font_cell;
     wire [3:0] pc98_font_line;
     wire [2:0] pc98_grb;
@@ -1184,13 +1183,10 @@ end
     pc98_text_render u_pc98_text (
         .clk(clk_vga_cga), .pix_ce(1'b1),
         .hcount(pc98_h), .vcount(pc98_v), .blink_on(pc98_blink),
-        .tv_cell(tvram_vid_cell_w),
-        .tv_char_lo(tvram_vid_char_lo), .tv_char_hi(tvram_vid_char_hi),
-        .tv_attr(tvram_vid_attr),
-        .font_cell(pc98_font_cell),
-        .font_code(pc98_font_code), .font_line(pc98_font_line),
+        .tv_cell(tvram_vid_cell_w), .tv_attr(tvram_vid_attr),
+        .font_cell(pc98_font_cell), .font_line(pc98_font_line),
         .font_row(pc98_font_row),
-        .grb(pc98_grb), .pixel(pc98_pixel), .kanji_seen(pc98_kanji_seen)
+        .grb(pc98_grb), .pixel(pc98_pixel)
     );
 
     // ------------------------------------------------- glyphs, out of SDRAM
@@ -1234,7 +1230,7 @@ end
         .clk(clock), .rst(reset),
         .fill_start(pc98_row_fill), .row_base(pc98_row_base),
         .bitac(8'hFF), .busy(pc98_fill_busy),
-        .tv_cell(tvram_vid_cell_w),
+        .tv_cell(tvram_fil_cell),
         .tv_char_lo(tvram_vid_char_lo), .tv_char_hi(tvram_vid_char_hi),
         .f_req(pc98_f_req), .f_addr(pc98_f_addr), .f_busy(pc98_f_busy),
         .f_valid(pc98_f_valid), .f_data(pc98_f_data),
@@ -1242,7 +1238,7 @@ end
         // drawing: it runs one cell ahead, and using the current column here
         // would shift every line by one.
         .rd_clk(clk_vga_cga), .rd_cell(pc98_font_cell), .rd_line(pc98_font_line),
-        .rd_byte(pc98_font_row)
+        .rd_byte(pc98_font_row), .kanji_seen(pc98_kanji_seen)
     );
 
     pc98_font_fetch u_pc98_fetch (
@@ -1261,7 +1257,7 @@ end
         .wr_clk(font_wr_clk), .wr_en(font_wr_en),
         .wr_addr(font_wr_addr), .wr_data(font_wr_data),
         .rd_clk(clk_vga_cga),
-        .code(pc98_font_code), .line(pc98_font_line),
+        .code(8'h00), .line(4'd0),
         .row(pc98_ank_row_unused)
     );
 
@@ -1475,7 +1471,8 @@ end
     defparam hgc1.BLINK_MAX = 24'd5166000;
 `ifdef MACHINE_PC98
     wire [7:0]  tvram_cpu_q;
-    wire [11:0] tvram_vid_cell = tvram_vid_cell_w;
+    wire [11:0] tvram_vid_cell = tvram_vid_cell_w;   // renderer, attributes
+    wire [11:0] tvram_fil_cell;                      // row buffer, codes
     wire [7:0]  tvram_vid_char_lo, tvram_vid_char_hi, tvram_vid_attr;
 
     pc98_tvram u_tvram (
@@ -1484,9 +1481,14 @@ end
         .cpu_wren    (tvram_mem_select & ~memory_write_n),
         .cpu_wdata   (internal_data_bus),
         .cpu_q       (tvram_cpu_q),
+        // Character codes to the row buffer, on the chipset clock.
+        .fil_clk     (clock),
+        .fil_cell    (tvram_fil_cell),
+        .fil_char_lo (tvram_vid_char_lo),
+        .fil_char_hi (tvram_vid_char_hi),
+        // The attribute to the renderer, on the dot clock.
+        .vid_clk     (clk_vga_cga),
         .vid_cell    (tvram_vid_cell),
-        .vid_char_lo (tvram_vid_char_lo),
-        .vid_char_hi (tvram_vid_char_hi),
         .vid_attr    (tvram_vid_attr)
     );
 `endif
