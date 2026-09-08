@@ -811,6 +811,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_glyph_addr.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_glyph_rowbuf.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_font_fetch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pulse_cdc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_cgwindow.sv
 set_global_assignment -name VERILOG_FILE core/pll_video_pc98.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_kf_shim.sv
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFPS2KB/HDL/KFPS2KB_Byte_Accept.sv"

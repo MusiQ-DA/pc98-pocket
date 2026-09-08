@@ -77,6 +77,15 @@ jobs:
           ./obj_tv/v | tee tv.log
           grep -q "RESULT: PASS" tv.log
 
+      - name: the CG window serves a glyph to the guest
+        run: |
+          S=pcxt-base/src/fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_cgwindow \
+            -Isim -I$S sim/tb_pc98_cgwindow.sv \
+            $S/pc98_cgwindow.sv $S/pc98_glyph_addr.sv -o c --Mdir obj_cg
+          ./obj_cg/c | tee cg.log
+          grep -q "RESULT: PASS" cg.log
+
       - name: a pulse survives the clock crossing
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pulse_cdc \
