@@ -41,6 +41,10 @@
 `default_nettype none
 
 module sdram_kf_shim #(
+    // Published so the port list can use them; the internals below re-derive
+    // the same values as localparams.
+    parameter int ADDR_BITS_PUB    = 24,
+    parameter int LEN_BITS_PUB     = 4,
     parameter int sdram_col_width  = 9,
     parameter int sdram_row_width  = 13,
     parameter int sdram_bank_width = 2,
@@ -87,15 +91,38 @@ module sdram_kf_shim #(
     output logic [sdram_bank_width-1:0]       sdram_ba,
     input  wire  [sdram_data_width-1:0]       sdram_dq_in,
     output logic [sdram_data_width-1:0]       sdram_dq_out,
-    output logic                              sdram_dq_io
+    output logic                              sdram_dq_io,
+
+    // ---------------------------------------------------------------- port B
+    //
+    // A second, read-only master, for the video side's font fetch. This is
+    // what sdram_mp being multi-port was for: FONT.ROM is 282 KB against about
+    // 202 KB of free M10K, so it lives in SDRAM and glyphs are read while the
+    // picture is drawn.
+    //
+    // The controller is instanced with two ports on BOTH machines rather than
+    // conditionally, because making the port count depend on a macro makes
+    // every signal width depend on it too. On PC/AT b_req is tied low, the
+    // round-robin never grants it, and the guest path behaves as it did.
+    input  wire                               b_req,      /* tie low if unused */
+    input  wire  [ADDR_BITS_PUB-1:0]          b_addr,
+    input  wire  [LEN_BITS_PUB-1:0]           b_len,
+    output logic                              b_ack,
+    output logic                              b_rvalid,
+    output logic [sdram_data_width-1:0]       b_rdata,
+    output logic                              b_done
 );
 
     localparam int ADDR_BITS = sdram_col_width + sdram_row_width + sdram_bank_width;
     localparam int MASK_BITS = sdram_data_width/8;
 
-    // KFSDRAM's callers only ever ask for one word, so BURST_MAX is 1 here and
-    // the address never has to be checked against a column boundary.
-    localparam int BURST_MAX = 1;
+    // KFSDRAM's callers only ever ask for one word, so port A never bursts and
+    // its address never has to be checked against a column boundary. BURST_MAX
+    // is 16 for port B: a glyph is sixteen bytes and RAM.sv stores one byte per
+    // word, so that is one transaction instead of sixteen.
+    localparam int BURST_MAX = 16;
+    localparam int LEN_BITS  = (BURST_MAX > 1) ? $clog2(BURST_MAX) : 1;
+    localparam int PORTS     = 2;
 
     // sdram_mp schedules its own refresh; the KF_REF far end is stock KFSDRAM
     // and consumes enable_refresh directly (see its instantiation below).
@@ -108,7 +135,8 @@ module sdram_kf_shim #(
     logic [ADDR_BITS-1:0] addr_r;
     logic        p_ack, p_done, p_rvalid, stat_idle, stat_refresh;
     logic [sdram_data_width-1:0] p_rdata;
-    logic [0:0]  grant;
+    logic        mp_rvalid;
+    logic [sdram_data_width-1:0] mp_rdata;
 
     // Request latch, shared by both far ends. A request is taken only when the
     // far end can actually accept a command this cycle (stat_idle), which for
@@ -209,7 +237,6 @@ module sdram_kf_shim #(
     assign p_rvalid  = kf_read_flag;
     assign p_rdata   = kf_data_out;
     assign p_done    = kf_idle & ~kf_idle_q;
-    assign grant     = 1'b0;
 
     always_ff @(posedge sdram_clock or posedge sdram_reset) begin
         if (sdram_reset) begin
@@ -252,7 +279,15 @@ module sdram_kf_shim #(
         .sdram_dq_io        (sdram_dq_io)
     );
 
-    wire _unused_mp_if = &{1'b0, kf_write_flag, grant, 1'b0};
+    // The KF_REF far end is single-master by construction: port B has no
+    // meaning against stock KFSDRAM, so it reads back nothing.
+    assign b_ack    = 1'b0;
+    assign b_done   = 1'b0;
+    assign b_rvalid = 1'b0;
+    assign b_rdata  = '0;
+    wire _unused_b  = &{1'b0, b_req, b_addr, b_len, 1'b0};
+
+    wire _unused_mp_if = &{1'b0, kf_write_flag, 1'b0};
 
 `else
     // ---------------------------------------------------------------------
@@ -261,8 +296,29 @@ module sdram_kf_shim #(
     logic init_done;
     logic [MASK_BITS-1:0] dqm_unused;
 
+    // Port A is the guest (KFSDRAM's protocol, one word at a time), port B the
+    // font fetch. Packed so the widths follow the controller's parameters.
+    wire [PORTS-1:0] mp_req  = {b_req, req};
+    wire [PORTS-1:0] mp_we   = {1'b0,  we_r};
+    wire [PORTS-1:0][ADDR_BITS-1:0] mp_addr  = {b_addr, addr_r};
+    wire [PORTS-1:0][LEN_BITS-1:0]  mp_len   = {b_len,  LEN_BITS'(0)};
+    wire [PORTS-1:0][sdram_data_width-1:0] mp_wdata = {{sdram_data_width{1'b0}}, data_in};
+    wire [PORTS-1:0][MASK_BITS-1:0] mp_wmask = {{MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}};
+    wire [PORTS-1:0] mp_ack, mp_done;
+    wire [$clog2(PORTS)-1:0] mp_grant;
+
+    assign p_ack    = mp_ack[0];
+    assign p_done   = mp_done[0];
+    assign b_ack    = mp_ack[1];
+    assign b_done   = mp_done[1];
+    // Read data is tagged with the owning port, so each master sees only its own.
+    assign p_rvalid = mp_rvalid & (mp_grant == 1'b0);
+    assign b_rvalid = mp_rvalid & (mp_grant == 1'b1);
+    assign p_rdata  = mp_rdata;
+    assign b_rdata  = mp_rdata;
+
     sdram_mp #(
-        .PORTS       (1),
+        .PORTS       (PORTS),
         .ROW_BITS    (sdram_row_width),
         .COL_BITS    (sdram_col_width),
         .BANK_BITS   (sdram_bank_width),
@@ -278,18 +334,18 @@ module sdram_kf_shim #(
     ) u_mp (
         .clk          (sdram_clock),
         .rst          (sdram_reset),
-        .p_req        (req),
-        .p_we         (we_r),
-        .p_addr       (addr_r),
-        .p_len        (1'b0),
-        .p_ack        (p_ack),
+        .p_req        (mp_req),
+        .p_we         (mp_we),
+        .p_addr       (mp_addr),
+        .p_len        (mp_len),
+        .p_ack        (mp_ack),
         .p_wcnt       (),
-        .p_wdata      (data_in),
-        .p_wmask      ({MASK_BITS{1'b1}}),
-        .grant        (grant),
-        .p_rvalid     (p_rvalid),
-        .p_rdata      (p_rdata),
-        .p_done       (p_done),
+        .p_wdata      (mp_wdata),
+        .p_wmask      (mp_wmask),
+        .grant        (mp_grant),
+        .p_rvalid     (mp_rvalid),
+        .p_rdata      (mp_rdata),
+        .p_done       (mp_done),
         .init_done    (init_done),
         .stat_idle    (stat_idle),
         .stat_refresh (stat_refresh),
