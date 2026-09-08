@@ -37,7 +37,7 @@ static uint8_t guest_peek(uint32_t addr)
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
-#define PANEL_H 58
+#define PANEL_H 68
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -166,7 +166,31 @@ void post_mon_tick(void)
         vectors_read = 1;
     }
 
+    // The option-ROM window, read at the same time.
+    //
+    // POST 11 means the BIOS scanned C000-C800, believed it found an option
+    // ROM, and called into it -- and did not come back. But nothing loads a ROM
+    // there: the BIOS memory test only covers 0x00000-0x07FFF, so C0000 is
+    // uninitialised SDRAM. If it happens to read 55 AA, the signature check
+    // passes and the machine calls into whatever garbage follows.
+    //
+    // So print the four bytes the scanner looked at, and the far pointer it
+    // stored at 0x67. 55 AA there is the whole explanation.
+    static uint32_t c0[4] = {0, 0, 0, 0};
+    static uint32_t romptr_off = 0, romptr_seg = 0;
+    if (!vectors_read && idle_ticks >= 4000u) {
+        for (int i = 0; i < 4; i++) c0[i] = guest_peek(0xC0000u + (uint32_t) i);
+        romptr_off = guest_peek(0x67) | ((uint32_t) guest_peek(0x68) << 8);
+        romptr_seg = guest_peek(0x69) | ((uint32_t) guest_peek(0x6A) << 8);
+    }
+
     if (vectors_read) {
+        osd_draw_string(&fb, 4, 52, "C000", OSD_LABEL);
+        for (int i = 0; i < 4; i++) hex(4 + (5 + i * 3) * 8, 52, c0[i], 2);
+        osd_draw_string(&fb, 4 + 18 * 8, 52, "PTR", OSD_LABEL);
+        hex(4 + 22 * 8, 52, romptr_seg, 4);
+        hex(4 + 27 * 8, 52, romptr_off, 4);
+
         osd_draw_string(&fb, 4, 42, "16h", OSD_LABEL);
         hex(4 + 4 * 8, 42, v16_seg, 4);
         osd_draw_string(&fb, 4 + 8 * 8, 42, ":", OSD_LABEL);
