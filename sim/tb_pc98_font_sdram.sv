@@ -40,6 +40,7 @@ module tb_pc98_font_sdram;
     logic [6:0] rd_col = 7'd0;
     logic [3:0] rd_line = 4'd0;
     wire  [7:0] rd_byte;
+    wire        kanji_seen;
 
     pc98_glyph_rowbuf #(.COLS(4)) u_rowbuf (
         .clk(clk), .rst(rst),
@@ -47,7 +48,7 @@ module tb_pc98_font_sdram;
         .tv_cell(tv_cell), .tv_char_lo(tv_char_lo), .tv_char_hi(tv_char_hi),
         .f_req(f_req), .f_addr(f_addr), .f_busy(f_busy),
         .f_valid(f_valid), .f_data(f_data),
-        .rd_clk(clk), .rd_cell(rd_col), .rd_line(rd_line), .rd_byte(rd_byte)
+        .rd_clk(clk), .rd_cell(rd_col), .rd_line(rd_line), .rd_byte(rd_byte), .kanji_seen(kanji_seen)
     );
 
     // Cell 0 is ANK 'A'; cells 1 and 2 are one kanji; cell 3 is ANK 'A' again.

@@ -70,7 +70,11 @@ module pc98_glyph_rowbuf #(
     input  wire         rd_clk,
     input  wire  [6:0]  rd_cell,
     input  wire  [3:0]  rd_line,
-    output logic [7:0]  rd_byte
+    output logic [7:0]  rd_byte,
+
+    // Sticky: a kanji cell has been seen. The renderer cannot tell -- it is
+    // handed bytes -- and this is where the pairing is decided, so it is here.
+    output logic        kanji_seen
 );
 
     (* ramstyle = "M10K" *) logic [7:0] store [0:4095];
@@ -113,6 +117,7 @@ module pc98_glyph_rowbuf #(
             busy        <= 1'b0;
             f_req       <= 1'b0;
             pair_second <= 1'b0;
+            kanji_seen  <= 1'b0;
             tv_cell     <= 12'd0;
         end else begin
             f_req <= 1'b0;
@@ -160,6 +165,7 @@ module pc98_glyph_rowbuf #(
             end
 
             S_NEXT: begin
+                if (ga_is_kanji) kanji_seen <= 1'b1;
                 // A kanji's first col is followed by its right half, which
                 // reuses the same code with right_half set. The col after that
                 // starts fresh.

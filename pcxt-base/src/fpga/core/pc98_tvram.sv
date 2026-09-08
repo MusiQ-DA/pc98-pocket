@@ -18,9 +18,18 @@
 // windows are 8 KB each and the guest may address all of it. Two 8 KB banks,
 // byte-wide, dual-ported: 16 KB total = 4 M10K blocks.
 //
-// The video side reads a whole cell at once -- both character bytes and the
-// attribute -- because the renderer needs them together and fetching them
-// through the CPU port would cost three accesses per cell.
+// TWO read ports, not one, and they read different banks:
+//
+//   fil  character bytes, on the chipset clock -- the glyph row buffer, which
+//        needs the codes to work out where each glyph lives
+//   vid  the attribute, on the dot clock -- the renderer, which needs colour
+//        and reverse and blink for the cell it is drawing
+//
+// Splitting them that way costs nothing. Each bank still has one write port and
+// one read port, so nothing has to be duplicated. Sharing a single read port
+// between the two would need it in two clock domains at once, and driving it
+// from both is a multiple-driver error the Fitter catches rather than a subtle
+// one -- which is how this was found.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -36,10 +45,15 @@ module pc98_tvram (
     input  wire  [7:0] cpu_wdata,
     output logic [7:0] cpu_q,
 
-    // Video side, by cell index.
-    input  wire [11:0] vid_cell,       // 0..4095
-    output logic [7:0] vid_char_lo,
-    output logic [7:0] vid_char_hi,
+    // Fill side: character codes, on the clock the row buffer runs on.
+    input  wire        fil_clk,
+    input  wire [11:0] fil_cell,
+    output logic [7:0] fil_char_lo,
+    output logic [7:0] fil_char_hi,
+
+    // Render side: the attribute, on the dot clock.
+    input  wire        vid_clk,
+    input  wire [11:0] vid_cell,
     output logic [7:0] vid_attr
 );
 
@@ -77,9 +91,15 @@ module pc98_tvram (
         q_is_attr <= is_attr;
         q_hi      <= cpu_hi;
 
-        vid_char_lo <= char_lo[vid_cell];
-        vid_char_hi <= char_hi[vid_cell];
-        vid_attr    <= attr[vid_cell];
+    end
+
+    always_ff @(posedge fil_clk) begin
+        fil_char_lo <= char_lo[fil_cell];
+        fil_char_hi <= char_hi[fil_cell];
+    end
+
+    always_ff @(posedge vid_clk) begin
+        vid_attr <= attr[vid_cell];
     end
 
     always_comb begin
