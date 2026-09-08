@@ -77,6 +77,36 @@ jobs:
           ./obj_tv/v | tee tv.log
           grep -q "RESULT: PASS" tv.log
 
+      - name: glyphs come back out of SDRAM intact
+        run: |
+          S=pcxt-base/src/fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_font_sdram \
+            -Isim -I$S sim/tb_pc98_font_sdram.sv sim/sdram_model.sv \
+            $S/pc98_glyph_rowbuf.sv $S/pc98_glyph_addr.sv \
+            $S/pc98_font_fetch.sv $S/sdram_mp.sv \
+            -o f --Mdir obj_fs
+          ./obj_fs/f | tee fs.log
+          grep -q "RESULT: PASS" fs.log
+
+      - name: a text row's glyphs land in the buffer, kanji paired
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_rowbuf \
+            -Isim -Ipcxt-base/src/fpga/core sim/tb_pc98_rowbuf.sv \
+            pcxt-base/src/fpga/core/pc98_glyph_rowbuf.sv \
+            pcxt-base/src/fpga/core/pc98_glyph_addr.sv \
+            -o b --Mdir obj_rb
+          ./obj_rb/b | tee rb.log
+          grep -q "RESULT: PASS" rb.log
+
+      - name: glyph addresses match a real FONT.ROM
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_glyph_addr \
+            -Isim -Ipcxt-base/src/fpga/core \
+            sim/tb_pc98_glyph_addr.sv pcxt-base/src/fpga/core/pc98_glyph_addr.sv \
+            -o g --Mdir obj_ga
+          ./obj_ga/g | tee ga.log
+          grep -q "RESULT: PASS" ga.log
+
       - name: raster is the 640x400 one PC-98 software expects
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_timing \
@@ -101,6 +131,9 @@ jobs:
             -Isim sim/tb_itf_bank.sv -o t --Mdir obj_itf
           ./obj_itf/t | tee itf.log
           grep -q "RESULT: PASS" itf.log
+
+      - name: no two OSD fields overlap
+        run: python3 scripts/check_osd_layout.py
 
       - name: no module input left dangling in core_top
         run: python3 scripts/check_unconnected.py

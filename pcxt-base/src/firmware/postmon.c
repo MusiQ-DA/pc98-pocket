@@ -176,6 +176,7 @@ void post_mon_tick(void)
     // accesses -- so there is no reason to gate them at all. On PC-98 the ITF's
     // route to the hand-over runs 0x0461 then 0x043D, so 043D arriving and BANK
     // going 0 is the whole of P1.
+#ifdef MACHINE_PC98
     {
         uint32_t io0 = *POST_IOH0, io1 = *POST_IOH1, ios = *POST_IOST;
         // Two ports, not four. The row ran to column 37 with four of them and
@@ -187,20 +188,21 @@ void post_mon_tick(void)
         hex(4 + 8 * 8, 12, io0 >> 16, 4);
         osd_draw_string(&fb, 4 + 14 * 8, 12, "N", OSD_LABEL);
         dec(4 + 16 * 8, 12, ios & 0xFFFFu);
-        osd_draw_string(&fb, 4 + 23 * 8, 12, "BANK", OSD_LABEL);
-        dec(4 + 28 * 8, 12, (ios >> 16) & 1u);
-        // Older two ports on their own row rather than squeezed onto this one.
-        osd_draw_string(&fb, 4 + 31 * 8, 12, "P", OSD_LABEL);
-        hex(4 + 33 * 8, 12, io1 & 0xFFFFu, 4);
+        osd_draw_string(&fb, 4 + 22 * 8, 12, "BANK", OSD_LABEL);
+        dec(4 + 27 * 8, 12, (ios >> 16) & 1u);
+        (void) io1;
     }
+#endif
 
     osd_draw_string(&fb, 4, 22, "ADDR", OSD_LABEL);
     hex(4 + 5 * 8, 22, *POST_ADDR & 0xFFFFFu, 5);
 
-    osd_draw_string(&fb, 4 + 26 * 8, 22, "MAX", OSD_LABEL);
-    hex(4 + 30 * 8, 22, (maxrst >> 16) & 0xFFu, 2);
-    osd_draw_string(&fb, 4 + 33 * 8, 22, "RST", OSD_LABEL);
-    dec(4 + 37 * 8, 22, maxrst & 0xFFFFu);
+#ifndef MACHINE_PC98
+    osd_draw_string(&fb, 4 + 24 * 8, 22, "MAX", OSD_LABEL);
+    hex(4 + 28 * 8, 22, (maxrst >> 16) & 0xFFu, 2);
+    osd_draw_string(&fb, 4 + 31 * 8, 22, "RST", OSD_LABEL);
+    dec(4 + 34 * 8, 22, maxrst & 0xFFFFu);
+#endif
 
     // Words the ROM-load FIFO threw away, and how deep it ever got.
     //
@@ -212,10 +214,10 @@ void post_mon_tick(void)
     // the SDRAM consumer slower.
     {
         uint32_t rlf = *POST_RLF;
-        osd_draw_string(&fb, 4 + 24 * 8, 32, "DROP", OSD_LABEL);
-        dec(4 + 29 * 8, 32, rlf & 0xFFFFu);
-        osd_draw_string(&fb, 4 + 35 * 8, 32, "HW", OSD_LABEL);
-        dec(4 + 38 * 8, 32, rlf >> 16);
+        osd_draw_string(&fb, 4, 132, "DROP", OSD_LABEL);
+        dec(4 + 5 * 8, 132, rlf & 0xFFFFu);
+        osd_draw_string(&fb, 4 + 11 * 8, 132, "HW", OSD_LABEL);
+        dec(4 + 14 * 8, 132, rlf >> 16);
     }
 
     // testB27 answered it: F8 2E 41 D6 against F8 2E E8 D2 in the image.
@@ -257,8 +259,10 @@ void post_mon_tick(void)
         hex(4 + (4 + (i - 8) * 3) * 8, 122, (ld[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
 
 
+#ifdef MACHINE_PC98
     osd_draw_string(&fb, 4 + 17 * 8, 22, "LDN", OSD_LABEL);
     dec(4 + 21 * 8, 22, *POST_ROMLDN & 0xFFu);
+#endif
 
     osd_draw_string(&fb, 4, 32, "LIVE", OSD_LABEL);
     hex(4 + 5 * 8, 32, live & 0xFFFFFu, 5);
@@ -399,12 +403,16 @@ void post_mon_tick(void)
     }
 
     // History, oldest first, so the path through POST is visible at a glance.
+    // PC/AT only: these are port-0x80 progress codes, and on PC-98 the row
+    // belongs to the I/O trace -- which is what they were colliding with.
+#ifndef MACHINE_PC98
     uint32_t hi = *POST_HIST_H, lo = *POST_HIST_L;
     osd_draw_string(&fb, 4 + 11 * 8, 12, "SEQ", OSD_LABEL);
     for (int i = 0; i < 4; i++)
         hex(4 + (15 + i * 3) * 8, 12, (hi >> (24 - i * 8)) & 0xFFu, 2);
     for (int i = 0; i < 4; i++)
         hex(4 + (27 + i * 3) * 8, 12, (lo >> (24 - i * 8)) & 0xFFu, 2);
+#endif
 
     *VKB_CTRL = 1u;
 }
