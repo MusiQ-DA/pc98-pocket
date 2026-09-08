@@ -15,6 +15,7 @@
 #define POST_IVT16B ((volatile uint32_t *) 0x50000030) // off
 #define POST_WRCNT  ((volatile uint32_t *) 0x50000034) // {aen_count, any_count}
 #define POST_WRADDR ((volatile uint32_t *) 0x50000038) // last memory write address
+#define POST_IVTTCH ((volatile uint32_t *) 0x5000003C) // accesses landing in 0x58-0x5B
 
 // The self-test master, reused to read guest memory while the guest runs. It
 // takes the bus through hold acknowledge, which is what the BIOS loader does.
@@ -231,10 +232,12 @@ void post_mon_tick(void)
         uint32_t w = *POST_WRCNT;
         osd_draw_string(&fb, 4, 72, "WR", OSD_LABEL);
         dec(4 + 3 * 8, 72, w & 0xFFFFu);
-        osd_draw_string(&fb, 4 + 9 * 8, 72, "AEN", OSD_LABEL);
-        dec(4 + 13 * 8, 72, w >> 16);
-        osd_draw_string(&fb, 4 + 19 * 8, 72, "AT", OSD_LABEL);
-        hex(4 + 22 * 8, 72, *POST_WRADDR & 0xFFFFFu, 5);
+        osd_draw_string(&fb, 4 + 9 * 8, 72, "RD", OSD_LABEL);
+        dec(4 + 12 * 8, 72, w >> 16);
+        osd_draw_string(&fb, 4 + 26 * 8, 72, "T", OSD_LABEL);
+        dec(4 + 28 * 8, 72, *POST_IVTTCH & 0xFFFFu);
+        osd_draw_string(&fb, 4 + 18 * 8, 72, "AT", OSD_LABEL);
+        hex(4 + 21 * 8, 72, *POST_WRADDR & 0xFFFFFu, 5);
 
         osd_draw_string(&fb, 4, 42, "16h", OSD_LABEL);
         hex(4 + 4 * 8, 42, v16_seg, 4);
