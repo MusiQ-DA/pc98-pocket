@@ -941,7 +941,17 @@ module core_top (
         .post_live_max              (post_live_max),
         .post_count                 (post_count),
         .post_max                   (post_max),
-        .post_restarts              (post_restarts)
+        .post_restarts              (post_restarts),
+        .ivt16_off                  (ivt16_off),
+        .ivt16_seg                  (ivt16_seg),
+        .ivt16_wr_count             (ivt16_wr_count),
+        .wr_any_count               (wr_any_count),
+        .rd_any_count               (rd_any_count),
+        .ivt_touch_count            (ivt_touch_count),
+        .wr_last_addr               (wr_last_addr),
+        .raw_strobes                (raw_strobes),
+        .wr_low_cycles              (wr_low_cycles),
+        .rd_low_cycles              (rd_low_cycles)
     );
 
     //

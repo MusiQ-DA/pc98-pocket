@@ -61,6 +61,9 @@ jobs:
             grep -q "RESULT: PASS" ram_$mode.log
           done
 
+      - name: no module input left dangling in core_top
+        run: python3 scripts/check_unconnected.py
+
       - name: POST monitor captures what the guest wrote
         run: |
           S=pcxt-base/src/fpga/core
