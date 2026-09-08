@@ -131,6 +131,17 @@ void post_mon_tick(void)
         last_count = count_now;
         idle_ticks = 0;
     }
+    // The redraw gate skips the WHOLE function, including the *VKB_CTRL = 1
+    // at the end that turns the overlay on. On PC/AT that was harmless because
+    // POST codes and the live address changed constantly, so it ran all the
+    // time. On PC-98 nothing here ever changes -- no port-0x80 progress, and a
+    // guest that has stopped -- so the gate can hold shut and the overlay is
+    // never enabled at all. Which is what "no OSD" looks like.
+    //
+    // Enable it before deciding whether to redraw: it costs one store and it is
+    // not the expensive part.
+    *VKB_CTRL = 1u;
+
     if (status == last_status && maxrst == last_maxrst && live == last_live
         && idle_ticks != 4000u) {
         return;                            // nothing worth redrawing
