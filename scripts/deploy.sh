@@ -85,9 +85,36 @@ print('yes' if q and q[0]['conclusion'] == 'success' else 'no')
 PY
 }
 
+# Wait for a run whose commit is the one we are sitting on. Started right after
+# a push, "the latest run" is still the PREVIOUS one -- it reports completed
+# within seconds and the old bitstream goes to the card looking like a fresh
+# build. That nearly cost a hardware test.
+run_for_head() {
+    python3 - "$1" <<'PY'
+import sys
+sys.path.insert(0, 'scripts/tools')
+import ghlib
+head = sys.argv[1]
+for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=20')['workflow_runs']:
+    if r['head_sha'].startswith(head):
+        print(r['run_number'])
+        break
+else:
+    print('none')
+PY
+}
+
 if [ -z "$RUN" ]; then
-    read -r RUN _ _ <<<"$(latest_run)"
-    say "watching run#$RUN"
+    HEAD_SHA=$(git rev-parse HEAD)
+    waited=0
+    while :; do
+        RUN=$(run_for_head "$HEAD_SHA")
+        [ "$RUN" != "none" ] && break
+        [ $waited -eq 0 ] && say "waiting for CI to pick up ${HEAD_SHA:0:10}"
+        [ $waited -ge 600 ] && { say "no run appeared for ${HEAD_SHA:0:10}"; exit 1; }
+        sleep 20; waited=$((waited + 20))
+    done
+    say "watching run#$RUN (commit ${HEAD_SHA:0:10})"
 fi
 
 waited=0
