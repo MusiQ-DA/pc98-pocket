@@ -122,11 +122,32 @@ cp dist/pc98/Assets/pc98/hiroya.PC98/* "$VOL/Assets/pc98/hiroya.PC98/"
 cp dist/pc98/Platforms/* "$VOL/Platforms/" 2>/dev/null || true
 sync
 
-if cmp -s dist/pc98/Cores/hiroya.PC98/bitstream.rbf_r "$VOL/Cores/hiroya.PC98/bitstream.rbf_r"; then
-    say "written and verified to hiroya.PC98"
-else
-    say "VERIFY FAILED"; exit 1
+# Verify everything that was written, not just the bitstream. The first run of
+# this script reported "written and verified" while the ROMs sat in a directory
+# nothing reads: core.json still said platform_ids ["pcxt"] and the Pocket looks
+# for assets under Assets/<platform_id>/<core>/. A core with no BIOS comes up
+# with no complaint, so the check has to cover the assets and the path.
+PLAT=$(python3 -c "
+import json
+d=json.load(open('dist/pc98/Cores/hiroya.PC98/core.json'.strip()))
+print(d['core']['metadata']['platform_ids'][0])")
+if [ "$PLAT" != "pc98" ]; then
+    say "core.json says platform '$PLAT' but the assets went to pc98 -- stopping"
+    exit 1
 fi
+
+fail=0
+for f in Cores/hiroya.PC98/bitstream.rbf_r Cores/hiroya.PC98/core.json \
+         Cores/hiroya.PC98/data.json Assets/pc98/hiroya.PC98/bios.rom \
+         Assets/pc98/hiroya.PC98/itf.rom Platforms/pc98.json; do
+    if cmp -s "dist/pc98/$f" "$VOL/$f"; then
+        say "  ok  $f"
+    else
+        say "  BAD $f"; fail=1
+    fi
+done
+[ $fail -eq 0 ] || { say "VERIFY FAILED"; exit 1; }
+say "written and verified to hiroya.PC98"
 
 diskutil eject "$VOL" >/dev/null 2>&1 && say "ejected -- ready to test" \
                                       || say "written; eject by hand"

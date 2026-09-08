@@ -26,7 +26,13 @@ SRC="dist/testB24"
 rm -rf "$DIR"
 mkdir -p "$DIR/Cores/hiroya.PC98" "$DIR/Assets/pc98/hiroya.PC98" "$DIR/Platforms"
 cp "$SRC"/Cores/hiroya.PCXTDEV/*.json "$DIR/Cores/hiroya.PC98/"
-cp "$SRC"/Platforms/pcxt.json "$DIR/Platforms/pc98.json" 2>/dev/null || true
+python3 - "$DIR/Platforms/pc98.json" <<'PY'
+import json, sys
+out = {"platform": {"category": "Computer", "name": "NEC PC-9801",
+                    "year": 1982, "manufacturer": "NEC"}}
+open(sys.argv[1], 'wb').write(
+    (json.dumps(out, indent=2) + "\n").encode().replace(b"\n", b"\r\n"))
+PY
 
 python3 - "$DIR/Cores/hiroya.PC98" <<'PY'
 import json, os, sys
@@ -44,7 +50,11 @@ def core(j):
     m = j['core']['metadata']
     m['shortname'] = 'PC98'
     m['description'] = 'PC-98 machine layer (P1: ITF + BIOS fetch)'
-    j['core']['framework']['dataslot_hooks'] = j['core']['framework'].get('dataslot_hooks', [])
+    # The Pocket looks for a core's assets under Assets/<platform_id>/<core>/,
+    # so this has to match the directory the ROMs go in. Leaving it at 'pcxt'
+    # while writing to Assets/pc98/ puts the ROMs somewhere nothing reads, and
+    # the core comes up with no BIOS and no complaint.
+    m['platform_ids'] = ['pc98']
     for c in j['core']['cores']:
         c['filename'] = 'bitstream.rbf_r'
 
