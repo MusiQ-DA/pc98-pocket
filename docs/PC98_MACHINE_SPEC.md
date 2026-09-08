@@ -14,12 +14,21 @@
 | 範囲 | サイズ | 内容 | 実装 |
 |---|---|---|---|
 | 0x00000-0x9FFFF | 640KB | コンベンショナルRAM | SDRAM |
-| 0xA0000-0xA3FFF | 16KB×? | TVRAM(char/attr交互) | BRAM(デュアルポート) |
+| 0xA0000-0xA1FFF | 8KB | **TVRAM 文字コード**(`A0000 + idx*2` が下位、`+1` が上位=漢字/フラグ) | BRAM(デュアルポート) |
+| 0xA2000-0xA3FFF | 8KB | **TVRAM アトリビュート**(`A2000 + idx*2`、奇数番地は未使用) | BRAM |
 | 0xA4000-0xA4FFF | 4KB | テキストページ2等 | BRAM |
 | 0xA8000-0xBFFFF | 96KB | G-RAM(グラフィック4プレーン) | SDRAM |
 | 0xC0000-0xDFFFF | 128KB | VRAMウィンドウ/EGC窓 | バンク窓 |
 | 0xE8000-0xFFFFF | 96KB | BIOS+ITF ROM(bios.rom) | BRAM/SDRAM |
 | 0xF00000- | 拡張 | 9821 VRAM direct 等 | 後期フェーズ |
+
+> **TVRAM は char と attr が交互ではなく別領域**。np2 `vram/maketext.c` で確認:
+> `mem[0xa0000 + edi*2]`(文字下位)、`mem[0xa0001 + edi*2]`(上位、`gdc.bitac` と AND される)、
+> `mem[0xa2000 + edi*2]`(アトリビュート)。
+> 旧 `src/fpga/core/tvram.sv`(ピボット前の資産)は「char at even, attr at odd」を
+> 仮定しており**誤り**。流用する際は書き直すこと。
+> 80×25 = 2000 セルなので実使用は各 4000 バイトだが、窓は各 8KB。
+> BRAM 16KB = 4 M10K ブロック。
 
 ## I/Oマップ(主要デバイスと np2 対応)
 
