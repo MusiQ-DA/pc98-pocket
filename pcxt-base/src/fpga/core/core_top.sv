@@ -955,6 +955,8 @@ module core_top (
         .rom_read_data              (rom_read_data),
         .rom_load_data              (rom_load_data),
         .rom_load_count             (rom_load_count),
+        .rlf_drops                  (rlf_drops),
+        .rlf_level_max              ({{(16-(RLF_AW+1)){1'b0}}, rlf_level_max}),
         .rom_read_count             (rom_read_count)
     );
 
@@ -1261,11 +1263,33 @@ module core_top (
     // tail of the ROM cannot be lost if allcomplete races ahead of the last write.
     assign load_active = is_downloading | ~rlf_empty;
 
+    // "it never overflows" was an assumption, never a measurement, and a full
+    // FIFO here drops the word SILENTLY -- data_loader has no ready input, so
+    // there is no backpressure to the APF bridge and these 256 entries are the
+    // only elasticity in the path. How fast this drains depends on how long
+    // RAM.sv takes per byte, which depends on the SDRAM controller: the shim
+    // answers in ten cycles where KFSDRAM answers in five, so a change of
+    // controller changes whether the assumption holds.
+    //
+    // That matters because run#106 showed the BIOS image arriving incomplete:
+    // the loader never presented F000:D882-D883 or D88E-D88F, while every other
+    // byte of that window was written correctly. A dropped ioctl word is
+    // exactly that shape, and it would be invisible to every SDRAM testbench.
+    //
+    // So count them, and record how close the FIFO ever came to full.
+    reg [15:0] rlf_drops = 16'd0;
+    reg [RLF_AW:0] rlf_level_max = '0;
+    wire [RLF_AW:0] rlf_level = rlf_wptr - rlf_rptr;
+
     always @(posedge clk_chipset) begin
         if (dl_wr && ~rlf_full) begin
             romfifo[rlf_wptr[RLF_AW-1:0]] <= {download_id == 16'd2, dl_addr[24:0], dl_data};
             rlf_wptr <= rlf_wptr + 1'b1;
         end
+        if (dl_wr && rlf_full && rlf_drops != 16'hFFFF)
+            rlf_drops <= rlf_drops + 16'd1;
+        if (rlf_level > rlf_level_max)
+            rlf_level_max <= rlf_level;
         if (rlf_pop && ~rlf_empty)
             rlf_rptr <= rlf_rptr + 1'b1;
     end
