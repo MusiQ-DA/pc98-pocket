@@ -953,6 +953,8 @@ module core_top (
         .wr_low_cycles              (wr_low_cycles),
         .rd_low_cycles              (rd_low_cycles),
         .rom_read_data              (rom_read_data),
+        .rom_load_data              (rom_load_data),
+        .rom_load_count             (rom_load_count),
         .rom_read_count             (rom_read_count)
     );
 
@@ -1543,6 +1545,8 @@ module core_top (
     wire  [3:0] raw_strobes;
     wire [15:0] wr_low_cycles, rd_low_cycles;
     wire [127:0] rom_read_data;
+    wire [127:0] rom_load_data;
+    wire   [7:0] rom_load_count;
     wire  [7:0] rom_read_count;
 
     post_monitor u_post (
@@ -1575,7 +1579,12 @@ module core_top (
         .wr_low_cycles  (wr_low_cycles),
         .rd_low_cycles  (rd_low_cycles),
         .rom_read_data  (rom_read_data),
-        .rom_read_count (rom_read_count)
+        .rom_read_count (rom_read_count),
+        .ld_addr        (bios_access_address),
+        .ld_data        (bios_write_data[7:0]),
+        .ld_we_n        (bios_write_n),
+        .rom_load_data  (rom_load_data),
+        .rom_load_count (rom_load_count)
     );
 
     //
