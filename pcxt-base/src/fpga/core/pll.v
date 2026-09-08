@@ -38,39 +38,36 @@ module pll (
         // phase is purely an interface knob: it sets both when the SDRAM
         // samples our commands and when it launches read data at us.
         //
-        // It was 11640 ps = 180 deg of the 23280 ps period. STA on run#101
-        // measured the two directions:
+        // 11640 ps is 180 deg of the 23280 ps period, and it STAYS, because the
+        // one experiment that moved it says every other value tried so far is
+        // worse. Measured, run#101 vs run#104:
         //
-        //     write/command -> dram_*   setup  +4.395 ns
-        //     read: dram_dq -> core     setup  -2.357 ns
+        //                        11640 ps      8730 ps
+        //     setup write/cmd     +4.395       +2.018
+        //     setup read          -2.357       -4.585
+        //     hold  write/cmd        --       +11.429
+        //     hold  read             --       +16.021
         //
-        // Moving this phase trades one against the other 1:1 -- earlier means
-        // the part launches read data sooner (more setup for our capture) and
-        // samples our commands sooner (less setup for them). The failing side
-        // was the read, and 6.75 ns of total budget was sitting lopsided in the
-        // write side. An even split would be 11640 - 3376 = 8264 ps, but the
-        // phase is QUANTISED: this PLL runs a 687.2727 MHz VCO (85.909091 x 8),
-        // so a VCO period is 1455.03 ps and only multiples of 1455 ps land on a
-        // whole number of picoseconds. 8264 is rejected outright --
+        // The move was made on the theory that the two directions trade 1:1 --
+        // earlier means the part launches read data sooner (more setup for our
+        // capture) and samples our commands sooner (less for them) -- so 2910
+        // ps of the write side's surplus should have bought the read side out
+        // of its 2.357 ns hole. BOTH got worse by about 2.3 ns instead. The
+        // trade model is wrong, and nothing here should move again until a
+        // third data point in the OTHER direction says what the real trend is.
+        //
+        // Whatever that trend turns out to be, note the read path is genuinely
+        // failing timing at -2.357 ns and the hold side has 11-16 ns of room,
+        // so the margin exists somewhere; this knob just is not how to reach
+        // it. Phase values are also quantised: the VCO is 687.2727 MHz
+        // (85.909091 x 8), a VCO period is 1455.03 ps, and only multiples of
+        // 1455 land on a whole picosecond. 8264 was rejected outright --
         //   Error: PLL Output Counter parameter 'phase_shift' is set to an
         //   illegal value of '8264 ps'
-        // -- which is why the existing shifts are 11640 (8 VCO periods) and
-        // 17460 (12). The nearest legal step down is 8730 ps, 6 VCO periods,
-        // moving 2910 ps:
-        //
-        //     read           -2.357 + 2.910 = +0.553 ns
-        //     write/command  +4.395 - 2.910 = +1.485 ns
-        //
-        // Both positive. Not the even split, but the finest the hardware
-        // offers without going to 7275 ps, which would put the write side at
-        // +0.030 and simply move the cliff.
-        //
-        // This is the same failure the hardware shows directly: the CPU reads
-        // F8 2E 41 D6 at F000:D880 where the image holds F8 2E E8 D2, with the
-        // low word correct and the next word wrong -- a marginal capture, not a
-        // mapping or protocol fault (docs/HANDOVER.md §1).
+        // -- which is why the shifts in this file are 11640 (8 VCO periods)
+        // and 17460 (12).
         .output_clock_frequency2   ("42.954545 MHz"),
-        .phase_shift2              ("8730 ps"),
+        .phase_shift2              ("11640 ps"),
         .duty_cycle2               (50),
         .output_clock_frequency3   ("28.636360 MHz"),
         .phase_shift3              ("0 ps"),
