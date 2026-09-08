@@ -162,13 +162,56 @@ void post_mon_tick(void)
     osd_draw_string(&fb, 4 + 16 * 8, 2, "N", OSD_LABEL);
     dec(4 + 18 * 8, 2, status >> 16);
 
-    osd_draw_string(&fb, 4, 12, "ADDR", OSD_LABEL);
-    hex(4 + 5 * 8, 12, *POST_ADDR & 0xFFFFFu, 5);
+    // Which I/O ports the guest has written, newest first, and whether the ITF
+    // has handed over yet.
+    //
+    // UNCONDITIONAL, and it has to be. This started inside the block gated on
+    // post_max >= 0x08 -- which is a port-0x80 progress code, a PC/AT thing
+    // that a PC-98 never writes. So on the machine it was added for, the gate
+    // never opened and the readout never appeared: the first PC-98 build came
+    // back reporting "POST 00" and nothing else, because POST 00 is the reset
+    // value of a field that machine does not use.
+    //
+    // Reading these costs nothing -- they are registers in the monitor, not bus
+    // accesses -- so there is no reason to gate them at all. On PC-98 the ITF's
+    // route to the hand-over runs 0x0461 then 0x043D, so 043D arriving and BANK
+    // going 0 is the whole of P1.
+    {
+        uint32_t io0 = *POST_IOH0, io1 = *POST_IOH1, ios = *POST_IOST;
+        osd_draw_string(&fb, 4, 12, "IO", OSD_LABEL);
+        hex(4 + 3 * 8, 12, io0 & 0xFFFFu, 4);
+        hex(4 + 8 * 8, 12, io0 >> 16, 4);
+        hex(4 + 13 * 8, 12, io1 & 0xFFFFu, 4);
+        hex(4 + 18 * 8, 12, io1 >> 16, 4);
+        osd_draw_string(&fb, 4 + 23 * 8, 12, "N", OSD_LABEL);
+        dec(4 + 25 * 8, 12, ios & 0xFFFFu);
+        osd_draw_string(&fb, 4 + 31 * 8, 12, "BANK", OSD_LABEL);
+        dec(4 + 36 * 8, 12, (ios >> 16) & 1u);
+    }
 
-    osd_draw_string(&fb, 4, 22, "MAX", OSD_LABEL);
-    hex(4 + 4 * 8, 22, (maxrst >> 16) & 0xFFu, 2);
-    osd_draw_string(&fb, 4 + 7 * 8, 22, "RESTARTS", OSD_LABEL);
-    dec(4 + 16 * 8, 22, maxrst & 0xFFFFu);
+    osd_draw_string(&fb, 4, 22, "ADDR", OSD_LABEL);
+    hex(4 + 5 * 8, 22, *POST_ADDR & 0xFFFFFu, 5);
+
+    osd_draw_string(&fb, 4 + 26 * 8, 22, "MAX", OSD_LABEL);
+    hex(4 + 30 * 8, 22, (maxrst >> 16) & 0xFFu, 2);
+    osd_draw_string(&fb, 4 + 33 * 8, 22, "RST", OSD_LABEL);
+    dec(4 + 37 * 8, 22, maxrst & 0xFFFFu);
+
+    // Words the ROM-load FIFO threw away, and how deep it ever got.
+    //
+    // Unconditional for the same reason the IO line is. A nonzero DROP means
+    // the image in memory is incomplete before the CPU executes an
+    // instruction, so it is the first thing worth knowing on ANY machine --
+    // and it was sitting behind a PC/AT progress code a PC-98 never writes.
+    // It is also the check that has to be repeated every time something makes
+    // the SDRAM consumer slower.
+    {
+        uint32_t rlf = *POST_RLF;
+        osd_draw_string(&fb, 4 + 24 * 8, 32, "DROP", OSD_LABEL);
+        dec(4 + 29 * 8, 32, rlf & 0xFFFFu);
+        osd_draw_string(&fb, 4 + 35 * 8, 32, "HW", OSD_LABEL);
+        dec(4 + 38 * 8, 32, rlf >> 16);
+    }
 
     osd_draw_string(&fb, 4, 32, "LIVE", OSD_LABEL);
     hex(4 + 5 * 8, 32, live & 0xFFFFFu, 5);
@@ -271,24 +314,6 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4 + 28 * 8, 102, "N", OSD_LABEL);
         dec(4 + 30 * 8, 102, *POST_ROMRDN & 0xFFu);
 
-        // Which I/O ports the guest has written, newest first, and whether the
-        // ITF has handed over yet.
-        //
-        // On PC-98 there is no port 0x80 progress code: what says how far the
-        // ITF got is WHICH ports it has touched. Its route to the hand-over
-        // runs 0x0461 then 0x043D (MOV DX,043D / MOV AL,12 / OUT at F8A98), so
-        // seeing 043D arrive and BANK go 0 is the whole of P1 in two fields.
-        uint32_t io0 = *POST_IOH0, io1 = *POST_IOH1, ios = *POST_IOST;
-        osd_draw_string(&fb, 4, 132, "IO", OSD_LABEL);
-        hex(4 + 3 * 8, 132, io0 & 0xFFFFu, 4);
-        hex(4 + 8 * 8, 132, io0 >> 16, 4);
-        hex(4 + 13 * 8, 132, io1 & 0xFFFFu, 4);
-        hex(4 + 18 * 8, 132, io1 >> 16, 4);
-        osd_draw_string(&fb, 4 + 23 * 8, 132, "N", OSD_LABEL);
-        dec(4 + 25 * 8, 132, ios & 0xFFFFu);
-        osd_draw_string(&fb, 4 + 31 * 8, 132, "BANK", OSD_LABEL);
-        dec(4 + 36 * 8, 132, (ios >> 16) & 1u);
-
         // And what the BIOS LOADER put there in the first place, taken off its
         // own FSM rather than the bus. RD is what the CPU took in; LD is what
         // was written. The two together say which half is broken:
@@ -314,16 +339,6 @@ void post_mon_tick(void)
         hex(4 + 11 * 8, 52, v16b_off, 4);
         osd_draw_string(&fb, 4 + 17 * 8, 52, "LDN", OSD_LABEL);
         dec(4 + 21 * 8, 52, *POST_ROMLDN & 0xFFu);
-        // Words the BIOS-load FIFO threw away, and how deep it ever got. A
-        // nonzero DROP means the image in memory is incomplete before the CPU
-        // ever runs, and nothing downstream of it is worth debugging.
-        // The panel is 320 px = 40 columns of the 8 px font, so anything past
-        // column 40 is simply not on screen -- HW at column 38 ran off the
-        // right edge. DROP stays here, HW moves to the spare half of the WROTE
-        // row below.
-        uint32_t rlf = *POST_RLF;
-        osd_draw_string(&fb, 4 + 24 * 8, 52, "DROP", OSD_LABEL);
-        dec(4 + 29 * 8, 52, rlf & 0xFFFFu);
 
         // What the guest actually PUT there, snooped off the bus as POST 05's
         // install loop wrote it. Reading the vector back after the hang shows
@@ -335,8 +350,6 @@ void post_mon_tick(void)
         hex(4 + 11 * 8, 62, *POST_IVT16B & 0xFFFFu, 4);
         osd_draw_string(&fb, 4 + 17 * 8, 62, "NW", OSD_LABEL);
         dec(4 + 20 * 8, 62, a >> 24);
-        osd_draw_string(&fb, 4 + 24 * 8, 62, "HW", OSD_LABEL);
-        dec(4 + 27 * 8, 62, rlf >> 16);
 
         // Which term of the snoop filter is wrong: writes seen at all, writes
         // seen with AEN low, and where the last one went.
