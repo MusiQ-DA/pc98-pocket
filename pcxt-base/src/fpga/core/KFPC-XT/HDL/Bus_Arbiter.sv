@@ -193,7 +193,14 @@ module BUS_ARBITER (
         //.io_write_n_io                      (),
         .end_of_process_n_in                (1'b1),
         .end_of_process_n_out               (terminal_count),
+`ifdef MACHINE_PC98
+        // PC-98 puts the DMA controller on the ODD addresses of 0x01-0x1F, so
+        // A0 is part of the chip select and the register comes from the bits
+        // above it. Same silicon, shifted decode.
+        .address_in                         (address[4:1]),
+`else
         .address_in                         (address[3:0]),
+`endif
         .address_out                        (dma_address_out),
         //.output_highst_address              (),
         .hold_request                       (dma_hold_request),
@@ -219,7 +226,11 @@ module BUS_ARBITER (
         always_ff @(posedge clock, posedge reset) begin
             if (reset)
                 dma_page_register[dma_page_i] <= 0;
+`ifdef MACHINE_PC98
+            else if ((~dma_page_chip_select_n) && (~io_write_n) && (bit_select[dma_page_i] == address[2:1]))
+`else
             else if ((~dma_page_chip_select_n) && (~io_write_n) && (bit_select[dma_page_i] == address[1:0]))
+`endif
                 dma_page_register[dma_page_i] <= internal_data_bus[3:0];
             else
                 dma_page_register[dma_page_i] <= dma_page_register[dma_page_i];
