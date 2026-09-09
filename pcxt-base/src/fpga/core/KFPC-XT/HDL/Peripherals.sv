@@ -425,6 +425,12 @@ module PERIPHERALS #(
     //
     // 8259
     //
+    // PC-98 carries two: the master at 0000-0007 even, the slave at 0008-000F
+    // even. The BIOS initializes both (ICW3 master 0x80: the slave hangs off
+    // IRQ7; slave ID 7) and then tests each IMR by writing and reading back --
+    // an absent slave reads FF, and the VM BIOS halts at FDA65 on exactly
+    // that. The timer stays on the master's IRQ0; the slave's own lines are
+    // quiet until something needs IRQ8-15.
     logic           timer_interrupt;
     logic           keybord_interrupt;
     logic           uart_interrupt;
@@ -433,7 +439,17 @@ module PERIPHERALS #(
     logic   [7:0]   interrupt_data_bus_out;
     logic           interrupt_to_cpu_buf;
 
-    KF8259 u_KF8259 
+    logic   [7:0]   interrupt2_data_bus_out;
+    logic           interrupt2_data_bus_io;
+    logic           interrupt2_to_cpu;
+    logic   [2:0]   interrupt_cascade_out;
+    logic           interrupt_cascade_io;
+
+`ifdef MACHINE_PC98
+    wire    interrupt2_chip_select_n;
+`endif
+
+    KF8259 u_KF8259
     (
         // Bus
         .clock                      (clock),
@@ -446,14 +462,32 @@ module PERIPHERALS #(
         .data_bus_out               (interrupt_data_bus_out),
 
         // I/O
+`ifdef MACHINE_PC98
+        .cascade_in                 (3'b000),
+        .cascade_out                (interrupt_cascade_out),
+        .cascade_io                 (interrupt_cascade_io),
+`else
         .cascade_in                 (3'b000),
         //.cascade_out                (),
         //.cascade_io                 (),
+`endif
         .slave_program_n            (1'b1),
         //.buffer_enable              (),
         //.slave_program_or_enable_buffer     (),
         .interrupt_acknowledge_n    (interrupt_acknowledge_n),
         .interrupt_to_cpu           (interrupt_to_cpu_buf),
+`ifdef MACHINE_PC98
+        // IRQ7 is the slave's cascade line; the machine's own IRQ7 has to
+        // stand down for it.
+        .interrupt_request          ({interrupt2_to_cpu,
+                                        fdd_interrupt,
+                                        interrupt_request[5],
+                                        uart_interrupt,
+                                        uart2_interrupt,
+                                        interrupt_request[2],
+                                        keybord_interrupt,
+                                        timer_interrupt})
+`else
         .interrupt_request          ({interrupt_request[7],
                                         fdd_interrupt,
                                         interrupt_request[5],
@@ -463,6 +497,37 @@ module PERIPHERALS #(
                                         keybord_interrupt,
                                         timer_interrupt})
     );
+
+`ifdef MACHINE_PC98
+    // The slave PIC, 0008-000F even. Its INT feeds the master's IRQ7 and its
+    // cascade lines close the loop, so an IRQ8-15 acknowledge gets its vector
+    // from the slave exactly the way the metal does it.
+    assign interrupt2_chip_select_n = ~(pc98_io & ~address[0] & address[3]
+                                        & (address[7:4] == 4'h0));
+
+    KF8259 u_KF8259_2
+    (
+        // Bus
+        .clock                      (clock),
+        .reset                      (reset),
+        .chip_select_n              (interrupt2_chip_select_n),
+        .read_enable_n              (io_read_n),
+        .write_enable_n             (io_write_n),
+        .address                    (pic_reg_addr),
+        .data_bus_in                (internal_data_bus),
+        .data_bus_out               (interrupt2_data_bus_out),
+        .data_bus_io                (interrupt2_data_bus_io),
+
+        // I/O
+        .cascade_in                 (interrupt_cascade_out),
+        .cascade_out                (),
+        .cascade_io                 (),
+        .slave_program_n            (1'b0),
+        .interrupt_acknowledge_n    (interrupt_acknowledge_n),
+        .interrupt_to_cpu           (interrupt2_to_cpu),
+        .interrupt_request          (8'b0)
+    );
+`endif
 
     always_ff @(posedge clock, posedge reset)
         if (reset)
@@ -2126,9 +2191,24 @@ end
     begin
         if (~interrupt_acknowledge_n)
         begin
+            // During the acknowledge the master either drives its own vector
+            // or puts the slave's ID on the cascade lines and stands down --
+            // data_bus_io is how the slave says it recognized itself.
             data_bus_out_from_chipset <= 1'b1;
+`ifdef MACHINE_PC98
+            data_bus_out <= (~interrupt2_data_bus_io) ? interrupt2_data_bus_out
+                                                      : interrupt_data_bus_out;
+`else
             data_bus_out <= interrupt_data_bus_out;
+`endif
         end
+`ifdef MACHINE_PC98
+        else if ((~interrupt2_chip_select_n) && (~io_read_n))
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= interrupt2_data_bus_out;
+        end
+`endif
         else if ((~interrupt_chip_select_n) && (~io_read_n))
         begin
             data_bus_out_from_chipset <= 1'b1;
