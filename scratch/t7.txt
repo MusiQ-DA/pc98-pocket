@@ -1,0 +1,1078 @@
+F8059E  B030             MOV AL,30h
+F805A0  E677             OUT 77h,AL
+F805A2  EB00             JMP SHORT 5A4h
+F805A4  EB00             JMP SHORT 5A6h
+F805A6  B000             MOV AL,00h
+F805A8  E671             OUT 71h,AL
+F805AA  EB00             JMP SHORT 5ACh
+F805AC  EB00             JMP SHORT 5AEh
+F805AE  B000             MOV AL,00h
+F805B0  E671             OUT 71h,AL
+F805B2  EB00             JMP SHORT 5B4h
+F805B4  EB00             JMP SHORT 5B6h
+F805B6  BAE603           MOV DX,3E6h
+F805B9  E442             IN AL,42h
+F805BB  A820             TEST AL,20h
+F805BD  7503             JNZ  5C2h
+F805BF  BACD04           MOV DX,4CDh
+F805C2  B076             MOV AL,76h
+F805C4  E677             OUT 77h,AL
+F805C6  EB00             JMP SHORT 5C8h
+F805C8  EB00             JMP SHORT 5CAh
+F805CA  8AC2             MOV AL,DL
+F805CC  E673             OUT 73h,AL
+F805CE  EB00             JMP SHORT 5D0h
+F805D0  EB00             JMP SHORT 5D2h
+F805D2  8AC6             MOV AL,DH
+F805D4  E673             OUT 73h,AL
+F805D6  EB00             JMP SHORT 5D8h
+F805D8  EB00             JMP SHORT 5DAh
+F805DA  B0B6             MOV AL,0B6h
+F805DC  E677             OUT 77h,AL
+F805DE  FFE4             JMP SP
+---- gap 05E0..0621 (65) ----
+F80621  33C9             XOR CX,CX
+F80623  E2FE             LOOP 623h
+F80625  B037             MOV AL,37h
+F80627  E643             OUT 43h,AL
+F80629  EB00             JMP SHORT 62Bh
+F8062B  EB00             JMP SHORT 62Dh
+F8062D  EB00             JMP SHORT 62Fh
+F8062F  EB00             JMP SHORT 631h
+F80631  EB00             JMP SHORT 633h
+F80633  EB00             JMP SHORT 635h
+F80635  EB00             JMP SHORT 637h
+F80637  EB00             JMP SHORT 639h
+F80639  8AC4             MOV AL,AH
+F8063B  E641             OUT 41h,AL
+F8063D  B94000           MOV CX,40h
+F80640  E2FE             LOOP 640h
+F80642  EB00             JMP SHORT 644h
+F80644  E443             IN AL,43h
+F80646  A801             TEST AL,01h
+F80648  74F8             JZ   642h
+F8064A  B016             MOV AL,16h
+F8064C  E643             OUT 43h,AL
+F8064E  B90008           MOV CX,800h
+F80651  E2FE             LOOP 651h
+F80653  FFE5             JMP BP
+F80655  B98000           MOV CX,80h
+F80658  E2FE             LOOP 658h
+F8065A  B90080           MOV CX,8000h
+F8065D  EB00             JMP SHORT 65Fh
+F8065F  E443             IN AL,43h
+F80661  A802             TEST AL,02h
+F80663  7504             JNZ  669h
+F80665  E2F6             LOOP 65Dh
+F80667  FFE5             JMP BP
+F80669  B98000           MOV CX,80h
+F8066C  E2FE             LOOP 66Ch
+F8066E  E441             IN AL,41h
+F80670  FFE5             JMP BP
+---- gap 0672..0B70 (1278) ----
+F80B70  7309             JNC  0B7Bh
+F80B72  BE461B           MOV SI,1B46h
+F80B75  BC7B0B           MOV SP,0B7Bh
+F80B78  E95012           JMP 1DCBh
+F80B7B  6633C0           XOR EAX,EAX
+F80B7E  8ED8             MOV DS,AX
+F80B80  8EC0             MOV ES,AX
+F80B82  33FF             XOR DI,DI
+F80B84  B94000           MOV CX,40h
+F80B87  66F3AB           REP STOSD
+F80B8A  BA3F04           MOV DX,43Fh
+F80B8D  B022             MOV AL,22h
+F80B8F  EE               OUT DX,AL
+F80B90  BB00B0           MOV BX,0B000h
+F80B93  8EC3             MOV ES,BX
+F80B95  33FF             XOR DI,DI
+F80B97  26C70555AA       MOV WORD PTR ES:[DI],0AA55h
+F80B9C  26C70555AA       MOV WORD PTR ES:[DI],0AA55h
+F80BA1  BA3F04           MOV DX,43Fh
+F80BA4  B020             MOV AL,20h
+F80BA6  EE               OUT DX,AL
+F80BA7  26813D55AA       CMP WORD PTR ES:[DI],0AA55h
+F80BAC  7405             JZ   0BB3h
+F80BAE  B022             MOV AL,22h
+F80BB0  EE               OUT DX,AL
+F80BB1  EB08             JMP SHORT 0BBBh
+F80BB3  26C7050000       MOV WORD PTR ES:[DI],0h
+F80BB8  EB69             JMP SHORT 0C23h
+---- gap 0BBA..0BBB (1) ----
+F80BBB  B008             MOV AL,08h
+F80BBD  E637             OUT 37h,AL
+F80BBF  FC               CLD
+F80BC0  6633C0           XOR EAX,EAX
+F80BC3  BCC90B           MOV SP,0BC9h
+F80BC6  EB66             JMP SHORT 0C2Eh
+---- gap 0BC8..0BC9 (1) ----
+F80BC9  BCCF0B           MOV SP,0BCFh
+F80BCC  EB60             JMP SHORT 0C2Eh
+---- gap 0BCE..0BCF (1) ----
+F80BCF  B009             MOV AL,09h
+F80BD1  E637             OUT 37h,AL
+F80BD3  B201             MOV DL,01h
+F80BD5  8AC2             MOV AL,DL
+F80BD7  8AE2             MOV AH,DL
+F80BD9  8BF8             MOV DI,AX
+F80BDB  66C1E010         SHL EAX,10h
+F80BDF  8BC7             MOV AX,DI
+F80BE1  BCE70B           MOV SP,0BE7h
+F80BE4  EB48             JMP SHORT 0C2Eh
+---- gap 0BE6..0BE7 (1) ----
+F80BE7  BCED0B           MOV SP,0BEDh
+F80BEA  EB4C             JMP SHORT 0C38h
+---- gap 0BEC..0BED (1) ----
+F80BED  7234             JC   0C23h
+F80BEF  E433             IN AL,33h
+F80BF1  A804             TEST AL,04h
+F80BF3  752E             JNZ  0C23h
+F80BF5  B2FF             MOV DL,0FFh
+F80BF7  8AC2             MOV AL,DL
+F80BF9  8AE2             MOV AH,DL
+F80BFB  8BF8             MOV DI,AX
+F80BFD  66C1E010         SHL EAX,10h
+F80C01  8BC7             MOV AX,DI
+F80C03  BC090C           MOV SP,0C09h
+F80C06  EB26             JMP SHORT 0C2Eh
+---- gap 0C08..0C09 (1) ----
+F80C09  BC0F0C           MOV SP,0C0Fh
+F80C0C  EB2A             JMP SHORT 0C38h
+---- gap 0C0E..0C0F (1) ----
+F80C0F  7212             JC   0C23h
+F80C11  E433             IN AL,33h
+F80C13  A804             TEST AL,04h
+F80C15  750C             JNZ  0C23h
+F80C17  80EA55           SUB DL,55h
+F80C1A  73DB             JNC  0BF7h
+F80C1C  800E810420       OR BYTE PTR [0481h],20h
+F80C21  EB25             JMP SHORT 0C48h
+F80C23  BEB31B           MOV SI,1BB3h
+F80C26  BC2C0C           MOV SP,0C2Ch
+F80C29  E99F11           JMP 1DCBh
+F80C2C  EB1A             JMP SHORT 0C48h
+F80C2E  33FF             XOR DI,DI
+F80C30  B90040           MOV CX,4000h
+F80C33  66F3AB           REP STOSD
+F80C36  FFE4             JMP SP
+F80C38  33FF             XOR DI,DI
+F80C3A  B90040           MOV CX,4000h
+F80C3D  66F3AF           REP SCASD
+F80C40  7503             JNZ  0C45h
+F80C42  F8               CLC
+F80C43  FFE4             JMP SP
+F80C45  F9               STC
+F80C46  FFE4             JMP SP
+F80C48  BA3F04           MOV DX,43Fh
+F80C4B  B020             MOV AL,20h
+F80C4D  EE               OUT DX,AL
+F80C4E  33C0             XOR AX,AX
+F80C50  8ED8             MOV DS,AX
+F80C52  2EC7060080AA55   MOV WORD PTR CS:[8000h],55AAh
+F80C59  813E0000AA55     CMP WORD PTR [0000h],55AAh
+F80C5F  740A             JZ   0C6Bh
+F80C61  BEF61B           MOV SI,1BF6h
+F80C64  BC6A0C           MOV SP,0C6Ah
+F80C67  E96111           JMP 1DCBh
+F80C6A  F4               HLT
+F80C6B  C70600000000     MOV WORD PTR [0000h],0h
+F80C71  B006             MOV AL,06h
+F80C73  E637             OUT 37h,AL
+F80C75  BB1000           MOV BX,10h
+F80C78  BE5040           MOV SI,4050h
+F80C7B  BF9080           MOV DI,8090h
+F80C7E  B90300           MOV CX,3h
+F80C81  BA7100           MOV DX,71h
+F80C84  BDFFFF           MOV BP,0FFFFh
+F80C87  8AC3             MOV AL,BL
+F80C89  E677             OUT 77h,AL
+F80C8B  EB00             JMP SHORT 0C8Dh
+F80C8D  EB00             JMP SHORT 0C8Fh
+F80C8F  8BC5             MOV AX,BP
+F80C91  EE               OUT DX,AL
+F80C92  EB00             JMP SHORT 0C94h
+F80C94  EB00             JMP SHORT 0C96h
+F80C96  8AC7             MOV AL,BH
+F80C98  E677             OUT 77h,AL
+F80C9A  EB00             JMP SHORT 0C9Ch
+F80C9C  EB00             JMP SHORT 0C9Eh
+F80C9E  EC               IN AL,DX
+F80C9F  3AE0             CMP AH,AL
+F80CA1  750A             JNZ  0CADh
+F80CA3  BE471C           MOV SI,1C47h
+F80CA6  BCAC0C           MOV SP,0CACh
+F80CA9  E91F11           JMP 1DCBh
+F80CAC  F4               HLT
+F80CAD  80FC00           CMP AH,00h
+F80CB0  7405             JZ   0CB7h
+F80CB2  BD0000           MOV BP,0h
+F80CB5  EBD0             JMP SHORT 0C87h
+F80CB7  42               INC DX
+F80CB8  42               INC DX
+F80CB9  8BDE             MOV BX,SI
+F80CBB  8BF7             MOV SI,DI
+F80CBD  E2C5             LOOP 0C84h
+F80CBF  B007             MOV AL,07h
+F80CC1  E637             OUT 37h,AL
+F80CC3  BCC90C           MOV SP,0CC9h
+F80CC6  E9D5F8           JMP 59Eh
+F80CC9  E61B             OUT 1Bh,AL
+F80CCB  B0FF             MOV AL,0FFh
+F80CCD  BA0100           MOV DX,1h
+F80CD0  B90800           MOV CX,8h
+F80CD3  8AD8             MOV BL,AL
+F80CD5  8AFB             MOV BH,BL
+F80CD7  EE               OUT DX,AL
+F80CD8  EB00             JMP SHORT 0CDAh
+F80CDA  EE               OUT DX,AL
+F80CDB  EB00             JMP SHORT 0CDDh
+F80CDD  EC               IN AL,DX
+F80CDE  8AE0             MOV AH,AL
+F80CE0  EC               IN AL,DX
+F80CE1  3BD8             CMP BX,AX
+F80CE3  750C             JNZ  0CF1h
+F80CE5  42               INC DX
+F80CE6  42               INC DX
+F80CE7  E2EE             LOOP 0CD7h
+F80CE9  0AC0             OR AL,AL
+F80CEB  740E             JZ   0CFBh
+F80CED  B000             MOV AL,00h
+F80CEF  EBDC             JMP SHORT 0CCDh
+F80CF1  BE551C           MOV SI,1C55h
+F80CF4  BCFA0C           MOV SP,0CFAh
+F80CF7  E9D110           JMP 1DCBh
+F80CFA  F4               HLT
+F80CFB  B040             MOV AL,40h
+F80CFD  E611             OUT 11h,AL
+F80CFF  FA               CLI
+F80D00  B80000           MOV AX,0h
+F80D03  E602             OUT 02h,AL
+F80D05  EB00             JMP SHORT 0D07h
+F80D07  E402             IN AL,02h
+F80D09  3AE0             CMP AH,AL
+F80D0B  740A             JZ   0D17h
+F80D0D  BE611C           MOV SI,1C61h
+F80D10  BC160D           MOV SP,0D16h
+F80D13  E9B510           JMP 1DCBh
+F80D16  F4               HLT
+F80D17  E60A             OUT 0Ah,AL
+F80D19  EB00             JMP SHORT 0D1Bh
+F80D1B  E40A             IN AL,0Ah
+F80D1D  3AE0             CMP AH,AL
+F80D1F  740A             JZ   0D2Bh
+F80D21  BE611C           MOV SI,1C61h
+F80D24  BC2A0D           MOV SP,0D2Ah
+F80D27  E9A110           JMP 1DCBh
+F80D2A  F4               HLT
+F80D2B  0BC0             OR AX,AX
+F80D2D  7504             JNZ  0D33h
+F80D2F  F7D0             NOT AX
+F80D31  EBD0             JMP SHORT 0D03h
+F80D33  33C0             XOR AX,AX
+F80D35  8EC0             MOV ES,AX
+F80D37  FC               CLD
+F80D38  BF2000           MOV DI,20h
+F80D3B  B8890D           MOV AX,0D89h
+F80D3E  AB               STOSW
+F80D3F  8CC8             MOV AX,CS
+F80D41  AB               STOSW
+F80D42  B92000           MOV CX,20h
+F80D45  32E4             XOR AH,AH
+F80D47  FB               STI
+F80D48  F6C4FF           TEST AH,0FFh
+F80D4B  740A             JZ   0D57h
+F80D4D  BE611C           MOV SI,1C61h
+F80D50  BC560D           MOV SP,0D56h
+F80D53  E97510           JMP 1DCBh
+F80D56  F4               HLT
+F80D57  E2EF             LOOP 0D48h
+F80D59  B01A             MOV AL,1Ah
+F80D5B  E671             OUT 71h,AL
+F80D5D  33C0             XOR AX,AX
+F80D5F  EB00             JMP SHORT 0D61h
+F80D61  EB00             JMP SHORT 0D63h
+F80D63  E671             OUT 71h,AL
+F80D65  B92000           MOV CX,20h
+F80D68  B0FE             MOV AL,0FEh
+F80D6A  E602             OUT 02h,AL
+F80D6C  F6C4FF           TEST AH,0FFh
+F80D6F  750C             JNZ  0D7Dh
+F80D71  E2F9             LOOP 0D6Ch
+F80D73  BE611C           MOV SI,1C61h
+F80D76  BC7C0D           MOV SP,0D7Ch
+F80D79  E94F10           JMP 1DCBh
+F80D7C  F4               HLT
+F80D7D  32C0             XOR AL,AL
+F80D7F  E671             OUT 71h,AL
+F80D81  EB00             JMP SHORT 0D83h
+F80D83  EB00             JMP SHORT 0D85h
+F80D85  E671             OUT 71h,AL
+F80D87  EB0B             JMP SHORT 0D94h
+---- gap 0D89..0D94 (11) ----
+F80D94  E431             IN AL,31h
+F80D96  A810             TEST AL,10h
+F80D98  7440             JZ   0DDAh
+F80D9A  B00D             MOV AL,0Dh
+F80D9C  E668             OUT 68h,AL
+F80D9E  B800A0           MOV AX,0A000h
+F80DA1  8EC0             MOV ES,AX
+F80DA3  BBE03F           MOV BX,3FE0h
+F80DA6  26C6470248       MOV BYTE PTR ES:[BX+02h],48h
+F80DAB  26C6470605       MOV BYTE PTR ES:[BX+06h],05h
+F80DB0  26C6470A04       MOV BYTE PTR ES:[BX+0Ah],04h
+F80DB5  BADB7F           MOV DX,7FDBh
+F80DB8  EC               IN AL,DX
+F80DB9  A840             TEST AL,40h
+F80DBB  7505             JNZ  0DC2h
+F80DBD  26C6470A03       MOV BYTE PTR ES:[BX+0Ah],03h
+F80DC2  26C6470E00       MOV BYTE PTR ES:[BX+0Eh],00h
+F80DC7  26C6471201       MOV BYTE PTR ES:[BX+12h],01h
+F80DCC  26806716C0       AND BYTE PTR ES:[BX+16h],0C0h
+F80DD1  26C6471A00       MOV BYTE PTR ES:[BX+1Ah],00h
+F80DD6  B00C             MOV AL,0Ch
+F80DD8  E668             OUT 68h,AL
+F80DDA  33C0             XOR AX,AX
+F80DDC  8ED8             MOV DS,AX
+F80DDE  BB0020           MOV BX,2000h
+F80DE1  B602             MOV DH,02h
+F80DE3  BDE90D           MOV BP,0DE9h
+F80DE6  E9D60B           JMP 19BFh
+F80DE9  B800A0           MOV AX,0A000h
+F80DEC  8EC0             MOV ES,AX
+F80DEE  26A0EA3F         MOV AL,ES:[3FEAh]
+F80DF2  2407             AND AL,07h
+F80DF4  FEC0             INC AL
+F80DF6  D0E0             SHL AL,1
+F80DF8  3AF0             CMP DH,AL
+F80DFA  7503             JNZ  0DFFh
+F80DFC  E99400           JMP 0E93h
+F80DFF  B008             MOV AL,08h
+F80E01  E637             OUT 37h,AL
+F80E03  33C0             XOR AX,AX
+F80E05  BC0B0E           MOV SP,0E0Bh
+F80E08  E98C0A           JMP 1897h
+F80E0B  BC110E           MOV SP,0E11h
+F80E0E  E9860A           JMP 1897h
+F80E11  B009             MOV AL,09h
+F80E13  E637             OUT 37h,AL
+F80E15  B201             MOV DL,01h
+F80E17  8AC2             MOV AL,DL
+F80E19  8AE2             MOV AH,DL
+F80E1B  BC210E           MOV SP,0E21h
+F80E1E  E9760A           JMP 1897h
+F80E21  BC270E           MOV SP,0E27h
+F80E24  E9970A           JMP 18BEh
+F80E27  7257             JC   0E80h
+F80E29  E433             IN AL,33h
+F80E2B  A804             TEST AL,04h
+F80E2D  7548             JNZ  0E77h
+F80E2F  B2FF             MOV DL,0FFh
+F80E31  8AC2             MOV AL,DL
+F80E33  8AE2             MOV AH,DL
+F80E35  BC3B0E           MOV SP,0E3Bh
+F80E38  E95C0A           JMP 1897h
+F80E3B  BC410E           MOV SP,0E41h
+F80E3E  E97D0A           JMP 18BEh
+F80E41  723D             JC   0E80h
+F80E43  E433             IN AL,33h
+F80E45  A804             TEST AL,04h
+F80E47  752E             JNZ  0E77h
+F80E49  80EA55           SUB DL,55h
+F80E4C  73E3             JNC  0E31h
+F80E4E  81C30020         ADD BX,2000h
+F80E52  FEC6             INC DH
+F80E54  FEC6             INC DH
+F80E56  BD5C0E           MOV BP,0E5Ch
+F80E59  E9630B           JMP 19BFh
+F80E5C  B800A0           MOV AX,0A000h
+F80E5F  8EC0             MOV ES,AX
+F80E61  26A0EA3F         MOV AL,ES:[3FEAh]
+F80E65  2407             AND AL,07h
+F80E67  3C05             CMP AL,05h
+F80E69  7202             JC   0E6Dh
+F80E6B  B004             MOV AL,04h
+F80E6D  FEC0             INC AL
+F80E6F  D0E0             SHL AL,1
+F80E71  3AF0             CMP DH,AL
+F80E73  758A             JNZ  0DFFh
+F80E75  EB1C             JMP SHORT 0E93h
+F80E77  BD7D0E           MOV BP,0E7Dh
+F80E7A  E94F0C           JMP 1ACCh
+F80E7D  EB14             JMP SHORT 0E93h
+---- gap 0E7F..0E80 (1) ----
+F80E80  83EF04           SUB DI,0004h
+F80E83  BD890E           MOV BP,0E89h
+F80E86  E9B80B           JMP 1A41h
+F80E89  B800A0           MOV AX,0A000h
+F80E8C  8EC0             MOV ES,AX
+F80E8E  26FE06E03F       INC BYTE PTR ES:[3FE0h]
+F80E93  33C0             XOR AX,AX
+F80E95  8ED8             MOV DS,AX
+F80E97  D0EE             SHR DH,1
+F80E99  FECE             DEC DH
+F80E9B  08360105         OR [0501h],DH
+F80E9F  E442             IN AL,42h
+F80EA1  A802             TEST AL,02h
+F80EA3  7403             JZ   0EA8h
+F80EA5  E90C04           JMP 12B4h
+F80EA8  FA               CLI
+F80EA9  BC3000           MOV SP,30h
+F80EAC  8ED4             MOV SS,SP
+F80EAE  BCFE00           MOV SP,0FEh
+F80EB1  33C0             XOR AX,AX
+F80EB3  8ED8             MOV DS,AX
+F80EB5  8EC0             MOV ES,AX
+F80EB7  FC               CLD
+F80EB8  B8FFFF           MOV AX,0FFFFh
+F80EBB  BF0080           MOV DI,8000h
+F80EBE  B90500           MOV CX,5h
+F80EC1  F3AB             REP STOSW
+F80EC3  BD0080           MOV BP,8000h
+F80EC6  260F015E00       LIDT ES:[BP+00h]
+F80ECB  BD0580           MOV BP,8005h
+F80ECE  260F015600       LGDT ES:[BP+00h]
+F80ED3  BD0090           MOV BP,9000h
+F80ED6  260F014E00       SIDT ES:[BP+00h]
+F80EDB  BD0590           MOV BP,9005h
+F80EDE  260F014600       SGDT ES:[BP+00h]
+F80EE3  BF0090           MOV DI,9000h
+F80EE6  B90500           MOV CX,5h
+F80EE9  F3AF             REP SCASW
+F80EEB  7403             JZ   0EF0h
+F80EED  E97303           JMP 1263h
+F80EF0  0BC0             OR AX,AX
+F80EF2  7405             JZ   0EF9h
+F80EF4  2D5555           SUB AX,5555h
+F80EF7  EBC2             JMP SHORT 0EBBh
+F80EF9  FC               CLD
+F80EFA  0E               PUSH CS
+F80EFB  1F               POP DS
+F80EFC  BE630F           MOV SI,0F63h
+F80EFF  BF0080           MOV DI,8000h
+F80F02  B94000           MOV CX,40h
+F80F05  F3A5             REP MOVSW
+F80F07  BEE30F           MOV SI,0FE3h
+F80F0A  BF0090           MOV DI,9000h
+F80F0D  B92000           MOV CX,20h
+F80F10  A5               MOVSW
+F80F11  B83800           MOV AX,38h
+F80F14  AB               STOSW
+F80F15  B80087           MOV AX,8700h
+F80F18  AB               STOSW
+F80F19  33C0             XOR AX,AX
+F80F1B  AB               STOSW
+F80F1C  E2F2             LOOP 0F10h
+F80F1E  B9E000           MOV CX,0E0h
+F80F21  B85D10           MOV AX,105Dh
+F80F24  AB               STOSW
+F80F25  B83800           MOV AX,38h
+F80F28  AB               STOSW
+F80F29  B80086           MOV AX,8600h
+F80F2C  AB               STOSW
+F80F2D  33C0             XOR AX,AX
+F80F2F  AB               STOSW
+F80F30  E2EF             LOOP 0F21h
+F80F32  06               PUSH ES
+F80F33  1F               POP DS
+F80F34  0F011E1080       LIDT [8010h]
+F80F39  0F01160880       LGDT [8008h]
+F80F3E  33C0             XOR AX,AX
+F80F40  8ED8             MOV DS,AX
+F80F42  E6F2             OUT 0F2h,AL
+F80F44  B002             MOV AL,02h
+F80F46  E6F6             OUT 0F6h,AL
+F80F48  0E               PUSH CS
+F80F49  686C12           PUSH 126Ch
+F80F4C  8C160604         MOV [0406h],SS
+F80F50  89260404         MOV [0404h],SP
+F80F54  B00E             MOV AL,0Eh
+F80F56  E637             OUT 37h,AL
+F80F58  B80100           MOV AX,1h
+F80F5B  0F01F0           LMSW AX
+F80F5E  EA64103800       JMP FAR 38h:1064h
+---- gap 0F63..1263 (768) ----
+F81263  B00B             MOV AL,0Bh
+F81265  E637             OUT 37h,AL
+F81267  EB00             JMP SHORT 1269h
+F81269  E92C0C           JMP 1E98h
+---- gap 126C..12B4 (72) ----
+F812B4  E442             IN AL,42h
+F812B6  A802             TEST AL,02h
+F812B8  7508             JNZ  12C2h
+F812BA  BADD7F           MOV DX,7FDDh
+F812BD  EC               IN AL,DX
+F812BE  A804             TEST AL,04h
+F812C0  7403             JZ   12C5h
+F812C2  E98604           JMP 174Bh
+F812C5  FA               CLI
+F812C6  BC3000           MOV SP,30h
+F812C9  8ED4             MOV SS,SP
+F812CB  BCFE00           MOV SP,0FEh
+F812CE  33C0             XOR AX,AX
+F812D0  8ED8             MOV DS,AX
+F812D2  8EC0             MOV ES,AX
+F812D4  FC               CLD
+F812D5  0E               PUSH CS
+F812D6  1F               POP DS
+F812D7  BE1614           MOV SI,1416h
+F812DA  BF0080           MOV DI,8000h
+F812DD  B94000           MOV CX,40h
+F812E0  F3A5             REP MOVSW
+F812E2  06               PUSH ES
+F812E3  1F               POP DS
+F812E4  0F011E1080       LIDT [8010h]
+F812E9  0F01160880       LGDT [8008h]
+F812EE  33C0             XOR AX,AX
+F812F0  8ED8             MOV DS,AX
+F812F2  E6F2             OUT 0F2h,AL
+F812F4  B002             MOV AL,02h
+F812F6  E6F6             OUT 0F6h,AL
+F812F8  0E               PUSH CS
+F812F9  681617           PUSH 1716h
+F812FC  8C160604         MOV [0406h],SS
+F81300  89260404         MOV [0404h],SP
+F81304  B00E             MOV AL,0Eh
+F81306  E637             OUT 37h,AL
+F81308  B80100           MOV AX,1h
+F8130B  0F01F0           LMSW AX
+F8130E  EA9D153800       JMP FAR 38h:159Dh
+---- gap 1313..174B (1080) ----
+F8174B  33C0             XOR AX,AX
+F8174D  8ED8             MOV DS,AX
+F8174F  BC3000           MOV SP,30h
+F81752  8ED4             MOV SS,SP
+F81754  BCFE00           MOV SP,0FEh
+F81757  B400             MOV AH,00h
+F81759  BD5F17           MOV BP,175Fh
+F8175C  E9C2EE           JMP 621h
+F8175F  B204             MOV DL,04h
+F81761  B49F             MOV AH,9Fh
+F81763  BD6917           MOV BP,1769h
+F81766  E9B8EE           JMP 621h
+F81769  BD6F17           MOV BP,176Fh
+F8176C  E9E6EE           JMP 655h
+F8176F  742C             JZ   179Dh
+F81771  3CFA             CMP AL,0FAh
+F81773  740B             JZ   1780h
+F81775  3CFC             CMP AL,0FCh
+F81777  74E8             JZ   1761h
+F81779  FECA             DEC DL
+F8177B  75E4             JNZ  1761h
+F8177D  EB1E             JMP SHORT 179Dh
+---- gap 177F..1780 (1) ----
+F81780  BD8617           MOV BP,1786h
+F81783  E9CFEE           JMP 655h
+F81786  7415             JZ   179Dh
+F81788  3CA0             CMP AL,0A0h
+F8178A  7511             JNZ  179Dh
+F8178C  BD9217           MOV BP,1792h
+F8178F  E9C3EE           JMP 655h
+F81792  7409             JZ   179Dh
+F81794  3C80             CMP AL,80h
+F81796  7505             JNZ  179Dh
+F81798  800E810440       OR BYTE PTR [0481h],40h
+F8179D  BADB7F           MOV DX,7FDBh
+F817A0  EC               IN AL,DX
+F817A1  A840             TEST AL,40h
+F817A3  B080             MOV AL,80h
+F817A5  7502             JNZ  17A9h
+F817A7  B082             MOV AL,82h
+F817A9  BA3F04           MOV DX,43Fh
+F817AC  EE               OUT DX,AL
+F817AD  B020             MOV AL,20h
+F817AF  EE               OUT DX,AL
+F817B0  E4F0             IN AL,0F0h
+F817B2  A840             TEST AL,40h
+F817B4  750F             JNZ  17C5h
+F817B6  BAC40C           MOV DX,0CC4h
+F817B9  EC               IN AL,DX
+F817BA  2403             AND AL,03h
+F817BC  C0E006           SHL AL,06h
+F817BF  0C20             OR AL,20h
+F817C1  08068404         OR [0484h],AL
+F817C5  B406             MOV AH,06h
+F817C7  E4F0             IN AL,0F0h
+F817C9  A820             TEST AL,20h
+F817CB  7503             JNZ  17D0h
+F817CD  80CC40           OR AH,40h
+F817D0  8AC4             MOV AL,AH
+F817D2  BA3D05           MOV DX,53Dh
+F817D5  EE               OUT DX,AL
+F817D6  EB00             JMP SHORT 17D8h
+F817D8  B008             MOV AL,08h
+F817DA  BA6104           MOV DX,461h
+F817DD  EE               OUT DX,AL
+F817DE  EB00             JMP SHORT 17E0h
+F817E0  BADD7F           MOV DX,7FDDh
+F817E3  EC               IN AL,DX
+F817E4  A804             TEST AL,04h
+F817E6  7413             JZ   17FBh
+F817E8  B00E             MOV AL,0Eh
+F817EA  E637             OUT 37h,AL
+F817EC  0E               PUSH CS
+F817ED  68FB17           PUSH 17FBh
+F817F0  8C160604         MOV [0406h],SS
+F817F4  89260404         MOV [0404h],SP
+F817F8  E9A206           JMP 1E9Dh
+F817FB  33C0             XOR AX,AX
+F817FD  8ED8             MOV DS,AX
+F817FF  E442             IN AL,42h
+F81801  8AE0             MOV AH,AL
+F81803  D0EC             SHR AH,1
+F81805  D0EC             SHR AH,1
+F81807  80E430           AND AH,30h
+F8180A  80CC40           OR AH,40h
+F8180D  A802             TEST AL,02h
+F8180F  751D             JNZ  182Eh
+F81811  80E4BF           AND AH,0BFh
+F81814  800E800403       OR BYTE PTR [0480h],03h
+F81819  800E000402       OR BYTE PTR [0400h],02h
+F8181E  A820             TEST AL,20h
+F81820  7507             JNZ  1829h
+F81822  800E840402       OR BYTE PTR [0484h],02h
+F81827  EB08             JMP SHORT 1831h
+F81829  800E000404       OR BYTE PTR [0400h],04h
+F8182E  80CC80           OR AH,80h
+F81831  8026010507       AND BYTE PTR [0501h],07h
+F81836  B001             MOV AL,01h
+F81838  09060005         OR [0500h],AX
+F8183C  800E800440       OR BYTE PTR [0480h],40h
+F81841  E442             IN AL,42h
+F81843  A802             TEST AL,02h
+F81845  7513             JNZ  185Ah
+F81847  DBE3             ESC 3,BX
+F81849  9B               WAIT
+F8184A  DFE0             ESC 7,AX
+F8184C  0AC0             OR AL,AL
+F8184E  750A             JNZ  185Ah
+F81850  0F01E0           SMSW AX
+F81853  0C02             OR AL,02h
+F81855  0F01F0           LMSW AX
+F81858  EB00             JMP SHORT 185Ah
+F8185A  33C0             XOR AX,AX
+F8185C  8ED8             MOV DS,AX
+F8185E  BC6418           MOV SP,1864h
+F81861  E93AED           JMP 59Eh
+F81864  BC3000           MOV SP,30h
+F81867  8ED4             MOV SS,SP
+F81869  BCFE00           MOV SP,0FEh
+F8186C  E83306           CALL 1EA2h
+F8186F  B00F             MOV AL,0Fh
+F81871  E637             OUT 37h,AL
+F81873  EB00             JMP SHORT 1875h
+F81875  EB00             JMP SHORT 1877h
+F81877  B00A             MOV AL,0Ah
+F81879  E637             OUT 37h,AL
+F8187B  C706F804EEEA     MOV WORD PTR [04F8h],0EAEEh
+F81881  C706FA040200     MOV WORD PTR [04FAh],2h
+F81887  C706FC0480FD     MOV WORD PTR [04FCh],0FD80h
+F8188D  BA3D04           MOV DX,43Dh
+F81890  B012             MOV AL,12h
+F81892  EAF8040000       JMP FAR 0h:4F8h
+F81897  FC               CLD
+F81898  8EC3             MOV ES,BX
+F8189A  8BF8             MOV DI,AX
+F8189C  66C1E010         SHL EAX,10h
+F818A0  8BC7             MOV AX,DI
+F818A2  33FF             XOR DI,DI
+F818A4  B90040           MOV CX,4000h
+F818A7  66F3AB           REP STOSD
+F818AA  81C30010         ADD BX,1000h
+F818AE  8EC3             MOV ES,BX
+F818B0  33FF             XOR DI,DI
+F818B2  B90040           MOV CX,4000h
+F818B5  66F3AB           REP STOSD
+F818B8  81EB0010         SUB BX,1000h
+F818BC  FFE4             JMP SP
+F818BE  FC               CLD
+F818BF  8EC3             MOV ES,BX
+F818C1  8BF8             MOV DI,AX
+F818C3  66C1E010         SHL EAX,10h
+F818C7  8BC7             MOV AX,DI
+F818C9  33FF             XOR DI,DI
+F818CB  B90040           MOV CX,4000h
+F818CE  66F3AF           REP SCASD
+F818D1  751B             JNZ  18EEh
+F818D3  81C30010         ADD BX,1000h
+F818D7  FEC6             INC DH
+F818D9  8EC3             MOV ES,BX
+F818DB  33FF             XOR DI,DI
+F818DD  B90040           MOV CX,4000h
+F818E0  66F3AF           REP SCASD
+F818E3  7509             JNZ  18EEh
+F818E5  81EB0010         SUB BX,1000h
+F818E9  FECE             DEC DH
+F818EB  F8               CLC
+F818EC  FFE4             JMP SP
+F818EE  F9               STC
+F818EF  FFE4             JMP SP
+---- gap 18F1..19BF (206) ----
+F819BF  80FE02           CMP DH,02h
+F819C2  7409             JZ   19CDh
+F819C4  B800A0           MOV AX,0A000h
+F819C7  8ED8             MOV DS,AX
+F819C9  FE0EE03F         DEC BYTE PTR [3FE0h]
+F819CD  BEBF1B           MOV SI,1BBFh
+F819D0  BCD619           MOV SP,19D6h
+F819D3  E9F503           JMP 1DCBh
+F819D6  8BF2             MOV SI,DX
+F819D8  A0E03F           MOV AL,[3FE0h]
+F819DB  FEC8             DEC AL
+F819DD  B4A0             MOV AH,0A0h
+F819DF  F6E4             MUL AH
+F819E1  8BF8             MOV DI,AX
+F819E3  83C712           ADD DI,0012h
+F819E6  E431             IN AL,31h
+F819E8  A804             TEST AL,04h
+F819EA  7403             JZ   19EFh
+F819EC  83C712           ADD DI,0012h
+F819EF  8BC2             MOV AX,DX
+F819F1  80FC10           CMP AH,10h
+F819F4  7203             JC   19F9h
+F819F6  80EC08           SUB AH,08h
+F819F9  32C0             XOR AL,AL
+F819FB  D1E8             SHR AX,1
+F819FD  D1E8             SHR AX,1
+F819FF  B90A00           MOV CX,0Ah
+F81A02  33D2             XOR DX,DX
+F81A04  F7F1             DIV CX
+F81A06  80CA30           OR DL,30h
+F81A09  8815             MOV [DI],DL
+F81A0B  8BD0             MOV DX,AX
+F81A0D  4F               DEC DI
+F81A0E  4F               DEC DI
+F81A0F  E431             IN AL,31h
+F81A11  A804             TEST AL,04h
+F81A13  7402             JZ   1A17h
+F81A15  4F               DEC DI
+F81A16  4F               DEC DI
+F81A17  8BC2             MOV AX,DX
+F81A19  33D2             XOR DX,DX
+F81A1B  F7F1             DIV CX
+F81A1D  80CA30           OR DL,30h
+F81A20  8815             MOV [DI],DL
+F81A22  8BD0             MOV DX,AX
+F81A24  4F               DEC DI
+F81A25  4F               DEC DI
+F81A26  E431             IN AL,31h
+F81A28  A804             TEST AL,04h
+F81A2A  7402             JZ   1A2Eh
+F81A2C  4F               DEC DI
+F81A2D  4F               DEC DI
+F81A2E  8BC2             MOV AX,DX
+F81A30  33D2             XOR DX,DX
+F81A32  F7F1             DIV CX
+F81A34  80CA30           OR DL,30h
+F81A37  8815             MOV [DI],DL
+F81A39  8BD6             MOV DX,SI
+F81A3B  33C0             XOR AX,AX
+F81A3D  8ED8             MOV DS,AX
+F81A3F  FFE5             JMP BP
+F81A41  8BDF             MOV BX,DI
+F81A43  BED11B           MOV SI,1BD1h
+F81A46  80FE02           CMP DH,02h
+F81A49  7203             JC   1A4Eh
+F81A4B  BE0E1C           MOV SI,1C0Eh
+F81A4E  BC541A           MOV SP,1A54h
+F81A51  E97703           JMP 1DCBh
+F81A54  8BFB             MOV DI,BX
+F81A56  A0E03F           MOV AL,[3FE0h]
+F81A59  FEC8             DEC AL
+F81A5B  B4A0             MOV AH,0A0h
+F81A5D  F6E4             MUL AH
+F81A5F  8BF0             MOV SI,AX
+F81A61  83C61A           ADD SI,001Ah
+F81A64  E431             IN AL,31h
+F81A66  A804             TEST AL,04h
+F81A68  7403             JZ   1A6Dh
+F81A6A  83C61A           ADD SI,001Ah
+F81A6D  8AC6             MOV AL,DH
+F81A6F  BC751A           MOV SP,1A75h
+F81A72  E9E203           JMP 1E57h
+F81A75  8BC7             MOV AX,DI
+F81A77  8AC4             MOV AL,AH
+F81A79  BC7F1A           MOV SP,1A7Fh
+F81A7C  E9D803           JMP 1E57h
+F81A7F  8BC7             MOV AX,DI
+F81A81  BC871A           MOV SP,1A87h
+F81A84  E9D003           JMP 1E57h
+F81A87  46               INC SI
+F81A88  46               INC SI
+F81A89  E431             IN AL,31h
+F81A8B  A804             TEST AL,04h
+F81A8D  7402             JZ   1A91h
+F81A8F  46               INC SI
+F81A90  46               INC SI
+F81A91  268A4503         MOV AL,ES:[DI+03h]
+F81A95  32C2             XOR AL,DL
+F81A97  BC9D1A           MOV SP,1A9Dh
+F81A9A  E9BA03           JMP 1E57h
+F81A9D  268A4502         MOV AL,ES:[DI+02h]
+F81AA1  32C2             XOR AL,DL
+F81AA3  BCA91A           MOV SP,1AA9h
+F81AA6  E9AE03           JMP 1E57h
+F81AA9  268A4501         MOV AL,ES:[DI+01h]
+F81AAD  32C2             XOR AL,DL
+F81AAF  BCB51A           MOV SP,1AB5h
+F81AB2  E9A203           JMP 1E57h
+F81AB5  268A05           MOV AL,ES:[DI]
+F81AB8  32C2             XOR AL,DL
+F81ABA  BCC01A           MOV SP,1AC0h
+F81ABD  E99703           JMP 1E57h
+F81AC0  BCC61A           MOV SP,1AC6h
+F81AC3  EB57             JMP SHORT 1B1Ch
+---- gap 1AC5..1AC6 (1) ----
+F81AC6  33C0             XOR AX,AX
+F81AC8  8ED8             MOV DS,AX
+F81ACA  FFE5             JMP BP
+F81ACC  B008             MOV AL,08h
+F81ACE  E637             OUT 37h,AL
+F81AD0  33C0             XOR AX,AX
+F81AD2  81E300E0         AND BX,0E000h
+F81AD6  BCDC1A           MOV SP,1ADCh
+F81AD9  E9BBFD           JMP 1897h
+F81ADC  B009             MOV AL,09h
+F81ADE  E637             OUT 37h,AL
+F81AE0  BEE01B           MOV SI,1BE0h
+F81AE3  80FE02           CMP DH,02h
+F81AE6  7203             JC   1AEBh
+F81AE8  BE1D1C           MOV SI,1C1Dh
+F81AEB  BCF11A           MOV SP,1AF1h
+F81AEE  E9DA02           JMP 1DCBh
+F81AF1  A0E03F           MOV AL,[3FE0h]
+F81AF4  FEC8             DEC AL
+F81AF6  B4A0             MOV AH,0A0h
+F81AF8  F6E4             MUL AH
+F81AFA  8BF0             MOV SI,AX
+F81AFC  83C61A           ADD SI,001Ah
+F81AFF  E431             IN AL,31h
+F81B01  A804             TEST AL,04h
+F81B03  7403             JZ   1B08h
+F81B05  83C61A           ADD SI,001Ah
+F81B08  8AC6             MOV AL,DH
+F81B0A  BC101B           MOV SP,1B10h
+F81B0D  E94703           JMP 1E57h
+F81B10  BC161B           MOV SP,1B16h
+F81B13  EB07             JMP SHORT 1B1Ch
+---- gap 1B15..1B16 (1) ----
+F81B16  33C0             XOR AX,AX
+F81B18  8ED8             MOV DS,AX
+F81B1A  FFE5             JMP BP
+F81B1C  B006             MOV AL,06h
+F81B1E  E637             OUT 37h,AL
+F81B20  33C9             XOR CX,CX
+F81B22  E2FE             LOOP 1B22h
+F81B24  E2FE             LOOP 1B24h
+F81B26  E2FE             LOOP 1B26h
+F81B28  E2FE             LOOP 1B28h
+F81B2A  E2FE             LOOP 1B2Ah
+F81B2C  E2FE             LOOP 1B2Ch
+F81B2E  B007             MOV AL,07h
+F81B30  E637             OUT 37h,AL
+F81B32  FFE4             JMP SP
+---- gap 1B34..1DCB (663) ----
+F81DCB  B800A0           MOV AX,0A000h
+F81DCE  8ED8             MOV DS,AX
+F81DD0  FC               CLD
+F81DD1  A0E03F           MOV AL,[3FE0h]
+F81DD4  B4A0             MOV AH,0A0h
+F81DD6  F6E4             MUL AH
+F81DD8  8BF8             MOV DI,AX
+F81DDA  2EAC             CS:LODSB
+F81DDC  B92800           MOV CX,28h
+F81DDF  8AE0             MOV AH,AL
+F81DE1  88A50020         MOV [DI+2000h],AH
+F81DE5  47               INC DI
+F81DE6  47               INC DI
+F81DE7  E431             IN AL,31h
+F81DE9  A804             TEST AL,04h
+F81DEB  7402             JZ   1DEFh
+F81DED  47               INC DI
+F81DEE  47               INC DI
+F81DEF  E2F0             LOOP 1DE1h
+F81DF1  A0E03F           MOV AL,[3FE0h]
+F81DF4  B4A0             MOV AH,0A0h
+F81DF6  F6E4             MUL AH
+F81DF8  8BF8             MOV DI,AX
+F81DFA  32E4             XOR AH,AH
+F81DFC  B92800           MOV CX,28h
+F81DFF  2EAC             CS:LODSB
+F81E01  0AC0             OR AL,AL
+F81E03  7410             JZ   1E15h
+F81E05  8905             MOV [DI],AX
+F81E07  47               INC DI
+F81E08  47               INC DI
+F81E09  E431             IN AL,31h
+F81E0B  A804             TEST AL,04h
+F81E0D  7402             JZ   1E11h
+F81E0F  47               INC DI
+F81E10  47               INC DI
+F81E11  E2EC             LOOP 1DFFh
+F81E13  E310             JCXZ 1E25h
+F81E15  C7052000         MOV WORD PTR [DI],20h
+F81E19  47               INC DI
+F81E1A  47               INC DI
+F81E1B  E431             IN AL,31h
+F81E1D  A804             TEST AL,04h
+F81E1F  7402             JZ   1E23h
+F81E21  47               INC DI
+F81E22  47               INC DI
+F81E23  E2F0             LOOP 1E15h
+F81E25  FE06E03F         INC BYTE PTR [3FE0h]
+F81E29  2EAC             CS:LODSB
+F81E2B  8AE0             MOV AH,AL
+F81E2D  F6C401           TEST AH,01h
+F81E30  741B             JZ   1E4Dh
+F81E32  B006             MOV AL,06h
+F81E34  E637             OUT 37h,AL
+F81E36  33C9             XOR CX,CX
+F81E38  E2FE             LOOP 1E38h
+F81E3A  E2FE             LOOP 1E3Ah
+F81E3C  E2FE             LOOP 1E3Ch
+F81E3E  E2FE             LOOP 1E3Eh
+F81E40  E2FE             LOOP 1E40h
+F81E42  E2FE             LOOP 1E42h
+F81E44  F6C402           TEST AH,02h
+F81E47  7504             JNZ  1E4Dh
+F81E49  B007             MOV AL,07h
+F81E4B  E637             OUT 37h,AL
+F81E4D  F6C480           TEST AH,80h
+F81E50  7403             JZ   1E55h
+F81E52  FA               CLI
+F81E53  EBFE             JMP SHORT 1E53h
+F81E55  FFE4             JMP SP
+F81E57  BB881E           MOV BX,1E88h
+F81E5A  8AE0             MOV AH,AL
+F81E5C  D0E8             SHR AL,1
+F81E5E  D0E8             SHR AL,1
+F81E60  D0E8             SHR AL,1
+F81E62  D0E8             SHR AL,1
+F81E64  240F             AND AL,0Fh
+F81E66  2ED7             XLAT
+F81E68  8804             MOV [SI],AL
+F81E6A  46               INC SI
+F81E6B  46               INC SI
+F81E6C  E431             IN AL,31h
+F81E6E  A804             TEST AL,04h
+F81E70  7402             JZ   1E74h
+F81E72  46               INC SI
+F81E73  46               INC SI
+F81E74  8AC4             MOV AL,AH
+F81E76  240F             AND AL,0Fh
+F81E78  2ED7             XLAT
+F81E7A  8804             MOV [SI],AL
+F81E7C  46               INC SI
+F81E7D  46               INC SI
+F81E7E  E431             IN AL,31h
+F81E80  A804             TEST AL,04h
+F81E82  7402             JZ   1E86h
+F81E84  46               INC SI
+F81E85  46               INC SI
+F81E86  FFE4             JMP SP
+---- gap 1E88..1E98 (16) ----
+F81E98  B000             MOV AL,00h
+F81E9A  E6F0             OUT 0F0h,AL
+F81E9C  F4               HLT
+F81E9D  B007             MOV AL,07h
+F81E9F  E6F0             OUT 0F0h,AL
+F81EA1  F4               HLT
+F81EA2  B080             MOV AL,80h
+F81EA4  E67C             OUT 7Ch,AL
+F81EA6  B033             MOV AL,33h
+F81EA8  E67E             OUT 7Eh,AL
+F81EAA  B055             MOV AL,55h
+F81EAC  E67E             OUT 7Eh,AL
+F81EAE  B000             MOV AL,00h
+F81EB0  E67E             OUT 7Eh,AL
+F81EB2  B000             MOV AL,00h
+F81EB4  E67E             OUT 7Eh,AL
+F81EB6  B04C             MOV AL,4Ch
+F81EB8  E8A400           CALL 1F5Fh
+F81EBB  B000             MOV AL,00h
+F81EBD  E8AB00           CALL 1F6Bh
+F81EC0  B049             MOV AL,49h
+F81EC2  E89A00           CALL 1F5Fh
+F81EC5  B80040           MOV AX,4000h
+F81EC8  E8A000           CALL 1F6Bh
+F81ECB  8AC4             MOV AL,AH
+F81ECD  E89B00           CALL 1F6Bh
+F81ED0  B008             MOV AL,08h
+F81ED2  E89600           CALL 1F6Bh
+F81ED5  B020             MOV AL,20h
+F81ED7  E88500           CALL 1F5Fh
+F81EDA  B0FF             MOV AL,0FFh
+F81EDC  E88C00           CALL 1F6Bh
+F81EDF  E88900           CALL 1F6Bh
+F81EE2  B049             MOV AL,49h
+F81EE4  E87800           CALL 1F5Fh
+F81EE7  E89800           CALL 1F82h
+F81EEA  B000             MOV AL,00h
+F81EEC  E67C             OUT 7Ch,AL
+F81EEE  B800A8           MOV AX,0A800h
+F81EF1  8EC0             MOV ES,AX
+F81EF3  26A10000         MOV AX,ES:[0h]
+F81EF7  3D3333           CMP AX,3333h
+F81EFA  751F             JNZ  1F1Bh
+F81EFC  B800B0           MOV AX,0B000h
+F81EFF  8EC0             MOV ES,AX
+F81F01  26A10000         MOV AX,ES:[0h]
+F81F05  3D5555           CMP AX,5555h
+F81F08  7511             JNZ  1F1Bh
+F81F0A  E83200           CALL 1F3Fh
+F81F0D  B80000           MOV AX,0h
+F81F10  8EC0             MOV ES,AX
+F81F12  26800E4D0540     OR BYTE PTR ES:[054Dh],40h
+F81F18  EB0C             JMP SHORT 1F26h
+---- gap 1F1A..1F1B (1) ----
+F81F1B  B80000           MOV AX,0h
+F81F1E  8EC0             MOV ES,AX
+F81F20  2680264D05BF     AND BYTE PTR ES:[054Dh],0BFh
+F81F26  B800A8           MOV AX,0A800h
+F81F29  8EC0             MOV ES,AX
+F81F2B  26C70600000000   MOV WORD PTR ES:[0000h],0h
+F81F32  B800B0           MOV AX,0B000h
+F81F35  8EC0             MOV ES,AX
+F81F37  26C70600000000   MOV WORD PTR ES:[0000h],0h
+F81F3E  C3               RET
+F81F3F  B007             MOV AL,07h
+F81F41  E66A             OUT 6Ah,AL
+F81F43  B005             MOV AL,05h
+F81F45  E66A             OUT 6Ah,AL
+F81F47  B080             MOV AL,80h
+F81F49  E67C             OUT 7Ch,AL
+F81F4B  BAA004           MOV DX,4A0h
+F81F4E  B8F0FF           MOV AX,0FFF0h
+F81F51  EF               OUT DX,AX
+F81F52  B000             MOV AL,00h
+F81F54  E67C             OUT 7Ch,AL
+F81F56  B004             MOV AL,04h
+F81F58  E66A             OUT 6Ah,AL
+F81F5A  B006             MOV AL,06h
+F81F5C  E66A             OUT 6Ah,AL
+F81F5E  C3               RET
+F81F5F  50               PUSH AX
+F81F60  E81400           CALL 1F77h
+F81F63  58               POP AX
+F81F64  EB00             JMP SHORT 1F66h
+F81F66  EB00             JMP SHORT 1F68h
+F81F68  E6A2             OUT 0A2h,AL
+F81F6A  C3               RET
+F81F6B  50               PUSH AX
+F81F6C  E80800           CALL 1F77h
+F81F6F  58               POP AX
+F81F70  EB00             JMP SHORT 1F72h
+F81F72  EB00             JMP SHORT 1F74h
+F81F74  E6A0             OUT 0A0h,AL
+F81F76  C3               RET
+F81F77  EB00             JMP SHORT 1F79h
+F81F79  E4A0             IN AL,0A0h
+F81F7B  A802             TEST AL,02h
+F81F7D  EB00             JMP SHORT 1F7Fh
+F81F7F  75F6             JNZ  1F77h
+F81F81  C3               RET
+F81F82  EB00             JMP SHORT 1F84h
+F81F84  E4A0             IN AL,0A0h
+F81F86  A804             TEST AL,04h
+F81F88  EB00             JMP SHORT 1F8Ah
+F81F8A  74F6             JZ   1F82h
+F81F8C  C3               RET

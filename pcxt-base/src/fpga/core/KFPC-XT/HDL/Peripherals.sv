@@ -1263,6 +1263,33 @@ end
         end
     end
 
+    // ------------------------------------------------------ GDC status
+    //
+    // The ITF's first hard gate. At F80388 it does IN AL,60h / TEST AL,20h and
+    // waits for bit 5 to go low, high, low -- twice -- before it will go on.
+    // With that port answering a constant it spins there forever, which is
+    // exactly what the hardware showed: LIVE parked at 08383, which is ROM
+    // offset 0383 because (F8000 + off) & FFFF is 8000 + off.
+    //
+    // uPD7220 status: [7] light pen, [6] HBLANK, [5] VSYNC, [4] DMA execute,
+    // [3] drawing, [2] FIFO empty, [1] FIFO full, [0] data ready. Nothing here
+    // has a command FIFO yet, so it reports permanently empty and ready, and
+    // the two timing bits come from the raster the renderer is already running.
+    //
+    // Crossing into the chipset clock: two flops, because a status bit read one
+    // cycle stale is a status bit, and a metastable one is a coin toss.
+    logic gdc_vs_s1, gdc_vs_q, gdc_hb_s1, gdc_hb_q;
+    always_ff @(posedge clock) begin
+        gdc_vs_s1 <= pc98_vs;  gdc_vs_q <= gdc_vs_s1;
+        gdc_hb_s1 <= pc98_hb;  gdc_hb_q <= gdc_hb_s1;
+    end
+    wire [7:0] gdc_status = {1'b0, gdc_hb_q, gdc_vs_q, 1'b0, 1'b0, 1'b1, 1'b0, 1'b1};
+
+    // Text GDC at 0x60, graphics GDC at 0xA0. Both answer the same status: the
+    // ITF checks both, and both watch the same raster.
+    wire gdc_stat_select = pc98_io & ((address[7:0] == 8'h60) | (address[7:0] == 8'hA0));
+    wire gdc_stat_read   = gdc_stat_select & ~io_read_n;
+
     wire [7:0] pc98_font_row;      // driven by the row buffer below
     wire [6:0] pc98_font_cell;
     wire [3:0] pc98_font_line;
@@ -2073,6 +2100,11 @@ end
             data_bus_out <= ppi_data_bus_out;
         end
 `ifdef MACHINE_PC98
+        else if (gdc_stat_read)
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= gdc_status;
+        end
         else if (fdd_stub_read)
         begin
             data_bus_out_from_chipset <= 1'b1;

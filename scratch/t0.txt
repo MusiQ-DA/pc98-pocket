@@ -1,0 +1,174 @@
+F80000  FA               CLI
+F80001  B4D5             MOV AH,0D5h
+F80003  9E               SAHF
+F80004  79FE             JNS  4h
+F80006  75FE             JNZ  6h
+F80008  7BFE             JPO  8h
+F8000A  73FE             JNC  0Ah
+F8000C  F8               CLC
+F8000D  3F               AAS
+F8000E  73FE             JNC  0Eh
+F80010  B001             MOV AL,01h
+F80012  B402             MOV AH,02h
+F80014  F6E4             MUL AH
+F80016  70FE             JO   16h
+F80018  33C0             XOR AX,AX
+F8001A  9E               SAHF
+F8001B  78FE             JS   1Bh
+F8001D  74FE             JZ   1Dh
+F8001F  7AFE             JPE  1Fh
+F80021  72FE             JC   21h
+F80023  F9               STC
+F80024  3F               AAS
+F80025  72FE             JC   25h
+F80027  B07F             MOV AL,7Fh
+F80029  B420             MOV AH,20h
+F8002B  F6E4             MUL AH
+F8002D  71FE             JNO  2Dh
+F8002F  B8FFFF           MOV AX,0FFFFh
+F80032  8ED8             MOV DS,AX
+F80034  8CDB             MOV BX,DS
+F80036  8ED3             MOV SS,BX
+F80038  8CD1             MOV CX,SS
+F8003A  8EC1             MOV ES,CX
+F8003C  8CC2             MOV DX,ES
+F8003E  8BE2             MOV SP,DX
+F80040  8BEC             MOV BP,SP
+F80042  8BF5             MOV SI,BP
+F80044  8BFE             MOV DI,SI
+F80046  3BF8             CMP DI,AX
+F80048  75FE             JNZ  48h
+F8004A  2D5555           SUB AX,5555h
+F8004D  73E3             JNC  32h
+F8004F  BA3904           MOV DX,439h
+F80052  EC               IN AL,DX
+F80053  EC               IN AL,DX
+F80054  0AC0             OR AL,AL
+F80056  7527             JNZ  7Fh
+F80058  B092             MOV AL,92h
+F8005A  E637             OUT 37h,AL
+F8005C  EB00             JMP SHORT 5Eh
+F8005E  EB00             JMP SHORT 60h
+F80060  B0FF             MOV AL,0FFh
+F80062  E635             OUT 35h,AL
+F80064  B80003           MOV AX,300h
+F80067  E643             OUT 43h,AL
+F80069  B90A00           MOV CX,0Ah
+F8006C  E2FE             LOOP 6Ch
+F8006E  FECC             DEC AH
+F80070  75F5             JNZ  67h
+F80072  B040             MOV AL,40h
+F80074  E643             OUT 43h,AL
+F80076  B90A00           MOV CX,0Ah
+F80079  E2FE             LOOP 79h
+F8007B  B05E             MOV AL,5Eh
+F8007D  E643             OUT 43h,AL
+F8007F  EC               IN AL,DX
+F80080  2402             AND AL,02h
+F80082  0C34             OR AL,34h
+F80084  EE               OUT DX,AL
+F80085  B800A0           MOV AX,0A000h
+F80088  8EC0             MOV ES,AX
+F8008A  E435             IN AL,35h
+F8008C  A880             TEST AL,80h
+F8008E  7509             JNZ  99h
+F80090  8E160604         MOV SS,[0406h]
+F80094  8B260404         MOV SP,[0404h]
+F80098  CB               RETF
+F80099  A820             TEST AL,20h
+F8009B  751F             JNZ  0BCh
+F8009D  BDA300           MOV BP,0A3h
+F800A0  E99900           JMP 13Ch
+---- gap 00A3..00BC (25 bytes) ----
+F800BC  B070             MOV AL,70h
+F800BE  E677             OUT 77h,AL
+F800C0  EB00             JMP SHORT 0C2h
+F800C2  EB00             JMP SHORT 0C4h
+F800C4  B000             MOV AL,00h
+F800C6  E673             OUT 73h,AL
+F800C8  EB00             JMP SHORT 0CAh
+F800CA  EB00             JMP SHORT 0CCh
+F800CC  B000             MOV AL,00h
+F800CE  E673             OUT 73h,AL
+F800D0  BEE500           MOV SI,0E5h
+F800D3  FC               CLD
+F800D4  32ED             XOR CH,CH
+F800D6  2EAD             CS:LODSW
+F800D8  8AC8             MOV CL,AL
+F800DA  8AF4             MOV DH,AH
+F800DC  2EAD             CS:LODSW
+F800DE  8AD4             MOV DL,AH
+F800E0  EE               OUT DX,AL
+F800E1  E2F9             LOOP 0DCh
+F800E3  FFE6             JMP SI
+---- gap 00E5..013C (87 bytes) ----
+F8013C  E433             IN AL,33h
+F8013E  A808             TEST AL,08h
+F80140  7506             JNZ  148h
+F80142  B000             MOV AL,00h
+F80144  E66E             OUT 6Eh,AL
+F80146  EB04             JMP SHORT 14Ch
+F80148  B001             MOV AL,01h
+F8014A  E66E             OUT 6Eh,AL
+F8014C  BBE504           MOV BX,4E5h
+F8014F  B440             MOV AH,40h
+F80151  BC5701           MOV SP,157h
+F80154  E90803           JMP 45Fh
+---- gap 0157..045F (776 bytes) ----
+F8045F  BA6200           MOV DX,62h
+F80462  F6C480           TEST AH,80h
+F80465  7403             JZ   46Ah
+F80467  BAA200           MOV DX,0A2h
+F8046A  F6C440           TEST AH,40h
+F8046D  751F             JNZ  48Eh
+F8046F  F6C480           TEST AH,80h
+F80472  7508             JNZ  47Ch
+F80474  E460             IN AL,60h
+F80476  A804             TEST AL,04h
+F80478  74FA             JZ   474h
+F8047A  EB12             JMP SHORT 48Eh
+F8047C  EB00             JMP SHORT 47Eh
+F8047E  EB00             JMP SHORT 480h
+F80480  EB00             JMP SHORT 482h
+F80482  E4A0             IN AL,0A0h
+F80484  A804             TEST AL,04h
+F80486  74F4             JZ   47Ch
+F80488  EB00             JMP SHORT 48Ah
+F8048A  EB00             JMP SHORT 48Ch
+F8048C  EB00             JMP SHORT 48Eh
+F8048E  2E8A0F           MOV CL,CS:[BX]
+F80491  43               INC BX
+F80492  32ED             XOR CH,CH
+F80494  2E8A07           MOV AL,CS:[BX]
+F80497  43               INC BX
+F80498  FEC5             INC CH
+F8049A  FEC9             DEC CL
+F8049C  EE               OUT DX,AL
+F8049D  83EA02           SUB DX,0002h
+F804A0  0AC9             OR CL,CL
+F804A2  7431             JZ   4D5h
+F804A4  80FD10           CMP CH,10h
+F804A7  7C21             JL   4CAh
+F804A9  32ED             XOR CH,CH
+F804AB  F6C480           TEST AH,80h
+F804AE  7508             JNZ  4B8h
+F804B0  E460             IN AL,60h
+F804B2  A804             TEST AL,04h
+F804B4  74FA             JZ   4B0h
+F804B6  EB12             JMP SHORT 4CAh
+F804B8  EB00             JMP SHORT 4BAh
+F804BA  EB00             JMP SHORT 4BCh
+F804BC  EB00             JMP SHORT 4BEh
+F804BE  E4A0             IN AL,0A0h
+F804C0  A804             TEST AL,04h
+F804C2  74F4             JZ   4B8h
+F804C4  EB00             JMP SHORT 4C6h
+F804C6  EB00             JMP SHORT 4C8h
+F804C8  EB00             JMP SHORT 4CAh
+F804CA  2E8A07           MOV AL,CS:[BX]
+F804CD  43               INC BX
+F804CE  FEC5             INC CH
+F804D0  FEC9             DEC CL
+F804D2  EE               OUT DX,AL
+F804D3  EBCB             JMP SHORT 4A0h
+F804D5  FFE4             JMP SP
