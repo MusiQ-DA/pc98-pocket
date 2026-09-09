@@ -152,6 +152,7 @@ module tb_pc98_boot;
     // of one instruction's operand fetch.
     assign din = ~mem_rd_n ? (is_rom(cpu_address) ? rom_byte(cpu_address)
                                                   : ram[cpu_address])
+                  : pit_iocycle ? pit_dout
                            : 8'hFF;
 
     // ---- I/O ---------------------------------------------------------------
@@ -196,6 +197,47 @@ module tb_pc98_boot;
             end
         end
     end
+
+    // ---- 8253, as the chipset wires it --------------------------------------
+    //
+    // The counter test at FD873 is the first thing in this BIOS that demands
+    // an ANSWER rather than a port write: load FF, latch, read, and halt if
+    // the read matches the load -- the signature of a counter that never
+    // counts. So the bench carries the real chip model, with counter 2's gate
+    // as a plusarg: +gate2=0 is the AT wiring the machine died on (gate from
+    // 8255 port B bit 0, which the BIOS has not written at that point); the
+    // default 1 is the PC-98 wiring the fix restores.
+    logic gate2 = 1'b1;
+    initial begin
+        int v;
+        if ($value$plusargs("gate2=%d", v)) gate2 = (v != 0);
+    end
+
+    logic timer_clock = 1'b0;
+    always_ff @(posedge clk_chipset)
+        if (peripheral_ce) timer_clock <= ~timer_clock;
+
+    wire [7:0] pit_dout;
+    wire pit_iocycle = (~io_rd_n | ~io_wr_n) & cpu_address[0]
+                     & (cpu_address[7:4] == 4'h7) & ~cpu_address[9] & ~cpu_address[8];
+
+    KF8253 u_pit (
+        .clock            (clk_chipset),
+        .reset            (reset),
+        .chip_select_n    (~pit_iocycle),
+        .read_enable_n    (io_rd_n),
+        .write_enable_n   (io_wr_n),
+        .address          (cpu_address[2:1]),
+        .data_bus_in      (cpu_data_bus),
+        .data_bus_out     (pit_dout),
+
+        .counter_0_clock  (timer_clock), .counter_0_gate (1'b1),
+        .counter_0_out    (),
+        .counter_1_clock  (timer_clock), .counter_1_gate (1'b1),
+        .counter_1_out    (),
+        .counter_2_clock  (timer_clock), .counter_2_gate (gate2),
+        .counter_2_out    ()
+    );
 
     // ---- execution trace, from inside the CPU -------------------------------
     //
@@ -342,6 +384,10 @@ module tb_pc98_boot;
         end
 
         $display("--- done ---");
+        $display("PIT gate2     %0d  (counters now %04X %04X %04X)", gate2,
+                 u_pit.u_KF8253_Counter_0.count[15:0],
+                 u_pit.u_KF8253_Counter_1.count[15:0],
+                 u_pit.u_KF8253_Counter_2.count[15:0]);
         $display("fetches       %0d", fetches);
         $display("distinct PCs  %0d", ring_w);
         $display("PC range      %05X .. %05X", pc_min, pc_max);
