@@ -191,18 +191,28 @@ void post_mon_tick(void)
 #ifdef MACHINE_PC98
     {
         uint32_t io0 = *POST_IOH0, io1 = *POST_IOH1, ios = *POST_IOST;
-        // Two ports, not four. The row ran to column 37 with four of them and
-        // BANK -- the field this build exists to show -- came out unreadable
-        // on the actual screen. The two oldest entries are worth less than
-        // being able to read the newest ones.
+        // Four ports now, on their own row.
+        //
+        // Two of them shared row 12 with N and BANK and the row ran to column
+        // 37, which put BANK -- the field that build existed to show -- off the
+        // readable part of the screen. The panel has empty rows below, so the
+        // history gets one to itself and nothing has to be dropped: the ITF is
+        // running, and the sequence of ports it touches is how far it got.
         osd_draw_string(&fb, 4, 12, "IO", OSD_LABEL);
         hex(4 + 3 * 8, 12, io0 & 0xFFFFu, 4);
         hex(4 + 8 * 8, 12, io0 >> 16, 4);
-        osd_draw_string(&fb, 4 + 14 * 8, 12, "N", OSD_LABEL);
-        dec(4 + 16 * 8, 12, ios & 0xFFFFu);
-        osd_draw_string(&fb, 4 + 22 * 8, 12, "BANK", OSD_LABEL);
-        dec(4 + 27 * 8, 12, (ios >> 16) & 1u);
-        (void) io1;
+        hex(4 + 13 * 8, 12, io1 & 0xFFFFu, 4);
+        hex(4 + 18 * 8, 12, io1 >> 16, 4);
+        osd_draw_string(&fb, 4 + 23 * 8, 12, "N", OSD_LABEL);
+        dec(4 + 25 * 8, 12, ios & 0xFFFFu);
+        // BANK stays on this row, pushed right: the panel is forty columns and
+        // four ports plus N reach thirty, so it fits with room to spare. The
+        // rows below look empty on a PC-98 screen but every one of them carries
+        // PC/AT-only fields that the layout check still counts.
+        osd_draw_string(&fb, 4 + 31 * 8, 12, "BANK", OSD_LABEL);
+        // hex, not dec: it is one bit, and dec() has no fixed width so the
+        // layout check has to assume five digits and calls the row off-panel.
+        hex(4 + 36 * 8, 12, (ios >> 16) & 1u, 1);
     }
 #endif
 
