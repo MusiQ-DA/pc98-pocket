@@ -499,6 +499,11 @@ module tb_pc98_boot;
             8'h04: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd1; end
             8'h07: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd0; end
             8'h08: begin fdc_shape_writes = 4'd0; fdc_shape_results = 4'd2; end
+            8'h0F: begin fdc_shape_writes = 4'd2; fdc_shape_results = 4'd0; end
+            8'h0A, 8'h4A: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd7; end
+            8'h05, 8'h06, 8'h45, 8'h46, 8'h65, 8'h66, 8'hE5, 8'hE6:
+                   begin fdc_shape_writes = 4'd8; fdc_shape_results = 4'd7; end
+            8'h4D, 8'hCD: begin fdc_shape_writes = 4'd5; fdc_shape_results = 4'd7; end
             default: begin fdc_shape_writes = 4'd0; fdc_shape_results = 4'd2; end
         endcase
     end
@@ -526,7 +531,7 @@ module tb_pc98_boot;
         end
         if (fdc_cmd_done) begin
             if (fdc_results_left != 4'd0) fdc_in_result <= 1'b1;
-            else if (fdc_cmd == 8'h07)    fdc_irq3      <= 1'b1;
+            else if (fdc_cmd == 8'h07 || fdc_cmd == 8'h0F) fdc_irq3 <= 1'b1;
         end
         if (fdc_irq3) fdc_irq3 <= 1'b0;
     end
