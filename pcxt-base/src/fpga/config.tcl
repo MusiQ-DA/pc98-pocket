@@ -24,6 +24,11 @@ set_global_assignment -name VERILOG_MACRO "MACHINE_PC98=1"
 # the machine has a picture to show.
 # set_global_assignment -name VERILOG_MACRO "PC98_DEBUG_BANDS=1"
 
+# A 16x16 white square at the OSD's coordinate origin, so a build that still
+# shows no panel says whether osd_hcnt/osd_vcnt reach the window at all.
+# Remove once the OSD is up.
+set_global_assignment -name VERILOG_MACRO "PC98_OSD_MARK=1"
+
 # Route SDRAM through sdram_mp (via sdram_kf_shim) instead of KFSDRAM.
 # RAM.sv tests this with `ifdef, so setting it to 0 would still select the shim
 # -- COMMENT THE LINE OUT to fall back to the stock controller for a hardware A/B.
