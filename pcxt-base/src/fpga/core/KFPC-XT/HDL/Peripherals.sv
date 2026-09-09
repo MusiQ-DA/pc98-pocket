@@ -1163,21 +1163,33 @@ end
     wire [9:0] pc98_h, pc98_v;
     wire       pc98_hs, pc98_vs, pc98_hb, pc98_vb, pc98_de, pc98_fs;
 
+    // Free-running: the raster does not belong to the guest.
+    //
+    // Held by `reset`, the timing generator stops whenever the guest does --
+    // and the OSD is composited into the frame this produces, so holding the
+    // 8088 takes the display with it. That makes every diagnostic that needs
+    // the guest stopped, the SDRAM self-test above all, impossible to read: it
+    // holds the guest, and the screen goes dark exactly when it has something
+    // to say. The splash and the boot hold have the same problem in smaller
+    // form.
+    //
+    // These are free-running counters with no state worth resetting, and the
+    // dot clock is up long before anything else, so there is nothing to hold
+    // them for.
     pc98_video_timing u_pc98_timing (
-        .clk(clk_vga_cga), .ce(1'b1), .rst(reset),
+        .clk(clk_vga_cga), .ce(1'b1), .rst(1'b0),
         .hcount(pc98_h), .vcount(pc98_v),
         .hsync(pc98_hs), .vsync(pc98_vs),
         .hblank(pc98_hb), .vblank(pc98_vb), .de(pc98_de), .frame_start(pc98_fs)
     );
 
     // Blink, about 2 Hz: one toggle every 32 frames of 56.4 Hz is 1.76 Hz.
-    logic [5:0] pc98_blink_cnt;
-    logic       pc98_blink;
+    // Initialised at declaration rather than reset, for the same reason as the
+    // timing generator: it must keep running while the guest is held.
+    logic [5:0] pc98_blink_cnt = 6'd0;
+    logic       pc98_blink     = 1'b1;
     always_ff @(posedge clk_vga_cga) begin
-        if (reset) begin
-            pc98_blink_cnt <= 6'd0;
-            pc98_blink     <= 1'b1;
-        end else if (pc98_fs) begin
+        if (pc98_fs) begin
             pc98_blink_cnt <= pc98_blink_cnt + 6'd1;
             if (pc98_blink_cnt == 6'd31) begin
                 pc98_blink_cnt <= 6'd0;
