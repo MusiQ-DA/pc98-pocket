@@ -2,7 +2,7 @@
 # deploy_pc98.sh [--run N]
 #
 # Like deploy.sh, but for the PC-98 core: it has to create the whole core
-# directory (hiroya.PC98) rather than drop a bitstream into an existing one,
+# directory (hiroya.PC9801) rather than drop a bitstream into an existing one,
 # and it has to place two ROMs the core cannot boot without.
 #
 # The ROMs are the user's own dumps and are not in this repository. Point
@@ -104,7 +104,7 @@ fi
 say "have $(stat -f%z "$ART/ap_core.rbf") bytes of bitstream"
 
 bash scripts/package_pc98.sh "$ART" || exit 1
-cp "$ROMS/bios.rom" "$ROMS/itf.rom" "$ROMS/font.rom" dist/pc98/Assets/pc98/hiroya.PC98/
+cp "$ROMS/bios.rom" "$ROMS/itf.rom" "$ROMS/font.rom" dist/pc98/Assets/pc98/hiroya.PC9801/
 # The softcore's firmware rides along as a slot, so a change to an on-screen
 # readout is a file copy rather than a Quartus compile. Built here rather than
 # assumed present: firmware.bin is gitignored, being a build product.
@@ -131,7 +131,7 @@ sys.exit(0 if b == bytes(vb[:len(b)]) else 1)
 PY
 say "firmware.bin matches firmware.vh"
 
-cp pcxt-base/src/firmware/firmware.bin dist/pc98/Assets/pc98/hiroya.PC98/
+cp pcxt-base/src/firmware/firmware.bin dist/pc98/Assets/pc98/hiroya.PC9801/
 say "packaged with ROMs"
 
 # ---- 3. write --------------------------------------------------------------
@@ -143,9 +143,9 @@ while [ ! -d "$VOL" ]; do
 done
 say "card is here"
 
-mkdir -p "$VOL/Cores/hiroya.PC98" "$VOL/Assets/pc98/hiroya.PC98" "$VOL/Platforms"
-cp dist/pc98/Cores/hiroya.PC98/* "$VOL/Cores/hiroya.PC98/"
-cp dist/pc98/Assets/pc98/hiroya.PC98/* "$VOL/Assets/pc98/hiroya.PC98/"
+mkdir -p "$VOL/Cores/hiroya.PC9801" "$VOL/Assets/pc98/hiroya.PC9801" "$VOL/Platforms"
+cp dist/pc98/Cores/hiroya.PC9801/* "$VOL/Cores/hiroya.PC9801/"
+cp dist/pc98/Assets/pc98/hiroya.PC9801/* "$VOL/Assets/pc98/hiroya.PC9801/"
 cp dist/pc98/Platforms/* "$VOL/Platforms/" 2>/dev/null || true
 sync
 
@@ -156,7 +156,7 @@ sync
 # with no complaint, so the check has to cover the assets and the path.
 PLAT=$(python3 -c "
 import json
-d=json.load(open('dist/pc98/Cores/hiroya.PC98/core.json'.strip()))
+d=json.load(open('dist/pc98/Cores/hiroya.PC9801/core.json'.strip()))
 print(d['core']['metadata']['platform_ids'][0])")
 if [ "$PLAT" != "pc98" ]; then
     say "core.json says platform '$PLAT' but the assets went to pc98 -- stopping"
@@ -164,10 +164,10 @@ if [ "$PLAT" != "pc98" ]; then
 fi
 
 fail=0
-for f in Cores/hiroya.PC98/bitstream.rbf_r Cores/hiroya.PC98/core.json \
-         Cores/hiroya.PC98/data.json Assets/pc98/hiroya.PC98/bios.rom \
-         Assets/pc98/hiroya.PC98/itf.rom Assets/pc98/hiroya.PC98/font.rom \
-         Assets/pc98/hiroya.PC98/firmware.bin Platforms/pc98.json; do
+for f in Cores/hiroya.PC9801/bitstream.rbf_r Cores/hiroya.PC9801/core.json \
+         Cores/hiroya.PC9801/data.json Assets/pc98/hiroya.PC9801/bios.rom \
+         Assets/pc98/hiroya.PC9801/itf.rom Assets/pc98/hiroya.PC9801/font.rom \
+         Assets/pc98/hiroya.PC9801/firmware.bin Platforms/pc98.json; do
     if cmp -s "dist/pc98/$f" "$VOL/$f"; then
         say "  ok  $f"
     else
@@ -175,7 +175,7 @@ for f in Cores/hiroya.PC98/bitstream.rbf_r Cores/hiroya.PC98/core.json \
     fi
 done
 [ $fail -eq 0 ] || { say "VERIFY FAILED"; exit 1; }
-say "written and verified to hiroya.PC98"
+say "written and verified to hiroya.PC9801"
 
 diskutil eject "$VOL" >/dev/null 2>&1 && say "ejected -- ready to test" \
                                       || say "written; eject by hand"
