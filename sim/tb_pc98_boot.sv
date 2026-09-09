@@ -159,6 +159,7 @@ module tb_pc98_boot;
                   : pic2_iocycle   ? pic2_dout
                   : kbd_data_iocycle ? 8'h60
                   : kbd_stat_iocycle ? 8'h02
+                  : gdc_stat_iocycle ? gdc_status_mock
                            : 8'hFF;
 
     // ---- I/O ---------------------------------------------------------------
@@ -304,6 +305,32 @@ module tb_pc98_boot;
                       & cpu_address[3] & (cpu_address[7:4] == 4'h0)
                       & ~cpu_address[9] & ~cpu_address[8];
 
+    // VSYNC stand-in: the machine's raster raises IRQ2 once per frame, and
+    // the BIOS's FED23 sequence unmasks it (port 0x02, bit 2) then waits at
+    // FED44 for the handler it installed on INT 0x0A. The GDC status waits
+    // at FDBB3/FDC3E poll the same flag, so the pulse is held for a real
+    // retrace's worth of clocks -- a 3-clock blip is too narrow for the
+    // BIOS's polling loop to ever see.
+    logic [19:0] crt_period_cnt = 20'd0;
+    logic [15:0] crt_pulse_cnt  = 16'd0;
+    logic        crt_vsync_mock = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (crt_pulse_cnt == 16'd0) begin
+            crt_period_cnt <= crt_period_cnt + 20'd1;
+            if (crt_period_cnt >= 20'd760_000) begin
+                crt_vsync_mock  <= 1'b1;
+                crt_pulse_cnt   <= 16'd1;
+                crt_period_cnt  <= 20'd0;
+            end
+        end else begin
+            crt_pulse_cnt <= crt_pulse_cnt + 16'd1;
+            if (crt_pulse_cnt >= 16'd20_000) begin   // ~460 us, like a retrace
+                crt_vsync_mock <= 1'b0;
+                crt_pulse_cnt  <= 16'd0;
+            end
+        end
+    end
+
     wire [7:0] pic1_dout, pic2_dout;
     wire       pic1_to_cpu_buf, pic2_to_cpu;
     wire       pic1_data_bus_io, pic2_data_bus_io;
@@ -325,7 +352,7 @@ module tb_pc98_boot;
         .slave_program_n  (1'b1),
         .interrupt_acknowledge_n (inta_n),
         .interrupt_to_cpu (pic1_to_cpu_buf),
-        .interrupt_request({pic2_to_cpu, 6'b0, timer_out0})
+        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, 1'b0, timer_out0})
     );
 
     KF8259 u_pic2 (
@@ -353,6 +380,16 @@ module tb_pc98_boot;
     always_ff @(posedge clk_chipset)
         if (cpu_ce_negedge) pic1_to_cpu <= pic1_to_cpu_buf;
 
+    // How far the CRT interrupt gets: edge seen, INT raised, INTR delivered.
+    int  crt_edges = 0, int_rises = 0;
+    logic irr2_prev = 1'b0, int_prev = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (u_pic1.interrupt_request_register[2] & ~irr2_prev) crt_edges <= crt_edges + 1;
+        if (pic1_to_cpu_buf & ~int_prev)                        int_rises <= int_rises + 1;
+        irr2_prev <= u_pic1.interrupt_request_register[2];
+        int_prev  <= pic1_to_cpu_buf;
+    end
+
     // INTA count: how many acknowledges the CPU issued. One means the first
     // interrupt reached the INTA pair; the handler ran if the EU ever stands
     // on FD80:02BC or beyond FDAB1.
@@ -361,7 +398,12 @@ module tb_pc98_boot;
     always_ff @(posedge clk_chipset) begin
         if (~inta_n) begin
             if (inta_count == 0) $display("  %8t  INTA #1", $time);
-            if (inta_d) $display("  %8t  INTA  vector %02X", $time, din);
+            if (inta_d) $display("  %8t  INTA  vector %02X  pic2_int=%b irrg=%02X isrg=%02X imr=%02X casc=%b",
+                                 $time, din, pic2_to_cpu,
+                                 u_pic1.interrupt_request_register,
+                                 u_pic1.in_service_register,
+                                 u_pic1.interrupt_mask,
+                                 pic1_cascade_out);
             inta_count <= inta_count + 1;
         end
         inta_d <= inta_n;
@@ -384,6 +426,13 @@ module tb_pc98_boot;
     // sweep) instead of burning millions of clocks in the absent-path loop.
     wire kbd_stat_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0043);
     wire kbd_data_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0041);
+
+    // Text GDC status at 0x60, shaped exactly like PERIPHERALS' gdc_status:
+    // bit 5 rides the vertical retrace (the FDBB3 wait), bit 2 is a constant
+    // one (the FDE00C parameter-path wait passes instantly), bit 0 one too.
+    wire gdc_stat_iocycle = ~io_rd_n & ((cpu_address[15:0] == 16'h0060)
+                                      |  (cpu_address[15:0] == 16'h00A0));
+    wire [7:0] gdc_status_mock = 8'h05 | (crt_vsync_mock ? 8'h20 : 8'h00);
 
 
     // ---- execution trace, from inside the CPU -------------------------------
@@ -450,14 +499,14 @@ module tb_pc98_boot;
 
     logic [19:0] eu_pc_d = 20'hFFFFF;
     int          eu_steps = 0, eu_traced = 0;
-    logic [19:0] eu_ring [0:31];
+    logic [19:0] eu_ring [0:127];
     int          eu_ring_w = 0;
 
     always_ff @(posedge clk_chipset) begin
         eu_pc_d <= eu_pc;
         if (eu_pc != eu_pc_d) begin
             eu_steps <= eu_steps + 1;
-            eu_ring[eu_ring_w[4:0]] <= eu_pc;
+            eu_ring[eu_ring_w[6:0]] <= eu_pc;
             eu_ring_w <= eu_ring_w + 1;
             if (eu_traced < 0) begin
                 eu_traced <= eu_traced + 1;
@@ -536,6 +585,15 @@ module tb_pc98_boot;
                  u_pit.u_KF8253_Counter_1.count[15:0],
                  u_pit.u_KF8253_Counter_2.count[15:0]);
         $display("INTA count    %0d", inta_count);
+        $display("CRT edges seen %0d, INT rises %0d", crt_edges, int_rises);
+        $display("PIC1 irr=%02X isr=%02X imr=%02X int=%b | PIC2 irr=%02X imr=%02X",
+                 u_pic1.interrupt_request_register, u_pic1.in_service_register,
+                 u_pic1.interrupt_mask, pic1_to_cpu,
+                 u_pic2.interrupt_request_register, u_pic2.interrupt_mask);
+        $display("[0x53C]=%02X  [0x0542]=%04X:%04X  IVT0A=%04X:%04X",
+                 ram[8'h3C],
+                 {ram[9'h543],ram[9'h542]}, {ram[9'h545],ram[9'h544]},
+                 {ram[9'h2B],ram[9'h2A]}, {ram[9'h2D],ram[9'h2C]});
         $display("IVT 08 : %04X:%04X   IVT 18: %04X:%04X",
                  {ram[8'h23],ram[8'h22]}, {ram[8'h21],ram[8'h20]},
                  {ram[8'h63],ram[8'h62]}, {ram[8'h61],ram[8'h60]});
@@ -556,9 +614,9 @@ module tb_pc98_boot;
         $display("last 16 microcode addresses:");
         for (i = 0; i < 16; i = i + 1)
             $display("  %04X", urom_seen[(urom_w + i) & 15]);
-        $display("last 32 EU addresses (oldest first):");
-        for (i = 0; i < 32; i = i + 1)
-            $display("  %05X", eu_ring[(eu_ring_w + i) & 31]);
+        $display("last 128 EU addresses (oldest first):");
+        for (i = 0; i < 128; i = i + 1)
+            $display("  %05X", eu_ring[(eu_ring_w + i) & 127]);
         $finish;
     end
 
