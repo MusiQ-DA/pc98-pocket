@@ -259,15 +259,26 @@ void post_mon_tick(void)
         hex(4 + 22 * 8, 132, sdram_peek(0xF800E5u), 2);
         hex(4 + 25 * 8, 132, sdram_peek(0xF800E6u), 2);
         hex(4 + 28 * 8, 132, sdram_peek(0xF800E7u), 2);
-        osd_draw_string(&fb, 4, 142, "WANT", OSD_LABEL);
-        hex(4 +  7 * 8, 142, 0xEEu, 2);
-        hex(4 + 10 * 8, 142, 0xE2u, 2);
-        hex(4 + 13 * 8, 142, 0xF9u, 2);
-        hex(4 + 16 * 8, 142, 0xFFu, 2);
-        hex(4 + 19 * 8, 142, 0xE6u, 2);
-        hex(4 + 22 * 8, 142, 0x0Du, 2);
-        hex(4 + 25 * 8, 142, 0x00u, 2);
-        hex(4 + 28 * 8, 142, 0x44u, 2);
+        // A control, on the same path. F800E0 came back all zeros, but the
+        // peek runs through the self-test master, which was built to work with
+        // the 8088 held in reset -- and the guest is running now. A read that
+        // loses its arbitration returns a stale zero, which looks exactly like
+        // an empty ROM.
+        //
+        // FFFF0 is the one place whose contents are already known: RD0 shows
+        // the CPU reading EA 00 00 00 F8 there, and LD0 two rows up shows what
+        // the loader wrote. If this row matches LD0, the peek works and F800E0
+        // really is empty. If it comes back zeros too, the peek is the thing
+        // that is broken and F800E0 says nothing.
+        osd_draw_string(&fb, 4, 142, "FFFF0", OSD_LABEL);
+        hex(4 +  7 * 8, 142, sdram_peek(0xFFFF0u), 2);
+        hex(4 + 10 * 8, 142, sdram_peek(0xFFFF1u), 2);
+        hex(4 + 13 * 8, 142, sdram_peek(0xFFFF2u), 2);
+        hex(4 + 16 * 8, 142, sdram_peek(0xFFFF3u), 2);
+        hex(4 + 19 * 8, 142, sdram_peek(0xFFFF4u), 2);
+        hex(4 + 22 * 8, 142, sdram_peek(0xFFFF5u), 2);
+        hex(4 + 25 * 8, 142, sdram_peek(0xFFFF6u), 2);
+        hex(4 + 28 * 8, 142, sdram_peek(0xFFFF7u), 2);
     }
 #endif
     osd_draw_string(&fb, 4, 152, "DROP", OSD_LABEL);
