@@ -478,13 +478,14 @@ module PERIPHERALS #(
         .interrupt_to_cpu           (interrupt_to_cpu_buf),
 `ifdef MACHINE_PC98
         // IRQ7 is the slave's cascade line; the machine's own IRQ7 has to
-        // stand down for it.
+        // stand down for it. IRQ2 is the CRT interrupt -- see crt_vsync_irq
+        // above; without it the BIOS parks at FED44 for good.
         .interrupt_request          ({interrupt2_to_cpu,
                                         fdd_interrupt,
                                         interrupt_request[5],
                                         uart_interrupt,
                                         uart2_interrupt,
-                                        interrupt_request[2],
+                                        crt_vsync_irq,
                                         keybord_interrupt,
                                         timer_interrupt})
 `else
@@ -1361,6 +1362,22 @@ end
 
     // ------------------------------------------------------ GDC status
     //
+    // The CRT interrupt. The text GDC raises IRQ2 once per frame in vertical
+    // retrace; the BIOS's FED23 sequence installs a handler on INT 0x0A,
+    // unmasks IRQ2 (IMR bit 2), and spins at FED44 until the handler clears
+    // 0x53C bit 6 -- which is where the machine sits without this. The raster
+    // is already running (it drew the cursor), so its vsync edge IS the
+    // interrupt; the 8259 is edge-triggered and one clean edge per frame is
+    // exactly what the real GDC gives it. The flag lives here rather than in
+    // core_top because everything else the BIOS polls is answered here too.
+    logic vs_irq_s1 = 1'b0, vs_irq_s2 = 1'b0, vs_irq_s3 = 1'b0;
+    always_ff @(posedge clk_vga_cga) begin
+        vs_irq_s1 <= pc98_vs;
+        vs_irq_s2 <= vs_irq_s1;
+        vs_irq_s3 <= vs_irq_s2;
+    end
+    wire crt_vsync_irq = vs_irq_s2 & ~vs_irq_s3;
+
     // The ITF's first hard gate. At F80388 it does IN AL,60h / TEST AL,20h and
     // waits for bit 5 to go low, high, low -- twice -- before it will go on.
     // With that port answering a constant it spins there forever, which is

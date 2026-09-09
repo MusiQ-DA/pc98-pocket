@@ -44,6 +44,13 @@ module KF8259_Interrupt_Request (
         //
         // Request Latch
         //
+        // Latched, not level-following: the real 8259's IRR holds an edge
+        // until the acknowledge clears it. Writing the edge through every
+        // clock (IRR <= edge) made any request whose pin did not STAY high
+        // -- the CRT interrupt's one-frame pulse, above all -- vanish before
+        // ACK1 could sample it, and the chip then acknowledged nothing as
+        // IRQ7's vector. The timer got away with it only because mode 0's
+        // output stays high.
         always_ff @(posedge clock, posedge reset) begin
             if (reset)
                 interrupt_request_register[ir_bit_no] <= 1'b0;
@@ -54,7 +61,8 @@ module KF8259_Interrupt_Request (
             else if (level_or_edge_toriggered_config)
                 interrupt_request_register[ir_bit_no] <= interrupt_request_pin[ir_bit_no];
             else
-                interrupt_request_register[ir_bit_no] <= interrupt_request_edge[ir_bit_no];
+                interrupt_request_register[ir_bit_no] <= interrupt_request_register[ir_bit_no]
+                                                      | interrupt_request_edge[ir_bit_no];
         end
     end
     endgenerate
