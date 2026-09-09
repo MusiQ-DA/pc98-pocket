@@ -674,12 +674,12 @@ module tb_pc98_boot;
         repeat (40) @(posedge clk_chipset);
         reset = 1'b0;
 
-        // Long enough for a real POST to finish: 300 five-million chipset-
-        // clock chunks is about 35 seconds of guest time -- through the FDD
-        // sequence, the boot beep, and the memory test, into whatever the
-        // BIOS does when no disk answers. A progress line every chunk says
+        // Long enough to finish POST: 780 five-million chipset-clock chunks
+        // is about 90 seconds of guest time. 35 seconds cleared the screen
+        // and got the memory test to ~280 KB; a full sweep of a megabyte,
+        // then, wants three times that. A progress line every chunk says
         // whether it is moving or parked.
-        for (i = 0; i < 300; i = i + 1) begin
+        for (i = 0; i < 780; i = i + 1) begin
             repeat (5_000_000) @(posedge clk_chipset);
             $display("  ... %0t  EU %05X  urom %04X  cyc %0d/%0d  ratio %0d dec %0d  zero %0d",
                      $time, eu_pc, urom,
