@@ -111,10 +111,19 @@ static uint8_t rom_b[8];   // FFFF0 : the reset vector, as a control
 
 void postmon_capture_rom(void)
 {
-    for (uint32_t i = 0; i < 8; i++) {
-        rom_a[i] = sdram_peek(0xF800E0u + i);
-        rom_b[i] = sdram_peek(0xFFFF0u + i);
-    }
+    // A damage map, not a hex dump. FFFF0 came back byte-perfect while
+    // F800E0 was unrecognisable -- not from any of the three ROM images -- so
+    // the question is which parts of the 32 KB arrived, not what one of them
+    // says. One byte from the head of each 4 KB page covers the lot.
+    //
+    // The file's values are FA 10 72 01 00 00 00 00; the last four pages read
+    // 00 in the image itself, so only the first four carry information.
+    for (uint32_t i = 0; i < 8; i++)
+        rom_a[i] = sdram_peek(0xF8000u + (i << 12));
+    // And the head of the ITF, whose first bytes the CPU demonstrably executed:
+    // FA 10 72 01 ... is the file, and the flag self-test starts at F8000.
+    for (uint32_t i = 0; i < 8; i++)
+        rom_b[i] = sdram_peek(0xF8000u + i);
 }
 
 void post_mon_tick(void)
@@ -263,7 +272,7 @@ void post_mon_tick(void)
     // 0077, 0073. F800E0 is that loop and the first bytes of its table, so the
     // file's own values are printed underneath as the key.
     {
-        osd_draw_string(&fb, 4, 132, "F800E0", OSD_LABEL);
+        osd_draw_string(&fb, 4, 132, "PAGES", OSD_LABEL);
         // Unrolled: check_osd_layout reads these calls literally and cannot
         // resolve a loop variable in the x expression.
         hex(4 +  7 * 8, 132, rom_a[0], 2);
@@ -285,7 +294,7 @@ void post_mon_tick(void)
         // the loader wrote. If this row matches LD0, the peek works and F800E0
         // really is empty. If it comes back zeros too, the peek is the thing
         // that is broken and F800E0 says nothing.
-        osd_draw_string(&fb, 4, 142, "FFFF0", OSD_LABEL);
+        osd_draw_string(&fb, 4, 142, "F8000", OSD_LABEL);
         hex(4 +  7 * 8, 142, rom_b[0], 2);
         hex(4 + 10 * 8, 142, rom_b[1], 2);
         hex(4 + 13 * 8, 142, rom_b[2], 2);
