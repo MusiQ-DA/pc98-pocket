@@ -456,14 +456,17 @@ module pocket_video (
     wire       pb_rule      = (pb_v >= 10'd320) && (pb_h >= 10'd64)
                               && (pb_h < 10'd320) && (pb_h[5:0] < 6'd2);
     wire [23:0] pb_bar_rgb  = {{8{pb_bar[2]}}, {8{pb_bar[1]}}, {8{pb_bar[0]}}};
-    // The overlay, on black. Colour bars showing through the panel's
-    // transparent pixels made the text unreadable, and the text is the point --
-    // so the whole framebuffer window gets a flat background and the bars stay
-    // outside it.
+    // The overlay, on a flat backdrop. Colour bars showing through the panel's
+    // transparent pixels made the text unreadable, and the text is the point.
+    //
+    // Mid grey, not black: the label colour is 0x101010, so anywhere the panel
+    // body did not get filled a black backdrop would hide the very text this is
+    // for. Grey keeps both the light body (0xF1E5D5) and the near-black label
+    // legible against it.
     wire [23:0] pb_rgb      = pb_rule       ? 24'hFF0000
                             : pb_band_area ? (pb_lit ? 24'hFFFFFF : 24'h202020)
                             : osd_show     ? osd_color
-                            : osd_in_area  ? 24'h000000
+                            : osd_in_area  ? 24'h606060
                             :                pb_bar_rgb;
 
     reg [23:0] pb_vid_rgb = 24'd0;
