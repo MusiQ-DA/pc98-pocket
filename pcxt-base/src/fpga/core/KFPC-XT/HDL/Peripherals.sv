@@ -311,19 +311,20 @@ module PERIPHERALS #(
 
     // 0x00CC  2DD drive/motor control (MAME fdc_2hd_2dd_ctrl<0>). The write
     //          latches; bit 3 is the motor; bit 0's rising edge arms a
-    //          ~100 ms timer whose expiry raises the drive interrupt. The
-    //          VM BIOS writes 0x09/0x0C here and waits for IRQ6 -- with no
-    //          timer it rewrites the port forever, which is where the
-    //          machine froze (N stuck at 17244, IO 00CC 00CC 00CC).
-    //          Read returns the latch with bit 5 set and bit 4 as
-    //          drive-ready; a machine with no drive still reports ready
+    //          ~100 ms timer whose expiry raises the drive interrupt --
+    //          MAME's fdc_trigger pulses the SLAVE PIC's IRQ2, and only
+    //          when bit 2 (XTMASK) is set. The VM BIOS writes 0x09/0x0C
+    //          here and waits for that interrupt; with nothing wired it
+    //          rewrote the port forever (N frozen at 17244, IO 00CC 00CC
+    //          00CC). Read returns the latch with bit 5 set and bit 4 as
+    //          drive-ready; a driveless machine still reports ready
     //          rather than halting, so a constant one is what it wants.
     wire fdd_cc_select = pc98_io_exact & (address[7:0] == 8'hCC);
     logic [7:0] fdd_cc_latch;
     logic       fdd_cc_trig_q;
     logic [22:0] fdd_cc_timer;
     logic        fdd_cc_armed;
-    logic        fdd_cc_irq;
+    logic        fdd_cc_irq;      // XTMASK interrupt: slave IRQ2
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
             fdd_cc_latch  <= 8'h00;
@@ -343,22 +344,120 @@ module PERIPHERALS #(
             if (fdd_cc_armed) begin
                 if (fdd_cc_timer == 23'd4_295_000) begin  // ~100 ms at 42.95 MHz
                     fdd_cc_armed <= 1'b0;
-                    fdd_cc_irq   <= 1'b1;
+                    fdd_cc_irq   <= fdd_cc_latch[2];
                 end else
                     fdd_cc_timer <= fdd_cc_timer + 23'd1;
             end else if (fdd_cc_irq)
-                fdd_cc_irq <= 1'b0;   // one chipset clock of IRQ6 is plenty
+                fdd_cc_irq <= 1'b0;   // one chipset clock is a whole edge
         end
     end
     wire        fdd_cc_read  = fdd_cc_select & ~io_read_n;
     wire [7:0]  fdd_cc_data  = fdd_cc_latch | 8'h30;
 
+    // Minimal uPD765 at 0x90-0x93 and its 0xC8-0xCB mirror (MAME maps the
+    // 2HD controller there; the VM BIOS drives it with DX). Command bytes
+    // are counted per the uPD765 table, every command finishes at once, and
+    // the answers all say "no drive attached":
+    //   0x03 SPECIFY     3 bytes in, no result -- back to idle
+    //   0x04 SENSE DRIVE 2 in, 1 result (0x00)
+    //   0x07 RECALIBRATE 2 in, no result, and a pulse on the slave's IRQ3,
+    //                     exactly how the real chip interrupts when the
+    //                     drive it was told to seek is not there
+    //   0x08 SENSE INT   1 in, 2 results (ST0 = 0x80 "not ready", PCN = 0)
+    //   anything else    treated as 1 in, 2 results, so an unexpected
+    //                     command still hands the BIOS an answer instead of
+    //                     a status port that never reaches the result phase
+    wire fdc_base_select = pc98_io_exact
+                         & ((address[7:2] == 6'h24) | (address[7:2] == 6'h32));
+    wire fdc_msr_select  = fdc_base_select & ~address[1];
+    wire fdc_fifo_select = fdc_base_select &  address[1];
+
+    logic [7:0] fdc_cmd;
+    logic [3:0] fdc_writes_left;
+    logic [3:0] fdc_results_left;
+    logic [3:0] fdc_result_idx;
+    logic [7:0] fdc_result0, fdc_result1;
+    logic       fdc_in_result;
+    logic       fdc_cmd_done;     // high for one clock when a command completes
+    logic       fdc_irq3;
+
+    // Command shape: bytes still to write after the first, and results.
+    always_comb begin
+        case (fdc_cmd)
+            8'h03: begin fdc_shape_writes = 4'd2; fdc_shape_results = 4'd0; end
+            8'h04: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd1; end
+            8'h07: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd0; end
+            8'h08: begin fdc_shape_writes = 4'd0; fdc_shape_results = 4'd2; end
+            default: begin fdc_shape_writes = 4'd0; fdc_shape_results = 4'd2; end
+        endcase
+    end
+    logic [3:0] fdc_shape_writes, fdc_shape_results;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            fdc_cmd         <= 8'h00;
+            fdc_writes_left <= 4'd0;
+            fdc_results_left<= 4'd0;
+            fdc_result_idx  <= 4'd0;
+            fdc_result0     <= 8'h00;
+            fdc_result1     <= 8'h00;
+            fdc_in_result   <= 1'b0;
+            fdc_cmd_done    <= 1'b0;
+            fdc_irq3        <= 1'b0;
+        end else begin
+            fdc_cmd_done <= 1'b0;
+            if (fdc_fifo_select & ~io_write_n) begin
+                if (fdc_writes_left == 4'd0) begin
+                    // First byte: it IS the command.
+                    fdc_cmd        <= internal_data_bus;
+                    fdc_result_idx <= 4'd0;
+                    case (internal_data_bus)
+                        8'h04: begin fdc_result0 <= 8'h00; end
+                        default: begin fdc_result0 <= 8'h80; fdc_result1 <= 8'h00; end
+                    endcase
+                    fdc_writes_left  <= fdc_shape_writes;
+                    fdc_results_left <= fdc_shape_results;
+                    if (fdc_shape_writes == 4'd0)
+                        fdc_cmd_done <= 1'b1;      // single-byte command
+                end else begin
+                    fdc_writes_left <= fdc_writes_left - 4'd1;
+                    if (fdc_writes_left == 4'd1)
+                        fdc_cmd_done <= 1'b1;      // that was the last byte
+                end
+            end else begin
+                // Reading results hands them out one by one; the last one
+                // returns the chip to idle.
+                if (fdc_fifo_select & ~io_read_n && fdc_in_result) begin
+                    fdc_result_idx <= fdc_result_idx + 4'd1;
+                    if (fdc_result_idx + 4'd1 >= fdc_results_left) begin
+                        fdc_in_result    <= 1'b0;
+                        fdc_results_left <= 4'd0;
+                    end
+                end
+            end
+            if (fdc_cmd_done) begin
+                if (fdc_results_left != 4'd0)
+                    fdc_in_result <= 1'b1;
+                else if (fdc_cmd == 8'h07)
+                    fdc_irq3 <= 1'b1;    // RECALIBRATE: no drive, instant IRQ
+            end
+            if (fdc_irq3)
+                fdc_irq3 <= 1'b0;
+        end
+    end
+    wire [7:0] fdc_msr  = fdc_in_result ? 8'hC0 : 8'h80;  // RQM, plus DIO in result phase
+    wire [7:0] fdc_fifo = (fdc_result_idx == 4'd0) ? fdc_result0
+                        : (fdc_result_idx == 4'd1) ? fdc_result1
+                        :                            8'h00;
+
     wire fdd_stub_read = (fdd_be_select | fdd_90_select | fdd_94_select
-                          | fdd_cc_select) & ~io_read_n;
-    wire [7:0] fdd_stub_data = fdd_be_select ? 8'hFB
-                             : fdd_90_select ? 8'h80
-                             : fdd_cc_select ? fdd_cc_data
-                             :                 8'h44;
+                          | fdd_cc_select | fdc_base_select) & ~io_read_n;
+    wire [7:0] fdd_stub_data = fdd_be_select  ? 8'hFB
+                             : fdd_90_select  ? fdc_msr
+                             : fdd_94_select  ? 8'h44
+                             : fdd_cc_select  ? fdd_cc_data
+                             : fdc_msr_select ? fdc_msr
+                             :                  fdc_fifo;
 `else
     assign  dma_chip_select_n       = chip_select_n[0]; // 0x00 .. 0x1F
     wire    interrupt_chip_select_n = chip_select_n[1]; // 0x20 .. 0x3F
@@ -526,10 +625,10 @@ module PERIPHERALS #(
 `ifdef MACHINE_PC98
         // IRQ7 is the slave's cascade line; the machine's own IRQ7 has to
         // stand down for it. IRQ2 is the CRT interrupt -- see crt_vsync_irq
-        // above; without it the BIOS parks at FED44 for good. IRQ6 carries
-        // the 2DD drive timer too (see the 0xCC stub in the floppy block).
+        // above; without it the BIOS parks at FED44 for good. The drive's
+        // own interrupts live on the slave (IRQ2 XTMASK, IRQ3 FDC).
         .interrupt_request          ({interrupt2_to_cpu,
-                                        fdd_interrupt | fdd_cc_irq,
+                                        fdd_interrupt,
                                         interrupt_request[5],
                                         uart_interrupt,
                                         uart2_interrupt,
@@ -575,7 +674,9 @@ module PERIPHERALS #(
         .slave_program_n            (1'b0),
         .interrupt_acknowledge_n    (interrupt_acknowledge_n),
         .interrupt_to_cpu           (interrupt2_to_cpu),
-        .interrupt_request          (8'b0)
+        // IRQ3 is the FDC's own interrupt (RECALIBRATE finding no drive);
+        // IRQ2 is the XTMASK pulse the 100 ms 0xCC timer fires.
+        .interrupt_request          ({4'b0, fdc_irq3, fdd_cc_irq, 2'b0})
     );
 `endif
 
