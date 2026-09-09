@@ -134,6 +134,20 @@ jobs:
           ./obj_ti/r | tee ti.log
           grep -q "RESULT: PASS" ti.log
 
+      - name: the OSD's coordinates reach the OSD's window
+        run: |
+          S=pcxt-base/src/fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_osdwin \
+            -DMACHINE_PC98=1 -DPC98_OSD_MARK=1 \
+            -Isim -I$S sim/tb_pc98_osdwin.sv \
+            $S/pocket_video.sv $S/pc98_video_timing.sv \
+            pcxt-base/src/fpga/apf/common.v $S/video_sync_guard.sv \
+            $S/common/jtframe_credits.v $S/common/jtframe_dual_ram.v \
+            $S/common/jtframe_ram.v \
+            -o w --Mdir obj_ow
+          ./obj_ow/w | tee ow.log
+          grep -q "^PASS" ow.log
+
       - name: text plane draws what TVRAM says
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_text \
