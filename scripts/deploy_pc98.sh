@@ -10,6 +10,14 @@
 # pair (docs/PC98_MACHINE_SPEC.md F3-F5); the copy circulating as np2's
 # BIOS.ROM has its reset vector overwritten and its ITF.ROM is not an ITF.
 set -uo pipefail
+
+# Apple's clang cannot assemble start.S -- it rejects the cc1as flag its own
+# driver passes for -march=rv32im -- so prefer Homebrew's LLVM when installed.
+# The firmware rebuild failed on exactly this after a fifteen-minute Quartus run
+# had already succeeded.
+for _d in /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin; do
+    [ -x "$_d/clang" ] && { PATH="$_d:$PATH"; break; }
+done
 cd "$(dirname "$0")/.."
 
 RUN=""
