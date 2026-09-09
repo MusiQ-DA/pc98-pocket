@@ -1361,7 +1361,19 @@ module core_top (
     wire rom_dl_wanted = ~fw_dl_slot;
 `endif
 
-    localparam RLF_AW = 8;
+    // 2048 entries, not 256.
+    //
+    // 256 was enough when the only slots were a 96 KB BIOS and a 32 KB ITF, and
+    // the hardware reported DROP 0. font.rom added 282 KB to the same path and
+    // the hardware now reports DROP 58: the FIFO overflows, and an overflow
+    // here is silent -- data_loader has no ready input, so there is no
+    // backpressure to the APF bridge and these entries are the only elasticity
+    // in the whole path. Fifty-eight lost words is fifty-eight holes somewhere
+    // in a ROM the guest then executes.
+    //
+    // 2048 x 42 bits is about nine M10K blocks, which this design can afford far
+    // more easily than it can afford a corrupted BIOS.
+    localparam RLF_AW = 11;
     reg  [41:0]     romfifo [0:(1<<RLF_AW)-1];
     reg  [RLF_AW:0] rlf_wptr = 0;
     reg  [RLF_AW:0] rlf_rptr = 0;
