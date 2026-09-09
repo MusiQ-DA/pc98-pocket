@@ -2444,27 +2444,44 @@ module core_top (
 
     // ------------------------------------------------------ hardware bands
     //
-    // The OSD is the softcore's only output, so when the softcore is silent
-    // there is no way to ask why. These six bits are painted by pocket_video as
-    // stripes down the left edge, straight from the RTL -- no softcore, no
-    // firmware, no guest involved. Read top to bottom:
+    // Sixteen RTL-driven bits, painted by pocket_video as two columns of eight
+    // stripes down the left edge. No softcore, no firmware, no guest -- and,
+    // since the probe generates its own raster, no CHIPSET either.
     //
-    //   1  reset_soft       the softcore is held in reset
-    //   2  boot_dl_done     the boot-time downloads finished
-    //   3  load_active      a slot is loading, or the ROM FIFO is not empty
-    //   4  is_downloading   APF says a slot is being written
-    //   5  rlf_empty        the ROM FIFO has drained
-    //   6  osd_active       the softcore asserted its OSD-enable register
-    //   7  ~RESET           every PLL is locked
-    //   8  boot_dl_late     the download watchdog expired -- the gate hung
+    // The first round answered its question: reset_soft 0, boot_dl_done 1,
+    // load_active 0, rlf_empty 1, osd_active 1, PLLs locked. The softcore runs,
+    // the ROMs loaded, and it is asking for an OSD that never arrives. So the
+    // fault is downstream: CHIPSET produces no raster, DE never asserts, and
+    // both the picture and the OSD composited into it are lost.
     //
-    // A lit band 1 with band 2 dark means the softcore never left reset because
-    // a download never completed; band 1 dark with band 6 dark means it is
-    // running but never enabled the OSD; band 7 dark means the PC-98 dot-clock
-    // PLL never locked and nothing downstream of it can run.
-    wire [7:0] dbg_bits = {
-        boot_dl_late, ~RESET, osd_active, rlf_empty,
-        is_downloading, load_active, boot_dl_done, reset_soft
+    // These sixteen are the remaining terms of reset_wire plus the evidence for
+    // whether the raster runs at all.
+    //
+    //   left column                      right column
+    //   1  soft_guest_hold               9   dataslots_ready
+    //   2  splash_pending_sync2          10  initilized_sdram
+    //   3  splashscreen_sync2            11  processor_ready
+    //   4  splash_reset_hold             12  reset_cpu
+    //   5  bios_ever_loaded              13  reset_soft
+    //   6  interact_reset                14  osd_active
+    //   7  reset (the guest reset)       15  load_active
+    //   8  raster_alive (HSync moves)    16  ~RESET
+    //
+    // reset_wire is RESET | load_active | ~bios_ever_loaded | interact_reset |
+    // splashscreen_sync2 | splash_reset_hold | splash_pending_sync2 |
+    // soft_guest_hold, and bands 1-7 are every one of those still unaccounted
+    // for. Whichever is lit is the one holding the machine.
+    //
+    // splash_pending is the one to watch: it powers up asserted and clears only
+    // when bios_ever_loaded & ~soft_guest_hold, on clk_28_636 -- the CGA dot
+    // clock, which this machine does not otherwise use.
+    wire [15:0] dbg_bits = {
+        ~RESET, load_active, osd_active, reset_soft,
+        reset_cpu, processor_ready, initilized_sdram, dataslots_ready,
+        1'b0 /* raster_alive, filled in by pocket_video */, reset,
+        interact_reset, bios_ever_loaded,
+        splash_reset_hold, splashscreen_sync2, splash_pending_sync2,
+        soft_guest_hold
     };
 
     pocket_video u_pocket_video (
