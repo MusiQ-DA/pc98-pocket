@@ -308,9 +308,56 @@ module PERIPHERALS #(
     wire fdd_be_select = pc98_io_exact & (address[7:0] == 8'hBE);
     wire fdd_90_select = pc98_io_exact & (address[7:0] == 8'h90);
     wire fdd_94_select = pc98_io_exact & (address[7:0] == 8'h94);
-    wire fdd_stub_read = (fdd_be_select | fdd_90_select | fdd_94_select) & ~io_read_n;
+
+    // 0x00CC  2DD drive/motor control (MAME fdc_2hd_2dd_ctrl<0>). The write
+    //          latches; bit 3 is the motor; bit 0's rising edge arms a
+    //          ~100 ms timer whose expiry raises the drive interrupt. The
+    //          VM BIOS writes 0x09/0x0C here and waits for IRQ6 -- with no
+    //          timer it rewrites the port forever, which is where the
+    //          machine froze (N stuck at 17244, IO 00CC 00CC 00CC).
+    //          Read returns the latch with bit 5 set and bit 4 as
+    //          drive-ready; a machine with no drive still reports ready
+    //          rather than halting, so a constant one is what it wants.
+    wire fdd_cc_select = pc98_io_exact & (address[7:0] == 8'hCC);
+    logic [7:0] fdd_cc_latch;
+    logic       fdd_cc_trig_q;
+    logic [22:0] fdd_cc_timer;
+    logic        fdd_cc_armed;
+    logic        fdd_cc_irq;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            fdd_cc_latch  <= 8'h00;
+            fdd_cc_trig_q <= 1'b0;
+            fdd_cc_timer  <= 23'd0;
+            fdd_cc_armed  <= 1'b0;
+            fdd_cc_irq    <= 1'b0;
+        end else begin
+            fdd_cc_trig_q <= fdd_cc_latch[0];
+            if (fdd_cc_select & ~io_write_n)
+                fdd_cc_latch <= internal_data_bus;
+            // A fresh bit0 rising edge (re)arms the 100 ms timer.
+            if (fdd_cc_latch[0] & ~fdd_cc_trig_q) begin
+                fdd_cc_armed <= 1'b1;
+                fdd_cc_timer <= 23'd0;
+            end
+            if (fdd_cc_armed) begin
+                if (fdd_cc_timer == 23'd4_295_000) begin  // ~100 ms at 42.95 MHz
+                    fdd_cc_armed <= 1'b0;
+                    fdd_cc_irq   <= 1'b1;
+                end else
+                    fdd_cc_timer <= fdd_cc_timer + 23'd1;
+            end else if (fdd_cc_irq)
+                fdd_cc_irq <= 1'b0;   // one chipset clock of IRQ6 is plenty
+        end
+    end
+    wire        fdd_cc_read  = fdd_cc_select & ~io_read_n;
+    wire [7:0]  fdd_cc_data  = fdd_cc_latch | 8'h30;
+
+    wire fdd_stub_read = (fdd_be_select | fdd_90_select | fdd_94_select
+                          | fdd_cc_select) & ~io_read_n;
     wire [7:0] fdd_stub_data = fdd_be_select ? 8'hFB
                              : fdd_90_select ? 8'h80
+                             : fdd_cc_select ? fdd_cc_data
                              :                 8'h44;
 `else
     assign  dma_chip_select_n       = chip_select_n[0]; // 0x00 .. 0x1F
@@ -479,9 +526,10 @@ module PERIPHERALS #(
 `ifdef MACHINE_PC98
         // IRQ7 is the slave's cascade line; the machine's own IRQ7 has to
         // stand down for it. IRQ2 is the CRT interrupt -- see crt_vsync_irq
-        // above; without it the BIOS parks at FED44 for good.
+        // above; without it the BIOS parks at FED44 for good. IRQ6 carries
+        // the 2DD drive timer too (see the 0xCC stub in the floppy block).
         .interrupt_request          ({interrupt2_to_cpu,
-                                        fdd_interrupt,
+                                        fdd_interrupt | fdd_cc_irq,
                                         interrupt_request[5],
                                         uart_interrupt,
                                         uart2_interrupt,
