@@ -424,6 +424,17 @@ module core_top (
     // then un-blank once the scaler has seen frames of the new timing.
     wire swap_video_chip;
     synch_3 s_swap_video (swap_video, swap_video_chip, clk_chipset);
+`ifdef MACHINE_PC98
+    // This machine has one video mode, so there is nothing to swap to. The
+    // switch is not merely useless here, it is harmful: it never checked
+    // ENABLE_HGC, so a guest touching the PC/AT video mode register raised
+    // swap_video and took pix_sel with it -- and pix_sel selects the Hercules
+    // canvas for the OSD's line counter and asks the scaler for mode 1, which
+    // the PC-98 video.json does not declare. Both the OSD and the picture go
+    // with it. Held at zero.
+    wire pix_sel   = 1'b0;
+    wire vid_blank = 1'b0;
+`else
     reg         pix_sel   = 1'b0;   // 0 = CGA pixel pair, 1 = HGC pixel pair
     reg         vid_blank = 1'b0;   // forces DE low across the clock switch
     reg  [21:0] pix_switch_cnt = 22'd0;
@@ -440,6 +451,7 @@ module core_top (
             pix_switch_cnt <= PIX_SWITCH_CYCLES;
         end
     end
+`endif
 
 `ifdef MACHINE_PC98
     // One video mode, so no switch: the dot clock goes straight out. The CGA

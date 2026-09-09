@@ -78,8 +78,15 @@ module pocket_video (
     localparam CANVAS_W = 10'd720;
     localparam CANVAS_H = 10'd350;
     localparam CANVAS_VSKIP = 5'd16; // lines from the vsync fall to the window top
+`ifdef MACHINE_PC98
+    // No Hercules canvas on this machine, so nothing downstream may ever take
+    // that path: it owns the OSD's line counter, the presented blanking and the
+    // scaler slot.
+    wire hgc_shown_pix = 1'b0;
+`else
     wire hgc_shown_pix;
     synch_3 s_hgc_shown_pix (pix_sel, hgc_shown_pix, clk_pix);
+`endif
     reg       src_hb_d = 1'b0;
     reg       src_vs_d = 1'b0;
     reg       v_arm    = 1'b0;   // vsync fell; window opens after the skip
@@ -487,7 +494,22 @@ module pocket_video (
     wire [23:0] dbg_color = 24'd0;
 `endif
 
-    wire [23:0] overlay    = dbg_in    ? dbg_color
+    // A 16x16 white square at the origin of the OSD's own coordinate system,
+    // drawn from osd_hcnt/osd_vcnt -- the two counters the overlay is indexed
+    // by. It costs one corner of the picture and makes the next hardware round
+    // trip decisive either way: square but no panel means the counters are fine
+    // and the fault is in the framebuffer read; neither means the counters
+    // still never reach the window. Remove it once the OSD is up.
+`ifdef PC98_OSD_MARK
+    wire        mark_in  = (osd_hcnt < 10'd16) && (osd_vcnt < 10'd16);
+    wire [23:0] mark_rgb = 24'hFFFFFF;
+`else
+    wire        mark_in  = 1'b0;
+    wire [23:0] mark_rgb = 24'd0;
+`endif
+
+    wire [23:0] overlay    = mark_in   ? mark_rgb
+                           : dbg_in    ? dbg_color
                            : osd_show  ? osd_color
                            : guard_run ? 24'd0
                            :             credits_rgb;
