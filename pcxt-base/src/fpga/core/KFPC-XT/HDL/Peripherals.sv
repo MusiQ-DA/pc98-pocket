@@ -364,6 +364,12 @@ module PERIPHERALS #(
     //                     exactly how the real chip interrupts when the
     //                     drive it was told to seek is not there
     //   0x08 SENSE INT   1 in, 2 results (ST0 = 0x80 "not ready", PCN = 0)
+    //   0x0F SEEK        3 in, no result, same IRQ3 as RECALIBRATE
+    //   0x4A/0x0A READ ID          2 in, 7 results -- the IPL probe needs the
+    //                               full seven bytes or its result loop runs
+    //                               off the end of the status port
+    //   66/46/06/E6 read data, 65/45/05/E5 write, 4D/CD format: 9 (6 for
+    //                               format) in, 7 results, all zero error
     //   anything else    treated as 1 in, 2 results, so an unexpected
     //                     command still hands the BIOS an answer instead of
     //                     a status port that never reaches the result phase
@@ -388,6 +394,11 @@ module PERIPHERALS #(
             8'h04: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd1; end
             8'h07: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd0; end
             8'h08: begin fdc_shape_writes = 4'd0; fdc_shape_results = 4'd2; end
+            8'h0F: begin fdc_shape_writes = 4'd2; fdc_shape_results = 4'd0; end
+            8'h0A, 8'h4A: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd7; end
+            8'h05, 8'h06, 8'h45, 8'h46, 8'h65, 8'h66, 8'hE5, 8'hE6:
+                   begin fdc_shape_writes = 4'd8; fdc_shape_results = 4'd7; end
+            8'h4D, 8'hCD: begin fdc_shape_writes = 4'd5; fdc_shape_results = 4'd7; end
             default: begin fdc_shape_writes = 4'd0; fdc_shape_results = 4'd2; end
         endcase
     end
@@ -438,8 +449,8 @@ module PERIPHERALS #(
             if (fdc_cmd_done) begin
                 if (fdc_results_left != 4'd0)
                     fdc_in_result <= 1'b1;
-                else if (fdc_cmd == 8'h07)
-                    fdc_irq3 <= 1'b1;    // RECALIBRATE: no drive, instant IRQ
+                else if (fdc_cmd == 8'h07 || fdc_cmd == 8'h0F)
+                    fdc_irq3 <= 1'b1;    // RECALIBRATE/SEEK: no drive, instant IRQ
             end
             if (fdc_irq3)
                 fdc_irq3 <= 1'b0;
