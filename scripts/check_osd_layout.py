@@ -46,6 +46,40 @@ txt = re.sub(r"/\*.*?\*/", "", txt, flags=re.S)
 txt = re.sub(r"//[^\n]*", "", txt)
 
 
+def strip_pcat_only(src):
+    """Drop `#ifndef MACHINE_PC98` blocks.
+
+    The panel draws two different machines' fields on the same rows, and the
+    PC/AT ones do not exist in a PC-98 build. Counting both reported collisions
+    between fields that can never be on screen together -- SEQ against the I/O
+    history, MAX against LDN -- and a checker that cries wolf is one that gets
+    ignored the day it is right.
+    """
+    out, depth, skip_at = [], 0, None
+    for line in src.split("\n"):
+        t = line.strip()
+        if t.startswith("#if"):
+            depth += 1
+            if skip_at is None and t.startswith("#ifndef MACHINE_PC98"):
+                skip_at = depth
+        elif t.startswith("#else") and skip_at == depth:
+            skip_at = None
+            out.append("")
+            continue
+        elif t.startswith("#endif"):
+            if skip_at == depth:
+                skip_at = None
+            depth -= 1
+        if skip_at is None:
+            out.append(line)
+        else:
+            out.append("")
+    return "\n".join(out)
+
+
+txt = strip_pcat_only(txt)
+
+
 def val(expr):
     """Evaluate the simple arithmetic these calls use."""
     expr = expr.strip()

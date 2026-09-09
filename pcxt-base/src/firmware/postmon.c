@@ -2,6 +2,7 @@
 #include "softcpu_regs.h"
 #include "vkb_draw.h"
 #include "postmon.h"
+#include "sdramtest.h"
 
 // post_monitor window (region 0x5, read-only).
 #define POST_STATUS ((volatile uint32_t *) 0x50000010) // {count[31:16], prev[15:8], code[7:0]}
@@ -69,7 +70,7 @@ static uint8_t guest_peek(uint32_t addr)
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
-#define PANEL_H 142
+#define PANEL_H 162
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -236,10 +237,43 @@ void post_mon_tick(void)
     // the SDRAM consumer slower.
     {
         uint32_t rlf = *POST_RLF;
-        osd_draw_string(&fb, 4, 132, "DROP", OSD_LABEL);
-        dec(4 + 5 * 8, 132, rlf & 0xFFFFu);
-        osd_draw_string(&fb, 4 + 11 * 8, 132, "HW", OSD_LABEL);
-        dec(4 + 14 * 8, 132, rlf >> 16);
+    #ifdef MACHINE_PC98
+    // What the guest's ROM actually holds, read through the self-test master.
+    //
+    // RD0 covers sixteen bytes at FFFF0 and nothing else, so a fault that
+    // spares the reset vector and corrupts the rest reads as "the ITF started
+    // and then went somewhere odd" -- which is what the port trace showed: the
+    // ITF's port-init table takes every port number from the ODD byte of a
+    // word, and the hardware wrote 000C/000D where a correct ROM gives 0439,
+    // 0077, 0073. F800E0 is that loop and the first bytes of its table, so the
+    // file's own values are printed underneath as the key.
+    {
+        osd_draw_string(&fb, 4, 132, "F800E0", OSD_LABEL);
+        // Unrolled: check_osd_layout reads these calls literally and cannot
+        // resolve a loop variable in the x expression.
+        hex(4 +  7 * 8, 132, sdram_peek(0xF800E0u), 2);
+        hex(4 + 10 * 8, 132, sdram_peek(0xF800E1u), 2);
+        hex(4 + 13 * 8, 132, sdram_peek(0xF800E2u), 2);
+        hex(4 + 16 * 8, 132, sdram_peek(0xF800E3u), 2);
+        hex(4 + 19 * 8, 132, sdram_peek(0xF800E4u), 2);
+        hex(4 + 22 * 8, 132, sdram_peek(0xF800E5u), 2);
+        hex(4 + 25 * 8, 132, sdram_peek(0xF800E6u), 2);
+        hex(4 + 28 * 8, 132, sdram_peek(0xF800E7u), 2);
+        osd_draw_string(&fb, 4, 142, "WANT", OSD_LABEL);
+        hex(4 +  7 * 8, 142, 0xEEu, 2);
+        hex(4 + 10 * 8, 142, 0xE2u, 2);
+        hex(4 + 13 * 8, 142, 0xF9u, 2);
+        hex(4 + 16 * 8, 142, 0xFFu, 2);
+        hex(4 + 19 * 8, 142, 0xE6u, 2);
+        hex(4 + 22 * 8, 142, 0x0Du, 2);
+        hex(4 + 25 * 8, 142, 0x00u, 2);
+        hex(4 + 28 * 8, 142, 0x44u, 2);
+    }
+#endif
+    osd_draw_string(&fb, 4, 152, "DROP", OSD_LABEL);
+        dec(4 + 5 * 8, 152, rlf & 0xFFFFu);
+        osd_draw_string(&fb, 4 + 11 * 8, 152, "HW", OSD_LABEL);
+        dec(4 + 14 * 8, 152, rlf >> 16);
     }
 
     // testB27 answered it: F8 2E 41 D6 against F8 2E E8 D2 in the image.
