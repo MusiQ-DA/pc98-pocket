@@ -720,7 +720,10 @@ module PERIPHERALS #(
     // same way the POST codes confirm the rest.
 `ifdef MACHINE_PC98
     wire    tim2gatespk = 1'b1;
-    wire    spkdata     = 1'b1;
+    // The beeper's gate is 8255 port C bit 3: the BIOS's BSR writes to 0x37
+    // (0x06 then 0x07, at FE0DF/FE0E9) raise and lower it, and THAT is the
+    // boot beep -- not a constant, which would never go quiet.
+    wire    spkdata     = port_c_out[3] & ~port_c_io;
 `else
     wire    tim2gatespk = port_b_out[0] & ~port_b_io;
     wire    spkdata     = port_b_out[1] & ~port_b_io;

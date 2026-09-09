@@ -160,6 +160,9 @@ module tb_pc98_boot;
                   : kbd_data_iocycle ? 8'h60
                   : kbd_stat_iocycle ? 8'h02
                   : gdc_stat_iocycle ? gdc_status_mock
+                  : cc_ioread       ? (cc_latch | 8'h30)
+                  : fdc_msr_sel     ? fdc_msr
+                  : fdc_fifo_sel    ? fdc_fifo
                            : 8'hFF;
 
     // ---- I/O ---------------------------------------------------------------
@@ -371,7 +374,7 @@ module tb_pc98_boot;
         .slave_program_n  (1'b0),
         .interrupt_acknowledge_n (inta_n),
         .interrupt_to_cpu (pic2_to_cpu),
-        .interrupt_request(8'b0)
+        .interrupt_request({4'b0, fdc_irq3, cc_irq2, 2'b0})
     );
 
     // Latched the way PERIPHERALS latches it, on the CPU clock's falling
@@ -418,14 +421,103 @@ module tb_pc98_boot;
             $display("  %8t  CS %04X -> %04X  (pc %05X)", $time, eu_cs_d, eu_cs, eu_pc);
     end
 
-    // ---- keyboard stand-in ---------------------------------------------------
+    // ---- keyboard: none, like the hardware -----------------------------------
     //
-    // The keyboard check at FD95F polls 0x43 (8251 status) for bit 1 and then
-    // reads 0x41 expecting the power-on keycode 0x60. Answering those two lets
-    // the bench take the "keyboard present" path (short: BDA clear, no memory
-    // sweep) instead of burning millions of clocks in the absent-path loop.
-    wire kbd_stat_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0043);
-    wire kbd_data_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0041);
+    // The BIOS copes: three polls of 0x43 (8251 status), then 0x41 answers
+    // nothing and it takes the absent path (FD9AD). The bench matches the
+    // machine; the old "present" stand-in took a branch it never takes.
+    wire kbd_stat_iocycle = 1'b0;
+    wire kbd_data_iocycle = 1'b0;
+
+    // ---- 2DD drive control (0xCC) and a minimal FDC --------------------------
+    //
+    // The same shapes PERIPHERALS models, so the bench walks the machine's
+    // FDD sequence: the 0xCC latch with its motor bit and XTMASK timer into
+    // the slave's IRQ2, and a uPD765 that counts command bytes, answers
+    // "no drive", and interrupts the slave's IRQ3 on RECALIBRATE. The timer
+    // is shortened for the bench -- the real 100 ms costs 4.3 M clocks a
+    // trigger, and the BIOS only cares that the interrupt comes eventually.
+    // +ccms=N stretches it back toward the real thing.
+    logic [7:0] cc_latch  = 8'h00;
+    logic       cc_trig_q = 1'b0;
+    logic [22:0] cc_timer = 23'd0;
+    logic       cc_armed  = 1'b0;
+    logic       cc_irq2   = 1'b0;
+    int         cc_ticks  = 86_000;
+    initial begin
+        int ms;
+        if ($value$plusargs("ccms=%d", ms)) cc_ticks = ms * 42_955;
+    end
+    wire cc_iowrite = ~io_wr_n & (cpu_address[15:0] == 16'h00CC);
+    wire cc_ioread  = ~io_rd_n & (cpu_address[15:0] == 16'h00CC);
+    always_ff @(posedge clk_chipset) begin
+        cc_trig_q <= cc_latch[0];
+        if (cc_iowrite) cc_latch <= cpu_data_bus;
+        if (cc_latch[0] & ~cc_trig_q) begin
+            cc_armed <= 1'b1;
+            cc_timer <= 23'd0;
+        end
+        if (cc_armed) begin
+            if (cc_timer >= cc_ticks[22:0]) begin
+                cc_armed <= 1'b0;
+                cc_irq2  <= cc_latch[2];
+            end else
+                cc_timer <= cc_timer + 23'd1;
+        end else if (cc_irq2)
+            cc_irq2 <= 1'b0;
+    end
+
+    wire fdc_sel  = (~io_rd_n | ~io_wr_n)
+                  & ((cpu_address[7:2] == 6'h24) | (cpu_address[7:2] == 6'h32))
+                  & ~cpu_address[9] & ~cpu_address[8];
+    wire fdc_msr_sel  = fdc_sel & ~cpu_address[1];
+    wire fdc_fifo_sel = fdc_sel &  cpu_address[1];
+
+    logic [7:0] fdc_cmd;
+    logic [3:0] fdc_writes_left, fdc_results_left, fdc_result_idx;
+    logic [3:0] fdc_shape_writes, fdc_shape_results;
+    logic [7:0] fdc_result0 = 8'h00, fdc_result1 = 8'h00;
+    logic       fdc_in_result = 1'b0, fdc_cmd_done = 1'b0, fdc_irq3 = 1'b0;
+    always_comb begin
+        case (fdc_cmd)
+            8'h03: begin fdc_shape_writes = 4'd2; fdc_shape_results = 4'd0; end
+            8'h04: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd1; end
+            8'h07: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd0; end
+            8'h08: begin fdc_shape_writes = 4'd0; fdc_shape_results = 4'd2; end
+            default: begin fdc_shape_writes = 4'd0; fdc_shape_results = 4'd2; end
+        endcase
+    end
+    always_ff @(posedge clk_chipset) begin
+        fdc_cmd_done <= 1'b0;
+        if (fdc_fifo_sel & ~io_wr_n) begin
+            if (fdc_writes_left == 4'd0) begin
+                fdc_cmd        <= cpu_data_bus;
+                fdc_result_idx <= 4'd0;
+                if (cpu_data_bus == 8'h04) fdc_result0 <= 8'h00;
+                else begin fdc_result0 <= 8'h80; fdc_result1 <= 8'h00; end
+                fdc_writes_left  <= fdc_shape_writes;
+                fdc_results_left <= fdc_shape_results;
+                if (fdc_shape_writes == 4'd0) fdc_cmd_done <= 1'b1;
+            end else begin
+                fdc_writes_left <= fdc_writes_left - 4'd1;
+                if (fdc_writes_left == 4'd1) fdc_cmd_done <= 1'b1;
+            end
+        end else if (fdc_fifo_sel & ~io_rd_n && fdc_in_result) begin
+            fdc_result_idx <= fdc_result_idx + 4'd1;
+            if (fdc_result_idx + 4'd1 >= fdc_results_left) begin
+                fdc_in_result    <= 1'b0;
+                fdc_results_left <= 4'd0;
+            end
+        end
+        if (fdc_cmd_done) begin
+            if (fdc_results_left != 4'd0) fdc_in_result <= 1'b1;
+            else if (fdc_cmd == 8'h07)    fdc_irq3      <= 1'b1;
+        end
+        if (fdc_irq3) fdc_irq3 <= 1'b0;
+    end
+    wire [7:0] fdc_msr  = fdc_in_result ? 8'hC0 : 8'h80;
+    wire [7:0] fdc_fifo = (fdc_result_idx == 4'd0) ? fdc_result0
+                        : (fdc_result_idx == 4'd1) ? fdc_result1 : 8'h00;
 
     // Text GDC status at 0x60, shaped exactly like PERIPHERALS' gdc_status:
     // bit 5 rides the vertical retrace (the FDBB3 wait), bit 2 is a constant
@@ -567,10 +659,11 @@ module tb_pc98_boot;
         repeat (40) @(posedge clk_chipset);
         reset = 1'b0;
 
-        // Long enough for a real POST to get somewhere: 40 M chipset clocks is
-        // about a second of guest time. A progress line every two million says
-        // whether it is moving or parked.
-        for (i = 0; i < 40; i = i + 1) begin
+        // Long enough for a real POST to get somewhere: 160 five-million
+        // chipset-clock chunks is about 18.6 seconds of guest time -- past
+        // the FDD sequence and the boot beep's busy wait. A progress line
+        // every chunk says whether it is moving or parked.
+        for (i = 0; i < 160; i = i + 1) begin
             repeat (5_000_000) @(posedge clk_chipset);
             $display("  ... %0t  EU %05X  urom %04X  cyc %0d/%0d  ratio %0d dec %0d  zero %0d",
                      $time, eu_pc, urom,
