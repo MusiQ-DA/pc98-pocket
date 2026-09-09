@@ -144,14 +144,9 @@ static uint8_t  rom_b[8];     // eight bytes from there: what the file holds
 
 void postmon_capture_rom(void)
 {
-    // Watch where the guest actually is, not where it was supposed to go.
-    //
-    // The ROM is intact (BAD 000 over the first 256 bytes) and guest RAM passes
-    // its own 64 KB walk, so nothing the ITF reads from memory is wrong -- and
-    // yet it writes ports 000C/000D where a correct run writes 0073, 0077,
-    // 0439, and parks with LIVE 08383. That address is in RAM, and RD0 pointed
-    // at it shows the bytes the CPU is reading there.
-    *POST_ROMWIN = 0x00838u;
+    // Watch the BIOS entry, since that is where the machine now starts.
+    // The BIOS entry: FD800 is EB 02 EB 5D FA 33 C0 8E D8 E4 35 ...
+    *POST_ROMWIN = 0x0FD80u;
 
     // A damage map, not a hex dump. FFFF0 came back byte-perfect while
     // F800E0 was unrecognisable -- not from any of the three ROM images -- so
