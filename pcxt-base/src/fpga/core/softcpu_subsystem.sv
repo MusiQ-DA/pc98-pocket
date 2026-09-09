@@ -128,6 +128,7 @@ module softcpu_subsystem (
     input   [3:0] raw_strobes,
     input  [15:0] wr_low_cycles,
     input  [15:0] rd_low_cycles,
+    output [15:0] rom_win,          // W 0x5000007C: CPU-read snoop window
     input [127:0] rom_read_data,
     input [127:0] rom_load_data,
     input   [7:0] rom_load_count,
@@ -289,6 +290,14 @@ module softcpu_subsystem (
     // chipset cycles and core_top's sequencer can sample it directly; the
     // request stays up until st_done returns, which is what stops one firmware
     // write from launching several accesses.
+    // The CPU-read snoop's window, address[19:4]. Powers up at FFFF so a build
+    // with no firmware support behaves as it always did.
+    reg [15:0] rom_win_r = 16'hFFFF;
+    always @(posedge clk_pico)
+        if (sel_st && cpu_mem_wstrb[0] && cpu_mem_ready && cpu_mem_addr[7:0] == 8'h7C)
+            rom_win_r <= cpu_mem_wdata[15:0];
+    assign rom_win = rom_win_r;
+
     reg [19:0] st_addr_r  = 20'd0;
     reg  [7:0] st_wdata_r = 8'd0;
     reg        st_we_r    = 1'b0;
@@ -903,6 +912,7 @@ module softcpu_subsystem (
             32'h5000_0074: cpu_mem_rdata = io_port_hist[63:32];   // older two
             32'h5000_0078: cpu_mem_rdata = {15'd0, itf_bank, io_wr_count};
             32'h5000_0048: cpu_mem_rdata = {24'd0, rom_read_count};
+            32'h5000_007C: cpu_mem_rdata = {16'd0, rom_win_r};
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;
         endcase

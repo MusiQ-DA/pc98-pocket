@@ -91,6 +91,16 @@ module post_monitor #(
     // region with the self-test master came back 11 11 11 11 11 11 11 11, which
     // is not memory content, so the master's read of the BIOS region is broken
     // and only a bus snoop can be trusted here.
+    // Which 16 bytes the CPU-read snoop watches, as address[19:4].
+    //
+    // It was fixed at FFFF, and sixteen bytes was all of the guest's memory the
+    // panel could ever see through the CPU's own eyes. That is how a fault that
+    // spares the reset vector stayed invisible: the peek reads the ROM through
+    // CHIPSET's external port and finds it intact, while the CPU reads the same
+    // bytes through its own path and evidently does not. Now the firmware
+    // points this anywhere, so the two paths can be compared at any address for
+    // the cost of a file copy.
+    input  wire   [15:0] rom_win,
     output logic [127:0] rom_read_data,
     output logic  [7:0] rom_read_count,
     // The BIOS LOADER's own write of the same sixteen bytes, taken straight
@@ -171,10 +181,14 @@ module post_monitor #(
     // F800:0000, itself), and a genuine system BIOS holds EA 00 00 80 FD. Any
     // other content means the CPU is executing whatever happened to be in
     // memory, which is what "LIVE 07E83, stopped" looks like from outside.
-    wire  in_rom_win = (address[19:4] == 16'hFFFF) & ~address_enable_n;
+    wire  in_rom_win = (address[19:4] == rom_win) & ~address_enable_n;
 `else
-    wire  in_rom_win = (address[19:4] == 16'hFD88) & ~address_enable_n;
+    wire  in_rom_win = (address[19:4] == rom_win) & ~address_enable_n;
 `endif
+
+    // Moving the window starts a fresh capture: bytes taken at the old address
+    // mixed with the new ones would read as corruption that is not there.
+    logic [15:0] rom_win_q;
 
     // The loader writes each byte with the strobe held until the RAM controller
     // completes, so address and data are stable throughout and no edge games
@@ -212,6 +226,7 @@ module post_monitor #(
             wr_low_cycles <= 16'd0;
             rd_low_cycles <= 16'd0;
             rom_read_data <= 128'd0;
+            rom_win_q     <= 16'hFFFF;
             io_port_hist  <= 64'd0;
             io_wr_count   <= 16'd0;
             io_port_q     <= 16'd0;
@@ -255,7 +270,13 @@ module post_monitor #(
             // byte fetched just before. Same mistake as the POST port, so: hold
             // the address and the bus while the read is active, and commit when
             // the strobe releases.
-            if (~memory_read_n && in_rom_win) begin
+            rom_win_q <= rom_win;
+            if (rom_win_q != rom_win) begin
+                rom_read_data  <= 128'd0;
+                rom_read_count <= 8'd0;
+                rom_hold_q     <= 1'b0;
+            end
+            else if (~memory_read_n && in_rom_win) begin
                 rom_slot_q <= address[3:0];
                 rom_byte_q <= bus_data;
                 rom_hold_q <= 1'b1;

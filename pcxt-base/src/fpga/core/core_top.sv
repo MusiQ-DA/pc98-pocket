@@ -890,6 +890,7 @@ module core_top (
     wire [3:0] osd_palette_idx;
     wire       osd_in_area;
     wire       osd_active;
+    wire [15:0] rom_win;          // softcore-settable CPU-read snoop window
     wire       osd_credits_req;
     wire       osd_video_req;
     wire [8:0] vkb_key;
@@ -1033,6 +1034,7 @@ module core_top (
         .raw_strobes                (raw_strobes),
         .wr_low_cycles              (wr_low_cycles),
         .rd_low_cycles              (rd_low_cycles),
+        .rom_win                    (rom_win),
         .rom_read_data              (rom_read_data),
         .rom_load_data              (rom_load_data),
         .rom_load_count             (rom_load_count),
@@ -1892,6 +1894,7 @@ module core_top (
         .raw_strobes    (raw_strobes),
         .wr_low_cycles  (wr_low_cycles),
         .rd_low_cycles  (rd_low_cycles),
+        .rom_win        (rom_win),
         .rom_read_data  (rom_read_data),
         .rom_read_count (rom_read_count),
         .ld_addr        (bios_access_address),
