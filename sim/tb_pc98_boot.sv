@@ -74,7 +74,7 @@ module tb_pc98_boot;
         .CLK       (clk_cpu),
         .RESET     (reset),
         .READY     (1'b1),           // flat memory answers immediately
-        .INTR      (1'b0),
+        .INTR      (pic1_to_cpu),
         .NMI       (1'b0),
         .ad_out    (cpu_ad_out),
         .dout      (cpu_data_bus),
@@ -152,7 +152,13 @@ module tb_pc98_boot;
     // of one instruction's operand fetch.
     assign din = ~mem_rd_n ? (is_rom(cpu_address) ? rom_byte(cpu_address)
                                                   : ram[cpu_address])
-                  : pit_iocycle ? pit_dout
+                  : ~inta_n       ? ((~pic2_data_bus_io) ? pic2_dout : pic1_dout)
+                  : pit_iocycle    ? pit_dout
+                  : dma_iocycle    ? dma_dout
+                  : pic1_iocycle   ? pic1_dout
+                  : pic2_iocycle   ? pic2_dout
+                  : kbd_data_iocycle ? 8'h60
+                  : kbd_stat_iocycle ? 8'h02
                            : 8'hFF;
 
     // ---- I/O ---------------------------------------------------------------
@@ -166,6 +172,7 @@ module tb_pc98_boot;
     logic [7:0]  last_043d = 8'h00;
 
     logic io_wr_d = 1'b1, mem_wr_d = 1'b1, mem_rd_d = 1'b1, io_rd_d = 1'b1;
+    logic [7:0] mem_wr_data_q = 8'h00;
 
     always_ff @(posedge clk_chipset) begin
         io_wr_d  <= io_wr_n;
@@ -173,9 +180,22 @@ module tb_pc98_boot;
         mem_rd_d <= mem_rd_n;
         io_rd_d  <= io_rd_n;
 
+        // Write data is valid throughout the command and guaranteed at its
+        // END. Sampling cpu_data_bus once on the trailing edge caught the
+        // bus already moving on -- the IVT write at FDA76 landed 21 02 23 FD
+        // where the BIOS put BC 02 80 FD, and INT 08 went astray on exactly
+        // that. Sample continuously while the cycle is live and keep the last.
+        if (~mem_wr_n) mem_wr_data_q <= cpu_data_bus;
+
         // Memory write, on the trailing edge, and never into ROM.
-        if (mem_wr_n & ~mem_wr_d & ~is_rom(cpu_address))
-            ram[cpu_address] <= cpu_data_bus;
+        if (mem_wr_n & ~mem_wr_d & ~is_rom(cpu_address)) begin
+            ram[cpu_address] <= mem_wr_data_q;
+            // The first page carries the vectors; who touches 0000-0FFF and
+            // with what decides whether INT xx lands where the BIOS meant.
+            if (cpu_address[19:12] == 8'h00)
+                $display("  %8t  RAM[%04X] <= %02X   (eu_pc %05X)",
+                         $time, cpu_address[15:0], mem_wr_data_q, eu_pc);
+        end
 
         // I/O reads matter here too: if the ModRM byte of a group opcode is
         // dispatched as an opcode, E4 becomes IN AL,imm8 and shows up as a read
@@ -221,6 +241,8 @@ module tb_pc98_boot;
     wire pit_iocycle = (~io_rd_n | ~io_wr_n) & cpu_address[0]
                      & (cpu_address[7:4] == 4'h7) & ~cpu_address[9] & ~cpu_address[8];
 
+    logic timer_out0;
+
     KF8253 u_pit (
         .clock            (clk_chipset),
         .reset            (reset),
@@ -232,12 +254,137 @@ module tb_pc98_boot;
         .data_bus_out     (pit_dout),
 
         .counter_0_clock  (timer_clock), .counter_0_gate (1'b1),
-        .counter_0_out    (),
+        .counter_0_out    (timer_out0),
         .counter_1_clock  (timer_clock), .counter_1_gate (1'b1),
         .counter_1_out    (),
         .counter_2_clock  (timer_clock), .counter_2_gate (gate2),
         .counter_2_out    ()
     );
+
+    // ---- 8237 stand-in ------------------------------------------------------
+    //
+    // The DMA register test at FD8E6 writes each odd port 01-0F twice (LSB,
+    // MSB through the shared byte pointer) and reads it back the same way.
+    // The real chip's current registers are read/write, so a pair of
+    // write-through bytes per port answers it honestly without modelling a
+    // whole 8237 the boot never puts in motion.
+    logic [7:0] dma_lsb  [0:15];
+    logic [7:0] dma_msb  [0:15];
+    logic       dma_hi_byte = 1'b0;
+    wire  [3:0] dma_reg   = cpu_address[4:1];
+    wire        dma_iocycle = (~io_rd_n | ~io_wr_n) & cpu_address[0]
+                            & (cpu_address[7:4] == 4'h0) & ~cpu_address[9]
+                            & ~cpu_address[8];
+    always_ff @(posedge clk_chipset) begin
+        if (dma_iocycle) begin
+            if (~io_wr_n) begin
+                if (~dma_hi_byte) dma_lsb[dma_reg] <= cpu_data_bus;
+                else              dma_msb[dma_reg] <= cpu_data_bus;
+            end
+            // The byte pointer advances on a read as well; two reads walk
+            // LSB then MSB and hand it back for the next write pair.
+            if (~io_wr_n | ~io_rd_n) dma_hi_byte <= ~dma_hi_byte;
+        end
+    end
+    wire [7:0] dma_dout = dma_hi_byte ? dma_msb[dma_reg] : dma_lsb[dma_reg];
+
+    // ---- 8259 pair, as the chipset wires them -------------------------------
+    //
+    // Master at 0000-0007 even, slave at 0008-000F even, the slave's INT on
+    // the master's IRQ7 (the BIOS programs ICW3 0x80 / slave ID 7), the timer
+    // on IRQ0, and the cascade lines closed so an acknowledge can pull the
+    // vector from the right chip. The IMR test at FDA4F writes 0 and FF to
+    // both chips and reads both back; the interrupt test at FDAA9 unmask IRQ0,
+    // loads counter 0 with 0x20, and waits for the handler at FD80:02BC to
+    // raise AH -- INT 08, end to end.
+    wire pic1_iocycle = (~io_rd_n | ~io_wr_n) & ~cpu_address[0]
+                      & (cpu_address[7:3] == 5'b00000) & ~cpu_address[9]
+                      & ~cpu_address[8];
+    wire pic2_iocycle = (~io_rd_n | ~io_wr_n) & ~cpu_address[0]
+                      & cpu_address[3] & (cpu_address[7:4] == 4'h0)
+                      & ~cpu_address[9] & ~cpu_address[8];
+
+    wire [7:0] pic1_dout, pic2_dout;
+    wire       pic1_to_cpu_buf, pic2_to_cpu;
+    wire       pic1_data_bus_io, pic2_data_bus_io;
+    wire [2:0] pic1_cascade_out;
+
+    KF8259 u_pic1 (
+        .clock            (clk_chipset),
+        .reset            (reset),
+        .chip_select_n    (~pic1_iocycle),
+        .read_enable_n    (io_rd_n),
+        .write_enable_n   (io_wr_n),
+        .address          (cpu_address[1]),
+        .data_bus_in      (cpu_data_bus),
+        .data_bus_out     (pic1_dout),
+        .data_bus_io      (pic1_data_bus_io),
+        .cascade_in       (3'b000),
+        .cascade_out      (pic1_cascade_out),
+        .cascade_io       (),
+        .slave_program_n  (1'b1),
+        .interrupt_acknowledge_n (inta_n),
+        .interrupt_to_cpu (pic1_to_cpu_buf),
+        .interrupt_request({pic2_to_cpu, 6'b0, timer_out0})
+    );
+
+    KF8259 u_pic2 (
+        .clock            (clk_chipset),
+        .reset            (reset),
+        .chip_select_n    (~pic2_iocycle),
+        .read_enable_n    (io_rd_n),
+        .write_enable_n   (io_wr_n),
+        .address          (cpu_address[1]),
+        .data_bus_in      (cpu_data_bus),
+        .data_bus_out     (pic2_dout),
+        .data_bus_io      (pic2_data_bus_io),
+        .cascade_in       (pic1_cascade_out),
+        .cascade_out      (),
+        .cascade_io       (),
+        .slave_program_n  (1'b0),
+        .interrupt_acknowledge_n (inta_n),
+        .interrupt_to_cpu (pic2_to_cpu),
+        .interrupt_request(8'b0)
+    );
+
+    // Latched the way PERIPHERALS latches it, on the CPU clock's falling
+    // enable, so the bench sees the same edge the core will.
+    logic pic1_to_cpu = 1'b0;
+    always_ff @(posedge clk_chipset)
+        if (cpu_ce_negedge) pic1_to_cpu <= pic1_to_cpu_buf;
+
+    // INTA count: how many acknowledges the CPU issued. One means the first
+    // interrupt reached the INTA pair; the handler ran if the EU ever stands
+    // on FD80:02BC or beyond FDAB1.
+    int inta_count = 0;
+    logic inta_d = 1'b1;
+    always_ff @(posedge clk_chipset) begin
+        if (~inta_n) begin
+            if (inta_count == 0) $display("  %8t  INTA #1", $time);
+            if (inta_d) $display("  %8t  INTA  vector %02X", $time, din);
+            inta_count <= inta_count + 1;
+        end
+        inta_d <= inta_n;
+    end
+
+    // Segment transfers: when CS changes, where the EU went matters more
+    // than where it was. A stray vector lands the CPU in RAM.
+    logic [15:0] eu_cs_d = 16'hFFFF;
+    always_ff @(posedge clk_chipset) begin
+        eu_cs_d <= eu_cs;
+        if (eu_cs != eu_cs_d)
+            $display("  %8t  CS %04X -> %04X  (pc %05X)", $time, eu_cs_d, eu_cs, eu_pc);
+    end
+
+    // ---- keyboard stand-in ---------------------------------------------------
+    //
+    // The keyboard check at FD95F polls 0x43 (8251 status) for bit 1 and then
+    // reads 0x41 expecting the power-on keycode 0x60. Answering those two lets
+    // the bench take the "keyboard present" path (short: BDA clear, no memory
+    // sweep) instead of burning millions of clocks in the absent-path loop.
+    wire kbd_stat_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0043);
+    wire kbd_data_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0041);
+
 
     // ---- execution trace, from inside the CPU -------------------------------
     //
@@ -388,6 +535,10 @@ module tb_pc98_boot;
                  u_pit.u_KF8253_Counter_0.count[15:0],
                  u_pit.u_KF8253_Counter_1.count[15:0],
                  u_pit.u_KF8253_Counter_2.count[15:0]);
+        $display("INTA count    %0d", inta_count);
+        $display("IVT 08 : %04X:%04X   IVT 18: %04X:%04X",
+                 {ram[8'h23],ram[8'h22]}, {ram[8'h21],ram[8'h20]},
+                 {ram[8'h63],ram[8'h62]}, {ram[8'h61],ram[8'h60]});
         $display("fetches       %0d", fetches);
         $display("distinct PCs  %0d", ring_w);
         $display("PC range      %05X .. %05X", pc_min, pc_max);
