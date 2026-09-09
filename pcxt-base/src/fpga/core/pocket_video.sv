@@ -281,16 +281,74 @@ module pocket_video (
     // band is still distinguishable from the picture behind it. Compiled in
     // only under PC98_DEBUG_BANDS.
 `ifdef PC98_DEBUG_BANDS
-    // dbg_bits is asynchronous to clk_pix; two flops are enough for something
-    // only a human reads.
+    // ---------------------------------------------------- free-running probe
+    //
+    // The first version of this drew its bands inside the normal picture, which
+    // was useless: the bands rode on vid_de_now, and vid_de_now rides on the
+    // blanking CHIPSET produces. CHIPSET is held by the guest reset, and the
+    // guest reset shares a term (load_active) with the softcore's -- so in the
+    // one situation worth debugging, the raster is stopped, DE never asserts,
+    // and the bands are as invisible as the OSD they were meant to explain.
+    // What reaches the screen then is the scaler's own uninitialised memory: a
+    // fine checkerboard that changes with video.json and with nothing else,
+    // which is exactly what the hardware has been showing.
+    //
+    // So this generates its own 640x400 raster from clk_pix alone -- no reset,
+    // no CHIPSET, no softcore, no guest -- and drives the APF output directly.
+    // It answers a question the picture path cannot: is the bitstream running
+    // and is the scaler accepting our frames at all?
+    //
+    //   left 64 px   eight status bands, 32 lines each, white = 1
+    //   the rest     eight vertical colour bars, so the frame is unmistakable
+    //
+    // If the screen shows bars, clock, PLL, bitstream and scaler are all fine
+    // and the bands say why nothing else runs. If it still shows the
+    // checkerboard, the fault is upstream of every one of them.
     reg [7:0] dbg_bits_s1 = 8'd0, dbg_bits_pix = 8'd0;
     always @(posedge clk_pix) begin
         dbg_bits_s1  <= dbg_bits;
         dbg_bits_pix <= dbg_bits_s1;
     end
-    wire [2:0]  dbg_band = osd_vcnt[7:5];
-    wire        dbg_in   = (osd_hcnt < 10'd64) && (osd_vcnt < 10'd256);
-    wire [23:0] dbg_color = dbg_bits_pix[dbg_band] ? 24'hFFFFFF : 24'h202020;
+
+    wire [9:0] pb_h, pb_v;
+    wire       pb_hs, pb_vs, pb_hb, pb_vb, pb_de;
+    pc98_video_timing u_probe_timing (
+        .clk         (clk_pix),
+        .ce          (1'b1),
+        .rst         (1'b0),
+        .hcount      (pb_h),
+        .vcount      (pb_v),
+        .hsync       (pb_hs),
+        .vsync       (pb_vs),
+        .hblank      (pb_hb),
+        .vblank      (pb_vb),
+        .de          (pb_de),
+        .frame_start ()
+    );
+
+    wire       pb_band_area = (pb_h < 10'd64) && (pb_v < 10'd256);
+    wire [2:0] pb_band      = pb_v[7:5];
+    // 128 px per bar, offset by one so no bar is black -- a black bar next to
+    // the bands would read as "nothing here" and defeat the point.
+    wire [2:0] pb_bar       = pb_h[9:7] + 3'd1;
+    wire [23:0] pb_bar_rgb  = {{8{pb_bar[2]}}, {8{pb_bar[1]}}, {8{pb_bar[0]}}};
+    wire [23:0] pb_rgb      = pb_band_area
+                            ? (dbg_bits_pix[pb_band] ? 24'hFFFFFF : 24'h202020)
+                            : pb_bar_rgb;
+
+    reg [23:0] pb_vid_rgb = 24'd0;
+    reg        pb_vid_de  = 1'b0;
+    reg        pb_vid_hs  = 1'b0;
+    reg        pb_vid_vs  = 1'b0;
+    always @(posedge clk_pix) begin
+        pb_vid_de  <= pb_de;
+        pb_vid_rgb <= pb_de ? pb_rgb : 24'd0;   // slot 0 through blanking
+        pb_vid_hs  <= pb_hs;
+        pb_vid_vs  <= pb_vs;
+    end
+
+    wire        dbg_in    = 1'b0;
+    wire [23:0] dbg_color = 24'd0;
 `else
     wire        dbg_in    = 1'b0;
     wire [23:0] dbg_color = 24'd0;
@@ -307,10 +365,17 @@ module pocket_video (
         vid_vs  <= sel_vs_d1;
     end
 
+`ifdef PC98_DEBUG_BANDS
+    assign video_rgb          = pb_vid_rgb;
+    assign video_de           = pb_vid_de;
+    assign video_hs           = pb_vid_hs;
+    assign video_vs           = pb_vid_vs;
+`else
     assign video_rgb          = vid_rgb;
     assign video_de           = vid_de;
     assign video_hs           = vid_hs;
     assign video_vs           = vid_vs;
+`endif
     assign video_skip         = 1'b0;
     assign video_rgb_clock    = clk_pix;
     assign video_rgb_clock_90 = clk_pix_90;
