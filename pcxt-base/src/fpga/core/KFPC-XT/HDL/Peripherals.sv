@@ -496,6 +496,7 @@ module PERIPHERALS #(
                                         interrupt_request[2],
                                         keybord_interrupt,
                                         timer_interrupt})
+`endif
     );
 
 `ifdef MACHINE_PC98
