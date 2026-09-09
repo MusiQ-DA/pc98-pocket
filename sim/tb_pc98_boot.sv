@@ -157,7 +157,7 @@ module tb_pc98_boot;
     // Reads answer 0xFF: nothing here is modelled, and the point is where the
     // CPU goes, not what it finds. A port that must answer to get past a spin
     // will show up as a spin, which is itself the finding.
-    logic [15:0] io_port_hist [0:15];
+    logic [15:0] io_port_hist [0:63];
     int          io_n = 0;
     logic        saw_043d = 1'b0;
     logic [7:0]  last_043d = 8'h00;
@@ -182,7 +182,7 @@ module tb_pc98_boot;
 
         // I/O write, on the trailing edge.
         if (io_wr_n & ~io_wr_d) begin
-            if (io_n < 16) io_port_hist[io_n] <= cpu_address[15:0];
+            if (io_n < 64) io_port_hist[io_n] <= cpu_address[15:0];
             io_n <= io_n + 1;
             if (cpu_address[15:0] == 16'h043D) begin
                 saw_043d  <= 1'b1;
@@ -224,7 +224,7 @@ module tb_pc98_boot;
     always_ff @(posedge clk_core) begin
         urom_core_d <= urom;
         if (urom == 13'h01F6) urom_log <= 1'b1;
-        if (urom_log && (urom != urom_core_d) && (urom_log_n < 3000)) begin
+        if (urom_log && (urom != urom_core_d) && (urom_log_n < 0)) begin
             urom_log_n <= urom_log_n + 1;
             $display("    u %04X", urom);
         end
@@ -268,7 +268,7 @@ module tb_pc98_boot;
             eu_steps <= eu_steps + 1;
             eu_ring[eu_ring_w[4:0]] <= eu_pc;
             eu_ring_w <= eu_ring_w + 1;
-            if (eu_traced < 300) begin
+            if (eu_traced < 0) begin
                 eu_traced <= eu_traced + 1;
                 $display("  %8t  EU %05X", $time, eu_pc);
             end
@@ -298,7 +298,7 @@ module tb_pc98_boot;
                 ring_w <= ring_w + 1;
                 if (cpu_address < pc_min) pc_min <= cpu_address;
                 if (cpu_address > pc_max) pc_max <= cpu_address;
-                if (traced < 400) begin
+                if (traced < 0) begin
                     traced <= traced + 1;
                     $display("  %8t  fetch %05X  %02X",
                              $time, cpu_address,
@@ -330,8 +330,8 @@ module tb_pc98_boot;
         // Long enough for a real POST to get somewhere: 40 M chipset clocks is
         // about a second of guest time. A progress line every two million says
         // whether it is moving or parked.
-        for (i = 0; i < 20; i = i + 1) begin
-            repeat (2_000_000) @(posedge clk_chipset);
+        for (i = 0; i < 40; i = i + 1) begin
+            repeat (5_000_000) @(posedge clk_chipset);
             $display("  ... %0t  EU %05X  urom %04X  cyc %0d/%0d  ratio %0d dec %0d  zero %0d",
                      $time, eu_pc, urom,
                      u_cpu.BIU_CORE.clock_cycle_counter,
@@ -344,7 +344,7 @@ module tb_pc98_boot;
         $display("distinct PCs  %0d", ring_w);
         $display("PC range      %05X .. %05X", pc_min, pc_max);
         $display("I/O writes    %0d", io_n);
-        for (i = 0; i < (io_n < 16 ? io_n : 16); i = i + 1)
+        for (i = 0; i < (io_n < 64 ? io_n : 64); i = i + 1)
             $display("  io[%0d] %04X", i, io_port_hist[i]);
         $display("port 043D written: %0d  last value %02X  itf_bank %0d",
                  saw_043d, last_043d, itf_bank);
