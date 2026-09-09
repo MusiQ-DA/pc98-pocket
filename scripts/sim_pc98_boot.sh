@@ -18,6 +18,7 @@ ROMS="${PC98_ROMS:-$HOME/.pc98roms}"
 
 OUT="${TMPDIR:-/tmp}/pc98boot"
 mkdir -p "$OUT"
+
 python3 - "$ROMS" "$OUT" "$SYNTH" <<'PY'
 import sys, os
 roms, out, synth = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
@@ -92,6 +93,6 @@ docker run --rm -v "$PWD":/work -v "$OUT":/hex -w /hex pc98-sim bash -lc "
     /work/$S/8088/mcl86_eu_core.v /work/$S/8088/eu_rom.v \
     /work/$K/XT_CE_Generator.sv /work/$K/KF8288/HDL/KF8288.sv \
     -o boot --Mdir /tmp/obj_boot
-  cp /work/$S/8088/microcode.mem /hex/ 2>/dev/null || true
+  cp /work/$S/8088/microcode.mem /hex/
   /tmp/obj_boot/boot
 "

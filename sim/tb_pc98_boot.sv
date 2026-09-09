@@ -224,7 +224,7 @@ module tb_pc98_boot;
     always_ff @(posedge clk_core) begin
         urom_core_d <= urom;
         if (urom == 13'h01F6) urom_log <= 1'b1;
-        if (urom_log && (urom != urom_core_d) && (urom_log_n < 120)) begin
+        if (urom_log && (urom != urom_core_d) && (urom_log_n < 3000)) begin
             urom_log_n <= urom_log_n + 1;
             $display("    u %04X", urom);
         end
@@ -332,8 +332,11 @@ module tb_pc98_boot;
         // whether it is moving or parked.
         for (i = 0; i < 20; i = i + 1) begin
             repeat (2_000_000) @(posedge clk_chipset);
-            $display("  ... %0t  EU %05X  urom %04X (moves %0d)  fetches %0d  io %0d",
-                     $time, eu_pc, urom, urom_w, fetches, io_n);
+            $display("  ... %0t  EU %05X  urom %04X  cyc %0d/%0d  ratio %0d dec %0d  zero %0d",
+                     $time, eu_pc, urom,
+                     u_cpu.BIU_CORE.clock_cycle_counter,
+                     u_cpu.BIU_CORE.clock_cycle_counter_div,
+                     ccc_div, ccc_dec, u_cpu.BIU_CORE.BIU_CLK_COUNTER_ZERO);
         end
 
         $display("--- done ---");
