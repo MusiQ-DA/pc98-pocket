@@ -290,9 +290,15 @@ module softcpu_subsystem (
     // chipset cycles and core_top's sequencer can sample it directly; the
     // request stays up until st_done returns, which is what stops one firmware
     // write from launching several accesses.
-    // The CPU-read snoop's window, address[19:4]. Powers up at FFFF so a build
-    // with no firmware support behaves as it always did.
+    // The CPU-read snoop's window, address[19:4]. Powers up where each machine
+    // had it hardwired, so a build whose firmware never writes this behaves
+    // exactly as it always did: the PC-98 reset vector at FFFF, and F D88 -- the
+    // PC/AT BIOS entry the bring-up was watching -- otherwise.
+`ifdef MACHINE_PC98
     reg [15:0] rom_win_r = 16'hFFFF;
+`else
+    reg [15:0] rom_win_r = 16'hFD88;
+`endif
     always @(posedge clk_pico)
         if (sel_st && cpu_mem_wstrb[0] && cpu_mem_ready && cpu_mem_addr[7:0] == 8'h7C)
             rom_win_r <= cpu_mem_wdata[15:0];
