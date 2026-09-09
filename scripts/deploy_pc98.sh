@@ -138,8 +138,14 @@ say "packaged with ROMs"
 
 # ---- 3. write --------------------------------------------------------------
 say "waiting for $VOL -- put the Pocket into USB access mode"
+# `-d "$VOL"` is not enough. macOS creates the mount point as a plain root-owned
+# directory on the boot volume before the filesystem lands on it, so a deploy
+# that starts on the first sight of the path writes into that stub and gets
+# "Permission denied" on mkdir and "Not a directory" on cp -- twice now. Wait
+# for a real mount: an entry in `mount` AND the Cores directory every Pocket
+# card has.
 waited=0
-while [ ! -d "$VOL" ]; do
+while ! { mount | grep -q " on $VOL "; } || [ ! -d "$VOL/Cores" ]; do
     [ $waited -ge $MAX_WAIT ] && { say "card never appeared"; exit 1; }
     sleep $SD_POLL; waited=$((waited + SD_POLL))
 done
