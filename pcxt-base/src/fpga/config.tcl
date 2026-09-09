@@ -17,10 +17,12 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # Comment it out to fall back to the PCXT build that reached POST (run#109).
 set_global_assignment -name VERILOG_MACRO "MACHINE_PC98=1"
 
-# Debug bands: paint eight RTL-driven stripes down the left edge of the picture
-# so the softcore's reset chain can be read without the softcore. Remove this
-# line once the PC-98 core reaches its OSD. See dbg_bits in core_top.sv.
-set_global_assignment -name VERILOG_MACRO "PC98_DEBUG_BANDS=1"
+# PC98_DEBUG_BANDS replaces the picture with a free-running probe. It did its
+# job: it proved the softcore, the ROM load, the raster and the OSD chain were
+# all healthy, which left the CPU as the only suspect and sent the search to
+# simulation, where the microcode ROM's out-of-range read turned up. Off now --
+# the machine has a picture to show.
+# set_global_assignment -name VERILOG_MACRO "PC98_DEBUG_BANDS=1"
 
 # Route SDRAM through sdram_mp (via sdram_kf_shim) instead of KFSDRAM.
 # RAM.sv tests this with `ifdef, so setting it to 0 would still select the shim
