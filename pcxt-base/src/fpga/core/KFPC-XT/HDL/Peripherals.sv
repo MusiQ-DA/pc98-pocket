@@ -1290,6 +1290,21 @@ end
     wire gdc_stat_select = pc98_io & ((address[7:0] == 8'h60) | (address[7:0] == 8'hA0));
     wire gdc_stat_read   = gdc_stat_select & ~io_read_n;
 
+    // ------------------------------------------------- system port stubs
+    //
+    // 0x35 is the 8255's port C on a PC-98, and the BIOS reads it on its second
+    // instruction: FD809 is IN AL,35h / TEST AL,80h / JNZ. Bits 7 and 5 have to
+    // read 1 or it branches away before it has done anything. The 8255 here is
+    // a real chip with its port C pins tied off, so the read is answered
+    // directly rather than by inventing pin values for it.
+    //
+    // 0x42 is the printer side of 0x40-0x4F; the ITF trace has it tested for
+    // bit 1 clear. Zero satisfies that and claims nothing else.
+    wire sysport_35_select = pc98_io & (address[7:0] == 8'h35);
+    wire sysport_42_select = pc98_io & (address[7:0] == 8'h42);
+    wire sysport_read      = (sysport_35_select | sysport_42_select) & ~io_read_n;
+    wire [7:0] sysport_data = sysport_35_select ? 8'hA0 : 8'h00;
+
     wire [7:0] pc98_font_row;      // driven by the row buffer below
     wire [6:0] pc98_font_cell;
     wire [3:0] pc98_font_line;
@@ -2100,6 +2115,11 @@ end
             data_bus_out <= ppi_data_bus_out;
         end
 `ifdef MACHINE_PC98
+        else if (sysport_read)
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= sysport_data;
+        end
         else if (gdc_stat_read)
         begin
             data_bus_out_from_chipset <= 1'b1;

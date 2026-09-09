@@ -2070,11 +2070,27 @@ module core_top (
     // it -- so it jumps to a stub in RAM, switches there, and far-jumps into
     // FD80:xxxx. All 8086 instructions.
     //
-    // Reset value is 1: the reset vector that makes sense at power-on is the
-    // ITF's (EA 00 00 00 F8, jump to itself), not the system BIOS's
-    // (EA 00 00 80 FD, which would skip the ITF entirely). np2 clears it
-    // instead, but np2 never runs an ITF.
+    // Reset value 0: the BIOS bank, not the ITF.
+    //
+    // The ITF is a 386 image. docs/PC98_ITF_TRACE.md has the disassembly: it
+    // uses 66-prefixed REP STOSD, LGDT/LIDT, SMSW/LMSW and SHL EAX,16, prints
+    // "Processor is 80386", and runs two of its extended-memory tests in
+    // protected mode. On an 8088 it cannot reach its own hand-over, however
+    // much of the I/O map is in place -- and this session put the map in place
+    // and watched it get as far as the GDC vsync wait at F80388.
+    //
+    // So boot where the ITF would have handed over. BIOS.ROM's reset vector is
+    // already EA 00 00 80 FD, its entry at FD800 is EB 02 EB 5D FA 33 C0 ... --
+    // plain 8086 throughout -- and np2 boots exactly this way, having no ITF at
+    // all. The ITF stays loaded in the shadow bank and port 0x043D still
+    // switches to it, so nothing is lost; only the power-on choice changes.
+    //
+    // `PC98_BOOT_ITF` puts it back for anyone testing the ITF path.
+`ifdef PC98_BOOT_ITF
     reg  itf_bank = 1'b1;
+`else
+    reg  itf_bank = 1'b0;
+`endif
     reg  itf_io_q, itf_io_qq;
     reg  [7:0] itf_io_data;
     wire itf_port_write = ~chipset_io_write_n & ~chipset_aen
@@ -2082,7 +2098,11 @@ module core_top (
 
     always @(posedge clk_chipset or posedge reset_sdram) begin
         if (reset_sdram) begin
+`ifdef PC98_BOOT_ITF
             itf_bank    <= 1'b1;
+`else
+            itf_bank    <= 1'b0;
+`endif
             itf_io_q    <= 1'b0;
             itf_io_qq   <= 1'b0;
             itf_io_data <= 8'h00;
