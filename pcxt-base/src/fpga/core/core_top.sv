@@ -1726,7 +1726,16 @@ module core_top (
                     bios_write_data     <= bios_write_data;
                     bios_write_n        <= 1'b1;
                     bios_write_byte_cnt <= bios_write_byte_cnt;
-                    tandy_bios_write    <= 1'b0;
+                    // HOLD the bank, for the same reason state 02 holds it: one
+                    // 16-bit word is written as two byte accesses, and both
+                    // belong to the address latched in state 01. Clearing it
+                    // here sent the SECOND byte of every word to the normal bank
+                    // instead of the shadow, so the ITF went in with only its
+                    // even-offset bytes and the guest read its own reset vector
+                    // back as EA A8 00 A8 F8 -- correct on the even offsets,
+                    // untouched SDRAM on the odd ones.
+                    tandy_bios_write    <= tandy_bios_write;
+                    font_bank_write     <= font_bank_write;
                     ioctl_wait          <= 1'b1;
                     bios_write_wait_cnt <= bios_write_wait_cnt + 8'h1;
 
@@ -1754,7 +1763,10 @@ module core_top (
                     bios_write_n        <= 1'b1;
                     bios_write_wait_cnt <= 'h0;
                     bios_write_byte_cnt <= ~bios_write_byte_cnt;
-                    tandy_bios_write    <= 1'b0;
+                    // Held here too: this state advances to the word's second
+                    // byte and hands back to state 02 to write it.
+                    tandy_bios_write    <= tandy_bios_write;
+                    font_bank_write     <= font_bank_write;
                     ioctl_wait          <= 1'b1;
                     if (bios_write_byte_cnt == 1'b0)
                         bios_load_state     <= 4'h02;
