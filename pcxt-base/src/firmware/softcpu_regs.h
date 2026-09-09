@@ -191,4 +191,13 @@ void ide_init(void);
 void ide_mount(uint32_t drive, uint32_t sectors);
 void ide_poll(void);
 
+// CPU-read snoop window, as guest address[19:4]. Powers up at 0xFFFF, so the
+// panel's RD0/RD8 show the reset vector unless the firmware moves it.
+//
+// The peek (sdramtest.h) reads guest memory through CHIPSET's external port;
+// this watches the CPU read it through its own. When those two disagree the
+// difference is the fault, and until this was settable there was exactly one
+// address at which they could be compared.
+#define POST_ROMWIN ((volatile uint32_t *) 0x5000007C)
+
 #endif
