@@ -373,9 +373,34 @@ module pocket_video (
     //   14 osd_enable     osd_active, synced to clk_pix
     //   15 ia_any         the softcore returned in-area for some probe pixel
     //   16 px_any         and returned a non-zero palette index there
-    wire [15:0] dbg_show = {px_any, ia_any, osd_enable, vb_any,
-                            hb_any, de_any, vsync_alive, raster_alive,
-                            dbg_bits_pix[7:0]};
+    // What the guest-derived counters actually reach over the DE-active pixels
+    // of a frame. The panel window is a range test on exactly these two, so
+    // their span is the whole remaining question.
+    reg [9:0] vg_min_acc = 10'h3FF, vg_max_acc = 10'd0, hg_max_acc = 10'd0;
+    reg [9:0] vg_min = 10'h3FF, vg_max = 10'd0, hg_max = 10'd0;
+    always @(posedge clk_pix) begin
+        if (pb_vs & ~pb_vs_d) begin
+            vg_min <= vg_min_acc; vg_max <= vg_max_acc; hg_max <= hg_max_acc;
+            vg_min_acc <= 10'h3FF; vg_max_acc <= 10'd0; hg_max_acc <= 10'd0;
+        end else if (vid_de_now) begin
+            if (osd_vcnt_g < vg_min_acc) vg_min_acc <= osd_vcnt_g;
+            if (osd_vcnt_g > vg_max_acc) vg_max_acc <= osd_vcnt_g;
+            if (osd_hcnt_g > hg_max_acc) hg_max_acc <= osd_hcnt_g;
+        end
+    end
+
+    //   A  core_top's eight, as before, then two dark
+    //   B  raster_alive, vsync_alive, vb_any, hb_any, de_any,
+    //      ia_any, px_any, osd_enable, guard_run, then one dark
+    //   C  osd_vcnt_g minimum over the frame, ten bits, MSB at the top
+    //   D  osd_vcnt_g maximum
+    //   E  osd_hcnt_g maximum
+    wire [9:0] dbg_colA = {2'b00, dbg_bits_pix[7:0]};
+    wire [9:0] dbg_colB = {1'b0, guard_run, osd_enable, px_any, ia_any,
+                           de_any, hb_any, vb_any, vsync_alive, raster_alive};
+    wire [9:0] dbg_colC = vg_min;
+    wire [9:0] dbg_colD = vg_max;
+    wire [9:0] dbg_colE = hg_max;
 
     wire [9:0] pb_h, pb_v;
     wire       pb_hs, pb_vs, pb_hb, pb_vb, pb_de;
@@ -395,26 +420,43 @@ module pocket_video (
 
     // The probe reads the softcore's framebuffer with its OWN raster, so the
     // whole OSD chain can be tested with CHIPSET out of the picture entirely.
-    assign osd_hcnt = pb_h;
-    assign osd_vcnt = pb_v;
+    // Round three feeds the softcore the GUEST counters -- the path that fails.
+    // Round two proved the chain works by driving it from pb_h/pb_v and getting
+    // a panel, so what is left is to measure what these two actually do.
+    assign osd_hcnt = osd_hcnt_g;
+    assign osd_vcnt = osd_vcnt_g;
 
     // Two columns of eight: 0-63 is bits 0-7, 64-127 is bits 8-15.
-    wire       pb_band_area = (pb_h < 10'd128) && (pb_v < 10'd256);
-    wire [3:0] pb_band      = {pb_h[6], pb_v[7:5]};
+    // Five columns of ten bands: 64 px wide, 32 lines tall, red rules between.
+    wire       pb_band_area = (pb_h < 10'd320) && (pb_v < 10'd320);
+    wire [2:0] pb_col       = pb_h[8:6];
+    wire [3:0] pb_row       = pb_v[8:5];
+    reg  [9:0] pb_colsel;
+    always @(*) begin
+        case (pb_col)
+            3'd0:    pb_colsel = dbg_colA;
+            3'd1:    pb_colsel = dbg_colB;
+            3'd2:    pb_colsel = dbg_colC;
+            3'd3:    pb_colsel = dbg_colD;
+            default: pb_colsel = dbg_colE;
+        endcase
+    end
+    // MSB first in the numeric columns, so they read top to bottom as binary.
+    wire pb_lit = (pb_col >= 3'd2) ? pb_colsel[4'd9 - pb_row]
+                                   : pb_colsel[pb_row];
     // 128 px per bar, offset by one so no bar is black -- a black bar next to
     // the bands would read as "nothing here" and defeat the point.
     wire [2:0] pb_bar       = pb_h[9:7] + 3'd1;
     // A one-pixel rule between the two band columns, so they cannot be misread
     // as one column of sixteen.
-    wire       pb_rule      = (pb_h == 10'd64) || (pb_h == 10'd65);
+    wire       pb_rule      = (pb_h >= 10'd64) && (pb_h < 10'd320)
+                              && (pb_h[5:0] < 6'd2);
     wire [23:0] pb_bar_rgb  = {{8{pb_bar[2]}}, {8{pb_bar[1]}}, {8{pb_bar[0]}}};
-    // The softcore's overlay, composited on the probe's raster. If the panel
-    // appears here, the whole OSD chain works and only the picture path is at
-    // fault; if it does not, the fault is in the framebuffer or its origin.
+    // No overlay composite this round: it is driven by the guest counters now,
+    // so it would land wherever those land and could sit on top of the bands
+    // that are meant to explain them. ia_any and px_any report it instead.
     wire [23:0] pb_rgb      = pb_rule       ? 24'hFF0000
-                            : pb_band_area ? (dbg_show[pb_band] ? 24'hFFFFFF
-                                                                : 24'h202020)
-                            : osd_show     ? osd_color
+                            : pb_band_area ? (pb_lit ? 24'hFFFFFF : 24'h202020)
                             :                pb_bar_rgb;
 
     reg [23:0] pb_vid_rgb = 24'd0;
