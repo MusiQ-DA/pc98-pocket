@@ -95,8 +95,20 @@ def data(j):
          "address": "0x10030000", "size_maximum": "0x1000"},
     ]
 
+def video(j):
+    # The PC-98 raster is 640x400 (pc98_video_timing.sv, from np2's clock
+    # table). The inherited file declares the PC/AT pair -- CGA 640x200 and the
+    # Hercules 720x350 canvas -- so the scaler was told to expect two hundred
+    # lines and handed four hundred. There is one mode here because the machine
+    # has one.
+    j['video']['scaler_modes'] = [
+        {"width": 640, "height": 400, "aspect_w": 4, "aspect_h": 3,
+         "rotation": 0, "mirror": 0},
+    ]
+
 rw('core.json', core)
 rw('data.json', data)
+rw('video.json', video)
 PY
 
 python3 - "$ART/ap_core.rbf" "$DIR/Cores/hiroya.PC9801/bitstream.rbf_r" <<'PY'

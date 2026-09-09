@@ -228,8 +228,16 @@ module pocket_video (
 
     // Presented raster size, read by the softcore to place the overlay window;
     // the canvas reports its 349 usable lines, excluding the sacrificial one.
+`ifdef MACHINE_PC98
+    // One raster, 640x400. The PC/AT pair below is CGA and the Hercules canvas,
+    // neither of which exists here -- and reporting 200 lines put the softcore's
+    // panel in the top half of a 400-line picture.
+    assign osd_raster_w = 10'd640;
+    assign osd_raster_h = 10'd400;
+`else
     assign osd_raster_w = pix_sel ? CANVAS_W : 10'd640;
     assign osd_raster_h = pix_sel ? (CANVAS_H - 10'd1) : 10'd200;
+`endif
 
     // Framebuffer palette index -> opaque colour; index 0 is transparent and
     // falls through to the picture.

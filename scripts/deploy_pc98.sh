@@ -14,7 +14,9 @@ cd "$(dirname "$0")/.."
 
 RUN=""
 VOL="/Volumes/ANALOGUE"
-ROMS="${PC98_ROMS:-}"
+# ~/.pc98roms is the default so a deploy does not depend on an environment
+# variable set in some other shell -- that has cost a run more than once.
+ROMS="${PC98_ROMS:-$HOME/.pc98roms}"
 POLL=45; SD_POLL=15; MAX_WAIT=5400
 
 while [ $# -gt 0 ]; do
