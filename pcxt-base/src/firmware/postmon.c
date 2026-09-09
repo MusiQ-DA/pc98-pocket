@@ -106,8 +106,41 @@ static void dec(int x, int y, uint32_t v)
 //
 // Read once, with the guest held, and show the cached bytes afterwards. See
 // postmon.h for why it cannot be read live.
-static uint8_t rom_a[8];   // F800E0: the ITF's port-init loop and its table
-static uint8_t rom_b[8];   // FFFF0 : the reset vector, as a control
+// The first 256 bytes of itf.rom, so the firmware can COMPARE instead of dump.
+//
+// The peek says F8000 and every 4 KB page head are byte-perfect and F800E0 is
+// not, deterministically, across builds. Dumping eight bytes at a time to find
+// the edges of that would take a dozen round trips; carrying the answer costs
+// 256 bytes of firmware and reports the first mismatch as one number.
+static const uint8_t itf_head[256] = {
+    0xFA, 0xB4, 0xD5, 0x9E, 0x79, 0xFE, 0x75, 0xFE, 0x7B, 0xFE, 0x73, 0xFE,
+    0xF8, 0x3F, 0x73, 0xFE, 0xB0, 0x01, 0xB4, 0x02, 0xF6, 0xE4, 0x70, 0xFE,
+    0x33, 0xC0, 0x9E, 0x78, 0xFE, 0x74, 0xFE, 0x7A, 0xFE, 0x72, 0xFE, 0xF9,
+    0x3F, 0x72, 0xFE, 0xB0, 0x7F, 0xB4, 0x20, 0xF6, 0xE4, 0x71, 0xFE, 0xB8,
+    0xFF, 0xFF, 0x8E, 0xD8, 0x8C, 0xDB, 0x8E, 0xD3, 0x8C, 0xD1, 0x8E, 0xC1,
+    0x8C, 0xC2, 0x8B, 0xE2, 0x8B, 0xEC, 0x8B, 0xF5, 0x8B, 0xFE, 0x3B, 0xF8,
+    0x75, 0xFE, 0x2D, 0x55, 0x55, 0x73, 0xE3, 0xBA, 0x39, 0x04, 0xEC, 0xEC,
+    0x0A, 0xC0, 0x75, 0x27, 0xB0, 0x92, 0xE6, 0x37, 0xEB, 0x00, 0xEB, 0x00,
+    0xB0, 0xFF, 0xE6, 0x35, 0xB8, 0x00, 0x03, 0xE6, 0x43, 0xB9, 0x0A, 0x00,
+    0xE2, 0xFE, 0xFE, 0xCC, 0x75, 0xF5, 0xB0, 0x40, 0xE6, 0x43, 0xB9, 0x0A,
+    0x00, 0xE2, 0xFE, 0xB0, 0x5E, 0xE6, 0x43, 0xEC, 0x24, 0x02, 0x0C, 0x34,
+    0xEE, 0xB8, 0x00, 0xA0, 0x8E, 0xC0, 0xE4, 0x35, 0xA8, 0x80, 0x75, 0x09,
+    0x8E, 0x16, 0x06, 0x04, 0x8B, 0x26, 0x04, 0x04, 0xCB, 0xA8, 0x20, 0x75,
+    0x1F, 0xBD, 0xA3, 0x00, 0xE9, 0x99, 0x00, 0xBC, 0xA9, 0x00, 0xE9, 0x2E,
+    0x04, 0xB0, 0x0D, 0xE6, 0x62, 0xB0, 0x0F, 0xE6, 0x68, 0xBE, 0x34, 0x1B,
+    0xBD, 0xBA, 0x00, 0xE9, 0x11, 0x1D, 0xEB, 0xFE, 0xB0, 0x70, 0xE6, 0x77,
+    0xEB, 0x00, 0xEB, 0x00, 0xB0, 0x00, 0xE6, 0x73, 0xEB, 0x00, 0xEB, 0x00,
+    0xB0, 0x00, 0xE6, 0x73, 0xBE, 0xE5, 0x00, 0xFC, 0x32, 0xED, 0x2E, 0xAD,
+    0x8A, 0xC8, 0x8A, 0xF4, 0x2E, 0xAD, 0x8A, 0xD4, 0xEE, 0xE2, 0xF9, 0xFF,
+    0xE6, 0x0D, 0x00, 0x44, 0x11, 0x92, 0x37, 0x07, 0x37, 0x00, 0x50, 0x0D,
+    0x37, 0x82, 0x46, 0x0F, 0x46, 0x0C, 0x37, 0x0F, 0x37, 0x0A, 0x37, 0x07,
+    0x6A, 0x04, 0x6A, 0x06,
+};
+
+static uint32_t rom_bad;      // how many of the 256 disagree
+static uint32_t rom_first;    // offset of the first, or 0x100 if none
+static uint8_t  rom_a[8];     // eight bytes from there: what memory holds
+static uint8_t  rom_b[8];     // eight bytes from there: what the file holds
 
 void postmon_capture_rom(void)
 {
@@ -124,14 +157,23 @@ void postmon_capture_rom(void)
     //
     // The file's values are FA 10 72 01 00 00 00 00; the last four pages read
     // 00 in the image itself, so only the first four carry information.
-    // The pages and F8000 both came back byte-perfect, so the loader's copy is
-    // intact and there is nothing left to map. What is left is the same bytes
-    // through the other path: peek F800E0 here, and RD0 above shows the CPU
-    // reading them.
-    for (uint32_t i = 0; i < 8; i++)
-        rom_a[i] = sdram_peek(0xF800E0u + i);
-    for (uint32_t i = 0; i < 8; i++)
-        rom_b[i] = sdram_peek(0xF800E8u + i);
+    rom_bad = 0;
+    rom_first = 0x100u;
+    for (uint32_t i = 0; i < 256u; i++) {
+        if (sdram_peek(0xF8000u + i) != itf_head[i]) {
+            rom_bad++;
+            if (rom_first == 0x100u)
+                rom_first = i;
+        }
+    }
+    // Eight bytes from the first disagreement, memory against file.
+    uint32_t base = (rom_first < 0x100u) ? rom_first : 0u;
+    if (base > 248u)
+        base = 248u;
+    for (uint32_t i = 0; i < 8; i++) {
+        rom_a[i] = sdram_peek(0xF8000u + base + i);
+        rom_b[i] = itf_head[base + i];
+    }
 }
 
 void post_mon_tick(void)
@@ -280,7 +322,13 @@ void post_mon_tick(void)
     // 0077, 0073. F800E0 is that loop and the first bytes of its table, so the
     // file's own values are printed underneath as the key.
     {
-        osd_draw_string(&fb, 4, 132, "PK-E0", OSD_LABEL);
+        // BAD = how many of the first 256 bytes disagree, AT = the first one.
+        // On the POST row, which this machine leaves half empty.
+        osd_draw_string(&fb, 4 + 24 * 8, 2, "BAD", OSD_LABEL);
+        hex(4 + 28 * 8, 2, rom_bad, 3);
+        osd_draw_string(&fb, 4 + 32 * 8, 2, "AT", OSD_LABEL);
+        hex(4 + 35 * 8, 2, rom_first, 3);
+        osd_draw_string(&fb, 4, 132, "GOT", OSD_LABEL);
         // Unrolled: check_osd_layout reads these calls literally and cannot
         // resolve a loop variable in the x expression.
         hex(4 +  7 * 8, 132, rom_a[0], 2);
@@ -302,7 +350,7 @@ void post_mon_tick(void)
         // the loader wrote. If this row matches LD0, the peek works and F800E0
         // really is empty. If it comes back zeros too, the peek is the thing
         // that is broken and F800E0 says nothing.
-        osd_draw_string(&fb, 4, 142, "PK-E8", OSD_LABEL);
+        osd_draw_string(&fb, 4, 142, "FILE", OSD_LABEL);
         hex(4 +  7 * 8, 142, rom_b[0], 2);
         hex(4 + 10 * 8, 142, rom_b[1], 2);
         hex(4 + 13 * 8, 142, rom_b[2], 2);
