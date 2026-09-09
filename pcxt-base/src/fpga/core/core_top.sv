@@ -537,12 +537,36 @@ module core_top (
     // load_active falls after having been high, and hold reset until then.
     // One-shot, so a deferred slot mounted later (a floppy, say) cannot put the
     // softcore back into reset and take the OSD away.
+    //
+    // WATCHDOG. This condition can hang, and hanging costs the OSD -- which is
+    // the only way to ask the core anything. load_active falls only when APF
+    // raises dataslot_allcomplete and the ROM FIFO has drained; if either never
+    // happens (a slot APF declines to stream, a word the loader never consumes)
+    // the softcore stays in reset forever and the machine is mute. That is a
+    // strictly worse failure than the one this gate was added to prevent:
+    // starting on the baked-in image and having it replaced underneath.
+    //
+    // So the gate expires. Four seconds at 42.95 MHz is far longer than any
+    // real slot load -- the whole 416 KB of ROM moves in about 75 ms -- so a
+    // healthy boot never reaches it, and an unhealthy one still gets an OSD to
+    // explain itself with.
+    localparam [27:0] BOOT_DL_TIMEOUT = 28'd171_818_180;   // 4 s @ 42.95 MHz
     logic boot_dl_seen = 1'b0;
     logic boot_dl_done = 1'b0;
+    logic boot_dl_late = 1'b0;
+    logic [27:0] boot_dl_timer = 28'd0;
     always @(posedge clk_chipset) begin
         if (load_active)                   boot_dl_seen <= 1'b1;
         if (boot_dl_seen && !load_active)  boot_dl_done <= 1'b1;
+
+        if (boot_dl_done)
+            boot_dl_timer <= 28'd0;
+        else if (boot_dl_timer == BOOT_DL_TIMEOUT)
+            boot_dl_late  <= 1'b1;
+        else
+            boot_dl_timer <= boot_dl_timer + 28'd1;
     end
+    wire boot_dl_release = boot_dl_done | boot_dl_late;
 
     logic reset_soft = 1'b1;
     logic [15:0] reset_soft_count = 16'h0000;
@@ -553,7 +577,7 @@ module core_top (
             reset_soft <= 1'b1;
             reset_soft_count <= 16'h0000;
         end
-        else if (!boot_dl_done)
+        else if (!boot_dl_release)
         begin
             reset_soft <= 1'b1;
             reset_soft_count <= 16'h0000;
@@ -1407,9 +1431,9 @@ module core_top (
     // and the ext port. It is a 4 KB BRAM with no handshake, so queueing it
     // behind the BIOS load would buy nothing.
     //
-    // data.json puts font.rom at bridge 0x10030000, and FONT.ROM's 8x16 ANK set
+    // data.json puts font.rom at bridge 0x10100000, and FONT.ROM's 8x16 ANK set
     // is the contiguous 0x0800-0x17FF of the file (np2 font/fontv98.c), so the
-    // window is dl_addr 0x30800-0x317FF and the BRAM address is the offset
+    // window is dl_addr 0x100800-0x1017FF and the BRAM address is the offset
     // within it.
     wire        font_dl_hit  = dl_wr && (dl_addr[27:16] == 12'h010)
                                      && (dl_addr[15:0] >= 16'h0800)
@@ -2418,6 +2442,31 @@ module core_top (
     wire [5:0]  r, g, b;
     wire        tandy_16_gfx, tandy_color_16;   // CHIPSET Tandy-video outputs (unused)
 
+    // ------------------------------------------------------ hardware bands
+    //
+    // The OSD is the softcore's only output, so when the softcore is silent
+    // there is no way to ask why. These six bits are painted by pocket_video as
+    // stripes down the left edge, straight from the RTL -- no softcore, no
+    // firmware, no guest involved. Read top to bottom:
+    //
+    //   1  reset_soft       the softcore is held in reset
+    //   2  boot_dl_done     the boot-time downloads finished
+    //   3  load_active      a slot is loading, or the ROM FIFO is not empty
+    //   4  is_downloading   APF says a slot is being written
+    //   5  rlf_empty        the ROM FIFO has drained
+    //   6  osd_active       the softcore asserted its OSD-enable register
+    //   7  ~RESET           every PLL is locked
+    //   8  boot_dl_late     the download watchdog expired -- the gate hung
+    //
+    // A lit band 1 with band 2 dark means the softcore never left reset because
+    // a download never completed; band 1 dark with band 6 dark means it is
+    // running but never enabled the OSD; band 7 dark means the PC-98 dot-clock
+    // PLL never locked and nothing downstream of it can run.
+    wire [7:0] dbg_bits = {
+        boot_dl_late, ~RESET, osd_active, rlf_empty,
+        is_downloading, load_active, boot_dl_done, reset_soft
+    };
+
     pocket_video u_pocket_video (
         .clk_pix            (clk_pix),
         .clk_pix_90         (clk_pix_90),
@@ -2436,6 +2485,7 @@ module core_top (
         .osd_active         (osd_active),
         .osd_palette_idx    (osd_palette_idx),
         .osd_in_area        (osd_in_area),
+        .dbg_bits           (dbg_bits),
         .osd_hcnt           (osd_hcnt),
         .osd_vcnt           (osd_vcnt_sel),
         .osd_raster_w       (osd_raster_w),

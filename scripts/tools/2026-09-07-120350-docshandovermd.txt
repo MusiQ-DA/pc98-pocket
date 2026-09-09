@@ -1,0 +1,2273 @@
+ ▐▛███▛█   Claude Code v2.1.263
+▝▜██████▀  Opus 5 · Claude Pro
+  ▝▝ ▝▝    ~/repo/pc98-pocket/scripts/tools
+
+
+❯ docs/HANDOVER.md で引き継いで                                                 
+
+⏺ I'll read the handover doc first.
+
+  Read 1 file, listed 1 directory (ctrl+o to expand)
+
+⏺ 引き継ぎ内容を把握しました。まず指示どおり B0ビルドの状態確認から始めます。
+
+  Listed 4 directories, ran 14 shell commands (ctrl+o to expand)
+
+⏺ 状況を把握しました。引き継ぎ文書と実際の状態にズレがあります。まず判明した事実
+  を確定させ、見つかった不備を修正します。
+
+  Ran 5 shell commands (ctrl+o to expand)
+
+⏺ 引き継ぎ完了しました。引き継ぎ文書と実際の状態にズレがあったので、検証して修正
+  しました。
+
+  判明した事実
+
+  B0ビルドは完了しており、SDカードにも投入済みでした。
+  ただし経路が文書と違います。
+
+  - ローカルDockerビルドは 22:45 に合成途中で中断(/tmp/pcxtbase_build.log が
+    Analysis&Synthesis の途中で切れている、pcxt-base/**/output_files/ は不在)
+  - 成功したのは GitHub Actions CI。アーティファクトを 00:14 に dist/testB0/
+    としてパッケージ、00:15 に SD へコピー済み
+  - ビットストリームは正規: 1,744,436 B(純正 desaster.PCXT の 1,741,140 B
+    とサイズが違う=別ビルド、流用ではない)、先頭非FFバイト 56 56 56 56 6c 2f
+    で反転も検証OK
+
+  なお src/fpga/output_files/ap_core.rbf(リポジトリ直下)は旧スクラッチchassis
+  の成果物です(top = apf_top, 1,674 ALM, PLL 0)。B0 とは別物なので混同注意。
+
+  修正した不備 2件
+
+  1. 必須アセット boot.bin が未配置だった — data.json のスロット1「PCXT BIOS」は
+     required: true / parameters: 0x203(bit1 = core
+     specific)でコア固有アセットディレクトリを見ます。純正は
+     Assets/pcxt/desaster.PCXT/boot.bin
+     ですが、我々のコア用は存在せず、Assets/pcxt/common/ も空でした。→
+     hiroya.PCXTDEV/ と hiroya.PCXT-dev/ の両方に配置(author.shortname
+     派生かフォルダ名派生か未確定のため両建て)。
+  2. SD上の core.json が手編集で LF・末尾改行なしになっていた →
+     正規化して再生成・再コピー。
+
+  /Cores 直下の散落ファイルは 0 件、Platforms/pcxt.json
+  も配置済みで、パッケージ側の問題は他にありません。
+
+  docs/HANDOVER.md を実態に合わせて更新し、コミットしました(d18c892)。
+
+  環境
+
+  DNS は依然壊れています(scutil --dns → No DNS configuration
+  available、socket.gethostbyname 失敗)。dig @1.1.1.1
+  は生きているので、ネットワーク操作は scripts/tools/ の dig
+  ピン留めスクリプト経由で行います。修復するなら sudo networksetup 
+  -setdnsservers Wi-Fi 1.1.1.1 8.8.8.8 です。
+
+  確認したいこと
+
+  B0 の実機テストは既に実施されましたか?
+
+  - 未実施 → SD をイジェクトして Pocket で PCXTDEV を起動してください。BIOS POST
+    が出れば我々のビルドパイプラインは健全と確定し、P1(PC-98メモリマップ)へ進め
+    ます。
+  - 実施済みでエラーだった → その結果は上記の boot.bin 
+    欠落込みの可能性が高いので、修正後に再テストをお願いします。
+
+  結果を教えていただければ、次の分岐(P1着手 /
+  raetroイメージのA/B検証)に進みます。SD
+  のイジェクトは権限の都合でこちらから実行できないため、Finder
+  からお願いします。
+
+✻ Baked for 4m 21s · done 12:55 AM
+
+※ recap: PC-98コアのビルドパイプライン検証中で、B0ベースラインのビットストリームはSDカードに投入済み、boot.bin欠落も修正済みです。次はSDをイジェクトしてPocketでPCXTDEVを起動し、BIOS POSTが出るか確認してください。 (disable recaps in /config)
+
+❯ load error in core general error でした                                       
+
+⏺ 実機テスト結果、ありがとうございます。これは重要な情報です —
+  過去の自作ビルド(Test 1–3)は「Core not ready」「Host commands ignored」でした
+  。それらはビットストリームのロード自体は成功していたことを意味します。B0 の
+  "Load error"
+  はそれより手前の段階での失敗なので、症状が違います。原因を特定します。
+
+  Ran 6 shell commands (ctrl+o to expand)
+
+⏺ CI アーティファクトが残っていました。ビルドレポートを確認します。
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ ビルド自体は完全に健全でした(Fitter Successful / エラー0 / Critical Warning 0
+  / ALM 65% / 224ピン)。つまりQuartusの出力が正常なのに実機がロードを拒否してい
+  ます。上流がどの環境でビルドしているかを確認します。
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+⏺ 原因が特定できました。ビットストリームではなくパッケージ側です。
+
+  SDカード上の278コアを検査したところ、277コアが フォルダ名 == author.shortname 
+  を厳密に満たしており、破っているのは我々の B0 コアだけでした(フォルダ
+  hiroya.PCXT-dev に対し core.json は hiroya.PCXTDEV)。エラーなしだった TestA は
+  hiroya.PC98 / author=hiroya / shortname=PC98 で一致しています。
+
+  修正します。
+
+  Ran 6 shell commands (ctrl+o to expand)
+
+⏺ 修正版を SD に投入しました。原因はビットストリームではなくパッケージ側です。
+
+  根拠
+
+  まず、ビットストリームは健全でした(CIレポート
+  /private/tmp/bitstream_b0/ap_core.fit.rpt):
+  - Fitter Successful / Quartus 18.1.1 Build 646 / Error 0・Critical Warning 0
+  - ALM 12,049/18,480 (65%)、RAM 63%、DSP 24%、224/224 pins
+  - raetro イメージの Quartus は 1 つだけ(バージョン取り違えの余地なし)
+
+  さらに、過去の Test 1–3 の「Core not ready to run」「Host commands 
+  ignored」は、ビットストリームのロードには成功していた段階のエラーです。つまり
+  raetro ビルド品は実機でロードできることが既に示されており、「raetro
+  が悪い」仮説の根拠は弱い。
+
+  見つけた不備 3 件
+
+  1. フォルダ名が <author>.<shortname> と不一致(最有力)
+     フォルダ hiroya.PCXT-dev に対し core.json は hiroya.PCXTDEV。SD 内の全 278 
+     コアを検査したところ、277 コアがこの規約を厳守しており、破っていたのは我々
+     のコアだけでした。エラーが出なかった TestA は hiroya.PC98 / author=hiroya /
+     shortname=PC98 で一致しています。
+  2. 必須アセット boot.bin が未配置 — data.json スロット1は parameters: 
+     0x203(bit1 = core
+     specific)なので、コア固有アセットディレクトリを見ます。Assets/pcxt/common/
+     は空でした。
+  3. data.json の IDE スロット size_maximum が 0x80000000 — 純正リリース版は
+     0x40000000。0x80000000 は符号付き32bitで負値になります。上流 main
+     の新しい値を拾ったものと思われ、ベースライン検証には不要な差分です。
+
+  対処: testB0b
+
+  dist/testB0b/ として作り直し、SD へ投入済みです。
+
+  - コア名を hiroya.PCXTDEV に統一(フォルダ名 = author.shortname)
+  - JSON は純正 desaster.PCXT からそのままコピーし、core.json の
+    shortname/author/description の 3 行のみ最小編集(→ 2. と 3. も自動的に解消)
+  - Assets/pcxt/hiroya.PCXTDEV/boot.bin を配置、旧 hiroya.PCXT-dev は
+    Cores/Assets とも撤去
+
+  検証済み:
+  - SD 全コアで フォルダ名 == author.shortname、不一致 0 件
+  - 動作実績のある純正 desaster.PCXT との差分は bitstream.rbf_r と core.json の 
+    3 行だけ → 実質ビットストリームだけが変数の理想的な A/B になりました
+  - SD 上の rbf_r は dist と byte 一致(コピー健全)
+
+  docs/HANDOVER.md に知見を反映してコミット済みです(25eeae1)。フォルダ名規約と
+  size_maximum の件は §4 の技術知見にも 5b/5c として追記しました。
+
+  お願い
+
+  SD をイジェクトして(権限の都合でこちらから実行できないため Finder
+  からお願いします)、Pocket で PCXTDEV を起動してみてください。
+
+  - ✅ BIOS POST 表示 →
+    ビルドパイプライン健全と確定。P1(PC-98メモリマップ)へ進めます
+  - ❌ また Load error → パッケージ要因は出し切ったので、次は MacLC ソースを
+    raetro でビルドして実機テストする A/B に進みます(MacLC 純正 rbf は TestA
+    で動作実績があるので差分が取れます)
+
+✻ Worked for 6m 27s · done 1:08 AM
+
+❯ POSTでました                                                                  
+
+⏺ B0 通過です。我々のビルドパイプラインが健全であることが確定しました。記録して
+  P1 の準備に入ります。
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ あ、でも厳密にはBIOSに移らないんだけど、これは正常？                          
+
+⏺ 良い指摘です。まず「どこまで進んだか」を切り分けます。firmware.vh を NOP
+  スタブにしている影響が出ているはずなので、ソースで確認します。
+
+  Ran 10 shell commands (ctrl+o to expand)
+
+⏺ Homebrew の LLVM 23(riscv32 対応)+ lld が入っていました。ネットワーク不要で 
+  firmware をビルドできます。
+
+  Ran 5 shell commands (ctrl+o to expand)
+
+⏺ ビルド中間物(.o/.d/.elf/.bin)まで含めてしまったので除外します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ はい、完全に正常です。むしろ想定どおりで、原因も特定済みです。
+
+  なぜ BIOS に進まないか
+
+  firmware.vh を NOP スタブにしているせいです。RTL
+  を追ったところ、これは避けられない挙動でした:
+
+  - softcpu_subsystem.sv:220 — reg soft_guest_hold_r = 1'b1;
+    ゲスト(8088)は電源投入時リセット保持で起動する
+  - これを解除できるのは picorv32 のファームウェアだけ: main.c の
+    *SOFT_GUEST_HOLD = 0;(MMIO 0x2000001C)
+  - core_top.sv:473 — reset_wire = ... | soft_guest_hold;
+  - core_top.sv:1506 — スプラッシュ表示すら ~soft_guest_hold_28 を待っている
+
+  NOP スタブ(6144×0x00000013)はこのストアを一度も実行しないので、8088 
+  は永久にリセット保持。BIOS に進みようがありません。**picorv32
+  は単なる周辺サービスではなく「ブートマスタ」**でした。
+
+  なので今回の結果の意味はこうです:
+
+  ┌─────────────────────┬───────────────────────────────────────────────────┐
+  │        事象         │                       意味                        │
+  ├─────────────────────┼───────────────────────────────────────────────────┤
+  │ Load error が消えた │ パッケージ + ビルドパイプラインが健全と確定 ✅    │
+  ├─────────────────────┼───────────────────────────────────────────────────┤
+  │ 画面が出た          │ ビットストリームが実機で正常にコンフィグされた ✅ │
+  ├─────────────────────┼───────────────────────────────────────────────────┤
+  │ BIOS に進まない     │ NOP スタブの必然。ビルドの問題ではない            │
+  └─────────────────────┴───────────────────────────────────────────────────┘
+
+  firmware を実ビルドしました
+
+  嬉しい誤算が2つありました。
+
+  1. RISC-V GNU ツールチェーンは不要でした。上流の Makefile は LLVM
+     を使います(clang --target=riscv32 + ld.lld + llvm-objcopy)。
+  2. ローカルに Homebrew LLVM 23(riscv32 対応)が既に入っていたので、DNS
+     が壊れたままでもビルドできました。
+
+  1点だけ修正が必要でした: LLVM 23 は vkb_layout.c の文字列長ループを
+  LoopIdiomRecognize が strlen 呼び出しに書き換えてしまい、ベアメタルリンクで
+  undefined symbol: strlen になります。CFLAGS に -ffreestanding
+  を追加して解決しました(理由をコメントで残してあります)。
+
+  成果物: text 17,442 + data 184 → 4,407 / 6144 ワード、24KB ROM
+  に収まります。先頭ワードは 1580006f = jal x0,+0x158(リセットベクタ)で、NOP
+  埋めでないことも確認済みです。
+
+  コミット済みです(bf8ee94)。docs/HANDOVER.md にも RTL 上の根拠と firmware
+  ビルド手順を §4-6/6b として記録しました。
+
+  次: 再ビルドしますか
+
+  この firmware.vh でビットストリームを焼き直せば 8088 が解放され、FDD/IDE
+  サービスと OSD も動くはずです。ローカル Docker は amd64
+  エミュレーションで前回中断しているので、CI(GitHub 
+  Actions)に投げるのが現実的です(前回は成功しています)。
+
+  DNS が壊れているので scripts/tools/ghpush.py 経由で main に push → CI
+  起動、という流れになります。push して回してよいですか?(1〜2時間かかります)
+
+  なお、この後 DOS ブートまで見るならフロッピーイメージも要ります。desaster.PCXT
+  側で使っているイメージがあれば流用できますが、B0
+  の目的(パイプライン検証)としては「BIOS POST が出て Boot failure
+  まで進む」で十分です。
+
+✻ Crunched for 3m 53s · done 1:15 AM
+
+❯ 時間かかるようなら次に進みますか。 PC-98 として本来の目標に達するまで /goal   
+  コマンドで指定したいのですが、なんと指定すればいい？                          
+
+⏺ /goal が実在するか確認します。
+
+  Listed 1 directory (ctrl+o to expand)
+
+⏺ /goal は存在しません。確認した範囲は以下です:
+
+  - プロジェクトの .claude/commands/ — ディレクトリ自体なし
+  - ユーザーの ~/.claude/commands/ — agmsg.md のみ
+  - 利用可能なスキル一覧 — goal に相当するものなし
+
+  近いのは /loop(プロンプトを反復実行。間隔を省略すると自己ペース)です。ただし
+  /loop は「繰り返す」仕組みであって「ゴールを登録する」仕組みではないので、ゴー
+  ル定義そのものは文章として渡す必要があります。
+
+  渡すべきゴール文(たたき台)
+
+  /loop に渡すなら、こういう「完了条件つきの1文+停止条件」が実用的です:
+
+  /loop PC-98 コアを Analogue Pocket 実機で MS-DOS が起動するまで進める。
+  現在地と次の一手は docs/HANDOVER.md §5 を唯一の正とし、1イテレーションごとに
+  (1) 次の未完タスクを1つ進める (2) 結果を HANDOVER.md に反映 (3) commit する。
+  実機テストが必要な段階に来たら、SD
+  への投入まで済ませてユーザーに依頼して停止する。
+  CI ビルド待ちの間は待たずに次のタスクへ進む。
+
+  ポイントは**「実機テストが必要になったら止まる」**を明記することです。これを書
+  かないと、私が検証できない段階でループが空回りします(実機テストはユーザー担当
+  、というのが §7 の約束事なので)。
+
+  ただ、その前に「本来の目標」を確定させたい
+
+  現状 docs/HANDOVER.md の作業リストは P1〜P6
+  の手段が並んでいるだけで、完了条件(Definition of Done)が書かれていません。ゴー
+  ル駆動で回すなら、まずこれを決めるべきです。私の理解では候補はこのあたりです:
+
+  ┌──────────┬───────────────────────────────────────────────────────────────┐
+  │   段階   │                           完了条件                            │
+  ├──────────┼───────────────────────────────────────────────────────────────┤
+  │ 最小成功 │ 実機で PC-98 BIOS が POST し、TVRAM にテキストが表示される    │
+  ├──────────┼───────────────────────────────────────────────────────────────┤
+  │ 実用最小 │ 実機で FD から MS-DOS が起動し、コマンドが打てる              │
+  ├──────────┼───────────────────────────────────────────────────────────────┤
+  │ 本命     │ 実機で PC-98 用ソフト(ゲーム等)が GDC                         │
+  │          │ グラフィック+音源つきで動く                                   │
+  └──────────┴───────────────────────────────────────────────────────────────┘
+
+  どれを「本来の目標」とするかで、P3(GDC)/P5(OPNA)/P6(EGC)
+  を今回のスコープに入れるかが変わります。**ご希望はどれでしょうか。**決めていた
+  だければ、docs/GOAL.md として完了条件を明文化し、HANDOVER.md §5
+  をそこに紐づけて、上の /loop 文をそのまま使える状態にします。
+
+  並行して: CI は今すぐ投げるのが得です
+
+  「時間かかるなら次に進む」ではなく、両方やれます。CI は裏で回るので、push
+  してから P1(PC-98 メモリマップ)の設計に入れば待ち時間はゼロです。
+
+  scripts/tools/ghpush.py で main に push → CI 起動、という流れになります。push 
+  してよいですか? 承認いただければ投げて、そのまま P1 に着手します。
+
+✻ Cogitated for 50s · done 1:17 AM
+❯ 本命かな                                                                      
+
+⏺ 「本命」了解しました。完了条件を明文化する前に、既存の設計ドキュメントと矛盾し
+  ないよう確認します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ 本命の完了条件を書く前に、容量予算が本当に足りるのかを実測データで押さえておき
+  ます。B0 の fit レポートにエンティティ別の使用量が入っています。
+
+  Ran 5 shell commands (ctrl+o to expand)
+
+⏺ 実測で容量予算が出せました。ROM 資産のサイズも確認しておきます。
+
+  Listed 1 directory (ctrl+o to expand)
+
+⏺ 容量予算と ROM 資産の実測が揃ったので、docs/GOAL.md を書きます。PORT_PLAN 
+  の記述に誤りが1件見つかったのでそれも直します(sound.rom は 128KB ではなく
+  16KB、かつリズム音源は ROM ではなく WAV でした)。
+
+⏺ Write(~/repo/pc98-pocket/docs/GOAL.md)
+  ⎿  Wrote 156 lines to ../../docs/GOAL.md
+       1 # プロジェクトゴール(確定版 2026-09-07)
+       2 
+       3 このプロジェクトの**唯一の正**となるゴール定義。
+       4 各セッションはここを読んでから `docs/HANDOVER.md` §5 の作業リス
+         トに進むこと。
+       6 ---
+       7 
+       8 ## 1. ゴール(「本命」)
+       9 
+      10 > **Analogue Pocket 実機で、PC-98 用ソフト(ゲーム)が
+     … +178 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 「本命」でゴールを確定し、docs/GOAL.md に明文化しました。
+
+  /loop に渡す指示文(これが答え)
+
+  /loop docs/GOAL.md のゴール達成に向けて進める。現在地と次の一手は
+  docs/HANDOVER.md §5 を唯一の正とする。1イテレーションで
+  (1) 未完タスクを1つ進める (2) 結果を HANDOVER.md に反映 (3) commit する。
+  実機テストが必要な段階に来たら、SD
+  への投入まで済ませてユーザーに依頼し停止する。
+  CI ビルド待ちの間は待たずに次のタスクへ進む。
+
+  **「実機テストが必要になったら止まる」を必ず入れてください。**実機検証はユーザ
+  ー担当なので、これがないとループが空回りします。
+
+  ゴール定義(要点)
+
+  ▎ 実機で PC-98 ソフトが GDC グラフィックと FM 音源つきで実用速度で動く
+
+  完了条件を D1〜D7 で定義しました。D7「全部入りが同一ビットストリームで成立する
+  」が本質的な難所です。個々の機能は入っても、同時に載るかは別問題なので。
+
+  なお D2/D5/D6 
+  は主観判定になりやすいので、検収タイトルを1本決める必要があります(V30
+  で動く/GDC 16色/OPNA/EGC
+  使用)。お手持ちのイメージから選んでいただく必要があるので、GOAL.md
+  では未決定として残してあります。
+
+  実測でわかったこと(良い話と悪い話)
+
+  B0 の fit レポートからエンティティ別に実測しました。
+
+  良い話 — ALM は余裕がありました。 置換対象の CHIPSET(PC/AT 機械層一式)が 6,428
+  ALM を占めており、シャーシ側は 5,621 ALM しか使っていません。つまり PC-98 
+  機械層に 12,859 ALM(70%)使えます。PC/AT 機械層が 6,428
+  で収まっている以上、PC-98 も入る見込みが立ちます。撤去できる PC/AT
+  固有ブロック(SAA1099×2、OPL2、CGA)だけで約 2,030 ALM 浮きます。
+
+  悪い話 — ボトルネックは M10K でした。 残り 162 ブロック ≒
+  202KB。ここに3つのリスクがあります:
+
+  - R1(最重要): G-RAM 128KB をどこに置くか。 BRAM に置くと他が入らず、SDRAM
+    に置くと EGC の 4プレーン同時アクセスが帯域・遅延で厳しい。D5(EGC 
+    正速)は事実上この設計判断で決まります。 そこで P3(GDC)の前に P0「G-RAM 
+    配置とバス構造の決定」を新設しました。
+  - R2: FONT.ROM は 288KB で BRAM に入りません(M10K 全体の 75%)。漢字は SDRAM
+    常駐 + ANK のみキャッシュが現実解です。
+  - R3: PORT_PLAN の記述に誤りがありました。 sound.rom は 128KB ではなく
+    16KB、しかも YM2608 のリズム ROM ではなく -26/-86 ボードの BIOS ROM
+    でした。YM2608 リズム ROM のダンプは存在せず、np2 は 
+    2608_*.WAV(計約82KB)で代用しています。 D4 を実機で満たすには WAV を ADPCM-A
+    に変換して配る設計が別途必要で、これは未設計です。
+
+  PORT_PLAN も訂正し、HANDOVER にも反映してコミット済みです(2939898)。
+
+  push の件
+
+  先ほどの質問がまだ保留です。firmware 入りビットストリームの CI 
+  ビルドを投げてよいですか? 投げれば裏で回るので、その間に P0(G-RAM
+  配置の設計)を進められます。承認いただければ scripts/tools/ghpush.py で main に
+  push します。
+
+✻ Churned for 3m 59s · done 1:23 AM
+
+※ recap: 目標は実機で PC-98 ソフトを GDC グラフィックと FM 音源つきで動かすことで、ゴール定義を GOAL.md に確定しました。次は firmware 入りビットストリームの CI ビルドを push してよいか、承認をお願いします。 (disable recaps in /config)
+
+❯ ボトルネックどう解消するか先に決めなくて大丈夫？                              
+
+⏺ その指摘は正しいです。先に決めるべきです。ただ、GOAL.md に書いた R1
+  の見立てには詰めが足りませんでした。数字を出し直します。
+
+  まず、M10K を一番食っているのは実は機械層ではなく softcpu_subsystem(110/193
+  ブロック)です。中身を割ります。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ softcpu_subsystem の 110
+  ブロックの内訳が出ました。ボトルネックの正体は機械層ではありませんでした。
+  SDRAM 側の実力も確認します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ SDRAM の実力が決定的でした。追加で OSD フレームバッファの寸法を確認します。
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+⏺ np2 のソースはローカルにありません(バイナリと ROM
+  だけ)。それでも判断に必要な数字は揃いました。結論から言うと、選択肢は思ったよ
+  り少なく、ほぼ強制的に決まります。
+
+⏺ Write(~/repo/pc98-pocket/docs/P0_MEMORY.md)
+  ⎿  Wrote 133 lines to ../../docs/P0_MEMORY.md
+       1 # P0: メモリアーキテクチャ決定(2026-09-07)
+       2 
+       3 GOAL.md R1(G-RAM をどこに置くか)への回答。**P3(GDC)着手前の必須
+         決定。**
+       4 
+       6 
+       7 ## 1. 結論
+       8 
+       9 | 決定 | 内容 |
+      10 |---|---|
+     … +142 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ ご指摘のとおりでした。先に決めるべきで、しかも調べたら選択肢がほぼ消えました。
+  docs/P0_MEMORY.md に決定として記録しました。
+
+  ボトルネックの正体は機械層ではなかった
+
+  M10K 193 ブロックの内訳を実測したところ:
+
+  ┌────────────────────────┬────────────────────────────────────────────────┐
+  │         使用者         │                      M10K                      │
+  ├────────────────────────┼────────────────────────────────────────────────┤
+  │ softcpu_subsystem      │  110(内訳: OSD フレームバッファ 64 / firmware  │
+  │                        │                            ROM 32 / その他 14) │
+  ├────────────────────────┼────────────────────────────────────────────────┤
+  │ CHIPSET(PC/AT          │                                             47 │
+  │ 機械層一式)            │                                                │
+  ├────────────────────────┼────────────────────────────────────────────────┤
+  │ その他                 │                                             36 │
+  └────────────────────────┴────────────────────────────────────────────────┘
+
+  OSD フレームバッファ(640×200 @ 4bpp = 62.5KB)が単独で 64 
+  ブロックを占めており、PC/AT 機械層まるごと(47)より大きい。firmware ROM も 24KB
+  確保して 17.6KB しか使っていません。削減余地はここにありました。
+
+  G-RAM は BRAM 一択(選択の余地なし)
+
+  KFSDRAM.sv を読んだところ、SDRAM 案は成立しません:
+
+  - 16bit 幅 / 42.95MHz / 単一ポート(CPU メイン RAM と共有)
+  - アクセスごとに PRECHARGE(IDLE→READ/WRITE→PRECHARGE_WAIT→PRECHARGE)。バンクイ
+    ンターリーブもパイプラインもなし
+
+  理論ピーク 85.9MB/s に対し、この構造では実効ランダム帯域は一桁 MB/s
+  台。ところが EGC の全画面 read-modify-write だけで約 15MB/s 必要で、しかも CPU
+  と同じ1ポートを奪い合います。D5(EGC 正速)と両立しません。 「2ページ目だけ
+  SDRAM に置いてフリップ時にコピー」も、128KB コピーが 1
+  フレーム分の帯域を丸ごと食うので不可です。
+
+  容量収支 — ここが本当の分岐点
+
+  ┌─────────────────────────────┬───────────┬────────────────────┐
+  │            構成             │ 必要 M10K │        判定        │
+  ├─────────────────────────────┼───────────┼────────────────────┤
+  │ 1 ページ(640×400×4プレーン) │ 144 / 162 │ ✅ 収まる(余裕 18) │
+  ├─────────────────────────────┼───────────┼────────────────────┤
+  │ 2 ページ                    │ 244 / 162 │ ❌ 82 不足         │
+  └─────────────────────────────┴───────────┴────────────────────┘
+
+  OSD FB 縮小(+32)+ さらに縮小(+16)+ firmware ROM 詰め(+6)= 現実的な最大削減 +54
+  を尽くしても、2ページは 28 ブロック不足で載りません。
+
+  決めたこと / 残った1点
+
+  決定: G-RAM は BRAM、まず 1 ページ。プレーン RAM
+  はページベースレジスタ経由でアドレスして、2
+  ページ目の追加をパラメータ変更で済むようにする。OSD FB
+  縮小は機械層を書く前に先行実施(単独で実機確認でき、切り戻しも容易)。
+
+  残った未確定: PC-9801VX 級が 1 ページか 2 
+  ページか、検収タイトルがページフリップを使うか。
+  これは正直に言ってローカルで検証できません。~/Documents/lodemnc/ にあるのは
+  np2 のバイナリと ROM ダンプだけで、ソースがないからです(PC98_MACHINE_SPEC
+  の「iocore_attach
+  から抽出済み」は、もう残っていないソースツリーに基づく記述でした)。NP2kai
+  のソース取得が要ります = ネットワーク作業です。
+
+  2ページ必須と判明した場合、D5 か D7 
+  のどちらかを諦めるゴール再交渉が必要になります。 P3
+  に着手してから判明すると手戻りが大きいので、ここで潰しておくべきです。
+
+  提案する順序
+
+  1. NP2kai ソースを dig ピン留めで取得 → VRAM 
+     ページ数を確定(これが最優先。ゴールの実現可能性そのものに関わる)
+  2. OSD FB 縮小を実装
+  3. firmware 入りビットストリームを CI に投げる(B1 検証も兼ねる)
+
+  1 と 3 は独立なので同時に進められます。まず 1 に着手してよいですか? あわせて
+  CI への push 承認もいただければ、両方まとめて動かします。
+
+✻ Cogitated for 4m 35s · done 1:33 AM
+
+❯ 両方お願いします                                                              
+
+⏺ 両方進めます。まずツールの使い方を確認します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ ghpush.py は parents: [] で main を force 更新する(履歴を毎回作り直す)実装なの
+  で、まずリモートの状態を確認します。並行して NP2kai のソース取得も始めます。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ NP2kai ソース取得成功。VRAM の実体を調べます。
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ 決定的な事実が出ました。 np2 は VRAM を VRAM0 / VRAM1 
+  の2バンクで定義しています(i386c/cpumem.h)。ページ切替の実装を確認します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ ページ切替(VRAM_STEP 加算)は表示側・GDC 側の両方で実装されており、2ページは実
+  際に使われる機能でした。この結果を踏まえた判断は後述します。
+
+  先に push を実行します。ghpush.py は毎回履歴を作り直す実装なので、リモートの親
+  を維持し、差分ファイルだけ送る版を用意します。
+
+⏺ Write(ghpush2.py)
+  ⎿  Wrote 117 lines to ghpush2.py
+       1 #!/usr/bin/env python3
+         Git Data API.
+       3 
+       4 Supersedes ghpush.py, which built every commit with `parents: []
+       5 force-updated main, so the remote history was recreated from scr
+         atch on
+       7 
+       8 This version:
+       9   * keeps history: the new commit's parent is the current remote
+      10   * uses the local HEAD commit message
+     … +129 lines (ctrl+o to expand)
+
+⏺ Update(ghpush2.py)  ⎿  Added 1 line, removed 3 lines
+      76              unchanged += 1
+      77              continue
+      78          code, b = api("POST", f"/repos/{REPO}/git/blobs",
+      79 -                      {"content": data.hex(), "encoding": "hex"
+         -} if False else                                                
+      80 -                      {"content": __import__("base64").b64encod
+         -e(data).decode(),                                              
+      81 -                       "encoding": "base64"})                  
+      79 +                      {"content": base64.b64encode(data).decode
+         +(), "encoding": "base64"})                                     
+      80          if "sha" not in b:
+      81              sys.exit(f"blob failed ({rel}): {json.dumps(b)[:200
+          ]}")
+      82          entries.append({"path": rel, "mode": "100644", "type": 
+          "blob", "sha": b["sha"]})
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Push 成功しました(46d9193d → da7f4164、履歴を維持)。CI
+  が起動しているか確認します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ CI run#39 が起動しました(sha da7f4164)。1〜2時間かかります。
+
+  その間に np2 の結果を詰めます。2ページ構成は実在の機能と確定したので、収支を精
+  査したところ、先ほどの結論を修正する必要が出ました。SDRAM
+  の物理仕様を確認します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ SDRAM は 4バンク・16bit・13row/9col(32MB) の標準品でした。ここで先ほどの P0 
+  結論を訂正する必要があります。
+
+  「SDRAM は使えない」と書きましたが、正確には使えないのは KFSDRAM 
+  というコントローラであって、SDRAM 
+  デバイスではありません。この違いが結論を変えます。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ 両方完了しました。そして先ほどの P0 結論を訂正します。
+
+  1. CI: 起動しました
+
+  ghpush.py は毎回 parents: [] で main を force 更新する実装で、リモート履歴を毎
+  回作り直しローカルのコミットメッセージが一切届いていませんでした(リモート main
+  は孤立コミット1個だけでした)。履歴を維持して差分ファイルだけ送る ghpush2.py
+  を書いて使いました。
+
+  main 46d9193d → da7f4164(70ファイル更新、368 変更なし)。CI run#39 
+  が実行中です。
+
+  2. np2 調査: 2ページは実在の機能でした
+
+  i386c/cpumem.h が決定的でした:
+
+  #define VRAMADDRMASKEX(a)  ((a) & (VRAM_STEP | 0x7fff))   // プレーン = 32KB
+  #define VRAM0_B  VRAM_B                 // B/R/G/E の4プレーン
+  #define VRAM1_B  (VRAM_STEP + VRAM_B)   // ← 2バンク目
+
+  1ページ = 32KB × 4プレーン = 128KB、それが2バンクで 256KB。 しかも
+  maketgrp.c(表示ページ選択)・gdc_sub.c(GDC 描画先)・gdc_pset.c すべてが
+  VRAM_STEP で切り替えており、ページフリップは np2 
+  が実装している実機能です。飾りではありません。
+
+  3. 訂正: 「SDRAM は使えない」は言い過ぎでした
+
+  先ほど「G-RAM は BRAM 一択」と書きましたが、使えないのは KFSDRAM 
+  というコントローラであって、SDRAM デバイスではありません。
+
+  - デバイス: dram_ba[1:0] = 4バンク、16bit、32MB — ごく標準的な SDRAM
+  - コントローラ: アクセスごとに PRECHARGE、4バンクを一切使わず、CPU
+    と単一ポート共有
+
+  バンクインターリーブ + オープンロウ +
+  マルチポートにすれば同じデバイスで数倍〜一桁改善が見込めます。先例として
+  X68000_MiSTer は 512KB の VRAM を SDRAM で運用しており、PC-98 の 256KB
+  はそれより小さい。この違いが結論を変えるので、docs を書き直しました。
+
+  選択肢(ここはご判断をお願いします)
+
+  ┌──────────────┬───────┬──────────────────────┬─────────────────────────┐
+  │      案      │ 容量  │        互換性        │         コスト          │
+  ├──────────────┼───────┼──────────────────────┼─────────────────────────┤
+  │ A: 1ページの │ ✅ 23 │ ❌ ページフリップ不  │ 小。すぐ P1 へ          │
+  │ み、BRAM     │ 6/308 │ 可(恒久的な上限)     │                         │
+  ├──────────────┼───────┼──────────────────────┼─────────────────────────┤
+  │ B: 2ページ、 │ ❌ 34 │ —                    │ 算術的に不可能          │
+  │ BRAM         │ 4/308 │                      │                         │
+  ├──────────────┼───────┼──────────────────────┼─────────────────────────┤
+  │ C: SDRAM へ  │ ✅    │                      │                         │
+  │ + コントロー │ BRAM  │ ✅ 2ページ可         │ 大。本プロジェクト最大  │
+  │ ラ作り直し   │ 約200 │                      │ のインフラ作業          │
+  │              │ 解放  │                      │                         │
+  └──────────────┴───────┴──────────────────────┴─────────────────────────┘
+
+  B は確定で死んでいます。G-RAM 2ページだけでチップ全 BRAM の 66% を占め、OSD
+  を極限まで削っても 36 ブロック超過します。
+
+  推奨は C です。ゴールが「本命」である以上、A
+  はアーキテクチャ段階で互換性の上限を確定させてしまいます。C なら
+  R2(漢字フォント 288KB)と R3(OPNA の ADPCM/リズム)の圧力も同時に下がります。
+
+  ただし C を選ぶなら、設計を進める前に帯域を実測すべきです。コントローラを書く
+  → 合成 → 実測 → その数字を見て G-RAM
+  配置を確定、の順にしないと、見込みが外れたとき全体設計が崩れます。
+
+  なお 1点だけ未確認が残っています:
+  検収タイトルがページフリップを使うかどうか。PC-98 には静止画中心の ADV/RPG
+  も多く、A でも問題ないタイトルは相当数あるはずですが、定量的な根拠はありません
+  。検収タイトルが決まれば A で足りるか判定できます。
+
+  A と C、どちらで進めますか。 また、OSD フレームバッファ縮小(+32
+  M10K)はどちらを選んでも損にならないので、ご返答を待つ間に着手しておきます。
+
+✻ Churned for 6m 9s · done 1:39 AM
+
+❯ Cかな                                                                         
+
+⏺ C 了解しました。決定を記録して着手します。まずライセンスと統合面を確認します(
+  既存コントローラの移植が使えるかで作業量が変わるため)。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ pcxt-base は GPLv3 でした。これは重要で、MiSTer 系の SDRAM 
+  コントローラ(GPL)をそのまま移植できます。ゼロから書くより遥かに低リスクです。
+  参照実装を取得します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ X68000_MiSTer に gvram_bram.vhd
+  があります。私が挙げた先例が誤っている可能性があるので確認します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 訂正が必要です。私が挙げた先例は誤りでした。
+
+  X68000_MiSTer は GVRAM を SDRAM ではなく BRAM に置いています。gvram_bram.vhd
+  は ram_block_type => "M10K" で 2チップ × 65,536 × 16bit = 256KB を M10K 
+  に確保しています。C を推奨した根拠の一つが崩れたので、記録を直します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ C で記録しました。ただし私が C 
+  の根拠に挙げた先例が間違っていたので、訂正します。
+
+  訂正: X68000_MiSTer は VRAM を BRAM に置いていた
+
+  rtl/memory/gvram_bram.vhd を読んだところ、ram_block_type => "M10K" で 2チップ 
+  × 65,536 × 16bit = 256KB を BRAM に確保していました。SDRAM ではありません。
+
+  実際の構成はこうでした:
+
+  ┌──────────────┬──────────────────────┬────────────────────────────────────┐
+  │     対象     │       置き場所       │                前段                │
+  ├──────────────┼──────────────────────┼────────────────────────────────────┤
+  │ メインメモリ │ SDRAM(SDRAMC.vhd     │ キャッシュ(cachecont.vhd)          │
+  │              │ 80MHz バースト)      │                                    │
+  ├──────────────┼──────────────────────┼────────────────────────────────────┤
+  │ GVRAM        │ BRAM(gvram_bram.vhd) │ プレーンごとの表示ラインキャッシュ │
+  └──────────────┴──────────────────────┴────────────────────────────────────┘
+
+  つまり 80MHz バーストコントローラを持っている作者が、それでも VRAM は BRAM 
+  に置いたということです。C の追い風ではなく、むしろ向かい風の材料でした。
+
+  ただし DE10-Nano の 5CSEBA6 は M10K 553 ブロックあり、256KB = 205 ブロックでも
+  37% で済みます。Pocket は 308 ブロックなので 67%。BRAM 
+  が潤沢だったから選べたという可能性は高いです。
+
+  そして重要な示唆が1つ: 重い VRAM アクセスを SDRAM 
+  に生で当てる設計にはなっていない。SDRAM を使うなら BRAM 
+  キャッシュを前段に置くのが前提です。C の設計に織り込みました。
+
+  それでも C は妥当だと考えます
+
+  選択肢を洗い直した結果、新たに **E(2ページ BRAM + OSD
+  全廃)**が浮上しましたが、試算すると 306/308 
+  ブロック。数字上は通りますが余裕ゼロで、仮想キーボードを失います。PC-98
+  はキーボード必須のソフトが多く、D6(実用的に遊べる)と衝突します。
+
+  C なら 約 210/308 で約100ブロック余り、R2(漢字フォント)R3(OPNA
+  ADPCM)の圧力も同時に下がります。C を維持で問題ないと思いますが、「先例のない新
+  規設計」であることは認識しておいてください。
+
+  良い材料もありました
+
+  - pcxt-base は GPLv3 でした。MiSTer 系 GPL 
+    コードの移植に支障はありません。X68000_MiSTer の SDRAMC.vhd(80MHz / 16bit /
+    ロウ内バースト)を移植候補にできます。ゼロから書くより遥かに低リスクです。
+  - OSD フレームバッファ縮小は C では不要になりました。
+    約100ブロック余るので削る理由がなく、firmware
+    の描画コードを触るリスクだけが残ります。着手しないでおきます(前言撤回です)。
+
+  実装順序と撤退ライン
+
+  C の成否は帯域の実測で決まるので、設計を広げる前に数字を取る順序にしました。
+
+  1. SDRAM コントローラ置換(SDRAMC.vhd 移植 + マルチポート化)
+  2. 帯域の実測 ← 分水嶺
+  3. BRAM キャッシュ設計(表示ラインバッファ / EGC ワーキングセット)
+  4. P1 以降
+
+  撤退ラインも明記しました: 手順2で必要帯域(表示 7.7MB/s + EGC 約15MB/s +
+  CPU)に届かなければ C を諦めて A(1ページ)に戻り、D2/D5/D6 
+  の達成範囲を再交渉します。深追いすると P1〜P7 が丸ごと止まるので。
+
+  CI run#39 は実行中です。次はコントローラ移植に着手しますが、その前に run#39 
+  の結果(B1: 実 firmware で DOS 
+  ブートするか)を見てからの方が安全です。ベースが健全だと確認できていない状態で
+  SDRAM を差し替えると、問題の切り分けができなくなるので。run#39
+  の完了を待ちますか、それとも並行して移植を始めますか。
+
+✻ Crunched for 3m 12s · done 1:44 AM
+
+❯ 移植始めたいが goal コマンドのプロンプトを与えてスタートしたい                
+
+⏺ /goal は存在しないので /loop
+  を使います。その前に参照ソースを永続化しておきます(/tmp
+  は再起動で消えるため。前回スクリプトを失いかけた件と同じリスクです)。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ 準備できました。/goal は存在しないので /loop
+  を使います。以下をそのまま貼ってください。
+
+  そのまま貼れる /loop プロンプト
+
+  /loop docs/GOAL.md のゴール(実機で PC-98 ソフトが GDC グラフィックと FM
+  音源つきで
+  実用速度で動く)に向けて進める。現在地と次の一手は docs/HANDOVER.md §5
+  を唯一の正とし、
+  メモリ設計の判断は docs/P0_MEMORY.md に従う。
+
+  いま進めるのは P0 手順2「SDRAM コントローラの置換」。移植元は
+  ~/repo/_refs/x68-memory/SDRAMC.vhd(X68000_MiSTer, GPL,
+  80MHz/16bit/ロウ内バースト)、
+  置換対象は pcxt-base の KFSDRAM.sv。CPU メインRAM / G-RAM / 表示フェッチの
+  マルチポート化まで含む。
+
+  1イテレーションで (1) 未完タスクを1つ進める (2) 結果を HANDOVER.md に反映
+  (3) commit する (4) 必要なら scripts/tools/ghpush2.py で push する。
+
+  停止条件:
+  - 実機テストが必要になったら、SD への投入まで済ませてユーザーに依頼し停止する
+  - P0 手順3 の帯域実測で要求(表示 7.7MB/s + EGC 約15MB/s + CPU)に届かない場合、
+    勝手に深追いせず停止し、A(1ページ)への後退をユーザーに提案する
+
+  CI ビルド待ちの間は待たずに次のタスクへ進む。
+  np2 のコードは移植しない(挙動リファレンスのみ)。
+
+  事前にやっておいたこと
+
+  参照ソースを永続化しました。 /tmp は再起動で消えるので ~/repo/_refs/
+  に移してあります(前セッションでヘルパースクリプトを /tmp
+  に置いて失いかけた件と同じリスクです)。
+
+  ┌───────────────────────────────────┬──────────────────────────────────────┐
+  │               パス                │                 内容                 │
+  ├───────────────────────────────────┼──────────────────────────────────────┤
+  │                                   │ X68000_MiSTer の rtl/memory/         │
+  │ ~/repo/_refs/x68-memory/          │ 一式(SDRAMC.vhd / cachecont.vhd /    │
+  │                                   │ gvram_*)                             │
+  ├───────────────────────────────────┼──────────────────────────────────────┤
+  │ ~/repo/_refs/NP2kai-master.tar.gz │ np2 ソース(挙動リファレンス専用)     │
+  └───────────────────────────────────┴──────────────────────────────────────┘
+
+  HANDOVER.md §5 も現状に合わせて書き換えました。作業リストの先頭が「P0 手順2:
+  SDRAM コントローラ置換」になっているので、上のプロンプトの「HANDOVER §5
+  を唯一の正とする」がそのまま機能します。再取得コマンド(dig
+  ピン留め)も併記してあります。
+
+  プロンプトに入れた停止条件について
+
+  2つ目の停止条件が重要です。帯域が足りなかったときに勝手に工夫を重ねて進み続け
+  ないようにしています。C は先例のない新規設計なので、ここで粘られると P1〜P7
+  が丸ごと止まります。撤退判断はユーザーに戻す設計にしました。
+
+  1点だけ懸念
+
+  HANDOVER §5 では B1 の確認(CI run#39 の結果)を項目3 に置きました。順序としては
+  SDRAM 差し替えの前にベースの健全性を確認できた方が切り分けが楽です。もし
+  run#39 が失敗していた場合、SDRAM を差し替えた後だと「firmware が悪いのか SDRAM
+  が悪いのか」がわからなくなります。
+
+  ループを回す前に run#39 の結果を確認しておくのが安全ですが、ビルドは 1〜2
+  時間かかるので、先に移植を始めて run#39 は完了時に見るでも実害は小さいはずです
+  (移植はまだ合成しない段階が長いので)。お任せします。
+
+✻ Worked for 1m 17s · done 1:46 AM
+
+❯ /goal docs/GOAL.md のゴール(実機で PC-98 ソフトが GDC グラフィックと FM       
+音源つきで                                                                      
+実用速度で動く)に向けて進める。現在地と次の一手は docs/HANDOVER.md §5           
+を唯一の正とし、                                                                
+メモリ設計の判断は docs/P0_MEMORY.md に従う。                                   
+                                                                                
+いま進めるのは P0 手順2「SDRAM コントローラの置換」。移植元は                   
+~/repo/_refs/x68-memory/SDRAMC.vhd(X68000_MiSTer, GPL,                          
+80MHz/16bit/ロウ内バースト)、                                                   
+置換対象は pcxt-base の KFSDRAM.sv。CPU メインRAM / G-RAM / 表示フェッチの      
+マルチポート化まで含む。                                                        
+                                                                                
+1イテレーションで (1) 未完タスクを1つ進める (2) 結果を HANDOVER.md に反映       
+(3) commit する (4) 必要なら scripts/tools/ghpush2.py で push する。            
+                                                                                
+停止条件:                                                                       
+- 実機テストが必要になったら、SD への投入まで済ませてユーザーに依頼し停止する   
+- P0 手順3 の帯域実測で要求(表示 7.7MB/s + EGC 約15MB/s + CPU)に届かない場合、  
+  勝手に深追いせず停止し、A(1ページ)への後退をユーザーに提案する                
+                                                                                
+CI ビルド待ちの間は待たずに次のタスクへ進む。                                   
+np2 のコードは移植しない(挙動リファレンスのみ)。                                
+  ⎿  Goal set: docs/GOAL.md のゴール(実機で PC-98 ソフトが GDC グラフィックと FM
+     音源つきで
+     実用速度で動く)に向けて進める。現在地と次の一手は docs/HANDOVER.md §5
+     を唯一の正とし、
+     メモリ設計の判断は docs/P0_MEMORY.md に従う。
+
+     いま進めるのは P0 手順2「SDRAM コントローラの置換」。移植元は
+     ~/repo/_refs/x68-memory/SDRAMC.vhd(X68000_MiSTer, GPL,
+     80MHz/16bit/ロウ内バースト)、
+     置換対象は pcxt-base の KFSDRAM.sv。CPU メインRAM / G-RAM / 表示フェッチの
+     マルチポート化まで含む。
+
+     1イテレーションで (1) 未完タスクを1つ進める (2) 結果を HANDOVER.md に反映
+     (3) commit する (4) 必要なら scripts/tools/ghpush2.py で push する。
+
+     停止条件:
+     - 実機テストが必要になったら、SD
+       への投入まで済ませてユーザーに依頼し停止する
+     - P0 手順3 の帯域実測で要求(表示 7.7MB/s + EGC 約15MB/s +
+       CPU)に届かない場合、
+       勝手に深追いせず停止し、A(1ページ)への後退をユーザーに提案する
+
+     CI ビルド待ちの間は待たずに次のタスクへ進む。
+     np2 のコードは移植しない(挙動リファレンスのみ)。
+
+⏺ /goal は実在しました(先ほど「存在しない」と言ったのは誤りです)。ゴールを受領し
+  ました。P0 手順2、SDRAM コントローラの置換に着手します。
+
+  まず置換対象と移植元の両方を精読します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ KFSDRAM の構造を把握しました(ロウ内バーストはするが、毎トランザクションで PREC
+  HARGE、バンクは1つしか使わない)。移植元が実際に何を改善するのか、SDRAMC.vhd
+  の中核を読みます。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ SDRAMC の中核を読んで、移植で得られるものの正体がわかりました。SDRAMC も
+  KFSDRAM と同じく毎回 PALL しており、バンクインターリーブもしていません。差は
+  クロック(80MHz vs 42.95MHz)
+  と、呼び出し側が常に長いバーストでキャッシュに流し込む使い方です。
+
+  クロック引き上げが可能かを確認します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 重要な発見: PLL は既に clk_core = 85.9 MHz(= clk_chipset の正確に2倍)
+  を出力しています。SDRAMC の設計点 80MHz にほぼ一致し、整数倍なので CDC
+  も単純になります。PLL の変更可否を確認します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ PLL は素直な altera_pll 実装で、outclk_2 を 85.9MHz 
+  に変更するだけで済みそうです。
+
+  コントローラを書く前に、検証手段があるかを確認します。未検証の SDRAM
+  コントローラは価値が低いので。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 検証手段が見つかりました。ローカルにシミュレータはありませんが、CI(ubuntu)なら
+  apt で導入できます。 テストベンチで帯域を直接測れるので、P0 手順3 
+  の判定をハードウェアなしで実施できます。これは当初計画より大幅に良いです。
+
+  RTL を書く前に、DQ の信号規約だけ確認します(ドロップイン置換にするため)。
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 検証は CI で行える見込みが立ちました。コントローラを書きます。DQ は dq_io が
+  アクティブLow の出力イネーブル、Pocket に dram_cs ピンは無い(CS
+  常時アサート扱い)ことを確認したので、その規約に合わせます。
+
+⏺ Write(~/repo/pc98-pocket/pcxt-base/src/fpga/core/sdram_mp.sv)
+  ⎿  Wrote 335 lines to ../../pcxt-base/src/fpga/core/sdram_mp.sv
+       1 //
+          Pocket.
+       4 // Replaces KFSDRAM for the PC-98 machine layer. KFSDRAM serves 
+         a single
+         far short of
+         oller keeps the
+          buy bandwidth:
+       8 //
+         instead of
+         tes
+     … +385 lines (ctrl+o to expand)
+
+⏺ ポートリストで使う派生パラメータの宣言順など、構造的な誤りがあるので書き直しま
+  す。あわせて write データのハンドシェイクを、BRAM
+  読み出しレイテンシを吸収できる索引方式に変えます。
+
+⏺ Write(~/repo/pc98-pocket/pcxt-base/src/fpga/core/sdram_mp.sv)
+  ⎿  Added 99 lines, removed 101 lines
+       8  //
+       9  //   * it runs at clk_core (85.909 MHz, exactly 2x clk_chipset)
+           instead of
+      10  //     42.95 MHz, reusing a PLL output the design already gener
+          ates
+      11 -//   * it moves BURST_MAX words per granted transaction, so the
+         - ~8 cycles of                                                  
+      12 -//     ACTIVATE/CAS/PRECHARGE overhead amortise across the burs
+         -t                                                              
+      11 +//   * it moves up to BURST_MAX words per granted transaction, 
+         +so the ~8 cycles                                               
+      12 +//     of ACTIVATE/CAS/PRECHARGE overhead amortise across the b
+         +urst                                                           
+      13  //
+      14 -// Sustained rate is DQ_BITS * f * BURST_MAX / (BURST_MAX + 8).
+         - At the defaults                                               
+      15 -// that is 16 * 85.909e6 * 32/40 = 137 MB/s, against a requirem
+         -ent of roughly                                                 
+      16 -// 7.7 MB/s of display fetch plus ~15 MB/s of EGC read-modify-w
+         -rite plus CPU                                                  
+      17 -// traffic. The measurement that decides this is the testbench,
+         - not this                                                      
+      18 -// comment -- see docs/P0_SDRAM_DESIGN.md.                     
+      14 +// Sustained rate is DQ_BITS * f * BURST/(BURST + overhead). At
+         + the defaults                                                  
+      15 +// that is roughly 16 * 85.909e6 * 32/40 = 137 MB/s, against a 
+         +requirement of                                                 
+      16 +// about 7.7 MB/s of display fetch plus ~15 MB/s of EGC read-mo
+         +dify-write plus                                                
+      17 +// CPU traffic. The number that decides option C is the one the
+         + testbench                                                     
+      18 +// measures, not this comment -- see docs/P0_SDRAM_DESIGN.md.  
+      19  //
+      20 -// Ports are arbitrated round-robin so no requester can be star
+         -ved by a                                                       
+      21 -// neighbour that always has work queued. One transaction is in
+         - flight at a                                                   
+      22 -// time, so the read data path is shared and tagged with `grant
+         -`.                                                             
+      20 +// Ports are arbitrated round-robin so no requester is starved 
+         +by a neighbour                                                 
+      21 +// that always has work queued. One transaction is in flight at
+         + a time, so the                                                
+      22 +// read data path is shared and tagged with `grant`.           
+      23  //
+      24 -// Bursts must not cross a column boundary (COL_BITS words). Ca
+         -llers are cache                                                
+      24 +// A burst must not cross a column boundary (COL_BITS words). C
+         +allers are cache                                               
+      25  // line fills using aligned power-of-two bursts, which satisfie
+          s this by
+      26  // construction; the controller does not split a crossing burst
+          .
+      27  //
+     ...
+      44      parameter int BURST_MAX   = 32,
+      45      parameter int CAS_LATENCY = 3,
+      46  
+      47 -    // Timing, in controller clocks. Defaults are for 85.909 MH
+         -z (11.64 ns) on a                                              
+      48 -    // -7 grade part and are deliberately conservative; the tes
+         -tbench sweeps them.                                            
+      47 +    // Timing, in controller clocks. Defaults are for 85.909 MH
+         +z (11.64 ns) and                                               
+      48 +    // are deliberately conservative; the testbench sweeps them
+         +.                                                              
+      49      parameter int T_RCD       = 2,      // ACTIVATE -> READ/WRI
+          TE
+      50      parameter int T_RP        = 2,      // PRECHARGE -> ACTIVAT
+          E
+      51      parameter int T_WR        = 2,      // last write datum -> 
+          PRECHARGE
+      52      parameter int T_RFC       = 7,      // AUTO REFRESH cycle
+      53      parameter int T_MRD       = 2,      // MODE REGISTER SET ->
+           any command
+      54      parameter int INIT_NOP    = 8600,   // >= 100 us of NOP aft
+          er power-up
+      55 -    parameter int REFRESH_INT = 640     // <= 7.8 us between AU
+         -TO REFRESH                                                     
+      55 +    parameter int REFRESH_INT = 640,    // <= 7.8 us between AU
+         +TO REFRESH                                                     
+      56 +                                                               
+      57 +    // Derived. Do not override.                               
+      58 +    parameter int ADDR_BITS   = ROW_BITS + BANK_BITS + COL_BITS
+         +,                                                              
+      59 +    parameter int LEN_BITS    = $clog2(BURST_MAX),             
+      60 +    parameter int GRANT_BITS  = (PORTS > 1) ? $clog2(PORTS) : 1
+         +,                                                              
+      61 +    parameter int MASK_BITS   = DQ_BITS/8                      
+      62  ) (
+      57 -    input  wire                      clk,                      
+      58 -    input  wire                      rst,                      
+      63 +    input  wire                              clk,              
+      64 +    input  wire                              rst,              
+      65  
+      66      // Request interface. Hold req until ack. addr is a word ad
+          dress laid out as
+      67      // {row, bank, col} so consecutive column blocks land in di
+          fferent banks,
+      62 -    // which leaves room to add bank interleaving later without
+         - moving data.                                                  
+      63 -    input  wire [PORTS-1:0]                  p_req,            
+      64 -    input  wire [PORTS-1:0]                  p_we,             
+      65 -    input  wire [PORTS-1:0][ADDR_BITS-1:0]   p_addr,           
+      66 -    input  wire [PORTS-1:0][LEN_BITS-1:0]    p_len,     // word
+         -s to move, minus 1                                             
+      68 +    // leaving room to add bank interleaving later without movi
+         +ng data.                                                       
+      69 +    input  wire  [PORTS-1:0]                 p_req,            
+      70 +    input  wire  [PORTS-1:0]                 p_we,             
+      71 +    input  wire  [PORTS-1:0][ADDR_BITS-1:0]  p_addr,           
+      72 +    input  wire  [PORTS-1:0][LEN_BITS-1:0]   p_len,     // word
+         +s to move, minus 1                                             
+      73      output logic [PORTS-1:0]                 p_ack,     // one 
+          cycle, request taken
+      74  
+      69 -    // Write data: the granted port presents the next word when
+         - p_wnext pulses.                                               
+      70 -    input  wire [PORTS-1:0][DQ_BITS-1:0]     p_wdata,          
+      71 -    input  wire [PORTS-1:0][DQ_BITS/8-1:0]   p_wmask,   // acti
+         -ve high byte enables                                           
+      72 -    output logic                             p_wnext,          
+      75 +    // Write data. The controller publishes the index of the wo
+         +rd it wants in                                                 
+      76 +    // p_wcnt and consumes p_wdata[grant] combinationally. p_wc
+         +nt is valid from                                               
+      77 +    // the ACTIVATE onward, so a caller sourcing from BRAM gets
+         + T_RCD cycles of                                               
+      78 +    // head start on the first word and one cycle per word ther
+         +eafter.                                                        
+      79 +    output logic [LEN_BITS-1:0]              p_wcnt,           
+      80 +    input  wire  [PORTS-1:0][DQ_BITS-1:0]    p_wdata,          
+      81 +    input  wire  [PORTS-1:0][MASK_BITS-1:0]  p_wmask,   // acti
+         +ve high byte enables                                           
+      82  
+      83      // Read data, tagged with the owning port.
+      84      output logic [GRANT_BITS-1:0]            grant,
+     ...
+       95      output logic                             sdram_ras_n,
+       96      output logic                             sdram_cas_n,
+       97      output logic                             sdram_we_n,
+       89 -    output logic [DQ_BITS/8-1:0]             sdram_dqm,       
+       98 +    output logic [MASK_BITS-1:0]             sdram_dqm,       
+       99      input  wire  [DQ_BITS-1:0]               sdram_dq_in,
+      100      output logic [DQ_BITS-1:0]               sdram_dq_out,
+      101      output logic                             sdram_dq_io   // 
+           active low output enable
+      102  );
+      103  
+       95 -    localparam int ADDR_BITS  = ROW_BITS + BANK_BITS + COL_BIT
+          -S;                                                            
+       96 -    localparam int LEN_BITS   = $clog2(BURST_MAX);            
+       97 -    localparam int GRANT_BITS = (PORTS > 1) ? $clog2(PORTS) : 
+          -1;                                                            
+       98 -    localparam int MASK_BITS  = DQ_BITS/8;                    
+       99 -                                                              
+      104      // Command encodings, {ras_n, cas_n, we_n}. CS is tied ass
+           erted on this board.
+      101 -    localparam logic [2:0] CMD_NOP    = 3'b111;               
+      102 -    localparam logic [2:0] CMD_ACT    = 3'b011;               
+      103 -    localparam logic [2:0] CMD_READ   = 3'b101;               
+      104 -    localparam logic [2:0] CMD_WRITE  = 3'b100;               
+      105 -    localparam logic [2:0] CMD_PRE    = 3'b010;               
+      106 -    localparam logic [2:0] CMD_REF    = 3'b001;               
+      107 -    localparam logic [2:0] CMD_MRS    = 3'b000;               
+      105 +    localparam logic [2:0] CMD_NOP   = 3'b111;                
+      106 +    localparam logic [2:0] CMD_ACT   = 3'b011;                
+      107 +    localparam logic [2:0] CMD_READ  = 3'b101;                
+      108 +    localparam logic [2:0] CMD_WRITE = 3'b100;                
+      109 +    localparam logic [2:0] CMD_PRE   = 3'b010;                
+      110 +    localparam logic [2:0] CMD_REF   = 3'b001;                
+      111 +    localparam logic [2:0] CMD_MRS   = 3'b000;                
+      112  
+      109 -    // Mode register: burst length 1, sequential, programmed C
+          -AS latency,                                                   
+      110 -    // standard operation, burst read / burst write.          
+      111 -    localparam logic [ROW_BITS-1:0] MODE_REG =                
+      112 -        ROW_BITS'({{(ROW_BITS-10){1'b0}}, 1'b0, 2'b00, CAS_LAT
+          -ENCY[2:0], 1'b0, 3'b000});                                    
+      113 +    // Mode register: A[2:0] burst length 1, A[3] sequential, 
+          +A[6:4] CAS latency,                                           
+      114 +    // A[8:7] standard operation, A[9] burst read / burst writ
+          +e.                                                            
+      115 +    localparam logic [ROW_BITS-1:0] MODE_REG = {              
+      116 +        {(ROW_BITS-10){1'b0}}, 1'b0, 2'b00, CAS_LATENCY[2:0], 
+          +1'b0, 3'b000                                                  
+      117 +    };                                                        
+      118  
+      119      typedef enum logic [3:0] {
+      120          S_INIT_NOP, S_INIT_PRE, S_INIT_REF, S_INIT_MRS,
+     ...
+      123  
+      124      state_t state;
+      125  
+      121 -    // -------------------------------------------------------
+          ---------- helpers                                             
+      122 -                                                              
+      126      logic [2:0] cmd;
+      127      always_comb {sdram_ras_n, sdram_cas_n, sdram_we_n} = cmd;
+      128  
+      126 -    function automatic logic [ROW_BITS-1:0] row_of(input logic
+          - [ADDR_BITS-1:0] a);                                          
+      127 -        row_of = a[ADDR_BITS-1 -: ROW_BITS];                  
+      128 -    endfunction                                               
+      129 -    function automatic logic [BANK_BITS-1:0] bank_of(input log
+          -ic [ADDR_BITS-1:0] a);                                        
+      130 -        bank_of = a[COL_BITS +: BANK_BITS];                   
+      131 -    endfunction                                               
+      132 -    function automatic logic [COL_BITS-1:0] col_of(input logic
+          - [ADDR_BITS-1:0] a);                                          
+      133 -        col_of = a[COL_BITS-1:0];                             
+      134 -    endfunction                                               
+      135 -                                                              
+      129      // -------------------------------------------------------
+           --------- arbiter
+      130  
+      138 -    logic [GRANT_BITS-1:0] rr_ptr;    // round-robin resume po
+          -int                                                           
+      131 +    logic [GRANT_BITS-1:0] rr_ptr;    // where the next scan s
+          +tarts                                                         
+      132      logic [GRANT_BITS-1:0] winner;
+      133      logic                  have_req;
+      134 +    integer                i, idx;                            
+      135  
+      136      always_comb begin
+      137          winner   = '0;
+      138          have_req = 1'b0;
+      145 -        // Walk the ports starting one past whoever went last.
+      146 -        for (int i = PORTS-1; i >= 0; i--) begin              
+      147 -            automatic int idx = (int'(rr_ptr) + i) % PORTS;   
+      139 +        // Scan from rr_ptr downward so the lowest i (nearest 
+          +rr_ptr) wins.                                                 
+      140 +        for (i = PORTS-1; i >= 0; i = i - 1) begin            
+      141 +            idx = (rr_ptr + i) % PORTS;                       
+      142              if (p_req[idx]) begin
+      143                  winner   = GRANT_BITS'(idx);
+      144                  have_req = 1'b1;
+     ...
+      148  
+      149      // -------------------------------------------------------
+            transaction regs
+      150  
+      157 -    logic [ADDR_BITS-1:0]  cur_addr;                          
+      158 -    logic [COL_BITS-1:0]   cur_col;                           
+      159 -    logic [LEN_BITS:0]     left;       // words still to comma
+          -nd                                                            
+      160 -    logic                  cur_we;                            
+      161 -    logic [15:0]           timer;                             
+      162 -    logic [15:0]           init_left;                         
+      163 -    logic [15:0]           refresh_cnt;                       
+      164 -    logic                  refresh_due;                       
+      151 +    logic [ADDR_BITS-1:0] cur_addr;                           
+      152 +    logic [COL_BITS-1:0]  cur_col;                            
+      153 +    logic [LEN_BITS:0]    left;        // words still to comma
+          +nd                                                            
+      154 +    logic                 cur_we;                             
+      155 +    logic [15:0]          timer;                              
+      156 +    logic [15:0]          init_left;                          
+      157 +    logic [15:0]          refresh_cnt;                        
+      158 +    logic                 refresh_due;                        
+      159  
+      160      assign refresh_due = (refresh_cnt >= REFRESH_INT[15:0]);
+      161  
+     ...
+      163      // pipeline slots carry real data so p_rvalid lines up wit
+           h sdram_dq_in.
+      164      logic [CAS_LATENCY:0] rd_pipe;
+      165  
+      172 -    // -------------------------------------------------------
+          ---------- sequencer                                           
+      166 +    wire [ROW_BITS-1:0]  act_row  = p_addr[winner][ADDR_BITS-1
+          + -: ROW_BITS];                                                
+      167 +    wire [BANK_BITS-1:0] act_bank = p_addr[winner][COL_BITS +:
+          + BANK_BITS];                                                  
+      168 +    wire [COL_BITS-1:0]  act_col  = p_addr[winner][COL_BITS-1:
+          +0];                                                           
+      169 +    wire [BANK_BITS-1:0] cur_bank = cur_addr[COL_BITS +: BANK_
+          +BITS];                                                        
+      170  
+      171 +    // -------------------------------------------------------
+          +------ sequencer                                              
+      172 +                                                              
+      173      always_ff @(posedge clk) begin
+      174          if (rst) begin
+      175              state        <= S_INIT_NOP;
+     ...
+      182              sdram_dq_io  <= 1'b1;
+      183              p_ack        <= '0;
+      184              p_done       <= '0;
+      186 -            p_wnext      <= 1'b0;                             
+      185 +            p_wcnt       <= '0;                               
+      186              grant        <= '0;
+      187              rr_ptr       <= '0;
+      188              init_done    <= 1'b0;
+     ...
+      192              rd_pipe      <= '0;
+      193              left         <= '0;
+      194              cur_we       <= 1'b0;
+      195 +            cur_addr     <= '0;                               
+      196 +            cur_col      <= '0;                               
+      197          end else begin
+      198              // Defaults; the states below override what they n
+           eed.
+      198 -            cmd          <= CMD_NOP;                          
+      199 -            sdram_a      <= '0;                               
+      200 -            sdram_ba     <= '0;                               
+      201 -            sdram_dqm    <= cur_we ? sdram_dqm : '0;          
+      202 -            sdram_dq_io  <= 1'b1;                             
+      203 -            p_ack        <= '0;                               
+      204 -            p_done       <= '0;                               
+      205 -            p_wnext      <= 1'b0;                             
+      199 +            cmd         <= CMD_NOP;                           
+      200 +            sdram_a     <= '0;                                
+      201 +            sdram_ba    <= '0;                                
+      202 +            sdram_dqm   <= '0;                                
+      203 +            sdram_dq_io <= 1'b1;                              
+      204 +            p_ack       <= '0;                                
+      205 +            p_done      <= '0;                                
+      206  
+      207 -            rd_pipe      <= {rd_pipe[CAS_LATENCY-1:0], 1'b0}; 
+      207 +            rd_pipe <= {rd_pipe[CAS_LATENCY-1:0], 1'b0};      
+      208              if (refresh_cnt != 16'hFFFF) refresh_cnt <= refres
+           h_cnt + 16'd1;
+      209              if (timer != 0)              timer       <= timer 
+           - 16'd1;
+      210  
+      211 -            unique case (state)                               
+      211 +            case (state)                                      
+      212  
+      213              // ---- power-up ---------------------------------
+           ---------------
+      214              S_INIT_NOP: begin
+      215                  sdram_dqm <= '1;
+      216                  if (init_left != 0) init_left <= init_left - 1
+           6'd1;
+      217 -                else begin                                    
+      218 -                    state <= S_INIT_PRE;                      
+      219 -                    timer <= '0;                              
+      220 -                end                                           
+      217 +                else                state     <= S_INIT_PRE;  
+      218              end
+      219  
+      223 -            S_INIT_PRE: if (timer == 0) begin                 
+      220 +            S_INIT_PRE: begin                                 
+      221                  cmd       <= CMD_PRE;
+      225 -                sdram_a   <= ROW_BITS'(1 << 10);   // A10 = pr
+          -echarge all banks                                             
+      222 +                sdram_a   <= ROW_BITS'(1) << 10;   // A10 = pr
+          +echarge all banks                                             
+      223                  timer     <= T_RP[15:0];
+      224                  init_left <= 16'd8;                // eight re
+           freshes before MRS
+      225                  state     <= S_INIT_REF;
+     ...
+      254                      refresh_cnt <= '0;
+      255                      state       <= S_REF;
+      256                  end else if (have_req) begin
+      260 -                    cmd        <= CMD_ACT;                    
+      261 -                    sdram_a    <= row_of(p_addr[winner]);     
+      262 -                    sdram_ba   <= bank_of(p_addr[winner]);    
+      263 -                    cur_addr   <= p_addr[winner];             
+      264 -                    cur_col    <= col_of(p_addr[winner]);     
+      265 -                    cur_we     <= p_we[winner];               
+      266 -                    left       <= {1'b0, p_len[winner]} + 1'b1
+          -;                                                             
+      267 -                    grant      <= winner;                     
+      257 +                    cmd           <= CMD_ACT;                 
+      258 +                    sdram_a       <= act_row;                 
+      259 +                    sdram_ba      <= act_bank;                
+      260 +                    cur_addr      <= p_addr[winner];          
+      261 +                    cur_col       <= act_col;                 
+      262 +                    cur_we        <= p_we[winner];            
+      263 +                    left          <= {1'b0, p_len[winner]} + 1
+          +'b1;                                                          
+      264 +                    grant         <= winner;                  
+      265                      p_ack[winner] <= 1'b1;
+      269 -                    rr_ptr     <= (winner == GRANT_BITS'(PORTS
+          --1)) ? '0 : winner + 1'b1;                                    
+      270 -                    timer      <= T_RCD[15:0] - 16'd1;        
+      271 -                    state      <= S_ACT;                      
+      272 -                    // The first write word must be on p_wdata
+          - when we reach S_RW.                                          
+      273 -                    if (p_we[winner]) p_wnext <= 1'b1;        
+      266 +                    p_wcnt        <= '0;                      
+      267 +                    rr_ptr        <= (winner == GRANT_BITS'(PO
+          +RTS-1)) ? '0                                                  
+      268 +                                                              
+          +       : winner + 1'b1;                                       
+      269 +                    timer         <= T_RCD[15:0];             
+      270 +                    state         <= S_ACT;                   
+      271                  end
+      272              end
+      273  
+     ...
+      276              S_ACT: if (timer == 0) state <= S_RW;
+      277  
+      278              S_RW: begin
+      282 -                sdram_ba <= bank_of(cur_addr);                
+      279 +                sdram_ba <= cur_bank;                         
+      280                  sdram_a  <= ROW_BITS'(cur_col);   // A10 low: 
+           no auto precharge
+      281                  if (cur_we) begin
+      282                      cmd          <= CMD_WRITE;
+      283                      sdram_dq_out <= p_wdata[grant];
+      284                      sdram_dq_io  <= 1'b0;
+      285                      sdram_dqm    <= ~p_wmask[grant];
+      289 -                    p_wnext      <= (left > 1);               
+      286 +                    p_wcnt       <= p_wcnt + 1'b1;            
+      287                  end else begin
+      288                      cmd        <= CMD_READ;
+      292 -                    sdram_dqm  <= '0;                         
+      289                      rd_pipe[0] <= 1'b1;
+      290                  end
+      291                  cur_col <= cur_col + 1'b1;
+     ...
+      299              // Drain the read pipeline, or honour tWR, before 
+           precharging.
+      300              S_TAIL: if (timer == 0) begin
+      301                  cmd      <= CMD_PRE;
+      306 -                sdram_ba <= bank_of(cur_addr);                
+      302 +                sdram_ba <= cur_bank;                         
+      303                  sdram_a  <= '0;                   // A10 low: 
+           this bank only
+      304                  timer    <= T_RP[15:0];
+      305                  state    <= S_PRE;
+     ...
+      310                  state         <= S_IDLE;
+      311              end
+      312  
+      313 +            default: state <= S_INIT_NOP;                     
+      314 +                                                              
+      315              endcase
+      316          end
+      317      end
+
+⏺ コントローラを書きました。次は検証環境です。ローカルでシミュレーションできるか
+  どうかで反復速度が桁違いなので、Docker コンテナ内の DNS
+  が生きているか試します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 大きな収穫です。Docker コンテナ内は DNS が生きています(Docker Desktop
+  が独自リゾルバ 192.168.127.7 を提供)。ホストの DNS
+  故障を回避できます。Verilator を入れたシミュレーション環境を作ります。
+
+  Listed 1 directory, ran 4 shell commands (ctrl+o to expand)
+
+⏺ Verilator 5.020 がローカルで動くようになりました。SDRAM
+  の動作モデルとテストベンチを書きます。
+
+⏺ Write(~/repo/pc98-pocket/sim/sdram_model.sv)
+  ⎿  Wrote 199 lines to ../../sim/sdram_model.sv
+       1 //
+       3 //
+       4 // Models enough of a 4-bank part to catch protocol mistakes: it
+       5 // row per bank, enforces tRCD/tRP/tWR/tRFC, honours the program
+         med CAS latency,
+         ather than
+       7 // silently returning plausible data. Storage is an associative 
+       8 // part costs only what the test actually touches.
+       9 //
+          controller
+     … +224 lines (ctrl+o to expand)
+
+⏺ Write(~/repo/pc98-pocket/sim/tb_sdram_mp.sv)
+  ⎿  Wrote 220 lines to ../../sim/tb_sdram_mp.sv
+       1 //
+       2 // tb_sdram_mp — protocol and bandwidth testbench for sdram_mp.
+       4 // This is the measurement that decides P0 option C (docs/P0_MEM
+         ORY.md §6). The
+       5 // requirement is roughly 7.7 MB/s of display fetch plus ~15 MB/
+       6 // read-modify-write, on top of CPU traffic, so the number to be
+         at is about
+       7 // 30 MB/s of sustained mixed traffic.
+       9 // SPDX-License-Identifier: GPL-3.0-or-later
+      10 //
+     … +238 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ ビルドは通りました。実行部分の出力を確認します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ SIGSEGV(exit 139)でした。原因を絞ります。
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ ASAN でクラッシュ箇所を特定します。
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  You've hit your session limit · resets 4:40am (Asia/Tokyo)
+     /upgrade to increase your usage limit.
+
+✻ Churned for 11m 18s · done 1:57 AM
+
+❯ continue                                                                      
+
+⏺ ASAN 実行が無出力だったので、ビルドログを捨てずに再実行します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Docker Desktop
+  が停止しています(セッション再開後、時間が経過しているようです)。CI
+  の結果確認と Docker 復帰を並行します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ CI run#39 が 成功しました(実 firmware 入り、sha da7f4164)。これで B1
+  の実機テストが可能です。アーティファクトを取得してパッケージします。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(getartifact.py)
+  ⎿  Wrote 65 lines to getartifact.py
+       1 #!/usr/bin/env python3
+         k it.
+       3 
+       4 Supersedes getart2.py, which had a single artifact id baked into
+       5 had to be edited for every build.
+       6 
+       8 
+       9 With no run_number the newest successful run is used. Everything
+          goes through
+         he machine's
+     … +65 lines (ctrl+o to expand)
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ B1 を SD に投入しました。Docker
+  の復帰を確認しつつ、ここまでの成果をコミットします。
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ SIGTRAP(exit 133)でした。ツールチェーン自体か RTL
+  かを切り分けるため、最小テストベンチで二分します。
+
+  Ran 1 shell command (ctrl+o to expand)
+⏺ ツールチェーンは正常でした(aarch64 ネイティブ)。DUT
+  とモデルだけの最小構成に絞ります。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ DUT とモデルは正常でした(init 完了、CL=3)。クラッシュは TB 側。最有力は mem
+  の名前衝突(インスタンス名と連想配列名が同じで VARHIDDEN
+  警告が出ていた)なので、改名して再実行します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 名前衝突ではありませんでした。TB のテストロジックを二分します(fork/join
+  が最有力)。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ fork/join が Verilator 5.020
+  でのクラッシュ原因と確定。同時に2つの実測結果が出ました。
+
+  - プロトコル違反 0 — コントローラの SDRAM 手順は正しい
+  - シーケンシャル読み出し 126.2 MB/s(要求 ~30 MB/s)
+  - read データが 2サイクル分ずれる バグを検出(p_rvalid が早すぎる)
+
+  両方直します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ tests 1–2 PASS(違反0・エラー0・120.7 MB/s)。3ポート競合テストを fork
+  なしで書きます。
+
+⏺ Write(~/repo/pc98-pocket/sim/tb_sdram_load.sv)
+  ⎿  Wrote 226 lines to ../../sim/tb_sdram_load.sv
+       1 //
+         nt for sdram_mp.
+       3 //
+         d §6): can one
+         traffic at once?
+       6 // Requirement is roughly 7.7 MB/s display + ~15 MB/s EGC + CPU,
+       7 // sustained mixed traffic with no port starved.
+       8 //
+         forked threads:
+         calls a task that
+     … +243 lines (ctrl+o to expand)
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ P0 手順3の帯域ゲート、通過しました。
+
+  ┌───────────────────────┬────────────┬──────────────────┐
+  │        ポート         │    実測    │ 最悪グラント待ち │
+  ├───────────────────────┼────────────┼──────────────────┤
+  │ display(32語連続読み) │ 53.3 MB/s  │ 69 cyc           │
+  ├───────────────────────┼────────────┼──────────────────┤
+  │ EGC(32語 read+write)  │ 53.1 MB/s  │ 69 cyc           │
+  ├───────────────────────┼────────────┼──────────────────┤
+  │ CPU(2語散在)          │ 3.3 MB/s   │ 99 cyc (1.15 µs) │
+  ├───────────────────────┼────────────┼──────────────────┤
+  │ 合計                  │ 109.7 MB/s │ 違反0            │
+  └───────────────────────┴────────────┴──────────────────┘
+
+  要求 30 MB/s に対し 3.6倍の余裕。バースト数も 194/193/193
+  でラウンドロビンは公平です。
+
+  ドキュメント化して CI にも組み込みます。
+
+⏺ Write(~/repo/pc98-pocket/docs/P0_SDRAM_DESIGN.md)
+  ⎿  Wrote 128 lines to ../../docs/P0_SDRAM_DESIGN.md
+       1 # P0 手順2–3: SDRAM コントローラ設計と帯域実測(2026-09-07)
+       2 
+       3 `docs/P0_MEMORY.md` の決定 C(G-RAM を SDRAM に置く)を成立させる
+       4 コントローラ実装と、その成否を決める帯域測定の記録。
+       5 
+       6 ---
+       7 
+       9 
+      10 3ポート競合での実測 **109.7 MB/s**(要求 30 MB/s に対し **3.6倍**
+         )、
+     … +139 lines (ctrl+o to expand)
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+⏺ P0 手順2–3 完了。帯域ゲート通過につき C を続行します。 B1
+  の実機テストが必要な段階に来たので、ここで停止します。
+
+  実機テストのお願い
+
+  SD カード(/Volumes/ANALOGUE/Cores/hiroya.PCXTDEV/)に 実 firmware 
+  入りビットストリームを投入済みです。イジェクトして Pocket で PCXTDEV
+  を起動してください。
+
+  - 前回: 画面は出たが BIOS に進まず(firmware が NOP スタブ → 8088
+    がリセット保持のまま)
+  - 今回: 実 firmware なので *SOFT_GUEST_HOLD = 0 が実行され、BIOS POST → DOS 
+    ブートまで進むはず(CI run#39、Fitter Successful / Error 0 / ALM 65%)
+
+  SDRAM コントローラ: 実測結果
+
+  ┌─────────┬─────────────────┬────────────┬──────────────────┐
+  │ ポート  │    想定負荷     │    帯域    │ 最悪グラント待ち │
+  ├─────────┼─────────────────┼────────────┼──────────────────┤
+  │ display │ 32語 連続読み   │  53.3 MB/s │           69 cyc │
+  ├─────────┼─────────────────┼────────────┼──────────────────┤
+  │ EGC     │ 32語 read→write │  53.1 MB/s │           69 cyc │
+  ├─────────┼─────────────────┼────────────┼──────────────────┤
+  │ CPU     │ 2語 散在        │   3.3 MB/s │ 99 cyc (1.15 µs) │
+  ├─────────┼─────────────────┼────────────┼──────────────────┤
+  │ 合計    │                 │ 109.7 MB/s │  違反 0 / 誤り 0 │
+  └─────────┴─────────────────┴────────────┴──────────────────┘
+
+  要求 30 MB/s の 3.6倍。バースト数 194/193/193
+  で調停は公平、飢餓なし。撤退ライン(A への後退)は発動しません。
+
+  計画からの変更点2つ
+
+  1. SDRAMC.vhd は移植しませんでした。 中身を読んだら KFSDRAM
+  と同じアーキテクチャ階級(毎回 PRECHARGE、単一バンク、単一ポート)で、差はクロッ
+  クと「長いバーストでキャッシュに流し込む使い方」だけでした。VHDL
+  を混ぜる摩擦に見合わないので、SDRAMC を挙動リファレンスとして SystemVerilog
+  で新規に書き、マルチポート調停を追加しました。
+
+  2. ローカルで Verilator が動くようになりました。 ホストの DNS
+  は壊れていますが、Docker Desktop はコンテナに独自リゾルバを提供していて apt 
+  が通ります。bash sim/run.sh <tb名> で回せます。CI にも sim
+  ジョブとして回帰登録しました(run#41 で初回実行中)。
+
+  途中で実バグを1件検出しています: p_rvalid の遅延が CAS_LATENCY では足りず、cmd
+  の出力レジスタと dq_in の入力レジスタで +2 
+  サイクル必要でした。読み戻し照合が捕まえました。
+
+  留意点
+
+  CPU ポートの最悪待ちが 1.15 µs(V30 @8MHz
+  のバスサイクル約2回分)。現状は許容範囲ですが、実機で CPU が遅く感じたら
+  BURST_MAX を 32→16 にする等で改善できます(docs/P0_SDRAM_DESIGN.md §5
+  に3案記載)。
+
+  B1 の結果を教えていただければ、P0 手順4(BRAM
+  キャッシュ層設計)と実機統合に進みます。
+
+✔ Goal achieved (10m · 1 turn · 32k tokens) (ctrl+o to expand)
+
+✻ Churned for 10m 2s · done 9:31 AM
+
+❯ BIOS動きました                                                                
+
+⏺ B1 通過(BIOS POST 到達)。CI 結果を確認して記録し、実機統合に進みます。
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ CI はまだ実行中。統合作業に入ります。
+
+  まず判断: sdram_mp は当面 clk_chipset (42.95MHz) で差し込みます。 理由は、シミ
+  ュレーションが自作モデル×自作コントローラで同じ誤解を共有していると素通りする
+  ため、実機での独立検証を最優先すべきで、クロック配線の変更(CHIPSET〜core_top
+  まで波及)は検証の変数を増やすからです。85.9MHz 化は Fitter の Fmax
+  で別途評価します。
+
+  KFSDRAM と同じポートを持つシムを書きます。
+
+⏺ Write(~/repo/pc98-pocket/pcxt-base/src/fpga/core/sdram_kf_shim.sv)
+  ⎿  Wrote 177 lines to ../../pcxt-base/src/fpga/core/sdram_kf_shim.sv
+       1 //
+       3 //
+       4 // Exists to get sdram_mp onto real hardware underneath a system
+       5 // behaviour is already known. Our simulation coverage is good (
+         0 protocol
+         he SDRAM model
+       7 // it is checked against are ours, so a shared misreading of the
+       8 // simulation and fail on the board. Booting the unmodified PCXT
+          through
+      10 //
+     … +195 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ シム PASS。RAM.sv に切替マクロ付きで組み込みます。
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ 3本とも PASS。config.tcl のコメント位置を直して記録・push します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ CI 3本が実行中(run#42 が A/B ビルド)。待たずに P0 手順4 に進みます。
+
+  設計を詰めた結果、プレーンの配置がこの層の成否を決めることがわかりました。
+
+⏺ Write(~/repo/pc98-pocket/docs/P0_CACHE_DESIGN.md)
+  ⎿  Wrote 119 lines to ../../docs/P0_CACHE_DESIGN.md
+       1 # P0 手順4: G-RAM の SDRAM 配置と BRAM キャッシュ層(2026-09-07)
+       2 
+       3 `sdram_mp` が帯域ゲートを通った(`docs/P0_SDRAM_DESIGN.md`)ことを
+       4 G-RAM を SDRAM に置くための **データ配置** と **前段キャッシュ**
+          を決める。
+       5 
+       6 ---
+       8 ## 1. 結論
+       9 
+      10 | 決定 | 内容 |
+     … +130 lines (ctrl+o to expand)
+
+⏺ K-1 の前提(EGC が4プレーン同時アクセスか)を np2
+  ソースで即確認します。ここが崩れると配置設計が逆効果になるので。
+
+  Ran 5 shell commands (ctrl+o to expand)
+
+⏺ K-1 の前提、np2 ソースで裏付けが取れました。 mem/memegc.c はすべてのアクセスで
+  mem[ad + VRAM_B/R/G/E] を同一 ad に対して読み書きし、EGCQUAD(UINT16 w[4] /
+  UINT64 q)として1操作で扱っています。4プレーン同時が確定。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ B1 通過を受けて、P0 を手順4まで完了しました。 CI 4本が実行中(run#42 が SDRAM
+  差し替えの A/B ビルド、run#43 が最新)。
+
+  この回で進んだこと
+
+  1. B1 記録 — 実 firmware で BIOS 到達。NOP スタブ時に 8088
+  がリセット保持だった件は解消、picorv32
+  のブートマスタ経路が実機で通りました。DOS ブートは FDD
+  イメージ未投入のため未確認ですが、PC-98 側の作業には影響しません。
+
+  2. sdram_kf_shim.sv — KFSDRAM と同一ポートで sdram_mp を RAM.sv
+  に差し込めるようにしました。config.tcl の SDRAM_USE_MP で切替。シムは 42.95MHz
+  据え置きです — 85.9MHz 化はクロック配線が CHIPSET〜core_top まで波及して A/B
+  の変数が増えるため分離しました。
+
+  自作モデル×自作コントローラだと同じ誤解を共有していると素通りするので、動作既
+  知の PCXT を新コントローラで起動させるのが独立検証になります。run#42
+  がその判定材料です。
+
+  3. P0 手順4 設計完了 — ここで設計の要になる発見がありました。
+
+  G-RAM の SDRAM 配置: プレーンインターリーブが必須
+
+  np2 のアドレスマップ(プレーン間 32KB)をそのまま SDRAM に写すと、CPU/EGC 
+  の1操作が4つの別ロウへの4アクセスになり、sdram_mp の約8サイクルのトランザクシ
+  ョンオーバーヘッドを1語ごとに払うことになります。効率
+  11%、帯域が一桁落ちます。
+
+  4プレーンをワード単位でインターリーブすれば、CPU/EGC の1操作は同一ロウ内の連続
+  4ワード、表示フェッチは完全シーケンシャル。両方同時に成立します。
+
+  この前提(EGC が4プレーン同時か)は推測せず np2 で確認しました: mem/memegc.c
+  は全アクセスで mem[ad + VRAM_B/R/G/E] を同一 ad に対して操作し、値を
+  EGCQUAD(UINT16 w[4] / UINT64 q)として1操作で扱っています。成立します。
+
+  キャッシュ層は見積り 20 M10K に対し 約10(ラインバッファ1 +
+  ライトバックキャッシュ8)。BRAM 収支 199/308、余裕 109 ブロックです。
+
+  残っている未検証事項2件
+
+  - キャッシュのスラッシング — 128ライン ダイレクトマップは EGC
+    が離れた2領域を交互に舐めると崩れます。実装後に EGC
+    相当トレースでヒット率を測る必要があります
+  - ページフリップ時のフラッシュコスト — 毎フレームフリップだと効く可能性
+
+  次は gram_cache.sv の実装です。run#42 が完了したら SD に投入して A/B
+  テストをお願いすることになります。
+
+✻ Sautéed for 7m 7s · done 9:41 AM
+❯ Docker使ってローカルで高速ビルドできるようにならないの？                      
+
+⏺ Quartus は x86 専用なので Apple Silicon
+  では必ずエミュレーションになりますが、Rosetta か QEMU 
+  かで数倍違います。現状を実測します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ 2つ問題が見つかりました。Rosetta が無効(=QEMU エミュレーション)、Docker VM 
+  のメモリが 8GB(ホストは 64GB)。まず現状を実測します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ エミュレーションは 2倍程度(0.476s vs 0.237s)で、QEMU にしては速すぎます。実質
+  Rosetta 相当が効いているようです。ボトルネックは別。CI
+  の実所要時間と比較しつつ、ローカル実測を始めます。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ 重要な訂正: CI は 13〜14分です。 私が「1〜2時間」と言っていたのは誤りでした。
+
+  ┌─────────────────────┬─────────┬────────┐
+  │         run         │  結果   │  所要  │
+  ├─────────────────────┼─────────┼────────┤
+  │ #41(sim ジョブ込み) │ success │ 14.2分 │
+  ├─────────────────────┼─────────┼────────┤
+  │ #39(quartus のみ)   │ success │ 13.4分 │
+  └─────────────────────┴─────────┴────────┘
+
+  run#41 が success ということは sim ジョブも CI 
+  で通っています。確認しつつ、ローカルビルドの実測を始めます。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ CI の sim ジョブも通っています。ローカルビルドを実測します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ ビルドスクリプトには既に
+  --fast(物理合成オフ)モードがあります。実測を開始します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ ビルド実行中。待つ間に記録を更新します(CI
+  所要時間について私が誤った説明をしていたので訂正)。
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Background command "Start timed local build in background" completed (exit
+code 0)
+
+⏺ バックグラウンド起動の仕方が悪く、親シェル終了時にビルドが道連れになりました。
+  ツールのバックグラウンド機能で直接起動し直します。
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ 現時点の答えを先に出します。ローカルビルドは計測中です。
+
+  まず訂正が2つあります。
+
+  1. **CI は
+     13〜14分でした。**私が繰り返し「1〜2時間」と言っていたのは誤りです。
+  2. **エミュレーションは既に十分速い。**同一ベンチで amd64 が 0.476s、arm64
+     ネイティブが 0.237s で 約2倍。QEMU なら 5〜10倍遅くなるので、実質 Rosetta
+     相当が効いています。ビルドスクリプト自身のコメントにも amd64/Rosetta
+     とありました。
+
+  つまり「ローカルが遅い」という前提自体が怪しく、前回のローカルビルドが1時間経
+  っても終わらなかったのは別の理由の可能性があります。今それを実測中です。
+
+  わかっている改善余地
+
+  Docker VM のメモリが 8GB(ホストは 64GB / 20コア)。Quartus のフィッタはメモリを
+  食うので、ここがスワップしていると大幅に遅くなります。ただし実測前に触らない方
+  針で進めています(前回、根拠の薄い推測で誤った結論を出したので)。
+
+  なお VM リソースは settings-store.json にキーが無く(14キーのみ、全て UI
+  系)、docker desktop CLI にも設定コマンドがないため、変更は Docker Desktop の 
+  GUI 設定からになります。実測でメモリが効くと判明したら、Settings → Resources
+  で Memory を 24GB 程度に上げていただく形になります。
+
+  ローカル化の本当の利点
+
+  CI が 13分なら、ローカルの利点は速度そのものより:
+
+  - push 不要(DNS 故障下では ghpush2.py 経由なので手間)
+  - キュー待ちなし — 実際いま run#42/43 が直列待ちしています(GitHub
+    無料枠の同時実行制限)
+
+  ついでの確認
+
+  CI の sim ジョブは通っています(run#40, #41 とも sim: success)。SDRAM
+  コントローラの3本のテストベンチが回帰実行されている状態です。
+
+  run#42(SDRAM 差し替えの A/B ビルド)はまだ実行待ちです。ローカルビルドの結果が
+  出たら、所要時間と合わせて報告します。
+
+✻ Baked for 5m 22s · done 9:49 AM
+
+※ recap: PC-98 コアを Pocket 実機で動かすのが目標で、いま SDRAM コントローラの P0 検証が終わり、ローカル Quartus ビルドの所要時間を計測中です。次はその結果を見て、CI run#42(SDRAM 差し替え)の A/B ビルドを実機テストに回します。 (disable recaps in /config)
+
+❯ どうなった？                                                                  
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ 答え: ローカルは 45分経過してまだ終わらず、CI は 12.8分。 少なくとも
+  3.5倍以上遅いので、CI が速い経路です。
+
+  同時に run#42(SDRAM 差し替え版)が成功しました。A/B
+  テスト用のビットストリームができています。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ ローカルビルドは 45分経ってまだ Analysis & Synthesis 段階(output_files/
+  すら未生成)。CI が全工程
+  12.8分なので勝負になりません。計測目的は果たしたので停止し、A/B
+  ビットストリームを SD に投入します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Background command "Run local Quartus build timed" completed (exit code 0)
+
+⏺ A/B ビルドは健全(12,105 ALM — KFSDRAM 版 12,049 に対し +56 ALM だけ、M10K
+  同一、エラー0)。SD に投入します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ 答え: ローカル Docker ビルドは CI より遅いです。速くなりません。
+
+  ┌────────────────────────┬──────────────────────────────────────────────┐
+  │          経路          │                     所要                     │
+  ├────────────────────────┼──────────────────────────────────────────────┤
+  │ CI(GitHub Actions)     │ 12.8〜14.2分(全工程)                         │
+  ├────────────────────────┼──────────────────────────────────────────────┤
+  │ ローカル Docker --fast │ 45分でまだ Analysis & Synthesis 中(打ち切り) │
+  └────────────────────────┴──────────────────────────────────────────────┘
+
+  3.5倍以上の差です。単純な CPU ベンチでは amd64
+  エミュレーションはネイティブ比2倍(0.476s vs 0.237s、QEMU にしては速く実質
+  Rosetta 相当)でしたが、Quartus 
+  では差がずっと大きく出ました。ベンチが軽すぎて実態を表していませんでした。
+
+  唯一の改善余地
+
+  Docker VM のメモリが 8GB しかありません(ホストは 64GB / 20コア)。Quartus
+  はメモリ常駐量が大きいので、これが最有力の原因です。
+
+  ただし VM リソースは settings-store.json にキーが無く、docker desktop CLI
+  にも設定コマンドがないため、Docker Desktop の GUI(Settings → Resources → 
+  Memory)からしか変更できません。24GB 程度に上げれば改善する可能性はありますが、
+  未検証です。試されるならその後にもう一度実測します。
+
+  なお**ローカル化の価値は速度ではなく「push
+  不要・キュー待ちなし」**です。実際いま run#42/43 は GitHub
+  の同時実行制限で直列待ちしていました。
+
+  実機テストのお願い(A/B 判定)
+
+  run#42(SDRAM_USE_MP=1、SDRAM を sdram_mp に差し替えた版)が成功し、SD 
+  に投入済みです。
+
+  - Fitter Successful / Error 0 / Critical Warning 0
+  - 12,105 ALM — KFSDRAM 版 12,049 に対し +56 ALM だけ、M10K は同一の 193
+
+  SD をイジェクトして PCXTDEV を起動してください。
+
+  - ✅ BIOS が前回同様に出る → 自作 SDRAM コントローラが実機で動作。シミュレーシ
+    ョンが自作モデル×自作コントローラで閉じていた懸念が晴れ、P0 完了
+  - ❌ BIOS が出ない/화면が壊れる → コントローラか統合の問題。config.tcl の
+    SDRAM_USE_MP の行をコメントアウトすれば KFSDRAM
+    に戻せるので、切り分けは容易です
+
+  CI の sim ジョブ(3本のテストベンチ)は run#40〜43 すべてで通っています。
+
+✻ Sautéed for 2m 1s · done 10:35 AM
+
+❯ BIOS出ませんね                                                                
+
+⏺ A/B 失敗。シミュレーションが自作モデル×自作コントローラで閉じていた懸念が現実
+  化しました。推測せず、RAM.sv ごとシミュレーションして KFSDRAM 
+  と差分を取ります。
+
+  まず refresh_mode / enable_refresh
+  の使われ方を確認します(私はこの2つを無視/固定にしたので)。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ 有力な差分を発見しました。 RAM.sv:376 は refresh_mode で CPU
+  にウェイトを入れます:
+
+  systemverilog
+  else if ((write_command) && (refresh_mode))  access_ready <= 1'b0;
+  else if ((read_command)  && (refresh_mode))  access_ready <= 1'b0;
+
+  私はシムで refresh_mode を 1'b0 固定にしました。リフレッシュは 7.45µs
+  ごとに走るので、衝突したアクセスがウェイトなしで素通りします。BIOS
+  ロード中の書き込みが化ければ POST しません。
+
+  ただし推測で直さず、RAM.sv ごとシミュレーションして KFSDRAM と比較します。
+
+⏺ Write(~/repo/pc98-pocket/sim/tb_ram_ab.sv)
+  ⎿  Wrote 177 lines to ../../sim/tb_ram_ab.sv
+       1 //
+         ip.
+       3 //
+         OS through
+         tegration
+       6 // differs in a way the controller-level testbenches could not s
+       7 // the actual RAM.sv so the two controllers can be compared dire
+         ctly.
+       9 // Select the controller with +define+SDRAM_USE_MP (the same mac
+      10 // sets for the FPGA build).
+     … +184 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 両方が同じ765エラーで落ちました。参照側(KFSDRAM)も失敗しているので、私のテスト
+  ベンチのバス手順が間違っています。RAM.sv の access_ready はアイドル時点で既に
+  1 なので、待機ループが即抜けていました。正しい手順を RAM.sv 側で確認します。
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ access_complete(= COMPLETE_RAM_RW)が正しい完了信号でした。TB
+  を修正します。あわせて参照側 KFSDRAM に 1330 件の違反が出た件も確認します —
+  私のモデルが厳しすぎる可能性があり、それだと sdram_mp
+  の「違反0」の意味も弱まります。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 結果が逆転し、決定的な情報が出ました。
+
+  - KFSDRAM(実機で動く参照)が私のモデルで違反: tRCD violated
+  - shim(sdram_mp)は PASS: 違反0・エラー0
+
+  つまり 私の SDRAM モデルの tRCD が厳しすぎた(KFSDRAM は ACTIVATE
+  の1サイクル後に CAS を出す。42.95MHz = 23.3ns なら tRCD 15-20ns
+  は1サイクルで足りるので KFSDRAM が正しい)。
+
+  そして RAM.sv + shim はシミュレーションでは通るのに実機で落ちる。シミュレーシ
+  ョンで見えない要因を疑うべきで、筆頭はタイミング収束です。run#42 の STA
+  レポートを確認します。
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+⏺ タイミングは両ビルドとも同じ箇所で負スラック(B1 も -0.728、CGA クロック
+  general[3])。B1 は動くのでタイミングは差分ではありません。
+
+  シミュレーションで見えない筆頭はリード遅延の実機差です。KFSDRAM
+  がリードデータを何サイクル目で拾っているか比較します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ タイミングは差分ではないと確認できました。**シミュレーションが見逃す典型は「リ
+  フレッシュ不足」**です — モデルはデータが decay
+  しないので、リフレッシュが足りなくても通ってしまいます。モデルに tREF / tRAS /
+  tRC の検査を追加して再実行します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ TB がまだ不正です — 参照の KFSDRAM が 765 エラーなので、この TB
+  は判定基準になりません(shim の PASS も意味を持ちません)。data_bus_out
+  の生成タイミングを確認します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ バグを特定しました。 RAM.sv:374 の access_ready <= idle が鍵です。
+
+  - KFSDRAM: idle = (state == IDLE) — リフレッシュ中は 0。CPU は待たされる
+  - 私のシム: idle = init_done & ~busy — リフレッシュ中も busy は 0 なので 1 
+    を返す
+
+  つまりリフレッシュ中に来たアクセスに対し「即完了」と答えてしまいます。refresh_
+  mode を 0 固定にしたことも同じ方向に効きます。私の TB は access_complete 
+  を待っていて memory_access_ready 
+  の経路を踏んでいなかったため、これを見逃しました。
+
+  コントローラの FSM 状態を公開して直します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ TB を memory_access_ready 
+  を使う実バス手順に直します(これを踏んでいなかったのが見逃しの原因)。参照の 
+  KFSDRAM が PASS することを TB の妥当性条件とします。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ CPU バスサイクルが短すぎました。実機の CPU は 4.77MHz、チップセットは 42.95MHz
+  なので 1 バスサイクル ≒ 36 チップセットクロックです。合わせて再実行します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 参照側の書き込みがモデルに届いていません。計測を追加して切り分けます。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ モデルのリードデータ窓が1サイクルしかなく、2-state
+  シミュレーションでは脆いのが原因のようです(実部品の DQ
+  はクロック縁の前後で有効)。窓を2サイクルに広げます。参照が PASS すれば TB 
+  は妥当です。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ TB はまだ参照を再現できておらず、妥当なオラクルになっていません。ここで正直に
+  区切ります。
+
+  まず SD を動作する B1(KFSDRAM 版)に戻し、修正を push します。
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ バグを特定して修正しました。SD は動作する B1(KFSDRAM 版)に戻してあります。
+
+  原因
+
+  RAM.sv はコントローラの状態を2経路で使います:
+
+  systemverilog
+  else if (state == IDLE)                     access_ready <= idle;
+  else if (write_command && refresh_mode)     access_ready <= 1'b0;
+  else if (read_command  && refresh_mode)     access_ready <= 1'b0;
+
+  ┌──────────────┬───────────────────────────┬──────────────────────────────┐
+  │              │          KFSDRAM          │         私のシム(誤)         │
+  ├──────────────┼───────────────────────────┼──────────────────────────────┤
+  │ idle         │ state == IDLE —           │ init_done & ~busy —          │
+  │              │ リフレッシュ中は 0        │ リフレッシュ中も 1           │
+  ├──────────────┼───────────────────────────┼──────────────────────────────┤
+  │ refresh_mode │ REFRESH 状態を報告        │ 1'b0 固定                    │
+  └──────────────┴───────────────────────────┴──────────────────────────────┘
+
+  リフレッシュ中に来たアクセスに「待つ必要なし」と答えていました。 RAM.sv
+  はウェイトを入れずにバスサイクルを終わらせるので、データが動く前に完了扱いにな
+  ります。リフレッシュは 7.45µs ごとなので BIOS ロード中に確実に踏みます。
+
+  sdram_mp に stat_idle(このサイクルにコマンドを受け付けられるか)と stat_refresh
+  を追加し、シムがそれを返すようにしました。
+
+  なぜシミュレーションで見逃したか
+
+  テストベンチが access_complete を待っていて、memory_access_ready 
+  の経路を一度も踏んでいませんでした。 RAM.sv が唯一ウェイトを入れるのが
+  refresh_mode
+  衝突なので、そこを踏まないテストはこのバグに構造的に盲目でした。TB は CPU
+  バスサイクルを模して memory_access_ready を見る方式に書き直しました。
+
+  ついでに私のモデル側の誤りも2件見つかりました。tRCD
+  を2サイクル必須にしていた(KFSDRAM は1サイクル後に CAS を出す。23.3ns なら
+  15-20ns は1サイクルで足りるのでモデルが厳しすぎた)、リードデータ窓が1サイクル
+  しかなかった。
+
+  正直な現状: まだ検証できていません
+
+  tb_ram_ab は参照の KFSDRAM を PASS させられていません(765
+  データ誤り)。参照が落ちる TB は判定に使えないので、シム側の PASS 
+  も信用できません。
+
+  つまり 今回の修正は RAM.sv のソースを読んで導いたもので、シミュレーションで裏
+  付けが取れていません。リードデータの latch 位置の詰めが残っています。
+
+  選択肢
+
+  1. TB を先に妥当化する(KFSDRAM を PASS させてから修正を検証)—
+     筋は良いが、もう数往復かかります
+  2. 修正版をそのまま実機で試す — CI は
+     13分。当たれば早いですが、外れたらまた原因が絞れません
+
+  **1 を推奨します。**同じ轍(検証されていないものを実機に投げる)を踏むことになる
+  ので。ただ、push 済みなので CI は既に修正版をビルドしています。試されるなら完
+  成後にパッケージします。どちらで進めましょうか。
+
+✻ Worked for 10m 45s · done 10:49 AM
+
+❯ 1                                                                             
+
+⏺ TB の妥当化から。モデルのリードデータ窓が1サイクル遅い疑いが濃厚です。
+
+  実部品は READ を取り込んだ縁 N の N+CL 
+  の縁でサンプル可能になりますが、私のモデルは rd_vld[cas_lat] を使っており、駆
+  動区間が1サイクル後ろにずれています。修正して参照が通るか見ます。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 参照が「00」から実データらしき値を返すようになりました。窓を2スロット駆動して
+  いるため隣接リードが混ざっている可能性があります。単一スロットに絞ります。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 決定的です。 モデルを正しくしたところ:
+
+  - KFSDRAM: PASS → TB がオラクルとして妥当になりました ✅
+  - sdram_mp シム: FAIL(リードが 00)
+
+  私のコントローラはリードデータを1サイクル遅く拾っていました。 RD_DELAY = 
+  CAS_LATENCY + 2 が誤りで、正しくは +1 です。これは idle/refresh_mode
+  とは別の、2件目の実機バグでした。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 全て PASS。参照の KFSDRAM も通るので、TB がオラクルとして妥当になりました。
+
+  ┌────────────────────────┬───────────────────────────┐
+  │         テスト         │           結果            │
+  ├────────────────────────┼───────────────────────────┤
+  │ RAM.sv + KFSDRAM(参照) │ PASS ← これが妥当性の条件 │
+  ├────────────────────────┼───────────────────────────┤
+  │ RAM.sv + sdram_mp      │ PASS                      │
+  ├────────────────────────┼───────────────────────────┤
+  │ tb_sdram_mp            │ PASS / 123.4 MB/s         │
+  ├────────────────────────┼───────────────────────────┤
+  │ tb_sdram_load          │ PASS / 111.7 MB/s         │
+  ├────────────────────────┼───────────────────────────┤
+  │ tb_sdram_shim          │ PASS                      │
+  └────────────────────────┴───────────────────────────┘
+
+  CI に回帰登録して push します。
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ TB を妥当化したら、その場で2件目のバグが出ました。 これが正解の順序でした。
+
+  経緯
+
+  TB が参照 KFSDRAM を通せなかった原因はモデル側でした。実部品は READ
+  を取り込んだ縁 N に対し N+CL の縁でサンプル可能になるので、駆動スロットは
+  rd_vld[cas_lat-1] が正しく、私は rd_vld[cas_lat]
+  を使って丸一サイクル遅く駆動していました。
+
+  モデルを直すと KFSDRAM が PASS(TB が妥当化)、同時に sdram_mp が 
+  FAIL。ここで2件目のバグが露出しました:
+
+  ▎ RD_DELAY = CAS_LATENCY + 2 は1サイクル遅い。正しくは +1。
+  ▎ cmd をレジスタするので、縁 T で発行した READ は T+1 に部品へ届き、データは 
+  ▎ T+1+CL でサンプル可能。rd_pipe[0] は T で立つので、p_rvalid を作るスロットは
+  ▎ rd_pipe[CAS_LATENCY]。
+
+  モデルとコントローラが同じ誤解を共有していたので辻褄が合っていました。
+  実機ではリードが 00 になります。idle/refresh_mode
+  の件とは独立した別のバグです。
+
+  現在の状態
+
+  ┌───────────────────────────┬─────────────────────┐
+  │          テスト           │        結果         │
+  ├───────────────────────────┼─────────────────────┤
+  │ tb_ram_ab + KFSDRAM(参照) │ PASS ← 妥当性の条件 │
+  ├───────────────────────────┼─────────────────────┤
+  │ tb_ram_ab + sdram_mp      │ PASS                │
+  ├───────────────────────────┼─────────────────────┤
+  │ tb_sdram_mp               │ PASS / 123.4 MB/s   │
+  ├───────────────────────────┼─────────────────────┤
+  │ tb_sdram_load             │ PASS / 111.7 MB/s   │
+  ├───────────────────────────┼─────────────────────┤
+  │ tb_sdram_shim             │ PASS                │
+  └───────────────────────────┴─────────────────────┘
+
+  tb_ram_ab を両モードで CI に回帰登録しました。参照が落ちたら即座に気づけます。
+
+  教訓(ドキュメントに記載済み)
+
+  自作モデルで自作 RTL を検証するときは、必ず動作既知の参照実装を同じ TB 
+  に通すこと。参照が落ちるなら疑うべきはモデル。
+  今回はこれをやっていなかったために、実機1往復を無駄にしました。
+
+  次
+
+  CI がビルド中です(13分)。完成したらパッケージして SD
+  に投入するので、もう一度実機テストをお願いします。今度は参照と同じ TB
+  を通った状態なので、前回より根拠があります。
+
+  なお SD は現在**動作する B1(KFSDRAM 版)**のままなので、それまで使えます。
+
+✻ Worked for 3m 15s · done 10:55 AM
+
+❯ ビルドおわったよね？ちゃんと検知して                                          
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  You've hit your session limit · resets 2:10pm (Asia/Tokyo)
+     /upgrade to increase your usage limit.
+
+✻ Baked for 22s · done 12:03 PM

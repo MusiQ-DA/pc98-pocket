@@ -12,8 +12,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VOL="${1:-/Volumes/ANALOGUE}"
-DST="$VOL/Assets/pc98/hiroya.PC98"
+DST="$VOL/Assets/pc98/hiroya.PC9801"
 
+# Apple's clang cannot assemble start.S -- it rejects the cc1as flag its own
+# driver passes for -march=rv32im -- so build with Homebrew's LLVM when it is
+# installed. ld.lld/llvm-objcopy come from there anyway.
+for d in /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin; do
+    [ -x "$d/clang" ] && { PATH="$d:$PATH"; break; }
+done
 make -C pcxt-base/src/firmware >/dev/null
 echo "built $(stat -f%z pcxt-base/src/firmware/firmware.bin) bytes"
 
