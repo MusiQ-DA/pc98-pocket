@@ -128,8 +128,53 @@ module pocket_video (
     //
     // The Hercules canvas when that card is shown, the CGA HBlank/VBlank otherwise
     // (cga.v already normalizes every CGA mode to 640x200).
+`ifdef MACHINE_PC98
+    // -------------------------------------------------- rebuilt PC-98 blanking
+    //
+    // Not CHIPSET's HBlank/VBlank. Everything indexed by the counters derived
+    // from those -- the overlay, the RTL status bands, a sixteen-pixel square at
+    // their own origin -- has never appeared on hardware, while everything
+    // driven from a free-running raster has: colour bars, and the softcore's
+    // panel with its text readable. Simulating this exact path
+    // (tb_pc98_osdwin) says it is correct, so what reaches pocket_video on the
+    // hardware is not what the renderer's timing generator puts out.
+    //
+    // So rebuild the presented blanking here, from the two signals the hardware
+    // has confirmed alive: the HSync and VSync edges. The PC-98 raster is fixed
+    // -- 848 x 440 with sync at 680 and 412 -- so counting from those edges
+    // reproduces the guest's own blanking exactly, and in phase with it, which
+    // is what keeps the picture aligned.
+    localparam [9:0] PC98_H_TOTAL  = 10'd848, PC98_H_ACTIVE = 10'd640;
+    localparam [9:0] PC98_V_TOTAL  = 10'd440, PC98_V_ACTIVE = 10'd400;
+    localparam [9:0] PC98_H_SYNC   = 10'd680;   // H_ACTIVE + H_FRONT
+    localparam [9:0] PC98_V_SYNC   = 10'd412;   // V_ACTIVE + V_FRONT
+
+    reg  [9:0] rb_h = 10'd0, rb_v = 10'd0;
+    reg        rb_hs_d = 1'b0, rb_vs_d = 1'b0;
+    wire       rb_hs_edge = HSync & ~rb_hs_d;
+    wire       rb_vs_edge = VSync & ~rb_vs_d;
+    always @(posedge clk_pix) begin
+        rb_hs_d <= HSync;
+        rb_vs_d <= VSync;
+        if (rb_hs_edge)                     rb_h <= PC98_H_SYNC;
+        else if (rb_h == PC98_H_TOTAL - 1)  rb_h <= 10'd0;
+        else                                rb_h <= rb_h + 10'd1;
+
+        if (rb_vs_edge)                     rb_v <= PC98_V_SYNC;
+        else if (rb_hs_edge) begin
+            if (rb_v == PC98_V_TOTAL - 1)   rb_v <= 10'd0;
+            else                            rb_v <= rb_v + 10'd1;
+        end
+    end
+    wire pc98_hb = (rb_h >= PC98_H_ACTIVE);
+    wire pc98_vb = (rb_v >= PC98_V_ACTIVE);
+
+    wire vid_hb  = pc98_hb;
+    wire vid_vb  = pc98_vb;
+`else
     wire vid_hb  = hgc_shown_pix ? canvas_hb : HBlank;
     wire vid_vb  = hgc_shown_pix ? canvas_vb : VBlank;
+`endif
     // Canvas padding (inside the window, outside the guest raster). The window's first
     // line is sacrificial/black: the scaler captures the first DE line unreliably.
     wire vid_pad = hgc_shown_pix & (HBlank | VBlank | (v_run == CANVAS_H));
@@ -181,6 +226,24 @@ module pocket_video (
     wire osd_enable;
     synch_3 s_osd_enable_pix (osd_active, osd_enable, clk_pix);
 
+`ifdef MACHINE_PC98
+    // No guard on this machine.
+    //
+    // The guard exists because a PC/AT guest can program the CRTC to stall
+    // HSYNC or suppress VSYNC, and an open overlay then has no stable frame to
+    // ride on. This machine has one raster, fixed at 640x400 by
+    // pc98_video_timing, and no way to leave spec.
+    //
+    // Left in, it does not merely idle: tb_pc98_osdwin measures it engaged for
+    // 1119361 cycles out of 1119360 -- permanently -- because it is calibrated
+    // for CGA's 640x200 and reads a 400-line frame as out of spec. It then
+    // substitutes its own 200-line raster, so osd_vcnt reaches 199 instead of
+    // 399 while osd_raster_h still reports 400, and the softcore places its
+    // panel across lines the presented frame never has. It also forces the
+    // picture black for as long as it runs.
+    wire guard_run = 1'b0;
+    wire gen_hs = 1'b0, gen_vs = 1'b0, gen_hb = 1'b0, gen_vb = 1'b0;
+`else
     wire guard_run, gen_hs, gen_vs, gen_hb, gen_vb;
     video_sync_guard u_sync_guard (
         .clk_pix      (clk_pix),
@@ -195,6 +258,7 @@ module pocket_video (
         .gen_hb       (gen_hb),
         .gen_vb       (gen_vb)
     );
+`endif
 
     //
     // Presented raster
