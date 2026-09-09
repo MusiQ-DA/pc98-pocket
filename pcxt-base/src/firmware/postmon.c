@@ -102,6 +102,21 @@ static void dec(int x, int y, uint32_t v)
     osd_draw_string(&fb, x, y, out, OSD_LABEL);
 }
 
+// ---------------------------------------------------------- ROM capture
+//
+// Read once, with the guest held, and show the cached bytes afterwards. See
+// postmon.h for why it cannot be read live.
+static uint8_t rom_a[8];   // F800E0: the ITF's port-init loop and its table
+static uint8_t rom_b[8];   // FFFF0 : the reset vector, as a control
+
+void postmon_capture_rom(void)
+{
+    for (uint32_t i = 0; i < 8; i++) {
+        rom_a[i] = sdram_peek(0xF800E0u + i);
+        rom_b[i] = sdram_peek(0xFFFF0u + i);
+    }
+}
+
 void post_mon_tick(void)
 {
     static uint32_t last_status = 0xFFFFFFFFu;
@@ -251,14 +266,14 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4, 132, "F800E0", OSD_LABEL);
         // Unrolled: check_osd_layout reads these calls literally and cannot
         // resolve a loop variable in the x expression.
-        hex(4 +  7 * 8, 132, sdram_peek(0xF800E0u), 2);
-        hex(4 + 10 * 8, 132, sdram_peek(0xF800E1u), 2);
-        hex(4 + 13 * 8, 132, sdram_peek(0xF800E2u), 2);
-        hex(4 + 16 * 8, 132, sdram_peek(0xF800E3u), 2);
-        hex(4 + 19 * 8, 132, sdram_peek(0xF800E4u), 2);
-        hex(4 + 22 * 8, 132, sdram_peek(0xF800E5u), 2);
-        hex(4 + 25 * 8, 132, sdram_peek(0xF800E6u), 2);
-        hex(4 + 28 * 8, 132, sdram_peek(0xF800E7u), 2);
+        hex(4 +  7 * 8, 132, rom_a[0], 2);
+        hex(4 + 10 * 8, 132, rom_a[1], 2);
+        hex(4 + 13 * 8, 132, rom_a[2], 2);
+        hex(4 + 16 * 8, 132, rom_a[3], 2);
+        hex(4 + 19 * 8, 132, rom_a[4], 2);
+        hex(4 + 22 * 8, 132, rom_a[5], 2);
+        hex(4 + 25 * 8, 132, rom_a[6], 2);
+        hex(4 + 28 * 8, 132, rom_a[7], 2);
         // A control, on the same path. F800E0 came back all zeros, but the
         // peek runs through the self-test master, which was built to work with
         // the 8088 held in reset -- and the guest is running now. A read that
@@ -271,14 +286,14 @@ void post_mon_tick(void)
         // really is empty. If it comes back zeros too, the peek is the thing
         // that is broken and F800E0 says nothing.
         osd_draw_string(&fb, 4, 142, "FFFF0", OSD_LABEL);
-        hex(4 +  7 * 8, 142, sdram_peek(0xFFFF0u), 2);
-        hex(4 + 10 * 8, 142, sdram_peek(0xFFFF1u), 2);
-        hex(4 + 13 * 8, 142, sdram_peek(0xFFFF2u), 2);
-        hex(4 + 16 * 8, 142, sdram_peek(0xFFFF3u), 2);
-        hex(4 + 19 * 8, 142, sdram_peek(0xFFFF4u), 2);
-        hex(4 + 22 * 8, 142, sdram_peek(0xFFFF5u), 2);
-        hex(4 + 25 * 8, 142, sdram_peek(0xFFFF6u), 2);
-        hex(4 + 28 * 8, 142, sdram_peek(0xFFFF7u), 2);
+        hex(4 +  7 * 8, 142, rom_b[0], 2);
+        hex(4 + 10 * 8, 142, rom_b[1], 2);
+        hex(4 + 13 * 8, 142, rom_b[2], 2);
+        hex(4 + 16 * 8, 142, rom_b[3], 2);
+        hex(4 + 19 * 8, 142, rom_b[4], 2);
+        hex(4 + 22 * 8, 142, rom_b[5], 2);
+        hex(4 + 25 * 8, 142, rom_b[6], 2);
+        hex(4 + 28 * 8, 142, rom_b[7], 2);
     }
 #endif
     osd_draw_string(&fb, 4, 152, "DROP", OSD_LABEL);

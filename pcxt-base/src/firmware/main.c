@@ -54,6 +54,11 @@ int main(void)
         ;
 #endif
 
+    // Read the guest ROM while the 8088 is still held: the peek shares
+    // CHIPSET's external-access port with it and loses every arbitration once
+    // it runs.
+    postmon_capture_rom();
+
     *SOFT_GUEST_HOLD = 0;
 
     // Arm the timer and enable only its interrupt (bit 0); the fault interrupts stay
