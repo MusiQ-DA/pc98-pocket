@@ -1,0 +1,5 @@
+
+== unresolved indirect/far transfers ==
+F804D5  JMP SP
+F800E3  JMP SI
+bytes covered: 351

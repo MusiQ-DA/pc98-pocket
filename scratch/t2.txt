@@ -1,0 +1,495 @@
+F80000  FA               CLI
+F80001  B4D5             MOV AH,0D5h
+F80003  9E               SAHF
+F80004  79FE             JNS  4h
+F80006  75FE             JNZ  6h
+F80008  7BFE             JPO  8h
+F8000A  73FE             JNC  0Ah
+F8000C  F8               CLC
+F8000D  3F               AAS
+F8000E  73FE             JNC  0Eh
+F80010  B001             MOV AL,01h
+F80012  B402             MOV AH,02h
+F80014  F6E4             MUL AH
+F80016  70FE             JO   16h
+F80018  33C0             XOR AX,AX
+F8001A  9E               SAHF
+F8001B  78FE             JS   1Bh
+F8001D  74FE             JZ   1Dh
+F8001F  7AFE             JPE  1Fh
+F80021  72FE             JC   21h
+F80023  F9               STC
+F80024  3F               AAS
+F80025  72FE             JC   25h
+F80027  B07F             MOV AL,7Fh
+F80029  B420             MOV AH,20h
+F8002B  F6E4             MUL AH
+F8002D  71FE             JNO  2Dh
+F8002F  B8FFFF           MOV AX,0FFFFh
+F80032  8ED8             MOV DS,AX
+F80034  8CDB             MOV BX,DS
+F80036  8ED3             MOV SS,BX
+F80038  8CD1             MOV CX,SS
+F8003A  8EC1             MOV ES,CX
+F8003C  8CC2             MOV DX,ES
+F8003E  8BE2             MOV SP,DX
+F80040  8BEC             MOV BP,SP
+F80042  8BF5             MOV SI,BP
+F80044  8BFE             MOV DI,SI
+F80046  3BF8             CMP DI,AX
+F80048  75FE             JNZ  48h
+F8004A  2D5555           SUB AX,5555h
+F8004D  73E3             JNC  32h
+F8004F  BA3904           MOV DX,439h
+F80052  EC               IN AL,DX
+F80053  EC               IN AL,DX
+F80054  0AC0             OR AL,AL
+F80056  7527             JNZ  7Fh
+F80058  B092             MOV AL,92h
+F8005A  E637             OUT 37h,AL
+F8005C  EB00             JMP SHORT 5Eh
+F8005E  EB00             JMP SHORT 60h
+F80060  B0FF             MOV AL,0FFh
+F80062  E635             OUT 35h,AL
+F80064  B80003           MOV AX,300h
+F80067  E643             OUT 43h,AL
+F80069  B90A00           MOV CX,0Ah
+F8006C  E2FE             LOOP 6Ch
+F8006E  FECC             DEC AH
+F80070  75F5             JNZ  67h
+F80072  B040             MOV AL,40h
+F80074  E643             OUT 43h,AL
+F80076  B90A00           MOV CX,0Ah
+F80079  E2FE             LOOP 79h
+F8007B  B05E             MOV AL,5Eh
+F8007D  E643             OUT 43h,AL
+F8007F  EC               IN AL,DX
+F80080  2402             AND AL,02h
+F80082  0C34             OR AL,34h
+F80084  EE               OUT DX,AL
+F80085  B800A0           MOV AX,0A000h
+F80088  8EC0             MOV ES,AX
+F8008A  E435             IN AL,35h
+F8008C  A880             TEST AL,80h
+F8008E  7509             JNZ  99h
+F80090  8E160604         MOV SS,[0406h]
+F80094  8B260404         MOV SP,[0404h]
+F80098  CB               RETF
+F80099  A820             TEST AL,20h
+F8009B  751F             JNZ  0BCh
+F8009D  BDA300           MOV BP,0A3h
+F800A0  E99900           JMP 13Ch
+---- gap 00A3..00BC (25) ----
+F800BC  B070             MOV AL,70h
+F800BE  E677             OUT 77h,AL
+F800C0  EB00             JMP SHORT 0C2h
+F800C2  EB00             JMP SHORT 0C4h
+F800C4  B000             MOV AL,00h
+F800C6  E673             OUT 73h,AL
+F800C8  EB00             JMP SHORT 0CAh
+F800CA  EB00             JMP SHORT 0CCh
+F800CC  B000             MOV AL,00h
+F800CE  E673             OUT 73h,AL
+F800D0  BEE500           MOV SI,0E5h
+F800D3  FC               CLD
+F800D4  32ED             XOR CH,CH
+F800D6  2EAD             CS:LODSW
+F800D8  8AC8             MOV CL,AL
+F800DA  8AF4             MOV DH,AH
+F800DC  2EAD             CS:LODSW
+F800DE  8AD4             MOV DL,AH
+F800E0  EE               OUT DX,AL
+F800E1  E2F9             LOOP 0DCh
+F800E3  FFE6             JMP SI
+---- gap 00E5..0101 (28) ----
+F80101  BADF7F           MOV DX,7FDFh
+F80104  B093             MOV AL,93h
+F80106  EE               OUT DX,AL
+F80107  EB00             JMP SHORT 109h
+F80109  EB00             JMP SHORT 10Bh
+F8010B  BA6704           MOV DX,467h
+F8010E  B000             MOV AL,00h
+F80110  EE               OUT DX,AL
+F80111  BA6104           MOV DX,461h
+F80114  B008             MOV AL,08h
+F80116  EE               OUT DX,AL
+F80117  E442             IN AL,42h
+F80119  A802             TEST AL,02h
+F8011B  740E             JZ   12Bh
+F8011D  BA3700           MOV DX,37h
+F80120  B00B             MOV AL,0Bh
+F80122  EE               OUT DX,AL
+F80123  BAF000           MOV DX,0F0h
+F80126  B000             MOV AL,00h
+F80128  EE               OUT DX,AL
+F80129  EBFE             JMP SHORT 129h
+F8012B  B342             MOV BL,42h
+F8012D  A820             TEST AL,20h
+F8012F  7502             JNZ  133h
+F80131  B340             MOV BL,40h
+F80133  BA3F04           MOV DX,43Fh
+F80136  8AC3             MOV AL,BL
+F80138  EE               OUT DX,AL
+F80139  BD7F05           MOV BP,57Fh
+F8013C  E433             IN AL,33h
+F8013E  A808             TEST AL,08h
+F80140  7506             JNZ  148h
+F80142  B000             MOV AL,00h
+F80144  E66E             OUT 6Eh,AL
+F80146  EB04             JMP SHORT 14Ch
+F80148  B001             MOV AL,01h
+F8014A  E66E             OUT 6Eh,AL
+F8014C  BBE504           MOV BX,4E5h
+F8014F  B440             MOV AH,40h
+F80151  BC5701           MOV SP,157h
+F80154  E90803           JMP 45Fh
+F80157  BBE704           MOV BX,4E7h
+F8015A  B400             MOV AH,00h
+F8015C  BC6201           MOV SP,162h
+F8015F  E9FD02           JMP 45Fh
+F80162  BBE904           MOV BX,4E9h
+F80165  E433             IN AL,33h
+F80167  A808             TEST AL,08h
+F80169  7503             JNZ  16Eh
+F8016B  BBF304           MOV BX,4F3h
+F8016E  B400             MOV AH,00h
+F80170  BC7601           MOV SP,176h
+F80173  E9E902           JMP 45Fh
+F80176  BBFD04           MOV BX,4FDh
+F80179  B400             MOV AH,00h
+F8017B  BC8101           MOV SP,181h
+F8017E  E9DE02           JMP 45Fh
+F80181  BB0005           MOV BX,500h
+F80184  B400             MOV AH,00h
+F80186  BC8C01           MOV SP,18Ch
+F80189  E9D302           JMP 45Fh
+F8018C  BB0305           MOV BX,503h
+F8018F  B400             MOV AH,00h
+F80191  BC9701           MOV SP,197h
+F80194  E9C802           JMP 45Fh
+F80197  B001             MOV AL,01h
+F80199  E668             OUT 68h,AL
+F8019B  B90200           MOV CX,2h
+F8019E  BCA401           MOV SP,1A4h
+F801A1  E93303           JMP 4D7h
+F801A4  E2F8             LOOP 19Eh
+F801A6  BB2905           MOV BX,529h
+F801A9  B4C0             MOV AH,0C0h
+F801AB  BCB101           MOV SP,1B1h
+F801AE  E9AE02           JMP 45Fh
+F801B1  BCB701           MOV SP,1B7h
+F801B4  E92003           JMP 4D7h
+F801B7  BB2B05           MOV BX,52Bh
+F801BA  B480             MOV AH,80h
+F801BC  BCC201           MOV SP,1C2h
+F801BF  E99D02           JMP 45Fh
+F801C2  B90200           MOV CX,2h
+F801C5  BCCB01           MOV SP,1CBh
+F801C8  E90C03           JMP 4D7h
+F801CB  E2F8             LOOP 1C5h
+F801CD  E442             IN AL,42h
+F801CF  A808             TEST AL,08h
+F801D1  740F             JZ   1E2h
+F801D3  BB2D05           MOV BX,52Dh
+F801D6  E433             IN AL,33h
+F801D8  A808             TEST AL,08h
+F801DA  7512             JNZ  1EEh
+F801DC  BB3705           MOV BX,537h
+F801DF  EB0D             JMP SHORT 1EEh
+---- gap 01E1..01E2 (1) ----
+F801E2  BB6B05           MOV BX,56Bh
+F801E5  E433             IN AL,33h
+F801E7  A808             TEST AL,08h
+F801E9  7503             JNZ  1EEh
+F801EB  BB7505           MOV BX,575h
+F801EE  B480             MOV AH,80h
+F801F0  BCF601           MOV SP,1F6h
+F801F3  E96902           JMP 45Fh
+F801F6  B90200           MOV CX,2h
+F801F9  BCFF01           MOV SP,1FFh
+F801FC  E9D802           JMP 4D7h
+F801FF  E2F8             LOOP 1F9h
+F80201  B00F             MOV AL,0Fh
+F80203  E6A2             OUT 0A2h,AL
+F80205  B90200           MOV CX,2h
+F80208  BC0E02           MOV SP,20Eh
+F8020B  E9C902           JMP 4D7h
+F8020E  E2F8             LOOP 208h
+F80210  B04F             MOV AL,4Fh
+F80212  E67C             OUT 7Ch,AL
+F80214  B081             MOV AL,81h
+F80216  E66A             OUT 6Ah,AL
+F80218  E433             IN AL,33h
+F8021A  A808             TEST AL,08h
+F8021C  753E             JNZ  25Ch
+F8021E  B008             MOV AL,08h
+F80220  E668             OUT 68h,AL
+F80222  E431             IN AL,31h
+F80224  A808             TEST AL,08h
+F80226  741A             JZ   242h
+F80228  B01F             MOV AL,1Fh
+F8022A  E670             OUT 70h,AL
+F8022C  B008             MOV AL,08h
+F8022E  E672             OUT 72h,AL
+F80230  B008             MOV AL,08h
+F80232  E674             OUT 74h,AL
+F80234  BB1A05           MOV BX,51Ah
+F80237  B400             MOV AH,00h
+F80239  BC3F02           MOV SP,23Fh
+F8023C  E92002           JMP 45Fh
+F8023F  EB5C             JMP SHORT 29Dh
+---- gap 0241..0242 (1) ----
+F80242  B000             MOV AL,00h
+F80244  E670             OUT 70h,AL
+F80246  B007             MOV AL,07h
+F80248  E672             OUT 72h,AL
+F8024A  B008             MOV AL,08h
+F8024C  E674             OUT 74h,AL
+F8024E  BB1505           MOV BX,515h
+F80251  B400             MOV AH,00h
+F80253  BC5902           MOV SP,259h
+F80256  E90602           JMP 45Fh
+F80259  EB42             JMP SHORT 29Dh
+---- gap 025B..025C (1) ----
+F8025C  B007             MOV AL,07h
+F8025E  E668             OUT 68h,AL
+F80260  EB00             JMP SHORT 262h
+F80262  B009             MOV AL,09h
+F80264  E668             OUT 68h,AL
+F80266  E431             IN AL,31h
+F80268  A808             TEST AL,08h
+F8026A  741A             JZ   286h
+F8026C  B01E             MOV AL,1Eh
+F8026E  E670             OUT 70h,AL
+F80270  B011             MOV AL,11h
+F80272  E672             OUT 72h,AL
+F80274  B010             MOV AL,10h
+F80276  E674             OUT 74h,AL
+F80278  BB2405           MOV BX,524h
+F8027B  B400             MOV AH,00h
+F8027D  BC8302           MOV SP,283h
+F80280  E9DC01           JMP 45Fh
+F80283  EB18             JMP SHORT 29Dh
+---- gap 0285..0286 (1) ----
+F80286  B000             MOV AL,00h
+F80288  E670             OUT 70h,AL
+F8028A  B00F             MOV AL,0Fh
+F8028C  E672             OUT 72h,AL
+F8028E  B010             MOV AL,10h
+F80290  E674             OUT 74h,AL
+F80292  BB1F05           MOV BX,51Fh
+F80295  B400             MOV AH,00h
+F80297  BC9D02           MOV SP,29Dh
+F8029A  E9C201           JMP 45Fh
+F8029D  E431             IN AL,31h
+F8029F  A804             TEST AL,04h
+F802A1  7404             JZ   2A7h
+F802A3  B005             MOV AL,05h
+F802A5  E668             OUT 68h,AL
+F802A7  B000             MOV AL,00h
+F802A9  E676             OUT 76h,AL
+F802AB  E442             IN AL,42h
+F802AD  A810             TEST AL,10h
+F802AF  7504             JNZ  2B5h
+F802B1  B041             MOV AL,41h
+F802B3  E66A             OUT 6Ah,AL
+F802B5  B082             MOV AL,82h
+F802B7  E66A             OUT 6Ah,AL
+F802B9  B084             MOV AL,84h
+F802BB  E66A             OUT 6Ah,AL
+F802BD  B007             MOV AL,07h
+F802BF  E66A             OUT 6Ah,AL
+F802C1  E433             IN AL,33h
+F802C3  A808             TEST AL,08h
+F802C5  B8DD2C           MOV AX,2CDDh
+F802C8  7503             JNZ  2CDh
+F802CA  B88832           MOV AX,3288h
+F802CD  E6A0             OUT 0A0h,AL
+F802CF  8AC4             MOV AL,AH
+F802D1  E6A2             OUT 0A2h,AL
+F802D3  B006             MOV AL,06h
+F802D5  E66A             OUT 6Ah,AL
+F802D7  B000             MOV AL,00h
+F802D9  E66A             OUT 6Ah,AL
+F802DB  B90200           MOV CX,2h
+F802DE  BCE402           MOV SP,2E4h
+F802E1  E9F301           JMP 4D7h
+F802E4  E2F8             LOOP 2DEh
+F802E6  BB2905           MOV BX,529h
+F802E9  B4C0             MOV AH,0C0h
+F802EB  BCF102           MOV SP,2F1h
+F802EE  E96E01           JMP 45Fh
+F802F1  BCF702           MOV SP,2F7h
+F802F4  E9E001           JMP 4D7h
+F802F7  BB2B05           MOV BX,52Bh
+F802FA  B480             MOV AH,80h
+F802FC  BC0203           MOV SP,302h
+F802FF  E95D01           JMP 45Fh
+F80302  B90200           MOV CX,2h
+F80305  BC0B03           MOV SP,30Bh
+F80308  E9CC01           JMP 4D7h
+F8030B  E2F8             LOOP 305h
+F8030D  E442             IN AL,42h
+F8030F  A808             TEST AL,08h
+F80311  740F             JZ   322h
+F80313  BB2D05           MOV BX,52Dh
+F80316  E433             IN AL,33h
+F80318  A808             TEST AL,08h
+F8031A  7512             JNZ  32Eh
+F8031C  BB3705           MOV BX,537h
+F8031F  EB0D             JMP SHORT 32Eh
+---- gap 0321..0322 (1) ----
+F80322  BB6B05           MOV BX,56Bh
+F80325  E433             IN AL,33h
+F80327  A808             TEST AL,08h
+F80329  7503             JNZ  32Eh
+F8032B  BB7505           MOV BX,575h
+F8032E  B480             MOV AH,80h
+F80330  BC3603           MOV SP,336h
+F80333  E92901           JMP 45Fh
+F80336  BB4105           MOV BX,541h
+F80339  E433             IN AL,33h
+F8033B  A808             TEST AL,08h
+F8033D  7503             JNZ  342h
+F8033F  BB4405           MOV BX,544h
+F80342  B480             MOV AH,80h
+F80344  BC4A03           MOV SP,34Ah
+F80347  E91501           JMP 45Fh
+F8034A  BB4705           MOV BX,547h
+F8034D  B480             MOV AH,80h
+F8034F  BC5503           MOV SP,355h
+F80352  E90A01           JMP 45Fh
+F80355  BB4A05           MOV BX,54Ah
+F80358  B480             MOV AH,80h
+F8035A  BC6003           MOV SP,360h
+F8035D  E9FF00           JMP 45Fh
+F80360  BB4D05           MOV BX,54Dh
+F80363  B480             MOV AH,80h
+F80365  BC6B03           MOV SP,36Bh
+F80368  E9F400           JMP 45Fh
+F8036B  BB5F05           MOV BX,55Fh
+F8036E  B480             MOV AH,80h
+F80370  BC7603           MOV SP,376h
+F80373  E9E900           JMP 45Fh
+F80376  BB6905           MOV BX,569h
+F80379  B480             MOV AH,80h
+F8037B  BC8103           MOV SP,381h
+F8037E  E9DE00           JMP 45Fh
+F80381  B000             MOV AL,00h
+F80383  E66C             OUT 6Ch,AL
+F80385  B90200           MOV CX,2h
+F80388  E460             IN AL,60h
+F8038A  A820             TEST AL,20h
+F8038C  75FA             JNZ  388h
+F8038E  E460             IN AL,60h
+F80390  A820             TEST AL,20h
+F80392  74FA             JZ   38Eh
+F80394  E460             IN AL,60h
+F80396  A820             TEST AL,20h
+F80398  75FA             JNZ  394h
+F8039A  E2EC             LOOP 388h
+F8039C  EB00             JMP SHORT 39Eh
+F8039E  EB00             JMP SHORT 3A0h
+F803A0  EB00             JMP SHORT 3A2h
+F803A2  E4A0             IN AL,0A0h
+F803A4  A820             TEST AL,20h
+F803A6  75F4             JNZ  39Ch
+F803A8  EB00             JMP SHORT 3AAh
+F803AA  EB00             JMP SHORT 3ACh
+F803AC  EB00             JMP SHORT 3AEh
+F803AE  E4A0             IN AL,0A0h
+F803B0  A820             TEST AL,20h
+F803B2  74F4             JZ   3A8h
+F803B4  EB00             JMP SHORT 3B6h
+F803B6  EB00             JMP SHORT 3B8h
+F803B8  EB00             JMP SHORT 3BAh
+F803BA  E4A0             IN AL,0A0h
+F803BC  A820             TEST AL,20h
+F803BE  75F4             JNZ  3B4h
+F803C0  EB00             JMP SHORT 3C2h
+F803C2  EB00             JMP SHORT 3C4h
+F803C4  EB00             JMP SHORT 3C6h
+F803C6  B00D             MOV AL,0Dh
+F803C8  E6A2             OUT 0A2h,AL
+F803CA  EB00             JMP SHORT 3CCh
+F803CC  E662             OUT 62h,AL
+F803CE  EB00             JMP SHORT 3D0h
+F803D0  E4A0             IN AL,0A0h
+F803D2  A820             TEST AL,20h
+F803D4  74FA             JZ   3D0h
+F803D6  EB00             JMP SHORT 3D8h
+F803D8  EB00             JMP SHORT 3DAh
+F803DA  EB00             JMP SHORT 3DCh
+F803DC  B00C             MOV AL,0Ch
+F803DE  E6A2             OUT 0A2h,AL
+F803E0  EB00             JMP SHORT 3E2h
+F803E2  E662             OUT 62h,AL
+F803E4  B002             MOV AL,02h
+F803E6  E668             OUT 68h,AL
+F803E8  BEEE03           MOV SI,3EEh
+F803EB  E9E5FC           JMP 0D3h
+---- gap 03EE..045F (113) ----
+F8045F  BA6200           MOV DX,62h
+F80462  F6C480           TEST AH,80h
+F80465  7403             JZ   46Ah
+F80467  BAA200           MOV DX,0A2h
+F8046A  F6C440           TEST AH,40h
+F8046D  751F             JNZ  48Eh
+F8046F  F6C480           TEST AH,80h
+F80472  7508             JNZ  47Ch
+F80474  E460             IN AL,60h
+F80476  A804             TEST AL,04h
+F80478  74FA             JZ   474h
+F8047A  EB12             JMP SHORT 48Eh
+F8047C  EB00             JMP SHORT 47Eh
+F8047E  EB00             JMP SHORT 480h
+F80480  EB00             JMP SHORT 482h
+F80482  E4A0             IN AL,0A0h
+F80484  A804             TEST AL,04h
+F80486  74F4             JZ   47Ch
+F80488  EB00             JMP SHORT 48Ah
+F8048A  EB00             JMP SHORT 48Ch
+F8048C  EB00             JMP SHORT 48Eh
+F8048E  2E8A0F           MOV CL,CS:[BX]
+F80491  43               INC BX
+F80492  32ED             XOR CH,CH
+F80494  2E8A07           MOV AL,CS:[BX]
+F80497  43               INC BX
+F80498  FEC5             INC CH
+F8049A  FEC9             DEC CL
+F8049C  EE               OUT DX,AL
+F8049D  83EA02           SUB DX,0002h
+F804A0  0AC9             OR CL,CL
+F804A2  7431             JZ   4D5h
+F804A4  80FD10           CMP CH,10h
+F804A7  7C21             JL   4CAh
+F804A9  32ED             XOR CH,CH
+F804AB  F6C480           TEST AH,80h
+F804AE  7508             JNZ  4B8h
+F804B0  E460             IN AL,60h
+F804B2  A804             TEST AL,04h
+F804B4  74FA             JZ   4B0h
+F804B6  EB12             JMP SHORT 4CAh
+F804B8  EB00             JMP SHORT 4BAh
+F804BA  EB00             JMP SHORT 4BCh
+F804BC  EB00             JMP SHORT 4BEh
+F804BE  E4A0             IN AL,0A0h
+F804C0  A804             TEST AL,04h
+F804C2  74F4             JZ   4B8h
+F804C4  EB00             JMP SHORT 4C6h
+F804C6  EB00             JMP SHORT 4C8h
+F804C8  EB00             JMP SHORT 4CAh
+F804CA  2E8A07           MOV AL,CS:[BX]
+F804CD  43               INC BX
+F804CE  FEC5             INC CH
+F804D0  FEC9             DEC CL
+F804D2  EE               OUT DX,AL
+F804D3  EBCB             JMP SHORT 4A0h
+F804D5  FFE4             JMP SP
+F804D7  E460             IN AL,60h
+F804D9  A820             TEST AL,20h
+F804DB  74FA             JZ   4D7h
+F804DD  E460             IN AL,60h
+F804DF  A820             TEST AL,20h
+F804E1  75FA             JNZ  4DDh
+F804E3  FFE4             JMP SP
