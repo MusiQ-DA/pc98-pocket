@@ -46,6 +46,10 @@ module tb_post_monitor;
         .post_code(post_code), .post_prev(post_prev), .post_hist(post_hist),
         .last_mem_addr(last_mem_addr), .post_count(post_count),
         .post_max(post_max), .restart_count(restart_count),
+        // The snoop window is a register now, so the bench has to say where it
+        // looks. FD88 is what the PC/AT build hardwired, which is what these
+        // expectations were written against; the PC-98 build powers up at FFFF.
+        .rom_win(16'hFD88),
         .rom_read_data(rom_read_data), .rom_read_count(rom_read_count),
         .ld_addr(ld_addr), .ld_data(ld_data), .ld_we_n(ld_we_n),
         .rom_load_data(rom_load_data), .rom_load_count(rom_load_count),
