@@ -29,7 +29,7 @@ module pocket_video (
     input     [15:0]  dbg_bits,
     input      [3:0]  osd_palette_idx,
     input             osd_in_area,
-    output reg [9:0]  osd_hcnt,
+    output     [9:0]  osd_hcnt,
     output     [9:0]  osd_vcnt,
     output     [9:0]  osd_raster_w,
     output     [9:0]  osd_raster_h,
@@ -217,14 +217,15 @@ module pocket_video (
     // OSD raster counters: osd_hcnt = pixel in the active line; the line index is the
     // canvas countdown on Hercules, else an hblank-fall counter parked at -1 so the
     // first fall (after VBlank) is line 0.
+    reg [9:0] osd_hcnt_g   = 10'd0;
     reg [9:0] osd_vcnt_raw = 10'd0;
     always @(posedge clk_pix) begin
-        if (sel_hb)                   osd_hcnt <= 10'd0;
-        else                          osd_hcnt <= osd_hcnt + 10'd1;
+        if (sel_hb)                   osd_hcnt_g <= 10'd0;
+        else                          osd_hcnt_g <= osd_hcnt_g + 10'd1;
         if (sel_vb)                   osd_vcnt_raw <= 10'd1023;
         else if (sel_hb_d1 & ~sel_hb) osd_vcnt_raw <= osd_vcnt_raw + 10'd1;
     end
-    assign osd_vcnt = hgc_shown_pix ? (CANVAS_H - 10'd1 - v_run) : osd_vcnt_raw;
+    wire [9:0] osd_vcnt_g = hgc_shown_pix ? (CANVAS_H - 10'd1 - v_run) : osd_vcnt_raw;
 
     // Presented raster size, read by the softcore to place the overlay window;
     // the canvas reports its 349 usable lines, excluding the sacrificial one.
@@ -326,7 +327,55 @@ module pocket_video (
         else
             hs_idle <= hs_idle + 20'd1;
     end
-    wire [15:0] dbg_show = {dbg_bits_pix[15:8], raster_alive, dbg_bits_pix[6:0]};
+    // VSync liveness, same shape as HSync's.
+    reg        vs_seen = 1'b0;
+    reg [21:0] vs_idle = 22'd0;
+    reg        vsync_alive = 1'b0;
+    always @(posedge clk_pix) begin
+        vs_seen <= VSync;
+        if (VSync != vs_seen) begin
+            vsync_alive <= 1'b1;
+            vs_idle     <= 22'd0;
+        end else if (vs_idle == 22'h3FFFFF)
+            vsync_alive <= 1'b0;
+        else
+            vs_idle <= vs_idle + 22'd1;
+    end
+
+    // Per-frame "did this ever happen" flags, published at the probe's own frame
+    // boundary so each reads as the state of the frame just gone.
+    reg pb_vs_d = 1'b0;
+    reg de_acc = 1'b0, ia_acc = 1'b0, px_acc = 1'b0, hb_acc = 1'b0, vb_acc = 1'b0;
+    reg de_any = 1'b0, ia_any = 1'b0, px_any = 1'b0, hb_any = 1'b0, vb_any = 1'b0;
+    always @(posedge clk_pix) begin
+        pb_vs_d <= pb_vs;
+        if (pb_vs & ~pb_vs_d) begin
+            de_any <= de_acc; ia_any <= ia_acc; px_any <= px_acc;
+            hb_any <= hb_acc; vb_any <= vb_acc;
+            de_acc <= 1'b0; ia_acc <= 1'b0; px_acc <= 1'b0;
+            hb_acc <= 1'b0; vb_acc <= 1'b0;
+        end else begin
+            if (vid_de_now)                                  de_acc <= 1'b1;
+            if (osd_in_area)                                 ia_acc <= 1'b1;
+            if (osd_in_area && (osd_palette_idx != 4'd0))    px_acc <= 1'b1;
+            if (~sel_hb)                                     hb_acc <= 1'b1;
+            if (~sel_vb)                                     vb_acc <= 1'b1;
+        end
+    end
+
+    // Left column is core_top's; the right column is measured here.
+    //
+    //   9  raster_alive   HSync moves
+    //   10 vsync_alive    VSync moves
+    //   11 de_any         the picture path asserted DE this frame
+    //   12 hb_any         the presented hblank ever cleared
+    //   13 vb_any         the presented vblank ever cleared
+    //   14 osd_enable     osd_active, synced to clk_pix
+    //   15 ia_any         the softcore returned in-area for some probe pixel
+    //   16 px_any         and returned a non-zero palette index there
+    wire [15:0] dbg_show = {px_any, ia_any, osd_enable, vb_any,
+                            hb_any, de_any, vsync_alive, raster_alive,
+                            dbg_bits_pix[7:0]};
 
     wire [9:0] pb_h, pb_v;
     wire       pb_hs, pb_vs, pb_hb, pb_vb, pb_de;
@@ -344,6 +393,11 @@ module pocket_video (
         .frame_start ()
     );
 
+    // The probe reads the softcore's framebuffer with its OWN raster, so the
+    // whole OSD chain can be tested with CHIPSET out of the picture entirely.
+    assign osd_hcnt = pb_h;
+    assign osd_vcnt = pb_v;
+
     // Two columns of eight: 0-63 is bits 0-7, 64-127 is bits 8-15.
     wire       pb_band_area = (pb_h < 10'd128) && (pb_v < 10'd256);
     wire [3:0] pb_band      = {pb_h[6], pb_v[7:5]};
@@ -354,9 +408,13 @@ module pocket_video (
     // as one column of sixteen.
     wire       pb_rule      = (pb_h == 10'd64) || (pb_h == 10'd65);
     wire [23:0] pb_bar_rgb  = {{8{pb_bar[2]}}, {8{pb_bar[1]}}, {8{pb_bar[0]}}};
+    // The softcore's overlay, composited on the probe's raster. If the panel
+    // appears here, the whole OSD chain works and only the picture path is at
+    // fault; if it does not, the fault is in the framebuffer or its origin.
     wire [23:0] pb_rgb      = pb_rule       ? 24'hFF0000
                             : pb_band_area ? (dbg_show[pb_band] ? 24'hFFFFFF
                                                                 : 24'h202020)
+                            : osd_show     ? osd_color
                             :                pb_bar_rgb;
 
     reg [23:0] pb_vid_rgb = 24'd0;
@@ -399,6 +457,11 @@ module pocket_video (
     assign video_hs           = vid_hs;
     assign video_vs           = vid_vs;
 `endif
+`ifndef PC98_DEBUG_BANDS
+    assign osd_hcnt = osd_hcnt_g;
+    assign osd_vcnt = osd_vcnt_g;
+`endif
+
     assign video_skip         = 1'b0;
     assign video_rgb_clock    = clk_pix;
     assign video_rgb_clock_90 = clk_pix_90;

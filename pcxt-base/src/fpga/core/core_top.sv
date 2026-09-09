@@ -2457,15 +2457,13 @@ module core_top (
     // These sixteen are the remaining terms of reset_wire plus the evidence for
     // whether the raster runs at all.
     //
-    //   left column                      right column
-    //   1  soft_guest_hold               9   dataslots_ready
-    //   2  splash_pending_sync2          10  initilized_sdram
-    //   3  splashscreen_sync2            11  processor_ready
-    //   4  splash_reset_hold             12  reset_cpu
-    //   5  bios_ever_loaded              13  reset_soft
-    //   6  interact_reset                14  osd_active
-    //   7  reset (the guest reset)       15  load_active
-    //   8  raster_alive (HSync moves)    16  ~RESET
+    // The left column is these eight; pocket_video measures the right column
+    // itself, from signals that only exist there.
+    //
+    //   1  soft_guest_hold      5  bios_ever_loaded
+    //   2  splash_pending_sync2 6  interact_reset
+    //   3  splashscreen_sync2   7  reset (the guest reset)
+    //   4  splash_reset_hold    8  ~RESET
     //
     // reset_wire is RESET | load_active | ~bios_ever_loaded | interact_reset |
     // splashscreen_sync2 | splash_reset_hold | splash_pending_sync2 |
@@ -2478,7 +2476,7 @@ module core_top (
     wire [15:0] dbg_bits = {
         ~RESET, load_active, osd_active, reset_soft,
         reset_cpu, processor_ready, initilized_sdram, dataslots_ready,
-        1'b0 /* raster_alive, filled in by pocket_video */, reset,
+        ~RESET, reset,
         interact_reset, bios_ever_loaded,
         splash_reset_hold, splashscreen_sync2, splash_pending_sync2,
         soft_guest_hold
