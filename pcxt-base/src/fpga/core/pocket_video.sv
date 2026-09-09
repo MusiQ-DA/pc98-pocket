@@ -26,7 +26,7 @@ module pocket_video (
     input             vid_blank,
     // OSD framebuffer handshake (softcore)
     input             osd_active,
-    input      [7:0]  dbg_bits,
+    input     [15:0]  dbg_bits,
     input      [3:0]  osd_palette_idx,
     input             osd_in_area,
     output reg [9:0]  osd_hcnt,
@@ -304,11 +304,29 @@ module pocket_video (
     // If the screen shows bars, clock, PLL, bitstream and scaler are all fine
     // and the bands say why nothing else runs. If it still shows the
     // checkerboard, the fault is upstream of every one of them.
-    reg [7:0] dbg_bits_s1 = 8'd0, dbg_bits_pix = 8'd0;
+    reg [15:0] dbg_bits_s1 = 16'd0, dbg_bits_pix = 16'd0;
     always @(posedge clk_pix) begin
         dbg_bits_s1  <= dbg_bits;
         dbg_bits_pix <= dbg_bits_s1;
     end
+
+    // Bit 7: does CHIPSET's raster run at all? HSync arrives on clk_pix already,
+    // so this needs no crossing -- just an edge and a timeout. About 50 ms of
+    // stillness (a PC-98 line is 848 dots) counts as stopped.
+    reg        hs_seen = 1'b0;
+    reg [19:0] hs_idle = 20'd0;
+    reg        raster_alive = 1'b0;
+    always @(posedge clk_pix) begin
+        hs_seen <= HSync;
+        if (HSync != hs_seen) begin
+            raster_alive <= 1'b1;
+            hs_idle      <= 20'd0;
+        end else if (hs_idle == 20'hFFFFF)
+            raster_alive <= 1'b0;
+        else
+            hs_idle <= hs_idle + 20'd1;
+    end
+    wire [15:0] dbg_show = {dbg_bits_pix[15:8], raster_alive, dbg_bits_pix[6:0]};
 
     wire [9:0] pb_h, pb_v;
     wire       pb_hs, pb_vs, pb_hb, pb_vb, pb_de;
@@ -326,15 +344,20 @@ module pocket_video (
         .frame_start ()
     );
 
-    wire       pb_band_area = (pb_h < 10'd64) && (pb_v < 10'd256);
-    wire [2:0] pb_band      = pb_v[7:5];
+    // Two columns of eight: 0-63 is bits 0-7, 64-127 is bits 8-15.
+    wire       pb_band_area = (pb_h < 10'd128) && (pb_v < 10'd256);
+    wire [3:0] pb_band      = {pb_h[6], pb_v[7:5]};
     // 128 px per bar, offset by one so no bar is black -- a black bar next to
     // the bands would read as "nothing here" and defeat the point.
     wire [2:0] pb_bar       = pb_h[9:7] + 3'd1;
+    // A one-pixel rule between the two band columns, so they cannot be misread
+    // as one column of sixteen.
+    wire       pb_rule      = (pb_h == 10'd64) || (pb_h == 10'd65);
     wire [23:0] pb_bar_rgb  = {{8{pb_bar[2]}}, {8{pb_bar[1]}}, {8{pb_bar[0]}}};
-    wire [23:0] pb_rgb      = pb_band_area
-                            ? (dbg_bits_pix[pb_band] ? 24'hFFFFFF : 24'h202020)
-                            : pb_bar_rgb;
+    wire [23:0] pb_rgb      = pb_rule       ? 24'hFF0000
+                            : pb_band_area ? (dbg_show[pb_band] ? 24'hFFFFFF
+                                                                : 24'h202020)
+                            :                pb_bar_rgb;
 
     reg [23:0] pb_vid_rgb = 24'd0;
     reg        pb_vid_de  = 1'b0;
