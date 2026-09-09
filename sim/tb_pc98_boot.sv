@@ -177,6 +177,9 @@ module tb_pc98_boot;
 
     logic io_wr_d = 1'b1, mem_wr_d = 1'b1, mem_rd_d = 1'b1, io_rd_d = 1'b1;
     logic [7:0] mem_wr_data_q = 8'h00;
+    logic [7:0] tvram_code [0:511];   // A0000-A01FF, first row of cells
+    logic [7:0] tvram_attr [0:511];   // A2000-A21FF
+    int          tvram_wr_count = 0;
 
     always_ff @(posedge clk_chipset) begin
         io_wr_d  <= io_wr_n;
@@ -199,6 +202,18 @@ module tb_pc98_boot;
             if (cpu_address[19:12] == 8'h00)
                 $display("  %8t  RAM[%04X] <= %02X   (eu_pc %05X)",
                          $time, cpu_address[15:0], mem_wr_data_q, eu_pc);
+            // The text plane: the memory-count display lands here. Keep the
+            // first row of cells (code + attribute) for the final dump.
+            if (cpu_address >= 20'hA0000 && cpu_address < 20'hA4000) begin
+                if (cpu_address < 20'hA0200)
+                    tvram_code[cpu_address[8:0]]  <= mem_wr_data_q;
+                else if (cpu_address >= 20'hA2000 && cpu_address < 20'hA2200)
+                    tvram_attr[cpu_address[8:0]]  <= mem_wr_data_q;
+                tvram_wr_count <= tvram_wr_count + 1;
+                if (tvram_wr_count < 40)
+                    $display("  %8t  TVRAM[%04X] <= %02X   (eu_pc %05X)",
+                             $time, cpu_address[15:0], mem_wr_data_q, eu_pc);
+            end
         end
 
         // I/O reads matter here too: if the ModRM byte of a group opcode is
@@ -659,11 +674,12 @@ module tb_pc98_boot;
         repeat (40) @(posedge clk_chipset);
         reset = 1'b0;
 
-        // Long enough for a real POST to get somewhere: 160 five-million
-        // chipset-clock chunks is about 18.6 seconds of guest time -- past
-        // the FDD sequence and the boot beep's busy wait. A progress line
-        // every chunk says whether it is moving or parked.
-        for (i = 0; i < 160; i = i + 1) begin
+        // Long enough for a real POST to finish: 300 five-million chipset-
+        // clock chunks is about 35 seconds of guest time -- through the FDD
+        // sequence, the boot beep, and the memory test, into whatever the
+        // BIOS does when no disk answers. A progress line every chunk says
+        // whether it is moving or parked.
+        for (i = 0; i < 300; i = i + 1) begin
             repeat (5_000_000) @(posedge clk_chipset);
             $display("  ... %0t  EU %05X  urom %04X  cyc %0d/%0d  ratio %0d dec %0d  zero %0d",
                      $time, eu_pc, urom,
@@ -690,6 +706,11 @@ module tb_pc98_boot;
         $display("IVT 08 : %04X:%04X   IVT 18: %04X:%04X",
                  {ram[8'h23],ram[8'h22]}, {ram[8'h21],ram[8'h20]},
                  {ram[8'h63],ram[8'h62]}, {ram[8'h61],ram[8'h60]});
+        $display("TVRAM writes %0d; first row, code words:", tvram_wr_count);
+        for (i = 0; i < 16; i = i + 1)
+            $display("  cell %02d: code %04X  attr %04X", i,
+                     {tvram_code[i*2+1], tvram_code[i*2]},
+                     {tvram_attr[i*2+1], tvram_attr[i*2]});
         $display("fetches       %0d", fetches);
         $display("distinct PCs  %0d", ring_w);
         $display("PC range      %05X .. %05X", pc_min, pc_max);
