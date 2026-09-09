@@ -57,6 +57,24 @@ module XT_CE_Generator (
                 cpu_edge_den = 9'd9;
                 clock_cycle_counter_division_ratio = 8'd6 - 8'd1;
                 clock_cycle_counter_decrement_value = 8'd7;
+`ifdef MACHINE_PC98
+                // Read margin for a shared SDRAM.
+                //
+                // RAM.sv raises access_ready from `idle` while the controller is
+                // idle and holds it through the access, so the CPU sees ready
+                // before read_flag and takes whatever data_bus_out is showing --
+                // which, before the read lands, is data_bus_out_reg, the
+                // PREVIOUS byte. The only margin is this wait count, and at the
+                // boot clock setting it is zero.
+                //
+                // That was survivable when the guest was the only SDRAM master.
+                // This machine has three: the guest, the font fetch and the CG
+                // window. The hardware reads its own reset vector back as
+                // EA A8 00 A8 F8 where the loader demonstrably wrote
+                // EA 00 00 00 F8 -- some bytes right, some stale, which is what
+                // a read sampled too early looks like under contention.
+                ram_read_wait_cycle = 2'd3;
+`endif
             end
 
             2'b01:
