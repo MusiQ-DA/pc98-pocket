@@ -241,11 +241,76 @@ module PERIPHERALS #(
 
     wire    iorq = ~io_read_n | ~io_write_n;
 
+`ifdef MACHINE_PC98
+    // ------------------------------------------------- PC-98 chip selects
+    //
+    // On a PC-98, A0 says WHICH CHIP, not which register. Two devices
+    // interleave through the same range on even and odd addresses, and the
+    // register within a device is selected by the bits above A0. Nothing about
+    // the PC/AT decode above survives that: it splits I/O space into 32-byte
+    // blocks by address[7:5] and hands each block to one device.
+    //
+    //   0x00-0x0F  even  8259 PIC     odd  8237 DMA
+    //   0x30-0x3F  even  8251         odd  8255 system port
+    //   0x70-0x7F  even  CRTC/GRCG    odd  8253 PIT
+    //
+    // Master 8259 at 0x00/0x02, slave at 0x08/0x0A. Only the master is wired
+    // for now -- KFPC-XT is an XT and carries one -- so the slave's addresses
+    // are left undecoded rather than answered wrongly.
+    //
+    // The register selects change with the map: the 8259's A0 comes from
+    // address[1], and the 8253's and 8255's two bits from address[2:1].
+    wire pc98_io  = iorq & ~address_enable_n & (address[15:8] == 8'h00);
+
+    assign dma_chip_select_n        = ~(pc98_io &  address[0] & ~address[7] & ~address[6] & ~address[5] & ~address[4]);
+    wire   interrupt_chip_select_n  = ~(pc98_io & ~address[0] & (address[7:3] == 5'b00000));
+    wire   timer_chip_select_n      = ~(pc98_io &  address[0] & (address[7:4] == 4'h7));
+    wire   ppi_chip_select_n        = ~(pc98_io &  address[0] & (address[7:4] == 4'h3));
+
+    // 0x21-0x2F odd: the DMA bank (page) registers.
+    assign dma_page_chip_select_n   = ~(pc98_io &  address[0] & (address[7:4] == 4'h2));
+
+    wire   [0:0] pic_reg_addr  = address[1];
+    wire   [1:0] pit_reg_addr  = address[2:1];
+    wire   [1:0] ppi_reg_addr  = address[2:1];
+    wire   [3:0] dma_reg_addr  = address[4:1];
+
+    // ---------------------------------------------- floppy interface stub
+    //
+    // Three ports the ITF polls before it will go any further. There is no
+    // drive here and none is needed: with nothing attached these read as
+    // constants on a real machine, and answering them is the whole of what the
+    // ITF wants at this stage.
+    //
+    //   0x00BE  FDD interface select. Bit 3 reads 1, bit 2 reads 0, and the low
+    //           two bits are the latch, which resets to 3 -- so 0xFB. The ITF
+    //           does IN AL,0BEh / TEST AL,1 / JZ, and bit 0 is what it is
+    //           testing.
+    //   0x0090  uPD765A main status. Idle is RQM alone, 0x80. The ITF tests
+    //           bit 4 (FDC busy) in a LOOPNE, so 0x00 would spin it out and
+    //           0xFF would fake a result phase that never comes.
+    //   0x0094  control register. The read side is a constant, 0x44.
+    //
+    // 0x0092 is the data register and is left out deliberately: it only means
+    // anything mid-command, and there are no commands without a drive.
+    wire fdd_be_select = pc98_io & (address[7:0] == 8'hBE);
+    wire fdd_90_select = pc98_io & (address[7:0] == 8'h90);
+    wire fdd_94_select = pc98_io & (address[7:0] == 8'h94);
+    wire fdd_stub_read = (fdd_be_select | fdd_90_select | fdd_94_select) & ~io_read_n;
+    wire [7:0] fdd_stub_data = fdd_be_select ? 8'hFB
+                             : fdd_90_select ? 8'h80
+                             :                 8'h44;
+`else
     assign  dma_chip_select_n       = chip_select_n[0]; // 0x00 .. 0x1F
     wire    interrupt_chip_select_n = chip_select_n[1]; // 0x20 .. 0x3F
     wire    timer_chip_select_n     = chip_select_n[2]; // 0x40 .. 0x5F
     wire    ppi_chip_select_n       = chip_select_n[3]; // 0x60 .. 0x7F
+    wire   [0:0] pic_reg_addr  = address[0];
+    wire   [1:0] pit_reg_addr  = address[1:0];
+    wire   [1:0] ppi_reg_addr  = address[1:0];
+    wire   [3:0] dma_reg_addr  = address[3:0];
     assign  dma_page_chip_select_n  = chip_select_n[4]; // 0x80 .. 0x8F
+`endif
     wire    nmi_chip_select_n       = chip_select_n[5]; // 0xA0 .. 0xBF
     wire    joystick_select         = (iorq && ~address_enable_n && address[15:3] == (16'h0200 >> 3)); // 0x200 .. 0x207
     wire    tandy_chip_select_n     = tandy_io_en ? chip_select_n[6] : 1'b1; // 0xC0 .. 0xDF
@@ -364,7 +429,7 @@ module PERIPHERALS #(
         .chip_select_n              (interrupt_chip_select_n),
         .read_enable_n              (io_read_n),
         .write_enable_n             (io_write_n),
-        .address                    (address[0]),
+        .address                    (pic_reg_addr),
         .data_bus_in                (internal_data_bus),
         .data_bus_out               (interrupt_data_bus_out),
 
@@ -423,7 +488,7 @@ module PERIPHERALS #(
         .chip_select_n              (timer_chip_select_n),
         .read_enable_n              (io_read_n),
         .write_enable_n             (io_write_n),
-        .address                    (address[1:0]),
+        .address                    (pit_reg_addr),
         .data_bus_in                (internal_data_bus),
         .data_bus_out               (timer_data_bus_out),
 
@@ -456,7 +521,7 @@ module PERIPHERALS #(
         .chip_select_n              (ppi_chip_select_n),
         .read_enable_n              (io_read_n),
         .write_enable_n             (io_write_n),
-        .address                    (address[1:0]),
+        .address                    (ppi_reg_addr),
         .data_bus_in                (internal_data_bus),
         .data_bus_out               (ppi_data_bus_out),
 
@@ -2008,6 +2073,11 @@ end
             data_bus_out <= ppi_data_bus_out;
         end
 `ifdef MACHINE_PC98
+        else if (fdd_stub_read)
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= fdd_stub_data;
+        end
         else if (tvram_mem_select && (~memory_read_n))
         begin
             data_bus_out_from_chipset <= 1'b1;
