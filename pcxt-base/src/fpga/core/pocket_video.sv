@@ -420,17 +420,21 @@ module pocket_video (
 
     // The probe reads the softcore's framebuffer with its OWN raster, so the
     // whole OSD chain can be tested with CHIPSET out of the picture entirely.
-    // Round three feeds the softcore the GUEST counters -- the path that fails.
-    // Round two proved the chain works by driving it from pb_h/pb_v and getting
-    // a panel, so what is left is to measure what these two actually do.
-    assign osd_hcnt = osd_hcnt_g;
-    assign osd_vcnt = osd_vcnt_g;
+    // Keep feeding the softcore the probe's raster: that is the configuration
+    // that renders a readable panel, and the panel carries the guest readouts
+    // this whole exercise was for. The guest counters do not have to be routed
+    // through the softcore to be measured -- vg_min/vg_max/hg_max below watch
+    // them directly.
+    assign osd_hcnt = pb_h;
+    assign osd_vcnt = pb_v;
 
     // Two columns of eight: 0-63 is bits 0-7, 64-127 is bits 8-15.
-    // Five columns of ten bands: 64 px wide, 32 lines tall, red rules between.
-    wire       pb_band_area = (pb_h < 10'd320) && (pb_v < 10'd320);
+    // Five columns of ten bands, in a strip along the BOTTOM of the frame:
+    // 64 px wide, 8 lines tall, red rules between. The bottom is where the
+    // softcore's 640x200 panel is not, so the readouts stay legible.
+    wire       pb_band_area = (pb_h < 10'd320) && (pb_v >= 10'd320);
     wire [2:0] pb_col       = pb_h[8:6];
-    wire [3:0] pb_row       = pb_v[8:5];
+    wire [3:0] pb_row       = (pb_v - 10'd320) >> 3;
     reg  [9:0] pb_colsel;
     always @(*) begin
         case (pb_col)
@@ -449,14 +453,17 @@ module pocket_video (
     wire [2:0] pb_bar       = pb_h[9:7] + 3'd1;
     // A one-pixel rule between the two band columns, so they cannot be misread
     // as one column of sixteen.
-    wire       pb_rule      = (pb_h >= 10'd64) && (pb_h < 10'd320)
-                              && (pb_h[5:0] < 6'd2);
+    wire       pb_rule      = (pb_v >= 10'd320) && (pb_h >= 10'd64)
+                              && (pb_h < 10'd320) && (pb_h[5:0] < 6'd2);
     wire [23:0] pb_bar_rgb  = {{8{pb_bar[2]}}, {8{pb_bar[1]}}, {8{pb_bar[0]}}};
-    // No overlay composite this round: it is driven by the guest counters now,
-    // so it would land wherever those land and could sit on top of the bands
-    // that are meant to explain them. ia_any and px_any report it instead.
+    // The overlay, on black. Colour bars showing through the panel's
+    // transparent pixels made the text unreadable, and the text is the point --
+    // so the whole framebuffer window gets a flat background and the bars stay
+    // outside it.
     wire [23:0] pb_rgb      = pb_rule       ? 24'hFF0000
                             : pb_band_area ? (pb_lit ? 24'hFFFFFF : 24'h202020)
+                            : osd_show     ? osd_color
+                            : osd_in_area  ? 24'h000000
                             :                pb_bar_rgb;
 
     reg [23:0] pb_vid_rgb = 24'd0;
