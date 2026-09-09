@@ -260,7 +260,19 @@ module PERIPHERALS #(
     //
     // The register selects change with the map: the 8259's A0 comes from
     // address[1], and the 8253's and 8255's two bits from address[2:1].
-    wire pc98_io  = iorq & ~address_enable_n & (address[15:8] == 8'h00);
+    // Qualified the way the PC/AT decode above qualifies: A9 and A8 low, and
+    // nothing said about A15-A10 -- which is not just what the original did,
+    // but what a PC-98 does. The machine's own I/O map mirrors 0000-00FF at
+    // 0100-03FF, 0400-0FFF and beyond, so the upper lines are genuinely
+    // don't care to the chipset. (The BIOS's 8253 test at FD885 reads counter
+    // 0 at 0071; a boot simulation of exactly that cycle shows 0071 on the
+    // latched address, so the upper bits are not garbage either -- the loose
+    // decode is for fidelity, not to rescue a missing select.)
+    wire pc98_io  = iorq & ~address_enable_n & ~address[9] & ~address[8];
+
+    // The single-port stubs below stay strict: they answer one address each and
+    // have no business claiming aliases.
+    wire pc98_io_exact = iorq & ~address_enable_n & (address[15:8] == 8'h00);
 
     assign dma_chip_select_n        = ~(pc98_io &  address[0] & ~address[7] & ~address[6] & ~address[5] & ~address[4]);
     wire   interrupt_chip_select_n  = ~(pc98_io & ~address[0] & (address[7:3] == 5'b00000));
@@ -293,9 +305,9 @@ module PERIPHERALS #(
     //
     // 0x0092 is the data register and is left out deliberately: it only means
     // anything mid-command, and there are no commands without a drive.
-    wire fdd_be_select = pc98_io & (address[7:0] == 8'hBE);
-    wire fdd_90_select = pc98_io & (address[7:0] == 8'h90);
-    wire fdd_94_select = pc98_io & (address[7:0] == 8'h94);
+    wire fdd_be_select = pc98_io_exact & (address[7:0] == 8'hBE);
+    wire fdd_90_select = pc98_io_exact & (address[7:0] == 8'h90);
+    wire fdd_94_select = pc98_io_exact & (address[7:0] == 8'h94);
     wire fdd_stub_read = (fdd_be_select | fdd_90_select | fdd_94_select) & ~io_read_n;
     wire [7:0] fdd_stub_data = fdd_be_select ? 8'hFB
                              : fdd_90_select ? 8'h80
@@ -1287,7 +1299,7 @@ end
 
     // Text GDC at 0x60, graphics GDC at 0xA0. Both answer the same status: the
     // ITF checks both, and both watch the same raster.
-    wire gdc_stat_select = pc98_io & ((address[7:0] == 8'h60) | (address[7:0] == 8'hA0));
+    wire gdc_stat_select = pc98_io_exact & ((address[7:0] == 8'h60) | (address[7:0] == 8'hA0));
     wire gdc_stat_read   = gdc_stat_select & ~io_read_n;
 
     // ------------------------------------------------- system port stubs
@@ -1300,8 +1312,8 @@ end
     //
     // 0x42 is the printer side of 0x40-0x4F; the ITF trace has it tested for
     // bit 1 clear. Zero satisfies that and claims nothing else.
-    wire sysport_35_select = pc98_io & (address[7:0] == 8'h35);
-    wire sysport_42_select = pc98_io & (address[7:0] == 8'h42);
+    wire sysport_35_select = pc98_io_exact & (address[7:0] == 8'h35);
+    wire sysport_42_select = pc98_io_exact & (address[7:0] == 8'h42);
     wire sysport_read      = (sysport_35_select | sysport_42_select) & ~io_read_n;
     wire [7:0] sysport_data = sysport_35_select ? 8'hA0 : 8'h00;
 

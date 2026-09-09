@@ -133,7 +133,9 @@ module tb_pc98_boot;
     logic [7:0] itf  [0:32767];      // 0x8000, mapped at F8000
     logic [7:0] bios [0:98303];      // 0x18000, mapped at E8000
 
-    logic itf_bank = 1'b1;           // core_top's reset value
+    // core_top's reset value, now that the ITF turned out to be a 386 image:
+    // the BIOS bank, booted directly the way np2 boots it.
+    logic itf_bank = 1'b0;
 
     function automatic logic is_rom(input logic [19:0] a);
         is_rom = (a >= 20'hE8000);
