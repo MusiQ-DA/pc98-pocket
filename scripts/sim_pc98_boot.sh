@@ -11,6 +11,7 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SYNTH=0
 [ "${1:-}" = "--synth" ] && { SYNTH=1; shift; }
+# Anything left over goes straight to the simulator binary (e.g. +gate2=0).
 
 ROMS="${PC98_ROMS:-$HOME/.pc98roms}"
 [ -f "$ROMS/itf.rom" ] && [ -f "$ROMS/bios.rom" ] \
@@ -84,15 +85,18 @@ export DOCKER_CONFIG="$CFG"
 
 S=pcxt-base/src/fpga/core
 K=$S/KFPC-XT/HDL
-docker run --rm -v "$PWD":/work -v "$OUT":/hex -w /hex pc98-sim bash -lc "
+docker run --rm -v "$PWD":/work -v "$OUT":/hex -w /hex -e "SIMARGS=$*" pc98-sim bash -lc "
   set -e
   verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot \
     -I/work/sim -I/work/$S -I/work/$S/8088 -I/work/$K -I/work/$K/KF8288/HDL \
+    -I/work/$K/KF8253/HDL \
     /work/sim/tb_pc98_boot.sv \
     /work/$S/8088/i8088.v /work/$S/8088/biu_max.v \
     /work/$S/8088/mcl86_eu_core.v /work/$S/8088/eu_rom.v \
     /work/$K/XT_CE_Generator.sv /work/$K/KF8288/HDL/KF8288.sv \
+    /work/$K/KF8253/HDL/KF8253.sv /work/$K/KF8253/HDL/KF8253_Counter.sv \
+    /work/$K/KF8253/HDL/KF8253_Control_Logic.sv \
     -o boot --Mdir /tmp/obj_boot
   cp /work/$S/8088/microcode.mem /hex/
-  /tmp/obj_boot/boot
+  /tmp/obj_boot/boot \$SIMARGS
 "

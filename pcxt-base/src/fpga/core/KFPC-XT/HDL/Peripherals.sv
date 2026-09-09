@@ -489,8 +489,26 @@ module PERIPHERALS #(
 
     logic   [7:0]   timer_data_bus_out;
 
+    // The AT gates counter 2 off port B bit 0 (speaker gate). A PC-98 keeps
+    // all three PIT gates hard-wired high and mutes the beeper downstream
+    // instead -- and it matters: the VM BIOS tests counter 2 at FD885 before
+    // writing a single byte to the 8255 (nothing but the two control words to
+    // 0x37 precede it in the trace). With port B at its reset value the AT
+    // wiring held counter 2's gate low, it never counted, the readback
+    // returned the load value, and the test read that as a dead chip and
+    // halted. That is exactly where the machine stopped: N=34 is counter 2's
+    // first pass through the loop, one latch short of the read that halts.
+    //
+    // The beep is left unmuted on purpose: the machine's boot beep IS counter
+    // 2 in mode 3 (FD8B4 programs it), so hearing it confirms this fix the
+    // same way the POST codes confirm the rest.
+`ifdef MACHINE_PC98
+    wire    tim2gatespk = 1'b1;
+    wire    spkdata     = 1'b1;
+`else
     wire    tim2gatespk = port_b_out[0] & ~port_b_io;
     wire    spkdata     = port_b_out[1] & ~port_b_io;
+`endif
 
     KF8253 u_KF8253 
     (
