@@ -166,6 +166,7 @@ void post_mon_tick(void)
     // at all -- testB13 drew label text over the picture and was invisible.
     osd_fill_rect(&fb, PANEL_X, PANEL_Y, PANEL_W, PANEL_H, OSD_KEYFACE);
 
+
     osd_draw_string(&fb, 4, 2, "POST", OSD_LABEL);
     hex(4 + 5 * 8, 2, status & 0xFFu, 2);
     osd_draw_string(&fb, 4 + 8 * 8, 2, "PREV", OSD_LABEL);
@@ -268,7 +269,6 @@ void post_mon_tick(void)
     osd_draw_string(&fb, 4, 122, "LD8", OSD_LABEL);
     for (int i = 8; i < 16; i++)
         hex(4 + (4 + (i - 8) * 3) * 8, 122, (ld[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
-
 
 #ifdef MACHINE_PC98
     osd_draw_string(&fb, 4 + 17 * 8, 22, "LDN", OSD_LABEL);

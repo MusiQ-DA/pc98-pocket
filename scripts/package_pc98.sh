@@ -62,7 +62,11 @@ def rw(name, fn):
 
 def core(j):
     m = j['core']['metadata']
-    m['shortname'] = 'PC98'
+    # MUST match the part of the directory name after the dot. Every other core
+    # on the card follows that -- hiroya.PCXTA/PCXTA, desaster.PCXT/PCXT -- and
+    # renaming the directory while leaving this at PC98 got "Load in core
+    # general error" until it was fixed.
+    m['shortname'] = 'PC9801'
     m['description'] = 'PC-98 machine layer (P1: ITF + BIOS fetch)'
     # The Pocket looks for a core's assets under Assets/<platform_id>/<core>/,
     # so this has to match the directory the ROMs go in. Leaving it at 'pcxt'

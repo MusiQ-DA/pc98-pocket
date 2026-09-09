@@ -38,7 +38,11 @@ HW_DEFINES := $(addprefix -D,$(shell sed -n 's/^[[:space:]]*set_global_assignmen
 # TargetLibraryInfo, LoopIdiomRecognize rewrites the string-measuring loop in
 # vkb_layout.c into a call to strlen, which does not exist in this bare-metal
 # link (ld.lld: undefined symbol: strlen). Freestanding disables that rewrite.
-CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Os -mno-relax -ffreestanding -Wall -Werror -Wundef -MMD -MP $(HW_DEFINES)
+# EXTRA_DEFINES is for bisecting on hardware: `make EXTRA_DEFINES=-DFOO`.
+# The firmware rides on an SD slot, so a marker costs seconds rather than a
+# fifteen-minute bitstream -- but only if there is a way to switch one on.
+EXTRA_DEFINES ?=
+CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Os -mno-relax -ffreestanding -Wall -Werror -Wundef -MMD -MP $(HW_DEFINES) $(EXTRA_DEFINES)
 ASFLAGS = --target=riscv32 -march=rv32im -mno-relax -Wall -Werror -MMD -MP
 
 all: firmware.vh firmware.srchash

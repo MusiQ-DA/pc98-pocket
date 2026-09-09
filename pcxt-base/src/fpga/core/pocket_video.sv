@@ -26,6 +26,7 @@ module pocket_video (
     input             vid_blank,
     // OSD framebuffer handshake (softcore)
     input             osd_active,
+    input      [7:0]  dbg_bits,
     input      [3:0]  osd_palette_idx,
     input             osd_in_area,
     output reg [9:0]  osd_hcnt,
@@ -267,7 +268,28 @@ module pocket_video (
     reg         vid_hs  = 1'b0;
     reg         vid_vs  = 1'b0;
     wire        vid_de_now = ~(sel_hb_d1 | sel_vb_d1) & ~vid_blank_pix;
-    wire [23:0] overlay    = osd_show  ? osd_color
+    // Debug bands: 64px-wide stripes down the left edge, 32 lines tall each,
+    // lit white when the bit is high and dark grey when it is low, so a dark
+    // band is still distinguishable from the picture behind it. Compiled in
+    // only under PC98_DEBUG_BANDS.
+`ifdef PC98_DEBUG_BANDS
+    // dbg_bits is asynchronous to clk_pix; two flops are enough for something
+    // only a human reads.
+    reg [7:0] dbg_bits_s1 = 8'd0, dbg_bits_pix = 8'd0;
+    always @(posedge clk_pix) begin
+        dbg_bits_s1  <= dbg_bits;
+        dbg_bits_pix <= dbg_bits_s1;
+    end
+    wire [2:0]  dbg_band = osd_vcnt[7:5];
+    wire        dbg_in   = (osd_hcnt < 10'd64) && (osd_vcnt < 10'd256);
+    wire [23:0] dbg_color = dbg_bits_pix[dbg_band] ? 24'hFFFFFF : 24'h202020;
+`else
+    wire        dbg_in    = 1'b0;
+    wire [23:0] dbg_color = 24'd0;
+`endif
+
+    wire [23:0] overlay    = dbg_in    ? dbg_color
+                           : osd_show  ? osd_color
                            : guard_run ? 24'd0
                            :             credits_rgb;
     always @(posedge clk_pix) begin
