@@ -211,11 +211,23 @@ module tb_pc98_boot;
     // bits 7-5 the RS-232C modem status, bit 0 the calendar clock, and the
     // rest zero. Bit 2 is one of the zeroes, and the UX ITF reads it at F889C
     // as PARITY ERROR -- which is what FF gave it, and what it printed.
+    // 0x31 is DIP switch 2, and bit 4 tells the ITF to initialise the memory
+    // switch: the twenty bytes at A3FE0 that hold the machine's configuration,
+    // A3FEA among them, whose low three bits are how many 128 KB units of RAM
+    // to count -- 0 for 128 KB, 4 for 640 KB.
+    //
+    // On a real PC-98 that area is battery-backed text VRAM and survives a
+    // power cycle, so the ITF only rewrites it when the switch asks. Here it
+    // is ordinary VRAM and comes up cleared every time, so the answer is
+    // always "please initialise": bit 4 set. With it clear, the ITF skipped
+    // the whole block, read A3FEA as zero, and counted 128 KB -- which is
+    // exactly what MEMORY 128KB OK was reporting on a 640 KB machine.
     wire [7:0] sysport_data = sysport_35_sel ? 8'hA0
-                            : sysport_31_sel ? 8'h00
+                            : sysport_31_sel ? 8'h10
                             : sysport_33_sel ? 8'h00
                             :                  8'h00;
 
+    logic saw_high_write = 1'b0;
     logic din_default_q = 1'b0;
     logic unanswered_seen [0:255];
     initial for (int q = 0; q < 256; q = q + 1) unanswered_seen[q] = 1'b0;
@@ -303,6 +315,12 @@ module tb_pc98_boot;
             // readout is the same quantity, and "sweeping upward through the
             // memory test" and "going round a small ring" look identical on a
             // 20 fps display but not at all alike here.
+            if (cpu_address >= 20'h20000 && cpu_address < 20'hA0000
+                && ~saw_high_write) begin
+                saw_high_write <= 1'b1;
+                $display("  %8t  first write above 128 KB: %05X (eu_pc %05X)",
+                         $time, cpu_address, eu_pc);
+            end
             if (cpu_address < wr_lo_chunk) wr_lo_chunk <= cpu_address;
             if (cpu_address > wr_hi_chunk) wr_hi_chunk <= cpu_address;
             wr_n_chunk <= wr_n_chunk + 1;
@@ -801,7 +819,33 @@ module tb_pc98_boot;
             // seconds. Nothing in the image jumps there -- the early ITF has
             // no stack and returns through JMP BP / JMP SP -- so the only way
             // to see who sends it back is to catch the arrival.
-            if (eu_pc == 20'hF8427 && itf_ck_n < 4) begin
+            // The ITF's memory sizing, at the two points where it has just
+            // verified a 64 KB pair: BX is the segment it tested, DH the
+            // running block count, and CF says whether the compare held. The
+            // count stops at 2 -- 128 KB -- and nothing above 1FFFF is ever
+            // written, so either the fill never ran or the compare that
+            // follows it is not doing what the ROM thinks.
+            // The size display itself: DX is the answer it is about to print
+            // (AH x 64 KB), and the branches that reach here name whoever
+            // decided it -- the 640 KB counting loop at F8AF0 never runs, so
+            // something else is setting DH.
+            if (eu_pc == 20'hF9678 && itf_ck_n < 2) begin
+                itf_ck_n <= itf_ck_n + 1;
+                $display("  %8t  SIZE DISPLAY  dx %04X  bx %04X", $time,
+                         u_cpu.EU_CORE.eu_register_dx, u_cpu.EU_CORE.eu_register_bx);
+                for (m = 0; m < 48; m = m + 1)
+                    $display("        %05X  op %02X",
+                             disp_pc[(disp_w + 64 - 48 + m) % 64],
+                             disp_op[(disp_w + 64 - 48 + m) % 64]);
+            end
+            if (eu_pc == 20'hF8880 || eu_pc == 20'hF8B1E
+             || eu_pc == 20'hF889A || eu_pc == 20'hF8B38) begin
+                $display("  %8t  MEMSIZE at %05X  bx %04X dx %04X ax %04X  CF=%0d",
+                         $time, eu_pc,
+                         u_cpu.EU_CORE.eu_register_bx, u_cpu.EU_CORE.eu_register_dx,
+                         u_cpu.EU_CORE.eu_register_ax, u_cpu.EU_CORE.eu_flags[0]);
+            end
+            if (1'b0 && eu_pc == 20'hF8427) begin
                 itf_ck_n <= itf_ck_n + 1;
                 $display("  %8t  ITF cycle mark at F8427 (visit %0d)", $time, itf_ck_n);
                 for (m = 0; m < 48; m = m + 1)

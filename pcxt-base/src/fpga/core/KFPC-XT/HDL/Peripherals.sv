@@ -1514,10 +1514,25 @@ end
     //
     // 0x42 is the printer side of 0x40-0x4F; the ITF trace has it tested for
     // bit 1 clear. Zero satisfies that and claims nothing else.
+    // 0x31 is DIP switch 2, and bit 4 tells the ITF to initialise the memory
+    // switch: the twenty bytes at A3FE0 that hold the machine's configuration,
+    // A3FEA among them, whose low three bits are how many 128 KB units of RAM
+    // to count -- 0 for 128 KB, 4 for 640 KB.
+    //
+    // On a real PC-98 that area is battery-backed text VRAM and survives a
+    // power cycle, so the ITF only rewrites it when the switch asks. Here it
+    // is ordinary VRAM and comes up cleared every time, so the answer is
+    // always "please initialise": bit 4 set. With it clear, the ITF skipped
+    // the whole block, read A3FEA as zero, and counted 128 KB -- which is
+    // exactly what MEMORY 128KB OK was reporting on a 640 KB machine.
+    wire sysport_31_select = pc98_io_exact & (address[7:0] == 8'h31);
     wire sysport_35_select = pc98_io_exact & (address[7:0] == 8'h35);
     wire sysport_42_select = pc98_io_exact & (address[7:0] == 8'h42);
-    wire sysport_read      = (sysport_35_select | sysport_42_select) & ~io_read_n;
-    wire [7:0] sysport_data = sysport_35_select ? 8'hA0 : 8'h00;
+    wire sysport_read      = (sysport_31_select | sysport_35_select
+                            | sysport_42_select) & ~io_read_n;
+    wire [7:0] sysport_data = sysport_35_select ? 8'hA0
+                            : sysport_31_select ? 8'h10
+                            :                     8'h00;
 
     wire [7:0] pc98_font_row;      // driven by the row buffer below
     wire [6:0] pc98_font_cell;
