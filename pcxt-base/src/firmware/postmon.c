@@ -29,6 +29,10 @@
 #define POST_ROMLDN ((volatile uint32_t *) 0x50000068)
 #define POST_RLF    ((volatile uint32_t *) 0x5000006C) // {fifo high water, words dropped}
 #define POST_TVRAM  ((volatile uint32_t *) 0x50000080) // {tvram last addr, write count}
+#define POST_TVC0   ((volatile uint32_t *) 0x50000084) // row 0 cells 0-3, codes
+#define POST_TVC1   ((volatile uint32_t *) 0x50000088) // cells 4-7
+#define POST_TVA0   ((volatile uint32_t *) 0x5000008C) // row 0 cells 0-3, attributes
+#define POST_TVA1   ((volatile uint32_t *) 0x50000090) // cells 4-7
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -109,13 +113,6 @@ static void dec(int x, int y, uint32_t v)
 // it. Drawn through a helper, so check_osd_layout cannot evaluate the x
 // expressions and does not see these fields -- which is safe only because
 // rows 62 and 72 now belong to this and to nothing else.
-static void segrange(int x, int y, int i, const uint16_t *lo, const uint16_t *hi)
-{
-    hex(x, y, (uint32_t) i, 1);
-    hex(x + 2 * 8, y, lo[i], 4);
-    osd_draw_string(&fb, x + 6 * 8, y, "-", OSD_LABEL);
-    hex(x + 7 * 8, y, hi[i], 4);
-}
 #endif
 
 // ---------------------------------------------------------- ROM capture
@@ -498,6 +495,7 @@ void post_mon_tick(void)
         hex(4 + 4 * 8, 52, p0, 8);
         hex(4 + 12 * 8, 52, p1, 8);
         osd_draw_string(&fb, 4 + 21 * 8, 52, "FR", OSD_LABEL);
+        (void) seg_lo_s; (void) seg_hi_s;
         hex(4 + 24 * 8, 52, seg_front_show, 5);
 
         // The extents, for the two highest-numbered live segments and the two
@@ -505,15 +503,46 @@ void post_mon_tick(void)
         // machine); low is where it is working. Four segments lit is what the
         // first reading gave -- 0, 1, D and E -- and the four ranges name the
         // loop between them.
-        int hi1 = -1, hi2 = -1, lo1 = -1, lo2 = -1;
-        for (int i = 15; i >= 0; i--)
-            if (seg_show[i]) { if (hi1 < 0) hi1 = i; else if (hi2 < 0) hi2 = i; }
-        for (int i = 0; i < 16; i++)
-            if (seg_show[i]) { if (lo1 < 0) lo1 = i; else if (lo2 < 0) lo2 = i; }
-        if (hi1 >= 0) segrange(4,            62, hi1, seg_lo_s, seg_hi_s);
-        if (hi2 >= 0) segrange(4 + 13 * 8,   62, hi2, seg_lo_s, seg_hi_s);
-        if (lo1 >= 0) segrange(4,            72, lo1, seg_lo_s, seg_hi_s);
-        if (lo2 >= 0) segrange(4 + 13 * 8,   72, lo2, seg_lo_s, seg_hi_s);
+
+        // Row 0's first eight cells, snooped off the bus as the guest writes
+        // them -- passive, because the self-test master cannot reach the text
+        // VRAM at all: the arbiter raises address_enable_n for its accesses
+        // and tvram_mem_select is qualified with ~address_enable_n. Reaching
+        // for it with guest_peek froze the machine and reported the read's own
+        // address as the guest's position.
+        //
+        // The ITF's message record is E1 'MEMORY 000KB OK': attribute E1 is
+        // white, visible, no reverse. If the codes are 4D 45 4D 4F ... and the
+        // screen still has no letters in it, the fault is downstream of the
+        // VRAM, in the glyph path.
+        {
+            uint32_t c0 = *POST_TVC0, c1 = *POST_TVC1;
+            uint32_t a0 = *POST_TVA0, a1 = *POST_TVA1;
+            osd_draw_string(&fb, 4, 62, "TVC", OSD_LABEL);
+            for (int i = 0; i < 4; i++)
+                hex(4 + (4 + i * 3) * 8, 62, (c0 >> (i * 8)) & 0xFFu, 2);
+            for (int i = 0; i < 4; i++)
+                hex(4 + (16 + i * 3) * 8, 62, (c1 >> (i * 8)) & 0xFFu, 2);
+            osd_draw_string(&fb, 4, 72, "TVA", OSD_LABEL);
+            for (int i = 0; i < 4; i++)
+                hex(4 + (4 + i * 3) * 8, 72, (a0 >> (i * 8)) & 0xFFu, 2);
+            for (int i = 0; i < 4; i++)
+                hex(4 + (16 + i * 3) * 8, 72, (a1 >> (i * 8)) & 0xFFu, 2);
+        }
+
+        // NO bus-master readback here, and that is the point.
+        //
+        // This row briefly read A0000 and A2000 through guest_peek to settle
+        // whether the VRAM held the right bytes. It settled something else:
+        // the machine stopped, N frozen at 84, and LIVE reading A200E -- which
+        // is not where the guest was, it is the eighth byte THIS read asked
+        // for. guest_peek takes the bus through hold acknowledge, and a read
+        // of the text VRAM does not hand it back.
+        //
+        // postmon has been here before; the note above the vector block says
+        // an ext read "destroyed the measurement it was meant to support".
+        // Reading the guest's own video memory while it runs needs a passive
+        // snoop in post_monitor, not the bus master.
     }
 #endif
 

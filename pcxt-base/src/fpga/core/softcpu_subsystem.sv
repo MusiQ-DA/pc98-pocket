@@ -123,6 +123,8 @@ module softcpu_subsystem (
     input   [7:0] ivt16_wr_count,
     input  [15:0] wr_any_count,
     input  [15:0] tvram_wr_count,
+    input  [63:0] tvram_row0_code,
+    input  [63:0] tvram_row0_attr,
     input  [15:0] rd_any_count,
     input  [15:0] ivt_touch_count,
     input  [19:0] wr_last_addr,
@@ -922,6 +924,11 @@ module softcpu_subsystem (
             32'h5000_0048: cpu_mem_rdata = {24'd0, rom_read_count};
             32'h5000_007C: cpu_mem_rdata = {16'd0, rom_win_r};
             32'h5000_0080: cpu_mem_rdata = {tvram_last_addr[11:0], tvram_wr_count};
+            // Row 0's first eight cells, as written. Codes and attributes.
+            32'h5000_0084: cpu_mem_rdata = tvram_row0_code[31:0];
+            32'h5000_0088: cpu_mem_rdata = tvram_row0_code[63:32];
+            32'h5000_008C: cpu_mem_rdata = tvram_row0_attr[31:0];
+            32'h5000_0090: cpu_mem_rdata = tvram_row0_attr[63:32];
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;
         endcase

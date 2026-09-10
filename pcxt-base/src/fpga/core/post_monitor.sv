@@ -80,6 +80,13 @@ module post_monitor #(
     output logic [15:0] ivt_touch_count,  // any access with address in 0x58-0x5B
     output logic [19:0] wr_last_addr,     // address of the last memory write
     output logic [19:0] tvram_last_addr,  // last write into the text plane
+    // The first eight cells of row 0, snooped as the guest writes them:
+    // codes at A0000 + 2n, attributes at A2000 + 2n. Passive -- the self-test
+    // master cannot read the text VRAM at all (the arbiter raises
+    // address_enable_n for its accesses and tvram_mem_select is qualified with
+    // ~address_enable_n), and reaching for it froze the machine.
+    output logic [63:0] tvram_row0_code,
+    output logic [63:0] tvram_row0_attr,
     // The raw strobes, and how many cycles each spends asserted. Edge counting
     // came back 0 for reads AND writes while LIVE looked busy, and both facts
     // fit one explanation: the strobes sit LOW permanently, so mem_access is
@@ -158,6 +165,7 @@ module post_monitor #(
     wire mem_write = ~memory_write_n & ~address_enable_n;
     wire in_ivt16  = (address[19:2] == 18'h00016);   // 0x58..0x5B
     logic mem_write_q, mem_write_q_raw, mem_read_q_raw;
+    logic [7:0] tv_wr_data;
     logic [15:0] io_port_q;
     logic        io_wr_q, io_wr_qq;
     wire         io_wr_any = io_write & ~address_enable_n;
@@ -244,6 +252,9 @@ module post_monitor #(
             wr_last_addr  <= 20'd0;
             tvram_wr_count <= 16'd0;
             tvram_last_addr <= 20'd0;
+            tvram_row0_code <= 64'd0;
+            tvram_row0_attr <= 64'd0;
+            tv_wr_data      <= 8'h00;
             ivt16_off     <= 16'h0;
             ivt16_seg     <= 16'h0;
             ivt16_wr_count<= 8'd0;
@@ -253,6 +264,16 @@ module post_monitor #(
             mem_addr_q    <= 20'h0;
         end else begin
             mem_write_q <= mem_write;
+            // Write data is guaranteed at the END of the cycle, so keep the
+            // last value seen while the strobe is low and use it on the edge.
+            if (~memory_write_n) tv_wr_data <= cpu_data;
+            if (memory_write_n && mem_write_q_raw
+                && address[19:15] == 5'b10100 && ~address[0]) begin
+                if (~address[14] && ~address[13] && address[12:4] == 9'd0)
+                    tvram_row0_code[address[3:1]*8 +: 8] <= tv_wr_data;
+                if (~address[14] &&  address[13] && address[12:4] == 9'd0)
+                    tvram_row0_attr[address[3:1]*8 +: 8] <= tv_wr_data;
+            end
             if (~memory_write_n && ~mem_write_q_raw) begin
                 if (wr_any_count != 16'hFFFF) wr_any_count <= wr_any_count + 16'd1;
                 wr_last_addr <= address;

@@ -52,7 +52,7 @@ module tb_pc98_boot;
 
     XT_CE_Generator u_ce (
         .clock                              (clk_chipset),
-        .reset                              (cpu_reset_w),
+        .reset                              (reset),
         .clk_select_load                    (biu_done),
         .clk_select                         (2'b00),      // the boot default, as core_top uses
         .cpu_clk_pin                        (clk_cpu),
@@ -78,7 +78,7 @@ module tb_pc98_boot;
     i8088 u_cpu (
         .CORE_CLK  (clk_core),
         .CLK       (clk_cpu),
-        .RESET     (reset),
+        .RESET     (cpu_reset_w),
         .READY     (1'b1),           // flat memory answers immediately
         .INTR      (pic1_to_cpu),
         .NMI       (1'b0),
