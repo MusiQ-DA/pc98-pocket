@@ -1043,6 +1043,8 @@ module core_top (
         .ivt_touch_count            (ivt_touch_count),
         .wr_last_addr               (wr_last_addr),
         .tvram_last_addr            (tvram_last_addr),
+        .tvram_row0_code            (tvram_row0_code),
+        .tvram_row0_attr            (tvram_row0_attr),
         .raw_strobes                (raw_strobes),
         .wr_low_cycles              (wr_low_cycles),
         .rd_low_cycles              (rd_low_cycles),
@@ -1870,6 +1872,7 @@ module core_top (
     wire [15:0] tvram_wr_count;
     wire [19:0] wr_last_addr;
     wire [19:0] tvram_last_addr;
+    wire [63:0] tvram_row0_code, tvram_row0_attr;
     wire  [3:0] raw_strobes;
     wire [15:0] wr_low_cycles, rd_low_cycles;
     wire [127:0] rom_read_data;
@@ -1907,6 +1910,8 @@ module core_top (
         .ivt_touch_count(ivt_touch_count),
         .wr_last_addr   (wr_last_addr),
         .tvram_last_addr(tvram_last_addr),
+        .tvram_row0_code(tvram_row0_code),
+        .tvram_row0_attr(tvram_row0_attr),
         .raw_strobes    (raw_strobes),
         .wr_low_cycles  (wr_low_cycles),
         .rd_low_cycles  (rd_low_cycles),
