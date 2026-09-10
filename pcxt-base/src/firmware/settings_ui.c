@@ -101,7 +101,11 @@ typedef struct {
 #define SETTING_D(a, d) { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), (d) }
 
 static setting_t settings[SET_COUNT] = {
-    SETTING(opt_cpu),         // SET_CPU_SPEED
+    // Index 2 is 9.54 MHz. A PC-9801VM's V30 runs at 8 or 10, and this is the
+    // closest of the four -- 4.5 per cent under the fast setting. At the 4.77
+    // MHz default the ITF's 640 KB memory test is a long wait with nothing on
+    // screen but its own test pattern.
+    SETTING_D(opt_cpu, 2),    // SET_CPU_SPEED
     SETTING(opt_yes_no),      // SET_CGA_GFX (Yes = the card's I/O decode responds)
     SETTING(opt_yes_no),      // SET_HGC_GFX
     SETTING(opt_video_1st),   // SET_VIDEO_1ST (applied by the BIOS at the next Reset PC)

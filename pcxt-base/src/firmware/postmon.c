@@ -109,13 +109,6 @@ static void dec(int x, int y, uint32_t v)
 // it. Drawn through a helper, so check_osd_layout cannot evaluate the x
 // expressions and does not see these fields -- which is safe only because
 // rows 62 and 72 now belong to this and to nothing else.
-static void segrange(int x, int y, int i, const uint16_t *lo, const uint16_t *hi)
-{
-    hex(x, y, (uint32_t) i, 1);
-    hex(x + 2 * 8, y, lo[i], 4);
-    osd_draw_string(&fb, x + 6 * 8, y, "-", OSD_LABEL);
-    hex(x + 7 * 8, y, hi[i], 4);
-}
 #endif
 
 // ---------------------------------------------------------- ROM capture
@@ -498,6 +491,7 @@ void post_mon_tick(void)
         hex(4 + 4 * 8, 52, p0, 8);
         hex(4 + 12 * 8, 52, p1, 8);
         osd_draw_string(&fb, 4 + 21 * 8, 52, "FR", OSD_LABEL);
+        (void) seg_lo_s; (void) seg_hi_s;
         hex(4 + 24 * 8, 52, seg_front_show, 5);
 
         // The extents, for the two highest-numbered live segments and the two
@@ -505,15 +499,23 @@ void post_mon_tick(void)
         // machine); low is where it is working. Four segments lit is what the
         // first reading gave -- 0, 1, D and E -- and the four ranges name the
         // loop between them.
-        int hi1 = -1, hi2 = -1, lo1 = -1, lo2 = -1;
-        for (int i = 15; i >= 0; i--)
-            if (seg_show[i]) { if (hi1 < 0) hi1 = i; else if (hi2 < 0) hi2 = i; }
-        for (int i = 0; i < 16; i++)
-            if (seg_show[i]) { if (lo1 < 0) lo1 = i; else if (lo2 < 0) lo2 = i; }
-        if (hi1 >= 0) segrange(4,            62, hi1, seg_lo_s, seg_hi_s);
-        if (hi2 >= 0) segrange(4 + 13 * 8,   62, hi2, seg_lo_s, seg_hi_s);
-        if (lo1 >= 0) segrange(4,            72, lo1, seg_lo_s, seg_hi_s);
-        if (lo2 >= 0) segrange(4 + 13 * 8,   72, lo2, seg_lo_s, seg_hi_s);
+
+        // What is actually IN the text VRAM, read back through the bus.
+        //
+        // The ITF writes its message to A0000 and the matching attributes to
+        // A2000 (F9973), and the write counter says thousands of writes are
+        // landing -- but the screen shows a coloured band and no characters.
+        // Those are different faults: wrong bytes in the VRAM is the chipset,
+        // right bytes and nothing on screen is the renderer. Sixteen bus
+        // reads a redraw settles which.
+        //
+        // Cell n is a WORD: code at A0000 + 2n, attribute at A2000 + 2n.
+        osd_draw_string(&fb, 4, 62, "TVC", OSD_LABEL);
+        for (int i = 0; i < 8; i++)
+            hex(4 + (4 + i * 3) * 8, 62, guest_peek(0xA0000u + i * 2u), 2);
+        osd_draw_string(&fb, 4, 72, "TVA", OSD_LABEL);
+        for (int i = 0; i < 8; i++)
+            hex(4 + (4 + i * 3) * 8, 72, guest_peek(0xA2000u + i * 2u), 2);
     }
 #endif
 
