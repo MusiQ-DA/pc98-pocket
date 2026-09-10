@@ -75,9 +75,11 @@ module post_monitor #(
     // really never assert -- impossible, the memory test writes 32 KB -- or my
     // counter is wrong. Three counters settle it without another guess.
     output logic [15:0] wr_any_count,     // memory WRITE strobes
+    output logic [15:0] tvram_wr_count,   // writes into the text plane A0000-A3FFF
     output logic [15:0] rd_any_count,     // memory READ strobes
     output logic [15:0] ivt_touch_count,  // any access with address in 0x58-0x5B
     output logic [19:0] wr_last_addr,     // address of the last memory write
+    output logic [19:0] tvram_last_addr,  // last write into the text plane
     // The raw strobes, and how many cycles each spends asserted. Edge counting
     // came back 0 for reads AND writes while LIVE looked busy, and both facts
     // fit one explanation: the strobes sit LOW permanently, so mem_access is
@@ -240,6 +242,8 @@ module post_monitor #(
             rom_byte_q    <= 8'd0;
             rom_hold_q    <= 1'b0;
             wr_last_addr  <= 20'd0;
+            tvram_wr_count <= 16'd0;
+            tvram_last_addr <= 20'd0;
             ivt16_off     <= 16'h0;
             ivt16_seg     <= 16'h0;
             ivt16_wr_count<= 8'd0;
@@ -252,6 +256,11 @@ module post_monitor #(
             if (~memory_write_n && ~mem_write_q_raw) begin
                 if (wr_any_count != 16'hFFFF) wr_any_count <= wr_any_count + 16'd1;
                 wr_last_addr <= address;
+                // The text plane: did the BIOS ever put a character there?
+                if (address[19:15] == 5'b10100 && !address[14]) begin
+                    if (tvram_wr_count != 16'hFFFF) tvram_wr_count <= tvram_wr_count + 16'd1;
+                    tvram_last_addr <= address;
+                end
             end
             if (~memory_read_n && ~mem_read_q_raw)
                 if (rd_any_count != 16'hFFFF) rd_any_count <= rd_any_count + 16'd1;
