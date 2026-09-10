@@ -535,7 +535,32 @@ module tb_pc98_boot;
     logic [3:0] fdc_writes_left, fdc_results_left, fdc_result_idx;
     logic [7:0] fdc_result0 = 8'h00, fdc_result1 = 8'h00;
     logic       fdc_in_result = 1'b0, fdc_cmd_done = 1'b0, fdc_irq3 = 1'b0;
-        // Command shape: bytes still to write after the first, and results.
+        // One event per ACCESS, not one per clock.
+    //
+    // fdc_fifo_select is a LEVEL: iorq is asserted for the whole bus cycle,
+    // which at 42.95 MHz against a 4.77 MHz CPU is around eighteen chipset
+    // clocks. The state machine below consumes a byte every clock it sees the
+    // select, so one command byte was consumed eighteen times -- writes_left
+    // counted through zero and wrapped to fifteen, cmd_done fired on a command
+    // the BIOS had not finished writing, and the model parked in the result
+    // phase. MSR then reads C0 for good, and the BIOS sits at FFA26 waiting
+    // for 80: the FFA26-FFA2D range the hardware readout came back with.
+    //
+    // Every other device in this file already takes the prev_io_*_n edges for
+    // exactly this reason; the FDC was the one that did not. The address hit
+    // is computed without iorq because the strobe has already gone by at the
+    // edge being used, and the write byte is latched while the cycle is live
+    // -- the bus moves on before the edge, which is the same reason the
+    // memory-write path here samples continuously and keeps the last value.
+    logic       fdc_prev_wr_n = 1'b1, fdc_prev_rd_n = 1'b1;
+    logic [7:0] fdc_wr_data = 8'h00;
+    wire fdc_addr_hit  = (cpu_address[15:8] == 8'h00)
+                       & ((cpu_address[7:2] == 6'h24) | (cpu_address[7:2] == 6'h32)) & ~cpu_address[9] & ~cpu_address[8];
+    wire fdc_fifo_addr = fdc_addr_hit & cpu_address[1];
+    wire fdc_wr_pulse  = fdc_fifo_addr & io_wr_n & ~fdc_prev_wr_n;
+    wire fdc_rd_pulse  = fdc_fifo_addr & io_rd_n & ~fdc_prev_rd_n;
+
+    // Command shape: bytes still to write after the first, and results.
     // Of the byte ARRIVING -- see the same fix in Peripherals.sv for what
     // reading it off fdc_cmd (still the PREVIOUS command here) did.
     function automatic logic [7:0] fdc_shape(input logic [7:0] c);
@@ -554,16 +579,20 @@ module tb_pc98_boot;
     endfunction
     // Sliced off a wire, not off the call: indexing a function's
     // result directly is a syntax error to both Verilator and Quartus.
-    wire [7:0] fdc_shape_now   = fdc_shape(cpu_data_bus);
+    wire [7:0] fdc_shape_now   = fdc_shape(fdc_wr_data);
     wire [3:0] fdc_new_writes  = fdc_shape_now[7:4];
     wire [3:0] fdc_new_results = fdc_shape_now[3:0];
     always_ff @(posedge clk_chipset) begin
+        fdc_prev_wr_n <= io_wr_n;
+        fdc_prev_rd_n <= io_rd_n;
+        // The byte, sampled while the cycle is live -- see Peripherals.sv.
+        if (fdc_fifo_sel & ~io_wr_n) fdc_wr_data <= cpu_data_bus;
         fdc_cmd_done <= 1'b0;
-        if (fdc_fifo_sel & ~io_wr_n) begin
+        if (fdc_wr_pulse) begin
             if (fdc_writes_left == 4'd0) begin
-                fdc_cmd        <= cpu_data_bus;
+                fdc_cmd        <= fdc_wr_data;
                 fdc_result_idx <= 4'd0;
-                if (cpu_data_bus == 8'h04) fdc_result0 <= 8'h00;
+                if (fdc_wr_data == 8'h04) fdc_result0 <= 8'h00;
                 else begin fdc_result0 <= 8'h80; fdc_result1 <= 8'h00; end
                 fdc_writes_left  <= fdc_new_writes;
                 fdc_results_left <= fdc_new_results;
@@ -572,7 +601,7 @@ module tb_pc98_boot;
                 fdc_writes_left <= fdc_writes_left - 4'd1;
                 if (fdc_writes_left == 4'd1) fdc_cmd_done <= 1'b1;
             end
-        end else if (fdc_fifo_sel & ~io_rd_n && fdc_in_result) begin
+        end else if (fdc_rd_pulse && fdc_in_result) begin
             fdc_result_idx <= fdc_result_idx + 4'd1;
             if (fdc_result_idx + 4'd1 >= fdc_results_left) begin
                 fdc_in_result    <= 1'b0;

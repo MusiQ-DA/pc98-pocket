@@ -387,6 +387,31 @@ module PERIPHERALS #(
     logic       fdc_cmd_done;     // high for one clock when a command completes
     logic       fdc_irq3;
 
+    // One event per ACCESS, not one per clock.
+    //
+    // fdc_fifo_select is a LEVEL: iorq is asserted for the whole bus cycle,
+    // which at 42.95 MHz against a 4.77 MHz CPU is around eighteen chipset
+    // clocks. The state machine below consumes a byte every clock it sees the
+    // select, so one command byte was consumed eighteen times -- writes_left
+    // counted through zero and wrapped to fifteen, cmd_done fired on a command
+    // the BIOS had not finished writing, and the model parked in the result
+    // phase. MSR then reads C0 for good, and the BIOS sits at FFA26 waiting
+    // for 80: the FFA26-FFA2D range the hardware readout came back with.
+    //
+    // Every other device in this file already takes the prev_io_*_n edges for
+    // exactly this reason; the FDC was the one that did not. The address hit
+    // is computed without iorq because the strobe has already gone by at the
+    // edge being used, and the write byte is latched while the cycle is live
+    // -- the bus moves on before the edge, which is the same reason the
+    // memory-write path here samples continuously and keeps the last value.
+    logic       fdc_prev_wr_n, fdc_prev_rd_n;
+    logic [7:0] fdc_wr_data;
+    wire fdc_addr_hit  = ~address_enable_n & (address[15:8] == 8'h00)
+                       & ((address[7:2] == 6'h24) | (address[7:2] == 6'h32));
+    wire fdc_fifo_addr = fdc_addr_hit & address[1];
+    wire fdc_wr_pulse  = fdc_fifo_addr & io_write_n & ~fdc_prev_wr_n;
+    wire fdc_rd_pulse  = fdc_fifo_addr & io_read_n & ~fdc_prev_rd_n;
+
     // Command shape: bytes still to write after the first, and results.
     //
     // Of the byte ARRIVING, not of fdc_cmd. fdc_cmd still holds the PREVIOUS
@@ -421,7 +446,7 @@ module PERIPHERALS #(
     endfunction
     // Sliced off a wire, not off the call: indexing a function's
     // result directly is a syntax error to both Verilator and Quartus.
-    wire [7:0] fdc_shape_now   = fdc_shape(internal_data_bus);
+    wire [7:0] fdc_shape_now   = fdc_shape(fdc_wr_data);
     wire [3:0] fdc_new_writes  = fdc_shape_now[7:4];
     wire [3:0] fdc_new_results = fdc_shape_now[3:0];
 
@@ -436,14 +461,22 @@ module PERIPHERALS #(
             fdc_in_result   <= 1'b0;
             fdc_cmd_done    <= 1'b0;
             fdc_irq3        <= 1'b0;
+            fdc_prev_wr_n   <= 1'b1;
+            fdc_prev_rd_n   <= 1'b1;
+            fdc_wr_data     <= 8'h00;
         end else begin
+            fdc_prev_wr_n <= io_write_n;
+            fdc_prev_rd_n <= io_read_n;
+            // The byte, sampled while the cycle is live: at the trailing
+            // edge the bus has already moved on.
+            if (fdc_fifo_select & ~io_write_n) fdc_wr_data <= internal_data_bus;
             fdc_cmd_done <= 1'b0;
-            if (fdc_fifo_select & ~io_write_n) begin
+            if (fdc_wr_pulse) begin
                 if (fdc_writes_left == 4'd0) begin
                     // First byte: it IS the command.
-                    fdc_cmd        <= internal_data_bus;
+                    fdc_cmd        <= fdc_wr_data;
                     fdc_result_idx <= 4'd0;
-                    case (internal_data_bus)
+                    case (fdc_wr_data)
                         8'h04: begin fdc_result0 <= 8'h00; end
                         default: begin fdc_result0 <= 8'h80; fdc_result1 <= 8'h00; end
                     endcase
@@ -459,7 +492,7 @@ module PERIPHERALS #(
             end else begin
                 // Reading results hands them out one by one; the last one
                 // returns the chip to idle.
-                if (fdc_fifo_select & ~io_read_n && fdc_in_result) begin
+                if (fdc_rd_pulse && fdc_in_result) begin
                     fdc_result_idx <= fdc_result_idx + 4'd1;
                     if (fdc_result_idx + 4'd1 >= fdc_results_left) begin
                         fdc_in_result    <= 1'b0;
