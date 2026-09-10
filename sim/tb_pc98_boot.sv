@@ -52,9 +52,15 @@ module tb_pc98_boot;
 
     XT_CE_Generator u_ce (
         .clock                              (clk_chipset),
-        .reset                              (cpu_reset_w),
+        .reset                              (reset),
         .clk_select_load                    (biu_done),
-        .clk_select                         (2'b00),      // the boot default, as core_top uses
+        // 9.54 MHz -- what the shipped firmware now boots with, and 2x the
+        // old 4.77 default. The memory test is CPU-bound, so this halves the
+        // chipset edges the same guest progress costs: the boot that took 40
+        // wall minutes to reach the reset at 18.5 s of guest time should take
+        // twenty. Timer-fed delays still take their full guest time, which is
+        // the honest trade: the machine itself is faster, not the clocks.
+        .clk_select                         (2'b10),      // 9.54 MHz, the firmware default
         .cpu_clk_pin                        (clk_cpu),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
@@ -78,7 +84,7 @@ module tb_pc98_boot;
     i8088 u_cpu (
         .CORE_CLK  (clk_core),
         .CLK       (clk_cpu),
-        .RESET     (reset),
+        .RESET     (cpu_reset_w),
         .READY     (1'b1),           // flat memory answers immediately
         .INTR      (pic1_to_cpu),
         .NMI       (1'b0),
@@ -379,6 +385,15 @@ module tb_pc98_boot;
             if (cpu_address < wr_lo_chunk) wr_lo_chunk <= cpu_address;
             if (cpu_address > wr_hi_chunk) wr_hi_chunk <= cpu_address;
             wr_n_chunk <= wr_n_chunk + 1;
+            // The ITF's CPU-reset resume state lives at 0000:03F0-040F: the
+            // pushed far return F800:1497 at 03FA/03FC, the saved SS:SP at
+            // 0404/0406. The run of 2026-09-11 RETFed to 0000:0069 instead,
+            // so one of those words is not what the save left behind. There
+            // are only a handful of writes into this window in a whole boot,
+            // and the one that clobbers it names itself here.
+            if (cpu_address >= 20'h003F0 && cpu_address <= 20'h0040F)
+                $display("  %8t  SAVE[%04X] <= %02X   (eu_pc %05X)",
+                         $time, cpu_address[15:0], mem_wr_data_q, eu_pc);
             // The first page carries the vectors; who touches 0000-0FFF and
             // with what decides whether INT xx lands where the BIOS meant.
             // (Display off -- the memory test writes there for a living and
@@ -923,6 +938,38 @@ module tb_pc98_boot;
     int          eu_steps = 0, eu_traced = 0;
     logic [19:0] eu_ring [0:127];
     int          eu_ring_w = 0;
+
+    // ---- the CPU-reset resume, watched end to end ---------------------------
+    //
+    // The ITF saves its return state (F9475: push cs; push 1497; [0406]=ss;
+    // [0404]=sp), asks the CPU to reset itself through port 0F0h, and on the
+    // way back in reloads SS:SP from those words and RETFs (F8069). One-shot
+    // dumps at the save and at the retf, so what the four words held at both
+    // ends of the reset is in the log.
+    int  save_seen = 0, resume_seen = 0;
+    wire [19:0] resume_stack = {u_cpu.BIU_CORE.biu_register_ss[15:0], 4'd0}
+                             + {4'd0, u_cpu.EU_CORE.eu_register_sp[15:0]};
+    always_ff @(posedge clk_chipset) begin
+        if (eu_pc == 20'hF9475 && save_seen < 4) begin
+            save_seen <= save_seen + 1;
+            $display("  %8t  SAVE entry: ss=%04X sp=%04X  [0404]=%02X%02X [0406]=%02X%02X",
+                     $time, u_cpu.BIU_CORE.biu_register_ss,
+                     u_cpu.EU_CORE.eu_register_sp,
+                     ram[20'h405], ram[20'h404], ram[20'h407], ram[20'h406]);
+        end
+        if (eu_pc == 20'hF8069 && resume_seen < 4) begin
+            resume_seen <= resume_seen + 1;
+            $display("  %8t  RESUME retf: ss=%04X sp=%04X  [0404]=%02X%02X [0406]=%02X%02X",
+                     $time, u_cpu.BIU_CORE.biu_register_ss,
+                     u_cpu.EU_CORE.eu_register_sp,
+                     ram[20'h405], ram[20'h404], ram[20'h407], ram[20'h406]);
+            $display("        stack: %02X %02X %02X %02X   03F0: %02X..%02X  03F8: %02X..%02X  0400: %02X..%02X  0408: %02X..%02X",
+                     ram[resume_stack],     ram[resume_stack + 20'd1],
+                     ram[resume_stack + 20'd2], ram[resume_stack + 20'd3],
+                     ram[20'h3F0], ram[20'h3F7], ram[20'h3F8], ram[20'h3FF],
+                     ram[20'h400], ram[20'h407], ram[20'h408], ram[20'h40F]);
+        end
+    end
 
     always_ff @(posedge clk_chipset) begin
         eu_pc_d <= eu_pc;
