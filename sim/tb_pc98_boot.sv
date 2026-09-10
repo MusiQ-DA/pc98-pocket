@@ -174,6 +174,13 @@ module tb_pc98_boot;
                   : sysport_sel     ? sysport_data
                            : 8'hFF;
 
+    // True when the read above fell through to the FF default -- i.e. nothing
+    // here answered it. Used to name the port once, in the trace.
+    wire din_is_default = ~(~mem_rd_n | ~inta_n | pit_iocycle | dma_iocycle
+                          | pic1_iocycle | pic2_iocycle | kbd_data_iocycle
+                          | kbd_stat_iocycle | gdc_stat_iocycle | cc_ioread
+                          | fdc_msr_sel | fdc_fifo_sel | sysport_sel);
+
     // ---- I/O ---------------------------------------------------------------
     //
     // Reads answer 0xFF: nothing here is modelled, and the point is where the
@@ -194,10 +201,23 @@ module tb_pc98_boot;
     //
     // 0x35 is the 8255's port C: the BIOS's second instruction is
     // IN AL,35h / TEST AL,80h / JNZ, and bits 7 and 5 have to read 1.
+    wire sysport_31_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0031);
+    wire sysport_33_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0033);
     wire sysport_35_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0035);
     wire sysport_42_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0042);
-    wire sysport_sel    = sysport_35_sel | sysport_42_sel;
-    wire [7:0] sysport_data = sysport_35_sel ? 8'hA0 : 8'h00;
+    wire sysport_sel    = sysport_31_sel | sysport_33_sel
+                        | sysport_35_sel | sysport_42_sel;
+    // 0x33 is 8255 port B, an INPUT on a PC-98: bit 3 a DIP switch inverted,
+    // bits 7-5 the RS-232C modem status, bit 0 the calendar clock, and the
+    // rest zero. Bit 2 is one of the zeroes, and the UX ITF reads it at F889C
+    // as PARITY ERROR -- which is what FF gave it, and what it printed.
+    wire [7:0] sysport_data = sysport_35_sel ? 8'hA0
+                            : sysport_31_sel ? 8'h00
+                            : sysport_33_sel ? 8'h00
+                            :                  8'h00;
+
+    logic unanswered_seen [0:255];
+    initial for (int q = 0; q < 256; q = q + 1) unanswered_seen[q] = 1'b0;
 
     logic io_wr_d = 1'b1, mem_wr_d = 1'b1, mem_rd_d = 1'b1, io_rd_d = 1'b1;
     logic [7:0] mem_wr_data_q = 8'h00;
@@ -322,6 +342,17 @@ module tb_pc98_boot;
         // buried everything else and cost more than the simulation did. The
         // first read of each visit is the one that says the loop was entered;
         // the rest say only that a frame is long.
+        // Every port this bench does not model answers FF, and FF is NEVER
+        // neutral: the ITF read 0x42 as an order to shut down and 0x33 as a
+        // parity error, and each cost a run to find. Name them the first time
+        // they are read, so the next one costs a line of log instead.
+        if (io_rd_n & ~io_rd_d && din_is_default
+            && ~unanswered_seen[cpu_address[7:0]]) begin
+            unanswered_seen[cpu_address[7:0]] <= 1'b1;
+            $display("  %8t  UNMODELLED PORT %04X read -- answering FF (eu_pc %05X)",
+                     $time, cpu_address[15:0], eu_pc);
+        end
+
         if (io_rd_n & ~io_rd_d) begin
             if (gdc_stat_port) begin
                 if (~gdc_poll_seen) begin
@@ -710,9 +741,13 @@ module tb_pc98_boot;
     // instructions can reach. This starts at the entry and runs forwards.
     logic basic_trace = 1'b0;
     int   basic_n = 0;
+    int   itf_ck_n = 0;
+    int   m;
     logic [19:0] disp_pc [0:63];
     logic [7:0]  disp_op [0:63];
     int          disp_w = 0;
+    logic [19:0] disp_last = 20'hFFFFF;
+    logic [19:0] disp_rec  = 20'hFFFFF;
     logic [7:0] op_seen [0:63];
     int         op_w = 0;
     logic       is_dispatch_d = 1'b0;
@@ -732,10 +767,43 @@ module tb_pc98_boot;
             // eu_pc is the prefetch queue's read pointer and has already moved
             // past the opcode byte by the time the dispatch entry is seen, so
             // read these as "the instruction ending just before here".
-            disp_pc[disp_w[5:0]] <= eu_pc;
-            disp_op[disp_w[5:0]] <= urom[7:0];
-            disp_w <= disp_w + 1;
+            // Only the jumps. A 65536-iteration delay loop dispatches the
+            // same two instructions until the ring holds nothing else, and
+            // the ITF is mostly delay loops; keeping the discontinuities
+            // makes 64 entries reach back through the whole cycle.
+            // Jumps only, and a run of the SAME jump collapses to one entry.
+            // A delay loop is one branch taken 65536 times and a poll loop is
+            // one branch taken until the port answers; recording either in
+            // full leaves 64 entries covering a few microseconds. Collapsed,
+            // they cover the whole 1.4-second cycle.
+            if ((eu_pc < disp_last || eu_pc > disp_last + 20'd8)
+                && eu_pc != disp_rec) begin
+                disp_pc[disp_w[5:0]] <= eu_pc;
+                disp_op[disp_w[5:0]] <= urom[7:0];
+                disp_w   <= disp_w + 1;
+                disp_rec <= eu_pc;
+                // Straight out, in order, rather than into a ring. Two turns
+                // of the 1.4-second cycle fit in a few thousand lines, and
+                // the edge that closes the loop is whichever branch appears
+                // in the second turn with a target the first turn reached
+                // from somewhere else.
+                if (disp_w < 4000)
+                    $display("    J%0d %05X op %02X", disp_w, eu_pc, urom[7:0]);
+            end
+            disp_last <= eu_pc;
             if (eu_cs == 16'hE800) basic_trace <= 1'b1;
+            // The ITF cycles back to its own ROM checksum about every 1.4
+            // seconds. Nothing in the image jumps there -- the early ITF has
+            // no stack and returns through JMP BP / JMP SP -- so the only way
+            // to see who sends it back is to catch the arrival.
+            if (eu_pc == 20'hF8427 && itf_ck_n < 4) begin
+                itf_ck_n <= itf_ck_n + 1;
+                $display("  %8t  ITF cycle mark at F8427 (visit %0d)", $time, itf_ck_n);
+                for (m = 0; m < 48; m = m + 1)
+                    $display("        %05X  op %02X",
+                             disp_pc[(disp_w + 64 - 48 + m) % 64],
+                             disp_op[(disp_w + 64 - 48 + m) % 64]);
+            end
             if (basic_trace && basic_n < 600) begin
                 basic_n <= basic_n + 1;
                 $display("    B%0d  %05X  op %02X  ax %04X bx %04X cx %04X dx %04X si %04X di %04X",
