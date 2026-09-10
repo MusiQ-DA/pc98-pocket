@@ -36,6 +36,12 @@ module tb_pc98_boot;
     always  #5.820 clk_core    = ~clk_core;
 
     logic reset = 1'b1;
+    // OUT 0F0h resets the CPU and nothing else: memory keeps its contents and
+    // the ROM bank keeps its selection, which is what the ITF's resume needs.
+    logic       f0_prev_wr_n = 1'b1;
+    logic       soft_reset_cpu = 1'b0;
+    logic [7:0] soft_reset_count = 8'h00;
+    wire        cpu_reset_w = reset | soft_reset_cpu;
 
     // ---- clock enables and the CPU pin clock -------------------------------
     wire       clk_cpu, cpu_ce_posedge, cpu_ce_negedge, peripheral_ce;
@@ -46,7 +52,7 @@ module tb_pc98_boot;
 
     XT_CE_Generator u_ce (
         .clock                              (clk_chipset),
-        .reset                              (reset),
+        .reset                              (cpu_reset_w),
         .clk_select_load                    (biu_done),
         .clk_select                         (2'b00),      // the boot default, as core_top uses
         .cpu_clk_pin                        (clk_cpu),
@@ -222,7 +228,39 @@ module tb_pc98_boot;
     // always "please initialise": bit 4 set. With it clear, the ITF skipped
     // the whole block, read A3FEA as zero, and counted 128 KB -- which is
     // exactly what MEMORY 128KB OK was reporting on a 640 KB machine.
-    wire [7:0] sysport_data = sysport_35_sel ? 8'hA0
+    // 0x35 is a latch here too, resetting to F9 and answering the 0x37 bit
+    // set/reset -- bit 7 is the shutdown flag the ITF clears before OUT 0F0h.
+    logic [7:0] sysport_c = 8'hF9;
+    logic       sysp_prev_wr_n = 1'b1;
+    logic [7:0] sysp_wr_data = 8'h00;
+    wire sysp_wr35 = ~io_wr_n & (cpu_address[15:0] == 16'h0035);
+    wire sysp_wr37 = ~io_wr_n & (cpu_address[15:0] == 16'h0037);
+    always_ff @(posedge clk_chipset) begin
+        sysp_prev_wr_n <= io_wr_n;
+        if (sysp_wr35 | sysp_wr37) sysp_wr_data <= cpu_data_bus;
+        if (io_wr_n & ~sysp_prev_wr_n) begin
+            if (cpu_address[15:0] == 16'h0035)
+                sysport_c <= sysp_wr_data;
+            else if (cpu_address[15:0] == 16'h0037 && sysp_wr_data[7:4] == 4'h0)
+                sysport_c[sysp_wr_data[3:1]] <= sysp_wr_data[0];
+        end
+    end
+
+    // OUT 0F0h resets the CPU and nothing else -- the ITF's way out of its
+    // memory test. Held for a while, like the core's own reset release.
+    always_ff @(posedge clk_chipset) begin
+        f0_prev_wr_n <= io_wr_n;
+        if (io_wr_n & ~f0_prev_wr_n & (cpu_address[15:0] == 16'h00F0)) begin
+            soft_reset_cpu   <= 1'b1;
+            soft_reset_count <= 8'hFF;
+            $display("  %8t  OUT 00F0 -- CPU reset requested (eu_pc %05X)", $time, eu_pc);
+        end else if (soft_reset_count != 8'h00)
+            soft_reset_count <= soft_reset_count - 8'h01;
+        else
+            soft_reset_cpu <= 1'b0;
+    end
+
+    wire [7:0] sysport_data = sysport_35_sel ? sysport_c
                             : sysport_31_sel ? 8'h10
     // 0x42 bit 1: this machine has no protected mode.
     //

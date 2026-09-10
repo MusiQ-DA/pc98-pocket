@@ -1525,6 +1525,46 @@ end
     // always "please initialise": bit 4 set. With it clear, the ITF skipped
     // the whole block, read A3FEA as zero, and counted 128 KB -- which is
     // exactly what MEMORY 128KB OK was reporting on a 640 KB machine.
+    // 0x35, the system port's port-C latch -- and the shutdown flag.
+    //
+    // Bit 7 is what the ITF reads at F805B to tell a power-on from a return
+    // from OUT 0F0h: set means cold boot, clear means "restore SS:SP from
+    // 0000:0404 and RETF". It clears the bit through the 8255's bit
+    // set/reset -- out 37h, 0Eh -- just before asking for the reset.
+    //
+    // A constant A0 could never carry that: the flag has to be written and
+    // read back. So the latch lives here, resetting to F9 and answering both
+    // the whole-byte write at 0x35 and the single-bit write at 0x37 (np2
+    // io/sysport.c, sysp_o35 and sysp_o37, as a behaviour reference). Note
+    // that a MODE word -- anything with a bit set in the top nibble -- leaves
+    // it alone; only the bit set/reset form touches it.
+    logic [7:0] pc98_sysport_c;
+    logic       sysp_prev_wr_n;
+    logic [7:0] sysp_wr_data;
+    wire sysport_37_select = pc98_io_exact & (address[7:0] == 8'h37);
+    wire sysp_addr_35 = ~address_enable_n & (address[15:8] == 8'h00)
+                      & (address[7:0] == 8'h35);
+    wire sysp_addr_37 = ~address_enable_n & (address[15:8] == 8'h00)
+                      & (address[7:0] == 8'h37);
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            pc98_sysport_c <= 8'hF9;
+            sysp_prev_wr_n <= 1'b1;
+            sysp_wr_data   <= 8'h00;
+        end else begin
+            sysp_prev_wr_n <= io_write_n;
+            if ((sysport_35_select | sysport_37_select) & ~io_write_n)
+                sysp_wr_data <= internal_data_bus;
+            if (io_write_n & ~sysp_prev_wr_n) begin
+                if (sysp_addr_35)
+                    pc98_sysport_c <= sysp_wr_data;
+                else if (sysp_addr_37 && (sysp_wr_data[7:4] == 4'h0))
+                    pc98_sysport_c[sysp_wr_data[3:1]] <= sysp_wr_data[0];
+            end
+        end
+    end
+
     wire sysport_31_select = pc98_io_exact & (address[7:0] == 8'h31);
     wire sysport_35_select = pc98_io_exact & (address[7:0] == 8'h35);
     wire sysport_42_select = pc98_io_exact & (address[7:0] == 8'h42);
@@ -1546,7 +1586,7 @@ end
     // protected-mode block, which is the truth about this CPU rather than a
     // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
-    wire [7:0] sysport_data = sysport_35_select ? 8'hA0
+    wire [7:0] sysport_data = sysport_35_select ? pc98_sysport_c
                             : sysport_31_select ? 8'h10
                             : sysport_42_select ? 8'h02
                             :                     8'h00;
@@ -2370,17 +2410,31 @@ end
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= timer_data_bus_out;
         end
+`ifdef MACHINE_PC98
+        // BEFORE the 8255, and this order is the whole point.
+        //
+        // 0x31, 0x35 and 0x37 are the PPI's registers on a PC-98 as well, so
+        // the chip answers them -- and its port C resets to zero. The ITF
+        // reads bit 7 of 0x35 at F805D to tell a power-on from a return from
+        // OUT 0F0h; zero means "resume", so it restored SS:SP from an
+        // uninitialised 0000:0404 and RETF'd into nothing. On the hardware
+        // that is a machine parked at FD807 with one I/O write to its name.
+        //
+        // The bench never had a PPI on those addresses, answered from its own
+        // model, and booted -- which is exactly the kind of divergence a bench
+        // is supposed to catch rather than create.
+        else if (sysport_read)
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= sysport_data;
+        end
+`endif
         else if ((~ppi_chip_select_n) && (~io_read_n))
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= ppi_data_bus_out;
         end
 `ifdef MACHINE_PC98
-        else if (sysport_read)
-        begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= sysport_data;
-        end
         else if (gdc_stat_read)
         begin
             data_bus_out_from_chipset <= 1'b1;
