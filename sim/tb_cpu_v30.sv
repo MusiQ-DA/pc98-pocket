@@ -1,16 +1,17 @@
 //
-// tb_cpu_v30 -- the 186-class instructions the V30 ROMs actually use.
+// tb_cpu_v30 -- the V30 core swap's acceptance bench.
 //
-// The machine's CPUs are V30s: the VM BIOS, the UX ITF, and N88-BASIC all
-// assume the 186 additions, and the first one that mattered was PUSH imm16.
-// mcl86 is an 8088, where opcode 0x68 is the undocumented alias of JS -- the
-// ITF's CPU-reset save sequence starts with one, so the "jump if sign" ate
-// the immediate as a displacement, the stream derailed four bytes deep, and
-// the reset resume RETFed to garbage. That failure is why this bench exists.
+// The machine's CPUs are V30s and its ROMs use the 186-class instructions
+// that chip has. The first one measured was the ITF's `push imm16` in its
+// CPU-reset save sequence, which the 8088 core dispatched to the undocumented
+// JS alias and derailed the stream with. This bench runs the same program on
+// nuV30 (vendored under pcxt-base/src/fpga/core/v30) and checks what actually
+// lands on the stack.
 //
-// A flat 64 KB, the same clock-enable plumbing as the boot bench, and a
-// program of pushes. What lands on the stack is then exactly what the
-// microcode did.
+// De-muxed bus view: ADDR_O is the owning cycle's linear address, DATA_I is
+// served combinationally, writes commit on the cycle's trailing edge with
+// byte lanes from A0/UBE_N -- the same protocol hdl/rtl/nec_bus.sv drives the
+// real part with.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -20,135 +21,105 @@
 
 module tb_cpu_v30;
 
-    logic clk_chipset = 1'b0;
-    logic clk_core    = 1'b0;
-    always #11.641 clk_chipset = ~clk_chipset;
-    always  #5.820 clk_core    = ~clk_core;
+    logic clk = 0;
+    always #5 clk = ~clk;
 
     logic reset = 1'b1;
 
-    wire       clk_cpu, cpu_ce_posedge, cpu_ce_negedge, peripheral_ce;
-    wire       cycle_accrate, shift_read_timing;
-    wire [7:0] ccc_div, ccc_dec;
-    wire [1:0] ram_rd_wait, ram_wr_wait;
-    wire       biu_done;
+    // BS = the max-mode S2-S0 the 8288 family decodes.
+    localparam logic [2:0] BS_INTA = 3'b000, BS_IOR = 3'b001, BS_IOW = 3'b010,
+                           BS_HALT = 3'b011, BS_CODE = 3'b100, BS_MEMR = 3'b101,
+                           BS_MEMW = 3'b110, BS_PASV = 3'b111;
 
-    XT_CE_Generator u_ce (
-        .clock                              (clk_chipset),
-        .reset                              (reset),
-        .clk_select_load                    (biu_done),
-        .clk_select                         (2'b10),      // 9.54 MHz, as shipped
-        .cpu_clk_pin                        (clk_cpu),
-        .cpu_ce_posedge                     (cpu_ce_posedge),
-        .cpu_ce_negedge                     (cpu_ce_negedge),
-        .peripheral_ce                      (peripheral_ce),
-        .cycle_accrate                      (cycle_accrate),
-        .clock_cycle_counter_division_ratio  (ccc_div),
-        .clock_cycle_counter_decrement_value (ccc_dec),
-        .shift_read_timing                  (shift_read_timing),
-        .ram_read_wait_cycle                (ram_rd_wait),
-        .ram_write_wait_cycle               (ram_wr_wait)
-    );
+    wire [19:0] ADDR_O;
+    wire [15:0] DATA_O;
+    wire  [2:0] BS;
+    wire  [1:0] QS;
+    wire        RD_N, UBE_N, BUSLOCK_N;
+    wire  [3:0] STATUS_O;
+    // V30_BACKDOOR compiles the debug/bkd ports in -- here only for dbg_regs,
+    // the live register view the boot bench will log from. The backdoor inputs
+    // themselves stay tied off.
+    logic        bkd_load = 1'b0;
+    logic [223:0] bkd_regs = '0;
+    logic [47:0] bkd_queue = '0;
+    logic  [2:0] bkd_qlen = '0;
+    logic [15:0] bkd_fetch_ip = '0;
+    logic        scr_en = 1'b0;
+    logic  [1:0] scr_qop = '0;
+    wire  [223:0] dbg_regs;
 
-    wire [19:0] cpu_ad_out;
-    wire  [7:0] cpu_data_bus, din;
-    wire  [2:0] processor_status;
-    wire        lock_n, s6_3_mux;
-    wire  [2:0] SEGMENT;
+    logic [15:0] DATA_I;
 
-    i8088 u_cpu (
-        .CORE_CLK  (clk_core),
-        .CLK       (clk_cpu),
+    v30_core dut (
+        .CLK       (clk),
+        .CE        (1'b1),          // de-muxed mode: CE every fabric clock is legal
         .RESET     (reset),
         .READY     (1'b1),
-        .INTR      (1'b0),
+        .INT       (1'b0),
         .NMI       (1'b0),
-        .ad_out    (cpu_ad_out),
-        .dout      (cpu_data_bus),
-        .din       (din),
-        .lock_n    (lock_n),
-        .s6_3_mux  (s6_3_mux),
-        .s2_s0_out (processor_status),
-        .SEGMENT   (SEGMENT),
-        .biu_done  (biu_done),
-        .cycle_accrate                       (cycle_accrate),
-        .clock_cycle_counter_division_ratio  (ccc_div),
-        .clock_cycle_counter_decrement_value (ccc_dec),
-        .shift_read_timing                   (shift_read_timing)
+        .POLL_N    (1'b1),
+        .DATA_I    (DATA_I),
+        .ADDR_O    (ADDR_O),
+        .DATA_O    (DATA_O),
+        .STATUS_O  (STATUS_O),
+        .QS        (QS),
+        .BS        (BS),
+        .RD_N      (RD_N),
+        .UBE_N     (UBE_N),
+        .BUSLOCK_N (BUSLOCK_N),
+        .SS_ADDR   (), .SS_WDATA (), .SS_WE (), .SS_RDATA (), .SS_ERR (),
+        .SS_BUS_QUIET (),
+        .bkd_load (bkd_load), .bkd_regs (bkd_regs), .bkd_queue (bkd_queue),
+        .bkd_qlen (bkd_qlen), .bkd_fetch_ip (bkd_fetch_ip),
+        .scr_en (scr_en), .scr_qop (scr_qop),
+        .dbg_regs  (dbg_regs), .dbg_first_pop (), .dbg_pend ()
     );
 
-    // ---- bus controller, as the boot bench has it ---------------------------
-    wire mem_rd_n, mem_wr_n, adv_mem_wr_n;
-    wire io_rd_n,  io_wr_n,  adv_io_wr_n;
-    wire inta_n, ale, en_io, en_mem, dt_r_n, den, mce, pden;
-
-    KF8288 u_8288 (
-        .clock                           (clk_chipset),
-        .cpu_ce_posedge                  (cpu_ce_posedge),
-        .cpu_ce_negedge                  (cpu_ce_negedge),
-        .reset                           (reset),
-        .address_enable_n                (1'b0),
-        .command_enable                  (1'b1),
-        .io_bus_mode                     (1'b0),
-        .processor_status                (processor_status),
-        .enable_io_command               (en_io),
-        .advanced_io_write_command_n     (adv_io_wr_n),
-        .io_write_command_n              (io_wr_n),
-        .io_read_command_n               (io_rd_n),
-        .interrupt_acknowledge_n         (inta_n),
-        .enable_memory_command           (en_mem),
-        .advanced_memory_write_command_n (adv_mem_wr_n),
-        .memory_write_command_n          (mem_wr_n),
-        .memory_read_command_n           (mem_rd_n),
-        .direction_transmit_or_receive_n (dt_r_n),
-        .data_enable                     (den),
-        .master_cascade_enable           (mce),
-        .peripheral_data_enable_n        (pden),
-        .address_latch_enable            (ale)
-    );
-
-    logic [19:0] cpu_address = 20'h0;
-    always_ff @(posedge clk_chipset)
-        if (ale) cpu_address <= cpu_ad_out;
-
+    // ---- flat memory, served as the aligned word the CPU asks of it ---------
     logic [7:0] ram [0:1048575];
-    assign din = ~mem_rd_n ? ram[cpu_address] : 8'hFF;
 
-    logic mem_wr_d = 1'b1;
-    logic [7:0] mem_wr_data_q = 8'h00;
-    always_ff @(posedge clk_chipset) begin
-        mem_wr_d   <= mem_wr_n;
-        if (~mem_wr_n) mem_wr_data_q <= cpu_data_bus;
-        if (mem_wr_n & ~mem_wr_d) ram[cpu_address] <= mem_wr_data_q;
+    wire [19:0] word_addr = {ADDR_O[19:1], 1'b0};
+    wire [15:0] mem_word  = {ram[word_addr + 20'd1], ram[word_addr]};
+
+    always_comb begin
+        case (BS)
+            BS_CODE, BS_MEMR: DATA_I = mem_word;
+            BS_IOR:           DATA_I = 16'hFFFF;   // nothing is connected
+            BS_INTA:          DATA_I = 16'h0000;
+            default:          DATA_I = 16'h0000;
+        endcase
     end
 
-    wire [19:0] eu_pc = {u_cpu.t_biu_register_cs, 4'd0}
-                      + {4'd0, u_cpu.t_pfq_addr_out};
+    // Writes: hold the cycle's address/data/lanes, commit when the cycle ends
+    // (BS moves off the write type -- the protocol always has a passive gap,
+    // the same property nec_bus's cycle reconstruction stands on).
+    logic [2:0]  bs_d = BS_PASV;
+    logic [19:0] wr_addr = 20'hFFFFF;
+    logic [15:0] wr_data = 16'h0000;
+    logic        wr_even = 1'b0, wr_odd = 1'b0, wr_active = 1'b0;
 
-    // Microcode trace, only for the new routine and its callees, so a broken
-    // clone names the microinstruction it died at.
-    logic [12:0] urom_d = 13'h1FFF;
-    wire  [12:0] urom = u_cpu.EU_CORE.eu_rom_address;
-    logic        trace_on = 1'b0;
-    int          trace_n = 0;
-    always_ff @(posedge clk_core) begin
-        urom_d <= urom;
-        if (urom == 13'h0F7A) trace_on <= 1'b1;
-        if (trace_on && trace_n < 700 && urom != urom_d) begin
-            trace_n <= trace_n + 1;
-            $display("  %6t u %03X r3=%04X r1=%04X out=%04X sp=%04X pfqe=%b", $time, urom,
-                     u_cpu.EU_CORE.eu_register_r3, u_cpu.EU_CORE.eu_register_r1,
-                     u_cpu.EU_CORE.eu_biu_dataout, u_cpu.EU_CORE.eu_register_sp,
-                     ~u_cpu.BIU_CORE.pfq_empty);
+    always_ff @(posedge clk) begin
+        bs_d <= BS;
+        if (BS == BS_MEMW || BS == BS_IOW) begin
+            wr_addr   <= ADDR_O;
+            wr_data   <= DATA_O;
+            wr_even   <= (ADDR_O[0] == 1'b0);
+            wr_odd    <= (UBE_N == 1'b0);
+            wr_active <= 1'b1;
+        end else if (wr_active) begin
+            wr_active <= 1'b0;
+            if (wr_even) ram[wr_addr] <= wr_data[7:0];
+            if (wr_odd)  ram[{wr_addr[19:1], 1'b1}] <= wr_data[15:8];
         end
     end
 
     int errors = 0;
 
     initial begin
-        // CS:IP = 0000:0100 via the reset vector, which jumps there.
+        // CS:IP = F000:0100 via the reset vector.
         ram[20'hFFFF0] = 8'hEA; ram[20'hFFFF1] = 8'h00; ram[20'hFFFF2] = 8'h01;
-        ram[20'hFFFF3] = 8'h00; ram[20'hFFFF4] = 8'h00;
+        ram[20'hFFFF3] = 8'h00; ram[20'hFFFF4] = 8'hF0;
 
         // 0100: B8 00 02        mov ax, 0x0200
         // 0103: 8E D0           mov ss, ax
@@ -158,50 +129,37 @@ module tb_cpu_v30;
         // 010E: 6A FE           push -2        (sign-extends to FFFE)
         // 0110: 6A 42           push byte 0x42
         // 0112: EB FE           jmp $
-        ram[20'h0100]=8'hB8; ram[20'h0101]=8'h00; ram[20'h0102]=8'h02;
-        ram[20'h0103]=8'h8E; ram[20'h0104]=8'hD0;
-        ram[20'h0105]=8'hBC; ram[20'h0106]=8'h60; ram[20'h0107]=8'h00;
-        ram[20'h0108]=8'h68; ram[20'h0109]=8'h34; ram[20'h010A]=8'h12;
-        ram[20'h010B]=8'h68; ram[20'h010C]=8'h78; ram[20'h010D]=8'h56;
-        ram[20'h010E]=8'h6A; ram[20'h010F]=8'hFE;
-        ram[20'h0110]=8'h6A; ram[20'h0111]=8'h42;
-        ram[20'h0112]=8'hEB; ram[20'h0113]=8'hFE;
+        ram[20'hF0100]=8'hB8; ram[20'hF0101]=8'h00; ram[20'hF0102]=8'h02;
+        ram[20'hF0103]=8'h8E; ram[20'hF0104]=8'hD0;
+        ram[20'hF0105]=8'hBC; ram[20'hF0106]=8'h60; ram[20'hF0107]=8'h00;
+        ram[20'hF0108]=8'h68; ram[20'hF0109]=8'h34; ram[20'hF010A]=8'h12;
+        ram[20'hF010B]=8'h68; ram[20'hF010C]=8'h78; ram[20'hF010D]=8'h56;
+        ram[20'hF010E]=8'h6A; ram[20'hF010F]=8'hFE;
+        ram[20'hF0110]=8'h6A; ram[20'hF0111]=8'h42;
+        ram[20'hF0112]=8'hEB; ram[20'hF0113]=8'hFE;
 
-        for (int i = 20'h0200; i < 20'h0300; i++) ram[i] = 8'h00;
+        for (int i = 20'h2040; i < 20'h2080; i++) ram[i] = 8'h00;
 
-        repeat (40) @(posedge clk_chipset);
+        repeat (8) @(posedge clk);
         reset = 1'b0;
 
-        // The program is a handful of instructions; a thousand CPU clocks is
-        // many times over. Poll for the park on the EB FE instead of guessing.
-        repeat (30000) @(posedge clk_chipset);
-        if (eu_pc !== 20'h0112)
-            $display("  note: eu_pc %05X (park expected at 0112)", eu_pc);
+        // A handful of instructions; ten thousand clocks is many times over.
+        repeat (10000) @(posedge clk);
 
-        $display("=== V30 push immediates ===");
-        // SS:SP should now be 0200:0058, with the four words below it.
-        $display("  SP %04X (want 0058)", u_cpu.EU_CORE.eu_register_sp);
-        if (u_cpu.EU_CORE.eu_register_sp !== 16'h0058) begin
-            $display("  FAIL SP"); errors++;
-        end
-        for (int i = 20'h0100; i < 20'h0400; i++)
-            if (ram[i] !== 8'h00 && !(i >= 20'h0100 && i <= 20'h0113))
-                $display("  RAM[%04X] = %02X", i, ram[i]);
-        begin : check
-            logic [7:0] w0, w1, w2, w3, w4, w5, w6, w7;
-            w0 = ram[20'h0258]; w1 = ram[20'h0259];
-            w2 = ram[20'h025A]; w3 = ram[20'h025B];
-            w4 = ram[20'h025C]; w5 = ram[20'h025D];
-            w6 = ram[20'h025E]; w7 = ram[20'h025F];
-            $display("  [0258] %02X%02X (want 1234)", w1, w0);
-            $display("  [025A] %02X%02X (want 5678)", w3, w2);
-            $display("  [025C] %02X%02X (want FFFE)", w5, w4);
-            $display("  [025E] %02X%02X (want 0042)", w7, w6);
-            if ({w1, w0} !== 16'h1234) begin $display("  FAIL push imm16 low");  errors++; end
-            if ({w3, w2} !== 16'h5678) begin $display("  FAIL push imm16 high"); errors++; end
-            if ({w5, w4} !== 16'hFFFE) begin $display("  FAIL push imm8 negative sign-extension"); errors++; end
-            if ({w7, w6} !== 16'h0042) begin $display("  FAIL push imm8 positive"); errors++; end
-        end
+        $display("=== V30 push immediates (nuV30) ===");
+        // SS = 0x0200, so the pushes land at 0x2000+0x58..0x5F.
+        $display("  [0205E] %02X %02X (want 34 12)  push 1234",
+                 ram[20'h0205F], ram[20'h0205E]);
+        $display("  [0205C] %02X %02X (want 78 56)  push 5678",
+                 ram[20'h0205D], ram[20'h0205C]);
+        $display("  [0205A] %02X %02X (want FE FF)  push -2",
+                 ram[20'h0205B], ram[20'h0205A]);
+        $display("  [02058] %02X %02X (want 42 00)  push 42",
+                 ram[20'h02059], ram[20'h02058]);
+        if ({ram[20'h0205F], ram[20'h0205E]} !== 16'h1234) begin $display("  FAIL push imm16 first");  errors++; end
+        if ({ram[20'h0205D], ram[20'h0205C]} !== 16'h5678) begin $display("  FAIL push imm16 second"); errors++; end
+        if ({ram[20'h0205B], ram[20'h0205A]} !== 16'hFFFE) begin $display("  FAIL push imm8 negative sign-extension"); errors++; end
+        if ({ram[20'h02059], ram[20'h02058]} !== 16'h0042) begin $display("  FAIL push imm8 positive"); errors++; end
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");
