@@ -606,6 +606,10 @@ module core_top (
     logic reset_cpu_ff = 1'b1;
     logic reset_cpu = 1'b1;
     logic [15:0] reset_cpu_count = 16'h0000;
+    // OUT 0F0h asks for a CPU-only reset -- see the port decode further down.
+    reg  f0_io_q, f0_io_qq;
+    reg  soft_reset_cpu = 1'b0;
+    reg  [7:0] soft_reset_count = 8'h00;
 
     always @(negedge clk_chipset, posedge reset)
     begin
@@ -622,6 +626,12 @@ module core_top (
         if (reset)
         begin
             hgc_mode <= `ENABLE_HGC ? (`ENABLE_CGA ? video_1st_cfg : 1'b1) : 1'b0;
+            reset_cpu <= 1'b1;
+            reset_cpu_count <= 16'h0000;
+        end
+        // OUT 0F0h. The CPU restarts; nothing else does.
+        else if (soft_reset_cpu)
+        begin
             reset_cpu <= 1'b1;
             reset_cpu_count <= 16'h0000;
         end
@@ -2120,6 +2130,49 @@ module core_top (
     reg  [7:0] itf_io_data;
     wire itf_port_write = ~chipset_io_write_n & ~chipset_aen
                         & (chipset_address[15:0] == 16'h043D);
+
+    // ------------------------------------------------------- OUT 0F0h: reset
+    //
+    // The ITF ends its memory test by asking for a CPU reset:
+    //
+    //     F9475  push cs / push 1497        the address to come back to
+    //     F9479  mov [0406],ss / mov [0404],sp
+    //     F9A30  mov al,7 / out F0,al       reset me
+    //     F9A34  jmp $                      and wait for it
+    //
+    // That is how a PC-98 leaves protected mode, and it is how this ITF gets
+    // from the end of POST to the hand-over. Nothing answered 0x0F0, so the
+    // machine stopped on that JMP $ with MEMORY 640KB OK on the screen.
+    //
+    // The CPU alone: memory keeps its contents (the resume needs SS:SP at
+    // 0000:0404 and the return address on the stack), and the ROM bank keeps
+    // its selection, so the reset vector still lands in the ITF and its entry
+    // finds the shutdown flag waiting.
+    //
+    // Same two-cycle qualification as the bank switch above, and for the same
+    // reason: the address lines sweep through other ports on their way, and
+    // resetting the CPU on a glitch would be worse than a bad readout.
+    wire f0_port_write = ~chipset_io_write_n & ~chipset_aen
+                       & (chipset_address[15:0] == 16'h00F0);
+
+    always @(posedge clk_chipset or posedge reset_sdram) begin
+        if (reset_sdram) begin
+            f0_io_q          <= 1'b0;
+            f0_io_qq         <= 1'b0;
+            soft_reset_cpu   <= 1'b0;
+            soft_reset_count <= 8'h00;
+        end else begin
+            f0_io_q  <= f0_port_write;
+            f0_io_qq <= f0_io_q;
+            if (f0_io_q && f0_io_qq && ~f0_port_write) begin
+                soft_reset_cpu   <= 1'b1;
+                soft_reset_count <= 8'hFF;
+            end else if (soft_reset_count != 8'h00)
+                soft_reset_count <= soft_reset_count - 8'h01;
+            else
+                soft_reset_cpu <= 1'b0;
+        end
+    end
 
     always @(posedge clk_chipset or posedge reset_sdram) begin
         if (reset_sdram) begin
