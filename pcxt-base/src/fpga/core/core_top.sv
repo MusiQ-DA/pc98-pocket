@@ -1670,6 +1670,26 @@ module core_top (
                     bios_access_request <= 1'b1;
                     bios_write_byte_cnt <= 1'h0;
                     tandy_bios_write    <= select_shadow;
+                    // ...and the font's bank, which nothing ever set.
+                    //
+                    // font_bank_write was declared, reset to zero, and held --
+                    // and never once assigned a one. So font_bank_load stayed
+                    // low, RAM.sv never redirected the load to 0x400000, and
+                    // FONT.ROM went into the low megabyte at its own file
+                    // offset instead. The glyph fetcher reads 0x400000 upward,
+                    // which nothing had written.
+                    //
+                    // That is why this machine has never drawn a character.
+                    // The hardware readout showed the text VRAM holding
+                    // 4B 41 4E 4A 49 -- "KANJI" -- with attribute C1, yellow
+                    // and visible and not reversed, and the screen showing a
+                    // solid yellow band: the right cells, the right colour,
+                    // and every glyph row read out of memory nobody filled.
+                    //
+                    // Same latch point and same reason as the shadow decision
+                    // above: select_font comes from the live ioctl_addr, and
+                    // by state 02 it can already describe the next slot.
+                    font_bank_write     <= select_font;
                     if (~ioctl_download)
                     begin
                         bios_access_address <= 20'hFFFFF;
