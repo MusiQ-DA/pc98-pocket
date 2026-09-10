@@ -93,6 +93,7 @@ docker run --rm -v "$PWD":/work -v "$OUT":/hex -w /hex -e "SIMARGS=$*" pc98-sim 
     /work/sim/tb_pc98_boot.sv \
     /work/$S/8088/i8088.v /work/$S/8088/biu_max.v \
     /work/$S/8088/mcl86_eu_core.v /work/$S/8088/eu_rom.v \
+    /work/$K/pc98_fdc.sv \
     /work/$K/XT_CE_Generator.sv /work/$K/KF8288/HDL/KF8288.sv \
     /work/$K/KF8253/HDL/KF8253.sv /work/$K/KF8253/HDL/KF8253_Counter.sv \
     /work/$K/KF8253/HDL/KF8253_Control_Logic.sv \
