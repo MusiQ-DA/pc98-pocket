@@ -500,22 +500,19 @@ void post_mon_tick(void)
         // first reading gave -- 0, 1, D and E -- and the four ranges name the
         // loop between them.
 
-        // What is actually IN the text VRAM, read back through the bus.
+        // NO readback here, and that is the point.
         //
-        // The ITF writes its message to A0000 and the matching attributes to
-        // A2000 (F9973), and the write counter says thousands of writes are
-        // landing -- but the screen shows a coloured band and no characters.
-        // Those are different faults: wrong bytes in the VRAM is the chipset,
-        // right bytes and nothing on screen is the renderer. Sixteen bus
-        // reads a redraw settles which.
+        // This row briefly read A0000 and A2000 through guest_peek to settle
+        // whether the VRAM held the right bytes. It settled something else:
+        // the machine stopped, N frozen at 84, and LIVE reading A200E -- which
+        // is not where the guest was, it is the eighth byte THIS read asked
+        // for. guest_peek takes the bus through hold acknowledge, and a read
+        // of the text VRAM does not hand it back.
         //
-        // Cell n is a WORD: code at A0000 + 2n, attribute at A2000 + 2n.
-        osd_draw_string(&fb, 4, 62, "TVC", OSD_LABEL);
-        for (int i = 0; i < 8; i++)
-            hex(4 + (4 + i * 3) * 8, 62, guest_peek(0xA0000u + i * 2u), 2);
-        osd_draw_string(&fb, 4, 72, "TVA", OSD_LABEL);
-        for (int i = 0; i < 8; i++)
-            hex(4 + (4 + i * 3) * 8, 72, guest_peek(0xA2000u + i * 2u), 2);
+        // postmon has been here before; the note above the vector block says
+        // an ext read "destroyed the measurement it was meant to support".
+        // Reading the guest's own video memory while it runs needs a passive
+        // snoop in post_monitor, not the bus master.
     }
 #endif
 
