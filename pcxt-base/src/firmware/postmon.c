@@ -104,6 +104,20 @@ static void dec(int x, int y, uint32_t v)
     osd_draw_string(&fb, x, y, out, OSD_LABEL);
 }
 
+#ifdef MACHINE_PC98
+// One segment's window: its digit, then the lowest and highest offset seen in
+// it. Drawn through a helper, so check_osd_layout cannot evaluate the x
+// expressions and does not see these fields -- which is safe only because
+// rows 62 and 72 now belong to this and to nothing else.
+static void segrange(int x, int y, int i, const uint16_t *lo, const uint16_t *hi)
+{
+    hex(x, y, (uint32_t) i, 1);
+    hex(x + 2 * 8, y, lo[i], 4);
+    osd_draw_string(&fb, x + 6 * 8, y, "-", OSD_LABEL);
+    hex(x + 7 * 8, y, hi[i], 4);
+}
+#endif
+
 // ---------------------------------------------------------- ROM capture
 //
 // Read once, with the guest held, and show the cached bytes afterwards. See
@@ -212,17 +226,32 @@ void post_mon_tick(void)
     // window over window while a test is running and does not while it is not.
 #ifdef MACHINE_PC98
     static uint8_t  seg_hit[16], seg_show[16];
+    static uint16_t seg_lo[16], seg_hi[16], seg_lo_s[16], seg_hi_s[16];
     static uint32_t seg_n = 0, seg_front = 0, seg_front_show = 0;
     for (int i = 0; i < 8; i++) {
         uint32_t a = *POST_LIVE & 0xFFFFFu;
-        uint32_t g = a >> 16;
+        uint32_t g = a >> 16, off = a & 0xFFFFu;
+        // Which segment is not enough on its own: a segment is 64 KB and a
+        // loop is a few bytes. The extent inside it is what names the routine.
+        if (seg_hit[g] == 0u) {
+            seg_lo[g] = (uint16_t) off;
+            seg_hi[g] = (uint16_t) off;
+        } else {
+            if (off < seg_lo[g]) seg_lo[g] = (uint16_t) off;
+            if (off > seg_hi[g]) seg_hi[g] = (uint16_t) off;
+        }
         if (seg_hit[g] < 255u) seg_hit[g]++;
         if (a < 0xA0000u && a > seg_front) seg_front = a;
     }
     // 4096 samples: long enough that the window spans real guest time at any
     // plausible rate for this loop, short enough to still be a window.
     if ((seg_n += 8u) >= 4096u) {
-        for (int i = 0; i < 16; i++) { seg_show[i] = seg_hit[i]; seg_hit[i] = 0; }
+        for (int i = 0; i < 16; i++) {
+            seg_show[i] = seg_hit[i];
+            seg_lo_s[i] = seg_lo[i];
+            seg_hi_s[i] = seg_hi[i];
+            seg_hit[i] = 0;
+        }
         seg_front_show = seg_front;
         seg_front = 0;
         seg_n = 0;
@@ -470,6 +499,21 @@ void post_mon_tick(void)
         hex(4 + 12 * 8, 52, p1, 8);
         osd_draw_string(&fb, 4 + 21 * 8, 52, "FR", OSD_LABEL);
         hex(4 + 24 * 8, 52, seg_front_show, 5);
+
+        // The extents, for the two highest-numbered live segments and the two
+        // lowest. High is where the code is (E8000-FFFFF is ROM on this
+        // machine); low is where it is working. Four segments lit is what the
+        // first reading gave -- 0, 1, D and E -- and the four ranges name the
+        // loop between them.
+        int hi1 = -1, hi2 = -1, lo1 = -1, lo2 = -1;
+        for (int i = 15; i >= 0; i--)
+            if (seg_show[i]) { if (hi1 < 0) hi1 = i; else if (hi2 < 0) hi2 = i; }
+        for (int i = 0; i < 16; i++)
+            if (seg_show[i]) { if (lo1 < 0) lo1 = i; else if (lo2 < 0) lo2 = i; }
+        if (hi1 >= 0) segrange(4,            62, hi1, seg_lo_s, seg_hi_s);
+        if (hi2 >= 0) segrange(4 + 13 * 8,   62, hi2, seg_lo_s, seg_hi_s);
+        if (lo1 >= 0) segrange(4,            72, lo1, seg_lo_s, seg_hi_s);
+        if (lo2 >= 0) segrange(4 + 13 * 8,   72, lo2, seg_lo_s, seg_hi_s);
     }
 #endif
 
