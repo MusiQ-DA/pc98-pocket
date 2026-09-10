@@ -181,7 +181,27 @@ module tb_pc98_boot;
     logic [7:0] tvram_attr [0:511];   // A2000-A21FF
     int          tvram_wr_count = 0;
 
+    // The two GDC status ports, named here because the trace below has to
+    // recognise them long before the mock that answers them is declared.
+    wire  gdc_stat_port  = (cpu_address[15:0] == 16'h0060)
+                         | (cpu_address[15:0] == 16'h00A0);
+    logic gdc_poll_seen  = 1'b0;
+
+    // Reset by the progress loop after every chunk it prints -- through a
+    // toggle rather than by assigning them there, because a variable written
+    // both blocking and non-blocking is one Verilator gets to reorder.
+    logic [19:0] wr_lo_chunk = 20'hFFFFF, wr_hi_chunk = 20'h00000;
+    int          wr_n_chunk  = 0;
+    logic        wr_clear_tog = 1'b0, wr_clear_d = 1'b0;
+
     always_ff @(posedge clk_chipset) begin
+        wr_clear_d <= wr_clear_tog;
+        if (wr_clear_tog != wr_clear_d) begin
+            wr_lo_chunk <= 20'hFFFFF;
+            wr_hi_chunk <= 20'h00000;
+            wr_n_chunk  <= 0;
+        end
+
         io_wr_d  <= io_wr_n;
         mem_wr_d <= mem_wr_n;
         mem_rd_d <= mem_rd_n;
@@ -197,11 +217,19 @@ module tb_pc98_boot;
         // Memory write, on the trailing edge, and never into ROM.
         if (mem_wr_n & ~mem_wr_d & ~is_rom(cpu_address)) begin
             ram[cpu_address] <= mem_wr_data_q;
+            // Where the writes are going, chunk by chunk. The hardware's LIVE
+            // readout is the same quantity, and "sweeping upward through the
+            // memory test" and "going round a small ring" look identical on a
+            // 20 fps display but not at all alike here.
+            if (cpu_address < wr_lo_chunk) wr_lo_chunk <= cpu_address;
+            if (cpu_address > wr_hi_chunk) wr_hi_chunk <= cpu_address;
+            wr_n_chunk <= wr_n_chunk + 1;
             // The first page carries the vectors; who touches 0000-0FFF and
             // with what decides whether INT xx lands where the BIOS meant.
-            if (cpu_address[19:12] == 8'h00)
-                $display("  %8t  RAM[%04X] <= %02X   (eu_pc %05X)",
-                         $time, cpu_address[15:0], mem_wr_data_q, eu_pc);
+            // (Display off -- the memory test writes there for a living and
+            // the log grew to half a gigabyte. The IVT dump at the end
+            // still tells the story.)
+            // $display("  %8t  RAM[%04X] <= %02X   (eu_pc %05X)", ...)
             // The text plane: the memory-count display lands here. Keep the
             // first row of cells (code + attribute) for the final dump.
             if (cpu_address >= 20'hA0000 && cpu_address < 20'hA4000) begin
@@ -219,8 +247,23 @@ module tb_pc98_boot;
         // I/O reads matter here too: if the ModRM byte of a group opcode is
         // dispatched as an opcode, E4 becomes IN AL,imm8 and shows up as a read
         // from a port the program never names.
-        if (io_rd_n & ~io_rd_d)
-            $display("  %8t  IN  from %04X", $time, cpu_address[15:0]);
+        // GDC status (0x60/0xA0) is polled in a tight loop for a whole frame
+        // at a time -- eleven thousand lines of it in the last run, which
+        // buried everything else and cost more than the simulation did. The
+        // first read of each visit is the one that says the loop was entered;
+        // the rest say only that a frame is long.
+        if (io_rd_n & ~io_rd_d) begin
+            if (gdc_stat_port) begin
+                if (~gdc_poll_seen) begin
+                    $display("  %8t  IN  from %04X  (poll begins, eu_pc %05X)",
+                             $time, cpu_address[15:0], eu_pc);
+                    gdc_poll_seen <= 1'b1;
+                end
+            end else begin
+                gdc_poll_seen <= 1'b0;
+                $display("  %8t  IN  from %04X", $time, cpu_address[15:0]);
+            end
+        end
 
         // I/O write, on the trailing edge.
         if (io_wr_n & ~io_wr_d) begin
@@ -679,18 +722,18 @@ module tb_pc98_boot;
         repeat (40) @(posedge clk_chipset);
         reset = 1'b0;
 
-        // Long enough to finish POST: 780 five-million chipset-clock chunks
-        // is about 90 seconds of guest time. 35 seconds cleared the screen
-        // and got the memory test to ~280 KB; a full sweep of a megabyte,
-        // then, wants three times that. A progress line every chunk says
-        // whether it is moving or parked.
-        for (i = 0; i < 780; i = i + 1) begin
+        // One chunk is 5M chipset clocks, which is 116 ms of guest time --
+        // NOT one second, and the two runs that read it that way stopped at
+        // 4.7 and 2.7 seconds and proved nothing. The machine has to be met
+        // AFTER the screen clear, and the clear alone took 8 seconds, so the
+        // run needs the full 780 chunks (90 s) the sweep run used, and then
+        // some: the memory test was still going at 280 KB when that one ended.
+        for (i = 0; i < 1200; i = i + 1) begin
             repeat (5_000_000) @(posedge clk_chipset);
-            $display("  ... %0t  EU %05X  urom %04X  cyc %0d/%0d  ratio %0d dec %0d  zero %0d",
+            $display("  ... %0t  EU %05X  urom %04X  wr %05X-%05X n %0d  tvw %0d",
                      $time, eu_pc, urom,
-                     u_cpu.BIU_CORE.clock_cycle_counter,
-                     u_cpu.BIU_CORE.clock_cycle_counter_div,
-                     ccc_div, ccc_dec, u_cpu.BIU_CORE.BIU_CLK_COUNTER_ZERO);
+                     wr_lo_chunk, wr_hi_chunk, wr_n_chunk, tvram_wr_count);
+            wr_clear_tog = ~wr_clear_tog;
         end
 
         $display("--- done ---");

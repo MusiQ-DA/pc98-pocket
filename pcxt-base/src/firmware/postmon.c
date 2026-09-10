@@ -53,6 +53,7 @@ static void guest_poke(uint32_t addr, uint8_t v)
             break;
 }
 
+__attribute__((unused))
 static uint8_t guest_peek(uint32_t addr)
 {
     uint32_t s = 0;
@@ -195,6 +196,39 @@ void post_mon_tick(void)
     // the gate never fired. That is why testB24 showed no vectors, and it is
     // also why I read that run as a reset loop: the symptom was my gate, not
     // the guest.
+    // Where the guest's accesses ARE, not just where the last one was.
+    //
+    // LIVE is one address sampled at whatever rate this loop runs, and a
+    // number that will not sit still looks the same whether the machine is
+    // sweeping the memory test through 640 KB or going round a handful of
+    // bytes of garbage. Those are opposite diagnoses and the readout could
+    // not tell them apart, which is why "LIVE is flailing" has been reported
+    // three times without settling anything.
+    //
+    // So: bucket the samples by 64 KB segment and show all sixteen counts.
+    // A memory test is 0-9 lit with F (the code it runs from); a loop in one
+    // place is one segment lit and the rest dark. FR is the highest address
+    // seen below A0000 in the window -- the sweep's frontier, which climbs
+    // window over window while a test is running and does not while it is not.
+#ifdef MACHINE_PC98
+    static uint8_t  seg_hit[16], seg_show[16];
+    static uint32_t seg_n = 0, seg_front = 0, seg_front_show = 0;
+    for (int i = 0; i < 8; i++) {
+        uint32_t a = *POST_LIVE & 0xFFFFFu;
+        uint32_t g = a >> 16;
+        if (seg_hit[g] < 255u) seg_hit[g]++;
+        if (a < 0xA0000u && a > seg_front) seg_front = a;
+    }
+    // 4096 samples: long enough that the window spans real guest time at any
+    // plausible rate for this loop, short enough to still be a window.
+    if ((seg_n += 8u) >= 4096u) {
+        for (int i = 0; i < 16; i++) { seg_show[i] = seg_hit[i]; seg_hit[i] = 0; }
+        seg_front_show = seg_front;
+        seg_front = 0;
+        seg_n = 0;
+    }
+#endif
+
     static uint32_t idle_ticks = 0;
     uint32_t count_now = status >> 16;
     static uint32_t last_count = 0xFFFFFFFFu;
@@ -415,6 +449,30 @@ void post_mon_tick(void)
     osd_draw_string(&fb, 4 + 12 * 8, 32, "HIGH", OSD_LABEL);
     hex(4 + 17 * 8, 32, *POST_LIVEMX & 0xFFFFFu, 5);
 
+#ifdef MACHINE_PC98
+    // Row 52 is free on this machine: it belongs to the vector dump, which is
+    // gated on a restart that never happens here.
+    //
+    // One digit per 64 KB segment, 0 (never seen this window) to F (saturated
+    // -- the counter is capped so a busy segment cannot roll back to zero and
+    // read as dark).
+    {
+        // Packed four bits to a segment, two words of eight, because sixteen
+        // separate one-digit calls cost 160 bytes of a ROM with 24 K in it.
+        uint32_t p0 = 0, p1 = 0;
+        for (int i = 0; i < 8; i++) {
+            uint32_t c = seg_show[i], d = seg_show[i + 8];
+            p0 = (p0 << 4) | (c > 15u ? 15u : c);
+            p1 = (p1 << 4) | (d > 15u ? 15u : d);
+        }
+        osd_draw_string(&fb, 4, 52, "SEG", OSD_LABEL);
+        hex(4 + 4 * 8, 52, p0, 8);
+        hex(4 + 12 * 8, 52, p1, 8);
+        osd_draw_string(&fb, 4 + 21 * 8, 52, "FR", OSD_LABEL);
+        hex(4 + 24 * 8, 52, seg_front_show, 5);
+    }
+#endif
+
     // Vectors are read ONCE, after the guest has already restarted at least
     // once.
     //
@@ -428,6 +486,14 @@ void post_mon_tick(void)
     // waiting for a restart never fires either -- testB25 sat on
     // "VEC -- WAITING RESTART" indefinitely. Quiet means POST is over and
     // taking the bus for a few reads disturbs nothing.
+    //
+    // ALL OF IT IS PC/AT ONLY, and the comment above says why without acting
+    // on it: the gate is post_max >= 0x08, a port-0x80 progress code a PC-98
+    // never writes, so on this machine the reads never happen and the rows
+    // never draw. Compiled in, it was still 24 K of ROM spent on a branch that
+    // cannot run -- and it owns rows 42-82, which is where a readout that CAN
+    // run has to go.
+#ifndef MACHINE_PC98
     static int vectors_read = 0;
     static uint32_t v16_seg = 0, v16_off = 0;
     static uint32_t v16b_seg = 0, v16b_off = 0;
@@ -547,6 +613,7 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4, 42, "VEC -- WAITING (MAX<08)", OSD_LABEL);
 #endif
     }
+#endif
 
     // History, oldest first, so the path through POST is visible at a glance.
     // PC/AT only: these are port-0x80 progress codes, and on PC-98 the row
