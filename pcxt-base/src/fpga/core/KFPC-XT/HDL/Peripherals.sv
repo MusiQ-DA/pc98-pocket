@@ -388,21 +388,39 @@ module PERIPHERALS #(
     logic       fdc_irq3;
 
     // Command shape: bytes still to write after the first, and results.
-    always_comb begin
-        case (fdc_cmd)
-            8'h03: begin fdc_shape_writes = 4'd2; fdc_shape_results = 4'd0; end
-            8'h04: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd1; end
-            8'h07: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd0; end
-            8'h08: begin fdc_shape_writes = 4'd0; fdc_shape_results = 4'd2; end
-            8'h0F: begin fdc_shape_writes = 4'd2; fdc_shape_results = 4'd0; end
-            8'h0A, 8'h4A: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd7; end
-            8'h05, 8'h06, 8'h45, 8'h46, 8'h65, 8'h66, 8'hE5, 8'hE6:
-                   begin fdc_shape_writes = 4'd8; fdc_shape_results = 4'd7; end
-            8'h4D, 8'hCD: begin fdc_shape_writes = 4'd5; fdc_shape_results = 4'd7; end
-            default: begin fdc_shape_writes = 4'd0; fdc_shape_results = 4'd2; end
+    //
+    // Of the byte ARRIVING, not of fdc_cmd. fdc_cmd still holds the PREVIOUS
+    // command at the moment the counts are loaded -- it is assigned in the
+    // same non-blocking block -- so every command was set up with its
+    // predecessor's byte count, and the model desynchronised on the second
+    // command it ever saw.
+    //
+    // What that looks like from the BIOS: SENSE INTERRUPT (0x08, no parameter
+    // bytes, two results) is followed by SPECIFY (0x03, two parameter bytes,
+    // no results). SPECIFY loaded 0x08's shape -- zero writes, two results --
+    // so the model declared itself finished on the command byte alone and
+    // went into the result phase. MSR then reads C0 (RQM with DIO set: "read
+    // me"), and the BIOS, waiting at FFA26 for MSR & C0 == 80 before it may
+    // write a parameter, spins out its whole CX -- 65536 reads, most of a
+    // second -- and gives up. Every FDC command after the first cost a full
+    // timeout, which is the "IN from 0090 x65538, IN from 00c8 x45172" in the
+    // bench trace and the frozen I/O write count on the hardware.
+    function automatic logic [7:0] fdc_shape(input logic [7:0] c);
+        case (c)
+        8'h03: fdc_shape = {4'd2, 4'd0};
+        8'h04: fdc_shape = {4'd1, 4'd1};
+        8'h07: fdc_shape = {4'd1, 4'd0};
+        8'h08: fdc_shape = {4'd0, 4'd2};
+        8'h0F: fdc_shape = {4'd2, 4'd0};
+        8'h0A, 8'h4A: fdc_shape = {4'd1, 4'd7};
+        8'h05, 8'h06, 8'h45, 8'h46, 8'h65, 8'h66, 8'hE5, 8'hE6:
+               fdc_shape = {4'd8, 4'd7};
+        8'h4D, 8'hCD: fdc_shape = {4'd5, 4'd7};
+        default: fdc_shape = {4'd0, 4'd2};
         endcase
-    end
-    logic [3:0] fdc_shape_writes, fdc_shape_results;
+    endfunction
+    wire [3:0] fdc_new_writes  = fdc_shape(internal_data_bus)[7:4];
+    wire [3:0] fdc_new_results = fdc_shape(internal_data_bus)[3:0];
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
@@ -426,9 +444,9 @@ module PERIPHERALS #(
                         8'h04: begin fdc_result0 <= 8'h00; end
                         default: begin fdc_result0 <= 8'h80; fdc_result1 <= 8'h00; end
                     endcase
-                    fdc_writes_left  <= fdc_shape_writes;
-                    fdc_results_left <= fdc_shape_results;
-                    if (fdc_shape_writes == 4'd0)
+                    fdc_writes_left  <= fdc_new_writes;
+                    fdc_results_left <= fdc_new_results;
+                    if (fdc_new_writes == 4'd0)
                         fdc_cmd_done <= 1'b1;      // single-byte command
                 end else begin
                     fdc_writes_left <= fdc_writes_left - 4'd1;

@@ -533,23 +533,27 @@ module tb_pc98_boot;
 
     logic [7:0] fdc_cmd;
     logic [3:0] fdc_writes_left, fdc_results_left, fdc_result_idx;
-    logic [3:0] fdc_shape_writes, fdc_shape_results;
     logic [7:0] fdc_result0 = 8'h00, fdc_result1 = 8'h00;
     logic       fdc_in_result = 1'b0, fdc_cmd_done = 1'b0, fdc_irq3 = 1'b0;
-    always_comb begin
-        case (fdc_cmd)
-            8'h03: begin fdc_shape_writes = 4'd2; fdc_shape_results = 4'd0; end
-            8'h04: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd1; end
-            8'h07: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd0; end
-            8'h08: begin fdc_shape_writes = 4'd0; fdc_shape_results = 4'd2; end
-            8'h0F: begin fdc_shape_writes = 4'd2; fdc_shape_results = 4'd0; end
-            8'h0A, 8'h4A: begin fdc_shape_writes = 4'd1; fdc_shape_results = 4'd7; end
-            8'h05, 8'h06, 8'h45, 8'h46, 8'h65, 8'h66, 8'hE5, 8'hE6:
-                   begin fdc_shape_writes = 4'd8; fdc_shape_results = 4'd7; end
-            8'h4D, 8'hCD: begin fdc_shape_writes = 4'd5; fdc_shape_results = 4'd7; end
-            default: begin fdc_shape_writes = 4'd0; fdc_shape_results = 4'd2; end
+        // Command shape: bytes still to write after the first, and results.
+    // Of the byte ARRIVING -- see the same fix in Peripherals.sv for what
+    // reading it off fdc_cmd (still the PREVIOUS command here) did.
+    function automatic logic [7:0] fdc_shape(input logic [7:0] c);
+        case (c)
+        8'h03: fdc_shape = {4'd2, 4'd0};
+        8'h04: fdc_shape = {4'd1, 4'd1};
+        8'h07: fdc_shape = {4'd1, 4'd0};
+        8'h08: fdc_shape = {4'd0, 4'd2};
+        8'h0F: fdc_shape = {4'd2, 4'd0};
+        8'h0A, 8'h4A: fdc_shape = {4'd1, 4'd7};
+        8'h05, 8'h06, 8'h45, 8'h46, 8'h65, 8'h66, 8'hE5, 8'hE6:
+               fdc_shape = {4'd8, 4'd7};
+        8'h4D, 8'hCD: fdc_shape = {4'd5, 4'd7};
+        default: fdc_shape = {4'd0, 4'd2};
         endcase
-    end
+    endfunction
+    wire [3:0] fdc_new_writes  = fdc_shape(cpu_data_bus)[7:4];
+    wire [3:0] fdc_new_results = fdc_shape(cpu_data_bus)[3:0];
     always_ff @(posedge clk_chipset) begin
         fdc_cmd_done <= 1'b0;
         if (fdc_fifo_sel & ~io_wr_n) begin
@@ -558,9 +562,9 @@ module tb_pc98_boot;
                 fdc_result_idx <= 4'd0;
                 if (cpu_data_bus == 8'h04) fdc_result0 <= 8'h00;
                 else begin fdc_result0 <= 8'h80; fdc_result1 <= 8'h00; end
-                fdc_writes_left  <= fdc_shape_writes;
-                fdc_results_left <= fdc_shape_results;
-                if (fdc_shape_writes == 4'd0) fdc_cmd_done <= 1'b1;
+                fdc_writes_left  <= fdc_new_writes;
+                fdc_results_left <= fdc_new_results;
+                if (fdc_new_writes == 4'd0) fdc_cmd_done <= 1'b1;
             end else begin
                 fdc_writes_left <= fdc_writes_left - 4'd1;
                 if (fdc_writes_left == 4'd1) fdc_cmd_done <= 1'b1;
