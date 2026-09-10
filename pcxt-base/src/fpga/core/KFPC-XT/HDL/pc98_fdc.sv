@@ -56,6 +56,11 @@ module pc98_fdc (
     logic [7:0] fdc_result0, fdc_result1;
     logic       fdc_in_result;
     logic       fdc_cmd_done;     // high for one clock when a command completes
+    // Four milliseconds: shorter than any real recalibrate, and far
+    // longer than the handful of instructions the BIOS puts between
+    // issuing the seek and clearing its flags.
+    localparam int SEEK_CLOCKS = 172_000;
+    logic [17:0] seek_timer;
 
     // One event per ACCESS, not one per clock.
     //
@@ -170,6 +175,7 @@ module pc98_fdc (
             irq_int        <= 1'b0;
             fdc_unit        <= 2'd0;
             fdc_seek_pend   <= 4'd0;
+            seek_timer      <= 18'd0;
             fdc_prev_wr_n   <= 1'b1;
             fdc_prev_rd_n   <= 1'b1;
             fdc_wr_data     <= 8'h00;
@@ -227,11 +233,28 @@ module pc98_fdc (
             if (fdc_cmd_done) begin
                 if (fdc_results_left != 4'd0)
                     fdc_in_result <= 1'b1;
-                else if (fdc_cmd == 8'h07 || fdc_cmd == 8'h0F)
-                    begin
-                    irq_int        <= 1'b1;   // no drive: the seek ends at once
+                else if (fdc_cmd == 8'h07 || fdc_cmd == 8'h0F) begin
+                    // Seek end is RECORDED here and SIGNALLED later.
+                    //
+                    // The BIOS issues RECALIBRATE for all four units, then
+                    // CLEARS its drive map at 055E, and only then waits for the
+                    // interrupts to fill it back in -- FF57A, FF57D, FF587, in
+                    // that order. That is only safe because a real head takes
+                    // milliseconds to step to track 0. Raising the interrupt one
+                    // clock after the command -- 23 ns -- ran the handler BEFORE
+                    // the clear, so all four bits were set and then wiped, and
+                    // the wait that followed had nothing left to wait for:
+                    // sixteen retries of a zeroed CX, eleven seconds, once for
+                    // the 2HD probe at port 90 and once for the 2DD one at C8.
                     fdc_seek_pend[fdc_unit] <= 1'b1;
+                    seek_timer              <= SEEK_CLOCKS;
                 end
+            end
+            // The seek's interrupt, once the head would have got there.
+            if (seek_timer != 18'd0) begin
+                seek_timer <= seek_timer - 18'd1;
+                if (seek_timer == 18'd1)
+                    irq_int <= 1'b1;
             end
             if (irq_int)
                 irq_int <= 1'b0;

@@ -519,10 +519,19 @@ module tb_pc98_boot;
     // Segment transfers: when CS changes, where the EU went matters more
     // than where it was. A stray vector lands the CPU in RAM.
     logic [15:0] eu_cs_d = 16'hFFFF;
+    int k;
     always_ff @(posedge clk_chipset) begin
         eu_cs_d <= eu_cs;
-        if (eu_cs != eu_cs_d)
+        if (eu_cs != eu_cs_d) begin
             $display("  %8t  CS %04X -> %04X  (pc %05X)", $time, eu_cs_d, eu_cs, eu_pc);
+            // Every segment transfer in this boot is worth its full context:
+            // there are five of them in ninety seconds, and one of them is the
+            // machine leaving the ROM for good.
+            for (k = 0; k < 48; k = k + 1)
+                $display("        %05X  op %02X",
+                         disp_pc[(disp_w + 64 - 48 + k) % 64],
+                         disp_op[(disp_w + 64 - 48 + k) % 64]);
+        end
     end
 
     // ---- keyboard: none, like the hardware -----------------------------------
@@ -669,6 +678,9 @@ module tb_pc98_boot;
     // while eu_rom_address[12:8] == 1 the low byte IS the opcode being started.
     // That gives a true x86 instruction trace, which the bus cannot.
     wire       is_dispatch = (urom[12:8] == 5'h01);
+    logic [19:0] disp_pc [0:63];
+    logic [7:0]  disp_op [0:63];
+    int          disp_w = 0;
     logic [7:0] op_seen [0:63];
     int         op_w = 0;
     logic       is_dispatch_d = 1'b0;
@@ -680,6 +692,17 @@ module tb_pc98_boot;
         if (is_dispatch & ~is_dispatch_d) begin
             op_seen[op_w[5:0]] <= urom[7:0];
             op_w <= op_w + 1;
+            // The same trace, but keeping WHERE each opcode was dispatched
+            // from. A ring of addresses says the control flow went somewhere
+            // it should not have; a ring of address-and-opcode says which
+            // instruction sent it, which is the part that can be fixed.
+            //
+            // eu_pc is the prefetch queue's read pointer and has already moved
+            // past the opcode byte by the time the dispatch entry is seen, so
+            // read these as "the instruction ending just before here".
+            disp_pc[disp_w[5:0]] <= eu_pc;
+            disp_op[disp_w[5:0]] <= urom[7:0];
+            disp_w <= disp_w + 1;
         end
     end
 
