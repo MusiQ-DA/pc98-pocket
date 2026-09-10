@@ -216,6 +216,7 @@ module tb_pc98_boot;
                             : sysport_33_sel ? 8'h00
                             :                  8'h00;
 
+    logic din_default_q = 1'b0;
     logic unanswered_seen [0:255];
     initial for (int q = 0; q < 256; q = q + 1) unanswered_seen[q] = 1'b0;
 
@@ -346,7 +347,11 @@ module tb_pc98_boot;
         // neutral: the ITF read 0x42 as an order to shut down and 0x33 as a
         // parity error, and each cost a run to find. Name them the first time
         // they are read, so the next one costs a line of log instead.
-        if (io_rd_n & ~io_rd_d && din_is_default
+        // Sampled WHILE the cycle is live: at the trailing edge every select
+        // has already dropped, so din_is_default reads true for every port
+        // and the first version of this named all of them.
+        if (~io_rd_n) din_default_q <= din_is_default;
+        if (io_rd_n & ~io_rd_d && din_default_q
             && ~unanswered_seen[cpu_address[7:0]]) begin
             unanswered_seen[cpu_address[7:0]] <= 1'b1;
             $display("  %8t  UNMODELLED PORT %04X read -- answering FF (eu_pc %05X)",
