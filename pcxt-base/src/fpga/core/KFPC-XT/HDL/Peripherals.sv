@@ -2410,17 +2410,31 @@ end
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= timer_data_bus_out;
         end
+`ifdef MACHINE_PC98
+        // BEFORE the 8255, and this order is the whole point.
+        //
+        // 0x31, 0x35 and 0x37 are the PPI's registers on a PC-98 as well, so
+        // the chip answers them -- and its port C resets to zero. The ITF
+        // reads bit 7 of 0x35 at F805D to tell a power-on from a return from
+        // OUT 0F0h; zero means "resume", so it restored SS:SP from an
+        // uninitialised 0000:0404 and RETF'd into nothing. On the hardware
+        // that is a machine parked at FD807 with one I/O write to its name.
+        //
+        // The bench never had a PPI on those addresses, answered from its own
+        // model, and booted -- which is exactly the kind of divergence a bench
+        // is supposed to catch rather than create.
+        else if (sysport_read)
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= sysport_data;
+        end
+`endif
         else if ((~ppi_chip_select_n) && (~io_read_n))
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= ppi_data_bus_out;
         end
 `ifdef MACHINE_PC98
-        else if (sysport_read)
-        begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= sysport_data;
-        end
         else if (gdc_stat_read)
         begin
             data_bus_out_from_chipset <= 1'b1;
