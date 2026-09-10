@@ -847,6 +847,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFMMC/HDL/KFMMC
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFMMC/HDL/KFMMC_DRIVE_SPI2IDE.sv"
 set_global_assignment -name VERILOG_FILE "core/KFPC-XT/HDL/rtc.v"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/Peripherals.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/pc98_fdc.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/Chipset.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/Bus_Arbiter.sv"
 

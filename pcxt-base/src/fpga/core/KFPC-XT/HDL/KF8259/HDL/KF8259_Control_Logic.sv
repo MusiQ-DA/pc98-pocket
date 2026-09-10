@@ -549,6 +549,26 @@ module KF8259_Control_Logic (
             interrupt_to_cpu <= 1'b0;
         else if (end_of_poll_command == 1'b1)
             interrupt_to_cpu <= 1'b0;
+        // A request that goes away takes INT with it.
+        //
+        // `interrupt` is the resolver's output: the requests still pending
+        // after the mask and the in-service register have had their say. When
+        // it goes to zero there is nothing left to offer, and a real 8259
+        // drops INT -- masking an interrupt is how software withdraws it.
+        //
+        // Latched until an acknowledge, INT survived the withdrawal, and the
+        // next STI made the CPU acknowledge an interrupt the chip no longer
+        // had. The 8259 answers that with IRQ7's vector, which is what the
+        // spurious-interrupt convention exists for: the UX ITF masks
+        // everything at F8A25, enables interrupts at F8A2A, and took INT 0F
+        // into an IVT slot it had not filled in. From there the machine ran
+        // zeroes in RAM for the rest of the boot.
+        //
+        // Only outside an acknowledge sequence: between the two INTA pulses
+        // the resolver is frozen and `interrupt` reads zero, and dropping INT
+        // there would abandon a cycle already under way.
+        else if ((control_state == CTL_READY) && (interrupt_acknowledge_n == 1'b1))
+            interrupt_to_cpu <= 1'b0;
         else
             interrupt_to_cpu <= interrupt_to_cpu;
     end

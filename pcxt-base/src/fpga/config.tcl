@@ -29,6 +29,20 @@ set_global_assignment -name VERILOG_MACRO "MACHINE_PC98=1"
 # Remove once the OSD is up.
 set_global_assignment -name VERILOG_MACRO "PC98_OSD_MARK=1"
 
+# Boot the ITF, not the BIOS.
+#
+# The core has powered on into the BIOS since the retrobios ITF was found to
+# be a 386 image that cannot reach its own hand-over on an 8088. The ITF now
+# shipped is the PC-9801UX one: no 32-bit instructions anywhere in it, a
+# 70116 (V30) branch, and a checksum that passes. In simulation it runs the
+# text VRAM test, sizes memory 128 KB at a time up to MEMORY 640KB OK, and
+# hands over through port 0x043D.
+#
+# The BIOS stays the PC-9801VM one -- reconstructed byte for byte from the
+# MAME chip dumps and 8086 throughout. The UX BIOS is not usable here: its
+# POST uses PUSHA at FDA35 and SMSW/LGDT/LIDT after it.
+set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
+
 # Route SDRAM through sdram_mp (via sdram_kf_shim) instead of KFSDRAM.
 # RAM.sv tests this with `ifdef, so setting it to 0 would still select the shim
 # -- COMMENT THE LINE OUT to fall back to the stock controller for a hardware A/B.

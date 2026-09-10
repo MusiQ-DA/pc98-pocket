@@ -135,7 +135,15 @@ module tb_pc98_boot;
 
     // core_top's reset value, now that the ITF turned out to be a 386 image:
     // the BIOS bank, booted directly the way np2 boots it.
+    // Power-on bank. Zero -- the BIOS -- is what the core does by default,
+    // because a previous session watched the ITF stall at F80388 waiting on
+    // the GDC's vertical retrace. That wait is answered now, so +itf=1 is
+    // here to ask the question again rather than assume the old answer.
     logic itf_bank = 1'b0;
+    initial begin
+        int v;
+        if ($value$plusargs("itf=%d", v)) itf_bank = (v != 0);
+    end
 
     function automatic logic is_rom(input logic [19:0] a);
         is_rom = (a >= 20'hE8000);
@@ -163,7 +171,15 @@ module tb_pc98_boot;
                   : cc_ioread       ? (cc_latch | 8'h30)
                   : fdc_msr_sel     ? fdc_msr
                   : fdc_fifo_sel    ? fdc_fifo
+                  : sysport_sel     ? sysport_data
                            : 8'hFF;
+
+    // True when the read above fell through to the FF default -- i.e. nothing
+    // here answered it. Used to name the port once, in the trace.
+    wire din_is_default = ~(~mem_rd_n | ~inta_n | pit_iocycle | dma_iocycle
+                          | pic1_iocycle | pic2_iocycle | kbd_data_iocycle
+                          | kbd_stat_iocycle | gdc_stat_iocycle | cc_ioread
+                          | fdc_msr_sel | fdc_fifo_sel | sysport_sel);
 
     // ---- I/O ---------------------------------------------------------------
     //
@@ -174,6 +190,64 @@ module tb_pc98_boot;
     int          io_n = 0;
     logic        saw_043d = 1'b0;
     logic [7:0]  last_043d = 8'h00;
+
+    // 0x35 and 0x42, answered exactly as PERIPHERALS answers them.
+    //
+    // The default 8'hFF here is not neutral. The ITF reads 0x42 at F8117 and
+    // tests bit 1; with the bit set it writes 0B to 0x37 and 00 to 0xF0 -- the
+    // shutdown port -- and stops on JMP $ at F8129. So the bench's "nothing is
+    // modelled, answer FF" was ordering the machine to shut down, and the ITF
+    // was never given a chance to run at all.
+    //
+    // 0x35 is the 8255's port C: the BIOS's second instruction is
+    // IN AL,35h / TEST AL,80h / JNZ, and bits 7 and 5 have to read 1.
+    wire sysport_31_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0031);
+    wire sysport_33_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0033);
+    wire sysport_35_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0035);
+    wire sysport_42_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0042);
+    wire sysport_sel    = sysport_31_sel | sysport_33_sel
+                        | sysport_35_sel | sysport_42_sel;
+    // 0x33 is 8255 port B, an INPUT on a PC-98: bit 3 a DIP switch inverted,
+    // bits 7-5 the RS-232C modem status, bit 0 the calendar clock, and the
+    // rest zero. Bit 2 is one of the zeroes, and the UX ITF reads it at F889C
+    // as PARITY ERROR -- which is what FF gave it, and what it printed.
+    // 0x31 is DIP switch 2, and bit 4 tells the ITF to initialise the memory
+    // switch: the twenty bytes at A3FE0 that hold the machine's configuration,
+    // A3FEA among them, whose low three bits are how many 128 KB units of RAM
+    // to count -- 0 for 128 KB, 4 for 640 KB.
+    //
+    // On a real PC-98 that area is battery-backed text VRAM and survives a
+    // power cycle, so the ITF only rewrites it when the switch asks. Here it
+    // is ordinary VRAM and comes up cleared every time, so the answer is
+    // always "please initialise": bit 4 set. With it clear, the ITF skipped
+    // the whole block, read A3FEA as zero, and counted 128 KB -- which is
+    // exactly what MEMORY 128KB OK was reporting on a 640 KB machine.
+    wire [7:0] sysport_data = sysport_35_sel ? 8'hA0
+                            : sysport_31_sel ? 8'h10
+    // 0x42 bit 1: this machine has no protected mode.
+    //
+    // The UX ITF tests it at F8B95 and, with the bit CLEAR, walks into
+    //
+    //     F8BBC  lidt [es:bp+0]
+    //     F8BC4  lgdt [es:bp+0]
+    //
+    // to size memory above 1 MB. Those are 286 instructions, and on an 8086
+    // 0F is POP CS -- so the machine popped a word off the stack into CS and
+    // left the ROM. That is the CS f800 -> 0000 jump that ended every run
+    // right after MEMORY 640KB OK was printed.
+    //
+    // With the bit SET the ITF branches to F8FA2 and skips the whole
+    // protected-mode block, which is the truth about this CPU rather than a
+    // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
+    // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
+                            : sysport_33_sel ? 8'h00
+                            : sysport_42_sel ? 8'h02
+                            :                  8'h00;
+
+    logic saw_high_write = 1'b0;
+    logic din_default_q = 1'b0;
+    logic unanswered_seen [0:255];
+    initial for (int q = 0; q < 256; q = q + 1) unanswered_seen[q] = 1'b0;
 
     logic io_wr_d = 1'b1, mem_wr_d = 1'b1, mem_rd_d = 1'b1, io_rd_d = 1'b1;
     logic [7:0] mem_wr_data_q = 8'h00;
@@ -187,6 +261,41 @@ module tb_pc98_boot;
                          | (cpu_address[15:0] == 16'h00A0);
     logic gdc_poll_seen  = 1'b0;
 
+    // The last sixteen DISTINCT execution addresses.
+    //
+    // "eu_pc is in the FF72F wait" is not enough to tell one long loop from a
+    // caller that keeps re-entering it: both park most samples on the same
+    // eight bytes. The ring shows the whole cycle, and the addresses either
+    // side of the loop are the ones that say who is retrying it.
+    logic [19:0] pc_ring [0:15];
+    int          pc_ring_w = 0;
+    logic [19:0] pc_ring_d = 20'hFFFFF;
+    always_ff @(posedge clk_chipset) begin
+        // Only the DISCONTINUITIES. eu_pc is the prefetch queue's read
+        // pointer, so it walks a byte at a time and a ring of every value is
+        // sixteen bytes of one straight line. A jump is what says where the
+        // control flow went, so keep the targets and drop the walking.
+        if (eu_pc != pc_ring_d) begin
+            pc_ring_d <= eu_pc;
+            if (eu_pc < pc_ring_d || eu_pc > pc_ring_d + 20'd4) begin
+                pc_ring[pc_ring_w[3:0]] <= eu_pc;
+                pc_ring_w <= pc_ring_w + 1;
+            end
+        end
+    end
+
+    // CX, at its lowest in the chunk.
+    //
+    // The wait at FF72F is LOOPNE with CX zeroed on entry, so it has 65536
+    // tries -- about 0.4 seconds -- and then it MUST fall through. It does
+    // not, on the hardware or here, and the execution range says the loop is
+    // never left at all. Either the count is not counting or something is
+    // putting it back. One number decides it: if the low-water mark of CX
+    // walks down to zero the loop is completing and being re-entered; if it
+    // never gets near zero, CX is being reset under the loop's feet.
+    wire [15:0] eu_cx = u_cpu.EU_CORE.eu_register_cx;
+    logic [15:0] cx_min_chunk = 16'hFFFF;
+
     // Reset by the progress loop after every chunk it prints -- through a
     // toggle rather than by assigning them there, because a variable written
     // both blocking and non-blocking is one Verilator gets to reorder.
@@ -197,10 +306,12 @@ module tb_pc98_boot;
     always_ff @(posedge clk_chipset) begin
         wr_clear_d <= wr_clear_tog;
         if (wr_clear_tog != wr_clear_d) begin
-            wr_lo_chunk <= 20'hFFFFF;
-            wr_hi_chunk <= 20'h00000;
-            wr_n_chunk  <= 0;
-        end
+            wr_lo_chunk  <= 20'hFFFFF;
+            wr_hi_chunk  <= 20'h00000;
+            wr_n_chunk   <= 0;
+            cx_min_chunk <= 16'hFFFF;
+        end else if (eu_cx < cx_min_chunk)
+            cx_min_chunk <= eu_cx;
 
         io_wr_d  <= io_wr_n;
         mem_wr_d <= mem_wr_n;
@@ -221,6 +332,12 @@ module tb_pc98_boot;
             // readout is the same quantity, and "sweeping upward through the
             // memory test" and "going round a small ring" look identical on a
             // 20 fps display but not at all alike here.
+            if (cpu_address >= 20'h20000 && cpu_address < 20'hA0000
+                && ~saw_high_write) begin
+                saw_high_write <= 1'b1;
+                $display("  %8t  first write above 128 KB: %05X (eu_pc %05X)",
+                         $time, cpu_address, eu_pc);
+            end
             if (cpu_address < wr_lo_chunk) wr_lo_chunk <= cpu_address;
             if (cpu_address > wr_hi_chunk) wr_hi_chunk <= cpu_address;
             wr_n_chunk <= wr_n_chunk + 1;
@@ -238,9 +355,18 @@ module tb_pc98_boot;
                 else if (cpu_address >= 20'hA2000 && cpu_address < 20'hA2200)
                     tvram_attr[cpu_address[8:0]]  <= mem_wr_data_q;
                 tvram_wr_count <= tvram_wr_count + 1;
-                if (tvram_wr_count < 40)
-                    $display("  %8t  TVRAM[%04X] <= %02X   (eu_pc %05X)",
-                             $time, cpu_address[15:0], mem_wr_data_q, eu_pc);
+                // The first forty writes (the clear, and what shape it has),
+                // and after that every PRINTABLE byte into the code plane --
+                // which is the memory count, if the BIOS ever writes one. The
+                // clear itself is 20487 writes of 00 and E1 and says nothing.
+                if (tvram_wr_count < 40
+                 || (cpu_address < 20'hA2000
+                     && mem_wr_data_q >= 8'h20 && mem_wr_data_q < 8'h7F))
+                    $display("  %8t  TVRAM[%04X] <= %02X %s  (eu_pc %05X)",
+                             $time, cpu_address[15:0], mem_wr_data_q,
+                             (mem_wr_data_q >= 8'h20 && mem_wr_data_q < 8'h7F)
+                                 ? string'({"'", mem_wr_data_q, "'"}) : "   ",
+                             eu_pc);
             end
         end
 
@@ -252,6 +378,21 @@ module tb_pc98_boot;
         // buried everything else and cost more than the simulation did. The
         // first read of each visit is the one that says the loop was entered;
         // the rest say only that a frame is long.
+        // Every port this bench does not model answers FF, and FF is NEVER
+        // neutral: the ITF read 0x42 as an order to shut down and 0x33 as a
+        // parity error, and each cost a run to find. Name them the first time
+        // they are read, so the next one costs a line of log instead.
+        // Sampled WHILE the cycle is live: at the trailing edge every select
+        // has already dropped, so din_is_default reads true for every port
+        // and the first version of this named all of them.
+        if (~io_rd_n) din_default_q <= din_is_default;
+        if (io_rd_n & ~io_rd_d && din_default_q
+            && ~unanswered_seen[cpu_address[7:0]]) begin
+            unanswered_seen[cpu_address[7:0]] <= 1'b1;
+            $display("  %8t  UNMODELLED PORT %04X read -- answering FF (eu_pc %05X)",
+                     $time, cpu_address[15:0], eu_pc);
+        end
+
         if (io_rd_n & ~io_rd_d) begin
             if (gdc_stat_port) begin
                 if (~gdc_poll_seen) begin
@@ -432,7 +573,7 @@ module tb_pc98_boot;
         .slave_program_n  (1'b0),
         .interrupt_acknowledge_n (inta_n),
         .interrupt_to_cpu (pic2_to_cpu),
-        .interrupt_request({4'b0, fdc_irq3, cc_irq2, 2'b0})
+        .interrupt_request({4'b0, fdc_irq3, cc_irq2 | fdc_irq2, 2'b0})
     );
 
     // Latched the way PERIPHERALS latches it, on the CPU clock's falling
@@ -473,10 +614,19 @@ module tb_pc98_boot;
     // Segment transfers: when CS changes, where the EU went matters more
     // than where it was. A stray vector lands the CPU in RAM.
     logic [15:0] eu_cs_d = 16'hFFFF;
+    int k;
     always_ff @(posedge clk_chipset) begin
         eu_cs_d <= eu_cs;
-        if (eu_cs != eu_cs_d)
+        if (eu_cs != eu_cs_d) begin
             $display("  %8t  CS %04X -> %04X  (pc %05X)", $time, eu_cs_d, eu_cs, eu_pc);
+            // Every segment transfer in this boot is worth its full context:
+            // there are five of them in ninety seconds, and one of them is the
+            // machine leaving the ROM for good.
+            for (k = 0; k < 48; k = k + 1)
+                $display("        %05X  op %02X",
+                         disp_pc[(disp_w + 64 - 48 + k) % 64],
+                         disp_op[(disp_w + 64 - 48 + k) % 64]);
+        end
     end
 
     // ---- keyboard: none, like the hardware -----------------------------------
@@ -525,168 +675,48 @@ module tb_pc98_boot;
             cc_irq2 <= 1'b0;
     end
 
-    wire fdc_sel  = (~io_rd_n | ~io_wr_n)
-                  & ((cpu_address[7:2] == 6'h24) | (cpu_address[7:2] == 6'h32))
-                  & ~cpu_address[9] & ~cpu_address[8];
-    wire fdc_msr_sel  = fdc_sel & ~cpu_address[1];
-    wire fdc_fifo_sel = fdc_sel &  cpu_address[1];
+    // The floppy controller: THE one from the chipset, instantiated, not a
+    // copy of it living here. Four defects came out of this model in one
+    // session and every one of them had to be fixed twice by hand; the second
+    // copy is gone. See pc98_fdc.sv.
+    wire       fdc_base_sel, fdc_msr_sel, fdc_fifo_sel;
+    wire [7:0] fdc_msr, fdc_fifo;
+    wire       fdc_irq3, fdc_irq2;
 
-    logic [7:0] fdc_cmd;
-    logic [3:0] fdc_writes_left, fdc_results_left, fdc_result_idx;
-    logic [7:0] fdc_result0 = 8'h00, fdc_result1 = 8'h00;
-    logic       fdc_in_result = 1'b0, fdc_cmd_done = 1'b0, fdc_irq3 = 1'b0;
-        // One event per ACCESS, not one per clock.
-    //
-    // fdc_fifo_select is a LEVEL: iorq is asserted for the whole bus cycle,
-    // which at 42.95 MHz against a 4.77 MHz CPU is around eighteen chipset
-    // clocks. The state machine below consumes a byte every clock it sees the
-    // select, so one command byte was consumed eighteen times -- writes_left
-    // counted through zero and wrapped to fifteen, cmd_done fired on a command
-    // the BIOS had not finished writing, and the model parked in the result
-    // phase. MSR then reads C0 for good, and the BIOS sits at FFA26 waiting
-    // for 80: the FFA26-FFA2D range the hardware readout came back with.
-    //
-    // Every other device in this file already takes the prev_io_*_n edges for
-    // exactly this reason; the FDC was the one that did not. The address hit
-    // is computed without iorq because the strobe has already gone by at the
-    // edge being used, and the write byte is latched while the cycle is live
-    // -- the bus moves on before the edge, which is the same reason the
-    // memory-write path here samples continuously and keeps the last value.
-    logic       fdc_prev_wr_n = 1'b1, fdc_prev_rd_n = 1'b1;
-    logic [7:0] fdc_wr_data = 8'h00;
-    wire fdc_addr_hit  = (cpu_address[15:8] == 8'h00)
-                       & ((cpu_address[7:2] == 6'h24) | (cpu_address[7:2] == 6'h32)) & ~cpu_address[9] & ~cpu_address[8];
-    wire fdc_fifo_addr = fdc_addr_hit & cpu_address[1];
-    wire fdc_wr_pulse  = fdc_fifo_addr & io_wr_n & ~fdc_prev_wr_n;
-    wire fdc_rd_pulse  = fdc_fifo_addr & io_rd_n & ~fdc_prev_rd_n;
+    pc98_fdc u_pc98_fdc (
+        .clock            (clk_chipset),
+        .reset            (reset),
+        .address          (cpu_address[15:0]),
+        .address_enable_n (1'b0),
+        .io_read_n        (io_rd_n),
+        .io_write_n       (io_wr_n),
+        .data_in          (cpu_data_bus),
+        .base_select      (fdc_base_sel),
+        .msr_select       (fdc_msr_sel),
+        .fifo_select      (fdc_fifo_sel),
+        .msr              (fdc_msr),
+        .fifo             (fdc_fifo),
+        .irq_int          (fdc_irq3),
+        .irq_2dd          (fdc_irq2)
+    );
 
-    // SENSE INTERRUPT's answer, honestly shaped.
-    //
-    // The bench read one result byte and stopped, and the model sat on the
-    // second one for ever. That is the BIOS behaving correctly: this returned
-    // ST0 = 80, and 80 is IC = "invalid command / no interrupt pending", the
-    // one case where a uPD765 hands back ONE byte instead of two. The BIOS
-    // took its byte and left; the model still wanted to give another.
-    //
-    // So say what actually happened. A RECALIBRATE or SEEK here finds no
-    // drive, which is a real, describable outcome: IC = abnormal termination,
-    // SE (seek end) and EC (equipment check) both set, unit in the low two
-    // bits -- 70 | unit -- followed by PCN 0. That is two bytes, and the BIOS
-    // reads two. With no interrupt pending it is 80 and one byte, as before.
-    logic [1:0] fdc_unit = 2'd0;
-    logic       fdc_int_pending = 1'b0;
-
-    // Command shape: bytes still to write after the first, and results.
-    // Of the byte ARRIVING -- see the same fix in Peripherals.sv for what
-    // reading it off fdc_cmd (still the PREVIOUS command here) did.
-    function automatic logic [7:0] fdc_shape(input logic [7:0] c);
-        case (c)
-        8'h03: fdc_shape = {4'd2, 4'd0};
-        8'h04: fdc_shape = {4'd1, 4'd1};
-        8'h07: fdc_shape = {4'd1, 4'd0};
-        8'h08: fdc_shape = {4'd0, 4'd2};
-        8'h0F: fdc_shape = {4'd2, 4'd0};
-        8'h0A, 8'h4A: fdc_shape = {4'd1, 4'd7};
-        8'h05, 8'h06, 8'h45, 8'h46, 8'h65, 8'h66, 8'hE5, 8'hE6:
-               fdc_shape = {4'd8, 4'd7};
-        8'h4D, 8'hCD: fdc_shape = {4'd5, 4'd7};
-        default: fdc_shape = {4'd0, 4'd2};
-        endcase
-    endfunction
-    // Sliced off a wire, not off the call: indexing a function's
-    // result directly is a syntax error to both Verilator and Quartus.
-    wire [7:0] fdc_shape_now   = fdc_shape(fdc_wr_data);
-    wire [3:0] fdc_new_writes  = fdc_shape_now[7:4];
-    wire [3:0] fdc_new_results = fdc_shape_now[3:0];
+    // The conversation, one line per byte, reached into the instance. The
+    // status polling is what floods and is not logged, so this stays small.
     always_ff @(posedge clk_chipset) begin
-        fdc_prev_wr_n <= io_wr_n;
-        fdc_prev_rd_n <= io_rd_n;
-        // The byte, sampled while the cycle is live -- see Peripherals.sv.
-        if (fdc_fifo_sel & ~io_wr_n) fdc_wr_data <= cpu_data_bus;
-        fdc_cmd_done <= 1'b0;
-        if (fdc_wr_pulse) begin
-            if (fdc_writes_left == 4'd0) begin
-                fdc_cmd        <= fdc_wr_data;
-                fdc_result_idx <= 4'd0;
-                case (fdc_wr_data)
-                    8'h04: fdc_result0 <= 8'h00;
-                    8'h08: begin
-                        fdc_result0     <= fdc_int_pending ? {2'b01, 2'b11, 2'b00, fdc_unit}
-                                                           : 8'h80;
-                        fdc_result1     <= 8'h00;
-                        fdc_int_pending <= 1'b0;
-                    end
-                    default: begin fdc_result0 <= 8'h80; fdc_result1 <= 8'h00; end
-                endcase
-                fdc_writes_left  <= fdc_new_writes;
-                fdc_results_left <= (fdc_wr_data == 8'h08)
-                                  ? (fdc_int_pending ? 4'd2 : 4'd1)
-                                  : fdc_new_results;
-                if (fdc_new_writes == 4'd0) fdc_cmd_done <= 1'b1;
-            end else begin
-                fdc_writes_left <= fdc_writes_left - 4'd1;
-                // The unit is the first parameter of RECALIBRATE and
-                // SEEK, and it is what ST0 has to name afterwards.
-                if ((fdc_cmd == 8'h07 && fdc_writes_left == 4'd1)
-                 || (fdc_cmd == 8'h0F && fdc_writes_left == 4'd2))
-                    fdc_unit <= fdc_wr_data[1:0];
-                if (fdc_writes_left == 4'd1) fdc_cmd_done <= 1'b1;
-            end
-        end else if (fdc_rd_pulse && fdc_in_result) begin
-            fdc_result_idx <= fdc_result_idx + 4'd1;
-            if (fdc_result_idx + 4'd1 >= fdc_results_left) begin
-                fdc_in_result    <= 1'b0;
-                fdc_results_left <= 4'd0;
-            end
-        end
-        if (fdc_cmd_done) begin
-            if (fdc_results_left != 4'd0) fdc_in_result <= 1'b1;
-            else if (fdc_cmd == 8'h07 || fdc_cmd == 8'h0F) begin
-                fdc_irq3        <= 1'b1;   // no drive: the seek ends at once
-                fdc_int_pending <= 1'b1;
-            end
-        end
-        if (fdc_irq3) fdc_irq3 <= 1'b0;
-
-        // The FDC conversation, one line per byte. Low volume by construction
-        // -- the status polling is what floods, and that is not logged -- and
-        // it is the only way to see WHICH command leaves the model in the
-        // result phase with MSR stuck at C0.
-        if (fdc_wr_pulse)
+        if (u_pc98_fdc.fdc_wr_pulse)
             $display("  %8t  FDC <- %02X   (%s, writes_left %0d, results_left %0d)",
-                     $time, fdc_wr_data,
-                     (fdc_writes_left == 4'd0) ? "cmd" : "param",
-                     fdc_writes_left, fdc_results_left);
-        if (fdc_rd_pulse && fdc_in_result)
+                     $time, u_pc98_fdc.fdc_wr_data,
+                     (u_pc98_fdc.fdc_writes_left == 4'd0) ? "cmd" : "param",
+                     u_pc98_fdc.fdc_writes_left, u_pc98_fdc.fdc_results_left);
+        if (u_pc98_fdc.fdc_rd_pulse && u_pc98_fdc.fdc_in_result)
             $display("  %8t  FDC -> %02X   (result %0d of %0d)",
-                     $time, fdc_fifo, fdc_result_idx, fdc_results_left);
-        if (fdc_cmd_done)
-            $display("  %8t  FDC done cmd %02X  results_left %0d",
-                     $time, fdc_cmd, fdc_results_left);
+                     $time, fdc_fifo, u_pc98_fdc.fdc_result_idx,
+                     u_pc98_fdc.fdc_results_left);
+        if (u_pc98_fdc.fdc_cmd_done)
+            $display("  %8t  FDC done cmd %02X  results_left %0d  pend %01X",
+                     $time, u_pc98_fdc.fdc_cmd, u_pc98_fdc.fdc_results_left,
+                     u_pc98_fdc.fdc_seek_pend);
     end
-    // MSR, with the busy bit the BIOS actually tests.
-    //
-    // FFC16 is the BIOS's result-phase wait:
-    //
-    //     in al,dx / and al,D0 / cmp al,D0 / loopne FFC16
-    //
-    // RQM and DIO are not enough -- it wants bit 4, CB, the chip's "a command
-    // is in progress" flag, which on a uPD765 is set from the first command
-    // byte until the last result byte has been read. This model answered C0 in
-    // the result phase, CB clear, so the BIOS could never take the two bytes
-    // that SENSE INTERRUPT (08) had waiting, the model stayed in the result
-    // phase, and the next command's wait at FFA26 -- MSR & C0 == 80 -- spun
-    // out its whole CX. That is the FA26-FA2D the hardware readout named.
-    //
-    // The other two waits agree with modelling CB properly: FFC00 wants
-    // D0 == 80, CB CLEAR, before the first command byte, and FFA26 masks CB
-    // off entirely for the parameter bytes that follow.
-    wire fdc_busy = fdc_in_result | (fdc_writes_left != 4'd0);
-    wire [7:0] fdc_msr = fdc_in_result ? 8'hD0     // RQM + DIO + CB: read me
-                       : fdc_busy      ? 8'h90     // RQM + CB: next parameter
-                       :                 8'h80;    // RQM: idle, send a command
-    wire [7:0] fdc_fifo = (fdc_result_idx == 4'd0) ? fdc_result0
-                        : (fdc_result_idx == 4'd1) ? fdc_result1 : 8'h00;
 
     // Text GDC status at 0x60, shaped exactly like PERIPHERALS' gdc_status:
     // bit 5 rides the vertical retrace (the FDBB3 wait), bit 2 is a constant
@@ -744,6 +774,20 @@ module tb_pc98_boot;
     // while eu_rom_address[12:8] == 1 the low byte IS the opcode being started.
     // That gives a true x86 instruction trace, which the bus cannot.
     wire       is_dispatch = (urom[12:8] == 5'h01);
+    // From the moment the machine leaves the BIOS for the ROM BASIC at E800,
+    // every instruction, in order, until the trace is spent. The ring dumped
+    // at the CS change was all keyword table -- ASCII executed as code -- so
+    // the derailment happens earlier than any ring of the last few dozen
+    // instructions can reach. This starts at the entry and runs forwards.
+    logic basic_trace = 1'b0;
+    int   basic_n = 0;
+    int   itf_ck_n = 0;
+    int   m;
+    logic [19:0] disp_pc [0:63];
+    logic [7:0]  disp_op [0:63];
+    int          disp_w = 0;
+    logic [19:0] disp_last = 20'hFFFFF;
+    logic [19:0] disp_rec  = 20'hFFFFF;
     logic [7:0] op_seen [0:63];
     int         op_w = 0;
     logic       is_dispatch_d = 1'b0;
@@ -755,6 +799,85 @@ module tb_pc98_boot;
         if (is_dispatch & ~is_dispatch_d) begin
             op_seen[op_w[5:0]] <= urom[7:0];
             op_w <= op_w + 1;
+            // The same trace, but keeping WHERE each opcode was dispatched
+            // from. A ring of addresses says the control flow went somewhere
+            // it should not have; a ring of address-and-opcode says which
+            // instruction sent it, which is the part that can be fixed.
+            //
+            // eu_pc is the prefetch queue's read pointer and has already moved
+            // past the opcode byte by the time the dispatch entry is seen, so
+            // read these as "the instruction ending just before here".
+            // Only the jumps. A 65536-iteration delay loop dispatches the
+            // same two instructions until the ring holds nothing else, and
+            // the ITF is mostly delay loops; keeping the discontinuities
+            // makes 64 entries reach back through the whole cycle.
+            // Jumps only, and a run of the SAME jump collapses to one entry.
+            // A delay loop is one branch taken 65536 times and a poll loop is
+            // one branch taken until the port answers; recording either in
+            // full leaves 64 entries covering a few microseconds. Collapsed,
+            // they cover the whole 1.4-second cycle.
+            if ((eu_pc < disp_last || eu_pc > disp_last + 20'd8)
+                && eu_pc != disp_rec) begin
+                disp_pc[disp_w[5:0]] <= eu_pc;
+                disp_op[disp_w[5:0]] <= urom[7:0];
+                disp_w   <= disp_w + 1;
+                disp_rec <= eu_pc;
+                // Straight out, in order, rather than into a ring. Two turns
+                // of the 1.4-second cycle fit in a few thousand lines, and
+                // the edge that closes the loop is whichever branch appears
+                // in the second turn with a target the first turn reached
+                // from somewhere else.
+                if (disp_w < 4000)
+                    $display("    J%0d %05X op %02X", disp_w, eu_pc, urom[7:0]);
+            end
+            disp_last <= eu_pc;
+            if (eu_cs == 16'hE800) basic_trace <= 1'b1;
+            // The ITF cycles back to its own ROM checksum about every 1.4
+            // seconds. Nothing in the image jumps there -- the early ITF has
+            // no stack and returns through JMP BP / JMP SP -- so the only way
+            // to see who sends it back is to catch the arrival.
+            // The ITF's memory sizing, at the two points where it has just
+            // verified a 64 KB pair: BX is the segment it tested, DH the
+            // running block count, and CF says whether the compare held. The
+            // count stops at 2 -- 128 KB -- and nothing above 1FFFF is ever
+            // written, so either the fill never ran or the compare that
+            // follows it is not doing what the ROM thinks.
+            // The size display itself: DX is the answer it is about to print
+            // (AH x 64 KB), and the branches that reach here name whoever
+            // decided it -- the 640 KB counting loop at F8AF0 never runs, so
+            // something else is setting DH.
+            if (eu_pc == 20'hF9678 && itf_ck_n < 2) begin
+                itf_ck_n <= itf_ck_n + 1;
+                $display("  %8t  SIZE DISPLAY  dx %04X  bx %04X", $time,
+                         u_cpu.EU_CORE.eu_register_dx, u_cpu.EU_CORE.eu_register_bx);
+                for (m = 0; m < 48; m = m + 1)
+                    $display("        %05X  op %02X",
+                             disp_pc[(disp_w + 64 - 48 + m) % 64],
+                             disp_op[(disp_w + 64 - 48 + m) % 64]);
+            end
+            if (eu_pc == 20'hF8880 || eu_pc == 20'hF8B1E
+             || eu_pc == 20'hF889A || eu_pc == 20'hF8B38) begin
+                $display("  %8t  MEMSIZE at %05X  bx %04X dx %04X ax %04X  CF=%0d",
+                         $time, eu_pc,
+                         u_cpu.EU_CORE.eu_register_bx, u_cpu.EU_CORE.eu_register_dx,
+                         u_cpu.EU_CORE.eu_register_ax, u_cpu.EU_CORE.eu_flags[0]);
+            end
+            if (1'b0 && eu_pc == 20'hF8427) begin
+                itf_ck_n <= itf_ck_n + 1;
+                $display("  %8t  ITF cycle mark at F8427 (visit %0d)", $time, itf_ck_n);
+                for (m = 0; m < 48; m = m + 1)
+                    $display("        %05X  op %02X",
+                             disp_pc[(disp_w + 64 - 48 + m) % 64],
+                             disp_op[(disp_w + 64 - 48 + m) % 64]);
+            end
+            if (basic_trace && basic_n < 600) begin
+                basic_n <= basic_n + 1;
+                $display("    B%0d  %05X  op %02X  ax %04X bx %04X cx %04X dx %04X si %04X di %04X",
+                         basic_n, eu_pc, urom[7:0],
+                         u_cpu.EU_CORE.eu_register_ax, u_cpu.EU_CORE.eu_register_bx,
+                         u_cpu.EU_CORE.eu_register_cx, u_cpu.EU_CORE.eu_register_dx,
+                         u_cpu.EU_CORE.eu_register_si, u_cpu.EU_CORE.eu_register_di);
+            end
         end
     end
 
@@ -811,7 +934,7 @@ module tb_pc98_boot;
     end
 
     // ---- run ---------------------------------------------------------------
-    int i;
+    int i, j;
     initial begin
         for (i = 0; i < 1048576; i = i + 1) ram[i] = 8'h00;
         $readmemh("itf.hex",  itf);
@@ -839,6 +962,13 @@ module tb_pc98_boot;
             $display("  ... %0t  EU %05X  urom %04X  wr %05X-%05X n %0d  tvw %0d",
                      $time, eu_pc, urom,
                      wr_lo_chunk, wr_hi_chunk, wr_n_chunk, tvram_wr_count);
+            $write("        cx %04X min %04X  ax %04X bx %04X dx %04X  pc:",
+                   eu_cx, cx_min_chunk,
+                   u_cpu.EU_CORE.eu_register_ax, u_cpu.EU_CORE.eu_register_bx,
+                   u_cpu.EU_CORE.eu_register_dx);
+            for (j = 0; j < 16; j = j + 1)
+                $write(" %05X", pc_ring[(pc_ring_w + j) % 16]);
+            $display("");
             wr_clear_tog = ~wr_clear_tog;
         end
 

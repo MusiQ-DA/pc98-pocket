@@ -2058,6 +2058,25 @@ module core_top (
     assign  port_c_in[3:0] = port_b_out[3] ? sw[7:4] : sw[3:0];
 
 `ifdef MACHINE_PC98
+    // 8255 port B is 0x0033, and on a PC-98 it is an INPUT: bit 3 is a DIP
+    // switch inverted, bits 7-5 are the RS-232C modem status, bit 0 is the
+    // calendar clock's data line, and everything else reads zero (np2
+    // io/sysport.c, sysp_i33 -- behaviour reference, not code).
+    //
+    // It was wired to port_b_out, a PC/AT leftover where port B is an output
+    // and reading it back is harmless. Here it is not: the UX ITF reads 0x33
+    // at F889C and tests bit 2, and a set bit 2 means PARITY ERROR -- which is
+    // what it printed. Whatever the BIOS last wrote to port B decided whether
+    // this machine believed its own memory was faulty.
+    //
+    // No serial and no clock chip yet, so the modem bits and the clock bit are
+    // zero; bit 3 follows the display DIP the way the reference does.
+    wire [7:0] pc98_port_b_in = {3'b000, 1'b0, ~sw[0], 3'b000};
+`else
+    wire [7:0] pc98_port_b_in = port_b_out;
+`endif
+
+`ifdef MACHINE_PC98
     // ---------------------------------------------------------------- ITF bank
     //
     // F8000-FFFFF is 32 KB of ROM that is the ITF at power-on and the system
@@ -2238,7 +2257,7 @@ module core_top (
     //  .terminal_count_n                   (terminal_count_n)
         .port_b_out                         (port_b_out),
         .port_c_in                          (port_c_in),
-        .port_b_in                          (port_b_out),
+        .port_b_in                          (pc98_port_b_in),
         .speaker_out                        (speaker_out),
         .kb_byte                            (kb_byte),
         .kb_valid                           (kb_valid),

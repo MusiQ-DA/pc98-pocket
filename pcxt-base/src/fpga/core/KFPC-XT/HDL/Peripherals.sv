@@ -373,201 +373,28 @@ module PERIPHERALS #(
     //   anything else    treated as 1 in, 2 results, so an unexpected
     //                     command still hands the BIOS an answer instead of
     //                     a status port that never reaches the result phase
-    wire fdc_base_select = pc98_io_exact
-                         & ((address[7:2] == 6'h24) | (address[7:2] == 6'h32));
-    wire fdc_msr_select  = fdc_base_select & ~address[1];
-    wire fdc_fifo_select = fdc_base_select &  address[1];
+    // The floppy controller, shared with sim/tb_pc98_boot.sv rather than
+    // copied into it -- see pc98_fdc.sv for why that stopped being optional.
+    wire       fdc_base_select, fdc_msr_select, fdc_fifo_select;
+    wire [7:0] fdc_msr, fdc_fifo;
+    wire       fdc_irq3, fdc_irq2;
 
-    logic [7:0] fdc_cmd;
-    logic [3:0] fdc_writes_left;
-    logic [3:0] fdc_results_left;
-    logic [3:0] fdc_result_idx;
-    logic [7:0] fdc_result0, fdc_result1;
-    logic       fdc_in_result;
-    logic       fdc_cmd_done;     // high for one clock when a command completes
-    logic       fdc_irq3;
-
-    // One event per ACCESS, not one per clock.
-    //
-    // fdc_fifo_select is a LEVEL: iorq is asserted for the whole bus cycle,
-    // which at 42.95 MHz against a 4.77 MHz CPU is around eighteen chipset
-    // clocks. The state machine below consumes a byte every clock it sees the
-    // select, so one command byte was consumed eighteen times -- writes_left
-    // counted through zero and wrapped to fifteen, cmd_done fired on a command
-    // the BIOS had not finished writing, and the model parked in the result
-    // phase. MSR then reads C0 for good, and the BIOS sits at FFA26 waiting
-    // for 80: the FFA26-FFA2D range the hardware readout came back with.
-    //
-    // Every other device in this file already takes the prev_io_*_n edges for
-    // exactly this reason; the FDC was the one that did not. The address hit
-    // is computed without iorq because the strobe has already gone by at the
-    // edge being used, and the write byte is latched while the cycle is live
-    // -- the bus moves on before the edge, which is the same reason the
-    // memory-write path here samples continuously and keeps the last value.
-    logic       fdc_prev_wr_n, fdc_prev_rd_n;
-    logic [7:0] fdc_wr_data;
-    wire fdc_addr_hit  = ~address_enable_n & (address[15:8] == 8'h00)
-                       & ((address[7:2] == 6'h24) | (address[7:2] == 6'h32));
-    wire fdc_fifo_addr = fdc_addr_hit & address[1];
-    wire fdc_wr_pulse  = fdc_fifo_addr & io_write_n & ~fdc_prev_wr_n;
-    wire fdc_rd_pulse  = fdc_fifo_addr & io_read_n & ~fdc_prev_rd_n;
-
-    // SENSE INTERRUPT's answer, honestly shaped.
-    //
-    // The bench read one result byte and stopped, and the model sat on the
-    // second one for ever. That is the BIOS behaving correctly: this returned
-    // ST0 = 80, and 80 is IC = "invalid command / no interrupt pending", the
-    // one case where a uPD765 hands back ONE byte instead of two. The BIOS
-    // took its byte and left; the model still wanted to give another.
-    //
-    // So say what actually happened. A RECALIBRATE or SEEK here finds no
-    // drive, which is a real, describable outcome: IC = abnormal termination,
-    // SE (seek end) and EC (equipment check) both set, unit in the low two
-    // bits -- 70 | unit -- followed by PCN 0. That is two bytes, and the BIOS
-    // reads two. With no interrupt pending it is 80 and one byte, as before.
-    logic [1:0] fdc_unit;
-    logic       fdc_int_pending;
-
-    // Command shape: bytes still to write after the first, and results.
-    //
-    // Of the byte ARRIVING, not of fdc_cmd. fdc_cmd still holds the PREVIOUS
-    // command at the moment the counts are loaded -- it is assigned in the
-    // same non-blocking block -- so every command was set up with its
-    // predecessor's byte count, and the model desynchronised on the second
-    // command it ever saw.
-    //
-    // What that looks like from the BIOS: SENSE INTERRUPT (0x08, no parameter
-    // bytes, two results) is followed by SPECIFY (0x03, two parameter bytes,
-    // no results). SPECIFY loaded 0x08's shape -- zero writes, two results --
-    // so the model declared itself finished on the command byte alone and
-    // went into the result phase. MSR then reads C0 (RQM with DIO set: "read
-    // me"), and the BIOS, waiting at FFA26 for MSR & C0 == 80 before it may
-    // write a parameter, spins out its whole CX -- 65536 reads, most of a
-    // second -- and gives up. Every FDC command after the first cost a full
-    // timeout, which is the "IN from 0090 x65538, IN from 00c8 x45172" in the
-    // bench trace and the frozen I/O write count on the hardware.
-    function automatic logic [7:0] fdc_shape(input logic [7:0] c);
-        case (c)
-        8'h03: fdc_shape = {4'd2, 4'd0};
-        8'h04: fdc_shape = {4'd1, 4'd1};
-        8'h07: fdc_shape = {4'd1, 4'd0};
-        8'h08: fdc_shape = {4'd0, 4'd2};
-        8'h0F: fdc_shape = {4'd2, 4'd0};
-        8'h0A, 8'h4A: fdc_shape = {4'd1, 4'd7};
-        8'h05, 8'h06, 8'h45, 8'h46, 8'h65, 8'h66, 8'hE5, 8'hE6:
-               fdc_shape = {4'd8, 4'd7};
-        8'h4D, 8'hCD: fdc_shape = {4'd5, 4'd7};
-        default: fdc_shape = {4'd0, 4'd2};
-        endcase
-    endfunction
-    // Sliced off a wire, not off the call: indexing a function's
-    // result directly is a syntax error to both Verilator and Quartus.
-    wire [7:0] fdc_shape_now   = fdc_shape(fdc_wr_data);
-    wire [3:0] fdc_new_writes  = fdc_shape_now[7:4];
-    wire [3:0] fdc_new_results = fdc_shape_now[3:0];
-
-    always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
-            fdc_cmd         <= 8'h00;
-            fdc_writes_left <= 4'd0;
-            fdc_results_left<= 4'd0;
-            fdc_result_idx  <= 4'd0;
-            fdc_result0     <= 8'h00;
-            fdc_result1     <= 8'h00;
-            fdc_in_result   <= 1'b0;
-            fdc_cmd_done    <= 1'b0;
-            fdc_irq3        <= 1'b0;
-            fdc_unit        <= 2'd0;
-            fdc_int_pending <= 1'b0;
-            fdc_prev_wr_n   <= 1'b1;
-            fdc_prev_rd_n   <= 1'b1;
-            fdc_wr_data     <= 8'h00;
-        end else begin
-            fdc_prev_wr_n <= io_write_n;
-            fdc_prev_rd_n <= io_read_n;
-            // The byte, sampled while the cycle is live: at the trailing
-            // edge the bus has already moved on.
-            if (fdc_fifo_select & ~io_write_n) fdc_wr_data <= internal_data_bus;
-            fdc_cmd_done <= 1'b0;
-            if (fdc_wr_pulse) begin
-                if (fdc_writes_left == 4'd0) begin
-                    // First byte: it IS the command.
-                    fdc_cmd        <= fdc_wr_data;
-                    fdc_result_idx <= 4'd0;
-                    case (fdc_wr_data)
-                        8'h04: fdc_result0 <= 8'h00;
-                        8'h08: begin
-                            fdc_result0     <= fdc_int_pending ? {2'b01, 2'b11, 2'b00, fdc_unit}
-                                                               : 8'h80;
-                            fdc_result1     <= 8'h00;
-                            fdc_int_pending <= 1'b0;
-                        end
-                        default: begin fdc_result0 <= 8'h80; fdc_result1 <= 8'h00; end
-                    endcase
-                    fdc_writes_left  <= fdc_new_writes;
-                    fdc_results_left <= (fdc_wr_data == 8'h08)
-                                      ? (fdc_int_pending ? 4'd2 : 4'd1)
-                                      : fdc_new_results;
-                    if (fdc_new_writes == 4'd0)
-                        fdc_cmd_done <= 1'b1;      // single-byte command
-                end else begin
-                    fdc_writes_left <= fdc_writes_left - 4'd1;
-                // The unit is the first parameter of RECALIBRATE and
-                // SEEK, and it is what ST0 has to name afterwards.
-                if ((fdc_cmd == 8'h07 && fdc_writes_left == 4'd1)
-                 || (fdc_cmd == 8'h0F && fdc_writes_left == 4'd2))
-                    fdc_unit <= fdc_wr_data[1:0];
-                    if (fdc_writes_left == 4'd1)
-                        fdc_cmd_done <= 1'b1;      // that was the last byte
-                end
-            end else begin
-                // Reading results hands them out one by one; the last one
-                // returns the chip to idle.
-                if (fdc_rd_pulse && fdc_in_result) begin
-                    fdc_result_idx <= fdc_result_idx + 4'd1;
-                    if (fdc_result_idx + 4'd1 >= fdc_results_left) begin
-                        fdc_in_result    <= 1'b0;
-                        fdc_results_left <= 4'd0;
-                    end
-                end
-            end
-            if (fdc_cmd_done) begin
-                if (fdc_results_left != 4'd0)
-                    fdc_in_result <= 1'b1;
-                else if (fdc_cmd == 8'h07 || fdc_cmd == 8'h0F)
-                    begin
-                    fdc_irq3        <= 1'b1;   // no drive: the seek ends at once
-                    fdc_int_pending <= 1'b1;
-                end
-            end
-            if (fdc_irq3)
-                fdc_irq3 <= 1'b0;
-        end
-    end
-    // MSR, with the busy bit the BIOS actually tests.
-    //
-    // FFC16 is the BIOS's result-phase wait:
-    //
-    //     in al,dx / and al,D0 / cmp al,D0 / loopne FFC16
-    //
-    // RQM and DIO are not enough -- it wants bit 4, CB, the chip's "a command
-    // is in progress" flag, which on a uPD765 is set from the first command
-    // byte until the last result byte has been read. This model answered C0 in
-    // the result phase, CB clear, so the BIOS could never take the two bytes
-    // that SENSE INTERRUPT (08) had waiting, the model stayed in the result
-    // phase, and the next command's wait at FFA26 -- MSR & C0 == 80 -- spun
-    // out its whole CX. That is the FA26-FA2D the hardware readout named.
-    //
-    // The other two waits agree with modelling CB properly: FFC00 wants
-    // D0 == 80, CB CLEAR, before the first command byte, and FFA26 masks CB
-    // off entirely for the parameter bytes that follow.
-    wire fdc_busy = fdc_in_result | (fdc_writes_left != 4'd0);
-    wire [7:0] fdc_msr = fdc_in_result ? 8'hD0     // RQM + DIO + CB: read me
-                       : fdc_busy      ? 8'h90     // RQM + CB: next parameter
-                       :                 8'h80;    // RQM: idle, send a command
-    wire [7:0] fdc_fifo = (fdc_result_idx == 4'd0) ? fdc_result0
-                        : (fdc_result_idx == 4'd1) ? fdc_result1
-                        :                            8'h00;
+    pc98_fdc u_pc98_fdc (
+        .clock            (clock),
+        .reset            (reset),
+        .address          (address[15:0]),
+        .address_enable_n (address_enable_n),
+        .io_read_n        (io_read_n),
+        .io_write_n       (io_write_n),
+        .data_in          (internal_data_bus),
+        .base_select      (fdc_base_select),
+        .msr_select       (fdc_msr_select),
+        .fifo_select      (fdc_fifo_select),
+        .msr              (fdc_msr),
+        .fifo             (fdc_fifo),
+        .irq_int          (fdc_irq3),
+        .irq_2dd          (fdc_irq2)
+    );
 
     wire fdd_stub_read = (fdd_be_select | fdd_90_select | fdd_94_select
                           | fdd_cc_select | fdc_base_select) & ~io_read_n;
@@ -795,7 +622,8 @@ module PERIPHERALS #(
         .interrupt_to_cpu           (interrupt2_to_cpu),
         // IRQ3 is the FDC's own interrupt (RECALIBRATE finding no drive);
         // IRQ2 is the XTMASK pulse the 100 ms 0xCC timer fires.
-        .interrupt_request          ({4'b0, fdc_irq3, fdd_cc_irq, 2'b0})
+        .interrupt_request          ({4'b0, fdc_irq3,
+                                     fdd_cc_irq | fdc_irq2, 2'b0})
     );
 `endif
 
@@ -1686,10 +1514,42 @@ end
     //
     // 0x42 is the printer side of 0x40-0x4F; the ITF trace has it tested for
     // bit 1 clear. Zero satisfies that and claims nothing else.
+    // 0x31 is DIP switch 2, and bit 4 tells the ITF to initialise the memory
+    // switch: the twenty bytes at A3FE0 that hold the machine's configuration,
+    // A3FEA among them, whose low three bits are how many 128 KB units of RAM
+    // to count -- 0 for 128 KB, 4 for 640 KB.
+    //
+    // On a real PC-98 that area is battery-backed text VRAM and survives a
+    // power cycle, so the ITF only rewrites it when the switch asks. Here it
+    // is ordinary VRAM and comes up cleared every time, so the answer is
+    // always "please initialise": bit 4 set. With it clear, the ITF skipped
+    // the whole block, read A3FEA as zero, and counted 128 KB -- which is
+    // exactly what MEMORY 128KB OK was reporting on a 640 KB machine.
+    wire sysport_31_select = pc98_io_exact & (address[7:0] == 8'h31);
     wire sysport_35_select = pc98_io_exact & (address[7:0] == 8'h35);
     wire sysport_42_select = pc98_io_exact & (address[7:0] == 8'h42);
-    wire sysport_read      = (sysport_35_select | sysport_42_select) & ~io_read_n;
-    wire [7:0] sysport_data = sysport_35_select ? 8'hA0 : 8'h00;
+    wire sysport_read      = (sysport_31_select | sysport_35_select
+                            | sysport_42_select) & ~io_read_n;
+    // 0x42 bit 1: this machine has no protected mode.
+    //
+    // The UX ITF tests it at F8B95 and, with the bit CLEAR, walks into
+    //
+    //     F8BBC  lidt [es:bp+0]
+    //     F8BC4  lgdt [es:bp+0]
+    //
+    // to size memory above 1 MB. Those are 286 instructions, and on an 8086
+    // 0F is POP CS -- so the machine popped a word off the stack into CS and
+    // left the ROM. That is the CS f800 -> 0000 jump that ended every run
+    // right after MEMORY 640KB OK was printed.
+    //
+    // With the bit SET the ITF branches to F8FA2 and skips the whole
+    // protected-mode block, which is the truth about this CPU rather than a
+    // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
+    // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
+    wire [7:0] sysport_data = sysport_35_select ? 8'hA0
+                            : sysport_31_select ? 8'h10
+                            : sysport_42_select ? 8'h02
+                            :                     8'h00;
 
     wire [7:0] pc98_font_row;      // driven by the row buffer below
     wire [6:0] pc98_font_cell;
