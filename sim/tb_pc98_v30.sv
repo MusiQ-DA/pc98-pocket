@@ -222,7 +222,7 @@ module tb_pc98_v30;
                : pic1_iocycle ? pic1_dout
                : pic2_iocycle ? pic2_dout
                : kbd_data_iocycle ? 8'h60
-               : kbd_stat_iocycle ? 8'h02
+               : kbd_stat_iocycle ? kbd_status
                : gdc_stat_iocycle ? gdc_status_mock
                : cc_ioread   ? (cc_latch | 8'h30)
                : fdc_msr_sel ? fdc_msr
@@ -381,6 +381,14 @@ module tb_pc98_v30;
             // in a whole boot, and the one that clobbers it names itself here.
             if (a >= 20'h003F0 && a <= 20'h0040F)
                 $display("  %8t  SAVE[%04X] <= %02X   (eu_pc %05X)",
+                         $time, a[15:0], d, eu_pc);
+            // The vector slots around the boot decision: INT 1E (disk boot)
+            // and INT 1F (ROM BASIC) live at 0078/007C. The run of
+            // 2026-09-12 vectored the BASIC entry to D800:0A05 instead of
+            // E800:0A07, so who writes these four bytes and with what is now
+            // a named question.
+            if (a >= 20'h0070 && a <= 20'h0083)
+                $display("  %8t  IVT[%04X] <= %02X   (eu_pc %05X)",
                          $time, a[15:0], d, eu_pc);
             // The text plane: the memory-count display lands here. Keep the
             // first row of cells (code + attribute) for the final dump.
@@ -738,6 +746,14 @@ module tb_pc98_v30;
         eu_cs_d <= eu_cs;
         if (eu_cs != eu_cs_d) begin
             $display("  %8t  CS %04X -> %04X  (pc %05X)", $time, eu_cs_d, eu_cs, eu_pc);
+            $display("        IVT 60: %02X %02X %02X %02X  70: %02X %02X %02X %02X  78: %02X %02X %02X %02X  80: %02X %02X %02X %02X",
+                     ram[20'h0060], ram[20'h0061], ram[20'h0062], ram[20'h0063],
+                     ram[20'h0070], ram[20'h0071], ram[20'h0072], ram[20'h0073],
+                     ram[20'h0078], ram[20'h0079], ram[20'h007A], ram[20'h007B],
+                     ram[20'h007C], ram[20'h007D], ram[20'h007E], ram[20'h007F],
+                     ram[20'h0080], ram[20'h0081], ram[20'h0082], ram[20'h0083]);
+            $display("        IVT 84: %02X %02X %02X %02X",
+                     ram[20'h0084], ram[20'h0085], ram[20'h0086], ram[20'h0087]);
             // Every segment transfer in this boot is worth its full context:
             // there are five of them in ninety seconds, and one of them is the
             // machine leaving the ROM for good.
@@ -748,13 +764,31 @@ module tb_pc98_v30;
         end
     end
 
-    // ---- keyboard: none, like the hardware -----------------------------------
+    // ---- keyboard: the 8251 at 0x41/0x43, present, like the machine's --------
     //
-    // The BIOS copes: three polls of 0x43 (8251 status), then 0x41 answers
-    // nothing and it takes the absent path (FD9AD). The bench matches the
-    // machine; the old "present" stand-in took a branch it never takes.
-    wire kbd_stat_iocycle = 1'b0;
-    wire kbd_data_iocycle = 1'b0;
+    // The BIOS's FD930 block resets the keyboard and waits for its 0x60 ACK
+    // before it will set bit 7 of [0x0500] -- and without that bit the
+    // vector installer at FDB1E writes the no-keyboard defaults into INT
+    // 1E/1F: BASIC at D800:2A00, an option-ROM slot nothing occupies on this
+    // machine. Every run so far vectored there and derailed in empty RAM;
+    // the hardware does the same, because nothing answers 0x41/0x43 there
+    // either. A command write to 0x43 arms one 0x60; status bit 1 says a
+    // byte is waiting; reading 0x41 takes it.
+    logic       kbd_ack_armed = 1'b0;
+    logic       kbd_wr_d = 1'b1;
+    wire        kbd_wr = ~io_wr_n & ((cpu_address[15:0] == 16'h0043)
+                               | (cpu_address[15:0] == 16'h0073));  // the ITF drives 0x73
+    wire        kbd_rd = ~io_rd_n & (cpu_address[15:0] == 16'h0041);
+    wire [7:0]  kbd_status = kbd_ack_armed ? 8'h02 : 8'h00;
+
+    always_ff @(posedge clk_chipset) begin
+        kbd_wr_d <= kbd_wr;
+        if (kbd_wr & ~kbd_wr_d) kbd_ack_armed <= 1'b1;
+        if (kbd_rd)             kbd_ack_armed <= 1'b0;
+    end
+
+    wire kbd_stat_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0043);
+    wire kbd_data_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0041) & kbd_ack_armed;
 
     // ---- 2DD drive control (0xCC) and a minimal FDC --------------------------
     //
