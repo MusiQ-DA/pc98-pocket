@@ -182,8 +182,10 @@ void post_mon_tick(void)
     uint32_t status = *POST_STATUS;
     uint32_t maxrst = *POST_MAXRST;
     uint32_t live   = *POST_LIVE;
+    uint32_t tvram = *POST_TVRAM;
     static uint32_t last_maxrst = 0xFFFFFFFFu;
     static uint32_t last_live = 0xFFFFFFFFu;
+    static uint32_t last_tvram = 0xFFFFFFFFu;
     // LIVE is the point of this build: when the guest stops, it settles on
     // whatever the CPU is spinning in. Redraw whenever it moves.
     // Staleness is judged on the POST COUNT ALONE.
@@ -214,9 +216,11 @@ void post_mon_tick(void)
     *VKB_CTRL = 1u;
 
     if (status == last_status && maxrst == last_maxrst && live == last_live
+        && tvram == last_tvram
         && idle_ticks != 4000u) {
         return;                            // nothing worth redrawing
     }
+    last_tvram = tvram;
     last_status = status;
     last_maxrst = maxrst;
     last_live = live;
@@ -559,12 +563,14 @@ void post_mon_tick(void)
 #ifdef MACHINE_PC98
     // Did the BIOS ever write a character? The text plane is A0000-A3FFF;
     // the count is the answer to "why is the screen still just a cursor".
+    // Row 42 is where the PC/AT build shows its VEC line; on PC-98 it is
+    // free, and the first try at row 92 landed on top of RD0.
     {
         uint32_t tv = *POST_TVRAM;
-        osd_draw_string(&fb, 4, 92, "TVW", OSD_LABEL);
-        hex(4 + 4 * 8, 92, tv & 0xFFFFu, 4);
-        osd_draw_string(&fb, 4 + 13 * 8, 92, "AT", OSD_LABEL);
-        hex(4 + 16 * 8, 92, 0xA0000u | (tv >> 20), 5);
+        osd_draw_string(&fb, 4, 42, "TVW", OSD_LABEL);
+        hex(4 + 4 * 8, 42, tv & 0xFFFFu, 4);
+        osd_draw_string(&fb, 4 + 13 * 8, 42, "AT", OSD_LABEL);
+        hex(4 + 16 * 8, 42, 0xA0000u | (tv >> 20), 5);
     }
 #endif
 
