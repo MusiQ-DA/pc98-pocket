@@ -365,9 +365,17 @@ module KF8259_Control_Logic (
     // Operation control word 1
     //
     // IMR
+    // OCW1 (IMR). Reset masks everything; ICW1 CLEARS the mask -- that is
+    // the real 8259's behaviour, and without it a chip the BIOS only ever
+    // programs through its ICWs keeps every line masked forever. That is
+    // exactly what happened to the slave: IRR latched the drive timer's
+    // IRQ2, and INT never rose, so the BIOS waited on a flag that could
+    // never be set.
     always_ff @(posedge clock, posedge reset) begin
         if (reset)
             interrupt_mask <= 8'b11111111;
+        else if (write_initial_command_word_1 == 1'b1)
+            interrupt_mask <= 8'b00000000;
         else if ((write_operation_control_word_1_registers == 1'b1) && (enable_special_mask_mode == 1'b0))
             interrupt_mask <= internal_data_bus;
         else
