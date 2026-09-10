@@ -426,7 +426,28 @@ module PERIPHERALS #(
     // bits -- 70 | unit -- followed by PCN 0. That is two bytes, and the BIOS
     // reads two. With no interrupt pending it is 80 and one byte, as before.
     logic [1:0] fdc_unit;
-    logic       fdc_int_pending;
+    logic [3:0] fdc_seek_pend;
+
+    // A seek-end per unit, not one flag for all of them.
+    //
+    // The BIOS recalibrates units 0, 1, 2 and 3 back to back and then waits
+    // for all four bits of its drive map at 055E. Each RECALIBRATE ends with
+    // its own interrupt, and the handler drains them: SENSE INTERRUPT until
+    // the chip answers 80. The bench showed four commands producing exactly
+    // two senses -- one unit, then "nothing pending" -- because this kept a
+    // single pending flag and a single unit. Three of the four units were
+    // never reported, three of the four bits never got set, and the wait ran
+    // its full 65536 tries sixteen times over: eleven seconds for the 2HD
+    // probe and eleven more for the 2DD one.
+    //
+    // So keep a bit per unit and hand them back lowest first. ST0 is 20 | unit
+    // -- seek end, normal termination -- which is a drive that recalibrated to
+    // track 0. Whether it has a DISK in it is a question for the read that
+    // follows, not for the seek.
+    wire       fdc_any_pend  = |fdc_seek_pend;
+    wire [1:0] fdc_next_unit = fdc_seek_pend[0] ? 2'd0
+                             : fdc_seek_pend[1] ? 2'd1
+                             : fdc_seek_pend[2] ? 2'd2 : 2'd3;
 
     // Command shape: bytes still to write after the first, and results.
     //
@@ -478,7 +499,7 @@ module PERIPHERALS #(
             fdc_cmd_done    <= 1'b0;
             fdc_irq3        <= 1'b0;
             fdc_unit        <= 2'd0;
-            fdc_int_pending <= 1'b0;
+            fdc_seek_pend   <= 4'd0;
             fdc_prev_wr_n   <= 1'b1;
             fdc_prev_rd_n   <= 1'b1;
             fdc_wr_data     <= 8'h00;
@@ -497,16 +518,18 @@ module PERIPHERALS #(
                     case (fdc_wr_data)
                         8'h04: fdc_result0 <= 8'h00;
                         8'h08: begin
-                            fdc_result0     <= fdc_int_pending ? {2'b01, 2'b11, 2'b00, fdc_unit}
-                                                               : 8'h80;
-                            fdc_result1     <= 8'h00;
-                            fdc_int_pending <= 1'b0;
+                            // Lowest unit still owed a report, then PCN.
+                            fdc_result0 <= fdc_any_pend
+                                         ? {2'b00, 1'b1, 3'b000, fdc_next_unit}
+                                         : 8'h80;
+                            fdc_result1 <= 8'h00;
+                            if (fdc_any_pend) fdc_seek_pend[fdc_next_unit] <= 1'b0;
                         end
                         default: begin fdc_result0 <= 8'h80; fdc_result1 <= 8'h00; end
                     endcase
                     fdc_writes_left  <= fdc_new_writes;
                     fdc_results_left <= (fdc_wr_data == 8'h08)
-                                      ? (fdc_int_pending ? 4'd2 : 4'd1)
+                                      ? (fdc_any_pend ? 4'd2 : 4'd1)
                                       : fdc_new_results;
                     if (fdc_new_writes == 4'd0)
                         fdc_cmd_done <= 1'b1;      // single-byte command
@@ -537,7 +560,7 @@ module PERIPHERALS #(
                 else if (fdc_cmd == 8'h07 || fdc_cmd == 8'h0F)
                     begin
                     fdc_irq3        <= 1'b1;   // no drive: the seek ends at once
-                    fdc_int_pending <= 1'b1;
+                    fdc_seek_pend[fdc_unit] <= 1'b1;
                 end
             end
             if (fdc_irq3)

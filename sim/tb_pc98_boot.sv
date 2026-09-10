@@ -187,6 +187,41 @@ module tb_pc98_boot;
                          | (cpu_address[15:0] == 16'h00A0);
     logic gdc_poll_seen  = 1'b0;
 
+    // The last sixteen DISTINCT execution addresses.
+    //
+    // "eu_pc is in the FF72F wait" is not enough to tell one long loop from a
+    // caller that keeps re-entering it: both park most samples on the same
+    // eight bytes. The ring shows the whole cycle, and the addresses either
+    // side of the loop are the ones that say who is retrying it.
+    logic [19:0] pc_ring [0:15];
+    int          pc_ring_w = 0;
+    logic [19:0] pc_ring_d = 20'hFFFFF;
+    always_ff @(posedge clk_chipset) begin
+        // Only the DISCONTINUITIES. eu_pc is the prefetch queue's read
+        // pointer, so it walks a byte at a time and a ring of every value is
+        // sixteen bytes of one straight line. A jump is what says where the
+        // control flow went, so keep the targets and drop the walking.
+        if (eu_pc != pc_ring_d) begin
+            pc_ring_d <= eu_pc;
+            if (eu_pc < pc_ring_d || eu_pc > pc_ring_d + 20'd4) begin
+                pc_ring[pc_ring_w[3:0]] <= eu_pc;
+                pc_ring_w <= pc_ring_w + 1;
+            end
+        end
+    end
+
+    // CX, at its lowest in the chunk.
+    //
+    // The wait at FF72F is LOOPNE with CX zeroed on entry, so it has 65536
+    // tries -- about 0.4 seconds -- and then it MUST fall through. It does
+    // not, on the hardware or here, and the execution range says the loop is
+    // never left at all. Either the count is not counting or something is
+    // putting it back. One number decides it: if the low-water mark of CX
+    // walks down to zero the loop is completing and being re-entered; if it
+    // never gets near zero, CX is being reset under the loop's feet.
+    wire [15:0] eu_cx = u_cpu.EU_CORE.eu_register_cx;
+    logic [15:0] cx_min_chunk = 16'hFFFF;
+
     // Reset by the progress loop after every chunk it prints -- through a
     // toggle rather than by assigning them there, because a variable written
     // both blocking and non-blocking is one Verilator gets to reorder.
@@ -197,10 +232,12 @@ module tb_pc98_boot;
     always_ff @(posedge clk_chipset) begin
         wr_clear_d <= wr_clear_tog;
         if (wr_clear_tog != wr_clear_d) begin
-            wr_lo_chunk <= 20'hFFFFF;
-            wr_hi_chunk <= 20'h00000;
-            wr_n_chunk  <= 0;
-        end
+            wr_lo_chunk  <= 20'hFFFFF;
+            wr_hi_chunk  <= 20'h00000;
+            wr_n_chunk   <= 0;
+            cx_min_chunk <= 16'hFFFF;
+        end else if (eu_cx < cx_min_chunk)
+            cx_min_chunk <= eu_cx;
 
         io_wr_d  <= io_wr_n;
         mem_wr_d <= mem_wr_n;
@@ -238,9 +275,18 @@ module tb_pc98_boot;
                 else if (cpu_address >= 20'hA2000 && cpu_address < 20'hA2200)
                     tvram_attr[cpu_address[8:0]]  <= mem_wr_data_q;
                 tvram_wr_count <= tvram_wr_count + 1;
-                if (tvram_wr_count < 40)
-                    $display("  %8t  TVRAM[%04X] <= %02X   (eu_pc %05X)",
-                             $time, cpu_address[15:0], mem_wr_data_q, eu_pc);
+                // The first forty writes (the clear, and what shape it has),
+                // and after that every PRINTABLE byte into the code plane --
+                // which is the memory count, if the BIOS ever writes one. The
+                // clear itself is 20487 writes of 00 and E1 and says nothing.
+                if (tvram_wr_count < 40
+                 || (cpu_address < 20'hA2000
+                     && mem_wr_data_q >= 8'h20 && mem_wr_data_q < 8'h7F))
+                    $display("  %8t  TVRAM[%04X] <= %02X %s  (eu_pc %05X)",
+                             $time, cpu_address[15:0], mem_wr_data_q,
+                             (mem_wr_data_q >= 8'h20 && mem_wr_data_q < 8'h7F)
+                                 ? string'({"'", mem_wr_data_q, "'"}) : "   ",
+                             eu_pc);
             end
         end
 
@@ -574,7 +620,28 @@ module tb_pc98_boot;
     // bits -- 70 | unit -- followed by PCN 0. That is two bytes, and the BIOS
     // reads two. With no interrupt pending it is 80 and one byte, as before.
     logic [1:0] fdc_unit = 2'd0;
-    logic       fdc_int_pending = 1'b0;
+    logic [3:0] fdc_seek_pend = 4'd0;
+
+    // A seek-end per unit, not one flag for all of them.
+    //
+    // The BIOS recalibrates units 0, 1, 2 and 3 back to back and then waits
+    // for all four bits of its drive map at 055E. Each RECALIBRATE ends with
+    // its own interrupt, and the handler drains them: SENSE INTERRUPT until
+    // the chip answers 80. The bench showed four commands producing exactly
+    // two senses -- one unit, then "nothing pending" -- because this kept a
+    // single pending flag and a single unit. Three of the four units were
+    // never reported, three of the four bits never got set, and the wait ran
+    // its full 65536 tries sixteen times over: eleven seconds for the 2HD
+    // probe and eleven more for the 2DD one.
+    //
+    // So keep a bit per unit and hand them back lowest first. ST0 is 20 | unit
+    // -- seek end, normal termination -- which is a drive that recalibrated to
+    // track 0. Whether it has a DISK in it is a question for the read that
+    // follows, not for the seek.
+    wire       fdc_any_pend  = |fdc_seek_pend;
+    wire [1:0] fdc_next_unit = fdc_seek_pend[0] ? 2'd0
+                             : fdc_seek_pend[1] ? 2'd1
+                             : fdc_seek_pend[2] ? 2'd2 : 2'd3;
 
     // Command shape: bytes still to write after the first, and results.
     // Of the byte ARRIVING -- see the same fix in Peripherals.sv for what
@@ -611,16 +678,18 @@ module tb_pc98_boot;
                 case (fdc_wr_data)
                     8'h04: fdc_result0 <= 8'h00;
                     8'h08: begin
-                        fdc_result0     <= fdc_int_pending ? {2'b01, 2'b11, 2'b00, fdc_unit}
-                                                           : 8'h80;
-                        fdc_result1     <= 8'h00;
-                        fdc_int_pending <= 1'b0;
+                        // Lowest unit still owed a report, then PCN.
+                        fdc_result0 <= fdc_any_pend
+                                     ? {2'b00, 1'b1, 3'b000, fdc_next_unit}
+                                     : 8'h80;
+                        fdc_result1 <= 8'h00;
+                        if (fdc_any_pend) fdc_seek_pend[fdc_next_unit] <= 1'b0;
                     end
                     default: begin fdc_result0 <= 8'h80; fdc_result1 <= 8'h00; end
                 endcase
                 fdc_writes_left  <= fdc_new_writes;
                 fdc_results_left <= (fdc_wr_data == 8'h08)
-                                  ? (fdc_int_pending ? 4'd2 : 4'd1)
+                                  ? (fdc_any_pend ? 4'd2 : 4'd1)
                                   : fdc_new_results;
                 if (fdc_new_writes == 4'd0) fdc_cmd_done <= 1'b1;
             end else begin
@@ -643,7 +712,7 @@ module tb_pc98_boot;
             if (fdc_results_left != 4'd0) fdc_in_result <= 1'b1;
             else if (fdc_cmd == 8'h07 || fdc_cmd == 8'h0F) begin
                 fdc_irq3        <= 1'b1;   // no drive: the seek ends at once
-                fdc_int_pending <= 1'b1;
+                fdc_seek_pend[fdc_unit] <= 1'b1;
             end
         end
         if (fdc_irq3) fdc_irq3 <= 1'b0;
@@ -811,7 +880,7 @@ module tb_pc98_boot;
     end
 
     // ---- run ---------------------------------------------------------------
-    int i;
+    int i, j;
     initial begin
         for (i = 0; i < 1048576; i = i + 1) ram[i] = 8'h00;
         $readmemh("itf.hex",  itf);
@@ -839,6 +908,13 @@ module tb_pc98_boot;
             $display("  ... %0t  EU %05X  urom %04X  wr %05X-%05X n %0d  tvw %0d",
                      $time, eu_pc, urom,
                      wr_lo_chunk, wr_hi_chunk, wr_n_chunk, tvram_wr_count);
+            $write("        cx %04X min %04X  ax %04X bx %04X dx %04X  pc:",
+                   eu_cx, cx_min_chunk,
+                   u_cpu.EU_CORE.eu_register_ax, u_cpu.EU_CORE.eu_register_bx,
+                   u_cpu.EU_CORE.eu_register_dx);
+            for (j = 0; j < 16; j = j + 1)
+                $write(" %05X", pc_ring[(pc_ring_w + j) % 16]);
+            $display("");
             wr_clear_tog = ~wr_clear_tog;
         end
 
