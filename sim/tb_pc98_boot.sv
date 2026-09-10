@@ -560,6 +560,22 @@ module tb_pc98_boot;
     wire fdc_wr_pulse  = fdc_fifo_addr & io_wr_n & ~fdc_prev_wr_n;
     wire fdc_rd_pulse  = fdc_fifo_addr & io_rd_n & ~fdc_prev_rd_n;
 
+    // SENSE INTERRUPT's answer, honestly shaped.
+    //
+    // The bench read one result byte and stopped, and the model sat on the
+    // second one for ever. That is the BIOS behaving correctly: this returned
+    // ST0 = 80, and 80 is IC = "invalid command / no interrupt pending", the
+    // one case where a uPD765 hands back ONE byte instead of two. The BIOS
+    // took its byte and left; the model still wanted to give another.
+    //
+    // So say what actually happened. A RECALIBRATE or SEEK here finds no
+    // drive, which is a real, describable outcome: IC = abnormal termination,
+    // SE (seek end) and EC (equipment check) both set, unit in the low two
+    // bits -- 70 | unit -- followed by PCN 0. That is two bytes, and the BIOS
+    // reads two. With no interrupt pending it is 80 and one byte, as before.
+    logic [1:0] fdc_unit = 2'd0;
+    logic       fdc_int_pending = 1'b0;
+
     // Command shape: bytes still to write after the first, and results.
     // Of the byte ARRIVING -- see the same fix in Peripherals.sv for what
     // reading it off fdc_cmd (still the PREVIOUS command here) did.
@@ -592,13 +608,28 @@ module tb_pc98_boot;
             if (fdc_writes_left == 4'd0) begin
                 fdc_cmd        <= fdc_wr_data;
                 fdc_result_idx <= 4'd0;
-                if (fdc_wr_data == 8'h04) fdc_result0 <= 8'h00;
-                else begin fdc_result0 <= 8'h80; fdc_result1 <= 8'h00; end
+                case (fdc_wr_data)
+                    8'h04: fdc_result0 <= 8'h00;
+                    8'h08: begin
+                        fdc_result0     <= fdc_int_pending ? {2'b01, 2'b11, 2'b00, fdc_unit}
+                                                           : 8'h80;
+                        fdc_result1     <= 8'h00;
+                        fdc_int_pending <= 1'b0;
+                    end
+                    default: begin fdc_result0 <= 8'h80; fdc_result1 <= 8'h00; end
+                endcase
                 fdc_writes_left  <= fdc_new_writes;
-                fdc_results_left <= fdc_new_results;
+                fdc_results_left <= (fdc_wr_data == 8'h08)
+                                  ? (fdc_int_pending ? 4'd2 : 4'd1)
+                                  : fdc_new_results;
                 if (fdc_new_writes == 4'd0) fdc_cmd_done <= 1'b1;
             end else begin
                 fdc_writes_left <= fdc_writes_left - 4'd1;
+                // The unit is the first parameter of RECALIBRATE and
+                // SEEK, and it is what ST0 has to name afterwards.
+                if ((fdc_cmd == 8'h07 && fdc_writes_left == 4'd1)
+                 || (fdc_cmd == 8'h0F && fdc_writes_left == 4'd2))
+                    fdc_unit <= fdc_wr_data[1:0];
                 if (fdc_writes_left == 4'd1) fdc_cmd_done <= 1'b1;
             end
         end else if (fdc_rd_pulse && fdc_in_result) begin
@@ -610,7 +641,10 @@ module tb_pc98_boot;
         end
         if (fdc_cmd_done) begin
             if (fdc_results_left != 4'd0) fdc_in_result <= 1'b1;
-            else if (fdc_cmd == 8'h07 || fdc_cmd == 8'h0F) fdc_irq3 <= 1'b1;
+            else if (fdc_cmd == 8'h07 || fdc_cmd == 8'h0F) begin
+                fdc_irq3        <= 1'b1;   // no drive: the seek ends at once
+                fdc_int_pending <= 1'b1;
+            end
         end
         if (fdc_irq3) fdc_irq3 <= 1'b0;
 
