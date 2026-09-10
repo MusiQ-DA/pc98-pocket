@@ -1530,8 +1530,25 @@ end
     wire sysport_42_select = pc98_io_exact & (address[7:0] == 8'h42);
     wire sysport_read      = (sysport_31_select | sysport_35_select
                             | sysport_42_select) & ~io_read_n;
+    // 0x42 bit 1: this machine has no protected mode.
+    //
+    // The UX ITF tests it at F8B95 and, with the bit CLEAR, walks into
+    //
+    //     F8BBC  lidt [es:bp+0]
+    //     F8BC4  lgdt [es:bp+0]
+    //
+    // to size memory above 1 MB. Those are 286 instructions, and on an 8086
+    // 0F is POP CS -- so the machine popped a word off the stack into CS and
+    // left the ROM. That is the CS f800 -> 0000 jump that ended every run
+    // right after MEMORY 640KB OK was printed.
+    //
+    // With the bit SET the ITF branches to F8FA2 and skips the whole
+    // protected-mode block, which is the truth about this CPU rather than a
+    // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
+    // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
     wire [7:0] sysport_data = sysport_35_select ? 8'hA0
                             : sysport_31_select ? 8'h10
+                            : sysport_42_select ? 8'h02
                             :                     8'h00;
 
     wire [7:0] pc98_font_row;      // driven by the row buffer below
