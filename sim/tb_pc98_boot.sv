@@ -135,7 +135,15 @@ module tb_pc98_boot;
 
     // core_top's reset value, now that the ITF turned out to be a 386 image:
     // the BIOS bank, booted directly the way np2 boots it.
+    // Power-on bank. Zero -- the BIOS -- is what the core does by default,
+    // because a previous session watched the ITF stall at F80388 waiting on
+    // the GDC's vertical retrace. That wait is answered now, so +itf=1 is
+    // here to ask the question again rather than assume the old answer.
     logic itf_bank = 1'b0;
+    initial begin
+        int v;
+        if ($value$plusargs("itf=%d", v)) itf_bank = (v != 0);
+    end
 
     function automatic logic is_rom(input logic [19:0] a);
         is_rom = (a >= 20'hE8000);
@@ -163,6 +171,7 @@ module tb_pc98_boot;
                   : cc_ioread       ? (cc_latch | 8'h30)
                   : fdc_msr_sel     ? fdc_msr
                   : fdc_fifo_sel    ? fdc_fifo
+                  : sysport_sel     ? sysport_data
                            : 8'hFF;
 
     // ---- I/O ---------------------------------------------------------------
@@ -174,6 +183,21 @@ module tb_pc98_boot;
     int          io_n = 0;
     logic        saw_043d = 1'b0;
     logic [7:0]  last_043d = 8'h00;
+
+    // 0x35 and 0x42, answered exactly as PERIPHERALS answers them.
+    //
+    // The default 8'hFF here is not neutral. The ITF reads 0x42 at F8117 and
+    // tests bit 1; with the bit set it writes 0B to 0x37 and 00 to 0xF0 -- the
+    // shutdown port -- and stops on JMP $ at F8129. So the bench's "nothing is
+    // modelled, answer FF" was ordering the machine to shut down, and the ITF
+    // was never given a chance to run at all.
+    //
+    // 0x35 is the 8255's port C: the BIOS's second instruction is
+    // IN AL,35h / TEST AL,80h / JNZ, and bits 7 and 5 have to read 1.
+    wire sysport_35_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0035);
+    wire sysport_42_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0042);
+    wire sysport_sel    = sysport_35_sel | sysport_42_sel;
+    wire [7:0] sysport_data = sysport_35_sel ? 8'hA0 : 8'h00;
 
     logic io_wr_d = 1'b1, mem_wr_d = 1'b1, mem_rd_d = 1'b1, io_rd_d = 1'b1;
     logic [7:0] mem_wr_data_q = 8'h00;

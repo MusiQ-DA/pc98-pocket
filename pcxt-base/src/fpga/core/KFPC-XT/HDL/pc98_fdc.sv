@@ -59,6 +59,22 @@ module pc98_fdc (
     // byte, so the seek that completes later still knows where it came from.
     wire cmd_is_2dd = (address[7:2] == 6'h32);
 
+    // Which commands END WITH AN INTERRUPT.
+    //
+    // On a uPD765 every command with an execution phase raises INT when that
+    // phase finishes, and the handler collects the result bytes. Only the
+    // three that answer immediately -- SPECIFY, SENSE DRIVE STATUS, SENSE
+    // INTERRUPT -- do not. Treating RECALIBRATE and SEEK as the only ones left
+    // READ ID sitting in the result phase with seven bytes nobody came for,
+    // CB set for good, and the BIOS at FFA1D waiting for CB to clear before it
+    // could send anything else.
+    function automatic logic cmd_ends_with_int(input logic [7:0] c);
+        case (c)
+            8'h03, 8'h04, 8'h08: cmd_ends_with_int = 1'b0;
+            default:             cmd_ends_with_int = 1'b1;
+        endcase
+    endfunction
+
     logic [7:0] fdc_cmd;
     logic [3:0] fdc_writes_left;
     logic [3:0] fdc_results_left;
@@ -71,6 +87,7 @@ module pc98_fdc (
     // issuing the seek and clearing its flags.
     localparam int SEEK_CLOCKS = 172_000;
     logic [17:0] seek_timer;
+    logic        fdc_want_unit;
     // Which interface the command in flight was written to. They are driven
     // one at a time through POST, so one latch is enough to route the answer.
     logic        seek_is_2dd;
@@ -191,6 +208,7 @@ module pc98_fdc (
             fdc_unit        <= 2'd0;
             fdc_seek_pend   <= 4'd0;
             seek_timer      <= 18'd0;
+            fdc_want_unit   <= 1'b0;
             fdc_prev_wr_n   <= 1'b1;
             fdc_prev_rd_n   <= 1'b1;
             fdc_wr_data     <= 8'h00;
@@ -218,6 +236,7 @@ module pc98_fdc (
                         end
                         default: begin fdc_result0 <= 8'h80; fdc_result1 <= 8'h00; end
                     endcase
+                    fdc_want_unit    <= (fdc_new_writes != 4'd0);
                     fdc_writes_left  <= fdc_new_writes;
                     fdc_results_left <= (fdc_wr_data == 8'h08)
                                       ? (fdc_any_pend ? 4'd2 : 4'd1)
@@ -248,7 +267,20 @@ module pc98_fdc (
             if (fdc_cmd_done) begin
                 if (fdc_results_left != 4'd0)
                     fdc_in_result <= 1'b1;
-                else if (fdc_cmd == 8'h07 || fdc_cmd == 8'h0F) begin
+                // An execution phase that found no disk: abnormal termination,
+                // and ST1 says why -- no address mark, which is what an empty
+                // drive gives. The unit comes from the parameter, so ST0 names
+                // the drive the BIOS asked about.
+                if (cmd_ends_with_int(fdc_cmd) && fdc_cmd != 8'h07
+                                               && fdc_cmd != 8'h0F) begin
+                    fdc_result0 <= {2'b01, 4'b0000, fdc_unit};
+                    fdc_result1 <= 8'h01;
+                end
+                if (cmd_ends_with_int(fdc_cmd)) begin
+                    seek_timer  <= SEEK_CLOCKS;
+                    seek_is_2dd <= cmd_is_2dd;
+                end
+                if (fdc_cmd == 8'h07 || fdc_cmd == 8'h0F) begin
                     // Seek end is RECORDED here and SIGNALLED later.
                     //
                     // The BIOS issues RECALIBRATE for all four units, then
@@ -262,8 +294,6 @@ module pc98_fdc (
                     // sixteen retries of a zeroed CX, eleven seconds, once for
                     // the 2HD probe at port 90 and once for the 2DD one at C8.
                     fdc_seek_pend[fdc_unit] <= 1'b1;
-                    seek_timer              <= SEEK_CLOCKS;
-                    seek_is_2dd             <= cmd_is_2dd;
                 end
             end
             // The seek's interrupt, once the head would have got there.
