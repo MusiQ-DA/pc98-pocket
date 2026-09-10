@@ -28,6 +28,7 @@
 #define POST_ROMLD3 ((volatile uint32_t *) 0x50000064)
 #define POST_ROMLDN ((volatile uint32_t *) 0x50000068)
 #define POST_RLF    ((volatile uint32_t *) 0x5000006C) // {fifo high water, words dropped}
+#define POST_TVRAM  ((volatile uint32_t *) 0x50000080) // {tvram last addr, write count}
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -553,6 +554,18 @@ void post_mon_tick(void)
         hex(4 + (15 + i * 3) * 8, 12, (hi >> (24 - i * 8)) & 0xFFu, 2);
     for (int i = 0; i < 4; i++)
         hex(4 + (27 + i * 3) * 8, 12, (lo >> (24 - i * 8)) & 0xFFu, 2);
+#endif
+
+#ifdef MACHINE_PC98
+    // Did the BIOS ever write a character? The text plane is A0000-A3FFF;
+    // the count is the answer to "why is the screen still just a cursor".
+    {
+        uint32_t tv = *POST_TVRAM;
+        osd_draw_string(&fb, 4, 92, "TVW", OSD_LABEL);
+        hex(4 + 4 * 8, 92, tv & 0xFFFFu, 4);
+        osd_draw_string(&fb, 4 + 13 * 8, 92, "AT", OSD_LABEL);
+        hex(4 + 16 * 8, 92, 0xA0000u | (tv >> 20), 5);
+    }
 #endif
 
     *VKB_CTRL = 1u;
