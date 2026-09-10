@@ -108,9 +108,15 @@ module RAM (
     // N frozen). So the SDRAM answers 00000-BFFFF only: the main RAM, plus
     // the A8000-BFFFF window the GVRAM probe writes through. A0000-A7FFF is
     // still excluded -- text VRAM and the CG window answer from elsewhere.
+    //
+    // E8000-FFFFF stays SELECTED on purpose: the BIOS image lives in the
+    // SDRAM (the loader writes it there, the guest fetches it from there),
+    // and taking it out of the select -- which one revision did -- starved
+    // the loader into DROP 38190 and left BAD 0F2 on the compare.
     assign ram_address_select_n = ~(enable_sdram
-                                 && (address[19:16] < 4'hC)
-                                 && ~(address[19:15] == 5'b10100)); // A0000-A7FFF
+                             && ((address[19:16] < 4'hC)             // RAM + GVRAM window
+                              || (address[19:15] >= 5'b11101))        // E8000-FFFFF: ROM image
+                             && ~(address[19:15] == 5'b10100));       // A0000-A7FFF
 `else
     assign ram_address_select_n = ~(enable_sdram && ~(address[19:16] == 4'b1011) &&  // B0000h reserved for VRAM
 	                               ~(~enable_a000h && address[19:16] == 4'b1010));    // A0000h is optional
