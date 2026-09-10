@@ -36,7 +36,13 @@ module pc98_fdc (
     // What it answers with, and the seek-end interrupt.
     output logic [7:0]  msr,
     output logic [7:0]  fifo,
-    output logic        irq_int
+    // Two interrupt lines, because there are two interfaces behind these
+    // registers. The BIOS puts the 2HD handler on INT 13 (slave IRQ3, via
+    // FF531) and the 2DD handler on INT 12 (slave IRQ2, via FF5FC), and a
+    // seek on one interface reported to the other's handler sets no bits at
+    // all -- which is the second eleven seconds of the FDD probe.
+    output logic        irq_int,       // 2HD, ports 90-93: slave IRQ3
+    output logic        irq_2dd        // 2DD, ports C8-CB: slave IRQ2
 );
 
     // 0x90-0x93 (2HD) and 0xC8-0xCB (2DD), the two interfaces this BIOS
@@ -48,6 +54,10 @@ module pc98_fdc (
     assign base_select   = fdc_base_select;
     assign msr_select    = fdc_base_select & ~address[1];
     assign fifo_select   = fdc_base_select &  address[1];
+
+    // C8-CB is the 2DD interface, 90-93 the 2HD one. Latched with the command
+    // byte, so the seek that completes later still knows where it came from.
+    wire cmd_is_2dd = (address[7:2] == 6'h32);
 
     logic [7:0] fdc_cmd;
     logic [3:0] fdc_writes_left;
@@ -61,6 +71,9 @@ module pc98_fdc (
     // issuing the seek and clearing its flags.
     localparam int SEEK_CLOCKS = 172_000;
     logic [17:0] seek_timer;
+    // Which interface the command in flight was written to. They are driven
+    // one at a time through POST, so one latch is enough to route the answer.
+    logic        seek_is_2dd;
 
     // One event per ACCESS, not one per clock.
     //
@@ -173,6 +186,8 @@ module pc98_fdc (
             fdc_in_result   <= 1'b0;
             fdc_cmd_done    <= 1'b0;
             irq_int        <= 1'b0;
+            irq_2dd        <= 1'b0;
+            seek_is_2dd    <= 1'b0;
             fdc_unit        <= 2'd0;
             fdc_seek_pend   <= 4'd0;
             seek_timer      <= 18'd0;
@@ -248,16 +263,19 @@ module pc98_fdc (
                     // the 2HD probe at port 90 and once for the 2DD one at C8.
                     fdc_seek_pend[fdc_unit] <= 1'b1;
                     seek_timer              <= SEEK_CLOCKS;
+                    seek_is_2dd             <= cmd_is_2dd;
                 end
             end
             // The seek's interrupt, once the head would have got there.
             if (seek_timer != 18'd0) begin
                 seek_timer <= seek_timer - 18'd1;
-                if (seek_timer == 18'd1)
-                    irq_int <= 1'b1;
+                if (seek_timer == 18'd1) begin
+                    if (seek_is_2dd) irq_2dd <= 1'b1;
+                    else             irq_int <= 1'b1;
+                end
             end
-            if (irq_int)
-                irq_int <= 1'b0;
+            if (irq_int) irq_int <= 1'b0;
+            if (irq_2dd) irq_2dd <= 1'b0;
         end
     end
     // MSR, with the busy bit the BIOS actually tests.

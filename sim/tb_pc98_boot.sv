@@ -478,7 +478,7 @@ module tb_pc98_boot;
         .slave_program_n  (1'b0),
         .interrupt_acknowledge_n (inta_n),
         .interrupt_to_cpu (pic2_to_cpu),
-        .interrupt_request({4'b0, fdc_irq3, cc_irq2, 2'b0})
+        .interrupt_request({4'b0, fdc_irq3, cc_irq2 | fdc_irq2, 2'b0})
     );
 
     // Latched the way PERIPHERALS latches it, on the CPU clock's falling
@@ -586,7 +586,7 @@ module tb_pc98_boot;
     // copy is gone. See pc98_fdc.sv.
     wire       fdc_base_sel, fdc_msr_sel, fdc_fifo_sel;
     wire [7:0] fdc_msr, fdc_fifo;
-    wire       fdc_irq3;
+    wire       fdc_irq3, fdc_irq2;
 
     pc98_fdc u_pc98_fdc (
         .clock            (clk_chipset),
@@ -601,7 +601,8 @@ module tb_pc98_boot;
         .fifo_select      (fdc_fifo_sel),
         .msr              (fdc_msr),
         .fifo             (fdc_fifo),
-        .irq_int          (fdc_irq3)
+        .irq_int          (fdc_irq3),
+        .irq_2dd          (fdc_irq2)
     );
 
     // The conversation, one line per byte, reached into the instance. The
@@ -678,6 +679,13 @@ module tb_pc98_boot;
     // while eu_rom_address[12:8] == 1 the low byte IS the opcode being started.
     // That gives a true x86 instruction trace, which the bus cannot.
     wire       is_dispatch = (urom[12:8] == 5'h01);
+    // From the moment the machine leaves the BIOS for the ROM BASIC at E800,
+    // every instruction, in order, until the trace is spent. The ring dumped
+    // at the CS change was all keyword table -- ASCII executed as code -- so
+    // the derailment happens earlier than any ring of the last few dozen
+    // instructions can reach. This starts at the entry and runs forwards.
+    logic basic_trace = 1'b0;
+    int   basic_n = 0;
     logic [19:0] disp_pc [0:63];
     logic [7:0]  disp_op [0:63];
     int          disp_w = 0;
@@ -703,6 +711,15 @@ module tb_pc98_boot;
             disp_pc[disp_w[5:0]] <= eu_pc;
             disp_op[disp_w[5:0]] <= urom[7:0];
             disp_w <= disp_w + 1;
+            if (eu_cs == 16'hE800) basic_trace <= 1'b1;
+            if (basic_trace && basic_n < 600) begin
+                basic_n <= basic_n + 1;
+                $display("    B%0d  %05X  op %02X  ax %04X bx %04X cx %04X dx %04X si %04X di %04X",
+                         basic_n, eu_pc, urom[7:0],
+                         u_cpu.EU_CORE.eu_register_ax, u_cpu.EU_CORE.eu_register_bx,
+                         u_cpu.EU_CORE.eu_register_cx, u_cpu.EU_CORE.eu_register_dx,
+                         u_cpu.EU_CORE.eu_register_si, u_cpu.EU_CORE.eu_register_di);
+            end
         end
     end
 

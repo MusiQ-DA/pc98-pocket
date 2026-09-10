@@ -377,7 +377,7 @@ module PERIPHERALS #(
     // copied into it -- see pc98_fdc.sv for why that stopped being optional.
     wire       fdc_base_select, fdc_msr_select, fdc_fifo_select;
     wire [7:0] fdc_msr, fdc_fifo;
-    wire       fdc_irq3;
+    wire       fdc_irq3, fdc_irq2;
 
     pc98_fdc u_pc98_fdc (
         .clock            (clock),
@@ -392,7 +392,8 @@ module PERIPHERALS #(
         .fifo_select      (fdc_fifo_select),
         .msr              (fdc_msr),
         .fifo             (fdc_fifo),
-        .irq_int          (fdc_irq3)
+        .irq_int          (fdc_irq3),
+        .irq_2dd          (fdc_irq2)
     );
 
     wire fdd_stub_read = (fdd_be_select | fdd_90_select | fdd_94_select
@@ -621,7 +622,8 @@ module PERIPHERALS #(
         .interrupt_to_cpu           (interrupt2_to_cpu),
         // IRQ3 is the FDC's own interrupt (RECALIBRATE finding no drive);
         // IRQ2 is the XTMASK pulse the 100 ms 0xCC timer fires.
-        .interrupt_request          ({4'b0, fdc_irq3, fdd_cc_irq, 2'b0})
+        .interrupt_request          ({4'b0, fdc_irq3,
+                                     fdd_cc_irq | fdc_irq2, 2'b0})
     );
 `endif
 
