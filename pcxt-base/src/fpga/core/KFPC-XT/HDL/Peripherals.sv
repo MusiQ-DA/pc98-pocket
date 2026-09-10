@@ -419,8 +419,11 @@ module PERIPHERALS #(
         default: fdc_shape = {4'd0, 4'd2};
         endcase
     endfunction
-    wire [3:0] fdc_new_writes  = fdc_shape(internal_data_bus)[7:4];
-    wire [3:0] fdc_new_results = fdc_shape(internal_data_bus)[3:0];
+    // Sliced off a wire, not off the call: indexing a function's
+    // result directly is a syntax error to both Verilator and Quartus.
+    wire [7:0] fdc_shape_now   = fdc_shape(internal_data_bus);
+    wire [3:0] fdc_new_writes  = fdc_shape_now[7:4];
+    wire [3:0] fdc_new_results = fdc_shape_now[3:0];
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
