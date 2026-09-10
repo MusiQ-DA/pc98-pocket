@@ -433,7 +433,9 @@ module PERIPHERALS #(
     wire    tvram_mem_select        = ~iorq && ~address_enable_n
                                     && (address[19:14] == 6'b101000);
     // A4000-A4FFF: the character generator window. RAM.sv already keeps SDRAM
-    // out of A0000-A7FFF, so this only has to claim the read.
+    // out of A0000-A7FFF; this claims the read AND the write, because the
+    // window is RAM -- the ITF's CG test writes a pattern through it and reads
+    // the pattern back, and user-defined characters load the same way.
     wire    cgwin_mem_select        = ~iorq && ~address_enable_n
                                     && (address[19:12] == 8'b10100100);
 `else
@@ -1710,6 +1712,8 @@ end
     pc98_cgwindow u_pc98_cgwin (
         .clk(clock), .rst(reset),
         .io_wr(cg_io_commit), .io_port(cg_io_port), .io_data(cg_io_data),
+        .mem_wr(cgwin_mem_select & ~memory_write_n),
+        .wr_addr(address[11:0]), .wr_data(internal_data_bus),
         .rd_addr(address[11:0]), .rd_data(cgwin_q),
         .f_req(cg_f_req), .f_addr(cg_f_addr), .f_busy(cg_f_busy),
         .f_valid(cg_f_valid), .f_data(cg_f_data), .busy()
