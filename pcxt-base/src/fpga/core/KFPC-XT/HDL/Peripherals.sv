@@ -510,7 +510,27 @@ module PERIPHERALS #(
                 fdc_irq3 <= 1'b0;
         end
     end
-    wire [7:0] fdc_msr  = fdc_in_result ? 8'hC0 : 8'h80;  // RQM, plus DIO in result phase
+    // MSR, with the busy bit the BIOS actually tests.
+    //
+    // FFC16 is the BIOS's result-phase wait:
+    //
+    //     in al,dx / and al,D0 / cmp al,D0 / loopne FFC16
+    //
+    // RQM and DIO are not enough -- it wants bit 4, CB, the chip's "a command
+    // is in progress" flag, which on a uPD765 is set from the first command
+    // byte until the last result byte has been read. This model answered C0 in
+    // the result phase, CB clear, so the BIOS could never take the two bytes
+    // that SENSE INTERRUPT (08) had waiting, the model stayed in the result
+    // phase, and the next command's wait at FFA26 -- MSR & C0 == 80 -- spun
+    // out its whole CX. That is the FA26-FA2D the hardware readout named.
+    //
+    // The other two waits agree with modelling CB properly: FFC00 wants
+    // D0 == 80, CB CLEAR, before the first command byte, and FFA26 masks CB
+    // off entirely for the parameter bytes that follow.
+    wire fdc_busy = fdc_in_result | (fdc_writes_left != 4'd0);
+    wire [7:0] fdc_msr = fdc_in_result ? 8'hD0     // RQM + DIO + CB: read me
+                       : fdc_busy      ? 8'h90     // RQM + CB: next parameter
+                       :                 8'h80;    // RQM: idle, send a command
     wire [7:0] fdc_fifo = (fdc_result_idx == 4'd0) ? fdc_result0
                         : (fdc_result_idx == 4'd1) ? fdc_result1
                         :                            8'h00;
