@@ -433,7 +433,9 @@ module PERIPHERALS #(
     wire    tvram_mem_select        = ~iorq && ~address_enable_n
                                     && (address[19:14] == 6'b101000);
     // A4000-A4FFF: the character generator window. RAM.sv already keeps SDRAM
-    // out of A0000-A7FFF, so this only has to claim the read.
+    // out of A0000-A7FFF; this claims the read AND the write, because the
+    // window is RAM -- the ITF's CG test writes a pattern through it and reads
+    // the pattern back, and user-defined characters load the same way.
     wire    cgwin_mem_select        = ~iorq && ~address_enable_n
                                     && (address[19:12] == 8'b10100100);
 `else
@@ -1642,6 +1644,9 @@ end
     wire        pc98_f_req, pc98_f_busy, pc98_f_valid;
     wire [19:0] pc98_f_addr;
     wire  [7:0] pc98_f_data;
+    wire  [7:0] pc98_ank_code;
+    wire  [3:0] pc98_ank_line;
+    wire  [7:0] pc98_ank_row;
 
     pc98_glyph_rowbuf u_pc98_rowbuf (
         .clk(clock), .rst(reset),
@@ -1651,6 +1656,11 @@ end
         .tv_char_lo(tvram_vid_char_lo), .tv_char_hi(tvram_vid_char_hi),
         .f_req(pc98_f_req), .f_addr(pc98_f_addr), .f_busy(pc98_f_busy),
         .f_valid(pc98_f_valid), .f_data(pc98_f_data),
+        // ANK cells read the local 4 KB BRAM instead of the SDRAM -- the bytes
+        // the loader wrote straight in, with no bank redirect and no video
+        // port between them and the screen.
+        .ank_code(pc98_ank_code), .ank_line(pc98_ank_line),
+        .ank_row(pc98_ank_row),
         // Indexed by the cell the renderer is FETCHING, not the one it is
         // drawing: it runs one cell ahead, and using the current column here
         // would shift every line by one.
@@ -1702,6 +1712,8 @@ end
     pc98_cgwindow u_pc98_cgwin (
         .clk(clock), .rst(reset),
         .io_wr(cg_io_commit), .io_port(cg_io_port), .io_data(cg_io_data),
+        .mem_wr(cgwin_mem_select & ~memory_write_n),
+        .wr_addr(address[11:0]), .wr_data(internal_data_bus),
         .rd_addr(address[11:0]), .rd_data(cgwin_q),
         .f_req(cg_f_req), .f_addr(cg_f_addr), .f_busy(cg_f_busy),
         .f_valid(cg_f_valid), .f_data(cg_f_data), .busy()
@@ -1725,15 +1737,14 @@ end
         .p_done(font_rd_done)
     );
 
-    // The ANK BRAM stays for the CG window at A4000-A4FFF, which the guest
-    // reads directly and which does not want to wait on a burst.
-    wire [7:0] pc98_ank_row_unused;
+    // The ANK BRAM: the row buffer's ANK source, on the same clock as its FSM.
+    // Plain text comes out of here -- the SDRAM burst path is for kanji only.
     pc98_font_ank u_pc98_font (
         .wr_clk(font_wr_clk), .wr_en(font_wr_en),
         .wr_addr(font_wr_addr), .wr_data(font_wr_data),
-        .rd_clk(clk_vga_cga),
-        .code(8'h00), .line(4'd0),
-        .row(pc98_ank_row_unused)
+        .rd_clk(clock),
+        .code(pc98_ank_code), .line(pc98_ank_line),
+        .row(pc98_ank_row)
     );
 
     // The attribute's colour field is G R B, so it maps to the output that way

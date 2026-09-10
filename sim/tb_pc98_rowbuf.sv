@@ -41,6 +41,16 @@ module tb_pc98_rowbuf;
     logic       f_busy = 1'b0, f_valid = 1'b0;
     logic [7:0] f_data = 8'h00;
 
+    // The ANK side: the REAL BRAM, loaded with a pattern that names the byte
+    // -- {code[3:0], line[3:0]} -- so a wrong glyph address or a wrong line
+    // order reads out as a wrong value rather than as a plausible font.
+    wire  [7:0] ank_code;
+    wire  [3:0] ank_line;
+    wire  [7:0] ank_row;
+    logic       font_wr_en = 1'b0;
+    logic [10:0] font_wr_addr = 11'd0;
+    logic [15:0] font_wr_data = 16'd0;
+
     logic [6:0] rd_col = 7'd0;
     logic [3:0] rd_line = 4'd0;
     wire  [7:0] rd_byte;
@@ -52,8 +62,20 @@ module tb_pc98_rowbuf;
         .tv_cell(tv_cell), .tv_char_lo(tv_char_lo), .tv_char_hi(tv_char_hi),
         .f_req(f_req), .f_addr(f_addr), .f_busy(f_busy),
         .f_valid(f_valid), .f_data(f_data),
+        .ank_code(ank_code), .ank_line(ank_line), .ank_row(ank_row),
         .rd_clk(clk), .rd_cell(rd_col), .rd_line(rd_line), .rd_byte(rd_byte), .kanji_seen(kanji_seen)
     );
+
+    pc98_font_ank u_ank (
+        .wr_clk(clk), .wr_en(font_wr_en), .wr_addr(font_wr_addr),
+        .wr_data(font_wr_data),
+        .rd_clk(clk), .code(ank_code), .line(ank_line), .row(ank_row)
+    );
+
+    function automatic logic [7:0] ank_pat(input logic [7:0] code,
+                                           input logic [3:0] line);
+        ank_pat = {code[3:0], line};
+    endfunction
 
     // ---- model TVRAM: cell 3 and 4 are a kanji pair, the rest are ANK -------
     logic [7:0] scr_lo [0:127];
@@ -113,7 +135,18 @@ module tb_pc98_rowbuf;
         scr_lo[3] = 8'h04; scr_hi[3] = 8'h22;
         scr_lo[4] = 8'hFF; scr_hi[4] = 8'hFF;   // deliberately not a character
 
-        repeat (4) @(posedge clk);
+        repeat (2) @(posedge clk);
+        // Load the ANK BRAM the way the loader does: sixteen bits at a time,
+        // low byte at the even offset.
+        for (int w = 0; w < 2048; w++) begin
+            font_wr_en   = 1'b1;
+            font_wr_addr = 11'(w);
+            font_wr_data = {ank_pat(8'((2*w+1) >> 4), 4'((2*w+1) & 15)),
+                            ank_pat(8'((2*w)   >> 4), 4'((2*w)   & 15))};
+            @(posedge clk);
+        end
+        font_wr_en = 1'b0;
+        repeat (2) @(posedge clk);
         rst = 0;
         repeat (2) @(posedge clk);
 
@@ -128,41 +161,49 @@ module tb_pc98_rowbuf;
         wait (busy == 1'b0);
         repeat (4) @(posedge clk);
 
-        $display("  fetches: %0d (want %0d, two fills)", fetches, 2*COLS);
-        if (fetches !== 2*COLS) begin $display("  FAIL fetch count"); errors++; end
+        // ANK cells must NOT reach for the SDRAM: only the two kanji halves
+        // burst, so two fills of this screen make four fetches, not 320.
+        $display("  fetches: %0d (want 4: two kanji halves x two fills)", fetches);
+        if (fetches !== 4) begin $display("  FAIL fetch count"); errors++; end
 
-        // Column 0: ANK 0x41 -> 0x0800 + 0x41*16 = 0x0C10.
-        $display("  col 0 addr %05h (want 00C10)", seen_addr[0]);
-        if (seen_addr[0] !== 20'h00C10) begin $display("  FAIL ANK addr"); errors++; end
-
-        // Column 3: kanji left half at 0x3C40. Column 4: its RIGHT half, 0x3C50
-        // -- not whatever FF FF would decode to.
-        $display("  col 3 addr %05h (want 03C40)", seen_addr[3]);
-        if (seen_addr[3] !== 20'h03C40) begin $display("  FAIL kanji left"); errors++; end
-        $display("  col 4 addr %05h (want 03C50, the right half)", seen_addr[4]);
-        if (seen_addr[4] !== 20'h03C50) begin
+        // First fill: col 3 is the kanji left half at 0x3C40, col 4 its RIGHT
+        // half at 0x3C50 -- not whatever FF FF would decode to.
+        $display("  kanji left addr %05h (want 03C40)", seen_addr[0]);
+        if (seen_addr[0] !== 20'h03C40) begin $display("  FAIL kanji left"); errors++; end
+        $display("  kanji right addr %05h (want 03C50, the right half)", seen_addr[1]);
+        if (seen_addr[1] !== 20'h03C50) begin
             $display("  FAIL kanji right half not paired"); errors++;
         end
 
-        // Column 5 must be back to ANK, from its own code.
-        $display("  col 5 addr %05h (want %05h)", seen_addr[5], 20'h0800 + 20'((8'h41 + 5) * 16));
-        if (seen_addr[5] !== 20'h0800 + 20'((8'h41 + 5) * 16)) begin
-            $display("  FAIL cell after a kanji pair"); errors++;
-        end
-
-        // And the bytes landed in the right places: the model font returns the
-        // address's low byte plus the beat.
+        // The ANK cells came out of the BRAM: every byte names its own
+        // (code, line), so the wrong glyph, the wrong line order, or the
+        // column-shifted-by-one failure mode all read as a wrong value.
+        // Columns 0, 7, 14 ... cover the cells before, between and after the
+        // kanji pair; 3 and 4 are the pair itself and must hold the BURST
+        // model's bytes, 0x40+l and 0x50+l.
         for (int c = 0; c < COLS; c += 7) begin
             for (int l = 0; l < 16; l += 5) begin
                 rd(c, l, got);
-                if (got !== 8'(seen_addr[c][7:0] + 8'(l))) begin
+                if (got !== ank_pat(8'(8'h41 + c), 4'(l))) begin
                     $display("  FAIL col %0d line %0d: %02h want %02h",
-                             c, l, got, 8'(seen_addr[c][7:0] + 8'(l)));
+                             c, l, got, ank_pat(8'(8'h41 + c), 4'(l)));
                     errors++;
                 end
             end
         end
-        $display("  buffer contents match the fetched addresses");
+        for (int l = 0; l < 16; l += 5) begin
+            rd(3, l, got);
+            if (got !== 8'(8'h40 + l)) begin
+                $display("  FAIL kanji col 3 line %0d: %02h want %02h", l, got, 8'(8'h40 + l));
+                errors++;
+            end
+            rd(4, l, got);
+            if (got !== 8'(8'h50 + l)) begin
+                $display("  FAIL kanji col 4 line %0d: %02h want %02h", l, got, 8'(8'h50 + l));
+                errors++;
+            end
+        end
+        $display("  ANK bytes from BRAM, kanji bytes from the burst");
 
         // The bank must flip on the ROW BOUNDARY, not on fill completion.
         //
@@ -178,7 +219,7 @@ module tb_pc98_rowbuf;
             logic [7:0] after_y, after_z;
             logic [7:0] want_x, want_y;
 
-            // col 9's line-0 byte is the low byte of 0x0800 + code*16, so pick
+            // col 9's line-0 byte is the ANK pattern {code[3:0], 0}, so pick
             // contents whose code&0x0F differ or the check proves nothing.
             want_x = 8'((8'h4A & 8'h0F) << 4);      // 0x41 + 9
             want_y = 8'((8'h89 & 8'h0F) << 4);      // 0x80 + 9

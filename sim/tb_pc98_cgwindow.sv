@@ -23,6 +23,9 @@ module tb_pc98_cgwindow;
     logic        io_wr = 0;
     logic [15:0] io_port = 0;
     logic  [7:0] io_data = 0;
+    logic        mem_wr = 0;
+    logic [11:0] wr_addr = 0;
+    logic  [7:0] wr_data = 0;
     logic [11:0] rd_addr = 0;
     wire   [7:0] rd_data;
     wire         f_req, busy;
@@ -33,6 +36,7 @@ module tb_pc98_cgwindow;
     pc98_cgwindow dut (
         .clk(clk), .rst(rst),
         .io_wr(io_wr), .io_port(io_port), .io_data(io_data),
+        .mem_wr(mem_wr), .wr_addr(wr_addr), .wr_data(wr_data),
         .rd_addr(rd_addr), .rd_data(rd_data),
         .f_req(f_req), .f_addr(f_addr), .f_busy(f_busy),
         .f_valid(f_valid), .f_data(f_data), .busy(busy)
@@ -141,6 +145,43 @@ module tb_pc98_cgwindow;
         repeat (40) @(posedge clk);
         $display("  ANK 'A' left %05h (want 00C10)", last_a);
         if (last_a !== 20'h00C10) begin $display("  FAIL ANK addr"); errors++; end
+
+        // The ITF's CG test, exactly as the ROM does it: set a code, write a
+        // pattern through the window at the ODD offsets (the right half), then
+        // read the same offsets back. The code write kicks off a refill, and
+        // the CPU reaches its first store before the burst lands, so this also
+        // proves the refill does not stamp over the guest's bytes.
+        port(16'h00A1, 8'h22);
+        port(16'h00A3, 8'h04);
+        port(16'h00A5, 8'h00);
+        // No wait: march straight in, the way stosb does.
+        for (int k = 0; k < 16; k++) begin
+            wr_addr = 12'(2 * k + 1); wr_data = 8'hA5 ^ 8'(k); mem_wr = 1'b1;
+            @(posedge clk);
+        end
+        mem_wr = 1'b0;
+        repeat (80) @(posedge clk);   // let any in-flight refill finish
+        for (int k = 0; k < 16; k++) begin
+            rd(2 * k + 1, got);
+            if (got !== (8'hA5 ^ 8'(k))) begin
+                $display("  FAIL guest write line %0d: %02h want %02h",
+                         k, got, 8'hA5 ^ 8'(k)); errors++;
+            end
+        end
+        $display("  guest writes survive their own refill");
+
+        // A code change after that hands the window back to the font store.
+        port(16'h00A1, 8'h22);
+        port(16'h00A3, 8'h04);
+        repeat (4) @(posedge clk);
+        wait (busy == 1'b0);
+        repeat (40) @(posedge clk);
+        rd(1, got);
+        if (got !== 8'(20'h03C50 & 20'hFF)) begin
+            $display("  FAIL window did not refill after a code change: %02h", got);
+            errors++;
+        end
+        $display("  a code change refills the window again");
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");

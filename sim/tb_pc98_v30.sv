@@ -26,14 +26,14 @@
 `default_nettype none
 `timescale 1ns/1ps
 
-module tb_pc98_boot;
+module tb_pc98_v30;
 
-    // clk_chipset is 42.954545 MHz; clk_core is twice it, as core_top's PLL
-    // makes them.
+    // clk_chipset is 42.954545 MHz. The V30 core runs on it gated by the CE
+    // train, which is how the core is meant to be clocked on fast fabric.
     logic clk_chipset = 1'b0;
-    logic clk_core    = 1'b0;
     always #11.641 clk_chipset = ~clk_chipset;
-    always  #5.820 clk_core    = ~clk_core;
+
+    logic pic1_to_cpu = 1'b0;   // forward: the PIC models below drive it
 
     logic reset = 1'b1;
     // OUT 0F0h resets the CPU and nothing else: memory keeps its contents and
@@ -48,12 +48,13 @@ module tb_pc98_boot;
     wire       cycle_accrate, shift_read_timing;
     wire [7:0] ccc_div, ccc_dec;
     wire [1:0] ram_rd_wait, ram_wr_wait;
-    wire       biu_done;
 
     XT_CE_Generator u_ce (
         .clock                              (clk_chipset),
         .reset                              (reset),
-        .clk_select_load                    (biu_done),
+        // A bus-cycle boundary, which is what the 8088's biu_done used to
+        // stand in for; the select itself is constant here.
+        .clk_select_load                    (cpu_ce_posedge),
         // 9.54 MHz -- what the shipped firmware now boots with, and 2x the
         // old 4.77 default. The memory test is CPU-bound, so this halves the
         // chipset edges the same guest progress costs: the boot that took 40
@@ -73,36 +74,71 @@ module tb_pc98_boot;
         .ram_write_wait_cycle               (ram_wr_wait)
     );
 
-    // ---- the CPU -----------------------------------------------------------
-    wire [19:0] cpu_ad_out;
-    wire  [7:0] cpu_data_bus;
-    wire  [7:0] din;
-    wire  [2:0] processor_status;
-    wire        lock_n, s6_3_mux;
-    wire  [2:0] SEGMENT;
+    // ---- the CPU: nuV30, the real part -------------------------------------
+    //
+    // De-muxed bus view. ADDR_O is the owning cycle's linear address for the
+    // whole cycle; DATA_I must be valid before the READY sample at T3 (flat
+    // memory answers combinationally); DATA_O carries the write word with
+    // byte lanes selected by A0 and UBE_N -- the same protocol hdl's
+    // nec_bus.sv drives the silicon with.
+    // din is declared with din_of below, where the models' answers are muxed
+    wire  [2:0] processor_status;    // v30 BS == the 8288's S2-S0
+    wire        RD_N, UBE_N, BUSLOCK_N;
 
-    i8088 u_cpu (
-        .CORE_CLK  (clk_core),
-        .CLK       (clk_cpu),
+    wire [19:0] ADDR_O;
+    wire [15:0] DATA_O;
+    wire  [1:0] QS;
+    wire  [3:0] STATUS_O;
+    wire [223:0] dbg_regs;
+    logic [15:0] DATA_I;
+
+    logic        bkd_load = 1'b0;
+    logic [223:0] bkd_regs = '0;
+    logic [47:0] bkd_queue = '0;
+    logic  [2:0] bkd_qlen = '0;
+    logic [15:0] bkd_fetch_ip = '0;
+    logic        scr_en = 1'b0;
+    logic  [1:0] scr_qop = '0;
+
+    v30_core u_cpu (
+        .CLK       (clk_chipset),
+        .CE        (cpu_ce_posedge),
         .RESET     (cpu_reset_w),
         .READY     (1'b1),           // flat memory answers immediately
-        .INTR      (pic1_to_cpu),
+        .INT       (pic1_to_cpu),
         .NMI       (1'b0),
-        .ad_out    (cpu_ad_out),
-        .dout      (cpu_data_bus),
-        .din       (din),
-        .lock_n    (lock_n),
-        .s6_3_mux  (s6_3_mux),
-        .s2_s0_out (processor_status),
-        .SEGMENT   (SEGMENT),
-        .biu_done  (biu_done),
-        .cycle_accrate                       (cycle_accrate),
-        .clock_cycle_counter_division_ratio  (ccc_div),
-        .clock_cycle_counter_decrement_value (ccc_dec),
-        .shift_read_timing                   (shift_read_timing)
+        .POLL_N    (1'b1),
+        .DATA_I    (DATA_I),
+        .ADDR_O    (ADDR_O),
+        .DATA_O    (DATA_O),
+        .STATUS_O  (STATUS_O),
+        .QS        (QS),
+        .BS        (processor_status),
+        .RD_N      (RD_N),
+        .UBE_N     (UBE_N),
+        .BUSLOCK_N (BUSLOCK_N),
+        .SS_ADDR (), .SS_WDATA (), .SS_WE (), .SS_RDATA (), .SS_ERR (),
+        .SS_BUS_QUIET (),
+        .bkd_load (bkd_load), .bkd_regs (bkd_regs), .bkd_queue (bkd_queue),
+        .bkd_qlen (bkd_qlen), .bkd_fetch_ip (bkd_fetch_ip),
+        .scr_en (scr_en), .scr_qop (scr_qop),
+        .dbg_regs  (dbg_regs), .dbg_first_pop (), .dbg_pend ()
     );
 
-    // ---- bus controller and address latch ----------------------------------
+    // The live register view: {psw,ip,ds,ss,cs,es,di,si,bp,sp,bx,dx,cx,ax},
+    // retired-instruction granularity. The old bench reached into mcl86 for
+    // these; the V30 core publishes them on a port.
+    wire [15:0] dbg_ax = dbg_regs[15:0];
+    wire [15:0] dbg_cx = dbg_regs[31:16];
+    wire [15:0] dbg_dx = dbg_regs[47:32];
+    wire [15:0] dbg_bx = dbg_regs[63:48];
+    wire [15:0] dbg_sp = dbg_regs[79:64];
+    wire [15:0] dbg_si = dbg_regs[111:96];
+    wire [15:0] dbg_di = dbg_regs[127:112];
+    wire [15:0] dbg_cs = dbg_regs[159:144];
+    wire [15:0] dbg_ss = dbg_regs[175:160];
+
+    // ---- bus controller ----------------------------------------------------
     wire mem_rd_n, mem_wr_n, adv_mem_wr_n;
     wire io_rd_n,  io_wr_n,  adv_io_wr_n;
     wire inta_n, ale, en_io, en_mem, dt_r_n, den, mce, pden;
@@ -132,9 +168,14 @@ module tb_pc98_boot;
         .address_latch_enable            (ale)
     );
 
-    logic [19:0] cpu_address = 20'h0;
-    always_ff @(posedge clk_chipset)
-        if (ale) cpu_address <= cpu_ad_out;
+    // The core registers the owning cycle's address itself; the models sample
+    // it at command trailing edges, where it is stable.
+    wire [19:0] cpu_address = ADDR_O;
+
+    // The eight-bit data bus the models see: the lane the cycle actually
+    // addresses. PC-98 devices live on the low byte; an odd port reaches them
+    // through the upper lane, exactly as the board's transceivers steer it.
+    wire [7:0] cpu_data_bus = ADDR_O[0] ? DATA_O[15:8] : DATA_O[7:0];
 
     // ---- memory ------------------------------------------------------------
     //
@@ -170,21 +211,40 @@ module tb_pc98_boot;
     // put a chipset clock between the strobe and the byte, and the core sampled
     // stale data: the first run stalled for seventeen milliseconds in the middle
     // of one instruction's operand fetch.
-    assign din = ~mem_rd_n ? (is_rom(cpu_address) ? rom_byte(cpu_address)
-                                                  : ram[cpu_address])
-                  : ~inta_n       ? ((~pic2_data_bus_io) ? pic2_dout : pic1_dout)
-                  : pit_iocycle    ? pit_dout
-                  : dma_iocycle    ? dma_dout
-                  : pic1_iocycle   ? pic1_dout
-                  : pic2_iocycle   ? pic2_dout
-                  : kbd_data_iocycle ? 8'h60
-                  : kbd_stat_iocycle ? 8'h02
-                  : gdc_stat_iocycle ? gdc_status_mock
-                  : cc_ioread       ? (cc_latch | 8'h30)
-                  : fdc_msr_sel     ? fdc_msr
-                  : fdc_fifo_sel    ? fdc_fifo
-                  : sysport_sel     ? sysport_data
-                           : 8'hFF;
+    //
+    // A function so the V30 front can ask for BOTH bytes of the aligned word
+    // it fetches, while every model below still speaks eight bits.
+    function automatic logic [7:0] din_of(input logic [19:0] a);
+        din_of = ~mem_rd_n    ? (is_rom(a) ? rom_byte(a) : ram[a])
+               : ~inta_n      ? ((~pic2_data_bus_io) ? pic2_dout : pic1_dout)
+               : pit_iocycle  ? pit_dout
+               : dma_iocycle  ? dma_dout
+               : pic1_iocycle ? pic1_dout
+               : pic2_iocycle ? pic2_dout
+               : kbd_data_iocycle ? 8'h60
+               : kbd_stat_iocycle ? kbd_status
+               : gdc_stat_iocycle ? gdc_status_mock
+               : cc_ioread   ? (cc_latch | 8'h30)
+               : fdc_msr_sel ? fdc_msr
+               : fdc_fifo_sel ? fdc_fifo
+               : sysport_sel ? sysport_data
+               : 8'hFF;
+    endfunction
+
+    wire [7:0] din = din_of(cpu_address);
+    // Reads: memory and code fetches want the aligned WORD; I/O and INTA are
+    // byte affairs, served on both lanes. mem8_of() is the old bench's whole
+    // din mux, evaluated at the aligned neighbours.
+    wire [7:0] din_even = din_of({cpu_address[19:1], 1'b0});
+    wire [7:0] din_odd  = din_of({cpu_address[19:1], 1'b1});
+    always_comb begin
+        case (processor_status)
+            3'b100, 3'b101: DATA_I = {din_odd, din_even};   // CODE, MEMR
+            3'b000:         DATA_I = {8'h00, din_even};     // INTA: vector low
+            default:        DATA_I = {din_even, din_even};  // I/O, byte-wide
+        endcase
+    end
+
 
     // True when the read above fell through to the FF default -- i.e. nothing
     // here answered it. Used to name the port once, in the trace.
@@ -295,6 +355,63 @@ module tb_pc98_boot;
 
     logic io_wr_d = 1'b1, mem_wr_d = 1'b1, mem_rd_d = 1'b1, io_rd_d = 1'b1;
     logic [7:0] mem_wr_data_q = 8'h00;
+    logic [15:0] mem_wr_word_q = 16'h0000;
+
+    // One committed byte of a memory write, with every watcher that used to
+    // sit inline on the eight-bit bus: the sweep ranges, the ITF's
+    // reset-resume save window, and the text-plane snoop.
+    task automatic commit_mem_byte(input logic [19:0] a, input logic [7:0] d);
+        if (~is_rom(a)) begin
+            ram[a] <= d;
+            // Where the writes are going, chunk by chunk. The hardware's LIVE
+            // readout is the same quantity, and "sweeping upward through the
+            // memory test" and "going round a small ring" look identical on a
+            // 20 fps display but not at all alike here.
+            if (a >= 20'h20000 && a < 20'hA0000 && ~saw_high_write) begin
+                saw_high_write <= 1'b1;
+                $display("  %8t  first write above 128 KB: %05X (eu_pc %05X)",
+                         $time, a, eu_pc);
+            end
+            if (a < wr_lo_chunk) wr_lo_chunk <= a;
+            if (a > wr_hi_chunk) wr_hi_chunk <= a;
+            wr_n_chunk <= wr_n_chunk + 1;
+            // The ITF's CPU-reset resume state lives at 0000:03F0-040F: the
+            // pushed far return F800:1497 at 03FA/03FC, the saved SS:SP at
+            // 0404/0406. There are only a handful of writes into this window
+            // in a whole boot, and the one that clobbers it names itself here.
+            if (a >= 20'h003F0 && a <= 20'h0040F)
+                $display("  %8t  SAVE[%04X] <= %02X   (eu_pc %05X)",
+                         $time, a[15:0], d, eu_pc);
+            // The vector slots around the boot decision: INT 1E (disk boot)
+            // and INT 1F (ROM BASIC) live at 0078/007C. The run of
+            // 2026-09-12 vectored the BASIC entry to D800:0A05 instead of
+            // E800:0A07, so who writes these four bytes and with what is now
+            // a named question.
+            if (a >= 20'h0070 && a <= 20'h0083)
+                $display("  %8t  IVT[%04X] <= %02X   (eu_pc %05X)",
+                         $time, a[15:0], d, eu_pc);
+            // The text plane: the memory-count display lands here. Keep the
+            // first row of cells (code + attribute) for the final dump.
+            if (a >= 20'hA0000 && a < 20'hA4000) begin
+                if (a < 20'hA0200)
+                    tvram_code[a[8:0]]  <= d;
+                else if (a >= 20'hA2000 && a < 20'hA2200)
+                    tvram_attr[a[8:0]]  <= d;
+                tvram_wr_count <= tvram_wr_count + 1;
+                // The first forty writes (the clear, and what shape it has),
+                // and after that every PRINTABLE byte into the code plane --
+                // which is the memory count, if the BIOS ever writes one. The
+                // clear itself is 20487 writes of 00 and E1 and says nothing.
+                if (tvram_wr_count < 40
+                 || (a < 20'hA2000 && d >= 8'h20 && d < 8'h7F))
+                    $display("  %8t  TVRAM[%04X] <= %02X %s  (eu_pc %05X)",
+                             $time, a[15:0], d,
+                             (d >= 8'h20 && d < 8'h7F)
+                                 ? string'({"'", d, "'"}) : "   ",
+                             eu_pc);
+            end
+        end
+    endtask
     logic [7:0] tvram_code [0:511];   // A0000-A01FF, first row of cells
     logic [7:0] tvram_attr [0:511];   // A2000-A21FF
     int          tvram_wr_count = 0;
@@ -337,7 +454,7 @@ module tb_pc98_boot;
     // putting it back. One number decides it: if the low-water mark of CX
     // walks down to zero the loop is completing and being re-entered; if it
     // never gets near zero, CX is being reset under the loop's feet.
-    wire [15:0] eu_cx = u_cpu.EU_CORE.eu_register_cx;
+    wire [15:0] eu_cx = dbg_cx;
     logic [15:0] cx_min_chunk = 16'hFFFF;
 
     // Reset by the progress loop after every chunk it prints -- through a
@@ -363,64 +480,22 @@ module tb_pc98_boot;
         io_rd_d  <= io_rd_n;
 
         // Write data is valid throughout the command and guaranteed at its
-        // END. Sampling cpu_data_bus once on the trailing edge caught the
-        // bus already moving on -- the IVT write at FDA76 landed 21 02 23 FD
-        // where the BIOS put BC 02 80 FD, and INT 08 went astray on exactly
-        // that. Sample continuously while the cycle is live and keep the last.
-        if (~mem_wr_n) mem_wr_data_q <= cpu_data_bus;
+        // END. The V30 drives a word; the lane the cycle addresses comes from
+        // A0 (even, DATA_O[7:0]) and UBE_N (odd, DATA_O[15:8]). PC-98 guests
+        // write bytes, which is one lane high; a word write lights both.
+        if (~mem_wr_n) begin
+            mem_wr_data_q <= cpu_data_bus;      // the addressed lane, for the models
+            mem_wr_word_q <= DATA_O;
+        end
 
-        // Memory write, on the trailing edge, and never into ROM.
-        if (mem_wr_n & ~mem_wr_d & ~is_rom(cpu_address)) begin
-            ram[cpu_address] <= mem_wr_data_q;
-            // Where the writes are going, chunk by chunk. The hardware's LIVE
-            // readout is the same quantity, and "sweeping upward through the
-            // memory test" and "going round a small ring" look identical on a
-            // 20 fps display but not at all alike here.
-            if (cpu_address >= 20'h20000 && cpu_address < 20'hA0000
-                && ~saw_high_write) begin
-                saw_high_write <= 1'b1;
-                $display("  %8t  first write above 128 KB: %05X (eu_pc %05X)",
-                         $time, cpu_address, eu_pc);
-            end
-            if (cpu_address < wr_lo_chunk) wr_lo_chunk <= cpu_address;
-            if (cpu_address > wr_hi_chunk) wr_hi_chunk <= cpu_address;
-            wr_n_chunk <= wr_n_chunk + 1;
-            // The ITF's CPU-reset resume state lives at 0000:03F0-040F: the
-            // pushed far return F800:1497 at 03FA/03FC, the saved SS:SP at
-            // 0404/0406. The run of 2026-09-11 RETFed to 0000:0069 instead,
-            // so one of those words is not what the save left behind. There
-            // are only a handful of writes into this window in a whole boot,
-            // and the one that clobbers it names itself here.
-            if (cpu_address >= 20'h003F0 && cpu_address <= 20'h0040F)
-                $display("  %8t  SAVE[%04X] <= %02X   (eu_pc %05X)",
-                         $time, cpu_address[15:0], mem_wr_data_q, eu_pc);
-            // The first page carries the vectors; who touches 0000-0FFF and
-            // with what decides whether INT xx lands where the BIOS meant.
-            // (Display off -- the memory test writes there for a living and
-            // the log grew to half a gigabyte. The IVT dump at the end
-            // still tells the story.)
-            // $display("  %8t  RAM[%04X] <= %02X   (eu_pc %05X)", ...)
-            // The text plane: the memory-count display lands here. Keep the
-            // first row of cells (code + attribute) for the final dump.
-            if (cpu_address >= 20'hA0000 && cpu_address < 20'hA4000) begin
-                if (cpu_address < 20'hA0200)
-                    tvram_code[cpu_address[8:0]]  <= mem_wr_data_q;
-                else if (cpu_address >= 20'hA2000 && cpu_address < 20'hA2200)
-                    tvram_attr[cpu_address[8:0]]  <= mem_wr_data_q;
-                tvram_wr_count <= tvram_wr_count + 1;
-                // The first forty writes (the clear, and what shape it has),
-                // and after that every PRINTABLE byte into the code plane --
-                // which is the memory count, if the BIOS ever writes one. The
-                // clear itself is 20487 writes of 00 and E1 and says nothing.
-                if (tvram_wr_count < 40
-                 || (cpu_address < 20'hA2000
-                     && mem_wr_data_q >= 8'h20 && mem_wr_data_q < 8'h7F))
-                    $display("  %8t  TVRAM[%04X] <= %02X %s  (eu_pc %05X)",
-                             $time, cpu_address[15:0], mem_wr_data_q,
-                             (mem_wr_data_q >= 8'h20 && mem_wr_data_q < 8'h7F)
-                                 ? string'({"'", mem_wr_data_q, "'"}) : "   ",
-                             eu_pc);
-            end
+        // Memory write, on the trailing edge, and never into ROM. One commit
+        // per live lane, so a word write lands as its two bytes and every
+        // watcher below sees each of them.
+        if (mem_wr_n & ~mem_wr_d) begin
+            if (cpu_address[0] == 1'b0)
+                commit_mem_byte(cpu_address, mem_wr_word_q[7:0]);
+            if (UBE_N == 1'b0)
+                commit_mem_byte({cpu_address[19:1], 1'b1}, mem_wr_word_q[15:8]);
         end
 
         // I/O reads matter here too: if the ModRM byte of a group opcode is
@@ -631,7 +706,6 @@ module tb_pc98_boot;
 
     // Latched the way PERIPHERALS latches it, on the CPU clock's falling
     // enable, so the bench sees the same edge the core will.
-    logic pic1_to_cpu = 1'b0;
     always_ff @(posedge clk_chipset)
         if (cpu_ce_negedge) pic1_to_cpu <= pic1_to_cpu_buf;
 
@@ -672,23 +746,53 @@ module tb_pc98_boot;
         eu_cs_d <= eu_cs;
         if (eu_cs != eu_cs_d) begin
             $display("  %8t  CS %04X -> %04X  (pc %05X)", $time, eu_cs_d, eu_cs, eu_pc);
+            $display("        IVT 60: %02X %02X %02X %02X  70: %02X %02X %02X %02X  78: %02X %02X %02X %02X  80: %02X %02X %02X %02X",
+                     ram[20'h0060], ram[20'h0061], ram[20'h0062], ram[20'h0063],
+                     ram[20'h0070], ram[20'h0071], ram[20'h0072], ram[20'h0073],
+                     ram[20'h0078], ram[20'h0079], ram[20'h007A], ram[20'h007B],
+                     ram[20'h007C], ram[20'h007D], ram[20'h007E], ram[20'h007F],
+                     ram[20'h0080], ram[20'h0081], ram[20'h0082], ram[20'h0083]);
+            $display("        IVT 84: %02X %02X %02X %02X",
+                     ram[20'h0084], ram[20'h0085], ram[20'h0086], ram[20'h0087]);
             // Every segment transfer in this boot is worth its full context:
             // there are five of them in ninety seconds, and one of them is the
             // machine leaving the ROM for good.
             for (k = 0; k < 48; k = k + 1)
                 $display("        %05X  op %02X",
                          disp_pc[(disp_w + 64 - 48 + k) % 64],
-                         disp_op[(disp_w + 64 - 48 + k) % 64]);
+                         byte_at(disp_pc[(disp_w + 64 - 48 + k) % 64]));
         end
     end
 
-    // ---- keyboard: none, like the hardware -----------------------------------
+    // ---- keyboard: the 8251 at 0x41/0x43, present, like the machine's --------
     //
-    // The BIOS copes: three polls of 0x43 (8251 status), then 0x41 answers
-    // nothing and it takes the absent path (FD9AD). The bench matches the
-    // machine; the old "present" stand-in took a branch it never takes.
-    wire kbd_stat_iocycle = 1'b0;
-    wire kbd_data_iocycle = 1'b0;
+    // The BIOS's FD930 block resets the keyboard and waits for its 0x60 ACK
+    // before it will set bit 7 of [0x0500] -- and without that bit the
+    // vector installer at FDB1E writes the no-keyboard defaults into INT
+    // 1E/1F: BASIC at D800:2A00, an option-ROM slot nothing occupies on this
+    // machine. Every run so far vectored there and derailed in empty RAM;
+    // the hardware does the same, because nothing answers 0x41/0x43 there
+    // either. A command write to 0x43 arms one 0x60; status bit 1 says a
+    // byte is waiting; reading 0x41 takes it.
+    logic       kbd_ack_armed = 1'b1;
+    logic       kbd_wr_d = 1'b1;
+    wire        kbd_wr = ~io_wr_n & ((cpu_address[15:0] == 16'h0043)
+                               |    (cpu_address[15:0] == 16'h0073));
+    wire        kbd_rd = ~io_rd_n & (cpu_address[15:0] == 16'h0041);
+    // Always ready, always the ACK: the handshakes read one byte and compare
+    // it, and a keyboard that has just been reset obliges. Arming only on a
+    // command write lost the ITF's first probe, whose init writes go to a
+    // port this image never touches.
+    wire [7:0]  kbd_status = 8'h02;
+
+    always_ff @(posedge clk_chipset) begin
+        kbd_wr_d <= kbd_wr;
+        if (kbd_wr & ~kbd_wr_d) kbd_ack_armed <= 1'b1;
+        if (kbd_rd)             kbd_ack_armed <= 1'b1;
+    end
+
+    wire kbd_stat_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0043);
+    wire kbd_data_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0041) & kbd_ack_armed;
 
     // ---- 2DD drive control (0xCC) and a minimal FDC --------------------------
     //
@@ -788,151 +892,65 @@ module tb_pc98_boot;
     //
     // The queue's read pointer is the EU's instruction pointer, so CS:PFQ_ADDR
     // is the real program counter.
-    wire [15:0] eu_ip = u_cpu.t_pfq_addr_out;
-    wire [15:0] eu_cs = u_cpu.t_biu_register_cs;
+    wire [15:0] eu_ip = dbg_regs[207:192];   // retired-instruction IP
+    wire [15:0] eu_cs = dbg_cs;
     wire [19:0] eu_pc = {eu_cs, 4'd0} + {4'd0, eu_ip};
 
-    // The microcode program counter. A stuck EU is either parked on one
-    // microinstruction or going round a small ring of them, and which it is
-    // decides where to look.
-    wire [12:0] urom = u_cpu.EU_CORE.eu_rom_address;
-    logic [12:0] urom_min = 13'h1FFF, urom_max = 13'd0;
-    logic [12:0] urom_seen [0:15];
-    int          urom_w = 0;
-    // Once the F6 dispatch is seen, log every microinstruction. F7 has the same
-    // shape in the listing and works, so the divergence is what matters.
-    logic urom_log = 1'b0;
-    int   urom_log_n = 0;
-    logic [12:0] urom_core_d = 13'h1FFF;
-    logic [12:0] urom_d = 13'h1FFF;
-    always_ff @(posedge clk_core) begin
-        urom_core_d <= urom;
-        if (urom == 13'h01F6) urom_log <= 1'b1;
-        if (urom_log && (urom != urom_core_d) && (urom_log_n < 0)) begin
-            urom_log_n <= urom_log_n + 1;
-            $display("    u %04X", urom);
-        end
-    end
-    always_ff @(posedge clk_chipset) begin
-        urom_d <= urom;
-        if (urom != urom_d) begin
-            urom_seen[urom_w[3:0]] <= urom;
-            urom_w <= urom_w + 1;
-            if (urom < urom_min) urom_min <= urom;
-            if (urom > urom_max) urom_max <= urom;
-        end
-    end
-
-    // mcl86 dispatches an x86 instruction by jumping to 0x0100 + opcode, so
-    // while eu_rom_address[12:8] == 1 the low byte IS the opcode being started.
-    // That gives a true x86 instruction trace, which the bus cannot.
-    wire       is_dispatch = (urom[12:8] == 5'h01);
-    // From the moment the machine leaves the BIOS for the ROM BASIC at E800,
-    // every instruction, in order, until the trace is spent. The ring dumped
-    // at the CS change was all keyword table -- ASCII executed as code -- so
-    // the derailment happens earlier than any ring of the last few dozen
-    // instructions can reach. This starts at the entry and runs forwards.
+    // Instruction retirement: dbg_regs updates as each instruction retires,
+    // so watching eu_pc move gives the x86 trace the old bench read out of
+    // mcl86's microcode dispatch. Only the discontinuities are kept -- a
+    // delay loop is one branch taken 65536 times, and collapsed, 64 entries
+    // cover a whole 1.4-second ITF cycle.
     logic basic_trace = 1'b0;
     int   basic_n = 0;
     int   itf_ck_n = 0;
     int   m;
     logic [19:0] disp_pc [0:63];
-    logic [7:0]  disp_op [0:63];
     int          disp_w = 0;
-    logic [19:0] disp_last = 20'hFFFFF;
     logic [19:0] disp_rec  = 20'hFFFFF;
-    logic [7:0] op_seen [0:63];
-    int         op_w = 0;
-    logic       is_dispatch_d = 1'b0;
-    // Sampled on the EU's own clock. On clk_chipset the microcode PC had often
-    // already advanced past the dispatch entry, and every opcode came out one
-    // too high.
-    always_ff @(posedge clk_core) begin
-        is_dispatch_d <= is_dispatch;
-        if (is_dispatch & ~is_dispatch_d) begin
-            op_seen[op_w[5:0]] <= urom[7:0];
-            op_w <= op_w + 1;
-            // The same trace, but keeping WHERE each opcode was dispatched
-            // from. A ring of addresses says the control flow went somewhere
-            // it should not have; a ring of address-and-opcode says which
-            // instruction sent it, which is the part that can be fixed.
-            //
-            // eu_pc is the prefetch queue's read pointer and has already moved
-            // past the opcode byte by the time the dispatch entry is seen, so
-            // read these as "the instruction ending just before here".
-            // Only the jumps. A 65536-iteration delay loop dispatches the
-            // same two instructions until the ring holds nothing else, and
-            // the ITF is mostly delay loops; keeping the discontinuities
-            // makes 64 entries reach back through the whole cycle.
-            // Jumps only, and a run of the SAME jump collapses to one entry.
-            // A delay loop is one branch taken 65536 times and a poll loop is
-            // one branch taken until the port answers; recording either in
-            // full leaves 64 entries covering a few microseconds. Collapsed,
-            // they cover the whole 1.4-second cycle.
-            if ((eu_pc < disp_last || eu_pc > disp_last + 20'd8)
+
+    function automatic logic [7:0] byte_at(input logic [19:0] a);
+        byte_at = is_rom(a) ? rom_byte(a) : ram[a];
+    endfunction
+
+    always_ff @(posedge clk_chipset) begin
+        if (eu_pc != eu_pc_retired_d) begin
+            if ((eu_pc < eu_pc_retired_d || eu_pc > eu_pc_retired_d + 20'd8)
                 && eu_pc != disp_rec) begin
-                disp_pc[disp_w[5:0]] <= eu_pc;
-                disp_op[disp_w[5:0]] <= urom[7:0];
-                disp_w   <= disp_w + 1;
+                disp_pc[disp_w % 64] <= eu_pc;
                 disp_rec <= eu_pc;
-                // Straight out, in order, rather than into a ring. Two turns
-                // of the 1.4-second cycle fit in a few thousand lines, and
-                // the edge that closes the loop is whichever branch appears
-                // in the second turn with a target the first turn reached
-                // from somewhere else.
                 if (disp_w < 4000)
-                    $display("    J%0d %05X op %02X", disp_w, eu_pc, urom[7:0]);
+                    $display("    J%0d %05X op %02X", disp_w, eu_pc, byte_at(eu_pc));
+                disp_w <= disp_w + 1;
             end
-            disp_last <= eu_pc;
             if (eu_cs == 16'hE800) basic_trace <= 1'b1;
-            // The ITF cycles back to its own ROM checksum about every 1.4
-            // seconds. Nothing in the image jumps there -- the early ITF has
-            // no stack and returns through JMP BP / JMP SP -- so the only way
-            // to see who sends it back is to catch the arrival.
             // The ITF's memory sizing, at the two points where it has just
             // verified a 64 KB pair: BX is the segment it tested, DH the
-            // running block count, and CF says whether the compare held. The
-            // count stops at 2 -- 128 KB -- and nothing above 1FFFF is ever
-            // written, so either the fill never ran or the compare that
-            // follows it is not doing what the ROM thinks.
-            // The size display itself: DX is the answer it is about to print
-            // (AH x 64 KB), and the branches that reach here name whoever
-            // decided it -- the 640 KB counting loop at F8AF0 never runs, so
-            // something else is setting DH.
+            // running block count, and CF says whether the compare held.
             if (eu_pc == 20'hF9678 && itf_ck_n < 2) begin
                 itf_ck_n <= itf_ck_n + 1;
                 $display("  %8t  SIZE DISPLAY  dx %04X  bx %04X", $time,
-                         u_cpu.EU_CORE.eu_register_dx, u_cpu.EU_CORE.eu_register_bx);
+                         dbg_dx, dbg_bx);
                 for (m = 0; m < 48; m = m + 1)
                     $display("        %05X  op %02X",
                              disp_pc[(disp_w + 64 - 48 + m) % 64],
-                             disp_op[(disp_w + 64 - 48 + m) % 64]);
+                             byte_at(disp_pc[(disp_w + 64 - 48 + m) % 64]));
             end
             if (eu_pc == 20'hF8880 || eu_pc == 20'hF8B1E
              || eu_pc == 20'hF889A || eu_pc == 20'hF8B38) begin
                 $display("  %8t  MEMSIZE at %05X  bx %04X dx %04X ax %04X  CF=%0d",
-                         $time, eu_pc,
-                         u_cpu.EU_CORE.eu_register_bx, u_cpu.EU_CORE.eu_register_dx,
-                         u_cpu.EU_CORE.eu_register_ax, u_cpu.EU_CORE.eu_flags[0]);
-            end
-            if (1'b0 && eu_pc == 20'hF8427) begin
-                itf_ck_n <= itf_ck_n + 1;
-                $display("  %8t  ITF cycle mark at F8427 (visit %0d)", $time, itf_ck_n);
-                for (m = 0; m < 48; m = m + 1)
-                    $display("        %05X  op %02X",
-                             disp_pc[(disp_w + 64 - 48 + m) % 64],
-                             disp_op[(disp_w + 64 - 48 + m) % 64]);
+                         $time, eu_pc, dbg_bx, dbg_dx, dbg_ax, dbg_regs[208]);
             end
             if (basic_trace && basic_n < 600) begin
                 basic_n <= basic_n + 1;
                 $display("    B%0d  %05X  op %02X  ax %04X bx %04X cx %04X dx %04X si %04X di %04X",
-                         basic_n, eu_pc, urom[7:0],
-                         u_cpu.EU_CORE.eu_register_ax, u_cpu.EU_CORE.eu_register_bx,
-                         u_cpu.EU_CORE.eu_register_cx, u_cpu.EU_CORE.eu_register_dx,
-                         u_cpu.EU_CORE.eu_register_si, u_cpu.EU_CORE.eu_register_di);
+                         basic_n, eu_pc, byte_at(eu_pc),
+                         dbg_ax, dbg_bx, dbg_cx, dbg_dx, dbg_si, dbg_di);
             end
         end
+        eu_pc_retired_d <= eu_pc;
     end
+    logic [19:0] eu_pc_retired_d = 20'hFFFFF;
 
     logic [19:0] eu_pc_d = 20'hFFFFF;
     int          eu_steps = 0, eu_traced = 0;
@@ -947,21 +965,21 @@ module tb_pc98_boot;
     // dumps at the save and at the retf, so what the four words held at both
     // ends of the reset is in the log.
     int  save_seen = 0, resume_seen = 0;
-    wire [19:0] resume_stack = {u_cpu.BIU_CORE.biu_register_ss[15:0], 4'd0}
-                             + {4'd0, u_cpu.EU_CORE.eu_register_sp[15:0]};
+    wire [19:0] resume_stack = {dbg_ss, 4'd0}
+                             + {4'd0, dbg_sp};
     always_ff @(posedge clk_chipset) begin
         if (eu_pc == 20'hF9475 && save_seen < 4) begin
             save_seen <= save_seen + 1;
             $display("  %8t  SAVE entry: ss=%04X sp=%04X  [0404]=%02X%02X [0406]=%02X%02X",
-                     $time, u_cpu.BIU_CORE.biu_register_ss,
-                     u_cpu.EU_CORE.eu_register_sp,
+                     $time, dbg_ss,
+                     dbg_sp,
                      ram[20'h405], ram[20'h404], ram[20'h407], ram[20'h406]);
         end
         if (eu_pc == 20'hF8069 && resume_seen < 4) begin
             resume_seen <= resume_seen + 1;
             $display("  %8t  RESUME retf: ss=%04X sp=%04X  [0404]=%02X%02X [0406]=%02X%02X",
-                     $time, u_cpu.BIU_CORE.biu_register_ss,
-                     u_cpu.EU_CORE.eu_register_sp,
+                     $time, dbg_ss,
+                     dbg_sp,
                      ram[20'h405], ram[20'h404], ram[20'h407], ram[20'h406]);
             $display("        stack: %02X %02X %02X %02X   03F0: %02X..%02X  03F8: %02X..%02X  0400: %02X..%02X  0408: %02X..%02X",
                      ram[resume_stack],     ram[resume_stack + 20'd1],
@@ -1044,13 +1062,13 @@ module tb_pc98_boot;
         // some: the memory test was still going at 280 KB when that one ended.
         for (i = 0; i < 1200; i = i + 1) begin
             repeat (5_000_000) @(posedge clk_chipset);
-            $display("  ... %0t  EU %05X  urom %04X  wr %05X-%05X n %0d  tvw %0d",
-                     $time, eu_pc, urom,
+            $display("  ... %0t  EU %05X  op %02X  wr %05X-%05X n %0d  tvw %0d",
+                     $time, eu_pc, byte_at(eu_pc),
                      wr_lo_chunk, wr_hi_chunk, wr_n_chunk, tvram_wr_count);
             $write("        cx %04X min %04X  ax %04X bx %04X dx %04X  pc:",
                    eu_cx, cx_min_chunk,
-                   u_cpu.EU_CORE.eu_register_ax, u_cpu.EU_CORE.eu_register_bx,
-                   u_cpu.EU_CORE.eu_register_dx);
+                   dbg_ax, dbg_bx,
+                   dbg_dx);
             for (j = 0; j < 16; j = j + 1)
                 $write(" %05X", pc_ring[(pc_ring_w + j) % 16]);
             $display("");
@@ -1089,14 +1107,7 @@ module tb_pc98_boot;
         $display("port 043D written: %0d  last value %02X  itf_bank %0d",
                  saw_043d, last_043d, itf_bank);
         $display("EU steps      %0d", eu_steps);
-        $display("urom now      %04X   moves %0d   range %04X..%04X",
-                 urom, urom_w, urom_min, urom_max);
-        $display("x86 opcodes dispatched: %0d", op_w);
-        for (i = (op_w > 64 ? op_w - 64 : 0); i < op_w; i = i + 1)
-            $display("  op %02X", op_seen[i & 63]);
-        $display("last 16 microcode addresses:");
-        for (i = 0; i < 16; i = i + 1)
-            $display("  %04X", urom_seen[(urom_w + i) & 15]);
+
         $display("last 128 EU addresses (oldest first):");
         for (i = 0; i < 128; i = i + 1)
             $display("  %05X", eu_ring[(eu_ring_w + i) & 127]);

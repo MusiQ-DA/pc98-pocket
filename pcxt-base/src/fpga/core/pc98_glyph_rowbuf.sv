@@ -54,11 +54,26 @@ module pc98_glyph_rowbuf #(
 
     // Font fetch: request a sixteen-byte burst at f_addr, take f_data on each
     // f_valid. Sixteen beats, then the provider drops f_busy.
+    //
+    // KANJI cells only. An ANK cell's sixteen bytes come from the local
+    // pc98_font_ank BRAM instead: the 4 KB 8x16 set the loader writes directly,
+    // so plain text never depends on FONT.ROM reaching 0x400000 or on the
+    // video SDRAM port being free. On the first hardware run that drew at all,
+    // the SDRAM path read a region nobody had filled and every cell came out
+    // solid -- attributes with no glyph. ANK out of BRAM is the fix and the
+    // regression bench for it is tb_pc98_rowbuf.
     output logic        f_req,
     output logic [19:0] f_addr,
     input  wire         f_busy,
     input  wire         f_valid,
     input  wire  [7:0]  f_data,
+
+    // ANK BRAM side, same clock as this FSM. Present (code, line); ank_row
+    // answers the following cycle, one byte at a time -- two clocks per byte,
+    // thirty-two per cell, against a budget of 1730 x 16 per row.
+    output logic [7:0]  ank_code,
+    output logic [3:0]  ank_line,
+    input  wire  [7:0]  ank_row,
 
     // Renderer side: the row NOT being filled.
     //
@@ -85,8 +100,9 @@ module pc98_glyph_rowbuf #(
     logic       pair_second;       // this col is a kanji's right half
     logic [7:0] hold_lo, hold_hi;
 
-    typedef enum logic [2:0] {
-        S_IDLE, S_TV_REQ, S_TV_W1, S_TV_W2, S_FETCH, S_STREAM, S_NEXT
+    typedef enum logic [3:0] {
+        S_IDLE, S_TV_REQ, S_TV_W1, S_TV_W2, S_FETCH, S_STREAM, S_NEXT,
+        S_ANK, S_ANK_W
     } state_t;
     state_t state;
 
@@ -121,6 +137,8 @@ module pc98_glyph_rowbuf #(
             pair_second <= 1'b0;
             kanji_seen  <= 1'b0;
             tv_cell     <= 12'd0;
+            ank_code    <= 8'h00;
+            ank_line    <= 4'd0;
         end else begin
             f_req <= 1'b0;
 
@@ -160,11 +178,41 @@ module pc98_glyph_rowbuf #(
                 state   <= S_FETCH;
             end
 
+            // An ANK cell never touches the SDRAM port: the bytes come out of
+            // the local BRAM, two clocks apiece. ga_is_kanji is the same
+            // decision the address path makes, so the two paths cannot
+            // disagree about what a cell is.
             S_FETCH: if (!f_busy) begin
-                f_req  <= 1'b1;
-                f_addr <= ga_addr;
-                beat   <= 4'd0;
-                state  <= S_STREAM;
+                if (ga_is_kanji) begin
+                    f_req  <= 1'b1;
+                    f_addr <= ga_addr;
+                    beat   <= 4'd0;
+                    state  <= S_STREAM;
+                end else begin
+                    ank_code <= hold_lo;
+                    ank_line <= 4'd0;
+                    beat     <= 4'd0;
+                    state    <= S_ANK;
+                end
+            end
+
+            // One dead cycle. ank_code/ank_line were registered on the way in,
+            // so the BRAM's answer for the current line only exists a cycle
+            // after the request -- and the same is true of every line after
+            // the first, so S_ANK_W comes back here between bytes.
+            S_ANK: state <= S_ANK_W;
+
+            // Store the byte the BRAM registered last cycle, then ask for the
+            // next line. One byte every two clocks: request, wait, store.
+            S_ANK_W: begin
+                store[{bank, col, beat}] <= ank_row;
+                if (beat == 4'd15) begin
+                    state <= S_NEXT;
+                end else begin
+                    ank_line <= beat + 4'd1;
+                    beat     <= beat + 4'd1;
+                    state    <= S_ANK;
+                end
             end
 
             S_STREAM: begin

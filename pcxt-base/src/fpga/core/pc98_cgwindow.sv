@@ -50,6 +50,16 @@ module pc98_cgwindow (
     input  wire [15:0] io_port,
     input  wire  [7:0] io_data,
 
+    // Guest writes to A4000-A4FFF, same qualification shape as the text VRAM's
+    // (select & ~memory_write_n). The window is RAM on machines this BIOS
+    // family knows: the ITF's own test writes a pattern through the window and
+    // reads it back, and user-defined characters are loaded the same way. A
+    // write lands in the same slot a read at that address would come from, so
+    // what the guest wrote is what the guest reads.
+    input  wire        mem_wr,
+    input  wire [11:0] wr_addr,
+    input  wire  [7:0] wr_data,
+
     // Guest read of A4000-A4FFF; offset within the window.
     input  wire [11:0] rd_addr,
     output wire  [7:0] rd_data,
@@ -69,6 +79,13 @@ module pc98_cgwindow (
 
     // Two halves of sixteen lines.
     (* ramstyle = "M10K" *) logic [7:0] win [0:31];
+
+    // Which slots the guest has written since the last code change. The code
+    // write kicks off a refill from the font store, and the CPU can reach its
+    // first stosb before that burst lands -- without the mask the refill would
+    // stamp ROM bytes over the guest's pattern and the write would look like
+    // it never happened.
+    logic [31:0] dirty;
 
     wire        ga_kanji;
     wire [19:0] ga_addr;
@@ -102,8 +119,14 @@ module pc98_cgwindow (
             busy       <= 1'b0;
             reload     <= 1'b0;
             fetch_half <= 1'b0;
+            dirty      <= 32'h0;
         end else begin
             f_req <= 1'b0;
+
+            if (mem_wr) begin
+                win[{wr_addr[0], wr_addr[4:1]}] <= wr_data;
+                dirty[{wr_addr[0], wr_addr[4:1]}] <= 1'b1;
+            end
 
             if (io_wr) begin
                 case (io_port)
@@ -116,6 +139,14 @@ module pc98_cgwindow (
                     end
                     default: ;
                 endcase
+                // A code change hands the window back to the font store -- but
+                // on the WRITE, not while `reload` is held: a refill can be in
+                // flight when the guest starts storing, and clearing on the
+                // level here would wipe the marks those stores leave and let
+                // the refill stamp over them.
+                if (io_port == 16'h00A1 || io_port == 16'h00A3
+                 || io_port == 16'h00A5)
+                    dirty <= 32'h0;
             end
 
             case (state)
@@ -134,7 +165,7 @@ module pc98_cgwindow (
             end
 
             S_STREAM: if (f_valid) begin
-                win[{fetch_half, beat}] <= f_data;
+                if (!dirty[{fetch_half, beat}]) win[{fetch_half, beat}] <= f_data;
                 beat <= beat + 4'd1;
                 if (beat == 4'd15) state <= S_NEXT;
             end
