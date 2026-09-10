@@ -774,17 +774,21 @@ module tb_pc98_v30;
     // the hardware does the same, because nothing answers 0x41/0x43 there
     // either. A command write to 0x43 arms one 0x60; status bit 1 says a
     // byte is waiting; reading 0x41 takes it.
-    logic       kbd_ack_armed = 1'b0;
+    logic       kbd_ack_armed = 1'b1;
     logic       kbd_wr_d = 1'b1;
     wire        kbd_wr = ~io_wr_n & ((cpu_address[15:0] == 16'h0043)
-                               | (cpu_address[15:0] == 16'h0073));  // the ITF drives 0x73
+                               |    (cpu_address[15:0] == 16'h0073));
     wire        kbd_rd = ~io_rd_n & (cpu_address[15:0] == 16'h0041);
-    wire [7:0]  kbd_status = kbd_ack_armed ? 8'h02 : 8'h00;
+    // Always ready, always the ACK: the handshakes read one byte and compare
+    // it, and a keyboard that has just been reset obliges. Arming only on a
+    // command write lost the ITF's first probe, whose init writes go to a
+    // port this image never touches.
+    wire [7:0]  kbd_status = 8'h02;
 
     always_ff @(posedge clk_chipset) begin
         kbd_wr_d <= kbd_wr;
         if (kbd_wr & ~kbd_wr_d) kbd_ack_armed <= 1'b1;
-        if (kbd_rd)             kbd_ack_armed <= 1'b0;
+        if (kbd_rd)             kbd_ack_armed <= 1'b1;
     end
 
     wire kbd_stat_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0043);
