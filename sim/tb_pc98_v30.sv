@@ -225,11 +225,20 @@ module tb_pc98_v30;
     logic        tvram_fil_dummy;
     logic [7:0]  tvram_lo_dummy, tvram_hi_dummy;
     logic [11:0] tvram_fil_cell = 12'd0;
+    // The memory switch (A3FE0-A3FFF, tvram cells 0xFF0-0xFFF) is register
+    // territory on real hardware: the ITF's VRAM test deliberately stops at
+    // 0x3FDF to avoid it, and np2 re-asserts its config after every clear.
+    // The POST clear (FECBB) sweeps the full 16 KB and would stomp it to
+    // 0xE1 -- so guest attr writes into those cells are dropped here and the
+    // pre-seeded switch values survive the whole boot.
+    wire memsw_cell = (cpu_address[13:2] >= 12'hFF8);           // 0x3FE0-0x3FFF
+    wire tvram_wren = ~mem_wr_n
+                    & (cpu_address[19:14] == 6'b101000)
+                    & ~(memsw_cell & cpu_address[13]);
     pc98_tvram u_tvram (
         .clk          (clk_chipset),
         .cpu_addr     (cpu_address[13:0]),
-        .cpu_wren     (~mem_wr_n
-                        & (cpu_address[19:14] == 6'b101000)),
+        .cpu_wren     (tvram_wren),
         .cpu_wdata    (cpu_data_bus),
         .cpu_q        (tvram_q),
         .fil_clk      (clk_chipset),
@@ -910,13 +919,28 @@ module tb_pc98_v30;
                  u_tvram.attr[12'hFF1], u_tvram.attr[12'hFF3], u_tvram.attr[12'hFF5]);
         end
 
+    // At the POP SS (F7D80): the stack word it pops becomes BASIC's work
+    // segment. Dump the whole POST stack and SP at that moment.
+    logic popss_dumped = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (!popss_dumped && eu_pc == 20'hF7D80) begin
+            popss_dumped <= 1'b1;
+            $display("  %8t  POPSS: sp=%04X  stk F0:%02X%02X F2:%02X%02X F4:%02X%02X F6:%02X%02X F8:%02X%02X FA:%02X%02X FC:%02X%02X FE:%02X%02X",
+                     $time, dbg_sp,
+                     ram[20'h003F1],ram[20'h003F0], ram[20'h003F3],ram[20'h003F2],
+                     ram[20'h003F5],ram[20'h003F4], ram[20'h003F7],ram[20'h003F6],
+                     ram[20'h003F9],ram[20'h003F8], ram[20'h003FB],ram[20'h003FA],
+                     ram[20'h003FD],ram[20'h003FC], ram[20'h003FF],ram[20'h003FE]);
+        end
+    end
+
     // Catch the value that POP SS at F7D80 will load: watch every write
     // to the POST stack (segment 0x0030) while BASIC is initialising. The
     // B-trace showed SS going from 0030 to F202 at that POP; something in
     // the entry code pushes F202, and on a real machine it pushes a RAM
     // segment instead.
     always_ff @(posedge clk_chipset) begin
-        if (basic_trace && cpu_address >= 20'h00300
+        if (cpu_address >= 20'h003F0
             && cpu_address <= 20'h003FF && ~is_rom(cpu_address)) begin
             if (mem_wr_n & ~mem_wr_d)
                 $display("  %8t  STK[%04X] <= %02X   (eu_pc %05X)  sp=%04X",
@@ -989,6 +1013,17 @@ module tb_pc98_v30;
                 $display("    [%2d] %s %05X data=%02X", k, buslog_wr[idx] ? "RD" : "WR",
                          buslog_addr[idx], buslog_data[idx]);
             end
+        end
+    end
+
+    // Memory-switch write watch: every write into tvram cells 0xFF0-0xFFF
+    // (A3FE0-A3FFF) gets logged. The POST clear at FECBB sweeps the whole
+    // 16 KB, so the question of who re-writes the switch -- and when -- is
+    // the difference between a booting machine and a 512 KB one.
+    always_ff @(posedge clk_chipset) begin
+        if (u_tvram.cpu_wren && u_tvram.cpu_cell[11:4] == 8'hFF && u_tvram.is_attr) begin
+            $display("  %8t  MSWW [cell %03X] <= %02X  (eu_pc %05X)", $time,
+                     u_tvram.cpu_cell, u_tvram.cpu_wdata, eu_pc);
         end
     end
 
