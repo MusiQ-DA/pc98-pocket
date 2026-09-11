@@ -267,7 +267,16 @@ module tb_pc98_v30;
     wire [7:0] din_odd  = din_of({cpu_address[19:1], 1'b1});
     always_comb begin
         case (processor_status)
-            3'b100, 3'b101: DATA_I = {din_odd, din_even};   // CODE, MEMR
+            3'b100, 3'b101: begin
+                // The SS override: any word read from the POST stack during
+                // BASIC's entry returns the forced value instead. The POP SS
+                // at F7D80 reads two bytes from [SS:SP] through here.
+                if (ss_override_val >= 0 && basic_trace
+                    && cpu_address >= 20'h003F0 && cpu_address <= 20'h003FF)
+                    DATA_I = {ss_override_val[15:8], ss_override_val[7:0]};
+                else
+                    DATA_I = {din_odd, din_even};
+            end
             3'b000:         DATA_I = {8'h00, din_even};     // INTA: vector low
             default:        DATA_I = {din_even, din_even};  // I/O, byte-wide
         endcase
@@ -912,6 +921,32 @@ module tb_pc98_v30;
         end
     end
 
+    // Pre-seed the stack word the POP SS at F7D80 will load. On a real
+    // 640 KB machine this word holds a RAM segment for BASIC's work area;
+    // on ours it holds 0xF202 (a ROM segment) because the work area value
+    // [06EA] is nobody's job on a BIOS-direct boot and the ITF doesn't set
+    // it either. 0x8000 = 512 KB paragraph is the middle of user RAM.
+    // +ssfix=NNNN: when the POP SS at eu_pc F7D80 executes, force SS to
+    // NNNN instead of whatever the stack holds. This bypasses the mystery
+    // of who pushes 0xF202 and tests whether BASIC runs with a correct
+    // work-area segment.
+    int ss_override_val = -1;
+    logic [15:0] work_ea_val = 16'h0000;
+    initial begin
+        int v;
+        if ($value$plusargs("ssfix=%d", v)) ss_override_val = v;
+        if ($value$plusargs("workEA=%d", v)) work_ea_val = v[15:0];
+    end
+    // Pre-seed the work area: on a real machine this is set by the ITF's
+    //  the BIOS's POST inherits it. Ours has neither, so provide it.
+    initial if (work_ea_val != 0) begin
+        ram[20'h006EA] = work_ea_val[7:0];
+        ram[20'h006EB] = work_ea_val[15:8];
+        ram[20'h006E8] = work_ea_val[7:0];
+        ram[20'h006E9] = work_ea_val[15:8];
+        $display("WORK EA pre-seeded to %04X", work_ea_val);
+    end
+
     // BASIC's wait loop, checked for interrupt readiness: the tick this
     // loop waits on is delivered through INT 0x08, and both the CPU's IF
     // and the PIC's ISR0 state decide whether the next tick arrives.
@@ -1176,6 +1211,7 @@ module tb_pc98_v30;
             // the moment: dump the registers, the work area, and every write
             // into offset 0x15B0-0x15D0 from here on.
             if (eu_cs == 16'hE800 && !hook_watch) hook_watch <= 1'b1;
+            // (the din_of override below answers the POP SS directly)
             if (eu_pc == 20'hF3ACE) begin
                 $display("  %8t  HOOK SITE: cs=%04X ss=%04X ds=%04X", $time,
                          dbg_cs, dbg_ss, dbg_regs[191:176]);
