@@ -214,8 +214,36 @@ module tb_pc98_v30;
     //
     // A function so the V30 front can ask for BOTH bytes of the aligned word
     // it fetches, while every model below still speaks eight bits.
+    //
+    // A0000-A3FFF is the REAL pc98_tvram, not flat RAM: the machine's run#191
+    // drew every letter through the two-byte path because the high bytes of
+    // the message cells still held the VRAM test's 0x55 -- the mov-word write
+    // that should have cleared them never landed in the hardware banks. This
+    // bench modelled the plane as flat memory, so the write path that failed
+    // had no coverage at all.
+    logic [7:0]  tvram_q;
+    logic        tvram_fil_dummy;
+    logic [7:0]  tvram_lo_dummy, tvram_hi_dummy;
+    logic [11:0] tvram_fil_cell = 12'd0;
+    pc98_tvram u_tvram (
+        .clk          (clk_chipset),
+        .cpu_addr     (cpu_address[13:0]),
+        .cpu_wren     (~mem_wr_n
+                        & (cpu_address[19:14] == 6'b101000)),
+        .cpu_wdata    (cpu_data_bus),
+        .cpu_q        (tvram_q),
+        .fil_clk      (clk_chipset),
+        .fil_cell     (tvram_fil_cell),
+        .fil_char_lo  (tvram_lo_dummy),
+        .fil_char_hi  (tvram_hi_dummy),
+        .vid_clk      (clk_chipset),
+        .vid_cell     (12'd0),
+        .vid_attr     (tvram_fil_dummy)
+    );
+
     function automatic logic [7:0] din_of(input logic [19:0] a);
-        din_of = ~mem_rd_n    ? (is_rom(a) ? rom_byte(a) : ram[a])
+        din_of = ~mem_rd_n    ? (is_rom(a) ? rom_byte(a)
+                              : ((a[19:14] == 6'b101000) ? tvram_q : ram[a]))
                : ~inta_n      ? ((~pic2_data_bus_io) ? pic2_dout : pic1_dout)
                : pit_iocycle  ? pit_dout
                : dma_iocycle  ? dma_dout
@@ -277,8 +305,14 @@ module tb_pc98_v30;
     wire sysport_33_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0033);
     wire sysport_35_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0035);
     wire sysport_42_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0042);
+    // 0xBE: the extension/boot-option read the disk-boot code makes when
+    // 0x42 bit0 is clear. FF here reads as "an extension ROM is present",
+    // and the BIOS then installs INT 1E pointing into the empty C page
+    // (FC5C:FE92 wraps past the megabyte) -- the derailment every run took
+    // at the boot decision. Nothing is present; answer 00.
+    wire sysport_be_sel = ~io_rd_n & (cpu_address[15:0] == 16'h00BE);
     wire sysport_sel    = sysport_31_sel | sysport_33_sel
-                        | sysport_35_sel | sysport_42_sel;
+                        | sysport_35_sel | sysport_42_sel | sysport_be_sel;
     // 0x33 is 8255 port B, an INPUT on a PC-98: bit 3 a DIP switch inverted,
     // bits 7-5 the RS-232C modem status, bit 0 the calendar clock, and the
     // rest zero. Bit 2 is one of the zeroes, and the UX ITF reads it at F889C
@@ -345,6 +379,7 @@ module tb_pc98_v30;
     // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
                             : sysport_33_sel ? 8'h00
+                            : sysport_be_sel ? 8'h00
                             : sysport_42_sel ? 8'h02
                             :                  8'h00;
 
@@ -362,7 +397,11 @@ module tb_pc98_v30;
     // reset-resume save window, and the text-plane snoop.
     task automatic commit_mem_byte(input logic [19:0] a, input logic [7:0] d);
         if (~is_rom(a)) begin
-            ram[a] <= d;
+            // The real tvram module owns A0000-A3FFF; flat RAM must not also
+            // take the writes, or the read mux above would be reading a
+            // different store than the machine does.
+            if (a[19:14] != 6'b101000)
+                ram[a] <= d;
             // Where the writes are going, chunk by chunk. The hardware's LIVE
             // readout is the same quantity, and "sweeping upward through the
             // memory test" and "going round a small ring" look identical on a
@@ -389,6 +428,16 @@ module tb_pc98_v30;
             // a named question.
             if (a >= 20'h0070 && a <= 20'h0083)
                 $display("  %8t  IVT[%04X] <= %02X   (eu_pc %05X)",
+                         $time, a[15:0], d, eu_pc);
+            // The extension-ROM scan state: [0x4AC] the far-call pointer,
+            // [0x4AE] the segment under test. And the low-RAM stub page the
+            // boot decision jumps through -- where 0000:0A05 keeps turning
+            // up as the derailment target.
+            if (a >= 20'h004A0 && a <= 20'h004B0)
+                $display("  %8t  FAR[%04X] <= %02X   (eu_pc %05X)",
+                         $time, a[15:0], d, eu_pc);
+            if (a >= 20'h00A00 && a <= 20'h00A20)
+                $display("  %8t  STUB[%04X] <= %02X   (eu_pc %05X)",
                          $time, a[15:0], d, eu_pc);
             // The text plane: the memory-count display lands here. Keep the
             // first row of cells (code + attribute) for the final dump.
@@ -754,6 +803,10 @@ module tb_pc98_v30;
                      ram[20'h0080], ram[20'h0081], ram[20'h0082], ram[20'h0083]);
             $display("        IVT 84: %02X %02X %02X %02X",
                      ram[20'h0084], ram[20'h0085], ram[20'h0086], ram[20'h0087]);
+            $display("        FAR 4AC: %02X %02X %02X %02X   STUB A00: %02X %02X %02X %02X %02X %02X %02X %02X",
+                     ram[20'h004AC], ram[20'h004AD], ram[20'h004AE], ram[20'h004AF],
+                     ram[20'h00A00], ram[20'h00A01], ram[20'h00A02], ram[20'h00A03],
+                     ram[20'h00A04], ram[20'h00A05], ram[20'h00A06], ram[20'h00A07]);
             // Every segment transfer in this boot is worth its full context:
             // there are five of them in ninety seconds, and one of them is the
             // machine leaving the ROM for good.
@@ -774,21 +827,21 @@ module tb_pc98_v30;
     // the hardware does the same, because nothing answers 0x41/0x43 there
     // either. A command write to 0x43 arms one 0x60; status bit 1 says a
     // byte is waiting; reading 0x41 takes it.
-    logic       kbd_ack_armed = 1'b1;
+    logic       kbd_ack_armed = 1'b0;
     logic       kbd_wr_d = 1'b1;
     wire        kbd_wr = ~io_wr_n & ((cpu_address[15:0] == 16'h0043)
                                |    (cpu_address[15:0] == 16'h0073));
     wire        kbd_rd = ~io_rd_n & (cpu_address[15:0] == 16'h0041);
-    // Always ready, always the ACK: the handshakes read one byte and compare
-    // it, and a keyboard that has just been reset obliges. Arming only on a
-    // command write lost the ITF's first probe, whose init writes go to a
-    // port this image never touches.
-    wire [7:0]  kbd_status = 8'h02;
+    // Arm on a command write, take on the read: the keyboard ACKs its reset.
+    // With the ACK always offered, the ITF's first probe (before ANY command
+    // write) also sees 0x60 and the ITF skips its whole test sequence --
+    // which is not what a cold machine does.
+    wire [7:0]  kbd_status = kbd_ack_armed ? 8'h02 : 8'h00;
 
     always_ff @(posedge clk_chipset) begin
         kbd_wr_d <= kbd_wr;
         if (kbd_wr & ~kbd_wr_d) kbd_ack_armed <= 1'b1;
-        if (kbd_rd)             kbd_ack_armed <= 1'b1;
+        if (kbd_rd)             kbd_ack_armed <= 1'b0;
     end
 
     wire kbd_stat_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0043);
@@ -931,6 +984,7 @@ module tb_pc98_v30;
                 itf_ck_n <= itf_ck_n + 1;
                 $display("  %8t  SIZE DISPLAY  dx %04X  bx %04X", $time,
                          dbg_dx, dbg_bx);
+                tvram_row0_dump;
                 for (m = 0; m < 48; m = m + 1)
                     $display("        %05X  op %02X",
                              disp_pc[(disp_w + 64 - 48 + m) % 64],
@@ -951,6 +1005,32 @@ module tb_pc98_v30;
         eu_pc_retired_d <= eu_pc;
     end
     logic [19:0] eu_pc_retired_d = 20'hFFFFF;
+
+    // The renderer's eye on row 0: present each cell to the real tvram's fill
+    // port and record what a glyph_addr would make of it. is_kanji on a cell
+    // the guest wrote as plain ANK is the run#191 symptom -- the letter goes
+    // to the two-byte path and the screen shows a dense wrong glyph with its
+    // neighbour swallowed as the right half.
+    task automatic tvram_row0_dump;
+        int k;
+        begin
+            $write("        row0 decode:");
+            for (k = 0; k < 16; k = k + 1) begin
+                // fil_* are registered: present, wait a clock, then read.
+                tvram_fil_cell = 12'(k);
+                @(posedge clk_chipset); @(posedge clk_chipset);
+                $write(" %02X%02X%s", tvram_fil_hi_q, tvram_fil_lo_q,
+                       (tvram_fil_hi_q != 8'h00) ? "*" : " ");
+            end
+            $display("   (* = kanji-flagged)");
+            tvram_fil_cell = 12'd0;
+        end
+    endtask
+    logic [7:0]  tvram_fil_lo_q, tvram_fil_hi_q;
+    always_ff @(posedge clk_chipset) begin
+        tvram_fil_lo_q <= tvram_lo_dummy;
+        tvram_fil_hi_q <= tvram_hi_dummy;
+    end
 
     logic [19:0] eu_pc_d = 20'hFFFFF;
     int          eu_steps = 0, eu_traced = 0;
@@ -1042,6 +1122,17 @@ module tb_pc98_v30;
         for (i = 0; i < 1048576; i = i + 1) ram[i] = 8'h00;
         $readmemh("itf.hex",  itf);
         $readmemh("bios.hex", bios);
+
+        // +basicvec=1: pre-seed INT 1F with the N88-BASIC entry, the way a
+        // machine whose boot has already established it would hold it. The
+        // ROM's own installer writes D800:xxxx there (the option-ROM slot),
+        // and whose job the E800 vector is on a bare VM is still open -- but
+        // whether BASIC itself runs on this CPU is the question this answers.
+        if ($test$plusargs("basicvec")) begin
+            ram[20'h0007C] = 8'h07; ram[20'h0007D] = 8'h0A;
+            ram[20'h0007E] = 8'h00; ram[20'h0007F] = 8'hE8;
+            $display("IVT[1F] pre-seeded with E800:0A07");
+        end
 
         $display("ITF  reset vector F8000+7FF0: %02X %02X %02X %02X %02X",
                  itf[16'h7FF0], itf[16'h7FF1], itf[16'h7FF2],
