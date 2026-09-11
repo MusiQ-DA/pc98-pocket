@@ -919,6 +919,64 @@ module tb_pc98_v30;
                  u_tvram.attr[12'hFF1], u_tvram.attr[12'hFF3], u_tvram.attr[12'hFF5]);
         end
 
+    // Value-change watch on the two bytes that become the POP SS word:
+    // [0030:00FC] and [0030:00FD]. Edge-triggered on the ARRAY VALUE, so
+    // word writes and both bus lanes are caught regardless of the
+    // address/data latching.
+    logic [7:0] stkfc_q = 8'hxx, stkfd_q = 8'hxx;
+    always_ff @(posedge clk_chipset) begin
+        if (ram[20'h003FC] !== stkfc_q) begin
+            $display("  %8t  FCWATCH [03FC] %02X -> %02X  (eu_pc %05X)", $time,
+                     stkfc_q, ram[20'h003FC], eu_pc);
+            stkfc_q <= ram[20'h003FC];
+        end
+        if (ram[20'h003FD] !== stkfd_q) begin
+            $display("  %8t  FDWATCH [03FD] %02X -> %02X  (eu_pc %05X)", $time,
+                     stkfd_q, ram[20'h003FD], eu_pc);
+            stkfd_q <= ram[20'h003FD];
+        end
+    end
+
+    // [0x3F8]/[0x3F9] watches: the int-1E frame's IP lands here; the POPSS
+    // dump showed {07,0A} where the ROM's own int at FD80:6205 would push
+    // {07,62} -- the 0x0A's writer is the last unknown.
+    logic [7:0] stkf8_q = 8'h00, stkf9_q = 8'h00;
+    always_ff @(posedge clk_chipset) begin
+        if (ram[20'h003F8] !== stkf8_q) begin
+            $display("  %8t  F8WATCH [03F8] %02X -> %02X  (eu_pc %05X)", $time,
+                     stkf8_q, ram[20'h003F8], eu_pc);
+            stkf8_q <= ram[20'h003F8];
+        end
+        if (ram[20'h003F9] !== stkf9_q) begin
+            $display("  %8t  F9WATCH [03F9] %02X -> %02X  (eu_pc %05X)", $time,
+                     stkf9_q, ram[20'h003F9], eu_pc);
+            stkf9_q <= ram[20'h003F9];
+        end
+    end
+
+    // Keyboard I/O + [0x500] trace: the BIOS keyboard test should set
+    // [0x500].bit7 on a successful 8251 echo; our machine never gets it,
+    // so the second extension-ROM scan runs and leaves [0030:00F8]=0x0F --
+    // the word BASIC's entry stub later consumes as ES.
+    logic [7:0] kbd500_q = 8'h00;
+    wire kbd_io_sel = ~io_rd_n & ((cpu_address[15:0] == 16'h0041)
+                                | (cpu_address[15:0] == 16'h0043));
+    wire kbd32_io   = ~io_wr_n & (cpu_address[15:0] == 16'h0032);
+    wire kbd43_io   = ~io_wr_n & (cpu_address[15:0] == 16'h0043);
+    always_ff @(posedge clk_chipset) begin
+        if (kbd_io_sel & io_rd_d)
+            $display("  %8t  KBD RD %04X => %02X  (eu_pc %05X)", $time,
+                     cpu_address[15:0], (kbd_ack_armed ? 8'h60 : 8'h00), eu_pc);
+        if (kbd32_io | kbd43_io)
+            $display("  %8t  KBD WR %04X <= %02X  (eu_pc %05X)", $time,
+                     cpu_address[15:0], cpu_data_bus, eu_pc);
+        if (ram[20'h00500] !== kbd500_q) begin
+            $display("  %8t  K500 [0500] %02X -> %02X  (eu_pc %05X)", $time,
+                     kbd500_q, ram[20'h00500], eu_pc);
+            kbd500_q <= ram[20'h00500];
+        end
+    end
+
     // At the POP SS (F7D80): the stack word it pops becomes BASIC's work
     // segment. Dump the whole POST stack and SP at that moment.
     logic popss_dumped = 1'b0;

@@ -833,6 +833,7 @@ module tb_pc98_boot;
     // the derailment happens earlier than any ring of the last few dozen
     // instructions can reach. This starts at the entry and runs forwards.
     logic basic_trace = 1'b0;
+    logic basic_entry_dumped = 1'b0;
     int   basic_n = 0;
     int   itf_ck_n = 0;
     int   m;
@@ -885,6 +886,22 @@ module tb_pc98_boot;
             end
             disp_last <= eu_pc;
             if (eu_cs == 16'hE800) basic_trace <= 1'b1;
+            // BASIC-entry forensics (mirrors the V30 bench): when the machine
+            // first enters the BASIC segment, dump the POST stack, SP and the
+            // IVT[1E] entry -- the V30 machine derails here because the POP SS
+            // at F000:7D80 pops a stale printer-handler word, and the mcl86
+            // machine (which reached F3AD5) is the working reference.
+            if (eu_cs == 16'hE800 && !basic_entry_dumped) begin
+                basic_entry_dumped <= 1'b1;
+                $display("  %8t  BENTRY: sp=%04X ss=%04X IVT1E=%04X:%04X  stk F0:%02X%02X F2:%02X%02X F4:%02X%02X F6:%02X%02X F8:%02X%02X FA:%02X%02X FC:%02X%02X FE:%02X%02X",
+                         $time, u_cpu.EU_CORE.eu_register_sp,
+                         u_cpu.BIU_CORE.biu_register_ss,
+                         ram[20'h0079],ram[20'h0078], ram[20'h007B],ram[20'h007A],
+                         ram[20'h003F1],ram[20'h003F0], ram[20'h003F3],ram[20'h003F2],
+                         ram[20'h003F5],ram[20'h003F4], ram[20'h003F7],ram[20'h003F6],
+                         ram[20'h003F9],ram[20'h003F8], ram[20'h003FB],ram[20'h003FA],
+                         ram[20'h003FD],ram[20'h003FC], ram[20'h003FF],ram[20'h003FE]);
+            end
             // The ITF cycles back to its own ROM checksum about every 1.4
             // seconds. Nothing in the image jumps there -- the early ITF has
             // no stack and returns through JMP BP / JMP SP -- so the only way
