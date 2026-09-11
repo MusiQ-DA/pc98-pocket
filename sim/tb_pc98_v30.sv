@@ -225,11 +225,20 @@ module tb_pc98_v30;
     logic        tvram_fil_dummy;
     logic [7:0]  tvram_lo_dummy, tvram_hi_dummy;
     logic [11:0] tvram_fil_cell = 12'd0;
+    // The memory switch (A3FE0-A3FFF, tvram cells 0xFF0-0xFFF) is register
+    // territory on real hardware: the ITF's VRAM test deliberately stops at
+    // 0x3FDF to avoid it, and np2 re-asserts its config after every clear.
+    // The POST clear (FECBB) sweeps the full 16 KB and would stomp it to
+    // 0xE1 -- so guest attr writes into those cells are dropped here and the
+    // pre-seeded switch values survive the whole boot.
+    wire memsw_cell = (cpu_address[13:2] >= 12'hFF8);           // 0x3FE0-0x3FFF
+    wire tvram_wren = ~mem_wr_n
+                    & (cpu_address[19:14] == 6'b101000)
+                    & ~(memsw_cell & cpu_address[13]);
     pc98_tvram u_tvram (
         .clk          (clk_chipset),
         .cpu_addr     (cpu_address[13:0]),
-        .cpu_wren     (~mem_wr_n
-                        & (cpu_address[19:14] == 6'b101000)),
+        .cpu_wren     (tvram_wren),
         .cpu_wdata    (cpu_data_bus),
         .cpu_q        (tvram_q),
         .fil_clk      (clk_chipset),
@@ -333,8 +342,11 @@ module tb_pc98_v30;
     // default set is 3E E3 7B). Bit0 is the boot order: SET means int 1F is
     // skipped and the machine goes straight to int 1E -- which is how a
     // stock machine avoids IVT[1F]'s D800:2A00, an entry for a BASIC card
-    // nothing here has. Bit4 asks the ITF to initialise the memory switch,
-    // which is how the count reaches 640 KB. 0x11 = both.
+    // nothing here has. Bit4 asks the ROM to initialise the memory switch --
+    // but np2 keeps it CLEAR (0xE3) and instead pre-writes the switch bytes
+    // {48,05,04,...} into A3FE2+4i at every reset (pccore_reset), because
+    // the ROM's own writer tops out at FEA=2 (512 KB class) while the real
+    // 640 KB value is FEA=4. Answer 0xE3: bit0 boot-first, bit4 no-init.
     wire sysport_31_bootfirst = 1'b1;
     wire sysport_sel    = sysport_31_sel | sysport_33_sel
                         | sysport_35_sel | sysport_42_sel | sysport_be_sel;
@@ -386,7 +398,7 @@ module tb_pc98_v30;
     end
 
     wire [7:0] sysport_data = sysport_35_sel ? sysport_c
-                            : sysport_31_sel ? (sysport_31_bootfirst ? 8'h11 : 8'h10)
+                            : sysport_31_sel ? (sysport_31_bootfirst ? 8'hE3 : 8'hE2)
     // 0x42 bit 1: this machine has no protected mode.
     //
     // The UX ITF tests it at F8B95 and, with the bit CLEAR, walks into
@@ -907,13 +919,86 @@ module tb_pc98_v30;
                  u_tvram.attr[12'hFF1], u_tvram.attr[12'hFF3], u_tvram.attr[12'hFF5]);
         end
 
+    // Value-change watch on the two bytes that become the POP SS word:
+    // [0030:00FC] and [0030:00FD]. Edge-triggered on the ARRAY VALUE, so
+    // word writes and both bus lanes are caught regardless of the
+    // address/data latching.
+    logic [7:0] stkfc_q = 8'hxx, stkfd_q = 8'hxx;
+    always_ff @(posedge clk_chipset) begin
+        if (ram[20'h003FC] !== stkfc_q) begin
+            $display("  %8t  FCWATCH [03FC] %02X -> %02X  (eu_pc %05X)", $time,
+                     stkfc_q, ram[20'h003FC], eu_pc);
+            stkfc_q <= ram[20'h003FC];
+        end
+        if (ram[20'h003FD] !== stkfd_q) begin
+            $display("  %8t  FDWATCH [03FD] %02X -> %02X  (eu_pc %05X)", $time,
+                     stkfd_q, ram[20'h003FD], eu_pc);
+            stkfd_q <= ram[20'h003FD];
+        end
+    end
+
+    // [0x3F8]/[0x3F9] watches: the int-1E frame's IP lands here; the POPSS
+    // dump showed {07,0A} where the ROM's own int at FD80:6205 would push
+    // {07,62} -- the 0x0A's writer is the last unknown.
+    logic [7:0] stkf8_q = 8'h00, stkf9_q = 8'h00;
+    always_ff @(posedge clk_chipset) begin
+        if (ram[20'h003F8] !== stkf8_q) begin
+            $display("  %8t  F8WATCH [03F8] %02X -> %02X  (eu_pc %05X)", $time,
+                     stkf8_q, ram[20'h003F8], eu_pc);
+            stkf8_q <= ram[20'h003F8];
+        end
+        if (ram[20'h003F9] !== stkf9_q) begin
+            $display("  %8t  F9WATCH [03F9] %02X -> %02X  (eu_pc %05X)", $time,
+                     stkf9_q, ram[20'h003F9], eu_pc);
+            stkf9_q <= ram[20'h003F9];
+        end
+    end
+
+    // Keyboard I/O + [0x500] trace: the BIOS keyboard test should set
+    // [0x500].bit7 on a successful 8251 echo; our machine never gets it,
+    // so the second extension-ROM scan runs and leaves [0030:00F8]=0x0F --
+    // the word BASIC's entry stub later consumes as ES.
+    logic [7:0] kbd500_q = 8'h00;
+    wire kbd_io_sel = ~io_rd_n & ((cpu_address[15:0] == 16'h0041)
+                                | (cpu_address[15:0] == 16'h0043));
+    wire kbd32_io   = ~io_wr_n & (cpu_address[15:0] == 16'h0032);
+    wire kbd43_io   = ~io_wr_n & (cpu_address[15:0] == 16'h0043);
+    always_ff @(posedge clk_chipset) begin
+        if (kbd_io_sel & io_rd_d)
+            $display("  %8t  KBD RD %04X => %02X  (eu_pc %05X)", $time,
+                     cpu_address[15:0], (kbd_ack_armed ? 8'h60 : 8'h00), eu_pc);
+        if (kbd32_io | kbd43_io)
+            $display("  %8t  KBD WR %04X <= %02X  (eu_pc %05X)", $time,
+                     cpu_address[15:0], cpu_data_bus, eu_pc);
+        if (ram[20'h00500] !== kbd500_q) begin
+            $display("  %8t  K500 [0500] %02X -> %02X  (eu_pc %05X)", $time,
+                     kbd500_q, ram[20'h00500], eu_pc);
+            kbd500_q <= ram[20'h00500];
+        end
+    end
+
+    // At the POP SS (F7D80): the stack word it pops becomes BASIC's work
+    // segment. Dump the whole POST stack and SP at that moment.
+    logic popss_dumped = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (!popss_dumped && eu_pc == 20'hF7D80) begin
+            popss_dumped <= 1'b1;
+            $display("  %8t  POPSS: sp=%04X  stk F0:%02X%02X F2:%02X%02X F4:%02X%02X F6:%02X%02X F8:%02X%02X FA:%02X%02X FC:%02X%02X FE:%02X%02X",
+                     $time, dbg_sp,
+                     ram[20'h003F1],ram[20'h003F0], ram[20'h003F3],ram[20'h003F2],
+                     ram[20'h003F5],ram[20'h003F4], ram[20'h003F7],ram[20'h003F6],
+                     ram[20'h003F9],ram[20'h003F8], ram[20'h003FB],ram[20'h003FA],
+                     ram[20'h003FD],ram[20'h003FC], ram[20'h003FF],ram[20'h003FE]);
+        end
+    end
+
     // Catch the value that POP SS at F7D80 will load: watch every write
     // to the POST stack (segment 0x0030) while BASIC is initialising. The
     // B-trace showed SS going from 0030 to F202 at that POP; something in
     // the entry code pushes F202, and on a real machine it pushes a RAM
     // segment instead.
     always_ff @(posedge clk_chipset) begin
-        if (basic_trace && cpu_address >= 20'h00300
+        if (cpu_address >= 20'h003F0
             && cpu_address <= 20'h003FF && ~is_rom(cpu_address)) begin
             if (mem_wr_n & ~mem_wr_d)
                 $display("  %8t  STK[%04X] <= %02X   (eu_pc %05X)  sp=%04X",
@@ -932,6 +1017,23 @@ module tb_pc98_v30;
     // work-area segment.
     int ss_override_val = -1;
     logic [15:0] work_ea_val = 16'h0000;
+    // np2's pccore_reset writes the memory switch into the text VRAM at
+    // 0xA3FE2+4i BEFORE the ROM runs, from cfg {48 05 04 08 01 00 00 6E}.
+    // The ROM never initialises it (DIP bit4 clear), so these bytes ARE the
+    // machine's memory configuration: FEA=4 is 640 KB -- the value the whole
+    // BIOS/BASIC work-area arithmetic is built around. Without it the guest
+    // computes 512 KB-class values and BASIC stacks itself into ROM.
+    initial begin
+        u_tvram.attr[12'hFF1] = 8'h48;   // A3FE2
+        u_tvram.attr[12'hFF3] = 8'h05;   // A3FE6
+        u_tvram.attr[12'hFF5] = 8'h04;   // A3FEA = 640 KB
+        u_tvram.attr[12'hFF7] = 8'h08;   // A3FEE
+        u_tvram.attr[12'hFF9] = 8'h01;   // A3FF2
+        u_tvram.attr[12'hFFB] = 8'h00;   // A3FF6
+        u_tvram.attr[12'hFFD] = 8'h00;   // A3FFA
+        u_tvram.attr[12'hFFF] = 8'h6E;   // A3FFE
+        $display("MEMSW pre-seeded (np2 defaults): 48 05 04 08 01 00 00 6E");
+    end
     initial begin
         int v;
         if ($value$plusargs("ssfix=%d", v)) ss_override_val = v;
@@ -945,6 +1047,58 @@ module tb_pc98_v30;
         ram[20'h006E8] = work_ea_val[7:0];
         ram[20'h006E9] = work_ea_val[15:8];
         $display("WORK EA pre-seeded to %04X", work_ea_val);
+    end
+
+    // Rolling bus log for derailment forensics
+    logic [19:0] buslog_addr [0:19];
+    logic [7:0]  buslog_data [0:19];
+    logic        buslog_wr   [0:19];
+    int          buslog_n = 0;
+    logic        derailed_dumped = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (~mem_rd_n || (~mem_wr_n && ~is_rom(cpu_address))) begin
+            buslog_addr[buslog_n % 20] <= cpu_address;
+            buslog_data[buslog_n % 20] <= ~mem_wr_n ? din_of(cpu_address) : mem_wr_data_q;
+            buslog_wr[buslog_n % 20]   <= ~mem_wr_n;
+            buslog_n <= buslog_n + 1;
+        end
+        if (basic_trace && !derailed_dumped && eu_pc < 20'h10000 && eu_pc != 20'h00000) begin
+            derailed_dumped <= 1'b1;
+            $display("  %8t  DERAIL: eu_pc=%05X  last 20 bus cycles:", $time, eu_pc);
+            for (int k = 0; k < 20; k++) begin
+                int idx;
+                idx = (buslog_n + k) % 20;
+                $display("    [%2d] %s %05X data=%02X", k, buslog_wr[idx] ? "RD" : "WR",
+                         buslog_addr[idx], buslog_data[idx]);
+            end
+        end
+    end
+
+    // Memory-switch write watch: every write into tvram cells 0xFF0-0xFFF
+    // (A3FE0-A3FFF) gets logged. The POST clear at FECBB sweeps the whole
+    // 16 KB, so the question of who re-writes the switch -- and when -- is
+    // the difference between a booting machine and a 512 KB one.
+    always_ff @(posedge clk_chipset) begin
+        if (u_tvram.cpu_wren && u_tvram.cpu_cell[11:4] == 8'hFF && u_tvram.is_attr) begin
+            $display("  %8t  MSWW [cell %03X] <= %02X  (eu_pc %05X)", $time,
+                     u_tvram.cpu_cell, u_tvram.cpu_wdata, eu_pc);
+        end
+    end
+
+    // IVT-read watch: during BASIC, any fetch from 0x00000-0x003FF is an
+    // interrupt vector load. The fatal derailment lands at 0x067C7 --
+    // {IP=67C7, CS=0000} -- so some IVT[n] held that pointer. Find n.
+    logic [19:0] ivt_watch_last = 20'hFFFFF;
+    always_ff @(posedge clk_chipset) begin
+        if (basic_trace && ~mem_rd_n && cpu_address < 20'h00400
+            && cpu_address != ivt_watch_last) begin
+            ivt_watch_last <= cpu_address;
+            $display("  %8t  IVTRD [%05X] => %02X%02X  (eu_pc %05X)", $time,
+                     cpu_address, ram[{cpu_address[19:1],1'b1}], ram[{cpu_address[19:1],1'b0}],
+                     eu_pc);
+        end else if (cpu_address >= 20'h00400) begin
+            ivt_watch_last <= 20'hFFFFF;
+        end
     end
 
     // BASIC's wait loop, checked for interrupt readiness: the tick this
