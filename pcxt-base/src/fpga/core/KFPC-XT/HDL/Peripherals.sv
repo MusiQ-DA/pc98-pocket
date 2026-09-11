@@ -121,7 +121,18 @@ module PERIPHERALS #(
         input   logic   [15:0]  joya0,
         input   logic   [15:0]  joya1,
         // JTOPL
-        output  logic   [15:0]  jtopl2_snd_e,
+        // The row buffer's own view of row 0's first eight cells, latched as the
+    // fill reads them -- what the renderer will actually draw. If the banks
+    // dropped a write, or the fill's first sample is stale, it shows HERE
+    // even while the bus snoops (TVC/TVH) read clean.
+    output  logic   [63:0]  pc98_tvfill_view,
+    // The kanji fetch path's activity: f_req pulses and f_valid beats. With
+    // ANK out of the BRAM these only move for two-byte cells, so on a screen
+    // of plain text they should sit still -- and a solid tofu where a kanji
+    // should be says whether the fetch ever answered.
+    output  logic   [15:0]  pc98_rowbuf_freq_count,
+    output  logic   [15:0]  pc98_rowbuf_fvalid_count,
+    output  logic   [15:0]  jtopl2_snd_e,
         input   logic   [1:0]   opl2_io,
         // C/MS Audio
         input   logic           cms_en,
@@ -1642,6 +1653,7 @@ end
                               + {3'd0, pc98_next_row, 4'd0};
 
     wire        pc98_f_req, pc98_f_busy, pc98_f_valid;
+    logic       pc98_f_req_q = 1'b0;
     wire [19:0] pc98_f_addr;
     wire  [7:0] pc98_f_data;
     wire  [7:0] pc98_ank_code;
@@ -1667,6 +1679,25 @@ end
         .rd_clk(clk_vga_cga), .rd_cell(pc98_font_cell), .rd_line(pc98_font_line),
         .rd_byte(pc98_font_row), .kanji_seen(pc98_kanji_seen)
     );
+
+    // The fill's view, latched per cell: tvram_fil_cell/lo/hi are stable for
+    // several clocks per cell, so a straight register catches the settled
+    // pair. Only row 0's cells 0-7 are kept (tv_cell is the plane-wide cell
+    // index, so no other row's fill reaches index <8). Byte 2n = hi, 2n+1 =
+    // lo, so one reading reads like the TVRAM itself.
+    always_ff @(posedge clock) begin
+        if (tvram_fil_cell < 12'd8) begin
+            pc98_tvfill_view[{tvram_fil_cell[2:0], 1'b0}]     <= tvram_vid_char_hi;
+            pc98_tvfill_view[{tvram_fil_cell[2:0], 1'b1}]     <= tvram_vid_char_lo;
+        end
+    end
+
+    always_ff @(posedge clock) begin
+        if (pc98_f_req & ~pc98_f_req_q) pc98_rowbuf_freq_count <= pc98_rowbuf_freq_count + 16'd1;
+        pc98_f_req_q <= pc98_f_req;
+        if (pc98_f_valid) pc98_rowbuf_fvalid_count <= pc98_rowbuf_fvalid_count + 16'd1;
+    end
+
 
     // ------------------------------------------------------- CG window
     //

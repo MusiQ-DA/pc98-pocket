@@ -125,6 +125,9 @@ module softcpu_subsystem (
     input  [15:0] tvram_wr_count,
     input  [63:0] tvram_row0_code,
     input  [63:0] tvram_row0_hi,
+    input  [63:0] pc98_tvfill_view,
+    input  [15:0] pc98_rowbuf_freq_count,
+    input  [15:0] pc98_rowbuf_fvalid_count,
     input  [63:0] tvram_row0_attr,
     input  [15:0] rd_any_count,
     input  [15:0] ivt_touch_count,
@@ -935,6 +938,12 @@ module softcpu_subsystem (
             // run#191 screen.
             32'h5000_0094: cpu_mem_rdata = tvram_row0_hi[31:0];
             32'h5000_0098: cpu_mem_rdata = tvram_row0_hi[63:32];
+            // The row buffer's own view of row 0's first cells (byte 2n =
+            // high, 2n+1 = low), and the kanji fetch path's activity.
+            32'h5000_009C: cpu_mem_rdata = pc98_tvfill_view[31:0];
+            32'h5000_00A0: cpu_mem_rdata = pc98_tvfill_view[63:32];
+            32'h5000_00A4: cpu_mem_rdata = {pc98_rowbuf_fvalid_count,
+                                            pc98_rowbuf_freq_count};
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;
         endcase
