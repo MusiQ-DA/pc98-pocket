@@ -267,7 +267,16 @@ module tb_pc98_v30;
     wire [7:0] din_odd  = din_of({cpu_address[19:1], 1'b1});
     always_comb begin
         case (processor_status)
-            3'b100, 3'b101: DATA_I = {din_odd, din_even};   // CODE, MEMR
+            3'b100, 3'b101: begin
+                // The SS override: any word read from the POST stack during
+                // BASIC's entry returns the forced value instead. The POP SS
+                // at F7D80 reads two bytes from [SS:SP] through here.
+                if (ss_override_val >= 0 && basic_trace
+                    && cpu_address >= 20'h003F0 && cpu_address <= 20'h003FF)
+                    DATA_I = {ss_override_val[15:8], ss_override_val[7:0]};
+                else
+                    DATA_I = {din_odd, din_even};
+            end
             3'b000:         DATA_I = {8'h00, din_even};     // INTA: vector low
             default:        DATA_I = {din_even, din_even};  // I/O, byte-wide
         endcase
@@ -879,6 +888,65 @@ module tb_pc98_v30;
     end
     logic pic1_to_cpu_d = 1'b0;
 
+    // At the boot decision, dump the POST stack area -- the words POP SS
+    // will load during BASIC's init come from whatever the POST left there.
+    always_ff @(posedge clk_chipset)
+        if (eu_pc == 20'hFE1FD) begin
+        $display("  %8t  BOOTDEC stack: F0:%02X%02X F2:%02X%02X F4:%02X%02X F6:%02X%02X F8:%02X%02X FA:%02X%02X FC:%02X%02X FE:%02X%02X",
+                 $time,
+                 ram[20'h003F1],ram[20'h003F0], ram[20'h003F3],ram[20'h003F2],
+                 ram[20'h003F5],ram[20'h003F4], ram[20'h003F7],ram[20'h003F6],
+                 ram[20'h003F9],ram[20'h003F8], ram[20'h003FB],ram[20'h003FA],
+                 ram[20'h003FD],ram[20'h003FC], ram[20'h003FF],ram[20'h003FE]);
+        // The memory switch lives in the tvram module's attribute bank
+        // (A3FE0-A3FEF); the flat ram[] no longer carries it.
+        $display("  %8t  WORK: [06EA]=%04X [06EC]=%04X [186A]=%04X  memsw(attr) FE2=%02X FE6=%02X FEA=%02X",
+                 $time,
+                 {ram[20'h006EB],ram[20'h006EA]}, {ram[20'h006ED],ram[20'h006EC]},
+                 {ram[20'h0186B],ram[20'h0186A]},
+                 u_tvram.attr[12'hFF1], u_tvram.attr[12'hFF3], u_tvram.attr[12'hFF5]);
+        end
+
+    // Catch the value that POP SS at F7D80 will load: watch every write
+    // to the POST stack (segment 0x0030) while BASIC is initialising. The
+    // B-trace showed SS going from 0030 to F202 at that POP; something in
+    // the entry code pushes F202, and on a real machine it pushes a RAM
+    // segment instead.
+    always_ff @(posedge clk_chipset) begin
+        if (basic_trace && cpu_address >= 20'h00300
+            && cpu_address <= 20'h003FF && ~is_rom(cpu_address)) begin
+            if (mem_wr_n & ~mem_wr_d)
+                $display("  %8t  STK[%04X] <= %02X   (eu_pc %05X)  sp=%04X",
+                         $time, cpu_address[15:0], mem_wr_data_q, eu_pc, dbg_sp);
+        end
+    end
+
+    // Pre-seed the stack word the POP SS at F7D80 will load. On a real
+    // 640 KB machine this word holds a RAM segment for BASIC's work area;
+    // on ours it holds 0xF202 (a ROM segment) because the work area value
+    // [06EA] is nobody's job on a BIOS-direct boot and the ITF doesn't set
+    // it either. 0x8000 = 512 KB paragraph is the middle of user RAM.
+    // +ssfix=NNNN: when the POP SS at eu_pc F7D80 executes, force SS to
+    // NNNN instead of whatever the stack holds. This bypasses the mystery
+    // of who pushes 0xF202 and tests whether BASIC runs with a correct
+    // work-area segment.
+    int ss_override_val = -1;
+    logic [15:0] work_ea_val = 16'h0000;
+    initial begin
+        int v;
+        if ($value$plusargs("ssfix=%d", v)) ss_override_val = v;
+        if ($value$plusargs("workEA=%d", v)) work_ea_val = v[15:0];
+    end
+    // Pre-seed the work area: on a real machine this is set by the ITF's
+    //  the BIOS's POST inherits it. Ours has neither, so provide it.
+    initial if (work_ea_val != 0) begin
+        ram[20'h006EA] = work_ea_val[7:0];
+        ram[20'h006EB] = work_ea_val[15:8];
+        ram[20'h006E8] = work_ea_val[7:0];
+        ram[20'h006E9] = work_ea_val[15:8];
+        $display("WORK EA pre-seeded to %04X", work_ea_val);
+    end
+
     // BASIC's wait loop, checked for interrupt readiness: the tick this
     // loop waits on is delivered through INT 0x08, and both the CPU's IF
     // and the PIC's ISR0 state decide whether the next tick arrives.
@@ -1143,6 +1211,7 @@ module tb_pc98_v30;
             // the moment: dump the registers, the work area, and every write
             // into offset 0x15B0-0x15D0 from here on.
             if (eu_cs == 16'hE800 && !hook_watch) hook_watch <= 1'b1;
+            // (the din_of override below answers the POP SS directly)
             if (eu_pc == 20'hF3ACE) begin
                 $display("  %8t  HOOK SITE: cs=%04X ss=%04X ds=%04X", $time,
                          dbg_cs, dbg_ss, dbg_regs[191:176]);
@@ -1176,9 +1245,10 @@ module tb_pc98_v30;
             end
             if (basic_trace && basic_n < 600) begin
                 basic_n <= basic_n + 1;
-                $display("    B%0d  %05X  op %02X  ax %04X bx %04X cx %04X dx %04X si %04X di %04X",
+                $display("    B%0d  %05X  op %02X  ax %04X bx %04X cx %04X dx %04X si %04X di %04X  ss %04X ds %04X es %04X sp %04X",
                          basic_n, eu_pc, byte_at(eu_pc),
-                         dbg_ax, dbg_bx, dbg_cx, dbg_dx, dbg_si, dbg_di);
+                         dbg_ax, dbg_bx, dbg_cx, dbg_dx, dbg_si, dbg_di,
+                         dbg_ss, dbg_regs[191:176], dbg_regs[143:128], dbg_sp);
             end
         end
         eu_pc_retired_d <= eu_pc;
