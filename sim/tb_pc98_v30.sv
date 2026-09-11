@@ -305,12 +305,28 @@ module tb_pc98_v30;
     wire sysport_33_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0033);
     wire sysport_35_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0035);
     wire sysport_42_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0042);
-    // 0xBE: the extension/boot-option read the disk-boot code makes when
-    // 0x42 bit0 is clear. FF here reads as "an extension ROM is present",
-    // and the BIOS then installs INT 1E pointing into the empty C page
-    // (FC5C:FE92 wraps past the megabyte) -- the derailment every run took
-    // at the boot decision. Nothing is present; answer 00.
+    // 0xBE: the FDC's drive/media register (np2 io/fdc.c, fdc_ibe): reads
+    // (chgreg & 3) | 8 | 0xF0, so F8 with no drive selected. The 00 this
+    // bench answered made the disk-boot attempt's retry flow diverge, and
+    // the register context BASIC's strap saw at int 1E was garbage -- its
+    // rep movsb "IPL copy" then ran from DS:BX=04E0, ROM-pointing segment
+    // registers followed, and the timer vector ended up in an uncopied part
+    // of the RAM image: the tick the interpreter waits on never ticks.
     wire sysport_be_sel = ~io_rd_n & (cpu_address[15:0] == 16'h00BE);
+    logic [7:0] fdc_be_chgreg = 8'h00;
+    logic       be_wr_d = 1'b1;
+    wire        be_wr = ~io_wr_n & (cpu_address[15:0] == 16'h00BE);
+    always_ff @(posedge clk_chipset) begin
+        be_wr_d <= be_wr;
+        if (be_wr & ~be_wr_d) fdc_be_chgreg <= cpu_data_bus;
+    end
+    // 0x31 = DIP switch 2 (np2's sysp_i31 returns pccore.dipsw[1]; np2's
+    // default set is 3E E3 7B). Bit0 is the boot order: SET means int 1F is
+    // skipped and the machine goes straight to int 1E -- which is how a
+    // stock machine avoids IVT[1F]'s D800:2A00, an entry for a BASIC card
+    // nothing here has. Bit4 asks the ITF to initialise the memory switch,
+    // which is how the count reaches 640 KB. 0x11 = both.
+    wire sysport_31_bootfirst = 1'b1;
     wire sysport_sel    = sysport_31_sel | sysport_33_sel
                         | sysport_35_sel | sysport_42_sel | sysport_be_sel;
     // 0x33 is 8255 port B, an INPUT on a PC-98: bit 3 a DIP switch inverted,
@@ -361,7 +377,7 @@ module tb_pc98_v30;
     end
 
     wire [7:0] sysport_data = sysport_35_sel ? sysport_c
-                            : sysport_31_sel ? 8'h10
+                            : sysport_31_sel ? (sysport_31_bootfirst ? 8'h11 : 8'h10)
     // 0x42 bit 1: this machine has no protected mode.
     //
     // The UX ITF tests it at F8B95 and, with the bit CLEAR, walks into
@@ -379,7 +395,7 @@ module tb_pc98_v30;
     // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
                             : sysport_33_sel ? 8'h00
-                            : sysport_be_sel ? 8'h00
+                            : sysport_be_sel ? (fdc_be_chgreg[1:0] | 8'h08 | 8'hF0)
                             : sysport_42_sel ? 8'h02
                             :                  8'h00;
 
@@ -439,6 +455,12 @@ module tb_pc98_v30;
             if (a >= 20'h00A00 && a <= 20'h00A20)
                 $display("  %8t  STUB[%04X] <= %02X   (eu_pc %05X)",
                          $time, a[15:0], d, eu_pc);
+            // The BASIC hook area: any write whose 16-bit offset lands in
+            // 0x15B0-0x15D0, once the machine reached the crash site. The
+            // writer of the bogus 0FB0:BAD9 pointer names itself here.
+            if (hook_watch && a[15:0] >= 16'h15B0 && a[15:0] <= 16'h15D0)
+                $display("  %8t  HOOK[%04X:%04X] <= %02X   (eu_pc %05X)",
+                         $time, a[19:16], a[15:0], d, eu_pc);
             // The text plane: the memory-count display lands here. Keep the
             // first row of cells (code + attribute) for the final dump.
             if (a >= 20'hA0000 && a < 20'hA4000) begin
@@ -547,6 +569,32 @@ module tb_pc98_v30;
                 commit_mem_byte({cpu_address[19:1], 1'b1}, mem_wr_word_q[15:8]);
         end
 
+        // The hook operands' FETCH addresses: the gate at [0x15B5] and the
+        // pointer at [0x15C6]. The full 20-bit address names the segment the
+        // CPU was actually using -- the register view lags retirement and
+        // cannot be trusted at the crash site.
+        if (hook_watch & ~mem_rd_n & ~is_rom(cpu_address)
+            && ((cpu_address[15:0] == 16'h15B5) | (cpu_address[15:0] == 16'h15C6)
+             || (cpu_address[15:0] == 16'h15C7) || (cpu_address[15:0] == 16'h15C8)
+             || (cpu_address[15:0] == 16'h15C9)))
+            $display("  %8t  HOOKFETCH %05X => %02X   (eu_pc %05X)", $time,
+                     cpu_address, ram[cpu_address], eu_pc);
+
+        // The interval timer and the PICs, every write named. BASIC's entry
+        // at 21.3 s was the last moment the timer interrupt fired; its wait
+        // loop has spun since on a tick counter nobody increments. Whoever
+        // reprogrammed what, the OUT sequence says so.
+        if (io_wr_n & ~io_wr_d) begin
+            if (cpu_address[15:0] == 16'h0077 || cpu_address[15:0] == 16'h0071
+             || cpu_address[15:0] == 16'h0073 || cpu_address[15:0] == 16'h0075)
+                $display("  %8t  OUT PIT %04X, %02X   (eu_pc %05X)", $time,
+                         cpu_address[15:0], mem_wr_data_q, eu_pc);
+            if (cpu_address[15:0] == 16'h0000 || cpu_address[15:0] == 16'h0002
+             || cpu_address[15:0] == 16'h0004 || cpu_address[15:0] == 16'h0006)
+                $display("  %8t  OUT PIC %04X, %02X   (eu_pc %05X)", $time,
+                         cpu_address[15:0], mem_wr_data_q, eu_pc);
+        end
+
         // I/O reads matter here too: if the ModRM byte of a group opcode is
         // dispatched as an opcode, E4 becomes IN AL,imm8 and shows up as a read
         // from a port the program never names.
@@ -614,14 +662,17 @@ module tb_pc98_v30;
     end
 
     logic timer_clock = 1'b0;
+    logic timer_out0;
+    wire  [7:0] pit_dout;
+    wire pit_iocycle = (~io_rd_n | ~io_wr_n) & cpu_address[0]
+                     & (cpu_address[7:4] == 4'h7) & ~cpu_address[9] & ~cpu_address[8];
     always_ff @(posedge clk_chipset)
         if (peripheral_ce) timer_clock <= ~timer_clock;
 
-    wire [7:0] pit_dout;
-    wire pit_iocycle = (~io_rd_n | ~io_wr_n) & cpu_address[0]
-                     & (cpu_address[7:4] == 4'h7) & ~cpu_address[9] & ~cpu_address[8];
-
-    logic timer_out0;
+    // (The power-on mode injection lived here; see the git history for the
+    // three timings that each broke a different ROM expectation -- the FD866
+    // counter test demands the power-on mode, and a running mode-3 counter
+    // races the IVT install through the FDAC2 unmask window.)
 
     KF8253 u_pit (
         .clock            (clk_chipset),
@@ -767,6 +818,37 @@ module tb_pc98_v30;
         irr2_prev <= u_pic1.interrupt_request_register[2];
         int_prev  <= pic1_to_cpu_buf;
     end
+
+    // The PIC1-direct interrupt autopsy: around the timer's first (and only)
+    // acknowledge, trace inta_n, the PIC's INT line, its control state and
+    // in-service register every chipset clock. The cascaded interrupts get
+    // two clean INTA pulses; this one got a single pulse, no vector taken,
+    // and the in-service bit stuck -- everything the timer needed to die.
+    // Print the PIC1 state around every INTA pulse for the first five
+    // acknowledges -- the cascaded pairs and the timer's lone pulse.
+    logic inta_seen_n = 1'b1;
+    int  inta_pulse_log = 0;
+    always_ff @(posedge clk_chipset) begin
+        inta_seen_n <= inta_n;
+        if (~inta_n && inta_pulse_log < 40) begin
+            inta_pulse_log <= inta_pulse_log + 1;
+            $display("  %8t  PIC inta=%b intLAT=%b st=%s irr=%02X isr=%02X imr=%02X",
+                     $time, pic1_to_cpu_buf, pic1_to_cpu,
+                     u_pic1.u_Control_Logic.control_state,
+                     u_pic1.interrupt_request_register,
+                     u_pic1.in_service_register,
+                     u_pic1.interrupt_mask);
+        end
+        // Any transition of the LATCHED INT line near an acknowledge: the
+        // V30 aborts its two-cycle INTA if INT dips between the pulses, and
+        // the latch re-samples every falling CPU enable -- a one-clock
+        // dropout there is invisible everywhere else.
+        if (inta_pulse_log > 0 && inta_pulse_log < 40 && pic1_to_cpu != pic1_to_cpu_d)
+            $display("  %8t  INTLAT %b -> %b   (inta_n=%b, eu_pc %05X)", $time,
+                     pic1_to_cpu_d, pic1_to_cpu, inta_n, eu_pc);
+        pic1_to_cpu_d <= pic1_to_cpu;
+    end
+    logic pic1_to_cpu_d = 1'b0;
 
     // INTA count: how many acknowledges the CPU issued. One means the first
     // interrupt reached the INTA pair; the handler ran if the EU ever stands
@@ -972,11 +1054,31 @@ module tb_pc98_v30;
                 && eu_pc != disp_rec) begin
                 disp_pc[disp_w % 64] <= eu_pc;
                 disp_rec <= eu_pc;
-                if (disp_w < 4000)
+                if (disp_w < 400000)
                     $display("    J%0d %05X op %02X", disp_w, eu_pc, byte_at(eu_pc));
                 disp_w <= disp_w + 1;
             end
             if (eu_cs == 16'hE800) basic_trace <= 1'b1;
+            // The BASIC crash site: F3ACE gates an indirect far call on
+            // [DS:0x15B5] and calls through [DS:0x15C6]. Neither is ever
+            // written by the ROM -- on a real machine the whole area reads
+            // zero and the gate stays shut. Our run called 0FB0:BAD9. Catch
+            // the moment: dump the registers, the work area, and every write
+            // into offset 0x15B0-0x15D0 from here on.
+            if (eu_cs == 16'hE800 && !hook_watch) hook_watch <= 1'b1;
+            if (eu_pc == 20'hF3ACE) begin
+                $display("  %8t  HOOK SITE: cs=%04X ss=%04X ds=%04X", $time,
+                         dbg_cs, dbg_ss, dbg_regs[191:176]);
+                $display("        [15B0]: %02X %02X %02X %02X %02X %02X %02X %02X  [15C0]: %02X %02X %02X %02X %02X %02X %02X %02X",
+                         ram[{dbg_ss,4'd0}+20'h15B0], ram[{dbg_ss,4'd0}+20'h15B1],
+                         ram[{dbg_ss,4'd0}+20'h15B2], ram[{dbg_ss,4'd0}+20'h15B3],
+                         ram[{dbg_ss,4'd0}+20'h15B4], ram[{dbg_ss,4'd0}+20'h15B5],
+                         ram[{dbg_ss,4'd0}+20'h15B6], ram[{dbg_ss,4'd0}+20'h15B7],
+                         ram[{dbg_ss,4'd0}+20'h15C0], ram[{dbg_ss,4'd0}+20'h15C1],
+                         ram[{dbg_ss,4'd0}+20'h15C2], ram[{dbg_ss,4'd0}+20'h15C3],
+                         ram[{dbg_ss,4'd0}+20'h15C4], ram[{dbg_ss,4'd0}+20'h15C5],
+                         ram[{dbg_ss,4'd0}+20'h15C6], ram[{dbg_ss,4'd0}+20'h15C7]);
+            end
             // The ITF's memory sizing, at the two points where it has just
             // verified a 64 KB pair: BX is the segment it tested, DH the
             // running block count, and CF says whether the compare held.
@@ -1005,6 +1107,7 @@ module tb_pc98_v30;
         eu_pc_retired_d <= eu_pc;
     end
     logic [19:0] eu_pc_retired_d = 20'hFFFFF;
+    logic        hook_watch = 1'b0;
 
     // The renderer's eye on row 0: present each cell to the real tvram's fill
     // port and record what a glyph_addr would make of it. is_kanji on a cell
