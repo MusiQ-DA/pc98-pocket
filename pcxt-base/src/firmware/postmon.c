@@ -33,6 +33,8 @@
 #define POST_TVC1   ((volatile uint32_t *) 0x50000088) // cells 4-7
 #define POST_TVA0   ((volatile uint32_t *) 0x5000008C) // row 0 cells 0-3, attributes
 #define POST_TVA1   ((volatile uint32_t *) 0x50000090) // cells 4-7
+#define POST_TVH0   ((volatile uint32_t *) 0x50000094) // row 0 cells 0-3, HIGH bytes
+#define POST_TVH1   ((volatile uint32_t *) 0x50000098) // cells 4-7
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -528,6 +530,18 @@ void post_mon_tick(void)
                 hex(4 + (4 + i * 3) * 8, 72, (a0 >> (i * 8)) & 0xFFu, 2);
             for (int i = 0; i < 4; i++)
                 hex(4 + (16 + i * 3) * 8, 72, (a1 >> (i * 8)) & 0xFFu, 2);
+            // The high bytes: every one of these should read 00 once the
+            // message has been written. Anything else two-byte-flags its cell
+            // -- the letter goes to the kanji path and the screen shows a
+            // solid block where it should be, which is what run#191 drew.
+            {
+                uint32_t h0 = *POST_TVH0, h1 = *POST_TVH1;
+                osd_draw_string(&fb, 4, 82, "TVH", OSD_LABEL);
+                for (int i = 0; i < 4; i++)
+                    hex(4 + (4 + i * 3) * 8, 82, (h0 >> (i * 8)) & 0xFFu, 2);
+                for (int i = 0; i < 4; i++)
+                    hex(4 + (16 + i * 3) * 8, 82, (h1 >> (i * 8)) & 0xFFu, 2);
+            }
         }
 
         // NO bus-master readback here, and that is the point.

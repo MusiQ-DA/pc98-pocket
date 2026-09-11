@@ -124,6 +124,7 @@ module softcpu_subsystem (
     input  [15:0] wr_any_count,
     input  [15:0] tvram_wr_count,
     input  [63:0] tvram_row0_code,
+    input  [63:0] tvram_row0_hi,
     input  [63:0] tvram_row0_attr,
     input  [15:0] rd_any_count,
     input  [15:0] ivt_touch_count,
@@ -929,6 +930,11 @@ module softcpu_subsystem (
             32'h5000_0088: cpu_mem_rdata = tvram_row0_code[63:32];
             32'h5000_008C: cpu_mem_rdata = tvram_row0_attr[31:0];
             32'h5000_0090: cpu_mem_rdata = tvram_row0_attr[63:32];
+            // The same cells' HIGH bytes: nonzero = two-byte flagged = the
+            // cell renders as kanji. That flag is the whole story of the
+            // run#191 screen.
+            32'h5000_0094: cpu_mem_rdata = tvram_row0_hi[31:0];
+            32'h5000_0098: cpu_mem_rdata = tvram_row0_hi[63:32];
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;
         endcase

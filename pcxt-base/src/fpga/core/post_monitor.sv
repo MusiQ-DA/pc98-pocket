@@ -87,6 +87,12 @@ module post_monitor #(
     // ~address_enable_n), and reaching for it froze the machine.
     output logic [63:0] tvram_row0_code,
     output logic [63:0] tvram_row0_attr,
+    // The HIGH bytes of the same cells (A0000 + 2n + 1). A nonzero high byte
+    // is the two-byte flag: the cell renders as kanji, which on this machine
+    // is the difference between a letter and a solid block. The run#191
+    // screen drew every letter through that path because the word writes
+    // that should have cleared the highs never landed.
+    output logic [63:0] tvram_row0_hi,
     // The raw strobes, and how many cycles each spends asserted. Edge counting
     // came back 0 for reads AND writes while LIVE looked busy, and both facts
     // fit one explanation: the strobes sit LOW permanently, so mem_access is
@@ -254,6 +260,7 @@ module post_monitor #(
             tvram_last_addr <= 20'd0;
             tvram_row0_code <= 64'd0;
             tvram_row0_attr <= 64'd0;
+            tvram_row0_hi   <= 64'd0;
             tv_wr_data      <= 8'h00;
             ivt16_off     <= 16'h0;
             ivt16_seg     <= 16'h0;
@@ -268,11 +275,16 @@ module post_monitor #(
             // last value seen while the strobe is low and use it on the edge.
             if (~memory_write_n) tv_wr_data <= cpu_data;
             if (memory_write_n && mem_write_q_raw
-                && address[19:15] == 5'b10100 && ~address[0]) begin
-                if (~address[14] && ~address[13] && address[12:4] == 9'd0)
+                && address[19:15] == 5'b10100) begin
+                if (~address[0] && ~address[14] && ~address[13]
+                    && address[12:4] == 9'd0)
                     tvram_row0_code[address[3:1]*8 +: 8] <= tv_wr_data;
-                if (~address[14] &&  address[13] && address[12:4] == 9'd0)
+                if (~address[0] && ~address[14] &&  address[13]
+                    && address[12:4] == 9'd0)
                     tvram_row0_attr[address[3:1]*8 +: 8] <= tv_wr_data;
+                if (address[0] && ~address[14] && ~address[13]
+                    && address[12:4] == 9'd0)
+                    tvram_row0_hi[address[3:1]*8 +: 8] <= tv_wr_data;
             end
             if (~memory_write_n && ~mem_write_q_raw) begin
                 if (wr_any_count != 16'hFFFF) wr_any_count <= wr_any_count + 16'd1;
