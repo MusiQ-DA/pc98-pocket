@@ -1894,6 +1894,8 @@ module core_top (
     wire [19:0] wr_last_addr;
     wire [19:0] tvram_last_addr;
     wire [63:0] tvram_row0_code, tvram_row0_attr, tvram_row0_hi;
+    wire [63:0] pc98_tvfill_view;
+    wire [15:0] pc98_rowbuf_freq_count, pc98_rowbuf_fvalid_count;
     wire  [3:0] raw_strobes;
     wire [15:0] wr_low_cycles, rd_low_cycles;
     wire [127:0] rom_read_data;
@@ -1933,6 +1935,9 @@ module core_top (
         .tvram_last_addr(tvram_last_addr),
         .tvram_row0_code(tvram_row0_code),
         .tvram_row0_hi  (tvram_row0_hi),
+        .pc98_tvfill_view (pc98_tvfill_view),
+        .pc98_rowbuf_freq_count (pc98_rowbuf_freq_count),
+        .pc98_rowbuf_fvalid_count (pc98_rowbuf_fvalid_count),
         .tvram_row0_attr(tvram_row0_attr),
         .raw_strobes    (raw_strobes),
         .wr_low_cycles  (wr_low_cycles),
@@ -2299,6 +2304,9 @@ module core_top (
         .enable_hgc                         (enable_hgc_sel),
         .hgc_rgb                            (hgc_rgb_sel),
     //  .de_o                               (VGA_DE),
+        .pc98_tvfill_view                   (pc98_tvfill_view),
+        .pc98_rowbuf_freq_count             (pc98_rowbuf_freq_count),
+        .pc98_rowbuf_fvalid_count           (pc98_rowbuf_fvalid_count),
         .VGA_R                              (r),
         .VGA_G                              (g),
         .VGA_B                              (b),

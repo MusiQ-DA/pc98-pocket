@@ -35,6 +35,9 @@
 #define POST_TVA1   ((volatile uint32_t *) 0x50000090) // cells 4-7
 #define POST_TVH0   ((volatile uint32_t *) 0x50000094) // row 0 cells 0-3, HIGH bytes
 #define POST_TVH1   ((volatile uint32_t *) 0x50000098) // cells 4-7
+#define POST_TVF0   ((volatile uint32_t *) 0x5000009C) // row buffer's view, cells 0-3
+#define POST_TVF1   ((volatile uint32_t *) 0x500000A0) // cells 4-7
+#define POST_FRB    ((volatile uint32_t *) 0x500000A4) // {f_valid beats, f_req pulses}
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -541,6 +544,25 @@ void post_mon_tick(void)
                     hex(4 + (4 + i * 3) * 8, 82, (h0 >> (i * 8)) & 0xFFu, 2);
                 for (int i = 0; i < 4; i++)
                     hex(4 + (16 + i * 3) * 8, 82, (h1 >> (i * 8)) & 0xFFu, 2);
+            }
+            // TVF: the row buffer's own view of the same cells, latched as
+            // the fill read them. TVC/TVH say what the BUS carried; TVF says
+            // what the RENDERER will draw. A disagreement between them names
+            // the bank that lost the write; a stale first cell shows here as
+            // junk in cell 0 with the rest clean.
+            {
+                uint32_t f0 = *POST_TVF0, f1 = *POST_TVF1;
+                uint32_t frb = *POST_FRB;
+                osd_draw_string(&fb, 4, 92, "TVF", OSD_LABEL);
+                for (int i = 0; i < 4; i++)
+                    hex(4 + (4 + i * 3) * 8, 92, (f0 >> (i * 8)) & 0xFFu, 2);
+                for (int i = 0; i < 4; i++)
+                    hex(4 + (16 + i * 3) * 8, 92, (f1 >> (i * 8)) & 0xFFu, 2);
+                // Byte pairs are {hi,lo} per cell: 00 4B 00 41 ... is clean.
+                // FRB: the kanji fetch path. f_valid beats x f_req pulses.
+                osd_draw_string(&fb, 4 + 20 * 8, 92, "FRB", OSD_LABEL);
+                hex(4 + 24 * 8, 92, (frb >> 16) & 0xFFFFu, 4);
+                hex(4 + 29 * 8, 92, frb & 0xFFFFu, 4);
             }
         }
 
