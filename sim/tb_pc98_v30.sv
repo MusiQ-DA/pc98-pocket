@@ -1063,7 +1063,12 @@ module tb_pc98_v30;
     // With the ACK always offered, the ITF's first probe (before ANY command
     // write) also sees 0x60 and the ITF skips its whole test sequence --
     // which is not what a cold machine does.
-    wire [7:0]  kbd_status = kbd_ack_armed ? 8'h02 : 8'h00;
+    logic       kbd_disabled = 1'b0;
+    initial begin
+        if ($test$plusargs("nokbd")) kbd_disabled = 1'b1;
+    end
+    wire [7:0]  kbd_status = kbd_disabled ? 8'h00 :
+                             kbd_ack_armed ? 8'h02 : 8'h00;
 
     always_ff @(posedge clk_chipset) begin
         kbd_wr_d <= kbd_wr;
@@ -1072,7 +1077,8 @@ module tb_pc98_v30;
     end
 
     wire kbd_stat_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0043);
-    wire kbd_data_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0041) & kbd_ack_armed;
+    wire kbd_data_iocycle = ~kbd_disabled &
+                             ~io_rd_n & (cpu_address[15:0] == 16'h0041) & kbd_ack_armed;
 
     // ---- 2DD drive control (0xCC) and a minimal FDC --------------------------
     //
@@ -1243,7 +1249,7 @@ module tb_pc98_v30;
                 $display("  %8t  MEMSIZE at %05X  bx %04X dx %04X ax %04X  CF=%0d",
                          $time, eu_pc, dbg_bx, dbg_dx, dbg_ax, dbg_regs[208]);
             end
-            if (basic_trace && basic_n < 600) begin
+            if (basic_trace && basic_n < 50000) begin
                 basic_n <= basic_n + 1;
                 $display("    B%0d  %05X  op %02X  ax %04X bx %04X cx %04X dx %04X si %04X di %04X  ss %04X ds %04X es %04X sp %04X",
                          basic_n, eu_pc, byte_at(eu_pc),
