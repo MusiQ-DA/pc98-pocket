@@ -76,7 +76,15 @@ module KF8253 (
     //
     // Counter #0
     //
-    KF8253_Counter u_KF8253_Counter_0 (
+    // Counter 0 -- the interval timer -- powers up in mode 3 (square wave),
+    // matching np2's itimer_reset. The VM BIOS reloads it at FDA9A without
+    // writing a mode word, so whatever mode the chip wakes in is the mode
+    // the timer runs in for the whole boot. Mode 0 gave one interrupt per
+    // reload -- one tick, then silence -- and N88-BASIC's first wait loop
+    // spun forever on a count nobody incremented.
+    KF8253_Counter #(
+        .RESET_MODE (3'd3)       // MODE_3: square wave, np2's choice
+    ) u_KF8253_Counter_0 (
         // Bus
         .clock                  (clock),
         .reset                  (reset),

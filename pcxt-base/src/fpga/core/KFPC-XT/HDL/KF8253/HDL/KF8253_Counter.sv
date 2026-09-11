@@ -7,7 +7,9 @@
 
 `include "KF8253_Definitions.svh"
 
-module KF8253_Counter (
+module KF8253_Counter #(
+    parameter logic [2:0] RESET_MODE = 3'd0
+) (
     // Bus
     input   logic           clock,
     input   logic           reset,
@@ -114,7 +116,7 @@ module KF8253_Counter (
     // MODE
     always_ff @(posedge clock, posedge reset) begin
         if (reset)
-            select_mode <= `KF8253_CONTROL_MODE_0;
+            select_mode <= RESET_MODE;
         else if (update_counter_config)
             select_mode <= internal_data_bus[3:1];
         else
