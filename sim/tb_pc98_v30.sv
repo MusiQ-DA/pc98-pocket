@@ -692,6 +692,29 @@ module tb_pc98_v30;
         .counter_2_out    ()
     );
 
+    // The interval timer's interrupt, generated the way np2 schedules it
+    // (NEVENT_ITIMER): periodic at the rate the BIOS's last reload of
+    // counter 0 implies, independent of the 8253 model's output pin. The
+    // FDA9A reload writes 0x80,0x80 (MSB only per the reset RL state) --
+    // 0x8000 counts at the PIT clock. The PIT clock here is timer_clock
+    // (peripheral_ce toggling, ~8.59 MHz / 2). One full period at mode 3
+    // = the reload value; the interrupt fires on each output transition.
+    logic       pit_timer_irq = 1'b0;
+    logic [1:0] pit_irq_state = 2'b00;
+    int         pit_irq_divider = 0;
+    // Period: reload 0x8000 at timer_clock/2 rate.  We just toggle every
+    // 16384 timer_clock edges (half of 0x8000) which approximates the mode-3
+    // square wave for interrupt purposes.  BIOS reload value observed: 0x80.
+    always_ff @(posedge clk_chipset) begin
+        if (peripheral_ce) begin
+            pit_irq_divider <= pit_irq_divider + 1;
+            if (pit_irq_divider >= 16384) begin
+                pit_irq_divider <= 0;
+                pit_timer_irq  <= ~pit_timer_irq;
+            end
+        end
+    end
+
     // ---- 8237 stand-in ------------------------------------------------------
     //
     // The DMA register test at FD8E6 writes each odd port 01-0F twice (LSB,
@@ -782,7 +805,13 @@ module tb_pc98_v30;
         .slave_program_n  (1'b1),
         .interrupt_acknowledge_n (inta_n),
         .interrupt_to_cpu (pic1_to_cpu_buf),
-        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, 1'b0, timer_out0})
+        // np2 generates the timer interrupt as a scheduled event keyed to
+        // the counter's reload value, NOT from the 8253's output pin
+        // (io/pit.c: systimer / setsystimerevent). Our KF8253's mode-3
+        // output has a stuck-output bug this boot exposes; until that is
+        // fixed, the honest model is np2's: the interrupt fires at the
+        // period the ROM programmed, every time.
+        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, 1'b0, pit_timer_irq})
     );
 
     KF8259 u_pic2 (
@@ -850,13 +879,61 @@ module tb_pc98_v30;
     end
     logic pic1_to_cpu_d = 1'b0;
 
+    // BASIC's wait loop, checked for interrupt readiness: the tick this
+    // loop waits on is delivered through INT 0x08, and both the CPU's IF
+    // and the PIC's ISR0 state decide whether the next tick arrives.
+    logic waitloop_seen = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (eu_pc == 20'h115C2 && !waitloop_seen) begin
+            waitloop_seen <= 1'b1;
+            $display("  %8t  WAITLOOP: IF=%b psw=%04X isr=%02X imr=%02X int=%b",
+                     $time, dbg_regs[217], dbg_regs[223:208],
+                     u_pic1.in_service_register,
+                     u_pic1.interrupt_mask, pic1_to_cpu_buf);
+        end
+    end
+
+    // After the last timer edge, report the stuck state once: the output
+    // froze, and the reason lives in the counter's own registers.
+    int  stuck_count = 0;
+    logic stuck_reported = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (timer_edges > 3 && timer_out0 == timer_out0_d) begin
+            if (stuck_count < 1000000) stuck_count <= stuck_count + 1;
+            else if (!stuck_reported) begin
+                stuck_reported <= 1'b1;
+                $display("  %8t  TIMER STUCK after edge #%0d: out=%b", $time, timer_edges, timer_out0);
+                $display("        Read the pit: %02X at port 0x71 last write trace above", 0);
+            end
+        end else if (timer_out0 != timer_out0_d) begin
+            stuck_count <= 0;
+        end
+    end
+
+    // Timer output edges: mode 3 should toggle forever. If the count stops
+    // at 2, the counter loaded once and never reloaded -- the mode-3
+    // auto-reload is broken in the KF8253's single-byte load path.
+    int timer_edges = 0;
+    logic timer_out0_d = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        timer_out0_d <= timer_out0;
+        if (timer_out0 != timer_out0_d) begin
+            timer_edges <= timer_edges + 1;
+            if (timer_edges < 12)
+                $display("  %8t  TIMER EDGE #%0d  out=%b  (eu_pc %05X)", $time,
+                         timer_edges, timer_out0, eu_pc);
+        end
+    end
+
     // INTA count: how many acknowledges the CPU issued. One means the first
     // interrupt reached the INTA pair; the handler ran if the EU ever stands
     // on FD80:02BC or beyond FDAB1.
     int inta_count = 0;
+    int inta_vec08_count = 0;
     logic inta_d = 1'b1;
     always_ff @(posedge clk_chipset) begin
         if (~inta_n) begin
+            if (inta_d && din == 8'h08) inta_vec08_count <= inta_vec08_count + 1;
             if (inta_count == 0) $display("  %8t  INTA #1", $time);
             if (inta_d) $display("  %8t  INTA  vector %02X  pic2_int=%b irrg=%02X isrg=%02X imr=%02X casc=%b",
                                  $time, din, pic2_to_cpu,
