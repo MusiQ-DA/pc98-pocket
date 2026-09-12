@@ -62,7 +62,32 @@ v=$(check_vec "$ROMS/bios.rom" 0x17FF0 "ea000080fd")
 [ "$v" = "ok" ] || { say "bios.rom reset vector is '$v', want ea 00 00 80 fd -- this is a patched dump"; exit 1; }
 v=$(check_vec "$ROMS/itf.rom" 0x7FF0 "ea000000f8")
 [ "$v" = "ok" ] || { say "itf.rom reset vector is '$v', want ea 00 00 00 f8 -- this is not an ITF"; exit 1; }
-say "ROMs look genuine"
+
+# The vector checks pass for ANY genuine dump -- including the mixed-generation
+# set that ran P1-P4 (a VM BIOS assembled from per-chip dumps under a UX ITF).
+# That one was only unmasked by a sim run, so do not spend a hardware run on a
+# set nobody has identified: pin the coherent PC-9801UX trio. The mixed set is
+# parked in ~/.pc98roms/franken-vm-mix-20260913/ if it is ever wanted again.
+md5of() { md5 -q "$1"; }
+rombad=0
+for spec in "bios.rom 3af0ae018c5710eec6e2891064814138" \
+            "itf.rom  1d295699ffeab0f0e24e09381299259d" \
+            "font.rom 4133b0be0d470920da60b9ed28d2614f"; do
+    f=${spec%% *}; want=${spec##* }
+    got=$(md5of "$ROMS/$f")
+    [ "$got" = "$want" ] && continue
+    say "$f md5 is $got, want $want (PC-9801UX set)"
+    rombad=1
+done
+if [ $rombad -ne 0 ]; then
+    if [ "${PC98_ANY_ROMS:-}" = "1" ]; then
+        say "PC98_ANY_ROMS=1: deploying this unidentified set anyway"
+    else
+        say "not the pinned PC-9801UX set -- refusing (PC98_ANY_ROMS=1 to override)"
+        exit 1
+    fi
+fi
+say "ROMs look genuine; set is the pinned PC-9801UX trio"
 
 # ---- 1. wait for the run ---------------------------------------------------
 if [ -z "$RUN" ]; then
