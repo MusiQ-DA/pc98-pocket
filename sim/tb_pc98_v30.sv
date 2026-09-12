@@ -980,6 +980,34 @@ module tb_pc98_v30;
         end
     end
 
+    // Work-area word watches: the entry stub at F7EF3-F7F16 branches on
+    // [0x1862]/[0x1866]/[0x186C]/[0x1860]; ours are all zero and the wrong
+    // branch reaches the F000:7D80 POP SS. Catch every writer.
+    logic [15:0] wa60_q = 16'h0000, wa62_q = 16'h0000,
+                 wa66_q = 16'h0000, wa6c_q = 16'h0000;
+    always_ff @(posedge clk_chipset) begin
+        if ({ram[20'h01861],ram[20'h01860]} !== wa60_q) begin
+            $display("  %8t  WA [1860] %04X -> %04X  (eu_pc %05X)", $time,
+                     wa60_q, {ram[20'h01861],ram[20'h01860]}, eu_pc);
+            wa60_q <= {ram[20'h01861],ram[20'h01860]};
+        end
+        if ({ram[20'h01863],ram[20'h01862]} !== wa62_q) begin
+            $display("  %8t  WA [1862] %04X -> %04X  (eu_pc %05X)", $time,
+                     wa62_q, {ram[20'h01863],ram[20'h01862]}, eu_pc);
+            wa62_q <= {ram[20'h01863],ram[20'h01862]};
+        end
+        if ({ram[20'h01867],ram[20'h01866]} !== wa66_q) begin
+            $display("  %8t  WA [1866] %04X -> %04X  (eu_pc %05X)", $time,
+                     wa66_q, {ram[20'h01867],ram[20'h01866]}, eu_pc);
+            wa66_q <= {ram[20'h01867],ram[20'h01866]};
+        end
+        if ({ram[20'h0186D],ram[20'h0186C]} !== wa6c_q) begin
+            $display("  %8t  WA [186C] %04X -> %04X  (eu_pc %05X)", $time,
+                     wa6c_q, {ram[20'h0186D],ram[20'h0186C]}, eu_pc);
+            wa6c_q <= {ram[20'h0186D],ram[20'h0186C]};
+        end
+    end
+
     // At the POP SS (F7D80): the stack word it pops becomes BASIC's work
     // segment. Dump the whole POST stack and SP at that moment.
     logic popss_dumped = 1'b0;
