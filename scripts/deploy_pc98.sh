@@ -6,9 +6,12 @@
 # and it has to place two ROMs the core cannot boot without.
 #
 # The ROMs are the user's own dumps and are not in this repository. Point
-# PC98_ROMS at a directory holding bios.rom and itf.rom -- use the UNPATCHED
-# pair (docs/PC98_MACHINE_SPEC.md F3-F5); the copy circulating as np2's
-# BIOS.ROM has its reset vector overwritten and its ITF.ROM is not an ITF.
+# PC98_ROMS at a directory holding the coherent PC-9801UX set: bios.rom,
+# itf.rom and font.rom (docs/PC98_MACHINE_SPEC.md F1-F5). The set that ran
+# P1-P4 turned out to be mixed-generation -- a VM-family BIOS under a UX
+# ITF, a "Franken-ROM" -- and it passes the vector checks below, so the
+# deploy also pins the UX trio by md5. Anything else is refused unless
+# PC98_ANY_ROMS=1 is set deliberately.
 set -uo pipefail
 
 # Apple's clang cannot assemble start.S -- it rejects the cc1as flag its own
