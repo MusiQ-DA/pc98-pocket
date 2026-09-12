@@ -387,10 +387,13 @@ module tb_pc98_v30;
     // memory test. Held for a while, like the core's own reset release.
     always_ff @(posedge clk_chipset) begin
         f0_prev_wr_n <= io_wr_n;
-        if (io_wr_n & ~f0_prev_wr_n & (cpu_address[15:0] == 16'h00F0)) begin
+        if (io_wr_n & ~f0_prev_wr_n & (cpu_address[15:0] == 16'h00F0)
+            || (force_pass1_reset && soft_reset_count == 8'h00)) begin
             soft_reset_cpu   <= 1'b1;
             soft_reset_count <= 8'hFF;
-            $display("  %8t  OUT 00F0 -- CPU reset requested (eu_pc %05X)", $time, eu_pc);
+            if (!force_pass1_reset)
+                $display("  %8t  OUT 00F0 -- CPU reset requested (eu_pc %05X)", $time, eu_pc);
+            force_pass1_reset <= 1'b0;
         end else if (soft_reset_count != 8'h00)
             soft_reset_count <= soft_reset_count - 8'h01;
         else
@@ -1034,6 +1037,20 @@ module tb_pc98_v30;
         u_tvram.attr[12'hFFF] = 8'h6E;   // A3FFE
         $display("MEMSW pre-seeded (np2 defaults): 48 05 04 08 01 00 00 6E");
     end
+    // The ROM's two-pass boot: pass 1 (keyboard not yet ready) installs
+    // IVT[1E]={E800,0A07} at FDB26 and enters BASIC dirty; BASIC's init
+    // resets the CPU; pass 2 (keyboard ready, bit7=1) skips the install AND
+    // the second ext-ROM scan and boots BASIC with the clean stack. Our
+    // keyboard ACK answers on pass 1, so we pre-seed the pass-1 products:
+    // IVT[1E] as FDB26 would have written it (table entry 31 = 0A07,
+    // CS=E800).
+    initial begin
+        ram[20'h0078] = 8'h07;   // IVT[1E].IP low
+        ram[20'h0079] = 8'h0A;   // IVT[1E].IP high
+        ram[20'h007A] = 8'h00;   // IVT[1E].CS low
+        ram[20'h007B] = 8'hE8;   // IVT[1E].CS high
+        $display("IVT[1E] pre-seeded: E800:0A07");
+    end
     initial begin
         int v;
         if ($value$plusargs("ssfix=%d", v)) ss_override_val = v;
@@ -1210,6 +1227,9 @@ module tb_pc98_v30;
     // byte is waiting; reading 0x41 takes it.
     logic       kbd_ack_armed = 1'b0;
     logic       kbd_wr_d = 1'b1;
+    logic       kbd_rd_d = 1'b1;
+    logic       soft_reset_cpu_d = 1'b0;
+    logic       force_pass1_reset = 1'b0;
     wire        kbd_wr = ~io_wr_n & ((cpu_address[15:0] == 16'h0043)
                                |    (cpu_address[15:0] == 16'h0073));
     wire        kbd_rd = ~io_rd_n & (cpu_address[15:0] == 16'h0041);
@@ -1218,16 +1238,50 @@ module tb_pc98_v30;
     // write) also sees 0x60 and the ITF skips its whole test sequence --
     // which is not what a cold machine does.
     logic       kbd_disabled = 1'b0;
+    int         cpu_reset_count = 0;
     initial begin
         if ($test$plusargs("nokbd")) kbd_disabled = 1'b1;
+        // Default: the keyboard answers from the second boot pass on --
+        // the real one is still powering up during the first POST.
+        if (!$test$plusargs("kbdpass1")) kbd_disabled = 1'b1;
     end
     wire [7:0]  kbd_status = kbd_disabled ? 8'h00 :
                              kbd_ack_armed ? 8'h02 : 8'h00;
 
+    // Pass-1 cut: the dirty pass-1 BASIC can't reach its own reset (the
+    // F202 stack breaks it first). The real pass 1 waits for the keyboard
+    // and reboots; we pulse the same reset on first BASIC entry.
+    logic pass1_reset_fired = 1'b0;
+    logic basic_seen_q = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        basic_seen_q <= basic_trace;
+        if (basic_trace && !basic_seen_q && !pass1_reset_fired
+            && cpu_reset_count == 0) begin
+            pass1_reset_fired <= 1'b1;
+            force_pass1_reset <= 1'b1;
+            $display("  %8t  PASS1: BASIC entered dirty -- forcing CPU reset for pass 2", $time);
+        end
+    end
+
     always_ff @(posedge clk_chipset) begin
         kbd_wr_d <= kbd_wr;
+        kbd_rd_d <= kbd_rd;
+        if (soft_reset_cpu & ~soft_reset_cpu_d) begin
+            cpu_reset_count <= cpu_reset_count + 1;
+            // The real keyboard powers up during the first POST; the ROM's
+            // two-pass design needs pass 1 to fail the 8251 test. From the
+            // first CPU reset (pass 2) the ACK answers.
+            kbd_disabled <= 1'b0;
+        end
+        soft_reset_cpu_d <= soft_reset_cpu;
         if (kbd_wr & ~kbd_wr_d) kbd_ack_armed <= 1'b1;
-        if (kbd_rd)             kbd_ack_armed <= 1'b0;
+        // Clear AFTER the read cycle ends: the CPU latches din late in the
+        // cycle, and clearing kbd_ack_armed mid-cycle made the BIOS's own
+        // keyboard test (FD80:0164-0177: poll 0x43 bit1, read 0x41, expect
+        // 0x60) see 0xFF instead of the ACK -- three failed retries, no
+        // [0x500].bit7, and the no-keyboard boot path with its polluted
+        // stack. The ACK now survives the whole read.
+        if (kbd_rd_d & ~kbd_rd) kbd_ack_armed <= 1'b0;
     end
 
     wire kbd_stat_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0043);
