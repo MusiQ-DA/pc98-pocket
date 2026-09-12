@@ -387,10 +387,13 @@ module tb_pc98_v30;
     // memory test. Held for a while, like the core's own reset release.
     always_ff @(posedge clk_chipset) begin
         f0_prev_wr_n <= io_wr_n;
-        if (io_wr_n & ~f0_prev_wr_n & (cpu_address[15:0] == 16'h00F0)) begin
+        if (io_wr_n & ~f0_prev_wr_n & (cpu_address[15:0] == 16'h00F0)
+            || (force_pass1_reset && soft_reset_count == 8'h00)) begin
             soft_reset_cpu   <= 1'b1;
             soft_reset_count <= 8'hFF;
-            $display("  %8t  OUT 00F0 -- CPU reset requested (eu_pc %05X)", $time, eu_pc);
+            if (!force_pass1_reset)
+                $display("  %8t  OUT 00F0 -- CPU reset requested (eu_pc %05X)", $time, eu_pc);
+            force_pass1_reset <= 1'b0;
         end else if (soft_reset_count != 8'h00)
             soft_reset_count <= soft_reset_count - 8'h01;
         else
@@ -1226,6 +1229,7 @@ module tb_pc98_v30;
     logic       kbd_wr_d = 1'b1;
     logic       kbd_rd_d = 1'b1;
     logic       soft_reset_cpu_d = 1'b0;
+    logic       force_pass1_reset = 1'b0;
     wire        kbd_wr = ~io_wr_n & ((cpu_address[15:0] == 16'h0043)
                                |    (cpu_address[15:0] == 16'h0073));
     wire        kbd_rd = ~io_rd_n & (cpu_address[15:0] == 16'h0041);
@@ -1243,6 +1247,21 @@ module tb_pc98_v30;
     end
     wire [7:0]  kbd_status = kbd_disabled ? 8'h00 :
                              kbd_ack_armed ? 8'h02 : 8'h00;
+
+    // Pass-1 cut: the dirty pass-1 BASIC can't reach its own reset (the
+    // F202 stack breaks it first). The real pass 1 waits for the keyboard
+    // and reboots; we pulse the same reset on first BASIC entry.
+    logic pass1_reset_fired = 1'b0;
+    logic basic_seen_q = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        basic_seen_q <= basic_trace;
+        if (basic_trace && !basic_seen_q && !pass1_reset_fired
+            && cpu_reset_count == 0) begin
+            pass1_reset_fired <= 1'b1;
+            force_pass1_reset <= 1'b1;
+            $display("  %8t  PASS1: BASIC entered dirty -- forcing CPU reset for pass 2", $time);
+        end
+    end
 
     always_ff @(posedge clk_chipset) begin
         kbd_wr_d <= kbd_wr;
