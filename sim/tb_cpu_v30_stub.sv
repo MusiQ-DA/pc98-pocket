@@ -108,6 +108,9 @@ module tb_cpu_v30_stub;
     wire [15:0] r_cs = dbg_regs[159:144];
     wire [15:0] r_sp = dbg_regs[79:64];
     wire [15:0] r_si = dbg_regs[111:96];
+    // The EU's live PC and the loaded displacement -- the short-jump pieces
+    wire [15:0] eu_pc_l = dut.u_eu.pc;
+    wire [15:0] eu_lddisp = dut.u_eu.ld_disp;
 
     int errors = 0;
 
@@ -133,7 +136,8 @@ module tb_cpu_v30_stub;
         // E800:FFDA: EB FE            jmp $  (the WRONG landing, per the boot bench)
         // E800:FFE1: B8 41 41 EB FE   mov ax,0x4141; jmp $  (the INTENDED target)
         ram[20'hF7FD8]=8'h90; ram[20'hF7FD9]=8'h90;
-        ram[20'hF7FDA]=8'hEB; ram[20'hF7FDB]=8'hFE;
+        ram[20'hF7FDA]=8'hB8; ram[20'hF7FDB]=8'h42; ram[20'hF7FDC]=8'h42;
+        ram[20'hF7FDD]=8'hEB; ram[20'hF7FDE]=8'hFE;
         ram[20'hF7FE1]=8'hB8; ram[20'hF7FE2]=8'h41; ram[20'hF7FE3]=8'h41;
         ram[20'hF7FE4]=8'hEB; ram[20'hF7FE5]=8'hFE;
 
@@ -180,9 +184,52 @@ module tb_cpu_v30_stub;
 
         repeat (3000) @(posedge clk);
 
+        // Variant C at F100:0000: `66 90` (prefix + nop) then park.
+        ram[20'hF1000]=8'h66; ram[20'hF1001]=8'h90;
+        ram[20'hF1002]=8'hB8; ram[20'hF1003]=8'h43; ram[20'hF1004]=8'h43;
+        ram[20'hF1005]=8'hEB; ram[20'hF1006]=8'hFE;
+        // Variant D at F200:0000: `90` (nop) then park.
+        ram[20'hF2000]=8'h90;
+        ram[20'hF2001]=8'hB8; ram[20'hF2002]=8'h44; ram[20'hF2003]=8'h44;
+        ram[20'hF2004]=8'hEB; ram[20'hF2005]=8'hFE;
+        // Variant E at F300:0000: `66 18 77 d5 89 de` (the exact 6 bytes) then park.
+        ram[20'hF3000]=8'h66; ram[20'hF3001]=8'h18; ram[20'hF3002]=8'h77;
+        ram[20'hF3003]=8'hD5; ram[20'hF3004]=8'h89; ram[20'hF3005]=8'hDE;
+        ram[20'hF3006]=8'hB8; ram[20'hF3007]=8'h45; ram[20'hF3008]=8'h45;
+        ram[20'hF3009]=8'hEB; ram[20'hF300A]=8'hFE;
+
+        // Variant F at F400:0000: the stub through `rep movsb` then park (no jmp).
+        ram[20'hF4000]=8'h06; ram[20'hF4001]=8'h66; ram[20'hF4002]=8'h18;
+        ram[20'hF4003]=8'h77; ram[20'hF4004]=8'hD5; ram[20'hF4005]=8'h89;
+        ram[20'hF4006]=8'hDE; ram[20'hF4007]=8'hF3; ram[20'hF4008]=8'hA4;
+        ram[20'hF4009]=8'hB8; ram[20'hF400A]=8'h46; ram[20'hF400B]=8'h46;
+        ram[20'hF400C]=8'hEB; ram[20'hF400D]=8'hFE;
+        // Variant G at F500:0000: only `eb d6` (the jmp) after a nop start.
+        ram[20'hF5000]=8'h90; ram[20'hF5001]=8'hEB; ram[20'hF5002]=8'hD6;
+
+        // Variant H at F600:0000: full stub, jmp target = F600:FFE1 gets
+        // `B8 48 48 EB FE`; FFDA area left as ZEROS (no park) -- if the
+        // machine lands there it walks; if it lands at FFE1 it parks.
+        ram[20'hF6000]=8'h06; ram[20'hF6001]=8'h66; ram[20'hF6002]=8'h18;
+        ram[20'hF6003]=8'h77; ram[20'hF6004]=8'hD5; ram[20'hF6005]=8'h89;
+        ram[20'hF6006]=8'hDE; ram[20'hF6007]=8'hF3; ram[20'hF6008]=8'hA4;
+        ram[20'hF6009]=8'hEB; ram[20'hF600A]=8'hD6;
+        ram[20'h05FE1]=8'hB8; ram[20'h05FE2]=8'h48; ram[20'h05FE3]=8'h48;
+        ram[20'h05FE4]=8'hEB; ram[20'h05FE5]=8'hFE;
+
+        // Variant L at F700:0000: the stub with 66 -> 90 (NOP) -- if the jump
+        // then lands correctly, the 66-prefix's queue interaction is the bug
+        // and NOPing it is the workaround.
+        ram[20'hF7000]=8'h06; ram[20'hF7001]=8'h90; ram[20'hF7002]=8'h18;
+        ram[20'hF7003]=8'h77; ram[20'hF7004]=8'hD5; ram[20'hF7005]=8'h89;
+        ram[20'hF7006]=8'hDE; ram[20'hF7007]=8'hF3; ram[20'hF7008]=8'hA4;
+        ram[20'hF7009]=8'hEB; ram[20'hF700A]=8'hD6;
+        ram[20'hF6FE1]=8'hB8; ram[20'hF6FE2]=8'h4C; ram[20'hF6FE3]=8'h4C;
+        ram[20'hF6FE4]=8'hEB; ram[20'hF6FE5]=8'hFE;
+
         $display("=== V30 entry-stub first bytes ===");
-        $display("  final CS:IP = %04X:%04X  (E800:FFE1 expected, FFDA is the bug)",
-                 r_cs, r_ip);
+        $display("  final CS:IP = %04X:%04X  AX=%04X (4141=FFE1 landing, 4242=FFDA landing)",
+                 r_cs, r_ip, dbg_regs[15:0]);
         $display("  SP=%04X SI=%04X", r_sp, r_si);
         $display("  push es wrote [030FE]=%02X%02X (want DF00 little-endian 00 DF)",
                  ram[20'h003FF], ram[20'h003FE]);
@@ -210,6 +257,100 @@ module tb_cpu_v30_stub;
             $display("  RESULT B: PASS -- mov si,bx ran");
         else
             $display("  RESULT B: FAIL -- mov si,bx skipped");
+        // ---- variant C: 66 + nop ----
+        reset = 1'b1;
+        repeat (4) @(posedge clk);
+        bkd_regs = {16'h0002, 16'h0000, 16'h0000, 16'h0030, 16'hF100,
+                    16'hDF00, 16'h0000, 16'h0000, 16'h0000, 16'h0100,
+                    16'h04E0, 16'h00C8, 16'h0000, 16'h0000};
+        bkd_load = 1'b1;
+        repeat (2) @(posedge clk);
+        bkd_load = 1'b0;
+        reset = 1'b0;
+        repeat (500) @(posedge clk);
+        $display("  C: 66+nop: IP=%04X (want 0007 if 66 is 1-byte prefix) AX=%04X",
+                 r_ip, dbg_regs[15:0]);
+
+        // ---- variant D: plain nop ----
+        reset = 1'b1;
+        repeat (4) @(posedge clk);
+        bkd_regs = {16'h0002, 16'h0000, 16'h0000, 16'h0030, 16'hF200,
+                    16'hDF00, 16'h0000, 16'h0000, 16'h0000, 16'h0100,
+                    16'h04E0, 16'h00C8, 16'h0000, 16'h0000};
+        bkd_load = 1'b1;
+        repeat (2) @(posedge clk);
+        bkd_load = 1'b0;
+        reset = 1'b0;
+        repeat (500) @(posedge clk);
+        $display("  D: nop:    IP=%04X (want 0006) AX=%04X",
+                 r_ip, dbg_regs[15:0]);
+
+        // ---- variant E: the exact 6 bytes then park ----
+        reset = 1'b1;
+        repeat (4) @(posedge clk);
+        bkd_regs = {16'h0002, 16'h0000, 16'h0000, 16'h0030, 16'hF300,
+                    16'hDF00, 16'h0000, 16'h0000, 16'h0000, 16'h0100,
+                    16'h04E0, 16'h00C8, 16'h0000, 16'h0000};
+        bkd_load = 1'b1;
+        repeat (2) @(posedge clk);
+        bkd_load = 1'b0;
+        reset = 1'b0;
+        repeat (500) @(posedge clk);
+        $display("  E: 66 18 77 d5 89 de: IP=%04X (want 0008 if 4-byte+2-byte) SI=%04X (want 04E0)",
+                 r_ip, r_si);
+        // ---- variant F: stub + rep movsb, park (no jmp) ----
+        reset = 1'b1;
+        repeat (4) @(posedge clk);
+        bkd_regs = {16'h0002, 16'h0000, 16'h0000, 16'h0030, 16'hF400,
+                    16'hDF00, 16'h0500, 16'h0000, 16'h0000, 16'h0100,
+                    16'h04E0, 16'h00C8, 16'h0000, 16'h0000};
+        bkd_load = 1'b1;
+        repeat (2) @(posedge clk);
+        bkd_load = 1'b0;
+        reset = 1'b0;
+        repeat (500) @(posedge clk);
+        $display("  F: stub+rep+park: IP=%04X (want 000F) SI=%04X AX=%04X (4646=reached park)",
+                 r_ip, r_si, dbg_regs[15:0]);
+
+        // ---- variant G: nop + eb d6 (jmp only) ----
+        reset = 1'b1;
+        repeat (4) @(posedge clk);
+        bkd_regs = {16'h0002, 16'h0000, 16'h0000, 16'h0030, 16'hF500,
+                    16'hDF00, 16'h0000, 16'h0000, 16'h0000, 16'h0100,
+                    16'h04E0, 16'h00C8, 16'h0000, 16'h0000};
+        bkd_load = 1'b1;
+        repeat (2) @(posedge clk);
+        bkd_load = 1'b0;
+        reset = 1'b0;
+        repeat (500) @(posedge clk);
+        $display("  G: nop+jmp d6: IP=%04X (F500:FFDB-FFC4 = wrap target 0x0003-0x2A...)",
+                 r_ip);
+        // ---- variant H: full stub at F600, park at FFE1, zeros at FFDA ----
+        reset = 1'b1;
+        repeat (4) @(posedge clk);
+        bkd_regs = {16'h0002, 16'h0000, 16'h0000, 16'h0030, 16'hF600,
+                    16'hDF00, 16'h0500, 16'h0000, 16'h0000, 16'h0100,
+                    16'h04E0, 16'h00C8, 16'h0000, 16'h0000};
+        bkd_load = 1'b1;
+        repeat (2) @(posedge clk);
+        bkd_load = 1'b0;
+        reset = 1'b0;
+        repeat (3000) @(posedge clk);
+        $display("  H: F600 stub: IP=%04X AX=%04X (4848=parked at FFE1, else walked)",
+                 r_ip, dbg_regs[15:0]);
+        // ---- variant L: 66->90 then the full stub ----
+        reset = 1'b1;
+        repeat (4) @(posedge clk);
+        bkd_regs = {16'h0002, 16'h0000, 16'h0000, 16'h0030, 16'hF700,
+                    16'hDF00, 16'h0500, 16'h0000, 16'h0000, 16'h0100,
+                    16'h04E0, 16'h00C8, 16'h0000, 16'h0000};
+        bkd_load = 1'b1;
+        repeat (2) @(posedge clk);
+        bkd_load = 1'b0;
+        reset = 1'b0;
+        repeat (3000) @(posedge clk);
+        $display("  L: 66->90 stub: IP=%04X AX=%04X SI=%04X (4C4C=parked at FFE1 correct!)",
+                 r_ip, dbg_regs[15:0], r_si);
         $finish;
     end
 
