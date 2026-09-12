@@ -980,6 +980,64 @@ module tb_pc98_v30;
         end
     end
 
+    // One-shot park dump: the first HOOKFETCH = the machine entering the
+    // final wait. Dump the loop's own code bytes and the register state.
+    logic park_dumped = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (!park_dumped && basic_trace && eu_pc == 20'h115C4) begin
+            park_dumped <= 1'b1;
+            $display("  %8t  PARK: cs=%04X ip~%04X ds=%04X es=%04X ss=%04X sp=%04X psw=%04X",
+                     $time, dbg_cs, dbg_regs[207:192], dbg_regs[191:176],
+                     dbg_regs[143:128], dbg_ss, dbg_sp, dbg_regs[223:208]);
+            $display("  PARK code at 0x115B0-0x115E0:");
+            for (int q = 0; q < 12; q++)
+                $display("    %05X: %02X %02X %02X %02X", 20'h115B0 + q*4,
+                         ram[20'h115B0+q*4], ram[20'h115B1+q*4],
+                         ram[20'h115B2+q*4], ram[20'h115B3+q*4]);
+        end
+    end
+
+    // IF-transition trace: psw[9] = the interrupt flag. The machine ends
+    // parked in a BASIC wait loop with IF=0 -- catch the last few CLI/STI
+    // that led there.
+    logic if_q = 1'b1;
+    int if_drops = 0;
+    always_ff @(posedge clk_chipset) begin
+        if (basic_trace && dbg_regs[217] != if_q) begin
+            if_q <= dbg_regs[201];
+            if (!dbg_regs[217]) begin
+                if_drops <= if_drops + 1;
+                if (if_drops < 40 || if_drops % 500 == 0)
+                    $display("  %8t  IF->0 (CLI) #%0d  (eu_pc %05X psw %04X)", $time,
+                             if_drops, eu_pc, dbg_regs[207:192]);
+            end else if (if_drops > 0 && if_drops % 500 == 1)
+                $display("  %8t  IF->1 (STI) after #%0d  (eu_pc %05X)", $time, if_drops, eu_pc);
+        end
+    end
+
+    // Command-queue + work-limit watches: the FE24 block (which sets the
+    // work-area words [0x1862..]) is gated on [0x6A4] < [0x6A6] and uses
+    // BX=[0x1406]. Nobody populates any of them on this machine -- who
+    // does on a real one is the open question.
+    logic [15:0] q6a4_q = 16'h0000, q6a6_q = 16'h0000, w1406_q = 16'h0000;
+    always_ff @(posedge clk_chipset) begin
+        if ({ram[20'h006A5],ram[20'h006A4]} !== q6a4_q) begin
+            $display("  %8t  QUEUE [06A4] %04X -> %04X  (eu_pc %05X)", $time,
+                     q6a4_q, {ram[20'h006A5],ram[20'h006A4]}, eu_pc);
+            q6a4_q <= {ram[20'h006A5],ram[20'h006A4]};
+        end
+        if ({ram[20'h006A7],ram[20'h006A6]} !== q6a6_q) begin
+            $display("  %8t  QUEUE [06A6] %04X -> %04X  (eu_pc %05X)", $time,
+                     q6a6_q, {ram[20'h006A7],ram[20'h006A6]}, eu_pc);
+            q6a6_q <= {ram[20'h006A7],ram[20'h006A6]};
+        end
+        if ({ram[20'h01407],ram[20'h01406]} !== w1406_q) begin
+            $display("  %8t  LIMIT [1406] %04X -> %04X  (eu_pc %05X)", $time,
+                     w1406_q, {ram[20'h01407],ram[20'h01406]}, eu_pc);
+            w1406_q <= {ram[20'h01407],ram[20'h01406]};
+        end
+    end
+
     // Work-area word watches: the entry stub at F7EF3-F7F16 branches on
     // [0x1862]/[0x1866]/[0x186C]/[0x1860]; ours are all zero and the wrong
     // branch reaches the F000:7D80 POP SS. Catch every writer.
@@ -1135,7 +1193,12 @@ module tb_pc98_v30;
         if (pchist_armed && eu_pc < 20'h10000 && eu_pc >= 20'h00100
             && !pchist_dump_done) begin
             pchist_dump_done <= 1'b1;
-            $display("  %8t  PCFALL: eu_pc=%05X  last 64 ROM retirements:", $time, eu_pc);
+            $display("  %8t  PCFALL: eu_pc=%05X int=%b pic1_irrg=%02X pic1_imr=%02X IVT08=%04X:%04X IVT09=%04X:%04X",
+                     $time, eu_pc, pic1_to_cpu,
+                     u_pic1.interrupt_request_register, u_pic1.interrupt_mask,
+                     {ram[20'h0021],ram[20'h0020]}, {ram[20'h0023],ram[20'h0022]},
+                     {ram[20'h0025],ram[20'h0024]}, {ram[20'h0027],ram[20'h0026]});
+            $display("  %8t  PCFALL: last 64 ROM retirements:", $time);
             for (int k = 0; k < 64; k++) begin
                 int idx;
                 idx = (pchist_n + k) % 64;
@@ -1667,6 +1730,13 @@ module tb_pc98_v30;
         for (i = 0; i < 1048576; i = i + 1) ram[i] = 8'h00;
         $readmemh("itf.hex",  itf);
         $readmemh("bios.hex", bios);
+        // WORKAROUND: the 0x66 prefix at E800:0001 (file 0x0001) makes the
+        // following short jump land at FFDA instead of FFE1 on nuV30. The
+        // real V30's 66+18 77 d5 decodes as a 4-byte prefix+SBB and the
+        // stream continues to mov si,bx / rep movsb / jmp FFE1. Replace the
+        // prefix with NOP so the intended path runs (the SBB itself is a
+        // harmless work-area RMW).
+        bios[1] = 8'h90;
 
         // +basicvec=1: pre-seed INT 1F with the N88-BASIC entry, the way a
         // machine whose boot has already established it would hold it. The
