@@ -607,6 +607,7 @@ module tb_pc98_boot;
         .slave_program_n  (1'b1),
         .interrupt_acknowledge_n (inta_n),
         .interrupt_to_cpu (pic1_to_cpu_buf),
+        .external_irr_clear (8'h00),
         .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, 1'b0, timer_out0})
     );
 
@@ -626,6 +627,7 @@ module tb_pc98_boot;
         .slave_program_n  (1'b0),
         .interrupt_acknowledge_n (inta_n),
         .interrupt_to_cpu (pic2_to_cpu),
+        .external_irr_clear (8'h00),
         .interrupt_request({4'b0, fdc_irq3, cc_irq2 | fdc_irq2, 2'b0})
     );
 

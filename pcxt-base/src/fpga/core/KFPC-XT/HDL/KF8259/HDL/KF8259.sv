@@ -28,7 +28,12 @@ module KF8259 (
     input   logic           interrupt_acknowledge_n,
     output  logic           interrupt_to_cpu,
 
-    input   logic   [7:0]   interrupt_request
+    input   logic   [7:0]   interrupt_request,
+
+    // np2's timer quirk as an explicit port: a strobe here clears the
+    // corresponding IRR bits (see KF8259_Interrupt_Request).  Only the master
+    // PIC's bit 0 is ever driven on a PC-98 -- the interval timer's writes.
+    input   logic   [7:0]   external_irr_clear
 );
 
     //
@@ -144,6 +149,7 @@ module KF8259 (
         // Inputs from control logic
         .level_or_edge_toriggered_config    (level_or_edge_toriggered_config),
         .freeze                             (freeze),
+        .external_irr_clear                 (external_irr_clear),
         .clear_interrupt_request            (clear_interrupt_request),
 
         // External inputs
