@@ -33,8 +33,15 @@ module tb_pc98_tvram;
     wire   [7:0] vid_char_lo, vid_char_hi, vid_attr;
     logic [11:0] fil_cell = 12'h0;
 
+    // Held over the first edge so the memory switch registers come out of
+    // reset loaded with the np2 defaults, the way the core's reset does it.
+    // Released with #1 clear of the edge so the flop and the release cannot
+    // race.
+    logic rst = 1'b1;
+
     pc98_tvram dut (
         .clk(clk),
+        .rst(rst),
         .cpu_addr(cpu_addr), .cpu_wren(cpu_wren), .cpu_wdata(cpu_wdata),
         .cpu_q(cpu_q),
         .fil_clk(clk), .fil_cell(fil_cell),
@@ -63,6 +70,7 @@ module tb_pc98_tvram;
     initial begin
         $display("=== PC-98 TVRAM ===");
         @(posedge clk);
+        #1 rst = 1'b0;
 
         // A whole 80x25 screen, written the way the BIOS writes it.
         for (int i = 0; i < 2000; i++) begin
@@ -124,6 +132,37 @@ module tb_pc98_tvram;
         end
         $display("  regions independent: char %02h %02h, attr %02h",
                  8'hAA, 8'hBB, 8'hCC);
+
+        // ------------------------------------------------------ memory switch
+        //
+        // A3FE2+4i must read back the np2 defaults after reset, and guest
+        // writes into A3FE0-A3FFF must be silently dropped -- the POST's
+        // 16 KB screen clear (FECBB) sweeps straight through here on a real
+        // machine too, and the battery-backed switch survives it.
+        begin : memsw_test
+            logic [7:0] expect_sw [0:7];
+            expect_sw = '{8'h48, 8'h05, 8'h04, 8'h08, 8'h01, 8'h00, 8'h00, 8'h6E};
+            for (int i = 0; i < 8; i++) begin
+                rd(14'h3FE2 + 14'(i*4), got);
+                if (got !== expect_sw[i]) begin
+                    $display("  FAIL memsw A3FE%02x: %02h (want %02h)",
+                             14'hE2 + i*4, got, expect_sw[i]);
+                    errors++;
+                end
+            end
+            // Stomp the whole protected range the way the clear does.
+            for (int a = 'h3FE0; a <= 'h3FFF; a++)
+                wr(14'(a), 8'hE1);
+            for (int i = 0; i < 8; i++) begin
+                rd(14'h3FE2 + 14'(i*4), got);
+                if (got !== expect_sw[i]) begin
+                    $display("  FAIL memsw not write-protected at +%0d: %02h",
+                             i, got);
+                    errors++;
+                end
+            end
+            $display("  memory switch: pre-seeded and write-protected");
+        end
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");

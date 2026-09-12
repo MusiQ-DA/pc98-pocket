@@ -550,6 +550,26 @@ module PERIPHERALS #(
     logic   [2:0]   interrupt_cascade_out;
     logic           interrupt_cascade_io;
 
+    // np2's timer-write quirk, decoded at the source: the byte lands in the
+    // KF8253 on the trailing edge of the I/O write, and on that same edge the
+    // master PIC's IRR bit 0 drops if the byte was a channel-0 count or a
+    // control word aimed at channel 0 with a real read/load code (a latch
+    // command arms nothing, so np2 leaves the request alone for it).
+    logic           pit_write_cycle_q;
+    wire            pit_write_cycle  = ~timer_chip_select_n & ~io_write_n;
+    wire            pit_write_done   = pit_write_cycle_q & ~pit_write_cycle;
+    wire            pit0_write_clears_irr0 = pit_write_done &
+           (  (pit_reg_addr == 2'b00)
+            | ((pit_reg_addr == 2'b11) & (internal_data_bus[7:6] == 2'b00)
+                                      & (internal_data_bus[5:4] != 2'b00)));
+    always_ff @(posedge clock, posedge reset)
+    begin
+        if (reset)
+            pit_write_cycle_q    <= 1'b0;
+        else
+            pit_write_cycle_q    <= pit_write_cycle;
+    end
+
 `ifdef MACHINE_PC98
     wire    interrupt2_chip_select_n;
 `endif
@@ -581,6 +601,11 @@ module PERIPHERALS #(
         //.slave_program_or_enable_buffer     (),
         .interrupt_acknowledge_n    (interrupt_acknowledge_n),
         .interrupt_to_cpu           (interrupt_to_cpu_buf),
+        // np2 (io/pit.c): writing the interval timer -- a count byte for
+        // channel 0, or a control word aimed at it -- clears the master's IRR
+        // bit 0, so an interrupt latched before the reprogram cannot fire
+        // after it.  The strobe is decoded below, next to the PIT.
+        .external_irr_clear         ({7'b0, pit0_write_clears_irr0}),
 `ifdef MACHINE_PC98
         // IRQ7 is the slave's cascade line; the machine's own IRQ7 has to
         // stand down for it. IRQ2 is the CRT interrupt -- see crt_vsync_irq
@@ -633,6 +658,7 @@ module PERIPHERALS #(
         .slave_program_n            (1'b0),
         .interrupt_acknowledge_n    (interrupt_acknowledge_n),
         .interrupt_to_cpu           (interrupt2_to_cpu),
+        .external_irr_clear         (8'h00),
         // IRQ3 is the FDC's own interrupt (RECALIBRATE finding no drive);
         // IRQ2 is the XTMASK pulse the 100 ms 0xCC timer fires.
         .interrupt_request          ({4'b0, fdc_irq3,
@@ -652,6 +678,34 @@ module PERIPHERALS #(
     //
     // 8253
     //
+`ifdef MACHINE_PC98
+    // The PC-98 interval timer counts at the machine's 2.4576 MHz PIT clock
+    // (1.9968 MHz on the 8 MHz class; np2's clk_base for this VM is 2.4576).
+    // The XT's 1.193181 MHz below is half that and halves every programmed
+    // rate: the BIOS's FDE20 load of 0x6000 ticks at 50 Hz instead of 100 Hz.
+    // 42.954545 MHz is not an integer multiple (17.48...), so phase-accumulate
+    // and toggle on carry: a square wave whose falling edges -- what the chip
+    // counts -- land at exactly 2.4576 MHz on average.
+    logic           timer_clock;
+    logic [31:0]    pit_clk_phase;
+    localparam logic [31:0] PIT_CLK_HZ_TOGGLE = 32'd4_915_200;  // 2 toggles per period
+    localparam logic [31:0] CHIPSET_HZ       = 32'd42_954_545;
+    always_ff @(posedge clock, posedge reset)
+    begin
+        if (reset) begin
+            timer_clock     <= 1'b0;
+            pit_clk_phase   <= 32'd0;
+        end
+        else begin
+            if ({1'b0, pit_clk_phase} + PIT_CLK_HZ_TOGGLE >= CHIPSET_HZ) begin
+                pit_clk_phase <= pit_clk_phase + PIT_CLK_HZ_TOGGLE - CHIPSET_HZ;
+                timer_clock   <= ~timer_clock;
+            end
+            else
+                pit_clk_phase <= pit_clk_phase + PIT_CLK_HZ_TOGGLE;
+        end
+    end
+`else
     logic   timer_clock;
     always_ff @(posedge clock, posedge reset)
     begin
@@ -662,6 +716,7 @@ module PERIPHERALS #(
         else
             timer_clock         <= timer_clock;
     end
+`endif
 
     logic   [7:0]   timer_data_bus_out;
 

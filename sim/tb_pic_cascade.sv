@@ -51,6 +51,7 @@ module tb_pic_cascade;
         .slave_program_n(1'b1),
         .interrupt_acknowledge_n(inta_n),
         .interrupt_to_cpu(pic1_int_raw),
+        .external_irr_clear(8'h00),
         .interrupt_request({pic2_int, 7'b0})   // slave on IRQ7, per ICW3
     );
 
@@ -68,6 +69,7 @@ module tb_pic_cascade;
         .slave_program_n(1'b0),
         .interrupt_acknowledge_n(inta_n),
         .interrupt_to_cpu(pic2_int),
+        .external_irr_clear(8'h00),
         .interrupt_request({5'b0, irq2_pulse, 2'b0})  // IRQ2 = XTMASK
     );
 

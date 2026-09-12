@@ -608,10 +608,12 @@ module tb_pc98_v30;
             $display("  %8t  HOOKFETCH %05X => %02X   (eu_pc %05X)", $time,
                      cpu_address, ram[cpu_address], eu_pc);
 
-        // The interval timer and the PICs, every write named. BASIC's entry
-        // at 21.3 s was the last moment the timer interrupt fired; its wait
-        // loop has spun since on a tick counter nobody increments. Whoever
-        // reprogrammed what, the OUT sequence says so.
+        // The interval timer and the PICs, every write named. The values the
+        // print shows are from mem_wr_data_q, which only tracks MEMORY
+        // writes -- an I/O write shows whatever the last RAM write carried.
+        // The PIT itself samples the live bus, so its state is authoritative;
+        // read the TIMER EDGE / counter readouts for what the chip actually
+        // holds.
         if (io_wr_n & ~io_wr_d) begin
             if (cpu_address[15:0] == 16'h0077 || cpu_address[15:0] == 16'h0071
              || cpu_address[15:0] == 16'h0073 || cpu_address[15:0] == 16'h0075)
@@ -689,27 +691,65 @@ module tb_pc98_v30;
         if ($value$plusargs("gate2=%d", v)) gate2 = (v != 0);
     end
 
+    // The PC-98 interval-timer input: 2.4576 MHz, the machine's PIT clock
+    // (np2's clk_base for this model).  42.954545 MHz is not an integer
+    // multiple, so phase-accumulate and toggle on carry; the falling edges
+    // the KF8253 counts land at exactly 2.4576 MHz on average.  The old
+    // timer_clock (peripheral_ce toggling) was the XT's 1.193181 MHz and ran
+    // every programmed rate at half speed.
     logic timer_clock = 1'b0;
-    logic timer_out0;
-    wire  [7:0] pit_dout;
-    wire pit_iocycle = (~io_rd_n | ~io_wr_n) & cpu_address[0]
-                     & (cpu_address[7:4] == 4'h7) & ~cpu_address[9] & ~cpu_address[8];
-    always_ff @(posedge clk_chipset)
-        if (peripheral_ce) timer_clock <= ~timer_clock;
+    logic [31:0] pit_clk_phase = 32'd0;
+    localparam logic [31:0] PIT_CLK_TOGGLE_HZ = 32'd4_915_200;  // 2 toggles per period
+    localparam logic [31:0] CHIPSET_HZ        = 32'd42_954_545;
+    always_ff @(posedge clk_chipset) begin
+        if ({1'b0, pit_clk_phase} + PIT_CLK_TOGGLE_HZ >= CHIPSET_HZ) begin
+            pit_clk_phase <= pit_clk_phase + PIT_CLK_TOGGLE_HZ - CHIPSET_HZ;
+            timer_clock   <= ~timer_clock;
+        end
+        else
+            pit_clk_phase <= pit_clk_phase + PIT_CLK_TOGGLE_HZ;
+    end
 
     // (The power-on mode injection lived here; see the git history for the
     // three timings that each broke a different ROM expectation -- the FD866
     // counter test demands the power-on mode, and a running mode-3 counter
     // races the IVT install through the FDAC2 unmask window.)
 
+    // The golden-state boot strap re-enters the ROM AFTER the FD80 POST, and
+    // the POST is where the interval timer is programmed: FDE20 writes the
+    // control word 0x36 (counter 0, LSB+MSB, MODE 3 -- the only mode-3
+    // programming of counter 0 in the whole ROM set) and the count 0x00,0x60
+    // (0x6000 = 100 Hz at 2.4576 MHz; [0x501]&0x80 stays clear, per the
+    // golden [0x500]=0x2403), and FDE49 unmasks IRQ0.  Without it the timer
+    // stays in whatever mode the ITF's own tests left -- mode 0, one
+    // interrupt at terminal count and then silence forever -- and N88-BASIC's
+    // first wait loop has nothing to wait for.  The RAM work areas get the
+    // same treatment through the +golden pre-seeder; this is the PIT's share
+    // of that state, driven through the real bus interface so the chip's own
+    // write path is what programs it.  +nopitseed restores the raw boot.
+    logic       pit_seed_active = 1'b0;
+    logic       pit_seed_we_n   = 1'b1;
+    logic       pit_seed_cs_n   = 1'b1;
+    logic [1:0] pit_seed_addr   = 2'b00;
+    logic [7:0] pit_seed_data   = 8'h00;
+
+    logic timer_out0;
+    wire  [7:0] pit_dout;
+    wire pit_iocycle = (~io_rd_n | ~io_wr_n) & cpu_address[0]
+                     & (cpu_address[7:4] == 4'h7) & ~cpu_address[9] & ~cpu_address[8];
+    wire [1:0] pit_addr_eff = pit_seed_active ? pit_seed_addr : cpu_address[2:1];
+    wire [7:0] pit_data_eff = pit_seed_active ? pit_seed_data : cpu_data_bus;
+    wire       pit_we_n_eff = pit_seed_active ? pit_seed_we_n : io_wr_n;
+    wire       pit_cs_n_eff = pit_seed_active ? pit_seed_cs_n : ~pit_iocycle;
+
     KF8253 u_pit (
         .clock            (clk_chipset),
         .reset            (reset),
-        .chip_select_n    (~pit_iocycle),
+        .chip_select_n    (pit_cs_n_eff),
         .read_enable_n    (io_rd_n),
-        .write_enable_n   (io_wr_n),
-        .address          (cpu_address[2:1]),
-        .data_bus_in      (cpu_data_bus),
+        .write_enable_n   (pit_we_n_eff),
+        .address          (pit_addr_eff),
+        .data_bus_in      (pit_data_eff),
         .data_bus_out     (pit_dout),
 
         .counter_0_clock  (timer_clock), .counter_0_gate (1'b1),
@@ -720,26 +760,62 @@ module tb_pc98_v30;
         .counter_2_out    ()
     );
 
-    // The interval timer's interrupt, generated the way np2 schedules it
-    // (NEVENT_ITIMER): periodic at the rate the BIOS's last reload of
-    // counter 0 implies, independent of the 8253 model's output pin. The
-    // FDA9A reload writes 0x80,0x80 (MSB only per the reset RL state) --
-    // 0x8000 counts at the PIT clock. The PIT clock here is timer_clock
-    // (peripheral_ce toggling, ~8.59 MHz / 2). One full period at mode 3
-    // = the reload value; the interrupt fires on each output transition.
-    logic       pit_timer_irq = 1'b0;
-    logic [1:0] pit_irq_state = 2'b00;
-    int         pit_irq_divider = 0;
-    // Period: reload 0x8000 at timer_clock/2 rate.  We just toggle every
-    // 16384 timer_clock edges (half of 0x8000) which approximates the mode-3
-    // square wave for interrupt purposes.  BIOS reload value observed: 0x80.
-    always_ff @(posedge clk_chipset) begin
-        if (peripheral_ce) begin
-            pit_irq_divider <= pit_irq_divider + 1;
-            if (pit_irq_divider >= 16384) begin
-                pit_irq_divider <= 0;
-                pit_timer_irq  <= ~pit_timer_irq;
+    // The interval timer's interrupt is the PIT's own output pin.  np2's
+    // scheduled-event model (NEVENT_ITIMER) and the square wave on the pin
+    // agree: one rising edge -- one edge-triggered IRQ0 -- per programmed
+    // period.  The software stand-in this replaces toggled at a fixed 16384
+    // clock-enable rate regardless of what the ROM programmed, which is
+    // neither rate nor mode honest.
+
+    // np2 (io/pit.c pit_o71/pit_o77): a completed write to channel 0 -- the
+    // count byte, or a control word for it with a real read/load code --
+    // clears the master PIC's IRR bit 0, so an interrupt latched before a
+    // reprogram cannot be delivered after it.  Same decode as Peripherals.sv.
+    logic pit_write_cycle_q = 1'b0;
+    wire  pit_write_cycle   = ~pit_cs_n_eff & ~pit_we_n_eff;
+    wire  pit_write_done    = pit_write_cycle_q & ~pit_write_cycle;
+    wire  pit0_write_clears_irr0 = pit_write_done &
+           (  (pit_addr_eff == 2'b00)
+            | ((pit_addr_eff == 2'b11) & (pit_data_eff[7:6] == 2'b00)
+                                      & (pit_data_eff[5:4] != 2'b00)));
+    always_ff @(posedge clk_chipset)
+        pit_write_cycle_q <= pit_write_cycle;
+
+    task automatic pit_seed_write(input logic [1:0] a, input logic [7:0] d);
+        begin
+            @(negedge clk_chipset);
+            pit_seed_addr  = a;
+            pit_seed_data  = d;
+            pit_seed_cs_n  = 1'b0;
+            pit_seed_we_n  = 1'b0;
+            repeat (4) @(negedge clk_chipset);
+            pit_seed_we_n  = 1'b1;      // the KF8253 latches on WE rising
+            @(negedge clk_chipset);
+            pit_seed_cs_n  = 1'b1;
+            repeat (8) @(negedge clk_chipset);
+        end
+    endtask
+
+    // Inject it at the boot decision (FE1FD), the same moment the +golden
+    // RAM words go in: that is the boundary where the machine straps into
+    // BASIC, and it is the state a completed FD80 POST would have left.
+    // Re-arms for every boot pass -- the two-pass boot re-enters the
+    // decision after BASIC's first reset, and every ITF pass in between
+    // rewrites the PIT with its own mode-0 test code.
+    initial begin
+        forever begin
+            if ($test$plusargs("nopitseed")) begin
+                #1 $display("PIT seed disabled (+nopitseed)");
+                break;
             end
+            wait (eu_pc == 20'hFE1FD && reset == 1'b0);
+            pit_seed_active = 1'b1;
+            pit_seed_write(2'b11, 8'h36);   // ctrl: counter 0, LSB+MSB, mode 3
+            pit_seed_write(2'b00, 8'h00);   // count LSB
+            pit_seed_write(2'b00, 8'h60);   // count MSB  -> 0x6000 = 100 Hz
+            pit_seed_active = 1'b0;
+            $display("%8t  PIT seeded with the FDE20 state at the boot decision: mode 3, 0x6000 (100 Hz at 2.4576 MHz)", $time);
+            wait (eu_pc != 20'hFE1FD);
         end
     end
 
@@ -833,13 +909,14 @@ module tb_pc98_v30;
         .slave_program_n  (1'b1),
         .interrupt_acknowledge_n (inta_n),
         .interrupt_to_cpu (pic1_to_cpu_buf),
-        // np2 generates the timer interrupt as a scheduled event keyed to
-        // the counter's reload value, NOT from the 8253's output pin
-        // (io/pit.c: systimer / setsystimerevent). Our KF8253's mode-3
-        // output has a stuck-output bug this boot exposes; until that is
-        // fixed, the honest model is np2's: the interrupt fires at the
-        // period the ROM programmed, every time.
-        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, 1'b0, pit_timer_irq})
+        // np2 quirk: the interval timer's own writes clear the master's IRR
+        // bit 0 (io/pit.c pit_o71/pit_o77) -- a request latched before the
+        // reprogram must not survive it.
+        .external_irr_clear ({7'b0, pit0_write_clears_irr0}),
+        // IRQ0 is the PIT's output pin itself: mode 3's square wave gives one
+        // rising edge -- one edge-triggered request -- per programmed period,
+        // which is exactly np2's NEVENT_ITIMER cadence.
+        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, 1'b0, timer_out0})
     );
 
     KF8259 u_pic2 (
@@ -858,6 +935,7 @@ module tb_pc98_v30;
         .slave_program_n  (1'b0),
         .interrupt_acknowledge_n (inta_n),
         .interrupt_to_cpu (pic2_to_cpu),
+        .external_irr_clear (8'h00),
         .interrupt_request({4'b0, fdc_irq3, cc_irq2 | fdc_irq2, 2'b0})
     );
 
@@ -1320,9 +1398,13 @@ module tb_pc98_v30;
         end
     end
 
-    // Timer output edges: mode 3 should toggle forever. If the count stops
-    // at 2, the counter loaded once and never reloaded -- the mode-3
-    // auto-reload is broken in the KF8253's single-byte load path.
+    // Timer output edges: mode 3 toggles forever, every N/2 counts (5 ms for
+    // the seeded 0x6000 at 2.4576 MHz), and each rising edge is one IRQ0.
+    // The boot's earlier sparse edges were MODE 0 doing its one-shot job:
+    // the ITF programs counter 0 with 0x30 (mode 0) for its counter and
+    // INT-08 tests, and only the FD80 POST's FDE20 -- which the golden-state
+    // strap skips -- ever writes mode 3.  The mode-3 counter logic itself was
+    // never broken; sim/tb_kf8253_mode3.sv proves it by direct measurement.
     int timer_edges = 0;
     logic timer_out0_d = 1'b0;
     always_ff @(posedge clk_chipset) begin
@@ -1789,6 +1871,10 @@ module tb_pc98_v30;
 
         repeat (40) @(posedge clk_chipset);
         reset = 1'b0;
+
+        // The FD80 POST's timer programming is injected at the boot decision
+        // (FE1FD) by the PIT-seed process above -- the same boundary the
+        // +golden RAM pre-seeder uses.
 
         // One chunk is 5M chipset clocks, which is 116 ms of guest time --
         // NOT one second, and the two runs that read it that way stopped at

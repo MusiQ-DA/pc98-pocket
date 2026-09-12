@@ -77,6 +77,7 @@ module KF8259_tm();
     logic           interrupt_acknowledge_n;
     logic           interrupt_to_cpu;
     logic   [7:0]   interrupt_request;
+    logic   [7:0]   external_irr_clear;
 
     KF8259 u_KF8259 (.*);
 
@@ -94,6 +95,7 @@ module KF8259_tm();
         cascade_in              = 3'b000;
         slave_program_n         = 1'b0;
         interrupt_acknowledge_n = 1'b1;
+        external_irr_clear      = 8'h00;
         interrupt_request       = 8'b00000000;
         #(`TB_CYCLE * 12);
     end

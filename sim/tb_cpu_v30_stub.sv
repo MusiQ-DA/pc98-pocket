@@ -172,8 +172,9 @@ module tb_cpu_v30_stub;
                     @(posedge clk);
                     if (reset == 1'b0 && r_ip != ip_q) begin
                         ip_q = r_ip;
-                        $display("  [%0d] IP=%04X  op=%02X %02X  AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X SP=%04X",
+                        $display("  [%0d] IP=%04X  op=%02X %02X  PSW=%04X AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X SP=%04X",
                                  n, r_ip, ram[{r_cs,4'h0}+r_ip], ram[{r_cs,4'h0}+r_ip+1],
+                                 dbg_regs[223:208],
                                  dbg_regs[15:0], dbg_regs[63:48], dbg_regs[31:16], dbg_regs[47:32],
                                  r_si, dbg_regs[127:112], r_sp);
                         n = n + 1;
