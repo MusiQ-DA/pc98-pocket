@@ -1008,6 +1008,30 @@ module tb_pc98_v30;
         end
     end
 
+    // At the int 1E (FD80:6205 = phys FE205): dump EVERYTHING the BASIC
+    // entry will inherit -- registers, the work-area words, and the key
+    // pointers. Pass 1 vs pass 2 comparison happens here.
+    logic int1e_dumped = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (eu_pc == 20'hFE205 && !int1e_dumped) begin
+            int1e_dumped <= 1'b1;
+            $display("  %8t  INT1E: ax=%04X bx=%04X cx=%04X dx=%04X si=%04X di=%04X bp=%04X sp=%04X",
+                     $time, dbg_ax, dbg_bx, dbg_cx, dbg_dx, dbg_si, dbg_di, dbg_regs[95:80], dbg_sp);
+            $display("  %8t  INT1E: es=%04X cs=%04X ss=%04X ds=%04X  [1406]=%04X [6A4]=%04X [6A6]=%04X [6EA]=%04X",
+                     $time, dbg_regs[143:128], dbg_cs, dbg_ss, dbg_regs[191:176],
+                     {ram[20'h01407],ram[20'h01406]},
+                     {ram[20'h006A5],ram[20'h006A4]}, {ram[20'h006A7],ram[20'h006A6]},
+                     {ram[20'h006EB],ram[20'h006EA]});
+            $display("  %8t  INT1E: [1860]=%04X [1862]=%04X [1866]=%04X [186C]=%04X [186A]=%04X [500]=%02X",
+                     $time,
+                     {ram[20'h01861],ram[20'h01860]}, {ram[20'h01863],ram[20'h01862]},
+                     {ram[20'h01867],ram[20'h01866]}, {ram[20'h0186D],ram[20'h0186C]},
+                     {ram[20'h0186B],ram[20'h0186A]}, ram[20'h00500]);
+        end
+        // re-arm for the next pass after a reset
+        if (eu_pc == 20'hFD805 && int1e_dumped) int1e_dumped <= 1'b0;
+    end
+
     // At the POP SS (F7D80): the stack word it pops becomes BASIC's work
     // segment. Dump the whole POST stack and SP at that moment.
     logic popss_dumped = 1'b0;
@@ -1092,6 +1116,32 @@ module tb_pc98_v30;
         ram[20'h006E8] = work_ea_val[7:0];
         ram[20'h006E9] = work_ea_val[15:8];
         $display("WORK EA pre-seeded to %04X", work_ea_val);
+    end
+
+    // Rolling PC history: the last 64 retirement eu_pcs. Dumped when the
+    // machine first falls into low RAM (< 0x10000, excluding the POST's own
+    // low-RAM execution) -- answers "which instruction jumped to RAM" once.
+    logic       pchist_dump_done = 1'b0;
+    logic [19:0] pchist [0:63];
+    int pchist_n = 0;
+    logic pchist_armed = 1'b0;
+    initial pchist_armed = 1'b1;   // armed until the first BASIC entry
+    always_ff @(posedge clk_chipset) begin
+        if (eu_pc >= 20'hE8000 && eu_pc <= 20'hFFFFF) pchist_armed <= 1'b1;
+        if (pchist_armed && eu_pc != 20'h0) begin
+            pchist[pchist_n % 64] <= eu_pc;
+            pchist_n <= pchist_n + 1;
+        end
+        if (pchist_armed && eu_pc < 20'h10000 && eu_pc >= 20'h00100
+            && !pchist_dump_done) begin
+            pchist_dump_done <= 1'b1;
+            $display("  %8t  PCFALL: eu_pc=%05X  last 64 ROM retirements:", $time, eu_pc);
+            for (int k = 0; k < 64; k++) begin
+                int idx;
+                idx = (pchist_n + k) % 64;
+                $display("    PC[%2d] %05X", k, pchist[idx]);
+            end
+        end
     end
 
     // Rolling bus log for derailment forensics
@@ -1485,6 +1535,11 @@ module tb_pc98_v30;
                 $display("  %8t  MEMSIZE at %05X  bx %04X dx %04X ax %04X  CF=%0d",
                          $time, eu_pc, dbg_bx, dbg_dx, dbg_ax, dbg_regs[208]);
             end
+            // Re-arm a 1000-entry window when a FRESH BASIC entry happens
+            // (back in the E800 ROM after having exhausted the cap before).
+            if (basic_trace && basic_n >= 50000
+                && (eu_pc >= 20'hE8000) && (eu_pc <= 20'hFFFFF))
+                basic_n <= 49000;
             if (basic_trace && basic_n < 50000) begin
                 basic_n <= basic_n + 1;
                 $display("    B%0d  %05X  op %02X  ax %04X bx %04X cx %04X dx %04X si %04X di %04X  ss %04X ds %04X es %04X sp %04X",
