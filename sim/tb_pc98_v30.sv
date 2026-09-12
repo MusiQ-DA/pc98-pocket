@@ -1341,24 +1341,22 @@ module tb_pc98_v30;
         end
     end
 
+    // The real keyboard answers its reset command in ~10-30 ms; the BIOS's
+    // boot test polls for ~1-2 ms and TIMES OUT -- that failure is the
+    // machine's normal path ([0x500].bit7 stays clear, FDB1E installs
+    // IVT[1E], BASIC is entered). The ACK arrives for the LATER polls.
+    // An instant ACK here makes the boot test pass, skips the vector
+    // install, and crashes the machine -- so answer late.
+    int kbd_ack_delay = 0;
     always_ff @(posedge clk_chipset) begin
         kbd_wr_d <= kbd_wr;
         kbd_rd_d <= kbd_rd;
-        if (soft_reset_cpu & ~soft_reset_cpu_d) begin
-            cpu_reset_count <= cpu_reset_count + 1;
-            // The real keyboard powers up during the first POST; the ROM's
-            // two-pass design needs pass 1 to fail the 8251 test. From the
-            // first CPU reset (pass 2) the ACK answers.
-            kbd_disabled <= 1'b0;
+        if (kbd_wr & ~kbd_wr_d) kbd_ack_delay <= 3436364; // ~80 ms at 42.95 MHz
+        else if (kbd_ack_delay > 0) begin
+            kbd_ack_delay <= kbd_ack_delay - 1;
+            if (kbd_ack_delay == 1) kbd_ack_armed <= 1'b1;
         end
         soft_reset_cpu_d <= soft_reset_cpu;
-        if (kbd_wr & ~kbd_wr_d) kbd_ack_armed <= 1'b1;
-        // Clear AFTER the read cycle ends: the CPU latches din late in the
-        // cycle, and clearing kbd_ack_armed mid-cycle made the BIOS's own
-        // keyboard test (FD80:0164-0177: poll 0x43 bit1, read 0x41, expect
-        // 0x60) see 0xFF instead of the ACK -- three failed retries, no
-        // [0x500].bit7, and the no-keyboard boot path with its polluted
-        // stack. The ACK now survives the whole read.
         if (kbd_rd_d & ~kbd_rd) kbd_ack_armed <= 1'b0;
     end
 
