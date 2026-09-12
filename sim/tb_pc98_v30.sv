@@ -1130,6 +1130,35 @@ module tb_pc98_v30;
     // work-area segment.
     int ss_override_val = -1;
     logic [15:0] work_ea_val = 16'h0000;
+    // +golden=<file>: seed work-area words from a file right before the
+    // int 1E (the RAM test would zero them at t=0). The np2 golden-state
+    // measurement writes this file. One "ADDR VALUE" hex pair per line.
+    string golden_file;
+    int golden_fd, golden_cnt, golden_r;
+    logic [19:0] g_addr;
+    logic [15:0] g_val;
+    logic golden_seeded = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (!golden_seeded && eu_pc == 20'hFE1FD) begin
+            golden_seeded <= 1'b1;
+            if ($value$plusargs("golden=%s", golden_file)) begin
+                golden_fd = $fopen(golden_file, "r");
+                if (golden_fd != 0) begin
+                    golden_cnt = 0;
+                    forever begin
+                        golden_r = $fscanf(golden_fd, "%h %h\n", g_addr, g_val);
+                        if (golden_r != 2) break;
+                        ram[g_addr]   = g_val[7:0];
+                        ram[g_addr+1] = g_val[15:8];
+                        golden_cnt++;
+                    end
+                    $fclose(golden_fd);
+                    $display("  %8t  GOLDEN: seeded %0d words from %s (at FE1FD)", $time, golden_cnt, golden_file);
+                end else
+                    $display("  %8t  GOLDEN: file %s not found", $time, golden_file);
+            end
+        end
+    end
     // np2's pccore_reset writes the memory switch into the text VRAM at
     // 0xA3FE2+4i BEFORE the ROM runs, from cfg {48 05 04 08 01 00 00 6E}.
     // The ROM never initialises it (DIP bit4 clear), so these bytes ARE the
