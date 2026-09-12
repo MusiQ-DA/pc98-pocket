@@ -24,10 +24,10 @@
 # move the association. A new directory name is a new core to the Pocket, which
 # is the only reliable way back from that.
 #
-# The ROMs are the user's own dumps and are NOT in this repository. Use the
-# unpatched pair (docs/PC98_MACHINE_SPEC.md F3-F5); the copy circulating as
-# np2's BIOS.ROM has its reset vector overwritten, and its ITF.ROM is not an
-# ITF at all.
+# The ROMs are the user's own dumps and are NOT in this repository. The
+# deploy set is the coherent PC-9801UX trio (deploy_pc98.sh pins it by md5);
+# the copy circulating as np2's BIOS.ROM has its reset vector overwritten,
+# its ITF.ROM is not an ITF at all, and the P1-P4 set was mixed-generation.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

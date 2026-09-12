@@ -160,9 +160,16 @@ pit 0x71, crtc 0x70, fdc 0xBE, dmac 0x01/0x21, serial 0x30/0x41)
 
 | ファイル | 出所 | 用途 | 配置 |
 |---|---|---|---|
-| `itf.rom` (32,768) | [Abdess/retrobios](https://github.com/Abdess/retrobios/tree/main/bios/NEC/PC-98) | **ITF(電源投入時)** | `F8000-FFFFF` |
-| `bios.rom` (98,304) | 同上 | システム BIOS | `E8000-FFFFF` |
-| `font.rom` (288,768) | 同上 / 手元 | ANK + 漢字 | SDRAM 常駐(R2) |
+| `bios.rom` (98,304) | **PC-9801UX 純正ダンプ** md5 `3af0ae01…` | システム BIOS | `E8000-FFFFF` |
+| `itf.rom` (32,768) | 同上 md5 `1d295699…` | **ITF(電源投入時)** | `F8000-FFFFF` |
+| `font.rom` (288,768) | 同上 md5 `4133b0be…` | ANK + 漢字 | SDRAM 常駐(R2) |
+| `sound.rom` (16,384) | 同上 md5 `42c271f8…` | -26/-86 ボード BIOS。**未使用**(RTL未実装、将来の音源マイルストーン用にステージのみ) | — |
+
+**2026-09-13 更新**: それまで使っていたセットは mixed-generation
+(VM 系 BIOS + UX ITF の「Franken-ROM」)だったことが sim で判明
+(afc1e6d)。UI/BIOS 世代が揃った上記 UX トリオに差し替え、
+`deploy_pc98.sh` が md5 でピニングする。旧セットは
+`~/.pc98roms/franken-vm-mix-20260913/` に退避。
 
 **手元の `np2rom/BIOS.ROM` と `ITF.ROM` は使わない**(下記 F2/F5)。
 
