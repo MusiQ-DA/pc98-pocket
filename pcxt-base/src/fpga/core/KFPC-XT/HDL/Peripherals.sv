@@ -1527,17 +1527,21 @@ end
     //
     // 0x42 is the printer side of 0x40-0x4F; the ITF trace has it tested for
     // bit 1 clear. Zero satisfies that and claims nothing else.
-    // 0x31 is DIP switch 2, and bit 4 tells the ITF to initialise the memory
-    // switch: the twenty bytes at A3FE0 that hold the machine's configuration,
-    // A3FEA among them, whose low three bits are how many 128 KB units of RAM
-    // to count -- 0 for 128 KB, 4 for 640 KB.
+    // 0x31 is DIP switch 2 (np2's default set is 3E E3 7B; the E3 is this
+    // port). Bit 0 set is the boot order: the ROM goes straight to int 1E and
+    // skips IVT[1F]'s D800:2A00, an entry for a BASIC option-ROM card nothing
+    // here has. Bit 4 CLEAR tells the ROM NOT to re-initialise the memory
+    // switch at A3FE0 -- on a real machine that is battery-backed VRAM, and
+    // np2 keeps the bit clear because it pre-writes the switch bytes itself
+    // at every reset. pc98_tvram does the same now (it pre-seeds
+    // {48 05 04 08 01 00 00 6E} on reset and drops guest writes to those
+    // cells), so the bit must be clear here too: the ROM's own writer tops
+    // out at A3FEA=2 (512 KB class) where a 640 KB machine carries 4.
     //
-    // On a real PC-98 that area is battery-backed text VRAM and survives a
-    // power cycle, so the ITF only rewrites it when the switch asks. Here it
-    // is ordinary VRAM and comes up cleared every time, so the answer is
-    // always "please initialise": bit 4 set. With it clear, the ITF skipped
-    // the whole block, read A3FEA as zero, and counted 128 KB -- which is
-    // exactly what MEMORY 128KB OK was reporting on a 640 KB machine.
+    // This port used to answer 0x10 -- bit 4 SET, "please initialise" -- for
+    // the opposite reason: the tvram came up empty and the ROM was the only
+    // writer. With the pre-seed in place that answer would now fight it, and
+    // MEMORY 128KB OK on a 640 KB machine was the old result anyway.
     // 0x35, the system port's port-C latch -- and the shutdown flag.
     //
     // Bit 7 is what the ITF reads at F805B to tell a power-on from a return
@@ -1599,10 +1603,78 @@ end
     // protected-mode block, which is the truth about this CPU rather than a
     // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
+    // 0x31 = 0xE3: bit 0 boot-first (int 1E, skip IVT[1F]), bit 4 clear -- the
+    // memory switch is the tvram's to hold, not the ROM's to rewrite. See the
+    // comment above and pc98_tvram's reset pre-seed.
     wire [7:0] sysport_data = sysport_35_select ? pc98_sysport_c
-                            : sysport_31_select ? 8'h10
+                            : sysport_31_select ? 8'hE3
                             : sysport_42_select ? 8'h02
                             :                     8'h00;
+
+    // ------------------------------------------------ keyboard 8251 stub
+    //
+    // 0x41 data / 0x43 status+command: the keyboard's 8251. The BIOS's FD930
+    // block resets the keyboard with a command write to 0x43 and waits for
+    // the keyboard's 0x60 ACK; the boot test at FD80:0164-0177 polls 0x43
+    // bit 1 (RxRDY) and reads 0x41 expecting 0x60, and sets [0x0500].bit7
+    // when it gets one. The ROM's boot is a TWO-PASS affair turned on that
+    // bit: pass 1 (ACK not yet arrived, bit clear) installs IVT[1E] and
+    // enters BASIC dirty; BASIC's init resets the CPU; pass 2 (ACK arrived,
+    // bit set) takes the clean path.
+    //
+    // So the ACK's TIMING is load-bearing, not decoration. A real keyboard
+    // answers its reset command tens of milliseconds later -- long after the
+    // boot test's ~1-2 ms poll has timed out, which IS the machine's normal
+    // first pass. An instant ACK made the pass-1 test pass instead, the
+    // IVT[1E] install was skipped, and the machine derailed through the
+    // uninstalled vector into empty RAM: sim/tb_pc98_v30.sv measured exactly
+    // that, and the ~80 ms delay below is what put the boot back on the
+    // ROM's intended path. The status model follows np2's keyboard_i43:
+    // TxRDY/TxE/DSR (bits 0/2/7) always set, RxRDY (bit 1) while the ACK is
+    // pending. 0x73 is the command port's mirror the BIOS also writes.
+    wire kbd_data_select = pc98_io_exact & (address[7:0] == 8'h41);
+    wire kbd_stat_select = pc98_io_exact & (address[7:0] == 8'h43);
+    wire kbd_wr = (pc98_io_exact & ((address[7:0] == 8'h43)
+                                  | (address[7:0] == 8'h73))) & ~io_write_n;
+    wire kbd_rd = kbd_data_select & ~io_read_n;
+
+    // 3436364 chipset ticks at 42.95 MHz ~= 80 ms: the real keyboard's
+    // power-up/reset response time, and the value the simulation confirmed.
+    localparam [21:0] KBD_ACK_DELAY = 22'd3436364;
+    logic             kbd_ack_armed;
+    logic             kbd_wr_d, kbd_rd_d;
+    logic [21:0]      kbd_ack_timer;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            kbd_ack_armed <= 1'b0;
+            kbd_wr_d      <= 1'b1;
+            kbd_rd_d      <= 1'b1;
+            kbd_ack_timer <= 22'd0;
+        end else begin
+            kbd_wr_d <= kbd_wr;
+            kbd_rd_d <= kbd_rd;
+            // Arm on a command write; the byte appears when the timer runs
+            // out, not before -- an early ACK breaks the ROM's two-pass boot
+            // exactly the way an instant one does.
+            if (kbd_wr & ~kbd_wr_d)
+                kbd_ack_timer <= KBD_ACK_DELAY;
+            else if (kbd_ack_timer != 22'd0) begin
+                kbd_ack_timer <= kbd_ack_timer - 22'd1;
+                if (kbd_ack_timer == 22'd1)
+                    kbd_ack_armed <= 1'b1;
+            end
+            // Clear only on the read strobe's FALLING edge, after the cycle
+            // has completed: clearing during the 0x41 read would race the CPU
+            // latching the very byte being handed over.
+            if (kbd_rd_d & ~kbd_rd)
+                kbd_ack_armed <= 1'b0;
+        end
+    end
+
+    wire [7:0] kbd_readdata = kbd_data_select
+                            ? (kbd_ack_armed ? 8'h60 : 8'hFF)
+                            : (8'h85 | (kbd_ack_armed ? 8'h02 : 8'h00));
 
     wire [7:0] pc98_font_row;      // driven by the row buffer below
     wire [6:0] pc98_font_cell;
@@ -1994,6 +2066,8 @@ end
 
     pc98_tvram u_tvram (
         .clk         (clock),
+        // Reloads the memory switch registers at A3FE2+4i -- see the module.
+        .rst         (reset),
         .cpu_addr    (address[13:0]),
         .cpu_wren    (tvram_mem_select & ~memory_write_n),
         .cpu_wdata   (internal_data_bus),
@@ -2469,6 +2543,13 @@ end
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= sysport_data;
+        end
+        // The keyboard 8251 at 0x41/0x43. AFTER the timer entry on purpose:
+        // 0x73 is the command-port mirror and the PIT owns its read side.
+        else if (kbd_rd || (kbd_stat_select & ~io_read_n))
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= kbd_readdata;
         end
 `endif
         else if ((~ppi_chip_select_n) && (~io_read_n))

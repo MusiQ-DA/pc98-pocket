@@ -31,6 +31,27 @@
 // from both is a multiple-driver error the Fitter catches rather than a subtle
 // one -- which is how this was found.
 //
+// ------------------------------------------------------------- memory switch
+//
+// A3FE0-A3FFF (attribute cells 0xFF0-0xFFF) is the PC-98's memory switch:
+// eight configuration bytes at A3FE2+4i, battery-backed text VRAM on real
+// hardware. np2's pccore_reset writes them from cfg {48 05 04 08 01 00 00 6E}
+// BEFORE the ROM runs, and keeps DIP switch 2 bit 4 (port 0x31) clear so the
+// ROM never re-initialises them. A3FEA is the one that matters most: its low
+// bits say how many 128 KB units of RAM to count, so 04 = 640 KB -- the value
+// the whole BIOS/BASIC work-area arithmetic is built around. Zero there and
+// the machine counts 128 KB and stacks BASIC into ROM.
+//
+// The BIOS POST's screen clear at FECBB sweeps the full 16 KB of text VRAM
+// and would stomp these bytes to 0xE1 -- the ITF's own VRAM test stops at
+// 0x3FDF, sixteen bytes short, precisely to avoid this. So the eight switch
+// bytes live in dedicated registers, reset-loaded with the np2 defaults, and
+// guest writes anywhere in the 0xFF0-0xFFF cell range are silently dropped:
+// the pre-seeded switch survives every clear exactly as the battery-backed
+// original survives a power cycle. Confirmed in sim/tb_pc98_v30.sv, where
+// the pre-seed plus the write gate is what carries the boot to int 1E with
+// a 640 KB machine underneath it.
+//
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 
@@ -38,6 +59,7 @@
 
 module pc98_tvram (
     input  wire        clk,
+    input  wire        rst,            // reloads the memory switch registers
 
     // Guest side, byte addressed within A0000-A3FFF.
     input  wire [13:0] cpu_addr,       // offset from A0000
@@ -73,11 +95,33 @@ module pc98_tvram (
     wire [11:0] cpu_cell = off[12:1];
     wire        cpu_hi   = off[0];
 
+    // The memory switch: the eight attribute cells 0xFF1, 0xFF3, ... 0xFFF
+    // (A3FE2-A3FFE at 4-byte intervals). Everything else in 0xFF0-0xFFF is
+    // switch territory too and is equally write-protected. See the header.
+    wire memsw_wr_block = is_attr & (cpu_cell[11:4] == 8'hFF);  // cells 0xFF0-0xFFF
+    wire memsw_rd_hit   = memsw_wr_block & cpu_cell[0];         // the eight bytes
+
+    logic [7:0] memsw [0:7];
+    always_ff @(posedge clk, posedge rst) begin
+        if (rst) begin
+            memsw[0] <= 8'h48;   // A3FE2
+            memsw[1] <= 8'h05;   // A3FE6
+            memsw[2] <= 8'h04;   // A3FEA = 640 KB
+            memsw[3] <= 8'h08;   // A3FEE
+            memsw[4] <= 8'h01;   // A3FF2
+            memsw[5] <= 8'h00;   // A3FF6
+            memsw[6] <= 8'h00;   // A3FFA
+            memsw[7] <= 8'h6E;   // A3FFE
+        end
+    end
+
     logic [7:0] q_char_lo, q_char_hi, q_attr;
     logic       q_is_attr, q_hi;
+    logic       q_memsw;
+    logic [2:0] q_memsw_idx;
 
     always_ff @(posedge clk) begin
-        if (cpu_wren) begin
+        if (cpu_wren & ~memsw_wr_block) begin
             if (is_attr)      attr[cpu_cell]    <= cpu_wdata;
             else if (cpu_hi)  char_hi[cpu_cell] <= cpu_wdata;
             else              char_lo[cpu_cell] <= cpu_wdata;
@@ -85,11 +129,15 @@ module pc98_tvram (
 
         // Read-back for the guest, one cycle late, selected after the fact so
         // all three banks are read unconditionally and the mux is outside them.
-        q_char_lo <= char_lo[cpu_cell];
-        q_char_hi <= char_hi[cpu_cell];
-        q_attr    <= attr[cpu_cell];
-        q_is_attr <= is_attr;
-        q_hi      <= cpu_hi;
+        // The switch mux rides the same registered stage so its data and its
+        // select arrive together.
+        q_char_lo  <= char_lo[cpu_cell];
+        q_char_hi  <= char_hi[cpu_cell];
+        q_attr     <= attr[cpu_cell];
+        q_is_attr  <= is_attr;
+        q_hi       <= cpu_hi;
+        q_memsw     <= memsw_rd_hit;
+        q_memsw_idx <= cpu_cell[3:1];
 
     end
 
@@ -103,9 +151,10 @@ module pc98_tvram (
     end
 
     always_comb begin
-        if (q_is_attr)   cpu_q = q_attr;
-        else if (q_hi)   cpu_q = q_char_hi;
-        else             cpu_q = q_char_lo;
+        if (q_memsw)        cpu_q = memsw[q_memsw_idx];
+        else if (q_is_attr) cpu_q = q_attr;
+        else if (q_hi)      cpu_q = q_char_hi;
+        else                cpu_q = q_char_lo;
     end
 
 endmodule

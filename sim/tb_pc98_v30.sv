@@ -237,6 +237,10 @@ module tb_pc98_v30;
                     & ~(memsw_cell & cpu_address[13]);
     pc98_tvram u_tvram (
         .clk          (clk_chipset),
+        // Loads the memory switch registers with the np2 defaults while the
+        // machine is in reset -- the RTL owns the pre-seed now, the way the
+        // real fix carries it into the FPGA.
+        .rst          (reset),
         .cpu_addr     (cpu_address[13:0]),
         .cpu_wren     (tvram_wren),
         .cpu_wdata    (cpu_data_bus),
@@ -913,13 +917,14 @@ module tb_pc98_v30;
                  ram[20'h003F5],ram[20'h003F4], ram[20'h003F7],ram[20'h003F6],
                  ram[20'h003F9],ram[20'h003F8], ram[20'h003FB],ram[20'h003FA],
                  ram[20'h003FD],ram[20'h003FC], ram[20'h003FF],ram[20'h003FE]);
-        // The memory switch lives in the tvram module's attribute bank
-        // (A3FE0-A3FEF); the flat ram[] no longer carries it.
-        $display("  %8t  WORK: [06EA]=%04X [06EC]=%04X [186A]=%04X  memsw(attr) FE2=%02X FE6=%02X FEA=%02X",
+        // The memory switch lives in the tvram module's dedicated registers
+        // (A3FE2+4i); neither the flat ram[] nor the attribute BRAM carries
+        // it -- writes there are dropped, so only memsw[] holds the truth.
+        $display("  %8t  WORK: [06EA]=%04X [06EC]=%04X [186A]=%04X  memsw FE2=%02X FE6=%02X FEA=%02X",
                  $time,
                  {ram[20'h006EB],ram[20'h006EA]}, {ram[20'h006ED],ram[20'h006EC]},
                  {ram[20'h0186B],ram[20'h0186A]},
-                 u_tvram.attr[12'hFF1], u_tvram.attr[12'hFF3], u_tvram.attr[12'hFF5]);
+                 u_tvram.memsw[0], u_tvram.memsw[1], u_tvram.memsw[2]);
         end
 
     // Value-change watch on the two bytes that become the POP SS word:
@@ -1130,23 +1135,44 @@ module tb_pc98_v30;
     // work-area segment.
     int ss_override_val = -1;
     logic [15:0] work_ea_val = 16'h0000;
+    // +golden=<file>: seed work-area words from a file right before the
+    // int 1E (the RAM test would zero them at t=0). The np2 golden-state
+    // measurement writes this file. One "ADDR VALUE" hex pair per line.
+    string golden_file;
+    int golden_fd, golden_cnt, golden_r;
+    logic [19:0] g_addr;
+    logic [15:0] g_val;
+    logic golden_seeded = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (!golden_seeded && eu_pc == 20'hFE1FD) begin
+            golden_seeded <= 1'b1;
+            if ($value$plusargs("golden=%s", golden_file)) begin
+                golden_fd = $fopen(golden_file, "r");
+                if (golden_fd != 0) begin
+                    golden_cnt = 0;
+                    forever begin
+                        golden_r = $fscanf(golden_fd, "%h %h\n", g_addr, g_val);
+                        if (golden_r != 2) break;
+                        ram[g_addr]   = g_val[7:0];
+                        ram[g_addr+1] = g_val[15:8];
+                        golden_cnt++;
+                    end
+                    $fclose(golden_fd);
+                    $display("  %8t  GOLDEN: seeded %0d words from %s (at FE1FD)", $time, golden_cnt, golden_file);
+                end else
+                    $display("  %8t  GOLDEN: file %s not found", $time, golden_file);
+            end
+        end
+    end
     // np2's pccore_reset writes the memory switch into the text VRAM at
     // 0xA3FE2+4i BEFORE the ROM runs, from cfg {48 05 04 08 01 00 00 6E}.
     // The ROM never initialises it (DIP bit4 clear), so these bytes ARE the
     // machine's memory configuration: FEA=4 is 640 KB -- the value the whole
     // BIOS/BASIC work-area arithmetic is built around. Without it the guest
     // computes 512 KB-class values and BASIC stacks itself into ROM.
-    initial begin
-        u_tvram.attr[12'hFF1] = 8'h48;   // A3FE2
-        u_tvram.attr[12'hFF3] = 8'h05;   // A3FE6
-        u_tvram.attr[12'hFF5] = 8'h04;   // A3FEA = 640 KB
-        u_tvram.attr[12'hFF7] = 8'h08;   // A3FEE
-        u_tvram.attr[12'hFF9] = 8'h01;   // A3FF2
-        u_tvram.attr[12'hFFB] = 8'h00;   // A3FF6
-        u_tvram.attr[12'hFFD] = 8'h00;   // A3FFA
-        u_tvram.attr[12'hFFF] = 8'h6E;   // A3FFE
-        $display("MEMSW pre-seeded (np2 defaults): 48 05 04 08 01 00 00 6E");
-    end
+    // pc98_tvram pre-seeds these on reset itself now (its memsw registers,
+    // with writes to cells 0xFF0-0xFFF dropped), so the bench inherits the
+    // fix through the module rather than poking u_tvram.attr as it used to.
     // The ROM's two-pass boot: pass 1 (keyboard not yet ready) installs
     // IVT[1E]={E800,0A07} at FDB26 and enters BASIC dirty; BASIC's init
     // resets the CPU; pass 2 (keyboard ready, bit7=1) skips the install AND
@@ -1232,14 +1258,18 @@ module tb_pc98_v30;
         end
     end
 
-    // Memory-switch write watch: every write into tvram cells 0xFF0-0xFFF
-    // (A3FE0-A3FFF) gets logged. The POST clear at FECBB sweeps the whole
-    // 16 KB, so the question of who re-writes the switch -- and when -- is
-    // the difference between a booting machine and a 512 KB one.
+    // Memory-switch write watch: every write ATTEMPT into tvram cells
+    // 0xFF0-0xFFF (A3FE0-A3FFF) gets logged. The POST clear at FECBB sweeps
+    // the whole 16 KB, so these are the writes that must be dropped for the
+    // pre-seeded switch to survive. Both the bench's tvram_wren gate and the
+    // module's own protection drop them now, so this watches the RAW bus
+    // cycle -- u_tvram.cpu_wren is long since 0 by the time it would have
+    // been interesting.
     always_ff @(posedge clk_chipset) begin
-        if (u_tvram.cpu_wren && u_tvram.cpu_cell[11:4] == 8'hFF && u_tvram.is_attr) begin
-            $display("  %8t  MSWW [cell %03X] <= %02X  (eu_pc %05X)", $time,
-                     u_tvram.cpu_cell, u_tvram.cpu_wdata, eu_pc);
+        if (~mem_wr_n && (cpu_address[19:14] == 6'b101000)
+            && (cpu_address[13:2] >= 12'hFF8)) begin
+            $display("  %8t  MSWW [cell %03X] <= %02X (dropped)  (eu_pc %05X)", $time,
+                     cpu_address[12:1], cpu_data_bus, eu_pc);
         end
     end
 
@@ -1736,7 +1766,7 @@ module tb_pc98_v30;
         // stream continues to mov si,bx / rep movsb / jmp FFE1. Replace the
         // prefix with NOP so the intended path runs (the SBB itself is a
         // harmless work-area RMW).
-        bios[1] = 8'h90;
+        if (bios[1] == 8'h66) bios[1] = 8'h90;  // only patch if present
 
         // +basicvec=1: pre-seed INT 1F with the N88-BASIC entry, the way a
         // machine whose boot has already established it would hold it. The
