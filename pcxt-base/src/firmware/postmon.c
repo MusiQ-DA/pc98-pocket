@@ -219,10 +219,17 @@ void post_mon_tick(void)
     static uint32_t last_status = 0xFFFFFFFFu;
     static int placed = 0;
 
+    // An overlay owns the framebuffer while it is open, and this panel used to
+    // paint over it every tick. That made the settings menu unreadable -- and
+    // the menu is where the button that hides this panel is bound, so the one
+    // way to get the panel out of the way was behind the panel.
+    if (vkb_ui_overlay_open()) {
+        placed = 0; // the overlay moves the origin; re-place on the way back
+        return;
+    }
+
     if (!postmon_shown) {
-        if (!vkb_ui_overlay_open()) {
-            *VKB_CTRL = 0u;
-        }
+        *VKB_CTRL = 0u;
         placed = 0; // re-place the strip when it comes back
         return;
     }
