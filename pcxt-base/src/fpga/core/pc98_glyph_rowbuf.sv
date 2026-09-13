@@ -155,6 +155,18 @@ module pc98_glyph_rowbuf #(
                 // still drawing. Flipping on the row boundary keeps the two
                 // banks meaning "the row on screen" and "the row being fetched"
                 // for the whole of every row.
+                //
+                // It is still one cell late for the renderer. pc98_text_render
+                // fetches cell 0 of a line during the PREVIOUS line's blanking
+                // -- sampled at hcount 843, five dot clocks before the line it
+                // belongs to -- so at a text row boundary that read lands
+                // before this flip and takes cell 0 line 0 out of the bank that
+                // still holds the row above. One scanline of one cell per row,
+                // and in FONT.ROM's 8x16 ANK set (0x0800-0x17FF) line 0 is
+                // blank for every printable ASCII code but 0x60, so on text it
+                // is invisible; the box-drawing codes 0x01-0x1F do carry ink
+                // there. Flipping earlier needs the DISPLAY row boundary, and
+                // fill_start is the only thing this side is handed.
                 bank        <= ~bank;
                 state       <= S_TV_REQ;
             end
