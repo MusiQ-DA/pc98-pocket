@@ -58,7 +58,7 @@ import sys
 sys.path.insert(0, 'scripts/tools')
 import ghlib
 want = int(sys.argv[1])
-for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=20')['workflow_runs']:
+for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=100')['workflow_runs']:
     if r['run_number'] == want:
         print(r['status'], r['conclusion'])
         break
@@ -77,7 +77,7 @@ sys.path.insert(0, 'scripts/tools')
 import ghlib
 want = int(sys.argv[1])
 R = '/repos/MusiQ-DA/pc98-pocket'
-run = next(r for r in ghlib.gh(f'{R}/actions/runs?per_page=20')['workflow_runs']
+run = next(r for r in ghlib.gh(f'{R}/actions/runs?per_page=100')['workflow_runs']
            if r['run_number'] == want)
 jobs = ghlib.gh(f"{R}/actions/runs/{run['id']}/jobs")['jobs']
 q = [j for j in jobs if j['name'] == 'quartus']
@@ -110,7 +110,7 @@ import sys
 sys.path.insert(0, 'scripts/tools')
 import ghlib
 head = sys.argv[1]
-for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=20')['workflow_runs']:
+for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=100')['workflow_runs']:
     if r['head_sha'] == head:
         print(r['run_number'])
         break

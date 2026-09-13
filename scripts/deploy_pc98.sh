@@ -99,7 +99,7 @@ print(ghlib.gh('/repos/MusiQ-DA/pc98-pocket/commits/main')['sha'])")
     while :; do
         RUN=$(python3 -c "
 import sys; sys.path.insert(0,'scripts/tools'); import ghlib
-for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=20')['workflow_runs']:
+for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=100')['workflow_runs']:
     if r['head_sha'] == '$HEAD_SHA':
         print(r['run_number']); break
 else: print('none')")
@@ -114,7 +114,7 @@ waited=0
 while :; do
     read -r st cc <<<"$(python3 -c "
 import sys; sys.path.insert(0,'scripts/tools'); import ghlib
-for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=20')['workflow_runs']:
+for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=100')['workflow_runs']:
     if r['run_number'] == $RUN:
         print(r['status'], r['conclusion'] or ''); break
 else: print('missing', '')")"
@@ -127,7 +127,7 @@ done
 qok=$(python3 -c "
 import sys; sys.path.insert(0,'scripts/tools'); import ghlib
 R='/repos/MusiQ-DA/pc98-pocket'
-rid=[r['id'] for r in ghlib.gh(R+'/actions/runs?per_page=20')['workflow_runs'] if r['run_number']==$RUN][0]
+rid=[r['id'] for r in ghlib.gh(R+'/actions/runs?per_page=100')['workflow_runs'] if r['run_number']==$RUN][0]
 j=[x for x in ghlib.gh(f'{R}/actions/runs/{rid}/jobs')['jobs'] if x['name']=='quartus'][0]
 print('yes' if j['conclusion']=='success' else 'no')")
 [ "$qok" = "yes" ] || { say "the quartus job did not succeed -- nothing worth flashing"; exit 1; }

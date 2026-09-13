@@ -1664,11 +1664,27 @@ end
     // protected-mode block, which is the truth about this CPU rather than a
     // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
-    // 0x31 = 0xE3: bit 0 boot-first (int 1E, skip IVT[1F]), bit 4 clear -- the
-    // memory switch is the tvram's to hold, not the ROM's to rewrite. See the
-    // comment above and pc98_tvram's reset pre-seed.
+    // 0x31 = 0x12, and the value is under investigation -- read this before
+    // changing it again.
+    //
+    // Run #193 answered 0x10 and the hardware printed the memory count, then
+    // looped at the CS f800 -> 0000 jump the comment above describes. Bit 1
+    // fixes that jump, so the answer became 0xE3 -- which also flipped bits
+    // 0, 4, 5, 6, 7 -- and on hardware the screen then showed NOTHING AT ALL,
+    // earlier than the count. Measured, both directions, on the Pocket.
+    //
+    // 0x12 is the smallest step that keeps what worked: 0x10's bits (bit 4
+    // SET, so the ITF initialises the memory switch itself) plus bit 1. The
+    // switch registers in pc98_tvram are write-protected, so the ITF's own
+    // initialisation writes are dropped and the pre-seeded 640 KB value
+    // stands -- which is the combination bit 4 clear was trying to arrange by
+    // asking the ROM not to write at all.
+    //
+    // Bit 0 (boot-first: int 1E, skip IVT[1F]) is NOT set here yet. It
+    // belongs to the BASIC path, not the memory count, and adding it in the
+    // same build would make a black screen ambiguous again.
     wire [7:0] sysport_data = sysport_35_select ? pc98_sysport_c
-                            : sysport_31_select ? 8'hE3
+                            : sysport_31_select ? 8'h12
                             : sysport_42_select ? 8'h02
                             :                     8'h00;
 
