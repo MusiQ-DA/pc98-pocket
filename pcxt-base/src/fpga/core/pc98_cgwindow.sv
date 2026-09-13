@@ -36,6 +36,15 @@
 // halves map where for particular ku, and none of them is reachable until a
 // guest asks for those characters. Left explicit rather than approximated.
 //
+// ALSO NOT YET: a backing store for the gaiji RAM. On a real machine ku
+// 0x56/0x57 are 192 characters of user-definable RAM, 6 KB, and what the guest
+// writes there survives a code change and is drawn by the text renderer. Here a
+// write lives only in these thirty-two bytes, until the guest selects another
+// character. That is enough for the ITF's test, which writes and reads one code
+// at a time, and it is not enough for software that defines characters and then
+// displays them -- which would want the 6 KB and a second source in the row
+// buffer, not a change here.
+//
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 
@@ -123,20 +132,36 @@ module pc98_cgwindow (
         end else begin
             f_req <= 1'b0;
 
-            if (mem_wr) begin
-                win[{wr_addr[0], wr_addr[4:1]}] <= wr_data;
-                dirty[{wr_addr[0], wr_addr[4:1]}] <= 1'b1;
-            end
-
             if (io_wr) begin
                 case (io_port)
                     16'h00A1: begin code[15:8] <= io_data; reload <= 1'b1; end
                     16'h00A3: begin code[7:0]  <= io_data; reload <= 1'b1; end
-                    16'h00A5: begin
-                        // bit 5 clear selects the right half
-                        right_sel <= ~io_data[5];
-                        reload    <= 1'b1;
-                    end
+                    // 0x00A5 carries the line and the half, and NEITHER of
+                    // those is part of this window: the thirty-two bytes hold
+                    // both halves' sixteen lines at once, indexed out of the
+                    // address (see rd_data above), so `right_sel` has nothing
+                    // to select and a refill would fetch the same bytes again.
+                    //
+                    // It must therefore also not touch `dirty`, and that is
+                    // the whole KANJI CG RAM ERROR. The ITF's test is
+                    // itf.rom F8743-F87D5:
+                    //
+                    //   OUT A1/A3          ku 0x56, the gaiji region
+                    //   OUT A5,00 + 16 x STOSB      write the pattern
+                    //   OUT A5,20 + 16 x STOSB      write it again
+                    //   OUT A5,00 + 16 x SCASB      read it back
+                    //   OUT A5,20 + 16 x SCASB      and again
+                    //   JNZ -> MOV SI,17DEh, "KANJI CG RAM ERROR"
+                    //
+                    // The third OUT A5 sits between the writing and the
+                    // reading. Clearing `dirty` there re-armed the refill over
+                    // all thirty-two slots, and at 4.77 MHz the burst lands
+                    // long before the first SCASB's bus cycle, so every one of
+                    // the 128 read-backs returned a font byte (measured:
+                    // 128/128 in tb_pc98_cgwindow before this change, 0/128
+                    // after). The test cannot pass while a selector write
+                    // discards what the guest stored.
+                    16'h00A5: right_sel <= ~io_data[5];
                     default: ;
                 endcase
                 // A code change hands the window back to the font store -- but
@@ -144,8 +169,7 @@ module pc98_cgwindow (
                 // flight when the guest starts storing, and clearing on the
                 // level here would wipe the marks those stores leave and let
                 // the refill stamp over them.
-                if (io_port == 16'h00A1 || io_port == 16'h00A3
-                 || io_port == 16'h00A5)
+                if (io_port == 16'h00A1 || io_port == 16'h00A3)
                     dirty <= 32'h0;
             end
 
@@ -182,6 +206,17 @@ module pc98_cgwindow (
 
             default: state <= S_IDLE;
             endcase
+
+            // LAST, so the guest wins a same-cycle collision with a refill
+            // beat. `dirty` is read a cycle too late to cover the beat that
+            // coincides with the store: the S_STREAM branch above sees the old
+            // zero and would assign f_data after this block if this block came
+            // first. One cycle in thirty-two per glyph is not a risk worth
+            // leaving in a path whose failure mode is a wrong character.
+            if (mem_wr) begin
+                win[{wr_addr[0], wr_addr[4:1]}] <= wr_data;
+                dirty[{wr_addr[0], wr_addr[4:1]}] <= 1'b1;
+            end
         end
     end
 

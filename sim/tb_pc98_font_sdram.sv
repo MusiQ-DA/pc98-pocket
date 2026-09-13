@@ -11,6 +11,26 @@
 // "<byte offset> <value>" with one byte per SDRAM word, which is how RAM.sv
 // stores everything and therefore how the loader will write it.
 //
+// Both of the row buffer's glyph sources are modelled, because it has two and
+// only one of them is SDRAM. Kanji burst out of the SDRAM port; ANK comes from
+// the 4 KB pc98_font_ank BRAM the loader writes directly (see the row buffer's
+// header: on the first hardware run that drew at all the SDRAM path read a
+// region nobody had filled, and ANK-out-of-BRAM is the fix). This bench used to
+// leave .ank_code/.ank_line/.ank_row unconnected, which Verilator ties to zero,
+// so every ANK byte read back as 00 and eleven of the sixteen lines of 'A'
+// failed -- a bench that had not been updated when the RTL grew a second
+// source, not a fault in the fetch path. The kanji cells passed throughout.
+//
+// The ANK model is inline rather than an instance of pc98_font_ank because the
+// CI step that runs this bench names its source files explicitly and that file
+// is not among them. It has the same one-cycle registered latency, which is the
+// part the row buffer's S_ANK/S_ANK_W pair depends on.
+//
+// FONT_BASE is NOT overridden: the value the fetcher defaults to is exactly
+// what hardware depends on (RAM.sv's font bank puts the image at word 0x400000)
+// and a bench that supplies its own cannot notice it being wrong. It was wrong
+// -- 0x200000, the bottom of the EMS window -- for every build up to this one.
+//
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 
@@ -21,7 +41,10 @@ module tb_pc98_font_sdram;
 
     localparam int ADDR_BITS = 24;
     localparam int LEN_BITS  = 5;
-    localparam [ADDR_BITS-1:0] FONT_BASE = 24'h200000;
+    // Where the loader puts font.rom, as a word address: RAM.sv's font bank is
+    // latch_address = {1'b1, 2'b00, address}, and core_top chooses the slot so
+    // the low twenty bits are the file offset.
+    localparam [ADDR_BITS-1:0] FONT_BASE = 24'h400000;
 
     logic clk = 0, rst = 1;
     always #11.64 clk = ~clk;
@@ -42,12 +65,21 @@ module tb_pc98_font_sdram;
     wire  [7:0] rd_byte;
     wire        kanji_seen;
 
+    // The ANK BRAM, modelled: one registered cycle of latency, same as
+    // pc98_font_ank. Holds FONT.ROM 0x0800-0x17FF, the whole 8x16 set.
+    wire [7:0] ank_code;
+    wire [3:0] ank_line;
+    logic [7:0] ank_mem [0:4095];
+    logic [7:0] ank_row;
+    always_ff @(posedge clk) ank_row <= ank_mem[{ank_code, ank_line}];
+
     pc98_glyph_rowbuf #(.COLS(4)) u_rowbuf (
         .clk(clk), .rst(rst),
         .fill_start(fill_start), .row_base(row_base), .bitac(8'hFF), .busy(busy),
         .tv_cell(tv_cell), .tv_char_lo(tv_char_lo), .tv_char_hi(tv_char_hi),
         .f_req(f_req), .f_addr(f_addr), .f_busy(f_busy),
         .f_valid(f_valid), .f_data(f_data),
+        .ank_code(ank_code), .ank_line(ank_line), .ank_row(ank_row),
         .rd_clk(clk), .rd_cell(rd_col), .rd_line(rd_line), .rd_byte(rd_byte), .kanji_seen(kanji_seen)
     );
 
@@ -66,8 +98,7 @@ module tb_pc98_font_sdram;
     wire                 p_ack, p_rvalid, p_done;
     wire [15:0]          p_rdata;
 
-    pc98_font_fetch #(.ADDR_BITS(ADDR_BITS), .LEN_BITS(LEN_BITS),
-                      .FONT_BASE(FONT_BASE)) u_fetch (
+    pc98_font_fetch #(.ADDR_BITS(ADDR_BITS), .LEN_BITS(LEN_BITS)) u_fetch (
         .clk(clk), .rst(rst),
         .f_req(f_req), .f_addr(f_addr), .f_busy(f_busy),
         .f_valid(f_valid), .f_data(f_data),
@@ -103,6 +134,13 @@ module tb_pc98_font_sdram;
         .dq_out(s_dq_out), .dq_io(s_dq_io), .dq_in(s_dq_in)
     );
 
+    // Where the fetcher actually pointed the controller. Reading back what the
+    // bench itself poked proves nothing about FONT_BASE if the bench supplies
+    // it, so record the first burst address and check it against the loader's.
+    logic [ADDR_BITS-1:0] first_burst = {ADDR_BITS{1'b1}};
+    always_ff @(posedge clk)
+        if (p_req && first_burst == {ADDR_BITS{1'b1}}) first_burst <= p_addr;
+
     // ---- the real font bytes ----------------------------------------------
     int fh, waddr, wval, n;
     logic [7:0] want [0:65535];        // byte offset -> expected value
@@ -124,6 +162,7 @@ module tb_pc98_font_sdram;
             int lines;
             string ln;
             lines = 0;
+            for (int b = 0; b < 65536; b++) want[b] = 8'h00;
             fh = $fopen("sim/font_slice.hex", "r");
             if (fh == 0) begin
                 $display("  FAIL cannot open sim/font_slice.hex"); errors++;
@@ -139,6 +178,10 @@ module tb_pc98_font_sdram;
             $fclose(fh);
             $display("  preloaded %0d words", lines);
             if (lines == 0) begin $display("  FAIL empty slice"); errors++; end
+
+            // The same bytes into the ANK BRAM, which the loader fills from the
+            // contiguous 8x16 set at 0x0800-0x17FF rather than from SDRAM.
+            for (int b = 0; b < 4096; b++) ank_mem[b] = want[20'h0800 + b];
         end
 
         scr_lo[0] = 8'h41; scr_hi[0] = 8'h00;   // ANK 'A'  -> 0x0C10
@@ -183,6 +226,14 @@ module tb_pc98_font_sdram;
                  want[20'h0C10], want[20'h0C11], want[20'h0C12], want[20'h0C13]);
         $display("  kanji line 0-3: %02h %02h %02h %02h",
                  want[20'h3C40], want[20'h3C41], want[20'h3C42], want[20'h3C43]);
+        // Cell 0 is ANK, so the first SDRAM burst is cell 1's kanji left half.
+        $display("  first burst %06h (want %06h)",
+                 first_burst, FONT_BASE + 24'h003C40);
+        if (first_burst !== FONT_BASE + 24'h003C40) begin
+            $display("  FAIL the fetcher is not reading where the loader wrote");
+            errors++;
+        end
+
         $display("  protocol violations: %0d", sdr.violations);
         if (sdr.violations != 0) begin $display("  FAIL violations"); errors++; end
 
