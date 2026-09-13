@@ -2632,11 +2632,24 @@ end
         end
         // The keyboard 8251 at 0x41/0x43. AFTER the timer entry on purpose:
         // 0x73 is the command-port mirror and the PIT owns its read side.
+        //
+        // UNDER INVESTIGATION on hardware, and off by default. Run #193 --
+        // the last bitstream that compiled, and the last one that printed the
+        // memory count -- answered NEITHER of these ports: the model claims
+        // two addresses the chipset previously left unclaimed, and it landed
+        // inside the window where the Pocket went blank. The guest now loops
+        // in F84xx-F86xx with TVW climbing, BANK 1, and ADDR/FR both zero:
+        // ITF screen setup, before it ever touches RAM, which is exactly
+        // where the keyboard is first probed.
+        //
+        // Define PC98_KBD_8251 to put it back.
+`ifdef PC98_KBD_8251
         else if (kbd_rd || (kbd_stat_select & ~io_read_n))
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= kbd_readdata;
         end
+`endif
 `endif
         else if ((~ppi_chip_select_n) && (~io_read_n))
         begin

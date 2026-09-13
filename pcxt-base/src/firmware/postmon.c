@@ -387,11 +387,21 @@ void post_mon_tick(void)
     osd_draw_string(&fb, 4, 22, "ADDR", OSD_LABEL);
     hex(4 + 5 * 8, 22, *POST_ADDR & 0xFFFFFu, 5);
 
+    // MAX and RST were PC/AT-only, and their absence cost a night: "is the
+    // guest looping or restarting?" is the first question a blank screen
+    // raises, and on PC-98 the panel could not answer it. MAX stays quiet
+    // here (the PC-98 BIOS writes no port-80 progress, so it is always 00),
+    // but the restart counter is the machine's own, and it is the one number
+    // that separates a hang from a reset loop.
+    // Right of LDN's dec(), which the layout check must assume is five digits
+    // wide (it ends at column 26).
+    osd_draw_string(&fb, 4 + 27 * 8, 22, "RST", OSD_LABEL);
+    // hex, fixed width: dec() has no fixed width and the check would then
+    // have to assume five digits and call the row off-panel.
+    hex(4 + 31 * 8, 22, maxrst & 0xFFFFu, 4);
 #ifndef MACHINE_PC98
-    osd_draw_string(&fb, 4 + 24 * 8, 22, "MAX", OSD_LABEL);
-    hex(4 + 28 * 8, 22, (maxrst >> 16) & 0xFFu, 2);
-    osd_draw_string(&fb, 4 + 31 * 8, 22, "RST", OSD_LABEL);
-    dec(4 + 34 * 8, 22, maxrst & 0xFFFFu);
+    osd_draw_string(&fb, 4 + 36 * 8, 22, "MAX", OSD_LABEL);
+    hex(4 + 40 * 8, 22, (maxrst >> 16) & 0xFFu, 2);
 #endif
 
     // Words the ROM-load FIFO threw away, and how deep it ever got.

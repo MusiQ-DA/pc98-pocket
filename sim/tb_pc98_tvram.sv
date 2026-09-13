@@ -133,6 +133,58 @@ module tb_pc98_tvram;
         $display("  regions independent: char %02h %02h, attr %02h",
                  8'hAA, 8'hBB, 8'hCC);
 
+        // ------------------------------------------- the ITF's own VRAM test
+        //
+        // This is the sequence the hardware is looping on. The ITF at F86EA
+        // fills A0000-A3FDF with 0xFF a word at a time, then reads the whole
+        // range back and compares:
+        //
+        //   F86F4  MOV CX,1FF0h / REP STOSW     ; 0x3FE0 bytes of FFFF
+        //   F86FB  MOV CX,1000h / REP SCASW     ; compare A0000-A1FFF
+        //   F8702  MOV CX,0FF0h / SCASB / INC DI ; and A2000-A3FDF
+        //   F8700/F8706  JNZ 8714               ; any mismatch -> error
+        //
+        // The Pocket writes text VRAM forever (TVW climbing) without ever
+        // printing the memory count or leaving the ITF (BANK 1), and LIVE
+        // sits in F84xx-F86xx: this compare is failing there and nothing in
+        // the bench covered it. The old screen test wrote 2000 cells the way
+        // the BIOS writes them; the ITF sweeps the FULL plane, including the
+        // last cells before the memory switch.
+        begin : itf_vram_test
+            int bad;
+            bad = 0;
+            for (int a = 0; a < 'h3FE0; a++)
+                wr(14'(a), 8'hFF);
+            for (int a = 0; a < 'h3FE0; a++) begin
+                rd(14'(a), got);
+                if (got !== 8'hFF) begin
+                    if (bad < 8)
+                        $display("  FAIL ITF VRAM test at %04h: %02h (want FF)",
+                                 a, got);
+                    bad++;
+                end
+            end
+            if (bad != 0) begin
+                $display("  FAIL ITF VRAM test: %0d of %0d bytes wrong",
+                         bad, 'h3FE0);
+                errors++;
+            end
+            else
+                $display("  ITF VRAM test: 0x3FE0 bytes written and read back");
+            // And the second pass, which writes zeros over the same range.
+            bad = 0;
+            for (int a = 0; a < 'h3FE0; a++)
+                wr(14'(a), 8'h00);
+            for (int a = 0; a < 'h3FE0; a++) begin
+                rd(14'(a), got);
+                if (got !== 8'h00) bad++;
+            end
+            if (bad != 0) begin
+                $display("  FAIL ITF VRAM zero pass: %0d bytes wrong", bad);
+                errors++;
+            end
+        end
+
         // ------------------------------------------------------ memory switch
         //
         // A3FE2+4i must read back the machine's defaults after reset, and guest
