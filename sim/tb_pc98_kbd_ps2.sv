@@ -294,6 +294,20 @@ module tb_pc98_kbd_ps2;
         send(8'h5A);               expect_ev(1'b1, 8'h1C, "typed RETURN");
         send(8'hF0); send(8'h5A);  expect_ev(1'b0, 8'h9C, "typed RETURN release");
 
+        // ---- VKB's PC-98-only keys (Set-2 codes no real keyboard emits) -----
+        check(8'h08, 8'h60, "VKB STOP");
+        check(8'h0F, 8'h72, "VKB KANA");
+        check(8'h10, 8'h73, "VKB GRPH");
+        check(8'h13, 8'h35, "VKB XFER");
+        check(8'h17, 8'h51, "VKB NFER");
+        check(8'h18, 8'h3F, "VKB HELP");
+        check(8'h19, 8'h36, "VKB ROLL UP");
+        check(8'h1F, 8'h37, "VKB ROLL DOWN");
+        check(8'h20, 8'h38, "VKB INS");
+        check(8'h28, 8'h39, "VKB DEL");
+        check(8'h2F, 8'h33, "VKB RO");
+        send(8'hF0); send(8'h08); expect_ev(1'b0, 8'hE0, "VKB STOP break");
+
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");
         $finish;

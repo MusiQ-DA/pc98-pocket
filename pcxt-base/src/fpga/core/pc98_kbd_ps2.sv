@@ -138,6 +138,24 @@ module pc98_kbd_ps2 (
             8'h11: set2_pc98 = 8'h51; // left alt  -> NFER
             8'h14: set2_pc98 = 8'h74; // left ctrl -> CTRL
             8'h59: set2_pc98 = 8'h7D; // right shift
+
+            // PC-98-only keys the VIRTUAL keyboard sends on Set-2 codes that a
+            // real USB keyboard never emits (verified against hid_to_ps2's
+            // output table). These codes belong to vkb_layout.c's PC-9801
+            // table; a docked keyboard reaches the same PC-98 keys through the
+            // entries above and the extended block instead.
+            8'h08: set2_pc98 = 8'h60; // STOP   (Pause key on a docked kbd)
+            8'h0F: set2_pc98 = 8'h72; // KANA
+            8'h10: set2_pc98 = 8'h73; // GRPH   (right ctrl on a docked kbd)
+            8'h13: set2_pc98 = 8'h35; // XFER   (right alt on a docked kbd)
+            8'h17: set2_pc98 = 8'h51; // NFER   (left alt on a docked kbd)
+            8'h18: set2_pc98 = 8'h3F; // HELP
+            8'h19: set2_pc98 = 8'h36; // ROLL UP
+            8'h1F: set2_pc98 = 8'h37; // ROLL DOWN
+            8'h20: set2_pc98 = 8'h38; // INS
+            8'h28: set2_pc98 = 8'h39; // DEL
+            8'h2F: set2_pc98 = 8'h33; // _ / RO
+            8'h30: set2_pc98 = 8'h41; // keypad /
             default: set2_pc98 = KC_NONE;
         endcase
     endfunction
