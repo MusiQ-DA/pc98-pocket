@@ -116,7 +116,19 @@ static uint8_t key_color(int i)
 }
 
 // Visual rows for navigation: each is a contiguous, left-to-right span of
-// vkb_keys[] (function block + main block + keypad).
+// vkb_keys[] (function block + main block + keypad), matching the compiled
+// PC-98 or PC/XT table in vkb_layout.c.
+#ifdef MACHINE_PC98
+static const struct {
+    uint8_t start, count;
+} vrows[] = {
+    { 0, 22 },  // row 0: F1 F2 ESC 1..0 -^¥ BS STOP / * / + -
+    { 22, 20 }, // row 1: F3 F4 TAB Q..P @ [ RETURN / 7 8 9 ENTER
+    { 42, 19 }, // row 2: F5 F6 CTRL CAPS A..L ; : ] / 4 5 6
+    { 61, 18 }, // row 3: F7 F8 SHIFT Z..M , . / _ SHIFT / 1 2 3
+    { 79, 14 }, // row 4: F9 F10 KANA GRPH SPACE XFER NFER HELP ROLLx2 INS DEL / 0 .
+};
+#else
 static const struct {
     uint8_t start, count;
 } vrows[] = {
@@ -126,7 +138,8 @@ static const struct {
     { 57, 19 }, // row 3
     { 76, 7 },  // row 4
 };
-#define NUM_VROWS 5
+#endif
+#define NUM_VROWS ((int) (sizeof(vrows) / sizeof(vrows[0])))
 
 // Vertical steps to the adjacent row and picks the key whose horizontal centre is
 // nearest (so staggered rows never skip); horizontal steps by index within the
