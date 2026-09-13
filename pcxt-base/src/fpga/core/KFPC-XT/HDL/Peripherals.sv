@@ -605,7 +605,13 @@ module PERIPHERALS #(
         // channel 0, or a control word aimed at it -- clears the master's IRR
         // bit 0, so an interrupt latched before the reprogram cannot fire
         // after it.  The strobe is decoded below, next to the PIT.
+`ifdef MACHINE_PC98
         .external_irr_clear         ({7'b0, pit0_write_clears_irr0}),
+`else
+        // An XT's 8259 does not see the PIT's writes; this is np2's
+        // PC-98-specific behaviour, so the XT path keeps the real chip's.
+        .external_irr_clear         (8'h00),
+`endif
 `ifdef MACHINE_PC98
         // IRQ7 is the slave's cascade line; the machine's own IRQ7 has to
         // stand down for it. IRQ2 is the CRT interrupt -- see crt_vsync_irq
