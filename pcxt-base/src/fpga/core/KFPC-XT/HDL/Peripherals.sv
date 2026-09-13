@@ -736,19 +736,28 @@ module PERIPHERALS #(
     // halted. That is exactly where the machine stopped: N=34 is counter 2's
     // first pass through the loop, one latch short of the read that halts.
     //
-    // The beep is left unmuted on purpose: the machine's boot beep IS counter
-    // 2 in mode 3 (FD8B4 programs it), so hearing it confirms this fix the
-    // same way the POST codes confirm the rest.
+    // The beeper's TONE is counter 1, not counter 2. Counter 2 is the
+    // RS-232C baud source (np2 io/pit.c: pit_o75 -> pit_setrs232cspeed);
+    // the B6h the ITF writes at F805DC is that channel's init, not a beep.
+    // The boot beep is the ITF's F80738 76h -- counter 1, LSB+MSB, mode 3
+    // -- with the divisor fed to 0x73 at F80740/48, exactly the channel
+    // np2's beeper follows (pit_o73 -> beep_hzset / beep_lheventset).
+    //
+    // The beeper's MUTE is system-port C bit 3, INVERTED: 1 = silent,
+    // 0 = sounding (np2 sound/beepc.c: buz = (sysport.c & 8) ? 0 : 1), and
+    // the latch resets to 0xF9 -- muted. The gate is the LATCH, the thing
+    // 0x35 reads back, not the XT 8255's port C pin: the BIOS only ever
+    // issues bit set/reset words to 0x37, never a mode word, so the chip
+    // holds port C in input mode and port_c_io[3] never drops. Keying the
+    // enable on ~port_c_io muted the beeper forever -- the machine's boot
+    // beep was silent while 0037 stacked up in the IO history.
 `ifdef MACHINE_PC98
     wire    tim2gatespk = 1'b1;
-    // The beeper's gate is 8255 port C bit 3, and it is INVERTED: the beep
-    // sounds while PC3 is LOW (MAME: m_beeper->set_state(!(data & 8))). The
-    // BIOS's FE0DF routine clears PC3 (0x06), waits, sets it (0x07) -- the
-    // wait IS the beep, so following the bit straight would hold the gate
-    // shut exactly when it should sing.
-    wire    spkdata     = ~port_c_out[3] & ~port_c_io;
+    wire    spktone     = timer_counter_out[1];
+    wire    spkdata     = ~pc98_sysport_c[3];
 `else
     wire    tim2gatespk = port_b_out[0] & ~port_b_io;
+    wire    spktone     = timer_counter_out[2];
     wire    spkdata     = port_b_out[1] & ~port_b_io;
 `endif
 
@@ -777,7 +786,7 @@ module PERIPHERALS #(
     );
 
     assign  timer_interrupt = timer_counter_out[0];
-    assign  speaker_out     = timer_counter_out[2] & spkdata;
+    assign  speaker_out     = spktone & spkdata;
 
     //
     // 8255

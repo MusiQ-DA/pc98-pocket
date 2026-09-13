@@ -166,6 +166,21 @@ jobs:
           ./obj_fc/q | tee fc.log
           grep -q "RESULT: PASS" fc.log
 
+      - name: the boot beep reaches the speaker pin (ctr1, sysport bit3)
+        run: |
+          H=pcxt-base/src/fpga/core/KFPC-XT/HDL
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_beep \
+            -Isim -I$H/KF8253/HDL -I$H/KF8255/HDL \
+            sim/tb_pc98_beep.sv \
+            $H/KF8253/HDL/KF8253.sv $H/KF8253/HDL/KF8253_Control_Logic.sv \
+            $H/KF8253/HDL/KF8253_Counter.sv \
+            $H/KF8255/HDL/KF8255.sv $H/KF8255/HDL/KF8255_Control_Logic.sv \
+            $H/KF8255/HDL/KF8255_Group.sv $H/KF8255/HDL/KF8255_Port.sv \
+            $H/KF8255/HDL/KF8255_Port_C.sv \
+            -o b --Mdir obj_beep
+          ./obj_beep/b | tee beep.log
+          grep -q "RESULT: PASS" beep.log
+
       - name: ITF bank switches on 0x043D and not on a glitch
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_itf_bank \
