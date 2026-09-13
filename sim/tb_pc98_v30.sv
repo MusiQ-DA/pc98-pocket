@@ -1754,11 +1754,15 @@ module tb_pc98_v30;
     // perturb the POST's keyboard test -- whose TIMEOUT is the path that
     // reaches BASIC at all (see the kbd_ack_delay comment above).
     //
-    //   +keys=3\r      three file buffers, then RETURN
-    //   +keys=\r       take the default
+    //   +keys=3\r                three file buffers, then RETURN
+    //   +keys=\r                 take the default
+    //   +keys=3\r\w\wPRINT_2\r    answer, wait, then type a command
     //
-    // "\r" and "\n" are accepted as two-character escapes, since a plusarg
-    // cannot carry a control character.
+    // "\r" and "\n" are two-character escapes for RETURN, and "\w" waits a
+    // second of guest time -- a plusarg cannot carry a control character, and
+    // the keystrokes after the prompt have to land after BASIC is ready for
+    // them. "_" is SPACE, so a command with spaces survives the shell's word
+    // splitting on the way into the container.
     logic [7:0] kbd_rx_data = 8'h00;
     logic       kbd_rx_full = 1'b0;
     logic       prompt_seen = 1'b0;
@@ -1843,7 +1847,14 @@ module tb_pc98_v30;
                         ch = 8'h0D;
                         k  = k + 1;
                     end
+                    else if (keys_arg.getc(k+1) == "w") begin
+                        $display("  %8t  KEYS: waiting a second", $time);
+                        #1_000_000_000;
+                        k  = k + 2;
+                        continue;
+                    end
                 end
+                if (ch == "_") ch = " ";
                 sc = pc98_scan(ch);
                 if (sc == 8'hFF)
                     $display("  %8t  KEYS: no PC-98 code for %02X -- skipped", $time, ch);
