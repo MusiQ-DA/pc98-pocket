@@ -35,6 +35,15 @@ module CHIPSET #(
         input   logic           clk_vga_hgc,
         input   logic           enable_hgc,
         input   logic   [1:0]   hgc_rgb,
+        // The PC-98 row buffer's own view of text row 0 and its fill counters.
+        // PERIPHERALS produces them and softcpu_subsystem serves them to the
+        // firmware (0x5000009C/A0/A4); CHIPSET sits between the two and has to
+        // carry them, which is what was missing -- core_top connected them to
+        // an instance whose module never declared them and Quartus failed on
+        // every build since.
+        output  logic   [63:0]  pc98_tvfill_view,
+        output  logic   [15:0]  pc98_rowbuf_freq_count,
+        output  logic   [15:0]  pc98_rowbuf_fvalid_count,
         output  logic           de_o,
         output  logic   [5:0]   VGA_R,
         output  logic   [5:0]   VGA_G,
@@ -352,6 +361,9 @@ module CHIPSET #(
         .enable_hgc                         (enable_hgc),
         .de_o                               (de_o),
         .hgc_rgb                            (hgc_rgb),
+        .pc98_tvfill_view                   (pc98_tvfill_view),
+        .pc98_rowbuf_freq_count             (pc98_rowbuf_freq_count),
+        .pc98_rowbuf_fvalid_count           (pc98_rowbuf_fvalid_count),
         .VGA_R                              (VGA_R),
         .VGA_G                              (VGA_G),
         .VGA_B                              (VGA_B),
