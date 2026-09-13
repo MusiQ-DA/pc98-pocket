@@ -282,12 +282,31 @@ module tb_pc98_v30;
 
     // The module's reset values; the guest's writes to them are blocked, so
     // they are constant for the whole run.
+    //
+    // memsw[3] (A3FEE) is not inert configuration: BASIC reads it as the mask
+    // of INSTALLED OPTION ROMS and far-calls through it --
+    //
+    //   E8242  XOR AX,AX
+    //   E8244  MOV [1598h],AX            ; far offset 0
+    //   E8247  MOV WORD PTR [159Ah],0C000h ; first segment
+    //   E824D  MOV BX,0EEh               ; A3F0:00EE = A3FEE
+    //   E8250  CALL 0A1D1h               ; AL = that byte
+    //   E8253  MOV [1596h],AL            ; the mask
+    //   E8288  TEST [1596h],AH / CALL FAR [1598h]
+    //
+    // -- and np2's default 0x08 opens the AH=08 gate, which puts CS:IP at
+    // CC00:0000: empty option-ROM window, all zeros, and the run derails
+    // there right after printing the full banner. +memsw3=<n> overrides the
+    // byte so the question "is this the stale bit?" costs one run.
+    int memsw3_ovr = -1;
+    initial if (!$value$plusargs("memsw3=%d", memsw3_ovr)) memsw3_ovr = -1;
+
     function automatic logic [7:0] memsw_default(input logic [2:0] i);
         case (i)
             3'd0: memsw_default = 8'h48;   // A3FE2
             3'd1: memsw_default = 8'h05;   // A3FE6
             3'd2: memsw_default = 8'h04;   // A3FEA = 640 KB
-            3'd3: memsw_default = 8'h08;   // A3FEE
+            3'd3: memsw_default = (memsw3_ovr >= 0) ? 8'(memsw3_ovr) : 8'h08;  // A3FEE
             3'd4: memsw_default = 8'h01;   // A3FF2
             3'd5: memsw_default = 8'h00;   // A3FF6
             3'd6: memsw_default = 8'h00;   // A3FFA
@@ -337,6 +356,7 @@ module tb_pc98_v30;
     logic tv_q_checked = 1'b0;
     always_ff @(posedge clk_chipset) begin
         if (!tv_q_checked && ~mem_rd_n && cpu_address[19:14] == 6'b101000
+            && !(memsw3_ovr >= 0 && cpu_address[13:0] >= 14'h3FE0)
             && tvram_q !== tvram_byte(cpu_address)) begin
             tv_q_checked <= 1'b1;
             $display("  %8t  TVRAM READ MISMATCH at %05X: module %02X, shadow %02X  (eu_pc %05X)",
@@ -562,6 +582,15 @@ module tb_pc98_v30;
             // The text plane: the memory-count display lands here. Keep the
             // first row of cells (code + attribute) for the final dump.
             if (a >= 20'hA0000 && a < 20'hA4000) begin
+                // Every guest write into the switch area, blocked or not.
+                // The block exists because the POST's VRAM clear would stomp
+                // the switch -- but if the POST also writes the option-ROM
+                // scan RESULT here, the block is what keeps a stale bit alive,
+                // and that bit is what BASIC far-calls through. There are only
+                // a handful of these in a boot, so never filter them.
+                if (a[13] && a[12:5] == 8'hFF)
+                    $display("  %8t  MEMSW[%05X] <= %02X  (BLOCKED)  (eu_pc %05X  eu.pc %04X)",
+                             $time, a, d, eu_pc, mem_wr_pc_q);
                 // Same gate as tvram_wren: the eight memory-switch bytes and
                 // the rest of attribute cells 0xFF0-0xFFF are write-protected
                 // in the module, so the shadow must refuse them too.
@@ -1936,6 +1965,7 @@ module tb_pc98_v30;
     // cover a whole 1.4-second ITF cycle.
     logic basic_trace = 1'b0;
     int   basic_n = 0;
+    int   ext_hook_n = 0;
     logic basic_cs_q = 1'b0;        // eu_cs was E800 at the previous retirement
     int   basic_rearm = 0;
     int   basic_rearm_cap = 32;
@@ -1984,6 +2014,31 @@ module tb_pc98_v30;
                          ram[{dbg_ss,4'd0}+20'h15C2], ram[{dbg_ss,4'd0}+20'h15C3],
                          ram[{dbg_ss,4'd0}+20'h15C4], ram[{dbg_ss,4'd0}+20'h15C5],
                          ram[{dbg_ss,4'd0}+20'h15C6], ram[{dbg_ss,4'd0}+20'h15C7]);
+            end
+            // BASIC's extension-hook walk, which is where the run derails
+            // AFTER printing the full banner:
+            //
+            //   E8288  84 26 96 15     TEST [1596h],AH     ; mask of hooks
+            //   E828C  74 04           JZ   8292           ; bit clear: skip
+            //   E828E  FF 1E 98 15     CALL FAR [1598h]    ; bit set: call it
+            //   E8292  81 06 9A 15 ..  ADD  [159Ah],200h   ; next segment
+            //
+            // The caller walks AH = 01,02,04,40,08,80,10,20. The first two
+            // gates were shut, the next three were OPEN, and the third open
+            // one put CS:IP at CC00:0292 -- graphics VRAM, all zeros. On a
+            // machine with no option ROMs every gate should stay shut, so the
+            // question is what [DS:1596] holds and where [DS:1598] points.
+            if (ext_hook_n < 48
+                && (eu_pc == 20'hE8288 || eu_pc == 20'hE828E)) begin
+                ext_hook_n <= ext_hook_n + 1;
+                $display("  %8t  EXTHOOK %05X  ds %04X  ah %02X  [%05X]=%02X  far=%04X:%04X",
+                         $time, eu_pc, dbg_regs[191:176], dbg_regs[15:8],
+                         {dbg_regs[191:176], 4'd0} + 20'h1596,
+                         ram[{dbg_regs[191:176], 4'd0} + 20'h1596],
+                         {ram[{dbg_regs[191:176], 4'd0} + 20'h159B],
+                          ram[{dbg_regs[191:176], 4'd0} + 20'h159A]},
+                         {ram[{dbg_regs[191:176], 4'd0} + 20'h1599],
+                          ram[{dbg_regs[191:176], 4'd0} + 20'h1598]});
             end
             // The ITF's memory sizing, at the two points where it has just
             // verified a 64 KB pair: BX is the segment it tested, DH the
