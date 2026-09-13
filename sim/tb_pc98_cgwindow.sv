@@ -183,6 +183,76 @@ module tb_pc98_cgwindow;
         end
         $display("  a code change refills the window again");
 
+        // ---- the ITF's KANJI CG RAM test, instruction for instruction ------
+        //
+        // itf.rom F8743-F87D5 (disassembled with scratch/dis8086.py). ES=A400,
+        // DX walks 0x5620..0x567F then 0x5720..0x577F -- ku 0x56/0x57, the
+        // gaiji region -- and for each code:
+        //
+        //   MOV AL,DL / OUT A1   MOV AL,DH / OUT A3      set the code
+        //   MOV AL,00 / OUT A5   16 x (INC DI; STOSB)    write the pattern
+        //   MOV AL,20 / OUT A5   16 x (INC DI; STOSB)    write it again
+        //   MOV AL,00 / OUT A5   16 x (INC DI; SCASB)    read it back
+        //   MOV AL,20 / OUT A5   16 x (INC DI; SCASB)    and again
+        //
+        // then JNZ -> MOV SI,17DEh, which is the string "KANJI CG RAM ERROR".
+        // INC DI before each STOSB/SCASB means only the ODD offsets are
+        // touched, four patterns FF/AA/55/00 in turn.
+        //
+        // The point of the sequence is the THIRD OUT A5: the guest changes the
+        // line/half selector between writing and reading. Port A5 does not
+        // change which character the window is looking at, so nothing it does
+        // may disturb what the guest put there.
+        //
+        // The gaps model the 4.77 MHz CPU against the 42.95 MHz chipset: an
+        // OUT is eight CPU cycles, about seventy here, so any refill an OUT
+        // starts has landed long before the next instruction's bus cycle.
+        for (int p = 0; p < 4; p++) begin
+            logic [7:0] pat;
+            pat = 8'hFF - 8'(p) * 8'h55;
+
+            port(16'h00A1, 8'h20);           // DL: code[15:8] = ten
+            port(16'h00A3, 8'h56);           // DH: code[7:0]  = ku 0x56
+            repeat (70) @(posedge clk);
+
+            port(16'h00A5, 8'h00);
+            repeat (70) @(posedge clk);
+            for (int k = 0; k < 16; k++) begin
+                wr_addr = 12'(2 * k + 1); wr_data = pat; mem_wr = 1'b1;
+                @(posedge clk);
+            end
+            mem_wr = 1'b0;
+
+            port(16'h00A5, 8'h20);
+            repeat (70) @(posedge clk);
+            for (int k = 0; k < 16; k++) begin
+                wr_addr = 12'(2 * k + 1); wr_data = pat; mem_wr = 1'b1;
+                @(posedge clk);
+            end
+            mem_wr = 1'b0;
+
+            port(16'h00A5, 8'h00);
+            repeat (70) @(posedge clk);
+            for (int k = 0; k < 16; k++) begin
+                rd(2 * k + 1, got);
+                if (got !== pat) begin
+                    $display("  FAIL ITF pattern %02h, A5=00, line %0d: %02h",
+                             pat, k, got); errors++;
+                end
+            end
+
+            port(16'h00A5, 8'h20);
+            repeat (70) @(posedge clk);
+            for (int k = 0; k < 16; k++) begin
+                rd(2 * k + 1, got);
+                if (got !== pat) begin
+                    $display("  FAIL ITF pattern %02h, A5=20, line %0d: %02h",
+                             pat, k, got); errors++;
+                end
+            end
+        end
+        $display("  the ITF's KANJI CG RAM test reads back what it wrote");
+
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");
         $finish;

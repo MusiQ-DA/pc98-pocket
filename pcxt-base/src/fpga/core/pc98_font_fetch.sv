@@ -20,6 +20,20 @@
 // as far as the machine is concerned, and the CG window will read it through
 // this same path rather than by mapping it into the address space.
 //
+// It has to be the address the LOADER actually used, and that address is
+// 0x400000, not 0x200000. RAM.sv's font bank is
+//
+//     else if (font_bank_flag)
+//         latch_address = {1'b1, 2'b00, address};      // 0x400000 + file offset
+//
+// (RAM.sv "0x400000 upward: past EMS, which owns bit 21"), and core_top picks
+// the slot address so that the low twenty bits ARE the file offset. 0x200000 is
+// the bottom of the EMS window -- {1'b0, 1'b1, map_ems[0], address[13:0]} --
+// so every glyph this module fetched came out of an EMS page instead of the
+// font, which nothing has written at power-on. That is why the ITF's CG test
+// has failed on every build: the character generator window prefetches through
+// this same fetcher.
+//
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 
@@ -28,7 +42,7 @@
 module pc98_font_fetch #(
     parameter int ADDR_BITS = 24,
     parameter int LEN_BITS  = 5,
-    parameter [ADDR_BITS-1:0] FONT_BASE = 24'h200000
+    parameter [ADDR_BITS-1:0] FONT_BASE = 24'h400000
 ) (
     input  wire        clk,
     input  wire        rst,
