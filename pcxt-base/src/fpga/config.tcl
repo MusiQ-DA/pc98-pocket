@@ -17,6 +17,15 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # Comment it out to fall back to the PCXT build that reached POST (run#109).
 set_global_assignment -name VERILOG_MACRO "MACHINE_PC98=1"
 
+# The keyboard 8251 at 0x41/0x43 (pc98_kbd8251.sv). On by default: without it
+# nobody answers the keyboard, the ITF's probe times out on every pass,
+# [0x0500] bit 7 never gets set, and BASIC has no input at all. The first
+# version of the model blanked the ITF by arming ACKs on writes that were
+# not the 8251's (0x73 is the beep port); the model now arms only on the
+# break edge, exactly as np2 does, so it can stay on. Comment it out to
+# bisect a suspect keyboard interaction on hardware.
+set_global_assignment -name VERILOG_MACRO "PC98_KBD_8251=1"
+
 # PC98_DEBUG_BANDS replaces the picture with a free-running probe. It did its
 # job: it proved the softcore, the ROM load, the raster and the OSD chain were
 # all healthy, which left the CPU as the only suspect and sent the search to

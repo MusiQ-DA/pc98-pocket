@@ -1096,7 +1096,10 @@ end
     end
 	 
 //
-
+// The PC-98 keyboard 8251's RxRDY line -- declared here because the IRQ
+// synchroniser below is its first user; the model itself sits down at the
+// 0x41/0x43 decode.
+    logic   kbd8251_irq;
     logic   keybord_interrupt_ff;
     logic   uart_interrupt_ff;
     logic   uart2_interrupt_ff;
@@ -1113,7 +1116,16 @@ end
         end
         else
         begin
+            // PC-98: IRQ1 is the 8251's RxRDY line, not the XT PS/2
+            // keyboard's -- the machine has no port 0x60 keyboard, and a
+            // PS/2 byte raising IRQ1 there only made the BIOS's FE65D
+            // handler read a phantom 0x41. With the 8251 model compiled out
+            // the XT line stands in, which is what the build did before.
+`ifdef PC98_KBD_8251
+            keybord_interrupt_ff    <= kbd8251_irq;
+`else
             keybord_interrupt_ff    <= keybord_irq;
+`endif
             keybord_interrupt       <= keybord_interrupt_ff;
             uart_interrupt_ff       <= uart_irq;
             uart_interrupt          <= uart_interrupt_ff;
@@ -1685,70 +1697,32 @@ end
                             : sysport_42_select ? 8'h02
                             :                     8'h00;
 
-    // ------------------------------------------------ keyboard 8251 stub
+    // ------------------------------------------------- keyboard 8251
     //
-    // 0x41 data / 0x43 status+command: the keyboard's 8251. The BIOS's FD930
-    // block resets the keyboard with a command write to 0x43 and waits for
-    // the keyboard's 0x60 ACK; the boot test at FD80:0164-0177 polls 0x43
-    // bit 1 (RxRDY) and reads 0x41 expecting 0x60, and sets [0x0500].bit7
-    // when it gets one. The ROM's boot is a TWO-PASS affair turned on that
-    // bit: pass 1 (ACK not yet arrived, bit clear) installs IVT[1E] and
-    // enters BASIC dirty; BASIC's init resets the CPU; pass 2 (ACK arrived,
-    // bit set) takes the clean path.
-    //
-    // So the ACK's TIMING is load-bearing, not decoration. A real keyboard
-    // answers its reset command tens of milliseconds later -- long after the
-    // boot test's ~1-2 ms poll has timed out, which IS the machine's normal
-    // first pass. An instant ACK made the pass-1 test pass instead, the
-    // IVT[1E] install was skipped, and the machine derailed through the
-    // uninstalled vector into empty RAM: sim/tb_pc98_v30.sv measured exactly
-    // that, and the ~80 ms delay below is what put the boot back on the
-    // ROM's intended path. The status model follows np2's keyboard_i43:
-    // TxRDY/TxE/DSR (bits 0/2/7) always set, RxRDY (bit 1) while the ACK is
-    // pending. 0x73 is the command port's mirror the BIOS also writes.
+    // 0x41 data / 0x43 status+command: the keyboard's 8251. The chip model
+    // itself -- np2's io/serial.c semantics, the break-edge reset, the 0x60
+    // answer and its timing against the ITF's poll window -- lives in
+    // pc98_kbd8251.sv with the full derivation; here it is only decoded and
+    // wired. Note the decode is exact and 0x73 is NOT claimed: 0x73 is the
+    // beep data port (np2 pit_o73), and the ITF's no-keyboard path programs
+    // it twice -- arming ACKs there is what blanked the Pocket's screen.
     wire kbd_data_select = pc98_io_exact & (address[7:0] == 8'h41);
     wire kbd_stat_select = pc98_io_exact & (address[7:0] == 8'h43);
-    wire kbd_wr = (pc98_io_exact & ((address[7:0] == 8'h43)
-                                  | (address[7:0] == 8'h73))) & ~io_write_n;
-    wire kbd_rd = kbd_data_select & ~io_read_n;
 
-    // 3436364 chipset ticks at 42.95 MHz ~= 80 ms: the real keyboard's
-    // power-up/reset response time, and the value the simulation confirmed.
-    localparam [21:0] KBD_ACK_DELAY = 22'd3436364;
-    logic             kbd_ack_armed;
-    logic             kbd_wr_d, kbd_rd_d;
-    logic [21:0]      kbd_ack_timer;
+    logic       kbd8251_read_select;
+    logic [7:0] kbd8251_read_data;
 
-    always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
-            kbd_ack_armed <= 1'b0;
-            kbd_wr_d      <= 1'b1;
-            kbd_rd_d      <= 1'b1;
-            kbd_ack_timer <= 22'd0;
-        end else begin
-            kbd_wr_d <= kbd_wr;
-            kbd_rd_d <= kbd_rd;
-            // Arm on a command write; the byte appears when the timer runs
-            // out, not before -- an early ACK breaks the ROM's two-pass boot
-            // exactly the way an instant one does.
-            if (kbd_wr & ~kbd_wr_d)
-                kbd_ack_timer <= KBD_ACK_DELAY;
-            else if (kbd_ack_timer != 22'd0) begin
-                kbd_ack_timer <= kbd_ack_timer - 22'd1;
-                if (kbd_ack_timer == 22'd1)
-                    kbd_ack_armed <= 1'b1;
-            end
-            // Clear only on the read strobe's FALLING edge, after the cycle
-            // has completed: clearing during the 0x41 read would race the CPU
-            // latching the very byte being handed over.
-            if (kbd_rd_d & ~kbd_rd)
-                kbd_ack_armed <= 1'b0;
-        end
-    end
-
-    wire [7:0] kbd_readdata = kbd_data_select
-                            ? (kbd_ack_armed ? 8'h60 : 8'hFF)
-                            : (8'h85 | (kbd_ack_armed ? 8'h02 : 8'h00));
+    pc98_kbd8251 u_pc98_kbd8251 (
+        .clock              (clock),
+        .reset              (reset),
+        .ctrl_write_strobe  (kbd_stat_select & ~io_write_n),
+        .data_read_strobe   (kbd_data_select & ~io_read_n),
+        .stat_read_strobe   (kbd_stat_select & ~io_read_n),
+        .data_in            (internal_data_bus),
+        .read_select        (kbd8251_read_select),
+        .read_data          (kbd8251_read_data),
+        .irq                (kbd8251_irq)
+    );
 
     wire [7:0] pc98_font_row;      // driven by the row buffer below
     wire [6:0] pc98_font_cell;
@@ -2627,24 +2601,21 @@ end
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= sysport_data;
         end
-        // The keyboard 8251 at 0x41/0x43. AFTER the timer entry on purpose:
-        // 0x73 is the command-port mirror and the PIT owns its read side.
+        // The keyboard 8251 at 0x41/0x43, claiming exactly those two ports.
+        // The decode is exact so nothing above can collide with it; this
+        // entry sits after the timer/interrupt/sysport ones only to keep the
+        // mux's history.
         //
-        // UNDER INVESTIGATION on hardware, and off by default. Run #193 --
-        // the last bitstream that compiled, and the last one that printed the
-        // memory count -- answered NEITHER of these ports: the model claims
-        // two addresses the chipset previously left unclaimed, and it landed
-        // inside the window where the Pocket went blank. The guest now loops
-        // in F84xx-F86xx with TVW climbing, BANK 1, and ADDR/FR both zero:
-        // ITF screen setup, before it ever touches RAM, which is exactly
-        // where the keyboard is first probed.
-        //
-        // Define PC98_KBD_8251 to put it back.
+        // Default ON (config.tcl defines PC98_KBD_8251): without it nobody
+        // answers 0x41/0x43, the ITF takes its no-keyboard path, [0x0500]
+        // bit 7 never gets set, and BASIC has no keyboard at all. Undefine
+        // the macro to fall back to the dead ports -- e.g. to bisect a
+        // suspect keyboard interaction on hardware.
 `ifdef PC98_KBD_8251
-        else if (kbd_rd || (kbd_stat_select & ~io_read_n))
+        else if (kbd8251_read_select)
         begin
             data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= kbd_readdata;
+            data_bus_out <= kbd8251_read_data;
         end
 `endif
 `endif
