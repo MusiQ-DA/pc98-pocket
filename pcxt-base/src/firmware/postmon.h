@@ -9,6 +9,14 @@
 // Call from the service loop. Cheap: it redraws only when the code changes.
 void post_mon_tick(void);
 
+// Show or hide the overlay. Bound to a button through the settings menu
+// (BTNFN_POSTMON), because the panel covers the top of the guest's screen and
+// there was no way to look underneath it without rebuilding the firmware.
+//
+// The strip starts SHOWN: it is a diagnostic build's whole point, and a build
+// that came up blank would read as the monitor being broken.
+void postmon_toggle(void);
+
 // Capture the guest ROM bytes the panel shows.
 //
 // Must be called with the guest still held. The peek goes through the

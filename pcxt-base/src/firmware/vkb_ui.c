@@ -3,6 +3,7 @@
 #include "softcpu_regs.h"
 #include "vkb_draw.h"
 #include "vkb_layout.h"
+#include "postmon.h"
 #include "vkb_ui.h"
 
 // D-pad auto-repeat timing, in cycles (the softcore runs at clk_chipset / 6).
@@ -74,6 +75,13 @@ static void osd_origin_write(void)
         y = (h - OSD_FB_HEIGHT) / 2;
     }
     *OSD_ORIGIN = (y << 16) | x;
+}
+
+// True while the keyboard or the settings menu owns the framebuffer. The POST
+// panel asks before clearing VKB_CTRL, so hiding it cannot close an overlay.
+int vkb_ui_overlay_open(void)
+{
+    return ui_mode != OSD_NONE;
 }
 
 // OSD control word: bit0 = an overlay is shown; the origin is refreshed first.
@@ -309,6 +317,11 @@ static void button_function(uint8_t fn)
         *OSD_ACTION = 0;             // re-arm the edge
         *OSD_ACTION = OSD_ACT_VIDEO; // rising edge -> toggle the displayed video card
         break;
+#ifdef POST_MONITOR
+    case BTNFN_POSTMON:
+        postmon_toggle();
+        break;
+#endif
     default: // BTNFN_NONE
         break;
     }

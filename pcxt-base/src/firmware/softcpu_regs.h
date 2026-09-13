@@ -89,6 +89,7 @@
 #define BTNFN_SETTINGS 1u
 #define BTNFN_CREDITS  2u
 #define BTNFN_VIDEO    3u
+#define BTNFN_POSTMON  4u
 
 // FDD_REQUEST bits
 #define FDD_REQ_READ  (1 << 0)
