@@ -70,9 +70,26 @@ S=pcxt-base/src/fpga/core
 K=$S/KFPC-XT/HDL
 V=$S/v30
 
+# Verilator's own default is OPT_FAST=-Os -- the generated model compiled for
+# SIZE, on a run that is pure CPU time. A make-command-line override wins over
+# verilated.mk, and -O2 is worth a large multiple here. It has to stay ONE
+# token: verilator splits -MAKEFLAGS on whitespace, so "-O2 -march=native"
+# reaches make as a variable plus a stray option and the build dies.
+# SIM_THREADS splits the eval across cores (the box has 20, the run used one).
+#
+# NOT --x-assign fast / --x-initial fast: they are a speed win everywhere else,
+# but here they changed the boot. With them the ITF parks in a two-instruction
+# loop at F8448/F8476 that the default X handling walks straight through, so
+# something in this machine still depends on an uninitialised value reading
+# as X rather than 0. Measured, run keys2.
+SIM_OPT="${SIM_OPT:--O2}"
+SIM_THREADS="${SIM_THREADS:-4}"
+
 BUILD_AND_RUN="
   set -e
-  verilator --binary --timing -Wno-fatal -j 0 +define+V30_BACKDOOR --top-module tb_pc98_v30 \
+  verilator --binary --timing -Wno-fatal -j 0 +define+V30_BACKDOOR \
+    --threads $SIM_THREADS -MAKEFLAGS OPT_FAST=$SIM_OPT \
+    --top-module tb_pc98_v30 \
     -I/work/sim -I/work/$S -I/work/$V -I/work/$K -I/work/$K/KF8288/HDL \
     -I/work/$K/KF8253/HDL -I/work/$K/KF8259/HDL \
     /work/$V/v30u_ss_pkg.sv \

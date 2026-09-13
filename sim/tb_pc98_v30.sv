@@ -494,6 +494,9 @@ module tb_pc98_v30;
             if (a >= 20'hA0000 && a < 20'hA4000) begin
                 if (a < 20'hA2000)
                     tvram_page[a[12:0]] <= d;
+                else
+                    tvram_apage[a[12:0]] <= d;
+                tvram_attr_wr <= tvram_attr_wr + ((a >= 20'hA2000) ? 1 : 0);
                 // The prompt ends in '?', and nothing earlier in the boot
                 // writes one: that is the moment a keystroke becomes useful.
                 if (a < 20'hA2000 && d == 8'h3F && !prompt_seen) begin
@@ -510,10 +513,17 @@ module tb_pc98_v30;
                 // and after that every PRINTABLE byte into the code plane --
                 // which is the memory count, if the BIOS ever writes one. The
                 // clear itself is 20487 writes of 00 and E1 and says nothing.
-                if (tvram_wr_count < 40
+                // The old filter was `a < A2000 && printable`, which hid the
+                // ATTRIBUTE plane completely -- so "nothing writes A2000" was
+                // never a measurement, only the filter speaking. And it
+                // printed a[15:0], which for a word write cannot tell the two
+                // byte lanes apart from a repeat into the same cell. Print the
+                // full 20-bit address, and once the prompt is up print BOTH
+                // planes: that window is short and it is the one that matters.
+                if (tvram_wr_count < 40 || prompt_seen
                  || (a < 20'hA2000 && d >= 8'h20 && d < 8'h7F))
-                    $display("  %8t  TVRAM[%04X] <= %02X %s  (eu_pc %05X)",
-                             $time, a[15:0], d,
+                    $display("  %8t  TVRAM[%05X] <= %02X %s  (eu_pc %05X)",
+                             $time, a, d,
                              (d >= 8'h20 && d < 8'h7F)
                                  ? string'({"'", d, "'"}) : "   ",
                              eu_pc);
@@ -523,6 +533,8 @@ module tb_pc98_v30;
     logic [7:0] tvram_code [0:511];   // A0000-A01FF, first row of cells
     logic [7:0] tvram_attr [0:511];   // A2000-A21FF
     logic [7:0] tvram_page [0:8191];  // A0000-A1FFF, the whole code plane
+    logic [7:0] tvram_apage[0:8191];  // A2000-A3FFF, the whole attribute plane
+    int         tvram_attr_wr = 0;
 
     // Row 0 and a per-cell glyph decode answer "is the character path right".
     // They cannot answer "what does the machine SAY", and what the machine
@@ -541,6 +553,10 @@ module tb_pc98_v30;
                 end
                 $display("|");
             end
+            $display("        attribute-plane writes so far: %0d", tvram_attr_wr);
+            $write("        row0 attrs:");
+            for (c = 0; c < 24; c = c + 1) $write(" %02X", tvram_apage[c*2]);
+            $display("");
         end
     endtask
 
