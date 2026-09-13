@@ -306,7 +306,10 @@ module tb_pc98_v30;
             3'd0: memsw_default = 8'h48;   // A3FE2
             3'd1: memsw_default = 8'h05;   // A3FE6
             3'd2: memsw_default = 8'h04;   // A3FEA = 640 KB
-            3'd3: memsw_default = (memsw3_ovr >= 0) ? 8'(memsw3_ovr) : 8'h08;  // A3FEE
+            // 0x00, not np2's 0x08: see pc98_tvram.sv -- that bit claims an
+            // option ROM at CC00 that this machine does not have, and BASIC
+            // far-calls it. Kept in step with the RTL default on purpose.
+            3'd3: memsw_default = (memsw3_ovr >= 0) ? 8'(memsw3_ovr) : 8'h00;  // A3FEE
             3'd4: memsw_default = 8'h01;   // A3FF2
             3'd5: memsw_default = 8'h00;   // A3FF6
             3'd6: memsw_default = 8'h00;   // A3FFA

@@ -107,7 +107,25 @@ module pc98_tvram (
             memsw[0] <= 8'h48;   // A3FE2
             memsw[1] <= 8'h05;   // A3FE6
             memsw[2] <= 8'h04;   // A3FEA = 640 KB
-            memsw[3] <= 8'h08;   // A3FEE
+            // A3FEE is the mask of INSTALLED OPTION ROMS, not inert config.
+            // N88-BASIC reads it (E824D: MOV BX,0EEh / CALL A1D1 reads
+            // A3F0:00EE) and FAR-CALLS every window whose bit is set:
+            // bit0 C000, bit1 C400, bit2 C800, bit6 CA00, bit3 CC00,
+            // bit7 CE00, bit4 D000, bit5 D400.
+            //
+            // np2's default here is 0x08, and this was copied from it -- but
+            // that bit says "there is a ROM at CC00", and this machine has no
+            // option ROMs at all. Measured: with 0x08 the boot printed the
+            // whole BASIC banner and then jumped into CC00:0000 -- an empty
+            // window, all zeros -- and never came back. With 0x00 it walks
+            // all eight gates and reaches the Ok prompt.
+            //
+            // Do not restore np2's value without also providing the ROM it
+            // claims. (np2's own byte is a saved battery-backed state, which
+            // on real hardware the last boot's scan wrote; ours has no scan
+            // result to inherit because the block above keeps the POST from
+            // writing here at all.)
+            memsw[3] <= 8'h00;   // A3FEE -- no option ROMs on this machine
             memsw[4] <= 8'h01;   // A3FF2
             memsw[5] <= 8'h00;   // A3FF6
             memsw[6] <= 8'h00;   // A3FFA
