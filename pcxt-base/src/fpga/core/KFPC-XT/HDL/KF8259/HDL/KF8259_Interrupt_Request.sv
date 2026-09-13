@@ -53,8 +53,22 @@ module KF8259_Interrupt_Request (
             low_input_latch[ir_bit_no] <= 1'b0;
         else if (~interrupt_request_pin[ir_bit_no])
             low_input_latch[ir_bit_no] <= 1'b1;
+`ifdef KF8259_EDGE_DISARM
+        // Under investigation on hardware. This is the 8259A's real edge
+        // behaviour -- disarm once the request register has taken the edge,
+        // so a pin that STAYS high produces one request, not one per clock --
+        // and the simulation needs it for the mode-3 square wave. But the
+        // Pocket went from "memory count, then a loop" to a completely blank
+        // screen in the same build that introduced it, and the ITF runs its
+        // INT 08 test (F8A3C) long BEFORE it prints the count (F9999): a
+        // missed or mistimed request there stops the machine with nothing on
+        // screen, which is exactly what the hardware shows.
+        //
+        // Off by default until the hardware says otherwise. Define
+        // KF8259_EDGE_DISARM to put it back.
         else if (low_input_latch[ir_bit_no] && !freeze)
             low_input_latch[ir_bit_no] <= 1'b0;
+`endif
         else
             low_input_latch[ir_bit_no] <= low_input_latch[ir_bit_no];
         end

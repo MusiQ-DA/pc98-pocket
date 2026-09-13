@@ -1835,9 +1835,18 @@ end
     // index, so no other row's fill reaches index <8). Byte 2n = hi, 2n+1 =
     // lo, so one reading reads like the TVRAM itself.
     always_ff @(posedge clock) begin
-        if (tvram_fil_cell < 12'd8) begin
-            pc98_tvfill_view[{tvram_fil_cell[2:0], 1'b0}]     <= tvram_vid_char_hi;
-            pc98_tvfill_view[{tvram_fil_cell[2:0], 1'b1}]     <= tvram_vid_char_lo;
+        // BYTE lanes, not bit indices, and FOUR cells, not eight.
+        //
+        // This used to index pc98_tvfill_view -- 64 BITS -- with 0..15 and
+        // assign an eight-bit value to the single bit it selected: every byte
+        // collapsed to its LSB, in the wrong place, and the TVF readout has
+        // been noise since the day it was added. The comment always said
+        // "byte", and eight cells of {hi,lo} is 128 bits, which never fit:
+        // softcpu_subsystem serves exactly two words (0x5000009C and A0), so
+        // four cells is what the panel can show.
+        if (tvram_fil_cell < 12'd4) begin
+            pc98_tvfill_view[{tvram_fil_cell[1:0], 1'b0} * 8 +: 8] <= tvram_vid_char_hi;
+            pc98_tvfill_view[{tvram_fil_cell[1:0], 1'b1} * 8 +: 8] <= tvram_vid_char_lo;
         end
     end
 
