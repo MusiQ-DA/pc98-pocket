@@ -107,6 +107,64 @@ IRR0クリア両経路。**全フェーズPASS。** `tb_pic_cascade`も変わら
 シードは不要。実機に必要なのは上記3修正(クロック・エッジ検出・IRR0クリア)
 のみ。`Peripherals.sv`のPITクロックとIRR0クリア配線はMACHINE_PC98側で対応済み。
 
+### 3.5 訂正: FE1FD は UX BIOS では命令アドレスではない(2026-09-13 計測)
+
+`+golden` のRAM事前投入と §3.3 のPITシードは **どちらも発火していない**。
+両方のフックが `eu_pc == 20'hFE1FD` を待つが、UX BIOS のその番地はパディング:
+
+```
+FDE35  E9 E3 FE     JMP 0DD1Bh
+...
+FE1F3  E9 56 FF     JMP 0E14Ch      ← ルーチンの最後
+FE1F6  00 00 ...    (FE1FF までゼロ)
+FE200  FA           CLI             ← 次のルーチン(INT ハンドラ)
+```
+
+FE1FD は **FE1F6-FE1FF のゼロ埋めの中**。命令境界として retire することは
+なく、`wait (eu_pc == 20'hFE1FD)` は永久に成立しない。計測: 素のブート
+(`pitfix4`/`pitfix5`)のログに `PIT seeded` が **0 件**。
+
+**FE1FD は旧 Franken-ROM 由来の番地**だった(§2.1)。UX BIOS を使う限り、
+`+golden` もPITシードも無効 — フックし直すまで「シードした結果」を語っては
+いけない。素のブートでは後述のとおりROM自身がタイマーを設定するので、
+シード自体が不要な可能性が高い。
+
+### 3.6 タイマーのレートはROMが [0x0501] bit 7 で選ぶ
+
+ROMセット中でカウンタ0に mode 3 を書く唯一の場所は **FDE00**(`OUT 77h` は
+ROM全体で FDE02 と FEF76 の2箇所のみ):
+
+```
+FDDF4  MOV [058Ah],CX        ; タイマーカウンタのソフト分周
+FDDF8  MOV [001Ch],BX        ; IVT[7] = INT 08 ハンドラ
+FDDFC  MOV [001Eh],ES
+FDE00  MOV AL,36h            ; ctrl: counter 0, LSB+MSB, mode 3
+FDE02  OUT 77h,AL
+FDE04  TEST BYTE PTR [0501h],80h
+FDE09  JNZ  FDE19
+FDE0B  MOV AL,00h            ; ─ bit7=0: 5/10MHz クラス
+FDE0D  OUT 71h,AL
+FDE0F  MOV AL,60h
+FDE15  OUT 71h,AL            ;   count 0x6000 = 24576 → 2.4576MHz で 100Hz
+FDE17  JMP SHORT FDE25
+FDE19  MOV AL,00h            ; ─ bit7=1: 8MHz クラス
+FDE1B  OUT 71h,AL
+FDE1D  MOV AL,4Eh
+FDE23  OUT 71h,AL            ;   count 0x4E00 = 19968 → 1.9968MHz で 100Hz
+FDE25  CLI / IN AL,02 / AND 0FEh / OUT 02 / STI   ; IRQ0 アンマスク
+```
+
+つまり **PIT入力クロックと `[0x0501]` bit 7 は必ず一致させなければならない**。
+一致しなければ 100Hz のはずの割込みが 123Hz(または 81Hz)になる。
+
+現状は整合している: ベンチのRAMは t=0 で全ゼロ、POST は 0x501 bit 7 を
+立てないので ROM は 0x6000 を書き、RTL/ベンチの 2.4576MHz と合う。
+**将来 0x501 を 8MHz クラスで事前投入するなら、PITクロックを 1.9968MHz に
+変えること**(`Peripherals.sv` の `PIT_CLK_HZ_TOGGLE`)。
+
+§3.3 の「FDE20 の ctrl 0x36 + 0x6000」という記述は番地が FDE00-FDE15、
+分岐付き、が正確な姿。
+
 ## §4 セットアップ
 
 ### 4.1 ROMファイル
