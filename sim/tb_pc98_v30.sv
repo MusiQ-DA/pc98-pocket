@@ -1648,6 +1648,13 @@ module tb_pc98_v30;
     // cover a whole 1.4-second ITF cycle.
     logic basic_trace = 1'b0;
     int   basic_n = 0;
+    logic basic_cs_q = 1'b0;        // eu_cs was E800 at the previous retirement
+    int   basic_rearm = 0;
+    int   basic_rearm_cap = 32;
+    initial begin
+        int v;
+        if ($value$plusargs("basicrearm=%d", v)) basic_rearm_cap = v;
+    end
     int   itf_ck_n = 0;
     int   m;
     logic [19:0] disp_pc [0:63];
@@ -1710,9 +1717,21 @@ module tb_pc98_v30;
             end
             // Re-arm a 1000-entry window when a FRESH BASIC entry happens
             // (back in the E800 ROM after having exhausted the cap before).
+            //
+            // This was a LEVEL on eu_pc in E8000-FFFFF, and that range is the
+            // WHOLE ROM -- ITF and FD80 POST included -- so the window re-armed
+            // on every retirement and the trace never ended: 45 million lines
+            // per run, the simulator spending its time in $display and the
+            // docker log outgrowing the disk. The "fresh entry" it wanted is
+            // the EDGE of a re-entry into the E800 segment, and it needs a cap:
+            // +basicrearm=<n> raises it.
+            basic_cs_q <= (eu_cs == 16'hE800);
             if (basic_trace && basic_n >= 50000
-                && (eu_pc >= 20'hE8000) && (eu_pc <= 20'hFFFFF))
-                basic_n <= 49000;
+                && (eu_cs == 16'hE800) && !basic_cs_q
+                && basic_rearm < basic_rearm_cap) begin
+                basic_rearm <= basic_rearm + 1;
+                basic_n     <= 49000;
+            end
             if (basic_trace && basic_n < 50000) begin
                 basic_n <= basic_n + 1;
                 $display("    B%0d  %05X  op %02X  ax %04X bx %04X cx %04X dx %04X si %04X di %04X  ss %04X ds %04X es %04X sp %04X",
