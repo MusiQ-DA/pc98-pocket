@@ -254,15 +254,93 @@ module tb_pc98_v30;
         .vid_attr     (tvram_fil_dummy)
     );
 
+    // ---- text VRAM reads, per lane -----------------------------------------
+    //
+    // pc98_tvram's CPU port is BYTE wide and REGISTERED: cpu_addr in, cpu_q
+    // one cycle later. din_of() below is evaluated twice per word read, once
+    // per lane, and `tvram_q` is driven by cpu_address -- not by the address
+    // din_of was asked about. So a word read of the text plane returned the
+    // SAME byte on both lanes: {b, b}.
+    //
+    // That is not cosmetic. BASIC's F4AF2 reads a cell as a word and tests AH
+    // -- the cell's HIGH byte -- to decide whether the cell holds a kanji
+    // left-half:
+    //
+    //   F4AF2  26 8B 05        MOV AX,ES:[DI]
+    //   F4AFA  80 FC FF        CMP AH,0FFh
+    //
+    // With AH carrying the character instead of 0x00, every ANK character
+    // looked like a kanji half, and the caller (F3D89) blanked the cell it had
+    // just printed. That is the empty screen, and it was the bench's.
+    //
+    // The real machine cannot have this bug: the shipped design runs the 8088,
+    // which reads a word as two byte cycles, and Peripherals' data_bus_out is
+    // eight bits wide. So keep the module -- it is here to cover the WRITE
+    // path -- and answer reads from a shadow that mirrors it exactly,
+    // memory-switch registers included.
+    logic [7:0] tv_shadow [0:16383];
+
+    // The module's reset values; the guest's writes to them are blocked, so
+    // they are constant for the whole run.
+    //
+    // memsw[3] (A3FEE) is not inert configuration: BASIC reads it as the mask
+    // of INSTALLED OPTION ROMS and far-calls through it --
+    //
+    //   E8242  XOR AX,AX
+    //   E8244  MOV [1598h],AX            ; far offset 0
+    //   E8247  MOV WORD PTR [159Ah],0C000h ; first segment
+    //   E824D  MOV BX,0EEh               ; A3F0:00EE = A3FEE
+    //   E8250  CALL 0A1D1h               ; AL = that byte
+    //   E8253  MOV [1596h],AL            ; the mask
+    //   E8288  TEST [1596h],AH / CALL FAR [1598h]
+    //
+    // -- and np2's default 0x08 opens the AH=08 gate, which puts CS:IP at
+    // CC00:0000: empty option-ROM window, all zeros, and the run derails
+    // there right after printing the full banner. +memsw3=<n> overrides the
+    // byte so the question "is this the stale bit?" costs one run.
+    int memsw3_ovr = -1;
+    initial if (!$value$plusargs("memsw3=%d", memsw3_ovr)) memsw3_ovr = -1;
+
+    function automatic logic [7:0] memsw_default(input logic [2:0] i);
+        case (i)
+            3'd0: memsw_default = 8'h48;   // A3FE2
+            3'd1: memsw_default = 8'h05;   // A3FE6
+            3'd2: memsw_default = 8'h04;   // A3FEA = 640 KB
+            // 0x00, not np2's 0x08: see pc98_tvram.sv -- that bit claims an
+            // option ROM at CC00 that this machine does not have, and BASIC
+            // far-calls it. Kept in step with the RTL default on purpose.
+            3'd3: memsw_default = (memsw3_ovr >= 0) ? 8'(memsw3_ovr) : 8'h00;  // A3FEE
+            3'd4: memsw_default = 8'h01;   // A3FF2
+            3'd5: memsw_default = 8'h00;   // A3FF6
+            3'd6: memsw_default = 8'h00;   // A3FFA
+            default: memsw_default = 8'h6E; // A3FFE
+        endcase
+    endfunction
+
+    function automatic logic [7:0] tvram_byte(input logic [19:0] a);
+        logic [13:0] o;
+        logic [11:0] cel;
+        begin
+            o   = a[13:0];
+            cel = o[12:1];
+            // the eight switch bytes: attribute plane, cells 0xFF0-0xFFF, odd
+            // ('cell' is a Verilog-2001 config reserved word -- hence 'cel')
+            if (o[13] && cel[11:4] == 8'hFF && cel[0])
+                tvram_byte = memsw_default(cel[3:1]);
+            else
+                tvram_byte = tv_shadow[o];
+        end
+    endfunction
+
     function automatic logic [7:0] din_of(input logic [19:0] a);
         din_of = ~mem_rd_n    ? (is_rom(a) ? rom_byte(a)
-                              : ((a[19:14] == 6'b101000) ? tvram_q : ram[a]))
+                              : ((a[19:14] == 6'b101000) ? tvram_byte(a) : ram[a]))
                : ~inta_n      ? ((~pic2_data_bus_io) ? pic2_dout : pic1_dout)
                : pit_iocycle  ? pit_dout
                : dma_iocycle  ? dma_dout
                : pic1_iocycle ? pic1_dout
                : pic2_iocycle ? pic2_dout
-               : kbd_data_iocycle ? 8'h60
+               : kbd_data_iocycle ? (kbd_rx_full ? kbd_rx_data : 8'h60)
                : kbd_stat_iocycle ? kbd_status
                : gdc_stat_iocycle ? gdc_status_mock
                : cc_ioread   ? (cc_latch | 8'h30)
@@ -273,6 +351,21 @@ module tb_pc98_v30;
     endfunction
 
     wire [7:0] din = din_of(cpu_address);
+
+    // The module still answers reads on its own port; say so once if it ever
+    // disagrees with the shadow on the addressed lane. Abandoning the module's
+    // read path silently is how a write-path bench stops covering the thing it
+    // was built for.
+    logic tv_q_checked = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (!tv_q_checked && ~mem_rd_n && cpu_address[19:14] == 6'b101000
+            && !(memsw3_ovr >= 0 && cpu_address[13:0] >= 14'h3FE0)
+            && tvram_q !== tvram_byte(cpu_address)) begin
+            tv_q_checked <= 1'b1;
+            $display("  %8t  TVRAM READ MISMATCH at %05X: module %02X, shadow %02X  (eu_pc %05X)",
+                     $time, cpu_address, tvram_q, tvram_byte(cpu_address), eu_pc);
+        end
+    end
     // Reads: memory and code fetches want the aligned WORD; I/O and INTA are
     // byte affairs, served on both lanes. mem8_of() is the old bench's whole
     // din mux, evaluated at the aligned neighbours.
@@ -492,6 +585,32 @@ module tb_pc98_v30;
             // The text plane: the memory-count display lands here. Keep the
             // first row of cells (code + attribute) for the final dump.
             if (a >= 20'hA0000 && a < 20'hA4000) begin
+                // Every guest write into the switch area, blocked or not.
+                // The block exists because the POST's VRAM clear would stomp
+                // the switch -- but if the POST also writes the option-ROM
+                // scan RESULT here, the block is what keeps a stale bit alive,
+                // and that bit is what BASIC far-calls through. There are only
+                // a handful of these in a boot, so never filter them.
+                if (a[13] && a[12:5] == 8'hFF)
+                    $display("  %8t  MEMSW[%05X] <= %02X  (BLOCKED)  (eu_pc %05X  eu.pc %04X)",
+                             $time, a, d, eu_pc, mem_wr_pc_q);
+                // Same gate as tvram_wren: the eight memory-switch bytes and
+                // the rest of attribute cells 0xFF0-0xFFF are write-protected
+                // in the module, so the shadow must refuse them too.
+                if (!(a[13] && a[12:5] == 8'hFF))
+                    tv_shadow[a[13:0]] <= d;
+                if (a < 20'hA2000)
+                    tvram_page[a[12:0]] <= d;
+                else
+                    tvram_apage[a[12:0]] <= d;
+                tvram_attr_wr <= tvram_attr_wr + ((a >= 20'hA2000) ? 1 : 0);
+                // The prompt ends in '?', and nothing earlier in the boot
+                // writes one: that is the moment a keystroke becomes useful.
+                if (a < 20'hA2000 && d == 8'h3F && !prompt_seen) begin
+                    prompt_seen <= 1'b1;
+                    $display("  %8t  PROMPT: '?' at cell %0d -- key channel armed",
+                             $time, a[12:0] / 2);
+                end
                 if (a < 20'hA0200)
                     tvram_code[a[8:0]]  <= d;
                 else if (a >= 20'hA2000 && a < 20'hA2200)
@@ -501,18 +620,62 @@ module tb_pc98_v30;
                 // and after that every PRINTABLE byte into the code plane --
                 // which is the memory count, if the BIOS ever writes one. The
                 // clear itself is 20487 writes of 00 and E1 and says nothing.
-                if (tvram_wr_count < 40
+                // The old filter was `a < A2000 && printable`, which hid the
+                // ATTRIBUTE plane completely -- so "nothing writes A2000" was
+                // never a measurement, only the filter speaking. And it
+                // printed a[15:0], which for a word write cannot tell the two
+                // byte lanes apart from a repeat into the same cell. Print the
+                // full 20-bit address, and once the prompt is up print BOTH
+                // planes: that window is short and it is the one that matters.
+                if (tvram_wr_count < 40 || prompt_seen
                  || (a < 20'hA2000 && d >= 8'h20 && d < 8'h7F))
-                    $display("  %8t  TVRAM[%04X] <= %02X %s  (eu_pc %05X)",
-                             $time, a[15:0], d,
+                    $display("  %8t  TVRAM[%05X] <= %02X %s  (eu_pc %05X  eu.pc %04X  word %04X)",
+                             $time, a, d,
                              (d >= 8'h20 && d < 8'h7F)
                                  ? string'({"'", d, "'"}) : "   ",
-                             eu_pc);
+                             eu_pc, mem_wr_pc_q, mem_wr_word_q);
             end
         end
     endtask
     logic [7:0] tvram_code [0:511];   // A0000-A01FF, first row of cells
     logic [7:0] tvram_attr [0:511];   // A2000-A21FF
+    logic [15:0] mem_wr_pc_q = 16'h0000;   // the EU's live pc at the write
+    logic [7:0] tvram_page [0:8191];  // A0000-A1FFF, the whole code plane
+    logic [7:0] tvram_apage[0:8191];  // A2000-A3FFF, the whole attribute plane
+    int         tvram_attr_wr = 0;
+
+    // Row 0 and a per-cell glyph decode answer "is the character path right".
+    // They cannot answer "what does the machine SAY", and what the machine
+    // says arrives on row 0 and row 24 at once -- N88-BASIC's prompt and its
+    // function-key labels. Read the plane back as a screen.
+    task automatic tvram_screen_dump;
+        int r, c, ch;
+        begin
+            $display("        ---- text screen (80x25) ----");
+            for (r = 0; r < 25; r = r + 1) begin
+                $write("        %02d |", r);
+                for (c = 0; c < 80; c = c + 1) begin
+                    ch = tvram_page[(r*80 + c)*2];
+                    if (ch >= 8'h20 && ch < 8'h7F) $write("%c", ch);
+                    else                           $write(".");
+                end
+                $display("|");
+            end
+            $display("        attribute-plane writes so far: %0d", tvram_attr_wr);
+            $write("        row0 attrs:");
+            for (c = 0; c < 24; c = c + 1) $write(" %02X", tvram_apage[c*2]);
+            $display("");
+        end
+    endtask
+
+    // One screen every two guest seconds: enough to watch text appear
+    // without drowning the log. +noscreen turns it off.
+    initial begin
+        if (!$test$plusargs("noscreen")) forever begin
+            #2_000_000_000;   // 2 s at 1ns/1ps
+            tvram_screen_dump;
+        end
+    end
     int          tvram_wr_count = 0;
 
     // The two GDC status ports, named here because the trace below has to
@@ -585,6 +748,14 @@ module tb_pc98_v30;
         if (~mem_wr_n) begin
             mem_wr_data_q <= cpu_data_bus;      // the addressed lane, for the models
             mem_wr_word_q <= DATA_O;
+            // The RETIRED pc lags by enough instructions to name the wrong
+            // writer: the character store at F4912 and a blanking store ~100
+            // instructions later both reported eu_pc F4915, which sent the
+            // whole diagnosis after an effective-address bug that does not
+            // exist (sim/tb_v30_ea_disp16.sv: every [reg+disp16] form is
+            // correct). The EU's live pc names the instruction that is
+            // actually on the bus.
+            mem_wr_pc_q   <= u_cpu.u_eu.pc;
         end
 
         // Memory write, on the trailing edge, and never into ROM. One commit
@@ -781,6 +952,33 @@ module tb_pc98_v30;
     always_ff @(posedge clk_chipset)
         pit_write_cycle_q <= pit_write_cycle;
 
+    // What the guest ACTUALLY programs into the interval timer.  The whole
+    // timer question -- is counter 0 in mode 3, and who put it there -- was
+    // being argued from the output pin, and the pin cannot distinguish "the
+    // ROM never wrote mode 3" from "mode 3 is broken".  Writes are rare (a
+    // handful per boot pass), so log every one with its decode and the PC
+    // that issued it.
+    logic [1:0] pit_wr_addr_q = 2'b00;
+    logic [7:0] pit_wr_data_q = 8'h00;
+    always_ff @(posedge clk_chipset) begin
+        if (pit_write_cycle) begin
+            pit_wr_addr_q <= pit_addr_eff;
+            pit_wr_data_q <= pit_data_eff;
+        end
+        if (pit_write_done) begin
+            string sd;
+            if (pit_seed_active) sd = "  (seed)"; else sd = "";
+            if (pit_wr_addr_q == 2'b11)
+                $display("  %8t  PIT WR ctrl <= %02X  sel %0d rl %0d mode %0d bcd %0d%s  (eu_pc %05X)",
+                         $time, pit_wr_data_q, pit_wr_data_q[7:6],
+                         pit_wr_data_q[5:4], pit_wr_data_q[3:1],
+                         pit_wr_data_q[0], sd, eu_pc);
+            else
+                $display("  %8t  PIT WR ctr%0d <= %02X%s  (eu_pc %05X)",
+                         $time, pit_wr_addr_q, pit_wr_data_q, sd, eu_pc);
+        end
+    end
+
     task automatic pit_seed_write(input logic [1:0] a, input logic [7:0] d);
         begin
             @(negedge clk_chipset);
@@ -916,7 +1114,7 @@ module tb_pc98_v30;
         // IRQ0 is the PIT's output pin itself: mode 3's square wave gives one
         // rising edge -- one edge-triggered request -- per programmed period,
         // which is exactly np2's NEVENT_ITIMER cadence.
-        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, 1'b0, timer_out0})
+        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, kbd_rx_full, timer_out0})
     );
 
     KF8259 u_pic2 (
@@ -1498,8 +1696,8 @@ module tb_pc98_v30;
         // the real one is still powering up during the first POST.
         if (!$test$plusargs("kbdpass1")) kbd_disabled = 1'b1;
     end
-    wire [7:0]  kbd_status = kbd_disabled ? 8'h00 :
-                             kbd_ack_armed ? 8'h02 : 8'h00;
+    wire [7:0]  kbd_status = (kbd_rx_full
+                              | (~kbd_disabled & kbd_ack_armed)) ? 8'h02 : 8'h00;
 
     // Pass-1 cut: the dirty pass-1 BASIC can't reach its own reset (the
     // F202 stack breaks it first). The real pass 1 waits for the keyboard
@@ -1536,8 +1734,141 @@ module tb_pc98_v30;
     end
 
     wire kbd_stat_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0043);
-    wire kbd_data_iocycle = ~kbd_disabled &
-                             ~io_rd_n & (cpu_address[15:0] == 16'h0041) & kbd_ack_armed;
+    wire kbd_data_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0041)
+                          & (kbd_rx_full | (~kbd_disabled & kbd_ack_armed));
+
+    // ---- key injection: +keys=<text> -----------------------------------------
+    //
+    // N88-BASIC stops at "How many files (0-15)?" and does not start its own
+    // 100 Hz timer until the prompt is answered -- the INT 1Ch AH=02 call at
+    // F44CB is downstream of it -- so none of the PIT work can be verified
+    // without a keystroke. IRQ1 on the master PIC was tied to 1'b0 here,
+    // which is why no keystroke could ever arrive however the 8251 answered.
+    //
+    // A PC-98 keyboard sends a make code over the 8251 at 0x41 and raises
+    // IRQ1; the release is the same code with bit 7 set. The codes below are
+    // the machine's matrix: ESC 00, 1-9 01-09, 0 0A, RETURN 1C, QWERTYUIOP
+    // 10-19, ASDFGHJKL 1D-25, ZXCVBNM 29-2F, SPACE 34.
+    //
+    // The channel is armed only after the prompt has been drawn, so it cannot
+    // perturb the POST's keyboard test -- whose TIMEOUT is the path that
+    // reaches BASIC at all (see the kbd_ack_delay comment above).
+    //
+    //   +keys=3\r                three file buffers, then RETURN
+    //   +keys=\r                 take the default
+    //   +keys=3\r\w\wPRINT_2\r    answer, wait, then type a command
+    //
+    // "\r" and "\n" are two-character escapes for RETURN, and "\w" waits a
+    // second of guest time -- a plusarg cannot carry a control character, and
+    // the keystrokes after the prompt have to land after BASIC is ready for
+    // them. "_" is SPACE, so a command with spaces survives the shell's word
+    // splitting on the way into the container.
+    logic [7:0] kbd_rx_data = 8'h00;
+    logic       kbd_rx_full = 1'b0;
+    logic       prompt_seen = 1'b0;
+    string      keys_arg    = "";
+    int         keys_len    = 0;
+    wire        kbd_rd_done = kbd_rd_d & ~kbd_rd;
+
+    function automatic logic [7:0] pc98_scan(input logic [7:0] ch);
+        begin
+            pc98_scan = 8'hFF;
+            if (ch >= "1" && ch <= "9")      pc98_scan = 8'h01 + (ch - "1");
+            else if (ch == "0")              pc98_scan = 8'h0A;
+            else if (ch == 8'h0D)            pc98_scan = 8'h1C;   // RETURN
+            else if (ch == 8'h1B)            pc98_scan = 8'h00;   // ESC
+            else if (ch == " ")              pc98_scan = 8'h34;
+            else if (ch == "-")              pc98_scan = 8'h0B;
+            else if (ch == ",")              pc98_scan = 8'h30;
+            else if (ch == ".")              pc98_scan = 8'h31;
+            else if (ch == "/")              pc98_scan = 8'h32;
+            else begin
+                // fold case, then the three letter rows
+                logic [7:0] u;
+                u = (ch >= "a" && ch <= "z") ? (ch - 8'h20) : ch;
+                case (u)
+                    "Q": pc98_scan = 8'h10;  "W": pc98_scan = 8'h11;
+                    "E": pc98_scan = 8'h12;  "R": pc98_scan = 8'h13;
+                    "T": pc98_scan = 8'h14;  "Y": pc98_scan = 8'h15;
+                    "U": pc98_scan = 8'h16;  "I": pc98_scan = 8'h17;
+                    "O": pc98_scan = 8'h18;  "P": pc98_scan = 8'h19;
+                    "A": pc98_scan = 8'h1D;  "S": pc98_scan = 8'h1E;
+                    "D": pc98_scan = 8'h1F;  "F": pc98_scan = 8'h20;
+                    "G": pc98_scan = 8'h21;  "H": pc98_scan = 8'h22;
+                    "J": pc98_scan = 8'h23;  "K": pc98_scan = 8'h24;
+                    "L": pc98_scan = 8'h25;  "Z": pc98_scan = 8'h29;
+                    "X": pc98_scan = 8'h2A;  "C": pc98_scan = 8'h2B;
+                    "V": pc98_scan = 8'h2C;  "B": pc98_scan = 8'h2D;
+                    "N": pc98_scan = 8'h2E;  "M": pc98_scan = 8'h2F;
+                    default: pc98_scan = 8'hFF;
+                endcase
+            end
+        end
+    endfunction
+
+    // Offer one byte and wait for the guest to take it. A byte nobody reads
+    // is the interesting failure (no INT 09 handler, or IRQ1 still masked),
+    // so say so rather than stalling the run.
+    task automatic kbd_send(input logic [7:0] code);
+        int guard;
+        begin
+            kbd_rx_data = code;
+            kbd_rx_full = 1'b1;
+            guard = 0;
+            while (guard < 8_000_000) begin      // ~186 ms of bench clock
+                @(posedge clk_chipset);
+                guard = guard + 1;
+                if (kbd_rd_done) break;
+            end
+            if (guard >= 8_000_000)
+                $display("  %8t  KEY %02X WENT UNREAD -- no INT 09, or IRQ1 masked", $time, code);
+            else
+                $display("  %8t  KEY %02X taken", $time, code);
+            kbd_rx_full = 1'b0;
+            @(posedge clk_chipset);
+        end
+    endtask
+
+    initial begin
+        logic [7:0] ch, sc;
+        int k;
+        if (!$value$plusargs("keys=%s", keys_arg)) keys_arg = "";
+        keys_len = keys_arg.len();
+        if (keys_len > 0) begin
+            $display("KEYS: \"%s\" queued, armed on the prompt", keys_arg);
+            wait (prompt_seen);
+            $display("  %8t  KEYS: prompt seen, feeding", $time);
+            #50_000_000;                          // 50 ms of settling
+            k = 0;
+            while (k < keys_len) begin
+                ch = keys_arg.getc(k);
+                if (ch == "\\" && (k + 1) < keys_len) begin
+                    if (keys_arg.getc(k+1) == "r" || keys_arg.getc(k+1) == "n") begin
+                        ch = 8'h0D;
+                        k  = k + 1;
+                    end
+                    else if (keys_arg.getc(k+1) == "w") begin
+                        $display("  %8t  KEYS: waiting a second", $time);
+                        #1_000_000_000;
+                        k  = k + 2;
+                        continue;
+                    end
+                end
+                if (ch == "_") ch = " ";
+                sc = pc98_scan(ch);
+                if (sc == 8'hFF)
+                    $display("  %8t  KEYS: no PC-98 code for %02X -- skipped", $time, ch);
+                else begin
+                    kbd_send(sc);               // make
+                    #10_000_000;
+                    kbd_send(sc | 8'h80);       // break
+                    #30_000_000;
+                end
+                k = k + 1;
+            end
+            $display("  %8t  KEYS: all sent", $time);
+        end
+    end
 
     // ---- 2DD drive control (0xCC) and a minimal FDC --------------------------
     //
@@ -1648,6 +1979,14 @@ module tb_pc98_v30;
     // cover a whole 1.4-second ITF cycle.
     logic basic_trace = 1'b0;
     int   basic_n = 0;
+    int   ext_hook_n = 0;
+    logic basic_cs_q = 1'b0;        // eu_cs was E800 at the previous retirement
+    int   basic_rearm = 0;
+    int   basic_rearm_cap = 32;
+    initial begin
+        int v;
+        if ($value$plusargs("basicrearm=%d", v)) basic_rearm_cap = v;
+    end
     int   itf_ck_n = 0;
     int   m;
     logic [19:0] disp_pc [0:63];
@@ -1690,6 +2029,31 @@ module tb_pc98_v30;
                          ram[{dbg_ss,4'd0}+20'h15C4], ram[{dbg_ss,4'd0}+20'h15C5],
                          ram[{dbg_ss,4'd0}+20'h15C6], ram[{dbg_ss,4'd0}+20'h15C7]);
             end
+            // BASIC's extension-hook walk, which is where the run derails
+            // AFTER printing the full banner:
+            //
+            //   E8288  84 26 96 15     TEST [1596h],AH     ; mask of hooks
+            //   E828C  74 04           JZ   8292           ; bit clear: skip
+            //   E828E  FF 1E 98 15     CALL FAR [1598h]    ; bit set: call it
+            //   E8292  81 06 9A 15 ..  ADD  [159Ah],200h   ; next segment
+            //
+            // The caller walks AH = 01,02,04,40,08,80,10,20. The first two
+            // gates were shut, the next three were OPEN, and the third open
+            // one put CS:IP at CC00:0292 -- graphics VRAM, all zeros. On a
+            // machine with no option ROMs every gate should stay shut, so the
+            // question is what [DS:1596] holds and where [DS:1598] points.
+            if (ext_hook_n < 48
+                && (eu_pc == 20'hE8288 || eu_pc == 20'hE828E)) begin
+                ext_hook_n <= ext_hook_n + 1;
+                $display("  %8t  EXTHOOK %05X  ds %04X  ah %02X  [%05X]=%02X  far=%04X:%04X",
+                         $time, eu_pc, dbg_regs[191:176], dbg_regs[15:8],
+                         {dbg_regs[191:176], 4'd0} + 20'h1596,
+                         ram[{dbg_regs[191:176], 4'd0} + 20'h1596],
+                         {ram[{dbg_regs[191:176], 4'd0} + 20'h159B],
+                          ram[{dbg_regs[191:176], 4'd0} + 20'h159A]},
+                         {ram[{dbg_regs[191:176], 4'd0} + 20'h1599],
+                          ram[{dbg_regs[191:176], 4'd0} + 20'h1598]});
+            end
             // The ITF's memory sizing, at the two points where it has just
             // verified a 64 KB pair: BX is the segment it tested, DH the
             // running block count, and CF says whether the compare held.
@@ -1710,9 +2074,21 @@ module tb_pc98_v30;
             end
             // Re-arm a 1000-entry window when a FRESH BASIC entry happens
             // (back in the E800 ROM after having exhausted the cap before).
+            //
+            // This was a LEVEL on eu_pc in E8000-FFFFF, and that range is the
+            // WHOLE ROM -- ITF and FD80 POST included -- so the window re-armed
+            // on every retirement and the trace never ended: 45 million lines
+            // per run, the simulator spending its time in $display and the
+            // docker log outgrowing the disk. The "fresh entry" it wanted is
+            // the EDGE of a re-entry into the E800 segment, and it needs a cap:
+            // +basicrearm=<n> raises it.
+            basic_cs_q <= (eu_cs == 16'hE800);
             if (basic_trace && basic_n >= 50000
-                && (eu_pc >= 20'hE8000) && (eu_pc <= 20'hFFFFF))
-                basic_n <= 49000;
+                && (eu_cs == 16'hE800) && !basic_cs_q
+                && basic_rearm < basic_rearm_cap) begin
+                basic_rearm <= basic_rearm + 1;
+                basic_n     <= 49000;
+            end
             if (basic_trace && basic_n < 50000) begin
                 basic_n <= basic_n + 1;
                 $display("    B%0d  %05X  op %02X  ax %04X bx %04X cx %04X dx %04X si %04X di %04X  ss %04X ds %04X es %04X sp %04X",
@@ -1840,6 +2216,7 @@ module tb_pc98_v30;
     int i, j;
     initial begin
         for (i = 0; i < 1048576; i = i + 1) ram[i] = 8'h00;
+        for (i = 0; i < 16384;   i = i + 1) tv_shadow[i] = 8'h00;
         $readmemh("itf.hex",  itf);
         $readmemh("bios.hex", bios);
         // WORKAROUND: the 0x66 prefix at E800:0001 (file 0x0001) makes the
@@ -1915,6 +2292,7 @@ module tb_pc98_v30;
         $display("IVT 08 : %04X:%04X   IVT 18: %04X:%04X",
                  {ram[8'h23],ram[8'h22]}, {ram[8'h21],ram[8'h20]},
                  {ram[8'h63],ram[8'h62]}, {ram[8'h61],ram[8'h60]});
+        tvram_screen_dump;
         $display("TVRAM writes %0d; first row, code words:", tvram_wr_count);
         for (i = 0; i < 16; i = i + 1)
             $display("  cell %02d: code %04X  attr %04X", i,
