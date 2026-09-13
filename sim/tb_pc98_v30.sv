@@ -254,9 +254,65 @@ module tb_pc98_v30;
         .vid_attr     (tvram_fil_dummy)
     );
 
+    // ---- text VRAM reads, per lane -----------------------------------------
+    //
+    // pc98_tvram's CPU port is BYTE wide and REGISTERED: cpu_addr in, cpu_q
+    // one cycle later. din_of() below is evaluated twice per word read, once
+    // per lane, and `tvram_q` is driven by cpu_address -- not by the address
+    // din_of was asked about. So a word read of the text plane returned the
+    // SAME byte on both lanes: {b, b}.
+    //
+    // That is not cosmetic. BASIC's F4AF2 reads a cell as a word and tests AH
+    // -- the cell's HIGH byte -- to decide whether the cell holds a kanji
+    // left-half:
+    //
+    //   F4AF2  26 8B 05        MOV AX,ES:[DI]
+    //   F4AFA  80 FC FF        CMP AH,0FFh
+    //
+    // With AH carrying the character instead of 0x00, every ANK character
+    // looked like a kanji half, and the caller (F3D89) blanked the cell it had
+    // just printed. That is the empty screen, and it was the bench's.
+    //
+    // The real machine cannot have this bug: the shipped design runs the 8088,
+    // which reads a word as two byte cycles, and Peripherals' data_bus_out is
+    // eight bits wide. So keep the module -- it is here to cover the WRITE
+    // path -- and answer reads from a shadow that mirrors it exactly,
+    // memory-switch registers included.
+    logic [7:0] tv_shadow [0:16383];
+
+    // The module's reset values; the guest's writes to them are blocked, so
+    // they are constant for the whole run.
+    function automatic logic [7:0] memsw_default(input logic [2:0] i);
+        case (i)
+            3'd0: memsw_default = 8'h48;   // A3FE2
+            3'd1: memsw_default = 8'h05;   // A3FE6
+            3'd2: memsw_default = 8'h04;   // A3FEA = 640 KB
+            3'd3: memsw_default = 8'h08;   // A3FEE
+            3'd4: memsw_default = 8'h01;   // A3FF2
+            3'd5: memsw_default = 8'h00;   // A3FF6
+            3'd6: memsw_default = 8'h00;   // A3FFA
+            default: memsw_default = 8'h6E; // A3FFE
+        endcase
+    endfunction
+
+    function automatic logic [7:0] tvram_byte(input logic [19:0] a);
+        logic [13:0] o;
+        logic [11:0] cel;
+        begin
+            o   = a[13:0];
+            cel = o[12:1];
+            // the eight switch bytes: attribute plane, cells 0xFF0-0xFFF, odd
+            // ('cell' is a Verilog-2001 config reserved word -- hence 'cel')
+            if (o[13] && cel[11:4] == 8'hFF && cel[0])
+                tvram_byte = memsw_default(cel[3:1]);
+            else
+                tvram_byte = tv_shadow[o];
+        end
+    endfunction
+
     function automatic logic [7:0] din_of(input logic [19:0] a);
         din_of = ~mem_rd_n    ? (is_rom(a) ? rom_byte(a)
-                              : ((a[19:14] == 6'b101000) ? tvram_q : ram[a]))
+                              : ((a[19:14] == 6'b101000) ? tvram_byte(a) : ram[a]))
                : ~inta_n      ? ((~pic2_data_bus_io) ? pic2_dout : pic1_dout)
                : pit_iocycle  ? pit_dout
                : dma_iocycle  ? dma_dout
@@ -273,6 +329,20 @@ module tb_pc98_v30;
     endfunction
 
     wire [7:0] din = din_of(cpu_address);
+
+    // The module still answers reads on its own port; say so once if it ever
+    // disagrees with the shadow on the addressed lane. Abandoning the module's
+    // read path silently is how a write-path bench stops covering the thing it
+    // was built for.
+    logic tv_q_checked = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (!tv_q_checked && ~mem_rd_n && cpu_address[19:14] == 6'b101000
+            && tvram_q !== tvram_byte(cpu_address)) begin
+            tv_q_checked <= 1'b1;
+            $display("  %8t  TVRAM READ MISMATCH at %05X: module %02X, shadow %02X  (eu_pc %05X)",
+                     $time, cpu_address, tvram_q, tvram_byte(cpu_address), eu_pc);
+        end
+    end
     // Reads: memory and code fetches want the aligned WORD; I/O and INTA are
     // byte affairs, served on both lanes. mem8_of() is the old bench's whole
     // din mux, evaluated at the aligned neighbours.
@@ -492,6 +562,11 @@ module tb_pc98_v30;
             // The text plane: the memory-count display lands here. Keep the
             // first row of cells (code + attribute) for the final dump.
             if (a >= 20'hA0000 && a < 20'hA4000) begin
+                // Same gate as tvram_wren: the eight memory-switch bytes and
+                // the rest of attribute cells 0xFF0-0xFFF are write-protected
+                // in the module, so the shadow must refuse them too.
+                if (!(a[13] && a[12:5] == 8'hFF))
+                    tv_shadow[a[13:0]] <= d;
                 if (a < 20'hA2000)
                     tvram_page[a[12:0]] <= d;
                 else
@@ -2072,6 +2147,7 @@ module tb_pc98_v30;
     int i, j;
     initial begin
         for (i = 0; i < 1048576; i = i + 1) ram[i] = 8'h00;
+        for (i = 0; i < 16384;   i = i + 1) tv_shadow[i] = 8'h00;
         $readmemh("itf.hex",  itf);
         $readmemh("bios.hex", bios);
         // WORKAROUND: the 0x66 prefix at E800:0001 (file 0x0001) makes the
