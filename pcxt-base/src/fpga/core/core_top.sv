@@ -2254,7 +2254,8 @@ module core_top (
     // ext port the CPU is parked on hold acknowledge and the DMA controller's
     // acknowledge is masked, so steering the shadow out from under the peek
     // disturbs no fetch.
-    wire tandy_bios_flag = bios_write_n ? itf_bank : tandy_bios_write;
+    wire tandy_bios_flag = st_run      ? 1'b0 :
+                           bios_write_n ? itf_bank : tandy_bios_write;
     // Only ever set during a loader write: the guest has no font bank to see.
     wire font_bank_load  = ~bios_write_n & font_bank_write;
 `else

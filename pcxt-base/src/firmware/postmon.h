@@ -19,11 +19,22 @@ void postmon_toggle(void);
 
 // Capture the guest ROM bytes the panel shows.
 //
-// Must be called with the guest still held. The peek goes through the
-// self-test master, which shares CHIPSET's external-access port with the guest;
-// with the 8088 running it loses the arbitration and returns zeros, which reads
-// as an empty ROM and is not. Called once from main() before the guest is
-// released, the read happens in the conditions the master was built for.
+// Must be called with the guest still held: the peek shares CHIPSET's
+// external-access port with the guest, and taking the bus while the 8088 runs
+// disturbs the very boot this panel exists to watch. Called once from main()
+// before the guest is released, the read happens in the conditions the master
+// was built for.
+//
+// What the peek returns is the image in the MAIN bank -- what the loader wrote
+// at that guest address. That is a property of the RTL, not of the call site:
+// RAM.sv overlays the ITF shadow on F8000-FFFFF for the guest's bank bit, and
+// the master's accesses are routed around the overlay precisely because this
+// compare is against the BIOS image (core_top's tandy_bios_flag). Before that,
+// with PC98_BOOT_ITF powering up in the ITF bank, the peek read the ITF copy
+// at physical 1FD800 -- zero padding past the ITF's code -- and the panel read
+// BAD 0EC: all 256 bytes zero against a table that itself holds 20 zero bytes,
+// 236 mismatches, GOT all 00. Not an empty ROM and not lost arbitration: the
+// wrong bank of a working one.
 void postmon_capture_rom(void);
 
 #endif
