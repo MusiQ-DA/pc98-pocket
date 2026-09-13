@@ -1872,6 +1872,7 @@ module core_top (
         .rdata            (st_rdata),
         .initilized_sdram (initilized_sdram),
         .loader_busy      (ioctl_download),
+        .bus_granted      (chipset_aen),   // CHIPSET's address_enable_n = HLDA
         .run              (st_run),
         .write_n          (st_wr_n),
         .read_n           (st_rd_n),
@@ -2241,6 +2242,18 @@ module core_top (
     // One flag drives both directions of the shadow, as the Tandy path does:
     // while the loader writes it routes the ITF image in, and at all other
     // times it decides which of the two ROMs the guest sees at F8000.
+    //
+    // The self-test master is the one reader that must NOT see the shadow. It
+    // is a diagnostic window onto the image the loader wrote at a guest
+    // address, and with PC98_BOOT_ITF the machine powers up with itf_bank set
+    // -- so postmon_capture_rom, which peeks FD800 with the guest still held,
+    // was reading the ITF copy at 1FD800 instead of the BIOS at FD800. The ITF
+    // image holds nothing but zero padding from file offset 0x5800 up, so the
+    // panel read BAD 0EC: 236 of 256 bytes "wrong", which is exactly 256 minus
+    // the 20 bytes the BIOS entry itself holds as zero. While st_run owns the
+    // ext port the CPU is parked on hold acknowledge and the DMA controller's
+    // acknowledge is masked, so steering the shadow out from under the peek
+    // disturbs no fetch.
     wire tandy_bios_flag = bios_write_n ? itf_bank : tandy_bios_write;
     // Only ever set during a loader write: the guest has no font bank to see.
     wire font_bank_load  = ~bios_write_n & font_bank_write;
