@@ -492,6 +492,8 @@ module tb_pc98_v30;
             // The text plane: the memory-count display lands here. Keep the
             // first row of cells (code + attribute) for the final dump.
             if (a >= 20'hA0000 && a < 20'hA4000) begin
+                if (a < 20'hA2000)
+                    tvram_page[a[12:0]] <= d;
                 if (a < 20'hA0200)
                     tvram_code[a[8:0]]  <= d;
                 else if (a >= 20'hA2000 && a < 20'hA2200)
@@ -513,6 +515,36 @@ module tb_pc98_v30;
     endtask
     logic [7:0] tvram_code [0:511];   // A0000-A01FF, first row of cells
     logic [7:0] tvram_attr [0:511];   // A2000-A21FF
+    logic [7:0] tvram_page [0:8191];  // A0000-A1FFF, the whole code plane
+
+    // Row 0 and a per-cell glyph decode answer "is the character path right".
+    // They cannot answer "what does the machine SAY", and what the machine
+    // says arrives on row 0 and row 24 at once -- N88-BASIC's prompt and its
+    // function-key labels. Read the plane back as a screen.
+    task automatic tvram_screen_dump;
+        int r, c, ch;
+        begin
+            $display("        ---- text screen (80x25) ----");
+            for (r = 0; r < 25; r = r + 1) begin
+                $write("        %02d |", r);
+                for (c = 0; c < 80; c = c + 1) begin
+                    ch = tvram_page[(r*80 + c)*2];
+                    if (ch >= 8'h20 && ch < 8'h7F) $write("%c", ch);
+                    else                           $write(".");
+                end
+                $display("|");
+            end
+        end
+    endtask
+
+    // One screen every two guest seconds: enough to watch text appear
+    // without drowning the log. +noscreen turns it off.
+    initial begin
+        if (!$test$plusargs("noscreen")) forever begin
+            #2_000_000_000;   // 2 s at 1ns/1ps
+            tvram_screen_dump;
+        end
+    end
     int          tvram_wr_count = 0;
 
     // The two GDC status ports, named here because the trace below has to
@@ -1961,6 +1993,7 @@ module tb_pc98_v30;
         $display("IVT 08 : %04X:%04X   IVT 18: %04X:%04X",
                  {ram[8'h23],ram[8'h22]}, {ram[8'h21],ram[8'h20]},
                  {ram[8'h63],ram[8'h62]}, {ram[8'h61],ram[8'h60]});
+        tvram_screen_dump;
         $display("TVRAM writes %0d; first row, code words:", tvram_wr_count);
         for (i = 0; i < 16; i = i + 1)
             $display("  cell %02d: code %04X  attr %04X", i,
