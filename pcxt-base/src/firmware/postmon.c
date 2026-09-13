@@ -82,7 +82,12 @@ static uint8_t guest_peek(uint32_t addr)
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
-#define PANEL_H 162
+// 182, not 162: TVF and FRB were drawn on row 92 on top of RD0, three fields
+// in one row's worth of space. They cannot share a row either -- TVF is a
+// label plus eight bytes (28 of the panel's 40 columns) and FRB is another
+// 13 -- so the panel grew by two rows rather than one of them staying
+// unreadable. OSD_FB_HEIGHT is 200, so 182 still fits.
+#define PANEL_H 182
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -591,16 +596,16 @@ void post_mon_tick(void)
             {
                 uint32_t f0 = *POST_TVF0, f1 = *POST_TVF1;
                 uint32_t frb = *POST_FRB;
-                osd_draw_string(&fb, 4, 92, "TVF", OSD_LABEL);
+                osd_draw_string(&fb, 4, 162, "TVF", OSD_LABEL);
                 for (int i = 0; i < 4; i++)
-                    hex(4 + (4 + i * 3) * 8, 92, (f0 >> (i * 8)) & 0xFFu, 2);
+                    hex(4 + (4 + i * 3) * 8, 162, (f0 >> (i * 8)) & 0xFFu, 2);
                 for (int i = 0; i < 4; i++)
-                    hex(4 + (16 + i * 3) * 8, 92, (f1 >> (i * 8)) & 0xFFu, 2);
+                    hex(4 + (16 + i * 3) * 8, 162, (f1 >> (i * 8)) & 0xFFu, 2);
                 // Byte pairs are {hi,lo} per cell: 00 4B 00 41 ... is clean.
                 // FRB: the kanji fetch path. f_valid beats x f_req pulses.
-                osd_draw_string(&fb, 4 + 20 * 8, 92, "FRB", OSD_LABEL);
-                hex(4 + 24 * 8, 92, (frb >> 16) & 0xFFFFu, 4);
-                hex(4 + 29 * 8, 92, frb & 0xFFFFu, 4);
+                osd_draw_string(&fb, 4, 172, "FRB", OSD_LABEL);
+                hex(4 + 4 * 8, 172, (frb >> 16) & 0xFFFFu, 4);
+                hex(4 + 9 * 8, 172, frb & 0xFFFFu, 4);
             }
         }
 
