@@ -781,6 +781,33 @@ module tb_pc98_v30;
     always_ff @(posedge clk_chipset)
         pit_write_cycle_q <= pit_write_cycle;
 
+    // What the guest ACTUALLY programs into the interval timer.  The whole
+    // timer question -- is counter 0 in mode 3, and who put it there -- was
+    // being argued from the output pin, and the pin cannot distinguish "the
+    // ROM never wrote mode 3" from "mode 3 is broken".  Writes are rare (a
+    // handful per boot pass), so log every one with its decode and the PC
+    // that issued it.
+    logic [1:0] pit_wr_addr_q = 2'b00;
+    logic [7:0] pit_wr_data_q = 8'h00;
+    always_ff @(posedge clk_chipset) begin
+        if (pit_write_cycle) begin
+            pit_wr_addr_q <= pit_addr_eff;
+            pit_wr_data_q <= pit_data_eff;
+        end
+        if (pit_write_done) begin
+            string sd;
+            if (pit_seed_active) sd = "  (seed)"; else sd = "";
+            if (pit_wr_addr_q == 2'b11)
+                $display("  %8t  PIT WR ctrl <= %02X  sel %0d rl %0d mode %0d bcd %0d%s  (eu_pc %05X)",
+                         $time, pit_wr_data_q, pit_wr_data_q[7:6],
+                         pit_wr_data_q[5:4], pit_wr_data_q[3:1],
+                         pit_wr_data_q[0], sd, eu_pc);
+            else
+                $display("  %8t  PIT WR ctr%0d <= %02X%s  (eu_pc %05X)",
+                         $time, pit_wr_addr_q, pit_wr_data_q, sd, eu_pc);
+        end
+    end
+
     task automatic pit_seed_write(input logic [1:0] a, input logic [7:0] d);
         begin
             @(negedge clk_chipset);
