@@ -287,6 +287,10 @@ static const char *bind_name(int btn)
         return "Show Credits";
     case BTNFN_VIDEO:
         return "Switch Video";
+#ifdef POST_MONITOR
+    case BTNFN_POSTMON:
+        return "POST Overlay";
+#endif
     default:
         break;
     }
@@ -320,6 +324,9 @@ static const uint8_t keybind_cycle[] = {
     0xF0u + BTNFN_CREDITS,  // Show Credits
 #if ENABLE_HGC
     0xF0u + BTNFN_VIDEO, // Switch Video
+#endif
+#ifdef POST_MONITOR
+    0xF0u + BTNFN_POSTMON, // POST Overlay -- show/hide the diagnostic strip
 #endif
     BIND_KEY_SLOT, // pick a key
 };

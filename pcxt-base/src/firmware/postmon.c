@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include "softcpu_regs.h"
 #include "vkb_draw.h"
+#include "vkb_ui.h"
 #include "postmon.h"
 #include "sdramtest.h"
 
@@ -189,10 +190,28 @@ void postmon_capture_rom(void)
     }
 }
 
+// Shown by default -- see postmon.h. The panel and the vkb/settings overlays
+// share one framebuffer and one VKB_CTRL bit, so hiding the panel must not pull
+// the bit out from under an overlay that is open.
+static int postmon_shown = 1;
+
+void postmon_toggle(void)
+{
+    postmon_shown = !postmon_shown;
+}
+
 void post_mon_tick(void)
 {
     static uint32_t last_status = 0xFFFFFFFFu;
     static int placed = 0;
+
+    if (!postmon_shown) {
+        if (!vkb_ui_overlay_open()) {
+            *VKB_CTRL = 0u;
+        }
+        placed = 0; // re-place the strip when it comes back
+        return;
+    }
 
     // POST_STATUS freezes after the first pass through POST, so this settles;
     // the counters below keep moving and are what show a reboot loop.

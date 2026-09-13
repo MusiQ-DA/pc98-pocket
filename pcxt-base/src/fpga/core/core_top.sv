@@ -1046,6 +1046,14 @@ module core_top (
         .tvram_row0_code            (tvram_row0_code),
         .tvram_row0_hi              (tvram_row0_hi),
         .tvram_row0_attr            (tvram_row0_attr),
+        // The row buffer's own view of row 0 and its fill counters. These were
+        // connected to post_monitor, which has no such ports, so Quartus threw
+        // three "can't find port" errors and every build since has been red.
+        // softcpu_subsystem is what declares them (inputs) and what serves them
+        // to the firmware at 0x5000009C/A0/A4 -- POST_TVF0/TVF1/FRB.
+        .pc98_tvfill_view           (pc98_tvfill_view),
+        .pc98_rowbuf_freq_count     (pc98_rowbuf_freq_count),
+        .pc98_rowbuf_fvalid_count   (pc98_rowbuf_fvalid_count),
         .raw_strobes                (raw_strobes),
         .wr_low_cycles              (wr_low_cycles),
         .rd_low_cycles              (rd_low_cycles),
@@ -1935,9 +1943,6 @@ module core_top (
         .tvram_last_addr(tvram_last_addr),
         .tvram_row0_code(tvram_row0_code),
         .tvram_row0_hi  (tvram_row0_hi),
-        .pc98_tvfill_view (pc98_tvfill_view),
-        .pc98_rowbuf_freq_count (pc98_rowbuf_freq_count),
-        .pc98_rowbuf_fvalid_count (pc98_rowbuf_fvalid_count),
         .tvram_row0_attr(tvram_row0_attr),
         .raw_strobes    (raw_strobes),
         .wr_low_cycles  (wr_low_cycles),

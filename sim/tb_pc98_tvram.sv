@@ -135,13 +135,19 @@ module tb_pc98_tvram;
 
         // ------------------------------------------------------ memory switch
         //
-        // A3FE2+4i must read back the np2 defaults after reset, and guest
+        // A3FE2+4i must read back the machine's defaults after reset, and guest
         // writes into A3FE0-A3FFF must be silently dropped -- the POST's
         // 16 KB screen clear (FECBB) sweeps straight through here on a real
         // machine too, and the battery-backed switch survives it.
+        //
+        // These are np2's table (pccore.c) EXCEPT memsw[3], which is 0x00 here
+        // and 0x08 there. That byte is the mask of installed option ROMs, and
+        // N88-BASIC far-calls every window whose bit is set; 0x08 names CC00,
+        // which this machine does not populate, so the guest jumped into an
+        // empty window right after printing its banner. See pc98_tvram.sv.
         begin : memsw_test
             logic [7:0] expect_sw [0:7];
-            expect_sw = '{8'h48, 8'h05, 8'h04, 8'h08, 8'h01, 8'h00, 8'h00, 8'h6E};
+            expect_sw = '{8'h48, 8'h05, 8'h04, 8'h00, 8'h01, 8'h00, 8'h00, 8'h6E};
             for (int i = 0; i < 8; i++) begin
                 rd(14'h3FE2 + 14'(i*4), got);
                 if (got !== expect_sw[i]) begin
