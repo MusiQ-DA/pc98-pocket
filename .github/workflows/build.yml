@@ -125,6 +125,15 @@ jobs:
           ./obj_ga/g | tee ga.log
           grep -q "RESULT: PASS" ga.log
 
+      - name: port 0x68 drives the ANK/kanji mode the row buffer honours
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_gdc_mode1 \
+            -Isim -Ipcxt-base/src/fpga/core \
+            sim/tb_pc98_gdc_mode1.sv pcxt-base/src/fpga/core/pc98_gdc_mode1.sv \
+            -o m --Mdir obj_m1
+          ./obj_m1/m | tee m1.log
+          grep -q "RESULT: PASS" m1.log
+
       - name: raster is the 640x400 one PC-98 software expects
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_timing \

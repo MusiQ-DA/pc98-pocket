@@ -1806,10 +1806,53 @@ end
     wire  [3:0] pc98_ank_line;
     wire  [7:0] pc98_ank_row;
 
+    // ------------------------------------------------ GDC mode (port 0x68)
+    //
+    // The mode flip-flops the BIOS drives around its CRT and CG-window
+    // sequences -- see pc98_gdc_mode1's header for the ROM measurements. Bit
+    // 5 decides whether a cell's high byte can make it a kanji at all, and
+    // the POST's own printer (FE0F0) stores single bytes into the code plane
+    // and never clears that high byte, so the machine HAS to be able to
+    // honour the "all cells ANK" mode the same way np2's gdc_restorekacmode
+    // does. Same trailing-edge shape as the system port above it: address and
+    // command do not change together, and a mode flip taken from a glitched
+    // sweep through 0x68 would change every cell's width.
+    wire  mode68_select = pc98_io_exact & (address[7:0] == 8'h68);
+    wire  mode68_addr   = ~address_enable_n & (address[15:8] == 8'h00)
+                        & (address[7:0] == 8'h68);
+    logic       mode68_prev_wr_n;
+    logic [7:0] mode68_data;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            mode68_prev_wr_n <= 1'b1;
+            mode68_data      <= 8'h00;
+        end else begin
+            mode68_prev_wr_n <= io_write_n;
+            if (mode68_select & ~io_write_n)
+                mode68_data <= internal_data_bus;
+        end
+    end
+
+    wire mode68_wr = io_write_n & ~mode68_prev_wr_n & mode68_addr;
+
+    wire [7:0] pc98_bitac;
+
+    pc98_gdc_mode1 u_gdc_mode1 (
+        .clk  (clock),
+        .rst  (reset),
+        .wr   (mode68_wr),
+        .d    (mode68_data),
+        // mode1 itself: nothing downstream wants the other bits yet -- bit 3's
+        // 8x8/8x16 font select and the graphics-display bits are future work.
+        .mode1 (),
+        .bitac(pc98_bitac)
+    );
+
     pc98_glyph_rowbuf u_pc98_rowbuf (
         .clk(clock), .rst(reset),
         .fill_start(pc98_row_fill), .row_base(pc98_row_base),
-        .bitac(8'hFF), .busy(pc98_fill_busy),
+        .bitac(pc98_bitac), .busy(pc98_fill_busy),
         .tv_cell(tvram_fil_cell),
         .tv_char_lo(tvram_vid_char_lo), .tv_char_hi(tvram_vid_char_hi),
         .f_req(pc98_f_req), .f_addr(pc98_f_addr), .f_busy(pc98_f_busy),

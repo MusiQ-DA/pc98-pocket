@@ -103,6 +103,12 @@ module pc98_cgwindow (
     pc98_glyph_addr u_addr (
         .char_lo    (code[7:0]),
         .char_hi    (code[15:8]),
+        // NOT the GDC mode mask. np2's cgwindowset decides this window by the
+        // code alone -- `!(cr->code & 0xff00)` takes the ANK path whatever
+        // mode1 bit 5 says -- so 8'hFF (high byte decides) is the faithful
+        // wiring here, and the BIOS's OUT 68h,0Bh around window access is
+        // about the rest of the machine, not the window. The ROW BUFFER is
+        // the consumer that has to honour bitac (Peripherals.sv).
         .bitac      (8'hFF),
         .right_half (fetch_half),
         .line       (4'd0),
