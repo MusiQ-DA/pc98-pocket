@@ -262,7 +262,7 @@ module tb_pc98_v30;
                : dma_iocycle  ? dma_dout
                : pic1_iocycle ? pic1_dout
                : pic2_iocycle ? pic2_dout
-               : kbd_data_iocycle ? 8'h60
+               : kbd_data_iocycle ? (kbd_rx_full ? kbd_rx_data : 8'h60)
                : kbd_stat_iocycle ? kbd_status
                : gdc_stat_iocycle ? gdc_status_mock
                : cc_ioread   ? (cc_latch | 8'h30)
@@ -494,6 +494,13 @@ module tb_pc98_v30;
             if (a >= 20'hA0000 && a < 20'hA4000) begin
                 if (a < 20'hA2000)
                     tvram_page[a[12:0]] <= d;
+                // The prompt ends in '?', and nothing earlier in the boot
+                // writes one: that is the moment a keystroke becomes useful.
+                if (a < 20'hA2000 && d == 8'h3F && !prompt_seen) begin
+                    prompt_seen <= 1'b1;
+                    $display("  %8t  PROMPT: '?' at cell %0d -- key channel armed",
+                             $time, a[12:0] / 2);
+                end
                 if (a < 20'hA0200)
                     tvram_code[a[8:0]]  <= d;
                 else if (a >= 20'hA2000 && a < 20'hA2200)
@@ -975,7 +982,7 @@ module tb_pc98_v30;
         // IRQ0 is the PIT's output pin itself: mode 3's square wave gives one
         // rising edge -- one edge-triggered request -- per programmed period,
         // which is exactly np2's NEVENT_ITIMER cadence.
-        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, 1'b0, timer_out0})
+        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, kbd_rx_full, timer_out0})
     );
 
     KF8259 u_pic2 (
@@ -1557,8 +1564,8 @@ module tb_pc98_v30;
         // the real one is still powering up during the first POST.
         if (!$test$plusargs("kbdpass1")) kbd_disabled = 1'b1;
     end
-    wire [7:0]  kbd_status = kbd_disabled ? 8'h00 :
-                             kbd_ack_armed ? 8'h02 : 8'h00;
+    wire [7:0]  kbd_status = (kbd_rx_full
+                              | (~kbd_disabled & kbd_ack_armed)) ? 8'h02 : 8'h00;
 
     // Pass-1 cut: the dirty pass-1 BASIC can't reach its own reset (the
     // F202 stack breaks it first). The real pass 1 waits for the keyboard
@@ -1595,8 +1602,130 @@ module tb_pc98_v30;
     end
 
     wire kbd_stat_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0043);
-    wire kbd_data_iocycle = ~kbd_disabled &
-                             ~io_rd_n & (cpu_address[15:0] == 16'h0041) & kbd_ack_armed;
+    wire kbd_data_iocycle = ~io_rd_n & (cpu_address[15:0] == 16'h0041)
+                          & (kbd_rx_full | (~kbd_disabled & kbd_ack_armed));
+
+    // ---- key injection: +keys=<text> -----------------------------------------
+    //
+    // N88-BASIC stops at "How many files (0-15)?" and does not start its own
+    // 100 Hz timer until the prompt is answered -- the INT 1Ch AH=02 call at
+    // F44CB is downstream of it -- so none of the PIT work can be verified
+    // without a keystroke. IRQ1 on the master PIC was tied to 1'b0 here,
+    // which is why no keystroke could ever arrive however the 8251 answered.
+    //
+    // A PC-98 keyboard sends a make code over the 8251 at 0x41 and raises
+    // IRQ1; the release is the same code with bit 7 set. The codes below are
+    // the machine's matrix: ESC 00, 1-9 01-09, 0 0A, RETURN 1C, QWERTYUIOP
+    // 10-19, ASDFGHJKL 1D-25, ZXCVBNM 29-2F, SPACE 34.
+    //
+    // The channel is armed only after the prompt has been drawn, so it cannot
+    // perturb the POST's keyboard test -- whose TIMEOUT is the path that
+    // reaches BASIC at all (see the kbd_ack_delay comment above).
+    //
+    //   +keys=3\r      three file buffers, then RETURN
+    //   +keys=\r       take the default
+    //
+    // "\r" and "\n" are accepted as two-character escapes, since a plusarg
+    // cannot carry a control character.
+    logic [7:0] kbd_rx_data = 8'h00;
+    logic       kbd_rx_full = 1'b0;
+    logic       prompt_seen = 1'b0;
+    string      keys_arg    = "";
+    int         keys_len    = 0;
+    wire        kbd_rd_done = kbd_rd_d & ~kbd_rd;
+
+    function automatic logic [7:0] pc98_scan(input logic [7:0] ch);
+        begin
+            pc98_scan = 8'hFF;
+            if (ch >= "1" && ch <= "9")      pc98_scan = 8'h01 + (ch - "1");
+            else if (ch == "0")              pc98_scan = 8'h0A;
+            else if (ch == 8'h0D)            pc98_scan = 8'h1C;   // RETURN
+            else if (ch == 8'h1B)            pc98_scan = 8'h00;   // ESC
+            else if (ch == " ")              pc98_scan = 8'h34;
+            else if (ch == "-")              pc98_scan = 8'h0B;
+            else if (ch == ",")              pc98_scan = 8'h30;
+            else if (ch == ".")              pc98_scan = 8'h31;
+            else if (ch == "/")              pc98_scan = 8'h32;
+            else begin
+                // fold case, then the three letter rows
+                logic [7:0] u;
+                u = (ch >= "a" && ch <= "z") ? (ch - 8'h20) : ch;
+                case (u)
+                    "Q": pc98_scan = 8'h10;  "W": pc98_scan = 8'h11;
+                    "E": pc98_scan = 8'h12;  "R": pc98_scan = 8'h13;
+                    "T": pc98_scan = 8'h14;  "Y": pc98_scan = 8'h15;
+                    "U": pc98_scan = 8'h16;  "I": pc98_scan = 8'h17;
+                    "O": pc98_scan = 8'h18;  "P": pc98_scan = 8'h19;
+                    "A": pc98_scan = 8'h1D;  "S": pc98_scan = 8'h1E;
+                    "D": pc98_scan = 8'h1F;  "F": pc98_scan = 8'h20;
+                    "G": pc98_scan = 8'h21;  "H": pc98_scan = 8'h22;
+                    "J": pc98_scan = 8'h23;  "K": pc98_scan = 8'h24;
+                    "L": pc98_scan = 8'h25;  "Z": pc98_scan = 8'h29;
+                    "X": pc98_scan = 8'h2A;  "C": pc98_scan = 8'h2B;
+                    "V": pc98_scan = 8'h2C;  "B": pc98_scan = 8'h2D;
+                    "N": pc98_scan = 8'h2E;  "M": pc98_scan = 8'h2F;
+                    default: pc98_scan = 8'hFF;
+                endcase
+            end
+        end
+    endfunction
+
+    // Offer one byte and wait for the guest to take it. A byte nobody reads
+    // is the interesting failure (no INT 09 handler, or IRQ1 still masked),
+    // so say so rather than stalling the run.
+    task automatic kbd_send(input logic [7:0] code);
+        int guard;
+        begin
+            kbd_rx_data = code;
+            kbd_rx_full = 1'b1;
+            guard = 0;
+            while (guard < 8_000_000) begin      // ~186 ms of bench clock
+                @(posedge clk_chipset);
+                guard = guard + 1;
+                if (kbd_rd_done) break;
+            end
+            if (guard >= 8_000_000)
+                $display("  %8t  KEY %02X WENT UNREAD -- no INT 09, or IRQ1 masked", $time, code);
+            else
+                $display("  %8t  KEY %02X taken", $time, code);
+            kbd_rx_full = 1'b0;
+            @(posedge clk_chipset);
+        end
+    endtask
+
+    initial begin
+        logic [7:0] ch, sc;
+        int k;
+        if (!$value$plusargs("keys=%s", keys_arg)) keys_arg = "";
+        keys_len = keys_arg.len();
+        if (keys_len > 0) begin
+            $display("KEYS: \"%s\" queued, armed on the prompt", keys_arg);
+            wait (prompt_seen);
+            $display("  %8t  KEYS: prompt seen, feeding", $time);
+            #50_000_000;                          // 50 ms of settling
+            k = 0;
+            while (k < keys_len) begin
+                ch = keys_arg.getc(k);
+                if (ch == "\\" && (k + 1) < keys_len) begin
+                    if (keys_arg.getc(k+1) == "r" || keys_arg.getc(k+1) == "n") begin
+                        ch = 8'h0D;
+                        k  = k + 1;
+                    end
+                end
+                sc = pc98_scan(ch);
+                if (sc == 8'hFF)
+                    $display("  %8t  KEYS: no PC-98 code for %02X -- skipped", $time, ch);
+                else begin
+                    kbd_send(sc);               // make
+                    #10_000_000;
+                    kbd_send(sc | 8'h80);       // break
+                    #30_000_000;
+                end
+                k = k + 1;
+            end
+            $display("  %8t  KEYS: all sent", $time);
+        end
+    end
 
     // ---- 2DD drive control (0xCC) and a minimal FDC --------------------------
     //
