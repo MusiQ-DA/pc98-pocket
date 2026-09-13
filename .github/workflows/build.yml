@@ -200,6 +200,9 @@ jobs:
       - name: no two OSD fields overlap
         run: python3 scripts/check_osd_layout.py
 
+      - name: the virtual keyboard's tables are sane
+        run: python3 scripts/check_vkb_layout.py
+
       - name: no module input left dangling in core_top
         run: python3 scripts/check_unconnected.py
 
