@@ -181,6 +181,15 @@ jobs:
           ./obj_beep/b | tee beep.log
           grep -q "RESULT: PASS" beep.log
 
+      - name: Set-2 keys translate to PC-98 make/break codes
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_kbd_ps2 \
+            -Isim -Ipcxt-base/src/fpga/core \
+            sim/tb_pc98_kbd_ps2.sv pcxt-base/src/fpga/core/pc98_kbd_ps2.sv \
+            -o k --Mdir obj_kb
+          ./obj_kb/k | tee kb.log
+          grep -q "RESULT: PASS" kb.log
+
       - name: ITF bank switches on 0x043D and not on a glitch
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_itf_bank \

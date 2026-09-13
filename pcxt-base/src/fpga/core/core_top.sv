@@ -1271,6 +1271,47 @@ module core_top (
         .kbd_stb      (dock_key_stb)
     );
 
+`ifdef MACHINE_PC98
+    //
+    // PC-98 keyboard: the Set-2 stream above is a PC/XT keyboard's language;
+    // a PC-98 keyboard is a serial device on the 8251 at ports 0x41/0x43 that
+    // sends one matrix byte per key, bit 7 set on release. pc98_kbd_ps2 taps
+    // the SAME stream -- it never stalls it, KFPS2KB's kb_ready keeps the
+    // pace -- and re-emits each key as a PC-98 event.
+    //
+    // INTEGRATION CONTRACT (whoever wires the 8251 model, see PC98_KBD_8251
+    // in Peripherals.sv): take these three into the 8251's key-injection
+    // queue, OR-ed with the simulation +keys channel (the bench has no dock,
+    // so the two sources never fire together).
+    //   pc98_key_stb  -- TOGGLES per event (sample against a delayed copy)
+    //   pc98_key_make -- 1 = press, 0 = release
+    //   pc98_key_code -- matrix code; bit 7 is already set on a release, so
+    //                    the byte can go on the 8251's wire as-is
+    // Until that port exists the wires stand ready here, unconnected.
+    //
+    // The cutover also needs KFPS2KB's keybord_interrupt taken OFF the master
+    // PIC's IRQ1 in the PC-98 build (Peripherals.sv, the MACHINE_PC98 leg of
+    // u_KF8259's interrupt_request): while it stays wired, every docked key
+    // press also raises the PC/XT's INT 09 and port 0x60 answers with an XT
+    // keycode. That edit lives in the 8251 agent's territory, so it is only
+    // recorded here.
+    //
+    wire       pc98_key_stb;
+    wire       pc98_key_make;
+    wire [7:0] pc98_key_code;
+
+    pc98_kbd_ps2 u_pc98_kbd_ps2 (
+        .clk      (clk_chipset),
+        .reset    (reset),
+        .kb_byte  (kb_byte),
+        .kb_valid (kb_valid),
+        .kb_ready (kb_ready),
+        .key_stb  (pc98_key_stb),
+        .key_make (pc98_key_make),
+        .key_code (pc98_key_code)
+    );
+`endif
+
     //
     // Mouse: docked USB mouse (cont4_*) -> Microsoft serial byte stream on COM1, paced
     // by RTS. In mouse mode the pad's D-pad and A/B drive it too; quiet under an overlay.
