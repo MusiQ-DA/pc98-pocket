@@ -24,10 +24,13 @@ set_global_assignment -name VERILOG_MACRO "MACHINE_PC98=1"
 # the machine has a picture to show.
 # set_global_assignment -name VERILOG_MACRO "PC98_DEBUG_BANDS=1"
 
-# A 16x16 white square at the OSD's coordinate origin, so a build that still
-# shows no panel says whether osd_hcnt/osd_vcnt reach the window at all.
-# Remove once the OSD is up.
-set_global_assignment -name VERILOG_MACRO "PC98_OSD_MARK=1"
+# A 16x16 white square at the OSD's coordinate origin, to prove osd_hcnt and
+# osd_vcnt reach the window at all. Its own comment said to remove it once the
+# OSD was up; the OSD has been up for a while and the square has been sitting
+# in the top-left corner of every build since, reading as a double-width tofu
+# because that is exactly the size of one. It is first in pocket_video's
+# overlay mux, so it covers whatever the guest draws there.
+# set_global_assignment -name VERILOG_MACRO "PC98_OSD_MARK=1"
 
 # Boot the ITF, not the BIOS.
 #
