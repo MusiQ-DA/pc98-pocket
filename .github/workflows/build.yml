@@ -157,6 +157,15 @@ jobs:
           ./obj_tx/x | tee tx.log
           grep -q "RESULT: PASS" tx.log
 
+      - name: the first cell of a line is drawn, not lost to the blanking
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_firstcell \
+            -Isim -Ipcxt-base/src/fpga/core \
+            sim/tb_pc98_firstcell.sv pcxt-base/src/fpga/core/pc98_text_render.sv \
+            -o q --Mdir obj_fc
+          ./obj_fc/q | tee fc.log
+          grep -q "RESULT: PASS" fc.log
+
       - name: ITF bank switches on 0x043D and not on a glitch
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_itf_bank \
