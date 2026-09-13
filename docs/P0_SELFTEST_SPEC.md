@@ -78,6 +78,14 @@ assign ext_access_request   = st_active ? 1'b1           : bios_access_request;
 `st_*` は softcpu_subsystem から来る。**`ext_access_request` を忘れないこと**
 (BIOS ローダがこれで RAM.sv にアクセス権を主張している)。
 
+**コマンドストローブは HLDA を待ってから**(`sdram_selftest_master` の S_GRANT)。
+BUS_ARBITER は `ext_access_request` を受けてから最大2 CPUサイクル(約27 clk)後まで
+アドレスマルチプレクサが `cpu_address` 側のままで、その間に `memory_read_n_ext` を
+下げると RAM.sv はゲストCPUのアドレス(保持中は0)でリクエストを受けてしまう。
+HOLD を出してすぐコマンドを出すのは 8088 バスのプロトコル違反でもあり、
+「peek が定数 11 11 11 11 を返す」実機観測の正体。現在の master は
+`bus_granted`(CHIPSET の `address_enable_n`)が立つのを待ってからストローブする。
+
 ### 3.3 `softcpu_subsystem.sv` — MMIO 4本
 
 **`0x5` 領域を新設する(実装時に変更)。** `0x2` の空きを使う案だったが、既存デコードが

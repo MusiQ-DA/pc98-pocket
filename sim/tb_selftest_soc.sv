@@ -82,6 +82,9 @@ module tb_selftest_soc;
         .done(st_done), .rdata(st_rdata),
         .initilized_sdram(initilized_sdram),
         .loader_busy(1'b0),
+        // No BUS_ARBITER in this bench: RAM.sv is driven directly, so the bus
+        // is granted the moment the master asks for it.
+        .bus_granted(1'b1),
         .run(st_run), .write_n(st_wr_n), .read_n(st_rd_n),
         .ram_rw_complete(ram_rw_complete), .ext_rdata(ram_data_out)
     );

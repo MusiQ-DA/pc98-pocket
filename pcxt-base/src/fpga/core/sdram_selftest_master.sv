@@ -46,6 +46,17 @@ module sdram_selftest_master #(
     input  wire        initilized_sdram,
     input  wire        loader_busy,      // the BIOS loader always wins
 
+    // CHIPSET's address_enable_n, i.e. HLDA for this master. The command
+    // strobes must wait for it: BUS_ARBITER needs up to two cpu_ce periods
+    // after ext_access_request before its address mux selects address_ext, and
+    // until then it still presents cpu_address while our memory_read_n_ext is
+    // already low -- RAM.sv would latch the guest CPU's address (0, with the
+    // guest held) and the read would return one fixed word for every address.
+    // That is the "11 11 11 11 -- a constant, not memory" the PC/AT postmon
+    // once read through this master, and it is a HOLD-protocol violation on
+    // any 8088 bus: raise HOLD, wait for HLDA, then command.
+    input  wire        bus_granted,
+
     // CHIPSET external-access port.
     output logic       run,              // drives ext_access_request and the muxes
     output logic       write_n,
@@ -54,7 +65,7 @@ module sdram_selftest_master #(
     input  wire  [7:0] ext_rdata
 );
 
-    typedef enum logic [1:0] { S_IDLE, S_ACCESS, S_DRAIN } state_t;
+    typedef enum logic [1:0] { S_IDLE, S_GRANT, S_ACCESS, S_DRAIN } state_t;
     state_t state;
 
     logic [15:0] guard;
@@ -78,7 +89,19 @@ module sdram_selftest_master #(
                 read_n  <= 1'b1;
                 done    <= 1'b0;
                 if (grant && initilized_sdram) begin
-                    run     <= 1'b1;
+                    run     <= 1'b1;    // request the bus, commands still idle
+                    guard   <= 16'd0;
+                    state   <= S_GRANT;
+                end
+            end
+
+            // HOLD is up; wait for HLDA before strobing. The guard is the
+            // backstop for a build with no arbiter in front of this master:
+            // after GUARD cycles the access is attempted anyway, which is
+            // exactly what the old single-state behavior did.
+            S_GRANT: begin
+                guard <= guard + 16'd1;
+                if (bus_granted || (guard == 16'(GUARD))) begin
                     write_n <= ~we;
                     read_n  <=  we;
                     guard   <= 16'd0;
