@@ -403,6 +403,7 @@ module tb_pc98_v30;
     // will show up as a spin, which is itself the finding.
     logic [15:0] io_port_hist [0:63];
     int          io_n = 0;
+    int          out68_n = 0;
     logic        saw_043d = 1'b0;
     logic [7:0]  last_043d = 8'h00;
 
@@ -647,9 +648,11 @@ module tb_pc98_v30;
     // Row 0 and a per-cell glyph decode answer "is the character path right".
     // They cannot answer "what does the machine SAY", and what the machine
     // says arrives on row 0 and row 24 at once -- N88-BASIC's prompt and its
-    // function-key labels. Read the plane back as a screen.
+    // function-key labels. Read the plane back as a screen. The trailing
+    // count of nonzero high bytes is the pairing the row buffer would apply:
+    // every starred cell is one the renderer calls KANJI.
     task automatic tvram_screen_dump;
-        int r, c, ch;
+        int r, c, ch, knj;
         begin
             $display("        ---- text screen (80x25) ----");
             for (r = 0; r < 25; r = r + 1) begin
@@ -661,6 +664,11 @@ module tb_pc98_v30;
                 end
                 $display("|");
             end
+            knj = 0;
+            for (r = 0; r < 25; r = r + 1)
+                for (c = 0; c < 80; c = c + 1)
+                    if (tvram_page[(r*80 + c)*2 + 1] != 8'h00) knj++;
+            $display("        cells with nonzero high byte: %0d/2000 (kanji-flagged)", knj);
             $display("        attribute-plane writes so far: %0d", tvram_attr_wr);
             $write("        row0 attrs:");
             for (c = 0; c < 24; c = c + 1) $write(" %02X", tvram_apage[c*2]);
@@ -843,6 +851,18 @@ module tb_pc98_v30;
                 else if (cpu_data_bus == 8'h12) itf_bank <= 1'b0;
                 $display("  %8t  OUT 043D, %02X   -> itf_bank %0d",
                          $time, cpu_data_bus, (cpu_data_bus == 8'h12) ? 0 : 1);
+            end
+            // Port 0x68, the GDC mode flip-flops. The ROM toggles bit 5
+            // (0x0A clear / 0x0B set: KAC/ANK, the force-single-width mode
+            // np2's gdc_restorekacmode derives bitac from) around its
+            // CG-window and CRT-init sequences. Logging every write pins the
+            // mode the screen is actually in, which the disassembly alone
+            // cannot -- the writes are table-driven.
+            if (cpu_address[15:0] == 16'h0068) begin
+                out68_n <= out68_n + 1;
+                $display("  %8t  OUT 0068, %02X   bit5=%0d bit3=%0d  (eu_pc %05X)",
+                         $time, cpu_data_bus, (cpu_data_bus >> 5) & 1,
+                         (cpu_data_bus >> 3) & 1, eu_pc);
             end
         end
     end

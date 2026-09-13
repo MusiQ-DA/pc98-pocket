@@ -645,6 +645,15 @@ bit0   = 1 でセット、0 でリセット
 **リセット値**(`gdc_biosreset()`): DIPSW1-1 が OFF なら **mode1 = 0x98**、
 ON なら **0x80**(このとき `crt15khz = 3`)。
 
+**実装(core/pc98_gdc_mode1.sv)**: 0x68 の書き込みをデコードし、bit5 から
+`bitac` を出力して `pc98_glyph_rowbuf` の ANK/漢字判定に供給する
+(bit5 セット = `bitac 0x00` = 全セル強制 ANK)。リセット値 0x98。
+bit5 以外の mode1 ビットは未実装(bit3 の 8x8 フォント選択などは今後)。
+ROM 側の実測: BIOS は FE272/FEB96/FEC6A で 0x0B、FE267/FEC12/FECA1 で 0x0A を
+書き、CRT 初期化のテーブルウォーカ(FE8B8-FE8E9)は INT 18h モードバイトの
+bit3 で 0x0A/0x0B を選ぶ。ITF は CG ウィンドウ試験の前後で 0x0B/0x0A
+(itf.rom file 0751/07D5)。
+
 **モードフリップフロップ 2(0x6A write)**: `dat` が 0x00-0x07 のときは
 ビットセット/リセット(内部 bit = `(dat>>1)&3`)。
 
