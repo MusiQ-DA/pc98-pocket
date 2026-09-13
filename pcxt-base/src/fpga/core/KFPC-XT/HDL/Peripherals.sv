@@ -1664,27 +1664,24 @@ end
     // protected-mode block, which is the truth about this CPU rather than a
     // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
-    // 0x31 = 0x12, and the value is under investigation -- read this before
-    // changing it again.
+    // 0x31 = 0xE3. The detour through 0x12 is worth recording.
     //
-    // Run #193 answered 0x10 and the hardware printed the memory count, then
-    // looped at the CS f800 -> 0000 jump the comment above describes. Bit 1
-    // fixes that jump, so the answer became 0xE3 -- which also flipped bits
-    // 0, 4, 5, 6, 7 -- and on hardware the screen then showed NOTHING AT ALL,
-    // earlier than the count. Measured, both directions, on the Pocket.
+    // When 0xE3 first went in, the Pocket's screen went completely blank and
+    // this value was the obvious suspect, so it was walked back to 0x12 --
+    // 0x10's bits plus bit 1, with bit 4 SET so the ITF initialises the
+    // memory switch itself. The screen stayed blank, and the real cause
+    // turned out to be the keyboard 8251 claiming ports 0x41/0x43. With that
+    // gated off the picture came back -- and said MEMORY SWITCH ERROR,
+    // because bit 4 set asks the ROM to write a switch that pc98_tvram
+    // write-protects: the ITF's initialisation is swallowed and the readback
+    // disagrees with what it just wrote.
     //
-    // 0x12 is the smallest step that keeps what worked: 0x10's bits (bit 4
-    // SET, so the ITF initialises the memory switch itself) plus bit 1. The
-    // switch registers in pc98_tvram are write-protected, so the ITF's own
-    // initialisation writes are dropped and the pre-seeded 640 KB value
-    // stands -- which is the combination bit 4 clear was trying to arrange by
-    // asking the ROM not to write at all.
-    //
-    // Bit 0 (boot-first: int 1E, skip IVT[1F]) is NOT set here yet. It
-    // belongs to the BASIC path, not the memory count, and adding it in the
-    // same build would make a black screen ambiguous again.
+    // So bit 4 stays CLEAR, which is what it was always for: the switch is
+    // the tvram's to hold, pre-seeded at reset, not the ROM's to rewrite.
+    // Bit 0 is boot-first (int 1E, skip IVT[1F]) and bit 1 skips the
+    // protected-mode block described above.
     wire [7:0] sysport_data = sysport_35_select ? pc98_sysport_c
-                            : sysport_31_select ? 8'h12
+                            : sysport_31_select ? 8'hE3
                             : sysport_42_select ? 8'h02
                             :                     8'h00;
 
