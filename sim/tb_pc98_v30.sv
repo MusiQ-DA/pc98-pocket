@@ -522,16 +522,17 @@ module tb_pc98_v30;
                 // planes: that window is short and it is the one that matters.
                 if (tvram_wr_count < 40 || prompt_seen
                  || (a < 20'hA2000 && d >= 8'h20 && d < 8'h7F))
-                    $display("  %8t  TVRAM[%05X] <= %02X %s  (eu_pc %05X)",
+                    $display("  %8t  TVRAM[%05X] <= %02X %s  (eu_pc %05X  eu.pc %04X  word %04X)",
                              $time, a, d,
                              (d >= 8'h20 && d < 8'h7F)
                                  ? string'({"'", d, "'"}) : "   ",
-                             eu_pc);
+                             eu_pc, mem_wr_pc_q, mem_wr_word_q);
             end
         end
     endtask
     logic [7:0] tvram_code [0:511];   // A0000-A01FF, first row of cells
     logic [7:0] tvram_attr [0:511];   // A2000-A21FF
+    logic [15:0] mem_wr_pc_q = 16'h0000;   // the EU's live pc at the write
     logic [7:0] tvram_page [0:8191];  // A0000-A1FFF, the whole code plane
     logic [7:0] tvram_apage[0:8191];  // A2000-A3FFF, the whole attribute plane
     int         tvram_attr_wr = 0;
@@ -640,6 +641,14 @@ module tb_pc98_v30;
         if (~mem_wr_n) begin
             mem_wr_data_q <= cpu_data_bus;      // the addressed lane, for the models
             mem_wr_word_q <= DATA_O;
+            // The RETIRED pc lags by enough instructions to name the wrong
+            // writer: the character store at F4912 and a blanking store ~100
+            // instructions later both reported eu_pc F4915, which sent the
+            // whole diagnosis after an effective-address bug that does not
+            // exist (sim/tb_v30_ea_disp16.sv: every [reg+disp16] form is
+            // correct). The EU's live pc names the instruction that is
+            // actually on the bus.
+            mem_wr_pc_q   <= u_cpu.u_eu.pc;
         end
 
         // Memory write, on the trailing edge, and never into ROM. One commit
