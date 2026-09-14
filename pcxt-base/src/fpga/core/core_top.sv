@@ -2531,7 +2531,76 @@ module core_top (
     wire s6_3_mux;
     wire [2:0] SEGMENT;
 
-    i8088 B1    
+`ifdef MACHINE_PC98
+    // ---------------------------------------------------------------- the CPU
+    //
+    // nuV30 (the real part whose microcode the ROMs expect -- the ITF's
+    // F9476 pushes imm16, which an 8088 dispatches to an undocumented JS
+    // alias) through v30_cpu_bridge, which splits its 16-bit cycles into
+    // the 8288 world's byte cycles. The wiring follows tb_pc98_v30, the
+    // bench that booted N88-BASIC on this core, and tb_v30_bridge, the
+    // bench that proved the bridge: CLK=clk_chipset, CE gated by the
+    // bridge, INT from the PIC, DATA_I assembled by the bridge.
+    //
+    // The 8088-only loops (SEGMENT, cycle_accrate and the BIU's counter
+    // programming) simply do not exist here: the CE generator's outputs
+    // still pace the CHIPSET's RAM waits, which is where they are consumed.
+    wire [2:0]  v30_bs;
+    wire [19:0] v30_addr;
+    wire [15:0] v30_data_o, v30_data_i;
+    wire        v30_ube_n, v30_ce, v30_ready;
+    wire        v30_ss_err_unused, v30_ss_quiet_unused;
+    wire [15:0] v30_ss_rdata_unused;
+
+    v30_cpu_bridge u_v30_bridge (
+        .clk               (clk_chipset),
+        .cpu_ce_posedge    (cpu_ce_posedge),
+        .cpu_ce_negedge    (cpu_ce_negedge),
+        .reset             (reset_cpu),
+        .v30_bs            (v30_bs),
+        .v30_addr          (v30_addr),
+        .v30_ube_n         (v30_ube_n),
+        .v30_data_o        (v30_data_o),
+        .v30_data_i        (v30_data_i),
+        .v30_ready         (v30_ready),
+        .v30_ce            (v30_ce),
+        .processor_status  (processor_status),
+        .ad_out            (cpu_ad_out),
+        .cpu_data_bus      (cpu_data_bus),
+        .lock_n            (lock_n),
+        .data_bus          (data_bus),
+        .processor_ready   (processor_ready),
+        .address_enable_n  (chipset_aen),
+        .pause_core        (pause_core),
+        .biu_done          (biu_done)
+    );
+
+    v30_core u_cpu (
+        .CLK        (clk_chipset),
+        .CE         (v30_ce),
+        .RESET      (reset_cpu),
+        .READY      (v30_ready),
+        .INT        (interrupt_to_cpu),
+        .NMI        (1'b0),
+        .POLL_N     (1'b1),
+        .DATA_I     (v30_data_i),
+        .ADDR_O     (v30_addr),
+        .DATA_O     (v30_data_o),
+        .STATUS_O   (),
+        .QS         (),
+        .BS         (v30_bs),
+        .RD_N       (),
+        .UBE_N      (v30_ube_n),
+        .BUSLOCK_N  (),
+        .SS_ADDR    ('0),
+        .SS_WDATA   ('0),
+        .SS_WE      (1'b0),
+        .SS_RDATA   (v30_ss_rdata_unused),
+        .SS_ERR     (v30_ss_err_unused),
+        .SS_BUS_QUIET (v30_ss_quiet_unused)
+    );
+`else
+    i8088 B1
     (
         .CORE_CLK(clk_core),
         .CLK(clk_cpu),
@@ -2556,6 +2625,7 @@ module core_top (
         .clock_cycle_counter_decrement_value(clock_cycle_counter_decrement_value),
         .shift_read_timing(shift_read_timing)
     );
+`endif
 
     //
     // MACHINE PORT STUBS

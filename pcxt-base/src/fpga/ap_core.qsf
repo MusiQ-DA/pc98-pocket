@@ -800,6 +800,18 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/sound/saa1099.sv"
 set_global_assignment -name QIP_FILE core/sound/jt89/hdl/jt89.qip
 set_global_assignment -name QIP_FILE core/sound/jtopl/hdl/jtopl2.qip
 set_global_assignment -name QIP_FILE core/8088/8088.qip
+# The nuV30 (the PC-98's CPU) and its 8-bit-bus bridge. v30u_ucrom
+# $readmemh's its two tables from HEXDIR "rtl/ucore/" (its SYNTHESIS
+# default, relative to this project directory) -- rtl/ucore/ holds
+# symlinks to the vendored hex so there is one copy of each table.
+# SEARCH_PATH lets Quartus find the .svh files v30u_eu.sv includes.
+set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_ss_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_biu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_eu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_ucrom.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/v30_cpu_bridge.sv
+set_global_assignment -name SEARCH_PATH core/v30
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFSDRAM/HDL/KFSDRAM.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_mp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_selftest_master.sv

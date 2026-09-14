@@ -21,6 +21,9 @@ MODULES = {
     "softcpu_subsystem": "pcxt-base/src/fpga/core/softcpu_subsystem.sv",
     "post_monitor": "pcxt-base/src/fpga/core/post_monitor.sv",
     "sdram_selftest_master": "pcxt-base/src/fpga/core/sdram_selftest_master.sv",
+    # The CPU-side swap of 2026-09: the bridge carries every pin the V30
+    # sees, so a dangling input there reads as a dead machine, not a zero.
+    "v30_cpu_bridge": "pcxt-base/src/fpga/core/v30_cpu_bridge.sv",
 }
 
 

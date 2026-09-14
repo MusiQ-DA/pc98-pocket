@@ -1,16 +1,28 @@
 #!/usr/bin/env bash
-# sim_pc98_boot.sh -- run the real ITF on the real 8088 core, in simulation.
+# sim_pc98_boot.sh -- run the real ITF on the real CPU core, in simulation.
 #
 # The hardware readout says BANK 1: the guest never executes OUT 043D, 12. Where
 # it goes instead is an execution question, and execution questions are far
 # cheaper to answer here than on a fifteen-minute bitstream.
+#
+#   scripts/sim_pc98_boot.sh [+plusarg ...]        # the 8088 (the old CPU)
+#   scripts/sim_pc98_boot.sh --v30 [+plusarg ...]  # the nuV30 + v30_cpu_bridge
 #
 # Not part of CI: it needs bios.rom and itf.rom, which are not in the tree.
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SYNTH=0
-[ "${1:-}" = "--synth" ] && { SYNTH=1; shift; }
+V30=0
+DETACH=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --synth) SYNTH=1; shift ;;
+        --v30)   V30=1;   shift ;;
+        -d)      DETACH=1; shift ;;
+        *) break ;;
+    esac
+done
 # Anything left over goes straight to the simulator binary (e.g. +gate2=0).
 
 ROMS="${PC98_ROMS:-$HOME/.pc98roms}"
@@ -85,14 +97,41 @@ export DOCKER_CONFIG="$CFG"
 
 S=pcxt-base/src/fpga/core
 K=$S/KFPC-XT/HDL
-docker run --rm -v "$PWD":/work -v "$OUT":/hex -w /hex -e "SIMARGS=$*" pc98-sim bash -lc "
+V=$S/v30
+
+# v30u_ucrom's simulation default is HEXDIR="hdl/rtl/ucore/" relative to the
+# working directory -- and an empty microcode ROM is a $fatal, not a warning.
+mkdir -p "$OUT/hdl/rtl/ucore"
+cp $V/ucrom.hex $V/ucdecode.hex "$OUT/hdl/rtl/ucore/"
+
+if [ "$V30" = 1 ]; then
+  CPU_FILES="/work/$V/v30u_ss_pkg.sv \
+    /work/$V/v30_core.sv /work/$V/v30u_biu.sv /work/$V/v30u_eu.sv \
+    /work/$V/v30u_ucrom.sv /work/$S/v30_cpu_bridge.sv"
+  CPU_DEF="+define+CPU_V30+V30_BACKDOOR"
+  CPU_INC="-I/work/$V"
+else
+  CPU_FILES="/work/$S/8088/i8088.v /work/$S/8088/biu_max.v \
+    /work/$S/8088/mcl86_eu_core.v /work/$S/8088/eu_rom.v"
+  CPU_DEF=""
+  CPU_INC="-I/work/$S/8088"
+fi
+
+# The V30 build is pure CPU time in Verilator: compile the model for speed
+# (-O2, same reasoning as sim_pc98_v30.sh) and split the eval across cores.
+# NOT --x-assign/--x-initial fast: sim_pc98_v30.sh measured those changing
+# the boot.
+SIM_OPT="${SIM_OPT:--O2}"
+SIM_THREADS="${SIM_THREADS:-4}"
+
+RUN_CMD="
   set -e
-  verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot \
-    -I/work/sim -I/work/$S -I/work/$S/8088 -I/work/$K -I/work/$K/KF8288/HDL \
+  verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot $CPU_DEF \
+    --threads $SIM_THREADS -MAKEFLAGS OPT_FAST=$SIM_OPT \
+    -I/work/sim -I/work/$S $CPU_INC -I/work/$K -I/work/$K/KF8288/HDL \
     -I/work/$K/KF8253/HDL -I/work/$K/KF8259/HDL \
     /work/sim/tb_pc98_boot.sv \
-    /work/$S/8088/i8088.v /work/$S/8088/biu_max.v \
-    /work/$S/8088/mcl86_eu_core.v /work/$S/8088/eu_rom.v \
+    $CPU_FILES \
     /work/$K/pc98_fdc.sv /work/$S/pc98_kbd8251.sv \
     /work/$K/XT_CE_Generator.sv /work/$K/KF8288/HDL/KF8288.sv \
     /work/$K/KF8253/HDL/KF8253.sv /work/$K/KF8253/HDL/KF8253_Counter.sv \
@@ -102,6 +141,17 @@ docker run --rm -v "$PWD":/work -v "$OUT":/hex -w /hex -e "SIMARGS=$*" pc98-sim 
     /work/$K/KF8259/HDL/KF8259_Interrupt_Request.sv \
     /work/$K/KF8259/HDL/KF8259_Priority_Resolver.sv \
     -o boot --Mdir /tmp/obj_boot
-  cp /work/$S/8088/microcode.mem /hex/
+  [ \"$V30\" = 1 ] || cp /work/$S/8088/microcode.mem /hex/
   /tmp/obj_boot/boot \$SIMARGS
 "
+
+if [ "$DETACH" = 1 ]; then
+    NAME="${SIM_NAME:-pc98boot}"
+    docker rm -f "$NAME" >/dev/null 2>&1 || true
+    docker run -d --name "$NAME" -v "$PWD":/work -v "$OUT":/hex -w /hex \
+        -e "SIMARGS=$*" pc98-sim bash -lc "$RUN_CMD"
+    echo "detached: docker logs -f $NAME"
+else
+    docker run --rm -v "$PWD":/work -v "$OUT":/hex -w /hex \
+        -e "SIMARGS=$*" pc98-sim bash -lc "$RUN_CMD"
+fi

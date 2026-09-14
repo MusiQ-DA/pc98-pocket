@@ -1,6 +1,21 @@
 //
-// tb_pc98_boot -- run the real ITF on the real 8088 core, and watch where it
+// tb_pc98_boot -- run the real ITF on the real CPU core, and watch where it
 // goes.
+//
+// Two CPU configurations share this bench:
+//
+//   (default)      the 8088 -- the hardware's first CPU. On the ITF it
+//                  derails at F9476 (0x68 there is the undocumented JS the
+//                  8086-class decoder dispatches to; the ITF means PUSH
+//                  imm16), which is the measurement that sent the hardware
+//                  to the V30.
+//   +define+CPU_V30  the nuV30 through v30_cpu_bridge -- the machine the
+//                  hardware is becoming. The same flat memory and the same
+//                  I/O models now see the bridge's byte cycles, so this is
+//                  the end-to-end dress rehearsal of the hardware CPU path
+//                  (KF8288 + 8-bit bus + real ROMs + 8251) before the
+//                  bitstream: the instruction the 8088 tripped on must
+//                  simply execute here.
 //
 // The hardware says BANK 1: the ITF bank register is still at its reset value,
 // so the guest has never executed OUT 043D, 12. Everything upstream of that is
@@ -8,7 +23,7 @@
 // question is what the ITF does instead, and that is an execution question, not
 // a hardware one.
 //
-// This is the machine reduced to what the question needs: the 8088 core, the
+// This is the machine reduced to what the question needs: the CPU core, the
 // clock-enable generator and the bus controller exactly as core_top wires them,
 // the address latch, and one flat megabyte of memory with the two ROM images in
 // it. No chipset, no peripherals, no SDRAM -- every one of those has its own
@@ -82,6 +97,72 @@ module tb_pc98_boot;
     wire        lock_n, s6_3_mux;
     wire  [2:0] SEGMENT;
 
+`ifdef CPU_V30
+    // The nuV30 + the bridge, wired the way core_top wires them under
+    // MACHINE_PC98. V30_BACKDOOR gives the bench dbg_regs for the trace
+    // below (the 8088 build reads its registers hierarchically instead).
+    wire [2:0]  v30_bs;
+    wire [19:0] v30_addr;
+    wire [15:0] v30_data_o, v30_data_i;
+    wire        v30_ube_n, v30_ce, v30_ready;
+    wire [223:0] dbg_regs;
+    wire        dbg_first_pop, dbg_pend;
+    wire [15:0] v30_ss_rdata_unused;
+    wire        v30_ss_err_unused, v30_ss_quiet_unused;
+
+    v30_cpu_bridge u_bridge (
+        .clk               (clk_chipset),
+        .cpu_ce_posedge    (cpu_ce_posedge),
+        .cpu_ce_negedge    (cpu_ce_negedge),
+        .reset             (cpu_reset_w),
+        .v30_bs            (v30_bs),
+        .v30_addr          (v30_addr),
+        .v30_ube_n         (v30_ube_n),
+        .v30_data_o        (v30_data_o),
+        .v30_data_i        (v30_data_i),
+        .v30_ready         (v30_ready),
+        .v30_ce            (v30_ce),
+        .processor_status  (processor_status),
+        .ad_out            (cpu_ad_out),
+        .cpu_data_bus      (cpu_data_bus),
+        .lock_n            (lock_n),
+        .data_bus          (din),
+        .processor_ready   (1'b1),      // flat memory answers immediately
+        .address_enable_n  (1'b0),      // no other master in this bench
+        .pause_core        (1'b0),
+        .biu_done          (biu_done)
+    );
+
+    v30_core u_cpu (
+        .CLK       (clk_chipset),
+        .CE        (v30_ce),
+        .RESET     (cpu_reset_w),
+        .READY     (v30_ready),
+        .INT       (pic1_to_cpu),
+        .NMI       (1'b0),
+        .POLL_N    (1'b1),
+        .DATA_I    (v30_data_i),
+        .ADDR_O    (v30_addr),
+        .DATA_O    (v30_data_o),
+        .STATUS_O  (),
+        .QS        (),
+        .BS        (v30_bs),
+        .RD_N      (),
+        .UBE_N     (v30_ube_n),
+        .BUSLOCK_N (),
+        .SS_ADDR   ('0),
+        .SS_WDATA  ('0),
+        .SS_WE     (1'b0),
+        .SS_RDATA  (v30_ss_rdata_unused),
+        .SS_ERR    (v30_ss_err_unused),
+        .SS_BUS_QUIET (v30_ss_quiet_unused),
+        .bkd_load  (1'b0), .bkd_regs ('0), .bkd_queue ('0),
+        .bkd_qlen  (3'd0), .bkd_fetch_ip (16'h0000),
+        .scr_en    (1'b0), .scr_qop (2'b00),
+        .dbg_regs  (dbg_regs), .dbg_first_pop (dbg_first_pop),
+        .dbg_pend  (dbg_pend)
+    );
+`else
     i8088 u_cpu (
         .CORE_CLK  (clk_core),
         .CLK       (clk_cpu),
@@ -102,6 +183,30 @@ module tb_pc98_boot;
         .clock_cycle_counter_decrement_value (ccc_dec),
         .shift_read_timing                   (shift_read_timing)
     );
+`endif
+
+    // ---- the register view: one local name per quantity, both CPUs -------
+    // (the 8088 build reads mcl86's registers hierarchically; the V30 build
+    // reads the core's dbg_regs view, retired-instruction granularity)
+`ifdef CPU_V30
+    wire [15:0] eu_ax = dbg_regs[15:0];
+    wire [15:0] eu_bx = dbg_regs[63:48];
+    wire [15:0] eu_dx = dbg_regs[47:32];
+    wire [15:0] eu_si = dbg_regs[111:96];
+    wire [15:0] eu_di = dbg_regs[127:112];
+    wire [15:0] eu_sp = dbg_regs[79:64];
+    wire [15:0] eu_ss = dbg_regs[175:160];
+    wire        eu_cf = dbg_regs[208];
+`else
+    wire [15:0] eu_ax = u_cpu.EU_CORE.eu_register_ax;
+    wire [15:0] eu_bx = u_cpu.EU_CORE.eu_register_bx;
+    wire [15:0] eu_dx = u_cpu.EU_CORE.eu_register_dx;
+    wire [15:0] eu_si = u_cpu.EU_CORE.eu_register_si;
+    wire [15:0] eu_di = u_cpu.EU_CORE.eu_register_di;
+    wire [15:0] eu_sp = u_cpu.EU_CORE.eu_register_sp;
+    wire [15:0] eu_ss = u_cpu.BIU_CORE.biu_register_ss;
+    wire        eu_cf = u_cpu.EU_CORE.eu_flags[0];
+`endif
 
     // ---- bus controller and address latch ----------------------------------
     wire mem_rd_n, mem_wr_n, adv_mem_wr_n;
@@ -365,7 +470,11 @@ module tb_pc98_boot;
     // putting it back. One number decides it: if the low-water mark of CX
     // walks down to zero the loop is completing and being re-entered; if it
     // never gets near zero, CX is being reset under the loop's feet.
+`ifdef CPU_V30
+    wire [15:0] eu_cx = dbg_regs[31:16];
+`else
     wire [15:0] eu_cx = u_cpu.EU_CORE.eu_register_cx;
+`endif
     logic [15:0] cx_min_chunk = 16'hFFFF;
 
     // Reset by the progress loop after every chunk it prints -- through a
@@ -864,15 +973,26 @@ module tb_pc98_boot;
     // say where the CPU stopped FETCHING and not where it stopped EXECUTING.
     //
     // The queue's read pointer is the EU's instruction pointer, so CS:PFQ_ADDR
-    // is the real program counter.
+    // is the real program counter. The V30 build reads the same quantities off
+    // the core's dbg_regs view ({psw,ip,ds,ss,cs,es,di,si,bp,sp,bx,dx,cx,ax},
+    // retired-instruction granularity -- the same view tb_pc98_v30 traced).
+`ifdef CPU_V30
+    wire [15:0] eu_ip = dbg_regs[207:192];
+    wire [15:0] eu_cs = dbg_regs[159:144];
+`else
     wire [15:0] eu_ip = u_cpu.t_pfq_addr_out;
     wire [15:0] eu_cs = u_cpu.t_biu_register_cs;
+`endif
     wire [19:0] eu_pc = {eu_cs, 4'd0} + {4'd0, eu_ip};
 
     // The microcode program counter. A stuck EU is either parked on one
     // microinstruction or going round a small ring of them, and which it is
     // decides where to look.
+`ifdef CPU_V30
+    wire [12:0] urom = 13'd0;
+`else
     wire [12:0] urom = u_cpu.EU_CORE.eu_rom_address;
+`endif
     logic [12:0] urom_min = 13'h1FFF, urom_max = 13'd0;
     logic [12:0] urom_seen [0:15];
     int          urom_w = 0;
@@ -971,8 +1091,8 @@ module tb_pc98_boot;
             if (eu_cs == 16'hE800 && !basic_entry_dumped) begin
                 basic_entry_dumped <= 1'b1;
                 $display("  %8t  BENTRY: sp=%04X ss=%04X IVT1E=%04X:%04X  stk F0:%02X%02X F2:%02X%02X F4:%02X%02X F6:%02X%02X F8:%02X%02X FA:%02X%02X FC:%02X%02X FE:%02X%02X",
-                         $time, u_cpu.EU_CORE.eu_register_sp,
-                         u_cpu.BIU_CORE.biu_register_ss,
+                         $time, eu_sp,
+                         eu_ss,
                          ram[20'h0079],ram[20'h0078], ram[20'h007B],ram[20'h007A],
                          ram[20'h003F1],ram[20'h003F0], ram[20'h003F3],ram[20'h003F2],
                          ram[20'h003F5],ram[20'h003F4], ram[20'h003F7],ram[20'h003F6],
@@ -996,7 +1116,7 @@ module tb_pc98_boot;
             if (eu_pc == 20'hF9678 && itf_ck_n < 2) begin
                 itf_ck_n <= itf_ck_n + 1;
                 $display("  %8t  SIZE DISPLAY  dx %04X  bx %04X", $time,
-                         u_cpu.EU_CORE.eu_register_dx, u_cpu.EU_CORE.eu_register_bx);
+                         eu_dx, eu_bx);
                 for (m = 0; m < 48; m = m + 1)
                     $display("        %05X  op %02X",
                              disp_pc[(disp_w + 64 - 48 + m) % 64],
@@ -1006,8 +1126,8 @@ module tb_pc98_boot;
              || eu_pc == 20'hF889A || eu_pc == 20'hF8B38) begin
                 $display("  %8t  MEMSIZE at %05X  bx %04X dx %04X ax %04X  CF=%0d",
                          $time, eu_pc,
-                         u_cpu.EU_CORE.eu_register_bx, u_cpu.EU_CORE.eu_register_dx,
-                         u_cpu.EU_CORE.eu_register_ax, u_cpu.EU_CORE.eu_flags[0]);
+                         eu_bx, eu_dx,
+                         eu_ax, eu_cf);
             end
             if (1'b0 && eu_pc == 20'hF8427) begin
                 itf_ck_n <= itf_ck_n + 1;
@@ -1021,9 +1141,9 @@ module tb_pc98_boot;
                 basic_n <= basic_n + 1;
                 $display("    B%0d  %05X  op %02X  ax %04X bx %04X cx %04X dx %04X si %04X di %04X",
                          basic_n, eu_pc, urom[7:0],
-                         u_cpu.EU_CORE.eu_register_ax, u_cpu.EU_CORE.eu_register_bx,
-                         u_cpu.EU_CORE.eu_register_cx, u_cpu.EU_CORE.eu_register_dx,
-                         u_cpu.EU_CORE.eu_register_si, u_cpu.EU_CORE.eu_register_di);
+                         eu_ax, eu_bx,
+                         eu_cx, eu_dx,
+                         eu_si, eu_di);
             end
         end
     end
@@ -1041,21 +1161,21 @@ module tb_pc98_boot;
     // dumps at the save and at the retf, so what the four words held at both
     // ends of the reset is in the log.
     int  save_seen = 0, resume_seen = 0;
-    wire [19:0] resume_stack = {u_cpu.BIU_CORE.biu_register_ss[15:0], 4'd0}
-                             + {4'd0, u_cpu.EU_CORE.eu_register_sp[15:0]};
+    wire [19:0] resume_stack = {eu_ss[15:0], 4'd0}
+                             + {4'd0, eu_sp[15:0]};
     always_ff @(posedge clk_chipset) begin
         if (eu_pc == 20'hF9475 && save_seen < 4) begin
             save_seen <= save_seen + 1;
             $display("  %8t  SAVE entry: ss=%04X sp=%04X  [0404]=%02X%02X [0406]=%02X%02X",
-                     $time, u_cpu.BIU_CORE.biu_register_ss,
-                     u_cpu.EU_CORE.eu_register_sp,
+                     $time, eu_ss,
+                     eu_sp,
                      ram[20'h405], ram[20'h404], ram[20'h407], ram[20'h406]);
         end
         if (eu_pc == 20'hF8069 && resume_seen < 4) begin
             resume_seen <= resume_seen + 1;
             $display("  %8t  RESUME retf: ss=%04X sp=%04X  [0404]=%02X%02X [0406]=%02X%02X",
-                     $time, u_cpu.BIU_CORE.biu_register_ss,
-                     u_cpu.EU_CORE.eu_register_sp,
+                     $time, eu_ss,
+                     eu_sp,
                      ram[20'h405], ram[20'h404], ram[20'h407], ram[20'h406]);
             $display("        stack: %02X %02X %02X %02X   03F0: %02X..%02X  03F8: %02X..%02X  0400: %02X..%02X  0408: %02X..%02X",
                      ram[resume_stack],     ram[resume_stack + 20'd1],
@@ -1119,6 +1239,16 @@ module tb_pc98_boot;
         for (i = 0; i < 1048576; i = i + 1) ram[i] = 8'h00;
         $readmemh("itf.hex",  itf);
         $readmemh("bios.hex", bios);
+`ifdef CPU_V30
+        // WORKAROUND (same as tb_pc98_v30's, see docs/NUV30_66_VERIFICATION.md
+        // and docs/FRANKEN_ROM_LESSON.md): the 0x66 at BIOS.ROM+1 is
+        // mid-instruction data in a mixed-generation image. nuV30 executes
+        // it silicon-accurately as a 2-byte ModR/M-consuming NOP, which
+        // sends the following JA down the wrong path for THIS image's
+        // intent; a NOP in its place runs the intended stream. Only patch
+        // if present, so a fixed ROM needs no bench edit.
+        if (bios[1] == 8'h66) bios[1] = 8'h90;
+`endif
 
         $display("ITF  reset vector F8000+7FF0: %02X %02X %02X %02X %02X",
                  itf[16'h7FF0], itf[16'h7FF1], itf[16'h7FF2],
@@ -1151,8 +1281,8 @@ module tb_pc98_boot;
             kbd_state_dump;
             $write("        cx %04X min %04X  ax %04X bx %04X dx %04X  pc:",
                    eu_cx, cx_min_chunk,
-                   u_cpu.EU_CORE.eu_register_ax, u_cpu.EU_CORE.eu_register_bx,
-                   u_cpu.EU_CORE.eu_register_dx);
+                   eu_ax, eu_bx,
+                   eu_dx);
             for (j = 0; j < 16; j = j + 1)
                 $write(" %05X", pc_ring[(pc_ring_w + j) % 16]);
             $display("");
