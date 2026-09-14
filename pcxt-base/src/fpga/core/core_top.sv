@@ -655,6 +655,60 @@ module core_top (
         end
     end
 
+    // ------------------------------------------------ the chipset's own reset
+    //
+    // reset_cpu is the CPU's, and OUT 0F0h is one of its terms. CHIPSET was
+    // taking it too, so the ITF's own hand-over reset wiped the chipset -- and
+    // with it pc98_sysport_c, the 8255 port C latch that carries the shutdown
+    // flag. It reset to F9, bit 7 SET, and the ITF entry at F8005B reads bit 7
+    // to tell a power-on from a return from OUT 0F0h:
+    //
+    //     F9471   mov al,0Eh / out 37h,al   clear PC7: "resume"
+    //     F9475   push cs / push 1497       the address to come back to
+    //     F9479   mov [0406],ss / [0404],sp
+    //     F9A30   mov al,7 / out F0,al      reset me
+    //     F8005B  in al,35h / test al,80h   ... and here it read SET again
+    //
+    // so every hand-over came back as a cold boot: black screen, boot chime,
+    // MEMORY counting from 000KB, and another OUT 0F0h. The POST panel's F0
+    // count climbing is that loop. On the hardware OUT 0F0h pulses the CPU's
+    // RESET pin and nothing else -- the 8255, the PIC, the PIT and the GDCs
+    // all keep their state -- which is what the port decode's own comment says
+    // it does ("The CPU alone") and what tb_pc98_boot models, which is why the
+    // bench never reproduced the restart and the machine did.
+    //
+    // Identical to reset_cpu in every other way, including the 0x2A-cycle
+    // release, so power-up timing is unchanged.
+    logic reset_chipset = 1'b1;
+    logic [15:0] reset_chipset_count = 16'h0000;
+
+    always @(negedge clk_chipset, posedge reset)
+    begin
+        if (reset)
+        begin
+            reset_chipset <= 1'b1;
+            reset_chipset_count <= 16'h0000;
+        end
+        else if (reset_chipset)
+        begin
+            reset_chipset <= reset_cpu_ff;
+            reset_chipset_count <= 16'h0000;
+        end
+        else
+        begin
+            if (reset_chipset_count != 16'h002A)
+            begin
+                reset_chipset <= reset_cpu_ff;
+                reset_chipset_count <= reset_chipset_count + 16'h0001;
+            end
+            else
+            begin
+                reset_chipset <= 1'b0;
+                reset_chipset_count <= reset_chipset_count;
+            end
+        end
+    end
+
     always @(posedge clk_chipset, posedge reset_sdram_wire)
     begin
         if (reset_sdram_wire)
@@ -2354,7 +2408,7 @@ module core_top (
         .clk_sys                            (clk_chipset),
         .peripheral_ce                      (peripheral_ce),
         .clk_select                         (clk_select),
-        .reset                              (reset_cpu),
+        .reset                              (reset_chipset),
         .sdram_reset                        (reset_sdram),
         .cpu_address                        (cpu_address),
         .cpu_data_bus                       (cpu_data_bus),
