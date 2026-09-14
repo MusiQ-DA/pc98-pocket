@@ -39,6 +39,7 @@
 #define POST_TVF0   ((volatile uint32_t *) 0x5000009C) // row buffer's view, cells 0-3
 #define POST_TVF1   ((volatile uint32_t *) 0x500000A0) // cells 4-7
 #define POST_FRB    ((volatile uint32_t *) 0x500000A4) // {f_valid beats, f_req pulses}
+#define POST_MEMSZ  ((volatile uint32_t *) 0x500000A8) // {f0 count, [0501], A3FEA}
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -805,6 +806,25 @@ void post_mon_tick(void)
         hex(4 + 4 * 8, 42, tv & 0xFFFFu, 4);
         osd_draw_string(&fb, 4 + 13 * 8, 42, "AT", OSD_LABEL);
         hex(4 + 16 * 8, 42, 0xA0000u | (tv >> 20), 5);
+    }
+
+    // Why MEMORY stops at 128KB, in three bytes.
+    //
+    //   MSW  A3FEA as the GUEST read it. The ITF sizes RAM from this byte
+    //        alone (F8B58: and al,7 / clamp 4 / (n+1)*2 vs the 64 KB count),
+    //        so 04 = 640 KB and 00 = stop after one 128 KB block.
+    //        pc98_tvram pre-seeds 04; this is whether the guest gets it.
+    //   SZ   what the ITF concluded, from its OR [0501],DH at F8B91.
+    //   F0   OUT 0F0h requests. That instruction IS how POST hands over --
+    //        one is normal and owns the boot chime. Climbing means the loop.
+    {
+        uint32_t m = *POST_MEMSZ;
+        osd_draw_string(&fb, 4, 182, "MSW", OSD_LABEL);
+        hex(4 + 4 * 8, 182, m & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 8 * 8, 182, "SZ", OSD_LABEL);
+        hex(4 + 11 * 8, 182, (m >> 8) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 15 * 8, 182, "F0", OSD_LABEL);
+        hex(4 + 18 * 8, 182, (m >> 16) & 0xFFu, 2);
     }
 #endif
 

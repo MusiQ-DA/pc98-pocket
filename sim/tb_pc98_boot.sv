@@ -769,7 +769,7 @@ module tb_pc98_boot;
                 $write("\n             ROM  F88D0:");
                 for (int sb = 0; sb < 32; sb++) $write(" %02X", rom_byte(20'hF88D0 + sb));
                 $write("\n");
-                trace_all <= 8'd120;
+                trace_req <= ~trace_req;   // arm the clk_core tracer
                 $display("  %8t  OUT 043D, %02X   -> itf_bank %0d",
                          $time, cpu_data_bus, (cpu_data_bus == 8'h12) ? 0 : 1);
             end
@@ -1196,7 +1196,14 @@ module tb_pc98_boot;
     logic [19:0] disp_pc [0:63];
     logic [7:0]  disp_op [0:63];
     int          disp_w = 0;
+    // trace_all is armed from the clk_chipset OUT-043D block and counted down
+    // here, on clk_core. Two always_ff blocks writing one variable is a
+    // MULTIDRIVEN net: Verilator splits it and the arming never stuck, which
+    // is why +trace_all printed nothing. The chipset side now only TOGGLES a
+    // request; this domain owns the counter and loads it when the toggle moves.
     logic [7:0]  trace_all = 8'd0;
+    logic        trace_req = 1'b0;   // driven by the clk_chipset block
+    logic        trace_req_q = 1'b0; // driven here
     logic [19:0] disp_last = 20'hFFFFF;
     logic [19:0] disp_rec  = 20'hFFFFF;
     logic [7:0] op_seen [0:63];
@@ -1273,7 +1280,10 @@ module tb_pc98_boot;
             // collapsed ring says "the PC came back to 0x00000 forty-eight
             // times" and cannot say what it executed in between, which is
             // exactly what the bank-switch failure needs.
-            if (trace_all != 8'd0) begin
+            trace_req_q <= trace_req;
+            if (trace_req != trace_req_q)
+                trace_all <= 8'd120;
+            else if (trace_all != 8'd0) begin
                 $display("    ALL %05X op %02X  ax %04x bx %04x cx %04x dx %04x",
                          eu_pc, urom[7:0], eu_ax, eu_bx, eu_cx, eu_dx);
                 trace_all <= trace_all - 8'd1;

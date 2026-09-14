@@ -1054,6 +1054,9 @@ module core_top (
         .pc98_tvfill_view           (pc98_tvfill_view),
         .pc98_rowbuf_freq_count     (pc98_rowbuf_freq_count),
         .pc98_rowbuf_fvalid_count   (pc98_rowbuf_fvalid_count),
+        .memsw_seen                 (memsw_seen),
+        .memsize_seen               (memsize_seen),
+        .f0_count                   (f0_count),
         .raw_strobes                (raw_strobes),
         .wr_low_cycles              (wr_low_cycles),
         .rd_low_cycles              (rd_low_cycles),
@@ -1947,6 +1950,12 @@ module core_top (
     wire  [7:0] rom_read_count;
     wire [63:0] io_port_hist;
     wire [15:0] io_wr_count;
+    // The memory-sizing evidence: the A3FEA byte as the GUEST read it, the
+    // size the ITF wrote to [0501], and how many times it has asked for a CPU
+    // reset. See post_monitor.
+    wire  [7:0] memsw_seen;
+    wire  [7:0] memsize_seen;
+    wire  [7:0] f0_count;
 
     post_monitor u_post (
         .clk            (clk_chipset),
@@ -1991,7 +2000,10 @@ module core_top (
         .rom_load_data  (rom_load_data),
         .rom_load_count (rom_load_count),
         .io_port_hist   (io_port_hist),
-        .io_wr_count    (io_wr_count)
+        .io_wr_count    (io_wr_count),
+        .memsw_seen     (memsw_seen),
+        .memsize_seen   (memsize_seen),
+        .f0_count       (f0_count)
     );
 
     //

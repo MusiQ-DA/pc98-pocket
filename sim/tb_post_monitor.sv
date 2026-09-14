@@ -96,6 +96,39 @@ module tb_post_monitor;
         repeat (2) @(posedge clk);
     endtask
 
+    // A guest memory WRITE, data settling mid-cycle like out80's does.
+    task automatic mem_write(input logic [19:0] a, input logic [7:0] v);
+        address = a; cpu_data = 8'hC3; memory_write_n = 0;
+        repeat (2) @(posedge clk);
+        cpu_data = v;
+        repeat (3) @(posedge clk);
+        memory_write_n = 1; address = 20'h0;
+        repeat (3) @(posedge clk);
+    endtask
+
+    // A guest memory READ whose data arrives late, like rom_read's.
+    task automatic mem_read_val(input logic [19:0] a,
+                                input logic  [7:0] stale,
+                                input logic  [7:0] val);
+        address = a; bus_data = stale; memory_read_n = 0;
+        repeat (2) @(posedge clk);
+        bus_data = val;
+        repeat (3) @(posedge clk);
+        memory_read_n = 1; address = 20'h0;
+        repeat (3) @(posedge clk);
+    endtask
+
+    // An I/O write to an arbitrary port.
+    task automatic out_port(input logic [15:0] p, input logic [7:0] v);
+        address = {4'h0, p};
+        cpu_data = v;
+        io_write_n = 0;
+        repeat (4) @(posedge clk);
+        io_write_n = 1;
+        address = 20'h0;
+        repeat (3) @(posedge clk);
+    endtask
+
     // out 0x80,al the way the bus does it: address and command up first, data
     // settling only partway through. A monitor that latches on the leading edge
     // captures the garbage that is on the bus beforehand.
@@ -302,6 +335,35 @@ module tb_post_monitor;
         if (io_wr_count !== 16'd11) begin
             $display("  FAIL io write count %0d, want 11", io_wr_count); errors++;
         end
+
+        // ---------------------------------------------- the 128KB instruments
+        //
+        // MSW/SZ/F0 on the POST panel exist to say why MEMORY stops at 128KB,
+        // so they have to be right about a bus that settles late -- the same
+        // hazard out80 and rom_read were written for. A3FEA must come back as
+        // the byte on bus_data at the END of the read, [0501] as cpu_data at
+        // the end of the write, and F0 must count one per OUT, not one per
+        // cycle the strobe is held.
+        mem_read_val(20'hA3FEA, 8'hC3, 8'h04);
+        if (u_dut.memsw_seen !== 8'h04) begin
+            $display("  FAIL MSW = %02h (want 04)", u_dut.memsw_seen); errors++;
+        end
+        mem_read_val(20'hA3FEB, 8'h00, 8'h99);   // the neighbour must not count
+        if (u_dut.memsw_seen !== 8'h04) begin
+            $display("  FAIL MSW moved on A3FEB: %02h", u_dut.memsw_seen); errors++;
+        end
+        mem_write(20'h00501, 8'h04);
+        if (u_dut.memsize_seen !== 8'h04) begin
+            $display("  FAIL SZ = %02h (want 04)", u_dut.memsize_seen); errors++;
+        end
+        out_port(16'h00F0, 8'h07);
+        out_port(16'h00F0, 8'h00);
+        out_port(16'h0037, 8'h0E);               // not 0F0, must not count
+        if (u_dut.f0_count !== 8'd2) begin
+            $display("  FAIL F0 = %0d (want 2)", u_dut.f0_count); errors++;
+        end
+        $display("  128KB instruments: MSW %02h  SZ %02h  F0 %0d",
+                 u_dut.memsw_seen, u_dut.memsize_seen, u_dut.f0_count);
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");

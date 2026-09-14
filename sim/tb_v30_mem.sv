@@ -459,6 +459,29 @@ module tb_v30_mem;
 
     int fill_top, check_top;
 
+    // One 128 KB-block half, the way the ITF writes it: REP STOSW to fill,
+    // REPE SCASW to verify. Stores 0000 at `res` if the compare stayed equal
+    // (0001 if not) and the final DI at res+2 -- 2000 when all 1000h words
+    // matched, the mismatch offset otherwise.
+    task automatic memblk(input logic [15:0] seg, input logic [15:0] res);
+        emit(8'hB8); emit16(16'hAA55);          // mov ax,AA55  (lanes differ)
+        emit(8'hBB); emit16(seg);               // mov bx,seg
+        emit(8'h8E); emit(8'hC3);               // mov es,bx
+        emit(8'h31); emit(8'hFF);               // xor di,di
+        emit(8'hB9); emit16(16'h1000);          // mov cx,1000  (8 KB)
+        emit(8'hFC);                            // cld
+        emit(8'hF3); emit(8'hAB);               // rep stosw
+        emit(8'h8E); emit(8'hC3);               // mov es,bx
+        emit(8'h31); emit(8'hFF);               // xor di,di
+        emit(8'hB9); emit16(16'h1000);          // mov cx,1000
+        emit(8'hF3); emit(8'hAF);               // repe scasw
+        emit(8'hB0); emit(8'h00);               // mov al,0
+        emit(8'h74); emit(8'h02);               // jz  +2
+        emit(8'hB0); emit(8'h01);               // mov al,1
+        emit(8'hA2); emit16(res);               // mov [res],al
+        emit(8'h89); emit(8'h3E); emit16(res + 16'd2);  // mov [res+2],di
+    endtask
+
     initial begin : program_image
         int i;
 
@@ -514,6 +537,25 @@ module tb_v30_mem;
         emit(8'h83); emit(8'hC7); emit(8'h02);  // add di,2
         emit(8'hE2); emit(8'(check_top - (pc + 1)));  // loop check
         emit(8'h89); emit(8'h1E); emit16(16'h0306);   // mov [0306],bx -> 0000
+
+        // T5-T7: the ITF's OWN instruction shape, at the ITF's OWN addresses.
+        //
+        // T4 is a hand-rolled LOOP over 256 words at 01000. The ITF's memory
+        // test is neither: F9544 fills with REP STOSW and F9561 verifies with
+        // REPE SCASW -- back-to-back word accesses at the maximum rate the bus
+        // will take, with no instruction fetch in between to space them out.
+        // That shape has never been run against the real memory path, and it
+        // is the shape the machine fails on.
+        //
+        // The addresses matter too. The ITF sweeps in 128 KB blocks: block 1
+        // is ES=0000 then ES=1000, block 2 is ES=2000 then ES=3000. The
+        // hardware prints MEMORY 128KB OK, which is block 1 passing and the
+        // sweep ending -- so block 2 is where to look. Run 8 KB of the real
+        // shape in each of three segments and record, per segment, whether
+        // REPE SCASW came out equal and where DI stopped.
+        memblk(16'h1000, 16'h0310);
+        memblk(16'h2000, 16'h0314);
+        memblk(16'h3000, 16'h0318);
 
         emit(8'hB0); emit(8'hA5);               // mov al,A5
         emit(8'hE6); emit(8'hE0);               // out E0,al
@@ -580,6 +622,18 @@ module tb_v30_mem;
             want(20'h00204, 16'h5678, "T3 in memory");
             want(20'h01000, 16'h1000, "T4 first word");
             want(20'h011FE, 16'h11FE, "T4 last word");
+            want(20'h00310, 16'h0000, "T5 ES=1000 repe scasw equal");
+            want(20'h00312, 16'h2000, "T5 ES=1000 end DI");
+            want(20'h00314, 16'h0000, "T6 ES=2000 repe scasw equal");
+            want(20'h00316, 16'h2000, "T6 ES=2000 end DI");
+            want(20'h00318, 16'h0000, "T7 ES=3000 repe scasw equal");
+            want(20'h0031A, 16'h2000, "T7 ES=3000 end DI");
+            want(20'h10000, 16'hAA55, "T5 first word in memory");
+            want(20'h11FFE, 16'hAA55, "T5 last word in memory");
+            want(20'h20000, 16'hAA55, "T6 first word in memory");
+            want(20'h21FFE, 16'hAA55, "T6 last word in memory");
+            want(20'h30000, 16'hAA55, "T7 first word in memory");
+            want(20'h31FFE, 16'hAA55, "T7 last word in memory");
         end
 
         $display("one-cycle word accesses: %0d", word_cycles);

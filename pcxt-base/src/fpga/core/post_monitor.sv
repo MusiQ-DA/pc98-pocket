@@ -101,6 +101,26 @@ module post_monitor #(
     output logic  [3:0] raw_strobes,       // {mem_rd_n, mem_wr_n, io_wr_n, aen_n}
     output logic [15:0] wr_low_cycles,     // cycles memory_write_n was low
     output logic [15:0] rd_low_cycles,     // cycles memory_read_n was low
+
+    // ---- the MEMORY 128KB question ---------------------------------------
+    //
+    // The ITF sizes RAM from ONE byte: A3FEA, the memory switch in text VRAM.
+    // F8B58 reads it, ANDs 7, clamps to 4 and compares (n+1)*2 against the
+    // 64 KB block count -- so 4 means 640 KB and 0 means it stops after the
+    // first 128 KB block. pc98_tvram pre-seeds it to 4 and its unit bench
+    // agrees; whether the GUEST sees the 4 is a different question and only
+    // the machine can answer it. memsw_seen is the byte the guest actually
+    // got, taken off bus_data (the read side) on the trailing edge.
+    //
+    // memsize_seen is what the ITF concluded: F8B91 does OR [0501],DH with DH
+    // already halved and decremented, so 04 means 640 KB and 00 means 128 KB.
+    //
+    // f0_count is how many times the ITF has asked for a CPU reset (OUT 0F0h,
+    // F9A2C/F9A32). One is normal -- that is how POST hands over, and the
+    // boot chime belongs to it. More than one is the loop.
+    output logic  [7:0] memsw_seen,
+    output logic  [7:0] memsize_seen,
+    output logic  [7:0] f0_count,
     // What the CPU READ out of F000:D880-D883 -- the two words POST 05's movsw
     // copies into INT 16h's vector. Passive, like the write snoop: reading that
     // region with the self-test master came back 11 11 11 11 11 11 11 11, which
@@ -153,6 +173,10 @@ module post_monitor #(
     // Port 0x80 is decoded on the low 16 bits; the BIOS uses out 0x80,al.
     wire io_write   = ~io_write_n;
     wire mem_access = ~memory_read_n | ~memory_write_n;
+    logic [7:0] memsw_q;
+    logic       memsw_hold;
+    logic       f0_wr_q, f0_wr_qq;
+    wire f0_wr_any = ~io_write_n & ~address_enable_n & (address[15:0] == 16'h00F0);
     wire is_post    = io_write && ~address_enable_n
                                && (address[15:0] == 16'h0080);
 
@@ -248,6 +272,13 @@ module post_monitor #(
             io_port_q     <= 16'd0;
             io_wr_q       <= 1'b0;
             io_wr_qq      <= 1'b0;
+            memsw_seen    <= 8'h00;
+            memsw_q       <= 8'h00;
+            memsw_hold    <= 1'b0;
+            memsize_seen  <= 8'h00;
+            f0_count      <= 8'h00;
+            f0_wr_q       <= 1'b0;
+            f0_wr_qq      <= 1'b0;
             rom_load_data <= 128'd0;
             rom_load_count<= 8'd0;
             ld_seen_q     <= 1'b0;
@@ -340,6 +371,29 @@ module post_monitor #(
                 io_port_hist <= {io_port_hist[47:0], io_port_q};
                 if (io_wr_count != 16'hFFFF) io_wr_count <= io_wr_count + 16'd1;
             end
+
+            // A3FEA, held while the read strobe is low and committed on its
+            // trailing edge -- the same shape as the ROM window above, and for
+            // the same reason: the address bus is still moving at the start.
+            if (~memory_read_n && ~address_enable_n && address == 20'hA3FEA) begin
+                memsw_q    <= bus_data;
+                memsw_hold <= 1'b1;
+            end
+            if (memory_read_n && memsw_hold) begin
+                memsw_seen <= memsw_q;
+                memsw_hold <= 1'b0;
+            end
+
+            // [0501]: the size the ITF settled on. cpu_data, because this is a
+            // write.
+            if (~memory_write_n && ~address_enable_n && address == 20'h00501)
+                memsize_seen <= cpu_data;
+
+            // OUT 0F0h, two-cycle qualified like io_port_hist.
+            f0_wr_q  <= f0_wr_any;
+            f0_wr_qq <= f0_wr_q;
+            if (f0_wr_q && f0_wr_qq && ~f0_wr_any && f0_count != 8'hFF)
+                f0_count <= f0_count + 8'd1;
 
             // One count per write, not one per cycle the strobe is held.
             ld_seen_q <= in_ld_win;
