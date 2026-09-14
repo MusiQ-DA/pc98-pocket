@@ -841,20 +841,24 @@ void post_mon_tick(void)
         // Why the CPU stopped being interrupted. INT above froze while LIVE
         // kept moving, so the guest is running with nothing reaching it.
         //
-        //   IF    the V30's interrupt-enable flag (psw bit 9). 0 means the
-        //         guest is running CLI'd and nothing can reach it.
+        //   IL    INTR as a LEVEL, out of the PIC. The V30's own IF is not
+        //         reachable -- v30_core's dbg_regs is inside `ifndef SYNTHESIS
+        //         -- so this asks from the other side: INTR held high with the
+        //         count frozen means the CPU is refusing it, i.e. IF=0.
         //   TMR   timer ticks, saturating. Frozen means the PIT stopped and
         //         there is nothing left to interrupt with.
         //   LVL   the master PIC's eight request lines, live:
         //         bit0 timer, bit1 keyboard, bit2 vsync, bit3 uart2,
         //         bit4 uart, bit5 -, bit6 fdd, bit7 slave.
         //
-        // IF 0 blames the guest. IF 1 with TMR frozen blames the PIT. IF 1,
-        // TMR moving and INT frozen blames the PIC -- masked, or stuck
-        // in-service because an EOI never landed.
+        // TMR frozen blames the PIT: nothing left to interrupt with. TMR
+        // moving with IL 1 and INT frozen blames the guest -- the PIC is
+        // asking and the CPU will not take it. TMR moving with IL 0 and INT
+        // frozen blames the PIC: masked, or stuck in-service because an EOI
+        // never landed.
         uint32_t il = *POST_IRQL;
-        osd_draw_string(&fb, 4 + 16 * 8, 112, "IF", OSD_LABEL);
-        hex(4 + 19 * 8, 112, (il >> 24) & 1u, 1);
+        osd_draw_string(&fb, 4 + 16 * 8, 112, "IL", OSD_LABEL);
+        hex(4 + 19 * 8, 112, (iv >> 16) & 1u, 1);
         osd_draw_string(&fb, 4 + 22 * 8, 112, "TMR", OSD_LABEL);
         hex(4 + 26 * 8, 112, (il >> 16) & 0xFFu, 2);
         osd_draw_string(&fb, 4 + 30 * 8, 112, "LVL", OSD_LABEL);

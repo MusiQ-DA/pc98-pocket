@@ -115,7 +115,6 @@ module softcpu_subsystem (
     // The master GDC's view, served at 0x500000B0. See PERIPHERALS.
     input   [7:0] dbg_irq_level,
     input   [7:0] dbg_timer_count,
-    input         dbg_cpu_if,
     input   [7:0] dbg_kbd_irq_count,
     input   [7:0] dbg_kbd_rd_count,
     input  [14:0] dbg_gdc_sad,
@@ -1099,7 +1098,7 @@ module softcpu_subsystem (
             32'h5000_00B0: cpu_mem_rdata = {dbg_gdc_unk_count, dbg_gdc_unk_cmd,
                                             dbg_gdc_disp_on, dbg_gdc_sad};
             32'h5000_00B8: cpu_mem_rdata = {16'd0, dbg_kbd_rd_count, dbg_kbd_irq_count};
-            32'h5000_00BC: cpu_mem_rdata = {7'd0, dbg_cpu_if,
+            32'h5000_00BC: cpu_mem_rdata = {8'd0,
                                             dbg_timer_count, dbg_irq_level, 8'd0};
             32'h5000_00B4: cpu_mem_rdata = {15'd0, int_live, int_count};
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
