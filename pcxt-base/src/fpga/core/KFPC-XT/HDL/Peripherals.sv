@@ -2898,18 +2898,52 @@ end endgenerate
             write_to_fdd  <= write_to_fdd;
     end
 
+`ifdef PC98_FDC_REAL
+    // The PC-98 ports onto floppy.v's PC/XT register file. The MSR and FIFO
+    // map straight across; the control port has to BECOME a Digital Output
+    // Register, because a PC-98 has none and floppy.v will not run without
+    // one. pc98_fdc_glue does that -- see it for what each bit becomes and
+    // why.
+    wire fdc_wr_end = io_write_n & ~prev_io_write_n & ~floppy0_chip_select_n;
+
+    wire [2:0] fdc_glue_addr;
+    wire       fdc_glue_write;
+    wire [7:0] fdc_glue_wdata;
+    wire [7:0] fdc_ctrl_readback;
+
+    pc98_fdc_glue u_pc98_fdc_glue (
+        .clk           (clock),
+        .rst           (reset),
+        // floppy0_chip_select_n covers 0x90/0x92/0xC8/0xCA in this build;
+        // address[1] is what separates status from data within each pair.
+        .sel_stat      (~floppy0_chip_select_n & ~address[1]),
+        .sel_data      (~floppy0_chip_select_n &  address[1]),
+        .sel_ctrl      (fdd_94_select | fdd_cc_select),
+        .wr_stb        (fdc_wr_end | ((fdd_94_select | fdd_cc_select)
+                                      & io_write_n & ~prev_io_write_n)),
+        .wr_data       (write_to_fdd),
+        .fd_addr       (fdc_glue_addr),
+        .fd_write      (fdc_glue_write),
+        .fd_wdata      (fdc_glue_wdata),
+        .ctrl_readback (fdc_ctrl_readback)
+    );
+
     always_ff @(posedge clock)
     begin
-`ifdef PC98_FDC_REAL
-        // 0x90/0xC8 -> the XT's MSR offset, 0x92/0xCA -> its data offset.
-        fdd_io_address     <= address[1] ? 3'd5 : 3'd4;
+        fdd_io_address     <= fdc_glue_addr;
+        fdd_io_read        <= ~io_read_n & prev_io_read_n   & ~floppy0_chip_select_n;
+        fdd_io_read_1      <= fdd_io_read;
+        fdd_io_write       <= fdc_glue_write;
+    end
 `else
+    always_ff @(posedge clock)
+    begin
         fdd_io_address     <= address[2:0];
-`endif
         fdd_io_read        <= ~io_read_n & prev_io_read_n   & ~floppy0_chip_select_n;
         fdd_io_read_1      <= fdd_io_read;
         fdd_io_write       <= io_write_n & ~prev_io_write_n & ~floppy0_chip_select_n;
     end
+`endif
 
     assign  fdd_dma_read    = fdd_dma_ack & ~io_read_n;
 

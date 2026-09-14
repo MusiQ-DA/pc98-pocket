@@ -75,6 +75,18 @@ set_global_assignment -name VERILOG_MACRO "PC98_KBD_8251=1"
 # MAME chip dumps and 8086 throughout. The UX BIOS is not usable here: its
 # POST uses PUSHA at FDA35 and SMSW/LGDT/LIDT after it.
 set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
+# The real floppy controller, not the constant-returning stub.
+#
+# This was off because floppy0_chip_select_n decoded the PC/XT's 0x3F0-0x3F7,
+# which a PC-98 never writes: floppy.v was instantiated, cost 885 ALMs, and
+# could not be reached by the guest at all. The PC-98 ports were answered by
+# fdd_stub_data with canned values, so the machine has had no working floppy.
+#
+# What kept it off was that the PC-98 control port is not a Digital Output
+# Register and floppy.v needs one. pc98_fdc_glue makes that translation and
+# tb_pc98_fdc_glue pins it -- which is the bench the PERIPHERALS comment asked
+# for before this switch was allowed to move.
+set_global_assignment -name VERILOG_MACRO "PC98_FDC_REAL=1"
 
 # Route SDRAM through sdram_mp (via sdram_kf_shim) instead of KFSDRAM.
 # RAM.sv tests this with `ifdef, so setting it to 0 would still select the shim
