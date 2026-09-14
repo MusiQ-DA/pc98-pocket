@@ -279,6 +279,27 @@ jobs:
             grep -q "RESULT: PASS" ct_$mode.log
           done
 
+      - name: the V30 on the real memory path, at every CE index
+        run: |
+          S=pcxt-base/src/fpga/core
+          H=$S/KFPC-XT/HDL
+          V=$S/v30
+          mkdir -p hdl/rtl/ucore && cp $V/ucrom.hex $V/ucdecode.hex hdl/rtl/ucore/
+          verilator --binary --timing -Wno-fatal --top-module tb_v30_mem \
+            +define+CPU_V30+V30_BACKDOOR+MACHINE_PC98+SDRAM_USE_MP \
+            -O2 -Isim -I$S -I$V -I$H -I$H/KF8288/HDL \
+            sim/tb_v30_mem.sv \
+            $V/v30u_ss_pkg.sv $V/v30_core.sv $V/v30u_biu.sv $V/v30u_eu.sv \
+            $V/v30u_ucrom.sv $S/v30_cpu_bridge.sv \
+            $S/sdram_kf_shim.sv $S/sdram_mp.sv \
+            sim/sdram_board_model.sv sim/sdram_model.sv \
+            $H/RAM.sv $H/Ready.sv $H/XT_CE_Generator.sv $H/KF8288/HDL/KF8288.sv \
+            -o vm --Mdir obj_vm
+          for sp in 0 1 2 3; do
+            ./obj_vm/vm +speed=$sp | tee vm_$sp.log
+            grep -q "PASS tb_v30_mem" vm_$sp.log
+          done
+
       - name: CE generator makes the frequencies the speed menu names
         run: |
           H=pcxt-base/src/fpga/core/KFPC-XT/HDL

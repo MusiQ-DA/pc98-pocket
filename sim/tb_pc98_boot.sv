@@ -47,7 +47,13 @@ module tb_pc98_boot;
     // makes them.
     logic clk_chipset = 1'b0;
     logic clk_core    = 1'b0;
-    always #11.641 clk_chipset = ~clk_chipset;
+    // DERIVED, not a rounded literal. 11.641 drifts 0.0016 ns per cycle against
+    // sdram_board_model's CLK_MHZ-derived device clock -- a whole period by
+    // cycle 14800 -- and under REALMEM that manufactures read failures that are
+    // not in the RTL. It did exactly that once; see tb_v30_mem's comment.
+    localparam real CLK_MHZ = 42.954545;
+    localparam real HALF_NS = 500.0 / CLK_MHZ;
+    always #(HALF_NS) clk_chipset = ~clk_chipset;
     always  #5.820 clk_core    = ~clk_core;
 
     logic reset = 1'b1;
@@ -57,7 +63,18 @@ module tb_pc98_boot;
     logic       f0_prev_rd_n = 1'b1;
     logic       soft_reset_cpu = 1'b0;
     logic [7:0] soft_reset_count = 8'h00;
+    // Under REALMEM the controller needs its init sequence (about 233 us) before
+    // it can answer a fetch, so the CPU is held past it the way core_top holds
+    // it behind initilized_sdram. `reset` itself must be released for the
+    // controller to start, so this is a separate hold, not a longer reset.
+`ifdef REALMEM
+    wire        cpu_reset_w = reset | soft_reset_cpu | ~sdram_up;
+    logic       sdram_up = 1'b0;
+    always_ff @(posedge clk_chipset)
+        if (initilized_sdram_w) sdram_up <= 1'b1;
+`else
     wire        cpu_reset_w = reset | soft_reset_cpu;
+`endif
 
     // ---- clock enables and the CPU pin clock -------------------------------
     wire       clk_cpu, cpu_ce_posedge, cpu_ce_negedge, peripheral_ce;
@@ -127,7 +144,7 @@ module tb_pc98_boot;
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
         .data_bus          (din),
-        .processor_ready   (1'b1),      // flat memory answers immediately
+        .processor_ready   (bench_ready),
         .address_enable_n  (1'b0),      // no other master in this bench
         .pause_core        (1'b0),
         .biu_done          (biu_done)
@@ -276,8 +293,7 @@ module tb_pc98_boot;
     // put a chipset clock between the strobe and the byte, and the core sampled
     // stale data: the first run stalled for seventeen milliseconds in the middle
     // of one instruction's operand fetch.
-    assign din = ~mem_rd_n ? (is_rom(cpu_address) ? rom_byte(cpu_address)
-                                                  : ram[cpu_address])
+    assign din = ~mem_rd_n ? mem_read_byte
                   : ~inta_n       ? ((~pic2_data_bus_io) ? pic2_dout : pic1_dout)
                   : pit_iocycle    ? pit_dout
                   : dma_iocycle    ? dma_dout
@@ -291,6 +307,115 @@ module tb_pc98_boot;
                   : fdc_fifo_sel    ? fdc_fifo
                   : sysport_sel     ? sysport_data
                            : 8'hFF;
+
+    // ---- the real memory path (+define+REALMEM) ----------------------------
+    //
+    // The flat array above is a model of memory; this is the memory. RAM.sv on
+    // sdram_kf_shim on sdram_mp on the part, with the board's half-period clock
+    // skew -- what core_top instantiates. tb_v30_mem proved the bridge against
+    // that path with a program of its own; this runs the REAL ITF through it,
+    // which is the only way to ask whether the machine's memory test fails for
+    // a reason that lives in the memory path.
+    //
+    // ram[] stays, as a MIRROR: every guest write still lands in it, so every
+    // monitor in this file keeps working and -- more useful -- the mirror is
+    // what the guest believes it wrote. mem_mirror_check compares the two on
+    // every read RAM.sv answers, so a memory-path fault is named the moment it
+    // happens rather than inferred from where the CPU ended up.
+`ifdef REALMEM
+    wire [7:0]  ram_dout;
+    wire        memory_access_ready, ram_address_select_n;
+    wire        initilized_sdram_w, access_complete_w;
+    wire [12:0] s_a;  wire [1:0] s_ba;
+    wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
+    wire [15:0] s_dq_out, s_dq_in;
+    logic [6:0] ems_map [0:3] = '{7'd0, 7'd0, 7'd0, 7'd0};
+
+    RAM u_ram (
+        .clock(clk_chipset), .reset(reset),
+        .enable_sdram(1'b1), .initilized_sdram(initilized_sdram_w),
+        .address(cpu_address), .internal_data_bus(cpu_data_bus),
+        .data_bus_out(ram_dout),
+        .memory_read_n(mem_rd_n), .memory_write_n(mem_wr_n),
+        .no_command_state(mem_rd_n & mem_wr_n & io_rd_n & io_wr_n),
+        .memory_access_ready(memory_access_ready),
+        .access_complete(access_complete_w),
+        .ram_address_select_n(ram_address_select_n),
+        .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
+        .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
+        .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
+        .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
+        .map_ems(ems_map), .ems_b1(1'b0), .ems_b2(1'b0), .ems_b3(1'b0),
+        .ems_b4(1'b0),
+        // The ITF window is the SHADOW, the way RAM.sv does it on hardware:
+        // F8000-FFFFF redirected to 1F8000 while the flag is set. itf_bank is
+        // this bench's copy of core_top's, so the images are loaded once and
+        // the switch is an address bit, not a copy.
+        .bios_protect_flag(2'b10), .tandy_bios_flag(itf_bank),
+        .font_bank_flag(1'b0),
+        .font_rd_req(1'b0), .font_rd_addr(24'h0), .font_rd_len(4'h0),
+        .font_rd_ack(), .font_rd_valid(), .font_rd_data(), .font_rd_done(),
+        .cg_rd_req(1'b0), .cg_rd_addr(24'h0), .cg_rd_len(4'h0),
+        .cg_rd_ack(), .cg_rd_valid(), .cg_rd_data(), .cg_rd_done(),
+        .enable_a000h(1'b1), .wait_count_clk_en(cpu_ce_negedge),
+        .ram_read_wait_cycle(ram_rd_wait), .ram_write_wait_cycle(ram_wr_wait)
+    );
+
+    sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
+                        .T_RAS(2), .T_RC(3), .T_REF(335)) sdr (
+        .clk(clk_chipset), .a(s_a), .ba(s_ba), .cke(s_cke),
+        .ras_n(s_ras), .cas_n(s_cas), .we_n(s_we), .dqm({s_udqm, s_ldqm}),
+        .dq_out(s_dq_out), .dq_io(s_dq_io), .dq_in(s_dq_in)
+    );
+
+    // Chipset.sv: io_channel_ready & memory_access_ready.
+    wire bench_ready;
+    READY u_ready (
+        .clock               (clk_chipset),
+        .cpu_ce_posedge      (cpu_ce_posedge),
+        .cpu_ce_negedge      (cpu_ce_negedge),
+        .reset               (reset),
+        .processor_ready     (bench_ready),
+        .dma_ready           (),
+        .dma_wait_n          (1'b1),
+        .io_channel_ready    (memory_access_ready),
+        .io_read_n           (io_rd_n),
+        .io_write_n          (io_wr_n),
+        .memory_read_n       (mem_rd_n),
+        .dma0_acknowledge_n  (1'b1),
+        .address_enable_n    (1'b0)
+    );
+
+    // RAM.sv answers where it is selected; the mirror answers the rest
+    // (A0000-A7FFF and C0000-E7FFF are not in its select).
+    wire [7:0] mem_read_byte = ~ram_address_select_n ? ram_dout
+                                                     : ram[cpu_address];
+
+    // The mirror check. On the trailing edge of a read RAM.sv answered, what
+    // it gave against what the guest put there.
+    logic       mrd_d = 1'b1;
+    logic [7:0] mrd_live;
+    int         mem_mismatches = 0;
+    always_ff @(posedge clk_chipset) begin
+        mrd_d <= mem_rd_n;
+        if (~mem_rd_n) mrd_live <= mem_read_byte;
+        if (mem_rd_n & ~mrd_d & ~ram_address_select_n) begin
+            logic [7:0] want_b;
+            want_b = is_rom(cpu_address) ? rom_byte(cpu_address)
+                                         : ram[cpu_address];
+            if (mrd_live !== want_b) begin
+                mem_mismatches++;
+                if (mem_mismatches <= 20)
+                    $display("  %8t  MEMPATH [%05X] gave %02X, guest wrote %02X  (eu_pc %05X)",
+                             $time, cpu_address, mrd_live, want_b, eu_pc);
+            end
+        end
+    end
+`else
+    wire [7:0] mem_read_byte = is_rom(cpu_address) ? rom_byte(cpu_address)
+                                                   : ram[cpu_address];
+    wire bench_ready = 1'b1;          // flat memory answers immediately
+`endif
 
     // True when the read above fell through to the FF default -- i.e. nothing
     // here answered it. Used to name the port once, in the trace.
@@ -1256,6 +1381,19 @@ module tb_pc98_boot;
         $display("BIOS reset vector E8000+17FF0: %02X %02X %02X %02X %02X",
                  bios[18'h17FF0], bios[18'h17FF1], bios[18'h17FF2],
                  bios[18'h17FF3], bios[18'h17FF4]);
+`ifdef REALMEM
+        // The images go into the PART, at the addresses RAM.sv maps them to:
+        // the BIOS at E8000-FFFFF, the ITF in the shadow at 1F8000 that
+        // tandy_bios_flag selects. One guest byte per 16-bit word, which is how
+        // RAM.sv stores everything (access_data_in is {8'h00, byte}).
+        for (i = 0; i < 98304;  i = i + 1)
+            sdr.u_part.poke(20'hE8000 + i, {8'h00, bios[i]});
+        for (i = 0; i < 32768;  i = i + 1)
+            sdr.u_part.poke(24'h1F8000 + i, {8'h00, itf[i]});
+        // The mirror carries the ROM too, so MEMPATH can compare against it.
+        $display("REALMEM: images loaded into the part");
+`endif
+
         $display("--- trace (first 400 distinct fetch addresses) ---");
 
         repeat (40) @(posedge clk_chipset);

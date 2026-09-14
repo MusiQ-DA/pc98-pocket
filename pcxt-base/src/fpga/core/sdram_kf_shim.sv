@@ -74,6 +74,22 @@ module sdram_kf_shim #(
     input  wire  [sdram_col_width-1:0]        access_num,
     input  wire  [sdram_data_width-1:0]       data_in,
     output logic [sdram_data_width-1:0]       data_out,
+    // The second word of a two-word access on this port. RAM.sv stores ONE
+    // GUEST BYTE PER 16-BIT SDRAM WORD (access_data_in is {8'h00, byte} and
+    // the write mask is all-ones), so the guest's byte N and byte N+1 are
+    // consecutive SDRAM WORDS. That makes a V30 word access one burst of two
+    // rather than two transactions: one arbitration, one ACTIVATE, one extra
+    // column clock. access_num picks the shape -- 1 or 2, nothing else -- and
+    // these two carry the second word in each direction.
+    //
+    // Only the sdram_mp far end bursts here. Under SDRAM_MP_KF_REF the port
+    // stays one word per transaction (stock KFSDRAM holds read_flag as a level
+    // rather than pulsing per beat, so a beat counter would miscount), and
+    // data_out_hi reads back zero -- which is why RAM.sv asks for two words
+    // only when PC98_WORD_MEM is defined, and config.tcl only defines that
+    // alongside SDRAM_USE_MP.
+    input  wire  [sdram_data_width-1:0]       data_in_hi,
+    output logic [sdram_data_width-1:0]       data_out_hi,
     input  wire                               write_request,
     input  wire                               read_request,
     input  wire                               enable_refresh,
@@ -147,6 +163,8 @@ module sdram_kf_shim #(
 
     logic        req, we_r, busy;
     logic [ADDR_BITS-1:0] addr_r;
+    logic [LEN_BITS-1:0]  len_r;      // words - 1, latched with the request
+    logic                 rbeat;      // which word of a two-word read is next
     logic        p_ack, p_done, p_rvalid, stat_idle, stat_refresh;
     logic [sdram_data_width-1:0] p_rdata;
     logic        mp_rvalid;
@@ -158,19 +176,38 @@ module sdram_kf_shim #(
     // refreshing".
     always_ff @(posedge sdram_clock or posedge sdram_reset) begin
         if (sdram_reset) begin
-            req      <= 1'b0;
-            we_r     <= 1'b0;
-            busy     <= 1'b0;
-            addr_r   <= '0;
-            data_out <= '0;
+            req         <= 1'b0;
+            we_r        <= 1'b0;
+            busy        <= 1'b0;
+            addr_r      <= '0;
+            len_r       <= '0;
+            rbeat       <= 1'b0;
+            data_out    <= '0;
+            data_out_hi <= '0;
         end else begin
+`ifdef SDRAM_MP_KF_REF
+            // Stock KFSDRAM holds read_flag as a LEVEL, not a per-beat pulse,
+            // so a beat counter would miscount it. No burst on this far end.
             if (p_rvalid) data_out <= p_rdata;
+`else
+            // Read beats arrive in address order, so the first belongs to the
+            // addressed byte and the second to the odd half.
+            if (p_rvalid) begin
+                if (rbeat == 1'b0) data_out    <= p_rdata;
+                else               data_out_hi <= p_rdata;
+                rbeat <= ~rbeat;
+            end
+`endif
 
             if (!busy) begin
                 if (stat_idle && (write_request || read_request)) begin
                     req    <= 1'b1;
                     we_r   <= write_request;
                     addr_r <= address[ADDR_BITS-1:0];
+                    // Exactly two shapes, tested rather than truncated: a
+                    // wider access_num cannot silently become a long burst.
+                    len_r  <= (access_num >= 'd2) ? LEN_BITS'(1) : LEN_BITS'(0);
+                    rbeat  <= 1'b0;
                     busy   <= 1'b1;
                 end
             end else begin
@@ -306,6 +343,10 @@ module sdram_kf_shim #(
     wire _unused_b  = &{1'b0, b_req, b_addr, b_len, c_req, c_addr, c_len, 1'b0};
 
     wire _unused_mp_if = &{1'b0, kf_write_flag, 1'b0};
+    // No burst on this far end (see the data_in_hi comment above). len_r and
+    // rbeat still exist -- the request latch is shared -- but nothing reads
+    // them here, and the second word never lands.
+    wire _unused_kf_word = &{1'b0, len_r, rbeat, data_in_hi, 1'b0};
 
 `else
     // ---------------------------------------------------------------------
@@ -319,9 +360,14 @@ module sdram_kf_shim #(
     wire [PORTS-1:0] mp_req  = {c_req, b_req, req};
     wire [PORTS-1:0] mp_we   = {1'b0,  1'b0,  we_r};
     wire [PORTS-1:0][ADDR_BITS-1:0] mp_addr  = {c_addr, b_addr, addr_r};
-    wire [PORTS-1:0][LEN_BITS-1:0]  mp_len   = {c_len,  b_len,  LEN_BITS'(0)};
+    wire [PORTS-1:0][LEN_BITS-1:0]  mp_len   = {c_len,  b_len,  len_r};
+    // sdram_mp publishes the index of the word it wants in p_wcnt and consumes
+    // p_wdata combinationally, so a two-word write is just this select. Ports
+    // B and C are read-only.
+    wire [LEN_BITS-1:0] mp_wcnt;
     wire [PORTS-1:0][sdram_data_width-1:0] mp_wdata =
-        {{sdram_data_width{1'b0}}, {sdram_data_width{1'b0}}, data_in};
+        {{sdram_data_width{1'b0}}, {sdram_data_width{1'b0}},
+         (mp_wcnt == LEN_BITS'(0)) ? data_in : data_in_hi};
     wire [PORTS-1:0][MASK_BITS-1:0] mp_wmask =
         {{MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}};
     wire [PORTS-1:0] mp_ack, mp_done;
@@ -363,7 +409,7 @@ module sdram_kf_shim #(
         .p_addr       (mp_addr),
         .p_len        (mp_len),
         .p_ack        (mp_ack),
-        .p_wcnt       (),
+        .p_wcnt       (mp_wcnt),
         .p_wdata      (mp_wdata),
         .p_wmask      (mp_wmask),
         .grant        (mp_grant),
