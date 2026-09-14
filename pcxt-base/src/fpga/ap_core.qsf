@@ -757,6 +757,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/hid_to_ps2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_keyboard.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_kbd_ps2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gdc.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_grcg.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_mouse.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_video.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/video_sync_guard.sv

@@ -308,6 +308,14 @@ jobs:
           ./obj_gdc/g | tee gdc.log
           grep -q "PASS tb_pc98_gdc" gdc.log
 
+      - name: the GRCG's three operations match np2kai's expressions
+        run: |
+          S=pcxt-base/src/fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_grcg \
+            -Isim -I$S sim/tb_pc98_grcg.sv $S/pc98_grcg.sv -o gr --Mdir obj_grcg
+          ./obj_grcg/gr | tee grcg.log
+          grep -q "PASS tb_pc98_grcg" grcg.log
+
       - name: CE generator makes the frequencies the speed menu names
         run: |
           H=pcxt-base/src/fpga/core/KFPC-XT/HDL
