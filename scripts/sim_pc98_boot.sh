@@ -108,7 +108,10 @@ if [ "$V30" = 1 ]; then
   CPU_FILES="/work/$V/v30u_ss_pkg.sv \
     /work/$V/v30_core.sv /work/$V/v30u_biu.sv /work/$V/v30u_eu.sv \
     /work/$V/v30u_ucrom.sv /work/$S/v30_cpu_bridge.sv"
-  CPU_DEF="+define+CPU_V30+V30_BACKDOOR"
+  # MACHINE_PC98 too: XT_CE_Generator keys its speed table on it, and a V30
+  # bench that ran the PC/XT frequencies would not be the hardware rehearsal
+  # it is meant to be. No other file in this list reads the macro.
+  CPU_DEF="+define+CPU_V30+V30_BACKDOOR+MACHINE_PC98"
   CPU_INC="-I/work/$V"
 else
   CPU_FILES="/work/$S/8088/i8088.v /work/$S/8088/biu_max.v \

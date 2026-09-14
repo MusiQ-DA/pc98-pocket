@@ -279,6 +279,18 @@ jobs:
             grep -q "RESULT: PASS" ct_$mode.log
           done
 
+      - name: CE generator makes the frequencies the speed menu names
+        run: |
+          H=pcxt-base/src/fpga/core/KFPC-XT/HDL
+          for d in "+define+MACHINE_PC98" "+define+CE_XT_BUILD"; do
+            verilator --binary --timing -Wno-fatal --top-module tb_ce_rates $d \
+              -Isim -I$H sim/tb_ce_rates.sv $H/XT_CE_Generator.sv \
+              -o ce --Mdir obj_ce
+            ./obj_ce/ce | tee ce.log
+            grep -q "PASS tb_ce_rates" ce.log
+            rm -rf obj_ce
+          done
+
       - name: postmon ROM peek reads the ROM the loader wrote (not the ITF shadow)
         run: |
           S=pcxt-base/src/fpga/core

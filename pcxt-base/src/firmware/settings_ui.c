@@ -79,11 +79,14 @@ enum {
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
-// The four speeds the CE generator really makes from the 42.95 MHz chipset clock; the
-// PC/XT build names the fourth for the PC/AT box it was tuned against, while the PC-98
-// build says what it is: the cycle-inaccurate maximum.
+// The four speeds the CE generator really makes from the 42.95 MHz chipset clock.
+// The PC-98 ladder is the 2.4576 MHz family this machine presents (x2 and x4 are the
+// "5 MHz" and "10 MHz" of a PC-9801VM/VX; the third is twice the fast one, still
+// cycle-paced) and a fourth that is the chipset clock itself -- not a speed, the
+// cycle-inaccurate maximum. The PC/XT build keeps its own frequencies and names its
+// fourth for the PC/AT box it was tuned against.
 #ifdef MACHINE_PC98
-static const char *const opt_cpu[] = { "4.77 MHz", "7.16 MHz", "9.54 MHz", "Turbo (max)" };
+static const char *const opt_cpu[] = { "5 MHz", "10 MHz", "20 MHz", "Turbo (max)" };
 #else
 static const char *const opt_cpu[] = { "4.77 MHz", "7.16 MHz", "9.54 MHz", "PC/AT 3.5 MHz" };
 #endif
@@ -115,10 +118,14 @@ typedef struct {
 #define SETTING_D(a, d) { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), (d) }
 
 static setting_t settings[SET_COUNT] = {
-    // Index 2 is 9.54 MHz. A PC-9801VM's V30 runs at 8 or 10, and this is the
-    // closest of the four -- 4.5 per cent under the fast setting. At the 4.77
-    // MHz default the ITF's 640 KB memory test is a long wait with nothing on
-    // screen but its own test pattern.
+    // Index 1 is the faithful clock: a PC-9801VM/VX's V30 at 2.4576 MHz x4.
+    // The default is index 2 anyway, because v30_cpu_bridge splits every word
+    // access into two byte cycles on the 8-bit chipset -- about 12 CPU clocks
+    // where a real 16-bit V30 spends 4 -- so index 2 is the setting whose
+    // THROUGHPUT lands nearest a real 10 MHz machine, not index 1. Move the
+    // default down to 1 when the 16-bit memory path lands and the split goes
+    // away. At index 0 the ITF's 640 KB memory test is a long wait with nothing
+    // on screen but its own test pattern.
     SETTING_D(opt_cpu, 2),    // SET_CPU_SPEED
     SETTING(opt_yes_no),      // SET_CGA_GFX (Yes = the card's I/O decode responds)
     SETTING(opt_yes_no),      // SET_HGC_GFX

@@ -50,6 +50,50 @@ module XT_CE_Generator (
         cpu_edge_num = 9'd2;
         cpu_edge_den = 9'd9;
 
+`ifdef MACHINE_PC98
+        // PC-98 speeds. The machine is a 2.4576 MHz-family box -- the class the
+        // ITF selects when [0x0501] bit 7 is clear, which is what this build
+        // presents and what the PIT is already clocked for (docs/HANDOVER.md
+        // 3.6) -- so the V30's two real speeds are 2.4576 MHz x2 and x4, the
+        // "5 MHz" and "10 MHz" of a PC-9801VM/VX front panel. The third step is
+        // twice the fast one: not a speed any real machine had, but still
+        // cycle-paced, unlike the fourth. 201 is the denominator that lands all
+        // three within 0.0001% of the exact frequency, and 184/201 still fits
+        // the 9-bit accumulator.
+        //
+        // The clock_cycle_counter_* and shift_read_timing outputs below are the
+        // 8088 BIU's, and the 8088 is not instantiated in this build (core_top
+        // puts the nuV30 + v30_cpu_bridge there); only the edge ratio and the
+        // RAM waits are consumed here.
+        case (active_clk_select)
+            2'b00:
+            begin                                   // 4.915197 MHz ("5 MHz")
+                cpu_edge_num = 9'd46;
+                cpu_edge_den = 9'd201;
+            end
+
+            2'b01:
+            begin                                   // 9.830393 MHz ("10 MHz")
+                cpu_edge_num = 9'd92;
+                cpu_edge_den = 9'd201;
+            end
+
+            2'b10:
+            begin                                   // 19.660787 MHz (2 x fast)
+                cpu_edge_num = 9'd184;
+                cpu_edge_den = 9'd201;
+                ram_read_wait_cycle = 2'd1;         // as the 1/1 step needs
+            end
+
+            2'b11:
+            begin                                   // 21.477 MHz, the chipset
+                cpu_edge_num = 9'd1;                // clock itself
+                cpu_edge_den = 9'd1;
+                cycle_accrate = 1'b0;
+                ram_read_wait_cycle = 2'd1;
+            end
+        endcase
+`else
         case (active_clk_select)
             2'b00:
             begin
@@ -85,6 +129,7 @@ module XT_CE_Generator (
                 ram_read_wait_cycle = 2'd1;
             end
         endcase
+`endif
     end
 
     always_ff @(posedge clock, posedge reset)

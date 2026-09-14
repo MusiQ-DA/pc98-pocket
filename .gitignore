@@ -20,3 +20,4 @@ pcxt-base/src/firmware/firmware.elf
 pcxt-base/src/firmware/firmware.bin
 __pycache__/
 *.pyc
+pcxt-base/src/firmware/obj_dir/

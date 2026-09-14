@@ -76,7 +76,7 @@ module tb_pc98_boot;
         // wall minutes to reach the reset at 18.5 s of guest time should take
         // twenty. Timer-fed delays still take their full guest time, which is
         // the honest trade: the machine itself is faster, not the clocks.
-        .clk_select                         (2'b10),      // 9.54 MHz, the firmware default
+        .clk_select                         (2'b10),      // the firmware default (PC-98: 19.66 MHz)
         .cpu_clk_pin                        (clk_cpu),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
