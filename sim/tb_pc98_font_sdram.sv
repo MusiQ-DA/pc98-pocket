@@ -6,9 +6,12 @@
 // glyph the renderer eventually reads is the one that is actually in the font,
 // which is the whole chain the kanji path depends on.
 //
-// The font slice in font_slice.hex was cut from a real font.rom: ANK 'A' at
-// 0x0C10 and hiragana A at 0x3C40, both halves. Its lines are
-// "<byte offset> <value>" with one byte per SDRAM word, which is how RAM.sv
+// The glyphs in font_slice.hex are drawn for this bench (a plain 'A'-shaped
+// pattern at byte 0x0C10 in the 8x16 ANK window and two 16x16 halves at
+// byte 0x3C40/0x3C50): the bench only checks that bytes make the round trip,
+// so the pattern content is arbitrary and no font.rom bytes are committed.
+// Its lines are "<word offset> <value>" -- byte offset doubled, one byte per
+// SDRAM word, which is how RAM.sv
 // stores everything and therefore how the loader will write it.
 //
 // Both of the row buffer's glyph sources are modelled, because it has two and
