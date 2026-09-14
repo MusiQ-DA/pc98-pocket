@@ -160,6 +160,11 @@ module PERIPHERALS #(
     // The keyboard's last two hops. KEY (core_top) says the translator emitted
     // the event; these say whether the 8251 raised IRQ1 for it and whether the
     // guest ever came to collect the byte at 0x41.
+    // The master PIC's eight request lines as a level, and a count of timer
+    // ticks. INT (core_top) says the CPU stopped being interrupted; these say
+    // whether anything is still ASKING.
+    output  logic    [7:0]  dbg_irq_level,
+    output  logic    [7:0]  dbg_timer_count,
     output  logic    [7:0]  dbg_kbd_irq_count,
     output  logic    [7:0]  dbg_kbd_rd_count,
     output  logic   [14:0]  dbg_gdc_sad,
@@ -1931,6 +1936,25 @@ end endgenerate
         .read_data          (kbd8251_read_data),
         .irq                (kbd8251_irq)
     );
+
+    logic timer_interrupt_q;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            timer_interrupt_q <= 1'b0;
+            dbg_timer_count   <= 8'h00;
+        end else begin
+            timer_interrupt_q <= timer_interrupt;
+            if (timer_interrupt & ~timer_interrupt_q && dbg_timer_count != 8'hFF)
+                dbg_timer_count <= dbg_timer_count + 8'd1;
+        end
+    end
+`ifdef MACHINE_PC98
+    assign dbg_irq_level = {interrupt2_to_cpu, fdd_interrupt, interrupt_request[5],
+                            uart_interrupt, uart2_interrupt, crt_vsync_irq,
+                            keybord_interrupt, timer_interrupt};
+`else
+    assign dbg_irq_level = 8'h00;
+`endif
 
     logic kbd8251_irq_q;
     always_ff @(posedge clock, posedge reset) begin
