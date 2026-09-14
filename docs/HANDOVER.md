@@ -414,7 +414,17 @@ MEMORY SWITCH ERROR まで到達**(ポート0x31を誤って0x12にしたのが�
 
 - `scripts/deploy.sh` は `hiroya.PCXTDEV` に書く。**PC-98 は
   `scripts/deploy_pc98.sh`** — ROM 3本(bios/itf/font)と firmware を
-  `Assets/pc98/hiroya.PC9801/` に一式置く。間違えた方は1発で分かる。
+  `Assets/pc98/hiroya.PC9801/` に一式置く。
+  **「間違えた方は1発で分かる」は誤り**(2026-09-14 に実証)。`deploy.sh` は
+  "written and verified" と成功を報告して exit 0 し、起動される
+  `hiroya.PC9801` は前回のビットストリームと **firmware.bin** のまま動く
+  (firmware はカードから読むデータスロットなので、ビットストリームだけ
+  新しくしても置き換わらない)。OSD フォント修正が「効いていない」と
+  読めたが、実機に一度も届いていなかった。
+  `deploy.sh` は `--core` 明示なしでは実行を拒否するようにした。
+  効かないように見えたら、まず
+  `/Volumes/ANALOGUE/Assets/pc98/hiroya.PC9801/firmware.bin` を
+  そのコミットの `pcxt-base/src/firmware/firmware.bin` とバイト比較すること。
 - Pocket のカードは `/Volumes/ANALOGUE`。`/Volumes/Untitled`(exFAT)は
   別カード(h2testw の検査ファイル入り)。
 - `--run N` は per_page=20 の縛りで古い run を引くと永久スピンしていた

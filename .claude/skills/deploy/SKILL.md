@@ -5,15 +5,28 @@ description: Wait for the current CI build, fetch the bitstream, convert it to t
 
 # Deploying a build to the Pocket
 
-`scripts/deploy.sh` does the whole loop. Run it in the background and report
-what it says; do not re-implement the steps by hand.
+`scripts/deploy_pc98.sh` does the whole loop for THIS repository's core. Run it
+in the background and report what it says; do not re-implement the steps by hand.
 
 ```
-scripts/deploy.sh                  # latest run -> hiroya.PCXTDEV
-scripts/deploy.sh --core PCXTA     # into a named core directory
-scripts/deploy.sh --run 87         # a specific run
-scripts/deploy.sh --no-eject       # leave the card mounted
+scripts/deploy_pc98.sh             # latest run -> hiroya.PC9801
+scripts/deploy_pc98.sh --run 87    # a specific run
+scripts/deploy_pc98.sh --roms DIR  # a ROM set other than ~/.pc98roms
 ```
+
+**Not `scripts/deploy.sh`.** That one writes `hiroya.PCXTDEV`, the PC/XT core,
+whose `data.json` has no font slot and whose Assets folder has none of the PC-98
+ROMs. It now refuses to run without an explicit `--core`, because when it was
+run bare it reported "written and verified" and exited 0 while the core actually
+being launched kept the previous build -- an OSD font fix read as "not fixed" on
+hardware having never reached the machine.
+
+`deploy_pc98.sh` builds the whole `hiroya.PC9801` core directory: the bitstream,
+the PC-98 `data.json` (BIOS=1, ITF=2, Font=3, Firmware=4, Settings=7), and
+`bios.rom` / `itf.rom` / `font.rom` / `firmware.bin` into
+`Assets/pc98/hiroya.PC9801/`. **`firmware.bin` is a data slot loaded off the
+card, so a new bitstream alone does not replace it** -- which is why a partial
+deploy can leave a stale firmware running under a fresh bitstream.
 
 Always launch it with `run_in_background: true`. It polls CI every 45 s and the
 card every 15 s, for up to 90 minutes, so it will happily sit waiting while the

@@ -8,10 +8,20 @@
 # finished while nobody was looking, and the card sat mounted while nobody was
 # copying.
 #
-#   scripts/deploy.sh                     latest run -> the PCXTDEV core
-#   scripts/deploy.sh --core PCXTA        ... into a named core directory
+#   scripts/deploy.sh --core PCXTA        into a named PC/XT core directory
 #   scripts/deploy.sh --run 87            a specific run number
 #   scripts/deploy.sh --no-eject          leave the card mounted
+#
+# THIS IS NOT THE PC-98 DEPLOY. Use scripts/deploy_pc98.sh for that; this one
+# refuses to run without an explicit --core, and the reason is a measured
+# failure rather than tidiness. On 2026-09-14 it was run with no arguments: it
+# wrote hiroya.PCXTDEV, said "written and verified", and exited 0 -- while the
+# core actually being launched, hiroya.PC9801, kept the PREVIOUS build's
+# bitstream AND its firmware.bin (the firmware is a data slot loaded off the
+# card, so a new bitstream does not replace it). An OSD font fix read as "not
+# fixed" on hardware when it had never reached the machine. The success message
+# is about the directory it wrote, not the core that boots, and nothing about
+# the PC-98 core's screen says which build it is running.
 #
 # Safe to background: it polls, it does not hold anything open, and every step
 # is verified before the next one.
@@ -21,7 +31,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-CORE="PCXTDEV"
+CORE=""          # no default: see the banner above
 RUN=""
 EJECT=1
 VOL="/Volumes/ANALOGUE"
@@ -38,6 +48,19 @@ while [ $# -gt 0 ]; do
         *) echo "unknown option: $1"; exit 2 ;;
     esac
 done
+
+if [ -z "$CORE" ]; then
+    cat >&2 <<'EOM'
+deploy.sh: refusing to guess a core directory.
+
+  PC-98 (what this repository builds):   scripts/deploy_pc98.sh
+  a PC/XT variant core:                  scripts/deploy.sh --core PCXTA
+
+Run with no arguments this used to write hiroya.PCXTDEV and report success
+while the PC-98 core kept the previous build. See the banner in this file.
+EOM
+    exit 2
+fi
 
 say() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 
