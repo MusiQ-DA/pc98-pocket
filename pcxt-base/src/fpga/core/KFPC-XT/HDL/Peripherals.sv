@@ -531,7 +531,13 @@ module PERIPHERALS #(
     assign  ems_b2                  = `ENABLE_EMS ? (~iorq && ena_ems[1] && (address[19:14] == {ems_page_address, 2'b01})) : 1'b0; // C4000h - D4000h - E4000h
     assign  ems_b3                  = `ENABLE_EMS ? (~iorq && ena_ems[2] && (address[19:14] == {ems_page_address, 2'b10})) : 1'b0; // C8000h - D8000h - E0000h
     assign  ems_b4                  = `ENABLE_EMS ? (~iorq && ena_ems[3] && (address[19:14] == {ems_page_address, 2'b11})) : 1'b0; // CC000h - DC000h - EC000h
+`ifdef MACHINE_PC98
+    // No IDE on this machine -- see the XT2IDE block. Held deasserted so the
+    // read mux arm at the bottom of the file is unreachable and prunes.
+    wire    ide0_chip_select_n      = 1'b1;
+`else
     wire    ide0_chip_select_n      = ~(iorq && ~address_enable_n && ({address[15:4], 4'd0} == 16'h0300));
+`endif
 `ifdef PC98_FDC_REAL
     // THE REAL uPD765 ON THE PC-98's PORTS.
     //
@@ -2577,6 +2583,18 @@ end endgenerate
     //
     // XT2IDE
     //
+    // GONE ON PC-98. The AT task-file at 0x300-0x30F is a PC/XT interface; a
+    // PC-98 uses SASI (0x80/0x82), SCSI (0xCC0-0xCC6) or -- only from the
+    // 9821 generation -- IDE at 0x640-0x64F. Neither bios.rom nor itf.rom
+    // references 0x640-0x64F at all, in any addressing form, so nothing in
+    // this machine's ROM set could ever drive what is here. It was inherited
+    // from the PC/XT base and instantiated unconditionally, so it has been
+    // occupying a device that is at 91% ALM.
+    //
+    // np2kai agrees about the generation: SUPPORT_IDEIO is in its ia32 /
+    // PC-9821 definitions only, while the V30/286 common build gets
+    // SUPPORT_SCSI. SCSI at 0xCC0 is what replaces this.
+`ifndef MACHINE_PC98
     logic   [7:0]   xt2ide0_data_bus_out;
     logic           ide0_cs1fx;
     logic           ide0_cs3fx;
@@ -2712,6 +2730,13 @@ end endgenerate
     );
 
     assign ide0_data_bus_in = ~ide_ignore ? ide_readdata : mmcide_readdata;
+`else
+    // The four things the rest of the file reads from the block above.
+    wire [7:0] xt2ide0_data_bus_out = 8'hFF;
+    wire       mgmt_ide0_cs         = 1'b0;
+    wire [15:0] mgmt_ide0_readdata  = 16'h0000;
+    assign     ide0_request         = 3'b000;
+`endif
 
 
     //
