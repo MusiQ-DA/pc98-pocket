@@ -39,6 +39,7 @@ module tb_pc98_boot;
     // OUT 0F0h resets the CPU and nothing else: memory keeps its contents and
     // the ROM bank keeps its selection, which is what the ITF's resume needs.
     logic       f0_prev_wr_n = 1'b1;
+    logic       f0_prev_rd_n = 1'b1;
     logic       soft_reset_cpu = 1'b0;
     logic [7:0] soft_reset_count = 8'h00;
     wire        cpu_reset_w = reset | soft_reset_cpu;
@@ -177,8 +178,8 @@ module tb_pc98_boot;
                   : dma_iocycle    ? dma_dout
                   : pic1_iocycle   ? pic1_dout
                   : pic2_iocycle   ? pic2_dout
-                  : kbd_data_iocycle ? 8'h60
-                  : kbd_stat_iocycle ? 8'h02
+                  : kbd_data_iocycle ? kbd8251_read_data
+                  : kbd_stat_iocycle ? kbd8251_read_data
                   : gdc_stat_iocycle ? gdc_status_mock
                   : cc_ioread       ? (cc_latch | 8'h30)
                   : fdc_msr_sel     ? fdc_msr
@@ -256,6 +257,7 @@ module tb_pc98_boot;
     // memory test. Held for a while, like the core's own reset release.
     always_ff @(posedge clk_chipset) begin
         f0_prev_wr_n <= io_wr_n;
+        f0_prev_rd_n <= io_rd_n;
         if (io_wr_n & ~f0_prev_wr_n & (cpu_address[15:0] == 16'h00F0)) begin
             soft_reset_cpu   <= 1'b1;
             soft_reset_count <= 8'hFF;
@@ -264,6 +266,32 @@ module tb_pc98_boot;
             soft_reset_count <= soft_reset_count - 8'h01;
         else
             soft_reset_cpu <= 1'b0;
+    end
+
+    // Keyboard flow: the 0x43 command writes, the 0x41 reads, and the state
+    // of [0x500] -- the byte whose bit 7 the ITF sets when it reads its 0x60
+    // and the BIOS branches on at FD897. This is the story the 8251 model is
+    // on trial for. (The 0x41 log samples the data mux WHILE the read is
+    // live: after the strobe ends the module's read_data falls back to the
+    // status word, which made the first run's log say "IN 41 -> 87".)
+    logic [7:0] kbd500_q  = 8'h00;
+    logic [7:0] kbd41_q   = 8'h00;
+    always_ff @(posedge clk_chipset) begin
+        if (kbd8251_en & ~io_rd_n & (cpu_address[15:0] == 16'h0041))
+            kbd41_q <= kbd8251_read_data;
+        if (kbd8251_en & (io_wr_n & ~f0_prev_wr_n)
+                       & (cpu_address[15:0] == 16'h0043))
+            $display("  %8t  KBD OUT 43 <- %02X  (eu_pc %05X)",
+                     $time, cpu_data_bus, eu_pc);
+        if (kbd8251_en & (io_rd_n & ~f0_prev_rd_n)
+                       & (cpu_address[15:0] == 16'h0041))
+            $display("  %8t  KBD IN  41 -> %02X  (eu_pc %05X)",
+                     $time, kbd41_q, eu_pc);
+        if (ram[20'h00500] !== kbd500_q) begin
+            $display("  %8t  [0500] %02X -> %02X  (eu_pc %05X)",
+                     $time, kbd500_q, ram[20'h00500], eu_pc);
+            kbd500_q <= ram[20'h00500];
+        end
     end
 
     wire [7:0] sysport_data = sysport_35_sel ? sysport_c
@@ -372,6 +400,12 @@ module tb_pc98_boot;
         // Memory write, on the trailing edge, and never into ROM.
         if (mem_wr_n & ~mem_wr_d & ~is_rom(cpu_address)) begin
             ram[cpu_address] <= mem_wr_data_q;
+            // The ITF's reset-resume state (0000:03F0-0410): every write here
+            // is part of the OUT-0F0h dance, and a save that goes missing is
+            // the difference between a resume and a derail.
+            if (cpu_address >= 20'h003F0 && cpu_address <= 20'h00410)
+                $display("  %8t  RESUME-state write %05X <- %02X  (eu_pc %05X)",
+                         $time, cpu_address, mem_wr_data_q, eu_pc);
             // Where the writes are going, chunk by chunk. The hardware's LIVE
             // readout is the same quantity, and "sweeping upward through the
             // memory test" and "going round a small ring" look identical on a
@@ -684,13 +718,54 @@ module tb_pc98_boot;
         end
     end
 
-    // ---- keyboard: none, like the hardware -----------------------------------
+    // ---- keyboard: the real 8251 model, the shipped RTL -----------------------
     //
-    // The BIOS copes: three polls of 0x43 (8251 status), then 0x41 answers
-    // nothing and it takes the absent path (FD9AD). The bench matches the
-    // machine; the old "present" stand-in took a branch it never takes.
-    wire kbd_stat_iocycle = 1'b0;
-    wire kbd_data_iocycle = 1'b0;
+    // pc98_kbd8251.sv is the model PERIPHERALS instantiates; running it here
+    // puts the actual RTL against the actual ROM sequence. Default OFF keeps
+    // the no-keyboard machine this bench has always been; +kbd8251=1 wires
+    // it in with its shipped ~10 ms ACK delay.
+    logic kbd8251_en = 1'b0;
+    initial begin
+        int v;
+        if ($value$plusargs("kbd8251=%d", v)) kbd8251_en = (v != 0);
+    end
+
+    logic       kbd8251_read_select;
+    logic [7:0] kbd8251_read_data;
+    wire        kbd8251_irq;
+
+    pc98_kbd8251 u_kbd8251 (
+        .clock              (clk_chipset),
+        .reset              (reset),
+        .ctrl_write_strobe  (kbd8251_en & ~io_wr_n & (cpu_address[15:0] == 16'h0043)),
+        .data_read_strobe   (kbd8251_en & ~io_rd_n & (cpu_address[15:0] == 16'h0041)),
+        .stat_read_strobe   (kbd8251_en & ~io_rd_n & (cpu_address[15:0] == 16'h0043)),
+        .data_in            (cpu_data_bus),
+        .read_select        (kbd8251_read_select),
+        .read_data          (kbd8251_read_data),
+        .irq                (kbd8251_irq)
+    );
+
+    wire kbd_stat_iocycle = kbd8251_read_select & (cpu_address[15:0] == 16'h0043);
+    wire kbd_data_iocycle = kbd8251_read_select & (cpu_address[15:0] == 16'h0041);
+
+    // Watch the model's innards: whether the edge armed, when the ACK lands.
+    logic kbd_rx_full_d = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        kbd_rx_full_d <= u_kbd8251.rx_full;
+        if (u_kbd8251.rx_full & ~kbd_rx_full_d)
+            $display("  %8t  KBD ACK landed (rx_full -> 1)", $time);
+    end
+    // And its state at every chunk line: cmd_q/ack_timer tell whether the
+    // break edge was even seen.
+    task automatic kbd_state_dump;
+        begin
+            if (kbd8251_en)
+                $display("        kbd8251: cmd %02X  timer %0d  rx_full %b  rx %02X",
+                         u_kbd8251.cmd_q, u_kbd8251.ack_timer,
+                         u_kbd8251.rx_full, u_kbd8251.rx_q);
+        end
+    endtask
 
     // ---- 2DD drive control (0xCC) and a minimal FDC --------------------------
     //
@@ -1039,6 +1114,7 @@ module tb_pc98_boot;
 
     // ---- run ---------------------------------------------------------------
     int i, j;
+    int chunks = 1200;              // +chunks=N cuts the run short
     initial begin
         for (i = 0; i < 1048576; i = i + 1) ram[i] = 8'h00;
         $readmemh("itf.hex",  itf);
@@ -1061,11 +1137,18 @@ module tb_pc98_boot;
         // AFTER the screen clear, and the clear alone took 8 seconds, so the
         // run needs the full 780 chunks (90 s) the sweep run used, and then
         // some: the memory test was still going at 280 KB when that one ended.
-        for (i = 0; i < 1200; i = i + 1) begin
+        // +chunks=N cuts it short when the question lives early (the keyboard
+        // probe answers inside the first two).
+        begin
+            int v;
+            if ($value$plusargs("chunks=%d", v)) chunks = v;
+        end
+        for (i = 0; i < chunks; i = i + 1) begin
             repeat (5_000_000) @(posedge clk_chipset);
             $display("  ... %0t  EU %05X  urom %04X  wr %05X-%05X n %0d  tvw %0d",
                      $time, eu_pc, urom,
                      wr_lo_chunk, wr_hi_chunk, wr_n_chunk, tvram_wr_count);
+            kbd_state_dump;
             $write("        cx %04X min %04X  ax %04X bx %04X dx %04X  pc:",
                    eu_cx, cx_min_chunk,
                    u_cpu.EU_CORE.eu_register_ax, u_cpu.EU_CORE.eu_register_bx,

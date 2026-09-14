@@ -206,6 +206,15 @@ jobs:
           ./obj_itf/t | tee itf.log
           grep -q "RESULT: PASS" itf.log
 
+      - name: keyboard 8251 answers the way the ROMs ask
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_kbd8251 \
+            -Isim -Ipcxt-base/src/fpga/core \
+            sim/tb_pc98_kbd8251.sv pcxt-base/src/fpga/core/pc98_kbd8251.sv \
+            -o k --Mdir obj_kbd
+          ./obj_kbd/k | tee kbd.log
+          grep -q "RESULT: PASS" kbd.log
+
       - name: no two OSD fields overlap
         run: python3 scripts/check_osd_layout.py
 
