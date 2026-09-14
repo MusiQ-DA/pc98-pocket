@@ -151,13 +151,20 @@ module tb_pc98_gdc;
         want("cursor bottom line",   cursor_bottom,     5'h11);
 
         // ---- the status register --------------------------------------------
-        // np2kai gdc_i60: bit 7 always, bit 6 hblank, bit 5 vsync, bit 2 empty.
-        // The mock this replaced had bit 7 CLEAR.
+        // bit 6 hblank, bit 5 vsync, bit 2 FIFO empty, and bit 7 CLEAR.
+        //
+        // Bit 7 is LIGHT PEN DETECT and this machine has no light pen. It was
+        // 1 here, copied from np2kai's unconditional 0x80, and the BIOS hung
+        // on it: F305E reads the status, sees the pen, issues LPRD at F3074
+        // and waits for DRDY, which never arrives because nothing queues
+        // read-back data -- then F3097 starts the whole sequence again. See
+        // pc98_gdc.sv. This bench asserted the value that produced the hang,
+        // which is why nothing caught it.
         hblank = 1'b0; vsync = 1'b0; @(posedge clk);
         cs = 1'b1; a1 = 1'b0; io_read_n = 1'b0; @(posedge clk);
-        want("status, quiet raster", data_out, 8'h84);
+        want("status, quiet raster (no light pen)", data_out, 8'h04);
         hblank = 1'b1; vsync = 1'b1; @(posedge clk);
-        want("status, hblank+vsync", data_out, 8'hE4);
+        want("status, hblank+vsync", data_out, 8'h64);
         io_read_n = 1'b1; cs = 1'b0;
 
         // ---- the guard on the scope decision --------------------------------

@@ -211,10 +211,35 @@ module pc98_gdc (
     // ------------------------------------------------------------------
     // np2kai gdc_i60: 0x80 always, 0x40 hblank, 0x20 vsync (gdc.vsync is set
     // to 0x20 in pccore.c), 0x04 FIFO empty, 0x02 FIFO full, 0x01 data ready.
-    // Bit 7 is set unconditionally there; the mock this replaces had it clear.
     // Nothing here queues read-back data yet, so empty is true and full and
     // ready are false.
-    wire [7:0] status = {1'b1, hblank, vsync, 1'b0, 1'b0, 1'b1, 1'b0, 1'b0};
+    //
+    // BIT 7 IS LIGHT PEN DETECT, AND IT IS CLEAR: no light pen is fitted.
+    //
+    // It was 1, copied from np2kai, which sets 0x80 unconditionally. np2 gets
+    // away with that because it also answers the read that follows. This does
+    // not, and the BIOS hangs in the gap:
+    //
+    //     F305E  in al,60h / test al,80h / jz 3094     no pen -> done
+    //     F3064  mov cx,0Ah
+    //     F3067  in al,60h / test al,04h / jnz 3071    wait for FIFO empty
+    //     F3074  mov al,C0h / out 62h,al               LPRD: read the pen
+    //     F307C  in al,60h / test al,01h / jnz 3086    wait for DRDY
+    //     F3082  loop 307C                             ten tries
+    //     F3097  mov al,4Ah / out 60h,al / jmp 305E    give up, START OVER
+    //
+    // Bit 0 never sets here, so the DRDY wait always times out and F3097 jumps
+    // back to the top forever. That is the machine the panel was showing: the
+    // last four I/O writes all port 0x60 with the count saturated, LIVE parked
+    // at F3069, the screen frozen after BASIC's function key line, interrupts
+    // still running (the loop is interruptible) and keys reaching the 8251 and
+    // being read by the ISR while the foreground never comes back to use them.
+    //
+    // Clearing bit 7 is the truth about this machine and takes the exit at
+    // F3062 on the first test, so LPRD is never issued. The alternative --
+    // keeping bit 7 and queueing three bytes for LPRD -- answers a question
+    // the hardware should not be asking.
+    wire [7:0] status = {1'b0, hblank, vsync, 1'b0, 1'b0, 1'b1, 1'b0, 1'b0};
 
     assign data_out = a1 ? 8'h00 : status;
 
