@@ -23,6 +23,15 @@ module RAM (
     input   logic   [19:0]  address,
     input   logic   [7:0]   internal_data_bus,
     output  logic   [7:0]   data_bus_out,
+    // Sixteen-bit CPU access. This machine keeps ONE GUEST BYTE PER 16-BIT
+    // SDRAM WORD (see access_data_in below), so the guest's byte N and byte
+    // N+1 sit in consecutive SDRAM words: a V30 word cycle is one burst of
+    // two, not two bus cycles. word_access says the cycle is a word, and the
+    // _hi pair carries its odd half. Held low, everything below behaves
+    // exactly as it did byte-at-a-time.
+    input   logic           word_access,
+    input   logic   [7:0]   internal_data_bus_hi,
+    output  logic   [7:0]   data_bus_out_hi,
     input   logic           memory_read_n,
     input   logic           memory_write_n,
     input   logic           no_command_state,
@@ -86,6 +95,7 @@ module RAM (
     state_t         next_state;
     logic   [22:0]  latch_address;
     logic   [7:0]   latch_data;
+    logic   [7:0]   latch_data_hi;
     logic           write_command;
     logic           read_command;
     logic           prev_no_command_state;
@@ -175,10 +185,14 @@ module RAM (
 
     // Data
     always_ff @(posedge clock, posedge reset) begin
-        if (reset)
+        if (reset) begin
             latch_data      <= 0;
-        else
+            latch_data_hi   <= 0;
+        end
+        else begin
             latch_data      <= internal_data_bus;
+            latch_data_hi   <= internal_data_bus_hi;
+        end
     end
 
     // Write Command
@@ -206,7 +220,21 @@ module RAM (
     logic   [24:0]  access_address;
     logic   [9:0]   access_num;
     logic   [15:0]  access_data_in;
+    logic   [15:0]  access_data_in_hi;
     logic   [15:0]  access_data_out;
+    logic   [15:0]  access_data_out_hi;
+
+    // A word access is two words only where the far end can burst; config.tcl
+    // defines PC98_WORD_MEM alongside SDRAM_USE_MP and nowhere else, and the
+    // shim's KF_REF far end cannot count read beats. Undefined, this file is
+    // byte-at-a-time exactly as before and word_access is dead.
+`ifdef PC98_WORD_MEM
+    wire            word_now = word_access;
+`else
+    wire            word_now = 1'b0;
+    wire _unused_word = &{1'b0, word_access, internal_data_bus_hi, 1'b0};
+`endif
+    wire    [9:0]   access_words = word_now ? 10'h002 : 10'h001;
     logic           write_request;
     logic           read_request;
     logic           write_flag;
@@ -225,6 +253,8 @@ module RAM (
         .access_num         (access_num),
         .data_in            (access_data_in),
         .data_out           (access_data_out),
+        .data_in_hi         (access_data_in_hi),
+        .data_out_hi        (access_data_out_hi),
         .write_request      (write_request),
         .read_request       (read_request),
         .enable_refresh     (enable_refresh),
@@ -283,7 +313,8 @@ module RAM (
         .sdram_dq_out       (sdram_dq_out),
         .sdram_dq_io        (sdram_dq_io)
     );
-    // Stock KFSDRAM has no second master.
+    // Stock KFSDRAM has neither a second master nor a burst on this port.
+    assign access_data_out_hi = 16'h0000;
     assign font_rd_ack   = 1'b0;
     assign font_rd_valid = 1'b0;
     assign font_rd_data  = 16'h0000;
@@ -366,8 +397,9 @@ module RAM (
         casez (state)
             IDLE: begin
                 access_address  = {6'h00, latch_address};
-                access_num      = 10'h001;
+                access_num      = access_words;
                 access_data_in  = {8'h00, latch_data};
+                access_data_in_hi = {8'h00, latch_data_hi};
                 write_request   = write_command ? 1'b1 : 1'b0;
                 read_request    = read_command  ? 1'b1 : 1'b0;
                 sdram_ldqm      = 1'b0;
@@ -375,8 +407,9 @@ module RAM (
             end
             RAM_WRITE_1: begin
                 access_address  = {6'h00, latch_address};
-                access_num      = 10'h001;
+                access_num      = access_words;
                 access_data_in  = {8'h00, latch_data};
+                access_data_in_hi = {8'h00, latch_data_hi};
                 write_request   = 1'b1;
                 read_request    = 1'b0;
                 sdram_ldqm      = 1'b0;
@@ -384,8 +417,9 @@ module RAM (
             end
             RAM_WRITE_2: begin
                 access_address  = {6'h00, latch_address};
-                access_num      = 10'h001;
+                access_num      = access_words;
                 access_data_in  = {8'h00, latch_data};
+                access_data_in_hi = {8'h00, latch_data_hi};
                 write_request   = 1'b0;
                 read_request    = 1'b0;
                 sdram_ldqm      = 1'b0;
@@ -393,8 +427,9 @@ module RAM (
             end
             RAM_READ_1: begin
                 access_address  = {6'h00, latch_address};
-                access_num      = 10'h001;
+                access_num      = access_words;
                 access_data_in  = 16'h0000;
+                access_data_in_hi = 16'h0000;
                 write_request   = 1'b0;
                 read_request    = 1'b1;
                 sdram_ldqm      = 1'b0;
@@ -402,8 +437,9 @@ module RAM (
             end
             RAM_READ_2: begin
                 access_address  = {6'h00, latch_address};
-                access_num      = 10'h001;
+                access_num      = access_words;
                 access_data_in  = 16'h0000;
+                access_data_in_hi = 16'h0000;
                 write_request   = 1'b0;
                 read_request    = 1'b0;
                 sdram_ldqm      = 1'b0;
@@ -411,8 +447,9 @@ module RAM (
             end
             COMPLETE_RAM_RW: begin
                 access_address  = 25'h0000000;
-                access_num      = 10'h001;
+                access_num      = access_words;
                 access_data_in  = 16'h0000;
+                access_data_in_hi = 16'h0000;
                 write_request   = 1'b0;
                 read_request    = 1'b0;
                 sdram_ldqm      = 1'b0;
@@ -420,8 +457,9 @@ module RAM (
             end
             WAIT: begin
                 access_address  = 25'h0000000;
-                access_num      = 10'h001;
+                access_num      = access_words;
                 access_data_in  = 16'h0000;
+                access_data_in_hi = 16'h0000;
                 write_request   = 1'b0;
                 read_request    = 1'b0;
                 sdram_ldqm      = 1'b1;
@@ -435,17 +473,29 @@ module RAM (
     // Databus Out
     //
     logic   [7:0]   data_bus_out_reg;
+    logic   [7:0]   data_bus_out_hi_reg;
 
     always_ff @(posedge clock, posedge reset) begin
-        if (reset)
+        if (reset) begin
             data_bus_out_reg    <= 0;
-        else if (read_flag)
+            data_bus_out_hi_reg <= 0;
+        end
+        else if (read_flag) begin
             data_bus_out_reg    <= access_data_out[7:0];
-        else
+            data_bus_out_hi_reg <= access_data_out_hi[7:0];
+        end
+        else begin
             data_bus_out_reg    <= data_bus_out_reg;
+            data_bus_out_hi_reg <= data_bus_out_hi_reg;
+        end
     end
 
     assign  data_bus_out = ~read_command ? 0 : ~read_flag ? data_bus_out_reg : access_data_out[7:0];
+    // The odd half, on exactly the same terms. Both beats of a two-word read
+    // land before read_flag drops, so the same latch-while-flag rule holds.
+    assign  data_bus_out_hi = ~read_command ? 0
+                            : ~read_flag    ? data_bus_out_hi_reg
+                                            : access_data_out_hi[7:0];
 
 
     //
@@ -488,8 +538,35 @@ module RAM (
             write_wait_count    <= write_wait_count;
     end
 
+    // Ready comes from the STATE, not from the access_ready register.
+    //
+    // access_ready is a clock behind the command: it is latched from `idle` in
+    // the IDLE state, so for the first one or two chipset clocks after a
+    // command rises it still reads 1 while read_flag is still 0 and
+    // data_bus_out is THE PREVIOUS ACCESS'S BYTE. Measured in tb_v30_mem:
+    //
+    //   st=3 rdcmd=1 rdflag=0 ardy=1 prdy=1 dout=10   <- command up, stale
+    //   st=4 rdcmd=1 rdflag=1 ardy=1 prdy=1 dout=10   <- a CE edge lands here
+    //   st=4 rdcmd=1 rdflag=1 ardy=0 prdy=0 dout=10   <- ready finally drops
+    //   st=4 ...                               dout=8b <- the real byte
+    //
+    // The 8088 never fell in: it samples READY once, deep in T3, a whole CPU
+    // clock (nine chipset cycles at 4.77 MHz) after the command. v30_cpu_bridge
+    // samples at EVERY posedge CE from its third T state on, and the 8288
+    // raises the command around that same edge -- so the byte engine could
+    // complete in the stale window and latch the previous byte. It did: the
+    // first instruction fetch after a taken branch came back wrong, the CPU ran
+    // into zeros, and it never recovered. On the machine that is the ITF's
+    // memory test, which is a loop, reporting 000KB and starting over.
+    //
+    // COMPLETE_RAM_RW is reached only when the transaction has genuinely
+    // finished -- it is what access_complete already means for the ROM loader
+    // -- and data_bus_out_reg holds the captured byte by then. Saying ready
+    // there and nowhere else makes this a real handshake for any master,
+    // however it samples. The 8088 sees ready no earlier than it did; it just
+    // no longer sees it before the data.
     assign  memory_access_ready = ((~ram_address_select_n) && ((~memory_read_n) || (~memory_write_n)))
-                                        ? (access_ready & ((read_wait_count==0) || (~read_command)) & ((write_wait_count==0) || (~write_command))) : 1'b1;
+                                        ? ((state == COMPLETE_RAM_RW) & ((read_wait_count==0) || (~read_command)) & ((write_wait_count==0) || (~write_command))) : 1'b1;
 
     // ROM-load (Pocket): a clean per-access "done" pulse for core_top's BIOS
     // loader. COMPLETE_RAM_RW is reached only after the SDRAM write truly

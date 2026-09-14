@@ -54,6 +54,8 @@ module sdram_model #(
     logic [15:0] store [int];             // sparse; key is the flat word address
 
     int  open_row  [BANKS];               // -1 when the bank is precharged
+    int  dbg_rd = 0;
+    initial if (!$value$plusargs("dbgrd=%d", dbg_rd)) dbg_rd = 0;
     int  act_at    [BANKS];               // cycle the row was activated
     int  pre_at    [BANKS];               // cycle the bank was precharged
     int  wr_at     [BANKS];               // cycle of the last write datum
@@ -165,6 +167,8 @@ module sdram_model #(
                     complain("tRFC violated: ACTIVATE too soon after AUTO REFRESH");
                 open_row[ba] = int'(a);
                 act_at[ba]   = cyc;
+                if (dbg_rd)
+                    $display("%0t  PART ACT  ba=%0d row=%0d", $time, ba, open_row[ba]);
             end
 
             3'b101: begin // READ
@@ -177,6 +181,13 @@ module sdram_model #(
                     rd_data[0] <= store.exists(addr) ? store[addr] : 16'hDEAD;
                     rd_vld[0]  <= 1'b1;
                     reads_served++;
+                    // +dbgrd=1: what the PART thinks it is reading. "The
+                    // command stream looks right but the data is wrong" is
+                    // only answerable from in here.
+                    if (dbg_rd)
+                        $display("%0t  PART READ ba=%0d row=%0d col=%0d -> flat=%05x data=%04x",
+                                 $time, ba, open_row[ba], a[COL_BITS-1:0], addr,
+                                 store.exists(addr) ? store[addr] : 16'hDEAD);
                 end
                 if (a[10]) complain("auto-precharge READ is not modelled");
             end
