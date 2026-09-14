@@ -437,8 +437,15 @@ module PERIPHERALS #(
         .irq_2dd          (fdc_irq2)
     );
 
+`ifdef PC98_FDC_REAL
+    // 0x90 and 0x92 now come from the real controller; 0xBE, 0x94 and 0xCC
+    // keep their PC-98 handling, which has no XT counterpart.
+    wire fdd_stub_read = (fdd_be_select | fdd_94_select
+                          | fdd_cc_select) & ~io_read_n;
+`else
     wire fdd_stub_read = (fdd_be_select | fdd_90_select | fdd_94_select
                           | fdd_cc_select | fdc_base_select) & ~io_read_n;
+`endif
     wire [7:0] fdd_stub_data = fdd_be_select  ? 8'hFB
                              : fdd_90_select  ? fdc_msr
                              : fdd_94_select  ? 8'h44
@@ -499,7 +506,41 @@ module PERIPHERALS #(
     assign  ems_b3                  = `ENABLE_EMS ? (~iorq && ena_ems[2] && (address[19:14] == {ems_page_address, 2'b10})) : 1'b0; // C8000h - D8000h - E0000h
     assign  ems_b4                  = `ENABLE_EMS ? (~iorq && ena_ems[3] && (address[19:14] == {ems_page_address, 2'b11})) : 1'b0; // CC000h - DC000h - EC000h
     wire    ide0_chip_select_n      = ~(iorq && ~address_enable_n && ({address[15:4], 4'd0} == 16'h0300));
+`ifdef PC98_FDC_REAL
+    // THE REAL uPD765 ON THE PC-98's PORTS.
+    //
+    // floppy.v is a uPD765, which is the right chip -- a PC-98's FDC is a
+    // uPD765A -- and it holds the disk image and the DMA path. What was wrong
+    // was only WHERE it listened: 0x03F0-0x03F7, the PC/XT's window. A PC-98
+    // guest writes 0x90/0x92 (2HD) and 0xC8/0xCA (2DD), which reached the stub
+    // below and nothing else.
+    //
+    // np2kai io/fdc.c attaches both groups to the same four handlers
+    // (`iocore_attachcmnoutex(0x0090, 0x00f9, fdco90, 4)` and the same for
+    // 0x00c8), so the two windows are one register set:
+    //
+    //     0x90 / 0xC8   read: main status (MSR)
+    //     0x92 / 0xCA   read/write: the data register
+    //     0x94 / 0xCC   control -- NOT the same shape as the XT's DOR, so it
+    //                   keeps the PC-98 handling below rather than being
+    //                   translated
+    //
+    // The translation is therefore only of the two that do correspond: MSR at
+    // the XT's offset 4, data at 5.
+    //
+    // DEFAULT OFF, and that is deliberate. The stub below was tuned against
+    // the ROM's probes for a machine WITH NO DRIVE -- its comments record what
+    // each constant had to be to get the BIOS past them -- and nothing in this
+    // tree reaches an FDD transfer yet to say whether the real path behaves.
+    // Turning this on trades a known-good stub for an untested path; it wants
+    // a bench that gets there first.
+    wire    floppy0_chip_select_n   = ~(~address_enable_n
+                                     && (address[15:8] == 8'h00)
+                                     && ((address[7:0] == 8'h90) || (address[7:0] == 8'h92)
+                                      || (address[7:0] == 8'hC8) || (address[7:0] == 8'hCA)));
+`else
     wire    floppy0_chip_select_n   = ~(~address_enable_n && (({address[15:2], 2'd0} == 16'h03F0) || ({address[15:1], 1'd0} == 16'h03F4) || ({address[15:0]} == 16'h03F7)));
+`endif
 
     logic   [1:0]   ems_access_address;
     logic           ems_write_enable;
@@ -2571,7 +2612,12 @@ end endgenerate
 
     always_ff @(posedge clock)
     begin
+`ifdef PC98_FDC_REAL
+        // 0x90/0xC8 -> the XT's MSR offset, 0x92/0xCA -> its data offset.
+        fdd_io_address     <= address[1] ? 3'd5 : 3'd4;
+`else
         fdd_io_address     <= address[2:0];
+`endif
         fdd_io_read        <= ~io_read_n & prev_io_read_n   & ~floppy0_chip_select_n;
         fdd_io_read_1      <= fdd_io_read;
         fdd_io_write       <= io_write_n & ~prev_io_write_n & ~floppy0_chip_select_n;
