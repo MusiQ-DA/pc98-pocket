@@ -806,6 +806,13 @@ set_global_assignment -name VERILOG_FILE core/pll_video_hgc.v
 set_global_assignment -name SEARCH_PATH core/8088
 set_global_assignment -name SEARCH_PATH core/video
 set_global_assignment -name SEARCH_PATH core/common
+# core/ itself: pc98_sdram_map.svh lives there and is `include`d from three
+# places, one of which (KFPC-XT/HDL/RAM.sv) is four directories away. The
+# Verilator benches pass -Ipcxt-base/src/fpga/core and never noticed; Quartus
+# resolves an include against the file's own directory and the search path, so
+# without this every build since the map landed has been
+#   Error (10054): can't open Verilog Design File "pc98_sdram_map.svh"
+set_global_assignment -name SEARCH_PATH core
 set_global_assignment -name QIP_FILE core/common/common.qip
 set_global_assignment -name QIP_FILE core/video/video.qip
 set_global_assignment -name QIP_FILE core/uart/uart.qip
