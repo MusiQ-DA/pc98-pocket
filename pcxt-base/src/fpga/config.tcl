@@ -19,6 +19,18 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPL2=0"
 set_global_assignment -name VERILOG_MACRO "ENABLE_CMS=0"
 set_global_assignment -name VERILOG_MACRO "ENABLE_EMS=1"
 set_global_assignment -name VERILOG_MACRO "ENABLE_A000_UMB=1"
+
+# PC/XT peripherals a PC-98 ROM cannot reach, and the device is at 97 per cent
+# ALMs with the GDC and the GRCG still to come. The fit report puts the
+# MC146818 at 0x02C0 at 349 ALMs and the two 16550s at 0x3F8/0x2F8 at 412; a
+# PC-98's clock is a uPD4990A at 0x20/0x22/0x33 and its serial an 8251 at 0x30,
+# so neither is addressable here -- they were synthesised only because nothing
+# gated them.
+#
+# The XT IDE pair stays: no PC-98 storage path is written yet, and keeping the
+# one that exists reachable is worth its 216 ALMs.
+set_global_assignment -name VERILOG_MACRO "ENABLE_XT_RTC=0"
+set_global_assignment -name VERILOG_MACRO "ENABLE_XT_UART=0"
 # Chipset clock rate in Hz: drives cur_rate (Verilog) and the softcore clock (firmware, /6).
 set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # Machine layer: define MACHINE_PC98 to build the PC-98 memory map instead of

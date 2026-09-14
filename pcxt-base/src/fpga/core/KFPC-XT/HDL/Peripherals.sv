@@ -28,6 +28,24 @@
 `ifndef ENABLE_EMS
 `define ENABLE_EMS 0
 `endif
+// PC/XT peripherals with no PC-98 counterpart at the same ports. They were
+// synthesised into the PC-98 build because nothing gated them, and at 97 per
+// cent ALM occupancy that is not free: the fit report has the MC146818 at 349
+// ALMs, the two 16550s at 412 and the XT IDE pair at 216, none of which any
+// PC-98 ROM can reach.
+//   RTC   this is the PCXT's at 0x02C0; a PC-98 has a uPD4990A at 0x20/0x22/0x33
+//   UART  0x3F8 / 0x2F8; a PC-98's serial is an 8251 at 0x30/0x32
+// config.tcl turns them off for MACHINE_PC98 and the PC/XT build keeps them.
+//
+// The XT IDE pair (216 ALMs at 0x0300) is NOT on this list on purpose: the
+// PC-98 build keeps it, so the storage path that exists stays reachable while
+// a PC-98 one is not written yet.
+`ifndef ENABLE_XT_RTC
+`define ENABLE_XT_RTC 1
+`endif
+`ifndef ENABLE_XT_UART
+`define ENABLE_XT_UART 1
+`endif
 
 module PERIPHERALS #(
         parameter ps2_over_time = 16'd1000,
@@ -1230,52 +1248,68 @@ end
 
     wire iorq_uart = (io_write_n & ~prev_io_write_n) || (~io_read_n  & prev_io_read_n);
 
-    uart uart1
-    (
-        .clk               (clock),
-        .br_clk            (clk_uart),
-        .reset             (reset),
-
-        .address           (address[2:0]),
-        .writedata         (write_to_uart),
-        .read              (~io_read_n  & prev_io_read_n),
-        .write             (io_write_n & ~prev_io_write_n),
-        .readdata          (uart_readdata_1),
-        .cs                (uart_chip_select & iorq_uart),
-        .rx                (uart_rx),
-        .cts_n             (0),
-        .dcd_n             (0),
-        .dsr_n             (0),
-        .ri_n              (1),
-        .rts_n             (uart_rts_n),
-        .irq               (uart_irq)
-    );
+generate if (`ENABLE_XT_UART) begin : g_xt_uart1
+        uart uart1
+        (
+            .clk               (clock),
+            .br_clk            (clk_uart),
+            .reset             (reset),
+    
+            .address           (address[2:0]),
+            .writedata         (write_to_uart),
+            .read              (~io_read_n  & prev_io_read_n),
+            .write             (io_write_n & ~prev_io_write_n),
+            .readdata          (uart_readdata_1),
+            .cs                (uart_chip_select & iorq_uart),
+            .rx                (uart_rx),
+            .cts_n             (0),
+            .dcd_n             (0),
+            .dsr_n             (0),
+            .ri_n              (1),
+            .rts_n             (uart_rts_n),
+            .irq               (uart_irq)
+        );
+end else begin : g_xt_uart1_off
+    // COM1 at 0x3F8 is a PC/XT port; a PC-98's serial is an 8251 at 0x30.
+    assign uart_readdata_1 = 8'hFF;
+    assign uart_rts_n      = 1'b1;
+    assign uart_irq        = 1'b0;
+end endgenerate
 	 
 
-    uart uart2
-    (
-        .clk               (clock),
-        .br_clk            (clk_uart),
-        .reset             (reset),
-
-        .address           (address[2:0]),
-        .writedata         (write_to_uart2),
-        .read              (~io_read_n  & prev_io_read_n),
-        .write             (io_write_n & ~prev_io_write_n),
-        .readdata          (uart2_readdata_1),
-        .cs                (uart2_chip_select & iorq_uart),
-
-        .rx                (uart2_rx),
-        .tx                (uart2_tx),
-        .cts_n             (uart2_cts_n),
-        .dcd_n             (uart2_dcd_n),
-        .dsr_n             (uart2_dsr_n),
-        .rts_n             (uart2_rts_n),
-        .dtr_n             (uart2_dtr_n),
-        .ri_n              (1),
-
-        .irq               (uart2_irq)
-    );
+generate if (`ENABLE_XT_UART) begin : g_xt_uart2
+        uart uart2
+        (
+            .clk               (clock),
+            .br_clk            (clk_uart),
+            .reset             (reset),
+    
+            .address           (address[2:0]),
+            .writedata         (write_to_uart2),
+            .read              (~io_read_n  & prev_io_read_n),
+            .write             (io_write_n & ~prev_io_write_n),
+            .readdata          (uart2_readdata_1),
+            .cs                (uart2_chip_select & iorq_uart),
+    
+            .rx                (uart2_rx),
+            .tx                (uart2_tx),
+            .cts_n             (uart2_cts_n),
+            .dcd_n             (uart2_dcd_n),
+            .dsr_n             (uart2_dsr_n),
+            .rts_n             (uart2_rts_n),
+            .dtr_n             (uart2_dtr_n),
+            .ri_n              (1),
+    
+            .irq               (uart2_irq)
+        );
+end else begin : g_xt_uart2_off
+    // COM2 at 0x2F8, likewise.
+    assign uart2_readdata_1 = 8'hFF;
+    assign uart2_tx         = 1'b1;
+    assign uart2_rts_n      = 1'b1;
+    assign uart2_dtr_n      = 1'b1;
+    assign uart2_irq        = 1'b0;
+end endgenerate
 
     // Timing of the readings may need to be reviewed.
     always_ff @(posedge clock)
@@ -2567,26 +2601,31 @@ end
 	 
     assign mgmt_rtc_cs   = (mgmt_address[15:8] == 8'hF4);
 
-    rtc rtc
-    (
-       .clk               (clock),
-       .rst_n             (~reset),
-
-       .clock_rate        (clk_rate),
-
-       .io_address        (address[0]),
-       .io_writedata      (internal_data_bus),
-       .io_read           (~io_read_n & rtc_chip_select),
-       .io_write          (~io_write_n & rtc_chip_select),
-       .io_readdata       (rtc_readdata),
-
-       .mgmt_address      (mgmt_address),
-       .mgmt_write        (mgmt_write & mgmt_rtc_cs),
-       .mgmt_writedata    (mgmt_writedata[7:0]),
-
-       .memcfg            (1'b0),
-       .bootcfg           (5'd0)
-    );
+generate if (`ENABLE_XT_RTC) begin : g_xt_rtc
+        rtc rtc
+        (
+           .clk               (clock),
+           .rst_n             (~reset),
+    
+           .clock_rate        (clk_rate),
+    
+           .io_address        (address[0]),
+           .io_writedata      (internal_data_bus),
+           .io_read           (~io_read_n & rtc_chip_select),
+           .io_write          (~io_write_n & rtc_chip_select),
+           .io_readdata       (rtc_readdata),
+    
+           .mgmt_address      (mgmt_address),
+           .mgmt_write        (mgmt_write & mgmt_rtc_cs),
+           .mgmt_writedata    (mgmt_writedata[7:0]),
+    
+           .memcfg            (1'b0),
+           .bootcfg           (5'd0)
+        );
+end else begin : g_xt_rtc_off
+    // No MC146818 here. A PC-98 reads a uPD4990A at 0x20/0x22/0x33,
+    assign rtc_readdata = 8'hFF;
+end endgenerate
     
 
     //
