@@ -300,6 +300,14 @@ jobs:
             grep -q "PASS tb_v30_mem" vm_$sp.log
           done
 
+      - name: the GDC puts parameters where np2kai puts them
+        run: |
+          S=pcxt-base/src/fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_gdc \
+            -Isim -I$S sim/tb_pc98_gdc.sv $S/pc98_gdc.sv -o g --Mdir obj_gdc
+          ./obj_gdc/g | tee gdc.log
+          grep -q "PASS tb_pc98_gdc" gdc.log
+
       - name: CE generator makes the frequencies the speed menu names
         run: |
           H=pcxt-base/src/fpga/core/KFPC-XT/HDL
