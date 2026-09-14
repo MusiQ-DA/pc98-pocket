@@ -485,15 +485,20 @@ pc98_tvram のスイッチ8バイトは書き込み保護されているため I
   **sdram_peek / self-test master のアドレス空間不一致**を疑って
   エージェントE が調査中。
 
-### §8.7 進行中(2026-09-14 02:00 時点)
+### §8.7 並行サブエージェントの戦果(2026-09-14 02:00-04:00、6本)
 
-| エージェント | 課題 | 状態 |
+| エージェント | 課題 | 結果 |
 |---|---|---|
-| A | ANK 2バイト化(bitac 固定 0xFF、ポート 0x68 未デコード) | 再起動 |
-| D | キーボード 8251 を ITF(F8619 の 0x43 ポーリング)を止めない形で復活 | 再起動 |
-| E | ROM 覗き見経路(GOT 全ゼロ) | 再起動 |
+| A | ANK 2バイト化 | **ポート 0x68 は ROM が本当に書く**(BIOS FE272/FEB96/FEC6A で 0x0B/0x0A、ITF は CG 窓試験の前後)。`pc98_gdc_mode1.sv` 新規、rowbuf の bitac を実レジスタ化。**ただし実機「全文字2バイト幅」の直接原因は別件の疑い**: 実機 row0 の奇数バイトが VRAM テストの 0x55 のまま残っている(= ワード書きの奇数バイトが tvram に届かない?)。sim の V30 は再現しない。**次の実機ランで TVH を見る: 00 なら健全、55 なら 8088 ワード書き経路のバグ** |
+| B | 行頭1文字欠け | fetch pointer wrap が col 79 だったが走査線は106文字。次走査線のセル0を指すよう修正 + tb_pc98_firstcell(§8.4) |
+| C | フォント | FONT_BASE 0x200000(EMS の底)→0x400000、OUT A5 の再フェッチが CG 窓のデータを潰す(§8.5) |
+| D | キーボード 8251 | **実8251モデル**(`pc98_kbd8251.sv`): SEND-BREAK 立ち下がりエッジ(0x43 への 3A→32)でだけ ARM。旧モデルは 0x73(beep)書き込みでも ACK を ARMしており、それが真っ暗の正体。ACK 遅延 350ms = ITF のポーリング窓(~82ms)の外 → ITF は no-keyboard パスを歩き、BIOS の INT 18h AH=3 リセット応答とキーストリームには生き残る。**IRQ1 を XT PS/2 → 8251 RxRDY に付け替え** |
+| E | ROM 覗き見 | peek が itf_bank mux を通って itf.rom のゼロ領域(物理 0x1FD800)を読んでいた。`st_run` 中はメインバンクを読むよう修正 + self-test master の HLDA レース修正(8088 バスプロトコル違反、"11 11 11 11" の正体) |
+| F | beep | 経路は存在したが両端が誤り: ゲートが XT 8255 のピン方向(ゲストは BSR ワードしか書かないため入力モード固定=永久消音)、トーンが ctr2(RS-232C 用)。**ctr1 × sysport ラッチ**に修正。実機仕様は bit3=1 がミュート(リセット値 0xF9) |
+| G | Dock USB → PC-98 | `pc98_kbd_ps2.sv`: Set-2 → PC-98 変換(np2kai kbtrans 準拠、GRPH=右Ctrl 等)。core_top で tap(ストールなし) |
+| H | VKB PC-98 配列 | PC-9801 配列93キー(F1-F10 左縦2列、STOP/KANA/GRPH/XFER/NFER/HELP/ROLL)。PC-98 固有キーは未使用 Set-2 コードに仮割り当て |
+| (親) | 結線 | 8251 にキー注入ポート(stb+byte、1深 hold、break エッジでクリア、ACK より優先)、CHIPSET/PERIPHERALS/core_top を通して G/H の出力を接続。VKB 固有キーを G のテーブルに登録 |
 
-(初回は 2026-09-14 01:54 に rate limit で全滅。B/C の成果は統合済み。)
+**カットオーバーの全体像**: Dock USB / VKB / コントローラ → pocket_keyboard(Set-2 統合) → pc98_kbd_ps2(→PC-98 変換) → pc98_kbd8251(注入) → 0x41/0x43 → ゲスト。
 
-run#219(0xE3 戻し、quartus success)をデプロイ待ち — MEMORY SWITCH ERROR
-が消えてメモリカウントに進むかの確認用。
+run#219 の実機観測(§8.2 の後): MEMORY SWITCH ERROR 解消、MEMORY 000KB OK 表示。ただし **RST 0000 / TVW FFFF / FR 9Fxxx / BANK 1** — ゲストは生きてメモリテストを完走するが、キーボード ACK が無いため ITF の警告ビープ→全テスト再走ループ(IO 履歴 0037 = OUT 37h ビープ連発)に留まる。D のモデルがこれを解く。
