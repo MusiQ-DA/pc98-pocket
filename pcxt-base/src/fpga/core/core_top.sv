@@ -1392,8 +1392,15 @@ module core_top (
     // vkb_stb toggle or pocket_keyboard's queue never produced the byte.
     // Climbing means the key reached the PC-98 side and whatever is wrong is
     // downstream: the 8251 model, IRQ1 off its RxRDY, or the guest.
+    // key_stb TOGGLES per event -- pc98_kbd_ps2's mailbox idiom, and what
+    // pc98_kbd8251 compares against its own copy. Counting it as a LEVEL, which
+    // this did at first, adds one per CLOCK for as long as the toggle sits
+    // high: KEY saturated at FF within microseconds of the first key and said
+    // nothing. Count transitions, so KEY is comparable with IRQ below it.
+    logic pc98_key_stb_q = 1'b0;
     always @(posedge clk_chipset) begin
-        if (pc98_key_stb) begin
+        pc98_key_stb_q <= pc98_key_stb;
+        if (pc98_key_stb != pc98_key_stb_q) begin
             key_last <= {pc98_key_make, pc98_key_code[6:0]};
             if (key_count != 8'hFF) key_count <= key_count + 8'd1;
         end
