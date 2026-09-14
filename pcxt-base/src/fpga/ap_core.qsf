@@ -762,6 +762,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gdc_mode2.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gvram_seq.sv"
 # The PC-9801-55 SCSI board's register window at 0x0CC0-0x0CC7.
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_scsi.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_scsi_rom.sv"
 
 # Dropped for the PC-98 build (2026-09-14). Their instantiations in
 # Peripherals.sv are now behind `ifndef MACHINE_PC98`, so nothing here

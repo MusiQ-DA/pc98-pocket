@@ -2763,6 +2763,21 @@ end endgenerate
     //
     wire scsi_cs = iorq & ~address_enable_n & (address[15:3] == 13'h198);
 
+    // The board's option ROM at D2000-D2FFF. The BIOS scan at FFF23 walks
+    // sixteen 4 KB windows from D000 and far-calls offset 000C of any that
+    // carries 55 AA at offset 9; D200 is the third. The SDRAM map does not
+    // cover D0000-DFFFF (pc98_sdram_map.svh: a[19:16] >= 0xC and below
+    // 0b11101 hits nothing), so this window is the only thing there.
+    wire    scsi_rom_select = ~iorq && ~address_enable_n
+                            && (address[19:12] == 8'hD2);
+    wire [7:0] scsi_rom_q;
+
+    pc98_scsi_rom u_pc98_scsi_rom (
+        .clk  (clock),
+        .addr (address[11:0]),
+        .q    (scsi_rom_q)
+    );
+
     logic        mgmt_scsi_cs;
     assign       mgmt_scsi_cs = (mgmt_address[15:8] == 8'hF4);
     wire         mgmt_scsi_wr = mgmt_write & mgmt_scsi_cs;
@@ -3153,6 +3168,11 @@ end endgenerate
             data_bus_out <= ppi_data_bus_out;
         end
 `ifdef MACHINE_PC98
+        else if (scsi_rom_select && (~memory_read_n))
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= scsi_rom_q;
+        end
         else if (scsi_read_select)
         begin
             data_bus_out_from_chipset <= 1'b1;
