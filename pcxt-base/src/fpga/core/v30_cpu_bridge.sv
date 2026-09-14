@@ -133,6 +133,16 @@ module v30_cpu_bridge (
     output reg   [7:0]  cpu_data_bus,       // the addressed write lane
     output wire         lock_n,             // the core ties BUSLOCK_N high
 
+    // The 16-bit memory path (PC98_WORD_MEM). RAM.sv keeps one guest byte per
+    // 16-bit SDRAM word, so the guest's byte N and byte N+1 are consecutive
+    // SDRAM WORDS and a word access is one burst of two rather than two bus
+    // cycles. word_access says this cycle is a word; the _hi pair carries its
+    // odd half. Undefined, these are tied off and every word still runs as two
+    // byte cycles, which is what everything that is not the SDRAM needs.
+    output reg          word_access,
+    output reg   [7:0]  cpu_data_bus_hi,
+    input  wire  [7:0]  data_bus_hi,
+
     // chipset status
     input  wire  [7:0]  data_bus,           // the read byte, during commands
     input  wire         processor_ready,    // the READY module's output
@@ -339,7 +349,34 @@ module v30_cpu_bridge (
                  || (cur_bs == BS_CODE) || (cur_bs == BS_MEMR);
     wire cur_word = (cur_addr[0] == 1'b0) && (cur_ube_n == 1'b0)
                     && (cur_bs != BS_INTA);
-    wire last_byte = (byte_idx == 2'd1) || !cur_word;
+
+`include "pc98_sdram_map.svh"
+
+    // A word runs as ONE cycle only where the SDRAM is the target. Everything
+    // else on this bus is eight bits wide -- the text VRAM, the CG window, the
+    // I/O -- so a word there is still two byte cycles, exactly as before. The
+    // address test is pc98_sdram_map.svh's, the same one RAM.sv turns into
+    // ram_address_select_n, so the two cannot drift apart; written out twice
+    // the failure would be silent, one byte landing where two belong.
+    //
+    // The alignment invariants a burst needs all hold by construction: the V30
+    // only announces a word on an even address (cur_word tests A0), so the pair
+    // cannot straddle a region boundary, an EMS page, or an SDRAM column
+    // boundary -- all of those are at least two-byte aligned.
+    function automatic logic word_1cyc(input logic [2:0] bs,
+                                       input logic [19:0] a,
+                                       input logic ube_n);
+`ifdef PC98_WORD_MEM
+        word_1cyc = (a[0] == 1'b0) && (ube_n == 1'b0)
+                 && ((bs == BS_CODE) || (bs == BS_MEMR) || (bs == BS_MEMW))
+                 && pc98_sdram_hits(a);
+`else
+        word_1cyc = 1'b0;
+`endif
+    endfunction
+
+    wire cur_1cyc  = word_1cyc(cur_bs, cur_addr, cur_ube_n);
+    wire last_byte = cur_1cyc || (byte_idx == 2'd1) || !cur_word;
 
     wire bus_ours = (address_enable_n == 1'b0);
 
@@ -384,6 +421,8 @@ module v30_cpu_bridge (
             processor_status <= BS_PASV;
             ad_out           <= 20'h0;
             cpu_data_bus     <= 8'h00;
+            word_access      <= 1'b0;
+            cpu_data_bus_hi  <= 8'h00;
             v30_data_i       <= 16'h0000;
         end else begin
             case (bstate)
@@ -398,6 +437,11 @@ module v30_cpu_bridge (
                     processor_status <= srv_bs;
                     ad_out           <= srv_byte_addr;
                     cpu_data_bus     <= srv_byte_data;
+                    // Held from here to the end of the pair, because RAM.sv
+                    // samples it at the moment the 8288's command reaches the
+                    // controller, which is inside B_CMD.
+                    word_access      <= word_1cyc(srv_bs, srv_addr, srv_ube);
+                    cpu_data_bus_hi  <= srv_data[15:8];
                     from_queue       <= srv_queue;
                     t_cnt            <= 3'd0;
                     bstate           <= B_CMD;
@@ -417,6 +461,9 @@ module v30_cpu_bridge (
                     && processor_ready && bus_ours) begin
                     if (cur_read && (byte_idx == 2'd0)) rd_lo <= data_bus;
                     if (cur_read && (byte_idx == 2'd1)) rd_hi <= data_bus;
+                    // One-cycle word: both lanes land together, the odd one on
+                    // the second bus of its own.
+                    if (cur_read && cur_1cyc)           rd_hi <= data_bus_hi;
                     processor_status <= BS_PASV;
                     gap_cnt          <= 2'd0;
                     bstate           <= B_GAP;
@@ -444,8 +491,9 @@ module v30_cpu_bridge (
                                 v30_data_i <= {rd_lo, rd_lo};
                         end
                         // (from_queue: the pop is q_pop's own doing.)
-                        byte_idx <= 2'd0;
-                        bstate   <= B_IDLE;
+                        byte_idx    <= 2'd0;
+                        word_access <= 1'b0;
+                        bstate      <= B_IDLE;
                     end else begin
                         byte_idx <= 2'd1;
                         bstate   <= B_IDLE;

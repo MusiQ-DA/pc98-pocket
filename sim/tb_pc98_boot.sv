@@ -109,6 +109,8 @@ module tb_pc98_boot;
     // ---- the CPU -----------------------------------------------------------
     wire [19:0] cpu_ad_out;
     wire  [7:0] cpu_data_bus;
+    wire  [7:0] cpu_data_bus_hi;
+    wire        cpu_word_access;
     wire  [7:0] din;
     wire  [2:0] processor_status;
     wire        lock_n, s6_3_mux;
@@ -143,6 +145,9 @@ module tb_pc98_boot;
         .ad_out            (cpu_ad_out),
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
+        .word_access       (cpu_word_access),
+        .cpu_data_bus_hi   (cpu_data_bus_hi),
+        .data_bus_hi       (din_hi),
         .data_bus          (din),
         .processor_ready   (bench_ready),
         .address_enable_n  (1'b0),      // no other master in this bench
@@ -323,7 +328,7 @@ module tb_pc98_boot;
     // every read RAM.sv answers, so a memory-path fault is named the moment it
     // happens rather than inferred from where the CPU ended up.
 `ifdef REALMEM
-    wire [7:0]  ram_dout;
+    wire [7:0]  ram_dout, ram_dout_hi;
     wire        memory_access_ready, ram_address_select_n;
     wire        initilized_sdram_w, access_complete_w;
     wire [12:0] s_a;  wire [1:0] s_ba;
@@ -336,6 +341,9 @@ module tb_pc98_boot;
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram_w),
         .address(cpu_address), .internal_data_bus(cpu_data_bus),
         .data_bus_out(ram_dout),
+        .word_access(cpu_word_access),
+        .internal_data_bus_hi(cpu_data_bus_hi),
+        .data_bus_out_hi(ram_dout_hi),
         .memory_read_n(mem_rd_n), .memory_write_n(mem_wr_n),
         .no_command_state(mem_rd_n & mem_wr_n & io_rd_n & io_wr_n),
         .memory_access_ready(memory_access_ready),
@@ -390,6 +398,9 @@ module tb_pc98_boot;
     // (A0000-A7FFF and C0000-E7FFF are not in its select).
     wire [7:0] mem_read_byte = ~ram_address_select_n ? ram_dout
                                                      : ram[cpu_address];
+    // The odd lane of a one-cycle word read; only the SDRAM serves those.
+    wire [7:0] din_hi = (~mem_rd_n & ~ram_address_select_n) ? ram_dout_hi
+                                                            : 8'hFF;
 
     // The mirror check. On the trailing edge of a read RAM.sv answered, what
     // it gave against what the guest put there.
@@ -415,6 +426,9 @@ module tb_pc98_boot;
     wire [7:0] mem_read_byte = is_rom(cpu_address) ? rom_byte(cpu_address)
                                                    : ram[cpu_address];
     wire bench_ready = 1'b1;          // flat memory answers immediately
+    // The flat array is byte-wide, so no word cycle can be served from it.
+    // PC98_WORD_MEM is not defined for this build, so none is asked for.
+    wire [7:0] din_hi = 8'hFF;
 `endif
 
     // True when the read above fell through to the FF default -- i.e. nothing

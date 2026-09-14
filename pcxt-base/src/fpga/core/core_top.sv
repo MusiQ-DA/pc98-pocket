@@ -2116,6 +2116,12 @@ module core_top (
     wire [19:0] cpu_ad_out;
     reg  [19:0] cpu_address;
     wire [7:0] cpu_data_bus;
+    // The 16-bit memory path's extra lane. Under the PC/XT build the 8088
+    // drives cpu_data_bus and nothing asks for a word, so these are tied off
+    // below; the PC-98 build wires them to v30_cpu_bridge.
+    wire [7:0] cpu_data_bus_hi;
+    wire [7:0] data_bus_hi;
+    wire       cpu_word_access;
     wire processor_ready;
     wire interrupt_to_cpu;
     wire address_latch_enable;
@@ -2337,6 +2343,9 @@ module core_top (
         .sdram_reset                        (reset_sdram),
         .cpu_address                        (cpu_address),
         .cpu_data_bus                       (cpu_data_bus),
+        .cpu_word_access                    (cpu_word_access),
+        .cpu_data_bus_hi                    (cpu_data_bus_hi),
+        .data_bus_hi                        (data_bus_hi),
         .processor_status                   (processor_status),
         .processor_lock_n                   (lock_n),
     //  .processor_transmit_or_receive_n    (processor_transmit_or_receive_n),
@@ -2568,6 +2577,9 @@ module core_top (
         .ad_out            (cpu_ad_out),
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
+        .word_access       (cpu_word_access),
+        .cpu_data_bus_hi   (cpu_data_bus_hi),
+        .data_bus_hi       (data_bus_hi),
         .data_bus          (data_bus),
         .processor_ready   (processor_ready),
         .address_enable_n  (chipset_aen),
@@ -2600,6 +2612,11 @@ module core_top (
         .SS_BUS_QUIET (v30_ss_quiet_unused)
     );
 `else
+    // The 8088 has an eight-bit bus and never asks for a word, so the extra
+    // lane is tied off here rather than made conditional inside Chipset.
+    assign cpu_word_access = 1'b0;
+    assign cpu_data_bus_hi = 8'h00;
+
     i8088 B1
     (
         .CORE_CLK(clk_core),

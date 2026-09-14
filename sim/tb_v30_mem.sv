@@ -134,6 +134,8 @@ module tb_v30_mem;
     wire [2:0]  processor_status;
     wire [19:0] ad_out;
     wire [7:0]  cpu_data_bus;
+    wire [7:0]  cpu_data_bus_hi;
+    wire        cpu_word_access;
     wire        lock_n;
 
     v30_cpu_bridge u_bridge (
@@ -152,6 +154,9 @@ module tb_v30_mem;
         .ad_out            (ad_out),
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
+        .word_access       (cpu_word_access),
+        .cpu_data_bus_hi   (cpu_data_bus_hi),
+        .data_bus_hi       (din_hi),
         .data_bus          (din),
         .processor_ready   (processor_ready),
         .address_enable_n  (1'b0),
@@ -219,7 +224,7 @@ module tb_v30_mem;
     );
 
     // ---- the memory: the real RAM.sv on the real controller ---------------
-    wire [7:0]  ram_dout;
+    wire [7:0]  ram_dout, ram_dout_hi;
     wire        access_complete, ram_address_select_n, initilized_sdram;
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
@@ -231,9 +236,9 @@ module tb_v30_mem;
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram),
         .address(cpu_address), .internal_data_bus(cpu_data_bus),
         .data_bus_out(ram_dout),
-`ifdef PC98_WORD_MEM
-        .word_access(1'b0), .internal_data_bus_hi(8'h00), .data_bus_out_hi(),
-`endif
+        .word_access(cpu_word_access),
+        .internal_data_bus_hi(cpu_data_bus_hi),
+        .data_bus_out_hi(ram_dout_hi),
         .memory_read_n(mem_rd_n), .memory_write_n(mem_wr_n),
         .no_command_state(mem_rd_n & mem_wr_n & io_rd_n & io_wr_n),
         .memory_access_ready(memory_access_ready),
@@ -267,7 +272,10 @@ module tb_v30_mem;
     // ---- what the CPU reads ----------------------------------------------
     // Memory answers from RAM.sv; everything else reads FF, as an empty
     // chipset would.
-    wire [7:0] din = (~mem_rd_n & ~ram_address_select_n) ? ram_dout : 8'hFF;
+    wire [7:0] din    = (~mem_rd_n & ~ram_address_select_n) ? ram_dout    : 8'hFF;
+    // The odd lane of a one-cycle word read. Only ever consulted when the
+    // bridge asked for a word, and only the SDRAM serves those.
+    wire [7:0] din_hi = (~mem_rd_n & ~ram_address_select_n) ? ram_dout_hi : 8'hFF;
 
     // ---- tracing ----------------------------------------------------------
     //
@@ -405,6 +413,16 @@ module tb_v30_mem;
             $display("cyc=%0d %0t  cmd=%s rvalid=%b rdata=%04x dq_in=%04x dout=%02x",
                      cyc, $time, cmd_name(), u_ram.u_KFSDRAM.p_rvalid,
                      u_ram.u_KFSDRAM.p_rdata, s_dq_in, ram_dout);
+    end
+
+    // How many cycles actually ran as ONE word. Without this the word path
+    // could fall back to byte pairs and the bench would still pass -- slower
+    // and silent, which is the failure mode worth naming.
+    int  word_cycles = 0;
+    logic wa_q = 1'b0;
+    always_ff @(posedge clk) begin
+        wa_q <= cpu_word_access;
+        if (cpu_word_access & ~wa_q) word_cycles++;
     end
 
     // ---- the result port --------------------------------------------------
@@ -561,6 +579,19 @@ module tb_v30_mem;
             want(20'h01000, 16'h1000, "T4 first word");
             want(20'h011FE, 16'h11FE, "T4 last word");
         end
+
+        $display("one-cycle word accesses: %0d", word_cycles);
+`ifdef PC98_WORD_MEM
+        if (word_cycles == 0) begin
+            $display("FAIL PC98_WORD_MEM is defined but no word cycle ran");
+            errors++;
+        end
+`else
+        if (word_cycles != 0) begin
+            $display("FAIL word cycles ran without PC98_WORD_MEM");
+            errors++;
+        end
+`endif
 
         if (errors == 0) $display("PASS tb_v30_mem");
         else             $display("FAILED tb_v30_mem: %0d", errors);

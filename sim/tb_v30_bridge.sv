@@ -114,6 +114,11 @@ module tb_v30_bridge;
         .ad_out            (ad_out),
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
+        // No word path here: this bench's memory is a flat byte array and
+        // PC98_WORD_MEM is never defined for it, so word_access stays low.
+        .word_access       (),
+        .cpu_data_bus_hi   (),
+        .data_bus_hi       (8'hFF),
         .data_bus          (din),
         .processor_ready   (processor_ready),
         .address_enable_n  (1'b0),     // no other master in this bench

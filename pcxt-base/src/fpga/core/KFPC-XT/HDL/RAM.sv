@@ -123,10 +123,10 @@ module RAM (
     // SDRAM (the loader writes it there, the guest fetches it from there),
     // and taking it out of the select -- which one revision did -- starved
     // the loader into DROP 38190 and left BAD 0F2 on the compare.
-    assign ram_address_select_n = ~(enable_sdram
-                             && ((address[19:16] < 4'hC)             // RAM + GVRAM window
-                              || (address[19:15] >= 5'b11101))        // E8000-FFFFF: ROM image
-                             && ~(address[19:15] == 5'b10100));       // A0000-A7FFF
+    // The predicate itself lives in pc98_sdram_map.svh, because v30_cpu_bridge
+    // needs the same answer one step earlier -- see that file.
+`include "pc98_sdram_map.svh"
+    assign ram_address_select_n = ~(enable_sdram && pc98_sdram_hits(address));
 `else
     assign ram_address_select_n = ~(enable_sdram && ~(address[19:16] == 4'b1011) &&  // B0000h reserved for VRAM
 	                               ~(~enable_a000h && address[19:16] == 4'b1010));    // A0000h is optional

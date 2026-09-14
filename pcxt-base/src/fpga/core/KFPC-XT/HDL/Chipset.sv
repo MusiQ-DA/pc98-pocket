@@ -18,6 +18,14 @@ module CHIPSET #(
         // CPU
         input   logic   [19:0]  cpu_address,
         input   logic   [7:0]   cpu_data_bus,
+        // The 16-bit memory path (PC98_WORD_MEM): v30_cpu_bridge asks for a
+        // word, RAM.sv turns it into one two-word SDRAM burst instead of two
+        // bus cycles, and the odd lane travels on its own pair of wires rather
+        // than widening the chipset's eight-bit bus. Tied off in every other
+        // build -- see pc98_sdram_map.svh for which addresses can take one.
+        input   logic           cpu_word_access,
+        input   logic   [7:0]   cpu_data_bus_hi,
+        output  logic   [7:0]   data_bus_hi,
         input   logic   [2:0]   processor_status,
         input   logic           processor_lock_n,
         output  logic           processor_transmit_or_receive_n,
@@ -490,6 +498,9 @@ module CHIPSET #(
         .address                            (latch_address),
         .internal_data_bus                  (internal_data_bus),
         .data_bus_out                       (internal_data_bus_ram),
+        .word_access                        (cpu_word_access),
+        .internal_data_bus_hi               (cpu_data_bus_hi),
+        .data_bus_out_hi                    (data_bus_hi),
         .memory_read_n                      (memory_read_n),
         .memory_write_n                     (memory_write_n),
         .no_command_state                   (no_command_state),
