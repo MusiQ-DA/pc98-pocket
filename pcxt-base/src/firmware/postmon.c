@@ -42,6 +42,7 @@
 #define POST_MEMSZ  ((volatile uint32_t *) 0x500000A8) // {f0 count, [0501], A3FEA}
 #define POST_KEY    ((volatile uint32_t *) 0x500000AC) // {gdc pitch, last {make,code}, count}
 #define POST_GDC    ((volatile uint32_t *) 0x500000B0) // {unk count, unk cmd, disp_on, SAD}
+#define POST_INT    ((volatile uint32_t *) 0x500000B4) // {INTR level, INTR rising edges}
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -868,6 +869,14 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4 + 21 * 8, 190, "U", OSD_LABEL);
         hex(4 + 23 * 8, 190, (g >> 24) & 0xFFu, 2);
         hex(4 + 26 * 8, 190, (g >> 16) & 0xFFu, 2);
+
+        // INT: rising edges of INTR into the CPU, and its current level.
+        // Zero means the guest has never been interrupted -- no timer, no
+        // keyboard -- which is the shape that leaves BASIC having cleared the
+        // screen and drawn its function key line and then stopped.
+        uint32_t iv = *POST_INT;
+        osd_draw_string(&fb, 4 + 30 * 8, 190, "INT", OSD_LABEL);
+        hex(4 + 34 * 8, 190, iv & 0xFFFFu, 4);
     }
 #endif
 
