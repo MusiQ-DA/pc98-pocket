@@ -108,6 +108,15 @@ static uint8_t guest_peek(uint32_t addr)
 // behind it and is cut off -- which is what MSW/SZ/F0 did on the first try at
 // row 182 against PANEL_H 182.
 //
+// The panel is drawn over the guest's text screen: the OSD framebuffer is
+// 640x200 against a 640x400 raster, so it is centred at y=100 and each of its
+// lines is one guest line. 112 rows therefore cover guest lines 100-211 --
+// text rows 7 to 14 -- and everything above and below stays readable. Nine
+// rows of spent diagnostics came out (the ROM read/load dumps, the slot
+// sizes, the FIFO drops and the row buffer's view) and the two live rows
+// moved up into the hole rather than leaving it, which is what took the
+// panel from 200 down to 112.
+//
 // 182, not 162: TVF and FRB were drawn on row 92 on top of RD0, three fields
 // in one row's worth of space. They cannot share a row either -- TVF is a
 // label plus eight bytes (28 of the panel's 40 columns) and FRB is another
@@ -115,7 +124,7 @@ static uint8_t guest_peek(uint32_t addr)
 // unreadable. 192 adds the MSW/SZ/F0 row on top of that; OSD_FB_HEIGHT is
 // 200, so it still fits. 200 adds the GDC row at 190 and is the whole
 // framebuffer -- there is no room for another.
-#define PANEL_H 200
+#define PANEL_H 112
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -443,7 +452,6 @@ void post_mon_tick(void)
     // It is also the check that has to be repeated every time something makes
     // the SDRAM consumer slower.
     {
-        uint32_t rlf = *POST_RLF;
     #ifdef MACHINE_PC98
     // What the guest's ROM actually holds, read through the self-test master.
     //
@@ -461,17 +469,6 @@ void post_mon_tick(void)
         hex(4 + 28 * 8, 2, rom_bad, 3);
         osd_draw_string(&fb, 4 + 32 * 8, 2, "AT", OSD_LABEL);
         hex(4 + 35 * 8, 2, rom_first, 3);
-        osd_draw_string(&fb, 4, 132, "GOT", OSD_LABEL);
-        // Unrolled: check_osd_layout reads these calls literally and cannot
-        // resolve a loop variable in the x expression.
-        hex(4 +  7 * 8, 132, rom_a[0], 2);
-        hex(4 + 10 * 8, 132, rom_a[1], 2);
-        hex(4 + 13 * 8, 132, rom_a[2], 2);
-        hex(4 + 16 * 8, 132, rom_a[3], 2);
-        hex(4 + 19 * 8, 132, rom_a[4], 2);
-        hex(4 + 22 * 8, 132, rom_a[5], 2);
-        hex(4 + 25 * 8, 132, rom_a[6], 2);
-        hex(4 + 28 * 8, 132, rom_a[7], 2);
         // A control, on the same path. F800E0 came back all zeros, but the
         // peek runs through the self-test master, which was built to work with
         // the 8088 held in reset -- and the guest is running now. A read that
@@ -483,21 +480,8 @@ void post_mon_tick(void)
         // the loader wrote. If this row matches LD0, the peek works and F800E0
         // really is empty. If it comes back zeros too, the peek is the thing
         // that is broken and F800E0 says nothing.
-        osd_draw_string(&fb, 4, 142, "FILE", OSD_LABEL);
-        hex(4 +  7 * 8, 142, rom_b[0], 2);
-        hex(4 + 10 * 8, 142, rom_b[1], 2);
-        hex(4 + 13 * 8, 142, rom_b[2], 2);
-        hex(4 + 16 * 8, 142, rom_b[3], 2);
-        hex(4 + 19 * 8, 142, rom_b[4], 2);
-        hex(4 + 22 * 8, 142, rom_b[5], 2);
-        hex(4 + 25 * 8, 142, rom_b[6], 2);
-        hex(4 + 28 * 8, 142, rom_b[7], 2);
     }
 #endif
-    osd_draw_string(&fb, 4, 152, "DROP", OSD_LABEL);
-        dec(4 + 5 * 8, 152, rlf & 0xFFFFu);
-        osd_draw_string(&fb, 4 + 11 * 8, 152, "HW", OSD_LABEL);
-        dec(4 + 14 * 8, 152, rlf >> 16);
     }
 
     // testB27 answered it: F8 2E 41 D6 against F8 2E E8 D2 in the image.
@@ -506,19 +490,6 @@ void post_mon_tick(void)
     // back perfect and word D882 came back with BOTH bytes wrong, which
     // also rules out a swapped DQ lane. Sixteen bytes now, to see whether
     // the damage alternates by word, runs, or is a single word.
-    uint32_t rr[4];
-    rr[0] = *POST_ROMRD;
-    rr[1] = *POST_ROMRD1;
-    rr[2] = *POST_ROMRD2;
-    rr[3] = *POST_ROMRD3;
-    osd_draw_string(&fb, 4, 92, "RD0", OSD_LABEL);
-    for (int i = 0; i < 8; i++)
-        hex(4 + (4 + i * 3) * 8, 92, (rr[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
-    osd_draw_string(&fb, 4, 102, "RD8", OSD_LABEL);
-    for (int i = 8; i < 16; i++)
-        hex(4 + (4 + (i - 8) * 3) * 8, 102, (rr[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
-    osd_draw_string(&fb, 4 + 28 * 8, 102, "N", OSD_LABEL);
-    dec(4 + 30 * 8, 102, *POST_ROMRDN & 0xFFu);
 
     // And what the BIOS LOADER put there in the first place, taken off its
     // own FSM rather than the bus. RD is what the CPU took in; LD is what
@@ -526,17 +497,6 @@ void post_mon_tick(void)
     //
     //   LD E8 D2, RD 41 D6  -> written correctly, not kept or not read
     //   LD 41 D6            -> the loader delivered the wrong bytes
-    uint32_t ld[4];
-    ld[0] = *POST_ROMLD0;
-    ld[1] = *POST_ROMLD1;
-    ld[2] = *POST_ROMLD2;
-    ld[3] = *POST_ROMLD3;
-    osd_draw_string(&fb, 4, 112, "LD0", OSD_LABEL);
-    for (int i = 0; i < 8; i++)
-        hex(4 + (4 + i * 3) * 8, 112, (ld[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
-    osd_draw_string(&fb, 4, 122, "LD8", OSD_LABEL);
-    for (int i = 8; i < 16; i++)
-        hex(4 + (4 + (i - 8) * 3) * 8, 122, (ld[i >> 2] >> ((i & 3) * 8)) & 0xFFu, 2);
 
 #ifdef MACHINE_PC98
     osd_draw_string(&fb, 4 + 17 * 8, 22, "LDN", OSD_LABEL);
@@ -612,25 +572,6 @@ void post_mon_tick(void)
                     hex(4 + (4 + i * 3) * 8, 82, (h0 >> (i * 8)) & 0xFFu, 2);
                 for (int i = 0; i < 4; i++)
                     hex(4 + (16 + i * 3) * 8, 82, (h1 >> (i * 8)) & 0xFFu, 2);
-            }
-            // TVF: the row buffer's own view of the same cells, latched as
-            // the fill read them. TVC/TVH say what the BUS carried; TVF says
-            // what the RENDERER will draw. A disagreement between them names
-            // the bank that lost the write; a stale first cell shows here as
-            // junk in cell 0 with the rest clean.
-            {
-                uint32_t f0 = *POST_TVF0, f1 = *POST_TVF1;
-                uint32_t frb = *POST_FRB;
-                osd_draw_string(&fb, 4, 162, "TVF", OSD_LABEL);
-                for (int i = 0; i < 4; i++)
-                    hex(4 + (4 + i * 3) * 8, 162, (f0 >> (i * 8)) & 0xFFu, 2);
-                for (int i = 0; i < 4; i++)
-                    hex(4 + (16 + i * 3) * 8, 162, (f1 >> (i * 8)) & 0xFFu, 2);
-                // Byte pairs are {hi,lo} per cell: 00 4B 00 41 ... is clean.
-                // FRB: the kanji fetch path. f_valid beats x f_req pulses.
-                osd_draw_string(&fb, 4, 172, "FRB", OSD_LABEL);
-                hex(4 + 4 * 8, 172, (frb >> 16) & 0xFFFFu, 4);
-                hex(4 + 9 * 8, 172, frb & 0xFFFFu, 4);
             }
         }
 
@@ -828,12 +769,12 @@ void post_mon_tick(void)
     //        one is normal and owns the boot chime. Climbing means the loop.
     {
         uint32_t m = *POST_MEMSZ;
-        osd_draw_string(&fb, 4, 182, "MSW", OSD_LABEL);
-        hex(4 + 4 * 8, 182, m & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 8 * 8, 182, "SZ", OSD_LABEL);
-        hex(4 + 11 * 8, 182, (m >> 8) & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 15 * 8, 182, "F0", OSD_LABEL);
-        hex(4 + 18 * 8, 182, (m >> 16) & 0xFFu, 2);
+        osd_draw_string(&fb, 4, 92, "MSW", OSD_LABEL);
+        hex(4 + 4 * 8, 92, m & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 8 * 8, 92, "SZ", OSD_LABEL);
+        hex(4 + 11 * 8, 92, (m >> 8) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 15 * 8, 92, "F0", OSD_LABEL);
+        hex(4 + 18 * 8, 92, (m >> 16) & 0xFFu, 2);
 
         // KEY: how far a key press gets. The count is pc98_kbd_ps2's output
         // strobes and the code is the last event ({make, PC-98 code}) -- so
@@ -843,9 +784,9 @@ void post_mon_tick(void)
         // vkb_stb toggle or pocket_keyboard's queue. Climbing puts it
         // downstream: the 8251 model, IRQ1 off its RxRDY, or the guest.
         uint32_t k = *POST_KEY;
-        osd_draw_string(&fb, 4 + 22 * 8, 182, "KEY", OSD_LABEL);
-        hex(4 + 26 * 8, 182, k & 0xFFu, 2);
-        hex(4 + 29 * 8, 182, (k >> 8) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 22 * 8, 92, "KEY", OSD_LABEL);
+        hex(4 + 26 * 8, 92, k & 0xFFu, 2);
+        hex(4 + 29 * 8, 92, (k >> 8) & 0xFFu, 2);
 
         // GDC: where the TEXT renderer is pointed, against where the guest
         // writes (TVW/AT above). pc98_text_render takes SAD and PITCH from the
@@ -860,23 +801,23 @@ void post_mon_tick(void)
         //        last opcode. Anything but 00 means the guest asked for
         //        something this GDC does not implement.
         uint32_t g = *POST_GDC;
-        osd_draw_string(&fb, 4, 190, "SAD", OSD_LABEL);
-        hex(4 + 4 * 8, 190, g & 0x7FFFu, 4);
-        osd_draw_string(&fb, 4 + 10 * 8, 190, "P", OSD_LABEL);
-        hex(4 + 12 * 8, 190, (k >> 16) & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 16 * 8, 190, "D", OSD_LABEL);
-        hex(4 + 18 * 8, 190, (g >> 16) & 1u, 1);
-        osd_draw_string(&fb, 4 + 21 * 8, 190, "U", OSD_LABEL);
-        hex(4 + 23 * 8, 190, (g >> 24) & 0xFFu, 2);
-        hex(4 + 26 * 8, 190, (g >> 16) & 0xFFu, 2);
+        osd_draw_string(&fb, 4, 102, "SAD", OSD_LABEL);
+        hex(4 + 4 * 8, 102, g & 0x7FFFu, 4);
+        osd_draw_string(&fb, 4 + 10 * 8, 102, "P", OSD_LABEL);
+        hex(4 + 12 * 8, 102, (k >> 16) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 16 * 8, 102, "D", OSD_LABEL);
+        hex(4 + 18 * 8, 102, (g >> 16) & 1u, 1);
+        osd_draw_string(&fb, 4 + 21 * 8, 102, "U", OSD_LABEL);
+        hex(4 + 23 * 8, 102, (g >> 24) & 0xFFu, 2);
+        hex(4 + 26 * 8, 102, (g >> 16) & 0xFFu, 2);
 
         // INT: rising edges of INTR into the CPU, and its current level.
         // Zero means the guest has never been interrupted -- no timer, no
         // keyboard -- which is the shape that leaves BASIC having cleared the
         // screen and drawn its function key line and then stopped.
         uint32_t iv = *POST_INT;
-        osd_draw_string(&fb, 4 + 30 * 8, 190, "INT", OSD_LABEL);
-        hex(4 + 34 * 8, 190, iv & 0xFFFFu, 4);
+        osd_draw_string(&fb, 4 + 30 * 8, 102, "INT", OSD_LABEL);
+        hex(4 + 34 * 8, 102, iv & 0xFFFFu, 4);
     }
 #endif
 
