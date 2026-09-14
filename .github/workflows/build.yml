@@ -316,6 +316,15 @@ jobs:
           ./obj_grcg/gr | tee grcg.log
           grep -q "PASS tb_pc98_grcg" grcg.log
 
+      - name: one guest GVRAM access becomes the right several to memory
+        run: |
+          S=pcxt-base/src/fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_gvram_seq \
+            -Isim -I$S sim/tb_pc98_gvram_seq.sv $S/pc98_gvram_seq.sv \
+            -o gs --Mdir obj_gseq
+          ./obj_gseq/gs | tee gseq.log
+          grep -q "PASS tb_pc98_gvram_seq" gseq.log
+
       - name: CE generator makes the frequencies the speed menu names
         run: |
           H=pcxt-base/src/fpga/core/KFPC-XT/HDL

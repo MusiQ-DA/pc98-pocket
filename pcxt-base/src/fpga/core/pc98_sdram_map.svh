@@ -38,6 +38,11 @@
 // (i386c/cpumem.c, memm_vram), so three planes is CORRECT for a digital
 // machine, not a gap. Opening E0000 unconditionally is the failure RAM.sv
 // records: the POST swept into a phantom expansion and stopped at D0000.
+// Each of these looks at only part of the address -- the window functions at
+// the top bits, the plane function at the bottom -- and a full-width argument
+// is what keeps the callers from having to know which. Verilator's
+// UNUSEDSIGNAL on a function argument is noise here, not a finding.
+/* verilator lint_off UNUSEDSIGNAL */
 function automatic logic pc98_sdram_hits(input logic [19:0] a,
                                          input logic analog);
     pc98_sdram_hits = (((a[19:16] < 4'hC)         // RAM + planes B, R, G
@@ -63,4 +68,5 @@ function automatic logic [19:0] pc98_gvram_plane(input logic [19:0] a,
     pc98_gvram_plane = (p == 2'd3) ? {5'b11100, a[14:0]}
                                    : {5'b10101 + 5'(p), a[14:0]};
 endfunction
+/* verilator lint_on UNUSEDSIGNAL */
 
