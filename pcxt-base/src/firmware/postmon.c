@@ -40,6 +40,7 @@
 #define POST_TVF1   ((volatile uint32_t *) 0x500000A0) // cells 4-7
 #define POST_FRB    ((volatile uint32_t *) 0x500000A4) // {f_valid beats, f_req pulses}
 #define POST_MEMSZ  ((volatile uint32_t *) 0x500000A8) // {f0 count, [0501], A3FEA}
+#define POST_KEY    ((volatile uint32_t *) 0x500000AC) // {last {make,code}, count}
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -830,6 +831,18 @@ void post_mon_tick(void)
         hex(4 + 11 * 8, 182, (m >> 8) & 0xFFu, 2);
         osd_draw_string(&fb, 4 + 15 * 8, 182, "F0", OSD_LABEL);
         hex(4 + 18 * 8, 182, (m >> 16) & 0xFFu, 2);
+
+        // KEY: how far a key press gets. The count is pc98_kbd_ps2's output
+        // strobes and the code is the last event ({make, PC-98 code}) -- so
+        // this is BEFORE the 8251 and before IRQ1.
+        //
+        // Zero after pressing keys puts the fault in the virtual keyboard, the
+        // vkb_stb toggle or pocket_keyboard's queue. Climbing puts it
+        // downstream: the 8251 model, IRQ1 off its RxRDY, or the guest.
+        uint32_t k = *POST_KEY;
+        osd_draw_string(&fb, 4 + 22 * 8, 182, "KEY", OSD_LABEL);
+        hex(4 + 26 * 8, 182, k & 0xFFu, 2);
+        hex(4 + 29 * 8, 182, (k >> 8) & 0xFFu, 2);
     }
 #endif
 

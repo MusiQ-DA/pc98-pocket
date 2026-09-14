@@ -987,6 +987,13 @@ module core_top (
     wire       dock_key_ext;
     wire       dock_key_stb;
 
+    // Driven by the PC-98 keyboard translator further down; declared here
+    // because the softcore instance below reads them and because a non-PC-98
+    // build has no translator and must still elaborate. See the always block
+    // next to pc98_kbd_ps2.
+    logic [7:0] key_count = 8'h00;
+    logic [7:0] key_last  = 8'h00;
+
     softcpu_subsystem u_softcpu (
         .fw_wr_clk                  (clk_chipset),
         .fw_wr_en                   (fw_wr_en_r),
@@ -1108,6 +1115,8 @@ module core_top (
         .pc98_tvfill_view           (pc98_tvfill_view),
         .pc98_rowbuf_freq_count     (pc98_rowbuf_freq_count),
         .pc98_rowbuf_fvalid_count   (pc98_rowbuf_fvalid_count),
+        .key_count                  (key_count),
+        .key_last                   (key_last),
         .memsw_seen                 (memsw_seen),
         .memsize_seen               (memsize_seen),
         .f0_count                   (f0_count),
@@ -1349,6 +1358,21 @@ module core_top (
     wire       pc98_key_stb;
     wire       pc98_key_make;
     wire [7:0] pc98_key_code;
+
+    // How far does a key get? key_count counts pc98_key_stb pulses and key_last
+    // holds the last event ({make, code}) -- the output of the translator, so
+    // before the 8251 and before IRQ1. The panel's KEY field reads them.
+    //
+    // Zero after pressing keys means the virtual keyboard, the firmware's
+    // vkb_stb toggle or pocket_keyboard's queue never produced the byte.
+    // Climbing means the key reached the PC-98 side and whatever is wrong is
+    // downstream: the 8251 model, IRQ1 off its RxRDY, or the guest.
+    always @(posedge clk_chipset) begin
+        if (pc98_key_stb) begin
+            key_last <= {pc98_key_make, pc98_key_code[6:0]};
+            if (key_count != 8'hFF) key_count <= key_count + 8'd1;
+        end
+    end
 
     pc98_kbd_ps2 u_pc98_kbd_ps2 (
         .clk      (clk_chipset),
