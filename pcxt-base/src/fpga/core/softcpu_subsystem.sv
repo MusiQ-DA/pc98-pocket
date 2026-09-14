@@ -761,8 +761,12 @@ module softcpu_subsystem (
     // way as q_a did.
     wire [7:0] font_q;
     wire [31:0] font_cpu_q;
-    wire [8:0] font_waddr = {gs_glyph, gy}[10:2];
-    wire [1:0] font_lane  = {gs_glyph, gy}[1:0];
+    // A concatenation cannot be bit-selected directly in Quartus's Verilog
+    // front-end (Error 10170 at the "["), so the byte address lands on a wire
+    // first and is sliced off it.
+    wire [10:0] font_addr = {gs_glyph, gy};
+    wire [8:0]  font_waddr = font_addr[10:2];
+    wire [1:0]  font_lane  = font_addr[1:0];
     wire [7:0] font_a_lane0, font_a_lane1, font_a_lane2, font_a_lane3;
     wire [7:0] font_b_lane0, font_b_lane1, font_b_lane2, font_b_lane3;
 
