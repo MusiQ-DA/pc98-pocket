@@ -502,3 +502,64 @@ pc98_tvram のスイッチ8バイトは書き込み保護されているため I
 **カットオーバーの全体像**: Dock USB / VKB / コントローラ → pocket_keyboard(Set-2 統合) → pc98_kbd_ps2(→PC-98 変換) → pc98_kbd8251(注入) → 0x41/0x43 → ゲスト。
 
 run#219 の実機観測(§8.2 の後): MEMORY SWITCH ERROR 解消、MEMORY 000KB OK 表示。ただし **RST 0000 / TVW FFFF / FR 9Fxxx / BANK 1** — ゲストは生きてメモリテストを完走するが、キーボード ACK が無いため ITF の警告ビープ→全テスト再走ループ(IO 履歴 0037 = OUT 37h ビープ連発)に留まる。D のモデルがこれを解く。
+
+---
+
+## §9 2026-09-14 昼: run#221 の答え合わせと CPU の正体
+
+### §9.1 run#221(全部入り第1弾)の実機結果
+
+| 項目 | 結果 |
+|---|---|
+| ビープ | ✅ 鳴る |
+| 行頭文字 | ✅ M 欠けず(MEMORY) |
+| BAD | ✅ 000 |
+| TVH | ✅ 00(ワード書き経路健全。ANK 2バイト化の「0x55 残り」説消滅) |
+| KANJI CG RAM ERROR | ✅ 消失 |
+| ITF | ❌ 000KB OK で再起動ループ |
+
+### §9.2 ループの正体: **8088 が V30 命令を誤実行していた**
+
+ITF の CPU リセット保存シーケンス F9476 は `68 97 14` = **PUSH imm16(186+/V30 命令)**。
+8088(mcl86)は 0x68 を未定義 JS エイリアスとして実行し命令ストリームが脱線。
+sim が通って実機だけ止まった理由は sim がずっと V30 ベンチだったこと。
+`v30/README.md` にはこのために nuV30 を vendored した経緯が最初から書いてあった
+(初測定は ITF の push imm16、と)。
+
+### §9.3 CPU 差し替え: nuV30 + v30_cpu_bridge
+
+- **`v30_cpu_bridge.sv`(新規)**: 16ビット max-mode V30 ↔ 8ビット 8288 世界。
+  読み出しは CPU を CE 駐車(コアは ADDR/UBE/BS を固定したままフリーズ、
+  ウェイトは純粋にカレンダー時間)、書き込みは 2段FIFO キュー(プログラム順序を
+  保証、OUT 043D バンク切替も次フェッチ前に着地)。バイトエンジンは 8288 から
+  見て 8088 そのもの(バイト毎の S2-S0、偶→奇の順、AEN 競合は自己修復)
+- **tb_v30_bridge**: 実V30+実KF8288+実8259、INTA から IRET まで — PASS
+- **tb_pc98_boot --v30 +itf=1(実機経路の完全リハーサル)**: F9476 実行 →
+  640KB 掃引 → OUT F0 1回 → リジューム → FD80 POST → **N88-BASIC
+  「How many files(0-15)?」到達**
+- 8088 は XT ビルドで無傷。`v30/` ディレクトリは一切未変更。
+  qsf に v30 ファイル + SEARCH_PATH、`rtl/ucore/` からシンボリックリンクで
+  テーブル単一管理
+- 実効速度はフラットバス想定の約 1/2.5(ワードが 2 バイトサイクルに分割される
+  ため)。最適化候補: RAM の 16ビットワードポート / バイト間ギャップ短縮 / ターボ
+
+### §9.4 OSD フォントのデータスロット化(著作権対応)
+
+font.rom の ANK グリフを抽出してコミットしていた件の整理:
+
+- `softcpu_subsystem.sv` の font_rom を $readmemh 焼き込みから **MMIO 書き込み
+  可能**(リージョン 0x7)に。firmware の `osd_font.c` が起動時に font.rom 先頭
+  2KB(8x8 ANK)をコピーし、独自グリフ(罫線・矢印・G_*、全て自作)を上書き。
+  ¥ キーも CP437 0x9D → ANK 0x5C に修正
+- リポジトリから `font_8x8.png/.vh`、`gen_8x8.py`、`gen_pc98.py` を削除。
+  `sim/font_slice.hex` も合成グリフに置換(tb は往復比較のみで中身任意)
+- **`git filter-repo` で png/vh を全履歴から除去し force push**。
+  ビットストリーム・CI Artifact・リポジトリ履歴のすべてから NEC/IBM 由来
+  グリフが消えた。ユーザー手順の増加ゼロ(font.rom は元から必須ファイル)
+- ROM 予算の都合で sdramtest/postmon は `#ifdef`(出荷 23184/24576)
+
+### §9.5 設定メニューの PC-98 化
+
+PC-98 ビルドで BIOS Writable / OPL2 / C/MS / Composite を非表示
+(enum は save blob のインデックス互換のため無変更)。CPU 速度の第4項目は
+「Turbo (max)」。EMS 3項目(Lo-tech 2MB / Frame / A000 UMB)は将来のため温存。
