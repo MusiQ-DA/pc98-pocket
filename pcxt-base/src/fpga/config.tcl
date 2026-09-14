@@ -1,4 +1,9 @@
 # PCXT configuration
+# SYNTHESIS: the vendored nuV30 guards its simulation-only blocks (plusargs,
+# $display traces) behind `ifndef SYNTHESIS`, and Quartus does not define the
+# macro by itself for .sv inputs -- without this the PC-98 build dies
+# elaborating $test$plusargs (Error 10174).
+set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
 set_global_assignment -name VERILOG_MACRO "SYSTEM_VARIANT_TANDY=0"
 set_global_assignment -name VERILOG_MACRO "ROM_VARIANT_TANDY=0"
 set_global_assignment -name VERILOG_MACRO "ENABLE_TANDY_VIDEO=0"
