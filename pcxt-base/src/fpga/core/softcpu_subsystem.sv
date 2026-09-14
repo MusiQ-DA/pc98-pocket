@@ -767,6 +767,9 @@ module softcpu_subsystem (
         // port_a_data_width"); the 8-bit framebuffer lanes above carry no
         // byte enables and so never needed it.
         .width_byteena_a (4),
+        // And AUTO block selection refuses a mixed-width pair outright
+        // (Error 272006). M10K supports a 32->8 width ratio natively.
+        .ram_block_type ("M10K"),
         .address_reg_b  ("CLOCK1"),
         .outdata_reg_a  ("UNREGISTERED"),
         .outdata_reg_b  ("UNREGISTERED"),
