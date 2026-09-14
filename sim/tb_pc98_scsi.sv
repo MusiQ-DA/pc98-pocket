@@ -214,13 +214,14 @@ module tb_pc98_scsi;
         want("CYLINDERS readable by firmware", mg_reg_rdata, 8'h77);
 
         $display("\n  errors: %0d", errors);
-        $display("  RESULT: %s", (errors == 0) ? "PASS" : "FAIL");
+        if (errors == 0) $display("PASS tb_pc98_scsi");
+        else             $display("FAILED tb_pc98_scsi: %0d", errors);
         $finish;
     end
 
     initial begin
         #2000000;
-        $display("  RESULT: FAIL (timeout)");
+        $display("FAILED tb_pc98_scsi: timeout");
         $finish;
     end
 

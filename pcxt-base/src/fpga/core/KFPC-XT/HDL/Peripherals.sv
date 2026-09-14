@@ -2739,6 +2739,115 @@ end endgenerate
 `endif
 
 
+`ifdef MACHINE_PC98
+    //
+    // SCSI -- the PC-9801-55 board at 0x0CC0-0x0CC7
+    //
+    // The window itself is pc98_scsi.sv; this is the decode and the softcore's
+    // way in. mgmt chip-select 0xF4, next to ide.v's 0xF0 and floppy.v's 0xF2.
+    //
+    // The management side is eight registers, because mgmt_address carries
+    // only four bits of register within a chip-select and the data buffer is
+    // 8 KB. An index-plus-autoincrementing-data-port pair reaches both the
+    // control file and the buffer, which is the same shape ide.v uses for
+    // sector data (its mgmt register 0xF).
+    //
+    //   0  R: {cmd_byte, 7'd0, cmd_req}   W: bit0 acknowledges the request
+    //   1  W: control-register index
+    //   2  R/W: control register at the index, index post-increments
+    //   3  W: buffer pointer (13 bits)
+    //   4  R/W: buffer byte at the pointer, pointer post-increments
+    //   5  W: auxstatus, the byte 0xCC0 hands the guest
+    //   6  W: scsistatus, the byte index 0x17 hands the guest
+    //   7  W: bit0 rewinds the guest's read pointer, bit1 its write pointer
+    //
+    wire scsi_cs = iorq & ~address_enable_n & (address[15:3] == 13'h198);
+
+    logic        mgmt_scsi_cs;
+    assign       mgmt_scsi_cs = (mgmt_address[15:8] == 8'hF4);
+    wire         mgmt_scsi_wr = mgmt_write & mgmt_scsi_cs;
+    wire         mgmt_scsi_rd = mgmt_read  & mgmt_scsi_cs;
+    wire  [3:0]  mgmt_scsi_reg = mgmt_address[3:0];
+
+    logic  [4:0] scsi_mg_reg_addr;
+    logic [12:0] scsi_mg_buf_addr;
+    logic        scsi_cmd_ack;            // the firmware's copy of cmd_req
+
+    wire   [7:0] scsi_mg_reg_rdata;
+    wire   [7:0] scsi_mg_buf_rdata;
+    wire         scsi_cmd_req;
+    wire   [7:0] scsi_cmd_byte;
+    wire   [7:0] scsi_data_out;
+    wire         scsi_read_select;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            scsi_mg_reg_addr <= 5'd0;
+            scsi_mg_buf_addr <= 13'd0;
+            scsi_cmd_ack     <= 1'b0;
+        end else begin
+            if (mgmt_scsi_wr) begin
+                case (mgmt_scsi_reg)
+                    4'd0: if (mgmt_writedata[0]) scsi_cmd_ack <= scsi_cmd_req;
+                    4'd1: scsi_mg_reg_addr <= mgmt_writedata[4:0];
+                    4'd2: scsi_mg_reg_addr <= scsi_mg_reg_addr + 5'd1;
+                    4'd3: scsi_mg_buf_addr <= mgmt_writedata[12:0];
+                    4'd4: scsi_mg_buf_addr <= scsi_mg_buf_addr + 13'd1;
+                    default: ;
+                endcase
+            end
+            // A read advances the same way a write does, so the firmware can
+            // stream a sector out of the buffer without re-addressing it.
+            if (mgmt_scsi_rd) begin
+                case (mgmt_scsi_reg)
+                    4'd2: scsi_mg_reg_addr <= scsi_mg_reg_addr + 5'd1;
+                    4'd4: scsi_mg_buf_addr <= scsi_mg_buf_addr + 13'd1;
+                    default: ;
+                endcase
+            end
+        end
+    end
+
+    logic [15:0] mgmt_scsi_readdata;
+    always_comb begin
+        case (mgmt_scsi_reg)
+            4'd0: mgmt_scsi_readdata = {scsi_cmd_byte,
+                                        7'd0, scsi_cmd_req ^ scsi_cmd_ack};
+            4'd2: mgmt_scsi_readdata = {8'd0, scsi_mg_reg_rdata};
+            4'd4: mgmt_scsi_readdata = {8'd0, scsi_mg_buf_rdata};
+            default: mgmt_scsi_readdata = 16'h0000;
+        endcase
+    end
+
+    pc98_scsi u_pc98_scsi (
+        .clk                (clock),
+        .rst                (reset),
+        .cs                 (scsi_cs),
+        .a1a2               (address[2:1]),
+        .io_read_n          (io_read_n),
+        .io_write_n         (io_write_n),
+        .data_in            (internal_data_bus),
+        .data_out           (scsi_data_out),
+        .read_select        (scsi_read_select),
+        .cmd_req            (scsi_cmd_req),
+        .cmd_byte           (scsi_cmd_byte),
+        .mg_reg_addr        (scsi_mg_reg_addr),
+        .mg_reg_we          (mgmt_scsi_wr & (mgmt_scsi_reg == 4'd2)),
+        .mg_reg_wdata       (mgmt_writedata[7:0]),
+        .mg_reg_rdata       (scsi_mg_reg_rdata),
+        .mg_buf_addr        (scsi_mg_buf_addr),
+        .mg_buf_we          (mgmt_scsi_wr & (mgmt_scsi_reg == 4'd4)),
+        .mg_buf_wdata       (mgmt_writedata[7:0]),
+        .mg_buf_rdata       (scsi_mg_buf_rdata),
+        .mg_auxstatus       (mgmt_writedata[7:0]),
+        .mg_auxstatus_we    (mgmt_scsi_wr & (mgmt_scsi_reg == 4'd5)),
+        .mg_scsistatus      (mgmt_writedata[7:0]),
+        .mg_scsistatus_we   (mgmt_scsi_wr & (mgmt_scsi_reg == 4'd6)),
+        .mg_rdptr_clr       (mgmt_scsi_wr & (mgmt_scsi_reg == 4'd7) & mgmt_writedata[0]),
+        .mg_wrptr_clr       (mgmt_scsi_wr & (mgmt_scsi_reg == 4'd7) & mgmt_writedata[1])
+    );
+`endif
+
     //
     // FDC
     //
@@ -2870,7 +2979,12 @@ end endgenerate
     //
     // mgmt_readdata
     //
+`ifdef MACHINE_PC98
+    assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
+                         : mgmt_ide0_cs ? mgmt_ide0_readdata : mgmt_fdd_readdata;
+`else
     assign mgmt_readdata = mgmt_ide0_cs ? mgmt_ide0_readdata : mgmt_fdd_readdata;
+`endif
 
 
     //
@@ -3039,6 +3153,11 @@ end endgenerate
             data_bus_out <= ppi_data_bus_out;
         end
 `ifdef MACHINE_PC98
+        else if (scsi_read_select)
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= scsi_data_out;
+        end
         else if (grcg_mode_cs & ~io_read_n)
         begin
             data_bus_out_from_chipset <= 1'b1;
