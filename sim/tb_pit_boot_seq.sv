@@ -16,7 +16,12 @@
 //      PIC -- np2's NEVENT_ITIMER cadence.
 //   D. np2's quirk (io/pit.c pit_o71/pit_o77): a completed channel-0 write
 //      clears the master PIC's IRR bit 0, so a request latched before a
-//      reprogram cannot be delivered after it.
+//      reprogram cannot be delivered after it.  D's second half failed for
+//      as long as the 8259's edge detector never disarmed -- "FAIL: D IRR0
+//      survived a ch0 control write" -- because a level-following detector
+//      re-asserts the request one clock after the clear, for as long as the
+//      pin stays high.  sim/tb_pic_irq0_edge.sv carries that all the way to
+//      the boot sequences the freeze came out of.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -228,9 +233,9 @@ module tb_pit_boot_seq;
         end
 
         if (errors == 0)
-            $display("\n*** ALL PHASES PASS ***");
+            $display("\n*** ALL PHASES PASS ***\nRESULT: PASS");
         else
-            $display("\n*** %0d FAILURES ***", errors);
+            $display("\n*** %0d FAILURES ***\nRESULT: FAIL", errors);
         $finish;
     end
 
