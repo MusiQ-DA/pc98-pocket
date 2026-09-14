@@ -86,7 +86,22 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # Register and floppy.v needs one. pc98_fdc_glue makes that translation and
 # tb_pc98_fdc_glue pins it -- which is the bench the PERIPHERALS comment asked
 # for before this switch was allowed to move.
-set_global_assignment -name VERILOG_MACRO "PC98_FDC_REAL=1"
+# DISABLED AGAIN -- switching it on stopped the boot at MEMORY 640KB OK.
+#
+# The panel named it: the last four I/O writes were 00BE 00CC 00CC, the
+# 2HD/2DD mode port and the 2DD control port, so the guest was inside the FDC
+# code; and LVL read 41, which is the timer line plus bit 6 -- floppy.v's
+# interrupt, asserted and never cleared. The stub that used to answer those
+# ports has no interrupt line at all, which is why the boot got past here for
+# as long as it did.
+#
+# Everything else stays: pc98_fdc_glue.sv and its bench are correct about the
+# mapping (eighteen checks, and they caught a real one-write-late DOR bug), and
+# the PERIPHERALS wiring is in place behind this macro. What is missing is the
+# INTERRUPT contract -- who acknowledges floppy.v's irq on a PC-98, and through
+# which port -- and that needs np2kai's fdc.c read properly rather than guessed
+# at. Turn this back on with that in hand.
+# set_global_assignment -name VERILOG_MACRO "PC98_FDC_REAL=1"
 
 # Route SDRAM through sdram_mp (via sdram_kf_shim) instead of KFSDRAM.
 # RAM.sv tests this with `ifdef, so setting it to 0 would still select the shim
