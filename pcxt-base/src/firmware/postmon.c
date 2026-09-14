@@ -101,12 +101,17 @@ static uint8_t guest_peek(uint32_t addr)
 #define PANEL_X 0
 #define PANEL_Y 0
 #define PANEL_W 320
+// PANEL_H is the LAST ROW + 10, and a row drawn past it has no background
+// behind it and is cut off -- which is what MSW/SZ/F0 did on the first try at
+// row 182 against PANEL_H 182.
+//
 // 182, not 162: TVF and FRB were drawn on row 92 on top of RD0, three fields
 // in one row's worth of space. They cannot share a row either -- TVF is a
 // label plus eight bytes (28 of the panel's 40 columns) and FRB is another
 // 13 -- so the panel grew by two rows rather than one of them staying
-// unreadable. OSD_FB_HEIGHT is 200, so 182 still fits.
-#define PANEL_H 182
+// unreadable. 192 adds the MSW/SZ/F0 row on top of that; OSD_FB_HEIGHT is
+// 200, so it still fits.
+#define PANEL_H 192
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
