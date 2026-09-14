@@ -762,6 +762,11 @@ module softcpu_subsystem (
         .width_b        (8),
         .widthad_b      (11),
         .numwords_b     (2048),
+        // Quartus cannot derive the mixed-width + byte-enable configuration
+        // without this (Error 14093 "Can't recognize value for
+        // port_a_data_width"); the 8-bit framebuffer lanes above carry no
+        // byte enables and so never needed it.
+        .width_byteena_a (4),
         .address_reg_b  ("CLOCK1"),
         .outdata_reg_a  ("UNREGISTERED"),
         .outdata_reg_b  ("UNREGISTERED"),
