@@ -760,6 +760,15 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gdc.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_grcg.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gdc_mode2.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gvram_seq.sv"
+
+# Dropped for the PC-98 build (2026-09-14). Their instantiations in
+# Peripherals.sv are now behind `ifndef MACHINE_PC98`, so nothing here
+# references them and Quartus need not analyse them:
+#   core/sound/saa1099.sv                        C/MS -- no such board
+#   core/sound/jtopl/hdl/jtopl2.qip              OPL2 -- PC-98 FM is a YM2203/2608
+#   .../KFPS2KB/HDL/Tandy_Scancode_Converter.sv  a Tandy keyboard
+# The files stay in the tree; re-adding a line brings any of them back.
+
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_mouse.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_video.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/video_sync_guard.sv
@@ -800,9 +809,7 @@ set_global_assignment -name SEARCH_PATH core/common
 set_global_assignment -name QIP_FILE core/common/common.qip
 set_global_assignment -name QIP_FILE core/video/video.qip
 set_global_assignment -name QIP_FILE core/uart/uart.qip
-set_global_assignment -name SYSTEMVERILOG_FILE "core/sound/saa1099.sv"
 set_global_assignment -name QIP_FILE core/sound/jt89/hdl/jt89.qip
-set_global_assignment -name QIP_FILE core/sound/jtopl/hdl/jtopl2.qip
 set_global_assignment -name QIP_FILE core/8088/8088.qip
 # The nuV30 (the PC-98's CPU) and its 8-bit-bus bridge. v30u_ucrom
 # $readmemh's its two tables from HEXDIR "rtl/ucore/" (its SYNTHESIS
@@ -835,7 +842,6 @@ set_global_assignment -name VERILOG_FILE core/pll_video_pc98.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_kf_shim.sv
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFPS2KB/HDL/KFPS2KB_Byte_Accept.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFPS2KB/HDL/KFPS2KB.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KFPS2KB/HDL/Tandy_Scancode_Converter.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KF8288/HDL/KF8288.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KF8259/HDL/KF8259_Priority_Resolver.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/KFPC-XT/HDL/KF8259/HDL/KF8259_Interrupt_Request.sv"

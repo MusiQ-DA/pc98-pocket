@@ -1010,6 +1010,7 @@ module PERIPHERALS #(
     end
 
     // Convert Tandy scancode
+`ifndef MACHINE_PC98
     Tandy_Scancode_Converter u_Tandy_Scancode_Converter 
     (
         .clock                      (clock),
@@ -1018,6 +1019,10 @@ module PERIPHERALS #(
         .keybord_irq                (keybord_irq),
         .convert_data               (tandy_keycode_conv)
     );
+`else
+    // No Tandy keyboard here; PC-98 keys arrive through pc98_kbd8251.
+    assign tandy_keycode_conv = 8'h00;
+`endif
     wire [7:0] tandy_keycode = `ENABLE_TANDY_KBD ? tandy_keycode_conv : keycode;
 
     always_ff @(posedge clk_vga_hgc)
@@ -1044,6 +1049,7 @@ module PERIPHERALS #(
         end
     end
 
+`ifndef MACHINE_PC98
     jtopl2 jtopl2_inst
     (
         .rst(reset | opl_warm_reset),
@@ -1058,6 +1064,11 @@ module PERIPHERALS #(
         .snd(jtopl2_snd_e_int),
         .sample()
     );
+`else
+    // No OPL2 on a PC-98; its FM is a YM2203/2608 on a sound board.
+    assign jtopl2_dout_int  = 8'h00;
+    assign jtopl2_snd_e_int = 16'h0000;
+`endif
 
 
     wire [10:0] tandy_snd_e_int;
@@ -1123,6 +1134,7 @@ end
     end
 
     wire [7:0] saa1_l,saa1_r;
+`ifndef MACHINE_PC98
     saa1099 ssa1
     (
 	    .clk_sys(clock),
@@ -1135,8 +1147,14 @@ end
 	    .out_l(saa1_l),
 	    .out_r(saa1_r)
     );
+`else
+    // No C/MS on a PC-98 -- see ssa2 below.
+    assign saa1_l = 8'h00;
+    assign saa1_r = 8'h00;
+`endif
 
     wire [7:0] saa2_l,saa2_r;
+`ifndef MACHINE_PC98
     saa1099 ssa2
     (
 	    .clk_sys(clock),
@@ -1149,6 +1167,11 @@ end
 	    .out_l(saa2_l),
 	    .out_r(saa2_r)
     );
+`else
+    // No C/MS on a PC-98.
+    assign saa2_l = 8'h00;
+    assign saa2_r = 8'h00;
+`endif
 
     wire [8:0] cms_l = {1'b0, saa1_l} + {1'b0, saa2_l};
     wire [8:0] cms_r = {1'b0, saa1_r} + {1'b0, saa2_r};
@@ -2832,6 +2855,7 @@ end endgenerate
 
     logic [7:0] joy_data;
 
+`ifndef MACHINE_PC98
     tandy_pcjr_joy joysticks
     (
         .clk                       (clock),
@@ -2845,6 +2869,10 @@ end endgenerate
         .joya1                     (joya1),
         .d_out                     (joy_data)
     );
+`else
+    // No PCjr joystick port on a PC-98; its pads arrive through the 8255.
+    assign joy_data = 8'hFF;
+`endif
 
 
     //
