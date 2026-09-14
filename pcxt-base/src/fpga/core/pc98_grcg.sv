@@ -42,13 +42,26 @@
 //
 // WHAT THIS MODULE IS NOT. It is the transform and the registers, not the
 // memory: it takes the four planes' current bytes and hands back what to write
-// and which planes to write. Where the planes live is the caller's business,
-// which matters here because THE FOURTH PLANE HAS NOWHERE TO LIVE YET --
-// np2kai puts them at A8000 (B), B0000 (R), B8000 (G) and E0000 (E), and
-// pc98_sdram_map.svh's select covers the first three and stops at BFFFF.
-// E0000-E7FFF answers to nothing. Opening it needs care: RAM.sv's own comment
-// records the POST sweeping into a phantom expansion and stopping when C0000
-// upward was made to answer.
+// and which planes to write. Where the planes live is the caller's business.
+//
+// AND THE FOURTH PLANE IS CONDITIONAL, which a first reading of np2kai's
+// address constants misses. memm_vram (i386c/cpumem.c) hangs the VRAM handler
+// on all four windows -- A8000 (B), B0000 (R), B8000 (G), E0000 (E) -- and
+// then takes the last one back:
+//
+//     if (!(func & (1 << VOPBIT_ANALOG))) {       // digital
+//         memfn0.rd8[0xe0000 >> 15] = memnc_rd8;  //   no-connect
+//         memfn0.wr8[0xe0000 >> 15] = memnc_wr8;
+//     }
+//
+// In DIGITAL (eight-colour) mode there are THREE planes and E0000 answers to
+// nothing; the fourth exists only in ANALOG (sixteen-colour) mode, switched by
+// port 0x6A bit 0 (io/gdc.c's gdc_o6a, and only while gdc.display's analog bit
+// is set). So this core's map is not missing a plane -- it is in digital mode,
+// where three is correct. Sixteen colours means OPENING AND CLOSING
+// E0000-E7FFF with that port, not adding a line to pc98_sdram_map.svh; RAM.sv
+// records the POST sweeping into a phantom expansion when C0000 upward was
+// made to answer unconditionally.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //

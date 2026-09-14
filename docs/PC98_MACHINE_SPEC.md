@@ -17,10 +17,48 @@
 | 0xA0000-0xA1FFF | 8KB | **TVRAM 文字コード**(`A0000 + idx*2` が下位、`+1` が上位=漢字/フラグ) | BRAM(デュアルポート) |
 | 0xA2000-0xA3FFF | 8KB | **TVRAM アトリビュート**(`A2000 + idx*2`、奇数番地は未使用) | BRAM |
 | 0xA4000-0xA4FFF | 4KB | **CG(文字ジェネレータ)ウィンドウ** — 漢字 ROM の読み出し窓 | SDRAM 常駐フォント |
-| 0xA8000-0xBFFFF | 96KB | G-RAM(グラフィック4プレーン) | SDRAM |
+| 0xA8000-0xAFFFF | 32KB | **G-RAM プレーン B(青)** | SDRAM |
+| 0xB0000-0xB7FFF | 32KB | **G-RAM プレーン R(赤)** | SDRAM |
+| 0xB8000-0xBFFFF | 32KB | **G-RAM プレーン G(緑)** | SDRAM |
 | 0xC0000-0xDFFFF | 128KB | VRAMウィンドウ/EGC窓 | バンク窓 |
+| 0xE0000-0xE7FFF | 32KB | **G-RAM プレーン E(輝度) — アナログ(16色)モードのときだけ存在** | 未実装 |
 | 0xE8000-0xFFFFF | 96KB | BIOS+ITF ROM(bios.rom) | BRAM/SDRAM |
 | 0xF00000- | 拡張 | 9821 VRAM direct 等 | 後期フェーズ |
+
+> ## ★ グラフィックプレーンは 3 枚ではなく 4 枚、ただし 4 枚目は条件付き
+>
+> 当初この表は「`0xA8000-0xBFFFF` 96KB = グラフィック4プレーン」と書いていたが
+> **誤り**。96KB は 32KB × 3 枚でしかなく、4 枚目は別の場所にある。
+> np2kai `i386c/cpumem.c` の `memm_vram()` が 4 つの窓すべてに同じ
+> VRAM ハンドラを張る:
+>
+> ```c
+> memfn0.rd8[0xa8000 >> 15] = vacc->rd8;   // B
+> memfn0.rd8[0xb0000 >> 15] = vacc->rd8;   // R
+> memfn0.rd8[0xb8000 >> 15] = vacc->rd8;   // G
+> memfn0.rd8[0xe0000 >> 15] = vacc->rd8;   // E
+> ```
+>
+> **そのうえで、デジタル(8色)モードでは E0000 を未接続に戻す**:
+>
+> ```c
+> if (!(func & (1 << VOPBIT_ANALOG))) {       // デジタル
+>     memfn0.rd8[0xe0000 >> 15] = memnc_rd8;  //   no-connect
+>     memfn0.wr8[0xe0000 >> 15] = memnc_wr8;
+> }
+> ```
+>
+> つまり **E0000 は「マップから漏れている」のではなく、モード依存で存在しない**。
+> 現在のコアがデジタルモードで正しく動いているのはそのため。
+>
+> 切り替えは **ポート 0x6A(`gdc_o6a`、ビット set/reset 形式)の bit 0**。
+> `gdc.display` のアナログ許可ビットが立っているときだけ効き、`VOPBIT_ANALOG`
+> を動かして `MEMM_VRAM()` がメモリマップを張り替える(np2kai `io/gdc.c:515-535`)。
+>
+> **16 色モードを実装するときの作業は「select に 1 行足す」ではなく
+> 「ポート 0x6A bit 0 に応じて E0000-E7FFF を開閉する」。** 無条件に開けては
+> ならない — `RAM.sv` のコメントが記録しているとおり、C0000 以降を答えさせた
+> ときに POST が存在しない拡張メモリを掃いて D0000 で止まった実測がある。
 
 > **TVRAM は char と attr が交互ではなく別領域**。np2 `vram/maketext.c` で確認:
 > `mem[0xa0000 + edi*2]`(文字下位)、`mem[0xa0001 + edi*2]`(上位、`gdc.bitac` と AND される)、
