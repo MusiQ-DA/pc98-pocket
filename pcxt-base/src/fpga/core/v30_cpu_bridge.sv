@@ -139,6 +139,10 @@ module v30_cpu_bridge (
     // cycles. word_access says this cycle is a word; the _hi pair carries its
     // odd half. Undefined, these are tied off and every word still runs as two
     // byte cycles, which is what everything that is not the SDRAM needs.
+    // Sixteen-colour mode, for the same reason RAM.sv needs it: with E0000
+    // open, a word access there is as burstable as one at A8000, and the two
+    // must agree or a word cycle lands where only a byte is served.
+    input  wire         analog_mode,
     output reg          word_access,
     output reg   [7:0]  cpu_data_bus_hi,
     input  wire  [7:0]  data_bus_hi,
@@ -369,7 +373,7 @@ module v30_cpu_bridge (
 `ifdef PC98_WORD_MEM
         word_1cyc = (a[0] == 1'b0) && (ube_n == 1'b0)
                  && ((bs == BS_CODE) || (bs == BS_MEMR) || (bs == BS_MEMW))
-                 && pc98_sdram_hits(a);
+                 && pc98_sdram_hits(a, analog_mode);
 `else
         word_1cyc = 1'b0;
 `endif

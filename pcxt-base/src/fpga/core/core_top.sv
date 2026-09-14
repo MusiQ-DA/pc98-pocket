@@ -2122,6 +2122,9 @@ module core_top (
     wire [7:0] cpu_data_bus_hi;
     wire [7:0] data_bus_hi;
     wire       cpu_word_access;
+    // Sixteen-colour mode: CHIPSET decides it (port 0x6A) and the bridge has
+    // to know, because it and RAM.sv must agree on where memory is.
+    wire       pc98_analog;
     wire processor_ready;
     wire interrupt_to_cpu;
     wire address_latch_enable;
@@ -2346,6 +2349,7 @@ module core_top (
         .cpu_word_access                    (cpu_word_access),
         .cpu_data_bus_hi                    (cpu_data_bus_hi),
         .data_bus_hi                        (data_bus_hi),
+        .pc98_analog                        (pc98_analog),
         .processor_status                   (processor_status),
         .processor_lock_n                   (lock_n),
     //  .processor_transmit_or_receive_n    (processor_transmit_or_receive_n),
@@ -2577,6 +2581,7 @@ module core_top (
         .ad_out            (cpu_ad_out),
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
+        .analog_mode       (pc98_analog),
         .word_access       (cpu_word_access),
         .cpu_data_bus_hi   (cpu_data_bus_hi),
         .data_bus_hi       (data_bus_hi),

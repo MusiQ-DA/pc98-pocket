@@ -31,9 +31,36 @@
 // signal name. INCLUDE THIS INSIDE THE MODULE -- each one gets its own copy,
 // which is what keeps Quartus happy about a function at compilation-unit
 // scope.
-function automatic logic pc98_sdram_hits(input logic [19:0] a);
-    pc98_sdram_hits = ((a[19:16] < 4'hC)          // RAM + the GVRAM window
-                    || (a[19:15] >= 5'b11101))    // E8000-FFFFF: the ROM image
-                    && (a[19:15] != 5'b10100);    // not A0000-A7FFF
+// `analog` is the sixteen-colour mode bit (port 0x6A bit 0). It has to be an
+// ARGUMENT rather than a constant because it MOVES THE MEMORY MAP: the fourth
+// graphics plane lives at E0000-E7FFF and exists only in analog mode. np2kai
+// maps all four windows and then takes the fourth back in digital mode
+// (i386c/cpumem.c, memm_vram), so three planes is CORRECT for a digital
+// machine, not a gap. Opening E0000 unconditionally is the failure RAM.sv
+// records: the POST swept into a phantom expansion and stopped at D0000.
+function automatic logic pc98_sdram_hits(input logic [19:0] a,
+                                         input logic analog);
+    pc98_sdram_hits = (((a[19:16] < 4'hC)         // RAM + planes B, R, G
+                     || (a[19:15] >= 5'b11101))   // E8000-FFFFF: the ROM image
+                     && (a[19:15] != 5'b10100))   // not A0000-A7FFF
+                    || (analog && (a[19:15] == 5'b11100)); // E0000: plane E
+endfunction
+
+// The three graphics windows that always exist, plus the fourth when analog.
+// A GRCG access to ANY of them touches all four planes, so the memory path
+// needs to recognise the window rather than the plane.
+function automatic logic pc98_gvram_hits(input logic [19:0] a,
+                                         input logic analog);
+    pc98_gvram_hits = (a[19:15] == 5'b10101)      // A8000-AFFFF  plane B
+                   || (a[19:16] == 4'hB)          // B0000-BFFFF  planes R, G
+                   || (analog && (a[19:15] == 5'b11100)); // E0000  plane E
+endfunction
+
+// Where plane p of the byte at `a` lives. Planes B/R/G are 0x8000 apart from
+// A8000; plane E is not -- it is at E0000, four windows further on.
+function automatic logic [19:0] pc98_gvram_plane(input logic [19:0] a,
+                                                 input logic [1:0] p);
+    pc98_gvram_plane = (p == 2'd3) ? {5'b11100, a[14:0]}
+                                   : {5'b10101 + 5'(p), a[14:0]};
 endfunction
 

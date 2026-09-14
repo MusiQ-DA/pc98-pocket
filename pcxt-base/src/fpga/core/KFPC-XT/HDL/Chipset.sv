@@ -26,6 +26,9 @@ module CHIPSET #(
         input   logic           cpu_word_access,
         input   logic   [7:0]   cpu_data_bus_hi,
         output  logic   [7:0]   data_bus_hi,
+        // Sixteen-colour mode, out to core_top for v30_cpu_bridge: it and
+        // RAM.sv must agree on whether E0000-E7FFF is memory.
+        output  logic           pc98_analog,
         input   logic   [2:0]   processor_status,
         input   logic           processor_lock_n,
         output  logic           processor_transmit_or_receive_n,
@@ -352,6 +355,7 @@ module CHIPSET #(
         .font_wr_addr                       (font_wr_addr),
         .font_wr_data                       (font_wr_data),
         .clock                              (clock),
+        .pc98_analog                        (pc98_analog),
         .clk_sys                            (clk_sys),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
@@ -498,6 +502,7 @@ module CHIPSET #(
         .address                            (latch_address),
         .internal_data_bus                  (internal_data_bus),
         .data_bus_out                       (internal_data_bus_ram),
+        .analog_mode                        (pc98_analog),
         .word_access                        (cpu_word_access),
         .internal_data_bus_hi               (cpu_data_bus_hi),
         .data_bus_out_hi                    (data_bus_hi),

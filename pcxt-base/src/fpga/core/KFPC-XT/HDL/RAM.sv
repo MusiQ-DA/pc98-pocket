@@ -29,6 +29,9 @@ module RAM (
     // two, not two bus cycles. word_access says the cycle is a word, and the
     // _hi pair carries its odd half. Held low, everything below behaves
     // exactly as it did byte-at-a-time.
+    // Sixteen-colour mode (port 0x6A bit 0). It moves the memory map: the
+    // fourth graphics plane at E0000-E7FFF exists only while this is set.
+    input   logic           analog_mode,
     input   logic           word_access,
     input   logic   [7:0]   internal_data_bus_hi,
     output  logic   [7:0]   data_bus_out_hi,
@@ -126,7 +129,7 @@ module RAM (
     // The predicate itself lives in pc98_sdram_map.svh, because v30_cpu_bridge
     // needs the same answer one step earlier -- see that file.
 `include "pc98_sdram_map.svh"
-    assign ram_address_select_n = ~(enable_sdram && pc98_sdram_hits(address));
+    assign ram_address_select_n = ~(enable_sdram && pc98_sdram_hits(address, analog_mode));
 `else
     assign ram_address_select_n = ~(enable_sdram && ~(address[19:16] == 4'b1011) &&  // B0000h reserved for VRAM
 	                               ~(~enable_a000h && address[19:16] == 4'b1010));    // A0000h is optional

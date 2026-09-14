@@ -116,6 +116,7 @@ module tb_v30_bridge;
         .lock_n            (lock_n),
         // No word path here: this bench's memory is a flat byte array and
         // PC98_WORD_MEM is never defined for it, so word_access stays low.
+        .analog_mode       (1'b0),
         .word_access       (),
         .cpu_data_bus_hi   (),
         .data_bus_hi       (8'hFF),

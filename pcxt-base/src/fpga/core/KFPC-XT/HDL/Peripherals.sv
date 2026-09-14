@@ -52,6 +52,9 @@ module PERIPHERALS #(
 		parameter clk_rate = 28'd50000000
     ) (
         input   logic           clock,
+        // Sixteen-colour mode, out to the memory path: it decides whether
+        // E0000-E7FFF is the fourth graphics plane or nothing at all.
+        output  logic           pc98_analog,
         input   logic           clk_sys,
         input   logic           cpu_ce_posedge,
         input   logic           cpu_ce_negedge,
@@ -1923,6 +1926,40 @@ end endgenerate
     end
 
     wire mode68_wr = io_write_n & ~mode68_prev_wr_n & mode68_addr;
+
+    // Port 0x6A, the same bit set/reset shape as 0x68 and for the same reason:
+    // its bit 0 is sixteen-colour mode, which MOVES THE MEMORY MAP by bringing
+    // the fourth graphics plane at E0000-E7FFF into existence.
+    wire  mode6a_select = pc98_io_exact & (address[7:0] == 8'h6A);
+    wire  mode6a_addr   = ~address_enable_n & (address[15:8] == 8'h00)
+                        & (address[7:0] == 8'h6A);
+    logic       mode6a_prev_wr_n;
+    logic [7:0] mode6a_data;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            mode6a_prev_wr_n <= 1'b1;
+            mode6a_data      <= 8'h00;
+        end else begin
+            mode6a_prev_wr_n <= io_write_n;
+            if (mode6a_select & ~io_write_n)
+                mode6a_data <= internal_data_bus;
+        end
+    end
+
+    wire mode6a_wr = io_write_n & ~mode6a_prev_wr_n & mode6a_addr;
+
+    pc98_gdc_mode2 u_gdc_mode2 (
+        .clk            (clock),
+        .rst            (reset),
+        .wr             (mode6a_wr),
+        .d              (mode6a_data),
+        // This core has the four planes, so it admits to the hardware. The
+        // input exists so that is a decision rather than an assumption.
+        .analog_capable (1'b1),
+        .mode2          (),
+        .analog         (pc98_analog)
+    );
 
     wire [7:0] pc98_bitac;
 
