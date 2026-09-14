@@ -538,10 +538,17 @@ int settings_input(uint16_t pressed)
     if (it->type == IT_OPTION) {
         setting_t *s = &settings[it->arg];
         int changed = 1;
+        // Wrapped by comparison, not by %. picorv32 is built without
+        // ENABLE_DIV -- its divider was 216 ALMs for the six division
+        // instructions in this firmware, on a device that is 97 per cent full
+        // with the GDC still to come -- and a menu index is always already
+        // inside its range, so one compare does what a modulo did.
         if (pressed & BTN_RIGHT) {
-            s->value = (uint8_t) ((s->value + 1) % s->count);
+            uint8_t v = (uint8_t) (s->value + 1u);
+            s->value = (v >= s->count) ? 0u : v;
         } else if (pressed & BTN_LEFT) {
-            s->value = (uint8_t) ((s->value + s->count - 1) % s->count);
+            s->value = s->value ? (uint8_t) (s->value - 1u)
+                                : (uint8_t) (s->count - 1u);
         } else {
             changed = 0;
         }
@@ -575,7 +582,10 @@ int settings_input(uint16_t pressed)
                 if (keybind_cycle[slot] == BIND_KEY_SLOT) {
                     keybind_remember(btn);
                 }
-                slot = (slot + dir + KEYBIND_CYCLE_COUNT) % KEYBIND_CYCLE_COUNT;
+                // dir is +1 or -1, so one step can leave the range by one.
+                slot += dir;
+                if (slot < 0)                     slot = KEYBIND_CYCLE_COUNT - 1;
+                else if (slot >= KEYBIND_CYCLE_COUNT) slot = 0;
                 keybind_sel[btn] = (uint8_t) slot;
                 uint8_t code = keybind_cycle[slot];
                 if (code == BIND_KEY_SLOT) {

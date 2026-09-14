@@ -177,13 +177,42 @@ static void ide_drain_sector(void)
     }
 }
 
+// Shift-subtract division, because picorv32 is built without ENABLE_DIV.
+//
+// The divider cost 216 ALMs and this firmware had six division instructions:
+// two in the settings menu (now compares) and these, the LBA-to-CHS maths.
+// The device is at 97 per cent with a uPD7220 and a GRCG still to come, so the
+// trade is 216 ALMs of fabric against about thirty instructions on a path that
+// runs once per disk access and is nowhere near the bottleneck.
+//
+// Exact, including the remainder: the results have to match what `/` and `%`
+// produced, or a sector lands in the wrong place.
+static uint32_t udiv32(uint32_t n, uint32_t d, uint32_t *rem)
+{
+    uint32_t q = 0u, r = 0u;
+    if (d == 0u) {
+        if (rem) *rem = 0u;
+        return 0u;
+    }
+    for (int i = 31; i >= 0; i--) {
+        r = (r << 1) | ((n >> i) & 1u);
+        if (r >= d) {
+            r -= d;
+            q |= 1u << i;
+        }
+    }
+    if (rem) *rem = r;
+    return q;
+}
+
+
 // Set the CHS translation and recompute cylinders from it. 0x91 (init device
 // parameters) uses this to adopt the geometry the guest wants.
 static void ide_set_geometry(struct hdd_drive *d, uint32_t spt, uint32_t heads)
 {
     d->heads = heads ? heads : 16;
     d->spt = spt ? spt : 256;
-    uint32_t cyls = d->total / (d->heads * d->spt);
+    uint32_t cyls = udiv32(d->total, d->heads * d->spt, 0);
     if (cyls > 65535) {
         cyls = 65535;
     }
@@ -210,10 +239,10 @@ static void ide_put_lba(uint32_t lba)
         R.head = (lba >> 24) & 0xF;
     } else {
         uint32_t hspt = dsel->heads * dsel->spt;
-        R.cylinder = lba / hspt;
-        lba = lba % hspt;
-        R.head = lba / dsel->spt;
-        R.sector = (lba % dsel->spt) + 1;
+        uint32_t rem;
+        R.cylinder = udiv32(lba, hspt, &rem);
+        R.head     = udiv32(rem, dsel->spt, &rem);
+        R.sector   = rem + 1u;
     }
 }
 

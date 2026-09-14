@@ -18,6 +18,7 @@ CC      = clang
 LD      = ld.lld
 OBJCOPY = llvm-objcopy
 SIZE    = llvm-size
+OBJDUMP = llvm-objdump
 
 # Hardware feature macros (ENABLE_*) come from the FPGA build config, so the menu
 # code always compiles against the feature set of the bitstream it runs in.
@@ -78,7 +79,25 @@ firmware.srchash: $(SRC_FINGERPRINT)
 srchash-print:
 	@shasum -a 256 $(SRC_FINGERPRINT) | shasum -a 256 | cut -d' ' -f1
 
-srchash-verify:
+# The softcore is built with ENABLE_DIV(0) -- picorv32_pcpi_div was 216 ALMs
+# on a device that is 97 per cent full. A div/rem instruction would not be a
+# wrong answer there, it would be an ILLEGAL INSTRUCTION TRAP, and the compiler
+# emits them from a bare `/` or `%` without a word. So the absence is a claim,
+# and this is the gate: ide_service.c's udiv32 and the menu's compares are what
+# keep it true.
+nodiv-verify: firmware.elf
+	@n=$$($(OBJDUMP) -d firmware.elf | awk '{print $$3}' \
+	      | grep -cE '^(div|divu|rem|remu)$$' || true); \
+	 if [ "$$n" != "0" ]; then \
+	   echo "$$n division instruction(s) in the image, but the softcore has no divider:"; \
+	   $(OBJDUMP) -d --symbolize-operands firmware.elf \
+	     | awk '/^[0-9a-f]+ </{fn=$$2} /\t(div|divu|rem|remu)\t/{print "  ", fn, $$0}'; \
+	   echo "use udiv32() (ide_service.c) or a compare, or re-enable ENABLE_DIV in softcpu_subsystem.sv"; \
+	   exit 1; \
+	 fi; \
+	 echo "no division instructions -- the softcore needs no divider"
+
+srchash-verify: nodiv-verify
 	@want=$$(shasum -a 256 $(SRC_FINGERPRINT) | shasum -a 256 | cut -d' ' -f1); \
 	 have=$$(cat firmware.srchash 2>/dev/null || echo "<missing>"); \
 	 echo "sources  : $$want"; echo "committed: $$have"; \

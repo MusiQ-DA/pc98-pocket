@@ -219,7 +219,13 @@ module softcpu_subsystem (
         .COMPRESSED_ISA(0),
         .ENABLE_IRQ(1),
         .ENABLE_MUL(1),
-        .ENABLE_DIV(1)
+        // No divider. picorv32_pcpi_div was 216 ALMs and this firmware had six
+        // division instructions -- two menu wraps and the IDE's LBA-to-CHS
+        // maths -- all of which are now compares and a shift-subtract helper
+        // (ide_service.c's udiv32). The multiplier stays: seventeen uses, and
+        // it is inside the core rather than a separate 216-ALM block. Verified
+        // by objdump: the image contains no div/divu/rem/remu.
+        .ENABLE_DIV(0)
     ) pico (
         .clk       (clk_pico),
         .resetn    (~reset),
