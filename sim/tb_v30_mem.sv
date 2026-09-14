@@ -557,6 +557,54 @@ module tb_v30_mem;
         memblk(16'h2000, 16'h0314);
         memblk(16'h3000, 16'h0318);
 
+        // T8: DIV, the instruction the ITF's MEMORY line is printed with.
+        //
+        // F9678 converts the 64 KB block count to decimal and it is the only
+        // place that conversion happens:
+        //
+        //     F9682  xor al,al      ax = dh<<8
+        //     F9684  shr ax,1 / shr ax,1    ax = dh*64, the KB figure
+        //     F9688  mov cx,0Ah / xor dx,dx
+        //     F968D  div cx
+        //     F968F  or dl,30h      the remainder is the digit
+        //
+        // A DIV that returns zero prints exactly "000KB", which is what the
+        // machine shows while [0501] says it counted the full 640 KB -- the
+        // count never goes through DIV and the display is nothing but DIV.
+        emit(8'hB8); emit16(16'd640);           // mov ax,640
+        emit(8'h31); emit(8'hD2);               // xor dx,dx
+        emit(8'hB9); emit16(16'd10);            // mov cx,10
+        emit(8'hF7); emit(8'hF1);               // div cx      -> ax=64 dx=0
+        emit(8'hA3); emit16(16'h0320);          // mov [0320],ax
+        emit(8'h89); emit(8'h16); emit16(16'h0322);  // mov [0322],dx
+
+        emit(8'hB8); emit16(16'd64);            // mov ax,64
+        emit(8'h31); emit(8'hD2);               // xor dx,dx
+        emit(8'hF7); emit(8'hF1);               // div cx      -> ax=6 dx=4
+        emit(8'hA3); emit16(16'h0324);          // mov [0324],ax
+        emit(8'h89); emit(8'h16); emit16(16'h0326);  // mov [0326],dx
+
+        // A dividend with a nonzero high half, which a 16-bit-only divider
+        // gets wrong in a different way: 10000h/3 = 5555h r 1.
+        emit(8'hB8); emit16(16'h0000);          // mov ax,0000
+        emit(8'hBA); emit16(16'h0001);          // mov dx,0001
+        emit(8'hB9); emit16(16'd3);             // mov cx,3
+        emit(8'hF7); emit(8'hF1);               // div cx      -> ax=5555 dx=0001
+        emit(8'hA3); emit16(16'h0328);          // mov [0328],ax
+        emit(8'h89); emit(8'h16); emit16(16'h032A);  // mov [032A],dx
+
+        // The byte form, and MUL, which the same routines lean on (F8B66
+        // mul ah, F9668 mul ah).
+        emit(8'hB8); emit16(16'h00C8);          // mov ax,00C8 (200)
+        emit(8'hB3); emit(8'd7);                // mov bl,7
+        emit(8'hF6); emit(8'hF3);               // div bl      -> al=28 ah=4
+        emit(8'hA3); emit16(16'h032C);          // mov [032C],ax
+
+        emit(8'hB0); emit(8'd5);                // mov al,5
+        emit(8'hB4); emit(8'hA0);               // mov ah,A0
+        emit(8'hF6); emit(8'hE4);               // mul ah      -> ax=0320
+        emit(8'hA3); emit16(16'h032E);          // mov [032E],ax
+
         emit(8'hB0); emit(8'hA5);               // mov al,A5
         emit(8'hE6); emit(8'hE0);               // out E0,al
         emit(8'hEB); emit(8'hFE);               // jmp $
@@ -628,6 +676,14 @@ module tb_v30_mem;
             want(20'h00316, 16'h2000, "T6 ES=2000 end DI");
             want(20'h00318, 16'h0000, "T7 ES=3000 repe scasw equal");
             want(20'h0031A, 16'h2000, "T7 ES=3000 end DI");
+            want(20'h00320, 16'd64,    "T8 640/10 quotient");
+            want(20'h00322, 16'd0,     "T8 640/10 remainder");
+            want(20'h00324, 16'd6,     "T8 64/10 quotient");
+            want(20'h00326, 16'd4,     "T8 64/10 remainder");
+            want(20'h00328, 16'h5555,  "T8 10000h/3 quotient");
+            want(20'h0032A, 16'h0001,  "T8 10000h/3 remainder");
+            want(20'h0032C, 16'h041C,  "T8 200/7 byte {ah=rem,al=quot}");
+            want(20'h0032E, 16'h0320,  "T8 5 * A0 (mul ah)");
             want(20'h10000, 16'hAA55, "T5 first word in memory");
             want(20'h11FFE, 16'hAA55, "T5 last word in memory");
             want(20'h20000, 16'hAA55, "T6 first word in memory");

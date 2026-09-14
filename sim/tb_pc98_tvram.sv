@@ -219,7 +219,34 @@ module tb_pc98_tvram;
                     errors++;
                 end
             end
-            $display("  memory switch: pre-seeded and write-protected");
+            // The EVEN cells in the same range are ordinary attribute RAM and
+            // must still take a write. A3FE0 is the one that matters: the ITF
+            // keeps the POST display's line number there (F9652 dec byte
+            // [3FE0], F9661 reads it back and multiplies by 160 to get the
+            // row). Blocking it read 0, DEC AL made it FF, and MEMORY was
+            // written at A000:9F72 -- off the text plane entirely.
+            wr(14'h3FE0, 8'h05);
+            rd(14'h3FE0, got);
+            if (got !== 8'h05) begin
+                $display("  FAIL A3FE0 not writable: %02h (want 05)", got);
+                errors++;
+            end
+            wr(14'h3FE4, 8'h17);
+            rd(14'h3FE4, got);
+            if (got !== 8'h17) begin
+                $display("  FAIL A3FE4 not writable: %02h (want 17)", got);
+                errors++;
+            end
+            // ... and the eight switch bytes are still untouched by all that.
+            for (int i = 0; i < 8; i++) begin
+                rd(14'h3FE2 + 14'(i*4), got);
+                if (got !== expect_sw[i]) begin
+                    $display("  FAIL memsw %0d moved: %02h (want %02h)",
+                             i, got, expect_sw[i]);
+                    errors++;
+                end
+            end
+            $display("  memory switch: eight bytes protected, the rest of A3FE0-A3FFF writable");
         end
 
         $display("\n  errors: %0d", errors);
