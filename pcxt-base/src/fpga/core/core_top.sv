@@ -998,6 +998,13 @@ module core_top (
     wire  [7:0] dbg_gdc_unk_count;
     wire        dbg_gdc_disp_on;
 
+    // INTR into the CPU. BASIC clears the screen, draws the function key line
+    // and stops; an interrupt that never arrives is the shape that produces
+    // exactly that. int_count is rising edges of the 8259's INTR (saturating)
+    // and int_live is its current level.
+    logic [15:0] int_count = 16'd0;
+    logic        int_live  = 1'b0;
+
     logic [7:0] key_count = 8'h00;
     logic [7:0] key_last  = 8'h00;
 
@@ -1119,6 +1126,8 @@ module core_top (
         // three "can't find port" errors and every build since has been red.
         // softcpu_subsystem is what declares them (inputs) and what serves them
         // to the firmware at 0x5000009C/A0/A4 -- POST_TVF0/TVF1/FRB.
+        .int_count                  (int_count),
+        .int_live                   (int_live),
         .dbg_gdc_sad                (dbg_gdc_sad),
         .dbg_gdc_pitch              (dbg_gdc_pitch),
         .dbg_gdc_unk_cmd            (dbg_gdc_unk_cmd),
@@ -2229,6 +2238,16 @@ module core_top (
     wire       pc98_analog;
     wire processor_ready;
     wire interrupt_to_cpu;
+
+    // Counted here rather than next to the declaration above, because
+    // interrupt_to_cpu is declared on the line before this and using a net
+    // ahead of its declaration makes an implicit one-bit wire that then
+    // collides with the real thing.
+    always @(posedge clk_chipset) begin
+        int_live <= interrupt_to_cpu;
+        if (interrupt_to_cpu & ~int_live & (int_count != 16'hFFFF))
+            int_count <= int_count + 16'd1;
+    end
     wire address_latch_enable;
     wire address_direction;
 

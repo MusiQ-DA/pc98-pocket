@@ -109,6 +109,9 @@ module softcpu_subsystem (
     input   [7:0] st_rdata,
     // POST monitor (post_monitor.sv): the guest's progress on I/O port 0x80,
     // so the firmware can put "where the BIOS got to" on screen.
+    // INTR into the CPU, served at 0x500000B4. See core_top.
+    input  [15:0] int_count,
+    input         int_live,
     // The master GDC's view, served at 0x500000B0. See PERIPHERALS.
     input  [14:0] dbg_gdc_sad,
     input   [7:0] dbg_gdc_pitch,
@@ -1088,6 +1091,7 @@ module softcpu_subsystem (
             32'h5000_00AC: cpu_mem_rdata = {8'd0, dbg_gdc_pitch, key_last, key_count};
             32'h5000_00B0: cpu_mem_rdata = {dbg_gdc_unk_count, dbg_gdc_unk_cmd,
                                             1'b0, dbg_gdc_disp_on, 1'b0, dbg_gdc_sad};
+            32'h5000_00B4: cpu_mem_rdata = {15'd0, int_live, int_count};
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;
         endcase
