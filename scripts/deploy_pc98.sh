@@ -89,6 +89,22 @@ if [ $rombad -ne 0 ]; then
 fi
 say "ROMs look genuine; set is the pinned PC-9801UX trio"
 
+# ...but "genuine" is not "matched". The md5 pin says each file is the one it
+# claims to be; it cannot say the ITF and the BIOS came off the same machine.
+# They did not, and it cost half a day: the ITF switches the ROM bank in the
+# middle of a routine and carries on expecting its own next instruction, which
+# only works if the BIOS image has the same bytes there. See
+# scripts/check_rom_pair.py, and docs/FRANKEN_ROM_LESSON.md for the FIRST time
+# a spliced image manufactured a phantom hardware bug here.
+if ! python3 scripts/check_rom_pair.py "$ROMS"; then
+    if [ "${PC98_ANY_ROMS:-}" = "1" ]; then
+        say "PC98_ANY_ROMS=1: deploying this mismatched pair anyway"
+    else
+        say "the ITF and BIOS are not a matched pair -- refusing (PC98_ANY_ROMS=1 to override)"
+        exit 1
+    fi
+fi
+
 # ---- 1. wait for the run ---------------------------------------------------
 if [ -z "$RUN" ]; then
     HEAD_SHA=$(python3 -c "

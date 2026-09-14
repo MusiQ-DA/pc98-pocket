@@ -750,6 +750,24 @@ module tb_pc98_boot;
                 last_043d <= cpu_data_bus;
                 if      (cpu_data_bus == 8'h10) itf_bank <= 1'b1;
                 else if (cpu_data_bus == 8'h12) itf_bank <= 1'b0;
+                // What the low-RAM bank-switch stub actually contains.
+                //
+                // The ITF cannot switch the ROM out from under its own
+                // fetches, so it runs the switch from a copy in segment 0 --
+                // the bench sees CS go F800 -> 0000 with the PC at 0x008D6,
+                // the SAME offset the routine has in the ROM (F88D6). Whether
+                // that copy is there is the whole question: after the switch
+                // the CPU executes zeros from 0x00000 and wraps the segment
+                // forty-eight times before the machine restarts.
+                //
+                // Printed at the OUT rather than at the jump, so it shows the
+                // memory as the stub itself saw it.
+                $write("  %8t  stub 008D0:", $time);
+                for (int sb = 0; sb < 32; sb++) $write(" %02X", ram[20'h008D0 + sb]);
+                $write("\n             ROM  F88D0:");
+                for (int sb = 0; sb < 32; sb++) $write(" %02X", rom_byte(20'hF88D0 + sb));
+                $write("\n");
+                trace_all <= 8'd120;
                 $display("  %8t  OUT 043D, %02X   -> itf_bank %0d",
                          $time, cpu_data_bus, (cpu_data_bus == 8'h12) ? 0 : 1);
             end
@@ -1176,6 +1194,7 @@ module tb_pc98_boot;
     logic [19:0] disp_pc [0:63];
     logic [7:0]  disp_op [0:63];
     int          disp_w = 0;
+    logic [7:0]  trace_all = 8'd0;
     logic [19:0] disp_last = 20'hFFFFF;
     logic [19:0] disp_rec  = 20'hFFFFF;
     logic [7:0] op_seen [0:63];
@@ -1201,6 +1220,16 @@ module tb_pc98_boot;
             // same two instructions until the ring holds nothing else, and
             // the ITF is mostly delay loops; keeping the discontinuities
             // makes 64 entries reach back through the whole cycle.
+            // +trace_all: every fetch, uncollapsed, for a short window. The
+            // collapsed ring says "the PC came back to 0x00000 forty-eight
+            // times" and cannot say what it executed in between, which is
+            // exactly what the bank-switch failure needs.
+            if (trace_all != 8'd0) begin
+                $display("    ALL %05X op %02X  ax %04x bx %04x cx %04x dx %04x",
+                         eu_pc, urom[7:0], eu_ax, eu_bx, eu_cx, eu_dx);
+                trace_all <= trace_all - 8'd1;
+            end
+
             // Jumps only, and a run of the SAME jump collapses to one entry.
             // A delay loop is one branch taken 65536 times and a poll loop is
             // one branch taken until the port answers; recording either in
