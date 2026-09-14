@@ -130,6 +130,9 @@ module CHIPSET #(
         input   logic   [15:0]  joya1,
         // JTOPL
         output  logic   [15:0]  jtopl2_snd_e,
+        // PC-9801-86 OPNA, stereo, straight from Peripherals to the mixer.
+        output  logic signed [15:0] opna_snd_l,
+        output  logic signed [15:0] opna_snd_r,
         input   logic   [1:0]   opl2_io,
         // C/MS Audio
         input   logic           cms_en,
@@ -444,6 +447,8 @@ module CHIPSET #(
         .joya0                              (joya0),
         .joya1                              (joya1),
         .jtopl2_snd_e                       (jtopl2_snd_e),
+        .opna_snd_l                         (opna_snd_l),
+        .opna_snd_r                         (opna_snd_r),
         .opl2_io                            (opl2_io),
         .cms_en                             (cms_en),
         .o_cms_l                            (o_cms_l),

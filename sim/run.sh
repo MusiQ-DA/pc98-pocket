@@ -27,6 +27,9 @@ docker run --rm -v "$PWD":/work -w /work pc98-sim bash -lc "
   verilator --binary --timing -Wno-fatal -Wall \
     --top-module $TB \
     -Isim -Ipcxt-base/src/fpga/core \
+    -Ipcxt-base/src/fpga/core/sound/jt12/hdl \
+    -Ipcxt-base/src/fpga/core/sound/jt12/hdl/adpcm \
+    -Ipcxt-base/src/fpga/core/sound/jt12/jt49/hdl \
     sim/${TB}.sv sim/sdram_model.sv pcxt-base/src/fpga/core/sdram_mp.sv \
     -o ${TB}_sim --Mdir /tmp/obj_${TB}
   /tmp/obj_${TB}/${TB}_sim

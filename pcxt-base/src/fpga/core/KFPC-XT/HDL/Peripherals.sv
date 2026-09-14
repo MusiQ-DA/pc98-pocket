@@ -180,6 +180,9 @@ module PERIPHERALS #(
     output  logic   [15:0]  pc98_rowbuf_freq_count,
     output  logic   [15:0]  pc98_rowbuf_fvalid_count,
     output  logic   [15:0]  jtopl2_snd_e,
+        // PC-9801-86 OPNA, stereo. Zero on a non-PC-98 build.
+    output  logic signed [15:0] opna_snd_l,
+    output  logic signed [15:0] opna_snd_r,
         input   logic   [1:0]   opl2_io,
         // C/MS Audio
         input   logic           cms_en,
@@ -741,6 +744,11 @@ module PERIPHERALS #(
     );
 
 `ifdef MACHINE_PC98
+    // Declared here rather than beside pc98_opna: the board's interrupt is a
+    // slave-PIC line and the slave is instantiated two thousand lines before
+    // the sound board is.
+    wire opna_irq;
+
     // The slave PIC, 0008-000F even. Its INT feeds the master's IRQ7 and its
     // cascade lines close the loop, so an IRQ8-15 acknowledge gets its vector
     // from the slave exactly the way the metal does it.
@@ -769,8 +777,11 @@ module PERIPHERALS #(
         .interrupt_to_cpu           (interrupt2_to_cpu),
         .external_irr_clear         (8'h00),
         // IRQ3 is the FDC's own interrupt (RECALIBRATE finding no drive);
-        // IRQ2 is the XTMASK pulse the 100 ms 0xCC timer fires.
-        .interrupt_request          ({4'b0, fdc_irq3,
+        // IRQ2 is the XTMASK pulse the 100 ms 0xCC timer fires. IRQ4 is the
+        // PC-9801-86's: np2kai sound/opntimer.c:13 has the board's four jumper
+        // positions as {0x03, 0x0d, 0x0a, 0x0c} -- INT0/INT6/INT41/INT5 -- and
+        // the factory setting is INT5, which is IRQ12, slave bit 4.
+        .interrupt_request          ({3'b0, opna_irq, fdc_irq3,
                                      fdd_cc_irq | fdc_irq2, 2'b0})
     );
 `endif
@@ -2861,6 +2872,79 @@ end endgenerate
         .mg_rdptr_clr       (mgmt_scsi_wr & (mgmt_scsi_reg == 4'd7) & mgmt_writedata[0]),
         .mg_wrptr_clr       (mgmt_scsi_wr & (mgmt_scsi_reg == 4'd7) & mgmt_writedata[1])
     );
+
+    //
+    // OPNA -- the PC-9801-86 sound board's YM2608 at 0x0188-0x018F
+    //
+    // The chip and its register router are pc98_opna.sv; this is the decode,
+    // the softcore's way in, and the one register the board keeps outside the
+    // chip. mgmt chip-select 0xF5, next to pc98_scsi's 0xF4.
+    //
+    // np2kai cbus/board86.c:171 binds the ports as
+    //   cbuscore_attachsndex(0x188 + g_opna[0].s.base, opna_o, opna_i)
+    // with s.base 0 for the default dip setting (board86.c:158-162), and only
+    // the even addresses in the window are the board.
+    //
+    // 0xA460 bit 0 is the odd one out: it is not a YM2608 register at all.
+    // np2kai cbus/pcm86io.c:45-51 has pcm86_oa460 call fmboard_extenable(val&1)
+    // and board86.c:107-120 makes that the difference between a 6-channel
+    // stereo OPNA with a second register pair and a 3-channel mono OPN. Every
+    // PC-98 FM driver sets it, and without it half the chip is invisible.
+    // The rest of 0xA460-0xA46C is the -86's own 16-bit PCM, which this core
+    // does not have.
+    //
+    wire opna_cs = iorq & ~address_enable_n
+                 & (address[15:3] == 13'h031) & ~address[0];
+
+    wire opna_a460_wr = iorq & ~address_enable_n & ~io_write_n
+                      & (address[15:0] == 16'hA460);
+
+    logic opna_extend;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset)             opna_extend <= 1'b0;
+        else if (opna_a460_wr) opna_extend <= internal_data_bus[0];
+    end
+
+    logic        mgmt_opna_cs;
+    assign       mgmt_opna_cs = (mgmt_address[15:8] == 8'hF5);
+    wire         mgmt_opna_wr = mgmt_write & mgmt_opna_cs;
+    wire  [3:0]  mgmt_opna_reg = mgmt_address[3:0];
+    wire [15:0]  mgmt_opna_readdata;
+
+    wire  [7:0]  opna_data_out;
+    wire         opna_read_select;
+    wire [23:0]  opna_adpcmb_addr;
+    wire         opna_adpcmb_roe_n;
+
+    pc98_opna u_pc98_opna (
+        .clk          (clock),
+        .rst          (reset),
+        .cs           (opna_cs),
+        .a2a1         (address[2:1]),
+        .io_read_n    (io_read_n),
+        .io_write_n   (io_write_n),
+        .data_in      (internal_data_bus),
+        .data_out     (opna_data_out),
+        .read_select  (opna_read_select),
+        .ext_enable   (opna_extend),
+        .irq          (opna_irq),
+        .mg_reg       (mgmt_opna_reg),
+        .mg_wr        (mgmt_opna_wr),
+        .mg_wdata     (mgmt_writedata),
+        .mg_rdata     (mgmt_opna_readdata),
+        // No fourth sdram_mp.sv port yet, so the board's 256 KB of ADPCM RAM
+        // reads as zero and the DELTA-T channel is silent. Nothing else in the
+        // chip depends on it; see the gap list in pc98_opna.sv.
+        .adpcmb_addr  (opna_adpcmb_addr),
+        .adpcmb_roe_n (opna_adpcmb_roe_n),
+        .adpcmb_data  (8'h00),
+        .snd_l        (opna_snd_l),
+        .snd_r        (opna_snd_r)
+    );
+`else
+    // No PC-9801-86 outside the PC-98 build.
+    assign opna_snd_l = 16'sd0;
+    assign opna_snd_r = 16'sd0;
 `endif
 
     //
@@ -3030,6 +3114,7 @@ end endgenerate
     //
 `ifdef MACHINE_PC98
     assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
+                         : mgmt_opna_cs ? mgmt_opna_readdata
                          : mgmt_ide0_cs ? mgmt_ide0_readdata : mgmt_fdd_readdata;
 `else
     assign mgmt_readdata = mgmt_ide0_cs ? mgmt_ide0_readdata : mgmt_fdd_readdata;
@@ -3211,6 +3296,11 @@ end endgenerate
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= scsi_data_out;
+        end
+        else if (opna_read_select)
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= opna_data_out;
         end
         else if (grcg_mode_cs & ~io_read_n)
         begin
