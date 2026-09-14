@@ -308,6 +308,14 @@ jobs:
           ./obj_gdc/g | tee gdc.log
           grep -q "PASS tb_pc98_gdc" gdc.log
 
+      - name: the SCSI register window indexes and increments like the board
+        run: |
+          S=pcxt-base/src/fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_scsi \
+            -Isim -I$S sim/tb_pc98_scsi.sv $S/pc98_scsi.sv -o sc --Mdir obj_scsi
+          ./obj_scsi/sc | tee scsi.log
+          grep -q "PASS tb_pc98_scsi" scsi.log
+
       - name: the GRCG's three operations match np2kai's expressions
         run: |
           S=pcxt-base/src/fpga/core
