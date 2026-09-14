@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
-"""check_rom_pair.py -- are the ITF and the BIOS a matched pair?
+"""check_rom_pair.py -- RETRACTED. This check's premise is false.
 
-THE FAILURE THIS CATCHES, measured 2026-09-14. The ITF switches the ROM bank
-from itself to the BIOS *in the middle of a routine*:
+WHAT IT CLAIMED (2026-09-14, wrong within the hour): that the ITF and the BIOS
+are a mismatched pair, because the ITF switches the ROM bank at F88DB and the
+BIOS image does not carry the ITF's next instruction at F88DC.
 
-    F88D6  BA 3D 04   mov dx,043D
-    F88D9  B0 12      mov al,12
-    F88DB  EE         out dx,al     <- from here the fetches come from the BIOS
-    F88DC  FC         cld           <- and the ITF expects THIS to still be here
-    F88DD  B8 00 F8   mov ax,F800
-           ...                         its own ROM-checksum routine
+WHY THAT IS WRONG. The routine at F88D6 is not meant to run from the ROM. It is
+COPIED INTO LOW RAM and run from there -- which is the only way to switch the
+ROM bank at all, since a routine executing out of F8000 cannot swap the image
+under its own fetches. Written at an offset that works identically in RAM, it
+does the OUT and then reads the newly-selected BIOS through DS:SI while
+executing from RAM. The BIOS image having different bytes at F88DC is NORMAL.
 
-On a matched set that is transparent, because the BIOS image carries the same
-continuation at the same address. On a mismatched one the instruction stream
-changes under the CPU: it runs unrelated BIOS code, derails into zeros, and the
-ITF restarts -- which on hardware looks like "MEMORY 000KB OK, then reboot",
-and cost this project half a day of hunting an RTL bug that was not there.
+The set in ~/.pc98roms is a single-machine PC-9801UX dump -- byte-identical to
+the preservation zip the machine's owner supplied -- so the pair was never in
+question. The md5 pin in deploy_pc98.sh was right and this check was not.
 
-It is the SECOND time a spliced image has manufactured a phantom hardware bug
-here; docs/FRANKEN_ROM_LESSON.md is the first. That note asked for a check that
-runs in minutes. This is it.
+WHAT IS ACTUALLY TRUE, and still unexplained: low RAM at 0x008D6 is thirty-two
+zero bytes at the moment of the bank switch, where the copied stub should be,
+and the fetch ring shows the CPU ALREADY cycling through 0x00000 before the
+switch happens. The derail is upstream of the hand-over; OUT 043D,12 and the
+jump to 0000:08D6 are downstream noise.
+
+Kept, not deleted, because the ROM-identification part of it is still useful
+and because docs/FRANKEN_ROM_LESSON.md's whole subject is how confidently a
+wrong ROM theory can be argued. This is the second entry in that genre and the
+author was the model.
 
     scripts/check_rom_pair.py [rom_dir]      default ~/.pc98roms
 """
