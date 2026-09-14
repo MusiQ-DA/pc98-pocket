@@ -763,57 +763,89 @@ module softcpu_subsystem (
     wire [31:0] font_cpu_q;
     wire [8:0] font_waddr = {gs_glyph, gy}[10:2];
     wire [1:0] font_lane  = {gs_glyph, gy}[1:0];
-    wire [7:0] font_b_lane [0:3];
-    wire [7:0] font_a_lane [0:3];
+    wire [7:0] font_a_lane0, font_a_lane1, font_a_lane2, font_a_lane3;
+    wire [7:0] font_b_lane0, font_b_lane1, font_b_lane2, font_b_lane3;
 
-    genvar fl;
-    generate
-        for (fl = 0; fl < 4; fl = fl + 1) begin : font_lane_ram
-            altsyncram #(
-                .operation_mode ("BIDIR_DUAL_PORT"),
-                .width_a        (8),
-                .widthad_a      (9),
-                .numwords_a     (512),
-                .width_b        (8),
-                .widthad_b      (9),
-                .numwords_b     (512),
-                .address_reg_b  ("CLOCK1"),
-                .outdata_reg_a  ("UNREGISTERED"),
-                .outdata_reg_b  ("UNREGISTERED"),
-                .lpm_type       ("altsyncram"),
-                .intended_device_family ("Cyclone V")
-            ) font_lane_inst (
-                .clock0    (clk_pico),
-                .address_a (cpu_mem_addr[10:2]),
-                .data_a    (cpu_mem_wdata[fl*8 +: 8]),
-                .wren_a    (sel_font && cpu_mem_wstrb[fl]),
-                .q_a       (font_a_lane[fl]),
+    // Four hand-written instances: Quartus's front-end wants no unpacked-array
+    // wires and no generate-conditional assigns here, so plain is plainest.
+    altsyncram #(
+        .operation_mode ("BIDIR_DUAL_PORT"), .width_a (8), .widthad_a (9),
+        .numwords_a (512), .width_b (8), .widthad_b (9), .numwords_b (512),
+        .address_reg_b ("CLOCK1"), .outdata_reg_a ("UNREGISTERED"),
+        .outdata_reg_b ("UNREGISTERED"), .lpm_type ("altsyncram"),
+        .intended_device_family ("Cyclone V")
+    ) font_lane0 (
+        .clock0 (clk_pico), .address_a (cpu_mem_addr[10:2]),
+        .data_a (cpu_mem_wdata[7:0]), .wren_a (sel_font && cpu_mem_wstrb[0]),
+        .q_a (font_a_lane0),
+        .clock1 (clk_sys), .address_b (font_waddr), .data_b (8'd0),
+        .wren_b (1'b0), .q_b (font_b_lane0),
+        .aclr0 (1'b0), .aclr1 (1'b0), .addressstall_a (1'b0),
+        .addressstall_b (1'b0), .byteena_a (1'b1), .byteena_b (1'b1),
+        .clocken0 (1'b1), .clocken1 (1'b1), .clocken2 (1'b1), .clocken3 (1'b1),
+        .eccstatus (), .rden_a (1'b1), .rden_b (1'b1)
+    );
+    altsyncram #(
+        .operation_mode ("BIDIR_DUAL_PORT"), .width_a (8), .widthad_a (9),
+        .numwords_a (512), .width_b (8), .widthad_b (9), .numwords_b (512),
+        .address_reg_b ("CLOCK1"), .outdata_reg_a ("UNREGISTERED"),
+        .outdata_reg_b ("UNREGISTERED"), .lpm_type ("altsyncram"),
+        .intended_device_family ("Cyclone V")
+    ) font_lane1 (
+        .clock0 (clk_pico), .address_a (cpu_mem_addr[10:2]),
+        .data_a (cpu_mem_wdata[15:8]), .wren_a (sel_font && cpu_mem_wstrb[1]),
+        .q_a (font_a_lane1),
+        .clock1 (clk_sys), .address_b (font_waddr), .data_b (8'd0),
+        .wren_b (1'b0), .q_b (font_b_lane1),
+        .aclr0 (1'b0), .aclr1 (1'b0), .addressstall_a (1'b0),
+        .addressstall_b (1'b0), .byteena_a (1'b1), .byteena_b (1'b1),
+        .clocken0 (1'b1), .clocken1 (1'b1), .clocken2 (1'b1), .clocken3 (1'b1),
+        .eccstatus (), .rden_a (1'b1), .rden_b (1'b1)
+    );
+    altsyncram #(
+        .operation_mode ("BIDIR_DUAL_PORT"), .width_a (8), .widthad_a (9),
+        .numwords_a (512), .width_b (8), .widthad_b (9), .numwords_b (512),
+        .address_reg_b ("CLOCK1"), .outdata_reg_a ("UNREGISTERED"),
+        .outdata_reg_b ("UNREGISTERED"), .lpm_type ("altsyncram"),
+        .intended_device_family ("Cyclone V")
+    ) font_lane2 (
+        .clock0 (clk_pico), .address_a (cpu_mem_addr[10:2]),
+        .data_a (cpu_mem_wdata[23:16]), .wren_a (sel_font && cpu_mem_wstrb[2]),
+        .q_a (font_a_lane2),
+        .clock1 (clk_sys), .address_b (font_waddr), .data_b (8'd0),
+        .wren_b (1'b0), .q_b (font_b_lane2),
+        .aclr0 (1'b0), .aclr1 (1'b0), .addressstall_a (1'b0),
+        .addressstall_b (1'b0), .byteena_a (1'b1), .byteena_b (1'b1),
+        .clocken0 (1'b1), .clocken1 (1'b1), .clocken2 (1'b1), .clocken3 (1'b1),
+        .eccstatus (), .rden_a (1'b1), .rden_b (1'b1)
+    );
+    altsyncram #(
+        .operation_mode ("BIDIR_DUAL_PORT"), .width_a (8), .widthad_a (9),
+        .numwords_a (512), .width_b (8), .widthad_b (9), .numwords_b (512),
+        .address_reg_b ("CLOCK1"), .outdata_reg_a ("UNREGISTERED"),
+        .outdata_reg_b ("UNREGISTERED"), .lpm_type ("altsyncram"),
+        .intended_device_family ("Cyclone V")
+    ) font_lane3 (
+        .clock0 (clk_pico), .address_a (cpu_mem_addr[10:2]),
+        .data_a (cpu_mem_wdata[31:24]), .wren_a (sel_font && cpu_mem_wstrb[3]),
+        .q_a (font_a_lane3),
+        .clock1 (clk_sys), .address_b (font_waddr), .data_b (8'd0),
+        .wren_b (1'b0), .q_b (font_b_lane3),
+        .aclr0 (1'b0), .aclr1 (1'b0), .addressstall_a (1'b0),
+        .addressstall_b (1'b0), .byteena_a (1'b1), .byteena_b (1'b1),
+        .clocken0 (1'b1), .clocken1 (1'b1), .clocken2 (1'b1), .clocken3 (1'b1),
+        .eccstatus (), .rden_a (1'b1), .rden_b (1'b1)
+    );
 
-                .clock1    (clk_sys),
-                .address_b (font_waddr),
-                .data_b    (8'd0),
-                .wren_b    (1'b0),
-                .q_b       (font_b_lane[fl]),
-
-                .aclr0 (1'b0),
-                .aclr1 (1'b0),
-                .addressstall_a (1'b0),
-                .addressstall_b (1'b0),
-                .byteena_a (1'b1),
-                .byteena_b (1'b1),
-                .clocken0 (1'b1),
-                .clocken1 (1'b1),
-                .clocken2 (1'b1),
-                .clocken3 (1'b1),
-                .eccstatus (),
-                .rden_a (1'b1),
-                .rden_b (1'b1)
-            );
-        end
-    endgenerate
-
-    assign font_q     = font_b_lane[font_lane];
-    assign font_cpu_q = {font_a_lane[3], font_a_lane[2], font_a_lane[1], font_a_lane[0]};
+    reg [7:0] font_q_mux;
+    always @* case (font_lane)
+        2'd0: font_q_mux = font_b_lane0;
+        2'd1: font_q_mux = font_b_lane1;
+        2'd2: font_q_mux = font_b_lane2;
+        2'd3: font_q_mux = font_b_lane3;
+    endcase
+    assign font_q     = font_q_mux;
+    assign font_cpu_q = {font_a_lane3, font_a_lane2, font_a_lane1, font_a_lane0};
 
     always @(posedge clk_sys) begin
         if (reset) begin

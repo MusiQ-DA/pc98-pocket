@@ -316,20 +316,20 @@ module tb_selftest_soc;
         // The RAM is four same-width lanes now, so a byte address splits into
         // {lane = [1:0], word = [10:2]}.
         font_bad = 0;
-        if (u_soft.font_lane_ram[0].font_lane_inst.mem[9'h004] !== 8'h80) begin
+        if (u_soft.font_lane0.mem[9'h004] !== 8'h80) begin
             font_bad++;
             $display("  font[0x010] = %02h, want 80 (G_HOME row 0, patched)",
-                     u_soft.font_lane_ram[0].font_lane_inst.mem[9'h004]);
+                     u_soft.font_lane0.mem[9'h004]);
         end
-        if (u_soft.font_lane_ram[0].font_lane_inst.mem[9'h082] !== 8'hFF) begin
+        if (u_soft.font_lane0.mem[9'h082] !== 8'hFF) begin
             font_bad++;
             $display("  font[0x208] = %02h, want FF ('A' row 0, staged pattern)",
-                     u_soft.font_lane_ram[0].font_lane_inst.mem[9'h082]);
+                     u_soft.font_lane0.mem[9'h082]);
         end
-        if (u_soft.font_lane_ram[3].font_lane_inst.mem[9'h1B4] !== 8'h1F) begin
+        if (u_soft.font_lane3.mem[9'h1B4] !== 8'h1F) begin
             font_bad++;
             $display("  font[0x6D3] = %02h, want 1F (G_TL row 3, patched)",
-                     u_soft.font_lane_ram[3].font_lane_inst.mem[9'h1B4]);
+                     u_soft.font_lane3.mem[9'h1B4]);
         end
         $display("  font window samples  : %0d wrong", font_bad);
         if (shown_pixels == 0)
