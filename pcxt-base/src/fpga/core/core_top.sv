@@ -991,6 +991,13 @@ module core_top (
     // because the softcore instance below reads them and because a non-PC-98
     // build has no translator and must still elaborate. See the always block
     // next to pc98_kbd_ps2.
+    // The master GDC's view, from CHIPSET, for the POST panel's GDC line.
+    wire [14:0] dbg_gdc_sad;
+    wire  [7:0] dbg_gdc_pitch;
+    wire  [7:0] dbg_gdc_unk_cmd;
+    wire  [7:0] dbg_gdc_unk_count;
+    wire        dbg_gdc_disp_on;
+
     logic [7:0] key_count = 8'h00;
     logic [7:0] key_last  = 8'h00;
 
@@ -1112,6 +1119,11 @@ module core_top (
         // three "can't find port" errors and every build since has been red.
         // softcpu_subsystem is what declares them (inputs) and what serves them
         // to the firmware at 0x5000009C/A0/A4 -- POST_TVF0/TVF1/FRB.
+        .dbg_gdc_sad                (dbg_gdc_sad),
+        .dbg_gdc_pitch              (dbg_gdc_pitch),
+        .dbg_gdc_unk_cmd            (dbg_gdc_unk_cmd),
+        .dbg_gdc_unk_count          (dbg_gdc_unk_count),
+        .dbg_gdc_disp_on            (dbg_gdc_disp_on),
         .pc98_tvfill_view           (pc98_tvfill_view),
         .pc98_rowbuf_freq_count     (pc98_rowbuf_freq_count),
         .pc98_rowbuf_fvalid_count   (pc98_rowbuf_fvalid_count),
@@ -2460,6 +2472,11 @@ module core_top (
         .enable_hgc                         (enable_hgc_sel),
         .hgc_rgb                            (hgc_rgb_sel),
     //  .de_o                               (VGA_DE),
+        .dbg_gdc_sad                        (dbg_gdc_sad),
+        .dbg_gdc_pitch                      (dbg_gdc_pitch),
+        .dbg_gdc_unk_cmd                    (dbg_gdc_unk_cmd),
+        .dbg_gdc_unk_count                  (dbg_gdc_unk_count),
+        .dbg_gdc_disp_on                    (dbg_gdc_disp_on),
         .pc98_tvfill_view                   (pc98_tvfill_view),
         .pc98_rowbuf_freq_count             (pc98_rowbuf_freq_count),
         .pc98_rowbuf_fvalid_count           (pc98_rowbuf_fvalid_count),

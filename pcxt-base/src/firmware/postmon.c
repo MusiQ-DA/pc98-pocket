@@ -40,7 +40,8 @@
 #define POST_TVF1   ((volatile uint32_t *) 0x500000A0) // cells 4-7
 #define POST_FRB    ((volatile uint32_t *) 0x500000A4) // {f_valid beats, f_req pulses}
 #define POST_MEMSZ  ((volatile uint32_t *) 0x500000A8) // {f0 count, [0501], A3FEA}
-#define POST_KEY    ((volatile uint32_t *) 0x500000AC) // {last {make,code}, count}
+#define POST_KEY    ((volatile uint32_t *) 0x500000AC) // {gdc pitch, last {make,code}, count}
+#define POST_GDC    ((volatile uint32_t *) 0x500000B0) // {unk count, unk cmd, disp_on, SAD}
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -111,8 +112,9 @@ static uint8_t guest_peek(uint32_t addr)
 // label plus eight bytes (28 of the panel's 40 columns) and FRB is another
 // 13 -- so the panel grew by two rows rather than one of them staying
 // unreadable. 192 adds the MSW/SZ/F0 row on top of that; OSD_FB_HEIGHT is
-// 200, so it still fits.
-#define PANEL_H 192
+// 200, so it still fits. 200 adds the GDC row at 190 and is the whole
+// framebuffer -- there is no room for another.
+#define PANEL_H 200
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -811,7 +813,7 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4, 42, "TVW", OSD_LABEL);
         hex(4 + 4 * 8, 42, tv & 0xFFFFu, 4);
         osd_draw_string(&fb, 4 + 13 * 8, 42, "AT", OSD_LABEL);
-        hex(4 + 16 * 8, 42, 0xA0000u | (tv >> 20), 5);
+        hex(4 + 16 * 8, 42, 0xA0000u | ((tv >> 16) & 0x3FFFu), 5);
     }
 
     // Why MEMORY stops at 128KB, in three bytes.
@@ -843,6 +845,29 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4 + 22 * 8, 182, "KEY", OSD_LABEL);
         hex(4 + 26 * 8, 182, k & 0xFFu, 2);
         hex(4 + 29 * 8, 182, (k >> 8) & 0xFFu, 2);
+
+        // GDC: where the TEXT renderer is pointed, against where the guest
+        // writes (TVW/AT above). pc98_text_render takes SAD and PITCH from the
+        // master GDC, so characters can be in TVRAM and off the screen at the
+        // same time -- SAD moved and the renderer followed it somewhere else.
+        //
+        //   SAD  display start, words. 0000 with PITCH 50 is the normal
+        //        80-column screen from the top of the plane.
+        //   P    pitch, words per line. 50 is 80 columns.
+        //   D    disp_on.
+        //   U    commands the decode did not recognise: the count, then the
+        //        last opcode. Anything but 00 means the guest asked for
+        //        something this GDC does not implement.
+        uint32_t g = *POST_GDC;
+        osd_draw_string(&fb, 4, 190, "SAD", OSD_LABEL);
+        hex(4 + 4 * 8, 190, g & 0x7FFFu, 4);
+        osd_draw_string(&fb, 4 + 10 * 8, 190, "P", OSD_LABEL);
+        hex(4 + 12 * 8, 190, (k >> 16) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 16 * 8, 190, "D", OSD_LABEL);
+        hex(4 + 18 * 8, 190, (g >> 16) & 1u, 1);
+        osd_draw_string(&fb, 4 + 21 * 8, 190, "U", OSD_LABEL);
+        hex(4 + 23 * 8, 190, (g >> 24) & 0xFFu, 2);
+        hex(4 + 26 * 8, 190, (g >> 16) & 0xFFu, 2);
     }
 #endif
 

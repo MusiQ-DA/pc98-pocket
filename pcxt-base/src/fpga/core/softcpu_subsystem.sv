@@ -109,6 +109,12 @@ module softcpu_subsystem (
     input   [7:0] st_rdata,
     // POST monitor (post_monitor.sv): the guest's progress on I/O port 0x80,
     // so the firmware can put "where the BIOS got to" on screen.
+    // The master GDC's view, served at 0x500000B0. See PERIPHERALS.
+    input  [14:0] dbg_gdc_sad,
+    input   [7:0] dbg_gdc_pitch,
+    input   [7:0] dbg_gdc_unk_cmd,
+    input   [7:0] dbg_gdc_unk_count,
+    input         dbg_gdc_disp_on,
     // How far a key press gets, served at 0x500000AC. See core_top.
     input   [7:0] key_count,
     input   [7:0] key_last,
@@ -1056,7 +1062,9 @@ module softcpu_subsystem (
             32'h5000_0078: cpu_mem_rdata = {15'd0, itf_bank, io_wr_count};
             32'h5000_0048: cpu_mem_rdata = {24'd0, rom_read_count};
             32'h5000_007C: cpu_mem_rdata = {16'd0, rom_win_r};
-            32'h5000_0080: cpu_mem_rdata = {tvram_last_addr[11:0], tvram_wr_count};
+            // [13:0], not [11:0]: the text plane is 0x0000-0x3FFF and twelve
+            // bits could not tell byte 0x0F9 from 0x10F9 -- two different rows.
+            32'h5000_0080: cpu_mem_rdata = {2'd0, tvram_last_addr[13:0], tvram_wr_count};
             // Row 0's first eight cells, as written. Codes and attributes.
             32'h5000_0084: cpu_mem_rdata = tvram_row0_code[31:0];
             32'h5000_0088: cpu_mem_rdata = tvram_row0_code[63:32];
@@ -1077,7 +1085,9 @@ module softcpu_subsystem (
             // [0501], F0 = OUT 0F0h requests. 04/04/01 is a healthy 640 KB
             // boot; 00/00 and a rising F0 is the MEMORY 128KB loop.
             32'h5000_00A8: cpu_mem_rdata = {8'd0, f0_count, memsize_seen, memsw_seen};
-            32'h5000_00AC: cpu_mem_rdata = {16'd0, key_last, key_count};
+            32'h5000_00AC: cpu_mem_rdata = {8'd0, dbg_gdc_pitch, key_last, key_count};
+            32'h5000_00B0: cpu_mem_rdata = {dbg_gdc_unk_count, dbg_gdc_unk_cmd,
+                                            1'b0, dbg_gdc_disp_on, 1'b0, dbg_gdc_sad};
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;
         endcase

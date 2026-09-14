@@ -151,6 +151,17 @@ module PERIPHERALS #(
     // fill reads them -- what the renderer will actually draw. If the banks
     // dropped a write, or the fill's first sample is stale, it shows HERE
     // even while the bus snoops (TVC/TVH) read clean.
+    // Where the TEXT renderer is POINTED, as opposed to where the guest
+    // writes. pc98_text_render takes its start address and pitch from the
+    // master GDC, so a guest that reprograms the GDC in a way this decode does
+    // not follow writes one region and displays another -- which is exactly
+    // what "the characters are in TVRAM but the screen is blank" looks like.
+    // unk_cmd/unk_count are the commands the decode did not recognise.
+    output  logic   [14:0]  dbg_gdc_sad,
+    output  logic    [7:0]  dbg_gdc_pitch,
+    output  logic    [7:0]  dbg_gdc_unk_cmd,
+    output  logic    [7:0]  dbg_gdc_unk_count,
+    output  logic           dbg_gdc_disp_on,
     output  logic   [63:0]  pc98_tvfill_view,
     // The kanji fetch path's activity: f_req pulses and f_valid beats. With
     // ANK out of the BRAM these only move for two-byte cells, so on a screen
@@ -1740,6 +1751,12 @@ end endgenerate
     wire [4:0]  gdc_m_cur_bot,   gdc_s_cur_bot;
     wire [5:0]  gdc_m_cur_rate,  gdc_s_cur_rate;
     wire [1:0]  gdc_m_zoom,      gdc_s_zoom;
+
+    assign dbg_gdc_sad       = gdc_m_sad[0];
+    assign dbg_gdc_pitch     = gdc_m_pitch;
+    assign dbg_gdc_unk_cmd   = gdc_m_unk_cmd;
+    assign dbg_gdc_unk_count = gdc_m_unk_count;
+    assign dbg_gdc_disp_on   = gdc_m_disp_on;
 
     pc98_gdc u_gdc_m (
         .clk(clock), .reset(reset),
