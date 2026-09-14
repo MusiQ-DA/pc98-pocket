@@ -994,10 +994,12 @@ module core_top (
     // The master GDC's view, from CHIPSET, for the POST panel's GDC line.
     wire  [7:0] dbg_irq_level;
     wire  [7:0] dbg_timer_count;
-    // The V30's flags word rides in the top 16 bits of dbg_regs (v30u_eu:
-    // {psw, pc, sreg...}), so IF is bit 9 of that -- dbg_regs[217].
-    wire [223:0] v30_dbg_regs;
-    wire         dbg_cpu_if = v30_dbg_regs[217];
+    // IF was going to come from psw bit 9 in v30_core's dbg_regs. That port is
+    // inside `ifndef SYNTHESIS and does not exist in a built core, so the flag
+    // is not reachable. int_live -- the PIC's INT output as a LEVEL, already
+    // counted next to int_count -- answers the same question from the other
+    // side: if the PIC is asserting INTR and the count is not moving, the CPU
+    // is refusing it, which is IF=0.
     wire  [7:0] dbg_kbd_irq_count;
     wire  [7:0] dbg_kbd_rd_count;
     wire [14:0] dbg_gdc_sad;
@@ -1136,7 +1138,6 @@ module core_top (
         // to the firmware at 0x5000009C/A0/A4 -- POST_TVF0/TVF1/FRB.
         .int_count                  (int_count),
         .int_live                   (int_live),
-        .dbg_cpu_if                 (dbg_cpu_if),
         .dbg_irq_level              (dbg_irq_level),
         .dbg_timer_count            (dbg_timer_count),
         .dbg_kbd_irq_count          (dbg_kbd_irq_count),
@@ -2764,8 +2765,7 @@ module core_top (
         .SS_WE      (1'b0),
         .SS_RDATA   (v30_ss_rdata_unused),
         .SS_ERR     (v30_ss_err_unused),
-        .SS_BUS_QUIET (v30_ss_quiet_unused),
-        .dbg_regs     (v30_dbg_regs)
+        .SS_BUS_QUIET (v30_ss_quiet_unused)
     );
 `else
     // The 8088 has an eight-bit bus and never asks for a word, so the extra
