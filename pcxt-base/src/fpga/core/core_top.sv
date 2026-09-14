@@ -2575,6 +2575,8 @@ module core_top (
         .joya0                              (swapjoy_cfg ? joya1 : joya0),
         .joya1                              (swapjoy_cfg ? joya0 : joya1),
         .jtopl2_snd_e                       (jtopl2_snd_e),
+        .opna_snd_l                         (opna_snd_l),
+        .opna_snd_r                         (opna_snd_r),
         .tandy_snd_e                        (tandy_snd_e),
         .opl2_io                            (xtctl[4] ? 2'b10 : opl2_cfg),
         .cms_en                             (cms_cfg),
@@ -2826,6 +2828,14 @@ module core_top (
      
     wire [15:0] jtopl2_snd_e;
     wire [16:0] jtopl2_snd = {jtopl2_snd_e[15], jtopl2_snd_e};
+
+    // PC-9801-86. jt12_top's snd_left/snd_right are FM+SSG already summed
+    // (jt12_top.v:484-485) and signed 16-bit, so they join the mix the same
+    // way jtopl2's mono output does -- sign-extended by one and clamped below.
+    wire signed [15:0] opna_snd_l;
+    wire signed [15:0] opna_snd_r;
+    wire        [16:0] opna_l = {opna_snd_l[15], opna_snd_l};
+    wire        [16:0] opna_r = {opna_snd_r[15], opna_snd_r};
     wire [10:0] tandy_snd_e;
     wire [16:0] tandy_snd = `ENABLE_TANDY_AUDIO ? {{{2{tandy_snd_e[10]}}, {4{tandy_snd_e[10]}}, tandy_snd_e}, 2'b00} : 17'd0;
     wire [16:0] spk_vol =  {2'b00, {3'b000,~speaker_out} << spk_vol_cfg, 11'd0};
@@ -2859,7 +2869,7 @@ module core_top (
     begin
         reg [16:0] tmp_l;
 
-        tmp_l <= jtopl2_snd + cms_l_snd + tandy_snd + spk_vol;
+        tmp_l <= jtopl2_snd + cms_l_snd + tandy_snd + spk_vol + opna_l;
 
         // clamp the output
         out_l <= (^tmp_l[16:15]) ? {tmp_l[16], {15{tmp_l[15]}}} : tmp_l[15:0];
@@ -2873,7 +2883,7 @@ module core_top (
     begin
         reg [16:0] tmp_r;
 
-        tmp_r <= jtopl2_snd + cms_r_snd + tandy_snd + spk_vol;
+        tmp_r <= jtopl2_snd + cms_r_snd + tandy_snd + spk_vol + opna_r;
 
         // clamp the output
         out_r <= (^tmp_r[16:15]) ? {tmp_r[16], {15{tmp_r[15]}}} : tmp_r[15:0];

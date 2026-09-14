@@ -764,6 +764,12 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gvram_seq.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_scsi.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_scsi_rom.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_fdc_glue.sv"
+# The PC-9801-86 sound board's YM2608 at 0x0188-0x018F, and jotego's jt12 +
+# jt49 behind it. jt12_top parameterised as an OPNA measured 1334 ALM against
+# about 1806 free, so it fits; see the header of pc98_opna.sv for the register
+# router it needs and why.
+set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_opna.sv"
+set_global_assignment -name QIP_FILE core/sound/jt12/hdl/jt12_opna.qip
 
 # Dropped for the PC-98 build (2026-09-14). Their instantiations in
 # Peripherals.sv are now behind `ifndef MACHINE_PC98`, so nothing here
