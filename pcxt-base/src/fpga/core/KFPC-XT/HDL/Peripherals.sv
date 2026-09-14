@@ -157,6 +157,11 @@ module PERIPHERALS #(
     // not follow writes one region and displays another -- which is exactly
     // what "the characters are in TVRAM but the screen is blank" looks like.
     // unk_cmd/unk_count are the commands the decode did not recognise.
+    // The keyboard's last two hops. KEY (core_top) says the translator emitted
+    // the event; these say whether the 8251 raised IRQ1 for it and whether the
+    // guest ever came to collect the byte at 0x41.
+    output  logic    [7:0]  dbg_kbd_irq_count,
+    output  logic    [7:0]  dbg_kbd_rd_count,
     output  logic   [14:0]  dbg_gdc_sad,
     output  logic    [7:0]  dbg_gdc_pitch,
     output  logic    [7:0]  dbg_gdc_unk_cmd,
@@ -1926,6 +1931,21 @@ end endgenerate
         .read_data          (kbd8251_read_data),
         .irq                (kbd8251_irq)
     );
+
+    logic kbd8251_irq_q;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            kbd8251_irq_q     <= 1'b0;
+            dbg_kbd_irq_count <= 8'h00;
+            dbg_kbd_rd_count  <= 8'h00;
+        end else begin
+            kbd8251_irq_q <= kbd8251_irq;
+            if (kbd8251_irq & ~kbd8251_irq_q && dbg_kbd_irq_count != 8'hFF)
+                dbg_kbd_irq_count <= dbg_kbd_irq_count + 8'd1;
+            if (kbd_data_select & ~io_read_n && dbg_kbd_rd_count != 8'hFF)
+                dbg_kbd_rd_count <= dbg_kbd_rd_count + 8'd1;
+        end
+    end
 
     wire [7:0] pc98_font_row;      // driven by the row buffer below
     wire [6:0] pc98_font_cell;

@@ -43,6 +43,7 @@
 #define POST_KEY    ((volatile uint32_t *) 0x500000AC) // {gdc pitch, last {make,code}, count}
 #define POST_GDC    ((volatile uint32_t *) 0x500000B0) // {unk count, unk cmd, disp_on, SAD}
 #define POST_INT    ((volatile uint32_t *) 0x500000B4) // {INTR level, INTR rising edges}
+#define POST_KBD    ((volatile uint32_t *) 0x500000B8) // {0x41 reads, IRQ1 rises}
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -124,7 +125,7 @@ static uint8_t guest_peek(uint32_t addr)
 // unreadable. 192 adds the MSW/SZ/F0 row on top of that; OSD_FB_HEIGHT is
 // 200, so it still fits. 200 adds the GDC row at 190 and is the whole
 // framebuffer -- there is no room for another.
-#define PANEL_H 112
+#define PANEL_H 122
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -806,10 +807,11 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4 + 10 * 8, 102, "P", OSD_LABEL);
         hex(4 + 12 * 8, 102, (k >> 16) & 0xFFu, 2);
         osd_draw_string(&fb, 4 + 16 * 8, 102, "D", OSD_LABEL);
-        hex(4 + 18 * 8, 102, (g >> 16) & 1u, 1);
+        hex(4 + 18 * 8, 102, (g >> 15) & 1u, 1);
         osd_draw_string(&fb, 4 + 21 * 8, 102, "U", OSD_LABEL);
         hex(4 + 23 * 8, 102, (g >> 24) & 0xFFu, 2);
         hex(4 + 26 * 8, 102, (g >> 16) & 0xFFu, 2);
+
 
         // INT: rising edges of INTR into the CPU, and its current level.
         // Zero means the guest has never been interrupted -- no timer, no
@@ -818,6 +820,22 @@ void post_mon_tick(void)
         uint32_t iv = *POST_INT;
         osd_draw_string(&fb, 4 + 30 * 8, 102, "INT", OSD_LABEL);
         hex(4 + 34 * 8, 102, iv & 0xFFFFu, 4);
+
+        // IRQ / RD: the keyboard's last two hops, after KEY.
+        //
+        //   KEY  the translator emitted the event   (255+ seen)
+        //   IRQ  the 8251 raised RxRDY -> IRQ1 for it
+        //   RD   the guest came and read the byte at 0x41
+        //
+        // IRQ 00 blames the 8251 model or its RxRDY. IRQ climbing with RD 00
+        // blames the PIC mask or the vector -- the interrupt was raised and
+        // nobody served it. Both climbing puts the key inside the guest and
+        // the fault somewhere past the hardware.
+        uint32_t kb = *POST_KBD;
+        osd_draw_string(&fb, 4, 112, "IRQ", OSD_LABEL);
+        hex(4 + 4 * 8, 112, kb & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 8 * 8, 112, "RD", OSD_LABEL);
+        hex(4 + 11 * 8, 112, (kb >> 8) & 0xFFu, 2);
     }
 #endif
 
