@@ -29,13 +29,14 @@
 
 #include "softcpu_regs.h"
 
-// Slot id candidates for font.rom, tried in order. The first is data.json's
-// id for the Font ROM slot; the second is the slot's ordinal in data.json,
-// which is the id the bridge protocol would carry if a host ever numbered
-// slots by position. Under either scheme neither id can name another file
-// (the neighbours are the BIOS at 200/0 and the sound ROM at 202/2), so a
-// successful read is the font and a failed one costs one error round trip.
-static const uint16_t font_slot_candidates[] = { 201u, 1u };
+// Slot id candidates for font.rom, tried in order. The first is the id the
+// PC-98 data.json actually carries (BIOS=1, ITF=2, Font=3); the second is the
+// XT-era numbering (Font was 201 there), kept in case the ids ever get
+// renumbered back. The BIOS at id 1 must NOT be in this list: under today's
+// data.json it would stage the BIOS's first 2 KB as glyphs, which is exactly
+// the garble the first hardware run showed. Under either scheme no listed id
+// can name another file, so a failed read costs one error round trip.
+static const uint16_t font_slot_candidates[] = { 3u, 201u };
 
 // The ANK bank is 2 KB and the bridge RAM holds 1 KB, so the copy runs as two
 // target-dataslot reads. A shorter bound than the disk spin: this runs once
