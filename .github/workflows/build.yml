@@ -308,6 +308,14 @@ jobs:
           ./obj_gdc/g | tee gdc.log
           grep -q "PASS tb_pc98_gdc" gdc.log
 
+      - name: the PC-98 FDC ports land on floppy.v's register file
+        run: |
+          S=pcxt-base/src/fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_fdc_glue \
+            -Isim -I$S sim/tb_pc98_fdc_glue.sv $S/pc98_fdc_glue.sv -o fg --Mdir obj_fdcglue
+          ./obj_fdcglue/fg | tee fdcglue.log
+          grep -q "PASS tb_pc98_fdc_glue" fdcglue.log
+
       - name: the SCSI register window indexes and increments like the board
         run: |
           S=pcxt-base/src/fpga/core
