@@ -96,10 +96,31 @@ module pc98_tvram (
     wire        cpu_hi   = off[0];
 
     // The memory switch: the eight attribute cells 0xFF1, 0xFF3, ... 0xFFF
-    // (A3FE2-A3FFE at 4-byte intervals). Everything else in 0xFF0-0xFFF is
-    // switch territory too and is equally write-protected. See the header.
-    wire memsw_wr_block = is_attr & (cpu_cell[11:4] == 8'hFF);  // cells 0xFF0-0xFFF
-    wire memsw_rd_hit   = memsw_wr_block & cpu_cell[0];         // the eight bytes
+    // (A3FE2-A3FFE at 4-byte intervals), and ONLY those eight.
+    //
+    // The block used to cover all of 0xFF0-0xFFF on the theory that the whole
+    // range was switch territory. It is not: the even cells there are ordinary
+    // attribute RAM, and the ITF uses one of them as a working variable. A3FE0
+    // is the POST display's current line number --
+    //
+    //     F9652  dec byte [3FE0]         one line down
+    //     F9661  mov al,[3FE0]
+    //     F9664  dec al
+    //     F9666  mov ah,A0h / mul ah     ax = (line-1) * 160, the row's offset
+    //     F966A  mov di,ax / add di,12h
+    //
+    // -- so with the write swallowed it read back 0, DEC AL made it FF, and
+    // the MEMORY line was written at A000:9F72: outside the text plane
+    // altogether, into what the SDRAM map hands to the graphics planes. The
+    // count was right (the ITF's own [0501] said 640 KB) and the screen said
+    // 000KB, because the digits never landed anywhere visible.
+    //
+    // Protecting the odd cells alone keeps the switch safe from the POST's
+    // 16 KB screen clear exactly as before -- the clear sweeps both parities
+    // and the eight bytes it must not touch are all odd.
+    wire memsw_cells    = is_attr & (cpu_cell[11:4] == 8'hFF);  // cells 0xFF0-0xFFF
+    wire memsw_rd_hit   = memsw_cells & cpu_cell[0];            // the eight bytes
+    wire memsw_wr_block = memsw_rd_hit;                         // and only those
 
     logic [7:0] memsw [0:7];
     // Loaded on the LEVEL of rst, synchronously, not on a posedge of it.
