@@ -215,6 +215,36 @@ jobs:
           ./obj_kbd/k | tee kbd.log
           grep -q "RESULT: PASS" kbd.log
 
+      - name: the V30 rides the 8288 world through the bridge (fast memory)
+        run: |
+          # v30u_ucrom $readmemh's its tables from HEXDIR "hdl/rtl/ucore/"
+          # relative to the working directory; stage them (an empty ROM is
+          # a $fatal inside the core, not a warning).
+          mkdir -p hdl/rtl/ucore
+          cp pcxt-base/src/fpga/core/v30/ucrom.hex \
+             pcxt-base/src/fpga/core/v30/ucdecode.hex hdl/rtl/ucore/
+          S=pcxt-base/src/fpga/core
+          K=$S/KFPC-XT/HDL
+          verilator --binary --timing -Wno-fatal --top-module tb_v30_bridge \
+            -Isim -I$S -I$S/v30 -I$K -I$K/KF8288/HDL -I$K/KF8259/HDL \
+            sim/tb_v30_bridge.sv \
+            $S/v30/v30u_ss_pkg.sv $S/v30/v30_core.sv $S/v30/v30u_biu.sv \
+            $S/v30/v30u_eu.sv $S/v30/v30u_ucrom.sv \
+            $S/v30_cpu_bridge.sv \
+            $K/XT_CE_Generator.sv $K/KF8288/HDL/KF8288.sv $K/Ready.sv \
+            $K/KF8259/HDL/KF8259.sv $K/KF8259/HDL/KF8259_Bus_Control_Logic.sv \
+            $K/KF8259/HDL/KF8259_Control_Logic.sv $K/KF8259/HDL/KF8259_In_Service.sv \
+            $K/KF8259/HDL/KF8259_Interrupt_Request.sv \
+            $K/KF8259/HDL/KF8259_Priority_Resolver.sv \
+            -o v --Mdir obj_v30br
+          ./obj_v30br/v +slow=0 | tee v30br.log
+          grep -q "RESULT: PASS" v30br.log
+
+      - name: the V30 rides the 8288 world through the bridge (wait states)
+        run: |
+          ./obj_v30br/v +slow=12 | tee v30br_slow.log
+          grep -q "RESULT: PASS" v30br_slow.log
+
       - name: no two OSD fields overlap
         run: python3 scripts/check_osd_layout.py
 
