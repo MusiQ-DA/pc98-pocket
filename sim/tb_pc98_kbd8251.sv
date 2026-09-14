@@ -61,6 +61,10 @@ module tb_pc98_kbd8251;
 
     logic       fast_ctrl_wr = 0, fast_data_rd = 0, fast_stat_rd = 0;
     logic [7:0] fast_data_in = 8'h00;
+    // Key injection (the translator's {stb, byte} pair), driven on the fast
+    // instance. The shipped instance's injection inputs stay 0/untoggled.
+    logic       fast_key_stb = 0;
+    logic [7:0] fast_key_byte = 8'h00;
 
     wire       fast_read_select, fast_irq;
     wire [7:0] fast_read_data;
@@ -71,6 +75,8 @@ module tb_pc98_kbd8251;
         .ctrl_write_strobe  (fast_ctrl_wr),
         .data_read_strobe   (fast_data_rd),
         .stat_read_strobe   (fast_stat_rd),
+        .key_stb            (fast_key_stb),
+        .key_byte           (fast_key_byte),
         .data_in            (fast_data_in),
         .read_select        (fast_read_select),
         .read_data          (fast_read_data),
@@ -104,6 +110,17 @@ module tb_pc98_kbd8251;
             b = fast_read_data;
             repeat (2) @(negedge clock);
             fast_data_rd = 1'b0;
+            @(negedge clock);
+        end
+    endtask
+
+    // Toggle the injection strobe for one event.
+    task automatic inject(input logic [7:0] b);
+        begin
+            @(negedge clock);
+            fast_key_byte = b;
+            fast_key_stb  = ~fast_key_stb;
+            @(negedge clock);
             @(negedge clock);
         end
     endtask
@@ -237,6 +254,47 @@ module tb_pc98_kbd8251;
         wr43(1'b0, 8'h3A); wr43(1'b0, 8'h32); wr43(1'b0, 8'h16);
         wait (fast_irq === 1'b1);
         rd41(b); expect_eq(b, 8'h60, "third ACK (BIOS reset)");
+
+        // ---- 6: key injection reaches the receive register ---------------
+        // A make (0x1D = A) then its break (0x9D), typed through the
+        // translator's toggle interface.
+        inject(8'h1D);
+        rd43(b); expect_eq(b, 8'h87, "status after a key make");
+        rd41(b); expect_eq(b, 8'h1D, "key make byte");
+        if (fast_irq !== 1'b0) begin
+            errors = errors + 1;
+            $display("FAIL: irq set after reading the make");
+        end
+
+        // ---- 7: the one-deep hold ----------------------------------------
+        // Two events with no read in between: the first lands, the second
+        // waits, and both come out in order across two reads.
+        inject(8'h26);                        // '3' make -> holding
+        inject(8'hA6);                        // '3' break -> hold slot
+        rd41(b); expect_eq(b, 8'h26, "held make");
+        rd41(b); expect_eq(b, 8'hA6, "held break");
+        if (fast_irq !== 1'b0) begin
+            errors = errors + 1;
+            $display("FAIL: irq set after draining the hold");
+        end
+
+        // ---- 8: a break edge clears the hold, not just the register ------
+        inject(8'h15);                        // 'Q' make lands
+        inject(8'h95);                        // 'Q' break -> hold slot
+        wr43(1'b0, 8'h3A); wr43(1'b0, 8'h32); // keyboard reset
+        repeat (8) @(negedge clock);
+        // The register still holds the make (np2 keeps the current byte's
+        // readable side simple: only the queue depth is dropped).
+        rd41(b); expect_eq(b, 8'h15, "make survived the edge");
+        rd43(b); expect_eq(b, 8'h85, "held break was dropped by the edge");
+
+        // ---- 9: a key outranks the ACK bookkeeping ------------------------
+        wr43(1'b0, 8'h3A); wr43(1'b0, 8'h32); // arm the ACK
+        repeat (FAST_TICKS - 50) @(negedge clock);
+        inject(8'h1C);                        // RETURN make lands late
+        repeat (60) @(negedge clock);         // past the ACK expiry
+        rd41(b); expect_eq(b, 8'h1C, "key beat the ACK slot");
+        rd43(b); expect_eq(b, 8'h85, "no second byte behind it");
 
         if (errors == 0)
             $display("RESULT: PASS");

@@ -1280,21 +1280,14 @@ module core_top (
     // pace -- and re-emits each key as a PC-98 event.
     //
     // INTEGRATION CONTRACT (whoever wires the 8251 model, see PC98_KBD_8251
-    // in Peripherals.sv): take these three into the 8251's key-injection
-    // queue, OR-ed with the simulation +keys channel (the bench has no dock,
-    // so the two sources never fire together).
-    //   pc98_key_stb  -- TOGGLES per event (sample against a delayed copy)
-    //   pc98_key_make -- 1 = press, 0 = release
-    //   pc98_key_code -- matrix code; bit 7 is already set on a release, so
-    //                    the byte can go on the 8251's wire as-is
-    // Until that port exists the wires stand ready here, unconnected.
+    // in Peripherals.sv): DONE -- these now feed the 8251 model's key-
+    // injection port through CHIPSET (pc98_kbd8251's key_stb/key_byte; the
+    // byte rides as-is because bit 7 is already set on a release). The
+    // simulation +keys channel is bench-side only (tb_pc98_v30.sv drives its
+    // own model), so the two sources never meet in RTL.
     //
-    // The cutover also needs KFPS2KB's keybord_interrupt taken OFF the master
-    // PIC's IRQ1 in the PC-98 build (Peripherals.sv, the MACHINE_PC98 leg of
-    // u_KF8259's interrupt_request): while it stays wired, every docked key
-    // press also raises the PC/XT's INT 09 and port 0x60 answers with an XT
-    // keycode. That edit lives in the 8251 agent's territory, so it is only
-    // recorded here.
+    // KFPS2KB's keybord_interrupt is OFF the master PIC's IRQ1 in the PC-98
+    // build -- IRQ1 now comes from the 8251's RxRDY line (see Peripherals.sv).
     //
     wire       pc98_key_stb;
     wire       pc98_key_make;
@@ -2495,6 +2488,10 @@ module core_top (
         .vsync_width_osd                    (vsync_width_osd),
         .hsync_width_osd                    (hsync_width_osd),
         .ram_rw_complete                    (ram_rw_complete)
+`ifdef MACHINE_PC98
+        ,.pc98_key_stb                      (pc98_key_stb)
+        ,.pc98_key_byte                     (pc98_key_code)
+`endif
     );
 
     // CHIPSET per-access "done" pulse (COMPLETE_RAM_RW); drives the ROM-load FSM.

@@ -192,6 +192,11 @@ module CHIPSET #(
         input   logic   [2:0]   crt_v_offset,
         input   logic   [2:0]   vsync_width_osd,
         input   logic   [2:0]   hsync_width_osd,
+`ifdef MACHINE_PC98
+        // PC-98 keyboard injection, passed to PERIPHERALS' 8251 model.
+        input   logic           pc98_key_stb,
+        input   logic   [7:0]   pc98_key_byte,
+`endif
         // ROM-load (Pocket): expose the RAM access-complete pulse so core_top's
         // BIOS loader can pace on the real SDRAM write instead of a fixed delay.
         output  logic           ram_rw_complete
@@ -455,6 +460,10 @@ module CHIPSET #(
         .crt_v_offset                       (crt_v_offset),
         .vsync_width_osd                    (vsync_width_osd),
         .hsync_width_osd                    (hsync_width_osd)
+`ifdef MACHINE_PC98
+        ,.pc98_key_stb                      (pc98_key_stb)
+        ,.pc98_key_byte                     (pc98_key_byte)
+`endif
     );
 
     RAM u_RAM 

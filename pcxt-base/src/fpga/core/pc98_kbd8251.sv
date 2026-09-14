@@ -94,6 +94,17 @@ module pc98_kbd8251 #(
     input  wire logic stat_read_strobe,      // 0x43 selected, io_read_n low
     input  wire logic [7:0] data_in,         // internal_data_bus
 
+    // Key injection, from the Set-2 -> PC-98 translator (pc98_kbd_ps2), i.e.
+    // from the dock's USB keyboard and the virtual keyboard. stb TOGGLES per
+    // event; code is the PC-98 matrix byte, bit 7 already set on a release,
+    // so it goes on the receive wire as-is. An event that arrives while the
+    // holding register still holds a byte the guest has not read waits in a
+    // one-deep side queue; pocket_keyboard's typematic rate spaces real key
+    // events far wider than a BIOS poll cycle, so one slot of slack is the
+    // measured need (make, break, and a repeat share the slot in turn).
+    input  wire logic key_stb,
+    input  wire logic [7:0] key_byte,
+
     output wire logic read_select,           // this module drives the bus
     output wire logic [7:0] read_data,
     output wire logic irq                    // RxRDY, level, to PIC IR1
@@ -110,6 +121,10 @@ module pc98_kbd8251 #(
     logic [7:0] wr_data_q;
     logic       ctrl_wr_level_q;
     logic       data_rd_level_q;
+    // The injection side's delayed strobe copy and its one-deep queue.
+    logic       key_stb_q;
+    logic [7:0] key_hold;
+    logic       key_pending;
 
     logic [23:0] ack_timer;
 
@@ -122,6 +137,9 @@ module pc98_kbd8251 #(
             rx_q            <= 8'hFF;            // np2's reset value
             rx_full         <= 1'b0;
             ack_timer       <= 24'd0;
+            key_stb_q       <= 1'b0;
+            key_hold        <= 8'h00;
+            key_pending     <= 1'b0;
         end else begin
             ctrl_wr_level_q <= ctrl_write_strobe;
             data_rd_level_q <= data_read_strobe;
@@ -149,6 +167,10 @@ module pc98_kbd8251 #(
                 if (!wr_data_q[3] && cmd_q[3]) begin
                     ack_timer <= ACK_DELAY_TICKS[23:0];
                     rx_full   <= 1'b0;
+                    // np2's keyboard_resetsignal clears the pending buffers
+                    // too: a key that was still queued when the keyboard was
+                    // reset belongs to the cycle that just died.
+                    key_pending <= 1'b0;
                 end
                 cmd_q <= wr_data_q;
             end
@@ -158,6 +180,24 @@ module pc98_kbd8251 #(
             // latched what it was handed.
             if (data_rd_level_q && ~data_read_strobe)
                 rx_full <= 1'b0;
+
+            // Key injection. Written last so an event landing on the same
+            // tick as the ACK expiry or a read completing takes the register:
+            // a real key press outranks both bookkeeping paths.
+            key_stb_q <= key_stb;
+            if (key_stb != key_stb_q) begin
+                if (!rx_full) begin
+                    rx_q    <= key_byte;
+                    rx_full <= 1'b1;
+                end else if (!key_pending) begin
+                    key_hold    <= key_byte;
+                    key_pending <= 1'b1;
+                end
+            end else if (key_pending && !rx_full) begin
+                rx_q        <= key_hold;
+                rx_full     <= 1'b1;
+                key_pending <= 1'b0;
+            end
         end
     end
 

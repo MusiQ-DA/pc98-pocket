@@ -193,6 +193,15 @@ module PERIPHERALS #(
         input   logic   [2:0]   crt_v_offset,
         input   logic   [2:0]   vsync_width_osd,
         input   logic   [2:0]   hsync_width_osd
+`ifdef MACHINE_PC98
+        // PC-98 keyboard injection: the Set-2 -> PC-98 translator's output
+        // (dock USB keyboard + virtual keyboard), landing on the 8251's
+        // receive wire. stb toggles per event; byte's bit 7 is set on a
+        // release. Passed through from core_top via CHIPSET.
+        ,
+        input   logic           pc98_key_stb,
+        input   logic   [7:0]   pc98_key_byte
+`endif
         
     );
 
@@ -1728,6 +1737,8 @@ end
         .data_read_strobe   (kbd_data_select & ~io_read_n),
         .stat_read_strobe   (kbd_stat_select & ~io_read_n),
         .data_in            (internal_data_bus),
+        .key_stb            (pc98_key_stb),
+        .key_byte           (pc98_key_byte),
         .read_select        (kbd8251_read_select),
         .read_data          (kbd8251_read_data),
         .irq                (kbd8251_irq)
