@@ -1199,6 +1199,26 @@ module tb_pc98_boot;
     logic [19:0] disp_rec  = 20'hFFFFF;
     logic [7:0] op_seen [0:63];
     int         op_w = 0;
+
+    // ---- the fall into low memory, caught the FIRST time ------------------
+    //
+    // The collapsed ring above answers "where did it end up" and cannot answer
+    // "what sent it there": by the time the machine is cycling through
+    // 0x00000, every entry is 0x00000. This is an UNCOLLAPSED ring, always
+    // recording, dumped once -- the first time the PC drops into the interrupt
+    // vector table, which no legitimate ITF code does.
+    //
+    // The derail was previously read off the bank switch. It is upstream of
+    // it: at the switch the ring was ALREADY all zeros.
+    localparam int TRAPN = 192;
+    logic [19:0] trap_pc [0:TRAPN-1];
+    logic [7:0]  trap_op [0:TRAPN-1];
+    logic [15:0] trap_sp [0:TRAPN-1];
+    logic [15:0] trap_ss [0:TRAPN-1];
+    logic [15:0] trap_ax [0:TRAPN-1];
+    int          trap_w = 0;
+    logic        trap_done = 1'b0;
+    int          tq;
     logic       is_dispatch_d = 1'b0;
     // Sampled on the EU's own clock. On clk_chipset the microcode PC had often
     // already advanced past the dispatch entry, and every opcode came out one
@@ -1208,6 +1228,33 @@ module tb_pc98_boot;
         if (is_dispatch & ~is_dispatch_d) begin
             op_seen[op_w[5:0]] <= urom[7:0];
             op_w <= op_w + 1;
+
+            trap_pc[trap_w % TRAPN] <= eu_pc;
+            trap_op[trap_w % TRAPN] <= urom[7:0];
+            trap_sp[trap_w % TRAPN] <= eu_sp;
+            trap_ss[trap_w % TRAPN] <= eu_ss;
+            trap_ax[trap_w % TRAPN] <= eu_ax;
+            trap_w <= trap_w + 1;
+
+            // Executing below 0x00400 is the interrupt vector table. Nothing
+            // in the ROM does that on purpose, so the first time is the one
+            // that matters -- and the 192 instructions before it are what
+            // this whole bench exists to show.
+            if (!trap_done && trap_w > TRAPN && eu_pc < 20'h00400) begin
+                trap_done <= 1'b1;
+                $display("\n  %8t  *** FELL INTO LOW MEMORY at %05X ***",
+                         $time, eu_pc);
+                $display("  the %0d instructions before it, oldest first:", TRAPN);
+                for (tq = 0; tq < TRAPN; tq = tq + 1)
+                    $display("    %3d  %05X  op %02X   ss:sp %04X:%04X  ax %04X",
+                             tq,
+                             trap_pc[(trap_w + tq) % TRAPN],
+                             trap_op[(trap_w + tq) % TRAPN],
+                             trap_ss[(trap_w + tq) % TRAPN],
+                             trap_sp[(trap_w + tq) % TRAPN],
+                             trap_ax[(trap_w + tq) % TRAPN]);
+                $display("  *** end of the fall ***\n");
+            end
             // The same trace, but keeping WHERE each opcode was dispatched
             // from. A ring of addresses says the control flow went somewhere
             // it should not have; a ring of address-and-opcode says which
