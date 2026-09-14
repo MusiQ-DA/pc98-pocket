@@ -7,6 +7,7 @@
 #include "sdramtest.h"
 #include "postmon.h"
 #include "softcpu_regs.h"
+#include "osd_font.h"
 #include "vkb_ui.h"
 
 // The OSD runs from a periodic timer interrupt (see irq() and start.S) so blocking disk
@@ -40,6 +41,11 @@ int main(void)
     // reads it), adopt the saved settings, then release.
     while (!DATASLOTS_READY(*CONT1_KEY))
         ;
+    // Load the OSD font before anything can draw it: the glyph RAM is blank at
+    // reset (its old baked-in image was CP437/NEC-derived and had to leave the
+    // bitstream), so the first CHAR op must not run until font.rom's ANK bank
+    // and this core's own glyphs have landed. See osd_font.c.
+    osd_font_load();
     key_bind_init(); // stage the default button map, which settings_load then overrides from the
                      // save
     settings_load();
@@ -54,10 +60,14 @@ int main(void)
         ;
 #endif
 
+#ifndef SDRAM_SELFTEST
     // Read the guest ROM while the 8088 is still held: the peek shares
     // CHIPSET's external-access port with it and loses every arbitration once
-    // it runs.
+    // it runs. The self-test build never gets this far, and postmon.c compiles
+    // the capture out of it (the 24 KB ROM has no room for code it cannot
+    // reach).
     postmon_capture_rom();
+#endif
 
     *SOFT_GUEST_HOLD = 0;
 
@@ -102,9 +112,11 @@ int main(void)
         rebind_seen = rebind;
 
 #ifdef POST_MONITOR
+#ifndef SDRAM_SELFTEST
         // Diagnostic overlay: how far the guest BIOS has got. Redraws only when
         // the POST code changes, so it costs nothing in the steady state.
         post_mon_tick();
+#endif
 #endif
         if (!mounted_hdd) {
             uint32_t sectors = slot_bytes(HDD0_SLOT_ID) / SECTOR_BYTES;

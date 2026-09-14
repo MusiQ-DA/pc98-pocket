@@ -1,6 +1,9 @@
-// Minimal altsyncram for the softcore testbench: the only instance in
-// softcpu_subsystem is the OSD framebuffer, and the disk bridge has its own.
-// Simple dual-port behavioural model, enough to elaborate and run.
+// Minimal altsyncram for the softcore testbench: the instances in
+// softcpu_subsystem are the OSD framebuffer (8/8 bit ports) and the OSD font
+// RAM (a 32-bit CPU port over the same memory the 8-bit glyph port reads).
+// Simple dual-port behavioural model with byte enables and mixed port widths,
+// enough to elaborate and run. The output is unregistered (one-cycle read),
+// matching every instance's outdata_reg_* setting.
 `default_nettype none
 module altsyncram #(
     parameter operation_mode = "BIDIR_DUAL_PORT",
@@ -41,17 +44,33 @@ module altsyncram #(
     input  wire                  clock3,
     input  wire  [1:0]           eccstatus
 );
-    reg [width_a-1:0] mem [0:numwords_a-1];
+    // One byte-granular memory both widths view, so a wide port A and a narrow
+    // port B address the same bytes (that is the font RAM's whole job).
+    localparam BYTES_A = numwords_a * width_a / 8;
+    localparam BYTES_B = numwords_b * width_b / 8;
+    localparam MEM_BYTES = (BYTES_A > BYTES_B) ? BYTES_A : BYTES_B;
+    reg [7:0] mem [0:MEM_BYTES-1];
+
     always @(posedge clock0) begin
-        if (wren_a) mem[address_a] <= data_a;
-        q_a <= mem[address_a];
+        if (wren_a) begin
+            for (int i = 0; i < width_a/8; i++)
+                if (byteena_a[i])
+                    mem[address_a*(width_a/8) + i] <= data_a[i*8 +: 8];
+        end
+        for (int i = 0; i < width_a/8; i++)
+            q_a[i*8 +: 8] <= mem[address_a*(width_a/8) + i];
     end
     always @(posedge clock1) begin
-        if (wren_b) mem[address_b] <= data_b;
-        q_b <= mem[address_b];
+        if (wren_b) begin
+            for (int i = 0; i < width_b/8; i++)
+                if (byteena_b[i])
+                    mem[address_b*(width_b/8) + i] <= data_b[i*8 +: 8];
+        end
+        for (int i = 0; i < width_b/8; i++)
+            q_b[i*8 +: 8] <= mem[address_b*(width_b/8) + i];
     end
     wire _unused = &{1'b0, aclr0, aclr1, addressstall_a, addressstall_b,
-                     byteena_a, byteena_b, clocken0, clocken1, clocken2,
-                     clocken3, rden_a, rden_b, clock2, clock3, eccstatus, 1'b0};
+                     clocken0, clocken1, clocken2, clocken3,
+                     rden_a, rden_b, clock2, clock3, eccstatus, 1'b0};
 endmodule
 `default_nettype wire

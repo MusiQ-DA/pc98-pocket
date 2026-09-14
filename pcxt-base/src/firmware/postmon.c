@@ -52,6 +52,24 @@
 #define ST_STATUS ((volatile uint32_t *) 0x5000000C)
 #define ST_BUSY   (1u << 8)
 
+// Shown by default -- see postmon.h. The panel and the vkb/settings overlays
+// share one framebuffer and one VKB_CTRL bit, so hiding the panel must not pull
+// the bit out from under an overlay that is open.
+//
+// The panel itself is compiled out of the SDRAM_SELFTEST build: that build's
+// main() never returns from the self-test, so the tick and the ROM capture
+// would be dead weight in a 24 KB ROM that build now fills to the brim too
+// (the boot font load, osd_font.c, lives in every image). The toggle stays --
+// the virtual keyboard's button binding reaches it from the timer interrupt.
+static int postmon_shown = 1;
+
+void postmon_toggle(void)
+{
+    postmon_shown = !postmon_shown;
+}
+
+#ifndef SDRAM_SELFTEST
+
 __attribute__((unused))
 static void guest_poke(uint32_t addr, uint8_t v)
 {
@@ -202,16 +220,6 @@ void postmon_capture_rom(void)
         rom_a[i] = sdram_peek(0xFD800u + base + i);
         rom_b[i] = bios_head[base + i];
     }
-}
-
-// Shown by default -- see postmon.h. The panel and the vkb/settings overlays
-// share one framebuffer and one VKB_CTRL bit, so hiding the panel must not pull
-// the bit out from under an overlay that is open.
-static int postmon_shown = 1;
-
-void postmon_toggle(void)
-{
-    postmon_shown = !postmon_shown;
 }
 
 void post_mon_tick(void)
@@ -802,3 +810,5 @@ void post_mon_tick(void)
 
     *VKB_CTRL = 1u;
 }
+
+#endif // !SDRAM_SELFTEST

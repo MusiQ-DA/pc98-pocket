@@ -12,6 +12,12 @@
 // decode, the master and RAM.sv are all the shipped article. What it watches
 // for is simply whether an access ever reaches the memory bus at all.
 //
+// Since the OSD font became a boot-time load from font.rom's dataslot
+// (osd_font.c), this bench also answers for that path: a small APF stand-in
+// answers the target-dataslot read by DMAing a synthetic 8x8 ANK into the
+// bridge RAM, so the glyphs that reach the panel went through the whole
+// firmware handshake, the bridge RAM, and the region-0x7 font window.
+//
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 
@@ -28,6 +34,60 @@ module tb_selftest_soc;
 
     logic clk_74a = 0;  always #6.7 clk_74a = ~clk_74a;
     logic clk_pix = 0;  always #17.5 clk_pix = ~clk_pix;
+
+    // ---- APF stand-in for the target-dataslot read (the boot font load)
+    //
+    // The firmware asks for font.rom's first kilobytes by slot id; the real
+    // host reads the file off the SD card. This answers the handshake the way
+    // core_bridge_cmd expects -- ack on command, data, done -- and DMAs a
+    // synthetic ANK bank into the bridge RAM one word per pulse, byte 0 of the
+    // chunk in bridge_wr_data[31:24] like the real bridge. The pattern (even
+    // bytes solid, odd bytes striped) puts ink in every glyph, which is all
+    // the visibility checks below need; the font-window content check at the
+    // end compares against it exactly.
+    logic        tds_ack = 0, tds_done = 0;
+    logic        bridge_wr_r = 0;
+    logic [31:0] bridge_addr_r = 0, bridge_data_r = 0;
+    wire         target_dataslot_read;
+    logic        tds_read_d = 0;
+    int          tds_word = 0;
+    int          tds_state = 0;
+
+    function automatic logic [31:0] ank_word(int w); // four glyph-row bytes, APF order
+        int b0 = w * 4, b1 = w * 4 + 1, b2 = w * 4 + 2, b3 = w * 4 + 3;
+        ank_word = {(b0 & 1) ? 8'h3C : 8'hFF, (b1 & 1) ? 8'h3C : 8'hFF,
+                    (b2 & 1) ? 8'h3C : 8'hFF, (b3 & 1) ? 8'h3C : 8'hFF};
+    endfunction
+
+    always @(posedge clk_74a) begin
+        tds_read_d <= target_dataslot_read;  // already a clk_74a signal
+        bridge_wr_r <= 1'b0;
+        case (tds_state)
+            0: if (target_dataslot_read && !tds_read_d) begin
+                   tds_ack  <= 1'b1;
+                   tds_word <= 0;
+                   tds_state <= 1;
+               end
+            1: begin
+                   bridge_wr_r   <= 1'b1;
+                   bridge_addr_r <= 32'h60000000 + tds_word * 4;
+                   bridge_data_r <= ank_word(tds_word);
+                   if (tds_word == 255)
+                       tds_state <= 2;
+                   else
+                       tds_word <= tds_word + 1;
+               end
+            2: begin
+                   tds_done  <= 1'b1;   // one pulse: the bridge edge-detects it
+                   tds_ack   <= 1'b0;
+                   tds_state <= 3;
+               end
+            3: begin
+                   tds_done  <= 1'b0;
+                   tds_state <= 0;
+               end
+        endcase
+    end
 
     wire        clk_pico;
     wire [19:0] st_addr;
@@ -46,11 +106,12 @@ module tb_selftest_soc;
         .datatable_q(32'd0),
         .fdd0_rebind(1'b0), .fdd1_rebind(1'b0),
         .mgmt_addr(), .mgmt_dout(), .mgmt_wr(), .mgmt_rd(), .mgmt_din(16'd0),
-        .bridge_wr(1'b0), .bridge_addr(32'd0), .bridge_wr_data(32'd0),
-        .target_dataslot_read(), .target_dataslot_write(),
+        .bridge_wr(bridge_wr_r), .bridge_addr(bridge_addr_r), .bridge_wr_data(bridge_data_r),
+        .target_dataslot_read(target_dataslot_read),
+        .target_dataslot_write(),
         .target_dataslot_id(), .target_dataslot_slotoffset(),
         .target_dataslot_bridgeaddr(), .target_dataslot_length(),
-        .target_dataslot_ack(1'b1), .target_dataslot_done(1'b1),
+        .target_dataslot_ack(tds_ack), .target_dataslot_done(tds_done),
         .target_dataslot_err(3'd0), .bridge_rd_data_out(),
         .clk_pix(clk_pix), .osd_hcnt(osd_hcnt), .osd_vcnt(osd_vcnt),
         .osd_palette_idx(osd_palette_idx), .osd_in_area(osd_in_area),
@@ -170,6 +231,7 @@ module tb_selftest_soc;
     );
 
     int lit_pixels = 0, in_area_cycles = 0, shown_pixels = 0, any_overlay_pixels = 0;
+    int font_bad = 0;
     always @(posedge clk_pix) begin
         if (osd_in_area) begin
             in_area_cycles++;
@@ -248,10 +310,32 @@ module tb_selftest_soc;
         $display("  overlay pixels       : %0d (any non-black)", any_overlay_pixels);
         $display("  VISIBLE pixels       : %0d  <-- bright enough to read",
                  shown_pixels);
+        // The font window itself: one staged ANK byte and two patched glyphs
+        // (osd_font.c's table). Wrong lane order, wrong endianness, or a patch
+        // off by a row all show up here even when the panel still draws.
+        font_bad = 0;
+        if (u_soft.font_ram.mem[19'h010] !== 8'h80) begin
+            font_bad++;
+            $display("  font[0x010] = %02h, want 80 (G_HOME row 0, patched)",
+                     u_soft.font_ram.mem[19'h010]);
+        end
+        if (u_soft.font_ram.mem[19'h208] !== 8'hFF) begin
+            font_bad++;
+            $display("  font[0x208] = %02h, want FF ('A' row 0, staged pattern)",
+                     u_soft.font_ram.mem[19'h208]);
+        end
+        if (u_soft.font_ram.mem[19'h6D3] !== 8'h1F) begin
+            font_bad++;
+            $display("  font[0x6D3] = %02h, want 1F (G_TL row 3, patched)",
+                     u_soft.font_ram.mem[19'h6D3]);
+        end
+        $display("  font window samples  : %0d wrong", font_bad);
         if (shown_pixels == 0)
             $display("  RESULT: FAIL -- nothing reaches the screen");
         else if (lit_pixels == 0)
             $display("  RESULT: FAIL -- the overlay never produced a lit pixel");
+        else if (font_bad != 0)
+            $display("  RESULT: FAIL -- the font window did not take the load");
         else if (reqs == 0)
             $display("  RESULT: FAIL -- the firmware never drove the MMIO window");
         else if (accesses == 0)

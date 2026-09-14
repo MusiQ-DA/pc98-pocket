@@ -9,8 +9,11 @@ None of that is visible from a photograph of a handheld screen, so check it
 mechanically, the way check_osd_layout.py does for the POST panel:
 
   * every key rect lies inside the 636x81 VKB region, and no two overlap;
-  * every legend's ink (from the real font ROM image, font/font_8x8.vh) fits
-    its key, and a dual legend's halves stay clear of each other;
+  * every legend's ink fits its key, and a dual legend's halves stay clear of
+    each other. The base glyphs are font.rom's 8x8 ANK, staged at boot and not
+    in this repository (copyrighted font data), so they are assumed to ink the
+    full 8px cell -- the worst case -- while this core's own glyphs are read
+    exactly out of osd_font.c's table;
   * scancodes are unique except where two keys share one on purpose, nothing
     emits 0x00, and the key count fits vkb_ui.c's latch bitmaps (96);
   * the PC-98-only sentinel codes are distinct and unreachable from the docked
@@ -26,7 +29,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "pcxt-base/src/firmware"
 CFG = ROOT / "pcxt-base/src/fpga/config.tcl"
 HID = ROOT / "pcxt-base/src/fpga/core/hid_to_ps2.sv"
-FONT = SRC / "font/font_8x8.vh"
+GLYPHS = SRC / "osd_font.c"
 VKB_W, VKB_H = 636, 81
 FONT_W = 8
 SEP = "\x1f"  # vkb_layout.h VKB_LBL_SEP: splits a dual legend's two halves
@@ -200,19 +203,32 @@ def parse_vrows(text):
 
 
 def load_font():
-    """font_8x8.vh: 2048 bytes, glyph-major. Return per-glyph ink extents."""
-    words = re.findall(r"[0-9a-fA-F]{2}", FONT.read_text())
-    assert len(words) == 2048, f"font image has {len(words)} bytes, want 2048"
-    ext = []
-    for g in range(256):
+    """Per-glyph ink extents as the fit check should see them.
+
+    The OSD font's base is font.rom's 8x8 ANK bank, staged into the glyph RAM
+    by the firmware at boot: it is copyrighted font data, deliberately not in
+    this repository, so this checker cannot measure it and must not need to.
+    Instead every glyph this core does not itself define is assumed to ink
+    columns 1-7 of the cell -- the worst the ANK's printable range does, its
+    column 0 is the font's own inter-cell spacing -- while the glyphs in
+    osd_font.c's osd_own_glyphs[] table (this core's own drawings, the ones
+    with real tight fits: the arrows, the key symbols) are measured exactly
+    from the bytes that will actually be drawn.
+    """
+    text = GLYPHS.read_text()
+    own = {}
+    for m in re.finditer(r"\{\s*(0x[0-9A-Fa-f]{2})\s*,\s*\{\s*([0-9a-fA-Fx,\s]+?)\s*\}\s*\}", text):
+        code = int(m.group(1), 16)
+        rows = [int(b, 0) for b in re.split(r"[,\s]+", m.group(2).strip())]
+        assert len(rows) == 8, f"osd_own_glyphs 0x{code:02X} has {len(rows)} rows"
         cols = set()
-        for r in range(8):
-            b = int(words[g * 8 + r], 16)
+        for b in rows:
             for c in range(8):
                 if b & (0x80 >> c):
                     cols.add(c)
-        ext.append((min(cols), max(cols)) if cols else None)
-    return ext
+        own[code] = (min(cols), max(cols)) if cols else None
+    assert own, "no glyphs parsed from osd_font.c -- the table and the regex drifted apart"
+    return [own.get(g, (1, 7)) for g in range(256)]
 
 
 def ink_span(font, ch, x):

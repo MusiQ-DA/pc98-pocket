@@ -8,13 +8,15 @@
 #define KA(x, y, w, h, sc, lbl)     { (lbl), (x), (w), (y), (h), (sc), OSD_KEYACCENT }
 #define K2A(x, y, w, h, sc, l1, l2) { (l1 "\x1f" l2), (x), (w), (y), (h), (sc), OSD_KEYACCENT }
 
-// CP437 arrow glyphs, for the keypad arrow legends.
+// Arrow glyphs for the keypad arrow legends (drawn in osd_font.c, which
+// patches them over the ANK at boot).
 #define GL_LEFT  "\x1b" // <-
 #define GL_RIGHT "\x1a" // ->
 #define GL_UP    "\x18" // ^
 #define GL_DOWN  "\x19" // v
 
-// Our own glyphs, drawn into unused CP437 slots in the PNG.
+// Our own glyphs, patched over the ANK's blank control-code area at boot by
+// osd_font.c.
 #define G_END   "\x01"
 #define G_HOME  "\x02"
 #define G_PGUP  "\x03"
@@ -97,7 +99,9 @@ const vkb_key_t vkb_keys[] = {
     K(329, 1, 25, 15, 0x45, "0"),
     K2(356, 1, 25, 15, 0x4E, "-", "="),
     K2(383, 1, 25, 15, 0x55, "^", "`"),
-    K2(410, 1, 25, 15, 0x0E, "\x9D", "|"), // ¥ over | (CP437 has the yen sign)
+    // 0x5C, not CP437's 0x9D: in the PC-98 ANK the yen sign lives at 0x5C,
+    // which is what the machine's own screen prints for this key.
+    K2(410, 1, 25, 15, 0x0E, "\x5C", "|"), // ¥ over |
     KA(437, 1, 32, 15, 0x66, "BS"),
     KA(471, 1, 35, 15, PC98K_STOP, "STOP"),
     KA(516, 1, 28, 15, 0x7C, "*"),

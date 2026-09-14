@@ -236,7 +236,8 @@ module softcpu_subsystem (
 
     //
     // Address decode. ROM at 0x0xxxxxxx, work RAM at 0x1xxxxxxx, status/control at
-    // 0x2xxxxxxx, the disk bridge at 0x3xxxxxxx, the OSD framebuffer at 0x4xxxxxxx.
+    // 0x2xxxxxxx, the disk bridge at 0x3xxxxxxx, the OSD framebuffer at 0x4xxxxxxx,
+    // the OSD font at 0x7xxxxxxx.
     //
     wire sel_rom    = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h0);
     wire sel_ram    = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h1);
@@ -248,6 +249,11 @@ module softcpu_subsystem (
     // cpu_mem_addr[4:2] and ignores bit 5 -- 0x20000030 would also have fired
     // OSD_ACTION at 0x20000010, 0x34 the compositor origin, and so on.
     wire sel_st     = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h5);
+    // Region 0x7: the OSD font load window (see the font RAM below). Not 0x6:
+    // that prefix is the bridge RAM's APF-side address space (FDD_BRIDGE_BASE),
+    // which the CPU never addresses directly but which shares a number with it
+    // in every datasheet that matters.
+    wire sel_font   = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h7);
 
     // OSD control at 0x20000004: bit0 = overlay shown.
     reg osd_active_r = 1'b0;
@@ -703,10 +709,24 @@ module softcpu_subsystem (
     reg  [7:0] gs_glyph;
     reg  [2:0] gx, gy;                // glyph-local column/row within the 8x8 cell
 
-    // OSD font ROM: 256 glyphs x 8 rows, one 8-pixel row bitmap per byte (bit 7 = leftmost).
-    reg [7:0] font_rom [0:2047];
-    initial $readmemh("../firmware/font/font_8x8.vh", font_rom);
-    reg [7:0] font_q;                 // current glyph row, registered like the framebuffer read
+    // OSD font RAM: 256 glyphs x 8 rows, one 8-pixel row bitmap per byte (bit 7 = leftmost).
+    // Port B (clk_sys) is the glyph read the CHAR op drives; port A (clk_pico) is the
+    // firmware's load window at 0x7xxxxxxx, word-addressed with byte enables so any
+    // store width lands (the loader's copy uses words; the glyph patch could use bytes).
+    // A PicoRV32 store holds the bus for two clk_pico cycles, so each byte is written
+    // twice with identical data: idempotent.
+    //
+    // The contents are deliberately NOT in the bitstream. The font this panel
+    // showed was IBM CP437 / NEC font.rom lineage baked in through $readmemh,
+    // which put copyrighted glyph data into a public repository and every build
+    // artifact. Instead the firmware copies font.rom's 8x8 ANK bank (the first
+    // 2 KB of a file the user must already place as a required data slot) into
+    // this RAM at boot and patches in this core's own symbol glyphs; until that
+    // load the glyphs read as zero, and nothing draws before it (see osd_font.c
+    // and main.c's boot order). The CPU-side read serves the same window for
+    // bring-up checks.
+    wire [7:0] font_q;                 // current glyph row, one-cycle read like the framebuffer
+    wire [31:0] font_cpu_q;            // CPU-side read of the same window (bring-up checks)
 
     wire [1:0]  cur_lane = baddr[1:0];
     wire [7:0]  cur_byte = pa_q[cur_lane];   // Port A read of the current lane
@@ -730,11 +750,50 @@ module softcpu_subsystem (
     wire  [3:0] pa_we   = (gs == GS_WR && draw_px) ? (4'd1 << cur_lane) : 4'd0;
     wire  [7:0] pa_wd   = fill_byte ? {draw_col, draw_col} : cur_byte_mod;
 
-    // Font ROM read, clk_sys, registered one cycle to match the framebuffer Port A read latency so
-    // the glyph row and cur_byte arrive together.
-    always @(posedge clk_sys) begin
-        font_q <= font_rom[{gs_glyph, gy}];
-    end
+    // Font RAM read. Port B is a one-cycle read like the framebuffer's Port A, so
+    // the glyph row and cur_byte arrive together; port A is the CPU load window
+    // (32-bit words with byte enables, so a byte, halfword or word store all
+    // land; the narrow port B reads the same memory a byte at a glyph row).
+    altsyncram #(
+        .operation_mode ("BIDIR_DUAL_PORT"),
+        .width_a        (32),
+        .widthad_a      (9),
+        .numwords_a     (512),
+        .width_b        (8),
+        .widthad_b      (11),
+        .numwords_b     (2048),
+        .address_reg_b  ("CLOCK1"),
+        .outdata_reg_a  ("UNREGISTERED"),
+        .outdata_reg_b  ("UNREGISTERED"),
+        .lpm_type       ("altsyncram"),
+        .intended_device_family ("Cyclone V")
+    ) font_ram (
+        .clock0    (clk_pico),
+        .address_a (cpu_mem_addr[10:2]),
+        .data_a    (cpu_mem_wdata),
+        .wren_a    (sel_font && cpu_mem_wstrb != 4'd0),
+        .byteena_a (cpu_mem_wstrb),
+        .q_a       (font_cpu_q),
+
+        .clock1    (clk_sys),
+        .address_b ({gs_glyph, gy}),
+        .data_b    (8'd0),
+        .wren_b    (1'b0),
+        .q_b       (font_q),
+
+        .aclr0 (1'b0),
+        .aclr1 (1'b0),
+        .addressstall_a (1'b0),
+        .addressstall_b (1'b0),
+        .byteena_b (1'b1),
+        .clocken0 (1'b1),
+        .clocken1 (1'b1),
+        .clocken2 (1'b1),
+        .clocken3 (1'b1),
+        .eccstatus (),
+        .rden_a (1'b1),
+        .rden_b (1'b1)
+    );
 
     always @(posedge clk_sys) begin
         if (reset) begin
@@ -898,6 +957,7 @@ module softcpu_subsystem (
 
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
             32'h4???_????: cpu_mem_rdata = gpu_status;
+            32'h7???_????: cpu_mem_rdata = font_cpu_q;
             32'h5000_000C: cpu_mem_rdata = {23'd0, st_req_r, st_rdata};
             // POST monitor, read-only.
             32'h5000_0010: cpu_mem_rdata = {post_count, post_prev, post_code};
