@@ -44,6 +44,7 @@
 #define POST_GDC    ((volatile uint32_t *) 0x500000B0) // {unk count, unk cmd, disp_on, SAD}
 #define POST_INT    ((volatile uint32_t *) 0x500000B4) // {INTR level, INTR rising edges}
 #define POST_KBD    ((volatile uint32_t *) 0x500000B8) // {0x41 reads, IRQ1 rises}
+#define POST_IRQL   ((volatile uint32_t *) 0x500000BC) // {IF, timer ticks, IRQ levels}
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -836,6 +837,28 @@ void post_mon_tick(void)
         hex(4 + 4 * 8, 112, kb & 0xFFu, 2);
         osd_draw_string(&fb, 4 + 8 * 8, 112, "RD", OSD_LABEL);
         hex(4 + 11 * 8, 112, (kb >> 8) & 0xFFu, 2);
+
+        // Why the CPU stopped being interrupted. INT above froze while LIVE
+        // kept moving, so the guest is running with nothing reaching it.
+        //
+        //   IF    the V30's interrupt-enable flag (psw bit 9). 0 means the
+        //         guest is running CLI'd and nothing can reach it.
+        //   TMR   timer ticks, saturating. Frozen means the PIT stopped and
+        //         there is nothing left to interrupt with.
+        //   LVL   the master PIC's eight request lines, live:
+        //         bit0 timer, bit1 keyboard, bit2 vsync, bit3 uart2,
+        //         bit4 uart, bit5 -, bit6 fdd, bit7 slave.
+        //
+        // IF 0 blames the guest. IF 1 with TMR frozen blames the PIT. IF 1,
+        // TMR moving and INT frozen blames the PIC -- masked, or stuck
+        // in-service because an EOI never landed.
+        uint32_t il = *POST_IRQL;
+        osd_draw_string(&fb, 4 + 16 * 8, 112, "IF", OSD_LABEL);
+        hex(4 + 19 * 8, 112, (il >> 24) & 1u, 1);
+        osd_draw_string(&fb, 4 + 22 * 8, 112, "TMR", OSD_LABEL);
+        hex(4 + 26 * 8, 112, (il >> 16) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 30 * 8, 112, "LVL", OSD_LABEL);
+        hex(4 + 34 * 8, 112, (il >> 8) & 0xFFu, 2);
     }
 #endif
 
