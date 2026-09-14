@@ -7,6 +7,7 @@
 #
 #   scripts/sim_pc98_boot.sh [+plusarg ...]        # the 8088 (the old CPU)
 #   scripts/sim_pc98_boot.sh --v30 [+plusarg ...]  # the nuV30 + v30_cpu_bridge
+#   scripts/sim_pc98_boot.sh --v30 --realmem ...   # ... on the REAL memory path
 #
 # Not part of CI: it needs bios.rom and itf.rom, which are not in the tree.
 set -euo pipefail
@@ -14,11 +15,16 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SYNTH=0
 V30=0
+REALMEM=0
 DETACH=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --synth) SYNTH=1; shift ;;
         --v30)   V30=1;   shift ;;
+        # --realmem: run the ITF through the REAL memory path -- RAM.sv on
+        # sdram_kf_shim on sdram_mp on the part, with the board's clock skew --
+        # instead of the flat array. V30 only.
+        --realmem) REALMEM=1; shift ;;
         -d)      DETACH=1; shift ;;
         *) break ;;
     esac
@@ -108,7 +114,11 @@ if [ "$V30" = 1 ]; then
   CPU_FILES="/work/$V/v30u_ss_pkg.sv \
     /work/$V/v30_core.sv /work/$V/v30u_biu.sv /work/$V/v30u_eu.sv \
     /work/$V/v30u_ucrom.sv /work/$S/v30_cpu_bridge.sv"
+  # MACHINE_PC98 too: RAM.sv's PC-98 address select and ITF shadow are keyed
+  # on it, and a bench that ran the PC/AT map would not be the rehearsal it is
+  # meant to be.
   CPU_DEF="+define+CPU_V30+V30_BACKDOOR"
+  [ "$REALMEM" = 1 ] && CPU_DEF="$CPU_DEF+MACHINE_PC98+REALMEM+SDRAM_USE_MP"
   CPU_INC="-I/work/$V"
 else
   CPU_FILES="/work/$S/8088/i8088.v /work/$S/8088/biu_max.v \
@@ -124,6 +134,12 @@ fi
 SIM_OPT="${SIM_OPT:--O2}"
 SIM_THREADS="${SIM_THREADS:-4}"
 
+if [ "$REALMEM" = 1 ]; then
+    MEMFILES="/work/$K/RAM.sv /work/$K/Ready.sv /work/$S/sdram_kf_shim.sv /work/$S/sdram_mp.sv /work/sim/sdram_board_model.sv /work/sim/sdram_model.sv"
+else
+    MEMFILES=""
+fi
+
 RUN_CMD="
   set -e
   verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot $CPU_DEF \
@@ -132,6 +148,7 @@ RUN_CMD="
     -I/work/$K/KF8253/HDL -I/work/$K/KF8259/HDL \
     /work/sim/tb_pc98_boot.sv \
     $CPU_FILES \
+    \$MEMFILES \
     /work/$K/pc98_fdc.sv /work/$S/pc98_kbd8251.sv \
     /work/$K/XT_CE_Generator.sv /work/$K/KF8288/HDL/KF8288.sv \
     /work/$K/KF8253/HDL/KF8253.sv /work/$K/KF8253/HDL/KF8253_Counter.sv \
@@ -149,9 +166,9 @@ if [ "$DETACH" = 1 ]; then
     NAME="${SIM_NAME:-pc98boot}"
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     docker run -d --name "$NAME" -v "$PWD":/work -v "$OUT":/hex -w /hex \
-        -e "SIMARGS=$*" pc98-sim bash -lc "$RUN_CMD"
+        -e "SIMARGS=$*" -e "MEMFILES=$MEMFILES" pc98-sim bash -lc "$RUN_CMD"
     echo "detached: docker logs -f $NAME"
 else
     docker run --rm -v "$PWD":/work -v "$OUT":/hex -w /hex \
-        -e "SIMARGS=$*" pc98-sim bash -lc "$RUN_CMD"
+        -e "SIMARGS=$*" -e "MEMFILES=$MEMFILES" pc98-sim bash -lc "$RUN_CMD"
 fi
