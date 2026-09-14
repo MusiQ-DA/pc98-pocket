@@ -39,6 +39,13 @@ module tb_pc98_gvram_seq;
     wire        mem_rd, mem_wr;
     logic [7:0] mem_rdata;
     logic       mem_done;
+    // RAM.sv's memory_access_ready, modelled as RAM.sv actually behaves: it
+    // goes HIGH AT COMPLETE_RAM_RW WHILE THE COMMAND IS STILL UP -- that is
+    // how it tells the CPU the data has arrived -- and reads 1 whenever no
+    // selected access is in flight. "No access in flight" alone deadlocks: the
+    // command stays up waiting for a ready that cannot come until it drops.
+    logic       completed = 1'b0;
+    wire        mem_ready = (mem_rd | mem_wr) ? completed : 1'b1;
 
     pc98_gvram_seq dut (
         .clk(clk), .reset(reset),
@@ -50,7 +57,7 @@ module tb_pc98_gvram_seq;
         .analog_mode(analog_mode),
         .mem_addr(mem_addr), .mem_wdata(mem_wdata),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
-        .mem_rdata(mem_rdata), .mem_done(mem_done)
+        .mem_rdata(mem_rdata), .mem_done(mem_done), .mem_ready(mem_ready)
     );
 
     // ---- the memory: sparse, with a latency ------------------------------
@@ -74,7 +81,7 @@ module tb_pc98_gvram_seq;
     always_ff @(posedge clk) begin
         mem_done <= 1'b0;
         if (reset) begin busy <= 1'b0; lat_n <= 0; armed <= 1'b1; end
-        else if (!(mem_rd | mem_wr)) armed <= 1'b1;
+        else if (!(mem_rd | mem_wr)) begin armed <= 1'b1; completed <= 1'b0; end
         else if (!busy && armed && (mem_rd | mem_wr)) begin
             busy  <= 1'b1;
             lat_n <= LAT;
@@ -83,6 +90,7 @@ module tb_pc98_gvram_seq;
             else begin
                 busy <= 1'b0;
                 armed <= 1'b0;          // not again until the command drops
+                completed <= 1'b1;
                 mem_done <= 1'b1;
                 if (mem_wr) begin
                     store[int'(mem_addr)] = mem_wdata;
@@ -114,6 +122,12 @@ module tb_pc98_gvram_seq;
         @(posedge clk);
         cpu_gvram = 1'b1; cpu_addr = a; cpu_wdata = d;
         cpu_rd = rd; cpu_wr = ~rd;
+        // One edge before looking at ready. The strobes were only just
+        // assigned, so cpu_ready still carries its previous value in this time
+        // step -- and with pass-through's ready being "no access in flight",
+        // that value is HIGH and the loop would exit before anything happened.
+        // A real 8288 asserts the command and samples ready on a later edge.
+        @(posedge clk);
         // Drop the strobes ON the ready, the way the 8288 does. Holding them
         // one cycle longer started another memory access and made every count
         // in this bench one too high.

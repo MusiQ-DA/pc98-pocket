@@ -356,6 +356,10 @@ module CHIPSET #(
         .font_wr_data                       (font_wr_data),
         .clock                              (clock),
         .pc98_analog                        (pc98_analog),
+        .grcg_active                        (grcg_active),
+        .grcg_rmw                           (grcg_rmw),
+        .grcg_mask                          (grcg_mask),
+        .grcg_tile                          (grcg_tile),
         .clk_sys                            (clk_sys),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
@@ -478,6 +482,49 @@ module CHIPSET #(
 `endif
     );
 
+    // ---- the GRCG's plane expansion, ahead of RAM.sv -------------------
+    //
+    // pc98_gvram_seq turns one guest access to a graphics window into one per
+    // unmasked plane -- two per plane in RMW mode -- and holds the guest off
+    // until the last one lands. RAM.sv is not changed: the sequencer drives
+    // its one-byte interface repeatedly, which is what the module was shaped
+    // to do rather than surgery on the path that boots the machine.
+    //
+    // TRANSPARENT WITH THE GRCG OFF, which is how it comes out of reset: the
+    // request goes straight through and cpu_ready is RAM.sv's own
+    // memory_access_ready, unchanged. That is the property that makes this
+    // safe to insert before anything uses it.
+    wire        grcg_active, grcg_rmw;
+    wire [3:0]  grcg_mask;
+    wire [7:0]  grcg_tile [0:3];
+
+    wire [19:0] ram_addr_w;
+    wire [7:0]  ram_wdata_w;
+    wire        ram_rd_w, ram_wr_w;
+    wire [7:0]  ram_dout_w;
+    wire        ram_complete_w, ram_ready_w;
+    wire        gvram_sel = ~ram_address_select_n;
+
+    pc98_gvram_seq u_gvram_seq (
+        .clk(sdram_clock), .reset(sdram_reset),
+        .cpu_gvram(gvram_sel),
+        .cpu_rd(~memory_read_n), .cpu_wr(~memory_write_n),
+        .cpu_addr(latch_address), .cpu_wdata(internal_data_bus),
+        .cpu_rdata(internal_data_bus_ram), .cpu_ready(memory_access_ready),
+        .grcg_active(grcg_active), .grcg_rmw(grcg_rmw),
+        .grcg_mask(grcg_mask), .grcg_tile(grcg_tile),
+        .analog_mode(pc98_analog),
+        .mem_addr(ram_addr_w), .mem_wdata(ram_wdata_w),
+        .mem_rd(ram_rd_w), .mem_wr(ram_wr_w),
+        .mem_rdata(ram_dout_w), .mem_done(ram_complete_w),
+        .mem_ready(ram_ready_w)
+    );
+
+    // The ROM loader's per-access done pulse still comes from RAM.sv itself:
+    // it writes E8000-FFFFF, which is never a graphics window, so it takes the
+    // sequencer's pass-through and sees the memory's own completion.
+    assign ram_rw_complete = ram_complete_w;
+
     RAM u_RAM 
     (
         .font_bank_flag                     (font_bank_flag),
@@ -499,18 +546,18 @@ module CHIPSET #(
         .reset                              (sdram_reset),
         .enable_sdram                       (enable_sdram),
         .initilized_sdram                   (initilized_sdram),
-        .address                            (latch_address),
-        .internal_data_bus                  (internal_data_bus),
-        .data_bus_out                       (internal_data_bus_ram),
+        .address                            (ram_addr_w),
+        .internal_data_bus                  (ram_wdata_w),
+        .data_bus_out                       (ram_dout_w),
         .analog_mode                        (pc98_analog),
         .word_access                        (cpu_word_access),
         .internal_data_bus_hi               (cpu_data_bus_hi),
         .data_bus_out_hi                    (data_bus_hi),
-        .memory_read_n                      (memory_read_n),
-        .memory_write_n                     (memory_write_n),
+        .memory_read_n                      (~ram_rd_w),
+        .memory_write_n                     (~ram_wr_w),
         .no_command_state                   (no_command_state),
-        .memory_access_ready                (memory_access_ready),
-        .access_complete                    (ram_rw_complete),
+        .memory_access_ready                (ram_ready_w),
+        .access_complete                    (ram_complete_w),
         .ram_address_select_n               (ram_address_select_n),
         .sdram_address                      (sdram_address),
         .sdram_cke                          (sdram_cke),

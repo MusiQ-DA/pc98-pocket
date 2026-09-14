@@ -84,6 +84,10 @@ module pc98_grcg (
     output wire       active,         // mode bit 7: the GRCG is in the path
     output wire       rmw,            // mode bit 6
     output wire [3:0] plane_mask,     // 1 = skip this plane
+    // The four tile registers, out to whoever owns the planes. This module's
+    // own transform below is for a caller that already has the planes' bytes
+    // in hand; pc98_gvram_seq fetches them itself and needs the tiles.
+    output wire [7:0] tile_o [0:3],
 
     // ---- the write transform --------------------------------------------
     input  wire [7:0] cpu_wdata,
@@ -120,6 +124,13 @@ module pc98_grcg (
     end
 
     assign io_data_out = mode;
+
+    genvar t;
+    generate
+        for (t = 0; t < 4; t = t + 1) begin : g_tile
+            assign tile_o[t] = tile[t];
+        end
+    endgenerate
 
     assign active     = mode[7];
     assign rmw        = mode[6];

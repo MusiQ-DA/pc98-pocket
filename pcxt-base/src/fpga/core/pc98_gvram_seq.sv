@@ -63,7 +63,12 @@ module pc98_gvram_seq (
     output reg         mem_rd,
     output reg         mem_wr,
     input  wire [7:0]  mem_rdata,
-    input  wire        mem_done          // RAM.sv's access_complete
+    input  wire        mem_done,         // RAM.sv's access_complete
+    // RAM.sv's memory_access_ready, which is NOT access_complete: it is 1
+    // whenever no selected access is in flight, which is the semantics the
+    // guest's READY has always had. Pass-through must hand that through
+    // unchanged or every non-graphics access in the machine changes shape.
+    input  wire        mem_ready
 );
 
 `include "pc98_sdram_map.svh"
@@ -103,7 +108,7 @@ module pc98_gvram_seq (
         ? ((rd_hold & ~cpu_wdata) | (cpu_wdata & cur_tile))
         : cur_tile;
 
-    assign cpu_ready = expand ? (st == S_DONE) : mem_done;
+    assign cpu_ready = expand ? (st == S_DONE) : mem_ready;
 
     // COMBINATIONAL, and it has to be. Assigning it inside the S_DONE arm did
     // not work: by the time S_DONE is the current state the guest has seen

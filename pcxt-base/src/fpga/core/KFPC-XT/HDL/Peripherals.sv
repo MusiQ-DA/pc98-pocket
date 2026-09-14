@@ -55,6 +55,11 @@ module PERIPHERALS #(
         // Sixteen-colour mode, out to the memory path: it decides whether
         // E0000-E7FFF is the fourth graphics plane or nothing at all.
         output  logic           pc98_analog,
+        // The GRCG's registers, out to the sequencer that owns the planes.
+        output  logic           grcg_active,
+        output  logic           grcg_rmw,
+        output  logic   [3:0]   grcg_mask,
+        output  logic   [7:0]   grcg_tile [0:3],
         input   logic           clk_sys,
         input   logic           cpu_ce_posedge,
         input   logic           cpu_ce_negedge,
@@ -2031,6 +2036,27 @@ end endgenerate
         .analog         (pc98_analog)
     );
 
+    // The GRCG's own two ports. 0x7C is the mode register (and writing it
+    // resets the tile counter); 0x7E walks the four tile registers.
+    wire grcg_mode_cs = pc98_io_exact & (address[7:0] == 8'h7C);
+    wire grcg_tile_cs = pc98_io_exact & (address[7:0] == 8'h7E);
+    wire [7:0] grcg_mode_rd;
+
+    pc98_grcg u_pc98_grcg (
+        .clk(clock), .reset(reset),
+        .cs_mode(grcg_mode_cs), .cs_tile(grcg_tile_cs),
+        .io_read_n(io_read_n), .io_write_n(io_write_n),
+        .io_data_in(internal_data_bus), .io_data_out(grcg_mode_rd),
+        .active(grcg_active), .rmw(grcg_rmw), .plane_mask(grcg_mask),
+        .tile_o(grcg_tile),
+        // The transform's own ports are unused here: the sequencer in CHIPSET
+        // does the plane arithmetic, and it takes the registers rather than
+        // the transform, because it is the one that has the planes' contents.
+        .cpu_wdata(8'h00),
+        .plane_rdata('{8'h00, 8'h00, 8'h00, 8'h00}),
+        .plane_wdata(), .plane_we(), .cpu_rdata()
+    );
+
     wire [7:0] pc98_bitac;
 
     pc98_gdc_mode1 u_gdc_mode1 (
@@ -2899,6 +2925,11 @@ end endgenerate
             data_bus_out <= ppi_data_bus_out;
         end
 `ifdef MACHINE_PC98
+        else if (grcg_mode_cs & ~io_read_n)
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= grcg_mode_rd;
+        end
         else if (gdc_stat_read)
         begin
             data_bus_out_from_chipset <= 1'b1;
