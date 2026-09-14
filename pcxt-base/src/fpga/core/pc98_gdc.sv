@@ -1,0 +1,253 @@
+//
+// pc98_gdc -- the uPD7220's DISPLAY side. One module, instantiated twice.
+//
+// WHAT THIS IS AND IS NOT. The 7220 has two faces: it decides what part of
+// VRAM reaches the screen, and it draws. This is the first one only --
+// docs/PC98_GDC_DESIGN.md has the reasoning, and the short version is that the
+// device is at 97 per cent ALMs, the drawing processor is the expensive half,
+// and PC-98 software overwhelmingly draws by writing VRAM through the GRCG
+// rather than by issuing GDC drawing commands. That last clause is a JUDGEMENT
+// AND NOT A MEASUREMENT, so the unimplemented commands are counted and
+// reported (unk_cmd / unk_count) instead of being silently swallowed: if the
+// ROM issues one, the judgement is wrong and the readout says so.
+//
+// NOR DOES IT GENERATE THE RASTER. pc98_video_timing already makes 640x400 at
+// 24.83 kHz and the picture it produces works. The SYNC parameters are
+// therefore RECORDED, not obeyed; moving the raster onto the GDC would put
+// everything that currently displays at risk for no gain today.
+//
+// THE PORTS, from np2kai io/gdc.c, because getting this backwards inverts
+// every command in the machine:
+//
+//     0x60 / 0xA0   write -> PARAMETER      read -> STATUS
+//     0x62 / 0xA2   write -> COMMAND        read -> the read-back FIFO
+//     0x64 / 0xA4   write -> clear the vsync interrupt (not handled here)
+//
+// np2kai pushes both into one FIFO and tags the command with bit 8
+// (`gdc.m.fifo[cnt++] = 0x100 | dat`); the tag is what lets a command arrive
+// mid-parameter-run and cut it short, which is what a real 7220 does.
+//
+// THE PARAMETER STORE, from np2kai io/gdc_cmd.tbl -- a 256-entry table of
+// {where the parameters go, how many}. Two things in it are not obvious and
+// both were nearly got wrong here:
+//
+//   * 0x70-0x7F ARE ONE COMMAND, not two. The low nibble is the start offset
+//     into a SIXTEEN-byte PRAM and the count is 16 - offset. np2kai's
+//     CMD_SCROLL (0x70) and CMD_TEXTW (0x78) are two names for offsets 0 and 8
+//     of the same block: GDC_SCROLL is para[12] and GDC_TEXTW is para[20].
+//   * ZOOM is 0x46, not 0x06. The enum in gdc_cmd.h says CMD_ZOOM = 0x06 but
+//     the TABLE, which is indexed by opcode, puts {GDC_ZOOM, 1} at 0x46 and
+//     nothing at 0x06.
+//
+// THE PRAM IS FOUR PARTITIONS OF FOUR BYTES, and the display walks them in
+// turn (np2kai vram/makegrex.c calls its partition walker with gpos 0 then 4,
+// forever, until the screen is full):
+//
+//     bytes 0-1   SAD   display address = (SAD << 1) & 0x7FFF
+//     bytes 2-3   LEN   lines = (LEN & 0x3FFF) >> 4
+//
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+
+`default_nettype none
+
+// NO MASTER/SLAVE PARAMETER. The two GDCs differ in which ports address them
+// and in what the rest of the core does with their registers, not in how they
+// decode; the slave's status has a drawing bit, and there is no drawing here
+// to report. A parameter that selects nothing is worse than none.
+module pc98_gdc (
+    input  wire        clk,
+    input  wire        reset,
+
+    // ---- the guest's side --------------------------------------------------
+    input  wire        cs,            // this GDC's two ports are addressed
+    input  wire        a1,            // 0 = 0x60/0xA0, 1 = 0x62/0xA2
+    input  wire        io_read_n,
+    input  wire        io_write_n,
+    input  wire [7:0]  data_in,
+    output wire [7:0]  data_out,
+
+    // ---- what the raster is doing (status bits 6 and 5) --------------------
+    input  wire        hblank,
+    input  wire        vsync,
+
+    // ---- what the display side of the core needs ---------------------------
+    output wire        disp_on,       // START seen, STOP not
+    output wire [7:0]  pitch,         // words per line
+    // Four partitions, in PRAM order. A screen with one area sets partition 0
+    // to the whole height; the walker in the renderer then never advances.
+    output wire [14:0] part_sad [0:3],
+    output wire [9:0]  part_len [0:3],
+    // The cursor, as CSRW and CSRFORM leave it.
+    output wire [14:0] cursor_addr,
+    output wire [3:0]  cursor_dot,    // dot address within the word
+    output wire        cursor_en,
+    output wire        cursor_blink_en,
+    output wire [4:0]  cursor_top,
+    output wire [4:0]  cursor_bottom,
+    output wire [5:0]  cursor_rate,
+    output wire [1:0]  zoom_disp,
+
+    // ---- what the post monitor needs ---------------------------------------
+    // The drawing processor is not here. If the ROM asks for it, this says so.
+    output reg  [7:0]  unk_cmd,
+    output reg  [7:0]  unk_count
+);
+
+    // ------------------------------------------------------------------
+    // the parameter store
+    // ------------------------------------------------------------------
+    // np2kai's offsets, kept verbatim so the table above can be read against
+    // gdc_cmd.tbl without translating.
+    localparam int P_SYNC    = 0;
+    localparam int P_ZOOM    = 8;
+    localparam int P_CSRFORM = 9;
+    localparam int P_PRAM    = 12;   // 16 bytes: four partitions of four
+    localparam int P_PITCH   = 28;
+    localparam int P_LPEN    = 29;   // read-back only; listed to keep the map whole
+    localparam int P_VECTW   = 32;
+    localparam int P_CSRW    = 43;
+    localparam int P_MASK    = 46;
+    localparam int P_LAST    = 55;
+
+    reg [7:0] para [0:P_LAST];
+
+    // Where the next parameter goes, and how many are still expected. A new
+    // command cuts a run short, which is the point of np2kai's bit-8 tag.
+    reg [5:0] p_dst;
+    reg [4:0] p_left;
+
+    reg       disp_on_r;
+
+    // ------------------------------------------------------------------
+    // the command decode
+    // ------------------------------------------------------------------
+    // {destination, count}. Anything not named here takes no parameters and is
+    // counted as unimplemented -- see unk_cmd.
+    function automatic logic [10:0] decode(input logic [7:0] c);
+        logic [5:0] d;
+        logic [4:0] n;
+        d = 6'd0; n = 5'd0;
+        casez (c)
+            8'h00:          begin d = P_SYNC[5:0];    n = 5'd8;  end // RESET
+            8'h0E, 8'h0F:   begin d = P_SYNC[5:0];    n = 5'd8;  end // SYNC off/on
+            8'h46:          begin d = P_ZOOM[5:0];    n = 5'd1;  end // ZOOM
+            8'h47:          begin d = P_PITCH[5:0];   n = 5'd1;  end // PITCH
+            8'h49:          begin d = P_CSRW[5:0];    n = 5'd3;  end // CSRW
+            8'h4A:          begin d = P_MASK[5:0];    n = 5'd2;  end // MASK
+            8'h4B:          begin d = P_CSRFORM[5:0]; n = 5'd3;  end // CSRFORM
+            8'h4C:          begin d = P_VECTW[5:0];   n = 5'd11; end // VECTW
+            8'b0111_????:   begin                                   // PRAM
+                            d = 6'(P_PRAM + int'(c[3:0]));
+                            n = 5'd16 - 5'(c[3:0]);
+                            end
+            default:        begin d = 6'd0;           n = 5'd0;  end
+        endcase
+        decode = {d, n};
+    endfunction
+
+    // Commands this module implements with no parameters, so an unknown one
+    // can be told apart from a known zero-parameter one.
+    function automatic logic known_noparam(input logic [7:0] c);
+        known_noparam = (c == 8'h05) || (c == 8'h0C)       // STOP
+                     || (c == 8'h0D) || (c == 8'h6B)       // START
+                     || (c == 8'h6E) || (c == 8'h6F)       // SLAVE / MASTER
+                     || (c == 8'hE0) || (c == 8'hC0);      // CSRR / LPEN
+    endfunction
+
+    wire cmd_wr = cs & ~io_write_n &  a1;
+    wire par_wr = cs & ~io_write_n & ~a1;
+
+    integer i;
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            p_dst     <= 6'd0;
+            p_left    <= 5'd0;
+            disp_on_r <= 1'b0;
+            unk_cmd   <= 8'h00;
+            unk_count <= 8'h00;
+            for (i = 0; i <= P_LAST; i = i + 1) para[i] <= 8'h00;
+        end else begin
+            if (cmd_wr) begin
+                logic [10:0] dn;
+                dn     = decode(data_in);
+                p_dst  <= dn[10:5];
+                p_left <= dn[4:0];
+
+                // The immediate ones.
+                if (data_in == 8'h0D || data_in == 8'h6B) disp_on_r <= 1'b1;
+                if (data_in == 8'h0C || data_in == 8'h05) disp_on_r <= 1'b0;
+                if (data_in == 8'h00) begin
+                    // RESET stops the display and takes SYNC parameters; it
+                    // does NOT clear the PRAM (np2kai does not either).
+                    disp_on_r <= 1'b0;
+                end
+
+                // Unimplemented: no destination, no count, and not one of the
+                // zero-parameter commands this module does handle. Saturating,
+                // because "how many" matters less than "at all".
+                if (dn[4:0] == 5'd0 && !known_noparam(data_in)) begin
+                    unk_cmd <= data_in;
+                    if (unk_count != 8'hFF) unk_count <= unk_count + 8'd1;
+                end
+            end else if (par_wr) begin
+                if (p_left != 5'd0) begin
+                    para[p_dst] <= data_in;
+                    p_dst       <= p_dst + 6'd1;
+                    p_left      <= p_left - 5'd1;
+                end
+            end
+        end
+    end
+
+    // ------------------------------------------------------------------
+    // status
+    // ------------------------------------------------------------------
+    // np2kai gdc_i60: 0x80 always, 0x40 hblank, 0x20 vsync (gdc.vsync is set
+    // to 0x20 in pccore.c), 0x04 FIFO empty, 0x02 FIFO full, 0x01 data ready.
+    // Bit 7 is set unconditionally there; the mock this replaces had it clear.
+    // Nothing here queues read-back data yet, so empty is true and full and
+    // ready are false.
+    wire [7:0] status = {1'b1, hblank, vsync, 1'b0, 1'b0, 1'b1, 1'b0, 1'b0};
+
+    assign data_out = a1 ? 8'h00 : status;
+
+    // ------------------------------------------------------------------
+    // the display registers, as the rest of the core wants them
+    // ------------------------------------------------------------------
+    assign disp_on = disp_on_r;
+    assign pitch   = para[P_PITCH];
+
+    genvar g;
+    generate
+        for (g = 0; g < 4; g = g + 1) begin : g_part
+            // SAD is a word address; the display address is it shifted up one
+            // and cut to 15 bits (np2kai: `vad = LOW15(vad << 1)`).
+            wire [15:0] sad_raw = {para[P_PRAM + g*4 + 1], para[P_PRAM + g*4 + 0]};
+            wire [15:0] len_raw = {para[P_PRAM + g*4 + 3], para[P_PRAM + g*4 + 2]};
+            assign part_sad[g] = 15'((sad_raw << 1));
+            // lines = (LEN & 0x3FFF) >> 4
+            assign part_len[g] = 10'((len_raw & 16'h3FFF) >> 4);
+        end
+    endgenerate
+
+    // CSRW: three bytes, {EAD low, EAD mid, dAD/EAD high}.
+    assign cursor_addr = {para[P_CSRW + 2][1:0], para[P_CSRW + 1], para[P_CSRW + 0][4:0]};
+    assign cursor_dot  = para[P_CSRW + 2][7:4];
+
+    // CSRFORM: display-cursor enable, blink enable and rate, top and bottom
+    // line within the cell.
+    assign cursor_en        = para[P_CSRFORM + 0][7];
+    assign cursor_blink_en  = para[P_CSRFORM + 0][6];
+    assign cursor_top       = para[P_CSRFORM + 0][4:0];
+    assign cursor_rate      = {para[P_CSRFORM + 2][1:0], para[P_CSRFORM + 1][7:4]};
+    assign cursor_bottom    = para[P_CSRFORM + 2][7:3];
+
+    assign zoom_disp = para[P_ZOOM][1:0];
+
+    // The light pen's three bytes are read back, never driven from here.
+    wire _unused = &{1'b0, para[P_LPEN], para[P_MASK], para[P_SYNC], 1'b0};
+
+endmodule
+
+`default_nettype wire
