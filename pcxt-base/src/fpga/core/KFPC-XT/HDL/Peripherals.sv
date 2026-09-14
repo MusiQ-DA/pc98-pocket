@@ -1635,12 +1635,72 @@ end endgenerate
         gdc_vs_s1 <= pc98_vs;  gdc_vs_q <= gdc_vs_s1;
         gdc_hb_s1 <= pc98_hb;  gdc_hb_q <= gdc_hb_s1;
     end
-    wire [7:0] gdc_status = {1'b0, gdc_hb_q, gdc_vs_q, 1'b0, 1'b0, 1'b1, 1'b0, 1'b1};
+    // THE MOCK IS GONE. pc98_gdc is the real command and parameter interface --
+    // see docs/PC98_GDC_DESIGN.md for what it does and does not implement, and
+    // the module header for the two things np2kai's enum would have got wrong.
+    // One note carried over: the mock's bit 7 was CLEAR, and np2kai's gdc_i60
+    // sets it unconditionally. The real module sets it.
+    //
+    // Text GDC at 0x60/0x62, graphics GDC at 0xA0/0xA2. The even port is
+    // status (read) and parameter (write); the odd-numbered one two up is the
+    // read-back FIFO and the command port. Both watch the same raster, because
+    // this core generates it in pc98_video_timing rather than in either GDC.
+    wire gdc_m_cs = pc98_io_exact & ((address[7:0] == 8'h60) | (address[7:0] == 8'h62));
+    wire gdc_s_cs = pc98_io_exact & ((address[7:0] == 8'hA0) | (address[7:0] == 8'hA2));
 
-    // Text GDC at 0x60, graphics GDC at 0xA0. Both answer the same status: the
-    // ITF checks both, and both watch the same raster.
-    wire gdc_stat_select = pc98_io_exact & ((address[7:0] == 8'h60) | (address[7:0] == 8'hA0));
-    wire gdc_stat_read   = gdc_stat_select & ~io_read_n;
+    wire [7:0] gdc_m_dout, gdc_s_dout;
+    wire [7:0] gdc_m_unk_cmd, gdc_m_unk_count;
+    wire [7:0] gdc_s_unk_cmd, gdc_s_unk_count;
+
+    // The display registers are not consumed yet: pc98_text_render still
+    // derives its cell index from the raster. Wiring them in is the next step
+    // and its regression test is that one partition at SAD 0 reduces to the
+    // expression the renderer uses today.
+    wire        gdc_m_disp_on, gdc_s_disp_on;
+    wire [7:0]  gdc_m_pitch,   gdc_s_pitch;
+    wire [14:0] gdc_m_sad [0:3], gdc_s_sad [0:3];
+    wire [9:0]  gdc_m_len [0:3], gdc_s_len [0:3];
+    wire [14:0] gdc_m_cur_addr,  gdc_s_cur_addr;
+    wire [3:0]  gdc_m_cur_dot,   gdc_s_cur_dot;
+    wire        gdc_m_cur_en,    gdc_s_cur_en;
+    wire        gdc_m_cur_bl,    gdc_s_cur_bl;
+    wire [4:0]  gdc_m_cur_top,   gdc_s_cur_top;
+    wire [4:0]  gdc_m_cur_bot,   gdc_s_cur_bot;
+    wire [5:0]  gdc_m_cur_rate,  gdc_s_cur_rate;
+    wire [1:0]  gdc_m_zoom,      gdc_s_zoom;
+
+    pc98_gdc u_gdc_m (
+        .clk(clock), .reset(reset),
+        .cs(gdc_m_cs), .a1(address[1]),
+        .io_read_n(io_read_n), .io_write_n(io_write_n),
+        .data_in(internal_data_bus), .data_out(gdc_m_dout),
+        .hblank(gdc_hb_q), .vsync(gdc_vs_q),
+        .disp_on(gdc_m_disp_on), .pitch(gdc_m_pitch),
+        .part_sad(gdc_m_sad), .part_len(gdc_m_len),
+        .cursor_addr(gdc_m_cur_addr), .cursor_dot(gdc_m_cur_dot),
+        .cursor_en(gdc_m_cur_en), .cursor_blink_en(gdc_m_cur_bl),
+        .cursor_top(gdc_m_cur_top), .cursor_bottom(gdc_m_cur_bot),
+        .cursor_rate(gdc_m_cur_rate), .zoom_disp(gdc_m_zoom),
+        .unk_cmd(gdc_m_unk_cmd), .unk_count(gdc_m_unk_count)
+    );
+
+    pc98_gdc u_gdc_s (
+        .clk(clock), .reset(reset),
+        .cs(gdc_s_cs), .a1(address[1]),
+        .io_read_n(io_read_n), .io_write_n(io_write_n),
+        .data_in(internal_data_bus), .data_out(gdc_s_dout),
+        .hblank(gdc_hb_q), .vsync(gdc_vs_q),
+        .disp_on(gdc_s_disp_on), .pitch(gdc_s_pitch),
+        .part_sad(gdc_s_sad), .part_len(gdc_s_len),
+        .cursor_addr(gdc_s_cur_addr), .cursor_dot(gdc_s_cur_dot),
+        .cursor_en(gdc_s_cur_en), .cursor_blink_en(gdc_s_cur_bl),
+        .cursor_top(gdc_s_cur_top), .cursor_bottom(gdc_s_cur_bot),
+        .cursor_rate(gdc_s_cur_rate), .zoom_disp(gdc_s_zoom),
+        .unk_cmd(gdc_s_unk_cmd), .unk_count(gdc_s_unk_count)
+    );
+
+    wire       gdc_stat_read = (gdc_m_cs | gdc_s_cs) & ~io_read_n;
+    wire [7:0] gdc_status    = gdc_m_cs ? gdc_m_dout : gdc_s_dout;
 
     // ------------------------------------------------- system port stubs
     //
