@@ -39,6 +39,13 @@
 
 static const osd_fb_t panel = { PANEL_X, PANEL_Y, PANEL_W, PANEL_H };
 
+// PC-98 builds drop the XT-only hardware knobs (BIOS ROM window, OPL2, C/MS,
+// composite) from the menus by #ifndef MACHINE_PC98 -- hidden, never removed:
+// the save blob stores setting values by enum index, so the enum order (and
+// with it every later setting's slot) is frozen. The settings themselves stay
+// compiled in and are still pushed to the machine at boot with their default
+// values, exactly as if the rows were there and untouched.
+
 // Every option-valued setting, addressed by id. `value` is the current selection (an index into
 // `opts`); it starts at the first option here, and the option order/default is reconciled with the
 // machine when each setting is wired.
@@ -72,7 +79,14 @@ enum {
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
+// The four speeds the CE generator really makes from the 42.95 MHz chipset clock; the
+// PC/XT build names the fourth for the PC/AT box it was tuned against, while the PC-98
+// build says what it is: the cycle-inaccurate maximum.
+#ifdef MACHINE_PC98
+static const char *const opt_cpu[] = { "4.77 MHz", "7.16 MHz", "9.54 MHz", "Turbo (max)" };
+#else
 static const char *const opt_cpu[] = { "4.77 MHz", "7.16 MHz", "9.54 MHz", "PC/AT 3.5 MHz" };
+#endif
 static const char *const opt_bios_wr[] = { "None", "EC00", "Main", "All" };
 static const char *const opt_opl2[] = { "Adlib 388h", "SB FM 388h/228h", "Disabled" };
 static const char *const opt_boost[] = { "None", "2x", "4x" };
@@ -168,17 +182,25 @@ static const item_t items_system[] = {
     { "Hercules Graphics", IT_OPTION, SET_HGC_GFX },
     { "1st Video", IT_OPTION, SET_VIDEO_1ST },
 #endif
+#ifndef MACHINE_PC98
+    // An XT ROM-bank window; the PC-98 ITF/BIOS map has no such knob.
     { "BIOS Writable", IT_OPTION, SET_BIOS_WR },
+#endif
     { "Boot Splash", IT_OPTION, SET_SPLASH },
 };
 
 static const item_t items_av[] = {
+#ifndef MACHINE_PC98
+    // OPL2 (Adlib/SB FM), the C/MS Game Blaster, and CGA composite output are
+    // PC/XT add-in cards; the PC-98's sound path is the board's own (beep and,
+    // eventually, OPNA), and its video is the fixed 640x400 analog RGB.
     { "OPL2 Audio", IT_OPTION, SET_OPL2 },
+    { "C/MS Audio", IT_OPTION, SET_CMS },
+    { "Composite", IT_OPTION, SET_COMPOSITE },
+#endif
     { "Audio Boost", IT_OPTION, SET_BOOST },
     { "Speaker Volume", IT_OPTION, SET_SPK_VOL },
     { "Stereo Mix", IT_OPTION, SET_STEREO },
-    { "C/MS Audio", IT_OPTION, SET_CMS },
-    { "Composite", IT_OPTION, SET_COMPOSITE },
     { "Display", IT_OPTION, SET_DISPLAY },
 };
 
