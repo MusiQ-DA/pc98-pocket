@@ -725,8 +725,7 @@ module softcpu_subsystem (
     // load the glyphs read as zero, and nothing draws before it (see osd_font.c
     // and main.c's boot order). The CPU-side read serves the same window for
     // bring-up checks.
-    wire [7:0] font_q;                 // current glyph row, one-cycle read like the framebuffer
-    wire [31:0] font_cpu_q;            // CPU-side read of the same window (bring-up checks)
+    // (font_q / font_cpu_q are declared with the four-lane font RAM below)
 
     wire [1:0]  cur_lane = baddr[1:0];
     wire [7:0]  cur_byte = pa_q[cur_lane];   // Port A read of the current lane
@@ -750,58 +749,71 @@ module softcpu_subsystem (
     wire  [3:0] pa_we   = (gs == GS_WR && draw_px) ? (4'd1 << cur_lane) : 4'd0;
     wire  [7:0] pa_wd   = fill_byte ? {draw_col, draw_col} : cur_byte_mod;
 
-    // Font RAM read. Port B is a one-cycle read like the framebuffer's Port A, so
-    // the glyph row and cur_byte arrive together; port A is the CPU load window
-    // (32-bit words with byte enables, so a byte, halfword or word store all
-    // land; the narrow port B reads the same memory a byte at a glyph row).
-    altsyncram #(
-        .operation_mode ("BIDIR_DUAL_PORT"),
-        .width_a        (32),
-        .widthad_a      (9),
-        .numwords_a     (512),
-        .width_b        (8),
-        .widthad_b      (11),
-        .numwords_b     (2048),
-        // Quartus cannot derive the mixed-width + byte-enable configuration
-        // without this (Error 14093 "Can't recognize value for
-        // port_a_data_width"); the 8-bit framebuffer lanes above carry no
-        // byte enables and so never needed it.
-        .width_byteena_a (4),
-        // And AUTO block selection refuses a mixed-width pair outright
-        // (Error 272006). M10K supports a 32->8 width ratio natively.
-        .ram_block_type ("M10K"),
-        .address_reg_b  ("CLOCK1"),
-        .outdata_reg_a  ("UNREGISTERED"),
-        .outdata_reg_b  ("UNREGISTERED"),
-        .lpm_type       ("altsyncram"),
-        .intended_device_family ("Cyclone V")
-    ) font_ram (
-        .clock0    (clk_pico),
-        .address_a (cpu_mem_addr[10:2]),
-        .data_a    (cpu_mem_wdata),
-        .wren_a    (sel_font && cpu_mem_wstrb != 4'd0),
-        .byteena_a (cpu_mem_wstrb),
-        .q_a       (font_cpu_q),
+    // Font RAM. Four same-width 8-bit lanes -- the pattern the framebuffer
+    // above uses -- because Quartus refuses a mixed-width dual port outright
+    // (Error 272006: cannot use port A width with port B width), M10K or not.
+    // Port A is the CPU load window on clk_pico (byte enables become per-lane
+    // wren, so a byte, halfword or word store all land); port B is the GPU's
+    // glyph read on clk_sys. All four lanes see the same word address, and the
+    // addressed byte is picked out of the four registered lane outputs with a
+    // combinational mux, so the glyph row keeps the framebuffer's one-cycle
+    // read contract. The CPU's read-back word reassembles the lanes the same
+    // way as q_a did.
+    wire [7:0] font_q;
+    wire [31:0] font_cpu_q;
+    wire [8:0] font_waddr = {gs_glyph, gy}[10:2];
+    wire [1:0] font_lane  = {gs_glyph, gy}[1:0];
+    wire [7:0] font_b_lane [0:3];
+    wire [7:0] font_a_lane [0:3];
 
-        .clock1    (clk_sys),
-        .address_b ({gs_glyph, gy}),
-        .data_b    (8'd0),
-        .wren_b    (1'b0),
-        .q_b       (font_q),
+    genvar fl;
+    generate
+        for (fl = 0; fl < 4; fl = fl + 1) begin : font_lane_ram
+            altsyncram #(
+                .operation_mode ("BIDIR_DUAL_PORT"),
+                .width_a        (8),
+                .widthad_a      (9),
+                .numwords_a     (512),
+                .width_b        (8),
+                .widthad_b      (9),
+                .numwords_b     (512),
+                .address_reg_b  ("CLOCK1"),
+                .outdata_reg_a  ("UNREGISTERED"),
+                .outdata_reg_b  ("UNREGISTERED"),
+                .lpm_type       ("altsyncram"),
+                .intended_device_family ("Cyclone V")
+            ) font_lane_inst (
+                .clock0    (clk_pico),
+                .address_a (cpu_mem_addr[10:2]),
+                .data_a    (cpu_mem_wdata[fl*8 +: 8]),
+                .wren_a    (sel_font && cpu_mem_wstrb[fl]),
+                .q_a       (font_a_lane[fl]),
 
-        .aclr0 (1'b0),
-        .aclr1 (1'b0),
-        .addressstall_a (1'b0),
-        .addressstall_b (1'b0),
-        .byteena_b (1'b1),
-        .clocken0 (1'b1),
-        .clocken1 (1'b1),
-        .clocken2 (1'b1),
-        .clocken3 (1'b1),
-        .eccstatus (),
-        .rden_a (1'b1),
-        .rden_b (1'b1)
-    );
+                .clock1    (clk_sys),
+                .address_b (font_waddr),
+                .data_b    (8'd0),
+                .wren_b    (1'b0),
+                .q_b       (font_b_lane[fl]),
+
+                .aclr0 (1'b0),
+                .aclr1 (1'b0),
+                .addressstall_a (1'b0),
+                .addressstall_b (1'b0),
+                .byteena_a (1'b1),
+                .byteena_b (1'b1),
+                .clocken0 (1'b1),
+                .clocken1 (1'b1),
+                .clocken2 (1'b1),
+                .clocken3 (1'b1),
+                .eccstatus (),
+                .rden_a (1'b1),
+                .rden_b (1'b1)
+            );
+        end
+    endgenerate
+
+    assign font_q     = font_b_lane[font_lane];
+    assign font_cpu_q = {font_a_lane[3], font_a_lane[2], font_a_lane[1], font_a_lane[0]};
 
     always @(posedge clk_sys) begin
         if (reset) begin

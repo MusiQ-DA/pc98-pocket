@@ -313,21 +313,23 @@ module tb_selftest_soc;
         // The font window itself: one staged ANK byte and two patched glyphs
         // (osd_font.c's table). Wrong lane order, wrong endianness, or a patch
         // off by a row all show up here even when the panel still draws.
+        // The RAM is four same-width lanes now, so a byte address splits into
+        // {lane = [1:0], word = [10:2]}.
         font_bad = 0;
-        if (u_soft.font_ram.mem[19'h010] !== 8'h80) begin
+        if (u_soft.font_lane_ram[0].font_lane_inst.mem[9'h004] !== 8'h80) begin
             font_bad++;
             $display("  font[0x010] = %02h, want 80 (G_HOME row 0, patched)",
-                     u_soft.font_ram.mem[19'h010]);
+                     u_soft.font_lane_ram[0].font_lane_inst.mem[9'h004]);
         end
-        if (u_soft.font_ram.mem[19'h208] !== 8'hFF) begin
+        if (u_soft.font_lane_ram[0].font_lane_inst.mem[9'h082] !== 8'hFF) begin
             font_bad++;
             $display("  font[0x208] = %02h, want FF ('A' row 0, staged pattern)",
-                     u_soft.font_ram.mem[19'h208]);
+                     u_soft.font_lane_ram[0].font_lane_inst.mem[9'h082]);
         end
-        if (u_soft.font_ram.mem[19'h6D3] !== 8'h1F) begin
+        if (u_soft.font_lane_ram[3].font_lane_inst.mem[9'h1B4] !== 8'h1F) begin
             font_bad++;
             $display("  font[0x6D3] = %02h, want 1F (G_TL row 3, patched)",
-                     u_soft.font_ram.mem[19'h6D3]);
+                     u_soft.font_lane_ram[3].font_lane_inst.mem[9'h1B4]);
         end
         $display("  font window samples  : %0d wrong", font_bad);
         if (shown_pixels == 0)
