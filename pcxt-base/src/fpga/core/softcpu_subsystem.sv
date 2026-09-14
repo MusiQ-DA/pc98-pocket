@@ -109,6 +109,9 @@ module softcpu_subsystem (
     input   [7:0] st_rdata,
     // POST monitor (post_monitor.sv): the guest's progress on I/O port 0x80,
     // so the firmware can put "where the BIOS got to" on screen.
+    // How far a key press gets, served at 0x500000AC. See core_top.
+    input   [7:0] key_count,
+    input   [7:0] key_last,
     // The memory-sizing evidence, served at 0x500000A8. See post_monitor.
     input   [7:0] memsw_seen,
     input   [7:0] memsize_seen,
@@ -1074,6 +1077,7 @@ module softcpu_subsystem (
             // [0501], F0 = OUT 0F0h requests. 04/04/01 is a healthy 640 KB
             // boot; 00/00 and a rising F0 is the MEMORY 128KB loop.
             32'h5000_00A8: cpu_mem_rdata = {8'd0, f0_count, memsize_seen, memsw_seen};
+            32'h5000_00AC: cpu_mem_rdata = {16'd0, key_last, key_count};
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;
         endcase
