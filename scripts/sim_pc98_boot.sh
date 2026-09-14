@@ -16,6 +16,7 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYNTH=0
 V30=0
 REALMEM=0
+WORD=0
 DETACH=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -25,6 +26,9 @@ while [ $# -gt 0 ]; do
         # sdram_kf_shim on sdram_mp on the part, with the board's clock skew --
         # instead of the flat array. V30 only.
         --realmem) REALMEM=1; shift ;;
+        # --word: with --realmem, let a word memory access run as one bus
+        # cycle (PC98_WORD_MEM). The real ITF is the acceptance test for it.
+        --word)    WORD=1; REALMEM=1; shift ;;
         -d)      DETACH=1; shift ;;
         *) break ;;
     esac
@@ -120,6 +124,7 @@ if [ "$V30" = 1 ]; then
   # not be the hardware rehearsal it is meant to be.
   CPU_DEF="+define+CPU_V30+V30_BACKDOOR+MACHINE_PC98"
   [ "$REALMEM" = 1 ] && CPU_DEF="$CPU_DEF+REALMEM+SDRAM_USE_MP"
+  [ "$WORD" = 1 ] && CPU_DEF="$CPU_DEF+PC98_WORD_MEM"
   CPU_INC="-I/work/$V"
 else
   CPU_FILES="/work/$S/8088/i8088.v /work/$S/8088/biu_max.v \
