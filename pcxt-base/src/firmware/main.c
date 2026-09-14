@@ -34,7 +34,13 @@ int main(void)
 {
     // Start with both hard disks absent so the BIOS boots from floppy until (and unless)
     // an image mounts.
+#ifdef MACHINE_PC98
+    // No IDE on a PC-98 -- see PERIPHERALS' XT2IDE block. The disk is the
+    // PC-9801-55 SCSI window instead.
+    scsi_init();
+#else
     ide_init();
+#endif
     vkb_ui_init();
 
     // The guest stays held until settings are staged: wait for the dataslot load (settings_load
@@ -67,6 +73,9 @@ int main(void)
     // the capture out of it (the 24 KB ROM has no room for code it cannot
     // reach).
     postmon_capture_rom();
+#ifdef MACHINE_PC98
+    scsi_init();
+#endif
 #endif
 
     *SOFT_GUEST_HOLD = 0;
@@ -83,7 +92,9 @@ int main(void)
     uint32_t mounted_a = 0;
     uint32_t mounted_b = 0;
     uint32_t mounted_hdd = 0;
-    uint32_t mounted_hdd_b = 0;
+#ifndef MACHINE_PC98
+    uint32_t mounted_hdd_b = 0;   // the second IDE drive; PC-98 has one SCSI image
+#endif
     uint32_t settings_sized = 0;        // Settings size declared in the datatable yet
     uint32_t rebind_seen = *FDD_REBIND; // last-seen rebind toggles
 
@@ -121,10 +132,15 @@ int main(void)
         if (!mounted_hdd) {
             uint32_t sectors = slot_bytes(HDD0_SLOT_ID) / SECTOR_BYTES;
             if (sectors != 0) {
+#ifdef MACHINE_PC98
+                scsi_mount(sectors);
+#else
                 ide_mount(0, sectors);
+#endif
                 mounted_hdd = 1;
             }
         }
+#ifndef MACHINE_PC98
         if (!mounted_hdd_b) {
             uint32_t sectors = slot_bytes(HDD1_SLOT_ID) / SECTOR_BYTES;
             if (sectors != 0) {
@@ -132,11 +148,17 @@ int main(void)
                 mounted_hdd_b = 1;
             }
         }
+#endif
 
         fdd_poll();
+#ifdef MACHINE_PC98
+        // Cheap when idle: one management read that finds the request bit clear.
+        scsi_poll();
+#else
         if (mounted_hdd || mounted_hdd_b) {
             ide_poll();
         }
+#endif
         settings_service(); // persist any OSD changes into the save window
     }
 

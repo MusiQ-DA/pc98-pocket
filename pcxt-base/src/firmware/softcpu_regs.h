@@ -137,6 +137,17 @@
 // taskfile (regs 0-5) is packed/unpacked in ide_service.c per ide.v's register map;
 // reg 0xF is the 16-bit sector data port (auto-incrementing).
 #define IDE_TARGET    (1 << 8) // FDD_MGMT_ADDR bit: select ide.v
+#define SCSI_TARGET   (1 << 9) // FDD_MGMT_ADDR bit: select pc98_scsi (mgmt 0xF4)
+
+// pc98_scsi management registers (mgmt_address[3:0]). See PERIPHERALS.
+#define SMGMT_CTRL    0x0      // R: {cmd_byte, req != ack}  W: bit0 acknowledges
+#define SMGMT_REGIDX  0x1      // W: control-register index
+#define SMGMT_REGDATA 0x2      // R/W: that register, index post-increments
+#define SMGMT_BUFPTR  0x3      // W: data-buffer pointer
+#define SMGMT_BUFDATA 0x4      // R/W: buffer byte, pointer post-increments
+#define SMGMT_AUXSTAT 0x5      // W: the byte 0xCC0 hands the guest
+#define SMGMT_STATUS  0x6      // W: the byte index 0x17 hands the guest
+#define SMGMT_PTRCLR  0x7      // W: bit0 rewinds read ptr, bit1 write ptr
 #define IMGMT_PRESENT 0x6      // drive present / config register
 #define IMGMT_DATA    0xF      // sector data port
 #define IDE_DRV0_WE   (1 << 3) // reg 6: commit drive-0 present/hob bits
@@ -192,6 +203,12 @@ int slot_declare_size(uint16_t id, uint32_t bytes);
 
 // Service entry points (fdd_service.c).
 void fdd_mount(uint32_t drive, uint32_t sectors);
+
+// Service entry points (scsi_service.c). PC-98 only -- the board is a
+// PC-9801-55 and the PC/XT build keeps its IDE instead.
+void scsi_init(void);
+void scsi_mount(uint32_t sectors);
+void scsi_poll(void);
 void fdd_poll(void);
 
 // Service entry points (ide_service.c).

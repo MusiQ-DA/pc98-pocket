@@ -17,6 +17,13 @@
 
 #include "softcpu_regs.h"
 
+// Compiled out of the PC-98 build entirely. PERIPHERALS gates XT2IDE, ide.v
+// and the MMC-IDE bridge out of that build -- no PC-98 ROM references
+// 0x640-0x64F, so nothing could drive them -- which leaves this talking to a
+// management bus with nothing on the far end. The softcore ROM is 24 KB and
+// scsi_service.c needs the room.
+#ifndef MACHINE_PC98
+
 #define IDE_STATE_IDLE  0
 #define IDE_STATE_RESET 1
 
@@ -779,3 +786,5 @@ void ide_poll(void)
         ide_state = IDE_STATE_RESET;
     }
 }
+
+#endif // !MACHINE_PC98
