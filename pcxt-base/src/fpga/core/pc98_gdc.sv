@@ -76,7 +76,13 @@ module pc98_gdc (
     output wire [7:0]  pitch,         // words per line
     // Four partitions, in PRAM order. A screen with one area sets partition 0
     // to the whole height; the walker in the renderer then never advances.
-    output wire [14:0] part_sad [0:3],
+    // RAW, not interpreted. The two GDCs read the SAME PRAM field DIFFERENTLY:
+    // np2kai's graphics walker takes LOW15(vad << 1) (vram/makegrex.c) and its
+    // text renderer takes LOW12(...) with no shift at all (vram/maketext.c,
+    // where the result indexes cells as mem[0xa0000 + edi*2]). Baking either
+    // one in here would be right for one consumer and wrong for the other --
+    // it was baked in as the graphics form, and that was wrong for text.
+    output wire [15:0] part_sad [0:3],
     output wire [9:0]  part_len [0:3],
     // The cursor, as CSRW and CSRFORM leave it.
     output wire [14:0] cursor_addr,
@@ -221,11 +227,9 @@ module pc98_gdc (
     genvar g;
     generate
         for (g = 0; g < 4; g = g + 1) begin : g_part
-            // SAD is a word address; the display address is it shifted up one
-            // and cut to 15 bits (np2kai: `vad = LOW15(vad << 1)`).
             wire [15:0] sad_raw = {para[P_PRAM + g*4 + 1], para[P_PRAM + g*4 + 0]};
             wire [15:0] len_raw = {para[P_PRAM + g*4 + 3], para[P_PRAM + g*4 + 2]};
-            assign part_sad[g] = 15'((sad_raw << 1));
+            assign part_sad[g] = sad_raw;
             // lines = (LEN & 0x3FFF) >> 4
             assign part_len[g] = 10'((len_raw & 16'h3FFF) >> 4);
         end

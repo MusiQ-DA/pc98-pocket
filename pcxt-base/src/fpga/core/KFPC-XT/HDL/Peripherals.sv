@@ -1888,8 +1888,37 @@ end endgenerate
     wire [2:0] pc98_grb;
     wire       pc98_pixel, pc98_kanji_seen;
 
+    // The master GDC's display registers, carried into the pixel domain.
+    //
+    // TAKEN AT VSYNC, not synchronised bit by bit. gdc_pitch and gdc_sad are
+    // multi-bit and the guest writes them a byte at a time, so a two-flop
+    // synchroniser would eventually hand the renderer half of one value and
+    // half of the next -- a torn start address is a screen that jumps. Real
+    // hardware latches these at the frame boundary and so does this, which
+    // also means a program that writes them mid-frame sees the change on the
+    // next one, as it would on the machine.
+    //
+    // gdc_on is one bit and is synchronised plainly; the renderer falls back
+    // to 80 columns from cell 0 while it is low, which is the picture that
+    // works today.
+    logic gdc_on_s1, gdc_on_px;
+    logic pc98_vs_s1, pc98_vs_px, pc98_vs_px_d;
+    logic [7:0]  gdc_pitch_px;
+    logic [15:0] gdc_sad_px;
+
+    always_ff @(posedge clk_vga_cga) begin
+        gdc_on_s1  <= gdc_m_disp_on;  gdc_on_px  <= gdc_on_s1;
+        pc98_vs_s1 <= pc98_vs;        pc98_vs_px <= pc98_vs_s1;
+        pc98_vs_px_d <= pc98_vs_px;
+        if (pc98_vs_px & ~pc98_vs_px_d) begin
+            gdc_pitch_px <= gdc_m_pitch;
+            gdc_sad_px   <= gdc_m_sad[0];
+        end
+    end
+
     pc98_text_render u_pc98_text (
         .clk(clk_vga_cga), .pix_ce(1'b1),
+        .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px), .gdc_sad(gdc_sad_px),
         .hcount(pc98_h), .vcount(pc98_v), .blink_on(pc98_blink),
         .tv_cell(tvram_vid_cell_w), .tv_attr(tvram_vid_attr),
         .font_cell(pc98_font_cell), .font_line(pc98_font_line),

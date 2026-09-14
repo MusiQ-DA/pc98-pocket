@@ -37,6 +37,12 @@ module pc98_text_render #(
     input  wire [9:0]  vcount,          // line within the frame
     input  wire        blink_on,        // blink phase, ~2 Hz
 
+    // The master GDC's display registers. Tie gdc_on low and this module
+    // behaves exactly as it did before they existed.
+    input  wire        gdc_on,          // START seen
+    input  wire [7:0]  gdc_pitch,       // words per row
+    input  wire [15:0] gdc_sad,         // partition 0's start, RAW
+
     // TVRAM attribute port (one cycle of latency). The character codes are the
     // row buffer's business, not this module's: it is handed glyph bytes.
     output wire [11:0] tv_cell,
@@ -91,9 +97,33 @@ module pc98_text_render #(
     wire [6:0]  next_col  = last_char ? 7'd0 : col + 7'd1;
     wire [4:0]  next_row  = next_v[8:4];
 
-    // row * 80, as a shift pair rather than a multiplier.
-    wire [11:0] next_rowbase = {1'b0, next_row, 6'd0} + {3'b000, next_row, 4'd0};
-    wire [11:0] next_cell    = next_rowbase + {5'd0, next_col};
+    // ---- where the screen starts, and how wide a row is -------------------
+    //
+    // np2kai vram/maketext.c, which is the authority for the TEXT side:
+    //
+    //     pitch = gdc.m.para[GDC_PITCH] & 0xfe;
+    //     esi   = LOW12(LOADINTELWORD(gdc.m.para + GDC_SCROLL));
+    //     ...   mem[0xa0000 + edi*2]
+    //
+    // so the master GDC's SAD is a CELL INDEX, twelve bits, NOT shifted -- the
+    // graphics GDC's LOW15(vad << 1) is a different reading of the same PRAM
+    // field, and pc98_gdc hands both out raw for that reason.
+    //
+    // AN UNPROGRAMMED GDC MUST GIVE TODAY'S PICTURE. gdc_on is the START
+    // command; a pitch of zero is a GDC that has been started but not told how
+    // wide a row is. Either way this falls back to 80 columns from cell 0,
+    // which is the expression that was here before, so the screen that works
+    // now keeps working and is the regression test for this change.
+    wire        gdc_live  = gdc_on & (gdc_pitch != 8'd0);
+    wire [7:0]  eff_pitch = gdc_live ? {gdc_pitch[7:1], 1'b0} : 8'd80;
+    wire [11:0] eff_start = gdc_live ? gdc_sad[11:0]          : 12'd0;
+
+    // row * pitch. Kept as a multiplier only when the GDC is driving it; the
+    // 80-column case is still the shift pair it always was.
+    wire [11:0] next_rowbase = gdc_live
+        ? 12'(next_row * eff_pitch)
+        : ({1'b0, next_row, 6'd0} + {3'b000, next_row, 4'd0});
+    wire [11:0] next_cell    = eff_start + next_rowbase + {5'd0, next_col};
 
     assign tv_cell = next_cell;
 

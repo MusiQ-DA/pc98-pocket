@@ -38,7 +38,7 @@ module tb_pc98_gdc;
 
     wire        disp_on;
     wire [7:0]  pitch;
-    wire [14:0] part_sad [0:3];
+    wire [15:0] part_sad [0:3];
     wire [9:0]  part_len [0:3];
     wire [14:0] cursor_addr;
     wire [3:0]  cursor_dot;
@@ -110,9 +110,11 @@ module tb_pc98_gdc;
         cmd(8'h70);
         par(8'h00); par(8'h00); par(8'h90); par(8'h01);
         par(8'hD0); par(8'h07); par(8'hF0); par(8'h00);
-        want("part0 SAD = (0x0000 << 1)", part_sad[0], 0);
+        want("part0 SAD raw",             part_sad[0], 16'h0000);
         want("part0 LEN lines",           part_len[0], 16'h0190 >> 4);
-        want("part1 SAD = (0x07D0 << 1)", part_sad[1], (16'h07D0 << 1) & 15'h7FFF);
+        // RAW: the graphics side shifts it, the text side masks it to 12
+        // bits, and neither belongs in the GDC. See its header.
+        want("part1 SAD raw",             part_sad[1], 16'h07D0);
         want("part1 LEN lines",           part_len[1], 16'h00F0 >> 4);
 
         // ---- 0x78 is the SAME PRAM, from offset 8 --------------------------
@@ -120,16 +122,14 @@ module tb_pc98_gdc;
         // partition 2.
         cmd(8'h78);
         par(8'h34); par(8'h12); par(8'h00); par(8'h02);
-        want("0x78 lands in partition 2 SAD", part_sad[2],
-             (16'h1234 << 1) & 15'h7FFF);
+        want("0x78 lands in partition 2 SAD", part_sad[2], 16'h1234);
         want("0x78 partition 2 LEN lines",    part_len[2], 16'h0200 >> 4);
 
         // ---- a PRAM write from a non-zero nibble ----------------------------
         // 0x74 starts at PRAM offset 4 -- partition 1.
         cmd(8'h74);
         par(8'hFF); par(8'h00); par(8'h10); par(8'h00);
-        want("0x74 starts at partition 1", part_sad[1],
-             (16'h00FF << 1) & 15'h7FFF);
+        want("0x74 starts at partition 1", part_sad[1], 16'h00FF);
 
         // ---- a command cuts a parameter run short --------------------------
         // Two of the four parameters, then a new command. The third and fourth
@@ -138,8 +138,7 @@ module tb_pc98_gdc;
         par(8'hAA); par(8'hBB);
         cmd(8'h47); par(8'd40);
         want("PITCH after a cut-short run", pitch, 40);
-        want("partition 0 SAD took the two", part_sad[0],
-             (16'hBBAA << 1) & 15'h7FFF);
+        want("partition 0 SAD took the two", part_sad[0], 16'hBBAA);
 
         // ---- CSRW / CSRFORM -------------------------------------------------
         cmd(8'h49); par(8'h21); par(8'h43); par(8'h05);
