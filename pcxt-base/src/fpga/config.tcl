@@ -9,10 +9,14 @@ set_global_assignment -name VERILOG_MACRO "ROM_VARIANT_TANDY=0"
 set_global_assignment -name VERILOG_MACRO "ENABLE_TANDY_VIDEO=0"
 set_global_assignment -name VERILOG_MACRO "ENABLE_TANDY_AUDIO=0"
 set_global_assignment -name VERILOG_MACRO "ENABLE_TANDY_KBD=0"
-set_global_assignment -name VERILOG_MACRO "ENABLE_CGA=1"
+# CGA/OPL2/CMS are the PC/XT's hardware; the PC-98 needs none of them
+# (the CGA write path is architecturally dead under MACHINE_PC98, and
+# the sound is the OPNA/beep line). The nuV30's LABs need the room:
+# run#230 was 2042 LABs against the device's 1848.
+set_global_assignment -name VERILOG_MACRO "ENABLE_CGA=0"
 set_global_assignment -name VERILOG_MACRO "ENABLE_HGC=0"
-set_global_assignment -name VERILOG_MACRO "ENABLE_OPL2=1"
-set_global_assignment -name VERILOG_MACRO "ENABLE_CMS=1"
+set_global_assignment -name VERILOG_MACRO "ENABLE_OPL2=0"
+set_global_assignment -name VERILOG_MACRO "ENABLE_CMS=0"
 set_global_assignment -name VERILOG_MACRO "ENABLE_EMS=1"
 set_global_assignment -name VERILOG_MACRO "ENABLE_A000_UMB=1"
 # Chipset clock rate in Hz: drives cur_rate (Verilog) and the softcore clock (firmware, /6).
