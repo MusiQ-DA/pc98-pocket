@@ -102,7 +102,22 @@ module pc98_tvram (
     wire memsw_rd_hit   = memsw_wr_block & cpu_cell[0];         // the eight bytes
 
     logic [7:0] memsw [0:7];
-    always_ff @(posedge clk, posedge rst) begin
+    // Loaded on the LEVEL of rst, synchronously, not on a posedge of it.
+    //
+    // The async-reset form this used to have (@(posedge clk, posedge rst))
+    // only ever writes these registers on a RISING edge of rst -- and there
+    // may not be one. core_top's guest `reset` is declared `logic reset = 1'b1`
+    // and its always block only ever drives it back to 0: it powers up
+    // asserted and falls. A unit bench pulses rst 0->1->0 and the load always
+    // happens; the machine can come up having never produced the edge, leaving
+    // the switch at whatever the fabric powered up with. A3FEA reading 0 there
+    // means `and al,7` = 0, and the ITF's sizing loop at F8B68 compares against
+    // (0+1)*2 = 2 -- it stops after one 128 KB block. MEMORY 128KB OK.
+    //
+    // rst is held for 65536 chipset clocks at power-up, so a synchronous load
+    // gated on the level cannot miss, and it costs a load enable rather than
+    // an async preset/clear per bit.
+    always_ff @(posedge clk) begin
         if (rst) begin
             memsw[0] <= 8'h48;   // A3FE2
             memsw[1] <= 8'h05;   // A3FE6
