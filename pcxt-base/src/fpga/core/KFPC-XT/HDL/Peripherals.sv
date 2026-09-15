@@ -186,6 +186,7 @@ module PERIPHERALS #(
     output  logic    [7:0]  dbg_pic2_isr,
     output  logic    [7:0]  dbg_motor_arms,
     output  logic    [7:0]  dbg_motor_pulses,
+    output  logic    [7:0]  dbg_chg,
     output  logic    [7:0]  dbg_irq_level,
     output  logic    [7:0]  dbg_timer_count,
     output  logic    [7:0]  dbg_kbd_irq_count,
@@ -3149,7 +3150,8 @@ end endgenerate
         .irq_2hd       (fdc_glue_irq_2hd),
         .irq_2dd       (fdc_glue_irq_2dd),
         .dbg_motor_arms   (dbg_motor_arms),
-        .dbg_motor_pulses (dbg_motor_pulses)
+        .dbg_motor_pulses (dbg_motor_pulses),
+        .dbg_chg       (dbg_chg)
     );
 
     always_ff @(posedge clock)

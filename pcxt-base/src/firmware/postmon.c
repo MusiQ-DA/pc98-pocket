@@ -276,7 +276,6 @@ void post_mon_tick(void)
     uint32_t live   = *POST_LIVE;
     uint32_t tvram = *POST_TVRAM;
     static uint32_t last_maxrst = 0xFFFFFFFFu;
-    static uint32_t last_live = 0xFFFFFFFFu;
     static uint32_t last_tvram = 0xFFFFFFFFu;
     // LIVE is the point of this build: when the guest stops, it settles on
     // whatever the CPU is spinning in. Redraw whenever it moves.
@@ -355,15 +354,26 @@ void post_mon_tick(void)
     // not the expensive part.
     *VKB_CTRL = 1u;
 
-    if (status == last_status && maxrst == last_maxrst && live == last_live
+    // The repaint rate. This runs from the softcore's main loop, which spins
+    // far faster than any eye needs, and LIVE -- a sampled guest address --
+    // changes on effectively every call while the guest runs. Gating on "a
+    // value moved" therefore repainted at the loop rate: clear, draw, clear,
+    // draw, and the OSD showed the average of the two, which is the flicker
+    // that made the panel unreadable on a running machine. So LIVE no longer
+    // gates anything (the comment above said it didn't; the code disagreed),
+    // and a repaint happens only when a SLOW field moved, or anyway once
+    // every 65536 calls -- a few times a second at this loop's pace.
+    static uint32_t calls = 0;
+    calls++;
+    if (status == last_status && maxrst == last_maxrst
         && tvram == last_tvram
+        && (calls & 0xFFFFu) != 0u
         && idle_ticks != 4000u) {
-        return;                            // nothing worth redrawing
+        return;                            // nothing worth redrawing yet
     }
     last_tvram = tvram;
     last_status = status;
     last_maxrst = maxrst;
-    last_live = live;
 
     if (!placed) {
         // vkb_ui writes the origin from the presented raster before it raises
@@ -936,6 +946,12 @@ void post_mon_tick(void)
         hex(4 + 21 * 8, 142, mo & 0xFFu, 2);
         osd_draw_string(&fb, 4 + 24 * 8, 142, "MP", OSD_LABEL);
         hex(4 + 27 * 8, 142, (mo >> 16) & 0xFFu, 2);
+        // The window register, 0xBE's last byte. Bit0 picks the live port
+        // group (1 = 0x90/0x92/0x94, the 2HD one) and steers the interrupt
+        // lines. G 03 with MA 00 means the BIOS wrote its 2DD motor pair
+        // into a window np2's guard drops.
+        osd_draw_string(&fb, 4 + 30 * 8, 142, "G", OSD_LABEL);
+        hex(4 + 32 * 8, 142, (mo >> 24) & 0xFFu, 2);
     }
 #endif
 
