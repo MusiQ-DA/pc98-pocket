@@ -27,6 +27,7 @@ docker run --rm -v "$PWD":/work -w /work pc98-sim bash -lc "
   verilator --binary --timing -Wno-fatal -Wall \
     --top-module $TB \
     -Isim -Ipcxt-base/src/fpga/core \
+    -Ipcxt-base/src/fpga/core/common \
     -Ipcxt-base/src/fpga/core/sound/jt12/hdl \
     -Ipcxt-base/src/fpga/core/sound/jt12/hdl/adpcm \
     -Ipcxt-base/src/fpga/core/sound/jt12/jt49/hdl \
