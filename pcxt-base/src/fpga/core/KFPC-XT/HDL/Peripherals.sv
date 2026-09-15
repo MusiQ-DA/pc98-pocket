@@ -3124,28 +3124,61 @@ end endgenerate
     // Register, because a PC-98 has none and floppy.v will not run without
     // one. pc98_fdc_glue does that -- see it for what each bit becomes and
     // why.
-    wire fdc_wr_end = io_write_n & ~prev_io_write_n & ~floppy0_chip_select_n;
-
     wire [2:0] fdc_glue_addr;
     wire       fdc_glue_write;
     wire       fdc_glue_read;
     wire [7:0] fdc_glue_wdata;
 
-    // THE SELECTS BELOW CARRY NO iorq, ON PURPOSE. The old ones came off
-    // pc98_io_exact, whose iorq is ~io_read_n | ~io_write_n -- true only
-    // while a strobe is LOW. The end-of-write strobe, io_write_n &
-    // ~prev_io_write_n, fires the clock the strobe is HIGH. A select built
-    // on iorq is therefore FALSE at exactly the moment the strobe is
-    // true, and sel & strobe was identically zero: the glue sat inert
-    // on metal for 0x94/0xCC/0xBE while every path around it measured
-    // alive (EX FF RD 46 WR 3A ST FF against the glue's all-zero
-    // strobe counters). A bench cannot catch this -- it drives sel and
-    // strobe as independent wires -- so the contradiction lived until
-    // a panel counted both sides of it.
-    wire pc98_addr_win = ~address_enable_n & (address[15:8] == 8'h00);
-    wire fdd_ctrl_win  = pc98_addr_win & ((address[7:0] == 8'h94)
-                                        |  (address[7:0] == 8'hCC));
-    wire fdd_mode_win  = pc98_addr_win &  (address[7:0] == 8'hBE);
+    // THE WRITE IS DECODED FROM A LATCHED ADDRESS, and this is the whole
+    // reason the FDC never worked.
+    //
+    // The house idiom fires a write one cycle AFTER the strobe ends
+    // (io_write_n & ~prev_io_write_n) and decodes the port from the LIVE
+    // address bus at that moment. By then the address has usually moved on
+    // to the next bus cycle -- the prefetch that follows the OUT. So the
+    // decode catches a write only when the guest happens to do nothing on
+    // the bus right after it, and the counters said exactly that:
+    //
+    //   ITF 1BA3   in 0BEh / out 0BEh,al        -> plain code follows: MISSED
+    //              out 94h,80h / LOOP $         -> 65536 idle iterations: HIT
+    //              out 94h,10h / (loop above)   -> HIT
+    //   BIOS       out 94h,08h / ret            -> stack + prefetch: MISSED
+    //              the command bytes to 0x92    -> a tight loop of bus
+    //                                             cycles: ALWAYS MISSED
+    //
+    // n94 02 (the two ITF writes with LOOP behind them, and nothing else),
+    // nBE 00, nD 00, and an LB of 48 -- a byte no ROM ever writes to these
+    // ports, because the address that latched it belonged to one write and
+    // the data to another.
+    //
+    // So the port is captured at the START of the write, where ISA says the
+    // address is valid and settled, and used at the end. The data keeps the
+    // house's late sampling (valid at the trailing edge, the other half of
+    // the same rule). Reads are untouched: they decode live, on their own
+    // start-of-read strobe.
+    logic [15:0] io_wr_addr_q = 16'h0000;
+    logic        io_wr_aen_q  = 1'b1;
+    always_ff @(posedge clock) begin
+        if (~io_write_n & prev_io_write_n) begin
+            io_wr_addr_q <= address[15:0];
+            io_wr_aen_q  <= address_enable_n;
+        end
+    end
+
+    wire        fdc_wr_edge  = io_write_n & ~prev_io_write_n;
+    wire [15:0] fdc_addr_eff = fdc_wr_edge ? io_wr_addr_q     : address[15:0];
+    wire        fdc_aen_eff  = fdc_wr_edge ? io_wr_aen_q      : address_enable_n;
+
+    wire pc98_addr_win = ~fdc_aen_eff & (fdc_addr_eff[15:8] == 8'h00);
+    wire fdd_ctrl_win  = pc98_addr_win & ((fdc_addr_eff[7:0] == 8'h94)
+                                        |  (fdc_addr_eff[7:0] == 8'hCC));
+    wire fdd_mode_win  = pc98_addr_win &  (fdc_addr_eff[7:0] == 8'hBE);
+    // The MSR/FIFO pairs, the same set floppy0_chip_select_n covers, but off
+    // the effective address so a write lands on the port it was issued to.
+    wire fdd_fifo_win  = pc98_addr_win & ((fdc_addr_eff[7:0] == 8'h90)
+                                        |  (fdc_addr_eff[7:0] == 8'h92)
+                                        |  (fdc_addr_eff[7:0] == 8'hC8)
+                                        |  (fdc_addr_eff[7:0] == 8'hCA));
 
     pc98_fdc_glue u_pc98_fdc_glue (
         .clk           (clock),
@@ -3156,13 +3189,14 @@ end endgenerate
         // 0x90/0x92/0x94 have it clear, 0xC8/0xCA/0xCC set. The glue needs
         // that to apply np2kai's ((port >> 4) ^ chgreg) & 1 guard and to know
         // which slave line an interrupt belongs on.
-        .sel_stat      (~floppy0_chip_select_n & ~address[1]),
-        .sel_data      (~floppy0_chip_select_n &  address[1]),
+        .sel_stat      (fdd_fifo_win & ~fdc_addr_eff[1]),
+        .sel_data      (fdd_fifo_win &  fdc_addr_eff[1]),
         .sel_ctrl      (fdd_ctrl_win),
         .sel_mode      (fdd_mode_win),
-        .port_2dd      (address[6]),
-        .wr_stb        (fdc_wr_end | ((fdd_ctrl_win | fdd_mode_win)
-                                       & io_write_n & ~prev_io_write_n)),
+        .port_2dd      (fdc_addr_eff[6]),
+        // The selects already carry the window -- and, on the end-of-write
+        // cycle, the window of the write that just finished.
+        .wr_stb        (fdc_wr_edge),
         .wr_data       (write_to_fdd),
         .rd_stb        (~io_read_n & prev_io_read_n & ~floppy0_chip_select_n),
         .fd_addr       (fdc_glue_addr),
