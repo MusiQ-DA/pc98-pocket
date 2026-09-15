@@ -116,6 +116,8 @@ module softcpu_subsystem (
     input   [7:0] dbg_pic_irr,
     input   [7:0] dbg_pic_imr,
     input   [7:0] dbg_pic_isr,
+    input   [7:0] dbg_inta_vec,
+    input  [15:0] dbg_inta_count,
     input   [7:0] dbg_irq_level,
     input   [7:0] dbg_timer_count,
     input   [7:0] dbg_kbd_irq_count,
@@ -144,6 +146,10 @@ module softcpu_subsystem (
     input  [15:0] ivt16_off,
     input  [15:0] ivt16_seg,
     input   [7:0] ivt16_wr_count,
+    input  [15:0] ivt13_off,
+    input  [15:0] ivt13_seg,
+    input  [15:0] ivt12_off,
+    input  [15:0] ivt12_seg,
     input  [15:0] wr_any_count,
     input  [15:0] tvram_wr_count,
     input  [63:0] tvram_row0_code,
@@ -1054,6 +1060,11 @@ module softcpu_subsystem (
             32'h5000_0028: cpu_mem_rdata = {12'd0, post_live_max};
             32'h5000_002C: cpu_mem_rdata = {ivt16_wr_count, ivt16_seg, ivt16_off[15:8]};
             32'h5000_0030: cpu_mem_rdata = {16'd0, ivt16_off};
+            // The two FDC vectors: 0x4C/0x4E = INT 13h (2HD), 0x48/0x4A =
+            // INT 12h (2DD). Zero throughout means the BIOS never installed
+            // the handlers before the drive probe interrupted.
+            32'h5000_00C8: cpu_mem_rdata = {ivt13_seg, ivt13_off};
+            32'h5000_00CC: cpu_mem_rdata = {ivt12_seg, ivt12_off};
             32'h5000_0034: cpu_mem_rdata = {rd_any_count, wr_any_count};
             32'h5000_003C: cpu_mem_rdata = {12'd0, raw_strobes, ivt_touch_count};
             32'h5000_0040: cpu_mem_rdata = {rd_low_cycles, wr_low_cycles};
@@ -1107,6 +1118,12 @@ module softcpu_subsystem (
             // interrupt path a panel could not see.
             32'h5000_00C0: cpu_mem_rdata = {8'd0, dbg_pic_isr,
                                             dbg_pic_imr, dbg_pic_irr};
+            // The vector byte the CPU received at the last INTA, and the
+            // acknowledge count. 0x12/0x13 = the pair delivered the FDC's
+            // handler; 0x0F = the master answered its own cascade line
+            // (spurious); anything else = the acknowledge came back wrong.
+            32'h5000_00C4: cpu_mem_rdata = {8'd0, dbg_inta_vec,
+                                            dbg_inta_count};
             32'h5000_00B4: cpu_mem_rdata = {15'd0, int_live, int_count};
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;
