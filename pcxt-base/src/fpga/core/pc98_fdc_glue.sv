@@ -197,7 +197,7 @@ module pc98_fdc_glue (
     logic [7:0] chgreg;
     logic       reset_pending;
 
-    // ---- the motor interrupt the drive probe actually waits for ---------
+    // ---- the motor interrupts the drive probes actually wait for -------
     //
     // The BIOS's 2DD init ends with (bios.rom FF6BF..FF6C5)
     //
@@ -206,61 +206,91 @@ module pc98_fdc_glue (
     //     ... then a bounded wait whose flag only the FDC's
     //         interrupt handler ever sets
     //
-    // and the wait never ends unless that interrupt arrives ~100 ms later.
-    // np2 produces it two ways (io/fdc.c): RECALIBRATE/SEEK always arm
-    // fdc.int_timer, and a control-write edge arms it too -- the OSASK
-    // workaround at fdc_o94 (bit7 edge with bit3) and the motor path
-    // (bit3 edge under chgreg&4, disk-ready). floppy.v covers the command
-    // completions; nothing covered the control-write one, because the old
-    // STUB owned it -- Peripherals' fdd_cc_irq, which PC98_FDC_REAL quietly
-    // disconnected when the real controller took over. Every boot since has
-    // parked the BIOS in that wait (LIVE 0050x polling the disk work at
-    // 0x0500, IO ending 00BE 00CC 00CC).
+    // and the handlers' tails write the SAME pair to the OTHER drive's
+    // port without switching the window first -- the 2HD handler ends with
+    // 0D/0C to 0xCC (FFB9F..FFBA5), the 2DD handler with 0D/0C to 0x94
+    // (FFAD6..FFADC). So the metal has TWO motor circuits, one behind each
+    // drive-control port, both outside the FDC window guard: 0x94 is the
+    // 2HD drive adapter's control and 0xCC the 2DD one (MAME models the
+    // pair as fdc_2hd_2dd_ctrl / fdc_trigger), each pulsing ITS OWN slave
+    // line -- 0x94 -> slave bit 3, INT 13h; 0xCC -> slave bit 2, INT 12h.
     //
-    // The arm below is the stub's proven-on-hardware contract rather than
-    // np2's: bit 0's RISING edge on a control write to the LIVE window arms
-    // a ~100 ms timer, and expiry pulses the steered line for one clock --
-    // one whole edge to the 8259 -- but only when the latched bit 2
-    // (XTMASK) is set, which the 0x0C write supplies. The BIOS's own pair
-    // 09h then 0Ch is exactly arm-then-gate.
-    logic        motor_armed;
-    logic [22:0] motor_timer;
-    logic        motor_pulse;
-    logic [7:0]  motor_arms   = 8'd0;
-    logic [7:0]  motor_pulses = 8'd0;
+    // The old stub had only the 0xCC half and that was enough for its
+    // boots; the real controller took the port over and lost both. Gating
+    // the arm on group_live (np2's fdc_o94 guard) was faithful and wrong:
+    // np2 drops the write, the timer never arms (measured: G 03, MA 00),
+    // and the BIOS parks forever.
+    //
+    // Per timer: bit 0's RISING edge on ANY write to its port arms ~100 ms,
+    // and expiry pulses its line for one clock when the latched bit 2
+    // (XTMASK) is set. A pulse while the line is still masked merely parks
+    // in the slave's IRR and delivers at the unmask, which is exactly what
+    // the handler's write-then-unmask order needs.
+    logic        motor_armed_2hd,  motor_armed_2dd;
+    logic [22:0] motor_timer_2hd,  motor_timer_2dd;
+    logic        motor_pulse_2hd,  motor_pulse_2dd;
+    logic [7:0]  motor_arms        = 8'd0;   // both timers, summed
+    logic [7:0]  motor_pulses      = 8'd0;
+    logic        ctrl0_q_2hd,      ctrl0_q_2dd;
+    logic [7:0]  ctrlcc_q_2hd,     ctrlcc_q_2dd;
 
     always_ff @(posedge clk, posedge rst) begin
         if (rst) begin
-            motor_armed   <= 1'b0;
-            motor_timer   <= 23'd0;
-            motor_pulse   <= 1'b0;
-            motor_arms    <= 8'd0;
-            motor_pulses  <= 8'd0;
+            motor_armed_2hd <= 1'b0;  motor_armed_2dd <= 1'b0;
+            motor_timer_2hd <= 23'd0; motor_timer_2dd <= 23'd0;
+            motor_pulse_2hd <= 1'b0;  motor_pulse_2dd <= 1'b0;
+            ctrl0_q_2hd     <= 1'b0;  ctrl0_q_2dd     <= 1'b0;
+            ctrlcc_q_2hd    <= 8'h00; ctrlcc_q_2dd    <= 8'h00;
+            motor_arms      <= 8'd0;  motor_pulses    <= 8'd0;
         end
         else begin
-            // ctrl_q still holds the PREVIOUS byte while the strobe is up,
-            // so "new bit0 up against old bit0 down" is the edge itself.
-            if (wr_stb && sel_ctrl && group_live && wr_data[0] && !ctrl_q[0]) begin
-                motor_armed <= 1'b1;
-                motor_timer <= 23'd0;
-                if (motor_arms != 8'hFF) motor_arms <= motor_arms + 8'd1;
+            // 0x94 -- the 2HD drive control, window ignored.
+            if (wr_stb && sel_ctrl && ~port_2dd) begin
+                if (wr_data[0] && !ctrl0_q_2hd) begin
+                    motor_armed_2hd <= 1'b1;
+                    motor_timer_2hd <= 23'd0;
+                    if (motor_arms != 8'hFF) motor_arms <= motor_arms + 8'd1;
+                end
+                ctrl0_q_2hd  <= wr_data[0];
+                ctrlcc_q_2hd <= wr_data;
             end
-            if (motor_armed) begin
-                if (motor_timer == 23'd4_295_000) begin   // ~100 ms at 42.95 MHz
-                    motor_armed <= 1'b0;
-                    motor_pulse <= ctrl_q[2];
+            // 0xCC -- the 2DD drive control, window ignored.
+            if (wr_stb && sel_ctrl && port_2dd) begin
+                if (wr_data[0] && !ctrl0_q_2dd) begin
+                    motor_armed_2dd <= 1'b1;
+                    motor_timer_2dd <= 23'd0;
+                    if (motor_arms != 8'hFF) motor_arms <= motor_arms + 8'd1;
+                end
+                ctrl0_q_2dd  <= wr_data[0];
+                ctrlcc_q_2dd <= wr_data;
+            end
+            if (motor_armed_2hd) begin
+                if (motor_timer_2hd == 23'd4_295_000) begin   // ~100 ms
+                    motor_armed_2hd <= 1'b0;
+                    motor_pulse_2hd <= ctrlcc_q_2hd[2];
                     if (motor_pulses != 8'hFF) motor_pulses <= motor_pulses + 8'd1;
                 end
                 else
-                    motor_timer <= motor_timer + 23'd1;
+                    motor_timer_2hd <= motor_timer_2hd + 23'd1;
             end
-            else if (motor_pulse)
-                motor_pulse <= 1'b0;   // one clock is a whole edge
+            else if (motor_pulse_2hd)
+                motor_pulse_2hd <= 1'b0;
+            if (motor_armed_2dd) begin
+                if (motor_timer_2dd == 23'd4_295_000) begin   // ~100 ms
+                    motor_armed_2dd <= 1'b0;
+                    motor_pulse_2dd <= ctrlcc_q_2dd[2];
+                    if (motor_pulses != 8'hFF) motor_pulses <= motor_pulses + 8'd1;
+                end
+                else
+                    motor_timer_2dd <= motor_timer_2dd + 23'd1;
+            end
+            else if (motor_pulse_2dd)
+                motor_pulse_2dd <= 1'b0;
         end
     end
     assign dbg_motor_arms   = motor_arms;
     assign dbg_motor_pulses = motor_pulses;
-    assign dbg_chg       = chgreg;
+    assign dbg_chg          = chgreg;
 
     // np2 fdc_reset (io/fdc.c:1155-1161): fdc.chgreg = 3. Bit 0 set means the
     // 0x90/0x92/0x94 window is the live one out of reset.
@@ -283,11 +313,13 @@ module pc98_fdc_glue (
                                        : 8'h44;  // 0x40 |               0x04
 
     // np2's pic_setirq(0x0b) / pic_setirq(0x0a), io/fdc.c:47-51: the same
-    // chgreg bit that picks the window picks the interrupt. The motor timer
-    // below rides the same steering, the way np2's fdc_interrupt() does.
-    wire fd_irq_any = fd_irq | motor_pulse;
-    assign irq_2hd =  fd_irq_any &  chgreg[0];
-    assign irq_2dd =  fd_irq_any & ~chgreg[0];
+    // chgreg bit that picks the window picks the interrupt -- for the
+    // CONTROLLER's own (floppy.v's) interrupts. The motor pulse is
+    // different hardware (the drive adapter at 0xCC) and always belongs to
+    // the 2DD line, slave bit 2 / INT 12h -- MAME's fdc_trigger and the old
+    // stub both pulse exactly there, whatever the window says.
+    assign irq_2hd = (fd_irq & chgreg[0]) | motor_pulse_2hd;
+    assign irq_2dd = (fd_irq & ~chgreg[0]) | motor_pulse_2dd;
 
     // Only the live window reads the chip. The dead one is answered with 0xFF
     // by the chipset and never reaches floppy.v, so it cannot lower irq.
