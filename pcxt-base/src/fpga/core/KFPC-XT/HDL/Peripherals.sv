@@ -467,20 +467,46 @@ module PERIPHERALS #(
     );
 
 `ifdef PC98_FDC_REAL
-    // 0x90 and 0x92 now come from the real controller; 0xBE, 0x94 and 0xCC
-    // keep their PC-98 handling, which has no XT counterpart.
+    // 0x90/0x92 and 0xC8/0xCA now come from the real controller. 0xBE, 0x94
+    // and 0xCC have no XT counterpart at all, so pc98_fdc_glue answers them:
+    // 0xBE is a real latch (the BIOS steers itself with the readback -- ITF
+    // FAFD0 tests bit 0 to pick between 0x90 and 0xC8, BIOS FF3C3 does a
+    // read-modify-write of it), and 0x94/0xCC are np2kai's fdc_i94 constants
+    // rather than the written byte. The glue is instantiated two thousand
+    // lines down, beside floppy.v; these are its outputs reaching back.
+    logic [7:0] fdc_mode_readback;   // 0xBE
+    logic [7:0] fdc_ctrl_readback;   // 0x94 / 0xCC
+    logic       fdc_group_live;      // this cycle's window is chgreg's choice
+    logic       fdc_glue_irq_2hd;    // slave IRQ11 -> INT 13h
+    logic       fdc_glue_irq_2dd;    // slave IRQ10 -> INT 12h
+
+    // np2kai's guard (io/fdc.c, first statement of fdc_o92/fdc_i90/fdc_i92):
+    // the window chgreg did NOT select ignores writes and reads 0xFF. Decoded
+    // here rather than from floppy0_chip_select_n because that is declared a
+    // hundred lines further down; the four ports are the same four.
+    wire fdd_dead_select = pc98_io_exact & ~fdc_group_live
+                         & ((address[7:0] == 8'h90) || (address[7:0] == 8'h92)
+                         ||  (address[7:0] == 8'hC8) || (address[7:0] == 8'hCA));
+
     wire fdd_stub_read = (fdd_be_select | fdd_94_select
-                          | fdd_cc_select) & ~io_read_n;
+                          | fdd_cc_select | fdd_dead_select) & ~io_read_n;
 `else
     wire fdd_stub_read = (fdd_be_select | fdd_90_select | fdd_94_select
                           | fdd_cc_select | fdc_base_select) & ~io_read_n;
 `endif
+`ifdef PC98_FDC_REAL
+    wire [7:0] fdd_stub_data = fdd_be_select   ? fdc_mode_readback
+                             : (fdd_94_select | fdd_cc_select)
+                                               ? fdc_ctrl_readback
+                             :                   8'hFF;   // the dead window
+`else
     wire [7:0] fdd_stub_data = fdd_be_select  ? 8'hFB
                              : fdd_90_select  ? fdc_msr
                              : fdd_94_select  ? 8'h44
                              : fdd_cc_select  ? fdd_cc_data
                              : fdc_msr_select ? fdc_msr
                              :                  fdc_fifo;
+`endif
 `else
     assign  dma_chip_select_n       = chip_select_n[0]; // 0x00 .. 0x1F
     wire    interrupt_chip_select_n = chip_select_n[1]; // 0x20 .. 0x3F
@@ -678,6 +704,17 @@ module PERIPHERALS #(
 
 `ifdef MACHINE_PC98
     wire    interrupt2_chip_select_n;
+
+    // What the PC-98's master IRQ6 actually carries. With the real FDC on,
+    // nothing: floppy.v's irq has moved to the slave, where the machine puts
+    // it. With the stub, fdd_interrupt is floppy.v listening at the PC/XT's
+    // 0x3F0 window that a PC-98 guest never writes -- it is left where it was
+    // rather than changed underneath a configuration nothing exercises.
+`ifdef PC98_FDC_REAL
+    wire    pc98_master_irq6 = 1'b0;
+`else
+    wire    pc98_master_irq6 = fdd_interrupt;
+`endif
 `endif
 
     KF8259 u_KF8259
@@ -723,8 +760,18 @@ module PERIPHERALS #(
         // stand down for it. IRQ2 is the CRT interrupt -- see crt_vsync_irq
         // above; without it the BIOS parks at FED44 for good. The drive's
         // own interrupts live on the slave (IRQ2 XTMASK, IRQ3 FDC).
+        //
+        // MASTER IRQ6 IS NOT THE FLOPPY. That is the PC/XT's wiring; on a
+        // PC-98 IRQ6 is INT3, a free expansion line, and the FDC is slave
+        // IRQ10/IRQ11 -- np2kai io/fdc.c:46-51 (pic_setirq 0x0a / 0x0b) and
+        // the BIOS's own gates at FF438 and FF4B3, which read the SLAVE mask
+        // at 0x0A and refuse the call if bit 2 / bit 3 is set. Driving
+        // floppy.v's irq in here is what put LVL 41 on the POST panel: a
+        // request nobody had a handler for, latched high for good because the
+        // only thing that lowers it is the result-phase read the handler
+        // would have done.
         .interrupt_request          ({interrupt2_to_cpu,
-                                        fdd_interrupt,
+                                        pc98_master_irq6,
                                         interrupt_request[5],
                                         uart_interrupt,
                                         uart2_interrupt,
@@ -785,8 +832,20 @@ module PERIPHERALS #(
         // PC-9801-86's: np2kai sound/opntimer.c:13 has the board's four jumper
         // positions as {0x03, 0x0d, 0x0a, 0x0c} -- INT0/INT6/INT41/INT5 -- and
         // the factory setting is INT5, which is IRQ12, slave bit 4.
+        //
+        // With the real controller those two lines come from floppy.v through
+        // pc98_fdc_glue, steered by chgreg exactly as np2kai's fdc_intwait
+        // steers pic_setirq (io/fdc.c:46-51): 2HD window -> IRQ11 (bit 3,
+        // INT 13h, handler at FFAF6), 2DD window -> IRQ10 (bit 2, INT 12h,
+        // handler at FFB69). The stub's own lines and the 0xCC timer stand
+        // down -- they existed only because there was no chip to raise them.
+`ifdef PC98_FDC_REAL
+        .interrupt_request          ({3'b0, opna_irq, fdc_glue_irq_2hd,
+                                     fdc_glue_irq_2dd, 2'b0})
+`else
         .interrupt_request          ({3'b0, opna_irq, fdc_irq3,
                                      fdd_cc_irq | fdc_irq2, 2'b0})
+`endif
     );
 `endif
 
@@ -1970,7 +2029,13 @@ end endgenerate
         end
     end
 `ifdef MACHINE_PC98
-    assign dbg_irq_level = {interrupt2_to_cpu, fdd_interrupt, interrupt_request[5],
+    // The MASTER's eight request lines, as levels -- what LVL on the POST
+    // panel reads. Bit 6 is whatever the master is actually given, which with
+    // the real FDC is nothing: the drive's interrupt is a SLAVE line now, and
+    // a panel that kept showing fdd_interrupt here would be reporting a wire
+    // that no longer goes anywhere. LVL 41 -- bit 0 and bit 6 -- is the
+    // reading this replaced.
+    assign dbg_irq_level = {interrupt2_to_cpu, pc98_master_irq6, interrupt_request[5],
                             uart_interrupt, uart2_interrupt, crt_vsync_irq,
                             keybord_interrupt, timer_interrupt};
 `else
@@ -3018,30 +3083,50 @@ end endgenerate
 
     wire [2:0] fdc_glue_addr;
     wire       fdc_glue_write;
+    wire       fdc_glue_read;
     wire [7:0] fdc_glue_wdata;
-    wire [7:0] fdc_ctrl_readback;
 
     pc98_fdc_glue u_pc98_fdc_glue (
         .clk           (clock),
         .rst           (reset),
         // floppy0_chip_select_n covers 0x90/0x92/0xC8/0xCA in this build;
-        // address[1] is what separates status from data within each pair.
+        // address[1] is what separates status from data within each pair, and
+        // address[6] is what separates the 2HD window from the 2DD one --
+        // 0x90/0x92/0x94 have it clear, 0xC8/0xCA/0xCC set. The glue needs
+        // that to apply np2kai's ((port >> 4) ^ chgreg) & 1 guard and to know
+        // which slave line an interrupt belongs on.
         .sel_stat      (~floppy0_chip_select_n & ~address[1]),
         .sel_data      (~floppy0_chip_select_n &  address[1]),
         .sel_ctrl      (fdd_94_select | fdd_cc_select),
-        .wr_stb        (fdc_wr_end | ((fdd_94_select | fdd_cc_select)
+        .sel_mode      (fdd_be_select),
+        .port_2dd      (address[6]),
+        .wr_stb        (fdc_wr_end | ((fdd_94_select | fdd_cc_select
+                                       | fdd_be_select)
                                       & io_write_n & ~prev_io_write_n)),
         .wr_data       (write_to_fdd),
+        .rd_stb        (~io_read_n & prev_io_read_n & ~floppy0_chip_select_n),
         .fd_addr       (fdc_glue_addr),
         .fd_write      (fdc_glue_write),
+        .fd_read       (fdc_glue_read),
         .fd_wdata      (fdc_glue_wdata),
-        .ctrl_readback (fdc_ctrl_readback)
+        .fd_irq        (fdd_interrupt),
+        .ctrl_readback (fdc_ctrl_readback),
+        .mode_readback (fdc_mode_readback),
+        .group_live    (fdc_group_live),
+        .irq_2hd       (fdc_glue_irq_2hd),
+        .irq_2dd       (fdc_glue_irq_2dd)
     );
 
     always_ff @(posedge clock)
     begin
         fdd_io_address     <= fdc_glue_addr;
-        fdd_io_read        <= ~io_read_n & prev_io_read_n   & ~floppy0_chip_select_n;
+        // The read strobe carries the guard too, and the glue applies it. A
+        // read of the window chgreg did not select must not reach floppy.v at
+        // all: register 5 is where the interrupt gets acknowledged (floppy.v
+        // lowers irq on exactly `io_read && io_address == 5`), and a probe of
+        // the dead window would otherwise throw away the interrupt the live
+        // one is holding.
+        fdd_io_read        <= fdc_glue_read;
         fdd_io_read_1      <= fdd_io_read;
         fdd_io_write       <= fdc_glue_write;
     end

@@ -95,12 +95,45 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # ports has no interrupt line at all, which is why the boot got past here for
 # as long as it did.
 #
-# Everything else stays: pc98_fdc_glue.sv and its bench are correct about the
-# mapping (eighteen checks, and they caught a real one-write-late DOR bug), and
-# the PERIPHERALS wiring is in place behind this macro. What is missing is the
-# INTERRUPT contract -- who acknowledges floppy.v's irq on a PC-98, and through
-# which port -- and that needs np2kai's fdc.c read properly rather than guessed
-# at. Turn this back on with that in hand.
+# THE INTERRUPT CONTRACT IS NOW SETTLED AND IMPLEMENTED -- and the macro still
+# stays off, for a DIFFERENT and measured reason. What was found:
+#
+#   * The routing was wrong, not the acknowledge. A PC-98's FDC interrupt is a
+#     SLAVE line -- IRQ11 (INT 13h) for the 2HD register window, IRQ10 (INT 12h)
+#     for the 2DD one -- never master IRQ6, which is the PC/XT's floppy line and
+#     on this machine is INT3, an expansion interrupt with no handler. np2kai
+#     io/fdc.c:46-51 picks between pic_setirq(0x0b) and pic_setirq(0x0a) on
+#     chgreg bit 0; the BIOS gates each of its own entry points on the SLAVE
+#     mask (FF4B3 `in al,0x0A / test al,0x08` for 2HD, FF438 `test al,0x04` for
+#     2DD) and refuses the call with AH=40h when masked; the ITF programs the
+#     slave with ICW2 = 0x10 at F85C9, which puts those two on INT 12h/13h --
+#     the vectors of the two handlers at FFAF6 and FFB69. LVL 41 was floppy.v
+#     shouting down a wire the machine does not have.
+#   * The acknowledge is a read of the result phase from the data port
+#     (0x92/0xCA) and nothing else -- floppy.v lowers irq on exactly
+#     `io_read && io_address == 5`, which is what both branches of the BIOS's
+#     handler do. No acknowledge port, and the control port does not clear it.
+#   * 0xBE had to become a real latch (the BIOS steers ITSELF with the readback)
+#     and 0x94/0xCC np2's fdc_i94 constants rather than a readback of the write.
+#
+# All of that is implemented in pc98_fdc_glue.sv and wired in Peripherals.sv,
+# and sim/tb_pc98_fdc_glue now closes the loop against the real floppy.v: the
+# BIOS's own sequence -- enable, RECALIBRATE, read the MSR, SENSE INTERRUPT
+# STATUS, read ST0 -- raises the interrupt on IRQ11 and puts it down again, and
+# a second command raises a fresh one.
+#
+# WHAT STOPS IT NOW, measured by that same bench: floppy.v with NO DISK IN THE
+# DRIVE hangs on READ DATA. cmd_read_write_hang_at_start accepts the command,
+# sets CB, and then does nothing -- it is in neither enter_result_phase nor
+# raise_interrupt -- so the MSR parks at 0x90 for good. The BIOS waits for CB to
+# clear before it may send any further command (FFA0B), so one IPL read with an
+# empty drive kills the controller for the rest of POST. That read is issued
+# right after MEMORY 640KB OK. The hand-tuned stub answered the same probe with
+# seven bytes meaning "no drive", which is why it boots.
+#
+# So the next step is floppy.v's no-media path, not the glue: READ DATA and
+# READ ID with no media have to end in a result phase with a not-ready status
+# instead of hanging. Turn this on with THAT in hand.
 # set_global_assignment -name VERILOG_MACRO "PC98_FDC_REAL=1"
 
 # Route SDRAM through sdram_mp (via sdram_kf_shim) instead of KFSDRAM.
