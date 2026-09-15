@@ -3151,15 +3151,19 @@ end endgenerate
     // ports, because the address that latched it belonged to one write and
     // the data to another.
     //
-    // So the port is captured at the START of the write, where ISA says the
-    // address is valid and settled, and used at the end. The data keeps the
-    // house's late sampling (valid at the trailing edge, the other half of
-    // the same rule). Reads are untouched: they decode live, on their own
-    // start-of-read strobe.
+    // So the port is captured WHILE the write is on the bus and used at the
+    // end -- the same shape write_to_fdd uses for the byte, and for the same
+    // reason. Not at the start: capturing on the falling edge of io_write_n
+    // took n94 from 02 to 00 and nCC from 03 to 00 on metal, which says the
+    // address is not settled yet when the strobe goes low. Sampled on every
+    // low cycle, what survives is the last one before the strobe rises --
+    // the real port, and immune to the next bus cycle claiming the pins on
+    // the very clock the strobe ends. Reads are untouched: they decode live,
+    // on their own start-of-read strobe.
     logic [15:0] io_wr_addr_q = 16'h0000;
     logic        io_wr_aen_q  = 1'b1;
     always_ff @(posedge clock) begin
-        if (~io_write_n & prev_io_write_n) begin
+        if (~io_write_n) begin
             io_wr_addr_q <= address[15:0];
             io_wr_aen_q  <= address_enable_n;
         end
