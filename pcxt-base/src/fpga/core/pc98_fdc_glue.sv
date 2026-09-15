@@ -183,7 +183,14 @@ module pc98_fdc_glue (
     // never armed the timer, a moved pair with the slave's IRR empty says
     // the pulse died between here and the PIC.
     output logic [7:0] dbg_motor_arms,
-    output logic [7:0] dbg_motor_pulses
+    output logic [7:0] dbg_motor_pulses,
+    // The window register itself. 0xBE's last byte: bit0 picks which of the
+    // two port groups is live, and the same bit steers the interrupts. The
+    // 0xCC motor writes are only seen when bit0 is CLEAR -- np2's
+    // ((port>>4)^chgreg)&1 guard drops them otherwise -- so a 3 here with
+    // MA 00 means the BIOS is writing 0xCC into a dead window, and the
+    // question moves to why the ROM does that.
+    output logic [7:0] dbg_chg
 );
 
     logic [7:0] ctrl_q;
@@ -253,6 +260,7 @@ module pc98_fdc_glue (
     end
     assign dbg_motor_arms   = motor_arms;
     assign dbg_motor_pulses = motor_pulses;
+    assign dbg_chg       = chgreg;
 
     // np2 fdc_reset (io/fdc.c:1155-1161): fdc.chgreg = 3. Bit 0 set means the
     // 0x90/0x92/0x94 window is the live one out of reset.

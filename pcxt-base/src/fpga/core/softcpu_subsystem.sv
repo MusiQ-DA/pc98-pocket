@@ -123,6 +123,7 @@ module softcpu_subsystem (
     input   [7:0] dbg_pic2_isr,
     input   [7:0] dbg_motor_arms,
     input   [7:0] dbg_motor_pulses,
+    input   [7:0] dbg_chg,
     input   [7:0] dbg_irq_level,
     input   [7:0] dbg_timer_count,
     input   [7:0] dbg_kbd_irq_count,
@@ -1134,8 +1135,8 @@ module softcpu_subsystem (
             // r2/m2/s2 = the slave; MA/MP = motor arms/pulses.
             32'h5000_00D0: cpu_mem_rdata = {8'd0, dbg_pic2_isr,
                                             dbg_pic2_imr, dbg_pic2_irr};
-            32'h5000_00D4: cpu_mem_rdata = {16'd0, dbg_motor_pulses,
-                                            dbg_motor_arms};
+            32'h5000_00D4: cpu_mem_rdata = {8'd0, dbg_chg,
+                                            dbg_motor_pulses, dbg_motor_arms};
             32'h5000_00B4: cpu_mem_rdata = {15'd0, int_live, int_count};
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;
