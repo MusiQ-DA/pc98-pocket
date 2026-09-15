@@ -188,6 +188,17 @@ module tb_pc98_fdc_glue;
         #1;
     endtask
 
+    // Count clocks each interrupt line spends high across the motor tests,
+    // so a stuck level cannot pass as a pulse. Cleared through motor_clr.
+    logic [7:0] motor_hi_2dd = 0, motor_hi_2hd = 0;
+    logic       motor_clr = 1'b0;
+    always @(posedge clk) begin
+        if (irq_2dd) motor_hi_2dd <= motor_hi_2dd + 1;
+        else if (motor_clr) motor_hi_2dd <= 0;
+        if (irq_2hd) motor_hi_2hd <= motor_hi_2hd + 1;
+        else if (motor_clr) motor_hi_2hd <= 0;
+    end
+
     initial begin
         $display("=== PC-98 FDC port mapping ===");
         repeat (3) @(posedge clk);
@@ -662,6 +673,76 @@ module tb_pc98_fdc_glue;
             want1("and it is transferring, not in a result phase", msr[6], 1'b0);
         end
 
+        // ================================================================
+        // The motor interrupt. The BIOS's 2DD init ends with OUT 0CCh,09 /
+        // OUT 0CCh,0C and then waits on a flag only the FDC's interrupt
+        // handler sets; the wait is what parked every real-controller boot
+        // at LIVE 0050x (IO ending 00BE 00CC 00CC), because the old stub
+        // owned this timer and PC98_FDC_REAL disconnected it. The glue now
+        // arms ~100 ms on a control-write bit0 rising edge to the live
+        // window and pulses the steered line at expiry when bit2 (XTMASK)
+        // is set.
+        begin
+            $display("--- the motor interrupt ---");
+
+            // 2DD window live: chgreg bit0 clear.
+            window(1'b1);
+            wr(3, 8'h02);                       // 0xBE = 2: 0xC8/0xCA/0xCC live
+            #1;
+            want1("2DD window is live", group_live, 1'b1);
+
+            // Arm-then-gate, the BIOS's own pair.
+            wr(2, 8'h08);                       // bit0 stays down: no arm
+            wr(2, 8'h09);                       // bit0 rises: arm
+            wr(2, 8'h0C);                       // bit2 up: XTMASK
+            motor_clr = 1'b1; @(negedge clk); motor_clr = 1'b0;
+            repeat (4_295_010) @(posedge clk);
+            #1;
+            want("2DD motor pulse clocks", motor_hi_2dd[7:0], 8'd1);
+            want("2HD line stayed quiet", motor_hi_2hd[7:0], 8'd0);
+
+            // No XTMASK, no interrupt.
+            wr(2, 8'h08);
+            wr(2, 8'h09);
+            wr(2, 8'h08);                       // bit2 down
+            motor_clr = 1'b1; @(negedge clk); motor_clr = 1'b0;
+            repeat (4_295_010) @(posedge clk);
+            #1;
+            want("no XTMASK, no pulse on 2DD", motor_hi_2dd[7:0], 8'd0);
+            want("no XTMASK, no pulse on 2HD", motor_hi_2hd[7:0], 8'd0);
+
+            // The dead window cannot arm.
+            window(1'b0);                       // 0x94 with chgreg bit0 clear
+            #1;
+            want1("0x94 is the dead window now", group_live, 1'b0);
+            wr(2, 8'h08);
+            wr(2, 8'h09);                       // bit0 rises on a DEAD port
+            wr(2, 8'h0C);
+            window(1'b1);                       // back to the live one
+            wr(2, 8'h0C);
+            motor_clr = 1'b1; @(negedge clk); motor_clr = 1'b0;
+            repeat (4_295_010) @(posedge clk);
+            #1;
+            want("dead-window write armed nothing", motor_hi_2dd[7:0], 8'd0);
+
+            // Steering follows chgreg at expiry, the way np2's
+            // fdc_interrupt() does: arm in 2DD, flip to the 2HD window
+            // before the timer runs out, and the pulse lands on IRQ11.
+            wr(2, 8'h08);
+            wr(2, 8'h09);
+            wr(2, 8'h0C);
+            wr(3, 8'h03);                       // 0xBE = 3: 0x90 window live
+            window(1'b0);
+            motor_clr = 1'b1; @(negedge clk); motor_clr = 1'b0;
+            repeat (4_295_010) @(posedge clk);
+            #1;
+            want("flipped chgreg: pulse on 2HD", motor_hi_2hd[7:0], 8'd1);
+            want("flipped chgreg: 2DD quiet",    motor_hi_2dd[7:0], 8'd0);
+            // Leave the window the way the bench found it.
+            window(1'b1);
+            wr(3, 8'h02);
+        end
+
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("PASS tb_pc98_fdc_glue");
         else             $display("FAILED tb_pc98_fdc_glue: %0d", errors);
@@ -669,7 +750,10 @@ module tb_pc98_fdc_glue;
     end
 
     initial begin
-        #5000000;
+        // The motor phases each wait out a real ~100 ms timer (4 x 42.95 ms
+        // of simulation at the bench's 10 ns clock), so the watchdog has to
+        // clear them with room to spare.
+        #250000000;
         $display("FAILED tb_pc98_fdc_glue: timeout");
         $finish;
     end
