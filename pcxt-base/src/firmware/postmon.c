@@ -945,13 +945,14 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4 + 18 * 8, 142, "MA", OSD_LABEL);
         hex(4 + 21 * 8, 142, mo & 0xFFu, 2);
         osd_draw_string(&fb, 4 + 24 * 8, 142, "MP", OSD_LABEL);
-        hex(4 + 27 * 8, 142, (mo >> 16) & 0xFFu, 2);
+        hex(4 + 27 * 8, 142, (mo >> 8) & 0xFFu, 2);
         // The window register, 0xBE's last byte. Bit0 picks the live port
-        // group (1 = 0x90/0x92/0x94, the 2HD one) and steers the interrupt
-        // lines. G 03 with MA 00 means the BIOS wrote its 2DD motor pair
-        // into a window np2's guard drops.
+        // group (1 = 0x90/0x92/0x94, the 2HD one) and steers the
+        // controller's interrupt lines. The motor circuit at 0xCC is
+        // outside that guard -- it arms on any 0xCC write -- so G no longer
+        // predicts MA.
         osd_draw_string(&fb, 4 + 30 * 8, 142, "G", OSD_LABEL);
-        hex(4 + 32 * 8, 142, (mo >> 24) & 0xFFu, 2);
+        hex(4 + 32 * 8, 142, (mo >> 16) & 0xFFu, 2);
     }
 #endif
 
