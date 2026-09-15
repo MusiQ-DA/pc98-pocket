@@ -50,7 +50,10 @@
 #define POST_IVT13  ((volatile uint32_t *) 0x500000C8) // INT 13h vector {seg, off}
 #define POST_IVT12  ((volatile uint32_t *) 0x500000CC) // INT 12h vector {seg, off}
 #define POST_PIC2   ((volatile uint32_t *) 0x500000D0) // slave PIC {ISR, IMR, IRR}
-#define POST_MOTOR  ((volatile uint32_t *) 0x500000D4) // {pulses, arms} of the 0xCC timer
+#define POST_MOTOR  ((volatile uint32_t *) 0x500000D4) // {pulses, arms} of the motor timers
+#define POST_STRB1  ((volatile uint32_t *) 0x500000D8) // {data strobes, 0xCC strobes}
+#define POST_STRB2  ((volatile uint32_t *) 0x500000DC) // {0xBE strobes, 0x94 strobes}
+#define POST_LCTRL  ((volatile uint32_t *) 0x500000E0) // last control byte the glue saw
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -132,7 +135,7 @@ static uint8_t guest_peek(uint32_t addr)
 // unreadable. 192 adds the MSW/SZ/F0 row on top of that; OSD_FB_HEIGHT is
 // 200, so it still fits. 200 adds the GDC row at 190 and is the whole
 // framebuffer -- there is no room for another.
-#define PANEL_H 152
+#define PANEL_H 162
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -953,6 +956,23 @@ void post_mon_tick(void)
         // predicts MA.
         osd_draw_string(&fb, 4 + 30 * 8, 142, "G", OSD_LABEL);
         hex(4 + 32 * 8, 142, (mo >> 16) & 0xFFu, 2);
+
+        // Strobe witnesses: did the glue's write strobe fire AT ALL, per
+        // port? nBE/n94/nCC/nD count 0xBE / 0x94 / 0xCC / data-port writes
+        // the glue saw; LB is the last control byte it carried. All zero
+        // while the IO trace shows the writes means the strobe generation
+        // -- not the glue -- is the dead link.
+        uint32_t s1 = *POST_STRB1, s2 = *POST_STRB2, lb = *POST_LCTRL;
+        osd_draw_string(&fb, 4, 152, "nBE", OSD_LABEL);
+        hex(4 + 4 * 8, 152, s2 >> 16, 2);
+        osd_draw_string(&fb, 4 + 7 * 8, 152, "n94", OSD_LABEL);
+        hex(4 + 11 * 8, 152, s2 & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 14 * 8, 152, "nCC", OSD_LABEL);
+        hex(4 + 18 * 8, 152, s1 & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 21 * 8, 152, "nD", OSD_LABEL);
+        hex(4 + 24 * 8, 152, s1 >> 16, 2);
+        osd_draw_string(&fb, 4 + 27 * 8, 152, "LB", OSD_LABEL);
+        hex(4 + 30 * 8, 152, lb & 0xFFu, 2);
     }
 #endif
 

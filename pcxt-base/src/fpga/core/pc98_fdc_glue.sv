@@ -184,6 +184,20 @@ module pc98_fdc_glue (
     // the pulse died between here and the PIC.
     output logic [7:0] dbg_motor_arms,
     output logic [7:0] dbg_motor_pulses,
+    // Write-strobe witnesses, saturating: did wr_stb EVER fire for each
+    // port? The panel's motor fields said "no arm" across two builds while
+    // every decode traced clean on paper, so the question is no longer what
+    // the glue DOES with a strobe but whether one arrives at all.
+    //   dbg_strb_be  0xBE writes seen
+    //   dbg_strb_94  0x94 writes seen
+    //   dbg_strb_cc  0xCC writes seen
+    //   dbg_strb_dat 0x92/0xCA writes seen
+    //   dbg_last_ctrl the last control byte at a 0x94/0xCC strobe
+    output logic [7:0] dbg_strb_be,
+    output logic [7:0] dbg_strb_94,
+    output logic [7:0] dbg_strb_cc,
+    output logic [7:0] dbg_strb_dat,
+    output logic [7:0] dbg_last_ctrl,
     // The window register itself. 0xBE's last byte: bit0 picks which of the
     // two port groups is live, and the same bit steers the interrupts. The
     // 0xCC motor writes are only seen when bit0 is CLEAR -- np2's
@@ -291,6 +305,24 @@ module pc98_fdc_glue (
     assign dbg_motor_arms   = motor_arms;
     assign dbg_motor_pulses = motor_pulses;
     assign dbg_chg          = chgreg;
+
+    // The strobe witnesses.
+    logic [7:0] strb_be = 8'd0, strb_94 = 8'd0, strb_cc = 8'd0, strb_dat = 8'd0;
+    logic [7:0] last_ctrl_byte = 8'd0;
+    always_ff @(posedge clk) begin
+        if (wr_stb) begin
+            if (sel_mode && strb_be  != 8'hFF) strb_be  <= strb_be  + 8'd1;
+            if (sel_ctrl && ~port_2dd && strb_94 != 8'hFF) strb_94 <= strb_94 + 8'd1;
+            if (sel_ctrl &&  port_2dd && strb_cc != 8'hFF) strb_cc <= strb_cc + 8'd1;
+            if (sel_data && strb_dat != 8'hFF) strb_dat <= strb_dat + 8'd1;
+            if (sel_ctrl) last_ctrl_byte <= wr_data;
+        end
+    end
+    assign dbg_strb_be   = strb_be;
+    assign dbg_strb_94   = strb_94;
+    assign dbg_strb_cc   = strb_cc;
+    assign dbg_strb_dat  = strb_dat;
+    assign dbg_last_ctrl = last_ctrl_byte;
 
     // np2 fdc_reset (io/fdc.c:1155-1161): fdc.chgreg = 3. Bit 0 set means the
     // 0x90/0x92/0x94 window is the live one out of reset.
