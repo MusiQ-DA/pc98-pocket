@@ -3092,6 +3092,7 @@ end endgenerate
     logic           fdd_io_read;
     logic           fdd_io_read_1;
     logic           fdd_io_write;
+    logic   [7:0]   fdd_io_writedata;
     logic   [7:0]   fdd_readdata_wire;
     logic   [7:0]   fdd_dma_readdata;
     logic   [7:0]   fdd_readdata;
@@ -3196,6 +3197,17 @@ end endgenerate
         fdd_io_read        <= fdc_glue_read;
         fdd_io_read_1      <= fdd_io_read;
         fdd_io_write       <= fdc_glue_write;
+        // AND THE BYTE. fd_wdata is not the guest's byte: on a 0x94 write the
+        // glue addresses register 2 and hands over a SYNTHESISED DOR, and on
+        // a pending reset register 4 with 0x80. floppy.v was wired straight
+        // to write_to_fdd -- the raw guest byte -- so the DOR it latched was
+        // whatever the PC-98 control port happened to hold, and bit 2 of that
+        // is not "enable". LB 48 clears it, which holds floppy.v in reset:
+        // MSR never raises RQM, the BIOS polls 0x90 forever and never writes
+        // a command byte (nD 00 on metal, with n94 02 / nCC 03 above it).
+        // The address and the strobe are registered here, so the byte has to
+        // be registered with them or it arrives a cycle early.
+        fdd_io_writedata   <= fdc_glue_wdata;
     end
 `else
     always_ff @(posedge clock)
@@ -3204,6 +3216,7 @@ end endgenerate
         fdd_io_read        <= ~io_read_n & prev_io_read_n   & ~floppy0_chip_select_n;
         fdd_io_read_1      <= fdd_io_read;
         fdd_io_write       <= io_write_n & ~prev_io_write_n & ~floppy0_chip_select_n;
+        fdd_io_writedata   <= write_to_fdd;   // the PC/XT path: the guest's byte
     end
 `endif
 
@@ -3284,7 +3297,7 @@ end endgenerate
         .io_read                    (fdd_io_read),
         .io_readdata                (fdd_readdata_wire),
         .io_write                   (fdd_io_write),
-        .io_writedata               (write_to_fdd),
+        .io_writedata               (fdd_io_writedata),
 
         //        .fdd0_inserted              (),
 
