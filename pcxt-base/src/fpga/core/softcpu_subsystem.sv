@@ -1142,8 +1142,17 @@ module softcpu_subsystem (
                                             dbg_motor_pulses, dbg_motor_arms};
             // Did the glue's write strobe ever fire, per port, and what
             // was the last control byte it carried?
-            32'h5000_00D8: cpu_mem_rdata = {dbg_strb_dat, dbg_strb_cc};
-            32'h5000_00DC: cpu_mem_rdata = {dbg_strb_be, dbg_strb_94};
+            // Byte 0 and byte 2, NOT byte 0 and byte 1: postmon reads these
+            // as (x & 0xFF) and (x >> 16). Packed adjacent, the second field
+            // of each pair read back as a constant zero -- nBE and nD were
+            // structurally 00 on every panel that ever showed them, and a
+            // whole build was spent explaining a zero that was the readout's
+            // own. The other debug words here are read the same way; these
+            // two were the pair that disagreed.
+            32'h5000_00D8: cpu_mem_rdata = {8'd0, dbg_strb_dat,
+                                            8'd0, dbg_strb_cc};
+            32'h5000_00DC: cpu_mem_rdata = {8'd0, dbg_strb_be,
+                                            8'd0, dbg_strb_94};
             32'h5000_00E0: cpu_mem_rdata = {24'd0, dbg_last_ctrl};
             // The write path counted in PERIPHERALS: {any-port write
             // strobe, decode clocks} and {write levels, read levels}.
