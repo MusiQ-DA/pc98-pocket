@@ -45,6 +45,7 @@
 #define POST_INT    ((volatile uint32_t *) 0x500000B4) // {INTR level, INTR rising edges}
 #define POST_KBD    ((volatile uint32_t *) 0x500000B8) // {0x41 reads, IRQ1 rises}
 #define POST_IRQL   ((volatile uint32_t *) 0x500000BC) // {IF, timer ticks, IRQ levels}
+#define POST_PIC    ((volatile uint32_t *) 0x500000C0) // {ISR, IMR, IRR} of the master PIC
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -126,7 +127,7 @@ static uint8_t guest_peek(uint32_t addr)
 // unreadable. 192 adds the MSW/SZ/F0 row on top of that; OSD_FB_HEIGHT is
 // 200, so it still fits. 200 adds the GDC row at 190 and is the whole
 // framebuffer -- there is no room for another.
-#define PANEL_H 122
+#define PANEL_H 132
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -863,6 +864,23 @@ void post_mon_tick(void)
         hex(4 + 26 * 8, 112, (il >> 16) & 0xFFu, 2);
         osd_draw_string(&fb, 4 + 30 * 8, 112, "LVL", OSD_LABEL);
         hex(4 + 34 * 8, 112, (il >> 8) & 0xFFu, 2);
+
+        // The master PIC's own registers -- the last blind spot. IL 0 with a
+        // request line high says the chip has the request and is not passing
+        // it on, and only these three say which:
+        //
+        //   R  IRR, requests latched
+        //   M  IMR, masked off -- a SET bit is masked
+        //   S  ISR, in service. A set bit blocks itself and everything BELOW
+        //      it until an EOI clears it, and IRQ0 is the top of the master,
+        //      so S 01 stuck means nothing else on this chip can ever arrive.
+        uint32_t pc = *POST_PIC;
+        osd_draw_string(&fb, 4, 122, "R", OSD_LABEL);
+        hex(4 + 2 * 8, 122, pc & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 6 * 8, 122, "M", OSD_LABEL);
+        hex(4 + 8 * 8, 122, (pc >> 8) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 12 * 8, 122, "S", OSD_LABEL);
+        hex(4 + 14 * 8, 122, (pc >> 16) & 0xFFu, 2);
     }
 #endif
 

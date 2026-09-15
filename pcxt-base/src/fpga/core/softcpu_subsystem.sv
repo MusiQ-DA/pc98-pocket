@@ -113,6 +113,9 @@ module softcpu_subsystem (
     input  [15:0] int_count,
     input         int_live,
     // The master GDC's view, served at 0x500000B0. See PERIPHERALS.
+    input   [7:0] dbg_pic_irr,
+    input   [7:0] dbg_pic_imr,
+    input   [7:0] dbg_pic_isr,
     input   [7:0] dbg_irq_level,
     input   [7:0] dbg_timer_count,
     input   [7:0] dbg_kbd_irq_count,
@@ -1100,6 +1103,10 @@ module softcpu_subsystem (
             32'h5000_00B8: cpu_mem_rdata = {16'd0, dbg_kbd_rd_count, dbg_kbd_irq_count};
             32'h5000_00BC: cpu_mem_rdata = {8'd0,
                                             dbg_timer_count, dbg_irq_level, 8'd0};
+            // The master PIC's own three registers -- the last part of the
+            // interrupt path a panel could not see.
+            32'h5000_00C0: cpu_mem_rdata = {8'd0, dbg_pic_isr,
+                                            dbg_pic_imr, dbg_pic_irr};
             32'h5000_00B4: cpu_mem_rdata = {15'd0, int_live, int_count};
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;

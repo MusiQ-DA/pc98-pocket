@@ -53,6 +53,9 @@ module CHIPSET #(
         // an instance whose module never declared them and Quartus failed on
         // every build since.
         // The master GDC's view, carried for the POST panel. See PERIPHERALS.
+        output  logic    [7:0]  dbg_pic_irr,
+        output  logic    [7:0]  dbg_pic_imr,
+        output  logic    [7:0]  dbg_pic_isr,
         output  logic    [7:0]  dbg_irq_level,
         output  logic    [7:0]  dbg_timer_count,
         output  logic    [7:0]  dbg_kbd_irq_count,
@@ -395,6 +398,9 @@ module CHIPSET #(
         .enable_hgc                         (enable_hgc),
         .de_o                               (de_o),
         .hgc_rgb                            (hgc_rgb),
+        .dbg_pic_irr                        (dbg_pic_irr),
+        .dbg_pic_imr                        (dbg_pic_imr),
+        .dbg_pic_isr                        (dbg_pic_isr),
         .dbg_irq_level                      (dbg_irq_level),
         .dbg_timer_count                    (dbg_timer_count),
         .dbg_kbd_irq_count                  (dbg_kbd_irq_count),
