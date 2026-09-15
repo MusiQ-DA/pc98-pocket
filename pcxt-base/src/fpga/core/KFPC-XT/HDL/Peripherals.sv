@@ -747,7 +747,11 @@ module PERIPHERALS #(
     // Declared here rather than beside pc98_opna: the board's interrupt is a
     // slave-PIC line and the slave is instantiated two thousand lines before
     // the sound board is.
+`ifdef ENABLE_OPNA
     wire opna_irq;
+`else
+    wire opna_irq = 1'b0;
+`endif
 
     // The slave PIC, 0008-000F even. Its INT feeds the master's IRQ7 and its
     // cascade lines close the loop, so an IRQ8-15 acknowledge gets its vector
@@ -2873,6 +2877,7 @@ end endgenerate
         .mg_wrptr_clr       (mgmt_scsi_wr & (mgmt_scsi_reg == 4'd7) & mgmt_writedata[1])
     );
 
+`ifdef ENABLE_OPNA
     //
     // OPNA -- the PC-9801-86 sound board's YM2608 at 0x0188-0x018F
     //
@@ -2941,6 +2946,27 @@ end endgenerate
         .snd_l        (opna_snd_l),
         .snd_r        (opna_snd_r)
     );
+`else
+    // OFF BY DEFAULT, AND THE REASON IS THE DEVICE, NOT THE DESIGN.
+    //
+    // pc98_opna measures 1733 ALMs standalone against about 1806 free, which
+    // read as fitting with room to spare. It does not:
+    //
+    //   Error (170012): Fitter requires 1876 LABs to implement the design,
+    //                   but the device contains only 1848 LABs
+    //
+    // ALM count is not the binding constraint at this density. A LAB holds ten
+    // ALMs and cannot be packed arbitrarily, so 99 per cent of the ALM budget
+    // is more than 100 per cent of the LAB budget, and "73 ALMs to spare" was
+    // measuring the wrong thing.
+    //
+    // Everything stays: the vendored jt12, pc98_opna.sv, the decode above and
+    // tb_pc98_opna in CI. Define ENABLE_OPNA when there is real room -- the
+    // audio filter's fixed-coefficient rework is about 490 ALMs and is the
+    // nearest candidate.
+    assign opna_snd_l = 16'sd0;
+    assign opna_snd_r = 16'sd0;
+`endif
 `else
     // No PC-9801-86 outside the PC-98 build.
     assign opna_snd_l = 16'sd0;
@@ -3113,9 +3139,14 @@ end endgenerate
     // mgmt_readdata
     //
 `ifdef MACHINE_PC98
+`ifdef ENABLE_OPNA
     assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
                          : mgmt_opna_cs ? mgmt_opna_readdata
                          : mgmt_ide0_cs ? mgmt_ide0_readdata : mgmt_fdd_readdata;
+`else
+    assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
+                         : mgmt_ide0_cs ? mgmt_ide0_readdata : mgmt_fdd_readdata;
+`endif
 `else
     assign mgmt_readdata = mgmt_ide0_cs ? mgmt_ide0_readdata : mgmt_fdd_readdata;
 `endif
@@ -3297,11 +3328,13 @@ end endgenerate
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= scsi_data_out;
         end
+`ifdef ENABLE_OPNA
         else if (opna_read_select)
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= opna_data_out;
         end
+`endif
         else if (grcg_mode_cs & ~io_read_n)
         begin
             data_bus_out_from_chipset <= 1'b1;
