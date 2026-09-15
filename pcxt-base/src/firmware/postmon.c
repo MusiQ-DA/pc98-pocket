@@ -885,32 +885,35 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4 + 12 * 8, 122, "S", OSD_LABEL);
         hex(4 + 14 * 8, 122, (pc >> 16) & 0xFFu, 2);
 
-        // The vector byte the CPU actually received at the last INTA.
-        // The two-PIC cascade is protocol-clean (tb_pic_cascade) while the
-        // machine still lands the CPU at 0:0500, so the remaining suspects
-        // are the real bridge's INTA timing and the IVT's content:
+        // The vector byte the CPU actually received at the last INTA, and
+        // how many acknowledges there have been. The two-PIC cascade is
+        // protocol-clean (tb_pic_cascade) while the machine still parked
+        // the BIOS in the drive probe, so delivery has to be watched on
+        // metal:
         //
-        //   V 13/12  delivery worked -- look at the IVT lines below
+        //   V 13/12  a drive interrupt was delivered -- look at IVT13/12
+        //   V 09     the keyboard (unmasked all boot) -- normal while idle
         //   V 0F     the master answered its own cascade line (spurious)
         //   V 00/other  the acknowledge came back wrong
-        uint32_t pv = *POST_INTA;
+        uint32_t pv = *POST_INTA;                 // {0, vector byte, count}
         osd_draw_string(&fb, 4 + 18 * 8, 122, "V", OSD_LABEL);
-        hex(4 + 20 * 8, 122, pv & 0xFFu, 2);
+        hex(4 + 20 * 8, 122, (pv >> 16) & 0xFFu, 2);
         osd_draw_string(&fb, 4 + 24 * 8, 122, "x", OSD_LABEL);
-        hex(4 + 25 * 8, 122, (pv >> 8) & 0xFFFFu, 4);
+        hex(4 + 25 * 8, 122, pv & 0xFFFFu, 4);
 
-        // The two FDC vectors as last written by the guest. The drive probe
-        // interrupts through INT 13h (2HD) / INT 12h (2DD); zeros mean the
-        // BIOS never installed them before the interrupt fired.
+        // The two FDC vectors as last written by the guest, seg:off. The
+        // drive probe interrupts through INT 13h (2HD) / INT 12h (2DD);
+        // zeros mean the BIOS never installed them before the interrupt
+        // fired. The healthy pair reads FD80:22F7 and FD80:2369.
         uint32_t v13 = *POST_IVT13, v12 = *POST_IVT12;
         osd_draw_string(&fb, 4, 132, "V13", OSD_LABEL);
-        hex(4 + 4 * 8, 132, v13 & 0xFFFFu, 4);
+        hex(4 + 4 * 8, 132, (v13 >> 16) & 0xFFFFu, 4);
         osd_draw_string(&fb, 4 + 9 * 8, 132, ":", OSD_LABEL);
-        hex(4 + 10 * 8, 132, (v13 >> 16) & 0xFFFFu, 4);
+        hex(4 + 10 * 8, 132, v13 & 0xFFFFu, 4);
         osd_draw_string(&fb, 4 + 16 * 8, 132, "V12", OSD_LABEL);
-        hex(4 + 20 * 8, 132, v12 & 0xFFFFu, 4);
+        hex(4 + 20 * 8, 132, (v12 >> 16) & 0xFFFFu, 4);
         osd_draw_string(&fb, 4 + 25 * 8, 132, ":", OSD_LABEL);
-        hex(4 + 26 * 8, 132, (v12 >> 16) & 0xFFFFu, 4);
+        hex(4 + 26 * 8, 132, v12 & 0xFFFFu, 4);
     }
 #endif
 

@@ -183,6 +183,62 @@ module pc98_fdc_glue (
     logic [7:0] chgreg;
     logic       reset_pending;
 
+    // ---- the motor interrupt the drive probe actually waits for ---------
+    //
+    // The BIOS's 2DD init ends with (bios.rom FF6BF..FF6C5)
+    //
+    //     mov al,09h / out 0CCh      motor start: bit 0 rises
+    //     mov al,0Ch / out 0CCh      XTMASK: bit 2 set
+    //     ... then a bounded wait whose flag only the FDC's
+    //         interrupt handler ever sets
+    //
+    // and the wait never ends unless that interrupt arrives ~100 ms later.
+    // np2 produces it two ways (io/fdc.c): RECALIBRATE/SEEK always arm
+    // fdc.int_timer, and a control-write edge arms it too -- the OSASK
+    // workaround at fdc_o94 (bit7 edge with bit3) and the motor path
+    // (bit3 edge under chgreg&4, disk-ready). floppy.v covers the command
+    // completions; nothing covered the control-write one, because the old
+    // STUB owned it -- Peripherals' fdd_cc_irq, which PC98_FDC_REAL quietly
+    // disconnected when the real controller took over. Every boot since has
+    // parked the BIOS in that wait (LIVE 0050x polling the disk work at
+    // 0x0500, IO ending 00BE 00CC 00CC).
+    //
+    // The arm below is the stub's proven-on-hardware contract rather than
+    // np2's: bit 0's RISING edge on a control write to the LIVE window arms
+    // a ~100 ms timer, and expiry pulses the steered line for one clock --
+    // one whole edge to the 8259 -- but only when the latched bit 2
+    // (XTMASK) is set, which the 0x0C write supplies. The BIOS's own pair
+    // 09h then 0Ch is exactly arm-then-gate.
+    logic        motor_armed;
+    logic [22:0] motor_timer;
+    logic        motor_pulse;
+
+    always_ff @(posedge clk, posedge rst) begin
+        if (rst) begin
+            motor_armed <= 1'b0;
+            motor_timer <= 23'd0;
+            motor_pulse <= 1'b0;
+        end
+        else begin
+            // ctrl_q still holds the PREVIOUS byte while the strobe is up,
+            // so "new bit0 up against old bit0 down" is the edge itself.
+            if (wr_stb && sel_ctrl && group_live && wr_data[0] && !ctrl_q[0]) begin
+                motor_armed <= 1'b1;
+                motor_timer <= 23'd0;
+            end
+            if (motor_armed) begin
+                if (motor_timer == 23'd4_295_000) begin   // ~100 ms at 42.95 MHz
+                    motor_armed <= 1'b0;
+                    motor_pulse <= ctrl_q[2];
+                end
+                else
+                    motor_timer <= motor_timer + 23'd1;
+            end
+            else if (motor_pulse)
+                motor_pulse <= 1'b0;   // one clock is a whole edge
+        end
+    end
+
     // np2 fdc_reset (io/fdc.c:1155-1161): fdc.chgreg = 3. Bit 0 set means the
     // 0x90/0x92/0x94 window is the live one out of reset.
     always_ff @(posedge clk, posedge rst) begin
@@ -204,9 +260,11 @@ module pc98_fdc_glue (
                                        : 8'h44;  // 0x40 |               0x04
 
     // np2's pic_setirq(0x0b) / pic_setirq(0x0a), io/fdc.c:47-51: the same
-    // chgreg bit that picks the window picks the interrupt.
-    assign irq_2hd =  fd_irq &  chgreg[0];
-    assign irq_2dd =  fd_irq & ~chgreg[0];
+    // chgreg bit that picks the window picks the interrupt. The motor timer
+    // below rides the same steering, the way np2's fdc_interrupt() does.
+    wire fd_irq_any = fd_irq | motor_pulse;
+    assign irq_2hd =  fd_irq_any &  chgreg[0];
+    assign irq_2dd =  fd_irq_any & ~chgreg[0];
 
     // Only the live window reads the chip. The dead one is answered with 0xFF
     // by the chipset and never reaches floppy.v, so it cannot lower irq.
