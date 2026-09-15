@@ -86,7 +86,8 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # Register and floppy.v needs one. pc98_fdc_glue makes that translation and
 # tb_pc98_fdc_glue pins it -- which is the bench the PERIPHERALS comment asked
 # for before this switch was allowed to move.
-# DISABLED AGAIN -- switching it on stopped the boot at MEMORY 640KB OK.
+# IT WAS DISABLED TWICE, and both reasons are now fixed. The first: switching
+# it on stopped the boot at MEMORY 640KB OK.
 #
 # The panel named it: the last four I/O writes were 00BE 00CC 00CC, the
 # 2HD/2DD mode port and the 2DD control port, so the guest was inside the FDC
@@ -95,8 +96,7 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # ports has no interrupt line at all, which is why the boot got past here for
 # as long as it did.
 #
-# THE INTERRUPT CONTRACT IS NOW SETTLED AND IMPLEMENTED -- and the macro still
-# stays off, for a DIFFERENT and measured reason. What was found:
+# THE INTERRUPT CONTRACT IS SETTLED AND IMPLEMENTED. What was found:
 #
 #   * The routing was wrong, not the acknowledge. A PC-98's FDC interrupt is a
 #     SLAVE line -- IRQ11 (INT 13h) for the 2HD register window, IRQ10 (INT 12h)
@@ -122,19 +122,40 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # STATUS, read ST0 -- raises the interrupt on IRQ11 and puts it down again, and
 # a second command raises a fresh one.
 #
-# WHAT STOPS IT NOW, measured by that same bench: floppy.v with NO DISK IN THE
-# DRIVE hangs on READ DATA. cmd_read_write_hang_at_start accepts the command,
-# sets CB, and then does nothing -- it is in neither enter_result_phase nor
-# raise_interrupt -- so the MSR parks at 0x90 for good. The BIOS waits for CB to
-# clear before it may send any further command (FFA0B), so one IPL read with an
-# empty drive kills the controller for the rest of POST. That read is issued
-# right after MEMORY 640KB OK. The hand-tuned stub answered the same probe with
-# seven bytes meaning "no drive", which is why it boots.
+# WHAT USED TO STOP IT, and no longer does: floppy.v with NO DISK IN THE DRIVE
+# -- this core's normal state -- hung. Each of the three commands that need
+# media had a *_hang_at_start wire named after what it did: accept the command
+# (command_first has already set CB) and then answer nothing, being in neither
+# enter_result_phase nor raise_interrupt, so the MSR parked at 0x90 for good.
+# The BIOS's FFA0B will not send another command until CB clears and FF966
+# spins 40*65536 polls for the interrupt, so one IPL probe of an empty drive --
+# issued right after MEMORY 640KB OK -- cost every later FDC call an AH=0x90
+# timeout at FFA57. The hand-tuned stub answered the same probe with seven
+# bytes meaning "no drive", which is the only reason the machine ever booted.
 #
-# So the next step is floppy.v's no-media path, not the glue: READ DATA and
-# READ ID with no media have to end in a result phase with a not-ready status
-# instead of hanging. Turn this on with THAT in hand.
-# set_global_assignment -name VERILOG_MACRO "PC98_FDC_REAL=1"
+# floppy.v now ends those commands properly, under a new NOT_READY_ENDS_COMMAND
+# parameter that Peripherals.sv sets from MACHINE_PC98 -- a PC-98's 2HD/2DD
+# drives drive a real READY line, a PC/AT's do not (pin 34 is DISK CHANGE), so
+# the PC/XT build passes 0, every wire the change adds constant-folds away and
+# its behaviour is unchanged. What an empty PC-98 drive answers instead comes
+# from np2kai: READ/WRITE DATA and FORMAT go through FDC_DriveCheck (io/fdc.c:
+# 176-182) to ST0 = FDCRLT_IC0|FDCRLT_NR|(hd<<2)|us = 0x48, ST1 = ST2 = 0,
+# C/H/R/N echoed, seven bytes and an interrupt (fdcsend_error7, io/fdc.c:
+# 97-117); READ ID (io/fdc.c:646-650) gives IC0|ND, ST0 = 0x40 / ST1 = 0x04.
+# The BIOS's own result decoder at FF98F reads that back the way it is meant
+# to: ST0 & 0xC0 nonzero -> FF9A1, EC (0x10) tested FIRST -> AH=0x40, then NR
+# (0x08) -> AH=0x60, "drive not ready" -- the answer the IPL can carry on from.
+#
+# sim/tb_pc98_fdc_glue proves it against the real floppy.v behind the real
+# glue: an empty-drive READ DATA interrupts on IRQ11, offers MSR 0xD0, hands
+# back 48 00 00 00 00 01 02 and leaves CB CLEAR, a second one behaves the same,
+# READ ID and FORMAT likewise, and a disk put back in still takes the old path.
+# Every one of those checks was mutation-tested: with the parameter at 0 the
+# new section fails 20 ways and the MSR reads 0x90, the old hang, for all three
+# commands. (That also corrected the previous note here, which recorded READ ID
+# as "fine" -- it had been measured against a drive that still had the earlier
+# section's disk in it, because media_present has no reset in floppy.v.)
+set_global_assignment -name VERILOG_MACRO "PC98_FDC_REAL=1"
 
 # Route SDRAM through sdram_mp (via sdram_kf_shim) instead of KFSDRAM.
 # RAM.sv tests this with `ifdef, so setting it to 0 would still select the shim
