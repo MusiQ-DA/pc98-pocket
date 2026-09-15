@@ -178,6 +178,14 @@ module PERIPHERALS #(
     // garbage) means the acknowledge itself came back wrong.
     output  logic    [7:0]  dbg_inta_vec,
     output  logic   [15:0]  dbg_inta_count,
+    // The slave PIC's own three, and the motor timer's progress. The drive
+    // probe's interrupt dies somewhere between a 0xCC write and the slave's
+    // IRR; these four say exactly which link gave out.
+    output  logic    [7:0]  dbg_pic2_irr,
+    output  logic    [7:0]  dbg_pic2_imr,
+    output  logic    [7:0]  dbg_pic2_isr,
+    output  logic    [7:0]  dbg_motor_arms,
+    output  logic    [7:0]  dbg_motor_pulses,
     output  logic    [7:0]  dbg_irq_level,
     output  logic    [7:0]  dbg_timer_count,
     output  logic    [7:0]  dbg_kbd_irq_count,
@@ -840,6 +848,9 @@ module PERIPHERALS #(
         .data_bus_in                (internal_data_bus),
         .data_bus_out               (interrupt2_data_bus_out),
         .data_bus_io                (interrupt2_data_bus_io),
+        .dbg_irr                    (dbg_pic2_irr),
+        .dbg_imr                    (dbg_pic2_imr),
+        .dbg_isr                    (dbg_pic2_isr),
 
         // I/O
         .cascade_in                 (interrupt_cascade_out),
@@ -3136,7 +3147,9 @@ end endgenerate
         .mode_readback (fdc_mode_readback),
         .group_live    (fdc_group_live),
         .irq_2hd       (fdc_glue_irq_2hd),
-        .irq_2dd       (fdc_glue_irq_2dd)
+        .irq_2dd       (fdc_glue_irq_2dd),
+        .dbg_motor_arms   (dbg_motor_arms),
+        .dbg_motor_pulses (dbg_motor_pulses)
     );
 
     always_ff @(posedge clock)

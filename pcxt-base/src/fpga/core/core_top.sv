@@ -997,6 +997,11 @@ module core_top (
     wire  [7:0] dbg_pic_isr;
     wire  [7:0] dbg_inta_vec;
     wire [15:0] dbg_inta_count;
+    wire  [7:0] dbg_pic2_irr;
+    wire  [7:0] dbg_pic2_imr;
+    wire  [7:0] dbg_pic2_isr;
+    wire  [7:0] dbg_motor_arms;
+    wire  [7:0] dbg_motor_pulses;
     wire  [7:0] dbg_irq_level;
     wire  [7:0] dbg_timer_count;
     // IF was going to come from psw bit 9 in v30_core's dbg_regs. That port is
@@ -1152,6 +1157,11 @@ module core_top (
         .dbg_pic_isr                (dbg_pic_isr),
         .dbg_inta_vec               (dbg_inta_vec),
         .dbg_inta_count             (dbg_inta_count),
+        .dbg_pic2_irr               (dbg_pic2_irr),
+        .dbg_pic2_imr               (dbg_pic2_imr),
+        .dbg_pic2_isr               (dbg_pic2_isr),
+        .dbg_motor_arms             (dbg_motor_arms),
+        .dbg_motor_pulses           (dbg_motor_pulses),
         .dbg_irq_level              (dbg_irq_level),
         .dbg_timer_count            (dbg_timer_count),
         .dbg_kbd_irq_count          (dbg_kbd_irq_count),
@@ -2536,6 +2546,11 @@ module core_top (
         .dbg_pic_isr                        (dbg_pic_isr),
         .dbg_inta_vec                       (dbg_inta_vec),
         .dbg_inta_count                     (dbg_inta_count),
+        .dbg_pic2_irr                       (dbg_pic2_irr),
+        .dbg_pic2_imr                       (dbg_pic2_imr),
+        .dbg_pic2_isr                       (dbg_pic2_isr),
+        .dbg_motor_arms                     (dbg_motor_arms),
+        .dbg_motor_pulses                   (dbg_motor_pulses),
         .dbg_irq_level                      (dbg_irq_level),
         .dbg_timer_count                    (dbg_timer_count),
         .dbg_kbd_irq_count                  (dbg_kbd_irq_count),
