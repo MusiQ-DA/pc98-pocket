@@ -54,6 +54,8 @@
 #define POST_STRB1  ((volatile uint32_t *) 0x500000D8) // {data strobes, 0xCC strobes}
 #define POST_STRB2  ((volatile uint32_t *) 0x500000DC) // {0xBE strobes, 0x94 strobes}
 #define POST_LCTRL  ((volatile uint32_t *) 0x500000E0) // last control byte the glue saw
+#define POST_WPATH  ((volatile uint32_t *) 0x500000E4) // {io_write strobes, decode clocks}
+#define POST_RWLVL  ((volatile uint32_t *) 0x500000E8) // {write levels, read levels}
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -135,7 +137,7 @@ static uint8_t guest_peek(uint32_t addr)
 // unreadable. 192 adds the MSW/SZ/F0 row on top of that; OSD_FB_HEIGHT is
 // 200, so it still fits. 200 adds the GDC row at 190 and is the whole
 // framebuffer -- there is no room for another.
-#define PANEL_H 162
+#define PANEL_H 172
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -973,6 +975,21 @@ void post_mon_tick(void)
         hex(4 + 24 * 8, 152, s1 >> 16, 2);
         osd_draw_string(&fb, 4 + 27 * 8, 152, "LB", OSD_LABEL);
         hex(4 + 30 * 8, 152, lb & 0xFFu, 2);
+
+        // The write path counted in PERIPHERALS itself: EX = pc98_io_exact
+        // clocks, RD/WR = read/write levels on the FDC selects, ST = the
+        // raw io_write_n strobe (any port). EX 00 convicts the decode;
+        // RD>0 WR 00 convicts io_write_n for these ports; WR>0 ST 00
+        // convicts the edge detector.
+        uint32_t wp = *POST_WPATH, wl = *POST_RWLVL;
+        osd_draw_string(&fb, 4, 162, "EX", OSD_LABEL);
+        hex(4 + 3 * 8, 162, wp & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 6 * 8, 162, "RD", OSD_LABEL);
+        hex(4 + 9 * 8, 162, wl & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 12 * 8, 162, "WR", OSD_LABEL);
+        hex(4 + 15 * 8, 162, (wl >> 8) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 18 * 8, 162, "ST", OSD_LABEL);
+        hex(4 + 21 * 8, 162, (wp >> 8) & 0xFFu, 2);
     }
 #endif
 
