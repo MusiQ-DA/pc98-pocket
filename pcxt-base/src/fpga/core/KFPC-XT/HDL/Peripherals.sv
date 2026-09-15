@@ -192,6 +192,11 @@ module PERIPHERALS #(
     output  logic    [7:0]  dbg_strb_cc,
     output  logic    [7:0]  dbg_strb_dat,
     output  logic    [7:0]  dbg_last_ctrl,
+    // The write path counted in PERIPHERALS, before any glue: {raw write
+    // strobe, pc98_io_exact clocks} and {write levels, read levels} on the
+    // FDC port selects.
+    output  logic   [15:0]  dbg_w_path,
+    output  logic   [15:0]  dbg_rw_lvl,
     output  logic    [7:0]  dbg_irq_level,
     output  logic    [7:0]  dbg_timer_count,
     output  logic    [7:0]  dbg_kbd_irq_count,
@@ -3212,6 +3217,32 @@ end endgenerate
     // 2HD/2DD drives return READY and a PC/AT's do not (see floppy.v). With no
     // disk in the drive -- this core's normal state -- it is the difference
     // between a result phase carrying ST0 = 48h and a CB bit that never clears.
+
+    // ---- write-path witnesses, counted HERE, before any glue ------------
+    //
+    // The glue's strobe counters came back all zero while the IO trace showed
+    // the writes, and G 03 hints the 0xBE READ path works -- so the split to
+    // make is decode/level/edge, each counted on the same ports:
+    //   w_ioexact   clocks pc98_io_exact was true at all
+    //   w_rd_lvl    read levels on fdd_94|cc|be selects (~io_read_n)
+    //   w_wr_lvl    write levels on the same selects (~io_write_n)
+    //   w_wr_edge   the raw io_write_n & ~prev_io_write_n strobe, any port
+    logic [7:0] w_ioexact = 8'd0, w_rd_lvl = 8'd0, w_wr_lvl = 8'd0, w_wr_edge = 8'd0;
+    always_ff @(posedge clock) begin
+        if (pc98_io_exact && w_ioexact != 8'hFF)
+            w_ioexact <= w_ioexact + 8'd1;
+        if ((fdd_94_select | fdd_cc_select | fdd_be_select) & ~io_read_n
+            && w_rd_lvl != 8'hFF)
+            w_rd_lvl <= w_rd_lvl + 8'd1;
+        if ((fdd_94_select | fdd_cc_select | fdd_be_select) & ~io_write_n
+            && w_wr_lvl != 8'hFF)
+            w_wr_lvl <= w_wr_lvl + 8'd1;
+        if (io_write_n & ~prev_io_write_n && w_wr_edge != 8'hFF)
+            w_wr_edge <= w_wr_edge + 8'd1;
+    end
+    assign dbg_w_path = {w_wr_edge, w_ioexact};   // [15:8] edge, [7:0] decode
+    assign dbg_rw_lvl = {w_wr_lvl, w_rd_lvl};     // [15:8] writes, [7:0] reads
+
     floppy #(
 `ifdef MACHINE_PC98
         .NOT_READY_ENDS_COMMAND     (1)
