@@ -266,12 +266,12 @@ jobs:
         run: |
           S=pcxt-base/src/fpga/core
           H=$S/KFPC-XT/HDL
-          for tb in tb_pic_irq0_edge tb_pit_boot_seq; do
+          for tb in tb_pic_irq0_edge tb_pit_boot_seq tb_pic_cascade; do
             verilator --binary --timing -Wno-fatal --top-module $tb \
               -Isim -I$S -I$H -I$H/KF8253/HDL -I$H/KF8259/HDL \
               sim/$tb.sv -o e --Mdir obj_$tb
             ./obj_$tb/e | tee $tb.log
-            grep -q "RESULT: PASS" $tb.log
+            grep -q "RESULT: PASS\|PASS tb_" $tb.log
           done
 
       - name: 8088 read timing (the check every other bench was missing)

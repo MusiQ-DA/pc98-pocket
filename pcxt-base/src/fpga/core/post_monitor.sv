@@ -67,6 +67,15 @@ module post_monitor #(
     output logic [15:0] ivt16_off,
     output logic [15:0] ivt16_seg,
     output logic  [7:0] ivt16_wr_count,
+    // The two FDC vectors, same treatment. The 2HD handler goes to INT 13h
+    // (0x4C-0x4F) and the 2DD handler to INT 12h (0x48-0x4B); the drive
+    // probe interrupts through them, and a machine that lands the CPU at
+    // 0:0500 needs to say whether these were ever installed and what they
+    // pointed at when the interrupt fired.
+    output logic [15:0] ivt13_off,
+    output logic [15:0] ivt13_seg,
+    output logic [15:0] ivt12_off,
+    output logic [15:0] ivt12_seg,
     // Diagnostics for the snoop itself. NW came back 0 on hardware, so one of
     // the terms in the filter is wrong; counting them separately says which,
     // instead of another round of guessing.
@@ -194,6 +203,8 @@ module post_monitor #(
     // bus the POST codes come from and never asks for it.
     wire mem_write = ~memory_write_n & ~address_enable_n;
     wire in_ivt16  = (address[19:2] == 18'h00016);   // 0x58..0x5B
+    wire in_ivt13  = (address[19:2] == 18'h00013);   // 0x4C..0x4F
+    wire in_ivt12  = (address[19:2] == 18'h00012);   // 0x48..0x4B
     logic mem_write_q, mem_write_q_raw, mem_read_q_raw;
     logic [7:0] tv_wr_data;
     logic [15:0] io_port_q;
@@ -296,6 +307,10 @@ module post_monitor #(
             ivt16_off     <= 16'h0;
             ivt16_seg     <= 16'h0;
             ivt16_wr_count<= 8'd0;
+            ivt13_off     <= 16'h0;
+            ivt13_seg     <= 16'h0;
+            ivt12_off     <= 16'h0;
+            ivt12_seg     <= 16'h0;
             is_post_q     <= 1'b0;
             is_post_d     <= 1'b0;
             data_q        <= 8'h00;
@@ -409,14 +424,41 @@ module post_monitor #(
             if (~memory_read_n && rd_low_cycles != 16'hFFFF)
                 rd_low_cycles <= rd_low_cycles + 16'd1;
 
-            if (~memory_write_n && ~mem_write_q_raw && in_ivt16) begin
+            // Latch the lane on EVERY clock the write is active, not just its
+            // opening edge: data settles mid-cycle on this bus, and the
+            // first-cut opening-edge latch here kept the stale byte (the
+            // bench writes C3 before the real value) -- the same trap the
+            // POST-code path documents above.
+            if (mem_write && in_ivt16) begin
                 case (address[1:0])
                     2'd0: ivt16_off[7:0]   <= cpu_data;
                     2'd1: ivt16_off[15:8]  <= cpu_data;
                     2'd2: ivt16_seg[7:0]   <= cpu_data;
                     2'd3: ivt16_seg[15:8]  <= cpu_data;
                 endcase
-                if (ivt16_wr_count != 8'hFF) ivt16_wr_count <= ivt16_wr_count + 8'd1;
+            end
+            // One count per write, not one per clock the strobe is held.
+            if (mem_write && ~mem_write_q && in_ivt16
+                                         && ivt16_wr_count != 8'hFF)
+                ivt16_wr_count <= ivt16_wr_count + 8'd1;
+
+            // The FDC vectors, same shape: keep the last byte seen while the
+            // write is in flight.
+            if (mem_write && in_ivt13) begin
+                case (address[1:0])
+                    2'd0: ivt13_off[7:0]   <= cpu_data;
+                    2'd1: ivt13_off[15:8]  <= cpu_data;
+                    2'd2: ivt13_seg[7:0]   <= cpu_data;
+                    2'd3: ivt13_seg[15:8]  <= cpu_data;
+                endcase
+            end
+            if (mem_write && in_ivt12) begin
+                case (address[1:0])
+                    2'd0: ivt12_off[7:0]   <= cpu_data;
+                    2'd1: ivt12_off[15:8]  <= cpu_data;
+                    2'd2: ivt12_seg[7:0]   <= cpu_data;
+                    2'd3: ivt12_seg[15:8]  <= cpu_data;
+                endcase
             end
 
             io_write_q <= io_write;

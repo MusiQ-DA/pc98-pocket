@@ -169,6 +169,15 @@ module PERIPHERALS #(
     output  logic    [7:0]  dbg_pic_irr,
     output  logic    [7:0]  dbg_pic_imr,
     output  logic    [7:0]  dbg_pic_isr,
+    // The vector byte the CPU actually received on the second INTA pulse,
+    // and how many acknowledges there have been. The two-PIC cascade was
+    // proven right at the protocol level (tb_pic_cascade) while the machine
+    // still landed the CPU at 0:0500 -- so the remaining suspects are the
+    // real bridge's INTA timing and the IVT's content, and this byte is what
+    // splits them: 0x12/0x13 means delivery worked, anything else (0x0F, 0x00,
+    // garbage) means the acknowledge itself came back wrong.
+    output  logic    [7:0]  dbg_inta_vec,
+    output  logic   [15:0]  dbg_inta_count,
     output  logic    [7:0]  dbg_irq_level,
     output  logic    [7:0]  dbg_timer_count,
     output  logic    [7:0]  dbg_kbd_irq_count,
@@ -3353,6 +3362,39 @@ end endgenerate
     // data_bus_out
     //
     
+    // The vector byte of the LAST acknowledge, latched as the SECOND pulse
+    // of the pair closes. The 8288 sequences two pulses per interrupt and
+    // the chip answers on the second, so the byte sitting on the mux below
+    // near the end of that pulse is what the CPU takes.
+    logic       inta_q;
+    logic       inta_second;         // 1 while the pulse in flight is #2
+    logic [7:0] inta_vec_sample;
+    always_ff @(posedge clock) inta_q <= interrupt_acknowledge_n;
+    always_ff @(posedge clock or posedge reset) begin
+        if (reset) begin
+            inta_second     <= 1'b0;
+            inta_vec_sample <= 8'h00;
+            dbg_inta_vec    <= 8'h00;
+            dbg_inta_count  <= 16'd0;
+        end
+        else begin
+            // Track the bus through the pulse; the answer is on it well
+            // before the pulse ends.
+            if (~interrupt_acknowledge_n)
+                inta_vec_sample <= data_bus_out;
+            // A pulse just closed. The second of the pair carried the
+            // vector -- keep it.
+            if (~inta_q && interrupt_acknowledge_n) begin
+                if (inta_second) begin
+                    dbg_inta_vec <= inta_vec_sample;
+                    if (dbg_inta_count != 16'hFFFF)
+                        dbg_inta_count <= dbg_inta_count + 16'd1;
+                end
+                inta_second <= ~inta_second;
+            end
+        end
+    end
+
     always_ff @(posedge clock)
     begin
         if (~interrupt_acknowledge_n)

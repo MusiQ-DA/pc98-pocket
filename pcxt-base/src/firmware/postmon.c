@@ -46,6 +46,9 @@
 #define POST_KBD    ((volatile uint32_t *) 0x500000B8) // {0x41 reads, IRQ1 rises}
 #define POST_IRQL   ((volatile uint32_t *) 0x500000BC) // {IF, timer ticks, IRQ levels}
 #define POST_PIC    ((volatile uint32_t *) 0x500000C0) // {ISR, IMR, IRR} of the master PIC
+#define POST_INTA   ((volatile uint32_t *) 0x500000C4) // {vector byte, INTA count}
+#define POST_IVT13  ((volatile uint32_t *) 0x500000C8) // INT 13h vector {seg, off}
+#define POST_IVT12  ((volatile uint32_t *) 0x500000CC) // INT 12h vector {seg, off}
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -127,7 +130,7 @@ static uint8_t guest_peek(uint32_t addr)
 // unreadable. 192 adds the MSW/SZ/F0 row on top of that; OSD_FB_HEIGHT is
 // 200, so it still fits. 200 adds the GDC row at 190 and is the whole
 // framebuffer -- there is no room for another.
-#define PANEL_H 132
+#define PANEL_H 142
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -881,6 +884,33 @@ void post_mon_tick(void)
         hex(4 + 8 * 8, 122, (pc >> 8) & 0xFFu, 2);
         osd_draw_string(&fb, 4 + 12 * 8, 122, "S", OSD_LABEL);
         hex(4 + 14 * 8, 122, (pc >> 16) & 0xFFu, 2);
+
+        // The vector byte the CPU actually received at the last INTA.
+        // The two-PIC cascade is protocol-clean (tb_pic_cascade) while the
+        // machine still lands the CPU at 0:0500, so the remaining suspects
+        // are the real bridge's INTA timing and the IVT's content:
+        //
+        //   V 13/12  delivery worked -- look at the IVT lines below
+        //   V 0F     the master answered its own cascade line (spurious)
+        //   V 00/other  the acknowledge came back wrong
+        uint32_t pv = *POST_INTA;
+        osd_draw_string(&fb, 4 + 18 * 8, 122, "V", OSD_LABEL);
+        hex(4 + 20 * 8, 122, pv & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 24 * 8, 122, "x", OSD_LABEL);
+        hex(4 + 25 * 8, 122, (pv >> 8) & 0xFFFFu, 4);
+
+        // The two FDC vectors as last written by the guest. The drive probe
+        // interrupts through INT 13h (2HD) / INT 12h (2DD); zeros mean the
+        // BIOS never installed them before the interrupt fired.
+        uint32_t v13 = *POST_IVT13, v12 = *POST_IVT12;
+        osd_draw_string(&fb, 4, 132, "V13", OSD_LABEL);
+        hex(4 + 4 * 8, 132, v13 & 0xFFFFu, 4);
+        osd_draw_string(&fb, 4 + 9 * 8, 132, ":", OSD_LABEL);
+        hex(4 + 10 * 8, 132, (v13 >> 16) & 0xFFFFu, 4);
+        osd_draw_string(&fb, 4 + 16 * 8, 132, "V12", OSD_LABEL);
+        hex(4 + 20 * 8, 132, v12 & 0xFFFFu, 4);
+        osd_draw_string(&fb, 4 + 25 * 8, 132, ":", OSD_LABEL);
+        hex(4 + 26 * 8, 132, (v12 >> 16) & 0xFFFFu, 4);
     }
 #endif
 

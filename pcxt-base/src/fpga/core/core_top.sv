@@ -995,6 +995,8 @@ module core_top (
     wire  [7:0] dbg_pic_irr;
     wire  [7:0] dbg_pic_imr;
     wire  [7:0] dbg_pic_isr;
+    wire  [7:0] dbg_inta_vec;
+    wire [15:0] dbg_inta_count;
     wire  [7:0] dbg_irq_level;
     wire  [7:0] dbg_timer_count;
     // IF was going to come from psw bit 9 in v30_core's dbg_regs. That port is
@@ -1124,6 +1126,10 @@ module core_top (
         .post_restarts              (post_restarts),
         .ivt16_off                  (ivt16_off),
         .ivt16_seg                  (ivt16_seg),
+        .ivt13_off                  (ivt13_off),
+        .ivt13_seg                  (ivt13_seg),
+        .ivt12_off                  (ivt12_off),
+        .ivt12_seg                  (ivt12_seg),
         .ivt16_wr_count             (ivt16_wr_count),
         .wr_any_count               (wr_any_count),
         .tvram_wr_count             (tvram_wr_count),
@@ -1144,6 +1150,8 @@ module core_top (
         .dbg_pic_irr                (dbg_pic_irr),
         .dbg_pic_imr                (dbg_pic_imr),
         .dbg_pic_isr                (dbg_pic_isr),
+        .dbg_inta_vec               (dbg_inta_vec),
+        .dbg_inta_count             (dbg_inta_count),
         .dbg_irq_level              (dbg_irq_level),
         .dbg_timer_count            (dbg_timer_count),
         .dbg_kbd_irq_count          (dbg_kbd_irq_count),
@@ -2061,6 +2069,7 @@ module core_top (
     wire [15:0] post_restarts;
     wire [15:0] ivt16_off, ivt16_seg;
     wire  [7:0] ivt16_wr_count;
+    wire [15:0] ivt13_off, ivt13_seg, ivt12_off, ivt12_seg;
     wire [15:0] wr_any_count, rd_any_count, ivt_touch_count;
     wire [15:0] tvram_wr_count;
     wire [19:0] wr_last_addr;
@@ -2105,6 +2114,10 @@ module core_top (
         .ivt16_off      (ivt16_off),
         .ivt16_seg      (ivt16_seg),
         .ivt16_wr_count (ivt16_wr_count),
+        .ivt13_off      (ivt13_off),
+        .ivt13_seg      (ivt13_seg),
+        .ivt12_off      (ivt12_off),
+        .ivt12_seg      (ivt12_seg),
         .wr_any_count   (wr_any_count),
         .tvram_wr_count (tvram_wr_count),
         .rd_any_count   (rd_any_count),
@@ -2521,6 +2534,8 @@ module core_top (
         .dbg_pic_irr                        (dbg_pic_irr),
         .dbg_pic_imr                        (dbg_pic_imr),
         .dbg_pic_isr                        (dbg_pic_isr),
+        .dbg_inta_vec                       (dbg_inta_vec),
+        .dbg_inta_count                     (dbg_inta_count),
         .dbg_irq_level                      (dbg_irq_level),
         .dbg_timer_count                    (dbg_timer_count),
         .dbg_kbd_irq_count                  (dbg_kbd_irq_count),

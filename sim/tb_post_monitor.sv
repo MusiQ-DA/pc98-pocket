@@ -365,6 +365,43 @@ module tb_post_monitor;
         $display("  128KB instruments: MSW %02h  SZ %02h  F0 %0d",
                  u_dut.memsw_seen, u_dut.memsize_seen, u_dut.f0_count);
 
+        // ---------------------------------------------- the FDC vector watches
+        //
+        // IVT13/IVT12 exist to say whether the BIOS installed the drive
+        // handlers before the probe's interrupt fired. Pin the same shape as
+        // ivt16: the four bytes land in the right lanes, the neighbour
+        // vector does not leak, and a later overwrite replaces the value.
+        mem_write(20'h0004C, 8'hF6);             // INT 13h offset lo
+        mem_write(20'h0004D, 8'hFA);             // offset hi
+        mem_write(20'h0004E, 8'h00);             // segment lo
+        mem_write(20'h0004F, 8'hF0);             // segment hi
+        if (u_dut.ivt13_off !== 16'hFAF6 || u_dut.ivt13_seg !== 16'hF000) begin
+            $display("  FAIL IVT13 = %04h:%04h (want F000:FAF6)",
+                     u_dut.ivt13_seg, u_dut.ivt13_off); errors++;
+        end
+        mem_write(20'h00048, 8'hF7);             // INT 12h
+        mem_write(20'h00049, 8'hFA);
+        mem_write(20'h0004A, 8'h00);
+        mem_write(20'h0004B, 8'hF0);
+        if (u_dut.ivt12_off !== 16'hFAF7 || u_dut.ivt12_seg !== 16'hF000) begin
+            $display("  FAIL IVT12 = %04h:%04h (want F000:FAF7)",
+                     u_dut.ivt12_seg, u_dut.ivt12_off); errors++;
+        end
+        // A neighbour's write must not leak into the watched slots.
+        mem_write(20'h00047, 8'hED);
+        mem_write(20'h00050, 8'hDC);
+        if (u_dut.ivt12_off !== 16'hFAF7 || u_dut.ivt13_off !== 16'hFAF6) begin
+            $display("  FAIL neighbour leaked into IVT12/13"); errors++;
+        end
+        // And a later install replaces, as the BIOS re-init would.
+        mem_write(20'h0004D, 8'hB6);
+        if (u_dut.ivt13_off !== 16'hB6F6) begin
+            $display("  FAIL IVT13 did not update: %04h", u_dut.ivt13_off); errors++;
+        end
+        $display("  FDC vectors: V13 %04h:%04h  V12 %04h:%04h",
+                 u_dut.ivt13_seg, u_dut.ivt13_off,
+                 u_dut.ivt12_seg, u_dut.ivt12_off);
+
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");
         $finish;
