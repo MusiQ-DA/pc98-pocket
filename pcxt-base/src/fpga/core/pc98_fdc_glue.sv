@@ -176,7 +176,14 @@ module pc98_fdc_glue (
     output logic [7:0] mode_readback,  // 0xBE read
     output logic       group_live,     // this cycle's window is the selected one
     output logic       irq_2hd,        // slave IRQ11 -> INT 13h
-    output logic       irq_2dd         // slave IRQ10 -> INT 12h
+    output logic       irq_2dd,        // slave IRQ10 -> INT 12h
+    // How far the motor timer got, saturating: arms (a live-window control
+    // write with bit 0 rising) and expiry pulses delivered to the steering.
+    // The BIOS's motor wait needs BOTH to move; a stuck pair says the write
+    // never armed the timer, a moved pair with the slave's IRR empty says
+    // the pulse died between here and the PIC.
+    output logic [7:0] dbg_motor_arms,
+    output logic [7:0] dbg_motor_pulses
 );
 
     logic [7:0] ctrl_q;
@@ -212,12 +219,16 @@ module pc98_fdc_glue (
     logic        motor_armed;
     logic [22:0] motor_timer;
     logic        motor_pulse;
+    logic [7:0]  motor_arms   = 8'd0;
+    logic [7:0]  motor_pulses = 8'd0;
 
     always_ff @(posedge clk, posedge rst) begin
         if (rst) begin
-            motor_armed <= 1'b0;
-            motor_timer <= 23'd0;
-            motor_pulse <= 1'b0;
+            motor_armed   <= 1'b0;
+            motor_timer   <= 23'd0;
+            motor_pulse   <= 1'b0;
+            motor_arms    <= 8'd0;
+            motor_pulses  <= 8'd0;
         end
         else begin
             // ctrl_q still holds the PREVIOUS byte while the strobe is up,
@@ -225,11 +236,13 @@ module pc98_fdc_glue (
             if (wr_stb && sel_ctrl && group_live && wr_data[0] && !ctrl_q[0]) begin
                 motor_armed <= 1'b1;
                 motor_timer <= 23'd0;
+                if (motor_arms != 8'hFF) motor_arms <= motor_arms + 8'd1;
             end
             if (motor_armed) begin
                 if (motor_timer == 23'd4_295_000) begin   // ~100 ms at 42.95 MHz
                     motor_armed <= 1'b0;
                     motor_pulse <= ctrl_q[2];
+                    if (motor_pulses != 8'hFF) motor_pulses <= motor_pulses + 8'd1;
                 end
                 else
                     motor_timer <= motor_timer + 23'd1;
@@ -238,6 +251,8 @@ module pc98_fdc_glue (
                 motor_pulse <= 1'b0;   // one clock is a whole edge
         end
     end
+    assign dbg_motor_arms   = motor_arms;
+    assign dbg_motor_pulses = motor_pulses;
 
     // np2 fdc_reset (io/fdc.c:1155-1161): fdc.chgreg = 3. Bit 0 set means the
     // 0x90/0x92/0x94 window is the live one out of reset.

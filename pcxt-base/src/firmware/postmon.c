@@ -49,6 +49,8 @@
 #define POST_INTA   ((volatile uint32_t *) 0x500000C4) // {vector byte, INTA count}
 #define POST_IVT13  ((volatile uint32_t *) 0x500000C8) // INT 13h vector {seg, off}
 #define POST_IVT12  ((volatile uint32_t *) 0x500000CC) // INT 12h vector {seg, off}
+#define POST_PIC2   ((volatile uint32_t *) 0x500000D0) // slave PIC {ISR, IMR, IRR}
+#define POST_MOTOR  ((volatile uint32_t *) 0x500000D4) // {pulses, arms} of the 0xCC timer
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -130,7 +132,7 @@ static uint8_t guest_peek(uint32_t addr)
 // unreadable. 192 adds the MSW/SZ/F0 row on top of that; OSD_FB_HEIGHT is
 // 200, so it still fits. 200 adds the GDC row at 190 and is the whole
 // framebuffer -- there is no room for another.
-#define PANEL_H 142
+#define PANEL_H 152
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -914,6 +916,26 @@ void post_mon_tick(void)
         hex(4 + 20 * 8, 132, (v12 >> 16) & 0xFFFFu, 4);
         osd_draw_string(&fb, 4 + 25 * 8, 132, ":", OSD_LABEL);
         hex(4 + 26 * 8, 132, v12 & 0xFFFFu, 4);
+
+        // The drive probe's interrupt, link by link. The slave PIC's three
+        // (r2/m2/s2 -- a SET m2 bit is masked) and the motor timer's arms
+        // and expiry pulses. MA 00 means the 0xCC write never armed the
+        // timer (a decode or window problem); MA>0 with r2's bit2/3 empty
+        // means the pulse died between the glue and the slave; r2 set with
+        // the master's R bit7 clear means the slave is holding it back
+        // (mask or priority); everything set with V unchanged means the
+        // master never passed it up.
+        uint32_t p2 = *POST_PIC2, mo = *POST_MOTOR;
+        osd_draw_string(&fb, 4, 142, "r2", OSD_LABEL);
+        hex(4 + 3 * 8, 142, p2 & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 6 * 8, 142, "m2", OSD_LABEL);
+        hex(4 + 9 * 8, 142, (p2 >> 8) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 12 * 8, 142, "s2", OSD_LABEL);
+        hex(4 + 15 * 8, 142, (p2 >> 16) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 18 * 8, 142, "MA", OSD_LABEL);
+        hex(4 + 21 * 8, 142, mo & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 24 * 8, 142, "MP", OSD_LABEL);
+        hex(4 + 27 * 8, 142, (mo >> 16) & 0xFFu, 2);
     }
 #endif
 
