@@ -3130,6 +3130,22 @@ end endgenerate
     wire       fdc_glue_read;
     wire [7:0] fdc_glue_wdata;
 
+    // THE SELECTS BELOW CARRY NO iorq, ON PURPOSE. The old ones came off
+    // pc98_io_exact, whose iorq is ~io_read_n | ~io_write_n -- true only
+    // while a strobe is LOW. The end-of-write strobe, io_write_n &
+    // ~prev_io_write_n, fires the clock the strobe is HIGH. A select built
+    // on iorq is therefore FALSE at exactly the moment the strobe is
+    // true, and sel & strobe was identically zero: the glue sat inert
+    // on metal for 0x94/0xCC/0xBE while every path around it measured
+    // alive (EX FF RD 46 WR 3A ST FF against the glue's all-zero
+    // strobe counters). A bench cannot catch this -- it drives sel and
+    // strobe as independent wires -- so the contradiction lived until
+    // a panel counted both sides of it.
+    wire pc98_addr_win = ~address_enable_n & (address[15:8] == 8'h00);
+    wire fdd_ctrl_win  = pc98_addr_win & ((address[7:0] == 8'h94)
+                                        |  (address[7:0] == 8'hCC));
+    wire fdd_mode_win  = pc98_addr_win &  (address[7:0] == 8'hBE);
+
     pc98_fdc_glue u_pc98_fdc_glue (
         .clk           (clock),
         .rst           (reset),
@@ -3141,12 +3157,11 @@ end endgenerate
         // which slave line an interrupt belongs on.
         .sel_stat      (~floppy0_chip_select_n & ~address[1]),
         .sel_data      (~floppy0_chip_select_n &  address[1]),
-        .sel_ctrl      (fdd_94_select | fdd_cc_select),
-        .sel_mode      (fdd_be_select),
+        .sel_ctrl      (fdd_ctrl_win),
+        .sel_mode      (fdd_mode_win),
         .port_2dd      (address[6]),
-        .wr_stb        (fdc_wr_end | ((fdd_94_select | fdd_cc_select
-                                       | fdd_be_select)
-                                      & io_write_n & ~prev_io_write_n)),
+        .wr_stb        (fdc_wr_end | ((fdd_ctrl_win | fdd_mode_win)
+                                       & io_write_n & ~prev_io_write_n)),
         .wr_data       (write_to_fdd),
         .rd_stb        (~io_read_n & prev_io_read_n & ~floppy0_chip_select_n),
         .fd_addr       (fdc_glue_addr),
