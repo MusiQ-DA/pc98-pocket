@@ -124,6 +124,8 @@ module softcpu_subsystem (
     input   [7:0] dbg_motor_arms,
     input   [7:0] dbg_motor_pulses,
     input   [7:0] dbg_chg,
+    input   [7:0] dbg_strb_be, dbg_strb_94, dbg_strb_cc, dbg_strb_dat,
+    input   [7:0] dbg_last_ctrl,
     input   [7:0] dbg_irq_level,
     input   [7:0] dbg_timer_count,
     input   [7:0] dbg_kbd_irq_count,
@@ -1137,6 +1139,11 @@ module softcpu_subsystem (
                                             dbg_pic2_imr, dbg_pic2_irr};
             32'h5000_00D4: cpu_mem_rdata = {8'd0, dbg_chg,
                                             dbg_motor_pulses, dbg_motor_arms};
+            // Did the glue's write strobe ever fire, per port, and what
+            // was the last control byte it carried?
+            32'h5000_00D8: cpu_mem_rdata = {dbg_strb_dat, dbg_strb_cc};
+            32'h5000_00DC: cpu_mem_rdata = {dbg_strb_be, dbg_strb_94};
+            32'h5000_00E0: cpu_mem_rdata = {24'd0, dbg_last_ctrl};
             32'h5000_00B4: cpu_mem_rdata = {15'd0, int_live, int_count};
             32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;
