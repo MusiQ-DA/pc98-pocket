@@ -10,10 +10,17 @@
 // line, asserted and never cleared, on a machine whose FDC interrupt is a SLAVE
 // line. So the second half of this bench is the routing.
 //
+// The third part is the state this core is normally in: AN EMPTY DRIVE, which
+// floppy.v used to accept a command in and then never answer. That was the
+// last thing keeping PC98_FDC_REAL off, it is fixed in floppy.v behind the
+// NOT_READY_ENDS_COMMAND parameter, and it is asserted here.
+//
 // Checked against np2kai io/fdc.c (fdc_o94's three live bits, fdc_i94's
 // constant, fdc_obe/fdc_ibe and the ((port>>4)^chgreg)&1 guard, fdc_intwait's
-// pic_setirq) and against the ROM: ITF F85C3 (slave ICW2 = 0x10), BIOS FF438 /
-// FF4B3 (the slave mask each path checks), FFAF6 / FFB69 (the two handlers).
+// pic_setirq, FDC_DriveCheck and fdcsend_error7 for the not-ready result) and
+// against the ROM: ITF F85C3 (slave ICW2 = 0x10), BIOS FF438 / FF4B3 (the
+// slave mask each path checks), FFAF6 / FFB69 (the two handlers), FF98F (the
+// result-byte decoder that turns ST0 into the AH the caller sees).
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -70,7 +77,10 @@ module tb_pc98_fdc_glue;
     logic [3:0]  mgmt_address = 4'd0;
     logic [15:0] mgmt_writedata = 16'd0;
 
-    floppy u_floppy (
+    // NOT_READY_ENDS_COMMAND is what Peripherals.sv passes under MACHINE_PC98:
+    // a PC-98's drives report READY, so an empty one ends a command instead of
+    // parking CB. The PC/XT build passes 0 and keeps floppy.v's old behaviour.
+    floppy #(.NOT_READY_ENDS_COMMAND(1)) u_floppy (
         .clk            (clk),
         .rst_n          (~rst),
         .dma_req        (),
@@ -464,34 +474,38 @@ module tb_pc98_fdc_glue;
             want1("and nothing on either slave line", irq_2hd | irq_2dd, 1'b0);
         end
 
-        // ======== WHAT STILL STANDS BETWEEN THIS AND PC98_FDC_REAL =========
+        // =============== THE DRIVE WITH NOTHING IN IT ======================
         //
-        // A CHARACTERISATION, not a check -- it records floppy.v's behaviour
-        // with NO DISK IN THE DRIVE, which is this core's normal state and the
-        // reason the macro is still off. No assertions, so that fixing the
-        // behaviour does not turn this bench red; the numbers are here to be
-        // compared against.
+        // This core's normal state is an empty drive, and it is the state the
+        // macro used to die in. floppy.v's three media commands each had a
+        // *_hang_at_start wire that accepted the command -- command_first has
+        // already set CB -- and then answered nothing, being in neither
+        // enter_result_phase nor raise_interrupt, so the MSR parked at 0x90 for
+        // good. The BIOS's FFA0B (`xor cx,cx / in al,dx / test al,0x10 /
+        // loopne`) will not send another command until CB clears and FF966
+        // spins 40*65536 polls for the interrupt, so one probe of an empty
+        // drive cost every later FDC call an AH=0x90 timeout at FFA57. The IPL
+        // read that triggers it is issued right after MEMORY 640KB OK.
         //
-        // READ ID is fine: it interrupts and hands back seven bytes. READ DATA
-        // is not. floppy.v's cmd_read_write_hang_at_start is named after what
-        // it does -- with no media the command is accepted (command_first sets
-        // busy) and then nothing: it is in neither enter_result_phase nor
-        // raise_interrupt, so the MSR parks at 0x90, CB set, forever.
+        // What it must answer instead, from np2kai:
+        //   READ/WRITE DATA and FORMAT go through FDC_DriveCheck (io/fdc.c:
+        //   176-182) -> ST0 = FDCRLT_IC0|FDCRLT_NR|(hd<<2)|us = 0x48 here,
+        //   ST1 = ST2 = 0, C/H/R/N echoed from the command, seven bytes and an
+        //   interrupt (fdcsend_error7, io/fdc.c:97-117).
+        //   READ ID (io/fdc.c:646-650) gives IC0|ND instead: ST0 = 0x40,
+        //   ST1 = 0x04.
+        // and what the BIOS makes of it, from its own decoder at FF98F: ST0 &
+        // 0xC0 nonzero -> FF9A1, EC (0x10) tested first -> AH=0x40, then NR
+        // (0x08) -> AH=0x60 "drive not ready", then the ST1 bits, of which ND
+        // -> AH=0xC0. 0x60 is the answer an empty drive is supposed to give.
         //
-        // That is fatal to the boot, and not because of the interrupt. The
-        // BIOS's FFA0B waits for CB to clear before it can send ANY further
-        // command (`in dx / test al,0x10 / loopne`), so a stuck CB kills the
-        // controller for the rest of POST -- and the IPL read is issued right
-        // after MEMORY 640KB OK, which is where the hardware stopped.
-        //
-        // The stub this path replaces answered the same probe with seven
-        // result bytes meaning "no drive", which is why it booted. Fixing the
-        // interrupt routing does not fix this: it is a separate defect, it is
-        // in floppy.v rather than in the glue, and it wants its own change and
-        // its own evidence before PC98_FDC_REAL goes back on.
-        $display("--- floppy.v with no disk: the remaining blocker ---");
+        // MEDIA_PRESENT HAS NO RESET in floppy.v (it is written only by mgmt
+        // register 0), so rst does NOT undo the disk the section above put in:
+        // the first version of this block relied on that and was measuring a
+        // drive with a disk in it. Eject explicitly.
+        $display("--- floppy.v with no disk in the drive ---");
         begin
-            logic [7:0] msr, dummy;
+            logic [7:0] msr, st0, st1, st2, c, h, r, n;
             int guard;
 
             rst = 1'b1;
@@ -499,33 +513,20 @@ module tb_pc98_fdc_glue;
             rst = 1'b0;
             repeat (2) @(posedge clk);
             window(1'b0);
-            // No mgmt write this time: media_present stays 0, which is a core
-            // with nothing in the drive.
-            wr(2, 8'h08);              // interrupts enabled
-            wr(1, 8'h0A);              // READ ID
-            wr(1, 8'h00);              // head 0, unit 0
 
-            guard = 0;
-            while (!fd_irq && guard < 20000) begin
-                @(negedge clk);
-                guard++;
-            end
+            // EJECT. mgmt register 0 bit 0 is floppy.v's media_present, the
+            // same bit fdd_service.c's fdd_mount() sets (FMGMT_PRESENT).
+            @(negedge clk);
+            mgmt_address = 4'd0; mgmt_writedata = 16'h0000; mgmt_write = 1'b1;
+            @(negedge clk);
+            mgmt_write = 1'b0;
             #1;
-            rd(0, msr);
-            $display("  ..   no-media READ ID: irq=%0d after %0d cycles, MSR=%02h",
-                     fd_irq, guard, msr);
-            for (int b = 0; b < 8; b++) begin
-                rd(0, msr);
-                rd(1, dummy);
-                $display("  ..   result[%0d] = %02h   MSR now %02h  irq %0d",
-                         b, dummy, msr, fd_irq);
-            end
 
-            // READ DATA, the one the IPL actually issues. Its guard chain is
-            // cmd_read_write_hang_at_start, which is a different wire from
-            // READ ID's, so it gets measured too rather than reasoned about.
+            wr(2, 8'h08);              // out 0x94,08 -- interrupts enabled
+
+            // ---- READ DATA, the command the IPL actually issues ------------
             wr(1, 8'h46);   // READ DATA, MFM
-            wr(1, 8'h00);   // head 0, unit 0
+            wr(1, 8'h00);   // HDS/US: head 0, unit 0
             wr(1, 8'h00);   // C
             wr(1, 8'h00);   // H
             wr(1, 8'h01);   // R
@@ -533,16 +534,132 @@ module tb_pc98_fdc_glue;
             wr(1, 8'h08);   // EOT
             wr(1, 8'h1B);   // GPL
             wr(1, 8'hFF);   // DTL
+
             guard = 0;
-            while (!fd_irq && guard < 40000) begin
+            while (!fd_irq && guard < 2000) begin
                 @(negedge clk);
                 guard++;
             end
+            #1;
+            want1("no-media READ DATA interrupts", fd_irq, 1'b1);
+            want1("on the 2HD window's slave IRQ11", irq_2hd, 1'b1);
+
+            // RQM + DIO + CB: a result phase is waiting. The old behaviour was
+            // 0x90 -- RQM + CB with nothing to read and nothing coming.
             rd(0, msr);
-            $display("  ..   no-media READ DATA: irq=%0d after %0d cycles, MSR=%02h",
-                     fd_irq, guard, msr);
-            $display("  ..   (0x90 = RQM+CB with no result phase: CB never");
-            $display("  ..    clears, so FFA0B's wait for it never ends)");
+            want("MSR offers a result phase", msr, 8'hD0);
+
+            rd(1, st0);
+            want("ST0 = IC abnormal + NR", st0, 8'h48);
+            want1("the result read clears the interrupt", fd_irq, 1'b0);
+            rd(1, st1);  want("ST1 is clear (not EC, not ND)", st1, 8'h00);
+            rd(1, st2);  want("ST2 is clear", st2, 8'h00);
+            rd(1, c);    want("C echoes the command", c, 8'h00);
+            rd(1, h);    want("H echoes the command", h, 8'h00);
+            rd(1, r);    want("R echoes the command", r, 8'h01);
+            rd(1, n);    want("N echoes the command", n, 8'h02);
+
+            // THE THING THAT KILLED POST: CB back down, so FFA0B's wait ends
+            // and the next command can be sent at all.
+            rd(0, msr);
+            want("CB clear again after seven bytes", msr, 8'h80);
+
+            // FF98F decodes ST0 = 0x48 as: & 0xC0 nonzero -> abnormal; EC
+            // (0x10) clear so not AH=0x40; NR (0x08) set -> AH=0x60. Spelled
+            // out here because getting EC wrong reads as a broken drive.
+            want1("BIOS FF98F: abnormal termination", |(st0 & 8'hC0), 1'b1);
+            want1("BIOS FF98F: EC clear, so not AH=40", |(st0 & 8'h10), 1'b0);
+            want1("BIOS FF98F: NR set, so AH=60 not ready", |(st0 & 8'h08), 1'b1);
+
+            // ---- and the controller is still alive afterwards --------------
+            // One empty-drive probe used to end POST. A second command has to
+            // be accepted and answered like the first.
+            wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h01); wr(1, 8'h02); wr(1, 8'h08); wr(1, 8'h1B);
+            wr(1, 8'hFF);
+            guard = 0;
+            while (!fd_irq && guard < 2000) begin
+                @(negedge clk);
+                guard++;
+            end
+            #1;
+            want1("a second empty-drive read answers too", fd_irq, 1'b1);
+            rd(1, st0);
+            want("and says not ready again", st0, 8'h48);
+            for (int b = 0; b < 6; b++) rd(1, msr);
+            rd(0, msr);
+            want("controller idle again", msr, 8'h80);
+
+            // ---- READ ID, the other command that hung ----------------------
+            // The previous version of this bench recorded READ ID as "fine".
+            // It was not: it was measured against a drive that still had the
+            // section above's disk in it. Its guard chain is a different wire
+            // (cmd_read_id_hang_at_start) and it hung for the same reason.
+            wr(1, 8'h4A);   // READ ID, MFM
+            wr(1, 8'h00);   // HDS/US
+            guard = 0;
+            while (!fd_irq && guard < 2000) begin
+                @(negedge clk);
+                guard++;
+            end
+            #1;
+            want1("no-media READ ID interrupts", fd_irq, 1'b1);
+            rd(0, msr);
+            want("READ ID offers a result phase", msr, 8'hD0);
+            rd(1, st0);  want("READ ID ST0 = IC abnormal, no NR", st0, 8'h40);
+            rd(1, st1);  want("READ ID ST1 = ND, np2's choice", st1, 8'h04);
+            rd(1, st2);  want("READ ID ST2 is clear", st2, 8'h00);
+            for (int b = 0; b < 4; b++) rd(1, msr);   // C H R N
+            rd(0, msr);
+            want("CB clear after READ ID too", msr, 8'h80);
+
+            // ---- FORMAT TRACK, for completeness ----------------------------
+            // Not on the boot path, but the same hang and the same fix, and a
+            // core that hangs when someone formats an empty drive is no better
+            // than one that hangs at POST.
+            wr(1, 8'h4D);   // FORMAT TRACK (WRITE ID), MFM
+            wr(1, 8'h00);   // HDS/US
+            wr(1, 8'h02);   // N
+            wr(1, 8'h08);   // SC
+            wr(1, 8'h1B);   // GPL
+            wr(1, 8'hE5);   // D, the filler byte
+            guard = 0;
+            while (!fd_irq && guard < 2000) begin
+                @(negedge clk);
+                guard++;
+            end
+            #1;
+            want1("no-media FORMAT interrupts", fd_irq, 1'b1);
+            rd(1, st0);  want("FORMAT ST0 = IC abnormal + NR", st0, 8'h48);
+            for (int b = 0; b < 6; b++) rd(1, msr);
+            rd(0, msr);
+            want("CB clear after FORMAT too", msr, 8'h80);
+
+            // ---- and a disk put back in still reads normally ---------------
+            // The not-ready path must be exactly that and nothing more: with
+            // media present the command has to reach the old ok_at_start path,
+            // not the new result phase. Geometry too -- media_cylinders has no
+            // reset either, and a C past the end of it is one of the hangs
+            // this change deliberately did NOT touch.
+            @(negedge clk);
+            mgmt_address = 4'd2; mgmt_writedata = 16'd80; mgmt_write = 1'b1;  // cylinders
+            @(negedge clk);
+            mgmt_address = 4'd3; mgmt_writedata = 16'd8;                      // sectors/track
+            @(negedge clk);
+            mgmt_address = 4'd5; mgmt_writedata = 16'd2;                      // heads
+            @(negedge clk);
+            mgmt_address = 4'd0; mgmt_writedata = 16'h0001;                   // insert
+            @(negedge clk);
+            mgmt_write = 1'b0;
+            #1;
+            wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h01); wr(1, 8'h02); wr(1, 8'h08); wr(1, 8'h1B);
+            wr(1, 8'hFF);
+            repeat (20) @(negedge clk);
+            #1;
+            want1("with a disk in, no not-ready interrupt", fd_irq, 1'b0);
+            rd(0, msr);
+            want1("and it is transferring, not in a result phase", msr[6], 1'b0);
         end
 
         $display("\n  errors: %0d", errors);

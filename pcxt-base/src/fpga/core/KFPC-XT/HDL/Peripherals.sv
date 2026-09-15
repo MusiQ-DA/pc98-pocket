@@ -589,12 +589,15 @@ module PERIPHERALS #(
     // The translation is therefore only of the two that do correspond: MSR at
     // the XT's offset 4, data at 5.
     //
-    // DEFAULT OFF, and that is deliberate. The stub below was tuned against
-    // the ROM's probes for a machine WITH NO DRIVE -- its comments record what
-    // each constant had to be to get the BIOS past them -- and nothing in this
-    // tree reaches an FDD transfer yet to say whether the real path behaves.
-    // Turning this on trades a known-good stub for an untested path; it wants
-    // a bench that gets there first.
+    // NOW ON. It was off because the stub below was tuned against the ROM's
+    // probes for a machine WITH NO DRIVE -- its comments record what each
+    // constant had to be to get the BIOS past them -- and nothing here reached
+    // an FDD transfer to say whether the real path behaved. It does now:
+    // sim/tb_pc98_fdc_glue runs the BIOS's own sequence against the real
+    // floppy.v behind the real glue, interrupt loop and all, and against the
+    // case the stub was standing in for -- an EMPTY DRIVE, which used to hang
+    // floppy.v with CB set forever and now ends in a not-ready result phase
+    // (see NOT_READY_ENDS_COMMAND at the instantiation below, and config.tcl).
     wire    floppy0_chip_select_n   = ~(~address_enable_n
                                      && (address[15:8] == 8'h00)
                                      && ((address[7:0] == 8'h90) || (address[7:0] == 8'h92)
@@ -3160,7 +3163,18 @@ end endgenerate
             fdd_dma_tc <= 1'b0;
     end
 
-    floppy floppy 
+    // NOT_READY_ENDS_COMMAND is a property of the DRIVES, not of the register
+    // mapping, so it follows MACHINE_PC98 rather than PC98_FDC_REAL: a PC-98's
+    // 2HD/2DD drives return READY and a PC/AT's do not (see floppy.v). With no
+    // disk in the drive -- this core's normal state -- it is the difference
+    // between a result phase carrying ST0 = 48h and a CB bit that never clears.
+    floppy #(
+`ifdef MACHINE_PC98
+        .NOT_READY_ENDS_COMMAND     (1)
+`else
+        .NOT_READY_ENDS_COMMAND     (0)
+`endif
+    ) floppy
     (
         .clk                        (clock),
         .rst_n                      (~reset),
