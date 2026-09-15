@@ -28,6 +28,18 @@ module KF8259 (
     input   logic           interrupt_acknowledge_n,
     output  logic           interrupt_to_cpu,
 
+    // Debug taps. The three registers that decide whether a request reaches
+    // the CPU, and the only part of this chip a POST panel cannot otherwise
+    // see: everything outside it is already measured and INTR going quiet
+    // while a request line is high has no other explanation.
+    //   dbg_irr  requests latched
+    //   dbg_imr  masked off  (a set bit is MASKED)
+    //   dbg_isr  in service -- a set bit blocks itself and everything below
+    //            it until an EOI clears it
+    output  logic   [7:0]   dbg_irr,
+    output  logic   [7:0]   dbg_imr,
+    output  logic   [7:0]   dbg_isr,
+
     input   logic   [7:0]   interrupt_request,
 
     // np2's timer quirk as an explicit port: a strobe here clears the
@@ -183,6 +195,10 @@ module KF8259 (
     //
     // In Service
     //
+    assign dbg_irr = interrupt_request_register;
+    assign dbg_imr = interrupt_mask;
+    assign dbg_isr = in_service_register;
+
     KF8259_In_Service u_In_Service (
         // Bus
         .clock                              (clock),

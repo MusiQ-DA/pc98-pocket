@@ -163,6 +163,12 @@ module PERIPHERALS #(
     // The master PIC's eight request lines as a level, and a count of timer
     // ticks. INT (core_top) says the CPU stopped being interrupted; these say
     // whether anything is still ASKING.
+    // The master PIC's own registers. INTR going quiet while a request line
+    // is high is either a mask or an un-EOI'd in-service bit, and nothing
+    // outside the chip can tell those apart.
+    output  logic    [7:0]  dbg_pic_irr,
+    output  logic    [7:0]  dbg_pic_imr,
+    output  logic    [7:0]  dbg_pic_isr,
     output  logic    [7:0]  dbg_irq_level,
     output  logic    [7:0]  dbg_timer_count,
     output  logic    [7:0]  dbg_kbd_irq_count,
@@ -791,6 +797,10 @@ module PERIPHERALS #(
                                         keybord_interrupt,
                                         timer_interrupt})
 `endif
+        ,
+        .dbg_irr                    (dbg_pic_irr),
+        .dbg_imr                    (dbg_pic_imr),
+        .dbg_isr                    (dbg_pic_isr)
     );
 
 `ifdef MACHINE_PC98

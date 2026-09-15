@@ -992,6 +992,9 @@ module core_top (
     // build has no translator and must still elaborate. See the always block
     // next to pc98_kbd_ps2.
     // The master GDC's view, from CHIPSET, for the POST panel's GDC line.
+    wire  [7:0] dbg_pic_irr;
+    wire  [7:0] dbg_pic_imr;
+    wire  [7:0] dbg_pic_isr;
     wire  [7:0] dbg_irq_level;
     wire  [7:0] dbg_timer_count;
     // IF was going to come from psw bit 9 in v30_core's dbg_regs. That port is
@@ -1138,6 +1141,9 @@ module core_top (
         // to the firmware at 0x5000009C/A0/A4 -- POST_TVF0/TVF1/FRB.
         .int_count                  (int_count),
         .int_live                   (int_live),
+        .dbg_pic_irr                (dbg_pic_irr),
+        .dbg_pic_imr                (dbg_pic_imr),
+        .dbg_pic_isr                (dbg_pic_isr),
         .dbg_irq_level              (dbg_irq_level),
         .dbg_timer_count            (dbg_timer_count),
         .dbg_kbd_irq_count          (dbg_kbd_irq_count),
@@ -2512,6 +2518,9 @@ module core_top (
         .enable_hgc                         (enable_hgc_sel),
         .hgc_rgb                            (hgc_rgb_sel),
     //  .de_o                               (VGA_DE),
+        .dbg_pic_irr                        (dbg_pic_irr),
+        .dbg_pic_imr                        (dbg_pic_imr),
+        .dbg_pic_isr                        (dbg_pic_isr),
         .dbg_irq_level                      (dbg_irq_level),
         .dbg_timer_count                    (dbg_timer_count),
         .dbg_kbd_irq_count                  (dbg_kbd_irq_count),
