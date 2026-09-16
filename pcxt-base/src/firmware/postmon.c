@@ -56,6 +56,8 @@
 #define POST_LCTRL  ((volatile uint32_t *) 0x500000E0) // last control byte the glue saw
 #define POST_WPATH  ((volatile uint32_t *) 0x500000E4) // {io_write strobes, decode clocks}
 #define POST_RWLVL  ((volatile uint32_t *) 0x500000E8) // {write levels, read levels}
+#define POST_FDCX   ((volatile uint32_t *) 0x500000EC) // {results read, DOR, irq rises, MSR}
+#define POST_FDCY   ((volatile uint32_t *) 0x500000F0) // {last 0xCC byte, last 0x94 byte}
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -137,7 +139,7 @@ static uint8_t guest_peek(uint32_t addr)
 // unreadable. 192 adds the MSW/SZ/F0 row on top of that; OSD_FB_HEIGHT is
 // 200, so it still fits. 200 adds the GDC row at 190 and is the whole
 // framebuffer -- there is no room for another.
-#define PANEL_H 172
+#define PANEL_H 182
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
@@ -990,6 +992,29 @@ void post_mon_tick(void)
         hex(4 + 15 * 8, 162, (wl >> 8) & 0xFFu, 2);
         osd_draw_string(&fb, 4 + 18 * 8, 162, "ST", OSD_LABEL);
         hex(4 + 21 * 8, 162, (wp >> 8) & 0xFFu, 2);
+
+        // The controller itself. MS is the MSR the guest last read -- 80
+        // means RQM with the chip idle and ready, C0 means it wants to be
+        // read, 10 in bit 4 is a command in progress. IQ counts floppy.v's
+        // irq RISES: 00 with commands going in (nD) says the chip never
+        // asked for attention, and then DO says whether it was allowed to --
+        // bit 3 of the DOR is the interrupt enable, and it is built from the
+        // guest's bit 3 at the last 0x94 write. RD counts result bytes read
+        // back. 94 and CC are the last byte written to each control port,
+        // kept apart: LB above mixes them.
+        uint32_t fx = *POST_FDCX, fy = *POST_FDCY;
+        osd_draw_string(&fb, 4, 172, "MS", OSD_LABEL);
+        hex(4 + 3 * 8, 172, fx & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 6 * 8, 172, "IQ", OSD_LABEL);
+        hex(4 + 9 * 8, 172, (fx >> 8) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 12 * 8, 172, "DO", OSD_LABEL);
+        hex(4 + 15 * 8, 172, (fx >> 16) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 18 * 8, 172, "RD", OSD_LABEL);
+        hex(4 + 21 * 8, 172, (fx >> 24) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 24 * 8, 172, "94", OSD_LABEL);
+        hex(4 + 27 * 8, 172, fy & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 30 * 8, 172, "CC", OSD_LABEL);
+        hex(4 + 33 * 8, 172, (fy >> 8) & 0xFFu, 2);
     }
 #endif
 
