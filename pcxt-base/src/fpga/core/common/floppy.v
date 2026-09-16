@@ -298,30 +298,71 @@ always @(posedge clk) begin
 	else if(reset_changeline &&  selected_drive[0] && media_present[1]) change[1] <= 1'b0;
 end
 
-reg [3:0] in_seek_mode;
+// ---- seeks, one per DRIVE -------------------------------------------------
+//
+// The 765 seeks on all four units AT ONCE -- that is what the MSR's drive
+// -busy bits are for -- and raises one interrupt per completion, each
+// collected by its own SENSE INTERRUPT STATUS. The PC-98 BIOS relies on it
+// completely: its drive probe is
+//
+//     03 BF 32   SPECIFY
+//     07 00      RECALIBRATE unit 0
+//     07 01      RECALIBRATE unit 1
+//     07 02      RECALIBRATE unit 2
+//     07 03      RECALIBRATE unit 3
+//     08 08 ...  a SENSE INTERRUPT STATUS per completion
+//
+// read straight off the panel's FIFO ring. One seek engine answered that
+// with ONE interrupt: each RECALIBRATE overwrote the last one's drive and
+// restarted its timer, the four collapsed into one completion, the BIOS
+// collected it, asked for the next and got 80h, and waited for three
+// interrupts that no longer existed.
+//
+// So the seeks are tracked as a pair of bitmaps instead of a single drive:
+// seek_busy is who is stepping, seek_done is who has arrived and not yet
+// been sensed. The timer stays single -- every drive of this era steps at
+// the same rate and the BIOS issues them together -- and its completion
+// moves the whole busy set into done at once. Each SENSE INTERRUPT STATUS
+// then reports the lowest drive still in done, clears it, and leaves the
+// interrupt up for the next one.
+reg [3:0] seek_busy;
+reg [3:0] seek_done;
+
+wire [1:0] sense_drive = seek_done[0] ? 2'd0 : seek_done[1] ? 2'd1 :
+                         seek_done[2] ? 2'd2 :                2'd3;
+
+// ST0 for the drive being sensed: seek end, plus IC = "abnormal" and EC
+// when there is no drive under it. Units 2 and 3 do not exist on this
+// controller (two sets of registers, two motors), so they always answer the
+// way a real machine answers a missing drive -- which is how the BIOS
+// learns it has two drives and not four.
+wire [7:0] sense_st0 = 8'h20 | {6'd0, sense_drive}
+                     | ((sense_drive[1] || ~motor_enable[sense_drive[0]])
+                        ? 8'h50 : 8'h00);
+wire [7:0] sense_pcn = sense_drive[1] ? 8'd0 : cylinder[sense_drive[0]];
+
+// The MSR's drive-busy bits: stepping, or arrived and not yet sensed.
+wire [3:0] in_seek_mode = seek_busy | seek_done;
+
 always @(posedge clk) begin
-	if(~rst_n | sw_reset)          in_seek_mode <= 4'b0000;
-	else if(cmd_recalibrate_start) in_seek_mode <= 4'b0001 << io_writedata[0];
-	else if(cmd_seek_start)        in_seek_mode <= 4'b0001 << command[0];
-	// ... and CLEARED by the SENSE INTERRUPT STATUS that collects the seek,
-	// for the drive that command reports. The 765 datasheet makes the drive
-	// -busy bits the host's "is the seek over" flag and Sense Interrupt
-	// Status the only thing that clears them; without the clear they are set
-	// once and stay set for the life of the machine.
-	//
-	// The PC-98 FDD BIOS waits on exactly those bits, so a stuck one hangs
-	// the boot: the panel came back MS D2 -- RQM, DIO, busy, and D1B for a
-	// RECALIBRATE of drive 1 that had long since finished and been sensed.
-	//
-	// All of them, not the one ST0 names: this register is ASSIGNED by each
-	// seek, never OR'd, so it holds at most one drive at a time -- and the
-	// drive it holds need not be the one the reply reports. RECALIBRATE
-	// takes its unit from the command byte (io_writedata[0] above) while
-	// the reply takes it from selected_drive, the DOR's drive field, which
-	// on a PC-98 is not the guest's at all: the machine has no DOR, so the
-	// glue synthesises one and parks that field at 0. Clearing "the drive
-	// in ST0" would then clear bit 0 while bit 1 stayed up for good.
-	else if(cmd_sense_interrupt_status_start) in_seek_mode <= 4'b0000;
+	if(~rst_n | sw_reset) begin
+		seek_busy <= 4'b0000;
+		seek_done <= 4'b0000;
+	end
+	else begin
+		if(cmd_recalibrate_start)
+			seek_busy <= seek_busy | (4'b0001 << io_writedata[1:0]);
+		else if(cmd_seek_start)
+			seek_busy <= seek_busy | (4'b0001 << command[1:0]);
+		else if(delay_last_cycle)
+			seek_busy <= 4'b0000;
+
+		if(cmd_sense_interrupt_status_start && |seek_done)
+			seek_done <= (seek_done | (delay_last_cycle ? seek_busy : 4'd0))
+			             & ~(4'b0001 << sense_drive);
+		else if(delay_last_cycle)
+			seek_done <= seek_done | seek_busy;
+	end
 end
 
 //------------------------------------------------------------------------------
@@ -573,6 +614,10 @@ always @(posedge clk) begin
 	else if(ndma_write | ndma_read)                      irq <= 1'b0;
 	else if(ndma_irq | raise_interrupt)                  irq <= 1'b1;
 	else if(io_read && io_address == 3'd5 && ~ndma_read) irq <= 1'b0;
+	// A seek that has arrived and not been sensed keeps asking. The read
+	// above lowers the line first, so the next one arrives as a fresh EDGE
+	// -- which is the only thing an edge-triggered 8259 will take.
+	else if(dma_irq_enable && |seek_done)                irq <= 1'b1;
 end
 
 reg [2:0] reset_sensei;
@@ -749,7 +794,7 @@ always @(posedge clk) begin
 	// ~busy, and the machine stops dead. The panel caught it exactly:
 	// FW 07 03 08 08 with RB 80 and MS D0, the BIOS having read the 80 and
 	// moved on the way the datasheet says it may.
-	else if(cmd_sense_interrupt_status_start)                                    reply_left <= (reset_sensei || pending_interrupt) ? 4'd2 : 4'd1;
+	else if(cmd_sense_interrupt_status_start)                                    reply_left <= (|seek_done || reset_sensei || pending_interrupt) ? 4'd2 : 4'd1;
 	else if(cmd_dump_registers_start)                                            reply_left <= 4'd10;
 	else if(cmd_version_start)                                                   reply_left <= 4'd1;
 	else if(cmd_unlock_start || cmd_lock_start)                                  reply_left <= 4'd1;
@@ -792,6 +837,7 @@ always @(posedge clk) begin
 	else if(state == S_WAIT_FOR_FORMAT_INPUT && cmd_format_in_input_finish)   reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h40 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	else if(cmd_read_id_finished)                                             reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	else if(cmd_get_status_start)                                             reply <= { 72'd0, 1'b0, media_writeprotected[io_writedata[0]], 1'b1, !cylinder[io_writedata[0]], 1'b1, io_writedata[2], 1'b0, io_writedata[0] };
+	else if(cmd_sense_interrupt_status_start && |seek_done)                   reply <= { 64'd0, sense_pcn, sense_st0 };
 	else if(cmd_sense_interrupt_status_start && reset_sensei)                 reply <= { 64'd0, cylinder[selected_drive[0]], 4'hC, 2'b00, reset_sensei_drive };
 	else if(cmd_sense_interrupt_status_start && pending_interrupt)            reply <= { 64'd0, cylinder[selected_drive[0]], status_reg0_temp };
 	else if(cmd_sense_interrupt_status_start && ~pending_interrupt)           reply <= { 64'd0, cylinder[selected_drive[0]], 8'h80 };
