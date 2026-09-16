@@ -311,6 +311,8 @@ module tb_pc98_boot;
                   : cc_ioread       ? (cc_latch | 8'h30)
                   : fdc_msr_sel     ? fdc_msr
                   : fdc_fifo_sel    ? fdc_fifo
+                  : fdc_ctrl_sel    ? fdc_ctrl_rb
+                  : fdc_mode_sel    ? fdc_mode_rb
                   : sysport_sel     ? sysport_data
                            : 8'hFF;
 
@@ -438,7 +440,8 @@ module tb_pc98_boot;
     wire din_is_default = ~(~mem_rd_n | ~inta_n | pit_iocycle | dma_iocycle
                           | pic1_iocycle | pic2_iocycle | kbd_data_iocycle
                           | kbd_stat_iocycle | gdc_stat_iocycle | cc_ioread
-                          | fdc_msr_sel | fdc_fifo_sel | sysport_sel);
+                          | fdc_msr_sel | fdc_fifo_sel | fdc_ctrl_sel
+                          | fdc_mode_sel | sysport_sel);
 
     // ---- I/O ---------------------------------------------------------------
     //
@@ -1077,43 +1080,134 @@ module tb_pc98_boot;
     // copy of it living here. Four defects came out of this model in one
     // session and every one of them had to be fixed twice by hand; the second
     // copy is gone. See pc98_fdc.sv.
-    wire       fdc_base_sel, fdc_msr_sel, fdc_fifo_sel;
-    wire [7:0] fdc_msr, fdc_fifo;
     wire       fdc_irq3, fdc_irq2;
 
-    pc98_fdc u_pc98_fdc (
-        .clock            (clk_chipset),
-        .reset            (reset),
-        .address          (cpu_address[15:0]),
-        .address_enable_n (1'b0),
-        .io_read_n        (io_rd_n),
-        .io_write_n       (io_wr_n),
-        .data_in          (cpu_data_bus),
-        .base_select      (fdc_base_sel),
-        .msr_select       (fdc_msr_sel),
-        .fifo_select      (fdc_fifo_sel),
-        .msr              (fdc_msr),
-        .fifo             (fdc_fifo),
-        .irq_int          (fdc_irq3),
-        .irq_2dd          (fdc_irq2)
+    // THE REAL PAIR, not the stub: pc98_fdc_glue in front of floppy.v, wired
+    // the way PERIPHERALS wires them -- the write decoded from a port latched
+    // while the write is on the bus, the read strobed at the start of the
+    // read, the address/strobe/byte to floppy.v all registered together. The
+    // stub answered a shape of its own and could not have shown any of the
+    // four defects the hardware panel has cost us this week.
+    logic prev_io_wr_n = 1'b1, prev_io_rd_n = 1'b1;
+    always_ff @(posedge clk_chipset) begin
+        prev_io_wr_n <= io_wr_n;
+        prev_io_rd_n <= io_rd_n;
+    end
+
+    logic [15:0] io_wr_addr_q = 16'h0000;
+    always_ff @(posedge clk_chipset)
+        if (~io_wr_n) io_wr_addr_q <= cpu_address[15:0];
+
+    wire        fdc_wr_edge  = io_wr_n & ~prev_io_wr_n;
+    wire [15:0] fdc_addr_eff = fdc_wr_edge ? io_wr_addr_q : cpu_address[15:0];
+    wire        fdc_win_eff  = (fdc_addr_eff[15:8] == 8'h00);
+
+    wire fdd_fifo_win = fdc_win_eff & ((fdc_addr_eff[7:0] == 8'h90)
+                                     |  (fdc_addr_eff[7:0] == 8'h92)
+                                     |  (fdc_addr_eff[7:0] == 8'hC8)
+                                     |  (fdc_addr_eff[7:0] == 8'hCA));
+    wire fdd_ctrl_win = fdc_win_eff & ((fdc_addr_eff[7:0] == 8'h94)
+                                     |  (fdc_addr_eff[7:0] == 8'hCC));
+    wire fdd_mode_win = fdc_win_eff &  (fdc_addr_eff[7:0] == 8'hBE);
+
+    wire       fdc_sel_stat = fdd_fifo_win & ~fdc_addr_eff[1];
+    wire       fdc_sel_data = fdd_fifo_win &  fdc_addr_eff[1];
+    wire [2:0] fdc_glue_addr;
+    wire       fdc_glue_write, fdc_glue_read;
+    wire [7:0] fdc_glue_wdata, fdc_ctrl_rb, fdc_mode_rb;
+    wire       fdc_group_live;
+    wire [7:0] fdd_readdata_wire;
+    wire       fdd_irq_wire;
+
+    logic [7:0] write_to_fdd = 8'h00;
+    always_ff @(posedge clk_chipset)
+        if (~io_wr_n) write_to_fdd <= cpu_data_bus;
+
+    pc98_fdc_glue u_pc98_fdc_glue (
+        .clk           (clk_chipset),
+        .rst           (reset),
+        .sel_stat      (fdc_sel_stat),
+        .sel_data      (fdc_sel_data),
+        .sel_ctrl      (fdd_ctrl_win),
+        .sel_mode      (fdd_mode_win),
+        .port_2dd      (fdc_addr_eff[6]),
+        .wr_stb        (fdc_wr_edge),
+        .wr_data       (write_to_fdd),
+        .rd_stb        (~io_rd_n & prev_io_rd_n & fdd_fifo_win),
+        .fd_addr       (fdc_glue_addr),
+        .fd_write      (fdc_glue_write),
+        .fd_read       (fdc_glue_read),
+        .fd_wdata      (fdc_glue_wdata),
+        .fd_irq        (fdd_irq_wire),
+        .ctrl_readback (fdc_ctrl_rb),
+        .mode_readback (fdc_mode_rb),
+        .group_live    (fdc_group_live),
+        .irq_2hd       (fdc_irq3),
+        .irq_2dd       (fdc_irq2),
+        .dbg_motor_arms   (), .dbg_motor_pulses (), .dbg_chg (),
+        .dbg_strb_be   (), .dbg_strb_94 (), .dbg_strb_cc (),
+        .dbg_strb_dat  (), .dbg_last_ctrl ()
     );
 
-    // The conversation, one line per byte, reached into the instance. The
-    // status polling is what floods and is not logged, so this stays small.
+    logic [2:0] fdd_io_address;
+    logic       fdd_io_read, fdd_io_read_1, fdd_io_write;
+    logic [7:0] fdd_io_writedata;
     always_ff @(posedge clk_chipset) begin
-        if (u_pc98_fdc.fdc_wr_pulse)
-            $display("  %8t  FDC <- %02X   (%s, writes_left %0d, results_left %0d)",
-                     $time, u_pc98_fdc.fdc_wr_data,
-                     (u_pc98_fdc.fdc_writes_left == 4'd0) ? "cmd" : "param",
-                     u_pc98_fdc.fdc_writes_left, u_pc98_fdc.fdc_results_left);
-        if (u_pc98_fdc.fdc_rd_pulse && u_pc98_fdc.fdc_in_result)
-            $display("  %8t  FDC -> %02X   (result %0d of %0d)",
-                     $time, fdc_fifo, u_pc98_fdc.fdc_result_idx,
-                     u_pc98_fdc.fdc_results_left);
-        if (u_pc98_fdc.fdc_cmd_done)
-            $display("  %8t  FDC done cmd %02X  results_left %0d  pend %01X",
-                     $time, u_pc98_fdc.fdc_cmd, u_pc98_fdc.fdc_results_left,
-                     u_pc98_fdc.fdc_seek_pend);
+        fdd_io_address   <= fdc_glue_addr;
+        fdd_io_read      <= fdc_glue_read;
+        fdd_io_read_1    <= fdd_io_read;
+        fdd_io_write     <= fdc_glue_write;
+        fdd_io_writedata <= fdc_glue_wdata;
+    end
+
+    logic [7:0] fdd_readdata = 8'hFF;
+    always_ff @(posedge clk_chipset)
+        if (fdd_io_read_1) fdd_readdata <= fdd_readdata_wire;
+
+    floppy #(.NOT_READY_ENDS_COMMAND (1)) u_floppy (
+        .clk            (clk_chipset),
+        .rst_n          (~reset),
+        .dma_req        (), .dma_ack (1'b0), .dma_tc (1'b0),
+        .dma_readdata   (write_to_fdd), .dma_writedata (),
+        .irq            (fdd_irq_wire),
+        .io_address     (fdd_io_address),
+        .io_read        (fdd_io_read),
+        .io_readdata    (fdd_readdata_wire),
+        .io_write       (fdd_io_write),
+        .io_writedata   (fdd_io_writedata),
+        .mgmt_address   (4'd0),
+        .mgmt_fddn      (1'b0),
+        .mgmt_write     (1'b0),
+        .mgmt_writedata (16'd0),
+        .mgmt_read      (1'b0),
+        .mgmt_readdata  (),
+        .wp             (2'b00),
+        .clock_rate     (28'd42_954_545),
+        .request        (),
+        .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left ()
+    );
+
+    // What the guest sees on a read: the live window answers from floppy.v,
+    // the dead one 0xFF, and 0x94/0xCC/0xBE answer out of the glue.
+    wire fdc_msr_sel  = ~io_rd_n & fdc_sel_stat;
+    wire fdc_fifo_sel = ~io_rd_n & fdc_sel_data;
+    wire fdc_ctrl_sel = ~io_rd_n & fdd_ctrl_win;
+    wire fdc_mode_sel = ~io_rd_n & fdd_mode_win;
+    wire [7:0] fdc_msr  = fdc_group_live ? fdd_readdata : 8'hFF;
+    wire [7:0] fdc_fifo = fdc_group_live ? fdd_readdata : 8'hFF;
+
+    // The conversation, one line per byte, plus every interrupt edge.
+    logic fdd_irq_q = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        fdd_irq_q <= fdd_irq_wire;
+        if (fdd_io_write && fdd_io_address == 3'd5)
+            $display("  %8t  FDC <- %02X", $time, fdd_io_writedata);
+        if (fdd_io_write && fdd_io_address == 3'd2)
+            $display("  %8t  FDC DOR %02X", $time, fdd_io_writedata);
+        if (fdd_io_read_1 && fdd_io_address == 3'd5)
+            $display("  %8t  FDC -> %02X", $time, fdd_readdata_wire);
+        if (fdd_irq_wire & ~fdd_irq_q)
+            $display("  %8t  FDC IRQ up   (MSR %02X)", $time, u_floppy.io_readdata);
     end
 
     // Text GDC status at 0x60, shaped exactly like PERIPHERALS' gdc_status:

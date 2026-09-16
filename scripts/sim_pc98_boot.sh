@@ -150,12 +150,12 @@ RUN_CMD="
   set -e
   verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot $CPU_DEF \
     --threads $SIM_THREADS -MAKEFLAGS OPT_FAST=$SIM_OPT \
-    -I/work/sim -I/work/$S $CPU_INC -I/work/$K -I/work/$K/KF8288/HDL \
+    -I/work/sim -I/work/$S -I/work/$S/common $CPU_INC -I/work/$K -I/work/$K/KF8288/HDL \
     -I/work/$K/KF8253/HDL -I/work/$K/KF8259/HDL \
     /work/sim/tb_pc98_boot.sv \
     $CPU_FILES \
     \$MEMFILES \
-    /work/$K/pc98_fdc.sv /work/$S/pc98_kbd8251.sv \
+    /work/$S/pc98_fdc_glue.sv /work/$S/common/floppy.v /work/$S/pc98_kbd8251.sv \
     /work/$K/XT_CE_Generator.sv /work/$K/KF8288/HDL/KF8288.sv \
     /work/$K/KF8253/HDL/KF8253.sv /work/$K/KF8253/HDL/KF8253_Counter.sv \
     /work/$K/KF8253/HDL/KF8253_Control_Logic.sv \
