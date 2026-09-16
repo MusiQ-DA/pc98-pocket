@@ -715,7 +715,16 @@ always @(posedge clk) begin
 	else if(state == S_WAIT_FOR_FORMAT_INPUT && cmd_format_in_input_finish)      reply_left <= 4'd7;
 	else if(cmd_read_id_finished)                                                reply_left <= 4'd7;
 	else if(cmd_get_status_start)                                                reply_left <= 4'd1;
-	else if(cmd_sense_interrupt_status_start)                                    reply_left <= 4'd2;
+	// TWO bytes only when there is an interrupt to report. With none
+	// pending the 765 treats SENSE INTERRUPT STATUS as an invalid command:
+	// ST0 = 80h and a result phase ONE byte long, the same shape
+	// cmd_invalid_start takes just above. Promising a second byte nobody
+	// comes back for leaves the result phase open -- busy and DIO stay up,
+	// every later command write is dropped because command_first needs
+	// ~busy, and the machine stops dead. The panel caught it exactly:
+	// FW 07 03 08 08 with RB 80 and MS D0, the BIOS having read the 80 and
+	// moved on the way the datasheet says it may.
+	else if(cmd_sense_interrupt_status_start)                                    reply_left <= (reset_sensei || pending_interrupt) ? 4'd2 : 4'd1;
 	else if(cmd_dump_registers_start)                                            reply_left <= 4'd10;
 	else if(cmd_version_start)                                                   reply_left <= 4'd1;
 	else if(cmd_unlock_start || cmd_lock_start)                                  reply_left <= 4'd1;
