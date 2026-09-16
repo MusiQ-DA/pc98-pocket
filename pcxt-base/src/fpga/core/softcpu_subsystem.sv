@@ -128,7 +128,7 @@ module softcpu_subsystem (
     input   [7:0] dbg_last_ctrl,
     input  [31:0] dbg_fdc_x,
     input  [31:0] dbg_fdc_y,
-    input  [31:0] dbg_fdc_z,
+    input  [95:0] dbg_fdc_z,
     input  [31:0] dbg_fdc_w,
     input  [15:0] dbg_w_path, dbg_rw_lvl,
     input   [7:0] dbg_irq_level,
@@ -1165,7 +1165,13 @@ module softcpu_subsystem (
             // (x >> 8*n) & 0xFF -- see the D8/DC packing bug.
             32'h5000_00EC: cpu_mem_rdata = dbg_fdc_x;
             32'h5000_00F0: cpu_mem_rdata = dbg_fdc_y;
-            32'h5000_00F4: cpu_mem_rdata = dbg_fdc_z;
+            // The FIFO ring, newest four bytes first. Twelve bytes is the
+            // whole conversation at CA 07: seven commands and their
+            // parameters, which is what it takes to read the stream rather
+            // than guess at its tail.
+            32'h5000_00F4: cpu_mem_rdata = dbg_fdc_z[31:0];
+            32'h5000_0100: cpu_mem_rdata = dbg_fdc_z[63:32];
+            32'h5000_0104: cpu_mem_rdata = dbg_fdc_z[95:64];
             32'h5000_00F8: cpu_mem_rdata = dbg_fdc_w;
             // The write path counted in PERIPHERALS: {any-port write
             // strobe, decode clocks} and {write levels, read levels}.

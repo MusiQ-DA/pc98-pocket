@@ -200,7 +200,7 @@ module PERIPHERALS #(
     // unexplained).
     output  logic   [31:0]  dbg_fdc_x,   // {rd results, DOR, irq rises, MSR}
     output  logic   [31:0]  dbg_fdc_y,   // {last read byte, 0, 0xCC, 0x94}
-    output  logic   [31:0]  dbg_fdc_z,   // the last four bytes into the FIFO
+    output  logic   [95:0]  dbg_fdc_z,   // the last TWELVE bytes into the FIFO
     output  logic   [31:0]  dbg_fdc_w,   // {drops, accepts, reply_left, 0}
     // The write path counted in PERIPHERALS, before any glue: {raw write
     // strobe, pc98_io_exact clocks} and {write levels, read levels} on the
@@ -3338,7 +3338,7 @@ end endgenerate
     logic [7:0] fdc_last_94    = 8'h00;
     logic [7:0] fdc_last_cc    = 8'h00;
     logic [7:0] fdc_last_rd    = 8'h00;
-    logic [31:0] fdc_fifo_ring = 32'h0;
+    logic [95:0] fdc_fifo_ring = 96'h0;
     logic       prev_fdd_irq   = 1'b0;
     always_ff @(posedge clock) begin
         prev_fdd_irq <= fdd_interrupt;
@@ -3358,7 +3358,7 @@ end endgenerate
         // is a RECALIBRATE of drive 1; 08 is SENSE INTERRUPT STATUS; 04 is
         // SENSE DRIVE STATUS. Four bytes is one command plus its parameters.
         if (fdd_io_write && (fdd_io_address == 3'd5))
-            fdc_fifo_ring <= {fdc_fifo_ring[23:0], fdd_io_writedata};
+            fdc_fifo_ring <= {fdc_fifo_ring[87:0], fdd_io_writedata};
         if (fdc_wr_edge && fdd_ctrl_win && ~fdc_addr_eff[6])
             fdc_last_94 <= write_to_fdd;
         if (fdc_wr_edge && fdd_ctrl_win &&  fdc_addr_eff[6])
@@ -3371,7 +3371,7 @@ end endgenerate
 `else
     assign dbg_fdc_x = 32'd0;
     assign dbg_fdc_y = 32'd0;
-    assign dbg_fdc_z = 32'd0;
+    assign dbg_fdc_z = 96'd0;
     assign dbg_fdc_w = 32'd0;
 `endif
 

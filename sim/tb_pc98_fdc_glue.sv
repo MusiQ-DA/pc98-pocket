@@ -797,6 +797,59 @@ module tb_pc98_fdc_glue;
             wr(3, 8'h02);
         end
 
+        // ---- the machine's own conversation, replayed ------------------
+        //
+        // The panel came back CD 00 CA 07 RL 0 with IQ 01: the bytes all
+        // reached floppy.v as commands, nothing was dropped, nothing is
+        // held -- and the interrupt fired exactly once, for the FIRST
+        // RECALIBRATE. FW 07 03 08 08 is the tail: a second RECALIBRATE
+        // and two SENSE INTERRUPT STATUS that got 80h, "nothing pending".
+        // So the question is whether a second seek, issued after the first
+        // has been sensed, raises anything at all.
+        $display("--- the machine's sequence: two seeks, one after another ---");
+        begin
+            logic [7:0] msr, st0, pcn;
+            int guard;
+
+            rst = 1'b1; repeat (4) @(posedge clk); rst = 1'b0;
+            repeat (2) @(posedge clk);
+            loop_mode = 1'b1;
+            window(1'b0);
+            @(negedge clk);
+            mgmt_address = 4'd0; mgmt_writedata = 16'h0001; mgmt_write = 1'b1;
+            @(negedge clk);
+            mgmt_write = 1'b0; #1;
+
+            wr(2, 8'h08);                  // 0x94 = 08: interrupts enabled
+            wr(1, 8'h03);                  // SPECIFY
+            wr(1, 8'hDF);
+            wr(1, 8'h02);
+
+            wr(1, 8'h07); wr(1, 8'h01);    // RECALIBRATE, unit 1
+            guard = 0;
+            while (!fd_irq && guard < 4_000_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("first seek interrupts", fd_irq, 1'b1);
+            wr(1, 8'h08); rd(1, st0); rd(1, pcn);
+            want1("and the sense clears it", fd_irq, 1'b0);
+
+            // The second one, with the machine's own unit byte: 03.
+            wr(1, 8'h07); wr(1, 8'h03);
+            guard = 0;
+            while (!fd_irq && guard < 4_000_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("SECOND seek interrupts too", fd_irq, 1'b1);
+            wr(1, 8'h08); rd(1, st0);
+            want("its ST0 is a seek end, not 80", st0 & 8'hF0, 8'h20);
+            rd(1, pcn);
+            rd(0, msr);
+            want("and the chip is idle after it", msr, 8'h80);
+        end
+
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("PASS tb_pc98_fdc_glue");
         else             $display("FAILED tb_pc98_fdc_glue: %0d", errors);
