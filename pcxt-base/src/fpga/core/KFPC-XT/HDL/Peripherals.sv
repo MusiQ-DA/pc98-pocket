@@ -192,6 +192,14 @@ module PERIPHERALS #(
     output  logic    [7:0]  dbg_strb_cc,
     output  logic    [7:0]  dbg_strb_dat,
     output  logic    [7:0]  dbg_last_ctrl,
+    // The controller itself, from the chipset's side of it: the MSR the
+    // guest last READ, the count of floppy.v interrupt rises, the DOR byte
+    // floppy.v last latched, the count of result bytes read, and the last
+    // byte written to each control port separately (dbg_last_ctrl mixes
+    // 0x94 and 0xCC, which is how a 48 with no matching ROM constant went
+    // unexplained).
+    output  logic   [31:0]  dbg_fdc_x,   // {rd results, DOR, irq rises, MSR}
+    output  logic   [15:0]  dbg_fdc_y,   // {last 0xCC byte, last 0x94 byte}
     // The write path counted in PERIPHERALS, before any glue: {raw write
     // strobe, pc98_io_exact clocks} and {write levels, read levels} on the
     // FDC port selects.
@@ -3308,6 +3316,45 @@ end endgenerate
     end
     assign dbg_w_path = {w_wr_edge, w_ioexact};   // [15:8] edge, [7:0] decode
     assign dbg_rw_lvl = {w_wr_lvl, w_rd_lvl};     // [15:8] writes, [7:0] reads
+
+`ifdef PC98_FDC_REAL
+    // ---- the controller, watched where it meets the chipset -------------
+    //
+    // nD 0D says the command bytes now land; r2 00 with m2 F7 says the BIOS
+    // has unmasked slave bit 3 (INT 13h, the 2HD line) and is waiting for an
+    // interrupt that never comes. Between those two facts sit floppy.v's MSR,
+    // its irq pin, and the DOR it is holding -- none of which anything has
+    // ever read out. IQ 00 means the chip never raised irq; a DOR with bit 3
+    // clear means it was told not to.
+    logic [7:0] fdc_msr_seen   = 8'h00;
+    logic [7:0] fdc_irq_rises  = 8'd0;
+    logic [7:0] fdc_dor_seen   = 8'h00;
+    logic [7:0] fdc_res_reads  = 8'd0;
+    logic [7:0] fdc_last_94    = 8'h00;
+    logic [7:0] fdc_last_cc    = 8'h00;
+    logic       prev_fdd_irq   = 1'b0;
+    always_ff @(posedge clock) begin
+        prev_fdd_irq <= fdd_interrupt;
+        if (fdd_interrupt & ~prev_fdd_irq & (fdc_irq_rises != 8'hFF))
+            fdc_irq_rises <= fdc_irq_rises + 8'd1;
+        if (fdd_io_read_1 & ~address_enable_n) begin
+            if (fdd_io_address == 3'd4) fdc_msr_seen <= fdd_readdata_wire;
+            if ((fdd_io_address == 3'd5) && (fdc_res_reads != 8'hFF))
+                fdc_res_reads <= fdc_res_reads + 8'd1;
+        end
+        if (fdd_io_write && (fdd_io_address == 3'd2))
+            fdc_dor_seen <= fdd_io_writedata;
+        if (fdc_wr_edge && fdd_ctrl_win && ~fdc_addr_eff[6])
+            fdc_last_94 <= write_to_fdd;
+        if (fdc_wr_edge && fdd_ctrl_win &&  fdc_addr_eff[6])
+            fdc_last_cc <= write_to_fdd;
+    end
+    assign dbg_fdc_x = {fdc_res_reads, fdc_dor_seen, fdc_irq_rises, fdc_msr_seen};
+    assign dbg_fdc_y = {fdc_last_cc, fdc_last_94};
+`else
+    assign dbg_fdc_x = 32'd0;
+    assign dbg_fdc_y = 16'd0;
+`endif
 
     floppy #(
 `ifdef MACHINE_PC98

@@ -1004,6 +1004,8 @@ module core_top (
     wire  [7:0] dbg_motor_pulses;
     wire  [7:0] dbg_chg;
     wire  [7:0] dbg_strb_be, dbg_strb_94, dbg_strb_cc, dbg_strb_dat, dbg_last_ctrl;
+    wire [31:0] dbg_fdc_x;
+    wire [15:0] dbg_fdc_y;
     wire [15:0] dbg_w_path, dbg_rw_lvl;
     wire  [7:0] dbg_irq_level;
     wire  [7:0] dbg_timer_count;
@@ -1171,6 +1173,8 @@ module core_top (
         .dbg_strb_cc             (dbg_strb_cc),
         .dbg_strb_dat            (dbg_strb_dat),
         .dbg_last_ctrl           (dbg_last_ctrl),
+        .dbg_fdc_x               (dbg_fdc_x),
+        .dbg_fdc_y               (dbg_fdc_y),
         .dbg_w_path              (dbg_w_path),
         .dbg_rw_lvl              (dbg_rw_lvl),
         .dbg_irq_level              (dbg_irq_level),
@@ -2568,6 +2572,8 @@ module core_top (
         .dbg_strb_cc                     (dbg_strb_cc),
         .dbg_strb_dat                    (dbg_strb_dat),
         .dbg_last_ctrl                   (dbg_last_ctrl),
+        .dbg_fdc_x                       (dbg_fdc_x),
+        .dbg_fdc_y                       (dbg_fdc_y),
         .dbg_w_path                      (dbg_w_path),
         .dbg_rw_lvl                      (dbg_rw_lvl),
         .dbg_irq_level                      (dbg_irq_level),

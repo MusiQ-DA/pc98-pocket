@@ -126,6 +126,8 @@ module softcpu_subsystem (
     input   [7:0] dbg_chg,
     input   [7:0] dbg_strb_be, dbg_strb_94, dbg_strb_cc, dbg_strb_dat,
     input   [7:0] dbg_last_ctrl,
+    input  [31:0] dbg_fdc_x,
+    input  [15:0] dbg_fdc_y,
     input  [15:0] dbg_w_path, dbg_rw_lvl,
     input   [7:0] dbg_irq_level,
     input   [7:0] dbg_timer_count,
@@ -1154,6 +1156,13 @@ module softcpu_subsystem (
             32'h5000_00DC: cpu_mem_rdata = {8'd0, dbg_strb_be,
                                             8'd0, dbg_strb_94};
             32'h5000_00E0: cpu_mem_rdata = {24'd0, dbg_last_ctrl};
+            // The controller itself: byte 0 the MSR the guest last read,
+            // byte 1 floppy.v's interrupt rises, byte 2 the DOR it holds,
+            // byte 3 the result bytes read back; then the last byte written
+            // to 0x94 and to 0xCC, kept apart. Byte-aligned, read as
+            // (x >> 8*n) & 0xFF -- see the D8/DC packing bug.
+            32'h5000_00EC: cpu_mem_rdata = dbg_fdc_x;
+            32'h5000_00F0: cpu_mem_rdata = {16'd0, dbg_fdc_y};
             // The write path counted in PERIPHERALS: {any-port write
             // strobe, decode clocks} and {write levels, read levels}.
             32'h5000_00E4: cpu_mem_rdata = dbg_w_path;
