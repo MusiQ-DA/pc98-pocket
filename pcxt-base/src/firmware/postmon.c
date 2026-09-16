@@ -62,6 +62,7 @@
 #define POST_FDCW   ((volatile uint32_t *) 0x500000F8) // {drops, accepts, reply_left, 0}
 #define POST_FDCZ1  ((volatile uint32_t *) 0x50000100) // FIFO bytes 4..7 back
 #define POST_FDCZ2  ((volatile uint32_t *) 0x50000104) // FIFO bytes 8..11 back
+#define POST_FDCV   ((volatile uint32_t *) 0x50000108) // {0, last port, dead, live}
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -987,15 +988,23 @@ void post_mon_tick(void)
         // raw io_write_n strobe (any port). EX 00 convicts the decode;
         // RD>0 WR 00 convicts io_write_n for these ports; WR>0 ST 00
         // convicts the edge detector.
-        uint32_t wp = *POST_WPATH, wl = *POST_RWLVL;
-        osd_draw_string(&fb, 4, 162, "EX", OSD_LABEL);
-        hex(4 + 3 * 8, 162, wp & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 6 * 8, 162, "RD", OSD_LABEL);
-        hex(4 + 9 * 8, 162, wl & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 12 * 8, 162, "WR", OSD_LABEL);
-        hex(4 + 15 * 8, 162, (wl >> 8) & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 18 * 8, 162, "ST", OSD_LABEL);
-        hex(4 + 21 * 8, 162, (wp >> 8) & 0xFFu, 2);
+        // The read side of the MSR poll, which is the boot's inner loop. LV
+        // counts reads that REACHED floppy.v; DD counts the ones the window
+        // guard turned away, which the chipset answers 0xFF -- and 0xFF & D0
+        // is D0, so a guest polling a dead window waits for a busy bit that
+        // will never fall. LP is the last FDC port read: 90/92 is the 2HD
+        // window, C8/CA the 2DD one. MS only moves on a live read, so MS D0
+        // beside RL 0 means the guest has been reading something else.
+        //
+        // This row replaces EX/RD/WR/ST: the write path they convicted is
+        // fixed and they have all been saturated for three builds.
+        uint32_t fv = *POST_FDCV;
+        osd_draw_string(&fb, 4, 162, "LV", OSD_LABEL);
+        hex(4 + 3 * 8, 162, fv & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 6 * 8, 162, "DD", OSD_LABEL);
+        hex(4 + 9 * 8, 162, (fv >> 8) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 12 * 8, 162, "LP", OSD_LABEL);
+        hex(4 + 15 * 8, 162, (fv >> 16) & 0xFFu, 2);
 
         // The controller itself. MS is the MSR the guest last read -- 80
         // means RQM with the chip idle and ready, C0 means it wants to be
