@@ -278,6 +278,25 @@ always @(posedge clk) begin
 	if(~rst_n | sw_reset)          in_seek_mode <= 4'b0000;
 	else if(cmd_recalibrate_start) in_seek_mode <= 4'b0001 << io_writedata[0];
 	else if(cmd_seek_start)        in_seek_mode <= 4'b0001 << command[0];
+	// ... and CLEARED by the SENSE INTERRUPT STATUS that collects the seek,
+	// for the drive that command reports. The 765 datasheet makes the drive
+	// -busy bits the host's "is the seek over" flag and Sense Interrupt
+	// Status the only thing that clears them; without the clear they are set
+	// once and stay set for the life of the machine.
+	//
+	// The PC-98 FDD BIOS waits on exactly those bits, so a stuck one hangs
+	// the boot: the panel came back MS D2 -- RQM, DIO, busy, and D1B for a
+	// RECALIBRATE of drive 1 that had long since finished and been sensed.
+	//
+	// All of them, not the one ST0 names: this register is ASSIGNED by each
+	// seek, never OR'd, so it holds at most one drive at a time -- and the
+	// drive it holds need not be the one the reply reports. RECALIBRATE
+	// takes its unit from the command byte (io_writedata[0] above) while
+	// the reply takes it from selected_drive, the DOR's drive field, which
+	// on a PC-98 is not the guest's at all: the machine has no DOR, so the
+	// glue synthesises one and parks that field at 0. Clearing "the drive
+	// in ST0" would then clear bit 0 while bit 1 stayed up for good.
+	else if(cmd_sense_interrupt_status_start) in_seek_mode <= 4'b0000;
 end
 
 //------------------------------------------------------------------------------

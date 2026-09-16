@@ -127,7 +127,8 @@ module softcpu_subsystem (
     input   [7:0] dbg_strb_be, dbg_strb_94, dbg_strb_cc, dbg_strb_dat,
     input   [7:0] dbg_last_ctrl,
     input  [31:0] dbg_fdc_x,
-    input  [15:0] dbg_fdc_y,
+    input  [31:0] dbg_fdc_y,
+    input  [31:0] dbg_fdc_z,
     input  [15:0] dbg_w_path, dbg_rw_lvl,
     input   [7:0] dbg_irq_level,
     input   [7:0] dbg_timer_count,
@@ -1162,7 +1163,8 @@ module softcpu_subsystem (
             // to 0x94 and to 0xCC, kept apart. Byte-aligned, read as
             // (x >> 8*n) & 0xFF -- see the D8/DC packing bug.
             32'h5000_00EC: cpu_mem_rdata = dbg_fdc_x;
-            32'h5000_00F0: cpu_mem_rdata = {16'd0, dbg_fdc_y};
+            32'h5000_00F0: cpu_mem_rdata = dbg_fdc_y;
+            32'h5000_00F4: cpu_mem_rdata = dbg_fdc_z;
             // The write path counted in PERIPHERALS: {any-port write
             // strobe, decode clocks} and {write levels, read levels}.
             32'h5000_00E4: cpu_mem_rdata = dbg_w_path;

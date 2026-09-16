@@ -449,6 +449,40 @@ module tb_pc98_fdc_glue;
             want("PCN is track 0", pcn, 8'h00);
             want1("still clear after the second byte", fd_irq, 1'b0);
 
+            // The MSR's drive-busy bits, the other half of a seek. The 765
+            // sets one when the seek starts and clears it at the SENSE
+            // INTERRUPT STATUS that collects it, and the PC-98 FDD BIOS
+            // waits on exactly that. floppy.v used to set them and never
+            // clear them: the panel came back MS D2, D1B still up for a
+            // RECALIBRATE of drive 1 that had finished and been sensed long
+            // before, and the boot sat there.
+            rd(0, msr);
+            want1("seek bits clear once the interrupt is sensed",
+                  |(msr & 8'h0F), 1'b0);
+
+            // Drive 1, which is the case the machine actually runs and the
+            // one that hung: RECALIBRATE takes its unit from the command
+            // byte, while the reply's ST0 takes it from the DOR's drive
+            // field -- and the glue parks that at 0, because a PC-98 has no
+            // DOR to put it in. A clear keyed on ST0 would miss this.
+            wr(1, 8'h07);
+            wr(1, 8'h01);
+            rd(0, msr);
+            want1("drive 1 reads busy while it seeks", msr[1], 1'b1);
+            guard = 0;
+            while (!fd_irq && guard < 2000) begin
+                @(negedge clk);
+                guard++;
+            end
+            #1;
+            want1("drive 1's recalibrate interrupts", fd_irq, 1'b1);
+            wr(1, 8'h08);
+            rd(1, st0);
+            rd(1, pcn);
+            rd(0, msr);
+            want1("and drive 1's busy bit clears with it", msr[1], 1'b0);
+            want("the MSR is idle again", msr & 8'hF0, 8'h80);
+
             // And the loop goes round again: a second RECALIBRATE has to raise
             // a fresh interrupt. An edge-triggered 8259 gets nothing from a
             // line that never came down, which is the other half of why a
