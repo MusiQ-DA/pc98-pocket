@@ -59,6 +59,7 @@
 #define POST_FDCX   ((volatile uint32_t *) 0x500000EC) // {results read, DOR, irq rises, MSR}
 #define POST_FDCY   ((volatile uint32_t *) 0x500000F0) // {last read byte, 0, CC, 94}
 #define POST_FDCZ   ((volatile uint32_t *) 0x500000F4) // the last four FIFO bytes
+#define POST_FDCW   ((volatile uint32_t *) 0x500000F8) // {drops, accepts, reply_left, 0}
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -1026,6 +1027,17 @@ void post_mon_tick(void)
         hex(4 + 3 * 8, 182, fz, 8);
         osd_draw_string(&fb, 4 + 13 * 8, 182, "RB", OSD_LABEL);
         hex(4 + 16 * 8, 182, (fy >> 24) & 0xFFu, 2);
+        // CA counts the bytes floppy.v took AS A COMMAND, CD the ones it
+        // dropped because it was busy or mid-result. A drop shifts the whole
+        // stream by one: the parameter behind a dropped opcode becomes the
+        // next opcode. RL is how many result bytes it is still holding.
+        uint32_t fw = *POST_FDCW;
+        osd_draw_string(&fb, 4 + 20 * 8, 182, "CA", OSD_LABEL);
+        hex(4 + 23 * 8, 182, (fw >> 16) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 27 * 8, 182, "CD", OSD_LABEL);
+        hex(4 + 30 * 8, 182, (fw >> 24) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 34 * 8, 182, "RL", OSD_LABEL);
+        hex(4 + 37 * 8, 182, (fw >> 8) & 0x0Fu, 1);
     }
 #endif
 

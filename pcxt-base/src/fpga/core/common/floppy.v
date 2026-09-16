@@ -83,11 +83,36 @@ module floppy
 
 	input      [27:0] clock_rate,
 
-	output      [1:0] request
+	output      [1:0] request,
+
+	// Debug witnesses. A write to the FIFO is only a command byte if the
+	// chip is idle and not mid-result; one that arrives while busy is
+	// silently DROPPED, and a dropped opcode turns the parameter behind it
+	// into the next opcode -- 07 01 becomes a RECALIBRATE that never
+	// happened followed by a SPECIFY that eats whatever comes next. These
+	// count both, so the panel can tell "the byte reached the chip" from
+	// "the chip took it as a command".
+	output reg  [7:0] dbg_cmd_accepts,
+	output reg  [7:0] dbg_cmd_drops,
+	output      [3:0] dbg_reply_left
 );
 
 reg [27:0] clk_rate;
 always @(posedge clk) clk_rate <= clock_rate;
+
+assign dbg_reply_left = reply_left;
+always @(posedge clk) begin
+	if(~rst_n) begin
+		dbg_cmd_accepts <= 8'd0;
+		dbg_cmd_drops   <= 8'd0;
+	end else begin
+		if(command_first && dbg_cmd_accepts != 8'hFF)
+			dbg_cmd_accepts <= dbg_cmd_accepts + 8'd1;
+		if(io_write && io_address == 3'h5 && ~command_first && ~command_next
+		   && ~execute_ndma && dbg_cmd_drops != 8'hFF)
+			dbg_cmd_drops <= dbg_cmd_drops + 8'd1;
+	end
+end
 
 //------------------------------------------------------------------------------ media management
 
