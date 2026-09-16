@@ -34,14 +34,22 @@ static uint32_t mgmt_read(uint32_t drive, uint32_t reg)
     return *FDD_MGMT_RDATA & 0xFFFF;
 }
 
-// Stream the 512 bytes now in the bridge RAM into the controller FIFO, in order.
+// The sector length each drive was mounted with, in words, keyed by drive so
+// the sector movers below know how much to move. The controller's request
+// carries a drive bit; its FIFO is one per chip, so only the length is
+// drive-keyed.
+static uint32_t fdd_sector_words[2] = { 128, 128 };
+
+// Stream the sector now in the bridge RAM into the controller FIFO, in order.
 // The bridge RAM holds the sector little-endian, so the low byte of each word is
 // the earlier file byte. The FIFO register address is set once for the whole run.
+// The length is the mounted media's sector width -- 512 bytes for every format
+// but a PC-98 2HD, whose sectors are 1024.
 static void push_sector(uint32_t drive)
 {
     *FDD_BRAM_ADDR = 0;
     *FDD_MGMT_ADDR = (drive << 4) | FMGMT_FIFO;
-    for (int i = 0; i < SECTOR_WORDS; i++) {
+    for (int i = 0; i < (int) fdd_sector_words[drive]; i++) {
         uint32_t w = *FDD_BRAM_RDATA;
         for (int b = 0; b < 4; b++) {
             *FDD_MGMT_WDATA = (w >> (b * 8)) & 0xFF;
@@ -50,15 +58,15 @@ static void push_sector(uint32_t drive)
     }
 }
 
-// Drain the 512 bytes the controller has queued for a write out of its FIFO and
+// Drain the sector the controller has queued for a write out of its FIFO and
 // into the bridge RAM, in order. Mirror of push_sector: the first byte popped is
-// the earliest file byte, so it lands in the low byte of the first RAM word. The
-// FIFO register address is set once for the whole run.
+// the earliest file byte, so it lands in the low byte of the first RAM word.
+// Length is the media's sector width, as above.
 static void pull_fifo(uint32_t drive)
 {
     *FDD_BRAM_ADDR = 0;
     *FDD_MGMT_ADDR = (drive << 4) | FMGMT_FIFO;
-    for (int i = 0; i < SECTOR_WORDS; i++) {
+    for (int i = 0; i < (int) fdd_sector_words[drive]; i++) {
         uint32_t w = 0;
         for (int b = 0; b < 4; b++) {
             *FDD_MGMT_TRIG = FDD_MGMT_RD;
@@ -75,19 +83,37 @@ struct fdd_geom {
     uint32_t cyls;
     uint32_t spt;
     uint32_t heads;
+    uint32_t is_1024;   // sector length: 512 << this, from the format's N
 };
 
+#ifdef MACHINE_PC98
+// The PC-98's own formats. A 2HD disk is 77 cylinders, 8 sectors, 2 heads of
+// 1024 bytes (N=3) = 1232 KB; a 2DD is 80/8/2 of 512s = 640 KB (with a
+// 9-sector 720 KB variant). 1.44 MB is a later PC-9821 format, listed ahead of
+// 2HD because its sector count is higher -- each row's count is computed from
+// its own sector width, so the ordering picks the right row for every size
+// that exists. The PC/AT table would answer 1.2 MB (80/15/2 of 512s) for a
+// 1232 KB image, which no PC-98 disk is.
 static const struct fdd_geom fdd_geoms[] = {
-    { 5760, 80, 36, 2 }, // 2.88 MB
-    { 3360, 80, 21, 2 }, // 1.68 MB
-    { 2880, 80, 18, 2 }, // 1.44 MB
-    { 2400, 80, 15, 2 }, // 1.2 MB
-    { 1440, 80, 9, 2 },  // 720 KB
-    { 720, 40, 9, 2 },   // 360 KB
-    { 640, 40, 8, 2 },   // 320 KB
-    { 360, 40, 9, 1 },   // 180 KB
-    { 0, 40, 8, 1 },     // 160 KB
+    { 2880, 80, 18, 2, 0 }, // 1.44 MB (PC-9821)
+    { 2464, 77,  8, 2, 1 }, // 2HD 1232 KB -- the standard PC-98 disk, N=3
+    { 1440, 80,  9, 2, 0 }, // 2DD 720 KB
+    { 1280, 80,  8, 2, 0 }, // 2DD 640 KB
+    {    0, 80,  8, 2, 0 }, // anything smaller: 2DD shape, sized by the image
 };
+#else
+static const struct fdd_geom fdd_geoms[] = {
+    { 5760, 80, 36, 2, 0 }, // 2.88 MB
+    { 3360, 80, 21, 2, 0 }, // 1.68 MB
+    { 2880, 80, 18, 2, 0 }, // 1.44 MB
+    { 2400, 80, 15, 2, 0 }, // 1.2 MB
+    { 1440, 80,  9, 2, 0 }, // 720 KB
+    {  720, 40,  9, 2, 0 }, // 360 KB
+    {  640, 40,  8, 2, 0 }, // 320 KB
+    {  360, 40,  9, 1, 0 }, // 180 KB
+    {    0, 40,  8, 1, 0 }, // 160 KB
+};
+#endif
 
 // Crude busy-wait, long enough to separate the eject from the insert below.
 static void spin(uint32_t n)
@@ -116,6 +142,11 @@ void fdd_mount(uint32_t drive, uint32_t sectors)
     mgmt_write(drive, FMGMT_SPT, g->spt);
     mgmt_write(drive, FMGMT_TOTAL, g->cyls * g->spt * g->heads);
     mgmt_write(drive, FMGMT_HEADS, g->heads);
+    // The controller keys its FIFO-full threshold and the N of a READ ID off
+    // this, and the sector movers below key their byte count off the same
+    // table row, so both always agree with what the media was declared to be.
+    mgmt_write(drive, FMGMT_SECSIZE, g->is_1024);
+    fdd_sector_words[drive] = g->is_1024 ? 256 : 128;
     mgmt_write(drive, FMGMT_WRPROT, 0);
     mgmt_write(drive, FMGMT_PRESENT, 1);
 }
@@ -125,24 +156,28 @@ void fdd_mount(uint32_t drive, uint32_t sectors)
 // the sector is moved to or from. A read pulls the sector from that dataslot and
 // streams it to the controller FIFO; a write drains the FIFO and persists it to that
 // dataslot. The reg-0 read and the FIFO are drive-agnostic in floppy.v, so only the
-// slot id is keyed on the drive. Writes reach the SD file directly, so nothing else
-// is needed here.
+// slot id and the sector width are keyed on the drive. Writes reach the SD file
+// directly, so nothing else is needed here.
 void fdd_poll(void)
 {
     uint32_t req = *FDD_REQUEST;
     if (req & FDD_REQ_READ) {
         uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);
-        uint32_t slot = (reg0 & FDD_LBA_DRIVE) ? FDD1_SLOT_ID : FDD0_SLOT_ID;
+        uint32_t drv = (reg0 & FDD_LBA_DRIVE) ? 1 : 0;
+        uint32_t bytes = fdd_sector_words[drv] * 4;
+        uint32_t slot = drv ? FDD1_SLOT_ID : FDD0_SLOT_ID;
         // Push only on a good read; a failed transfer must not stream stale bytes.
-        if (tds_transfer(slot, reg0 & FDD_LBA_MASK, FDD_TDS_READ)) {
-            push_sector(0);
+        if (tds_transfer(slot, reg0 & FDD_LBA_MASK, FDD_TDS_READ, bytes)) {
+            push_sector(drv);
         }
     } else if (req & FDD_REQ_WRITE) {
         uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);
-        uint32_t slot = (reg0 & FDD_LBA_DRIVE) ? FDD1_SLOT_ID : FDD0_SLOT_ID;
+        uint32_t drv = (reg0 & FDD_LBA_DRIVE) ? 1 : 0;
+        uint32_t bytes = fdd_sector_words[drv] * 4;
+        uint32_t slot = drv ? FDD1_SLOT_ID : FDD0_SLOT_ID;
         // pull_fifo already completes the controller's write; a failed persist has no
         // path back to the guest, so the result is not acted on here.
-        pull_fifo(0);
-        tds_transfer(slot, reg0 & FDD_LBA_MASK, FDD_TDS_WRITE);
+        pull_fifo(drv);
+        tds_transfer(slot, reg0 & FDD_LBA_MASK, FDD_TDS_WRITE, bytes);
     }
 }

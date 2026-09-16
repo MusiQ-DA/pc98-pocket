@@ -126,6 +126,7 @@
 #define FMGMT_SPT     0x3
 #define FMGMT_TOTAL   0x4
 #define FMGMT_HEADS   0x5
+#define FMGMT_SECSIZE 0x6   // bit0: sectors are 1024 bytes (PC-98 2HD), not 512
 #define FMGMT_FIFO    0xF
 
 // LBA read from register 0: 15-bit block, bit 15 selects drive B.
@@ -194,8 +195,9 @@
 // Bytes to declare for the nonvolatile Settings slot so it flushes on first boot.
 #define SETTINGS_SLOT_BYTES 64
 
-// Shared disk-bridge sector transfer (disk_tds.c).
-int tds_transfer(uint32_t slot, uint32_t lba, uint32_t dir);
+// Shared disk-bridge sector transfer (disk_tds.c). The length is the media's
+// sector width, because the image file is laid out in that width.
+int tds_transfer(uint32_t slot, uint32_t lba, uint32_t dir, uint32_t bytes);
 
 // APF datatable access by slot id (disk_tds.c).
 uint32_t slot_bytes(uint16_t id);

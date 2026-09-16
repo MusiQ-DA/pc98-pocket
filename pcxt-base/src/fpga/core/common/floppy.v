@@ -142,6 +142,15 @@ always @(posedge clk) if(mgmt_write && mgmt_address == 4'd4 &&  mgmt_fddn) media
 (* ramstyle = "logic" *) reg [1:0] media_heads[2];
 always @(posedge clk) if(mgmt_write && mgmt_address == 4'd5) media_heads[mgmt_fddn] <= mgmt_writedata[1:0];
 
+// A PC-98's 2HD disks carry 1024-byte sectors (N=3); everything this file
+// served before -- the PC/AT formats and a PC-98's 2DD -- is 512 bytes (N=2).
+// The host declares which it mounted, per drive, and everything downstream
+// (how full the FIFO must get before a sector is whole, and the N a READ ID
+// reports) keys off the MEDIA, because that is what the silicon would key
+// off: the controller does not get to choose the sector size, the disk does.
+(* ramstyle = "logic" *) reg media_is_1024[2];
+always @(posedge clk) if(mgmt_write && mgmt_address == 4'd6) media_is_1024[mgmt_fddn] <= mgmt_writedata[0];
+
 wire fifo_read  = mgmt_read  && &mgmt_address;
 wire fifo_write = mgmt_write && &mgmt_address;
 
@@ -539,11 +548,16 @@ wire reset_changeline =
 wire cmd_read_write_hang_at_start =
 	~motor_enable[selected_drive[0]] ||  //motor off
 	~media_present[selected_drive[0]] || //no media
-	command[23:16] != 8'h02 ||           //invalid sector size
+	(command[23:16] != 8'h02 && command[23:16] != 8'h03) || //sector size neither 512 nor 1024
 	command[47:40] >= media_cylinders[selected_drive[0]];   //invalid cylinder
 
 wire cmd_read_write_incorrect_head_at_start   = motor_enable[selected_drive[0]] && (command[50] != command[32] || (command[32] && media_heads[selected_drive[0]] == 2'd1));
-wire cmd_read_write_incorrect_sector_at_start = ~cmd_read_write_hang_at_start && (command[31:24] > media_sectors_per_track[selected_drive[0]] || command[31:24] > command[15:8]);
+// The N naming a width the mounted media does not carry is an error answer,
+// not a hang: the PC-98 BIOS probes a drive in more than one format (2HD
+// then 2DD) and must get ST0 back to fall through to the next try, the same
+// way an empty drive does.
+wire cmd_read_write_incorrect_sector_at_start = ~cmd_read_write_hang_at_start && (command[31:24] > media_sectors_per_track[selected_drive[0]] || command[31:24] > command[15:8] || media_is_1024[selected_drive[0]] != (command[23:16] == 8'h03));
+
 wire cmd_write_and_writeprotected_at_start    = ~cmd_read_write_hang_at_start && ~cmd_read_write_incorrect_sector_at_start && cmd_write_normal_start && media_writeprotected[selected_drive[0]];
     
 wire cmd_read_write_ok_at_start = 
@@ -563,7 +577,7 @@ reg cmd_read_write_was_ndma_terminal;
 always @(posedge clk) begin
     if(~rst_n)                                                                                 cmd_read_write_was_ndma_terminal <= 1'd0;
     else if(state == S_UPDATE_SECTOR && sector[selected_drive[0]] == eot[selected_drive[0]] && 
-	        {1'b0, head[selected_drive[0]] } == (media_heads[selected_drive[0]] - 2'd1))        cmd_read_write_was_ndma_terminal <= 1'd1;
+	        (~cmd_read_write_multitrack || {1'b0, head[selected_drive[0]] } == (media_heads[selected_drive[0]] - 2'd1))) cmd_read_write_was_ndma_terminal <= 1'd1;
     else if(state == S_UPDATE_SECTOR)                                                          cmd_read_write_was_ndma_terminal <= 1'd0;
 end
 
@@ -826,16 +840,18 @@ always @(posedge clk) begin
 	//   uses. READ ID is a two-byte command, so at cmd_read_id_start `command`
 	//   still holds only the opcode and the HDS/US byte is on io_writedata --
 	//   the head bit is io_writedata[2], the way cmd_recalibrate_start reads
-	//   its unit out of io_writedata[0] rather than out of command.
-	else if(cmd_read_id_notready_at_start)                                   reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h04, (8'h40 | { 5'd0, io_writedata[2], selected_drive }) };
+	//   its unit out of io_writedata[0] rather than out of command. The N is
+	//   the MEDIA's sector size, not a constant: a READ ID is how the host
+	//   asks "what format is this disk", and a 2HD answers N=3.
+	else if(cmd_read_id_notready_at_start)                                   reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h04, (8'h40 | { 5'd0, io_writedata[2], selected_drive }) };
 	else if(cmd_read_write_start && cmd_read_write_incorrect_head_at_start)   reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h04, (8'h40 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	else if(cmd_read_write_start && cmd_read_write_incorrect_sector_at_start) reply <= { 24'd0, 8'd2, command[31:24],            7'b0,command[32],             command[47:40],              8'h00, 8'h04, (8'h40 | { 5'd0, command[32],              selected_drive }) };
 	else if(cmd_write_normal_start && cmd_write_and_writeprotected_at_start)  reply <= { 24'd0, 8'd2, command[31:24],            7'b0,command[32],             command[47:40],              8'h31, 8'h27, (8'h40 | { 5'd0, command[32],              selected_drive }) };
 	else if(cmd_format_track_start && cmd_format_writeprotected_at_start)     reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,command[26],             cylinder[selected_drive[0]], 8'h31, 8'h27, (8'h40 | { 5'd0, command[26],              selected_drive }) };
-	else if(state == S_CHECK_TC && cmd_read_write_finish)                     reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
+	else if(state == S_CHECK_TC && cmd_read_write_finish)                     reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	else if(state == S_CHECK_TC && cmd_format_finish)                         reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	else if(state == S_WAIT_FOR_FORMAT_INPUT && cmd_format_in_input_finish)   reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h40 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
-	else if(cmd_read_id_finished)                                             reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
+	else if(cmd_read_id_finished)                                             reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	else if(cmd_get_status_start)                                             reply <= { 72'd0, 1'b0, media_writeprotected[io_writedata[0]], 1'b1, !cylinder[io_writedata[0]], 1'b1, io_writedata[2], 1'b0, io_writedata[0] };
 	else if(cmd_sense_interrupt_status_start && |seek_done)                   reply <= { 64'd0, sense_pcn, sense_st0 };
 	else if(cmd_sense_interrupt_status_start && reset_sensei)                 reply <= { 64'd0, cylinder[selected_drive[0]], 4'hC, 2'b00, reset_sensei_drive };
@@ -1029,10 +1045,16 @@ end
 
 //------------------------------------------------------------------------------ fifo
 
-wire [9:0] fifo_count;
-wire       fifo_empty;
-wire       fifo_full = fifo_count[9];
-wire [7:0] fifo_q;
+// One sector of the mounted media: 512 bytes for every format this file ever
+// served, 1024 for a PC-98 2HD. The FIFO itself is twice the largest sector
+// so a full 1024 still leaves headroom for the read and write sides to
+// overlap -- the same margin the old fixed-1024-deep FIFO gave a 512.
+wire [10:0] sector_len = media_is_1024[selected_drive[0]] ? 11'd1024 : 11'd512;
+
+wire [10:0] fifo_count;
+wire        fifo_empty;
+wire        fifo_full = (fifo_count >= sector_len);
+wire [7:0]  fifo_q;
 
 reg  [7:0] fifo_readdata;
 always @(posedge clk) begin
@@ -1048,7 +1070,7 @@ wire fifo_pc_rd   = (ndma_read || (~execute_ndma && dma_ack));
 
 simple_fifo #(
 	.width      (8),
-	.widthu     (10)
+	.widthu     (11)
 )
 fifo_to_floppy_inst (
 	.clk        (clk),

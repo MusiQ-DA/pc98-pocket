@@ -73,6 +73,7 @@ module tb_pc98_fdc_glue;
     // loop closing. This is the chip the bitstream ships.
     wire       fdd_irq;
     wire [7:0] fdd_readdata;
+    wire [1:0] fdd_request;
     logic        mgmt_write = 1'b0;
     logic [3:0]  mgmt_address = 4'd0;
     logic [15:0] mgmt_writedata = 16'd0;
@@ -106,7 +107,7 @@ module tb_pc98_fdc_glue;
         // in a handful of cycles instead of a hardware second. It only scales
         // the seek delay; nothing about the interrupt depends on its value.
         .clock_rate     (28'd2000),
-        .request        ()
+        .request        (fdd_request)
     );
 
     // fd_read is a one-cycle strobe, so looking at it after a read task has
@@ -866,6 +867,140 @@ module tb_pc98_fdc_glue;
             want("a fifth SENSE gets 80", st0, 8'h80);
             rd(0, msr);
             want("still idle after it", msr, 8'h80);
+        end
+
+        // ================================================================
+        // 2HD: 1024-byte sectors (N=3). The PC-98's standard disk is 77
+        // cylinders, 8 sectors, 2 heads of 1024 bytes -- twice the width
+        // everything above assumed. The FIFO's full threshold, and the N a
+        // READ ID reports, key off the media's declared width; and a command
+        // whose N names the WRONG width is an error ANSWER, not a hang,
+        // because the BIOS probes a drive in more than one format and must
+        // get ST0 back to fall through to the next try.
+        $display("--- 2HD: 1024-byte sectors ---");
+        begin
+            logic [7:0] msr, st0, b0, blast;
+            int guard;
+
+            rst = 1'b1;
+            repeat (4) @(posedge clk);
+            rst = 1'b0;
+            repeat (2) @(posedge clk);
+            window(1'b0);
+
+            // Mount the 1232 KB disk, the way fdd_mount() would.
+            @(negedge clk);
+            mgmt_address = 4'd2; mgmt_writedata = 16'd77; mgmt_write = 1'b1;
+            @(negedge clk);
+            mgmt_address = 4'd3; mgmt_writedata = 16'd8;
+            @(negedge clk);
+            mgmt_address = 4'd5; mgmt_writedata = 16'd2;
+            @(negedge clk);
+            mgmt_address = 4'd6; mgmt_writedata = 16'd1;  // sectors are 1024B
+            @(negedge clk);
+            mgmt_address = 4'd0; mgmt_writedata = 16'd1;  // insert
+            @(negedge clk);
+            mgmt_write = 1'b0;
+            #1;
+
+            wr(2, 8'h08);                                // interrupts enabled
+            // SPECIFY with NDMA set (byte 2 bit 0): the bench drains the
+            // sector over the data port rather than keeping a DMA engine
+            // busy. The BIOS's own value is 32 -- DMA mode -- which needs
+            // the 8237; this exercises the same FIFO either way.
+            wr(1, 8'h03); wr(1, 8'hBF); wr(1, 8'h33);    // SPECIFY, NDMA on
+
+            // READ DATA: C0 H0 R1 N3 EOT1 -- one 1024-byte sector.
+            wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h01); wr(1, 8'h1B);
+            wr(1, 8'hFF);
+
+            repeat (10) @(negedge clk); #1;
+            want1("2HD read raises the sector request", fdd_request[0], 1'b1);
+
+            // 512 bytes -- a whole 2DD sector -- is HALF a 2HD one, and the
+            // request must still be standing.
+            mgmt_address = 4'hF;
+            for (int i = 0; i < 512; i++) begin
+                @(negedge clk);
+                mgmt_writedata = {8'h00, i[7:0]};
+                mgmt_write = 1'b1;
+            end
+            @(negedge clk);
+            mgmt_write = 1'b0;
+            repeat (10) @(negedge clk); #1;
+            want1("512 bytes did not fill a 2HD sector", fdd_request[0], 1'b1);
+
+            // The second half completes it, and the chip moves on to handing
+            // the bytes to the guest.
+            for (int i = 0; i < 512; i++) begin
+                @(negedge clk);
+                mgmt_writedata = {8'h00, (i[7:0] ^ 8'hA5)};
+                mgmt_write = 1'b1;
+            end
+            @(negedge clk);
+            mgmt_write = 1'b0;
+            guard = 0;
+            while (fdd_request[0] && guard < 20_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("1024 bytes completed the sector", fdd_request[0], 1'b0);
+
+            // The guest drains it over NDMA: first byte of the first half,
+            // last byte of the second (i=511: 511&FF ^ A5 = 5A).
+            rd(1, b0);
+            want("first byte of the sector", b0, 8'h00);
+            for (int i = 0; i < 1022; i++) rd(1, msr);
+            rd(1, blast);
+            want("last byte of the sector", blast, 8'h5A);
+
+            // EOT was 1, so the transfer is over: result phase, interrupt,
+            // and a clean ST0.
+            guard = 0;
+            while (!fd_irq && guard < 20_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("the read interrupts", fd_irq, 1'b1);
+            rd(1, st0);
+            want("ST0 clean", st0, 8'h00);
+            for (int b = 0; b < 6; b++) rd(1, msr);
+            rd(0, msr);
+            want("MSR idle after the result", msr, 8'h80);
+
+            // ---- a READ ID on the same media reports ITS N as 3 -----------
+            wr(1, 8'h0A); wr(1, 8'h00);   // READ ID, head 0 unit 0
+            guard = 0;
+            while (!fd_irq && guard < 10_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("READ ID interrupts", fd_irq, 1'b1);
+            rd(1, st0);
+            want("READ ID ST0 clean", st0, 8'h00);
+            rd(1, msr); rd(1, msr); rd(1, msr); rd(1, msr); rd(1, msr);
+            rd(1, b0);
+            want("READ ID reports N=3 for 2HD", b0, 8'h03);
+            rd(0, msr);
+            want("MSR idle after READ ID", msr, 8'h80);
+
+            // ---- and the WRONG N is an answer, not a hang ------------------
+            wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h01); wr(1, 8'h02); wr(1, 8'h01); wr(1, 8'h1B);
+            wr(1, 8'hFF);
+            guard = 0;
+            while (!fd_irq && guard < 20_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("N=2 on a 2HD disk interrupts", fd_irq, 1'b1);
+            rd(1, st0);
+            want("ST0 = IC abnormal, not a hang", st0 & 8'hC0, 8'h40);
+            want1("and no sector request was made", fdd_request[0], 1'b0);
+            for (int b = 0; b < 6; b++) rd(1, msr);
+            rd(0, msr);
+            want("MSR idle after the error", msr, 8'h80);
         end
 
         $display("\n  errors: %0d", errors);

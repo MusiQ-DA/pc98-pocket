@@ -122,7 +122,7 @@ static void scsi_ok(void)
 // end first, so the image's byte order survives.
 static int scsi_push_sector(uint32_t lba)
 {
-    if (!tds_transfer(HDD0_SLOT_ID, lba, FDD_TDS_READ))
+    if (!tds_transfer(HDD0_SLOT_ID, lba, FDD_TDS_READ, SECTOR_BYTES))
         return 0;
     *FDD_BRAM_ADDR = 0;
     for (int i = 0; i < SECTOR_WORDS; i++) {
@@ -145,7 +145,7 @@ static int scsi_drain_sector(uint32_t lba)
         uint32_t b3 = scsi_get();
         *FDD_BRAM_WDATA = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
     }
-    return tds_transfer(HDD0_SLOT_ID, lba, FDD_TDS_WRITE);
+    return tds_transfer(HDD0_SLOT_ID, lba, FDD_TDS_WRITE, SECTOR_BYTES);
 }
 
 // The buffer is 8 KB, so a transfer is capped at sixteen blocks per command.
