@@ -201,6 +201,7 @@ module PERIPHERALS #(
     output  logic   [31:0]  dbg_fdc_x,   // {rd results, DOR, irq rises, MSR}
     output  logic   [31:0]  dbg_fdc_y,   // {last read byte, 0, 0xCC, 0x94}
     output  logic   [31:0]  dbg_fdc_z,   // the last four bytes into the FIFO
+    output  logic   [31:0]  dbg_fdc_w,   // {drops, accepts, reply_left, 0}
     // The write path counted in PERIPHERALS, before any glue: {raw write
     // strobe, pc98_io_exact clocks} and {write levels, read levels} on the
     // FDC port selects.
@@ -3110,6 +3111,9 @@ end endgenerate
     logic           prev_fdd_dma_ack;
     logic           fdd_dma_rw_ack;
     logic           fdd_dma_tc;
+    wire    [7:0]   fdc_cmd_accepts;
+    wire    [7:0]   fdc_cmd_drops;
+    wire    [3:0]   fdc_reply_left;
 
     assign  mgmt_fdd_cs = (mgmt_address[15:8] == 8'hF2);
 
@@ -3363,10 +3367,12 @@ end endgenerate
     assign dbg_fdc_x = {fdc_res_reads, fdc_dor_seen, fdc_irq_rises, fdc_msr_seen};
     assign dbg_fdc_y = {fdc_last_rd, 8'd0, fdc_last_cc, fdc_last_94};
     assign dbg_fdc_z = fdc_fifo_ring;
+    assign dbg_fdc_w = {fdc_cmd_drops, fdc_cmd_accepts, 4'd0, fdc_reply_left, 8'd0};
 `else
     assign dbg_fdc_x = 32'd0;
     assign dbg_fdc_y = 32'd0;
     assign dbg_fdc_z = 32'd0;
+    assign dbg_fdc_w = 32'd0;
 `endif
 
     floppy #(
@@ -3411,7 +3417,11 @@ end endgenerate
         .clock_rate                 (clk_select[1] == 1'b0 ? clk_rate :
                                      clk_select[0] == 1'b0 ? {1'b0, clk_rate[27:1]} : {2'b00, clk_rate[27:2]}),
 
-        .request                    (fdd_request)
+        .request                    (fdd_request),
+
+        .dbg_cmd_accepts            (fdc_cmd_accepts),
+        .dbg_cmd_drops              (fdc_cmd_drops),
+        .dbg_reply_left             (fdc_reply_left)
     );
 
     always_ff @(posedge clock)

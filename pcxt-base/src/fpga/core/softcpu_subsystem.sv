@@ -129,6 +129,7 @@ module softcpu_subsystem (
     input  [31:0] dbg_fdc_x,
     input  [31:0] dbg_fdc_y,
     input  [31:0] dbg_fdc_z,
+    input  [31:0] dbg_fdc_w,
     input  [15:0] dbg_w_path, dbg_rw_lvl,
     input   [7:0] dbg_irq_level,
     input   [7:0] dbg_timer_count,
@@ -1165,6 +1166,7 @@ module softcpu_subsystem (
             32'h5000_00EC: cpu_mem_rdata = dbg_fdc_x;
             32'h5000_00F0: cpu_mem_rdata = dbg_fdc_y;
             32'h5000_00F4: cpu_mem_rdata = dbg_fdc_z;
+            32'h5000_00F8: cpu_mem_rdata = dbg_fdc_w;
             // The write path counted in PERIPHERALS: {any-port write
             // strobe, decode clocks} and {write levels, read levels}.
             32'h5000_00E4: cpu_mem_rdata = dbg_w_path;
