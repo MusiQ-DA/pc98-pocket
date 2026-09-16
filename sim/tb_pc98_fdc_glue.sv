@@ -799,17 +799,22 @@ module tb_pc98_fdc_glue;
 
         // ---- the machine's own conversation, replayed ------------------
         //
-        // The panel came back CD 00 CA 07 RL 0 with IQ 01: the bytes all
-        // reached floppy.v as commands, nothing was dropped, nothing is
-        // held -- and the interrupt fired exactly once, for the FIRST
-        // RECALIBRATE. FW 07 03 08 08 is the tail: a second RECALIBRATE
-        // and two SENSE INTERRUPT STATUS that got 80h, "nothing pending".
-        // So the question is whether a second seek, issued after the first
-        // has been sensed, raises anything at all.
-        $display("--- the machine's sequence: two seeks, one after another ---");
+        // Off the panel's FIFO ring, oldest byte first:
+        //
+        //     [03] BF 32    SPECIFY
+        //     07 00         RECALIBRATE unit 0
+        //     07 01         RECALIBRATE unit 1
+        //     07 02         RECALIBRATE unit 2
+        //     07 03         RECALIBRATE unit 3
+        //     08 08         SENSE INTERRUPT STATUS, twice
+        //
+        // Four seeks issued together and collected one at a time -- the 765's
+        // overlapped seek, which the BIOS's drive probe is built on. CA 07
+        // counts exactly those seven commands.
+        $display("--- the BIOS drive probe: four seeks at once ---");
         begin
             logic [7:0] msr, st0, pcn;
-            int guard;
+            int guard, i;
 
             rst = 1'b1; repeat (4) @(posedge clk); rst = 1'b0;
             repeat (2) @(posedge clk);
@@ -820,34 +825,47 @@ module tb_pc98_fdc_glue;
             @(negedge clk);
             mgmt_write = 1'b0; #1;
 
-            wr(2, 8'h08);                  // 0x94 = 08: interrupts enabled
-            wr(1, 8'h03);                  // SPECIFY
-            wr(1, 8'hDF);
-            wr(1, 8'h02);
-
-            wr(1, 8'h07); wr(1, 8'h01);    // RECALIBRATE, unit 1
-            guard = 0;
-            while (!fd_irq && guard < 4_000_000) begin
-                @(negedge clk); guard++;
-            end
-            #1;
-            want1("first seek interrupts", fd_irq, 1'b1);
-            wr(1, 8'h08); rd(1, st0); rd(1, pcn);
-            want1("and the sense clears it", fd_irq, 1'b0);
-
-            // The second one, with the machine's own unit byte: 03.
+            wr(2, 8'h08);                              // interrupts enabled
+            wr(1, 8'h03); wr(1, 8'hBF); wr(1, 8'h32);  // SPECIFY
+            wr(1, 8'h07); wr(1, 8'h00);
+            wr(1, 8'h07); wr(1, 8'h01);
+            wr(1, 8'h07); wr(1, 8'h02);
             wr(1, 8'h07); wr(1, 8'h03);
+
+            rd(0, msr);
+            want("all four drives read busy", msr & 8'h0F, 8'h0F);
+
             guard = 0;
-            while (!fd_irq && guard < 4_000_000) begin
+            while (!fd_irq && guard < 8_000_000) begin
                 @(negedge clk); guard++;
             end
             #1;
-            want1("SECOND seek interrupts too", fd_irq, 1'b1);
-            wr(1, 8'h08); rd(1, st0);
-            want("its ST0 is a seek end, not 80", st0 & 8'hF0, 8'h20);
-            rd(1, pcn);
+            want1("the seeks interrupt", fd_irq, 1'b1);
+
+            // One SENSE INTERRUPT STATUS per drive, in order, each clearing
+            // its own busy bit and leaving the line up for the next.
+            for (i = 0; i < 4; i++) begin
+                wr(1, 8'h08);
+                rd(1, st0);
+                rd(1, pcn);
+                want("ST0 names the drive, seek end", st0 & 8'h23,
+                     8'h20 | i[1:0]);
+                if (i < 3) begin
+                    repeat (2) @(negedge clk); #1;
+                    want1("and the line comes back for the next", fd_irq, 1'b1);
+                end
+            end
+            repeat (2) @(negedge clk); #1;
+            want1("four sensed, the line finally rests", fd_irq, 1'b0);
             rd(0, msr);
-            want("and the chip is idle after it", msr, 8'h80);
+            want("and the MSR is idle", msr, 8'h80);
+
+            // The fifth ask gets the invalid-command answer, one byte.
+            wr(1, 8'h08);
+            rd(1, st0);
+            want("a fifth SENSE gets 80", st0, 8'h80);
+            rd(0, msr);
+            want("still idle after it", msr, 8'h80);
         end
 
         $display("\n  errors: %0d", errors);
