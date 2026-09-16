@@ -483,6 +483,18 @@ module tb_pc98_fdc_glue;
             want1("and drive 1's busy bit clears with it", msr[1], 1'b0);
             want("the MSR is idle again", msr & 8'hF0, 8'h80);
 
+            // SENSE INTERRUPT STATUS with NOTHING pending: the 765 calls
+            // that an invalid command -- ST0 = 80h and a ONE byte result
+            // phase. Two bytes would leave the phase open on a host that
+            // reads the 80 and stops, and a result phase that never ends
+            // holds busy up and makes every later command write vanish.
+            // FW 07 03 08 08 / RB 80 / MS D0 on the panel was that state.
+            wr(1, 8'h08);
+            rd(1, st0);
+            want("no interrupt pending: ST0 is 80", st0, 8'h80);
+            rd(0, msr);
+            want("and the chip is idle, not mid-result", msr, 8'h80);
+
             // And the loop goes round again: a second RECALIBRATE has to raise
             // a fresh interrupt. An edge-triggered 8259 gets nothing from a
             // line that never came down, which is the other half of why a
