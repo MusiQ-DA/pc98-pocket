@@ -77,6 +77,14 @@ def core(j):
         c['filename'] = 'bitstream.rbf_r'
 
 def data(j):
+    # The floppy and hard-disk ids are the ones the firmware's slot map
+    # (softcpu_regs.h) and core_top's dataslot_update decode expect: 3/4 are
+    # the two floppy drives, 5 is the SCSI image the PC-98 disk BIOS would
+    # talk to. The ROMs used to squat on 3 and 4 -- harmless while nothing
+    # mounted a floppy, and wrong now that something can: a dataslot_update
+    # for id 3 is read by core_top as "floppy A's size", so the FONT's byte
+    # count was being mounted as a disk. The bridge addresses, not the ids,
+    # are what routes the ROM streams, so renumbering them is free.
     j['data']['data_slots'] = [
         {"name": "PC-98 BIOS",  "id": 1, "required": True,  "parameters": "0x203",
          "filename": "bios.rom", "extensions": ["rom", "bin"],
@@ -84,15 +92,24 @@ def data(j):
         {"name": "PC-98 ITF",   "id": 2, "required": True,  "parameters": "0x203",
          "filename": "itf.rom",  "extensions": ["rom", "bin"],
          "address": "0x10020000", "size_maximum": "0x8000"},
-        {"name": "PC-98 Font",  "id": 3, "required": True,  "parameters": "0x203",
+        {"name": "PC-98 Font",  "id": 11, "required": True,  "parameters": "0x203",
          "filename": "font.rom", "extensions": ["rom", "bin"],
          "address": "0x10100000", "size_maximum": "0x46800"},
-        {"name": "Firmware",    "id": 4, "required": False, "parameters": "0x203",
+        {"name": "Firmware",    "id": 12, "required": False, "parameters": "0x203",
          "filename": "firmware.bin", "extensions": ["bin"],
          "address": "0x10040000", "size_maximum": "0x6000"},
         {"name": "Settings",    "id": 7, "required": False, "parameters": "0x03",
          "filename": "settings.dat", "extensions": ["dat"],
          "address": "0x10030000", "size_maximum": "0x1000"},
+        {"name": "Floppy A",    "id": 3, "required": False, "parameters": 1,
+         "extensions": ["d88", "d98", "fdi", "fdd", "2hd", "tfd", "hdm", "xdf"],
+         "size_maximum": 8388608, "deferload": True},
+        {"name": "Floppy B",    "id": 4, "required": False, "parameters": 1,
+         "extensions": ["d88", "d98", "fdi", "fdd", "2hd", "tfd", "hdm", "xdf"],
+         "size_maximum": 8388608, "deferload": True},
+        {"name": "Hard Disk",   "id": 5, "required": False, "parameters": 1,
+         "extensions": ["hdi", "nhd", "thd", "hdd", "hdn"],
+         "deferload": True},
     ]
 
 def video(j):
