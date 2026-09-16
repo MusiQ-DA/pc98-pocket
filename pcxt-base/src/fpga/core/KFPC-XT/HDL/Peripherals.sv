@@ -202,6 +202,7 @@ module PERIPHERALS #(
     output  logic   [31:0]  dbg_fdc_y,   // {last read byte, 0, 0xCC, 0x94}
     output  logic   [95:0]  dbg_fdc_z,   // the last TWELVE bytes into the FIFO
     output  logic   [31:0]  dbg_fdc_w,   // {drops, accepts, reply_left, 0}
+    output  logic   [31:0]  dbg_fdc_v,   // {last port, dead reads, live reads}
     // The write path counted in PERIPHERALS, before any glue: {raw write
     // strobe, pc98_io_exact clocks} and {write levels, read levels} on the
     // FDC port selects.
@@ -3338,12 +3339,31 @@ end endgenerate
     logic [7:0] fdc_last_94    = 8'h00;
     logic [7:0] fdc_last_cc    = 8'h00;
     logic [7:0] fdc_last_rd    = 8'h00;
+    // Reads that reached the chip, against reads the window guard answered
+    // with 0xFF from the chipset. The guest's MSR poll is the boot's whole
+    // inner loop, so if it is polling a DEAD window it sees FF forever --
+    // and MS, which only updates on a read that gets through, freezes at
+    // whatever it last really saw. MS D0 with RL 0 is exactly that shape.
+    logic [7:0] fdc_live_reads = 8'd0;
+    logic [7:0] fdc_dead_reads = 8'd0;
+    logic [7:0] fdc_last_port  = 8'h00;
     logic [95:0] fdc_fifo_ring = 96'h0;
     logic       prev_fdd_irq   = 1'b0;
     always_ff @(posedge clock) begin
         prev_fdd_irq <= fdd_interrupt;
         if (fdd_interrupt & ~prev_fdd_irq & (fdc_irq_rises != 8'hFF))
             fdc_irq_rises <= fdc_irq_rises + 8'd1;
+        if (~io_read_n & prev_io_read_n & pc98_addr_win
+            & ((address[7:0] == 8'h90) | (address[7:0] == 8'h92)
+             | (address[7:0] == 8'hC8) | (address[7:0] == 8'hCA))) begin
+            fdc_last_port <= address[7:0];
+            if (fdc_group_live) begin
+                if (fdc_live_reads != 8'hFF)
+                    fdc_live_reads <= fdc_live_reads + 8'd1;
+            end
+            else if (fdc_dead_reads != 8'hFF)
+                fdc_dead_reads <= fdc_dead_reads + 8'd1;
+        end
         if (fdd_io_read_1 & ~address_enable_n) begin
             if (fdd_io_address == 3'd4) fdc_msr_seen <= fdd_readdata_wire;
             if (fdd_io_address == 3'd5) begin
@@ -3368,11 +3388,13 @@ end endgenerate
     assign dbg_fdc_y = {fdc_last_rd, 8'd0, fdc_last_cc, fdc_last_94};
     assign dbg_fdc_z = fdc_fifo_ring;
     assign dbg_fdc_w = {fdc_cmd_drops, fdc_cmd_accepts, 4'd0, fdc_reply_left, 8'd0};
+    assign dbg_fdc_v = {8'd0, fdc_last_port, fdc_dead_reads, fdc_live_reads};
 `else
     assign dbg_fdc_x = 32'd0;
     assign dbg_fdc_y = 32'd0;
     assign dbg_fdc_z = 96'd0;
     assign dbg_fdc_w = 32'd0;
+    assign dbg_fdc_v = 32'd0;
 `endif
 
     floppy #(
