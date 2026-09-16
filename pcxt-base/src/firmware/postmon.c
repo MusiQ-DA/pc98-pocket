@@ -60,6 +60,8 @@
 #define POST_FDCY   ((volatile uint32_t *) 0x500000F0) // {last read byte, 0, CC, 94}
 #define POST_FDCZ   ((volatile uint32_t *) 0x500000F4) // the last four FIFO bytes
 #define POST_FDCW   ((volatile uint32_t *) 0x500000F8) // {drops, accepts, reply_left, 0}
+#define POST_FDCZ1  ((volatile uint32_t *) 0x50000100) // FIFO bytes 4..7 back
+#define POST_FDCZ2  ((volatile uint32_t *) 0x50000104) // FIFO bytes 8..11 back
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -1005,39 +1007,39 @@ void post_mon_tick(void)
         // back. 94 and CC are the last byte written to each control port,
         // kept apart: LB above mixes them.
         uint32_t fx = *POST_FDCX, fy = *POST_FDCY;
-        osd_draw_string(&fb, 4, 172, "MS", OSD_LABEL);
-        hex(4 + 3 * 8, 172, fx & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 6 * 8, 172, "IQ", OSD_LABEL);
-        hex(4 + 9 * 8, 172, (fx >> 8) & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 12 * 8, 172, "DO", OSD_LABEL);
-        hex(4 + 15 * 8, 172, (fx >> 16) & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 18 * 8, 172, "RD", OSD_LABEL);
-        hex(4 + 21 * 8, 172, (fx >> 24) & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 24 * 8, 172, "94", OSD_LABEL);
-        hex(4 + 27 * 8, 172, fy & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 30 * 8, 172, "CC", OSD_LABEL);
-        hex(4 + 33 * 8, 172, (fy >> 8) & 0xFFu, 2);
-
-        // The command stream, oldest of the four on the left. 07 01 is a
-        // RECALIBRATE of drive 1, 08 a SENSE INTERRUPT STATUS, 04 a SENSE
-        // DRIVE STATUS, 03 xx xx a SPECIFY. RB is the last byte read back
-        // out of the FIFO -- the ST0/PCN/ST3 the BIOS is deciding on.
-        uint32_t fz = *POST_FDCZ;
-        osd_draw_string(&fb, 4, 182, "FW", OSD_LABEL);
-        hex(4 + 3 * 8, 182, fz, 8);
-        osd_draw_string(&fb, 4 + 13 * 8, 182, "RB", OSD_LABEL);
-        hex(4 + 16 * 8, 182, (fy >> 24) & 0xFFu, 2);
-        // CA counts the bytes floppy.v took AS A COMMAND, CD the ones it
-        // dropped because it was busy or mid-result. A drop shifts the whole
-        // stream by one: the parameter behind a dropped opcode becomes the
-        // next opcode. RL is how many result bytes it is still holding.
+        // Seven fields at a five-column pitch. 94 and CC are gone: both have
+        // read 48 on every build since they started arriving, and the space
+        // buys the command stream below. CA counts the bytes floppy.v took
+        // AS A COMMAND, CD the ones it dropped because it was busy or
+        // mid-result, RL the result bytes it is still holding.
         uint32_t fw = *POST_FDCW;
-        osd_draw_string(&fb, 4 + 20 * 8, 182, "CA", OSD_LABEL);
-        hex(4 + 23 * 8, 182, (fw >> 16) & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 27 * 8, 182, "CD", OSD_LABEL);
-        hex(4 + 30 * 8, 182, (fw >> 24) & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 34 * 8, 182, "RL", OSD_LABEL);
-        hex(4 + 37 * 8, 182, (fw >> 8) & 0x0Fu, 1);
+        osd_draw_string(&fb, 4, 172, "MS", OSD_LABEL);
+        hex(4 + 2 * 8, 172, fx & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 5 * 8, 172, "IQ", OSD_LABEL);
+        hex(4 + 7 * 8, 172, (fx >> 8) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 10 * 8, 172, "DO", OSD_LABEL);
+        hex(4 + 12 * 8, 172, (fx >> 16) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 15 * 8, 172, "RD", OSD_LABEL);
+        hex(4 + 17 * 8, 172, (fx >> 24) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 20 * 8, 172, "CA", OSD_LABEL);
+        hex(4 + 22 * 8, 172, (fw >> 16) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 25 * 8, 172, "CD", OSD_LABEL);
+        hex(4 + 27 * 8, 172, (fw >> 24) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 30 * 8, 172, "RL", OSD_LABEL);
+        hex(4 + 32 * 8, 172, (fw >> 8) & 0x0Fu, 1);
+
+        // The command stream, TWELVE bytes, oldest on the left. 03 xx xx is
+        // a SPECIFY, 07 uu a RECALIBRATE of unit uu, 08 a SENSE INTERRUPT
+        // STATUS, 04 uu a SENSE DRIVE STATUS. Four bytes only showed the
+        // tail, and a tail read two ways cost a build: the sequence
+        // reconstructed from 07 03 08 08 passed in simulation while the
+        // machine it came from hung. RB is the last byte read back out.
+        osd_draw_string(&fb, 4, 182, "FW", OSD_LABEL);
+        hex(4 + 3 * 8, 182, *POST_FDCZ2, 8);
+        hex(4 + 11 * 8, 182, *POST_FDCZ1, 8);
+        hex(4 + 19 * 8, 182, *POST_FDCZ, 8);
+        osd_draw_string(&fb, 4 + 28 * 8, 182, "RB", OSD_LABEL);
+        hex(4 + 31 * 8, 182, (fy >> 24) & 0xFFu, 2);
     }
 #endif
 

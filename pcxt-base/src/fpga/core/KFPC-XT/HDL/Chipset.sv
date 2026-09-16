@@ -71,7 +71,7 @@ module CHIPSET #(
         output  logic    [7:0]  dbg_last_ctrl,
         output  logic   [31:0]  dbg_fdc_x,
         output  logic   [31:0]  dbg_fdc_y,
-        output  logic   [31:0]  dbg_fdc_z,
+        output  logic   [95:0]  dbg_fdc_z,
         output  logic   [31:0]  dbg_fdc_w,
         output  logic   [15:0]  dbg_w_path,
         output  logic   [15:0]  dbg_rw_lvl,
