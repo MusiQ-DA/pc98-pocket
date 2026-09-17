@@ -718,6 +718,47 @@ module tb_pc98_fdc_glue;
             want1("with a disk in, no not-ready interrupt", fd_irq, 1'b0);
             rd(0, msr);
             want1("and it is transferring, not in a result phase", msr[6], 1'b0);
+
+            // ---- SENSE DRIVE STATUS answers READY from the MEDIA ------------
+            // The BIOS's drive probe (FD80:F4E8) issues SENSE DRIVE STATUS
+            // sixteen times and reads ST3 bit 5 -- a PC-98's 2HD drive only
+            // raises READY with media in it, which is what lets an empty
+            // machine finish probing and fall through to ROM BASIC instead
+            // of retrying IPL reads on a drive that answers ready forever.
+            // PC/AT keeps the strapped-true bit (NOT_READY_ENDS_COMMAND 0).
+            rst = 1'b1;
+            repeat (4) @(posedge clk);
+            rst = 1'b0;
+            repeat (2) @(negedge clk);
+            // media_present survives reset (it has none), so eject first --
+            // the same dance the no-media section above has to do.
+            @(negedge clk);
+            mgmt_address = 4'd0; mgmt_writedata = 16'h0000; mgmt_write = 1'b1;
+            @(negedge clk);
+            mgmt_write = 1'b0;
+            #1;
+            wr(1, 8'h04);   // SENSE DRIVE STATUS, unit 0
+            wr(1, 8'h00);
+            repeat (10) @(negedge clk); #1;
+            rd(0, msr);
+            want("sense status offers its result", msr, 8'hD0);
+            rd(1, st0);
+            want("empty drive: READY bit down", st0 & 8'h20, 8'h00);
+            rd(0, msr);
+            want("CB clear after sense", msr, 8'h80);
+
+            // ...and up with a disk in.
+            @(negedge clk);
+            mgmt_address = 4'd0; mgmt_writedata = 16'h0001; mgmt_write = 1'b1;
+            @(negedge clk);
+            mgmt_write = 1'b0;
+            #1;
+            wr(1, 8'h04); wr(1, 8'h00);
+            repeat (10) @(negedge clk); #1;
+            rd(1, st0);
+            want("with a disk: READY bit up", st0 & 8'h20, 8'h20);
+            rd(0, msr);
+            want("CB clear after that too", msr, 8'h80);
         end
 
         // ================================================================
