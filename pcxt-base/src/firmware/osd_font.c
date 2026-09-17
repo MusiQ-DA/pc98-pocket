@@ -29,14 +29,17 @@
 
 #include "softcpu_regs.h"
 
-// Slot id candidates for font.rom, tried in order. The first is the id the
-// PC-98 data.json actually carries (BIOS=1, ITF=2, Font=3); the second is the
-// XT-era numbering (Font was 201 there), kept in case the ids ever get
-// renumbered back. The BIOS at id 1 must NOT be in this list: under today's
-// data.json it would stage the BIOS's first 2 KB as glyphs, which is exactly
-// the garble the first hardware run showed. Under either scheme no listed id
-// can name another file, so a failed read costs one error round trip.
-static const uint16_t font_slot_candidates[] = { 3u, 201u };
+// Slot id candidates for font.rom, tried in order. First the PC-98's CURRENT
+// numbering (Font=11, since the floppies took 3/4 and the firmware 12), then
+// the earlier PC-98 numbering (Font=3) and the XT-era one (Font=201), kept in
+// case the ids ever get renumbered again. Ordering is load-bearing: id 3 is
+// Floppy A now, and a disk in drive A would stage its first 2 KB as glyphs
+// when 11 -- a REQUIRED slot -- has failed for some other reason. The BIOS at
+// id 1 must NOT be in this list: it would stage the BIOS's first 2 KB as
+// glyphs, which is exactly the garble the first hardware run showed. Under
+// the live data.json no listed id can name another file, so a failed read
+// costs one error round trip.
+static const uint16_t font_slot_candidates[] = { 11u, 3u, 201u };
 
 // The ANK bank is 2 KB and the bridge RAM holds 1 KB, so the copy runs as two
 // target-dataslot reads. A shorter bound than the disk spin: this runs once
