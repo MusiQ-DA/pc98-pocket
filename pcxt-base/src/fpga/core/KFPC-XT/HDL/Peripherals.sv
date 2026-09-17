@@ -2004,8 +2004,20 @@ end endgenerate
     wire sysport_31_select = pc98_io_exact & (address[7:0] == 8'h31);
     wire sysport_35_select = pc98_io_exact & (address[7:0] == 8'h35);
     wire sysport_42_select = pc98_io_exact & (address[7:0] == 8'h42);
-    wire sysport_read      = (sysport_31_select | sysport_35_select
-                            | sysport_42_select) & ~io_read_n;
+
+    // 0x33, the 8255's port B: bit 3 an inverted DIP, bits 7-5 the RS-232C
+    // modem lines, bit 0 the calendar clock -- uPD4990's cdat, the serial
+    // data line the BIOS clocks 48 bits out of (FD80's 0x15D3C loop issues
+    // the uPD4990 read command at 0x20 and samples THIS bit eight times per
+    // byte, six bytes: the date). np2 answers bit3 | rs232c_stat()&0xe0 |
+    // uPD4990.cdat; with the stock dip set (3E -> bit3=1), no modem (0) and
+    // a resting clock line (0) that is 0x08. The port used to be unmodelled
+    // here and read as open-bus FF -- every date bit 1, a calendar no real
+    // chip produces -- and the BIOS sat validating it forever with LIVE
+    // dancing on the work buffer and the drive probe never advancing.
+    wire sysport_33_select = pc98_io_exact & (address[7:0] == 8'h33);
+    wire sysport_read      = (sysport_31_select | sysport_33_select
+                            | sysport_35_select | sysport_42_select) & ~io_read_n;
     // 0x42 bit 1: this machine has no protected mode.
     //
     // The UX ITF tests it at F8B95 and, with the bit CLEAR, walks into
@@ -2040,6 +2052,7 @@ end endgenerate
     // protected-mode block described above.
     wire [7:0] sysport_data = sysport_35_select ? pc98_sysport_c
                             : sysport_31_select ? 8'hE3
+                            : sysport_33_select ? 8'h08
                             : sysport_42_select ? 8'h02
                             :                     8'h00;
 

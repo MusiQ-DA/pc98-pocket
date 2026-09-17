@@ -520,7 +520,7 @@ module tb_pc98_v30;
     // protected-mode block, which is the truth about this CPU rather than a
     // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
-                            : sysport_33_sel ? 8'h00
+                            : sysport_33_sel ? 8'h08
                             : sysport_be_sel ? (fdc_be_chgreg[1:0] | 8'h08 | 8'hF0)
                             : sysport_42_sel ? 8'h02
                             : sysport_94_sel ? 8'h44
