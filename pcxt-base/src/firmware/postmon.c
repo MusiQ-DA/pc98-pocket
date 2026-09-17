@@ -987,6 +987,12 @@ void post_mon_tick(void)
         hex(4 + 24 * 8, 152, s1 >> 16, 2);
         osd_draw_string(&fb, 4 + 27 * 8, 152, "LB", OSD_LABEL);
         hex(4 + 30 * 8, 152, lb & 0xFFu, 2);
+        // The last byte written to 0xBE -- chgreg, the window register.
+        // Bit 0 picks which port group is live (1 = 0x9x / 2HD); the BIOS
+        // flips it on the way into the 2DD probe, and a value stuck at FB
+        // while the probe hammers 0xC8 is the dead-window hang in one byte.
+        osd_draw_string(&fb, 4 + 33 * 8, 152, "CH", OSD_LABEL);
+        hex(4 + 36 * 8, 152, (fy >> 16) & 0xFFu, 2);
 
         // The write path counted in PERIPHERALS itself: EX = pc98_io_exact
         // clocks, RD/WR = read/write levels on the FDC selects, ST = the

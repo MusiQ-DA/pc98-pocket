@@ -3337,6 +3337,7 @@ end endgenerate
     logic [7:0] fdc_dor_seen   = 8'h00;
     logic [7:0] fdc_res_reads  = 8'd0;
     logic [7:0] fdc_last_94    = 8'h00;
+    logic [7:0] fdc_last_be    = 8'h00;   // last byte written to 0xBE (chgreg)
     logic [7:0] fdc_last_cc    = 8'h00;
     logic [7:0] fdc_last_rd    = 8'h00;
     // Reads that reached the chip, against reads the window guard answered
@@ -3383,9 +3384,11 @@ end endgenerate
             fdc_last_94 <= write_to_fdd;
         if (fdc_wr_edge && fdd_ctrl_win &&  fdc_addr_eff[6])
             fdc_last_cc <= write_to_fdd;
+        if (fdc_wr_edge && fdd_mode_win)
+            fdc_last_be <= write_to_fdd;
     end
     assign dbg_fdc_x = {fdc_res_reads, fdc_dor_seen, fdc_irq_rises, fdc_msr_seen};
-    assign dbg_fdc_y = {fdc_last_rd, 8'd0, fdc_last_cc, fdc_last_94};
+    assign dbg_fdc_y = {fdc_last_rd, fdc_last_be, fdc_last_cc, fdc_last_94};
     assign dbg_fdc_z = fdc_fifo_ring;
     assign dbg_fdc_w = {fdc_cmd_drops, fdc_cmd_accepts, 4'd0, fdc_reply_left, 8'd0};
     assign dbg_fdc_v = {8'd0, fdc_last_port, fdc_dead_reads, fdc_live_reads};

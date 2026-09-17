@@ -96,7 +96,8 @@ BUILD_AND_RUN="
     /work/sim/tb_pc98_v30.sv \
     /work/$V/v30_core.sv /work/$V/v30u_biu.sv /work/$V/v30u_eu.sv \
     /work/$V/v30u_ucrom.sv \
-    /work/$S/pc98_tvram.sv /work/$K/pc98_fdc.sv \
+    /work/$S/pc98_tvram.sv /work/$S/pc98_fdc_glue.sv \
+    /work/$S/common/floppy.v /work/$S/common/simple_fifo.v \
     /work/$K/XT_CE_Generator.sv /work/$K/KF8288/HDL/KF8288.sv \
     /work/$K/KF8253/HDL/KF8253.sv /work/$K/KF8253/HDL/KF8253_Counter.sv \
     /work/$K/KF8253/HDL/KF8253_Control_Logic.sv \
