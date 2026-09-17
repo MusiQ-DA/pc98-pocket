@@ -1055,19 +1055,15 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4 + 28 * 8, 182, "RB", OSD_LABEL);
         hex(4 + 31 * 8, 182, (fy >> 24) & 0xFFu, 2);
 
-        // The CPU-read snoop window's FIRST FOUR bytes, drawn in the space
-        // right of the V field on this row. The window is parked on 0x480,
-        // the drive-configuration work: byte zero is [0x480] itself and bit
-        // 4 of it is "a 2HD drive exists", the flag every motor-on and every
-        // SENSE DRIVE STATUS probe in the INT 1Bh driver consults. These
-        // are MMIO reads on the softcore's own bus, so drawing them costs
-        // the guest nothing.
-        osd_draw_string(&fb, 4 + 24 * 8, 122, "W4", OSD_LABEL);
+        // [0x480] itself, the single byte that matters, in this row's
+        // remaining right margin: bit 4 is "a 2HD drive exists", the flag
+        // every motor-on and every SENSE DRIVE STATUS probe in the INT 1Bh
+        // driver consults. Read off the softcore's own bus, so it costs the
+        // guest nothing to draw.
+        osd_draw_string(&fb, 4 + 30 * 8, 122, "W", OSD_LABEL);
         {
             volatile uint32_t *romd = (volatile uint32_t *) 0x50000044u;
-            uint32_t w0 = romd[0];
-            for (int i = 0; i < 4; i++)
-                hex(4 + (27 + i * 2) * 8, 122, (w0 >> (i * 8)) & 0xFFu, 2);
+            hex(4 + 32 * 8, 122, romd[0] & 0xFFu, 2);
         }
     }
 #endif
