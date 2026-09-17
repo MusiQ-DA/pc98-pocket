@@ -992,7 +992,7 @@ void post_mon_tick(void)
         // flips it on the way into the 2DD probe, and a value stuck at FB
         // while the probe hammers 0xC8 is the dead-window hang in one byte.
         osd_draw_string(&fb, 4 + 33 * 8, 152, "CH", OSD_LABEL);
-        hex(4 + 36 * 8, 152, (fy >> 16) & 0xFFu, 2);
+        hex(4 + 36 * 8, 152, (*POST_FDCY >> 16) & 0xFFu, 2);
 
         // The write path counted in PERIPHERALS itself: EX = pc98_io_exact
         // clocks, RD/WR = read/write levels on the FDC selects, ST = the
