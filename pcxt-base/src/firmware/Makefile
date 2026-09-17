@@ -47,6 +47,12 @@ EXTRA_DEFINES ?=
 CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Os -mno-relax -ffreestanding -Wall -Werror -Wundef -MMD -MP $(HW_DEFINES) $(EXTRA_DEFINES)
 ASFLAGS = --target=riscv32 -march=rv32im -mno-relax -Wall -Werror -MMD -MP
 
+# The digest the fingerprint uses, portable across the two CI worlds:
+# Linux has sha256sum and no shasum, macOS the reverse. Output formats agree
+# ("<hash>  <file>" and "<hash>  -" for stdin), so the fingerprint is the same
+# bytes on both -- which is the whole point of a source-only hash.
+SHA256 = $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo 'shasum -a 256')
+
 all: firmware.vh firmware.srchash
 
 # The -D values are baked into every object, so a config change rebuilds them all.
@@ -69,7 +75,7 @@ firmware.vh: firmware.bin
 	hexdump -v -e '4/4 "%08x " "\n"' $< > $@
 
 firmware.srchash: $(SRC_FINGERPRINT)
-	@shasum -a 256 $(SRC_FINGERPRINT) | shasum -a 256 | cut -d' ' -f1 > $@
+	@$(SHA256) $(SRC_FINGERPRINT) | $(SHA256) | cut -d' ' -f1 > $@
 	@echo "source fingerprint: $$(cat $@)"
 
 # The single definition of the fingerprint, so CI cannot drift from the build.
@@ -78,7 +84,7 @@ firmware.srchash: $(SRC_FINGERPRINT)
 # attempt at this silently hashed one long filename.
 .PHONY: srchash-print srchash-verify
 srchash-print:
-	@shasum -a 256 $(SRC_FINGERPRINT) | shasum -a 256 | cut -d' ' -f1
+	@$(SHA256) $(SRC_FINGERPRINT) | $(SHA256) | cut -d' ' -f1
 
 # The softcore is built with ENABLE_DIV(0) -- picorv32_pcpi_div was 216 ALMs
 # on a device that is 97 per cent full. A div/rem instruction would not be a
@@ -99,7 +105,7 @@ nodiv-verify: firmware.elf
 	 echo "no division instructions -- the softcore needs no divider"
 
 srchash-verify: nodiv-verify
-	@want=$$(shasum -a 256 $(SRC_FINGERPRINT) | shasum -a 256 | cut -d' ' -f1); \
+	@want=$$($(SHA256) $(SRC_FINGERPRINT) | $(SHA256) | cut -d' ' -f1); \
 	 have=$$(cat firmware.srchash 2>/dev/null || echo "<missing>"); \
 	 echo "sources  : $$want"; echo "committed: $$have"; \
 	 if [ "$$want" != "$$have" ]; then \
