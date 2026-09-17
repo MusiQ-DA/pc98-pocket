@@ -270,6 +270,10 @@ module PERIPHERALS #(
         input   logic           mgmt_write,
         input   logic   [15:0]  mgmt_writedata,
         input   logic   [1:0]   floppy_wp,
+        // The calendar, packed the way pc98_upd4990 wants it (see the module):
+        // year BCD, month<<4|week, day, hour, min, sec -- from the Pocket's
+        // bridge RTC. A PC-98 reads the date off this chip's serial line.
+        input   logic   [47:0]  rtc_time,
         output  logic   [1:0]   fdd_present,
         output  logic   [1:0]   fdd_request,
         output  logic   [2:0]   ide0_request,
@@ -2016,6 +2020,36 @@ end endgenerate
     // chip produces -- and the BIOS sat validating it forever with LIVE
     // dancing on the work buffer and the drive probe never advancing.
     wire sysport_33_select = pc98_io_exact & (address[7:0] == 8'h33);
+
+    // The calendar chip's command port: every write is one STB/CLK/DATA
+    // phase, latched while the cycle is live and strobed at its end -- the
+    // same shape the memory-switch writer below uses.
+    wire sysport_20_wlevel = pc98_io_exact & (address[7:0] == 8'h20)
+                           & ~io_write_n;
+    logic       upd4990_wr_stb = 1'b0;
+    logic       upd4990_wr_lvl_q = 1'b0;
+    logic [7:0] upd4990_wr_data = 8'h00;
+    logic       upd4990_cdat;
+    always_ff @(posedge clock or posedge reset) begin
+        if (reset) begin
+            upd4990_wr_lvl_q <= 1'b0;
+            upd4990_wr_stb   <= 1'b0;
+            upd4990_wr_data  <= 8'h00;
+        end else begin
+            upd4990_wr_lvl_q <= sysport_20_wlevel;
+            upd4990_wr_stb   <=  upd4990_wr_lvl_q & ~sysport_20_wlevel;
+            if (sysport_20_wlevel)
+                upd4990_wr_data <= internal_data_bus;
+        end
+    end
+    pc98_upd4990 u_upd4990 (
+        .clk      (clock),
+        .rst      (reset),
+        .wr_stb   (upd4990_wr_stb),
+        .wr_data  (upd4990_wr_data),
+        .time_in  (rtc_time),
+        .cdat     (upd4990_cdat)
+    );
     wire sysport_read      = (sysport_31_select | sysport_33_select
                             | sysport_35_select | sysport_42_select) & ~io_read_n;
     // 0x42 bit 1: this machine has no protected mode.
@@ -2052,7 +2086,7 @@ end endgenerate
     // protected-mode block described above.
     wire [7:0] sysport_data = sysport_35_select ? pc98_sysport_c
                             : sysport_31_select ? 8'hE3
-                            : sysport_33_select ? 8'h08
+                            : sysport_33_select ? (8'h08 | {7'd0, upd4990_cdat})
                             : sysport_42_select ? 8'h02
                             :                     8'h00;
 

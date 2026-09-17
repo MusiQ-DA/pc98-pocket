@@ -786,6 +786,50 @@ module core_top (
     wire        dataslots_ready;   // sticky: APF finished the initial slot load (latched below)
     wire        osnotify_inmenu;
 
+    // The Pocket's real clock, packed for the uPD4990. The bridge hands over
+    // BCD bytes -- date {day [23:16], month [15:8], year [7:0]}, time {hour
+    // [23:16], min [15:8], sec [7:0]} -- and np2's date2bcd wants year, then
+    // month with the weekday in the low nibble, then day/hour/min/sec. The
+    // weekday the bridge does not carry, so it comes off Sakamoto's table
+    // (0 = Sunday). Latched once on rtc_valid, which pulses after the values
+    // settle -- the chip only samples it on a time-read command anyway.
+    wire [31:0] rtc_epoch_seconds;
+    wire [31:0] rtc_date_bcd;
+    wire [31:0] rtc_time_bcd;
+    wire        rtc_valid;
+
+    function automatic [3:0] bcd2bin(input [7:0] b);
+        bcd2bin = (b[7:4] * 5) + b[3:0];            // 10*hi + lo
+    endfunction
+
+    logic [47:0] rtc_time = 48'd0;
+    logic        rtc_valid_q = 1'b0;
+    always_ff @(posedge clk_74a) begin
+        rtc_valid_q <= rtc_valid;
+        if (rtc_valid && !rtc_valid_q) begin
+            automatic logic [11:0] y  = 12'd2000 + bcd2bin(rtc_date_bcd[7:0]);
+            automatic logic [3:0]  mo = bcd2bin(rtc_date_bcd[15:8]);
+            automatic logic [4:0]  da = bcd2bin(rtc_date_bcd[23:16]);
+            automatic logic [11:0] yy = (mo < 4'd3) ? (y - 12'd1) : y;
+            automatic logic [2:0]  t;               // Sakamoto, month 1..12
+            case (mo)
+            4'd1:  t = 3'd0;  4'd2:  t = 3'd3;  4'd3:  t = 3'd2;
+            4'd4:  t = 3'd5;  4'd5:  t = 3'd0;  4'd6:  t = 3'd3;
+            4'd7:  t = 3'd5;  4'd8:  t = 3'd1;  4'd9:  t = 3'd4;
+            4'd10: t = 3'd6;  4'd11: t = 3'd2;  4'd12: t = 3'd4;
+            default: t = 3'd0;
+            endcase
+            automatic logic [15:0] acc = 16'(da) + 16'(t) + 16'(yy)
+                                       + 16'(yy >> 2) + 16'd1 - 16'd15;
+            rtc_time <= {rtc_time_bcd[7:0],      // second
+                         rtc_time_bcd[15:8],     // minute
+                         rtc_time_bcd[23:16],    // hour
+                         rtc_date_bcd[23:16],    // day
+                         {mo, acc % 7},          // month<<4 | weekday
+                         rtc_date_bcd[7:0]};     // year
+        end
+    end
+
     // Target-dataslot: the disk softcore initiates host reads of floppy images.
     wire        target_dataslot_read;
     wire        target_dataslot_write;
@@ -836,10 +880,10 @@ module core_top (
 
         .dataslot_allcomplete      (dataslot_allcomplete),
 
-        .rtc_epoch_seconds         (),
-        .rtc_date_bcd              (),
-        .rtc_time_bcd              (),
-        .rtc_valid                 (),
+        .rtc_epoch_seconds         (rtc_epoch_seconds),
+        .rtc_date_bcd              (rtc_date_bcd),
+        .rtc_time_bcd              (rtc_time_bcd),
+        .rtc_valid                 (rtc_valid),
 
         .savestate_supported       (1'b0),
         .savestate_addr            (32'd0),
@@ -2706,6 +2750,7 @@ module core_top (
         .mgmt_write                         (mgmt_wr),
         .mgmt_read                          (mgmt_rd),
         .floppy_wp                          (wp_cfg),
+        .rtc_time                           (rtc_time),
         .fdd_present                        (fdd_present),
         .fdd_request                        (mgmt_req[7:6]),
         .ide0_request                       (mgmt_req[2:0]),

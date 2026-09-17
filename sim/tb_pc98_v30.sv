@@ -449,6 +449,32 @@ module tb_pc98_v30;
     // 640 KB value is FEA=4. Answer 0xE3: bit0 boot-first, bit4 no-init.
     wire sysport_31_bootfirst = 1'b1;
     wire sysport_94_sel  = ~io_rd_n & (cpu_address[15:0] == 16'h0094);
+    wire sysport_20_sel  = ~io_wr_n & (cpu_address[15:0] == 16'h0020);
+
+    // The uPD4990 calendar, the same chip the metal now carries: commands
+    // at 0x20, serial data on 0x33's bit 0. The bench feeds it a fixed but
+    // REAL date -- year 0x26, month 9, day 0x18 -- where the old constant
+    // 0x08 line handed the BIOS a zero calendar. Both boot on np2; this
+    // proves a real one boots here too.
+    logic       upd4990_wr_stb = 1'b0, upd4990_lvl_q = 1'b0;
+    logic [7:0] upd4990_wr_data = 8'h00;
+    always_ff @(posedge clk_chipset) begin
+        upd4990_lvl_q <= sysport_20_sel;
+        upd4990_wr_stb <= upd4990_lvl_q & ~sysport_20_sel;
+        if (sysport_20_sel) upd4990_wr_data <= cpu_data_bus;
+    end
+    logic upd4990_cdat;
+    pc98_upd4990 u_upd4990 (
+        .clk     (clk_chipset),
+        .rst     (reset),
+        .wr_stb  (upd4990_wr_stb),
+        .wr_data (upd4990_wr_data),
+        // 2026-09-18 00:00:00, a Friday. Layout is year | month<<4|week |
+        // day | hour | min | sec, BCD where np2 uses BCD: 26 | 95 | 18 |
+        // 00 | 00 | 00.
+        .time_in ({8'h00, 8'h00, 8'h00, 8'h18, 8'h95, 8'h26}),
+        .cdat    (upd4990_cdat)
+    );
     wire sysport_sel    = sysport_31_sel | sysport_33_sel
                         | sysport_35_sel | sysport_42_sel
                         | sysport_94_sel;
@@ -520,7 +546,7 @@ module tb_pc98_v30;
     // protected-mode block, which is the truth about this CPU rather than a
     // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
-                            : sysport_33_sel ? 8'h08
+                            : sysport_33_sel ? (8'h08 | {7'd0, upd4990_cdat})
                             : sysport_be_sel ? (fdc_be_chgreg[1:0] | 8'h08 | 8'hF0)
                             : sysport_42_sel ? 8'h02
                             : sysport_94_sel ? 8'h44
