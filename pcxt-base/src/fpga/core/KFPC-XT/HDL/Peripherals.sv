@@ -3179,6 +3179,12 @@ end endgenerate
             write_to_fdd  <= write_to_fdd;
     end
 
+    always_ff @(posedge clock)
+    begin
+        if (~io_read_n && ~address_enable_n)
+            fdc_last_rdport <= address[7:0];
+    end
+
 `ifdef PC98_FDC_REAL
     // The PC-98 ports onto floppy.v's PC/XT register file. The MSR and FIFO
     // map straight across; the control port has to BECOME a Digital Output
@@ -3387,6 +3393,11 @@ end endgenerate
     logic [7:0] fdc_last_be    = 8'h00;   // last byte written to 0xBE (chgreg)
     logic [7:0] fdc_last_cc    = 8'h00;
     logic [7:0] fdc_last_rd    = 8'h00;
+    // The port of the LAST I/O read of any kind -- which poll loop the CPU
+    // is in RIGHT NOW: 0x90 the MSR wait, 0x92 the result drain, 0x08 the
+    // slave-PIC in-service poll, 0x33 the calendar, 0x42 the printer gate.
+    // Sampled while the cycle is live, same as write_to_fdd.
+    logic [7:0] fdc_last_rdport = 8'h00;
     // Reads that reached the chip, against reads the window guard answered
     // with 0xFF from the chipset. The guest's MSR poll is the boot's whole
     // inner loop, so if it is polling a DEAD window it sees FF forever --
@@ -3438,7 +3449,7 @@ end endgenerate
     assign dbg_fdc_y = {fdc_last_rd, fdc_last_be, fdc_last_cc, fdc_last_94};
     assign dbg_fdc_z = fdc_fifo_ring;
     assign dbg_fdc_w = {fdc_cmd_drops, fdc_cmd_accepts, 4'd0, fdc_reply_left, 8'd0};
-    assign dbg_fdc_v = {8'd0, fdc_last_port, fdc_dead_reads, fdc_live_reads};
+    assign dbg_fdc_v = {fdc_last_rdport, fdc_last_port, fdc_dead_reads, fdc_live_reads};
 `else
     assign dbg_fdc_x = 32'd0;
     assign dbg_fdc_y = 32'd0;

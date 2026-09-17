@@ -1016,6 +1016,10 @@ void post_mon_tick(void)
         hex(4 + 9 * 8, 162, (fv >> 8) & 0xFFu, 2);
         osd_draw_string(&fb, 4 + 12 * 8, 162, "LP", OSD_LABEL);
         hex(4 + 15 * 8, 162, (fv >> 16) & 0xFFu, 2);
+        // LR: the port of the last I/O read, period -- names the poll loop
+        // the CPU is spinning in right now when everything else is frozen.
+        osd_draw_string(&fb, 4 + 18 * 8, 162, "LR", OSD_LABEL);
+        hex(4 + 21 * 8, 162, (fv >> 24) & 0xFFu, 2);
 
         // The controller itself. MS is the MSR the guest last read -- 80
         // means RQM with the chip idle and ready, C0 means it wants to be
