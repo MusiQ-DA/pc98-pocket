@@ -791,8 +791,9 @@ module core_top (
     // [23:16], min [15:8], sec [7:0]} -- and np2's date2bcd wants year, then
     // month with the weekday in the low nibble, then day/hour/min/sec. The
     // weekday the bridge does not carry, so it comes off Sakamoto's table
-    // (0 = Sunday). Latched once on rtc_valid, which pulses after the values
-    // settle -- the chip only samples it on a time-read command anyway.
+    // (0 = Sunday). Combinational helpers rather than block-locals: Quartus
+    // rejects "automatic" declarations inside always_ff even though
+    // Verilator accepts them.
     wire [31:0] rtc_epoch_seconds;
     wire [31:0] rtc_date_bcd;
     wire [31:0] rtc_time_bcd;
@@ -802,32 +803,39 @@ module core_top (
         bcd2bin = (b[7:4] * 5) + b[3:0];            // 10*hi + lo
     endfunction
 
+    wire [3:0]  rtc_mo  = bcd2bin(rtc_date_bcd[15:8]);
+    wire [4:0]  rtc_da  = bcd2bin(rtc_date_bcd[23:16]);
+    wire [11:0] rtc_y   = 12'd2000 + {8'd0, bcd2bin(rtc_date_bcd[7:0])};
+    wire [11:0] rtc_yy  = (rtc_mo < 4'd3) ? (rtc_y - 12'd1) : rtc_y;
+
+    function automatic [2:0] sakamoto(input [3:0] mo);   // month 1..12
+        case (mo)
+        4'd1:  sakamoto = 3'd0;  4'd2:  sakamoto = 3'd3;
+        4'd3:  sakamoto = 3'd2;  4'd4:  sakamoto = 3'd5;
+        4'd5:  sakamoto = 3'd0;  4'd6:  sakamoto = 3'd3;
+        4'd7:  sakamoto = 3'd5;  4'd8:  sakamoto = 3'd1;
+        4'd9:  sakamoto = 3'd4;  4'd10: sakamoto = 3'd6;
+        4'd11: sakamoto = 3'd2;  4'd12: sakamoto = 3'd4;
+        default: sakamoto = 3'd0;
+        endcase
+    endfunction
+
+    // (d + t + yy + yy/4 + 1 - 15) mod 7 -- the -15 folds y/100-y/400 for
+    // 2000-2099 (20-5), the +1 keeps it positive.
+    wire [15:0] rtc_acc = 16'(rtc_da) + 16'(sakamoto(rtc_mo))
+                        + 16'(rtc_yy) + 16'(rtc_yy >> 2) + 16'd1 - 16'd15;
+
     logic [47:0] rtc_time = 48'd0;
     logic        rtc_valid_q = 1'b0;
     always_ff @(posedge clk_74a) begin
         rtc_valid_q <= rtc_valid;
-        if (rtc_valid && !rtc_valid_q) begin
-            automatic logic [11:0] y  = 12'd2000 + bcd2bin(rtc_date_bcd[7:0]);
-            automatic logic [3:0]  mo = bcd2bin(rtc_date_bcd[15:8]);
-            automatic logic [4:0]  da = bcd2bin(rtc_date_bcd[23:16]);
-            automatic logic [11:0] yy = (mo < 4'd3) ? (y - 12'd1) : y;
-            automatic logic [2:0]  t;               // Sakamoto, month 1..12
-            case (mo)
-            4'd1:  t = 3'd0;  4'd2:  t = 3'd3;  4'd3:  t = 3'd2;
-            4'd4:  t = 3'd5;  4'd5:  t = 3'd0;  4'd6:  t = 3'd3;
-            4'd7:  t = 3'd5;  4'd8:  t = 3'd1;  4'd9:  t = 3'd4;
-            4'd10: t = 3'd6;  4'd11: t = 3'd2;  4'd12: t = 3'd4;
-            default: t = 3'd0;
-            endcase
-            automatic logic [15:0] acc = 16'(da) + 16'(t) + 16'(yy)
-                                       + 16'(yy >> 2) + 16'd1 - 16'd15;
+        if (rtc_valid && !rtc_valid_q)
             rtc_time <= {rtc_time_bcd[7:0],      // second
                          rtc_time_bcd[15:8],     // minute
                          rtc_time_bcd[23:16],    // hour
                          rtc_date_bcd[23:16],    // day
-                         {mo, acc % 7},          // month<<4 | weekday
+                         {rtc_mo, rtc_acc % 7},  // month<<4 | weekday
                          rtc_date_bcd[7:0]};     // year
-        end
     end
 
     // Target-dataslot: the disk softcore initiates host reads of floppy images.
