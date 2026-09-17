@@ -252,7 +252,7 @@ module tb_pc98_fdc_glue;
         // 0xCx port only, plus 0x04 for "internal drives first" (this dip
         // setting) or 0x08 for the other. The old glue handed back ctrl_q,
         // which after the 0x08 above would read 0x08.
-        want("0x94 reads np2's 0x44", ctrl_readback, 8'h44);
+        want("0x94 reads np2's 0x48 (E3 dip arm)", ctrl_readback, 8'h48);
 
         // Interrupt enable off: the same constants, bit 3 clear.
         wr_begin(2, 8'h00);
@@ -312,7 +312,7 @@ module tb_pc98_fdc_glue;
         want1("2HD window now dead", group_live, 1'b0);
         window(1'b1);
         want1("2DD window now live", group_live, 1'b1);
-        want("0xCC reads np2's 0x74", ctrl_readback, 8'h74);
+        want("0xCC reads np2's 0x78 (E3 dip arm)", ctrl_readback, 8'h78);
 
         want1("interrupt follows: not 2HD", irq_2hd, 1'b0);
         want1("interrupt follows: slave IRQ10", irq_2dd, 1'b1);

@@ -339,10 +339,18 @@ module pc98_fdc_glue (
     assign mode_readback = 8'hF8 | {6'd0, chgreg[1:0]};
 
     // fdc_i94, io/fdc.c:1064-1087. The dead window reads 0xFF, as every one of
-    // np2's handlers does when the guard rejects the port.
+    // np2's handlers does when the guard rejects the port. The live value is
+    // 0x40 | 0x20 | 0x10 (0xCx port only) | (0x04 if dipsw[0]&8 else 0x08):
+    // this machine's port 0x31 reads 0xE3, whose bit 3 is CLEAR, so the else
+    // arm applies -- 0x48, not 0x44. That bit is not decoration: the BIOS's
+    // drive probe reads 0x94 and tests bit 3 of the answer (FD80:F41F's helper
+    // under the FF3F0 route) to set [0x480] bit 3, and without it the probe
+    // never reaches its SENSE DRIVE STATUS stage -- the machine looped on
+    // SENSE INTERRUPT forever instead of falling through to ROM BASIC. The
+    // stub's old 0x44 constant was the wrong arm of np2's dip.
     assign ctrl_readback = ~group_live ? 8'hFF
-                         :  port_2dd   ? 8'h74   // 0x40 | 0x20 | 0x10 | 0x04
-                                       : 8'h44;  // 0x40 |               0x04
+                         :  port_2dd   ? 8'h78   // 0x40 | 0x20 | 0x10 | 0x08
+                                       : 8'h48;  // 0x40 |               0x08
 
     // np2's pic_setirq(0x0b) / pic_setirq(0x0a), io/fdc.c:47-51: the same
     // chgreg bit that picks the window picks the interrupt -- for the
