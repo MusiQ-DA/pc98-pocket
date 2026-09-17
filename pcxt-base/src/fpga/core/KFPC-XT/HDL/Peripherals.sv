@@ -3448,7 +3448,15 @@ end endgenerate
     assign dbg_fdc_x = {fdc_res_reads, fdc_dor_seen, fdc_irq_rises, fdc_msr_seen};
     assign dbg_fdc_y = {fdc_last_rd, fdc_last_be, fdc_last_cc, fdc_last_94};
     assign dbg_fdc_z = fdc_fifo_ring;
-    assign dbg_fdc_w = {fdc_cmd_drops, fdc_cmd_accepts, 4'd0, fdc_reply_left, 8'd0};
+    // The bottom byte: what the CPU last got back from a read of the SLAVE
+    // PIC's IMR port, 0x0A -- the FDC exec's guard tests bit 3 of it before
+    // every command, and the panel's m2 reads the REGISTER while this reads
+    // the BUS. If the two disagree, the guard is bailing on a ghost.
+    logic [7:0] fdc_imr_seen = 8'h00;
+    always_ff @(posedge clock)
+        if (~io_read_n && ~address_enable_n && (address[7:0] == 8'h0A))
+            fdc_imr_seen <= interrupt2_data_bus_out;
+    assign dbg_fdc_w = {fdc_cmd_drops, fdc_cmd_accepts, 4'd0, fdc_reply_left, fdc_imr_seen};
     assign dbg_fdc_v = {fdc_last_rdport, fdc_last_port, fdc_dead_reads, fdc_live_reads};
 `else
     assign dbg_fdc_x = 32'd0;

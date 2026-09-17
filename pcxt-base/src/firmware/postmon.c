@@ -1020,6 +1020,11 @@ void post_mon_tick(void)
         // the CPU is spinning in right now when everything else is frozen.
         osd_draw_string(&fb, 4 + 18 * 8, 162, "LR", OSD_LABEL);
         hex(4 + 21 * 8, 162, (fv >> 24) & 0xFFu, 2);
+        // What the CPU last READ from the slave PIC's IMR port -- against
+        // m2, which is the register itself. F7 here and the guard passes;
+        // anything with bit 3 set and the probe is bailing on a ghost.
+        osd_draw_string(&fb, 4 + 24 * 8, 162, "0A", OSD_LABEL);
+        hex(4 + 27 * 8, 162, *POST_FDCW & 0xFFu, 2);
 
         // The controller itself. MS is the MSR the guest last read -- 80
         // means RQM with the chip idle and ready, C0 means it wants to be
