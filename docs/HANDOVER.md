@@ -635,3 +635,11 @@ font.rom の ANK グリフを抽出してコミットしていた件の整理:
 PC-98 ビルドで BIOS Writable / OPL2 / C/MS / Composite を非表示
 (enum は save blob のインデックス互換のため無変更)。CPU 速度の第4項目は
 「Turbo (max)」。EMS 3項目(Lo-tech 2MB / Frame / A000 UMB)は将来のため温存。
+
+## RTC (uPD4990) — 将来実装
+
+Pocket の APF ブリッジは実時刻を持つ (core_bridge_cmd の rtc_date_bcd /
+rtc_time_bcd / rtc_valid — core_top.sv では現在未接続)。必要になったら
+これを uPD4990 モデルに食わせ、0x20/0x22 のコマンドと 0x33 の cdat を
+本物のシリアルプロトコルで返す。現状は 0x33 = 0x08 (クロック線静止、
+日付ゼロ) のスタブでブートを通している (2026-09-18, 9ac8deb)。
