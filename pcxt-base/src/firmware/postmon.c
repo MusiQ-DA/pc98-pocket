@@ -231,9 +231,14 @@ static uint8_t  rom_b[8];     // eight bytes from there: what the file holds
 
 void postmon_capture_rom(void)
 {
-    // Watch the BIOS entry, since that is where the machine now starts.
-    // The BIOS entry: FD800 is EB 02 EB 30 FA 33 C0 8E D8 E4 35 ... on the UX
-    *POST_ROMWIN = 0x0FD80u;
+    // Watch the BIOS's drive-configuration work byte, 0x480-0x48F. The FDD
+    // boot path consults [0x480] bit 4 (a 2HD drive exists) before every
+    // motor-on and every SENSE DRIVE STATUS probe, so while the boot is
+    // hunting for a disk this window streams live values -- passive, unlike
+    // the self-test master, which cannot be aimed at RAM while the guest is
+    // mid-burst without freezing it. The old target (FD800, the ROM check)
+    // is long since green on every build.
+    *POST_ROMWIN = 0x48u;
 
     // A damage map, not a hex dump. FFFF0 came back byte-perfect while
     // F800E0 was unrecognisable -- not from any of the three ROM images -- so
