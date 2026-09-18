@@ -801,21 +801,19 @@ void post_mon_tick(void)
     //        one is normal and owns the boot chime. Climbing means the loop.
     {
         uint32_t m = *POST_MEMSZ;
-        osd_draw_string(&fb, 4, 92, "SZ", OSD_LABEL);
-        hex(4 + 3 * 8, 92, (m >> 8) & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 6 * 8, 92, "F0", OSD_LABEL);
-        hex(4 + 9 * 8, 92, (m >> 16) & 0xFFu, 2);
-        // STK: the snoop window's first six bytes, low address left. The
-        // window parks on the stack the CPU churns when every counter is
-        // frozen -- return addresses left by the pushes name the loop.
-        osd_draw_string(&fb, 4 + 12 * 8, 92, "STK", OSD_LABEL);
+        (void)m;
+        // STK: the snoop window's first eight bytes, low address left, on
+        // the whole row -- the window parks on 0x500, the flags the boot
+        // polls while everything else is frozen, and SZ/F0/KEY stand down
+        // for the one build it takes to read them.
+        osd_draw_string(&fb, 4, 92, "STK", OSD_LABEL);
         {
             volatile uint32_t *romd = (volatile uint32_t *) 0x50000044u;
             uint32_t w0 = romd[0], w1 = romd[2];
             for (int i = 0; i < 4; i++)
-                hex(4 + (16 + i * 2) * 8, 92, (w0 >> (i * 8)) & 0xFFu, 2);
-            for (int i = 0; i < 2; i++)
-                hex(4 + (24 + i * 2) * 8, 92, (w1 >> (i * 8)) & 0xFFu, 2);
+                hex(4 + (4 + i * 3) * 8, 92, (w0 >> (i * 8)) & 0xFFu, 2);
+            for (int i = 0; i < 4; i++)
+                hex(4 + (17 + i * 3) * 8, 92, (w1 >> (i * 8)) & 0xFFu, 2);
         }
 
         // KEY: how far a key press gets. The count is pc98_kbd_ps2's output
