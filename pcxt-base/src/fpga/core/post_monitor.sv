@@ -57,6 +57,11 @@ module post_monitor #(
     input  wire    [15:0] dbg_ip,
     output logic   [15:0] live_cs,
     output logic   [15:0] live_ip,
+    // The derail catch: the CS:IP of the LAST cycle before CS left the ROM
+    // segments. Sampled every clock in hardware, so the exact site of the
+    // jump into garbage survives even when the CPU is lost a cycle later.
+    output logic   [15:0] derail_cs,
+    output logic   [15:0] derail_ip,
     // LIVE, never frozen. The guest stops rather than restarting, so this
     // settles on whatever it is spinning in -- which is the one thing the
     // frozen snapshot cannot say. testB19 gave ADDR FE1DD, the prefetch at the
@@ -508,13 +513,32 @@ module post_monitor #(
         end
     end
 
+    wire is_rom_cs = (dbg_cs == 16'hFD80) || (dbg_cs == 16'hE800)
+                   || (dbg_cs >= 16'hF000 && dbg_cs <= 16'hF880);
+
+    logic        rom_prev;
+    logic [15:0] cs_q, ip_q;
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
-            live_cs <= 16'h0000;
-            live_ip <= 16'h0000;
+            live_cs   <= 16'h0000;
+            live_ip   <= 16'h0000;
+            derail_cs <= 16'h0000;
+            derail_ip <= 16'h0000;
+            rom_prev  <= 1'b0;
+            cs_q      <= 16'h0000;
+            ip_q      <= 16'h0000;
         end else begin
             live_cs <= dbg_cs;
             live_ip <= dbg_ip;
+            cs_q    <= dbg_cs;
+            ip_q    <= dbg_ip;
+            rom_prev <= is_rom_cs;
+            // The edge: this cycle's CS is NOT ROM, last cycle's WAS --
+            // the CPU just jumped out. cs_q/ip_q hold where it came from.
+            if (rom_prev && !is_rom_cs) begin
+                derail_cs <= cs_q;
+                derail_ip <= ip_q;
+            end
         end
     end
 

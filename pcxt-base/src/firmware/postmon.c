@@ -64,6 +64,7 @@
 #define POST_FDCZ2  ((volatile uint32_t *) 0x50000104) // FIFO bytes 8..11 back
 #define POST_FDCV   ((volatile uint32_t *) 0x50000108) // {0, last port, dead, live}
 #define POST_LIVPC  ((volatile uint32_t *) 0x50000110) // {ip, cs} of the retired instruction
+#define POST_DRAIL  ((volatile uint32_t *) 0x50000114) // {ip, cs} at the ROM-exit edge
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -590,6 +591,13 @@ void post_mon_tick(void)
             hex(4 + 17 * 8, 52, (g_last_rom_pc >> 16) & 0xFFFFu, 4);
             osd_draw_string(&fb, 4 + 21 * 8, 52, ":", OSD_LABEL);
             hex(4 + 22 * 8, 52, g_last_rom_pc & 0xFFFFu, 4);
+        }
+        {
+            uint32_t dp = *POST_DRAIL;
+            osd_draw_string(&fb, 4 + 28 * 8, 52, "DP", OSD_LABEL);
+            hex(4 + 31 * 8, 52, (dp >> 16) & 0xFFFFu, 4);
+            osd_draw_string(&fb, 4 + 35 * 8, 52, ":", OSD_LABEL);
+            hex(4 + 36 * 8, 52, dp & 0xFFFFu, 4);
         }
         (void) p0; (void) p1; (void) seg_front_show;
 
