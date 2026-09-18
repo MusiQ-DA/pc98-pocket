@@ -264,10 +264,25 @@ void postmon_capture_rom(void)
     }
 }
 
+static uint32_t g_last_rom_pc = 0;
+
 void post_mon_tick(void)
 {
     static uint32_t last_status = 0xFFFFFFFFu;
     static int placed = 0;
+    // The last PC the guest executed INSIDE a ROM segment. Polled every
+    // loop pass, far denser than the panel: when the CPU derails into RAM
+    // (which is what a wandering CS:IP with LIVE dancing means), this keeps
+    // the last ROM address -- the site of the derail itself.
+    static uint32_t last_rom_pc = 0;
+    {
+        uint32_t pc = *POST_LIVPC;
+        uint32_t cs = pc & 0xFFFFu;
+        if (cs == 0xFD80u || cs == 0xE800u || (cs >= 0xF000u && cs <= 0xF800u)
+         || cs == 0xF880u)
+            last_rom_pc = pc;
+        g_last_rom_pc = last_rom_pc;
+    }
 
     // An overlay owns the framebuffer while it is open, and this panel used to
     // paint over it every tick. That made the settings menu unreadable -- and
@@ -567,6 +582,14 @@ void post_mon_tick(void)
             hex(4 + 3 * 8, 52, (pc >> 16) & 0xFFFFu, 4);
             osd_draw_string(&fb, 4 + 7 * 8, 52, ":", OSD_LABEL);
             hex(4 + 8 * 8, 52, pc & 0xFFFFu, 4);
+        }
+        {
+            // The last ROM address, and (in parens spirit) the word it held:
+            // named as RP so the derail site reads off the panel directly.
+            osd_draw_string(&fb, 4 + 14 * 8, 52, "RP", OSD_LABEL);
+            hex(4 + 17 * 8, 52, (g_last_rom_pc >> 16) & 0xFFFFu, 4);
+            osd_draw_string(&fb, 4 + 21 * 8, 52, ":", OSD_LABEL);
+            hex(4 + 22 * 8, 52, g_last_rom_pc & 0xFFFFu, 4);
         }
         (void) p0; (void) p1; (void) seg_front_show;
 
