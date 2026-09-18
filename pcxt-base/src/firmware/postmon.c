@@ -235,7 +235,7 @@ void postmon_capture_rom(void)
     // 0x110A0-0x110AF. If the CPU is hammering the drive probe, this window
     // catches the return addresses the pushes leave behind -- they name the
     // outer loop directly. Passive, like every ROMWIN read.
-    *POST_ROMWIN = 0x110Au;
+    *POST_ROMWIN = 0x50u;
 
     // A damage map, not a hex dump. FFFF0 came back byte-perfect while
     // F800E0 was unrecognisable -- not from any of the three ROM images -- so
