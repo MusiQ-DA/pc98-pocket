@@ -121,10 +121,13 @@ module v30_core (
     input      [15:0] bkd_fetch_ip, // BIU fetch offset (= ip + qlen)
     input             scr_en,       // scripted-consumer mode (BIU-only test)
     input       [1:0] scr_qop,      // per-cycle queue op, QS encoding
-    output    [223:0] dbg_regs,     // ip slot holds the retired-instruction IP
     output            dbg_first_pop,
     output            dbg_pend
 `endif
+    ,
+    // Unconditional: the POST panel reads CS:IP off the metal, and the
+    // "where is the CPU" question does not care whether the backdoor is in.
+    output    [223:0] dbg_regs     // ip slot holds the retired-instruction IP
 );
 
 import v30_ss_pkg::*;
@@ -463,16 +466,15 @@ v30u_eu u_eu (
     .bkd_load   (bkd_load),
     .bkd_regs   (bkd_regs),
 `ifdef V30_BACKDOOR
-    .dbg_regs      (dbg_regs),
     .dbg_first_pop (dbg_first_pop),
     .dbg_pend      (dbg_pend),
 `else
     /* verilator lint_off PINCONNECTEMPTY */
-    .dbg_regs      (),
     .dbg_first_pop (),
     .dbg_pend      (),
     /* verilator lint_on PINCONNECTEMPTY */
 `endif
+    .dbg_regs      (dbg_regs),
     .ss_addr    (ss_addr_q),
     .ss_wdata   (ss_wdata_q),
     .ss_we      (ss_we_q),
