@@ -63,6 +63,7 @@
 #define POST_FDCZ1  ((volatile uint32_t *) 0x50000100) // FIFO bytes 4..7 back
 #define POST_FDCZ2  ((volatile uint32_t *) 0x50000104) // FIFO bytes 8..11 back
 #define POST_FDCV   ((volatile uint32_t *) 0x50000108) // {0, last port, dead, live}
+#define POST_LIVPC  ((volatile uint32_t *) 0x50000110) // {ip, cs} of the retired instruction
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -556,12 +557,18 @@ void post_mon_tick(void)
             p0 = (p0 << 4) | (c > 15u ? 15u : c);
             p1 = (p1 << 4) | (d > 15u ? 15u : d);
         }
-        osd_draw_string(&fb, 4, 52, "SEG", OSD_LABEL);
-        hex(4 + 4 * 8, 52, p0, 8);
-        hex(4 + 12 * 8, 52, p1, 8);
-        osd_draw_string(&fb, 4 + 21 * 8, 52, "FR", OSD_LABEL);
-        (void) seg_lo_s; (void) seg_hi_s;
-        hex(4 + 24 * 8, 52, seg_front_show, 5);
+        // The V30's own CS:IP, retired-instruction granularity: the exact
+        // instruction the machine is stuck on, against LIVE's RAM address.
+        // The SEG/FR extent dump that shared this row is retired -- PC is the
+        // one datum that ends the archaeology.
+        {
+            uint32_t pc = *POST_LIVPC;
+            osd_draw_string(&fb, 4, 52, "PC", OSD_LABEL);
+            hex(4 + 3 * 8, 52, (pc >> 16) & 0xFFFFu, 4);
+            osd_draw_string(&fb, 4 + 7 * 8, 52, ":", OSD_LABEL);
+            hex(4 + 8 * 8, 52, pc & 0xFFFFu, 4);
+        }
+        (void) p0; (void) p1; (void) seg_front_show;
 
         // The extents, for the two highest-numbered live segments and the two
         // lowest. High is where the code is (E8000-FFFFF is ROM on this
@@ -709,7 +716,7 @@ void post_mon_tick(void)
         //
         // Second read of 16h, and our own scratch round trip.
         osd_draw_string(&fb, 4, 52, "16h#2", OSD_LABEL);
-        hex(4 + 6 * 8, 52, v16b_seg, 4);
+        hex(4 + 17 * 8, 52, v16b_seg, 4);
         osd_draw_string(&fb, 4 + 10 * 8, 52, ":", OSD_LABEL);
         hex(4 + 11 * 8, 52, v16b_off, 4);
 

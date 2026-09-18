@@ -1183,6 +1183,8 @@ module core_top (
         .post_mem_addr              (post_mem_addr),
         .post_live_addr             (post_live_addr),
         .post_live_max              (post_live_max),
+        .post_live_cs               (post_live_cs),
+        .post_live_ip               (post_live_ip),
         .post_count                 (post_count),
         .post_max                   (post_max),
         .post_restarts              (post_restarts),
@@ -2144,6 +2146,7 @@ module core_top (
     wire  [7:0] post_code, post_prev;
     wire [63:0] post_hist;
     wire [19:0] post_mem_addr, post_live_addr, post_live_max;
+    wire [15:0] post_live_cs, post_live_ip;
     wire [15:0] post_count;
     wire  [7:0] post_max;
     wire [15:0] post_restarts;
@@ -2188,6 +2191,10 @@ module core_top (
         .last_mem_addr  (post_mem_addr),
         .live_mem_addr  (post_live_addr),
         .live_mem_max   (post_live_max),
+        .dbg_cs         (v30_dbg_regs[159:144]),
+        .dbg_ip         (v30_dbg_regs[207:192]),
+        .live_cs        (post_live_cs),
+        .live_ip        (post_live_ip),
         .post_count     (post_count),
         .post_max       (post_max),
         .restart_count  (post_restarts),
@@ -2868,6 +2875,8 @@ module core_top (
         .biu_done          (biu_done)
     );
 
+    wire [223:0] v30_dbg_regs;
+
     v30_core u_cpu (
         .CLK        (clk_chipset),
         .CE         (v30_ce),
@@ -2890,7 +2899,8 @@ module core_top (
         .SS_WE      (1'b0),
         .SS_RDATA   (v30_ss_rdata_unused),
         .SS_ERR     (v30_ss_err_unused),
-        .SS_BUS_QUIET (v30_ss_quiet_unused)
+        .SS_BUS_QUIET (v30_ss_quiet_unused),
+        .dbg_regs     (v30_dbg_regs)
     );
 `else
     // The 8088 has an eight-bit bus and never asks for a word, so the extra

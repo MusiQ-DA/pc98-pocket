@@ -50,6 +50,13 @@ module post_monitor #(
     output logic [7:0] post_prev,         // the one before it
     output logic [DEPTH*8-1:0] post_hist, // FROZEN: the first DEPTH codes, oldest first
     output logic [19:0] last_mem_addr,    // memory address at the last recorded code
+    // The V30's own register view, retired-instruction granularity. CS:IP
+    // through here names the instruction the loop is stuck on when every
+    // other witness is a RAM address.
+    input  wire    [15:0] dbg_cs,
+    input  wire    [15:0] dbg_ip,
+    output logic   [15:0] live_cs,
+    output logic   [15:0] live_ip,
     // LIVE, never frozen. The guest stops rather than restarting, so this
     // settles on whatever it is spinning in -- which is the one thing the
     // frozen snapshot cannot say. testB19 gave ADDR FE1DD, the prefetch at the
@@ -498,6 +505,16 @@ module post_monitor #(
                     filled        <= filled + 1'b1;
                 end
             end
+        end
+    end
+
+    always_ff @(posedge clk or posedge rst) begin
+        if (rst) begin
+            live_cs <= 16'h0000;
+            live_ip <= 16'h0000;
+        end else begin
+            live_cs <= dbg_cs;
+            live_ip <= dbg_ip;
         end
     end
 
