@@ -567,21 +567,6 @@ void post_mon_tick(void)
             hex(4 + 3 * 8, 52, (pc >> 16) & 0xFFFFu, 4);
             osd_draw_string(&fb, 4 + 7 * 8, 52, ":", OSD_LABEL);
             hex(4 + 8 * 8, 52, pc & 0xFFFFu, 4);
-            // and WHAT is there: six bytes of guest memory at the live
-            // linear address, read through the self-test master. AA/55 is
-            // memory-test residue, 00 is the zero-wander, real opcodes are
-            // something loaded.
-            {
-                uint32_t lin = ((pc & 0xFFFFu) << 4)           // cs
-                             + ((pc >> 16) & 0xFFFFu);         // ip
-                
-                osd_draw_string(&fb, 4 + 14 * 8, 52, "@", OSD_LABEL);
-                hex(4 + 16 * 8, 52, lin, 5);
-                osd_draw_string(&fb, 4 + 22 * 8, 52, "=", OSD_LABEL);
-                for (int i = 0; i < 6; i++)
-                    hex(4 + (24 + i * 3) * 8, 52,
-                        sdram_peek(lin + i), 2);
-            }
         }
         (void) p0; (void) p1; (void) seg_front_show;
 
