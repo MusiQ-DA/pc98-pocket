@@ -201,38 +201,11 @@ static void dec(int x, int y, uint32_t v)
 //
 // Regenerate with:
 //   python3 -c "d=open('bios.rom','rb').read()[0x15800:0x15A00]; ..." 
-static const uint8_t bios_head[256] = {
-    0xEB, 0x02, 0xEB, 0x30, 0xFA, 0x33, 0xC0, 0x8E, 0xD8, 0xE4, 0x35, 0xA8,
-    0x80, 0x75, 0x09, 0x8E, 0x16, 0x06, 0x04, 0x8B, 0x26, 0x04, 0x04, 0xCB,
-    0xC7, 0x06, 0xF8, 0x04, 0xEE, 0xEA, 0xC7, 0x06, 0xFA, 0x04, 0x00, 0x00,
-    0xC7, 0x06, 0xFC, 0x04, 0xFF, 0xFF, 0xBA, 0x3D, 0x04, 0xB0, 0x10, 0xEA,
-    0xF8, 0x04, 0x00, 0x00, 0xFA, 0xB8, 0x30, 0x00, 0x8E, 0xD0, 0xBC, 0xFE,
-    0x00, 0xEB, 0x41, 0x90, 0x36, 0x09, 0x36, 0x09, 0xF0, 0x08, 0x36, 0x09,
-    0x36, 0x09, 0x36, 0x09, 0x36, 0x09, 0x36, 0x09, 0x38, 0x06, 0x44, 0x0E,
-    0x37, 0x09, 0x37, 0x09, 0x3D, 0x18, 0x37, 0x09, 0x37, 0x09, 0x37, 0x09,
-    0x37, 0x09, 0x37, 0x09, 0x37, 0x09, 0x37, 0x09, 0x37, 0x09, 0x37, 0x09,
-    0x37, 0x09, 0x37, 0x09, 0xBD, 0x0A, 0x96, 0x15, 0x80, 0x06, 0x82, 0x1A,
-    0x00, 0x05, 0x36, 0x09, 0x00, 0x00, 0x00, 0x02, 0x8C, 0xC8, 0x8E, 0xD8,
-    0x33, 0xC0, 0x8E, 0xC0, 0xFC, 0xBE, 0x40, 0x00, 0x33, 0xFF, 0xB9, 0x1E,
-    0x00, 0xA5, 0x8C, 0xC8, 0xAB, 0xE2, 0xFA, 0x26, 0xF6, 0x06, 0x00, 0x05,
-    0x80, 0x75, 0x07, 0xA5, 0xB8, 0x00, 0xE8, 0xAB, 0xEB, 0x03, 0x83, 0xC7,
-    0x04, 0xA5, 0x8C, 0xC8, 0xAB, 0x33, 0xC0, 0x8E, 0xD8, 0xE4, 0x42, 0xA8,
-    0x02, 0x75, 0x06, 0xB8, 0x36, 0x09, 0xA3, 0x40, 0x00, 0xB0, 0x02, 0xE6,
-    0x32, 0xB9, 0x0A, 0x00, 0xE2, 0xFE, 0xB0, 0x40, 0xE6, 0x32, 0xB0, 0x02,
-    0xE6, 0x43, 0xB9, 0x0A, 0x00, 0xE2, 0xFE, 0xB0, 0x40, 0xE6, 0x43, 0xB9,
-    0x0A, 0x00, 0xE2, 0xFE, 0xB0, 0x5E, 0xE6, 0x43, 0xB9, 0x0A, 0x00, 0xE2,
-    0xFE, 0xB4, 0x03, 0xCD, 0x18, 0xBA, 0x88, 0x01, 0xB0, 0x27, 0xEE, 0xB9,
-    0x00, 0x01, 0xE2, 0xFE, 0xBA, 0x8A, 0x01, 0xB0, 0x0F, 0xEE, 0xC6, 0x06,
-    0x4C, 0x05, 0x0E, 0xE4,
-};
 
-static uint32_t rom_bad;      // how many of the 256 disagree
-static uint32_t rom_first;    // offset of the first, or 0x100 if none
-static uint8_t  rom_a[8];     // eight bytes from there: what memory holds
-static uint8_t  rom_b[8];     // eight bytes from there: what the file holds
+
 
 static uint32_t romw_off  = 0;            // next chunk's file offset
-static uint32_t romw_pass = 0;
+
 static uint32_t romw_bad_at  = 0xFFFFFFFFu;  // first mismatch, guest linear
 static uint8_t  romw_bad_file = 0, romw_bad_ram = 0;
 
@@ -251,65 +224,6 @@ void postmon_capture_rom(void)
     //
     // The file's values are FA 10 72 01 00 00 00 00; the last four pages read
     // 00 in the image itself, so only the first four carry information.
-    rom_bad = 0;
-    rom_first = 0x100u;
-    for (uint32_t i = 0; i < 256u; i++) {
-        if (sdram_peek(0xFD800u + i) != bios_head[i]) {
-            rom_bad++;
-            if (rom_first == 0x100u)
-                rom_first = i;
-        }
-    }
-    // Eight bytes from the first disagreement, memory against file.
-    uint32_t base = (rom_first < 0x100u) ? rom_first : 0u;
-    if (base > 248u)
-        base = 248u;
-    for (uint32_t i = 0; i < 8; i++) {
-        rom_a[i] = sdram_peek(0xFD800u + base + i);
-        rom_b[i] = bios_head[base + i];
-    
-    // THE FULL 96 KB, once, against the dataslot original, while the guest
-    // is still held: the bus belongs to the softcore and the peek cannot
-    // starve anyone. A byte that arrived wrong from the stream (or a weak
-    // cell that flips at write time -- deterministic, the same byte every
-    // boot, which is what an identical derail site on every boot smells
-    // like) is caught here, before the guest ever executes it.
-    for (uint32_t off = 0; off < 0x18000u && romw_bad_at == 0xFFFFFFFFu;
-         off += 256u) {
-        *FDD_TDS_ID = 1;
-        *FDD_TDS_OFFSET = off;
-        *FDD_TDS_BRIDGE = 0x60000000u;
-        *FDD_TDS_LENGTH = 256;
-        *FDD_TDS_CLR = 1;
-        *FDD_TDS_TRIG = FDD_TDS_READ;
-        uint32_t to = 4000000u, st = 0;
-        while (!((st = *FDD_TDS_STATUS) & FDD_TDS_DONE) && --to) {}
-        if (to == 0 || (st & FDD_TDS_ERR)) {
-            romw_bad_at = 0x1FFFFFu;         // marker: the reference failed
-            romw_bad_file = st & 0xFF;
-            romw_bad_ram  = 0xEE;
-            break;
-        }
-        *FDD_BRAM_ADDR = 0;
-        for (uint32_t i = 0; i < 256u; i += 4u) {
-            uint32_t w = *FDD_BRAM_RDATA;     // one WORD per read, low byte first
-            for (uint32_t b = 0; b < 4u; b++) {
-                uint8_t want = (w >> (b * 8)) & 0xFF;
-                uint8_t have = sdram_peek(0xE8000u + off + i + b);
-                if (want != have) {
-                    romw_bad_at   = 0xE8000u + off + i + b;
-                    romw_bad_file = want;
-                    romw_bad_ram  = have;
-                    break;
-                }
-            }
-            if (romw_bad_at != 0xFFFFFFFFu)
-                break;
-        }
-    }
-    romw_off = 0x18000u;                     // scan finished marker
-}
-
     // THE FULL 96 KB, once, against the dataslot original, while the guest
     // is still held: the bus belongs to the softcore and the peek cannot
     // starve anyone. A byte that arrived wrong from the stream (or a weak
@@ -362,44 +276,6 @@ static uint32_t g_last_rom_pc = 0;
 // through the target-dataslot path and comparing against the copy in place.
 // One 256-byte chunk per ~50000 loop passes: about a percent of the bus.
 
-static void romwatch_tick(void)
-{
-    return;                                  // the walk moved to boot, guest held
-    if (romw_bad_at != 0xFFFFFFFFu)
-        return;
-    if (++romw_pass < 50000u)
-        return;
-    romw_pass = 0;
-
-    // Original bytes -> bridge RAM (tds_transfer's shape, slot 1 = bios.rom).
-    *FDD_TDS_ID = 1;
-    *FDD_TDS_OFFSET = romw_off;
-    *FDD_TDS_BRIDGE = 0x60000000u;
-    *FDD_TDS_LENGTH = 256;
-    *FDD_TDS_CLR = 1;
-    *FDD_TDS_TRIG = FDD_TDS_READ;
-    {
-        uint32_t to = 4000000u, st;
-        while (!((st = *FDD_TDS_STATUS) & FDD_TDS_DONE) && --to) {}
-        if (to == 0 || (st & FDD_TDS_ERR))
-            return;                          // host busy; try this chunk again
-    }
-    // Compare. Guest linear = 0xE8000 + file offset.
-    *FDD_BRAM_ADDR = 0;
-    for (uint32_t i = 0; i < 256u; i++) {
-        uint8_t want = *FDD_BRAM_RDATA & 0xFF;
-        uint8_t have = sdram_peek(0xE8000u + romw_off + i);
-        if (want != have) {
-            romw_bad_at   = 0xE8000u + romw_off + i;
-            romw_bad_file = want;
-            romw_bad_ram  = have;
-            return;
-        }
-    }
-    romw_off += 256u;
-    if (romw_off >= 0x18000u)
-        romw_off = 0;
-}
 
 void post_mon_tick(void)
 {
@@ -410,7 +286,6 @@ void post_mon_tick(void)
     // (which is what a wandering CS:IP with LIVE dancing means), this keeps
     // the last ROM address -- the site of the derail itself.
     static uint32_t last_rom_pc = 0;
-    romwatch_tick();
     {
         uint32_t pc = *POST_LIVPC;
         uint32_t cs = pc & 0xFFFFu;
@@ -650,9 +525,9 @@ void post_mon_tick(void)
         // BAD = how many of the first 256 bytes disagree, AT = the first one.
         // On the POST row, which this machine leaves half empty.
         osd_draw_string(&fb, 4 + 24 * 8, 2, "BAD", OSD_LABEL);
-        hex(4 + 28 * 8, 2, rom_bad, 3);
+        hex(4 + 28 * 8, 2, romw_off ? 0u : 0u, 3); // retired spot check: always 0
         osd_draw_string(&fb, 4 + 32 * 8, 2, "AT", OSD_LABEL);
-        hex(4 + 35 * 8, 2, rom_first, 3);
+        hex(4 + 35 * 8, 2, 0u, 3);
         // The continuous watcher's verdict: RW = the offset it has walked to
         // (so you can see it live), R! = the first rot it ever caught, with
         // the file byte and what SDRAM holds instead. FF = clean so far.
