@@ -150,10 +150,17 @@ int main(void)
         }
 #endif
 
-        fdd_poll();
+        // Both polls walk the CHIPSET management bus, which arbitrates with
+        // the guest cycle-by-cycle -- on the metal this fires tens of
+        // thousands of holds a second through the whole boot, and no bench
+        // models it (the benches have no softcore). With nothing mounted
+        // there is nothing to poll: gate the traffic on a disk being present,
+        // and a diskless boot runs with the guest bus entirely its own.
+        if (mounted_a || mounted_b)
+            fdd_poll();
 #ifdef MACHINE_PC98
-        // Cheap when idle: one management read that finds the request bit clear.
-        scsi_poll();
+        if (mounted_hdd)
+            scsi_poll();
 #else
         if (mounted_hdd || mounted_hdd_b) {
             ide_poll();
