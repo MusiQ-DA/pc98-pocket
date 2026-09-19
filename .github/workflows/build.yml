@@ -489,6 +489,31 @@ jobs:
               quartus_sta -t /repo-scripts/check_sdram_paths.tcl ap_core
             '
 
+      - name: Detailed STA of the CPU-domain violations
+        # The summary panel shows the chipset clock at -27.9 ns with a TNS of
+        # -29,331: thousands of paths the metal cannot close. The netlist is
+        # right here with its database -- dump the worst of them, with full
+        # node detail, so the fix has names.
+        if: always()
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/pcxt-base":/work \
+            -v "${{ github.workspace }}/scripts":/repo-scripts:ro \
+            -w /work/src/fpga \
+            raetro/quartus:pocket bash -lc '
+              set -e
+              Q=""
+              for p in /opt/intelFPGA/quartus /opt/quartus /usr/local/quartus; do
+                f=$(find "$p" -maxdepth 3 -name quartus_sta 2>/dev/null | head -1)
+                if [ -n "$f" ]; then Q=$(dirname "$f"); break; fi
+              done
+              if [ -z "$Q" ]; then echo "ERROR: quartus_sta not found"; exit 1; fi
+              export PATH="$Q:$PATH"
+              export LD_LIBRARY_PATH="$Q:${LD_LIBRARY_PATH:-}"
+              quartus_sta -t /repo-scripts/sta_cpu_paths.tcl ap_core || true
+              ls -la sta_cpu*.txt sta_pico*.txt 2>/dev/null || true
+            '
+
       - name: Show fit summary
         if: always()
         run: |
@@ -506,4 +531,7 @@ jobs:
           path: |
             pcxt-base/src/fpga/output_files/*.rbf
             pcxt-base/src/fpga/output_files/*.fit.rpt
+            pcxt-base/src/fpga/sta_cpu_*.txt
+            pcxt-base/src/fpga/sta_pico_*.txt
+            pcxt-base/src/fpga/sta_sdram_*.txt
             pcxt-base/src/fpga/output_files/*.sta.rpt
