@@ -143,3 +143,49 @@ set_output_delay -clock $dram_chip_clk -reference_pin [get_ports {dram_clk}] \
 set_output_delay -clock $dram_chip_clk -reference_pin [get_ports {dram_clk}] \
     -min -1.0 -add_delay [get_ports {dram_cke dram_a[*] dram_ba[*] dram_dqm[*] dram_dq[*] \
                                      dram_ras_n dram_cas_n dram_we_n}]
+
+# ---------------------------------------------------------------------------
+# CE-PACED LOGIC (added 2026-09-20, the derail hunt)
+# ---------------------------------------------------------------------------
+# WHY THIS EXISTS. Two big register banks advance on clock-enables, not on
+# every clk_chipset edge, and the SDC never told the tool. STA timed them
+# single-cycle, the Fitter chased an impossible goal, and the placement
+# pressure displaced everything else -- the same mechanism the SDRAM block
+# above documents (the fit lottery: unconstrained paths pull placement,
+# build-to-build, in ways simulation cannot see). The metal-only derail --
+# every boot to the same address, every simulable path clean, the ROM copy
+# byte-perfect -- has exactly that signature.
+#
+# The honest pacing:
+#
+#  * The KF8253's counters decrement on count_edge -- a detected edge of the
+#    2.4576 MHz timer_clock, which the phase accumulator in PERIPHERALS
+#    toggles at 4.9152 MHz. 42.954545/4.9152 = 8.74, so consecutive
+#    count_edges land 8 or 9 clk_chipset cycles apart, and BOTH count and
+#    counter_out only change on those edges (KF8253_Counter.sv: "Update
+#    Count" and "Output" blocks are both count_edge-gated). count ->
+#    counter_out therefore has eight cycles, not one.
+#
+#  * The nuV30's registers advance on v30_ce = cpu_ce_posedge && !parked.
+#    At the default "5 MHz" front-panel setting the accumulator ratio is
+#    46/201: 4.37 chipset clocks per CPU step, so consecutive CEs land 4 or
+#    5 cycles apart and every intra-core path has five.
+#
+# NOT covered, deliberately: the "Turbo (max)" menu step (2'b11) runs the
+# core CE every chipset cycle -- at 21.5 MHz this design is overclocked and
+# on its own. And paths that LEAVE these blocks stay single-cycle: the
+# bridge, the glue, the PICs clock for real every edge.
+
+set pit_counters [get_keepers -nocase {*KF8253_Counter*}]
+set pit_counts   [get_keepers -nocase {*KF8253_Counter*|count[*]}]
+set pit_outs     [get_keepers -nocase {*KF8253_Counter*|counter_out}]
+if {[llength $pit_counts] > 0 && [llength $pit_outs] > 0} {
+    set_multicycle_path -setup -end 8 -from $pit_counts -to $pit_outs
+    set_multicycle_path -hold  -end 7 -from $pit_counts -to $pit_outs
+}
+
+set v30_core [get_keepers -nocase {core_top:ic|v30_core:u_cpu*}]
+if {[llength $v30_core] > 1} {
+    set_multicycle_path -setup -end 5 -from $v30_core -to $v30_core
+    set_multicycle_path -hold  -end 4 -from $v30_core -to $v30_core
+}
