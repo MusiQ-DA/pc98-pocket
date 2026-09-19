@@ -37,4 +37,25 @@ report_timing -nworst 20 -setup \
   -to_clock $cpuclk \
   -file sta_sdram_to_cpu.txt
 
+# The sharpest cut: single-cycle paths in the CPU domain that are NOT inside
+# the V30 core. The core's registers are CE-gated (the "5 MHz" front-panel
+# setting paces them at ~4.4 chipset clocks), so its intra-core reds are
+# multicycle artifacts until constrained -- but everything AROUND the core
+# (bridge, FDC glue, floppy.v, PICs) clocks every chipset edge for real.
+report_timing -nworst 40 -setup   -from_clock $cpuclk -to_clock $cpuclk   -from [get_keepers *] -to [get_keepers *]   -xpaths [get_keepers core_top:ic|v30_core:u_cpu*]   -file sta_cpu_excluding_core.txt
+
+# And the core's intra paths with the CE multicycle applied, to see what is
+# left when the pacing is honest. 5 edges covers the worst accumulator gap
+# at the default 46/201 rate.
+set_multicycle_path -setup 5 -end \
+  -from [get_keepers core_top:ic|v30_core:u_cpu*] \
+  -to   [get_keepers core_top:ic|v30_core:u_cpu*]
+set_multicycle_path -hold 4 -end \
+  -from [get_keepers core_top:ic|v30_core:u_cpu*] \
+  -to   [get_keepers core_top:ic|v30_core:u_cpu*]
+report_timing -nworst 40 -setup   -from_clock $cpuclk -to_clock $cpuclk \
+  -from [get_keepers core_top:ic|v30_core:u_cpu*] \
+  -to   [get_keepers core_top:ic|v30_core:u_cpu*] \
+  -file sta_core_multicycle.txt
+
 puts "STA_CPU_PATHS_DONE"
