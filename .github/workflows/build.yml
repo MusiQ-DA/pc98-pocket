@@ -532,7 +532,7 @@ jobs:
             pcxt-base/src/fpga/output_files/*.rbf
             pcxt-base/src/fpga/output_files/*.fit.rpt
             pcxt-base/src/fpga/sta_cpu_*.txt
-            pcxt-base/src/fpga/sta_core_*.txt
+            pcxt-base/src/fpga/sta_pico_*.txt
             pcxt-base/src/fpga/sta_pico_*.txt
             pcxt-base/src/fpga/sta_sdram_*.txt
             pcxt-base/src/fpga/output_files/*.sta.rpt
