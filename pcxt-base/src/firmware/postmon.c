@@ -572,14 +572,8 @@ void post_mon_tick(void)
         // The continuous watcher's verdict: RW = the offset it has walked to
         // (so you can see it live), R! = the first rot it ever caught, with
         // the file byte and what SDRAM holds instead. FF = clean so far.
-        osd_draw_string(&fb, 4 + 30 * 8, 2, "RW", OSD_LABEL);
-        hex(4 + 33 * 8, 2, romw_off >> 10, 2);   // KB walked, mod 96
-        if (romw_bad_at != 0xFFFFFFFFu) {
-            osd_draw_string(&fb, 4 + 30 * 8, 12, "R!", OSD_LABEL);
-            hex(4 + 32 * 8, 12, romw_bad_at - 0xE8000u, 5);
-            hex(4 + 38 * 8, 12, romw_bad_file, 2);
-            hex(4 + 41 * 8, 12, romw_bad_ram, 2);
-        }
+        osd_draw_string(&fb, 4 + 35 * 8, 122, "RW", OSD_LABEL);
+        hex(4 + 38 * 8, 122, romw_off >> 10, 2);   // KB walked, mod 96
         // A control, on the same path. F800E0 came back all zeros, but the
         // peek runs through the self-test master, which was built to work with
         // the 8088 held in reset -- and the guest is running now. A read that
@@ -906,14 +900,16 @@ void post_mon_tick(void)
         // the whole row -- the window parks on 0x500, the flags the boot
         // polls while everything else is frozen, and SZ/F0/KEY stand down
         // for the one build it takes to read them.
-        osd_draw_string(&fb, 4, 92, "STK", OSD_LABEL);
-        {
-            volatile uint32_t *romd = (volatile uint32_t *) 0x50000044u;
-            uint32_t w0 = romd[0], w1 = romd[2];
-            for (int i = 0; i < 4; i++)
-                hex(4 + (4 + i * 3) * 8, 92, (w0 >> (i * 8)) & 0xFFu, 2);
-            for (int i = 0; i < 4; i++)
-                hex(4 + (17 + i * 3) * 8, 92, (w1 >> (i * 8)) & 0xFFu, 2);
+        // R!: the ROM watcher's catch, on the row the dead STK display
+        // vacated -- file offset of the first rot, the byte the file has,
+        // and the byte SDRAM actually holds.
+        if (romw_bad_at != 0xFFFFFFFFu) {
+            osd_draw_string(&fb, 4, 92, "R!", OSD_LABEL);
+            hex(4 + 3 * 8, 92, romw_bad_at - 0xE8000u, 5);
+            osd_draw_string(&fb, 4 + 9 * 8, 92, "F", OSD_LABEL);
+            hex(4 + 10 * 8, 92, romw_bad_file, 2);
+            osd_draw_string(&fb, 4 + 13 * 8, 92, "M", OSD_LABEL);
+            hex(4 + 14 * 8, 92, romw_bad_ram, 2);
         }
 
         // KEY: how far a key press gets. The count is pc98_kbd_ps2's output
