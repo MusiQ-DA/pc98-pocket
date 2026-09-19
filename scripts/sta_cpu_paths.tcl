@@ -15,26 +15,26 @@ set cpuclk {ic|pll|altera_pll_i|general\[0\].gpll~PLL_OUTPUT_COUNTER|divclk}
 # Intra-CPU-domain: the true on-clock violations.
 report_timing -nworst 40 -setup \
   -from_clock $cpuclk -to_clock $cpuclk \
-  -file sta_cpu_intra.txt -detail full
+  -file sta_cpu_intra.txt
 
 # Crossings each way with the softcore (clk_pico is a /6 of the same VCO, so
 # these are timed transfers, not false paths).
 report_timing -nworst 20 -setup -from_clock $cpuclk -to_clock {clk_pico} \
-  -file sta_cpu_to_pico.txt -detail full
+  -file sta_cpu_to_pico.txt
 report_timing -nworst 20 -setup -from_clock {clk_pico} -to_clock $cpuclk \
-  -file sta_pico_to_cpu.txt -detail full
+  -file sta_pico_to_cpu.txt
 
 # The softcore's own-domain failures.
 report_timing -nworst 20 -setup -from_clock {clk_pico} -to_clock {clk_pico} \
-  -file sta_pico_intra.txt -detail full
+  -file sta_pico_intra.txt
 
 # And the antiphase sibling (the SDRAM's 180-degree clock).
 report_timing -nworst 20 -setup -from_clock $cpuclk \
   -to_clock {ic|pll|altera_pll_i|general\[2\].gpll~PLL_OUTPUT_COUNTER|divclk} \
-  -file sta_cpu_to_sdram.txt -detail full
+  -file sta_cpu_to_sdram.txt
 report_timing -nworst 20 -setup \
   -from_clock {ic|pll|altera_pll_i|general\[2\].gpll~PLL_OUTPUT_COUNTER|divclk} \
   -to_clock $cpuclk \
-  -file sta_sdram_to_cpu.txt -detail full
+  -file sta_sdram_to_cpu.txt
 
 puts "STA_CPU_PATHS_DONE"
