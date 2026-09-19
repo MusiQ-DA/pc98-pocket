@@ -189,3 +189,15 @@ if {[llength $v30_core] > 1} {
     set_multicycle_path -setup -end 5 -from $v30_core -to $v30_core
     set_multicycle_path -hold  -end 4 -from $v30_core -to $v30_core
 }
+
+# The core's INPUT surface too (2026-09-20, same hunt): every v30_core
+# register -- including the ones that sample INT, the data bus, READY --
+# advances only on v30_ce, so a path FROM anywhere INTO the core has the
+# same CE interval. The run that first carried the constraints above moved
+# placement enough to surface this: PERIPHERALS' interrupt_to_cpu into the
+# EU's interrupt evaluation cone came back -8.6 ns single-cycle. The 8259's
+# INT is a level the core samples at CE; one cycle was never the real
+# requirement. (Core -> bridge paths stay single-cycle: the bridge clocks
+# for real and the parked core must present stable outputs to it.)
+set_multicycle_path -setup -end 5 -to $v30_core
+set_multicycle_path -hold  -end 4 -to $v30_core
