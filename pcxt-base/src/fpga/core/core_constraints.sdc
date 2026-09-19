@@ -185,9 +185,13 @@ if {[llength $pit_counts] > 0 && [llength $pit_outs] > 0} {
 }
 
 set v30_core [get_keepers -nocase {core_top:ic|v30_core:u_cpu*}]
-if {[llength $v30_core] > 1} {
+# NOTE: a Quartus collection stringifies to a HANDLE, so [llength] of one is
+# 1 no matter how many keepers it holds -- the original "> 1" guard here was
+# always false and skipped both multicycles in silence. "> 0" it is.
+if {[llength $v30_core] > 0} {
     set_multicycle_path -setup -end 5 -from $v30_core -to $v30_core
     set_multicycle_path -hold  -end 4 -from $v30_core -to $v30_core
+    puts "sdc: multicycled [llength $v30_core] (handle) core-core paths"
 }
 
 # The core's INPUT surface too (2026-09-20, same hunt): every v30_core
