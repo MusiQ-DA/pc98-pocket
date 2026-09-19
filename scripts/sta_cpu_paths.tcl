@@ -25,7 +25,9 @@ report_timing -nworst 40 -setup \
   -from_clock $cpuclk -to_clock $cpuclk \
   -file sta_cpu_intra.txt
 
-# --- 2. HONEST: multicycle the CE-gated core, then report again ---
+# --- 2. HONEST: multicycle the CE-gated core, cut the phantom ROM write
+# enables (a $readmemh ROM never writes; its WE registers are constants whose
+# fan-out STA still traces), then report deep enough to see past them.
 set core [get_keepers core_top:ic|v30_core:u_cpu*]
 if {[llength $core] > 0} {
     set_multicycle_path -setup 5 -end -from $core -to $core
@@ -33,7 +35,12 @@ if {[llength $core] > 0} {
 } else {
     puts "warning: no keepers matched the core pattern"
 }
-report_timing -nworst 40 -setup \
+set we [get_keepers *u_ucrom*PORT_A_WRITE_ENABLE_REG]
+if {[llength $we] > 0} {
+    set_false_path -from $we
+    puts "false-pathed [llength $we] ucrom WE keepers"
+}
+report_timing -nworst 200 -setup \
   -from_clock $cpuclk -to_clock $cpuclk \
   -file sta_cpu_honest.txt
 
