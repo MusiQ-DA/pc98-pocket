@@ -2,8 +2,12 @@
 # chipset clock (ic|pll general[0], 42.97 MHz) at -27.9 ns slack with a TNS
 # of -29,331 -- thousands of paths the metal cannot close, and the metal is
 # the only place the boot derails. These reports name them.
-set project ap_core
-create_timing_netlist
+project_open [lindex $quartus(args) 0]
+if {[catch {create_timing_netlist -model slow -speed 8 \
+                                  -temperature 85 -voltage 1100} err]} {
+    puts "note: explicit corner rejected ($err); retrying with defaults"
+    create_timing_netlist
+}
 read_sdc ap_core.sdc
 
 set cpuclk {ic|pll|altera_pll_i|general\[0\].gpll~PLL_OUTPUT_COUNTER|divclk}
