@@ -267,6 +267,56 @@ void postmon_capture_rom(void)
 
 static uint32_t g_last_rom_pc = 0;
 
+// The ROM-copy watcher: the BIOS the CPU executes lives in SDRAM, streamed
+// from the dataslot at boot. One flipped byte in that copy is one corrupted
+// instruction and a derailed boot -- exactly the shape on the metal. The
+// boot-time check reads only the first 256 bytes once; this one walks the
+// whole 96 KB forever, pulling the ORIGINAL bytes back from the dataslot
+// through the target-dataslot path and comparing against the copy in place.
+// One 256-byte chunk per ~50000 loop passes: about a percent of the bus.
+static uint32_t romw_off  = 0;            // next chunk's file offset
+static uint32_t romw_pass = 0;
+static uint32_t romw_bad_at  = 0xFFFFFFFFu;  // first mismatch, guest linear
+static uint8_t  romw_bad_file = 0, romw_bad_ram = 0;
+
+static void romwatch_tick(void)
+{
+    if (romw_bad_at != 0xFFFFFFFFu)
+        return;                              // latched: report, stop walking
+    if (++romw_pass < 50000u)
+        return;
+    romw_pass = 0;
+
+    // Original bytes -> bridge RAM (tds_transfer's shape, slot 1 = bios.rom).
+    *FDD_TDS_ID = 1;
+    *FDD_TDS_OFFSET = romw_off;
+    *FDD_TDS_BRIDGE = 0x60000000u;
+    *FDD_TDS_LENGTH = 256;
+    *FDD_TDS_CLR = 1;
+    *FDD_TDS_TRIG = FDD_TDS_READ;
+    {
+        uint32_t to = 4000000u, st;
+        while (!((st = *FDD_TDS_STATUS) & FDD_TDS_DONE) && --to) {}
+        if (to == 0 || (st & FDD_TDS_ERR))
+            return;                          // host busy; try this chunk again
+    }
+    // Compare. Guest linear = 0xE8000 + file offset.
+    *FDD_BRAM_ADDR = 0;
+    for (uint32_t i = 0; i < 256u; i++) {
+        uint8_t want = *FDD_BRAM_RDATA & 0xFF;
+        uint8_t have = sdram_peek(0xE8000u + romw_off + i);
+        if (want != have) {
+            romw_bad_at   = 0xE8000u + romw_off + i;
+            romw_bad_file = want;
+            romw_bad_ram  = have;
+            return;
+        }
+    }
+    romw_off += 256u;
+    if (romw_off >= 0x18000u)
+        romw_off = 0;
+}
+
 void post_mon_tick(void)
 {
     static uint32_t last_status = 0xFFFFFFFFu;
@@ -276,6 +326,7 @@ void post_mon_tick(void)
     // (which is what a wandering CS:IP with LIVE dancing means), this keeps
     // the last ROM address -- the site of the derail itself.
     static uint32_t last_rom_pc = 0;
+    romwatch_tick();
     {
         uint32_t pc = *POST_LIVPC;
         uint32_t cs = pc & 0xFFFFu;
@@ -518,6 +569,17 @@ void post_mon_tick(void)
         hex(4 + 28 * 8, 2, rom_bad, 3);
         osd_draw_string(&fb, 4 + 32 * 8, 2, "AT", OSD_LABEL);
         hex(4 + 35 * 8, 2, rom_first, 3);
+        // The continuous watcher's verdict: RW = the offset it has walked to
+        // (so you can see it live), R! = the first rot it ever caught, with
+        // the file byte and what SDRAM holds instead. FF = clean so far.
+        osd_draw_string(&fb, 4 + 30 * 8, 2, "RW", OSD_LABEL);
+        hex(4 + 33 * 8, 2, romw_off >> 10, 2);   // KB walked, mod 96
+        if (romw_bad_at != 0xFFFFFFFFu) {
+            osd_draw_string(&fb, 4 + 30 * 8, 12, "R!", OSD_LABEL);
+            hex(4 + 32 * 8, 12, romw_bad_at - 0xE8000u, 5);
+            hex(4 + 38 * 8, 12, romw_bad_file, 2);
+            hex(4 + 41 * 8, 12, romw_bad_ram, 2);
+        }
         // A control, on the same path. F800E0 came back all zeros, but the
         // peek runs through the self-test master, which was built to work with
         // the 8088 held in reset -- and the guest is running now. A read that
