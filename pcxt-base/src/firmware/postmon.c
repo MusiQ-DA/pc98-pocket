@@ -231,6 +231,11 @@ static uint32_t rom_first;    // offset of the first, or 0x100 if none
 static uint8_t  rom_a[8];     // eight bytes from there: what memory holds
 static uint8_t  rom_b[8];     // eight bytes from there: what the file holds
 
+static uint32_t romw_off  = 0;            // next chunk's file offset
+static uint32_t romw_pass = 0;
+static uint32_t romw_bad_at  = 0xFFFFFFFFu;  // first mismatch, guest linear
+static uint8_t  romw_bad_file = 0, romw_bad_ram = 0;
+
 void postmon_capture_rom(void)
 {
     // Watch the stack LIVE dances on when everything else is frozen:
@@ -262,7 +267,79 @@ void postmon_capture_rom(void)
     for (uint32_t i = 0; i < 8; i++) {
         rom_a[i] = sdram_peek(0xFD800u + base + i);
         rom_b[i] = bios_head[base + i];
+    
+    // THE FULL 96 KB, once, against the dataslot original, while the guest
+    // is still held: the bus belongs to the softcore and the peek cannot
+    // starve anyone. A byte that arrived wrong from the stream (or a weak
+    // cell that flips at write time -- deterministic, the same byte every
+    // boot, which is what an identical derail site on every boot smells
+    // like) is caught here, before the guest ever executes it.
+    for (uint32_t off = 0; off < 0x18000u && romw_bad_at == 0xFFFFFFFFu;
+         off += 256u) {
+        *FDD_TDS_ID = 1;
+        *FDD_TDS_OFFSET = off;
+        *FDD_TDS_BRIDGE = 0x60000000u;
+        *FDD_TDS_LENGTH = 256;
+        *FDD_TDS_CLR = 1;
+        *FDD_TDS_TRIG = FDD_TDS_READ;
+        uint32_t to = 4000000u, st = 0;
+        while (!((st = *FDD_TDS_STATUS) & FDD_TDS_DONE) && --to) {}
+        if (to == 0 || (st & FDD_TDS_ERR)) {
+            romw_bad_at = 0x1FFFFFu;         // marker: the reference failed
+            romw_bad_file = st & 0xFF;
+            romw_bad_ram  = 0xEE;
+            break;
+        }
+        *FDD_BRAM_ADDR = 0;
+        for (uint32_t i = 0; i < 256u; i++) {
+            uint8_t want = *FDD_BRAM_RDATA & 0xFF;
+            uint8_t have = sdram_peek(0xE8000u + off + i);
+            if (want != have) {
+                romw_bad_at   = 0xE8000u + off + i;
+                romw_bad_file = want;
+                romw_bad_ram  = have;
+                break;
+            }
+        }
     }
+    romw_off = 0x18000u;                     // scan finished marker
+}
+
+    // THE FULL 96 KB, once, against the dataslot original, while the guest
+    // is still held: the bus belongs to the softcore and the peek cannot
+    // starve anyone. A byte that arrived wrong from the stream (or a weak
+    // cell that flips at write time -- deterministic, the same byte every
+    // boot, which is what an identical derail site on every boot smells
+    // like) is caught here, before the guest ever executes it.
+    for (uint32_t off = 0; off < 0x18000u && romw_bad_at == 0xFFFFFFFFu;
+         off += 256u) {
+        *FDD_TDS_ID = 1;
+        *FDD_TDS_OFFSET = off;
+        *FDD_TDS_BRIDGE = 0x60000000u;
+        *FDD_TDS_LENGTH = 256;
+        *FDD_TDS_CLR = 1;
+        *FDD_TDS_TRIG = FDD_TDS_READ;
+        uint32_t to = 4000000u, st = 0;
+        while (!((st = *FDD_TDS_STATUS) & FDD_TDS_DONE) && --to) {}
+        if (to == 0 || (st & FDD_TDS_ERR)) {
+            romw_bad_at = 0x1FFFFFu;         // marker: the reference failed
+            romw_bad_file = st & 0xFF;
+            romw_bad_ram  = 0xEE;
+            break;
+        }
+        *FDD_BRAM_ADDR = 0;
+        for (uint32_t i = 0; i < 256u; i++) {
+            uint8_t want = *FDD_BRAM_RDATA & 0xFF;
+            uint8_t have = sdram_peek(0xE8000u + off + i);
+            if (want != have) {
+                romw_bad_at   = 0xE8000u + off + i;
+                romw_bad_file = want;
+                romw_bad_ram  = have;
+                break;
+            }
+        }
+    }
+    romw_off = 0x18000u;                     // scan finished marker
 }
 
 static uint32_t g_last_rom_pc = 0;
@@ -274,15 +351,12 @@ static uint32_t g_last_rom_pc = 0;
 // whole 96 KB forever, pulling the ORIGINAL bytes back from the dataslot
 // through the target-dataslot path and comparing against the copy in place.
 // One 256-byte chunk per ~50000 loop passes: about a percent of the bus.
-static uint32_t romw_off  = 0;            // next chunk's file offset
-static uint32_t romw_pass = 0;
-static uint32_t romw_bad_at  = 0xFFFFFFFFu;  // first mismatch, guest linear
-static uint8_t  romw_bad_file = 0, romw_bad_ram = 0;
 
 static void romwatch_tick(void)
 {
+    return;                                  // the walk moved to boot, guest held
     if (romw_bad_at != 0xFFFFFFFFu)
-        return;                              // latched: report, stop walking
+        return;
     if (++romw_pass < 50000u)
         return;
     romw_pass = 0;
@@ -573,7 +647,7 @@ void post_mon_tick(void)
         // (so you can see it live), R! = the first rot it ever caught, with
         // the file byte and what SDRAM holds instead. FF = clean so far.
         osd_draw_string(&fb, 4 + 35 * 8, 122, "RW", OSD_LABEL);
-        hex(4 + 38 * 8, 122, romw_off >> 10, 2);   // KB walked, mod 96
+        hex(4 + 38 * 8, 122, romw_off >> 10, 2);   // 60 = scanned all 96 KB
         // A control, on the same path. F800E0 came back all zeros, but the
         // peek runs through the self-test master, which was built to work with
         // the 8088 held in reset -- and the guest is running now. A read that
