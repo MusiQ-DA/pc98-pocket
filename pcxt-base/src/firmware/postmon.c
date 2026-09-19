@@ -291,15 +291,20 @@ void postmon_capture_rom(void)
             break;
         }
         *FDD_BRAM_ADDR = 0;
-        for (uint32_t i = 0; i < 256u; i++) {
-            uint8_t want = *FDD_BRAM_RDATA & 0xFF;
-            uint8_t have = sdram_peek(0xE8000u + off + i);
-            if (want != have) {
-                romw_bad_at   = 0xE8000u + off + i;
-                romw_bad_file = want;
-                romw_bad_ram  = have;
-                break;
+        for (uint32_t i = 0; i < 256u; i += 4u) {
+            uint32_t w = *FDD_BRAM_RDATA;     // one WORD per read, low byte first
+            for (uint32_t b = 0; b < 4u; b++) {
+                uint8_t want = (w >> (b * 8)) & 0xFF;
+                uint8_t have = sdram_peek(0xE8000u + off + i + b);
+                if (want != have) {
+                    romw_bad_at   = 0xE8000u + off + i + b;
+                    romw_bad_file = want;
+                    romw_bad_ram  = have;
+                    break;
+                }
             }
+            if (romw_bad_at != 0xFFFFFFFFu)
+                break;
         }
     }
     romw_off = 0x18000u;                     // scan finished marker
@@ -328,15 +333,20 @@ void postmon_capture_rom(void)
             break;
         }
         *FDD_BRAM_ADDR = 0;
-        for (uint32_t i = 0; i < 256u; i++) {
-            uint8_t want = *FDD_BRAM_RDATA & 0xFF;
-            uint8_t have = sdram_peek(0xE8000u + off + i);
-            if (want != have) {
-                romw_bad_at   = 0xE8000u + off + i;
-                romw_bad_file = want;
-                romw_bad_ram  = have;
-                break;
+        for (uint32_t i = 0; i < 256u; i += 4u) {
+            uint32_t w = *FDD_BRAM_RDATA;     // one WORD per read, low byte first
+            for (uint32_t b = 0; b < 4u; b++) {
+                uint8_t want = (w >> (b * 8)) & 0xFF;
+                uint8_t have = sdram_peek(0xE8000u + off + i + b);
+                if (want != have) {
+                    romw_bad_at   = 0xE8000u + off + i + b;
+                    romw_bad_file = want;
+                    romw_bad_ram  = have;
+                    break;
+                }
             }
+            if (romw_bad_at != 0xFFFFFFFFu)
+                break;
         }
     }
     romw_off = 0x18000u;                     // scan finished marker
