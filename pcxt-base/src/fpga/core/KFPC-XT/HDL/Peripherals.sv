@@ -1072,12 +1072,27 @@ module PERIPHERALS #(
     logic   [15:0]  opl_reset_cnt;
     wire            opl_warm_reset = `ENABLE_OPL2 ? (opl_reset_cnt != 16'd0) : 1'b0;
 
-    wire    clear_keycode = port_b_out[7];
     wire    ps2_reset_n   = ~tandy_video ? port_b_out[6] : 1'b1;
 
     // Keyboard self-test response: releasing the port-B reset line makes a real XT
     // keyboard run its self-test and send 0xAA, and the BIOS keyboard POST depends on
     // seeing that byte. Inject it into the Set-2 stream after roughly a real
+
+    // THE PC-98 HAS NO CONSUMER FOR THE XT KEYBOARD OUTPUT. The PC-98's
+    // keyboard is the 8251 at 0x41/0x43 (pc98_kbd_ps2 taps the Set-2 stream
+    // UPSTREAM of this converter), and the guest never reads the XT keycode
+    // buffer nor sends its port-0x61 PB7 acknowledge. Without the
+    // acknowledge, KFPS2KB's internal irq latches high after the first byte
+    // lands in keycode_buf, kb_ready (~busy & ~irq) stays low forever, and
+    // pocket_keyboard's queue stalls: ONE key event crosses, then nothing --
+    // the metal's "the first digit types and no second one does". Drain the
+    // XT output side unconditionally; its buffer is write-only on this
+    // machine.
+`ifdef MACHINE_PC98
+    wire    clear_keycode = 1'b1;
+`else
+    wire    clear_keycode = port_b_out[7];
+`endif
     // keyboard's reset-to-response delay, holding off the external stream meanwhile.
     localparam [16:0] KB_BAT_DELAY = 17'd100000;    // ~2 ms
     logic           prev_ps2_reset_n;
