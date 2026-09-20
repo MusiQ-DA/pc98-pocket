@@ -604,10 +604,8 @@ void post_mon_tick(void)
             // executed, on the R! row's right half (that row is empty while
             // the ROM watcher has nothing to report).
             uint32_t ld = *POST_LAND;
-            osd_draw_string(&fb, 4 + 20 * 8, 92, "L", OSD_LABEL);
-            hex(4 + 21 * 8, 92, (ld >> 16) & 0xFFFFu, 4);
-            osd_draw_string(&fb, 4 + 25 * 8, 92, ":", OSD_LABEL);
-            hex(4 + 26 * 8, 92, ld & 0xFFFFu, 4);
+            osd_draw_string(&fb, 4 + 10 * 8, 22, "L", OSD_LABEL);
+            hex(4 + 11 * 8, 22, ld & 0xFFFFu, 4);
         }
         (void) p0; (void) p1; (void) seg_front_show;
 
