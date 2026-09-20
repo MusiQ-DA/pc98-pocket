@@ -411,7 +411,7 @@ module post_monitor #(
             // one ring entry. Once the CPU derails into RAM these stop
             // happening, and the ring freezes on the last ROM bytes the
             // CPU ever fetched.
-            if (~memory_read_n && ~address_enable_n
+            if (~ring_frozen && ~memory_read_n && ~address_enable_n
                 && address[19:17] == 3'b111 && ~fr_hold_q) begin
                 fr1_addr <= fr0_addr;  fr1_data <= fr0_data;
                 fr0_addr <= address;

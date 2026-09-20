@@ -615,8 +615,9 @@ void post_mon_tick(void)
             // bus actually returned. Against the file, this is the fetch
             // path's honesty test.
             uint32_t f0 = *POST_FR0;
-            osd_draw_string(&fb, 4 + 16 * 8, 92, "F", OSD_LABEL);
-            hex(4 + 17 * 8, 92, f0 & 0xFFFFFu, 5);
+            osd_draw_string(&fb, 4 + 23 * 8, 42, "F", OSD_LABEL);
+            hex(4 + 24 * 8, 42, f0 & 0xFFFFFu, 5);
+            hex(4 + 30 * 8, 42, (f0 >> 24) & 0xFFu, 2);
         }
         }
         (void) p0; (void) p1; (void) seg_front_show;
