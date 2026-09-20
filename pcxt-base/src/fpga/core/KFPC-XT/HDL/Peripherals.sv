@@ -2197,20 +2197,32 @@ end endgenerate
     logic pc98_vs_s1, pc98_vs_px, pc98_vs_px_d;
     logic [7:0]  gdc_pitch_px;
     logic [15:0] gdc_sad_px;
+    logic [13:0] gdc_cur_addr_px;
+    logic [4:0]  gdc_cur_top_px, gdc_cur_bot_px;
+    logic gdc_cur_en_s1, gdc_cur_en_px;
+    logic gdc_cur_bl_s1, gdc_cur_bl_px;
 
     always_ff @(posedge clk_vga_cga) begin
         gdc_on_s1  <= gdc_m_disp_on;  gdc_on_px  <= gdc_on_s1;
         pc98_vs_s1 <= pc98_vs;        pc98_vs_px <= pc98_vs_s1;
         pc98_vs_px_d <= pc98_vs_px;
+        gdc_cur_en_s1 <= gdc_m_cur_en; gdc_cur_en_px <= gdc_cur_en_s1;
+        gdc_cur_bl_s1 <= gdc_m_cur_bl; gdc_cur_bl_px <= gdc_cur_bl_s1;
         if (pc98_vs_px & ~pc98_vs_px_d) begin
             gdc_pitch_px <= gdc_m_pitch;
             gdc_sad_px   <= gdc_m_sad[0];
+            gdc_cur_addr_px <= gdc_m_cur_addr;
+            gdc_cur_top_px  <= gdc_m_cur_top;
+            gdc_cur_bot_px  <= gdc_m_cur_bot;
         end
     end
 
     pc98_text_render u_pc98_text (
         .clk(clk_vga_cga), .pix_ce(1'b1),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px), .gdc_sad(gdc_sad_px),
+        .cur_addr(gdc_cur_addr_px), .cur_en(gdc_cur_en_px),
+        .cur_blink(gdc_cur_bl_px),
+        .cur_top(gdc_cur_top_px), .cur_bot(gdc_cur_bot_px),
         .hcount(pc98_h), .vcount(pc98_v), .blink_on(pc98_blink),
         .tv_cell(tvram_vid_cell_w), .tv_attr(tvram_vid_attr),
         .font_cell(pc98_font_cell), .font_line(pc98_font_line),

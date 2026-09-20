@@ -43,6 +43,15 @@ module pc98_text_render #(
     input  wire [7:0]  gdc_pitch,       // words per row
     input  wire [15:0] gdc_sad,         // partition 0's start, RAW
 
+    // The cursor, as the master GDC's CSRW/CSRFORM leave it. The address is
+    // a WORD index into the text plane -- the same space gdc_sad and the
+    // cell counter below count in -- so the comparison is direct.
+    input  wire [13:0] cur_addr,
+    input  wire        cur_en,
+    input  wire        cur_blink,
+    input  wire [4:0]  cur_top,
+    input  wire [4:0]  cur_bot,
+
     // TVRAM attribute port (one cycle of latency). The character codes are the
     // row buffer's business, not this module's: it is handed glyph bytes.
     output wire [11:0] tv_cell,
@@ -125,6 +134,23 @@ module pc98_text_render #(
         : ({1'b0, next_row, 6'd0} + {3'b000, next_row, 4'd0});
     wire [11:0] next_cell    = eff_start + next_rowbase + {5'd0, next_col};
 
+    // The cell being DRAWN: the current row and column against the same
+    // start and pitch. next_* above is where the memories are pointed (one
+    // character time ahead); this is where the shift register is emptying.
+    wire [4:0]  cur_row  = vcount[8:4];
+    wire [11:0] cur_rowbase = gdc_live
+        ? 12'(cur_row * eff_pitch)
+        : ({1'b0, cur_row, 6'd0} + {3'b000, cur_row, 4'd0});
+    wire [11:0] drawn_cell = eff_start + cur_rowbase + {5'd0, col};
+
+    // The GDC's cursor: a blinking reverse block over cursor_top..cursor_bot
+    // of the one cell CSRW names. Blink rides the attribute blink phase --
+    // close enough to the machine's own ~2 Hz until someone needs the exact
+    // CSRFORM rate.
+    wire cursor_here = cur_en & (drawn_cell == {2'b00, cur_addr[11:0]});
+    wire cursor_line = cursor_here & (line >= cur_top) & (line <= cur_bot);
+    wire cursor_show = cursor_line & (~cur_blink | blink_on);
+
     assign tv_cell = next_cell;
 
     // Latched at the point the TVRAM answer is valid.
@@ -174,6 +200,7 @@ module pc98_text_render #(
         if (reverse)               lit = ~lit;
 
 
+        if (cursor_show)          lit = ~lit;   // the cursor is a reverse slice
         pixel = visible & lit;
         grb   = cur_attr[7:5];
     end
