@@ -674,6 +674,22 @@ module CHIPSET #(
             internal_data_bus_ext = internal_data_bus_ram;
             data_bus_direction    = 1'b0;
         end
+        // The empty option-ROM window. C0000-E7FFF is deliberately not
+        // served by the SDRAM (RAM.sv's map), so reads here used to fall
+        // through to the external-bus branch below and return whatever the
+        // loader had last written there -- residue the POST's option-ROM
+        // scan can mistake for a 55 AA signature, and it CALLS into it.
+        // The metal derailed exactly there: FD80:27C4 `call far [4AC]`
+        // with [4AE]=D200, landing in garbage RAM (landing CS D200, then
+        // soup). An empty slot on the real machine reads open bus; answer
+        // 0xFF so the scan's signature check never matches and the POST
+        // falls through to IVT[1E] and BASIC.
+        else if ((~memory_read_n) && (address[19:16] >= 4'hC)
+                                          && (address[19:15] < 5'b11101))
+        begin
+            internal_data_bus_ext = 8'hFF;
+            data_bus_direction    = 1'b0;
+        end
         else
         begin
             if (internal_data_bus_direction == 1'b1)
