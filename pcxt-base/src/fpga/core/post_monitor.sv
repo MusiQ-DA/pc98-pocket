@@ -307,6 +307,8 @@ module post_monitor #(
             fr0_addr      <= 20'h00000; fr0_data <= 8'h00;
             fr1_addr      <= 20'h00000; fr1_data <= 8'h00;
             fr_hold_q     <= 1'b0;
+            fr_addr_q     <= 20'h00000;
+            fr_data_q     <= 8'h00;
             io_port_hist  <= 64'd0;
             io_wr_count   <= 16'd0;
             io_port_q     <= 16'd0;
@@ -411,15 +413,18 @@ module post_monitor #(
             // one ring entry. Once the CPU derails into RAM these stop
             // happening, and the ring freezes on the last ROM bytes the
             // CPU ever fetched.
-            if (~ring_frozen && ~memory_read_n && ~address_enable_n
-                && address[19:17] == 3'b111 && ~fr_hold_q) begin
+            if (fr_shift) begin
                 fr1_addr <= fr0_addr;  fr1_data <= fr0_data;
-                fr0_addr <= address;
-                fr0_data <= bus_data;
-                fr_hold_q <= 1'b1;
+                fr0_addr <= fr_addr_q;
+                fr0_data <= fr_data_q;
             end
-            if (memory_read_n)
+            if (fr_strobe) begin
+                fr_addr_q <= address;
+                fr_data_q <= bus_data;
+                fr_hold_q <= 1'b1;
+            end else begin
                 fr_hold_q <= 1'b0;
+            end
 
             // Any I/O write, by port. Commit on the trailing edge, after two
             // cycles of the same decode -- a port number latched while the
@@ -554,6 +559,14 @@ module post_monitor #(
     logic [15:0] cs_q, ip_q;
     logic        ring_frozen;
     logic        fr_hold_q;
+    logic [19:0] fr_addr_q;
+    logic [7:0]  fr_data_q;
+    logic        fr_strobe, fr_shift;
+    // A ROM-range read cycle, live on the bus (only before the derail).
+    assign fr_strobe = ~ring_frozen & ~memory_read_n & ~address_enable_n
+                     & (address[19:17] == 3'b111);
+    // One shift per read cycle: the strobe's leading edge.
+    assign fr_shift  = fr_strobe & ~fr_hold_q;
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             live_cs   <= 16'h0000;
