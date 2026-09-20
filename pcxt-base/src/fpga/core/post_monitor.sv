@@ -304,6 +304,8 @@ module post_monitor #(
             rd_low_cycles <= 16'd0;
             rom_read_data <= 128'd0;
             rom_win_q     <= 16'hFFFF;
+            fr0_addr      <= 20'h00000; fr0_data <= 8'h00;
+            fr1_addr      <= 20'h00000; fr1_data <= 8'h00;
             io_port_hist  <= 64'd0;
             io_wr_count   <= 16'd0;
             io_port_q     <= 16'd0;
@@ -555,8 +557,6 @@ module post_monitor #(
             ring_ip0 <= 16'h0000; ring_ip1 <= 16'h0000;
             ring_ip2 <= 16'h0000; ring_ip3 <= 16'h0000;
             land_cs  <= 16'h0000; land_ip  <= 16'h0000;
-            fr0_addr <= 20'h00000; fr0_data <= 8'h00;
-            fr1_addr <= 20'h00000; fr1_data <= 8'h00;
         end else begin
             live_cs <= dbg_cs;
             live_ip <= dbg_ip;
