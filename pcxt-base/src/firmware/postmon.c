@@ -588,30 +588,26 @@ void post_mon_tick(void)
             hex(4 + 8 * 8, 52, pc & 0xFFFFu, 4);
         }
         {
-            // R0..R3: the last four retired ROM IPs (newest first), frozen at
-            // the ROM exit -- the instruction sequence that derailed. L: the
-            // landing CS:IP, the first non-ROM instruction executed.
+            // R0..R3: the last four retired ROM IPs (newest first), frozen
+            // at the ROM exit -- the instruction sequence that derailed.
+            // The layout: PC takes cols 0-12, R + four 4-hex IPs take
+            // 14-31, all on this one row; DP retired into ring_ip0.
             uint32_t r01 = *POST_RING01, r23 = *POST_RING23;
             osd_draw_string(&fb, 4 + 14 * 8, 52, "R", OSD_LABEL);
             hex(4 + 15 * 8, 52, (r01 >> 16) & 0xFFFFu, 4);
-            hex(4 + 20 * 8, 52, r01 & 0xFFFFu, 4);
-            hex(4 + 25 * 8, 52, (r23 >> 16) & 0xFFFFu, 4);
-            uint32_t ld = *POST_LAND;
-            osd_draw_string(&fb, 4, 62, "L", OSD_LABEL);
-            hex(4 + 2 * 8, 62, (ld >> 16) & 0xFFFFu, 4);
-            osd_draw_string(&fb, 4 + 6 * 8, 62, ":", OSD_LABEL);
-            hex(4 + 7 * 8, 62, ld & 0xFFFFu, 4);
-            osd_draw_string(&fb, 4 + 12 * 8, 62, "R2", OSD_LABEL);
-            hex(4 + 14 * 8, 62, r23 & 0xFFFFu, 4);
+            hex(4 + 19 * 8, 52, r01 & 0xFFFFu, 4);
+            hex(4 + 23 * 8, 52, (r23 >> 16) & 0xFFFFu, 4);
+            hex(4 + 27 * 8, 52, r23 & 0xFFFFu, 4);
         }
         {
-            uint32_t dp = *POST_DRAIL;
-            // No colon here: with it the offset hex runs past the panel's
-            // 320 px (the layout checker failed CI four runs on exactly
-            // this). ssss then oooo, one column apart, still reads.
-            osd_draw_string(&fb, 4 + 28 * 8, 52, "DP", OSD_LABEL);
-            hex(4 + 31 * 8, 52, (dp >> 16) & 0xFFFFu, 4);
-            hex(4 + 35 * 8, 52, dp & 0xFFFFu, 4);
+            // L: the landing CS:IP -- the first non-ROM instruction the CPU
+            // executed, on the R! row's right half (that row is empty while
+            // the ROM watcher has nothing to report).
+            uint32_t ld = *POST_LAND;
+            osd_draw_string(&fb, 4 + 20 * 8, 92, "L", OSD_LABEL);
+            hex(4 + 21 * 8, 92, (ld >> 16) & 0xFFFFu, 4);
+            osd_draw_string(&fb, 4 + 25 * 8, 92, ":", OSD_LABEL);
+            hex(4 + 26 * 8, 92, ld & 0xFFFFu, 4);
         }
         (void) p0; (void) p1; (void) seg_front_show;
 
