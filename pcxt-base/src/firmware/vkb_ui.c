@@ -450,16 +450,21 @@ void vkb_ui_tick(void)
     uint16_t released = ~buttons & ui_prev;
     ui_prev = buttons;
 
-    // L1 is the one always-live control: it opens and closes the virtual keyboard, the fixed
-    // overlay opener, from any mode (so a binding can never strand it). A key picker owns every
-    // button while up, so L1 stands down then.
-    if (bind_target < 0 && (pressed & BTN_L1)) {
-        if (ui_mode == OSD_VKB) {
-            vkb_release_all(); // nothing stays down after closing
-            ui_mode = OSD_NONE;
-        } else {
+    // L1 is the one always-live control: it opens and closes overlays from any
+    // mode, so no binding or picker can strand the panel behind an overlay
+    // that will not close. From the VKB -- including a key picker in flight --
+    // and from the settings overlay it closes EVERYTHING back to none, where
+    // the POST panel draws again; from none it opens the keyboard. The old
+    // "L1 stands down during a key pick" rule is what an accidental pick
+    // entry looked like to the user: the OSD never came back.
+    if (pressed & BTN_L1) {
+        if (ui_mode == OSD_NONE) {
             ui_mode = OSD_VKB;
             vkb_draw_keyboard(&osd, cur_key);
+        } else {
+            bind_target = -1;   // cancel any pick in flight
+            vkb_release_all();  // nothing stays down after closing
+            ui_mode = OSD_NONE;
         }
         osd_ctrl_write();
     }
