@@ -55,6 +55,7 @@ module post_monitor #(
     // other witness is a RAM address.
     input  wire    [15:0] dbg_cs,
     input  wire    [15:0] dbg_ip,
+    input  wire           dbg_first_pop,
     output logic   [15:0] live_cs,
     output logic   [15:0] live_ip,
     // The derail catch: the CS:IP of the LAST cycle before CS left the ROM
@@ -555,13 +556,14 @@ module post_monitor #(
                 land_ip  <= dbg_ip;
                 ring_frozen <= 1'b1;
             end
-            if (is_rom_cs && !ring_frozen) begin
-                if (dbg_ip != ring_ip0) begin
-                    ring_ip3 <= ring_ip2;
-                    ring_ip2 <= ring_ip1;
-                    ring_ip1 <= ring_ip0;
-                    ring_ip0 <= dbg_ip;
-                end
+            // Strobed on first_pop: one entry per instruction the EU
+            // actually began -- retire-true, not prefetch noise. dbg_ip at
+            // the strobe is the instruction's own IP.
+            if (is_rom_cs && !ring_frozen && dbg_first_pop) begin
+                ring_ip3 <= ring_ip2;
+                ring_ip2 <= ring_ip1;
+                ring_ip1 <= ring_ip0;
+                ring_ip0 <= dbg_ip;
             end
         end
     end

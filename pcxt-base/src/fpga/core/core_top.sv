@@ -2204,6 +2204,7 @@ module core_top (
         .live_mem_max   (post_live_max),
         .dbg_cs         (v30_dbg_regs[159:144]),
         .dbg_ip         (v30_dbg_regs[207:192]),
+        .dbg_first_pop  (v30_first_pop),
         .live_cs        (post_live_cs),
         .live_ip        (post_live_ip),
         .derail_cs      (post_derail_cs),
@@ -2892,6 +2893,7 @@ module core_top (
     );
 
     wire [223:0] v30_dbg_regs;
+    wire        v30_first_pop;
 
     v30_core u_cpu (
         .CLK        (clk_chipset),
@@ -2916,7 +2918,8 @@ module core_top (
         .SS_RDATA   (v30_ss_rdata_unused),
         .SS_ERR     (v30_ss_err_unused),
         .SS_BUS_QUIET (v30_ss_quiet_unused),
-        .dbg_regs     (v30_dbg_regs)
+        .dbg_regs     (v30_dbg_regs),
+        .dbg_first_pop(v30_first_pop)
     );
 `else
     // The 8088 has an eight-bit bus and never asks for a word, so the extra

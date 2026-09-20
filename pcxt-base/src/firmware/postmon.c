@@ -606,6 +606,8 @@ void post_mon_tick(void)
             uint32_t ld = *POST_LAND;
             osd_draw_string(&fb, 4 + 10 * 8, 22, "L", OSD_LABEL);
             hex(4 + 11 * 8, 22, ld & 0xFFFFu, 4);
+            osd_draw_string(&fb, 4 + 16 * 8, 92, "LC", OSD_LABEL);
+            hex(4 + 18 * 8, 92, (ld >> 16) & 0xFFFFu, 4);
         }
         (void) p0; (void) p1; (void) seg_front_show;
 
