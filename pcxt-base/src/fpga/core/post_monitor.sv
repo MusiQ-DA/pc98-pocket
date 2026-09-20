@@ -413,16 +413,19 @@ module post_monitor #(
             // one ring entry. Once the CPU derails into RAM these stop
             // happening, and the ring freezes on the last ROM bytes the
             // CPU ever fetched.
-            if (fr_shift) begin
-                fr1_addr <= fr0_addr;  fr1_data <= fr0_data;
-                fr0_addr <= fr_addr_q;
-                fr0_data <= fr_data_q;
-            end
+            // The data bus is a REGISTERED output: during the read cycle it
+            // still shows the previous cycle's byte and swings to this one
+            // before the strobe releases. So: latch address at the start,
+            // keep latching the bus until the end, and commit the pair on
+            // the trailing edge -- the last bus_data seen IS this read's.
             if (fr_strobe) begin
                 fr_addr_q <= address;
                 fr_data_q <= bus_data;
                 fr_hold_q <= 1'b1;
-            end else begin
+            end else if (fr_hold_q) begin
+                fr1_addr <= fr0_addr;  fr1_data <= fr0_data;
+                fr0_addr <= fr_addr_q;
+                fr0_data <= fr_data_q;
                 fr_hold_q <= 1'b0;
             end
 
@@ -557,16 +560,17 @@ module post_monitor #(
 
     logic        rom_prev;
     logic [15:0] cs_q, ip_q;
-    logic        ring_frozen;
     logic        fr_hold_q;
     logic [19:0] fr_addr_q;
     logic [7:0]  fr_data_q;
     logic        fr_strobe, fr_shift;
-    // A ROM-range read cycle, live on the bus (only before the derail).
-    assign fr_strobe = ~ring_frozen & ~memory_read_n & ~address_enable_n
+    // A ROM-range read cycle, live on the bus. Runs for the whole boot --
+    // no freeze: the boot LEGITIMATELY leaves ROM for the ITF's bank-switch
+    // stub (a jump to 0x008D0), and freezing there blinded the ring. After
+    // the real derail the CPU never reads ROM again, so the ring stops on
+    // its own at the bytes that mattered.
+    assign fr_strobe = ~memory_read_n & ~address_enable_n
                      & (address[19:17] == 3'b111);
-    // One shift per read cycle: the strobe's leading edge.
-    assign fr_shift  = fr_strobe & ~fr_hold_q;
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             live_cs   <= 16'h0000;
@@ -576,7 +580,6 @@ module post_monitor #(
             rom_prev  <= 1'b0;
             cs_q      <= 16'h0000;
             ip_q      <= 16'h0000;
-            ring_frozen <= 1'b0;
             ring_ip0 <= 16'h0000; ring_ip1 <= 16'h0000;
             ring_ip2 <= 16'h0000; ring_ip3 <= 16'h0000;
             land_cs  <= 16'h0000; land_ip  <= 16'h0000;
@@ -595,12 +598,11 @@ module post_monitor #(
             if (rom_prev && !is_rom_cs) begin
                 land_cs  <= dbg_cs;
                 land_ip  <= dbg_ip;
-                ring_frozen <= 1'b1;
             end
             // Strobed on first_pop: one entry per instruction the EU
             // actually began -- retire-true, not prefetch noise. dbg_ip at
             // the strobe is the instruction's own IP.
-            if (is_rom_cs && !ring_frozen && dbg_first_pop) begin
+            if (is_rom_cs && dbg_first_pop) begin
                 ring_ip3 <= ring_ip2;
                 ring_ip2 <= ring_ip1;
                 ring_ip1 <= ring_ip0;
