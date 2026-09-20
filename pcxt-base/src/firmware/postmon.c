@@ -65,6 +65,9 @@
 #define POST_FDCV   ((volatile uint32_t *) 0x50000108) // {0, last port, dead, live}
 #define POST_LIVPC  ((volatile uint32_t *) 0x50000110) // {ip, cs} of the retired instruction
 #define POST_DRAIL  ((volatile uint32_t *) 0x50000114) // {ip, cs} at the ROM-exit edge
+#define POST_LAND   ((volatile uint32_t *) 0x50000118) // {ip, cs} of the first non-ROM instruction
+#define POST_RING01 ((volatile uint32_t *) 0x5000011C) // the two newest retired ROM IPs
+#define POST_RING23 ((volatile uint32_t *) 0x50000120) // the two older ones
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -266,8 +269,6 @@ void postmon_capture_rom(void)
     romw_off = 0x18000u;                     // scan finished marker
 }
 
-static uint32_t g_last_rom_pc = 0;
-
 // The ROM-copy watcher: the BIOS the CPU executes lives in SDRAM, streamed
 // from the dataslot at boot. One flipped byte in that copy is one corrupted
 // instruction and a derailed boot -- exactly the shape on the metal. The
@@ -281,19 +282,6 @@ void post_mon_tick(void)
 {
     static uint32_t last_status = 0xFFFFFFFFu;
     static int placed = 0;
-    // The last PC the guest executed INSIDE a ROM segment. Polled every
-    // loop pass, far denser than the panel: when the CPU derails into RAM
-    // (which is what a wandering CS:IP with LIVE dancing means), this keeps
-    // the last ROM address -- the site of the derail itself.
-    static uint32_t last_rom_pc = 0;
-    {
-        uint32_t pc = *POST_LIVPC;
-        uint32_t cs = pc & 0xFFFFu;
-        if (cs == 0xFD80u || cs == 0xE800u || (cs >= 0xF000u && cs <= 0xF800u)
-         || cs == 0xF880u)
-            last_rom_pc = pc;
-        g_last_rom_pc = last_rom_pc;
-    }
 
     // An overlay owns the framebuffer while it is open, and this panel used to
     // paint over it every tick. That made the settings menu unreadable -- and
@@ -531,8 +519,8 @@ void post_mon_tick(void)
         // The continuous watcher's verdict: RW = the offset it has walked to
         // (so you can see it live), R! = the first rot it ever caught, with
         // the file byte and what SDRAM holds instead. FF = clean so far.
-        osd_draw_string(&fb, 4 + 35 * 8, 122, "RW", OSD_LABEL);
-        hex(4 + 38 * 8, 122, romw_off >> 10, 2);   // 60 = scanned all 96 KB
+        osd_draw_string(&fb, 4 + 34 * 8, 122, "RW", OSD_LABEL);
+        hex(4 + 37 * 8, 122, romw_off >> 10, 2);   // 60 = scanned all 96 KB
         // A control, on the same path. F800E0 came back all zeros, but the
         // peek runs through the self-test master, which was built to work with
         // the 8088 held in reset -- and the guest is running now. A read that
@@ -600,19 +588,30 @@ void post_mon_tick(void)
             hex(4 + 8 * 8, 52, pc & 0xFFFFu, 4);
         }
         {
-            // The last ROM address, and (in parens spirit) the word it held:
-            // named as RP so the derail site reads off the panel directly.
-            osd_draw_string(&fb, 4 + 14 * 8, 52, "RP", OSD_LABEL);
-            hex(4 + 17 * 8, 52, (g_last_rom_pc >> 16) & 0xFFFFu, 4);
-            osd_draw_string(&fb, 4 + 21 * 8, 52, ":", OSD_LABEL);
-            hex(4 + 22 * 8, 52, g_last_rom_pc & 0xFFFFu, 4);
+            // R0..R3: the last four retired ROM IPs (newest first), frozen at
+            // the ROM exit -- the instruction sequence that derailed. L: the
+            // landing CS:IP, the first non-ROM instruction executed.
+            uint32_t r01 = *POST_RING01, r23 = *POST_RING23;
+            osd_draw_string(&fb, 4 + 14 * 8, 52, "R", OSD_LABEL);
+            hex(4 + 15 * 8, 52, (r01 >> 16) & 0xFFFFu, 4);
+            hex(4 + 20 * 8, 52, r01 & 0xFFFFu, 4);
+            hex(4 + 25 * 8, 52, (r23 >> 16) & 0xFFFFu, 4);
+            uint32_t ld = *POST_LAND;
+            osd_draw_string(&fb, 4, 62, "L", OSD_LABEL);
+            hex(4 + 2 * 8, 62, (ld >> 16) & 0xFFFFu, 4);
+            osd_draw_string(&fb, 4 + 6 * 8, 62, ":", OSD_LABEL);
+            hex(4 + 7 * 8, 62, ld & 0xFFFFu, 4);
+            osd_draw_string(&fb, 4 + 12 * 8, 62, "R2", OSD_LABEL);
+            hex(4 + 14 * 8, 62, r23 & 0xFFFFu, 4);
         }
         {
             uint32_t dp = *POST_DRAIL;
+            // No colon here: with it the offset hex runs past the panel's
+            // 320 px (the layout checker failed CI four runs on exactly
+            // this). ssss then oooo, one column apart, still reads.
             osd_draw_string(&fb, 4 + 28 * 8, 52, "DP", OSD_LABEL);
             hex(4 + 31 * 8, 52, (dp >> 16) & 0xFFFFu, 4);
-            osd_draw_string(&fb, 4 + 35 * 8, 52, ":", OSD_LABEL);
-            hex(4 + 36 * 8, 52, dp & 0xFFFFu, 4);
+            hex(4 + 35 * 8, 52, dp & 0xFFFFu, 4);
         }
         (void) p0; (void) p1; (void) seg_front_show;
 

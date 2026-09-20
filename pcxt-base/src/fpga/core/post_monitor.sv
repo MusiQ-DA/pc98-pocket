@@ -62,6 +62,12 @@ module post_monitor #(
     // jump into garbage survives even when the CPU is lost a cycle later.
     output logic   [15:0] derail_cs,
     output logic   [15:0] derail_ip,
+    // The last EIGHT retired IPs while CS was still ROM, sampled every clock
+    // (the retired IP changes only at the core's CE, so every instruction is
+    // caught), frozen at the ROM-exit edge -- and the first non-ROM CS:IP,
+    // the landing address of the derail itself.
+    output logic   [15:0] ring_ip0, ring_ip1, ring_ip2, ring_ip3,
+    output logic   [15:0] land_cs,  land_ip,
     // LIVE, never frozen. The guest stops rather than restarting, so this
     // settles on whatever it is spinning in -- which is the one thing the
     // frozen snapshot cannot say. testB19 gave ADDR FE1DD, the prefetch at the
@@ -518,6 +524,7 @@ module post_monitor #(
 
     logic        rom_prev;
     logic [15:0] cs_q, ip_q;
+    logic        ring_frozen;
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             live_cs   <= 16'h0000;
@@ -527,6 +534,10 @@ module post_monitor #(
             rom_prev  <= 1'b0;
             cs_q      <= 16'h0000;
             ip_q      <= 16'h0000;
+            ring_frozen <= 1'b0;
+            ring_ip0 <= 16'h0000; ring_ip1 <= 16'h0000;
+            ring_ip2 <= 16'h0000; ring_ip3 <= 16'h0000;
+            land_cs  <= 16'h0000; land_ip  <= 16'h0000;
         end else begin
             live_cs <= dbg_cs;
             live_ip <= dbg_ip;
@@ -538,6 +549,19 @@ module post_monitor #(
             if (rom_prev && !is_rom_cs) begin
                 derail_cs <= cs_q;
                 derail_ip <= ip_q;
+            end
+            if (rom_prev && !is_rom_cs) begin
+                land_cs  <= dbg_cs;
+                land_ip  <= dbg_ip;
+                ring_frozen <= 1'b1;
+            end
+            if (is_rom_cs && !ring_frozen) begin
+                if (dbg_ip != ring_ip0) begin
+                    ring_ip3 <= ring_ip2;
+                    ring_ip2 <= ring_ip1;
+                    ring_ip1 <= ring_ip0;
+                    ring_ip0 <= dbg_ip;
+                end
             end
         end
     end
