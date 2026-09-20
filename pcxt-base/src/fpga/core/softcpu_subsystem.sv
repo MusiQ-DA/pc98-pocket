@@ -160,6 +160,8 @@ module softcpu_subsystem (
     input  [15:0] post_derail_ip,
     input  [15:0] post_ring_ip0, post_ring_ip1, post_ring_ip2, post_ring_ip3,
     input  [15:0] post_land_cs,  post_land_ip,
+    input  [19:0] post_fr0_addr, post_fr1_addr,
+    input  [7:0]  post_fr0_data, post_fr1_data,
     input  [15:0] post_count,
     input   [7:0] post_max,
     input  [15:0] post_restarts,
@@ -1082,6 +1084,8 @@ module softcpu_subsystem (
             32'h5000_0118: cpu_mem_rdata = {post_land_ip,  post_land_cs};
             32'h5000_011C: cpu_mem_rdata = {post_ring_ip0, post_ring_ip1};
             32'h5000_0120: cpu_mem_rdata = {post_ring_ip2, post_ring_ip3};
+            32'h5000_0124: cpu_mem_rdata = {12'd0, post_fr0_data, post_fr0_addr};
+            32'h5000_0128: cpu_mem_rdata = {12'd0, post_fr1_data, post_fr1_addr};
             32'h5000_0028: cpu_mem_rdata = {12'd0, post_live_max};
             32'h5000_002C: cpu_mem_rdata = {ivt16_wr_count, ivt16_seg, ivt16_off[15:8]};
             32'h5000_0030: cpu_mem_rdata = {16'd0, ivt16_off};

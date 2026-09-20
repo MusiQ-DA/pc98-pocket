@@ -1191,6 +1191,10 @@ module core_top (
         .post_ring_ip1              (post_ring_ip1),
         .post_ring_ip2              (post_ring_ip2),
         .post_ring_ip3              (post_ring_ip3),
+        .post_fr0_addr              (post_fr0_addr),
+        .post_fr0_data              (post_fr0_data),
+        .post_fr1_addr              (post_fr1_addr),
+        .post_fr1_data              (post_fr1_data),
         .post_land_cs               (post_land_cs),
         .post_land_ip               (post_land_ip),
         .post_count                 (post_count),
@@ -2157,6 +2161,8 @@ module core_top (
     wire [15:0] post_live_cs, post_live_ip;
     wire [15:0] post_derail_cs, post_derail_ip;
     wire [15:0] post_ring_ip0, post_ring_ip1, post_ring_ip2, post_ring_ip3;
+    wire [19:0] post_fr0_addr, post_fr1_addr;
+    wire [7:0]  post_fr0_data, post_fr1_data;
     wire [15:0] post_land_cs, post_land_ip;
     wire [15:0] post_count;
     wire  [7:0] post_max;
@@ -2212,6 +2218,8 @@ module core_top (
         .ring_ip0       (post_ring_ip0), .ring_ip1 (post_ring_ip1),
         .ring_ip2       (post_ring_ip2), .ring_ip3 (post_ring_ip3),
         .land_cs        (post_land_cs),   .land_ip  (post_land_ip),
+        .fr0_addr       (post_fr0_addr), .fr0_data (post_fr0_data),
+        .fr1_addr       (post_fr1_addr), .fr1_data (post_fr1_data),
         .post_count     (post_count),
         .post_max       (post_max),
         .restart_count  (post_restarts),

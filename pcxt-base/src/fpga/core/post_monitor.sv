@@ -69,6 +69,13 @@ module post_monitor #(
     // the landing address of the derail itself.
     output logic   [15:0] ring_ip0, ring_ip1, ring_ip2, ring_ip3,
     output logic   [15:0] land_cs,  land_ip,
+    // The last committed ROM-window reads: address and the byte that came
+    // back. The ROM-copy scan verifies what the PEEK sees; this catches
+    // what the FETCH actually got -- if the byte the CPU decoded at the
+    // derail address is not the byte in the file, the fetch path corrupted
+    // it, and the value is on the panel.
+    output logic   [19:0] fr0_addr, fr1_addr,
+    output logic   [7:0]  fr0_data, fr1_data,
     // LIVE, never frozen. The guest stops rather than restarting, so this
     // settles on whatever it is spinning in -- which is the one thing the
     // frozen snapshot cannot say. testB19 gave ADDR FE1DD, the prefetch at the
@@ -394,6 +401,15 @@ module post_monitor #(
                 rom_hold_q <= 1'b0;
             end
 
+            // The fetch ring: every committed ROM-window read shifts in.
+            // rom_win_q is the 16-byte window base; the slot places the
+            // byte, so the pair is the read's linear address.
+            if (memory_read_n && rom_hold_q) begin
+                fr1_addr <= fr0_addr;  fr1_data <= fr0_data;
+                fr0_addr <= {rom_win_q, rom_slot_q};
+                fr0_data <= rom_byte_q;
+            end
+
             // Any I/O write, by port. Commit on the trailing edge, after two
             // cycles of the same decode -- a port number latched while the
             // address bus is still moving is the transient that produced POST
@@ -539,6 +555,8 @@ module post_monitor #(
             ring_ip0 <= 16'h0000; ring_ip1 <= 16'h0000;
             ring_ip2 <= 16'h0000; ring_ip3 <= 16'h0000;
             land_cs  <= 16'h0000; land_ip  <= 16'h0000;
+            fr0_addr <= 20'h00000; fr0_data <= 8'h00;
+            fr1_addr <= 20'h00000; fr1_data <= 8'h00;
         end else begin
             live_cs <= dbg_cs;
             live_ip <= dbg_ip;

@@ -68,6 +68,8 @@
 #define POST_LAND   ((volatile uint32_t *) 0x50000118) // {ip, cs} of the first non-ROM instruction
 #define POST_RING01 ((volatile uint32_t *) 0x5000011C) // the two newest retired ROM IPs
 #define POST_RING23 ((volatile uint32_t *) 0x50000120) // the two older ones
+#define POST_FR0    ((volatile uint32_t *) 0x50000124) // {byte, 20-bit addr} of the newest ROM read
+#define POST_FR1    ((volatile uint32_t *) 0x50000128) // the one before
 #define POST_IOH0   ((volatile uint32_t *) 0x50000070) // I/O ports written, newest two
 #define POST_IOH1   ((volatile uint32_t *) 0x50000074) // ... older two
 #define POST_IOST   ((volatile uint32_t *) 0x50000078) // {itf_bank, io write count}
@@ -606,8 +608,16 @@ void post_mon_tick(void)
             uint32_t ld = *POST_LAND;
             osd_draw_string(&fb, 4 + 10 * 8, 22, "L", OSD_LABEL);
             hex(4 + 11 * 8, 22, ld & 0xFFFFu, 4);
-            osd_draw_string(&fb, 4 + 16 * 8, 92, "LC", OSD_LABEL);
-            hex(4 + 18 * 8, 92, (ld >> 16) & 0xFFFFu, 4);
+
+
+        {
+            // The two newest ROM-window reads: address then the byte the
+            // bus actually returned. Against the file, this is the fetch
+            // path's honesty test.
+            uint32_t f0 = *POST_FR0;
+            osd_draw_string(&fb, 4 + 16 * 8, 92, "F", OSD_LABEL);
+            hex(4 + 17 * 8, 92, f0 & 0xFFFFFu, 5);
+        }
         }
         (void) p0; (void) p1; (void) seg_front_show;
 
