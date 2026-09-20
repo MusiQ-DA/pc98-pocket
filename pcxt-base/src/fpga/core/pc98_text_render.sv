@@ -137,11 +137,12 @@ module pc98_text_render #(
     // The cell being DRAWN: the current row and column against the same
     // start and pitch. next_* above is where the memories are pointed (one
     // character time ahead); this is where the shift register is emptying.
-    wire [4:0]  cur_row  = vcount[8:4];
-    wire [11:0] cur_rowbase = gdc_live
-        ? 12'(cur_row * eff_pitch)
-        : ({1'b0, cur_row, 6'd0} + {3'b000, cur_row, 4'd0});
-    wire [11:0] drawn_cell = eff_start + cur_rowbase + {5'd0, col};
+    // (Named draw_row because cur_row is the glyph register below.)
+    wire [4:0]  draw_row  = vcount[8:4];
+    wire [11:0] draw_rowbase = gdc_live
+        ? 12'(draw_row * eff_pitch)
+        : ({1'b0, draw_row, 6'd0} + {3'b000, draw_row, 4'd0});
+    wire [11:0] drawn_cell = eff_start + draw_rowbase + {5'd0, col};
 
     // The GDC's cursor: a blinking reverse block over cursor_top..cursor_bot
     // of the one cell CSRW names. Blink rides the attribute blink phase --
