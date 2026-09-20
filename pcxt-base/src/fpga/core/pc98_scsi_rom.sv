@@ -77,6 +77,20 @@ module pc98_scsi_rom (
         // is silently skipped.
         rom[8'h0C] = 8'hC6; rom[8'h0D] = 8'h07; rom[8'h0E] = 8'hFF;
         rom[8'h0F] = 8'hCB;
+
+        // 0012 and 0015: THE OTHER TWO ENTRY POINTS. The POST does not scan
+        // once -- bios.rom runs FOUR passes over the window, one per option-
+        // ROM SIZE CLASS, and the class picks the entry offset: 0x000C, then
+        // 0x000F, then 0x0012, then 0x0015 (FFF23, FFF57, FFF5F, FFF91).
+        // This stub's storage past the signature was ZERO, and 0x00 0x00 is
+        // `add [bx+si],al` -- a two-byte walk through four kilobytes of
+        // nothing and on into open RAM. The metal derailed exactly here on
+        // every boot: the first two passes returned (the ring saw their
+        // wrapper pops), the third stepped off the retf at 0x0F into the
+        // zeros and never came back. A far return at every entry the ROM's
+        // own scan can pick.
+        rom[8'h12] = 8'hCB;
+        rom[8'h15] = 8'hCB;
     end
 
     logic [7:0] rq;
