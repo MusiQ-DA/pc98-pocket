@@ -236,7 +236,7 @@ module PERIPHERALS #(
     output  logic   [1:0]   gdc_draw_req,
     output  logic   [1:0]   gdc_draw_busy,
     output  logic  [15:0]   gdc_draw_ops,
-    output  logic [159:0]   gdc_draw_snaps,
+    output  logic [319:0]   gdc_draw_snaps,
     input   logic   [1:0]   gdc_srv_done_levels,
     output  logic   [63:0]  pc98_tvfill_view,
     // The kanji fetch path's activity: f_req pulses and f_valid beats. With
@@ -1969,7 +1969,7 @@ end endgenerate
     generate
         for (dsg = 0; dsg < 5; dsg = dsg + 1) begin : g_dsnap
             assign gdc_draw_snaps[dsg*32 +: 32]      = gdc_m_draw_snap[dsg];
-            assign gdc_draw_snaps[80 + dsg*32 +: 32] = gdc_s_draw_snap[dsg];
+            assign gdc_draw_snaps[160 + dsg*32 +: 32] = gdc_s_draw_snap[dsg];
         end
     endgenerate
 

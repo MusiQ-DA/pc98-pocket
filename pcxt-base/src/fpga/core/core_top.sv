@@ -1079,7 +1079,7 @@ module core_top (
     wire [31:0] dbg_gdc_csrtrace;
     wire  [1:0] gdc_draw_req, gdc_draw_busy, gdc_srv_done_levels;
     wire [15:0] gdc_draw_ops;
-    wire [159:0] gdc_draw_snaps;
+    wire [319:0] gdc_draw_snaps;
 
     // INTR into the CPU. BASIC clears the screen, draws the function key line
     // and stops; an interrupt that never arrives is the shape that produces

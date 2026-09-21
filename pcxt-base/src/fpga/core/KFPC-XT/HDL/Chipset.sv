@@ -93,7 +93,7 @@ module CHIPSET #(
         output  logic   [1:0]   gdc_draw_req,
         output  logic   [1:0]   gdc_draw_busy,
         output  logic  [15:0]   gdc_draw_ops,
-        output  logic [159:0]   gdc_draw_snaps,
+        output  logic [319:0]   gdc_draw_snaps,
         input   logic   [1:0]   gdc_srv_done_levels,
         output  logic   [63:0]  pc98_tvfill_view,
         output  logic   [15:0]  pc98_rowbuf_freq_count,

@@ -149,7 +149,7 @@ module softcpu_subsystem (
     input   [1:0]  gdc_draw_req,
     input   [1:0]  gdc_draw_busy,
     input  [15:0]  gdc_draw_ops,
-    input [159:0]  gdc_draw_snaps,
+    input [319:0]  gdc_draw_snaps,
     output  [1:0]  gdc_srv_done_levels,
     // How far a key press gets, served at 0x500000AC. See core_top.
     input   [7:0] key_count,
