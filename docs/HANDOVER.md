@@ -310,7 +310,7 @@ F800:0000 から 0x4000 ワードを `add dl,al / add dh,ah` で合計し `or dx
 ### 3.6c 撤回 — ITF と BIOS は対になっている(2026-09-14)
 
 一度「ITF と BIOS が別世代で対になっていない」と結論し、検出器
-(`scripts/check_rom_pair.py`)まで書いて `deploy_pc98.sh` の門に入れた。
+(`scripts/check_rom_pair.py`)まで書いて `deploy.sh` の門に入れた。
 **すべて誤りだったので撤回する。** 門は同じ日のうちに外した
 (あのままなら正しい UX セットを拒否していた)。
 
@@ -416,7 +416,7 @@ docker run -d --name <name> \
 ### 4.3 ハードウェアROM
 
 デプロイ時に `/tmp/uxroms/bios.rom` を使用する。
-`scripts/deploy_pc98.sh` のROMパスを更新。
+`scripts/deploy.sh` のROMパスを更新。
 
 ## §5 コミット一覧(最終)
 
@@ -444,7 +444,7 @@ d4dda77 sim: memory switch protected from POST clear
 
 ## §7 次のアクション
 
-1. **実機デプロイ**: `bash scripts/deploy_pc98.sh`。
+1. **実機デプロイ**: `bash scripts/deploy.sh`。
    **`memsw[3]` の修正(§1.2b)が入っていることを確認すること** —
    入っていないと実機でもバナー直後に CC00 へ飛んで落ちる。
    シミュレーション側でやるべきことは一通り終わっている。
@@ -475,7 +475,7 @@ MEMORY SWITCH ERROR まで到達**(ポート0x31を誤って0x12にしたのが�
 ### §8.1 デプロイの足元(失敗2件)
 
 - `scripts/deploy.sh` は `hiroya.PCXTDEV` に書く。**PC-98 は
-  `scripts/deploy_pc98.sh`** — ROM 3本(bios/itf/font)と firmware を
+  `scripts/deploy.sh`** — ROM 3本(bios/itf/font)と firmware を
   `Assets/pc98/hiroya.PC9801/` に一式置く。
   **「間違えた方は1発で分かる」は誤り**(2026-09-14 に実証)。`deploy.sh` は
   "written and verified" と成功を報告して exit 0 し、起動される
@@ -486,7 +486,7 @@ MEMORY SWITCH ERROR まで到達**(ポート0x31を誤って0x12にしたのが�
   `deploy.sh` は `--core` 明示なしでは実行を拒否するようにした。
   効かないように見えたら、まず
   `/Volumes/ANALOGUE/Assets/pc98/hiroya.PC9801/firmware.bin` を
-  そのコミットの `pcxt-base/src/firmware/firmware.bin` とバイト比較すること。
+  そのコミットの `firmware/firmware.bin` とバイト比較すること。
 - Pocket のカードは `/Volumes/ANALOGUE`。`/Volumes/Untitled`(exFAT)は
   別カード(h2testw の検査ファイル入り)。
 - `--run N` は per_page=20 の縛りで古い run を引くと永久スピンしていた

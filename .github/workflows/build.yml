@@ -19,9 +19,9 @@ jobs:
       - name: SDRAM controller — integrity and single-port bandwidth
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_sdram_mp \
-            -Isim -Ipcxt-base/src/fpga/core \
+            -Isim -Ifpga/core \
             sim/tb_sdram_mp.sv sim/sdram_model.sv \
-            pcxt-base/src/fpga/core/sdram_mp.sv \
+            fpga/core/sdram_mp.sv \
             -o tb --Mdir obj_mp
           ./obj_mp/tb | tee mp.log
           grep -q "RESULT: PASS" mp.log
@@ -29,32 +29,32 @@ jobs:
       - name: SDRAM controller — three-port contention bandwidth
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_sdram_load \
-            -Isim -Ipcxt-base/src/fpga/core \
+            -Isim -Ifpga/core \
             sim/tb_sdram_load.sv sim/sdram_model.sv \
-            pcxt-base/src/fpga/core/sdram_mp.sv \
+            fpga/core/sdram_mp.sv \
             -o tbl --Mdir obj_load
           ./obj_load/tbl | tee load.log
           grep -q "RESULT: PASS" load.log
       - name: SDRAM controller — KFSDRAM shim handshake
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_sdram_shim \
-            -Isim -Ipcxt-base/src/fpga/core \
+            -Isim -Ifpga/core \
             sim/tb_sdram_shim.sv sim/sdram_model.sv \
-            pcxt-base/src/fpga/core/sdram_kf_shim.sv \
-            pcxt-base/src/fpga/core/sdram_mp.sv \
+            fpga/core/sdram_kf_shim.sv \
+            fpga/core/sdram_mp.sv \
             -o tbs --Mdir obj_shim
           ./obj_shim/tbs | tee shim.log
           grep -q "RESULT: PASS" shim.log
 
       - name: RAM.sv integration — KFSDRAM reference then sdram_mp
         run: |
-          S=pcxt-base/src/fpga/core
+          S=fpga/core
           for mode in ref mp; do
             DEF=""; [ "$mode" = "mp" ] && DEF="+define+SDRAM_USE_MP"
             verilator --binary --timing -Wno-fatal --top-module tb_ram_ab $DEF \
-              -Isim -I$S -I$S/KFPC-XT/HDL -I$S/KFPC-XT/HDL/KFSDRAM/HDL \
+              -Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/KFSDRAM/HDL \
               sim/tb_ram_ab.sv sim/sdram_model.sv \
-              $S/KFPC-XT/HDL/RAM.sv $S/KFPC-XT/HDL/KFSDRAM/HDL/KFSDRAM.sv \
+              $S/chipset/HDL/RAM.sv $S/chipset/HDL/KFSDRAM/HDL/KFSDRAM.sv \
               $S/sdram_kf_shim.sv $S/sdram_mp.sv \
               -o r --Mdir obj_$mode
             ./obj_$mode/r | tee ram_$mode.log
@@ -71,15 +71,15 @@ jobs:
       - name: TVRAM keeps characters and attributes apart
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_tvram \
-            -Isim -Ipcxt-base/src/fpga/core \
-            sim/tb_pc98_tvram.sv pcxt-base/src/fpga/core/pc98_tvram.sv \
+            -Isim -Ifpga/core \
+            sim/tb_pc98_tvram.sv fpga/core/pc98_tvram.sv \
             -o v --Mdir obj_tv
           ./obj_tv/v | tee tv.log
           grep -q "RESULT: PASS" tv.log
 
       - name: the CG window serves a glyph to the guest
         run: |
-          S=pcxt-base/src/fpga/core
+          S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_cgwindow \
             -Isim -I$S sim/tb_pc98_cgwindow.sv \
             $S/pc98_cgwindow.sv $S/pc98_glyph_addr.sv -o c --Mdir obj_cg
@@ -89,15 +89,15 @@ jobs:
       - name: a pulse survives the clock crossing
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pulse_cdc \
-            -Isim -Ipcxt-base/src/fpga/core \
-            sim/tb_pulse_cdc.sv pcxt-base/src/fpga/core/pulse_cdc.sv \
+            -Isim -Ifpga/core \
+            sim/tb_pulse_cdc.sv fpga/core/pulse_cdc.sv \
             -o p --Mdir obj_cdc
           ./obj_cdc/p | tee cdc.log
           grep -q "RESULT: PASS" cdc.log
 
       - name: glyphs come back out of SDRAM intact
         run: |
-          S=pcxt-base/src/fpga/core
+          S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_font_sdram \
             -Isim -I$S sim/tb_pc98_font_sdram.sv sim/sdram_model.sv \
             $S/pc98_glyph_rowbuf.sv $S/pc98_glyph_addr.sv \
@@ -109,9 +109,9 @@ jobs:
       - name: a text row's glyphs land in the buffer, kanji paired
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_rowbuf \
-            -Isim -Ipcxt-base/src/fpga/core sim/tb_pc98_rowbuf.sv \
-            pcxt-base/src/fpga/core/pc98_glyph_rowbuf.sv \
-            pcxt-base/src/fpga/core/pc98_glyph_addr.sv \
+            -Isim -Ifpga/core sim/tb_pc98_rowbuf.sv \
+            fpga/core/pc98_glyph_rowbuf.sv \
+            fpga/core/pc98_glyph_addr.sv \
             -o b --Mdir obj_rb
           ./obj_rb/b | tee rb.log
           grep -q "RESULT: PASS" rb.log
@@ -119,8 +119,8 @@ jobs:
       - name: glyph addresses match a real FONT.ROM
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_glyph_addr \
-            -Isim -Ipcxt-base/src/fpga/core \
-            sim/tb_pc98_glyph_addr.sv pcxt-base/src/fpga/core/pc98_glyph_addr.sv \
+            -Isim -Ifpga/core \
+            sim/tb_pc98_glyph_addr.sv fpga/core/pc98_glyph_addr.sv \
             -o g --Mdir obj_ga
           ./obj_ga/g | tee ga.log
           grep -q "RESULT: PASS" ga.log
@@ -128,8 +128,8 @@ jobs:
       - name: port 0x68 drives the ANK/kanji mode the row buffer honours
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_gdc_mode1 \
-            -Isim -Ipcxt-base/src/fpga/core \
-            sim/tb_pc98_gdc_mode1.sv pcxt-base/src/fpga/core/pc98_gdc_mode1.sv \
+            -Isim -Ifpga/core \
+            sim/tb_pc98_gdc_mode1.sv fpga/core/pc98_gdc_mode1.sv \
             -o m --Mdir obj_m1
           ./obj_m1/m | tee m1.log
           grep -q "RESULT: PASS" m1.log
@@ -137,20 +137,20 @@ jobs:
       - name: raster is the 640x400 one PC-98 software expects
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_timing \
-            -Isim -Ipcxt-base/src/fpga/core \
-            sim/tb_pc98_timing.sv pcxt-base/src/fpga/core/pc98_video_timing.sv \
+            -Isim -Ifpga/core \
+            sim/tb_pc98_timing.sv fpga/core/pc98_video_timing.sv \
             -o r --Mdir obj_ti
           ./obj_ti/r | tee ti.log
           grep -q "RESULT: PASS" ti.log
 
       - name: the OSD's coordinates reach the OSD's window
         run: |
-          S=pcxt-base/src/fpga/core
+          S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_osdwin \
             -DMACHINE_PC98=1 -DPC98_OSD_MARK=1 \
             -Isim -I$S sim/tb_pc98_osdwin.sv \
             $S/pocket_video.sv $S/pc98_video_timing.sv \
-            pcxt-base/src/fpga/apf/common.v $S/video_sync_guard.sv \
+            fpga/apf/common.v $S/video_sync_guard.sv \
             $S/common/jtframe_credits.v $S/common/jtframe_dual_ram.v \
             $S/common/jtframe_ram.v \
             -o w --Mdir obj_ow
@@ -160,8 +160,8 @@ jobs:
       - name: text plane draws what TVRAM says
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_text \
-            -Isim -Ipcxt-base/src/fpga/core \
-            sim/tb_pc98_text.sv pcxt-base/src/fpga/core/pc98_text_render.sv \
+            -Isim -Ifpga/core \
+            sim/tb_pc98_text.sv fpga/core/pc98_text_render.sv \
             -o x --Mdir obj_tx
           ./obj_tx/x | tee tx.log
           grep -q "RESULT: PASS" tx.log
@@ -169,23 +169,20 @@ jobs:
       - name: the first cell of a line is drawn, not lost to the blanking
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_firstcell \
-            -Isim -Ipcxt-base/src/fpga/core \
-            sim/tb_pc98_firstcell.sv pcxt-base/src/fpga/core/pc98_text_render.sv \
+            -Isim -Ifpga/core \
+            sim/tb_pc98_firstcell.sv fpga/core/pc98_text_render.sv \
             -o q --Mdir obj_fc
           ./obj_fc/q | tee fc.log
           grep -q "RESULT: PASS" fc.log
 
       - name: the boot beep reaches the speaker pin (ctr1, sysport bit3)
         run: |
-          H=pcxt-base/src/fpga/core/KFPC-XT/HDL
+          H=fpga/core/chipset/HDL
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_beep \
-            -Isim -I$H/KF8253/HDL -I$H/KF8255/HDL \
+            -Isim -I$H/KF8253/HDL \
             sim/tb_pc98_beep.sv \
             $H/KF8253/HDL/KF8253.sv $H/KF8253/HDL/KF8253_Control_Logic.sv \
             $H/KF8253/HDL/KF8253_Counter.sv \
-            $H/KF8255/HDL/KF8255.sv $H/KF8255/HDL/KF8255_Control_Logic.sv \
-            $H/KF8255/HDL/KF8255_Group.sv $H/KF8255/HDL/KF8255_Port.sv \
-            $H/KF8255/HDL/KF8255_Port_C.sv \
             -o b --Mdir obj_beep
           ./obj_beep/b | tee beep.log
           grep -q "RESULT: PASS" beep.log
@@ -193,8 +190,8 @@ jobs:
       - name: Set-2 keys translate to PC-98 make/break codes
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_kbd_ps2 \
-            -Isim -Ipcxt-base/src/fpga/core \
-            sim/tb_pc98_kbd_ps2.sv pcxt-base/src/fpga/core/pc98_kbd_ps2.sv \
+            -Isim -Ifpga/core \
+            sim/tb_pc98_kbd_ps2.sv fpga/core/pc98_kbd_ps2.sv \
             -o k --Mdir obj_kb
           ./obj_kb/k | tee kb.log
           grep -q "RESULT: PASS" kb.log
@@ -209,8 +206,8 @@ jobs:
       - name: keyboard 8251 answers the way the ROMs ask
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_kbd8251 \
-            -Isim -Ipcxt-base/src/fpga/core \
-            sim/tb_pc98_kbd8251.sv pcxt-base/src/fpga/core/pc98_kbd8251.sv \
+            -Isim -Ifpga/core \
+            sim/tb_pc98_kbd8251.sv fpga/core/pc98_kbd8251.sv \
             -o k --Mdir obj_kbd
           ./obj_kbd/k | tee kbd.log
           grep -q "RESULT: PASS" kbd.log
@@ -221,10 +218,10 @@ jobs:
           # relative to the working directory; stage them (an empty ROM is
           # a $fatal inside the core, not a warning).
           mkdir -p hdl/rtl/ucore
-          cp pcxt-base/src/fpga/core/v30/ucrom.hex \
-             pcxt-base/src/fpga/core/v30/ucdecode.hex hdl/rtl/ucore/
-          S=pcxt-base/src/fpga/core
-          K=$S/KFPC-XT/HDL
+          cp fpga/core/v30/ucrom.hex \
+             fpga/core/v30/ucdecode.hex hdl/rtl/ucore/
+          S=fpga/core
+          K=$S/chipset/HDL
           verilator --binary --timing -Wno-fatal --top-module tb_v30_bridge \
             -Isim -I$S -I$S/v30 -I$K -I$K/KF8288/HDL -I$K/KF8259/HDL \
             sim/tb_v30_bridge.sv \
@@ -256,7 +253,7 @@ jobs:
 
       - name: POST monitor captures what the guest wrote
         run: |
-          S=pcxt-base/src/fpga/core
+          S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_post_monitor \
             -Isim -I$S sim/tb_post_monitor.sv $S/post_monitor.sv -o p --Mdir obj_pm
           ./obj_pm/p | tee pm.log
@@ -264,8 +261,8 @@ jobs:
 
       - name: IRQ0 is an edge, not a level, on a timer pin latched high
         run: |
-          S=pcxt-base/src/fpga/core
-          H=$S/KFPC-XT/HDL
+          S=fpga/core
+          H=$S/chipset/HDL
           for tb in tb_pic_irq0_edge tb_pit_boot_seq tb_pic_cascade; do
             verilator --binary --timing -Wno-fatal --top-module $tb \
               -Isim -I$S -I$H -I$H/KF8253/HDL -I$H/KF8259/HDL \
@@ -276,8 +273,8 @@ jobs:
 
       - name: 8088 read timing (the check every other bench was missing)
         run: |
-          S=pcxt-base/src/fpga/core
-          H=$S/KFPC-XT/HDL
+          S=fpga/core
+          H=$S/chipset/HDL
           for mode in ref mp mp_kfref; do
             DEF="+define+SDRAM_USE_MP"
             [ "$mode" = ref ] && DEF=""
@@ -293,8 +290,8 @@ jobs:
 
       - name: the V30 on the real memory path, at every CE index
         run: |
-          S=pcxt-base/src/fpga/core
-          H=$S/KFPC-XT/HDL
+          S=fpga/core
+          H=$S/chipset/HDL
           V=$S/v30
           mkdir -p hdl/rtl/ucore && cp $V/ucrom.hex $V/ucdecode.hex hdl/rtl/ucore/
           verilator --binary --timing -Wno-fatal --top-module tb_v30_mem \
@@ -314,7 +311,7 @@ jobs:
 
       - name: the GDC puts parameters where np2kai puts them
         run: |
-          S=pcxt-base/src/fpga/core
+          S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_gdc \
             -Isim -I$S sim/tb_pc98_gdc.sv $S/pc98_gdc.sv -o g --Mdir obj_gdc
           ./obj_gdc/g | tee gdc.log
@@ -322,7 +319,7 @@ jobs:
 
       - name: the PC-98 FDC ports land on floppy.v's register file
         run: |
-          S=pcxt-base/src/fpga/core
+          S=fpga/core
           # -I$S/common because the bench now instantiates the REAL floppy.v
           # and drives the BIOS's own sequence through it, rather than checking
           # the mapping against an imagined controller.
@@ -334,7 +331,7 @@ jobs:
 
       - name: the SCSI register window indexes and increments like the board
         run: |
-          S=pcxt-base/src/fpga/core
+          S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_scsi \
             -Isim -I$S sim/tb_pc98_scsi.sv $S/pc98_scsi.sv -o sc --Mdir obj_scsi
           ./obj_scsi/sc | tee scsi.log
@@ -342,7 +339,7 @@ jobs:
 
       - name: the GRCG's three operations match np2kai's expressions
         run: |
-          S=pcxt-base/src/fpga/core
+          S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_grcg \
             -Isim -I$S sim/tb_pc98_grcg.sv $S/pc98_grcg.sv -o gr --Mdir obj_grcg
           ./obj_grcg/gr | tee grcg.log
@@ -350,7 +347,7 @@ jobs:
 
       - name: one guest GVRAM access becomes the right several to memory
         run: |
-          S=pcxt-base/src/fpga/core
+          S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_gvram_seq \
             -Isim -I$S sim/tb_pc98_gvram_seq.sv $S/pc98_gvram_seq.sv \
             -o gs --Mdir obj_gseq
@@ -359,20 +356,17 @@ jobs:
 
       - name: CE generator makes the frequencies the speed menu names
         run: |
-          H=pcxt-base/src/fpga/core/KFPC-XT/HDL
-          for d in "+define+MACHINE_PC98" "+define+CE_XT_BUILD"; do
-            verilator --binary --timing -Wno-fatal --top-module tb_ce_rates $d \
-              -Isim -I$H sim/tb_ce_rates.sv $H/XT_CE_Generator.sv \
-              -o ce --Mdir obj_ce
-            ./obj_ce/ce | tee ce.log
-            grep -q "PASS tb_ce_rates" ce.log
-            rm -rf obj_ce
-          done
+          H=fpga/core/chipset/HDL
+          verilator --binary --timing -Wno-fatal --top-module tb_ce_rates \
+            -Isim -I$H sim/tb_ce_rates.sv $H/XT_CE_Generator.sv \
+            -o ce --Mdir obj_ce
+          ./obj_ce/ce | tee ce.log
+          grep -q "PASS tb_ce_rates" ce.log
 
       - name: postmon ROM peek reads the ROM the loader wrote (not the ITF shadow)
         run: |
-          S=pcxt-base/src/fpga/core
-          H=$S/KFPC-XT/HDL
+          S=fpga/core
+          H=$S/chipset/HDL
           # fixed: the shipped flag mux -- the peek must read the main bank,
           # BAD 000. repro: the pre-fix mux -- must come back BAD 0EC with GOT
           # all zeros, i.e. this bench reproduces the hardware readout; if it
@@ -399,13 +393,13 @@ jobs:
 
       - name: RAM.sv integration at board timing (antiphase device clock)
         run: |
-          S=pcxt-base/src/fpga/core
+          S=fpga/core
           for mode in ref mp; do
             DEF=""; [ "$mode" = "mp" ] && DEF="+define+SDRAM_USE_MP"
             verilator --binary --timing -Wno-fatal --top-module tb_ram_ab_ph $DEF \
-              -Isim -I$S -I$S/KFPC-XT/HDL -I$S/KFPC-XT/HDL/KFSDRAM/HDL \
+              -Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/KFSDRAM/HDL \
               sim/tb_ram_ab_ph.sv sim/sdram_model.sv sim/sdram_board_model.sv \
-              $S/KFPC-XT/HDL/RAM.sv $S/KFPC-XT/HDL/KFSDRAM/HDL/KFSDRAM.sv \
+              $S/chipset/HDL/RAM.sv $S/chipset/HDL/KFSDRAM/HDL/KFSDRAM.sv \
               $S/sdram_kf_shim.sv $S/sdram_mp.sv \
               -o p --Mdir obj_ph_$mode
             ./obj_ph_$mode/p | tee ram_ph_$mode.log
@@ -438,7 +432,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y lld llvm
 
       - name: firmware.vh was built from the committed sources
-        run: make -C pcxt-base/src/firmware srchash-verify
+        run: make -C firmware srchash-verify
 
   quartus:
     runs-on: ubuntu-latest
@@ -458,8 +452,8 @@ jobs:
       - name: Compile (quartus_sh --flow compile)
         run: |
           docker run --rm \
-            -v "${{ github.workspace }}/pcxt-base":/work \
-            -w /work/src/fpga \
+            -v "${{ github.workspace }}/fpga":/work \
+            -w /work \
             raetro/quartus:pocket bash -lc '
               set -e
               Q=""
@@ -479,9 +473,9 @@ jobs:
         if: always()
         run: |
           docker run --rm \
-            -v "${{ github.workspace }}/pcxt-base":/work \
+            -v "${{ github.workspace }}/fpga":/work \
             -v "${{ github.workspace }}/scripts":/repo-scripts:ro \
-            -w /work/src/fpga \
+            -w /work \
             raetro/quartus:pocket bash -lc '
               set -e
               Q=""
@@ -503,9 +497,9 @@ jobs:
         if: always()
         run: |
           docker run --rm \
-            -v "${{ github.workspace }}/pcxt-base":/work \
+            -v "${{ github.workspace }}/fpga":/work \
             -v "${{ github.workspace }}/scripts":/repo-scripts:ro \
-            -w /work/src/fpga \
+            -w /work \
             raetro/quartus:pocket bash -lc '
               set -e
               Q=""
@@ -523,8 +517,8 @@ jobs:
       - name: Show fit summary
         if: always()
         run: |
-          grep -A14 "Logic utilization" pcxt-base/src/fpga/output_files/ap_core.fit.rpt 2>/dev/null | head -4 || true
-          ls -la pcxt-base/src/fpga/output_files/ 2>/dev/null || true
+          grep -A14 "Logic utilization" fpga/output_files/ap_core.fit.rpt 2>/dev/null | head -4 || true
+          ls -la fpga/output_files/ 2>/dev/null || true
 
       - name: Upload bitstream
         # always(): the SDRAM timing gate above runs first, and a red gate must
@@ -535,10 +529,10 @@ jobs:
           name: bitstream
           if-no-files-found: error
           path: |
-            pcxt-base/src/fpga/output_files/*.rbf
-            pcxt-base/src/fpga/output_files/*.fit.rpt
-            pcxt-base/src/fpga/sta_cpu_*.txt
-            pcxt-base/src/fpga/sta_pico_*.txt
-            pcxt-base/src/fpga/sta_pico_*.txt
-            pcxt-base/src/fpga/sta_sdram_*.txt
-            pcxt-base/src/fpga/output_files/*.sta.rpt
+            fpga/output_files/*.rbf
+            fpga/output_files/*.fit.rpt
+            fpga/sta_cpu_*.txt
+            fpga/sta_pico_*.txt
+            fpga/sta_pico_*.txt
+            fpga/sta_sdram_*.txt
+            fpga/output_files/*.sta.rpt

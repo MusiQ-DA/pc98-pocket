@@ -5,7 +5,7 @@
 
 ## 方針
 
-- PC/AT機械層(KFPC-XTチップセット)をPC-98機械層に置換する
+- PC/AT機械層(chipsetチップセット)をPC-98機械層に置換する
 - CPU(MCL86)・SDRAM・ビデオパイプライン・入力・bridgeはPCXTの実績を流用
 - I/Oマップは np2 の `iocore_attach*` 呼び出しから機械的に抽出して確定する
 
@@ -206,7 +206,7 @@ pit 0x71, crtc 0x70, fdc 0xBE, dmac 0x01/0x21, serial 0x30/0x41)
 **2026-09-13 更新**: それまで使っていたセットは mixed-generation
 (VM 系 BIOS + UX ITF の「Franken-ROM」)だったことが sim で判明
 (afc1e6d)。UI/BIOS 世代が揃った上記 UX トリオに差し替え、
-`deploy_pc98.sh` が md5 でピニングする。旧セットは
+`deploy.sh` が md5 でピニングする。旧セットは
 `~/.pc98roms/franken-vm-mix-20260913/` に退避。
 
 **手元の `np2rom/BIOS.ROM` と `ITF.ROM` は使わない**(下記 F2/F5)。

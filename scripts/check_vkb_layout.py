@@ -26,9 +26,9 @@ is the Set-2 assignment the PC-98 keyboard translator has to match.
 import re, sys, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SRC = ROOT / "pcxt-base/src/firmware"
-CFG = ROOT / "pcxt-base/src/fpga/config.tcl"
-HID = ROOT / "pcxt-base/src/fpga/core/hid_to_ps2.sv"
+SRC = ROOT / "firmware"
+CFG = ROOT / "fpga/config.tcl"
+HID = ROOT / "fpga/core/hid_to_ps2.sv"
 GLYPHS = SRC / "osd_font.c"
 VKB_W, VKB_H = 636, 81
 FONT_W = 8

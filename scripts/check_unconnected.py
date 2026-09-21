@@ -30,14 +30,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
 import re
 import sys
 
-CORE_TOP = "pcxt-base/src/fpga/core/core_top.sv"
+CORE_TOP = "fpga/core/core_top.sv"
 MODULES = {
-    "softcpu_subsystem": "pcxt-base/src/fpga/core/softcpu_subsystem.sv",
-    "post_monitor": "pcxt-base/src/fpga/core/post_monitor.sv",
-    "sdram_selftest_master": "pcxt-base/src/fpga/core/sdram_selftest_master.sv",
+    "softcpu_subsystem": "fpga/core/softcpu_subsystem.sv",
+    "post_monitor": "fpga/core/post_monitor.sv",
+    "sdram_selftest_master": "fpga/core/sdram_selftest_master.sv",
     # The CPU-side swap of 2026-09: the bridge carries every pin the V30
     # sees, so a dangling input there reads as a dead machine, not a zero.
-    "v30_cpu_bridge": "pcxt-base/src/fpga/core/v30_cpu_bridge.sv",
+    "v30_cpu_bridge": "fpga/core/v30_cpu_bridge.sv",
 }
 
 
@@ -70,9 +70,9 @@ def connected(core_src, module):
 # (2) The dangling-net scan. A net mentioned in exactly one .port(net)
 # connection and nowhere else in the file is connected to one side only.
 SCAN = [
-    "pcxt-base/src/fpga/core/KFPC-XT/HDL/Peripherals.sv",
-    "pcxt-base/src/fpga/core/KFPC-XT/HDL/Chipset.sv",
-    "pcxt-base/src/fpga/core/core_top.sv",
+    "fpga/core/chipset/HDL/Peripherals.sv",
+    "fpga/core/chipset/HDL/Chipset.sv",
+    "fpga/core/core_top.sv",
 ]
 # Nets that are one-sided ON PURPOSE (a port left open for a reason, a debug
 # tap kept for the next build). Name them here with the reason.

@@ -5,7 +5,7 @@
 // that chip has. The first one measured was the ITF's `push imm16` in its
 // CPU-reset save sequence, which the 8088 core dispatched to the undocumented
 // JS alias and derailed the stream with. This bench runs the same program on
-// nuV30 (vendored under pcxt-base/src/fpga/core/v30) and checks what actually
+// nuV30 (vendored under fpga/core/v30) and checks what actually
 // lands on the stack.
 //
 // De-muxed bus view: ADDR_O is the owning cycle's linear address, DATA_I is

@@ -31,7 +31,7 @@
 | モードフリップフロップ | `pc98_gdc_mode1` / `mode2` | OUT 68h の即時性（bitac は1文字単位で効く） |
 | GRCG + 平面展開 | `pc98_grcg` + `pc98_gvram_seq` | **1 CPU バスを最大 8 メモリアクセスに展開**しゲストを cpu_ready で待たせる。D5 の本体。RAM.sv を包む構成も正しい（実績パスを汚さない） |
 | TVRAM / CG 窓 / フォント | `pc98_tvram` / `pc98_cgwindow` / `pc98_font_*` | ゲスト可視の読み出しタイミング + 走査同期 fetch |
-| PIC×2 / PIT / 8251 キード / BEEP / RTC | KFPC-XT 系 + `pc98_upd4990` | 割り込み・ポーリングのタイミングが仕様 |
+| PIC×2 / PIT / 8251 キード / BEEP / RTC | chipset 系 + `pc98_upd4990` | 割り込み・ポーリングのタイミングが仕様 |
 | FDC（uPD765）・SCSI の**プロトコル部** | `floppy.v`（CHIPSET）+ `pc98_fdc_glue` / `pc98_scsi` | DRQ/INT/ステータス遷移の握手 |
 | OPNA（YM2608）合成 | `pc98_opna`（jt12 ラップ） | サンプルレート・リアルタイム |
 | SDRAM コントローラ | `sdram_mp`（PORTS=3）+ `sdram_kf_shim` | R1 解決済みの土台 |

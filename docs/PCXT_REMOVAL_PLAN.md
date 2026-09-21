@@ -1,4 +1,19 @@
-# PC-XT 実装の削除計画 (2026-09-22)
+# PC-XT 実装の削除計画 (2026-09-22) — 実施済み
+
+**状態: 完了 (2026-09-22)**。commit `bcf2e1c` がディレクトリ改名、`47623e5`
+が Peripherals.sv の中身、`2b6ff7d` がファイル本体・qsf・config.tcl・
+ファームウェア・scripts を削除した (合計 約 50,700 行減)。計画との差分:
+
+- **8088 (`core/8088/`) も削除**: 計画表に無かったが `ifdef MACHINE_PC98` の
+  else 側でしか実体化されておらず、XT 本体そのものなので同時に落とした。
+- **KFPS2KB は残留**: Set-2 ストリームの pacing (`kb_ready`) を握っており、
+  これが消えると pocket_keyboard のキューが進まない。XT キーコード出力側は
+  `clear_keycode = 1` で捨てる。
+- **ALM は空かない**: マクロ殺し済みのモジュールは既に合成から落ちていた。
+  実測で回収できたのは 8255 の 53.4 + KFPS2KB 相当 + splash タイマ ≈ 80 ALM。
+- **残件**: Peripherals/CHIPSET/core_top のポート signature に死んだポートが
+  残っている (定数で tie-off 済み)。EMS は計画どおり対象外。
+
 
 目的: このコアは PC-98 専用になった。XT 时代的な #ifdef 分岐・モジュール・
 資産をすべて削り、`MACHINE_PC98` を唯一のビルドにする。
@@ -16,8 +31,8 @@
 |---|---|
 | `core/video/` の cga*, hgc*, vram.v, UM6845R.v | XT 映像。video.qip を書き換え (splash とscandoubler/converter は PC-98 も使うか要確認 — `swap_video_sel`/`R_HGC` 参照を先に切る) |
 | `core/uart/` 全部 (16750 ベース) | PC-98 のシリアルは 8251。ENABLE_XT_UART=0 で死んでいる |
-| `core/KFPC-XT/HDL/XT2IDE.sv` | PC-98 のディスクは SCSI (scsi_service.c) + FDC。IDE サービス (ide_service.c) も firmware から削除 |
-| `core/KFPC-XT/HDL/rtc.v` (MC146818) | PC-98 は uPD4990 (pc98_upd4990.sv 実装済み) |
+| `core/chipset/HDL/XT2IDE.sv` | PC-98 のディスクは SCSI (scsi_service.c) + FDC。IDE サービス (ide_service.c) も firmware から削除 |
+| `core/chipset/HDL/rtc.v` (MC146818) | PC-98 は uPD4990 (pc98_upd4990.sv 実装済み) |
 | `core/sound/jtopl/` (OPL2) | PC-98 の FM は jt12_opna。CMS (jt89?) と Tandy 関連も |
 | `KF8255` (8255 PPI) | 使用箇所を確認 — PC-98 の sysport が 8255 を流用しているなら残す |
 
@@ -61,8 +76,14 @@
 
 ## 危険箇所 — 確認済み (2026-09-22 調査)
 
-- **8255 → 生存**: Peripherals.sv:1065 `u_KF8255` が実配線 (PC-98 の
-  sysport/beep 経路がポート C を使う、§1019-1025 の beep 修正参照)。削除しない
+- **8255 → 削除可** (再調査で判定変更): 実配線に見えたが PC-98 の全経路が
+  専用スタブで横取りしている — 読みは 0x31/0x33/0x35/0x42 が `sysport_data`
+  (mux が 8255 より優先、Peripherals:3876)、beep は `pc98_sysport_c[3]`
+  (§1025)、0x37 の bit set/reset 書き込みも専用ラッチが処理 (§2090)。
+  8255 が唯一応答するのは 0x37 の読み出しだが BIOS/ITF は一度も読まない。
+  残る参照の tie-off: `ps2_reset_n`→1 (port_b_out[6] は PC-98 では
+  書かれない定数、BAT 注入は不発で無害)、XT キーコード経路
+  (port_a_in/keycode_ff) は PC-98 で消費者なし。qsf から KF8255 一族を外す
 - **splash 画像 → 削除、ブートホールドだけ残す**: スプラッシュの正体は
   CGA VRAM への 4000 バイトコピー (Peripherals:1642-) を CGA ジェネレータで
   表示する PC/XT 機構。ENABLE_CGA=0 の PC-98 では**何も映らない**のに

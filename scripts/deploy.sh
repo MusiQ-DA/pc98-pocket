@@ -1,231 +1,239 @@
 #!/bin/bash
+# deploy.sh [--run N]
 #
-# deploy.sh -- wait for CI, fetch the bitstream, and put it on the card.
+# Like deploy.sh, but for the PC-98 core: it has to create the whole core
+# directory (hiroya.PC9801) rather than drop a bitstream into an existing one,
+# and it has to place two ROMs the core cannot boot without.
 #
-# The loop this automates was the whole shape of a night's work: poll the build,
-# download the artifact, bit-reverse it into the Pocket's rbf_r format, wait for
-# the card to appear, copy, verify, eject. Doing it by hand meant the build sat
-# finished while nobody was looking, and the card sat mounted while nobody was
-# copying.
-#
-#   scripts/deploy.sh --core PCXTA        into a named PC/XT core directory
-#   scripts/deploy.sh --run 87            a specific run number
-#   scripts/deploy.sh --no-eject          leave the card mounted
-#
-# THIS IS NOT THE PC-98 DEPLOY. Use scripts/deploy_pc98.sh for that; this one
-# refuses to run without an explicit --core, and the reason is a measured
-# failure rather than tidiness. On 2026-09-14 it was run with no arguments: it
-# wrote hiroya.PCXTDEV, said "written and verified", and exited 0 -- while the
-# core actually being launched, hiroya.PC9801, kept the PREVIOUS build's
-# bitstream AND its firmware.bin (the firmware is a data slot loaded off the
-# card, so a new bitstream does not replace it). An OSD font fix read as "not
-# fixed" on hardware when it had never reached the machine. The success message
-# is about the directory it wrote, not the core that boots, and nothing about
-# the PC-98 core's screen says which build it is running.
-#
-# Safe to background: it polls, it does not hold anything open, and every step
-# is verified before the next one.
-#
-# SPDX-License-Identifier: GPL-3.0-or-later
-
+# The ROMs are the user's own dumps and are not in this repository. Point
+# PC98_ROMS at a directory holding the coherent PC-9801UX set: bios.rom,
+# itf.rom and font.rom (docs/PC98_MACHINE_SPEC.md F1-F5). The set that ran
+# P1-P4 turned out to be mixed-generation -- a VM-family BIOS under a UX
+# ITF, a "Franken-ROM" -- and it passes the vector checks below, so the
+# deploy also pins the UX trio by md5. Anything else is refused unless
+# PC98_ANY_ROMS=1 is set deliberately.
 set -uo pipefail
+
+# Apple's clang cannot assemble start.S -- it rejects the cc1as flag its own
+# driver passes for -march=rv32im -- so prefer Homebrew's LLVM when installed.
+# The firmware rebuild failed on exactly this after a fifteen-minute Quartus run
+# had already succeeded.
+for _d in /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin; do
+    [ -x "$_d/clang" ] && { PATH="$_d:$PATH"; break; }
+done
 cd "$(dirname "$0")/.."
 
-CORE=""          # no default: see the banner above
 RUN=""
-EJECT=1
 VOL="/Volumes/ANALOGUE"
-POLL=45          # seconds between CI checks
-SD_POLL=15       # seconds between card checks
-MAX_WAIT=5400    # give up after 90 minutes rather than spin forever
+# ~/.pc98roms is the default so a deploy does not depend on an environment
+# variable set in some other shell -- that has cost a run more than once.
+ROMS="${PC98_ROMS:-$HOME/.pc98roms}"
+POLL=45; SD_POLL=15; MAX_WAIT=5400
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --core)      CORE="$2"; shift 2 ;;
-        --run)       RUN="$2";  shift 2 ;;
-        --no-eject)  EJECT=0;   shift ;;
-        --vol)       VOL="$2";  shift 2 ;;
+        --run)  RUN="$2"; shift 2 ;;
+        --roms) ROMS="$2"; shift 2 ;;
+        --vol)  VOL="$2";  shift 2 ;;
         *) echo "unknown option: $1"; exit 2 ;;
     esac
 done
 
-if [ -z "$CORE" ]; then
-    cat >&2 <<'EOM'
-deploy.sh: refusing to guess a core directory.
-
-  PC-98 (what this repository builds):   scripts/deploy_pc98.sh
-  a PC/XT variant core:                  scripts/deploy.sh --core PCXTA
-
-Run with no arguments this used to write hiroya.PCXTDEV and report success
-while the PC-98 core kept the previous build. See the banner in this file.
-EOM
-    exit 2
-fi
-
 say() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 
-# ---- 1. wait for the run to finish -----------------------------------------
-latest_run() {
-    python3 - <<'PY'
+[ -n "$ROMS" ] || { say "set PC98_ROMS (or --roms) to a dir with bios.rom and itf.rom"; exit 2; }
+for f in bios.rom itf.rom font.rom; do
+    [ -f "$ROMS/$f" ] || { say "missing $ROMS/$f"; exit 2; }
+done
+
+# Refuse the patched dumps outright rather than spending a hardware run on them.
+# A real system BIOS has EA 00 00 80 FD at FFFF0 and a real ITF has
+# EA 00 00 00 F8; the circulating patch puts CD 19 over the first two bytes.
+check_vec() {
+    python3 - "$1" "$2" "$3" <<'PY'
 import sys
-sys.path.insert(0, 'scripts/tools')
-import ghlib
-r = ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=1')['workflow_runs'][0]
-print(r['run_number'], r['status'], r['conclusion'])
+p, off, want = sys.argv[1], int(sys.argv[2], 16), bytes.fromhex(sys.argv[3])
+d = open(p, 'rb').read()
+got = d[off:off+len(want)]
+print("ok" if got == want else got.hex(' '))
 PY
 }
+v=$(check_vec "$ROMS/bios.rom" 0x17FF0 "ea000080fd")
+[ "$v" = "ok" ] || { say "bios.rom reset vector is '$v', want ea 00 00 80 fd -- this is a patched dump"; exit 1; }
+v=$(check_vec "$ROMS/itf.rom" 0x7FF0 "ea000000f8")
+[ "$v" = "ok" ] || { say "itf.rom reset vector is '$v', want ea 00 00 00 f8 -- this is not an ITF"; exit 1; }
 
-run_state() {
-    python3 - "$1" <<'PY'
-import sys
-sys.path.insert(0, 'scripts/tools')
-import ghlib
-want = int(sys.argv[1])
-for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=100')['workflow_runs']:
-    if r['run_number'] == want:
-        print(r['status'], r['conclusion'])
-        break
-else:
-    print('missing none')
-PY
-}
+# The vector checks pass for ANY genuine dump -- including the mixed-generation
+# set that ran P1-P4 (a VM BIOS assembled from per-chip dumps under a UX ITF).
+# That one was only unmasked by a sim run, so do not spend a hardware run on a
+# set nobody has identified: pin the coherent PC-9801UX trio. The mixed set is
+# parked in ~/.pc98roms/franken-vm-mix-20260913/ if it is ever wanted again.
+md5of() { md5 -q "$1"; }
+rombad=0
+for spec in "bios.rom 3af0ae018c5710eec6e2891064814138" \
+            "itf.rom  1d295699ffeab0f0e24e09381299259d" \
+            "font.rom 4133b0be0d470920da60b9ed28d2614f"; do
+    f=${spec%% *}; want=${spec##* }
+    got=$(md5of "$ROMS/$f")
+    [ "$got" = "$want" ] && continue
+    say "$f md5 is $got, want $want (PC-9801UX set)"
+    rombad=1
+done
+if [ $rombad -ne 0 ]; then
+    if [ "${PC98_ANY_ROMS:-}" = "1" ]; then
+        say "PC98_ANY_ROMS=1: deploying this unidentified set anyway"
+    else
+        say "not the pinned PC-9801UX set -- refusing (PC98_ANY_ROMS=1 to override)"
+        exit 1
+    fi
+fi
+say "ROMs look genuine; set is the pinned PC-9801UX trio"
 
-# Did the Quartus job itself succeed? A red gate or a red sim job after a good
-# compile still leaves a usable bitstream, and that distinction cost real time
-# to work out by hand.
-quartus_ok() {
-    python3 - "$1" <<'PY'
-import sys
-sys.path.insert(0, 'scripts/tools')
-import ghlib
-want = int(sys.argv[1])
-R = '/repos/MusiQ-DA/pc98-pocket'
-run = next(r for r in ghlib.gh(f'{R}/actions/runs?per_page=100')['workflow_runs']
-           if r['run_number'] == want)
-jobs = ghlib.gh(f"{R}/actions/runs/{run['id']}/jobs")['jobs']
-q = [j for j in jobs if j['name'] == 'quartus']
-print('yes' if q and q[0]['conclusion'] == 'success' else 'no')
-PY
-}
+# A ROM-pairing gate lived here for one commit and was WRONG: it would have
+# refused the correct PC-9801UX set. Its premise -- that the ITF's bank-switch
+# routine must have its continuation at the same address in the BIOS image --
+# is false, because that routine is COPIED INTO LOW RAM and run from there.
+# See scripts/check_rom_pair.py's header.
 
-# Wait for a run built from what is actually ON THE REMOTE.
-#
-# Two traps here, both hit for real. Asking for "the newest run" right after a
-# push returns the PREVIOUS one, because CI has not created the new one yet: it
-# reports completed in two seconds and a stale bitstream goes to the card
-# looking like a fresh build. And matching on local HEAD does not work either,
-# because scripts/tools/ghpush2.py creates commits through the API, so the
-# remote sha differs from the local one and no run ever matches.
-#
-# So ask the remote what main points at, and wait for a run on that.
-remote_head() {
-    python3 - <<'PY'
-import sys
-sys.path.insert(0, 'scripts/tools')
-import ghlib
-print(ghlib.gh('/repos/MusiQ-DA/pc98-pocket/commits/main')['sha'])
-PY
-}
-
-run_for_head() {
-    python3 - "$1" <<'PY'
-import sys
-sys.path.insert(0, 'scripts/tools')
-import ghlib
-head = sys.argv[1]
-for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=100')['workflow_runs']:
-    if r['head_sha'] == head:
-        print(r['run_number'])
-        break
-else:
-    print('none')
-PY
-}
-
+# ---- 1. wait for the run ---------------------------------------------------
 if [ -z "$RUN" ]; then
-    HEAD_SHA=$(remote_head)
+    HEAD_SHA=$(python3 -c "
+import sys; sys.path.insert(0,'scripts/tools'); import ghlib
+print(ghlib.gh('/repos/MusiQ-DA/pc98-pocket/commits/main')['sha'])")
     say "remote main is at ${HEAD_SHA:0:10}"
     waited=0
     while :; do
-        RUN=$(run_for_head "$HEAD_SHA")
+        RUN=$(python3 -c "
+import sys; sys.path.insert(0,'scripts/tools'); import ghlib
+for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=100')['workflow_runs']:
+    if r['head_sha'] == '$HEAD_SHA':
+        print(r['run_number']); break
+else: print('none')")
         [ "$RUN" != "none" ] && break
-        [ $waited -eq 0 ] && say "waiting for CI to pick it up"
-        [ $waited -ge 600 ] && { say "no run appeared for ${HEAD_SHA:0:10}"; exit 1; }
+        [ $waited -ge 600 ] && { say "no run appeared"; exit 1; }
         sleep 20; waited=$((waited + 20))
     done
-    say "watching run#$RUN (commit ${HEAD_SHA:0:10})"
+    say "watching run#$RUN"
 fi
 
 waited=0
 while :; do
-    read -r status conclusion <<<"$(run_state "$RUN")"
-    if [ "$status" = "completed" ]; then
-        say "run#$RUN completed/$conclusion"
-        break
-    fi
-    [ $waited -ge $MAX_WAIT ] && { say "gave up waiting for run#$RUN"; exit 1; }
+    read -r st cc <<<"$(python3 -c "
+import sys; sys.path.insert(0,'scripts/tools'); import ghlib
+for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=100')['workflow_runs']:
+    if r['run_number'] == $RUN:
+        print(r['status'], r['conclusion'] or ''); break
+else: print('missing', '')")"
+    [ "$st" = "completed" ] && { say "run#$RUN completed/$cc"; break; }
+    [ $waited -ge $MAX_WAIT ] && { say "gave up on run#$RUN"; exit 1; }
     sleep $POLL; waited=$((waited + POLL))
 done
 
-if [ "$(quartus_ok "$RUN")" != "yes" ]; then
-    say "the quartus job did not succeed -- nothing worth flashing"
-    exit 1
-fi
-[ "$conclusion" != "success" ] && \
-    say "note: run is red, but the compile succeeded; taking the bitstream"
+# The firmware job can be red while the bitstream is fine; only quartus matters.
+qok=$(python3 -c "
+import sys; sys.path.insert(0,'scripts/tools'); import ghlib
+R='/repos/MusiQ-DA/pc98-pocket'
+rid=[r['id'] for r in ghlib.gh(R+'/actions/runs?per_page=100')['workflow_runs'] if r['run_number']==$RUN][0]
+j=[x for x in ghlib.gh(f'{R}/actions/runs/{rid}/jobs')['jobs'] if x['name']=='quartus'][0]
+print('yes' if j['conclusion']=='success' else 'no')")
+[ "$qok" = "yes" ] || { say "the quartus job did not succeed -- nothing worth flashing"; exit 1; }
 
-# ---- 2. fetch --------------------------------------------------------------
+# ---- 2. fetch and package --------------------------------------------------
 ART="build/artifact_$RUN"
 if [ ! -f "$ART/ap_core.rbf" ]; then
     say "fetching artifact"
     python3 scripts/tools/getartifact.py "$RUN" "$ART" --allow-failed >/dev/null || {
         say "artifact download failed"; exit 1; }
+    # The archive's layout follows upload-artifact's shortest-common-prefix
+    # rule: while only output_files/*.rbf was uploaded the rbf landed at the
+    # root, but the sta_cpu_*.txt additions (bf946d5) raised the prefix to the
+    # fpga/ directory and pushed it under output_files/. Hoist it back so the
+    # packaging below and package.sh keep their root-level contract.
+    if [ ! -f "$ART/ap_core.rbf" ] && [ -f "$ART/output_files/ap_core.rbf" ]; then
+        cp "$ART/output_files/ap_core.rbf" "$ART/ap_core.rbf"
+    fi
 fi
 say "have $(stat -f%z "$ART/ap_core.rbf") bytes of bitstream"
 
-# ---- 3. convert ------------------------------------------------------------
-# The Pocket wants the bits within each byte reversed. NOT xor 0xFF: that
-# mistake produced a Load error and cost a hardware round trip once already.
-STAGE="build/deploy_$RUN.rbf_r"
-python3 - "$ART/ap_core.rbf" "$STAGE" <<'PY'
-import sys
-src, dst = sys.argv[1], sys.argv[2]
-t = bytes(int(format(b, '08b')[::-1], 2) for b in range(256))
-open(dst, 'wb').write(open(src, 'rb').read().translate(t))
-PY
-head=$(xxd -l 134 -s 128 -p "$STAGE" | tr -d '\n' | cut -c1-12)
-if [ "$head" != "565656566c2f" ]; then
-    say "converted image does not start like a Pocket core ($head) -- stopping"
-    exit 1
-fi
-say "converted, header looks right"
+bash scripts/package.sh "$ART" || exit 1
+cp "$ROMS/bios.rom" "$ROMS/itf.rom" "$ROMS/font.rom" dist/pc98/Assets/pc98/hiroya.PC9801/
+# The softcore's firmware rides along as a slot, so a change to an on-screen
+# readout is a file copy rather than a Quartus compile. Built here rather than
+# assumed present: firmware.bin is gitignored, being a build product.
+make -C firmware >/dev/null || { say "firmware build failed"; exit 1; }
 
-# ---- 4. wait for the card --------------------------------------------------
-DEST="$VOL/Cores/hiroya.$CORE"
+# And check that what came out is actually current.
+#
+# The first PC-98 deploy shipped a STALE firmware.bin: make had nothing to do
+# by its own dependency rules, but the binary on disk predated changes that had
+# since been compiled into firmware.vh. The core came up showing a mixture of
+# fields that no single build produces -- PC/AT-only rows next to PC-98-only
+# ones -- and that took a photograph and twenty minutes to work out.
+#
+# firmware.vh is committed and CI verifies it against its sources, so it is the
+# trustworthy copy: if the binary disagrees with it, the binary is stale.
+python3 - <<'PY' || { say "firmware.bin is stale against firmware.vh -- run make"; exit 1; }
+import sys
+b = open('firmware/firmware.bin', 'rb').read()
+v = open('firmware/firmware.vh').read().split()
+vb = bytearray()
+for w in v:
+    vb += int(w, 16).to_bytes(4, 'little')
+sys.exit(0 if b == bytes(vb[:len(b)]) else 1)
+PY
+say "firmware.bin matches firmware.vh"
+
+cp firmware/firmware.bin dist/pc98/Assets/pc98/hiroya.PC9801/
+say "packaged with ROMs"
+
+# ---- 3. write --------------------------------------------------------------
+say "waiting for $VOL -- put the Pocket into USB access mode"
+# `-d "$VOL"` is not enough. macOS creates the mount point as a plain root-owned
+# directory on the boot volume before the filesystem lands on it, so a deploy
+# that starts on the first sight of the path writes into that stub and gets
+# "Permission denied" on mkdir and "Not a directory" on cp -- twice now. Wait
+# for a real mount: an entry in `mount` AND the Cores directory every Pocket
+# card has.
 waited=0
-while [ ! -d "$DEST" ]; do
-    if [ $waited -eq 0 ]; then
-        say "waiting for $DEST -- put the Pocket into USB access mode"
-    fi
+while ! { mount | grep -q " on $VOL "; } || [ ! -d "$VOL/Cores" ]; do
     [ $waited -ge $MAX_WAIT ] && { say "card never appeared"; exit 1; }
     sleep $SD_POLL; waited=$((waited + SD_POLL))
 done
 say "card is here"
 
-# ---- 5. copy, verify, eject ------------------------------------------------
-cp "$STAGE" "$DEST/bitstream.rbf_r" || { say "copy failed"; exit 1; }
+mkdir -p "$VOL/Cores/hiroya.PC9801" "$VOL/Assets/pc98/hiroya.PC9801" "$VOL/Platforms"
+cp dist/pc98/Cores/hiroya.PC9801/* "$VOL/Cores/hiroya.PC9801/"
+cp dist/pc98/Assets/pc98/hiroya.PC9801/* "$VOL/Assets/pc98/hiroya.PC9801/"
+cp dist/pc98/Platforms/* "$VOL/Platforms/" 2>/dev/null || true
 sync
-if ! cmp -s "$DEST/bitstream.rbf_r" "$STAGE"; then
-    say "VERIFY FAILED -- the card does not match what was written"
+
+# Verify everything that was written, not just the bitstream. The first run of
+# this script reported "written and verified" while the ROMs sat in a directory
+# nothing reads: core.json still said platform_ids ["pcxt"] and the Pocket looks
+# for assets under Assets/<platform_id>/<core>/. A core with no BIOS comes up
+# with no complaint, so the check has to cover the assets and the path.
+PLAT=$(python3 -c "
+import json
+d=json.load(open('dist/pc98/Cores/hiroya.PC9801/core.json'.strip()))
+print(d['core']['metadata']['platform_ids'][0])")
+if [ "$PLAT" != "pc98" ]; then
+    say "core.json says platform '$PLAT' but the assets went to pc98 -- stopping"
     exit 1
 fi
-say "written and verified to hiroya.$CORE"
 
-if [ $EJECT -eq 1 ]; then
-    # macOS caches writes; ejecting is what guarantees the Pocket reads them.
-    # It occasionally needs the device rather than the mount point.
-    diskutil eject "$VOL" >/dev/null 2>&1 || \
-    diskutil eject "$(diskutil info "$VOL" 2>/dev/null | awk '/Device Node/{print $NF}')" >/dev/null 2>&1 || \
-        { say "eject failed -- eject it in Finder before testing"; exit 1; }
-    say "ejected -- ready to test"
-fi
+fail=0
+for f in Cores/hiroya.PC9801/bitstream.rbf_r Cores/hiroya.PC9801/core.json \
+         Cores/hiroya.PC9801/data.json Assets/pc98/hiroya.PC9801/bios.rom \
+         Assets/pc98/hiroya.PC9801/itf.rom Assets/pc98/hiroya.PC9801/font.rom \
+         Assets/pc98/hiroya.PC9801/firmware.bin Platforms/pc98.json; do
+    if cmp -s "dist/pc98/$f" "$VOL/$f"; then
+        say "  ok  $f"
+    else
+        say "  BAD $f"; fail=1
+    fi
+done
+[ $fail -eq 0 ] || { say "VERIFY FAILED"; exit 1; }
+say "written and verified to hiroya.PC9801"
+
+diskutil eject "$VOL" >/dev/null 2>&1 && say "ejected -- ready to test" \
+                                      || say "written; eject by hand"

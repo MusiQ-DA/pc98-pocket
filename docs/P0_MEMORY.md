@@ -76,7 +76,7 @@ GOAL.md R1(G-RAM をどこに置くか)への回答。**P3(GDC)着手前の必�
 同じデバイスで数倍の改善が見込める。移植元にできる GPL 実装も存在する
 (`X68000_MiSTer` の `rtl/memory/SDRAMC.vhd`: **80MHz / 16bit / バースト**、
 `bgnaddr`/`endaddr`/`bwidth` でロウ内バースト転送する設計)。
-**`pcxt-base` は GPLv3 なので、MiSTer 系 GPL コードの移植に支障はない。**
+**`fpga` は GPLv3 なので、MiSTer 系 GPL コードの移植に支障はない。**
 
 > **⚠ 訂正(2026-09-07)**: 当初「X68000_MiSTer は VRAM を SDRAM で運用している」
 > と書いたが、**これは誤り**。実際は `rtl/memory/gvram_bram.vhd` が

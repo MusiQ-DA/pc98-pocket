@@ -47,7 +47,7 @@ firmware (C)  --MMIO-->  softcpu_subsystem  --->  core_top の ext ポート調�
 
 ## 3. RTL 変更(3ファイル、いずれも小規模)
 
-### 3.1 `KFPC-XT/HDL/CHIPSET.sv` — 読み出しデータを外に出す
+### 3.1 `chipset/HDL/CHIPSET.sv` — 読み出しデータを外に出す
 
 現状 `internal_data_bus_ram`(RAM.sv の `data_bus_out`)は CHIPSET 内部で閉じている。
 出力ポートを1本足す:
@@ -107,7 +107,7 @@ CDC は不要**(SDC で同一グループ、`set_multicycle_path` 済み。`core
 
 ## 4. firmware 変更
 
-### 4.1 新規 `pcxt-base/src/firmware/sdramtest.c` / `.h`
+### 4.1 新規 `firmware/sdramtest.c` / `.h`
 
 ```c
 void sdram_selftest_run(void);   // main.c から、BIOS ロード完了後・ゲスト解放前に呼ぶ

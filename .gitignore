@@ -9,15 +9,15 @@ incremental_db/
 .DS_Store
 scripts/local.env
 dist/
-pcxt-base/games/
-pcxt-base/hdd/
-pcxt-base/SW/
-pcxt-base/dist/
+fpga/games/
+fpga/hdd/
+fpga/SW/
+fpga/dist/
 # picorv32 firmware build intermediates (firmware.vh itself is committed)
-pcxt-base/src/firmware/*.o
-pcxt-base/src/firmware/*.d
-pcxt-base/src/firmware/firmware.elf
-pcxt-base/src/firmware/firmware.bin
+firmware/*.o
+firmware/*.d
+firmware/firmware.elf
+firmware/firmware.bin
 __pycache__/
 *.pyc
-pcxt-base/src/firmware/obj_dir/
+firmware/obj_dir/

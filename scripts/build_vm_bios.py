@@ -24,7 +24,7 @@ import os, sys
 
 SRC = sys.argv[1] if len(sys.argv) > 1 else "/Volumes/Backup 4TB/Downloads/pc9801vm"
 # NOT bios.rom: that slot now holds the pinned PC-9801UX BIOS the deploy uses
-# (deploy_pc98.sh md5 check). Writing the assembled VM image there by default
+# (deploy.sh md5 check). Writing the assembled VM image there by default
 # would silently regress the deploy set to the mixed-generation ROM again.
 OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.expanduser("~/.pc98roms/bios_vm.rom")
 

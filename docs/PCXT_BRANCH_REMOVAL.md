@@ -4,7 +4,7 @@ A work plan, not a decision. Nothing here has been done.
 
 ## The question
 
-`pcxt-base` is a fork of desaster/openfpga-PCXT, and the PC/XT machine it came
+`fpga` is a fork of desaster/openfpga-PCXT, and the PC/XT machine it came
 from is still in the tree behind `MACHINE_PC98`. Is that worth keeping?
 
 ## What it costs, measured 2026-09-15
@@ -13,17 +13,17 @@ from is still in the tree behind `MACHINE_PC98`. Is that worth keeping?
 
 | file | sites |
 |---|---|
-| `KFPC-XT/HDL/Peripherals.sv` | 27 |
+| `chipset/HDL/Peripherals.sv` | 27 |
 | `core_top.sv` | 15 |
 | `pocket_video.sv` | 4 |
-| `KFPC-XT/HDL/RAM.sv` | 3 |
+| `chipset/HDL/RAM.sv` | 3 |
 | `post_monitor.sv` | 2 |
-| `KFPC-XT/HDL/Chipset.sv` | 2 |
-| `KFPC-XT/HDL/Bus_Arbiter.sv` | 2 |
+| `chipset/HDL/Chipset.sv` | 2 |
+| `chipset/HDL/Bus_Arbiter.sv` | 2 |
 | `softcpu_subsystem.sv` | 1 |
-| `KFPC-XT/HDL/XT_CE_Generator.sv` | 1 |
+| `chipset/HDL/XT_CE_Generator.sv` | 1 |
 
-**The PC/XT bitstream is never built.** `pcxt-base/src/fpga/config.tcl` sets
+**The PC/XT bitstream is never built.** `fpga/config.tcl` sets
 `MACHINE_PC98=1` unconditionally and the CI quartus job compiles one project.
 Some Verilator benches do run both ways (`+define+CE_XT_BUILD` in
 `.github/workflows/build.yml`), but nothing places or routes the PC/XT machine.
@@ -51,7 +51,7 @@ Split the tree by provenance rather than deleting wholesale.
 
 ### Keep the branch (upstream files)
 
-`common/floppy.v`, `common/ide.v`, `KFPC-XT/HDL/KF8259/`, `KF8253/`,
+`common/floppy.v`, `common/ide.v`, `chipset/HDL/KF8259/`, `KF8253/`,
 `KF8255/`, `KF8237/`, `KF8288/`, `KFSDRAM/`.
 
 Rule: differences go in **parameters or ports**, never `` `ifdef MACHINE_PC98 ``

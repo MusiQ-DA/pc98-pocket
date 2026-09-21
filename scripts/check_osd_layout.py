@@ -12,8 +12,8 @@ right edge.
 """
 import re, sys, pathlib, subprocess, shutil
 
-SRC = pathlib.Path("pcxt-base/src/firmware/postmon.c")
-CFG = pathlib.Path("pcxt-base/src/fpga/config.tcl")
+SRC = pathlib.Path("firmware/postmon.c")
+CFG = pathlib.Path("fpga/config.tcl")
 FONT_W = 8
 
 # Check the configuration that will actually ship, not the union of every

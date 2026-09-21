@@ -105,8 +105,8 @@ json.dump(c, open(sys.argv[1], 'w'))
 PY
 export DOCKER_CONFIG="$CFG"
 
-S=pcxt-base/src/fpga/core
-K=$S/KFPC-XT/HDL
+S=fpga/core
+K=$S/chipset/HDL
 V=$S/v30
 
 # v30u_ucrom's simulation default is HEXDIR="hdl/rtl/ucore/" relative to the

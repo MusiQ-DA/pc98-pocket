@@ -26,8 +26,8 @@ while :; do
   esac
 done
 
-S=pcxt-base/src/fpga/core
-K=$S/KFPC-XT/HDL
+S=fpga/core
+K=$S/chipset/HDL
 V=$S/v30
 
 DEF="+define+CPU_V30+V30_BACKDOOR+MACHINE_PC98+SDRAM_USE_MP"

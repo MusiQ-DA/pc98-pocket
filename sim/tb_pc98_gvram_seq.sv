@@ -55,10 +55,28 @@ module tb_pc98_gvram_seq;
         .grcg_active(grcg_active), .grcg_rmw(grcg_rmw),
         .grcg_mask(grcg_mask), .grcg_tile(grcg_tile),
         .analog_mode(analog_mode),
+        .access_page(access_page), .mem_page1(mem_page1),
+        .egc_active(egc_active), .egc_wr(egc_wr),
+        .egc_rg(egc_rg), .egc_d(egc_d),
         .mem_addr(mem_addr), .mem_wdata(mem_wdata),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_done(mem_done), .mem_ready(mem_ready)
     );
+
+    // The EGC's register writes, driven as PERIPHERALS forwards them.
+    logic       egc_active = 1'b0;
+    logic       egc_wr = 1'b0;
+    logic [3:0] egc_rg = 4'h0;
+    logic [7:0] egc_d = 8'h00;
+    logic       access_page = 1'b0;
+    wire        mem_page1;
+
+    task automatic egc_set(input [3:0] rg, input [7:0] v);
+        begin
+            @(negedge clk); egc_wr = 1'b1; egc_rg = rg; egc_d = v;
+            @(negedge clk); egc_wr = 1'b0;
+        end
+    endtask
 
     // ---- the memory: sparse, with a latency ------------------------------
     logic [7:0] store [int];

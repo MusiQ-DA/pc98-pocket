@@ -9,8 +9,8 @@ desaster/openfpga-PCXT は同一Pocket実機でDOSブートに成功している
 
 ## 決定
 
-- ベースを openfgba-PCXT(pcxt-base/)に変更
-- PC/AT機械層(KFPC-XT)をPC-98機械層に置換していく
+- ベースを openfgba-PCXT(fpga/)に変更
+- PC/AT機械層(chipset)をPC-98機械層に置換していく
 - 詳細は PC98_MACHINE_SPEC.md
 
 ## 旧ビルド(MacLCテンプレートベース)の扱い
@@ -25,5 +25,5 @@ desaster/openfpga-PCXT は同一Pocket実機でDOSブートに成功している
 ## ローカルビルド
 
 - Docker Desktop 再インストール済み、raetro/quartus:pocket イメージpull済み
-- `bash pcxt-base/scripts/build.sh 相当` または直接 quartus_sh --flow compile
+- `bash fpga/scripts/build.sh 相当` または直接 quartus_sh --flow compile
 - 注意: Docker Desktopのアンマウント/ejectはSSHセッションから不可(GUIで実施)

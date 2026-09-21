@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | Date | 2026-09-13 |
-| Core under test | nuV30 (vendored at `pcxt-base/src/fpga/core/v30/` in our downstream project **pc98-pocket**, from `wickerwaka/nuV30`) |
+| Core under test | nuV30 (vendored at `fpga/core/v30/` in our downstream project **pc98-pocket**, from `wickerwaka/nuV30`) |
 | Test vehicle | `sim/tb_cpu_v30_stub.sv` (variants A–L) plus directed tests T1–T4 |
 | Result | **No core bug. nuV30's 0x66/0x67 behavior is silicon-accurate. No change requested.** |
 

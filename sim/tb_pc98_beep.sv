@@ -7,8 +7,7 @@
 // reached. This bench rebuilds the wiring under test exactly as
 // Peripherals.sv has it under MACHINE_PC98:
 //
-//   - the KF8253 and KF8255 chip models, selected by the PC-98 decodes
-//     (PIT 0x71/73/75/77, PPI 0x31/33/35/37)
+//   - the KF8253 chip model, selected by the PC-98 decode (0x71/73/75/77)
 //   - the system-port C latch (0x35 whole-byte, 0x37 bit set/reset; np2
 //     io/sysport.c semantics -- mode words ignored, reset value 0xF9)
 //   - the beeper: counter 1's mode-3 square, muted by latch bit 3
@@ -29,10 +28,10 @@
 //      real machine whose PIT gates are all hard-wired high.
 //   B. the ITF's first tone: 0x37 <- 06h opens the beeper with nothing but
 //      bit set/reset words ever issued -- no mode word. This is the exact
-//      spot the old wiring died: it enabled the beeper off ~port_c_io, and
-//      port C never leaves input mode without a mode word. The 8255 is in
-//      this bench to prove that premise: port_c_io[3] is still 1 after the
-//      whole BSR stream.
+//      spot the old wiring died: it enabled the beeper off the 8255's
+//      ~port_c_io, and port C never leaves input mode without a mode word.
+//      The PPI itself is gone from the machine now; the latch below is what
+//      answers 0x31-0x37.
 //   C. the tone measures the counter-1 divisor (0x4CD and 0x99A at the
 //      2.4576 MHz PIT clock), not some free-running default.
 //   D. 0x37 <- 07h closes the gate mid-song: silence at once.
@@ -91,10 +90,8 @@ module tb_pc98_beep;
     wire pc98_io_exact = iorq & ~address_enable_n & (address[15:8] == 8'h00);
 
     wire timer_chip_select_n = ~(pc98_io & address[0] & (address[7:4] == 4'h7));
-    wire ppi_chip_select_n   = ~(pc98_io & address[0] & (address[7:4] == 4'h3));
 
     wire [1:0] pit_reg_addr = address[2:1];
-    wire [1:0] ppi_reg_addr = address[2:1];
 
     logic [7:0] timer_data_bus_out;
 
@@ -150,35 +147,6 @@ module tb_pc98_beep;
         .counter_1_out    (timer_counter_out[1]),
         .counter_2_clock  (timer_clock), .counter_2_gate (tim2gatespk),
         .counter_2_out    (timer_counter_out[2])
-    );
-
-    // The 8255 is here as a witness, not as the DUT: a real PC-98 would have
-    // one behind 0x31-0x37, and its port C direction is what the OLD beep
-    // enable keyed on. The guest never writes a mode word, so port C must
-    // still read INPUT after the whole beep program -- that is the fact that
-    // made the old wiring a permanent mute.
-    logic [7:0] ppi_data_bus_out;
-    logic [7:0] port_a_out, port_b_out, port_c_out, port_c_io_bus;
-    logic       port_a_io, port_b_io;
-
-    KF8255 u_ppi (
-        .clock            (clk),
-        .reset            (reset),
-        .chip_select_n    (ppi_chip_select_n),
-        .read_enable_n    (io_read_n),
-        .write_enable_n   (io_write_n),
-        .address          (ppi_reg_addr),
-        .data_bus_in      (internal_data_bus),
-        .data_bus_out     (ppi_data_bus_out),
-        .port_a_in        (8'hFF),
-        .port_a_out       (port_a_out),
-        .port_a_io        (port_a_io),
-        .port_b_in        (8'hFF),
-        .port_b_out       (port_b_out),
-        .port_b_io        (port_b_io),
-        .port_c_in        (8'hFF),
-        .port_c_out       (port_c_out),
-        .port_c_io        (port_c_io_bus)
     );
 
     // ---- bus driving -------------------------------------------------------
@@ -273,10 +241,6 @@ module tb_pc98_beep;
         run_ms(5);
         half_us = (half_n > 0) ? half_sum / half_n / 1000.0 : 0.0;
         $display("    edges=%0d  half-period avg=%.2f us (expect ~250.1)", edges, half_us);
-        $display("    8255 port C still input (port_c_io[3]=%b) after BSR-only writes",
-                 port_c_io_bus[3]);
-        check(port_c_io_bus[3] == 1'b1,
-              "B: premise -- BSR writes never make 8255 port C an output");
         check(edges >= 17 && edges <= 23, "B: ~2 kHz square on the speaker pin");
         check(half_us > 220.0 && half_us < 280.0, "B: half-period is 0x4CD/2 PIT clocks");
 

@@ -20,15 +20,15 @@ DST="$VOL/Assets/pc98/hiroya.PC9801"
 for d in /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin; do
     [ -x "$d/clang" ] && { PATH="$d:$PATH"; break; }
 done
-make -C pcxt-base/src/firmware >/dev/null
-echo "built $(stat -f%z pcxt-base/src/firmware/firmware.bin) bytes"
+make -C firmware >/dev/null
+echo "built $(stat -f%z firmware/firmware.bin) bytes"
 
 # Same check the deploy makes: firmware.vh is committed and CI verifies it
 # against its sources, so a binary that disagrees with it is stale.
 python3 - <<'PY' || { echo "firmware.bin is stale against firmware.vh"; exit 1; }
 import sys
-b = open('pcxt-base/src/firmware/firmware.bin', 'rb').read()
-v = open('pcxt-base/src/firmware/firmware.vh').read().split()
+b = open('firmware/firmware.bin', 'rb').read()
+v = open('firmware/firmware.vh').read().split()
 vb = bytearray()
 for w in v:
     vb += int(w, 16).to_bytes(4, 'little')
@@ -38,9 +38,9 @@ PY
 python3 scripts/check_osd_layout.py
 
 [ -d "$DST" ] || { echo "no $DST -- put the Pocket into USB access mode"; exit 1; }
-cp pcxt-base/src/firmware/firmware.bin "$DST/"
+cp firmware/firmware.bin "$DST/"
 sync
-cmp -s pcxt-base/src/firmware/firmware.bin "$DST/firmware.bin" \
+cmp -s firmware/firmware.bin "$DST/firmware.bin" \
     && echo "copied and verified" || { echo "VERIFY FAILED"; exit 1; }
 diskutil eject "$VOL" >/dev/null 2>&1 && echo "ejected -- ready to test" \
                                       || echo "copied; eject by hand"

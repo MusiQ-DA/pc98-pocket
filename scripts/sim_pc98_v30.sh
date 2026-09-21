@@ -23,7 +23,7 @@ ROMS="${PC98_ROMS:-$HOME/.pc98roms}"
 [ -f "$ROMS/itf.rom" ] && [ -f "$ROMS/bios.rom" ] \
     || { echo "need itf.rom and bios.rom in $ROMS"; exit 1; }
 
-# The UX BIOS set, md5-pinned the same way deploy_pc98.sh pins it: a
+# The UX BIOS set, md5-pinned the same way deploy.sh pins it: a
 # Franken-ROM here costs a thirty-minute run before it says anything wrong.
 if [ "${PC98_ANY_ROMS:-0}" != "1" ]; then
     want_bios=3af0ae018c5710eec6e2891064814138
@@ -51,7 +51,7 @@ PY
 # v30u_ucrom's simulation default is HEXDIR="hdl/rtl/ucore/", relative to the
 # working directory -- and an empty microcode ROM is a $fatal, not a warning.
 mkdir -p "$OUT/hdl/rtl/ucore"
-cp pcxt-base/src/fpga/core/v30/ucrom.hex pcxt-base/src/fpga/core/v30/ucdecode.hex "$OUT/hdl/rtl/ucore/"
+cp fpga/core/v30/ucrom.hex fpga/core/v30/ucdecode.hex "$OUT/hdl/rtl/ucore/"
 
 export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
 export DOCKER_HOST="unix://$HOME/.docker/run/docker.sock"
@@ -66,8 +66,8 @@ json.dump(c, open(sys.argv[1], 'w'))
 PY
 export DOCKER_CONFIG="$CFG"
 
-S=pcxt-base/src/fpga/core
-K=$S/KFPC-XT/HDL
+S=fpga/core
+K=$S/chipset/HDL
 V=$S/v30
 
 # Verilator's own default is OPT_FAST=-Os -- the generated model compiled for

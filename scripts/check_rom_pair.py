@@ -14,7 +14,7 @@ executing from RAM. The BIOS image having different bytes at F88DC is NORMAL.
 
 The set in ~/.pc98roms is a single-machine PC-9801UX dump -- byte-identical to
 the preservation zip the machine's owner supplied -- so the pair was never in
-question. The md5 pin in deploy_pc98.sh was right and this check was not.
+question. The md5 pin in deploy.sh was right and this check was not.
 
 WHAT IS ACTUALLY TRUE, and still unexplained: low RAM at 0x008D6 is thirty-two
 zero bytes at the moment of the bank switch, where the copied stub should be,

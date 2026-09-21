@@ -5,23 +5,20 @@ description: Wait for the current CI build, fetch the bitstream, convert it to t
 
 # Deploying a build to the Pocket
 
-`scripts/deploy_pc98.sh` does the whole loop for THIS repository's core. Run it
+`scripts/deploy.sh` does the whole loop for THIS repository's core. Run it
 in the background and report what it says; do not re-implement the steps by hand.
 
 ```
-scripts/deploy_pc98.sh             # latest run -> hiroya.PC9801
-scripts/deploy_pc98.sh --run 87    # a specific run
-scripts/deploy_pc98.sh --roms DIR  # a ROM set other than ~/.pc98roms
+scripts/deploy.sh             # latest run -> hiroya.PC9801
+scripts/deploy.sh --run 87    # a specific run
+scripts/deploy.sh --roms DIR  # a ROM set other than ~/.pc98roms
 ```
 
-**Not `scripts/deploy.sh`.** That one writes `hiroya.PCXTDEV`, the PC/XT core,
-whose `data.json` has no font slot and whose Assets folder has none of the PC-98
-ROMs. It now refuses to run without an explicit `--core`, because when it was
-run bare it reported "written and verified" and exited 0 while the core actually
-being launched kept the previous build -- an OSD font fix read as "not fixed" on
-hardware having never reached the machine.
+There is no second deploy script any more: the PC/XT one, which wrote
+`hiroya.PCXTDEV` with a `data.json` that had no font slot and an Assets folder
+with none of the PC-98 ROMs, went with the PC/XT core itself (2026-09-22).
 
-`deploy_pc98.sh` builds the whole `hiroya.PC9801` core directory: the bitstream,
+`deploy.sh` builds the whole `hiroya.PC9801` core directory: the bitstream,
 the PC-98 `data.json` (BIOS=1, ITF=2, Font=3, Firmware=4, Settings=7), and
 `bios.rom` / `itf.rom` / `font.rom` / `firmware.bin` into
 `Assets/pc98/hiroya.PC9801/`. **`firmware.bin` is a data slot loaded off the

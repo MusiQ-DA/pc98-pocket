@@ -2072,94 +2072,160 @@ module tb_pc98_v30;
     logic [15:0] srv_mgmt_readdata;
     wire  [1:0]  srv_request;
 
-    task automatic srv_wr(input [3:0] a, input [15:0] d);
-        begin
-            @(negedge clk_chipset);
-            srv_mgmt_address = a; srv_mgmt_fddn = 1'b0;
-            srv_mgmt_writedata = d; srv_mgmt_write = 1'b1;
-            @(negedge clk_chipset);
-            srv_mgmt_write = 1'b0;
-        end
-    endtask
+    // The whole server is a clocked FSM: a suspended initial thread proved
+    // unreliable under Verilator's scheduler in this bench (the reset wait
+    // loop ran, an identical later loop never resumed), while every
+    // edge-triggered block in the file runs fine. The image loads into an
+    // array at mount, so serving needs no per-byte file IO.
+    reg [3:0]  srv_state = 4'd0;
+    integer    srv_fd = 0;
+    integer    srv_timer = 0;
+    integer    srv_pushed = 0;
+    integer    srv_step = 0;
+    integer    srv_imgsize = 0;
+    reg [7:0]  srv_image [0:1262527];   // a 1232 KB 2HD plus slack
+    reg [15:0] srv_info_r = 16'd0;
+    reg [14:0] srv_lba_r = 15'd0;
+    reg [19:0] srv_mword = 20'd0;
 
-    integer srv_fd = 0;
-    integer srv_code;
-    reg [7:0] srv_byte;
-    reg [15:0] srv_info;
-    reg [14:0] srv_lba;
-    integer srv_pushed, srv_pulled, srv_count;
+    // fdd_mount(0, 2464)'s register run, in order: CYLS SPT TOTAL HEADS
+    // SECSIZE WRPROT PRESENT.
+    function [19:0] srv_mount_step(input integer k);
+        case (k)
+            0: srv_mount_step = {4'd2, 16'd77};
+            1: srv_mount_step = {4'd3, 16'd8};
+            2: srv_mount_step = {4'd4, 16'd1232};
+            3: srv_mount_step = {4'd5, 16'd2};
+            4: srv_mount_step = {4'd6, 16'd1};
+            5: srv_mount_step = {4'd1, 16'd0};
+            6: srv_mount_step = {4'd0, 16'd1};
+            default: srv_mount_step = 20'hFFFFF;
+        endcase
+    endfunction
 
-    initial begin : disk_server
-        string hdm_path;
-        if ($value$plusargs("hdm=%s", hdm_path)) begin
-            srv_fd = $fopen(hdm_path, "r+b");
-            if (srv_fd == 0) begin
-                $display("  DISK SERVER: cannot open %s", hdm_path);
-            end else begin
-                $display("  DISK SERVER: %s ready, mounting after reset", hdm_path);
-                wait (reset == 1'b0);
-                repeat (50_000) @(posedge clk_chipset);  // fdd_service's first poll
-                // fdd_mount(0, 2464): a 2HD 1232 KB, 77/8/2, N=3
-                srv_wr(4'd0, 16'd0);                     // eject (media change)
-                repeat (100_000) @(posedge clk_chipset); // fdd_mount's spin()
-                srv_wr(4'd2, 16'd77);                    // FMGMT_CYLS
-                srv_wr(4'd3, 16'd8);                     // FMGMT_SPT
-                srv_wr(4'd4, 16'd1232);                  // FMGMT_TOTAL (1K units)
-                srv_wr(4'd5, 16'd2);                     // FMGMT_HEADS
-                srv_wr(4'd6, 16'd1);                     // FMGMT_SECSIZE: N=3
-                srv_wr(4'd1, 16'd0);                     // FMGMT_WRPROT: off
-                srv_wr(4'd0, 16'd1);                     // FMGMT_PRESENT
-                $display("  DISK SERVER: drive 0 mounted 2HD 77/8/2 N=3");
-
-                forever begin
-                    wait (srv_request != 2'b00);
-                    // {drive, sd_sector} off the mgmt read port
-                    @(negedge clk_chipset);
-                    srv_mgmt_address = 4'd0; srv_mgmt_read = 1'b1;
-                    @(negedge clk_chipset);
-                    srv_info = srv_mgmt_readdata;
-                    srv_mgmt_read = 1'b0;
-                    srv_lba = srv_info[14:0];
-                    srv_count = 1024;                    // the mounted 2HD width
-
-                    if (srv_request[0]) begin            // READ: file -> FIFO
-                        srv_code = $fseek(srv_fd, srv_lba * 1024, 0);
-                        srv_pushed = 0;
-                        $display("  DISK SERVER: READ  lba %0d (file %0d)",
-                                 srv_lba, srv_lba * 1024);
-                        while (srv_pushed < srv_count) begin
-                            wait (srv_request[0]);
-                            srv_code = $fread(srv_byte, srv_fd);
-                            if (srv_code != 1) srv_byte = 8'hFF;  // past EOF
-                            @(negedge clk_chipset);
-                            srv_mgmt_address = 4'hF;
-                            srv_mgmt_writedata = {8'h00, srv_byte};
-                            srv_mgmt_write = 1'b1;
-                            @(negedge clk_chipset);
-                            srv_mgmt_write = 1'b0;
-                            srv_pushed = srv_pushed + 1;
-                        end
-                        $display("  DISK SERVER: served %0d bytes", srv_count);
-                    end else begin                       // WRITE: drain the FIFO
-                        // The boot test only reads; drain and count, keep the
-                        // image file untouched.
-                        srv_pulled = 0;
-                        $display("  DISK SERVER: WRITE lba %0d (drained, file untouched)",
-                                 srv_lba);
-                        while (srv_pulled < srv_count) begin
-                            @(negedge clk_chipset);
-                            srv_mgmt_address = 4'hF; srv_mgmt_read = 1'b1;
-                            @(negedge clk_chipset);
-                            srv_byte = srv_mgmt_readdata[7:0];
-                            srv_mgmt_read = 1'b0;
-                            srv_pulled = srv_pulled + 1;
-                        end
+    always @(posedge clk_chipset) begin
+        if (srv_fd != 0) begin
+            case (srv_state)
+                4'd0: if (reset == 1'b0) begin
+                    srv_timer <= 0;
+                    srv_state <= 4'd1;
+                end
+                4'd1: if (srv_timer == 50_000) begin  // fdd_service's first poll
+                    srv_imgsize = $fread(srv_image, srv_fd);
+                    $display("  DISK SERVER: image %0d bytes, ejecting", srv_imgsize);
+                    srv_timer <= 0;
+                    srv_state <= 4'd2;
+                end else begin
+                    srv_timer <= srv_timer + 1;
+                end
+                4'd2: begin                          // eject: media change
+                    srv_mgmt_address <= 4'd0;
+                    srv_mgmt_fddn <= 1'b0;
+                    srv_mgmt_writedata <= 16'd0;
+                    srv_mgmt_write <= 1'b1;
+                    srv_state <= 4'd3;
+                end
+                4'd3: begin
+                    srv_mgmt_write <= 1'b0;
+                    srv_timer <= 0;
+                    srv_state <= 4'd4;
+                end
+                4'd4: if (srv_timer == 100_000) begin // fdd_mount's spin()
+                    srv_timer <= 0;
+                    srv_step <= 0;
+                    srv_state <= 4'd5;
+                end else begin
+                    srv_timer <= srv_timer + 1;
+                end
+                4'd5: begin                          // one register per pair
+                    srv_mword = srv_mount_step(srv_step);
+                    srv_mgmt_address <= srv_mword[19:16];
+                    srv_mgmt_writedata <= srv_mword[15:0];
+                    srv_mgmt_write <= 1'b1;
+                    srv_state <= 4'd6;
+                end
+                4'd6: begin
+                    srv_mgmt_write <= 1'b0;
+                    if (srv_step == 6) begin
+                        $display("  DISK SERVER: drive 0 mounted 2HD 77/8/2 N=3");
+                        srv_state <= 4'd7;
+                    end else begin
+                        srv_step <= srv_step + 1;
+                        srv_state <= 4'd5;
                     end
                 end
-            end
+                // ---- serve: request[0] = READ (file -> FIFO) --------------
+                4'd7: if (srv_request != 2'b00) begin
+                    srv_mgmt_address <= 4'd0;        // {drive, sd_sector}
+                    srv_mgmt_read <= 1'b1;
+                    srv_state <= 4'd8;
+                end
+                4'd8: begin
+                    srv_mgmt_read <= 1'b0;
+                    srv_info_r <= srv_mgmt_readdata;
+                    srv_lba_r <= srv_mgmt_readdata[14:0];
+                    srv_pushed <= 0;
+                    if (srv_mgmt_readdata[15]) begin
+                        $display("  DISK SERVER: unsupported drive-1 request");
+                        srv_state <= 4'd7;
+                    end else if (srv_request[0]) begin
+                        $display("  DISK SERVER: READ lba %0d (file %0d)",
+                                 srv_mgmt_readdata[14:0], srv_mgmt_readdata[14:0] * 1024);
+                        srv_state <= 4'd9;
+                    end else begin
+                        $display("  DISK SERVER: WRITE lba %0d (drained)",
+                                 srv_mgmt_readdata[14:0]);
+                        srv_state <= 4'd12;
+                    end
+                end
+                4'd9: if (srv_request[0]) begin      // controller wants a byte
+                    srv_mgmt_address <= 4'hF;
+                    srv_mgmt_writedata <= {8'h00,
+                        srv_image[srv_lba_r * 1024 + srv_pushed]};
+                    srv_mgmt_write <= 1'b1;
+                    srv_state <= 4'd10;
+                end else begin
+                    srv_state <= 4'd9;               // FIFO full: wait
+                end
+                4'd10: begin
+                    srv_mgmt_write <= 1'b0;
+                    srv_pushed <= srv_pushed + 1;
+                    if (srv_pushed + 1 >= 1024) begin
+                        $display("  DISK SERVER: served 1024 bytes");
+                        srv_state <= 4'd7;
+                    end else begin
+                        srv_state <= 4'd9;
+                    end
+                end
+                // ---- WRITE (FIFO -> nowhere; the image stays pristine) ----
+                4'd12: if (srv_request[1] && srv_pushed < 1024) begin
+                    srv_mgmt_address <= 4'hF;
+                    srv_mgmt_read <= 1'b1;
+                    srv_state <= 4'd13;
+                end else if (!srv_request[1]) begin
+                    srv_state <= 4'd7;
+                end
+                4'd13: begin
+                    srv_mgmt_read <= 1'b0;
+                    srv_pushed <= srv_pushed + 1;
+                    srv_state <= 4'd12;
+                end
+                default: srv_state <= 4'd7;
+            endcase
         end
     end
 
+    // +hdm=<file>: open the image and let the FSM above do the rest.
+    initial begin : disk_server_open
+        string hdm_path;
+        if ($value$plusargs("hdm=%s", hdm_path)) begin
+            srv_fd = $fopen(hdm_path, "rb");
+            if (srv_fd == 0)
+                $display("  DISK SERVER: cannot open %s", hdm_path);
+            else
+                $display("  DISK SERVER: %s ready", hdm_path);
+        end
+    end
     // The guest's read answer: live window from floppy.v, dead 0xFF, and the
     // control/mode ports from the glue -- the same mux PERIPHERALS serves.
     wire fdc_msr_sel  = ~io_rd_n & fdc_sel_stat;

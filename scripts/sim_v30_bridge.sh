@@ -23,9 +23,9 @@ json.dump(c, open(sys.argv[1], 'w'))
 PY
 export DOCKER_CONFIG="$CFG"
 
-S=pcxt-base/src/fpga/core
+S=fpga/core
 V=$S/v30
-K=$S/KFPC-XT/HDL
+K=$S/chipset/HDL
 
 # v30u_ucrom's simulation default is HEXDIR="hdl/rtl/ucore/" relative to the
 # working directory -- and an empty microcode ROM is a $fatal, not a warning.

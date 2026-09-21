@@ -10,7 +10,7 @@ Analogue Pocket の openFPGA で動かすプロジェクト。
 ## 構成
 
 ```
-pcxt-base/          PCXTコアの作業ツリー(ここをPC-98化していく)
+fpga/          PCXTコアの作業ツリー(ここをPC-98化していく)
   src/fpga/         Quartusプロジェクト
 docs/               設計ドキュメント(PIVOT.md, PC98_MACHINE_SPEC.md, PORT_PLAN.md)
 ```
@@ -18,7 +18,7 @@ docs/               設計ドキュメント(PIVOT.md, PC98_MACHINE_SPEC.md, POR
 ## ビルド
 
 - **CI**: pushで自動ビルド → Actionsのartifactにrbf
-- **ローカル**: `pcxt-base/scripts/build-docker.sh`(raetro/quartus:pocketイメージ、Rosetta)
+- **ローカル**: `fpga/scripts/build-docker.sh`(raetro/quartus:pocketイメージ、Rosetta)
 
 ## ロードマップ
 

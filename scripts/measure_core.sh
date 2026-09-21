@@ -45,9 +45,9 @@ echo "PROJECT_REVISION = \"m\"" > "$OUT/m.qpf"
 # MEASURE_COPY: a directory whose contents belong next to the scratch qsf
 # (data files a core $readmem's from its project directory).
 if [ -n "${MEASURE_COPY:-}" ]; then cp -RL "$MEASURE_COPY"/. "$OUT/"; fi
-if [ -d pcxt-base/src/fpga/rtl ]; then
+if [ -d fpga/rtl ]; then
     mkdir -p "$OUT/rtl"
-    cp -RL pcxt-base/src/fpga/rtl/. "$OUT/rtl/"
+    cp -RL fpga/rtl/. "$OUT/rtl/"
 fi
 
 export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"

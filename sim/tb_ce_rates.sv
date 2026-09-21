@@ -51,13 +51,8 @@ module tb_ce_rates;
 
     // What each index is meant to be. A posedge of the CPU pin clock per
     // measured posedge CE, so this is the CPU's clock rate.
-`ifdef MACHINE_PC98
     real want [4] = '{4.9152, 9.8304, 19.6608, 21.4773};
     localparam string WHICH = "PC-98 (2.4576 MHz family)";
-`else
-    real want [4] = '{4.7727, 14.3182/2.0, 9.5455, 21.4773};
-    localparam string WHICH = "PC/XT (14.31818 MHz family)";
-`endif
 
     // 0.1 per cent: a phase accumulator cannot land exactly and does not need
     // to -- the PC-98 ratios are within 0.0001 per cent, and the tolerance is
