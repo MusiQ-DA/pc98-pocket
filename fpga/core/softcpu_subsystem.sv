@@ -144,6 +144,11 @@ module softcpu_subsystem (
     input  [23:0] dbg_gdc_cur,
     input   [7:0] dbg_gdc_csrcnt,
     input  [31:0] dbg_gdc_csrtrace,
+    // The guest-reset terms (core_top's dbg_bits low byte), the hardware-band
+    // strip's replacement: {~RESET, reset, interact_reset, bios_ever_loaded,
+    // 0, 0, guest_hold_sync2, soft_guest_hold} -- the reset_wire terms, read
+    // on the POST panel where they are legible.
+    input   [7:0] dbg_reset_terms,
     // The drawing server's view of the two GDCs, already in this domain via
     // the synchronisers below; the done LEVEL the engine writes back.
     input   [1:0]  gdc_draw_req,
@@ -326,10 +331,13 @@ module softcpu_subsystem (
     // chipset domain (quasi-static -- the engine holds each state for
     // microseconds), and the done LEVEL the engine writes toggles per
     // command; Peripherals edge-detects its synchronized rise.
+    logic [7:0] rst_terms_s1 = 8'h00, rst_terms_s2 = 8'h00;
     logic [1:0] draw_req_s1 = 2'b00, draw_req_s = 2'b00;
     logic [1:0] draw_busy_s = 2'b00;
     reg   [1:0] gdc_srv_done_levels_r = 2'b00;
     always @(posedge clk_pico) begin
+        rst_terms_s1 <= dbg_reset_terms;
+        rst_terms_s2 <= rst_terms_s1;
         draw_req_s1  <= gdc_draw_req;
         draw_req_s   <= draw_req_s1;
         draw_busy_s  <= gdc_draw_busy;
@@ -1174,6 +1182,10 @@ module softcpu_subsystem (
             // The CSRFORM byte trace: {how many, first three bytes after
             // the last 4B}. The panel's CT word.
             32'h5000_0130: cpu_mem_rdata = dbg_gdc_csrtrace;
+            // The guest-reset terms, synchronised: {~RESET, reset,
+            // interact_reset, bios_ever_loaded, 0, 0, guest_hold_sync2,
+            // soft_guest_hold}.
+            32'h5000_0134: cpu_mem_rdata = {24'd0, rst_terms_s2};
             // ---- the drawing server --------------------------------------
             // 0x140/0x180: {busy, req, opcode} for master/slave; +4..+0x14:
             // the five snapshot words. 0x15C/0x19C (writes): the done LEVEL

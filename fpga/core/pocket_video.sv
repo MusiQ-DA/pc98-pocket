@@ -428,6 +428,12 @@ module pocket_video (
         end
     end
 
+    // RETIRED, 2026-09-22: the band strip and its colour bars no longer
+    // draw. core_top's eight reset terms moved to the POST panel's RST field
+    // (MMIO 0x50000134), which is legible without a decoder ring; the probe
+    // measurements below stay as the source they always were, wired to
+    // nothing. pb_rgb's fallback is plain black now.
+    //
     //   A  core_top's eight, as before, then two dark
     //   B  raster_alive, vsync_alive, vb_any, hb_any, de_any,
     //      ia_any, px_any, osd_enable, guard_run, then one dark
@@ -502,11 +508,13 @@ module pocket_video (
     // body did not get filled a black backdrop would hide the very text this is
     // for. Grey keeps both the light body (0xF1E5D5) and the near-black label
     // legible against it.
-    wire [23:0] pb_rgb      = pb_rule       ? 24'hFF0000
-                            : pb_band_area ? (pb_lit ? 24'hFFFFFF : 24'h202020)
-                            : osd_show     ? osd_color
+    // The hardware-band strip and its colour bars are gone: the reset terms
+    // moved to the POST panel's RST field (0x50000134), which is legible,
+    // and a dead machine now shows plain black behind the panel rather than
+    // sixteen stripes that needed a decoder ring.
+    wire [23:0] pb_rgb      = osd_show     ? osd_color
                             : osd_in_area  ? 24'h606060
-                            :                pb_bar_rgb;
+                            :                24'h000000;
 
     reg [23:0] pb_vid_rgb = 24'd0;
     reg        pb_vid_de  = 1'b0;

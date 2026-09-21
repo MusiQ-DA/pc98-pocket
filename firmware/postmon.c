@@ -44,6 +44,7 @@
 #define POST_GDC    ((volatile uint32_t *) 0x500000B0) // {unk count, unk cmd, disp_on, SAD}
 #define POST_CUR    ((volatile uint32_t *) 0x5000012C) // {CSR count, en, bl, top, bot, cell}
 #define POST_CT     ((volatile uint32_t *) 0x50000130) // {byte count, 3 bytes after the last 4B}
+#define POST_RST    ((volatile uint32_t *) 0x50000134) // the guest-reset terms
 #define POST_INT    ((volatile uint32_t *) 0x500000B4) // {INTR level, INTR rising edges}
 #define POST_KBD    ((volatile uint32_t *) 0x500000B8) // {0x41 reads, IRQ1 rises}
 #define POST_IRQL   ((volatile uint32_t *) 0x500000BC) // {IF, timer ticks, IRQ levels}
@@ -544,6 +545,23 @@ void post_mon_tick(void)
 
     osd_draw_string(&fb, 4 + 17 * 8, 22, "LDN", OSD_LABEL);
     dec(4 + 21 * 8, 22, *POST_ROMLDN & 0xFFu);
+
+    // HLD: the guest-reset terms, six one-digit fields, the hardware-band
+    // strip's replacement -- same bits, legible. On row 82 after the TVH
+    // block, which is the only real estate left (row 22's RST already means
+    // max/restarts). In this order:
+    //   SH soft_guest_hold   GH guest_hold_sync2   BL bios_ever_loaded
+    //   IR interact_reset    RS reset (the guest)  LK ~RESET (PLL lock)
+    // A lit bit is a term HOLDING the machine: BL 0 = the ROM loader never
+    // finished; GH 1 with BL 1 = the boot hold never cleared; LK 0 = PLLs.
+    uint32_t rt = *POST_RST;
+    osd_draw_string(&fb, 224, 82, "HLD", OSD_LABEL);
+    hex(250, 82, rt & 1u, 1);
+    hex(260, 82, (rt >> 1) & 1u, 1);
+    hex(270, 82, (rt >> 4) & 1u, 1);
+    hex(280, 82, (rt >> 5) & 1u, 1);
+    hex(290, 82, (rt >> 6) & 1u, 1);
+    hex(300, 82, (rt >> 7) & 1u, 1);
 
     osd_draw_string(&fb, 4, 32, "LIVE", OSD_LABEL);
     hex(4 + 5 * 8, 32, live & 0xFFFFFu, 5);

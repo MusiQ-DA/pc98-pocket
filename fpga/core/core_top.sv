@@ -1175,6 +1175,7 @@ module core_top (
         .dbg_gdc_cur                (dbg_gdc_cur),
         .dbg_gdc_csrcnt             (dbg_gdc_csrcnt),
         .dbg_gdc_csrtrace           (dbg_gdc_csrtrace),
+        .dbg_reset_terms            (dbg_bits[7:0]),
         .gdc_draw_req               (gdc_draw_req),
         .gdc_draw_busy              (gdc_draw_busy),
         .gdc_draw_ops               (gdc_draw_ops),

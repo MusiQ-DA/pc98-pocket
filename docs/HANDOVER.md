@@ -798,3 +798,12 @@ CI に tb_pc98_egc を追加し、tb_pc98_gvram_seq のビルド行に pc98_egc.
   = ソースラッチが最後のリードのバイトを保持する形のみ
 - pc98_gvram_display 側: slave GDC の SAD/PITCH 未消費、パレットは固定 16 色、
   E プレーンは常に E0000 (アナログ前提)
+
+### §10.8 リセット項の OSD 化 (帯ストリップ廃止)
+
+ハードウェア帯 (pocket_video が画面下部に描く 16 ビットの縞) は読みにくい
+ため廃止し、**POST パネル row 82 の `HLD` フィールド**に移した:
+`SH GH BL IR RS LK` の 6 桁 (soft_guest_hold / guest_hold_sync2 /
+bios_ever_loaded / interact_reset / reset / ~RESET)。点いている桁が
+ゲストを止めている項。MMIO 0x50000134 (core_top の dbg_bits[7:0] を
+softcpu で 2FF 同期)。帯の色バーも消え、背景は黒。
