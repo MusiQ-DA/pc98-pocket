@@ -826,6 +826,20 @@ module tb_pc98_v30;
             $display("  %8t  HOOKFETCH %05X => %02X   (eu_pc %05X)", $time,
                      cpu_address, ram[cpu_address], eu_pc);
 
+        // The master GDC's command port (0x62) and parameter port (0x60),
+        // named byte by byte. Whether the boot ever sends CSRFORM (0x4B) or
+        // CSRW (0x49) -- and with which parameter bytes -- is exactly what
+        // the POST panel's CS c/E/A/T/B readout asks the metal; this answers
+        // the same question in sim, from the same ROMs.
+        if (~io_wr_n) io_wr_data_q <= cpu_data_bus;
+        if (io_wr_n & ~io_wr_d) begin
+            if (cpu_address[15:0] == 16'h0062)
+                $display("  %8t  OUT GDC CMD %02X   (eu_pc %05X)", $time,
+                         io_wr_data_q, eu_pc);
+            if (cpu_address[15:0] == 16'h0060)
+                $display("  %8t  OUT GDC PAR %02X", $time, io_wr_data_q);
+        end
+
         // The interval timer and the PICs, every write named. The values the
         // print shows are from mem_wr_data_q, which only tracks MEMORY
         // writes -- an I/O write shows whatever the last RAM write carried.
@@ -1949,6 +1963,7 @@ module tb_pc98_v30;
     end
 
     logic [15:0] io_wr_addr_q = 16'h0000;
+    logic [7:0]  io_wr_data_q = 8'h00;
     always_ff @(posedge clk_chipset)
         if (~io_wr_n) io_wr_addr_q <= cpu_address[15:0];
 

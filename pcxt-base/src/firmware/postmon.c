@@ -616,6 +616,19 @@ void post_mon_tick(void)
             // bus actually returned. Against the file, this is the fetch
             // path's honesty test.
             uint32_t f0 = *POST_FR0;
+        // CS: the cursor, as the master GDC holds it -- count, enable, cell,
+        // top, bottom as c E aaa t b. At the N88 Ok prompt: c 00 = the BIOS
+        // never sent a cursor command (port decode or a path that never
+        // ran); E 0 = the [0x53B]|0x80 enable never landed; t/b 0 with E 1 =
+        // the three-byte table CSRFORM never ran and the block is a
+        // hairline; all sane = the render path.
+        uint32_t cu = *POST_CUR;
+        osd_draw_string(&fb, 200, 32, "CS", OSD_LABEL);
+        hex(216, 32, (cu >> 24) & 0xFFu, 2);
+        hex(232, 32, (cu >> 23) & 1u, 1);
+        hex(240, 32, cu & 0xFFFu, 3);
+        hex(264, 32, (cu >> 17) & 0xFu, 1);
+        hex(272, 32, (cu >> 12) & 0xFu, 1);
             osd_draw_string(&fb, 4 + 23 * 8, 42, "F", OSD_LABEL);
             hex(4 + 24 * 8, 42, f0 & 0xFFFFFu, 5);
             hex(4 + 30 * 8, 42, (f0 >> 24) & 0xFFu, 2);
@@ -920,26 +933,6 @@ void post_mon_tick(void)
         uint32_t iv = *POST_INT;
         osd_draw_string(&fb, 4 + 30 * 8, 102, "INT", OSD_LABEL);
         hex(4 + 34 * 8, 102, iv & 0xFFFFu, 4);
-
-        // CS: the cursor, as the master GDC holds it. At the N88 Ok prompt
-        // this splits the no-cursor fault in one look:
-        //   c  CSRW/CSRFORM commands seen at all. 00 = the BIOS never sent
-        //      one (port decode, or an init path that never ran).
-        //   E  enable (CSRFORM P1 bit 7, the [0x53B]|0x80 write).
-        //   A  the cell CSRW names. Should be right of the last character.
-        //   T/B the slice top/bottom lines. 0/0 with E=1 = the three-byte
-        //      table CSRFORM never ran and the block is a hairline.
-        uint32_t cu = *POST_CUR;
-        osd_draw_string(&fb, 4 + 41 * 8, 102, "CS", OSD_LABEL);
-        hex(4 + 43 * 8, 102, (cu >> 24) & 0xFFu, 2);
-        osd_draw_string(&fb, 4 + 46 * 8, 102, "E", OSD_LABEL);
-        hex(4 + 47 * 8, 102, (cu >> 23) & 1u, 1);
-        osd_draw_string(&fb, 4 + 49 * 8, 102, "A", OSD_LABEL);
-        hex(4 + 50 * 8, 102, cu & 0xFFFu, 3);
-        osd_draw_string(&fb, 4 + 54 * 8, 102, "T", OSD_LABEL);
-        hex(4 + 55 * 8, 102, (cu >> 17) & 0x1Fu, 2);
-        osd_draw_string(&fb, 4 + 58 * 8, 102, "B", OSD_LABEL);
-        hex(4 + 59 * 8, 102, (cu >> 12) & 0x1Fu, 2);
 
         // IRQ / RD: the keyboard's last two hops, after KEY.
         //

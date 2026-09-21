@@ -131,6 +131,14 @@ module v30_core (
     output    [223:0] dbg_regs     // ip slot holds the retired-instruction IP
     ,
     output            dbg_first_pop
+`ifdef V30_BACKDOOR
+    // The BIU's pending-bus-cycle flag, a backdoor-only debug leg. Declared
+    // here so the guarded connection below binds a PORT and not Verilator's
+    // implicit variable -- which is an error, not a warning, and stopped the
+    // bench cold before any instruction ran.
+    ,
+    output            dbg_pend
+`endif
 );
 
 import v30_ss_pkg::*;
