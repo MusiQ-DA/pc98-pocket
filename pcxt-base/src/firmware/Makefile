@@ -45,6 +45,14 @@ HW_DEFINES := $(addprefix -D,$(shell sed -n 's/^[[:space:]]*set_global_assignmen
 # fifteen-minute bitstream -- but only if there is a way to switch one on.
 EXTRA_DEFINES ?=
 CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Oz -mno-relax -ffreestanding -Wall -Werror -Wundef -MMD -MP $(HW_DEFINES) $(EXTRA_DEFINES)
+# -Oz's first hardware run drew a panel with missing fields and never opened
+# the keyboard; the -Os build hours earlier was fine, and nothing static
+# explains it -- so every file that draws, reads input, or moves disk sectors
+# keeps the PROVEN -Os codegen, and -Oz shrinks only the two files whose
+# savings (settings_ui 340 B, scsi_service 108 B) are what make the ROM
+# budget at all. If those two misbehave it is the settings menu or SCSI,
+# never the keyboard.
+main.o vkb_ui.o vkb_draw.o vkb_layout.o postmon.o dpad.o key_bind.o osd_font.o fdd_service.o ide_service.o disk_tds.o sdramtest.o: CFLAGS := $(subst -Oz,-Os,$(CFLAGS))
 ASFLAGS = --target=riscv32 -march=rv32im -mno-relax -Wall -Werror -MMD -MP
 
 # The digest the fingerprint uses, portable across the two CI worlds:
