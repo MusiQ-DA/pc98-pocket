@@ -85,7 +85,7 @@
 | パーツ | 必要な時期 | 置く場所 | 根拠 | 状況 |
 |---|---|---|---|---|
 | **DMAC uPD71071** | P4 / D1（DOS 起動・FDC の DMA 転送） | **RTL** | バスマスタ。DRQ/DACK をゲストがタイミングとして観測。softcore@7MHz では追従不可 | 未実装 |
-| **EGC** | P6 / D5（正速） | **RTL** | バス展開型の平面演算。`pc98_gvram_seq` パターンの延長。softcore 置きは物理的に正速不可 | 未実装（GRCG のみ） |
+| **EGC** | P6 / D5（正速） | **RTL** | バス展開型の平面演算。`pc98_gvram_seq` パターンの延長。softcore 置きは物理的に正速不可 | **実装済み (WIP)** — レジスタ 0x4A0-0x4AF、raster op エンジン、fg/bg 色、パターンレジスタ、ソースラッチ (アライン blit)、ページ1 バンキング。残: sft/leng のシフトパイプライン (非アライン blit)。tb_pc98_egc が CI で回る |
 | **GVRAM 表示フェッチ** | P3 / D2 | **RTL** | SDRAM port B はフォント用で 16 行に 1 回程度の低負荷 — 共有スケジューリングか port D 追加。**追加時は R1 の規則「data_loader DROP=0 を再確認」を守ること** | 未実装 |
 | OPNA リズム音源 | P5 / D4 | **ビルド時アセット変換**（WAV→ADPCM-A）+ SDRAM 配置 + RTL フェッチ | 実行時の softcore の仕事ではない（GOAL R3「未設計」） | 未設計 |
 
@@ -107,6 +107,10 @@
 3. GDC 描画サーバーの実装形態決定: ピクセルループは `pc98_gvram_seq` 拡張（RTL）、
    コマンド解釈は現行の handshake を流用。タイトル実測（unk 計器）を入れてから
 4. GVRAM フェッチのポート設計（port B 共有 vs port D 追加）+ DROP=0 再確認
+5. EGC のシフトパイプライン（sft/leng）: 非アライン REP MOVSW blit。
+   RTL ではハードウェアのシフトレジスタ意味論（k = (dstbit-srcbit) mod 8、
+   direction ビット、bytemask 相当の端数マスク）を直接実装する。
+   検証ベクタは np2kai memegc.c の egcsftb 系から生成する
 
 ---
 
