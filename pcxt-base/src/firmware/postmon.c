@@ -629,14 +629,14 @@ void post_mon_tick(void)
         hex(216, 32, cu, 8);
 
         // CT: the bytes that followed the LAST CSRFORM (4B) command, as the
-        // GDC saw them on port 0x60: <n> is how many came before another
-        // command cut the run, then the first three bytes in order. The
-        // BIOS's cursor ON/OFF is one byte (n=1), the table form three
-        // (n=3); anything else says the writes are shifted or shared.
+        // GDC saw them on port 0x60: <n> (leftmost digit) is how many came
+        // before another command cut the run, then the first three bytes in
+        // order. The BIOS's cursor ON/OFF is one byte (n=1), the table form
+        // three (n=3); anything else says the writes are shifted or shared.
+        // One hex call, same reason as CS above.
         uint32_t ct = *POST_CT;
         osd_draw_string(&fb, 200, 62, "CT", OSD_LABEL);
-        hex(216, 62, ct & 0xFFFFFFu, 6);
-        hex(264, 62, (ct >> 24) & 0xFu, 1);
+        hex(216, 62, ct & 0x0FFFFFFFu, 7);
             osd_draw_string(&fb, 4 + 23 * 8, 42, "F", OSD_LABEL);
             hex(4 + 24 * 8, 42, f0 & 0xFFFFFu, 5);
             hex(4 + 30 * 8, 42, (f0 >> 24) & 0xFFu, 2);

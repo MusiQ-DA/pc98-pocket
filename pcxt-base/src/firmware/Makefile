@@ -44,7 +44,7 @@ HW_DEFINES := $(addprefix -D,$(shell sed -n 's/^[[:space:]]*set_global_assignmen
 # The firmware rides on an SD slot, so a marker costs seconds rather than a
 # fifteen-minute bitstream -- but only if there is a way to switch one on.
 EXTRA_DEFINES ?=
-CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Os -mno-relax -ffreestanding -Wall -Werror -Wundef -MMD -MP $(HW_DEFINES) $(EXTRA_DEFINES)
+CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Oz -mno-relax -ffreestanding -Wall -Werror -Wundef -MMD -MP $(HW_DEFINES) $(EXTRA_DEFINES)
 ASFLAGS = --target=riscv32 -march=rv32im -mno-relax -Wall -Werror -MMD -MP
 
 # The digest the fingerprint uses, portable across the two CI worlds:
