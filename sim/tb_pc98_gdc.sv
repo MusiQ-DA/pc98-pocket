@@ -150,16 +150,19 @@ module tb_pc98_gdc;
         cmd(8'h49); par(8'h21); par(8'h43); par(8'h05);
         want("cursor EAD, plain LE word", cursor_addr, 16'h4321);
         want("cursor dot address",        cursor_dot,  4'h0);
-        // CSRFORM: enable P1 bit7, top P1 bits 4-0, bottom P3 bits 7-3, and
-        // P2 bit 5 is "does NOT blink" -- the driver carries 0x00 (blink) or
-        // 0x20 (solid) in [0x53D] as exactly that byte.
+        // CSRFORM: enable P1 bit7, TOP P2 bits 4-0 (P1's low bits are the
+        // text row height, not the top -- maketext reads them as TEXT_LR),
+        // bottom P3 bits 7-3, and P2 bit 5 is "does NOT blink" -- the driver
+        // carries 0x00 (blink, top 0) or 0x20 (solid, top 0) in [0x53D] as
+        // exactly that byte.
         cmd(8'h4B); par(8'hC1); par(8'h20); par(8'h88);
         want("cursor enable",        cursor_en,         1);
         want("cursor solid (P2 bit5)", cursor_blink_en, 0);
-        want("cursor top line",      cursor_top,        5'h01);
+        want("cursor top line (P2)", cursor_top,        5'd0);
         want("cursor bottom line",   cursor_bottom,     5'h11);
-        cmd(8'h4B); par(8'hC1); par(8'h00); par(8'h88); // blinking form
+        cmd(8'h4B); par(8'hC1); par(8'h05); par(8'h88); // top=5, blinking
         want("cursor blinking (P2 bit5 clear)", cursor_blink_en, 1);
+        want("cursor top from P2 low bits", cursor_top, 5'd5);
         want("CSR command count", csr_wr_count, 8'd3);  // 1x CSRW + 2x CSRFORM
 
         // ---- the status register --------------------------------------------

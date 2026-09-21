@@ -283,15 +283,26 @@ module pc98_gdc (
     assign cursor_addr       = {para[P_CSRW + 1], para[P_CSRW + 0]};
     assign cursor_dot        = para[P_CSRW + 2][7:4];
 
-    // CSRFORM: display-cursor enable (P1 bit 7), top line (P1 bits 4-0) and
-    // bottom line (P3 bits 7-3), as np2kai's maketext reads them. BLINK IS
-    // P2 BIT 5, INVERTED: np2 treats a set bit as "does not blink" (the
-    // cursor goes solid), and the BIOS's driver carries exactly that bit in
-    // [0x53D] -- 0x00 for a blinking form, 0x20 for a solid one -- as the
-    // P2 byte of the three-byte table write. The port keeps the 1-means-
-    // blink sense the renderer expects.
+    // CSRFORM: display-cursor enable (P1 bit 7), top line (P2 bits 4-0) and
+    // bottom line (P3 bits 7-3), as np2kai's maketext reads them:
+    //
+    //     nowline >= (para[GDC_CSRFORM+1] & 0x1f)   <- TOP IS P2
+    //     nowline <= (para[GDC_CSRFORM+2] >> 3)
+    //
+    // P1's low five bits are NOT the cursor top -- maketext line 163 reads
+    // them as TEXT_LR, the lines-per-character-row. The BIOS agrees: [0x53B]
+    // (the P1 byte its enable write ORs 0x80 onto) is 0x0F, a sixteen-line
+    // row height, while [0x53D] (the P2 byte) is only ever 0x00 or 0x20 --
+    // the blink bit and a top of zero. Reading the top from P1 made every
+    // form say top=15 against a bottom below it: an empty slice, and "no
+    // reverse block, ever" on hardware.
+    //
+    // BLINK IS P2 BIT 5, INVERTED: np2 treats a set bit as "does not blink"
+    // (the cursor goes solid), and the BIOS's driver carries exactly that
+    // bit in [0x53D] as the P2 byte of the three-byte table write. The port
+    // keeps the 1-means-blink sense the renderer expects.
     assign cursor_en        = para[P_CSRFORM + 0][7];
-    assign cursor_top       = para[P_CSRFORM + 0][4:0];
+    assign cursor_top       = para[P_CSRFORM + 1][4:0];
     assign cursor_rate      = {para[P_CSRFORM + 2][1:0], para[P_CSRFORM + 1][7:4]};
     assign cursor_bottom    = para[P_CSRFORM + 2][7:3];
     assign cursor_blink_en  = ~para[P_CSRFORM + 1][5];
