@@ -417,10 +417,26 @@ static int vkb_input(uint16_t pressed, uint16_t buttons)
     }
     cursor_navigate(pressed, buttons);
     if (pressed & BTN_X) { // toggle: X presses the key down, X again releases it
-        int on = !is_latched(cur_key);
-        set_latched(cur_key, on);
-        vkb_emit(on, vkb_keys[cur_key].scancode);
-        vkb_key_border(&osd, cur_key, key_color(cur_key));
+        uint8_t sc = vkb_keys[cur_key].scancode;
+        // A BIOS-TOGGLE key cannot be held: the machine flips its state on
+        // the MAKE and no break unflips it, so a latch would only paint a
+        // border the machine disagrees with -- first unlatch leaves the
+        // guest toggled and every later press inverted. X on one is a
+        // single press instead: make, paced break, no latch, no border.
+#ifdef MACHINE_PC98
+        if (sc == 0x0F /* PC98K_KANA */ || sc == 0x58) {
+#else
+        if (sc == 0x58) {
+#endif
+            vkb_emit(1, sc);
+            vkb_pace_break();
+            vkb_emit(0, sc);
+        } else {
+            int on = !is_latched(cur_key);
+            set_latched(cur_key, on);
+            vkb_emit(on, sc);
+            vkb_key_border(&osd, cur_key, key_color(cur_key));
+        }
     }
     if (pressed & BTN_Y) { // clear every latched key
         vkb_clear_latches();
