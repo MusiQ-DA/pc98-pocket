@@ -242,7 +242,6 @@ module CHIPSET #(
     logic           ems_b2;
     logic           ems_b3;
     logic           ems_b4;
-    logic           tandy_snd_rdy;
     logic           fdd_dma_req;
 
 
@@ -266,6 +265,14 @@ module CHIPSET #(
             DRQ0 <= DRQ0;
     end
 
+    // tandy_snd_rdy was ANDed in here and, on a PC-98 build, was 1'b1 by
+    // construction (`ENABLE_TANDY_AUDIO ? ... : 1'b1`). The XT hardware's
+    // removal deleted the PERIPHERALS output that drove it but left this
+    // use, and an undriven net synthesises to GND -- io_channel_ready
+    // became a constant zero, processor_ready never asserted, and the CPU
+    // hung forever on its first cycle (LIVE pinned at FFFF0, no fetches,
+    // PC frozen in its reset state). The term was the Tandy sound's, and
+    // the Tandy sound is gone; the expression keeps the two that remain.
     READY u_READY 
     (
         .clock                              (clock),
@@ -275,7 +282,7 @@ module CHIPSET #(
         .processor_ready                    (processor_ready),
         .dma_ready                          (dma_ready),
         .dma_wait_n                         (dma_wait_n),
-        .io_channel_ready                   (io_channel_ready & memory_access_ready & tandy_snd_rdy),
+        .io_channel_ready                   (io_channel_ready & memory_access_ready),
         .io_read_n                          (io_read_n),
         .io_write_n                         (io_write_n),
         .memory_read_n                      (memory_read_n),
