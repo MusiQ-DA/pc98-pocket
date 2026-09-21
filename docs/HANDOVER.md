@@ -643,3 +643,45 @@ rtc_time_bcd / rtc_valid — core_top.sv では現在未接続)。必要にな�
 これを uPD4990 モデルに食わせ、0x20/0x22 のコマンドと 0x33 の cdat を
 本物のシリアルプロトコルで返す。現状は 0x33 = 0x08 (クロック線静止、
 日付ゼロ) のスタブでブートを通している (2026-09-18, 9ac8deb)。
+
+## §10 2026-09-21: N88-BASIC Ok 到達と VKB コード(同時押し)実装
+
+### §10.1 実機 ROM ブート完成
+
+run#342 の実機結果: `How many files (0-15)?` は **空 ENTER でdefault通り抜け**、
+N88-BASIC `Ok` 到達。`PRINT 2` 等の入力・実行も正常(数値+ENTERで聞き直される
+件は入力行がクリーンなのに残る謎、空 ENTER で回避可。カーソル表示も未達)。
+
+### §10.2 BIOS キーボードハンドラの解析(実機 ROM 逆アセンブル)
+
+`IN AL,0x41` は BIOS 0xFE65D–0xFE6C6 にのみ存在。判明した契約:
+
+- 1バイト読む毎に `OUT 0x43, 0x16`(正常経路)/`0x14`(エラー回復: status 0x38)
+- **全バイト(make/break問わず)を `XLAT(0xE3C)` マスクで 0x52A のキーマトリクスに
+  XOR** — breakだけ送るとビットが立ってしまう(押下扱い)ので make/break 対が必須
+- ≥0x70(SHIFT/CTRL/GRPH/KANA)はマトリクス更新のみで文字バッファに入らない。
+  SHIFT は 0x70/0x7D、CTRL 0x74、GRPH 0x73
+- 0x60(STOP)もバッファに入らずマトリクス参照専用
+
+→ 修飾キーは「make を先に送り key make → key break → mod break」の順なら
+確実に効く。これが VKB コード実装の根拠。
+
+### §10.3 VKB コード(chord)実装
+
+VKB は同時押しできないので、OSD 側で compose する(vkb_ui.c):
+
+- **X on 修飾キー = アーム**(バイト未送信、枠色 OSD_LATCH)。SHIFT(0x12/0x59)、
+  CTRL(0x14)、GRPH/XFER/NFER(PC98K_*)が対象。KANA/CAPS は BIOS でトグルなので
+  通常キーのまま
+- **A on 通常キー**: `[armed mod make][key make]` を送出(16深キューがバーストを吸収、
+  framer が KFPS2KB ペースで流出)
+- **A 離す**: `[key break][mod break]` + 自動解除(ワンショット。連続シフトは
+  都度 X、大文字連続は CAPS で)
+- アームだけ解除(X 再押下/Y/閉じ)はバイト送出なし — **break だけ送ると
+  0x52A マトリクスが反対に立つ**ため(§10.2)
+- コード発行中に閉じた場合(chord_active)は mod break を返済
+- R1 反転・再オープンで latch 枠が落ちる既存バグも repaint_latched() で修正
+
+PC98K_* 定義は vkb_layout.h へ移動(chord 判定と共有)。
+tb_pc98_kbd_ps2 の「shift, A make, A break, shift break」ケースがこのバイト列を
+既に検証済み(RTL 無変更)。
