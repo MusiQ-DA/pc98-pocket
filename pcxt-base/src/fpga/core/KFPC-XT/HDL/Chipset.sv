@@ -85,6 +85,10 @@ module CHIPSET #(
         output  logic    [7:0]  dbg_gdc_unk_cmd,
         output  logic    [7:0]  dbg_gdc_unk_count,
         output  logic           dbg_gdc_disp_on,
+        // The cursor's registers and the CSRW/CSRFORM arrival count, relayed
+        // to the softcore's panel (0x5000012C) the way the fields above are.
+        output  logic   [23:0]  dbg_gdc_cur,
+        output  logic    [7:0]  dbg_gdc_csrcnt,
         output  logic   [63:0]  pc98_tvfill_view,
         output  logic   [15:0]  pc98_rowbuf_freq_count,
         output  logic   [15:0]  pc98_rowbuf_fvalid_count,
@@ -451,6 +455,8 @@ module CHIPSET #(
         .dbg_gdc_unk_cmd                    (dbg_gdc_unk_cmd),
         .dbg_gdc_unk_count                  (dbg_gdc_unk_count),
         .dbg_gdc_disp_on                    (dbg_gdc_disp_on),
+        .dbg_gdc_cur                        (dbg_gdc_cur),
+        .dbg_gdc_csrcnt                     (dbg_gdc_csrcnt),
         .pc98_tvfill_view                   (pc98_tvfill_view),
         .pc98_rowbuf_freq_count             (pc98_rowbuf_freq_count),
         .pc98_rowbuf_fvalid_count           (pc98_rowbuf_fvalid_count),
