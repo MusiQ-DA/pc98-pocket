@@ -92,6 +92,21 @@ module tb_pc98_gdc;
         reset = 1'b0;
         repeat (4) @(posedge clk);
 
+        // ---- the CSRFORM power-on values -----------------------------------
+        // The BIOS's boot sends CSRFORM as ONE byte (the enable with TEXT_LR)
+        // and never the full three, so the form the cursor draws with is the
+        // one the chip woke with: np2kai's gdc_reset seeds the MASTER to
+        // {P1=0F, P2=C0, P3=7B} -- top 0, bottom 15, a full block, and P2
+        // bit5 CLEAR so it blinks (np2: a set bit is "does not blink").
+        // Reset-zero made bottom 0: a one-line sliver at the top of the
+        // right cell, which is "it blinks, but small and in the wrong
+        // place" on hardware.
+        want("reset cursor disabled",     cursor_en,         0);
+        want("reset cursor blinks (P2 b5)", cursor_blink_en, 1);
+        want("reset cursor top 0",        cursor_top,        5'd0);
+        want("reset cursor bottom 15",    cursor_bottom,     5'd15);
+        want("no CSRFORM traced at reset", csr_trace,        32'h0);
+
         // ---- START and STOP ------------------------------------------------
         cmd(8'h0D);  want("START -> disp_on", disp_on, 1);
         cmd(8'h0C);  want("STOP  -> disp_on", disp_on, 0);

@@ -1958,7 +1958,7 @@ end endgenerate
         .unk_cmd(gdc_m_unk_cmd), .unk_count(gdc_m_unk_count)
     );
 
-    pc98_gdc u_gdc_s (
+    pc98_gdc #(.MASTER(1'b0)) u_gdc_s (
         .clk(clock), .reset(reset),
         .cs(gdc_s_cs), .a1(address[1]),
         .io_read_n(io_read_n), .io_write_n(io_write_n),

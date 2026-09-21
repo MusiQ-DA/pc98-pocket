@@ -51,11 +51,14 @@
 
 `default_nettype none
 
-// NO MASTER/SLAVE PARAMETER. The two GDCs differ in which ports address them
-// and in what the rest of the core does with their registers, not in how they
-// decode; the slave's status has a drawing bit, and there is no drawing here
-// to report. A parameter that selects nothing is worse than none.
-module pc98_gdc (
+// MASTER/SLAVE AS A PARAMETER. The two GDCs still decode identically; the
+// one thing that differs is the power-on CSRFORM. np2kai's gdc_reset seeds
+// the master's form to {0F C0 7B} and the slave's P1 to 1, and the BIOS
+// never overwrites the difference at boot (see the reset block below), so
+// the values a machine's cursor RIDES ON are per-GDC from the first frame.
+module pc98_gdc #(
+    parameter bit MASTER = 1'b1
+) (
     input  wire        clk,
     input  wire        reset,
 
@@ -193,6 +196,26 @@ module pc98_gdc (
             csr_tr0 <= 8'h00; csr_tr1 <= 8'h00; csr_tr2 <= 8'h00;
             csr_n <= 4'd0; csr_live <= 1'b0;
             for (i = 0; i <= P_LAST; i = i + 1) para[i] <= 8'h00;
+            // The CSRFORM power-on values, and why the cursor is nothing
+            // without them: the BIOS's boot sends CSRFORM as ONE byte --
+            // [0x53B]|0x80, the enable with TEXT_LR -- and never sends the
+            // full three, so top/bottom/blink are whatever the chip woke
+            // with. np2kai's gdc_reset seeds the master to {P1=0F, P2=C0,
+            // P3=7B}: LR 15, top 0, bottom 15, blinking (P2 bit5 CLEAR is
+            // "does blink" in np2's inverted reading) -- a blinking full
+            // block -- and the BIOS's own form table (FD80:1062, entry
+            // 0x1062) opens with the same {0F, 7B} pair. The slave wakes
+            // with P1=1 and nothing else. Reset-zero P3 made bottom zero:
+            // the cursor a one-line sliver at the top of the right cell,
+            // which is what "it blinks, but small and in the wrong place"
+            // looked like on hardware.
+            if (MASTER) begin
+                para[P_CSRFORM + 0] <= 8'h0F;
+                para[P_CSRFORM + 1] <= 8'hC0;
+                para[P_CSRFORM + 2] <= 8'h7B;
+            end else begin
+                para[P_CSRFORM + 0] <= 8'h01;
+            end
         end else begin
             if (cmd_wr) begin
                 logic [10:0] dn;
