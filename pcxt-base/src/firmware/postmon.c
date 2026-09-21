@@ -43,6 +43,7 @@
 #define POST_KEY    ((volatile uint32_t *) 0x500000AC) // {gdc pitch, last {make,code}, count}
 #define POST_GDC    ((volatile uint32_t *) 0x500000B0) // {unk count, unk cmd, disp_on, SAD}
 #define POST_CUR    ((volatile uint32_t *) 0x5000012C) // {CSR count, en, bl, top, bot, cell}
+#define POST_CT     ((volatile uint32_t *) 0x50000130) // {byte count, 3 bytes after the last 4B}
 #define POST_INT    ((volatile uint32_t *) 0x500000B4) // {INTR level, INTR rising edges}
 #define POST_KBD    ((volatile uint32_t *) 0x500000B8) // {0x41 reads, IRQ1 rises}
 #define POST_IRQL   ((volatile uint32_t *) 0x500000BC) // {IF, timer ticks, IRQ levels}
@@ -626,6 +627,16 @@ void post_mon_tick(void)
         uint32_t cu = *POST_CUR;
         osd_draw_string(&fb, 200, 32, "CS", OSD_LABEL);
         hex(216, 32, cu, 8);
+
+        // CT: the bytes that followed the LAST CSRFORM (4B) command, as the
+        // GDC saw them on port 0x60: <n> is how many came before another
+        // command cut the run, then the first three bytes in order. The
+        // BIOS's cursor ON/OFF is one byte (n=1), the table form three
+        // (n=3); anything else says the writes are shifted or shared.
+        uint32_t ct = *POST_CT;
+        osd_draw_string(&fb, 200, 62, "CT", OSD_LABEL);
+        hex(216, 62, ct & 0xFFFFFFu, 6);
+        hex(264, 62, (ct >> 24) & 0xFu, 1);
             osd_draw_string(&fb, 4 + 23 * 8, 42, "F", OSD_LABEL);
             hex(4 + 24 * 8, 42, f0 & 0xFFFFFu, 5);
             hex(4 + 30 * 8, 42, (f0 >> 24) & 0xFFu, 2);

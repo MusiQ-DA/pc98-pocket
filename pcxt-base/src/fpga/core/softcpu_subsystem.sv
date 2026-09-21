@@ -143,6 +143,7 @@ module softcpu_subsystem (
     input         dbg_gdc_disp_on,
     input  [23:0] dbg_gdc_cur,
     input   [7:0] dbg_gdc_csrcnt,
+    input  [31:0] dbg_gdc_csrtrace,
     // How far a key press gets, served at 0x500000AC. See core_top.
     input   [7:0] key_count,
     input   [7:0] key_last,
@@ -1146,6 +1147,9 @@ module softcpu_subsystem (
             // count, packed ccEaaatb (count, enable, cell, top, bottom) so
             // one hex call on the panel prints it in reading order.
             32'h5000_012C: cpu_mem_rdata = {dbg_gdc_csrcnt, dbg_gdc_cur};
+            // The CSRFORM byte trace: {how many, first three bytes after
+            // the last 4B}. The panel's CT word.
+            32'h5000_0130: cpu_mem_rdata = dbg_gdc_csrtrace;
             32'h5000_00B8: cpu_mem_rdata = {16'd0, dbg_kbd_rd_count, dbg_kbd_irq_count};
             32'h5000_00BC: cpu_mem_rdata = {8'd0,
                                             dbg_timer_count, dbg_irq_level, 8'd0};

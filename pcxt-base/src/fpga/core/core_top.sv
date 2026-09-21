@@ -1076,6 +1076,7 @@ module core_top (
     wire        dbg_gdc_disp_on;
     wire [23:0] dbg_gdc_cur;
     wire  [7:0] dbg_gdc_csrcnt;
+    wire [31:0] dbg_gdc_csrtrace;
 
     // INTR into the CPU. BASIC clears the screen, draws the function key line
     // and stops; an interrupt that never arrives is the shape that produces
@@ -1259,6 +1260,7 @@ module core_top (
         .dbg_gdc_disp_on            (dbg_gdc_disp_on),
         .dbg_gdc_cur                (dbg_gdc_cur),
         .dbg_gdc_csrcnt             (dbg_gdc_csrcnt),
+        .dbg_gdc_csrtrace           (dbg_gdc_csrtrace),
         .pc98_tvfill_view           (pc98_tvfill_view),
         .pc98_rowbuf_freq_count     (pc98_rowbuf_freq_count),
         .pc98_rowbuf_fvalid_count   (pc98_rowbuf_fvalid_count),
@@ -2681,6 +2683,7 @@ module core_top (
         .dbg_gdc_disp_on                    (dbg_gdc_disp_on),
         .dbg_gdc_cur                        (dbg_gdc_cur),
         .dbg_gdc_csrcnt                     (dbg_gdc_csrcnt),
+        .dbg_gdc_csrtrace                   (dbg_gdc_csrtrace),
         .pc98_tvfill_view                   (pc98_tvfill_view),
         .pc98_rowbuf_freq_count             (pc98_rowbuf_freq_count),
         .pc98_rowbuf_fvalid_count           (pc98_rowbuf_fvalid_count),

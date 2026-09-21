@@ -96,6 +96,13 @@ module pc98_gdc (
     // reads it, because "the registers look right but nothing draws" and
     // "the BIOS never sent a form at all" are different faults.
     output reg  [7:0]  csr_wr_count,
+    // What actually followed the LAST CSRFORM command: the first three
+    // parameter bytes in order, and how many bytes arrived before another
+    // command cut the run short (saturating at 15). The BIOS writes CSRFORM
+    // as one byte (its cursor ON/OFF) and as three (the table form); which
+    // of those the metal actually sent, and whether the bytes landed where
+    // the capture puts them, is the question the panel's CT word answers.
+    output wire [31:0] csr_trace,
     output wire [1:0]  zoom_disp,
 
     // ---- what the post monitor needs ---------------------------------------
@@ -121,6 +128,12 @@ module pc98_gdc (
     localparam int P_LAST    = 55;
 
     reg [7:0] para [0:P_LAST];
+
+    // The CSRFORM trace, as csr_trace reports it.
+    reg [7:0] csr_tr0, csr_tr1, csr_tr2;
+    reg [3:0] csr_n;
+    reg       csr_live;
+    assign csr_trace = {4'b0000, csr_n, csr_tr0, csr_tr1, csr_tr2};
 
     // Where the next parameter goes, and how many are still expected. A new
     // command cuts a run short, which is the point of np2kai's bit-8 tag.
@@ -177,6 +190,8 @@ module pc98_gdc (
             unk_cmd   <= 8'h00;
             unk_count <= 8'h00;
             csr_wr_count <= 8'h00;
+            csr_tr0 <= 8'h00; csr_tr1 <= 8'h00; csr_tr2 <= 8'h00;
+            csr_n <= 4'd0; csr_live <= 1'b0;
             for (i = 0; i <= P_LAST; i = i + 1) para[i] <= 8'h00;
         end else begin
             if (cmd_wr) begin
@@ -184,6 +199,10 @@ module pc98_gdc (
                 dn     = decode(data_in);
                 p_dst  <= dn[10:5];
                 p_left <= dn[4:0];
+
+                // The trace follows only the CSRFORM command.
+                csr_live <= (data_in == 8'h4B);
+                csr_n    <= 4'd0;
 
                 // CSRW/CSRFORM arrivals, saturating, for the panel.
                 if ((data_in == 8'h49 || data_in == 8'h4B)
@@ -211,6 +230,14 @@ module pc98_gdc (
                     para[p_dst] <= data_in;
                     p_dst       <= p_dst + 6'd1;
                     p_left      <= p_left - 5'd1;
+                end
+                // The trace records every 0x60 byte while the last command
+                // was CSRFORM, landed in the capture or not.
+                if (csr_live) begin
+                    if (csr_n == 4'd0)      csr_tr0 <= data_in;
+                    else if (csr_n == 4'd1) csr_tr1 <= data_in;
+                    else if (csr_n == 4'd2) csr_tr2 <= data_in;
+                    if (csr_n != 4'hF) csr_n <= csr_n + 4'd1;
                 end
             end
         end

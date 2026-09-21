@@ -224,6 +224,10 @@ module PERIPHERALS #(
     // having sent the form or the enable.
     output  logic   [23:0]  dbg_gdc_cur,
     output  logic    [7:0]  dbg_gdc_csrcnt,
+    // The byte trace after the last CSRFORM: {count, three bytes}. Whether
+    // the metal's driver sends the one-byte ON or the three-byte table form
+    // -- and where the bytes actually land -- is what the panel's CT reads.
+    output  logic   [31:0]  dbg_gdc_csrtrace,
     output  logic   [63:0]  pc98_tvfill_view,
     // The kanji fetch path's activity: f_req pulses and f_valid beats. With
     // ANK out of the BRAM these only move for two-byte cells, so on a screen
@@ -1922,6 +1926,7 @@ end endgenerate
     wire [4:0]  gdc_m_cur_bot,   gdc_s_cur_bot;
     wire [5:0]  gdc_m_cur_rate,  gdc_s_cur_rate;
     wire [7:0]  gdc_m_csrcnt;
+    wire [31:0] gdc_m_csrtrace;
     wire [1:0]  gdc_m_zoom,      gdc_s_zoom;
 
     assign dbg_gdc_sad       = gdc_m_sad[0];
@@ -1935,6 +1940,7 @@ end endgenerate
                                 gdc_m_cur_top[3:0],   // t
                                 gdc_m_cur_bot[3:0]};  // b
     assign dbg_gdc_csrcnt    = gdc_m_csrcnt;
+    assign dbg_gdc_csrtrace  = gdc_m_csrtrace;
 
     pc98_gdc u_gdc_m (
         .clk(clock), .reset(reset),
@@ -1948,7 +1954,7 @@ end endgenerate
         .cursor_en(gdc_m_cur_en), .cursor_blink_en(gdc_m_cur_bl),
         .cursor_top(gdc_m_cur_top), .cursor_bottom(gdc_m_cur_bot),
         .cursor_rate(gdc_m_cur_rate), .zoom_disp(gdc_m_zoom),
-        .csr_wr_count(gdc_m_csrcnt),
+        .csr_wr_count(gdc_m_csrcnt), .csr_trace(gdc_m_csrtrace),
         .unk_cmd(gdc_m_unk_cmd), .unk_count(gdc_m_unk_count)
     );
 
