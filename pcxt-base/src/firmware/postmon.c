@@ -616,19 +616,16 @@ void post_mon_tick(void)
             // bus actually returned. Against the file, this is the fetch
             // path's honesty test.
             uint32_t f0 = *POST_FR0;
-        // CS: the cursor, as the master GDC holds it -- count, enable, cell,
-        // top, bottom as c E aaa t b. At the N88 Ok prompt: c 00 = the BIOS
-        // never sent a cursor command (port decode or a path that never
-        // ran); E 0 = the [0x53B]|0x80 enable never landed; t/b 0 with E 1 =
-        // the three-byte table CSRFORM never ran and the block is a
-        // hairline; all sane = the render path.
+        // CS: the cursor, as the master GDC holds it, packed ccEaaatb --
+        // CSRW/CSRFORM count, enable, cell address, slice top, slice bottom.
+        // cc 00 = the BIOS never sent a cursor command; E 0 = the
+        // [0x53B]|0x80 enable never landed; t/b 0 with E 1 = the table
+        // CSRFORM never ran and the cursor is a hairline; all sane = the
+        // render path. One hex call: the panel row and the ROM budget both
+        // wanted it that way.
         uint32_t cu = *POST_CUR;
         osd_draw_string(&fb, 200, 32, "CS", OSD_LABEL);
-        hex(216, 32, (cu >> 24) & 0xFFu, 2);
-        hex(232, 32, (cu >> 23) & 1u, 1);
-        hex(240, 32, cu & 0xFFFu, 3);
-        hex(264, 32, (cu >> 17) & 0xFu, 1);
-        hex(272, 32, (cu >> 12) & 0xFu, 1);
+        hex(216, 32, cu, 8);
             osd_draw_string(&fb, 4 + 23 * 8, 42, "F", OSD_LABEL);
             hex(4 + 24 * 8, 42, f0 & 0xFFFFFu, 5);
             hex(4 + 30 * 8, 42, (f0 >> 24) & 0xFFu, 2);
