@@ -263,26 +263,35 @@ module pc98_gvram_seq (
             mem_rd    <= 1'b0;
             mem_wr    <= 1'b0;
             mem_page1 <= 1'b0;
-        end else if (!expand) begin
-            // Pass-through: the guest's own access, unchanged.
-            mem_addr  <= cpu_addr;
-            mem_wdata <= cpu_wdata;
-            mem_rd    <= cpu_rd;
-            mem_wr    <= cpu_wr;
-            mem_page1 <= 1'b0;
-            // ONLY WHILE A READ IS LIVE. Assigning this unconditionally
-            // clobbered a TCR answer the moment the guest's strobes dropped
-            // and `expand` went false -- the answer has to survive until the
-            // guest has taken it, and the guest takes it while its own read
-            // command is still up.
-            if (cpu_rd) rdata_pass <= mem_rdata;
-            st        <= S_IDLE;
-            gp        <= 2'd0;
         end else begin
-            // The EGC's load strobes are one cycle each: cleared by default,
-            // set only by the cycle that has a byte in hand.
+            // The EGC's load strobes are one cycle each: cleared by default
+            // for the WHOLE non-reset path, set only by the cycle that has a
+            // byte in hand. They used to be cleared inside the expand arm
+            // alone, and the pass-through arm -- which is where the cycle
+            // after the LAST plane of an access lands, since the guest drops
+            // its strobes as soon as cpu_ready rises -- left the pulse high
+            // forever. The engine then kept latching mem_rdata with the
+            // stale plane number, which is how the blit's plane E came out
+            // holding plane B's byte.
             egc_pat_ld <= 1'b0;
             egc_src_ld <= 1'b0;
+
+            if (!expand) begin
+                // Pass-through: the guest's own access, unchanged.
+                mem_addr  <= cpu_addr;
+                mem_wdata <= cpu_wdata;
+                mem_rd    <= cpu_rd;
+                mem_wr    <= cpu_wr;
+                mem_page1 <= 1'b0;
+                // ONLY WHILE A READ IS LIVE. Assigning this unconditionally
+                // clobbered a TCR answer the moment the guest's strobes dropped
+                // and `expand` went false -- the answer has to survive until the
+                // guest has taken it, and the guest takes it while its own read
+                // command is still up.
+                if (cpu_rd) rdata_pass <= mem_rdata;
+                st        <= S_IDLE;
+                gp        <= 2'd0;
+            end else begin
             case (st)
               S_IDLE: begin
                 mem_rd <= 1'b0;
@@ -378,6 +387,7 @@ module pc98_gvram_seq (
 
               default: st <= S_IDLE;
             endcase
+            end
         end
     end
 

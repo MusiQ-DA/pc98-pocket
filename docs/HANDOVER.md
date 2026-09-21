@@ -775,3 +775,26 @@ attention 割込み** (FDCRLT_AI、FDC_INT_DELAY=6×100ms 後、条件なし)。
 修正: bit3 立上りで arm、~600ms 後に自スレーブ線をパルス (0x94→bit3/INT13h、
 0xCC→bit2/INT12h)、XTMASK 条件は廃止。tb_pc98_fdc_glue のモータテストを新仕様に
 書き換え PASS (タイムアウトも 250ms→3.2s に拡大)。
+
+### §10.8 EGC 実装 (WIP → plane E バグ修正済み, 2026-09-22)
+
+18b1b0d で EGC 一式 (レジスタ 0x4A0-0x4AF、raster op エンジン、fg/bg 色展開、
+パターンレジスタ、ソースラッチ、アクセスページ 0xA6 のページ1バンキング) と
+pc98_gvram_display (グラフィック表示フェッチの分離) が WIP で入り、
+**tb_pc98_egc の blit plane E だけが赤** (11 が出る、88 が正) の状態だった。
+
+**plane E の原因 (seq のストローブ残留)**: `egc_src_ld`/`egc_pat_ld` の
+1 サイクルパルスのクリアが expand 分岐の中にしか無く、アクセス最終プランの
+次サイクル (ゲストがストローブを下げて pass-through 分岐に入るサイクル) では
+クリアが走らない。パルスが立ちっぱなしになり、**古いプラン番号のまま
+mem_rdata を延々と再ラッチ**して src_q[3] を次のアクセスのデータで上書き。
+修正: クリアを非リセット側の共通位置 (分岐の外) に移し、両分岐で毎サイクル
+クリア。tb_pc98_egc 全ケース PASS。
+
+CI に tb_pc98_egc を追加し、tb_pc98_gvram_seq のビルド行に pc98_egc.sv を明示。
+
+残り (docs/SOFTCORE_RTL_SPLIT.md):
+- sft/leng のシフトパイプライン (非アライン blit)。今はアライン済み
+  = ソースラッチが最後のリードのバイトを保持する形のみ
+- pc98_gvram_display 側: slave GDC の SAD/PITCH 未消費、パレットは固定 16 色、
+  E プレーンは常に E0000 (アナログ前提)

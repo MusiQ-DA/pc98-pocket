@@ -350,9 +350,18 @@ jobs:
           S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_gvram_seq \
             -Isim -I$S sim/tb_pc98_gvram_seq.sv $S/pc98_gvram_seq.sv \
-            -o gs --Mdir obj_gseq
+            $S/pc98_egc.sv -o gs --Mdir obj_gseq
           ./obj_gseq/gs | tee gseq.log
           grep -q "PASS tb_pc98_gvram_seq" gseq.log
+
+      - name: the EGC's colour, raster ops and access page match np2kai
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_egc \
+            -Isim -I$S sim/tb_pc98_egc.sv $S/pc98_gvram_seq.sv \
+            $S/pc98_egc.sv -o eg --Mdir obj_egc
+          ./obj_egc/eg | tee egc.log
+          grep -q "PASS tb_pc98_egc" egc.log
 
       - name: CE generator makes the frequencies the speed menu names
         run: |

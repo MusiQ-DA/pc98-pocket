@@ -84,7 +84,6 @@ module tb_pc98_egc;
     int         LAT = 2;
     int         lat_n = 0;
     logic       busy = 1'b0;
-    int         verbose = 0;
 
     function automatic int banked(input [19:0] a);
         // What RAM.sv turns (mem_addr, mem_page1) into.
@@ -97,15 +96,8 @@ module tb_pc98_egc;
             if (lat_n == LAT) begin
                 busy      <= 1'b0;
                 completed <= 1'b1;
-                if (mem_wr) begin
-                    if (verbose) $display("  ACC wr a=%06x d=%02x p1=%b",
-                                          banked(mem_addr), mem_wdata, mem_page1);
-                    store[banked(mem_addr)] <= mem_wdata;
-                end else begin
-                    mem_rdata <= store[banked(mem_addr)];
-                    if (verbose) $display("  ACC rd a=%06x -> %02x",
-                                          banked(mem_addr), store[banked(mem_addr)]);
-                end
+                if (mem_wr) store[banked(mem_addr)] <= mem_wdata;
+                else        mem_rdata <= store[banked(mem_addr)];
             end
             lat_n <= lat_n + 1;
         end else if (mem_rd | mem_wr) begin
@@ -147,12 +139,6 @@ module tb_pc98_egc;
         p0 = (p == 2'd3) ? (20'hE0000 + a[14:0])
                          : (20'hA8000 + (20'(p) << 15) + a[14:0]);
     endfunction
-
-    always @(posedge clk)
-        if (verbose && dut.st == 3'd3 && dut.cur_live)
-            $display("  SWR gp=%b wr_byte=%02x op_data=%02x fgbg_col=%04x ope_sel=%b opext=%b srcsel=%04x",
-                     dut.gp, dut.wr_byte, dut.egc_op_data, dut.u_egc.fgbg_col,
-                     dut.u_egc.ope_r[12:11], dut.u_egc.op_ext, dut.u_egc.src_q[dut.gp]);
 
     int errors = 0;
     task automatic want(input string what, input int got, input int exp);
@@ -209,14 +195,7 @@ module tb_pc98_egc;
         egc_set(4'h2, 8'h00);            // fgbg low
         egc_set(4'h5, 8'h10);            // ope high: 0x1000 (0x4A5)
         egc_set(4'h4, 8'h00);            // ope low
-        $display("DBG fg_color=%b ope=%b fgbg=%b fgc0=%b fgc2=%b opsel=%b",
-                 dut.u_egc.fg_color, dut.u_egc.ope_r, dut.u_egc.fgbg_r,
-                 dut.u_egc.fgc[0], dut.u_egc.fgc[2], dut.u_egc.ope_r[12:11]);
-        verbose = 1;
-        $display("DBG fgbg_col=%b pat_b=%b op_data(plane0/ext0)=%b",
-                 dut.u_egc.fgbg_col, dut.u_egc.pat_b, dut.u_egc.op_data);
         g_wr(20'hA8080, 8'h77);
-        verbose = 0;
         want("fg fill: plane B FF", store[p0(20'hA8080, 2'd0)], 8'hFF);
         want("fg fill: plane R 00", store[p0(20'hA8080, 2'd1)], 8'h00);
         want("fg fill: plane G FF", store[p0(20'hA8080, 2'd2)], 8'hFF);
@@ -230,22 +209,17 @@ module tb_pc98_egc;
         store[p0(20'hA8100, 2'd2)] = 8'h44;
         store[p0(20'hA8100, 2'd3)] = 8'h88;
         g_rd(20'hA8100, rdb);            // the read also latches
-        $display("DBG after read: src_q = %02x %02x %02x %02x",
-                 dut.u_egc.src_q[0], dut.u_egc.src_q[1],
-                 dut.u_egc.src_q[2], dut.u_egc.src_q[3]);
         egc_set(4'h5, 8'h08);            // ope high: 0x0800
         egc_set(4'h4, 8'hF0);            // ope code F0 = src
-        verbose = 1;
         g_wr(20'hA8180, 8'h00);
-        verbose = 0;
         want("blit: plane B",  store[p0(20'hA8180, 2'd0)], 8'h11);
         want("blit: plane R",  store[p0(20'hA8180, 2'd1)], 8'h22);
         want("blit: plane G",  store[p0(20'hA8180, 2'd2)], 8'h44);
         want("blit: plane E",  store[p0(20'hA8180, 2'd3)], 8'h88);
 
         // ---- 6. the read's answer is fgbg 9:8's plane ------------------
-        // fgbg bits 9:8 = 0b10: plane R answers.
-        egc_set(4'h3, 8'h01);            // fgbf bits 9:8 = 01 -> plane R
+        // fgbg bits 9:8 = 0b01: plane R answers.
+        egc_set(4'h3, 8'h01);            // fgbg bits 9:8 = 01 -> plane R
         g_rd(20'hA8100, rdb);
         want("read answers plane R", rdb, 8'h22);
         egc_set(4'h3, 8'h00);
@@ -259,16 +233,18 @@ module tb_pc98_egc;
         g_wr(20'hA8200, 8'h5A);          // value written; patreg takes C3..
         want("pat load write: plane B value", store[p0(20'hA8200, 2'd0)], 8'h5A);
         // Now a raster write through the pattern: ope 0x0800, code 0x88 is
-        // the general engine (pat & src & dst | pat & ~src & ~dst) -- with
-        // src = the last read's plane byte and dst the same fresh byte the
-        // result follows the pattern's bits where src and dst agree.
+        // the general engine with minterms 7 and 3 set -- np2kai's table
+        // order, P.S.D | P.~S.D, which is P.~D... no: both terms need D, so
+        // it is P AND D with the source irrelevant. The constants here:
+        // patreg B holds C3 (loaded above), destination 5A (this test's
+        // value), and the source latch would matter only on other codes.
+        //   result = (C3 & 11 & 5A) | (C3 & EE & 5A) = (C3 & 5A) = 42
         egc_set(4'h5, 8'h08); egc_set(4'h4, 8'h88);
-        g_wr(20'hA8201, 8'h00);
-        // (patreg B = C3 was loaded from offset 0x200's plane B; the blit in
-        // test 5 left the source latch holding 11 at the last read -- the
-        // exact minterm arithmetic is np2kai's ope_xx with those inputs.)
-        $display("     pat-raster plane B = %02x (informational)",
-                 store[p0(20'hA8201, 2'd0)]);
+        g_wr(20'hA8200, 8'h00);
+        want("pat-raster B = C3 & (S|~S) & 5A", store[p0(20'hA8200, 2'd0)], 8'h42);
+        want("pat-raster R (no pattern)",        store[p0(20'hA8200, 2'd1)], 8'h00);
+        want("pat-raster G (no pattern)",        store[p0(20'hA8200, 2'd2)], 8'h00);
+        want("pat-raster E (no pattern)",        store[p0(20'hA8200, 2'd3)], 8'h00);
 
         // ---- 8. the access page ---------------------------------------
         egc_set(4'h5, 8'h00); egc_set(4'h4, 8'h00);   // ope 0x0000
