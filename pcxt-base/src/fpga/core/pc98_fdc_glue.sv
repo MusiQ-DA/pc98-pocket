@@ -213,90 +213,79 @@ module pc98_fdc_glue (
 
     // ---- the motor interrupts the drive probes actually wait for -------
     //
-    // The BIOS's 2DD init ends with (bios.rom FF6BF..FF6C5)
-    //
-    //     mov al,09h / out 0CCh      motor start: bit 0 rises
-    //     mov al,0Ch / out 0CCh      XTMASK: bit 2 set
-    //     ... then a bounded wait whose flag only the FDC's
-    //         interrupt handler ever sets
-    //
-    // and the handlers' tails write the SAME pair to the OTHER drive's
-    // port without switching the window first -- the 2HD handler ends with
-    // 0D/0C to 0xCC (FFB9F..FFBA5), the 2DD handler with 0D/0C to 0x94
-    // (FFAD6..FFADC). So the metal has TWO motor circuits, one behind each
-    // drive-control port, both outside the FDC window guard: 0x94 is the
-    // 2HD drive adapter's control and 0xCC the 2DD one (MAME models the
-    // pair as fdc_2hd_2dd_ctrl / fdc_trigger), each pulsing ITS OWN slave
-    // line -- 0x94 -> slave bit 3, INT 13h; 0xCC -> slave bit 2, INT 12h.
-    //
-    // The old stub had only the 0xCC half and that was enough for its
-    // boots; the real controller took the port over and lost both. Gating
-    // the arm on group_live (np2's fdc_o94 guard) was faithful and wrong:
-    // np2 drops the write, the timer never arms (measured: G 03, MA 00),
-    // and the BIOS parks forever.
-    //
-    // Per timer: bit 0's RISING edge on ANY write to its port arms ~100 ms,
-    // and expiry pulses its line for one clock when the latched bit 2
-    // (XTMASK) is set. A pulse while the line is still masked merely parks
-    // in the slave's IRR and delivers at the unmask, which is exactly what
-    // the handler's write-then-unmask order needs.
+    // THE TRIGGER IS BIT 3 (0x08), NOT BIT 0. np2kai's fdc_o94 (io/fdc.c
+    // 1104-1116): when the register's 0x08 bit RISES (with the 2HD window
+    // selected via 0xBE's bit 2), every READY drive gets an "attention"
+    // interrupt after FDC_INT_DELAY (6 x 100 ms in np2's event tick) on
+    // the FDC's line -- unconditionally, no XTMASK gate. The BIOS's own
+    // boot sequence agrees (out 0x94 sites in bios.rom): FF56C writes 0x08,
+    // FF638 writes 0x18 -- bit 3 set, BIT 0 NEVER -- and the metal showed
+    // exactly that (n94 saturated, the last control byte 0x18, MA 00: the
+    // bit-0 arm this used to watch could not fire). The 2DD side's
+    // FF6BF pair (0x09 then 0x0C to 0xCC) carries bit 3 as well, and the
+    // handlers' tails (0x0D/0x0C) keep the chain fed. Each side arms on its
+    // own port's bit-3 rising edge and pulses its slave line ~600 ms later:
+    // 0x94 -> slave bit 3, INT 13h; the 2DD-window 0xCC -> slave bit 2,
+    // INT 12h (MAME's fdc_2hd_2dd_ctrl / fdc_trigger pair). A pulse while
+    // the line is masked merely parks in the slave's IRR and delivers at
+    // the unmask, which is what the handler's write-then-unmask order needs.
     logic        motor_armed_2hd,  motor_armed_2dd;
-    logic [22:0] motor_timer_2hd,  motor_timer_2dd;
+    logic [24:0] motor_timer_2hd,  motor_timer_2dd;
     logic        motor_pulse_2hd,  motor_pulse_2dd;
     logic [7:0]  motor_arms        = 8'd0;   // both timers, summed
     logic [7:0]  motor_pulses      = 8'd0;
-    logic        ctrl0_q_2hd,      ctrl0_q_2dd;
+    logic        ctrl3_q_2hd,      ctrl3_q_2dd;
     logic [7:0]  ctrlcc_q_2hd,     ctrlcc_q_2dd;
 
     always_ff @(posedge clk, posedge rst) begin
         if (rst) begin
             motor_armed_2hd <= 1'b0;  motor_armed_2dd <= 1'b0;
-            motor_timer_2hd <= 23'd0; motor_timer_2dd <= 23'd0;
+            motor_timer_2hd <= 25'd0; motor_timer_2dd <= 25'd0;
             motor_pulse_2hd <= 1'b0;  motor_pulse_2dd <= 1'b0;
-            ctrl0_q_2hd     <= 1'b0;  ctrl0_q_2dd     <= 1'b0;
+            ctrl3_q_2hd     <= 1'b0;  ctrl3_q_2dd     <= 1'b0;
             ctrlcc_q_2hd    <= 8'h00; ctrlcc_q_2dd    <= 8'h00;
             motor_arms      <= 8'd0;  motor_pulses    <= 8'd0;
         end
         else begin
-            // 0x94 -- the 2HD drive control, window ignored.
+            // 0x94 -- the 2HD drive adapter's control.
             if (wr_stb && sel_ctrl && ~port_2dd) begin
-                if (wr_data[0] && !ctrl0_q_2hd) begin
+                if (wr_data[3] && !ctrl3_q_2hd) begin
                     motor_armed_2hd <= 1'b1;
-                    motor_timer_2hd <= 23'd0;
+                    motor_timer_2hd <= 25'd0;
                     if (motor_arms != 8'hFF) motor_arms <= motor_arms + 8'd1;
                 end
-                ctrl0_q_2hd  <= wr_data[0];
+                ctrl3_q_2hd  <= wr_data[3];
                 ctrlcc_q_2hd <= wr_data;
             end
-            // 0xCC -- the 2DD drive control, window ignored.
+            // 0xCC -- the 2DD drive adapter's control, window ignored.
             if (wr_stb && sel_ctrl && port_2dd) begin
-                if (wr_data[0] && !ctrl0_q_2dd) begin
+                if (wr_data[3] && !ctrl3_q_2dd) begin
                     motor_armed_2dd <= 1'b1;
-                    motor_timer_2dd <= 23'd0;
+                    motor_timer_2dd <= 25'd0;
                     if (motor_arms != 8'hFF) motor_arms <= motor_arms + 8'd1;
                 end
-                ctrl0_q_2dd  <= wr_data[0];
+                ctrl3_q_2dd  <= wr_data[3];
                 ctrlcc_q_2dd <= wr_data;
             end
             if (motor_armed_2hd) begin
-                if (motor_timer_2hd == 23'd4_295_000) begin   // ~100 ms
+                if (motor_timer_2hd == 25'd25_772_000) begin  // ~600 ms
                     motor_armed_2hd <= 1'b0;
-                    motor_pulse_2hd <= ctrlcc_q_2hd[2];
+                    motor_pulse_2hd <= 1'b1;
                     if (motor_pulses != 8'hFF) motor_pulses <= motor_pulses + 8'd1;
                 end
                 else
-                    motor_timer_2hd <= motor_timer_2hd + 23'd1;
+                    motor_timer_2hd <= motor_timer_2hd + 25'd1;
             end
             else if (motor_pulse_2hd)
                 motor_pulse_2hd <= 1'b0;
             if (motor_armed_2dd) begin
-                if (motor_timer_2dd == 23'd4_295_000) begin   // ~100 ms
+                if (motor_timer_2dd == 25'd25_772_000) begin  // ~600 ms
                     motor_armed_2dd <= 1'b0;
-                    motor_pulse_2dd <= ctrlcc_q_2dd[2];
+                    motor_pulse_2dd <= 1'b1;
                     if (motor_pulses != 8'hFF) motor_pulses <= motor_pulses + 8'd1;
                 end
                 else
-                    motor_timer_2dd <= motor_timer_2dd + 23'd1;
+                    motor_timer_2dd <= motor_timer_2dd + 25'd1;
             end
             else if (motor_pulse_2dd)
                 motor_pulse_2dd <= 1'b0;

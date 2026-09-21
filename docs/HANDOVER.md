@@ -757,3 +757,21 @@ EAD の検算も完了 (心配不要の確認):
 - bit1 は CRT 初期化 (F4BF2) が [0x42E]≥0x48 (80桁, [0:5C0] bit2=0 → 0x50) で
   **セット** → 80 桁ブートは常に k=2 → **EAD = 80·row + col (セル番号そのもの)**
 - np2kai maketext の step-1 と一致。RTL の drawn_cell 比較は正しい
+
+### §10.7 FDM が ROM BASIC に落ちる原因(確定・修正済み)
+
+実機 `n94=FF / MA=00 / nD=FF / r2=00 / V13=FD80:22F7` の読み:
+- BIOS は 0x94 を大量に書き、6 バイトのコマンド (SPECIFY+RECAL+SENSE_INT) まで出た
+- しかし**モータタイマが一度も arm せず** (MA=00)、RECAL 完了割込みも出ず、
+  MSR ポールが飽和 (nD=FF) → タイムアウト → ROM BASIC
+
+原因: glue のモータ回路は **bit0 の立上り + XTMASK ゲート**で arm する設計だったが、
+np2kai fdc_o94 (io/fdc.c:1104-1116) の実際は **bit3 (0x08) の立上りで ready
+attention 割込み** (FDCRLT_AI、FDC_INT_DELAY=6×100ms 後、条件なし)。BIOS 自身の
+0x94 値 (bios.rom 逆アセンブル) がまさに証拠: FF56C=0x08、FF638=0x18 (**bit0 は
+一度も立たない**)、2DD 側 FF6BF の 09/0C、ハンドラ末尾の 0D/0C — 全部 bit3 搭載。
+実機の LB=0x18 (最終 0x94 値) も一致。
+
+修正: bit3 立上りで arm、~600ms 後に自スレーブ線をパルス (0x94→bit3/INT13h、
+0xCC→bit2/INT12h)、XTMASK 条件は廃止。tb_pc98_fdc_glue のモータテストを新仕様に
+書き換え PASS (タイムアウトも 250ms→3.2s に拡大)。

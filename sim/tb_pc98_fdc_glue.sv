@@ -762,14 +762,19 @@ module tb_pc98_fdc_glue;
         end
 
         // ================================================================
-        // The motor interrupt. The BIOS's 2DD init ends with OUT 0CCh,09 /
-        // OUT 0CCh,0C (FF6BF..FF6C5) and its 2HD HANDLER's tail writes the
-        // same pair as 0D/0C without switching the window (FFB9F..FFBA5) --
-        // so the timer arms on ANY 0xCC write, window be damned, and the
-        // pulse lands on the 2DD line, slave bit 2, exactly where MAME's
-        // fdc_trigger and the old (boot-proven) stub put it.
+        // The motor interrupt. np2kai's fdc_o94 (io/fdc.c:1104-1116) arms a
+        // delayed "attention" interrupt when the control byte's BIT 3 rises
+        // -- not bit 0, and with no XTMASK gate. The BIOS's boot writes
+        // 0x08 then 0x18 to 0x94 (FF56C, FF638 -- bit 0 never set), its 2DD
+        // init writes 09/0C to 0xCC (FF6BF), and the handlers' tails write
+        // 0D/0C to the other port; every one of those carries bit 3. The
+        // timer arms on ANY write to its port -- window be damned -- and
+        // the pulse lands on its own line: 0xCC -> 2DD, slave bit 2, INT
+        // 12h; 0x94 -> 2HD, slave bit 3, INT 13h (MAME's fdc_trigger /
+        // fdc_2hd_2dd_ctrl pair).
         begin
             $display("--- the motor interrupt ---");
+            // ~600 ms + margin, np2's FDC_INT_DELAY of 6 x 100 ms.
 
             // 2DD window live: chgreg bit0 clear.
             window(1'b1);
@@ -777,25 +782,24 @@ module tb_pc98_fdc_glue;
             #1;
             want1("2DD window is live", group_live, 1'b1);
 
-            // Arm-then-gate, the BIOS's own pair.
-            wr(2, 8'h08);                       // bit0 stays down: no arm
-            wr(2, 8'h09);                       // bit0 rises: arm
-            wr(2, 8'h0C);                       // bit2 up: XTMASK
+            // The BIOS's own pair: bit3 rises on the 09, XTMASK is not a gate.
+            wr(2, 8'h00);                       // bit3 stays down: no arm
+            wr(2, 8'h09);                       // bit3 rises: arm
+            wr(2, 8'h0C);                       // (bit3 stays up; no re-arm)
             motor_clr = 1'b1; @(negedge clk); motor_clr = 1'b0;
-            repeat (4_295_010) @(posedge clk);
+            repeat (25_772_010) @(posedge clk);
             #1;
             want("2DD motor pulse clocks", motor_hi_2dd[7:0], 8'd1);
             want("2HD line stayed quiet", motor_hi_2hd[7:0], 8'd0);
 
-            // No XTMASK, no interrupt.
-            wr(2, 8'h08);
-            wr(2, 8'h09);
-            wr(2, 8'h08);                       // bit2 down
+            // No rising edge, no arm: bit3 already up does not re-fire.
+            wr(2, 8'h08);                       // bit3 up... but it already
+            wr(2, 8'h09);                       // ...was: no edge, no arm
             motor_clr = 1'b1; @(negedge clk); motor_clr = 1'b0;
-            repeat (4_295_010) @(posedge clk);
+            repeat (25_772_010) @(posedge clk);
             #1;
-            want("no XTMASK, no pulse on 2DD", motor_hi_2dd[7:0], 8'd0);
-            want("no XTMASK, no pulse on 2HD", motor_hi_2hd[7:0], 8'd0);
+            want("no bit3 edge, no pulse on 2DD", motor_hi_2dd[7:0], 8'd0);
+            want("no bit3 edge, no pulse on 2HD", motor_hi_2hd[7:0], 8'd0);
 
             // THE CASE THE HARDWARE MEASURED: the 2HD window is live and
             // the 2HD handler's tail still writes 0D/0C to 0xCC. The timer
@@ -808,10 +812,11 @@ module tb_pc98_fdc_glue;
             window(1'b1);                       // write 0xCC: a dead window
             #1;
             want1("0xCC is the dead window now", group_live, 1'b0);
-            wr(2, 8'h0D);                       // bit0 rises on a DEAD port
+            wr(2, 8'h00);                       // drop bit3 first...
+            wr(2, 8'h0D);                       // ...so it rises: arm
             wr(2, 8'h0C);
             motor_clr = 1'b1; @(negedge clk); motor_clr = 1'b0;
-            repeat (4_295_010) @(posedge clk);
+            repeat (25_772_010) @(posedge clk);
             #1;
             want("dead-window 0xCC still armed", motor_hi_2dd[7:0], 8'd1);
             want("and pulsed the 2DD line", motor_hi_2dd[7:0], 8'd1);
@@ -825,10 +830,11 @@ module tb_pc98_fdc_glue;
             window(1'b0);                       // ...so 0x94 is dead
             #1;
             want1("0x94 is the dead window now", group_live, 1'b0);
-            wr(2, 8'h0D);                       // bit0 rises on a DEAD port
+            wr(2, 8'h00);                       // drop bit3...
+            wr(2, 8'h0D);                       // ...rise: arm
             wr(2, 8'h0C);
             motor_clr = 1'b1; @(negedge clk); motor_clr = 1'b0;
-            repeat (4_295_010) @(posedge clk);
+            repeat (25_772_010) @(posedge clk);
             #1;
             want("dead-window 0x94 armed too", motor_hi_2hd[7:0], 8'd1);
             want("and pulsed the 2HD line", motor_hi_2hd[7:0], 8'd1);
@@ -1054,7 +1060,9 @@ module tb_pc98_fdc_glue;
         // The motor phases each wait out a real ~100 ms timer (4 x 42.95 ms
         // of simulation at the bench's 10 ns clock), so the watchdog has to
         // clear them with room to spare.
-        #250000000;
+        // The motor tests wait np2's FDC_INT_DELAY (~600 ms) four times
+        // over, so the watchdog sits past 3 s of simulated time.
+        #3200000000;
         $display("FAILED tb_pc98_fdc_glue: timeout");
         $finish;
     end
