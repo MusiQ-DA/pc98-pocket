@@ -144,6 +144,14 @@ if [ ! -f "$ART/ap_core.rbf" ]; then
     say "fetching artifact"
     python3 scripts/tools/getartifact.py "$RUN" "$ART" --allow-failed >/dev/null || {
         say "artifact download failed"; exit 1; }
+    # The archive's layout follows upload-artifact's shortest-common-prefix
+    # rule: while only output_files/*.rbf was uploaded the rbf landed at the
+    # root, but the sta_cpu_*.txt additions (bf946d5) raised the prefix to the
+    # fpga/ directory and pushed it under output_files/. Hoist it back so the
+    # packaging below and package_pc98.sh keep their root-level contract.
+    if [ ! -f "$ART/ap_core.rbf" ] && [ -f "$ART/output_files/ap_core.rbf" ]; then
+        cp "$ART/output_files/ap_core.rbf" "$ART/ap_core.rbf"
+    fi
 fi
 say "have $(stat -f%z "$ART/ap_core.rbf") bytes of bitstream"
 

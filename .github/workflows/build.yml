@@ -425,11 +425,17 @@ jobs:
     # So compare a fingerprint of the SOURCES instead. make writes
     # firmware.srchash next to firmware.vh; if it still matches the sources in
     # the tree, the committed image came from these sources. Toolchain
-    # independent, and it needs no compiler, so the job takes seconds.
+    # independent for the hash itself, but srchash-verify gates on
+    # nodiv-verify, which links the image (ld.lld) and disassembles it
+    # (llvm-objdump) -- the runner's clang comes without lld, so install the
+    # linker and the LLVM binutils or the job dies at the link.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install LLVM linker and binutils
+        run: sudo apt-get update && sudo apt-get install -y lld llvm
 
       - name: firmware.vh was built from the committed sources
         run: make -C pcxt-base/src/firmware srchash-verify

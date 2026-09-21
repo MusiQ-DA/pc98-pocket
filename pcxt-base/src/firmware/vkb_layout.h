@@ -26,22 +26,12 @@ typedef struct {
 // real keyboard sends -- see the assignment table in vkb_layout.c. The Set-2 ->
 // PC-98 translator downstream must decode those codes the same way.
 
-// PC-98-only keys carry bare Set-2 codes no real keyboard sends; the layout
-// and the chord logic (vkb_ui.c) share these names.
-#ifdef MACHINE_PC98
-#define PC98K_STOP   0x08 // PC-98 matrix 0x60
-#define PC98K_KANA   0x0F // PC-98 matrix 0x72
-#define PC98K_GRPH   0x10 // PC-98 matrix 0x73
-#define PC98K_XFER   0x13 // PC-98 matrix 0x35
-#define PC98K_NFER   0x17 // PC-98 matrix 0x51
-#define PC98K_HELP   0x18 // PC-98 matrix 0x3F
-#define PC98K_ROLLUP 0x19 // PC-98 matrix 0x36
-#define PC98K_ROLLDN 0x1F // PC-98 matrix 0x37
-#define PC98K_INS    0x20 // PC-98 matrix 0x38
-#define PC98K_DEL    0x28 // PC-98 matrix 0x39
-#define PC98K_RO     0x2F // PC-98 matrix 0x33 (the _ / RO key right of /)
-#define PC98K_KPDIV  0x30 // PC-98 matrix 0x41 (E0 4B needs a prefix; see above)
-#endif
+// Which table is compiled in: the PC-98 build (config.tcl MACHINE_PC98=1) draws a
+// PC-9801 keyboard, the PC/XT build the original 83-key layout. The VKB always
+// emits Set-2; for the PC-98-only keys (STOP, KANA, GRPH, XFER, NFER, HELP, ROLL,
+// INS, DEL, RO, keypad-/) the PC-98 table substitutes bare Set-2 codes that no
+// real keyboard sends -- see the assignment table in vkb_layout.c. The Set-2 ->
+// PC-98 translator downstream must decode those codes the same way.
 
 extern const vkb_key_t vkb_keys[];
 extern const int vkb_key_count;
