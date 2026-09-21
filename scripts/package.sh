@@ -95,9 +95,12 @@ def data(j):
         {"name": "PC-98 Font",  "id": 11, "required": True,  "parameters": "0x203",
          "filename": "font.rom", "extensions": ["rom", "bin"],
          "address": "0x10100000", "size_maximum": "0x46800"},
+        // 0x8000: the softcore ROM is 32 KB since the drawing server landed;
+        // the old 0x6000 (24 KB) made the framework refuse the file with
+        // "error in framework file id [12] too large" the moment it grew.
         {"name": "Firmware",    "id": 12, "required": False, "parameters": "0x203",
          "filename": "firmware.bin", "extensions": ["bin"],
-         "address": "0x10040000", "size_maximum": "0x6000"},
+         "address": "0x10040000", "size_maximum": "0x8000"},
         {"name": "Settings",    "id": 7, "required": False, "parameters": "0x03",
          "filename": "settings.dat", "extensions": ["dat"],
          "address": "0x10030000", "size_maximum": "0x1000"},
