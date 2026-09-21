@@ -40,6 +40,48 @@ static uint32_t mgmt_read(uint32_t drive, uint32_t reg)
 // drive-keyed.
 static uint32_t fdd_sector_words[2] = { 128, 128 };
 
+// Where drive X's raw image starts inside its file: zero, or the header an
+// FDI wraps it in (see fdd_probe_fdi).
+static uint32_t fdd_base[2] = { 0, 0 };
+
+// FDI (the T98/np2 family's format): a 0x20-byte header in front of the raw
+// image -- {dummy, fddtype, headersize, fddsize, sectorsize, sectors,
+// surfaces, cylinders}, little-endian words (np2kai diskimage/fd/fdd_xdf.c).
+// The slot's sector count cannot tell it from raw -- the header is under one
+// sector -- so the mount reads the first 32 bytes and believes the header's
+// own arithmetic: headersize + sectorsize*sectors*surfaces*cylinders must
+// land within a sector of the size the slot reported.
+static void fdd_probe_fdi(uint32_t drive, uint32_t sectors)
+{
+    uint32_t slot = drive ? FDD1_SLOT_ID : FDD0_SLOT_ID;
+    fdd_base[drive] = 0;
+    if (sectors < 4) {
+        return;                       // nothing that small is an FDI
+    }
+    if (!tds_transfer(slot, 0, FDD_TDS_READ, 32)) {
+        return;
+    }
+    uint32_t w[8];
+    *FDD_BRAM_ADDR = 0;
+    for (int i = 0; i < 8; i++) {
+        w[i] = *FDD_BRAM_RDATA;       // word i = file bytes 4i..4i+3
+    }
+    uint32_t hsize = w[2];            // headersize
+    uint32_t ssize = w[4];            // sectorsize
+    uint32_t spt    = w[5];           // sectors per track
+    uint32_t surf   = w[6];           // surfaces
+    uint32_t cyl    = w[7];           // cylinders
+    uint32_t raw    = ssize * spt * surf * cyl;
+    uint32_t file   = sectors * 512;  // the slot's size, truncated to sectors
+    if (hsize >= 0x20 && hsize <= 0x1000
+        && ssize >= 128 && ssize <= 4096
+        && spt >= 1 && spt <= 255
+        && surf == 2 && cyl >= 1 && cyl <= 127
+        && raw + hsize > file - 1024 && raw + hsize < file + 1024) {
+        fdd_base[drive] = hsize;
+    }
+}
+
 // Stream the sector now in the bridge RAM into the controller FIFO, in order.
 // The bridge RAM holds the sector little-endian, so the low byte of each word is
 // the earlier file byte. The FIFO register address is set once for the whole run.
@@ -135,6 +177,7 @@ void fdd_mount(uint32_t drive, uint32_t sectors)
             break;
         }
     }
+    fdd_probe_fdi(drive, sectors);   // sets fdd_base when the file is an FDI
 
     mgmt_write(drive, FMGMT_PRESENT, 0);
     spin(100000);
@@ -166,8 +209,9 @@ void fdd_poll(void)
         uint32_t drv = (reg0 & FDD_LBA_DRIVE) ? 1 : 0;
         uint32_t bytes = fdd_sector_words[drv] * 4;
         uint32_t slot = drv ? FDD1_SLOT_ID : FDD0_SLOT_ID;
+        uint32_t off = fdd_base[drv] + (reg0 & FDD_LBA_MASK) * bytes;
         // Push only on a good read; a failed transfer must not stream stale bytes.
-        if (tds_transfer(slot, reg0 & FDD_LBA_MASK, FDD_TDS_READ, bytes)) {
+        if (tds_transfer(slot, off, FDD_TDS_READ, bytes)) {
             push_sector(drv);
         }
     } else if (req & FDD_REQ_WRITE) {
@@ -175,9 +219,10 @@ void fdd_poll(void)
         uint32_t drv = (reg0 & FDD_LBA_DRIVE) ? 1 : 0;
         uint32_t bytes = fdd_sector_words[drv] * 4;
         uint32_t slot = drv ? FDD1_SLOT_ID : FDD0_SLOT_ID;
+        uint32_t off = fdd_base[drv] + (reg0 & FDD_LBA_MASK) * bytes;
         // pull_fifo already completes the controller's write; a failed persist has no
         // path back to the guest, so the result is not acted on here.
         pull_fifo(drv);
-        tds_transfer(slot, reg0 & FDD_LBA_MASK, FDD_TDS_WRITE, bytes);
+        tds_transfer(slot, off, FDD_TDS_WRITE, bytes);
     }
 }

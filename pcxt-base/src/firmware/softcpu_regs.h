@@ -197,7 +197,7 @@
 
 // Shared disk-bridge sector transfer (disk_tds.c). The length is the media's
 // sector width, because the image file is laid out in that width.
-int tds_transfer(uint32_t slot, uint32_t lba, uint32_t dir, uint32_t bytes);
+int tds_transfer(uint32_t slot, uint32_t offset, uint32_t dir, uint32_t bytes);
 
 // APF datatable access by slot id (disk_tds.c).
 uint32_t slot_bytes(uint16_t id);

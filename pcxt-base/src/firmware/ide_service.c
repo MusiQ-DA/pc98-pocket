@@ -319,7 +319,7 @@ static void ide_process_read(int multi)
         // the block lands contiguously.
         int ok = 1;
         for (uint32_t s = 0; s < cnt; s++) {
-            if (!tds_transfer(slot, lba + s, FDD_TDS_READ, SECTOR_BYTES)) {
+            if (!tds_transfer(slot, (lba + s) * SECTOR_BYTES, FDD_TDS_READ, SECTOR_BYTES)) {
                 ok = 0;
                 break;
             }
@@ -392,7 +392,7 @@ static void ide_process_write(int multi)
         int ok = 1;
         for (uint32_t s = 0; s < cnt; s++) {
             ide_drain_sector();
-            if (!tds_transfer(slot, lba + s, FDD_TDS_WRITE, SECTOR_BYTES)) {
+            if (!tds_transfer(slot, (lba + s) * SECTOR_BYTES, FDD_TDS_WRITE, SECTOR_BYTES)) {
                 ok = 0;
                 break;
             }

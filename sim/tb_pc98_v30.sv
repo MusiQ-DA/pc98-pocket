@@ -2044,17 +2044,121 @@ module tb_pc98_v30;
         .io_readdata    (fdd_readdata_wire),
         .io_write       (fdd_io_write),
         .io_writedata   (fdd_io_writedata),
-        .mgmt_address   (4'd0),
-        .mgmt_fddn      (1'b0),
-        .mgmt_write     (1'b0),
-        .mgmt_writedata (16'd0),
-        .mgmt_read      (1'b0),
-        .mgmt_readdata  (),
+        .mgmt_address   (srv_mgmt_address),
+        .mgmt_fddn      (srv_mgmt_fddn),
+        .mgmt_write     (srv_mgmt_write),
+        .mgmt_writedata (srv_mgmt_writedata),
+        .mgmt_read      (srv_mgmt_read),
+        .mgmt_readdata  (srv_mgmt_readdata),
         .wp             (2'b00),
         .clock_rate     (28'd42_954_545),
-        .request        (),
+        .request        (srv_request),
         .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left ()
     );
+
+    // ---- the disk server: what fdd_service.c does on hardware -------------
+    //
+    // +hdm=<file> mounts drive 0 from a raw 1232 KB 2HD image and serves the
+    // 765's sector requests out of it -- the register writes of fdd_mount and
+    // the FIFO pushes/pulls of fdd_poll -- so the whole disk IPL boot runs in
+    // the bench against the real BIOS driver, the real glue and the real
+    // floppy.v. Without the plusarg the mgmt bus stays quiet and the machine
+    // boots ROM BASIC, exactly as before.
+    logic [3:0]  srv_mgmt_address = 4'd0;
+    logic        srv_mgmt_fddn = 1'b0;
+    logic        srv_mgmt_write = 1'b0;
+    logic [15:0] srv_mgmt_writedata = 16'd0;
+    logic        srv_mgmt_read = 1'b0;
+    logic [15:0] srv_mgmt_readdata;
+    wire  [1:0]  srv_request;
+
+    task automatic srv_wr(input [3:0] a, input [15:0] d);
+        begin
+            @(negedge clk_chipset);
+            srv_mgmt_address = a; srv_mgmt_fddn = 1'b0;
+            srv_mgmt_writedata = d; srv_mgmt_write = 1'b1;
+            @(negedge clk_chipset);
+            srv_mgmt_write = 1'b0;
+        end
+    endtask
+
+    integer srv_fd = 0;
+    integer srv_code;
+    reg [7:0] srv_byte;
+    reg [15:0] srv_info;
+    reg [14:0] srv_lba;
+    integer srv_pushed, srv_pulled, srv_count;
+
+    initial begin : disk_server
+        string hdm_path;
+        if ($value$plusargs("hdm=%s", hdm_path)) begin
+            srv_fd = $fopen(hdm_path, "r+b");
+            if (srv_fd == 0) begin
+                $display("  DISK SERVER: cannot open %s", hdm_path);
+            end else begin
+                $display("  DISK SERVER: %s ready, mounting after reset", hdm_path);
+                wait (reset == 1'b0);
+                repeat (50_000) @(posedge clk_chipset);  // fdd_service's first poll
+                // fdd_mount(0, 2464): a 2HD 1232 KB, 77/8/2, N=3
+                srv_wr(4'd0, 16'd0);                     // eject (media change)
+                repeat (100_000) @(posedge clk_chipset); // fdd_mount's spin()
+                srv_wr(4'd2, 16'd77);                    // FMGMT_CYLS
+                srv_wr(4'd3, 16'd8);                     // FMGMT_SPT
+                srv_wr(4'd4, 16'd1232);                  // FMGMT_TOTAL (1K units)
+                srv_wr(4'd5, 16'd2);                     // FMGMT_HEADS
+                srv_wr(4'd6, 16'd1);                     // FMGMT_SECSIZE: N=3
+                srv_wr(4'd1, 16'd0);                     // FMGMT_WRPROT: off
+                srv_wr(4'd0, 16'd1);                     // FMGMT_PRESENT
+                $display("  DISK SERVER: drive 0 mounted 2HD 77/8/2 N=3");
+
+                forever begin
+                    wait (srv_request != 2'b00);
+                    // {drive, sd_sector} off the mgmt read port
+                    @(negedge clk_chipset);
+                    srv_mgmt_address = 4'd0; srv_mgmt_read = 1'b1;
+                    @(negedge clk_chipset);
+                    srv_info = srv_mgmt_readdata;
+                    srv_mgmt_read = 1'b0;
+                    srv_lba = srv_info[14:0];
+                    srv_count = 1024;                    // the mounted 2HD width
+
+                    if (srv_request[0]) begin            // READ: file -> FIFO
+                        srv_code = $fseek(srv_fd, srv_lba * 1024, 0);
+                        srv_pushed = 0;
+                        $display("  DISK SERVER: READ  lba %0d (file %0d)",
+                                 srv_lba, srv_lba * 1024);
+                        while (srv_pushed < srv_count) begin
+                            wait (srv_request[0]);
+                            srv_code = $fread(srv_byte, srv_fd);
+                            if (srv_code != 1) srv_byte = 8'hFF;  // past EOF
+                            @(negedge clk_chipset);
+                            srv_mgmt_address = 4'hF;
+                            srv_mgmt_writedata = {8'h00, srv_byte};
+                            srv_mgmt_write = 1'b1;
+                            @(negedge clk_chipset);
+                            srv_mgmt_write = 1'b0;
+                            srv_pushed = srv_pushed + 1;
+                        end
+                        $display("  DISK SERVER: served %0d bytes", srv_count);
+                    end else begin                       // WRITE: drain the FIFO
+                        // The boot test only reads; drain and count, keep the
+                        // image file untouched.
+                        srv_pulled = 0;
+                        $display("  DISK SERVER: WRITE lba %0d (drained, file untouched)",
+                                 srv_lba);
+                        while (srv_pulled < srv_count) begin
+                            @(negedge clk_chipset);
+                            srv_mgmt_address = 4'hF; srv_mgmt_read = 1'b1;
+                            @(negedge clk_chipset);
+                            srv_byte = srv_mgmt_readdata[7:0];
+                            srv_mgmt_read = 1'b0;
+                            srv_pulled = srv_pulled + 1;
+                        end
+                    end
+                end
+            end
+        end
+    end
 
     // The guest's read answer: live window from floppy.v, dead 0xFF, and the
     // control/mode ports from the glue -- the same mux PERIPHERALS serves.

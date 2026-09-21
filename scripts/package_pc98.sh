@@ -105,10 +105,10 @@ def data(j):
          # The schema allows at most FOUR extensions -- a longer list made the
          # Pocket browse on the first four only, and .hdm (seventh) was never
          # selectable. Keep the raw image formats the loader actually reads.
-         "extensions": ["hdm", "2hd", "tfd", "fdd"],
+         "extensions": ["hdm", "fdi", "2hd", "fdd"],
          "size_maximum": 8388608, "deferload": True},
         {"name": "Floppy B",    "id": 4, "required": False, "parameters": 1,
-         "extensions": ["hdm", "2hd", "tfd", "fdd"],
+         "extensions": ["hdm", "fdi", "2hd", "fdd"],
          "size_maximum": 8388608, "deferload": True},
         {"name": "Hard Disk",   "id": 5, "required": False, "parameters": 1,
          "extensions": ["hdi", "nhd", "thd", "hdd"],
