@@ -59,11 +59,19 @@
    ローカルで流す
 5. push — CI の sim/quartus が全面の門番
 
-## 危険箇所 (削除前に要確認)
+## 危険箇所 — 確認済み (2026-09-22 調査)
 
-- **8255**: PC-98 sysport がポート C 生成に使っているなら生存
-- **video.qip の splash**: ブートスプラッシュが PC-98 で出るなら splash_rom は生存
-- **scandoubler/converter**: `swap_video_sel` が PC-98 で常に 0 でも
-  配線が生きているなら生存 (core_top の `R_HGC` 参照を先に切って確認)
-- **EMS (ENABLE_EMS=1)**: PC-98 は EMS を持たない — ただし RAM.sv の
-  バンクロジックと絡んでいるので config で 0 にするだけに留める案もある
+- **8255 → 生存**: Peripherals.sv:1065 `u_KF8255` が実配線 (PC-98 の
+  sysport/beep 経路がポート C を使う、§1019-1025 の beep 修正参照)。削除しない
+- **splash 画像 → 削除、ブートホールドだけ残す**: スプラッシュの正体は
+  CGA VRAM への 4000 バイトコピー (Peripherals:1642-) を CGA ジェネレータで
+  表示する PC/XT 機構。ENABLE_CGA=0 の PC-98 では**何も映らない**のに
+  設定はデフォルト On — 毎ブート、見えない 5 秒 + splash 後リセット待ちを
+  支払っている。削る: `splash_rom.v/splash.hex`、コピー/クリア機構、
+  5 秒タイマ、splash_reset_hold、設定の Boot Splash 項。
+  **残す**: `splash_pending` — dataslot ロード + 設定ステージングまで
+  ゲストを hold するブート同期 (名前が共有なだけ)。`guest_ready` 等へ改名
+- **CGA/HGC → 削除可**: `swap_video_sel=0` 固定、`R_HGC/R_CGA` は 0 固定
+  (Peripherals:1833,2633)、core_top に HGC/CGA 信号の参照なし (grep 0 件)
+- **EMS (ENABLE_EMS=1)**: RAM.sv のバンクロジックと TVRAM 配線が共有。
+  削除は深部改修なので**今回の対象外**、config のフラグは残す
