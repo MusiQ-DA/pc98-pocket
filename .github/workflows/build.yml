@@ -452,8 +452,8 @@ jobs:
       - name: Compile (quartus_sh --flow compile)
         run: |
           docker run --rm \
-            -v "${{ github.workspace }}/fpga":/work \
-            -w /work \
+            -v "${{ github.workspace }}":/work \
+            -w /work/fpga \
             raetro/quartus:pocket bash -lc '
               set -e
               Q=""
@@ -473,9 +473,9 @@ jobs:
         if: always()
         run: |
           docker run --rm \
-            -v "${{ github.workspace }}/fpga":/work \
+            -v "${{ github.workspace }}":/work \
             -v "${{ github.workspace }}/scripts":/repo-scripts:ro \
-            -w /work \
+            -w /work/fpga \
             raetro/quartus:pocket bash -lc '
               set -e
               Q=""
@@ -497,9 +497,9 @@ jobs:
         if: always()
         run: |
           docker run --rm \
-            -v "${{ github.workspace }}/fpga":/work \
+            -v "${{ github.workspace }}":/work \
             -v "${{ github.workspace }}/scripts":/repo-scripts:ro \
-            -w /work \
+            -w /work/fpga \
             raetro/quartus:pocket bash -lc '
               set -e
               Q=""
