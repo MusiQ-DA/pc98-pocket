@@ -102,13 +102,16 @@ def data(j):
          "filename": "settings.dat", "extensions": ["dat"],
          "address": "0x10030000", "size_maximum": "0x1000"},
         {"name": "Floppy A",    "id": 3, "required": False, "parameters": 1,
-         "extensions": ["d88", "d98", "fdi", "fdd", "2hd", "tfd", "hdm", "xdf"],
+         # The schema allows at most FOUR extensions -- a longer list made the
+         # Pocket browse on the first four only, and .hdm (seventh) was never
+         # selectable. Keep the raw image formats the loader actually reads.
+         "extensions": ["hdm", "2hd", "tfd", "fdd"],
          "size_maximum": 8388608, "deferload": True},
         {"name": "Floppy B",    "id": 4, "required": False, "parameters": 1,
-         "extensions": ["d88", "d98", "fdi", "fdd", "2hd", "tfd", "hdm", "xdf"],
+         "extensions": ["hdm", "2hd", "tfd", "fdd"],
          "size_maximum": 8388608, "deferload": True},
         {"name": "Hard Disk",   "id": 5, "required": False, "parameters": 1,
-         "extensions": ["hdi", "nhd", "thd", "hdd", "hdn"],
+         "extensions": ["hdi", "nhd", "thd", "hdd"],
          "deferload": True},
     ]
 
