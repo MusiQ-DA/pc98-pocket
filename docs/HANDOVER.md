@@ -666,22 +666,16 @@ N88-BASIC `Ok` 到達。`PRINT 2` 等の入力・実行も正常(数値+ENTERで
 → 修飾キーは「make を先に送り key make → key break → mod break」の順なら
 確実に効く。これが VKB コード実装の根拠。
 
-### §10.3 VKB コード(chord)実装
+### §10.3 VKB トグル(X)の整理
 
-VKB は同時押しできないので、OSD 側で compose する(vkb_ui.c):
+VKB は同時押しできないが、BIOS の 0x52A マトリクスは make を覚えているので、
+**X = 単純トグル**(押下で make 送出、再押下で break 送出、通常キーと完全に同一の
+モデル)で十分。一時期入れた「アーム+コード(compose)」機構(chord_active /
+is_modifier / compose_*、c011d8a)はユーザー指摘で撤去 — make はラッチ時に必ず
+送出されているため「make なし break」は構造的に起きず、保護も不要。
+残した修正: R1 反転・再オープンで latch 枠が落ちる既存バグの repaint_latched()。
 
-- **X on 修飾キー = アーム**(バイト未送信、枠色 OSD_LATCH)。SHIFT(0x12/0x59)、
-  CTRL(0x14)、GRPH/XFER/NFER(PC98K_*)が対象。KANA/CAPS は BIOS でトグルなので
-  通常キーのまま
-- **A on 通常キー**: `[armed mod make][key make]` を送出(16深キューがバーストを吸収、
-  framer が KFPS2KB ペースで流出)
-- **A 離す**: `[key break][mod break]` + 自動解除(ワンショット。連続シフトは
-  都度 X、大文字連続は CAPS で)
-- アームだけ解除(X 再押下/Y/閉じ)はバイト送出なし — **break だけ送ると
-  0x52A マトリクスが反対に立つ**ため(§10.2)
-- コード発行中に閉じた場合(chord_active)は mod break を返済
-- R1 反転・再オープンで latch 枠が落ちる既存バグも repaint_latched() で修正
-
-PC98K_* 定義は vkb_layout.h へ移動(chord 判定と共有)。
-tb_pc98_kbd_ps2 の「shift, A make, A break, shift break」ケースがこのバイト列を
-既に検証済み(RTL 無変更)。
+実機検証: SHIFT 上で X → 枠が強調 → 文字キーで A → 大文字/記号になるか。
+失敗する場合は「保持型 make が金属で届かない」ことを意味し、c011d8a の
+chord 版(キー入力ごとに [mod make][key make]…[mod break] を組み直す)が
+フォールバックとして git 履歴にある。

@@ -49,7 +49,6 @@ static int held_key;              // key momentarily held by button A, -1 = none
 static int bind_target = -1;      // BIND_* being rebound in pick mode, -1 = normal typing
 static uint8_t dock_stb_prev;     // last docked-key change toggle seen, to catch a fresh press
 static uint32_t latch_bits[3];    // one bit per key index: latched keys stay down
-static uint8_t chord_active;      // an armed modifier's make went out; its break is owed
 static uint32_t ui_repeat_timer;  // cycle deadline for the next auto-repeat
 static uint16_t ui_repeat_btn;    // dpad direction(s) held for repeat
 static uint32_t ui_move_cooldown; // cycle deadline suppressing the next move
@@ -116,54 +115,8 @@ static uint8_t key_color(int i)
     return is_latched(i) ? OSD_LATCH : OSD_KEYEDGE;
 }
 
-// Chorded modifiers: the VKB cannot press two keys at once, so a modifier --
-// a key the BIOS tracks as held state in its 0x52A key matrix rather than as a
-// character (SHIFT, CTRL, GRPH, XFER, NFER; KANA and CAPS are toggles at the
-// BIOS and stay ordinary keys) -- does not go down when X latches it. X ARMS
-// it; the next key press then emits [mod make][key make] and the release
-// finishes the chord with [key break][mod break] before disarming. That is
-// exactly the byte sequence two hands on a real keyboard produce.
-static int is_modifier(uint8_t sc)
-{
-#ifdef MACHINE_PC98
-    /* both shifts, ctrl, and the PC-98-only GRPH / XFER / NFER */
-    return sc == 0x12 || sc == 0x59 || sc == 0x14 || sc == PC98K_GRPH || sc == PC98K_XFER ||
-           sc == PC98K_NFER;
-#else
-    /* both shifts, ctrl, alt */
-    return sc == 0x12 || sc == 0x59 || sc == 0x14 || sc == 0x11;
-#endif
-}
-
-// Emit the makes of every armed modifier, ahead of a key make. At most a
-// handful of one-byte makes: the sixteen-deep pocket_keyboard queue takes the
-// burst, and the framer still paces the stream at KFPS2KB's byte rate.
-static void compose_make_armed(void)
-{
-    for (int i = 0; i < vkb_key_count; i++) {
-        if (is_latched(i) && is_modifier(vkb_keys[i].scancode)) {
-            vkb_emit(1, vkb_keys[i].scancode);
-            chord_active = 1;
-        }
-    }
-}
-
-// Finish a chord after its key break: break every armed modifier, disarm it,
-// repaint its border.
-static void compose_break_armed(void)
-{
-    for (int i = 0; i < vkb_key_count; i++) {
-        if (is_latched(i) && is_modifier(vkb_keys[i].scancode)) {
-            vkb_emit(0, vkb_keys[i].scancode);
-            set_latched(i, 0);
-            vkb_key_border(&osd, i, (i == cur_key) ? OSD_CURSOR : OSD_KEYEDGE);
-        }
-    }
-    chord_active = 0;
-}
-
 // Full redraws (open, R1 flip) reset every border to its resting colour;
-// restore the latch/armed highlights so state survives the repaint.
+// restore the latch highlights so state survives the repaint.
 static void repaint_latched(void)
 {
     for (int i = 0; i < vkb_key_count; i++) {
@@ -304,7 +257,6 @@ void vkb_ui_init(void)
     ui_raster = *OSD_RASTER;
     osd.y0 = ui_osd_top ? 0 : (OSD_FB_HEIGHT - osd.height);
     latch_bits[0] = latch_bits[1] = latch_bits[2] = 0;
-    chord_active = 0;
     ui_mode = OSD_NONE; // nothing is shown until an overlay is opened
 }
 
@@ -319,26 +271,23 @@ static void vkb_pace_break(void)
 
 // Break every latched key and repaint it to its resting colour (button Y, and part
 // of closing). Breaks are paced so clearing a large batch cannot overflow the output.
-// An armed modifier that never sent its make disarms silently instead: the BIOS's
-// keyboard handler XORs every byte into its key matrix, so a break without a make
-// would press the modifier rather than release it.
+// Every latched key's make went out when it was latched, so each break lands
+// balanced -- the BIOS's keyboard handler XORs every byte into its key matrix,
+// and an unbalanced break would press the key instead of releasing it.
 static void vkb_clear_latches(void)
 {
     for (int i = 0; i < vkb_key_count; i++) {
         if (is_latched(i)) {
-            if (!is_modifier(vkb_keys[i].scancode) || chord_active) {
-                vkb_emit(0, vkb_keys[i].scancode);
-                vkb_pace_break();
-            }
+            vkb_emit(0, vkb_keys[i].scancode);
             set_latched(i, 0);
             vkb_key_border(&osd, i, (i == cur_key) ? OSD_CURSOR : OSD_KEYEDGE);
+            vkb_pace_break();
         }
     }
-    chord_active = 0;
 }
 
 // Release everything held (latched + momentary) so no key stays down after closing.
-// The momentary key breaks first so a chord in flight unwinds in typing order.
+// The momentary key breaks before the latched ones, mirroring typing order.
 static void vkb_release_all(void)
 {
     if (held_key >= 0) {
@@ -467,21 +416,17 @@ static int vkb_input(uint16_t pressed, uint16_t buttons)
         repaint_latched();
     }
     cursor_navigate(pressed, buttons);
-    if (pressed & BTN_X) { // latch/unlatch: a plain key holds down, a modifier arms for a chord
+    if (pressed & BTN_X) { // toggle: X presses the key down, X again releases it
         int on = !is_latched(cur_key);
         set_latched(cur_key, on);
-        if (!is_modifier(vkb_keys[cur_key].scancode)) {
-            vkb_emit(on, vkb_keys[cur_key].scancode); // make now / break now
-        } // an armed modifier sends nothing until the chord (see compose_make_armed)
+        vkb_emit(on, vkb_keys[cur_key].scancode);
         vkb_key_border(&osd, cur_key, key_color(cur_key));
     }
     if (pressed & BTN_Y) { // clear every latched key
         vkb_clear_latches();
     }
-    // A momentarily presses a non-latched key, after the armed modifiers' makes,
-    // so the guest sees one chord; typematic then repeats it while held.
+    // A momentarily presses a non-latched key; typematic then repeats it while held.
     if ((pressed & BTN_A) && !is_latched(cur_key)) {
-        compose_make_armed();
         vkb_emit(1, vkb_keys[cur_key].scancode);
         held_key = cur_key;
     }
@@ -555,7 +500,6 @@ void vkb_ui_tick(void)
         if (held_key >= 0) {
             if (released & BTN_A) {
                 vkb_emit(0, vkb_keys[held_key].scancode);
-                compose_break_armed(); // the chord's modifier breaks follow the key break
                 held_key = -1;
             }
         } else if (vkb_input(pressed, buttons)) { // nonzero = user closed the keyboard
