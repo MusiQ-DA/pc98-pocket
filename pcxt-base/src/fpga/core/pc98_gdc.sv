@@ -148,6 +148,15 @@ module pc98_gdc #(
 
     reg [7:0] para [0:P_LAST];
 
+    // The read-back FIFO: CSRR queues five bytes off CSRW (np2kai gdc.c's
+    // fill: the three address bytes, the high one masked to its two live
+    // bits, then two zeros), LPEN queues the latched pen position -- and no
+    // pen is fitted, so that is three zero bytes. What the queue buys is the
+    // contract: software that issues either command and polls DRDY gets its
+    // bytes and DRDY falls, instead of timing out against a silent port.
+    reg [7:0] rb_fifo [0:7];
+    reg [2:0] rb_wr = 3'd0, rb_rd = 3'd0;
+
     // The CSRFORM trace, as csr_trace reports it.
     reg [7:0] csr_tr0, csr_tr1, csr_tr2;
     reg [3:0] csr_n;
@@ -250,6 +259,8 @@ module pc98_gdc #(
             unk_cmd   <= 8'h00;
             unk_count <= 8'h00;
             csr_wr_count <= 8'h00;
+            rb_wr <= 3'd0;
+            rb_rd <= 3'd0;
             draw_pending <= 1'b0;
             draw_op_r    <= 8'h00;
             draw_busy_r  <= 1'b0;
@@ -332,6 +343,27 @@ module pc98_gdc #(
                         unk_count <= unk_count + 8'd1;
                 end
 
+                // CSRR: five bytes off CSRW, np2's fill verbatim -- the
+                // three address bytes (the high one masked to two bits) and
+                // two zeros. LPEN: the pen latch, and no pen is fitted.
+                // Both queue only when there is room; a guest that reissues
+                // without draining loses the new bytes, which is what a
+                // five-deep FIFO on a real chip would do to it too.
+                if (data_in == 8'hE0 && (3'd7 - (rb_wr - rb_rd)) >= 3'd4) begin
+                    rb_fifo[rb_wr]           <= para[P_CSRW + 0];
+                    rb_fifo[rb_wr + 3'd1]    <= para[P_CSRW + 1];
+                    rb_fifo[rb_wr + 3'd2]    <= para[P_CSRW + 2] & 8'h03;
+                    rb_fifo[rb_wr + 3'd3]    <= 8'h00;
+                    rb_fifo[rb_wr + 3'd4]    <= 8'h00;
+                    rb_wr <= rb_wr + 3'd5;
+                end
+                if (data_in == 8'hC0 && (3'd7 - (rb_wr - rb_rd)) >= 3'd2) begin
+                    rb_fifo[rb_wr]        <= 8'h00;   // no pen: the latch reads zero
+                    rb_fifo[rb_wr + 3'd1] <= 8'h00;
+                    rb_fifo[rb_wr + 3'd2] <= 8'h00;
+                    rb_wr <= rb_wr + 3'd3;
+                end
+
 
                 // The immediate ones.
                 if (data_in == 8'h0D || data_in == 8'h6B) disp_on_r <= 1'b1;
@@ -407,9 +439,28 @@ module pc98_gdc #(
     // clears -- the backpressure a real 7220 applies by filling its FIFO,
     // which is exactly what software's "wait FIFO empty" loops consume.
     wire fifo_empty = ~draw_pending & ~draw_busy_r;
-    wire [7:0] status = {1'b0, hblank, vsync, 1'b0, 1'b0, fifo_empty, 1'b0, 1'b0};
+    // DRDY (bit 0): the read-back FIFO holds CSRR/LPEN results. BIT 7 IS
+    // LIGHT PEN DETECT AND IT STAYS CLEAR: no pen is fitted, and a set bit
+    // walks the BIOS into the LPRD/DRDY poll at F307C that nothing would
+    // ever satisfy (see the history above the status word).
+    wire drdy = (rb_wr != rb_rd);
+    wire [7:0] status = {1'b0, hblank, vsync, 1'b0, 1'b0, fifo_empty, 1'b0, drdy};
 
-    assign data_out = a1 ? 8'h00 : status;
+    // The data port answers with the read-back head while DRDY is set, and
+    // with the status otherwise -- np2's gdc_i60/gdc_i62 split: the STATUS
+    // port (0x60, a1=0) always returns the status, whose bit 0 says data is
+    // ready, and the DATA port (0x62, a1=1) returns and pops one byte per
+    // read. The pop happens after the read strobe ends, the keyboard 8251's
+    // idiom, so the byte the CPU latched is the head.
+    wire data_rd_now = cs & a1 & ~io_read_n;
+    logic data_rd_q = 1'b0;
+    always_ff @(posedge clk) begin
+        data_rd_q <= data_rd_now;
+        if (data_rd_q && !data_rd_now && drdy)
+            rb_rd <= rb_rd + 3'd1;
+    end
+
+    assign data_out = a1 ? rb_fifo[rb_rd] : status;
 
     // ------------------------------------------------------------------
     // the display registers, as the rest of the core wants them

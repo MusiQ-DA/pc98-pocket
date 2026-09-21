@@ -272,6 +272,61 @@ module tb_pc98_gdc;
         cmd(8'hE0);                        // CSRR -- known, zero parameters
         want("CSRR not counted unknown",   unk_count, 2);
 
+        // ---- the read-back FIFO: CSRR and LPEN answer with bytes ---------
+        // CSRR queues five off CSRW (the high address byte masked to two
+        // bits, then two zeros); LPEN queues three zeros -- no pen fitted.
+        // DRDY (status bit 0) sets while the queue holds data, a data-port
+        // read returns the head and pops it AFTER the strobe ends, and bit
+        // 7 (pen detect) never sets, so the BIOS's F305E exit stays the
+        // path a penless machine takes.
+        // Drain whatever the earlier CSRR test queued (five bytes of the
+        // old CSRW) before issuing a fresh one: the FIFO is only eight deep.
+        for (int d = 0; d < 5; d++) begin
+            cs = 1'b1; a1 = 1'b1; io_read_n = 1'b0;
+            @(posedge clk);
+            io_read_n = 1'b1; cs = 1'b0; @(posedge clk);
+        end
+        cmd(8'h49); par(8'hCD); par(8'hAB); par(8'h06);  // CSRW = 0x06ABCD
+        cmd(8'hE0);                                        // CSRR
+        status_rd(st_v);
+        want("CSRR sets DRDY", st_v & 8'h01, 8'h01);
+        want("and bit 7 stays clear", st_v & 8'h80, 8'h00);
+        cs = 1'b1; a1 = 1'b1; io_read_n = 1'b0;
+        @(posedge clk);
+        want("CSRR byte 0 (EAD low)", data_out, 8'hCD);
+        io_read_n = 1'b1; @(posedge clk); io_read_n = 1'b0;
+        @(posedge clk);
+        want("CSRR byte 1 (EAD mid)", data_out, 8'hAB);
+        io_read_n = 1'b1; @(posedge clk); io_read_n = 1'b0;
+        @(posedge clk);
+        want("CSRR byte 2 (EAD high & 3)", data_out, 8'h02);
+        io_read_n = 1'b1; @(posedge clk); io_read_n = 1'b0;
+        @(posedge clk);
+        want("CSRR byte 3 (zero)", data_out, 8'h00);
+        io_read_n = 1'b1; @(posedge clk); io_read_n = 1'b0;
+        @(posedge clk);
+        want("CSRR byte 4 (zero)", data_out, 8'h00);
+        io_read_n = 1'b1; cs = 1'b0; @(posedge clk);
+        status_rd(st_v);
+        want("drained: DRDY falls", st_v & 8'h01, 8'h00);
+        want("and the status reads again", st_v & 8'h04, 8'h04);
+
+        cmd(8'hC0);                                        // LPEN
+        status_rd(st_v);
+        want("LPEN sets DRDY", st_v & 8'h01, 8'h01);
+        cs = 1'b1; a1 = 1'b1; io_read_n = 1'b0;
+        @(posedge clk);
+        want("LPEN byte 0 (no pen: zero)", data_out, 8'h00);
+        io_read_n = 1'b1; @(posedge clk); io_read_n = 1'b0;
+        @(posedge clk);
+        want("LPEN byte 1 (zero)", data_out, 8'h00);
+        io_read_n = 1'b1; @(posedge clk); io_read_n = 1'b0;
+        @(posedge clk);
+        want("LPEN byte 2 (zero)", data_out, 8'h00);
+        io_read_n = 1'b1; cs = 1'b0; @(posedge clk);
+        status_rd(st_v);
+        want("LPEN drained too", st_v & 8'h01, 8'h00);
+
         if (errors == 0) $display("PASS tb_pc98_gdc");
         else             $display("FAILED tb_pc98_gdc: %0d", errors);
         $finish;
