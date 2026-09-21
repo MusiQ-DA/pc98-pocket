@@ -137,7 +137,7 @@ static const struct {
     { 22, 20 }, // row 1: F3 F4 TAB Q..P @ [ RETURN / 7 8 9 ENTER
     { 42, 19 }, // row 2: F5 F6 CTRL CAPS A..L ; : ] / 4 5 6
     { 61, 18 }, // row 3: F7 F8 SHIFT Z..M , . / _ SHIFT / 1 2 3
-    { 79, 14 }, // row 4: F9 F10 KANA GRPH SPACE XFER NFER HELP ROLLx2 INS DEL / 0 .
+    { 79, 15 }, // row 4: F9 F10 KANA GRPH NFER SPACE XFER HELP ROLLx2 HMCR INS DEL / 0 .
 };
 #else
 static const struct {

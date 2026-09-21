@@ -84,6 +84,7 @@
 #define PC98K_DEL    0x28 // PC-98 matrix 0x39
 #define PC98K_RO     0x2F // PC-98 matrix 0x33 (the _ / RO key right of /)
 #define PC98K_KPDIV  0x30 // PC-98 matrix 0x41 (E0 4B needs a prefix; see above)
+#define PC98K_HOMECLR 0x27 // PC-98 matrix 0x3E (HOME / CLR, np2 "HMCR")
 
 const vkb_key_t vkb_keys[] = {
     // row 0: F1 F2 | ESC 1..0 - ^ ¥ BS STOP | keypad * / + -
@@ -172,20 +173,23 @@ const vkb_key_t vkb_keys[] = {
     K2(516, 49, 28, 15, 0x69, "1", G_END),
     K2(546, 49, 28, 15, 0x72, "2", GL_DOWN),
     K2(576, 49, 28, 15, 0x7A, "3", G_PGDN),
-    // row 4: F9 F10 | KANA GRPH SPACE XFER NFER HELP ROLLUP ROLLDN INS DEL |
-    //        keypad 0 .
+    // row 4: F9 F10 | KANA GRPH NFER SPACE XFER HELP ROLLUP ROLLDN HMCR INS
+    //        DEL | keypad 0 . -- NFER left of SPACE and XFER right of it,
+    //        the real board's arrangement; HOME CLR belongs to the cursor
+    //        key family (matrix 0x3A-0x3F), so it sits by ROLL and INS.
     KA(2, 65, 26, 15, 0x01, "F9 "),
     KA(30, 65, 26, 15, 0x09, "F10"),
     KA(58, 65, 36, 15, PC98K_KANA, "KANA"),
-    KA(96, 65, 36, 15, PC98K_GRPH, "GRPH"),
-    K(134, 65, 98, 15, 0x29, ""),
-    KA(234, 65, 36, 15, PC98K_XFER, "XFER"),
-    KA(272, 65, 36, 15, PC98K_NFER, "NFER"),
-    KA(310, 65, 34, 15, PC98K_HELP, "HELP"),
-    KA(346, 65, 44, 15, PC98K_ROLLUP, "ROLL\x18"), // ROLL + up-arrow glyph
-    KA(392, 65, 44, 15, PC98K_ROLLDN, "ROLL\x19"), // ROLL + down-arrow glyph
-    KA(438, 65, 34, 15, PC98K_INS, "INS"),
-    KA(474, 65, 32, 15, PC98K_DEL, "DEL"),
+    KA(96, 65, 34, 15, PC98K_GRPH, "GRPH"),
+    KA(132, 65, 34, 15, PC98K_NFER, "NFER"),
+    K(168, 65, 80, 15, 0x29, ""),
+    KA(250, 65, 34, 15, PC98K_XFER, "XFER"),
+    KA(286, 65, 34, 15, PC98K_HELP, "HELP"),
+    KA(322, 65, 40, 15, PC98K_ROLLUP, "ROLL\x18"), // ROLL + up-arrow glyph
+    KA(364, 65, 40, 15, PC98K_ROLLDN, "ROLL\x19"), // ROLL + down-arrow glyph
+    KA(406, 65, 38, 15, PC98K_HOMECLR, "HMCR"), // HOME CLR, np2's name for it
+    KA(452, 65, 32, 15, PC98K_INS, "INS"),
+    KA(486, 65, 28, 15, PC98K_DEL, "DEL"),
     K2(516, 65, 58, 15, 0x70, "0", "Ins"),
     K2(576, 65, 58, 15, 0x71, ".", "Del"),
 };

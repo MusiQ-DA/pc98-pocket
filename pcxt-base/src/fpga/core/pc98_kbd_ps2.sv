@@ -149,6 +149,7 @@ module pc98_kbd_ps2 (
             8'h10: set2_pc98 = 8'h73; // GRPH   (right ctrl on a docked kbd)
             8'h13: set2_pc98 = 8'h35; // XFER   (right alt on a docked kbd)
             8'h17: set2_pc98 = 8'h51; // NFER   (left alt on a docked kbd)
+            8'h27: set2_pc98 = 8'h3E; // HOME CLR (bare sentinel; 0x3E = np2 "HMCR")
             8'h18: set2_pc98 = 8'h3F; // HELP
             8'h19: set2_pc98 = 8'h36; // ROLL UP
             8'h1F: set2_pc98 = 8'h37; // ROLL DOWN
