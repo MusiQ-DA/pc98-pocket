@@ -45,6 +45,7 @@ module tb_pc98_gdc;
     wire        cursor_en, cursor_blink_en;
     wire [4:0]  cursor_top, cursor_bottom;
     wire [5:0]  cursor_rate;
+    wire [7:0]  csr_wr_count;
     wire [1:0]  zoom_disp;
     wire [7:0]  unk_cmd, unk_count;
 
@@ -59,6 +60,7 @@ module tb_pc98_gdc;
         .cursor_en(cursor_en), .cursor_blink_en(cursor_blink_en),
         .cursor_top(cursor_top), .cursor_bottom(cursor_bottom),
         .cursor_rate(cursor_rate), .zoom_disp(zoom_disp),
+        .csr_wr_count(csr_wr_count),
         .unk_cmd(unk_cmd), .unk_count(unk_count)
     );
 
@@ -158,6 +160,7 @@ module tb_pc98_gdc;
         want("cursor bottom line",   cursor_bottom,     5'h11);
         cmd(8'h4B); par(8'hC1); par(8'h00); par(8'h88); // blinking form
         want("cursor blinking (P2 bit5 clear)", cursor_blink_en, 1);
+        want("CSR command count", csr_wr_count, 8'd3);  // 1x CSRW + 2x CSRFORM
 
         // ---- the status register --------------------------------------------
         // bit 6 hblank, bit 5 vsync, bit 2 FIFO empty, and bit 7 CLEAR.

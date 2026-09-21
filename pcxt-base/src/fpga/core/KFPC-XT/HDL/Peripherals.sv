@@ -217,6 +217,12 @@ module PERIPHERALS #(
     output  logic    [7:0]  dbg_gdc_unk_cmd,
     output  logic    [7:0]  dbg_gdc_unk_count,
     output  logic           dbg_gdc_disp_on,
+    // The cursor's GDC-side state, served at 0x5000012C: {CSR command count,
+    // enable, blink, top, bottom, cell address}. "Right here and nothing
+    // draws" blames the render path; "enable 0 / bottom 0 / count 0" blames
+    // the BIOS never having sent the form, or the port decode.
+    output  logic   [23:0]  dbg_gdc_cur,
+    output  logic    [7:0]  dbg_gdc_csrcnt,
     output  logic   [63:0]  pc98_tvfill_view,
     // The kanji fetch path's activity: f_req pulses and f_valid beats. With
     // ANK out of the BRAM these only move for two-byte cells, so on a screen
@@ -1914,6 +1920,7 @@ end endgenerate
     wire [4:0]  gdc_m_cur_top,   gdc_s_cur_top;
     wire [4:0]  gdc_m_cur_bot,   gdc_s_cur_bot;
     wire [5:0]  gdc_m_cur_rate,  gdc_s_cur_rate;
+    wire [7:0]  gdc_m_csrcnt,    gdc_s_csrcnt;
     wire [1:0]  gdc_m_zoom,      gdc_s_zoom;
 
     assign dbg_gdc_sad       = gdc_m_sad[0];
@@ -1921,6 +1928,10 @@ end endgenerate
     assign dbg_gdc_unk_cmd   = gdc_m_unk_cmd;
     assign dbg_gdc_unk_count = gdc_m_unk_count;
     assign dbg_gdc_disp_on   = gdc_m_disp_on;
+    assign dbg_gdc_cur       = {gdc_m_cur_en, gdc_m_cur_bl,
+                                gdc_m_cur_top, gdc_m_cur_bot,
+                                gdc_m_cur_addr[11:0]};
+    assign dbg_gdc_csrcnt    = gdc_m_csrcnt;
 
     pc98_gdc u_gdc_m (
         .clk(clock), .reset(reset),
@@ -1934,6 +1945,7 @@ end endgenerate
         .cursor_en(gdc_m_cur_en), .cursor_blink_en(gdc_m_cur_bl),
         .cursor_top(gdc_m_cur_top), .cursor_bottom(gdc_m_cur_bot),
         .cursor_rate(gdc_m_cur_rate), .zoom_disp(gdc_m_zoom),
+        .csr_wr_count(gdc_m_csrcnt),
         .unk_cmd(gdc_m_unk_cmd), .unk_count(gdc_m_unk_count)
     );
 
@@ -1949,6 +1961,7 @@ end endgenerate
         .cursor_en(gdc_s_cur_en), .cursor_blink_en(gdc_s_cur_bl),
         .cursor_top(gdc_s_cur_top), .cursor_bottom(gdc_s_cur_bot),
         .cursor_rate(gdc_s_cur_rate), .zoom_disp(gdc_s_zoom),
+        .csr_wr_count(gdc_s_csrcnt),
         .unk_cmd(gdc_s_unk_cmd), .unk_count(gdc_s_unk_count)
     );
 

@@ -92,6 +92,10 @@ module pc98_gdc (
     output wire [4:0]  cursor_top,
     output wire [4:0]  cursor_bottom,
     output wire [5:0]  cursor_rate,
+    // How many CSRW/CSRFORM commands arrived -- the panel's cursor field
+    // reads it, because "the registers look right but nothing draws" and
+    // "the BIOS never sent a form at all" are different faults.
+    output reg  [7:0]  csr_wr_count,
     output wire [1:0]  zoom_disp,
 
     // ---- what the post monitor needs ---------------------------------------
@@ -172,6 +176,7 @@ module pc98_gdc (
             disp_on_r <= 1'b0;
             unk_cmd   <= 8'h00;
             unk_count <= 8'h00;
+            csr_wr_count <= 8'h00;
             for (i = 0; i <= P_LAST; i = i + 1) para[i] <= 8'h00;
         end else begin
             if (cmd_wr) begin
@@ -179,6 +184,11 @@ module pc98_gdc (
                 dn     = decode(data_in);
                 p_dst  <= dn[10:5];
                 p_left <= dn[4:0];
+
+                // CSRW/CSRFORM arrivals, saturating, for the panel.
+                if ((data_in == 8'h49 || data_in == 8'h4B)
+                        && csr_wr_count != 8'hFF)
+                    csr_wr_count <= csr_wr_count + 8'd1;
 
                 // The immediate ones.
                 if (data_in == 8'h0D || data_in == 8'h6B) disp_on_r <= 1'b1;

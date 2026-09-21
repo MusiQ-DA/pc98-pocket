@@ -42,6 +42,7 @@
 #define POST_MEMSZ  ((volatile uint32_t *) 0x500000A8) // {f0 count, [0501], A3FEA}
 #define POST_KEY    ((volatile uint32_t *) 0x500000AC) // {gdc pitch, last {make,code}, count}
 #define POST_GDC    ((volatile uint32_t *) 0x500000B0) // {unk count, unk cmd, disp_on, SAD}
+#define POST_CUR    ((volatile uint32_t *) 0x5000012C) // {CSR count, en, bl, top, bot, cell}
 #define POST_INT    ((volatile uint32_t *) 0x500000B4) // {INTR level, INTR rising edges}
 #define POST_KBD    ((volatile uint32_t *) 0x500000B8) // {0x41 reads, IRQ1 rises}
 #define POST_IRQL   ((volatile uint32_t *) 0x500000BC) // {IF, timer ticks, IRQ levels}
@@ -919,6 +920,26 @@ void post_mon_tick(void)
         uint32_t iv = *POST_INT;
         osd_draw_string(&fb, 4 + 30 * 8, 102, "INT", OSD_LABEL);
         hex(4 + 34 * 8, 102, iv & 0xFFFFu, 4);
+
+        // CS: the cursor, as the master GDC holds it. At the N88 Ok prompt
+        // this splits the no-cursor fault in one look:
+        //   c  CSRW/CSRFORM commands seen at all. 00 = the BIOS never sent
+        //      one (port decode, or an init path that never ran).
+        //   E  enable (CSRFORM P1 bit 7, the [0x53B]|0x80 write).
+        //   A  the cell CSRW names. Should be right of the last character.
+        //   T/B the slice top/bottom lines. 0/0 with E=1 = the three-byte
+        //      table CSRFORM never ran and the block is a hairline.
+        uint32_t cu = *POST_CUR;
+        osd_draw_string(&fb, 4 + 41 * 8, 102, "CS", OSD_LABEL);
+        hex(4 + 43 * 8, 102, (cu >> 24) & 0xFFu, 2);
+        osd_draw_string(&fb, 4 + 46 * 8, 102, "E", OSD_LABEL);
+        hex(4 + 47 * 8, 102, (cu >> 23) & 1u, 1);
+        osd_draw_string(&fb, 4 + 49 * 8, 102, "A", OSD_LABEL);
+        hex(4 + 50 * 8, 102, cu & 0xFFFu, 3);
+        osd_draw_string(&fb, 4 + 54 * 8, 102, "T", OSD_LABEL);
+        hex(4 + 55 * 8, 102, (cu >> 17) & 0x1Fu, 2);
+        osd_draw_string(&fb, 4 + 58 * 8, 102, "B", OSD_LABEL);
+        hex(4 + 59 * 8, 102, (cu >> 12) & 0x1Fu, 2);
 
         // IRQ / RD: the keyboard's last two hops, after KEY.
         //

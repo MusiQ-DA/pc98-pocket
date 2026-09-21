@@ -699,3 +699,19 @@ maketext.c 突き合わせで pc98_gdc.sv の 2 バグを特定:
 ON/OFF([0x53B]|0x80、FEAA4)」で使い分け、CSRW は 2 バイトで EAD 下位のみ。
 top=P1[4:0] / bottom=P3[7:3] / enable=P1[7] は np2 と一致(変更なし)。
 tb_pc98_gdc の期待値を修正 + tb_pc98_text にカーソル描画の回帰試験を追加。
+
+### §10.5 カーソル計器(run#346 でも出なかったため)
+
+CSRW/blink 修正後も実機でカーソルが出ず、原因が GDC 受け側か描画側か
+切り分け不能のため計器を追加:
+
+- pc98_gdc: `csr_wr_count`(CSRW/CSRFORM コマンド到着数、飽和)
+- Peripherals→core_top→softcpu MMIO **0x5000012C**:
+  `{count, en, blink, top, bot, addr[11:0]}`
+- パネル row 102 右端に `CS c=.. E=. A=... T=.. B=..` 表示
+
+読み方(Ok プロンプトで):
+- c=00 → BIOS が CSR 系を 1 回も送っていない(ポートデコードか初期化経路)
+- E=0 → ON 書き込み([0x53B]|0x80)が届いていない
+- E=1 T=0 B=0 → 3 バイトテーブル CSRFORM が未実行(ヘアライン化)
+- 全部正常 → 描画/サンプラ側(peripherals の vsync ラッチか drawn_cell)
