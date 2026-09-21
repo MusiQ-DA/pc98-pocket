@@ -304,10 +304,15 @@ module tb_post_monitor;
                      rom_read_data[119:112], rom_read_data[127:120]);
 
             // The loader window: sixteen writes off the loader's own FSM,
-            // plus one outside it.
+            // plus one outside it. The window is FFFF0-FFFFF on this machine
+            // -- d85e939 pointed the loader snoop at the reset vector, which
+            // is the sixteen bytes worth watching -- and it is HARDWIRED, not
+            // the firmware-set rom_win register the CPU-read snoop above
+            // uses. The writes here used to be FD880, the PC/AT entry, from
+            // before the machine layer was the only layer.
             for (int i = 0; i < 16; i++)
-                loader_write(20'hFD880 + i[19:0], img[i]);
-            loader_write(20'hFD890, 8'h99);
+                loader_write(20'hFFFF0 + i[19:0], img[i]);
+            loader_write(20'hFFFE0, 8'h99);
 
             $display("  loadN    = %0d (want 16)", rom_load_count);
             if (rom_load_count !== 8'd16) begin
