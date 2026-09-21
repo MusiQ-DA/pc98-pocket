@@ -301,11 +301,14 @@ module pc98_gdc (
     // (the cursor goes solid), and the BIOS's driver carries exactly that
     // bit in [0x53D] as the P2 byte of the three-byte table write. The port
     // keeps the 1-means-blink sense the renderer expects.
-    assign cursor_en        = para[P_CSRFORM + 0][7];
-    assign cursor_top       = para[P_CSRFORM + 1][4:0];
-    assign cursor_rate      = {para[P_CSRFORM + 2][1:0], para[P_CSRFORM + 1][7:4]};
-    assign cursor_bottom    = para[P_CSRFORM + 2][7:3];
-    assign cursor_blink_en  = ~para[P_CSRFORM + 1][5];
+    wire        csr_en = para[P_CSRFORM + 0][7];
+    wire [7:0]  csr_p2 = para[P_CSRFORM + 1];
+    wire [7:0]  csr_p3 = para[P_CSRFORM + 2];
+    assign cursor_en        = csr_en;
+    assign cursor_top       = csr_p2[4:0];
+    assign cursor_rate      = {csr_p3[1:0], csr_p2[7:4]};
+    assign cursor_bottom    = csr_p3[7:3];
+    assign cursor_blink_en  = ~csr_p2[5];
 
     assign zoom_disp = para[P_ZOOM][1:0];
 
