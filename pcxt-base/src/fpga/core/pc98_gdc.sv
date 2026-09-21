@@ -111,7 +111,23 @@ module pc98_gdc #(
     // ---- what the post monitor needs ---------------------------------------
     // The drawing processor is not here. If the ROM asks for it, this says so.
     output reg  [7:0]  unk_cmd,
-    output reg  [7:0]  unk_count
+    output reg  [7:0]  unk_count,
+    // ---- the drawing server (the softcore's GDC engine) ---------------------
+    // EXECUTE-class commands (VECTE 0x6C, TEXTE 0x68) stop being counted as
+    // unknown and land here instead: the snapshot ports hand the softcore the
+    // opcode and the whole parameter file, and the done port returns the
+    // engine's final EAD (the drawing cursor moves). While a snapshot is
+    // pending or the server is drawing, the FIFO-empty status bit clears --
+    // the throttle a real 7220 applies through its FIFO depth, which is what
+    // software's "wait FIFO empty" loops are for.
+    output wire        draw_req,       // an EXECUTE awaits the server
+    output wire [7:0]  draw_op,
+    output wire        draw_busy,      // status: the server is drawing
+    input  wire        srv_done_stb,   // the engine finished this EXECUTE
+    // The snapshot the engine reads, latched the moment the EXECUTE lands so
+    // the guest cannot race it: 19 bytes = VECTW (11), CSRW (4), TEXTW (2),
+    // ZOOM (1), the WRITE-mode byte (1). Served a word at a time.
+    output wire [31:0] draw_snap [0:4]
 );
 
     // ------------------------------------------------------------------
@@ -137,6 +153,45 @@ module pc98_gdc #(
     reg [3:0] csr_n;
     reg       csr_live;
     assign csr_trace = {4'b0000, csr_n, csr_tr0, csr_tr1, csr_tr2};
+
+    // The drawing server's handshake. draw_pending latches the first EXECUTE
+    // with a SNAPSHOT of everything the engine reads (the guest cannot race
+    // it); the server clears the request with srv_done_stb, which also runs
+    // the post-command reset the 7220 applies to the vector parameters.
+    reg        draw_pending;
+    reg [7:0]  draw_op_r;
+    reg        draw_busy_r;
+    reg [7:0]  snap [0:18];
+    assign draw_req  = draw_pending;
+    assign draw_op   = draw_op_r;
+    assign draw_busy = draw_busy_r;
+    genvar sk;
+    generate
+        for (sk = 0; sk < 5; sk = sk + 1) begin : g_snap
+            assign draw_snap[sk] = {snap[4*sk+3], snap[4*sk+2], snap[4*sk+1], snap[4*sk]};
+        end
+    endgenerate
+
+    // Where each snapshot byte comes from.
+    function automatic logic [5:0] snap_src(input int k);
+        if (k <= 10)     snap_src = 6'(P_VECTW + k);      // 32..42
+        else if (k <= 14) snap_src = 6'(P_CSRW + k - 11);  // 43..46
+        else if (k <= 16) snap_src = 6'(20 + k - 15);      // TEXTW 20..21
+        else if (k == 17) snap_src = 6'(P_ZOOM);           // 8
+        else              snap_src = 6'd53;                // the WRITE mode
+    endfunction
+
+    wire exec_cmd = (data_in == 8'h6C)   // VECTE
+                  | (data_in == 8'h68);  // TEXTE
+
+    // The watchdog: if the softcore server never answers, force the retire
+    // after ~4 frames of pending. A drawing server that hangs would
+    // otherwise hold the FIFO-empty throttle -- and every "wait FIFO empty"
+    // loop with it -- forever (docs/SOFTCORE_RTL_SPLIT.md's hang hazard).
+    // The drawing is simply lost; the machine lives.
+    logic [26:0] draw_watch = 27'd0;
+    localparam logic [26:0] DRAW_WATCHDOG = 27'd128_000_000;  // ~3 s of 42.95 MHz
+    wire draw_timeouts = draw_pending && (draw_watch == DRAW_WATCHDOG);
 
     // Where the next parameter goes, and how many are still expected. A new
     // command cuts a run short, which is the point of np2kai's bit-8 tag.
@@ -173,11 +228,13 @@ module pc98_gdc #(
     endfunction
 
     // Commands this module implements with no parameters, so an unknown one
-    // can be told apart from a known zero-parameter one.
+    // can be told apart from a known zero-parameter one. VECTE and TEXTE are
+    // EXECUTE-class: known, and handed to the drawing server instead.
     function automatic logic known_noparam(input logic [7:0] c);
         known_noparam = (c == 8'h05) || (c == 8'h0C)       // STOP
                      || (c == 8'h0D) || (c == 8'h6B)       // START
                      || (c == 8'h6E) || (c == 8'h6F)       // SLAVE / MASTER
+                     || (c == 8'h6C) || (c == 8'h68)       // VECTE / TEXTE
                      || (c == 8'hE0) || (c == 8'hC0);      // CSRR / LPEN
     endfunction
 
@@ -193,6 +250,10 @@ module pc98_gdc #(
             unk_cmd   <= 8'h00;
             unk_count <= 8'h00;
             csr_wr_count <= 8'h00;
+            draw_pending <= 1'b0;
+            draw_op_r    <= 8'h00;
+            draw_busy_r  <= 1'b0;
+            for (i = 0; i <= 18; i = i + 1) snap[i] <= 8'h00;
             csr_tr0 <= 8'h00; csr_tr1 <= 8'h00; csr_tr2 <= 8'h00;
             csr_n <= 4'd0; csr_live <= 1'b0;
             for (i = 0; i <= P_LAST; i = i + 1) para[i] <= 8'h00;
@@ -217,6 +278,30 @@ module pc98_gdc #(
                 para[P_CSRFORM + 0] <= 8'h01;
             end
         end else begin
+            // The server's completion: retire the request and run the
+            // post-command reset np2's gdc_vectreset applies -- the 7220
+            // clears the vector parameters after every EXECUTE. Independent
+            // of the command port: the engine finishes on its own clock.
+            if (srv_done_stb || draw_timeouts) begin
+                draw_pending <= 1'b0;
+                draw_watch   <= 23'd0;
+                draw_busy_r  <= 1'b1;      // one-cycle hold for stability
+                para[P_VECTW + 1]  <= 8'h00;   // DC = 0
+                para[P_VECTW + 2]  <= 8'h00;
+                para[P_VECTW + 3]  <= 8'h08;   // D  = 8
+                para[P_VECTW + 4]  <= 8'h00;
+                para[P_VECTW + 5]  <= 8'h08;   // D2 = 8
+                para[P_VECTW + 6]  <= 8'h00;
+                para[P_VECTW + 7]  <= 8'hFF;   // D1 = FFFF
+                para[P_VECTW + 8]  <= 8'hFF;
+                para[P_VECTW + 9]  <= 8'hFF;   // DM = FFFF
+                para[P_VECTW + 10] <= 8'hFF;
+            end else if (draw_busy_r) begin
+                draw_busy_r <= 1'b0;
+            end else if (draw_pending) begin
+                draw_watch <= draw_watch + 23'd1;
+            end
+
             if (cmd_wr) begin
                 logic [10:0] dn;
                 dn     = decode(data_in);
@@ -231,6 +316,22 @@ module pc98_gdc #(
                 if ((data_in == 8'h49 || data_in == 8'h4B)
                         && csr_wr_count != 8'hFF)
                     csr_wr_count <= csr_wr_count + 8'd1;
+
+                // EXECUTE-class: hand it to the drawing server. The snapshot
+                // lands with the latch; further EXECUTEs while pending are
+                // counted unknown (the FIFO-empty bit is already clear, so
+                // software that polls waits) -- the scope guard, sharpened.
+                if (exec_cmd && !draw_pending && !draw_busy_r) begin
+                    draw_pending <= 1'b1;
+                    draw_op_r    <= data_in;
+                    for (i = 0; i <= 18; i = i + 1)
+                        snap[i] <= para[snap_src(i)];
+                end else if (exec_cmd) begin
+                    unk_cmd <= data_in;
+                    if (unk_count != 8'hFF)
+                        unk_count <= unk_count + 8'd1;
+                end
+
 
                 // The immediate ones.
                 if (data_in == 8'h0D || data_in == 8'h6B) disp_on_r <= 1'b1;
@@ -299,7 +400,14 @@ module pc98_gdc #(
     // F3062 on the first test, so LPRD is never issued. The alternative --
     // keeping bit 7 and queueing three bytes for LPRD -- answers a question
     // the hardware should not be asking.
-    wire [7:0] status = {1'b0, hblank, vsync, 1'b0, 1'b0, 1'b1, 1'b0, 1'b0};
+    // np2kai gdc_i60: 0x80 always, 0x40 hblank, 0x20 vsync (gdc.vsync is set
+    // to 0x20 in pccore.c), 0x04 FIFO empty, 0x02 FIFO full, 0x01 data ready.
+    // BIT 2 (FIFO EMPTY) IS ALSO THE DRAWING THROTTLE: while an EXECUTE sits
+    // pending for the softcore server or the server is drawing, the bit
+    // clears -- the backpressure a real 7220 applies by filling its FIFO,
+    // which is exactly what software's "wait FIFO empty" loops consume.
+    wire fifo_empty = ~draw_pending & ~draw_busy_r;
+    wire [7:0] status = {1'b0, hblank, vsync, 1'b0, 1'b0, fifo_empty, 1'b0, 1'b0};
 
     assign data_out = a1 ? 8'h00 : status;
 

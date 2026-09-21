@@ -112,3 +112,21 @@
 
 関連: `docs/GOAL.md`（マイルストーン・資源予算）/ `docs/PC98_GDC_DESIGN.md`（第3期判断）
 / `docs/HANDOVER.md` §10（カーソル修正の経緯）
+
+## 7. 追記 (2026-09-22, 実装後)
+
+§3 の検証結果の修正と現状:
+
+- **st マスタはゲスト実行中に動く**: `BUS_ARBITER.sv:59` は
+  `hold_request = dma_hold_request | ext_access_request` — st_run は HOLD を上げ、
+  HLDA (chipset_aen) を得て**サイクルスチール**する。「hold 中しか勝てない」は
+  誤りで、postmon の ROM 読みが実証済み。よって softcore エンジンの GVRAM RMW
+  経路は機能する (毎バイト hold 握手 ≒ 実機のメモリサイクル相当)
+- **暫定サーバ実装済み**: `gdc_service.c` — np2kai の vectl/vectt/vectc/vectr/text
+  を移植、除算は udiv32、ROM 32K 化 (BRAM 47% → 余裕) で収容。VECTE 捕捉・
+  スナップショット 19B・FIFO-empty スロットル・done ベクトルリセットは RTL 側
+  (tb_pc98_gdc で検証)
+- **ウォッチドッグ搭載** (§6-1 のハング対策): サーバ無応答なら ~3 秒で強制
+  完了。描画は失うが機械は固まらない
+- §6-3 の最終形 (ピクセルループの RTL 化 = gvram_seq 拡張) は将来課題のまま。
+  handshake/スナップショット設計はそのまま流用可能

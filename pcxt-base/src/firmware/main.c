@@ -7,6 +7,8 @@
 #include "sdramtest.h"
 #include "postmon.h"
 #include "softcpu_regs.h"
+
+void gdc_poll(void);
 #include "osd_font.h"
 #include "vkb_ui.h"
 
@@ -158,6 +160,7 @@ int main(void)
         // and a diskless boot runs with the guest bus entirely its own.
         if (mounted_a || mounted_b)
             fdd_poll();
+        gdc_poll();
 #ifdef MACHINE_PC98
         if (mounted_hdd)
             scsi_poll();

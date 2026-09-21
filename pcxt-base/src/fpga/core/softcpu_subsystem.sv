@@ -144,6 +144,13 @@ module softcpu_subsystem (
     input  [23:0] dbg_gdc_cur,
     input   [7:0] dbg_gdc_csrcnt,
     input  [31:0] dbg_gdc_csrtrace,
+    // The drawing server's view of the two GDCs, already in this domain via
+    // the synchronisers below; the done LEVEL the engine writes back.
+    input   [1:0]  gdc_draw_req,
+    input   [1:0]  gdc_draw_busy,
+    input  [15:0]  gdc_draw_ops,
+    input [159:0]  gdc_draw_snaps,
+    output  [1:0]  gdc_srv_done_levels,
     // How far a key press gets, served at 0x500000AC. See core_top.
     input   [7:0] key_count,
     input   [7:0] key_last,
@@ -314,6 +321,24 @@ module softcpu_subsystem (
     // which the CPU never addresses directly but which shares a number with it
     // in every datasheet that matters.
     wire sel_font   = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h7);
+
+    // The drawing server's handshake synchronisers: req/busy cross from the
+    // chipset domain (quasi-static -- the engine holds each state for
+    // microseconds), and the done LEVEL the engine writes toggles per
+    // command; Peripherals edge-detects its synchronized rise.
+    logic [1:0] draw_req_s1 = 2'b00, draw_req_s = 2'b00;
+    logic [1:0] draw_busy_s = 2'b00;
+    reg   [1:0] gdc_srv_done_levels_r = 2'b00;
+    always @(posedge clk_pico) begin
+        draw_req_s1  <= gdc_draw_req;
+        draw_req_s   <= draw_req_s1;
+        draw_busy_s  <= gdc_draw_busy;
+        if (cpu_mem_valid && cpu_mem_wstrb[0] && cpu_mem_addr == 32'h5000_015C)
+            gdc_srv_done_levels_r[0] <= cpu_mem_wdata[0];
+        if (cpu_mem_valid && cpu_mem_wstrb[0] && cpu_mem_addr == 32'h5000_019C)
+            gdc_srv_done_levels_r[1] <= cpu_mem_wdata[0];
+    end
+    assign gdc_srv_done_levels = gdc_srv_done_levels_r;
 
     // OSD control at 0x20000004: bit0 = overlay shown.
     reg osd_active_r = 1'b0;
@@ -569,7 +594,10 @@ module softcpu_subsystem (
     sprom #(
         .aw(13),
         .dw(32),
-        .numwords(6144),
+        // 8192 words = 32 KB. The drawing server (gdc_service.c) needs more
+        // than the old 24 KB held; the M10K budget has the room (47% used)
+        // and the data_loader's fw_word is 13 bits already.
+        .numwords(8192),
         .MEM_INIT_FILE("../firmware/firmware.vh")
     ) pico_rom (
         .clk  (clk_pico),
@@ -1150,6 +1178,25 @@ module softcpu_subsystem (
             // The CSRFORM byte trace: {how many, first three bytes after
             // the last 4B}. The panel's CT word.
             32'h5000_0130: cpu_mem_rdata = dbg_gdc_csrtrace;
+            // ---- the drawing server --------------------------------------
+            // 0x140/0x180: {busy, req, opcode} for master/slave; +4..+0x14:
+            // the five snapshot words. 0x15C/0x19C (writes): the done LEVEL
+            // -- the engine writes 1 then 0, whose rising edge retires the
+            // EXECUTE in the GDC's own domain.
+            32'h5000_0140: cpu_mem_rdata = {22'd0, draw_req_s[0],
+                                            draw_busy_s[0], gdc_draw_ops[7:0]};
+            32'h5000_0144: cpu_mem_rdata = gdc_draw_snaps[31:0];
+            32'h5000_0148: cpu_mem_rdata = gdc_draw_snaps[63:32];
+            32'h5000_014C: cpu_mem_rdata = gdc_draw_snaps[95:64];
+            32'h5000_0150: cpu_mem_rdata = gdc_draw_snaps[127:96];
+            32'h5000_0154: cpu_mem_rdata = gdc_draw_snaps[159:128];
+            32'h5000_0180: cpu_mem_rdata = {22'd0, draw_req_s[1],
+                                            draw_busy_s[1], gdc_draw_ops[15:8]};
+            32'h5000_0184: cpu_mem_rdata = gdc_draw_snaps[191:160];
+            32'h5000_0188: cpu_mem_rdata = gdc_draw_snaps[223:192];
+            32'h5000_018C: cpu_mem_rdata = gdc_draw_snaps[255:224];
+            32'h5000_0190: cpu_mem_rdata = gdc_draw_snaps[287:256];
+            32'h5000_0194: cpu_mem_rdata = gdc_draw_snaps[319:288];
             32'h5000_00B8: cpu_mem_rdata = {16'd0, dbg_kbd_rd_count, dbg_kbd_irq_count};
             32'h5000_00BC: cpu_mem_rdata = {8'd0,
                                             dbg_timer_count, dbg_irq_level, 8'd0};

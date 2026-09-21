@@ -1077,6 +1077,9 @@ module core_top (
     wire [23:0] dbg_gdc_cur;
     wire  [7:0] dbg_gdc_csrcnt;
     wire [31:0] dbg_gdc_csrtrace;
+    wire  [1:0] gdc_draw_req, gdc_draw_busy, gdc_srv_done_levels;
+    wire [15:0] gdc_draw_ops;
+    wire [159:0] gdc_draw_snaps;
 
     // INTR into the CPU. BASIC clears the screen, draws the function key line
     // and stops; an interrupt that never arrives is the shape that produces
@@ -1261,6 +1264,11 @@ module core_top (
         .dbg_gdc_cur                (dbg_gdc_cur),
         .dbg_gdc_csrcnt             (dbg_gdc_csrcnt),
         .dbg_gdc_csrtrace           (dbg_gdc_csrtrace),
+        .gdc_draw_req               (gdc_draw_req),
+        .gdc_draw_busy              (gdc_draw_busy),
+        .gdc_draw_ops               (gdc_draw_ops),
+        .gdc_draw_snaps             (gdc_draw_snaps),
+        .gdc_srv_done_levels        (gdc_srv_done_levels),
         .pc98_tvfill_view           (pc98_tvfill_view),
         .pc98_rowbuf_freq_count     (pc98_rowbuf_freq_count),
         .pc98_rowbuf_fvalid_count   (pc98_rowbuf_fvalid_count),
@@ -2684,6 +2692,11 @@ module core_top (
         .dbg_gdc_cur                        (dbg_gdc_cur),
         .dbg_gdc_csrcnt                     (dbg_gdc_csrcnt),
         .dbg_gdc_csrtrace                   (dbg_gdc_csrtrace),
+        .gdc_draw_req                       (gdc_draw_req),
+        .gdc_draw_busy                      (gdc_draw_busy),
+        .gdc_draw_ops                       (gdc_draw_ops),
+        .gdc_draw_snaps                     (gdc_draw_snaps),
+        .gdc_srv_done_levels                (gdc_srv_done_levels),
         .pc98_tvfill_view                   (pc98_tvfill_view),
         .pc98_rowbuf_freq_count             (pc98_rowbuf_freq_count),
         .pc98_rowbuf_fvalid_count           (pc98_rowbuf_fvalid_count),

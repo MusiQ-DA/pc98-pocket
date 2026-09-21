@@ -228,6 +228,16 @@ module PERIPHERALS #(
     // the metal's driver sends the one-byte ON or the three-byte table form
     // -- and where the bytes actually land -- is what the panel's CT reads.
     output  logic   [31:0]  dbg_gdc_csrtrace,
+    // The drawing server: the softcore's GDC engine. Two channels, master
+    // and slave; each carries the EXECUTE handshake (req/busy + opcode) and
+    // the five snapshot words, and takes back a done LEVEL whose rising
+    // edge (synchronised here, the softcore is in another domain) retires
+    // the command and runs the vector reset.
+    output  logic   [1:0]   gdc_draw_req,
+    output  logic   [1:0]   gdc_draw_busy,
+    output  logic  [15:0]   gdc_draw_ops,
+    output  logic [159:0]   gdc_draw_snaps,
+    input   logic   [1:0]   gdc_srv_done_levels,
     output  logic   [63:0]  pc98_tvfill_view,
     // The kanji fetch path's activity: f_req pulses and f_valid beats. With
     // ANK out of the BRAM these only move for two-byte cells, so on a screen
@@ -1934,6 +1944,35 @@ end endgenerate
     assign dbg_gdc_unk_cmd   = gdc_m_unk_cmd;
     assign dbg_gdc_unk_count = gdc_m_unk_count;
     assign dbg_gdc_disp_on   = gdc_m_disp_on;
+    // The drawing-server plumbing: the two channels' handshakes and the
+    // done-level synchronisers (the softcore writes the level; the rising
+    // edge here retires the EXECUTE in the GDC).
+    wire        gdc_m_draw_req, gdc_m_draw_busy, gdc_m_done_stb;
+    wire        gdc_s_draw_req, gdc_s_draw_busy, gdc_s_done_stb;
+    wire [7:0]  gdc_m_draw_op,  gdc_s_draw_op;
+    wire [31:0] gdc_m_draw_snap [0:4];
+    wire [31:0] gdc_s_draw_snap [0:4];
+
+    logic [1:0] srv_done_s1 = 2'b00, srv_done_s2 = 2'b00, srv_done_s3 = 2'b00;
+    always_ff @(posedge clock) begin
+        srv_done_s1 <= gdc_srv_done_levels;
+        srv_done_s2 <= srv_done_s1;
+        srv_done_s3 <= srv_done_s2;
+    end
+
+    assign gdc_draw_req   = {gdc_s_draw_req,   gdc_m_draw_req};
+    assign gdc_draw_busy  = {gdc_s_draw_busy,  gdc_m_draw_busy};
+    assign gdc_draw_ops   = {gdc_s_draw_op,    gdc_m_draw_op};
+    assign gdc_m_done_stb = srv_done_s2[0] & ~srv_done_s3[0];
+    assign gdc_s_done_stb = srv_done_s2[1] & ~srv_done_s3[1];
+    genvar dsg;
+    generate
+        for (dsg = 0; dsg < 5; dsg = dsg + 1) begin : g_dsnap
+            assign gdc_draw_snaps[dsg*32 +: 32]      = gdc_m_draw_snap[dsg];
+            assign gdc_draw_snaps[80 + dsg*32 +: 32] = gdc_s_draw_snap[dsg];
+        end
+    endgenerate
+
     assign dbg_gdc_cur       = {gdc_m_csrcnt,     // cc: command count
                                 gdc_m_cur_en, 3'b000, // E
                                 gdc_m_cur_addr[11:0], // aaa: the cell
@@ -1955,6 +1994,9 @@ end endgenerate
         .cursor_top(gdc_m_cur_top), .cursor_bottom(gdc_m_cur_bot),
         .cursor_rate(gdc_m_cur_rate), .zoom_disp(gdc_m_zoom),
         .csr_wr_count(gdc_m_csrcnt), .csr_trace(gdc_m_csrtrace),
+        .draw_req(gdc_m_draw_req), .draw_op(gdc_m_draw_op),
+        .draw_busy(gdc_m_draw_busy), .srv_done_stb(gdc_m_done_stb),
+        .draw_snap(gdc_m_draw_snap),
         .unk_cmd(gdc_m_unk_cmd), .unk_count(gdc_m_unk_count)
     );
 
@@ -1971,6 +2013,9 @@ end endgenerate
         .cursor_top(gdc_s_cur_top), .cursor_bottom(gdc_s_cur_bot),
         .cursor_rate(gdc_s_cur_rate), .zoom_disp(gdc_s_zoom),
         .csr_wr_count(),  // the slave has no cursor; only the master's counts
+        .draw_req(gdc_s_draw_req), .draw_op(gdc_s_draw_op),
+        .draw_busy(gdc_s_draw_busy), .srv_done_stb(gdc_s_done_stb),
+        .draw_snap(gdc_s_draw_snap),
         .unk_cmd(gdc_s_unk_cmd), .unk_count(gdc_s_unk_count)
     );
 

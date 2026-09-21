@@ -47,6 +47,24 @@ module tb_pc98_gdc;
     wire [5:0]  cursor_rate;
     wire [7:0]  csr_wr_count;
     wire [31:0] csr_trace;
+    wire        draw_req, draw_busy;
+    wire [7:0]  draw_op;
+    wire [31:0] draw_snap [0:4];
+    logic       srv_done = 1'b0;
+    logic [7:0] st_v;
+
+    // Peek a parameter byte, the way the engine's snapshot does.
+    function [7:0] para_rd(input int idx);
+        para_rd = dut.para[idx];
+    endfunction
+
+    // One status read: set the port up, sample after the clock.
+    task automatic status_rd(output logic [7:0] v);
+        cs = 1'b1; a1 = 1'b0; io_read_n = 1'b0;
+        @(posedge clk);
+        v = data_out;
+        io_read_n = 1'b1; cs = 1'b0;
+    endtask
     wire [1:0]  zoom_disp;
     wire [7:0]  unk_cmd, unk_count;
 
@@ -62,6 +80,8 @@ module tb_pc98_gdc;
         .cursor_top(cursor_top), .cursor_bottom(cursor_bottom),
         .cursor_rate(cursor_rate), .zoom_disp(zoom_disp),
         .csr_wr_count(csr_wr_count), .csr_trace(csr_trace),
+        .draw_req(draw_req), .draw_op(draw_op), .draw_busy(draw_busy),
+        .srv_done_stb(srv_done), .draw_snap(draw_snap),
         .unk_cmd(unk_cmd), .unk_count(unk_count)
     );
 
@@ -200,16 +220,52 @@ module tb_pc98_gdc;
         want("status, hblank+vsync", data_out, 8'h64);
         io_read_n = 1'b1; cs = 1'b0;
 
-        // ---- the guard on the scope decision --------------------------------
-        // The drawing processor is not implemented; asking for it has to be
-        // visible, because "PC-98 software draws through the GRCG" is a
-        // judgement and this is what falsifies it.
+        // ---- the drawing server's handshake ---------------------------------
+        // VECTE/TEXTE are EXECUTE-class now: latched with a snapshot of the
+        // vector parameters, throttled (the FIFO-empty status bit clears)
+        // until the engine's done edge retires them and runs the vector
+        // reset. Anything ELSE drawing-shaped stays counted as unknown --
+        // the scope guard this always was.
         want("no unknown commands yet", unk_count, 0);
-        cmd(8'h6C);                        // VECTE -- a drawing command
-        want("VECTE counted as unknown",  unk_count, 1);
-        want("VECTE recorded",            unk_cmd,   8'h6C);
-        cmd(8'h68);                        // TEXTE
-        want("TEXTE counted too",         unk_count, 2);
+        cmd(8'h49); par(8'h34); par(8'h12); par(8'h00); // CSRW: EAD 0x1234
+        cmd(8'h4C);                                      // VECTW, 11 params
+        par(8'h49); par(8'h0A); par(8'h00);              //  ope=0x49, DC=10
+        par(8'h0A); par(8'h00);                          //  D  = 10
+        par(8'h0A); par(8'h00);                          //  D2 = 10
+        par(8'h14); par(8'h00);                          //  D1 = 20
+        par(8'h00); par(8'h00);                          //  DM = 0
+        cmd(8'h6C);                                      // VECTE
+        want("VECTE latched for the server", draw_req, 1);
+        want("VECTE opcode carried",        draw_op,  8'h6C);
+        want("snapshot ope",                draw_snap[0][7:0],  8'h49);
+        want("snapshot DC",                 draw_snap[0][23:8], 16'h000A);
+        want("snapshot D1",                 {draw_snap[2][7:0], draw_snap[1][31:24]},
+                                                          16'h0014);
+        want("snapshot CSRW low",           draw_snap[2][31:24], 8'h34);
+        want("snapshot CSRW mid",           draw_snap[3][7:0],   8'h12);
+        // FIFO empty clears while pending (the throttle).
+        cs = 1'b1; a1 = 1'b0; io_read_n = 1'b0; @(posedge clk);
+        want("FIFO empty clears while pending", data_out & 8'h04, 8'h00);
+        io_read_n = 1'b1; cs = 1'b0;
+        cmd(8'h6C);                        // a second EXECUTE while pending
+        want("second EXECUTE while pending is unknown", unk_count, 1);
+        want("second EXECUTE recorded", unk_cmd, 8'h6C);
+        @(posedge clk);
+        srv_done = 1; @(posedge clk);      // one full clock of done
+        srv_done = 0; @(posedge clk);
+        @(posedge clk);                    // let the busy hold cycle pass
+        @(posedge clk);
+        want("done retires the request", draw_req, 0);
+        want("vector reset: DC low",  para_rd(33), 8'h00);
+        want("vector reset: D low",   para_rd(35), 8'h08);
+        want("vector reset: D2 low",  para_rd(37), 8'h08);
+        want("vector reset: D1 high", para_rd(40), 8'hFF);
+        status_rd(st_v);
+        want("FIFO empty returns",    st_v & 8'h04, 8'h04);
+
+        cmd(8'h6D);                        // an unassigned drawing opcode
+        want("unknown stays counted", unk_count, 2);
+        want("unknown recorded",      unk_cmd,   8'h6D);
         // ...and a command that IS implemented must not be counted.
         cmd(8'h0D);
         want("START not counted unknown",  unk_count, 2);
