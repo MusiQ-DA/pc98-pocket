@@ -25,6 +25,16 @@ module tb_pc98_text;
     logic [9:0]  hcount = 10'd0, vcount = 10'd0;
     logic        blink_on = 1'b1;
 
+    // The GDC's display registers and cursor, driven directly here; the
+    // decode of CSRW/CSRFORM bytes is tb_pc98_gdc's business, this checks
+    // that the numbers the renderer receives put the block on the right cell.
+    logic        gdc_on = 1'b0;      // fallback: 80 columns from cell 0
+    logic [7:0]  gdc_pitch = 8'd0;
+    logic [15:0] gdc_sad = 16'd0;
+    logic [15:0] cur_addr = 16'd0;
+    logic        cur_en = 1'b0, cur_blink = 1'b0;
+    logic [4:0]  cur_top = 5'd0, cur_bot = 5'd0;
+
     wire [11:0] tv_cell;
     logic [7:0] tv_attr;
     wire  [6:0] font_cell;
@@ -36,6 +46,9 @@ module tb_pc98_text;
     pc98_text_render dut (
         .clk(clk), .pix_ce(pix_ce), .hcount(hcount), .vcount(vcount),
         .blink_on(blink_on),
+        .gdc_on(gdc_on), .gdc_pitch(gdc_pitch), .gdc_sad(gdc_sad),
+        .cur_addr(cur_addr), .cur_en(cur_en), .cur_blink(cur_blink),
+        .cur_top(cur_top), .cur_bot(cur_bot),
         .tv_cell(tv_cell), .tv_attr(tv_attr),
         .font_cell(font_cell), .font_line(font_line), .font_row(font_row),
         .grb(grb), .pixel(pixel)
@@ -125,6 +138,33 @@ module tb_pc98_text;
         // Kanji is no longer this module's business: the row buffer fetches
         // both halves and hands over bytes, and it reports kanji_seen. Covered
         // by tb_pc98_rowbuf instead.
+
+        // The GDC cursor: a solid reverse slice on the one cell CSRW names.
+        // cur_addr is the plain cell index (row*80 + col) -- the decode that
+        // scrambles it lives in pc98_gdc and has its own bench; here the
+        // renderer must honour it as-is. Cell (10,0) = 10, lines 1..8, the
+        // form the BIOS table writes (4B 01 02 4B: top 1, bottom 9-ish).
+        scr_attr  = 8'hE1;                // no reverse, glyph 1010_0000
+        glyph_row = 8'b1010_0000;
+        cur_en = 1'b1; cur_blink = 1'b0;
+        cur_addr = 16'd10; cur_top = 5'd1; cur_bot = 5'd8;
+        expect_pixel(8*10 + 0, 2, 1'b0, "cursor inverts a lit pixel");
+        expect_pixel(8*10 + 1, 2, 1'b1, "cursor inverts a dark pixel");
+        expect_pixel(8*10 + 0, 0, 1'b1, "line above cur_top untouched");
+        expect_pixel(8*10 + 0, 9, 1'b1, "line below cur_bot untouched");
+        expect_pixel(8*9  + 0, 2, 1'b1, "the cell left of the cursor untouched");
+        // Same form on row 1: cell 80+10 = 90, line 16+2.
+        cur_addr = 16'd90;
+        expect_pixel(8*10 + 0, 18, 1'b0, "cursor on row 1 inverts");
+        expect_pixel(8*10 + 0, 2,  1'b1, "row 0 no longer inverted");
+        // Blinking form: follows blink_on, and enable gates it all.
+        cur_blink = 1'b1; blink_on = 1'b0;
+        expect_pixel(8*10 + 0, 18, 1'b1, "blinking cursor, dark phase");
+        blink_on = 1'b1;
+        expect_pixel(8*10 + 0, 18, 1'b0, "blinking cursor, lit phase");
+        cur_en = 1'b0;
+        expect_pixel(8*10 + 0, 18, 1'b1, "disabled cursor draws nothing");
+        cur_en = 1'b1; cur_blink = 1'b0;
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");

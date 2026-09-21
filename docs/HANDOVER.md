@@ -679,3 +679,23 @@ is_modifier / compose_*、c011d8a)はユーザー指摘で撤去 — make はラ
 失敗する場合は「保持型 make が金属で届かない」ことを意味し、c011d8a の
 chord 版(キー入力ごとに [mod make][key make]…[mod break] を組み直す)が
 フォールバックとして git 履歴にある。
+
+### §10.4 カーソルが出ない原因(確定・修正済み)
+
+実機で「反転ブロックが一瞬も出ない」件。BIOS 逆アセンブルと np2kai の
+maketext.c 突き合わせで pc98_gdc.sv の 2 バグを特定:
+
+1. **CSRW のアドレスデコード**: RTL は uPD7220 マニュアル形式
+   `{P3[1:0], P2, P1[4:0]}`(P1 のビット 7-5 を捨てる)だったが、
+   BIOS (F49C9) は `mov ax,di / out 60h,al / mov al,ah / out 60h,al` と
+   **EAD をプレーンなリトルエンディアン 16 ビット**で書く。np2kai も
+   `LOADINTELWORD(para+GDC_CSRW)` で `curpos<0x1000` をセル番号として使用。
+   旧デコードだと EAD がスクランブルされ、カーソルは見えない場所に飛ぶ
+2. **点滅制御ビット**: RTL は P1 bit6 を見ていたが、np2 は **P2 bit5
+   (0x20) = 点滅なし**。BIOS のフル CSRFORM テーブル書き込みの P2 は
+   [0x53D](0x00=点滅 / 0x20=固定) — まさにこのビット
+
+補足: BIOS は CSRFORM を「フル 3 バイト(テーブル駆動、FEA44)」と「1 バイト
+ON/OFF([0x53B]|0x80、FEAA4)」で使い分け、CSRW は 2 バイトで EAD 下位のみ。
+top=P1[4:0] / bottom=P3[7:3] / enable=P1[7] は np2 と一致(変更なし)。
+tb_pc98_gdc の期待値を修正 + tb_pc98_text にカーソル描画の回帰試験を追加。

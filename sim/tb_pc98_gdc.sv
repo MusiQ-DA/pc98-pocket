@@ -40,7 +40,7 @@ module tb_pc98_gdc;
     wire [7:0]  pitch;
     wire [15:0] part_sad [0:3];
     wire [9:0]  part_len [0:3];
-    wire [14:0] cursor_addr;
+    wire [15:0] cursor_addr;
     wire [3:0]  cursor_dot;
     wire        cursor_en, cursor_blink_en;
     wire [4:0]  cursor_top, cursor_bottom;
@@ -141,14 +141,23 @@ module tb_pc98_gdc;
         want("partition 0 SAD took the two", part_sad[0], 16'hBBAA);
 
         // ---- CSRW / CSRFORM -------------------------------------------------
+        // The address is a plain little-endian word (np2kai maketext:
+        // LOADINTELWORD(para + GDC_CSRW)); the manual's interleaved reading
+        // drops bits 7-5 of byte 0 and scrambles the cell -- the bug that
+        // made the cursor invisible on hardware.
         cmd(8'h49); par(8'h21); par(8'h43); par(8'h05);
-        want("cursor EAD low bits",  cursor_addr[4:0],  5'h01);
-        want("cursor dot address",   cursor_dot,        4'h0);
+        want("cursor EAD, plain LE word", cursor_addr, 16'h4321);
+        want("cursor dot address",        cursor_dot,  4'h0);
+        // CSRFORM: enable P1 bit7, top P1 bits 4-0, bottom P3 bits 7-3, and
+        // P2 bit 5 is "does NOT blink" -- the driver carries 0x00 (blink) or
+        // 0x20 (solid) in [0x53D] as exactly that byte.
         cmd(8'h4B); par(8'hC1); par(8'h20); par(8'h88);
         want("cursor enable",        cursor_en,         1);
-        want("cursor blink enable",  cursor_blink_en,   1);
+        want("cursor solid (P2 bit5)", cursor_blink_en, 0);
         want("cursor top line",      cursor_top,        5'h01);
         want("cursor bottom line",   cursor_bottom,     5'h11);
+        cmd(8'h4B); par(8'hC1); par(8'h00); par(8'h88); // blinking form
+        want("cursor blinking (P2 bit5 clear)", cursor_blink_en, 1);
 
         // ---- the status register --------------------------------------------
         // bit 6 hblank, bit 5 vsync, bit 2 FIFO empty, and bit 7 CLEAR.

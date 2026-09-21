@@ -1907,7 +1907,7 @@ end endgenerate
     wire [7:0]  gdc_m_pitch,   gdc_s_pitch;
     wire [14:0] gdc_m_sad [0:3], gdc_s_sad [0:3];
     wire [9:0]  gdc_m_len [0:3], gdc_s_len [0:3];
-    wire [14:0] gdc_m_cur_addr,  gdc_s_cur_addr;
+    wire [15:0] gdc_m_cur_addr,  gdc_s_cur_addr;
     wire [3:0]  gdc_m_cur_dot,   gdc_s_cur_dot;
     wire        gdc_m_cur_en,    gdc_s_cur_en;
     wire        gdc_m_cur_bl,    gdc_s_cur_bl;
@@ -2197,7 +2197,7 @@ end endgenerate
     logic pc98_vs_s1, pc98_vs_px, pc98_vs_px_d;
     logic [7:0]  gdc_pitch_px;
     logic [15:0] gdc_sad_px;
-    logic [13:0] gdc_cur_addr_px;
+    logic [15:0] gdc_cur_addr_px;
     logic [4:0]  gdc_cur_top_px, gdc_cur_bot_px;
     logic gdc_cur_en_s1, gdc_cur_en_px;
     logic gdc_cur_bl_s1, gdc_cur_bl_px;

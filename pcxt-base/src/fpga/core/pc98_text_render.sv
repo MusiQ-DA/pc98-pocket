@@ -46,7 +46,7 @@ module pc98_text_render #(
     // The cursor, as the master GDC's CSRW/CSRFORM leave it. The address is
     // a WORD index into the text plane -- the same space gdc_sad and the
     // cell counter below count in -- so the comparison is direct.
-    input  wire [13:0] cur_addr,
+    input  wire [15:0] cur_addr,
     input  wire        cur_en,
     input  wire        cur_blink,
     input  wire [4:0]  cur_top,
@@ -148,7 +148,7 @@ module pc98_text_render #(
     // of the one cell CSRW names. Blink rides the attribute blink phase --
     // close enough to the machine's own ~2 Hz until someone needs the exact
     // CSRFORM rate.
-    wire cursor_here = cur_en & (drawn_cell == {2'b00, cur_addr[11:0]});
+    wire cursor_here = cur_en & (drawn_cell == cur_addr[11:0]);
     wire cursor_line = cursor_here & (line >= cur_top) & (line <= cur_bot);
     wire cursor_show = cursor_line & (~cur_blink | blink_on);
 

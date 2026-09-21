@@ -85,7 +85,7 @@ module pc98_gdc (
     output wire [15:0] part_sad [0:3],
     output wire [9:0]  part_len [0:3],
     // The cursor, as CSRW and CSRFORM leave it.
-    output wire [14:0] cursor_addr,
+    output wire [15:0] cursor_addr,
     output wire [3:0]  cursor_dot,    // dot address within the word
     output wire        cursor_en,
     output wire        cursor_blink_en,
@@ -260,17 +260,31 @@ module pc98_gdc (
         end
     endgenerate
 
-    // CSRW: three bytes, {EAD low, EAD mid, dAD/EAD high}.
-    assign cursor_addr = {para[P_CSRW + 2][1:0], para[P_CSRW + 1], para[P_CSRW + 0][4:0]};
-    assign cursor_dot  = para[P_CSRW + 2][7:4];
+    // CSRW: the address is a PLAIN little-endian 16-bit word. np2kai's text
+    // side does LOADINTELWORD(para + GDC_CSRW) and treats it as the cell
+    // index (curpos < 0x1000), and the BIOS's own driver writes AL then AH of
+    // the word address directly (F49C9: out 60h,al / mov al,ah / out 60h,al --
+    // two bytes, no third). The uPD7220 manual's interleaved reading
+    // {EAD14-13, EAD12-5, EAD4-0} drops bits 7-5 of the first byte, which
+    // scrambles the cell across the screen; with it the cursor never lands
+    // where the user is looking, which is what "no reverse block, ever"
+    // looked like on hardware. The dot address rides the third byte's high
+    // nibble -- PC-98 never sends one, so it stays zero.
+    assign cursor_addr       = {para[P_CSRW + 1], para[P_CSRW + 0]};
+    assign cursor_dot        = para[P_CSRW + 2][7:4];
 
-    // CSRFORM: display-cursor enable, blink enable and rate, top and bottom
-    // line within the cell.
+    // CSRFORM: display-cursor enable (P1 bit 7), top line (P1 bits 4-0) and
+    // bottom line (P3 bits 7-3), as np2kai's maketext reads them. BLINK IS
+    // P2 BIT 5, INVERTED: np2 treats a set bit as "does not blink" (the
+    // cursor goes solid), and the BIOS's driver carries exactly that bit in
+    // [0x53D] -- 0x00 for a blinking form, 0x20 for a solid one -- as the
+    // P2 byte of the three-byte table write. The port keeps the 1-means-
+    // blink sense the renderer expects.
     assign cursor_en        = para[P_CSRFORM + 0][7];
-    assign cursor_blink_en  = para[P_CSRFORM + 0][6];
     assign cursor_top       = para[P_CSRFORM + 0][4:0];
     assign cursor_rate      = {para[P_CSRFORM + 2][1:0], para[P_CSRFORM + 1][7:4]};
     assign cursor_bottom    = para[P_CSRFORM + 2][7:3];
+    assign cursor_blink_en  = ~para[P_CSRFORM + 1][5];
 
     assign zoom_disp = para[P_ZOOM][1:0];
 
