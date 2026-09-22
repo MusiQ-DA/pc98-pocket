@@ -12,20 +12,23 @@
                 "address": "0x6C",
                 "defaultval": 0,
                 "options": [
-                    { "value": 0, "name": "None" },
-                    { "value": 1, "name": "Floppy A" },
-                    { "value": 2, "name": "Floppy B" },
-                    { "value": 3, "name": "A & B" }
+                    {
+                        "value": 0,
+                        "name": "None"
+                    },
+                    {
+                        "value": 1,
+                        "name": "Floppy A"
+                    },
+                    {
+                        "value": 2,
+                        "name": "Floppy B"
+                    },
+                    {
+                        "value": 3,
+                        "name": "A & B"
+                    }
                 ]
-            },
-            {
-                "name": "Settings (OSD)",
-                "id": 2,
-                "type": "action",
-                "enabled": true,
-                "writeonly": true,
-                "address": "0x54",
-                "value": 1
             },
             {
                 "name": "Reset PC",

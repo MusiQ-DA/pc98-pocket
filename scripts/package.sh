@@ -143,12 +143,17 @@ def video(j):
     ]
 
 def interact(j):
-    # What the Pocket's Core Settings menu shows for this core. All three
-    # addresses are decoded in core_top's bridge block: 0x50 resets the guest,
-    # 0x54 opens the OSD's settings, 0x6C is the floppy write-protect pair
-    # wired to floppy.v. The values inherited from the PC/XT build carried the
-    # same three, so this is a keep, written down rather than copied from a
-    # stale build directory.
+    # What the Pocket's Core Settings menu shows for this core. Both addresses
+    # are decoded in core_top's bridge block: 0x50 resets the guest, 0x6C is
+    # the floppy write-protect pair wired to floppy.v.
+    #
+    # THERE IS NO "Settings (OSD)" ACTION ON PURPOSE. One existed (0x54, still
+    # decoded in the RTL) until it turned out to be a trap: selecting it opens
+    # the core's OSD, but the Pocket's own menu -- which is the framework's UI,
+    # and no bridge command can close it -- sits on top, so the choice was
+    # "press B once" versus "press SELECT and never open this menu at all".
+    # SELECT is the one path now; the OSD opens white-on-black over the machine
+    # with no framework menu involved.
     j['interact']['variables'] = [
         {"name": "Write Protect", "id": 3, "type": "list",
          "enabled": True, "persist": True, "writeonly": True,
@@ -159,9 +164,6 @@ def interact(j):
              {"value": 2, "name": "Floppy B"},
              {"value": 3, "name": "A & B"},
          ]},
-        {"name": "Settings (OSD)", "id": 2, "type": "action",
-         "enabled": True, "writeonly": True,
-         "address": "0x54", "value": 1},
         {"name": "Reset PC", "id": 1, "type": "action",
          "enabled": True, "writeonly": True,
          "address": "0x50", "value": 1},

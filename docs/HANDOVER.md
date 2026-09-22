@@ -824,3 +824,16 @@ softcpu で 2FF 同期)。帯の色バーも消え、背景は黒。
 
 実装: fdd_service.c に fdd_eject/fdd_insert/fdd_is_inserted/fdd_mounted_sectors、
 settings_ui.c に IT_FDD 行（Hardware 先頭）。ROM +712B (28088 text / 28300 bin)。
+
+### §10.10 Pocket メニューの整理 (2026-09-22, 4140b4e/このcommit)
+
+- **固定アセットはメニューに出さない**: data.json のパラメータ bit0
+  (user-reloadable = Core UI 表示) を BIOS/ITF/Font/Firmware/Settings から
+  クリア。Core Settings に残るのは **Floppy A/B + Hard Disk**（選ぶための
+  スロット）と interact の **Write Protect / Reset PC** のみ
+- **OSD を開くのは SELECT 一択**: Pocket メニューの "Settings (OSD)" アクション
+  (0x54) は削除した。APF に framework メニューを閉じる host/target コマンドは
+  無く（0x00B0 は「メニューが開いている」をコアに教えるだけ）、選んでも
+  「B を1回押す」対「SELECT ならメニューを一切開かない」の比較になっていた。
+  RTL の 0x54 デコードと firmware の osd_open 経路は休眠のまま残置
+- input.json の Select ラベル = "Select: Settings" がその唯一の入口
