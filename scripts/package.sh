@@ -83,6 +83,13 @@ def core(j):
         c['filename'] = 'bitstream.rbf_r'
 
 def data(j):
+    # THE DISTRIBUTED ASSETS ARE NOT MENU ITEMS. Parameters bit 0 is
+    # "user-reloadable in the Core UI", and it was set on the BIOS, ITF, Font,
+    # Firmware and Settings slots -- so the Pocket's Core Settings list offered
+    # to swap the BIOS by hand, mixed in with the floppies that actually want
+    # picking. They load from the core's own Assets folder (bit 1 and the
+    # filename see to that); the bit is clear now.
+    #
     # The floppy and hard-disk ids are the ones the firmware's slot map
     # (softcpu_regs.h) and core_top's dataslot_update decode expect: 3/4 are
     # the two floppy drives, 5 is the SCSI image the PC-98 disk BIOS would
@@ -92,22 +99,22 @@ def data(j):
     # count was being mounted as a disk. The bridge addresses, not the ids,
     # are what routes the ROM streams, so renumbering them is free.
     j['data']['data_slots'] = [
-        {"name": "PC-98 BIOS",  "id": 1, "required": True,  "parameters": "0x203",
+        {"name": "PC-98 BIOS",  "id": 1, "required": True,  "parameters": "0x202",
          "filename": "bios.rom", "extensions": ["rom", "bin"],
          "address": "0x10000000", "size_maximum": "0x18000"},
-        {"name": "PC-98 ITF",   "id": 2, "required": True,  "parameters": "0x203",
+        {"name": "PC-98 ITF",   "id": 2, "required": True,  "parameters": "0x202",
          "filename": "itf.rom",  "extensions": ["rom", "bin"],
          "address": "0x10020000", "size_maximum": "0x8000"},
-        {"name": "PC-98 Font",  "id": 11, "required": True,  "parameters": "0x203",
+        {"name": "PC-98 Font",  "id": 11, "required": True,  "parameters": "0x202",
          "filename": "font.rom", "extensions": ["rom", "bin"],
          "address": "0x10100000", "size_maximum": "0x46800"},
         # 0x8000: the softcore ROM is 32 KB since the drawing server landed;
         # the old 0x6000 (24 KB) made the framework refuse the file with
         # "error in framework file id [12] too large" the moment it grew.
-        {"name": "Firmware",    "id": 12, "required": False, "parameters": "0x203",
+        {"name": "Firmware",    "id": 12, "required": False, "parameters": "0x202",
          "filename": "firmware.bin", "extensions": ["bin"],
          "address": "0x10040000", "size_maximum": "0x8000"},
-        {"name": "Settings",    "id": 7, "required": False, "parameters": "0x03",
+        {"name": "Settings",    "id": 7, "required": False, "parameters": "0x02",
          "filename": "settings.dat", "extensions": ["dat"],
          "address": "0x10030000", "size_maximum": "0x1000"},
         {"name": "Floppy A",    "id": 3, "required": False, "parameters": 1,
