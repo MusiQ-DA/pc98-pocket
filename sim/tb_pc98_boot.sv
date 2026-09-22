@@ -1078,8 +1078,7 @@ module tb_pc98_boot;
 
     // The floppy controller: THE one from the chipset, instantiated, not a
     // copy of it living here. Four defects came out of this model in one
-    // session and every one of them had to be fixed twice by hand; the second
-    // copy is gone. See pc98_fdc.sv.
+    // session and every one of them had to be fixed twice by hand.
     wire       fdc_irq3, fdc_irq2;
 
     // THE REAL PAIR, not the stub: pc98_fdc_glue in front of floppy.v, wired

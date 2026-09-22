@@ -288,26 +288,22 @@ module PERIPHERALS #(
     wire   [0:0] pic_reg_addr  = address[1];
     wire   [1:0] pit_reg_addr  = address[2:1];
 
-    // ---------------------------------------------- floppy interface stub
+    // ---------------------------------------------- floppy interface glue
     //
-    // Three ports the ITF polls before it will go any further. There is no
-    // drive here and none is needed: with nothing attached these read as
-    // constants on a real machine, and answering them is the whole of what the
-    // ITF wants at this stage.
+    // The control-side ports around the real uPD765. The MSR and data
+    // register come from floppy.v through pc98_fdc_glue; these three have no
+    // PC/XT counterpart so the glue answers them and the mux below selects
+    // that answer -- or 0xFF for the window chgreg did not select.
     //
-    //   0x00BE  FDD interface select. Bit 3 reads 1, bit 2 reads 0, and the low
-    //           two bits are the latch, which resets to 3 -- so 0xFB. The ITF
-    //           does IN AL,0BEh / TEST AL,1 / JZ, and bit 0 is what it is
-    //           testing.
-    //   0x0090  uPD765A main status. Idle is RQM alone, 0x80. The ITF tests
-    //           bit 4 (FDC busy) in a LOOPNE, so 0x00 would spin it out and
-    //           0xFF would fake a result phase that never comes.
-    //   0x0094  control register. The read side is a constant, 0x44.
+    //   0x00BE  FDD interface select ("chgreg"). Bit 0 picks which port group
+    //           is live (1 = 0x9x / 2HD); readback is (chgreg & 3) | 0xF8.
+    //           The ITF does IN AL,0BEh / TEST AL,1 / JZ, and bit 0 is what
+    //           it is testing.
+    //   0x0094  control register (2HD). 0x00CC is the 2DD half.
     //
-    // 0x0092 is the data register and is left out deliberately: it only means
-    // anything mid-command, and there are no commands without a drive.
+    // 0x0090/0x0092 and 0x00C8/0x00CA are the controller itself; they are not
+    // decoded here at all.
     wire fdd_be_select = pc98_io_exact & (address[7:0] == 8'hBE);
-    wire fdd_90_select = pc98_io_exact & (address[7:0] == 8'h90);
     wire fdd_94_select = pc98_io_exact & (address[7:0] == 8'h94);
 
     // 0x00CC  2DD drive/motor control (MAME fdc_2hd_2dd_ctrl<0>). The write
@@ -317,84 +313,9 @@ module PERIPHERALS #(
     //          when bit 2 (XTMASK) is set. The VM BIOS writes 0x09/0x0C
     //          here and waits for that interrupt; with nothing wired it
     //          rewrote the port forever (N frozen at 17244, IO 00CC 00CC
-    //          00CC). Read returns the latch with bit 5 set and bit 4 as
-    //          drive-ready; a driveless machine still reports ready
-    //          rather than halting, so a constant one is what it wants.
+    //          00CC). In this build the whole port -- the latch, the timer
+    //          and the IRQ10 pulse -- lives in pc98_fdc_glue.
     wire fdd_cc_select = pc98_io_exact & (address[7:0] == 8'hCC);
-    logic [7:0] fdd_cc_latch;
-    logic       fdd_cc_trig_q;
-    logic [22:0] fdd_cc_timer;
-    logic        fdd_cc_armed;
-    logic        fdd_cc_irq;      // XTMASK interrupt: slave IRQ2
-    always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
-            fdd_cc_latch  <= 8'h00;
-            fdd_cc_trig_q <= 1'b0;
-            fdd_cc_timer  <= 23'd0;
-            fdd_cc_armed  <= 1'b0;
-            fdd_cc_irq    <= 1'b0;
-        end else begin
-            fdd_cc_trig_q <= fdd_cc_latch[0];
-            if (fdd_cc_select & ~io_write_n)
-                fdd_cc_latch <= internal_data_bus;
-            // A fresh bit0 rising edge (re)arms the 100 ms timer.
-            if (fdd_cc_latch[0] & ~fdd_cc_trig_q) begin
-                fdd_cc_armed <= 1'b1;
-                fdd_cc_timer <= 23'd0;
-            end
-            if (fdd_cc_armed) begin
-                if (fdd_cc_timer == 23'd4_295_000) begin  // ~100 ms at 42.95 MHz
-                    fdd_cc_armed <= 1'b0;
-                    fdd_cc_irq   <= fdd_cc_latch[2];
-                end else
-                    fdd_cc_timer <= fdd_cc_timer + 23'd1;
-            end else if (fdd_cc_irq)
-                fdd_cc_irq <= 1'b0;   // one chipset clock is a whole edge
-        end
-    end
-    wire [7:0]  fdd_cc_data  = fdd_cc_latch | 8'h30;
-
-    // Minimal uPD765 at 0x90-0x93 and its 0xC8-0xCB mirror (MAME maps the
-    // 2HD controller there; the VM BIOS drives it with DX). Command bytes
-    // are counted per the uPD765 table, every command finishes at once, and
-    // the answers all say "no drive attached":
-    //   0x03 SPECIFY     3 bytes in, no result -- back to idle
-    //   0x04 SENSE DRIVE 2 in, 1 result (0x00)
-    //   0x07 RECALIBRATE 2 in, no result, and a pulse on the slave's IRQ3,
-    //                     exactly how the real chip interrupts when the
-    //                     drive it was told to seek is not there
-    //   0x08 SENSE INT   1 in, 2 results (ST0 = 0x80 "not ready", PCN = 0)
-    //   0x0F SEEK        3 in, no result, same IRQ3 as RECALIBRATE
-    //   0x4A/0x0A READ ID          2 in, 7 results -- the IPL probe needs the
-    //                               full seven bytes or its result loop runs
-    //                               off the end of the status port
-    //   66/46/06/E6 read data, 65/45/05/E5 write, 4D/CD format: 9 (6 for
-    //                               format) in, 7 results, all zero error
-    //   anything else    treated as 1 in, 2 results, so an unexpected
-    //                     command still hands the BIOS an answer instead of
-    //                     a status port that never reaches the result phase
-    // The floppy controller, shared with sim/tb_pc98_boot.sv rather than
-    // copied into it -- see pc98_fdc.sv for why that stopped being optional.
-    wire       fdc_base_select, fdc_msr_select, fdc_fifo_select;
-    wire [7:0] fdc_msr, fdc_fifo;
-    wire       fdc_irq3, fdc_irq2;
-
-    pc98_fdc u_pc98_fdc (
-        .clock            (clock),
-        .reset            (reset),
-        .address          (address[15:0]),
-        .address_enable_n (address_enable_n),
-        .io_read_n        (io_read_n),
-        .io_write_n       (io_write_n),
-        .data_in          (internal_data_bus),
-        .base_select      (fdc_base_select),
-        .msr_select       (fdc_msr_select),
-        .fifo_select      (fdc_fifo_select),
-        .msr              (fdc_msr),
-        .fifo             (fdc_fifo),
-        .irq_int          (fdc_irq3),
-        .irq_2dd          (fdc_irq2)
-    );
 
     // The house strobes: one cycle after the command drops, used by the FDC
     // glue and its witness counters below.
@@ -406,7 +327,6 @@ module PERIPHERALS #(
         prev_io_write_n <= io_write_n;
     end
 
-`ifdef PC98_FDC_REAL
     // 0x90/0x92 and 0xC8/0xCA now come from the real controller. 0xBE, 0x94
     // and 0xCC have no XT counterpart at all, so pc98_fdc_glue answers them:
     // 0xBE is a real latch (the BIOS steers itself with the readback -- ITF
@@ -430,23 +350,10 @@ module PERIPHERALS #(
 
     wire fdd_stub_read = (fdd_be_select | fdd_94_select
                           | fdd_cc_select | fdd_dead_select) & ~io_read_n;
-`else
-    wire fdd_stub_read = (fdd_be_select | fdd_90_select | fdd_94_select
-                          | fdd_cc_select | fdc_base_select) & ~io_read_n;
-`endif
-`ifdef PC98_FDC_REAL
     wire [7:0] fdd_stub_data = fdd_be_select   ? fdc_mode_readback
                              : (fdd_94_select | fdd_cc_select)
                                                ? fdc_ctrl_readback
                              :                   8'hFF;   // the dead window
-`else
-    wire [7:0] fdd_stub_data = fdd_be_select  ? 8'hFB
-                             : fdd_90_select  ? fdc_msr
-                             : fdd_94_select  ? 8'h44
-                             : fdd_cc_select  ? fdd_cc_data
-                             : fdc_msr_select ? fdc_msr
-                             :                  fdc_fifo;
-`endif
 
     // Enable Segment Map hx000, hx400, hx800, hxC00. Was a port; nothing past
     // the module boundary reads it, the EMS windows and the register readback
@@ -470,14 +377,12 @@ module PERIPHERALS #(
     wire    cgwin_mem_select        = ~iorq && ~address_enable_n
                                     && (address[19:12] == 8'b10100100);
 
-`ifdef PC98_FDC_REAL
     // THE REAL uPD765 ON THE PC-98's PORTS.
     //
     // floppy.v is a uPD765, which is the right chip -- a PC-98's FDC is a
     // uPD765A -- and it holds the disk image and the DMA path. What was wrong
     // was only WHERE it listened: 0x03F0-0x03F7, the PC/XT's window. A PC-98
-    // guest writes 0x90/0x92 (2HD) and 0xC8/0xCA (2DD), which reached the stub
-    // below and nothing else.
+    // guest writes 0x90/0x92 (2HD) and 0xC8/0xCA (2DD).
     //
     // np2kai io/fdc.c attaches both groups to the same four handlers
     // (`iocore_attachcmnoutex(0x0090, 0x00f9, fdco90, 4)` and the same for
@@ -490,24 +395,15 @@ module PERIPHERALS #(
     //                   translated
     //
     // The translation is therefore only of the two that do correspond: MSR at
-    // the XT's offset 4, data at 5.
-    //
-    // NOW ON. It was off because the stub below was tuned against the ROM's
-    // probes for a machine WITH NO DRIVE -- its comments record what each
-    // constant had to be to get the BIOS past them -- and nothing here reached
-    // an FDD transfer to say whether the real path behaved. It does now:
-    // sim/tb_pc98_fdc_glue runs the BIOS's own sequence against the real
-    // floppy.v behind the real glue, interrupt loop and all, and against the
-    // case the stub was standing in for -- an EMPTY DRIVE, which used to hang
-    // floppy.v with CB set forever and now ends in a not-ready result phase
-    // (see NOT_READY_ENDS_COMMAND at the instantiation below, and config.tcl).
+    // the XT's offset 4, data at 5. sim/tb_pc98_fdc_glue runs the BIOS's own
+    // sequence against the real floppy.v behind the real glue, interrupt loop
+    // and all, and against an EMPTY DRIVE, which used to hang floppy.v with
+    // CB set forever and now ends in a not-ready result phase (see
+    // NOT_READY_ENDS_COMMAND at the instantiation below, and config.tcl).
     wire    floppy0_chip_select_n   = ~(~address_enable_n
                                      && (address[15:8] == 8'h00)
                                      && ((address[7:0] == 8'h90) || (address[7:0] == 8'h92)
                                       || (address[7:0] == 8'hC8) || (address[7:0] == 8'hCA)));
-`else
-    wire    floppy0_chip_select_n   = ~(~address_enable_n && (({address[15:2], 2'd0} == 16'h03F0) || ({address[15:1], 1'd0} == 16'h03F4) || ({address[15:0]} == 16'h03F7)));
-`endif
 
     logic   [1:0]   ems_access_address;
     logic           ems_write_enable;
@@ -605,16 +501,10 @@ module PERIPHERALS #(
 
     wire    interrupt2_chip_select_n;
 
-    // What the PC-98's master IRQ6 actually carries. With the real FDC on,
-    // nothing: floppy.v's irq has moved to the slave, where the machine puts
-    // it. With the stub, fdd_interrupt is floppy.v listening at the PC/XT's
-    // 0x3F0 window that a PC-98 guest never writes -- it is left where it was
-    // rather than changed underneath a configuration nothing exercises.
-`ifdef PC98_FDC_REAL
+    // The PC/XT floppy line has no PC-98 counterpart: the 2HD window's
+    // interrupt is slave IRQ11 and the 2DD one's is slave IRQ10 -- never
+    // master IRQ6.
     wire    pc98_master_irq6 = 1'b0;
-`else
-    wire    pc98_master_irq6 = fdd_interrupt;
-`endif
 
     i8259 u_i8259
     (
@@ -719,15 +609,9 @@ module PERIPHERALS #(
         // pc98_fdc_glue, steered by chgreg exactly as np2kai's fdc_intwait
         // steers pic_setirq (io/fdc.c:46-51): 2HD window -> IRQ11 (bit 3,
         // INT 13h, handler at FFAF6), 2DD window -> IRQ10 (bit 2, INT 12h,
-        // handler at FFB69). The stub's own lines and the 0xCC timer stand
-        // down -- they existed only because there was no chip to raise them.
-`ifdef PC98_FDC_REAL
+        // handler at FFB69).
         .interrupt_request          ({3'b0, opna_irq, fdc_glue_irq_2hd,
                                      fdc_glue_irq_2dd, 2'b0})
-`else
-        .interrupt_request          ({3'b0, opna_irq, fdc_irq3,
-                                     fdd_cc_irq | fdc_irq2, 2'b0})
-`endif
     );
 
     always_ff @(posedge clock, posedge reset)
@@ -1999,7 +1883,6 @@ module PERIPHERALS #(
             fdc_last_rdport <= address[7:0];
     end
 
-`ifdef PC98_FDC_REAL
     // The PC-98 ports onto floppy.v's PC/XT register file. The MSR and FIFO
     // map straight across; the control port has to BECOME a Digital Output
     // Register, because a PC-98 has none and floppy.v will not run without
@@ -2128,16 +2011,6 @@ module PERIPHERALS #(
         // be registered with them or it arrives a cycle early.
         fdd_io_writedata   <= fdc_glue_wdata;
     end
-`else
-    always_ff @(posedge clock)
-    begin
-        fdd_io_address     <= address[2:0];
-        fdd_io_read        <= ~io_read_n & prev_io_read_n   & ~floppy0_chip_select_n;
-        fdd_io_read_1      <= fdd_io_read;
-        fdd_io_write       <= io_write_n & ~prev_io_write_n & ~floppy0_chip_select_n;
-        fdd_io_writedata   <= write_to_fdd;   // the PC/XT path: the guest's byte
-    end
-`endif
 
     assign  fdd_dma_read    = fdd_dma_ack & ~io_read_n;
 
@@ -2190,7 +2063,6 @@ module PERIPHERALS #(
     assign dbg_w_path = {w_wr_edge, w_ioexact};   // [15:8] edge, [7:0] decode
     assign dbg_rw_lvl = {w_wr_lvl, w_rd_lvl};     // [15:8] writes, [7:0] reads
 
-`ifdef PC98_FDC_REAL
     // ---- the controller, watched where it meets the chipset -------------
     //
     // nD 0D says the command bytes now land; r2 00 with m2 F7 says the BIOS
@@ -2267,13 +2139,6 @@ module PERIPHERALS #(
             fdc_imr_seen <= interrupt2_data_bus_out;
     assign dbg_fdc_w = {fdc_cmd_drops, fdc_cmd_accepts, 4'd0, fdc_reply_left, fdc_imr_seen};
     assign dbg_fdc_v = {fdc_last_rdport, fdc_last_port, fdc_dead_reads, fdc_live_reads};
-`else
-    assign dbg_fdc_x = 32'd0;
-    assign dbg_fdc_y = 32'd0;
-    assign dbg_fdc_z = 96'd0;
-    assign dbg_fdc_w = 32'd0;
-    assign dbg_fdc_v = 32'd0;
-`endif
 
     floppy #(
         .NOT_READY_ENDS_COMMAND     (1)

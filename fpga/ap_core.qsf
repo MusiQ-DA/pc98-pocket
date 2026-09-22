@@ -868,7 +868,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/ce_generator.sv
 set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/Ready.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/RAM.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/Peripherals.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/pc98_fdc.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/Chipset.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/Bus_Arbiter.sv"
 

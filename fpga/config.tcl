@@ -128,7 +128,9 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # commands. (That also corrected the previous note here, which recorded READ ID
 # as "fine" -- it had been measured against a drive that still had the earlier
 # section's disk in it, because media_present has no reset in floppy.v.)
-set_global_assignment -name VERILOG_MACRO "PC98_FDC_REAL=1"
+#
+# PC98_FDC_REAL is gone with the stub it used to select against: the real
+# floppy.v behind pc98_fdc_glue is the only FDC now.
 
 # Route SDRAM through sdram_mp (via sdram_shim) instead of sdram_single.
 # RAM.sv tests this with `ifdef, so setting it to 0 would still select the shim
