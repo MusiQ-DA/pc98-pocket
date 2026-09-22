@@ -69,7 +69,7 @@ module pocket_video (
     end
 
     //
-    // Hercules canvas
+    // Presented window
     //
     // The guest programs arbitrary 6845 rasters, so present one fixed 720x350 window
     // (720 dots from the guest active start each line, 350 lines opening CANVAS_VSKIP

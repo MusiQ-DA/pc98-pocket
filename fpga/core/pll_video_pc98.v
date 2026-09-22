@@ -12,7 +12,7 @@
 // and the line is 106 characters of 8 dots. 2631575 / 106 = 24,826 Hz, and 440
 // lines gives 56.4 Hz.
 //
-// A separate PLL for the same reason the Hercules one is separate: the main
+// A separate PLL for the same reason the second video PLL was: the main
 // PLL's VCO is 687.2727 MHz and 21.0526 does not divide out of it (687.2727 /
 // 21.0526 = 32.64), so it cannot come from there whatever the output count.
 //

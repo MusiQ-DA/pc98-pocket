@@ -4,7 +4,7 @@
 //
 // Written by kitune-san
 //
-// Local modification (PCXT Pocket port, 2026-07-07): the F11 (0x78) / F12 (0x07) key
+// Local modification (Pocket port, 2026-07-07): the F11 (0x78) / F12 (0x07) key
 // intercepts that toggled swap_video / pause_core are removed, so both keys pass through
 // as normal keycodes; this port does not repurpose them. pause_core stays at its reset
 // value (unused here); swap_video follows the video_output input, so the top level owns

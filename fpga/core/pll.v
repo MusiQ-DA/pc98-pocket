@@ -1,15 +1,15 @@
-// PCXT Pocket system PLL.
+// Pocket system PLL.
 //
 // One fractional-N VCO from the Analogue Pocket 74.25 MHz reference (clk_74a) feeds all
-// core clocks, so the CPU, chipset and CGA video are mutually phase-locked (as on the
-// real machine, where all derive from one 14.31818 MHz crystal). Each output is an
-// integer division of the VCO; Quartus solves the M/N/C counters from these strings.
+// core clocks, so the CPU, chipset and video stay mutually phase-locked (as on the real
+// machine, where all derive from one 14.31818 MHz crystal). Each output is an integer
+// division of the VCO; Quartus solves the M/N/C counters from these strings.
 //   outclk_0   42.954545 MHz            chipset + SDRAM controller + XT_CE_Generator
-//   outclk_1   85.909091 MHz            i8088 (MCL86) CORE_CLK (2:1 to chipset)
+//   outclk_1   85.909091 MHz            open (was the 8088 core clock)
 //   outclk_2   42.954545 MHz  @180 deg  SDRAM device clock (dram_clk), edge-centered
-//   outclk_3   28.636360 MHz            CGA dot clock
-//   outclk_4   14.318180 MHz            scaler pixel clock (video_rgb_clock)
-//   outclk_5   14.318180 MHz  @90 deg   scaler pixel clock, DDR sibling
+//   outclk_3   28.636360 MHz            the boot hold's 14.318 MHz tick, halved
+//   outclk_4   14.318180 MHz            open (was the CGA scaler pixel clock)
+//   outclk_5   14.318180 MHz  @90 deg   open (likewise)
 `timescale 1ns/10ps
 module pll (
     input  wire refclk,

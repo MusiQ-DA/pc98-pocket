@@ -1,5 +1,5 @@
 //
-// MiSTer PCXT Chipset
+// PC-98 Chipset (grown out of the MiSTer PCXT base)
 // Ported by @spark2k06
 //
 // Based on chipset written by @kitune-san

@@ -1,5 +1,5 @@
 //
-// MiSTer PCXT RAM
+// PC-98 RAM (grown out of the MiSTer PCXT base)
 // Ported by @spark2k06
 //
 // Based on chipset written by @kitune-san
