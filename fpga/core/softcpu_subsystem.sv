@@ -291,7 +291,11 @@ module softcpu_subsystem (
         .mem_addr  (cpu_mem_addr),
         .mem_wdata (cpu_mem_wdata),
         .mem_wstrb (cpu_mem_wstrb),
-        .mem_rdata (cpu_mem_rdata)
+        .mem_rdata (cpu_mem_rdata),
+        .pcpi_wr   (1'b0),
+        .pcpi_rd   (32'd0),
+        .pcpi_wait (1'b0),
+        .pcpi_ready(1'b0)
     );
 
     //
@@ -679,6 +683,8 @@ module softcpu_subsystem (
                 .clocken1 (1'b1),
                 .clocken2 (1'b1),
                 .clocken3 (1'b1),
+                .clock2 (1'b0),
+                .clock3 (1'b0),
                 .eccstatus (),
                 .rden_a (1'b1),
                 .rden_b (1'b1)
@@ -866,6 +872,7 @@ module softcpu_subsystem (
         .aclr0 (1'b0), .aclr1 (1'b0), .addressstall_a (1'b0),
         .addressstall_b (1'b0), .byteena_a (1'b1), .byteena_b (1'b1),
         .clocken0 (1'b1), .clocken1 (1'b1), .clocken2 (1'b1), .clocken3 (1'b1),
+        .clock2 (1'b0), .clock3 (1'b0),
         .eccstatus (), .rden_a (1'b1), .rden_b (1'b1)
     );
     altsyncram #(
@@ -883,6 +890,7 @@ module softcpu_subsystem (
         .aclr0 (1'b0), .aclr1 (1'b0), .addressstall_a (1'b0),
         .addressstall_b (1'b0), .byteena_a (1'b1), .byteena_b (1'b1),
         .clocken0 (1'b1), .clocken1 (1'b1), .clocken2 (1'b1), .clocken3 (1'b1),
+        .clock2 (1'b0), .clock3 (1'b0),
         .eccstatus (), .rden_a (1'b1), .rden_b (1'b1)
     );
     altsyncram #(
@@ -900,6 +908,7 @@ module softcpu_subsystem (
         .aclr0 (1'b0), .aclr1 (1'b0), .addressstall_a (1'b0),
         .addressstall_b (1'b0), .byteena_a (1'b1), .byteena_b (1'b1),
         .clocken0 (1'b1), .clocken1 (1'b1), .clocken2 (1'b1), .clocken3 (1'b1),
+        .clock2 (1'b0), .clock3 (1'b0),
         .eccstatus (), .rden_a (1'b1), .rden_b (1'b1)
     );
     altsyncram #(
@@ -917,6 +926,7 @@ module softcpu_subsystem (
         .aclr0 (1'b0), .aclr1 (1'b0), .addressstall_a (1'b0),
         .addressstall_b (1'b0), .byteena_a (1'b1), .byteena_b (1'b1),
         .clocken0 (1'b1), .clocken1 (1'b1), .clocken2 (1'b1), .clocken3 (1'b1),
+        .clock2 (1'b0), .clock3 (1'b0),
         .eccstatus (), .rden_a (1'b1), .rden_b (1'b1)
     );
 

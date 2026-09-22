@@ -133,6 +133,8 @@ module softcpu_fdd_bridge #(
         .clocken1 (1'b1),
         .clocken2 (1'b1),
         .clocken3 (1'b1),
+        .clock2 (1'b0),
+        .clock3 (1'b0),
         .eccstatus (),
         .rden_a (1'b1),
         .rden_b (1'b1)

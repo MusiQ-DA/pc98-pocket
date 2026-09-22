@@ -1019,7 +1019,7 @@ module PERIPHERALS #(
     // expression the renderer uses today.
     wire        gdc_m_disp_on, gdc_s_disp_on;
     wire [7:0]  gdc_m_pitch,   gdc_s_pitch;
-    wire [14:0] gdc_m_sad [0:3], gdc_s_sad [0:3];
+    wire [15:0] gdc_m_sad [0:3], gdc_s_sad [0:3];
     wire [9:0]  gdc_m_len [0:3], gdc_s_len [0:3];
     wire [15:0] gdc_m_cur_addr,  gdc_s_cur_addr;
     wire [3:0]  gdc_m_cur_dot,   gdc_s_cur_dot;
@@ -1032,7 +1032,7 @@ module PERIPHERALS #(
     wire [31:0] gdc_m_csrtrace;
     wire [1:0]  gdc_m_zoom,      gdc_s_zoom;
 
-    assign dbg_gdc_sad       = gdc_m_sad[0];
+    assign dbg_gdc_sad       = gdc_m_sad[0][14:0];
     assign dbg_gdc_pitch     = gdc_m_pitch;
     assign dbg_gdc_unk_cmd   = gdc_m_unk_cmd;
     assign dbg_gdc_unk_count = gdc_m_unk_count;

@@ -60,11 +60,34 @@ verilator --lint-only --timing -Wno-fatal --top-module core_top \
 STATUS=0
 
 # Implicit nets: the exact thing Quartus refuses (default_nettype none).
-if grep -E '%Warning-IMPLICIT' "$OUT" | grep -v 'Exiting due to' >/dev/null; then
+if grep -E '%Warning-IMPLICIT:' "$OUT" | grep -v 'Exiting due to' >/dev/null; then
     echo "implicit net(s) -- Quartus will refuse these:"
-    grep -E '%Warning-IMPLICIT' "$OUT" | head -20
+    grep -E '%Warning-IMPLICIT:' "$OUT" | head -20
     STATUS=1
 fi
+
+# Unconnected input pins: Quartus ties a missing input to zero and calls it a
+# warning, which reads exactly like a real zero -- tandy_bios_flag ran the ITF
+# where the BIOS was expected and hung the boot at 640KB (70a8336). Outputs
+# left open are legal, so only 'input'/'inout' port declarations count; the
+# declaration text rides along inside each PINMISSING block.
+if python3 - "$OUT" <<'PY'
+import re, sys
+blocks = re.split(r'(?=%Warning-PINMISSING)', open(sys.argv[1]).read())
+bad = []
+for b in blocks:
+    if not b.startswith('%Warning-PINMISSING'):
+        continue
+    m = re.search(r'(?m)^\s*\d+\s*\|\s*(input|inout)\b', b)
+    if m:
+        bad.append(b.splitlines()[0])
+if bad:
+    print("unconnected input pin(s) -- Quartus ties them to zero:")
+    for h in bad:
+        print("   ", h)
+sys.exit(1 if bad else 0)
+PY
+then :; else STATUS=1; fi
 
 # Real errors, minus the ones the megafunction stubs cannot model (they are
 # parameter checks inside the stub, not in the core).

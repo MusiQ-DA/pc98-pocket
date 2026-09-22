@@ -2409,7 +2409,7 @@ module core_top (
         .data_bus_ext                       (st_run ? st_wdata : bios_write_data[7:0]),
     //  .data_bus_direction                 (data_bus_direction),
         .address_latch_enable               (address_latch_enable),
-    //  .io_channel_check                   (),
+        .io_channel_check                   (1'b0),
         .io_channel_ready                   (1'b1),
         .interrupt_request                  (0),    // use? -> It does not seem to be necessary.
     //  .io_read_n                          (io_read_n),

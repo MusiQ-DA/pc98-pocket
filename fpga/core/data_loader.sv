@@ -83,9 +83,9 @@ module data_loader #(
       .wrclk(clk_74a),
       .wrreq(write_req),
       .q(fifo_out),
-      .rdempty(mem_empty)
+      .rdempty(mem_empty),
+      .aclr(1'b0)
       // .wrempty(),
-      // .aclr(),
       // .eccstatus(),
       // .rdfull(),
       // .rdusedw(),
