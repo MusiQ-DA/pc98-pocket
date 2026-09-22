@@ -22,3 +22,4 @@ __pycache__/
 *.pyc
 firmware/obj_dir/
 build/
+*.pdf
