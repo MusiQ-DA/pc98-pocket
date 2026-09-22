@@ -458,7 +458,11 @@ module pc98_gdc #(
     // LIGHT PEN DETECT AND IT STAYS CLEAR: no pen is fitted, and a set bit
     // walks the BIOS into the LPRD/DRDY poll at F307C that nothing would
     // ever satisfy (see the history above the status word).
+    // (Under PC98_GDC_LEGACY drdy is the constant above and this
+    // declaration is compiled out; declaring it twice is an error.)
+`ifndef PC98_GDC_LEGACY
     wire drdy = (rb_wr != rb_rd);
+`endif
     wire [7:0] status = {1'b0, hblank, vsync, 1'b0, 1'b0, fifo_empty, 1'b0,
 `ifdef PC98_GDC_LEGACY
                          1'b0};
