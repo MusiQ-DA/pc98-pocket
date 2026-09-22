@@ -512,11 +512,14 @@ module CHIPSET #(
     wire [7:0]  grcg_tile [0:3];
 
     // The graphics pages and the EGC, PERIPHERALS to the sequencer.
+    // A/B: the sequencer here is the 2560979 one -- no pages, no EGC -- so
+    // the wires stay (PERIPHERALS still drives them) but nothing reads them,
+    // and the page flag RAM.sv wants is tied off.
     wire        gvram_disp_page_w, gvram_access_page_w;
     wire        egc_active_w, egc_wr_w;
     wire [3:0]  egc_rg_w;
     wire [7:0]  egc_d_w;
-    wire        gvram_mem_page1;
+    wire        gvram_mem_page1 = 1'b0;
 
     wire [19:0] ram_addr_w;
     wire [7:0]  ram_wdata_w;
@@ -534,9 +537,6 @@ module CHIPSET #(
         .grcg_active(grcg_active), .grcg_rmw(grcg_rmw),
         .grcg_mask(grcg_mask), .grcg_tile(grcg_tile),
         .analog_mode(pc98_analog),
-        .access_page(gvram_access_page_w), .mem_page1(gvram_mem_page1),
-        .egc_active(egc_active_w), .egc_wr(egc_wr_w),
-        .egc_rg(egc_rg_w), .egc_d(egc_d_w),
         .mem_addr(ram_addr_w), .mem_wdata(ram_wdata_w),
         .mem_rd(ram_rd_w), .mem_wr(ram_wr_w),
         .mem_rdata(ram_dout_w), .mem_done(ram_complete_w),
