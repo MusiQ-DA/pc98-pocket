@@ -4,16 +4,6 @@
 //
 // Based on chipset written by @kitune-san
 //
-`ifndef SYSTEM_VARIANT_TANDY
-`define SYSTEM_VARIANT_TANDY 0
-`endif
-`ifndef ROM_VARIANT_TANDY
-`define ROM_VARIANT_TANDY `SYSTEM_VARIANT_TANDY
-`endif
-`ifndef ROM_IS_TANDY
-`define ROM_IS_TANDY `ROM_VARIANT_TANDY
-`endif
-
 module RAM (
     input   logic           clock,
     input   logic           reset,
