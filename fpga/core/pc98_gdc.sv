@@ -441,13 +441,30 @@ module pc98_gdc #(
     // pending for the softcore server or the server is drawing, the bit
     // clears -- the backpressure a real 7220 applies by filling its FIFO,
     // which is exactly what software's "wait FIFO empty" loops consume.
+`ifdef PC98_GDC_LEGACY
+    // Bypass probe for the 640KB-OK derail. Tie the two bus-visible engine
+    // answers to their pre-engine (2560979-era) constants: FIFO always
+    // empty -- no throttle, no "wait FIFO empty" backpressure from the
+    // softcore server -- and DRDY never set, the CSRR/LPEN read-back FIFO
+    // absent. Everything else (the EXECUTE capture, the watchdog) keeps
+    // running; only what the guest can observe changes. If the boot passes
+    // 640 KB with this, the drawing engine is the corruptor.
+    wire fifo_empty = 1'b1;
+    wire drdy       = 1'b0;
+`else
     wire fifo_empty = ~draw_pending & ~draw_busy_r;
+`endif
     // DRDY (bit 0): the read-back FIFO holds CSRR/LPEN results. BIT 7 IS
     // LIGHT PEN DETECT AND IT STAYS CLEAR: no pen is fitted, and a set bit
     // walks the BIOS into the LPRD/DRDY poll at F307C that nothing would
     // ever satisfy (see the history above the status word).
     wire drdy = (rb_wr != rb_rd);
-    wire [7:0] status = {1'b0, hblank, vsync, 1'b0, 1'b0, fifo_empty, 1'b0, drdy};
+    wire [7:0] status = {1'b0, hblank, vsync, 1'b0, 1'b0, fifo_empty, 1'b0,
+`ifdef PC98_GDC_LEGACY
+                         1'b0};
+`else
+                         drdy};
+`endif
 
     // The data port answers with the read-back head while DRDY is set, and
     // with the status otherwise -- np2's gdc_i60/gdc_i62 split: the STATUS

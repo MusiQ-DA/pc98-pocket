@@ -130,6 +130,11 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # as "fine" -- it had been measured against a drive that still had the earlier
 # section's disk in it, because media_present has no reset in floppy.v.)
 set_global_assignment -name VERILOG_MACRO "PC98_FDC_REAL=1"
+# 2026-09-22 bisection probe: the GDC engine's two bus-visible answers (the
+# FIFO-empty throttle and the CSRR/LPEN read-back DRDY) return to their
+# pre-engine constants. If the boot passes 640 KB with this, the drawing
+# engine -- not the XT removal -- is what breaks the ROM reads.
+set_global_assignment -name VERILOG_MACRO "PC98_GDC_LEGACY=1"
 
 # Route SDRAM through sdram_mp (via sdram_kf_shim) instead of KFSDRAM.
 # RAM.sv tests this with `ifdef, so setting it to 0 would still select the shim
