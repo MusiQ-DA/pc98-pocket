@@ -1987,6 +1987,12 @@ module PERIPHERALS #(
             write_to_fdd  <= write_to_fdd;
     end
 
+    // The port of the LAST I/O read of any kind -- which poll loop the CPU
+    // is in RIGHT NOW: 0x90 the MSR wait, 0x92 the result drain, 0x08 the
+    // slave-PIC in-service poll, 0x33 the calendar, 0x42 the printer gate.
+    // Declared outside the FDC_REAL block: this write is unconditional, so
+    // a stub-config build would otherwise make it an implicit net.
+    logic [7:0] fdc_last_rdport = 8'h00;
     always_ff @(posedge clock)
     begin
         if (~io_read_n && ~address_enable_n)
@@ -2201,11 +2207,6 @@ module PERIPHERALS #(
     logic [7:0] fdc_last_be    = 8'h00;   // last byte written to 0xBE (chgreg)
     logic [7:0] fdc_last_cc    = 8'h00;
     logic [7:0] fdc_last_rd    = 8'h00;
-    // The port of the LAST I/O read of any kind -- which poll loop the CPU
-    // is in RIGHT NOW: 0x90 the MSR wait, 0x92 the result drain, 0x08 the
-    // slave-PIC in-service poll, 0x33 the calendar, 0x42 the printer gate.
-    // Sampled while the cycle is live, same as write_to_fdd.
-    logic [7:0] fdc_last_rdport = 8'h00;
     // Reads that reached the chip, against reads the window guard answered
     // with 0xFF from the chipset. The guest's MSR poll is the boot's whole
     // inner loop, so if it is polling a DEAD window it sees FF forever --

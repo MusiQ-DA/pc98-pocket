@@ -91,7 +91,7 @@ DANGLE_OK = {
     "gdc_s_cur_en", "gdc_s_cur_rate", "gdc_s_cur_top", "gdc_s_disp_on",
     "gdc_s_len", "gdc_s_pitch", "gdc_s_sad", "gdc_s_unk_cmd",
     "gdc_s_unk_count", "gdc_s_zoom",
-    "hgc_grph_mode", "opna_adpcmb_addr", "opna_adpcmb_roe_n",
+    "opna_adpcmb_addr", "opna_adpcmb_roe_n",
     "pc98_fill_busy", "pc98_kanji_seen",
     "uart_dtr", "uart_rts", "uart_tx",
     "v30_ss_err_unused", "v30_ss_quiet_unused", "v30_ss_rdata_unused",
