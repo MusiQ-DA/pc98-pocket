@@ -152,7 +152,7 @@ static uint8_t settings_default[SET_COUNT];
 // A menu row is a submenu link, an editable option, a controller-button binding, an action, or a
 // blank grouping spacer; `arg` selects the target menu, the setting id, the BIND_* button, or the
 // action respectively (unused for a spacer).
-enum { IT_SUBMENU, IT_OPTION, IT_KEYBIND, IT_ACTION, IT_SPACER };
+enum { IT_SUBMENU, IT_OPTION, IT_KEYBIND, IT_ACTION, IT_SPACER, IT_FDD };
 
 typedef struct {
     const char *label;
@@ -193,7 +193,14 @@ static const item_t items_av[] = {
 // 0x200-0x207 with a stub (joy_data = FF, "no PCjr port on a PC-98"), so the
 // options configured a port that does not exist. The settings stay in the
 // save blob, same reason as Boot Splash above.
+//
+// The two Floppy rows are NOT stored settings: the drives' media lives in
+// fdd_service, the Pocket menu's data slots are the only way an image gets
+// in, and these rows show the live state and eject/re-insert it (A button).
 static const item_t items_hw[] = {
+    { "Floppy A", IT_FDD, 0 },
+    { "Floppy B", IT_FDD, 1 },
+    { "", IT_SPACER, 0 },
     { "Lo-tech 2MB EMS", IT_OPTION, SET_EMS },
     { "EMS Frame", IT_OPTION, SET_EMS_FRAME },
     { "A000 UMB", IT_OPTION, SET_A000 },
@@ -407,6 +414,31 @@ static void draw_row(int i)
         osd_draw_string(&panel, COL_VALUE * 8, y, val, OSD_LABEL);
     } else if (it->type == IT_SUBMENU) {
         osd_draw_char(&panel, COL_VALUE * 8, y, G_MARKER, OSD_LABEL);
+    } else if (it->type == IT_FDD) {
+        // Live state, formatted here: "Inserted 1232K" or "Ejected". The size
+        // is sectors/2 in KB (512-byte sectors), which is what every PC-98
+        // format's label quotes.
+        char buf[18];
+        int n = 0;
+        if (fdd_is_inserted(it->arg)) {
+            static const char word[] = "Inserted ";
+            for (int k = 0; word[k]; k++) buf[n++] = word[k];
+            uint32_t kb = fdd_mounted_sectors(it->arg) / 2u;
+            char digs[8];
+            int nd = 0;
+            if (kb == 0) digs[nd++] = '0';
+            while (kb && nd < 7) {
+                digs[nd++] = (char) ('0' + (kb % 10u));
+                kb /= 10u;
+            }
+            while (nd) buf[n++] = digs[--nd];
+            buf[n++] = 'K';
+        } else {
+            static const char word[] = "Ejected";
+            for (int k = 0; word[k]; k++) buf[n++] = word[k];
+        }
+        buf[n] = 0;
+        osd_draw_string(&panel, COL_VALUE * 8, y, buf, OSD_LABEL);
     }
 }
 
@@ -571,6 +603,17 @@ int settings_input(uint16_t pressed)
                 settings_mark_dirty();
                 draw_row(cur_row);
             }
+        }
+    } else if (it->type == IT_FDD) {
+        // A (or either arrow, since there is no value to step) ejects an
+        // inserted drive and re-inserts the remembered image in an empty one.
+        if (pressed & (BTN_A | BTN_LEFT | BTN_RIGHT)) {
+            if (fdd_is_inserted(it->arg)) {
+                fdd_eject(it->arg);
+            } else {
+                fdd_insert(it->arg);
+            }
+            draw_row(cur_row);
         }
     } else if (it->type == IT_ACTION) {
         if (pressed & BTN_A) {

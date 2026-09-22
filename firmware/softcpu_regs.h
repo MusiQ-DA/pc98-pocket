@@ -205,6 +205,10 @@ int slot_declare_size(uint16_t id, uint32_t bytes);
 
 // Service entry points (fdd_service.c).
 void fdd_mount(uint32_t drive, uint32_t sectors);
+void fdd_eject(uint32_t drive);
+void fdd_insert(uint32_t drive);
+int  fdd_is_inserted(uint32_t drive);
+uint32_t fdd_mounted_sectors(uint32_t drive);
 
 // Service entry points (scsi_service.c). PC-98 only -- the board is a
 // PC-9801-55 and the PC/XT build keeps its IDE instead.

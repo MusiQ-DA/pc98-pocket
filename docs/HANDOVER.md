@@ -807,3 +807,20 @@ CI に tb_pc98_egc を追加し、tb_pc98_gvram_seq のビルド行に pc98_egc.
 bios_ever_loaded / interact_reset / reset / ~RESET)。点いている桁が
 ゲストを止めている項。MMIO 0x50000134 (core_top の dbg_bits[7:0] を
 softcpu で 2FF 同期)。帯の色バーも消え、背景は黒。
+
+### §10.9 フロッピーの eject / 挿入状態 (2026-09-22, a21c43f の次)
+
+実機からの問い「eject と挿入状態の確認はどうやる？」に対し、手段が無かったので実装。
+
+- **挿入 (image を入れる)**: Pocket メニュー → Core Settings → データスロット
+  「Floppy A/B」のロード（user-reloadable, parameters bit0）。APF の
+  dataslot update → rebind トグル → main.c が fdd_mount。これは従来どおり
+- **eject / 再挿入 / 状態確認**: **コア OSD** → Hardware → 「Floppy A / Floppy B」。
+  - 表示は live 値: `Inserted 1232K`（sectors/2 KB）または `Ejected`
+  - A（または左右）で eject ⇔ insert。eject は FMGMT_PRESENT=0 で
+    ゲストに NOT READY を見せ、サイズは fdd_service が記憶するので
+    **同じイメージを Pocket メニューに行かずに戻せる**
+  - 保存 blob には乗らない（実行時状態）
+
+実装: fdd_service.c に fdd_eject/fdd_insert/fdd_is_inserted/fdd_mounted_sectors、
+settings_ui.c に IT_FDD 行（Hardware 先頭）。ROM +712B (28088 text / 28300 bin)。

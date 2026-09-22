@@ -150,6 +150,13 @@ static void spin(uint32_t n)
     }
 }
 
+// The drives' media state, for the OSD's Floppy rows. `sectors` is the last
+// image mounted (0 = never), `inserted` is whether the controller is being
+// told the media is there. An eject only clears PRESENT and keeps the size,
+// so the OSD can put the same image back without the Pocket menu.
+static uint32_t fdd_sectors[2];
+static uint8_t  fdd_inserted[2];
+
 // Derive a drive's geometry from its image size (in sectors) and push it to the
 // controller, ejecting first so the controller flags a media change, then marking
 // the media present and writable. drive selects the controller's drive A (0) or B
@@ -178,6 +185,39 @@ void fdd_mount(uint32_t drive, uint32_t sectors)
     fdd_sector_words[drive] = g->is_1024 ? 256 : 128;
     mgmt_write(drive, FMGMT_WRPROT, 0);
     mgmt_write(drive, FMGMT_PRESENT, 1);
+    fdd_sectors[drive] = sectors;
+    fdd_inserted[drive] = 1;
+}
+
+// Eject: the controller stops reporting media, so the guest sees NOT READY
+// (and the change line for the next insert). The image size is remembered.
+void fdd_eject(uint32_t drive)
+{
+    if (drive > 1 || !fdd_inserted[drive]) {
+        return;
+    }
+    mgmt_write(drive, FMGMT_PRESENT, 0);
+    fdd_inserted[drive] = 0;
+}
+
+// Insert: put the remembered image back. A drive that has never been mounted
+// has nothing to put in; the Pocket menu's data slot is the way in for that.
+void fdd_insert(uint32_t drive)
+{
+    if (drive > 1 || fdd_inserted[drive] || !fdd_sectors[drive]) {
+        return;
+    }
+    fdd_mount(drive, fdd_sectors[drive]);
+}
+
+int fdd_is_inserted(uint32_t drive)
+{
+    return drive < 2 && fdd_inserted[drive];
+}
+
+uint32_t fdd_mounted_sectors(uint32_t drive)
+{
+    return drive < 2 ? fdd_sectors[drive] : 0;
 }
 
 // Answer one pending controller request. Register 0 reports the active request's
