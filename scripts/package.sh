@@ -183,7 +183,7 @@ def input_map(j):
             {"id": 3, "name": "Y: Enter", "key": "pad_btn_y"},
             {"id": 4, "name": "L: Virtual Keyboard", "key": "pad_trig_l"},
             {"id": 5, "name": "R: unmapped",         "key": "pad_trig_r"},
-            {"id": 6, "name": "Start: Pause",        "key": "pad_btn_start"},
+            {"id": 6, "name": "Start: POST Overlay", "key": "pad_btn_start"},
             {"id": 7, "name": "Select: Settings",    "key": "pad_btn_select"},
         ]},
     ]
