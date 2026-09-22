@@ -247,8 +247,10 @@ module core_top (
 
     wire pll_locked;             // system PLL lock
 
+    wire clk_core;               // 85.909 MHz, i8088 core
     wire clk_28_636;             // CGA dot clock
     wire clk_32_514;             // HGC dot clock (x2)
+    wire clk_cpu;                // 8088 pin clock (gated)
     logic cpu_ce_posedge;        // CPU clock-enable, rising
     logic cpu_ce_negedge;        // CPU clock-enable, falling
     logic peripheral_ce;         // peripheral clock-enable
@@ -257,6 +259,8 @@ module core_top (
     localparam [27:0] cur_rate = `CHIPSET_HZ;   // chipset clock rate, Hz (3 x 14.31818 MHz)
 
     wire clk_sdram_ph;           // SDRAM pin clock, phase-shifted
+    wire clk_pix_cga;            // CGA pixel
+    wire clk_pix_cga_90;         // CGA pixel, 90 deg
     wire clk_pix_hgc;            // HGC pixel
     wire clk_pix_hgc_90;         // HGC pixel, 90 deg
     wire clk_pix;                // selected pixel, video out
@@ -266,22 +270,16 @@ module core_top (
 
     // System PLL: chipset 42.95, core 85.9 (2:1), dram 42.95@180, CGA dot 28.64,
     // pixel 14.32 (+90) MHz. One VCO, so the CPU stays phase-locked to the CGA beam.
-    //
-    // THE 85.9 AND CGA PIXEL OUTPUTS ARE OPEN since the XT hardware left:
-    // their only consumers were the 8088 core clock and the CGA generator.
-    // The megafunction still generates them -- repinning a generated PLL is
-    // riskier than leaving three wires unrouted -- and the remaining
-    // consumers (the V30's CE generator, clk_28_636) are the same as before.
     pll pll
     (
         .refclk   (clk_74a),
         .rst      (1'b0),
         .outclk_0 (clk_chipset),
-        .outclk_1 (),
+        .outclk_1 (clk_core),
         .outclk_2 (clk_sdram_ph),
         .outclk_3 (clk_28_636),
-        .outclk_4 (),
-        .outclk_5 (),
+        .outclk_4 (clk_pix_cga),
+        .outclk_5 (clk_pix_cga_90),
         .locked   (pll_locked)
     );
 
@@ -317,9 +315,7 @@ module core_top (
         .reset                              (reset),
         .clk_select_load                    (biu_done),
         .clk_select                         (clk_select_next),
-        // The 8088 pin clock output is open: the V30 takes the CEs, not a
-        // pin clock, and nothing else ever read it.
-        .cpu_clk_pin                        (),
+        .cpu_clk_pin                        (clk_cpu),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
         .peripheral_ce                      (peripheral_ce),
@@ -1011,9 +1007,6 @@ module core_top (
         .clk_pico                   (clk_pico),
 
         .fdd_request                (mgmt_req[7:6]),
-        // PC-98 has no IDE: the XT2IDE block left with the XT hardware and
-        // its request lines are idle by construction.
-        .ide0_request               (3'b000),
         .fdd0_disk_size             (fdd0_disk_sectors),
         .fdd1_disk_size             (fdd1_disk_sectors),
         .datatable_addr             (datatable_addr),

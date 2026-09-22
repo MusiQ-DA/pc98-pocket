@@ -95,12 +95,6 @@ DANGLE_OK = {
     "pc98_fill_busy", "pc98_kanji_seen",
     "uart_dtr", "uart_rts", "uart_tx",
     "v30_ss_err_unused", "v30_ss_quiet_unused", "v30_ss_rdata_unused",
-    # Orphaned by the XT hardware's removal (2026-09-22), kept deliberately:
-    # the mouse stream is generated and paced with no PC-98 consumer until
-    # the board's serial mouse port is written, and the display page bit
-    # (port 0xA4) waits for the graphics display fetch's reader to land --
-    # pc98_gvram_display.sv is committed but not yet instantiated.
-    "mouse_rd", "mouse_rts_n", "gvram_disp_page_w",
 }
 
 
