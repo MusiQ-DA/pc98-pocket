@@ -17,6 +17,10 @@ void post_mon_tick(void);
 // that came up blank would read as the monitor being broken.
 void postmon_toggle(void);
 
+// Force the strip shown: the button binding uses this when it closes an open
+// overlay, where a blind toggle could land on hidden.
+void postmon_show(void);
+
 // Capture the guest ROM bytes the panel shows.
 //
 // Must be called with the guest still held: the peek shares CHIPSET's

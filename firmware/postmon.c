@@ -102,6 +102,11 @@ void postmon_toggle(void)
     postmon_shown = !postmon_shown;
 }
 
+void postmon_show(void)
+{
+    postmon_shown = 1;
+}
+
 #ifndef SDRAM_SELFTEST
 
 __attribute__((unused))

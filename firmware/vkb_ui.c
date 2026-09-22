@@ -343,26 +343,30 @@ static void button_function(uint8_t fn)
     }
 }
 
+// The physical button -> binding slot table. File scope so the always-live
+// POSTMON check in vkb_ui_tick can see which buttons carry that binding, not
+// just the normal-mode dispatch.
+static const struct {
+    uint16_t mask;
+    uint8_t btn;
+} bind_map[BIND_COUNT] = {
+    { BTN_A, BIND_A },
+    { BTN_B, BIND_B },
+    { BTN_X, BIND_X },
+    { BTN_Y, BIND_Y },
+    { BTN_R1, BIND_R1 },
+    { BTN_SELECT, BIND_SELECT },
+    { BTN_START, BIND_START },
+};
+
 // Normal-mode button dispatch: a function binding runs here; a key binding was already typed by
 // pocket_keyboard (its cfg carries the key, a function's carries 0). This is the normal-mode input
 // owner, the counterpart to settings_input and vkb_input.
 static void dispatch_bindings(uint16_t pressed)
 {
-    static const struct {
-        uint16_t mask;
-        uint8_t btn;
-    } map[BIND_COUNT] = {
-        { BTN_A, BIND_A },
-        { BTN_B, BIND_B },
-        { BTN_X, BIND_X },
-        { BTN_Y, BIND_Y },
-        { BTN_R1, BIND_R1 },
-        { BTN_SELECT, BIND_SELECT },
-        { BTN_START, BIND_START },
-    };
     for (int i = 0; i < BIND_COUNT; i++) {
-        if (pressed & map[i].mask) {
-            button_function(key_bind_function(map[i].btn));
+        if (pressed & bind_map[i].mask) {
+            button_function(key_bind_function(bind_map[i].btn));
         }
     }
 }
@@ -485,6 +489,30 @@ void vkb_ui_tick(void)
         }
         osd_ctrl_write();
     }
+
+#ifdef POST_MONITOR
+    // A POSTMON binding is always-live like L1: from an overlay it closes the
+    // overlay and shows the strip, from none it toggles. Without this the strip
+    // could only be reached by closing the panel some other way first, which
+    // read as the button doing nothing while a menu or the keyboard was up.
+    uint16_t postmon_mask = 0;
+    for (int i = 0; i < BIND_COUNT; i++) {
+        if (key_bind_function(bind_map[i].btn) == BTNFN_POSTMON)
+            postmon_mask |= bind_map[i].mask;
+    }
+    if (pressed & postmon_mask) {
+        if (ui_mode != OSD_NONE) {
+            bind_target = -1;
+            vkb_release_all();
+            ui_mode = OSD_NONE;
+            osd_ctrl_write();
+            postmon_show();
+        } else {
+            postmon_toggle();
+        }
+        pressed &= ~postmon_mask; // consumed; must not reach the mode dispatch too
+    }
+#endif
 
     // Every other button belongs to the active mode: an overlay consumes it for its own
     // navigation, and normal mode dispatches the bindings (a key was already typed by the RTL, a
