@@ -162,6 +162,14 @@ cp "$ROMS/bios.rom" "$ROMS/itf.rom" "$ROMS/font.rom" dist/pc98/Assets/pc98/hiroy
 # assumed present: firmware.bin is gitignored, being a build product.
 make -C firmware >/dev/null || { say "firmware build failed"; exit 1; }
 
+# The softcore has no divider (ENABLE_DIV(0)), so any div/rem instruction in
+# the image is an illegal instruction on hardware -- and a compiler is free to
+# invent one for code that never wrote a '/'. clang 23 does exactly that to a
+# "% and /=" pair. The Makefile's gate disassembles the built image; run it
+# here too, because this tree can be mid-edit in ways CI never saw.
+make -C firmware nodiv-verify >/dev/null \
+    || { say "the firmware image contains a division instruction -- make nodiv-verify"; exit 1; }
+
 # And check that what came out is actually current.
 #
 # The first PC-98 deploy shipped a STALE firmware.bin: make had nothing to do
