@@ -8,7 +8,6 @@ set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
 # (2026-09-22): this is a PC-98, and the RTL no longer has a second machine to
 # choose between. EMS stays a switch because RAM.sv still has both paths.
 set_global_assignment -name VERILOG_MACRO "ENABLE_EMS=1"
-set_global_assignment -name VERILOG_MACRO "ENABLE_A000_UMB=1"
 
 set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 

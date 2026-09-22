@@ -221,7 +221,7 @@ module tb_postmon_peek;
         .cg_rd_req(1'b0), .cg_rd_addr(24'd0), .cg_rd_len(4'd0),
         .cg_rd_ack(), .cg_rd_valid(), .cg_rd_data(), .cg_rd_done(),
         .tandy_bios_flag(tandy_bios_flag),
-        .enable_a000h(1'b1), .wait_count_clk_en(1'b1),
+        .wait_count_clk_en(1'b1),
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)
     );
 

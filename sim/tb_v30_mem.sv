@@ -257,7 +257,7 @@ module tb_v30_mem;
         .font_rd_ack(), .font_rd_valid(), .font_rd_data(), .font_rd_done(),
         .cg_rd_req(1'b0), .cg_rd_addr(24'h0), .cg_rd_len(4'h0),
         .cg_rd_ack(), .cg_rd_valid(), .cg_rd_data(), .cg_rd_done(),
-        .enable_a000h(1'b1), .wait_count_clk_en(cpu_ce_negedge),
+        .wait_count_clk_en(cpu_ce_negedge),
         .ram_read_wait_cycle(ram_rd_wait), .ram_write_wait_cycle(ram_wr_wait)
     );
 

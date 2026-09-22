@@ -234,7 +234,6 @@ module softcpu_subsystem (
     output  [1:0] osd_stereo,
     output        osd_ems,
     output  [1:0] osd_ems_frame,
-    output        osd_a000,
     output  [1:0] osd_gamepad,
 
     // Per-control key config {ext, Set-2 code}, one 9-bit entry per D-pad direction and button,
@@ -484,7 +483,7 @@ module softcpu_subsystem (
     localparam SET_IDX_DISPLAY   = 5'd5;
     localparam SET_IDX_EMS       = 5'd6;   // Hardware
     localparam SET_IDX_EMS_FRAME = 5'd7;
-    localparam SET_IDX_A000      = 5'd8;
+    // index 8 is still allocated by the firmware's A000 row; nothing reads it.
     // index 9 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
     localparam SET_IDX_GAMEPAD   = 5'd10;  // Controls
     reg [7:0] osd_settings [0:31];
@@ -502,7 +501,6 @@ module softcpu_subsystem (
     assign osd_stereo    = osd_settings[SET_IDX_STEREO][1:0];
     assign osd_ems       = osd_settings[SET_IDX_EMS][0];
     assign osd_ems_frame = osd_settings[SET_IDX_EMS_FRAME][1:0];
-    assign osd_a000      = osd_settings[SET_IDX_A000][0];
     assign osd_gamepad   = osd_settings[SET_IDX_GAMEPAD][1:0];
 
     // Per-control key config, written at KEYCFG_REG (0x20000020) as {id[12:9], ext[8], code[7:0]}.

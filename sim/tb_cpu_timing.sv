@@ -62,7 +62,7 @@ module tb_cpu_timing;
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
         .map_ems(map), .ems_b1(1'b0), .ems_b2(1'b0), .ems_b3(1'b0), .ems_b4(1'b0),
         .bios_protect_flag(2'b00), .tandy_bios_flag(1'b0),
-        .enable_a000h(1'b1), .wait_count_clk_en(1'b1),
+        .wait_count_clk_en(1'b1),
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)
     );
 

@@ -80,8 +80,6 @@ module RAM (
      output logic   [15:0]  cg_rd_data,
      output logic           cg_rd_done,
      input  logic           tandy_bios_flag,
-    // Optional flags
-    input  logic           enable_a000h,
     // Wait mode
     input   logic           wait_count_clk_en,
     input   logic   [1:0]   ram_read_wait_cycle,

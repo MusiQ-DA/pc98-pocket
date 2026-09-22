@@ -124,9 +124,8 @@ module tb_selftest_soc;
         .st_done(st_done), .st_rdata(st_rdata),
         .osd_active(), .osd_credits_req(),
         .vkb_key(), .vkb_stb(), .osd_palette(), .osd_cpu_speed(),
-        .osd_bios_wr(), .osd_opl2(), .osd_boost(), .osd_spk_vol(), .osd_stereo(),
-        .osd_cms(), .osd_ems(), .osd_ems_frame(), .osd_a000(),
-        .osd_joy1(), .osd_joy2(), .osd_swapjoy(), .osd_syncjoy(),
+        .osd_bios_wr(), .osd_boost(), .osd_spk_vol(), .osd_stereo(),
+        .osd_ems(), .osd_ems_frame(),
         .osd_gamepad(), .key_cfg_flat()
     );
 
@@ -173,7 +172,7 @@ module tb_selftest_soc;
         .map_ems(unused_map),
         .ems_b1(1'b0), .ems_b2(1'b0), .ems_b3(1'b0), .ems_b4(1'b0),
         .bios_protect_flag(2'b00), .tandy_bios_flag(1'b0),
-        .enable_a000h(1'b1), .wait_count_clk_en(1'b1),
+        .wait_count_clk_en(1'b1),
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)
     );
 

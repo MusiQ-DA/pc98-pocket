@@ -20,9 +20,6 @@
     // FEATURE CONFIGURATION
     //
 
-`ifndef ENABLE_A000_UMB
-`define ENABLE_A000_UMB 0
-`endif
 `ifndef ENABLE_EMS
 `define ENABLE_EMS 0
 `endif
@@ -913,7 +910,6 @@ module core_top (
     wire [1:0] osd_stereo;
     wire       osd_ems;
     wire [1:0] osd_ems_frame;
-    wire       osd_a000;
     wire [1:0] osd_gamepad;
     wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
 
@@ -1047,7 +1043,6 @@ module core_top (
         .osd_stereo                 (osd_stereo),
         .osd_ems                    (osd_ems),
         .osd_ems_frame              (osd_ems_frame),
-        .osd_a000                   (osd_a000),
         .osd_gamepad                (osd_gamepad),
         .key_cfg_flat               (key_cfg),
         .st_addr                    (st_addr),
@@ -1241,7 +1236,6 @@ module core_top (
     wire [1:0] stereo_mix_cfg = osd_stereo;
     wire       ems_en_cfg     = osd_ems;
     wire [1:0] ems_frame_cfg  = osd_ems_frame;
-    wire       a000_en_cfg    = osd_a000;
     synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
     synch_3              s_osd_open       (|osd_open_delay,    osd_open_req,  clk_chipset);
     synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
@@ -1266,7 +1260,7 @@ module core_top (
     // (The composite/CGA/HGC settings rows are gone -- their hardware left
     // with the PC/AT layer -- but the firmware still pushes the values, so
     // the softcore's osd_composite/osd_cga_gfx/osd_hgc_gfx outputs stay.)
-    wire a000h = `ENABLE_A000_UMB ? a000_en_cfg : 1'b0;
+
 
     // MiSTer front-panel buttons; the Pocket has none.
     assign buttons = 2'b00;
@@ -2462,7 +2456,6 @@ module core_top (
         .rtc_time                           (rtc_time),
         .fdd_present                        (fdd_present),
         .fdd_request                        (mgmt_req[7:6]),
-        .enable_a000h                       (a000h),
         .wait_count_clk_en                  (cpu_ce_negedge),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),
