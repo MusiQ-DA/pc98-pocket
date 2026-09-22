@@ -909,18 +909,12 @@ module core_top (
     wire [2:0] osd_palette;
     wire [1:0] osd_cpu_speed;
     wire [1:0] osd_bios_wr;
-    wire [1:0] osd_opl2;
     wire [1:0] osd_boost;
     wire [1:0] osd_spk_vol;
     wire [1:0] osd_stereo;
-    wire       osd_cms;
     wire       osd_ems;
     wire [1:0] osd_ems_frame;
     wire       osd_a000;
-    wire [1:0] osd_joy1;
-    wire [1:0] osd_joy2;
-    wire       osd_swapjoy;
-    wire       osd_syncjoy;
     wire [1:0] osd_gamepad;
     wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
 
@@ -1049,18 +1043,12 @@ module core_top (
         .osd_palette                (osd_palette),
         .osd_cpu_speed              (osd_cpu_speed),
         .osd_bios_wr                (osd_bios_wr),
-        .osd_opl2                   (osd_opl2),
         .osd_boost                  (osd_boost),
         .osd_spk_vol                (osd_spk_vol),
         .osd_stereo                 (osd_stereo),
-        .osd_cms                    (osd_cms),
         .osd_ems                    (osd_ems),
         .osd_ems_frame              (osd_ems_frame),
         .osd_a000                   (osd_a000),
-        .osd_joy1                   (osd_joy1),
-        .osd_joy2                   (osd_joy2),
-        .osd_swapjoy                (osd_swapjoy),
-        .osd_syncjoy                (osd_syncjoy),
         .osd_gamepad                (osd_gamepad),
         .key_cfg_flat               (key_cfg),
         .st_addr                    (st_addr),
@@ -1249,11 +1237,9 @@ module core_top (
     // osd_* are in the clk_chipset domain (clk_pico is a gated clk_chipset).
     wire [1:0] cpu_speed_cfg  = osd_cpu_speed;
     wire [1:0] bios_wr_cfg    = osd_bios_wr;
-    wire [1:0] opl2_cfg       = osd_opl2;
     wire [1:0] boost_cfg      = osd_boost;
     wire [1:0] spk_vol_cfg    = osd_spk_vol;
     wire [1:0] stereo_mix_cfg = osd_stereo;
-    wire       cms_cfg        = osd_cms;
     wire       ems_en_cfg     = osd_ems;
     wire [1:0] ems_frame_cfg  = osd_ems_frame;
     wire       a000_en_cfg    = osd_a000;
@@ -1282,10 +1268,6 @@ module core_top (
 
     // Game-port options from the settings OSD: [4]=Sync-to-CPU turbo timing, [3:2]=Joystick 2,
     // [1:0]=Joystick 1; each 2-bit field is 0=Analog, 1=Digital, 2=Disabled.
-    wire [1:0]  joy1_cfg = osd_joy1, joy2_cfg = osd_joy2;
-    wire        swapjoy_cfg = osd_swapjoy, syncjoy_cfg = osd_syncjoy;
-    wire [4:0]  joy_opts = {syncjoy_cfg, joy2_cfg, joy1_cfg};
-
     // (The composite/CGA/HGC settings rows are gone -- their hardware left
     // with the PC/AT layer -- but the firmware still pushes the values, so
     // the softcore's osd_composite/osd_cga_gfx/osd_hgc_gfx outputs stay.)
@@ -2476,7 +2458,6 @@ module core_top (
         .kb_byte                            (kb_byte),
         .kb_valid                           (kb_valid),
         .kb_ready                           (kb_ready),
-        .joy_opts                           (joy_opts),           //Joy0-Disabled, Joy0-Type, Joy1-Disabled, Joy1-Type, turbo_sync
         .joy0                               (swapjoy_cfg ? joy1 : joy0),
         .joy1                               (swapjoy_cfg ? joy0 : joy1),
         .joya0                              (swapjoy_cfg ? joya1 : joya0),

@@ -105,7 +105,6 @@ module PERIPHERALS #(
         input   logic   [7:0]   kb_byte,
         input   logic           kb_valid,
         output  logic           kb_ready,
-        input   logic   [4:0]   joy_opts,
         input   logic   [13:0]  joy0,
         input   logic   [13:0]  joy1,
         input   logic   [15:0]  joya0,

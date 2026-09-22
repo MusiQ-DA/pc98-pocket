@@ -52,27 +52,16 @@ static const osd_fb_t panel = { PANEL_X, PANEL_Y, PANEL_W, PANEL_H };
 enum {
     // System
     SET_CPU_SPEED,
-    SET_CGA_GFX,
-    SET_HGC_GFX,
-    SET_VIDEO_1ST,
     SET_BIOS_WR,
-    SET_SPLASH,
     // Audio & Video
-    SET_OPL2,
     SET_BOOST,
     SET_SPK_VOL,
     SET_STEREO,
-    SET_CMS,
-    SET_COMPOSITE,
     SET_DISPLAY,
     // Hardware
     SET_EMS,
     SET_EMS_FRAME,
     SET_A000,
-    SET_JOY1,
-    SET_JOY2,
-    SET_SWAPJOY,
-    SET_SYNCJOY,
     // Controls
     SET_DPAD,
     SET_GAMEPAD,
@@ -87,19 +76,13 @@ enum {
 // fourth for the PC/AT box it was tuned against.
 static const char *const opt_cpu[] = { "5 MHz", "10 MHz", "20 MHz", "Turbo (max)" };
 static const char *const opt_bios_wr[] = { "None", "EC00", "Main", "All" };
-static const char *const opt_opl2[] = { "Adlib 388h", "SB FM 388h/228h", "Disabled" };
 static const char *const opt_boost[] = { "None", "2x", "4x" };
 static const char *const opt_level4[] = { "1", "2", "3", "4" };
 static const char *const opt_stereo[] = { "None", "25%", "50%", "100%" };
-static const char *const opt_off_on[] = { "Off", "On" };
 static const char *const opt_dis_en[] = { "Disabled", "Enabled" };
 static const char *const opt_display[] = { "Full Color", "Green", "Amber", "B&W", "Red", "Blue",
     "Fuchsia", "Purple" };
 static const char *const opt_ems_frame[] = { "C000", "D000", "E000" };
-static const char *const opt_joy[] = { "Analog", "Digital", "Disabled" };
-static const char *const opt_no_yes[] = { "No", "Yes" };
-static const char *const opt_yes_no[] = { "Yes", "No" };
-static const char *const opt_video_1st[] = { "CGA", "Hercules" };
 static const char *const opt_dpad[] = { "Numpad", "Numpad w/ Diag.", "Arrows", "WASD", "HJKL",
     "HJKL w/ YUBN" };
 static const char *const opt_gamepad[] = { "Keyboard", "Joystick", "Mouse" };
@@ -113,6 +96,10 @@ typedef struct {
 #define SETTING(a)      { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), 0 }
 #define SETTING_D(a, d) { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), (d) }
 
+// The rows whose hardware left the machine (CGA/HGC graphics, the video 1st
+// card, the splash, OPL2, C/MS, composite, the game port) are gone from the
+// enum with it. A version-4 blob still loads -- settings_load remaps its
+// indices through v4_to_v5 below -- and the next save writes version 5.
 static setting_t settings[SET_COUNT] = {
     // Index 1 is the faithful clock: a PC-9801VM/VX's V30 at 2.4576 MHz x4.
     // The default is index 2 anyway, because v30_cpu_bridge splits every word
@@ -123,25 +110,14 @@ static setting_t settings[SET_COUNT] = {
     // away. At index 0 the ITF's 640 KB memory test is a long wait with nothing
     // on screen but its own test pattern.
     SETTING_D(opt_cpu, 2),    // SET_CPU_SPEED
-    SETTING(opt_yes_no),      // SET_CGA_GFX (Yes = the card's I/O decode responds)
-    SETTING(opt_yes_no),      // SET_HGC_GFX
-    SETTING(opt_video_1st),   // SET_VIDEO_1ST (applied by the BIOS at the next Reset PC)
     SETTING(opt_bios_wr),     // SET_BIOS_WR
-    SETTING_D(opt_off_on, 1), // SET_SPLASH (default On; read at cold boot)
-    SETTING(opt_opl2),        // SET_OPL2
     SETTING(opt_boost),       // SET_BOOST
     SETTING(opt_level4),      // SET_SPK_VOL
     SETTING(opt_stereo),      // SET_STEREO
-    SETTING_D(opt_dis_en, 1), // SET_CMS (default Enabled)
-    SETTING(opt_off_on),      // SET_COMPOSITE
     SETTING(opt_display),     // SET_DISPLAY
     SETTING_D(opt_dis_en, 1), // SET_EMS (default Enabled, as the fixed memory map was)
     SETTING(opt_ems_frame),   // SET_EMS_FRAME
     SETTING_D(opt_dis_en, 1), // SET_A000 (default Enabled)
-    SETTING_D(opt_joy, 1),    // SET_JOY1 (default Digital; built-in pad has no stick)
-    SETTING_D(opt_joy, 2),    // SET_JOY2 (default Disabled)
-    SETTING(opt_no_yes),      // SET_SWAPJOY
-    SETTING(opt_no_yes),      // SET_SYNCJOY
     SETTING(opt_dpad),        // SET_DPAD (default Numpad)
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
 };
@@ -644,9 +620,23 @@ int settings_input(uint16_t pressed)
 // values packed four per word, then the key-binding block (seven codes + ext byte) four per word. A
 // blob older than version 4 predates the menu-group value layout, so it is rejected and the
 // compiled defaults load.
+//
+// VERSION 5 REMOVED ELEVEN SETTINGS whose hardware left the machine, and the values are stored BY
+// INDEX, so a version-4 blob's bytes no longer line up. The v4 layout is mapped through the table
+// below: each old index either names its new index or is read past (the setting is gone). The blob
+// is rewritten as version 5 on the next save, so the remap runs once.
 #define SETTINGS_MAGIC   0x50435853u
-#define SETTINGS_VERSION 4u
+#define SETTINGS_VERSION 5u
 #define SETTINGS_WORD    128
+
+// Version 4's enum order: CPU, CGA, HGC, video-1st, BIOS-wr, splash, OPL2, boost, speaker, stereo,
+// C/MS, composite, display, EMS, EMS-frame, A000, joy1, joy2, swap-joy, sync-joy, d-pad, gamepad.
+// 0xFF means the row's hardware is gone and its value is dropped.
+static const uint8_t v4_to_v5[22] = {
+    0, 0xFF, 0xFF, 0xFF, 1, 0xFF, 0xFF, 2, 3, 4, 0xFF, 0xFF, 5, 6, 7, 8, 0xFF, 0xFF, 0xFF, 0xFF,
+    9, 10,
+};
+#define SETTINGS_V4_COUNT 22
 
 void settings_load(void)
 {
@@ -659,18 +649,27 @@ void settings_load(void)
     uint32_t version = head & 0xFF;
     if (magic == SETTINGS_MAGIC && version >= 4 && version <= SETTINGS_VERSION) {
         uint32_t count = (head >> 8) & 0xFF;
-        if (count > SET_COUNT) {
-            count = SET_COUNT;
+        uint32_t values = count;
+        if (version == 4) {
+            // The v4 blob's count is 22; read every byte (the words are consumed
+            // in fours, so the block must be walked whole) and land each on its
+            // v5 index where one exists.
+            if (values > SETTINGS_V4_COUNT) {
+                values = SETTINGS_V4_COUNT;
+            }
+        } else if (values > SET_COUNT) {
+            values = SET_COUNT;
         }
         uint32_t word = 0;
-        for (uint32_t i = 0; i < count; i++) {
+        for (uint32_t i = 0; i < values; i++) {
             if ((i & 3) == 0) {
                 word = *FDD_BRAM_RDATA;
             }
             uint8_t v = (word >> ((i & 3) * 8)) & 0xFF;
+            uint32_t t = (version == 4) ? v4_to_v5[i] : i;
             // Ignore an out-of-range value from an older blob.
-            if (v < settings[i].count) {
-                settings[i].value = v;
+            if (t != 0xFF && v < settings[t].count) {
+                settings[t].value = v;
             }
         }
         // The binding block follows the values (auto-incrementing read pointer): seven code bytes

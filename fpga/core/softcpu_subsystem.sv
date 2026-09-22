@@ -229,19 +229,12 @@ module softcpu_subsystem (
     output  [2:0] osd_palette,
     output  [1:0] osd_cpu_speed,
     output  [1:0] osd_bios_wr,
-    output  [1:0] osd_opl2,
     output  [1:0] osd_boost,
     output  [1:0] osd_spk_vol,
     output  [1:0] osd_stereo,
-    output        osd_cms,
     output        osd_ems,
     output  [1:0] osd_ems_frame,
     output        osd_a000,
-    output  [1:0] osd_joy1,
-    output  [1:0] osd_joy2,
-    output        osd_swapjoy,
-    output        osd_syncjoy,
-    output        osd_video_1st,
     output  [1:0] osd_gamepad,
 
     // Per-control key config {ext, Set-2 code}, one 9-bit entry per D-pad direction and button,
@@ -476,28 +469,20 @@ module softcpu_subsystem (
     // The file deliberately survives machine resets (registers power up 0): reset-latched
     // consumers like hgc_mode sample it at reset release, before the restarted firmware can
     // re-push values.
+    // The index order is the firmware's SET_* enum (settings_ui.c), version 5:
+    // the settings whose hardware left the machine (CGA/HGC, video 1st, splash,
+    // OPL2, C/MS, composite, the game port pair) are gone from both sides.
     localparam SET_IDX_CPU_SPEED = 5'd0;   // System
-    localparam SET_IDX_CGA_GFX   = 5'd1;
-    localparam SET_IDX_HGC_GFX   = 5'd2;
-    localparam SET_IDX_VIDEO_1ST = 5'd3;
-    localparam SET_IDX_BIOS_WR   = 5'd4;
-    localparam SET_IDX_SPLASH    = 5'd5;
-    localparam SET_IDX_OPL2      = 5'd6;   // Audio & Video
-    localparam SET_IDX_BOOST     = 5'd7;
-    localparam SET_IDX_SPK_VOL   = 5'd8;
-    localparam SET_IDX_STEREO    = 5'd9;
-    localparam SET_IDX_CMS       = 5'd10;
-    localparam SET_IDX_COMPOSITE = 5'd11;
-    localparam SET_IDX_DISPLAY   = 5'd12;
-    localparam SET_IDX_EMS       = 5'd13;  // Hardware
-    localparam SET_IDX_EMS_FRAME = 5'd14;
-    localparam SET_IDX_A000      = 5'd15;
-    localparam SET_IDX_JOY1      = 5'd16;
-    localparam SET_IDX_JOY2      = 5'd17;
-    localparam SET_IDX_SWAPJOY   = 5'd18;
-    localparam SET_IDX_SYNCJOY   = 5'd19;
-    // index 20 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
-    localparam SET_IDX_GAMEPAD   = 5'd21;  // Controls
+    localparam SET_IDX_BIOS_WR   = 5'd1;
+    localparam SET_IDX_BOOST     = 5'd2;   // Audio & Video
+    localparam SET_IDX_SPK_VOL   = 5'd3;
+    localparam SET_IDX_STEREO    = 5'd4;
+    localparam SET_IDX_DISPLAY   = 5'd5;
+    localparam SET_IDX_EMS       = 5'd6;   // Hardware
+    localparam SET_IDX_EMS_FRAME = 5'd7;
+    localparam SET_IDX_A000      = 5'd8;
+    // index 9 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
+    localparam SET_IDX_GAMEPAD   = 5'd10;  // Controls
     reg [7:0] osd_settings [0:31];
     wire settings_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd3;
     always @(posedge clk_pico) begin
@@ -508,20 +493,13 @@ module softcpu_subsystem (
     assign osd_palette   = osd_settings[SET_IDX_DISPLAY][2:0];
     assign osd_cpu_speed = osd_settings[SET_IDX_CPU_SPEED][1:0];
     assign osd_bios_wr   = osd_settings[SET_IDX_BIOS_WR][1:0];
-    assign osd_opl2      = osd_settings[SET_IDX_OPL2][1:0];
     assign osd_boost     = osd_settings[SET_IDX_BOOST][1:0];
     assign osd_spk_vol   = osd_settings[SET_IDX_SPK_VOL][1:0];
     assign osd_stereo    = osd_settings[SET_IDX_STEREO][1:0];
-    assign osd_cms       = osd_settings[SET_IDX_CMS][0];
     assign osd_ems       = osd_settings[SET_IDX_EMS][0];
     assign osd_ems_frame = osd_settings[SET_IDX_EMS_FRAME][1:0];
     assign osd_a000      = osd_settings[SET_IDX_A000][0];
-    assign osd_joy1      = osd_settings[SET_IDX_JOY1][1:0];
-    assign osd_joy2      = osd_settings[SET_IDX_JOY2][1:0];
-    assign osd_swapjoy   = osd_settings[SET_IDX_SWAPJOY][0];
-    assign osd_syncjoy   = osd_settings[SET_IDX_SYNCJOY][0];
     assign osd_gamepad   = osd_settings[SET_IDX_GAMEPAD][1:0];
-    assign osd_video_1st = osd_settings[SET_IDX_VIDEO_1ST][0];
 
     // Per-control key config, written at KEYCFG_REG (0x20000020) as {id[12:9], ext[8], code[7:0]}.
     // pocket_keyboard reads one 9-bit {ext, code} per D-pad direction (ids 0-3) and button (ids 4-10);
