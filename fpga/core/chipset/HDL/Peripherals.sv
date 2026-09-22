@@ -420,6 +420,16 @@ module PERIPHERALS #(
         .irq_2dd          (fdc_irq2)
     );
 
+    // The house strobes: one cycle after the command drops, used by the FDC
+    // glue and its witness counters below.
+    logic prev_io_read_n;
+    logic prev_io_write_n;
+
+    always_ff @(posedge clock) begin
+        prev_io_read_n  <= io_read_n;
+        prev_io_write_n <= io_write_n;
+    end
+
 `ifdef PC98_FDC_REAL
     // 0x90/0x92 and 0xC8/0xCA now come from the real controller. 0xBE, 0x94
     // and 0xCC have no XT counterpart at all, so pc98_fdc_glue answers them:
@@ -2345,11 +2355,9 @@ module PERIPHERALS #(
     //
 `ifdef ENABLE_OPNA
     assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
-                         : mgmt_opna_cs ? mgmt_opna_readdata
-                         : mgmt_ide0_cs ? mgmt_ide0_readdata : mgmt_fdd_readdata;
+                         : mgmt_opna_cs ? mgmt_opna_readdata : mgmt_fdd_readdata;
 `else
-    assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
-                         : mgmt_ide0_cs ? mgmt_ide0_readdata : mgmt_fdd_readdata;
+    assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata : mgmt_fdd_readdata;
 `endif
 
 
