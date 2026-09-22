@@ -10,8 +10,6 @@ module CHIPSET #(
         input   logic           clock,
         input   logic           cpu_ce_posedge,
         input   logic           cpu_ce_negedge,
-        input   logic           clk_sys,
-        input   logic           peripheral_ce,
         input   logic   [1:0]   clk_select,
         input   logic           reset,
         input   logic           sdram_reset,
@@ -105,7 +103,6 @@ module CHIPSET #(
         input   logic   [7:0]   data_bus_ext,
         output  logic           data_bus_direction,
         output  logic           address_latch_enable,
-        input   logic           io_channel_check,
         input   logic           io_channel_ready,
         input   logic   [7:0]   interrupt_request,
         output  logic           io_read_n,
@@ -176,12 +173,6 @@ module CHIPSET #(
         input   logic   [1:0]   ems_address,
         // BIOS
         input  logic    [1:0]   bios_protect_flag,
-        // MMC interface
-        input   logic   [1:0]   use_mmc,
-        output  logic           spi_clk,
-        output  logic           spi_cs,
-        output  logic           spi_mosi,
-        input   logic           spi_miso,
         // FDD
         input   logic   [15:0]  mgmt_address,
         input   logic           mgmt_read,
@@ -201,10 +192,6 @@ module CHIPSET #(
         input   logic   [1:0]   ram_write_wait_cycle,
         // Others
         output  logic           pause_core,
-        input   logic   [3:0]   crt_h_offset,
-        input   logic   [2:0]   crt_v_offset,
-        input   logic   [2:0]   vsync_width_osd,
-        input   logic   [2:0]   hsync_width_osd,
         // PC-98 keyboard injection, passed to PERIPHERALS' 8251 model.
         input   logic           pc98_key_stb,
         input   logic   [7:0]   pc98_key_byte,
@@ -235,7 +222,6 @@ module CHIPSET #(
     logic           DRQ0;
 
     logic   [6:0]   map_ems[0:3];
-    logic           ena_ems[0:3];
     logic           ems_b1;
     logic           ems_b2;
     logic           ems_b3;
@@ -373,10 +359,7 @@ module CHIPSET #(
         .egc_wr                             (egc_wr_w),
         .egc_rg                             (egc_rg_w),
         .egc_d                              (egc_d_w),
-        .clk_sys                            (clk_sys),
-        .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
-        .peripheral_ce                      (peripheral_ce),
         .clk_select                         (clk_select),
         .reset                              (reset),
         .interrupt_to_cpu                   (interrupt_to_cpu),
@@ -456,16 +439,10 @@ module CHIPSET #(
         .ems_enabled                       (ems_enabled),
         .ems_address                       (ems_address),
         .map_ems                           (map_ems),
-        .ena_ems                           (ena_ems),
         .ems_b1                            (ems_b1),
         .ems_b2                            (ems_b2),
         .ems_b3                            (ems_b3),
         .ems_b4                            (ems_b4),
-        .use_mmc                            (use_mmc),
-        .spi_clk                            (spi_clk),
-        .spi_cs                             (spi_cs),
-        .spi_mosi                           (spi_mosi),
-        .spi_miso                           (spi_miso),
         .mgmt_address                       (mgmt_address),
         .mgmt_read                          (mgmt_read),
         .mgmt_readdata                      (mgmt_readdata),
@@ -478,11 +455,7 @@ module CHIPSET #(
         .fdd_dma_req                        (fdd_dma_req),
         .fdd_dma_ack                        (~dma_acknowledge_n[2]),
         .terminal_count                     (terminal_count_n),
-        .pause_core                         (pause_core),
-        .crt_h_offset                       (crt_h_offset),
-        .crt_v_offset                       (crt_v_offset),
-        .vsync_width_osd                    (vsync_width_osd),
-        .hsync_width_osd                    (hsync_width_osd)
+        .pause_core                         (pause_core)
         ,.pc98_key_stb                      (pc98_key_stb)
         ,.pc98_key_byte                     (pc98_key_byte)
     );

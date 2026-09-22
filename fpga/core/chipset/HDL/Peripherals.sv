@@ -21,7 +21,6 @@
 // a PC-98 one is not written yet.
 
 module PERIPHERALS #(
-        parameter ps2_over_time = 16'd1000,
 		parameter clk_rate = 28'd50000000
     ) (
         input   logic           clock,
@@ -44,10 +43,7 @@ module PERIPHERALS #(
         output  logic           egc_wr,
         output  logic   [3:0]   egc_rg,
         output  logic   [7:0]   egc_d,
-        input   logic           clk_sys,
-        input   logic           cpu_ce_posedge,
         input   logic           cpu_ce_negedge,
-        input   logic           peripheral_ce,
         input   logic   [1:0]   clk_select,
         input   logic           reset,
         // CPU
@@ -214,17 +210,10 @@ module PERIPHERALS #(
         input   logic           ems_enabled,
         input   logic   [1:0]   ems_address,
         output  reg     [6:0]   map_ems[0:3], // Segment hx000, hx400, hx800, hxC00
-        output  reg             ena_ems[0:3], // Enable Segment Map hx000, hx400, hx800, hxC00
         output  logic           ems_b1,
         output  logic           ems_b2,
         output  logic           ems_b3,
         output  logic           ems_b4,
-        // MMC interface
-        input   logic   [1:0]   use_mmc,
-        output  logic           spi_clk,
-        output  logic           spi_cs,
-        output  logic           spi_mosi,
-        input   logic           spi_miso,
         // FDD
         input   logic   [15:0]  mgmt_address,
         input   logic           mgmt_read,
@@ -242,11 +231,7 @@ module PERIPHERALS #(
         input   logic           fdd_dma_ack,
         input   logic           terminal_count,
         // Others
-        output  logic           pause_core,
-        input   logic   [3:0]   crt_h_offset,
-        input   logic   [2:0]   crt_v_offset,
-        input   logic   [2:0]   vsync_width_osd,
-        input   logic   [2:0]   hsync_width_osd
+        output  logic           pause_core
         // PC-98 keyboard injection: the Set-2 -> PC-98 translator's output
         // (dock USB keyboard + virtual keyboard), landing on the 8251's
         // receive wire. stb toggles per event; byte's bit 7 is set on a
@@ -296,15 +281,12 @@ module PERIPHERALS #(
     assign dma_chip_select_n        = ~(pc98_io &  address[0] & ~address[7] & ~address[6] & ~address[5] & ~address[4]);
     wire   interrupt_chip_select_n  = ~(pc98_io & ~address[0] & (address[7:3] == 5'b00000));
     wire   timer_chip_select_n      = ~(pc98_io &  address[0] & (address[7:4] == 4'h7));
-    wire   ppi_chip_select_n        = ~(pc98_io &  address[0] & (address[7:4] == 4'h3));
 
     // 0x21-0x2F odd: the DMA bank (page) registers.
     assign dma_page_chip_select_n   = ~(pc98_io &  address[0] & (address[7:4] == 4'h2));
 
     wire   [0:0] pic_reg_addr  = address[1];
     wire   [1:0] pit_reg_addr  = address[2:1];
-    wire   [1:0] ppi_reg_addr  = address[2:1];
-    wire   [3:0] dma_reg_addr  = address[4:1];
 
     // ---------------------------------------------- floppy interface stub
     //
@@ -370,7 +352,6 @@ module PERIPHERALS #(
                 fdd_cc_irq <= 1'b0;   // one chipset clock is a whole edge
         end
     end
-    wire        fdd_cc_read  = fdd_cc_select & ~io_read_n;
     wire [7:0]  fdd_cc_data  = fdd_cc_latch | 8'h30;
 
     // Minimal uPD765 at 0x90-0x93 and its 0xC8-0xCB mirror (MAME maps the
@@ -467,6 +448,10 @@ module PERIPHERALS #(
                              :                  fdc_fifo;
 `endif
 
+    // Enable Segment Map hx000, hx400, hx800, hxC00. Was a port; nothing past
+    // the module boundary reads it, the EMS windows and the register readback
+    // below do.
+    logic               ena_ems[0:3];
     wire    [3:0] ems_page_address  = (ems_address == 2'b00) ? 4'b1100 : (ems_address == 2'b01) ? 4'b1101 : 4'b1110;
     wire    ems_chip_select         = `ENABLE_EMS ? (iorq && ~address_enable_n && ems_enabled && ({address[15:2], 2'd0} == 16'h0260)) : 1'b0;          // 260h..263h
     assign  ems_b1                  = `ENABLE_EMS ? (~iorq && ena_ems[0] && (address[19:14] == {ems_page_address, 2'b00})) : 1'b0; // C0000h - D0000h - E0000h
@@ -484,9 +469,7 @@ module PERIPHERALS #(
     // the pattern back, and user-defined characters load the same way.
     wire    cgwin_mem_select        = ~iorq && ~address_enable_n
                                     && (address[19:12] == 8'b10100100);
-    // No IDE on this machine -- see the XT2IDE block. Held deasserted so the
-    // read mux arm at the bottom of the file is unreachable and prunes.
-    wire    ide0_chip_select_n      = 1'b1;
+
 `ifdef PC98_FDC_REAL
     // THE REAL uPD765 ON THE PC-98's PORTS.
     //

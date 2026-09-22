@@ -250,7 +250,6 @@ module core_top (
     wire clk_28_636;             // 28.6 MHz; its half is the boot hold's 14.3 tick
     logic cpu_ce_posedge;        // CPU clock-enable, rising
     logic cpu_ce_negedge;        // CPU clock-enable, falling
-    logic peripheral_ce;         // peripheral clock-enable
     wire clk_chipset;            // 42.95 MHz, main domain
 
     localparam [27:0] cur_rate = `CHIPSET_HZ;   // chipset clock rate, Hz (3 x 14.31818 MHz)
@@ -319,7 +318,7 @@ module core_top (
         .cpu_clk_pin                        (),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
-        .peripheral_ce                      (peripheral_ce),
+        .peripheral_ce                      (),
         .cycle_accrate                      (cycle_accrate),
         .clock_cycle_counter_division_ratio (clock_cycle_counter_division_ratio),
         .clock_cycle_counter_decrement_value(clock_cycle_counter_decrement_value),
@@ -1268,8 +1267,6 @@ module core_top (
     // with the PC/AT layer -- but the firmware still pushes the values, so
     // the softcore's osd_composite/osd_cga_gfx/osd_hgc_gfx outputs stay.)
     wire a000h = `ENABLE_A000_UMB ? a000_en_cfg : 1'b0;
-    wire [2:0] vsync_width_osd = 3'd0;  // 0=Auto (use register), 1-7=override
-    wire [2:0] hsync_width_osd = 3'd0;  // 0=Auto, 1-7=fixed width (Nx16 pixel clocks)
 
     // MiSTer front-panel buttons; the Pocket has none.
     assign buttons = 2'b00;
@@ -2333,8 +2330,7 @@ module core_top (
         .clock                              (clk_chipset),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
-        .clk_sys                            (clk_chipset),
-        .peripheral_ce                      (peripheral_ce),
+
         .clk_select                         (clk_select),
         .reset                              (reset_chipset),
         .sdram_reset                        (reset_sdram),
@@ -2409,7 +2405,6 @@ module core_top (
         .data_bus_ext                       (st_run ? st_wdata : bios_write_data[7:0]),
     //  .data_bus_direction                 (data_bus_direction),
         .address_latch_enable               (address_latch_enable),
-        .io_channel_check                   (1'b0),
         .io_channel_ready                   (1'b1),
         .interrupt_request                  (0),    // use? -> It does not seem to be necessary.
     //  .io_read_n                          (io_read_n),
@@ -2458,11 +2453,6 @@ module core_top (
         .ems_enabled                        (ems_enabled_sel),
         .ems_address                        (ems_address_sel),
         .bios_protect_flag                  (bios_protect_flag),
-        .use_mmc                            (use_mmc),
-        .spi_clk                            (spi_clk),
-        .spi_cs                             (spi_cs),
-        .spi_mosi                           (spi_mosi),
-        .spi_miso                           (spi_miso),
         .mgmt_readdata                      (mgmt_din),
         .mgmt_writedata                     (mgmt_dout),
         .mgmt_address                       (mgmt_addr),
@@ -2477,10 +2467,6 @@ module core_top (
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),
         .pause_core                         (pause_core_chipset),
-        .crt_h_offset                       (4'd0),
-        .crt_v_offset                       (3'd0),
-        .vsync_width_osd                    (vsync_width_osd),
-        .hsync_width_osd                    (hsync_width_osd),
         .ram_rw_complete                    (ram_rw_complete)
         ,.pc98_key_stb                      (pc98_key_stb)
         ,.pc98_key_byte                     (pc98_key_code)
@@ -2610,10 +2596,7 @@ module core_top (
     wire uart_dsr = 1'b1;
     wire uart_dcd = 1'b1;
 
-    // SPI/MMC storage path unused; the managed-SD ide.v backend is used instead.
-    wire [1:0] use_mmc = 2'b00;
-    wire spi_clk, spi_cs, spi_mosi;     // CHIPSET outputs, no external pins
-    wire spi_miso = 1'b0;
+
 
     //
     // AUDIO
