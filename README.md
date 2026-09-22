@@ -10,8 +10,7 @@ Analogue Pocket の openFPGA で動かすプロジェクト。
 ## 構成
 
 ```
-fpga/          PCXTコアの作業ツリー(ここをPC-98化していく)
-  src/fpga/         Quartusプロジェクト
+fpga/               Quartusプロジェクト・コアRTL
 docs/               設計ドキュメント(PIVOT.md, PC98_MACHINE_SPEC.md, PORT_PLAN.md)
 ```
 

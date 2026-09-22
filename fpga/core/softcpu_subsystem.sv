@@ -483,9 +483,8 @@ module softcpu_subsystem (
     localparam SET_IDX_DISPLAY   = 5'd5;
     localparam SET_IDX_EMS       = 5'd6;   // Hardware
     localparam SET_IDX_EMS_FRAME = 5'd7;
-    // index 8 is still allocated by the firmware's A000 row; nothing reads it.
-    // index 9 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
-    localparam SET_IDX_GAMEPAD   = 5'd10;  // Controls
+    // index 8 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
+    localparam SET_IDX_GAMEPAD   = 5'd9;   // Controls
     reg [7:0] osd_settings [0:31];
     wire settings_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd3;
     always @(posedge clk_pico) begin

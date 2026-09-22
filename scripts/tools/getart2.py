@@ -25,5 +25,5 @@ code, loc = fetch("https://api.github.com/repos/MusiQ-DA/pc98-pocket/actions/art
 u=urlparse(loc); ip=resolve(u.hostname)
 subprocess.run(["curl","-sS","--resolve",f"{u.hostname}:443:{ip}","-L","-o","/tmp/art_diag.zip",loc],check=True)
 z=zipfile.ZipFile("/tmp/art_diag.zip")
-z.extractall("/Users/hiroya/repo/pc98-pocket/src/fpga/output_files")
+z.extractall("/Users/hiroya/repo/pc98-pocket/fpga/output_files")
 print("extracted:", z.namelist())

@@ -61,7 +61,6 @@ enum {
     // Hardware
     SET_EMS,
     SET_EMS_FRAME,
-    SET_A000,
     // Controls
     SET_DPAD,
     SET_GAMEPAD,
@@ -98,8 +97,8 @@ typedef struct {
 
 // The rows whose hardware left the machine (CGA/HGC graphics, the video 1st
 // card, the splash, OPL2, C/MS, composite, the game port) are gone from the
-// enum with it. A version-4 blob still loads -- settings_load remaps its
-// indices through v4_to_v5 below -- and the next save writes version 5.
+// enum with it. Older blobs still load -- settings_load remaps their indices
+// through the version tables below -- and the next save writes version 6.
 static setting_t settings[SET_COUNT] = {
     // Index 1 is the faithful clock: a PC-9801VM/VX's V30 at 2.4576 MHz x4.
     // The default is index 2 anyway, because v30_cpu_bridge splits every word
@@ -117,7 +116,6 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_display),     // SET_DISPLAY
     SETTING_D(opt_dis_en, 1), // SET_EMS (default Enabled, as the fixed memory map was)
     SETTING(opt_ems_frame),   // SET_EMS_FRAME
-    SETTING_D(opt_dis_en, 1), // SET_A000 (default Enabled)
     SETTING(opt_dpad),        // SET_DPAD (default Numpad)
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
 };
@@ -179,7 +177,6 @@ static const item_t items_hw[] = {
     { "", IT_SPACER, 0 },
     { "Lo-tech 2MB EMS", IT_OPTION, SET_EMS },
     { "EMS Frame", IT_OPTION, SET_EMS_FRAME },
-    { "A000 UMB", IT_OPTION, SET_A000 },
 };
 
 // Gamepad Mode picks what controller 1 drives: the D-pad preset and button binds below take effect
@@ -631,21 +628,30 @@ int settings_input(uint16_t pressed)
 // compiled defaults load.
 //
 // VERSION 5 REMOVED ELEVEN SETTINGS whose hardware left the machine, and the values are stored BY
-// INDEX, so a version-4 blob's bytes no longer line up. The v4 layout is mapped through the table
-// below: each old index either names its new index or is read past (the setting is gone). The blob
-// is rewritten as version 5 on the next save, so the remap runs once.
+// INDEX, so a version-4 blob's bytes no longer line up; version 6 removes one more (A000, whose
+// RAM flag was never read). Each old index maps through the tables below to its new index, or is
+// read past when the setting is gone; the blob is rewritten at the current version on the next
+// save, so each remap runs once.
 #define SETTINGS_MAGIC   0x50435853u
-#define SETTINGS_VERSION 5u
+#define SETTINGS_VERSION 6u
 #define SETTINGS_WORD    128
 
 // Version 4's enum order: CPU, CGA, HGC, video-1st, BIOS-wr, splash, OPL2, boost, speaker, stereo,
 // C/MS, composite, display, EMS, EMS-frame, A000, joy1, joy2, swap-joy, sync-joy, d-pad, gamepad.
-// 0xFF means the row's hardware is gone and its value is dropped.
+// 0xFF means the row's hardware is gone and its value is dropped. The table lands on the version-5
+// index; the v5_to_v6 pass below carries it the rest of the way.
 static const uint8_t v4_to_v5[22] = {
     0, 0xFF, 0xFF, 0xFF, 1, 0xFF, 0xFF, 2, 3, 4, 0xFF, 0xFF, 5, 6, 7, 8, 0xFF, 0xFF, 0xFF, 0xFF,
     9, 10,
 };
 #define SETTINGS_V4_COUNT 22
+
+// Version 5's enum order: CPU, BIOS-wr, boost, speaker, stereo, display, EMS, EMS-frame, A000,
+// d-pad, gamepad.
+static const uint8_t v5_to_v6[11] = {
+    0, 1, 2, 3, 4, 5, 6, 7, 0xFF, 8, 9,
+};
+#define SETTINGS_V5_COUNT 11
 
 void settings_load(void)
 {
@@ -666,6 +672,12 @@ void settings_load(void)
             if (values > SETTINGS_V4_COUNT) {
                 values = SETTINGS_V4_COUNT;
             }
+        } else if (version == 5) {
+            // v5 wrote eleven values; all eleven are read so the d-pad and
+            // gamepad bytes at the tail still reach their v6 indices.
+            if (values > SETTINGS_V5_COUNT) {
+                values = SETTINGS_V5_COUNT;
+            }
         } else if (values > SET_COUNT) {
             values = SET_COUNT;
         }
@@ -675,7 +687,13 @@ void settings_load(void)
                 word = *FDD_BRAM_RDATA;
             }
             uint8_t v = (word >> ((i & 3) * 8)) & 0xFF;
-            uint32_t t = (version == 4) ? v4_to_v5[i] : i;
+            uint32_t t = i;
+            if (version == 4) {
+                t = v4_to_v5[i];
+            }
+            if (version <= 5 && t != 0xFF) {
+                t = v5_to_v6[t];
+            }
             // Ignore an out-of-range value from an older blob.
             if (t != 0xFF && v < settings[t].count) {
                 settings[t].value = v;

@@ -6,7 +6,7 @@
 #   bash scripts/build-docker.sh --check   Analysis & Synthesis only
 # Requires: docker daemon running + raetro/quartus:pocket image pulled.
 set -euo pipefail
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/src/fpga"
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/fpga"
 
 IMAGE="${IMAGE:-raetro/quartus:pocket}"
 DOCKER_BIN="${DOCKER_BIN:-docker}"
