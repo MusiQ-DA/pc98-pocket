@@ -150,7 +150,15 @@ set_global_assignment -name VERILOG_MACRO "PC98_FDC_REAL=1"
 #          (-2.357 / TNS -17.784 vs -2.408 / TNS -17.914). So the -2.4 ns is a
 #          property of the constraint values, not of sdram_mp, and the read path
 #          is NOT the culprit. See docs/HANDOVER.md 1.8.
-set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
+# 2026-09-22 A/B (metal): ROM-region read corruption. The ITF derails right
+# after 640KB OK with a corrupted ROM read (F 0xF955F read 0x0F where the ITF
+# holds 0xFF; F 0xFFFFF read 0x05 where the BIOS holds 0x03) while the load
+# itself verifies clean (LD = RD = the file's bytes, DP 0, HW 1) and with the
+# softcore's polls fully off -- so the corruptor is inside the CPU/SDRAM
+# path. The project's own bisection left sdram_mp at "FAIL -- splash then
+# black" and pure KFSDRAM at "PASS -- boots this board". This build is that
+# A/B: stock KFSDRAM, no shim, no burst.
+# set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
 
 #   ---- DIAGNOSTIC BUILD: SDRAM_SELFTEST -----------------------------------
 #   Turns the core into an SDRAM test rig: the softcore walks guest memory with
