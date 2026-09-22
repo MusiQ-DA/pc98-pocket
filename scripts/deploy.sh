@@ -162,6 +162,14 @@ cp "$ROMS/bios.rom" "$ROMS/itf.rom" "$ROMS/font.rom" dist/pc98/Assets/pc98/hiroy
 # assumed present: firmware.bin is gitignored, being a build product.
 make -C firmware >/dev/null || { say "firmware build failed"; exit 1; }
 
+# What that build actually contains: this tree is shared, and it can hold
+# another session's work in progress. That is fine to flash when it is
+# deliberate -- but it has to be stated, because a diagnostic firmware (polls
+# commented out, say) boots to a black screen and that looks like a broken
+# bitstream from the couch. This has happened once.
+DIRTY=$(cd firmware && git status --porcelain -- . 2>/dev/null | awk '{print $2}' | tr '\n' ' ')
+[ -n "$DIRTY" ] && say "NOTE: firmware built from uncommitted sources: $DIRTY"
+
 # The softcore has no divider (ENABLE_DIV(0)), so any div/rem instruction in
 # the image is an illegal instruction on hardware -- and a compiler is free to
 # invent one for code that never wrote a '/'. clang 23 does exactly that to a
