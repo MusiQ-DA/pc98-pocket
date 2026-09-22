@@ -2529,6 +2529,7 @@ module core_top (
         .opna_snd_l                         (opna_snd_l),
         .opna_snd_r                         (opna_snd_r),
         .font_bank_flag                     (font_bank_load),
+        .tandy_bios_flag                    (tandy_bios_flag),
         .font_wr_clk                        (clk_chipset),
         .font_wr_en                         (font_dl_hit),
         .font_wr_addr                       (font_dl_addr),

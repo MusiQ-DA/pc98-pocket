@@ -151,6 +151,10 @@ module CHIPSET #(
         // addresses above the machine's megabyte, so the loader can write the
         // font where the guest cannot reach it.
         input   logic           font_bank_flag,
+        // ITF shadow: while set, RAM.sv banks F8000-FFFFF to the copy at
+        // 1F8000. core_top drives it -- the loader for the ITF write, the
+        // guest's port 0x043D afterwards.
+        input   logic           tandy_bios_flag,
         input   logic           font_wr_clk,
         input   logic           font_wr_en,
         input   logic   [10:0]  font_wr_addr,
@@ -551,6 +555,7 @@ module CHIPSET #(
     RAM u_RAM 
     (
         .gvram_page1_flag                   (gvram_mem_page1),
+        .tandy_bios_flag                    (tandy_bios_flag),
         .font_bank_flag                     (font_bank_flag),
         .font_rd_req                        (font_rd_req),
         .font_rd_addr                       (font_rd_addr),
