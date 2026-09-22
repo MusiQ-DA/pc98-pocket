@@ -40,6 +40,14 @@ while [ $# -gt 0 ]; do
 done
 
 say() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
+# The script waits on two things only a person can supply -- the CI run and
+# the physical card -- so the points where a human has to act (or where the
+# whole thing is finished) also go to the macOS notification centre and the
+# speaker. Nobody should have to watch the log to know it is their turn.
+note() {
+    osascript -e "display notification \"$*\" with title \"pc98 deploy\"" 2>/dev/null
+    command say "$*" 2>/dev/null &
+}
 
 [ -n "$ROMS" ] || { say "set PC98_ROMS (or --roms) to a dir with bios.rom and itf.rom"; exit 2; }
 for f in bios.rom itf.rom font.rom; do
@@ -110,7 +118,7 @@ for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=100')['work
         print(r['run_number']); break
 else: print('none')")
         [ "$RUN" != "none" ] && break
-        [ $waited -ge 600 ] && { say "no run appeared"; exit 1; }
+        [ $waited -ge 600 ] && { say "no run appeared"; note "deploy failed: no CI run appeared"; exit 1; }
         sleep 20; waited=$((waited + 20))
     done
     say "watching run#$RUN"
@@ -125,7 +133,7 @@ for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=100')['work
         print(r['status'], r['conclusion'] or ''); break
 else: print('missing', '')")"
     [ "$st" = "completed" ] && { say "run#$RUN completed/$cc"; break; }
-    [ $waited -ge $MAX_WAIT ] && { say "gave up on run#$RUN"; exit 1; }
+    [ $waited -ge $MAX_WAIT ] && { say "gave up on run#$RUN"; note "deploy gave up waiting on run $RUN"; exit 1; }
     sleep $POLL; waited=$((waited + POLL))
 done
 
@@ -204,6 +212,7 @@ say "packaged with ROMs"
 
 # ---- 3. write --------------------------------------------------------------
 say "waiting for $VOL -- put the Pocket into USB access mode"
+note "ready to write -- connect the Pocket's SD card"
 # `-d "$VOL"` is not enough. macOS creates the mount point as a plain root-owned
 # directory on the boot volume before the filesystem lands on it, so a deploy
 # that starts on the first sight of the path writes into that stub and gets
@@ -212,10 +221,11 @@ say "waiting for $VOL -- put the Pocket into USB access mode"
 # card has.
 waited=0
 while ! { mount | grep -q " on $VOL "; } || [ ! -d "$VOL/Cores" ]; do
-    [ $waited -ge $MAX_WAIT ] && { say "card never appeared"; exit 1; }
+    [ $waited -ge $MAX_WAIT ] && { say "card never appeared"; note "deploy timed out waiting for the SD card"; exit 1; }
     sleep $SD_POLL; waited=$((waited + SD_POLL))
 done
 say "card is here"
+note "card detected -- writing"
 
 mkdir -p "$VOL/Cores/hiroya.PC9801" "$VOL/Assets/pc98/hiroya.PC9801" "$VOL/Platforms"
 cp dist/pc98/Cores/hiroya.PC9801/* "$VOL/Cores/hiroya.PC9801/"
@@ -248,8 +258,13 @@ for f in Cores/hiroya.PC9801/bitstream.rbf_r Cores/hiroya.PC9801/core.json \
         say "  BAD $f"; fail=1
     fi
 done
-[ $fail -eq 0 ] || { say "VERIFY FAILED"; exit 1; }
+[ $fail -eq 0 ] || { say "VERIFY FAILED"; note "deploy VERIFY FAILED"; exit 1; }
 say "written and verified to hiroya.PC9801"
 
-diskutil eject "$VOL" >/dev/null 2>&1 && say "ejected -- ready to test" \
-                                      || say "written; eject by hand"
+if diskutil eject "$VOL" >/dev/null 2>&1; then
+    say "ejected -- ready to test"
+    note "deploy done -- card ejected, ready to test"
+else
+    say "written; eject by hand"
+    note "written and verified -- eject the card by hand"
+fi
