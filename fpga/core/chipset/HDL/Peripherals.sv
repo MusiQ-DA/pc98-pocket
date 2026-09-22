@@ -105,10 +105,6 @@ module PERIPHERALS #(
         input   logic   [7:0]   kb_byte,
         input   logic           kb_valid,
         output  logic           kb_ready,
-        input   logic   [13:0]  joy0,
-        input   logic   [13:0]  joy1,
-        input   logic   [15:0]  joya0,
-        input   logic   [15:0]  joya1,
         // JTOPL
         // The row buffer's own view of row 0's first eight cells, latched as the
     // fill reads them -- what the renderer will actually draw. If the banks

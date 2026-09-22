@@ -1248,8 +1248,6 @@ module core_top (
     synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_s,       cont1_key_chip, clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_s,       cont2_key_chip, clk_chipset);
-    synch_3 #(.WIDTH(32)) s_cont1_joy     (cont1_joy,         cont1_joy_chip, clk_chipset);
-    synch_3 #(.WIDTH(32)) s_cont2_joy     (cont2_joy,         cont2_joy_chip, clk_chipset);
     synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
     wire credits_mode_pix;
     wire credits_mode_chip;
@@ -1260,11 +1258,9 @@ module core_top (
     // gamepad_mode picks what the pad drives: mapped keys, the game port, or the serial mouse. The
     // softcore's per-control key_cfg reaches pocket_keyboard unchanged.
     wire [1:0]  gamepad_mode = osd_gamepad;
-    wire        gamepad  = (gamepad_mode == 2'd1);
     wire        mousepad = (gamepad_mode == 2'd2);
     wire [15:0] cont1_key_chip;
     wire [15:0] cont2_key_chip;
-    wire [31:0] cont1_joy_chip, cont2_joy_chip;
 
     // Game-port options from the settings OSD: [4]=Sync-to-CPU turbo timing, [3:2]=Joystick 2,
     // [1:0]=Joystick 1; each 2-bit field is 0=Analog, 1=Digital, 2=Disabled.
@@ -1288,33 +1284,6 @@ module core_top (
 
     wire        mouse_rd;
     wire        mouse_rts_n;
-
-    wire [13:0] joy0, joy1;
-    wire [15:0] joya0, joya1;
-
-    // Pocket controllers -> game-port digital bits: [5]=fire2 [4]=fire1 [3]=up [2]=down
-    // [1]=left [0]=right, from cont key bits [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B.
-    wire [13:0] cont1_dig = {8'd0, cont1_key_chip[5], cont1_key_chip[4],
-                                   cont1_key_chip[0], cont1_key_chip[1],
-                                   cont1_key_chip[2], cont1_key_chip[3]};
-    wire [13:0] cont2_dig = {8'd0, cont2_key_chip[5], cont2_key_chip[4],
-                                   cont2_key_chip[0], cont2_key_chip[1],
-                                   cont2_key_chip[2], cont2_key_chip[3]};
-    // Left stick -> analog: Pocket axes are unsigned centred on 0x80, the port wants
-    // signed centred on 0, so flip the top bit. An all-zero pad (no analog) is held at
-    // centre (a raw 0 would otherwise read as full deflection).
-    wire [15:0] cont1_ana = (cont1_joy_chip == 32'd0) ? 16'd0
-                          : {cont1_joy_chip[15:8] ^ 8'h80, cont1_joy_chip[7:0] ^ 8'h80};
-    wire [15:0] cont2_ana = (cont2_joy_chip == 32'd0) ? 16'd0
-                          : {cont2_joy_chip[15:8] ^ 8'h80, cont2_joy_chip[7:0] ^ 8'h80};
-    // Controller 1 reaches the port only in Gamepad Mode (else its buttons type keys); controller 2
-    // is always player 2. Both idle while an OSD panel is open, and a Disabled port sends nothing.
-    wire        p1_on = gamepad && !osd_active && (joy1_cfg != 2'd2);
-    wire        p2_on = !osd_active && (joy2_cfg != 2'd2);
-    assign joy0  = p1_on ? cont1_dig : 14'd0;
-    assign joy1  = p2_on ? cont2_dig : 14'd0;
-    assign joya0 = p1_on ? cont1_ana : 16'd0;
-    assign joya1 = p2_on ? cont2_ana : 16'd0;
 
     //
     // Keyboard: pad buttons + docked USB keyboard + VKB merged into one Set-2 byte
@@ -2458,10 +2427,6 @@ module core_top (
         .kb_byte                            (kb_byte),
         .kb_valid                           (kb_valid),
         .kb_ready                           (kb_ready),
-        .joy0                               (swapjoy_cfg ? joy1 : joy0),
-        .joy1                               (swapjoy_cfg ? joy0 : joy1),
-        .joya0                              (swapjoy_cfg ? joya1 : joya0),
-        .joya1                              (swapjoy_cfg ? joya0 : joya1),
         .opna_snd_l                         (opna_snd_l),
         .opna_snd_r                         (opna_snd_r),
         .font_bank_flag                     (font_bank_load),

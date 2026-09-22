@@ -136,10 +136,6 @@ module CHIPSET #(
         input   logic   [7:0]   kb_byte,
         input   logic           kb_valid,
         output  logic           kb_ready,
-        input   logic   [13:0]  joy0,
-        input   logic   [13:0]  joy1,
-        input   logic   [15:0]  joya0,
-        input   logic   [15:0]  joya1,
         // JTOPL
         // PC-9801-86 OPNA, stereo, straight from Peripherals to the mixer.
         output  logic signed [15:0] opna_snd_l,
@@ -451,10 +447,6 @@ module CHIPSET #(
         .kb_byte                            (kb_byte),
         .kb_valid                           (kb_valid),
         .kb_ready                           (kb_ready),
-        .joy0                               (joy0),
-        .joy1                               (joy1),
-        .joya0                              (joya0),
-        .joya1                              (joya1),
         .opna_snd_l                         (opna_snd_l),
         .opna_snd_r                         (opna_snd_r),
         .ems_enabled                       (ems_enabled),
