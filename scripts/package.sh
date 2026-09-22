@@ -129,9 +129,55 @@ def video(j):
          "rotation": 0, "mirror": 0},
     ]
 
+def interact(j):
+    # What the Pocket's Core Settings menu shows for this core. All three
+    # addresses are decoded in core_top's bridge block: 0x50 resets the guest,
+    # 0x54 opens the OSD's settings, 0x6C is the floppy write-protect pair
+    # wired to floppy.v. The values inherited from the PC/XT build carried the
+    # same three, so this is a keep, written down rather than copied from a
+    # stale build directory.
+    j['interact']['variables'] = [
+        {"name": "Write Protect", "id": 3, "type": "list",
+         "enabled": True, "persist": True, "writeonly": True,
+         "address": "0x6C", "defaultval": 0,
+         "options": [
+             {"value": 0, "name": "None"},
+             {"value": 1, "name": "Floppy A"},
+             {"value": 2, "name": "Floppy B"},
+             {"value": 3, "name": "A & B"},
+         ]},
+        {"name": "Settings (OSD)", "id": 2, "type": "action",
+         "enabled": True, "writeonly": True,
+         "address": "0x54", "value": 1},
+        {"name": "Reset PC", "id": 1, "type": "action",
+         "enabled": True, "writeonly": True,
+         "address": "0x50", "value": 1},
+    ]
+
+def input_map(j):
+    # The framework's Controls menu: which PHYSICAL button feeds each of the
+    # core's logical pad inputs. The pad-to-PC-98-key half is the OSD's
+    # Controls menu (key_bind.c); the names here are that menu's DEFAULTS, so
+    # a user sees what each button does out of the box. X, Y and R were absent
+    # from the inherited list, so those three could not be remapped at all.
+    j['input']['controllers'] = [
+        {"type": "default", "mappings": [
+            {"id": 0, "name": "A: Ctrl",  "key": "pad_btn_a"},
+            {"id": 1, "name": "B: Alt",   "key": "pad_btn_b"},
+            {"id": 2, "name": "X: Space", "key": "pad_btn_x"},
+            {"id": 3, "name": "Y: Enter", "key": "pad_btn_y"},
+            {"id": 4, "name": "L: Virtual Keyboard", "key": "pad_trig_l"},
+            {"id": 5, "name": "R: unmapped",         "key": "pad_trig_r"},
+            {"id": 6, "name": "Start: Pause",        "key": "pad_btn_start"},
+            {"id": 7, "name": "Select: Settings",    "key": "pad_btn_select"},
+        ]},
+    ]
+
 rw('core.json', core)
 rw('data.json', data)
 rw('video.json', video)
+rw('interact.json', interact)
+rw('input.json', input_map)
 PY
 
 python3 - "$ART/ap_core.rbf" "$DIR/Cores/hiroya.PC9801/bitstream.rbf_r" <<'PY'

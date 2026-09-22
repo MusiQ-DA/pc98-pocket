@@ -1,1 +1,41 @@
-{"interact":{"magic":"APF_VER_1","variables":[]}}
+{
+    "interact": {
+        "magic": "APF_VER_1",
+        "variables": [
+            {
+                "name": "Write Protect",
+                "id": 3,
+                "type": "list",
+                "enabled": true,
+                "persist": true,
+                "writeonly": true,
+                "address": "0x6C",
+                "defaultval": 0,
+                "options": [
+                    { "value": 0, "name": "None" },
+                    { "value": 1, "name": "Floppy A" },
+                    { "value": 2, "name": "Floppy B" },
+                    { "value": 3, "name": "A & B" }
+                ]
+            },
+            {
+                "name": "Settings (OSD)",
+                "id": 2,
+                "type": "action",
+                "enabled": true,
+                "writeonly": true,
+                "address": "0x54",
+                "value": 1
+            },
+            {
+                "name": "Reset PC",
+                "id": 1,
+                "type": "action",
+                "enabled": true,
+                "writeonly": true,
+                "address": "0x50",
+                "value": 1
+            }
+        ]
+    }
+}

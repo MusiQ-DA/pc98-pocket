@@ -5,31 +5,14 @@
             {
                 "type": "default",
                 "mappings": [
-                    {
-                        "id": 0,
-                        "name": "Z / Return",
-                        "key": "pad_btn_a"
-                    },
-                    {
-                        "id": 1,
-                        "name": "X / Space",
-                        "key": "pad_btn_b"
-                    },
-                    {
-                        "id": 2,
-                        "name": "Escape",
-                        "key": "pad_trig_l"
-                    },
-                    {
-                        "id": 3,
-                        "name": "Enter",
-                        "key": "pad_btn_start"
-                    },
-                    {
-                        "id": 4,
-                        "name": "(reserved) Virtual Keyboard",
-                        "key": "pad_btn_select"
-                    }
+                    { "id": 0, "name": "A: Ctrl", "key": "pad_btn_a" },
+                    { "id": 1, "name": "B: Alt", "key": "pad_btn_b" },
+                    { "id": 2, "name": "X: Space", "key": "pad_btn_x" },
+                    { "id": 3, "name": "Y: Enter", "key": "pad_btn_y" },
+                    { "id": 4, "name": "L: Virtual Keyboard", "key": "pad_trig_l" },
+                    { "id": 5, "name": "R: unmapped", "key": "pad_trig_r" },
+                    { "id": 6, "name": "Start: Pause", "key": "pad_btn_start" },
+                    { "id": 7, "name": "Select: Settings", "key": "pad_btn_select" }
                 ]
             }
         ]

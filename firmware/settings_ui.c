@@ -175,9 +175,11 @@ static const item_t items_main[] = {
     { "Reset PC", IT_ACTION, ACT_RESET_PC },
 };
 
+// Boot Splash left with the splash itself (the restructure deleted the
+// picture module): the setting still exists in the save blob for index
+// stability, but there is nothing left to switch.
 static const item_t items_system[] = {
     { "CPU Speed", IT_OPTION, SET_CPU_SPEED },
-    { "Boot Splash", IT_OPTION, SET_SPLASH },
 };
 
 static const item_t items_av[] = {
@@ -187,14 +189,14 @@ static const item_t items_av[] = {
     { "Display", IT_OPTION, SET_DISPLAY },
 };
 
+// The four joystick rows are gone with the game port: Peripherals answers
+// 0x200-0x207 with a stub (joy_data = FF, "no PCjr port on a PC-98"), so the
+// options configured a port that does not exist. The settings stay in the
+// save blob, same reason as Boot Splash above.
 static const item_t items_hw[] = {
     { "Lo-tech 2MB EMS", IT_OPTION, SET_EMS },
     { "EMS Frame", IT_OPTION, SET_EMS_FRAME },
     { "A000 UMB", IT_OPTION, SET_A000 },
-    { "Joystick 1", IT_OPTION, SET_JOY1 },
-    { "Joystick 2", IT_OPTION, SET_JOY2 },
-    { "Swap Joysticks", IT_OPTION, SET_SWAPJOY },
-    { "Sync Joy to CPU", IT_OPTION, SET_SYNCJOY },
 };
 
 // Gamepad Mode picks what controller 1 drives: the D-pad preset and button binds below take effect
