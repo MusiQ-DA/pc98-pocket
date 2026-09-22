@@ -527,6 +527,12 @@ jobs:
         if: always()
         run: |
           grep -A14 "Logic utilization" fpga/output_files/ap_core.fit.rpt 2>/dev/null | head -4 || true
+          # The memory numbers matter as much as the ALMs here: the OSD
+          # framebuffer and the softcore RAMs are M10K consumers, and every
+          # decision about them needs the block count in the log rather than
+          # a fifteen-minute compile to read it.
+          grep -E "Total (registers|block memory bits|RAM Blocks|DSP Blocks|PLLs)" \
+            fpga/output_files/ap_core.fit.rpt 2>/dev/null || true
           ls -la fpga/output_files/ 2>/dev/null || true
 
       - name: Upload bitstream

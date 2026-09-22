@@ -1,14 +1,16 @@
 // Minimal altsyncram for the softcore testbench: the instances in
-// softcpu_subsystem are the OSD framebuffer (8/8 bit ports) and the OSD font
-// RAM (a 32-bit CPU port over the same memory the 8-bit glyph port reads).
-// Simple dual-port behavioural model with byte enables and mixed port widths,
-// enough to elaborate and run. The output is unregistered (one-cycle read),
-// matching every instance's outdata_reg_* setting.
+// softcpu_subsystem are the OSD framebuffer (8/8 bit ports), the OSD font
+// RAM (32-bit ports both sides) and the work RAM (single port, 32-bit, byte
+// enables). Model with byte enables and independent port widths, enough to
+// elaborate and run. The output is registered (one-cycle read), matching
+// every instance's outdata_reg_* setting; address_reg_a/b are accepted for
+// the RTL's sake but do not change the model's timing.
 `default_nettype none
 module altsyncram #(
     parameter operation_mode = "BIDIR_DUAL_PORT",
     parameter width_a = 8, parameter widthad_a = 14, parameter numwords_a = 16384,
     parameter width_b = 8, parameter widthad_b = 14, parameter numwords_b = 16384,
+    parameter address_reg_a = "UNREGISTERED",
     parameter address_reg_b = "CLOCK1",
     parameter outdata_reg_a = "UNREGISTERED",
     parameter outdata_reg_b = "UNREGISTERED",

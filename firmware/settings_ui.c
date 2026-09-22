@@ -394,18 +394,27 @@ static void draw_row(int i)
         // Live state, formatted here: "Inserted 1232K" or "Ejected". The size
         // is sectors/2 in KB (512-byte sectors), which is what every PC-98
         // format's label quotes.
+        //
+        // No / and no %: clang 23 turns the % /= pair this used to carry into
+        // a divu/mul/sub sequence, and the softcore has no divider, so that
+        // pair is an illegal instruction on hardware (the Makefile's
+        // nodiv-verify is the gate). Decimal by repeated subtraction of the
+        // place values -- a floppy is four digits at the very most -- and the
+        // /2 is a shift, sectors being 512 bytes.
         char buf[18];
         int n = 0;
         if (fdd_is_inserted(it->arg)) {
             static const char word[] = "Inserted ";
             for (int k = 0; word[k]; k++) buf[n++] = word[k];
-            uint32_t kb = fdd_mounted_sectors(it->arg) / 2u;
-            char digs[8];
-            int nd = 0;
-            if (kb == 0) digs[nd++] = '0';
-            while (kb && nd < 7) {
-                digs[nd++] = (char) ('0' + (kb % 10u));
-                kb /= 10u;
+            uint32_t v = fdd_mounted_sectors(it->arg) >> 1;
+            static const uint16_t place[] = { 1000, 100, 10, 1 };
+            char digs[4];
+            int nd = 0, lead = 1;
+            if (v > 9999) v = 9999;
+            for (unsigned p = 0; p < sizeof(place) / sizeof(place[0]); p++) {
+                int d = 0;
+                while (v >= place[p]) { v -= place[p]; d++; }
+                if (!lead || d || place[p] == 1) { digs[nd++] = (char) ('0' + d); lead = 0; }
             }
             while (nd) buf[n++] = digs[--nd];
             buf[n++] = 'K';

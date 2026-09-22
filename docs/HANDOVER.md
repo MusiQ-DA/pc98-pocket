@@ -837,3 +837,36 @@ settings_ui.c に IT_FDD 行（Hardware 先頭）。ROM +712B (28088 text / 2830
   「B を1回押す」対「SELECT ならメニューを一切開かない」の比較になっていた。
   RTL の 0x54 デコードと firmware の osd_open 経路は休眠のまま残置
 - input.json の Select ラベル = "Select: Settings" がその唯一の入口
+
+### §10.11 OSD まわりの M10K 削減 第1弾 (2026-09-22)
+
+実測（0e2bcc1 の fit.rpt）: デバイスは **ALM 18,178/18,480 (98%)**、
+**M10K 201/308 (65%)**、メモリビット 49%。`softcpu_subsystem` = 2,861 ALM /
+112 M10K で、内訳は firmware ROM 32KB = 32、OSD framebuffer 64KB = **64**、
+font 2KB = 4、work RAM 8KB = 8、picorv32 2（cpuregs）+ FDD bridge 2。
+**律速は ALM** で M10K は 107 ブロック空き — だから「何を削ると効くか」を
+分けて考える必要がある（OSD の M10K を削るのは将来の RAM 需要に備える投資）。
+
+- **work RAM 8KB → 2KB**（−6 M10K: 8→2 ブロック）。根拠は実測:
+  .data + .bss = 772B、スタック最悪値 ≈ **416B**（最深の live 192B =
+  main→gdc_poll(48+144) に、IRQ 連鎖 224B = irq→vkb_ui_tick→settings_input→
+  vkb_ui_open_picker→vkb_draw_keyboard→draw_legendn が重なる。`-fstack-usage` の
+  フレームをコールグラフ上で足し上げ）。2KB で 3 倍の余裕。実装は 512x32 の
+  byteena 付き altsyncram 1本（4 レーンの reg 配列をやめた）
+- **font RAM 4 レーン → 1 本**（−2 M10K: 4→2 ブロック）。512x32 の
+  BIDIR_DUAL_PORT に統合。CPU 側の byte 書き込みは byteena が、GPU 側の
+  glyph 読みはワード + バイト mux が受ける。両ポート 32bit なので Quartus の
+  「混幅デュアルポート禁止」(Error 272006) に当たらない
+- **CI の fit summary にメモリ行を追加**（今まで ALM しか出しておらず、
+  M10K は fit.rpt をダウンロードしないと見えなかった）
+- **危険の発見（重要）**: ローカルの clang 23.1.0 は settings_ui.c の
+  `% 10u` と `/= 10u` の対を **divu/mul/sub に変換**する。この softcore は
+  除算器なし（`ENABLE_DIV(0)`）なので、そのまま書けば **実機で不正命令トラップ**。
+  コミット済み .bin は古い clang が強度低減していたため無事で、CI の Docker も
+  古い clang なので通っていた＝**ビルドする clang 次第で壊れる**状態だった。
+  減算ベースの10進変換に書き直して 0 除算にした（Makefile の `nodiv-verify` が
+  ローカルビルドで実際にこれを検出した）。**デプロイ firmware はローカルの
+  clang が作る**ので、`cd firmware && make srchash-verify` を毎回通すこと
+- 次の構造判断: **テキストコンソール化**（framebuffer 廃止、−60 M10K、
+  VKB の 25px キーを 8px グリッドに再レイアウト）vs **framebuffer を SDRAM へ**
+  （−62 M10K、ラインバッファ + SDRAM 第4ポート、UI は不変）

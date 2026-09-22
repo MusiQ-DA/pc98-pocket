@@ -36,7 +36,7 @@
 | OPNA（YM2608）合成 | `pc98_opna`（jt12 ラップ） | サンプルレート・リアルタイム |
 | SDRAM コントローラ | `sdram_mp`（PORTS=3）+ `sdram_kf_shim` | R1 解決済みの土台 |
 
-### softcore 側（picorv32 @ 42.95/6 ≈ 7.16MHz、ROM 32KB / RAM 8KB）
+### softcore 側（picorv32 @ 42.95/6 ≈ 7.16MHz、ROM 32KB / RAM 2KB）
 
 | 機能 | ファイル | なぜ softcore で正しい |
 |---|---|---|
@@ -96,7 +96,7 @@
 | ALM | 17,327 / 18,480（94%） | **約 1,150** | DMAC（概算 ~1K）と EGC は両方載らない。撤退線（`config.tcl` コメント: post_monitor 484 / audio / floppy 833）の発動条件を事前に決めておくこと。post_monitor はデバッグの生命線なので最後まで残す順序を推奨 |
 | M10K | 201 / 308（65%） | 107 | GVRAM ラインバッファ等には十分 |
 | DSP | 11 / 66（17%） | 55 | 余裕 |
-| softcore ROM/RAM | 32KB / 8KB | — | postmon が -Os/-Oz 済み。GDC サーバー等の追加で要監視 |
+| softcore ROM/RAM | 32KB / 2KB | — | postmon が -Os/-Oz 済み。RAM は実測（.data+.bss 772B + 最悪スタック ~416B）で 2KB に縮小。ROM は GDC サーバー等の追加で要監視 |
 | FDC 2HD スループット | — | — | 1.2MB/s = 1バイト/1.6µs ≈ **11 cycle/byte @7.16MHz**。mgmt FIFO のバースト転送で捌ける設計なら問題なし。**P4 で実測** |
 
 ## 6. アクション
