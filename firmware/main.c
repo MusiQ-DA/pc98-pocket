@@ -142,6 +142,22 @@ int main(void)
         if (mounted_hdd)
             scsi_poll();
         settings_service(); // persist any OSD changes into the save window
+
+        // Quiet the polls.
+        //
+        // Every management-bus access takes the guest's bus through the
+        // arbiter, so this loop was the only traffic this core added while the
+        // guest booted -- tens of thousands of holds a second, unmodelled by
+        // any bench and new since the last build that reached BASIC (the GDC
+        // engine and the disk service are both recent). The metal derails
+        // right after the ITF's 640 KB test with one wrong byte in a ROM read,
+        // which is the shape a hold landing on a fetch would leave. ~1 ms of
+        // spacing keeps the FDD far inside its budget (a 1024-byte sector
+        // every ~16 ms) and the GDC engine inside its draw latency, and cuts
+        // the hold rate ~100x. The LD/RD pair on the POST row says whether it
+        // was enough.
+        for (volatile uint32_t q = 0; q < 40000u; q++) {
+        }
     }
 
     return 0;

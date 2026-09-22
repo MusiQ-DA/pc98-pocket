@@ -217,11 +217,14 @@ static uint8_t  romw_bad_file = 0, romw_bad_ram = 0;
 
 void postmon_capture_rom(void)
 {
-    // Watch the stack LIVE dances on when everything else is frozen:
-    // 0x110A0-0x110AF. If the CPU is hammering the drive probe, this window
-    // catches the return addresses the pushes leave behind -- they name the
-    // outer loop directly. Passive, like every ROMWIN read.
-    *POST_ROMWIN = 0x14Eu;
+    // Watch the ROM's own tail, 0xFFFF0-0xFFFFF: the reset vector the CPU
+    // reads on every reset and the last word of the ROM checksum the ITF runs
+    // before it hands over. LD0..3 then hold what the BIOS LOADER wrote there
+    // and RD0..3 what the CPU read back -- the A/B that says whether a wrong
+    // byte is the loader's or the fetch path's. (This window held the stack
+    // dance while the drive probe was the suspect; that probe is understood
+    // now and the ROM tail is what settles the 640KB-OK derail.)
+    *POST_ROMWIN = 0xFFFFu;
 
     // A damage map, not a hex dump. FFFF0 came back byte-perfect while
     // F800E0 was unrecognisable -- not from any of the three ROM images -- so
@@ -504,12 +507,26 @@ void post_mon_tick(void)
     // 0077, 0073. F800E0 is that loop and the first bytes of its table, so the
     // file's own values are printed underneath as the key.
     {
-        // BAD = how many of the first 256 bytes disagree, AT = the first one.
-        // On the POST row, which this machine leaves half empty.
-        osd_draw_string(&fb, 4 + 24 * 8, 2, "BAD", OSD_LABEL);
-        hex(4 + 28 * 8, 2, romw_off ? 0u : 0u, 3); // retired spot check: always 0
-        osd_draw_string(&fb, 4 + 32 * 8, 2, "AT", OSD_LABEL);
-        hex(4 + 35 * 8, 2, 0u, 3);
+        // LD vs RD at the ROM tail, where the derail's byte lives, plus the
+        // loader FIFO's drops and high-water mark. LD is the LOADER's own
+        // write (off its FSM, not the bus); RD is what the CPU read back at
+        // 0xFFFF0-0xFFFFF. LD 00EA0000 and RD the same is a clean vector; LD
+        // showing zeros or rubbish is the loader or the FIFO; RD differing
+        // from LD is the fetch path or the SDRAM cell. DP 0000 says nothing
+        // was ever dropped; HW near 0800 says the FIFO filled to its brim. On
+        // row 192, the MSW/SZ/F0 row the taller panel vacated.
+        {
+            uint32_t ldr = *POST_ROMLD3, rdr = *POST_ROMRD3;
+            uint32_t rlf = *POST_RLF;
+            osd_draw_string(&fb, 4, 192, "LD", OSD_LABEL);
+            hex(4 + 3 * 8, 192, ldr, 8);
+            osd_draw_string(&fb, 4 + 12 * 8, 192, "RD", OSD_LABEL);
+            hex(4 + 15 * 8, 192, rdr, 8);
+            osd_draw_string(&fb, 4 + 24 * 8, 192, "DP", OSD_LABEL);
+            hex(4 + 27 * 8, 192, rlf & 0xFFFFu, 4);
+            osd_draw_string(&fb, 4 + 32 * 8, 192, "HW", OSD_LABEL);
+            hex(4 + 35 * 8, 192, (rlf >> 16) & 0xFFFFu, 4);
+        }
         // The continuous watcher's verdict: RW = the offset it has walked to
         // (so you can see it live), R! = the first rot it ever caught, with
         // the file byte and what SDRAM holds instead. FF = clean so far.
