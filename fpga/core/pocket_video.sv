@@ -1,10 +1,11 @@
 //
-// Pocket video output: composite the machine's CGA/HGC raster and the softcore's OSD
-// framebuffer into the Analogue APF scaler stream. The CGA raster is the pass-through
-// default; the stages below special-case only what differs from it: the monochrome
-// palette tint, the fixed Hercules canvas, the credits and sync-guard overlays, and the
-// final pack of RGB + single-cycle HS/VS + DE with the scaler-slot word held through
-// blanking. Runs on clk_pix, the CGA dot clock's half-rate sibling (one pixel per edge).
+// Pocket video output: composite the machine's raster and the softcore's OSD
+// framebuffer into the Analogue APF scaler stream. The machine raster is the
+// pass-through default; the stages below special-case only what differs from
+// it: the palette tint, the credits and sync-guard overlays, and the final
+// pack of RGB + single-cycle HS/VS + DE with the scaler-slot word held
+// through blanking. Runs on clk_pix, the dot clock's half-rate sibling (one
+// pixel per edge).
 //
 
 module pocket_video (
@@ -22,7 +23,6 @@ module pocket_video (
     // Config / clock-mux state
     input      [2:0]  palette_cfg,
     input             credits_mode_pix,
-    input             pix_sel,
     input             vid_blank,
     // OSD framebuffer handshake (softcore)
     input             osd_active,

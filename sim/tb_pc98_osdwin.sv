@@ -52,7 +52,6 @@ module tb_pc98_osdwin;
         .VBlank          (vb),
         .palette_cfg     (3'd0),
         .credits_mode_pix(1'b0),
-        .pix_sel         (1'b0),
         .vid_blank       (1'b0),
         .osd_active      (1'b1),
         .dbg_bits        (16'd0),

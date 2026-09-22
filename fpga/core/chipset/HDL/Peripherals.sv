@@ -80,13 +80,13 @@ module PERIPHERALS #(
         input   logic           font_wr_en,
         input   logic   [10:0]  font_wr_addr,
         input   logic   [15:0]  font_wr_data,
-        output  logic   [5:0]   VGA_R,
-        output  logic   [5:0]   VGA_G,
-        output  logic   [5:0]   VGA_B,
-        output  logic           VGA_HSYNC,
-        output  logic           VGA_VSYNC,
-        output  logic           VGA_HBlank,
-        output  logic           VGA_VBlank,
+        output  logic   [5:0]   VID_R,
+        output  logic   [5:0]   VID_G,
+        output  logic   [5:0]   VID_B,
+        output  logic           VID_HSYNC,
+        output  logic           VID_VSYNC,
+        output  logic           VID_HBlank,
+        output  logic           VID_VBlank,
         // I/O Ports
         input   logic   [19:0]  address,
         output  logic   [19:0]  latch_address,
@@ -246,8 +246,6 @@ module PERIPHERALS #(
         output  logic           fdd_dma_req,
         input   logic           fdd_dma_ack,
         input   logic           terminal_count,
-        // XTCTL DATA
-        output  logic   [7:0]   xtctl = 8'h00,
         // Others
         output  logic           pause_core,
         input   logic   [3:0]   crt_h_offset,
@@ -264,57 +262,7 @@ module PERIPHERALS #(
         
     );
 
-    wire [4:0] clkdiv;
-    wire grph_mode;
-    wire hres_mode;
-
-    wire tandy_video_en = 1'b0;
-    wire tandy_audio_en = 1'b0;
-
-    wire tandy_io_en = tandy_video_en | tandy_audio_en;
-
-    wire hgc_grph_mode;
-    wire hgc_grph_page;
-
-    assign tandy_16_gfx = 1'b0;
-
-
-
     //
-    // chip select
-    //
-    logic   [7:0]   chip_select_n;
-
-    always_comb
-    begin
-        if (iorq & ~address_enable_n & ~address[9] & ~address[8] & (tandy_io_en ? ~address[4] : 1'b1))
-        begin
-            casez (address[7:5])
-                3'b000:
-                    chip_select_n = 8'b11111110;
-                3'b001:
-                    chip_select_n = 8'b11111101;
-                3'b010:
-                    chip_select_n = 8'b11111011;
-                3'b011:
-                    chip_select_n = 8'b11110111;
-                3'b100:
-                    chip_select_n = 8'b11101111;
-                3'b101:
-                    chip_select_n = 8'b11011111;
-                3'b110:
-                    chip_select_n = 8'b10111111;
-                3'b111:
-                    chip_select_n = 8'b01111111;
-                default:
-                    chip_select_n = 8'b11111111;
-            endcase
-        end
-        else
-        begin
-            chip_select_n = 8'b11111111;
-        end
-    end
 
     wire    iorq = ~io_read_n | ~io_write_n;
 
@@ -513,36 +461,6 @@ module PERIPHERALS #(
                              : fdc_msr_select ? fdc_msr
                              :                  fdc_fifo;
 `endif
-    wire    nmi_chip_select_n       = chip_select_n[5]; // 0xA0 .. 0xBF
-    wire    joystick_select         = (iorq && ~address_enable_n && address[15:3] == (16'h0200 >> 3)); // 0x200 .. 0x207
-    wire    tandy_chip_select_n     = tandy_io_en ? chip_select_n[6] : 1'b1; // 0xC0 .. 0xDF
-    wire    nmi_mask_register       = (tandy_video_en && ~nmi_chip_select_n);
-
-    wire    opl_388_chip_select     = 1'b0;   // 0x388 (Adlib) -- no OPL2 here
-    wire    opl_228_chip_select     = 1'b0;   // 0x228 (Sound Blaster FM) -- likewise
-    wire    cms_220_chip_select     = 1'b0;   // 0x220 (C/MS) -- no such board
-    wire    video_mem_select        = 1'b0;   // the Tandy's 128 KB window
-    wire    cga_mem_select          = 1'b0;   // B8000 -- no CGA
-    // PC-98 text VRAM, A0000-A3FFF: characters at A0000 (two bytes per cell)
-    // and attributes at A2000. Same shape as the CGA window above -- a BRAM in
-    // the guest's address space, qualified with AEN so a DMA cycle carrying a
-    // matching address cannot reach it.
-    wire    tvram_mem_select        = ~iorq && ~address_enable_n
-                                    && (address[19:14] == 6'b101000);
-    // A4000-A4FFF: the character generator window. RAM.sv already keeps SDRAM
-    // out of A0000-A7FFF; this claims the read AND the write, because the
-    // window is RAM -- the ITF's CG test writes a pattern through it and reads
-    // the pattern back, and user-defined characters load the same way.
-    wire    cgwin_mem_select        = ~iorq && ~address_enable_n
-                                    && (address[19:12] == 8'b10100100);
-    wire    hgc_mem_select          = 1'b0;   // B0000 -- no Hercules
-    wire    uart_chip_select        = (~address_enable_n && {address[15:3], 3'd0} == 16'h03F8);
-    wire    uart2_chip_select       = (~address_enable_n && {address[15:3], 3'd0} == 16'h02F8);
-    wire    lpt_chip_select         = (iorq && ~address_enable_n && address[15:1] == (16'h0378 >> 1)); // 0x378 ... 0x379
-	 wire    lpt_ctrl_select         = (iorq && ~address_enable_n && address[15:0] == 16'h037A); // 0x37A
-    wire    tandy_page_chip_select  = 1'b0;   // 0x3DF -- the Tandy page register
-    wire    xtctl_chip_select       = (iorq && ~address_enable_n && address[15:0] == 16'h8888);
-    wire    rtc_chip_select         = (iorq && ~address_enable_n && address[15:1] == (16'h02C0 >> 1)); // 0x2C0 .. 0x2C1
 
     wire    [3:0] ems_page_address  = (ems_address == 2'b00) ? 4'b1100 : (ems_address == 2'b01) ? 4'b1101 : 4'b1110;
     wire    ems_chip_select         = `ENABLE_EMS ? (iorq && ~address_enable_n && ems_enabled && ({address[15:2], 2'd0} == 16'h0260)) : 1'b0;          // 260h..263h
@@ -656,9 +574,7 @@ module PERIPHERALS #(
     // quiet until something needs IRQ8-15.
     logic           timer_interrupt;
     logic           keybord_interrupt;
-    logic           uart_interrupt;
     logic           fdd_interrupt;
-    logic           uart2_interrupt;
     logic   [7:0]   interrupt_data_bus_out;
     logic           interrupt_to_cpu_buf;
 
@@ -744,8 +660,8 @@ module PERIPHERALS #(
         .interrupt_request          ({interrupt2_to_cpu,
                                         pc98_master_irq6,
                                         interrupt_request[5],
-                                        uart_interrupt,
-                                        uart2_interrupt,
+                                        1'b0,   // was the XT UART pair
+                                        1'b0,
                                         crt_vsync_irq,
                                         keybord_interrupt,
                                         timer_interrupt})
@@ -961,18 +877,12 @@ module PERIPHERALS #(
 // 0x41/0x43 decode.
     logic   kbd8251_irq;
     logic   keybord_interrupt_ff;
-    logic   uart_interrupt_ff;
-    logic   uart2_interrupt_ff;
     always_ff @(posedge clock, posedge reset)
     begin
         if (reset)
         begin
             keybord_interrupt_ff    <= 1'b0;
             keybord_interrupt       <= 1'b0;
-            uart_interrupt_ff       <= 1'b0;
-            uart_interrupt          <= 1'b0;
-            uart2_interrupt_ff      <= 1'b0;
-            uart2_interrupt         <= 1'b0;
         end
         else
         begin
@@ -987,100 +897,8 @@ module PERIPHERALS #(
             keybord_interrupt_ff    <= keybord_irq;
 `endif
             keybord_interrupt       <= keybord_interrupt_ff;
-            uart_interrupt_ff       <= uart_irq;
-            uart_interrupt          <= uart_interrupt_ff;
-            uart2_interrupt_ff      <= uart2_irq;
-            uart2_interrupt         <= uart2_interrupt_ff;
         end
     end
-
-    logic prev_io_read_n;
-    logic prev_io_write_n;
-    logic [7:0] write_to_uart;
-    logic [7:0] write_to_uart2;
-    logic [7:0] uart_readdata_1;
-    logic [7:0] uart_readdata;
-    logic [7:0] uart2_readdata_1;
-    logic [7:0] uart2_readdata;
-
-    always_ff @(posedge clock)
-    begin
-        prev_io_read_n <= io_read_n;
-        prev_io_write_n <= io_write_n;
-    end
-
-    reg [7:0] lpt_reg = 8'hFF;
-	 reg [7:0] lpt_ctrl = 8'h00;
-	 reg [7:0] lpt_enable_irq = 8'h00;
-    reg [7:0] tandy_page_data = 8'h00;
-    reg [7:0] nmi_mask_register_data = 8'hFF;
-    always_ff @(posedge clock, posedge reset)
-    begin
-        if (reset)        
-        begin
-            xtctl <= 8'b00;
-            tandy_page_data <= 8'h00;
-            nmi_mask_register_data <= 8'hFF;
-        end
-        else begin
-            if (~io_write_n)
-            begin
-                write_to_uart <= internal_data_bus;
-                write_to_uart2 <= internal_data_bus;
-            end
-            else
-            begin
-                write_to_uart <= write_to_uart;
-                write_to_uart2 <= write_to_uart2;
-            end
-
-            if ((lpt_chip_select) && (~io_write_n) && ~address[0])
-                lpt_reg <= internal_data_bus;
-
-            if ((lpt_ctrl_select) && (~io_write_n))
-            begin
-                lpt_ctrl <= internal_data_bus;
-                lpt_enable_irq <= internal_data_bus & 8'h10;
-            end
-
-            if ((xtctl_chip_select) && (~io_write_n))
-                xtctl <= internal_data_bus;
-
-        end
-
-    end
-
-    wire iorq_uart = (io_write_n & ~prev_io_write_n) || (~io_read_n  & prev_io_read_n);
-
-    // COM1 at 0x3F8 is a PC/XT port; a PC-98's serial is an 8251 at 0x30.
-    assign uart_readdata_1 = 8'hFF;
-    assign uart_rts_n      = 1'b1;
-    assign uart_irq        = 1'b0;
-	 
-
-    // COM2 at 0x2F8, likewise.
-    assign uart2_readdata_1 = 8'hFF;
-    assign uart2_tx         = 1'b1;
-    assign uart2_rts_n      = 1'b1;
-    assign uart2_dtr_n      = 1'b1;
-    assign uart2_irq        = 1'b0;
-
-    // Timing of the readings may need to be reviewed.
-    always_ff @(posedge clock)
-    begin
-        if (~io_read_n)
-        begin
-            uart_readdata <= uart_readdata_1;
-            uart2_readdata <= uart2_readdata_1;
-        end
-        else
-        begin
-            uart_readdata <= uart_readdata;
-            uart2_readdata <= uart2_readdata;
-        end
-    end
-
-
 
     // ---------------------------------------------------------- PC-98 video
     //
@@ -1479,7 +1297,7 @@ module PERIPHERALS #(
     // that no longer goes anywhere. LVL 41 -- bit 0 and bit 6 -- is the
     // reading this replaced.
     assign dbg_irq_level = {interrupt2_to_cpu, pc98_master_irq6, interrupt_request[5],
-                            uart_interrupt, uart2_interrupt, crt_vsync_irq,
+                            1'b0, 1'b0, crt_vsync_irq,
                             keybord_interrupt, timer_interrupt};
 
     logic kbd8251_irq_q;
@@ -1866,13 +1684,13 @@ module PERIPHERALS #(
 
     // The attribute's colour field is G R B, so it maps to the output that way
     // round. Full intensity: PC-98 text has no half-bright.
-    assign VGA_R     = (pc98_pixel & pc98_grb[1]) ? 6'h3F : 6'h00;
-    assign VGA_G     = (pc98_pixel & pc98_grb[2]) ? 6'h3F : 6'h00;
-    assign VGA_B     = (pc98_pixel & pc98_grb[0]) ? 6'h3F : 6'h00;
-    assign VGA_HSYNC = pc98_hs;
-    assign VGA_VSYNC = pc98_vs;
-    assign VGA_HBlank = pc98_hb;
-    assign VGA_VBlank = pc98_vb;
+    assign VID_R     = (pc98_pixel & pc98_grb[1]) ? 6'h3F : 6'h00;
+    assign VID_G     = (pc98_pixel & pc98_grb[2]) ? 6'h3F : 6'h00;
+    assign VID_B     = (pc98_pixel & pc98_grb[0]) ? 6'h3F : 6'h00;
+    assign VID_HSYNC = pc98_hs;
+    assign VID_VSYNC = pc98_vs;
+    assign VID_HBlank = pc98_hb;
+    assign VID_VBlank = pc98_vb;
     assign de_o      = pc98_de;
 
     wire [7:0]  tvram_cpu_q;
@@ -1915,9 +1733,6 @@ module PERIPHERALS #(
     // PC-9821 definitions only, while the V30/286 common build gets
     // SUPPORT_SCSI. SCSI at 0xCC0 is what replaces this.
     // The four things the rest of the file reads from the block above.
-    wire [7:0] xt2ide0_data_bus_out = 8'hFF;
-    wire       mgmt_ide0_cs         = 1'b0;
-    wire [15:0] mgmt_ide0_readdata  = 16'h0000;
     assign     ide0_request         = 3'b000;
 
 
@@ -2567,25 +2382,8 @@ module PERIPHERALS #(
     // );
 
 	 
-    // RTC
-	 
-    logic           mgmt_rtc_cs;
-    logic   [7:0]   rtc_readdata;
-	 
-    assign mgmt_rtc_cs   = (mgmt_address[15:8] == 8'hF4);
-
-    // No MC146818 here. A PC-98 reads a uPD4990A at 0x20/0x22/0x33,
-    assign rtc_readdata = 8'hFF;
     
 
-    //
-    // Joysticks
-    //
-
-    logic [7:0] joy_data;
-
-    // No PCjr joystick port on a PC-98; its pads arrive through the 8255.
-    assign joy_data = 8'hFF;
 
 
     //
@@ -2737,55 +2535,15 @@ module PERIPHERALS #(
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= cgwin_q;
         end
-        else if ((uart_chip_select) && (~io_read_n))
-        begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= uart_readdata;
-        end
-        else if ((uart2_chip_select) && (~io_read_n))
-        begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= uart2_readdata;
-        end
         else if (`ENABLE_EMS && (ems_chip_select) && (~io_read_n))
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= ena_ems[address[1:0]] ? map_ems[address[1:0]] : 8'hFF;
         end
-        else if ((lpt_chip_select) && (~io_read_n))
-        begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= address[0] ? 8'hDF : lpt_reg;
-        end
-        else if ((lpt_ctrl_select) && (~io_read_n))
-        begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= 8'hE0 | lpt_ctrl | lpt_enable_irq;
-        end
-        else if ((xtctl_chip_select) && (~io_read_n))
-        begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= xtctl;
-        end
-        else if (joystick_select && ~io_read_n)
-        begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= joy_data;
-        end
-        else if ((~ide0_chip_select_n) && (~io_read_n))
-        begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= xt2ide0_data_bus_out;
-        end
         else if ((~floppy0_chip_select_n || fdd_dma_read) && (~io_read_n))
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= fdd_readdata;
-        end
-        else if (rtc_chip_select && (~io_read_n))
-        begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= rtc_readdata;
         end
         else
         begin

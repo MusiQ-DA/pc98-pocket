@@ -220,7 +220,7 @@ module tb_selftest_soc;
         .r(6'd0), .g(6'd0), .b(6'd0),          // black picture: overlay only
         .HSync(hs), .VSync(vs), .HBlank(hb), .VBlank(vb),
         .palette_cfg(3'd0), .credits_mode_pix(1'b0),
-        .pix_sel(1'b0), .vid_blank(1'b0),
+        .vid_blank(1'b0),
         .osd_active(u_soft.osd_active_r),
         .osd_palette_idx(osd_palette_idx), .osd_in_area(osd_in_area),
         .osd_hcnt(osd_hcnt), .osd_vcnt(osd_vcnt),

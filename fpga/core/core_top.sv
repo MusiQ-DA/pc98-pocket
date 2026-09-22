@@ -300,8 +300,10 @@ module core_top (
     logic  [1:0] ram_write_wait_cycle;
     logic        cycle_accrate;
     logic  [1:0] clk_select;
-    wire   [1:0] clk_select_next = ((xtctl[3:2] == 2'b00) && ~xtctl[7]) ? cpu_speed_cfg :
-                                   (xtctl[7] ? 2'b11 : xtctl[3:2] - 2'b01);
+    // The CPU speed is the OSD's alone. It used to be overridable by a guest
+    // write to 0x8888 (the XT heritage's control port, xtctl); nothing on a
+    // PC-98 writes it, and the register is gone.
+    wire   [1:0] clk_select_next = cpu_speed_cfg;
 
     always @(posedge clk_chipset, posedge reset)
     begin
@@ -370,19 +372,9 @@ module core_top (
         end
     end
 
-    // Pixel-clock switch: video_rgb_clock follows the displayed card's pixel pair.
-    // On a card change (swap_video), blank the output, flip both muxes mid-window,
-    // then un-blank once the scaler has seen frames of the new timing.
-    wire swap_video_chip;
-    synch_3 s_swap_video (swap_video, swap_video_chip, clk_chipset);
-    // This machine has one video mode, so there is nothing to swap to. The
-    // switch is not merely useless here, it is harmful: it never checked
-    // ENABLE_HGC, so a guest touching the PC/AT video mode register raised
-    // swap_video and took pix_sel with it -- and pix_sel selects the Hercules
-    // canvas for the OSD's line counter and asks the scaler for mode 1, which
-    // the PC-98 video.json does not declare. Both the OSD and the picture go
-    // with it. Held at zero.
-    wire pix_sel   = 1'b0;
+    // One video mode: no card swap, no pixel-pair select, no blanking
+    // machinery. swap_video and pix_sel were the PC/AT pair's, and the
+    // register that raised them went with the CGA.
     wire vid_blank = 1'b0;
 
     // One video mode, so no switch: the dot clock goes straight out. The CGA
@@ -1209,7 +1201,6 @@ module core_top (
     //
 
     wire [1:0] buttons;
-    wire [7:0] xtctl;
 
     // Interact "Reset PC" (0x50): stretch the one-shot write to a level, sync to the
     // chipset clock, and fold into the guest reset so the machine re-POSTs.
@@ -1313,10 +1304,10 @@ module core_top (
     wire        swapjoy_cfg = osd_swapjoy, syncjoy_cfg = osd_syncjoy;
     wire [4:0]  joy_opts = {syncjoy_cfg, joy2_cfg, joy1_cfg};
 
-    wire composite_cfg = osd_composite;   // CGA composite colour decode (settings bank, 0x7C)
-    wire cga_gfx_cfg = osd_cga_gfx, hgc_gfx_cfg = osd_hgc_gfx;   // CGA/HGC graphics I/O enables (0 = Yes)
-    wire composite = composite_cfg | xtctl[0];
-    wire a000h = `ENABLE_A000_UMB ? (a000_en_cfg & ~xtctl[6]) : 1'b0;
+    // (The composite/CGA/HGC settings rows are gone -- their hardware left
+    // with the PC/AT layer -- but the firmware still pushes the values, so
+    // the softcore's osd_composite/osd_cga_gfx/osd_hgc_gfx outputs stay.)
+    wire a000h = `ENABLE_A000_UMB ? a000_en_cfg : 1'b0;
     wire [2:0] vsync_width_osd = 3'd0;  // 0=Auto (use register), 1-7=override
     wire [2:0] hsync_width_osd = 3'd0;  // 0=Auto, 1-7=fixed width (Nx16 pixel clocks)
 
@@ -2191,10 +2182,7 @@ module core_top (
     // THE MACHINE
     //
 
-    wire VGA_VBlank_border;
-    wire std_hsyncwidth;
     wire pause_core_chipset;
-    wire swap_video;
 
     wire [7:0] data_bus;
     wire INTA_n;
@@ -2438,7 +2426,6 @@ module core_top (
         .processor_ready                    (processor_ready),
         .interrupt_to_cpu                   (interrupt_to_cpu),
         .clk_vga_cga                        (clk_pc98_dot),
-    //  .de_o                               (VGA_DE),
         .dbg_pic_irr                        (dbg_pic_irr),
         .dbg_pic_imr                        (dbg_pic_imr),
         .dbg_pic_isr                        (dbg_pic_isr),
@@ -2482,13 +2469,13 @@ module core_top (
         .pc98_tvfill_view                   (pc98_tvfill_view),
         .pc98_rowbuf_freq_count             (pc98_rowbuf_freq_count),
         .pc98_rowbuf_fvalid_count           (pc98_rowbuf_fvalid_count),
-        .VGA_R                              (r),
-        .VGA_G                              (g),
-        .VGA_B                              (b),
-        .VGA_HSYNC                          (HSync),
-        .VGA_VSYNC                          (VSync),
-        .VGA_HBlank                         (HBlank),
-        .VGA_VBlank                         (VBlank),
+        .VID_R                              (r),
+        .VID_G                              (g),
+        .VID_B                              (b),
+        .VID_HSYNC                          (HSync),
+        .VID_VSYNC                          (VSync),
+        .VID_HBlank                         (HBlank),
+        .VID_VBlank                         (VBlank),
         .address                            (chipset_address),
         .address_ext                        (st_run ? st_addr : bios_access_address),
         .ext_access_request                 (st_run | bios_access_request),
@@ -2565,7 +2552,6 @@ module core_top (
         .rtc_time                           (rtc_time),
         .fdd_present                        (fdd_present),
         .fdd_request                        (mgmt_req[7:6]),
-        .xtctl                              (xtctl),
         .enable_a000h                       (a000h),
         .wait_count_clk_en                  (cpu_ce_negedge),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
@@ -2813,7 +2799,6 @@ module core_top (
     wire        VBlank;
     wire        VSync;
     wire [5:0]  r, g, b;
-    wire        tandy_16_gfx, tandy_color_16;   // CHIPSET Tandy-video outputs (unused)
 
     // ------------------------------------------------------ hardware bands
     //
@@ -2867,7 +2852,6 @@ module core_top (
         .VBlank             (VBlank),
         .palette_cfg        (palette_cfg),
         .credits_mode_pix   (credits_mode_pix),
-        .pix_sel            (pix_sel),
         .vid_blank          (vid_blank),
         .osd_active         (osd_active),
         .osd_palette_idx    (osd_palette_idx),
