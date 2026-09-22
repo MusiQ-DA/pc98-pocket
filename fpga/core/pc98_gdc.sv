@@ -170,10 +170,7 @@ module pc98_gdc #(
     reg        draw_pending;
     reg [7:0]  draw_op_r;
     reg        draw_busy_r;
-    // 19 bytes of snapshot in 20 slots: draw_snap packs four to a word, so
-    // the last byte of word 4 is padding. It has to exist, or the pack below
-    // indexes past the array -- which Verilator allows and Quartus rejects.
-    reg [7:0]  snap [0:19];
+    reg [7:0]  snap [0:18];
     assign draw_req  = draw_pending;
     assign draw_op   = draw_op_r;
     assign draw_busy = draw_busy_r;
@@ -263,10 +260,11 @@ module pc98_gdc #(
             unk_count <= 8'h00;
             csr_wr_count <= 8'h00;
             rb_wr <= 3'd0;
+            rb_rd <= 3'd0;
             draw_pending <= 1'b0;
             draw_op_r    <= 8'h00;
             draw_busy_r  <= 1'b0;
-            for (i = 0; i <= 19; i = i + 1) snap[i] <= 8'h00;
+            for (i = 0; i <= 18; i = i + 1) snap[i] <= 8'h00;
             csr_tr0 <= 8'h00; csr_tr1 <= 8'h00; csr_tr2 <= 8'h00;
             csr_n <= 4'd0; csr_live <= 1'b0;
             for (i = 0; i <= P_LAST; i = i + 1) para[i] <= 8'h00;
@@ -339,7 +337,6 @@ module pc98_gdc #(
                     draw_op_r    <= data_in;
                     for (i = 0; i <= 18; i = i + 1)
                         snap[i] <= para[snap_src(i)];
-                    snap[19] <= 8'h00;                 // the pad byte
                 end else if (exec_cmd) begin
                     unk_cmd <= data_in;
                     if (unk_count != 8'hFF)
@@ -457,16 +454,9 @@ module pc98_gdc #(
     // idiom, so the byte the CPU latched is the head.
     wire data_rd_now = cs & a1 & ~io_read_n;
     logic data_rd_q = 1'b0;
-    // rb_rd is reset here rather than with the rest of the state above: it is
-    // written here too, and a register driven from two always blocks is a
-    // multiple-driver error to Quartus however unreachable the overlap is.
     always_ff @(posedge clk) begin
         data_rd_q <= data_rd_now;
-        if (reset) begin
-            data_rd_q <= 1'b0;
-            rb_rd     <= 3'd0;
-        end
-        else if (data_rd_q && !data_rd_now && drdy)
+        if (data_rd_q && !data_rd_now && drdy)
             rb_rd <= rb_rd + 3'd1;
     end
 

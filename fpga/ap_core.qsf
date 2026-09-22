@@ -760,10 +760,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gdc.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_grcg.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gdc_mode2.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gvram_seq.sv"
-# The EGC's blitter, instantiated by the sequencer above. Landed with the
-# sequencer but never added here, so every build after it failed to elaborate.
-# WIP: tb_pc98_egc still fails one case (blit, plane E).
-set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_egc.sv"
 # The PC-9801-55 SCSI board's register window at 0x0CC0-0x0CC7.
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_scsi.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_scsi_rom.sv"

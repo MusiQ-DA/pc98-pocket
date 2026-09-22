@@ -57,8 +57,17 @@ module PERIPHERALS #(
         output  logic           dma_chip_select_n,
         output  logic           dma_page_chip_select_n,
         // SplashScreen
+        input   logic           splashscreen,
+        input   logic           status0_clear,
         // VGA
+        output  logic           std_hsyncwidth,
+        input   logic           composite,
+        input   logic           video_output,
         input   logic           clk_vga_cga,
+        input   logic           enable_cga,
+        input   logic           clk_vga_hgc,
+        input   logic           enable_hgc,
+        input   logic   [1:0]   hgc_rgb,
         output  logic           de_o,
         // PC-98 ANK font load, straight off the loader (core_top's dl_wr).
         // Glyph reads from SDRAM, the controller's second port.
@@ -87,6 +96,7 @@ module PERIPHERALS #(
         output  logic           VGA_VSYNC,
         output  logic           VGA_HBlank,
         output  logic           VGA_VBlank,
+        output  logic           VGA_VBlank_border,
         // I/O Ports
         input   logic   [19:0]  address,
         output  logic   [19:0]  latch_address,
@@ -102,9 +112,19 @@ module PERIPHERALS #(
         // Peripherals
         output  logic   [2:0]   timer_counter_out,
         output  logic           speaker_out,
+        output  logic   [7:0]   port_a_out,
+        output  logic           port_a_io,
+        input   logic   [7:0]   port_b_in,
+        output  logic   [7:0]   port_b_out,
+        output  logic           port_b_io,
+        input   logic   [7:0]   port_c_in,
+        output  logic   [7:0]   port_c_out,
+        output  logic   [7:0]   port_c_io,
         input   logic   [7:0]   kb_byte,
         input   logic           kb_valid,
         output  logic           kb_ready,
+        input   logic           uart_rx,
+        output  logic           uart_rts_n,
         input   logic   [4:0]   joy_opts,
         input   logic   [13:0]  joy0,
         input   logic   [13:0]  joy1,
@@ -209,12 +229,30 @@ module PERIPHERALS #(
     // should be says whether the fetch ever answered.
     output  logic   [15:0]  pc98_rowbuf_freq_count,
     output  logic   [15:0]  pc98_rowbuf_fvalid_count,
+    output  logic   [15:0]  jtopl2_snd_e,
         // PC-9801-86 OPNA, stereo. Zero on a non-PC-98 build.
     output  logic signed [15:0] opna_snd_l,
     output  logic signed [15:0] opna_snd_r,
+        input   logic   [1:0]   opl2_io,
         // C/MS Audio
+        input   logic           cms_en,
+        output  logic   [15:0]  o_cms_l,
+        output  logic   [15:0]  o_cms_r,
         // TANDY
+        input   logic           tandy_video,
+        output  logic   [10:0]  tandy_snd_e,
+        output  logic           tandy_snd_rdy,
+        output  logic           tandy_16_gfx,
+        output  logic           tandy_color_16,
         // UART
+        input   logic           clk_uart,
+        input   logic           uart2_rx,
+        output  logic           uart2_tx,
+        input   logic           uart2_cts_n,
+        input   logic           uart2_dcd_n,
+        input   logic           uart2_dsr_n,
+        output  logic           uart2_rts_n,
+        output  logic           uart2_dtr_n,
         // EMS
         input   logic           ems_enabled,
         input   logic   [1:0]   ems_address,
@@ -243,6 +281,7 @@ module PERIPHERALS #(
         input   logic   [47:0]  rtc_time,
         output  logic   [1:0]   fdd_present,
         output  logic   [1:0]   fdd_request,
+        output  logic   [2:0]   ide0_request,
         output  logic           fdd_dma_req,
         input   logic           fdd_dma_ack,
         input   logic           terminal_count,
@@ -250,6 +289,10 @@ module PERIPHERALS #(
         output  logic   [7:0]   xtctl = 8'h00,
         // Others
         output  logic           pause_core,
+        input   logic           cga_hw,
+        input   logic           cga_scandouble_en,
+        input   logic           hercules_hw,
+        output  logic           swap_video,
         input   logic   [3:0]   crt_h_offset,
         input   logic   [2:0]   crt_v_offset,
         input   logic   [2:0]   vsync_width_osd,
@@ -912,6 +955,25 @@ module PERIPHERALS #(
     assign  timer_interrupt = timer_counter_out[0];
     assign  speaker_out     = spktone & spkdata;
 
+    // Ports left over from the PC/XT peripherals removed above. They are
+    // still in the module signature, and in CHIPSET's and core_top's, so
+    // they are driven to what the disabled hardware drove them to; the
+    // signatures go next.
+    assign  std_hsyncwidth    = 1'b0;
+    assign  VGA_VBlank_border = 1'b0;
+    assign  tandy_color_16    = 1'b0;
+    assign  swap_video        = 1'b0;
+    assign  port_a_out        = 8'h00;
+    assign  port_a_io         = 1'b0;
+    assign  port_b_out        = 8'h00;
+    assign  port_b_io         = 1'b0;
+    assign  port_c_out        = 8'h00;
+    assign  port_c_io         = 8'h00;
+    assign  jtopl2_snd_e      = 16'd0;
+    assign  tandy_snd_e       = 11'd0;
+    assign  tandy_snd_rdy     = 1'b1;
+    assign  o_cms_l           = 16'd0;
+    assign  o_cms_r           = 16'd0;
 
     //
     // KFPS2KB -- kept for the pacing, not for the keycodes.
@@ -928,6 +990,7 @@ module PERIPHERALS #(
     // back, and exactly one key event would ever cross.
     //
     logic           keybord_irq;
+    logic   [7:0]   keycode_buf;
     wire            clear_keycode = 1'b1;
     logic           kb_ready_int;
     assign  kb_ready = kb_ready_int;
@@ -945,11 +1008,9 @@ module PERIPHERALS #(
 
         // I/O
         .irq                        (keybord_irq),
-        .keycode                    (),
+        .keycode                    (keycode_buf),
         .clear_keycode              (clear_keycode),
         .pause_core                 (pause_core),
-        // The card-swap hotkey and its Tandy variant: no second card to
-        // swap to, so the converter's display side is held quiet.
         .swap_video                 (),
         .video_output               (1'b0),
         .tandy_video                (1'b0)
