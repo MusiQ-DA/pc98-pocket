@@ -595,7 +595,7 @@ module PERIPHERALS #(
     logic           interrupt_cascade_io;
 
     // np2's timer-write quirk, decoded at the source: the byte lands in the
-    // KF8253 on the trailing edge of the I/O write, and on that same edge the
+    // i8253 on the trailing edge of the I/O write, and on that same edge the
     // master PIC's IRR bit 0 drops if the byte was a channel-0 count or a
     // control word aimed at channel 0 with a real read/load code (a latch
     // command arms nothing, so np2 leaves the request alone for it).
@@ -627,7 +627,7 @@ module PERIPHERALS #(
     wire    pc98_master_irq6 = fdd_interrupt;
 `endif
 
-    KF8259 u_KF8259
+    i8259 u_i8259
     (
         // Bus
         .clock                      (clock),
@@ -696,7 +696,7 @@ module PERIPHERALS #(
     assign interrupt2_chip_select_n = ~(pc98_io & ~address[0] & address[3]
                                         & (address[7:4] == 4'h0));
 
-    KF8259 u_KF8259_2
+    i8259 u_i8259_2
     (
         // Bus
         .clock                      (clock),
@@ -811,7 +811,7 @@ module PERIPHERALS #(
     wire    spktone     = timer_counter_out[1];
     wire    spkdata     = ~pc98_sysport_c[3];
 
-    KF8253 u_KF8253 
+    i8253 u_i8253 
     (
         // Bus
         .clock                      (clock),
@@ -840,7 +840,7 @@ module PERIPHERALS #(
 
 
     //
-    // KFPS2KB -- kept for the pacing, not for the keycodes.
+    // ps2_keyboard -- kept for the pacing, not for the keycodes.
     //
     // Nothing on this machine reads its XT keycode buffer: a PC-98's keyboard
     // is the 8251 at 0x41/0x43, and pc98_kbd_ps2 taps the Set-2 stream
@@ -858,7 +858,7 @@ module PERIPHERALS #(
     logic           kb_ready_int;
     assign  kb_ready = kb_ready_int;
 
-    KFPS2KB #(.clk_rate(clk_rate)) u_KFPS2KB
+    ps2_keyboard #(.clk_rate(clk_rate)) u_ps2_keyboard
     (
         // Bus
         .clock                      (clock),

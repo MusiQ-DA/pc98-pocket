@@ -23,7 +23,7 @@ while [ $# -gt 0 ]; do
         --synth) SYNTH=1; shift ;;
         --v30)   V30=1;   shift ;;
         # --realmem: run the ITF through the REAL memory path -- RAM.sv on
-        # sdram_kf_shim on sdram_mp on the part, with the board's clock skew --
+        # sdram_shim on sdram_mp on the part, with the board's clock skew --
         # instead of the flat array. V30 only.
         --realmem) REALMEM=1; shift ;;
         # --word: with --realmem, let a word memory access run as one bus
@@ -118,7 +118,7 @@ if [ "$V30" = 1 ]; then
   CPU_FILES="/work/$V/v30u_ss_pkg.sv \
     /work/$V/v30_core.sv /work/$V/v30u_biu.sv /work/$V/v30u_eu.sv \
     /work/$V/v30u_ucrom.sv /work/$S/v30_cpu_bridge.sv"
-  # MACHINE_PC98 always: XT_CE_Generator keys its speed table on it, and
+  # MACHINE_PC98 always: ce_generator keys its speed table on it, and
   # under --realmem so do RAM.sv's PC-98 address select and its ITF shadow.
   # A V30 bench running the PC/XT frequencies or the PC/AT memory map would
   # not be the hardware rehearsal it is meant to be.
@@ -141,7 +141,7 @@ SIM_OPT="${SIM_OPT:--O2}"
 SIM_THREADS="${SIM_THREADS:-4}"
 
 if [ "$REALMEM" = 1 ]; then
-    MEMFILES="/work/$K/RAM.sv /work/$K/Ready.sv /work/$S/sdram_kf_shim.sv /work/$S/sdram_mp.sv /work/sim/sdram_board_model.sv /work/sim/sdram_model.sv"
+    MEMFILES="/work/$K/RAM.sv /work/$K/Ready.sv /work/$S/sdram_shim.sv /work/$S/sdram_mp.sv /work/sim/sdram_board_model.sv /work/sim/sdram_model.sv"
 else
     MEMFILES=""
 fi
@@ -150,19 +150,19 @@ RUN_CMD="
   set -e
   verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot $CPU_DEF \
     --threads $SIM_THREADS -MAKEFLAGS OPT_FAST=$SIM_OPT \
-    -I/work/sim -I/work/$S -I/work/$S/common $CPU_INC -I/work/$K -I/work/$K/KF8288/HDL \
-    -I/work/$K/KF8253/HDL -I/work/$K/KF8259/HDL \
+    -I/work/sim -I/work/$S -I/work/$S/common $CPU_INC -I/work/$K -I/work/$K/i8288/HDL \
+    -I/work/$K/i8253/HDL -I/work/$K/i8259/HDL \
     /work/sim/tb_pc98_boot.sv \
     $CPU_FILES \
     \$MEMFILES \
     /work/$S/pc98_fdc_glue.sv /work/$S/common/floppy.v /work/$S/pc98_kbd8251.sv \
-    /work/$K/XT_CE_Generator.sv /work/$K/KF8288/HDL/KF8288.sv \
-    /work/$K/KF8253/HDL/KF8253.sv /work/$K/KF8253/HDL/KF8253_Counter.sv \
-    /work/$K/KF8253/HDL/KF8253_Control_Logic.sv \
-    /work/$K/KF8259/HDL/KF8259.sv /work/$K/KF8259/HDL/KF8259_Bus_Control_Logic.sv \
-    /work/$K/KF8259/HDL/KF8259_Control_Logic.sv /work/$K/KF8259/HDL/KF8259_In_Service.sv \
-    /work/$K/KF8259/HDL/KF8259_Interrupt_Request.sv \
-    /work/$K/KF8259/HDL/KF8259_Priority_Resolver.sv \
+    /work/$K/ce_generator.sv /work/$K/i8288/HDL/i8288.sv \
+    /work/$K/i8253/HDL/i8253.sv /work/$K/i8253/HDL/i8253_Counter.sv \
+    /work/$K/i8253/HDL/i8253_Control_Logic.sv \
+    /work/$K/i8259/HDL/i8259.sv /work/$K/i8259/HDL/i8259_Bus_Control_Logic.sv \
+    /work/$K/i8259/HDL/i8259_Control_Logic.sv /work/$K/i8259/HDL/i8259_In_Service.sv \
+    /work/$K/i8259/HDL/i8259_Interrupt_Request.sv \
+    /work/$K/i8259/HDL/i8259_Priority_Resolver.sv \
     -o boot --Mdir /tmp/obj_boot
   [ \"$V30\" = 1 ] || cp /work/$S/8088/microcode.mem /hex/
   /tmp/obj_boot/boot \$SIMARGS

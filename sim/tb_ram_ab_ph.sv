@@ -7,8 +7,8 @@
 // hardware actually presents: dram_clk is pll outclk_2 at +11.64 ns while the
 // controller runs on clk_chipset.
 //
-// Validity condition: the KFSDRAM reference must still PASS here, because
-// KFSDRAM boots the real board. If the reference fails, the board model is
+// Validity condition: the sdram_single reference must still PASS here, because
+// sdram_single boots the real board. If the reference fails, the board model is
 // wrong, not the DUT. The sdram_mp answer is only meaningful after that.
 //
 // Select the controller with +define+SDRAM_USE_MP (same as config.tcl).
@@ -117,7 +117,7 @@ module tb_ram_ab_ph;
     // The BIOS loader's cadence, copied from core_top's bios_load_state 02-04:
     // hold the write strobe until ram_rw_complete, then a five-clock settle
     // before the next byte. Not a fixed short pulse -- an unconditional
-    // back-to-back burst makes the KFSDRAM reference violate tRP, and KFSDRAM
+    // back-to-back burst makes the sdram_single reference violate tRP, and sdram_single
     // boots the real board, so that stimulus would be wrong rather than
     // revealing.
     task automatic bus_write_loader(input int addr, input logic [7:0] d);
@@ -150,9 +150,9 @@ module tb_ram_ab_ph;
 
     initial begin
 `ifdef SDRAM_USE_MP
-        $display("=== [board timing] RAM.sv + sdram_kf_shim (sdram_mp) ===");
+        $display("=== [board timing] RAM.sv + sdram_shim (sdram_mp) ===");
 `else
-        $display("=== [board timing] RAM.sv + KFSDRAM (reference) ===");
+        $display("=== [board timing] RAM.sv + sdram_single (reference) ===");
 `endif
         repeat (8) @(posedge clock);
         reset = 0;
@@ -186,7 +186,7 @@ module tb_ram_ab_ph;
         // ---------------------------------------------------------------
         // Bank crossing. The two passes above sit inside ONE 512-word column
         // block each, so with sdram_mp's {row, bank, col} mapping they land
-        // entirely in bank 0 -- which is also the only bank KFSDRAM's mapping
+        // entirely in bank 0 -- which is also the only bank sdram_single's mapping
         // ever uses. The testbench therefore never exercised sdram_mp's
         // multi-bank behaviour at all: bank switching, per-bank precharge, and
         // refresh while several banks have seen traffic.
@@ -250,9 +250,9 @@ module tb_ram_ab_ph;
         // guest ever reads it.
         //
         // sdram_mp only. At this cadence -- which is core_top's, not something
-        // invented for the bench -- KFSDRAM racks up tRP violations against the
+        // invented for the bench -- sdram_single racks up tRP violations against the
         // model (41 over 2048 writes) while its DATA still comes back correct.
-        // KFSDRAM boots the real board, so that is either a part more forgiving
+        // sdram_single boots the real board, so that is either a part more forgiving
         // than the model's T_RP=2 or a corner the reference has always cut. It
         // is not a finding about sdram_mp and must not gate this bench.
 `ifdef SDRAM_USE_MP

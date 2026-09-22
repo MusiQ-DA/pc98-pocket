@@ -1,7 +1,7 @@
 //
 // sdram_mp — multi-port burst SDRAM controller for the Analogue Pocket.
 //
-// Replaces KFSDRAM for the PC-98 machine layer. KFSDRAM serves a single
+// Replaces sdram_single for the PC-98 machine layer. sdram_single serves a single
 // requester and precharges after every access, which leaves it far short of
 // what a graphics VRAM needs (docs/P0_MEMORY.md §3). This controller keeps the
 // same command sequencing but adds the two things that actually buy bandwidth:
@@ -26,7 +26,7 @@
 // construction; the controller does not split a crossing burst.
 //
 // The Pocket brings no dram_cs pin out, so CS is effectively always asserted
-// and commands are decoded from RAS/CAS/WE alone. dq_io follows the KFSDRAM
+// and commands are decoded from RAS/CAS/WE alone. dq_io follows the sdram_single
 // convention and is an ACTIVE-LOW output enable, matching core_top's
 //   assign dram_dq = ~SDRAM_DQ_IO ? SDRAM_DQ_OUT : 16'hZZZZ;
 //
@@ -176,7 +176,7 @@ module sdram_mp #(
 
     assign refresh_due = (refresh_cnt >= 16'(REFRESH_INT));
 
-    // Read data timing, derived from KFSDRAM -- the controller that boots this
+    // Read data timing, derived from sdram_single -- the controller that boots this
     // board -- rather than from first principles, because the device clock is
     // antiphase (pll.v outclk_2 = clk_chipset + 180 deg) and the intuition
     // about which edge is "mid-window" inverts with it.
@@ -191,7 +191,7 @@ module sdram_mp #(
     // the launch instant itself, before tAC has elapsed -- sampling there
     // returns the previous word. (That was testB6, and it failed on hardware.)
     //
-    // KFSDRAM lands on exactly P+3: its READ reaches the bus one cycle after
+    // sdram_single lands on exactly P+3: its READ reaches the bus one cycle after
     // the request, its read_flag/data_out register fires three cycles later
     // (state_counter > cas_latency), and that pairing is what boots the board.
     // So: sample DQ on the posedge, RD_DELAY = CAS_LATENCY + 1, and rd_pipe[0]
@@ -211,7 +211,7 @@ module sdram_mp #(
     // four clocks before the access (ACT plus T_RCD) and four after (T_WR is
     // owed anyway, then PRE plus T_RP) whether or not the row was already
     // there. Measured against RAM.sv on the BIOS loader's cadence that made a
-    // byte cost 19.11 clocks where KFSDRAM costs 8.08.
+    // byte cost 19.11 clocks where sdram_single costs 8.08.
     //
     // That is not a performance nicety, it is the bug. data_loader cannot be
     // backpressured -- APF delivers a 32-bit word roughly every 75 clk_74a
@@ -278,8 +278,8 @@ module sdram_mp #(
             // sdram_a and sdram_ba are deliberately NOT cleared here. They used
             // to be, which drove the address bus row -> 0 -> col -> 0 on every
             // access: thirteen address lines plus two bank lines switching
-            // together, twice per transaction, for no reason. KFSDRAM holds its
-            // address across a state instead, and KFSDRAM is the one that runs
+            // together, twice per transaction, for no reason. sdram_single holds its
+            // address across a state instead, and sdram_single is the one that runs
             // reliably on this board.
             //
             // The hardware fault is intermittent (testB19/20 pass the BIOS
@@ -340,7 +340,7 @@ module sdram_mp #(
             S_IDLE: if (timer == 0) begin
                 if (refresh_due && pre_guard == 0) begin
                     // PRECHARGE ALL first, then AUTO REFRESH -- exactly what
-                    // KFSDRAM does (REFRESH_PALL -> REFRESH).
+                    // sdram_single does (REFRESH_PALL -> REFRESH).
                     //
                     // This controller used to issue AUTO REFRESH on its own,
                     // reasoning that every transaction ends with a PRECHARGE of
@@ -354,7 +354,7 @@ module sdram_mp #(
                     // It matters more here than the invariant suggests: this
                     // controller puts addr[10:9] in the bank field, so the
                     // BIOS's base 64 KB test -- the one reporting three beeps
-                    // on hardware -- spans all four banks, where KFSDRAM's
+                    // on hardware -- spans all four banks, where sdram_single's
                     // mapping keeps that region entirely in bank 0.
                     cmd         <= CMD_PRE;
                     sdram_a     <= ROW_BITS'(1) << 10;   // A10 = all banks

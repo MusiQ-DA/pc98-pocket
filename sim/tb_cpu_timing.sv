@@ -12,7 +12,7 @@
 // cycle length -- the 8088 asserts MEMR in T2 and latches at the end of T3, one
 // CPU clock later, which at 4.77 MHz is nine chipset cycles.
 //
-// Measured latency from read command to data: KFSDRAM 5, sdram_mp 10. So this
+// Measured latency from read command to data: sdram_single 5, sdram_mp 10. So this
 // bench samples at a fixed offset like the CPU does, instead of waiting.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -91,7 +91,7 @@ module tb_cpu_timing;
     // is latched at the end of T3 -- but only if READY is high there. If it is
     // low the CPU inserts wait states, a whole CPU clock each, and re-checks.
     //
-    // Modelling the CPU as never waiting was wrong and made even KFSDRAM's
+    // Modelling the CPU as never waiting was wrong and made even sdram_single's
     // shimmed reference fail; the point of the exercise is whether READY is
     // asserted HONESTLY, not whether the controller is fast.
     task automatic cpu_read(input int a, output logic [7:0] q, output int waits);
@@ -135,7 +135,7 @@ module tb_cpu_timing;
 `ifdef SDRAM_USE_MP
         $display("=== 8088 read timing through sdram_mp ===");
 `else
-        $display("=== 8088 read timing through KFSDRAM (reference) ===");
+        $display("=== 8088 read timing through sdram_single (reference) ===");
 `endif
         $display("    CPU latches %0d chipset cycles after MEMR", CPU_SAMPLE);
         repeat (8) @(posedge clock);

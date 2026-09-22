@@ -1,5 +1,5 @@
 //
-// tb_ce_rates -- what frequencies does XT_CE_Generator actually make?
+// tb_ce_rates -- what frequencies does ce_generator actually make?
 //
 // The speed table is four rational ratios against a 42.954545 MHz chipset
 // clock, and "is index 1 really 9.8304 MHz?" is a measurement, not a reading.
@@ -36,7 +36,7 @@ module tb_ce_rates;
     wire [7:0] ccc_div, ccc_dec;
     wire [1:0] rd_wait, wr_wait;
 
-    XT_CE_Generator dut (
+    ce_generator dut (
         .clock(clk), .reset(reset),
         .clk_select_load(load), .clk_select(sel),
         .cpu_clk_pin(clk_cpu),
@@ -69,7 +69,7 @@ module tb_ce_rates;
         reset = 1'b0;
         repeat (10) @(posedge clk);
 
-        $display("XT_CE_Generator: %s, chipset %0.6f MHz", WHICH, CLK_MHZ);
+        $display("ce_generator: %s, chipset %0.6f MHz", WHICH, CLK_MHZ);
 
         for (int i = 0; i < 4; i++) begin
             // Load the index the way core_top does, on biu_done.

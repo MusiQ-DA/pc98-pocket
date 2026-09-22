@@ -5,8 +5,8 @@
 // ports 0x41/0x43, and every key travels as ONE matrix byte with bit 7 set on
 // release. pocket_keyboard merges the controller buttons, the docked USB
 // keyboard and the on-screen keyboard into a PS/2 Set-2 byte stream paced by
-// KFPS2KB's kb_ready; this module TAPS that stream (it never stalls it --
-// KFPS2KB keeps the pace, its PACE timer spaces the bytes) and re-emits each
+// ps2_keyboard's kb_ready; this module TAPS that stream (it never stalls it --
+// ps2_keyboard keeps the pace, its PACE timer spaces the bytes) and re-emits each
 // key as a PC-98 event:
 //
 //     {key_stb, key_make, key_code[7:0]}
@@ -40,7 +40,7 @@ module pc98_kbd_ps2 (
     input        reset,
     input  [7:0] kb_byte,     // Set-2 stream, tapped from pocket_keyboard
     input        kb_valid,
-    input        kb_ready,    // from KFPS2KB via Peripherals; paces the stream
+    input        kb_ready,    // from ps2_keyboard via Peripherals; paces the stream
     output reg   key_stb,     // toggles per event
     output reg   key_make,    // 1 = press, 0 = release
     output reg [7:0] key_code // PC-98 matrix code, bit 7 already set on release

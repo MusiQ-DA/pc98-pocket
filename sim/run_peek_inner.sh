@@ -6,16 +6,16 @@ set -e
 S=fpga/core
 FILES="sim/tb_postmon_peek.sv sim/sdram_model.sv \
   $S/chipset/HDL/RAM.sv $S/chipset/HDL/Bus_Arbiter.sv \
-  $S/chipset/HDL/KFSDRAM/HDL/KFSDRAM.sv \
-  $S/sdram_kf_shim.sv $S/sdram_mp.sv $S/sdram_selftest_master.sv \
-  $S/chipset/HDL/KF8288/HDL/KF8288.sv \
-  $S/chipset/HDL/KF8237/HDL/KF8237.sv \
-  $S/chipset/HDL/KF8237/HDL/KF8237_Address_And_Count_Registers.sv \
-  $S/chipset/HDL/KF8237/HDL/KF8237_Bus_Control_Logic.sv \
-  $S/chipset/HDL/KF8237/HDL/KF8237_Priority_Encoder.sv \
-  $S/chipset/HDL/KF8237/HDL/KF8237_Timing_And_Control.sv"
-INC="-Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/KFSDRAM/HDL \
-  -I$S/chipset/HDL/KF8237/HDL -I$S/chipset/HDL/KF8288/HDL"
+  $S/chipset/HDL/sdram_single/HDL/sdram_single.sv \
+  $S/sdram_shim.sv $S/sdram_mp.sv $S/sdram_selftest_master.sv \
+  $S/chipset/HDL/i8288/HDL/i8288.sv \
+  $S/chipset/HDL/upd71071/HDL/upd71071.sv \
+  $S/chipset/HDL/upd71071/HDL/upd71071_Address_And_Count_Registers.sv \
+  $S/chipset/HDL/upd71071/HDL/upd71071_Bus_Control_Logic.sv \
+  $S/chipset/HDL/upd71071/HDL/upd71071_Priority_Encoder.sv \
+  $S/chipset/HDL/upd71071/HDL/upd71071_Timing_And_Control.sv"
+INC="-Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/sdram_single/HDL \
+  -I$S/chipset/HDL/upd71071/HDL -I$S/chipset/HDL/i8288/HDL"
 
 for variant in fixed repro; do
   DEF="+define+MACHINE_PC98+SDRAM_USE_MP"

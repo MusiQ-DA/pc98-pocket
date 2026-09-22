@@ -135,7 +135,7 @@ module BUS_ARBITER (
     logic           direction_transmit_or_receive_n;
     logic           data_enable;
 
-    KF8288 u_KF8288 (
+    i8288 u_i8288 (
         .clock                              (clock),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
@@ -174,7 +174,7 @@ module BUS_ARBITER (
     logic           dma_memory_read_n;
     logic           dma_memory_write_n;
 
-    KF8237 u_KF8237 (
+    upd71071 u_upd71071 (
         .clock                              (clock),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),

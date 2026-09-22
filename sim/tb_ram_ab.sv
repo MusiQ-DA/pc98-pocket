@@ -2,7 +2,7 @@
 // tb_ram_ab — drives the real RAM.sv and checks a byte round trip.
 //
 // Built after the hardware A/B failed: the PCXT base reached BIOS through
-// KFSDRAM but not through sdram_kf_shim, so something in the integration
+// sdram_single but not through sdram_shim, so something in the integration
 // differs in a way the controller-level testbenches could not see. This runs
 // the actual RAM.sv so the two controllers can be compared directly.
 //
@@ -136,7 +136,7 @@ module tb_ram_ab;
     // The BIOS loader's cadence, copied from core_top's bios_load_state 02-04:
     // hold the write strobe until ram_rw_complete, then a five-clock settle
     // before the next byte. Not a fixed short pulse -- an unconditional
-    // back-to-back burst makes the KFSDRAM reference violate tRP, and KFSDRAM
+    // back-to-back burst makes the sdram_single reference violate tRP, and sdram_single
     // boots the real board, so that stimulus would be wrong rather than
     // revealing.
     task automatic bus_write_loader(input int addr, input logic [7:0] d);
@@ -170,9 +170,9 @@ module tb_ram_ab;
 
     initial begin
 `ifdef SDRAM_USE_MP
-        $display("=== RAM.sv + sdram_kf_shim (sdram_mp) ===");
+        $display("=== RAM.sv + sdram_shim (sdram_mp) ===");
 `else
-        $display("=== RAM.sv + KFSDRAM (reference) ===");
+        $display("=== RAM.sv + sdram_single (reference) ===");
 `endif
         repeat (8) @(posedge clock);
         reset = 0;
@@ -238,9 +238,9 @@ module tb_ram_ab;
         // guest ever reads it.
         //
         // sdram_mp only. At this cadence -- which is core_top's, not something
-        // invented for the bench -- KFSDRAM racks up tRP violations against the
+        // invented for the bench -- sdram_single racks up tRP violations against the
         // model (41 over 2048 writes) while its DATA still comes back correct.
-        // KFSDRAM boots the real board, so that is either a part more forgiving
+        // sdram_single boots the real board, so that is either a part more forgiving
         // than the model's T_RP=2 or a corner the reference has always cut. It
         // is not a finding about sdram_mp and must not gate this bench.
 `ifdef SDRAM_USE_MP
@@ -248,7 +248,7 @@ module tb_ram_ab;
         for (int i = 0; i < 2048; i++)
             bus_write_loader(32'hFC000 + i, pat(i + 33));
         ld_timing = 0;
-        // The number this whole change exists to move. KFSDRAM, measured the
+        // The number this whole change exists to move. sdram_single, measured the
         // same way before any of it, costs 8.08 clocks/byte; sdram_mp cost
         // 19.11, and APF's delivery rate allows about 10.9.
         $display("  loader cost: %0d clocks for %0d bytes = %0d.%02d clocks/byte (budget 10.9)",

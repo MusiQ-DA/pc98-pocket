@@ -61,7 +61,7 @@ module audio_mixer #(
   //! ------------------------------------------------------------------------
   wire audio_sclk;
 
-  mf_audio_pll audio_pll (
+  audio_pll audio_pll (
       .refclk  (clk_74b),
       .rst     (0),
       .outclk_0(audio_mclk),

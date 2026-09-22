@@ -221,7 +221,7 @@ module sdram_model #(
     // samplable at edge N+CL. rd_vld[0] is set after the edge the command is
     // seen, so the bit that must be driving during the interval ending at
     // N+CL is rd_vld[cas_lat-1]. Using rd_vld[cas_lat] puts the window a full
-    // cycle late, which is what made this model reject KFSDRAM.
+    // cycle late, which is what made this model reject sdram_single.
     //
     // Two conventions, selected by PHYSICAL_DQ.
     //
@@ -241,7 +241,7 @@ module sdram_model #(
     //
     //   ★ 2026-09-07: this mode exists because the 3-slot window made the
     //   board testbench UNABLE TO FAIL on the question it was built to answer.
-    //   It passed both the posedge sampler (correct, matches KFSDRAM, boots)
+    //   It passed both the posedge sampler (correct, matches sdram_single, boots)
     //   and testB6's negedge sampler (half a cycle early, black on hardware).
     //   A window three times wider than the real one blesses everything. With
     //   PHYSICAL_DQ the negedge sampler lands before the data arrives and the

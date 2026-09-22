@@ -31,7 +31,7 @@ module tb_pc98_kbd_ps2;
     logic reset = 1;
     logic [7:0] kb_byte = 0;
     logic kb_valid = 0;
-    logic kb_ready = 1;     // KFPS2KB paces the real stream; the bench does not test pacing
+    logic kb_ready = 1;     // ps2_keyboard paces the real stream; the bench does not test pacing
 
     logic key_stb, key_make;
     logic [7:0] key_code;
@@ -70,7 +70,7 @@ module tb_pc98_kbd_ps2;
     int errors = 0;
 
     // One Set-2 byte, with a couple of idle cycles after it (the real stream
-    // is PACE-timed by KFPS2KB and never this dense).
+    // is PACE-timed by ps2_keyboard and never this dense).
     task automatic send(input logic [7:0] b);
         begin
             kb_byte  = b;

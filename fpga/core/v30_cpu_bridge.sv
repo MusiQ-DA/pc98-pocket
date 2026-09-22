@@ -1,12 +1,12 @@
 //============================================================================
 //
-//  v30_cpu_bridge -- put the nuV30 (16-bit bus) on the KF8288 world (8-bit).
+//  v30_cpu_bridge -- put the nuV30 (16-bit bus) on the i8288 world (8-bit).
 //
 //  WHY THIS EXISTS. The machine's ROMs are V30 ROMs (the ITF's F9476 pushes
 //  an immediate word -- a 186-class instruction the 8088 dispatched to its
 //  undocumented JS alias), so the hardware CPU is the vendored nuV30. That
 //  core has a 16-bit bus and no 8-bit mode, and everything on the other side
-//  of it here -- KF8288, Peripherals, RAM, the DMA controller -- is the
+//  of it here -- i8288, Peripherals, RAM, the DMA controller -- is the
 //  the 8-bit bus this chipset presents. On a real PC-98 the V30 talks to 16-bit memory and
 //  the byte-lane steering happens in glue; here the glue is this module.
 //
@@ -64,7 +64,7 @@
 //   ever dropped or reordered.
 //
 //  THE BYTE ENGINE, for whichever access it is serving, impersonates the
-//  8088 the KF8288 was built for:
+//  8088 the i8288 was built for:
 //
 //   * processor_status carries the cycle code per byte and passive between
 //     bytes, so the 8288 re-arms its ALE/command machinery per byte
@@ -128,7 +128,7 @@ module v30_cpu_bridge (
     output wire         v30_ce,             // gated posedge CE to the core
 
     // the 8088's pins, as the chipset sees them
-    output reg   [2:0]  processor_status,   // S2-S0 to the KF8288 / arbiter
+    output reg   [2:0]  processor_status,   // S2-S0 to the i8288 / arbiter
     output reg   [19:0] ad_out,             // to core_top's ALE address latch
     output reg   [7:0]  cpu_data_bus,       // the addressed write lane
     output wire         lock_n,             // the core ties BUSLOCK_N high

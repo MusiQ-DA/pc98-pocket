@@ -1,15 +1,15 @@
 //
 // Pocket keyboard: merge controller buttons, a docked USB keyboard, and the
 // on-screen virtual keyboard into one Set-2 scancode byte stream for CHIPSET's
-// KFPS2KB.
+// ps2_keyboard.
 //
 // Three event producers - the cont1_key button map, hid_to_ps2 over the docked
 // USB keyboard (cont3_*), and the virtual keyboard (vkb_*) - push key events into
-// a small queue; a framer drains it, handing KFPS2KB each byte over a ready/valid
+// a small queue; a framer drains it, handing ps2_keyboard each byte over a ready/valid
 // handshake as a make ([code]) or break ([0xF0, code]), with a 0xE0 prefix for
 // extended keys. kb_ready paces one byte at a time.
 //
-// Scancodes are Set-2 (KFPS2KB converts Set-2 -> XT).
+// Scancodes are Set-2 (ps2_keyboard converts Set-2 -> XT).
 //
 
 module pocket_keyboard #(
@@ -27,7 +27,7 @@ module pocket_keyboard #(
     input [15:0] cont3_trig,   // docked USB: HID usage codes 5-6
     input [15:0] cont3_key,    // docked USB: modifier bits (byte [15:8])
 
-    // Set-2 scancode byte to CHIPSET's KFPS2KB; kb_ready gates one byte at a time
+    // Set-2 scancode byte to CHIPSET's ps2_keyboard; kb_ready gates one byte at a time
     output [7:0] kb_byte,
     output       kb_valid,
     input        kb_ready,
@@ -312,7 +312,7 @@ module pocket_keyboard #(
                              (q_head[7:0] != 8'hE1) &&  // not Pause (sequence)
                              (q_head[7:0] != 8'hE2);    // not Print Screen (sequence)
 
-    // Byte handed to KFPS2KB, valid in the emit states; kb_ready completes the
+    // Byte handed to ps2_keyboard, valid in the emit states; kb_ready completes the
     // handshake and advances the framer.
     assign kb_valid = (fst == S_E0) || (fst == S_PREFIX) || (fst == S_CODE) ||
                       (fst == S_SEQ && seq_rom(seq_addr) != 8'h00);

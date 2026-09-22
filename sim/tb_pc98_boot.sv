@@ -13,7 +13,7 @@
 //                  hardware is becoming. The same flat memory and the same
 //                  I/O models now see the bridge's byte cycles, so this is
 //                  the end-to-end dress rehearsal of the hardware CPU path
-//                  (KF8288 + 8-bit bus + real ROMs + 8251) before the
+//                  (i8288 + 8-bit bus + real ROMs + 8251) before the
 //                  bitstream: the instruction the 8088 tripped on must
 //                  simply execute here.
 //
@@ -83,7 +83,7 @@ module tb_pc98_boot;
     wire [1:0] ram_rd_wait, ram_wr_wait;
     wire       biu_done;
 
-    XT_CE_Generator u_ce (
+    ce_generator u_ce (
         .clock                              (clk_chipset),
         .reset                              (reset),
         .clk_select_load                    (biu_done),
@@ -236,7 +236,7 @@ module tb_pc98_boot;
     wire io_rd_n,  io_wr_n,  adv_io_wr_n;
     wire inta_n, ale, en_io, en_mem, dt_r_n, den, mce, pden;
 
-    KF8288 u_8288 (
+    i8288 u_8288 (
         .clock                           (clk_chipset),
         .cpu_ce_posedge                  (cpu_ce_posedge),
         .cpu_ce_negedge                  (cpu_ce_negedge),
@@ -319,7 +319,7 @@ module tb_pc98_boot;
     // ---- the real memory path (+define+REALMEM) ----------------------------
     //
     // The flat array above is a model of memory; this is the memory. RAM.sv on
-    // sdram_kf_shim on sdram_mp on the part, with the board's half-period clock
+    // sdram_shim on sdram_mp on the part, with the board's half-period clock
     // skew -- what core_top instantiates. tb_v30_mem proved the bridge against
     // that path with a program of its own; this runs the REAL ITF through it,
     // which is the only way to ask whether the machine's memory test fails for
@@ -804,7 +804,7 @@ module tb_pc98_boot;
 
     logic timer_out0;
 
-    KF8253 u_pit (
+    i8253 u_pit (
         .clock            (clk_chipset),
         .reset            (reset),
         .chip_select_n    (~pit_iocycle),
@@ -896,7 +896,7 @@ module tb_pc98_boot;
     wire       pic1_data_bus_io, pic2_data_bus_io;
     wire [2:0] pic1_cascade_out;
 
-    KF8259 u_pic1 (
+    i8259 u_pic1 (
         .clock            (clk_chipset),
         .reset            (reset),
         .chip_select_n    (~pic1_iocycle),
@@ -916,7 +916,7 @@ module tb_pc98_boot;
         .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, 1'b0, timer_out0})
     );
 
-    KF8259 u_pic2 (
+    i8259 u_pic2 (
         .clock            (clk_chipset),
         .reset            (reset),
         .chip_select_n    (~pic2_iocycle),
@@ -1625,9 +1625,9 @@ module tb_pc98_boot;
 
         $display("--- done ---");
         $display("PIT gate2     %0d  (counters now %04X %04X %04X)", gate2,
-                 u_pit.u_KF8253_Counter_0.count[15:0],
-                 u_pit.u_KF8253_Counter_1.count[15:0],
-                 u_pit.u_KF8253_Counter_2.count[15:0]);
+                 u_pit.u_i8253_Counter_0.count[15:0],
+                 u_pit.u_i8253_Counter_1.count[15:0],
+                 u_pit.u_i8253_Counter_2.count[15:0]);
         $display("INTA count    %0d", inta_count);
         $display("CRT edges seen %0d, INT rises %0d", crt_edges, int_rises);
         $display("PIC1 irr=%02X isr=%02X imr=%02X int=%b | PIC2 irr=%02X imr=%02X",

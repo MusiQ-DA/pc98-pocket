@@ -4,7 +4,7 @@
 // core clocks, so the CPU, chipset and video stay mutually phase-locked (as on the real
 // machine, where all derive from one 14.31818 MHz crystal). Each output is an integer
 // division of the VCO; Quartus solves the M/N/C counters from these strings.
-//   outclk_0   42.954545 MHz            chipset + SDRAM controller + XT_CE_Generator
+//   outclk_0   42.954545 MHz            chipset + SDRAM controller + ce_generator
 //   outclk_1   85.909091 MHz            open (was the 8088 core clock)
 //   outclk_2   42.954545 MHz  @180 deg  SDRAM device clock (dram_clk), edge-centered
 //   outclk_3   28.636360 MHz            the boot hold's 14.318 MHz tick, halved

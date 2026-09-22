@@ -3,9 +3,9 @@
 // own clocking.
 //
 // What this proves, phase by phase:
-//   A. The KF8253's mode-3 logic toggles forever at exactly N/2 counts --
+//   A. The i8253's mode-3 logic toggles forever at exactly N/2 counts --
 //      the "mode 3 stops after ~5 edges" diagnosis was mode 0 doing its
-//      one-shot job, not a counter bug (sim/tb_kf8253_mode3.sv measures the
+//      one-shot job, not a counter bug (sim/tb_i8253_mode3.sv measures the
 //      same thing standalone).
 //   B. The ITF's own programming (F854E: ctrl 0x30, LSB/MSB 0x00 -- mode 0,
 //      count 65536) gives exactly one terminal-count edge 26.7 ms later at
@@ -74,7 +74,7 @@ module tb_pit_boot_seq;
     wire  [7:0]  data_bus_out;
     wire out0, out1, out2;
 
-    KF8253 u_pit (
+    i8253 u_pit (
         .clock            (clk_chipset),
         .reset            (reset),
         .chip_select_n    (chip_select_n),
@@ -94,7 +94,7 @@ module tb_pit_boot_seq;
     // A master PIC watching the timer pin, for the IRR0-quirk phase
     logic inta_n = 1'b1;
     wire  pic_int;
-    KF8259 u_pic (
+    i8259 u_pic (
         .clock            (clk_chipset),
         .reset            (reset),
         .chip_select_n    (1'b1),          // never bus-selected: IRR only
@@ -152,7 +152,7 @@ module tb_pit_boot_seq;
             if (edges <= 12)
                 $display("%12t  EDGE #%0d out=%b  half=%.3f us  count=%04X",
                          $realtime, edges, out0, half_ns / 1000.0,
-                         u_pit.u_KF8253_Counter_0.count[15:0]);
+                         u_pit.u_i8253_Counter_0.count[15:0]);
             t_edge = $realtime;
         end
     end

@@ -35,27 +35,27 @@ jobs:
             -o tbl --Mdir obj_load
           ./obj_load/tbl | tee load.log
           grep -q "RESULT: PASS" load.log
-      - name: SDRAM controller — KFSDRAM shim handshake
+      - name: SDRAM controller — sdram_single shim handshake
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_sdram_shim \
             -Isim -Ifpga/core \
             sim/tb_sdram_shim.sv sim/sdram_model.sv \
-            fpga/core/sdram_kf_shim.sv \
+            fpga/core/sdram_shim.sv \
             fpga/core/sdram_mp.sv \
             -o tbs --Mdir obj_shim
           ./obj_shim/tbs | tee shim.log
           grep -q "RESULT: PASS" shim.log
 
-      - name: RAM.sv integration — KFSDRAM reference then sdram_mp
+      - name: RAM.sv integration — sdram_single reference then sdram_mp
         run: |
           S=fpga/core
           for mode in ref mp; do
             DEF=""; [ "$mode" = "mp" ] && DEF="+define+SDRAM_USE_MP"
             verilator --binary --timing -Wno-fatal --top-module tb_ram_ab $DEF \
-              -Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/KFSDRAM/HDL \
+              -Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/sdram_single/HDL \
               sim/tb_ram_ab.sv sim/sdram_model.sv \
-              $S/chipset/HDL/RAM.sv $S/chipset/HDL/KFSDRAM/HDL/KFSDRAM.sv \
-              $S/sdram_kf_shim.sv $S/sdram_mp.sv \
+              $S/chipset/HDL/RAM.sv $S/chipset/HDL/sdram_single/HDL/sdram_single.sv \
+              $S/sdram_shim.sv $S/sdram_mp.sv \
               -o r --Mdir obj_$mode
             ./obj_$mode/r | tee ram_$mode.log
             grep -q "RESULT: PASS" ram_$mode.log
@@ -179,10 +179,10 @@ jobs:
         run: |
           H=fpga/core/chipset/HDL
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_beep \
-            -Isim -I$H/KF8253/HDL \
+            -Isim -I$H/i8253/HDL \
             sim/tb_pc98_beep.sv \
-            $H/KF8253/HDL/KF8253.sv $H/KF8253/HDL/KF8253_Control_Logic.sv \
-            $H/KF8253/HDL/KF8253_Counter.sv \
+            $H/i8253/HDL/i8253.sv $H/i8253/HDL/i8253_Control_Logic.sv \
+            $H/i8253/HDL/i8253_Counter.sv \
             -o b --Mdir obj_beep
           ./obj_beep/b | tee beep.log
           grep -q "RESULT: PASS" beep.log
@@ -223,16 +223,16 @@ jobs:
           S=fpga/core
           K=$S/chipset/HDL
           verilator --binary --timing -Wno-fatal --top-module tb_v30_bridge \
-            -Isim -I$S -I$S/v30 -I$K -I$K/KF8288/HDL -I$K/KF8259/HDL \
+            -Isim -I$S -I$S/v30 -I$K -I$K/i8288/HDL -I$K/i8259/HDL \
             sim/tb_v30_bridge.sv \
             $S/v30/v30u_ss_pkg.sv $S/v30/v30_core.sv $S/v30/v30u_biu.sv \
             $S/v30/v30u_eu.sv $S/v30/v30u_ucrom.sv \
             $S/v30_cpu_bridge.sv \
-            $K/XT_CE_Generator.sv $K/KF8288/HDL/KF8288.sv $K/Ready.sv \
-            $K/KF8259/HDL/KF8259.sv $K/KF8259/HDL/KF8259_Bus_Control_Logic.sv \
-            $K/KF8259/HDL/KF8259_Control_Logic.sv $K/KF8259/HDL/KF8259_In_Service.sv \
-            $K/KF8259/HDL/KF8259_Interrupt_Request.sv \
-            $K/KF8259/HDL/KF8259_Priority_Resolver.sv \
+            $K/ce_generator.sv $K/i8288/HDL/i8288.sv $K/Ready.sv \
+            $K/i8259/HDL/i8259.sv $K/i8259/HDL/i8259_Bus_Control_Logic.sv \
+            $K/i8259/HDL/i8259_Control_Logic.sv $K/i8259/HDL/i8259_In_Service.sv \
+            $K/i8259/HDL/i8259_Interrupt_Request.sv \
+            $K/i8259/HDL/i8259_Priority_Resolver.sv \
             -o v --Mdir obj_v30br
           ./obj_v30br/v +slow=0 | tee v30br.log
           grep -q "RESULT: PASS" v30br.log
@@ -265,7 +265,7 @@ jobs:
           H=$S/chipset/HDL
           for tb in tb_pic_irq0_edge tb_pit_boot_seq tb_pic_cascade; do
             verilator --binary --timing -Wno-fatal --top-module $tb \
-              -Isim -I$S -I$H -I$H/KF8253/HDL -I$H/KF8259/HDL \
+              -Isim -I$S -I$H -I$H/i8253/HDL -I$H/i8259/HDL \
               sim/$tb.sv -o e --Mdir obj_$tb
             ./obj_$tb/e | tee $tb.log
             grep -q "RESULT: PASS\|PASS tb_" $tb.log
@@ -275,14 +275,14 @@ jobs:
         run: |
           S=fpga/core
           H=$S/chipset/HDL
-          for mode in ref mp mp_kfref; do
+          for mode in ref mp mp_ref; do
             DEF="+define+SDRAM_USE_MP"
             [ "$mode" = ref ] && DEF=""
-            [ "$mode" = mp_kfref ] && DEF="+define+SDRAM_USE_MP+SDRAM_MP_KF_REF"
+            [ "$mode" = mp_ref ] && DEF="+define+SDRAM_USE_MP+SDRAM_MP_REF"
             verilator --binary --timing -Wno-fatal --top-module tb_cpu_timing $DEF \
-              -Isim -I$S -I$H -I$H/KFSDRAM/HDL \
+              -Isim -I$S -I$H -I$H/sdram_single/HDL \
               sim/tb_cpu_timing.sv sim/sdram_board_model.sv sim/sdram_model.sv \
-              $H/RAM.sv $H/KFSDRAM/HDL/KFSDRAM.sv $S/sdram_kf_shim.sv $S/sdram_mp.sv \
+              $H/RAM.sv $H/sdram_single/HDL/sdram_single.sv $S/sdram_shim.sv $S/sdram_mp.sv \
               -o c --Mdir obj_ct_$mode
             ./obj_ct_$mode/c | tee ct_$mode.log
             grep -q "RESULT: PASS" ct_$mode.log
@@ -296,13 +296,13 @@ jobs:
           mkdir -p hdl/rtl/ucore && cp $V/ucrom.hex $V/ucdecode.hex hdl/rtl/ucore/
           verilator --binary --timing -Wno-fatal --top-module tb_v30_mem \
             +define+CPU_V30+V30_BACKDOOR+MACHINE_PC98+SDRAM_USE_MP \
-            -O2 -Isim -I$S -I$V -I$H -I$H/KF8288/HDL \
+            -O2 -Isim -I$S -I$V -I$H -I$H/i8288/HDL \
             sim/tb_v30_mem.sv \
             $V/v30u_ss_pkg.sv $V/v30_core.sv $V/v30u_biu.sv $V/v30u_eu.sv \
             $V/v30u_ucrom.sv $S/v30_cpu_bridge.sv \
-            $S/sdram_kf_shim.sv $S/sdram_mp.sv \
+            $S/sdram_shim.sv $S/sdram_mp.sv \
             sim/sdram_board_model.sv sim/sdram_model.sv \
-            $H/RAM.sv $H/Ready.sv $H/XT_CE_Generator.sv $H/KF8288/HDL/KF8288.sv \
+            $H/RAM.sv $H/Ready.sv $H/ce_generator.sv $H/i8288/HDL/i8288.sv \
             -o vm --Mdir obj_vm
           for sp in 0 1 2 3; do
             ./obj_vm/vm +speed=$sp | tee vm_$sp.log
@@ -367,7 +367,7 @@ jobs:
         run: |
           H=fpga/core/chipset/HDL
           verilator --binary --timing -Wno-fatal --top-module tb_ce_rates \
-            -Isim -I$H sim/tb_ce_rates.sv $H/XT_CE_Generator.sv \
+            -Isim -I$H sim/tb_ce_rates.sv $H/ce_generator.sv \
             -o ce --Mdir obj_ce
           ./obj_ce/ce | tee ce.log
           grep -q "PASS tb_ce_rates" ce.log
@@ -384,17 +384,17 @@ jobs:
             DEF="+define+MACHINE_PC98+SDRAM_USE_MP"
             [ "$variant" = repro ] && DEF="+define+MACHINE_PC98+SDRAM_USE_MP+REPRO_OLD_SHADOW"
             verilator --binary --timing -Wno-fatal --top-module tb_postmon_peek $DEF \
-              -Isim -I$S -I$H -I$H/KFSDRAM/HDL -I$H/KF8237/HDL -I$H/KF8288/HDL \
+              -Isim -I$S -I$H -I$H/sdram_single/HDL -I$H/upd71071/HDL -I$H/i8288/HDL \
               sim/tb_postmon_peek.sv sim/sdram_model.sv sim/sdram_board_model.sv \
               $S/sdram_selftest_master.sv \
-              $H/RAM.sv $H/Bus_Arbiter.sv $H/KFSDRAM/HDL/KFSDRAM.sv \
-              $S/sdram_kf_shim.sv $S/sdram_mp.sv \
-              $H/KF8288/HDL/KF8288.sv \
-              $H/KF8237/HDL/KF8237.sv \
-              $H/KF8237/HDL/KF8237_Address_And_Count_Registers.sv \
-              $H/KF8237/HDL/KF8237_Bus_Control_Logic.sv \
-              $H/KF8237/HDL/KF8237_Priority_Encoder.sv \
-              $H/KF8237/HDL/KF8237_Timing_And_Control.sv \
+              $H/RAM.sv $H/Bus_Arbiter.sv $H/sdram_single/HDL/sdram_single.sv \
+              $S/sdram_shim.sv $S/sdram_mp.sv \
+              $H/i8288/HDL/i8288.sv \
+              $H/upd71071/HDL/upd71071.sv \
+              $H/upd71071/HDL/upd71071_Address_And_Count_Registers.sv \
+              $H/upd71071/HDL/upd71071_Bus_Control_Logic.sv \
+              $H/upd71071/HDL/upd71071_Priority_Encoder.sv \
+              $H/upd71071/HDL/upd71071_Timing_And_Control.sv \
               -o q --Mdir obj_pk_$variant
             (cd sim && ../obj_pk_$variant/q | tee ../pk_$variant.log)
             grep -q "RESULT: PASS" pk_$variant.log
@@ -406,10 +406,10 @@ jobs:
           for mode in ref mp; do
             DEF=""; [ "$mode" = "mp" ] && DEF="+define+SDRAM_USE_MP"
             verilator --binary --timing -Wno-fatal --top-module tb_ram_ab_ph $DEF \
-              -Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/KFSDRAM/HDL \
+              -Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/sdram_single/HDL \
               sim/tb_ram_ab_ph.sv sim/sdram_model.sv sim/sdram_board_model.sv \
-              $S/chipset/HDL/RAM.sv $S/chipset/HDL/KFSDRAM/HDL/KFSDRAM.sv \
-              $S/sdram_kf_shim.sv $S/sdram_mp.sv \
+              $S/chipset/HDL/RAM.sv $S/chipset/HDL/sdram_single/HDL/sdram_single.sv \
+              $S/sdram_shim.sv $S/sdram_mp.sv \
               -o p --Mdir obj_ph_$mode
             ./obj_ph_$mode/p | tee ram_ph_$mode.log
             grep -q "RESULT: PASS" ram_ph_$mode.log

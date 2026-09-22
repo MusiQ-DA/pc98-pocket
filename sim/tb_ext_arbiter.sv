@@ -177,7 +177,7 @@ module tb_ext_arbiter;
 `ifdef SDRAM_USE_MP
         $display("=== ext access through BUS_ARBITER, sdram_mp ===");
 `else
-        $display("=== ext access through BUS_ARBITER, KFSDRAM reference ===");
+        $display("=== ext access through BUS_ARBITER, sdram_single reference ===");
 `endif
         repeat (8) @(posedge clock);
         reset = 0;

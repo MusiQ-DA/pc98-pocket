@@ -84,7 +84,7 @@ module tb_pic_irq0_edge;
     wire  [7:0]  pit_dout;
     wire         out0, out1, out2;
 
-    KF8253 u_pit (
+    i8253 u_pit (
         .clock            (clk),
         .reset            (reset),
         .chip_select_n    (pit_cs_n),
@@ -124,7 +124,7 @@ module tb_pic_irq0_edge;
 
     logic        kbd_irq  = 1'b0;          // IRQ1, the 8251's line
 
-    KF8259 u_pic (
+    i8259 u_pic (
         .clock            (clk),
         .reset            (reset),
         .chip_select_n    (pic_cs_n),
@@ -227,7 +227,7 @@ module tb_pic_irq0_edge;
         // ================================================================
         // A. A pin latched high requests once, and the np2 clear sticks.
         //
-        // Counter 0 powers up in mode 3 idle (KF8253.sv RESET_MODE 3), so
+        // Counter 0 powers up in mode 3 idle (i8253.sv RESET_MODE 3), so
         // OUT is high and has never fallen: nothing is armed and IRR0 must
         // be clear.  The ITF's F854E control word takes it to mode 0 and
         // drops OUT; its terminal count is the machine's first real IRQ0

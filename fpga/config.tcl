@@ -131,21 +131,21 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # section's disk in it, because media_present has no reset in floppy.v.)
 set_global_assignment -name VERILOG_MACRO "PC98_FDC_REAL=1"
 
-# Route SDRAM through sdram_mp (via sdram_kf_shim) instead of KFSDRAM.
+# Route SDRAM through sdram_mp (via sdram_shim) instead of sdram_single.
 # RAM.sv tests this with `ifdef, so setting it to 0 would still select the shim
 # -- COMMENT THE LINE OUT to fall back to the stock controller for a hardware A/B.
 #
 # Bisection status (2026-09-07):
 #   testB2 (sdram_mp)              FAIL  -- splash then black
-#   testB3 (pure KFSDRAM)          PASS  -- tree + KFSDRAM path healthy
-#   testB4 (shim glue + KFSDRAM)   PASS  -- glue exonerated; failure inside sdram_mp
+#   testB3 (pure sdram_single)          PASS  -- tree + sdram_single path healthy
+#   testB4 (shim glue + sdram_single)   PASS  -- glue exonerated; failure inside sdram_mp
 #   testB5 (sdram_mp, width-cast timer constants + 233 us wait)  FAIL
 #   testB6 (sdram_mp, negedge DQ capture)                        FAIL -- a
 #          regression; the antiphase clock puts mid-window on the POSEDGE
 #   testB7/7b (sdram_mp, posedge restored, dram_* finally constrained)
 #
-#   testB7ref (#59, measurement only): pure KFSDRAM against the new SDRAM
-#          constraints. ANSWERED the question it was built for -- KFSDRAM, which
+#   testB7ref (#59, measurement only): pure sdram_single against the new SDRAM
+#          constraints. ANSWERED the question it was built for -- sdram_single, which
 #          boots this board, reports the SAME read-path violation as sdram_mp
 #          (-2.357 / TNS -17.784 vs -2.408 / TNS -17.914). So the -2.4 ns is a
 #          property of the constraint values, not of sdram_mp, and the read path

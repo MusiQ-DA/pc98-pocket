@@ -69,7 +69,7 @@ module sdram_board_model #(
     // Generated explicitly rather than as `assign #(PHASE_NS) dev_clk = clk`:
     // a net delay is inertial, and with a delay near the half period it eats
     // the very edges being modelled. That version logged 3584 tRP violations
-    // for the KFSDRAM reference at EVERY phase, including the 11.64 ns it was
+    // for the sdram_single reference at EVERY phase, including the 11.64 ns it was
     // replacing -- a modelling artefact that would have read as a finding.
     //
     // Note this gives the bench a real floor: commands reach the part T_CO_NS

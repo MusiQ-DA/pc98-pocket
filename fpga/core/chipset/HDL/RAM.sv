@@ -227,7 +227,7 @@ module RAM (
 
     // A word access is two words only where the far end can burst; config.tcl
     // defines PC98_WORD_MEM alongside SDRAM_USE_MP and nowhere else, and the
-    // shim's KF_REF far end cannot count read beats. Undefined, this file is
+    // shim's REF far end cannot count read beats. Undefined, this file is
     // byte-at-a-time exactly as before and word_access is dead.
 `ifdef PC98_WORD_MEM
     wire            word_now = word_access;
@@ -244,10 +244,10 @@ module RAM (
     logic           refresh_mode;
 
 `ifdef SDRAM_USE_MP
-    // sdram_kf_shim presents KFSDRAM's port list on top of sdram_mp, so the
+    // sdram_shim presents sdram_single's port list on top of sdram_mp, so the
     // unmodified PCXT can be booted through the new controller as an A/B check
     // before the PC-98 machine layer depends on it. See docs/P0_SDRAM_DESIGN.md.
-    sdram_kf_shim u_KFSDRAM (
+    sdram_shim u_sdram_single (
         .sdram_clock        (clock),
         .sdram_reset        (reset),
         .address            (access_address),
@@ -289,7 +289,7 @@ module RAM (
         .c_done             (cg_rd_done)
     );
 `else
-    KFSDRAM u_KFSDRAM (
+    sdram_single u_sdram_single (
         .sdram_clock        (clock),
         .sdram_reset        (reset),
         .address            (access_address),
@@ -314,7 +314,7 @@ module RAM (
         .sdram_dq_out       (sdram_dq_out),
         .sdram_dq_io        (sdram_dq_io)
     );
-    // Stock KFSDRAM has neither a second master nor a burst on this port.
+    // Stock sdram_single has neither a second master nor a burst on this port.
     assign access_data_out_hi = 16'h0000;
     assign font_rd_ack   = 1'b0;
     assign font_rd_valid = 1'b0;

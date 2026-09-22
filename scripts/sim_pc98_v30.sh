@@ -90,21 +90,21 @@ BUILD_AND_RUN="
   verilator --binary --timing -Wno-fatal -j 0 +define+V30_BACKDOOR \
     --threads $SIM_THREADS -MAKEFLAGS OPT_FAST=$SIM_OPT \
     --top-module tb_pc98_v30 \
-    -I/work/sim -I/work/$S -I/work/$V -I/work/$K -I/work/$K/KF8288/HDL \
-    -I/work/$K/KF8253/HDL -I/work/$K/KF8259/HDL \
+    -I/work/sim -I/work/$S -I/work/$V -I/work/$K -I/work/$K/i8288/HDL \
+    -I/work/$K/i8253/HDL -I/work/$K/i8259/HDL \
     /work/$V/v30u_ss_pkg.sv \
     /work/sim/tb_pc98_v30.sv \
     /work/$V/v30_core.sv /work/$V/v30u_biu.sv /work/$V/v30u_eu.sv \
     /work/$V/v30u_ucrom.sv \
     /work/$S/pc98_tvram.sv /work/$S/pc98_fdc_glue.sv /work/$S/pc98_upd4990.sv \
     /work/$S/common/floppy.v /work/$S/common/simple_fifo.v \
-    /work/$K/XT_CE_Generator.sv /work/$K/KF8288/HDL/KF8288.sv \
-    /work/$K/KF8253/HDL/KF8253.sv /work/$K/KF8253/HDL/KF8253_Counter.sv \
-    /work/$K/KF8253/HDL/KF8253_Control_Logic.sv \
-    /work/$K/KF8259/HDL/KF8259.sv /work/$K/KF8259/HDL/KF8259_Bus_Control_Logic.sv \
-    /work/$K/KF8259/HDL/KF8259_Control_Logic.sv /work/$K/KF8259/HDL/KF8259_In_Service.sv \
-    /work/$K/KF8259/HDL/KF8259_Interrupt_Request.sv \
-    /work/$K/KF8259/HDL/KF8259_Priority_Resolver.sv \
+    /work/$K/ce_generator.sv /work/$K/i8288/HDL/i8288.sv \
+    /work/$K/i8253/HDL/i8253.sv /work/$K/i8253/HDL/i8253_Counter.sv \
+    /work/$K/i8253/HDL/i8253_Control_Logic.sv \
+    /work/$K/i8259/HDL/i8259.sv /work/$K/i8259/HDL/i8259_Bus_Control_Logic.sv \
+    /work/$K/i8259/HDL/i8259_Control_Logic.sv /work/$K/i8259/HDL/i8259_In_Service.sv \
+    /work/$K/i8259/HDL/i8259_Interrupt_Request.sv \
+    /work/$K/i8259/HDL/i8259_Priority_Resolver.sv \
     -o v30boot --Mdir /tmp/obj_v30
   /tmp/obj_v30/v30boot \$SIMARGS
 "

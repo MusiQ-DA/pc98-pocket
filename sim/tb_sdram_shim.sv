@@ -1,5 +1,5 @@
 //
-// tb_sdram_shim — drives sdram_kf_shim the way RAM.sv drives KFSDRAM.
+// tb_sdram_shim — drives sdram_shim the way RAM.sv drives sdram_single.
 //
 // RAM.sv holds write_request/read_request high and edges its state machine on
 // the flag rising and falling, one word per access. This checks that the shim
@@ -28,7 +28,7 @@ module tb_sdram_shim;
     wire s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io;
     wire [DW-1:0] s_dq_out, s_dq_in;
 
-    sdram_kf_shim #(.INIT_NOP(64), .REFRESH_INT(320), .CAS_LATENCY(2)) dut (
+    sdram_shim #(.INIT_NOP(64), .REFRESH_INT(320), .CAS_LATENCY(2)) dut (
         .sdram_clock(clk), .sdram_reset(rst),
         .address(address), .access_num(access_num),
         .data_in(data_in), .data_out(data_out),

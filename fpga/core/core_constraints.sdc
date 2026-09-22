@@ -6,7 +6,7 @@
 #
 #   pll (system):   [0] clk_chipset 42.95   [1] clk_core 85.9 (CPU)  [2] clk_sdram_ph 42.95@180
 #                   [3] clk_28_636 (CGA)    [4] clk_pix_cga 14.318   [5] clk_pix_cga_90
-#   mf_audio_pll:   [0] audio_mclk 12.288   [1] audio_sclk 3.072
+#   audio_pll:   [0] audio_mclk 12.288   [1] audio_sclk 3.072
 #   APF / bridge:   clk_74a, clk_74b, bridge_spiclk
 #
 # One VCO feeds the CPU, chipset and CGA video, so they are mutually synchronous and
@@ -86,7 +86,7 @@ set_multicycle_path -hold -end 5 \
 # NOT ported: that core's `set_multicycle_path -from <chip clk> -setup -end 2`.
 # It is correct for ITS controller and WRONG for ours. dram_clk here is
 # clk_chipset inverted, so the part launches read data on our falling edge and
-# sdram_mp/KFSDRAM both capture it on the very NEXT rising edge -- a genuine
+# sdram_mp/sdram_single both capture it on the very NEXT rising edge -- a genuine
 # single-cycle transfer with a half-period (11.64 ns) window. Crediting two
 # periods would hide a real violation, which is the trap this file exists to
 # avoid. If these paths fail, fix the pipelining, do not relax the check.
@@ -111,7 +111,7 @@ set dram_chip_clk "ic|pll|altera_pll_i|general[2].gpll~PLL_OUTPUT_COUNTER|divclk
 #
 # ★ 2026-09-07, CALIBRATED AGAINST THE BOOTING REFERENCE. The sibling core's
 # 5.9 ns was tried first and is too pessimistic here. Proof: run#59 built pure
-# KFSDRAM -- which boots this board -- against these constraints and it missed
+# sdram_single -- which boots this board -- against these constraints and it missed
 # the 5.9 ns read path by 2.357 ns, essentially the same as sdram_mp's 2.408.
 # A constraint that the known-good configuration cannot meet is not measuring
 # the interface, it is just miscalibrated, and an unreachable goal also makes
@@ -127,7 +127,7 @@ set dram_chip_clk "ic|pll|altera_pll_i|general[2].gpll~PLL_OUTPUT_COUNTER|divclk
 # worse. Do not re-apply the number without understanding that first.
 #
 # Back to 5.9 -- the value the hardware build that finally produced a POST beep
-# (testB7b / run#58) was built with, and the value the KFSDRAM reference was
+# (testB7b / run#58) was built with, and the value the sdram_single reference was
 # measured against, so the two stay comparable.
 set_input_delay -clock $dram_chip_clk -reference_pin [get_ports {dram_clk}] \
     -max 5.9 [get_ports {dram_dq[*]}]
@@ -158,11 +158,11 @@ set_output_delay -clock $dram_chip_clk -reference_pin [get_ports {dram_clk}] \
 #
 # The honest pacing:
 #
-#  * The KF8253's counters decrement on count_edge -- a detected edge of the
+#  * The i8253's counters decrement on count_edge -- a detected edge of the
 #    2.4576 MHz timer_clock, which the phase accumulator in PERIPHERALS
 #    toggles at 4.9152 MHz. 42.954545/4.9152 = 8.74, so consecutive
 #    count_edges land 8 or 9 clk_chipset cycles apart, and BOTH count and
-#    counter_out only change on those edges (KF8253_Counter.sv: "Update
+#    counter_out only change on those edges (i8253_Counter.sv: "Update
 #    Count" and "Output" blocks are both count_edge-gated). count ->
 #    counter_out therefore has eight cycles, not one.
 #
@@ -176,9 +176,9 @@ set_output_delay -clock $dram_chip_clk -reference_pin [get_ports {dram_clk}] \
 # on its own. And paths that LEAVE these blocks stay single-cycle: the
 # bridge, the glue, the PICs clock for real every edge.
 
-set pit_counters [get_keepers -nocase {*KF8253_Counter*}]
-set pit_counts   [get_keepers -nocase {*KF8253_Counter*|count[*]}]
-set pit_outs     [get_keepers -nocase {*KF8253_Counter*|counter_out}]
+set pit_counters [get_keepers -nocase {*i8253_Counter*}]
+set pit_counts   [get_keepers -nocase {*i8253_Counter*|count[*]}]
+set pit_outs     [get_keepers -nocase {*i8253_Counter*|counter_out}]
 if {[llength $pit_counts] > 0 && [llength $pit_outs] > 0} {
     set_multicycle_path -setup -end 8 -from $pit_counts -to $pit_outs
     set_multicycle_path -hold  -end 7 -from $pit_counts -to $pit_outs

@@ -41,9 +41,9 @@ cp /tmp/pristine/*.sv "$OUT/" 2>/dev/null || true
 if [ "$PRISTINE" = 1 ]; then PR_RAM=1; PR_BRIDGE=1; fi
 [ "$PR_BRIDGE" = 1 ] && BR="$OUT/v30_cpu_bridge.sv" || BR="/work/$S/v30_cpu_bridge.sv"
 if [ "$PR_RAM" = 1 ]; then
-    RAMF="$OUT/RAM.sv $OUT/sdram_kf_shim.sv"
+    RAMF="$OUT/RAM.sv $OUT/sdram_shim.sv"
 else
-    RAMF="/work/$K/RAM.sv /work/$S/sdram_kf_shim.sv"
+    RAMF="/work/$K/RAM.sv /work/$S/sdram_shim.sv"
 fi
 RTL="$BR $RAMF"
 
@@ -54,15 +54,15 @@ docker run --rm --name "$NAME" -v "$PWD":/work -w "$OUT" \
   set -e
   cd $OUT
   verilator --binary --timing -Wno-fatal --top-module tb_v30_mem $DEF \
-    -O2 -I/work/sim -I/work/$S -I/work/$V -I/work/$K -I/work/$K/KF8288/HDL \
+    -O2 -I/work/sim -I/work/$S -I/work/$V -I/work/$K -I/work/$K/i8288/HDL \
     /work/sim/tb_v30_mem.sv \
     /work/$V/v30u_ss_pkg.sv /work/$V/v30_core.sv /work/$V/v30u_biu.sv \
     /work/$V/v30u_eu.sv /work/$V/v30u_ucrom.sv \
     \$RTL \
     /work/$S/sdram_mp.sv \
     /work/sim/sdram_board_model.sv /work/sim/sdram_model.sv \
-    /work/$K/Ready.sv /work/$K/XT_CE_Generator.sv \
-    /work/$K/KF8288/HDL/KF8288.sv \
+    /work/$K/Ready.sv /work/$K/ce_generator.sv \
+    /work/$K/i8288/HDL/i8288.sv \
     -o v30mem --Mdir $OUT/obj
   $OUT/obj/v30mem \$SIMARGS
 " 

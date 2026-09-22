@@ -2,7 +2,7 @@
 // tb_v30_bridge -- the bridge between the nuV30 and the 8288 world, alone.
 //
 // What this bench proves, by running a real V30 program through the real
-// KF8288 and the real READY module:
+// i8288 and the real READY module:
 //
 //   * a word write at an even address lands as TWO byte cycles, even
 //     address first, with the low lane's data on the even byte and the high
@@ -13,7 +13,7 @@
 //   * the V30's own odd-address word split (two byte cycles the CPU issues
 //     itself) passes through unharmed;
 //   * INTA runs the two-pulse sequence through the 8288 into a real
-//     KF8259, the vector reaches the core, and the handler runs;
+//     i8259, the vector reaches the core, and the handler runs;
 //   * HLT runs through without the bridge parking on it, and the wake
 //     continues after the HLT byte;
 //   * with +slow=N the "memory" takes N extra chipset clocks per access:
@@ -44,7 +44,7 @@ module tb_v30_bridge;
     wire  [1:0] ram_rd_wait, ram_wr_wait;
     logic biu_done;
 
-    XT_CE_Generator u_ce (
+    ce_generator u_ce (
         .clock                              (clk),
         .reset                              (reset),
         .clk_select_load                    (biu_done),
@@ -132,7 +132,7 @@ module tb_v30_bridge;
     wire io_rd_n,  io_wr_n,  adv_io_wr_n;
     wire inta_n, ale, en_io, en_mem, dt_r_n, den, mce, pden;
 
-    KF8288 u_8288 (
+    i8288 u_8288 (
         .clock                           (clk),
         .cpu_ce_posedge                  (cpu_ce_posedge),
         .cpu_ce_negedge                  (cpu_ce_negedge),
@@ -214,7 +214,7 @@ module tb_v30_bridge;
     wire pic_iocs = (~io_rd_n | ~io_wr_n) & (~cpu_address[0])
                     & (cpu_address[7:3] == 5'b00000) & ~cpu_address[9]
                     & ~cpu_address[8];
-    KF8259 u_pic (
+    i8259 u_pic (
         .clock            (clk),
         .reset            (reset),
         .chip_select_n    (~pic_iocs),

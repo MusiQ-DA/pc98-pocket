@@ -78,7 +78,7 @@ module tb_pic_cascade;
     logic        s_ir2 = 1'b0;
     logic        s_ir3 = 1'b0;
 
-    KF8259 u_master (
+    i8259 u_master (
         .clock            (clk),
         .reset            (reset),
         .chip_select_n    (m_cs_n),
@@ -108,7 +108,7 @@ module tb_pic_cascade;
     wire  [7:0]  s_dout;
     wire         s_dio;
 
-    KF8259 u_slave (
+    i8259 u_slave (
         .clock            (clk),
         .reset            (reset),
         .chip_select_n    (s_cs_n),

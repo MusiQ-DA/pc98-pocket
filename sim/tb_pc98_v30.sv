@@ -49,7 +49,7 @@ module tb_pc98_v30;
     wire [7:0] ccc_div, ccc_dec;
     wire [1:0] ram_rd_wait, ram_wr_wait;
 
-    XT_CE_Generator u_ce (
+    ce_generator u_ce (
         .clock                              (clk_chipset),
         .reset                              (reset),
         // A bus-cycle boundary, which is what the 8088's biu_done used to
@@ -143,7 +143,7 @@ module tb_pc98_v30;
     wire io_rd_n,  io_wr_n,  adv_io_wr_n;
     wire inta_n, ale, en_io, en_mem, dt_r_n, den, mce, pden;
 
-    KF8288 u_8288 (
+    i8288 u_8288 (
         .clock                           (clk_chipset),
         .cpu_ce_posedge                  (cpu_ce_posedge),
         .cpu_ce_negedge                  (cpu_ce_negedge),
@@ -938,7 +938,7 @@ module tb_pc98_v30;
     // The PC-98 interval-timer input: 2.4576 MHz, the machine's PIT clock
     // (np2's clk_base for this model).  42.954545 MHz is not an integer
     // multiple, so phase-accumulate and toggle on carry; the falling edges
-    // the KF8253 counts land at exactly 2.4576 MHz on average.  The old
+    // the i8253 counts land at exactly 2.4576 MHz on average.  The old
     // timer_clock (peripheral_ce toggling) was the XT's 1.193181 MHz and ran
     // every programmed rate at half speed.
     logic timer_clock = 1'b0;
@@ -986,7 +986,7 @@ module tb_pc98_v30;
     wire       pit_we_n_eff = pit_seed_active ? pit_seed_we_n : io_wr_n;
     wire       pit_cs_n_eff = pit_seed_active ? pit_seed_cs_n : ~pit_iocycle;
 
-    KF8253 u_pit (
+    i8253 u_pit (
         .clock            (clk_chipset),
         .reset            (reset),
         .chip_select_n    (pit_cs_n_eff),
@@ -1060,7 +1060,7 @@ module tb_pc98_v30;
             pit_seed_cs_n  = 1'b0;
             pit_seed_we_n  = 1'b0;
             repeat (4) @(negedge clk_chipset);
-            pit_seed_we_n  = 1'b1;      // the KF8253 latches on WE rising
+            pit_seed_we_n  = 1'b1;      // the i8253 latches on WE rising
             @(negedge clk_chipset);
             pit_seed_cs_n  = 1'b1;
             repeat (8) @(negedge clk_chipset);
@@ -1164,7 +1164,7 @@ module tb_pc98_v30;
     wire       pic1_data_bus_io, pic2_data_bus_io;
     wire [2:0] pic1_cascade_out;
 
-    KF8259 u_pic1 (
+    i8259 u_pic1 (
         .clock            (clk_chipset),
         .reset            (reset),
         .chip_select_n    (~pic1_iocycle),
@@ -1190,7 +1190,7 @@ module tb_pc98_v30;
         .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, kbd_rx_full, timer_out0})
     );
 
-    KF8259 u_pic2 (
+    i8259 u_pic2 (
         .clock            (clk_chipset),
         .reset            (reset),
         .chip_select_n    (~pic2_iocycle),
@@ -1675,7 +1675,7 @@ module tb_pc98_v30;
     // the ITF programs counter 0 with 0x30 (mode 0) for its counter and
     // INT-08 tests, and only the FD80 POST's FDE20 -- which the golden-state
     // strap skips -- ever writes mode 3.  The mode-3 counter logic itself was
-    // never broken; sim/tb_kf8253_mode3.sv proves it by direct measurement.
+    // never broken; sim/tb_i8253_mode3.sv proves it by direct measurement.
     int timer_edges = 0;
     logic timer_out0_d = 1'b0;
     always_ff @(posedge clk_chipset) begin
@@ -2574,9 +2574,9 @@ module tb_pc98_v30;
 
         $display("--- done ---");
         $display("PIT gate2     %0d  (counters now %04X %04X %04X)", gate2,
-                 u_pit.u_KF8253_Counter_0.count[15:0],
-                 u_pit.u_KF8253_Counter_1.count[15:0],
-                 u_pit.u_KF8253_Counter_2.count[15:0]);
+                 u_pit.u_i8253_Counter_0.count[15:0],
+                 u_pit.u_i8253_Counter_1.count[15:0],
+                 u_pit.u_i8253_Counter_2.count[15:0]);
         $display("INTA count    %0d", inta_count);
         $display("CRT edges seen %0d, INT rises %0d", crt_edges, int_rises);
         $display("PIC1 irr=%02X isr=%02X imr=%02X int=%b | PIC2 irr=%02X imr=%02X",

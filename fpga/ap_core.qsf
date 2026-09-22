@@ -790,7 +790,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/audio_mix.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/dc_blocker.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/iir_filter.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/iir_filter_tap.sv
-set_global_assignment -name VERILOG_FILE core/mf_audio_pll.v
+set_global_assignment -name VERILOG_FILE core/audio_pll.v
 
 # Disk-service softcore: a PicoRV32 CPU with a firmware ROM. Runs the
 # service loop that pulls floppy sectors from an APF dataslot into floppy.v.
@@ -830,7 +830,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_eu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_ucrom.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/v30_cpu_bridge.sv
 set_global_assignment -name SEARCH_PATH core/v30
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KFSDRAM/HDL/KFSDRAM.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/sdram_single/HDL/sdram_single.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_mp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_selftest_master.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/post_monitor.sv
@@ -846,31 +846,27 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_font_fetch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pulse_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_cgwindow.sv
 set_global_assignment -name VERILOG_FILE core/pll_video_pc98.v
-set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_kf_shim.sv
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KFPS2KB/HDL/KFPS2KB_Byte_Accept.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KFPS2KB/HDL/KFPS2KB.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8288/HDL/KF8288.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8259/HDL/KF8259_Priority_Resolver.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8259/HDL/KF8259_Interrupt_Request.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8259/HDL/KF8259_In_Service.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8259/HDL/KF8259_Control_Logic.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8259/HDL/KF8259_Bus_Control_Logic.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8259/HDL/KF8259.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8253/HDL/KF8253_Counter.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8253/HDL/KF8253_Control_Logic.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8253/HDL/KF8253.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8237/HDL/KF8237_Timing_And_Control.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8237/HDL/KF8237_Priority_Encoder.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8237/HDL/KF8237_Bus_Control_Logic.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8237/HDL/KF8237_Address_And_Count_Registers.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KF8237/HDL/KF8237.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/XT_CE_Generator.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_shim.sv
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/ps2_keyboard/HDL/ps2_keyboard_Byte_Accept.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/ps2_keyboard/HDL/ps2_keyboard.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/i8288/HDL/i8288.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/i8259/HDL/i8259_Priority_Resolver.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/i8259/HDL/i8259_Interrupt_Request.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/i8259/HDL/i8259_In_Service.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/i8259/HDL/i8259_Control_Logic.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/i8259/HDL/i8259_Bus_Control_Logic.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/i8259/HDL/i8259.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/i8253/HDL/i8253_Counter.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/i8253/HDL/i8253_Control_Logic.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/i8253/HDL/i8253.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/upd71071/HDL/upd71071_Timing_And_Control.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/upd71071/HDL/upd71071_Priority_Encoder.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/upd71071/HDL/upd71071_Bus_Control_Logic.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/upd71071/HDL/upd71071_Address_And_Count_Registers.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/upd71071/HDL/upd71071.sv"
+set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/ce_generator.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/Ready.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/RAM.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KFMMC/HDL/LDST_SEQUENCER.v"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KFMMC/HDL/KFMMC_SPI.sv"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KFMMC/HDL/KFMMC_SPI2IDE_ROM.v"
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/KFMMC/HDL/KFMMC_DRIVE_SPI2IDE.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/Peripherals.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/pc98_fdc.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/Chipset.sv"
@@ -898,9 +894,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/Bus_Arbiter.sv"
 # the actual disease here, not any single build's number.
 #
 # This works for BOTH arms of the hardware A/B, which matters because the
-# KFSDRAM reference has to stay valid: packing requires the flop to be fed only
+# sdram_single reference has to stay valid: packing requires the flop to be fed only
 # by the pin, and both `p_rdata <= sdram_dq_in` (sdram_mp) and
-# `data_out <= sdram_dq_in` (KFSDRAM) qualify.
+# `data_out <= sdram_dq_in` (sdram_single) qualify.
 set_instance_assignment -name FAST_INPUT_REGISTER ON -to dram_dq[*]
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_dq[*]
 set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to dram_dq[*]

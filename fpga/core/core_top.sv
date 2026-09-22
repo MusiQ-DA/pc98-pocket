@@ -285,7 +285,7 @@ module core_top (
     always @(posedge clk_28_636)
         ce_14_318 <= ~ce_14_318;
 
-    // CPU clock: XT_CE_Generator derives the 8088 pin clock and its CE strobes;
+    // CPU clock: ce_generator derives the 8088 pin clock and its CE strobes;
     // clk_select sets the speed and is reloaded each bus cycle (biu_done).
     logic  biu_done;
     logic  [7:0] clock_cycle_counter_division_ratio;
@@ -308,7 +308,7 @@ module core_top (
             clk_select <= clk_select_next;
     end
 
-    XT_CE_Generator u_XT_CE_Generator
+    ce_generator u_ce_generator
     (
         .clock                              (clk_chipset),
         .reset                              (reset),
@@ -1364,7 +1364,7 @@ module core_top (
     // PC-98 keyboard: the Set-2 stream above is a PC/XT keyboard's language;
     // a PC-98 keyboard is a serial device on the 8251 at ports 0x41/0x43 that
     // sends one matrix byte per key, bit 7 set on release. pc98_kbd_ps2 taps
-    // the SAME stream -- it never stalls it, KFPS2KB's kb_ready keeps the
+    // the SAME stream -- it never stalls it, ps2_keyboard's kb_ready keeps the
     // pace -- and re-emits each key as a PC-98 event.
     //
     // INTEGRATION CONTRACT (whoever wires the 8251 model, see PC98_KBD_8251
@@ -1374,7 +1374,7 @@ module core_top (
     // simulation +keys channel is bench-side only (tb_pc98_v30.sv drives its
     // own model), so the two sources never meet in RTL.
     //
-    // KFPS2KB's keybord_interrupt is OFF the master PIC's IRQ1 in the PC-98
+    // ps2_keyboard's keybord_interrupt is OFF the master PIC's IRQ1 in the PC-98
     // build -- IRQ1 now comes from the 8251's RxRDY line (see Peripherals.sv).
     //
     wire       pc98_key_stb;
@@ -1556,7 +1556,7 @@ module core_top (
     // there is no backpressure to the APF bridge and these 256 entries are the
     // only elasticity in the path. How fast this drains depends on how long
     // RAM.sv takes per byte, which depends on the SDRAM controller: the shim
-    // answers in ten cycles where KFSDRAM answers in five, so a change of
+    // answers in ten cycles where sdram_single answers in five, so a change of
     // controller changes whether the assumption holds.
     //
     // That matters because run#106 showed the BIOS image arriving incomplete:

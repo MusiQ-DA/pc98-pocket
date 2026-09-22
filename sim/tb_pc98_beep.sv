@@ -7,7 +7,7 @@
 // reached. This bench rebuilds the wiring under test exactly as
 // Peripherals.sv has it under MACHINE_PC98:
 //
-//   - the KF8253 chip model, selected by the PC-98 decode (0x71/73/75/77)
+//   - the i8253 chip model, selected by the PC-98 decode (0x71/73/75/77)
 //   - the system-port C latch (0x35 whole-byte, 0x37 bit set/reset; np2
 //     io/sysport.c semantics -- mode words ignored, reset value 0xF9)
 //   - the beeper: counter 1's mode-3 square, muted by latch bit 3
@@ -132,7 +132,7 @@ module tb_pc98_beep;
     wire spkdata     = ~pc98_sysport_c[3];     // 1 = muted; F9 at reset
     wire speaker_out = spktone & spkdata;
 
-    KF8253 u_pit (
+    i8253 u_pit (
         .clock            (clk),
         .reset            (reset),
         .chip_select_n    (timer_chip_select_n),

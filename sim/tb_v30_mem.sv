@@ -7,11 +7,11 @@
 //     but its own header says what it is standing on -- "one flat megabyte of
 //     memory with the two ROM images in it. No chipset, no peripherals, no
 //     SDRAM". Zero wait states, byte-wide, answers instantly.
-//   * tb_v30_bridge proves the bridge against the real KF8288, the real READY
+//   * tb_v30_bridge proves the bridge against the real i8288, the real READY
 //     and a real 8259, but its memory is again a flat array.
 //
-// So the path the hardware actually runs -- v30_cpu_bridge -> KF8288 ->
-// READY -> RAM.sv -> sdram_kf_shim -> sdram_mp -> the part, with the board's
+// So the path the hardware actually runs -- v30_cpu_bridge -> i8288 ->
+// READY -> RAM.sv -> sdram_shim -> sdram_mp -> the part, with the board's
 // half-period clock skew -- has never been simulated with a V30 on the front
 // of it. The machine's symptom lives exactly there: the ITF reaches its memory
 // test, reports 000KB, and restarts, while every bench is green.
@@ -77,7 +77,7 @@ module tb_v30_mem;
     // the CPU sat still and the bench reported "program never reported".
     wire  biu_done;
 
-    XT_CE_Generator u_ce (
+    ce_generator u_ce (
         .clock                              (clk),
         .reset                              (reset),
         .clk_select_load                    (biu_done),
@@ -170,7 +170,7 @@ module tb_v30_mem;
     wire io_rd_n,  io_wr_n,  adv_io_wr_n;
     wire inta_n, ale, en_io, en_mem, dt_r_n, den, mce, pden;
 
-    KF8288 u_8288 (
+    i8288 u_8288 (
         .clock                           (clk),
         .cpu_ce_posedge                  (cpu_ce_posedge),
         .cpu_ce_negedge                  (cpu_ce_negedge),
@@ -413,8 +413,8 @@ module tb_v30_mem;
     always_ff @(posedge clk) begin
         if (ram_at >= 0 && ram_run != 0)
             $display("cyc=%0d %0t  cmd=%s rvalid=%b rdata=%04x dq_in=%04x dout=%02x",
-                     cyc, $time, cmd_name(), u_ram.u_KFSDRAM.p_rvalid,
-                     u_ram.u_KFSDRAM.p_rdata, s_dq_in, ram_dout);
+                     cyc, $time, cmd_name(), u_ram.u_sdram_single.p_rvalid,
+                     u_ram.u_sdram_single.p_rdata, s_dq_in, ram_dout);
     end
 
     // How many cycles actually ran as ONE word. Without this the word path
