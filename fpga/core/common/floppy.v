@@ -819,7 +819,12 @@ reg [79:0] reply;
 always @(posedge clk) begin
 	if(~rst_n | sw_reset)                                                     reply <= 80'd0;
 	else if(cmd_invalid_start)                                                reply <= { reply[79:8], 8'h80 };
-	else if(delay_last_cycle && cmd_recalibrate_in_progress)                  reply <= { reply[79:8], 8'h20 | { 6'd0, selected_drive } | ((~motor_enable[selected_drive[0]])? 8'h50 : 8'h00) };
+	// np2: recalibrating a drive with no media answers ST0 = SE|IC0|NR (the
+	// "not ready" the BIOS falls through on), not the plain seek-end the old
+	// code returned with the motor already on.
+	else if(delay_last_cycle && cmd_recalibrate_in_progress)                  reply <= { reply[79:8], 8'h20 | { 6'd0, selected_drive } |
+		((NOT_READY_ENDS_COMMAND != 0 && ~media_present[selected_drive[0]]) ? 8'h48 :
+		 (~motor_enable[selected_drive[0]]) ? 8'h50 : 8'h00) };
 	else if(delay_last_cycle)                                                 reply <= { reply[79:8], 8'h20 | { 5'd0, head[selected_drive[0]], selected_drive } }; 
 	// NOT READY, ahead of the read/write error replies for the reason given at
 	// reply_left. Byte order is LSB-first: ST0, ST1, ST2, C, H, R, N.
@@ -852,7 +857,15 @@ always @(posedge clk) begin
 	else if(state == S_CHECK_TC && cmd_format_finish)                         reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	else if(state == S_WAIT_FOR_FORMAT_INPUT && cmd_format_in_input_finish)   reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h40 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	else if(cmd_read_id_finished)                                             reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
-	else if(cmd_get_status_start)                                             reply <= { 72'd0, 1'b0, media_writeprotected[io_writedata[0]], NOT_READY_ENDS_COMMAND ? media_present[io_writedata[0]] : 1'b1, !cylinder[io_writedata[0]], 1'b1, io_writedata[2], 1'b0, io_writedata[0] };
+	// A unit with no media (or no drive at all, US>1) must answer with the FAULT
+	// bit set -- ST3 = 0x80|HD|US, the np2 "drive not equipped" reply. Returning
+	// a merely-not-ready ST3 makes the PC-98 BIOS wait for a ready that can
+	// never come: it re-issues SENSE DRIVE STATUS forever and never reaches the
+	// drive-A IPL read.
+	else if(cmd_get_status_start)                                             reply <= { 72'd0,
+		(NOT_READY_ENDS_COMMAND != 0 && (io_writedata[1] || ~media_present[io_writedata[0]]))
+			? {1'b1, 4'b0000, io_writedata[2], io_writedata[1:0]}
+			: {1'b0, media_writeprotected[io_writedata[0]], NOT_READY_ENDS_COMMAND ? media_present[io_writedata[0]] : 1'b1, !cylinder[io_writedata[0]], 1'b1, io_writedata[2], 1'b0, io_writedata[0]} };
 	else if(cmd_sense_interrupt_status_start && |seek_done)                   reply <= { 64'd0, sense_pcn, sense_st0 };
 	else if(cmd_sense_interrupt_status_start && reset_sensei)                 reply <= { 64'd0, cylinder[selected_drive[0]], 4'hC, 2'b00, reset_sensei_drive };
 	else if(cmd_sense_interrupt_status_start && pending_interrupt)            reply <= { 64'd0, cylinder[selected_drive[0]], status_reg0_temp };
