@@ -1,4 +1,4 @@
-// PCXT Pocket audio PLL (interface-compatible with the OpenGateware audio_mixer).
+// Pocket audio PLL (interface-compatible with the OpenGateware audio_mixer).
 //
 // Derives the audio codec clocks from the Analogue Pocket 74.25 MHz reference (clk_74b):
 //   outclk_0   12.288 MHz   MCLK, 256 x 48 kHz; also clocks the filter chain

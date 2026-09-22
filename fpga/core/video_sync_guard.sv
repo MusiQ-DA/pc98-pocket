@@ -8,8 +8,8 @@
 
 module video_sync_guard (
     input        clk_pix,
-    input        overlay_open,   // an OSD/VKB is up on the CGA path
-    input        hsync_in,       // raw CGA sync/blanking, clk_pix domain
+    input        overlay_open,   // an OSD/VKB is up on the picture
+    input        hsync_in,       // raw machine sync/blanking, clk_pix domain
     input        vsync_in,
     input        hblank_in,
     input        vblank_in,

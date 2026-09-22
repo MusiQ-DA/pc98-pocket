@@ -161,7 +161,7 @@ typedef struct {
 } item_t;
 
 enum { MENU_MAIN, MENU_SYSTEM, MENU_AV, MENU_HW, MENU_CONTROLS, MENU_COUNT };
-enum { ACT_CREDITS, ACT_DEFAULTS, ACT_RESET_PC, ACT_SWITCH_VIDEO };
+enum { ACT_CREDITS, ACT_DEFAULTS, ACT_RESET_PC };
 
 static const item_t items_main[] = {
     { "System", IT_SUBMENU, MENU_SYSTEM },

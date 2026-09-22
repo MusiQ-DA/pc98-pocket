@@ -26,7 +26,8 @@ module sdram_selftest_master #(
     // Cycles to wait for RAM.sv before giving up on an access. A stuck
     // controller must return a wrong answer we can read, never hang the
     // softcore. Also the normal path for addresses RAM.sv does not own --
-    // CGA VRAM at 0xB0000-0xBFFFF never raises ram_rw_complete.
+    // the graphics VRAM window at 0xB0000-0xBFFFF never raises
+    // ram_rw_complete.
     parameter int GUARD = 200
 ) (
     input  wire        clk,              // clk_chipset

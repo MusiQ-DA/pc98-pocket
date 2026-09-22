@@ -247,8 +247,7 @@ module core_top (
 
     wire pll_locked;             // system PLL lock
 
-    wire clk_28_636;             // CGA dot clock
-    wire clk_32_514;             // HGC dot clock (x2)
+    wire clk_28_636;             // 28.6 MHz; its half is the boot hold's 14.3 tick
     logic cpu_ce_posedge;        // CPU clock-enable, rising
     logic cpu_ce_negedge;        // CPU clock-enable, falling
     logic peripheral_ce;         // peripheral clock-enable
@@ -257,21 +256,17 @@ module core_top (
     localparam [27:0] cur_rate = `CHIPSET_HZ;   // chipset clock rate, Hz (3 x 14.31818 MHz)
 
     wire clk_sdram_ph;           // SDRAM pin clock, phase-shifted
-    wire clk_pix_hgc;            // HGC pixel
-    wire clk_pix_hgc_90;         // HGC pixel, 90 deg
-    wire clk_pix;                // selected pixel, video out
-    wire clk_pix_90;             // selected pixel, 90 deg
-    wire pll_video_locked = 1'b1; // CGA on the system PLL; no separate lock
-    wire pll_video_hgc_locked;   // HGC PLL lock
+    wire clk_pix;                // pixel clock, video out
+    wire clk_pix_90;             // pixel clock, 90 deg
 
-    // System PLL: chipset 42.95, core 85.9 (2:1), dram 42.95@180, CGA dot 28.64,
-    // pixel 14.32 (+90) MHz. One VCO, so the CPU stays phase-locked to the CGA beam.
+    // System PLL: chipset 42.95, dram 42.95@180, and the 28.64 MHz clock whose
+    // half drives the boot hold's 14.3 MHz tick.
     //
-    // THE 85.9 AND CGA PIXEL OUTPUTS ARE OPEN since the XT hardware left:
-    // their only consumers were the 8088 core clock and the CGA generator.
-    // The megafunction still generates them -- repinning a generated PLL is
-    // riskier than leaving three wires unrouted -- and the remaining
-    // consumers (the V30's CE generator, clk_28_636) are the same as before.
+    // THE UNUSED OUTPUTS ARE OPEN since the XT hardware left: their only
+    // consumers were the 8088 core clock and the CGA/HGC generators. The
+    // megafunction still generates them -- repinning a generated PLL is
+    // riskier than leaving wires unrouted -- and the remaining consumers
+    // (the V30's CE generator, clk_28_636) are the same as before.
     pll pll
     (
         .refclk   (clk_74a),
@@ -909,7 +904,6 @@ module core_top (
     wire       osd_active;
     wire [15:0] rom_win;          // softcore-settable CPU-read snoop window
     wire       osd_credits_req;
-    wire       osd_video_req;
     wire [8:0] vkb_key;
     wire       vkb_stb;
     wire [2:0] osd_palette;
@@ -920,7 +914,6 @@ module core_top (
     wire [1:0] osd_spk_vol;
     wire [1:0] osd_stereo;
     wire       osd_cms;
-    wire       osd_composite;
     wire       osd_ems;
     wire [1:0] osd_ems_frame;
     wire       osd_a000;
@@ -928,10 +921,6 @@ module core_top (
     wire [1:0] osd_joy2;
     wire       osd_swapjoy;
     wire       osd_syncjoy;
-    wire       osd_video_1st;
-    wire       osd_cga_gfx;
-    wire       osd_hgc_gfx;
-    wire       osd_splash;
     wire [1:0] osd_gamepad;
     wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
 
@@ -1055,7 +1044,6 @@ module core_top (
         .soft_guest_hold            (soft_guest_hold),
         .osd_active                 (osd_active),
         .osd_credits_req            (osd_credits_req),
-        .osd_video_req              (osd_video_req),
         .vkb_key                    (vkb_key),
         .vkb_stb                    (vkb_stb),
         .osd_palette                (osd_palette),
@@ -1066,7 +1054,6 @@ module core_top (
         .osd_spk_vol                (osd_spk_vol),
         .osd_stereo                 (osd_stereo),
         .osd_cms                    (osd_cms),
-        .osd_composite              (osd_composite),
         .osd_ems                    (osd_ems),
         .osd_ems_frame              (osd_ems_frame),
         .osd_a000                   (osd_a000),
@@ -1074,10 +1061,6 @@ module core_top (
         .osd_joy2                   (osd_joy2),
         .osd_swapjoy                (osd_swapjoy),
         .osd_syncjoy                (osd_syncjoy),
-        .osd_video_1st              (osd_video_1st),
-        .osd_cga_gfx                (osd_cga_gfx),
-        .osd_hgc_gfx                (osd_hgc_gfx),
-        .osd_splash                 (osd_splash),
         .osd_gamepad                (osd_gamepad),
         .key_cfg_flat               (key_cfg),
         .st_addr                    (st_addr),
@@ -1274,7 +1257,6 @@ module core_top (
     wire       ems_en_cfg     = osd_ems;
     wire [1:0] ems_frame_cfg  = osd_ems_frame;
     wire       a000_en_cfg    = osd_a000;
-    wire       video_1st_cfg  = osd_video_1st;
     synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
     synch_3              s_osd_open       (|osd_open_delay,    osd_open_req,  clk_chipset);
     synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
@@ -2379,20 +2361,6 @@ module core_top (
     // Only ever set during a loader write: the guest has no font bank to see.
     wire font_bank_load  = ~bios_write_n & font_bank_write;
 
-    // Displayed card = the boot card XOR the Select-button CGA/HGC toggle. The toggle
-    // clears at machine reset, so a fresh POST always shows the 1st Video card.
-    reg  video_swap = 1'b0;
-    wire osd_video_req_chip;
-    synch_3 s_osd_video_req (osd_video_req, osd_video_req_chip, clk_chipset);
-    reg  osd_video_req_d = 1'b0;
-    always @(posedge clk_chipset) begin
-        osd_video_req_d <= osd_video_req_chip;
-        if (reset)
-            video_swap <= 1'b0;
-        else if (osd_video_req_chip & ~osd_video_req_d)
-            video_swap <= ~video_swap;
-    end
-
     wire ems_enabled_sel = `ENABLE_EMS ? ems_en_cfg : 1'b0;
     wire [1:0] ems_address_sel = `ENABLE_EMS ? ems_frame_cfg : 2'b00;
 
@@ -2791,7 +2759,7 @@ module core_top (
     // VIDEO AND OSD
     //
 
-    // CHIPSET's CGA/HGC raster feeds pocket_video, which composites the OSD and drives the
+    // CHIPSET's raster feeds pocket_video, which composites the OSD and drives the
     // APF scaler. r/g/b + syncs leave CHIPSET on the dot clock; clk_pix is its half-rate
     // sibling, so pocket_video samples one pixel per edge.
     wire        HBlank;

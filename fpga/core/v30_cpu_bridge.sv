@@ -7,7 +7,7 @@
 //  undocumented JS alias), so the hardware CPU is the vendored nuV30. That
 //  core has a 16-bit bus and no 8-bit mode, and everything on the other side
 //  of it here -- KF8288, Peripherals, RAM, the DMA controller -- is the
-//  PC/XT's 8-bit world. On a real PC-98 the V30 talks to 16-bit memory and
+//  the 8-bit bus this chipset presents. On a real PC-98 the V30 talks to 16-bit memory and
 //  the byte-lane steering happens in glue; here the glue is this module.
 //
 //  THE V30 SIDE'S CONTRACT (measured on the vendored core, not assumed):

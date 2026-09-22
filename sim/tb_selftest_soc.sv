@@ -122,12 +122,11 @@ module tb_selftest_soc;
         .soft_guest_hold(soft_guest_hold),
         .st_addr(st_addr), .st_wdata(st_wdata), .st_we(st_we), .st_req(st_req),
         .st_done(st_done), .st_rdata(st_rdata),
-        .osd_active(), .osd_credits_req(), .osd_video_req(),
+        .osd_active(), .osd_credits_req(),
         .vkb_key(), .vkb_stb(), .osd_palette(), .osd_cpu_speed(),
         .osd_bios_wr(), .osd_opl2(), .osd_boost(), .osd_spk_vol(), .osd_stereo(),
-        .osd_cms(), .osd_composite(), .osd_ems(), .osd_ems_frame(), .osd_a000(),
+        .osd_cms(), .osd_ems(), .osd_ems_frame(), .osd_a000(),
         .osd_joy1(), .osd_joy2(), .osd_swapjoy(), .osd_syncjoy(),
-        .osd_video_1st(), .osd_cga_gfx(), .osd_hgc_gfx(), .osd_splash(),
         .osd_gamepad(), .key_cfg_flat()
     );
 

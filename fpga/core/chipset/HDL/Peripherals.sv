@@ -865,7 +865,7 @@ module PERIPHERALS #(
         .clear_keycode              (clear_keycode),
         .pause_core                 (pause_core),
         // The card-swap hotkey and its Tandy variant: no second card to
-        // swap to, so the converter's display side is held quiet.
+        // swap to on a PC-98, so the converter's display side is held quiet.
         .swap_video                 (),
         .video_output               (1'b0),
         .tandy_video                (1'b0)
@@ -903,9 +903,8 @@ module PERIPHERALS #(
     // ---------------------------------------------------------- PC-98 video
     //
     // One plane, one mode: 640x400 text on the 21.0526 MHz dot clock, which
-    // core_top routes in as clk_vga_cga. The CGA and HGC generators are still
-    // instanced below -- they are the PC/AT machine layer and go when it does
-    // -- but nothing downstream of here looks at them.
+    // core_top routes in as clk_pc98_dot. The CGA and HGC generators went
+    // with the PC/AT machine layer; nothing here looks at them.
     wire [11:0] tvram_vid_cell_w;   // renderer -> TVRAM, instanced further down
     wire [9:0] pc98_h, pc98_v;
     wire       pc98_hs, pc98_vs, pc98_hb, pc98_vb, pc98_de, pc98_fs;

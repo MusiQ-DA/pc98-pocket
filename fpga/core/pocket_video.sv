@@ -78,10 +78,6 @@ module pocket_video (
     localparam CANVAS_W = 10'd720;
     localparam CANVAS_H = 10'd350;
     localparam CANVAS_VSKIP = 5'd16; // lines from the vsync fall to the window top
-    // No Hercules canvas on this machine, so nothing downstream may ever take
-    // that path: it owns the OSD's line counter, the presented blanking and the
-    // scaler slot.
-    wire hgc_shown_pix = 1'b0;
     reg       src_hb_d = 1'b0;
     reg       src_vs_d = 1'b0;
     reg       v_arm    = 1'b0;   // vsync fell; window opens after the skip
@@ -121,8 +117,8 @@ module pocket_video (
     //
     // Card blanking
     //
-    // The Hercules canvas when that card is shown, the CGA HBlank/VBlank otherwise
-    // (cga.v already normalizes every CGA mode to 640x200).
+    // The machine raster's HBlank/VBlank (the window counters above already
+    // normalize the frame to the presented size).
     // -------------------------------------------------- rebuilt PC-98 blanking
     //
     // Not CHIPSET's HBlank/VBlank. Everything indexed by the counters derived
@@ -167,7 +163,8 @@ module pocket_video (
     wire vid_vb  = pc98_vb;
     // Canvas padding (inside the window, outside the guest raster). The window's first
     // line is sacrificial/black: the scaler captures the first DE line unreliably.
-    wire vid_pad = hgc_shown_pix & (HBlank | VBlank | (v_run == CANVAS_H));
+    // No canvas to pad: the machine raster is the picture, edge to edge.
+    wire vid_pad = 1'b0;
 
     //
     // Credits overlay
@@ -212,7 +209,7 @@ module pocket_video (
     //
     // When the guest video timing leaves spec (a guest can program the CRTC to stall HSYNC
     // or suppress VSYNC), supply a stable frame for an open OSD/VKB to ride on so it stays
-    // framed. `guard_run` engages only on the CGA path with an overlay open.
+    // framed. `guard_run` engages only with an overlay open.
     wire osd_enable;
     synch_3 s_osd_enable_pix (osd_active, osd_enable, clk_pix);
 
@@ -225,7 +222,7 @@ module pocket_video (
     //
     // Left in, it does not merely idle: tb_pc98_osdwin measures it engaged for
     // 1119361 cycles out of 1119360 -- permanently -- because it is calibrated
-    // for CGA's 640x200 and reads a 400-line frame as out of spec. It then
+    // for a 640x200 frame and reads this 400-line one as out of spec. It then
     // substitutes its own 200-line raster, so osd_vcnt reaches 199 instead of
     // 399 while osd_raster_h still reports 400, and the softcore places its
     // panel across lines the presented frame never has. It also forces the
@@ -259,7 +256,7 @@ module pocket_video (
     // OSD framebuffer readout
     //
     // OSD raster counters: osd_hcnt = pixel in the active line; the line index is the
-    // canvas countdown on Hercules, else an hblank-fall counter parked at -1 so the
+    // window countdown, else an hblank-fall counter parked at -1 so the
     // first fall (after VBlank) is line 0.
     reg [9:0] osd_hcnt_g   = 10'd0;
     reg [9:0] osd_vcnt_raw = 10'd0;
@@ -269,13 +266,13 @@ module pocket_video (
         if (sel_vb)                   osd_vcnt_raw <= 10'd1023;
         else if (sel_hb_d1 & ~sel_hb) osd_vcnt_raw <= osd_vcnt_raw + 10'd1;
     end
-    wire [9:0] osd_vcnt_g = hgc_shown_pix ? (CANVAS_H - 10'd1 - v_run) : osd_vcnt_raw;
+    wire [9:0] osd_vcnt_g = osd_vcnt_raw;
 
     // Presented raster size, read by the softcore to place the overlay window;
     // the canvas reports its 349 usable lines, excluding the sacrificial one.
-    // One raster, 640x400. The PC/AT pair below is CGA and the Hercules canvas,
-    // neither of which exists here -- and reporting 200 lines put the softcore's
-    // panel in the top half of a 400-line picture.
+    // One raster, 640x400. The PC/AT pair this module was built around (CGA
+    // and the Hercules canvas) does not exist here -- and reporting 200 lines
+    // put the softcore's panel in the top half of a 400-line picture.
     assign osd_raster_w = 10'd640;
     assign osd_raster_h = 10'd400;
 
@@ -303,9 +300,9 @@ module pocket_video (
     //
     // Scaler output
     //
-    // Scaler slot (video.json): 0 = CGA 640x200, 1 = Hercules canvas; follows only the
-    // displayed card.
-    wire [2:0] vid_slot = hgc_shown_pix ? 3'd1 : 3'd0;
+    // Scaler slot: video.json declares exactly one mode (640x400), so slot 0
+    // is the only word the scaler can be handed.
+    wire [2:0] vid_slot = 3'd0;
 
     // Final pack: DE from the staged presented blanking, the overlay layered over the
     // picture (black behind it under the sync guard), sync staged to match. While DE is low

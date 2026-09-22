@@ -38,7 +38,7 @@ module floppy
 	// Set this to 1 on such a machine and the no-media cases below end in a
 	// result phase with a not-ready status instead of parking CB forever;
 	// leave it 0 and every wire this adds folds to a constant 0 under a
-	// condition that already loses, so the PC/XT build's logic is unchanged.
+	// condition that already loses, so the logic is unchanged.
 	parameter NOT_READY_ENDS_COMMAND = 0
 )
 (

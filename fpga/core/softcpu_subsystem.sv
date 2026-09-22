@@ -218,7 +218,6 @@ module softcpu_subsystem (
     input   [7:0] rom_read_count,
     output        osd_active,
     output        osd_credits_req,
-    output        osd_video_req,
 
     // Virtual-keyboard key event: {make, Set-2 code}, with a strobe that toggles
     // per firmware write so pocket_keyboard pushes exactly one queue entry.
@@ -235,7 +234,6 @@ module softcpu_subsystem (
     output  [1:0] osd_spk_vol,
     output  [1:0] osd_stereo,
     output        osd_cms,
-    output        osd_composite,
     output        osd_ems,
     output  [1:0] osd_ems_frame,
     output        osd_a000,
@@ -244,9 +242,6 @@ module softcpu_subsystem (
     output        osd_swapjoy,
     output        osd_syncjoy,
     output        osd_video_1st,
-    output        osd_cga_gfx,
-    output        osd_hgc_gfx,
-    output        osd_splash,
     output  [1:0] osd_gamepad,
 
     // Per-control key config {ext, Set-2 code}, one 9-bit entry per D-pad direction and button,
@@ -363,18 +358,14 @@ module softcpu_subsystem (
     // write before each request). A guest reset is orchestrated through soft_guest_hold below,
     // not here.
     reg osd_credits_req_r = 1'b0;
-    reg osd_video_req_r = 1'b0;
     always @(posedge clk_pico) begin
         if (reset) begin
             osd_credits_req_r <= 1'b0;
-            osd_video_req_r   <= 1'b0;
         end else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd4) begin
             osd_credits_req_r <= cpu_mem_wdata[1];
-            osd_video_req_r   <= cpu_mem_wdata[2];
         end
     end
     assign osd_credits_req = osd_credits_req_r;
-    assign osd_video_req   = osd_video_req_r;
 
     // Boot-master guest hold at 0x2000001C: powers up asserted so the guest stays in reset until
     // the firmware releases it (writes 0); the firmware writes 1 to re-assert it for an
@@ -522,7 +513,6 @@ module softcpu_subsystem (
     assign osd_spk_vol   = osd_settings[SET_IDX_SPK_VOL][1:0];
     assign osd_stereo    = osd_settings[SET_IDX_STEREO][1:0];
     assign osd_cms       = osd_settings[SET_IDX_CMS][0];
-    assign osd_composite = osd_settings[SET_IDX_COMPOSITE][0];
     assign osd_ems       = osd_settings[SET_IDX_EMS][0];
     assign osd_ems_frame = osd_settings[SET_IDX_EMS_FRAME][1:0];
     assign osd_a000      = osd_settings[SET_IDX_A000][0];
@@ -532,9 +522,6 @@ module softcpu_subsystem (
     assign osd_syncjoy   = osd_settings[SET_IDX_SYNCJOY][0];
     assign osd_gamepad   = osd_settings[SET_IDX_GAMEPAD][1:0];
     assign osd_video_1st = osd_settings[SET_IDX_VIDEO_1ST][0];
-    assign osd_cga_gfx   = osd_settings[SET_IDX_CGA_GFX][0];
-    assign osd_hgc_gfx   = osd_settings[SET_IDX_HGC_GFX][0];
-    assign osd_splash    = osd_settings[SET_IDX_SPLASH][0];
 
     // Per-control key config, written at KEYCFG_REG (0x20000020) as {id[12:9], ext[8], code[7:0]}.
     // pocket_keyboard reads one 9-bit {ext, code} per D-pad direction (ids 0-3) and button (ids 4-10);
