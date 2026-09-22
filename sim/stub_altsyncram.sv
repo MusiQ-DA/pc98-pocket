@@ -40,8 +40,9 @@ module altsyncram #(
     input  wire                  clocken3,
     input  wire                  rden_a,
     input  wire                  rden_b,
-    input  wire                  clock2,
-    input  wire                  clock3,
+    // clock2/clock3 are deliberately absent: they only exist on the real
+    // megafunction in operation modes this design never selects, and Quartus
+    // errors on a connection to a port the variant does not have.
     input  wire  [1:0]           eccstatus
 );
     // One byte-granular memory both widths view, so a wide port A and a narrow
@@ -71,6 +72,6 @@ module altsyncram #(
     end
     wire _unused = &{1'b0, aclr0, aclr1, addressstall_a, addressstall_b,
                      clocken0, clocken1, clocken2, clocken3,
-                     rden_a, rden_b, clock2, clock3, eccstatus, 1'b0};
+                     rden_a, rden_b, eccstatus, 1'b0};
 endmodule
 `default_nettype wire
