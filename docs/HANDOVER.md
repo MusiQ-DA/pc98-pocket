@@ -870,3 +870,24 @@ font 2KB = 4、work RAM 8KB = 8、picorv32 2（cpuregs）+ FDD bridge 2。
 - 次の構造判断: **テキストコンソール化**（framebuffer 廃止、−60 M10K、
   VKB の 25px キーを 8px グリッドに再レイアウト）vs **framebuffer を SDRAM へ**
   （−62 M10K、ラインバッファ + SDRAM 第4ポート、UI は不変）
+
+### §10.12 core 全体 lint — と、その最初の獲物 (2026-09-22)
+
+- Verilator は `default_nettype none` でも暗黙ネットを**警告** (%Warning-IMPLICIT)
+  で通し、v30 テストベンチは `core_top`/CHIPSET を一度もコンパイルしない。
+  Quartus は同じものを**エラー**で止める。この非対称のせいで Quartus を 2 回
+  無駄にした（core_top 2461 の `swapjoy_cfg`、1298 の `gamepad`）。
+  `scripts/lint_core.sh` = ap_core.qsf と config.tcl からファイルリストと
+  ENABLE_* を取り、sim/ のスタブで core_top 以下全部を精査して
+  `%Warning-IMPLICIT` とスタブ由来以外の `%Error` で失敗する。CI の sim ジョブ
+  先頭に追加したので、次からは 15 分の Quartus を待たずに落ちる
+- **最初の獲物は自分の過去の commit**: 967ed30（XT の死にポート掃除）が
+  `tvram_mem_select` と `cgwin_mem_select` の宣言まで巻き込んで消していた。
+  この 2 本は PC-98 の生きた信号（A0000-A3FFF テキスト VRAM / A4000-A4FFF
+  CG ウィンドウ）で、未宣言なら暗黙 wire = 常に 0 →
+  **ゲストの TVRAM / CG 書き込みが全部捨てられていた**。宣言と元コメントを復元
+- 同じ掃除で消した他の wire は使用箇所ゼロを全数確認済み。`ide0_request` の
+  死んだ assign も削除（core_top が softcore へ 3'b000 を直結している）
+- `.gamepad(gamepad)` の残骸（pocket_keyboard の入力）も同じ lint が見つけた。
+  ゲームポートはもう無いが、設定 "Gamepad Mode" の Joystick は
+  「パッドのキー入力を止める」意味だけが残っている（移行無しで消さない）

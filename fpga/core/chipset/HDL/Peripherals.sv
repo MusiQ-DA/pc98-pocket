@@ -473,6 +473,17 @@ module PERIPHERALS #(
     assign  ems_b2                  = `ENABLE_EMS ? (~iorq && ena_ems[1] && (address[19:14] == {ems_page_address, 2'b01})) : 1'b0; // C4000h - D4000h - E4000h
     assign  ems_b3                  = `ENABLE_EMS ? (~iorq && ena_ems[2] && (address[19:14] == {ems_page_address, 2'b10})) : 1'b0; // C8000h - D8000h - E0000h
     assign  ems_b4                  = `ENABLE_EMS ? (~iorq && ena_ems[3] && (address[19:14] == {ems_page_address, 2'b11})) : 1'b0; // CC000h - DC000h - EC000h
+    // PC-98 text VRAM, A0000-A3FFF: characters at A0000 (two bytes per cell)
+    // and attributes at A2000. A BRAM in the guest's address space, qualified
+    // with AEN so a DMA cycle carrying a matching address cannot reach it.
+    wire    tvram_mem_select        = ~iorq && ~address_enable_n
+                                    && (address[19:14] == 6'b101000);
+    // A4000-A4FFF: the character generator window. RAM.sv already keeps SDRAM
+    // out of A0000-A7FFF; this claims the read AND the write, because the
+    // window is RAM -- the ITF's CG test writes a pattern through it and reads
+    // the pattern back, and user-defined characters load the same way.
+    wire    cgwin_mem_select        = ~iorq && ~address_enable_n
+                                    && (address[19:12] == 8'b10100100);
     // No IDE on this machine -- see the XT2IDE block. Held deasserted so the
     // read mux arm at the bottom of the file is unreachable and prunes.
     wire    ide0_chip_select_n      = 1'b1;
@@ -1736,8 +1747,9 @@ module PERIPHERALS #(
     // np2kai agrees about the generation: SUPPORT_IDEIO is in its ia32 /
     // PC-9821 definitions only, while the V30/286 common build gets
     // SUPPORT_SCSI. SCSI at 0xCC0 is what replaces this.
-    // The four things the rest of the file reads from the block above.
-    assign     ide0_request         = 3'b000;
+    // (Nothing is left to read out of that block: the request output it used
+    // to drive went with it, and core_top holds the softcore's ide0_request at
+    // 3'b000 directly.)
 
 
     //

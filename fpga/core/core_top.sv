@@ -1295,7 +1295,12 @@ module core_top (
         .clk          (clk_chipset),
         .reset        (reset),
         .buttons      (kb_buttons),
-        .gamepad      (gamepad),
+        // The game port this once fed is gone (the Tandy joystick and its
+        // routing were removed with the PC/XT layer). The mode still exists in
+        // the settings and still suppresses the pad->keys mapping, which is
+        // what it did before -- there is simply nowhere for the bits to go
+        // now. Remove the option only with a settings-blob migration.
+        .gamepad      (gamepad_mode == 2'd1),
         .osd_active   (osd_active | credits_mode_chip),
         .vkb_key      (vkb_key),
         .vkb_stb      (vkb_stb),

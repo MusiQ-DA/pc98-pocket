@@ -16,6 +16,14 @@ jobs:
       - name: Install Verilator
         run: sudo apt-get update && sudo apt-get install -y verilator
 
+      - name: Core elaborates — no implicit nets, no undeclared names
+        # Quartus carries default_nettype none into core_top, so an undeclared
+        # name is a hard error there and a fifteen-minute compile dies; the
+        # sims never compile core_top or the CHIPSET at all, and Verilator
+        # itself only warns (%Warning-IMPLICIT).  Two Quartus runs and one
+        # silently-dead TVRAM later, this is the gate.
+        run: ./scripts/lint_core.sh
+
       - name: SDRAM controller — integrity and single-port bandwidth
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_sdram_mp \
