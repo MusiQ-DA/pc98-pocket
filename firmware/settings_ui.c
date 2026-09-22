@@ -6,6 +6,9 @@
 #include "vkb_draw.h"
 #include "vkb_layout.h"
 #include "vkb_ui.h"
+#ifdef POST_MONITOR
+#include "postmon.h"
+#endif
 
 // The settings overlay: a CP437-framed panel of submenus, drawn on demand into the shared OSD
 // framebuffer and navigated with the D-pad. Each edit updates the value in RAM and pushes it to the
@@ -135,7 +138,7 @@ typedef struct {
 } item_t;
 
 enum { MENU_MAIN, MENU_SYSTEM, MENU_AV, MENU_HW, MENU_CONTROLS, MENU_COUNT };
-enum { ACT_CREDITS, ACT_DEFAULTS, ACT_RESET_PC };
+enum { ACT_CREDITS, ACT_DEFAULTS, ACT_RESET_PC, ACT_POSTMON };
 
 static const item_t items_main[] = {
     { "System", IT_SUBMENU, MENU_SYSTEM },
@@ -146,6 +149,9 @@ static const item_t items_main[] = {
     { "Show Credits", IT_ACTION, ACT_CREDITS },
     { "Reset to Defaults", IT_ACTION, ACT_DEFAULTS },
     { "", IT_SPACER, 0 },
+#ifdef POST_MONITOR
+    { "POST Overlay", IT_ACTION, ACT_POSTMON },
+#endif
     { "Reset PC", IT_ACTION, ACT_RESET_PC },
 };
 
@@ -613,6 +619,11 @@ int settings_input(uint16_t pressed)
             } else if (it->arg == ACT_CREDITS) {
                 settings_show_credits();
                 return 1; // close the panel so the credits scroll shows on a clean screen
+#ifdef POST_MONITOR
+            } else if (it->arg == ACT_POSTMON) {
+                postmon_toggle();
+                return 1; // close the panel so the strip appears (or the guest under it does)
+#endif
             }
         }
     }
