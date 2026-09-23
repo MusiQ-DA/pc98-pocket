@@ -28,6 +28,11 @@ jobs:
           sudo docker image prune -a -f || true
           df -h /
 
+      - name: Make workspace writable for the container user
+        # The image runs Quartus as an unprivileged user whose uid does not
+        # match the runner's, so the bind-mounted checkout must be open.
+        run: chmod -R a+rwX "$GITHUB_WORKSPACE"
+
       - name: Log in to ghcr.io
         run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u musiq-da --password-stdin
 
