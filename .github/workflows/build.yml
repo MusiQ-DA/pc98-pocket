@@ -484,7 +484,7 @@ jobs:
 
   quartus-std:
     # Compiles with Quartus Prime Standard 18.1 running under Wine inside a
-    # private ghcr image (ghcr.io/musiq-da/quartus-wine:18.1) -- THE bitstream
+    # private ghcr image (ghcr.io/musiq-da/quartus-wine:18.1-slim) -- THE bitstream
     # build; the raetro/quartus:pocket Lite job that lived here was retired.
     #
     # Licensing: this edition needs a node-locked FlexLM license. The
@@ -532,7 +532,7 @@ jobs:
 
       - name: Pull Quartus Standard (Wine) image
         # -q: a 6 GB pull is hundreds of per-layer progress lines otherwise.
-        run: docker pull -q ghcr.io/musiq-da/quartus-wine:18.1
+        run: docker pull -q ghcr.io/musiq-da/quartus-wine:18.1-slim
 
       - name: Stage license.dat and pin the container MAC to its HOSTID
         id: lic
@@ -565,7 +565,7 @@ jobs:
             -e LM_LICENSE_FILE='Z:\license.dat' \
             -e ALTERAD_LICENSE_FILE='Z:\license.dat' \
             -w /work/fpga \
-            ghcr.io/musiq-da/quartus-wine:18.1 \
+            ghcr.io/musiq-da/quartus-wine:18.1-slim \
             "C:\\intelFPGA\\18.1\\quartus\\bin64\\quartus_sh.exe" \
             --flow compile ap_core 2>&1 | { grep --line-buffered -vE '^\s*Info' || true; }
 
@@ -581,7 +581,7 @@ jobs:
             -e LM_LICENSE_FILE='Z:\license.dat' \
             -e ALTERAD_LICENSE_FILE='Z:\license.dat' \
             -w /work/fpga \
-            ghcr.io/musiq-da/quartus-wine:18.1 \
+            ghcr.io/musiq-da/quartus-wine:18.1-slim \
             "C:\\intelFPGA\\18.1\\quartus\\bin64\\quartus_sta.exe" \
             -t "Z:\\work\\scripts\\check_sdram_paths.tcl" ap_core \
             2>&1 | { grep --line-buffered -vE '^\s*Info' || true; }
@@ -600,7 +600,7 @@ jobs:
             -e LM_LICENSE_FILE='Z:\license.dat' \
             -e ALTERAD_LICENSE_FILE='Z:\license.dat' \
             -w /work/fpga \
-            ghcr.io/musiq-da/quartus-wine:18.1 \
+            ghcr.io/musiq-da/quartus-wine:18.1-slim \
             "C:\\intelFPGA\\18.1\\quartus\\bin64\\quartus_sta.exe" \
             -t "Z:\\work\\scripts\\sta_cpu_paths.tcl" ap_core \
             2>&1 | { grep --line-buffered -vE '^\s*Info' || true; } || true
