@@ -289,10 +289,55 @@ void postmon_capture_rom(void)
 // One 256-byte chunk per ~50000 loop passes: about a percent of the bus.
 
 
+// Snapshots of the three snoop windows, indexed [0x55, 0x58, 0x49][word]:
+// eq_snap[0] byte 0xC/0xD = [0x55C]/[0x55D], [1] byte 4 = [0x584],
+// [2] byte 4 = [0x494]. eq_cnt keeps each window's rom_read_count so a
+// zero byte reads as "never read while live" vs "really read 00".
+static uint32_t eq_snap[3][4];
+static uint8_t  eq_cnt[3];
+
 void post_mon_tick(void)
 {
     static uint32_t last_status = 0xFFFFFFFFu;
     static int placed = 0;
+
+    // Passive equip-table snoop. guest_peek is unusable once the guest runs:
+    // it takes the bus through hold-acknowledge and the machine does not come
+    // back (the N=84 freeze, repeated at N=205 with low-RAM targets). The
+    // monitor's CPU-read snoop window touches nothing -- aim it at the BIOS
+    // disk work bytes and let the bus bring them.
+    //
+    //   win 0x55 (0x550-0x55F): [0x55C] 2HD units, [0x55D] 2DD (bit4 = unit0).
+    //       The scan's "or [0x55C],al" is read-modify-write, so the marking
+    //       itself is snooped; the enumerator reads the byte again per try.
+    //   win 0x58 (0x580-0x58F): [0x584] DISK_BOOT, the DAZUA each IPL pass
+    //       ran with -- read twice per retry at FFDD1/FFDE8.
+    //   win 0x49 (0x490-0x49F): [0x494] DISK-EQUIP2, the 0xF0-path table.
+    //
+    // 0xFFFF keeps the window through early POST (the reset-vector watch is
+    // done in the first iterations); then the three windows rotate quickly.
+    // The one-shot scan "or" is not the target -- every retry of the boot
+    // loop re-reads the equip byte and DISK_BOOT, so a rotating window
+    // catches them without a trigger that would need the FDC traffic that
+    // is itself the thing in doubt.
+    {
+        static const uint16_t eq_win[3]  = { 0x55u, 0x58u, 0x49u };
+        static int eq_t = 0, eq_live = -1;
+        eq_t++;
+        if (eq_live < 0) {
+            if (eq_t >= 90) {
+                *POST_ROMWIN = eq_win[0];
+                eq_live = 0; eq_t = 0;
+            }
+        } else if (eq_t >= 25) {
+            eq_snap[eq_live][0] = *POST_ROMRD;  eq_snap[eq_live][1] = *POST_ROMRD1;
+            eq_snap[eq_live][2] = *POST_ROMRD2; eq_snap[eq_live][3] = *POST_ROMRD3;
+            eq_cnt[eq_live] = (uint8_t) (*POST_ROMRDN & 0xFFu);
+            eq_live = (eq_live + 1) % 3;
+            *POST_ROMWIN = eq_win[eq_live];
+            eq_t = 0;
+        }
+    }
 
     // An overlay owns the framebuffer while it is open, and this panel used to
     // paint over it every tick. That made the settings menu unreadable -- and
@@ -1007,6 +1052,22 @@ void post_mon_tick(void)
         osd_draw_string(&fb, 4 + 24 * 8, 162, "0A", OSD_LABEL);
         hex(4 + 27 * 8, 162, *POST_FDCW & 0xFFu, 2);
 
+        // The disk equip tables, snooped off the guest's own reads by the
+        // phase machine at the top of the tick: which byte the BIOS marked
+        // the drive in decides which DAZUA -- and therefore which FDC window
+        // -- the boot loader uses. 5C = 2HD units 0-3, 5D = 2DD (bit4 =
+        // unit0), 494 = DISK-EQUIP2 (0xF0 path), 584 = DISK_BOOT, the DAZUA
+        // the last IPL attempt ran with. All zero while the BIOS has not
+        // read the window in reach.
+        {
+            uint32_t t = (eq_snap[0][3] & 0xFFu) << 24        // [0x55C]
+                       | (eq_snap[0][3] & 0xFF00u) << 8       // [0x55D]
+                       | (eq_snap[2][1] & 0xFFu) << 8         // [0x494]
+                       | (eq_snap[1][1] & 0xFFu);             // [0x584]
+            osd_draw_string(&fb, 4 + 29 * 8, 162, "T", OSD_LABEL);
+            hex(4 + 31 * 8, 162, t, 8);
+        }
+
         // The controller itself. MS is the MSR the guest last read -- 80
         // means RQM with the chip idle and ready, C0 means it wants to be
         // read, 10 in bit 4 is a command in progress. IQ counts floppy.v's
@@ -1037,6 +1098,16 @@ void post_mon_tick(void)
         hex(4 + 27 * 8, 172, (fw >> 24) & 0xFFu, 2);
         osd_draw_string(&fb, 4 + 30 * 8, 172, "RL", OSD_LABEL);
         hex(4 + 32 * 8, 172, (fw >> 8) & 0x0Fu, 1);
+        // n: reads the snoop saw per window (0x55 / 0x58 / 0x49), capped at
+        // F. A zero T byte beside a zero count means "never read in reach",
+        // beside a nonzero count it means the BIOS really read 00.
+        {
+            uint32_t n = (uint32_t) (eq_cnt[0] > 15 ? 15 : eq_cnt[0]) << 8
+                       | (uint32_t) (eq_cnt[1] > 15 ? 15 : eq_cnt[1]) << 4
+                       | (uint32_t) (eq_cnt[2] > 15 ? 15 : eq_cnt[2]);
+            osd_draw_string(&fb, 4 + 34 * 8, 172, "n", OSD_LABEL);
+            hex(4 + 36 * 8, 172, n, 3);
+        }
 
         // The command stream, TWELVE bytes, oldest on the left. 03 xx xx is
         // a SPECIFY, 07 uu a RECALIBRATE of unit uu, 08 a SENSE INTERRUPT

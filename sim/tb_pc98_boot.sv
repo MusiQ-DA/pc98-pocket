@@ -776,6 +776,16 @@ module tb_pc98_boot;
                 $display("  %8t  OUT 043D, %02X   -> itf_bank %0d",
                          $time, cpu_data_bus, (cpu_data_bus == 8'h12) ? 0 : 1);
             end
+            // FDC window: the byte stream the firmware panel shows on
+            // hardware, so the sim's sequence can be diffed against it.
+            if (cpu_address[15:8] == 8'h00
+                && (cpu_address[7:0] == 8'h90 || cpu_address[7:0] == 8'h92
+                 || cpu_address[7:0] == 8'h94 || cpu_address[7:0] == 8'h96
+                 || cpu_address[7:0] == 8'hBE || cpu_address[7:0] == 8'hC8
+                 || cpu_address[7:0] == 8'hCA || cpu_address[7:0] == 8'hCC
+                 || cpu_address[7:0] == 8'hCE))
+                $display("  %8t  FDC <- %04X, %02X  (eu_pc %05X)",
+                         $time, io_wr_addr_q, write_to_fdd, eu_pc);
         end
     end
 
@@ -1163,6 +1173,25 @@ module tb_pc98_boot;
     always_ff @(posedge clk_chipset)
         if (fdd_io_read_1) fdd_readdata <= fdd_readdata_wire;
 
+    // +media inserts a 2HD disk in drive 0 through the same mgmt port the
+    // core's file loader uses. media_present has no reset in floppy.v, so
+    // the write lands after reset and just stays.
+    logic        mgmt_wr = 1'b0;
+    logic [3:0]  mgmt_addr = 4'd0;
+    logic [15:0] mgmt_wdata = 16'd0;
+    initial begin
+        int v;
+        if ($value$plusargs("media=%d", v) && v != 0) begin
+            @(negedge reset);
+            repeat (20) @(negedge clk_chipset);
+            mgmt_addr = 4'd0; mgmt_wdata = 16'd1;    mgmt_wr = 1'b1; @(negedge clk_chipset); mgmt_wr = 1'b0; @(negedge clk_chipset);
+            mgmt_addr = 4'd2; mgmt_wdata = 16'd77;   mgmt_wr = 1'b1; @(negedge clk_chipset); mgmt_wr = 1'b0; @(negedge clk_chipset);
+            mgmt_addr = 4'd3; mgmt_wdata = 16'd8;    mgmt_wr = 1'b1; @(negedge clk_chipset); mgmt_wr = 1'b0; @(negedge clk_chipset);
+            mgmt_addr = 4'd5; mgmt_wdata = 16'd2;    mgmt_wr = 1'b1; @(negedge clk_chipset); mgmt_wr = 1'b0; @(negedge clk_chipset);
+            mgmt_addr = 4'd6; mgmt_wdata = 16'd1;    mgmt_wr = 1'b1; @(negedge clk_chipset); mgmt_wr = 1'b0;
+        end
+    end
+
     floppy #(.NOT_READY_ENDS_COMMAND (1)) u_floppy (
         .clk            (clk_chipset),
         .rst_n          (~reset),
@@ -1174,10 +1203,10 @@ module tb_pc98_boot;
         .io_readdata    (fdd_readdata_wire),
         .io_write       (fdd_io_write),
         .io_writedata   (fdd_io_writedata),
-        .mgmt_address   (4'd0),
+        .mgmt_address   (mgmt_addr),
         .mgmt_fddn      (1'b0),
-        .mgmt_write     (1'b0),
-        .mgmt_writedata (16'd0),
+        .mgmt_write     (mgmt_wr),
+        .mgmt_writedata (mgmt_wdata),
         .mgmt_read      (1'b0),
         .mgmt_readdata  (),
         .wp             (2'b00),
@@ -1619,6 +1648,13 @@ module tb_pc98_boot;
             for (j = 0; j < 16; j = j + 1)
                 $write(" %05X", pc_ring[(pc_ring_w + j) % 16]);
             $display("");
+            // The BIOS equipment/boot bytes the hardware panel cannot reach:
+            // [0x480] 2HD flag, [0x55C]/[0x55D] the per-drive tables,
+            // [0x494] DISK-EQUIP2, [0x584] DISK_BOOT (the live DAZUA).
+            $display("        disk: 480=%02X 485=%02X 492=%02X 493=%02X 494=%02X 55C=%02X 55D=%02X 55E=%02X 584=%02X",
+                     ram[20'h480], ram[20'h485], ram[20'h492], ram[20'h493],
+                     ram[20'h494], ram[20'h55C], ram[20'h55D], ram[20'h55E],
+                     ram[20'h584]);
             wr_clear_tog = ~wr_clear_tog;
         end
 
@@ -1665,6 +1701,29 @@ module tb_pc98_boot;
         $display("last 128 EU addresses (oldest first):");
         for (i = 0; i < 128; i = i + 1)
             $display("  %05X", eu_ring[(eu_ring_w + i) & 127]);
+        // The device-init interpreter's state and the patch program it
+        // built: [0x10C4-0x10E6] counters/cursors, [0x10E6-] wait entries,
+        // [0x1110-] the device-present bitmap it walks.
+        $display("init interp state:");
+        for (i = 0; i < 16; i = i + 1)
+            $display("  %05X: %02X %02X %02X %02X %02X %02X %02X %02X",
+                     20'h10C0+i*16,
+                     ram[20'h10C0+i*16+0], ram[20'h10C0+i*16+1],
+                     ram[20'h10C0+i*16+2], ram[20'h10C0+i*16+3],
+                     ram[20'h10C0+i*16+4], ram[20'h10C0+i*16+5],
+                     ram[20'h10C0+i*16+6], ram[20'h10C0+i*16+7],
+                     ram[20'h10C0+i*16+8], ram[20'h10C0+i*16+9],
+                     ram[20'h10C0+i*16+10], ram[20'h10C0+i*16+11],
+                     ram[20'h10C0+i*16+12], ram[20'h10C0+i*16+13],
+                     ram[20'h10C0+i*16+14], ram[20'h10C0+i*16+15]);
+        $display("disk work area 0x480-0x5A0:");
+        for (i = 0; i < 18; i = i + 1)
+            $display("  %05X: %02X %02X %02X %02X %02X %02X %02X %02X",
+                     20'h480+i*8,
+                     ram[20'h480+i*8+0], ram[20'h480+i*8+1],
+                     ram[20'h480+i*8+2], ram[20'h480+i*8+3],
+                     ram[20'h480+i*8+4], ram[20'h480+i*8+5],
+                     ram[20'h480+i*8+6], ram[20'h480+i*8+7]);
         $finish;
     end
 
