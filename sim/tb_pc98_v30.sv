@@ -1092,32 +1092,50 @@ module tb_pc98_v30;
 
     // ---- 8237 stand-in ------------------------------------------------------
     //
-    // The DMA register test at FD8E6 writes each odd port 01-0F twice (LSB,
-    // MSB through the shared byte pointer) and reads it back the same way.
-    // The real chip's current registers are read/write, so a pair of
-    // write-through bytes per port answers it honestly without modelling a
-    // whole 8237 the boot never puts in motion.
-    logic [7:0] dma_lsb  [0:15];
-    logic [7:0] dma_msb  [0:15];
-    logic       dma_hi_byte = 1'b0;
-    wire  [3:0] dma_reg   = cpu_address[4:1];
-    // Odd 0x01-0x1F, the whole uPD71071 map -- matching PERIPHERALS'
-    // dma_chip_select_n, which reaches all sixteen registers.
+    // tb_fdd_dma_model: the uPD71071's guest-visible surface -- the FD8E6
+    // register test's write/read-back pairs, and the BIOS's per-read
+    // channel setup (mode, address, count, page, unmask) driving a real
+    // byte-per-DRQ transfer engine. The disk server below owns the mgmt
+    // port, so the model's feeder stays off.
     wire        dma_iocycle = (~io_rd_n | ~io_wr_n) & cpu_address[0]
                             & (cpu_address[7:5] == 3'h0) & ~cpu_address[9]
                             & ~cpu_address[8];
-    always_ff @(posedge clk_chipset) begin
-        if (dma_iocycle) begin
-            if (~io_wr_n) begin
-                if (~dma_hi_byte) dma_lsb[dma_reg] <= cpu_data_bus;
-                else              dma_msb[dma_reg] <= cpu_data_bus;
-            end
-            // The byte pointer advances on a read as well; two reads walk
-            // LSB then MSB and hand it back for the next write pair.
-            if (~io_wr_n | ~io_rd_n) dma_hi_byte <= ~dma_hi_byte;
-        end
-    end
-    wire [7:0] dma_dout = dma_hi_byte ? dma_msb[dma_reg] : dma_lsb[dma_reg];
+    wire        dma_page_iocycle = (~io_rd_n | ~io_wr_n) & cpu_address[0]
+                            & (cpu_address[7:4] == 4'h2) & ~cpu_address[9]
+                            & ~cpu_address[8];
+    wire       fdc_dreq_w, fdc_ack_p, fdc_tc_p;
+    wire [7:0] fdc_dma_w, fdc_dma_r;
+    wire        dma_mem_wr;
+    wire [19:0] dma_mem_addr;
+    wire  [7:0] dma_mem_wd;
+    wire  [7:0] dma_dout;
+
+    always_ff @(posedge clk_chipset)
+        if (dma_mem_wr) ram[dma_mem_addr] <= dma_mem_wd;
+
+    tb_fdd_dma_model u_dma (
+        .clk        (clk_chipset),
+        .io_wr      ((dma_iocycle | dma_page_iocycle) & ~io_wr_n),
+        .io_rd      (dma_iocycle & ~io_rd_n),
+        .io_addr    (cpu_address[7:0]),
+        .io_wdata   (cpu_data_bus),
+        .io_rdata   (dma_dout),
+        .drq        (fdc_dreq_w),
+        .dack       (fdc_ack_p),
+        .tc         (fdc_tc_p),
+        .ddata_i    (fdc_dma_w),
+        .ddata_o    (fdc_dma_r),
+        .mem_wr     (dma_mem_wr),
+        .mem_addr   (dma_mem_addr),
+        .mem_wdata  (dma_mem_wd),
+        .mem_rdata  (ram[dma_mem_addr]),
+        .feed_en    (1'b0),
+        .sec_req    (2'b00),
+        .mgmt_wr    (), .mgmt_addr (), .mgmt_wdata (), .mgmt_rd (),
+        .mgmt_rdata (16'd0),
+        .media_1024 (1'b0),
+        .feed_lba   (), .feed_idx (), .feed_byte (8'h00)
+    );
 
     // ---- 8259 pair, as the chipset wires them -------------------------------
     //
@@ -2038,8 +2056,10 @@ module tb_pc98_v30;
     floppy #(.NOT_READY_ENDS_COMMAND (1)) u_floppy (
         .clk            (clk_chipset),
         .rst_n          (~reset),
-        .dma_req        (), .dma_ack (1'b0), .dma_tc (1'b0),
-        .dma_readdata   (write_to_fdd), .dma_writedata (),
+        .dma_req        (fdc_dreq_w),
+        .dma_ack        (fdc_ack_p),
+        .dma_tc         (fdc_tc_p),
+        .dma_readdata   (fdc_dma_r), .dma_writedata (fdc_dma_w),
         .irq            (fdd_irq_wire),
         .io_address     (fdd_io_address),
         .io_read        (fdd_io_read),

@@ -98,6 +98,7 @@ BUILD_AND_RUN="
     /work/$V/v30u_ucrom.sv \
     /work/$S/pc98_tvram.sv /work/$S/pc98_fdc_glue.sv /work/$S/pc98_upd4990.sv \
     /work/$S/common/floppy.v /work/$S/common/simple_fifo.v \
+    /work/sim/tb_fdd_dma_model.sv \
     /work/$K/ce_generator.sv /work/$K/i8288/HDL/i8288.sv \
     /work/$K/i8253/HDL/i8253.sv /work/$K/i8253/HDL/i8253_Counter.sv \
     /work/$K/i8253/HDL/i8253_Control_Logic.sv \
