@@ -309,7 +309,7 @@ module CHIPSET #(
         .memory_write_n_direction           (memory_write_n_direction),
         .no_command_state                   (no_command_state),
         .ext_access_request                 (ext_access_request),
-        .dma_request                        ({dma_request[3], fdd_dma_req, dma_request[1], DRQ0}),
+        .dma_request                        ({fdd_dma_req | dma_request[3], fdd_dma_req, dma_request[1], DRQ0}),
         .dma_acknowledge_n                  (dma_acknowledge_n),
         .address_enable_n                   (address_enable_n),
         .terminal_count_n                   (terminal_count_n)
@@ -451,7 +451,11 @@ module CHIPSET #(
         .fdd_present                        (fdd_present),
         .fdd_request                        (fdd_request),
         .fdd_dma_req                        (fdd_dma_req),
-        .fdd_dma_ack                        (~dma_acknowledge_n[2]),
+        // The BIOS runs 2HD (0x90 window) transfers on channel 2 and 2DD
+        // (0xC8 window) on channel 3 -- the arbiter pairs ack[2] with page
+        // register 1 (port 0x23) and ack[3] with page register 2 (0x25),
+        // which is exactly what the two setup paths program.
+        .fdd_dma_ack                        (~dma_acknowledge_n[2] | ~dma_acknowledge_n[3]),
         .terminal_count                     (terminal_count_n),
         .pause_core                         (pause_core)
         ,.pc98_key_stb                      (pc98_key_stb)

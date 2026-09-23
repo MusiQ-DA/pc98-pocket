@@ -843,8 +843,10 @@ module tb_pc98_boot;
     logic [7:0] dma_msb  [0:15];
     logic       dma_hi_byte = 1'b0;
     wire  [3:0] dma_reg   = cpu_address[4:1];
+    // Odd 0x01-0x1F, the whole uPD71071 map -- matching PERIPHERALS'
+    // dma_chip_select_n, which reaches all sixteen registers.
     wire        dma_iocycle = (~io_rd_n | ~io_wr_n) & cpu_address[0]
-                            & (cpu_address[7:4] == 4'h0) & ~cpu_address[9]
+                            & (cpu_address[7:5] == 3'h0) & ~cpu_address[9]
                             & ~cpu_address[8];
     always_ff @(posedge clk_chipset) begin
         if (dma_iocycle) begin

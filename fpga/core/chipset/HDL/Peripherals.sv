@@ -278,7 +278,7 @@ module PERIPHERALS #(
     // have no business claiming aliases.
     wire pc98_io_exact = iorq & ~address_enable_n & (address[15:8] == 8'h00);
 
-    assign dma_chip_select_n        = ~(pc98_io &  address[0] & ~address[7] & ~address[6] & ~address[5] & ~address[4]);
+    assign dma_chip_select_n        = ~(pc98_io &  address[0] & ~address[7] & ~address[6] & ~address[5]);
     wire   interrupt_chip_select_n  = ~(pc98_io & ~address[0] & (address[7:3] == 5'b00000));
     wire   timer_chip_select_n      = ~(pc98_io &  address[0] & (address[7:4] == 4'h7));
 

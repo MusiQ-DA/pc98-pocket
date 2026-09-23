@@ -93,8 +93,10 @@ module upd71071_Priority_Encoder (
         always_ff @(posedge clock, posedge reset) begin
             if (reset)
                 mask_register[mask_bit_i] <= 1'b1;
-            else if ((master_clear) || (clear_mask_register))
+            else if (master_clear)
                 mask_register[mask_bit_i] <= 1'b1;
+            else if (clear_mask_register)
+                mask_register[mask_bit_i] <= 1'b0;
             else if ((set_or_reset_mask_register) && (internal_data_bus[1:0] == bit_select[mask_bit_i]))
                 mask_register[mask_bit_i] <= internal_data_bus[2];
             else if (write_mask_register)
@@ -114,7 +116,7 @@ module upd71071_Priority_Encoder (
         always_ff @(posedge clock, posedge reset) begin
             if (reset)
                 request_register[req_reg_bit_i] <= 1'b0;
-            else if ((master_clear) || (clear_mask_register))
+            else if (master_clear)
                 request_register[req_reg_bit_i] <= 1'b0;
             else if ((write_request_register) && (internal_data_bus[1:0] == bit_select[req_reg_bit_i]))
                 request_register[req_reg_bit_i] <= internal_data_bus[2];
@@ -147,7 +149,7 @@ module upd71071_Priority_Encoder (
         always_ff @(posedge clock, posedge reset) begin
             if (reset)
                 dma_request_lock[req_lock_bit_i] <= 1'b0;
-            else if ((master_clear) || (clear_mask_register))
+            else if (master_clear)
                 dma_request_lock[req_lock_bit_i] <= 1'b0;
             else if (~edge_request[req_lock_bit_i])
                 dma_request_lock[req_lock_bit_i] <= 1'b0;
