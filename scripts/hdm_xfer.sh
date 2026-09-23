@@ -6,7 +6,7 @@ HDM="/Users/hiroya/Desktop/pc98_test.hdm"
 CARD="/Volumes/ANALOGUE"
 DEST_DIR="$CARD/Assets/pc98/common"
 
-say() { printf '[%(%H:%M:%S)T] %s\n' -1 "$1"; }
+say() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$1"; }
 
 [ -f "$HDM" ] || { say "no $HDM"; exit 1; }
 
