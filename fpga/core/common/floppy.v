@@ -561,7 +561,12 @@ wire cmd_read_write_incorrect_head_at_start   = motor_enable[selected_drive[0]] 
 // not a hang: the PC-98 BIOS probes a drive in more than one format (2HD
 // then 2DD) and must get ST0 back to fall through to the next try, the same
 // way an empty drive does.
-wire cmd_read_write_incorrect_sector_at_start = ~cmd_read_write_hang_at_start && (command[31:24] > media_sectors_per_track[selected_drive[0]] || command[31:24] > command[15:8] || media_is_1024[selected_drive[0]] != (command[23:16] == 8'h03));
+// The PC-98 BIOS sends EOT=0 and relies on the drive geometry instead, the
+// same convention the eot register applies below: compare R against the
+// normalized end-of-track, not the raw command byte, or R=1 > EOT=0 would
+// reject every real boot read.
+wire [7:0] eot_at_start = (command[15:8] == 8'd0) ? media_sectors_per_track[selected_drive[0]] : command[15:8];
+wire cmd_read_write_incorrect_sector_at_start = ~cmd_read_write_hang_at_start && (command[31:24] > media_sectors_per_track[selected_drive[0]] || command[31:24] > eot_at_start || media_is_1024[selected_drive[0]] != (command[23:16] == 8'h03));
 
 wire cmd_write_and_writeprotected_at_start    = ~cmd_read_write_hang_at_start && ~cmd_read_write_incorrect_sector_at_start && cmd_write_normal_start && media_writeprotected[selected_drive[0]];
     
@@ -927,7 +932,9 @@ always @(posedge clk) begin
 	//sd
 	else if(state == S_SD_CONTROL && cmd_read_normal_in_progress)                 state <= S_SD_READ_WAIT_FOR_DATA;
 	else if(state == S_SD_READ_WAIT_FOR_DATA && fifo_full)                        state <= S_WAIT_FOR_EMPTY_READ_FIFO;
-	else if(state == S_WAIT_FOR_EMPTY_READ_FIFO && fifo_empty)                    state <= S_UPDATE_SECTOR;
+	//a terminal count mid-sector ends the command too -- the dma is done, so the
+	//unread tail of the sector is abandoned (the fifo clears at S_IDLE)
+	else if(state == S_WAIT_FOR_EMPTY_READ_FIFO && (fifo_empty || cmd_read_write_finish)) state <= S_UPDATE_SECTOR;
 
 	//write
 	else if(state == S_COUNT_LOGICAL && !mult_b && cmd_write_normal_in_progress)  state <= S_WAIT_FOR_FULL_WRITE_FIFO;

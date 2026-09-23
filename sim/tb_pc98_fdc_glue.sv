@@ -1286,6 +1286,67 @@ module tb_pc98_fdc_glue;
             for (int b = 0; b < 6; b++) rd(1, msr);
             rd(0, msr);
             want("MSR idle after the result", msr, 8'h80);
+
+            // ---- and the BIOS's real boot read: EOT=0 --------------------
+            // The PC-98 BIOS sends EOT=0 and lets the DMA terminal count
+            // end the transfer -- the chip must take the mounted geometry
+            // (8 sectors/track) instead of rejecting R=1 > EOT=0.
+            dma_wr(8'h19, 8'h00);
+            dma_wr(8'h17, 8'h46);
+            dma_wr(8'h09, 8'h00); dma_wr(8'h09, 8'h00);
+            dma_wr(8'h23, 8'h01);
+            dma_wr(8'h0B, 8'hFF); dma_wr(8'h0B, 8'h03);
+            dma_wr(8'h15, 8'h02);
+
+            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'hFF);
+
+            guard = 0;
+            while (!fd_irq && guard < 40_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("EOT=0 read interrupts", fd_irq, 1'b1);
+            want1("feeder asked for LBA 0 again", feed_lba == 15'd0, 1'b1);
+            want("EOT=0 last byte landed", dma_mem[20'h10000 + 1023], 8'hFF);
+            rd(1, st0);
+            want("EOT=0 ST0 clean", st0, 8'h00);
+            for (int b = 0; b < 6; b++) rd(1, msr);
+            rd(0, msr);
+            want("MSR idle after EOT=0", msr, 8'h80);
+
+            // ---- early terminal count, the BIOS's 512-byte boot read ----
+            // The BIOS programs count=0x01FF for the IPL fetch: the DMA
+            // TC's halfway through the 1024-byte sector. A real uPD765
+            // abandons the tail and goes to the result phase; the model
+            // used to sit in S_WAIT_FOR_EMPTY_READ_FIFO forever because
+            // its only exit was fifo_empty.
+            dma_mem[20'h20000 + 512] = 8'h5A;              // untouched marker
+            dma_wr(8'h19, 8'h00);
+            dma_wr(8'h17, 8'h46);
+            dma_wr(8'h09, 8'h00); dma_wr(8'h09, 8'h00);
+            dma_wr(8'h23, 8'h02);                          // page 2 -> 0x20000
+            dma_wr(8'h0B, 8'hFF); dma_wr(8'h0B, 8'h01);    // 512 bytes
+            dma_wr(8'h15, 8'h02);
+
+            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'hFF);
+
+            guard = 0;
+            while (!fd_irq && guard < 40_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("early-TC read interrupts", fd_irq, 1'b1);
+            want("early-TC byte 511 landed", dma_mem[20'h20000 + 511], 8'hFF);
+            want("no byte past the TC",      dma_mem[20'h20000 + 512], 8'h5A);
+            rd(1, st0);
+            want("early-TC ST0 clean", st0, 8'h00);
+            for (int b = 0; b < 6; b++) rd(1, msr);
+            rd(0, msr);
+            want("MSR idle after early TC", msr, 8'h80);
         end
 
         $display("\n  errors: %0d", errors);
