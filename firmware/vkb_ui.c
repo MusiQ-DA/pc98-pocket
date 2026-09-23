@@ -458,11 +458,17 @@ void vkb_ui_tick(void)
         return;
     }
 
-    // The interact "Extra Options" action force-opens the settings OSD, edge-detected so closing it
-    // within the request window doesn't reopen. The guaranteed opener regardless of the bindings.
+    // The interact "Extra Options" action toggles the settings OSD, edge-detected so a held level
+    // cannot double-fire. Pressing it again while the menu is up closes it -- the guaranteed
+    // opener is also the guaranteed closer regardless of the bindings.
     uint8_t osd_open = CONT1_OSD_OPEN(raw) != 0;
     if (osd_open && !osd_open_prev) {
-        osd_enter_settings();
+        if (ui_mode == OSD_SETTINGS) {
+            ui_mode = OSD_NONE;
+            osd_ctrl_write();
+        } else {
+            osd_enter_settings();
+        }
     }
     osd_open_prev = osd_open;
 
@@ -513,6 +519,21 @@ void vkb_ui_tick(void)
         pressed &= ~postmon_mask; // consumed; must not reach the mode dispatch too
     }
 #endif
+
+    // A SETTINGS binding toggles like L1 does: pressing it again while the
+    // menu is up closes the overlay. Without this the press was dead --
+    // settings_input only understands A/B/arrows -- which is what "the OSD
+    // won't go away" looked like when the opener was the button tried again.
+    uint16_t settings_mask = 0;
+    for (int i = 0; i < BIND_COUNT; i++) {
+        if (key_bind_function(bind_map[i].btn) == BTNFN_SETTINGS)
+            settings_mask |= bind_map[i].mask;
+    }
+    if ((pressed & settings_mask) && ui_mode == OSD_SETTINGS) {
+        ui_mode = OSD_NONE;
+        osd_ctrl_write();
+        pressed &= ~settings_mask;
+    }
 
     // Every other button belongs to the active mode: an overlay consumes it for its own
     // navigation, and normal mode dispatches the bindings (a key was already typed by the RTL, a

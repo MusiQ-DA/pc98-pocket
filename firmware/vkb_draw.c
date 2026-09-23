@@ -2,13 +2,26 @@
 
 #include "softcpu_regs.h"
 
-// Wait until the GPU is idle so a launch does not overwrite a command still running. The
-// spin is bounded so a wedged GPU degrades to a misdrawn overlay, not a hung softcore (which
-// also services the disks). The largest fill needs a few thousand iterations; this is ample.
-static void gpu_wait(void)
+// A GPU command is several register writes (XY, WH, op) and the OSD tick runs
+// from the timer interrupt: an interrupt landing mid-sequence leaves the
+// launch half-written, so the fill/outline/char fires wherever the other
+// side's last XY pointed. That is how a framebuffer clear ended up as a small
+// rect at some glyph's address and a closed overlay stayed on screen. Mask
+// the timer for the wait-plus-launch so the whole thing is atomic; the wait
+// sits inside the mask because outside it the busy flag could change before
+// the launch was protected. The bounded spin also bounds the added latency.
+extern void irq_mask(uint32_t mask);
+
+static void gpu_begin(void)
 {
+    irq_mask(0xFFFFFFFFu);
     for (uint32_t spins = 0; (*GPU_STATUS & 1u) && spins < 1000000u; spins++) {
     }
+}
+
+static void gpu_end(void)
+{
+    irq_mask(0xFFFFFFFEu); // same mask main.c arms: every line but the timer
 }
 
 // Clipped to the region, then drawn by the GPU as one fill command in framebuffer coordinates.
@@ -21,10 +34,11 @@ void osd_fill_rect(const osd_fb_t *fb, int x, int y, int w, int h, uint8_t color
     if (cx0 >= cx1 || cy0 >= cy1) {
         return; // fully clipped
     }
-    gpu_wait();
+    gpu_begin();
     *GPU_XY = ((uint32_t) (fb->y0 + cy0) << 16) | (uint32_t) (fb->x0 + cx0);
     *GPU_WH = ((uint32_t) (cy1 - cy0) << 16) | (uint32_t) (cx1 - cx0);
     *GPU_FILL = color & 0x0F;
+    gpu_end();
 }
 
 void osd_clear(const osd_fb_t *fb, uint8_t color)
@@ -35,10 +49,11 @@ void osd_clear(const osd_fb_t *fb, uint8_t color)
 // Clear the whole framebuffer to transparent, so a previous overlay leaves no ghost.
 void osd_clear_screen(void)
 {
-    gpu_wait();
+    gpu_begin();
     *GPU_XY = 0;
     *GPU_WH = ((uint32_t) OSD_FB_HEIGHT << 16) | (uint32_t) OSD_FB_WIDTH;
     *GPU_FILL = OSD_CLEAR;
+    gpu_end();
 }
 
 // 1px rectangle outline drawn by the GPU as one command. rounded omits the four corner
@@ -49,10 +64,11 @@ void osd_rect_outline(const osd_fb_t *fb, int x, int y, int w, int h, uint8_t co
     if (w < 2 || h < 2 || x < 0 || y < 0 || x + w > fb->width || y + h > fb->height) {
         return;
     }
-    gpu_wait();
+    gpu_begin();
     *GPU_XY = ((uint32_t) (fb->y0 + y) << 16) | (uint32_t) (fb->x0 + x);
     *GPU_WH = ((uint32_t) h << 16) | (uint32_t) w;
     *GPU_OUTLINE = (rounded ? GPU_OUTLINE_ROUND : 0u) | (uint32_t) (color & 0x0F);
+    gpu_end();
 }
 
 // 1px-rounded outline (the four corner pixels omitted), the key-border look.
@@ -68,9 +84,10 @@ void osd_draw_char(const osd_fb_t *fb, int x, int y, uint8_t ch, uint8_t color)
     if (x < 0 || y < 0 || x + 8 > fb->width || y + 8 > fb->height) {
         return;
     }
-    gpu_wait();
+    gpu_begin();
     *GPU_XY = ((uint32_t) (fb->y0 + y) << 16) | (uint32_t) (fb->x0 + x);
     *GPU_CHAR = GPU_CHAR_TRANSP | ((uint32_t) (color & 0x0F) << 8) | (uint32_t) ch;
+    gpu_end();
 }
 
 void osd_draw_string(const osd_fb_t *fb, int x, int y, const char *s, uint8_t color)
