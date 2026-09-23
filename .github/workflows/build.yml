@@ -531,7 +531,8 @@ jobs:
         run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u musiq-da --password-stdin
 
       - name: Pull Quartus Standard (Wine) image
-        run: docker pull ghcr.io/musiq-da/quartus-wine:18.1
+        # -q: a 6 GB pull is hundreds of per-layer progress lines otherwise.
+        run: docker pull -q ghcr.io/musiq-da/quartus-wine:18.1
 
       - name: Stage license.dat and pin the container MAC to its HOSTID
         id: lic
@@ -551,6 +552,11 @@ jobs:
           echo "license staged; container MAC: $MAC"
 
       - name: Compile (quartus_sh --flow compile, Wine)
+        # Quartus's per-file/per-rule Info spam is thousands of lines; the
+        # authoritative record is in output_files/*.rpt + *.smsg, which are
+        # uploaded as artifacts. Keep Warnings, Errors and plain output.
+        # The braced ||true guards grep's exit-1-on-no-match; pipefail still
+        # propagates a docker/quartus failure.
         run: |
           docker run --rm --platform linux/amd64 \
             --mac-address "${{ steps.lic.outputs.mac }}" \
@@ -561,7 +567,7 @@ jobs:
             -w /work/fpga \
             ghcr.io/musiq-da/quartus-wine:18.1 \
             "C:\\intelFPGA\\18.1\\quartus\\bin64\\quartus_sh.exe" \
-            --flow compile ap_core
+            --flow compile ap_core 2>&1 | { grep --line-buffered -vE '^\s*Info' || true; }
 
       - name: SDRAM interface is actually timed (not just "green")
         # The workspace is /work, which Wine exposes as Z:\work; the tcl
@@ -577,7 +583,8 @@ jobs:
             -w /work/fpga \
             ghcr.io/musiq-da/quartus-wine:18.1 \
             "C:\\intelFPGA\\18.1\\quartus\\bin64\\quartus_sta.exe" \
-            -t "Z:\\work\\scripts\\check_sdram_paths.tcl" ap_core
+            -t "Z:\\work\\scripts\\check_sdram_paths.tcl" ap_core \
+            2>&1 | { grep --line-buffered -vE '^\s*Info' || true; }
 
       - name: Detailed STA of the CPU-domain violations
         # The summary panel shows the chipset clock at -27.9 ns with a TNS of
@@ -595,7 +602,8 @@ jobs:
             -w /work/fpga \
             ghcr.io/musiq-da/quartus-wine:18.1 \
             "C:\\intelFPGA\\18.1\\quartus\\bin64\\quartus_sta.exe" \
-            -t "Z:\\work\\scripts\\sta_cpu_paths.tcl" ap_core || true
+            -t "Z:\\work\\scripts\\sta_cpu_paths.tcl" ap_core \
+            2>&1 | { grep --line-buffered -vE '^\s*Info' || true; } || true
           ls -la fpga/sta_cpu*.txt fpga/sta_pico*.txt 2>/dev/null || true
 
       - name: Show fit summary
