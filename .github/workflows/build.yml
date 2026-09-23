@@ -333,7 +333,8 @@ jobs:
           # the mapping against an imagined controller.
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_fdc_glue \
             -Isim -I$S -I$S/common \
-            sim/tb_pc98_fdc_glue.sv $S/pc98_fdc_glue.sv -o fg --Mdir obj_fdcglue
+            sim/tb_pc98_fdc_glue.sv $S/pc98_fdc_glue.sv \
+            sim/tb_fdd_dma_model.sv -o fg --Mdir obj_fdcglue
           ./obj_fdcglue/fg | tee fdcglue.log
           grep -q "PASS tb_pc98_fdc_glue" fdcglue.log
 

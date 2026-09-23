@@ -832,34 +832,89 @@ module tb_pc98_boot;
         .counter_2_out    ()
     );
 
-    // ---- 8237 stand-in ------------------------------------------------------
+    // ---- the DMA controller -------------------------------------------------
     //
-    // The DMA register test at FD8E6 writes each odd port 01-0F twice (LSB,
-    // MSB through the shared byte pointer) and reads it back the same way.
-    // The real chip's current registers are read/write, so a pair of
-    // write-through bytes per port answers it honestly without modelling a
-    // whole 8237 the boot never puts in motion.
-    logic [7:0] dma_lsb  [0:15];
-    logic [7:0] dma_msb  [0:15];
-    logic       dma_hi_byte = 1'b0;
-    wire  [3:0] dma_reg   = cpu_address[4:1];
+    // tb_fdd_dma_model carries the guest-visible surface of the uPD71071:
+    // the DMA register test at FD8E6 writes each odd port 01-0F twice (LSB,
+    // MSB through the shared byte pointer) and reads it back the same way,
+    // and the BIOS's per-read channel setup (mode, address, count, page,
+    // unmask) lands in registers that actually move a byte per FDC DRQ --
+    // the path the HDM boot lives on.
     // Odd 0x01-0x1F, the whole uPD71071 map -- matching PERIPHERALS'
-    // dma_chip_select_n, which reaches all sixteen registers.
+    // dma_chip_select_n, which reaches all sixteen registers. The page
+    // window is the odd 0x21-0x2F the arbiter decodes.
     wire        dma_iocycle = (~io_rd_n | ~io_wr_n) & cpu_address[0]
                             & (cpu_address[7:5] == 3'h0) & ~cpu_address[9]
                             & ~cpu_address[8];
-    always_ff @(posedge clk_chipset) begin
-        if (dma_iocycle) begin
-            if (~io_wr_n) begin
-                if (~dma_hi_byte) dma_lsb[dma_reg] <= cpu_data_bus;
-                else              dma_msb[dma_reg] <= cpu_data_bus;
-            end
-            // The byte pointer advances on a read as well; two reads walk
-            // LSB then MSB and hand it back for the next write pair.
-            if (~io_wr_n | ~io_rd_n) dma_hi_byte <= ~dma_hi_byte;
+    wire        dma_page_iocycle = (~io_rd_n | ~io_wr_n) & cpu_address[0]
+                            & (cpu_address[7:4] == 4'h2) & ~cpu_address[9]
+                            & ~cpu_address[8];
+
+    // tb_fdd_dma_model: the stub grown into a transfer engine -- the BIOS's
+    // mode/address/count/page/unmask writes land in real registers, and an
+    // unmasked channel moves one byte per DRQ, TC on the last. The sector
+    // feeder inside it is fdd_poll()/push_sector() in miniature.
+    wire       fdc_dreq_w, fdc_ack_p, fdc_tc_p;
+    wire [7:0] fdc_dma_w, fdc_dma_r;
+    wire [1:0] fdd_req_w;
+    wire [15:0] fdd_mgmt_rdata;
+    wire        feed_wr_m, feed_rd_m;
+    wire  [3:0] feed_addr_m;
+    wire [15:0] feed_wdata_m;
+    wire [14:0] feed_lba;
+    int         feed_idx;
+    wire        dma_mem_wr;
+    wire [19:0] dma_mem_addr;
+    wire  [7:0] dma_mem_wd;
+
+    logic        media_1024 = 1'b0;
+    logic  [7:0] fdd_img [0:1572863];
+    int          fdd_img_len = -1;
+    initial begin
+        string p; int fd;
+        if ($value$plusargs("fddimg=%s", p)) begin
+            fd = $fopen(p, "rb");
+            if (fd) fdd_img_len = $fread(fdd_img, fd);
+            $fclose(fd);
+            $display("fdd image %s: %0d bytes", p, fdd_img_len);
         end
     end
-    wire [7:0] dma_dout = dma_hi_byte ? dma_msb[dma_reg] : dma_lsb[dma_reg];
+    wire [7:0] feed_byte = (fdd_img_len > 0
+                            && (feed_lba * (media_1024 ? 1024 : 512) + feed_idx) < fdd_img_len)
+                          ? fdd_img[feed_lba * (media_1024 ? 1024 : 512) + feed_idx] : 8'hE5;
+
+    always_ff @(posedge clk_chipset)
+        if (dma_mem_wr) ram[dma_mem_addr] <= dma_mem_wd;
+
+    wire [7:0] dma_dout;
+    tb_fdd_dma_model u_dma (
+        .clk        (clk_chipset),
+        .io_wr      ((dma_iocycle | dma_page_iocycle) & ~io_wr_n),
+        .io_rd      (dma_iocycle & ~io_rd_n),
+        .io_addr    (cpu_address[7:0]),
+        .io_wdata   (cpu_data_bus),
+        .io_rdata   (dma_dout),
+        .drq        (fdc_dreq_w),
+        .dack       (fdc_ack_p),
+        .tc         (fdc_tc_p),
+        .ddata_i    (fdc_dma_w),
+        .ddata_o    (fdc_dma_r),
+        .mem_wr     (dma_mem_wr),
+        .mem_addr   (dma_mem_addr),
+        .mem_wdata  (dma_mem_wd),
+        .mem_rdata  (ram[dma_mem_addr]),
+        .feed_en    (1'b1),
+        .sec_req    (fdd_req_w),
+        .mgmt_wr    (feed_wr_m),
+        .mgmt_addr  (feed_addr_m),
+        .mgmt_wdata (feed_wdata_m),
+        .mgmt_rd    (feed_rd_m),
+        .mgmt_rdata (fdd_mgmt_rdata),
+        .media_1024 (media_1024),
+        .feed_lba   (feed_lba),
+        .feed_idx   (feed_idx),
+        .feed_byte  (feed_byte)
+    );
 
     // ---- 8259 pair, as the chipset wires them -------------------------------
     //
@@ -1189,31 +1244,40 @@ module tb_pc98_boot;
             mgmt_addr = 4'd0; mgmt_wdata = 16'd1;    mgmt_wr = 1'b1; @(negedge clk_chipset); mgmt_wr = 1'b0; @(negedge clk_chipset);
             mgmt_addr = 4'd2; mgmt_wdata = 16'd77;   mgmt_wr = 1'b1; @(negedge clk_chipset); mgmt_wr = 1'b0; @(negedge clk_chipset);
             mgmt_addr = 4'd3; mgmt_wdata = 16'd8;    mgmt_wr = 1'b1; @(negedge clk_chipset); mgmt_wr = 1'b0; @(negedge clk_chipset);
+            mgmt_addr = 4'd4; mgmt_wdata = 16'd1232; mgmt_wr = 1'b1; @(negedge clk_chipset); mgmt_wr = 1'b0; @(negedge clk_chipset);
             mgmt_addr = 4'd5; mgmt_wdata = 16'd2;    mgmt_wr = 1'b1; @(negedge clk_chipset); mgmt_wr = 1'b0; @(negedge clk_chipset);
             mgmt_addr = 4'd6; mgmt_wdata = 16'd1;    mgmt_wr = 1'b1; @(negedge clk_chipset); mgmt_wr = 1'b0;
+            media_1024 = 1'b1;
         end
     end
+
+    // The feeder shares the mgmt port with the +media insert: the insert
+    // is long done by the time a sector request can exist.
+    wire        mgmt_wr_m    = feed_wr_m | mgmt_wr;
+    wire  [3:0] mgmt_addr_m  = feed_wr_m ? feed_addr_m : (feed_rd_m ? feed_addr_m : mgmt_addr);
+    wire [15:0] mgmt_wdata_m = feed_wr_m ? feed_wdata_m : mgmt_wdata;
+    wire        mgmt_rd_m    = feed_rd_m;
 
     floppy #(.NOT_READY_ENDS_COMMAND (1)) u_floppy (
         .clk            (clk_chipset),
         .rst_n          (~reset),
-        .dma_req        (), .dma_ack (1'b0), .dma_tc (1'b0),
-        .dma_readdata   (write_to_fdd), .dma_writedata (),
+        .dma_req        (fdc_dreq_w), .dma_ack (fdc_ack_p), .dma_tc (fdc_tc_p),
+        .dma_readdata   (fdc_dma_r), .dma_writedata (fdc_dma_w),
         .irq            (fdd_irq_wire),
         .io_address     (fdd_io_address),
         .io_read        (fdd_io_read),
         .io_readdata    (fdd_readdata_wire),
         .io_write       (fdd_io_write),
         .io_writedata   (fdd_io_writedata),
-        .mgmt_address   (mgmt_addr),
+        .mgmt_address   (mgmt_addr_m),
         .mgmt_fddn      (1'b0),
-        .mgmt_write     (mgmt_wr),
-        .mgmt_writedata (mgmt_wdata),
-        .mgmt_read      (1'b0),
-        .mgmt_readdata  (),
+        .mgmt_write     (mgmt_wr_m),
+        .mgmt_writedata (mgmt_wdata_m),
+        .mgmt_read      (mgmt_rd_m),
+        .mgmt_readdata  (fdd_mgmt_rdata),
         .wp             (2'b00),
         .clock_rate     (28'd42_954_545),
-        .request        (),
+        .request        (fdd_req_w),
         .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left ()
     );
 

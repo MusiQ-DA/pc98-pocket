@@ -81,14 +81,87 @@ module tb_pc98_fdc_glue;
     // NOT_READY_ENDS_COMMAND is what Peripherals.sv passes under MACHINE_PC98:
     // a PC-98's drives report READY, so an empty one ends a command instead of
     // parking CB. The PC/XT build passes 0 and keeps floppy.v's old behaviour.
+    // ---- the DMAC + sector feeder, tb_fdd_dma_model -------------------------
+    //
+    // The glue's own guests never touch the DMA registers -- the model's
+    // io_wr only pulses from the dma_wr() task below -- but the engine is
+    // real: an unmasked channel answers DRQ one byte at a time and drops
+    // TC on the last, exactly the pulses PERIPHERALS hands the chip. Its
+    // sector feeder shares the mgmt port with the tasks' own drives; a
+    // sector request only exists while a DMA command is live.
+    wire       fdc_dreq_w, fdc_ack_p, fdc_tc_p;
+    wire [7:0] fdc_dma_w, fdc_dma_r;
+    wire [15:0] fdd_mgmt_rdata;
+    wire        feed_wr_m, feed_rd_m;
+    wire  [3:0] feed_addr_m;
+    wire [15:0] feed_wdata_m;
+    wire [14:0] feed_lba;
+    int         feed_idx;
+    wire        dma_mem_wr;
+    wire [19:0] dma_mem_addr;
+    wire  [7:0] dma_mem_wd;
+    logic [7:0] dma_mem [0:262143];
+    logic       media_1024 = 1'b0;
+    logic       feed_en = 1'b0;
+    logic       dma_wr_p = 1'b0;
+    logic [7:0] dma_port = 8'd0, dma_wd = 8'd0;
+    wire  [7:0] feed_byte = feed_idx[7:0];
+
+    always_ff @(posedge clk)
+        if (dma_mem_wr) dma_mem[dma_mem_addr] <= dma_mem_wd;
+
+    wire        mgmt_wr_m    = feed_wr_m | mgmt_write;
+    wire  [3:0] mgmt_addr_m  = (feed_wr_m | feed_rd_m) ? feed_addr_m
+                                                       : mgmt_address;
+    wire [15:0] mgmt_wdata_m = feed_wr_m ? feed_wdata_m : mgmt_writedata;
+
+    tb_fdd_dma_model u_dma (
+        .clk        (clk),
+        .io_wr      (dma_wr_p),
+        .io_rd      (1'b0),
+        .io_addr    (dma_port),
+        .io_wdata   (dma_wd),
+        .io_rdata   (),
+        .drq        (fdc_dreq_w),
+        .dack       (fdc_ack_p),
+        .tc         (fdc_tc_p),
+        .ddata_i    (fdc_dma_w),
+        .ddata_o    (fdc_dma_r),
+        .mem_wr     (dma_mem_wr),
+        .mem_addr   (dma_mem_addr),
+        .mem_wdata  (dma_mem_wd),
+        .mem_rdata  (dma_mem[dma_mem_addr]),
+        .feed_en    (feed_en),
+        .sec_req    (fdd_request),
+        .mgmt_wr    (feed_wr_m),
+        .mgmt_addr  (feed_addr_m),
+        .mgmt_wdata (feed_wdata_m),
+        .mgmt_rd    (feed_rd_m),
+        .mgmt_rdata (fdd_mgmt_rdata),
+        .media_1024 (media_1024),
+        .feed_lba   (feed_lba),
+        .feed_idx   (feed_idx),
+        .feed_byte  (feed_byte)
+    );
+
+    // A guest I/O write to a DMAC/page port: one pulse wide enough to cover
+    // a posedge.
+    task automatic dma_wr(input logic [7:0] port, input logic [7:0] v);
+        @(negedge clk);
+        dma_port = port; dma_wd = v; dma_wr_p = 1'b1;
+        @(negedge clk);
+        dma_wr_p = 1'b0;
+        #1;
+    endtask
+
     floppy #(.NOT_READY_ENDS_COMMAND(1)) u_floppy (
         .clk            (clk),
         .rst_n          (~rst),
-        .dma_req        (),
-        .dma_ack        (1'b0),
-        .dma_tc         (1'b0),
-        .dma_readdata   (8'h00),
-        .dma_writedata  (),
+        .dma_req        (fdc_dreq_w),
+        .dma_ack        (fdc_ack_p),
+        .dma_tc         (fdc_tc_p),
+        .dma_readdata   (fdc_dma_r),
+        .dma_writedata  (fdc_dma_w),
         .irq            (fdd_irq),
         .io_address     (fd_addr),
         .io_read        (fd_read),
@@ -96,12 +169,12 @@ module tb_pc98_fdc_glue;
         .io_write       (fd_write),
         .io_writedata   (fd_wdata),
         .fdd0_inserted  (),
-        .mgmt_address   (mgmt_address),
+        .mgmt_address   (mgmt_addr_m),
         .mgmt_fddn      (1'b0),
-        .mgmt_write     (mgmt_write),
-        .mgmt_writedata (mgmt_writedata),
-        .mgmt_read      (1'b0),
-        .mgmt_readdata  (),
+        .mgmt_write     (mgmt_wr_m),
+        .mgmt_writedata (mgmt_wdata_m),
+        .mgmt_read      (feed_rd_m),
+        .mgmt_readdata  (fdd_mgmt_rdata),
         .wp             (2'b00),
         // Small, so the step-rate chain in floppy.v lands on delay_last_cycle
         // in a handful of cycles instead of a hardware second. It only scales
@@ -941,6 +1014,8 @@ module tb_pc98_fdc_glue;
             @(negedge clk);
             mgmt_address = 4'd3; mgmt_writedata = 16'd8;
             @(negedge clk);
+            mgmt_address = 4'd4; mgmt_writedata = 16'd1232; // total sectors
+            @(negedge clk);
             mgmt_address = 4'd5; mgmt_writedata = 16'd2;
             @(negedge clk);
             mgmt_address = 4'd6; mgmt_writedata = 16'd1;  // sectors are 1024B
@@ -1048,6 +1123,78 @@ module tb_pc98_fdc_glue;
             for (int b = 0; b < 6; b++) rd(1, msr);
             rd(0, msr);
             want("MSR idle after the error", msr, 8'h80);
+        end
+
+        // ================================================================
+        // The same 2HD read over DMA -- the BIOS's real path: SPECIFY's
+        // NDMA bit down, the uPD71071's ch2 programmed, DRQ answered one
+        // byte at a time, TC on the last. Everything the decode fix and
+        // the ch2/ch3 request wiring exist for.
+        $display("--- 2HD over DMA: the BIOS's own path ---");
+        begin
+            logic [7:0] msr, st0;
+            int guard;
+
+            rst = 1'b1;
+            repeat (4) @(posedge clk);
+            rst = 1'b0;
+            repeat (2) @(posedge clk);
+            window(1'b0);
+
+            @(negedge clk);
+            mgmt_address = 4'd2; mgmt_writedata = 16'd77; mgmt_write = 1'b1;
+            @(negedge clk);
+            mgmt_address = 4'd3; mgmt_writedata = 16'd8;
+            @(negedge clk);
+            mgmt_address = 4'd4; mgmt_writedata = 16'd1232; // total sectors
+            @(negedge clk);
+            mgmt_address = 4'd5; mgmt_writedata = 16'd2;
+            @(negedge clk);
+            mgmt_address = 4'd6; mgmt_writedata = 16'd1;
+            media_1024 = 1'b1;
+            @(negedge clk);
+            mgmt_address = 4'd0; mgmt_writedata = 16'd1;
+            @(negedge clk);
+            mgmt_write = 1'b0;
+            #1;
+            feed_en = 1'b1;                              // feeder live now
+
+            wr(2, 8'h08);                                // IRQ+DMA enabled
+            wr(1, 8'h03); wr(1, 8'hBF); wr(1, 8'h32);    // SPECIFY, DMA mode
+
+            // The BIOS's channel-2 setup: clear the flip-flop, single
+            // write-transfer mode, offset 0 page 1 (= 0x10000), 1024
+            // bytes, unmask. The decode fix is what makes 0x17/0x19 land.
+            dma_wr(8'h19, 8'h00);
+            dma_wr(8'h17, 8'h46);
+            dma_wr(8'h09, 8'h00); dma_wr(8'h09, 8'h00);
+            dma_wr(8'h23, 8'h01);
+            dma_wr(8'h0B, 8'hFF); dma_wr(8'h0B, 8'h03);
+            dma_wr(8'h15, 8'h02);
+
+            // READ DATA C0 H0 R1 N3 EOT1 -- the feeder answers request[0]
+            // with a ramp sector, the engine moves a byte per DRQ.
+            wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h01); wr(1, 8'h1B);
+            wr(1, 8'hFF);
+
+            guard = 0;
+            while (!fd_irq && guard < 40_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("the DMA read interrupts", fd_irq, 1'b1);
+            want1("feeder asked for LBA 0 (C0H0R1)", feed_lba == 15'd0, 1'b1);
+            want("byte 0 landed",    dma_mem[20'h10000],        8'h00);
+            want("byte 1 landed",    dma_mem[20'h10000 + 1],    8'h01);
+            want("byte 256 wrapped", dma_mem[20'h10000 + 256],  8'h00);
+            want("last byte landed", dma_mem[20'h10000 + 1023], 8'hFF);
+
+            rd(1, st0);
+            want("ST0 clean", st0, 8'h00);
+            for (int b = 0; b < 6; b++) rd(1, msr);
+            rd(0, msr);
+            want("MSR idle after the result", msr, 8'h80);
         end
 
         $display("\n  errors: %0d", errors);

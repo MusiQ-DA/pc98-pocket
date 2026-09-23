@@ -155,7 +155,8 @@ RUN_CMD="
     /work/sim/tb_pc98_boot.sv \
     $CPU_FILES \
     \$MEMFILES \
-    /work/$S/pc98_fdc_glue.sv /work/$S/common/floppy.v /work/$S/pc98_kbd8251.sv \
+    /work/$S/pc98_fdc_glue.sv /work/$S/common/floppy.v /work/$S/common/simple_fifo.v \
+    /work/sim/tb_fdd_dma_model.sv /work/$S/pc98_kbd8251.sv \
     /work/$K/ce_generator.sv /work/$K/i8288/HDL/i8288.sv \
     /work/$K/i8253/HDL/i8253.sv /work/$K/i8253/HDL/i8253_Counter.sv \
     /work/$K/i8253/HDL/i8253_Control_Logic.sv \
