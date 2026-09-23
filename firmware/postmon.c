@@ -97,6 +97,19 @@
 // the virtual keyboard's button binding reaches it from the timer interrupt.
 static int postmon_shown = 1;
 
+// Nonzero once this panel has claimed the framebuffer: it placed its origin and
+// repainted. An overlay can take the framebuffer over between two calls here --
+// the overlay check only resets this when a call actually catches it open, so
+// the IRQ side pushes an invalidate on every overlay transition instead. A fast
+// open-and-close that no call ever saw still forces the next paint to wipe and
+// re-place, instead of gating shut on stale keyboard pixels.
+static int placed = 0;
+
+void postmon_invalidate(void)
+{
+    placed = 0;
+}
+
 void postmon_toggle(void)
 {
     postmon_shown = !postmon_shown;
@@ -299,7 +312,6 @@ static uint8_t  eq_cnt[3];
 void post_mon_tick(void)
 {
     static uint32_t last_status = 0xFFFFFFFFu;
-    static int placed = 0;
 
     // Passive equip-table snoop. guest_peek is unusable once the guest runs:
     // it takes the bus through hold-acknowledge and the machine does not come

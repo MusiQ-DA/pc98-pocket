@@ -21,6 +21,11 @@ void postmon_toggle(void);
 // overlay, where a blind toggle could land on hidden.
 void postmon_show(void);
 
+// Mark the framebuffer as having changed owner. The overlay side calls this on
+// every transition, because an open-and-close that fits between two tick calls
+// would otherwise leave the next paint gated shut on stale pixels.
+void postmon_invalidate(void);
+
 // Capture the guest ROM bytes the panel shows.
 //
 // Must be called with the guest still held: the peek shares CHIPSET's

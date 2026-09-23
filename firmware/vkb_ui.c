@@ -85,8 +85,12 @@ int vkb_ui_overlay_open(void)
 }
 
 // OSD control word: bit0 = an overlay is shown; the origin is refreshed first.
+// Every transition also invalidates the POST panel's framebuffer claim: its
+// tick only drops the claim when a call happens to catch the overlay open, so
+// a quick open-and-close could leave stale pixels gated on screen.
 static void osd_ctrl_write(void)
 {
+    postmon_invalidate();
     osd_origin_write();
     *VKB_CTRL = (ui_mode != OSD_NONE) ? 1u : 0u;
 }
