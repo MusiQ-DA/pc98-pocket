@@ -524,18 +524,24 @@ void vkb_ui_tick(void)
     }
 #endif
 
-    // A SETTINGS binding toggles like L1 does: pressing it again while the
-    // menu is up closes the overlay. Without this the press was dead --
+    // A SETTINGS binding is always-live like L1: from the menu it closes, from
+    // the keyboard it swaps overlays (osd_enter_settings drops held keys and
+    // any pick first). Without this the press was dead in both overlays --
     // settings_input only understands A/B/arrows -- which is what "the OSD
-    // won't go away" looked like when the opener was the button tried again.
+    // won't go away" and "can't reach settings with the keyboard up" looked
+    // like when the opener was the button tried again.
     uint16_t settings_mask = 0;
     for (int i = 0; i < BIND_COUNT; i++) {
         if (key_bind_function(bind_map[i].btn) == BTNFN_SETTINGS)
             settings_mask |= bind_map[i].mask;
     }
-    if ((pressed & settings_mask) && ui_mode == OSD_SETTINGS) {
-        ui_mode = OSD_NONE;
-        osd_ctrl_write();
+    if (pressed & settings_mask) {
+        if (ui_mode == OSD_SETTINGS) {
+            ui_mode = OSD_NONE;
+            osd_ctrl_write();
+        } else if (ui_mode == OSD_VKB) {
+            osd_enter_settings();
+        }
         pressed &= ~settings_mask;
     }
 
