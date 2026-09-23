@@ -111,12 +111,14 @@ print(ghlib.gh('/repos/MusiQ-DA/pc98-pocket/commits/main')['sha'])")
     say "remote main is at ${HEAD_SHA:0:10}"
     waited=0
     while :; do
-        # A push can land more than one workflow on the same sha; build-std
-        # only produces reports while build uploads the bitstream artifact.
+        # A push lands more than one workflow on the same sha. The bitstream
+        # comes from the Quartus Standard job now (build-std ...): the 'build'
+        # workflow's Lite compile was retired and it only runs sim/firmware
+        # gates, i.e. its runs carry no artifacts.
         RUN=$(python3 -c "
 import sys; sys.path.insert(0,'scripts/tools'); import ghlib
 for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=100')['workflow_runs']:
-    if r['head_sha'] == '$HEAD_SHA' and r['name'] == 'build':
+    if r['head_sha'] == '$HEAD_SHA' and r['name'].startswith('build-std'):
         print(r['run_number']); break
 else: print('none')")
         [ "$RUN" != "none" ] && break

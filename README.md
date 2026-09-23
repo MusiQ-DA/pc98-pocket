@@ -16,8 +16,9 @@ docs/               設計ドキュメント(PIVOT.md, PC98_MACHINE_SPEC.md, POR
 
 ## ビルド
 
-- **CI**: pushで自動ビルド → Actionsのartifactにrbf
-- **ローカル**: `fpga/scripts/build-docker.sh`(raetro/quartus:pocketイメージ、Rosetta)
+- **CI**: pushで自動ビルド(build-std: Quartus Standard 18.1/Wine) → Actionsのartifactにsof/rbf。`build`ワークフローはsim/firmwareゲートのみ
+- **ローカル**: `scripts/build-docker.sh`(raetro/quartus:pocketイメージ、Rosetta)
+- **ローカル(Standard)**: `scripts/build-std.sh`(quartus-wine:18.1イメージ、要license.dat)
 
 ## ロードマップ
 
