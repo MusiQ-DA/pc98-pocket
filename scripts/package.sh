@@ -137,8 +137,12 @@ def video(j):
     # Hercules 720x350 canvas -- so the scaler was told to expect two hundred
     # lines and handed four hundred. There is one mode here because the machine
     # has one.
+    # Aspect is 8:5, not 4:3: the PC-98 pixel is square. NEC's own Graphic BIOS
+    # draws circles on that assumption, the 98NOTE LCDs are 640x400 native, and
+    # the 24kHz CRTs letterboxed the raster to 16:10 -- the 4:3 fill people
+    # remember was monitors stretching to fill, not the design.
     j['video']['scaler_modes'] = [
-        {"width": 640, "height": 400, "aspect_w": 4, "aspect_h": 3,
+        {"width": 640, "height": 400, "aspect_w": 8, "aspect_h": 5,
          "rotation": 0, "mirror": 0},
     ]
 
