@@ -448,7 +448,12 @@ void post_mon_tick(void)
     // every 65536 calls -- a few times a second at this loop's pace.
     static uint32_t calls = 0;
     calls++;
-    if (status == last_status && maxrst == last_maxrst
+    // placed == 0 means an overlay or the hidden state owned the framebuffer
+    // since the last paint: repaint now, whatever the fields say. Holding the
+    // gate shut here is what left a closed keyboard on screen -- VKB_CTRL went
+    // back to 1 on top of pixels nobody had erased.
+    if (placed
+        && status == last_status && maxrst == last_maxrst
         && tvram == last_tvram
         && (calls & 0xFFFFu) != 0u
         && idle_ticks != 4000u) {
@@ -459,6 +464,10 @@ void post_mon_tick(void)
     last_maxrst = maxrst;
 
     if (!placed) {
+        // Whoever owned the framebuffer last left pixels in it -- the panel
+        // repaints only its own strip, so without the wipe a closed keyboard
+        // or menu stays lit beside and below the panel forever.
+        osd_clear_screen();
         // vkb_ui writes the origin from the presented raster before it raises
         // VKB_CTRL; do the same, or the strip lands somewhere unhelpful.
         uint32_t raster = *OSD_RASTER;

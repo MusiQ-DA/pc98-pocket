@@ -537,6 +537,16 @@ void vkb_ui_tick(void)
     } else {
         dispatch_bindings(pressed);
     }
+
+    // Re-assert the open overlay's enable and origin every tick. VKB_CTRL and
+    // OSD_ORIGIN are shared with post_mon_tick, which runs on the main loop
+    // and can land its own write in the same tick an overlay opened -- leaving
+    // it drawn but disabled, or parked at the panel's origin, until the next
+    // transition. One store pair here heals that within a tick.
+    if (ui_mode != OSD_NONE) {
+        osd_origin_write();
+        *VKB_CTRL = 1u;
+    }
 }
 
 void vkb_ui_open_picker(int btn)
