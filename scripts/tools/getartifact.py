@@ -27,10 +27,10 @@ REPO = "MusiQ-DA/pc98-pocket"
 def pick_run(run_number):
     runs = ghlib.gh(f"/repos/{REPO}/actions/runs?per_page=30")["workflow_runs"]
     if run_number is None:
-        # The bitstream lives on the build-std workflow now; 'build' runs are
-        # sim/firmware gates only and carry no artifacts, so prefer them.
+        # One workflow now: 'build' carries the quartus-std bitstream
+        # artifact alongside the sim/firmware gates.
         for r in runs:
-            if r["conclusion"] == "success" and r["name"].startswith("build-std"):
+            if r["conclusion"] == "success" and r["name"] == "build":
                 return r
         for r in runs:
             if r["conclusion"] == "success":
