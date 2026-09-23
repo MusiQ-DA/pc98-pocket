@@ -1215,20 +1215,33 @@ module tb_pc98_boot;
         .dbg_strb_dat  (), .dbg_last_ctrl ()
     );
 
-    logic [2:0] fdd_io_address;
-    logic       fdd_io_read, fdd_io_read_1, fdd_io_write;
+    // Read side follows the glue combinationally and the held byte is the
+    // FDC's combinational answer captured at the strobe -- the byte has to
+    // be on the bus before the CPU's read-data latch, not three clocks
+    // after the strobe (see tb_pc98_v30, where the nuV30's T2->T3 sample
+    // raced the staged path and every other read came back one byte
+    // stale).  The write path keeps its staging: write strobes arrive at
+    // cycle end and need the registered address.
+    wire        fdd_io_read  = fdc_glue_read;
+    wire  [2:0] fdd_io_addr_rd = fdc_glue_addr;
+    logic       fdd_io_read_1;
+    logic [2:0] fdd_io_addr_rd_q;
+    logic       fdd_io_write;
+    logic [2:0] fdd_io_addr_wr;
     logic [7:0] fdd_io_writedata;
     always_ff @(posedge clk_chipset) begin
-        fdd_io_address   <= fdc_glue_addr;
-        fdd_io_read      <= fdc_glue_read;
         fdd_io_read_1    <= fdd_io_read;
+        fdd_io_addr_rd_q <= fdc_glue_addr;
         fdd_io_write     <= fdc_glue_write;
+        fdd_io_addr_wr   <= fdc_glue_addr;
         fdd_io_writedata <= fdc_glue_wdata;
     end
+    wire [2:0] fdd_io_address = fdd_io_write ? fdd_io_addr_wr
+                                           : fdd_io_addr_rd;
 
     logic [7:0] fdd_readdata = 8'hFF;
     always_ff @(posedge clk_chipset)
-        if (fdd_io_read_1) fdd_readdata <= fdd_readdata_wire;
+        if (fdd_io_read) fdd_readdata <= u_floppy.io_readdata_prepare;
 
     // +media inserts a 2HD disk in drive 0 through the same mgmt port the
     // core's file loader uses. media_present has no reset in floppy.v, so
@@ -1298,8 +1311,8 @@ module tb_pc98_boot;
             $display("  %8t  FDC <- %02X", $time, fdd_io_writedata);
         if (fdd_io_write && fdd_io_address == 3'd2)
             $display("  %8t  FDC DOR %02X", $time, fdd_io_writedata);
-        if (fdd_io_read_1 && fdd_io_address == 3'd5)
-            $display("  %8t  FDC -> %02X", $time, fdd_readdata_wire);
+        if (fdd_io_read_1 && fdd_io_addr_rd_q == 3'd5)
+            $display("  %8t  FDC -> %02X", $time, fdd_readdata);
         if (fdd_irq_wire & ~fdd_irq_q)
             $display("  %8t  FDC IRQ up   (MSR %02X)", $time, u_floppy.io_readdata);
     end
@@ -1717,10 +1730,10 @@ module tb_pc98_boot;
             // The BIOS equipment/boot bytes the hardware panel cannot reach:
             // [0x480] 2HD flag, [0x55C]/[0x55D] the per-drive tables,
             // [0x494] DISK-EQUIP2, [0x584] DISK_BOOT (the live DAZUA).
-            $display("        disk: 480=%02X 485=%02X 492=%02X 493=%02X 494=%02X 55C=%02X 55D=%02X 55E=%02X 584=%02X",
+            $display("        disk: 480=%02X 485=%02X 492=%02X 493=%02X 494=%02X 55C=%02X 55D=%02X 55E=%02X 584=%02X 4b7=%02X 4b9=%02X 501=%02X",
                      ram[20'h480], ram[20'h485], ram[20'h492], ram[20'h493],
                      ram[20'h494], ram[20'h55C], ram[20'h55D], ram[20'h55E],
-                     ram[20'h584]);
+                     ram[20'h584], ram[20'h4B7], ram[20'h4B9], ram[20'h501]);
             wr_clear_tog = ~wr_clear_tog;
         end
 

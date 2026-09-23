@@ -2038,20 +2038,37 @@ module tb_pc98_v30;
         .dbg_strb_dat  (), .dbg_last_ctrl ()
     );
 
-    logic [2:0] fdd_io_address;
-    logic       fdd_io_read, fdd_io_read_1, fdd_io_write;
+    // The byte a read returns has to be on the bus before the nuV30 latches
+    // ad_i at its T2->T3 edge, which can land just two clk_chipset after
+    // io_read_command_n falls.  The old three-deep staging (io_address ->
+    // io_readdata -> fdd_readdata) landed it at +3 -- the same edge the
+    // core samples on some CE phases, so every other FDC read came back
+    // one byte stale: the BIOS's post-ST0 status read looked "not busy",
+    // it fell into the command-send helper, and the seek drain wedged.
+    // io_address/io_read now follow the glue combinationally and the held
+    // byte is the FDC's combinational answer captured at the strobe --
+    // what a real data register shows for the whole RD.  The write path
+    // keeps its staging: the write strobe already arrives at cycle end.
+    wire        fdd_io_read  = fdc_glue_read;
+    wire  [2:0] fdd_io_addr_rd = fdc_glue_addr;
+    logic       fdd_io_read_1;
+    logic [2:0] fdd_io_addr_rd_q;
+    logic       fdd_io_write;
+    logic [2:0] fdd_io_addr_wr;
     logic [7:0] fdd_io_writedata;
     always_ff @(posedge clk_chipset) begin
-        fdd_io_address   <= fdc_glue_addr;
-        fdd_io_read      <= fdc_glue_read;
         fdd_io_read_1    <= fdd_io_read;
+        fdd_io_addr_rd_q <= fdc_glue_addr;
         fdd_io_write     <= fdc_glue_write;
+        fdd_io_addr_wr   <= fdc_glue_addr;
         fdd_io_writedata <= fdc_glue_wdata;
     end
+    wire [2:0] fdd_io_address = fdd_io_write ? fdd_io_addr_wr
+                                           : fdd_io_addr_rd;
 
     logic [7:0] fdd_readdata = 8'hFF;
     always_ff @(posedge clk_chipset)
-        if (fdd_io_read_1) fdd_readdata <= fdd_readdata_wire;
+        if (fdd_io_read) fdd_readdata <= u_floppy.io_readdata_prepare;
 
     floppy #(.NOT_READY_ENDS_COMMAND (1)) u_floppy (
         .clk            (clk_chipset),
@@ -2259,16 +2276,60 @@ module tb_pc98_v30;
 
     // The conversation, one line per byte, plus every interrupt edge.
     logic fdd_irq_q = 1'b0;
+    logic [3:0] fdd_seek_done_q = 4'h0;
     always_ff @(posedge clk_chipset) begin
         fdd_irq_q <= fdd_irq_wire;
+        fdd_seek_done_q <= u_floppy.seek_done;
         if (fdd_io_write && fdd_io_address == 3'd5)
-            $display("  %8t  FDC <- %02X", $time, fdd_io_writedata);
+            $display("  %8t  FDC <- %02X  (eu_pc %05X)", $time, fdd_io_writedata, eu_pc);
         if (fdd_io_write && fdd_io_address == 3'd2)
-            $display("  %8t  FDC DOR %02X", $time, fdd_io_writedata);
-        if (fdd_io_read_1 && fdd_io_address == 3'd5)
-            $display("  %8t  FDC -> %02X", $time, fdd_readdata_wire);
+            $display("  %8t  FDC DOR %02X  (eu_pc %05X)", $time, fdd_io_writedata, eu_pc);
+        if (fdd_io_read_1 && fdd_io_addr_rd_q == 3'd5)
+            $display("  %8t  FDC -> %02X  (eu_pc %05X, left %0d)", $time,
+                     fdd_readdata, eu_pc, u_floppy.reply_left);
         if (fdd_irq_wire & ~fdd_irq_q)
-            $display("  %8t  FDC IRQ up   (MSR %02X)", $time, u_floppy.io_readdata);
+            $display("  %8t  FDC IRQ up   (MSR %02X, eu_pc %05X, done %b busy %b)",
+                     $time, u_floppy.io_readdata, eu_pc,
+                     u_floppy.seek_done, u_floppy.seek_busy);
+        if (~fdd_irq_wire & fdd_irq_q)
+            $display("  %8t  FDC IRQ dn   (eu_pc %05X, done %b)", $time, eu_pc,
+                     u_floppy.seek_done);
+        if (u_floppy.seek_done != fdd_seek_done_q)
+            $display("  %8t  FDC done %b -> %b  (eu_pc %05X)", $time,
+                     fdd_seek_done_q, u_floppy.seek_done, eu_pc);
+    end
+
+    // Boot-device bookkeeping watch: [0x55e] = per-drive seek-done bits the
+    // IRQ handler at FAF6 sets, [0x55c]/[0x55d]/[0x494] = the equipment maps
+    // the fcc9 scan gates on, [0x472] = the boot-device count f4a79 reads.
+    logic [7:0] w55e_q = 8'h00, w55c_q = 8'h00, w55d_q = 8'h00,
+                w494_q = 8'h00, w472_q = 8'h00;
+    always_ff @(posedge clk_chipset) begin
+        if (ram[20'h0055E] != w55e_q) begin
+            $display("  %8t  W[55e] %02X -> %02X  (eu_pc %05X)", $time,
+                     w55e_q, ram[20'h0055E], eu_pc);
+            w55e_q <= ram[20'h0055E];
+        end
+        if (ram[20'h0055C] != w55c_q) begin
+            $display("  %8t  W[55c] %02X -> %02X  (eu_pc %05X)", $time,
+                     w55c_q, ram[20'h0055C], eu_pc);
+            w55c_q <= ram[20'h0055C];
+        end
+        if (ram[20'h0055D] != w55d_q) begin
+            $display("  %8t  W[55d] %02X -> %02X  (eu_pc %05X)", $time,
+                     w55d_q, ram[20'h0055D], eu_pc);
+            w55d_q <= ram[20'h0055D];
+        end
+        if (ram[20'h00494] != w494_q) begin
+            $display("  %8t  W[494] %02X -> %02X  (eu_pc %05X)", $time,
+                     w494_q, ram[20'h00494], eu_pc);
+            w494_q <= ram[20'h00494];
+        end
+        if (ram[20'h00472] != w472_q) begin
+            $display("  %8t  W[472] %02X -> %02X  (eu_pc %05X)", $time,
+                     w472_q, ram[20'h00472], eu_pc);
+            w472_q <= ram[20'h00472];
+        end
     end
 
     // Text GDC status at 0x60, shaped exactly like PERIPHERALS' gdc_status:

@@ -250,6 +250,30 @@ jobs:
           ./obj_v30br/v +slow=12 | tee v30br_slow.log
           grep -q "RESULT: PASS" v30br_slow.log
 
+      - name: a bare V30's T2 sample still lands after the FDC answers
+        run: |
+          # The nuV30 latches ad_i at T2->T3, as early as two clk_chipset
+          # after io_read_command_n falls.  If a peripheral's read answer is
+          # staged deeper than that the CPU reads the previous byte -- this
+          # is the race that made the BIOS's seek drain see a phantom
+          # "not busy" and wedge.  The bench runs SPECIFY/RECALIBRATE x4/
+          # SENSE-drain through the real core + 8288 + glue + floppy and
+          # checks every byte the program stored.
+          S=fpga/core
+          K=$S/chipset/HDL
+          V=$S/v30
+          mkdir -p hdl/rtl/ucore && cp $V/ucrom.hex $V/ucdecode.hex hdl/rtl/ucore/
+          verilator --binary --timing -Wno-fatal --top-module tb_v30_fdcrd \
+            -Isim -I$S -I$V -I$K -I$K/i8288/HDL \
+            sim/tb_v30_fdcrd.sv \
+            $V/v30u_ss_pkg.sv $V/v30_core.sv $V/v30u_biu.sv $V/v30u_eu.sv \
+            $V/v30u_ucrom.sv $S/pc98_fdc_glue.sv \
+            $S/common/floppy.v $S/common/simple_fifo.v \
+            $K/ce_generator.sv $K/i8288/HDL/i8288.sv \
+            -o fdcrd --Mdir obj_fdcrd
+          ./obj_fdcrd/fdcrd | tee fdcrd.log
+          grep -q "RESULT: PASS" fdcrd.log
+
       - name: no two OSD fields overlap
         run: python3 scripts/check_osd_layout.py
 

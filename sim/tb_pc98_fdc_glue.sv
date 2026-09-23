@@ -605,6 +605,84 @@ module tb_pc98_fdc_glue;
             want1("and nothing on either slave line", irq_2hd | irq_2dd, 1'b0);
         end
 
+        // ======== THE BIOS'S OWN PATTERN: RECAL x4 BACK-TO-BACK ============
+        //
+        // The equipment probe (BIOS FF5F1 area) issues RECALIBRATE for all
+        // four units in one burst -- the FDC trace shows 07 00/01/02/03 five
+        // microseconds apart -- then parks in FF233 waiting for [0x55E]&0x0F
+        // == 0x0F. The IRQ handler at FFAF6 is supposed to set one bit per
+        // SENSE INTERRUPT STATUS it drains. In the full-machine run only two
+        // of the four bits ever landed: the handler drained about one result
+        // per interrupt and the poll timed out first. This section drives the
+        // exact same command/drain sequence against the real chip and counts
+        // how many SENSEs it takes to empty the queue -- on a correct model
+        // one handler pass drains everything and drops the line.
+        $display("--- BIOS recal x4, handler-style drain ---");
+        begin
+            logic [7:0] msr, st0, pcn;
+            int         drained, guard, irq_edges;
+            logic       irq_q;
+
+            rst = 1'b1;
+            repeat (4) @(posedge clk);
+            rst = 1'b0;
+            repeat (2) @(posedge clk);
+            loop_mode = 1'b1;
+            window(1'b0);
+            irq_q = 1'b0; irq_edges = 0;
+
+            // Media in drive 0 only -- drives 1-3 must answer not-ready, the
+            // same 0x69/0x72/0x73 the real run logged.
+            @(negedge clk);
+            mgmt_address = 4'd0; mgmt_writedata = 16'h0001; mgmt_write = 1'b1;
+            @(negedge clk);
+            mgmt_write = 1'b0;
+            @(negedge clk);
+            mgmt_address = 4'd4; mgmt_writedata = 16'd1232; mgmt_write = 1'b1;
+            @(negedge clk);
+            mgmt_write = 1'b0;
+            #1;
+
+            wr(2, 8'h3C);           // DOR: enable + irq + both motors
+            wr(1, 8'h03);           // SPECIFY, the BIOS's bf 32
+            wr(1, 8'hBF);
+            wr(1, 8'h32);
+
+            // Four recalibrates in one burst, no waits between them.
+            wr(1, 8'h07); wr(1, 8'h00);
+            wr(1, 8'h07); wr(1, 8'h01);
+            wr(1, 8'h07); wr(1, 8'h02);
+            wr(1, 8'h07); wr(1, 8'h03);
+
+            // Wait for the first completion interrupt.
+            guard = 0;
+            while (!fd_irq && guard < 4000) begin
+                @(negedge clk); guard++;
+                if (fd_irq && !irq_q) irq_edges++;
+                irq_q = fd_irq;
+            end
+            want1("burst recal raises irq", fd_irq, 1'b1);
+
+            // The FFAF6 drain: SENSE, read ST0+PCN, repeat until 0x80. Count
+            // both results and interrupt edges while it runs.
+            drained = 0;
+            for (int i = 0; i < 12; i++) begin
+                wr(1, 8'h08);              // SENSE INTERRUPT STATUS
+                rd(1, st0);
+                if (st0 == 8'h80) break;   // empty queue: one-byte reply
+                rd(1, pcn);
+                drained++;
+                $display("    sense %0d: st0 %02X pcn %02X  irq %0d",
+                         i, st0, pcn, fd_irq);
+            end
+            want("four drives drained in one pass", drained, 8'd4);
+            want1("irq low once the queue is empty", fd_irq, 1'b0);
+            want1("no irq re-assert after last sense", fd_irq, 1'b0);
+            rd(0, msr);
+            want("MSR idle after the drain", msr & 8'hF0, 8'h80);
+            want1("seek-mode bits all clear", |(msr & 8'h0F), 1'b0);
+        end
+
         // =============== THE DRIVE WITH NOTHING IN IT ======================
         //
         // This core's normal state is an empty drive, and it is the state the
