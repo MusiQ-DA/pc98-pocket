@@ -419,7 +419,7 @@ static void draw_row(int i)
                 while (v >= place[p]) { v -= place[p]; d++; }
                 if (!lead || d || place[p] == 1) { digs[nd++] = (char) ('0' + d); lead = 0; }
             }
-            while (nd) buf[n++] = digs[--nd];
+            for (int i = 0; i < nd; i++) buf[n++] = digs[i];
             buf[n++] = 'K';
         } else {
             static const char word[] = "Ejected";
