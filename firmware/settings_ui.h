@@ -18,6 +18,11 @@ void settings_show_credits(void);
 // values. Returns nonzero when the user dismisses the overlay (B at the main menu).
 int settings_input(uint16_t pressed);
 
+// Advance the orchestrated guest reset (blank + hold, then unblank once the BIOS repaints) one
+// timer tick. Call every tick from vkb_ui_tick -- the sequence spans seconds, so it cannot run
+// inside the IRQ-context input handler that starts it.
+void settings_reset_tick(void);
+
 // Load the persisted settings from the nonvolatile save (if present) and apply them; call once at
 // startup, before the OSD can run. settings_service() writes any later change back into the save
 // window; call it from the main loop.

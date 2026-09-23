@@ -443,6 +443,8 @@ static int vkb_input(uint16_t pressed, uint16_t buttons)
 
 void vkb_ui_tick(void)
 {
+    settings_reset_tick(); // the reset's blank/hold walk, cheap while idle
+
     uint32_t raw = *CONT1_KEY;
     uint16_t buttons = raw & 0xFFFF;
 

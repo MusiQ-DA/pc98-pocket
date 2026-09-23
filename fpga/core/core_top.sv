@@ -363,10 +363,12 @@ module core_top (
         end
     end
 
-    // One video mode: no card swap, no pixel-pair select, no blanking
-    // machinery. swap_video and pix_sel were the PC/AT pair's, and the
-    // register that raised them went with the CGA.
-    wire vid_blank = 1'b0;
+    // One video mode: no card swap, no pixel-pair select. swap_video and
+    // pix_sel were the PC/AT pair's, and the register that raised them went
+    // with the CGA. vid_blank is the softcore's (SOFT_GUEST_HOLD bit1): it
+    // forces the presented frame dark through an orchestrated guest reset,
+    // so the stale VRAM picture cannot sit on screen until the BIOS repaints.
+    wire vid_blank = soft_vid_blank;
 
     // One video mode, so no switch: the dot clock goes straight out. The CGA
     // and HGC pairs and the swap machinery above are PC/AT things that this
@@ -390,8 +392,10 @@ module core_top (
     wire RESET = ~pll_locked | ~pll_pc98_locked;
 
     // The disk/OSD softcore is the boot master; it drives this hold (declared here so the guest
-    // reset can use it, sourced from u_softcpu below).
+    // reset can use it, sourced from u_softcpu below). soft_vid_blank is the
+    // same register's bit1, declared here for the pocket_video instance.
     wire soft_guest_hold;
+    wire soft_vid_blank;
 
     // Guest reset terms: PLL lock (RESET), ROM load and the first-BIOS gate, the interact
     // Reset PC, the boot hold, and the softcore's boot-master hold (soft_guest_hold), which
@@ -1031,6 +1035,7 @@ module core_top (
         .raster_h                   (osd_raster_h),
         .dataslots_ready            (dataslots_ready),
         .soft_guest_hold            (soft_guest_hold),
+        .soft_vid_blank             (soft_vid_blank),
         .osd_active                 (osd_active),
         .osd_credits_req            (osd_credits_req),
         .vkb_key                    (vkb_key),

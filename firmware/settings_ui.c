@@ -8,6 +8,9 @@
 #include "vkb_ui.h"
 #ifdef POST_MONITOR
 #include "postmon.h"
+// post_monitor's text-plane write snoop: {tvram last addr, write count}. The
+// reset sequence watches it to lift the video blank when the BIOS repaints.
+#define POST_TVRAM ((volatile uint32_t *) 0x50000080)
 #endif
 
 // The settings overlay: a CP437-framed panel of submenus, drawn on demand into the shared OSD
@@ -125,6 +128,16 @@ static setting_t settings[SET_COUNT] = {
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
 static uint8_t settings_default[SET_COUNT];
+
+// Orchestrated reset state machine, advanced one tick at a time by
+// settings_reset_tick (called from vkb_ui_tick, the timer IRQ). ACT_RESET_PC
+// runs inside that IRQ, so the multi-second blank cannot spin there: it would
+// park the softcore -- and with it fdd/gdc service -- for the whole re-POST.
+static uint8_t  reset_phase;
+static uint32_t reset_ticks;
+#ifdef POST_MONITOR
+static uint32_t reset_tv0;
+#endif
 
 // A menu row is a submenu link, an editable option, a controller-button binding, an action, or a
 // blank grouping spacer; `arg` selects the target menu, the setting id, the BIND_* button, or the
@@ -606,13 +619,13 @@ int settings_input(uint16_t pressed)
     } else if (it->type == IT_ACTION) {
         if (pressed & BTN_A) {
             if (it->arg == ACT_RESET_PC) {
-                // Orchestrated guest reset: assert the boot-master hold (the guest re-latches
-                // the live settings when it releases), hold briefly, then release. The softcore
-                // keeps running, so disks stay mounted and the guest re-detects them.
-                *SOFT_GUEST_HOLD = 1;
-                for (volatile int i = 0; i < 1000; i++)
-                    ;
-                *SOFT_GUEST_HOLD = 0;
+                // Orchestrated guest reset: blank the picture and hold the guest, then let
+                // settings_reset_tick walk the release. The raster is free-running, so the
+                // GDC keeps scanning the old VRAM and the dead screen would stay up until
+                // the BIOS repaints over it -- the blank (SOFT_GUEST_HOLD bit1) hides that.
+                *SOFT_GUEST_HOLD = 3;
+                reset_phase = 1;
+                reset_ticks = 0;
                 return 1; // close the panel so the re-POST shows on a clean screen
             } else if (it->arg == ACT_DEFAULTS) {
                 settings_reset_defaults();
@@ -628,6 +641,39 @@ int settings_input(uint16_t pressed)
         }
     }
     return 0;
+}
+
+void settings_reset_tick(void)
+{
+    if (reset_phase == 1) {
+        if (++reset_ticks >= 2) {        // ~2 ms of hold
+#ifdef POST_MONITOR
+            reset_tv0 = *POST_TVRAM;
+#endif
+            *SOFT_GUEST_HOLD = 2;        // release the guest, keep the blank
+            reset_phase = 2;
+            reset_ticks = 0;
+        }
+    } else if (reset_phase == 2) {
+#ifdef POST_MONITOR
+        // POST_TVRAM = {tvram last addr, write count}: any text-plane write
+        // moves it even once the low-16 count has saturated, so a rep-stosw
+        // screen clear exits this long before the ceiling does.
+        if (*POST_TVRAM != reset_tv0) {
+            reset_phase = 3;
+            reset_ticks = 0;
+        } else
+#endif
+        if (++reset_ticks >= 4000) {     // ~4 s ceiling, then unblank anyway
+            reset_phase = 0;
+            *SOFT_GUEST_HOLD = 0;
+        }
+    } else if (reset_phase == 3) {
+        if (++reset_ticks >= 100) {      // let the repaint's first burst land
+            reset_phase = 0;
+            *SOFT_GUEST_HOLD = 0;
+        }
+    }
 }
 
 // Persisted settings live in the nonvolatile dataslot's window in the disk bridge RAM (word

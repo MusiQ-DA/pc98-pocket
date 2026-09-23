@@ -98,6 +98,7 @@ module softcpu_subsystem (
     input   [9:0] raster_h,
     input         dataslots_ready, // APF has finished the initial dataslot load
     output        soft_guest_hold, // boot-master guest reset: held until settings are staged
+    output        soft_vid_blank,  // bit1 of the same register: force the presented frame dark
     // SDRAM self-test window (docs/P0_SELFTEST_SPEC.md). The firmware drives
     // guest SDRAM through core_top's ext-port master while the 8088 is held,
     // so a failing address can be reported instead of inferred from a beep.
@@ -366,14 +367,22 @@ module softcpu_subsystem (
     // Boot-master guest hold at 0x2000001C: powers up asserted so the guest stays in reset until
     // the firmware releases it (writes 0); the firmware writes 1 to re-assert it for an
     // orchestrated guest reset. Re-armed only by the softcore reset, not a guest reset.
+    // Bit 1 forces the presented picture dark while it is set: the raster is free-running, so
+    // the GDC keeps scanning the old VRAM through a reset and the dead screen stays up until
+    // the BIOS repaints over it, unless the output is blanked.
     reg soft_guest_hold_r = 1'b1;
+    reg soft_vid_blank_r  = 1'b0;
     always @(posedge clk_pico) begin
-        if (reset)
+        if (reset) begin
             soft_guest_hold_r <= 1'b1;
-        else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd7)
+            soft_vid_blank_r  <= 1'b0;
+        end else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd7) begin
             soft_guest_hold_r <= cpu_mem_wdata[0];
+            soft_vid_blank_r  <= cpu_mem_wdata[1];
+        end
     end
     assign soft_guest_hold = soft_guest_hold_r;
+    assign soft_vid_blank  = soft_vid_blank_r;
 
     // SDRAM self-test registers, 0x50000000/04/08/0C.
     //   00 W  address[19:0]
