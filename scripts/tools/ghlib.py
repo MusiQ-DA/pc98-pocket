@@ -3,9 +3,17 @@
 import json, os, subprocess, sys, time
 from urllib.parse import urlparse
 
-TOKEN = [l.split(":", 1)[1].strip()
-         for l in open(os.path.expanduser("~/.config/gh/hosts.yml"))
-         if "oauth_token:" in l][0]
+def _token():
+    h = os.path.expanduser("~/.config/gh/hosts.yml")
+    if os.path.exists(h):
+        for l in open(h):
+            if "oauth_token:" in l:
+                return l.split(":", 1)[1].strip()
+    # gh >= 2.x keeps the token in the OS keyring, not hosts.yml.
+    return subprocess.run(["gh", "auth", "token"],
+                          capture_output=True, text=True).stdout.strip()
+
+TOKEN = os.environ.get("GH_TOKEN") or _token()
 
 _ipcache = {}
 
