@@ -1,0 +1,66 @@
+name: build-std (Quartus Standard via Wine)
+
+# Experimental job: compiles with Quartus Prime Standard 18.1 running under
+# Wine inside a private ghcr image (ghcr.io/musiq-da/quartus-wine:18.1).
+# Manual trigger only -- the image runs in Evaluation Mode, which can
+# compile/fit/analyze timing but cannot generate programming files (.sof).
+# The public Lite job in build.yml remains the one that ships bitstreams.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  quartus-std:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        # 6 GB compressed image -- the default runner has ~14 GB usable,
+        # so drop the preinstalled SDK cruft first.
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune -a -f || true
+          df -h /
+
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u musiq-da --password-stdin
+
+      - name: Pull Quartus Standard (Wine) image
+        run: docker pull ghcr.io/musiq-da/quartus-wine:18.1
+
+      - name: Compile (quartus_sh --flow compile, Wine)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/work \
+            -w /work/fpga \
+            ghcr.io/musiq-da/quartus-wine:18.1 \
+            "C:\\intelFPGA\\18.1\\quartus\\bin64\\quartus_sh.exe" \
+            --flow compile ap_core
+
+      - name: Show fit summary
+        if: always()
+        run: |
+          grep -A14 "Logic utilization" fpga/output_files/ap_core.fit.rpt 2>/dev/null | head -4 || true
+          grep -E "Total (registers|block memory bits|RAM Blocks|DSP Blocks|PLLs)" \
+            fpga/output_files/ap_core.fit.rpt 2>/dev/null || true
+          grep -iE "evaluation mode|programming files" fpga/output_files/*.smsg \
+            fpga/output_files/*.rpt 2>/dev/null | head -5 || true
+          ls -la fpga/output_files/ 2>/dev/null || true
+
+      - name: Upload reports
+        # Evaluation Mode: no .sof/.rbf is produced; archive the reports.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quartus-std-reports
+          if-no-files-found: warn
+          path: |
+            fpga/output_files/*.rpt
+            fpga/output_files/*.summary
+            fpga/output_files/*.smsg
