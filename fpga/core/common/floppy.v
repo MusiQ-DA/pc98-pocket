@@ -631,12 +631,20 @@ always @(posedge clk) begin
 	if(~rst_n | sw_reset)                                irq <= 1'b0;
 	else if(~old_enable & enable)                        irq <= 1'b1;
 	else if(ndma_write | ndma_read)                      irq <= 1'b0;
-	else if(ndma_irq | raise_interrupt)                  irq <= 1'b1;
+	// A seek completion (delay_last_cycle) is not raised here: the
+	// same clock already latches it into seek_done, and the gated
+	// re-raise below presents it once the current result phase closes.
+	// An edge mid-phase lets the BIOS's early-EOI handler nest while a
+	// byte is still unread -- it then polls MSR, sees DIO still set,
+	// and burns its whole 65536-iteration timeout before draining.
+	else if(ndma_irq | (raise_interrupt & ~delay_last_cycle)) irq <= 1'b1;
 	else if(io_read && io_address == 3'd5 && ~ndma_read) irq <= 1'b0;
 	// A seek that has arrived and not been sensed keeps asking. The read
 	// above lowers the line first, so the next one arrives as a fresh EDGE
-	// -- which is the only thing an edge-triggered 8259 will take.
-	else if(dma_irq_enable && |seek_done)                irq <= 1'b1;
+	// -- which is the only thing an edge-triggered 8259 will take. The
+	// re-raise waits for the result phase to end (transfer_to_cpu clears
+	// on the last byte): a SENSE returns ST0 and PCN as one result.
+	else if(dma_irq_enable && |seek_done && ~transfer_to_cpu) irq <= 1'b1;
 end
 
 reg [2:0] reset_sensei;

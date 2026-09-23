@@ -670,8 +670,21 @@ module tb_pc98_fdc_glue;
                 wr(1, 8'h08);              // SENSE INTERRUPT STATUS
                 rd(1, st0);
                 if (st0 == 8'h80) break;   // empty queue: one-byte reply
+                // With more completions still queued the line must stay
+                // down until the WHOLE result is read: an edge between ST0
+                // and PCN reaches a handler whose early EOI already re-armed
+                // the PIC, so it nests with DIO still set and burns its
+                // 65536-iteration MSR poll -- the nested storm the full run
+                // showed. Wait past the old one-clock re-raise before
+                // sampling, so a mid-phase edge cannot slip the check.
+                repeat (3) @(negedge clk);
+                want1("no irq edge between ST0 and PCN", fd_irq, 1'b0);
                 rd(1, pcn);
                 drained++;
+                if (i < 3) begin
+                    repeat (2) @(negedge clk);
+                    want1("irq re-raised for the next completion", fd_irq, 1'b1);
+                end
                 $display("    sense %0d: st0 %02X pcn %02X  irq %0d",
                          i, st0, pcn, fd_irq);
             end
