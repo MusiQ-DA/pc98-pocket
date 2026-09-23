@@ -29,6 +29,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Restore incremental compile database
+        # The qsf carries INCREMENTAL_COMPILATION FULL_INCREMENTAL_COMPILATION
+        # with a POST_FIT / PLACEMENT_AND_ROUTING Top partition, so Quartus
+        # reuses last run's fit for unchanged logic -- as long as the db
+        # survives, which a fresh checkout does not give it. Every run saves
+        # under a unique key and restores the newest one by prefix, so a
+        # small RTL change does not pay a full refit. Bump the v1 prefix to
+        # throw away a suspect db.
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            fpga/db
+            fpga/incremental_db
+          key: quartus-incdb-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: quartus-incdb-v1-
+
       - name: Free disk space
         # 6 GB compressed image -- the default runner has ~14 GB usable,
         # so drop the preinstalled SDK cruft first.
@@ -141,3 +157,15 @@ jobs:
             fpga/sta_cpu_*.txt
             fpga/sta_pico_*.txt
             fpga/sta_sdram_*.txt
+
+      - name: Save incremental compile database
+        # always(): a red SDRAM timing gate still leaves a perfectly good
+        # post-fit db behind -- exactly the state the next fix wants to
+        # resume from.
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            fpga/db
+            fpga/incremental_db
+          key: quartus-incdb-v1-${{ github.run_id }}-${{ github.run_attempt }}
