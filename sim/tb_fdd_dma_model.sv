@@ -73,8 +73,24 @@ module tb_fdd_dma_model (
     wire         is_dmac  = io_addr[0] & (io_addr[7:5] == 3'h0);
     wire         is_page  = io_addr[0] & (io_addr[7:4] == 4'h2) & ~io_addr[3];
 
+    // io_wr/io_rd are level strobes: a real bus cycle holds them for two or
+    // three clks. Apply each access once, on the leading edge, or hi_byte
+    // toggles once per clk and the count/address bytes scramble.
+    logic io_wr_q = 1'b0, io_rd_q = 1'b0;
     always_ff @(posedge clk) begin
-        if (io_wr && is_dmac) begin
+        io_wr_q <= io_wr;
+        io_rd_q <= io_rd;
+    end
+    wire wr_p = io_wr & ~io_wr_q;
+    wire rd_done = io_rd_q & ~io_rd;
+    // The byte pointer flips when a channel-register read completes; ridx must
+    // be captured while the read is still live.
+    logic rd_was_chan = 1'b0;
+    always_ff @(posedge clk) if (io_rd) rd_was_chan <= is_dmac & (ridx < 8);
+    wire rd_is_chan = rd_was_chan;
+
+    always_ff @(posedge clk) begin
+        if (wr_p && is_dmac) begin
             if (ridx < 8) begin
                 if (~hi_byte) begin
                     rb_lsb[ridx[2:0]] <= io_wdata;
@@ -95,9 +111,9 @@ module tb_fdd_dma_model (
                 4'd15: mask_reg <= io_wdata[3:0];
                 default: ;
             endcase
-        end else if (io_wr && is_page) begin
+        end else if (wr_p && is_page) begin
             page_reg[io_addr[2:1]] <= io_wdata[3:0];
-        end else if (io_rd && is_dmac && ridx < 8) begin
+        end else if (rd_done && rd_is_chan) begin
             hi_byte <= ~hi_byte;
         end
     end
