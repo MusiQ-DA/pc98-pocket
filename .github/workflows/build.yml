@@ -511,8 +511,8 @@ jobs:
           path: |
             fpga/db
             fpga/incremental_db
-          key: quartus-incdb-v1-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: quartus-incdb-v1-
+          key: quartus-incdb-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: quartus-incdb-v2-
 
       - name: Free disk space
         # 6 GB compressed image -- the default runner has ~14 GB usable,
@@ -642,4 +642,4 @@ jobs:
           path: |
             fpga/db
             fpga/incremental_db
-          key: quartus-incdb-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          key: quartus-incdb-v2-${{ github.run_id }}-${{ github.run_attempt }}
