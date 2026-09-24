@@ -311,9 +311,12 @@ void postmon_capture_rom(void)
 static uint32_t eq_snap[3][4];
 static uint8_t  eq_cnt[3];
 
+static uint32_t mon_hb;
+
 void post_mon_tick(void)
 {
     static uint32_t last_status = 0xFFFFFFFFu;
+    mon_hb++;
 
     // Passive equip-table snoop. guest_peek is unusable once the guest runs:
     // it takes the bus through hold-acknowledge and the machine does not come
@@ -869,8 +872,20 @@ void post_mon_tick(void)
             hex(4 + 8 * 8, 92, fdd_dbg_pushed & 0xFFu, 2);
             osd_draw_string(&fb, 4 + 10 * 8, 92, "ER", OSD_LABEL);
             hex(4 + 13 * 8, 92, fdd_dbg_err & 0xFFu, 2);
-            osd_draw_string(&fb, 4 + 15 * 8, 92, "AF", OSD_LABEL);
-            hex(4 + 18 * 8, 92, fdd_dbg_aft & 0xFFu, 2);
+            // HB counts post_mon_tick calls -- one per firmware loop -- so a
+            // frozen panel is provable: compare two shots a few seconds
+            // apart. Bits 23:16 specifically: the forced repaint runs every
+            // 65536 calls, so the low bytes would repeat the same digits on
+            // every repaint of an idle machine and look frozen while the
+            // loop is alive. M is the firmware's own inserted flags ({B,A});
+            // a set floppy.v media bit with M clear means the poll loop is
+            // gated off and SN can never move no matter what the request
+            // does. AF is retired for the room: it was always 00.
+            osd_draw_string(&fb, 4 + 15 * 8, 92, "HB", OSD_LABEL);
+            hex(4 + 17 * 8 + 4, 92, (mon_hb >> 16) & 0xFFu, 2);
+            osd_draw_string(&fb, 4 + 19 * 8 + 4, 92, "M", OSD_LABEL);
+            hex(4 + 20 * 8 + 4, 92,
+                (fdd_is_inserted(1) ? 2u : 0u) | (fdd_is_inserted(0) ? 1u : 0u), 1);
         }
 
         // R!: the ROM watcher's catch, on the row the dead STK display
