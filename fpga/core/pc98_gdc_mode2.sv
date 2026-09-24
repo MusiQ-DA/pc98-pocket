@@ -37,6 +37,21 @@
 // true by its caller; the input exists so that is a decision someone made
 // rather than one nobody noticed.
 //
+// Bytes 0x82-0x85 are a different shape entirely -- the extended commands of
+// gdc_o6a's `else` arm, and of those the four that touch gdc.clock:
+//
+//     case 0x82: gdc.clock &= ~1;      case 0x84: gdc.clock &= ~2;
+//     case 0x83: gdc.clock |=  1;      case 0x85: gdc.clock |=  2;
+//
+// d[2] picks the bit, d[0] the value -- the same set/reset idea in a wider
+// encoding. The field is the machine's GDC clock switch: np2kai shows it as
+// "2.5MHz"/"5MHz" (np2info, bit 7 is a shadow flag it toggles when the field
+// hits 3, pccore.c), and in its renderers it changes what the slave GDC's
+// PITCH means -- maketgrp doubles s_pitch while the flag is clear, so a
+// 640-dot line is PITCH=40 words at 2.5MHz but PITCH=80 bytes at 5MHz. The
+// BIOS writes the pair together in INT 18h's graphics setup (bios18.c:
+// `gdc.clock |= 3` beside `PITCH = 80`).
+//
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 
@@ -54,6 +69,7 @@ module pc98_gdc_mode2 (
     input  wire        analog_capable,
 
     output logic [7:0] mode2,
+    output logic [1:0] gdc_clk,        // clock field -- 3 selects 5MHz mode
     output wire        analog          // 1 = sixteen colours, E0000 is plane 3
 );
 
@@ -61,14 +77,20 @@ module pc98_gdc_mode2 (
     wire [3:0] msk = 4'h1 << sel;
 
     always_ff @(posedge clk, posedge rst) begin
-        if (rst)
-            mode2 <= 8'h00;            // digital, three planes
-        else if (wr && (d & 8'hF8) == 8'h00) begin
-            // Bit 0 only moves while the machine admits to having the
-            // hardware; the others are unconditional.
-            if (!(sel == 2'd0) || analog_capable) begin
-                if (d[0]) mode2 <= mode2 |  {4'h0, msk};
-                else      mode2 <= mode2 & ~{4'h0, msk};
+        if (rst) begin
+            mode2    <= 8'h00;         // digital, three planes
+            gdc_clk  <= 2'b00;         // the 2.5MHz clock this machine boots in
+        end else if (wr) begin
+            if ((d & 8'hF8) == 8'h00) begin
+                // Bit 0 only moves while the machine admits to having the
+                // hardware; the others are unconditional.
+                if (!(sel == 2'd0) || analog_capable) begin
+                    if (d[0]) mode2 <= mode2 |  {4'h0, msk};
+                    else      mode2 <= mode2 & ~{4'h0, msk};
+                end
+            end else if ((d == 8'h82) || (d == 8'h83)
+                      || (d == 8'h84) || (d == 8'h85)) begin
+                gdc_clk[d[2]] <= d[0];
             end
         end
     end

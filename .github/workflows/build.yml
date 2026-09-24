@@ -148,6 +148,15 @@ jobs:
           ./obj_m1/m | tee m1.log
           grep -q "RESULT: PASS" m1.log
 
+      - name: port 0x6A takes the bit form and the 0x82-0x85 clock commands
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_gdc_mode2 \
+            -Isim -Ifpga/core \
+            sim/tb_pc98_gdc_mode2.sv fpga/core/pc98_gdc_mode2.sv \
+            -o m --Mdir obj_m2
+          ./obj_m2/m | tee m2.log
+          grep -q "RESULT: PASS" m2.log
+
       - name: raster is the 640x400 one PC-98 software expects
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_timing \

@@ -40,7 +40,7 @@
 #define POST_TVF1   ((volatile uint32_t *) 0x500000A0) // cells 4-7
 #define POST_FRB    ((volatile uint32_t *) 0x500000A4) // {f_valid beats, f_req pulses}
 #define POST_MEMSZ  ((volatile uint32_t *) 0x500000A8) // {f0 count, [0501], A3FEA}
-#define POST_KEY    ((volatile uint32_t *) 0x500000AC) // {gdc pitch, last {make,code}, count}
+#define POST_KEY    ((volatile uint32_t *) 0x500000AC) // {clk[1:0], gdc pitch, last {make,code}, count}
 #define POST_GDC    ((volatile uint32_t *) 0x500000B0) // {unk count, unk cmd, disp_on, SAD}
 #define POST_CUR    ((volatile uint32_t *) 0x5000012C) // {CSR count, en, bl, top, bot, cell}
 #define POST_CT     ((volatile uint32_t *) 0x50000130) // {byte count, 3 bytes after the last 4B}

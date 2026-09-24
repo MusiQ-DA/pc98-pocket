@@ -956,6 +956,7 @@ module core_top (
     wire  [7:0] dbg_kbd_rd_count;
     wire [14:0] dbg_gdc_sad;
     wire  [7:0] dbg_gdc_pitch;
+    wire  [1:0] dbg_gdc_clk;
     wire  [7:0] dbg_gdc_unk_cmd;
     wire  [7:0] dbg_gdc_unk_count;
     wire        dbg_gdc_disp_on;
@@ -1135,6 +1136,7 @@ module core_top (
         .dbg_kbd_rd_count           (dbg_kbd_rd_count),
         .dbg_gdc_sad                (dbg_gdc_sad),
         .dbg_gdc_pitch              (dbg_gdc_pitch),
+        .dbg_gdc_clk                (dbg_gdc_clk),
         .dbg_gdc_unk_cmd            (dbg_gdc_unk_cmd),
         .dbg_gdc_unk_count          (dbg_gdc_unk_count),
         .dbg_gdc_disp_on            (dbg_gdc_disp_on),
@@ -2381,6 +2383,7 @@ module core_top (
         .dbg_kbd_rd_count                   (dbg_kbd_rd_count),
         .dbg_gdc_sad                        (dbg_gdc_sad),
         .dbg_gdc_pitch                      (dbg_gdc_pitch),
+        .dbg_gdc_clk                        (dbg_gdc_clk),
         .dbg_gdc_unk_cmd                    (dbg_gdc_unk_cmd),
         .dbg_gdc_unk_count                  (dbg_gdc_unk_count),
         .dbg_gdc_disp_on                    (dbg_gdc_disp_on),

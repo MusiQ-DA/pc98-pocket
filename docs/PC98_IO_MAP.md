@@ -667,6 +667,16 @@ bit3 で 0x0A/0x0B を選ぶ。ITF は CG ウィンドウ試験の前後で 0x0B
 0x08 以上の値は拡張コマンド: 0x20/0x21(アナログ拡張)、0x40/0x41・0x80/0x81(プラズマ)、
 0x82-0x85(ドットクロック)、0x68/0x69(256 色拡張)。
 
+**0x82-0x85 は実装済み**: `gdc.clock` の 2 ビットフィールドをビットセット/リセット
+(0x82/0x83 が bit0、0x84/0x85 が bit1)。フィールド = 3 で「5MHz GDC」モード
+(np2kai np2info の 2.5MHz/5MHz 表示、pccore.c で bit7 フラグが立つ)。
+スレーブ GDC の **PITCH の単位が変わる**のが実効: 2.5MHz では PITCH は
+ワード数(maketgrp の `s_pitch <<= 1` → 640 ドット = PITCH 40)、5MHz では
+バイト数(PITCH 80、`& 0xFE` で偶数化)。BIOS の INT 18h 高解像度グラフィック
+設定は `gdc.clock |= 3` と `PITCH = 80` をセットで書く (bios18.c)。
+このコアでは `pc98_gdc_mode2` が `gdc_clk[1:0]` に保持し、
+`pc98_gvram_display` のラインストライド選択に使う。
+
 ### 9.2 CRTC + GRCG
 
 `io/crtc.c`。`iocore_attachsys{out,inp}ex(0x0070, 0x0CF1, tbl, 8)`。

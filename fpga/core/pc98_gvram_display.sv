@@ -56,7 +56,8 @@ module pc98_gvram_display #(
     // clock. They are latched at each line edge, so a mid-frame rewrite
     // takes effect from the next rasterline -- which is how the hardware's
     // scroll (SAD) and split-screen (partitions) actually behave.
-    input  wire  [7:0]  pitch,            // words per line
+    input  wire  [7:0]  pitch,            // PITCH register value
+    input  wire         mhz5,             // port 0x6A clock field == 3
     input  wire  [15:0] part_sad [0:3],   // partition start, word address
     input  wire  [9:0]  part_len [0:3],   // partition length, lines
 
@@ -174,6 +175,12 @@ module pc98_gvram_display #(
     logic [9:0]  part_rel  = 10'd0;     // line index inside the partition
     logic [14:0] run_base  = 15'd0;     // byte offset of the walked line
 
+    // The clock field changes what PITCH counts (np2kai maketgrp: s_pitch is
+    // doubled while the 5MHz flag is clear): at 2.5MHz the register is words
+    // per line, at 5MHz it is bytes per line -- and forced even, np2kai's
+    // `s_pitch &= 0xfe`. SAD stays a word address in both modes.
+    wire  [8:0]  pitch_b  = mhz5 ? {1'b0, pitch[7:1], 1'b0}
+                                 : {pitch, 1'b0};
     wire  [9:0]  cur_len  = part_len[cur_part];
     wire  [15:0] sad_next = part_sad[cur_part + 2'd1];   // wraps to 0 at 3, unused there
     wire         w_wrap   = (line_now == 9'(LINES - 2));
@@ -181,7 +188,7 @@ module pc98_gvram_display #(
                        && (({1'b0, part_rel} + 11'd1) >= {1'b0, cur_len});
     wire  [14:0] base_next = w_wrap ? 15'(part_sad[0] << 1)
                           : w_adv  ? 15'(sad_next << 1)
-                          :          run_base + 15'({pitch, 1'b0});
+                          :          run_base + 15'(pitch_b);
 
     always_ff @(posedge clk) begin
         if (rst) begin

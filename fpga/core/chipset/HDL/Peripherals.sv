@@ -181,6 +181,7 @@ module PERIPHERALS #(
     output  logic    [7:0]  dbg_kbd_rd_count,
     output  logic   [14:0]  dbg_gdc_sad,
     output  logic    [7:0]  dbg_gdc_pitch,
+    output  logic    [1:0]  dbg_gdc_clk,
     output  logic    [7:0]  dbg_gdc_unk_cmd,
     output  logic    [7:0]  dbg_gdc_unk_count,
     output  logic           dbg_gdc_disp_on,
@@ -1282,6 +1283,7 @@ module PERIPHERALS #(
         .disp_page(gvram_disp_page),
         .analog_mode(pc98_analog),
         .pitch(gdc_s_pitch),
+        .mhz5(&gdc_clk),
         .part_sad(gdc_s_sad), .part_len(gdc_s_len),
         .p_req(gv_rd_req), .p_addr(gv_rd_addr), .p_len(gv_rd_len),
         .p_ack(gv_rd_ack), .p_rvalid(gv_rd_valid), .p_rdata(gv_rd_data),
@@ -1406,6 +1408,7 @@ module PERIPHERALS #(
     wire mode6a_wr = io_write_n & ~mode6a_prev_wr_n & mode6a_addr;
 
     logic [7:0] mode2_q;
+    logic [1:0] gdc_clk;
     logic       egc_prev_wr_n;
 
     pc98_gdc_mode2 u_gdc_mode2 (
@@ -1417,8 +1420,11 @@ module PERIPHERALS #(
         // input exists so that is a decision rather than an assumption.
         .analog_capable (1'b1),
         .mode2          (mode2_q),
+        .gdc_clk        (gdc_clk),
         .analog         (pc98_analog)
     );
+
+    assign dbg_gdc_clk = gdc_clk;
 
     // Bits 3 and 2 of the same register are the EGC's arm and switch: np2kai
     // only honours bit 2 (VOPBIT_EGC) while bit 3 is set AND the G-RCG is

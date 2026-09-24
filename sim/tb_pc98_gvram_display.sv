@@ -15,6 +15,7 @@ module tb_pc98_gvram_display;
     logic disp_on = 1, disp_page = 0, analog_m = 1;
 
     logic [7:0]  pitch = 8'd40;
+    logic        mhz5  = 1'b0;
     logic [15:0] part_sad [0:3] = '{16'd0, 16'd0, 16'd0, 16'd0};
     logic [9:0]  part_len [0:3] = '{10'd400, 10'd0, 10'd0, 10'd0};
 
@@ -28,7 +29,8 @@ module tb_pc98_gvram_display;
         .clk(clk), .rst(rst), .rd_clk(rd_clk),
         .hcount(h), .vcount(v), .disp_on(disp_on),
         .disp_page(disp_page), .analog_mode(analog_m),
-        .pitch(pitch), .part_sad(part_sad), .part_len(part_len),
+        .pitch(pitch), .mhz5(mhz5),
+        .part_sad(part_sad), .part_len(part_len),
         .p_req(p_req), .p_addr(p_addr), .p_len(p_len),
         .p_ack(p_ack), .p_rvalid(p_rvalid), .p_rdata(p_rdata), .p_done(p_done),
         .gfx_dot(gfx_dot)
@@ -66,18 +68,23 @@ module tb_pc98_gvram_display;
         end
     end
 
-    // The same partition walk the DUT applies: line -> (sad + rel*pitch)*2.
+    // The same partition walk the DUT applies: line -> (sad + rel*pitch)*2,
+    // where the PITCH register counts words at 2.5MHz and bytes at 5MHz
+    // (np2kai maketgrp's `s_pitch <<= 1` while the flag is clear) -- so the
+    // word count here halves in 5MHz mode, and an odd byte pitch is floored
+    // by the same `& 0xfe` np2kai applies.
     function automatic int line_base(input int L);
-        int total, rel, wa;
+        int total, rel, wa, wp;
+        wp    = mhz5 ? (pitch >> 1) : pitch;
         total = part_len[0] + part_len[1] + part_len[2] + part_len[3];
         rel   = (total != 0) ? L % total : L;
-        if      (rel < part_len[0]) wa = part_sad[0] + rel * pitch;
+        if      (rel < part_len[0]) wa = part_sad[0] + rel * wp;
         else if (rel < part_len[0] + part_len[1])
-            wa = part_sad[1] + (rel - part_len[0]) * pitch;
+            wa = part_sad[1] + (rel - part_len[0]) * wp;
         else if (rel < part_len[0] + part_len[1] + part_len[2])
-            wa = part_sad[2] + (rel - part_len[0] - part_len[1]) * pitch;
+            wa = part_sad[2] + (rel - part_len[0] - part_len[1]) * wp;
         else
-            wa = part_sad[3] + (rel - part_len[0] - part_len[1] - part_len[2]) * pitch;
+            wa = part_sad[3] + (rel - part_len[0] - part_len[1] - part_len[2]) * wp;
         return (wa * 2) & 32'h7FFF;
     endfunction
 
@@ -173,6 +180,17 @@ module tb_pc98_gvram_display;
         disp_page = 0; analog_m = 0;
         settle(3);
         $display("F: digital checked=%0d errors=%0d", checked, errors);
+
+        quiet = 1'b1;              // G: 5MHz clock -- PITCH is bytes now, and
+        analog_m = 1; mhz5 = 1;    //    21 floors to 20 (np2kai's & 0xfe)
+        pitch = 8'd21;
+        settle(3);
+        $display("G: mhz5/21 checked=%0d errors=%0d", checked, errors);
+
+        quiet = 1'b1;              // H: the BIOS high-res shape -- clock=3,
+        pitch = 8'd80;             //    PITCH=80, the same 80-byte line as A
+        settle(3);
+        $display("H: mhz5/80 checked=%0d errors=%0d", checked, errors);
 
         if (errors == 0 && checked > 200000)
             $display("PASS tb_pc98_gvram_display (%0d dots)", checked);

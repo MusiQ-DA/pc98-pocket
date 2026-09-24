@@ -143,6 +143,7 @@ module softcpu_subsystem (
     input   [7:0] dbg_kbd_rd_count,
     input  [14:0] dbg_gdc_sad,
     input   [7:0] dbg_gdc_pitch,
+    input   [1:0] dbg_gdc_clk,
     input   [7:0] dbg_gdc_unk_cmd,
     input   [7:0] dbg_gdc_unk_count,
     input         dbg_gdc_disp_on,
@@ -1171,7 +1172,7 @@ module softcpu_subsystem (
             // [0501], F0 = OUT 0F0h requests. 04/04/01 is a healthy 640 KB
             // boot; 00/00 and a rising F0 is the MEMORY 128KB loop.
             32'h5000_00A8: cpu_mem_rdata = {8'd0, f0_count, memsize_seen, memsw_seen};
-            32'h5000_00AC: cpu_mem_rdata = {8'd0, dbg_gdc_pitch, key_last, key_count};
+            32'h5000_00AC: cpu_mem_rdata = {6'd0, dbg_gdc_clk, dbg_gdc_pitch, key_last, key_count};
             // 8 + 8 + 1 + 15 = 32. The first cut of this packed 34 bits into
             // 32 and silently lost the top of unk_count and shifted unk_cmd.
             32'h5000_00B0: cpu_mem_rdata = {dbg_gdc_unk_count, dbg_gdc_unk_cmd,
