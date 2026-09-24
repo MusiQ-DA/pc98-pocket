@@ -538,13 +538,18 @@ void vkb_ui_tick(void)
             settings_mask |= bind_map[i].mask;
     }
     if (pressed & settings_mask) {
+        // Consume the bit only where this check acts: from the menu it closes,
+        // from the keyboard it swaps. In normal mode the press belongs to
+        // dispatch_bindings -- eating it here left a SETTINGS-bound button
+        // unable to OPEN the menu at all.
         if (ui_mode == OSD_SETTINGS) {
             ui_mode = OSD_NONE;
             osd_ctrl_write();
+            pressed &= ~settings_mask;
         } else if (ui_mode == OSD_VKB) {
             osd_enter_settings();
+            pressed &= ~settings_mask;
         }
-        pressed &= ~settings_mask;
     }
 
     // Every other button belongs to the active mode: an overlay consumes it for its own
