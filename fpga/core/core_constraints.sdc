@@ -33,9 +33,20 @@ set_clock_groups -asynchronous \
  -group { \
    ic|audio_mixer|audio_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk \
    ic|audio_mixer|audio_pll|altera_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER|divclk } \
+ -group { \
+   ic|u_pll_pc98|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk \
+   ic|u_pll_pc98|altera_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER|divclk } \
  -group { clk_74a } \
  -group { clk_74b } \
  -group { bridge_spiclk }
+
+# u_pll_pc98 (clk_pix / clk_pix_90, refclk clk_74b) is a second PLL and so
+# asynchronous to every other domain -- it belonged in the group list from the
+# start. Without it the 129k chipset->pixel crossings were timed as
+# synchronous, reported -80 ns of setup slack, and sat on the Fitter's
+# impossible-goal pile exactly like the unconstrained SDRAM pins once did.
+# The crossings that matter are already handled in RTL (synch_3 on the OSD
+# config, the video pipeline's own staging for pixel data).
 
 # clk_pico holds each value six clk_chipset cycles, so the clk_pico -> clk_chipset crossing
 # has a six-cycle window (the reverse captures on clk_pico, so one cycle already suffices).

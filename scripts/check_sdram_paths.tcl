@@ -72,6 +72,13 @@ puts [format "  hold :  write/command %s   read %s" \
         [worst hold  -to [get_ports $out_ports]] \
         [worst hold  -from [get_ports $in_ports]]]
 
+# The number alone cannot say WHERE the budget went -- input buffer, route,
+# clock skew -- or whether the capture FF made it into the IOE (the endpoint's
+# cell type shows it). Print the worst read path in full so a regression in
+# the log is self-diagnosing instead of another blind build.
+puts "== worst read path, full detail =="
+report_timing -from [get_ports $in_ports] -npaths 1 -setup -detail full_path
+
 delete_timing_netlist
 project_close
 

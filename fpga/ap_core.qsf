@@ -187,6 +187,14 @@ set_location_assignment PIN_B13 -to dram_dq[3]
 set_location_assignment PIN_A15 -to dram_dq[2]
 set_location_assignment PIN_B15 -to dram_dq[1]
 set_location_assignment PIN_C15 -to dram_dq[0]
+
+# Pack the SDRAM read-capture registers into the IOEs. The read window is a
+# half period (the part launches on dram_clk's 180-degree edge, we latch on
+# the next clk_chipset rise), and with p_rdata out in the fabric the pin to
+# register route alone was eating it -- read setup slack sat at -2.4 ns.
+# Functionally identical: same clock, same edge, the FF just lives at the pin.
+set_instance_assignment -name FAST_INPUT_REGISTER ON -to "*u_mp|p_rdata[*]"
+
 set_location_assignment PIN_B11 -to dram_ras_n
 set_location_assignment PIN_C11 -to dram_we_n
 set_location_assignment PIN_H10 -to port_ir_rx
