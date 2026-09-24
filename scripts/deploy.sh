@@ -112,7 +112,7 @@ print(ghlib.gh('/repos/MusiQ-DA/pc98-pocket/commits/main')['sha'])")
     waited=0
     while :; do
         # One workflow now: 'build' runs the sim/firmware gates AND the
-        # quartus-std compile that produces the bitstream artifact.
+        # quartus-win compile that produces the bitstream artifact.
         RUN=$(python3 -c "
 import sys; sys.path.insert(0,'scripts/tools'); import ghlib
 for r in ghlib.gh('/repos/MusiQ-DA/pc98-pocket/actions/runs?per_page=100')['workflow_runs']:
