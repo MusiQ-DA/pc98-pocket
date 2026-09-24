@@ -88,20 +88,19 @@ report_timing -from [get_ports $in_ports] -npaths 8 -setup -detail full_path \
 # name Quartus renamed it after physical-synthesis retiming.
 puts "== per-pin read endpoint census -> sta_sdram_pins.txt =="
 set pout [open sta_sdram_pins.txt w]
-foreach pin [lsort -dictionary [query_collection -all \
-        [get_ports -nowarn {dram_dq[*]}]]] {
+foreach_in_collection pin [get_ports -nowarn {dram_dq[*]}] {
     set pname [get_port_info -name $pin]
     set col [get_timing_paths -from $pin -npaths 32 -setup]
     set n [get_collection_size $col]
     if {$n == 0} {
         puts $pout [format "%-14s NO ANALYSED PATHS" $pname]
-        continue
-    }
-    foreach_in_collection path $col {
-        set to [get_path_info $path -to]
-        set tag [expr {[string match *_OTERM* $to] ? "IOE" : "fabric"}]
-        puts $pout [format "%-14s slack %7.3f -> %s  [%s]" $pname \
-            [get_path_info $path -slack] $to $tag]
+    } else {
+        foreach_in_collection path $col {
+            set to [get_path_info $path -to]
+            set tag [expr {[string match *_OTERM* $to] ? "IOE" : "fabric"}]
+            puts $pout [format "%-14s slack %7.3f -> %s  [%s]" $pname \
+                [get_path_info $path -slack] $to $tag]
+        }
     }
 }
 close $pout
