@@ -88,7 +88,10 @@ report_timing -from [get_ports $in_ports] -npaths 8 -setup -detail full_path \
 # name Quartus renamed it after physical-synthesis retiming.
 puts "== per-pin read endpoint census -> sta_sdram_pins.txt =="
 set pout [open sta_sdram_pins.txt w]
-foreach_in_collection pin [get_ports -nowarn {dram_dq[*]}] {
+# No -nowarn: Quartus 18.1 does not know the option and returns the literal
+# error template "%s" instead of a collection -- foreach_in_collection then
+# dies with 'invalid command name "%s"'. The pins exist anyway.
+foreach_in_collection pin [get_ports {dram_dq[*]}] {
     set pname [get_port_info -name $pin]
     set col [get_timing_paths -from $pin -npaths 32 -setup]
     set n [get_collection_size $col]
