@@ -326,9 +326,11 @@ void postmon_isr_hb(void)
     *VKB_CTRL = 1u;   // the loop may have died before ever enabling the strip
     osd_fill_rect(&fb, 252, 92, 68, 10, OSD_KEYFACE);
     osd_draw_char(&fb, 256, 92, 'I', OSD_LABEL);
-    hex(4 + 33 * 8, 92, isr_hb & 0xFFu, 2);
-    osd_draw_char(&fb, 4 + 36 * 8, 92, 'M', OSD_LABEL);
-    hex(4 + 37 * 8, 92, postmon_mark & 0xFFu, 2);
+    hex(264, 92, isr_hb & 0xFFu, 2);
+    // M is four digits: the high pair is the loop iteration (moving = the
+    // loop runs at all), the low pair the leg it is in.
+    osd_draw_char(&fb, 280, 92, 'M', OSD_LABEL);
+    hex(288, 92, postmon_mark & 0xFFFFu, 4);
 }
 
 void post_mon_tick(void)

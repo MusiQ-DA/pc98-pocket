@@ -88,14 +88,18 @@ int main(void)
     uint32_t mounted_a = 0;
     uint32_t mounted_b = 0;
     uint32_t mounted_hdd = 0;
+    uint32_t iter = 0;                  // loop iteration, shown in postmon_mark's high byte
     uint32_t settings_sized = 0;        // Settings size declared in the datatable yet
     uint32_t rebind_seen = *FDD_REBIND; // last-seen rebind toggles
 
     for (;;) {
         // The stage marks go DOWN before each leg that can hang: the timer ISR
         // draws postmon_mark, so a frozen main loop leaves the number of the
-        // leg it never came back from on screen.
-        postmon_mark = 1;
+        // leg it never came back from on screen. The high byte is the loop
+        // iteration -- it changes between shots while the loop runs at all,
+        // so a stale M stops being ambiguous with "always in stage 7".
+        iter++;
+        postmon_mark = (iter << 8) | 1;
         // Declare the Settings size once the datatable is populated (retried because the
         // softcore may run before the host has written the table).
         if (!settings_sized) {
@@ -123,11 +127,11 @@ int main(void)
 #ifndef SDRAM_SELFTEST
         // Diagnostic overlay: how far the guest BIOS has got. Redraws only when
         // the POST code changes, so it costs nothing in the steady state.
-        postmon_mark = 2;
+        postmon_mark = (iter << 8) | 2;
         post_mon_tick();
 #endif
 #endif
-        postmon_mark = 3;
+        postmon_mark = (iter << 8) | 3;
         if (!mounted_hdd) {
             uint32_t sectors = slot_bytes(HDD0_SLOT_ID) / SECTOR_BYTES;
             if (sectors != 0) {
@@ -142,15 +146,15 @@ int main(void)
         // models it (the benches have no softcore). With nothing mounted
         // there is nothing to poll: gate the traffic on a disk being present,
         // and a diskless boot runs with the guest bus entirely its own.
-        postmon_mark = 4;
+        postmon_mark = (iter << 8) | 4;
         if (mounted_a || mounted_b)
             fdd_poll();
-        postmon_mark = 5;
+        postmon_mark = (iter << 8) | 5;
         gdc_poll();
-        postmon_mark = 6;
+        postmon_mark = (iter << 8) | 6;
         if (mounted_hdd)
             scsi_poll();
-        postmon_mark = 7;
+        postmon_mark = (iter << 8) | 7;
         settings_service(); // persist any OSD changes into the save window
 
         // Quiet the polls.
@@ -166,10 +170,10 @@ int main(void)
         // every ~16 ms) and the GDC engine inside its draw latency, and cuts
         // the hold rate ~100x. The LD/RD pair on the POST row says whether it
         // was enough.
-        postmon_mark = 8;
+        postmon_mark = (iter << 8) | 8;
         for (volatile uint32_t q = 0; q < 40000u; q++) {
         }
-        postmon_mark = 0;
+        postmon_mark = iter << 8;
     }
 
     return 0;

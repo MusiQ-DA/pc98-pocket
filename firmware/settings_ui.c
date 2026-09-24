@@ -789,11 +789,16 @@ void settings_mark_dirty(void)
 
 void settings_service(void)
 {
+    // Stage marks subdivide this leg: a main loop frozen at 0x2F never made
+    // it past the dirty check, and each later mark names the store it hung on.
+    postmon_mark = 0x2F;
     if (!dirty) {
         return;
     }
     dirty = 0;
+    postmon_mark = 0x30;
     *FDD_BRAM_ADDR = SETTINGS_WORD;
+    postmon_mark = 0x31;
     *FDD_BRAM_WDATA = SETTINGS_MAGIC;
     *FDD_BRAM_WDATA = SETTINGS_VERSION | ((uint32_t) SET_COUNT << 8);
     uint32_t word = 0;
@@ -804,6 +809,7 @@ void settings_service(void)
             word = 0;
         }
     }
+    postmon_mark = 0x32;
     // key-binding block: seven code bytes then the ext bitmap, four bytes per word.
     uint8_t ext = 0;
     for (uint32_t i = 0; i < BIND_COUNT; i++) {
@@ -818,4 +824,5 @@ void settings_service(void)
             word = 0;
         }
     }
+    postmon_mark = 0x33;
 }
