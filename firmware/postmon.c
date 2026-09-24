@@ -358,6 +358,10 @@ void postmon_isr_hb(void)
     // request comes out; DC is the encoder's side of that plus the write
     // snoop -- mask, request state, encoded channel, FSM, and whether the
     // BIOS's register writes ever landed at all. See upd71071.sv.
+    // OSD_LABEL is near-black -- invisible against the dark screen outside
+    // the panel, which is why row 92's words sit on a KEYFACE strip. DC gets
+    // the same treatment: no background, no reading it.
+    osd_fill_rect(&fb, 348, 102, 96, 10, OSD_KEYFACE);
     osd_draw_string(&fb, 352, 102, "DC", OSD_LABEL);
     hex(376, 102, *POST_DMAC, 8);
     // Row 92's FDC fields freeze with the rest of the panel once the guest
