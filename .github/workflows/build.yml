@@ -590,8 +590,19 @@ jobs:
         shell: bash
         run: |
           cd fpga
-          quartus_sh.exe --flow compile ap_core \
-            2>&1 | { grep --line-buffered -vE '^\s*Info' || true; }
+          # Quartus 18.1's parallel workers are flaky -- we've seen three
+          # distinct internal errors (TDC slack calc, Tcl interp teardown,
+          # DYN_ENUM in the router) across runs on the same sources. They
+          # don't reproduce on retry, and a retry resumes from the db left
+          # by the crashed stage, so one extra attempt is cheap insurance.
+          for attempt in 1 2; do
+            if quartus_sh.exe --flow compile ap_core \
+                 2>&1 | { grep --line-buffered -vE '^\s*Info' || true; }; then
+              break
+            fi
+            if [ "$attempt" = 2 ]; then exit 1; fi
+            echo "::warning::quartus compile attempt $attempt failed; retrying"
+          done
 
       - name: SDRAM interface is actually timed (not just "green")
         if: always()
