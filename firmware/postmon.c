@@ -337,6 +337,24 @@ void postmon_isr_hb(void)
     // loop runs at all), the low pair the leg it is in.
     osd_draw_char(&fb, 280, 92, 'M', OSD_LABEL);
     hex(288, 92, postmon_mark & 0xFFFFu, 4);
+    // Row 92's FDC fields freeze with the rest of the panel once the guest
+    // parks: the repaint gate needs a slow field to move and nothing moves on
+    // a stuck machine, so the main-painted SN/RQ can be first-paint history
+    // while the poll underneath is actually working. Re-draw the same strip
+    // here -- identical layout, fresh values -- unless the ROM watcher owns
+    // it (R! overwrites this area and outranks the poll fields).
+    if (romw_bad_at == 0xFFFFFFFFu) {
+        extern uint32_t fdd_dbg_seen, fdd_dbg_lba, fdd_dbg_gap;
+        osd_fill_rect(&fb, 4, 92, 172, 10, OSD_KEYFACE);
+        osd_draw_string(&fb, 4, 92, "SN", OSD_LABEL);
+        hex(28, 92, fdd_dbg_seen & 0xFFu, 2);
+        osd_draw_string(&fb, 44, 92, "LA", OSD_LABEL);
+        hex(68, 92, fdd_dbg_lba & 0xFFFFu, 4);
+        osd_draw_string(&fb, 100, 92, "GP", OSD_LABEL);
+        hex(124, 92, fdd_dbg_gap & 0xFFu, 2);
+        osd_draw_string(&fb, 140, 92, "RQ", OSD_LABEL);
+        hex(164, 92, *FDD_REQUEST & 0xFu, 1);
+    }
 }
 
 void post_mon_tick(void)
