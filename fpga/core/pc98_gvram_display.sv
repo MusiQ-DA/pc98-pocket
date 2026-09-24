@@ -110,11 +110,17 @@ module pc98_gvram_display #(
 
     // ---- the buffers -------------------------------------------------------
     //
-    // Two banks of four planes of eighty bytes. The fetch side writes one
-    // byte per completed word (RAM.sv's packing); the display side reads all
-    // four planes' byte for a dot in one cycle. Simple arrays; Quartus will
-    // put them in M10K and the registered read below is the BRAM's own.
-    logic [7:0] linebuf [0:1][0:3][0:79];
+    // Two banks of four planes of eighty bytes, four memories so the display
+    // can read every plane's byte in the same cycle. A packed-3D array lands
+    // in registers -- the LABs do not have it -- so each plane is its own
+    // flat array marked for M10K, written from its own always block the way
+    // the inference template wants. Index is {bank, byte-in-line} with the
+    // byte counting 0..79 of a 128-wide bank slot; the tail is unused, M10K
+    // blocks do not charge by the byte.
+    (* ramstyle = "M10K" *) logic [7:0] buf_b [0:255];
+    (* ramstyle = "M10K" *) logic [7:0] buf_r [0:255];
+    (* ramstyle = "M10K" *) logic [7:0] buf_g [0:255];
+    (* ramstyle = "M10K" *) logic [7:0] buf_e [0:255];
 
     logic        fill_bank = 1'b0;        // the bank being written
     logic        done_bank = 1'b0;        // the bank the last completed fill wrote
@@ -141,30 +147,49 @@ module pc98_gvram_display #(
 
     // The byte a line starts from: partition LEN walks the raster down the
     // four PRAM entries, each partition's SAD a word address that steps by
-    // PITCH words a line. The uPD7220's byte address is the word shifted
-    // left one, wrapped inside the 32 KB plane -- the "& 0x7FFF" below is
-    // that wrap. A rasterline beyond all four partitions wraps back through
-    // them, which is what the hardware does with the PRAM pointer cycling.
+    // PITCH words a line. Written as a nested subtract chain rather than
+    // compares plus four products -- one multiplier, no modulo. The nesting
+    // is semantic, not style: a line may only fall through to the next
+    // partition once it has run off the end of the current one, so the
+    // checks have to be conditional on each other. A rasterline beyond the
+    // last partition's LEN keeps extending partition three, the way the
+    // hardware's address counter just keeps running; the PRAM entries are
+    // meant to cover the raster, so this only shows on underspecified ones.
     function automatic logic [14:0] line_byte_base(input logic [8:0] ln);
-        logic [11:0] total, rel;
-        logic [19:0] word_addr;
-        total = {2'b0, part_len[0]} + {2'b0, part_len[1]}
-              + {2'b0, part_len[2]} + {2'b0, part_len[3]};
-        rel   = (total != 12'd0) ? 12'(ln) % total : {3'b0, ln};
-        if      (rel < 12'(part_len[0]))                        word_addr = 20'(part_sad[0]) + {8'd0, rel} * 20'(pitch);
-        else if (rel < 12'(part_len[0]) + 12'(part_len[1]))     word_addr = 20'(part_sad[1]) + {8'd0, rel - 12'(part_len[0])} * 20'(pitch);
-        else if (rel < 12'(part_len[0]) + 12'(part_len[1])
-                       + 12'(part_len[2]))                      word_addr = 20'(part_sad[2]) + {8'd0, rel - 12'(part_len[0]) - 12'(part_len[1])} * 20'(pitch);
-        else                                                    word_addr = 20'(part_sad[3]) + {8'd0, rel - 12'(part_len[0]) - 12'(part_len[1]) - 12'(part_len[2])} * 20'(pitch);
-        line_byte_base = 15'(word_addr << 1);
+        logic [9:0]  rel;
+        logic [15:0] sad;
+        rel = {1'b0, ln};
+        sad = part_sad[0];
+        if (rel >= 10'(part_len[0])) begin
+            rel = rel - 10'(part_len[0]);
+            sad = part_sad[1];
+            if (rel >= 10'(part_len[1])) begin
+                rel = rel - 10'(part_len[1]);
+                sad = part_sad[2];
+                if (rel >= 10'(part_len[2])) begin
+                    rel = rel - 10'(part_len[2]);
+                    sad = part_sad[3];
+                end
+            end
+        end
+        line_byte_base = 15'((20'(sad) + 20'(rel) * 20'(pitch)) << 1);
     endfunction
 
     logic [2:0]  f_plane = 3'd0;
     logic [3:0]  f_chunk = 4'd0;
-    logic [6:0]  f_word  = 7'd0;          // 0..15 within the burst
+    logic [3:0]  f_word  = 4'd0;          // 0..15 within the burst
     logic        f_active = 1'b0;
     logic        req_q    = 1'b0;         // want a burst, dropped on ack
     logic [14:0] fill_base = 15'd0;       // byte offset of this line in-plane
+
+    // The buffer writes live in their own blocks, one per plane memory --
+    // the M10K inference template. Byte index is {bank, chunk, word}.
+    wire  [7:0] w_addr = {fill_bank, f_chunk[2:0], f_word};
+    wire        wr     = f_active & p_rvalid;
+    always_ff @(posedge clk) if (wr && f_plane[1:0] == 2'd0) buf_b[w_addr] <= p_rdata[7:0];
+    always_ff @(posedge clk) if (wr && f_plane[1:0] == 2'd1) buf_r[w_addr] <= p_rdata[7:0];
+    always_ff @(posedge clk) if (wr && f_plane[1:0] == 2'd2) buf_g[w_addr] <= p_rdata[7:0];
+    always_ff @(posedge clk) if (wr && f_plane[1:0] == 2'd3) buf_e[w_addr] <= p_rdata[7:0];
 
     // One request per burst, deasserted the cycle the arbiter acks -- the
     // font fetcher drives port B the same way, and holding req through the
@@ -182,7 +207,7 @@ module pc98_gvram_display #(
             f_active <= 1'b0;
             f_plane  <= 3'd0;
             f_chunk  <= 4'd0;
-            f_word   <= 7'd0;
+            f_word   <= 4'd0;
             req_q    <= 1'b0;
             fill_bank <= 1'b0;
             done_bank <= 1'b0;
@@ -211,13 +236,9 @@ module pc98_gvram_display #(
                     req_q     <= 1'b1;
                 end
             end else begin
-                if (p_rvalid) begin
-                    linebuf[fill_bank][f_plane[1:0]][32'(f_chunk) * BURST + {28'd0, f_word[3:0]}]
-                        <= p_rdata[7:0];
-                    f_word <= f_word + 7'd1;
-                end
+                if (p_rvalid) f_word <= f_word + 4'd1;
                 if (p_done) begin
-                    f_word <= 7'd0;
+                    f_word <= 4'd0;
                     if (f_chunk == 4'(CHUNKS - 1)) begin
                         f_chunk <= 4'd0;
                         // A digital machine has no plane E: stop at G and
@@ -270,17 +291,16 @@ module pc98_gvram_display #(
     wire [2:0] n_bit = 7 - hcount[2:0];          // MSB is the leftmost dot
 
     logic [7:0] rd_b, rd_r, rd_g, rd_e;
-    logic [6:0] byi_q = 7'd0;
     logic [2:0] bit_q = 3'd0;
     logic       vis_q = 1'b0;
+    wire  [7:0] r_addr = {use_bank, n_byi};
     always_ff @(posedge rd_clk) begin
-        byi_q <= n_byi;
         bit_q <= n_bit;
         vis_q <= visible;
-        rd_b  <= linebuf[use_bank][0][n_byi];
-        rd_r  <= linebuf[use_bank][1][n_byi];
-        rd_g  <= linebuf[use_bank][2][n_byi];
-        rd_e  <= linebuf[use_bank][3][n_byi];
+        rd_b  <= buf_b[r_addr];
+        rd_r  <= buf_r[r_addr];
+        rd_g  <= buf_g[r_addr];
+        rd_e  <= buf_e[r_addr];
     end
 
     wire pb = rd_b[bit_q];
