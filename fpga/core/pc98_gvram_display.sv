@@ -124,7 +124,6 @@ module pc98_gvram_display #(
 
     logic        fill_bank = 1'b0;        // the bank being written
     logic        done_bank = 1'b0;        // the bank the last completed fill wrote
-    logic [8:0]  fill_line = 9'd0;
 
     // The plane bases, as SDRAM word addresses (one guest byte per word, so
     // the guest-linear windows are their own indices). Page one has no guest
@@ -145,35 +144,56 @@ module pc98_gvram_display #(
     localparam int BURST = 16;            // words per transaction
     localparam int CHUNKS = 80 / BURST;   // 5
 
-    // The byte a line starts from: partition LEN walks the raster down the
-    // four PRAM entries, each partition's SAD a word address that steps by
-    // PITCH words a line. Written as a nested subtract chain rather than
-    // compares plus four products -- one multiplier, no modulo. The nesting
-    // is semantic, not style: a line may only fall through to the next
-    // partition once it has run off the end of the current one, so the
-    // checks have to be conditional on each other. A rasterline beyond the
-    // last partition's LEN keeps extending partition three, the way the
-    // hardware's address counter just keeps running; the PRAM entries are
-    // meant to cover the raster, so this only shows on underspecified ones.
-    function automatic logic [14:0] line_byte_base(input logic [8:0] ln);
-        logic [9:0]  rel;
-        logic [15:0] sad;
-        rel = {1'b0, ln};
-        sad = part_sad[0];
-        if (rel >= 10'(part_len[0])) begin
-            rel = rel - 10'(part_len[0]);
-            sad = part_sad[1];
-            if (rel >= 10'(part_len[1])) begin
-                rel = rel - 10'(part_len[1]);
-                sad = part_sad[2];
-                if (rel >= 10'(part_len[2])) begin
-                    rel = rel - 10'(part_len[2]);
-                    sad = part_sad[3];
-                end
-            end
+    // The byte a line starts from: the uPD7220 never multiplies -- inside a
+    // partition it just adds PITCH words a line to the running address, and
+    // running off the partition's LEN restarts from the next entry's SAD.
+    // Track it the same way: a 2-bit partition pointer, a line counter
+    // inside it, and a base that steps by {pitch, 1'b0} bytes. A rasterline
+    // past all four LENs keeps extending partition three -- the address
+    // counter has nowhere else to go -- and the PRAM entries are meant to
+    // cover the raster anyway. Replaces a multiply, four compares and three
+    // subtracts with one adder and two small muxes. One corner is cheaper
+    // than the absolute model: a zero-length partition is crossed one line
+    // late instead of instantly (the walk advances once a line) -- an
+    // underspecified-PRAM case the BIOS never writes.
+    //
+    // The walk steps on EVERY raster edge, whether or not a fill can start
+    // that line: it then stays glued to the raster position, so a fill that
+    // overruns a line still picks up the right base when it next launches
+    // -- the skipped line's bank goes stale, same as any fetch underrun,
+    // but nothing downstream is corrupted.
+    //
+    // The walk leads the raster by one line: when the edge for line_now
+    // fires, the walk is positioned at line_now+1 -- the line the fill
+    // launched here must bring in, so it is in the bank before its own
+    // boundary. The step the edge performs moves the walk to line_now+2:
+    // the base for that line is run_base + pitch, or the next partition's
+    // SAD when line_now+1 ends a partition, or part_sad[0] when the walk
+    // crosses line 399 (raster line 398) and wraps to line 0.
+    logic [1:0]  cur_part  = 2'd0;
+    logic [9:0]  part_rel  = 10'd0;     // line index inside the partition
+    logic [14:0] run_base  = 15'd0;     // byte offset of the walked line
+
+    wire  [9:0]  cur_len  = part_len[cur_part];
+    wire  [15:0] sad_next = part_sad[cur_part + 2'd1];   // wraps to 0 at 3, unused there
+    wire         w_wrap   = (line_now == 9'(LINES - 2));
+    wire         w_adv    = !w_wrap && (cur_part != 2'd3)
+                       && (({1'b0, part_rel} + 11'd1) >= {1'b0, cur_len});
+    wire  [14:0] base_next = w_wrap ? 15'(part_sad[0] << 1)
+                          : w_adv  ? 15'(sad_next << 1)
+                          :          run_base + 15'({pitch, 1'b0});
+
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            cur_part <= 2'd0;
+            part_rel <= 10'd0;
+            run_base <= 15'd0;
+        end else if (line_edge && (line_now < 9'(LINES))) begin
+            cur_part <= w_wrap ? 2'd0 : w_adv ? cur_part + 2'd1 : cur_part;
+            part_rel <= (w_wrap || w_adv) ? 10'd0 : part_rel + 10'd1;
+            run_base <= base_next;
         end
-        line_byte_base = 15'((20'(sad) + 20'(rel) * 20'(pitch)) << 1);
-    endfunction
+    end
 
     logic [2:0]  f_plane = 3'd0;
     logic [3:0]  f_chunk = 4'd0;
@@ -211,7 +231,6 @@ module pc98_gvram_display #(
             req_q    <= 1'b0;
             fill_bank <= 1'b0;
             done_bank <= 1'b0;
-            fill_line <= 9'd0;
         end else begin
             if (p_ack) req_q <= 1'b0;
             if (!f_active) begin
@@ -219,16 +238,12 @@ module pc98_gvram_display #(
                     // A new line just began: fill the NEXT one into the other
                     // bank. Wrap at the raster's line count; lines past the
                     // active window are not fetched at all -- they have no
-                    // plane storage and nothing displays them. The byte base
-                    // is latched with the line so the whole fill is stable
-                    // against a mid-line SAD/PITCH rewrite.
-                    begin
-                        logic [8:0] nline;
-                        nline = (line_now == 9'(LINES - 1)) ? 9'd0
-                                                            : line_now + 9'd1;
-                        fill_line <= nline;
-                        fill_base <= line_byte_base(nline);
-                    end
+                    // plane storage and nothing displays them. The walk leads
+                    // the raster by a line, so run_base is already the byte
+                    // offset of the line this fill must fetch -- latching it
+                    // freezes it for the whole fill against a mid-line
+                    // SAD/PITCH rewrite.
+                    fill_base <= run_base;
                     fill_bank <= ~fill_bank;
                     f_plane   <= 3'd0;
                     f_chunk   <= 4'd0;
@@ -288,7 +303,7 @@ module pc98_gvram_display #(
     // Which dot the NEXT cycle will need.
     wire visible    = (hcount < 10'd640) && (vcount < 10'd400);
     wire [6:0] n_byi = hcount[9:3];              // 0..79
-    wire [2:0] n_bit = 7 - hcount[2:0];          // MSB is the leftmost dot
+    wire [2:0] n_bit = ~hcount[2:0];             // MSB is the leftmost dot
 
     logic [7:0] rd_b, rd_r, rd_g, rd_e;
     logic [2:0] bit_q = 3'd0;

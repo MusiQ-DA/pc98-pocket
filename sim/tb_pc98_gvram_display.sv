@@ -109,17 +109,28 @@ module tb_pc98_gvram_display;
     endfunction
 
     int errors = 0, checked = 0;
-    int quiet_v = -1;   // skip a couple of lines around a register rewrite
-    // gfx_dot lags hcount by one rd_clk: at h==H the dot is for h-1.
+    int frames = 0;
+    logic quiet = 1'b0;   // mute checks for the rest of a rewritten frame
+    // The DUT walks the partitions incrementally like the uPD7220: SAD and
+    // PITCH are latched when a partition starts, so a mid-frame rewrite
+    // only takes effect at the next frame -- and the walk itself only
+    // anchors its phase at the first wrap. Frame 0 and the remainder of a
+    // rewrite frame are therefore legitimately "old" data: don't score it.
+    // (v,h) starts at (0,0), so the frames counter ticks once at time zero
+    // -- wait for the SECOND wrap to be sure a whole frame has run.
     always_ff @(posedge rd_clk) begin
-        if (!rst && v >= 10 && v < 390 && h > 10 && h < 400
-         && int'(v) != quiet_v && int'(v) != quiet_v + 1) begin
+        if (v == 10'd0 && h == 10'd0) begin
+            frames <= frames + 1;
+            quiet  <= 1'b0;
+        end
+        if (!rst && frames >= 2 && !quiet && v >= 10 && v < 390
+         && h > 10 && h < 400) begin
             logic [3:0] exp;
             exp = exp_dot(int'(v), int'(h) - 1, disp_page ? 1 : 0);
             checked++;
             if (gfx_dot !== exp) begin
                 errors++;
-                if (errors < 8)
+                if (errors < 20)
                     $display("FAIL v=%0d h=%0d dot=%b exp=%b", v, h, gfx_dot, exp);
             end
         end
@@ -135,30 +146,30 @@ module tb_pc98_gvram_display;
         settle(3);   // A: linear screen, SAD=0 PITCH=40 LEN=400 (BIOS shape)
         $display("A: linear  checked=%0d errors=%0d", checked, errors);
 
-        quiet_v = int'(v);              // B: scroll -- SAD=200 words = +400 B
+        quiet = 1'b1;              // B: scroll -- SAD=200 words = +400 B
         part_sad[0] = 16'd200;
         settle(3);
         $display("B: sad=200 checked=%0d errors=%0d", checked, errors);
 
-        quiet_v = int'(v);              // C: split -- two 200-line partitions
+        quiet = 1'b1;              // C: split -- two 200-line partitions
         part_sad[0] = 16'h1000; part_len[0] = 10'd200;
         part_sad[1] = 16'd0;    part_len[1] = 10'd200;
         settle(3);
         $display("C: split   checked=%0d errors=%0d", checked, errors);
 
-        quiet_v = int'(v);              // D: half pitch -- 40-byte lines
+        quiet = 1'b1;              // D: half pitch -- 40-byte lines
         part_sad[0] = 16'd0; part_len[0] = 10'd400;
         part_sad[1] = 16'd0; part_len[1] = 10'd0;
         pitch = 8'd20;
         settle(3);
         $display("D: pitch20 checked=%0d errors=%0d", checked, errors);
 
-        quiet_v = int'(v);              // E: page one
+        quiet = 1'b1;              // E: page one
         pitch = 8'd40; disp_page = 1;
         settle(3);
         $display("E: page1   checked=%0d errors=%0d", checked, errors);
 
-        quiet_v = int'(v);              // F: digital -- plane E skipped/masked
+        quiet = 1'b1;              // F: digital -- plane E skipped/masked
         disp_page = 0; analog_m = 0;
         settle(3);
         $display("F: digital checked=%0d errors=%0d", checked, errors);
