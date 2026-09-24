@@ -1386,6 +1386,57 @@ module tb_pc98_fdc_glue;
             want("pulse lands once the chip is idle", motor_hi_2hd[7:0], 8'd1);
         end
 
+        // ---- a control-port reset aborts the parked fill-wait -------------
+        // POSTMON on metal caught the boot at MS=90 with the sector request
+        // gone and SN=00: a 0x94 write had landed while the chip waited in
+        // S_SD_READ_WAIT_FOR_DATA. On this board the reset is the control
+        // port's bit 7 rising edge -- the glue turns it into a reg4 write
+        // with bit 7 set, which is floppy.v's sw_reset. That cleared
+        // pending_command -- dropping the mgmt request the disk server
+        // polls -- but left the state parked, so the fifo could never fill
+        // and no new command could start either. A real uPD765 aborts the
+        // command on that write: the chip goes idle and the next READ DATA
+        // raises the request again.
+        begin
+            logic [7:0] msr;
+            int guard;
+            $display("--- control-port reset aborts a parked read ---");
+            window(1'b0);
+            // Park the chip in the fill-wait: READ DATA on the still-mounted
+            // media, and let the request prove the state was reached.
+            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'hFF);
+            guard = 0;
+            while (!fdd_request[0] && guard < 20_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("read parks waiting on the fifo", fdd_request[0], 1'b1);
+
+            // The BIOS's own reset: control port bit 7 going 0 -> 1, which
+            // the glue forwards as a one-cycle reg4 write with bit 7 set.
+            wr(2, 8'h80);
+            repeat (20) @(posedge clk);
+            #1;
+            want("request drops with the reset", fdd_request[0], 1'b0);
+
+            // Re-issue the same read. With the old half-reset the chip sat
+            // in S_SD_READ_WAIT_FOR_DATA with pending_command zeroed: the
+            // request stayed low and nothing ever ran again.
+            wr(2, 8'h0D);                // bit 7 back down, IRQ re-armed
+            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'hFF);
+            guard = 0;
+            while (!fdd_request[0] && guard < 20_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("a fresh read re-raises the request", fdd_request[0], 1'b1);
+            rd(0, msr);
+        end
+
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("PASS tb_pc98_fdc_glue");
         else             $display("FAILED tb_pc98_fdc_glue: %0d", errors);

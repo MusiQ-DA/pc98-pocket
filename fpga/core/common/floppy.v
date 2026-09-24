@@ -932,6 +932,13 @@ reg [3:0] state;
 always @(posedge clk) begin
 	if(~rst_n)                                                                    state <= S_IDLE;
 
+	// A software reset aborts the in-progress command too, like the chip's
+	// own: without it, a DOR reset landing in S_SD_READ_WAIT_FOR_DATA cleared
+	// pending_command (so the mgmt request dropped, invisible to the disk
+	// server) while the state stayed parked waiting on a fifo nobody would
+	// ever fill -- the boot's MS=90 stall with the sector request gone.
+	else if(sw_reset)                                                             state <= S_IDLE;
+
 	//start read/write
 	else if(state == S_IDLE && cmd_read_write_ok_at_start)                        state <= S_PREPARE_COUNT;
 

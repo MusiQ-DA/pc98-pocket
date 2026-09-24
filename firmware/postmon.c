@@ -170,10 +170,11 @@ static uint8_t guest_peek(uint32_t addr)
 // in one row's worth of space. They cannot share a row either -- TVF is a
 // label plus eight bytes (28 of the panel's 40 columns) and FRB is another
 // 13 -- so the panel grew by two rows rather than one of them staying
-// unreadable. 192 adds the MSW/SZ/F0 row on top of that; OSD_FB_HEIGHT is
-// 200, so it still fits. 200 adds the GDC row at 190 and is the whole
-// framebuffer -- there is no room for another.
-#define PANEL_H 192
+// unreadable. 192 adds the MSW/SZ/F0 row on top of that, and the DMA
+// handshake (DM) lives on the same last row -- so the background has to
+// reach the framebuffer's own 200 or the row draws unbacked and unreadable,
+// the same failure the 182 growth fixed. There is no room past 200.
+#define PANEL_H 200
 
 static const osd_fb_t fb = {0, 0, OSD_FB_WIDTH, OSD_FB_HEIGHT};
 
