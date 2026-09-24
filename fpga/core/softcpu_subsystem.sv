@@ -132,6 +132,7 @@ module softcpu_subsystem (
     input  [95:0] dbg_fdc_z,
     input  [31:0] dbg_fdc_w,
     input  [31:0] dbg_fdc_v,
+    input  [31:0] dbg_dma,
     input  [15:0] dbg_w_path, dbg_rw_lvl,
     input   [7:0] dbg_irq_level,
     input   [7:0] dbg_timer_count,
@@ -1252,6 +1253,10 @@ module softcpu_subsystem (
             32'h5000_0104: cpu_mem_rdata = dbg_fdc_z[95:64];
             32'h5000_00F8: cpu_mem_rdata = dbg_fdc_w;
             32'h5000_0108: cpu_mem_rdata = dbg_fdc_v;
+            // The whole FDC DMA handshake in one word: {floppy state+fifo
+            // count, its request, the DRQ the 71071 sees, the arbiter's
+            // hold grant, the DACK lines, TC, AEN, ext-access, cpu status}.
+            32'h5000_010C: cpu_mem_rdata = dbg_dma;
             // The write path counted in PERIPHERALS: {any-port write
             // strobe, decode clocks} and {write levels, read levels}.
             32'h5000_00E4: cpu_mem_rdata = dbg_w_path;

@@ -158,6 +158,10 @@ module PERIPHERALS #(
     output  logic   [95:0]  dbg_fdc_z,   // the last TWELVE bytes into the FIFO
     output  logic   [31:0]  dbg_fdc_w,   // {drops, accepts, reply_left, 0}
     output  logic   [31:0]  dbg_fdc_v,   // {last port, dead reads, live reads}
+    // The transfer side, for the panel's DM word: the fifo's own view
+    // ({state, bytes held}) plus every hop of the DMA handshake in one
+    // word -- {tc, read, edge-ack, dack, req-to-dmac, req-from-floppy}.
+    output  logic   [31:0]  dbg_fdc_dma,
     // The write path counted in PERIPHERALS, before any glue: {raw write
     // strobe, pc98_io_exact clocks} and {write levels, read levels} on the
     // FDC port selects.
@@ -1855,6 +1859,7 @@ module PERIPHERALS #(
     wire    [7:0]   fdc_cmd_accepts;
     wire    [7:0]   fdc_cmd_drops;
     wire    [3:0]   fdc_reply_left;
+    wire    [14:0]  fdc_xfer;
 
     assign  mgmt_fdd_cs = (mgmt_address[15:8] == 8'hF2);
 
@@ -2141,6 +2146,8 @@ module PERIPHERALS #(
             fdc_imr_seen <= interrupt2_data_bus_out;
     assign dbg_fdc_w = {fdc_cmd_drops, fdc_cmd_accepts, 4'd0, fdc_reply_left, fdc_imr_seen};
     assign dbg_fdc_v = {fdc_last_rdport, fdc_last_port, fdc_dead_reads, fdc_live_reads};
+    assign dbg_fdc_dma = {fdc_xfer, fdd_dma_tc, fdd_dma_read, fdd_dma_rw_ack,
+                          fdd_dma_ack, fdd_dma_req, fdd_dma_req_wire, 11'd0};
 
     floppy #(
         .NOT_READY_ENDS_COMMAND     (1)
@@ -2185,7 +2192,8 @@ module PERIPHERALS #(
 
         .dbg_cmd_accepts            (fdc_cmd_accepts),
         .dbg_cmd_drops              (fdc_cmd_drops),
-        .dbg_reply_left             (fdc_reply_left)
+        .dbg_reply_left             (fdc_reply_left),
+        .dbg_xfer                   (fdc_xfer)
     );
 
     always_ff @(posedge clock)

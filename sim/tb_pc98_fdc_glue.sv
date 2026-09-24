@@ -183,7 +183,8 @@ module tb_pc98_fdc_glue;
         // in a handful of cycles instead of a hardware second. It only scales
         // the seek delay; nothing about the interrupt depends on its value.
         .clock_rate     (28'd2000),
-        .request        (fdd_request)
+        .request        (fdd_request),
+        .dbg_xfer       ()
     );
 
     // fd_read is a one-cycle strobe, so looking at it after a read task has

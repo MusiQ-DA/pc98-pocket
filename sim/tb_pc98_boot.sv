@@ -1294,7 +1294,7 @@ module tb_pc98_boot;
         .wp             (2'b00),
         .clock_rate     (28'd42_954_545),
         .request        (fdd_req_w),
-        .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left ()
+        .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer ()
     );
 
     // What the guest sees on a read: the live window answers from floppy.v,

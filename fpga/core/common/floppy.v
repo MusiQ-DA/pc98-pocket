@@ -99,7 +99,11 @@ module floppy
 	// "the chip took it as a command".
 	output reg  [7:0] dbg_cmd_accepts,
 	output reg  [7:0] dbg_cmd_drops,
-	output      [3:0] dbg_reply_left
+	output      [3:0] dbg_reply_left,
+	// {state[3:0], fifo_count[10:0]} -- which wait the transfer died in and
+	// how much of the sector is still buffered. The PC-98 boot stalls are
+	// visible only from the POST panel, so the state comes out raw.
+	output     [14:0] dbg_xfer
 );
 
 reg [27:0] clk_rate;
@@ -1093,6 +1097,8 @@ wire [10:0] fifo_count;
 wire        fifo_empty;
 wire        fifo_full = (fifo_count >= sector_len);
 wire [7:0]  fifo_q;
+
+assign dbg_xfer = {state, fifo_count};
 
 reg  [7:0] fifo_readdata;
 always @(posedge clk) begin

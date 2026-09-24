@@ -125,7 +125,8 @@ module tb_pc98_dma_decode;
         .pc98_key_stb           (1'b0),
         .pc98_key_byte          (8'd0),
         .dma_chip_select_n      (dma_cs_n),
-        .dma_page_chip_select_n (dma_page_cs_n)
+        .dma_page_chip_select_n (dma_page_cs_n),
+        .dbg_fdc_dma            ()
     );
     /* verilator lint_on PINCONNECTEMPTY */
     /* verilator lint_on PINMISSING */
@@ -169,7 +170,8 @@ module tb_pc98_dma_decode;
         .dma_request(dma_request),
         .dma_acknowledge_n(dma_acknowledge_n),
         .address_enable_n(address_enable_n),
-        .terminal_count_n(terminal_count_n)
+        .terminal_count_n(terminal_count_n),
+        .dbg_hold()
     );
 
     int errors = 0;

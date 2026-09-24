@@ -45,7 +45,10 @@ module BUS_ARBITER (
     input   logic   [3:0]   dma_request,
     output  logic   [3:0]   dma_acknowledge_n,
     output  logic           address_enable_n,
-    output  logic           terminal_count_n
+    output  logic           terminal_count_n,
+    // The two ends of the hold handshake, for the panel's DM word: what the
+    // 71071 is asking for versus what the arbiter granted it.
+    output  logic   [3:0]   dbg_hold
 );
 
     //
@@ -85,6 +88,7 @@ module BUS_ARBITER (
     end
 
     assign  hold_acknowledge = (hold_request) ? hold_request_ff_2 : 1'b0;
+    assign  dbg_hold = {2'b00, hold_acknowledge, dma_hold_request};
 
 
     //

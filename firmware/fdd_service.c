@@ -227,6 +227,14 @@ uint32_t fdd_mounted_sectors(uint32_t drive)
 // dataslot. The reg-0 read and the FIFO are drive-agnostic in floppy.v, so only the
 // slot id and the sector width are keyed on the drive. Writes reach the SD file
 // directly, so nothing else is needed here.
+// POSTMON-visible counters, one per leg of a read request, so a stalled boot
+// says which link died: SEEN polls that found the request up, PUSH sectors
+// streamed into the controller fifo, ERR dataslot transfers that failed or
+// timed out, LBA the last reg-0 (drive bit + lba), AFT the request bits still
+// up right after a push (nonzero = the fifo never filled, or the next sector
+// was already asked for).
+uint32_t fdd_dbg_seen, fdd_dbg_pushed, fdd_dbg_err, fdd_dbg_lba, fdd_dbg_aft;
+
 void fdd_poll(void)
 {
     uint32_t req = *FDD_REQUEST;
@@ -236,9 +244,15 @@ void fdd_poll(void)
         uint32_t bytes = fdd_sector_words[drv] * 4;
         uint32_t slot = drv ? FDD1_SLOT_ID : FDD0_SLOT_ID;
         uint32_t off = fdd_base[drv] + (reg0 & FDD_LBA_MASK) * bytes;
+        fdd_dbg_seen++;
+        fdd_dbg_lba = reg0;
         // Push only on a good read; a failed transfer must not stream stale bytes.
         if (tds_transfer(slot, off, FDD_TDS_READ, bytes)) {
             push_sector(drv);
+            fdd_dbg_pushed++;
+            fdd_dbg_aft = *FDD_REQUEST;
+        } else {
+            fdd_dbg_err++;
         }
     } else if (req & FDD_REQ_WRITE) {
         uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);

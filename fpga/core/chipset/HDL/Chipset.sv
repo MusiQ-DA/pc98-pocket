@@ -63,6 +63,11 @@ module CHIPSET #(
         output  logic   [95:0]  dbg_fdc_z,
         output  logic   [31:0]  dbg_fdc_w,
         output  logic   [31:0]  dbg_fdc_v,
+        output  logic   [31:0]  dbg_fdc_dma,
+        // Every hop of the FDC's DMA handshake in one word, floppy.v's own
+        // wait state at the top and the arbiter's grant at the bottom --
+        // the panel's DM field reads it as eight digits.
+        output  logic   [31:0]  dbg_dma,
         output  logic   [15:0]  dbg_w_path,
         output  logic   [15:0]  dbg_rw_lvl,
         output  logic    [7:0]  dbg_irq_level,
@@ -312,8 +317,24 @@ module CHIPSET #(
         .dma_request                        ({fdd_dma_req | dma_request[3], fdd_dma_req, dma_request[1], DRQ0}),
         .dma_acknowledge_n                  (dma_acknowledge_n),
         .address_enable_n                   (address_enable_n),
-        .terminal_count_n                   (terminal_count_n)
+        .terminal_count_n                   (terminal_count_n),
+        .dbg_hold                           (arb_hold)
     );
+
+    assign  dbg_dma = {dbg_fdc_dma[31:17],       // floppy's {state, fifo_count}
+                       dbg_fdc_dma[11],          // floppy's raw dma_req
+                       dbg_fdc_dma[12],          // fdd_dma_req to the 71071
+                       arb_hold[0],              // dma_hold_request
+                       arb_hold[1],              // hold_acknowledge
+                       dma_acknowledge_n,        // DACK, active low
+                       ~terminal_count_n,
+                       address_enable_n,
+                       ext_access_request,
+                       processor_status,
+                       3'd0};
+
+    wire [3:0] arb_hold;
+
 
     // Video-side glyph reads, RAM.sv's port B out to PERIPHERALS.
     wire        font_rd_req, font_rd_ack, font_rd_valid, font_rd_done;
@@ -387,6 +408,7 @@ module CHIPSET #(
         .dbg_fdc_z                       (dbg_fdc_z),
         .dbg_fdc_w                       (dbg_fdc_w),
         .dbg_fdc_v                       (dbg_fdc_v),
+        .dbg_fdc_dma                     (dbg_fdc_dma),
         .dbg_w_path                      (dbg_w_path),
         .dbg_rw_lvl                      (dbg_rw_lvl),
         .dbg_irq_level                      (dbg_irq_level),

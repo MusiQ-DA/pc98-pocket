@@ -66,6 +66,7 @@
 #define POST_FDCZ1  ((volatile uint32_t *) 0x50000100) // FIFO bytes 4..7 back
 #define POST_FDCZ2  ((volatile uint32_t *) 0x50000104) // FIFO bytes 8..11 back
 #define POST_FDCV   ((volatile uint32_t *) 0x50000108) // {0, last port, dead, live}
+#define POST_FDMA   ((volatile uint32_t *) 0x5000010C) // the whole DMA handshake in one word
 #define POST_LIVPC  ((volatile uint32_t *) 0x50000110) // {ip, cs} of the retired instruction
 #define POST_DRAIL  ((volatile uint32_t *) 0x50000114) // {ip, cs} at the ROM-exit edge
 #define POST_LAND   ((volatile uint32_t *) 0x50000118) // {ip, cs} of the first non-ROM instruction
@@ -588,15 +589,19 @@ void post_mon_tick(void)
         // row 192, the MSW/SZ/F0 row the taller panel vacated.
         {
             uint32_t ldr = *POST_ROMLD3, rdr = *POST_ROMRD3;
-            uint32_t rlf = *POST_RLF;
             osd_draw_string(&fb, 4, 192, "LD", OSD_LABEL);
             hex(4 + 3 * 8, 192, ldr, 8);
             osd_draw_string(&fb, 4 + 12 * 8, 192, "RD", OSD_LABEL);
             hex(4 + 15 * 8, 192, rdr, 8);
-            osd_draw_string(&fb, 4 + 24 * 8, 192, "DP", OSD_LABEL);
-            hex(4 + 27 * 8, 192, rlf & 0xFFFFu, 4);
-            osd_draw_string(&fb, 4 + 32 * 8, 192, "HW", OSD_LABEL);
-            hex(4 + 35 * 8, 192, (rlf >> 16) & 0xFFFFu, 4);
+            // The FDC's DMA handshake, one word, replacing DP/HW now that
+            // the loader fifo reads clean on every boot. Bit order, top to
+            // bottom: {fdc state[31:28], fifo bytes[27:17], its req[16],
+            // DRQ to the 71071[15], hold req[14], holda[13], DACK[12:9],
+            // TC[8], AEN[7], ext[6], cpu status[5:3], 0[2:0]}. A READ that
+            // fills the fifo and stalls with DRQ up and DACK quiet is a
+            // 71071-side death; hreq up with holda 0 is the arbiter.
+            osd_draw_string(&fb, 4 + 24 * 8, 192, "DM", OSD_LABEL);
+            hex(4 + 27 * 8, 192, *POST_FDMA, 8);
         }
         // The continuous watcher's verdict: RW = the offset it has walked to
         // (so you can see it live), R! = the first rot it ever caught, with
@@ -847,6 +852,26 @@ void post_mon_tick(void)
         // the whole row -- the window parks on 0x500, the flags the boot
         // polls while everything else is frozen, and SZ/F0/KEY stand down
         // for the one build it takes to read them.
+        // The firmware side of a sector read, watched from the service loop:
+        // SN polls that found a read request up, PS sectors pushed into the
+        // controller fifo, ER dataslot transfers that failed or timed out,
+        // AF request bits still raised right after a push. SN 00 while the
+        // guest waits in MS 90 convicts the request link (or the mount);
+        // PS with AF 00 and no irq convicts the DMA drain. Row 92 is empty
+        // unless a ROM fault fires, in which case R! overdraws it.
+        {
+            extern uint32_t fdd_dbg_seen, fdd_dbg_pushed, fdd_dbg_err,
+                            fdd_dbg_lba, fdd_dbg_aft;
+            osd_draw_string(&fb, 4, 92, "SN", OSD_LABEL);
+            hex(4 + 3 * 8, 92, fdd_dbg_seen & 0xFFu, 2);
+            osd_draw_string(&fb, 4 + 5 * 8, 92, "PS", OSD_LABEL);
+            hex(4 + 8 * 8, 92, fdd_dbg_pushed & 0xFFu, 2);
+            osd_draw_string(&fb, 4 + 10 * 8, 92, "ER", OSD_LABEL);
+            hex(4 + 13 * 8, 92, fdd_dbg_err & 0xFFu, 2);
+            osd_draw_string(&fb, 4 + 15 * 8, 92, "AF", OSD_LABEL);
+            hex(4 + 18 * 8, 92, fdd_dbg_aft & 0xFFu, 2);
+        }
+
         // R!: the ROM watcher's catch, on the row the dead STK display
         // vacated -- file offset of the first rot, the byte the file has,
         // and the byte SDRAM actually holds.
