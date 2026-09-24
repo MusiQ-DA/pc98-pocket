@@ -667,7 +667,8 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: quartus-install
-          key: quartus-install-win-v1
+          key: quartus-install-win-v2
+          enableCrossOsArchive: true
 
       - name: Log in to ghcr.io
         if: steps.qinstall.outputs.cache-hit != 'true'
@@ -688,7 +689,8 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: quartus-install
-          key: quartus-install-win-v1
+          key: quartus-install-win-v2
+          enableCrossOsArchive: true
 
   quartus-win:
     # The same Quartus Prime Standard 18.1 tree running on a real Windows
@@ -708,7 +710,8 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: quartus-install
-          key: quartus-install-win-v1
+          key: quartus-install-win-v2
+          enableCrossOsArchive: true
 
       - name: Restore incremental compile database
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
