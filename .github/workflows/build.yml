@@ -586,6 +586,7 @@ jobs:
         run: quartus_sh.exe --version
 
       - name: Compile (quartus_sh --flow compile)
+        id: compile
         shell: bash
         run: |
           cd fpga
@@ -639,7 +640,11 @@ jobs:
             fpga/sta_sdram_*.txt
 
       - name: Save incremental compile database
-        if: always()
+        # always() so a flaky later step (STA gate, upload) doesn't forfeit
+        # the db -- but NOT on a crashed compile: run a77f8a7 hit a Quartus
+        # TDC internal error mid-map and would have cached a half-written
+        # db for every later run to restore.
+        if: always() && steps.compile.outcome == 'success'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
