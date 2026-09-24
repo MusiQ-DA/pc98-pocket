@@ -108,14 +108,16 @@ proc generateBuildID_MIF {} {
 	# Prefer the source revision's own stamp: a MIF that changes every run
 	# is a changed synthesis input, which makes Quartus re-elaborate and
 	# refit the whole Top partition -- defeating incremental compilation.
-	# Deriving from HEAD keeps the MIF identical for identical sources, so
-	# a no-change run can actually reuse the previous db. Without git (e.g.
-	# inside the wine container, which has no git.exe) this falls back to
-	# the old wall-clock + random behaviour.
-	if {![catch {exec git -C .. log -1 --format=%ct} buildEpoch]} {
+	# Deriving from the last commit that touched fpga/ or firmware/ (the
+	# bitstream's actual inputs) keeps the MIF identical whenever those
+	# inputs are unchanged, so a no-change run can reuse the previous db.
+	# Without git (e.g. inside the wine container, which has no git.exe) or
+	# without matching history (shallow clone) this falls back to the old
+	# wall-clock + random behaviour.
+	if {![catch {exec git -C .. log -1 --format=%ct -- fpga firmware} buildEpoch] && $buildEpoch ne ""} {
 		set buildDate [ clock format $buildEpoch -format %Y%m%d ]
 		set buildTime [ clock format $buildEpoch -format %H%M%S ]
-		if {![catch {exec git -C .. rev-parse --short=8 HEAD} buildSha]} {
+		if {![catch {exec git -C .. log -1 --abbrev=8 --format=%h -- fpga firmware} buildSha] && $buildSha ne ""} {
 			set buildUnique [expr 0x$buildSha]
 		} else {
 			set buildUnique 0
