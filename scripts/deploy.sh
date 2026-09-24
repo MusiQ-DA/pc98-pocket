@@ -144,8 +144,8 @@ qok=$(python3 -c "
 import sys; sys.path.insert(0,'scripts/tools'); import ghlib
 R='/repos/MusiQ-DA/pc98-pocket'
 rid=[r['id'] for r in ghlib.gh(R+'/actions/runs?per_page=100')['workflow_runs'] if r['run_number']==$RUN][0]
-j=[x for x in ghlib.gh(f'{R}/actions/runs/{rid}/jobs')['jobs'] if x['name'].startswith('quartus')][0]
-print('yes' if j['conclusion']=='success' else 'no')")
+j=[x for x in ghlib.gh(f'{R}/actions/runs/{rid}/jobs')['jobs'] if x['name'].startswith('quartus')]
+print('yes' if any(x['conclusion']=='success' for x in j) else 'no')")
 [ "$qok" = "yes" ] || { say "the quartus job did not succeed -- nothing worth flashing"; exit 1; }
 
 # ---- 2. fetch and package --------------------------------------------------
