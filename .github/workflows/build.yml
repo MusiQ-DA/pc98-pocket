@@ -506,11 +506,15 @@ jobs:
         # under a unique key and restores the newest one by prefix, so a
         # small RTL change does not pay a full refit. Bump the v1 prefix to
         # throw away a suspect db.
+        # output_files goes in too: a no-change incremental compile skips the
+        # assembler entirely, and the upload step still needs sof/rbf/rpt --
+        # the restored files are bit-identical to what the same db produces.
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             fpga/db
             fpga/incremental_db
+            fpga/output_files
           key: quartus-incdb-v2-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: quartus-incdb-v2-
 
@@ -650,4 +654,5 @@ jobs:
           path: |
             fpga/db
             fpga/incremental_db
+            fpga/output_files
           key: quartus-incdb-v2-${{ github.run_id }}-${{ github.run_attempt }}
