@@ -393,6 +393,15 @@ jobs:
           ./obj_gseq/gs | tee gseq.log
           grep -q "PASS tb_pc98_gvram_seq" gseq.log
 
+      - name: the graphics fetch shows what the slave GDC's partitions say
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_gvram_display \
+            -Isim -I$S sim/tb_pc98_gvram_display.sv $S/pc98_gvram_display.sv \
+            -o gd --Mdir obj_gdisp
+          ./obj_gdisp/gd | tee gdisp.log
+          grep -q "PASS tb_pc98_gvram_display" gdisp.log
+
       - name: the EGC's colour, raster ops and access page match np2kai
         run: |
           S=fpga/core

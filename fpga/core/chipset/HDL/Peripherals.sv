@@ -1281,6 +1281,8 @@ module PERIPHERALS #(
         .disp_on(gdc_s_on_px),
         .disp_page(gvram_disp_page),
         .analog_mode(pc98_analog),
+        .pitch(gdc_s_pitch),
+        .part_sad(gdc_s_sad), .part_len(gdc_s_len),
         .p_req(gv_rd_req), .p_addr(gv_rd_addr), .p_len(gv_rd_len),
         .p_ack(gv_rd_ack), .p_rvalid(gv_rd_valid), .p_rdata(gv_rd_data),
         .p_done(gv_rd_done),
@@ -1308,7 +1310,7 @@ module PERIPHERALS #(
         gv_wrote_s1 <= gv_wrote;
         gv_wrote_px <= gv_wrote_s1;
     end
-    wire [3:0] gfx_idx = gfx_dot_w & {4{gv_wrote_px}};
+    wire [3:0] gfx_idx = gfx_dot_w;
 
     // ------------------------------------------------- glyphs, out of SDRAM
     //
@@ -1440,6 +1442,54 @@ module PERIPHERALS #(
             if (pg_a4_cs & ~io_write_n) gvram_disp_page   <= internal_data_bus[0];
             if (pg_a6_cs & ~io_write_n) gvram_access_page <= internal_data_bus[0];
         end
+    end
+
+    // Ports 0xA8-0xAE: the analogue palette. 0xA8 takes the slot index, then
+    // 0xAA/0xAC/0xAE take green, red and blue nibbles for it -- the order the
+    // BIOS itself programs at F803FC (see docs/PC98_ITF_TRACE.md). Sixteen
+    // colours of 256 shades. On a 9801 they are write-only; reads stay 0xFF.
+    //
+    // In digital eight-colour mode the same ports carry a packed per-plane
+    // palette instead (docs/PC98_IO_MAP.md §9.3); that remapping is not
+    // implemented -- the digital path keeps its fixed eight colours.
+    wire pal_idx_cs = pc98_io_exact & (address[7:0] == 8'hA8);
+    wire pal_grn_cs = pc98_io_exact & (address[7:0] == 8'hAA);
+    wire pal_red_cs = pc98_io_exact & (address[7:0] == 8'hAC);
+    wire pal_blu_cs = pc98_io_exact & (address[7:0] == 8'hAE);
+
+    logic [3:0]  apal_idx;
+    logic [11:0] apal [0:15];              // {green, red, blue} nibbles
+
+    // The reset table is the one the BIOS POST loads (trace F8042F, three
+    // bytes a slot in green/red/blue order): dim colours 0-7, a dark grey
+    // at 8, bright 9-15. Held at reset so the screen is right even if the
+    // display starts before the palette write lands.
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            apal_idx <= 4'd0;
+            apal[ 0] <= 12'h000; apal[ 1] <= 12'h007;
+            apal[ 2] <= 12'h070; apal[ 3] <= 12'h077;
+            apal[ 4] <= 12'h700; apal[ 5] <= 12'h707;
+            apal[ 6] <= 12'h770; apal[ 7] <= 12'h777;
+            apal[ 8] <= 12'h444; apal[ 9] <= 12'h00F;
+            apal[10] <= 12'h0F0; apal[11] <= 12'h0FF;
+            apal[12] <= 12'hF00; apal[13] <= 12'hF0F;
+            apal[14] <= 12'hFF0; apal[15] <= 12'hFFF;
+        end else begin
+            if (pal_idx_cs & ~io_write_n) apal_idx <= internal_data_bus[3:0];
+            if (pal_grn_cs & ~io_write_n) apal[apal_idx][11:8] <= internal_data_bus[3:0];
+            if (pal_red_cs & ~io_write_n) apal[apal_idx][ 7:4] <= internal_data_bus[3:0];
+            if (pal_blu_cs & ~io_write_n) apal[apal_idx][ 3:0] <= internal_data_bus[3:0];
+        end
+    end
+
+    // Pixel-domain copy, latched once a frame like the master's SAD/PITCH --
+    // a palette rewritten mid-frame lands whole next frame, which also keeps
+    // the dot-clock read free of torn nibbles.
+    logic [11:0] apal_px [0:15];
+    always_ff @(posedge clk_vga_cga) begin
+        if (pc98_vs_px & ~pc98_vs_px_d)
+            for (int i = 0; i < 16; i++) apal_px[i] <= apal[i];
     end
 
     // Ports 0x4A0-0x4AF: the EGC register file, forwarded one strobe at a
@@ -1633,16 +1683,25 @@ module PERIPHERALS #(
         t_grb_q <= pc98_grb;
     end
 
-    // Fixed sixteen-colour palette: the four planes' bit as {E,R,G,B}, E the
-    // intensity bit -- half bright at 0, full at 1. The analog palette
-    // registers (ports 0xA8-0xAE) are not yet implemented; titles that write
-    // them see the defaults, the same table np2kai starts from.
-    function automatic logic [5:0] chan(input logic plane_bit, input logic e);
-        chan = plane_bit ? (e ? 6'h3F : 6'h2A) : 6'h00;
-    endfunction
-    wire [5:0] gfx_r = chan(gfx_idx[2], gfx_idx[3]);
-    wire [5:0] gfx_g = chan(gfx_idx[1], gfx_idx[3]);
-    wire [5:0] gfx_b = chan(gfx_idx[0], gfx_idx[3]);
+    // The graphics dot's colour. The index is {E,G,R,B}: in analogue mode it
+    // selects one of the sixteen palette entries written at 0xA8-0xAE (the
+    // per-frame copy keeps the read whole), each channel a nibble stretched
+    // to six bits; in digital eight-colour mode the palette hardware packs
+    // differently and is not implemented -- the fixed full-bright eight
+    // colours stand in.
+    wire [11:0] apal_rgb = apal_px[gfx_idx];
+    wire [5:0] gfx_r = gv_wrote_px
+                     ? (pc98_analog ? {apal_rgb[7:4],  apal_rgb[7:6]}
+                                    : (gfx_idx[1] ? 6'h3F : 6'h00))
+                     : 6'h00;
+    wire [5:0] gfx_g = gv_wrote_px
+                     ? (pc98_analog ? {apal_rgb[11:8], apal_rgb[11:10]}
+                                    : (gfx_idx[2] ? 6'h3F : 6'h00))
+                     : 6'h00;
+    wire [5:0] gfx_b = gv_wrote_px
+                     ? (pc98_analog ? {apal_rgb[3:0],  apal_rgb[3:2]}
+                                    : (gfx_idx[0] ? 6'h3F : 6'h00))
+                     : 6'h00;
 
     assign VID_R     = t_pix_q ? (t_grb_q[1] ? 6'h3F : 6'h00) : gfx_r;
     assign VID_G     = t_pix_q ? (t_grb_q[2] ? 6'h3F : 6'h00) : gfx_g;

@@ -796,8 +796,11 @@ CI に tb_pc98_egc を追加し、tb_pc98_gvram_seq のビルド行に pc98_egc.
 残り (docs/SOFTCORE_RTL_SPLIT.md):
 - sft/leng のシフトパイプライン (非アライン blit)。今はアライン済み
   = ソースラッチが最後のリードのバイトを保持する形のみ
-- pc98_gvram_display 側: slave GDC の SAD/PITCH 未消費、パレットは固定 16 色、
-  E プレーンは常に E0000 (アナログ前提)
+- pc98_gvram_display 側: ~~slave GDC の SAD/PITCH 未消費、パレットは固定
+  16 色~~ → 解消済み。SAD/PITCH/4パーティションをラインエッジでラッチして
+  消費 (スクロール・分割表示が動く)、0xA8-0xAE のアナログパレット
+  (index→G/R/B ニブル、BIOS テーブル既定値) を Peripherals に実装。
+  残る差分はデジタル 8 色モードの packed パレットのみ (固定 8 色で代替)。
 
 ### §10.8 リセット項の OSD 化 (帯ストリップ廃止)
 

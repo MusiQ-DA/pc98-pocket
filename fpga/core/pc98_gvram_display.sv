@@ -12,8 +12,14 @@
 // eighty dots is eighty SDRAM words: five sixteen-word bursts per plane,
 // twenty per line, plus the font's five -- comfortably inside a line time.
 // The plane bases are the hardware windows (A8000=B, B0000=R, B8000=G, and E
-// at E0000, where pc98_gvram_seq keeps it); the line stride is eighty bytes
-// inside each plane.
+// at E0000, where pc98_gvram_seq keeps it). A line's byte offset inside its
+// plane comes from the slave GDC's display registers the way the uPD7220
+// walks them: the rasterline selects one of the four PRAM partitions by its
+// LEN (lines past the last partition wrap back to the first), and the byte
+// address is that partition's SAD plus the line-in-partition times PITCH --
+// all word counts, shifted left one and wrapped inside the 32 KB plane.
+// Latched at each line edge, so scroll-by-SAD and split screens behave the
+// way software expects them to.
 //
 // DOMAINS. The fetch FSM runs on the chipset clock with the port-B
 // handshake; the display shift runs on the dot clock the text renderer uses.
@@ -22,10 +28,9 @@
 // a plain synchroniser), and the display side picks the freshest completed
 // bank off a toggled flag.
 //
-// First-cut limits, all noted in docs/SOFTCORE_RTL_SPLIT.md: the slave GDC's
-// SAD/PITCH are not consumed (games that scroll by moving SAD will not move),
-// and the palette is the fixed sixteen-colour mapping rather than ports
-// 0x4A0-0x4AF. Each is one register file away when a title needs it.
+// Remaining limit: the digital-mode packed palette at 0xA8-0xAE is not
+// decoded (the digital path shows the fixed eight colours), and the dot is
+// an index into the palette file owned by Peripherals.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -46,6 +51,14 @@ module pc98_gvram_display #(
     input  wire        disp_on,           // the slave GDC's START seen
     input  wire        disp_page,         // port 0xA4 bit 0: show page one
     input  wire        analog_mode,       // port 0x6A bit 0: plane E exists
+
+    // The slave GDC's display registers, live from pc98_gdc on this same
+    // clock. They are latched at each line edge, so a mid-frame rewrite
+    // takes effect from the next rasterline -- which is how the hardware's
+    // scroll (SAD) and split-screen (partitions) actually behave.
+    input  wire  [7:0]  pitch,            // words per line
+    input  wire  [15:0] part_sad [0:3],   // partition start, word address
+    input  wire  [9:0]  part_len [0:3],   // partition length, lines
 
     // sdram_mp port side -- the controller's port D, a read-only master of
     // its own so the twenty bursts a line never queue behind the font's five.
@@ -126,20 +139,43 @@ module pc98_gvram_display #(
     localparam int BURST = 16;            // words per transaction
     localparam int CHUNKS = 80 / BURST;   // 5
 
+    // The byte a line starts from: partition LEN walks the raster down the
+    // four PRAM entries, each partition's SAD a word address that steps by
+    // PITCH words a line. The uPD7220's byte address is the word shifted
+    // left one, wrapped inside the 32 KB plane -- the "& 0x7FFF" below is
+    // that wrap. A rasterline beyond all four partitions wraps back through
+    // them, which is what the hardware does with the PRAM pointer cycling.
+    function automatic logic [14:0] line_byte_base(input logic [8:0] ln);
+        logic [11:0] total, rel;
+        logic [19:0] word_addr;
+        total = {2'b0, part_len[0]} + {2'b0, part_len[1]}
+              + {2'b0, part_len[2]} + {2'b0, part_len[3]};
+        rel   = (total != 12'd0) ? 12'(ln) % total : {3'b0, ln};
+        if      (rel < 12'(part_len[0]))                        word_addr = 20'(part_sad[0]) + {8'd0, rel} * 20'(pitch);
+        else if (rel < 12'(part_len[0]) + 12'(part_len[1]))     word_addr = 20'(part_sad[1]) + {8'd0, rel - 12'(part_len[0])} * 20'(pitch);
+        else if (rel < 12'(part_len[0]) + 12'(part_len[1])
+                       + 12'(part_len[2]))                      word_addr = 20'(part_sad[2]) + {8'd0, rel - 12'(part_len[0]) - 12'(part_len[1])} * 20'(pitch);
+        else                                                    word_addr = 20'(part_sad[3]) + {8'd0, rel - 12'(part_len[0]) - 12'(part_len[1]) - 12'(part_len[2])} * 20'(pitch);
+        line_byte_base = 15'(word_addr << 1);
+    endfunction
+
     logic [2:0]  f_plane = 3'd0;
     logic [3:0]  f_chunk = 4'd0;
     logic [6:0]  f_word  = 7'd0;          // 0..15 within the burst
     logic        f_active = 1'b0;
     logic        req_q    = 1'b0;         // want a burst, dropped on ack
+    logic [14:0] fill_base = 15'd0;       // byte offset of this line in-plane
 
     // One request per burst, deasserted the cycle the arbiter acks -- the
     // font fetcher drives port B the same way, and holding req through the
     // burst lets the arbiter re-capture a stale address at p_done.
     assign p_req  = req_q;
     assign p_len  = 4'(BURST - 1);
+    // The plane byte offset wraps inside the 32 KB plane the way the GDC's
+    // own address counter does -- at chunk granularity here, which is exact
+    // unless a line straddles the plane end between sixteen-byte marks.
     assign p_addr = plane_base(f_plane[1:0])
-                 + {15'd0, fill_line} * 24'd80
-                 + {20'd0, f_chunk} * 24'(BURST);
+                 + {9'd0, (fill_base + 15'(f_chunk) * 15'(BURST)) & 15'h7FFF};
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -158,9 +194,16 @@ module pc98_gvram_display #(
                     // A new line just began: fill the NEXT one into the other
                     // bank. Wrap at the raster's line count; lines past the
                     // active window are not fetched at all -- they have no
-                    // plane storage and nothing displays them.
-                    fill_line <= (line_now == 9'(LINES - 1)) ? 9'd0
-                                                             : line_now + 9'd1;
+                    // plane storage and nothing displays them. The byte base
+                    // is latched with the line so the whole fill is stable
+                    // against a mid-line SAD/PITCH rewrite.
+                    begin
+                        logic [8:0] nline;
+                        nline = (line_now == 9'(LINES - 1)) ? 9'd0
+                                                            : line_now + 9'd1;
+                        fill_line <= nline;
+                        fill_base <= line_byte_base(nline);
+                    end
                     fill_bank <= ~fill_bank;
                     f_plane   <= 3'd0;
                     f_chunk   <= 4'd0;
@@ -244,7 +287,11 @@ module pc98_gvram_display #(
     wire pr = rd_r[bit_q];
     wire pg = rd_g[bit_q];
     wire pe = rd_e[bit_q] & analog_mode;
-    assign gfx_dot = (disp_on & vis_q) ? {pe, pr, pg, pb} : 4'd0;
+    // The four planes assemble into the palette index as {E,G,R,B}: the
+    // windows in memory order are B,R,G,E and the BIOS's own palette table
+    // (ITF trace F8042F) gives index 1 blue, 2 red, 4 green -- so the bit
+    // the B0000 window produced is index bit 1, the B8000 window bit 2.
+    assign gfx_dot = (disp_on & vis_q) ? {pe, pg, pr, pb} : 4'd0;
 
 endmodule
 
