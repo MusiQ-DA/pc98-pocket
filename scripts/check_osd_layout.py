@@ -116,6 +116,15 @@ for mm in re.finditer(r"\bdec\(\s*([^,]+),\s*([^,]+),", txt):
 # and can never both be drawn. The preprocessor cannot see that, so name them.
 RUNTIME_EXCLUSIVE = ("'VEC", )
 
+# Rows whose left-hand span is two runtime-exclusive arms, so every field
+# pair inside the span is legal by construction even though the checker
+# cannot see the condition:
+#   92 -- the SN/PS/ER/AF FDD-service counters share [4,168) with the R!/F/M
+#         ROM-rot report, which only draws when romw_bad_at has tripped.
+#         Fields at or right of 168 (KEY and beyond) coexist with both arms
+#         and are still checked against each other and against arm ends.
+RUNTIME_EXCLUSIVE_ROWS = {92: 168}
+
 bad = 0
 rows = {}
 for y, x0, x1, lab in fields:
@@ -126,6 +135,9 @@ for y in sorted(rows):
     for i in range(len(items) - 1):
         a, b = items[i], items[i + 1]
         if a[2].startswith(RUNTIME_EXCLUSIVE) or b[2].startswith(RUNTIME_EXCLUSIVE):
+            continue
+        if y in RUNTIME_EXCLUSIVE_ROWS and \
+           a[0] < RUNTIME_EXCLUSIVE_ROWS[y] and b[0] < RUNTIME_EXCLUSIVE_ROWS[y]:
             continue
         if a[1] > b[0]:
             print(f"OVERLAP row {y}: {a[2]} [{a[0]}..{a[1]}) into {b[2]} [{b[0]}..{b[1]})")
