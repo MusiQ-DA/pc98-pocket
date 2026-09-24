@@ -50,7 +50,7 @@ module BUS_ARBITER (
     // 71071 is asking for versus what the arbiter granted it.
     output  logic   [3:0]   dbg_hold,
     // uPD71071 internals for POSTMON's DC/DW fields -- see upd71071.sv.
-    output  logic   [63:0]  dbg_dmac
+    output  logic   [31:0]  dbg_dmac
 );
 
     //

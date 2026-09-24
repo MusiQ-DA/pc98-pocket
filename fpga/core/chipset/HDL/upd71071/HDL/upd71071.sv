@@ -34,17 +34,18 @@ module upd71071 (
     output  logic           memory_read_n,
     output  logic           memory_write_n,
 
-    // POSTMON's DC/DW words. The metal case: DRQ parked high at the pins,
+    // POSTMON's DC word. The metal case: DRQ parked high at the pins,
     // hold_request flat -- somewhere between "the write never arrived" and
     // "the encoder rejected it" the request dies, and none of those internals
-    // reach the outside. Low half is the live encoder/FSM state:
-    //   [31:28] request_register  [27:24] mask_register
-    //   [23:20] dma_request_state [19:16] encoded_dma
-    //   [15:12] dma_request_ff    [11:8]  terminal_count_state
-    //   [7:4]   dma_acknowledge_internal
-    //   [3]     controller_disable [2:0]  transfer FSM state
-    // High half is the register-write snoop (see Bus_Control_Logic).
-    output  logic   [63:0]  dbg
+    // reach the outside. 32 bits so the design keeps its fit margin:
+    //   [31:28] mask_register       [27:24] encoded_dma
+    //   [23:20] dma_request_state   [19:16] dma_request_ff
+    //   [15:12] last written register index
+    //   [11:8]  write count (saturating)
+    //   [7]     sticky: register 1010 (single mask, I/O 0x15) written
+    //   [6]     controller_disable
+    //   [5:3]   transfer FSM state  [2:0]   unused
+    output  logic   [31:0]  dbg
 );
 
 
@@ -103,7 +104,9 @@ module upd71071 (
         .read_current_address               (read_current_address),
         .read_current_word_count            (read_current_word_count),
 
-        .dbg_wr                             (dbg_wr)
+        .dbg_wr_last_reg                    (dbg_wr_last_reg),
+        .dbg_wr_cnt                         (dbg_wr_cnt),
+        .dbg_wr_reg_a                       (dbg_wr_reg_a)
     );
 
 
@@ -117,7 +120,9 @@ module upd71071 (
     logic           end_of_process_internal;
     logic   [3:0]   dma_acknowledge_internal;
     logic   [15:0]  dbg_enc;
-    logic   [31:0]  dbg_wr;
+    logic   [3:0]   dbg_wr_last_reg;
+    logic   [3:0]   dbg_wr_cnt;
+    logic           dbg_wr_reg_a;
 
     upd71071_Priority_Encoder u_Priority_Encoder (
         .clock                              (clock),
@@ -278,16 +283,16 @@ module upd71071 (
     // dbg_enc is {request_register, mask_register, dma_request_ff,
     // controller_disable, dreq_sense_active_low, rotating_priority, 1'b0}.
     assign  dbg = {
-        dbg_wr,
-        dbg_enc[15:12],     // request_register
         dbg_enc[11:8],      // mask_register
-        dma_request_state,
         encoded_dma,
+        dma_request_state,
         dbg_enc[7:4],       // dma_request_ff
-        terminal_count_state,
-        dma_acknowledge_internal,
+        dbg_wr_last_reg,
+        dbg_wr_cnt,
+        dbg_wr_reg_a,
         dbg_enc[3],         // controller_disable
-        dbg_state
+        dbg_state,
+        3'b000
     };
 
 endmodule
