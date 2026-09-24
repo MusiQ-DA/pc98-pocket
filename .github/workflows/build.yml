@@ -669,6 +669,10 @@ jobs:
           path: quartus-install
           key: quartus-install-win-v1
 
+      - name: Log in to ghcr.io
+        if: steps.qinstall.outputs.cache-hit != 'true'
+        run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u musiq-da --password-stdin
+
       - name: Extract intelFPGA from the wine image
         if: steps.qinstall.outputs.cache-hit != 'true'
         run: |
