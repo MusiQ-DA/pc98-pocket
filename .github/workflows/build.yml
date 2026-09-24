@@ -655,3 +655,157 @@ jobs:
           path: |
             fpga/output_files
           key: quartus-incdb-v3-${{ github.run_id }}-${{ github.run_attempt }}
+
+  stage-quartus-win:
+    # Lifts the Windows Quartus install out of the wine image once and
+    # stashes it in actions/cache. The windows-2022 job below restores it
+    # (~1 min) instead of an image it cannot run -- GHA windows runners
+    # have no docker. Re-extract only runs when the cache is missing.
+    runs-on: ubuntu-latest
+    steps:
+      - id: qinstall
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: quartus-install
+          key: quartus-install-win-v1
+
+      - name: Extract intelFPGA from the wine image
+        if: steps.qinstall.outputs.cache-hit != 'true'
+        run: |
+          docker pull -q ghcr.io/musiq-da/quartus-wine:18.1-slim
+          cid=$(docker create ghcr.io/musiq-da/quartus-wine:18.1-slim)
+          mkdir -p quartus-install
+          docker cp "$cid":/opt/prefix/drive_c/intelFPGA quartus-install/intelFPGA
+          docker rm -f "$cid"
+          du -sh quartus-install/intelFPGA
+
+      - name: Cache the Quartus install
+        if: steps.qinstall.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: quartus-install
+          key: quartus-install-win-v1
+
+  quartus-win:
+    # The same Quartus Prime Standard 18.1 tree running on a real Windows
+    # runner instead of under Wine. Motivation: quartus_map crashes (Fatal
+    # access violation -> DMGR ref_count assert on the way out) whenever a
+    # previous db exists under Wine, which killed db caching -- see the
+    # quartus-std restore comment. Native Windows is Quartus's supported
+    # platform for exactly that incremental-synthesis path, so the win db
+    # cache here keeps fpga/db too.
+    runs-on: windows-2022
+    needs: stage-quartus-win
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Restore the Quartus install
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: quartus-install
+          key: quartus-install-win-v1
+
+      - name: Restore incremental compile database
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            fpga/db
+            fpga/incremental_db
+            fpga/output_files
+          key: quartus-incdb-win-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: quartus-incdb-win-v1-
+
+      - name: Stage license.dat for this machine's FlexLM hostid
+        # shell: bash gives us Git Bash on the windows runner, so the same
+        # decode + sed rewrite works as on ubuntu. Difference vs Wine: there
+        # is no container MAC to pin, so instead of picking a MAC we ask
+        # FlexLM itself -- lmutil lmhostid reports the id this machine will
+        # present -- and rewrite the license's HOSTID placeholder to it.
+        shell: bash
+        run: |
+          set -e
+          LIC="$(cygpath "$RUNNER_TEMP")/license.dat"
+          printf '%s' "${{ secrets.QUARTUS_LICENSE_DAT }}" | base64 -d > "$LIC"
+          QBIN="$GITHUB_WORKSPACE/quartus-install/intelFPGA/18.1/quartus/bin64"
+          "$QBIN/lmutil.exe" lmhostid | tee lmhostid.txt
+          HOSTID_HEX=$(tr -d '\r' < lmhostid.txt | grep -oiE '[0-9a-f]{12}' | head -1)
+          echo "FlexLM hostid = $HOSTID_HEX"
+          test -n "$HOSTID_HEX"
+          LC_ALL=C sed -i.bak \
+            "s/HOSTID=[^[:space:]]*/HOSTID=$HOSTID_HEX/g" "$LIC"
+          grep -c "HOSTID=$HOSTID_HEX" "$LIC"
+          WIN_LIC="$(cygpath -w "$LIC")"
+          {
+            echo "LM_LICENSE_FILE=$WIN_LIC"
+            echo "ALTERAD_LICENSE_FILE=$WIN_LIC"
+            echo "QUARTUS_ROOTDIR=$(cygpath -w "$GITHUB_WORKSPACE/quartus-install/intelFPGA/18.1/quartus")"
+          } >> "$GITHUB_ENV"
+          cygpath -w "$QBIN" >> "$GITHUB_PATH"
+
+      - name: Quartus smoke test
+        shell: bash
+        run: quartus_sh.exe --version
+
+      - name: Compile (quartus_sh --flow compile)
+        shell: bash
+        run: |
+          cd fpga
+          quartus_sh.exe --flow compile ap_core \
+            2>&1 | { grep --line-buffered -vE '^\s*Info' || true; }
+
+      - name: SDRAM interface is actually timed (not just "green")
+        if: always()
+        shell: bash
+        run: |
+          cd fpga
+          quartus_sta.exe \
+            -t "$(cygpath -w "$GITHUB_WORKSPACE/scripts/check_sdram_paths.tcl")" \
+            ap_core 2>&1 | { grep --line-buffered -vE '^\s*Info' || true; }
+
+      - name: Detailed STA of the CPU-domain violations
+        if: always()
+        shell: bash
+        run: |
+          cd fpga
+          quartus_sta.exe \
+            -t "$(cygpath -w "$GITHUB_WORKSPACE/scripts/sta_cpu_paths.tcl")" \
+            ap_core 2>&1 | { grep --line-buffered -vE '^\s*Info' || true; } || true
+          ls -la fpga/sta_cpu*.txt fpga/sta_pico*.txt 2>/dev/null || true
+
+      - name: Show fit summary
+        if: always()
+        shell: bash
+        run: |
+          grep -A14 "Logic utilization" fpga/output_files/ap_core.fit.rpt 2>/dev/null | head -4 || true
+          grep -E "Flow Status|Successful|failed" \
+            fpga/output_files/ap_core.fit.rpt 2>/dev/null || true
+          grep -iE "evaluation mode" fpga/output_files/*.smsg \
+            fpga/output_files/*.rpt 2>/dev/null | head -5 || true
+          ls -la fpga/output_files/ 2>/dev/null || true
+
+      - name: Upload bitstream and reports
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: quartus-win-bitstream
+          if-no-files-found: error
+          path: |
+            fpga/output_files/*.sof
+            fpga/output_files/*.rbf
+            fpga/output_files/*.rpt
+            fpga/output_files/*.summary
+            fpga/output_files/*.smsg
+            fpga/output_files/*.sta.rpt
+            fpga/sta_cpu_*.txt
+            fpga/sta_pico_*.txt
+            fpga/sta_sdram_*.txt
+
+      - name: Save incremental compile database
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            fpga/db
+            fpga/incremental_db
+            fpga/output_files
+          key: quartus-incdb-win-v1-${{ github.run_id }}-${{ github.run_attempt }}
