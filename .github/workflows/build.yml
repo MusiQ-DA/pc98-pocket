@@ -595,13 +595,19 @@ jobs:
           # DYN_ENUM in the router) across runs on the same sources. They
           # don't reproduce on retry, and a retry resumes from the db left
           # by the crashed stage, so one extra attempt is cheap insurance.
+          # Real failures (unfittable design, HDL errors) are deterministic
+          # though -- only retry when the log shows an Internal/Fatal Error.
           for attempt in 1 2; do
-            if quartus_sh.exe --flow compile ap_core \
-                 2>&1 | { grep --line-buffered -vE '^\s*Info' || true; }; then
+            if quartus_sh.exe --flow compile ap_core 2>&1 \
+                 | tee "compile_$attempt.log" \
+                 | { grep --line-buffered -vE '^\s*Info' || true; }; then
               break
             fi
-            if [ "$attempt" = 2 ]; then exit 1; fi
-            echo "::warning::quartus compile attempt $attempt failed; retrying"
+            if [ "$attempt" = 2 ] \
+               || ! grep -qE 'Internal Error|Fatal Error' "compile_$attempt.log"; then
+              exit 1
+            fi
+            echo "::warning::quartus internal error on attempt $attempt; retrying"
           done
 
       - name: SDRAM interface is actually timed (not just "green")
