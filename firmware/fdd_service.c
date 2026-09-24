@@ -235,10 +235,21 @@ uint32_t fdd_mounted_sectors(uint32_t drive)
 // up right after a push (nonzero = the fifo never filled, or the next sector
 // was already asked for).
 uint32_t fdd_dbg_seen, fdd_dbg_pushed, fdd_dbg_err, fdd_dbg_lba, fdd_dbg_aft;
+uint32_t fdd_dbg_gap;
+static uint32_t gap_polls;
 
 void fdd_poll(void)
 {
     uint32_t req = *FDD_REQUEST;
+    if (!req) {
+        // Polls between services measure the BIOS's turnaround: a drained
+        // sector re-asks within a few loops, a parked drain only after the
+        // guest's own timeout, so the gap separates them by orders.
+        gap_polls++;
+        return;
+    }
+    fdd_dbg_gap = gap_polls;
+    gap_polls = 0;
     if (req & FDD_REQ_READ) {
         postmon_mark = 0x10;
         uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);

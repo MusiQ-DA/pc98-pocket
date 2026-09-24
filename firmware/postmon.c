@@ -311,9 +311,6 @@ void postmon_capture_rom(void)
 static uint32_t eq_snap[3][4];
 static uint8_t  eq_cnt[3];
 
-static uint32_t mon_hb;
-static uint32_t repaints;
-
 // The main loop drops a stage number here before every leg that can hang
 // (see main.c / fdd_service.c). irq() paints it with its own heartbeat, so
 // the corner past KEY keeps moving after the main loop -- and the panel's
@@ -337,7 +334,6 @@ void postmon_isr_hb(void)
 void post_mon_tick(void)
 {
     static uint32_t last_status = 0xFFFFFFFFu;
-    mon_hb++;
 
     // Passive equip-table snoop. guest_peek is unusable once the guest runs:
     // it takes the bus through hold-acknowledge and the machine does not come
@@ -886,25 +882,23 @@ void post_mon_tick(void)
         // unless a ROM fault fires, in which case R! overdraws it.
         {
             extern uint32_t fdd_dbg_seen, fdd_dbg_pushed, fdd_dbg_err,
-                            fdd_dbg_lba, fdd_dbg_aft;
+                            fdd_dbg_lba, fdd_dbg_aft, fdd_dbg_gap;
             osd_draw_string(&fb, 4, 92, "SN", OSD_LABEL);
             hex(4 + 3 * 8, 92, fdd_dbg_seen & 0xFFu, 2);
-            osd_draw_string(&fb, 4 + 5 * 8, 92, "PS", OSD_LABEL);
-            hex(4 + 8 * 8, 92, fdd_dbg_pushed & 0xFFu, 2);
-            // ER is retired -- it never left 00 -- for RQ and RP, the two
-            // numbers that settle the SN=00 question. RQ is *FDD_REQUEST read
-            // at paint time, the same register fdd_poll polls: 1 while the
-            // chip parks in S_SD_READ_WAIT_FOR_DATA, so RQ=1 with SN=00 says
-            // the request is up and the poll is not running. RP counts panel
-            // repaints: the forced repaint every 65536 calls moves it one,
-            // so a live loop changes it between shots and a dead one cannot.
-            // HB stays as the call counter's bits 23:16 for context.
-            osd_draw_string(&fb, 4 + 10 * 8, 92, "RQ", OSD_LABEL);
-            hex(4 + 12 * 8 + 4, 92, *FDD_REQUEST & 0xFu, 1);
-            osd_draw_string(&fb, 4 + 13 * 8 + 4, 92, "RP", OSD_LABEL);
-            hex(4 + 15 * 8 + 4, 92, ++repaints & 0xFFu, 2);
-            osd_draw_string(&fb, 4 + 17 * 8 + 4, 92, "HB", OSD_LABEL);
-            hex(4 + 19 * 8 + 4, 92, (mon_hb >> 16) & 0xFFu, 2);
+            // PS, HB and RP are retired -- the ISR heartbeat now proves the
+            // loop -- for LA and GP, the pair that separates a retry storm
+            // from progress. LA is the last sector the chip asked for
+            // (drive bit + lba): a BIOS re-reading the same sector keeps it
+            // constant, a boot that is advancing moves it. GP counts the
+            // req==0 polls before the latest service: a drained sector
+            // re-asks within a few loops, a drain the DMAC never ran only
+            // after the guest's timeout -- orders of magnitude apart.
+            osd_draw_string(&fb, 4 + 5 * 8, 92, "LA", OSD_LABEL);
+            hex(4 + 8 * 8, 92, fdd_dbg_lba & 0xFFFFu, 4);
+            osd_draw_string(&fb, 4 + 12 * 8, 92, "GP", OSD_LABEL);
+            hex(4 + 15 * 8, 92, fdd_dbg_gap & 0xFFu, 2);
+            osd_draw_string(&fb, 4 + 17 * 8, 92, "RQ", OSD_LABEL);
+            hex(4 + 20 * 8, 92, *FDD_REQUEST & 0xFu, 1);
         }
 
         // R!: the ROM watcher's catch, on the row the dead STK display
