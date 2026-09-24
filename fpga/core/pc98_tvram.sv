@@ -169,13 +169,32 @@ module pc98_tvram (
         end
     end
 
+    // The guest's reset is the screen's reset. The raster free-runs and the
+    // renderer draws this RAM even with the GDC unprogrammed, so a Reset PC
+    // left the old picture standing until the BIOS repainted over it -- the
+    // machine's own reset instead blanks the screen outright. While rst is
+    // held the three banks are walked one cell per clock and zeroed, which
+    // produces the same blackout: the text plane is empty until the BIOS
+    // repaints it. The memory switch lives in registers, not these banks, and
+    // reloads on the same rst level, so the sweep cannot touch it. The sweep
+    // only needs one wrap of the counter; any hold longer than 4096 clocks
+    // covers every cell wherever the count starts, and re-zeroing is harmless
+    // if it wraps again.
+    logic [11:0] clr_cell;
+
     logic [7:0] q_char_lo, q_char_hi, q_attr;
     logic       q_is_attr, q_hi;
     logic       q_memsw;
     logic [2:0] q_memsw_idx;
 
     always_ff @(posedge clk) begin
-        if (cpu_wren & ~memsw_wr_block) begin
+        if (rst) begin
+            clr_cell          <= clr_cell + 12'd1;
+            char_lo[clr_cell] <= 8'd0;
+            char_hi[clr_cell] <= 8'd0;
+            attr[clr_cell]    <= 8'd0;
+        end
+        else if (cpu_wren & ~memsw_wr_block) begin
             if (is_attr)      attr[cpu_cell]    <= cpu_wdata;
             else if (cpu_hi)  char_hi[cpu_cell] <= cpu_wdata;
             else              char_lo[cpu_cell] <= cpu_wdata;
