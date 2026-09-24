@@ -323,6 +323,12 @@ void postmon_isr_hb(void)
 {
     static uint32_t isr_hb;
     isr_hb++;
+    // Every draw is ~9 GPU launches; at a 1 kHz tick that makes the ISR itself
+    // eat most of the core. Every 64th tick keeps the marks visibly alive for
+    // ~2% of the cost -- which is what the marks are for, not the digits' pace.
+    if ((isr_hb & 0x3Fu) != 0u) {
+        return;
+    }
     *VKB_CTRL = 1u;   // the loop may have died before ever enabling the strip
     osd_fill_rect(&fb, 252, 92, 68, 10, OSD_KEYFACE);
     osd_draw_char(&fb, 256, 92, 'I', OSD_LABEL);
