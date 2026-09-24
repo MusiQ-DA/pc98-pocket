@@ -74,10 +74,38 @@ puts [format "  hold :  write/command %s   read %s" \
 
 # The number alone cannot say WHERE the budget went -- input buffer, route,
 # clock skew -- or whether the capture FF made it into the IOE (the endpoint's
-# cell type shows it). Print the worst read path in full so a regression in
-# the log is self-diagnosing instead of another blind build.
-puts "== worst read path, full detail =="
-report_timing -from [get_ports $in_ports] -npaths 1 -setup -detail full_path
+# cell type shows it). Dump the worst read paths to a file the workflow
+# uploads (fpga/sta_sdram_*.txt) -- stdout under quartus_sta -t drops the
+# report_timing table, so printing it here produced a marker and silence.
+puts "== worst read paths, full detail -> sta_sdram_read.txt =="
+report_timing -from [get_ports $in_ports] -npaths 8 -setup -detail full_path \
+    -file sta_sdram_read.txt
+
+# Per-pin census: for every dram_dq pin, how many setup endpoints it reaches
+# and the worst one's name + slack. dram_dq[8:15] showed ZERO packed input
+# registers in the fitter report and zero paths in the census above -- this
+# answers whether the upper byte reaches a register at all, and under which
+# name Quartus renamed it after physical-synthesis retiming.
+puts "== per-pin read endpoint census -> sta_sdram_pins.txt =="
+set pout [open sta_sdram_pins.txt w]
+foreach pin [lsort -dictionary [query_collection -all \
+        [get_ports -nowarn {dram_dq[*]}]]] {
+    set pname [get_port_info -name $pin]
+    set col [get_timing_paths -from $pin -npaths 32 -setup]
+    set n [get_collection_size $col]
+    if {$n == 0} {
+        puts $pout [format "%-14s NO ANALYSED PATHS" $pname]
+        continue
+    }
+    foreach_in_collection path $col {
+        set to [get_path_info $path -to]
+        set tag [expr {[string match *_OTERM* $to] ? "IOE" : "fabric"}]
+        puts $pout [format "%-14s slack %7.3f -> %s  [%s]" $pname \
+            [get_path_info $path -slack] $to $tag]
+    }
+}
+close $pout
+puts "    (see sta_sdram_pins.txt)"
 
 delete_timing_netlist
 project_close
