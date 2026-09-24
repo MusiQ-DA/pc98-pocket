@@ -131,6 +131,7 @@ module tb_pc98_font_sdram;
     );
 
     sdram_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
+                  .PHYSICAL_DQ(1'b1),
                   .T_RAS(2), .T_RC(3), .T_REF(0)) sdr (
         .clk(clk), .a(s_a), .ba(s_ba), .cke(s_cke),
         .ras_n(s_ras_n), .cas_n(s_cas_n), .we_n(s_we_n), .dqm(s_dqm),

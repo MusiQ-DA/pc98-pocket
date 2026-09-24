@@ -93,17 +93,25 @@ set pout [open sta_sdram_pins.txt w]
 # dies with 'invalid command name "%s"'. The pins exist anyway.
 foreach_in_collection pin [get_ports {dram_dq[*]}] {
     set pname [get_port_info -name $pin]
-    set col [get_timing_paths -from $pin -npaths 32 -setup]
-    set n [get_collection_size $col]
-    if {$n == 0} {
-        puts $pout [format "%-14s NO ANALYSED PATHS" $pname]
-    } else {
-        foreach_in_collection path $col {
-            set to [get_path_info $path -to]
-            set tag [expr {[string match *_OTERM* $to] ? "IOE" : "fabric"}]
-            puts $pout [format "%-14s slack %7.3f -> %s  [%s]" $pname \
-                [get_path_info $path -slack] $to $tag]
+    # -from must take a get_ports collection -- the element handle $pin itself
+    # makes get_timing_paths return the "%s" error template on Quartus 18.1,
+    # which get_collection_size then chokes on. Re-query the port by name, the
+    # same call shape as the census above. A pin that still fails degrades to a
+    # note instead of killing the whole census.
+    if {[catch {
+        set col [get_timing_paths -from [get_ports $pname] -npaths 32 -setup]
+        if {[get_collection_size $col] == 0} {
+            puts $pout [format "%-14s NO ANALYSED PATHS" $pname]
+        } else {
+            foreach_in_collection path $col {
+                set to [get_path_info $path -to]
+                set tag [expr {[string match *_OTERM* $to] ? "IOE" : "fabric"}]
+                puts $pout [format "%-14s slack %7.3f -> %s  [%s]" $pname \
+                    [get_path_info $path -slack] $to $tag]
+            }
         }
+    } err]} {
+        puts $pout [format "%-14s census query failed: %s" $pname $err]
     }
 }
 close $pout
