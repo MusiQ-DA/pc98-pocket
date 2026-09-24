@@ -318,7 +318,7 @@ jobs:
             grep -q "RESULT: PASS\|PASS tb_" $tb.log
           done
 
-      - name: 8088 read timing (the check every other bench was missing)
+      - name: V30 read timing at the real CE rates
         run: |
           S=fpga/core
           H=$S/chipset/HDL
@@ -329,7 +329,7 @@ jobs:
             verilator --binary --timing -Wno-fatal --top-module tb_cpu_timing $DEF \
               -Isim -I$S -I$H -I$H/sdram_single/HDL \
               sim/tb_cpu_timing.sv sim/sdram_board_model.sv sim/sdram_model.sv \
-              $H/RAM.sv $H/sdram_single/HDL/sdram_single.sv $S/sdram_shim.sv $S/sdram_mp.sv \
+              $H/RAM.sv $H/ce_generator.sv $H/sdram_single/HDL/sdram_single.sv $S/sdram_shim.sv $S/sdram_mp.sv \
               -o c --Mdir obj_ct_$mode
             ./obj_ct_$mode/c | tee ct_$mode.log
             grep -q "RESULT: PASS" ct_$mode.log

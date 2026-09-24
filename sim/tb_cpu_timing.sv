@@ -1,19 +1,31 @@
 //
-// tb_cpu_timing -- does the 8088 get its data in time?
+// tb_cpu_timing -- does the V30 get its data in time, at the real CE rates?
 //
 // The in-core self-test passes the whole base 64 KB through sdram_mp (hardware,
 // testB14: PILOT A5/A5, PILOT2 5A/5A, PASS 64K), while the BIOS running on the
-// 8088 reports three beeps for the same region. The self-test waits for
-// ram_rw_complete before moving on. The 8088 does not.
+// CPU reports three beeps for the same region. The self-test waits for
+// ram_rw_complete before moving on. The CPU does not.
 //
-// RAM.sv's ready is open loop: access_ready is taken from the controller's idle
-// while the state machine is in IDLE, so it is already high when the access
-// starts and nothing holds the CPU. What actually protects the read is the bus
-// cycle length -- the 8088 asserts MEMR in T2 and latches at the end of T3, one
-// CPU clock later, which at 4.77 MHz is nine chipset cycles.
+// RAM.sv's ready is open loop: nothing holds the CPU. What protects the read
+// is the bus-cycle protocol -- and on this machine that protocol is paced by
+// ce_generator's cpu_ce_* strobes, not by a fixed chipset-cycle window. The
+// V30's speeds are the PC-98 family's 2.4576 MHz x2/x4 ("5 MHz"/"10 MHz") plus
+// two faster cycle-paced steps -- none of them anywhere near the 8088's 4.77
+// MHz this bench used to model.
 //
-// Measured latency from read command to data: sdram_single 5, sdram_mp 10. So this
-// bench samples at a fixed offset like the CPU does, instead of waiting.
+// The contract the bridge actually runs (v30_cpu_bridge.sv):
+//   * the 8288 strobes processor_status on cpu_ce_negedge -- commands assert
+//     on a negedge
+//   * READY is sampled at every cpu_ce_posedge from the third T state on;
+//     each posedge with READY low is one wait state (one CPU clock)
+//   * data is latched at the posedge where READY is high
+//   * RAM's wait counter ticks on cpu_ce_negedge and must reach zero, which
+//     is how clk_select 2/3 force at least one Tw
+//
+// So this bench instantiates the real ce_generator and speaks that protocol:
+// command on a negedge, sample at posedges, latch where ready. It runs the
+// whole pass at all four clk_select speeds, because "ready in time" means
+// something different at 4.9 MHz and at 21.5 MHz.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -26,13 +38,29 @@ module tb_cpu_timing;
     localparam real CLK_MHZ = 42.954545;
     localparam real HALF_NS = 500.0 / CLK_MHZ;
 
-    // Chipset cycles from the read command to the 8088's latch point.
-    // 4.77 MHz: one CPU clock is nine chipset cycles.
-    localparam int CPU_SAMPLE = 9;
-    localparam int CPU_CLK    = 9;   // chipset cycles per 8088 clock at 4.77 MHz
-
     logic clock = 0, reset = 1;
     always #(HALF_NS) clock = ~clock;
+
+    // The real CE source, driven exactly as core_top drives it: clk_select is
+    // latched once per speed phase (biu_done in the machine; a bench pulse
+    // here between phases).
+    logic [1:0] clk_select = 2'b00;
+    logic       sel_load   = 1'b0;
+    wire        ce_pos, ce_neg;
+    wire [1:0]  rd_wait, wr_wait;
+
+    ce_generator ce (
+        .clock(clock), .reset(reset),
+        .clk_select_load(sel_load), .clk_select(clk_select),
+        .cpu_clk_pin(),
+        .cpu_ce_posedge(ce_pos), .cpu_ce_negedge(ce_neg),
+        .peripheral_ce(),
+        .cycle_accrate(),
+        .clock_cycle_counter_division_ratio(),
+        .clock_cycle_counter_decrement_value(),
+        .shift_read_timing(),
+        .ram_read_wait_cycle(rd_wait), .ram_write_wait_cycle(wr_wait)
+    );
 
     logic [19:0] address = '0;
     logic  [7:0] internal_data_bus = '0;
@@ -46,6 +74,8 @@ module tb_cpu_timing;
     wire [15:0] s_dq_out, s_dq_in;
     logic [6:0] map [0:3] = '{7'd0, 7'd0, 7'd0, 7'd0};
 
+    // RAM is wired as Chipset.sv wires it: the wait counter ticks on
+    // cpu_ce_negedge and reloads from the generator's own wait-cycle outputs.
     RAM dut (
         .clock(clock), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram),
@@ -62,8 +92,8 @@ module tb_cpu_timing;
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
         .map_ems(map), .ems_b1(1'b0), .ems_b2(1'b0), .ems_b3(1'b0), .ems_b4(1'b0),
         .bios_protect_flag(2'b00), .tandy_bios_flag(1'b0),
-        .wait_count_clk_en(1'b1),
-        .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)
+        .wait_count_clk_en(ce_neg),
+        .ram_read_wait_cycle(rd_wait), .ram_write_wait_cycle(wr_wait)
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
@@ -75,40 +105,62 @@ module tb_cpu_timing;
 
     int errors = 0, waited_errors = 0;
 
-    // A write the way the CPU does it: assert, hold a bus cycle, drop.
+    // CE helpers. The strobes are single chipset-clock pulses produced on
+    // posedge clock, so they are waited on negedge for a clean mid-cycle read.
+    task automatic ce_posedge_wait;
+        do @(negedge clock); while (!ce_pos);
+    endtask
+    task automatic ce_negedge_wait;
+        do @(negedge clock); while (!ce_neg);
+    endtask
+
+    // A write the way the bridge does it: status strobed on a negedge, the
+    // byte completes at a posedge where READY is high, passive through the
+    // next negedge, two posedges of gap.
     task automatic cpu_write(input int a, input logic [7:0] d);
+        int guard = 0;
+        ce_negedge_wait();
         address = 20'(a);
         internal_data_bus = d;
         no_command_state = 0;
         memory_write_n = 0;
-        repeat (36) @(posedge clock);          // a full 4-T bus cycle
+        ce_posedge_wait(); ce_posedge_wait();
+        forever begin
+            ce_posedge_wait();
+            if (memory_access_ready) break;
+            if (++guard > 80) begin
+                $display("  WRITE ready timeout @%05h", a);
+                break;
+            end
+        end
+        ce_negedge_wait();
         memory_write_n = 1;
         no_command_state = 1;
-        repeat (4) @(posedge clock);
+        ce_posedge_wait(); ce_posedge_wait();
     endtask
 
-    // A read the way the 8088 really does it. MEMR goes out in T2 and the data
-    // is latched at the end of T3 -- but only if READY is high there. If it is
-    // low the CPU inserts wait states, a whole CPU clock each, and re-checks.
-    //
-    // Modelling the CPU as never waiting was wrong and made even sdram_single's
-    // shimmed reference fail; the point of the exercise is whether READY is
-    // asserted HONESTLY, not whether the controller is fast.
+    // A read the way the bridge does it: command at a negedge, READY sampled
+    // at every posedge from the third on, each low sample one wait state.
     task automatic cpu_read(input int a, output logic [7:0] q, output int waits);
+        ce_negedge_wait();
         address = 20'(a);
         no_command_state = 0;
         memory_read_n = 0;
         waits = 0;
-        repeat (CPU_SAMPLE) @(posedge clock);   // T2 -> end of T3
-        while (!memory_access_ready && waits < 40) begin
-            repeat (CPU_CLK) @(posedge clock);  // one wait state
-            waits++;
+        ce_posedge_wait(); ce_posedge_wait();
+        forever begin
+            ce_posedge_wait();
+            if (memory_access_ready) break;
+            if (++waits > 80) begin
+                $display("  READ ready timeout @%05h", a);
+                break;
+            end
         end
-        q = data_bus_out;                       // the 8088's latch point
-        repeat (CPU_CLK) @(posedge clock);      // T4
+        q = data_bus_out;                       // latched at the ready posedge
+        ce_negedge_wait();
         memory_read_n = 1;
         no_command_state = 1;
-        repeat (4) @(posedge clock);
+        ce_posedge_wait(); ce_posedge_wait();   // B_GAP
     endtask
 
     // The same read, but waiting for completion -- what the self-test does.
@@ -117,7 +169,7 @@ module tb_cpu_timing;
         address = 20'(a);
         no_command_state = 0;
         memory_read_n = 0;
-        while (!access_complete && guard < 200) begin @(posedge clock); guard++; end
+        while (!access_complete && guard < 400) begin @(posedge clock); guard++; end
         q = data_bus_out;
         memory_read_n = 1;
         no_command_state = 1;
@@ -129,42 +181,57 @@ module tb_cpu_timing;
     endfunction
 
     logic [7:0] got;
-    int waits, total_waits = 0;
+    int waits, total_waits;
 
-    initial begin
-`ifdef SDRAM_USE_MP
-        $display("=== 8088 read timing through sdram_mp ===");
-`else
-        $display("=== 8088 read timing through sdram_single (reference) ===");
-`endif
-        $display("    CPU latches %0d chipset cycles after MEMR", CPU_SAMPLE);
-        repeat (8) @(posedge clock);
-        reset = 0;
-        wait (initilized_sdram);
+    // One pass at one clk_select: write, CE-paced read-back, waited read-back.
+    task automatic run_speed(input int s, input string name);
+        int spd_err = 0;
+        clk_select = 2'(s);
+        @(negedge clock) sel_load = 1;
+        @(negedge clock) sel_load = 0;
+        repeat (8) ce_posedge_wait();   // let the new edge ratio settle
 
         for (int i = 0; i < 64; i++) cpu_write(32'h01000 + i, pat(i));
 
-        // How the CPU reads.
+        total_waits = 0;
         for (int i = 0; i < 64; i++) begin
             cpu_read(32'h01000 + i, got, waits);
             total_waits += waits;
             if (got !== pat(i)) begin
-                if (errors < 4)
+                if (spd_err < 4)
                     $display("  CPU-TIMED MISMATCH @%05h: got %02h want %02h",
                              32'h01000 + i, got, pat(i));
-                errors++;
+                spd_err++;
             end
         end
+        errors += spd_err;
+        $display("  %-28s errors %0d/64, wait states %0d, rd_wait %0d",
+                 name, spd_err, total_waits, rd_wait);
+    endtask
 
-        // How the self-test reads, for contrast.
+    initial begin
+`ifdef SDRAM_USE_MP
+        $display("=== V30 read timing through sdram_mp (CE-paced) ===");
+`else
+        $display("=== V30 read timing through sdram_single (reference, CE-paced) ===");
+`endif
+        repeat (8) @(posedge clock);
+        reset = 0;
+        wait (initilized_sdram);
+
+        run_speed(0, "4.9152 MHz (5 MHz, PC-98)");
+        run_speed(1, "9.8304 MHz (10 MHz, PC-98)");
+        run_speed(2, "19.6608 MHz (2x fast)");
+        run_speed(3, "21.4773 MHz (chipset)");
+
+        // How the self-test reads, for contrast -- speed-independent.
         for (int i = 0; i < 64; i++) begin
             waited_read(32'h01000 + i, got);
             if (got !== pat(i)) waited_errors++;
         end
 
         $display("\n=== summary ===");
-        $display("  errors, CPU timing  : %0d / 64", errors);
-        $display("  wait states inserted: %0d total", total_waits);
+        $display("  errors, CPU timing  : %0d / 256", errors);
         $display("  errors, waiting     : %0d / 64", waited_errors);
         if (errors == 0) $display("  RESULT: PASS");
         else             $display("  RESULT: FAIL -- the CPU samples before the data arrives");
