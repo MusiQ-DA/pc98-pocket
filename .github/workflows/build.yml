@@ -500,23 +500,23 @@ jobs:
 
       - name: Restore incremental compile database
         # The qsf carries INCREMENTAL_COMPILATION FULL_INCREMENTAL_COMPILATION
-        # with a POST_FIT / PLACEMENT_AND_ROUTING Top partition, so Quartus
-        # reuses last run's fit for unchanged logic -- as long as the db
-        # survives, which a fresh checkout does not give it. Every run saves
-        # under a unique key and restores the newest one by prefix, so a
-        # small RTL change does not pay a full refit. Bump the v1 prefix to
-        # throw away a suspect db.
-        # output_files goes in too: a no-change incremental compile skips the
+        # with a POST_FIT / PLACEMENT_AND_ROUTING Top partition -- but the db
+        # itself no longer rides the cache: every restored db, v1 or v2, has
+        # crashed quartus_map inside DMGR (dmgr_utility_body.cpp:2923) a few
+        # minutes into the compile, including the db a successful cold build
+        # had just written. Whatever the tar round-trip does to it, this
+        # Quartus/Wine build cannot read it back, so the db paths are out and
+        # every compile is cold. Bump the v2 prefix if this ever gets re-tried
+        # -- a v2 tarball still carries fpga/db and would resurrect the crash.
+        # output_files stays: a no-change incremental compile skips the
         # assembler entirely, and the upload step still needs sof/rbf/rpt --
         # the restored files are bit-identical to what the same db produces.
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            fpga/db
-            fpga/incremental_db
             fpga/output_files
-          key: quartus-incdb-v2-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: quartus-incdb-v2-
+          key: quartus-incdb-v3-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: quartus-incdb-v3-
 
       - name: Free disk space
         # 6 GB compressed image -- the default runner has ~14 GB usable,
@@ -647,12 +647,11 @@ jobs:
       - name: Save incremental compile database
         # always(): a red SDRAM timing gate still leaves a perfectly good
         # post-fit db behind -- exactly the state the next fix wants to
-        # resume from.
+        # resume from. fpga/db itself is not saved: the restored copies
+        # crash quartus_map in DMGR every time (see the restore step).
         if: always()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            fpga/db
-            fpga/incremental_db
             fpga/output_files
-          key: quartus-incdb-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          key: quartus-incdb-v3-${{ github.run_id }}-${{ github.run_attempt }}
