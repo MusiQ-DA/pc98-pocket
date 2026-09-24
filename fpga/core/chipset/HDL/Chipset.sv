@@ -335,7 +335,6 @@ module CHIPSET #(
 
     wire [3:0] arb_hold;
 
-
     // Video-side glyph reads, RAM.sv's port B out to PERIPHERALS.
     wire        font_rd_req, font_rd_ack, font_rd_valid, font_rd_done;
     wire [23:0] font_rd_addr;
@@ -345,6 +344,10 @@ module CHIPSET #(
     wire [23:0] cg_rd_addr;
     wire  [3:0] cg_rd_len;
     wire [15:0] cg_rd_data;
+    wire        gv_rd_req, gv_rd_ack, gv_rd_valid, gv_rd_done;
+    wire [23:0] gv_rd_addr;
+    wire  [3:0] gv_rd_len;
+    wire [15:0] gv_rd_data;
 
     PERIPHERALS #(.clk_rate(clk_rate)) u_PERIPHERALS 
     (
@@ -362,6 +365,13 @@ module CHIPSET #(
         .cg_rd_valid                        (cg_rd_valid),
         .cg_rd_data                         (cg_rd_data),
         .cg_rd_done                         (cg_rd_done),
+        .gv_rd_req                          (gv_rd_req),
+        .gv_rd_addr                         (gv_rd_addr),
+        .gv_rd_len                          (gv_rd_len),
+        .gv_rd_ack                          (gv_rd_ack),
+        .gv_rd_valid                        (gv_rd_valid),
+        .gv_rd_data                         (gv_rd_data),
+        .gv_rd_done                         (gv_rd_done),
         .font_wr_clk                        (font_wr_clk),
         .font_wr_en                         (font_wr_en),
         .font_wr_addr                       (font_wr_addr),
@@ -556,6 +566,13 @@ module CHIPSET #(
         .cg_rd_valid                        (cg_rd_valid),
         .cg_rd_data                         (cg_rd_data),
         .cg_rd_done                         (cg_rd_done),
+        .gv_rd_req                          (gv_rd_req),
+        .gv_rd_addr                         (gv_rd_addr),
+        .gv_rd_len                          (gv_rd_len),
+        .gv_rd_ack                          (gv_rd_ack),
+        .gv_rd_valid                        (gv_rd_valid),
+        .gv_rd_data                         (gv_rd_data),
+        .gv_rd_done                         (gv_rd_done),
         .clock                              (sdram_clock),
         .reset                              (sdram_reset),
         .enable_sdram                       (enable_sdram),

@@ -140,7 +140,21 @@ module sdram_shim #(
     output logic                              c_ack,
     output logic                              c_rvalid,
     output logic [sdram_data_width-1:0]       c_rdata,
-    output logic                              c_done
+    output logic                              c_done,
+
+    // ---------------------------------------------------------------- port D
+    //
+    // The graphics plane's display fetch: twenty sixteen-word bursts per
+    // scanline, four planes of eighty bytes each. Like C it is read-only; the
+    // round robin inside sdram_mp shares the line time with the row buffer's
+    // five bursts and the guest's traffic.
+    input  wire                               d_req,
+    input  wire  [ADDR_BITS_PUB-1:0]          d_addr,
+    input  wire  [LEN_BITS_PUB-1:0]           d_len,
+    output logic                              d_ack,
+    output logic                              d_rvalid,
+    output logic [sdram_data_width-1:0]       d_rdata,
+    output logic                              d_done
 );
 
     localparam int ADDR_BITS = sdram_col_width + sdram_row_width + sdram_bank_width;
@@ -152,7 +166,7 @@ module sdram_shim #(
     // word, so that is one transaction instead of sixteen.
     localparam int BURST_MAX = 16;
     localparam int LEN_BITS  = (BURST_MAX > 1) ? $clog2(BURST_MAX) : 1;
-    localparam int PORTS     = 3;
+    localparam int PORTS     = 4;
 
     // sdram_mp schedules its own refresh; the REF far end is stock sdram_single
     // and consumes enable_refresh directly (see its instantiation below).
@@ -340,7 +354,12 @@ module sdram_shim #(
     assign c_done   = 1'b0;
     assign c_rvalid = 1'b0;
     assign c_rdata  = '0;
-    wire _unused_b  = &{1'b0, b_req, b_addr, b_len, c_req, c_addr, c_len, 1'b0};
+    assign d_ack    = 1'b0;
+    assign d_done   = 1'b0;
+    assign d_rvalid = 1'b0;
+    assign d_rdata  = '0;
+    wire _unused_b  = &{1'b0, b_req, b_addr, b_len, c_req, c_addr, c_len,
+                        d_req, d_addr, d_len, 1'b0};
 
     wire _unused_mp_if = &{1'b0, kf_write_flag, 1'b0};
     // No burst on this far end (see the data_in_hi comment above). len_r and
@@ -357,19 +376,21 @@ module sdram_shim #(
 
     // Port A is the guest (sdram_single's protocol, one word at a time), port B the
     // font fetch. Packed so the widths follow the controller's parameters.
-    wire [PORTS-1:0] mp_req  = {c_req, b_req, req};
-    wire [PORTS-1:0] mp_we   = {1'b0,  1'b0,  we_r};
-    wire [PORTS-1:0][ADDR_BITS-1:0] mp_addr  = {c_addr, b_addr, addr_r};
-    wire [PORTS-1:0][LEN_BITS-1:0]  mp_len   = {c_len,  b_len,  len_r};
+    wire [PORTS-1:0] mp_req  = {d_req, c_req, b_req, req};
+    wire [PORTS-1:0] mp_we   = {1'b0,  1'b0,  1'b0, we_r};
+    wire [PORTS-1:0][ADDR_BITS-1:0] mp_addr  = {d_addr, c_addr, b_addr, addr_r};
+    wire [PORTS-1:0][LEN_BITS-1:0]  mp_len   = {d_len,  c_len,  b_len,  len_r};
     // sdram_mp publishes the index of the word it wants in p_wcnt and consumes
     // p_wdata combinationally, so a two-word write is just this select. Ports
-    // B and C are read-only.
+    // B, C and D are read-only.
     wire [LEN_BITS-1:0] mp_wcnt;
     wire [PORTS-1:0][sdram_data_width-1:0] mp_wdata =
         {{sdram_data_width{1'b0}}, {sdram_data_width{1'b0}},
+         {sdram_data_width{1'b0}},
          (mp_wcnt == LEN_BITS'(0)) ? data_in : data_in_hi};
     wire [PORTS-1:0][MASK_BITS-1:0] mp_wmask =
-        {{MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}};
+        {{MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}},
+         {MASK_BITS{1'b1}}};
     wire [PORTS-1:0] mp_ack, mp_done;
     wire [$clog2(PORTS)-1:0] mp_grant;
 
@@ -379,13 +400,17 @@ module sdram_shim #(
     assign b_done   = mp_done[1];
     assign c_ack    = mp_ack[2];
     assign c_done   = mp_done[2];
+    assign d_ack    = mp_ack[3];
+    assign d_done   = mp_done[3];
     // Read data is tagged with the owning port, so each master sees only its own.
     assign p_rvalid = mp_rvalid & (mp_grant == 2'd0);
     assign b_rvalid = mp_rvalid & (mp_grant == 2'd1);
     assign c_rvalid = mp_rvalid & (mp_grant == 2'd2);
+    assign d_rvalid = mp_rvalid & (mp_grant == 2'd3);
     assign p_rdata  = mp_rdata;
     assign b_rdata  = mp_rdata;
     assign c_rdata  = mp_rdata;
+    assign d_rdata  = mp_rdata;
 
     sdram_mp #(
         .PORTS       (PORTS),

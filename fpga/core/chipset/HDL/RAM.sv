@@ -79,6 +79,14 @@ module RAM (
      output logic           cg_rd_valid,
      output logic   [15:0]  cg_rd_data,
      output logic           cg_rd_done,
+    // Third video-side reader: the graphics planes' display fetch.
+     input  logic           gv_rd_req,
+     input  logic   [23:0]  gv_rd_addr,
+     input  logic    [3:0]  gv_rd_len,
+     output logic           gv_rd_ack,
+     output logic           gv_rd_valid,
+     output logic   [15:0]  gv_rd_data,
+     output logic           gv_rd_done,
      input  logic           tandy_bios_flag,
     // Wait mode
     input   logic           wait_count_clk_en,
@@ -274,7 +282,14 @@ module RAM (
         .c_ack              (cg_rd_ack),
         .c_rvalid           (cg_rd_valid),
         .c_rdata            (cg_rd_data),
-        .c_done             (cg_rd_done)
+        .c_done             (cg_rd_done),
+        .d_req              (gv_rd_req),
+        .d_addr             (gv_rd_addr),
+        .d_len              (gv_rd_len),
+        .d_ack              (gv_rd_ack),
+        .d_rvalid           (gv_rd_valid),
+        .d_rdata            (gv_rd_data),
+        .d_done             (gv_rd_done)
     );
 `else
     sdram_single u_sdram_single (
@@ -312,6 +327,10 @@ module RAM (
     assign cg_rd_valid   = 1'b0;
     assign cg_rd_data    = 16'h0000;
     assign cg_rd_done    = 1'b0;
+    assign gv_rd_ack     = 1'b0;
+    assign gv_rd_valid   = 1'b0;
+    assign gv_rd_data    = 16'h0000;
+    assign gv_rd_done    = 1'b0;
 `endif
 
 

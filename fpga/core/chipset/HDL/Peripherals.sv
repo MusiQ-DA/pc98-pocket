@@ -72,6 +72,14 @@ module PERIPHERALS #(
         input   logic           cg_rd_valid,
         input   logic   [15:0]  cg_rd_data,
         input   logic           cg_rd_done,
+        // Third SDRAM reader: the graphics planes' display fetch.
+        output  logic           gv_rd_req,
+        output  logic   [23:0]  gv_rd_addr,
+        output  logic    [3:0]  gv_rd_len,
+        input   logic           gv_rd_ack,
+        input   logic           gv_rd_valid,
+        input   logic   [15:0]  gv_rd_data,
+        input   logic           gv_rd_done,
         input   logic           font_wr_clk,
         input   logic           font_wr_en,
         input   logic   [10:0]  font_wr_addr,
@@ -1222,6 +1230,7 @@ module PERIPHERALS #(
     // to 80 columns from cell 0 while it is low, which is the picture that
     // works today.
     logic gdc_on_s1, gdc_on_px;
+    logic gdc_s_on_s1, gdc_s_on_px;
     logic pc98_vs_s1, pc98_vs_px, pc98_vs_px_d;
     logic [7:0]  gdc_pitch_px;
     logic [15:0] gdc_sad_px;
@@ -1232,6 +1241,7 @@ module PERIPHERALS #(
 
     always_ff @(posedge clk_vga_cga) begin
         gdc_on_s1  <= gdc_m_disp_on;  gdc_on_px  <= gdc_on_s1;
+        gdc_s_on_s1 <= gdc_s_disp_on; gdc_s_on_px <= gdc_s_on_s1;
         pc98_vs_s1 <= pc98_vs;        pc98_vs_px <= pc98_vs_s1;
         pc98_vs_px_d <= pc98_vs_px;
         gdc_cur_en_s1 <= gdc_m_cur_en; gdc_cur_en_px <= gdc_cur_en_s1;
@@ -1257,6 +1267,48 @@ module PERIPHERALS #(
         .font_row(pc98_font_row),
         .grb(pc98_grb), .pixel(pc98_pixel)
     );
+
+    // The graphics half of the picture: the slave GDC's planes, fetched a
+    // line ahead over the SDRAM controller's port D and shifted out a dot
+    // behind the raster -- see pc98_gvram_display for the pipeline, whose
+    // +1 rd_clk offset is why the composite below delays the text pixel.
+    wire [3:0] gfx_dot_w;
+
+    pc98_gvram_display u_gvram_disp (
+        .clk(clock), .rst(reset),
+        .rd_clk(clk_vga_cga),
+        .hcount(pc98_h), .vcount(pc98_v),
+        .disp_on(gdc_s_on_px),
+        .disp_page(gvram_disp_page),
+        .analog_mode(pc98_analog),
+        .p_req(gv_rd_req), .p_addr(gv_rd_addr), .p_len(gv_rd_len),
+        .p_ack(gv_rd_ack), .p_rvalid(gv_rd_valid), .p_rdata(gv_rd_data),
+        .p_done(gv_rd_done),
+        .gfx_dot(gfx_dot_w)
+    );
+
+    // The layer also stays dark until the machine has written a graphics
+    // window since reset. SDRAM powers up (and survives a guest reset) with
+    // whatever bytes were last there; a BIOS or loader that starts the slave
+    // display before clearing it would otherwise flash that garbage under the
+    // text. First write through any plane window -- plain, GRCG or EGC --
+    // turns it on, the same moment real software has something to show.
+    logic gv_wrote;
+    always_ff @(posedge clock) begin
+        if (reset)
+            gv_wrote <= 1'b0;
+        else if (~iorq & ~memory_write_n
+              && ((address[19:15] == 5'b10101)           // A8000-AFFFF
+               || (address[19:16] == 4'hB)               // B0000-BFFFF
+               || (pc98_analog && address[19:15] == 5'b11100))) // E0000
+            gv_wrote <= 1'b1;
+    end
+    logic gv_wrote_s1, gv_wrote_px;
+    always_ff @(posedge clk_vga_cga) begin
+        gv_wrote_s1 <= gv_wrote;
+        gv_wrote_px <= gv_wrote_s1;
+    end
+    wire [3:0] gfx_idx = gfx_dot_w & {4{gv_wrote_px}};
 
     // ------------------------------------------------- glyphs, out of SDRAM
     //
@@ -1570,10 +1622,31 @@ module PERIPHERALS #(
     );
 
     // The attribute's colour field is G R B, so it maps to the output that way
-    // round. Full intensity: PC-98 text has no half-bright.
-    assign VID_R     = (pc98_pixel & pc98_grb[1]) ? 6'h3F : 6'h00;
-    assign VID_G     = (pc98_pixel & pc98_grb[2]) ? 6'h3F : 6'h00;
-    assign VID_B     = (pc98_pixel & pc98_grb[0]) ? 6'h3F : 6'h00;
+    // round. Full intensity: PC-98 text has no half-bright. The pixel is
+    // delayed one dot clock to line up with the graphics plane's own +1
+    // pipeline, then superimposed over it: text where the text pixel is lit,
+    // the graphics dot's colour anywhere else, which is the machine's overlay.
+    logic       t_pix_q;
+    logic [2:0] t_grb_q;
+    always_ff @(posedge clk_vga_cga) begin
+        t_pix_q <= pc98_pixel;
+        t_grb_q <= pc98_grb;
+    end
+
+    // Fixed sixteen-colour palette: the four planes' bit as {E,R,G,B}, E the
+    // intensity bit -- half bright at 0, full at 1. The analog palette
+    // registers (ports 0xA8-0xAE) are not yet implemented; titles that write
+    // them see the defaults, the same table np2kai starts from.
+    function automatic logic [5:0] chan(input logic plane_bit, input logic e);
+        chan = plane_bit ? (e ? 6'h3F : 6'h2A) : 6'h00;
+    endfunction
+    wire [5:0] gfx_r = chan(gfx_idx[2], gfx_idx[3]);
+    wire [5:0] gfx_g = chan(gfx_idx[1], gfx_idx[3]);
+    wire [5:0] gfx_b = chan(gfx_idx[0], gfx_idx[3]);
+
+    assign VID_R     = t_pix_q ? (t_grb_q[1] ? 6'h3F : 6'h00) : gfx_r;
+    assign VID_G     = t_pix_q ? (t_grb_q[2] ? 6'h3F : 6'h00) : gfx_g;
+    assign VID_B     = t_pix_q ? (t_grb_q[0] ? 6'h3F : 6'h00) : gfx_b;
     assign VID_HSYNC = pc98_hs;
     assign VID_VSYNC = pc98_vs;
     assign VID_HBlank = pc98_hb;
