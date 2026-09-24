@@ -312,7 +312,10 @@ module pocket_video (
     reg         vid_de  = 1'b0;
     reg         vid_hs  = 1'b0;
     reg         vid_vs  = 1'b0;
-    wire        vid_de_now = ~(sel_hb_d1 | sel_vb_d1) & ~vid_blank_pix;
+    // DE keeps running under vid_blank: the blank forces the PIXELS dark
+    // (in the overlay mux below) rather than starving DE, so the scaler sees
+    // an ordinary all-black frame and cannot treat the input as lost.
+    wire        vid_de_now = ~(sel_hb_d1 | sel_vb_d1);
     // Debug bands: 64px-wide stripes down the left edge, 32 lines tall each,
     // lit white when the bit is high and dark grey when it is low, so a dark
     // band is still distinguishable from the picture behind it. Compiled in
@@ -545,11 +548,12 @@ module pocket_video (
     wire [23:0] mark_rgb = 24'd0;
 `endif
 
-    wire [23:0] overlay    = mark_in   ? mark_rgb
-                           : dbg_in    ? dbg_color
-                           : osd_show  ? osd_color
-                           : guard_run ? 24'd0
-                           :             credits_rgb;
+    wire [23:0] overlay    = mark_in       ? mark_rgb
+                           : dbg_in        ? dbg_color
+                           : vid_blank_pix ? 24'd0
+                           : osd_show      ? osd_color
+                           : guard_run     ? 24'd0
+                           :                 credits_rgb;
     always @(posedge clk_pix) begin
         vid_de  <= vid_de_now;
         vid_rgb <= vid_de_now ? overlay : {8'd0, vid_slot, 13'd0};
