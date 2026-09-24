@@ -37,7 +37,11 @@ module upd71071_Bus_Control_Logic (
     output  logic           read_temporary_register,
     output  logic           read_status_register,
     output  logic   [3:0]   read_current_address,
-    output  logic   [3:0]   read_current_word_count
+    output  logic   [3:0]   read_current_word_count,
+
+    // -- debug: did the guest's register writes ever arrive, and what was
+    // the last one? POSTMON's DW word; see upd71071.sv for the packing.
+    output  logic   [31:0]  dbg_wr
 );
 
     //
@@ -114,6 +118,40 @@ module upd71071_Bus_Control_Logic (
     assign  read_current_word_count[1]              = read_flag & (address_in == 4'b0011);
     assign  read_current_word_count[2]              = read_flag & (address_in == 4'b0101);
     assign  read_current_word_count[3]              = read_flag & (address_in == 4'b0111);
+
+    //
+    // Write snoop
+    //
+    // The metal shows DRQ parked high with hold_request flat -- which is the
+    // encoder answering "all masked". Whether the BIOS's own writes ever
+    // reach the chip is the one thing the outside cannot see, so count every
+    // write_flag, keep the last {register, data} pair, and set a sticky bit
+    // per register touched. If the sticky for 1010 (single mask) never sets,
+    // the BIOS never unmasked us; if the count stays zero, no write lands.
+    //
+    logic   [3:0]   dbg_wr_cnt = 4'd0;
+    logic   [3:0]   dbg_wr_last_reg = 4'd0;
+    logic   [7:0]   dbg_wr_last_data = 8'd0;
+    logic   [15:0]  dbg_wr_sticky = 16'd0;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            dbg_wr_cnt       <= 4'd0;
+            dbg_wr_last_reg  <= 4'd0;
+            dbg_wr_last_data <= 8'd0;
+            dbg_wr_sticky    <= 16'd0;
+        end
+        else if (write_flag) begin
+            if (dbg_wr_cnt != 4'hF)
+                dbg_wr_cnt <= dbg_wr_cnt + 4'd1;
+            dbg_wr_last_reg            <= stable_address;
+            dbg_wr_last_data           <= internal_data_bus;
+            dbg_wr_sticky[stable_address] <= 1'b1;
+        end
+    end
+
+    assign  dbg_wr = {dbg_wr_sticky, dbg_wr_last_reg, dbg_wr_last_data,
+                      dbg_wr_cnt};
 
 endmodule
 

@@ -186,7 +186,9 @@ module tb_postmon_peek;
         .dma_request(4'd0),
         .dma_acknowledge_n(dma_acknowledge_n),
         .address_enable_n(address_enable_n),
-        .terminal_count_n(terminal_count_n)
+        .terminal_count_n(terminal_count_n),
+        .dbg_hold(),
+        .dbg_dmac()
     );
 
     // ------------------------------------------------------------------- RAM

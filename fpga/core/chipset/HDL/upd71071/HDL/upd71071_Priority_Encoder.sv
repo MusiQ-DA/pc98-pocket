@@ -32,7 +32,13 @@ module upd71071_Priority_Encoder (
     input   logic   [3:0]   dma_acknowledge_internal,
 
     // External signals
-    input   logic   [3:0]   dma_request
+    input   logic   [3:0]   dma_request,
+
+    // POSTMON's DC word: {request_register, mask_register, dma_request_ff,
+    // controller_disable, dreq_sense_active_low, rotating_priority} -- the
+    // encoder internals the metal cannot otherwise show (the case it has to
+    // crack is a DRQ that reaches the pins but never becomes a hold request).
+    output  logic   [15:0]  dbg_enc
 );
     import upd71071_Common_Package::rotate_right;
     import upd71071_Common_Package::rotate_left;
@@ -177,6 +183,10 @@ module upd71071_Priority_Encoder (
         encoded_dma         = rotating_priority ? rotate_left(encoded_dma, dma_rotate) : encoded_dma;
         encoded_dma         = controller_disable ? 4'b000 : encoded_dma;
     end
+
+    assign  dbg_enc = {request_register, mask_register, dma_request_ff,
+                       controller_disable, dreq_sense_active_low,
+                       rotating_priority, 1'b0};
 
 endmodule
 

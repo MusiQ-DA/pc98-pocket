@@ -133,6 +133,9 @@ module softcpu_subsystem (
     input  [31:0] dbg_fdc_w,
     input  [31:0] dbg_fdc_v,
     input  [31:0] dbg_dma,
+    // The 71071's own internals: encoder/FSM live state in the low word,
+    // the register-write snoop in the high one. See upd71071.sv.
+    input  [63:0] dbg_dmac,
     input  [15:0] dbg_w_path, dbg_rw_lvl,
     input   [7:0] dbg_irq_level,
     input   [7:0] dbg_timer_count,
@@ -1257,6 +1260,14 @@ module softcpu_subsystem (
             // count, its request, the DRQ the 71071 sees, the arbiter's
             // hold grant, the DACK lines, TC, AEN, ext-access, cpu status}.
             32'h5000_010C: cpu_mem_rdata = dbg_dma;
+            // The 71071's answer to the case above: DC is the live
+            // {request_register, mask, request_state, encoded, request_ff,
+            // terminal_count_state, ack_internal, controller_disable, FSM
+            // state} and DW is {per-register write stickies, last {reg,
+            // data}, saturating write count} -- whether the BIOS's setup
+            // ever arrived, and what the encoder did with it.
+            32'h5000_0138: cpu_mem_rdata = dbg_dmac[31:0];
+            32'h5000_013C: cpu_mem_rdata = dbg_dmac[63:32];
             // The write path counted in PERIPHERALS: {any-port write
             // strobe, decode clocks} and {write levels, read levels}.
             32'h5000_00E4: cpu_mem_rdata = dbg_w_path;

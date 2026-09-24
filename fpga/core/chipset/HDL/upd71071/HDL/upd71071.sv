@@ -32,7 +32,19 @@ module upd71071 (
     output  logic           address_enable,
     output  logic           address_strobe,
     output  logic           memory_read_n,
-    output  logic           memory_write_n
+    output  logic           memory_write_n,
+
+    // POSTMON's DC/DW words. The metal case: DRQ parked high at the pins,
+    // hold_request flat -- somewhere between "the write never arrived" and
+    // "the encoder rejected it" the request dies, and none of those internals
+    // reach the outside. Low half is the live encoder/FSM state:
+    //   [31:28] request_register  [27:24] mask_register
+    //   [23:20] dma_request_state [19:16] encoded_dma
+    //   [15:12] dma_request_ff    [11:8]  terminal_count_state
+    //   [7:4]   dma_acknowledge_internal
+    //   [3]     controller_disable [2:0]  transfer FSM state
+    // High half is the register-write snoop (see Bus_Control_Logic).
+    output  logic   [63:0]  dbg
 );
 
 
@@ -89,7 +101,9 @@ module upd71071 (
         .read_temporary_register            (read_temporary_register),
         .read_status_register               (read_status_register),
         .read_current_address               (read_current_address),
-        .read_current_word_count            (read_current_word_count)
+        .read_current_word_count            (read_current_word_count),
+
+        .dbg_wr                             (dbg_wr)
     );
 
 
@@ -102,6 +116,8 @@ module upd71071 (
     logic   [3:0]   encoded_dma;
     logic           end_of_process_internal;
     logic   [3:0]   dma_acknowledge_internal;
+    logic   [15:0]  dbg_enc;
+    logic   [31:0]  dbg_wr;
 
     upd71071_Priority_Encoder u_Priority_Encoder (
         .clock                              (clock),
@@ -129,7 +145,9 @@ module upd71071 (
         .dma_acknowledge_internal           (dma_acknowledge_internal),
 
         // External signals
-        .dma_request                        (dma_request)
+        .dma_request                        (dma_request),
+
+        .dbg_enc                            (dbg_enc)
     );
 
 
@@ -183,6 +201,7 @@ module upd71071 (
     logic           output_temporary_data;
     logic   [7:0]   temporary_register;
     logic   [3:0]   terminal_count_state;
+    logic   [2:0]   dbg_state;
 
     upd71071_Timing_And_Control u_Timing_And_Control (
         .clock                              (clock),
@@ -234,7 +253,9 @@ module upd71071 (
         .io_write_n_io                      (io_write_n_io),
         .ready                              (ready),
         .end_of_process_n_in                (end_of_process_n_in),
-        .end_of_process_n_out               (end_of_process_n_out)
+        .end_of_process_n_out               (end_of_process_n_out),
+
+        .dbg_state                          (dbg_state)
     );
 
 
@@ -253,6 +274,21 @@ module upd71071 (
         else
             data_bus_out = 8'h00;
     end
+
+    // dbg_enc is {request_register, mask_register, dma_request_ff,
+    // controller_disable, dreq_sense_active_low, rotating_priority, 1'b0}.
+    assign  dbg = {
+        dbg_wr,
+        dbg_enc[15:12],     // request_register
+        dbg_enc[11:8],      // mask_register
+        dma_request_state,
+        encoded_dma,
+        dbg_enc[7:4],       // dma_request_ff
+        terminal_count_state,
+        dma_acknowledge_internal,
+        dbg_enc[3],         // controller_disable
+        dbg_state
+    };
 
 endmodule
 

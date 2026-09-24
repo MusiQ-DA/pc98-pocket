@@ -67,6 +67,8 @@
 #define POST_FDCZ2  ((volatile uint32_t *) 0x50000104) // FIFO bytes 8..11 back
 #define POST_FDCV   ((volatile uint32_t *) 0x50000108) // {0, last port, dead, live}
 #define POST_FDMA   ((volatile uint32_t *) 0x5000010C) // the whole DMA handshake in one word
+#define POST_DMAC   ((volatile uint32_t *) 0x50000138) // the 71071's encoder/FSM internals
+#define POST_DMAW   ((volatile uint32_t *) 0x5000013C) // its register-write snoop
 #define POST_LIVPC  ((volatile uint32_t *) 0x50000110) // {ip, cs} of the retired instruction
 #define POST_DRAIL  ((volatile uint32_t *) 0x50000114) // {ip, cs} at the ROM-exit edge
 #define POST_LAND   ((volatile uint32_t *) 0x50000118) // {ip, cs} of the first non-ROM instruction
@@ -352,6 +354,15 @@ void postmon_isr_hb(void)
     hex(444, 92, *POST_FDCX, 8);
     osd_draw_string(&fb, 510, 92, "DR", OSD_LABEL);
     hex(534, 92, *POST_FDCW, 8);
+    // Row 102's main-painted fields stop at column 38: the 71071's own
+    // internals get the space past it. DM says the DRQ arrives and no hold
+    // request comes out; DC is the encoder's side of that (mask, request
+    // state, encoded channel, FSM) and DW is whether the BIOS's register
+    // writes ever landed at all.
+    osd_draw_string(&fb, 352, 102, "DC", OSD_LABEL);
+    hex(376, 102, *POST_DMAC, 8);
+    osd_draw_string(&fb, 450, 102, "DW", OSD_LABEL);
+    hex(474, 102, *POST_DMAW, 8);
     // Row 92's FDC fields freeze with the rest of the panel once the guest
     // parks: the repaint gate needs a slow field to move and nothing moves on
     // a stuck machine, so the main-painted SN/RQ can be first-paint history

@@ -84,6 +84,7 @@ module upd71071_tm();
     logic           address_strobe;
     logic           memory_read_n;
     logic           memory_write_n;
+    logic   [63:0]  dbg;
 
     upd71071 u_upd71071 (.*);
 

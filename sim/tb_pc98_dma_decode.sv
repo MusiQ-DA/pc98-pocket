@@ -171,8 +171,11 @@ module tb_pc98_dma_decode;
         .dma_acknowledge_n(dma_acknowledge_n),
         .address_enable_n(address_enable_n),
         .terminal_count_n(terminal_count_n),
-        .dbg_hold()
+        .dbg_hold(),
+        .dbg_dmac(dbg_dmac)
     );
+
+    wire [63:0] dbg_dmac;
 
     int errors = 0;
     task automatic check(input bit cond, input string name);
@@ -307,6 +310,15 @@ module tb_pc98_dma_decode;
         $display("  mask=%b ack=%b (unmask landed, ch2 live)",
                  u_arb.u_upd71071.u_Priority_Encoder.mask_register,
                  dma_acknowledge_n);
+
+        // The POSTMON word has to carry the same story the hierarchical
+        // probes do: mask at DC[27:24], the single-mask write's sticky at
+        // DW bit (16+10), the last {reg,data} pair, and a nonzero count.
+        check(dbg_dmac[27:24] == 4'b1011, "dbg DC carries mask_register");
+        check(dbg_dmac[58], "dbg DW sticky: single-mask reg written");
+        check(dbg_dmac[35:32] != 4'h0, "dbg DW counts the writes");
+        check(dbg_dmac[47:44] == 4'hA && dbg_dmac[43:36] == 8'h02,
+              "dbg DW last write is reg 0xA data 0x02");
 
         begin : wait_tc
             int guard = 0;

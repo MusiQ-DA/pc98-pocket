@@ -126,7 +126,7 @@ module tb_selftest_soc;
         .vkb_key(), .vkb_stb(), .osd_palette(), .osd_cpu_speed(),
         .osd_bios_wr(), .osd_boost(), .osd_spk_vol(), .osd_stereo(),
         .osd_ems(), .osd_ems_frame(),
-        .osd_gamepad(), .key_cfg_flat()
+        .osd_gamepad(), .key_cfg_flat(), .dbg_dmac(64'd0)
     );
 
     // ---- the shipped master

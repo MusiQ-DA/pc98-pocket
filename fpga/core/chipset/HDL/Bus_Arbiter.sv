@@ -48,7 +48,9 @@ module BUS_ARBITER (
     output  logic           terminal_count_n,
     // The two ends of the hold handshake, for the panel's DM word: what the
     // 71071 is asking for versus what the arbiter granted it.
-    output  logic   [3:0]   dbg_hold
+    output  logic   [3:0]   dbg_hold,
+    // uPD71071 internals for POSTMON's DC/DW fields -- see upd71071.sv.
+    output  logic   [63:0]  dbg_dmac
 );
 
     //
@@ -208,7 +210,8 @@ module BUS_ARBITER (
         //.address_enable                     (),
         //.address_strobe                     (),
         .memory_read_n                      (dma_memory_read_n),
-        .memory_write_n                     (dma_memory_write_n)
+        .memory_write_n                     (dma_memory_write_n),
+        .dbg                                (dbg_dmac)
     );
 
     assign  terminal_count_n = ~terminal_count;

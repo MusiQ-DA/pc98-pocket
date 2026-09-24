@@ -66,7 +66,11 @@ module upd71071_Timing_And_Control (
     output  logic           io_write_n_io,
     input   logic           ready,
     input   logic           end_of_process_n_in,
-    output  logic           end_of_process_n_out
+    output  logic           end_of_process_n_out,
+
+    // POSTMON's DC word: the transfer FSM's state so the panel can tell a
+    // parked SI (never picked a channel) from a stalled S-state.
+    output  logic   [2:0]   dbg_state
 );
     import upd71071_Common_Package::bit2num;
 
@@ -645,6 +649,8 @@ module upd71071_Timing_And_Control (
     end
 
     // TODO: temporary_register (Memory-to-Memory)
+
+    assign  dbg_state = 3'(state);
 
 endmodule
 

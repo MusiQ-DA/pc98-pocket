@@ -68,6 +68,9 @@ module CHIPSET #(
         // wait state at the top and the arbiter's grant at the bottom --
         // the panel's DM field reads it as eight digits.
         output  logic   [31:0]  dbg_dma,
+        // And the 71071's own internals (encoder, FSM, write snoop) -- the
+        // panel's DC/DW fields. See upd71071.sv for the packing.
+        output  logic   [63:0]  dbg_dmac,
         output  logic   [15:0]  dbg_w_path,
         output  logic   [15:0]  dbg_rw_lvl,
         output  logic    [7:0]  dbg_irq_level,
@@ -318,7 +321,8 @@ module CHIPSET #(
         .dma_acknowledge_n                  (dma_acknowledge_n),
         .address_enable_n                   (address_enable_n),
         .terminal_count_n                   (terminal_count_n),
-        .dbg_hold                           (arb_hold)
+        .dbg_hold                           (arb_hold),
+        .dbg_dmac                           (dbg_dmac)
     );
 
     assign  dbg_dma = {dbg_fdc_dma[31:17],       // floppy's {state, fifo_count}
