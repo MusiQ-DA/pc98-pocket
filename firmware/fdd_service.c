@@ -15,6 +15,7 @@
 // (Main_MiSTer support/x86/x86.cpp), retargeted from the HPS to this softcore.
 
 #include "softcpu_regs.h"
+#include "postmon.h"
 
 // One management-bus write: latch drive + register + 16-bit data, then trigger.
 static void mgmt_write(uint32_t drive, uint32_t reg, uint32_t data)
@@ -239,7 +240,9 @@ void fdd_poll(void)
 {
     uint32_t req = *FDD_REQUEST;
     if (req & FDD_REQ_READ) {
+        postmon_mark = 0x10;
         uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);
+        postmon_mark = 0x11;
         uint32_t drv = (reg0 & FDD_LBA_DRIVE) ? 1 : 0;
         uint32_t bytes = fdd_sector_words[drv] * 4;
         uint32_t slot = drv ? FDD1_SLOT_ID : FDD0_SLOT_ID;
@@ -248,13 +251,16 @@ void fdd_poll(void)
         fdd_dbg_lba = reg0;
         // Push only on a good read; a failed transfer must not stream stale bytes.
         if (tds_transfer(slot, off, FDD_TDS_READ, bytes)) {
+            postmon_mark = 0x12;
             push_sector(drv);
             fdd_dbg_pushed++;
             fdd_dbg_aft = *FDD_REQUEST;
         } else {
             fdd_dbg_err++;
         }
+        postmon_mark = 0x13;
     } else if (req & FDD_REQ_WRITE) {
+        postmon_mark = 0x20;
         uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);
         uint32_t drv = (reg0 & FDD_LBA_DRIVE) ? 1 : 0;
         uint32_t bytes = fdd_sector_words[drv] * 4;
@@ -264,5 +270,6 @@ void fdd_poll(void)
         // path back to the guest, so the result is not acted on here.
         pull_fifo(drv);
         tds_transfer(slot, off, FDD_TDS_WRITE, bytes);
+        postmon_mark = 0x23;
     }
 }

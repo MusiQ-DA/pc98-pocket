@@ -314,6 +314,26 @@ static uint8_t  eq_cnt[3];
 static uint32_t mon_hb;
 static uint32_t repaints;
 
+// The main loop drops a stage number here before every leg that can hang
+// (see main.c / fdd_service.c). irq() paints it with its own heartbeat, so
+// the corner past KEY keeps moving after the main loop -- and the panel's
+// own repaint path -- has stopped. I is the timer tick, M the last stage
+// reached: the digits a frozen panel cannot produce are the proof the core
+// is alive and where it was when the loop went away.
+uint32_t postmon_mark;
+
+void postmon_isr_hb(void)
+{
+    static uint32_t isr_hb;
+    isr_hb++;
+    *VKB_CTRL = 1u;   // the loop may have died before ever enabling the strip
+    osd_fill_rect(&fb, 252, 92, 68, 10, OSD_KEYFACE);
+    osd_draw_char(&fb, 256, 92, 'I', OSD_LABEL);
+    hex(4 + 33 * 8, 92, isr_hb & 0xFFu, 2);
+    osd_draw_char(&fb, 4 + 36 * 8, 92, 'M', OSD_LABEL);
+    hex(4 + 37 * 8, 92, postmon_mark & 0xFFu, 2);
+}
+
 void post_mon_tick(void)
 {
     static uint32_t last_status = 0xFFFFFFFFu;

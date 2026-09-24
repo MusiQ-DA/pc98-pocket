@@ -46,4 +46,12 @@ void postmon_invalidate(void);
 // wrong bank of a working one.
 void postmon_capture_rom(void);
 
+// Liveness from the timer ISR: irq() calls postmon_isr_hb() every tick, and
+// it draws the tick count plus postmon_mark -- the stage the main loop last
+// announced (main.c sets it before each leg that can hang, fdd_service.c
+// refines it inside the request legs). Because the ISR draws it, the corner
+// keeps updating after the loop -- and the panel's repaint path -- stops.
+extern uint32_t postmon_mark;
+void postmon_isr_hb(void);
+
 #endif
