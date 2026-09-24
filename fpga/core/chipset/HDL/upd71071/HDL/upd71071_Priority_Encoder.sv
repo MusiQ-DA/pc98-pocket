@@ -29,6 +29,7 @@ module upd71071_Priority_Encoder (
     output  logic   [3:0]   dma_request_state,
     output  logic   [3:0]   encoded_dma,
     input   logic           end_of_process_internal,
+    input   logic   [3:0]   autoinit_enable,
     input   logic   [3:0]   dma_acknowledge_internal,
 
     // External signals
@@ -107,6 +108,13 @@ module upd71071_Priority_Encoder (
                 mask_register[mask_bit_i] <= internal_data_bus[2];
             else if (write_mask_register)
                 mask_register[mask_bit_i] <= internal_data_bus[mask_bit_i];
+            // The 8237's own rule, per the PC-9800 hardware data book: a
+            // channel that reaches EOP sets its mask bit unless it was
+            // programmed for autoinitialization -- which is why the BIOS
+            // re-issues the 0x15 unmask before every FDC command.
+            else if ((end_of_process_internal) && (dma_acknowledge_internal[mask_bit_i])
+                     && ~autoinit_enable[mask_bit_i])
+                mask_register[mask_bit_i] <= 1'b1;
             else
                 mask_register[mask_bit_i] <= mask_register[mask_bit_i];
         end

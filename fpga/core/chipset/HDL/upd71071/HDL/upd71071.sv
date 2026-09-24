@@ -118,6 +118,7 @@ module upd71071 (
     logic   [3:0]   dma_request_state;
     logic   [3:0]   encoded_dma;
     logic           end_of_process_internal;
+    logic   [3:0]   autoinit_enable;
     logic   [3:0]   dma_acknowledge_internal;
     logic   [15:0]  dbg_enc;
     logic   [3:0]   dbg_wr_last_reg;
@@ -147,6 +148,7 @@ module upd71071 (
         .dma_request_state                  (dma_request_state),
         .encoded_dma                        (encoded_dma),
         .end_of_process_internal            (end_of_process_internal),
+        .autoinit_enable                    (autoinit_enable),
         .dma_acknowledge_internal           (dma_acknowledge_internal),
 
         // External signals
@@ -238,6 +240,7 @@ module upd71071 (
         .update_high_address                (update_high_address),
         .underflow                          (underflow),
         .end_of_process_internal            (end_of_process_internal),
+        .autoinit_enable                    (autoinit_enable),
         .lock_bus_control                   (lock_bus_control),
         .output_temporary_data              (output_temporary_data),
         .temporary_register                 (temporary_register),

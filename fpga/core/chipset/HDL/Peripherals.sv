@@ -1990,6 +1990,7 @@ module PERIPHERALS #(
     logic   [7:0]   fdd_dma_readdata;
     logic   [7:0]   fdd_readdata;
     logic           fdd_dma_req_wire;
+    logic           fdc_dma_enable;   // 0x94 bit 4 (DMAE), the DRQ/DACK gate
     logic           fdd_dma_read;
     logic           prev_fdd_dma_ack;
     logic           fdd_dma_rw_ack;
@@ -2122,6 +2123,7 @@ module PERIPHERALS #(
         .group_live    (fdc_group_live),
         .irq_2hd       (fdc_glue_irq_2hd),
         .irq_2dd       (fdc_glue_irq_2dd),
+        .dma_enable    (fdc_dma_enable),
         .dbg_motor_arms   (dbg_motor_arms),
         .dbg_motor_pulses (dbg_motor_pulses),
         .dbg_chg       (dbg_chg),
@@ -2339,7 +2341,11 @@ module PERIPHERALS #(
         if (fdd_dma_ack)
             fdd_dma_req <= 1'b0;
         else if (cpu_ce_negedge)
-            fdd_dma_req <= fdd_dma_req_wire;
+            // The PC-98's DMAE flip-flop (0x94 bit 4) sits on the DRQ line:
+            // the 765A may raise its request, but the 71071 only sees it
+            // once the BIOS has armed DMA. Resampled each CE so a control
+            // write closing the gate takes effect at the next negedge.
+            fdd_dma_req <= fdd_dma_req_wire & fdc_dma_enable;
         else
             fdd_dma_req <= fdd_dma_req;
     end

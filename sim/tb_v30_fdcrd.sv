@@ -179,6 +179,7 @@ module tb_v30_fdcrd;
         .group_live    (fdc_group_live),
         .irq_2hd       (),
         .irq_2dd       (),
+        .dma_enable    (),
         .dbg_motor_arms   (), .dbg_motor_pulses (), .dbg_chg (),
         .dbg_strb_be   (), .dbg_strb_94 (), .dbg_strb_cc (),
         .dbg_strb_dat  (), .dbg_last_ctrl ()

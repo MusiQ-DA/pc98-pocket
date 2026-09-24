@@ -46,6 +46,10 @@ module upd71071_Timing_And_Control (
     input   logic           update_high_address,
     input   logic           underflow,
     output  logic           end_of_process_internal,
+    // Mode-register bit 4 per channel, exported so the mask register can
+    // implement the 8237's rule: EOP sets the channel's mask bit unless it
+    // was programmed for autoinitialization (hardware data book, ch.2).
+    output  logic   [3:0]   autoinit_enable,
     output  logic           lock_bus_control,
     output  logic           output_temporary_data,
     output  logic   [7:0]   temporary_register,
@@ -586,6 +590,10 @@ module upd71071_Timing_And_Control (
     end
 
     assign  end_of_process_n_out = ~terminal_count;
+
+    always_comb
+        for (int i = 0; i < 4; i++)
+            autoinit_enable[i] = autoinitialization_enable[i];
 
     //
     // End Of Process Signal

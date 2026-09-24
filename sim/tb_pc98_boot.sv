@@ -855,6 +855,7 @@ module tb_pc98_boot;
     // unmasked channel moves one byte per DRQ, TC on the last. The sector
     // feeder inside it is fdd_poll()/push_sector() in miniature.
     wire       fdc_dreq_w, fdc_ack_p, fdc_tc_p;
+    wire       fdc_dmae_w;   // the glue's 0x94 bit-4 (DMAE) DRQ gate
     wire [7:0] fdc_dma_w, fdc_dma_r;
     wire [1:0] fdd_req_w;
     wire [15:0] fdd_mgmt_rdata;
@@ -894,7 +895,7 @@ module tb_pc98_boot;
         .io_addr    (cpu_address[7:0]),
         .io_wdata   (cpu_data_bus),
         .io_rdata   (dma_dout),
-        .drq        (fdc_dreq_w),
+        .drq        (fdc_dreq_w & fdc_dmae_w),
         .dack       (fdc_ack_p),
         .tc         (fdc_tc_p),
         .ddata_i    (fdc_dma_w),
@@ -1212,6 +1213,7 @@ module tb_pc98_boot;
         .group_live    (fdc_group_live),
         .irq_2hd       (fdc_irq3),
         .irq_2dd       (fdc_irq2),
+        .dma_enable    (fdc_dmae_w),
         .dbg_motor_arms   (), .dbg_motor_pulses (), .dbg_chg (),
         .dbg_strb_be   (), .dbg_strb_94 (), .dbg_strb_cc (),
         .dbg_strb_dat  (), .dbg_last_ctrl ()

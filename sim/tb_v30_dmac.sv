@@ -284,11 +284,11 @@ module tb_v30_dmac;
     // -- the 71071 does not carry the byte itself, the bus does; for the
     // counting below the address + strobe edges are what matter.
     int memw_pulses = 0;
-    logic dmac_memwr_d = 1'b1;
+    logic dmac_memwr_d = 1'b0;
     logic [19:0] dmac_last_addr;
     always_ff @(posedge clk) begin
         dmac_memwr_d <= dmac_memwr_n;
-        if (dmac_memwr_n & ~dmac_memwr_d) begin
+        if (~dmac_memwr_n & dmac_memwr_d) begin
             memw_pulses  <= memw_pulses + 1;
             dmac_last_addr <= {4'h0, dmac_addr_out};
         end
@@ -405,18 +405,29 @@ module tb_v30_dmac;
         end
         check(!dack_n[2], "DACK2 asserted");
 
-        // Four bytes at 0x0200..0x0203.
+        // Four bytes at 0x0200..0x0203; the fourth runs with the word count
+        // at zero, which is where the 8237 raises terminal count.
         guard = 0;
         while (memw_pulses < 4 && guard < 100000) begin
             @(posedge clk); guard++;
         end
         check(memw_pulses == 4, "four memory-write pulses for count=3");
+        check(dmac_last_addr == 20'h00203, "last byte written at 0x0203");
         $display("  memw_pulses=%0d last_addr=%05x", memw_pulses, dmac_last_addr);
 
         // Drop DRQ; the engine should fall back to idle.
         want_drq = 1'b0;
         repeat (2000) @(posedge clk);
         check(hrq == 1'b0, "hold_request released after drain");
+        check(tc_hits != 0, "terminal count asserted on the fourth byte");
+
+        // The 8237's own rule (PC-9800 hardware data book): EOP re-sets the
+        // channel's mask bit when it was not programmed for
+        // autoinitialization -- mode 46h has bit 4 clear, so ch2 must be
+        // masked again now. This is why the BIOS re-issues the 15h unmask
+        // before every command.
+        check(u_dmac.u_Priority_Encoder.mask_register[2],
+              "ch2 re-masked on EOP (no autoinit)");
 
         if (errors == 0)
             $display("PASS tb_v30_dmac");
@@ -424,6 +435,14 @@ module tb_v30_dmac;
             $display("FAIL tb_v30_dmac (%0d errors)", errors);
         $finish;
     end
+
+    // Terminal count must assert during the fourth byte's S4 -- the word
+    // count reaches zero on the third decrement, so the byte that runs with
+    // count==0 is the one that raises TC.
+    int tc_hits = 0;
+    always @(posedge clk)
+        if (u_dmac.u_Timing_And_Control.terminal_count)
+            tc_hits <= tc_hits + 1;
 
     // Watchdog
     initial begin

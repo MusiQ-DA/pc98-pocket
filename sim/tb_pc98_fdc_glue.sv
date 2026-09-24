@@ -56,6 +56,7 @@ module tb_pc98_fdc_glue;
     wire       group_live;
     wire       irq_2hd;
     wire       irq_2dd;
+    wire       dma_enable;
 
     pc98_fdc_glue dut (
         .clk(clk), .rst(rst),
@@ -65,7 +66,8 @@ module tb_pc98_fdc_glue;
         .fd_addr(fd_addr), .fd_write(fd_write), .fd_read(fd_read),
         .fd_wdata(fd_wdata), .fd_irq(fd_irq), .fd_busy(fd_busy),
         .ctrl_readback(ctrl_readback), .mode_readback(mode_readback),
-        .group_live(group_live), .irq_2hd(irq_2hd), .irq_2dd(irq_2dd)
+        .group_live(group_live), .irq_2hd(irq_2hd), .irq_2dd(irq_2dd),
+        .dma_enable(dma_enable)
     );
 
     // THE REAL CONTROLLER, behind the glue. The interrupt contract is a loop --
@@ -315,9 +317,11 @@ module tb_pc98_fdc_glue;
 
         // ---- 0x94 becomes a DOR write at register 2 ------------------------
         // The bits floppy.v needs that a PC-98 does not supply are constants:
-        // enable (2) and both motors (4,5). Interrupt enable comes from the
-        // guest's bit 3. Drive select stays 0 -- the uPD765 command's unit
-        // field is what really picks the drive.
+        // enable (2), both motors (4,5) and interrupt enable (3). The PC-98
+        // DMA gate is 0x94 BIT 4 (DMAE) on the DRQ line -- the hardware data
+        // book -- and it does not touch the interrupt, so the DOR's bit 3
+        // stays set whatever the guest writes. Drive select stays 0 -- the
+        // uPD765 command's unit field is what really picks the drive.
         wr_begin(2, 8'h08);
         want("0x94 write addresses reg 2 (DOR)", {5'd0, fd_addr}, 8'd2);
         want1("and asserts a write", fd_write, 1'b1);
@@ -331,10 +335,25 @@ module tb_pc98_fdc_glue;
         // which after the 0x08 above would read 0x08.
         want("0x94 reads np2's 0x44 (dipsw[0]=3E arm)", ctrl_readback, 8'h44);
 
-        // Interrupt enable off: the same constants, bit 3 clear.
+        // The DOR is constant -- guest bit 3 is the motor flag on a PC-98,
+        // not an interrupt gate, and the DMA gate lives on dma_enable.
         wr_begin(2, 8'h00);
-        want("DOR with irq disabled", fd_wdata, 8'h34);
+        want("DOR stays constant, irq armed", fd_wdata, 8'h3C);
         wr_end();
+
+        // ---- DMAE = 0x94 bit 4 gates DRQ, nothing else ----------------------
+        // Hardware data book: DMAE is the flip-flop on the DRQ/DACK lines.
+        // np2kai agrees -- fdc_o94 watches (ctrlreg ^ dat) & 0x10 and runs
+        // fdc_dmaready/dmac_check on a change. Bit 3 (motor, in np2kai)
+        // must NOT move it: that was the mapping that let a BIOS 0x94 write
+        // close the gate while arming DMA.
+        want1("DMAE closed after 0x00 write", dma_enable, 1'b0);
+        wr(2, 8'h10);
+        want1("0x94 bit 4 arms DMAE", dma_enable, 1'b1);
+        wr(2, 8'h08);
+        want1("motor bit alone does not arm it", dma_enable, 1'b0);
+        wr(2, 8'h18);
+        want1("DMAE and motor can coexist", dma_enable, 1'b1);
 
         // ---- bit 7 going 0 -> 1 pulses a reset -----------------------------
         // np2's fdc_o94 resets on the EDGE, not the level, so a guest that
@@ -592,21 +611,24 @@ module tb_pc98_fdc_glue;
             want1("and clears again", fd_irq, 1'b0);
             rd(1, pcn);
 
-            // With the interrupt disabled (control bit 3 low -> DOR bit 3 low
-            // -> floppy.v's dma_irq_enable low) a command must raise nothing.
-            // That is np2's fdc_o94 bit 0x08 and floppy.v's raise_interrupt
-            // agreeing, and it is what makes the enable meaningful.
+            // The PC-98 interrupt is NOT gated by the control port: the data
+            // book's DMAE flip-flop (0x94 bit 4) sits on DRQ/DACK only, and
+            // np2kai raises int_stat whatever ctrlreg holds -- the BIOS relies
+            // on seek/recalibrate interrupts before any DMA is armed. So the
+            // same command with a 0x00 control byte must STILL interrupt;
+            // what closes is the DRQ gate.
             wr(2, 8'h00);
+            want1("control 0x00 closes the DRQ gate", dma_enable, 1'b0);
             wr(1, 8'h07);
             wr(1, 8'h00);
             guard = 0;
-            while (guard < 200) begin
+            while (guard < 200 && !fd_irq) begin
                 @(negedge clk);
                 guard++;
             end
             #1;
-            want1("interrupt disabled: no request", fd_irq, 1'b0);
-            want1("and nothing on either slave line", irq_2hd | irq_2dd, 1'b0);
+            want1("interrupt is not gated by 0x94", fd_irq, 1'b1);
+            want1("and lands on a slave line", irq_2hd | irq_2dd, 1'b1);
         end
 
         // ======== THE BIOS'S OWN PATTERN: RECAL x4 BACK-TO-BACK ============

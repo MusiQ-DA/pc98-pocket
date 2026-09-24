@@ -25,8 +25,10 @@
 // Master IRQ6 is the PC/XT's floppy line. A PC-98 does not have one there.
 //
 //   WHO ASSERTS IT. floppy.v's irq, on command completion -- see its
-//   raise_interrupt, gated by dma_irq_enable, which is DOR bit 3 and therefore
-//   the control port's bit 3 below.
+//   raise_interrupt, gated by dma_irq_enable, which is DOR bit 3. On the
+//   PC-98 nothing gates the interrupt: the data book's DMAE bit (0x94
+//   bit 4) gates only DRQ/DACK, and np2kai raises int_stat regardless of
+//   the control register -- so the synthesised DOR holds bit 3 set.
 //
 //   WHERE IT GOES. The SLAVE PIC: IRQ11 (INT 13h) when the 2HD window is the
 //   live one, IRQ10 (INT 12h) when the 2DD window is. Three independent
@@ -182,6 +184,10 @@ module pc98_fdc_glue (
     output logic       group_live,     // this cycle's window is the selected one
     output logic       irq_2hd,        // slave IRQ11 -> INT 13h
     output logic       irq_2dd,        // slave IRQ10 -> INT 12h
+    // 0x94 bit 4 (DMAE): the flip-flop the hardware data book puts on the
+    // DRQ/DACK lines. Peripherals ANDs it with floppy.v's dma_req -- a
+    // control write with bit 4 clear is how the BIOS closes the channel.
+    output logic       dma_enable,
     // How far the motor timer got, saturating: arms (a live-window control
     // write with bit 0 rising) and expiry pulses delivered to the steering.
     // The BIOS's motor wait needs BOTH to move; a stuck pair says the write
@@ -392,17 +398,15 @@ module pc98_fdc_glue (
         end
     end
 
-    // The synthesised DOR. Bit 2 (enable) and bits 4-5 (motors) are constants
-    // because the PC-98 has nothing that drives them; bit 3 is the guest's.
-    //
-    // Taken from the byte being WRITTEN, not from ctrl_q. ctrl_q does not hold
-    // it until the clock edge that ends the write, and the DOR has to reach
-    // floppy.v during the write -- built from ctrl_q it carried the PREVIOUS
-    // interrupt-enable bit, so every change arrived one write late.
-    wire       ctrl_now = (wr_stb && sel_ctrl && group_live) ? wr_data[3]
-                                                            : ctrl_q[3];
-    wire [7:0] dor = {2'b00, 1'b1, 1'b1, ctrl_now, 1'b1, 1'b0, 1'b0};
-    //                      mot1  mot0   dma_irq  enable      drive
+    // The synthesised DOR, all constants: bit 2 (enable), bits 4-5 (motors)
+    // and bit 3 (dma_irq_enable) have no PC-98 driver. Bit 3 stays SET --
+    // the PC-98's DMA gate is 0x94 bit 4 (DMAE), a flip-flop on the DRQ/DACK
+    // lines per the hardware data book, and it does not touch the interrupt.
+    // DMAE is exported below and gates fdd_dma_req in Peripherals.
+    wire [7:0] dor = {2'b00, 1'b1, 1'b1, 1'b1, 1'b1, 1'b0, 1'b0};
+    //                      mot1  mot0  irq_en   enable      drive
+
+    assign dma_enable = ctrl_q[4];
 
     always_comb begin
         // Order matters: a pending reset outranks the cycle's own access, and
