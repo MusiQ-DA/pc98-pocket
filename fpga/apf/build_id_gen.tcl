@@ -105,9 +105,26 @@ proc generateBuildID_Verilog {} {
 proc generateBuildID_MIF {} {
 	
 	# Get the timestamp (see: http://www.altera.com/support/examples/tcl/tcl-date-time-stamp.html)
-	set buildDate [ clock format [ clock seconds ] -format %Y%m%d ]
-	set buildTime [ clock format [ clock seconds ] -format %H%M%S ]
-	set buildUnique [expr {int(rand()*(4294967295))}]
+	# Prefer the source revision's own stamp: a MIF that changes every run
+	# is a changed synthesis input, which makes Quartus re-elaborate and
+	# refit the whole Top partition -- defeating incremental compilation.
+	# Deriving from HEAD keeps the MIF identical for identical sources, so
+	# a no-change run can actually reuse the previous db. Without git (e.g.
+	# inside the wine container, which has no git.exe) this falls back to
+	# the old wall-clock + random behaviour.
+	if {![catch {exec git -C .. log -1 --format=%ct} buildEpoch]} {
+		set buildDate [ clock format $buildEpoch -format %Y%m%d ]
+		set buildTime [ clock format $buildEpoch -format %H%M%S ]
+		if {![catch {exec git -C .. rev-parse --short=8 HEAD} buildSha]} {
+			set buildUnique [expr 0x$buildSha]
+		} else {
+			set buildUnique 0
+		}
+	} else {
+		set buildDate [ clock format [ clock seconds ] -format %Y%m%d ]
+		set buildTime [ clock format [ clock seconds ] -format %H%M%S ]
+		set buildUnique [expr {int(rand()*(4294967295))}]
+	}
 	
 	set buildDateNoLeadingZeros [string trimleft $buildDate "0"]
 	set buildTimeNoLeadingZeros [string trimleft $buildTime "0"]
