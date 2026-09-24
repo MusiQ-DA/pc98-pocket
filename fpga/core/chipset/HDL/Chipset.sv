@@ -318,7 +318,12 @@ module CHIPSET #(
         .memory_write_n_direction           (memory_write_n_direction),
         .no_command_state                   (no_command_state),
         .ext_access_request                 (ext_access_request),
-        .dma_request                        ({fdd_dma_req | dma_request[3], fdd_dma_req, dma_request[1], DRQ0}),
+        // DRQ is active-low on the PC-98 bus (the data book names the pins
+        // DRQ3O..DRQ0O) and the BIOS programs the 71071's DREQ sense bit
+        // (0x11 bit6) to match. The sources here are active-high "request
+        // present" logic, so they are inverted onto the pin: a pin at zero
+        // is a request, and a tied-off dma_request[] input idles high.
+        .dma_request                        (~{fdd_dma_req | dma_request[3], fdd_dma_req, dma_request[1], DRQ0}),
         .dma_acknowledge_n                  (dma_acknowledge_n),
         .address_enable_n                   (address_enable_n),
         .terminal_count_n                   (terminal_count_n),
