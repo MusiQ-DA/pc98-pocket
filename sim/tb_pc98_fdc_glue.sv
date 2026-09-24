@@ -45,6 +45,7 @@ module tb_pc98_fdc_glue;
     logic loop_mode = 1'b0;      // 1 = floppy.v owns fd_irq
     logic fd_irq_force = 1'b0;
     wire  fd_irq = loop_mode ? fdd_irq : fd_irq_force;
+    wire  fd_busy = loop_mode ? fdd_busy : 1'b0;
 
     wire [2:0] fd_addr;
     wire       fd_write;
@@ -62,7 +63,7 @@ module tb_pc98_fdc_glue;
         .sel_mode(sel_mode), .port_2dd(port_2dd),
         .wr_stb(wr_stb), .wr_data(wr_data), .rd_stb(rd_stb),
         .fd_addr(fd_addr), .fd_write(fd_write), .fd_read(fd_read),
-        .fd_wdata(fd_wdata), .fd_irq(fd_irq),
+        .fd_wdata(fd_wdata), .fd_irq(fd_irq), .fd_busy(fd_busy),
         .ctrl_readback(ctrl_readback), .mode_readback(mode_readback),
         .group_live(group_live), .irq_2hd(irq_2hd), .irq_2dd(irq_2dd)
     );
@@ -72,6 +73,7 @@ module tb_pc98_fdc_glue;
     // drops it -- and a bench that stubs either end proves nothing about the
     // loop closing. This is the chip the bitstream ships.
     wire       fdd_irq;
+    wire       fdd_busy;
     wire [7:0] fdd_readdata;
     wire [1:0] fdd_request;
     logic        mgmt_write = 1'b0;
@@ -163,6 +165,7 @@ module tb_pc98_fdc_glue;
         .dma_readdata   (fdc_dma_r),
         .dma_writedata  (fdc_dma_w),
         .irq            (fdd_irq),
+        .busy           (fdd_busy),
         .io_address     (fd_addr),
         .io_read        (fd_read),
         .io_readdata    (fdd_readdata),
@@ -1349,6 +1352,39 @@ module tb_pc98_fdc_glue;
             want("MSR idle after early TC", msr, 8'h80);
         end
 
+        // ---- the motor pulse waits out a result phase --------------------
+        // POSTMON on metal counted two motor pulses inside the probe window:
+        // each is a fresh INT13 edge, and the ISR it dispatches reads the
+        // data port -- bytes that belong to the result the in-flight
+        // interrupt is still draining. The timer's answer has to hold until
+        // the chip is idle, then still arrive.
+        begin
+            logic [7:0] msr, st0;
+            int guard;
+            $display("--- motor pulse waits out a result phase ---");
+            // floppy.v is in the loop with the 2HD disk still mounted and
+            // the 2HD window live. READ ID gives a seven-byte result phase.
+            window(1'b0);
+            wr(1, 8'h0A); wr(1, 8'h00);
+            guard = 0;
+            while (!fd_irq && guard < 10_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("READ ID interrupts for the hold", fd_irq, 1'b1);
+            rd(1, st0);                  // irq falls; six bytes keep busy up
+            wr(2, 8'h00);                // bit 3 down ...
+            wr(2, 8'h0D);                // ... then up: the 2HD timer arms
+            motor_clr = 1'b1; @(negedge clk); motor_clr = 1'b0;
+            repeat (25_772_010) @(posedge clk);
+            #1;
+            want("no pulse while a result holds", motor_hi_2hd[7:0], 8'd0);
+            for (int b = 0; b < 6; b++) rd(1, msr);   // drain: busy falls
+            repeat (100) @(posedge clk);
+            #1;
+            want("pulse lands once the chip is idle", motor_hi_2hd[7:0], 8'd1);
+        end
+
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("PASS tb_pc98_fdc_glue");
         else             $display("FAILED tb_pc98_fdc_glue: %0d", errors);
@@ -1359,9 +1395,9 @@ module tb_pc98_fdc_glue;
         // The motor phases each wait out a real ~100 ms timer (4 x 42.95 ms
         // of simulation at the bench's 10 ns clock), so the watchdog has to
         // clear them with room to spare.
-        // The motor tests wait np2's FDC_INT_DELAY (~600 ms) four times
-        // over, so the watchdog sits past 3 s of simulated time.
-        #3200000000;
+        // The motor tests wait np2's FDC_INT_DELAY (~600 ms) five times
+        // over, so the watchdog sits past 4 s of simulated time.
+        #4000000000;
         $display("FAILED tb_pc98_fdc_glue: timeout");
         $finish;
     end

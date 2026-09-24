@@ -2007,6 +2007,7 @@ module tb_pc98_v30;
     wire       fdc_group_live;
     wire [7:0] fdd_readdata_wire;
     wire       fdd_irq_wire;
+    wire       fdd_busy_wire;
 
     logic [7:0] write_to_fdd = 8'h00;
     always_ff @(posedge clk_chipset)
@@ -2028,6 +2029,7 @@ module tb_pc98_v30;
         .fd_read       (fdc_glue_read),
         .fd_wdata      (fdc_glue_wdata),
         .fd_irq        (fdd_irq_wire),
+        .fd_busy       (fdd_busy_wire),
         .ctrl_readback (fdc_ctrl_rb),
         .mode_readback (fdc_mode_rb),
         .group_live    (fdc_group_live),
@@ -2078,6 +2080,7 @@ module tb_pc98_v30;
         .dma_tc         (fdc_tc_p),
         .dma_readdata   (fdc_dma_r), .dma_writedata (fdc_dma_w),
         .irq            (fdd_irq_wire),
+        .busy           (fdd_busy_wire),
         .io_address     (fdd_io_address),
         .io_read        (fdd_io_read),
         .io_readdata    (fdd_readdata_wire),

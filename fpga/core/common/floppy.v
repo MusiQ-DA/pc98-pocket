@@ -54,6 +54,11 @@ module floppy
 
 	//irq
 	output reg        irq,
+	// MSR bit 4 -- command in execution or result bytes still held. The
+	// PC-98 glue gates the motor-ready interrupt on it: an interrupt that
+	// lands mid-result lets the ISR it dispatches drain bytes the in-flight
+	// one is still reading.
+	output reg        busy,
 
 	//io buf
 	input       [2:0] io_address,
@@ -281,7 +286,6 @@ always @(posedge clk) begin
 	else if(io_read && io_address == 3'd5 && reply_left == 4'd1) transfer_to_cpu <= 1'b0;
 end
 
-reg busy;
 always @(posedge clk) begin
 	if(~rst_n | sw_reset)                                        busy <= 1'b0;
 	else if(command_first)                                       busy <= 1'b1;

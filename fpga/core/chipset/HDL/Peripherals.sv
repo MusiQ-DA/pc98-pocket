@@ -470,6 +470,7 @@ module PERIPHERALS #(
     logic           timer_interrupt;
     logic           keybord_interrupt;
     logic           fdd_interrupt;
+    logic           fdd_busy;
     logic   [7:0]   interrupt_data_bus_out;
     logic           interrupt_to_cpu_buf;
 
@@ -1972,6 +1973,7 @@ module PERIPHERALS #(
         .fd_read       (fdc_glue_read),
         .fd_wdata      (fdc_glue_wdata),
         .fd_irq        (fdd_interrupt),
+        .fd_busy       (fdd_busy),
         .ctrl_readback (fdc_ctrl_readback),
         .mode_readback (fdc_mode_readback),
         .group_live    (fdc_group_live),
@@ -2156,6 +2158,7 @@ module PERIPHERALS #(
 
         //irq
         .irq                        (fdd_interrupt),
+        .busy                       (fdd_busy),
 
         //io buf
         .io_address                 (fdd_io_address),

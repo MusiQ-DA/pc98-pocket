@@ -170,6 +170,11 @@ module pc98_fdc_glue (
     output logic       fd_read,
     output logic [7:0] fd_wdata,
     input  wire        fd_irq,
+    // floppy.v's MSR busy bit: command executing or result bytes still
+    // held. The motor-ready pulse waits for it to fall -- firing into a
+    // result phase lets the ISR it dispatches drain bytes the in-flight
+    // interrupt is still reading, which corrupts the probe's bookkeeping.
+    input  wire        fd_busy,
 
     // Chipset side.
     output logic [7:0] ctrl_readback,  // 0x94 / 0xCC read
@@ -232,6 +237,7 @@ module pc98_fdc_glue (
     logic        motor_armed_2hd,  motor_armed_2dd;
     logic [24:0] motor_timer_2hd,  motor_timer_2dd;
     logic        motor_pulse_2hd,  motor_pulse_2dd;
+    logic        motor_wait_2hd,   motor_wait_2dd;
     logic [7:0]  motor_arms        = 8'd0;   // both timers, summed
     logic [7:0]  motor_pulses      = 8'd0;
     logic        ctrl3_q_2hd,      ctrl3_q_2dd;
@@ -242,6 +248,7 @@ module pc98_fdc_glue (
             motor_armed_2hd <= 1'b0;  motor_armed_2dd <= 1'b0;
             motor_timer_2hd <= 25'd0; motor_timer_2dd <= 25'd0;
             motor_pulse_2hd <= 1'b0;  motor_pulse_2dd <= 1'b0;
+            motor_wait_2hd  <= 1'b0;  motor_wait_2dd  <= 1'b0;
             ctrl3_q_2hd     <= 1'b0;  ctrl3_q_2dd     <= 1'b0;
             ctrlcc_q_2hd    <= 8'h00; ctrlcc_q_2dd    <= 8'h00;
             motor_arms      <= 8'd0;  motor_pulses    <= 8'd0;
@@ -270,22 +277,35 @@ module pc98_fdc_glue (
             if (motor_armed_2hd) begin
                 if (motor_timer_2hd == 25'd25_772_000) begin  // ~600 ms
                     motor_armed_2hd <= 1'b0;
-                    motor_pulse_2hd <= 1'b1;
-                    if (motor_pulses != 8'hFF) motor_pulses <= motor_pulses + 8'd1;
+                    motor_wait_2hd  <= 1'b1;
                 end
                 else
                     motor_timer_2hd <= motor_timer_2hd + 25'd1;
+            end
+            // The timer's answer is an interrupt of convenience, not a
+            // command result -- but the ISR it dispatches cannot tell it
+            // from one. Fired mid-result it issues SENSE, gets dropped by
+            // the busy chip, and its data-port reads drain bytes the
+            // in-flight result still owns. Hold it until the chip is idle.
+            if (motor_wait_2hd && !fd_busy) begin
+                motor_wait_2hd  <= 1'b0;
+                motor_pulse_2hd <= 1'b1;
+                if (motor_pulses != 8'hFF) motor_pulses <= motor_pulses + 8'd1;
             end
             else if (motor_pulse_2hd)
                 motor_pulse_2hd <= 1'b0;
             if (motor_armed_2dd) begin
                 if (motor_timer_2dd == 25'd25_772_000) begin  // ~600 ms
                     motor_armed_2dd <= 1'b0;
-                    motor_pulse_2dd <= 1'b1;
-                    if (motor_pulses != 8'hFF) motor_pulses <= motor_pulses + 8'd1;
+                    motor_wait_2dd  <= 1'b1;
                 end
                 else
                     motor_timer_2dd <= motor_timer_2dd + 25'd1;
+            end
+            if (motor_wait_2dd && !fd_busy) begin
+                motor_wait_2dd  <= 1'b0;
+                motor_pulse_2dd <= 1'b1;
+                if (motor_pulses != 8'hFF) motor_pulses <= motor_pulses + 8'd1;
             end
             else if (motor_pulse_2dd)
                 motor_pulse_2dd <= 1'b0;
