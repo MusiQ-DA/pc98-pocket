@@ -329,14 +329,29 @@ void postmon_isr_hb(void)
     if ((isr_hb & 0x3Fu) != 0u) {
         return;
     }
+    if (vkb_ui_overlay_open()) {
+        return;       // an open menu owns the framebuffer; don't punch through it
+    }
     *VKB_CTRL = 1u;   // the loop may have died before ever enabling the strip
-    osd_fill_rect(&fb, 252, 92, 68, 10, OSD_KEYFACE);
+    osd_fill_rect(&fb, 252, 92, 350, 10, OSD_KEYFACE);
     osd_draw_char(&fb, 256, 92, 'I', OSD_LABEL);
     hex(264, 92, isr_hb & 0xFFu, 2);
     // M is four digits: the high pair is the loop iteration (moving = the
     // loop runs at all), the low pair the leg it is in.
     osd_draw_char(&fb, 280, 92, 'M', OSD_LABEL);
     hex(288, 92, postmon_mark & 0xFFFFu, 4);
+    // Past PANEL_W (320) nothing else ever draws: put the drain-side words
+    // there. DM is the whole FDC DMA handshake (state/fifo, DRQ, holdreq/
+    // holdack, DACK, TC, AEN); FX is {results read, DOR, irq rises, MSR};
+    // DR is {fifo drops, accepts, reply_left} -- nonzero drops mean pushed
+    // bytes the controller silently discarded, the "supply counted but the
+    // guest never saw it" failure.
+    osd_draw_string(&fb, 330, 92, "DM", OSD_LABEL);
+    hex(354, 92, *POST_FDMA, 8);
+    osd_draw_string(&fb, 420, 92, "FX", OSD_LABEL);
+    hex(444, 92, *POST_FDCX, 8);
+    osd_draw_string(&fb, 510, 92, "DR", OSD_LABEL);
+    hex(534, 92, *POST_FDCW, 8);
     // Row 92's FDC fields freeze with the rest of the panel once the guest
     // parks: the repaint gate needs a slow field to move and nothing moves on
     // a stuck machine, so the main-painted SN/RQ can be first-paint history

@@ -42,6 +42,14 @@ if txt is None:
 m = re.search(r"#define\s+PANEL_W\s+(\d+)", SRC.read_text())
 PANEL_W = int(m.group(1)) if m else 320
 
+# The drawable edge is the framebuffer, not the panel: the ISR heartbeat
+# strip draws right of PANEL_W (over its own fill) where nothing else ever
+# paints. Fields may live out there, but nothing may straddle the panel
+# edge -- a label on the panel with digits past it loses its background.
+m = re.search(r"#define\s+OSD_FB_WIDTH\s+(\d+)",
+              pathlib.Path("firmware/vkb_draw.h").read_text())
+FB_W = int(m.group(1)) if m else 640
+
 txt = re.sub(r"/\*.*?\*/", "", txt, flags=re.S)
 txt = re.sub(r"//[^\n]*", "", txt)
 
@@ -143,9 +151,14 @@ for y in sorted(rows):
             print(f"OVERLAP row {y}: {a[2]} [{a[0]}..{a[1]}) into {b[2]} [{b[0]}..{b[1]})")
             bad += 1
     last = items[-1]
-    if last[1] > PANEL_W:
-        print(f"OFF-PANEL row {y}: {last[2]} ends at {last[1]}, panel is {PANEL_W}")
+    if last[1] > FB_W:
+        print(f"OFF-PANEL row {y}: {last[2]} ends at {last[1]}, fb is {FB_W}")
         bad += 1
+    for x0, x1, lab in items:
+        if x0 < PANEL_W < x1:
+            print(f"STRADDLES-PANEL row {y}: {lab} [{x0}..{x1}) crosses the "
+                  f"panel edge at {PANEL_W}")
+            bad += 1
 
 if bad:
     print(f"check_osd_layout: {bad} problem(s)")
