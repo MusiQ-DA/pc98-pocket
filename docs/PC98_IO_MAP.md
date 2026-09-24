@@ -2,6 +2,12 @@
 
 **出典**: `/Users/hiroya/NP2kai`(AZO234/NP2kai)の `iocore_attach*` 呼び出しと、
 各デバイス実装(`io/`, `cbus/`, `diskimage/`)の読解。コードは転載していない。
+
+**実機一次資料**: NEC「PC-9800シリーズ テクニカルデータブック HARDWARE編」(1993) —
+<https://vtda.org/docs/computing/NEC/PC-9800TechnicalDataBookHARDWARE+OCR_1993.pdf>
+(OCR済みスキャン)。下記「NP2 の推定」「実機ドキュメントで裏を取っていない」と
+書かれた項目はまずここで裏を取ること。I/O マップ、ウェイト、バスタイミング、
+DMAC/FDC/PIT/PIC/GDC の実機仕様を網羅している。
 **用途**: PC/AT チップセット(8259A×2 / 8253 / 8237 / 8255 / FDC)を PC/AT 番地で
 デコードしている現行 FPGA 実装を、PC-98 番地へ移すためのチップセレクト設計資料。
 

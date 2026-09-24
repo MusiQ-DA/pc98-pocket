@@ -2,6 +2,8 @@
 
 ベース: desaster/openfpga-PCXT(chassis — 実機でDOSブート実績あり)
 リファレンス: np2(Neko Project 2 kai)の挙動。コード移植はしない。
+実機一次資料: NEC「PC-9800シリーズ テクニカルデータブック HARDWARE編」(1993) —
+<https://vtda.org/docs/computing/NEC/PC-9800TechnicalDataBookHARDWARE+OCR_1993.pdf>
 
 ## 方針
 
