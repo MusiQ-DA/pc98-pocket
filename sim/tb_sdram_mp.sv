@@ -67,9 +67,12 @@ module tb_sdram_mp;
         .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io)
     );
 
+    // PHYSICAL_DQ: sdram_mp samples DQ on the controller negedge, mid-way
+    // through the part's real one-period window -- the forgiving wide window
+    // cannot tell that sample point from one a beat late.
     sdram_model #(
         .ROW_BITS(ROW_BITS), .COL_BITS(COL_BITS), .BANK_BITS(BANK_BITS),
-        .DQ_BITS(DQ_BITS)
+        .DQ_BITS(DQ_BITS), .PHYSICAL_DQ(1'b1)
     ) sdr (
         .clk(clk), .a(s_a), .ba(s_ba), .cke(s_cke),
         .ras_n(s_ras_n), .cas_n(s_cas_n), .we_n(s_we_n), .dqm(s_dqm),

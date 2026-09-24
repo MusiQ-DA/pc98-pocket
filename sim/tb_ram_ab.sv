@@ -61,8 +61,16 @@ module tb_ram_ab;
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)
     );
 
+    // sdram_mp samples DQ on the controller negedge, mid-way through the part's
+    // real one-period window, so it needs PHYSICAL_DQ's honest window slot.
+    // sdram_single samples at a posedge that the legacy forgiving window was
+    // tuned for, so the reference build keeps the wide window.
     sdram_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
-                  .T_RAS(2), .T_RC(3), .T_REF(335)) sdr (
+                  .T_RAS(2), .T_RC(3), .T_REF(335)
+`ifdef SDRAM_USE_MP
+                  ,.PHYSICAL_DQ(1'b1)
+`endif
+                  ) sdr (
         .clk(clock), .a(s_a), .ba(s_ba), .cke(s_cke),
         .ras_n(s_ras), .cas_n(s_cas), .we_n(s_we), .dqm({s_udqm, s_ldqm}),
         .dq_out(s_dq_out), .dq_io(s_dq_io), .dq_in(s_dq_in)

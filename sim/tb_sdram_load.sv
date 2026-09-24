@@ -71,7 +71,7 @@ module tb_sdram_load;
 
     sdram_model #(
         .ROW_BITS(ROW_BITS), .COL_BITS(COL_BITS), .BANK_BITS(BANK_BITS),
-        .DQ_BITS(DQ_BITS)
+        .DQ_BITS(DQ_BITS), .PHYSICAL_DQ(1'b1)
     ) sdr (
         .clk(clk), .a(s_a), .ba(s_ba), .cke(s_cke),
         .ras_n(s_ras_n), .cas_n(s_cas_n), .we_n(s_we_n), .dqm(s_dqm),

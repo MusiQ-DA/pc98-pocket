@@ -40,7 +40,8 @@ module tb_sdram_shim;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io));
 
-    sdram_model #(.T_RCD(2), .T_RP(2), .T_WR(2), .T_RFC(4)) sdr (
+    sdram_model #(.T_RCD(2), .T_RP(2), .T_WR(2), .T_RFC(4),
+                  .PHYSICAL_DQ(1'b1)) sdr (
         .clk(clk), .a(s_a), .ba(s_ba), .cke(s_cke),
         .ras_n(s_ras), .cas_n(s_cas), .we_n(s_we), .dqm(2'b00),
         .dq_out(s_dq_out), .dq_io(s_dq_io), .dq_in(s_dq_in));

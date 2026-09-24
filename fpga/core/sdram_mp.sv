@@ -6,16 +6,19 @@
 // what a graphics VRAM needs (docs/P0_MEMORY.md §3). This controller keeps the
 // same command sequencing but adds the two things that actually buy bandwidth:
 //
-//   * it runs at clk_core (85.909 MHz, exactly 2x clk_chipset) instead of
-//     42.95 MHz, reusing a PLL output the design already generates
 //   * it moves up to BURST_MAX words per granted transaction, so the ~8 cycles
 //     of ACTIVATE/CAS/PRECHARGE overhead amortise across the burst
 //
-// Sustained rate is DQ_BITS * f * BURST/(BURST + overhead). At the defaults
-// that is roughly 16 * 85.909e6 * 32/40 = 137 MB/s, against a requirement of
-// about 7.7 MB/s of display fetch plus ~15 MB/s of EGC read-modify-write plus
-// CPU traffic. The number that decides option C is the one the testbench
-// measures, not this comment -- see docs/P0_SDRAM_DESIGN.md.
+// Clocking: the controller is clock-agnostic; it runs at whatever `clk` it is
+// given. sdram_shim supplies clk_chipset (42.95 MHz) in the current PC-98
+// integration -- an earlier revision ran it at clk_core (2x), but the pin
+// window vs dram_clk relationship is what matters, not the rate. Read data is
+// captured on the negedge, which sits in the middle of the part's one-period
+// DQ window once dram_clk's 180-degree shift and board flight times are in
+// (see the p_rdata block at the bottom of this file).
+//
+// Sustained rate is DQ_BITS * f * BURST/(BURST + overhead), measured by the
+// testbench -- see docs/P0_SDRAM_DESIGN.md.
 //
 // Ports are arbitrated round-robin so no requester is starved by a neighbour
 // that always has work queued. One transaction is in flight at a time, so the
@@ -44,7 +47,7 @@ module sdram_mp #(
     parameter int BURST_MAX   = 32,
     parameter int CAS_LATENCY = 3,
 
-    // Timing, in controller clocks. Defaults are for 85.909 MHz (11.64 ns) and
+    // Timing, in controller clocks. Defaults are for 42.95 MHz (23.28 ns) and
     // are deliberately conservative; the testbench sweeps them.
     parameter int T_RCD       = 2,      // ACTIVATE -> READ/WRITE
     parameter int T_RP        = 2,      // PRECHARGE -> ACTIVATE
@@ -52,7 +55,7 @@ module sdram_mp #(
     parameter int T_RFC       = 7,      // AUTO REFRESH cycle
     parameter int T_MRD       = 2,      // MODE REGISTER SET -> any command
     parameter int INIT_NOP    = 8600,   // >= 100 us of NOP after power-up
-    parameter int REFRESH_INT = 640,    // <= 7.8 us between AUTO REFRESH
+    parameter int REFRESH_INT = 320,    // <= 7.8 us between AUTO REFRESH
 
     // Derived. Do not override.
     parameter int ADDR_BITS   = ROW_BITS + BANK_BITS + COL_BITS,
@@ -462,17 +465,31 @@ module sdram_mp #(
         end
     end
 
-    // Read data is registered straight off the bus at the posedge that sits in
-    // the middle of the part's data window (see RD_DELAY above), one cycle
-    // behind the pipeline tag so p_rdata and p_rvalid present together.
+    // Read data is registered off the bus on the NEGEDGE a full device-clock
+    // after the part launched the word (see RD_DELAY above). The part drives
+    // DQ off dram_clk, which is this clock shifted 180 deg, so the word it
+    // launched at our falling edge N is still on the pin at our falling edge
+    // N+1 -- the sample lands one period into a one-period window. The old
+    // posedge capture sat only ~0.1 cycle after the word arrived and carried
+    // the interface's -2.5 ns input slack; this edge buys back a whole cycle
+    // of setup while the next beat's tOH still covers hold.
+    //
+    // The pipeline tag does NOT move: the capture negedge sits INSIDE the
+    // rd_pipe[RD_DELAY-1] cycle, so when rvalid raises during that cycle the
+    // consumer's end-of-cycle posedge still lands on freshly-captured data.
+    // Beat k's rvalid cycle contains exactly beat k's capture negedge.
+    always_ff @(negedge clk) begin
+        if (rst)
+            p_rdata <= '0;
+        else
+            p_rdata <= sdram_dq_in;
+    end
+
     always_ff @(posedge clk) begin
-        if (rst) begin
+        if (rst)
             p_rvalid <= 1'b0;
-            p_rdata  <= '0;
-        end else begin
+        else
             p_rvalid <= rd_pipe[RD_DELAY-1];
-            p_rdata  <= sdram_dq_in;
-        end
     end
 
 endmodule
