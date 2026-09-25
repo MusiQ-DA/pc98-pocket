@@ -57,11 +57,17 @@ module tb_pc98_dma_decode;
     // high here buys exactly one transfer, then the channel locks.
     // CHIPSET drives fdd_dma_req onto both request 2 (2HD) and request 3
     // (2DD); the bench does the same so either window's transfer runs.
+    //
+    // The pins are bus-level: DRQx is active-low on the PC-98 (the data
+    // book names them DRQ3O..DRQ0O) and the BIOS programs command bit6 to
+    // match, so a request drives its pin LOW -- exactly what CHIPSET now
+    // does by inverting its internal active-high sources.  Idle pins sit
+    // high, and the fdd_want term below is the pre-inversion logic level.
     logic        fdd_want  = 1'b0;
     logic        fdd_req_r = 1'b0;
     always_ff @(posedge clock)
         fdd_req_r <= fdd_want & dma_acknowledge_n[2] & dma_acknowledge_n[3];
-    wire   [3:0] dma_request = {fdd_req_r, fdd_req_r, 2'b00};
+    wire   [3:0] dma_request = ~{fdd_req_r, fdd_req_r, 2'b00};
 
     wire [19:0] address;
     wire  [7:0] internal_data_bus;
@@ -273,6 +279,10 @@ module tb_pc98_dma_decode;
         probe(20'h00115, sel, psel); check(!sel && !psel, "0x115 out of range");
 
         $display("=== BIOS channel-2 setup, exactly as FFA70/FFDEF drives it ===");
+        // The BIOS selects active-low DREQ sensing (command 0x11 bit6) to
+        // match the bus's DRQxO pins; without this the bench would exercise
+        // a polarity combination hardware never uses.
+        io_write(20'h00011, 8'h40);
         // Masked at reset: a request must not produce a status bit yet.
         fdd_want = 1'b1;
         repeat (8) @(posedge clock);
