@@ -92,7 +92,7 @@ module tb_pc98_dma_decode;
         .clk_select             (2'b00),
         .reset                  (reset),
         .interrupt_acknowledge_n(interrupt_acknowledge_n),
-        .clk_vga_cga            (1'b0),
+        .clk_pc98_dot            (1'b0),
         .font_rd_ack            (1'b0),
         .font_rd_valid          (1'b0),
         .font_rd_data           (16'd0),

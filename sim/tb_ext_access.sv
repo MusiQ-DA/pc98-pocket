@@ -4,7 +4,7 @@
 //
 // This is the check that should have run before testB9/10/11 went to hardware.
 // Three hardware round-trips came back with nothing on screen, including a
-// write to CGA text VRAM that does not involve the SDRAM at all, which means
+// write to text VRAM that does not involve the SDRAM at all, which means
 // the doubt is about the ext port itself rather than the memory behind it.
 //
 // The BIOS loader uses this port and works, so the port is not broken; what is
@@ -63,7 +63,7 @@ module tb_ext_access;
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
         .map_ems(unused_map),
         .ems_b1(1'b0), .ems_b2(1'b0), .ems_b3(1'b0), .ems_b4(1'b0),
-        .bios_protect_flag(2'b00), .tandy_bios_flag(1'b0),
+        .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(1'b1),
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)
     );
@@ -132,18 +132,19 @@ module tb_ext_access;
                  done, took, got);
         if (!done || got !== 8'h5A) errors++;
 
-        // CGA text VRAM: RAM.sv must NOT claim this, so ram_rw_complete never
-        // fires and the master falls through on its guard. That is the
-        // behaviour the firmware's "SELFTEST START" write depends on.
-        master_access(1'b1, 20'hB8000, 8'h53, got, took, done);
-        $display("  write B8000      : complete=%0d after %0d cycles (expect 0)",
+        // Text VRAM (A0000-A7FFF): RAM.sv must NOT claim this -- the TVRAM and
+        // the CG window answer it elsewhere -- so ram_rw_complete never fires
+        // and the master falls through on its guard. That is the behaviour the
+        // firmware's "SELFTEST START" write depends on.
+        master_access(1'b1, 20'hA0000, 8'h53, got, took, done);
+        $display("  write A0000      : complete=%0d after %0d cycles (expect 0)",
                  done, took);
         if (done) begin
-            $display("  UNEXPECTED: RAM.sv claimed a CGA VRAM address");
+            $display("  UNEXPECTED: RAM.sv claimed a text VRAM address");
             errors++;
         end
         if (ram_address_select_n !== 1'b1)
-            $display("  note: ram_address_select_n=%0d at B8000", ram_address_select_n);
+            $display("  note: ram_address_select_n=%0d at A0000", ram_address_select_n);
 
         $display("\n=== summary ===");
         $display("  errors : %0d", errors);

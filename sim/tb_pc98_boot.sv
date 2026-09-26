@@ -363,7 +363,7 @@ module tb_pc98_boot;
         // F8000-FFFFF redirected to 1F8000 while the flag is set. itf_bank is
         // this bench's copy of core_top's, so the images are loaded once and
         // the switch is an address bit, not a copy.
-        .bios_protect_flag(2'b10), .tandy_bios_flag(itf_bank),
+        .bios_protect_flag(2'b10), .bios_shadow_flag(itf_bank),
         .font_bank_flag(1'b0),
         .font_rd_req(1'b0), .font_rd_addr(24'h0), .font_rd_len(4'h0),
         .font_rd_ack(), .font_rd_valid(), .font_rd_data(), .font_rd_done(),
@@ -572,6 +572,7 @@ module tb_pc98_boot;
 
     logic io_wr_d = 1'b1, mem_wr_d = 1'b1, mem_rd_d = 1'b1, io_rd_d = 1'b1;
     logic [7:0] mem_wr_data_q = 8'h00;
+    logic [7:0] io_wr_data_q  = 8'h00;
     logic [7:0] tvram_code [0:511];   // A0000-A01FF, first row of cells
     logic [7:0] tvram_attr [0:511];   // A2000-A21FF
     int          tvram_wr_count = 0;
@@ -649,6 +650,9 @@ module tb_pc98_boot;
         // where the BIOS put BC 02 80 FD, and INT 08 went astray on exactly
         // that. Sample continuously while the cycle is live and keep the last.
         if (~mem_wr_n) mem_wr_data_q <= cpu_data_bus;
+        // Same trailing-edge hazard as the memory write: the I/O write data
+        // is live only while io_wr_n is low, so latch it here.
+        if (~io_wr_n) io_wr_data_q <= cpu_data_bus;
 
         // Memory write, on the trailing edge, and never into ROM.
         if (mem_wr_n & ~mem_wr_d & ~is_rom(cpu_address)) begin
@@ -786,6 +790,18 @@ module tb_pc98_boot;
                  || cpu_address[7:0] == 8'hCE))
                 $display("  %8t  FDC <- %04X, %02X  (eu_pc %05X)",
                          $time, io_wr_addr_q, write_to_fdd, eu_pc);
+            // GDC command/parameter stream, both heads -- the cursor bug
+            // lives in what the BIOS actually writes to 60/62/A0/A2, not in
+            // what we think it writes. CMD marks the a1=1 (command) port.
+            if (cpu_address[15:0] == 16'h0060 || cpu_address[15:0] == 16'h0062
+             || cpu_address[15:0] == 16'h00A0 || cpu_address[15:0] == 16'h00A2)
+                $display("  %8t  GDC %s <- %02X  (eu_pc %05X)",
+                         $time,
+                         (cpu_address[15:0] == 16'h0060) ? "m.par"
+                       : (cpu_address[15:0] == 16'h0062) ? "m.CMD"
+                       : (cpu_address[15:0] == 16'h00A0) ? "s.par"
+                       : "s.CMD",
+                         io_wr_data_q, eu_pc);
         end
     end
 
@@ -1692,7 +1708,7 @@ module tb_pc98_boot;
 `ifdef REALMEM
         // The images go into the PART, at the addresses RAM.sv maps them to:
         // the BIOS at E8000-FFFFF, the ITF in the shadow at 1F8000 that
-        // tandy_bios_flag selects. One guest byte per 16-bit word, which is how
+        // bios_shadow_flag selects. One guest byte per 16-bit word, which is how
         // RAM.sv stores everything (access_data_in is {8'h00, byte}).
         for (i = 0; i < 98304;  i = i + 1)
             sdr.u_part.poke(20'hE8000 + i, {8'h00, bios[i]});

@@ -3,7 +3,7 @@
 //
 // The last unverified stretch. tb_ext_access and tb_ext_arbiter proved the path
 // from the ext port through BUS_ARBITER to RAM.sv works for both controllers,
-// yet three hardware builds showed nothing on screen -- including a CGA VRAM
+// yet three hardware builds showed nothing on screen -- including a VRAM
 // write that never touches the SDRAM. So the fault is between the firmware and
 // that port: the MMIO window in softcpu_subsystem, sdram_selftest_master, or
 // the clk_pico/clk_sys handshake between them.
@@ -100,7 +100,7 @@ module tb_selftest_soc;
     // ---- the shipped softcore, running the committed firmware image
     softcpu_subsystem u_soft (
         .clk_sys(clk_sys), .clk_74a(clk_74a), .reset(reset), .clk_pico(clk_pico),
-        .fdd_request(2'd0), .ide0_request(3'd0),
+        .fdd_request(2'd0),
         .fdd0_disk_size(32'd0), .fdd1_disk_size(32'd0),
         .datatable_addr(), .datatable_data(), .datatable_wren(),
         .datatable_q(32'd0),
@@ -171,7 +171,7 @@ module tb_selftest_soc;
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
         .map_ems(unused_map),
         .ems_b1(1'b0), .ems_b2(1'b0), .ems_b3(1'b0), .ems_b4(1'b0),
-        .bios_protect_flag(2'b00), .tandy_bios_flag(1'b0),
+        .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(1'b1),
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)
     );
@@ -191,7 +191,7 @@ module tb_selftest_soc;
     // the raster, softcpu_subsystem answers with osd_in_area/palette, and the
     // question is simply whether video_rgb ever carries an overlay colour.
     //
-    // The raster is a plain 640x200 CGA-like frame; the picture behind it is
+    // The raster is a plain 640x200 frame; the picture behind it is
     // deliberately black so any non-black output pixel is the overlay.
     wire  [9:0] osd_hcnt, osd_vcnt;
     wire  [9:0] osd_raster_w, osd_raster_h;

@@ -75,7 +75,7 @@ module tb_postmon_peek;
     logic  [7:0] ld_wdata     = 8'hFF;
     logic        ld_req       = 1'b0;
     logic        ld_wr_n      = 1'b1;
-    logic        ld_shadow    = 1'b0;   // tandy_bios_write: ITF words -> shadow
+    logic        ld_shadow    = 1'b0;   // bios_shadow_write: ITF words -> shadow
 
     logic [19:0] st_addr_v    = 20'd0;
     logic  [7:0] st_wdata_v   = 8'd0;
@@ -115,14 +115,14 @@ module tb_postmon_peek;
     wire  [7:0] data_bus_ext     = st_run ? st_wdata_v : ld_wdata;
     wire        memory_write_ext = st_run ? st_wr_n    : ld_wr_n;
 
-    // The shadow-flag mux, mirroring core_top's tandy_bios_flag.
+    // The shadow-flag mux, mirroring core_top's bios_shadow_flag.
 `ifdef REPRO_OLD_SHADOW
     // core_top BEFORE the fix: every reader followed the guest's bank bit.
-    wire tandy_bios_flag = ld_wr_n ? itf_bank : ld_shadow;
+    wire bios_shadow_flag = ld_wr_n ? itf_bank : ld_shadow;
 `else
     // core_top AFTER the fix: the self-test master reads the MAIN bank. Keep
     // this line identical to the one in core_top's MACHINE_PC98 branch.
-    wire tandy_bios_flag = st_run ? 1'b0 :
+    wire bios_shadow_flag = st_run ? 1'b0 :
                            ld_wr_n ? itf_bank : ld_shadow;
 `endif
 
@@ -130,7 +130,7 @@ module tb_postmon_peek;
     // both masters are idle the flag is the guest's bank bit again.
     int flag_errors = 0;
     always @(posedge clock) begin
-        if (!reset && !st_run && ld_wr_n && (tandy_bios_flag !== itf_bank))
+        if (!reset && !st_run && ld_wr_n && (bios_shadow_flag !== itf_bank))
             flag_errors++;
     end
 
@@ -222,7 +222,7 @@ module tb_postmon_peek;
         .font_rd_ack(), .font_rd_valid(), .font_rd_data(), .font_rd_done(),
         .cg_rd_req(1'b0), .cg_rd_addr(24'd0), .cg_rd_len(4'd0),
         .cg_rd_ack(), .cg_rd_valid(), .cg_rd_data(), .cg_rd_done(),
-        .tandy_bios_flag(tandy_bios_flag),
+        .bios_shadow_flag(bios_shadow_flag),
         .wait_count_clk_en(1'b1),
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)
     );
@@ -409,7 +409,7 @@ module tb_postmon_peek;
         // still follows itf_bank whenever the master is idle.
         if (flag_errors != 0) begin
             errors++;
-            $display("  tandy_bios_flag left the guest's bank view %0d cycles", flag_errors);
+            $display("  bios_shadow_flag left the guest's bank view %0d cycles", flag_errors);
         end
 
         $display("\n=== summary ===");

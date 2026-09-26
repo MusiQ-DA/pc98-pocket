@@ -202,8 +202,8 @@ module tb_v30_mem;
 
     // ---- READY, wired the way Chipset.sv wires it -------------------------
     //
-    // Chipset.sv: .io_channel_ready(io_channel_ready & memory_access_ready
-    // & tandy_snd_rdy). memory_access_ready is RAM.sv's, and it is the whole
+    // Chipset.sv: .io_channel_ready(io_channel_ready & memory_access_ready).
+    // memory_access_ready is RAM.sv's, and it is the whole
     // point of this bench: the bridge's byte cycles must stretch on it.
     wire processor_ready;
     wire memory_access_ready;
@@ -251,7 +251,7 @@ module tb_v30_mem;
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
         .map_ems(map), .ems_b1(1'b0), .ems_b2(1'b0), .ems_b3(1'b0), .ems_b4(1'b0),
-        .bios_protect_flag(2'b00), .tandy_bios_flag(1'b0),
+        .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .font_bank_flag(1'b0),
         .font_rd_req(1'b0), .font_rd_addr(24'h0), .font_rd_len(4'h0),
         .font_rd_ack(), .font_rd_valid(), .font_rd_data(), .font_rd_done(),

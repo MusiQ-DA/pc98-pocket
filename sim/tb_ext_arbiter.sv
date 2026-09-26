@@ -4,7 +4,7 @@
 //
 // This is the piece that was never simulated before testB9/10/11 went to
 // hardware and came back with nothing on screen three times running --
-// including a write to CGA text VRAM, which does not involve the SDRAM at all.
+// including a write to text VRAM, which does not involve the SDRAM at all.
 // tb_ext_access already proved the sequence works when driven straight at
 // RAM.sv, so the arbiter in between is what is left.
 //
@@ -130,7 +130,7 @@ module tb_ext_arbiter;
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
         .map_ems(unused_map),
         .ems_b1(1'b0), .ems_b2(1'b0), .ems_b3(1'b0), .ems_b4(1'b0),
-        .bios_protect_flag(2'b00), .tandy_bios_flag(1'b0),
+        .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(1'b1),
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)
     );
