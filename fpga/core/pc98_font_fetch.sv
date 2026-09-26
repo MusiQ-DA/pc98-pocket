@@ -113,7 +113,11 @@ module pc98_font_fetch #(
 
             // p_done is one cycle and can share it with the last p_rvalid, so
             // start draining from the flag rather than from the pulse.
-            if (p_done) draining <= 1'b1;
+            // Guarded on f_busy: a done that arrives with no transaction in
+            // flight would otherwise drain stale bytes_q -- sixteen f_valid
+            // beats nobody requested, which the post-monitor's beat counter
+            // would count against bursts it never issued.
+            if (p_done && f_busy) draining <= 1'b1;
 
             if (draining) begin
                 f_valid <= 1'b1;

@@ -1,10 +1,18 @@
 #!/bin/bash
 # hdm_xfer.sh -- after the core deploy finishes, wait for the card and copy
-# the IPL test floppy to the Floppy A pick location, verify, eject.
+# a floppy image to the Floppy pick location, verify, eject.
+#
+#   hdm_xfer.sh [image] [cardname]
+#     image     source .hdm path   (default ~/Desktop/pc98_test.hdm)
+#     cardname  filename under Assets/pc98/common (default = basename(image))
+#
+# A distinct cardname (e.g. draw_test.hdm) sits alongside pc98_test.hdm in the
+# Pocket's disk picker rather than replacing it.
 set -u
-HDM="/Users/hiroya/Desktop/pc98_test.hdm"
+HDM="${1:-/Users/hiroya/Desktop/pc98_test.hdm}"
 CARD="/Volumes/ANALOGUE"
 DEST_DIR="$CARD/Assets/pc98/common"
+DEST="${2:-$(basename "$HDM")}"
 
 say() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$1"; }
 
@@ -29,12 +37,12 @@ say "card is here"
 
 # 3. Copy, verify, eject -- Finder's eject, the one that works here.
 mkdir -p "$DEST_DIR" || { say "mkdir failed"; exit 1; }
-cp "$HDM" "$DEST_DIR/" || { say "copy failed"; exit 1; }
+cp "$HDM" "$DEST_DIR/$DEST" || { say "copy failed"; exit 1; }
 sync
 want=$(md5 -q "$HDM")
-got=$(md5 -q "$DEST_DIR/pc98_test.hdm")
+got=$(md5 -q "$DEST_DIR/$DEST")
 if [ "$want" = "$got" ]; then
-    say "copied pc98_test.hdm to Assets/pc98/common ($got)"
+    say "copied $DEST to Assets/pc98/common ($got)"
 else
     say "MD5 MISMATCH want $want got $got"; exit 1
 fi

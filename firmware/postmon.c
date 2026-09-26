@@ -775,98 +775,40 @@ void post_mon_tick(void)
             hex(4 + 27 * 8, 52, r23 & 0xFFFFu, 4);
         }
         {
-            // SB: what DMA actually left at the IPL address. The BIOS loads
-            // the boot sector at 1FE0:0000 and calls it; a guest that lands
-            // there and then wanders off (PC past 0200) either never got the
-            // bytes or got the wrong ones. Eight bytes at 1FE00 say which:
-            // EB 1E is the test image's first instruction, all 00 is a write
-            // that never landed, anything else is the wrong sector. W is the
-            // last bus write the monitor saw -- after a sector DMA it should
-            // sit in 1FExx-20xxx. guest_peek borrows the bus through HOLD for
-            // a few cycles each; twelve of them a tick is nothing.
+            // The boot-sector diagnostics (SB peek row, +6A tail, SC bank
+            // scan) proved the IPL lands intact at 1FE0:0000 -- they are cut
+            // here, not because they were wrong, but because the image no
+            // longer fits them.
             osd_fill_rect(&fb, 336, 42, 300, 30, OSD_KEYFACE);
-            osd_draw_string(&fb, 340, 42, "SB", OSD_LABEL);
-            for (int i = 0; i < 8; i++)
-                hex(368 + i * 24, 42, guest_peek(0x1FE00u + (uint32_t) i), 2);
             osd_draw_string(&fb, 340, 52, "W", OSD_LABEL);
             hex(356, 52, *POST_WRADDR & 0xFFFFFu, 5);
-            // +6A: the jmp$ site -- the window shows E1 EB FE 00 when the
-            // sector tail is intact. EB FE surviving means the CPU left for
-            // a reason other than missing bytes (an interrupt to a bad
-            // vector); anything else means the tail was never written or was
-            // overwritten after the DMA.
-            osd_draw_string(&fb, 404, 52, "+6A", OSD_LABEL);
-            for (int i = 0; i < 4; i++)
-                hex(432 + i * 24, 52, guest_peek(0x1FE6Au + (uint32_t) i), 2);
             // FR: glyph-fetch {fvalid beats, freq pulses} -- if freq outruns
             // fvalid the row buffer is waiting on the SDRAM font port and the
             // row never fills, which is a black screen with a healthy guest.
             osd_draw_string(&fb, 532, 52, "FR", OSD_LABEL);
             hex(552, 52, *POST_FRB, 8);
-            // SC: where the boot sector actually went. The 71071's bank
-            // register selects in 64 KB steps, so a page slip lands the IPL
-            // at some other bank's +FE00; a count/address slip leaves it
-            // near 1FE00. Banks first, then a fine sweep of the window the
-            // DMA could have aimed at. '-' = EB 1E nowhere = the write path
-            // (not the address) is broken.
-            uint32_t sc = 0xFFFFF;
-            for (int i = 0; i < 16; i++) {
-                uint32_t a = (uint32_t) i * 0x10000u + 0xFE00u;
-                if (guest_peek(a) == 0xEB && guest_peek(a + 1) == 0x1E) {
-                    sc = a;
-                    break;
-                }
-            }
-            if (sc == 0xFFFFF)
-                for (uint32_t a = 0x1F000u; a < 0x21000u; a += 0x100u)
-                    if (guest_peek(a) == 0xEB && guest_peek(a + 1) == 0x1E) {
-                        sc = a;
-                        break;
-                    }
-            osd_draw_string(&fb, 340, 62, "SC", OSD_LABEL);
-            if (sc == 0xFFFFF)
-                osd_draw_string(&fb, 368, 62, "-----", OSD_LABEL);
-            else
-                hex(368, 62, sc, 5);
         }
         {
-            // L: the landing CS:IP -- the first non-ROM instruction the CPU
-            // executed, on the R! row's right half (that row is empty while
-            // the ROM watcher has nothing to report).
-            uint32_t ld = *POST_LAND;
-            osd_draw_string(&fb, 4 + 10 * 8, 22, "L", OSD_LABEL);
-            hex(4 + 11 * 8, 22, ld & 0xFFFFu, 4);
-
-
-        {
-            // The two newest ROM-window reads: address then the byte the
-            // bus actually returned. Against the file, this is the fetch
-            // path's honesty test.
-            uint32_t f0 = *POST_FR0;
-        // CS: the cursor, as the master GDC holds it, packed ccEaaatb --
-        // CSRW/CSRFORM count, enable, cell address, slice top, slice bottom.
-        // cc 00 = the BIOS never sent a cursor command; E 0 = the
-        // [0x53B]|0x80 enable never landed; t/b 0 with E 1 = the table
-        // CSRFORM never ran and the cursor is a hairline; all sane = the
-        // render path. One hex call: the panel row and the ROM budget both
-        // wanted it that way.
-        uint32_t cu = *POST_CUR;
-        osd_draw_string(&fb, 200, 32, "CS", OSD_LABEL);
-        hex(216, 32, cu, 8);
-
-        // CT: the bytes that followed the LAST CSRFORM (4B) command, as the
-        // GDC saw them on port 0x60: <n> (leftmost digit) is how many came
-        // before another command cut the run, then the first three bytes in
-        // order. The BIOS's cursor ON/OFF is one byte (n=1), the table form
-        // three (n=3); anything else says the writes are shifted or shared.
-        // One hex call, same reason as CS above.
-        uint32_t ct = *POST_CT;
-        osd_draw_string(&fb, 200, 62, "CT", OSD_LABEL);
-        hex(216, 62, ct & 0x0FFFFFFFu, 7);
-            osd_draw_string(&fb, 4 + 23 * 8, 42, "F", OSD_LABEL);
-            hex(4 + 24 * 8, 42, f0 & 0xFFFFFu, 5);
-            hex(4 + 30 * 8, 42, (f0 >> 24) & 0xFFu, 2);
-        }
+            // L (landing CS:IP) and the F/FR0 ROM-read pair answered their
+            // questions -- the IPL lands at 1FE0 and the fetch path is honest
+            // -- and the ROM budget is spent on the fields still hunting.
+            // CS: the cursor, as the master GDC holds it, packed ccEaaatb --
+            // CSRW/CSRFORM count, enable, cell address, slice top, slice bottom.
+            // cc 00 = the BIOS never sent a cursor command; E 0 = the
+            // [0x53B]|0x80 enable never landed; t/b 0 with E 1 = the table
+            // CSRFORM never ran and the cursor is a hairline; all sane = the
+            // render path.
+            // CT: the bytes that followed the LAST CSRFORM (4B) command, as the
+            // GDC saw them on port 0x60: <n> (leftmost digit) is how many came
+            // before another command cut the run, then the first three bytes
+            // in order. The BIOS's cursor ON/OFF is one byte (n=1), the table
+            // form three (n=3); anything else says the writes are shifted.
+            uint32_t cu = *POST_CUR;
+            uint32_t ct = *POST_CT;
+            osd_draw_string(&fb, 200, 32, "CS", OSD_LABEL);
+            hex(216, 32, cu, 8);
+            osd_draw_string(&fb, 200, 62, "CT", OSD_LABEL);
+            hex(216, 62, ct & 0x0FFFFFFFu, 7);
         }
         (void) p0; (void) p1; (void) seg_front_show;
 
