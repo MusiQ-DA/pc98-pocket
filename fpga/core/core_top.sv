@@ -1163,6 +1163,9 @@ module core_top (
             8'h12:   probe_data = {12'd0, tvram_last_addr};
             8'h13:   probe_data = io_port_hist[31:0];
             8'h14:   probe_data = io_port_hist[63:32];
+            8'h15:   probe_data = {8'h00, dbg_gdc_cur};        // cc E aaa t b
+            8'h16:   probe_data = dbg_gdc_csrtrace;          // bytes after CSRFORM
+            8'h17:   probe_data = {24'h0, dbg_gdc_csrcnt};   // CSRW/CSRFORM count
             8'hFF:   probe_data = 32'h98C0_DE98;
             default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
