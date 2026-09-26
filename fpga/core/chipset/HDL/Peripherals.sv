@@ -1612,7 +1612,7 @@ module PERIPHERALS #(
         end
     end
 
-    logic [31:0] frm_a_s1, frm_b_s1;
+    logic [31:0] frm_a_s1;
     always_ff @(posedge clock) begin
         frm_a_s1 <= {px_frm, rd_frm};
         dbg_frm_a <= frm_a_s1;

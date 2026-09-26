@@ -1133,6 +1133,47 @@ module core_top (
     );
 
     //
+    // JTAG probe -- the panel's readout without a camera.
+    //
+    // A USB Blaster on the FPGA's JTAG port reads these over the SLD hub:
+    // scripts/jtag_probe.cfg + jtag_probe_read.tcl drive USER1/USER0.
+    // The address map mirrors the POST monitor's softcore registers; the
+    // magic word proves the protocol end-to-end before any value is trusted.
+    logic [31:0] probe_data;
+    wire   [7:0] probe_addr;
+    always_comb begin
+        case (probe_addr)
+            8'h01:   probe_data = dbg_frm_a;   // {px lit, nz bytes served}
+            8'h02:   probe_data = dbg_frm_b;   // {nz stored, fills, rb fsm}
+            8'h03:   probe_data = {pc98_rowbuf_fvalid_count, pc98_rowbuf_freq_count};
+            8'h04:   probe_data = pc98_tvfill_view[31:0];
+            8'h05:   probe_data = pc98_tvfill_view[63:32];
+            8'h06:   probe_data = tvram_row0_code[31:0];
+            8'h07:   probe_data = tvram_row0_code[63:32];
+            8'h08:   probe_data = tvram_row0_attr[31:0];
+            8'h09:   probe_data = tvram_row0_attr[63:32];
+            8'h0A:   probe_data = tvram_row0_hi[31:0];
+            8'h0B:   probe_data = tvram_row0_hi[63:32];
+            8'h0C:   probe_data = {dbg_gdc_unk_count, dbg_gdc_unk_cmd, dbg_gdc_disp_on, dbg_gdc_sad};
+            8'h0D:   probe_data = {post_live_ip, post_live_cs};
+            8'h0E:   probe_data = {post_derail_ip, post_derail_cs};
+            8'h0F:   probe_data = {post_count, post_prev, post_code};
+            8'h10:   probe_data = {12'd0, post_live_addr};
+            8'h11:   probe_data = {12'd0, wr_last_addr};
+            8'h12:   probe_data = {12'd0, tvram_last_addr};
+            8'h13:   probe_data = io_port_hist[31:0];
+            8'h14:   probe_data = io_port_hist[63:32];
+            8'hFF:   probe_data = 32'h98C0_DE98;
+            default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
+        endcase
+    end
+
+    pc98_jtag_probe u_jtag_probe (
+        .probe_addr_sel (probe_addr),
+        .probe_data     (probe_data)
+    );
+
+    //
     // SETTINGS
     //
 

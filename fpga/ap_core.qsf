@@ -746,7 +746,7 @@ set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
 # end ENTITY(mf_pllbase_0002)
 # ---------------------------
 # ---------------------------------------------------------------------------
-# PCXT feature configuration.
+# PC-98 feature configuration.
 # ---------------------------------------------------------------------------
 source config.tcl
 
@@ -852,6 +852,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_glyph_addr.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_gdc_mode1.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_glyph_rowbuf.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_font_fetch.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_jtag_probe.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pulse_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_cgwindow.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_gvram_display.sv

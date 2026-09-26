@@ -54,7 +54,7 @@ verilator --lint-only --timing -Wno-fatal --top-module core_top \
   -I$S/sound/jt12/hdl -I$S/sound/jt12/hdl/adpcm -I$S/sound/jt12/jt49/hdl \
   $(cat "$LIST") \
   sim/stub_altsyncram.sv sim/stub_vhdl.sv sim/stub_saa1099.sv sim/stub_pll.sv \
-  sim/stub_dcfifo.sv \
+  sim/stub_dcfifo.sv sim/stub_sld_virtual_jtag.sv \
   >"$OUT" 2>&1
 
 STATUS=0
@@ -67,7 +67,7 @@ if grep -E '%Warning-IMPLICIT:' "$OUT" | grep -v 'Exiting due to' >/dev/null; th
 fi
 
 # Unconnected input pins: Quartus ties a missing input to zero and calls it a
-# warning, which reads exactly like a real zero -- tandy_bios_flag ran the ITF
+# warning, which reads exactly like a real zero -- bios_shadow_flag ran the ITF
 # where the BIOS was expected and hung the boot at 640KB (70a8336). Outputs
 # left open are legal, so only 'input'/'inout' port declarations count; the
 # declaration text rides along inside each PINMISSING block.
