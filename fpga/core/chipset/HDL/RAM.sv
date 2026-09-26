@@ -87,7 +87,7 @@ module RAM (
      output logic           gv_rd_valid,
      output logic   [15:0]  gv_rd_data,
      output logic           gv_rd_done,
-     input  logic           tandy_bios_flag,
+     input  logic           bios_shadow_flag,
     // Wait mode
     input   logic           wait_count_clk_en,
     input   logic   [1:0]   ram_read_wait_cycle,
@@ -106,7 +106,7 @@ module RAM (
     logic           prev_no_command_state;
     logic           enable_refresh;
     logic           write_protect;
-    logic           tandy_bios_select;
+    logic           bios_shadow_select;
 
     logic   [1:0]   read_wait_count;
     logic   [1:0]   write_wait_count;
@@ -136,14 +136,13 @@ module RAM (
 
     // The ITF bank. F8000-FFFFF, 32 KB, mapped to the shadow copy at 1F8000
     // through latch_address's spare bit -- the same bit and the same mechanism
-    // the Tandy BIOS shadow uses, reused rather than duplicated because the
-    // PC/AT machine layer this file belongs to is going away anyway.
+    // the BIOS shadow uses.
     //
     // Set: the guest sees the ITF (power-on, and after port 0x043D gets 0x10).
     // Clear: it sees the system BIOS's own F8000-FFFFF (after 0x043D gets 0x12).
     // core_top owns the flag; during the ITF load it is driven by the loader so
     // the image is written into the shadow instead of over the BIOS.
-    assign tandy_bios_select    = tandy_bios_flag & (address[19:15] == 5'b11111);
+    assign bios_shadow_select    = bios_shadow_flag & (address[19:15] == 5'b11111);
 
 
     //
@@ -177,7 +176,7 @@ module RAM (
             // 0x400000 upward: past EMS, which owns bit 21.
             latch_address   = {1'b1, 2'b00, address};
         else
-            latch_address   = {2'b00, tandy_bios_select, address};
+            latch_address   = {2'b00, bios_shadow_select, address};
     end
 
     // Data
@@ -241,8 +240,8 @@ module RAM (
 
 `ifdef SDRAM_USE_MP
     // sdram_shim presents sdram_single's port list on top of sdram_mp, so the
-    // unmodified PCXT can be booted through the new controller as an A/B check
-    // before the PC-98 machine layer depends on it. See docs/P0_SDRAM_DESIGN.md.
+    // new controller drops in under the unmodified address/data plumbing.
+    // See docs/P0_SDRAM_DESIGN.md.
     sdram_shim u_sdram_single (
         .sdram_clock        (clock),
         .sdram_reset        (reset),
