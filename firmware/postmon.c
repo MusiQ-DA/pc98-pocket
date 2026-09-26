@@ -45,6 +45,8 @@
 #define POST_CUR    ((volatile uint32_t *) 0x5000012C) // {CSR count, en, bl, top, bot, cell}
 #define POST_CT     ((volatile uint32_t *) 0x50000130) // {byte count, 3 bytes after the last 4B}
 #define POST_RST    ((volatile uint32_t *) 0x50000134) // the guest-reset terms
+#define POST_FRMA   ((volatile uint32_t *) 0x5000013C) // {px dots lit, nz bytes read}
+#define POST_FRMB   ((volatile uint32_t *) 0x50000158) // {nz stores, fills, rb fsm}
 #define POST_INT    ((volatile uint32_t *) 0x500000B4) // {INTR level, INTR rising edges}
 #define POST_KBD    ((volatile uint32_t *) 0x500000B8) // {0x41 reads, IRQ1 rises}
 #define POST_IRQL   ((volatile uint32_t *) 0x500000BC) // {IF, timer ticks, IRQ levels}
@@ -863,6 +865,24 @@ void post_mon_tick(void)
                 osd_draw_string(&fb, 340, 82, "FD", OSD_LABEL);
                 hex(340 + 3 * 8, 82, fr_now - fr_prev, 8);
                 fr_prev = fr_now;
+            }
+
+            // PX/ST: the last unlit segment, counted per frame. px is the
+            // dots the renderer lit, rd the non-zero glyph bytes the row
+            // buffer served it; st is the non-zero bytes the fill committed,
+            // fl the rows it ran, then the FSM's {state,pair,bank}. A black
+            // screen with a live guest splits here: st>0 with rd=0 is the
+            // wrong bank, st=0 an empty store, rd>0 with px=0 the renderer,
+            // px>0 on a black panel the composite or beyond.
+            {
+                uint32_t fa = *POST_FRMA, fbb = *POST_FRMB;
+                osd_draw_string(&fb, 340, 112, "PX", OSD_LABEL);
+                hex(340 + 3 * 8, 112, fa >> 16, 4);
+                hex(340 + 9 * 8, 112, fa & 0xFFFFu, 4);
+                osd_draw_string(&fb, 340, 122, "ST", OSD_LABEL);
+                hex(340 + 3 * 8, 122, fbb >> 16, 4);
+                hex(340 + 9 * 8, 122, (fbb >> 8) & 0xFFu, 2);
+                hex(340 + 13 * 8, 122, fbb & 0xFFu, 2);
             }
         }
 

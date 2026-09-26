@@ -34,9 +34,6 @@ module softcpu_subsystem (
     // floppy.v request flags (CHIPSET fdd_request): {write-pending, read-pending}
     input [1:0] fdd_request,
 
-    // ide.v request (CHIPSET ide0_request): 6=reset, 4=command, 5=data, 0=idle
-    input [2:0] ide0_request,
-
     // Mounted floppy image size in sectors, per drive (from the dataslot-update event).
     input [31:0] fdd0_disk_size,
     input [31:0] fdd1_disk_size,
@@ -200,6 +197,9 @@ module softcpu_subsystem (
     input  [63:0] pc98_tvfill_view,
     input  [15:0] pc98_rowbuf_freq_count,
     input  [15:0] pc98_rowbuf_fvalid_count,
+    // The frame census, served at 0x5000013C/0158. See PERIPHERALS.
+    input  [31:0] dbg_frm_a,
+    input  [31:0] dbg_frm_b,
     input  [63:0] tvram_row0_attr,
     input  [15:0] rd_any_count,
     input  [15:0] ivt_touch_count,
@@ -279,9 +279,10 @@ module softcpu_subsystem (
         .ENABLE_IRQ(1),
         .ENABLE_MUL(1),
         // No divider. picorv32_pcpi_div was 216 ALMs and this firmware had six
-        // division instructions -- two menu wraps and the IDE's LBA-to-CHS
-        // maths -- all of which are now compares and a shift-subtract helper
-        // (ide_service.c's udiv32). The multiplier stays: seventeen uses, and
+        // division instructions -- two menu wraps and the disk services'
+        // LBA-to-CHS maths -- all of which are now compares and a
+        // shift-subtract helper (gdc_service.c's udiv32). The multiplier stays:
+        // seventeen uses, and
         // it is inside the core rather than a separate 216-ALM block. Verified
         // by objdump: the image contains no div/divu/rem/remu.
         .ENABLE_DIV(0)
@@ -355,10 +356,9 @@ module softcpu_subsystem (
     end
     assign osd_active = osd_active_r;
 
-    // OSD action trigger at 0x20000010: bit1 the credits overlay, bit2 toggles the displayed
-    // video card. core_top edge-detects both (the firmware re-arms the register with a zero
-    // write before each request). A guest reset is orchestrated through soft_guest_hold below,
-    // not here.
+    // OSD action trigger at 0x20000010: bit1 the credits overlay. core_top edge-detects it
+    // (the firmware re-arms the register with a zero write before each request). A guest
+    // reset is orchestrated through soft_guest_hold below, not here.
     reg osd_credits_req_r = 1'b0;
     always @(posedge clk_pico) begin
         if (reset) begin
@@ -484,8 +484,8 @@ module softcpu_subsystem (
     // A plain value latch: the two-cycle PicoRV32 store just writes the same value twice, so no
     // strobe or edge-detect is needed. Only the settings wired to an output leave this module.
     // The file deliberately survives machine resets (registers power up 0): reset-latched
-    // consumers like hgc_mode sample it at reset release, before the restarted firmware can
-    // re-push values.
+    // consumers sample it at reset release, before the restarted firmware can re-push
+    // values.
     // The index order is the firmware's SET_* enum (settings_ui.c), version 5:
     // the settings whose hardware left the machine (CGA/HGC, video 1st, splash,
     // OPL2, C/MS, composite, the game port pair) are gone from both sides.
@@ -1062,7 +1062,6 @@ module softcpu_subsystem (
         .cpu_rdata  (fdd_rdata),
 
         .fdd_request(fdd_request),
-        .ide0_request(ide0_request),
         .fdd0_disk_size(fdd0_disk_size),
         .fdd1_disk_size(fdd1_disk_size),
         .datatable_addr(datatable_addr),
@@ -1166,6 +1165,10 @@ module softcpu_subsystem (
             // high, 2n+1 = low), and the kanji fetch path's activity.
             32'h5000_009C: cpu_mem_rdata = pc98_tvfill_view[31:0];
             32'h5000_00A0: cpu_mem_rdata = pc98_tvfill_view[63:32];
+            // The frame census: {dots lit, glyph bytes served} and
+            // {bytes stored, fills run, row-buffer FSM}. See PERIPHERALS.
+            32'h5000_013C: cpu_mem_rdata = dbg_frm_a;
+            32'h5000_0158: cpu_mem_rdata = dbg_frm_b;
             32'h5000_00A4: cpu_mem_rdata = {pc98_rowbuf_fvalid_count,
                                             pc98_rowbuf_freq_count};
             // MSW = A3FEA as the guest read it, SZ = what the ITF recorded at

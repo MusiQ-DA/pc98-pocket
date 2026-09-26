@@ -52,9 +52,8 @@ module PERIPHERALS #(
         input   logic           interrupt_acknowledge_n,
         output  logic           dma_chip_select_n,
         output  logic           dma_page_chip_select_n,
-        // SplashScreen
-        // VGA
-        input   logic           clk_vga_cga,
+        // PC-98 video
+        input   logic           clk_pc98_dot,
         output  logic           de_o,
         // PC-98 ANK font load, straight off the loader (core_top's dl_wr).
         // Glyph reads from SDRAM, the controller's second port.
@@ -213,6 +212,16 @@ module PERIPHERALS #(
     // should be says whether the fetch ever answered.
     output  logic   [15:0]  pc98_rowbuf_freq_count,
     output  logic   [15:0]  pc98_rowbuf_fvalid_count,
+    // Per-frame census of the last unlit segment of the text path. The
+    // pipeline reads healthy all the way to the font bursts while the panel
+    // is black, so these count what nobody has seen yet: px is the dots the
+    // renderer lit, rd the non-zero glyph bytes the row buffer served it
+    // (sampled at the dot-3 latch point), st the non-zero bytes the fill
+    // wrote, fl the fills that ran, rb the row buffer's FSM position.
+    // {px,rd} snapshot on the dot clock's frame edge, {st,fl,rb} on the
+    // chipset clock's; a zero in the middle names the stage that went dark.
+    output  logic   [31:0]  dbg_frm_a,
+    output  logic   [31:0]  dbg_frm_b,
         // PC-9801-86 OPNA, stereo. Zero on a non-PC-98 build.
     output  logic signed [15:0] opna_snd_l,
     output  logic signed [15:0] opna_snd_r,
@@ -272,8 +281,8 @@ module PERIPHERALS #(
     //   0x70-0x7F  even  CRTC/GRCG    odd  8253 PIT
     //
     // Master 8259 at 0x00/0x02, slave at 0x08/0x0A. Only the master is wired
-    // for now -- chipset is an XT and carries one -- so the slave's addresses
-    // are left undecoded rather than answered wrongly.
+    // for now, so the slave's addresses are left undecoded rather than
+    // answered wrongly.
     //
     // The register selects change with the map: the 8259's A0 comes from
     // address[1], and the 8253's and 8255's two bits from address[2:1].
@@ -760,12 +769,7 @@ module PERIPHERALS #(
         .irq                        (keybord_irq),
         .keycode                    (),
         .clear_keycode              (clear_keycode),
-        .pause_core                 (pause_core),
-        // The card-swap hotkey and its Tandy variant: no second card to
-        // swap to on a PC-98, so the converter's display side is held quiet.
-        .swap_video                 (),
-        .video_output               (1'b0),
-        .tandy_video                (1'b0)
+        .pause_core                 (pause_core)
     );
 
 //
@@ -820,7 +824,7 @@ module PERIPHERALS #(
     // dot clock is up long before anything else, so there is nothing to hold
     // them for.
     pc98_video_timing u_pc98_timing (
-        .clk(clk_vga_cga), .ce(1'b1), .rst(1'b0),
+        .clk(clk_pc98_dot), .ce(1'b1), .rst(1'b0),
         .hcount(pc98_h), .vcount(pc98_v),
         .hsync(pc98_hs), .vsync(pc98_vs),
         .hblank(pc98_hb), .vblank(pc98_vb), .de(pc98_de), .frame_start(pc98_fs)
@@ -831,7 +835,7 @@ module PERIPHERALS #(
     // timing generator: it must keep running while the guest is held.
     logic [5:0] pc98_blink_cnt = 6'd0;
     logic       pc98_blink     = 1'b1;
-    always_ff @(posedge clk_vga_cga) begin
+    always_ff @(posedge clk_pc98_dot) begin
         if (pc98_fs) begin
             pc98_blink_cnt <= pc98_blink_cnt + 6'd1;
             if (pc98_blink_cnt == 6'd31) begin
@@ -852,7 +856,7 @@ module PERIPHERALS #(
     // exactly what the real GDC gives it. The flag lives here rather than in
     // core_top because everything else the BIOS polls is answered here too.
     logic vs_irq_s1 = 1'b0, vs_irq_s2 = 1'b0, vs_irq_s3 = 1'b0;
-    always_ff @(posedge clk_vga_cga) begin
+    always_ff @(posedge clk_pc98_dot) begin
         vs_irq_s1 <= pc98_vs;
         vs_irq_s2 <= vs_irq_s1;
         vs_irq_s3 <= vs_irq_s2;
@@ -1240,7 +1244,7 @@ module PERIPHERALS #(
     logic gdc_cur_en_s1, gdc_cur_en_px;
     logic gdc_cur_bl_s1, gdc_cur_bl_px;
 
-    always_ff @(posedge clk_vga_cga) begin
+    always_ff @(posedge clk_pc98_dot) begin
         gdc_on_s1  <= gdc_m_disp_on;  gdc_on_px  <= gdc_on_s1;
         gdc_s_on_s1 <= gdc_s_disp_on; gdc_s_on_px <= gdc_s_on_s1;
         pc98_vs_s1 <= pc98_vs;        pc98_vs_px <= pc98_vs_s1;
@@ -1257,7 +1261,7 @@ module PERIPHERALS #(
     end
 
     pc98_text_render u_pc98_text (
-        .clk(clk_vga_cga), .pix_ce(1'b1),
+        .clk(clk_pc98_dot), .pix_ce(1'b1),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px), .gdc_sad(gdc_sad_px),
         .cur_addr(gdc_cur_addr_px), .cur_en(gdc_cur_en_px),
         .cur_blink(gdc_cur_bl_px),
@@ -1277,7 +1281,7 @@ module PERIPHERALS #(
 
     pc98_gvram_display u_gvram_disp (
         .clk(clock), .rst(reset),
-        .rd_clk(clk_vga_cga),
+        .rd_clk(clk_pc98_dot),
         .hcount(pc98_h), .vcount(pc98_v),
         .disp_on(gdc_s_on_px),
         .disp_page(gvram_disp_page),
@@ -1308,7 +1312,7 @@ module PERIPHERALS #(
             gv_wrote <= 1'b1;
     end
     logic gv_wrote_s1, gv_wrote_px;
-    always_ff @(posedge clk_vga_cga) begin
+    always_ff @(posedge clk_pc98_dot) begin
         gv_wrote_s1 <= gv_wrote;
         gv_wrote_px <= gv_wrote_s1;
     end
@@ -1333,11 +1337,11 @@ module PERIPHERALS #(
     // double-buffered and the renderer is reading the row being displayed.
     wire pc98_row_tick = pc98_de && (pc98_h == 10'd0) && (pc98_v[3:0] == 4'd0);
     logic pc98_row_tick_q;
-    always_ff @(posedge clk_vga_cga) pc98_row_tick_q <= pc98_row_tick;
+    always_ff @(posedge clk_pc98_dot) pc98_row_tick_q <= pc98_row_tick;
     wire pc98_row_start = pc98_row_tick & ~pc98_row_tick_q;
 
     pulse_cdc u_pc98_rowsync (
-        .src_clk(clk_vga_cga), .src_rst(reset), .src_pulse(pc98_row_start),
+        .src_clk(clk_pc98_dot), .src_rst(reset), .src_pulse(pc98_row_start),
         .src_busy(),
         .dst_clk(clock), .dst_rst(reset), .dst_pulse(pc98_row_fill)
     );
@@ -1493,7 +1497,7 @@ module PERIPHERALS #(
     // a palette rewritten mid-frame lands whole next frame, which also keeps
     // the dot-clock read free of torn nibbles.
     logic [11:0] apal_px [0:15];
-    always_ff @(posedge clk_vga_cga) begin
+    always_ff @(posedge clk_pc98_dot) begin
         if (pc98_vs_px & ~pc98_vs_px_d)
             for (int i = 0; i < 16; i++) apal_px[i] <= apal[i];
     end
@@ -1550,6 +1554,8 @@ module PERIPHERALS #(
         .bitac(pc98_bitac)
     );
 
+    wire       pc98_st_nz;
+    wire [7:0] pc98_rb_dbg;
     pc98_glyph_rowbuf u_pc98_rowbuf (
         .clk(clock), .rst(reset),
         .fill_start(pc98_row_fill), .row_base(pc98_row_base),
@@ -1566,9 +1572,52 @@ module PERIPHERALS #(
         // Indexed by the cell the renderer is FETCHING, not the one it is
         // drawing: it runs one cell ahead, and using the current column here
         // would shift every line by one.
-        .rd_clk(clk_vga_cga), .rd_cell(pc98_font_cell), .rd_line(pc98_font_line),
-        .rd_byte(pc98_font_row), .kanji_seen(pc98_kanji_seen)
+        .rd_clk(clk_pc98_dot), .rd_cell(pc98_font_cell), .rd_line(pc98_font_line),
+        .rd_byte(pc98_font_row), .kanji_seen(pc98_kanji_seen),
+        .st_nz(pc98_st_nz), .dbg(pc98_rb_dbg)
     );
+
+    // ---- the frame census the panel prints ---------------------------------
+    //
+    // px counts the dots the renderer lit this frame, rd the non-zero glyph
+    // bytes it fetched from the row buffer (sampled where nxt_row latches
+    // them, dot 3). Both snapshot at frame start; the held word reads on the
+    // chipset clock, a frame being far longer than any synchroniser's skew.
+    logic [15:0] px_run = 16'd0, px_frm = 16'd0;
+    logic [15:0] rd_run = 16'd0, rd_frm = 16'd0;
+    always_ff @(posedge clk_pc98_dot) begin
+        if (pc98_fs) begin
+            px_frm <= px_run;  px_run <= 16'd0;
+            rd_frm <= rd_run;  rd_run <= 16'd0;
+        end else begin
+            if (pc98_pixel)                                 px_run <= px_run + 16'd1;
+            if (pc98_font_row != 8'd0 && pc98_h[2:0] == 3'd3) rd_run <= rd_run + 16'd1;
+        end
+    end
+
+    // st counts the non-zero bytes the fill committed, fl the rows it ran --
+    // twenty-five per frame when the raster is fed. The chipset clock has no
+    // frame_start, so gdc_vs_q's edge stands in; it is the same raster.
+    logic [15:0] st_run = 16'd0, st_frm = 16'd0;
+    logic  [7:0] fl_run = 8'd0,  fl_frm = 8'd0;
+    logic        frm_vs_q = 1'b0;
+    always_ff @(posedge clock) begin
+        frm_vs_q <= gdc_vs_q;
+        if (gdc_vs_q & ~frm_vs_q) begin
+            st_frm <= st_run;  st_run <= 16'd0;
+            fl_frm <= fl_run;  fl_run <= 8'd0;
+        end else begin
+            if (pc98_st_nz)    st_run <= st_run + 16'd1;
+            if (pc98_row_fill) fl_run <= fl_run + 8'd1;
+        end
+    end
+
+    logic [31:0] frm_a_s1, frm_b_s1;
+    always_ff @(posedge clock) begin
+        frm_a_s1 <= {px_frm, rd_frm};
+        dbg_frm_a <= frm_a_s1;
+        dbg_frm_b <= {st_frm, fl_frm, pc98_rb_dbg};
+    end
 
     // The fill's view, latched per cell: tvram_fil_cell/lo/hi are stable for
     // several clocks per cell, so a straight register catches the settled
@@ -1684,7 +1733,7 @@ module PERIPHERALS #(
     // the graphics dot's colour anywhere else, which is the machine's overlay.
     logic       t_pix_q;
     logic [2:0] t_grb_q;
-    always_ff @(posedge clk_vga_cga) begin
+    always_ff @(posedge clk_pc98_dot) begin
         t_pix_q <= pc98_pixel;
         t_grb_q <= pc98_grb;
     end
@@ -1737,7 +1786,7 @@ module PERIPHERALS #(
         .fil_char_lo (tvram_vid_char_lo),
         .fil_char_hi (tvram_vid_char_hi),
         // The attribute to the renderer, on the dot clock.
-        .vid_clk     (clk_vga_cga),
+        .vid_clk     (clk_pc98_dot),
         .vid_cell    (tvram_vid_cell),
         .vid_attr    (tvram_vid_attr)
     );
@@ -1758,21 +1807,21 @@ module PERIPHERALS #(
     // PC-9821 definitions only, while the V30/286 common build gets
     // SUPPORT_SCSI. SCSI at 0xCC0 is what replaces this.
     // (Nothing is left to read out of that block: the request output it used
-    // to drive went with it, and core_top holds the softcore's ide0_request at
-    // 3'b000 directly.)
+    // to drive went with it, and the softcore's side of that wire is gone
+    // too.)
 
 
     //
     // SCSI -- the PC-9801-55 board at 0x0CC0-0x0CC7
     //
     // The window itself is pc98_scsi.sv; this is the decode and the softcore's
-    // way in. mgmt chip-select 0xF4, next to ide.v's 0xF0 and floppy.v's 0xF2.
+    // way in. mgmt chip-select 0xF4, next to floppy.v's 0xF2.
     //
     // The management side is eight registers, because mgmt_address carries
     // only four bits of register within a chip-select and the data buffer is
     // 8 KB. An index-plus-autoincrementing-data-port pair reaches both the
-    // control file and the buffer, which is the same shape ide.v uses for
-    // sector data (its mgmt register 0xF).
+    // control file and the buffer -- the same shape the floppy bridge uses for
+    // its own buffer window.
     //
     //   0  R: {cmd_byte, 7'd0, cmd_req}   W: bit0 acknowledges the request
     //   1  W: control-register index
@@ -2370,38 +2419,6 @@ module PERIPHERALS #(
 `else
     assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata : mgmt_fdd_readdata;
 `endif
-
-
-    //
-    // KFTVGA
-    //
-    
-    // logic   [7:0]   tvga_data_bus_out;
-
-    // KFTVGA u_KFTVGA (
-    //     // Bus
-    //     .clock                      (clock),
-    //     .reset                      (reset),
-    //     .chip_select_n              (tvga_chip_select_n),
-    //     .read_enable_n              (memory_read_n),
-    //     .write_enable_n             (memory_write_n),
-    //     .address                    (address[13:0]),
-    //     .data_bus_in                (internal_data_bus),
-    //     .data_bus_out               (tvga_data_bus_out),
-
-    //     // I/O
-    //     .video_clock                (video_clock),
-    //     .video_reset                (video_reset),
-    //     .video_h_sync               (video_h_sync),
-    //     .video_v_sync               (video_v_sync),
-    //     .video_r                    (video_r),
-    //     .video_g                    (video_g),
-    //     .video_b                    (video_b)
-    // );
-
-	 
-    
-
 
 
     //

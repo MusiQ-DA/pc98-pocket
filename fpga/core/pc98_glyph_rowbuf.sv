@@ -89,7 +89,14 @@ module pc98_glyph_rowbuf #(
 
     // Sticky: a kanji cell has been seen. The renderer cannot tell -- it is
     // handed bytes -- and this is where the pairing is decided, so it is here.
-    output logic        kanji_seen
+    output logic        kanji_seen,
+
+    // Debug taps, level outputs on the fill clock: st_nz marks each non-zero
+    // byte landing in the bank, dbg carries the FSM's position. The panel's
+    // per-frame census of these is what separates "the fill stored zeros"
+    // from "the renderer reads the wrong bank" on a black screen.
+    output logic        st_nz,
+    output logic [7:0]  dbg
 );
 
     (* ramstyle = "M10K" *) logic [7:0] store [0:4095];
@@ -125,6 +132,10 @@ module pc98_glyph_rowbuf #(
     // boundary, so this is the row on screen for the whole of that row.
     always_ff @(posedge rd_clk)
         rd_byte <= store[{~bank, rd_cell, rd_line}];
+
+    assign st_nz = (state == S_STREAM && f_valid && f_data != 8'd0)
+                || (state == S_ANK_W && ank_row != 8'd0);
+    assign dbg   = {state, pair_second, bank};
 
     always_ff @(posedge clk) begin
         if (rst) begin

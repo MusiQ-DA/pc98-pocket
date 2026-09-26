@@ -32,9 +32,8 @@ module CHIPSET #(
         output  logic           processor_transmit_or_receive_n,
         output  logic           processor_ready,
         output  logic           interrupt_to_cpu,
-        // SplashScreen
-        // VGA
-        input   logic           clk_vga_cga,
+        // PC-98 video
+        input   logic           clk_pc98_dot,
         // The PC-98 row buffer's own view of text row 0 and its fill counters.
         // PERIPHERALS produces them and softcpu_subsystem serves them to the
         // firmware (0x5000009C/A0/A4); CHIPSET sits between the two and has to
@@ -96,6 +95,9 @@ module CHIPSET #(
         output  logic   [63:0]  pc98_tvfill_view,
         output  logic   [15:0]  pc98_rowbuf_freq_count,
         output  logic   [15:0]  pc98_rowbuf_fvalid_count,
+        // The text path's per-frame census -- see PERIPHERALS.
+        output  logic   [31:0]  dbg_frm_a,
+        output  logic   [31:0]  dbg_frm_b,
         output  logic           de_o,
         output  logic   [5:0]   VID_R,
         output  logic   [5:0]   VID_G,
@@ -142,12 +144,9 @@ module CHIPSET #(
         input   logic   [7:0]   kb_byte,
         input   logic           kb_valid,
         output  logic           kb_ready,
-        // JTOPL
         // PC-9801-86 OPNA, stereo, straight from Peripherals to the mixer.
         output  logic signed [15:0] opna_snd_l,
         output  logic signed [15:0] opna_snd_r,
-        // C/MS Audio
-        // TANDY
         // FONT.ROM load: while font_bank_flag is set, RAM.sv redirects guest
         // addresses above the machine's megabyte, so the loader can write the
         // font where the guest cannot reach it.
@@ -155,12 +154,11 @@ module CHIPSET #(
         // ITF shadow: while set, RAM.sv banks F8000-FFFFF to the copy at
         // 1F8000. core_top drives it -- the loader for the ITF write, the
         // guest's port 0x043D afterwards.
-        input   logic           tandy_bios_flag,
+        input   logic           bios_shadow_flag,
         input   logic           font_wr_clk,
         input   logic           font_wr_en,
         input   logic   [10:0]  font_wr_addr,
         input   logic   [15:0]  font_wr_data,
-        // UART
         // SDRAM
         input   logic           enable_sdram,
         output  logic           initilized_sdram,
@@ -192,7 +190,6 @@ module CHIPSET #(
         input   logic   [47:0]  rtc_time,
         output  logic   [1:0]   fdd_present,
         output  logic   [1:0]   fdd_request,
-        // XTCTL DATA
         // RAM wait mode
         input   logic           wait_count_clk_en,
         input   logic   [1:0]   ram_read_wait_cycle,
@@ -405,7 +402,7 @@ module CHIPSET #(
         .interrupt_acknowledge_n            (interrupt_acknowledge_n),
         .dma_chip_select_n                  (dma_chip_select_n),
         .dma_page_chip_select_n             (dma_page_chip_select_n),
-        .clk_vga_cga                        (clk_vga_cga),
+        .clk_pc98_dot                       (clk_pc98_dot),
         .de_o                               (de_o),
         .dbg_pic_irr                        (dbg_pic_irr),
         .dbg_pic_imr                        (dbg_pic_imr),
@@ -452,6 +449,8 @@ module CHIPSET #(
         .pc98_tvfill_view                   (pc98_tvfill_view),
         .pc98_rowbuf_freq_count             (pc98_rowbuf_freq_count),
         .pc98_rowbuf_fvalid_count           (pc98_rowbuf_fvalid_count),
+        .dbg_frm_a                          (dbg_frm_a),
+        .dbg_frm_b                          (dbg_frm_b),
         .VID_R                              (VID_R),
         .VID_G                              (VID_G),
         .VID_B                              (VID_B),
@@ -561,7 +560,7 @@ module CHIPSET #(
     RAM u_RAM 
     (
         .gvram_page1_flag                   (gvram_mem_page1),
-        .tandy_bios_flag                    (tandy_bios_flag),
+        .bios_shadow_flag                   (bios_shadow_flag),
         .font_bank_flag                     (font_bank_flag),
         .font_rd_req                        (font_rd_req),
         .font_rd_addr                       (font_rd_addr),

@@ -324,45 +324,6 @@ module core_top (
         .ram_write_wait_cycle               (ram_write_wait_cycle)
     );
 
-    // COM baud clock-enables: a ce_14_318 edge sampled onto clk_chipset (COM1),
-    // divided by 8 for COM2.
-    logic clk_uart_ff_1;
-    logic clk_uart_ff_2;
-    logic clk_uart_ff_3;
-    logic clk_uart_en;
-    logic clk_uart2_en;
-    logic [2:0] clk_uart2_counter;
-
-    always @(posedge clk_chipset)
-    begin
-        clk_uart_ff_1 <= ce_14_318;
-        clk_uart_ff_2 <= clk_uart_ff_1;
-        clk_uart_ff_3 <= clk_uart_ff_2;
-        clk_uart_en   <= ~clk_uart_ff_3 & clk_uart_ff_2;
-    end
-
-    always @(posedge clk_chipset)
-    begin
-        if (clk_uart_en)
-        begin
-            if (3'd7 != clk_uart2_counter)
-            begin
-                clk_uart2_counter <= clk_uart2_counter +3'd1;
-                clk_uart2_en <= 1'b0;
-            end
-            else
-            begin
-                clk_uart2_counter <= 3'd0;
-                clk_uart2_en <= 1'b1;
-            end
-        end
-        else
-        begin
-            clk_uart2_counter <= clk_uart2_counter;
-            clk_uart2_en <= 1'b0;
-        end
-    end
-
     // One video mode: no card swap, no pixel-pair select. swap_video and
     // pix_sel were the PC/AT pair's, and the register that raised them went
     // with the CGA. vid_blank is the softcore's (SOFT_GUEST_HOLD bit1): it
@@ -988,9 +949,6 @@ module core_top (
         .clk_pico                   (clk_pico),
 
         .fdd_request                (mgmt_req[7:6]),
-        // PC-98 has no IDE: the XT2IDE block left with the XT hardware and
-        // its request lines are idle by construction.
-        .ide0_request               (3'b000),
         .fdd0_disk_size             (fdd0_disk_sectors),
         .fdd1_disk_size             (fdd1_disk_sectors),
         .datatable_addr             (datatable_addr),
@@ -1152,6 +1110,8 @@ module core_top (
         .pc98_tvfill_view           (pc98_tvfill_view),
         .pc98_rowbuf_freq_count     (pc98_rowbuf_freq_count),
         .pc98_rowbuf_fvalid_count   (pc98_rowbuf_fvalid_count),
+        .dbg_frm_a                  (dbg_frm_a),
+        .dbg_frm_b                  (dbg_frm_b),
         .key_count                  (key_count),
         .key_last                   (key_last),
         .memsw_seen                 (memsw_seen),
@@ -1268,9 +1228,8 @@ module core_top (
 
     // Game-port options from the settings OSD: [4]=Sync-to-CPU turbo timing, [3:2]=Joystick 2,
     // [1:0]=Joystick 1; each 2-bit field is 0=Analog, 1=Digital, 2=Disabled.
-    // (The composite/CGA/HGC settings rows are gone -- their hardware left
-    // with the PC/AT layer -- but the firmware still pushes the values, so
-    // the softcore's osd_composite/osd_cga_gfx/osd_hgc_gfx outputs stay.)
+    // (The composite/CGA/HGC settings rows went with their hardware; the
+    // softcore's matching outputs are gone too.)
 
 
     // MiSTer front-panel buttons; the Pocket has none.
@@ -1394,7 +1353,6 @@ module core_top (
     //
 
     wire        ioctl_download;
-    wire  [7:0] ioctl_index;
     wire        ioctl_wr;
     wire [24:0] ioctl_addr;
     wire [15:0] ioctl_data;
@@ -1460,7 +1418,7 @@ module core_top (
         .write_data          (dl_data)
     );
 
-    // Decoupling FIFO, entry = {xtide, addr[24:0], data[15:0]}: the slot tag rides each
+    // Decoupling FIFO, entry = {slot_tag, addr[24:0], data[15:0]}: the slot tag rides each
     // entry so a later stream can't retag a draining tail. 256 deep; the handshake loader
     // keeps it shallow and load_active holds reset until it drains, so it never overflows.
     // The firmware slot's whole window, not just the part copied into the ROM:
@@ -1476,9 +1434,8 @@ module core_top (
     // any future one with its own consumer, would deadlock the same way the
     // firmware slot did.
     //
-    // PC-98's slots are decided purely by address, so the predicate is exact.
-    // The PC/AT build also selects by index (XT-IDE), which is not available
-    // here, so it keeps its old behaviour minus the firmware window.
+    // PC-98's slots are decided purely by address, so the predicate is exact:
+    // every image slot is a fixed address window with no index discriminator.
     wire rom_dl_wanted = (dl_addr[24:17] == 8'h00)      // bios.rom
                        | (dl_addr[24:15] == 10'h004)    // itf.rom
                        | (dl_addr[24:20] == 5'h01);     // font.rom
@@ -1552,7 +1509,6 @@ module core_top (
 
     // Copier: present the FIFO head to the BIOS FSM as ioctl, honoring ioctl_wait.
     assign ioctl_download = load_active;
-    assign ioctl_index    = rlf_head[41] ? 8'd2 : 8'd0;  // EC00 (XT-IDE)->2, BIOS->0
     assign ioctl_addr     = rlf_head[40:16];
     assign ioctl_data     = rlf_head[15:0];
     reg ioctl_wr_r = 1'b0;
@@ -1627,7 +1583,7 @@ module core_top (
     reg        bios_write_n;
     reg [7:0]  bios_write_wait_cnt;
     reg        bios_write_byte_cnt;
-    reg        tandy_bios_write;
+    reg        bios_shadow_write;
     reg        font_bank_write;
     // PC-98: BIOS.ROM is 0x18000 bytes at physical 0x0E8000, which is where np2
     // reads it to and what the file size says (docs/PC98_MACHINE_SPEC.md F1).
@@ -1647,21 +1603,18 @@ module core_top (
     //
     // The ITF occupies the SAME guest addresses as the top of the system BIOS,
     // which is why it goes to the shadow: the loader asserts select_itf while
-    // writing and RAM.sv routes it there, the mechanism the Tandy BIOS shadow
-    // already uses.
-    wire select_pcxt  = (ioctl_addr[24:17] == 8'h00);
+    // writing and RAM.sv routes it to the shadow bank.
+    wire select_bios  = (ioctl_addr[24:17] == 8'h00);
     wire select_itf   = (ioctl_addr[24:15] == 10'h004);
     // font.rom, 0x46800 bytes at bridge 0x10100000. The slot's address is
     // chosen so the low twenty bits ARE the file offset: the font bank
     // redirects those to 0x400000 upward inside RAM.sv, so the loader needs no
     // arithmetic and the ext port's twenty bits are enough for a 282 KB image.
     wire select_font  = (ioctl_addr[24:20] == 5'h01);
-    wire select_tandy = 1'b0;
-    wire select_xtide = 1'b0;
     wire select_shadow = select_itf;
 
     wire [19:0] bios_access_address_wire =
-         select_pcxt ? (PC98_BIOS_BASE + {3'b000, ioctl_addr[16:0]}) :
+         select_bios ? (PC98_BIOS_BASE + {3'b000, ioctl_addr[16:0]}) :
          select_itf  ? (PC98_ITF_BASE  + {5'b00000, ioctl_addr[14:0]}) :
          select_font ? ioctl_addr[19:0] : 20'hFFFFF;
 
@@ -1688,11 +1641,11 @@ module core_top (
     // 0xea, then 0xfd800000) -- it restores the vector too.
     //
     // Only the word at FFFF0 differs, so one address needs intercepting.
-    wire        rom_patch_reset = select_pcxt
+    wire        rom_patch_reset = select_bios
                                 & (bios_access_address_wire == 20'hFFFF0);
     wire [15:0] rom_data_in     = rom_patch_reset ? 16'h00EA : ioctl_data;
 
-    wire bios_load_n = ~(ioctl_download & (select_pcxt | select_itf | select_font));
+    wire bios_load_n = ~(ioctl_download & (select_bios | select_itf | select_font));
 
     always @(posedge clk_chipset, posedge reset_sdram)
     begin
@@ -1705,7 +1658,7 @@ module core_top (
             bios_write_n        <= 1'b1;
             bios_write_wait_cnt <= 'h0;
             bios_write_byte_cnt <= 1'h0;
-            tandy_bios_write    <= 1'b0;
+            bios_shadow_write    <= 1'b0;
             font_bank_write     <= 1'b0;
             ioctl_wait          <= 1'b1;
             bios_load_state     <= 4'h00;
@@ -1733,7 +1686,7 @@ module core_top (
                     bios_write_n        <= 1'b1;
                     bios_write_wait_cnt <= 'h0;
                     bios_write_byte_cnt <= 1'h0;
-                    tandy_bios_write    <= 1'b0;
+                    bios_shadow_write    <= 1'b0;
                     if (~ioctl_download)
                     begin
                         bios_access_request <= 1'b0;
@@ -1755,7 +1708,7 @@ module core_top (
                     bios_protect_flag   <= 2'b00;
                     bios_access_request <= 1'b1;
                     bios_write_byte_cnt <= 1'h0;
-                    tandy_bios_write    <= select_shadow;
+                    bios_shadow_write    <= select_shadow;
                     // ...and the font's bank, which nothing ever set.
                     //
                     // font_bank_write was declared, reset to zero, and held --
@@ -1821,7 +1774,7 @@ module core_top (
                     // word of a slot gets judged by the next slot's address and
                     // lands in the wrong bank. The shadow decision belongs with
                     // the address, and the address is latched in state 01.
-                    tandy_bios_write    <= tandy_bios_write;
+                    bios_shadow_write    <= bios_shadow_write;
                     font_bank_write     <= font_bank_write;
                     ioctl_wait          <= 1'b1;
 
@@ -1856,7 +1809,7 @@ module core_top (
                     // even-offset bytes and the guest read its own reset vector
                     // back as EA A8 00 A8 F8 -- correct on the even offsets,
                     // untouched SDRAM on the odd ones.
-                    tandy_bios_write    <= tandy_bios_write;
+                    bios_shadow_write    <= bios_shadow_write;
                     font_bank_write     <= font_bank_write;
                     ioctl_wait          <= 1'b1;
                     bios_write_wait_cnt <= bios_write_wait_cnt + 8'h1;
@@ -1887,7 +1840,7 @@ module core_top (
                     bios_write_byte_cnt <= ~bios_write_byte_cnt;
                     // Held here too: this state advances to the word's second
                     // byte and hands back to state 02 to write it.
-                    tandy_bios_write    <= tandy_bios_write;
+                    bios_shadow_write    <= bios_shadow_write;
                     font_bank_write     <= font_bank_write;
                     ioctl_wait          <= 1'b1;
                     if (bios_write_byte_cnt == 1'b0)
@@ -1904,7 +1857,7 @@ module core_top (
                     bios_write_n        <= 1'b1;
                     bios_write_wait_cnt <= 'h0;
                     bios_write_byte_cnt <= 1'h0;
-                    tandy_bios_write    <= 1'b0;
+                    bios_shadow_write    <= 1'b0;
                     ioctl_wait          <= 1'b0;
                     bios_load_state     <= 4'h00;
                 end
@@ -1989,6 +1942,7 @@ module core_top (
     wire [63:0] tvram_row0_code, tvram_row0_attr, tvram_row0_hi;
     wire [63:0] pc98_tvfill_view;
     wire [15:0] pc98_rowbuf_freq_count, pc98_rowbuf_fvalid_count;
+    wire [31:0] dbg_frm_a, dbg_frm_b;
     wire  [3:0] raw_strobes;
     wire [15:0] wr_low_cycles, rd_low_cycles;
     wire [127:0] rom_read_data;
@@ -2299,9 +2253,9 @@ module core_top (
         end
     end
 
-    // One flag drives both directions of the shadow, as the Tandy path does:
-    // while the loader writes it routes the ITF image in, and at all other
-    // times it decides which of the two ROMs the guest sees at F8000.
+    // One flag drives both directions of the shadow: while the loader writes
+    // it routes the ITF image in, and at all other times it decides which of
+    // the two ROMs the guest sees at F8000.
     //
     // The self-test master is the one reader that must NOT see the shadow. It
     // is a diagnostic window onto the image the loader wrote at a guest
@@ -2314,8 +2268,8 @@ module core_top (
     // ext port the CPU is parked on hold acknowledge and the DMA controller's
     // acknowledge is masked, so steering the shadow out from under the peek
     // disturbs no fetch.
-    wire tandy_bios_flag = st_run      ? 1'b0 :
-                           bios_write_n ? itf_bank : tandy_bios_write;
+    wire bios_shadow_flag = st_run      ? 1'b0 :
+                           bios_write_n ? itf_bank : bios_shadow_write;
     // Only ever set during a loader write: the guest has no font bank to see.
     wire font_bank_load  = ~bios_write_n & font_bank_write;
 
@@ -2350,7 +2304,7 @@ module core_top (
     //  .processor_transmit_or_receive_n    (processor_transmit_or_receive_n),
         .processor_ready                    (processor_ready),
         .interrupt_to_cpu                   (interrupt_to_cpu),
-        .clk_vga_cga                        (clk_pc98_dot),
+        .clk_pc98_dot                       (clk_pc98_dot),
         .dbg_pic_irr                        (dbg_pic_irr),
         .dbg_pic_imr                        (dbg_pic_imr),
         .dbg_pic_isr                        (dbg_pic_isr),
@@ -2398,6 +2352,8 @@ module core_top (
         .pc98_tvfill_view                   (pc98_tvfill_view),
         .pc98_rowbuf_freq_count             (pc98_rowbuf_freq_count),
         .pc98_rowbuf_fvalid_count           (pc98_rowbuf_fvalid_count),
+        .dbg_frm_a                          (dbg_frm_a),
+        .dbg_frm_b                          (dbg_frm_b),
         .VID_R                              (r),
         .VID_G                              (g),
         .VID_B                              (b),
@@ -2439,7 +2395,7 @@ module core_top (
         .opna_snd_l                         (opna_snd_l),
         .opna_snd_r                         (opna_snd_r),
         .font_bank_flag                     (font_bank_load),
-        .tandy_bios_flag                    (tandy_bios_flag),
+        .bios_shadow_flag                    (bios_shadow_flag),
         .font_wr_clk                        (clk_chipset),
         .font_wr_en                         (font_dl_hit),
         .font_wr_addr                       (font_dl_addr),
@@ -2595,37 +2551,16 @@ module core_top (
     );
 
     //
-    // MACHINE PORT STUBS
-    //
-
-    wire uart_tx, uart_rts, uart_dtr;   // CHIPSET COM2 outputs, no external pins
-    wire uart_rx  = 1'b1;
-    wire uart_cts = 1'b1;
-    wire uart_dsr = 1'b1;
-    wire uart_dcd = 1'b1;
-
-
-
-    //
     // AUDIO
     //
 
-    wire [15:0] cms_l_snd_e;
-    wire [16:0] cms_l_snd = {cms_l_snd_e[15],cms_l_snd_e};
-    wire [15:0] cms_r_snd_e;
-    wire [16:0] cms_r_snd = {cms_r_snd_e[15],cms_r_snd_e};
-     
-    wire [15:0] jtopl2_snd_e;
-    wire [16:0] jtopl2_snd = {jtopl2_snd_e[15], jtopl2_snd_e};
-
     // PC-9801-86. jt12_top's snd_left/snd_right are FM+SSG already summed
-    // (jt12_top.v:484-485) and signed 16-bit, so they join the mix the same
-    // way jtopl2's mono output does -- sign-extended by one and clamped below.
+    // (jt12_top.v:484-485) and signed 16-bit, so they join the mix
+    // sign-extended by one and clamped below.
     wire signed [15:0] opna_snd_l;
     wire signed [15:0] opna_snd_r;
     wire        [16:0] opna_l = {opna_snd_l[15], opna_snd_l};
     wire        [16:0] opna_r = {opna_snd_r[15], opna_snd_r};
-    wire [16:0] tandy_snd = 17'd0;
     wire [16:0] spk_vol =  {2'b00, {3'b000,~speaker_out} << spk_vol_cfg, 11'd0};
     wire        speaker_out;
 
@@ -2657,7 +2592,7 @@ module core_top (
     begin
         reg [16:0] tmp_l;
 
-        tmp_l <= jtopl2_snd + cms_l_snd + tandy_snd + spk_vol + opna_l;
+        tmp_l <= spk_vol + opna_l;
 
         // clamp the output
         out_l <= (^tmp_l[16:15]) ? {tmp_l[16], {15{tmp_l[15]}}} : tmp_l[15:0];
@@ -2671,7 +2606,7 @@ module core_top (
     begin
         reg [16:0] tmp_r;
 
-        tmp_r <= jtopl2_snd + cms_r_snd + tandy_snd + spk_vol + opna_r;
+        tmp_r <= spk_vol + opna_r;
 
         // clamp the output
         out_r <= (^tmp_r[16:15]) ? {tmp_r[16], {15{tmp_r[15]}}} : tmp_r[15:0];
