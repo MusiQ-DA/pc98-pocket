@@ -82,6 +82,14 @@ module pc98_font_fetch #(
     logic  [4:0] rd_idx;
     logic        draining;
 
+    // A burst is tens of clocks; if p_done has not landed inside ~4k the
+    // completion was lost on the wire, and neither consumer has a timeout of
+    // its own -- the row buffer would sit in S_STREAM and the CG window in
+    // S_STREAM forever, which on hardware is a frozen screen / a KANJI CG
+    // test failure. Draining whatever bytes_q holds is a stale glyph, not a
+    // wedge: the FSM keeps walking and the next request is a clean one.
+    logic [12:0] stall;
+
     always_ff @(posedge clk) begin
         if (rst) begin
             p_req    <= 1'b0;
@@ -90,6 +98,7 @@ module pc98_font_fetch #(
             draining <= 1'b0;
             wr_idx   <= 4'd0;
             rd_idx   <= 5'd0;
+            stall    <= '0;
             p_len    <= LEN_BITS'(WORDS - 1);
         end else begin
             f_valid <= 1'b0;
@@ -111,13 +120,18 @@ module pc98_font_fetch #(
                 wr_idx          <= wr_idx + 4'd1;
             end
 
+            // Count the request-to-done wait; once it runs far past any
+            // possible burst length the done is gone and waiting is a wedge.
+            if (f_busy && !draining) stall <= stall + 13'd1;
+            else                     stall <= '0;
+
             // p_done is one cycle and can share it with the last p_rvalid, so
             // start draining from the flag rather than from the pulse.
             // Guarded on f_busy: a done that arrives with no transaction in
             // flight would otherwise drain stale bytes_q -- sixteen f_valid
             // beats nobody requested, which the post-monitor's beat counter
             // would count against bursts it never issued.
-            if (p_done && f_busy) draining <= 1'b1;
+            if ((p_done && f_busy) || &stall) draining <= 1'b1;
 
             if (draining) begin
                 f_valid <= 1'b1;
