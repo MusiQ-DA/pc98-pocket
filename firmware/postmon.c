@@ -365,24 +365,6 @@ void postmon_isr_hb(void)
     osd_fill_rect(&fb, 348, 102, 96, 10, OSD_KEYFACE);
     osd_draw_string(&fb, 352, 102, "DC", OSD_LABEL);
     hex(376, 102, *POST_DMAC, 8);
-    // Row 92's FDC fields freeze with the rest of the panel once the guest
-    // parks: the repaint gate needs a slow field to move and nothing moves on
-    // a stuck machine, so the main-painted SN/RQ can be first-paint history
-    // while the poll underneath is actually working. Re-draw the same strip
-    // here -- identical layout, fresh values -- unless the ROM watcher owns
-    // it (R! overwrites this area and outranks the poll fields).
-    if (romw_bad_at == 0xFFFFFFFFu) {
-        extern uint32_t fdd_dbg_seen, fdd_dbg_lba, fdd_dbg_gap;
-        osd_fill_rect(&fb, 4, 92, 172, 10, OSD_KEYFACE);
-        osd_draw_string(&fb, 4, 92, "SN", OSD_LABEL);
-        hex(28, 92, fdd_dbg_seen & 0xFFu, 2);
-        osd_draw_string(&fb, 44, 92, "LA", OSD_LABEL);
-        hex(68, 92, fdd_dbg_lba & 0xFFFFu, 4);
-        osd_draw_string(&fb, 100, 92, "GP", OSD_LABEL);
-        hex(124, 92, fdd_dbg_gap & 0xFFu, 2);
-        osd_draw_string(&fb, 140, 92, "RQ", OSD_LABEL);
-        hex(164, 92, *FDD_REQUEST & 0xFu, 1);
-    }
 }
 
 void post_mon_tick(void)
@@ -948,37 +930,10 @@ void post_mon_tick(void)
     {
         uint32_t m = *POST_MEMSZ;
         (void)m;
-        // STK: the snoop window's first eight bytes, low address left, on
-        // the whole row -- the window parks on 0x500, the flags the boot
-        // polls while everything else is frozen, and SZ/F0/KEY stand down
-        // for the one build it takes to read them.
-        // The firmware side of a sector read, watched from the service loop:
-        // SN polls that found a read request up, PS sectors pushed into the
-        // controller fifo, ER dataslot transfers that failed or timed out,
-        // AF request bits still raised right after a push. SN 00 while the
-        // guest waits in MS 90 convicts the request link (or the mount);
-        // PS with AF 00 and no irq convicts the DMA drain. Row 92 is empty
-        // unless a ROM fault fires, in which case R! overdraws it.
-        {
-            extern uint32_t fdd_dbg_seen, fdd_dbg_pushed, fdd_dbg_err,
-                            fdd_dbg_lba, fdd_dbg_aft, fdd_dbg_gap;
-            osd_draw_string(&fb, 4, 92, "SN", OSD_LABEL);
-            hex(4 + 3 * 8, 92, fdd_dbg_seen & 0xFFu, 2);
-            // PS, HB and RP are retired -- the ISR heartbeat now proves the
-            // loop -- for LA and GP, the pair that separates a retry storm
-            // from progress. LA is the last sector the chip asked for
-            // (drive bit + lba): a BIOS re-reading the same sector keeps it
-            // constant, a boot that is advancing moves it. GP counts the
-            // req==0 polls before the latest service: a drained sector
-            // re-asks within a few loops, a drain the DMAC never ran only
-            // after the guest's timeout -- orders of magnitude apart.
-            osd_draw_string(&fb, 4 + 5 * 8, 92, "LA", OSD_LABEL);
-            hex(4 + 8 * 8, 92, fdd_dbg_lba & 0xFFFFu, 4);
-            osd_draw_string(&fb, 4 + 12 * 8, 92, "GP", OSD_LABEL);
-            hex(4 + 15 * 8, 92, fdd_dbg_gap & 0xFFu, 2);
-            osd_draw_string(&fb, 4 + 17 * 8, 92, "RQ", OSD_LABEL);
-            hex(4 + 20 * 8, 92, *FDD_REQUEST & 0xFu, 1);
-        }
+        // Row 92 is empty unless a ROM fault fires, in which case R!
+        // overdraws it. The FDC service fields (SN/LA/GP/RQ) are retired:
+        // the sector read path is proven -- the IPL lands and the boot
+        // runs to its halt -- and the ROM is spent on fields still hunting.
 
         // R!: the ROM watcher's catch, on the row the dead STK display
         // vacated -- file offset of the first rot, the byte the file has,
