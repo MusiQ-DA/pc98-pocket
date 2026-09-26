@@ -131,6 +131,18 @@ jobs:
           ./obj_fstress/s | tee fstress.log
           grep -q "RESULT: PASS" fstress.log
 
+      - name: guest bus writes reach the screen as pixels, whole path real
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_pipeline \
+            -Isim -I$S sim/tb_pc98_pipeline.sv sim/sdram_model.sv \
+            $S/pc98_tvram.sv $S/pc98_glyph_rowbuf.sv $S/pc98_glyph_addr.sv \
+            $S/pc98_font_ank.sv $S/pc98_font_fetch.sv $S/sdram_mp.sv \
+            $S/pc98_text_render.sv $S/pc98_video_timing.sv $S/pulse_cdc.sv \
+            -o p --Mdir obj_pipe
+          ./obj_pipe/p | tee pipe.log
+          grep -q "RESULT: PASS" pipe.log
+
       - name: a text row's glyphs land in the buffer, kanji paired
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_rowbuf \
