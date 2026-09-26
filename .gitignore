@@ -23,3 +23,6 @@ __pycache__/
 firmware/obj_dir/
 build/
 *.pdf
+# drawing-test floppy build artifacts (source draw_test.asm + build.sh committed)
+testdisk/*.bin
+testdisk/*.hdm
