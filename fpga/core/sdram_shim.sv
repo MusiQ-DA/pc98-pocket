@@ -319,15 +319,23 @@ module sdram_shim #(
     assign p_ack     = stat_idle & req;
     assign p_rvalid  = kf_read_flag;
     assign p_rdata   = kf_data_out;
-    assign p_done    = kf_idle & ~kf_idle_q;
+    // p_done must be transaction-scoped: the request latch now claims a
+    // request the cycle it is seen -- possibly while the single is still in a
+    // refresh -- so a bare idle rising edge is not necessarily OUR completion.
+    // It only counts once this request has actually been taken (p_ack).
+    logic ref_started;
+    assign p_done    = ref_started & kf_idle & ~kf_idle_q;
 
     always_ff @(posedge sdram_clock or posedge sdram_reset) begin
         if (sdram_reset) begin
             kf_idle_q    <= 1'b0;
             kf_seen_idle <= 1'b0;
+            ref_started  <= 1'b0;
         end else begin
             kf_idle_q <= kf_idle;
             if (kf_idle) kf_seen_idle <= 1'b1;
+            if (p_ack)                        ref_started <= 1'b1;
+            else if (kf_idle & ~kf_idle_q)    ref_started <= 1'b0;
         end
     end
 
