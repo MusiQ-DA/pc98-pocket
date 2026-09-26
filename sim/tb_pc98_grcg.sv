@@ -54,7 +54,11 @@ module tb_pc98_grcg;
         @(posedge clk);
         cs_mode = mode_port; cs_tile = ~mode_port;
         io_data_in = d; io_write_n = 1'b0;
-        @(posedge clk);
+        // The real bus holds io_write_n low ~11 clk, not one -- a
+        // level-sensitive tile write would step the counter through all four
+        // registers with the same byte. The port commits it once, on the
+        // strobe's rising edge.
+        repeat (11) @(posedge clk);
         io_write_n = 1'b1; cs_mode = 1'b0; cs_tile = 1'b0;
         @(posedge clk);
     endtask

@@ -90,7 +90,11 @@ module tb_pc98_gdc;
     task automatic wr(input logic odd, input logic [7:0] d);
         @(posedge clk);
         cs = 1'b1; a1 = odd; data_in = d; io_write_n = 1'b0;
-        @(posedge clk);
+        // The real bus holds io_write_n low ~11 clk of the 42.95 MHz clock,
+        // not one -- a level-sensitive write would drop the byte into every
+        // parameter slot the strobe spans. The GDC commits it once, on the
+        // strobe's rising edge.
+        repeat (11) @(posedge clk);
         io_write_n = 1'b1; cs = 1'b0;
         @(posedge clk);
     endtask

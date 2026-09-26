@@ -103,6 +103,31 @@ module pc98_grcg (
     reg  [7:0] tile [0:3];
     reg  [1:0] tcount;
 
+    // io_write_n is a multi-cycle level on clk, so a bare cs & ~io_write_n
+    // would step tcount once per clk the strobe spans -- a single 0x7E byte
+    // landing in all four tile registers. Latch the byte while the strobe is
+    // low and commit once, on its rising edge, the way the GDC/OPNA ports do.
+    logic       wr_pend;
+    logic [7:0] wr_d;
+    logic       wr_is_mode;
+
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            wr_pend    <= 1'b0;
+            wr_d       <= 8'h00;
+            wr_is_mode <= 1'b0;
+        end else begin
+            if ((cs_mode | cs_tile) & ~io_write_n) begin
+                wr_d       <= io_data_in;
+                wr_is_mode <= cs_mode;
+                wr_pend    <= 1'b1;
+            end else if (io_write_n)
+                wr_pend <= 1'b0;
+        end
+    end
+
+    wire wr_commit = wr_pend & io_write_n;   // once, as the strobe lifts
+
     always_ff @(posedge clk) begin
         if (reset) begin
             mode   <= 8'h00;
@@ -110,14 +135,14 @@ module pc98_grcg (
             tile[0] <= 8'h00; tile[1] <= 8'h00;
             tile[2] <= 8'h00; tile[3] <= 8'h00;
         end else begin
-            if (cs_mode & ~io_write_n) begin
-                mode   <= io_data_in;
+            if (wr_commit & wr_is_mode) begin
+                mode   <= wr_d;
                 // Software sets the mode and then writes four tile bytes
                 // expecting the first to be tile 0. np2kai io/crtc.c does this
                 // in crtc_o7c and it is load-bearing.
                 tcount <= 2'd0;
-            end else if (cs_tile & ~io_write_n) begin
-                tile[tcount] <= io_data_in;
+            end else if (wr_commit & ~wr_is_mode) begin
+                tile[tcount] <= wr_d;
                 tcount       <= tcount + 2'd1;
             end
         end

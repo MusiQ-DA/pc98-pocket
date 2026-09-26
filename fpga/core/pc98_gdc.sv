@@ -193,8 +193,8 @@ module pc98_gdc #(
         else              snap_src = 6'd53;                // the WRITE mode
     endfunction
 
-    wire exec_cmd = (data_in == 8'h6C)   // VECTE
-                  | (data_in == 8'h68);  // TEXTE
+    wire exec_cmd = (wr_d == 8'h6C)   // VECTE
+                  | (wr_d == 8'h68);  // TEXTE
 
     // The watchdog: if the softcore server never answers, force the retire
     // after ~4 frames of pending. A drawing server that hangs would
@@ -250,8 +250,35 @@ module pc98_gdc #(
                      || (c == 8'hE0) || (c == 8'hC0);      // CSRR / LPEN
     endfunction
 
-    wire cmd_wr = cs & ~io_write_n &  a1;
-    wire par_wr = cs & ~io_write_n & ~a1;
+    // io_write_n is a multi-cycle level on clk, so a bare cs & ~io_write_n
+    // would run every byte through the block below once per clk the strobe
+    // spans -- one CSRFORM parameter landed in para[9], para[10] and para[11]
+    // alike, and CSRW's low byte repeated into the next slot. Latch the byte
+    // while the strobe is low (where the bus holds it stable) and commit it
+    // exactly once, on the strobe's rising edge -- the same dedup the FDC
+    // and the system ports apply to this bus.
+    logic       wr_pend;
+    logic [7:0] wr_d;
+    logic       wr_a1;
+
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            wr_pend <= 1'b0;
+            wr_d    <= 8'h00;
+            wr_a1   <= 1'b0;
+        end else begin
+            if (cs & ~io_write_n) begin
+                wr_d    <= data_in;
+                wr_a1   <= a1;
+                wr_pend <= 1'b1;
+            end else if (io_write_n)
+                wr_pend <= 1'b0;
+        end
+    end
+
+    wire wr_commit = wr_pend & io_write_n;   // once, as the strobe lifts
+    wire cmd_wr = wr_commit &  wr_a1;
+    wire par_wr = wr_commit & ~wr_a1;
 
     integer i;
     always_ff @(posedge clk) begin
@@ -317,16 +344,16 @@ module pc98_gdc #(
 
             if (cmd_wr) begin
                 logic [10:0] dn;
-                dn     = decode(data_in);
+                dn     = decode(wr_d);
                 p_dst  <= dn[10:5];
                 p_left <= dn[4:0];
 
                 // The trace follows only the CSRFORM command.
-                csr_live <= (data_in == 8'h4B);
+                csr_live <= (wr_d == 8'h4B);
                 csr_n    <= 4'd0;
 
                 // CSRW/CSRFORM arrivals, saturating, for the panel.
-                if ((data_in == 8'h49 || data_in == 8'h4B)
+                if ((wr_d == 8'h49 || wr_d == 8'h4B)
                         && csr_wr_count != 8'hFF)
                     csr_wr_count <= csr_wr_count + 8'd1;
 
@@ -336,12 +363,12 @@ module pc98_gdc #(
                 // software that polls waits) -- the scope guard, sharpened.
                 if (exec_cmd && !draw_pending && !draw_busy_r) begin
                     draw_pending <= 1'b1;
-                    draw_op_r    <= data_in;
+                    draw_op_r    <= wr_d;
                     for (i = 0; i <= 18; i = i + 1)
                         snap[i] <= para[snap_src(i)];
                     snap[19] <= 8'h00;                 // the pad byte
                 end else if (exec_cmd) begin
-                    unk_cmd <= data_in;
+                    unk_cmd <= wr_d;
                     if (unk_count != 8'hFF)
                         unk_count <= unk_count + 8'd1;
                 end
@@ -352,7 +379,7 @@ module pc98_gdc #(
                 // Both queue only when there is room; a guest that reissues
                 // without draining loses the new bytes, which is what a
                 // five-deep FIFO on a real chip would do to it too.
-                if (data_in == 8'hE0 && (3'd7 - (rb_wr - rb_rd)) >= 3'd4) begin
+                if (wr_d == 8'hE0 && (3'd7 - (rb_wr - rb_rd)) >= 3'd4) begin
                     rb_fifo[rb_wr]           <= para[P_CSRW + 0];
                     rb_fifo[rb_wr + 3'd1]    <= para[P_CSRW + 1];
                     rb_fifo[rb_wr + 3'd2]    <= para[P_CSRW + 2] & 8'h03;
@@ -360,7 +387,7 @@ module pc98_gdc #(
                     rb_fifo[rb_wr + 3'd4]    <= 8'h00;
                     rb_wr <= rb_wr + 3'd5;
                 end
-                if (data_in == 8'hC0 && (3'd7 - (rb_wr - rb_rd)) >= 3'd2) begin
+                if (wr_d == 8'hC0 && (3'd7 - (rb_wr - rb_rd)) >= 3'd2) begin
                     rb_fifo[rb_wr]        <= 8'h00;   // no pen: the latch reads zero
                     rb_fifo[rb_wr + 3'd1] <= 8'h00;
                     rb_fifo[rb_wr + 3'd2] <= 8'h00;
@@ -369,9 +396,9 @@ module pc98_gdc #(
 
 
                 // The immediate ones.
-                if (data_in == 8'h0D || data_in == 8'h6B) disp_on_r <= 1'b1;
-                if (data_in == 8'h0C || data_in == 8'h05) disp_on_r <= 1'b0;
-                if (data_in == 8'h00) begin
+                if (wr_d == 8'h0D || wr_d == 8'h6B) disp_on_r <= 1'b1;
+                if (wr_d == 8'h0C || wr_d == 8'h05) disp_on_r <= 1'b0;
+                if (wr_d == 8'h00) begin
                     // RESET stops the display and takes SYNC parameters; it
                     // does NOT clear the PRAM (np2kai does not either).
                     disp_on_r <= 1'b0;
@@ -380,22 +407,22 @@ module pc98_gdc #(
                 // Unimplemented: no destination, no count, and not one of the
                 // zero-parameter commands this module does handle. Saturating,
                 // because "how many" matters less than "at all".
-                if (dn[4:0] == 5'd0 && !known_noparam(data_in)) begin
-                    unk_cmd <= data_in;
+                if (dn[4:0] == 5'd0 && !known_noparam(wr_d)) begin
+                    unk_cmd <= wr_d;
                     if (unk_count != 8'hFF) unk_count <= unk_count + 8'd1;
                 end
             end else if (par_wr) begin
                 if (p_left != 5'd0) begin
-                    para[p_dst] <= data_in;
+                    para[p_dst] <= wr_d;
                     p_dst       <= p_dst + 6'd1;
                     p_left      <= p_left - 5'd1;
                 end
                 // The trace records every 0x60 byte while the last command
                 // was CSRFORM, landed in the capture or not.
                 if (csr_live) begin
-                    if (csr_n == 4'd0)      csr_tr0 <= data_in;
-                    else if (csr_n == 4'd1) csr_tr1 <= data_in;
-                    else if (csr_n == 4'd2) csr_tr2 <= data_in;
+                    if (csr_n == 4'd0)      csr_tr0 <= wr_d;
+                    else if (csr_n == 4'd1) csr_tr1 <= wr_d;
+                    else if (csr_n == 4'd2) csr_tr2 <= wr_d;
                     if (csr_n != 4'hF) csr_n <= csr_n + 4'd1;
                 end
             end
