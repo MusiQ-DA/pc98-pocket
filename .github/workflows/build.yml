@@ -120,6 +120,17 @@ jobs:
           ./obj_fs/f | tee fs.log
           grep -q "RESULT: PASS" fs.log
 
+      - name: the font port survives full contention
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_font_stress \
+            -Isim -I$S sim/tb_pc98_font_stress.sv sim/sdram_model.sv \
+            $S/pc98_glyph_rowbuf.sv $S/pc98_glyph_addr.sv \
+            $S/pc98_font_fetch.sv $S/sdram_mp.sv \
+            -o s --Mdir obj_fstress
+          ./obj_fstress/s | tee fstress.log
+          grep -q "RESULT: PASS" fstress.log
+
       - name: a text row's glyphs land in the buffer, kanji paired
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_rowbuf \
