@@ -30,17 +30,16 @@ module post_monitor #(
     // whose source depends on who is driving, and testB17 recorded MAX 63 with
     // it -- a value the BIOS never writes to this port (a linear disassembly
     // shows every one of its writes is a constant: 01-12, 52, 54). Taking the
-    // 8088's dout removes the ambiguity.
+    // CPU's dout removes the ambiguity.
     input  wire  [7:0] cpu_data,
     // The shared data bus, which carries READ data back to the CPU. cpu_data is
-    // the 8088's own output and only means anything on writes.
+    // the CPU's own output and only means anything on writes.
     input  wire  [7:0] bus_data,
     input  wire        io_write_n,
     // AEN. During a DMA cycle the bus carries a 20-bit MEMORY address while
     // IOW is asserted, so every memory address whose low 16 bits happen to be
-    // 0x0080 looks like a write to the POST port -- and an XT refreshes RAM
-    // through DMA channel 0 continuously, so it never stops. This is the same
-    // qualifier Peripherals.sv puts on cga_mem_select, and leaving it out is
+    // 0x0080 looks like a write to the POST port. This is the same
+    // qualifier Peripherals.sv puts on tvram_mem_select, and leaving it out is
     // what produced MAX C0 and RESTARTS 13 on testB18.
     input  wire        address_enable_n,
     input  wire        memory_read_n,

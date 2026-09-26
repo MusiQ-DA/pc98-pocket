@@ -92,10 +92,10 @@ module pc98_gvram_display #(
         gray2bin = b;
     endfunction
 
-    wire [8:0] vga_gray = bin2gray(vcount[8:0]);
+    wire [8:0] vcount_gray = bin2gray(vcount[8:0]);
     logic [8:0] gray_s1 = 9'd0, gray_s2 = 9'd0;
     always_ff @(posedge clk) begin
-        gray_s1 <= vga_gray;
+        gray_s1 <= vcount_gray;
         gray_s2 <= gray_s1;
     end
     wire [8:0] line_now = gray2bin(gray_s2);

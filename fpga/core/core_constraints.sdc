@@ -4,15 +4,17 @@
 # Asynchronous clock-domain groups. Clocks within a group are related and timed
 # normally; paths between groups are cut (their crossings are handled in RTL).
 #
-#   pll (system):   [0] clk_chipset 42.95   [1] clk_core 85.9 (CPU)  [2] clk_sdram_ph 42.95@180
-#                   [3] clk_28_636 (CGA)    [4] clk_pix_cga 14.318   [5] clk_pix_cga_90
+#   pll (system):   [0] clk_chipset 42.95   [1] open               [2] clk_sdram_ph 42.95@180
+#                   [3] clk_28_636          [4] open               [5] open
+#   pll_video_pc98: [0] clk_pc98_dot 21.05  [1] clk_pc98_dot_90     (raster clock, clk_pix)
 #   audio_pll:   [0] audio_mclk 12.288   [1] audio_sclk 3.072
 #   APF / bridge:   clk_74a, clk_74b, bridge_spiclk
 #
-# One VCO feeds the CPU, chipset and CGA video, so they are mutually synchronous and
-# timed as a single group. The muxed back-end clock (clk_pix) is derived from a PLL
-# output in that group, so it is intra-group too. The cut boundaries are the inherent
-# Pocket bridge clocks, the audio PLL, and the gated softcore clock (clk_pico).
+# One VCO feeds the chipset and SDRAM-phase clocks, so they are mutually synchronous
+# and timed as a single group. The raster clock (clk_pix) comes from its own PLL
+# (u_pll_pc98), which is why it is a separate group below. The cut boundaries are
+# the inherent Pocket bridge clocks, the audio PLL, and the gated softcore clock
+# (clk_pico).
 #
 # PicoRV32 softcore clock: clk_chipset (42.95 MHz) gated to one pulse in six (~7.16 MHz),
 # from softcpu_subsystem.sv. A generated clock of clk_chipset, kept in its group so the
@@ -79,7 +81,7 @@ set_multicycle_path -hold -end 5 \
 #     reproduce. That is the "all sims pass, hardware is black" signature.
 #
 # The fit-lottery shows up in the reports as well. Ranking the six bisection
-# builds by the CGA-domain (general[3]) total negative slack -- a proxy for how
+# builds by the video-domain (general[3], now clk_pc98_dot) total negative slack -- a proxy for how
 # hard the Fitter was struggling -- separates them perfectly by hardware result:
 #
 #   #49 testB3 pure KF     BOOTS   -1.30      #46 testB2 mp   black  -5.26
@@ -126,7 +128,7 @@ set dram_chip_clk "ic|pll|altera_pll_i|general[2].gpll~PLL_OUTPUT_COUNTER|divclk
 # the 5.9 ns read path by 2.357 ns, essentially the same as sdram_mp's 2.408.
 # A constraint that the known-good configuration cannot meet is not measuring
 # the interface, it is just miscalibrated, and an unreachable goal also makes
-# the Fitter give up ground elsewhere (the CGA domain went -0.386 -> -0.905
+# the Fitter give up ground elsewhere (the video domain went -0.386 -> -0.905
 # between #57 and #58).
 #
 # 5.9 - 2.357 = 3.54 ns is an upper bound on the real tAC + flight that this

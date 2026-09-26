@@ -2,9 +2,9 @@
 """check_vkb_layout.py -- is the on-screen keyboard's table sane?
 
 The virtual keyboard's key rectangles are hand-computed pixel coordinates in
-vkb_layout.c. Two layouts live there (PC-9801 and PC/XT, selected by the
-MACHINE_PC98 macro the firmware Makefile takes from config.tcl), and the PC-98
-one additionally substitutes made-up Set-2 codes for keys no real keyboard has.
+vkb_layout.c. A single PC-9801 layout lives there now (the PC/XT table went
+away with that build), and it additionally substitutes made-up Set-2 codes
+for keys no real keyboard has.
 None of that is visible from a photograph of a handheld screen, so check it
 mechanically, the way check_osd_layout.py does for the POST panel:
 
@@ -38,7 +38,7 @@ SEP = "\x1f"  # vkb_layout.h VKB_LBL_SEP: splits a dual legend's two halves
 SHARED_CODES = {0x5A: "RETURN and keypad ENTER (same PC-98 matrix code 0x1C)"}
 
 # Codes with structural meaning in pocket_keyboard / Peripherals: the framer's
-# E0/F0/E1/E2 bytes, the XT keyboard's 0xAA power-on self-test reply. A VKB key
+# E0/F0/E1/E2 bytes, the keyboard's 0xAA power-on self-test reply. A VKB key
 # emitting one would derail the stream, so they are banned outright.
 BANNED_CODES = {0x00, 0xAA, 0xE0, 0xE1, 0xE2, 0xF0}
 
@@ -251,24 +251,15 @@ def main():
     font = load_font()
     reachable = hid_reachable()
     shipping = config_defines()
-    failures = 0
 
-    # Check the configuration that will actually ship, then the other one: the
-    # two tables live behind the same #ifdef, and only ever building one of them
-    # is how the other quietly rots.
-    flipped = dict(shipping)
-    flipped["MACHINE_PC98"] = "0" if shipping.get("MACHINE_PC98", "0") not in ("0", "") else "1"
-    for defines, note in ((shipping, "shipping config"), (flipped, "flipped config")):
-        bad = check_layout(defines, font, reachable, verbose=defines is shipping)
-        pc98 = defines.get("MACHINE_PC98", "0") not in ("0", "")
-        machine = "PC-9801" if pc98 else "PC/XT"
-        tag = f" ({note})" if defines is flipped else ""
-        if bad:
-            print(f"check_vkb_layout: {machine}{tag}: {bad} problem(s)")
-            failures += 1
-        else:
-            print(f"check_vkb_layout: {machine}{tag}: ok")
-    return 1 if failures else 0
+    # Check the configuration that will actually ship. There is only the one
+    # table now -- the PC/XT branch went away with that build.
+    bad = check_layout(shipping, font, reachable, verbose=True)
+    if bad:
+        print(f"check_vkb_layout: PC-9801: {bad} problem(s)")
+        return 1
+    print("check_vkb_layout: PC-9801: ok")
+    return 0
 
 
 def check_layout(defines, font, reachable, verbose):
@@ -276,11 +267,9 @@ def check_layout(defines, font, reachable, verbose):
     ui = select_branches((SRC / "vkb_ui.c").read_text(), defines)
     keys = parse_keys(layout)
     vrows = parse_vrows(ui)
-    pc98 = defines.get("MACHINE_PC98", "0") not in ("0", "")
     bad = 0
 
-    machine = "PC-9801" if pc98 else "PC/XT"
-    print(f"check_vkb_layout: {machine} table, {len(keys)} keys, {len(vrows)} visual rows")
+    print(f"check_vkb_layout: PC-9801 table, {len(keys)} keys, {len(vrows)} visual rows")
 
     if not keys:
         print("check_vkb_layout: no keys parsed -- the regex and the table drifted apart")
@@ -376,25 +365,24 @@ def check_layout(defines, font, reachable, verbose):
         seen[c] = i
 
     # PC-98 sentinel rules: distinct, and never something a docked key can send.
-    if pc98:
-        defs = parse_defines(layout)
-        sentinels = {n: int(v, 0) for n, v in defs.items() if n.startswith("PC98K_")}
-        reachable = hid_reachable()
-        vals = {}
-        for name, val in sorted(sentinels.items()):
-            if val in vals:
-                print(f"SENTINEL REUSED: {vals[val]} and {name} both 0x{val:02X}")
-                bad += 1
-            vals[val] = name
-            if val in reachable:
-                print(f"SENTINEL COLLIDES WITH DOCKED KEYBOARD: {name} 0x{val:02X} "
-                      f"is a code hid_to_ps2 emits")
-                bad += 1
-            if val in seen and seen[val] is not None:
-                pass  # it is in the table by design; the parse above printed it
-        print("PC-98-only key sentinels (Set-2 code -> key):")
-        for name, val in sorted(sentinels.items(), key=lambda kv: kv[1]):
-            print(f"  0x{val:02X}  {name}")
+    defs = parse_defines(layout)
+    sentinels = {n: int(v, 0) for n, v in defs.items() if n.startswith("PC98K_")}
+    reachable = hid_reachable()
+    vals = {}
+    for name, val in sorted(sentinels.items()):
+        if val in vals:
+            print(f"SENTINEL REUSED: {vals[val]} and {name} both 0x{val:02X}")
+            bad += 1
+        vals[val] = name
+        if val in reachable:
+            print(f"SENTINEL COLLIDES WITH DOCKED KEYBOARD: {name} 0x{val:02X} "
+                  f"is a code hid_to_ps2 emits")
+            bad += 1
+        if val in seen and seen[val] is not None:
+            pass  # it is in the table by design; the parse above printed it
+    print("PC-98-only key sentinels (Set-2 code -> key):")
+    for name, val in sorted(sentinels.items(), key=lambda kv: kv[1]):
+        print(f"  0x{val:02X}  {name}")
 
     # vrows cover every key exactly once, in table order.
     covered = 0

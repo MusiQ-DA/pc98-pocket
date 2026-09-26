@@ -48,9 +48,6 @@ module softcpu_fdd_bridge #(
     // floppy.v request flags, clk_sys: {write-pending, read-pending}
     input  wire  [1:0] fdd_request,
 
-    // ide.v request, clk_sys: 6=reset, 4=command, 5=data phase, 0=idle
-    input  wire  [2:0] ide0_request,
-
     // Mounted floppy image size in sectors, per drive (from the dataslot-update event)
     input  wire [31:0] fdd0_disk_size,
     input  wire [31:0] fdd1_disk_size,
@@ -287,7 +284,6 @@ module softcpu_fdd_bridge #(
                 8'h34:   cpu_rdata = {28'd0, tds_err, tds_done};
                 8'h3C:   cpu_rdata = fdd0_disk_size;
                 8'h40:   cpu_rdata = fdd1_disk_size;
-                8'h44:   cpu_rdata = {29'd0, ide0_request};
                 8'h50:   cpu_rdata = {30'd0, fdd1_rebind, fdd0_rebind};
                 8'h58:   cpu_rdata = datatable_q;
                 default: cpu_rdata = 32'd0;

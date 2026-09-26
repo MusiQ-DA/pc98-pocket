@@ -93,7 +93,6 @@ DANGLE_OK = {
     "gdc_s_unk_count", "gdc_s_zoom",
     "opna_adpcmb_addr", "opna_adpcmb_roe_n",
     "pc98_fill_busy", "pc98_kanji_seen",
-    "uart_dtr", "uart_rts", "uart_tx",
     "v30_ss_err_unused", "v30_ss_quiet_unused", "v30_ss_rdata_unused",
     # Orphaned by the XT hardware's removal (2026-09-22), kept deliberately:
     # the mouse stream is generated and paced with no PC-98 consumer until

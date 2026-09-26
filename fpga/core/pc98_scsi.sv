@@ -11,8 +11,7 @@
 // CMD register (index 0x18) raises cmd_req and hands the byte over; the
 // softcore's firmware reads the CDB out of the register file, does the work
 // against the disk image on the SD card, fills the data buffer and writes the
-// status back. That is the same split ide_service.c already uses for the ATA
-// task file, and the same split np2kai uses -- its scsibios.res is `CB 90 90`
+// status back. That is the same split np2kai uses -- its scsibios.res is `CB 90 90`
 // entries plus a `55 AA` signature, about a kilobyte of nothing, with every
 // command handled on the host side.
 //

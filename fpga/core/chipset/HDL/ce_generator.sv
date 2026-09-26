@@ -1,8 +1,8 @@
 //
 // ce_generator
 //
-// Generate the virtual 8088 CLK pin plus synchronous clock-enable pulses for
-// the XT/chipset domain from the single 50 MHz chipset clock.
+// Generate the virtual CPU CLK pin plus synchronous clock-enable pulses for
+// the chipset domain from the single 50 MHz chipset clock.
 //
 module ce_generator (
     input   logic           clock,

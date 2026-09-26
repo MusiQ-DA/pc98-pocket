@@ -7,8 +7,7 @@
 // Local modification (Pocket port, 2026-07-07): the F11 (0x78) / F12 (0x07) key
 // intercepts that toggled swap_video / pause_core are removed, so both keys pass through
 // as normal keycodes; this port does not repurpose them. pause_core stays at its reset
-// value (unused here); swap_video follows the video_output input, so the top level owns
-// the displayed-card select.
+// value. The card-swap outputs went with the PC/XT video cards they selected.
 //
 module ps2_keyboard #(
     parameter clk_rate = 28'd50000000
@@ -24,10 +23,7 @@ module ps2_keyboard #(
     output  logic           irq,
     output  logic   [7:0]   keycode,
     input   logic           clear_keycode,
-    output  reg             pause_core,
-    output  reg             swap_video,
-    input   logic           video_output,
-    input   logic           tandy_video
+    output  reg             pause_core
 );
     //
     // Internal Signals
@@ -217,14 +213,6 @@ module ps2_keyboard #(
                 scancode_converter = code;
         endcase
     endfunction
-
-    //
-    // Displayed-card select: follows the top's video_output input (the F11 toggle
-    // upstream kept here is removed; see the header note).
-    //
-    always_ff @(posedge clock) begin
-        swap_video <= tandy_video ? 1'b0 : video_output;
-    end
 
     //
     // Make keycode

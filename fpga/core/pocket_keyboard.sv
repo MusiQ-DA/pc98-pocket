@@ -9,7 +9,8 @@
 // handshake as a make ([code]) or break ([0xF0, code]), with a 0xE0 prefix for
 // extended keys. kb_ready paces one byte at a time.
 //
-// Scancodes are Set-2 (ps2_keyboard converts Set-2 -> XT).
+// Scancodes are Set-2 (ps2_keyboard passes the stream through to kfps2kb,
+// which converts Set-2 -> the PC-98 serial matrix).
 //
 
 module pocket_keyboard #(
