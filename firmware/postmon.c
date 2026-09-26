@@ -105,6 +105,7 @@ static int postmon_shown = 1;
 // the IRQ side pushes an invalidate on every overlay transition instead. A fast
 // open-and-close that no call ever saw still forces the next paint to wipe and
 // re-place, instead of gating shut on stale keyboard pixels.
+__attribute__((unused))
 static int placed = 0;
 
 void postmon_invalidate(void)
@@ -774,6 +775,61 @@ void post_mon_tick(void)
             hex(4 + 27 * 8, 52, r23 & 0xFFFFu, 4);
         }
         {
+            // SB: what DMA actually left at the IPL address. The BIOS loads
+            // the boot sector at 1FE0:0000 and calls it; a guest that lands
+            // there and then wanders off (PC past 0200) either never got the
+            // bytes or got the wrong ones. Eight bytes at 1FE00 say which:
+            // EB 1E is the test image's first instruction, all 00 is a write
+            // that never landed, anything else is the wrong sector. W is the
+            // last bus write the monitor saw -- after a sector DMA it should
+            // sit in 1FExx-20xxx. guest_peek borrows the bus through HOLD for
+            // a few cycles each; twelve of them a tick is nothing.
+            osd_fill_rect(&fb, 336, 42, 300, 30, OSD_KEYFACE);
+            osd_draw_string(&fb, 340, 42, "SB", OSD_LABEL);
+            for (int i = 0; i < 8; i++)
+                hex(368 + i * 24, 42, guest_peek(0x1FE00u + (uint32_t) i), 2);
+            osd_draw_string(&fb, 340, 52, "W", OSD_LABEL);
+            hex(356, 52, *POST_WRADDR & 0xFFFFFu, 5);
+            // +6A: the jmp$ site -- the window shows E1 EB FE 00 when the
+            // sector tail is intact. EB FE surviving means the CPU left for
+            // a reason other than missing bytes (an interrupt to a bad
+            // vector); anything else means the tail was never written or was
+            // overwritten after the DMA.
+            osd_draw_string(&fb, 404, 52, "+6A", OSD_LABEL);
+            for (int i = 0; i < 4; i++)
+                hex(432 + i * 24, 52, guest_peek(0x1FE6Au + (uint32_t) i), 2);
+            // FR: glyph-fetch {fvalid beats, freq pulses} -- if freq outruns
+            // fvalid the row buffer is waiting on the SDRAM font port and the
+            // row never fills, which is a black screen with a healthy guest.
+            osd_draw_string(&fb, 532, 52, "FR", OSD_LABEL);
+            hex(552, 52, *POST_FRB, 8);
+            // SC: where the boot sector actually went. The 71071's bank
+            // register selects in 64 KB steps, so a page slip lands the IPL
+            // at some other bank's +FE00; a count/address slip leaves it
+            // near 1FE00. Banks first, then a fine sweep of the window the
+            // DMA could have aimed at. '-' = EB 1E nowhere = the write path
+            // (not the address) is broken.
+            uint32_t sc = 0xFFFFF;
+            for (int i = 0; i < 16; i++) {
+                uint32_t a = (uint32_t) i * 0x10000u + 0xFE00u;
+                if (guest_peek(a) == 0xEB && guest_peek(a + 1) == 0x1E) {
+                    sc = a;
+                    break;
+                }
+            }
+            if (sc == 0xFFFFF)
+                for (uint32_t a = 0x1F000u; a < 0x21000u; a += 0x100u)
+                    if (guest_peek(a) == 0xEB && guest_peek(a + 1) == 0x1E) {
+                        sc = a;
+                        break;
+                    }
+            osd_draw_string(&fb, 340, 62, "SC", OSD_LABEL);
+            if (sc == 0xFFFFF)
+                osd_draw_string(&fb, 368, 62, "-----", OSD_LABEL);
+            else
+                hex(368, 62, sc, 5);
+        }
+        {
             // L: the landing CS:IP -- the first non-ROM instruction the CPU
             // executed, on the R! row's right half (that row is empty while
             // the ROM watcher has nothing to report).
@@ -855,6 +911,34 @@ void post_mon_tick(void)
                     hex(4 + (4 + i * 3) * 8, 82, (h0 >> (i * 8)) & 0xFFu, 2);
                 for (int i = 0; i < 4; i++)
                     hex(4 + (16 + i * 3) * 8, 82, (h1 >> (i * 8)) & 0xFFu, 2);
+            }
+
+            // TVF: the row buffer's OWN view of cells 0-3, {hi,lo} interleaved
+            // in the order the FSM latches them -- the byte the fill port read
+            // out of the BRAM, against TVC/TVH's bus snoop. A divergence is a
+            // guest write that reached the bus but not the RAM; a match on a
+            // black screen puts the fault below the VRAM, in the fill/store
+            // path. Registered at 0x5000009C/A0, on the free half of rows
+            // 72/82's right side.
+            {
+                uint32_t f0 = *POST_TVF0, f1 = *POST_TVF1;
+                osd_draw_string(&fb, 340, 72, "TVF", OSD_LABEL);
+                for (int i = 0; i < 4; i++)
+                    hex(340 + (4 + i * 3) * 8, 72, (f0 >> (i * 8)) & 0xFFu, 2);
+                for (int i = 0; i < 4; i++)
+                    hex(340 + (16 + i * 3) * 8, 72, (f1 >> (i * 8)) & 0xFFu, 2);
+            }
+
+            // FD: the fetch counters' delta since the previous paint. FR's
+            // absolute value cannot tell "engine dead" from "running but
+            // every cell is ANK"; the delta can -- a permanently identical
+            // FR is a row buffer that has stopped, a moving one is alive.
+            {
+                static uint32_t fr_prev = 0;
+                uint32_t fr_now = *POST_FRB;
+                osd_draw_string(&fb, 340, 82, "FD", OSD_LABEL);
+                hex(340 + 3 * 8, 82, fr_now - fr_prev, 8);
+                fr_prev = fr_now;
             }
         }
 
@@ -1265,4 +1349,9 @@ void post_mon_tick(void)
     *VKB_CTRL = 1u;
 }
 
+#else // SDRAM_SELFTEST
+// The panel is compiled out of the selftest build, but the stage marks are
+// still written by main.c/fdd_service.c/settings_ui.c -- keep them linkable.
+uint32_t postmon_mark;
+void postmon_isr_hb(void) {}
 #endif // !SDRAM_SELFTEST

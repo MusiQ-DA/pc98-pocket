@@ -122,7 +122,7 @@ for mm in re.finditer(r"\bdec\(\s*([^,]+),\s*([^,]+),", txt):
 
 # Fields that share a row because they are the two arms of a runtime if/else
 # and can never both be drawn. The preprocessor cannot see that, so name them.
-RUNTIME_EXCLUSIVE = ("'VEC", )
+RUNTIME_EXCLUSIVE = ("'VEC", "'-----")
 
 # Rows whose left-hand span is two runtime-exclusive arms, so every field
 # pair inside the span is legal by construction even though the checker
