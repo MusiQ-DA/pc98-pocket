@@ -179,15 +179,27 @@ module sdram_shim #(
     logic [ADDR_BITS-1:0] addr_r;
     logic [LEN_BITS-1:0]  len_r;      // words - 1, latched with the request
     logic                 rbeat;      // which word of a two-word read is next
+    logic [sdram_data_width-1:0] wdata_r, wdata_hi_r;
     logic        p_ack, p_done, p_rvalid, stat_idle, stat_refresh;
     logic [sdram_data_width-1:0] p_rdata;
     logic        mp_rvalid;
     logic [sdram_data_width-1:0] mp_rdata;
 
-    // Request latch, shared by both far ends. A request is taken only when the
-    // far end can actually accept a command this cycle (stat_idle), which for
-    // both far ends also means "not before initialisation" and "not while
-    // refreshing".
+    // Request latch, shared by both far ends. Two different clocks apply here:
+    // the request fields are captured the first cycle the requester is seen --
+    // not when the far end can accept a command -- because req stays up until
+    // p_ack and early capture costs nothing downstream. The write payload is
+    // the opposite: data_in is RAM.sv's latch_data, a registered follower of
+    // internal_data_bus, so on the request's first cycle it is still the
+    // PREVIOUS byte. It is therefore resampled for the whole transaction and
+    // frozen at p_done. The byte is guaranteed on the bus for the duration:
+    // CPU and loader writes hold it until ready, and ready only rises from
+    // COMPLETE_RAM_RW -- after p_done; a µPD71071 DMA write drops its strobe
+    // at S4 but the FDC's byte stays driven on data_bus_out until the next
+    // beat, dozens of clocks past any plausible commit. Sampled live at the
+    // WRITE command instead -- which is what sdram_single got away with by
+    // never queueing behind other ports -- a delayed grant committed whatever
+    // the bus had moved on to, and the sector image landed shifted.
     always_ff @(posedge sdram_clock or posedge sdram_reset) begin
         if (sdram_reset) begin
             req         <= 1'b0;
@@ -196,9 +208,15 @@ module sdram_shim #(
             addr_r      <= '0;
             len_r       <= '0;
             rbeat       <= 1'b0;
+            wdata_r     <= '0;
+            wdata_hi_r  <= '0;
             data_out    <= '0;
             data_out_hi <= '0;
         end else begin
+            if (busy && we_r) begin
+                wdata_r    <= data_in;
+                wdata_hi_r <= data_in_hi;
+            end
 `ifdef SDRAM_MP_REF
             // Stock sdram_single holds read_flag as a LEVEL, not a per-beat pulse,
             // so a beat counter would miscount it. No burst on this far end.
@@ -214,10 +232,10 @@ module sdram_shim #(
 `endif
 
             if (!busy) begin
-                if (stat_idle && (write_request || read_request)) begin
-                    req    <= 1'b1;
-                    we_r   <= write_request;
-                    addr_r <= address[ADDR_BITS-1:0];
+                if (write_request || read_request) begin
+                    req        <= 1'b1;
+                    we_r       <= write_request;
+                    addr_r     <= address[ADDR_BITS-1:0];
                     // Exactly two shapes, tested rather than truncated: a
                     // wider access_num cannot silently become a long burst.
                     len_r  <= (access_num >= 'd2) ? LEN_BITS'(1) : LEN_BITS'(0);
@@ -323,7 +341,7 @@ module sdram_shim #(
         .sdram_reset        (sdram_reset),
         .address            (addr_r),
         .access_num         (sdram_col_width'(1)),
-        .data_in            (data_in),
+        .data_in            (wdata_r),
         .data_out           (kf_data_out),
         .write_request      (req &  we_r),
         .read_request       (req & ~we_r),
@@ -387,7 +405,7 @@ module sdram_shim #(
     wire [PORTS-1:0][sdram_data_width-1:0] mp_wdata =
         {{sdram_data_width{1'b0}}, {sdram_data_width{1'b0}},
          {sdram_data_width{1'b0}},
-         (mp_wcnt == LEN_BITS'(0)) ? data_in : data_in_hi};
+         (mp_wcnt == LEN_BITS'(0)) ? wdata_r : wdata_hi_r};
     wire [PORTS-1:0][MASK_BITS-1:0] mp_wmask =
         {{MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}},
          {MASK_BITS{1'b1}}};
