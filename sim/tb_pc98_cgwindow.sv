@@ -45,7 +45,7 @@ module tb_pc98_cgwindow;
     // Model font: byte at A is A's low eight bits.
     logic [19:0] burst_addr;
     int          n;
-    // Keep the LAST two, not the first two: np2 recomputes the window on every
+    // Keep the LAST two, not the first two: np21w recomputes the window on every
     // port write, so writing the code in two halves legitimately fetches once
     // with the code half-written. What matters is where it ends up.
     logic [19:0] last_a, last_b;
@@ -90,7 +90,7 @@ module tb_pc98_cgwindow;
         rst = 0;
         repeat (2) @(posedge clk);
 
-        // Hiragana A: ku index 4, ten 0x22. np2 puts the HIGH byte on 0x00A1
+        // Hiragana A: ku index 4, ten 0x22. np21w puts the HIGH byte on 0x00A1
         // and the LOW byte on 0x00A3, so ten goes to A1 and ku to A3.
         fetches = 0;
         port(16'h00A1, 8'h22);

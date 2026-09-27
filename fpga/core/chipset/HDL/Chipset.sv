@@ -34,73 +34,22 @@ module CHIPSET #(
         output  logic           interrupt_to_cpu,
         // PC-98 video
         input   logic           clk_pc98_dot,
-        // The PC-98 row buffer's own view of text row 0 and its fill counters.
-        // PERIPHERALS produces them and softcpu_subsystem serves them to the
-        // firmware (0x5000009C/A0/A4); CHIPSET sits between the two and has to
-        // carry them, which is what was missing -- core_top connected them to
-        // an instance whose module never declared them and Quartus failed on
-        // every build since.
-        // The master GDC's view, carried for the POST panel. See PERIPHERALS.
+        // The interrupt path's liveness taps, carried for the JTAG probe.
         output  logic    [7:0]  dbg_pic_irr,
         output  logic    [7:0]  dbg_pic_imr,
         output  logic    [7:0]  dbg_pic_isr,
-        output  logic    [7:0]  dbg_inta_vec,
-        output  logic   [15:0]  dbg_inta_count,
         output  logic    [7:0]  dbg_pic2_irr,
         output  logic    [7:0]  dbg_pic2_imr,
         output  logic    [7:0]  dbg_pic2_isr,
-        output  logic    [7:0]  dbg_motor_arms,
-        output  logic    [7:0]  dbg_motor_pulses,
-        output  logic    [7:0]  dbg_chg,
-        output  logic    [7:0]  dbg_strb_be,
-        output  logic    [7:0]  dbg_strb_94,
-        output  logic    [7:0]  dbg_strb_cc,
-        output  logic    [7:0]  dbg_strb_dat,
-        output  logic    [7:0]  dbg_last_ctrl,
-        output  logic   [31:0]  dbg_fdc_x,
-        output  logic   [31:0]  dbg_fdc_y,
-        output  logic   [95:0]  dbg_fdc_z,
-        output  logic   [31:0]  dbg_fdc_w,
-        output  logic   [31:0]  dbg_fdc_v,
-        output  logic   [31:0]  dbg_fdc_dma,
-        // Every hop of the FDC's DMA handshake in one word, floppy.v's own
-        // wait state at the top and the arbiter's grant at the bottom --
-        // the panel's DM field reads it as eight digits.
-        output  logic   [31:0]  dbg_dma,
-        // And the 71071's own internals (encoder, FSM, write snoop) -- the
-        // panel's DC/DW fields. See upd71071.sv for the packing.
-        output  logic   [31:0]  dbg_dmac,
-        output  logic   [15:0]  dbg_w_path,
-        output  logic   [15:0]  dbg_rw_lvl,
         output  logic    [7:0]  dbg_irq_level,
         output  logic    [7:0]  dbg_timer_count,
         output  logic    [7:0]  dbg_kbd_irq_count,
         output  logic    [7:0]  dbg_kbd_rd_count,
-        output  logic   [14:0]  dbg_gdc_sad,
-        output  logic    [7:0]  dbg_gdc_pitch,
-        output  logic    [1:0]  dbg_gdc_clk,
-        output  logic    [7:0]  dbg_gdc_unk_cmd,
-        output  logic    [7:0]  dbg_gdc_unk_count,
-        output  logic           dbg_gdc_disp_on,
-        // The cursor's registers and the CSRW/CSRFORM arrival count, relayed
-        // to the softcore's panel (0x5000012C) the way the fields above are.
-        output  logic   [23:0]  dbg_gdc_cur,
-        output  logic    [7:0]  dbg_gdc_csrcnt,
-        output  logic   [31:0]  dbg_gdc_csrtrace,
         output  logic   [1:0]   gdc_draw_req,
         output  logic   [1:0]   gdc_draw_busy,
         output  logic  [15:0]   gdc_draw_ops,
         output  logic [319:0]   gdc_draw_snaps,
         input   logic   [1:0]   gdc_srv_done_levels,
-        output  logic   [63:0]  pc98_tvfill_view,
-        output  logic   [15:0]  pc98_rowbuf_freq_count,
-        output  logic   [15:0]  pc98_rowbuf_fvalid_count,
-        // The text path's per-frame census -- see PERIPHERALS.
-        output  logic   [31:0]  dbg_frm_a,
-        output  logic   [31:0]  dbg_frm_b,
-        output  logic   [23:0]  dbg_cur_px,
-        output  logic   [15:0]  dbg_cshow_cnt,
-        output  logic   [27:0]  dbg_cshow_at,
         input   logic   [11:0]  tvram_dbg_cell,
         output  logic   [23:0]  tvram_dbg_word,
         output  logic           de_o,
@@ -328,24 +277,9 @@ module CHIPSET #(
         .dma_request                        (~{fdd_dma_req | dma_request[3], fdd_dma_req, dma_request[1], DRQ0}),
         .dma_acknowledge_n                  (dma_acknowledge_n),
         .address_enable_n                   (address_enable_n),
-        .terminal_count_n                   (terminal_count_n),
-        .dbg_hold                           (arb_hold),
-        .dbg_dmac                           (dbg_dmac)
+        .terminal_count_n                   (terminal_count_n)
     );
 
-    assign  dbg_dma = {dbg_fdc_dma[31:17],       // floppy's {state, fifo_count}
-                       dbg_fdc_dma[11],          // floppy's raw dma_req
-                       dbg_fdc_dma[12],          // fdd_dma_req to the 71071
-                       arb_hold[0],              // dma_hold_request
-                       arb_hold[1],              // hold_acknowledge
-                       dma_acknowledge_n,        // DACK, active low
-                       ~terminal_count_n,
-                       address_enable_n,
-                       ext_access_request,
-                       processor_status,
-                       3'd0};
-
-    wire [3:0] arb_hold;
 
     // Video-side glyph reads, RAM.sv's port B out to PERIPHERALS.
     wire        font_rd_req, font_rd_ack, font_rd_valid, font_rd_done;
@@ -412,53 +346,18 @@ module CHIPSET #(
         .dbg_pic_irr                        (dbg_pic_irr),
         .dbg_pic_imr                        (dbg_pic_imr),
         .dbg_pic_isr                        (dbg_pic_isr),
-        .dbg_inta_vec                       (dbg_inta_vec),
-        .dbg_inta_count                     (dbg_inta_count),
         .dbg_pic2_irr                       (dbg_pic2_irr),
         .dbg_pic2_imr                       (dbg_pic2_imr),
         .dbg_pic2_isr                       (dbg_pic2_isr),
-        .dbg_motor_arms                     (dbg_motor_arms),
-        .dbg_motor_pulses                   (dbg_motor_pulses),
-        .dbg_chg                         (dbg_chg),
-        .dbg_strb_be                     (dbg_strb_be),
-        .dbg_strb_94                     (dbg_strb_94),
-        .dbg_strb_cc                     (dbg_strb_cc),
-        .dbg_strb_dat                     (dbg_strb_dat),
-        .dbg_last_ctrl                   (dbg_last_ctrl),
-        .dbg_fdc_x                       (dbg_fdc_x),
-        .dbg_fdc_y                       (dbg_fdc_y),
-        .dbg_fdc_z                       (dbg_fdc_z),
-        .dbg_fdc_w                       (dbg_fdc_w),
-        .dbg_fdc_v                       (dbg_fdc_v),
-        .dbg_fdc_dma                     (dbg_fdc_dma),
-        .dbg_w_path                      (dbg_w_path),
-        .dbg_rw_lvl                      (dbg_rw_lvl),
         .dbg_irq_level                      (dbg_irq_level),
         .dbg_timer_count                    (dbg_timer_count),
         .dbg_kbd_irq_count                  (dbg_kbd_irq_count),
         .dbg_kbd_rd_count                   (dbg_kbd_rd_count),
-        .dbg_gdc_sad                        (dbg_gdc_sad),
-        .dbg_gdc_pitch                      (dbg_gdc_pitch),
-        .dbg_gdc_clk                        (dbg_gdc_clk),
-        .dbg_gdc_unk_cmd                    (dbg_gdc_unk_cmd),
-        .dbg_gdc_unk_count                  (dbg_gdc_unk_count),
-        .dbg_gdc_disp_on                    (dbg_gdc_disp_on),
-        .dbg_gdc_cur                        (dbg_gdc_cur),
-        .dbg_gdc_csrcnt                     (dbg_gdc_csrcnt),
-        .dbg_gdc_csrtrace                   (dbg_gdc_csrtrace),
         .gdc_draw_req                       (gdc_draw_req),
         .gdc_draw_busy                      (gdc_draw_busy),
         .gdc_draw_ops                       (gdc_draw_ops),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
-        .pc98_tvfill_view                   (pc98_tvfill_view),
-        .pc98_rowbuf_freq_count             (pc98_rowbuf_freq_count),
-        .pc98_rowbuf_fvalid_count           (pc98_rowbuf_fvalid_count),
-        .dbg_frm_a                          (dbg_frm_a),
-        .dbg_frm_b                          (dbg_frm_b),
-        .dbg_cur_px                         (dbg_cur_px),
-        .dbg_cshow_cnt                      (dbg_cshow_cnt),
-        .dbg_cshow_at                       (dbg_cshow_at),
         .tvram_dbg_cell                     (tvram_dbg_cell),
         .tvram_dbg_word                     (tvram_dbg_word),
         .VID_R                              (VID_R),

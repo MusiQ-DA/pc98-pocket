@@ -1,4 +1,4 @@
-// The uPD4990 calendar, ported line-for-line from np2kai io/upd4990.c.
+// The uPD4990 calendar, ported line-for-line from np21w io/upd4990.c.
 //
 // A PC-98 reads the date through THIS chip's one-bit serial line: commands
 // go to port 0x20 (STB/CLK/DATA phases packed into one byte), the data comes
@@ -9,13 +9,13 @@
 // resting): the boot passed with a zero date. Now the Pocket's bridge RTC
 // feeds the real thing.
 //
-// The state machine follows np2 exactly, including its quirks:
+// The state machine follows np21w exactly, including its quirks:
 //   - the serial command shifts in through bit 5 of DATA writes when the
 //     parallel command is 7, one CLK at a time;
 //   - both the READ and WRITE paths address cell (~pos)&7 of the byte
-//     (np2 spells the read side ">> ((~pos)&7)" and the write side
+//     (np21w spells the read side ">> ((~pos)&7)" and the write side
 //     "0x80 >> (pos&7)" -- the same bit, written twice);
-//   - "time read" also plants 0x01 in reg[1], np2's "uPD4990 Happy" marker
+//   - "time read" also plants 0x01 in reg[1], np21w's "uPD4990 Happy" marker
 //     that the BIOS accepts as the day-of-week register.
 //
 // REGLEN is 8 (io/upd4990.h): time lands in reg[7:2], the happy marker in
@@ -32,9 +32,9 @@ module pc98_upd4990
     input  wire        wr_stb,
     input  wire [7:0]  wr_data,
 
-    // The time, laid out the way np2's date2bcd fills reg[REGLEN-6..]:
+    // The time, laid out the way np21w's date2bcd fills reg[REGLEN-6..]:
     //   [7:0]   year, BCD (00-99)
-    //   [15:8]  (month << 4) | weekday, binary nibbles (np2 packs it this way)
+    //   [15:8]  (month << 4) | weekday, binary nibbles (np21w packs it this way)
     //   [23:16] day, BCD
     //   [31:24] hour, BCD
     //   [39:32] minute, BCD

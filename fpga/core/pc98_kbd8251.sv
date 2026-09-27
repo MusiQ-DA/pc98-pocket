@@ -20,18 +20,18 @@
 //
 // The reset itself is the 8251's SEND-BREAK bit, not a data byte: the host
 // writes a command with SBRK set (0x3A) and then one without (0x32), and the
-// break's falling edge is what resets the keyboard (np2 io/serial.c,
+// break's falling edge is what resets the keyboard (np21w io/serial.c,
 // keyboard_o43: `if ((!(dat & 8)) && (cmd & 8)) keyboard_resetsignal()`).
 // That edge is the ONLY thing that may arm an ACK here. The first hardware
 // version of this model armed on every write to 0x43 AND on writes to 0x73
-// -- which is the BEEP data port (np2 io/pit.c pit_o73), which the ITF's
+// -- which is the BEEP data port (np21w io/pit.c pit_o73), which the ITF's
 // no-keyboard path programs twice (F8671/F8679). Those phantom ACKs left a
 // 0x60 pending forever, the ITF's 1.4 s re-cycle then "found" it, took the
 // keyboard-present path mid-cycle, and the machine sat black with the guest
 // cycling in F84xx-F86xx: exactly what the Pocket showed.
 //
 // After the break the keyboard MCU re-runs itself and answers 0x60. Neither
-// np2 (whose keyboard only re-sends held keys there, io/keystat.c
+// np21w (whose keyboard only re-sends held keys there, io/keystat.c
 // keystat_resendstat) nor the ROMs leave much doubt about the speed: a real
 // keyboard answers in ~10 ms, far inside the ITF's 82 ms poll window (the
 // V30 bench agrees: tb_pc98_v30 with +kbdpass1 catches even an 80 ms ACK).
@@ -57,7 +57,7 @@
 // ~429 545 (10 ms): that value is proven to carry the ITF through F86AA
 // and the F945D reset dance on the V30 core.
 //
-// Status follows np2's keyboard_i43: `return(status | 0x85)` -- TxRDY, TxE
+// Status follows np21w's keyboard_i43: `return(status | 0x85)` -- TxRDY, TxE
 // and DSR permanently set (the transmitter is always idle here and the
 // keyboard is always connected), RxRDY while a byte waits. Reading 0x41
 // returns the byte and drops RxRDY and IRQ1 (keyboard_i41). The data
@@ -68,7 +68,7 @@
 // or overrun (there is no serial line, and nothing injects a second byte
 // while one waits), so the error bits read zero and the ER command bit is a
 // no-op; and the keyboard's replies to host commands sent through 0x41
-// (0x9C/0x9D/0x9F -> 0xFA.., np2 keystat_ctrlsend) are not synthesised
+// (0x9C/0x9D/0x9F -> 0xFA.., np21w keystat_ctrlsend) are not synthesised
 // because neither ROM writes 0x41 during boot. Both can grow on this module
 // without changing its ports.
 //
@@ -110,7 +110,7 @@ module pc98_kbd8251 #(
     output wire logic irq                    // RxRDY, level, to PIC IR1
 );
 
-    // np2's keybrd.cmd: the last command byte written to 0x43.
+    // np21w's keybrd.cmd: the last command byte written to 0x43.
     logic [7:0] cmd_q;
     // The receive side: one byte deep, like the real 8251's holding register.
     logic [7:0] rx_q;
@@ -134,7 +134,7 @@ module pc98_kbd8251 #(
             wr_data_q       <= 8'h00;
             ctrl_wr_level_q <= 1'b0;
             data_rd_level_q <= 1'b0;
-            rx_q            <= 8'hFF;            // np2's reset value
+            rx_q            <= 8'hFF;            // np21w's reset value
             rx_full         <= 1'b0;
             ack_timer       <= 24'd0;
             key_stb_q       <= 1'b0;
@@ -158,7 +158,7 @@ module pc98_kbd8251 #(
             if (ack_timer != 24'd0)
                 ack_timer <= ack_timer - 24'd1;
 
-            // End of a 0x43 write: np2's keyboard_o43. A break's falling
+            // End of a 0x43 write: np21w's keyboard_o43. A break's falling
             // edge (SBRK was set, now clear) resets the keyboard: the
             // pending answer timer restarts and anything still in the
             // receiver is dropped (keyboard_resetsignal clears status and
@@ -167,7 +167,7 @@ module pc98_kbd8251 #(
                 if (!wr_data_q[3] && cmd_q[3]) begin
                     ack_timer <= ACK_DELAY_TICKS[23:0];
                     rx_full   <= 1'b0;
-                    // np2's keyboard_resetsignal clears the pending buffers
+                    // np21w's keyboard_resetsignal clears the pending buffers
                     // too: a key that was still queued when the keyboard was
                     // reset belongs to the cycle that just died.
                     key_pending <= 1'b0;
@@ -175,7 +175,7 @@ module pc98_kbd8251 #(
                 cmd_q <= wr_data_q;
             end
 
-            // Reading 0x41 takes the byte and drops RxRDY/IRQ1 (np2's
+            // Reading 0x41 takes the byte and drops RxRDY/IRQ1 (np21w's
             // keyboard_i41) -- after the cycle has ended, so the CPU has
             // latched what it was handed.
             if (data_rd_level_q && ~data_read_strobe)

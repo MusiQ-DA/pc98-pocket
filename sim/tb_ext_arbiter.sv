@@ -103,9 +103,7 @@ module tb_ext_arbiter;
         .dma_request(4'd0),
         .dma_acknowledge_n(dma_acknowledge_n),
         .address_enable_n(address_enable_n),
-        .terminal_count_n(terminal_count_n),
-        .dbg_hold(),
-        .dbg_dmac()
+        .terminal_count_n(terminal_count_n)
     );
 
     wire [12:0] s_a; wire [1:0] s_ba;

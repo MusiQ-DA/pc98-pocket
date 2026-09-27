@@ -187,7 +187,7 @@ module tb_pc98_v30;
     logic [7:0] bios [0:98303];      // 0x18000, mapped at E8000
 
     // core_top's reset value, now that the ITF turned out to be a 386 image:
-    // the BIOS bank, booted directly the way np2 boots it.
+    // the BIOS bank, booted directly the way np21w boots it.
     // Power-on bank. Zero -- the BIOS -- is what the core does by default,
     // because a previous session watched the ITF stall at F80388 waiting on
     // the GDC's vertical retrace. That wait is answered now, so +itf=1 is
@@ -227,7 +227,7 @@ module tb_pc98_v30;
     logic [11:0] tvram_fil_cell = 12'd0;
     // The memory switch (A3FE0-A3FFF, tvram cells 0xFF0-0xFFF) is register
     // territory on real hardware: the ITF's VRAM test deliberately stops at
-    // 0x3FDF to avoid it, and np2 re-asserts its config after every clear.
+    // 0x3FDF to avoid it, and np21w re-asserts its config after every clear.
     // The POST clear (FECBB) sweeps the full 16 KB and would stomp it to
     // 0xE1 -- so guest attr writes into those cells are dropped here and the
     // pre-seeded switch values survive the whole boot.
@@ -237,7 +237,7 @@ module tb_pc98_v30;
                     & ~(memsw_cell & cpu_address[13]);
     pc98_tvram u_tvram (
         .clk          (clk_chipset),
-        // Loads the memory switch registers with the np2 defaults while the
+        // Loads the memory switch registers with the np21w defaults while the
         // machine is in reset -- the RTL owns the pre-seed now, the way the
         // real fix carries it into the FPGA.
         .rst          (reset),
@@ -294,7 +294,7 @@ module tb_pc98_v30;
     //   E8253  MOV [1596h],AL            ; the mask
     //   E8288  TEST [1596h],AH / CALL FAR [1598h]
     //
-    // -- and np2's default 0x08 opens the AH=08 gate, which puts CS:IP at
+    // -- and np21w's default 0x08 opens the AH=08 gate, which puts CS:IP at
     // CC00:0000: empty option-ROM window, all zeros, and the run derails
     // there right after printing the full banner. +memsw3=<n> overrides the
     // byte so the question "is this the stale bit?" costs one run.
@@ -306,7 +306,7 @@ module tb_pc98_v30;
             3'd0: memsw_default = 8'h48;   // A3FE2
             3'd1: memsw_default = 8'h05;   // A3FE6
             3'd2: memsw_default = 8'h04;   // A3FEA = 640 KB
-            // 0x00, not np2's 0x08: see pc98_tvram.sv -- that bit claims an
+            // 0x00, not np21w's 0x08: see pc98_tvram.sv -- that bit claims an
             // option ROM at CC00 that this machine does not have, and BASIC
             // far-calls it. Kept in step with the RTL default on purpose.
             3'd3: memsw_default = (memsw3_ovr >= 0) ? 8'(memsw3_ovr) : 8'h00;  // A3FEE
@@ -423,7 +423,7 @@ module tb_pc98_v30;
     wire sysport_33_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0033);
     wire sysport_35_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0035);
     wire sysport_42_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0042);
-    // 0xBE: the FDC's drive/media register (np2 io/fdc.c, fdc_ibe): reads
+    // 0xBE: the FDC's drive/media register (np21w io/fdc.c, fdc_ibe): reads
     // (chgreg & 3) | 8 | 0xF0, so F8 with no drive selected. The 00 this
     // bench answered made the disk-boot attempt's retry flow diverge, and
     // the register context BASIC's strap saw at int 1E was garbage -- its
@@ -438,12 +438,12 @@ module tb_pc98_v30;
         be_wr_d <= be_wr;
         if (be_wr & ~be_wr_d) fdc_be_chgreg <= cpu_data_bus;
     end
-    // 0x31 = DIP switch 2 (np2's sysp_i31 returns pccore.dipsw[1]; np2's
+    // 0x31 = DIP switch 2 (np21w's sysp_i31 returns pccore.dipsw[1]; np21w's
     // default set is 3E E3 7B). Bit0 is the boot order: SET means int 1F is
     // skipped and the machine goes straight to int 1E -- which is how a
     // stock machine avoids IVT[1F]'s D800:2A00, an entry for a BASIC card
     // nothing here has. Bit4 asks the ROM to initialise the memory switch --
-    // but np2 keeps it CLEAR (0xE3) and instead pre-writes the switch bytes
+    // but np21w keeps it CLEAR (0xE3) and instead pre-writes the switch bytes
     // {48,05,04,...} into A3FE2+4i at every reset (pccore_reset), because
     // the ROM's own writer tops out at FEA=2 (512 KB class) while the real
     // 640 KB value is FEA=4. Answer 0xE3: bit0 boot-first, bit4 no-init.
@@ -454,7 +454,7 @@ module tb_pc98_v30;
     // The uPD4990 calendar, the same chip the metal now carries: commands
     // at 0x20, serial data on 0x33's bit 0. The bench feeds it a fixed but
     // REAL date -- year 0x26, month 9, day 0x18 -- where the old constant
-    // 0x08 line handed the BIOS a zero calendar. Both boot on np2; this
+    // 0x08 line handed the BIOS a zero calendar. Both boot on np21w; this
     // proves a real one boots here too.
     logic       upd4990_wr_stb = 1'b0, upd4990_lvl_q = 1'b0;
     logic [7:0] upd4990_wr_data = 8'h00;
@@ -470,7 +470,7 @@ module tb_pc98_v30;
         .wr_stb  (upd4990_wr_stb),
         .wr_data (upd4990_wr_data),
         // 2026-09-18 00:00:00, a Friday. Layout is year | month<<4|week |
-        // day | hour | min | sec, BCD where np2 uses BCD: 26 | 95 | 18 |
+        // day | hour | min | sec, BCD where np21w uses BCD: 26 | 95 | 18 |
         // 00 | 00 | 00.
         .time_in ({8'h00, 8'h00, 8'h00, 8'h18, 8'h95, 8'h26}),
         .cdat    (upd4990_cdat)
@@ -907,7 +907,7 @@ module tb_pc98_v30;
             end
             // Port 0x68, the GDC mode flip-flops. The ROM toggles bit 5
             // (0x0A clear / 0x0B set: KAC/ANK, the force-single-width mode
-            // np2's gdc_restorekacmode derives bitac from) around its
+            // np21w's gdc_restorekacmode derives bitac from) around its
             // CG-window and CRT-init sequences. Logging every write pins the
             // mode the screen is actually in, which the disassembly alone
             // cannot -- the writes are table-driven.
@@ -936,7 +936,7 @@ module tb_pc98_v30;
     end
 
     // The PC-98 interval-timer input: 2.4576 MHz, the machine's PIT clock
-    // (np2's clk_base for this model).  42.954545 MHz is not an integer
+    // (np21w's clk_base for this model).  42.954545 MHz is not an integer
     // multiple, so phase-accumulate and toggle on carry; the falling edges
     // the i8253 counts land at exactly 2.4576 MHz on average.  The old
     // timer_clock (peripheral_ce toggling) was the XT's 1.193181 MHz and ran
@@ -1004,14 +1004,14 @@ module tb_pc98_v30;
         .counter_2_out    ()
     );
 
-    // The interval timer's interrupt is the PIT's own output pin.  np2's
+    // The interval timer's interrupt is the PIT's own output pin.  np21w's
     // scheduled-event model (NEVENT_ITIMER) and the square wave on the pin
     // agree: one rising edge -- one edge-triggered IRQ0 -- per programmed
     // period.  The software stand-in this replaces toggled at a fixed 16384
     // clock-enable rate regardless of what the ROM programmed, which is
     // neither rate nor mode honest.
 
-    // np2 (io/pit.c pit_o71/pit_o77): a completed write to channel 0 -- the
+    // np21w (io/pit.c pit_o71/pit_o77): a completed write to channel 0 -- the
     // count byte, or a control word for it with a real read/load code --
     // clears the master PIC's IRR bit 0, so an interrupt latched before a
     // reprogram cannot be delivered after it.  Same decode as Peripherals.sv.
@@ -1201,13 +1201,13 @@ module tb_pc98_v30;
         .slave_program_n  (1'b1),
         .interrupt_acknowledge_n (inta_n),
         .interrupt_to_cpu (pic1_to_cpu_buf),
-        // np2 quirk: the interval timer's own writes clear the master's IRR
+        // np21w quirk: the interval timer's own writes clear the master's IRR
         // bit 0 (io/pit.c pit_o71/pit_o77) -- a request latched before the
         // reprogram must not survive it.
         .external_irr_clear ({7'b0, pit0_write_clears_irr0}),
         // IRQ0 is the PIT's output pin itself: mode 3's square wave gives one
         // rising edge -- one edge-triggered request -- per programmed period,
-        // which is exactly np2's NEVENT_ITIMER cadence.
+        // which is exactly np21w's NEVENT_ITIMER cadence.
         .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, kbd_rx_full, timer_out0})
     );
 
@@ -1506,7 +1506,7 @@ module tb_pc98_v30;
     int ss_override_val = -1;
     logic [15:0] work_ea_val = 16'h0000;
     // +golden=<file>: seed work-area words from a file right before the
-    // int 1E (the RAM test would zero them at t=0). The np2 golden-state
+    // int 1E (the RAM test would zero them at t=0). The np21w golden-state
     // measurement writes this file. One "ADDR VALUE" hex pair per line.
     string golden_file;
     int golden_fd, golden_cnt, golden_r;
@@ -1534,7 +1534,7 @@ module tb_pc98_v30;
             end
         end
     end
-    // np2's pccore_reset writes the memory switch into the text VRAM at
+    // np21w's pccore_reset writes the memory switch into the text VRAM at
     // 0xA3FE2+4i BEFORE the ROM runs, from cfg {48 05 04 08 01 00 00 6E}.
     // The ROM never initialises it (DIP bit4 clear), so these bytes ARE the
     // machine's memory configuration: FEA=4 is 640 KB -- the value the whole

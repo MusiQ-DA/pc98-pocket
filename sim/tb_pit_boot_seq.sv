@@ -13,8 +13,8 @@
 //   C. The FD80 POST's programming (FDE20: ctrl 0x36, LSB 0x00, MSB 0x60 --
 //      mode 3, count 0x6000 = 100 Hz) toggles continuously, one rising edge
 //      per 10 ms period, which is one IRQ0 per period on an edge-triggered
-//      PIC -- np2's NEVENT_ITIMER cadence.
-//   D. np2's quirk (io/pit.c pit_o71/pit_o77): a completed channel-0 write
+//      PIC -- np21w's NEVENT_ITIMER cadence.
+//   D. np21w's quirk (io/pit.c pit_o71/pit_o77): a completed channel-0 write
 //      clears the master PIC's IRR bit 0, so a request latched before a
 //      reprogram cannot be delivered after it.  D's second half failed for
 //      as long as the 8259's edge detector never disarmed -- "FAIL: D IRR0
@@ -113,7 +113,7 @@ module tb_pit_boot_seq;
         .interrupt_request({7'b0, out0})
     );
 
-    // The np2 quirk decode, same as Peripherals.sv / the boot bench
+    // The np21w quirk decode, same as Peripherals.sv / the boot bench
     logic pit_write_cycle_q = 1'b0;
     wire  pit_write_cycle   = ~chip_select_n & ~write_enable_n;
     wire  pit_write_done    = pit_write_cycle_q & ~pit_write_cycle;
@@ -208,20 +208,20 @@ module tb_pit_boot_seq;
         end else
             $display("--- C: mode 3 continuous: %0d edges in 350 ms (100 Hz period)", edges);
 
-        // ---- D: the np2 IRR0 quirk ------------------------------------------
+        // ---- D: the np21w IRR0 quirk ------------------------------------------
         $display("\n=== D: IRR0 set on the rising edge, cleared by a ch0 write ===");
         wait (u_pic.interrupt_request_register[0] == 1'b1);
         $display("%10t  IRR0 set while the square wave runs (out=%b)", $realtime, out0);
         pit_write(2'b00, 8'h60);                      // ch0 count write
         repeat (10) @(posedge clk_chipset);
         if (u_pic.interrupt_request_register[0] == 1'b0)
-            $display("--- D: ch0 write cleared IRR0, as np2 does");
+            $display("--- D: ch0 write cleared IRR0, as np21w does");
         else begin
             $display("*** FAIL: D IRR0 survived a channel-0 write");
             errors = errors + 1;
         end
 
-        // and a control-word write for ch0 clears it too (np2 pit_o77)
+        // and a control-word write for ch0 clears it too (np21w pit_o77)
         wait (u_pic.interrupt_request_register[0] == 1'b1);
         pit_write(2'b11, 8'h36);
         repeat (10) @(posedge clk_chipset);

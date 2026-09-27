@@ -1,5 +1,5 @@
-import json, subprocess, sys, time
-TOKEN = [l.split(":",1)[1].strip() for l in open("/Users/hiroya/.config/gh/hosts.yml") if "oauth_token:" in l][0]
+import json, os, subprocess, sys, time
+TOKEN = [l.split(":",1)[1].strip() for l in open(os.path.expanduser("~/.config/gh/hosts.yml")) if "oauth_token:" in l][0]
 def resolve(host):
     for _ in range(6):
         out = subprocess.run(["dig","+short",host,"@1.1.1.1"],capture_output=True,text=True).stdout

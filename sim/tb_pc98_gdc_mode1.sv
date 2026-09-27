@@ -4,10 +4,10 @@
 //
 // What is checked:
 //
-//   * reset: mode1 = 0x98 (np2 gdc_biosreset, 24 kHz CRT), bitac = FF
+//   * reset: mode1 = 0x98 (np21w gdc_biosreset, 24 kHz CRT), bitac = FF
 //   * the bit set/reset form: dat < 0x10, bit = 1 << ((dat >> 1) & 7), value
 //     in dat[0] -- and only that form; a byte with the top nibble set is not
-//     a mode write at all (np2 gdc_o68's `if (!(dat & 0xf0))`)
+//     a mode write at all (np21w gdc_o68's `if (!(dat & 0xf0))`)
 //   * bit 5 is the only bit bitac looks at: 0x0B sets it (bitac -> 00, every
 //     cell ANK), 0x0A clears it (bitac -> FF) -- and the other bits moving
 //     must not disturb it
@@ -77,7 +77,7 @@ module tb_pc98_gdc_mode1;
 
         $display("  reset: mode1=%02h bitac=%02h", mode1, bitac);
         if (mode1 !== 8'h98) begin $display("  FAIL reset mode1"); errors++; end
-        chk(8'hFF, "reset is kanji mode, like np2's 0x98");
+        chk(8'hFF, "reset is kanji mode, like np21w's 0x98");
 
         // The ITF's own opening writes (itf.rom file 0x080: 0F, 0x13C: 01,
         // 0x1C3: 08, 0x201: 07, 0x207: 09). 0x98 resets with bits 3 and 4 set,
@@ -103,7 +103,7 @@ module tb_pc98_gdc_mode1;
         chk(8'hFF, "bit 6 (msw accessible) is not the ANK force");
         out68(8'h0C, 8'h99);                          // clear bit 6
 
-        // A byte with the top nibble set is not a bit write: np2's gdc_o68
+        // A byte with the top nibble set is not a bit write: np21w's gdc_o68
         // ignores it outright.
         out68(8'hAB, 8'h99);
         out68(8'h10, 8'h99);

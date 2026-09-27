@@ -275,7 +275,7 @@ module tb_pc98_boot;
     logic [7:0] bios [0:98303];      // 0x18000, mapped at E8000
 
     // core_top's reset value, now that the ITF turned out to be a 386 image:
-    // the BIOS bank, booted directly the way np2 boots it.
+    // the BIOS bank, booted directly the way np21w boots it.
     // Power-on bank. Zero -- the BIOS -- is what the core does by default,
     // because a previous session watched the ITF stall at F80388 waiting on
     // the GDC's vertical retrace. That wait is answered now, so +itf=1 is

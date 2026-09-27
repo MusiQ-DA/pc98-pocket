@@ -645,7 +645,7 @@ module core_top (
 
     // The Pocket's real clock, packed for the uPD4990. The bridge hands over
     // BCD bytes -- date {day [23:16], month [15:8], year [7:0]}, time {hour
-    // [23:16], min [15:8], sec [7:0]} -- and np2's date2bcd wants year, then
+    // [23:16], min [15:8], sec [7:0]} -- and np21w's date2bcd wants year, then
     // month with the weekday in the low nibble, then day/hour/min/sec. The
     // weekday the bridge does not carry, so it comes off Sakamoto's table
     // (0 = Sunday). Combinational helpers rather than block-locals: Quartus
@@ -917,7 +917,6 @@ module core_top (
     wire [3:0] osd_palette_idx;
     wire       osd_in_area;
     wire       osd_active;
-    wire [15:0] rom_win;          // softcore-settable CPU-read snoop window
     wire       osd_credits_req;
     wire [8:0] vkb_key;
     wire       vkb_stb;
@@ -937,58 +936,24 @@ module core_top (
     wire       dock_key_ext;
     wire       dock_key_stb;
 
-    // Driven by the PC-98 keyboard translator further down; declared here
-    // because the softcore instance below reads them and because a non-PC-98
-    // build has no translator and must still elaborate. See the always block
-    // next to pc98_kbd_ps2.
-    // The master GDC's view, from CHIPSET, for the POST panel's GDC line.
+    // The interrupt path's liveness taps, from CHIPSET, for the JTAG probe's
+    // interrupt-word slots (0x1f-0x21 under PC98_PROBE_EXTRA).
     wire  [7:0] dbg_pic_irr;
     wire  [7:0] dbg_pic_imr;
     wire  [7:0] dbg_pic_isr;
-    wire  [7:0] dbg_inta_vec;
-    wire [15:0] dbg_inta_count;
     wire  [7:0] dbg_pic2_irr;
     wire  [7:0] dbg_pic2_imr;
     wire  [7:0] dbg_pic2_isr;
-    wire  [7:0] dbg_motor_arms;
-    wire  [7:0] dbg_motor_pulses;
-    wire  [7:0] dbg_chg;
-    wire  [7:0] dbg_strb_be, dbg_strb_94, dbg_strb_cc, dbg_strb_dat, dbg_last_ctrl;
-    wire [31:0] dbg_fdc_x, dbg_fdc_y, dbg_fdc_w, dbg_fdc_v, dbg_fdc_dma;
-    wire [31:0] dbg_dma;
-    wire [31:0] dbg_dmac;
-    wire [95:0] dbg_fdc_z;
-    wire [15:0] dbg_w_path, dbg_rw_lvl;
     wire  [7:0] dbg_irq_level;
     wire  [7:0] dbg_timer_count;
-    // IF was going to come from psw bit 9 in v30_core's dbg_regs. That port is
-    // inside `ifndef SYNTHESIS and does not exist in a built core, so the flag
-    // is not reachable. int_live -- the PIC's INT output as a LEVEL, already
-    // counted next to int_count -- answers the same question from the other
-    // side: if the PIC is asserting INTR and the count is not moving, the CPU
-    // is refusing it, which is IF=0.
     wire  [7:0] dbg_kbd_irq_count;
     wire  [7:0] dbg_kbd_rd_count;
-    wire [14:0] dbg_gdc_sad;
-    wire  [7:0] dbg_gdc_pitch;
-    wire  [1:0] dbg_gdc_clk;
-    wire  [7:0] dbg_gdc_unk_cmd;
-    wire  [7:0] dbg_gdc_unk_count;
-    wire        dbg_gdc_disp_on;
-    wire [23:0] dbg_gdc_cur;
-    wire  [7:0] dbg_gdc_csrcnt;
-    wire [31:0] dbg_gdc_csrtrace;
     wire  [1:0] gdc_draw_req, gdc_draw_busy, gdc_srv_done_levels;
     wire [15:0] gdc_draw_ops;
     wire [319:0] gdc_draw_snaps;
 
-    // INTR into the CPU. BASIC clears the screen, draws the function key line
-    // and stops; an interrupt that never arrives is the shape that produces
-    // exactly that. int_count is rising edges of the 8259's INTR (saturating)
-    // and int_live is its current level.
-    logic [15:0] int_count = 16'd0;
-    logic        int_live  = 1'b0;
-
+    // How far does a key get? key_count counts pc98_key_stb pulses and
+    // key_last keeps the last {make, code}; the probe's key slot reads them.
     logic [7:0] key_count = 8'h00;
     logic [7:0] key_last  = 8'h00;
 
@@ -1073,119 +1038,11 @@ module core_top (
         .st_req                     (st_req),
         .st_done                    (st_done),
         .st_rdata                   (st_rdata),
-        .post_code                  (post_code),
-        .post_prev                  (post_prev),
-        .post_hist                  (post_hist),
-        .post_mem_addr              (post_mem_addr),
-        .post_live_addr             (post_live_addr),
-        .post_live_max              (post_live_max),
-        .post_live_cs               (post_live_cs),
-        .post_live_ip               (post_live_ip),
-        .post_derail_cs             (post_derail_cs),
-        .post_derail_ip             (post_derail_ip),
-        .post_ring_ip0              (post_ring_ip0),
-        .post_ring_ip1              (post_ring_ip1),
-        .post_ring_ip2              (post_ring_ip2),
-        .post_ring_ip3              (post_ring_ip3),
-        .post_fr0_addr              (post_fr0_addr),
-        .post_fr0_data              (post_fr0_data),
-        .post_fr1_addr              (post_fr1_addr),
-        .post_fr1_data              (post_fr1_data),
-        .post_land_cs               (post_land_cs),
-        .post_land_ip               (post_land_ip),
-        .post_count                 (post_count),
-        .post_max                   (post_max),
-        .post_restarts              (post_restarts),
-        .ivt16_off                  (ivt16_off),
-        .ivt16_seg                  (ivt16_seg),
-        .ivt13_off                  (ivt13_off),
-        .ivt13_seg                  (ivt13_seg),
-        .ivt12_off                  (ivt12_off),
-        .ivt12_seg                  (ivt12_seg),
-        .ivt16_wr_count             (ivt16_wr_count),
-        .wr_any_count               (wr_any_count),
-        .tvram_wr_count             (tvram_wr_count),
-        .rd_any_count               (rd_any_count),
-        .ivt_touch_count            (ivt_touch_count),
-        .wr_last_addr               (wr_last_addr),
-        .tvram_last_addr            (tvram_last_addr),
-        .tvram_row0_code            (tvram_row0_code),
-        .tvram_row0_hi              (tvram_row0_hi),
-        .tvram_row0_attr            (tvram_row0_attr),
-        // The row buffer's own view of row 0 and its fill counters. These were
-        // connected to post_monitor, which has no such ports, so Quartus threw
-        // three "can't find port" errors and every build since has been red.
-        // softcpu_subsystem is what declares them (inputs) and what serves them
-        // to the firmware at 0x5000009C/A0/A4 -- POST_TVF0/TVF1/FRB.
-        .int_count                  (int_count),
-        .int_live                   (int_live),
-        .dbg_pic_irr                (dbg_pic_irr),
-        .dbg_pic_imr                (dbg_pic_imr),
-        .dbg_pic_isr                (dbg_pic_isr),
-        .dbg_inta_vec               (dbg_inta_vec),
-        .dbg_inta_count             (dbg_inta_count),
-        .dbg_pic2_irr               (dbg_pic2_irr),
-        .dbg_pic2_imr               (dbg_pic2_imr),
-        .dbg_pic2_isr               (dbg_pic2_isr),
-        .dbg_motor_arms             (dbg_motor_arms),
-        .dbg_motor_pulses           (dbg_motor_pulses),
-        .dbg_chg                 (dbg_chg),
-        .dbg_strb_be             (dbg_strb_be),
-        .dbg_strb_94             (dbg_strb_94),
-        .dbg_strb_cc             (dbg_strb_cc),
-        .dbg_strb_dat            (dbg_strb_dat),
-        .dbg_last_ctrl           (dbg_last_ctrl),
-        .dbg_fdc_x               (dbg_fdc_x),
-        .dbg_fdc_y               (dbg_fdc_y),
-        .dbg_fdc_z               (dbg_fdc_z),
-        .dbg_fdc_w               (dbg_fdc_w),
-        .dbg_fdc_v               (dbg_fdc_v),
-        .dbg_dma                 (dbg_dma),
-        .dbg_dmac                (dbg_dmac),
-        .dbg_w_path              (dbg_w_path),
-        .dbg_rw_lvl              (dbg_rw_lvl),
-        .dbg_irq_level              (dbg_irq_level),
-        .dbg_timer_count            (dbg_timer_count),
-        .dbg_kbd_irq_count          (dbg_kbd_irq_count),
-        .dbg_kbd_rd_count           (dbg_kbd_rd_count),
-        .dbg_gdc_sad                (dbg_gdc_sad),
-        .dbg_gdc_pitch              (dbg_gdc_pitch),
-        .dbg_gdc_clk                (dbg_gdc_clk),
-        .dbg_gdc_unk_cmd            (dbg_gdc_unk_cmd),
-        .dbg_gdc_unk_count          (dbg_gdc_unk_count),
-        .dbg_gdc_disp_on            (dbg_gdc_disp_on),
-        .dbg_gdc_cur                (dbg_gdc_cur),
-        .dbg_gdc_csrcnt             (dbg_gdc_csrcnt),
-        .dbg_gdc_csrtrace           (dbg_gdc_csrtrace),
-        .dbg_reset_terms            (dbg_bits[7:0]),
         .gdc_draw_req               (gdc_draw_req),
         .gdc_draw_busy              (gdc_draw_busy),
         .gdc_draw_ops               (gdc_draw_ops),
         .gdc_draw_snaps             (gdc_draw_snaps),
-        .gdc_srv_done_levels        (gdc_srv_done_levels),
-        .pc98_tvfill_view           (pc98_tvfill_view),
-        .pc98_rowbuf_freq_count     (pc98_rowbuf_freq_count),
-        .pc98_rowbuf_fvalid_count   (pc98_rowbuf_fvalid_count),
-        .dbg_frm_a                  (dbg_frm_a),
-        .dbg_frm_b                  (dbg_frm_b),
-        .key_count                  (key_count),
-        .key_last                   (key_last),
-        .memsw_seen                 (memsw_seen),
-        .memsize_seen               (memsize_seen),
-        .f0_count                   (f0_count),
-        .raw_strobes                (raw_strobes),
-        .wr_low_cycles              (wr_low_cycles),
-        .rd_low_cycles              (rd_low_cycles),
-        .rom_win                    (rom_win),
-        .rom_read_data              (rom_read_data),
-        .rom_load_data              (rom_load_data),
-        .rom_load_count             (rom_load_count),
-        .io_port_hist               (io_port_hist),
-        .io_wr_count                (io_wr_count),
-        .itf_bank                   (itf_bank),
-        .rlf_drops                  (rlf_drops),
-        .rlf_level_max              ({{(16-(RLF_AW+1)){1'b0}}, rlf_level_max}),
-        .rom_read_count             (rom_read_count)
+        .gdc_srv_done_levels        (gdc_srv_done_levels)
     );
 
     //
@@ -1201,18 +1058,9 @@ module core_top (
             // Extended taps live under PC98_PROBE_EXTRA: at 99% ALM usage the
             // shipping build cannot afford them. Enable the macro in
             // config.tcl for a debug build.
-`ifdef PC98_PROBE_EXTRA
-            8'h01:   probe_data = dbg_frm_a;   // {px lit, nz bytes served}
-            8'h02:   probe_data = dbg_frm_b;   // {nz stored, fills, rb fsm}
-            8'h03:   probe_data = {pc98_rowbuf_fvalid_count, pc98_rowbuf_freq_count};
-            8'h04:   probe_data = pc98_tvfill_view[31:0];
-            8'h05:   probe_data = pc98_tvfill_view[63:32];
-`endif
-            // 0x06-0x0B (row0 cell snapshots) removed: slot 0x1B's auto-stepping
-            // cell read supersedes them, and the mux was over capacity.
-            8'h0C:   probe_data = {dbg_gdc_unk_count, dbg_gdc_unk_cmd, dbg_gdc_disp_on, dbg_gdc_sad};
-            // 0x0D-0x1A removed (POST-overlay monitor taps; io_port_hist duplicated
-            // the MMIO reads; GDC-cursor trace and cshow were for resolved hunts).
+            // 0x01-0x0B were the POST panel's census words (frame census, row
+            // buffer counters, tvfill, GDC snoops) -- their producers are gone
+            // with postmon, so the slots are retired rather than tied to 0.
             8'h1b:   probe_data = {8'h00, tvram_dbg_word};   // {attr,hi,lo} at dbg cell; read auto-steps
             8'h1c:   probe_data = {20'h0, dbg_tvram_cell};   // current debug cell
             8'h1d:   probe_data = {16'h0, key_count, key_last};
@@ -1221,14 +1069,19 @@ module core_top (
             8'h1f:   probe_data = {dbg_pic_irr, dbg_pic_imr, dbg_pic_isr, dbg_timer_count};
             8'h20:   probe_data = {dbg_pic2_irr, dbg_pic2_imr, dbg_pic2_isr, dbg_kbd_irq_count};
             8'h21:   probe_data = {dbg_irq_level, 8'h00, dbg_kbd_rd_count, key_count};
-            8'h23:   probe_data = dbg_dmac;         // 0x50000138's "DC word" -- DMAC FSM state
-            8'h24:   probe_data = dbg_dma;          // FDC DMA handshake view
+            // 0x23/0x24 were the 71071's internal word and the FDC DMA
+            // handshake view; both dbg chains are gone with postmon.
             // 0x25: the JTAG guest-memory master (slot 0x84). rdata is the last
             // byte read back; busy clears and done sets once an access lands.
             8'h25:   probe_data = {16'h0000, jt_st_done, jt_st_req, 6'h00, jt_st_rdata};
             // 0x26: the firmware's answer to the slot-0x85 FDD command --
             // {sectors[11:0], ok, inserted, seq echo, drive, cmd}.
             8'h26:   probe_data = jt_fddstat;
+            // 0x27: the management bus itself -- {writes seen, last address,
+            // fdd_request, fdd_present}. Decides between "firmware wrote
+            // nothing" and "the write arrived but the FDC ignored it".
+            8'h27:   probe_data = {mgmt_wr_seen, mgmt_last,
+                                   2'b00, mgmt_req[7:6], 2'b00, fdd_present};
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:
@@ -1665,10 +1518,9 @@ module core_top (
     // byte of that window was written correctly. A dropped ioctl word is
     // exactly that shape, and it would be invisible to every SDRAM testbench.
     //
-    // So count them, and record how close the FIFO ever came to full.
-    reg [15:0] rlf_drops = 16'd0;
-    reg [RLF_AW:0] rlf_level_max = '0;
-    wire [RLF_AW:0] rlf_level = rlf_wptr - rlf_rptr;
+    // That danger is now only historical context -- the drop/level counters
+    // that watched it left with postmon, and the FIFO's full flag is still
+    // what keeps a dropped word impossible.
 
     // Only words the BIOS loader will actually CONSUME go in here.
     //
@@ -1685,10 +1537,6 @@ module core_top (
             romfifo[rlf_wptr[RLF_AW-1:0]] <= {download_id == 16'd2, dl_addr[24:0], dl_data};
             rlf_wptr <= rlf_wptr + 1'b1;
         end
-        if (dl_wr && rlf_full && rlf_drops != 16'hFFFF)
-            rlf_drops <= rlf_drops + 16'd1;
-        if (rlf_level > rlf_level_max)
-            rlf_level_max <= rlf_level;
         if (rlf_pop && ~rlf_empty)
             rlf_rptr <= rlf_rptr + 1'b1;
     end
@@ -1721,7 +1569,7 @@ module core_top (
     // data.json puts font.rom at bridge 0x10100000. The BRAM keeps the file's
     // ANK sets: the 8x16 half (file 0x0800-0x17FF) at words 0x000-0x7FF and,
     // for the mode1-bit-3-clear case, the 8x8 half (file 0x0000-0x07FF) at
-    // words 0x800-0xBFF (np2 font/fontv98.c). So the window is the whole
+    // words 0x800-0xBFF (np21w font/fontv98.c). So the window is the whole
     // dl_addr 0x100000-0x1017FF.
     wire        font_dl_hit  = dl_wr && (dl_addr[27:16] == 12'h010)
                                      && (dl_addr[15:0] <  16'h1800);
@@ -1773,7 +1621,7 @@ module core_top (
     reg        bios_write_byte_cnt;
     reg        bios_shadow_write;
     reg        font_bank_write;
-    // PC-98: BIOS.ROM is 0x18000 bytes at physical 0x0E8000, which is where np2
+    // PC-98: BIOS.ROM is 0x18000 bytes at physical 0x0E8000, which is where np21w
     // reads it to and what the file size says (docs/PC98_MACHINE_SPEC.md F1).
     // Ninety-six KB, so the slot's address needs seventeen bits, not sixteen --
     // the PC/AT form below masks addr[24:16] to zero and lands everything in
@@ -1825,7 +1673,7 @@ module core_top (
     // So this is not a workaround, it is undoing someone else's edit, and it
     // is what makes a faithful boot possible without an ITF: the ITF's job is
     // to size memory and bank-switch, and mapping the post-ITF image does that
-    // for us. np2 writes exactly the same five bytes (bios.c: mem[0xffff0] =
+    // for us. np21w writes exactly the same five bytes (bios.c: mem[0xffff0] =
     // 0xea, then 0xfd800000) -- it restores the vector too.
     //
     // Only the word at FFFF0 differs, so one address needs intercepting.
@@ -2138,6 +1986,44 @@ module core_top (
     assign jt_fddctl = 32'd0;
 `endif
 
+    // JTAG -> CHIPSET management bus (probe write slot 0x86): one scan latches
+    // {addr[15:0], data[15:0]} and pulses mgmt_write for a clk_chipset cycle.
+    // The softcore is bypassed entirely, so FDD mount/FIFO fills work with the
+    // firmware dead, stale, or mid-hang -- the diagnosis path must not depend
+    // on the thing being diagnosed.
+`ifdef PC98_PROBE_EXTRA
+    reg [15:0] jt_mgmt_addr = 16'h0;
+    reg [15:0] jt_mgmt_data = 16'h0;
+    reg        jt_mgmt_wr   = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        jt_mgmt_wr <= 1'b0;
+        if (probe_wr_pulse && probe_waddr_c == 7'h06) begin
+            jt_mgmt_addr <= probe_wdata_c[31:16];
+            jt_mgmt_data <= probe_wdata_c[15:0];
+            jt_mgmt_wr   <= 1'b1;
+        end
+    end
+`else
+    wire [15:0] jt_mgmt_addr = 16'h0;
+    wire [15:0] jt_mgmt_data = 16'h0;
+    wire        jt_mgmt_wr   = 1'b0;
+`endif
+    wire        mgmt_wr_m   = mgmt_wr | jt_mgmt_wr;
+    wire [15:0] mgmt_addr_m = jt_mgmt_wr ? jt_mgmt_addr : mgmt_addr;
+    wire [15:0] mgmt_dout_m = jt_mgmt_wr ? jt_mgmt_data : mgmt_dout;
+
+    // mgmt bus witness for probe 0x27: a saturating count of writes the
+    // CHIPSET actually saw, and the last address -- answers "did the mount
+    // writes ever arrive" without a firmware round-trip.
+    reg [7:0]  mgmt_wr_seen = 8'h0;
+    reg [15:0] mgmt_last    = 16'h0;
+    always_ff @(posedge clk_chipset)
+        if (mgmt_wr_m) begin
+            if (mgmt_wr_seen != 8'hFF)
+                mgmt_wr_seen <= mgmt_wr_seen + 8'd1;
+            mgmt_last <= mgmt_addr_m;
+        end
+
     sdram_selftest_master u_selftest (
         .clk              (clk_chipset),
         .rst              (reset_sdram),
@@ -2158,75 +2044,12 @@ module core_top (
     );
 
     //
-    // POST monitor taps (inert)
-    //
-    // The overlay that read this bus is gone; the signal names below are kept
-    // only so the softcore debug-register window and the chipset taps they feed
-    // still elaborate, all hard-tied to 0 further down.
+    // CHIPSET bus
     //
     wire [19:0] chipset_address;
     wire        chipset_io_write_n, chipset_memory_read_n, chipset_memory_write_n;
     wire        chipset_aen;
-    wire  [7:0] post_code, post_prev;
-    wire [63:0] post_hist;
-    wire [19:0] post_mem_addr, post_live_addr, post_live_max;
-    wire [15:0] post_live_cs, post_live_ip;
-    wire [15:0] post_derail_cs, post_derail_ip;
-    wire [15:0] post_ring_ip0, post_ring_ip1, post_ring_ip2, post_ring_ip3;
-    wire [19:0] post_fr0_addr, post_fr1_addr;
-    wire [7:0]  post_fr0_data, post_fr1_data;
-    wire [15:0] post_land_cs, post_land_ip;
-    wire [15:0] post_count;
-    wire  [7:0] post_max;
-    wire [15:0] post_restarts;
-    wire [15:0] ivt16_off, ivt16_seg;
-    wire  [7:0] ivt16_wr_count;
-    wire [15:0] ivt13_off, ivt13_seg, ivt12_off, ivt12_seg;
-    wire [15:0] wr_any_count, rd_any_count, ivt_touch_count;
-    wire [15:0] tvram_wr_count;
-    wire [19:0] wr_last_addr;
-    wire [19:0] tvram_last_addr;
-    wire [63:0] tvram_row0_code, tvram_row0_attr, tvram_row0_hi;
-    wire [63:0] pc98_tvfill_view;
-    wire [15:0] pc98_rowbuf_freq_count, pc98_rowbuf_fvalid_count;
-    wire [31:0] dbg_frm_a, dbg_frm_b;
-    wire [23:0] dbg_cur_px;
-    wire [15:0] dbg_cshow_cnt;
-    wire [27:0] dbg_cshow_at;
     wire [23:0] tvram_dbg_word;
-    wire  [3:0] raw_strobes;
-    wire [15:0] wr_low_cycles, rd_low_cycles;
-    wire [127:0] rom_read_data;
-    wire [127:0] rom_load_data;
-    wire   [7:0] rom_load_count;
-    wire  [7:0] rom_read_count;
-    wire [63:0] io_port_hist;
-    wire [15:0] io_wr_count;
-    // The memory-sizing evidence: the A3FEA byte as the GUEST read it, the
-    // size the ITF wrote to [0501], and how many times it has asked for a CPU
-    // reset. These were the POST overlay's taps; with it gone they read 0.
-    wire  [7:0] memsw_seen;
-    wire  [7:0] memsize_seen;
-    wire  [7:0] f0_count;
-
-    // The POST overlay's capture engine (post_monitor.sv) is removed, so the
-    // softcore debug registers and the probe slots that read these words return
-    // 0. This is the same tie-off the POST_MONITOR-off build already shipped.
-    assign {post_code, post_prev, post_hist,
-            post_mem_addr, post_live_addr, post_live_max,
-            post_live_cs, post_live_ip, post_derail_cs, post_derail_ip,
-            post_ring_ip0, post_ring_ip1, post_ring_ip2, post_ring_ip3,
-            post_fr0_addr, post_fr1_addr, post_fr0_data, post_fr1_data,
-            post_land_cs, post_land_ip, post_count, post_max, post_restarts,
-            ivt16_off, ivt16_seg, ivt16_wr_count,
-            ivt13_off, ivt13_seg, ivt12_off, ivt12_seg,
-            wr_any_count, rd_any_count, ivt_touch_count, tvram_wr_count,
-            wr_last_addr, tvram_last_addr,
-            tvram_row0_code, tvram_row0_attr, tvram_row0_hi,
-            raw_strobes, wr_low_cycles, rd_low_cycles,
-            rom_read_data, rom_load_data, rom_read_count, rom_load_count,
-            io_port_hist, io_wr_count,
-            memsw_seen, memsize_seen, f0_count} = '0;
 
     //
     // BOOT HOLD
@@ -2299,16 +2122,6 @@ module core_top (
     wire       pc98_analog;
     wire processor_ready;
     wire interrupt_to_cpu;
-
-    // Counted here rather than next to the declaration above, because
-    // interrupt_to_cpu is declared on the line before this and using a net
-    // ahead of its declaration makes an implicit one-bit wire that then
-    // collides with the real thing.
-    always @(posedge clk_chipset) begin
-        int_live <= interrupt_to_cpu;
-        if (interrupt_to_cpu & ~int_live & (int_count != 16'hFFFF))
-            int_count <= int_count + 16'd1;
-    end
     wire address_latch_enable;
     wire address_direction;
 
@@ -2331,7 +2144,7 @@ module core_top (
 
     // 8255 port B is 0x0033, and on a PC-98 it is an INPUT: bit 3 is a DIP
     // switch inverted, bits 7-5 are the RS-232C modem status, bit 0 is the
-    // calendar clock's data line, and everything else reads zero (np2
+    // calendar clock's data line, and everything else reads zero (np21w
     // io/sysport.c, sysp_i33 -- behaviour reference, not code).
     //
     // It was wired to port_b_out, a PC/AT leftover where port B is an output
@@ -2348,7 +2161,7 @@ module core_top (
     //
     // F8000-FFFFF is 32 KB of ROM that is the ITF at power-on and the system
     // BIOS afterwards. The ITF switches it itself, through port 0x043D:
-    // 0x10 selects the ITF, 0x12 selects the BIOS (np2 io/necio.c, and the real
+    // 0x10 selects the ITF, 0x12 selects the BIOS (np21w io/necio.c, and the real
     // instructions are in the ROM -- BA 3D 04 B0 12 EE at F8A98).
     //
     // The hand-over at F988D is worth knowing, because it says the switch must
@@ -2373,7 +2186,7 @@ module core_top (
     //
     // So boot where the ITF would have handed over. BIOS.ROM's reset vector is
     // already EA 00 00 80 FD, its entry at FD800 is EB 02 EB 5D FA 33 C0 ... --
-    // plain 8086 throughout -- and np2 boots exactly this way, having no ITF at
+    // plain 8086 throughout -- and np21w boots exactly this way, having no ITF at
     // all. The ITF stays loaded in the shadow bank and port 0x043D still
     // switches to it, so nothing is lost; only the power-on choice changes.
     //
@@ -2513,55 +2326,18 @@ module core_top (
         .dbg_pic_irr                        (dbg_pic_irr),
         .dbg_pic_imr                        (dbg_pic_imr),
         .dbg_pic_isr                        (dbg_pic_isr),
-        .dbg_inta_vec                       (dbg_inta_vec),
-        .dbg_inta_count                     (dbg_inta_count),
         .dbg_pic2_irr                       (dbg_pic2_irr),
         .dbg_pic2_imr                       (dbg_pic2_imr),
         .dbg_pic2_isr                       (dbg_pic2_isr),
-        .dbg_motor_arms                     (dbg_motor_arms),
-        .dbg_motor_pulses                   (dbg_motor_pulses),
-        .dbg_chg                         (dbg_chg),
-        .dbg_strb_be                     (dbg_strb_be),
-        .dbg_strb_94                     (dbg_strb_94),
-        .dbg_strb_cc                     (dbg_strb_cc),
-        .dbg_strb_dat                    (dbg_strb_dat),
-        .dbg_last_ctrl                   (dbg_last_ctrl),
-        .dbg_fdc_x                       (dbg_fdc_x),
-        .dbg_fdc_y                       (dbg_fdc_y),
-        .dbg_fdc_z                       (dbg_fdc_z),
-        .dbg_fdc_w                       (dbg_fdc_w),
-        .dbg_fdc_v                       (dbg_fdc_v),
-        .dbg_fdc_dma                     (dbg_fdc_dma),
-        .dbg_dma                         (dbg_dma),
-        .dbg_dmac                        (dbg_dmac),
-        .dbg_w_path                      (dbg_w_path),
-        .dbg_rw_lvl                      (dbg_rw_lvl),
         .dbg_irq_level                      (dbg_irq_level),
         .dbg_timer_count                    (dbg_timer_count),
         .dbg_kbd_irq_count                  (dbg_kbd_irq_count),
         .dbg_kbd_rd_count                   (dbg_kbd_rd_count),
-        .dbg_gdc_sad                        (dbg_gdc_sad),
-        .dbg_gdc_pitch                      (dbg_gdc_pitch),
-        .dbg_gdc_clk                        (dbg_gdc_clk),
-        .dbg_gdc_unk_cmd                    (dbg_gdc_unk_cmd),
-        .dbg_gdc_unk_count                  (dbg_gdc_unk_count),
-        .dbg_gdc_disp_on                    (dbg_gdc_disp_on),
-        .dbg_gdc_cur                        (dbg_gdc_cur),
-        .dbg_gdc_csrcnt                     (dbg_gdc_csrcnt),
-        .dbg_gdc_csrtrace                   (dbg_gdc_csrtrace),
         .gdc_draw_req                       (gdc_draw_req),
         .gdc_draw_busy                      (gdc_draw_busy),
         .gdc_draw_ops                       (gdc_draw_ops),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
-        .pc98_tvfill_view                   (pc98_tvfill_view),
-        .pc98_rowbuf_freq_count             (pc98_rowbuf_freq_count),
-        .pc98_rowbuf_fvalid_count           (pc98_rowbuf_fvalid_count),
-        .dbg_frm_a                          (dbg_frm_a),
-        .dbg_frm_b                          (dbg_frm_b),
-        .dbg_cur_px                         (dbg_cur_px),
-        .dbg_cshow_cnt                      (dbg_cshow_cnt),
-        .dbg_cshow_at                       (dbg_cshow_at),
         .tvram_dbg_cell                     (dbg_tvram_cell),
         .tvram_dbg_word                     (tvram_dbg_word),
         .VID_R                              (r),
@@ -2629,9 +2405,9 @@ module core_top (
         .ems_address                        (ems_address_sel),
         .bios_protect_flag                  (bios_protect_flag),
         .mgmt_readdata                      (mgmt_din),
-        .mgmt_writedata                     (mgmt_dout),
-        .mgmt_address                       (mgmt_addr),
-        .mgmt_write                         (mgmt_wr),
+        .mgmt_writedata                     (mgmt_dout_m),
+        .mgmt_address                       (mgmt_addr_m),
+        .mgmt_write                         (mgmt_wr_m),
         .mgmt_read                          (mgmt_rd),
         .floppy_wp                          (wp_cfg),
         .rtc_time                           (rtc_time),

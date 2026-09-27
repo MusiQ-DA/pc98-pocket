@@ -6,12 +6,12 @@
 // request; everything after that happens here.
 //
 // This is a SCSI-1 direct-access target. The guest builds a command descriptor
-// block in control registers 0x03 onwards -- SCSICTR_CDB in np2kai's table --
+// block in control registers 0x03 onwards -- SCSICTR_CDB in np21w's table --
 // and this code reads it out, works against the HDD image dataslot, fills or
 // drains the buffer and writes the status back. The bridge RAM and the
 // target-dataslot engine are shared with the floppy and IDE paths.
 //
-// Same division of labour np2kai uses: its scsibios.res is `CB 90 90` entries
+// Same division of labour np21w uses: its scsibios.res is `CB 90 90` entries
 // plus a `55 AA` signature, about a kilobyte of nothing, with every command
 // handled on the host side (cbus/scsicmd.c). A command interpreter in RTL was
 // never affordable on a device at 91% ALM.
@@ -46,7 +46,7 @@
 #define SENSE_NOT_READY      0x02
 #define SENSE_ILLEGAL_REQ    0x05
 
-// The CDB lives at control register 0x03 (np2kai cbus/scsiio.tbl, SCSICTR_CDB).
+// The CDB lives at control register 0x03 (np21w cbus/scsiio.tbl, SCSICTR_CDB).
 #define CDB_BASE 0x03
 #define CDB_MAX  12
 

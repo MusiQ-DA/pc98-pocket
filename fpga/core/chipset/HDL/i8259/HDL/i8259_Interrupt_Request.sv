@@ -11,7 +11,7 @@ module i8259_Interrupt_Request (
     input   logic           level_or_edge_toriggered_config,
     input   logic           freeze,
 
-    // np2 (io/pit.c pit_o71/pit_o77): writing the interval timer's count
+    // np21w (io/pit.c pit_o71/pit_o77): writing the interval timer's count
     // (or a control word for channel 0) clears the master PIC's IRR bit 0 on
     // the real machine -- it is what keeps a timer interrupt latched BEFORE a
     // reprogram from being delivered AFTER it, into a handler that may since
@@ -47,7 +47,7 @@ module i8259_Interrupt_Request (
         // ITF's own tests drive counter 0 in mode 0 (F854E ctrl 0x30 count
         // 65536; F8A3C count 0x001A for the INT 08 test; F8A60 count 65536
         // again) and mode 0's output goes high at terminal count and STAYS
-        // high -- np2 models exactly that, firing pic_setirq(0) once per
+        // high -- np21w models exactly that, firing pic_setirq(0) once per
         // terminal count and only re-arming PIT_FLAG_I when the mode field
         // says rate generator or square wave (io/pit.c systimer():
         // "(pitch->ctrl & 0x0c) == 0x04").  The POST panel measured the
@@ -57,7 +57,7 @@ module i8259_Interrupt_Request (
         // edges, sat frozen at 0A57 and the CPU went on executing.
         //
         // Level-following on a pin like that makes IRR bit 0 unclearable.
-        // In particular it defeats np2's own defence: a channel-0 write
+        // In particular it defeats np21w's own defence: a channel-0 write
         // clears the master's IRR bit 0 (io/pit.c pit_o71 and pit_o77:
         // "pic.pi[0].irr &= (~1)"), which is what stops an interrupt latched
         // before a reprogram from being delivered after it.  Peripherals.sv

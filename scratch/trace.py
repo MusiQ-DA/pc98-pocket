@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Recursive-descent code walker over the ITF ROM using dis8086."""
-import sys, importlib.util
-spec = importlib.util.spec_from_file_location("d8", "/Users/hiroya/repo/pc98-pocket/scratch/dis8086.py")
+import os, sys, importlib.util
+D8 = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dis8086.py')
+spec = importlib.util.spec_from_file_location("d8", D8)
 # dis8086 runs main() on import; instead exec its source minus main()
-src = open('/Users/hiroya/repo/pc98-pocket/scratch/dis8086.py').read().replace('\nmain()\n','\n')
+src = open(D8).read().replace('\nmain()\n','\n')
 g = {'__name__':'d8'}
 exec(compile(src,'dis8086.py','exec'), g)
 Dis = g['Dis']
 
-rom = open('/Users/hiroya/.pc98roms/itf.rom','rb').read()
+rom = open(os.path.expanduser('~/.pc98roms/itf.rom'),'rb').read()
 d = Dis(rom, 0)
 
 seeds = [int(x,16) for x in sys.argv[1:]] or [0]

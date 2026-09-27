@@ -257,11 +257,8 @@ module tb_v30_dmac;
         .address_enable                     (),
         .address_strobe                     (),
         .memory_read_n                      (dmac_memrd_n),
-        .memory_write_n                     (dmac_memwr_n),
-        .dbg                                (dbg_dmac)
+        .memory_write_n                     (dmac_memwr_n)
     );
-
-    wire [31:0] dbg_dmac;
 
     // ---- memory + bus --------------------------------------------------------
     logic [7:0] mem [0:1048575];
@@ -379,12 +376,6 @@ module tb_v30_dmac;
         check(u_dmac.u_Timing_And_Control.transfer_mode[2] == 2'b01,
               "out 17h,46 set ch2 mode = single");
 
-        // The POSTMON word reports the same state the probes do: mask at
-        // [31:28], the single-mask write's sticky at bit 7, and a nonzero
-        // write count at [11:8].
-        check(dbg_dmac[31:28] == 4'b1011, "dbg carries mask_register");
-        check(dbg_dmac[7], "dbg sticky: single-mask reg written");
-        check(dbg_dmac[11:8] != 4'h0, "dbg counts the writes");
 
         // Readback over the bus: current address LSB of ch2 should be 00h.
         // (the program ended, so do it hierarchically -- the bus read path is

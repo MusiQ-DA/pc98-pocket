@@ -176,7 +176,7 @@ module tb_pc98_text;
         // ---- 40 columns: mode1 bit 2 ------------------------------------
         // A cell is sixteen dots: every glyph bit lasts two dots, and a
         // column consumes two TVRAM cells, the character living in the even
-        // one (np2kai's maketext40 steps the cell pointer by two).
+        // one (np21w's maketext40 steps the cell pointer by two).
         cur_en = 1'b0;
         scr_attr = 8'hE1; glyph_row = 8'b1010_0000;
         wide = 1'b1;

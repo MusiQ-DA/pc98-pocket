@@ -8,7 +8,7 @@ it computes at boot is what the real machine computes.
 
 ```sh
 # libretro core (headless-capable), needs C++17 for the ymfm parts
-cd /Users/hiroya/NP2kai/sdl
+cd ~/NP2kai/sdl
 make -f Makefile.libretro -j8 CXX_VER="-std=c++17"
 # stub for the unused SDL1 TTF include (font rendering is compiled out)
 # -> sdl/libretro/SDL/SDL_ttf.h  (empty file, see git-less notes below)
@@ -36,8 +36,8 @@ mkdir -p /tmp/np2run/np2kai
 cp /tmp/pc98roms_deploy/{bios,itf,font}.rom /tmp/np2run/np2kai/
 cd /tmp/np2run
 cc -O2 -o np2run np2run.c \
-   -I/Users/hiroya/NP2kai/sdl/libretro/libretro-common/include -ldl
-cp /Users/hiroya/NP2kai/sdl/np2kai_libretro.dylib .
+   -I"$HOME/NP2kai/sdl/libretro/libretro-common/include" -ldl
+cp "$HOME/NP2kai/sdl/np2kai_libretro.dylib" .
 rm -f np2kai/np2kai.cfg        # config otherwise overrides the model
 ./np2run 5400                  # 90 s of emulated time
 ```

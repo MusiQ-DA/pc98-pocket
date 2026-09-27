@@ -37,14 +37,7 @@ module upd71071_Bus_Control_Logic (
     output  logic           read_temporary_register,
     output  logic           read_status_register,
     output  logic   [3:0]   read_current_address,
-    output  logic   [3:0]   read_current_word_count,
-
-    // -- debug: did the guest's register writes ever arrive, and did the
-    // single-mask register (index 1010, I/O port 0x15) specifically? See
-    // upd71071.sv for where these land in POSTMON's DC word.
-    output  logic   [3:0]   dbg_wr_last_reg,
-    output  logic   [3:0]   dbg_wr_cnt,
-    output  logic           dbg_wr_reg_a
+    output  logic   [3:0]   read_current_word_count
 );
 
     //
@@ -121,32 +114,6 @@ module upd71071_Bus_Control_Logic (
     assign  read_current_word_count[1]              = read_flag & (address_in == 4'b0011);
     assign  read_current_word_count[2]              = read_flag & (address_in == 4'b0101);
     assign  read_current_word_count[3]              = read_flag & (address_in == 4'b0111);
-
-    //
-    // Write snoop
-    //
-    // The metal shows DRQ parked high with hold_request flat -- which is the
-    // encoder answering "all masked". Whether the BIOS's own writes ever
-    // reach the chip is the one thing the outside cannot see, so count every
-    // write_flag, keep the last register index, and set a sticky bit the
-    // moment register 1010 (single mask, I/O 0x15) is touched. If that bit
-    // never sets, the BIOS never unmasked us; if the count stays zero, no
-    // write lands at all.
-    //
-    always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
-            dbg_wr_cnt      <= 4'd0;
-            dbg_wr_last_reg <= 4'd0;
-            dbg_wr_reg_a    <= 1'b0;
-        end
-        else if (write_flag) begin
-            if (dbg_wr_cnt != 4'hF)
-                dbg_wr_cnt <= dbg_wr_cnt + 4'd1;
-            dbg_wr_last_reg <= stable_address;
-            if (stable_address == 4'b1010)
-                dbg_wr_reg_a <= 1'b1;
-        end
-    end
 
 endmodule
 

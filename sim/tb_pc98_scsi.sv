@@ -7,7 +7,7 @@
 // something the disk BIOS depends on, and none of them is visible from a
 // command-level test, so they get pinned here.
 //
-// Checked against np2kai cbus/scsiio.c: scsiio_occ0/2/4/6 and
+// Checked against np21w cbus/scsiio.c: scsiio_occ0/2/4/6 and
 // scsiio_icc0/2/4/6, with the indices from cbus/scsiio.tbl.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -115,7 +115,7 @@ module tb_pc98_scsi;
         repeat (4) @(posedge clk);
 
         // ---- the index post-increments, which is how a CDB gets written ----
-        // np2 scsiio_occ2: reg[port] = dat; port++ for port <= 0x19. The BIOS
+        // np21w scsiio_occ2: reg[port] = dat; port++ for port <= 0x19. The BIOS
         // writes SCSICTR_CDB (0x03) once and then pushes the whole descriptor
         // block through 0xCC2.
         io_wr(2'b00, 8'h03);              // select CDB

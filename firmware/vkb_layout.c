@@ -33,7 +33,7 @@
 // The VKB itself still emits Set-2 (the whole pocket_keyboard path is Set-2,
 // and the VKB register carries one bare code per event, no E0 prefix). Keys
 // that exist on a US keyboard take that key's Set-2 code at the same physical
-// position -- the same convention np2kai's SDL host-key table uses, so the
+// position -- the same convention np21w's SDL host-key table uses, so the
 // Set-2 -> PC-98 translator can share one table between the docked keyboard
 // and this overlay:
 //
@@ -51,7 +51,7 @@
 // PC-98-only keys have no Set-2 counterpart, so each carries a bare code that
 // no real keyboard ever sends (unassigned in the Set-2 matrix and outside
 // hid_to_ps2.sv's output), letting the translator decode them unambiguously.
-// PC-98 matrix codes (np2kai keystat.h) are noted for the translator:
+// PC-98 matrix codes (np21w keystat.h) are noted for the translator:
 //
 //   PC-98-only key   matrix   emitted    PC-98-only key   matrix   emitted
 //   STOP             0x60     0x08       ROLL UP          0x36     0x19
@@ -83,7 +83,7 @@
 #define PC98K_DEL    0x28 // PC-98 matrix 0x39
 #define PC98K_RO     0x2F // PC-98 matrix 0x33 (the _ / RO key right of /)
 #define PC98K_KPDIV  0x30 // PC-98 matrix 0x41 (E0 4B needs a prefix; see above)
-#define PC98K_HOMECLR 0x27 // PC-98 matrix 0x3E (HOME / CLR, np2 "HMCR")
+#define PC98K_HOMECLR 0x27 // PC-98 matrix 0x3E (HOME / CLR, np21w "HMCR")
 
 const vkb_key_t vkb_keys[] = {
     // row 0: F1 F2 | ESC 1..0 - ^ ¥ BS STOP | keypad * / + -
@@ -186,7 +186,7 @@ const vkb_key_t vkb_keys[] = {
     KA(286, 65, 34, 15, PC98K_HELP, "HELP"),
     KA(322, 65, 40, 15, PC98K_ROLLUP, "ROLL\x18"), // ROLL + up-arrow glyph
     KA(364, 65, 40, 15, PC98K_ROLLDN, "ROLL\x19"), // ROLL + down-arrow glyph
-    KA(406, 65, 38, 15, PC98K_HOMECLR, "HMCR"), // HOME CLR, np2's name for it
+    KA(406, 65, 38, 15, PC98K_HOMECLR, "HMCR"), // HOME CLR, np21w's name for it
     KA(452, 65, 32, 15, PC98K_INS, "INS"),
     KA(486, 65, 28, 15, PC98K_DEL, "DEL"),
     K2(516, 65, 58, 15, 0x70, "0", "Ins"),

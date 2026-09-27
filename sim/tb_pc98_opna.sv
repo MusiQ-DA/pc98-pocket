@@ -9,7 +9,7 @@
 // audio-level test, so it gets pinned here -- the same way tb_pc98_scsi pins
 // the 0xCC0 window.
 //
-// Checked against np2kai cbus/board86.c (opna_o188/o18a/o18c/o18e and
+// Checked against np21w cbus/board86.c (opna_o188/o18a/o18c/o18e and
 // opna_i188/i18a/i18c/i18e), cbus/pcm86io.c:45-51 (0xA460 bit 0 is what turns
 // the second register pair on), and jt12_mmr.v:342-391 for where jt12 actually
 // keeps its two ADPCM blocks.
@@ -149,7 +149,7 @@ module tb_pc98_opna;
     endtask
 
     // Write a chip register the way a driver does: index to the even port,
-    // value to the odd one (np2kai board86.c:17-51).
+    // value to the odd one (np21w cbus/board86.c (opna_o188)).
     task automatic chip_wr(input logic part, input [7:0] r, input [7:0] v);
         io_wr({part, 1'b0}, r);
         io_wr({part, 1'b1}, v);
@@ -205,7 +205,7 @@ module tb_pc98_opna;
         io_rd(2'b01, got);
         want("SSG reg 0 reads back", got, 8'hA5);
 
-        // np2kai board86.c:74-77: index 0xFF answers 1. Drivers use it to tell
+        // np21w cbus/board86.c (opna_i18a): index 0xFF answers 1. Drivers use it to tell
         // an OPNA board from an empty slot.
         io_wr(2'b00, 8'hFF);
         repeat (8) @(posedge clk);
@@ -213,7 +213,7 @@ module tb_pc98_opna;
         want("index FF is the presence probe", got, 8'h01);
 
         // ================================================================
-        // 2. Extended mode. It is not a chip register: np2kai
+        // 2. Extended mode. It is not a chip register: np21w
         //    cbus/pcm86io.c:45-51 drives it from bit 0 of a write to 0xA460,
         //    and board86.c:80-105 makes 0x18C/0x18E open bus without it.
         // ================================================================

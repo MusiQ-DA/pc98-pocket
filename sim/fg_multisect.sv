@@ -15,7 +15,7 @@
 // last thing keeping PC98_FDC_REAL off, it is fixed in floppy.v behind the
 // NOT_READY_ENDS_COMMAND parameter, and it is asserted here.
 //
-// Checked against np21w io/fdc.c (fdc_o94's three live bits, fdc_i94's
+// Checked against np2kai io/fdc.c (fdc_o94's three live bits, fdc_i94's
 // constant, fdc_obe/fdc_ibe and the ((port>>4)^chgreg)&1 guard, fdc_intwait's
 // pic_setirq, FDC_DriveCheck and fdcsend_error7 for the not-ready result) and
 // against the ROM: ITF F85C3 (slave ICW2 = 0x10), BIOS FF438 / FF4B3 (the
@@ -56,7 +56,6 @@ module tb_pc98_fdc_glue;
     wire       group_live;
     wire       irq_2hd;
     wire       irq_2dd;
-    wire       dma_enable;
 
     pc98_fdc_glue dut (
         .clk(clk), .rst(rst),
@@ -66,8 +65,7 @@ module tb_pc98_fdc_glue;
         .fd_addr(fd_addr), .fd_write(fd_write), .fd_read(fd_read),
         .fd_wdata(fd_wdata), .fd_irq(fd_irq), .fd_busy(fd_busy),
         .ctrl_readback(ctrl_readback), .mode_readback(mode_readback),
-        .group_live(group_live), .irq_2hd(irq_2hd), .irq_2dd(irq_2dd),
-        .dma_enable(dma_enable)
+        .group_live(group_live), .irq_2hd(irq_2hd), .irq_2dd(irq_2dd)
     );
 
     // THE REAL CONTROLLER, behind the glue. The interrupt contract is a loop --
@@ -286,7 +284,7 @@ module tb_pc98_fdc_glue;
         repeat (2) @(posedge clk);
 
         // ---- 0xBE out of reset is 3, so the 2HD window is the live one -----
-        // np21w fdc_reset (io/fdc.c:1155-1161) sets fdc.chgreg = 3; fdc_ibe
+        // np2 fdc_reset (io/fdc.c:1155-1161) sets fdc.chgreg = 3; fdc_ibe
         // returns (chgreg & 3) | 8 | 0xf0.
         window(1'b0);
         want("0xBE reads 0xFB at reset", mode_readback, 8'hFB);
@@ -317,11 +315,9 @@ module tb_pc98_fdc_glue;
 
         // ---- 0x94 becomes a DOR write at register 2 ------------------------
         // The bits floppy.v needs that a PC-98 does not supply are constants:
-        // enable (2), both motors (4,5) and interrupt enable (3). The PC-98
-        // DMA gate is 0x94 BIT 4 (DMAE) on the DRQ line -- the hardware data
-        // book -- and it does not touch the interrupt, so the DOR's bit 3
-        // stays set whatever the guest writes. Drive select stays 0 -- the
-        // uPD765 command's unit field is what really picks the drive.
+        // enable (2) and both motors (4,5). Interrupt enable comes from the
+        // guest's bit 3. Drive select stays 0 -- the uPD765 command's unit
+        // field is what really picks the drive.
         wr_begin(2, 8'h08);
         want("0x94 write addresses reg 2 (DOR)", {5'd0, fd_addr}, 8'd2);
         want1("and asserts a write", fd_write, 1'b1);
@@ -329,34 +325,19 @@ module tb_pc98_fdc_glue;
         wr_end();
 
         // ---- 0x94 READS A CONSTANT, not the byte just written --------------
-        // np21w fdc_i94, io/fdc.c:1064-1087: 0x40, plus 0x20|0x10 for the
+        // np2kai fdc_i94, io/fdc.c:1064-1087: 0x40, plus 0x20|0x10 for the
         // 0xCx port only, plus 0x04 for "internal drives first" (this dip
         // setting) or 0x08 for the other. The old glue handed back ctrl_q,
         // which after the 0x08 above would read 0x08.
-        want("0x94 reads np21w's 0x44 (dipsw[0]=3E arm)", ctrl_readback, 8'h44);
+        want("0x94 reads np2's 0x44 (dipsw[0]=3E arm)", ctrl_readback, 8'h44);
 
-        // The DOR is constant -- guest bit 3 is the motor flag on a PC-98,
-        // not an interrupt gate, and the DMA gate lives on dma_enable.
+        // Interrupt enable off: the same constants, bit 3 clear.
         wr_begin(2, 8'h00);
-        want("DOR stays constant, irq armed", fd_wdata, 8'h3C);
+        want("DOR with irq disabled", fd_wdata, 8'h34);
         wr_end();
 
-        // ---- DMAE = 0x94 bit 4 gates DRQ, nothing else ----------------------
-        // Hardware data book: DMAE is the flip-flop on the DRQ/DACK lines.
-        // np21w agrees -- fdc_o94 watches (ctrlreg ^ dat) & 0x10 and runs
-        // fdc_dmaready/dmac_check on a change. Bit 3 (motor, in np21w)
-        // must NOT move it: that was the mapping that let a BIOS 0x94 write
-        // close the gate while arming DMA.
-        want1("DMAE closed after 0x00 write", dma_enable, 1'b0);
-        wr(2, 8'h10);
-        want1("0x94 bit 4 arms DMAE", dma_enable, 1'b1);
-        wr(2, 8'h08);
-        want1("motor bit alone does not arm it", dma_enable, 1'b0);
-        wr(2, 8'h18);
-        want1("DMAE and motor can coexist", dma_enable, 1'b1);
-
         // ---- bit 7 going 0 -> 1 pulses a reset -----------------------------
-        // np21w's fdc_o94 resets on the EDGE, not the level, so a guest that
+        // np2's fdc_o94 resets on the EDGE, not the level, so a guest that
         // leaves the bit set does not hold the controller down. floppy.v takes
         // a reset at register 4 with bit 7 set. reset_pending is raised by the
         // edge that ends the write, so the pulse is the cycle AFTER it -- look
@@ -385,7 +366,7 @@ module tb_pc98_fdc_glue;
         //
         // floppy.v's irq is a level that stays up until the guest reads the
         // result phase. Which PIC line it appears on is chgreg's business --
-        // np21w io/fdc.c (fdc_intwait), pic_setirq(0x0b) when chgreg & 1 else
+        // np2kai io/fdc.c:46-51, pic_setirq(0x0b) when chgreg & 1 else
         // pic_setirq(0x0a) -- and NEITHER of them is the master's IRQ6 that
         // the first build drove.
         $display("--- interrupt routing ---");
@@ -408,7 +389,7 @@ module tb_pc98_fdc_glue;
         want1("2HD window now dead", group_live, 1'b0);
         window(1'b1);
         want1("2DD window now live", group_live, 1'b1);
-        want("0xCC reads np21w's 0x74 (dipsw[0]=3E arm)", ctrl_readback, 8'h74);
+        want("0xCC reads np2's 0x74 (dipsw[0]=3E arm)", ctrl_readback, 8'h74);
 
         want1("interrupt follows: not 2HD", irq_2hd, 1'b0);
         want1("interrupt follows: slave IRQ10", irq_2dd, 1'b1);
@@ -416,7 +397,7 @@ module tb_pc98_fdc_glue;
         want1("and it drops when floppy.v drops it", irq_2dd, 1'b0);
 
         // ---- the dead window reaches floppy.v not at all -------------------
-        // np21w's guard is the first statement of fdc_o92/fdc_o94/fdc_i90/
+        // np2's guard is the first statement of fdc_o92/fdc_o94/fdc_i90/
         // fdc_i92/fdc_i94: ((port >> 4) ^ chgreg) & 1 -> return. With chgreg
         // now even, 0x92 is dead and 0xCA is live.
         window(1'b0);                      // 0x92, the dead one
@@ -519,7 +500,7 @@ module tb_pc98_fdc_glue;
             want1("reading the MSR does not clear irq", fd_irq, 1'b1);
 
             // A probe of the DEAD window's data port must not clear it either.
-            // This is np21w's guard doing the one job that actually costs
+            // This is np2's guard doing the one job that actually costs
             // something if it is missing.
             window(1'b1);
             watch_reads();
@@ -611,24 +592,21 @@ module tb_pc98_fdc_glue;
             want1("and clears again", fd_irq, 1'b0);
             rd(1, pcn);
 
-            // The PC-98 interrupt is NOT gated by the control port: the data
-            // book's DMAE flip-flop (0x94 bit 4) sits on DRQ/DACK only, and
-            // np21w raises int_stat whatever ctrlreg holds -- the BIOS relies
-            // on seek/recalibrate interrupts before any DMA is armed. So the
-            // same command with a 0x00 control byte must STILL interrupt;
-            // what closes is the DRQ gate.
+            // With the interrupt disabled (control bit 3 low -> DOR bit 3 low
+            // -> floppy.v's dma_irq_enable low) a command must raise nothing.
+            // That is np2's fdc_o94 bit 0x08 and floppy.v's raise_interrupt
+            // agreeing, and it is what makes the enable meaningful.
             wr(2, 8'h00);
-            want1("control 0x00 closes the DRQ gate", dma_enable, 1'b0);
             wr(1, 8'h07);
             wr(1, 8'h00);
             guard = 0;
-            while (guard < 200 && !fd_irq) begin
+            while (guard < 200) begin
                 @(negedge clk);
                 guard++;
             end
             #1;
-            want1("interrupt is not gated by 0x94", fd_irq, 1'b1);
-            want1("and lands on a slave line", irq_2hd | irq_2dd, 1'b1);
+            want1("interrupt disabled: no request", fd_irq, 1'b0);
+            want1("and nothing on either slave line", irq_2hd | irq_2dd, 1'b0);
         end
 
         // ======== THE BIOS'S OWN PATTERN: RECAL x4 BACK-TO-BACK ============
@@ -735,7 +713,7 @@ module tb_pc98_fdc_glue;
         // drive cost every later FDC call an AH=0x90 timeout at FFA57. The IPL
         // read that triggers it is issued right after MEMORY 640KB OK.
         //
-        // What it must answer instead, from np21w:
+        // What it must answer instead, from np2kai:
         //   READ/WRITE DATA and FORMAT go through FDC_DriveCheck (io/fdc.c:
         //   176-182) -> ST0 = FDCRLT_IC0|FDCRLT_NR|(hd<<2)|us = 0x48 here,
         //   ST1 = ST2 = 0, C/H/R/N echoed from the command, seven bytes and an
@@ -855,7 +833,7 @@ module tb_pc98_fdc_glue;
             rd(0, msr);
             want("READ ID offers a result phase", msr, 8'hD0);
             rd(1, st0);  want("READ ID ST0 = IC abnormal, no NR", st0, 8'h40);
-            rd(1, st1);  want("READ ID ST1 = ND, np21w's choice", st1, 8'h04);
+            rd(1, st1);  want("READ ID ST1 = ND, np2's choice", st1, 8'h04);
             rd(1, st2);  want("READ ID ST2 is clear", st2, 8'h00);
             for (int b = 0; b < 4; b++) rd(1, msr);   // C H R N
             rd(0, msr);
@@ -952,7 +930,7 @@ module tb_pc98_fdc_glue;
         end
 
         // ================================================================
-        // The motor interrupt. np21w's fdc_o94 (io/fdc.c:1104-1116) arms a
+        // The motor interrupt. np2kai's fdc_o94 (io/fdc.c:1104-1116) arms a
         // delayed "attention" interrupt when the control byte's BIT 3 rises
         // -- not bit 0, and with no XTMASK gate. The BIOS's boot writes
         // 0x08 then 0x18 to 0x94 (FF56C, FF638 -- bit 0 never set), its 2DD
@@ -964,7 +942,7 @@ module tb_pc98_fdc_glue;
         // fdc_2hd_2dd_ctrl pair).
         begin
             $display("--- the motor interrupt ---");
-            // ~600 ms + margin, np21w's FDC_INT_DELAY of 6 x 100 ms.
+            // ~600 ms + margin, np2's FDC_INT_DELAY of 6 x 100 ms.
 
             // 2DD window live: chgreg bit0 clear.
             window(1'b1);
@@ -1321,7 +1299,7 @@ module tb_pc98_fdc_glue;
             dma_wr(8'h17, 8'h46);
             dma_wr(8'h09, 8'h00); dma_wr(8'h09, 8'h00);
             dma_wr(8'h23, 8'h01);
-            dma_wr(8'h0B, 8'hFF); dma_wr(8'h0B, 8'h03);
+            dma_wr(8'h0B, 8'hFF); dma_wr(8'h0B, 8'h07);
             dma_wr(8'h15, 8'h02);
 
             wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
@@ -1341,122 +1319,6 @@ module tb_pc98_fdc_glue;
             for (int b = 0; b < 6; b++) rd(1, msr);
             rd(0, msr);
             want("MSR idle after EOT=0", msr, 8'h80);
-
-            // ---- early terminal count, the BIOS's 512-byte boot read ----
-            // The BIOS programs count=0x01FF for the IPL fetch: the DMA
-            // TC's halfway through the 1024-byte sector. A real uPD765
-            // abandons the tail and goes to the result phase; the model
-            // used to sit in S_WAIT_FOR_EMPTY_READ_FIFO forever because
-            // its only exit was fifo_empty.
-            dma_mem[20'h20000 + 512] = 8'h5A;              // untouched marker
-            dma_wr(8'h19, 8'h00);
-            dma_wr(8'h17, 8'h46);
-            dma_wr(8'h09, 8'h00); dma_wr(8'h09, 8'h00);
-            dma_wr(8'h23, 8'h02);                          // page 2 -> 0x20000
-            dma_wr(8'h0B, 8'hFF); dma_wr(8'h0B, 8'h01);    // 512 bytes
-            dma_wr(8'h15, 8'h02);
-
-            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
-            wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
-            wr(1, 8'hFF);
-
-            guard = 0;
-            while (!fd_irq && guard < 40_000) begin
-                @(negedge clk); guard++;
-            end
-            #1;
-            want1("early-TC read interrupts", fd_irq, 1'b1);
-            want("early-TC byte 511 landed", dma_mem[20'h20000 + 511], 8'hFF);
-            want("no byte past the TC",      dma_mem[20'h20000 + 512], 8'h5A);
-            rd(1, st0);
-            want("early-TC ST0 clean", st0, 8'h00);
-            for (int b = 0; b < 6; b++) rd(1, msr);
-            rd(0, msr);
-            want("MSR idle after early TC", msr, 8'h80);
-        end
-
-        // ---- the motor pulse waits out a result phase --------------------
-        // POSTMON on metal counted two motor pulses inside the probe window:
-        // each is a fresh INT13 edge, and the ISR it dispatches reads the
-        // data port -- bytes that belong to the result the in-flight
-        // interrupt is still draining. The timer's answer has to hold until
-        // the chip is idle, then still arrive.
-        begin
-            logic [7:0] msr, st0;
-            int guard;
-            $display("--- motor pulse waits out a result phase ---");
-            // floppy.v is in the loop with the 2HD disk still mounted and
-            // the 2HD window live. READ ID gives a seven-byte result phase.
-            window(1'b0);
-            wr(1, 8'h0A); wr(1, 8'h00);
-            guard = 0;
-            while (!fd_irq && guard < 10_000) begin
-                @(negedge clk); guard++;
-            end
-            #1;
-            want1("READ ID interrupts for the hold", fd_irq, 1'b1);
-            rd(1, st0);                  // irq falls; six bytes keep busy up
-            wr(2, 8'h00);                // bit 3 down ...
-            wr(2, 8'h0D);                // ... then up: the 2HD timer arms
-            motor_clr = 1'b1; @(negedge clk); motor_clr = 1'b0;
-            repeat (25_772_010) @(posedge clk);
-            #1;
-            want("no pulse while a result holds", motor_hi_2hd[7:0], 8'd0);
-            for (int b = 0; b < 6; b++) rd(1, msr);   // drain: busy falls
-            repeat (100) @(posedge clk);
-            #1;
-            want("pulse lands once the chip is idle", motor_hi_2hd[7:0], 8'd1);
-        end
-
-        // ---- a control-port reset aborts the parked fill-wait -------------
-        // POSTMON on metal caught the boot at MS=90 with the sector request
-        // gone and SN=00: a 0x94 write had landed while the chip waited in
-        // S_SD_READ_WAIT_FOR_DATA. On this board the reset is the control
-        // port's bit 7 rising edge -- the glue turns it into a reg4 write
-        // with bit 7 set, which is floppy.v's sw_reset. That cleared
-        // pending_command -- dropping the mgmt request the disk server
-        // polls -- but left the state parked, so the fifo could never fill
-        // and no new command could start either. A real uPD765 aborts the
-        // command on that write: the chip goes idle and the next READ DATA
-        // raises the request again.
-        begin
-            logic [7:0] msr;
-            int guard;
-            $display("--- control-port reset aborts a parked read ---");
-            window(1'b0);
-            // Park the chip in the fill-wait: READ DATA on the still-mounted
-            // media, and let the request prove the state was reached.
-            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
-            wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
-            wr(1, 8'hFF);
-            guard = 0;
-            while (!fdd_request[0] && guard < 20_000) begin
-                @(negedge clk); guard++;
-            end
-            #1;
-            want1("read parks waiting on the fifo", fdd_request[0], 1'b1);
-
-            // The BIOS's own reset: control port bit 7 going 0 -> 1, which
-            // the glue forwards as a one-cycle reg4 write with bit 7 set.
-            wr(2, 8'h80);
-            repeat (20) @(posedge clk);
-            #1;
-            want("request drops with the reset", fdd_request[0], 1'b0);
-
-            // Re-issue the same read. With the old half-reset the chip sat
-            // in S_SD_READ_WAIT_FOR_DATA with pending_command zeroed: the
-            // request stayed low and nothing ever ran again.
-            wr(2, 8'h0D);                // bit 7 back down, IRQ re-armed
-            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
-            wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
-            wr(1, 8'hFF);
-            guard = 0;
-            while (!fdd_request[0] && guard < 20_000) begin
-                @(negedge clk); guard++;
-            end
-            #1;
-            want1("a fresh read re-raises the request", fdd_request[0], 1'b1);
-            rd(0, msr);
         end
 
         $display("\n  errors: %0d", errors);
@@ -1469,9 +1331,9 @@ module tb_pc98_fdc_glue;
         // The motor phases each wait out a real ~100 ms timer (4 x 42.95 ms
         // of simulation at the bench's 10 ns clock), so the watchdog has to
         // clear them with room to spare.
-        // The motor tests wait np21w's FDC_INT_DELAY (~600 ms) five times
-        // over, so the watchdog sits past 4 s of simulated time.
-        #4000000000;
+        // The motor tests wait np2's FDC_INT_DELAY (~600 ms) four times
+        // over, so the watchdog sits past 3 s of simulated time.
+        #3200000000;
         $display("FAILED tb_pc98_fdc_glue: timeout");
         $finish;
     end

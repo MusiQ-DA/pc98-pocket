@@ -1,7 +1,7 @@
 //
 // pc98_glyph_addr -- where a cell's glyph lives inside FONT.ROM.
 //
-// Derived from np2 and cross-checked two ways, because a wrong formula here
+// Derived from np21w and cross-checked two ways, because a wrong formula here
 // draws a different real character rather than obvious rubbish.
 //
 // FONT.ROM's kanji region, from font/fontv98.c's v98knjcpy:

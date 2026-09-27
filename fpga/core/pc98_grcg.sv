@@ -7,7 +7,7 @@
 // four accesses and a read-modify-write per plane, which is why this is the
 // piece that decides whether the machine is usable rather than merely correct.
 //
-// THE PORTS (np2kai io/crtc.c):
+// THE PORTS (np21w io/crtc.c):
 //
 //   0x7C  write  mode register; ALSO RESETS THE TILE COUNTER TO 0
 //         read   the mode register back
@@ -20,11 +20,11 @@
 //
 //   bit 7   GRCG on. Clear and every access below is a plain one.
 //   bit 6   RMW (1) or TDW (0)
-//   bits 3:0  PLANE MASK, one per plane, and SET MEANS SKIP. np2kai writes it
+//   bits 3:0  PLANE MASK, one per plane, and SET MEANS SKIP. np21w writes it
 //             as `if (!(grcg.modereg & 1))`, which is easy to read the wrong
 //             way round.
 //
-// THE THREE OPERATIONS, from np2kai mem/memvram.c:
+// THE THREE OPERATIONS, from np21w mem/memvram.c:
 //
 //   TDW  plane[p] = tile[p]
 //        The written byte is DISCARDED -- the macro ends `(void)(v)`. A solid
@@ -44,7 +44,7 @@
 // memory: it takes the four planes' current bytes and hands back what to write
 // and which planes to write. Where the planes live is the caller's business.
 //
-// AND THE FOURTH PLANE IS CONDITIONAL, which a first reading of np2kai's
+// AND THE FOURTH PLANE IS CONDITIONAL, which a first reading of np21w's
 // address constants misses. memm_vram (i386c/cpumem.c) hangs the VRAM handler
 // on all four windows -- A8000 (B), B0000 (R), B8000 (G), E0000 (E) -- and
 // then takes the last one back:
@@ -138,7 +138,7 @@ module pc98_grcg (
             if (wr_commit & wr_is_mode) begin
                 mode   <= wr_d;
                 // Software sets the mode and then writes four tile bytes
-                // expecting the first to be tile 0. np2kai io/crtc.c does this
+                // expecting the first to be tile 0. np21w io/crtc.c does this
                 // in crtc_o7c and it is load-bearing.
                 tcount <= 2'd0;
             end else if (wr_commit & ~wr_is_mode) begin
@@ -178,7 +178,7 @@ module pc98_grcg (
 
     // TCR: a bit is 1 where every UNMASKED plane matches its tile bit. Masked
     // planes contribute nothing, so with all four masked every bit matches and
-    // the answer is 0xFF -- which is what np2kai's `ret = 0; ... return ~ret`
+    // the answer is 0xFF -- which is what np21w's `ret = 0; ... return ~ret`
     // gives, and is worth keeping rather than special-casing.
     wire [7:0] diff = ((mode[0] ? 8'h00 : (plane_rdata[0] ^ tile[0]))
                      | (mode[1] ? 8'h00 : (plane_rdata[1] ^ tile[1]))

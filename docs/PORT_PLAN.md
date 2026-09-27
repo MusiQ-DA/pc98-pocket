@@ -12,7 +12,7 @@ NEC PC-9800シリーズ(PC-9801VX級)を Analogue Pocket openFPGA で動かす�
 | [danifunker/MacLC_pocket](https://github.com/danifunker/MacLC_pocket) | Pocket openFPGA の「シャーシ」構造のテンプレート(bridge/data slots/video/audio/input/SDRAM)。AI協働開発の先例(CLAUDE.md) |
 | [MiSTer-devel/X68000_MiSTer](https://github.com/MiSTer-devel/X68000_MiSTer) | 日本語PCのシステム統合パターン。FDC/FDC_xdf・sasiif・メモリ制御。※sound/のOPM(YM2151)は**不搭載**、FM演算器設計の参考のみ |
 | [MiSTer-devel/PC88_MiSTer](https://github.com/MiSTer-devel/PC88_MiSTer) | uPD765系FDCの別実装、日本語PC周辺IC |
-| [AZO234/NP2kai](https://github.com/AZO234/NP2kai)(np2) | PC-98ハードウェア挙動の**リファレンス**(GDC/EGC/DMA/PIT/OPNAのレジスタ動作)。コード移植はしない |
+| np21w `np21w-src-rev106`(NP21/W 0.86 rev106) | PC-98ハードウェア挙動の**リファレンス**(GDC/EGC/DMA/PIT/OPNAのレジスタ動作)。コード移植はしない |
 | alfikpl/ao486 | 486コア(容量検証後に再評価。初手は不採用) |
 | mtrberzi/ym2608 / nukeykt/YM2608-LLE | OPNA RTL試作 / サイクル精度リファレンス |
 
@@ -37,14 +37,14 @@ NEC PC-9800シリーズ(PC-9801VX級)を Analogue Pocket openFPGA で動かす�
    - **YM2151(OPM)は搭載しない**(PC-98には存在しない音源。FM演算器設計のリファレンス参照に留める)
    - 品質基準 = **PC-98の音楽ドライバ(PMD/PMD86, FMP/FMP86, MUCOM88等)が叩くレジスタ/I/O互換**(0x188-0x18F等)
    - 構成: FM 6ch(OPNA)/3ch(OPN) + SSG(AY-3-8910互換=既存コア流用可) + ADPCM + リズム
-   - リズム/ADPCM辞書はYM2608内蔵ROMダンプ(np2の sound.rom、ユーザー供給。data.json済み)
-   - リファレンス: nukeykt/YM2608-LLE(サイクル精度) > np2 fmgen > mtrberzi/ym2608(VHDL試作)
+   - リズム/ADPCM辞書はYM2608内蔵ROMダンプ(np21wの sound.rom、ユーザー供給。data.json済み)
+   - リファレンス: nukeykt/YM2608-LLE(サイクル精度) > np21w fmgen > mtrberzi/ym2608(VHDL試作)
 7. **ディスク**: FDD優先(**1024バイト/セクタの1.2MB対応が必須**)、HDDイメージ(HDI等)
-8. **ROM類**: BIOS/font/sound ROM は **np2互換のユーザー供給ダンプ**
+8. **ROM類**: BIOS/font/sound ROM は **np21w互換のユーザー供給ダンプ**
    — 実測(2026-09-07, `~/Documents/lodemnc/np2rom/`):
    `BIOS.ROM` 98,304B / `FONT.ROM` 288,768B / `ITF.ROM` 32,768B / `sound.rom` **16,384B**
    ※ 旧記載の「sound.rom=128KB」は誤り。かつ sound.rom は YM2608 のリズムROMではなく
-     -26/-86 ボードの BIOS ROM。**YM2608 リズムROMのダンプは存在せず、np2 は
+     -26/-86 ボードの BIOS ROM。**YM2608 リズムROMのダンプは存在せず、np21w は
      `2608_*.WAV`(計約82KB)で代用している** → 実機実装は別途設計が要る(GOAL.md R3)
 9. **入力**: ゲームパッド→キーマップ + Dock実キーボード/マウス + 仮想キーボード
 10. TH04/05など486必須級タイトルは対象外(V30 スコープ)

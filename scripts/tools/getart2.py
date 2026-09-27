@@ -1,6 +1,6 @@
 import json, os, subprocess, zipfile
 from urllib.parse import urlparse
-TOKEN = [l.split(":",1)[1].strip() for l in open("/Users/hiroya/.config/gh/hosts.yml") if "oauth_token:" in l][0]
+TOKEN = [l.split(":",1)[1].strip() for l in open(os.path.expanduser("~/.config/gh/hosts.yml")) if "oauth_token:" in l][0]
 def resolve(host):
     for _ in range(5):
         out = subprocess.run(["dig","+short",host,"@1.1.1.1"],capture_output=True,text=True).stdout
@@ -25,5 +25,6 @@ code, loc = fetch("https://api.github.com/repos/MusiQ-DA/pc98-pocket/actions/art
 u=urlparse(loc); ip=resolve(u.hostname)
 subprocess.run(["curl","-sS","--resolve",f"{u.hostname}:443:{ip}","-L","-o","/tmp/art_diag.zip",loc],check=True)
 z=zipfile.ZipFile("/tmp/art_diag.zip")
-z.extractall("/Users/hiroya/repo/pc98-pocket/fpga/output_files")
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+z.extractall(os.path.join(REPO, "fpga", "output_files"))
 print("extracted:", z.namelist())

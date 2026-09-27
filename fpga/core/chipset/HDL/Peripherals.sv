@@ -131,70 +131,16 @@ module PERIPHERALS #(
     output  logic    [7:0]  dbg_pic_irr,
     output  logic    [7:0]  dbg_pic_imr,
     output  logic    [7:0]  dbg_pic_isr,
-    // The vector byte the CPU actually received on the second INTA pulse,
-    // and how many acknowledges there have been. The two-PIC cascade was
-    // proven right at the protocol level (tb_pic_cascade) while the machine
-    // still landed the CPU at 0:0500 -- so the remaining suspects are the
-    // real bridge's INTA timing and the IVT's content, and this byte is what
-    // splits them: 0x12/0x13 means delivery worked, anything else (0x0F, 0x00,
-    // garbage) means the acknowledge itself came back wrong.
-    output  logic    [7:0]  dbg_inta_vec,
-    output  logic   [15:0]  dbg_inta_count,
     // The slave PIC's own three, and the motor timer's progress. The drive
     // probe's interrupt dies somewhere between a 0xCC write and the slave's
     // IRR; these four say exactly which link gave out.
     output  logic    [7:0]  dbg_pic2_irr,
     output  logic    [7:0]  dbg_pic2_imr,
     output  logic    [7:0]  dbg_pic2_isr,
-    output  logic    [7:0]  dbg_motor_arms,
-    output  logic    [7:0]  dbg_motor_pulses,
-    output  logic    [7:0]  dbg_chg,
-    output  logic    [7:0]  dbg_strb_be,
-    output  logic    [7:0]  dbg_strb_94,
-    output  logic    [7:0]  dbg_strb_cc,
-    output  logic    [7:0]  dbg_strb_dat,
-    output  logic    [7:0]  dbg_last_ctrl,
-    // The controller itself, from the chipset's side of it: the MSR the
-    // guest last READ, the count of floppy.v interrupt rises, the DOR byte
-    // floppy.v last latched, the count of result bytes read, and the last
-    // byte written to each control port separately (dbg_last_ctrl mixes
-    // 0x94 and 0xCC, which is how a 48 with no matching ROM constant went
-    // unexplained).
-    output  logic   [31:0]  dbg_fdc_x,   // {rd results, DOR, irq rises, MSR}
-    output  logic   [31:0]  dbg_fdc_y,   // {last read byte, 0, 0xCC, 0x94}
-    output  logic   [95:0]  dbg_fdc_z,   // the last TWELVE bytes into the FIFO
-    output  logic   [31:0]  dbg_fdc_w,   // {drops, accepts, reply_left, 0}
-    output  logic   [31:0]  dbg_fdc_v,   // {last port, dead reads, live reads}
-    // The transfer side, for the panel's DM word: the fifo's own view
-    // ({state, bytes held}) plus every hop of the DMA handshake in one
-    // word -- {tc, read, edge-ack, dack, req-to-dmac, req-from-floppy}.
-    output  logic   [31:0]  dbg_fdc_dma,
-    // The write path counted in PERIPHERALS, before any glue: {raw write
-    // strobe, pc98_io_exact clocks} and {write levels, read levels} on the
-    // FDC port selects.
-    output  logic   [15:0]  dbg_w_path,
-    output  logic   [15:0]  dbg_rw_lvl,
     output  logic    [7:0]  dbg_irq_level,
     output  logic    [7:0]  dbg_timer_count,
     output  logic    [7:0]  dbg_kbd_irq_count,
     output  logic    [7:0]  dbg_kbd_rd_count,
-    output  logic   [14:0]  dbg_gdc_sad,
-    output  logic    [7:0]  dbg_gdc_pitch,
-    output  logic    [1:0]  dbg_gdc_clk,
-    output  logic    [7:0]  dbg_gdc_unk_cmd,
-    output  logic    [7:0]  dbg_gdc_unk_count,
-    output  logic           dbg_gdc_disp_on,
-    // The cursor's GDC-side state, served at 0x5000012C, packed to read as
-    // hex digits in panel order: cc E aaa t b (command count, enable, cell
-    // address, slice top, slice bottom). "Sane here and nothing draws"
-    // blames the render path; "E 0 / t b 0 / cc 00" blames the BIOS never
-    // having sent the form or the enable.
-    output  logic   [23:0]  dbg_gdc_cur,
-    output  logic    [7:0]  dbg_gdc_csrcnt,
-    // The byte trace after the last CSRFORM: {count, three bytes}. Whether
-    // the metal's driver sends the one-byte ON or the three-byte table form
-    // -- and where the bytes actually land -- is what the panel's CT reads.
-    output  logic   [31:0]  dbg_gdc_csrtrace,
     // The drawing server: the softcore's GDC engine. Two channels, master
     // and slave; each carries the EXECUTE handshake (req/busy + opcode) and
     // the five snapshot words, and takes back a done LEVEL whose rising
@@ -205,30 +151,6 @@ module PERIPHERALS #(
     output  logic  [15:0]   gdc_draw_ops,
     output  logic [319:0]   gdc_draw_snaps,
     input   logic   [1:0]   gdc_srv_done_levels,
-    output  logic   [63:0]  pc98_tvfill_view,
-    // The kanji fetch path's activity: f_req pulses and f_valid beats. With
-    // ANK out of the BRAM these only move for two-byte cells, so on a screen
-    // of plain text they should sit still -- and a solid tofu where a kanji
-    // should be says whether the fetch ever answered.
-    output  logic   [15:0]  pc98_rowbuf_freq_count,
-    output  logic   [15:0]  pc98_rowbuf_fvalid_count,
-    // Per-frame census of the last unlit segment of the text path. The
-    // pipeline reads healthy all the way to the font bursts while the panel
-    // is black, so these count what nobody has seen yet: px is the dots the
-    // renderer lit, rd the non-zero glyph bytes the row buffer served it
-    // (sampled at the dot-3 latch point), st the non-zero bytes the fill
-    // wrote, fl the fills that ran, rb the row buffer's FSM position.
-    // {px,rd} snapshot on the dot clock's frame edge, {st,fl,rb} on the
-    // chipset clock's; a zero in the middle names the stage that went dark.
-    output  logic   [31:0]  dbg_frm_a,
-    output  logic   [31:0]  dbg_frm_b,
-    // What the PIXEL domain actually latched of the cursor (en,bl,top,bot,
-    // addr) plus how many cursor-slice dots it emitted last frame. On the
-    // metal the GDC side reads sane while nothing draws; this pair says
-    // which side of the clock crossing the failure lives on.
-    output  logic   [23:0]  dbg_cur_px,
-    output  logic   [15:0]  dbg_cshow_cnt,
-    output  logic   [27:0]  dbg_cshow_at,
 
     // TVRAM debug read port: while the guest is not selecting the window,
     // the CPU port's read side answers dbg_cell with {attr,hi,lo} one cycle
@@ -366,7 +288,7 @@ module PERIPHERALS #(
     // and 0xCC have no XT counterpart at all, so pc98_fdc_glue answers them:
     // 0xBE is a real latch (the BIOS steers itself with the readback -- ITF
     // FAFD0 tests bit 0 to pick between 0x90 and 0xC8, BIOS FF3C3 does a
-    // read-modify-write of it), and 0x94/0xCC are np2kai's fdc_i94 constants
+    // read-modify-write of it), and 0x94/0xCC are np21w's fdc_i94 constants
     // rather than the written byte. The glue is instantiated two thousand
     // lines down, beside floppy.v; these are its outputs reaching back.
     logic [7:0] fdc_mode_readback;   // 0xBE
@@ -375,7 +297,7 @@ module PERIPHERALS #(
     logic       fdc_glue_irq_2hd;    // slave IRQ11 -> INT 13h
     logic       fdc_glue_irq_2dd;    // slave IRQ10 -> INT 12h
 
-    // np2kai's guard (io/fdc.c, first statement of fdc_o92/fdc_i90/fdc_i92):
+    // np21w's guard (io/fdc.c, first statement of fdc_o92/fdc_i90/fdc_i92):
     // the window chgreg did NOT select ignores writes and reads 0xFF. Decoded
     // here rather than from floppy0_chip_select_n because that is declared a
     // hundred lines further down; the four ports are the same four.
@@ -419,7 +341,7 @@ module PERIPHERALS #(
     // was only WHERE it listened: 0x03F0-0x03F7, the PC/XT's window. A PC-98
     // guest writes 0x90/0x92 (2HD) and 0xC8/0xCA (2DD).
     //
-    // np2kai io/fdc.c attaches both groups to the same four handlers
+    // np21w io/fdc.c attaches both groups to the same four handlers
     // (`iocore_attachcmnoutex(0x0090, 0x00f9, fdco90, 4)` and the same for
     // 0x00c8), so the two windows are one register set:
     //
@@ -515,11 +437,11 @@ module PERIPHERALS #(
     logic   [2:0]   interrupt_cascade_out;
     logic           interrupt_cascade_io;
 
-    // np2's timer-write quirk, decoded at the source: the byte lands in the
+    // np21w's timer-write quirk, decoded at the source: the byte lands in the
     // i8253 on the trailing edge of the I/O write, and on that same edge the
     // master PIC's IRR bit 0 drops if the byte was a channel-0 count or a
     // control word aimed at channel 0 with a real read/load code (a latch
-    // command arms nothing, so np2 leaves the request alone for it).
+    // command arms nothing, so np21w leaves the request alone for it).
     logic           pit_write_cycle_q;
     wire            pit_write_cycle  = ~timer_chip_select_n & ~io_write_n;
     wire            pit_write_done   = pit_write_cycle_q & ~pit_write_cycle;
@@ -563,7 +485,7 @@ module PERIPHERALS #(
         //.slave_program_or_enable_buffer     (),
         .interrupt_acknowledge_n    (interrupt_acknowledge_n),
         .interrupt_to_cpu           (interrupt_to_cpu_buf),
-        // np2 (io/pit.c): writing the interval timer -- a count byte for
+        // np21w (io/pit.c): writing the interval timer -- a count byte for
         // channel 0, or a control word aimed at it -- clears the master's IRR
         // bit 0, so an interrupt latched before the reprogram cannot fire
         // after it.  The strobe is decoded below, next to the PIT.
@@ -575,7 +497,7 @@ module PERIPHERALS #(
         //
         // MASTER IRQ6 IS NOT THE FLOPPY. That is the PC/XT's wiring; on a
         // PC-98 IRQ6 is INT3, a free expansion line, and the FDC is slave
-        // IRQ10/IRQ11 -- np2kai io/fdc.c:46-51 (pic_setirq 0x0a / 0x0b) and
+        // IRQ10/IRQ11 -- np21w io/fdc.c's fdc_intwait (pic_setirq 0x0a / 0x0b) and
         // the BIOS's own gates at FF438 and FF4B3, which read the SLAVE mask
         // at 0x0A and refuse the call if bit 2 / bit 3 is set. Driving
         // floppy.v's irq in here is what put LVL 41 on the POST panel: a
@@ -637,12 +559,12 @@ module PERIPHERALS #(
         .external_irr_clear         (8'h00),
         // IRQ3 is the FDC's own interrupt (RECALIBRATE finding no drive);
         // IRQ2 is the XTMASK pulse the 100 ms 0xCC timer fires. IRQ4 is the
-        // PC-9801-86's: np2kai sound/opntimer.c:13 has the board's four jumper
+        // PC-9801-86's: np21w sound/opntimer.c (s_irqtable) has the board's four jumper
         // positions as {0x03, 0x0d, 0x0a, 0x0c} -- INT0/INT6/INT41/INT5 -- and
         // the factory setting is INT5, which is IRQ12, slave bit 4.
         //
         // With the real controller those two lines come from floppy.v through
-        // pc98_fdc_glue, steered by chgreg exactly as np2kai's fdc_intwait
+        // pc98_fdc_glue, steered by chgreg exactly as np21w's fdc_intwait
         // steers pic_setirq (io/fdc.c:46-51): 2HD window -> IRQ11 (bit 3,
         // INT 13h, handler at FFAF6), 2DD window -> IRQ10 (bit 2, INT 12h,
         // handler at FFB69).
@@ -663,7 +585,7 @@ module PERIPHERALS #(
     // 8253
     //
     // The PC-98 interval timer counts at the machine's 2.4576 MHz PIT clock
-    // (1.9968 MHz on the 8 MHz class; np2's clk_base for this VM is 2.4576).
+    // (1.9968 MHz on the 8 MHz class; np21w's clk_base for this VM is 2.4576).
     // The XT's 1.193181 MHz below is half that and halves every programmed
     // rate: the BIOS's FDE20 load of 0x6000 ticks at 50 Hz instead of 100 Hz.
     // 42.954545 MHz is not an integer multiple (17.48...), so phase-accumulate
@@ -702,14 +624,14 @@ module PERIPHERALS #(
     // first pass through the loop, one latch short of the read that halts.
     //
     // The beeper's TONE is counter 1, not counter 2. Counter 2 is the
-    // RS-232C baud source (np2 io/pit.c: pit_o75 -> pit_setrs232cspeed);
+    // RS-232C baud source (np21w io/pit.c: pit_o75 -> pit_setrs232cspeed);
     // the B6h the ITF writes at F805DC is that channel's init, not a beep.
     // The boot beep is the ITF's F80738 76h -- counter 1, LSB+MSB, mode 3
     // -- with the divisor fed to 0x73 at F80740/48, exactly the channel
-    // np2's beeper follows (pit_o73 -> beep_hzset / beep_lheventset).
+    // np21w's beeper follows (pit_o73 -> beep_hzset / beep_lheventset).
     //
     // The beeper's MUTE is system-port C bit 3, INVERTED: 1 = silent,
-    // 0 = sounding (np2 sound/beepc.c: buz = (sysport.c & 8) ? 0 : 1), and
+    // 0 = sounding (np21w sound/beepc.c: buz = (sysport.c & 8) ? 0 : 1), and
     // the latch resets to 0xF9 -- muted. The gate is the LATCH, the thing
     // 0x35 reads back, not the XT 8255's port C pin: the BIOS only ever
     // issues bit set/reset words to 0x37, never a mode word, so the chip
@@ -896,8 +818,8 @@ module PERIPHERALS #(
     end
     // THE MOCK IS GONE. pc98_gdc is the real command and parameter interface --
     // see docs/PC98_GDC_DESIGN.md for what it does and does not implement, and
-    // the module header for the two things np2kai's enum would have got wrong.
-    // One note carried over: the mock's bit 7 was CLEAR, and np2kai's gdc_i60
+    // the module header for the two things np21w's enum would have got wrong.
+    // One note carried over: the mock's bit 7 was CLEAR, and np21w's gdc_i60
     // sets it unconditionally. The real module sets it.
     //
     // Text GDC at 0x60/0x62, graphics GDC at 0xA0/0xA2. The even port is
@@ -908,8 +830,6 @@ module PERIPHERALS #(
     wire gdc_s_cs = pc98_io_exact & ((address[7:0] == 8'hA0) | (address[7:0] == 8'hA2));
 
     wire [7:0] gdc_m_dout, gdc_s_dout;
-    wire [7:0] gdc_m_unk_cmd, gdc_m_unk_count;
-    wire [7:0] gdc_s_unk_cmd, gdc_s_unk_count;
 
     // The display registers are not consumed yet: pc98_text_render still
     // derives its cell index from the raster. Wiring them in is the next step
@@ -926,15 +846,7 @@ module PERIPHERALS #(
     wire [4:0]  gdc_m_cur_top,   gdc_s_cur_top;
     wire [4:0]  gdc_m_cur_bot,   gdc_s_cur_bot;
     wire [5:0]  gdc_m_cur_rate,  gdc_s_cur_rate;
-    wire [7:0]  gdc_m_csrcnt;
-    wire [31:0] gdc_m_csrtrace;
     wire [1:0]  gdc_m_zoom,      gdc_s_zoom;
-
-    assign dbg_gdc_sad       = gdc_m_sad[0][14:0];
-    assign dbg_gdc_pitch     = gdc_m_pitch;
-    assign dbg_gdc_unk_cmd   = gdc_m_unk_cmd;
-    assign dbg_gdc_unk_count = gdc_m_unk_count;
-    assign dbg_gdc_disp_on   = gdc_m_disp_on;
     // The drawing-server plumbing: the two channels' handshakes and the
     // done-level synchronisers (the softcore writes the level; the rising
     // edge here retires the EXECUTE in the GDC).
@@ -964,14 +876,6 @@ module PERIPHERALS #(
         end
     endgenerate
 
-    assign dbg_gdc_cur       = {gdc_m_csrcnt,     // cc: command count
-                                gdc_m_cur_en, 3'b000, // E
-                                gdc_m_cur_addr[11:0], // aaa: the cell
-                                gdc_m_cur_top[3:0],   // t
-                                gdc_m_cur_bot[3:0]};  // b
-    assign dbg_gdc_csrcnt    = gdc_m_csrcnt;
-    assign dbg_gdc_csrtrace  = gdc_m_csrtrace;
-
     pc98_gdc u_gdc_m (
         .clk(clock), .reset(reset),
         .cs(gdc_m_cs), .a1(address[1]),
@@ -984,11 +888,9 @@ module PERIPHERALS #(
         .cursor_en(gdc_m_cur_en), .cursor_blink_en(gdc_m_cur_bl),
         .cursor_top(gdc_m_cur_top), .cursor_bottom(gdc_m_cur_bot),
         .cursor_rate(gdc_m_cur_rate), .zoom_disp(gdc_m_zoom),
-        .csr_wr_count(gdc_m_csrcnt), .csr_trace(gdc_m_csrtrace),
         .draw_req(gdc_m_draw_req), .draw_op(gdc_m_draw_op),
         .draw_busy(gdc_m_draw_busy), .srv_done_stb(gdc_m_done_stb),
-        .draw_snap(gdc_m_draw_snap),
-        .unk_cmd(gdc_m_unk_cmd), .unk_count(gdc_m_unk_count)
+        .draw_snap(gdc_m_draw_snap)
     );
 
     pc98_gdc #(.MASTER(1'b0)) u_gdc_s (
@@ -1003,11 +905,9 @@ module PERIPHERALS #(
         .cursor_en(gdc_s_cur_en), .cursor_blink_en(gdc_s_cur_bl),
         .cursor_top(gdc_s_cur_top), .cursor_bottom(gdc_s_cur_bot),
         .cursor_rate(gdc_s_cur_rate), .zoom_disp(gdc_s_zoom),
-        .csr_wr_count(),  // the slave has no cursor; only the master's counts
         .draw_req(gdc_s_draw_req), .draw_op(gdc_s_draw_op),
         .draw_busy(gdc_s_draw_busy), .srv_done_stb(gdc_s_done_stb),
-        .draw_snap(gdc_s_draw_snap),
-        .unk_cmd(gdc_s_unk_cmd), .unk_count(gdc_s_unk_count)
+        .draw_snap(gdc_s_draw_snap)
     );
 
     wire       gdc_stat_read = (gdc_m_cs | gdc_s_cs) & ~io_read_n;
@@ -1023,12 +923,12 @@ module PERIPHERALS #(
     //
     // 0x42 is the printer side of 0x40-0x4F; the ITF trace has it tested for
     // bit 1 clear. Zero satisfies that and claims nothing else.
-    // 0x31 is DIP switch 2 (np2's default set is 3E E3 7B; the E3 is this
+    // 0x31 is DIP switch 2 (np21w's default set is 3E E3 7B; the E3 is this
     // port). Bit 0 set is the boot order: the ROM goes straight to int 1E and
     // skips IVT[1F]'s D800:2A00, an entry for a BASIC option-ROM card nothing
     // here has. Bit 4 CLEAR tells the ROM NOT to re-initialise the memory
     // switch at A3FE0 -- on a real machine that is battery-backed VRAM, and
-    // np2 keeps the bit clear because it pre-writes the switch bytes itself
+    // np21w keeps the bit clear because it pre-writes the switch bytes itself
     // at every reset. pc98_tvram does the same now (it pre-seeds
     // {48 05 04 08 01 00 00 6E} on reset and drops guest writes to those
     // cells), so the bit must be clear here too: the ROM's own writer tops
@@ -1047,7 +947,7 @@ module PERIPHERALS #(
     //
     // A constant A0 could never carry that: the flag has to be written and
     // read back. So the latch lives here, resetting to F9 and answering both
-    // the whole-byte write at 0x35 and the single-bit write at 0x37 (np2
+    // the whole-byte write at 0x35 and the single-bit write at 0x37 (np21w
     // io/sysport.c, sysp_o35 and sysp_o37, as a behaviour reference). Note
     // that a MODE word -- anything with a bit set in the top nibble -- leaves
     // it alone; only the bit set/reset form touches it.
@@ -1086,7 +986,7 @@ module PERIPHERALS #(
     // modem lines, bit 0 the calendar clock -- uPD4990's cdat, the serial
     // data line the BIOS clocks 48 bits out of (FD80's 0x15D3C loop issues
     // the uPD4990 read command at 0x20 and samples THIS bit eight times per
-    // byte, six bytes: the date). np2 answers bit3 | rs232c_stat()&0xe0 |
+    // byte, six bytes: the date). np21w answers bit3 | rs232c_stat()&0xe0 |
     // uPD4990.cdat; with the stock dip set (3E -> bit3=1), no modem (0) and
     // a resting clock line (0) that is 0x08. The port used to be unmodelled
     // here and read as open-bus FF -- every date bit 1, a calendar no real
@@ -1166,11 +1066,11 @@ module PERIPHERALS #(
     // ------------------------------------------------- keyboard 8251
     //
     // 0x41 data / 0x43 status+command: the keyboard's 8251. The chip model
-    // itself -- np2's io/serial.c semantics, the break-edge reset, the 0x60
+    // itself -- np21w's io/serial.c semantics, the break-edge reset, the 0x60
     // answer and its timing against the ITF's poll window -- lives in
     // pc98_kbd8251.sv with the full derivation; here it is only decoded and
     // wired. Note the decode is exact and 0x73 is NOT claimed: 0x73 is the
-    // beep data port (np2 pit_o73), and the ITF's no-keyboard path programs
+    // beep data port (np21w pit_o73), and the ITF's no-keyboard path programs
     // it twice -- arming ACKs there is what blanked the Pocket's screen.
     wire kbd_data_select = pc98_io_exact & (address[7:0] == 8'h41);
     wire kbd_stat_select = pc98_io_exact & (address[7:0] == 8'h43);
@@ -1277,8 +1177,6 @@ module PERIPHERALS #(
         end
     end
 
-    wire pc98_cshow;
-    wire [7:0] pc98_cattr;
     pc98_text_render u_pc98_text (
         .clk(clk_pc98_dot), .pix_ce(1'b1),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px), .gdc_sad(gdc_sad_px),
@@ -1290,34 +1188,8 @@ module PERIPHERALS #(
         .tv_cell(tvram_vid_cell_w), .tv_attr(tvram_vid_attr),
         .font_cell(pc98_font_cell), .font_line(pc98_font_line),
         .font_row(pc98_font_row),
-        .grb(pc98_grb), .pixel(pc98_pixel), .dbg_cshow(pc98_cshow),
-        .dbg_attr(pc98_cattr)
+        .grb(pc98_grb), .pixel(pc98_pixel)
     );
-
-    // The cursor census: dbg_cur_px holds what the dot domain latched of the
-    // cursor (enable, blink-enable, slice, cell), and cshow_frm counts the
-    // dots cursor_show actually fired on last frame -- 0 means the slice never
-    // qualified, ~64 means a full reverse block is reaching the pixel path.
-    logic [15:0] cshow_run = 16'd0, cshow_frm = 16'd0;
-    logic [23:0] cur_px_packed;
-    logic        cshow_seen = 1'b0;
-    logic [27:0] cshow_at;
-    always_ff @(posedge clk_pc98_dot) begin
-        if (pc98_fs) begin
-            cshow_frm     <= cshow_run;
-            cshow_run     <= 16'd0;
-            cshow_seen    <= 1'b0;
-            cur_px_packed <= {gdc_cur_en_px, gdc_cur_bl_px,
-                              gdc_cur_top_px, gdc_cur_bot_px,
-                              gdc_cur_addr_px[11:0]};
-        end else if (pc98_cshow) begin
-            cshow_run <= cshow_run + 16'd1;
-            if (~cshow_seen) begin
-                cshow_seen <= 1'b1;
-                cshow_at   <= {pc98_h, pc98_v, pc98_cattr};
-            end
-        end
-    end
 
     // The graphics half of the picture: the slave GDC's planes, fetched a
     // line ahead over the SDRAM controller's port D and shifted out a dot
@@ -1398,7 +1270,6 @@ module PERIPHERALS #(
                               + {3'd0, pc98_next_row, 4'd0};
 
     wire        pc98_f_req, pc98_f_busy, pc98_f_valid;
-    logic       pc98_f_req_q = 1'b0;
     wire [19:0] pc98_f_addr;
     wire  [7:0] pc98_f_data;
     wire  [7:0] pc98_ank_code;
@@ -1412,7 +1283,7 @@ module PERIPHERALS #(
     // 5 decides whether a cell's high byte can make it a kanji at all, and
     // the POST's own printer (FE0F0) stores single bytes into the code plane
     // and never clears that high byte, so the machine HAS to be able to
-    // honour the "all cells ANK" mode the same way np2's gdc_restorekacmode
+    // honour the "all cells ANK" mode the same way np21w's gdc_restorekacmode
     // does. Same trailing-edge shape as the system port above it: address and
     // command do not change together, and a mode flip taken from a glitched
     // sweep through 0x68 would change every cell's width.
@@ -1474,16 +1345,14 @@ module PERIPHERALS #(
         .analog         (pc98_analog)
     );
 
-    assign dbg_gdc_clk = gdc_clk;
-
-    // Bits 3 and 2 of the same register are the EGC's arm and switch: np2kai
+    // Bits 3 and 2 of the same register are the EGC's arm and switch: np21w
     // only honours bit 2 (VOPBIT_EGC) while bit 3 is set AND the G-RCG is
     // the EGC-capable one (io/gdc.c gdc_o6a's `mode2 & 0x08` and
     // `grcg.chip == 3`). This machine's charger is, so the gate is those two
     // flip-flops and nothing else.
     assign egc_active = mode2_q[3] & mode2_q[2];
 
-    // Ports 0xA4/0xA6: the display and access page bits (np2kai gdc_oa4/
+    // Ports 0xA4/0xA6: the display and access page bits (np21w gdc_oa4/
     // gdc_oa6 -- gdcs.disp and gdcs.access). The access bit banks every
     // graphics window between the two 640x400 pages, and pc98_gvram_seq
     // consumes it; the display bit is the graphics raster's to consume.
@@ -1549,7 +1418,7 @@ module PERIPHERALS #(
     end
 
     // Ports 0x4A0-0x4AF: the EGC register file, forwarded one strobe at a
-    // time to the sequencer that owns the engine. np2kai hangs no read
+    // time to the sequencer that owns the engine. np21w hangs no read
     // handlers on these (iocore_attachout only), so neither does this.
     wire egc_cs = pc98_io_exact & (address[15:4] == 12'h04A);
     assign egc_rg = address[3:0];
@@ -1595,8 +1464,10 @@ module PERIPHERALS #(
         .rst  (reset),
         .wr   (mode68_wr),
         .d    (mode68_data),
-        // mode1 bit 2 is the 40-column switch the text renderer reads and
-        // bit 3 picks the 8x16/8x8 ANK bank below.
+        // mode1 bit 2 is the 40-column switch the text renderer reads; bit 3
+        // picks the font bank -- set is the 8x16 ANK, clear the 8x8 ANK each
+        // of whose rows serves two cell lines. The graphics-display bits are
+        // future work.
         .mode1 (pc98_mode1),
         .bitac(pc98_bitac)
     );
@@ -1612,8 +1483,6 @@ module PERIPHERALS #(
             pc98_ank8 <= ~pc98_mode1[3];
     end
 
-    wire       pc98_st_nz;
-    wire [7:0] pc98_rb_dbg;
     pc98_glyph_rowbuf u_pc98_rowbuf (
         .clk(clock), .rst(reset),
         .fill_start(pc98_row_fill), .row_base(pc98_row_base),
@@ -1631,81 +1500,8 @@ module PERIPHERALS #(
         // drawing: it runs one cell ahead, and using the current column here
         // would shift every line by one.
         .rd_clk(clk_pc98_dot), .rd_cell(pc98_font_cell), .rd_line(pc98_font_line),
-        .rd_byte(pc98_font_row), .kanji_seen(pc98_kanji_seen),
-        .st_nz(pc98_st_nz), .dbg(pc98_rb_dbg)
+        .rd_byte(pc98_font_row), .kanji_seen(pc98_kanji_seen)
     );
-
-    // ---- the frame census the panel prints ---------------------------------
-    //
-    // px counts the dots the renderer lit this frame, rd the non-zero glyph
-    // bytes it fetched from the row buffer (sampled where nxt_row latches
-    // them, dot 3). Both snapshot at frame start; the held word reads on the
-    // chipset clock, a frame being far longer than any synchroniser's skew.
-    logic [15:0] px_run = 16'd0, px_frm = 16'd0;
-    logic [15:0] rd_run = 16'd0, rd_frm = 16'd0;
-    always_ff @(posedge clk_pc98_dot) begin
-        if (pc98_fs) begin
-            px_frm <= px_run;  px_run <= 16'd0;
-            rd_frm <= rd_run;  rd_run <= 16'd0;
-        end else begin
-            if (pc98_pixel)                                 px_run <= px_run + 16'd1;
-            if (pc98_font_row != 8'd0 && pc98_h[2:0] == 3'd3) rd_run <= rd_run + 16'd1;
-        end
-    end
-
-    // st counts the non-zero bytes the fill committed, fl the rows it ran --
-    // twenty-five per frame when the raster is fed. The chipset clock has no
-    // frame_start, so gdc_vs_q's edge stands in; it is the same raster.
-    logic [15:0] st_run = 16'd0, st_frm = 16'd0;
-    logic  [7:0] fl_run = 8'd0,  fl_frm = 8'd0;
-    logic        frm_vs_q = 1'b0;
-    always_ff @(posedge clock) begin
-        frm_vs_q <= gdc_vs_q;
-        if (gdc_vs_q & ~frm_vs_q) begin
-            st_frm <= st_run;  st_run <= 16'd0;
-            fl_frm <= fl_run;  fl_run <= 8'd0;
-        end else begin
-            if (pc98_st_nz)    st_run <= st_run + 16'd1;
-            if (pc98_row_fill) fl_run <= fl_run + 8'd1;
-        end
-    end
-
-    logic [31:0] frm_a_s1;
-    always_ff @(posedge clock) begin
-        frm_a_s1 <= {px_frm, rd_frm};
-        dbg_frm_a <= frm_a_s1;
-        dbg_frm_b <= {st_frm, fl_frm, pc98_rb_dbg};
-        dbg_cur_px    <= cur_px_packed;
-        dbg_cshow_cnt <= cshow_frm;
-        dbg_cshow_at  <= cshow_at;
-    end
-
-    // The fill's view, latched per cell: tvram_fil_cell/lo/hi are stable for
-    // several clocks per cell, so a straight register catches the settled
-    // pair. Only row 0's cells 0-7 are kept (tv_cell is the plane-wide cell
-    // index, so no other row's fill reaches index <8). Byte 2n = hi, 2n+1 =
-    // lo, so one reading reads like the TVRAM itself.
-    always_ff @(posedge clock) begin
-        // BYTE lanes, not bit indices, and FOUR cells, not eight.
-        //
-        // This used to index pc98_tvfill_view -- 64 BITS -- with 0..15 and
-        // assign an eight-bit value to the single bit it selected: every byte
-        // collapsed to its LSB, in the wrong place, and the TVF readout has
-        // been noise since the day it was added. The comment always said
-        // "byte", and eight cells of {hi,lo} is 128 bits, which never fit:
-        // softcpu_subsystem serves exactly two words (0x5000009C and A0), so
-        // four cells is what the panel can show.
-        if (tvram_fil_cell < 12'd4) begin
-            pc98_tvfill_view[{tvram_fil_cell[1:0], 1'b0} * 8 +: 8] <= tvram_vid_char_hi;
-            pc98_tvfill_view[{tvram_fil_cell[1:0], 1'b1} * 8 +: 8] <= tvram_vid_char_lo;
-        end
-    end
-
-    always_ff @(posedge clock) begin
-        if (pc98_f_req & ~pc98_f_req_q) pc98_rowbuf_freq_count <= pc98_rowbuf_freq_count + 16'd1;
-        pc98_f_req_q <= pc98_f_req;
-        if (pc98_f_valid) pc98_rowbuf_fvalid_count <= pc98_rowbuf_fvalid_count + 16'd1;
-    end
 
 
     // ------------------------------------------------------- CG window
@@ -1868,7 +1664,7 @@ module PERIPHERALS #(
     // from the PC/XT base and instantiated unconditionally, so it has been
     // occupying a device that is at 91% ALM.
     //
-    // np2kai agrees about the generation: SUPPORT_IDEIO is in its ia32 /
+    // np21w agrees about the generation: SUPPORT_IDEIO is in its ia32 /
     // PC-9821 definitions only, while the V30/286 common build gets
     // SUPPORT_SCSI. SCSI at 0xCC0 is what replaces this.
     // (Nothing is left to read out of that block: the request output it used
@@ -2006,13 +1802,13 @@ module PERIPHERALS #(
     // the softcore's way in, and the one register the board keeps outside the
     // chip. mgmt chip-select 0xF5, next to pc98_scsi's 0xF4.
     //
-    // np2kai cbus/board86.c:171 binds the ports as
+    // np21w cbus/board86.c (board86_bind) binds the ports as
     //   cbuscore_attachsndex(0x188 + g_opna[0].s.base, opna_o, opna_i)
     // with s.base 0 for the default dip setting (board86.c:158-162), and only
     // the even addresses in the window are the board.
     //
     // 0xA460 bit 0 is the odd one out: it is not a YM2608 register at all.
-    // np2kai cbus/pcm86io.c:45-51 has pcm86_oa460 call fmboard_extenable(val&1)
+    // np21w cbus/pcm86io.c's pcm86_oa460 calls fmboard_extenable(val&1)
     // and board86.c:107-120 makes that the difference between a 6-channel
     // stereo OPNA with a second register pair and a 3-channel mono OPN. Every
     // PC-98 FM driver sets it, and without it half the chip is invisible.
@@ -2109,10 +1905,6 @@ module PERIPHERALS #(
     logic           prev_fdd_dma_ack;
     logic           fdd_dma_rw_ack;
     logic           fdd_dma_tc;
-    wire    [7:0]   fdc_cmd_accepts;
-    wire    [7:0]   fdc_cmd_drops;
-    wire    [3:0]   fdc_reply_left;
-    wire    [14:0]  fdc_xfer;
 
     assign  mgmt_fdd_cs = (mgmt_address[15:8] == 8'hF2);
 
@@ -2128,18 +1920,6 @@ module PERIPHERALS #(
             write_to_fdd  <= internal_data_bus;
         else
             write_to_fdd  <= write_to_fdd;
-    end
-
-    // The port of the LAST I/O read of any kind -- which poll loop the CPU
-    // is in RIGHT NOW: 0x90 the MSR wait, 0x92 the result drain, 0x08 the
-    // slave-PIC in-service poll, 0x33 the calendar, 0x42 the printer gate.
-    // Declared outside the FDC_REAL block: this write is unconditional, so
-    // a stub-config build would otherwise make it an implicit net.
-    logic [7:0] fdc_last_rdport = 8'h00;
-    always_ff @(posedge clock)
-    begin
-        if (~io_read_n && ~address_enable_n)
-            fdc_last_rdport <= address[7:0];
     end
 
     // The PC-98 ports onto floppy.v's PC/XT register file. The MSR and FIFO
@@ -2214,7 +1994,7 @@ module PERIPHERALS #(
         // address[1] is what separates status from data within each pair, and
         // address[6] is what separates the 2HD window from the 2DD one --
         // 0x90/0x92/0x94 have it clear, 0xC8/0xCA/0xCC set. The glue needs
-        // that to apply np2kai's ((port >> 4) ^ chgreg) & 1 guard and to know
+        // that to apply np21w's ((port >> 4) ^ chgreg) & 1 guard and to know
         // which slave line an interrupt belongs on.
         .sel_stat      (fdd_fifo_win & ~fdc_addr_eff[1]),
         .sel_data      (fdd_fifo_win &  fdc_addr_eff[1]),
@@ -2237,15 +2017,7 @@ module PERIPHERALS #(
         .group_live    (fdc_group_live),
         .irq_2hd       (fdc_glue_irq_2hd),
         .irq_2dd       (fdc_glue_irq_2dd),
-        .dma_enable    (fdc_dma_enable),
-        .dbg_motor_arms   (dbg_motor_arms),
-        .dbg_motor_pulses (dbg_motor_pulses),
-        .dbg_chg       (dbg_chg),
-        .dbg_strb_be   (dbg_strb_be),
-        .dbg_strb_94   (dbg_strb_94),
-        .dbg_strb_cc   (dbg_strb_cc),
-        .dbg_strb_dat  (dbg_strb_dat),
-        .dbg_last_ctrl (dbg_last_ctrl)
+        .dma_enable    (fdc_dma_enable)
     );
 
     always_ff @(posedge clock)
@@ -2299,110 +2071,6 @@ module PERIPHERALS #(
     // disk in the drive -- this core's normal state -- it is the difference
     // between a result phase carrying ST0 = 48h and a CB bit that never clears.
 
-    // ---- write-path witnesses, counted HERE, before any glue ------------
-    //
-    // The glue's strobe counters came back all zero while the IO trace showed
-    // the writes, and G 03 hints the 0xBE READ path works -- so the split to
-    // make is decode/level/edge, each counted on the same ports:
-    //   w_ioexact   clocks pc98_io_exact was true at all
-    //   w_rd_lvl    read levels on fdd_94|cc|be selects (~io_read_n)
-    //   w_wr_lvl    write levels on the same selects (~io_write_n)
-    //   w_wr_edge   the raw io_write_n & ~prev_io_write_n strobe, any port
-    logic [7:0] w_ioexact = 8'd0, w_rd_lvl = 8'd0, w_wr_lvl = 8'd0, w_wr_edge = 8'd0;
-    always_ff @(posedge clock) begin
-        if (pc98_io_exact && w_ioexact != 8'hFF)
-            w_ioexact <= w_ioexact + 8'd1;
-        if ((fdd_94_select | fdd_cc_select | fdd_be_select) & ~io_read_n
-            && w_rd_lvl != 8'hFF)
-            w_rd_lvl <= w_rd_lvl + 8'd1;
-        if ((fdd_94_select | fdd_cc_select | fdd_be_select) & ~io_write_n
-            && w_wr_lvl != 8'hFF)
-            w_wr_lvl <= w_wr_lvl + 8'd1;
-        if (io_write_n & ~prev_io_write_n && w_wr_edge != 8'hFF)
-            w_wr_edge <= w_wr_edge + 8'd1;
-    end
-    assign dbg_w_path = {w_wr_edge, w_ioexact};   // [15:8] edge, [7:0] decode
-    assign dbg_rw_lvl = {w_wr_lvl, w_rd_lvl};     // [15:8] writes, [7:0] reads
-
-    // ---- the controller, watched where it meets the chipset -------------
-    //
-    // nD 0D says the command bytes now land; r2 00 with m2 F7 says the BIOS
-    // has unmasked slave bit 3 (INT 13h, the 2HD line) and is waiting for an
-    // interrupt that never comes. Between those two facts sit floppy.v's MSR,
-    // its irq pin, and the DOR it is holding -- none of which anything has
-    // ever read out. IQ 00 means the chip never raised irq; a DOR with bit 3
-    // clear means it was told not to.
-    logic [7:0] fdc_msr_seen   = 8'h00;
-    logic [7:0] fdc_irq_rises  = 8'd0;
-    logic [7:0] fdc_dor_seen   = 8'h00;
-    logic [7:0] fdc_res_reads  = 8'd0;
-    logic [7:0] fdc_last_94    = 8'h00;
-    logic [7:0] fdc_last_be    = 8'h00;   // last byte written to 0xBE (chgreg)
-    logic [7:0] fdc_last_cc    = 8'h00;
-    logic [7:0] fdc_last_rd    = 8'h00;
-    // Reads that reached the chip, against reads the window guard answered
-    // with 0xFF from the chipset. The guest's MSR poll is the boot's whole
-    // inner loop, so if it is polling a DEAD window it sees FF forever --
-    // and MS, which only updates on a read that gets through, freezes at
-    // whatever it last really saw. MS D0 with RL 0 is exactly that shape.
-    logic [7:0] fdc_live_reads = 8'd0;
-    logic [7:0] fdc_dead_reads = 8'd0;
-    logic [7:0] fdc_last_port  = 8'h00;
-    logic [95:0] fdc_fifo_ring = 96'h0;
-    logic       prev_fdd_irq   = 1'b0;
-    always_ff @(posedge clock) begin
-        prev_fdd_irq <= fdd_interrupt;
-        if (fdd_interrupt & ~prev_fdd_irq & (fdc_irq_rises != 8'hFF))
-            fdc_irq_rises <= fdc_irq_rises + 8'd1;
-        if (~io_read_n & prev_io_read_n & pc98_addr_win
-            & ((address[7:0] == 8'h90) | (address[7:0] == 8'h92)
-             | (address[7:0] == 8'hC8) | (address[7:0] == 8'hCA))) begin
-            fdc_last_port <= address[7:0];
-            if (fdc_group_live) begin
-                if (fdc_live_reads != 8'hFF)
-                    fdc_live_reads <= fdc_live_reads + 8'd1;
-            end
-            else if (fdc_dead_reads != 8'hFF)
-                fdc_dead_reads <= fdc_dead_reads + 8'd1;
-        end
-        if (fdd_io_read_1 & ~address_enable_n) begin
-            if (fdd_io_address == 3'd4) fdc_msr_seen <= fdd_readdata_wire;
-            if (fdd_io_address == 3'd5) begin
-                fdc_last_rd <= fdd_readdata_wire;
-                if (fdc_res_reads != 8'hFF)
-                    fdc_res_reads <= fdc_res_reads + 8'd1;
-            end
-        end
-        if (fdd_io_write && (fdd_io_address == 3'd2))
-            fdc_dor_seen <= fdd_io_writedata;
-        // The command stream itself, newest byte in the low end. A 07 01
-        // is a RECALIBRATE of drive 1; 08 is SENSE INTERRUPT STATUS; 04 is
-        // SENSE DRIVE STATUS. Four bytes is one command plus its parameters.
-        if (fdd_io_write && (fdd_io_address == 3'd5))
-            fdc_fifo_ring <= {fdc_fifo_ring[87:0], fdd_io_writedata};
-        if (fdc_wr_edge && fdd_ctrl_win && ~fdc_addr_eff[6])
-            fdc_last_94 <= write_to_fdd;
-        if (fdc_wr_edge && fdd_ctrl_win &&  fdc_addr_eff[6])
-            fdc_last_cc <= write_to_fdd;
-        if (fdc_wr_edge && fdd_mode_win)
-            fdc_last_be <= write_to_fdd;
-    end
-    assign dbg_fdc_x = {fdc_res_reads, fdc_dor_seen, fdc_irq_rises, fdc_msr_seen};
-    assign dbg_fdc_y = {fdc_last_rd, fdc_last_be, fdc_last_cc, fdc_last_94};
-    assign dbg_fdc_z = fdc_fifo_ring;
-    // The bottom byte: what the CPU last got back from a read of the SLAVE
-    // PIC's IMR port, 0x0A -- the FDC exec's guard tests bit 3 of it before
-    // every command, and the panel's m2 reads the REGISTER while this reads
-    // the BUS. If the two disagree, the guard is bailing on a ghost.
-    logic [7:0] fdc_imr_seen = 8'h00;
-    always_ff @(posedge clock)
-        if (~io_read_n && ~address_enable_n && (address[7:0] == 8'h0A))
-            fdc_imr_seen <= interrupt2_data_bus_out;
-    assign dbg_fdc_w = {fdc_cmd_drops, fdc_cmd_accepts, 4'd0, fdc_reply_left, fdc_imr_seen};
-    assign dbg_fdc_v = {fdc_last_rdport, fdc_last_port, fdc_dead_reads, fdc_live_reads};
-    assign dbg_fdc_dma = {fdc_xfer, fdd_dma_tc, fdd_dma_read, fdd_dma_rw_ack,
-                          fdd_dma_ack, fdd_dma_req, fdd_dma_req_wire, 11'd0};
-
     floppy #(
         .NOT_READY_ENDS_COMMAND     (1)
     ) floppy
@@ -2442,12 +2110,7 @@ module PERIPHERALS #(
         .clock_rate                 (clk_select[1] == 1'b0 ? clk_rate :
                                      clk_select[0] == 1'b0 ? {1'b0, clk_rate[27:1]} : {2'b00, clk_rate[27:2]}),
 
-        .request                    (fdd_request),
-
-        .dbg_cmd_accepts            (fdc_cmd_accepts),
-        .dbg_cmd_drops              (fdc_cmd_drops),
-        .dbg_reply_left             (fdc_reply_left),
-        .dbg_xfer                   (fdc_xfer)
+        .request                    (fdd_request)
     );
 
     always_ff @(posedge clock)
@@ -2489,39 +2152,6 @@ module PERIPHERALS #(
     //
     // data_bus_out
     //
-    
-    // The vector byte of the LAST acknowledge, latched as the SECOND pulse
-    // of the pair closes. The 8288 sequences two pulses per interrupt and
-    // the chip answers on the second, so the byte sitting on the mux below
-    // near the end of that pulse is what the CPU takes.
-    logic       inta_q;
-    logic       inta_second;         // 1 while the pulse in flight is #2
-    logic [7:0] inta_vec_sample;
-    always_ff @(posedge clock) inta_q <= interrupt_acknowledge_n;
-    always_ff @(posedge clock or posedge reset) begin
-        if (reset) begin
-            inta_second     <= 1'b0;
-            inta_vec_sample <= 8'h00;
-            dbg_inta_vec    <= 8'h00;
-            dbg_inta_count  <= 16'd0;
-        end
-        else begin
-            // Track the bus through the pulse; the answer is on it well
-            // before the pulse ends.
-            if (~interrupt_acknowledge_n)
-                inta_vec_sample <= data_bus_out;
-            // A pulse just closed. The second of the pair carried the
-            // vector -- keep it.
-            if (~inta_q && interrupt_acknowledge_n) begin
-                if (inta_second) begin
-                    dbg_inta_vec <= inta_vec_sample;
-                    if (dbg_inta_count != 16'hFFFF)
-                        dbg_inta_count <= dbg_inta_count + 16'd1;
-                end
-                inta_second <= ~inta_second;
-            end
-        end
-    end
 
     always_ff @(posedge clock)
     begin
@@ -2608,12 +2238,12 @@ module PERIPHERALS #(
         else if (pg_a4_cs & ~io_read_n)
         begin
             data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= {7'b0, gvram_disp_page};   // np2kai gdc_ia4
+            data_bus_out <= {7'b0, gvram_disp_page};   // np21w gdc_ia4
         end
         else if (pg_a6_cs & ~io_read_n)
         begin
             data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= {7'b0, gvram_access_page}; // np2kai gdc_ia6
+            data_bus_out <= {7'b0, gvram_access_page}; // np21w gdc_ia6
         end
         else if (gdc_stat_read)
         begin

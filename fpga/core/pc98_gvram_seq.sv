@@ -19,7 +19,7 @@
 // as if this module were not here, which is what makes it safe to add before
 // anything uses it.
 //
-// THE THREE SHAPES (np2kai mem/memvram.c):
+// THE THREE SHAPES (np21w mem/memvram.c):
 //
 //   write, TDW  one write per unmasked plane, of that plane's tile. The byte
 //               the guest wrote is discarded.
@@ -28,7 +28,7 @@
 //   read        one read per unmasked plane, and the answer is the TCR mask:
 //               a bit is 1 where EVERY unmasked plane matches its tile bit.
 //
-// THE EGC SHAPES (np2kai mem/memegc.c, egc_writebyte/egc_readbyte). When the
+// THE EGC SHAPES (np21w mem/memegc.c, egc_writebyte/egc_readbyte). When the
 // EGC is active it supersedes the GRCG's transform, and every access walks
 // all four planes regardless of the GRCG's mask -- the EGC's own access
 // register gates them:
@@ -41,7 +41,7 @@
 //          answer with the plane fgbg 9:8 names, unless ope 0x2000 asks for
 //          the raw plane -- the same byte, until the shift pipeline exists.
 //
-// THE ACCESS PAGE (port 0xA6 bit 0, np2kai's gdcs.access). Page one of the
+// THE ACCESS PAGE (port 0xA6 bit 0, np21w's gdcs.access). Page one of the
 // graphics RAM has no guest address -- the real machine rebanks the same
 // windows -- so this module readdresses every plane access through
 // pc98_gvram_plane1 and raises mem_page1, and RAM.sv banks the byte at
@@ -92,7 +92,7 @@ module pc98_gvram_seq (
     input  wire        mem_ready,
 
     // ---- the access page (port 0xA6 bit 0) -------------------------------
-    // Rebanks every plane window between the two 640x400 pages, np2kai's
+    // Rebanks every plane window between the two 640x400 pages, np21w's
     // gdcs.access. When set, this module addresses planes through
     // pc98_gvram_plane1 and asserts mem_page1 so RAM.sv banks the byte at
     // 0x600000, past the guest's map and EMS alike.
@@ -102,7 +102,7 @@ module pc98_gvram_seq (
     // ---- the EGC ---------------------------------------------------------
     // Register writes decoded upstream (Peripherals, ports 0x4A0-0x4AF) and
     // forwarded here, where the engine that consumes them lives. egc_active
-    // is mode2 bits 3 and 2 together (np2kai's VOPBIT_EGC gate, io/gdc.c
+    // is mode2 bits 3 and 2 together (np21w's VOPBIT_EGC gate, io/gdc.c
     // gdc_o6a: bit 3 arms the EGC-capable G-RCG, bit 2 switches the memory
     // layer onto the EGC path).
     input  wire        egc_active,
@@ -171,7 +171,7 @@ module pc98_gvram_seq (
     // Which plane an EGC read answers with, and the byte it gave.
     wire [1:0] egc_rd_plane = egc_fgbg[9:8];
     reg  [7:0] egc_rd_q;
-    // The mask byte this write applies, np2kai's mask2: the mask register's
+    // The mask byte this write applies, np21w's mask2: the mask register's
     // byte for THIS half of the word (egc_writebyte's ext). A zero byte
     // suppresses the plane's write entirely, as egc_writebyte's `if` does.
     wire [7:0] egc_mask_b = cpu_addr[0] ? egc_mask[15:8] : egc_mask[7:0];
@@ -221,7 +221,7 @@ module pc98_gvram_seq (
                                  : pc98_gvram_plane(a, p);
     endfunction
 
-    // The transform, per np2kai: TDW lays the tile down and discards the
+    // The transform, per np21w: TDW lays the tile down and discards the
     // guest's byte; RMW uses it as a mask between the tile and what is there;
     // the EGC masks the engine's byte into what is there; a plain access
     // writes the guest's byte unchanged.
@@ -381,7 +381,7 @@ module pc98_gvram_seq (
                 // The answer itself is the mux above -- TCR returns the
                 // INVERSE, a bit set where every unmasked plane matched, and
                 // with every plane masked nothing differs and it is 0xFF,
-                // which is np2kai's behaviour too.
+                // which is np21w's behaviour too.
                 if (!(cpu_rd | cpu_wr)) st <= S_IDLE;
               end
 

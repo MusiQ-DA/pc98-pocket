@@ -1,14 +1,14 @@
 //
 // pc98_video_timing -- the 640x400 raster, 24.83 kHz.
 //
-// Numbers from np2's own GDC clock table (io/gdc.c), not from memory:
+// Numbers from np21w's own GDC clock table (io/gdc.c), not from memory:
 //
 //     {14318180 / 8, 112 - 8, 112 + 8, 200, 300}   15.98 kHz
 //     {21052600 / 8, 106 - 6, 106 + 6, 400, 575}   24.83 kHz   <- this one
 //     {25260000 / 8, 100 - 8, 100 + 8, 400, 575}   31 kHz
 //
 // The first field is the CHARACTER clock, so the dot clock is 21.0526 MHz and
-// the horizontal total is 106 characters of 8 dots = 848. np2 then computes
+// the horizontal total is 106 characters of 8 dots = 848. np21w then computes
 // hclock = clock / x = 2631575 / 106 = 24,826 Hz, and the vertical rate is
 // hclock / y -- 440 lines gives 56.4 Hz, which is the mode PC-98 software
 // expects.

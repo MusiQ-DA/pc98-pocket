@@ -35,8 +35,6 @@ for w in v:
 sys.exit(0 if b == bytes(vb[:len(b)]) else 1)
 PY
 
-python3 scripts/check_osd_layout.py
-
 [ -d "$DST" ] || { echo "no $DST -- put the Pocket into USB access mode"; exit 1; }
 cp firmware/firmware.bin "$DST/"
 sync

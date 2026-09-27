@@ -8,7 +8,7 @@
 // Peripherals.sv has it under MACHINE_PC98:
 //
 //   - the i8253 chip model, selected by the PC-98 decode (0x71/73/75/77)
-//   - the system-port C latch (0x35 whole-byte, 0x37 bit set/reset; np2
+//   - the system-port C latch (0x35 whole-byte, 0x37 bit set/reset; np21w
 //     io/sysport.c semantics -- mode words ignored, reset value 0xF9)
 //   - the beeper: counter 1's mode-3 square, muted by latch bit 3
 //
@@ -36,7 +36,7 @@
 //      2.4576 MHz PIT clock), not some free-running default.
 //   D. 0x37 <- 07h closes the gate mid-song: silence at once.
 //   E. a mode word (0x37 <- B6h, top nibble set) must not touch the gate --
-//      np2 ignores mode words on the system port.
+//      np21w ignores mode words on the system port.
 //   F. 0x35 <- F7/FF gates the beeper too (whole-byte path) and the latch
 //      is what 0x35 reads back.
 //   G. counter 2 is NOT the beeper: with counter 1 at ~2 kHz and counter 2
@@ -275,7 +275,7 @@ module tb_pc98_beep;
         io_write(8'h37, 8'hB6);
         run_ms(2);
         $display("    latch=%02X  edges=%0d", pc98_sysport_c, edges);
-        check(pc98_sysport_c == 8'hF9, "E: mode word ignored (np2 sysp_o37)");
+        check(pc98_sysport_c == 8'hF9, "E: mode word ignored (np21w sysp_o37)");
         check(edges == 0, "E: no sound through a mode word");
 
         // ---- F: the whole-byte path 0x35 also gates ---------------------------

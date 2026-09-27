@@ -18,7 +18,7 @@
 // F8A3C (count 0x001A for the INT 08 test), F8A60 (65536 again) -- and the
 // only mode-3 programming in either ROM is FD80's FDE02 (ctrl 0x36, count
 // 0x6000 = 100 Hz), which this boot never reached: a square wave would have
-// pinned TMR at its 0xFF saturation in half a second.  np2 models the same
+// pinned TMR at its 0xFF saturation in half a second.  np21w models the same
 // thing as an event, not a level: systimer() calls pic_setirq(0) once per
 // terminal count and only re-arms PIT_FLAG_I when the mode field says rate
 // generator or square wave (io/pit.c: "(pitch->ctrl & 0x0c) == 0x04").
@@ -26,7 +26,7 @@
 // What was broken was the 8259's edge detector.  It armed while the pin was
 // low and never disarmed, so "edge" meant "the pin is high and has ever been
 // low" -- a level.  On a pin latched high that makes IRR bit 0 unclearable,
-// and in particular it defeats np2's own defence: a channel-0 write clears
+// and in particular it defeats np21w's own defence: a channel-0 write clears
 // the master's IRR bit 0 (io/pit.c pit_o71 and pit_o77,
 // "pic.pi[0].irr &= (~1)"), which Peripherals.sv drives through
 // external_irr_clear.  With the clear inert the guest takes an IRQ0 it never
@@ -34,7 +34,7 @@
 // handler that does not EOI parks ISR bit 0 and starves IRQ1 and IRQ2.
 //
 // Phases:
-//   A. A pin that stays high requests ONCE, and stays cleared once the np2
+//   A. A pin that stays high requests ONCE, and stays cleared once the np21w
 //      channel-0 write has cleared it.  (Before the fix: it came straight
 //      back, one clock later, forever.)
 //   B. The ITF's INT 08 test replayed byte for byte (F8A3C..F8A5C): with the
@@ -101,7 +101,7 @@ module tb_pic_irq0_edge;
         .counter_2_out    (out2)
     );
 
-    // np2's channel-0 IRR clear, decoded exactly as Peripherals.sv does it.
+    // np21w's channel-0 IRR clear, decoded exactly as Peripherals.sv does it.
     logic pit_write_cycle_q = 1'b0;
     wire  pit_write_cycle   = ~pit_cs_n & ~pit_wr_n;
     wire  pit_write_done    = pit_write_cycle_q & ~pit_write_cycle;
@@ -225,7 +225,7 @@ module tb_pic_irq0_edge;
         pic_write(1'b1, 8'hFF);          // IMR: everything masked
 
         // ================================================================
-        // A. A pin latched high requests once, and the np2 clear sticks.
+        // A. A pin latched high requests once, and the np21w clear sticks.
         //
         // Counter 0 powers up in mode 3 idle (i8253.sv RESET_MODE 3), so
         // OUT is high and has never fallen: nothing is armed and IRR0 must
@@ -258,7 +258,7 @@ module tb_pic_irq0_edge;
         end else
             $display("--- A: OUT latched high at terminal count, IRR0 set once");
 
-        // np2's clear, and it must HOLD while the pin sits high.  This is
+        // np21w's clear, and it must HOLD while the pin sits high.  This is
         // the measurement the old level-following detector failed: IRR0 came
         // back on the next clock, every clock, because the edge detector
         // never disarmed.
@@ -328,7 +328,7 @@ module tb_pic_irq0_edge;
         // the exact hardware state the panel measured (LVL 01, TMR frozen).
         // The mode-3 control word drives OUT high again as its idle level,
         // so on a level-following detector the STI at FDE34 takes an
-        // immediate IRQ0 that the ROM never asked for.  np2 is explicit that
+        // immediate IRQ0 that the ROM never asked for.  np21w is explicit that
         // it must not: the control word clears IRR0 (pit_o77).
         //
         // The square wave's OUT starts high, falls at the first terminal

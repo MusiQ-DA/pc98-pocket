@@ -10,7 +10,7 @@
 // and transparent blits; DOS extender-era engines drive it through REP MOVSW,
 // which is why the source latch exists (see egc_src, below).
 //
-// THE REFERENCE IS np2kai, AND ITS TWO FILES SPLIT THE SAME WAY THIS TREE
+// THE REFERENCE IS np21w, AND ITS TWO FILES SPLIT THE SAME WAY THIS TREE
 // DOES: io/egc.c is the register file (the ports), mem/memegc.c is the
 // engine (what a write does). Everything below cites one or the other.
 //
@@ -39,7 +39,7 @@
 //     0x4A6  fg       the foreground COLOUR, four bits; it expands to four
 //                     planes of all-ones masks through maskword (io/egc.c
 //                     builds egc.fgc exactly this way).
-//     0x4A8  mask     the write mask, sixteen bits. np2kai only accepts this
+//     0x4A8  mask     the write mask, sixteen bits. np21w only accepts this
 //                     write while the pattern-source field is zero
 //                     (`if (!(egc.fgbg & 0x6000))`), and this follows it:
 //                     the register file shares silicon with the pattern
@@ -52,7 +52,7 @@
 // picked by ope 11:10, and the raster-op table is a 256-entry function table
 // over three inputs -- pat (the pattern source), src (the source latch), and
 // dst (what is in VRAM now) -- where the ope byte's eight bits are the eight
-// minterms of those inputs. np2kai implements a handful of the entries with
+// minterms of those inputs. np21w implements a handful of the entries with
 // dedicated two-input forms (ope_nd drops dst, ope_np drops pat, ope_00/0f/
 // c0/f0/fc/ff are constants and single terms) and every other code through
 // the general three-input form. The table here reproduces that mapping as a
@@ -171,7 +171,7 @@ module pc98_egc (
                     4'h4: ope_r[7:0]     <= d;    // 0x4A4
                     4'h5: ope_r[15:8]    <= d;
                     4'h6: fg_color       <= d[3:0]; // 0x4A6: colour, four bits
-                    4'h7: ;                        // 0x4A7: np2kai drops it
+                    4'h7: ;                        // 0x4A7: np21w drops it
                     4'h8: if (fgbg_r[14:13] == 2'b00) mask_r[7:0]  <= d;
                     4'h9: if (fgbg_r[14:13] == 2'b00) mask_r[15:8] <= d;
                     4'hA: bg_color       <= d[3:0]; // 0x4AA
@@ -203,7 +203,7 @@ module pc98_egc (
     // ------------------------------------------------------------------
     // the write datapath
     // ------------------------------------------------------------------
-    // The raster-op table, as np2kai's opefn[256] maps it: which of the nine
+    // The raster-op table, as np21w's opefn[256] maps it: which of the nine
     // forms a code takes. Everything not listed is the general three-input
     // form (ope_xx).
     localparam [3:0] K_Z = 4'd0,   // 0x00: all zeros
@@ -238,7 +238,7 @@ wire [7:0] src_b = op_ext ? src_q[op_plane][15:8] : src_q[op_plane][7:0];
 
     // The pattern source, as ope_nd/ope_np/ope_xx select it. The bank field
     // is fgbg bits 14:13, so 0x2000 (background) is 2'b01 and 0x4000
-    // (foreground) is 2'b10 -- np2kai's switch cases, in bit positions.
+    // (foreground) is 2'b10 -- np21w's switch cases, in bit positions.
     wire [15:0] fgbg_col = (fgbg_r[14:13] == 2'b01) ? bgc[op_plane]
                         : (fgbg_r[14:13] == 2'b10) ? fgc[op_plane]
                         : (fgbg_r[14:13] == 2'b11)

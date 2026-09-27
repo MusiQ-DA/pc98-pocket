@@ -33,7 +33,7 @@
 // scope.
 // `analog` is the sixteen-colour mode bit (port 0x6A bit 0). It has to be an
 // ARGUMENT rather than a constant because it MOVES THE MEMORY MAP: the fourth
-// graphics plane lives at E0000-E7FFF and exists only in analog mode. np2kai
+// graphics plane lives at E0000-E7FFF and exists only in analog mode. np21w
 // maps all four windows and then takes the fourth back in digital mode
 // (i386c/cpumem.c, memm_vram), so three planes is CORRECT for a digital
 // machine, not a gap. Opening E0000 unconditionally is the failure RAM.sv
@@ -69,7 +69,7 @@ function automatic logic [19:0] pc98_gvram_plane(input logic [19:0] a,
                                    : {5'b10101 + 5'(p), a[14:0]};
 endfunction
 
-// THE ACCESS PAGE (np2kai io/gdc.c, gdc_oa6: port 0xA6 bit 0 is gdcs.access,
+// THE ACCESS PAGE (np21w io/gdc.c, gdc_oa6: port 0xA6 bit 0 is gdcs.access,
 // and mem/memvram.c banks every plane window by it -- the window offset is
 // fifteen bits of ONE 640x400 page, and bit 14 of it is lines 256-399, NOT a
 // second page). Page zero is the guest-linear window above, unchanged. Page

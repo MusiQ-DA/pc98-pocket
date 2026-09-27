@@ -1,7 +1,7 @@
 # PC-98 機械層仕様(設計ドキュメント v0.1)
 
 ベース: desaster/openfpga-PCXT(chassis — 実機でDOSブート実績あり)
-リファレンス: np2(Neko Project 2 kai)の挙動。コード移植はしない。
+リファレンス: np21w(Neko Project 2 kai)の挙動。コード移植はしない。
 実機一次資料: NEC「PC-9800シリーズ テクニカルデータブック HARDWARE編」(1993) —
 <https://vtda.org/docs/computing/NEC/PC-9800TechnicalDataBookHARDWARE+OCR_1993.pdf>
 
@@ -9,7 +9,7 @@
 
 - PC/AT機械層(chipsetチップセット)をPC-98機械層に置換する
 - CPU(MCL86)・SDRAM・ビデオパイプライン・入力・bridgeはPCXTの実績を流用
-- I/Oマップは np2 の `iocore_attach*` 呼び出しから機械的に抽出して確定する
+- I/Oマップは np21w の `iocore_attach*` 呼び出しから機械的に抽出して確定する
 
 ## PC-98 メモリマップ(PC-9801VX級)
 
@@ -31,7 +31,7 @@
 >
 > 当初この表は「`0xA8000-0xBFFFF` 96KB = グラフィック4プレーン」と書いていたが
 > **誤り**。96KB は 32KB × 3 枚でしかなく、4 枚目は別の場所にある。
-> np2kai `i386c/cpumem.c` の `memm_vram()` が 4 つの窓すべてに同じ
+> np21w `i386c/cpumem.c` の `memm_vram()` が 4 つの窓すべてに同じ
 > VRAM ハンドラを張る:
 >
 > ```c
@@ -55,14 +55,14 @@
 >
 > 切り替えは **ポート 0x6A(`gdc_o6a`、ビット set/reset 形式)の bit 0**。
 > `gdc.display` のアナログ許可ビットが立っているときだけ効き、`VOPBIT_ANALOG`
-> を動かして `MEMM_VRAM()` がメモリマップを張り替える(np2kai `io/gdc.c:515-535`)。
+> を動かして `MEMM_VRAM()` がメモリマップを張り替える(np21w `io/gdc.c:515-535`)。
 >
 > **16 色モードを実装するときの作業は「select に 1 行足す」ではなく
 > 「ポート 0x6A bit 0 に応じて E0000-E7FFF を開閉する」。** 無条件に開けては
 > ならない — `RAM.sv` のコメントが記録しているとおり、C0000 以降を答えさせた
 > ときに POST が存在しない拡張メモリを掃いて D0000 で止まった実測がある。
 
-> **TVRAM は char と attr が交互ではなく別領域**。np2 `vram/maketext.c` で確認:
+> **TVRAM は char と attr が交互ではなく別領域**。np21w `vram/maketext.c` で確認:
 > `mem[0xa0000 + edi*2]`(文字下位)、`mem[0xa0001 + edi*2]`(上位、`gdc.bitac` と AND される)、
 > `mem[0xa2000 + edi*2]`(アトリビュート)。
 > 旧 `src/fpga/core/tvram.sv`(ピボット前の資産)は「char at even, attr at odd」を
@@ -83,7 +83,7 @@ ANK だけの画面は「PC-98 BIOS 画面が出た」とは呼べない。
 
 ### K2. ゲスト側 — CG ウィンドウ(`0xA4000-0xA4FFF`)
 
-BIOS もソフトも、字形を **I/O + メモリ窓** から読む。np2 `mem/memtram.c`:
+BIOS もソフトも、字形を **I/O + メモリ窓** から読む。np21w `mem/memtram.c`:
 
 ```c
 else if (address < 0xa5000) {
@@ -145,9 +145,9 @@ else if (address < 0xa5000) {
 
 段階1を「PC-98 対応」と呼ばないこと。**経路の検証であって、画面の完成ではない。**
 
-## I/Oマップ(主要デバイスと np2 対応)
+## I/Oマップ(主要デバイスと np21w 対応)
 
-| デバイス | np2リファレンス | 備考 |
+| デバイス | np21wリファレンス | 備考 |
 |---|---|---|
 | システムポート | io/sysport.c | リセット/電源/NVRAM制御 |
 | 割り込み(8259互換) | io/pic.c | 6体制割り込み |
@@ -162,7 +162,7 @@ else if (address < 0xa5000) {
 | サウンド(OPNA/26K/86) | sound/ + cbus/pcm86io.c | FM 6ch + SSG + ADPCM + リズム |
 | SASI/SCSI | (PCXTのSASI構造を参考) | HDDイメージ |
 
-※正確なポート番号は実装時に np2 の `iocore_attach*` 呼び出しから抽出する
+※正確なポート番号は実装時に np21w の `iocore_attach*` 呼び出しから抽出する
 (抽出スクリプトを作成済み。低域 0x00-0xF0 は確認済み: sysport 0x31, pic 0x00,
 pit 0x71, crtc 0x70, fdc 0xBE, dmac 0x01/0x21, serial 0x30/0x41)
 
@@ -193,7 +193,7 @@ pit 0x71, crtc 0x70, fdc 0xBE, dmac 0x01/0x21, serial 0x30/0x41)
 
 > ⚠️ この節は一度書き間違えている(初版の F3)。
 > **手元の `~/Documents/lodemnc/np2rom/` のダンプはパッチ済みで、
-> それを根拠に「np2 は実 BIOS を走らせない」と結論したのが誤りだった。**
+> それを根拠に「np21w は実 BIOS を走らせない」と結論したのが誤りだった。**
 > ユーザーが提示した2つの外部ソースで訂正できた。
 
 ### 使う ROM(結論)
@@ -215,7 +215,7 @@ pit 0x71, crtc 0x70, fdc 0xBE, dmac 0x01/0x21, serial 0x30/0x41)
 
 ### F1. BIOS.ROM は物理 `0x0E8000` に 96KB で載る
 
-np2 `bios/bios.c`: `file_read(fh, mem + 0x0e8000, 0x18000)`。
+np21w `bios/bios.c`: `file_read(fh, mem + 0x0e8000, 0x18000)`。
 `0x18000` = 98,304 = ファイルサイズと一致。
 
 ### F2. ⚠️ 手元の `ITF.ROM` は ITF ではない — BIOS.ROM 末尾32KB の複製
@@ -240,8 +240,8 @@ retrobios        EA 00 00 80 FD      JMP FD80:0000（無改変）
 手元ダンプでも `EB 02 EB 5D FA 33 C0 8E D8 E4 35`
 (CLI / DS クリア / `IN AL,35h` = PC-98 システムポート)と読める。**8086 命令のみ。**
 
-> **初版の誤り**: 「np2 はリセットベクタを上書きして自前 BIOS へ飛ばす =
-> 実 BIOS を走らせない」と書いたが、np2 の
+> **初版の誤り**: 「np21w はリセットベクタを上書きして自前 BIOS へ飛ばす =
+> 実 BIOS を走らせない」と書いたが、np21w の
 > `mem[0xffff0]=0xea; STOREINTELDWORD(mem+0xffff1, 0xfd800000)` は
 > **本物のリセットベクタを復元しているだけ**だった。
 > `FD80:0000` は実 BIOS 自身のエントリポイント。
@@ -268,7 +268,7 @@ Ce2 版は 386 命令を含むので使えない(機種も 486SX 機で対象外
 
 ### F5. 手元ダンプと retrobios の差は 252 バイト
 
-最初の差分は `0xB1F0`。np2 の `setbiosseed(mem + 0x0e8000, 0x10000, 0xb1f0)` が
+最初の差分は `0xB1F0`。np21w の `setbiosseed(mem + 0x0e8000, 0x10000, 0xb1f0)` が
 **まさにその位置に BIOS チェックサムのシードを書く**。
 = 手元のものはパッチ後にチェックサムを付け直したもの。
 
@@ -297,9 +297,9 @@ Ce2 版は 386 命令を含むので使えない(機種も 486SX 機で対象外
 | 2 | ROM 書き込み保護 `E8000-FFFFF` | ✅ 実装済み |
 | 3 | パッチ済みダンプのリセットベクタ復元 | ✅ 実装済み(無改変 ROM では no-op) |
 | 4 | **ITF を `F8000` にロードし、リセット時はそちらを見せる** | ⬜ |
-| 5 | **ROM バンク切り替え**(ITF → システム BIOS) | ⬜ ポート番号を np2 から特定する |
+| 5 | **ROM バンク切り替え**(ITF → システム BIOS) | ⬜ ポート番号を np21w から特定する |
 | 6 | フェッチの可視化(`post_monitor` を PC-98 へ) | ⬜ |
 
 **次の一手は 5**。ITF がバンクを切り替えられないと BIOS に渡らないので、
-これが P1 の実質的な山場。np2 の `memm_arch` / `sysport` 周辺から
+これが P1 の実質的な山場。np21w の `memm_arch` / `sysport` 周辺から
 ポート番号を特定する。

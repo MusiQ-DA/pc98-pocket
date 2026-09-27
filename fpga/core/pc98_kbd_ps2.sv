@@ -19,7 +19,7 @@
 // equivalent (GUI keys, F11/F12, Num/Scroll Lock) are swallowed silently.
 //
 // The Set-2 -> PC-98 mapping is BY KEY POSITION, an ANSI keyboard on a JIS
-// machine. The code set and the position choices are np2kai's (sdl/kbtrans.c,
+// machine. The code set and the position choices are np21w's (sdl/kbtrans.c,
 // the 101/106 tables): the JIS bracket row sits one key left of the ANSI one
 // (US [ is JIS @, US ] is JIS [, US ' is JIS :, US \ is JIS ]), US `~ doubles
 // as the JIS yen key, and the ISO key next to left shift (Set-2 0x61) is the
@@ -149,7 +149,7 @@ module pc98_kbd_ps2 (
             8'h10: set2_pc98 = 8'h73; // GRPH   (right ctrl on a docked kbd)
             8'h13: set2_pc98 = 8'h35; // XFER   (right alt on a docked kbd)
             8'h17: set2_pc98 = 8'h51; // NFER   (left alt on a docked kbd)
-            8'h27: set2_pc98 = 8'h3E; // HOME CLR (bare sentinel; 0x3E = np2 "HMCR")
+            8'h27: set2_pc98 = 8'h3E; // HOME CLR (bare sentinel; 0x3E = np21w "HMCR")
             8'h18: set2_pc98 = 8'h3F; // HELP
             8'h19: set2_pc98 = 8'h36; // ROLL UP
             8'h1F: set2_pc98 = 8'h37; // ROLL DOWN

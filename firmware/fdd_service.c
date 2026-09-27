@@ -44,9 +44,9 @@ static uint32_t fdd_sector_words[2] = { 128, 128 };
 // FDI wraps it in (see fdd_probe_fdi).
 static uint32_t fdd_base[2] = { 0, 0 };
 
-// FDI (the T98/np2 family's format): a 0x20-byte header in front of the raw
+// FDI (the T98/np21w family's format): a 0x20-byte header in front of the raw
 // image -- {dummy, fddtype, headersize, fddsize, sectorsize, sectors,
-// surfaces, cylinders}, little-endian words (np2kai diskimage/fd/fdd_xdf.c).
+// surfaces, cylinders}, little-endian words (np21w diskimage/fd/fdd_xdf.c).
 // The slot's sector count cannot tell it from raw -- the header is under one
 // sector -- so the mount reads the first 32 bytes and believes the header's
 // own arithmetic: headersize + sectorsize*sectors*surfaces*cylinders must

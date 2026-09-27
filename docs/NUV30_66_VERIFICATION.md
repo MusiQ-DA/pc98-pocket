@@ -179,17 +179,17 @@ Observations:
 | implementation | treats 0x66 as | byte consumption | valid for V30? |
 |---|---|---|---|
 | **nuV30** | reserved opcode (ModR/M-consuming NOP) | 2 | **yes — matches the die** |
-| **np2kai `i386c`** (`i386c/ia32/inst_table.c`) | `INST_PREFIX` — operand-size prefix, unconditionally (no CPU-type guard; 0x67 = address-size) | 1 (+ semantics of next insn) | **no** — 80386-generation behavior |
-| **np2kai `i286c`** (`i286c/v30patch.c`, `v30patch_op[]` → `v30_reserved`) | reserved no-op | **1** (handler burns 2 clocks, no ModR/M fetch) | direction correct (not a prefix), byte count differs from silicon |
+| **np21w `i386c`** (`i386c/ia32/inst_table.c`) | `INST_PREFIX` — operand-size prefix, unconditionally (no CPU-type guard; 0x67 = address-size) | 1 (+ semantics of next insn) | **no** — 80386-generation behavior |
+| **np21w `i286c`** (`i286c/v30patch.c`, `v30patch_op[]` → `v30_reserved`) | reserved no-op | **1** (handler burns 2 clocks, no ModR/M fetch) | direction correct (not a prefix), byte count differs from silicon |
 | **Intel 8086** | Jcc alias space (`60–6F` ≡ `70–7F`) | — | no — space redefined on V20/V30 |
 
-Measured on the same byte stream: np2kai's i386c path consumed `66 18 77 D5` as one
+Measured on the same byte stream: np21w's i386c path consumed `66 18 77 D5` as one
 4-byte `o32 SBB`, clobbered the flags (FL 0000 → 0095), and **never evaluated the JA at
 all**. That is a consistent 386 read of the stream — and it is precisely the "golden
 trace" that made us doubt the core. An emulator agreement is only evidence if the
 emulator models your CPU generation.
 
-Side note for np2kai (out of scope here, but worth recording): `v30_reserved()` in
+Side note for np21w (out of scope here, but worth recording): `v30_reserved()` in
 `i286c/v30patch.c` consumes only the opcode byte; real silicon consumes a ModR/M byte
 as well. Any V30-era code stream containing `63–67` will desynchronize that core by one
 byte relative to hardware.
