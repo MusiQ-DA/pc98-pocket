@@ -125,6 +125,13 @@ if {$mode eq "selftest"} {
 } elseif {$mode eq "poke"} {
     wmem $::env(ADDR) $::env(DATA)
     puts [format "poke %s <- 0x%02X ; readback 0x%02X" $::env(ADDR) $::env(DATA) [rmem $::env(ADDR)]]
+} elseif {$mode eq "fill"} {
+    set len [expr {[info exists ::env(LEN)] ? $::env(LEN) : 64}]
+    set a $::env(ADDR)
+    for {set i 0} {$i < $len} {incr i} {
+        wmem [expr {$a + $i}] $::env(DATA)
+    }
+    puts [format "filled %d bytes at %s with 0x%02X" $len $a $::env(DATA)]
 } elseif {$mode eq "dump"} {
     set len [expr {[info exists ::env(LEN)] ? $::env(LEN) : 64}]
     set a $::env(ADDR)
