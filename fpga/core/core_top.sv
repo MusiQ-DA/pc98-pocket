@@ -1236,7 +1236,6 @@ module core_top (
             8'h22:   probe_data = {8'h00, kb_valid, kb_ready,
                                    osd_active | credits_mode_chip, osd_active, credits_mode_chip,
                                    gamepad_mode, mousepad, kb_buttons};
-`endif
             8'hFF:   probe_data = 32'h98C0_DE98;
             default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
