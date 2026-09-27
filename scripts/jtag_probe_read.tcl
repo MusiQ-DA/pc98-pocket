@@ -66,6 +66,12 @@ set regs {
     18  TVRAM_LAST_ADDR
     19  IO_HIST_0
     20  IO_HIST_1
+    21  GDC_CUR=en,addr,top,bot
+    22  GDC_CSRTR=count,last_bytes
+    23  GDC_CSRCNT
+    24  CUR_PX=en,bl,top,bot,addr
+    25  CSHOW_CNT=dots_last_frame
+    26  CSHOW_AT=hcount,vcount,attr
     255 MAGIC
 }
 

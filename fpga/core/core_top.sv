@@ -1168,6 +1168,7 @@ module core_top (
             8'h17:   probe_data = {24'h0, dbg_gdc_csrcnt};   // CSRW/CSRFORM count
             8'h18:   probe_data = {8'h00, dbg_cur_px};       // px-domain {en,bl,top,bot,addr}
             8'h19:   probe_data = {16'h0, dbg_cshow_cnt};    // cursor dots emitted last frame
+            8'h1a:   probe_data = {4'h0, dbg_cshow_at};      // {hcount,vcount,attr} at first cshow
             8'hFF:   probe_data = 32'h98C0_DE98;
             default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -1991,6 +1992,7 @@ module core_top (
     wire [31:0] dbg_frm_a, dbg_frm_b;
     wire [23:0] dbg_cur_px;
     wire [15:0] dbg_cshow_cnt;
+    wire [27:0] dbg_cshow_at;
     wire  [3:0] raw_strobes;
     wire [15:0] wr_low_cycles, rd_low_cycles;
     wire [127:0] rom_read_data;
@@ -2404,6 +2406,7 @@ module core_top (
         .dbg_frm_b                          (dbg_frm_b),
         .dbg_cur_px                         (dbg_cur_px),
         .dbg_cshow_cnt                      (dbg_cshow_cnt),
+        .dbg_cshow_at                       (dbg_cshow_at),
         .VID_R                              (r),
         .VID_G                              (g),
         .VID_B                              (b),

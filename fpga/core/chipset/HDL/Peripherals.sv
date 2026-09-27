@@ -228,6 +228,7 @@ module PERIPHERALS #(
     // which side of the clock crossing the failure lives on.
     output  logic   [23:0]  dbg_cur_px,
     output  logic   [15:0]  dbg_cshow_cnt,
+    output  logic   [27:0]  dbg_cshow_at,
         // PC-9801-86 OPNA, stereo. Zero on a non-PC-98 build.
     output  logic signed [15:0] opna_snd_l,
     output  logic signed [15:0] opna_snd_r,
@@ -1267,6 +1268,7 @@ module PERIPHERALS #(
     end
 
     wire pc98_cshow;
+    wire [7:0] pc98_cattr;
     pc98_text_render u_pc98_text (
         .clk(clk_pc98_dot), .pix_ce(1'b1),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px), .gdc_sad(gdc_sad_px),
@@ -1277,7 +1279,8 @@ module PERIPHERALS #(
         .tv_cell(tvram_vid_cell_w), .tv_attr(tvram_vid_attr),
         .font_cell(pc98_font_cell), .font_line(pc98_font_line),
         .font_row(pc98_font_row),
-        .grb(pc98_grb), .pixel(pc98_pixel), .dbg_cshow(pc98_cshow)
+        .grb(pc98_grb), .pixel(pc98_pixel), .dbg_cshow(pc98_cshow),
+        .dbg_attr(pc98_cattr)
     );
 
     // The cursor census: dbg_cur_px holds what the dot domain latched of the
@@ -1286,15 +1289,22 @@ module PERIPHERALS #(
     // qualified, ~64 means a full reverse block is reaching the pixel path.
     logic [15:0] cshow_run = 16'd0, cshow_frm = 16'd0;
     logic [23:0] cur_px_packed;
+    logic        cshow_seen = 1'b0;
+    logic [27:0] cshow_at;
     always_ff @(posedge clk_pc98_dot) begin
         if (pc98_fs) begin
             cshow_frm     <= cshow_run;
             cshow_run     <= 16'd0;
+            cshow_seen    <= 1'b0;
             cur_px_packed <= {gdc_cur_en_px, gdc_cur_bl_px,
                               gdc_cur_top_px, gdc_cur_bot_px,
                               gdc_cur_addr_px[11:0]};
         end else if (pc98_cshow) begin
             cshow_run <= cshow_run + 16'd1;
+            if (~cshow_seen) begin
+                cshow_seen <= 1'b1;
+                cshow_at   <= {pc98_h, pc98_v, pc98_cattr};
+            end
         end
     end
 
@@ -1644,6 +1654,7 @@ module PERIPHERALS #(
         dbg_frm_b <= {st_frm, fl_frm, pc98_rb_dbg};
         dbg_cur_px    <= cur_px_packed;
         dbg_cshow_cnt <= cshow_frm;
+        dbg_cshow_at  <= cshow_at;
     end
 
     // The fill's view, latched per cell: tvram_fil_cell/lo/hi are stable for
