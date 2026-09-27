@@ -1,0 +1,304 @@
+     1                                  ; fdc_probe.asm -- FDC status + PIO sector read, injected at SEG:0000 via JTAG.
+     2                                  ; Runs in IRQ context (triggered through a hijacked vector).
+     3                                  ;
+     4                                  ; What it does:
+     5                                  ;   1. snapshots MSR (0x90), drive port (0xBE)
+     6                                  ;   2. SPECIFY with ND=1 (PIO mode), RECALIBRATE, SENSE INT
+     7                                  ;   3. READ DATA sec C0/H0/R1/N=3 -> 1024 bytes via data port (no DMA)
+     8                                  ;      into sector_buf (seg:0400 = phys SEG*16+0x400)
+     9                                  ;   4. reads 7 result bytes
+    10                                  ;   5. prints hex: MSR BE | rST0 rPCN | ST0 ST1 ST2 C H R | run
+    11                                  ;
+    12                                  ; Compare the sector_buf dump against the .hdm image to split "upstream of
+    13                                  ; the DMA" (tds/BRAM/fifo) from "the DMA write itself".
+    14                                  
+    15                                          bits 16
+    16                                          org 0
+    17                                  
+    18                                  start:
+    19 00000000 FA                              cli
+    20 00000001 50                              push    ax
+    21 00000002 53                              push    bx
+    22 00000003 51                              push    cx
+    23 00000004 52                              push    dx
+    24 00000005 1E                              push    ds
+    25 00000006 06                              push    es
+    26 00000007 56                              push    si
+    27 00000008 57                              push    di
+    28 00000009 55                              push    bp
+    29                                  
+    30 0000000A 8CC8                            mov     ax, cs
+    31 0000000C 8ED8                            mov     ds, ax
+    32 0000000E 8EC0                            mov     es, ax              ; sector_buf/res_buf live in our segment
+    33 00000010 FE06[F001]                      inc     byte [runcount]
+    34                                  
+    35                                          ; drain the keyboard byte our hijacked vector preempted: without this
+    36                                          ; the 8251 keeps it pending and IRQ1 never re-fires, so the probe can
+    37                                          ; only ever run once per boot.
+    38 00000014 BA4100                          mov     dx, 0x41
+    39 00000017 EC                              in      al, dx
+    40                                  
+    41                                          ; ---- snapshot status ----
+    42 00000018 BA9000                          mov     dx, 0x90
+    43 0000001B EC                              in      al, dx
+    44 0000001C A2[F101]                        mov     [buf+0], al             ; MSR
+    45 0000001F BABE00                          mov     dx, 0xBE
+    46 00000022 EC                              in      al, dx
+    47 00000023 A2[F201]                        mov     [buf+1], al             ; 0xBE
+    48                                  
+    49                                          ; ---- FDC soft reset: 0x94 bit7 0->1 edge -> sw_reset -> S_IDLE ----
+    50 00000026 BA9400                          mov     dx, 0x94
+    51 00000029 30C0                            xor     al, al
+    52 0000002B EE                              out     dx, al                  ; ctrl_q[7] := 0 (prime the edge)
+    53 0000002C B90020                          mov     cx, 0x2000
+    54 0000002F E2FE                    .rst0:  loop    .rst0
+    55 00000031 B080                            mov     al, 0x80
+    56 00000033 EE                              out     dx, al                  ; rising edge -> reset_pending -> reset
+    57 00000034 B90040                          mov     cx, 0x4000
+    58 00000037 E2FE                    .rst1:  loop    .rst1
+    59                                  
+    60                                          ; ---- drop DMAE so no stray DMAC cycle can fire ----
+    61 00000039 BA9400                          mov     dx, 0x94
+    62 0000003C B008                            mov     al, 0x08                ; keep motor-attn bit3, clear bit4 DMAE
+    63 0000003E EE                              out     dx, al
+    64                                  
+    65                                          ; ---- SPECIFY: 0x03, 0xDF, 0x03 (ND=1) ----
+    66 0000003F E86401                          call    wcmd
+    67 00000042 B003                            mov     al, 0x03
+    68 00000044 E89401                          call    wd92
+    69 00000047 E85C01                          call    wcmd
+    70 0000004A B0DF                            mov     al, 0xDF
+    71 0000004C E88C01                          call    wd92
+    72 0000004F E85401                          call    wcmd
+    73 00000052 B003                            mov     al, 0x03                ; HLT=1, ND=1 -> PIO mode
+    74 00000054 E88401                          call    wd92
+    75                                  
+    76                                          ; ---- RECALIBRATE drive 0 ----
+    77 00000057 E84C01                          call    wcmd
+    78 0000005A B007                            mov     al, 0x07
+    79 0000005C E87C01                          call    wd92
+    80 0000005F E84401                          call    wcmd
+    81 00000062 30C0                            xor     al, al
+    82 00000064 E87401                          call    wd92
+    83                                  
+    84                                          ; wait ~200ms for seek/attn
+    85 00000067 BD3C00                          mov     bp, 60
+    86 0000006A B9FFFF                  .d1:    mov     cx, 0xFFFF
+    87 0000006D E2FE                    .d1l:   loop    .d1l
+    88 0000006F 4D                              dec     bp
+    89 00000070 75F8                            jnz     .d1
+    90                                  
+    91                                          ; ---- SENSE INTERRUPT STATUS -> ST0, PCN ----
+    92 00000072 E83101                          call    wcmd
+    93 00000075 B008                            mov     al, 0x08
+    94 00000077 E86101                          call    wd92
+    95 0000007A E83D01                          call    wres
+    96 0000007D 7213                            jc      .sifail
+    97 0000007F E85E01                          call    rd92
+    98 00000082 A2[F301]                        mov     [buf+2], al             ; ST0
+    99 00000085 E83201                          call    wres
+   100 00000088 7208                            jc      .sifail
+   101 0000008A E85301                          call    rd92
+   102 0000008D A2[F401]                        mov     [buf+3], al             ; PCN
+   103 00000090 EB06                            jmp     .doread
+   104                                  .sifail:
+   105 00000092 C706[F301]FFFF                  mov     word [buf+2], 0xFFFF
+   106                                  
+   107                                  .doread:
+   108                                          ; ---- READ DATA: 46 00 00 00 01 03 08 1B FF ----
+   109 00000098 E80B01                          call    wcmd
+   110 0000009B B046                            mov     al, 0x46                ; MFM read
+   111 0000009D E83B01                          call    wd92
+   112 000000A0 E80301                          call    wcmd
+   113 000000A3 30C0                            xor     al, al                  ; unit = HD<<2|US = 0
+   114 000000A5 E83301                          call    wd92
+   115 000000A8 E8FB00                          call    wcmd
+   116 000000AB 30C0                            xor     al, al                  ; C = 0
+   117 000000AD E82B01                          call    wd92
+   118 000000B0 E8F300                          call    wcmd
+   119 000000B3 30C0                            xor     al, al                  ; H = 0
+   120 000000B5 E82301                          call    wd92
+   121 000000B8 E8EB00                          call    wcmd
+   122 000000BB B008                            mov     al, 0x08                ; R = 8 = EOT: a single-sector read so
+   123                                                                          ; the result phase actually arrives
+   124 000000BD E81B01                          call    wd92
+   125 000000C0 E8E300                          call    wcmd
+   126 000000C3 B003                            mov     al, 0x03                ; N = 3 (1024B)
+   127 000000C5 E81301                          call    wd92
+   128 000000C8 E8DB00                          call    wcmd
+   129 000000CB B008                            mov     al, 0x08                ; EOT = 8
+   130 000000CD E80B01                          call    wd92
+   131 000000D0 E8D300                          call    wcmd
+   132 000000D3 B01B                            mov     al, 0x1B                ; GPL
+   133 000000D5 E80301                          call    wd92
+   134 000000D8 E8CB00                          call    wcmd
+   135 000000DB B0FF                            mov     al, 0xFF                ; DTL
+   136 000000DD E8FB00                          call    wd92
+   137                                  
+   138                                          ; ---- drain 1024 data bytes ----
+   139 000000E0 BF[0003]                        mov     di, sector_buf
+   140 000000E3 B90004                          mov     cx, 1024
+   141                                  .rd:
+   142 000000E6 E8D100                          call    wres
+   143 000000E9 7206                            jc      .rdtimo
+   144 000000EB E8F200                          call    rd92
+   145 000000EE AA                              stosb
+   146 000000EF E2F5                            loop    .rd
+   147                                  .rdtimo:
+   148 000000F1 880E[F901]                      mov     [buf+8], cl             ; leftover count (0 = full read)
+   149 000000F5 882E[FA01]                      mov     [buf+9], ch
+   150                                  
+   151                                          ; ---- 7 result bytes ----
+   152 000000F9 BF[0102]                        mov     di, res_buf
+   153 000000FC B90700                          mov     cx, 7
+   154                                  .rs:
+   155 000000FF E8B800                          call    wres
+   156 00000102 7206                            jc      .rdone
+   157 00000104 E8D900                          call    rd92
+   158 00000107 AA                              stosb
+   159 00000108 E2F5                            loop    .rs
+   160                                  .rdone:
+   161                                  
+   162                                          ; ---- print: MSR BE ST0s PCN | ST0 ST1 ST2 C H R N | cnt run ----
+   163 0000010A B800A0                          mov     ax, 0xA000
+   164 0000010D 8EC0                            mov     es, ax
+   165 0000010F 31FF                            xor     di, di
+   166 00000111 BE[F101]                        mov     si, buf
+   167 00000114 B90400                          mov     cx, 4                   ; MSR BE sST0 sPCN
+   168 00000117 AC                      .pb:    lodsb
+   169 00000118 89C3                            mov     bx, ax
+   170 0000011A C0E804                          shr     al, 4
+   171 0000011D E86A00                          call    putnib
+   172 00000120 88D8                            mov     al, bl
+   173 00000122 E86500                          call    putnib
+   174 00000125 B020                            mov     al, ' '
+   175 00000127 E86A00                          call    putch
+   176 0000012A E2EB                            loop    .pb
+   177                                  
+   178 0000012C BE[0102]                        mov     si, res_buf
+   179 0000012F B90700                          mov     cx, 7                   ; ST0 ST1 ST2 C H R N
+   180 00000132 AC                      .rb:    lodsb
+   181 00000133 89C3                            mov     bx, ax
+   182 00000135 C0E804                          shr     al, 4
+   183 00000138 E84F00                          call    putnib
+   184 0000013B 88D8                            mov     al, bl
+   185 0000013D E84A00                          call    putnib
+   186 00000140 B020                            mov     al, ' '
+   187 00000142 E84F00                          call    putch
+   188 00000145 E2EB                            loop    .rb
+   189                                  
+   190 00000147 A0[FA01]                        mov     al, [buf+9]             ; bytes NOT read (hi/lo), 0000 = all read
+   191 0000014A 89C3                            mov     bx, ax
+   192 0000014C C0E804                          shr     al, 4
+   193 0000014F E83800                          call    putnib
+   194 00000152 88D8                            mov     al, bl
+   195 00000154 E83300                          call    putnib
+   196 00000157 A0[F901]                        mov     al, [buf+8]
+   197 0000015A 89C3                            mov     bx, ax
+   198 0000015C C0E804                          shr     al, 4
+   199 0000015F E82800                          call    putnib
+   200 00000162 88D8                            mov     al, bl
+   201 00000164 E82300                          call    putnib
+   202 00000167 B020                            mov     al, ' '
+   203 00000169 E82800                          call    putch
+   204                                  
+   205 0000016C A0[F001]                        mov     al, [runcount]
+   206 0000016F 89C3                            mov     bx, ax
+   207 00000171 C0E804                          shr     al, 4
+   208 00000174 E81300                          call    putnib
+   209 00000177 88D8                            mov     al, bl
+   210 00000179 E80E00                          call    putnib
+   211                                  
+   212                                          ; EOI so IRQ1 can fire again (we preempted the BIOS handler)
+   213 0000017C B020                            mov     al, 0x20
+   214 0000017E E600                            out     0x00, al
+   215                                  
+   216 00000180 5D                              pop     bp
+   217 00000181 5F                              pop     di
+   218 00000182 5E                              pop     si
+   219 00000183 07                              pop     es
+   220 00000184 1F                              pop     ds
+   221 00000185 5A                              pop     dx
+   222 00000186 59                              pop     cx
+   223 00000187 5B                              pop     bx
+   224 00000188 58                              pop     ax
+   225 00000189 CF                              iret
+   226                                  
+   227                                  ; ---------------------------------------------------------------- helpers
+   228                                  
+   229                                  ; putnib: AL low nibble -> hex char -> TVRAM cell at ES:DI, DI+=2
+   230                                  putnib:
+   231 0000018A 240F                            and     al, 0x0F
+   232 0000018C 0430                            add     al, '0'
+   233 0000018E 3C39                            cmp     al, '9'
+   234 00000190 7602                            jbe     putch
+   235 00000192 0407                            add     al, 'A'-'9'-1
+   236                                  putch:
+   237 00000194 268805                          mov     [es:di], al
+   238 00000197 26C6450100                      mov     byte [es:di+1], 0
+   239 0000019C 26C6850020E1                    mov     byte [es:di+0x2000], 0xE1
+   240 000001A2 83C702                          add     di, 2
+   241 000001A5 C3                              ret
+   242                                  
+   243                                  ; wcmd: poll MSR for RQM=1,DIO=0 (ready for a command/param byte). no timeout:
+   244                                  ; the FDC parks there. CF stays 0.
+   245                                  wcmd:
+   246 000001A6 51                              push    cx
+   247 000001A7 B9FFFF                          mov     cx, 0xFFFF
+   248 000001AA BA9000                  .wc:    mov     dx, 0x90
+   249 000001AD EC                              in      al, dx
+   250 000001AE A880                            test    al, 0x80
+   251 000001B0 7404                            jz      .wcn
+   252 000001B2 A840                            test    al, 0x40
+   253 000001B4 7402                            jz      .ok
+   254 000001B6 E2F2                    .wcn:   loop    .wc
+   255 000001B8 59                      .ok:    pop     cx
+   256 000001B9 C3                              ret
+   257                                  
+   258                                  ; wres: poll MSR for RQM=1,DIO=1 (data byte available). CF=1 on timeout.
+   259                                  ; The JTAG mgmt pump refills the fifo at scan speed (~8 ms/byte, a whole
+   260                                  ; sector in seconds), so the first-byte wait needs minutes, not ~ms: bp outer
+   261                                  ; wraps the 64K inner poll. Once the fifo is full the controller streams and
+   262                                  ; later iterations never reach the outer loop.
+   263                                  wres:
+   264 000001BA 51                              push    cx
+   265 000001BB 55                              push    bp
+   266 000001BC BD5802                          mov     bp, 600
+   267 000001BF B9FFFF                  .wr0:   mov     cx, 0xFFFF
+   268 000001C2 BA9000                  .wr:    mov     dx, 0x90
+   269 000001C5 EC                              in      al, dx
+   270 000001C6 A880                            test    al, 0x80
+   271 000001C8 7404                            jz      .wrn
+   272 000001CA A840                            test    al, 0x40
+   273 000001CC 7509                            jnz     .ok
+   274 000001CE E2F2                    .wrn:   loop    .wr
+   275 000001D0 4D                              dec     bp
+   276 000001D1 75EC                            jnz     .wr0
+   277 000001D3 F9                              stc
+   278 000001D4 5D                              pop     bp
+   279 000001D5 59                              pop     cx
+   280 000001D6 C3                              ret
+   281 000001D7 F8                      .ok:    clc
+   282 000001D8 5D                              pop     bp
+   283 000001D9 59                              pop     cx
+   284 000001DA C3                              ret
+   285                                  
+   286                                  ; wd92: write AL to data port 0x92 (clobbers DX)
+   287                                  wd92:
+   288 000001DB BA9200                          mov     dx, 0x92
+   289 000001DE EE                              out     dx, al
+   290 000001DF C3                              ret
+   291                                  
+   292                                  ; rd92: read data port 0x92 into AL (clobbers DX)
+   293                                  rd92:
+   294 000001E0 BA9200                          mov     dx, 0x92
+   295 000001E3 EC                              in      al, dx
+   296 000001E4 C3                              ret
+   297                                  
+   298 000001E5 90<rep Bh>                      align 16
+   299 000001F0 00                      runcount: db 0
+   300 000001F1 00<rep 10h>             buf:      times 16 db 0
+   301 00000201 00<rep 8h>              res_buf:  times 8  db 0
+   302                                  
+   303 00000209 90<rep F7h>                     align 256
+   304                                  sector_buf:
