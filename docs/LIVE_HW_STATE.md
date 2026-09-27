@@ -1,10 +1,30 @@
-# LIVE HARDWARE STATE — read before touching the Pocket (2026-09-28 ~04:10 JST)
+# LIVE HARDWARE STATE — read before touching the Pocket (2026-09-28 ~09:00 JST)
 
 > **ハードを共有している可能性への注意書き。** このセッション(Devin)は実機に
 > 介入を残したまま止まっています。あなたが別エージェントなら、以下を読んで
 > から作業してください。
 
-## 現在の状態: Pocket はスリープ/電源断 (JTAG チェーン dead)
+## ★ RAM write-strobe 修正: 実機検証済み (2026-09-28 08:5x JST, commit 75187b8)
+
+CI run 36358008905 のビットストリーム (USERCODE=0x0680F7B3) で
+ブート経路をフル検証 — **周期性 DMA 書き込みドロップは解消**:
+
+- BIOS の IPL 読み出しに JTAG で `fdc_ipl.hdm` セクタ 0 を供給
+  → **0x1FE00 (DMAC→SDRAM 経路): 511/512 byte-exact**。唯一の差分は
+  IPL 自身の `markpos` 変数 (実行の証拠)。修正前は 76/512 が
+  pre-dirty 0xFF のまま残る周期性ドロップだった。
+- IPL が自前で C0H0R1 を PIO 再読み → **0x40000: 512/512 byte-exact**。
+- 画面に **"ISRDPE"** — IPL 全フロー走破 (result phase まで到達)。
+
+再現手順: flash → `MGMOUNT=1` → req 待ち →
+`MGSECT=/tmp/fdc_ipl.hex MGNOWAIT=1` (hex = `od -An -v -t x1 hdm` 出力)
+→ 0x1FE00 dump → IPL の req で再 push → 0x40000 dump。
+
+テスト stub 側の修正 2 点 (commit af41bbb): `putmark` の push/pop 不整合
+(3 push vs 4 pop で ret がゴミへ) と `EOT=8→1` (NDMA は sector==eot まで
+result phase に入らず .rs が永久ブロック)。
+
+## 前回セッションからの状態: Pocket は復帰済み (要 再スリープ注意)
 
 - ~03:58 JST に JTAG スキャンチェーンが全ゼロを返すようになり、
   SLD hub (`hub=00000000`) も応答しない = **FPGA 無設定**。
