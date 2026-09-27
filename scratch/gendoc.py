@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-import io, sys
-src = open('/Users/hiroya/repo/pc98-pocket/scratch/dis8086.py').read().replace('\nmain()\n','\n')
+import io, os, sys
+HERE = os.path.dirname(os.path.abspath(__file__))   # scratch/
+ROOT = os.path.dirname(HERE)                        # repo root
+src = open(os.path.join(HERE,'dis8086.py')).read().replace('\nmain()\n','\n')
 g={'__name__':'d8'}; exec(compile(src,'dis8086.py','exec'), g)
 Dis=g['Dis']
-rom=open('/Users/hiroya/.pc98roms/itf.rom','rb').read()
+rom=open(os.path.expanduser('~/.pc98roms/itf.rom'),'rb').read()
 d=Dis(rom,0)
 
 C = {}
@@ -589,7 +591,7 @@ def expand(text):
         raise SystemExit('bad key ' + k)
     return re.sub(r'\{\{([^}]+)\}\}', rep, text)
 
-body = open('/Users/hiroya/repo/pc98-pocket/scratch/body.md').read() + \
-       open('/Users/hiroya/repo/pc98-pocket/scratch/body2.md').read()
-open('/Users/hiroya/repo/pc98-pocket/docs/PC98_ITF_TRACE.md','w').write(expand(body))
+body = open(os.path.join(HERE,'body.md')).read() + \
+       open(os.path.join(HERE,'body2.md')).read()
+open(os.path.join(ROOT,'docs','PC98_ITF_TRACE.md'),'w').write(expand(body))
 print('written', len(expand(body)), 'bytes')

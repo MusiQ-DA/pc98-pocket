@@ -9,7 +9,7 @@ source; np2kai remains only as the runnable headless harness
 binaries only.
 
 - np21w source is extracted locally at
-  `/Users/hiroya/repo/np21w/np21w-src-rev106/` (from the `np21w-src-rev106.zip`
+  `~/repo/np21w/np21w-src-rev106/` (from the `np21w-src-rev106.zip`
   bundled inside the `np21w-0.86-rev106beta1` binary distribution).
 - Comments cite it as `np21w <path>` (e.g. `np21w io/fdc.c (fdc_intwait)`,
   `np21w cbus/board86.c`). The file layout matches the old np2kai citations

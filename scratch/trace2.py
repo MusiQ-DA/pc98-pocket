@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Walker with tiny constant-propagation so `MOV BP,imm ; JMP sub` / `JMP BP` resolves."""
-import sys
-src = open('/Users/hiroya/repo/pc98-pocket/scratch/dis8086.py').read().replace('\nmain()\n','\n')
+import os, sys
+D8 = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dis8086.py')
+src = open(D8).read().replace('\nmain()\n','\n')
 g={'__name__':'d8'}; exec(compile(src,'dis8086.py','exec'), g)
 Dis=g['Dis']
-rom=open('/Users/hiroya/.pc98roms/itf.rom','rb').read()
+rom=open(os.path.expanduser('~/.pc98roms/itf.rom'),'rb').read()
 d=Dis(rom,0)
 TRACK=['AX','CX','DX','BX','SP','BP','SI','DI']
 

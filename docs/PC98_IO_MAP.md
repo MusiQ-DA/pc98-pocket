@@ -1,6 +1,6 @@
 # PC-98 I/O ポートマップ(NP2kai ソース由来)
 
-**出典**: np21w `np21w-src-rev106`(NP21/W 0.86 rev106, `/Users/hiroya/repo/np21w/`)の `iocore_attach*` 呼び出しと、
+**出典**: np21w `np21w-src-rev106`(NP21/W 0.86 rev106, `~/repo/np21w/`)の `iocore_attach*` 呼び出しと、
 各デバイス実装(`io/`, `cbus/`, `diskimage/`)の読解。コードは転載していない。
 
 **実機一次資料**: NEC「PC-9800シリーズ テクニカルデータブック HARDWARE編」(1993) —

@@ -1,4 +1,5 @@
-p='/Users/hiroya/repo/pc98-pocket/scratch/gendoc.py'
+import os
+p=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gendoc.py')
 s=open(p).read()
 OVSRC = """OV = {
  0x0084: (None, '(0439h & 02h) | 34h'),

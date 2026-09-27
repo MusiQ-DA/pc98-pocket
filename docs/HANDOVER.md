@@ -402,7 +402,7 @@ F44D6  CD 1C        INT 1Ch
 /tmp/uxroms/bios.rom  (md5: 3af0ae01)
 
 # シミュ用hexファイル
-HEX=/var/folders/df/39xrvpn57gj_g103mfbqvy5c0000gp/T/v30sim
+HEX="${TMPDIR:-/tmp}/v30sim"
 python3 -c "
 rom = open('/tmp/uxroms/bios.rom','rb').read()
 with open('$HEX/bios.hex','w') as f:

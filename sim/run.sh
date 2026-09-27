@@ -14,8 +14,8 @@ export DOCKER_HOST="unix://$HOME/.docker/run/docker.sock"
 CFG="${TMPDIR:-/tmp}/pc98-dockercfg"
 mkdir -p "$CFG"
 python3 - "$CFG/config.json" <<'PY'
-import json, sys
-c = json.load(open('/Users/hiroya/.docker/config.json'))
+import json, os, sys
+c = json.load(open(os.path.expanduser('~/.docker/config.json')))
 c.pop('credsStore', None)
 json.dump(c, open(sys.argv[1], 'w'))
 PY

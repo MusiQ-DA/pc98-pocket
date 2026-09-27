@@ -9,7 +9,7 @@
 # A distinct cardname (e.g. draw_test.hdm) sits alongside pc98_test.hdm in the
 # Pocket's disk picker rather than replacing it.
 set -u
-HDM="${1:-/Users/hiroya/Desktop/pc98_test.hdm}"
+HDM="${1:-$HOME/Desktop/pc98_test.hdm}"
 CARD="/Volumes/ANALOGUE"
 DEST_DIR="$CARD/Assets/pc98/common"
 DEST="${2:-$(basename "$HDM")}"
