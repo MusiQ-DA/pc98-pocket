@@ -81,7 +81,7 @@ module PERIPHERALS #(
         input   logic           gv_rd_done,
         input   logic           font_wr_clk,
         input   logic           font_wr_en,
-        input   logic   [10:0]  font_wr_addr,
+        input   logic   [11:0]  font_wr_addr,
         input   logic   [15:0]  font_wr_data,
         output  logic   [5:0]   VID_R,
         output  logic   [5:0]   VID_G,
@@ -1595,11 +1595,22 @@ module PERIPHERALS #(
         .rst  (reset),
         .wr   (mode68_wr),
         .d    (mode68_data),
-        // mode1 bit 2 is the 40-column switch the text renderer reads; bit 3's
-        // 8x8/8x16 font select and the graphics-display bits are future work.
+        // mode1 bit 2 is the 40-column switch the text renderer reads and
+        // bit 3 picks the 8x16/8x8 ANK bank below.
         .mode1 (pc98_mode1),
         .bitac(pc98_bitac)
     );
+
+    // The font-bank select, latched at the frame boundary the way
+    // gdc_wide_px is on the dot clock: the fill below runs a row ahead of the
+    // raster, and taking mode1[3] raw could put a mixed bank into one row.
+    logic pc98_ank8 = 1'b0;
+    logic gdc_vs_q3 = 1'b0;
+    always_ff @(posedge clock) begin
+        gdc_vs_q3 <= gdc_vs_q;
+        if (gdc_vs_q & ~gdc_vs_q3)
+            pc98_ank8 <= ~pc98_mode1[3];
+    end
 
     wire       pc98_st_nz;
     wire [7:0] pc98_rb_dbg;
@@ -1773,6 +1784,7 @@ module PERIPHERALS #(
         .wr_addr(font_wr_addr), .wr_data(font_wr_data),
         .rd_clk(clock),
         .code(pc98_ank_code), .line(pc98_ank_line),
+        .sel8(pc98_ank8),
         .row(pc98_ank_row)
     );
 

@@ -1715,17 +1715,19 @@ module core_top (
     end
 
     // ANK font load, straight off data_loader rather than through the ROM FIFO
-    // and the ext port. It is a 4 KB BRAM with no handshake, so queueing it
+    // and the ext port. It is a 6 KB BRAM with no handshake, so queueing it
     // behind the BIOS load would buy nothing.
     //
-    // data.json puts font.rom at bridge 0x10100000, and FONT.ROM's 8x16 ANK set
-    // is the contiguous 0x0800-0x17FF of the file (np2 font/fontv98.c), so the
-    // window is dl_addr 0x100800-0x1017FF and the BRAM address is the offset
-    // within it.
+    // data.json puts font.rom at bridge 0x10100000. The BRAM keeps the file's
+    // ANK sets: the 8x16 half (file 0x0800-0x17FF) at words 0x000-0x7FF and,
+    // for the mode1-bit-3-clear case, the 8x8 half (file 0x0000-0x07FF) at
+    // words 0x800-0xBFF (np2 font/fontv98.c). So the window is the whole
+    // dl_addr 0x100000-0x1017FF.
     wire        font_dl_hit  = dl_wr && (dl_addr[27:16] == 12'h010)
-                                     && (dl_addr[15:0] >= 16'h0800)
                                      && (dl_addr[15:0] <  16'h1800);
-    wire [10:0] font_dl_addr = dl_addr[11:1] - 11'h400;   // word index from 0x800
+    wire [11:0] font_dl_addr = (dl_addr[15:0] >= 16'h0800)
+                             ? ({1'b0, dl_addr[11:1]} - 12'h400)   // 8x16 bank
+                             :  (dl_addr[11:1] + 12'h800);        // 8x8 bank
 
     // ---------------------------------------------------------- firmware slot
     //

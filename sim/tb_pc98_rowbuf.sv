@@ -48,8 +48,9 @@ module tb_pc98_rowbuf;
     wire  [3:0] ank_line;
     wire  [7:0] ank_row;
     logic       font_wr_en = 1'b0;
-    logic [10:0] font_wr_addr = 11'd0;
+    logic [11:0] font_wr_addr = 12'd0;
     logic [15:0] font_wr_data = 16'd0;
+    logic        sel8 = 1'b0;
 
     logic [6:0] rd_col = 7'd0;
     logic [3:0] rd_line = 4'd0;
@@ -69,12 +70,19 @@ module tb_pc98_rowbuf;
     pc98_font_ank u_ank (
         .wr_clk(clk), .wr_en(font_wr_en), .wr_addr(font_wr_addr),
         .wr_data(font_wr_data),
-        .rd_clk(clk), .code(ank_code), .line(ank_line), .row(ank_row)
+        .rd_clk(clk), .code(ank_code), .line(ank_line), .sel8(sel8), .row(ank_row)
     );
 
     function automatic logic [7:0] ank_pat(input logic [7:0] code,
                                            input logic [3:0] line);
         ank_pat = {code[3:0], line};
+    endfunction
+
+    // 8x8-bank pattern: {1, code[3:0], row[2:0]} -- the top bit marks the
+    // bank so an 8x16 byte can never alias as a passing 8x8 read.
+    function automatic logic [7:0] ank8_pat(input logic [7:0] code,
+                                            input logic [2:0] row);
+        ank8_pat = {1'b1, code[3:0], row};
     endfunction
 
     // ---- model TVRAM: cell 3 and 4 are a kanji pair, the rest are ANK -------
@@ -140,7 +148,7 @@ module tb_pc98_rowbuf;
         // low byte at the even offset.
         for (int w = 0; w < 2048; w++) begin
             font_wr_en   = 1'b1;
-            font_wr_addr = 11'(w);
+            font_wr_addr = 12'(w);
             font_wr_data = {ank_pat(8'((2*w+1) >> 4), 4'((2*w+1) & 15)),
                             ank_pat(8'((2*w)   >> 4), 4'((2*w)   & 15))};
             @(posedge clk);
@@ -243,6 +251,37 @@ module tb_pc98_rowbuf;
                 $display("  FAIL the renderer did not advance a row"); errors++;
             end
         end
+
+        // ---- the 8x8 bank (mode1 bit 3 clear, the WIDTH 40 font) -----------
+        //
+        // sel8 moves u_ank's reads to words 0x800-0xBFF, each glyph row
+        // answering two cell lines (line[3:1]). Load it with the ank8_pat
+        // pattern, re-fill so the buffer's active bank holds the new bytes,
+        // then every line pair of a cell must read the same 8x8 row.
+        for (int w = 0; w < 1024; w++) begin
+            font_wr_en   = 1'b1;
+            font_wr_addr = 12'h800 + 12'(w);
+            font_wr_data = {ank8_pat(8'((2*w+1) >> 3), 3'((2*w+1) & 7)),
+                            ank8_pat(8'((2*w)   >> 3), 3'((2*w)   & 7))};
+            @(posedge clk);
+        end
+        font_wr_en = 1'b0;
+        sel8 = 1'b1;
+        repeat (2) @(posedge clk);
+        fill_start = 1'b1; @(posedge clk); fill_start = 1'b0;
+        wait (busy == 1'b0); repeat (4) @(posedge clk);
+        fill_start = 1'b1; @(posedge clk); fill_start = 1'b0;
+        wait (busy == 1'b0); repeat (4) @(posedge clk);
+        for (int l = 0; l < 16; l++) begin
+            rd(1, l, got);
+            if (got !== ank8_pat(scr_lo[1], 3'(l >> 1))) begin
+                $display("  FAIL 8x8 col 1 line %0d: %02h want %02h",
+                         l, got, ank8_pat(scr_lo[1], 3'(l >> 1)));
+                errors++;
+            end
+        end
+        $display("  8x8 bank: every line pair reads row line>>1");
+        sel8 = 1'b0;
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");

@@ -130,13 +130,14 @@ module tb_pc98_pipeline;
     // ------------------------------------------------------------ ANK BRAM
     // Loaded through its write port exactly the way data_loader does it.
     logic        ank_wr_en = 1'b0;
-    logic [10:0] ank_wr_addr = '0;
+    logic [11:0] ank_wr_addr = '0;
     logic [15:0] ank_wr_data = '0;
+    wire         sel8 = 1'b0;   // this bench exercises the 8x16 bank only
 
     pc98_font_ank u_ank (
         .wr_clk(clk), .wr_en(ank_wr_en),
         .wr_addr(ank_wr_addr), .wr_data(ank_wr_data),
-        .rd_clk(clk), .code(ank_code), .line(ank_line), .row(ank_row)
+        .rd_clk(clk), .code(ank_code), .line(ank_line), .sel8(sel8), .row(ank_row)
     );
 
     // ------------------------------------------------ SDRAM font path
@@ -305,7 +306,7 @@ module tb_pc98_pipeline;
         for (int w = 0; w < 2048; w++) begin
             @(negedge clk);
             ank_wr_en   = 1'b1;
-            ank_wr_addr = 11'(w);
+            ank_wr_addr = 12'(w);
             ank_wr_data = {want[16'h0800 + w*2 + 1], want[16'h0800 + w*2]};
         end
         @(negedge clk);
