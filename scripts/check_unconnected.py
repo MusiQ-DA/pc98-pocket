@@ -33,7 +33,6 @@ import sys
 CORE_TOP = "fpga/core/core_top.sv"
 MODULES = {
     "softcpu_subsystem": "fpga/core/softcpu_subsystem.sv",
-    "post_monitor": "fpga/core/post_monitor.sv",
     "sdram_selftest_master": "fpga/core/sdram_selftest_master.sv",
     # The CPU-side swap of 2026-09: the bridge carries every pin the V30
     # sees, so a dangling input there reads as a dead machine, not a zero.
@@ -100,6 +99,11 @@ DANGLE_OK = {
     # (port 0xA4) waits for the graphics display fetch's reader to land --
     # pc98_gvram_display.sv is committed but not yet instantiated.
     "mouse_rd", "mouse_rts_n", "gvram_disp_page_w",
+    # Orphaned by the postmon strip (2026-09-28): CHIPSET's bus-strobe view
+    # and the V30 bridge's debug taps only fed post_monitor and the retired
+    # probe slots; the drivers stay because the pins are still useful taps.
+    "chipset_memory_read_n", "chipset_memory_write_n",
+    "v30_dbg_regs", "v30_first_pop",
 }
 
 
