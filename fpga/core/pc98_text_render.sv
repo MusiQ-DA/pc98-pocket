@@ -207,7 +207,12 @@ module pc98_text_render #(
 
         if (cursor_show)          lit = ~lit;   // the cursor is a reverse slice
         pixel = visible & lit;
-        grb   = cur_attr[7:5];
+        // The cursor must be seen: where the cell's attribute is a non-black
+        // colour it lends it to the slice; where it is black -- every cell
+        // the BIOS never wrote -- the slice falls back to white or the block
+        // is a black square on a black screen, invisible.
+        grb   = cursor_show && (cur_attr[7:5] == 3'b000)
+              ? 3'b111 : cur_attr[7:5];
     end
 
 endmodule
