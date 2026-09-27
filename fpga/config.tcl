@@ -182,7 +182,7 @@ set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
 #   feeds the strip. COMMENT OUT the line to remove that engine and zero the
 #   softcore debug regs + the probe slots that read its taps (`ifdef tests
 #   definedness -- POST_MONITOR=0 would still leave it on).
-set_global_assignment -name VERILOG_MACRO "POST_MONITOR=1"
+# set_global_assignment -name VERILOG_MACRO "POST_MONITOR=1"   # off: debug build, paying for PROBE_EXTRA
 
 #   ---- DIAGNOSTIC: PC98_PROBE_EXTRA ---------------------------------------
 #   Extended JTAG probe taps (frame census, row-buffer counts, PIC/IRQ words,
@@ -190,4 +190,4 @@ set_global_assignment -name VERILOG_MACRO "POST_MONITOR=1"
 #   0x1E-0x24. Off in the shipping build -- the part is at ~99% ALMs. For a
 #   debug build uncomment this AND comment out POST_MONITOR above to pay for
 #   them.
-# set_global_assignment -name VERILOG_MACRO "PC98_PROBE_EXTRA=1"
+set_global_assignment -name VERILOG_MACRO "PC98_PROBE_EXTRA=1"

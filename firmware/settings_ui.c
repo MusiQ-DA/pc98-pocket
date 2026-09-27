@@ -6,8 +6,8 @@
 #include "vkb_draw.h"
 #include "vkb_layout.h"
 #include "vkb_ui.h"
+#include "postmon.h"   // postmon_mark is used unconditionally below
 #ifdef POST_MONITOR
-#include "postmon.h"
 // post_monitor's text-plane write snoop: {tvram last addr, write count}. The
 // reset sequence watches it to lift the video blank when the BIOS repaints.
 #define POST_TVRAM ((volatile uint32_t *) 0x50000080)

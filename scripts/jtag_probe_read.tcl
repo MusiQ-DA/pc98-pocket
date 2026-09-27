@@ -68,6 +68,7 @@ set regs {
     34  BTN_GATE=kbv,kbr,osd,mode,kb_buttons
     35  DMAC_DCWORD
     36  FDC_DMA_HANDSHAKE
+    37  MEMIF=done,busy,rdata
     255 MAGIC
 }
 

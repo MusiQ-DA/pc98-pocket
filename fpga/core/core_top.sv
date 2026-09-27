@@ -1229,6 +1229,9 @@ module core_top (
             8'h21:   probe_data = {dbg_irq_level, 8'h00, dbg_kbd_rd_count, key_count};
             8'h23:   probe_data = dbg_dmac;         // 0x50000138's "DC word" -- DMAC FSM state
             8'h24:   probe_data = dbg_dma;          // FDC DMA handshake view
+            // 0x25: the JTAG guest-memory master (slot 0x84). rdata is the last
+            // byte read back; busy clears and done sets once an access lands.
+            8'h25:   probe_data = {16'h0000, jt_st_done, jt_st_req, 6'h00, jt_st_rdata};
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:
@@ -2077,13 +2080,54 @@ module core_top (
     wire  [7:0] st_rdata;
     wire        st_run, st_wr_n, st_rd_n;
 
+    // JTAG guest-memory master (debug builds only). Probe slot 0x84 packs a
+    // whole access into one write: {go, we, addr[19:0], wdata[7:0]} laid out
+    // as {2'b0,go,we,wdata,addr}. Setting go borrows the BIOS-loader port
+    // (u_selftest, HOLD/HLDA) to drop a byte into live guest RAM; the access
+    // self-releases once st_done comes back. Read slot 0x25 returns
+    // {done,busy,rdata}. This is what lets a probe load draw_test.bin (or
+    // poke a VRAM cell) without touching the SD card.
+`ifdef PC98_PROBE_EXTRA
+    reg  [19:0] jt_st_addr  = 20'd0;
+    reg  [7:0]  jt_st_wdata = 8'd0;
+    reg         jt_st_we    = 1'b0;
+    reg         jt_st_req   = 1'b0;
+    reg  [7:0]  jt_st_rdata = 8'd0;
+    reg         jt_st_done  = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (probe_wr_pulse && probe_waddr_c == 7'h04) begin
+            jt_st_addr  <= probe_wdata_c[19:0];
+            jt_st_wdata <= probe_wdata_c[27:20];
+            jt_st_we    <= probe_wdata_c[28];
+            if (probe_wdata_c[29]) begin
+                jt_st_req  <= 1'b1;
+                jt_st_done <= 1'b0;
+            end else
+                jt_st_req  <= 1'b0;
+        end else if (jt_st_req && st_done) begin
+            jt_st_req   <= 1'b0;
+            jt_st_done  <= 1'b1;
+            jt_st_rdata <= st_rdata;
+        end
+    end
+    wire [19:0] st_addr_mux  = jt_st_req ? jt_st_addr  : st_addr;
+    wire [7:0]  st_wdata_mux = jt_st_req ? jt_st_wdata : st_wdata;
+    wire        st_we_mux    = jt_st_req ? jt_st_we    : st_we;
+    wire        st_req_mux   = st_req | jt_st_req;
+`else
+    wire [19:0] st_addr_mux  = st_addr;
+    wire [7:0]  st_wdata_mux = st_wdata;
+    wire        st_we_mux    = st_we;
+    wire        st_req_mux   = st_req;
+`endif
+
     sdram_selftest_master u_selftest (
         .clk              (clk_chipset),
         .rst              (reset_sdram),
-        .req              (st_req),
-        .we               (st_we),
-        .addr             (st_addr),
-        .wdata            (st_wdata),
+        .req              (st_req_mux),
+        .we               (st_we_mux),
+        .addr             (st_addr_mux),
+        .wdata            (st_wdata_mux),
         .done             (st_done),
         .rdata            (st_rdata),
         .initilized_sdram (initilized_sdram),
@@ -2578,12 +2622,12 @@ module core_top (
         .VID_HBlank                         (HBlank),
         .VID_VBlank                         (VBlank),
         .address                            (chipset_address),
-        .address_ext                        (st_run ? st_addr : bios_access_address),
+        .address_ext                        (st_run ? st_addr_mux : bios_access_address),
         .ext_access_request                 (st_run | bios_access_request),
         .data_bus_ext_out                   (chipset_ext_rdata),
         .address_direction                  (address_direction),
         .data_bus                           (data_bus),
-        .data_bus_ext                       (st_run ? st_wdata : bios_write_data[7:0]),
+        .data_bus_ext                       (st_run ? st_wdata_mux : bios_write_data[7:0]),
     //  .data_bus_direction                 (data_bus_direction),
         .address_latch_enable               (address_latch_enable),
         .io_channel_ready                   (1'b1),
