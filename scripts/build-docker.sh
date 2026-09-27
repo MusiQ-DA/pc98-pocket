@@ -6,7 +6,9 @@
 #   bash scripts/build-docker.sh --check   Analysis & Synthesis only
 # Requires: docker daemon running + raetro/quartus:pocket image pulled.
 set -euo pipefail
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/fpga"
+# Mount the repo root, not fpga/: sprom.v $readmemh's ../firmware/firmware.vh,
+# which escapes a fpga/-only mount.
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 IMAGE="${IMAGE:-raetro/quartus:pocket}"
 DOCKER_BIN="${DOCKER_BIN:-docker}"
@@ -15,7 +17,7 @@ FLOW="compile"
 [ "${1:-}" = "--check" ] && FLOW="analyze"
 
 echo ">> building with $IMAGE (flow: $FLOW)"
-exec "$DOCKER_BIN" run --rm -v "$PWD":/work -w /work "$IMAGE" bash -lc '
+exec "$DOCKER_BIN" run --rm -e FLOW="$FLOW" -v "$PWD":/work -w /work "$IMAGE" bash -lc '
   set -e
   Q=""
   for p in /opt/intelFPGA/quartus /opt/quartus /usr/local/quartus /opt/intelFPGA_lite /opt/altera; do
@@ -29,5 +31,6 @@ exec "$DOCKER_BIN" run --rm -v "$PWD":/work -w /work "$IMAGE" bash -lc '
   export PATH="$Q:$PATH"
   export LD_LIBRARY_PATH="$Q:${LD_LIBRARY_PATH:-}"
   quartus_sh --version
-  quartus_sh --flow compile ap_core
+  cd fpga
+  quartus_sh --flow "$FLOW" ap_core
 '
