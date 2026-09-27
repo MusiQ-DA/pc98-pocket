@@ -109,51 +109,6 @@ module softcpu_subsystem (
     output        st_req,   // level; held until st_done comes back
     input         st_done,
     input   [7:0] st_rdata,
-    // INTR into the CPU, served at 0x500000B4. See core_top.
-    input  [15:0] int_count,
-    input         int_live,
-    // The master GDC's view, served at 0x500000B0. See PERIPHERALS.
-    input   [7:0] dbg_pic_irr,
-    input   [7:0] dbg_pic_imr,
-    input   [7:0] dbg_pic_isr,
-    input   [7:0] dbg_inta_vec,
-    input  [15:0] dbg_inta_count,
-    input   [7:0] dbg_pic2_irr,
-    input   [7:0] dbg_pic2_imr,
-    input   [7:0] dbg_pic2_isr,
-    input   [7:0] dbg_motor_arms,
-    input   [7:0] dbg_motor_pulses,
-    input   [7:0] dbg_chg,
-    input   [7:0] dbg_strb_be, dbg_strb_94, dbg_strb_cc, dbg_strb_dat,
-    input   [7:0] dbg_last_ctrl,
-    input  [31:0] dbg_fdc_x,
-    input  [31:0] dbg_fdc_y,
-    input  [95:0] dbg_fdc_z,
-    input  [31:0] dbg_fdc_w,
-    input  [31:0] dbg_fdc_v,
-    input  [31:0] dbg_dma,
-    // The 71071's own internals: {mask, encoded, request vectors, write
-    // snoop, FSM state} packed into one word. See upd71071.sv.
-    input  [31:0] dbg_dmac,
-    input  [15:0] dbg_w_path, dbg_rw_lvl,
-    input   [7:0] dbg_irq_level,
-    input   [7:0] dbg_timer_count,
-    input   [7:0] dbg_kbd_irq_count,
-    input   [7:0] dbg_kbd_rd_count,
-    input  [14:0] dbg_gdc_sad,
-    input   [7:0] dbg_gdc_pitch,
-    input   [1:0] dbg_gdc_clk,
-    input   [7:0] dbg_gdc_unk_cmd,
-    input   [7:0] dbg_gdc_unk_count,
-    input         dbg_gdc_disp_on,
-    input  [23:0] dbg_gdc_cur,
-    input   [7:0] dbg_gdc_csrcnt,
-    input  [31:0] dbg_gdc_csrtrace,
-    // The guest-reset terms (core_top's dbg_bits low byte), the hardware-band
-    // strip's replacement: {~RESET, reset, interact_reset, bios_ever_loaded,
-    // 0, 0, guest_hold_sync2, soft_guest_hold} -- the reset_wire terms, read
-    // on the POST panel where they are legible.
-    input   [7:0] dbg_reset_terms,
     // The drawing server's view of the two GDCs, already in this domain via
     // the synchronisers below; the done LEVEL the engine writes back.
     input   [1:0]  gdc_draw_req,
@@ -161,70 +116,6 @@ module softcpu_subsystem (
     input  [15:0]  gdc_draw_ops,
     input [319:0]  gdc_draw_snaps,
     output  [1:0]  gdc_srv_done_levels,
-    // How far a key press gets, served at 0x500000AC. See core_top.
-    input   [7:0] key_count,
-    input   [7:0] key_last,
-    // The memory-sizing evidence, served at 0x500000A8. The POST-overlay monitor
-    // that drove these is gone; the inputs are tied off to 0 in core_top.
-    input   [7:0] memsw_seen,
-    input   [7:0] memsize_seen,
-    input   [7:0] f0_count,
-    input   [7:0] post_code,
-    input   [7:0] post_prev,
-    input  [63:0] post_hist,
-    input  [19:0] post_mem_addr,
-    input  [19:0] post_live_addr,
-    input  [19:0] post_live_max,
-    input  [15:0] post_live_cs,
-    input  [15:0] post_live_ip,
-    input  [15:0] post_derail_cs,
-    input  [15:0] post_derail_ip,
-    input  [15:0] post_ring_ip0, post_ring_ip1, post_ring_ip2, post_ring_ip3,
-    input  [15:0] post_land_cs,  post_land_ip,
-    input  [19:0] post_fr0_addr, post_fr1_addr,
-    input  [7:0]  post_fr0_data, post_fr1_data,
-    input  [15:0] post_count,
-    input   [7:0] post_max,
-    input  [15:0] post_restarts,
-    input  [15:0] ivt16_off,
-    input  [15:0] ivt16_seg,
-    input   [7:0] ivt16_wr_count,
-    input  [15:0] ivt13_off,
-    input  [15:0] ivt13_seg,
-    input  [15:0] ivt12_off,
-    input  [15:0] ivt12_seg,
-    input  [15:0] wr_any_count,
-    input  [15:0] tvram_wr_count,
-    input  [63:0] tvram_row0_code,
-    input  [63:0] tvram_row0_hi,
-    input  [63:0] pc98_tvfill_view,
-    input  [15:0] pc98_rowbuf_freq_count,
-    input  [15:0] pc98_rowbuf_fvalid_count,
-    // The frame census, served at 0x5000013C/0158. See PERIPHERALS.
-    input  [31:0] dbg_frm_a,
-    input  [31:0] dbg_frm_b,
-    input  [63:0] tvram_row0_attr,
-    input  [15:0] rd_any_count,
-    input  [15:0] ivt_touch_count,
-    input  [19:0] wr_last_addr,
-    input  [19:0] tvram_last_addr,
-    input   [3:0] raw_strobes,
-    input  [15:0] wr_low_cycles,
-    input  [15:0] rd_low_cycles,
-    output [15:0] rom_win,          // W 0x5000007C: CPU-read snoop window
-    input [127:0] rom_read_data,
-    input [127:0] rom_load_data,
-    input   [7:0] rom_load_count,
-    // BIOS-load FIFO health: words the FIFO had to throw away, and how deep it
-    // ever got. See core_top -- there is no backpressure to the APF bridge.
-    // Which I/O ports the guest has written, and the ITF bank state. On PC-98
-    // the ITF's progress is visible only through the ports it touches.
-    input  [63:0] io_port_hist,
-    input  [15:0] io_wr_count,
-    input         itf_bank,
-    input  [15:0] rlf_drops,
-    input  [15:0] rlf_level_max,
-    input   [7:0] rom_read_count,
     output        osd_active,
     output        osd_credits_req,
 
@@ -332,13 +223,10 @@ module softcpu_subsystem (
     // chipset domain (quasi-static -- the engine holds each state for
     // microseconds), and the done LEVEL the engine writes toggles per
     // command; Peripherals edge-detects its synchronized rise.
-    logic [7:0] rst_terms_s1 = 8'h00, rst_terms_s2 = 8'h00;
     logic [1:0] draw_req_s1 = 2'b00, draw_req_s = 2'b00;
     logic [1:0] draw_busy_s = 2'b00;
     reg   [1:0] gdc_srv_done_levels_r = 2'b00;
     always @(posedge clk_pico) begin
-        rst_terms_s1 <= dbg_reset_terms;
-        rst_terms_s2 <= rst_terms_s1;
         draw_req_s1  <= gdc_draw_req;
         draw_req_s   <= draw_req_s1;
         draw_busy_s  <= gdc_draw_busy;
@@ -401,16 +289,6 @@ module softcpu_subsystem (
     // chipset cycles and core_top's sequencer can sample it directly; the
     // request stays up until st_done returns, which is what stops one firmware
     // write from launching several accesses.
-    // The CPU-read snoop's window, address[19:4]. Powers up where each machine
-    // had it hardwired, so a build whose firmware never writes this behaves
-    // exactly as it always did: the PC-98 reset vector at FFFF, and F D88 -- the
-    // PC/AT BIOS entry the bring-up was watching -- otherwise.
-    reg [15:0] rom_win_r = 16'hFFFF;
-    always @(posedge clk_pico)
-        if (sel_st && cpu_mem_wstrb[0] && cpu_mem_ready && cpu_mem_addr[7:0] == 8'h7C)
-            rom_win_r <= cpu_mem_wdata[15:0];
-    assign rom_win = rom_win_r;
-
     reg [19:0] st_addr_r  = 20'd0;
     reg  [7:0] st_wdata_r = 8'd0;
     reg        st_we_r    = 1'b0;
@@ -1113,89 +991,6 @@ module softcpu_subsystem (
             32'h4???_????: cpu_mem_rdata = gpu_status;
             32'h7???_????: cpu_mem_rdata = font_cpu_q;
             32'h5000_000C: cpu_mem_rdata = {23'd0, st_req_r, st_rdata};
-            // POST monitor, read-only.
-            32'h5000_0010: cpu_mem_rdata = {post_count, post_prev, post_code};
-            32'h5000_0014: cpu_mem_rdata = {12'd0, post_mem_addr};
-            32'h5000_0018: cpu_mem_rdata = post_hist[31:0];    // newest four
-            32'h5000_001C: cpu_mem_rdata = post_hist[63:32];   // oldest four
-            32'h5000_0020: cpu_mem_rdata = {8'd0, post_max, post_restarts};
-            32'h5000_0024: cpu_mem_rdata = {12'd0, post_live_addr};
-            32'h5000_0110: cpu_mem_rdata = {post_live_ip, post_live_cs};
-            32'h5000_0114: cpu_mem_rdata = {post_derail_ip, post_derail_cs};
-            32'h5000_0118: cpu_mem_rdata = {post_land_ip,  post_land_cs};
-            32'h5000_011C: cpu_mem_rdata = {post_ring_ip0, post_ring_ip1};
-            32'h5000_0120: cpu_mem_rdata = {post_ring_ip2, post_ring_ip3};
-            32'h5000_0124: cpu_mem_rdata = {12'd0, post_fr0_data, post_fr0_addr};
-            32'h5000_0128: cpu_mem_rdata = {12'd0, post_fr1_data, post_fr1_addr};
-            32'h5000_0028: cpu_mem_rdata = {12'd0, post_live_max};
-            32'h5000_002C: cpu_mem_rdata = {ivt16_wr_count, ivt16_seg, ivt16_off[15:8]};
-            32'h5000_0030: cpu_mem_rdata = {16'd0, ivt16_off};
-            // The two FDC vectors: 0x4C/0x4E = INT 13h (2HD), 0x48/0x4A =
-            // INT 12h (2DD). Zero throughout means the BIOS never installed
-            // the handlers before the drive probe interrupted.
-            32'h5000_00C8: cpu_mem_rdata = {ivt13_seg, ivt13_off};
-            32'h5000_00CC: cpu_mem_rdata = {ivt12_seg, ivt12_off};
-            32'h5000_0034: cpu_mem_rdata = {rd_any_count, wr_any_count};
-            32'h5000_003C: cpu_mem_rdata = {12'd0, raw_strobes, ivt_touch_count};
-            32'h5000_0040: cpu_mem_rdata = {rd_low_cycles, wr_low_cycles};
-            32'h5000_0044: cpu_mem_rdata = rom_read_data[31:0];
-            32'h5000_004C: cpu_mem_rdata = rom_read_data[63:32];
-            32'h5000_0050: cpu_mem_rdata = rom_read_data[95:64];
-            32'h5000_0054: cpu_mem_rdata = rom_read_data[127:96];
-            32'h5000_0058: cpu_mem_rdata = rom_load_data[31:0];
-            32'h5000_005C: cpu_mem_rdata = rom_load_data[63:32];
-            32'h5000_0060: cpu_mem_rdata = rom_load_data[95:64];
-            32'h5000_0064: cpu_mem_rdata = rom_load_data[127:96];
-            32'h5000_0068: cpu_mem_rdata = {24'd0, rom_load_count};
-            32'h5000_006C: cpu_mem_rdata = {rlf_level_max, rlf_drops};
-            32'h5000_0070: cpu_mem_rdata = io_port_hist[31:0];    // newest two
-            32'h5000_0074: cpu_mem_rdata = io_port_hist[63:32];   // older two
-            32'h5000_0078: cpu_mem_rdata = {15'd0, itf_bank, io_wr_count};
-            32'h5000_0048: cpu_mem_rdata = {24'd0, rom_read_count};
-            32'h5000_007C: cpu_mem_rdata = {16'd0, rom_win_r};
-            // [13:0], not [11:0]: the text plane is 0x0000-0x3FFF and twelve
-            // bits could not tell byte 0x0F9 from 0x10F9 -- two different rows.
-            32'h5000_0080: cpu_mem_rdata = {2'd0, tvram_last_addr[13:0], tvram_wr_count};
-            // Row 0's first eight cells, as written. Codes and attributes.
-            32'h5000_0084: cpu_mem_rdata = tvram_row0_code[31:0];
-            32'h5000_0088: cpu_mem_rdata = tvram_row0_code[63:32];
-            32'h5000_008C: cpu_mem_rdata = tvram_row0_attr[31:0];
-            32'h5000_0090: cpu_mem_rdata = tvram_row0_attr[63:32];
-            // The same cells' HIGH bytes: nonzero = two-byte flagged = the
-            // cell renders as kanji. That flag is the whole story of the
-            // run#191 screen.
-            32'h5000_0094: cpu_mem_rdata = tvram_row0_hi[31:0];
-            32'h5000_0098: cpu_mem_rdata = tvram_row0_hi[63:32];
-            // The row buffer's own view of row 0's first cells (byte 2n =
-            // high, 2n+1 = low), and the kanji fetch path's activity.
-            32'h5000_009C: cpu_mem_rdata = pc98_tvfill_view[31:0];
-            32'h5000_00A0: cpu_mem_rdata = pc98_tvfill_view[63:32];
-            // The frame census: {dots lit, glyph bytes served} and
-            // {bytes stored, fills run, row-buffer FSM}. See PERIPHERALS.
-            32'h5000_013C: cpu_mem_rdata = dbg_frm_a;
-            32'h5000_0158: cpu_mem_rdata = dbg_frm_b;
-            32'h5000_00A4: cpu_mem_rdata = {pc98_rowbuf_fvalid_count,
-                                            pc98_rowbuf_freq_count};
-            // MSW = A3FEA as the guest read it, SZ = what the ITF recorded at
-            // [0501], F0 = OUT 0F0h requests. 04/04/01 is a healthy 640 KB
-            // boot; 00/00 and a rising F0 is the MEMORY 128KB loop.
-            32'h5000_00A8: cpu_mem_rdata = {8'd0, f0_count, memsize_seen, memsw_seen};
-            32'h5000_00AC: cpu_mem_rdata = {6'd0, dbg_gdc_clk, dbg_gdc_pitch, key_last, key_count};
-            // 8 + 8 + 1 + 15 = 32. The first cut of this packed 34 bits into
-            // 32 and silently lost the top of unk_count and shifted unk_cmd.
-            32'h5000_00B0: cpu_mem_rdata = {dbg_gdc_unk_count, dbg_gdc_unk_cmd,
-                                            dbg_gdc_disp_on, dbg_gdc_sad};
-            // The cursor's GDC-side registers plus the CSRW/CSRFORM command
-            // count, packed ccEaaatb (count, enable, cell, top, bottom) so
-            // one hex call on the panel prints it in reading order.
-            32'h5000_012C: cpu_mem_rdata = {dbg_gdc_csrcnt, dbg_gdc_cur};
-            // The CSRFORM byte trace: {how many, first three bytes after
-            // the last 4B}. The panel's CT word.
-            32'h5000_0130: cpu_mem_rdata = dbg_gdc_csrtrace;
-            // The guest-reset terms, synchronised: {~RESET, reset,
-            // interact_reset, bios_ever_loaded, 0, 0, guest_hold_sync2,
-            // soft_guest_hold}.
-            32'h5000_0134: cpu_mem_rdata = {24'd0, rst_terms_s2};
             // ---- the drawing server --------------------------------------
             // 0x140/0x180: {busy, req, opcode} for master/slave; +4..+0x14:
             // the five snapshot words. 0x15C/0x19C (writes): the done LEVEL
@@ -1215,72 +1010,6 @@ module softcpu_subsystem (
             32'h5000_018C: cpu_mem_rdata = gdc_draw_snaps[255:224];
             32'h5000_0190: cpu_mem_rdata = gdc_draw_snaps[287:256];
             32'h5000_0194: cpu_mem_rdata = gdc_draw_snaps[319:288];
-            32'h5000_00B8: cpu_mem_rdata = {16'd0, dbg_kbd_rd_count, dbg_kbd_irq_count};
-            32'h5000_00BC: cpu_mem_rdata = {8'd0,
-                                            dbg_timer_count, dbg_irq_level, 8'd0};
-            // The master PIC's own three registers -- the last part of the
-            // interrupt path a panel could not see.
-            32'h5000_00C0: cpu_mem_rdata = {8'd0, dbg_pic_isr,
-                                            dbg_pic_imr, dbg_pic_irr};
-            // The vector byte the CPU received at the last INTA, and the
-            // acknowledge count. 0x12/0x13 = the pair delivered the FDC's
-            // handler; 0x0F = the master answered its own cascade line
-            // (spurious); anything else = the acknowledge came back wrong.
-            32'h5000_00C4: cpu_mem_rdata = {8'd0, dbg_inta_vec,
-                                            dbg_inta_count};
-            // The drive probe's interrupt, link by link: the slave PIC's
-            // own three registers, and the motor timer's arms and pulses.
-            // r2/m2/s2 = the slave; MA/MP = motor arms/pulses.
-            32'h5000_00D0: cpu_mem_rdata = {8'd0, dbg_pic2_isr,
-                                            dbg_pic2_imr, dbg_pic2_irr};
-            32'h5000_00D4: cpu_mem_rdata = {8'd0, dbg_chg,
-                                            dbg_motor_pulses, dbg_motor_arms};
-            // Did the glue's write strobe ever fire, per port, and what
-            // was the last control byte it carried?
-            // Byte 0 and byte 2, NOT byte 0 and byte 1: read as
-            // (x & 0xFF) and (x >> 16). Packed adjacent, the second field
-            // of each pair read back as a constant zero -- nBE and nD were
-            // structurally 00 on every panel that ever showed them, and a
-            // whole build was spent explaining a zero that was the readout's
-            // own. The other debug words here are read the same way; these
-            // two were the pair that disagreed.
-            32'h5000_00D8: cpu_mem_rdata = {8'd0, dbg_strb_dat,
-                                            8'd0, dbg_strb_cc};
-            32'h5000_00DC: cpu_mem_rdata = {8'd0, dbg_strb_be,
-                                            8'd0, dbg_strb_94};
-            32'h5000_00E0: cpu_mem_rdata = {24'd0, dbg_last_ctrl};
-            // The controller itself: byte 0 the MSR the guest last read,
-            // byte 1 floppy.v's interrupt rises, byte 2 the DOR it holds,
-            // byte 3 the result bytes read back; then the last byte written
-            // to 0x94 and to 0xCC, kept apart. Byte-aligned, read as
-            // (x >> 8*n) & 0xFF -- see the D8/DC packing bug.
-            32'h5000_00EC: cpu_mem_rdata = dbg_fdc_x;
-            32'h5000_00F0: cpu_mem_rdata = dbg_fdc_y;
-            // The FIFO ring, newest four bytes first. Twelve bytes is the
-            // whole conversation at CA 07: seven commands and their
-            // parameters, which is what it takes to read the stream rather
-            // than guess at its tail.
-            32'h5000_00F4: cpu_mem_rdata = dbg_fdc_z[31:0];
-            32'h5000_0100: cpu_mem_rdata = dbg_fdc_z[63:32];
-            32'h5000_0104: cpu_mem_rdata = dbg_fdc_z[95:64];
-            32'h5000_00F8: cpu_mem_rdata = dbg_fdc_w;
-            32'h5000_0108: cpu_mem_rdata = dbg_fdc_v;
-            // The whole FDC DMA handshake in one word: {floppy state+fifo
-            // count, its request, the DRQ the 71071 sees, the arbiter's
-            // hold grant, the DACK lines, TC, AEN, ext-access, cpu status}.
-            32'h5000_010C: cpu_mem_rdata = dbg_dma;
-            // The 71071's answer to the case above: {mask, encoded_dma,
-            // request_state, request_ff, last write register, write count,
-            // reg-1010 sticky, controller_disable, FSM state} -- whether
-            // the BIOS's setup ever arrived, and what the encoder did
-            // with it. See upd71071.sv for the packing.
-            32'h5000_0138: cpu_mem_rdata = dbg_dmac;
-            // The write path counted in PERIPHERALS: {any-port write
-            // strobe, decode clocks} and {write levels, read levels}.
-            32'h5000_00E4: cpu_mem_rdata = dbg_w_path;
-            32'h5000_00E8: cpu_mem_rdata = dbg_rw_lvl;
-            32'h5000_00B4: cpu_mem_rdata = {15'd0, int_live, int_count};
-            32'h5000_0038: cpu_mem_rdata = {12'd0, wr_last_addr};
             default:       cpu_mem_rdata = 32'd0;
         endcase
     end

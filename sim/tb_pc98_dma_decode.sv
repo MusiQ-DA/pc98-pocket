@@ -131,8 +131,7 @@ module tb_pc98_dma_decode;
         .pc98_key_stb           (1'b0),
         .pc98_key_byte          (8'd0),
         .dma_chip_select_n      (dma_cs_n),
-        .dma_page_chip_select_n (dma_page_cs_n),
-        .dbg_fdc_dma            ()
+        .dma_page_chip_select_n (dma_page_cs_n)
     );
     /* verilator lint_on PINCONNECTEMPTY */
     /* verilator lint_on PINMISSING */
@@ -176,12 +175,8 @@ module tb_pc98_dma_decode;
         .dma_request(dma_request),
         .dma_acknowledge_n(dma_acknowledge_n),
         .address_enable_n(address_enable_n),
-        .terminal_count_n(terminal_count_n),
-        .dbg_hold(),
-        .dbg_dmac(dbg_dmac)
+        .terminal_count_n(terminal_count_n)
     );
-
-    wire [31:0] dbg_dmac;
 
     int errors = 0;
     task automatic check(input bit cond, input string name);
@@ -321,13 +316,6 @@ module tb_pc98_dma_decode;
                  u_arb.u_upd71071.u_Priority_Encoder.mask_register,
                  dma_acknowledge_n);
 
-        // The POSTMON word has to carry the same story the hierarchical
-        // probes do: mask at [31:28], the single-mask write's sticky at
-        // bit 7, its register index at [15:12], and a nonzero count.
-        check(dbg_dmac[31:28] == 4'b1011, "dbg carries mask_register");
-        check(dbg_dmac[7], "dbg sticky: single-mask reg written");
-        check(dbg_dmac[15:12] == 4'hA, "dbg last write is reg 0xA");
-        check(dbg_dmac[11:8] != 4'h0, "dbg counts the writes");
 
         begin : wait_tc
             int guard = 0;

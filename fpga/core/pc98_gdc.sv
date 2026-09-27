@@ -7,9 +7,7 @@
 // device is at 97 per cent ALMs, the drawing processor is the expensive half,
 // and PC-98 software overwhelmingly draws by writing VRAM through the GRCG
 // rather than by issuing GDC drawing commands. That last clause is a JUDGEMENT
-// AND NOT A MEASUREMENT, so the unimplemented commands are counted and
-// reported (unk_cmd / unk_count) instead of being silently swallowed: if the
-// ROM issues one, the judgement is wrong and the readout says so.
+// AND NOT A MEASUREMENT; the postmon-era counters that watched it are gone.
 //
 // NOR DOES IT GENERATE THE RASTER. pc98_video_timing already makes 640x400 at
 // 24.83 kHz and the picture it produces works. The SYNC parameters are
@@ -95,23 +93,8 @@ module pc98_gdc #(
     output wire [4:0]  cursor_top,
     output wire [4:0]  cursor_bottom,
     output wire [5:0]  cursor_rate,
-    // How many CSRW/CSRFORM commands arrived -- the panel's cursor field
-    // reads it, because "the registers look right but nothing draws" and
-    // "the BIOS never sent a form at all" are different faults.
-    output reg  [7:0]  csr_wr_count,
-    // What actually followed the LAST CSRFORM command: the first three
-    // parameter bytes in order, and how many bytes arrived before another
-    // command cut the run short (saturating at 15). The BIOS writes CSRFORM
-    // as one byte (its cursor ON/OFF) and as three (the table form); which
-    // of those the metal actually sent, and whether the bytes landed where
-    // the capture puts them, is the question the panel's CT word answers.
-    output wire [31:0] csr_trace,
     output wire [1:0]  zoom_disp,
 
-    // ---- what the post monitor needs ---------------------------------------
-    // The drawing processor is not here. If the ROM asks for it, this says so.
-    output reg  [7:0]  unk_cmd,
-    output reg  [7:0]  unk_count,
     // ---- the drawing server (the softcore's GDC engine) ---------------------
     // EXECUTE-class commands (VECTE 0x6C, TEXTE 0x68) stop being counted as
     // unknown and land here instead: the snapshot ports hand the softcore the
@@ -156,12 +139,6 @@ module pc98_gdc #(
     // bytes and DRDY falls, instead of timing out against a silent port.
     reg [7:0] rb_fifo [0:7];
     reg [2:0] rb_wr = 3'd0, rb_rd = 3'd0;
-
-    // The CSRFORM trace, as csr_trace reports it.
-    reg [7:0] csr_tr0, csr_tr1, csr_tr2;
-    reg [3:0] csr_n;
-    reg       csr_live;
-    assign csr_trace = {4'b0000, csr_n, csr_tr0, csr_tr1, csr_tr2};
 
     // The drawing server's handshake. draw_pending latches the first EXECUTE
     // with a SNAPSHOT of everything the engine reads (the guest cannot race
@@ -216,7 +193,7 @@ module pc98_gdc #(
     // the command decode
     // ------------------------------------------------------------------
     // {destination, count}. Anything not named here takes no parameters and is
-    // counted as unimplemented -- see unk_cmd.
+    // swallowed.
     function automatic logic [10:0] decode(input logic [7:0] c);
         logic [5:0] d;
         logic [4:0] n;
@@ -237,17 +214,6 @@ module pc98_gdc #(
             default:        begin d = 6'd0;           n = 5'd0;  end
         endcase
         decode = {d, n};
-    endfunction
-
-    // Commands this module implements with no parameters, so an unknown one
-    // can be told apart from a known zero-parameter one. VECTE and TEXTE are
-    // EXECUTE-class: known, and handed to the drawing server instead.
-    function automatic logic known_noparam(input logic [7:0] c);
-        known_noparam = (c == 8'h05) || (c == 8'h0C)       // STOP
-                     || (c == 8'h0D) || (c == 8'h6B)       // START
-                     || (c == 8'h6E) || (c == 8'h6F)       // SLAVE / MASTER
-                     || (c == 8'h6C) || (c == 8'h68)       // VECTE / TEXTE
-                     || (c == 8'hE0) || (c == 8'hC0);      // CSRR / LPEN
     endfunction
 
     // io_write_n is a multi-cycle level on clk, so a bare cs & ~io_write_n
@@ -286,16 +252,11 @@ module pc98_gdc #(
             p_dst     <= 6'd0;
             p_left    <= 5'd0;
             disp_on_r <= 1'b0;
-            unk_cmd   <= 8'h00;
-            unk_count <= 8'h00;
-            csr_wr_count <= 8'h00;
             rb_wr <= 3'd0;
             draw_pending <= 1'b0;
             draw_op_r    <= 8'h00;
             draw_busy_r  <= 1'b0;
             for (i = 0; i <= 19; i = i + 1) snap[i] <= 8'h00;
-            csr_tr0 <= 8'h00; csr_tr1 <= 8'h00; csr_tr2 <= 8'h00;
-            csr_n <= 4'd0; csr_live <= 1'b0;
             for (i = 0; i <= P_LAST; i = i + 1) para[i] <= 8'h00;
             // The CSRFORM power-on values, and why the cursor is nothing
             // without them: the BIOS's boot sends CSRFORM as ONE byte --
@@ -348,29 +309,16 @@ module pc98_gdc #(
                 p_dst  <= dn[10:5];
                 p_left <= dn[4:0];
 
-                // The trace follows only the CSRFORM command.
-                csr_live <= (wr_d == 8'h4B);
-                csr_n    <= 4'd0;
-
-                // CSRW/CSRFORM arrivals, saturating, for the panel.
-                if ((wr_d == 8'h49 || wr_d == 8'h4B)
-                        && csr_wr_count != 8'hFF)
-                    csr_wr_count <= csr_wr_count + 8'd1;
-
                 // EXECUTE-class: hand it to the drawing server. The snapshot
                 // lands with the latch; further EXECUTEs while pending are
-                // counted unknown (the FIFO-empty bit is already clear, so
-                // software that polls waits) -- the scope guard, sharpened.
+                // dropped (the FIFO-empty bit is already clear, so software
+                // that polls waits) -- the scope guard, sharpened.
                 if (exec_cmd && !draw_pending && !draw_busy_r) begin
                     draw_pending <= 1'b1;
                     draw_op_r    <= wr_d;
                     for (i = 0; i <= 18; i = i + 1)
                         snap[i] <= para[snap_src(i)];
                     snap[19] <= 8'h00;                 // the pad byte
-                end else if (exec_cmd) begin
-                    unk_cmd <= wr_d;
-                    if (unk_count != 8'hFF)
-                        unk_count <= unk_count + 8'd1;
                 end
 
                 // CSRR: five bytes off CSRW, np21w's fill verbatim -- the
@@ -404,26 +352,11 @@ module pc98_gdc #(
                     disp_on_r <= 1'b0;
                 end
 
-                // Unimplemented: no destination, no count, and not one of the
-                // zero-parameter commands this module does handle. Saturating,
-                // because "how many" matters less than "at all".
-                if (dn[4:0] == 5'd0 && !known_noparam(wr_d)) begin
-                    unk_cmd <= wr_d;
-                    if (unk_count != 8'hFF) unk_count <= unk_count + 8'd1;
-                end
             end else if (par_wr) begin
                 if (p_left != 5'd0) begin
                     para[p_dst] <= wr_d;
                     p_dst       <= p_dst + 6'd1;
                     p_left      <= p_left - 5'd1;
-                end
-                // The trace records every 0x60 byte while the last command
-                // was CSRFORM, landed in the capture or not.
-                if (csr_live) begin
-                    if (csr_n == 4'd0)      csr_tr0 <= wr_d;
-                    else if (csr_n == 4'd1) csr_tr1 <= wr_d;
-                    else if (csr_n == 4'd2) csr_tr2 <= wr_d;
-                    if (csr_n != 4'hF) csr_n <= csr_n + 4'd1;
                 end
             end
         end

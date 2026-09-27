@@ -187,35 +187,7 @@ module pc98_fdc_glue (
     // 0x94 bit 4 (DMAE): the flip-flop the hardware data book puts on the
     // DRQ/DACK lines. Peripherals ANDs it with floppy.v's dma_req -- a
     // control write with bit 4 clear is how the BIOS closes the channel.
-    output logic       dma_enable,
-    // How far the motor timer got, saturating: arms (a live-window control
-    // write with bit 0 rising) and expiry pulses delivered to the steering.
-    // The BIOS's motor wait needs BOTH to move; a stuck pair says the write
-    // never armed the timer, a moved pair with the slave's IRR empty says
-    // the pulse died between here and the PIC.
-    output logic [7:0] dbg_motor_arms,
-    output logic [7:0] dbg_motor_pulses,
-    // Write-strobe witnesses, saturating: did wr_stb EVER fire for each
-    // port? The panel's motor fields said "no arm" across two builds while
-    // every decode traced clean on paper, so the question is no longer what
-    // the glue DOES with a strobe but whether one arrives at all.
-    //   dbg_strb_be  0xBE writes seen
-    //   dbg_strb_94  0x94 writes seen
-    //   dbg_strb_cc  0xCC writes seen
-    //   dbg_strb_dat 0x92/0xCA writes seen
-    //   dbg_last_ctrl the last control byte at a 0x94/0xCC strobe
-    output logic [7:0] dbg_strb_be,
-    output logic [7:0] dbg_strb_94,
-    output logic [7:0] dbg_strb_cc,
-    output logic [7:0] dbg_strb_dat,
-    output logic [7:0] dbg_last_ctrl,
-    // The window register itself. 0xBE's last byte: bit0 picks which of the
-    // two port groups is live, and the same bit steers the interrupts. The
-    // 0xCC motor writes are only seen when bit0 is CLEAR -- np21w's
-    // ((port>>4)^chgreg)&1 guard drops them otherwise -- so a 3 here with
-    // MA 00 means the BIOS is writing 0xCC into a dead window, and the
-    // question moves to why the ROM does that.
-    output logic [7:0] dbg_chg
+    output logic       dma_enable
 );
 
     logic [7:0] ctrl_q;
@@ -244,8 +216,6 @@ module pc98_fdc_glue (
     logic [24:0] motor_timer_2hd,  motor_timer_2dd;
     logic        motor_pulse_2hd,  motor_pulse_2dd;
     logic        motor_wait_2hd,   motor_wait_2dd;
-    logic [7:0]  motor_arms        = 8'd0;   // both timers, summed
-    logic [7:0]  motor_pulses      = 8'd0;
     logic        ctrl3_q_2hd,      ctrl3_q_2dd;
     logic [7:0]  ctrlcc_q_2hd,     ctrlcc_q_2dd;
 
@@ -257,7 +227,6 @@ module pc98_fdc_glue (
             motor_wait_2hd  <= 1'b0;  motor_wait_2dd  <= 1'b0;
             ctrl3_q_2hd     <= 1'b0;  ctrl3_q_2dd     <= 1'b0;
             ctrlcc_q_2hd    <= 8'h00; ctrlcc_q_2dd    <= 8'h00;
-            motor_arms      <= 8'd0;  motor_pulses    <= 8'd0;
         end
         else begin
             // 0x94 -- the 2HD drive adapter's control.
@@ -265,7 +234,6 @@ module pc98_fdc_glue (
                 if (wr_data[3] && !ctrl3_q_2hd) begin
                     motor_armed_2hd <= 1'b1;
                     motor_timer_2hd <= 25'd0;
-                    if (motor_arms != 8'hFF) motor_arms <= motor_arms + 8'd1;
                 end
                 ctrl3_q_2hd  <= wr_data[3];
                 ctrlcc_q_2hd <= wr_data;
@@ -275,7 +243,6 @@ module pc98_fdc_glue (
                 if (wr_data[3] && !ctrl3_q_2dd) begin
                     motor_armed_2dd <= 1'b1;
                     motor_timer_2dd <= 25'd0;
-                    if (motor_arms != 8'hFF) motor_arms <= motor_arms + 8'd1;
                 end
                 ctrl3_q_2dd  <= wr_data[3];
                 ctrlcc_q_2dd <= wr_data;
@@ -296,7 +263,6 @@ module pc98_fdc_glue (
             if (motor_wait_2hd && !fd_busy) begin
                 motor_wait_2hd  <= 1'b0;
                 motor_pulse_2hd <= 1'b1;
-                if (motor_pulses != 8'hFF) motor_pulses <= motor_pulses + 8'd1;
             end
             else if (motor_pulse_2hd)
                 motor_pulse_2hd <= 1'b0;
@@ -311,33 +277,11 @@ module pc98_fdc_glue (
             if (motor_wait_2dd && !fd_busy) begin
                 motor_wait_2dd  <= 1'b0;
                 motor_pulse_2dd <= 1'b1;
-                if (motor_pulses != 8'hFF) motor_pulses <= motor_pulses + 8'd1;
             end
             else if (motor_pulse_2dd)
                 motor_pulse_2dd <= 1'b0;
         end
     end
-    assign dbg_motor_arms   = motor_arms;
-    assign dbg_motor_pulses = motor_pulses;
-    assign dbg_chg          = chgreg;
-
-    // The strobe witnesses.
-    logic [7:0] strb_be = 8'd0, strb_94 = 8'd0, strb_cc = 8'd0, strb_dat = 8'd0;
-    logic [7:0] last_ctrl_byte = 8'd0;
-    always_ff @(posedge clk) begin
-        if (wr_stb) begin
-            if (sel_mode && strb_be  != 8'hFF) strb_be  <= strb_be  + 8'd1;
-            if (sel_ctrl && ~port_2dd && strb_94 != 8'hFF) strb_94 <= strb_94 + 8'd1;
-            if (sel_ctrl &&  port_2dd && strb_cc != 8'hFF) strb_cc <= strb_cc + 8'd1;
-            if (sel_data && strb_dat != 8'hFF) strb_dat <= strb_dat + 8'd1;
-            if (sel_ctrl) last_ctrl_byte <= wr_data;
-        end
-    end
-    assign dbg_strb_be   = strb_be;
-    assign dbg_strb_94   = strb_94;
-    assign dbg_strb_cc   = strb_cc;
-    assign dbg_strb_dat  = strb_dat;
-    assign dbg_last_ctrl = last_ctrl_byte;
 
     // np21w fdc_reset (io/fdc.c:1155-1161): fdc.chgreg = 3. Bit 0 set means the
     // 0x90/0x92/0x94 window is the live one out of reset.
