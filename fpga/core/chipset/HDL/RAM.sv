@@ -108,6 +108,34 @@ module RAM (
     logic           write_protect;
     logic           bios_shadow_select;
 
+    // Pending-write slot, depth one. The FSM was built for the CPU, whose
+    // write strobe stays up until memory_access_ready ends its cycle; a
+    // strobe that lands while a write or read is in flight -- the uPD71071's
+    // memory_write_n arriving during the previous byte's COMPLETE_RAM_RW --
+    // sees ready for a write nobody started and is gone by the next IDLE.
+    // On the disk that is the periodic ~1-in-9 dropped byte of a sector DMA
+    // fill, proved on hardware with an 0xFF pre-dirty: misses came back
+    // stale, never as injected data. The slot parks the command with its
+    // address and data so the next IDLE can serve it; parked traffic goes
+    // first so guest-visible write order holds.
+    //
+    // accept_* snapshots the operands of every write at acceptance, from the
+    // slot or from the bus: RAM_WRITE_1/2 otherwise consume latch_* and the
+    // live data bus, which a pulse-width strobe can legally release -- and
+    // change -- before write_flag confirms the request.
+    logic           wc_pend;
+    logic           live_served;
+    logic           accept_live_wr;
+    logic           accept_live_rd;
+    logic   [22:0]  pend_address;
+    logic   [7:0]   pend_data;
+    logic   [7:0]   pend_data_hi;
+    logic           pend_word;
+    logic   [22:0]  accept_address;
+    logic   [7:0]   accept_data;
+    logic   [7:0]   accept_data_hi;
+    logic           accept_word;
+
     logic   [1:0]   read_wait_count;
     logic   [1:0]   write_wait_count;
     logic           access_ready;
@@ -340,20 +368,20 @@ module RAM (
         next_state = state;
         casez (state)
             IDLE: begin
-                if (write_command)
+                if (write_command | wc_pend)
                     next_state = RAM_WRITE_1;
                 else if (read_command)
                     next_state = RAM_READ_1;
             end
+            // Once a write is accepted it must complete: an early
+            // ~write_command (a pulse shorter than the accept handshake) used
+            // to drop the request on the floor here, which is the same class
+            // of miss as a strobe landing in COMPLETE_RAM_RW's window.
             RAM_WRITE_1: begin
-                if (~write_command)
-                    next_state = WAIT;
                 if (write_flag)
                     next_state = RAM_WRITE_2;
             end
             RAM_WRITE_2: begin
-                if (~write_command)
-                    next_state = WAIT;
                 if (~write_flag)
                     next_state = COMPLETE_RAM_RW;
             end
@@ -370,7 +398,11 @@ module RAM (
                     next_state = COMPLETE_RAM_RW;
             end
             COMPLETE_RAM_RW: begin
-                if ((~write_command) && (~read_command))
+                // A live strobe holds the exit only when it belongs to the
+                // access just served (accept_live_*); a parked access has no
+                // strobe to wait on, and a strobe for someone else's next
+                // transfer must not strand the FSM here.
+                if ((~write_command | ~accept_live_wr) & (~read_command | ~accept_live_rd))
                     next_state = IDLE;
             end
             WAIT: begin
@@ -380,11 +412,74 @@ module RAM (
         endcase
     end
 
+    // The parking-slot bookkeeping lives in the same process as the state
+    // register so every condition below reads the pre-edge state value --
+    // state uses <= for exactly that reason. live_served marks a write whose
+    // strobe is still up: back-to-back strobes can hold write_command across
+    // a master switch with no falling edge at all, so "is this strobe new"
+    // is decided by operands, not by edges. A held strobe keeps its operands
+    // and never re-parks; a different address or data is a new transfer and
+    // parks on the spot.
+    wire new_write_strobe = write_command && state != IDLE && !wc_pend
+        && (!live_served
+            || (latch_address != accept_address)
+            || (internal_data_bus != accept_data)
+            || (internal_data_bus_hi != accept_data_hi)
+            || (word_now != accept_word));
+
     always_ff @(posedge clock, posedge reset) begin
-        if (reset)
-            state = IDLE;
-        else
-            state = next_state;
+        if (reset) begin
+            state             <= IDLE;
+            wc_pend           <= 1'b0;
+            live_served       <= 1'b0;
+            accept_live_wr    <= 1'b0;
+            accept_live_rd    <= 1'b0;
+            pend_address      <= 23'd0;
+            pend_data         <= 8'd0;
+            pend_data_hi      <= 8'd0;
+            pend_word         <= 1'b0;
+            accept_address    <= 23'd0;
+            accept_data       <= 8'd0;
+            accept_data_hi    <= 8'd0;
+            accept_word       <= 1'b0;
+        end
+        else begin
+            state <= next_state;
+            if (state == IDLE && next_state == RAM_WRITE_1) begin
+                // Accept: operands snapshot either from the slot (parked
+                // traffic wins, so write order holds) or off the live bus.
+                live_served    <= ~wc_pend & write_command;
+                accept_live_wr <= ~wc_pend & write_command;
+                accept_live_rd <= 1'b0;
+                if (wc_pend) begin
+                    accept_address <= pend_address;
+                    accept_data    <= pend_data;
+                    accept_data_hi <= pend_data_hi;
+                    accept_word    <= pend_word;
+                end
+                else begin
+                    accept_address <= latch_address;
+                    accept_data    <= internal_data_bus;
+                    accept_data_hi <= internal_data_bus_hi;
+                    accept_word    <= word_now;
+                end
+                wc_pend <= 1'b0;
+            end
+            else if (state == IDLE && next_state == RAM_READ_1) begin
+                accept_live_rd <= read_command;
+                accept_live_wr <= 1'b0;
+            end
+            else if (~write_command)
+                live_served <= 1'b0;
+            if (new_write_strobe) begin
+                wc_pend      <= 1'b1;
+                live_served  <= 1'b0;
+                pend_address <= latch_address;
+                pend_data    <= internal_data_bus;
+                pend_data_hi <= internal_data_bus_hi;
+                pend_word    <= word_now;
+            end
+        end
     end
 
     always_ff @(posedge clock, posedge reset) begin
@@ -403,30 +498,34 @@ module RAM (
     always_comb begin
         casez (state)
             IDLE: begin
+                // A parked write goes first, so the direct fast-path may not
+                // fire a live strobe here: with wc_pend set the accepted
+                // write in RAM_WRITE_1 uses the parked operands, and a live
+                // request out of IDLE would run one slot ahead of it.
                 access_address  = {6'h00, latch_address};
                 access_num      = access_words;
                 access_data_in  = {8'h00, latch_data};
                 access_data_in_hi = {8'h00, latch_data_hi};
-                write_request   = write_command ? 1'b1 : 1'b0;
-                read_request    = read_command  ? 1'b1 : 1'b0;
+                write_request   = (write_command & ~wc_pend) ? 1'b1 : 1'b0;
+                read_request    = (read_command & ~wc_pend)  ? 1'b1 : 1'b0;
                 sdram_ldqm      = 1'b0;
                 sdram_udqm      = 1'b0;
             end
             RAM_WRITE_1: begin
-                access_address  = {6'h00, latch_address};
-                access_num      = access_words;
-                access_data_in  = {8'h00, latch_data};
-                access_data_in_hi = {8'h00, latch_data_hi};
+                access_address  = {6'h00, accept_address};
+                access_num      = accept_word ? 10'h002 : 10'h001;
+                access_data_in  = {8'h00, accept_data};
+                access_data_in_hi = {8'h00, accept_data_hi};
                 write_request   = 1'b1;
                 read_request    = 1'b0;
                 sdram_ldqm      = 1'b0;
                 sdram_udqm      = 1'b0;
             end
             RAM_WRITE_2: begin
-                access_address  = {6'h00, latch_address};
-                access_num      = access_words;
-                access_data_in  = {8'h00, latch_data};
-                access_data_in_hi = {8'h00, latch_data_hi};
+                access_address  = {6'h00, accept_address};
+                access_num      = accept_word ? 10'h002 : 10'h001;
+                access_data_in  = {8'h00, accept_data};
+                access_data_in_hi = {8'h00, accept_data_hi};
                 write_request   = 1'b0;
                 read_request    = 1'b0;
                 sdram_ldqm      = 1'b0;
@@ -572,8 +671,14 @@ module RAM (
     // there and nowhere else makes this a real handshake for any master,
     // however it samples. The 8088 sees ready no earlier than it did; it just
     // no longer sees it before the data.
+    // Ready answers only for the strobe whose access was actually served
+    // (accept_live_*); a strobe that arrived while the FSM was busy used to
+    // see this COMPLETE and drop its transfer before anyone ran it -- the
+    // orphaned writes the parking slot now also catches.
     assign  memory_access_ready = ((~ram_address_select_n) && ((~memory_read_n) || (~memory_write_n)))
-                                        ? ((state == COMPLETE_RAM_RW) & ((read_wait_count==0) || (~read_command)) & ((write_wait_count==0) || (~write_command))) : 1'b1;
+                                        ? ((state == COMPLETE_RAM_RW) & (
+                                              (write_command & accept_live_wr & (write_wait_count == 0))
+                                            | (read_command  & accept_live_rd & (read_wait_count  == 0)))) : 1'b1;
 
     // ROM-load (Pocket): a clean per-access "done" pulse for core_top's BIOS
     // loader. COMPLETE_RAM_RW is reached only after the SDRAM write truly
