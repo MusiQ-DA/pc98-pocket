@@ -656,8 +656,8 @@ module core_top (
     wire [31:0] rtc_time_bcd;
     wire        rtc_valid;
 
-    function automatic [3:0] bcd2bin(input [7:0] b);
-        bcd2bin = (b[7:4] * 5) + b[3:0];            // 10*hi + lo
+    function automatic [6:0] bcd2bin(input [7:0] b);
+        bcd2bin = (b[7:4] * 7'd10) + {3'd0, b[3:0]};   // 10*hi + lo
     endfunction
 
     wire [3:0]  rtc_mo  = bcd2bin(rtc_date_bcd[15:8]);
@@ -684,15 +684,69 @@ module core_top (
 
     logic [47:0] rtc_time = 48'd0;
     logic        rtc_valid_q = 1'b0;
+    // The latched snapshot never advanced, so TIME$ froze at load time.
+    // The real chip ticks: count clk_74a seconds and walk the BCD fields
+    // (sec/min/hour BCD, month binary, weekday mod 7, month lengths with
+    // leap-February when the BCD year divides by four).
+    localparam int RTC_DIV = 74_250_000;
+    logic [26:0] rtc_div = 27'd0;
+    wire         rtc_tick = (rtc_div == RTC_DIV - 1);
+
+    function automatic [7:0] bcd_inc(input [7:0] b);
+        bcd_inc = (b[3:0] == 4'd9) ? {b[7:4] + 4'd1, 4'd0} : b + 8'd1;
+    endfunction
+    function automatic [4:0] days_in(input [3:0] mo, input logic leap);
+        case (mo)
+        4'd4, 4'd6, 4'd9, 4'd11: days_in = 5'd30;
+        4'd2:                  days_in = leap ? 5'd29 : 5'd28;
+        default:               days_in = 5'd31;
+        endcase
+    endfunction
+    // {mo,wday} is a 7-bit value zero-extended into [15:8]: mo lives at
+    // [14:11], wday at [10:8], bit 15 stays clear.
+    wire [3:0] cur_mo   = rtc_time[14:11];
+    wire       cur_leap = (bcd2bin(rtc_time[7:0]) % 4) == 4'd0;
+    wire [4:0] cur_dim  = days_in(cur_mo, cur_leap);
+
     always_ff @(posedge clk_74a) begin
         rtc_valid_q <= rtc_valid;
-        if (rtc_valid && !rtc_valid_q)
+        if (rtc_valid && !rtc_valid_q) begin
             rtc_time <= {rtc_time_bcd[7:0],      // second
                          rtc_time_bcd[15:8],     // minute
                          rtc_time_bcd[23:16],    // hour
                          rtc_date_bcd[23:16],    // day
                          {rtc_mo, rtc_acc % 7},  // month<<4 | weekday
                          rtc_date_bcd[7:0]};     // year
+            rtc_div <= 27'd0;
+        end else if (rtc_tick) begin
+            rtc_div <= 27'd0;
+            if (rtc_time[47:40] == 8'h59) begin
+                rtc_time[47:40] <= 8'h00;
+                if (rtc_time[39:32] == 8'h59) begin
+                    rtc_time[39:32] <= 8'h00;
+                    if (rtc_time[31:24] == 8'h23) begin
+                        rtc_time[31:24] <= 8'h00;
+                        rtc_time[10:8] <= (rtc_time[10:8] == 3'd6) ? 3'd0
+                                          : rtc_time[10:8] + 3'd1;
+                        if (bcd2bin(rtc_time[23:16]) == {2'd0, cur_dim}) begin
+                            rtc_time[23:16] <= 8'h01;
+                            if (cur_mo == 4'd12) begin
+                                rtc_time[14:11] <= 4'd1;
+                                rtc_time[7:0]   <= (rtc_time[7:0] == 8'h99)
+                                                   ? 8'h00
+                                                   : bcd_inc(rtc_time[7:0]);
+                            end else
+                                rtc_time[14:11] <= cur_mo + 4'd1;
+                        end else
+                            rtc_time[23:16] <= bcd_inc(rtc_time[23:16]);
+                    end else
+                        rtc_time[31:24] <= bcd_inc(rtc_time[31:24]);
+                end else
+                    rtc_time[39:32] <= bcd_inc(rtc_time[39:32]);
+            end else
+                rtc_time[47:40] <= bcd_inc(rtc_time[47:40]);
+        end else
+            rtc_div <= rtc_div + 27'd1;
     end
 
     // Target-dataslot: the disk softcore initiates host reads of floppy images.
@@ -1176,6 +1230,20 @@ module core_top (
             8'h1f:   probe_data = {dbg_pic_irr, dbg_pic_imr, dbg_pic_isr, dbg_timer_count};
             8'h20:   probe_data = {dbg_pic2_irr, dbg_pic2_imr, dbg_pic2_isr, dbg_kbd_irq_count};
             8'h21:   probe_data = {dbg_irq_level, 8'h00, dbg_kbd_rd_count, key_count};
+            // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
+            // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
+            // would strip a pressed bit before it can queue a key event:
+            //   [15:0] kb_buttons          = pocket_keyboard's buttons input
+            //   [16]   mousepad            = gamepad_mode==2 (Mouse): masks dpad+face+shoulders
+            //   [18:17] gamepad_mode       = 0 Keyboard / 1 Joystick / 2 Mouse
+            //   [19]   credits_mode_chip
+            //   [20]   osd_active          = softcore VKB_CTRL bit0 (an overlay is up)
+            //   [21]   osd gate into pk    = osd_active | credits_mode_chip (suppresses all keys)
+            //   [22]   kb_ready            = ps2 accept (level; may read 0 mid-byte)
+            //   [23]   kb_valid            = framer emitting a Set-2 byte
+            8'h22:   probe_data = {8'h00, kb_valid, kb_ready,
+                                   osd_active | credits_mode_chip, osd_active, credits_mode_chip,
+                                   gamepad_mode, mousepad, kb_buttons};
             8'hFF:   probe_data = 32'h98C0_DE98;
             default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
