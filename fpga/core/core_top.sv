@@ -1166,6 +1166,8 @@ module core_top (
             8'h15:   probe_data = {8'h00, dbg_gdc_cur};        // cc E aaa t b
             8'h16:   probe_data = dbg_gdc_csrtrace;          // bytes after CSRFORM
             8'h17:   probe_data = {24'h0, dbg_gdc_csrcnt};   // CSRW/CSRFORM count
+            8'h18:   probe_data = {8'h00, dbg_cur_px};       // px-domain {en,bl,top,bot,addr}
+            8'h19:   probe_data = {16'h0, dbg_cshow_cnt};    // cursor dots emitted last frame
             8'hFF:   probe_data = 32'h98C0_DE98;
             default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -1987,6 +1989,8 @@ module core_top (
     wire [63:0] pc98_tvfill_view;
     wire [15:0] pc98_rowbuf_freq_count, pc98_rowbuf_fvalid_count;
     wire [31:0] dbg_frm_a, dbg_frm_b;
+    wire [23:0] dbg_cur_px;
+    wire [15:0] dbg_cshow_cnt;
     wire  [3:0] raw_strobes;
     wire [15:0] wr_low_cycles, rd_low_cycles;
     wire [127:0] rom_read_data;
@@ -2398,6 +2402,8 @@ module core_top (
         .pc98_rowbuf_fvalid_count           (pc98_rowbuf_fvalid_count),
         .dbg_frm_a                          (dbg_frm_a),
         .dbg_frm_b                          (dbg_frm_b),
+        .dbg_cur_px                         (dbg_cur_px),
+        .dbg_cshow_cnt                      (dbg_cshow_cnt),
         .VID_R                              (r),
         .VID_G                              (g),
         .VID_B                              (b),

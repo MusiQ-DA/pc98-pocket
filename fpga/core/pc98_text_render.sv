@@ -68,7 +68,8 @@ module pc98_text_render #(
     input  wire  [7:0] font_row,
 
     output logic [2:0] grb,             // G,R,B as the attribute orders them
-    output logic       pixel            // this pixel is lit
+    output logic       pixel,           // this pixel is lit
+    output wire        dbg_cshow        // cursor_show, for the frame census
 );
 
     wire visible = (hcount < 10'd640) && (vcount < 10'd400);
@@ -151,6 +152,7 @@ module pc98_text_render #(
     wire cursor_here = cur_en & (drawn_cell == cur_addr[11:0]);
     wire cursor_line = cursor_here & (line >= cur_top) & (line <= cur_bot);
     wire cursor_show = cursor_line & (~cur_blink | blink_on);
+    assign dbg_cshow = cursor_show;
 
     assign tv_cell = next_cell;
 

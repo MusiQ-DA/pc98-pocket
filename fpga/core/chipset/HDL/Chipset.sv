@@ -98,6 +98,8 @@ module CHIPSET #(
         // The text path's per-frame census -- see PERIPHERALS.
         output  logic   [31:0]  dbg_frm_a,
         output  logic   [31:0]  dbg_frm_b,
+        output  logic   [23:0]  dbg_cur_px,
+        output  logic   [15:0]  dbg_cshow_cnt,
         output  logic           de_o,
         output  logic   [5:0]   VID_R,
         output  logic   [5:0]   VID_G,
@@ -451,6 +453,8 @@ module CHIPSET #(
         .pc98_rowbuf_fvalid_count           (pc98_rowbuf_fvalid_count),
         .dbg_frm_a                          (dbg_frm_a),
         .dbg_frm_b                          (dbg_frm_b),
+        .dbg_cur_px                         (dbg_cur_px),
+        .dbg_cshow_cnt                      (dbg_cshow_cnt),
         .VID_R                              (VID_R),
         .VID_G                              (VID_G),
         .VID_B                              (VID_B),

@@ -222,6 +222,12 @@ module PERIPHERALS #(
     // chipset clock's; a zero in the middle names the stage that went dark.
     output  logic   [31:0]  dbg_frm_a,
     output  logic   [31:0]  dbg_frm_b,
+    // What the PIXEL domain actually latched of the cursor (en,bl,top,bot,
+    // addr) plus how many cursor-slice dots it emitted last frame. On the
+    // metal the GDC side reads sane while nothing draws; this pair says
+    // which side of the clock crossing the failure lives on.
+    output  logic   [23:0]  dbg_cur_px,
+    output  logic   [15:0]  dbg_cshow_cnt,
         // PC-9801-86 OPNA, stereo. Zero on a non-PC-98 build.
     output  logic signed [15:0] opna_snd_l,
     output  logic signed [15:0] opna_snd_r,
@@ -1260,6 +1266,7 @@ module PERIPHERALS #(
         end
     end
 
+    wire pc98_cshow;
     pc98_text_render u_pc98_text (
         .clk(clk_pc98_dot), .pix_ce(1'b1),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px), .gdc_sad(gdc_sad_px),
@@ -1270,8 +1277,26 @@ module PERIPHERALS #(
         .tv_cell(tvram_vid_cell_w), .tv_attr(tvram_vid_attr),
         .font_cell(pc98_font_cell), .font_line(pc98_font_line),
         .font_row(pc98_font_row),
-        .grb(pc98_grb), .pixel(pc98_pixel)
+        .grb(pc98_grb), .pixel(pc98_pixel), .dbg_cshow(pc98_cshow)
     );
+
+    // The cursor census: dbg_cur_px holds what the dot domain latched of the
+    // cursor (enable, blink-enable, slice, cell), and cshow_frm counts the
+    // dots cursor_show actually fired on last frame -- 0 means the slice never
+    // qualified, ~64 means a full reverse block is reaching the pixel path.
+    logic [15:0] cshow_run = 16'd0, cshow_frm = 16'd0;
+    logic [23:0] cur_px_packed;
+    always_ff @(posedge clk_pc98_dot) begin
+        if (pc98_fs) begin
+            cshow_frm     <= cshow_run;
+            cshow_run     <= 16'd0;
+            cur_px_packed <= {gdc_cur_en_px, gdc_cur_bl_px,
+                              gdc_cur_top_px, gdc_cur_bot_px,
+                              gdc_cur_addr_px[11:0]};
+        end else if (pc98_cshow) begin
+            cshow_run <= cshow_run + 16'd1;
+        end
+    end
 
     // The graphics half of the picture: the slave GDC's planes, fetched a
     // line ahead over the SDRAM controller's port D and shifted out a dot
@@ -1617,6 +1642,8 @@ module PERIPHERALS #(
         frm_a_s1 <= {px_frm, rd_frm};
         dbg_frm_a <= frm_a_s1;
         dbg_frm_b <= {st_frm, fl_frm, pc98_rb_dbg};
+        dbg_cur_px    <= cur_px_packed;
+        dbg_cshow_cnt <= cshow_frm;
     end
 
     // The fill's view, latched per cell: tvram_fil_cell/lo/hi are stable for
