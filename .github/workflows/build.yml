@@ -331,14 +331,6 @@ jobs:
       - name: no module input left dangling in core_top
         run: python3 scripts/check_unconnected.py
 
-      - name: POST monitor captures what the guest wrote
-        run: |
-          S=fpga/core
-          verilator --binary --timing -Wno-fatal --top-module tb_post_monitor \
-            -Isim -I$S sim/tb_post_monitor.sv $S/post_monitor.sv -o p --Mdir obj_pm
-          ./obj_pm/p | tee pm.log
-          grep -q "RESULT: PASS" pm.log
-
       - name: IRQ0 is an edge, not a level, on a timer pin latched high
         run: |
           S=fpga/core
@@ -461,34 +453,6 @@ jobs:
             -o ce --Mdir obj_ce
           ./obj_ce/ce | tee ce.log
           grep -q "PASS tb_ce_rates" ce.log
-
-      - name: postmon ROM peek reads the ROM the loader wrote (not the ITF shadow)
-        run: |
-          S=fpga/core
-          H=$S/chipset/HDL
-          # fixed: the shipped flag mux -- the peek must read the main bank,
-          # BAD 000. repro: the pre-fix mux -- must come back BAD 0EC with GOT
-          # all zeros, i.e. this bench reproduces the hardware readout; if it
-          # does not, the bench models nothing and its PASS means nothing.
-          for variant in fixed repro; do
-            DEF="+define+MACHINE_PC98+SDRAM_USE_MP"
-            [ "$variant" = repro ] && DEF="+define+MACHINE_PC98+SDRAM_USE_MP+REPRO_OLD_SHADOW"
-            verilator --binary --timing -Wno-fatal --top-module tb_postmon_peek $DEF \
-              -Isim -I$S -I$H -I$H/sdram_single/HDL -I$H/upd71071/HDL -I$H/i8288/HDL \
-              sim/tb_postmon_peek.sv sim/sdram_model.sv sim/sdram_board_model.sv \
-              $S/sdram_selftest_master.sv \
-              $H/RAM.sv $H/Bus_Arbiter.sv $H/sdram_single/HDL/sdram_single.sv \
-              $S/sdram_shim.sv $S/sdram_mp.sv \
-              $H/i8288/HDL/i8288.sv \
-              $H/upd71071/HDL/upd71071.sv \
-              $H/upd71071/HDL/upd71071_Address_And_Count_Registers.sv \
-              $H/upd71071/HDL/upd71071_Bus_Control_Logic.sv \
-              $H/upd71071/HDL/upd71071_Priority_Encoder.sv \
-              $H/upd71071/HDL/upd71071_Timing_And_Control.sv \
-              -o q --Mdir obj_pk_$variant
-            (cd sim && ../obj_pk_$variant/q | tee ../pk_$variant.log)
-            grep -q "RESULT: PASS" pk_$variant.log
-          done
 
       - name: RAM.sv integration at board timing (antiphase device clock)
         run: |

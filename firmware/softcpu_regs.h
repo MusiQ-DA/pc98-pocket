@@ -22,6 +22,8 @@
 #define FDD0_DISK_SIZE ((volatile uint32_t *) 0x3000003C) // R: floppy-0 image size in sectors
 #define FDD1_DISK_SIZE ((volatile uint32_t *) 0x30000040) // R: floppy-1 image size in sectors
 #define IDE_REQUEST    ((volatile uint32_t *) 0x30000044) // R: ide0 request [2:0]
+#define FDD_JTCTL      ((volatile uint32_t *) 0x30000048) // R: JTAG FDD command word (0 without PC98_PROBE_EXTRA)
+#define FDD_JTSTAT     ((volatile uint32_t *) 0x3000004C) // W: answer word, read back over probe slot 0x26
 #define FDD_REBIND     ((volatile uint32_t *) 0x30000050) // R: per-floppy image-rebind toggles
 #define DTBL_ADDR      ((volatile uint32_t *) 0x30000054) // W: datatable word index
 #define DTBL_DATA      ((volatile uint32_t *) 0x30000058) // R: datatable word at the index; W: write it
@@ -96,7 +98,6 @@
 #define BTNFN_SETTINGS 1u
 #define BTNFN_CREDITS  2u
 #define BTNFN_VIDEO    3u
-#define BTNFN_POSTMON  4u
 
 // FDD_REQUEST bits
 #define FDD_REQ_READ  (1 << 0)
@@ -105,6 +106,16 @@
 // FDD_REBIND bits: one toggle per floppy drive, flipping on each image (re)bind.
 #define FDD0_REBIND_BIT (1 << 0)
 #define FDD1_REBIND_BIT (1 << 1)
+
+// FDD_JTCTL word (probe write slot 0x85): {seq[15:8], drive[5:4], cmd[3:0]}.
+// A seq change runs cmd once; FDD_JTSTAT answers {sectors[31:20], ok[17],
+// inserted[16], seq[15:8], drive[5:4], cmd[3:0]} for the addressed drive.
+#define JT_FDD_NOP    0x0
+#define JT_FDD_EJECT  0x1 // media out; the image stays bound (insert brings it back)
+#define JT_FDD_INSERT 0x2 // re-insert the remembered image
+#define JT_FDD_MOUNT  0x3 // (re)mount whatever is bound in the drive's dataslot
+#define JT_FDD_UNBIND 0x4 // eject and forget the image; a host rebind mounts again
+#define JT_FDD_STAT   0x5 // no action, refresh the answer word only
 
 // FDD_MGMT_TRIG bits
 #define FDD_MGMT_WR (1 << 0)
@@ -207,6 +218,7 @@ int slot_declare_size(uint16_t id, uint32_t bytes);
 void fdd_mount(uint32_t drive, uint32_t sectors);
 void fdd_eject(uint32_t drive);
 void fdd_insert(uint32_t drive);
+void fdd_unbind(uint32_t drive);
 int  fdd_is_inserted(uint32_t drive);
 uint32_t fdd_mounted_sectors(uint32_t drive);
 

@@ -12,14 +12,8 @@
 static const uint8_t bind_keycfg_id[BIND_COUNT] = { 4, 5, 6, 7, 10, 8, 9 };
 
 // Default bindings: A=L-Ctrl, B=L-Alt, X=Space, Y=Enter, R1 unmapped, Select=Settings,
-// Start=POST Overlay. All single-byte, so the ext bitmap defaults clear.
-static const uint8_t bind_default[BIND_COUNT] = { 0x14, 0x11, 0x29, 0x5A, 0x00, 0xF1,
-#ifdef POST_MONITOR
-                                                  0xF0u + BTNFN_POSTMON
-#else
-                                                  0xF2
-#endif
-                                                  };
+// Start=Show Credits. All single-byte, so the ext bitmap defaults clear.
+static const uint8_t bind_default[BIND_COUNT] = { 0x14, 0x11, 0x29, 0x5A, 0x00, 0xF1, 0xF2 };
 static uint8_t bind[BIND_COUNT];
 static uint8_t bind_ext;
 

@@ -49,6 +49,10 @@ module softcpu_subsystem (
     // firmware re-mounts a swapped image even at an unchanged size.
     input        fdd0_rebind,
     input        fdd1_rebind,
+    // JTAG FDD command channel (probe write slot 0x85 / read slot 0x26,
+    // PC98_PROBE_EXTRA builds). See softcpu_fdd_bridge for the register map.
+    input  [31:0] jt_fddctl,
+    output [31:0] jt_fddstat,
 
     // Management-bus master to floppy.v via CHIPSET
     output [15:0] mgmt_addr,
@@ -105,8 +109,6 @@ module softcpu_subsystem (
     output        st_req,   // level; held until st_done comes back
     input         st_done,
     input   [7:0] st_rdata,
-    // POST monitor (post_monitor.sv): the guest's progress on I/O port 0x80,
-    // so the firmware can put "where the BIOS got to" on screen.
     // INTR into the CPU, served at 0x500000B4. See core_top.
     input  [15:0] int_count,
     input         int_live,
@@ -162,7 +164,8 @@ module softcpu_subsystem (
     // How far a key press gets, served at 0x500000AC. See core_top.
     input   [7:0] key_count,
     input   [7:0] key_last,
-    // The memory-sizing evidence, served at 0x500000A8. See post_monitor.
+    // The memory-sizing evidence, served at 0x500000A8. The POST-overlay monitor
+    // that drove these is gone; the inputs are tied off to 0 in core_top.
     input   [7:0] memsw_seen,
     input   [7:0] memsize_seen,
     input   [7:0] f0_count,
@@ -1070,6 +1073,8 @@ module softcpu_subsystem (
         .datatable_q(datatable_q),
         .fdd0_rebind(fdd0_rebind),
         .fdd1_rebind(fdd1_rebind),
+        .jt_fddctl (jt_fddctl),
+        .jt_fddstat(jt_fddstat),
 
         .mgmt_addr  (mgmt_addr),
         .mgmt_dout  (mgmt_dout),
@@ -1232,8 +1237,8 @@ module softcpu_subsystem (
                                             dbg_motor_pulses, dbg_motor_arms};
             // Did the glue's write strobe ever fire, per port, and what
             // was the last control byte it carried?
-            // Byte 0 and byte 2, NOT byte 0 and byte 1: postmon reads these
-            // as (x & 0xFF) and (x >> 16). Packed adjacent, the second field
+            // Byte 0 and byte 2, NOT byte 0 and byte 1: read as
+            // (x & 0xFF) and (x >> 16). Packed adjacent, the second field
             // of each pair read back as a constant zero -- nBE and nD were
             // structurally 00 on every panel that ever showed them, and a
             // whole build was spent explaining a zero that was the readout's

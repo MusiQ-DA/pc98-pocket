@@ -6,12 +6,6 @@
 #include "vkb_draw.h"
 #include "vkb_layout.h"
 #include "vkb_ui.h"
-#include "postmon.h"   // postmon_mark is used unconditionally below
-#ifdef POST_MONITOR
-// post_monitor's text-plane write snoop: {tvram last addr, write count}. The
-// reset sequence watches it to lift the video blank when the BIOS repaints.
-#define POST_TVRAM ((volatile uint32_t *) 0x50000080)
-#endif
 
 // The settings overlay: a CP437-framed panel of submenus, drawn on demand into the shared OSD
 // framebuffer and navigated with the D-pad. Each edit updates the value in RAM and pushes it to the
@@ -135,9 +129,6 @@ static uint8_t settings_default[SET_COUNT];
 // park the softcore -- and with it fdd/gdc service -- for the whole re-POST.
 static uint8_t  reset_phase;
 static uint32_t reset_ticks;
-#ifdef POST_MONITOR
-static uint32_t reset_tv0;
-#endif
 
 // A menu row is a submenu link, an editable option, a controller-button binding, an action, or a
 // blank grouping spacer; `arg` selects the target menu, the setting id, the BIND_* button, or the
@@ -151,7 +142,7 @@ typedef struct {
 } item_t;
 
 enum { MENU_MAIN, MENU_SYSTEM, MENU_AV, MENU_HW, MENU_CONTROLS, MENU_COUNT };
-enum { ACT_CREDITS, ACT_DEFAULTS, ACT_RESET_PC, ACT_POSTMON };
+enum { ACT_CREDITS, ACT_DEFAULTS, ACT_RESET_PC };
 
 static const item_t items_main[] = {
     { "System", IT_SUBMENU, MENU_SYSTEM },
@@ -162,9 +153,6 @@ static const item_t items_main[] = {
     { "Show Credits", IT_ACTION, ACT_CREDITS },
     { "Reset to Defaults", IT_ACTION, ACT_DEFAULTS },
     { "", IT_SPACER, 0 },
-#ifdef POST_MONITOR
-    { "POST Overlay", IT_ACTION, ACT_POSTMON },
-#endif
     { "Reset PC", IT_ACTION, ACT_RESET_PC },
 };
 
@@ -293,10 +281,6 @@ static const char *bind_name(int btn)
         return "Show Credits";
     case BTNFN_VIDEO:
         return "Switch Video";
-#ifdef POST_MONITOR
-    case BTNFN_POSTMON:
-        return "POST Overlay";
-#endif
     default:
         break;
     }
@@ -328,9 +312,6 @@ static const uint8_t keybind_cycle[] = {
     0x00,                   // Unmapped
     0xF0u + BTNFN_SETTINGS, // Open Settings
     0xF0u + BTNFN_CREDITS,  // Show Credits
-#ifdef POST_MONITOR
-    0xF0u + BTNFN_POSTMON, // POST Overlay -- show/hide the diagnostic strip
-#endif
     BIND_KEY_SLOT, // pick a key
 };
 #define KEYBIND_CYCLE_COUNT ((int) (sizeof(keybind_cycle) / sizeof(keybind_cycle[0])))
@@ -632,11 +613,6 @@ int settings_input(uint16_t pressed)
             } else if (it->arg == ACT_CREDITS) {
                 settings_show_credits();
                 return 1; // close the panel so the credits scroll shows on a clean screen
-#ifdef POST_MONITOR
-            } else if (it->arg == ACT_POSTMON) {
-                postmon_toggle();
-                return 1; // close the panel so the strip appears (or the guest under it does)
-#endif
             }
         }
     }
@@ -647,29 +623,12 @@ void settings_reset_tick(void)
 {
     if (reset_phase == 1) {
         if (++reset_ticks >= 2) {        // ~2 ms of hold
-#ifdef POST_MONITOR
-            reset_tv0 = *POST_TVRAM;
-#endif
             *SOFT_GUEST_HOLD = 2;        // release the guest, keep the blank
             reset_phase = 2;
             reset_ticks = 0;
         }
     } else if (reset_phase == 2) {
-#ifdef POST_MONITOR
-        // POST_TVRAM = {tvram last addr, write count}: any text-plane write
-        // moves it even once the low-16 count has saturated, so a rep-stosw
-        // screen clear exits this long before the ceiling does.
-        if (*POST_TVRAM != reset_tv0) {
-            reset_phase = 3;
-            reset_ticks = 0;
-        } else
-#endif
         if (++reset_ticks >= 4000) {     // ~4 s ceiling, then unblank anyway
-            reset_phase = 0;
-            *SOFT_GUEST_HOLD = 0;
-        }
-    } else if (reset_phase == 3) {
-        if (++reset_ticks >= 100) {      // let the repaint's first burst land
             reset_phase = 0;
             *SOFT_GUEST_HOLD = 0;
         }
@@ -789,16 +748,11 @@ void settings_mark_dirty(void)
 
 void settings_service(void)
 {
-    // Stage marks subdivide this leg: a main loop frozen at 0x2F never made
-    // it past the dirty check, and each later mark names the store it hung on.
-    postmon_mark = 0x2F;
     if (!dirty) {
         return;
     }
     dirty = 0;
-    postmon_mark = 0x30;
     *FDD_BRAM_ADDR = SETTINGS_WORD;
-    postmon_mark = 0x31;
     *FDD_BRAM_WDATA = SETTINGS_MAGIC;
     *FDD_BRAM_WDATA = SETTINGS_VERSION | ((uint32_t) SET_COUNT << 8);
     uint32_t word = 0;
@@ -809,7 +763,6 @@ void settings_service(void)
             word = 0;
         }
     }
-    postmon_mark = 0x32;
     // key-binding block: seven code bytes then the ext bitmap, four bytes per word.
     uint8_t ext = 0;
     for (uint32_t i = 0; i < BIND_COUNT; i++) {
@@ -824,5 +777,4 @@ void settings_service(void)
             word = 0;
         }
     }
-    postmon_mark = 0x33;
 }

@@ -117,13 +117,19 @@ def data(j):
         {"name": "Settings",    "id": 7, "required": False, "parameters": "0x02",
          "filename": "settings.dat", "extensions": ["dat"],
          "address": "0x10030000", "size_maximum": "0x1000"},
-        {"name": "Floppy A",    "id": 3, "required": False, "parameters": 1,
+        {"name": "Floppy A",    "id": 3, "required": False, "parameters": "0x201",
+         # 0x201 = bit0 user-reloadable + bit9 persist-browsed-filename: the
+         # picked disk is remembered and re-mounted on every load/reload, and
+         # filename pins a default so drive A comes up with the image already
+         # bound. That's what lets a JTAG bitstream reload keep a floppy
+         # attached with no picker round-trip.
+         "filename": "draw_test.hdm",
          # The schema allows at most FOUR extensions -- a longer list made the
          # Pocket browse on the first four only, and .hdm (seventh) was never
          # selectable. Keep the raw image formats the loader actually reads.
          "extensions": ["hdm", "fdi", "2hd", "fdd"],
          "size_maximum": 8388608, "deferload": True},
-        {"name": "Floppy B",    "id": 4, "required": False, "parameters": 1,
+        {"name": "Floppy B",    "id": 4, "required": False, "parameters": "0x201",
          "extensions": ["hdm", "fdi", "2hd", "fdd"],
          "size_maximum": 8388608, "deferload": True},
         {"name": "Hard Disk",   "id": 5, "required": False, "parameters": 1,

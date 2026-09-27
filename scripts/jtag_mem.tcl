@@ -32,7 +32,6 @@ proc rd {addr} {
 proc wr {addr data} {
     irscan fpga.tap 0x0c
     drscan fpga.tap 40 [expr {(($addr << 32) | $data) & 0xFFFFFFFFFF}] -endstate idle
-    return $raw
 }
 
 proc memrd {a} {

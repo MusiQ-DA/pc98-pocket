@@ -1011,6 +1011,8 @@ module core_top (
         .datatable_q                (datatable_q),
         .fdd0_rebind                (fdd0_rebind),
         .fdd1_rebind                (fdd1_rebind),
+        .jt_fddctl                  (jt_fddctl),
+        .jt_fddstat                 (jt_fddstat),
 
         .mgmt_addr                  (mgmt_addr),
         .mgmt_dout                  (mgmt_dout),
@@ -1191,16 +1193,14 @@ module core_top (
     //
     // A USB Blaster on the FPGA's JTAG port reads these over the SLD hub:
     // scripts/jtag_probe.cfg + jtag_probe_read.tcl drive USER1/USER0.
-    // The address map mirrors the POST monitor's softcore registers; the
-    // magic word proves the protocol end-to-end before any value is trusted.
+    // The magic word proves the protocol end-to-end before any value is trusted.
     logic [31:0] probe_data;
     wire   [7:0] probe_addr;
     always_comb begin
         case (probe_addr)
             // Extended taps live under PC98_PROBE_EXTRA: at 99% ALM usage the
             // shipping build cannot afford them. Enable the macro in
-            // config.tcl for a debug build -- and drop POST_MONITOR there
-            // to pay for them, the panel's capture engine is the big block.
+            // config.tcl for a debug build.
 `ifdef PC98_PROBE_EXTRA
             8'h01:   probe_data = dbg_frm_a;   // {px lit, nz bytes served}
             8'h02:   probe_data = dbg_frm_b;   // {nz stored, fills, rb fsm}
@@ -1211,14 +1211,8 @@ module core_top (
             // 0x06-0x0B (row0 cell snapshots) removed: slot 0x1B's auto-stepping
             // cell read supersedes them, and the mux was over capacity.
             8'h0C:   probe_data = {dbg_gdc_unk_count, dbg_gdc_unk_cmd, dbg_gdc_disp_on, dbg_gdc_sad};
-            8'h0D:   probe_data = {post_live_ip, post_live_cs};
-            8'h0E:   probe_data = {post_derail_ip, post_derail_cs};
-            8'h0F:   probe_data = {post_count, post_prev, post_code};
-            8'h10:   probe_data = {12'd0, post_live_addr};
-            8'h11:   probe_data = {12'd0, wr_last_addr};
-            8'h12:   probe_data = {12'd0, tvram_last_addr};
-            // 0x13-0x1A removed (io_port_hist duplicates postmon's MMIO reads;
-            // GDC-cursor trace and cshow were for hunts that are now resolved).
+            // 0x0D-0x1A removed (POST-overlay monitor taps; io_port_hist duplicated
+            // the MMIO reads; GDC-cursor trace and cshow were for resolved hunts).
             8'h1b:   probe_data = {8'h00, tvram_dbg_word};   // {attr,hi,lo} at dbg cell; read auto-steps
             8'h1c:   probe_data = {20'h0, dbg_tvram_cell};   // current debug cell
             8'h1d:   probe_data = {16'h0, key_count, key_last};
@@ -1232,6 +1226,9 @@ module core_top (
             // 0x25: the JTAG guest-memory master (slot 0x84). rdata is the last
             // byte read back; busy clears and done sets once an access lands.
             8'h25:   probe_data = {16'h0000, jt_st_done, jt_st_req, 6'h00, jt_st_rdata};
+            // 0x26: the firmware's answer to the slot-0x85 FDD command --
+            // {sectors[11:0], ok, inserted, seq echo, drive, cmd}.
+            8'h26:   probe_data = jt_fddstat;
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:
@@ -2121,6 +2118,24 @@ module core_top (
     wire        st_req_mux   = st_req;
 `endif
 
+    wire [31:0] jt_fddctl;
+    wire [31:0] jt_fddstat;
+    // JTAG FDD command channel (debug builds). Probe write slot 0x85 latches
+    // one command word {seq[15:8], drive[5:4], cmd[3:0]} that the softcore
+    // polls at 0x30000048 and answers through JTSTAT (0x3000004C), read back
+    // over probe slot 0x26. cmd: 1 eject / 2 insert / 3 (re)mount the bound
+    // image / 4 unbind / 5 status only.
+`ifdef PC98_PROBE_EXTRA
+    reg [31:0] jt_fddctl_r = 32'd0;
+    always_ff @(posedge clk_chipset) begin
+        if (probe_wr_pulse && probe_waddr_c == 7'h05)
+            jt_fddctl_r <= probe_wdata_c;
+    end
+    assign jt_fddctl = jt_fddctl_r;
+`else
+    assign jt_fddctl = 32'd0;
+`endif
+
     sdram_selftest_master u_selftest (
         .clk              (clk_chipset),
         .rst              (reset_sdram),
@@ -2141,11 +2156,11 @@ module core_top (
     );
 
     //
-    // POST MONITOR
+    // POST monitor taps (inert)
     //
-    // The BIOS reports progress on I/O port 0x80. Surfacing it turns hardware
-    // debugging from "it stops between two boot sounds" into "it stops at POST
-    // 04" -- the base 64 KB memory test at F000:E11A. Observational only.
+    // The overlay that read this bus is gone; the signal names below are kept
+    // only so the softcore debug-register window and the chipset taps they feed
+    // still elaborate, all hard-tied to 0 further down.
     //
     wire [19:0] chipset_address;
     wire        chipset_io_write_n, chipset_memory_read_n, chipset_memory_write_n;
@@ -2187,80 +2202,14 @@ module core_top (
     wire [15:0] io_wr_count;
     // The memory-sizing evidence: the A3FEA byte as the GUEST read it, the
     // size the ITF wrote to [0501], and how many times it has asked for a CPU
-    // reset. See post_monitor.
+    // reset. These were the POST overlay's taps; with it gone they read 0.
     wire  [7:0] memsw_seen;
     wire  [7:0] memsize_seen;
     wire  [7:0] f0_count;
 
-`ifdef POST_MONITOR
-    post_monitor u_post (
-        .clk            (clk_chipset),
-        .rst            (reset_sdram),
-        .address        (chipset_address),
-        .cpu_data       (cpu_data_bus),
-        .bus_data       (data_bus),
-        .io_write_n     (chipset_io_write_n),
-        .address_enable_n (chipset_aen),
-        .memory_read_n  (chipset_memory_read_n),
-        .memory_write_n (chipset_memory_write_n),
-        .post_code      (post_code),
-        .post_prev      (post_prev),
-        .post_hist      (post_hist),
-        .last_mem_addr  (post_mem_addr),
-        .live_mem_addr  (post_live_addr),
-        .live_mem_max   (post_live_max),
-        .dbg_cs         (v30_dbg_regs[159:144]),
-        .dbg_ip         (v30_dbg_regs[207:192]),
-        .dbg_first_pop  (v30_first_pop),
-        .live_cs        (post_live_cs),
-        .live_ip        (post_live_ip),
-        .derail_cs      (post_derail_cs),
-        .derail_ip      (post_derail_ip),
-        .ring_ip0       (post_ring_ip0), .ring_ip1 (post_ring_ip1),
-        .ring_ip2       (post_ring_ip2), .ring_ip3 (post_ring_ip3),
-        .land_cs        (post_land_cs),   .land_ip  (post_land_ip),
-        .fr0_addr       (post_fr0_addr), .fr0_data (post_fr0_data),
-        .fr1_addr       (post_fr1_addr), .fr1_data (post_fr1_data),
-        .post_count     (post_count),
-        .post_max       (post_max),
-        .restart_count  (post_restarts),
-        .ivt16_off      (ivt16_off),
-        .ivt16_seg      (ivt16_seg),
-        .ivt16_wr_count (ivt16_wr_count),
-        .ivt13_off      (ivt13_off),
-        .ivt13_seg      (ivt13_seg),
-        .ivt12_off      (ivt12_off),
-        .ivt12_seg      (ivt12_seg),
-        .wr_any_count   (wr_any_count),
-        .tvram_wr_count (tvram_wr_count),
-        .rd_any_count   (rd_any_count),
-        .ivt_touch_count(ivt_touch_count),
-        .wr_last_addr   (wr_last_addr),
-        .tvram_last_addr(tvram_last_addr),
-        .tvram_row0_code(tvram_row0_code),
-        .tvram_row0_hi  (tvram_row0_hi),
-        .tvram_row0_attr(tvram_row0_attr),
-        .raw_strobes    (raw_strobes),
-        .wr_low_cycles  (wr_low_cycles),
-        .rd_low_cycles  (rd_low_cycles),
-        .rom_win        (rom_win),
-        .rom_read_data  (rom_read_data),
-        .rom_read_count (rom_read_count),
-        .ld_addr        (bios_access_address),
-        .ld_data        (bios_write_data[7:0]),
-        .ld_we_n        (bios_write_n),
-        .rom_load_data  (rom_load_data),
-        .rom_load_count (rom_load_count),
-        .io_port_hist   (io_port_hist),
-        .io_wr_count    (io_wr_count),
-        .memsw_seen     (memsw_seen),
-        .memsize_seen   (memsize_seen),
-        .f0_count       (f0_count)
-    );
-`else
-    // POST_MONITOR off: no capture engine, so the softcore debug regs and the
-    // probe slots that read these words return 0. That frees ~600 ALMs --
-    // room for PC98_PROBE_EXTRA in a debug build.
+    // The POST overlay's capture engine (post_monitor.sv) is removed, so the
+    // softcore debug registers and the probe slots that read these words return
+    // 0. This is the same tie-off the POST_MONITOR-off build already shipped.
     assign {post_code, post_prev, post_hist,
             post_mem_addr, post_live_addr, post_live_max,
             post_live_cs, post_live_ip, post_derail_cs, post_derail_ip,
@@ -2276,7 +2225,6 @@ module core_top (
             rom_read_data, rom_load_data, rom_read_count, rom_load_count,
             io_port_hist, io_wr_count,
             memsw_seen, memsize_seen, f0_count} = '0;
-`endif
 
     //
     // BOOT HOLD
@@ -2495,8 +2443,8 @@ module core_top (
             // Two-cycle qualification, and take the data at the END of the
             // cycle. Address and command lines do not change together, so a
             // write on its way to another port sweeps through 0x043D for a
-            // cycle -- the same transient that logged POST codes the BIOS never
-            // wrote (see post_monitor). Switching the ROM out from under the
+            // cycle -- a transient that once logged POST codes the BIOS never
+            // wrote. Switching the ROM out from under the
             // CPU on a glitch would be considerably worse than a bad readout.
             itf_io_q  <= itf_port_write;
             itf_io_qq <= itf_io_q;
@@ -2515,8 +2463,8 @@ module core_top (
     // The self-test master is the one reader that must NOT see the shadow. It
     // is a diagnostic window onto the image the loader wrote at a guest
     // address, and with PC98_BOOT_ITF the machine powers up with itf_bank set
-    // -- so postmon_capture_rom, which peeks FD800 with the guest still held,
-    // was reading the ITF copy at 1FD800 instead of the BIOS at FD800. The ITF
+    // -- so a peek of FD800 with the guest still held would read the ITF copy
+    // at 1FD800 instead of the BIOS at FD800. The ITF
     // image holds nothing but zero padding from file offset 0x5800 up, so the
     // panel read BAD 0EC: 236 of 256 bytes "wrong", which is exactly 256 minus
     // the 20 bytes the BIOS entry itself holds as zero. While st_run owns the

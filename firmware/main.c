@@ -5,7 +5,6 @@
 #include "key_bind.h"
 #include "settings_ui.h"
 #include "sdramtest.h"
-#include "postmon.h"
 #include "softcpu_regs.h"
 
 void gdc_poll(void);
@@ -65,12 +64,6 @@ int main(void)
 #endif
 
 #ifndef SDRAM_SELFTEST
-    // Read the guest ROM while the 8088 is still held: the peek shares
-    // CHIPSET's external-access port with it and loses every arbitration once
-    // it runs. The self-test build never gets this far, and postmon.c compiles
-    // the capture out of it (the 24 KB ROM has no room for code it cannot
-    // reach).
-    postmon_capture_rom();
     scsi_init();
 #endif
 
@@ -88,18 +81,11 @@ int main(void)
     uint32_t mounted_a = 0;
     uint32_t mounted_b = 0;
     uint32_t mounted_hdd = 0;
-    uint32_t iter = 0;                  // loop iteration, shown in postmon_mark's high byte
     uint32_t settings_sized = 0;        // Settings size declared in the datatable yet
     uint32_t rebind_seen = *FDD_REBIND; // last-seen rebind toggles
+    uint32_t jt_fdd_seen = 0;           // last-executed JTAG FDD command seq
 
     for (;;) {
-        // The stage marks go DOWN before each leg that can hang: the timer ISR
-        // draws postmon_mark, so a frozen main loop leaves the number of the
-        // leg it never came back from on screen. The high byte is the loop
-        // iteration -- it changes between shots while the loop runs at all,
-        // so a stale M stops being ambiguous with "always in stage 7".
-        iter++;
-        postmon_mark = (iter << 8) | 1;
         // Declare the Settings size once the datatable is populated (retried because the
         // softcore may run before the host has written the table).
         if (!settings_sized) {
@@ -123,15 +109,54 @@ int main(void)
         }
         rebind_seen = rebind;
 
-#ifdef POST_MONITOR
-#ifndef SDRAM_SELFTEST
-        // Diagnostic overlay: how far the guest BIOS has got. Redraws only when
-        // the POST code changes, so it costs nothing in the steady state.
-        postmon_mark = (iter << 8) | 2;
-        post_mon_tick();
-#endif
-#endif
-        postmon_mark = (iter << 8) | 3;
+        // JTAG FDD commands (probe write slot 0x85 -> FDD_JTCTL, debug builds
+        // only: the register reads 0 without PC98_PROBE_EXTRA). A seq change
+        // runs cmd once; FDD_JTSTAT echoes the result for probe read 0x26.
+        // A JTAG eject survives the auto-mount because mounted_x stays set --
+        // same shape as the OSD eject -- and an unbind is only re-armed by a
+        // real host rebind.
+        uint32_t jt = *FDD_JTCTL;
+        if (((jt >> 8) & 0xFF) != jt_fdd_seen) {
+            jt_fdd_seen = (jt >> 8) & 0xFF;
+            uint32_t cmd = jt & 0xF;
+            uint32_t drv = (jt >> 4) & 0x3;
+            uint32_t ok = 0;
+            if (drv < 2) {
+                switch (cmd) {
+                case JT_FDD_EJECT:
+                    fdd_eject(drv);
+                    ok = 1;
+                    break;
+                case JT_FDD_INSERT:
+                    fdd_insert(drv);
+                    ok = fdd_is_inserted(drv);
+                    break;
+                case JT_FDD_MOUNT: {
+                    uint32_t s = stable_size(drv ? FDD1_DISK_SIZE : FDD0_DISK_SIZE);
+                    if (s != 0) {
+                        fdd_mount(drv, s);
+                        if (drv == 0) mounted_a = 1; else mounted_b = 1;
+                        ok = 1;
+                    }
+                    break;
+                }
+                case JT_FDD_UNBIND:
+                    fdd_unbind(drv);
+                    ok = 1;
+                    break;
+                case JT_FDD_STAT:
+                    ok = 1;
+                    break;
+                default:
+                    break;
+                }
+            }
+            *FDD_JTSTAT = ((fdd_mounted_sectors(drv) & 0xFFF) << 20) |
+                          ((ok & 1) << 17) |
+                          ((uint32_t) fdd_is_inserted(drv) << 16) |
+                          (jt_fdd_seen << 8) | (drv << 4) | cmd;
+        }
+
         if (!mounted_hdd) {
             uint32_t sectors = slot_bytes(HDD0_SLOT_ID) / SECTOR_BYTES;
             if (sectors != 0) {
@@ -146,15 +171,11 @@ int main(void)
         // models it (the benches have no softcore). With nothing mounted
         // there is nothing to poll: gate the traffic on a disk being present,
         // and a diskless boot runs with the guest bus entirely its own.
-        postmon_mark = (iter << 8) | 4;
         if (mounted_a || mounted_b)
             fdd_poll();
-        postmon_mark = (iter << 8) | 5;
         gdc_poll();
-        postmon_mark = (iter << 8) | 6;
         if (mounted_hdd)
             scsi_poll();
-        postmon_mark = (iter << 8) | 7;
         settings_service(); // persist any OSD changes into the save window
 
         // Quiet the polls.
@@ -163,17 +184,11 @@ int main(void)
         // arbiter, so this loop was the only traffic this core added while the
         // guest booted -- tens of thousands of holds a second, unmodelled by
         // any bench and new since the last build that reached BASIC (the GDC
-        // engine and the disk service are both recent). The metal derails
-        // right after the ITF's 640 KB test with one wrong byte in a ROM read,
-        // which is the shape a hold landing on a fetch would leave. ~1 ms of
-        // spacing keeps the FDD far inside its budget (a 1024-byte sector
-        // every ~16 ms) and the GDC engine inside its draw latency, and cuts
-        // the hold rate ~100x. The LD/RD pair on the POST row says whether it
-        // was enough.
-        postmon_mark = (iter << 8) | 8;
+        // engine and the disk service are both recent). ~1 ms of spacing keeps
+        // the FDD far inside its budget (a 1024-byte sector every ~16 ms) and
+        // the GDC engine inside its draw latency, and cuts the hold rate ~100x.
         for (volatile uint32_t q = 0; q < 40000u; q++) {
         }
-        postmon_mark = iter << 8;
     }
 
     return 0;
@@ -186,8 +201,5 @@ uint32_t *irq(uint32_t *regs, uint32_t irq_bits)
     (void) irq_bits;
     timer_start(TIMER_PERIOD);
     vkb_ui_tick();
-#ifdef POST_MONITOR
-    postmon_isr_hb();
-#endif
     return regs;
 }

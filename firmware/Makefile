@@ -4,7 +4,7 @@
 OBJS = start.o main.o disk_tds.o fdd_service.o scsi_service.o \
        gdc_service.o \
        vkb_draw.o vkb_layout.o vkb_ui.o \
-       settings_ui.o key_bind.o dpad.o sdramtest.o postmon.o osd_font.o
+       settings_ui.o key_bind.o dpad.o sdramtest.o osd_font.o
 DEPS = $(OBJS:.o=.d)
 
 # Everything that can change the built image. Hashed into firmware.srchash so CI
@@ -53,7 +53,7 @@ CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Oz -mno-relax -ffreestanding 
 # savings (settings_ui 340 B, scsi_service 108 B) are what make the ROM
 # budget at all. If those two misbehave it is the settings menu or SCSI,
 # never the keyboard.
-main.o vkb_ui.o vkb_draw.o vkb_layout.o postmon.o dpad.o key_bind.o osd_font.o fdd_service.o disk_tds.o gdc_service.o sdramtest.o: CFLAGS := $(subst -Oz,-Os,$(CFLAGS))
+main.o vkb_ui.o vkb_draw.o vkb_layout.o dpad.o key_bind.o osd_font.o fdd_service.o disk_tds.o gdc_service.o sdramtest.o: CFLAGS := $(subst -Oz,-Os,$(CFLAGS))
 ASFLAGS = --target=riscv32 -march=rv32im -mno-relax -Wall -Werror -MMD -MP
 
 # The digest the fingerprint uses, portable across the two CI worlds:

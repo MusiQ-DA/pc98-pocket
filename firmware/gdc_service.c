@@ -18,8 +18,7 @@
 
 #include "softcpu_regs.h"
 
-// The self-test master, the same registers postmon peeks guest memory with:
-// one trigger, then poll the request level down.
+// The self-test master: one trigger, then poll the request level down.
 #define ST_ADDR   ((volatile uint32_t *) 0x50000000)
 #define ST_WDATA  ((volatile uint32_t *) 0x50000004)
 #define ST_TRIG   ((volatile uint32_t *) 0x50000008)
@@ -118,8 +117,8 @@ static void init_bitreverse(void)
     }
 }
 
-// One guest byte through the self-test master, postmon's guest_peek idiom:
-// bounded, so a wedged bus degrades to a wrong pixel rather than a hang.
+// One guest byte through the self-test master: bounded, so a wedged bus
+// degrades to a wrong pixel rather than a hang.
 static uint8_t vr_read8(uint32_t addr)
 {
     uint32_t s = 0;

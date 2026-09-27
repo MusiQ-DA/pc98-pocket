@@ -63,6 +63,12 @@ module softcpu_fdd_bridge #(
     input  wire        fdd0_rebind,
     input  wire        fdd1_rebind,
 
+    // JTAG FDD command channel (probe write slot 0x85, PC98_PROBE_EXTRA builds):
+    // {seq[15:8], drive[5:4], cmd[3:0]}, a clk_sys level the firmware polls, runs
+    // on a seq change, and answers by writing JTSTAT (probe read slot 0x26).
+    input  wire [31:0] jt_fddctl,
+    output reg  [31:0] jt_fddstat,
+
     // Management-bus master to floppy.v via CHIPSET, clk_sys
     output wire [15:0] mgmt_addr,
     output wire [15:0] mgmt_dout,
@@ -284,6 +290,7 @@ module softcpu_fdd_bridge #(
                 8'h34:   cpu_rdata = {28'd0, tds_err, tds_done};
                 8'h3C:   cpu_rdata = fdd0_disk_size;
                 8'h40:   cpu_rdata = fdd1_disk_size;
+                8'h48:   cpu_rdata = jt_fddctl;
                 8'h50:   cpu_rdata = {30'd0, fdd1_rebind, fdd0_rebind};
                 8'h58:   cpu_rdata = datatable_q;
                 default: cpu_rdata = 32'd0;
@@ -318,6 +325,7 @@ module softcpu_fdd_bridge #(
             bram_data_b    <= 32'd0;
             dtbl_addr_r    <= 8'd0;
             dtbl_data_r    <= 32'd0;
+            jt_fddstat     <= 32'd0;
             cpu_valid_prev <= 1'b0;
             target_dataslot_id         <= 16'd0;
             target_dataslot_slotoffset <= 32'd0;
@@ -342,6 +350,7 @@ module softcpu_fdd_bridge #(
                     if (cpu_wdata[1]) tds_write_pulse <= 1'b1;
                 end
                 8'h38: if (cpu_wdata[0]) clr_done_pulse <= 1'b1;
+                8'h4C: jt_fddstat <= cpu_wdata;
                 8'h54: dtbl_addr_r <= cpu_wdata[7:0];
                 8'h58: begin dtbl_data_r <= cpu_wdata; dtbl_wren_r <= 1'b1; end
             endcase

@@ -3,7 +3,6 @@
 #include "softcpu_regs.h"
 #include "vkb_draw.h"
 #include "vkb_layout.h"
-#include "postmon.h"
 #include "vkb_ui.h"
 
 // D-pad auto-repeat timing, in cycles (the softcore runs at clk_chipset / 6).
@@ -77,20 +76,15 @@ static void osd_origin_write(void)
     *OSD_ORIGIN = (y << 16) | x;
 }
 
-// True while the keyboard or the settings menu owns the framebuffer. The POST
-// panel asks before clearing VKB_CTRL, so hiding it cannot close an overlay.
+// True while the keyboard or the settings menu owns the framebuffer.
 int vkb_ui_overlay_open(void)
 {
     return ui_mode != OSD_NONE;
 }
 
 // OSD control word: bit0 = an overlay is shown; the origin is refreshed first.
-// Every transition also invalidates the POST panel's framebuffer claim: its
-// tick only drops the claim when a call happens to catch the overlay open, so
-// a quick open-and-close could leave stale pixels gated on screen.
 static void osd_ctrl_write(void)
 {
-    postmon_invalidate();
     osd_origin_write();
     *VKB_CTRL = (ui_mode != OSD_NONE) ? 1u : 0u;
 }
@@ -337,18 +331,13 @@ static void button_function(uint8_t fn)
         *OSD_ACTION = 0;             // re-arm the edge
         *OSD_ACTION = OSD_ACT_VIDEO; // rising edge -> toggle the displayed video card
         break;
-#ifdef POST_MONITOR
-    case BTNFN_POSTMON:
-        postmon_toggle();
-        break;
-#endif
     default: // BTNFN_NONE
         break;
     }
 }
 
 // The physical button -> binding slot table. File scope so the always-live
-// POSTMON check in vkb_ui_tick can see which buttons carry that binding, not
+// binding check in vkb_ui_tick can see which buttons carry a binding, not
 // just the normal-mode dispatch.
 static const struct {
     uint16_t mask;
@@ -502,30 +491,6 @@ void vkb_ui_tick(void)
         osd_ctrl_write();
     }
 
-#ifdef POST_MONITOR
-    // A POSTMON binding is always-live like L1: from an overlay it closes the
-    // overlay and shows the strip, from none it toggles. Without this the strip
-    // could only be reached by closing the panel some other way first, which
-    // read as the button doing nothing while a menu or the keyboard was up.
-    uint16_t postmon_mask = 0;
-    for (int i = 0; i < BIND_COUNT; i++) {
-        if (key_bind_function(bind_map[i].btn) == BTNFN_POSTMON)
-            postmon_mask |= bind_map[i].mask;
-    }
-    if (pressed & postmon_mask) {
-        if (ui_mode != OSD_NONE) {
-            bind_target = -1;
-            vkb_release_all();
-            ui_mode = OSD_NONE;
-            osd_ctrl_write();
-            postmon_show();
-        } else {
-            postmon_toggle();
-        }
-        pressed &= ~postmon_mask; // consumed; must not reach the mode dispatch too
-    }
-#endif
-
     // A SETTINGS binding is always-live like L1: from the menu it closes, from
     // the keyboard it swaps overlays (osd_enter_settings drops held keys and
     // any pick first). Without this the press was dead in both overlays --
@@ -576,11 +541,8 @@ void vkb_ui_tick(void)
         dispatch_bindings(pressed);
     }
 
-    // Re-assert the open overlay's enable and origin every tick. VKB_CTRL and
-    // OSD_ORIGIN are shared with post_mon_tick, which runs on the main loop
-    // and can land its own write in the same tick an overlay opened -- leaving
-    // it drawn but disabled, or parked at the panel's origin, until the next
-    // transition. One store pair here heals that within a tick.
+    // Re-assert the open overlay's enable and origin every tick so it stays
+    // drawn and at its own origin until the next transition.
     if (ui_mode != OSD_NONE) {
         osd_origin_write();
         *VKB_CTRL = 1u;
