@@ -2036,10 +2036,7 @@ module tb_pc98_v30;
         .group_live    (fdc_group_live),
         .irq_2hd       (fdc_irq3),
         .irq_2dd       (fdc_irq2),
-        .dma_enable    (fdc_dmae_w),
-        .dbg_motor_arms   (), .dbg_motor_pulses (), .dbg_chg (),
-        .dbg_strb_be   (), .dbg_strb_94 (), .dbg_strb_cc (),
-        .dbg_strb_dat  (), .dbg_last_ctrl ()
+        .dma_enable    (fdc_dmae_w)
     );
 
     // The byte a read returns has to be on the bus before the nuV30 latches
