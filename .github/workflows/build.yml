@@ -75,6 +75,21 @@ jobs:
             grep -q "RESULT: PASS" ram_$mode.log
           done
 
+      - name: RAM.sv DMA-strobe regression — held writes, phase swept
+        run: |
+          S=fpga/core
+          for mode in ref mp; do
+            DEF=""; [ "$mode" = "mp" ] && DEF="+define+SDRAM_USE_MP"
+            verilator --binary --timing -Wno-fatal --top-module tb_ram_dma_wr $DEF \
+              -Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/sdram_single/HDL \
+              sim/tb_ram_dma_wr.sv sim/sdram_model.sv \
+              $S/chipset/HDL/RAM.sv $S/chipset/HDL/sdram_single/HDL/sdram_single.sv \
+              $S/sdram_shim.sv $S/sdram_mp.sv \
+              -o r --Mdir obj_dma_$mode
+            ./obj_dma_$mode/r | tee dma_$mode.log
+            grep -q "=== PASS ===" dma_$mode.log
+          done
+
       - name: ROM image lands where it should (no address folding)
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_bios_map \
