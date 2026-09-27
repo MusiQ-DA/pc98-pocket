@@ -72,6 +72,13 @@ set regs {
     24  CUR_PX=en,bl,top,bot,addr
     25  CSHOW_CNT=dots_last_frame
     26  CSHOW_AT=hcount,vcount,attr
+    27  TVRAM_DBG=attr,hi,lo
+    28  DBG_CELL
+    29  KEYS=count,last
+    30  PADS=cont2,cont1
+    31  PIC1=irr,imr,isr,timer_ticks
+    32  PIC2=irr,imr,isr,kbd_irqs
+    33  IRQ_LVL+kbd_rd
     255 MAGIC
 }
 

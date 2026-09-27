@@ -1173,6 +1173,9 @@ module core_top (
             8'h1c:   probe_data = {20'h0, dbg_tvram_cell};   // current debug cell
             8'h1d:   probe_data = {16'h0, key_count, key_last};
             8'h1e:   probe_data = {cont2_key_eff, cont1_key_eff};   // pad words, JTAG-held bits included
+            8'h1f:   probe_data = {dbg_pic_irr, dbg_pic_imr, dbg_pic_isr, dbg_timer_count};
+            8'h20:   probe_data = {dbg_pic2_irr, dbg_pic2_imr, dbg_pic2_isr, dbg_kbd_irq_count};
+            8'h21:   probe_data = {dbg_irq_level, 8'h00, dbg_kbd_rd_count, key_count};
             8'hFF:   probe_data = 32'h98C0_DE98;
             default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
