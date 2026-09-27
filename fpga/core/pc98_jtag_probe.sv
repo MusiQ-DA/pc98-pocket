@@ -23,13 +23,21 @@ module pc98_jtag_probe (
     // Probe bus -- the mux core_top feeds. Synchronous to tck; the values it
     // carries are quasi-static diagnostic registers, so no synchroniser chain.
     output logic [7:0]  probe_addr_sel,
-    input  wire [31:0]  probe_data
+    input  wire [31:0]  probe_data,
+
+    // Write side: a scan whose address byte has bit 7 set is a WRITE, not a
+    // read -- wr_tog toggles once per such scan and {wr_addr,wr_data} hold the
+    // payload (low seven address bits and the shifted-in data word). Both are
+    // in the tck domain; consumers sync the toggle and copy the payload.
+    output logic        wr_tog  = 1'b0,
+    output logic [6:0]  wr_addr = 7'h00,
+    output logic [31:0] wr_data = 32'h0
 );
 
     wire        vj_tck, vj_tdi;
     wire        vj_cdr, vj_sdr, vj_udr;
     logic       vj_tdo;
-    logic [7:0]  addr_q;
+    logic [7:0]  addr_q = 8'hFF;
     logic [39:0] shreg;
 
     // One node, index 0, one-bit IR. The hub addresses this instance through
@@ -85,8 +93,16 @@ module pc98_jtag_probe (
             shreg <= {8'h00, probe_data};
         else if (vj_sdr)
             shreg <= {vj_tdi, shreg[39:1]};
-        if (vj_udr)
+        if (vj_udr) begin
             addr_q <= shreg[39:32];
+            if (shreg[39] && shreg[38:32] != 7'h7F) begin
+                // 0x80-0xFE write; 0xFF stays a pure read (the magic register
+                // shares the top bit, so it gets a permanent exemption).
+                wr_tog  <= ~wr_tog;
+                wr_addr <= shreg[38:32];
+                wr_data <= shreg[31:0];
+            end
+        end
     end
 
     assign vj_tdo            = shreg[0];

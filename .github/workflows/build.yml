@@ -258,6 +258,16 @@ jobs:
           ./obj_kbd/k | tee kbd.log
           grep -q "RESULT: PASS" kbd.log
 
+      - name: JTAG probe writes reach the 8251 as keystrokes
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_jtag_key \
+            -Isim -Ifpga/core \
+            sim/tb_pc98_jtag_key.sv fpga/core/pc98_jtag_probe.sv \
+            fpga/core/pc98_key_inject.sv fpga/core/pc98_kbd8251.sv \
+            -o jk --Mdir obj_jk
+          ./obj_jk/jk | tee jk.log
+          grep -q "RESULT: PASS" jk.log
+
       - name: the V30 rides the 8288 world through the bridge (fast memory)
         run: |
           # v30u_ucrom $readmemh's its tables from HEXDIR "hdl/rtl/ucore/"

@@ -1174,9 +1174,15 @@ module core_top (
         endcase
     end
 
+    wire        probe_wr_tog;
+    wire [6:0]  probe_wr_addr;
+    wire [31:0] probe_wr_data;
     pc98_jtag_probe u_jtag_probe (
         .probe_addr_sel (probe_addr),
-        .probe_data     (probe_data)
+        .probe_data     (probe_data),
+        .wr_tog         (probe_wr_tog),
+        .wr_addr        (probe_wr_addr),
+        .wr_data        (probe_wr_data)
     );
 
     //
@@ -1344,6 +1350,9 @@ module core_top (
     wire       pc98_key_stb;
     wire       pc98_key_make;
     wire [7:0] pc98_key_code;
+    wire       kbd_key_stb;
+    wire       kbd_key_make;
+    wire [7:0] kbd_key_code;
 
     // How far does a key get? key_count counts pc98_key_stb pulses and key_last
     // holds the last event ({make, code}) -- the output of the translator, so
@@ -1373,6 +1382,21 @@ module core_top (
         .kb_byte  (kb_byte),
         .kb_valid (kb_valid),
         .kb_ready (kb_ready),
+        .key_stb  (kbd_key_stb),
+        .key_make (kbd_key_make),
+        .key_code (kbd_key_code)
+    );
+
+    // JTAG-injected keystrokes ride the same event line the 8251 drains; a
+    // probe write to slot 0x81 lands one toggle per injected matrix byte.
+    pc98_key_inject u_pc98_key_inject (
+        .clk      (clk_chipset),
+        .wr_tog   (probe_wr_tog),
+        .wr_addr  (probe_wr_addr),
+        .wr_data  (probe_wr_data),
+        .kbd_stb  (kbd_key_stb),
+        .kbd_make (kbd_key_make),
+        .kbd_code (kbd_key_code),
         .key_stb  (pc98_key_stb),
         .key_make (pc98_key_make),
         .key_code (pc98_key_code)
