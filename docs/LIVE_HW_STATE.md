@@ -1,38 +1,74 @@
-# LIVE HARDWARE STATE — read before touching the Pocket (2026-09-27 ~22:45 JST)
+# LIVE HARDWARE STATE — read before touching the Pocket (2026-09-28 ~04:10 JST)
 
 > **ハードを共有している可能性への注意書き。** このセッション(Devin)は実機に
-> 2つの介入を残したまま止まっています。あなたが別エージェントなら、以下を読んで
+> 介入を残したまま止まっています。あなたが別エージェントなら、以下を読んで
 > から作業してください。
 
-## 何が刺さっているか
+## 現在の状態: Pocket はスリープ/電源断 (JTAG チェーン dead)
 
-### 1. 新しいビットストリームをフラッシュ済み → マシンは cold boot した
+- ~03:58 JST に JTAG スキャンチェーンが全ゼロを返すようになり、
+  SLD hub (`hub=00000000`) も応答しない = **FPGA 無設定**。
+  直前までコアは正常動作していた → Pocket の auto-sleep か電源断が濃厚。
+- `ap_core.svf` (USERCODE=067F6330, mgmt直叩き入り) の replay は
+  **「コア実行中でないと nCONFIG が開かない」**ため失敗する。
+  再開にはまず Pocket の電源ON + コア起動が必要。
 
-- `gh run 36320551695` (branch `probe-extra-debug`, HEAD `62b1ddf`) の
-  `quartus-win-bitstream` 成果物から `ap_core.sof` を取り、
-  `scripts/jtag_flash.sh` で JTAG 書き込み。**MCU が再構成を検出して
-  コアを再起動** — 前のセッション状態は全て揮発。
-- 画面は現在 **N88-BASIC の cold-boot プロンプト `How many files(0-15)?`**。
-- もしあなたが旧ビットストリーム上でテスト中だったなら、この再構成が
-  それをリセットしています。謝ります。
+## このセッションで実証済みのこと (commit 58104b3)
 
-### 2. ⚠ ARMED — IVT[8](タイマー割り込み) をハイジャックしたまま
+CI run 36333730260 のビットストリーム (PC98_PROBE_EXTRA 入り) で:
 
-- ゲスト RAM **`0x80000` に `testdisk/draw_test.bin` (428B, 位置独立) がロード済み**。
-- **`IVT[8]` (phys `0x20`-`0x23`) = `0x8000:0x0000`** に書き換え済み(実測値
-  `00 00 00 80` = CS:IP 0x8000:0000)。
-- **現在は dormant**: PIC `IMR=0x3D` で **IRQ0 (timer) がマスク中**(probe 0x1f)。
-  BASIC がこのプロンプトの時点ではタイマー割り込みをまだアンマスクしていない
-  (§3.7: タイマーBIOSはBASICが `INT 1Ch AH=02` で自分で起動する)ため発火しない。
-- **リスク**: あなた/ゲストが IRQ0 をアンマスク(`IN AL,02; AND 0FEh; OUT 02`)
-  した瞬間、次のタイマーtick で `draw_test` が走り**画面を奪います**
-  (`cli` → 16色バンド+GRCG箱+テキスト+カーソル描画 → 永久 `.hang`)。
+- **JTAG→CHIPSET mgmt 直叩きが完結** (write slot `0x86`, witness `0x27`):
+  `MGMOUNT=1 openocd -f scripts/jtag_probe.cfg -f scripts/jtag_mgmt.tcl` で
+  firmware 無しに `present=01` が立つ (wr_seen=12, last=F200)。
+- **FIFO 直 push → ゲストメモリ往復がバイト一致**: `MGSECT` で
+  `fdc_ipl.hdm` の 1024B を `0xF20F` に push → `req` がちょうど 1024B で
+  降り、stub が drain した sector_buf = 投入データ完全一致
+  (E5フィルのセクタで実測)。
+- **mgmt write の CDC 取りこぼし説は棄却**: 120ns パルスを clk_chipset が
+  そのまま受けるので、JTAG ドライブの write は全部届く。
+- **ゲスト stub 運用の罠**: stub は IF=0 で走る + iret 時 EOI を送るが、
+  `.rs` 結果フェーズの長いタイムアウト中は ISR が in-service のまま
+  残り IRQ1 再発火がブロックされる → 次発火まで数分待ち。
 
-#### 無害化するには(どれか1つ)
+## 未解決/次の検証 (再開手順)
 
-- **リセットが一番クリーン** — コア/ゲストをリセットすれば BIOS が IVT を
-  再構築し、`0x80000` の注入コードも揮発。
-- または IVT[8] を IRET スタブに向け直す(下記 mem-write で `0x20` 番地を書く)。
+1. Pocket 電源ON → コア起動 → `scripts/jtag_flash.sh build/artifact_new/output_files/ap_core.sof`
+   (SVF キャッシュ `build/svf_jtag/ap_core.svf` でも可)。
+2. `MGMOUNT=1` で 2HD メディアを仮想マウント (firmware 不要)。
+3. BASIC プロンプトで Enter キー注入 → BIOS ディスクブート →
+   FDC req 発火 → `MGSECT=testdisk/fdc_ipl.hex SECTOFF=0 MGLEN=1024` で
+   IPL sector を push → BIOS が DMAC 経由で 0x1FE00 にロード。
+   IPL (`testdisk/fdc_ipl.asm`) は自身が PIO で C0H0R1 を再読みして
+   `0x40000` に格納する → もう一度 req が立つ → 再 push。
+4. **0x1FE00 (DMA 経路) と 0x40000 (PIO 経路) を `MODE=dump` で読み、
+   イメージと比較** — DMAC/SDRAM 書き込み経路と FDC/FIFO 経路を分離。
+
+## 破損の有力容疑 (floppy.v)
+
+`floppy.v:1119,1132`: DMA モードで `dma_has_terminated` が立つと
+**fifo が `8'h00` で埋められる** (TC 後の残りをゼロ埋め)。
+DMAC が sector 途中で TC を出すと、以降の位置が位置保存型で 0x00 になる
+= 観測されたブート時 IPL 破損 (~18% 散発ゼロ) と一致する注入経路。
+upstream (dataslot→BRAM) のゼロ混入も未排除 — 上記 0x1FE00/0x40000
+比較で切り分けられる。
+
+## JTAG slot 早見表 (PC98_PROBE_EXTRA ビルド)
+
+- write `0x81`: キーマトリクス byte (press `0x34`, release `0xB4`)
+- write `0x84` / read `0x25`: guest メモリ master (jtag_memwrite.tcl)
+- write `0x85` / read `0x26`: firmware FDD チャネル (要新版 firmware)
+- write `0x86` / read `0x27`: **CHIPSET mgmt 直叩き** (jtag_mgmt.tcl)
+  - write data = `{addr[15:0], data[15:0]}`; addr `0xF2nn`:
+    reg0 present / 1 wrprot / 2 cyls / 3 spt / 4 total / 5 heads /
+    6 secsize(0=512,1=1024) / **F = FIFO push**; bit7 = drive B
+  - read `0x27` = `{wr_seen[7:0], last_addr[15:0], req[1:0], present[1:0]}`
+    の packing = 実際は `{wr_seen,last,2'b00,req[7:6],2'b00,present[1:0]}`
+- read `0x1F/0x20/0x21`: PIC {IRR,IMR,ISR,timer} / slave+kbd_irq / irq_level
+
+### 旧セッション履歴 (IVT[8] draw_test の話)
+
+以前のセッションで IVT[8] を draw_test に向けた記録は**揮発済み**
+(FPGA 再構成で RAM ごと消えた)。以下は当時の記録として残す。
 
 ## 新しい JTAG ゲストメモリ経路(この bitstream で有効)
 
