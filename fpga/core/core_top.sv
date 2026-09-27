@@ -1230,6 +1230,8 @@ module core_top (
             8'h1f:   probe_data = {dbg_pic_irr, dbg_pic_imr, dbg_pic_isr, dbg_timer_count};
             8'h20:   probe_data = {dbg_pic2_irr, dbg_pic2_imr, dbg_pic2_isr, dbg_kbd_irq_count};
             8'h21:   probe_data = {dbg_irq_level, 8'h00, dbg_kbd_rd_count, key_count};
+            8'h23:   probe_data = dbg_dmac;         // 0x50000138's "DC word" -- DMAC FSM state
+            8'h24:   probe_data = dbg_dma;          // FDC DMA handshake view
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:

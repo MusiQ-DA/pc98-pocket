@@ -79,6 +79,9 @@ set regs {
     31  PIC1=irr,imr,isr,timer_ticks
     32  PIC2=irr,imr,isr,kbd_irqs
     33  IRQ_LVL+kbd_rd
+    34  BTN_GATE=kbv,kbr,osd,mode,kb_buttons
+    35  DMAC_DCWORD
+    36  FDC_DMA_HANDSHAKE
     255 MAGIC
 }
 
