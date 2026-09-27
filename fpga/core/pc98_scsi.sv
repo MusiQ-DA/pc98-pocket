@@ -11,15 +11,15 @@
 // CMD register (index 0x18) raises cmd_req and hands the byte over; the
 // softcore's firmware reads the CDB out of the register file, does the work
 // against the disk image on the SD card, fills the data buffer and writes the
-// status back. That is the same split np2kai uses -- its scsibios.res is `CB 90 90`
+// status back. That is the same split np21w uses -- its scsibios.res is `CB 90 90`
 // entries plus a `55 AA` signature, about a kilobyte of nothing, with every
 // command handled on the host side.
 //
 // Doing it the other way -- a command interpreter in RTL -- would cost far
-// more than the device has. np2's model alone carries reg[0x30], a phase
+// more than the device has. np21w's model alone carries reg[0x30], a phase
 // machine, a 64 KB buffer and two 8 KB BIOS banks.
 //
-// REFERENCE. np2kai cbus/scsiio.c (the four port handlers) and cbus/scsiio.tbl
+// REFERENCE. np21w cbus/scsiio.c (the four port handlers) and cbus/scsiio.tbl
 // (the register indices), read as behaviour, not copied as code.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -28,7 +28,7 @@
 `default_nettype none
 
 module pc98_scsi #(
-    // Bytes in the data buffer. np2 masks its pointers to 0x7FFF; 8 KB is
+    // Bytes in the data buffer. np21w masks its pointers to 0x7FFF; 8 KB is
     // sixteen 512-byte sectors, enough for the multi-sector reads the disk
     // BIOS issues, and one M10K row less than a power of two would waste.
     parameter int DATA_BYTES = 8192,
@@ -82,11 +82,11 @@ module pc98_scsi #(
     logic [7:0] idx;
 
     // Control registers 0x00-0x19. 0x03-0x0E double as the CDB (SCSICTR_CDB is
-    // 0x03 in np2's table), which is why the auto-increment matters: the BIOS
+    // 0x03 in np21w's table), which is why the auto-increment matters: the BIOS
     // writes a whole command descriptor block by writing 0xCC2 repeatedly.
     logic [7:0] ctrl [0:25];
 
-    // The registers outside that range that answer at all (np2 scsiio_icc2).
+    // The registers outside that range that answer at all (np21w scsiio_icc2).
     logic [7:0] membank;   // 0x30 -- bit 6 picks which 8 KB BIOS bank is at D2000
     logic [7:0] memwnd;    // 0x31
     logic [7:0] resent;    // 0x33
@@ -198,7 +198,7 @@ module pc98_scsi #(
                                 IDX_MEMBANK: membank <= wr_data_q;
                                 IDX_MEMWND:  memwnd  <= wr_data_q;
                                 IDX_RESENT:  resent  <= wr_data_q;
-                                // np2 scsiio_occ2 case 0x3f: bit set/reset,
+                                // np21w scsiio_occ2 case 0x3f: bit set/reset,
                                 // value bit 3 is the direction and bits 2-0
                                 // the bit number.
                                 IDX_DATMAP:
@@ -210,7 +210,7 @@ module pc98_scsi #(
                             endcase
                         end
                     end
-                    2'b10: ;                            // 0xCC4: np2 discards
+                    2'b10: ;                            // 0xCC4: np21w discards
                     2'b11: wrptr <= wrptr + 1'b1;       // 0xCC6: buffer
                 endcase
             end
@@ -245,7 +245,7 @@ module pc98_scsi #(
                     default:     data_out = (idx <= 8'h19) ? mg_ctrl_q : 8'hFF;
                 endcase
             end
-            2'b10: data_out = 8'h00;                    // np2 scsiio_icc4
+            2'b10: data_out = 8'h00;                    // np21w scsiio_icc4
             2'b11: data_out = dbuf_q;
         endcase
     end

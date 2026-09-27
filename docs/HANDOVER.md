@@ -87,11 +87,11 @@ E8288  TEST [1596h],AH
 E828E  CALL FAR [1598h] ; ゲートが開いていれば呼ぶ
 ```
 
-既定値 0x08 は np2 のテーブル(`pccore.c`)をそのまま引き継いだもの。実測:
+既定値 0x08 は np21w のテーブル(`pccore.c`)をそのまま引き継いだもの。実測:
 0x08 は5番目のゲート(CC00、空の窓=ゼロ)で脱線、0x00 は8つ全部歩いて `Ok`。
-**np2 の値を戻すなら、それが主張する ROM も用意すること。**
+**np21w の値を戻すなら、それが主張する ROM も用意すること。**
 
-なお np2 のこのバイトはバッテリバックアップの保存値で、実機なら前回ブートの
+なお np21w のこのバイトはバッテリバックアップの保存値で、実機なら前回ブートの
 スキャン結果が入る。こちらは継承できない: POST の一括VRAMクリア(`FED0B`、
 実測でスイッチ領域全域に 0xE1)からスイッチを守る書き込み禁止が、正当な
 書き込みも塞いでいるため。**保護は外さないこと** — 外すとクリアで
@@ -196,10 +196,10 @@ commit 3e1471a で**書き込みサイクル開始時点の EU ライブ PC**(`u
    - 8259A本来の「立上がりエッジ1回でラッチ、次のエッジまで再武装しない」に修正
    - これがないと割込み確認直後に同一割込みが再燃し続ける
 2. **PIT入力クロックが1.193MHz(PC/XT)だった**(`Peripherals.sv` / ベンチ)
-   - PC-98は **2.4576MHz**(VM=5MHz機、np2のclk_baseと同じ)
+   - PC-98は **2.4576MHz**(VM=5MHz機、np21wのclk_baseと同じ)
    - 42.954545MHzは非整数倍(17.48)なので位相アキュームレータで正確に2.4576MHzを生成
-3. **np2のIRR0クリア特性が未実装**(`KF8259.sv`に`external_irr_clear`ポート追加)
-   - np2 io/pit.c: ch0への書き込み(カウント値、またはRL≠ラッチのコントロール
+3. **np21wのIRR0クリア特性が未実装**(`KF8259.sv`に`external_irr_clear`ポート追加)
+   - np21w io/pit.c: ch0への書き込み(カウント値、またはRL≠ラッチのコントロール
      ワード)でマスタPICのIRR bit0をクリア
    - 再プログラム前にラッチされた古い割込みが、新しいハンドラに届くのを防ぐ
      実機由来の挙動。Peripherals.svとベンチ両方に配線
@@ -208,7 +208,7 @@ commit 3e1471a で**書き込みサイクル開始時点の EU ライブ PC**(`u
 
 - IRQ0を **ハードウェアPIT出力(timer_out0)から直接** 駆動。
   固定レートのソフトウェアトグラー(pit_timer_irq, 16384ce毎)は削除
-  — mode 3矩形波+エッジトリガPICで「周期ごとに1回の割込み」= np2の
+  — mode 3矩形波+エッジトリガPICで「周期ごとに1回の割込み」= np21wの
   NEVENT_ITIMERと同一のケイデンス
 - **PITシード**: ブート判断(FE1FD)の瞬間 — +goldenのRAM事前投入と同じ境界 —
   にFDE20の書き込み列(ctrl 0x36, LSB 0x00, MSB 0x60)を実際のバス経路で注入。
@@ -573,7 +573,7 @@ pc98_tvram のスイッチ8バイトは書き込み保護されているため I
 | D | キーボード 8251 | **実8251モデル**(`pc98_kbd8251.sv`): SEND-BREAK 立ち下がりエッジ(0x43 への 3A→32)でだけ ARM。旧モデルは 0x73(beep)書き込みでも ACK を ARMしており、それが真っ暗の正体。ACK 遅延 350ms = ITF のポーリング窓(~82ms)の外 → ITF は no-keyboard パスを歩き、BIOS の INT 18h AH=3 リセット応答とキーストリームには生き残る。**IRQ1 を XT PS/2 → 8251 RxRDY に付け替え** |
 | E | ROM 覗き見 | peek が itf_bank mux を通って itf.rom のゼロ領域(物理 0x1FD800)を読んでいた。`st_run` 中はメインバンクを読むよう修正 + self-test master の HLDA レース修正(8088 バスプロトコル違反、"11 11 11 11" の正体) |
 | F | beep | 経路は存在したが両端が誤り: ゲートが XT 8255 のピン方向(ゲストは BSR ワードしか書かないため入力モード固定=永久消音)、トーンが ctr2(RS-232C 用)。**ctr1 × sysport ラッチ**に修正。実機仕様は bit3=1 がミュート(リセット値 0xF9) |
-| G | Dock USB → PC-98 | `pc98_kbd_ps2.sv`: Set-2 → PC-98 変換(np2kai kbtrans 準拠、GRPH=右Ctrl 等)。core_top で tap(ストールなし) |
+| G | Dock USB → PC-98 | `pc98_kbd_ps2.sv`: Set-2 → PC-98 変換(np21w kbtrans 準拠、GRPH=右Ctrl 等)。core_top で tap(ストールなし) |
 | H | VKB PC-98 配列 | PC-9801 配列93キー(F1-F10 左縦2列、STOP/KANA/GRPH/XFER/NFER/HELP/ROLL)。PC-98 固有キーは未使用 Set-2 コードに仮割り当て |
 | (親) | 結線 | 8251 にキー注入ポート(stb+byte、1深 hold、break エッジでクリア、ACK より優先)、CHIPSET/PERIPHERALS/core_top を通して G/H の出力を接続。VKB 固有キーを G のテーブルに登録 |
 
@@ -688,22 +688,22 @@ chord 版(キー入力ごとに [mod make][key make]…[mod break] を組み直�
 
 ### §10.4 カーソルが出ない原因(確定・修正済み)
 
-実機で「反転ブロックが一瞬も出ない」件。BIOS 逆アセンブルと np2kai の
+実機で「反転ブロックが一瞬も出ない」件。BIOS 逆アセンブルと np21w の
 maketext.c 突き合わせで pc98_gdc.sv の 2 バグを特定:
 
 1. **CSRW のアドレスデコード**: RTL は uPD7220 マニュアル形式
    `{P3[1:0], P2, P1[4:0]}`(P1 のビット 7-5 を捨てる)だったが、
    BIOS (F49C9) は `mov ax,di / out 60h,al / mov al,ah / out 60h,al` と
-   **EAD をプレーンなリトルエンディアン 16 ビット**で書く。np2kai も
+   **EAD をプレーンなリトルエンディアン 16 ビット**で書く。np21w も
    `LOADINTELWORD(para+GDC_CSRW)` で `curpos<0x1000` をセル番号として使用。
    旧デコードだと EAD がスクランブルされ、カーソルは見えない場所に飛ぶ
-2. **点滅制御ビット**: RTL は P1 bit6 を見ていたが、np2 は **P2 bit5
+2. **点滅制御ビット**: RTL は P1 bit6 を見ていたが、np21w は **P2 bit5
    (0x20) = 点滅なし**。BIOS のフル CSRFORM テーブル書き込みの P2 は
    [0x53D](0x00=点滅 / 0x20=固定) — まさにこのビット
 
 補足: BIOS は CSRFORM を「フル 3 バイト(テーブル駆動、FEA44)」と「1 バイト
 ON/OFF([0x53B]|0x80、FEAA4)」で使い分け、CSRW は 2 バイトで EAD 下位のみ。
-top=P1[4:0] / bottom=P3[7:3] / enable=P1[7] は np2 と一致(変更なし)。
+top=P1[4:0] / bottom=P3[7:3] / enable=P1[7] は np21w と一致(変更なし)。
 tb_pc98_gdc の期待値を修正 + tb_pc98_text にカーソル描画の回帰試験を追加。
 
 ### §10.5 カーソル計器(run#346 でも出なかったため)
@@ -727,7 +727,7 @@ CSRW/blink 修正後も実機でカーソルが出ず、原因が GDC 受け側�
 実機計器 `CS 40 1 090 F 1`: コマンド 40 回・E=1・アドレスは移動に追随 —
 配信は全部生きている。だが **top=0F > bottom** でスライスが空。
 
-原因: **cursor_top を P1[4:0] から取っていたが、np2kai (maketext.c:334) は
+原因: **cursor_top を P1[4:0] から取っていたが、np21w (maketext.c:334) は
 `para[GDC_CSRFORM+1] & 0x1f` = P2[4:0] が top**。P1[4:0] は TEXT_LR
 (テキスト行の高さ、0x0F=16ライン) である (maketext.c:163)。BIOS 側も整合:
 [0x53B]=0x0F(行高さ、ON 時 0x80 を OR)・[0x53D]=0x00/0x20(blink ビットのみ、
@@ -747,7 +747,7 @@ enable + TEXT_LR=15)。3 バイトテーブル形式 (FEA44, CS=FD80 基準で�
 FD800+0x1062 = linear FE862: {0F,7B},{13,9B},{07,3B},{09,4B}) は int18 AH=12/13
 経由のみ。ゆえに **top/bottom/blink はチップのパワーオン値のまま**。
 
-- np2kai gdc_reset のマスター既定値 = {P1=0F, P2=C0, P3=7B} → top=0, bottom=15,
+- np21w gdc_reset のマスター既定値 = {P1=0F, P2=C0, P3=7B} → top=0, bottom=15,
   **点滅 (P2 bit5=0)** = 全画面ブロック。BIOS のフォームテーブル先頭 {0F,7B} と一致
 - 当 RTL は para[] を全ゼロリセット → P3=0 → bottom=0 → **正しいセルの最上段
   1 ラインのスリバー**。これが「ちょこっと/違うところ」の正体
@@ -762,7 +762,7 @@ EAD の検算も完了 (心配不要の確認):
 - BIOS F49A3: EAD = (k·col + 160·row)/2、k は [0x474] bit1 で切り替わり
 - bit1 は CRT 初期化 (F4BF2) が [0x42E]≥0x48 (80桁, [0:5C0] bit2=0 → 0x50) で
   **セット** → 80 桁ブートは常に k=2 → **EAD = 80·row + col (セル番号そのもの)**
-- np2kai maketext の step-1 と一致。RTL の drawn_cell 比較は正しい
+- np21w maketext の step-1 と一致。RTL の drawn_cell 比較は正しい
 
 ### §10.7 FDM が ROM BASIC に落ちる原因(確定・修正済み)
 
@@ -772,7 +772,7 @@ EAD の検算も完了 (心配不要の確認):
   MSR ポールが飽和 (nD=FF) → タイムアウト → ROM BASIC
 
 原因: glue のモータ回路は **bit0 の立上り + XTMASK ゲート**で arm する設計だったが、
-np2kai fdc_o94 (io/fdc.c:1104-1116) の実際は **bit3 (0x08) の立上りで ready
+np21w fdc_o94 (io/fdc.c:1104-1116) の実際は **bit3 (0x08) の立上りで ready
 attention 割込み** (FDCRLT_AI、FDC_INT_DELAY=6×100ms 後、条件なし)。BIOS 自身の
 0x94 値 (bios.rom 逆アセンブル) がまさに証拠: FF56C=0x08、FF638=0x18 (**bit0 は
 一度も立たない**)、2DD 側 FF6BF の 09/0C、ハンドラ末尾の 0D/0C — 全部 bit3 搭載。

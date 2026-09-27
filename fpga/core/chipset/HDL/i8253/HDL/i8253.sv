@@ -77,15 +77,15 @@ module i8253 (
     // Counter #0
     //
     // Counter 0 -- the interval timer -- powers up in mode 3 (square wave),
-    // matching np2's itimer_reset (io/pit.c: ch0.ctrl = 0x16 = RL=MSB,
+    // matching np21w's itimer_reset (io/pit.c: ch0.ctrl = 0x16 = RL=MSB,
     // mode 3). It stays inert (start_counting = 0) until the first count
-    // write, exactly like np2's chip: whatever the ROM writes drives it. On
+    // write, exactly like np21w's chip: whatever the ROM writes drives it. On
     // this machine only the FD80 POST programs mode 3 (FDE20: ctrl 0x36,
     // count 0x6000 = 100 Hz at the 2.4576 MHz PIT clock); the ITF's own
     // tests use mode 0 and leave a one-tick-then-silent timer behind, which
     // is correct mode-0 behavior, not a stuck output.
     i8253_Counter #(
-        .RESET_MODE (3'd3)       // MODE_3: square wave, np2's itimer_reset
+        .RESET_MODE (3'd3)       // MODE_3: square wave, np21w's itimer_reset
     ) u_i8253_Counter_0 (
         // Bus
         .clock                  (clock),

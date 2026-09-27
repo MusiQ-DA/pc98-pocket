@@ -140,7 +140,7 @@ Detection was one hash away the whole time (§3).
    listing.** A disassembly that starts at a vector target *inside* a wrapped
    instruction is fiction — plausible, self-consistent fiction.
 
-4. **Know your reference emulator's CPU generation.** np2kai's i386c path treats `0x66`
+4. **Know your reference emulator's CPU generation.** np21w's i386c path treats `0x66`
    as an operand-size prefix for every CPU type; on our byte stream it consumed
    `66 18 77 D5` as one 4-byte `o32 SBB`, clobbered flags, and **never evaluated the
    JA**. Its "golden trace" silently confirmed a byte stream that V30 silicon never
@@ -186,7 +186,7 @@ answer on day one.
 
 1. **Symptom.** Boot lands at `E800:FFDA`, expected `FFE1`; suspected mis-targeted
    `EB D6` after a `66` "prefix".
-2. **Workaround era.** Patched the ROM byte `0x66 → 0x90` (np2-following). The machine
+2. **Workaround era.** Patched the ROM byte `0x66 → 0x90` (np21w-following). The machine
    progressed — but that path *executes* `18 77 D5` as `sbb [bx+0xd5], dh`, a real
    memory write to DS:0x05B5 and a flag clobber that silicon never performs. A
    workaround that "works" is not proof of a diagnosis.
@@ -209,6 +209,6 @@ answer on day one.
 - Testbench: `sim/tb_cpu_v30_stub.sv` (variants A–L, directed T1–T4).
 - nuV30 (upstream): https://github.com/wickerwaka/nuV30 — `ucdecode`/`ucrom`/PLA
   transcriptions and `hdl/rtl/ucore/`.
-- np2kai: `i386c/ia32/inst_table.c` (0x66/0x67 as `INST_PREFIX`) and
+- np21w: `i386c/ia32/inst_table.c` (0x66/0x67 as `INST_PREFIX`) and
   `i286c/v30patch.c` (`{0x66, v30_reserved}` — correctly not a prefix, though it
   consumes 1 byte where silicon consumes 2).

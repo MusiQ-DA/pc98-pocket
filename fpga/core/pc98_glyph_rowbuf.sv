@@ -56,7 +56,7 @@ module pc98_glyph_rowbuf #(
     // f_valid. Sixteen beats, then the provider drops f_busy.
     //
     // KANJI cells only. An ANK cell's sixteen bytes come from the local
-    // pc98_font_ank BRAM instead: the 4 KB 8x16 set the loader writes directly,
+    // pc98_font_ank BRAM instead: the 6 KB ANK set the loader writes directly,
     // so plain text never depends on FONT.ROM reaching 0x400000 or on the
     // video SDRAM port being free. On the first hardware run that drew at all,
     // the SDRAM path read a region nobody had filled and every cell came out

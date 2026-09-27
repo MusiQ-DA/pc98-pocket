@@ -112,7 +112,7 @@ tv_cell = gdc_start_for_line(vcount) + column
 
 ## 検証
 
-1. `tb_pc98_gdc` — コマンド FIFO とパラメータ RAM の単体。np2kai の
+1. `tb_pc98_gdc` — コマンド FIFO とパラメータ RAM の単体。np21w の
    `gdc.c` / `gdc_sub.c` の挙動に対して、コマンド列 → レジスタ値を照合
 2. `tb_pc98_text` の拡張 — SAD/LEN を振って `tv_cell` の列を確認。
    分割 1・SAD 0 で現行と一致すること（退行）

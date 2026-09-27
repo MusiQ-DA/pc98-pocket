@@ -4,7 +4,7 @@
 //   outclk_0  21.052600 MHz            PC-98 dot clock (640x400, 24.83 kHz)
 //   outclk_1  21.052600 MHz  @90 deg   same clock for DDR (video_rgb_clock_90)
 //
-// 21.0526 MHz is np2's own figure for this mode -- io/gdc.c carries the table
+// 21.0526 MHz is np21w's own figure for this mode -- io/gdc.c carries the table
 //
 //     {21052600 / 8, 106 - 6, 106 + 6, 400, 575}
 //

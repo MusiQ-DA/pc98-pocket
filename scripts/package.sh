@@ -26,7 +26,7 @@
 #
 # The ROMs are the user's own dumps and are NOT in this repository. The
 # deploy set is the coherent PC-9801UX trio (deploy.sh pins it by md5);
-# the copy circulating as np2's BIOS.ROM has its reset vector overwritten,
+# the copy circulating as np21w's BIOS.ROM has its reset vector overwritten,
 # its ITF.ROM is not an ITF at all, and the P1-P4 set was mixed-generation.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -138,7 +138,7 @@ def data(j):
     ]
 
 def video(j):
-    # The PC-98 raster is 640x400 (pc98_video_timing.sv, from np2's clock
+    # The PC-98 raster is 640x400 (pc98_video_timing.sv, from np21w's clock
     # table). The inherited file declares the PC/AT pair -- CGA 640x200 and the
     # Hercules 720x350 canvas -- so the scaler was told to expect two hundred
     # lines and handed four hundred. There is one mode here because the machine

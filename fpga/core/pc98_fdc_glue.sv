@@ -27,13 +27,13 @@
 //   WHO ASSERTS IT. floppy.v's irq, on command completion -- see its
 //   raise_interrupt, gated by dma_irq_enable, which is DOR bit 3. On the
 //   PC-98 nothing gates the interrupt: the data book's DMAE bit (0x94
-//   bit 4) gates only DRQ/DACK, and np2kai raises int_stat regardless of
+//   bit 4) gates only DRQ/DACK, and np21w raises int_stat regardless of
 //   the control register -- so the synthesised DOR holds bit 3 set.
 //
 //   WHERE IT GOES. The SLAVE PIC: IRQ11 (INT 13h) when the 2HD window is the
 //   live one, IRQ10 (INT 12h) when the 2DD window is. Three independent
 //   witnesses:
-//     * np2kai io/fdc.c:46-51 -- fdc_intwait does pic_setirq(0x0b) when
+//     * np21w io/fdc.c's fdc_intwait does pic_setirq(0x0b) when
 //       fdc.chgreg & 1, else pic_setirq(0x0a).
 //     * The BIOS gates each entry point on the SLAVE's mask register: FF4B3
 //       `in al,0x0A / test al,0x08` before the 2HD path at FF4D9, and FF438
@@ -48,7 +48,7 @@
 //   and it drains the result bytes, or it issues SENSE INTERRUPT STATUS (08h)
 //   and reads ST0/PCN -- both are reads of 0x92/0xCA. That is floppy.v's
 //   register 5, and floppy.v lowers irq on exactly `io_read && io_address == 5`.
-//   np2kai agrees: io/fdc.c:920-928, fdc_dataread calls fdc_interruptreset()
+//   np21w agrees: io/fdc.c:920-928, fdc_dataread calls fdc_interruptreset()
 //   once the result phase has drained. There is no acknowledge port, and the
 //   control port does not clear it -- only a reset does (below).
 //
@@ -57,14 +57,14 @@
 // the master.
 //
 // ---------------------------------------------------------------------------
-// 0xBE, THE INTERFACE SELECT. np2kai io/fdc.c:1089-1115 (fdc_obe / fdc_ibe)
+// 0xBE, THE INTERFACE SELECT. np21w io/fdc.c's fdc_obe/fdc_ibe
 // and the guard at the head of fdc_o92/fdc_o94/fdc_i90/fdc_i92/fdc_i94:
 //
 //     if (((port >> 4) ^ fdc.chgreg) & 1) return;     // or return 0xff
 //
 // (port >> 4) & 1 is 1 for 0x9x and 0 for 0xCx, so chgreg bit 0 picks which
 // window reaches the chip; the other one ignores writes and reads 0xFF. Bit 1
-// is the media type, bit 2 arms np2's ready-attention interrupt. Reset value is
+// is the media type, bit 2 arms np21w's ready-attention interrupt. Reset value is
 // 3 (fdc_reset, io/fdc.c:1155-1161), which is why the stub's 0xBE constant was
 // 0xFB. The read is `(chgreg & 3) | 8 | 0xf0`.
 //
@@ -74,7 +74,7 @@
 // (`in al,0xBE / xor al,2 / and al,3 / out 0xBE,al`) to flip the media type
 // while probing. Answering 0xFB forever tells it the flip never took.
 //
-// 0x94 / 0xCC READ. Also NOT a readback of what was written: np2kai's fdc_i94
+// 0x94 / 0xCC READ. Also NOT a readback of what was written: np21w's fdc_i94
 // (io/fdc.c:1064-1087) synthesises a constant --
 //
 //     0x40 always
@@ -95,7 +95,7 @@
 //     bit 3  dma_irq_enable      bit 4  motor_enable[0]
 //     bit 5  motor_enable[1]
 //
-// The PC-98 control port (np2kai fdc_o94, io/fdc.c:990-1040) acts on three
+// The PC-98 control port (np21w fdc_o94, io/fdc.c:990-1040) acts on three
 // bits and ignores the rest:
 //
 //     0x80   0 -> 1 resets the FDC (fdcstatusreset)
@@ -112,13 +112,13 @@
 //   drive select left to floppy.v, which already takes it from the unit field
 //                of each uPD765 command (cmd_recalibrate_start and friends
 //                latch io_writedata[0]) -- which is how a real PC-98 does it.
-//   dma_irq_en   from control bit 3, the one np2 treats as interrupt enable.
-//   reset        control bit 7 going 0 -> 1 pulses it, as np2 does. floppy.v
+//   dma_irq_en   from control bit 3, the one np21w treats as interrupt enable.
+//   reset        control bit 7 going 0 -> 1 pulses it, as np21w does. floppy.v
 //                accepts a reset at register 4 with bit 7 set, so the pulse
 //                goes there rather than by dropping enable -- dropping enable
 //                would need a second write to restore it and the guest never
 //                makes one.
-//   bit 0x10     NOT mapped, deliberately. np2's fdcstatusreset() only puts the
+//   bit 0x10     NOT mapped, deliberately. np21w's fdcstatusreset() only puts the
 //                command engine back to RQM-idle; floppy.v's nearest equivalent
 //                is sw_reset, which also CLEARS IRQ and reloads reset_sensei.
 //                The BIOS drops bit 4 (0x18 -> 0x08 at FF44C/FF4DB) right
@@ -127,13 +127,13 @@
 //                either ROM is known to need it; if something turns out to,
 //                it wants its own narrower reset in floppy.v, not this one.
 //
-// One known divergence, recorded rather than invented: np2's fdc_o94 schedules
+// One known divergence, recorded rather than invented: np21w's fdc_o94 schedules
 // an interrupt when bit 7 rises with bit 3 already set (io/fdc.c:1005-1015, the
 // OSASK workaround), and floppy.v instead raises irq only on a 0->1 edge of DOR
 // bit 2, which this glue never produces. The ITF's own reset sequence (F9BB5
 // `out 0x94,0x80` / F9BC2 `out 0xCC,0xA8`, each followed by a LOOP delay, not
 // an interrupt wait) does not depend on it, so it is left alone. floppy.v's
-// reset_sensei does hand back 0xC0|unit -- np2's FDCRLT_AI -- to the first four
+// reset_sensei does hand back 0xC0|unit -- np21w's FDCRLT_AI -- to the first four
 // SENSE INTERRUPT commands after a reset, which is the same information.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -211,7 +211,7 @@ module pc98_fdc_glue (
     output logic [7:0] dbg_last_ctrl,
     // The window register itself. 0xBE's last byte: bit0 picks which of the
     // two port groups is live, and the same bit steers the interrupts. The
-    // 0xCC motor writes are only seen when bit0 is CLEAR -- np2's
+    // 0xCC motor writes are only seen when bit0 is CLEAR -- np21w's
     // ((port>>4)^chgreg)&1 guard drops them otherwise -- so a 3 here with
     // MA 00 means the BIOS is writing 0xCC into a dead window, and the
     // question moves to why the ROM does that.
@@ -224,10 +224,10 @@ module pc98_fdc_glue (
 
     // ---- the motor interrupts the drive probes actually wait for -------
     //
-    // THE TRIGGER IS BIT 3 (0x08), NOT BIT 0. np2kai's fdc_o94 (io/fdc.c
+    // THE TRIGGER IS BIT 3 (0x08), NOT BIT 0. np21w's fdc_o94 (io/fdc.c
     // 1104-1116): when the register's 0x08 bit RISES (with the 2HD window
     // selected via 0xBE's bit 2), every READY drive gets an "attention"
-    // interrupt after FDC_INT_DELAY (6 x 100 ms in np2's event tick) on
+    // interrupt after FDC_INT_DELAY (6 x 100 ms in np21w's event tick) on
     // the FDC's line -- unconditionally, no XTMASK gate. The BIOS's own
     // boot sequence agrees (out 0x94 sites in bios.rom): FF56C writes 0x08,
     // FF638 writes 0x18 -- bit 3 set, BIT 0 NEVER -- and the metal showed
@@ -339,14 +339,14 @@ module pc98_fdc_glue (
     assign dbg_strb_dat  = strb_dat;
     assign dbg_last_ctrl = last_ctrl_byte;
 
-    // np2 fdc_reset (io/fdc.c:1155-1161): fdc.chgreg = 3. Bit 0 set means the
+    // np21w fdc_reset (io/fdc.c:1155-1161): fdc.chgreg = 3. Bit 0 set means the
     // 0x90/0x92/0x94 window is the live one out of reset.
     always_ff @(posedge clk, posedge rst) begin
         if (rst) chgreg <= 8'h03;
         else if (wr_stb && sel_mode) chgreg <= wr_data;
     end
 
-    // np2's guard, ((port >> 4) ^ chgreg) & 1, with (port >> 4) & 1 written as
+    // np21w's guard, ((port >> 4) ^ chgreg) & 1, with (port >> 4) & 1 written as
     // ~port_2dd: live when chgreg[0] and port_2dd disagree.
     assign group_live = chgreg[0] ^ port_2dd;
 
@@ -354,10 +354,10 @@ module pc98_fdc_glue (
     assign mode_readback = 8'hF8 | {6'd0, chgreg[1:0]};
 
     // fdc_i94, io/fdc.c:1152-1180. The dead window reads 0xFF, as every one
-    // of np2's handlers does when the guard rejects the port. The live value
+    // of np21w's handlers does when the guard rejects the port. The live value
     // is 0x40 | 0x20 | 0x10 (0xCx port only) | (0x04 if dipsw[0]&8 else
     // 0x08), and the dipsw[0] THERE IS NOT WHAT PORT 0x31 READS -- that is
-    // dipsw[1], DIP 1-4; fdc_i94 reads dipsw[0], DIP 5-8, which np2 defaults
+    // dipsw[1], DIP 1-4; fdc_i94 reads dipsw[0], DIP 5-8, which np21w defaults
     // to 0x3E. Bit 3 set, so the 0x04 arm: 0x44, the value the stub chose all
     // along. (The swap to 0x48 cost a hardware round: the probe's FD80:F41F
     // helper may shift the byte left, and 0x48 shifted is 0x90, whose bit 3
@@ -367,7 +367,7 @@ module pc98_fdc_glue (
                          :  port_2dd   ? 8'h74   // 0x40 | 0x20 | 0x10 | 0x04
                                        : 8'h44;  // 0x40 |               0x04
 
-    // np2's pic_setirq(0x0b) / pic_setirq(0x0a), io/fdc.c:47-51: the same
+    // np21w's pic_setirq(0x0b) / pic_setirq(0x0a), io/fdc.c:47-51: the same
     // chgreg bit that picks the window picks the interrupt -- for the
     // CONTROLLER's own (floppy.v's) interrupts. The motor pulse is
     // different hardware (the drive adapter at 0xCC) and always belongs to
@@ -386,7 +386,7 @@ module pc98_fdc_glue (
             reset_pending <= 1'b0;
         end else begin
             if (wr_stb && sel_ctrl && group_live) begin
-                // np2: the reset fires on the 0 -> 1 edge of bit 7, not on the
+                // np21w: the reset fires on the 0 -> 1 edge of bit 7, not on the
                 // level. A guest that leaves the bit set does not hold the
                 // controller down.
                 if (wr_data[7] && !ctrl_q[7])
@@ -413,7 +413,7 @@ module pc98_fdc_glue (
         // a control write becomes a DOR write rather than reaching floppy.v's
         // register 4, which would be read as a data-rate change. A window that
         // chgreg has not selected reaches floppy.v not at all -- neither the
-        // address nor the write -- which is np2's guard.
+        // address nor the write -- which is np21w's guard.
         if (reset_pending) begin
             fd_addr  = 3'd4;
             fd_write = 1'b1;

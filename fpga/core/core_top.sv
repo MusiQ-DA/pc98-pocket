@@ -645,7 +645,7 @@ module core_top (
 
     // The Pocket's real clock, packed for the uPD4990. The bridge hands over
     // BCD bytes -- date {day [23:16], month [15:8], year [7:0]}, time {hour
-    // [23:16], min [15:8], sec [7:0]} -- and np2's date2bcd wants year, then
+    // [23:16], min [15:8], sec [7:0]} -- and np21w's date2bcd wants year, then
     // month with the weekday in the low nibble, then day/hour/min/sec. The
     // weekday the bridge does not carry, so it comes off Sakamoto's table
     // (0 = Sunday). Combinational helpers rather than block-locals: Quartus
@@ -1715,17 +1715,19 @@ module core_top (
     end
 
     // ANK font load, straight off data_loader rather than through the ROM FIFO
-    // and the ext port. It is a 4 KB BRAM with no handshake, so queueing it
+    // and the ext port. It is a 6 KB BRAM with no handshake, so queueing it
     // behind the BIOS load would buy nothing.
     //
-    // data.json puts font.rom at bridge 0x10100000, and FONT.ROM's 8x16 ANK set
-    // is the contiguous 0x0800-0x17FF of the file (np2 font/fontv98.c), so the
-    // window is dl_addr 0x100800-0x1017FF and the BRAM address is the offset
-    // within it.
+    // data.json puts font.rom at bridge 0x10100000. The BRAM keeps the file's
+    // ANK sets: the 8x16 half (file 0x0800-0x17FF) at words 0x000-0x7FF and,
+    // for the mode1-bit-3-clear case, the 8x8 half (file 0x0000-0x07FF) at
+    // words 0x800-0xBFF (np21w font/fontv98.c). So the window is the whole
+    // dl_addr 0x100000-0x1017FF.
     wire        font_dl_hit  = dl_wr && (dl_addr[27:16] == 12'h010)
-                                     && (dl_addr[15:0] >= 16'h0800)
                                      && (dl_addr[15:0] <  16'h1800);
-    wire [10:0] font_dl_addr = dl_addr[11:1] - 11'h400;   // word index from 0x800
+    wire [11:0] font_dl_addr = (dl_addr[15:0] >= 16'h0800)
+                             ? ({1'b0, dl_addr[11:1]} - 12'h400)   // 8x16 bank
+                             :  (dl_addr[11:1] + 12'h800);        // 8x8 bank
 
     // ---------------------------------------------------------- firmware slot
     //
@@ -1771,7 +1773,7 @@ module core_top (
     reg        bios_write_byte_cnt;
     reg        bios_shadow_write;
     reg        font_bank_write;
-    // PC-98: BIOS.ROM is 0x18000 bytes at physical 0x0E8000, which is where np2
+    // PC-98: BIOS.ROM is 0x18000 bytes at physical 0x0E8000, which is where np21w
     // reads it to and what the file size says (docs/PC98_MACHINE_SPEC.md F1).
     // Ninety-six KB, so the slot's address needs seventeen bits, not sixteen --
     // the PC/AT form below masks addr[24:16] to zero and lands everything in
@@ -1823,7 +1825,7 @@ module core_top (
     // So this is not a workaround, it is undoing someone else's edit, and it
     // is what makes a faithful boot possible without an ITF: the ITF's job is
     // to size memory and bank-switch, and mapping the post-ITF image does that
-    // for us. np2 writes exactly the same five bytes (bios.c: mem[0xffff0] =
+    // for us. np21w writes exactly the same five bytes (bios.c: mem[0xffff0] =
     // 0xea, then 0xfd800000) -- it restores the vector too.
     //
     // Only the word at FFFF0 differs, so one address needs intercepting.
@@ -2329,7 +2331,7 @@ module core_top (
 
     // 8255 port B is 0x0033, and on a PC-98 it is an INPUT: bit 3 is a DIP
     // switch inverted, bits 7-5 are the RS-232C modem status, bit 0 is the
-    // calendar clock's data line, and everything else reads zero (np2
+    // calendar clock's data line, and everything else reads zero (np21w
     // io/sysport.c, sysp_i33 -- behaviour reference, not code).
     //
     // It was wired to port_b_out, a PC/AT leftover where port B is an output
@@ -2346,7 +2348,7 @@ module core_top (
     //
     // F8000-FFFFF is 32 KB of ROM that is the ITF at power-on and the system
     // BIOS afterwards. The ITF switches it itself, through port 0x043D:
-    // 0x10 selects the ITF, 0x12 selects the BIOS (np2 io/necio.c, and the real
+    // 0x10 selects the ITF, 0x12 selects the BIOS (np21w io/necio.c, and the real
     // instructions are in the ROM -- BA 3D 04 B0 12 EE at F8A98).
     //
     // The hand-over at F988D is worth knowing, because it says the switch must
@@ -2371,7 +2373,7 @@ module core_top (
     //
     // So boot where the ITF would have handed over. BIOS.ROM's reset vector is
     // already EA 00 00 80 FD, its entry at FD800 is EB 02 EB 5D FA 33 C0 ... --
-    // plain 8086 throughout -- and np2 boots exactly this way, having no ITF at
+    // plain 8086 throughout -- and np21w boots exactly this way, having no ITF at
     // all. The ITF stays loaded in the shadow bank and port 0x043D still
     // switches to it, so nothing is lost; only the power-on choice changes.
     //

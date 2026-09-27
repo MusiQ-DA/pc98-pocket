@@ -54,7 +54,7 @@ wr 0x85 [expr {($seq << 8) | (($FDDRV & 3) << 4) | $cmd}]
 set ok 0
 for {set i 0} {$i < 400} {incr i} {
     set v [rd 0x26]
-    if {($v >> 8) & 0xFF == $seq} { set ok 1; break }
+    if {(($v >> 8) & 0xFF) == $seq} { set ok 1; break }
     after 5
 }
 if {!$ok} { puts "fdd: no ack (seq $seq never echoed -- EXTRA build? firmware up?)"; shutdown; exit 1 }

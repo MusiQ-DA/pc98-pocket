@@ -6,7 +6,7 @@
 // N88-BASIC; a lost shift breaks every capital letter. So the bench checks:
 //
 //   - the code table: letters, digits, symbols, keypad, F-keys, modifiers
-//     (spot values are np2kai's sdl/kbtrans.c tables; A make 0x1C -> 0x1D and
+//     (spot values are np21w's sdl/kbtrans.c tables; A make 0x1C -> 0x1D and
 //     break -> 0x9D are the pair the task was stated in)
 //   - break handling: bit 7 set, through the plain F0 and the E0 F0 forms
 //   - the multi-byte sentinels: Pause (E1 ...) must yield ONE STOP make and

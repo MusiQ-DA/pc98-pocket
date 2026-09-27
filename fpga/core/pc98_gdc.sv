@@ -16,23 +16,23 @@
 // therefore RECORDED, not obeyed; moving the raster onto the GDC would put
 // everything that currently displays at risk for no gain today.
 //
-// THE PORTS, from np2kai io/gdc.c, because getting this backwards inverts
+// THE PORTS, from np21w io/gdc.c, because getting this backwards inverts
 // every command in the machine:
 //
 //     0x60 / 0xA0   write -> PARAMETER      read -> STATUS
 //     0x62 / 0xA2   write -> COMMAND        read -> the read-back FIFO
 //     0x64 / 0xA4   write -> clear the vsync interrupt (not handled here)
 //
-// np2kai pushes both into one FIFO and tags the command with bit 8
+// np21w pushes both into one FIFO and tags the command with bit 8
 // (`gdc.m.fifo[cnt++] = 0x100 | dat`); the tag is what lets a command arrive
 // mid-parameter-run and cut it short, which is what a real 7220 does.
 //
-// THE PARAMETER STORE, from np2kai io/gdc_cmd.tbl -- a 256-entry table of
+// THE PARAMETER STORE, from np21w io/gdc_cmd.tbl -- a 256-entry table of
 // {where the parameters go, how many}. Two things in it are not obvious and
 // both were nearly got wrong here:
 //
 //   * 0x70-0x7F ARE ONE COMMAND, not two. The low nibble is the start offset
-//     into a SIXTEEN-byte PRAM and the count is 16 - offset. np2kai's
+//     into a SIXTEEN-byte PRAM and the count is 16 - offset. np21w's
 //     CMD_SCROLL (0x70) and CMD_TEXTW (0x78) are two names for offsets 0 and 8
 //     of the same block: GDC_SCROLL is para[12] and GDC_TEXTW is para[20].
 //   * ZOOM is 0x46, not 0x06. The enum in gdc_cmd.h says CMD_ZOOM = 0x06 but
@@ -40,7 +40,7 @@
 //     nothing at 0x06.
 //
 // THE PRAM IS FOUR PARTITIONS OF FOUR BYTES, and the display walks them in
-// turn (np2kai vram/makegrex.c calls its partition walker with gpos 0 then 4,
+// turn (np21w vram/makegrex.c calls its partition walker with gpos 0 then 4,
 // forever, until the screen is full):
 //
 //     bytes 0-1   SAD   display address = (SAD << 1) & 0x7FFF
@@ -52,7 +52,7 @@
 `default_nettype none
 
 // MASTER/SLAVE AS A PARAMETER. The two GDCs still decode identically; the
-// one thing that differs is the power-on CSRFORM. np2kai's gdc_reset seeds
+// one thing that differs is the power-on CSRFORM. np21w's gdc_reset seeds
 // the master's form to {0F C0 7B} and the slave's P1 to 1, and the BIOS
 // never overwrites the difference at boot (see the reset block below), so
 // the values a machine's cursor RIDES ON are per-GDC from the first frame.
@@ -80,7 +80,7 @@ module pc98_gdc #(
     // Four partitions, in PRAM order. A screen with one area sets partition 0
     // to the whole height; the walker in the renderer then never advances.
     // RAW, not interpreted. The two GDCs read the SAME PRAM field DIFFERENTLY:
-    // np2kai's graphics walker takes LOW15(vad << 1) (vram/makegrex.c) and its
+    // np21w's graphics walker takes LOW15(vad << 1) (vram/makegrex.c) and its
     // text renderer takes LOW12(...) with no shift at all (vram/maketext.c,
     // where the result indexes cells as mem[0xa0000 + edi*2]). Baking either
     // one in here would be right for one consumer and wrong for the other --
@@ -133,7 +133,7 @@ module pc98_gdc #(
     // ------------------------------------------------------------------
     // the parameter store
     // ------------------------------------------------------------------
-    // np2kai's offsets, kept verbatim so the table above can be read against
+    // np21w's offsets, kept verbatim so the table above can be read against
     // gdc_cmd.tbl without translating.
     localparam int P_SYNC    = 0;
     localparam int P_ZOOM    = 8;
@@ -148,7 +148,7 @@ module pc98_gdc #(
 
     reg [7:0] para [0:P_LAST];
 
-    // The read-back FIFO: CSRR queues five bytes off CSRW (np2kai gdc.c's
+    // The read-back FIFO: CSRR queues five bytes off CSRW (np21w gdc.c's
     // fill: the three address bytes, the high one masked to its two live
     // bits, then two zeros), LPEN queues the latched pen position -- and no
     // pen is fitted, so that is three zero bytes. What the queue buys is the
@@ -206,7 +206,7 @@ module pc98_gdc #(
     wire draw_timeouts = draw_pending && (draw_watch == DRAW_WATCHDOG);
 
     // Where the next parameter goes, and how many are still expected. A new
-    // command cuts a run short, which is the point of np2kai's bit-8 tag.
+    // command cuts a run short, which is the point of np21w's bit-8 tag.
     reg [5:0] p_dst;
     reg [4:0] p_left;
 
@@ -301,9 +301,9 @@ module pc98_gdc #(
             // without them: the BIOS's boot sends CSRFORM as ONE byte --
             // [0x53B]|0x80, the enable with TEXT_LR -- and never sends the
             // full three, so top/bottom/blink are whatever the chip woke
-            // with. np2kai's gdc_reset seeds the master to {P1=0F, P2=C0,
+            // with. np21w's gdc_reset seeds the master to {P1=0F, P2=C0,
             // P3=7B}: LR 15, top 0, bottom 15, blinking (P2 bit5 CLEAR is
-            // "does blink" in np2's inverted reading) -- a blinking full
+            // "does blink" in np21w's inverted reading) -- a blinking full
             // block -- and the BIOS's own form table (FD80:1062, entry
             // 0x1062) opens with the same {0F, 7B} pair. The slave wakes
             // with P1=1 and nothing else. Reset-zero P3 made bottom zero:
@@ -319,7 +319,7 @@ module pc98_gdc #(
             end
         end else begin
             // The server's completion: retire the request and run the
-            // post-command reset np2's gdc_vectreset applies -- the 7220
+            // post-command reset np21w's gdc_vectreset applies -- the 7220
             // clears the vector parameters after every EXECUTE. Independent
             // of the command port: the engine finishes on its own clock.
             if (srv_done_stb || draw_timeouts) begin
@@ -373,7 +373,7 @@ module pc98_gdc #(
                         unk_count <= unk_count + 8'd1;
                 end
 
-                // CSRR: five bytes off CSRW, np2's fill verbatim -- the
+                // CSRR: five bytes off CSRW, np21w's fill verbatim -- the
                 // three address bytes (the high one masked to two bits) and
                 // two zeros. LPEN: the pen latch, and no pen is fitted.
                 // Both queue only when there is room; a guest that reissues
@@ -400,7 +400,7 @@ module pc98_gdc #(
                 if (wr_d == 8'h0C || wr_d == 8'h05) disp_on_r <= 1'b0;
                 if (wr_d == 8'h00) begin
                     // RESET stops the display and takes SYNC parameters; it
-                    // does NOT clear the PRAM (np2kai does not either).
+                    // does NOT clear the PRAM (np21w does not either).
                     disp_on_r <= 1'b0;
                 end
 
@@ -432,14 +432,14 @@ module pc98_gdc #(
     // ------------------------------------------------------------------
     // status
     // ------------------------------------------------------------------
-    // np2kai gdc_i60: 0x80 always, 0x40 hblank, 0x20 vsync (gdc.vsync is set
+    // np21w gdc_i60: 0x80 always, 0x40 hblank, 0x20 vsync (gdc.vsync is set
     // to 0x20 in pccore.c), 0x04 FIFO empty, 0x02 FIFO full, 0x01 data ready.
     // Nothing here queues read-back data yet, so empty is true and full and
     // ready are false.
     //
     // BIT 7 IS LIGHT PEN DETECT, AND IT IS CLEAR: no light pen is fitted.
     //
-    // It was 1, copied from np2kai, which sets 0x80 unconditionally. np2 gets
+    // It was 1, copied from np21w, which sets 0x80 unconditionally. np21w gets
     // away with that because it also answers the read that follows. This does
     // not, and the BIOS hangs in the gap:
     //
@@ -462,7 +462,7 @@ module pc98_gdc #(
     // F3062 on the first test, so LPRD is never issued. The alternative --
     // keeping bit 7 and queueing three bytes for LPRD -- answers a question
     // the hardware should not be asking.
-    // np2kai gdc_i60: 0x80 always, 0x40 hblank, 0x20 vsync (gdc.vsync is set
+    // np21w gdc_i60: 0x80 always, 0x40 hblank, 0x20 vsync (gdc.vsync is set
     // to 0x20 in pccore.c), 0x04 FIFO empty, 0x02 FIFO full, 0x01 data ready.
     // BIT 2 (FIFO EMPTY) IS ALSO THE DRAWING THROTTLE: while an EXECUTE sits
     // pending for the softcore server or the server is drawing, the bit
@@ -477,7 +477,7 @@ module pc98_gdc #(
     wire [7:0] status = {1'b0, hblank, vsync, 1'b0, 1'b0, fifo_empty, 1'b0, drdy};
 
     // The data port answers with the read-back head while DRDY is set, and
-    // with the status otherwise -- np2's gdc_i60/gdc_i62 split: the STATUS
+    // with the status otherwise -- np21w's gdc_i60/gdc_i62 split: the STATUS
     // port (0x60, a1=0) always returns the status, whose bit 0 says data is
     // ready, and the DATA port (0x62, a1=1) returns and pops one byte per
     // read. The pop happens after the read strobe ends, the keyboard 8251's
@@ -516,7 +516,7 @@ module pc98_gdc #(
         end
     endgenerate
 
-    // CSRW: the address is a PLAIN little-endian 16-bit word. np2kai's text
+    // CSRW: the address is a PLAIN little-endian 16-bit word. np21w's text
     // side does LOADINTELWORD(para + GDC_CSRW) and treats it as the cell
     // index (curpos < 0x1000), and the BIOS's own driver writes AL then AH of
     // the word address directly (F49C9: out 60h,al / mov al,ah / out 60h,al --
@@ -530,7 +530,7 @@ module pc98_gdc #(
     assign cursor_dot        = para[P_CSRW + 2][7:4];
 
     // CSRFORM: display-cursor enable (P1 bit 7), top line (P2 bits 4-0) and
-    // bottom line (P3 bits 7-3), as np2kai's maketext reads them:
+    // bottom line (P3 bits 7-3), as np21w's maketext reads them:
     //
     //     nowline >= (para[GDC_CSRFORM+1] & 0x1f)   <- TOP IS P2
     //     nowline <= (para[GDC_CSRFORM+2] >> 3)
@@ -543,7 +543,7 @@ module pc98_gdc #(
     // form say top=15 against a bottom below it: an empty slice, and "no
     // reverse block, ever" on hardware.
     //
-    // BLINK IS P2 BIT 5, INVERTED: np2 treats a set bit as "does not blink"
+    // BLINK IS P2 BIT 5, INVERTED: np21w treats a set bit as "does not blink"
     // (the cursor goes solid), and the BIOS's driver carries exactly that
     // bit in [0x53D] as the P2 byte of the three-byte table write. The port
     // keeps the 1-means-blink sense the renderer expects.

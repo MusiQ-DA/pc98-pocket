@@ -1,8 +1,8 @@
 // tb_pc98_kbd8251 -- the keyboard 8251 model against what the ROMs do.
 //
-// The contract under test comes from the ITF and BIOS disassembly and np2:
+// The contract under test comes from the ITF and BIOS disassembly and np21w:
 //
-//   1. status reads 0x85 | RxRDY (np2 keyboard_i43), data reads hold the
+//   1. status reads 0x85 | RxRDY (np21w keyboard_i43), data reads hold the
 //      last byte (0xFF after reset),
 //   2. only the 8251 break's falling edge (a 0x43 write with SBRK=1 then
 //      one with SBRK=0) arms the 0x60 reset ACK -- plain command writes
@@ -16,7 +16,7 @@
 //      machine will switch back to,
 //   4. reading 0x41 takes the byte and drops RxRDY/IRQ1,
 //   5. a second break edge while an ACK is still pending drops it and
-//      restarts the timer (np2 keyboard_resetsignal).
+//      restarts the timer (np21w keyboard_resetsignal).
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -283,7 +283,7 @@ module tb_pc98_kbd8251;
         inject(8'h95);                        // 'Q' break -> hold slot
         wr43(1'b0, 8'h3A); wr43(1'b0, 8'h32); // keyboard reset
         repeat (8) @(negedge clock);
-        // The register still holds the make (np2 keeps the current byte's
+        // The register still holds the make (np21w keeps the current byte's
         // readable side simple: only the queue depth is dropped).
         rd41(b); expect_eq(b, 8'h15, "make survived the edge");
         rd43(b); expect_eq(b, 8'h85, "held break was dropped by the edge");

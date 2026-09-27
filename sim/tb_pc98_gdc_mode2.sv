@@ -1,5 +1,5 @@
 //
-// tb_pc98_gdc_mode2 -- the flip-flops behind port 0x6A, pinned to np2kai's
+// tb_pc98_gdc_mode2 -- the flip-flops behind port 0x6A, pinned to np21w's
 // gdc_o6a: bytes below 0x08 are the bit set/reset form, bytes at and above
 // it are extended commands, and of those only 0x82-0x85 touch the clock
 // field.
@@ -9,7 +9,7 @@
 //   * reset: mode2 = 0x00 (digital, three planes), gdc_clk = 0 (2.5MHz)
 //   * the bit form: dat < 0x08, bit = 1 << ((dat >> 1) & 3), value in dat[0]
 //   * the clock commands: 0x82/0x83 move gdc_clk[0], 0x84/0x85 gdc_clk[1] --
-//     3 is the "5MHz" field np2kai's renderers read as byte pitch, and the
+//     3 is the "5MHz" field np21w's renderers read as byte pitch, and the
 //     BIOS's INT 18h high-res setup lands on it via `gdc.clock |= 3`
 //   * the OTHER extended bytes (0x20 analog ext, 0x40/0x41 plasma, 0x68/0x69
 //     the 256-colour pair, and the undefined 0x86) touch neither register

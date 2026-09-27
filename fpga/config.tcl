@@ -16,7 +16,7 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # [0x0500] bit 7 never gets set, and BASIC has no input at all. The first
 # version of the model blanked the ITF by arming ACKs on writes that were
 # not the 8251's (0x73 is the beep port); the model now arms only on the
-# break edge, exactly as np2 does, so it can stay on. Comment it out to
+# break edge, exactly as np21w does, so it can stay on. Comment it out to
 # bisect a suspect keyboard interaction on hardware.
 set_global_assignment -name VERILOG_MACRO "PC98_KBD_8251=1"
 
@@ -74,7 +74,7 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 #   * The routing was wrong, not the acknowledge. A PC-98's FDC interrupt is a
 #     SLAVE line -- IRQ11 (INT 13h) for the 2HD register window, IRQ10 (INT 12h)
 #     for the 2DD one -- never master IRQ6, which is the PC/XT's floppy line and
-#     on this machine is INT3, an expansion interrupt with no handler. np2kai
+#     on this machine is INT3, an expansion interrupt with no handler. np21w
 #     io/fdc.c:46-51 picks between pic_setirq(0x0b) and pic_setirq(0x0a) on
 #     chgreg bit 0; the BIOS gates each of its own entry points on the SLAVE
 #     mask (FF4B3 `in al,0x0A / test al,0x08` for 2HD, FF438 `test al,0x04` for
@@ -87,7 +87,7 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 #     `io_read && io_address == 5`, which is what both branches of the BIOS's
 #     handler do. No acknowledge port, and the control port does not clear it.
 #   * 0xBE had to become a real latch (the BIOS steers ITSELF with the readback)
-#     and 0x94/0xCC np2's fdc_i94 constants rather than a readback of the write.
+#     and 0x94/0xCC np21w's fdc_i94 constants rather than a readback of the write.
 #
 # All of that is implemented in pc98_fdc_glue.sv and wired in Peripherals.sv,
 # and sim/tb_pc98_fdc_glue now closes the loop against the real floppy.v: the
@@ -111,7 +111,7 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # drives drive a real READY line, a PC/AT's do not (pin 34 is DISK CHANGE), so
 # the PC/XT build passes 0, every wire the change adds constant-folds away and
 # its behaviour is unchanged. What an empty PC-98 drive answers instead comes
-# from np2kai: READ/WRITE DATA and FORMAT go through FDC_DriveCheck (io/fdc.c:
+# from np21w: READ/WRITE DATA and FORMAT go through FDC_DriveCheck (io/fdc.c:
 # 176-182) to ST0 = FDCRLT_IC0|FDCRLT_NR|(hd<<2)|us = 0x48, ST1 = ST2 = 0,
 # C/H/R/N echoed, seven bytes and an interrupt (fdcsend_error7, io/fdc.c:
 # 97-117); READ ID (io/fdc.c:646-650) gives IC0|ND, ST0 = 0x40 / ST1 = 0x04.

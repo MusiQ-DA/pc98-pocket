@@ -8,7 +8,7 @@
 //                      masks with gdc.bitac)
 //   A2000 + idx*2      attribute byte (odd addresses in this region unused)
 //
-// Verified against np2 vram/maketext.c, which reads exactly those three
+// Verified against np21w vram/maketext.c, which reads exactly those three
 // addresses. The tvram.sv in the pre-pivot src/ tree assumed char at even and
 // attribute at odd addresses inside one 4 KB window; that is wrong, and it is
 // the kind of wrong that would have produced a screen of plausible-looking
@@ -35,7 +35,7 @@
 //
 // A3FE0-A3FFF (attribute cells 0xFF0-0xFFF) is the PC-98's memory switch:
 // eight configuration bytes at A3FE2+4i, battery-backed text VRAM on real
-// hardware. np2's pccore_reset writes them from cfg {48 05 04 08 01 00 00 6E}
+// hardware. np21w's pccore_reset writes them from cfg {48 05 04 08 01 00 00 6E}
 // BEFORE the ROM runs, and keeps DIP switch 2 bit 4 (port 0x31) clear so the
 // ROM never re-initialises them. A3FEA is the one that matters most: its low
 // bits say how many 128 KB units of RAM to count, so 04 = 640 KB -- the value
@@ -45,7 +45,7 @@
 // The BIOS POST's screen clear at FECBB sweeps the full 16 KB of text VRAM
 // and would stomp these bytes to 0xE1 -- the ITF's own VRAM test stops at
 // 0x3FDF, sixteen bytes short, precisely to avoid this. So the eight switch
-// bytes live in dedicated registers, reset-loaded with the np2 defaults, and
+// bytes live in dedicated registers, reset-loaded with the np21w defaults, and
 // guest writes anywhere in the 0xFF0-0xFFF cell range are silently dropped:
 // the pre-seeded switch survives every clear exactly as the battery-backed
 // original survives a power cycle. Confirmed in sim/tb_pc98_v30.sv, where
@@ -172,15 +172,15 @@ module pc98_tvram (
             // bit0 C000, bit1 C400, bit2 C800, bit6 CA00, bit3 CC00,
             // bit7 CE00, bit4 D000, bit5 D400.
             //
-            // np2's default here is 0x08, and this was copied from it -- but
+            // np21w's default here is 0x08, and this was copied from it -- but
             // that bit says "there is a ROM at CC00", and this machine has no
             // option ROMs at all. Measured: with 0x08 the boot printed the
             // whole BASIC banner and then jumped into CC00:0000 -- an empty
             // window, all zeros -- and never came back. With 0x00 it walks
             // all eight gates and reaches the Ok prompt.
             //
-            // Do not restore np2's value without also providing the ROM it
-            // claims. (np2's own byte is a saved battery-backed state, which
+            // Do not restore np21w's value without also providing the ROM it
+            // claims. (np21w's own byte is a saved battery-backed state, which
             // on real hardware the last boot's scan wrote; ours has no scan
             // result to inherit because the block above keeps the POST from
             // writing here at all.)

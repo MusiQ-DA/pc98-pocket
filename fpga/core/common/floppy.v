@@ -33,7 +33,7 @@ module floppy
 	// the drive -- so a read of an empty PC/AT drive is simply never answered
 	// until the host gives up, which is what this file has always modelled:
 	// cmd_read_write_hang_at_start accepts the command, sets CB, and stops.
-	// A PC-98's 2HD/2DD drives DO drive READY, and np2kai models a PC-98
+	// A PC-98's 2HD/2DD drives DO drive READY, and np21w models a PC-98
 	// exactly that way (io/fdc.c:176-182, FDC_DriveCheck -> fdcsend_error7).
 	// Set this to 1 on such a machine and the no-media cases below end in a
 	// result phase with a not-ready status instead of parking CB forever;
@@ -490,7 +490,7 @@ wire cmd_read_id_in_progress      = pending_command[4:0] == 5'h0A;
 // the rest of POST then falls out at FFA57 with AH = 0x90, a timeout. The IPL
 // probe of an empty drive is issued right after MEMORY 640KB OK.
 //
-// np2kai is the reference for what a PC-98 answers instead:
+// np21w is the reference for what a PC-98 answers instead:
 //
 //   READ/WRITE DATA and FORMAT TRACK go through FDC_DriveCheck (io/fdc.c:
 //   176-182): !fdd_diskready -> stat = FDCRLT_IC0 | FDCRLT_NR | (hd<<2) | us
@@ -501,7 +501,7 @@ wire cmd_read_id_in_progress      = pending_command[4:0] == 5'h0A;
 //
 //   READ ID does not call DriveCheck: fdd_readid() fails and io/fdc.c:646-650
 //   sets IC0 | FDCRLT_ND instead, i.e. ST0 = 0x40 | hd<<2 | us with ST1 = 0x04.
-//   Followed here rather than "corrected" to NR, because np2 is the model this
+//   Followed here rather than "corrected" to NR, because np21w is the model this
 //   ROM is known to boot on and READ ID is not on the POST path anyway (the
 //   BIOS reaches it only through the INT 1Bh service at FF9E8).
 //
@@ -845,7 +845,7 @@ reg [79:0] reply;
 always @(posedge clk) begin
 	if(~rst_n | sw_reset)                                                     reply <= 80'd0;
 	else if(cmd_invalid_start)                                                reply <= { reply[79:8], 8'h80 };
-	// np2: recalibrating a drive with no media answers ST0 = SE|IC0|NR (the
+	// np21w: recalibrating a drive with no media answers ST0 = SE|IC0|NR (the
 	// "not ready" the BIOS falls through on), not the plain seek-end the old
 	// code returned with the motor already on.
 	else if(delay_last_cycle && cmd_recalibrate_in_progress)                  reply <= { reply[79:8], 8'h20 | { 6'd0, selected_drive } |
@@ -855,10 +855,10 @@ always @(posedge clk) begin
 		| ((NOT_READY_ENDS_COMMAND != 0 && (selected_drive[1] || ~media_present[selected_drive[0]])) ? 8'h48 : 8'h00) };
 	// NOT READY, ahead of the read/write error replies for the reason given at
 	// reply_left. Byte order is LSB-first: ST0, ST1, ST2, C, H, R, N.
-	//   READ/WRITE DATA: np2's FDC_DriveCheck -- ST0 = IC0|NR|hd<<2|us, ST1 =
+	//   READ/WRITE DATA: np21w's FDC_DriveCheck -- ST0 = IC0|NR|hd<<2|us, ST1 =
 	//   ST2 = 0, and C/H/R/N echoed from the command itself (fdcsend_error7
 	//   sends fdc.C/H/R/N, which get_chrn() has just loaded from cmds[1..4]).
-	//   The head bit is the command's HDS (command[50]), which is what np2's
+	//   The head bit is the command's HDS (command[50]), which is what np21w's
 	//   get_hdus() reads; the unit field names the drive whose media_present
 	//   was tested, which in this file is selected_drive.
 	else if(cmd_read_write_notready_at_start)                                reply <= { 24'd0, command[23:16], command[31:24], 7'b0,command[32], command[47:40], 8'h00, 8'h00, (8'h48 | { 5'd0, command[50], selected_drive }) };
@@ -866,7 +866,7 @@ always @(posedge clk) begin
 	//   just below it and only the status bytes differ. Its HDS byte is
 	//   command[31:24], so the head bit is command[26].
 	else if(cmd_format_notready_at_start)                                    reply <= { 24'd0, command[23:16], sector[selected_drive[0]], 7'b0,command[26],             cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h48 | { 5'd0, command[26],  selected_drive }) };
-	//   READ ID: np2 io/fdc.c:646-650 gives IC0 without NR and ST1 = ND (0x04)
+	//   READ ID: np21w io/fdc.c (FDC_ReadID) gives IC0 without NR and ST1 = ND (0x04)
 	//   instead, so the BIOS's FF98F decoder lands on AH = 0xC0 rather than
 	//   0x60. Its C/H/R/N come from the same registers the success reply below
 	//   uses. READ ID is a two-byte command, so at cmd_read_id_start `command`
@@ -885,7 +885,7 @@ always @(posedge clk) begin
 	else if(state == S_WAIT_FOR_FORMAT_INPUT && cmd_format_in_input_finish)   reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h40 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	else if(cmd_read_id_finished)                                             reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	// A unit with no media (or no drive at all, US>1) must answer with the FAULT
-	// bit set -- ST3 = 0x80|HD|US, the np2 "drive not equipped" reply. Returning
+	// bit set -- ST3 = 0x80|HD|US, the np21w "drive not equipped" reply. Returning
 	// a merely-not-ready ST3 makes the PC-98 BIOS wait for a ready that can
 	// never come: it re-issues SENSE DRIVE STATUS forever and never reaches the
 	// drive-A IPL read.

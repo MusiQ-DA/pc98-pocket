@@ -3,12 +3,12 @@
 // The RTL (pc98_gdc) latches each EXECUTE-class command (VECTE 0x6C, TEXTE
 // 0x68) with a snapshot of the vector parameters and throttles the guest --
 // the FIFO-empty status bit stays clear -- until this engine retires it.
-// What runs here is np2kai's engine (io/gdc_sub.c + io/gdc_pset.c) with the
+// What runs here is np21w's engine (io/gdc_sub.c + io/gdc_pset.c) with the
 // VRAM layer retargeted: every pixel is a read-modify-write of one guest
 // byte through the self-test master, which takes the bus through hold --
 // cycle stealing, exactly what the real chip's memory cycles did.
 //
-// np2's own scoping is kept: only the SLAVE draws (np2kai gdc.c guards with
+// np21w's own scoping is kept: only the SLAVE draws (np21w gdc.c guards with
 // "id != GDCWORK_MASTER"); the master's EXECUTEs retire immediately. GRCG-
 // with-GDC (port 0x7C bit 3) is not carried over yet -- its tile registers
 // live in RTL this side cannot see -- so drawing in that mode falls back to
@@ -37,7 +37,7 @@
 #define GDC_OP_TEXTE  0x68u
 
 // The snapshot, nineteen bytes in the order the RTL packs them: VECTW's
-// eleven, CSRW's four (np2 reads a dword -- the fourth byte's high nibble
+// eleven, CSRW's four (np21w reads a dword -- the fourth byte's high nibble
 // is the dot address), TEXTW's two, ZOOM, the WRITE-mode byte.
 struct gdc_snap {
     uint8_t ope;
@@ -52,7 +52,7 @@ struct gdc_snap {
     uint8_t write_mode;
 };
 
-// np2's direction table: {x, y, x2, y2} steps for octants 0-7 and the
+// np21w's direction table: {x, y, x2, y2} steps for octants 0-7 and the
 // SL-flavoured 8-15 (io/gdc_sub.c vectdir).
 static const int8_t vectdir[16][4] = {
     { 0, 1, 1, 0 },
@@ -73,11 +73,11 @@ static const int8_t vectdir[16][4] = {
     { -1, 1, 0, 1 },
 };
 
-// np2's gdcplaneseg order: EAD bits 15-14 select the plane; the bases are
+// np21w's gdcplaneseg order: EAD bits 15-14 select the plane; the bases are
 // the hardware windows (A8000=B, B0000=R, B8000=G, E at E0000).
 static const uint32_t plane_base[4] = { 0xE0000, 0xA8000, 0xB0000, 0xB8000 };
 
-// np2's gdcbitreverse, built at boot: a table would cost 256 ROM bytes.
+// np21w's gdcbitreverse, built at boot: a table would cost 256 ROM bytes.
 static uint8_t bitreverse[256];
 static int gdc_inited = 0;
 
@@ -145,7 +145,7 @@ static void vr_write8(uint32_t addr, uint8_t v)
     }
 }
 
-// The pset state np2's gdcpset_prepare/gdcpset carry.
+// The pset state np21w's gdcpset_prepare/gdcpset carry.
 static struct {
     uint16_t pattern;
     uint16_t x, y;
@@ -158,7 +158,7 @@ static void pset_prepare(uint32_t csrw, uint16_t pat, uint8_t ope)
     pset.pattern = pat;
     pset.base = plane_base[(csrw >> 14) & 3u];
     pset.op = ope & 3u;
-    // np2 hardcodes forty words per drawing line (640 dots); PITCH unused.
+    // np21w hardcodes forty words per drawing line (640 dots); PITCH unused.
     uint32_t rem;
     pset.y = (uint16_t) udiv32(csrw & 0x3FFFu, 40u, &rem);
     pset.x = (uint16_t) ((rem << 4) + ((csrw >> 20) & 0x0Fu));
@@ -199,7 +199,7 @@ static void pset_at(int x, int y)
     vr_write8(addr, v);
 }
 
-// ---- the primitives, np2's algorithms verbatim ---------------------------
+// ---- the primitives, np21w's algorithms verbatim ---------------------------
 
 static void vectl(const struct gdc_snap *g)
 {
@@ -318,7 +318,7 @@ static void vectr(const struct gdc_snap *g)
     }
 }
 
-// Circles: np2 interpolates off a 4097-entry sqrt table (8 KB); the same
+// Circles: np21w interpolates off a 4097-entry sqrt table (8 KB); the same
 // curve comes from s = 32768*sin(pi/4 * i/m), computed with one Newton step
 // on the half-angle identity -- close to a dot at r = 2047.
 static void vectc(const struct gdc_snap *g)
@@ -444,7 +444,7 @@ void gdc_poll(void)
         init_bitreverse();
         gdc_inited = 1;
     }
-    // np2 draws only on the slave; the master's EXECUTEs still retire so
+    // np21w draws only on the slave; the master's EXECUTEs still retire so
     // its throttle releases.
     for (int ch = GDC_CH_SLAVE; ch >= GDC_CH_MASTER; ch--) {
         uint32_t st = *GDCD_STATUS(ch);

@@ -1,7 +1,7 @@
 //
 // pc98_text_render -- the 80x25 text plane, 8x16 cells on 640x400.
 //
-// Attribute byte, from np2 vram/maketext.h:
+// Attribute byte, from np21w vram/maketext.h:
 //
 //     bit 0  0x01  ~secret   (0 = the cell is not drawn)
 //     bit 1  0x02  blink
@@ -45,7 +45,7 @@ module pc98_text_render #(
     // 40 columns: mode1 bit 2 (the port 0x68 register) makes each cell
     // sixteen dots -- the glyph byte shifts at half rate so every bit lasts
     // two dots, and a column consumes TWO cells, the even one carrying the
-    // character. np2kai does the same split (pccore.c: gdc.mode1 & 4 ->
+    // character. np21w does the same split (pccore.c: gdc.mode1 & 4 ->
     // maketext40, which steps edi by 2 and doubles each byte through
     // text_tblx2).
     input  wire        wide,
@@ -121,7 +121,7 @@ module pc98_text_render #(
 
     // ---- where the screen starts, and how wide a row is -------------------
     //
-    // np2kai vram/maketext.c, which is the authority for the TEXT side:
+    // np21w vram/maketext.c, which is the authority for the TEXT side:
     //
     //     pitch = gdc.m.para[GDC_PITCH] & 0xfe;
     //     esi   = LOW12(LOADINTELWORD(gdc.m.para + GDC_SCROLL));
@@ -145,7 +145,7 @@ module pc98_text_render #(
     wire [11:0] next_rowbase = gdc_live
         ? 12'(next_row * eff_pitch)
         : ({1'b0, next_row, 6'd0} + {3'b000, next_row, 4'd0});
-    // In the cell index space a wide column occupies two slots (np2kai's
+    // In the cell index space a wide column occupies two slots (np21w's
     // edi += 2 per column), so the column term doubles.
     wire [11:0] next_cell    = eff_start + next_rowbase
                              + (wide ? {5'd0, next_col[5:0], 1'b0}

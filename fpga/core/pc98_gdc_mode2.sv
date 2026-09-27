@@ -3,7 +3,7 @@
 //
 // Same shape as pc98_gdc_mode1 (port 0x68): a "bit set/reset" byte whose bits
 // 3:1 pick a flip-flop and whose bit 0 is the new value, and which is only a
-// mode write at all when the top nibble is clear. np2kai io/gdc.c, gdc_o6a:
+// mode write at all when the top nibble is clear. np21w io/gdc.c, gdc_o6a:
 //
 //     if (!(dat & 0xf8)) {
 //         bit = (dat >> 1) & 3;
@@ -14,7 +14,7 @@
 // this port has four flip-flops, not eight.
 //
 // BIT 0 IS THE ONE THAT MOVES MEMORY. It selects analog (sixteen-colour) mode,
-// and in np2kai that is not a palette switch -- it RE-MAPS VRAM
+// and in np21w that is not a palette switch -- it RE-MAPS VRAM
 // (i386c/cpumem.c, memm_vram):
 //
 //     memfn0.rd8[0xa8000 >> 15] = vacc->rd8;   // B
@@ -30,7 +30,7 @@
 // That is why a core with three planes works: it is in digital mode, where
 // three is right.
 //
-// AND IT IS GATED. np2kai only acts on bit 0 while gdc.display's analog bit
+// AND IT IS GATED. np21w only acts on bit 0 while gdc.display's analog bit
 // is set (`if (gdc.display & (1 << GDCDISP_ANALOG))`), which is a machine
 // capability rather than a mode -- a machine without the sixteen-colour board
 // ignores the write. This core has the planes, so `analog_capable` is tied
@@ -44,7 +44,7 @@
 //     case 0x83: gdc.clock |=  1;      case 0x85: gdc.clock |=  2;
 //
 // d[2] picks the bit, d[0] the value -- the same set/reset idea in a wider
-// encoding. The field is the machine's GDC clock switch: np2kai shows it as
+// encoding. The field is the machine's GDC clock switch: np21w shows it as
 // "2.5MHz"/"5MHz" (np2info, bit 7 is a shadow flag it toggles when the field
 // hits 3, pccore.c), and in its renderers it changes what the slave GDC's
 // PITCH means -- maketgrp doubles s_pitch while the flag is clear, so a

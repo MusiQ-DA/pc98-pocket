@@ -1,7 +1,7 @@
 //
-// tb_pc98_egc -- the charger's engine, against np2kai's arithmetic.
+// tb_pc98_egc -- the charger's engine, against np21w's arithmetic.
 //
-// pc98_egc's registers are np2kai io/egc.c; the engine that consumes them is
+// pc98_egc's registers are np21w io/egc.c; the engine that consumes them is
 // mem/memegc.c's egc_writebyte/egc_readbyte. This bench drives the sequencer
 // with the EGC on and checks, per plane, the bytes that land in memory:
 //
@@ -233,7 +233,7 @@ module tb_pc98_egc;
         g_wr(20'hA8200, 8'h5A);          // value written; patreg takes C3..
         want("pat load write: plane B value", store[p0(20'hA8200, 2'd0)], 8'h5A);
         // Now a raster write through the pattern: ope 0x0800, code 0x88 is
-        // the general engine with minterms 7 and 3 set -- np2kai's table
+        // the general engine with minterms 7 and 3 set -- np21w's table
         // order, P.S.D | P.~S.D, which is P.~D... no: both terms need D, so
         // it is P AND D with the source irrelevant. The constants here:
         // patreg B holds C3 (loaded above), destination 5A (this test's

@@ -81,7 +81,7 @@ module PERIPHERALS #(
         input   logic           gv_rd_done,
         input   logic           font_wr_clk,
         input   logic           font_wr_en,
-        input   logic   [10:0]  font_wr_addr,
+        input   logic   [11:0]  font_wr_addr,
         input   logic   [15:0]  font_wr_data,
         output  logic   [5:0]   VID_R,
         output  logic   [5:0]   VID_G,
@@ -366,7 +366,7 @@ module PERIPHERALS #(
     // and 0xCC have no XT counterpart at all, so pc98_fdc_glue answers them:
     // 0xBE is a real latch (the BIOS steers itself with the readback -- ITF
     // FAFD0 tests bit 0 to pick between 0x90 and 0xC8, BIOS FF3C3 does a
-    // read-modify-write of it), and 0x94/0xCC are np2kai's fdc_i94 constants
+    // read-modify-write of it), and 0x94/0xCC are np21w's fdc_i94 constants
     // rather than the written byte. The glue is instantiated two thousand
     // lines down, beside floppy.v; these are its outputs reaching back.
     logic [7:0] fdc_mode_readback;   // 0xBE
@@ -375,7 +375,7 @@ module PERIPHERALS #(
     logic       fdc_glue_irq_2hd;    // slave IRQ11 -> INT 13h
     logic       fdc_glue_irq_2dd;    // slave IRQ10 -> INT 12h
 
-    // np2kai's guard (io/fdc.c, first statement of fdc_o92/fdc_i90/fdc_i92):
+    // np21w's guard (io/fdc.c, first statement of fdc_o92/fdc_i90/fdc_i92):
     // the window chgreg did NOT select ignores writes and reads 0xFF. Decoded
     // here rather than from floppy0_chip_select_n because that is declared a
     // hundred lines further down; the four ports are the same four.
@@ -419,7 +419,7 @@ module PERIPHERALS #(
     // was only WHERE it listened: 0x03F0-0x03F7, the PC/XT's window. A PC-98
     // guest writes 0x90/0x92 (2HD) and 0xC8/0xCA (2DD).
     //
-    // np2kai io/fdc.c attaches both groups to the same four handlers
+    // np21w io/fdc.c attaches both groups to the same four handlers
     // (`iocore_attachcmnoutex(0x0090, 0x00f9, fdco90, 4)` and the same for
     // 0x00c8), so the two windows are one register set:
     //
@@ -515,11 +515,11 @@ module PERIPHERALS #(
     logic   [2:0]   interrupt_cascade_out;
     logic           interrupt_cascade_io;
 
-    // np2's timer-write quirk, decoded at the source: the byte lands in the
+    // np21w's timer-write quirk, decoded at the source: the byte lands in the
     // i8253 on the trailing edge of the I/O write, and on that same edge the
     // master PIC's IRR bit 0 drops if the byte was a channel-0 count or a
     // control word aimed at channel 0 with a real read/load code (a latch
-    // command arms nothing, so np2 leaves the request alone for it).
+    // command arms nothing, so np21w leaves the request alone for it).
     logic           pit_write_cycle_q;
     wire            pit_write_cycle  = ~timer_chip_select_n & ~io_write_n;
     wire            pit_write_done   = pit_write_cycle_q & ~pit_write_cycle;
@@ -563,7 +563,7 @@ module PERIPHERALS #(
         //.slave_program_or_enable_buffer     (),
         .interrupt_acknowledge_n    (interrupt_acknowledge_n),
         .interrupt_to_cpu           (interrupt_to_cpu_buf),
-        // np2 (io/pit.c): writing the interval timer -- a count byte for
+        // np21w (io/pit.c): writing the interval timer -- a count byte for
         // channel 0, or a control word aimed at it -- clears the master's IRR
         // bit 0, so an interrupt latched before the reprogram cannot fire
         // after it.  The strobe is decoded below, next to the PIT.
@@ -575,7 +575,7 @@ module PERIPHERALS #(
         //
         // MASTER IRQ6 IS NOT THE FLOPPY. That is the PC/XT's wiring; on a
         // PC-98 IRQ6 is INT3, a free expansion line, and the FDC is slave
-        // IRQ10/IRQ11 -- np2kai io/fdc.c:46-51 (pic_setirq 0x0a / 0x0b) and
+        // IRQ10/IRQ11 -- np21w io/fdc.c's fdc_intwait (pic_setirq 0x0a / 0x0b) and
         // the BIOS's own gates at FF438 and FF4B3, which read the SLAVE mask
         // at 0x0A and refuse the call if bit 2 / bit 3 is set. Driving
         // floppy.v's irq in here is what put LVL 41 on the POST panel: a
@@ -637,12 +637,12 @@ module PERIPHERALS #(
         .external_irr_clear         (8'h00),
         // IRQ3 is the FDC's own interrupt (RECALIBRATE finding no drive);
         // IRQ2 is the XTMASK pulse the 100 ms 0xCC timer fires. IRQ4 is the
-        // PC-9801-86's: np2kai sound/opntimer.c:13 has the board's four jumper
+        // PC-9801-86's: np21w sound/opntimer.c (s_irqtable) has the board's four jumper
         // positions as {0x03, 0x0d, 0x0a, 0x0c} -- INT0/INT6/INT41/INT5 -- and
         // the factory setting is INT5, which is IRQ12, slave bit 4.
         //
         // With the real controller those two lines come from floppy.v through
-        // pc98_fdc_glue, steered by chgreg exactly as np2kai's fdc_intwait
+        // pc98_fdc_glue, steered by chgreg exactly as np21w's fdc_intwait
         // steers pic_setirq (io/fdc.c:46-51): 2HD window -> IRQ11 (bit 3,
         // INT 13h, handler at FFAF6), 2DD window -> IRQ10 (bit 2, INT 12h,
         // handler at FFB69).
@@ -663,7 +663,7 @@ module PERIPHERALS #(
     // 8253
     //
     // The PC-98 interval timer counts at the machine's 2.4576 MHz PIT clock
-    // (1.9968 MHz on the 8 MHz class; np2's clk_base for this VM is 2.4576).
+    // (1.9968 MHz on the 8 MHz class; np21w's clk_base for this VM is 2.4576).
     // The XT's 1.193181 MHz below is half that and halves every programmed
     // rate: the BIOS's FDE20 load of 0x6000 ticks at 50 Hz instead of 100 Hz.
     // 42.954545 MHz is not an integer multiple (17.48...), so phase-accumulate
@@ -702,14 +702,14 @@ module PERIPHERALS #(
     // first pass through the loop, one latch short of the read that halts.
     //
     // The beeper's TONE is counter 1, not counter 2. Counter 2 is the
-    // RS-232C baud source (np2 io/pit.c: pit_o75 -> pit_setrs232cspeed);
+    // RS-232C baud source (np21w io/pit.c: pit_o75 -> pit_setrs232cspeed);
     // the B6h the ITF writes at F805DC is that channel's init, not a beep.
     // The boot beep is the ITF's F80738 76h -- counter 1, LSB+MSB, mode 3
     // -- with the divisor fed to 0x73 at F80740/48, exactly the channel
-    // np2's beeper follows (pit_o73 -> beep_hzset / beep_lheventset).
+    // np21w's beeper follows (pit_o73 -> beep_hzset / beep_lheventset).
     //
     // The beeper's MUTE is system-port C bit 3, INVERTED: 1 = silent,
-    // 0 = sounding (np2 sound/beepc.c: buz = (sysport.c & 8) ? 0 : 1), and
+    // 0 = sounding (np21w sound/beepc.c: buz = (sysport.c & 8) ? 0 : 1), and
     // the latch resets to 0xF9 -- muted. The gate is the LATCH, the thing
     // 0x35 reads back, not the XT 8255's port C pin: the BIOS only ever
     // issues bit set/reset words to 0x37, never a mode word, so the chip
@@ -896,8 +896,8 @@ module PERIPHERALS #(
     end
     // THE MOCK IS GONE. pc98_gdc is the real command and parameter interface --
     // see docs/PC98_GDC_DESIGN.md for what it does and does not implement, and
-    // the module header for the two things np2kai's enum would have got wrong.
-    // One note carried over: the mock's bit 7 was CLEAR, and np2kai's gdc_i60
+    // the module header for the two things np21w's enum would have got wrong.
+    // One note carried over: the mock's bit 7 was CLEAR, and np21w's gdc_i60
     // sets it unconditionally. The real module sets it.
     //
     // Text GDC at 0x60/0x62, graphics GDC at 0xA0/0xA2. The even port is
@@ -1023,12 +1023,12 @@ module PERIPHERALS #(
     //
     // 0x42 is the printer side of 0x40-0x4F; the ITF trace has it tested for
     // bit 1 clear. Zero satisfies that and claims nothing else.
-    // 0x31 is DIP switch 2 (np2's default set is 3E E3 7B; the E3 is this
+    // 0x31 is DIP switch 2 (np21w's default set is 3E E3 7B; the E3 is this
     // port). Bit 0 set is the boot order: the ROM goes straight to int 1E and
     // skips IVT[1F]'s D800:2A00, an entry for a BASIC option-ROM card nothing
     // here has. Bit 4 CLEAR tells the ROM NOT to re-initialise the memory
     // switch at A3FE0 -- on a real machine that is battery-backed VRAM, and
-    // np2 keeps the bit clear because it pre-writes the switch bytes itself
+    // np21w keeps the bit clear because it pre-writes the switch bytes itself
     // at every reset. pc98_tvram does the same now (it pre-seeds
     // {48 05 04 08 01 00 00 6E} on reset and drops guest writes to those
     // cells), so the bit must be clear here too: the ROM's own writer tops
@@ -1047,7 +1047,7 @@ module PERIPHERALS #(
     //
     // A constant A0 could never carry that: the flag has to be written and
     // read back. So the latch lives here, resetting to F9 and answering both
-    // the whole-byte write at 0x35 and the single-bit write at 0x37 (np2
+    // the whole-byte write at 0x35 and the single-bit write at 0x37 (np21w
     // io/sysport.c, sysp_o35 and sysp_o37, as a behaviour reference). Note
     // that a MODE word -- anything with a bit set in the top nibble -- leaves
     // it alone; only the bit set/reset form touches it.
@@ -1086,7 +1086,7 @@ module PERIPHERALS #(
     // modem lines, bit 0 the calendar clock -- uPD4990's cdat, the serial
     // data line the BIOS clocks 48 bits out of (FD80's 0x15D3C loop issues
     // the uPD4990 read command at 0x20 and samples THIS bit eight times per
-    // byte, six bytes: the date). np2 answers bit3 | rs232c_stat()&0xe0 |
+    // byte, six bytes: the date). np21w answers bit3 | rs232c_stat()&0xe0 |
     // uPD4990.cdat; with the stock dip set (3E -> bit3=1), no modem (0) and
     // a resting clock line (0) that is 0x08. The port used to be unmodelled
     // here and read as open-bus FF -- every date bit 1, a calendar no real
@@ -1166,11 +1166,11 @@ module PERIPHERALS #(
     // ------------------------------------------------- keyboard 8251
     //
     // 0x41 data / 0x43 status+command: the keyboard's 8251. The chip model
-    // itself -- np2's io/serial.c semantics, the break-edge reset, the 0x60
+    // itself -- np21w's io/serial.c semantics, the break-edge reset, the 0x60
     // answer and its timing against the ITF's poll window -- lives in
     // pc98_kbd8251.sv with the full derivation; here it is only decoded and
     // wired. Note the decode is exact and 0x73 is NOT claimed: 0x73 is the
-    // beep data port (np2 pit_o73), and the ITF's no-keyboard path programs
+    // beep data port (np21w pit_o73), and the ITF's no-keyboard path programs
     // it twice -- arming ACKs there is what blanked the Pocket's screen.
     wire kbd_data_select = pc98_io_exact & (address[7:0] == 8'h41);
     wire kbd_stat_select = pc98_io_exact & (address[7:0] == 8'h43);
@@ -1412,7 +1412,7 @@ module PERIPHERALS #(
     // 5 decides whether a cell's high byte can make it a kanji at all, and
     // the POST's own printer (FE0F0) stores single bytes into the code plane
     // and never clears that high byte, so the machine HAS to be able to
-    // honour the "all cells ANK" mode the same way np2's gdc_restorekacmode
+    // honour the "all cells ANK" mode the same way np21w's gdc_restorekacmode
     // does. Same trailing-edge shape as the system port above it: address and
     // command do not change together, and a mode flip taken from a glitched
     // sweep through 0x68 would change every cell's width.
@@ -1476,14 +1476,14 @@ module PERIPHERALS #(
 
     assign dbg_gdc_clk = gdc_clk;
 
-    // Bits 3 and 2 of the same register are the EGC's arm and switch: np2kai
+    // Bits 3 and 2 of the same register are the EGC's arm and switch: np21w
     // only honours bit 2 (VOPBIT_EGC) while bit 3 is set AND the G-RCG is
     // the EGC-capable one (io/gdc.c gdc_o6a's `mode2 & 0x08` and
     // `grcg.chip == 3`). This machine's charger is, so the gate is those two
     // flip-flops and nothing else.
     assign egc_active = mode2_q[3] & mode2_q[2];
 
-    // Ports 0xA4/0xA6: the display and access page bits (np2kai gdc_oa4/
+    // Ports 0xA4/0xA6: the display and access page bits (np21w gdc_oa4/
     // gdc_oa6 -- gdcs.disp and gdcs.access). The access bit banks every
     // graphics window between the two 640x400 pages, and pc98_gvram_seq
     // consumes it; the display bit is the graphics raster's to consume.
@@ -1549,7 +1549,7 @@ module PERIPHERALS #(
     end
 
     // Ports 0x4A0-0x4AF: the EGC register file, forwarded one strobe at a
-    // time to the sequencer that owns the engine. np2kai hangs no read
+    // time to the sequencer that owns the engine. np21w hangs no read
     // handlers on these (iocore_attachout only), so neither does this.
     wire egc_cs = pc98_io_exact & (address[15:4] == 12'h04A);
     assign egc_rg = address[3:0];
@@ -1595,11 +1595,24 @@ module PERIPHERALS #(
         .rst  (reset),
         .wr   (mode68_wr),
         .d    (mode68_data),
-        // mode1 bit 2 is the 40-column switch the text renderer reads; bit 3's
-        // 8x8/8x16 font select and the graphics-display bits are future work.
+        // mode1 bit 2 is the 40-column switch the text renderer reads; bit 3
+        // picks the font bank -- set is the 8x16 ANK, clear the 8x8 ANK each
+        // of whose rows serves two cell lines. The graphics-display bits are
+        // future work.
         .mode1 (pc98_mode1),
         .bitac(pc98_bitac)
     );
+
+    // The font-bank select, latched at the frame boundary the way
+    // gdc_wide_px is on the dot clock: the fill below runs a row ahead of the
+    // raster, and taking mode1[3] raw could put a mixed bank into one row.
+    logic pc98_ank8 = 1'b0;
+    logic gdc_vs_q3 = 1'b0;
+    always_ff @(posedge clock) begin
+        gdc_vs_q3 <= gdc_vs_q;
+        if (gdc_vs_q & ~gdc_vs_q3)
+            pc98_ank8 <= ~pc98_mode1[3];
+    end
 
     wire       pc98_st_nz;
     wire [7:0] pc98_rb_dbg;
@@ -1773,6 +1786,7 @@ module PERIPHERALS #(
         .wr_addr(font_wr_addr), .wr_data(font_wr_data),
         .rd_clk(clock),
         .code(pc98_ank_code), .line(pc98_ank_line),
+        .sel8(pc98_ank8),
         .row(pc98_ank_row)
     );
 
@@ -1856,7 +1870,7 @@ module PERIPHERALS #(
     // from the PC/XT base and instantiated unconditionally, so it has been
     // occupying a device that is at 91% ALM.
     //
-    // np2kai agrees about the generation: SUPPORT_IDEIO is in its ia32 /
+    // np21w agrees about the generation: SUPPORT_IDEIO is in its ia32 /
     // PC-9821 definitions only, while the V30/286 common build gets
     // SUPPORT_SCSI. SCSI at 0xCC0 is what replaces this.
     // (Nothing is left to read out of that block: the request output it used
@@ -1994,13 +2008,13 @@ module PERIPHERALS #(
     // the softcore's way in, and the one register the board keeps outside the
     // chip. mgmt chip-select 0xF5, next to pc98_scsi's 0xF4.
     //
-    // np2kai cbus/board86.c:171 binds the ports as
+    // np21w cbus/board86.c (board86_bind) binds the ports as
     //   cbuscore_attachsndex(0x188 + g_opna[0].s.base, opna_o, opna_i)
     // with s.base 0 for the default dip setting (board86.c:158-162), and only
     // the even addresses in the window are the board.
     //
     // 0xA460 bit 0 is the odd one out: it is not a YM2608 register at all.
-    // np2kai cbus/pcm86io.c:45-51 has pcm86_oa460 call fmboard_extenable(val&1)
+    // np21w cbus/pcm86io.c's pcm86_oa460 calls fmboard_extenable(val&1)
     // and board86.c:107-120 makes that the difference between a 6-channel
     // stereo OPNA with a second register pair and a 3-channel mono OPN. Every
     // PC-98 FM driver sets it, and without it half the chip is invisible.
@@ -2202,7 +2216,7 @@ module PERIPHERALS #(
         // address[1] is what separates status from data within each pair, and
         // address[6] is what separates the 2HD window from the 2DD one --
         // 0x90/0x92/0x94 have it clear, 0xC8/0xCA/0xCC set. The glue needs
-        // that to apply np2kai's ((port >> 4) ^ chgreg) & 1 guard and to know
+        // that to apply np21w's ((port >> 4) ^ chgreg) & 1 guard and to know
         // which slave line an interrupt belongs on.
         .sel_stat      (fdd_fifo_win & ~fdc_addr_eff[1]),
         .sel_data      (fdd_fifo_win &  fdc_addr_eff[1]),
@@ -2596,12 +2610,12 @@ module PERIPHERALS #(
         else if (pg_a4_cs & ~io_read_n)
         begin
             data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= {7'b0, gvram_disp_page};   // np2kai gdc_ia4
+            data_bus_out <= {7'b0, gvram_disp_page};   // np21w gdc_ia4
         end
         else if (pg_a6_cs & ~io_read_n)
         begin
             data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= {7'b0, gvram_access_page}; // np2kai gdc_ia6
+            data_bus_out <= {7'b0, gvram_access_page}; // np21w gdc_ia6
         end
         else if (gdc_stat_read)
         begin

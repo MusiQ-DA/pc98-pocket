@@ -3,7 +3,7 @@
 // font image.
 //
 // The subtle part is not the arithmetic, it is what a TVRAM cell actually
-// HOLDS. It is not the raw JIS code. np2's renderer takes the cell as a word
+// HOLDS. It is not the raw JIS code. np21w's renderer takes the cell as a word
 // and computes (kc & 0x7f7f) << 4 against an internal layout that fontv98.c
 // fills at 0x20000 + (ku_index << 4) + (ten - 0x20) * 0x1000, and those agree
 // only if

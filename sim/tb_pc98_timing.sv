@@ -1,7 +1,7 @@
 //
 // tb_pc98_timing -- is the raster the one PC-98 software expects?
 //
-// The rates are what matter, and they come from np2's GDC clock table
+// The rates are what matter, and they come from np21w's GDC clock table
 // (io/gdc.c): a 21.0526 MHz dot clock, 106 characters of 8 dots across, and a
 // vertical total that puts the frame rate at 56.4 Hz. Getting the totals wrong
 // gives a picture that is present but out of spec, which a scaler may well hide
@@ -81,7 +81,7 @@ module tb_pc98_timing;
         if (seen_h == 0)             begin $display("  FAIL no hsync");     errors++; end
         if (seen_v == 0)             begin $display("  FAIL no vsync");     errors++; end
 
-        // The rates those totals imply, against np2's table.
+        // The rates those totals imply, against np21w's table.
         $display("  H rate           : %.1f Hz (want 24826)", DOT_HZ / (848.0));
         $display("  V rate           : %.2f Hz (want 56.4)",  DOT_HZ / (848.0 * 440.0));
         if (DOT_HZ / 848.0 < 24500.0 || DOT_HZ / 848.0 > 25200.0) begin

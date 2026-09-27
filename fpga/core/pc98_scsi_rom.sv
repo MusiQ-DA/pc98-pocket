@@ -19,7 +19,7 @@
 //
 // So: signature 55 AA at offset 9, entry far-called at offset 000C, windows
 // 4 KB apart from D000. D200 is the third of them, which is where the 55
-// board sits and where np2kai copies its own stub (cbus/scsiio.c:735).
+// board sits and where np21w copies its own stub (cbus/scsiio.c:735).
 //
 // WHAT IS HERE. The window and a stub that survives the scan: the signature,
 // and an entry that marks the window as claimed and returns. It does NOT
@@ -54,7 +54,7 @@ module pc98_scsi_rom (
     initial begin
         for (int i = 0; i < ROM_BYTES; i++) rom[i] = 8'h00;
 
-        // 0000: three far-return entry slots, the shape np2's stub uses. A
+        // 0000: three far-return entry slots, the shape np21w's stub uses. A
         // board that is asked for a service it does not implement returns
         // rather than faulting.
         rom[8'h00] = 8'hCB; rom[8'h01] = 8'h90; rom[8'h02] = 8'h90;  // retf
@@ -62,7 +62,7 @@ module pc98_scsi_rom (
         rom[8'h06] = 8'hCB; rom[8'h07] = 8'h90; rom[8'h08] = 8'h90;  // retf
 
         // 0009: the signature the scan at FFF30 looks for, and the size byte
-        // after it (np2's stub carries 02).
+        // after it (np21w's stub carries 02).
         rom[8'h09] = 8'h55; rom[8'h0A] = 8'hAA; rom[8'h0B] = 8'h02;
 
         // 000C: the initialisation entry, far-called with BX pointing at this
@@ -72,7 +72,7 @@ module pc98_scsi_rom (
         //   000C  C6 07 FF    mov byte [bx],0FFh
         //   000F  CB          retf
         //
-        // A byte, not np2's word: the scan reads one byte at [bx] and the next
+        // A byte, not np21w's word: the scan reads one byte at [bx] and the next
         // byte belongs to the next window, which must stay zero or that window
         // is silently skipped.
         rom[8'h0C] = 8'hC6; rom[8'h0D] = 8'h07; rom[8'h0E] = 8'hFF;

@@ -1,12 +1,12 @@
 //
-// tb_pc98_gdc -- does the GDC put the parameters where np2kai puts them?
+// tb_pc98_gdc -- does the GDC put the parameters where np21w puts them?
 //
 // pc98_gdc's whole job is a lookup: a command byte says where the bytes that
 // follow belong and how many there are. Getting that wrong is not a crash, it
 // is a screen that scrolls to the wrong address, so the table is worth an
 // assertion per entry rather than a reading.
 //
-// The expectations here come from np2kai's io/gdc_cmd.tbl (the 256-entry
+// The expectations here come from np21w's io/gdc_cmd.tbl (the 256-entry
 // {destination, count} table) and io/gdc.c, not from the enum in gdc_cmd.h --
 // two of its names are misleading and both were nearly believed:
 //
@@ -119,9 +119,9 @@ module tb_pc98_gdc;
         // ---- the CSRFORM power-on values -----------------------------------
         // The BIOS's boot sends CSRFORM as ONE byte (the enable with TEXT_LR)
         // and never the full three, so the form the cursor draws with is the
-        // one the chip woke with: np2kai's gdc_reset seeds the MASTER to
+        // one the chip woke with: np21w's gdc_reset seeds the MASTER to
         // {P1=0F, P2=C0, P3=7B} -- top 0, bottom 15, a full block, and P2
-        // bit5 CLEAR so it blinks (np2: a set bit is "does not blink").
+        // bit5 CLEAR so it blinks (np21w: a set bit is "does not blink").
         // Reset-zero made bottom 0: a one-line sliver at the top of the
         // right cell, which is "it blinks, but small and in the wrong
         // place" on hardware.
@@ -183,7 +183,7 @@ module tb_pc98_gdc;
         want("partition 0 SAD took the two", part_sad[0], 16'hBBAA);
 
         // ---- CSRW / CSRFORM -------------------------------------------------
-        // The address is a plain little-endian word (np2kai maketext:
+        // The address is a plain little-endian word (np21w maketext:
         // LOADINTELWORD(para + GDC_CSRW)); the manual's interleaved reading
         // drops bits 7-5 of byte 0 and scrambles the cell -- the bug that
         // made the cursor invisible on hardware.
@@ -211,7 +211,7 @@ module tb_pc98_gdc;
         // bit 6 hblank, bit 5 vsync, bit 2 FIFO empty, and bit 7 CLEAR.
         //
         // Bit 7 is LIGHT PEN DETECT and this machine has no light pen. It was
-        // 1 here, copied from np2kai's unconditional 0x80, and the BIOS hung
+        // 1 here, copied from np21w's unconditional 0x80, and the BIOS hung
         // on it: F305E reads the status, sees the pen, issues LPRD at F3074
         // and waits for DRDY, which never arrives because nothing queues
         // read-back data -- then F3097 starts the whole sequence again. See

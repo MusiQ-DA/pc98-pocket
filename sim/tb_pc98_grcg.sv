@@ -1,5 +1,5 @@
 //
-// tb_pc98_grcg -- the three operations, against np2kai's own expressions.
+// tb_pc98_grcg -- the three operations, against np21w's own expressions.
 //
 // The GRCG is four lines of arithmetic and a counter, and every one of the
 // four is easy to get backwards:
@@ -111,7 +111,7 @@ module tb_pc98_grcg;
         want("mask 0101 -> we 1010",   plane_we, 4'b1010);
 
         // ---- RMW: the data is a mask between tile and what is there -----
-        // np2kai: plane = (plane & ~data) | (data & tile)
+        // np21w: plane = (plane & ~data) | (data & tile)
         set_tiles(8'hC0, 8'hFF, 8'h00, 8'hF0, 8'h0F);
         plane_rdata[0] = 8'h55; plane_rdata[1] = 8'h55;
         plane_rdata[2] = 8'h55; plane_rdata[3] = 8'h55;

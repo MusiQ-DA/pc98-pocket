@@ -10,7 +10,7 @@
 //
 //   1. font.rom's 8x8 ANK bank -- the first 2 KB of the file: 256 glyphs x 8
 //      bytes, MSB = leftmost dot, 1 = dot on, the geometry and polarity the
-//      GPU reads (np2kai font/fontv98.c's V98 layout) -- is staged in through
+//      GPU reads (np21w font/fontv98.c's V98 layout) -- is staged in through
 //      the target-dataslot read path, two 1 KB chunks because the disk
 //      bridge's RAM is 1 KB. font.rom is a required data slot the user
 //      already places, so this adds no file and no user step; if the read

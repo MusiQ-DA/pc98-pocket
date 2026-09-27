@@ -162,7 +162,7 @@ module CHIPSET #(
         input   logic           bios_shadow_flag,
         input   logic           font_wr_clk,
         input   logic           font_wr_en,
-        input   logic   [10:0]  font_wr_addr,
+        input   logic   [11:0]  font_wr_addr,
         input   logic   [15:0]  font_wr_data,
         // SDRAM
         input   logic           enable_sdram,

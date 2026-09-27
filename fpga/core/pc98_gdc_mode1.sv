@@ -3,7 +3,7 @@
 //
 // The real PC-98 has a bank of mode flip-flops the BIOS drives with "bit
 // set/reset" bytes: a write below 0x10 carries a bit number in bits 3:1 and
-// the new value in bit 0. np2 keeps them as gdc.mode1 (io/gdc.c, gdc_o68):
+// the new value in bit 0. np21w keeps them as gdc.mode1 (io/gdc.c, gdc_o68):
 //
 //     bit = 1 << ((dat >> 1) & 7);
 //     dat & 1 ? (mode1 |= bit) : (mode1 &= ~bit);
@@ -27,7 +27,7 @@
 //   * the same ROM toggles the bit for real: OUT 68h,0Bh (set) at FE272,
 //     FEB96 and FEC6A, OUT 68h,0Ah (clear) at FE267, FEC12 and FECA1, and
 //     the CRT-init table walker at FE8B8-FE8E9 writes table[3] = 0x0A or
-//     0x0B picked by bit 3 of the INT 18h mode byte -- the same bit np2's
+//     0x0B picked by bit 3 of the INT 18h mode byte -- the same bit np21w's
 //     bios0x18_0a maps to gdc.mode1 |= 0x20. The ITF does the same dance
 //     around its CG-window test (itf.rom file 0751: OUT 68h,0Bh on the way
 //     in, file 07D5: OUT 68h,0Ah on the way out).
@@ -37,7 +37,7 @@
 // Pocket drew every letter double-width exactly that way, the high bytes
 // holding the ITF VRAM test's 0x55 that a mode-5 machine never looks at.
 //
-// Reset value 0x98 is np2's gdc_biosreset for a 24 kHz CRT (dipsw1-1 clear):
+// Reset value 0x98 is np21w's gdc_biosreset for a 24 kHz CRT (dipsw1-1 clear):
 // bit 5 clear, so a freshly reset machine renders kanji normally.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later

@@ -3,9 +3,9 @@
 //
 // PC-98 lets software read glyphs itself, which is not decoration: the BIOS
 // uses it, and a read that never answers hangs the guest rather than looking
-// wrong. np2 io/cgrom.c and mem/memtram.c between them give the whole thing.
+// wrong. np21w io/cgrom.c and mem/memtram.c between them give the whole thing.
 //
-// Ports, exactly as np2 decodes them:
+// Ports, exactly as np21w decodes them:
 //
 //   0x00A1  code[15:8]      cgrom_oa1: code = (dat << 8) | (code & 0xff)
 //   0x00A3  code[7:0]       cgrom_oa3: code = (code & 0xff00) | dat
@@ -103,7 +103,7 @@ module pc98_cgwindow (
     pc98_glyph_addr u_addr (
         .char_lo    (code[7:0]),
         .char_hi    (code[15:8]),
-        // NOT the GDC mode mask. np2's cgwindowset decides this window by the
+        // NOT the GDC mode mask. np21w's cgwindowset decides this window by the
         // code alone -- `!(cr->code & 0xff00)` takes the ANK path whatever
         // mode1 bit 5 says -- so 8'hFF (high byte decides) is the faithful
         // wiring here, and the BIOS's OUT 68h,0Bh around window access is

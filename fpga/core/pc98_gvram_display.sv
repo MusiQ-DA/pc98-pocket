@@ -175,9 +175,9 @@ module pc98_gvram_display #(
     logic [9:0]  part_rel  = 10'd0;     // line index inside the partition
     logic [14:0] run_base  = 15'd0;     // byte offset of the walked line
 
-    // The clock field changes what PITCH counts (np2kai maketgrp: s_pitch is
+    // The clock field changes what PITCH counts (np21w maketgrp: s_pitch is
     // doubled while the 5MHz flag is clear): at 2.5MHz the register is words
-    // per line, at 5MHz it is bytes per line -- and forced even, np2kai's
+    // per line, at 5MHz it is bytes per line -- and forced even, np21w's
     // `s_pitch &= 0xfe`. SAD stays a word address in both modes.
     wire  [8:0]  pitch_b  = mhz5 ? {1'b0, pitch[7:1], 1'b0}
                                  : {pitch, 1'b0};

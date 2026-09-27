@@ -42,7 +42,7 @@ module i8259 (
 
     input   logic   [7:0]   interrupt_request,
 
-    // np2's timer quirk as an explicit port: a strobe here clears the
+    // np21w's timer quirk as an explicit port: a strobe here clears the
     // corresponding IRR bits (see i8259_Interrupt_Request).  Only the master
     // PIC's bit 0 is ever driven on a PC-98 -- the interval timer's writes.
     input   logic   [7:0]   external_irr_clear

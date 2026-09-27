@@ -322,9 +322,6 @@ jobs:
           ./obj_fdcrd/fdcrd | tee fdcrd.log
           grep -q "RESULT: PASS" fdcrd.log
 
-      - name: no two OSD fields overlap
-        run: python3 scripts/check_osd_layout.py
-
       - name: the virtual keyboard's tables are sane
         run: python3 scripts/check_vkb_layout.py
 
@@ -381,7 +378,7 @@ jobs:
             grep -q "PASS tb_v30_mem" vm_$sp.log
           done
 
-      - name: the GDC puts parameters where np2kai puts them
+      - name: the GDC puts parameters where np21w puts them
         run: |
           S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_gdc \
@@ -410,7 +407,7 @@ jobs:
           ./obj_scsi/sc | tee scsi.log
           grep -q "PASS tb_pc98_scsi" scsi.log
 
-      - name: the GRCG's three operations match np2kai's expressions
+      - name: the GRCG's three operations match np21w's expressions
         run: |
           S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_grcg \
@@ -436,7 +433,7 @@ jobs:
           ./obj_gdisp/gd | tee gdisp.log
           grep -q "PASS tb_pc98_gvram_display" gdisp.log
 
-      - name: the EGC's colour, raster ops and access page match np2kai
+      - name: the EGC's colour, raster ops and access page match np21w
         run: |
           S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_egc \

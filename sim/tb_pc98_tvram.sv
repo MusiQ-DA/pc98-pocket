@@ -34,7 +34,7 @@ module tb_pc98_tvram;
     logic [11:0] fil_cell = 12'h0;
 
     // Held over the first edge so the memory switch registers come out of
-    // reset loaded with the np2 defaults, the way the core's reset does it.
+    // reset loaded with the np21w defaults, the way the core's reset does it.
     // Released with #1 clear of the edge so the flop and the release cannot
     // race.
     logic rst = 1'b1;
@@ -215,7 +215,7 @@ module tb_pc98_tvram;
         // 16 KB screen clear (FECBB) sweeps straight through here on a real
         // machine too, and the battery-backed switch survives it.
         //
-        // These are np2's table (pccore.c) EXCEPT memsw[3], which is 0x00 here
+        // These are np21w's table (pccore.c) EXCEPT memsw[3], which is 0x00 here
         // and 0x08 there. That byte is the mask of installed option ROMs, and
         // N88-BASIC far-calls every window whose bit is set; 0x08 names CC00,
         // which this machine does not populate, so the guest jumped into an

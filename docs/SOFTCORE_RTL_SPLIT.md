@@ -56,7 +56,7 @@
 2. **ステータスの FIFO-empty ビット（bit2）を意図的に落とす** — 実機 7220 の
    バックプレッシャの再現。「FIFO empty 待ち」ループを持つソフトはここで待つ
 3. `draw_req` を出し、softcore が done-level（`0x5000015C`/`0x5000019C`）を
-   トグルするのを待つ。完了時は np2 の `gdc_vectreset` 相当の VECTW 初期化も RTL 側で行う
+   トグルするのを待つ。完了時は np21w の `gdc_vectreset` 相当の VECTW 初期化も RTL 側で行う
 
 問題:
 
@@ -110,7 +110,7 @@
 5. EGC のシフトパイプライン（sft/leng）: 非アライン REP MOVSW blit。
    RTL ではハードウェアのシフトレジスタ意味論（k = (dstbit-srcbit) mod 8、
    direction ビット、bytemask 相当の端数マスク）を直接実装する。
-   検証ベクタは np2kai memegc.c の egcsftb 系から生成する
+   検証ベクタは np21w memegc.c の egcsftb 系から生成する
 
 ---
 
@@ -126,7 +126,7 @@
   HLDA (chipset_aen) を得て**サイクルスチール**する。「hold 中しか勝てない」は
   誤りで、postmon の ROM 読みが実証済み。よって softcore エンジンの GVRAM RMW
   経路は機能する (毎バイト hold 握手 ≒ 実機のメモリサイクル相当)
-- **暫定サーバ実装済み**: `gdc_service.c` — np2kai の vectl/vectt/vectc/vectr/text
+- **暫定サーバ実装済み**: `gdc_service.c` — np21w の vectl/vectt/vectc/vectr/text
   を移植、除算は udiv32、ROM 32K 化 (BRAM 47% → 余裕) で収容。VECTE 捕捉・
   スナップショット 19B・FIFO-empty スロットル・done ベクトルリセットは RTL 側
   (tb_pc98_gdc で検証)
@@ -137,7 +137,7 @@
 
 ## 8. LPEN/CSRR (2026-09-22, 実装)
 
-「LPEN 系」= 読み戻し FIFO 群。np2kai の gdc_i60/gdc_i62 分割どおり:
+「LPEN 系」= 読み戻し FIFO 群。np21w の gdc_i60/gdc_i62 分割どおり:
 - **0x60 (status)**: 常にステータス。bit0 = DRDY (読み戻し FIFO 非空)、
   bit7 = LPEN detect — **立てない** (ペン未接続 + F307C の LPRD/DRDY
   ポールに落ちるのを防ぐ、従来どおり)

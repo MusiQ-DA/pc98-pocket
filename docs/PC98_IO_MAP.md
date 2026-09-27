@@ -1,6 +1,6 @@
 # PC-98 I/O ポートマップ(NP2kai ソース由来)
 
-**出典**: `/Users/hiroya/NP2kai`(AZO234/NP2kai)の `iocore_attach*` 呼び出しと、
+**出典**: np21w `np21w-src-rev106`(NP21/W 0.86 rev106, `/Users/hiroya/repo/np21w/`)の `iocore_attach*` 呼び出しと、
 各デバイス実装(`io/`, `cbus/`, `diskimage/`)の読解。コードは転載していない。
 
 **実機一次資料**: NEC「PC-9800シリーズ テクニカルデータブック HARDWARE編」(1993) —
@@ -683,7 +683,7 @@ bit3 で 0x0A/0x0B を選ぶ。ITF は CG ウィンドウ試験の前後で 0x0B
 
 **0x82-0x85 は実装済み**: `gdc.clock` の 2 ビットフィールドをビットセット/リセット
 (0x82/0x83 が bit0、0x84/0x85 が bit1)。フィールド = 3 で「5MHz GDC」モード
-(np2kai np2info の 2.5MHz/5MHz 表示、pccore.c で bit7 フラグが立つ)。
+(np21w np2info の 2.5MHz/5MHz 表示、pccore.c で bit7 フラグが立つ)。
 スレーブ GDC の **PITCH の単位が変わる**のが実効: 2.5MHz では PITCH は
 ワード数(maketgrp の `s_pitch <<= 1` → 640 ドット = PITCH 40)、5MHz では
 バイト数(PITCH 80、`& 0xFE` で偶数化)。BIOS の INT 18h 高解像度グラフィック

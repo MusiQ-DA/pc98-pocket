@@ -70,9 +70,9 @@ module tb_pc98_gvram_display;
 
     // The same partition walk the DUT applies: line -> (sad + rel*pitch)*2,
     // where the PITCH register counts words at 2.5MHz and bytes at 5MHz
-    // (np2kai maketgrp's `s_pitch <<= 1` while the flag is clear) -- so the
+    // (np21w maketgrp's `s_pitch <<= 1` while the flag is clear) -- so the
     // word count here halves in 5MHz mode, and an odd byte pitch is floored
-    // by the same `& 0xfe` np2kai applies.
+    // by the same `& 0xfe` np21w applies.
     function automatic int line_base(input int L);
         int total, rel, wa, wp;
         wp    = mhz5 ? (pitch >> 1) : pitch;
@@ -182,7 +182,7 @@ module tb_pc98_gvram_display;
         $display("F: digital checked=%0d errors=%0d", checked, errors);
 
         quiet = 1'b1;              // G: 5MHz clock -- PITCH is bytes now, and
-        analog_m = 1; mhz5 = 1;    //    21 floors to 20 (np2kai's & 0xfe)
+        analog_m = 1; mhz5 = 1;    //    21 floors to 20 (np21w's & 0xfe)
         pitch = 8'd21;
         settle(3);
         $display("G: mhz5/21 checked=%0d errors=%0d", checked, errors);
