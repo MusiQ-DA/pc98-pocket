@@ -1172,6 +1172,7 @@ module core_top (
             8'h1b:   probe_data = {8'h00, tvram_dbg_word};   // {attr,hi,lo} at dbg cell; read auto-steps
             8'h1c:   probe_data = {20'h0, dbg_tvram_cell};   // current debug cell
             8'h1d:   probe_data = {16'h0, key_count, key_last};
+            8'h1e:   probe_data = {cont2_key_eff, cont1_key_eff};   // pad words, JTAG-held bits included
             8'hFF:   probe_data = 32'h98C0_DE98;
             default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -1225,8 +1226,16 @@ module core_top (
             cont2_key_s <= key2_cand;
         end
     end
+    // Probe-held buttons: write slot 0x83 latches {cont2_mask, cont1_mask} into jtag_btn*
+    // (in clk_chipset below), which ORs onto the settled pad words as a held-press level.
+    // Every consumer downstream -- the any-button wake, the chipset-domain pad words,
+    // pocket_keyboard's pad->key mapper, mouse mode -- sees them as real presses.
+    // The masks change only on JTAG writes, so the cross-domain OR is a quasi-static level.
+    reg  [15:0] jtag_btn1 = 16'd0, jtag_btn2 = 16'd0;
+    wire [15:0] cont1_key_eff = cont1_key_s | jtag_btn1;
+    wire [15:0] cont2_key_eff = cont2_key_s | jtag_btn2;
     wire       any_btn_74a;                // any Pocket controller-1 button, synced to this domain
-    synch_3 s_anybtn (|cont1_key_s, any_btn_74a, clk_74a);
+    synch_3 s_anybtn (|cont1_key_eff, any_btn_74a, clk_74a);
     wire       osd_credits_req_74a;        // OSD Show Credits request, synced from the softcore
     synch_3 s_osd_credits_74a (osd_credits_req, osd_credits_req_74a, clk_74a);
     reg        any_btn_74a_d = 1'b0;
@@ -1268,8 +1277,8 @@ module core_top (
     synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
     synch_3              s_osd_open       (|osd_open_delay,    osd_open_req,  clk_chipset);
     synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
-    synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_s,       cont1_key_chip, clk_chipset);
-    synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_s,       cont2_key_chip, clk_chipset);
+    synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_eff,     cont1_key_chip, clk_chipset);
+    synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_eff,     cont2_key_chip, clk_chipset);
     synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
     wire credits_mode_pix;
     wire credits_mode_chip;
@@ -1308,7 +1317,7 @@ module core_top (
     // Keyboard: pad buttons + docked USB keyboard + VKB merged into one Set-2 byte
     // stream (kb_byte/kb_valid, paced by kb_ready). In mouse mode the D-pad and A/B
     // drop out (they drive the mouse); X/Y and Select/Start stay mapped keys.
-    wire [15:0] kb_buttons = mousepad ? (cont1_key_s & 16'hFFC0) : cont1_key_s;
+    wire [15:0] kb_buttons = mousepad ? (cont1_key_eff & 16'hFFC0) : cont1_key_eff;
 
     pocket_keyboard #(.clk_rate(cur_rate)) u_pocket_keyboard (
         .clk          (clk_chipset),
@@ -1414,6 +1423,12 @@ module core_top (
             dbg_tvram_cell <= probe_wdata_c[11:0];
         else if (adv_sync[2] != adv_sync[1])
             dbg_tvram_cell <= dbg_tvram_cell + 12'd1;
+        // Slot 0x83: {cont2, cont1} held-button masks, OR-ed onto the settled
+        // pad words in clk_74a. A set bit stays down until the mask clears.
+        if (probe_wr_pulse && probe_waddr_c == 7'h03) begin
+            jtag_btn1 <= probe_wdata_c[15:0];
+            jtag_btn2 <= probe_wdata_c[31:16];
+        end
     end
 
     // JTAG-injected keystrokes ride the same event line the 8251 drains; a
