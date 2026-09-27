@@ -99,7 +99,9 @@
 // would be dead weight in a 24 KB ROM that build now fills to the brim too
 // (the boot font load, osd_font.c, lives in every image). The toggle stays --
 // the virtual keyboard's button binding reaches it from the timer interrupt.
-static int postmon_shown = 1;
+// Off at boot now that bring-up is stable -- the strip stays reachable from
+// Settings -> POST Overlay and the bindable button function.
+static int postmon_shown = 0;
 
 // Nonzero once this panel has claimed the framebuffer: it placed its origin and
 // repainted. An overlay can take the framebuffer over between two calls here --
