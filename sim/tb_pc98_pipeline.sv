@@ -200,7 +200,7 @@ module tb_pc98_pipeline;
     pc98_text_render u_render (
         .clk(clk_dot), .pix_ce(1'b1),
         .hcount(pc98_h), .vcount(pc98_v), .blink_on(1'b1),
-        .gdc_on(1'b0), .gdc_pitch(8'd0), .gdc_sad(16'd0),
+        .gdc_on(1'b0), .gdc_pitch(8'd0), .gdc_sad(16'd0), .wide(1'b0),
         .cur_addr(16'hFFFF), .cur_en(1'b0), .cur_blink(1'b0),
         .cur_top(5'd0), .cur_bot(5'd0),
         .tv_cell(vid_cell), .tv_attr(vid_attr),

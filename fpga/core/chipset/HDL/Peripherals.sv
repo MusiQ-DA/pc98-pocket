@@ -1254,6 +1254,7 @@ module PERIPHERALS #(
     logic [15:0] gdc_sad_px;
     logic [15:0] gdc_cur_addr_px;
     logic [4:0]  gdc_cur_top_px, gdc_cur_bot_px;
+    logic        gdc_wide_px;
     logic gdc_cur_en_s1, gdc_cur_en_px;
     logic gdc_cur_bl_s1, gdc_cur_bl_px;
 
@@ -1270,6 +1271,9 @@ module PERIPHERALS #(
             gdc_cur_addr_px <= gdc_m_cur_addr;
             gdc_cur_top_px  <= gdc_m_cur_top;
             gdc_cur_bot_px  <= gdc_m_cur_bot;
+            // The 40-column switch, sampled the same way: a mode flip mid-frame
+            // would only tear one frame's worth of columns.
+            gdc_wide_px     <= pc98_mode1[2];
         end
     end
 
@@ -1278,6 +1282,7 @@ module PERIPHERALS #(
     pc98_text_render u_pc98_text (
         .clk(clk_pc98_dot), .pix_ce(1'b1),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px), .gdc_sad(gdc_sad_px),
+        .wide(gdc_wide_px),
         .cur_addr(gdc_cur_addr_px), .cur_en(gdc_cur_en_px),
         .cur_blink(gdc_cur_bl_px),
         .cur_top(gdc_cur_top_px), .cur_bot(gdc_cur_bot_px),
@@ -1583,15 +1588,16 @@ module PERIPHERALS #(
     );
 
     wire [7:0] pc98_bitac;
+    wire [7:0] pc98_mode1;
 
     pc98_gdc_mode1 u_gdc_mode1 (
         .clk  (clock),
         .rst  (reset),
         .wr   (mode68_wr),
         .d    (mode68_data),
-        // mode1 itself: nothing downstream wants the other bits yet -- bit 3's
+        // mode1 bit 2 is the 40-column switch the text renderer reads; bit 3's
         // 8x8/8x16 font select and the graphics-display bits are future work.
-        .mode1 (),
+        .mode1 (pc98_mode1),
         .bitac(pc98_bitac)
     );
 

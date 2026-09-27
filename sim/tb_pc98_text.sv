@@ -34,6 +34,7 @@ module tb_pc98_text;
     logic [15:0] cur_addr = 16'd0;
     logic        cur_en = 1'b0, cur_blink = 1'b0;
     logic [4:0]  cur_top = 5'd0, cur_bot = 5'd0;
+    logic        wide = 1'b0;          // mode1 bit 2: 40 columns
 
     wire [11:0] tv_cell;
     logic [7:0] tv_attr;
@@ -47,6 +48,7 @@ module tb_pc98_text;
         .clk(clk), .pix_ce(pix_ce), .hcount(hcount), .vcount(vcount),
         .blink_on(blink_on),
         .gdc_on(gdc_on), .gdc_pitch(gdc_pitch), .gdc_sad(gdc_sad),
+        .wide(wide),
         .cur_addr(cur_addr), .cur_en(cur_en), .cur_blink(cur_blink),
         .cur_top(cur_top), .cur_bot(cur_bot),
         .tv_cell(tv_cell), .tv_attr(tv_attr),
@@ -59,10 +61,15 @@ module tb_pc98_text;
     logic [7:0] scr_attr    = 8'hE1;   // white (G,R,B all set), not secret
     logic [7:0] glyph_row   = 8'b1010_0000;
 
+    // percell gives each cell a glyph of its own -- a single lit bit whose
+    // position encodes the low three bits of the cell index -- so a column
+    // that fetched the wrong cell shows a misplaced dot, not a wrong byte.
+    logic        percell    = 1'b0;
+
     // Model the one-cycle latencies the real memories have.
     always_ff @(posedge clk) begin
         tv_attr  <= scr_attr;
-        font_row <= glyph_row;
+        font_row <= percell ? (8'h80 >> font_cell[2:0]) : glyph_row;
     end
 
     int errors = 0;
@@ -165,6 +172,59 @@ module tb_pc98_text;
         cur_en = 1'b0;
         expect_pixel(8*10 + 0, 18, 1'b1, "disabled cursor draws nothing");
         cur_en = 1'b1; cur_blink = 1'b0;
+
+        // ---- 40 columns: mode1 bit 2 ------------------------------------
+        // A cell is sixteen dots: every glyph bit lasts two dots, and a
+        // column consumes two TVRAM cells, the character living in the even
+        // one (np2kai's maketext40 steps the cell pointer by two).
+        cur_en = 1'b0;
+        scr_attr = 8'hE1; glyph_row = 8'b1010_0000;
+        wide = 1'b1;
+
+        expect_pixel(16*10 + 0, 0, 1'b1, "wide: bit 7, first dot");
+        expect_pixel(16*10 + 1, 0, 1'b1, "wide: bit 7, second dot");
+        expect_pixel(16*10 + 2, 0, 1'b0, "wide: bit 6, first dot");
+        expect_pixel(16*10 + 3, 0, 1'b0, "wide: bit 6, second dot");
+        expect_pixel(16*10 + 4, 0, 1'b1, "wide: bit 5");
+
+        // While column 0 is drawn the lookahead is fetching column 1, which
+        // is cell 2 -- and so on, two cells per column.
+        goto(8, 0);
+        if (tv_cell !== 12'd2 || font_cell !== 7'd2) begin
+            $display("  FAIL wide stride: tv_cell=%0d font_cell=%0d want 2", tv_cell, font_cell);
+            errors++;
+        end
+        goto(16*1 + 8, 0);
+        if (tv_cell !== 12'd4 || font_cell !== 7'd4) begin
+            $display("  FAIL wide stride: tv_cell=%0d font_cell=%0d want 4", tv_cell, font_cell);
+            errors++;
+        end
+
+        // Per-cell glyphs prove the DRAWN column takes its even cell:
+        // column c reads cell 2c, whose marker bit is 8'h80 >> (2c mod 8).
+        percell = 1'b1;
+        expect_pixel(16*1 + 4, 0, 1'b1, "wide col 1 lights cell 2's bit");
+        expect_pixel(16*1 + 0, 0, 1'b0, "wide col 1 doesn't take cell 0's bit");
+        expect_pixel(16*2 + 8, 0, 1'b1, "wide col 2 lights cell 4's bit");
+        // Last visible column (39) reads cell 78; bit index 78 mod 8 = 6.
+        expect_pixel(16*39 + 12, 0, 1'b1, "wide col 39 lights cell 78's bit");
+        expect_pixel(16*39 + 14, 0, 1'b0, "wide col 39 cell edge");
+        // Columns past 40 are off the visible area anyway.
+        expect_pixel(16*40 + 12, 0, 1'b0, "nothing beyond column 39");
+        percell = 1'b0;
+
+        // The cursor still names a cell, so cur_addr 10 lights column 5.
+        cur_en = 1'b1; cur_blink = 1'b0;
+        cur_addr = 16'd10; cur_top = 5'd1; cur_bot = 5'd8;
+        glyph_row = 8'b1010_0000;
+        expect_pixel(16*5 + 0, 2, 1'b0, "wide cursor inverts cell 10");
+        expect_pixel(16*4 + 0, 2, 1'b1, "wide: cell 8 (col 4) untouched");
+        cur_en = 1'b0;
+
+        // Back to 80 columns: eight-dot cells again, same cell index space.
+        wide = 1'b0;
+        expect_pixel(8*10 + 0, 0, 1'b1, "narrow again: bit 7");
+        expect_pixel(8*10 + 1, 0, 1'b0, "narrow again: bit 6");
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");

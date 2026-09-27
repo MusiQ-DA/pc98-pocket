@@ -66,6 +66,7 @@ module tb_pc98_firstcell;
     pc98_text_render dut (
         .clk(clk), .pix_ce(1'b1),
         .hcount(hcount), .vcount(vcount), .blink_on(1'b1),
+        .wide(1'b0),
         .tv_cell(tv_cell), .tv_attr(tv_attr),
         .font_cell(font_cell), .font_line(font_line), .font_row(font_row),
         .grb(grb), .pixel(pixel)

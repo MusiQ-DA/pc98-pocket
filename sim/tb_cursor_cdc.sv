@@ -111,6 +111,7 @@ module tb_cursor_cdc;
         .clk(clk_dot), .pix_ce(1'b1),
         .hcount(hcount), .vcount(vcount), .blink_on(blink_on),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px), .gdc_sad(gdc_sad_px),
+        .wide(1'b0),
         .cur_addr(gdc_cur_addr_px), .cur_en(gdc_cur_en_px),
         .cur_blink(gdc_cur_bl_px),
         .cur_top(gdc_cur_top_px), .cur_bot(gdc_cur_bot_px),

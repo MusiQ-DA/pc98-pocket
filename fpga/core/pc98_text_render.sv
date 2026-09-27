@@ -42,6 +42,13 @@ module pc98_text_render #(
     input  wire        gdc_on,          // START seen
     input  wire [7:0]  gdc_pitch,       // words per row
     input  wire [15:0] gdc_sad,         // partition 0's start, RAW
+    // 40 columns: mode1 bit 2 (the port 0x68 register) makes each cell
+    // sixteen dots -- the glyph byte shifts at half rate so every bit lasts
+    // two dots, and a column consumes TWO cells, the even one carrying the
+    // character. np2kai does the same split (pccore.c: gdc.mode1 & 4 ->
+    // maketext40, which steps edi by 2 and doubles each byte through
+    // text_tblx2).
+    input  wire        wide,
 
     // The cursor, as the master GDC's CSRW/CSRFORM leave it. The address is
     // a WORD index into the text plane -- the same space gdc_sad and the
@@ -75,9 +82,12 @@ module pc98_text_render #(
 
     wire visible = (hcount < 10'd640) && (vcount < 10'd400);
 
-    wire [6:0] col  = hcount[9:3];
+    // `col` counts COLUMNS, not cells: a wide column is sixteen dots (two
+    // cells' worth), a narrow one eight.
+    wire [6:0] col  = wide ? {1'b0, hcount[9:4]} : hcount[9:3];
     wire [3:0] line = vcount[3:0];     // the line being DRAWN; the fetch's is below
-    wire [2:0] dot  = hcount[2:0];
+    wire [2:0] dot  = hcount[2:0];     // dot within a narrow cell
+    wire [3:0] cdot = hcount[3:0];     // dot within a wide cell
 
     // The FETCH position: the raster cell one character time ahead of the one
     // being drawn, which is where the memories' one cycle of latency is paid
@@ -101,7 +111,8 @@ module pc98_text_render #(
     // is fetched during the line BEFORE it, so its line-within-cell -- and, at
     // a text row boundary, its row -- must be the next scanline's, or the top
     // cell of every line shows the slice above it.
-    wire        last_char = (hcount >= 10'(H_TOTAL - 8));
+    wire        last_char = wide ? (hcount >= 10'(H_TOTAL - 16))
+                                 : (hcount >= 10'(H_TOTAL - 8));
     wire [9:0]  next_v    = last_char
                           ? ((vcount == 10'(V_TOTAL - 1)) ? 10'd0 : vcount + 10'd1)
                           : vcount;
@@ -134,7 +145,11 @@ module pc98_text_render #(
     wire [11:0] next_rowbase = gdc_live
         ? 12'(next_row * eff_pitch)
         : ({1'b0, next_row, 6'd0} + {3'b000, next_row, 4'd0});
-    wire [11:0] next_cell    = eff_start + next_rowbase + {5'd0, next_col};
+    // In the cell index space a wide column occupies two slots (np2kai's
+    // edi += 2 per column), so the column term doubles.
+    wire [11:0] next_cell    = eff_start + next_rowbase
+                             + (wide ? {5'd0, next_col[5:0], 1'b0}
+                                     : {5'd0, next_col});
 
     // The cell being DRAWN: the current row and column against the same
     // start and pitch. next_* above is where the memories are pointed (one
@@ -144,7 +159,8 @@ module pc98_text_render #(
     wire [11:0] draw_rowbase = gdc_live
         ? 12'(draw_row * eff_pitch)
         : ({1'b0, draw_row, 6'd0} + {3'b000, draw_row, 4'd0});
-    wire [11:0] drawn_cell = eff_start + draw_rowbase + {5'd0, col};
+    wire [11:0] drawn_cell = eff_start + draw_rowbase
+                           + (wide ? {5'd0, col[5:0], 1'b0} : {5'd0, col});
 
     // The GDC's cursor: a blinking reverse block over cursor_top..cursor_bot
     // of the one cell CSRW names. Blink rides the attribute blink phase --
@@ -161,30 +177,37 @@ module pc98_text_render #(
     // Latched at the point the TVRAM answer is valid.
     logic [7:0] q_attr;
     assign font_line = next_v[3:0];
-    assign font_cell = next_col;
+    // The row buffer's slot equals the cell's offset within the row: double
+    // the column when wide.
+    assign font_cell = wide ? {next_col[5:0], 1'b0} : next_col;
 
     // The glyph and attribute in use for the cell being shifted out.
     logic [7:0] cur_row, cur_attr;
     logic [7:0] nxt_row, nxt_attr;
 
+    // The pipeline's three taps ride the character time: on a wide cell they
+    // land at dots 2, 6 and 14 of sixteen; on a narrow one, 1, 3 and 7 of
+    // eight. Either way the memories have had their cycle of latency.
+    wire ph_attr = wide ? (cdot == 4'd2 ) : (dot == 3'd1);
+    wire ph_row  = wide ? (cdot == 4'd6 ) : (dot == 3'd3);
+    wire ph_load = wide ? (cdot == 4'd14) : (dot == 3'd7);
+
     always_ff @(posedge clk) begin
         if (pix_ce) begin
-            case (dot)
-                3'd1: q_attr <= tv_attr;
-                3'd3: begin
-                    nxt_row  <= font_row;
-                    nxt_attr <= q_attr;
-                end
-                3'd7: begin
-                    cur_row  <= nxt_row;
-                    cur_attr <= nxt_attr;
-                end
-                default: ;
-            endcase
+            if (ph_attr) q_attr <= tv_attr;
+            if (ph_row) begin
+                nxt_row  <= font_row;
+                nxt_attr <= q_attr;
+            end
+            if (ph_load) begin
+                cur_row  <= nxt_row;
+                cur_attr <= nxt_attr;
+            end
         end
     end
 
-    wire [2:0] shift = ~dot;             // MSB is the leftmost pixel
+    // MSB is the leftmost pixel; on a wide cell each bit lasts two dots.
+    wire [2:0] shift = wide ? ~cdot[3:1] : ~dot;
     wire       glyph = cur_row[shift];
 
     wire secret    = ~cur_attr[0];
@@ -195,7 +218,8 @@ module pc98_text_render #(
 
     // Underline is the bottom line of the cell; the vertical line sits at the
     // left edge.
-    wire deco = (underline && (line == 4'd15)) || (vertline && (dot == 3'd0));
+    wire deco = (underline && (line == 4'd15))
+              || (vertline && (wide ? (cdot == 4'd0) : (dot == 3'd0)));
 
     always_comb begin
         logic lit;
