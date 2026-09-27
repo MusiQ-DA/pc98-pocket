@@ -45,8 +45,6 @@ module tb_pc98_gdc;
     wire        cursor_en, cursor_blink_en;
     wire [4:0]  cursor_top, cursor_bottom;
     wire [5:0]  cursor_rate;
-    wire [7:0]  csr_wr_count;
-    wire [31:0] csr_trace;
     wire        draw_req, draw_busy;
     wire [7:0]  draw_op;
     wire [31:0] draw_snap [0:4];
@@ -66,7 +64,6 @@ module tb_pc98_gdc;
         io_read_n = 1'b1; cs = 1'b0;
     endtask
     wire [1:0]  zoom_disp;
-    wire [7:0]  unk_cmd, unk_count;
 
     pc98_gdc dut (
         .clk(clk), .reset(reset),
@@ -79,10 +76,8 @@ module tb_pc98_gdc;
         .cursor_en(cursor_en), .cursor_blink_en(cursor_blink_en),
         .cursor_top(cursor_top), .cursor_bottom(cursor_bottom),
         .cursor_rate(cursor_rate), .zoom_disp(zoom_disp),
-        .csr_wr_count(csr_wr_count), .csr_trace(csr_trace),
         .draw_req(draw_req), .draw_op(draw_op), .draw_busy(draw_busy),
-        .srv_done_stb(srv_done), .draw_snap(draw_snap),
-        .unk_cmd(unk_cmd), .unk_count(unk_count)
+        .srv_done_stb(srv_done), .draw_snap(draw_snap)
     );
 
     int errors = 0;
@@ -129,7 +124,6 @@ module tb_pc98_gdc;
         want("reset cursor blinks (P2 b5)", cursor_blink_en, 1);
         want("reset cursor top 0",        cursor_top,        5'd0);
         want("reset cursor bottom 15",    cursor_bottom,     5'd15);
-        want("no CSRFORM traced at reset", csr_trace,        32'h0);
 
         // ---- START and STOP ------------------------------------------------
         cmd(8'h0D);  want("START -> disp_on", disp_on, 1);
@@ -203,9 +197,6 @@ module tb_pc98_gdc;
         cmd(8'h4B); par(8'hC1); par(8'h05); par(8'h88); // top=5, blinking
         want("cursor blinking (P2 bit5 clear)", cursor_blink_en, 1);
         want("cursor top from P2 low bits", cursor_top, 5'd5);
-        want("CSR command count", csr_wr_count, 8'd3);  // 1x CSRW + 2x CSRFORM
-        want("CSRFORM trace bytes", csr_trace[23:0], 24'hC10588);
-        want("CSRFORM trace count", csr_trace[27:24], 4'd3);
 
         // ---- the status register --------------------------------------------
         // bit 6 hblank, bit 5 vsync, bit 2 FIFO empty, and bit 7 CLEAR.
@@ -228,9 +219,7 @@ module tb_pc98_gdc;
         // VECTE/TEXTE are EXECUTE-class now: latched with a snapshot of the
         // vector parameters, throttled (the FIFO-empty status bit clears)
         // until the engine's done edge retires them and runs the vector
-        // reset. Anything ELSE drawing-shaped stays counted as unknown --
-        // the scope guard this always was.
-        want("no unknown commands yet", unk_count, 0);
+        // reset. Anything ELSE drawing-shaped is swallowed.
         cmd(8'h49); par(8'h34); par(8'h12); par(8'h00); // CSRW: EAD 0x1234
         cmd(8'h4C);                                      // VECTW, 11 params
         par(8'h49); par(8'h0A); par(8'h00);              //  ope=0x49, DC=10
@@ -252,8 +241,10 @@ module tb_pc98_gdc;
         want("FIFO empty clears while pending", data_out & 8'h04, 8'h00);
         io_read_n = 1'b1; cs = 1'b0;
         cmd(8'h6C);                        // a second EXECUTE while pending
-        want("second EXECUTE while pending is unknown", unk_count, 1);
-        want("second EXECUTE recorded", unk_cmd, 8'h6C);
+        // is swallowed, not re-latched: the request and the snapshot stand.
+        want("pending EXECUTE not re-launched", draw_req, 1);
+        want("opcode still the first",      draw_op,  8'h6C);
+        want("snapshot DC unchanged",       draw_snap[0][23:8], 16'h000A);
         @(posedge clk);
         srv_done = 1; @(posedge clk);      // one full clock of done
         srv_done = 0; @(posedge clk);
@@ -267,14 +258,10 @@ module tb_pc98_gdc;
         status_rd(st_v);
         want("FIFO empty returns",    st_v & 8'h04, 8'h04);
 
-        cmd(8'h6D);                        // an unassigned drawing opcode
-        want("unknown stays counted", unk_count, 2);
-        want("unknown recorded",      unk_cmd,   8'h6D);
-        // ...and a command that IS implemented must not be counted.
-        cmd(8'h0D);
-        want("START not counted unknown",  unk_count, 2);
-        cmd(8'hE0);                        // CSRR -- known, zero parameters
-        want("CSRR not counted unknown",   unk_count, 2);
+        cmd(8'h6D);                        // an unassigned drawing opcode is
+        cmd(8'h0D);                        // swallowed, as are the known
+        cmd(8'hE0);                        // zero-parameter START and CSRR.
+        want("no spurious request from strays", draw_req, 0);
 
         // ---- the read-back FIFO: CSRR and LPEN answer with bytes ---------
         // CSRR queues five off CSRW (the high address byte masked to two

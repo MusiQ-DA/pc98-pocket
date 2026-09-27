@@ -84,6 +84,10 @@ module upd71071_tm();
     logic           address_strobe;
     logic           memory_read_n;
     logic           memory_write_n;
+    // The module gained clock-enable inputs after this bench was written.
+    // Held high, every cycle is enabled -- the timing the bench was built on.
+    logic           cpu_ce_posedge = 1'b1;
+    logic           cpu_ce_negedge = 1'b1;
 
     upd71071 u_upd71071 (.*);
 

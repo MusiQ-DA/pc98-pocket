@@ -45,19 +45,9 @@ proc rd {addr} {
     return 0x[string range $raw end-7 end]
 }
 
+# Slots 0x01-0x24 were the POST panel's census and snoop words; they left
+# with postmon and read DEAD <addr> now. What remains:
 set regs {
-    1   FRM_A=px_lit,nz_served
-    2   FRM_B=nz_stored,fills,rb_fsm
-    3   FONT=fvalid,freq
-    4   TVFILL_0
-    5   TVFILL_1
-    12  GDC=unk,unkcmd,disp,sad
-    13  LIVE_IP_CS
-    14  DERAIL_IP_CS
-    15  POST=count,prev,code
-    16  LIVE_MEM_ADDR
-    17  WR_LAST_ADDR
-    18  TVRAM_LAST_ADDR
     27  TVRAM_DBG=attr,hi,lo
     28  DBG_CELL
     29  KEYS=count,last
@@ -66,9 +56,9 @@ set regs {
     32  PIC2=irr,imr,isr,kbd_irqs
     33  IRQ_LVL+kbd_rd
     34  BTN_GATE=kbv,kbr,osd,mode,kb_buttons
-    35  DMAC_DCWORD
-    36  FDC_DMA_HANDSHAKE
     37  MEMIF=done,busy,rdata
+    38  JT_FDD=sectors,ok,ins,seq,drv,cmd
+    39  MGMT=wrseen,last,fdd_req,fdd_present
     255 MAGIC
 }
 
