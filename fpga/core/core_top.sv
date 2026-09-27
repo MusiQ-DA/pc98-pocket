@@ -1202,12 +1202,8 @@ module core_top (
             8'h03:   probe_data = {pc98_rowbuf_fvalid_count, pc98_rowbuf_freq_count};
             8'h04:   probe_data = pc98_tvfill_view[31:0];
             8'h05:   probe_data = pc98_tvfill_view[63:32];
-            8'h06:   probe_data = tvram_row0_code[31:0];
-            8'h07:   probe_data = tvram_row0_code[63:32];
-            8'h08:   probe_data = tvram_row0_attr[31:0];
-            8'h09:   probe_data = tvram_row0_attr[63:32];
-            8'h0A:   probe_data = tvram_row0_hi[31:0];
-            8'h0B:   probe_data = tvram_row0_hi[63:32];
+            // 0x06-0x0B (row0 cell snapshots) removed: slot 0x1B's auto-stepping
+            // cell read supersedes them, and the mux was over capacity.
             8'h0C:   probe_data = {dbg_gdc_unk_count, dbg_gdc_unk_cmd, dbg_gdc_disp_on, dbg_gdc_sad};
             8'h0D:   probe_data = {post_live_ip, post_live_cs};
             8'h0E:   probe_data = {post_derail_ip, post_derail_cs};
@@ -1215,14 +1211,8 @@ module core_top (
             8'h10:   probe_data = {12'd0, post_live_addr};
             8'h11:   probe_data = {12'd0, wr_last_addr};
             8'h12:   probe_data = {12'd0, tvram_last_addr};
-            8'h13:   probe_data = io_port_hist[31:0];
-            8'h14:   probe_data = io_port_hist[63:32];
-            8'h15:   probe_data = {8'h00, dbg_gdc_cur};        // cc E aaa t b
-            8'h16:   probe_data = dbg_gdc_csrtrace;          // bytes after CSRFORM
-            8'h17:   probe_data = {24'h0, dbg_gdc_csrcnt};   // CSRW/CSRFORM count
-            8'h18:   probe_data = {8'h00, dbg_cur_px};       // px-domain {en,bl,top,bot,addr}
-            8'h19:   probe_data = {16'h0, dbg_cshow_cnt};    // cursor dots emitted last frame
-            8'h1a:   probe_data = {4'h0, dbg_cshow_at};      // {hcount,vcount,attr} at first cshow
+            // 0x13-0x1A removed (io_port_hist duplicates postmon's MMIO reads;
+            // GDC-cursor trace and cshow were for hunts that are now resolved).
             8'h1b:   probe_data = {8'h00, tvram_dbg_word};   // {attr,hi,lo} at dbg cell; read auto-steps
             8'h1c:   probe_data = {20'h0, dbg_tvram_cell};   // current debug cell
             8'h1d:   probe_data = {16'h0, key_count, key_last};
@@ -1246,6 +1236,7 @@ module core_top (
             8'h22:   probe_data = {8'h00, kb_valid, kb_ready,
                                    osd_active | credits_mode_chip, osd_active, credits_mode_chip,
                                    gamepad_mode, mousepad, kb_buttons};
+`endif
             8'hFF:   probe_data = 32'h98C0_DE98;
             default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase

@@ -51,12 +51,6 @@ set regs {
     3   FONT=fvalid,freq
     4   TVFILL_0
     5   TVFILL_1
-    6   TVRAM_CODE_0
-    7   TVRAM_CODE_1
-    8   TVRAM_ATTR_0
-    9   TVRAM_ATTR_1
-    10  TVRAM_HI_0
-    11  TVRAM_HI_1
     12  GDC=unk,unkcmd,disp,sad
     13  LIVE_IP_CS
     14  DERAIL_IP_CS
@@ -64,14 +58,6 @@ set regs {
     16  LIVE_MEM_ADDR
     17  WR_LAST_ADDR
     18  TVRAM_LAST_ADDR
-    19  IO_HIST_0
-    20  IO_HIST_1
-    21  GDC_CUR=en,addr,top,bot
-    22  GDC_CSRTR=count,last_bytes
-    23  GDC_CSRCNT
-    24  CUR_PX=en,bl,top,bot,addr
-    25  CSHOW_CNT=dots_last_frame
-    26  CSHOW_AT=hcount,vcount,attr
     27  TVRAM_DBG=attr,hi,lo
     28  DBG_CELL
     29  KEYS=count,last
