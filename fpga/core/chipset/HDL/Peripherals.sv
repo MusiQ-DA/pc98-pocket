@@ -229,6 +229,12 @@ module PERIPHERALS #(
     output  logic   [23:0]  dbg_cur_px,
     output  logic   [15:0]  dbg_cshow_cnt,
     output  logic   [27:0]  dbg_cshow_at,
+
+    // TVRAM debug read port: while the guest is not selecting the window,
+    // the CPU port's read side answers dbg_cell with {attr,hi,lo} one cycle
+    // later in tvram_dbg_word. The JTAG probe drives dbg_cell.
+    input   logic   [11:0]  tvram_dbg_cell,
+    output  logic   [23:0]  tvram_dbg_word,
         // PC-9801-86 OPNA, stereo. Zero on a non-PC-98 build.
     output  logic signed [15:0] opna_snd_l,
     output  logic signed [15:0] opna_snd_r,
@@ -1826,7 +1832,10 @@ module PERIPHERALS #(
         // The attribute to the renderer, on the dot clock.
         .vid_clk     (clk_pc98_dot),
         .vid_cell    (tvram_vid_cell),
-        .vid_attr    (tvram_vid_attr)
+        .vid_attr    (tvram_vid_attr),
+        .dbg_cell    (tvram_dbg_cell),
+        .dbg_own     (~tvram_mem_select),
+        .dbg_word    (tvram_dbg_word)
     );
 
 

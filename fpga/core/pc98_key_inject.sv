@@ -2,12 +2,12 @@
 // line that feeds pc98_kbd8251.
 //
 // pc98_jtag_probe exposes a write port: every scan whose address byte has
-// bit 7 set toggles wr_tog once, with {wr_addr, wr_data} holding the low
-// address bits and the shifted-in payload, all in the JTAG clock domain.
-// A write to slot 0x81 (wr_addr == 1) carries a PC-98 matrix byte in
-// wr_data[7:0] (bit 7 = release). Each such write lands exactly one more
-// toggle on the shared key_stb line, so the 8251 cannot tell an injected
-// event from a tapped one.
+// bit 7 set is a write, carried upstream as a one-clock wr_pulse in this
+// module's clock domain with {wr_addr, wr_data} holding the payload. A write
+// to slot 0x81 (wr_addr == 1) carries a PC-98 matrix byte in wr_data[7:0]
+// (bit 7 = release). Each such write lands exactly one more toggle on the
+// shared key_stb line, so the 8251 cannot tell an injected event from a
+// tapped one.
 //
 // src_jtag keeps key_make/key_code coherent: they belong to whichever side
 // produced the most recent event. The physical strobe goes through kbd_stb_q
@@ -21,7 +21,7 @@
 
 module pc98_key_inject (
     input  wire        clk,
-    input  wire        wr_tog,
+    input  wire        wr_pulse,
     input  wire [6:0]  wr_addr,
     input  wire [31:0] wr_data,
     input  wire        kbd_stb,
@@ -31,18 +31,16 @@ module pc98_key_inject (
     output wire        key_make,
     output wire [7:0]  key_code
 );
-    logic [2:0] jk_sync = 3'd0;
     logic       jtag_stb = 1'b0;
     logic [7:0] jtag_byte = 8'h00;
     logic       src_jtag = 1'b0;
     logic       kbd_stb_q = 1'b0;
 
     always_ff @(posedge clk) begin
-        jk_sync   <= {jk_sync[1:0], wr_tog};
         kbd_stb_q <= kbd_stb;
         if (kbd_stb != kbd_stb_q)
             src_jtag <= 1'b0;
-        if (jk_sync[2] != jk_sync[1]) begin
+        if (wr_pulse) begin
             jtag_byte <= wr_data[7:0];
             if (wr_addr == 7'h01) begin
                 jtag_stb <= ~jtag_stb;

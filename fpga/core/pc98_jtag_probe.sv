@@ -31,7 +31,13 @@ module pc98_jtag_probe (
     // in the tck domain; consumers sync the toggle and copy the payload.
     output logic        wr_tog  = 1'b0,
     output logic [6:0]  wr_addr = 7'h00,
-    output logic [31:0] wr_data = 32'h0
+    output logic [31:0] wr_data = 32'h0,
+
+    // Read-advance: toggles each time a scan that was READING slot 0x1B
+    // completes (the pre-update address decides, so the toggle fires on the
+    // scan whose capture carried that slot's data). core_top uses it to step
+    // the TVRAM debug cell, giving the host a one-scan-per-cell screen dump.
+    output logic        rd_adv  = 1'b0
 );
 
     wire        vj_tck, vj_tdi;
@@ -95,6 +101,8 @@ module pc98_jtag_probe (
             shreg <= {vj_tdi, shreg[39:1]};
         if (vj_udr) begin
             addr_q <= shreg[39:32];
+            if (addr_q == 8'h1B)
+                rd_adv <= ~rd_adv;
             if (shreg[39] && shreg[38:32] != 7'h7F) begin
                 // 0x80-0xFE write; 0xFF stays a pure read (the magic register
                 // shares the top bit, so it gets a permanent exemption).

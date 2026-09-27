@@ -1169,6 +1169,9 @@ module core_top (
             8'h18:   probe_data = {8'h00, dbg_cur_px};       // px-domain {en,bl,top,bot,addr}
             8'h19:   probe_data = {16'h0, dbg_cshow_cnt};    // cursor dots emitted last frame
             8'h1a:   probe_data = {4'h0, dbg_cshow_at};      // {hcount,vcount,attr} at first cshow
+            8'h1b:   probe_data = {8'h00, tvram_dbg_word};   // {attr,hi,lo} at dbg cell; read auto-steps
+            8'h1c:   probe_data = {20'h0, dbg_tvram_cell};   // current debug cell
+            8'h1d:   probe_data = {16'h0, key_count, key_last};
             8'hFF:   probe_data = 32'h98C0_DE98;
             default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -1177,12 +1180,14 @@ module core_top (
     wire        probe_wr_tog;
     wire [6:0]  probe_wr_addr;
     wire [31:0] probe_wr_data;
+    wire        probe_rd_adv;
     pc98_jtag_probe u_jtag_probe (
         .probe_addr_sel (probe_addr),
         .probe_data     (probe_data),
         .wr_tog         (probe_wr_tog),
         .wr_addr        (probe_wr_addr),
-        .wr_data        (probe_wr_data)
+        .wr_data        (probe_wr_data),
+        .rd_adv         (probe_rd_adv)
     );
 
     //
@@ -1387,13 +1392,37 @@ module core_top (
         .key_code (kbd_key_code)
     );
 
+    // Probe writes land in clk_chipset once, as a pulse with the payload
+    // copied alongside it. Slot 0x81 is a PC-98 matrix byte for the key line;
+    // slot 0x82 selects the TVRAM debug cell. A completed read of 0x1B steps
+    // the cell so a screen dump runs one scan per cell.
+    logic [2:0] jw_sync = 3'd0;
+    logic       probe_wr_pulse;
+    logic [6:0] probe_waddr_c;
+    logic [31:0] probe_wdata_c;
+    logic [11:0] dbg_tvram_cell = 12'd0;
+    logic [2:0]  adv_sync = 3'd0;
+    always_ff @(posedge clk_chipset) begin
+        jw_sync  <= {jw_sync[1:0], probe_wr_tog};
+        adv_sync <= {adv_sync[1:0], probe_rd_adv};
+        probe_wr_pulse <= jw_sync[2] != jw_sync[1];
+        if (jw_sync[2] != jw_sync[1]) begin
+            probe_waddr_c <= probe_wr_addr;
+            probe_wdata_c <= probe_wr_data;
+        end
+        if (probe_wr_pulse && probe_waddr_c == 7'h02)
+            dbg_tvram_cell <= probe_wdata_c[11:0];
+        else if (adv_sync[2] != adv_sync[1])
+            dbg_tvram_cell <= dbg_tvram_cell + 12'd1;
+    end
+
     // JTAG-injected keystrokes ride the same event line the 8251 drains; a
     // probe write to slot 0x81 lands one toggle per injected matrix byte.
     pc98_key_inject u_pc98_key_inject (
         .clk      (clk_chipset),
-        .wr_tog   (probe_wr_tog),
-        .wr_addr  (probe_wr_addr),
-        .wr_data  (probe_wr_data),
+        .wr_pulse (probe_wr_pulse),
+        .wr_addr  (probe_waddr_c),
+        .wr_data  (probe_wdata_c),
         .kbd_stb  (kbd_key_stb),
         .kbd_make (kbd_key_make),
         .kbd_code (kbd_key_code),
@@ -2017,6 +2046,7 @@ module core_top (
     wire [23:0] dbg_cur_px;
     wire [15:0] dbg_cshow_cnt;
     wire [27:0] dbg_cshow_at;
+    wire [23:0] tvram_dbg_word;
     wire  [3:0] raw_strobes;
     wire [15:0] wr_low_cycles, rd_low_cycles;
     wire [127:0] rom_read_data;
@@ -2431,6 +2461,8 @@ module core_top (
         .dbg_cur_px                         (dbg_cur_px),
         .dbg_cshow_cnt                      (dbg_cshow_cnt),
         .dbg_cshow_at                       (dbg_cshow_at),
+        .tvram_dbg_cell                     (dbg_tvram_cell),
+        .tvram_dbg_word                     (tvram_dbg_word),
         .VID_R                              (r),
         .VID_G                              (g),
         .VID_B                              (b),

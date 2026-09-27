@@ -106,14 +106,31 @@ module tb_pc98_jtag_key;
     wire        wr_tog;
     wire [6:0]  wr_addr;
     wire [31:0] wr_data;
+    wire        rd_adv;
 
     pc98_jtag_probe u_probe (
         .probe_addr_sel (probe_addr),
         .probe_data     (probe_data),
         .wr_tog         (wr_tog),
         .wr_addr        (wr_addr),
-        .wr_data        (wr_data)
+        .wr_data        (wr_data),
+        .rd_adv         (rd_adv)
     );
+
+    // The same CDC shape core_top uses: wr_tog from the tck domain becomes a
+    // one-clock wr_pulse with the payload captured beside it.
+    logic [2:0]  jw_sync = 3'd0;
+    logic        wr_pulse;
+    logic [6:0]  wr_addr_c;
+    logic [31:0] wr_data_c;
+    always_ff @(posedge clock) begin
+        jw_sync  <= {jw_sync[1:0], wr_tog};
+        wr_pulse <= jw_sync[2] != jw_sync[1];
+        if (jw_sync[2] != jw_sync[1]) begin
+            wr_addr_c <= wr_addr;
+            wr_data_c <= wr_data;
+        end
+    end
 
     // ---- inject + physical source -------------------------------------------
     reg        kbd_stb  = 0;
@@ -124,9 +141,9 @@ module tb_pc98_jtag_key;
 
     pc98_key_inject u_inject (
         .clk      (clock),
-        .wr_tog   (wr_tog),
-        .wr_addr  (wr_addr),
-        .wr_data  (wr_data),
+        .wr_pulse (wr_pulse),
+        .wr_addr  (wr_addr_c),
+        .wr_data  (wr_data_c),
         .kbd_stb  (kbd_stb),
         .kbd_make (kbd_make),
         .kbd_code (kbd_code),
@@ -219,6 +236,7 @@ module tb_pc98_jtag_key;
 
     logic [7:0] b;
     logic       stb_seen;
+    logic       adv_seen;
 
     initial begin
         repeat (8) @(negedge clock);
@@ -286,6 +304,29 @@ module tb_pc98_jtag_key;
         if (key_stb !== stb_seen) begin
             errors = errors + 1;
             $display("FAIL: write to slot 2 leaked a key event");
+        end
+
+        // ---- 8: a completed read of 0x1B toggles the auto-advance -----------
+        // rd_adv fires on any update-DR that retires while addr_q is 0x1B --
+        // i.e. once per delivered cell-read scan. Priming does not fire;
+        // moving to another slot costs exactly one extra step.
+        adv_seen = rd_adv;
+        vj_scan({8'h1B, 32'h0});            // primes addr_q=0x1B, no advance yet
+        if (rd_adv !== adv_seen) begin
+            errors = errors + 1;
+            $display("FAIL: priming 0x1B fired rd_adv early");
+        end
+        vj_scan({8'h1B, 32'h0});            // this scan read 0x1B -> advance
+        if (rd_adv === adv_seen) begin
+            errors = errors + 1;
+            $display("FAIL: reading 0x1B did not toggle rd_adv");
+        end
+        vj_scan(40'h0);                     // leaving 0x1B: one last step
+        adv_seen = rd_adv;
+        vj_scan(40'h0);                     // now on slot 0 -> no advance
+        if (rd_adv !== adv_seen) begin
+            errors = errors + 1;
+            $display("FAIL: rd_adv kept firing after leaving 0x1B");
         end
 
         if (errors == 0)
