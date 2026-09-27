@@ -177,4 +177,17 @@ set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
 #   core still boots normally; this only observes. See docs/HANDOVER.md 1.5 for
 #   the POST map -- the build under investigation is expected to stop at 04,
 #   the base 64 KB memory test at F000:E11A.
+#
+#   It also arms the RTL capture engine (post_monitor.u_post, ~600 ALMs) that
+#   feeds the strip. COMMENT OUT the line to remove that engine and zero the
+#   softcore debug regs + the probe slots that read its taps (`ifdef tests
+#   definedness -- POST_MONITOR=0 would still leave it on).
 set_global_assignment -name VERILOG_MACRO "POST_MONITOR=1"
+
+#   ---- DIAGNOSTIC: PC98_PROBE_EXTRA ---------------------------------------
+#   Extended JTAG probe taps (frame census, row-buffer counts, PIC/IRQ words,
+#   pad/button-gate words, DMAC/FDC-DMA handshakes): probe slots 0x01-0x05 and
+#   0x1E-0x24. Off in the shipping build -- the part is at ~99% ALMs. For a
+#   debug build uncomment this AND comment out POST_MONITOR above to pay for
+#   them.
+# set_global_assignment -name VERILOG_MACRO "PC98_PROBE_EXTRA=1"

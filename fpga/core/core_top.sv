@@ -1197,11 +1197,17 @@ module core_top (
     wire   [7:0] probe_addr;
     always_comb begin
         case (probe_addr)
+            // Extended taps live under PC98_PROBE_EXTRA: at 99% ALM usage the
+            // shipping build cannot afford them. Enable the macro in
+            // config.tcl for a debug build -- and drop POST_MONITOR there
+            // to pay for them, the panel's capture engine is the big block.
+`ifdef PC98_PROBE_EXTRA
             8'h01:   probe_data = dbg_frm_a;   // {px lit, nz bytes served}
             8'h02:   probe_data = dbg_frm_b;   // {nz stored, fills, rb fsm}
             8'h03:   probe_data = {pc98_rowbuf_fvalid_count, pc98_rowbuf_freq_count};
             8'h04:   probe_data = pc98_tvfill_view[31:0];
             8'h05:   probe_data = pc98_tvfill_view[63:32];
+`endif
             // 0x06-0x0B (row0 cell snapshots) removed: slot 0x1B's auto-stepping
             // cell read supersedes them, and the mux was over capacity.
             8'h0C:   probe_data = {dbg_gdc_unk_count, dbg_gdc_unk_cmd, dbg_gdc_disp_on, dbg_gdc_sad};
@@ -1216,6 +1222,7 @@ module core_top (
             8'h1b:   probe_data = {8'h00, tvram_dbg_word};   // {attr,hi,lo} at dbg cell; read auto-steps
             8'h1c:   probe_data = {20'h0, dbg_tvram_cell};   // current debug cell
             8'h1d:   probe_data = {16'h0, key_count, key_last};
+`ifdef PC98_PROBE_EXTRA
             8'h1e:   probe_data = {cont2_key_eff, cont1_key_eff};   // pad words, JTAG-held bits included
             8'h1f:   probe_data = {dbg_pic_irr, dbg_pic_imr, dbg_pic_isr, dbg_timer_count};
             8'h20:   probe_data = {dbg_pic2_irr, dbg_pic2_imr, dbg_pic2_isr, dbg_kbd_irq_count};
@@ -1236,6 +1243,7 @@ module core_top (
             8'h22:   probe_data = {8'h00, kb_valid, kb_ready,
                                    osd_active | credits_mode_chip, osd_active, credits_mode_chip,
                                    gamepad_mode, mousepad, kb_buttons};
+`endif
             8'hFF:   probe_data = 32'h98C0_DE98;
             default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -2140,6 +2148,7 @@ module core_top (
     wire  [7:0] memsize_seen;
     wire  [7:0] f0_count;
 
+`ifdef POST_MONITOR
     post_monitor u_post (
         .clk            (clk_chipset),
         .rst            (reset_sdram),
@@ -2204,6 +2213,26 @@ module core_top (
         .memsize_seen   (memsize_seen),
         .f0_count       (f0_count)
     );
+`else
+    // POST_MONITOR off: no capture engine, so the softcore debug regs and the
+    // probe slots that read these words return 0. That frees ~600 ALMs --
+    // room for PC98_PROBE_EXTRA in a debug build.
+    assign {post_code, post_prev, post_hist,
+            post_mem_addr, post_live_addr, post_live_max,
+            post_live_cs, post_live_ip, post_derail_cs, post_derail_ip,
+            post_ring_ip0, post_ring_ip1, post_ring_ip2, post_ring_ip3,
+            post_fr0_addr, post_fr1_addr, post_fr0_data, post_fr1_data,
+            post_land_cs, post_land_ip, post_count, post_max, post_restarts,
+            ivt16_off, ivt16_seg, ivt16_wr_count,
+            ivt13_off, ivt13_seg, ivt12_off, ivt12_seg,
+            wr_any_count, rd_any_count, ivt_touch_count, tvram_wr_count,
+            wr_last_addr, tvram_last_addr,
+            tvram_row0_code, tvram_row0_attr, tvram_row0_hi,
+            raw_strobes, wr_low_cycles, rd_low_cycles,
+            rom_read_data, rom_load_data, rom_read_count, rom_load_count,
+            io_port_hist, io_wr_count,
+            memsw_seen, memsize_seen, f0_count} = '0;
+`endif
 
     //
     // BOOT HOLD
