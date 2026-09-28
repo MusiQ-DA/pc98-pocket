@@ -213,6 +213,7 @@
 #define HDD1_SLOT_ID     6
 #define SETTINGS_SLOT_ID 7
 #define RHYTHM_SLOT_ID   13   // deferload: rhythm.bin, packed ADPCM-A voices
+#define RHY_WAV_SLOT_BASE 14  // deferload ids 14-19: per-voice *.wav sources
 // Bytes to declare for the nonvolatile Settings slot so it flushes on first boot.
 #define SETTINGS_SLOT_BYTES 64
 

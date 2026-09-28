@@ -146,6 +146,24 @@ def data(j):
         {"name": "Rhythm PCM",  "id": 13, "required": False, "parameters": "0x201",
          "filename": "rhythm.bin", "extensions": ["bin"],
          "size_maximum": "0x2000", "deferload": True},
+        # Per-voice rhythm sources: drop any 2608_*.wav (or a substitute hit)
+        # into the matching slot and the firmware encodes it into the OPNA's
+        # ADPCM-A store at boot -- no offline packer step. Any bound WAV slot
+        # switches the loader to this mode entirely (rhythm.bin is then
+        # ignored): each path packs its own sequential layout, so mixing
+        # would corrupt the offsets. Unbound voices stay silent.
+        {"name": "Rhythm BD",   "id": 14, "required": False, "parameters": "0x201",
+         "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
+        {"name": "Rhythm SD",   "id": 15, "required": False, "parameters": "0x201",
+         "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
+        {"name": "Rhythm TOP",  "id": 16, "required": False, "parameters": "0x201",
+         "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
+        {"name": "Rhythm HH",   "id": 17, "required": False, "parameters": "0x201",
+         "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
+        {"name": "Rhythm TOM",  "id": 18, "required": False, "parameters": "0x201",
+         "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
+        {"name": "Rhythm RIM",  "id": 19, "required": False, "parameters": "0x201",
+         "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
     ]
 
 def video(j):
