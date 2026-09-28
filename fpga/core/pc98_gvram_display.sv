@@ -4,14 +4,15 @@
 // The text plane reaches the screen through TVRAM and the glyph row buffer;
 // the graphics plane is 128 KB of guest SDRAM (four planes, B/R/G/E, 80 bytes
 // per line each) and nothing read it. This module is the graphics half of the
-// picture: it keeps two line buffers in BRAM, fills the back one a line ahead
-// over the font's SDRAM port (whose kanji load is five bursts per line against
-// a forty-burst budget), and shifts the front one out at the dot clock.
+// picture: four line buffers in BRAM hold a ring of display lines, the fill
+// runs LOOKAHEAD lines ahead over the font's SDRAM port, and each line's own
+// number selects the bank it is shifted out of at the dot clock.
 //
 // ADDRESSING. RAM.sv stores one guest byte per 16-bit word, so a line of
 // eighty dots is eighty SDRAM words: five sixteen-word bursts per plane,
-// twenty per line, plus the font's five -- comfortably inside a line time.
-// The plane bases are the hardware windows (A8000=B, B0000=R, B8000=G, and E
+// twenty per line, plus the font's five -- inside the LOOKAHEAD-line window
+// even when the round robin queues it behind the other masters. The plane
+// bases are the hardware windows (A8000=B, B0000=R, B8000=G, and E
 // at E0000, where pc98_gvram_seq keeps it). A line's byte offset inside its
 // plane comes from the slave GDC's display registers the way the uPD7220
 // walks them: the rasterline selects one of the four PRAM partitions by its
@@ -21,12 +22,12 @@
 // Latched at each line edge, so scroll-by-SAD and split screens behave the
 // way software expects them to.
 //
-// DOMAINS. The fetch FSM runs on the chipset clock with the port-B
+// DOMAINS. The fetch FSM runs on the chipset clock with the port-D
 // handshake; the display shift runs on the dot clock the text renderer uses.
-// The two meet in a byte-wide dual-port buffer pair; the fetch side learns
-// the scanline through a gray-coded vcount (multi-bit counters tear through
-// a plain synchroniser), and the display side picks the freshest completed
-// bank off a toggled flag.
+// The two meet in the line ring; the fetch side learns the scanline through
+// a gray-coded vcount (multi-bit counters tear through a plain
+// synchroniser), and the display side reads each line's own bank -- no
+// completion handshake crosses the boundary at all.
 //
 // Remaining limit: the digital-mode packed palette at 0xA8-0xAE is not
 // decoded (the digital path shows the fixed eight colours), and the dot is
@@ -119,20 +120,25 @@ module pc98_gvram_display #(
 
     // ---- the buffers -------------------------------------------------------
     //
-    // Two banks of four planes of eighty bytes, four memories so the display
+    // Four banks of four planes of eighty bytes, four memories so the display
     // can read every plane's byte in the same cycle. A packed-3D array lands
     // in registers -- the LABs do not have it -- so each plane is its own
     // flat array marked for M10K, written from its own always block the way
-    // the inference template wants. Index is {bank, byte-in-line} with the
-    // byte counting 0..79 of a 128-wide bank slot; the tail is unused, M10K
-    // blocks do not charge by the byte.
-    (* ramstyle = "M10K" *) logic [7:0] buf_b [0:255];
-    (* ramstyle = "M10K" *) logic [7:0] buf_r [0:255];
-    (* ramstyle = "M10K" *) logic [7:0] buf_g [0:255];
-    (* ramstyle = "M10K" *) logic [7:0] buf_e [0:255];
+    // the inference template wants. Index is {line[1:0], byte-in-line} with
+    // the byte counting 0..79 of a 128-wide bank slot; the tail is unused and
+    // 512 bytes still sit inside one M10K, so the two extra banks are free.
+    (* ramstyle = "M10K" *) logic [7:0] buf_b [0:511];
+    (* ramstyle = "M10K" *) logic [7:0] buf_r [0:511];
+    (* ramstyle = "M10K" *) logic [7:0] buf_g [0:511];
+    (* ramstyle = "M10K" *) logic [7:0] buf_e [0:511];
 
-    logic        fill_bank = 1'b0;        // the bank being written
-    logic        done_bank = 1'b0;        // the bank the last completed fill wrote
+    // The bank a line lives in is its own number modulo four: the fill for
+    // target T writes bank T[1:0] and the display reads bank vcount[1:0].
+    // With a LOOKAHEAD-line fetch the fill and the display never touch the
+    // same bank, so no done/use-bank handshake is needed at all -- a skipped
+    // fill simply leaves line T-4's bytes in T's bank.
+    localparam int LOOKAHEAD = 3;
+    logic [1:0]  fill_bank = 2'd0;        // T[1:0] of the running fill
 
     // The plane bases, as SDRAM word addresses (one guest byte per word, so
     // the guest-linear windows are their own indices). Page one has no guest
@@ -166,22 +172,25 @@ module pc98_gvram_display #(
     // late instead of instantly (the walk advances once a line) -- an
     // underspecified-PRAM case the BIOS never writes.
     //
-    // The walk steps on EVERY raster edge, whether or not a fill can start
-    // that line: it then stays glued to the raster position, so a fill that
-    // overruns a line still picks up the right base when it next launches
-    // -- the skipped line's bank goes stale, same as any fetch underrun,
-    // but nothing downstream is corrupted.
-    //
-    // The walk leads the raster by one line: when the edge for line_now
-    // fires, the walk is positioned at line_now+1 -- the line the fill
-    // launched here must bring in, so it is in the bank before its own
-    // boundary. The step the edge performs moves the walk to line_now+2:
-    // the base for that line is run_base + pitch, or the next partition's
-    // SAD when line_now+1 ends a partition, or part_sad[0] when the walk
-    // crosses line 399 (raster line 398) and wraps to line 0.
+    // The walk leads the raster by LOOKAHEAD lines: when the edge for
+    // line_now fires, run_base holds the byte offset of display line
+    // (line_now + LOOKAHEAD) mod LINES -- the line the fill launched here
+    // must bring in -- and the step moves it one line further. That gives a
+    // fill roughly three line times to land (~5200 chipset clocks against a
+    // ~1730-clock budget that the four-port round robin can occasionally
+    // overrun), and a fill that still misses just leaves a bank stale rather
+    // than corrupting the walk.
     logic [1:0]  cur_part  = 2'd0;
     logic [9:0]  part_rel  = 10'd0;     // line index inside the partition
     logic [14:0] run_base  = 15'd0;     // byte offset of the walked line
+
+    // The line the next fill must bring in, wrapped into the display range.
+    // line_now runs 0..439 but a fill only launches while line_now < LINES,
+    // so the sum tops out at 402 and one subtract covers the wrap: at edges
+    // 397..399 the targets are next frame's lines 0..2.
+    wire [9:0] tgt_sum  = {1'b0, line_now} + 10'(LOOKAHEAD);
+    wire [8:0] fill_tgt = (tgt_sum >= 10'(LINES)) ? 9'(tgt_sum - 10'(LINES))
+                                                : 9'(tgt_sum);
 
     // The clock field changes what PITCH counts (np21w maketgrp: s_pitch is
     // doubled while the 5MHz flag is clear): at 2.5MHz the register is words
@@ -191,7 +200,7 @@ module pc98_gvram_display #(
                                  : {pitch, 1'b0};
     wire  [9:0]  cur_len  = part_len[cur_part];
     wire  [15:0] sad_next = part_sad[cur_part + 2'd1];   // wraps to 0 at 3, unused there
-    wire         w_wrap   = (line_now == 9'(LINES - 2));
+    wire         w_wrap   = (line_now == 9'(LINES - 1 - LOOKAHEAD));
     wire         w_adv    = !w_wrap && (cur_part != 2'd3)
                        && (({1'b0, part_rel} + 11'd1) >= {1'b0, cur_len});
     wire  [14:0] base_next = w_wrap ? 15'(part_sad[0] << 1)
@@ -216,10 +225,11 @@ module pc98_gvram_display #(
     logic        f_active = 1'b0;
     logic        req_q    = 1'b0;         // want a burst, dropped on ack
     logic [14:0] fill_base = 15'd0;       // byte offset of this line in-plane
+    logic [8:0]  act_tgt   = 9'd0;        // display line the running fill serves
 
     // The buffer writes live in their own blocks, one per plane memory --
-    // the M10K inference template. Byte index is {bank, chunk, word}.
-    wire  [7:0] w_addr = {fill_bank, f_chunk[2:0], f_word};
+    // the M10K inference template. Byte index is {target[1:0], chunk, word}.
+    wire  [8:0] w_addr = {fill_bank, f_chunk[2:0], f_word};
     wire        wr     = f_active & p_rvalid;
     always_ff @(posedge clk) if (wr && f_plane[1:0] == 2'd0) buf_b[w_addr] <= p_rdata[7:0];
     always_ff @(posedge clk) if (wr && f_plane[1:0] == 2'd1) buf_r[w_addr] <= p_rdata[7:0];
@@ -244,22 +254,20 @@ module pc98_gvram_display #(
             f_chunk  <= 4'd0;
             f_word   <= 4'd0;
             req_q    <= 1'b0;
-            fill_bank <= 1'b0;
-            done_bank <= 1'b0;
+            fill_bank <= 2'd0;
+            act_tgt  <= 9'd0;
         end else begin
             if (p_ack) req_q <= 1'b0;
             if (!f_active) begin
                 if (line_edge && (line_now < 9'(LINES))) begin
-                    // A new line just began: fill the NEXT one into the other
-                    // bank. Wrap at the raster's line count; lines past the
-                    // active window are not fetched at all -- they have no
-                    // plane storage and nothing displays them. The walk leads
-                    // the raster by a line, so run_base is already the byte
-                    // offset of the line this fill must fetch -- latching it
-                    // freezes it for the whole fill against a mid-line
-                    // SAD/PITCH rewrite.
+                    // A new line just began: fill the one LOOKAHEAD lines
+                    // out into its own bank. The walk is already positioned
+                    // at that target, so run_base is its byte offset --
+                    // latching both freezes them for the whole fill against
+                    // a mid-line SAD/PITCH rewrite.
                     fill_base <= run_base;
-                    fill_bank <= ~fill_bank;
+                    fill_bank <= fill_tgt[1:0];
+                    act_tgt   <= fill_tgt;
                     f_plane   <= 3'd0;
                     f_chunk   <= 4'd0;
                     f_active  <= 1'b1;
@@ -276,7 +284,6 @@ module pc98_gvram_display #(
                         if (f_plane == (analog_mode ? 3'd3 : 3'd2)) begin
                             f_plane  <= 3'd0;
                             f_active <= 1'b0;
-                            done_bank <= fill_bank;    // the bank is ready
                         end else begin
                             f_plane <= f_plane + 3'd1;
                             req_q   <= 1'b1;
@@ -297,25 +304,10 @@ module pc98_gvram_display #(
     // dots later, and the merger in Peripherals delays the text pixel to
     // match.
     //
-    // The displayed bank changes ONLY at a line boundary: a fill completes
-    // well inside its line, and adopting it the moment p_done lands would
-    // shear the tail of the line still being drawn onto the next line's
-    // bytes. done_bank crosses as a plain bit -- it changes once a line --
-    // and use_bank follows it when vcount steps.
-    logic        done_bank_s1 = 1'b0, done_bank_s2 = 1'b0;
-    logic [8:0]  v_q = 9'd0;
-    logic        use_bank = 1'b0;
-    always_ff @(posedge rd_clk) begin
-        done_bank_s1 <= done_bank;
-        done_bank_s2 <= done_bank_s1;
-        v_q          <= vcount[8:0];
-        if (rst)
-            use_bank <= 1'b0;
-        else if (vcount[8:0] != v_q)
-            use_bank <= done_bank_s2;
-    end
-
-    // Which dot the NEXT cycle will need.
+    // The bank is the line's own number, so the read address needs no
+    // handshake at all: line N's bytes sit in bank N[1:0], written LOOKAHEAD
+    // lines earlier. The only failure left is a fill still running at its
+    // target's boundary, which shows last cycle-of-four's line.
     wire visible    = (hcount < 10'd640) && (vcount < 10'd400);
     wire [6:0] n_byi = hcount[9:3];              // 0..79
     wire [2:0] n_bit = ~hcount[2:0];             // MSB is the leftmost dot
@@ -323,7 +315,7 @@ module pc98_gvram_display #(
     logic [7:0] rd_b, rd_r, rd_g, rd_e;
     logic [2:0] bit_q = 3'd0;
     logic       vis_q = 1'b0;
-    wire  [7:0] r_addr = {use_bank, n_byi};
+    wire  [8:0] r_addr = {vcount[1:0], n_byi};
     always_ff @(posedge rd_clk) begin
         bit_q <= n_bit;
         vis_q <= visible;
@@ -335,14 +327,15 @@ module pc98_gvram_display #(
 
     // ---- underrun telemetry ------------------------------------------------
     //
-    // skip counts a line edge the running fill did not beat: the bank meant
-    // for the incoming line never launched, so the display adopts the older
-    // fill and that rasterline shows data a line stale. fills counts launches
-    // so the ratio is readable. max_fill is the worst launch->done length in
-    // clk cycles -- a line is ~3000 of them, so a number near that says the
-    // port-D budget itself is the problem rather than an occasional queue.
+    // skip counts a display-line edge a fill could not launch on because the
+    // previous one still ran -- that edge's target keeps its cycle-of-four
+    // data. late counts a fill still running when its OWN target's line edge
+    // arrives -- the line reads its bank mid-write. Both put stale data on a
+    // rasterline: the wandering band edge. max_fill is the worst launch->done
+    // length in clk cycles; a line is ~1730 of them, so a number near 5200
+    // says the deadline itself is the problem.
     logic [7:0]  dbg_skip      = 8'd0;
-    logic [7:0]  dbg_fills     = 8'd0;
+    logic [7:0]  dbg_late      = 8'd0;
     logic [15:0] dbg_fill_len  = 16'd0;
     logic [15:0] dbg_max_fill  = 16'd0;
     logic        f_act_d       = 1'b0;
@@ -350,13 +343,15 @@ module pc98_gvram_display #(
         f_act_d <= f_active;
         if (rst) begin
             dbg_skip     <= 8'd0;
-            dbg_fills    <= 8'd0;
+            dbg_late     <= 8'd0;
             dbg_fill_len <= 16'd0;
             dbg_max_fill <= 16'd0;
         end else begin
-            if (line_edge && (line_now < 9'(LINES))) begin
-                if (f_active) dbg_skip  <= (dbg_skip  == 8'hFF) ? dbg_skip  : dbg_skip  + 8'd1;
-                else          dbg_fills <= (dbg_fills == 8'hFF) ? dbg_fills : dbg_fills + 8'd1;
+            if (line_edge && f_active) begin
+                if (line_now == act_tgt && (dbg_late != 8'hFF))
+                    dbg_late <= dbg_late + 8'd1;
+                if (line_now < 9'(LINES) && (dbg_skip != 8'hFF))
+                    dbg_skip <= dbg_skip + 8'd1;
             end
             if (f_active)
                 dbg_fill_len <= (dbg_fill_len == 16'hFFFF) ? dbg_fill_len : dbg_fill_len + 16'd1;
@@ -366,7 +361,7 @@ module pc98_gvram_display #(
                 dbg_max_fill <= dbg_fill_len;
         end
     end
-    assign dbg = {dbg_max_fill, dbg_skip, dbg_fills};
+    assign dbg = {dbg_max_fill, dbg_skip, dbg_late};
 
     wire pb = rd_b[bit_q];
     wire pr = rd_r[bit_q];
