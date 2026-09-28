@@ -71,8 +71,7 @@ enum {
 // The PC-98 ladder is the 2.4576 MHz family this machine presents (x2 and x4 are the
 // "5 MHz" and "10 MHz" of a PC-9801VM/VX; the third is twice the fast one, still
 // cycle-paced) and a fourth that is the chipset clock itself -- not a speed, the
-// cycle-inaccurate maximum. The PC/XT build keeps its own frequencies and names its
-// fourth for the PC/AT box it was tuned against.
+// cycle-inaccurate maximum.
 static const char *const opt_cpu[] = { "5 MHz", "10 MHz", "20 MHz", "Turbo (max)" };
 static const char *const opt_bios_wr[] = { "None", "EC00", "Main", "All" };
 static const char *const opt_boost[] = { "None", "2x", "4x" };

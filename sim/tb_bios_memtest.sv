@@ -6,7 +6,7 @@
 // is roughly nineteen times faster and is what actually fails. This bench
 // reproduces the BIOS code rather than an approximation of it.
 //
-// From the shipped PCXT BIOS at F000:E11A (POST 04):
+// From the shipped base BIOS at F000:E11A (POST 04):
 //
 //     xor si,si / xor di,di / mov ds,di / mov es,di
 //     mov ax,0x55aa ; mov cx,0x4000 ; rep stosw     ; write 32 KB

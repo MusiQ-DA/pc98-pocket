@@ -817,10 +817,10 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/softcpu_fdd_bridge.sv
 # (pll_video_pc98.v, below); the CGA and Hercules PLLs went with the cards.
 set_global_assignment -name VERILOG_FILE core/pll.v
 
-# Shared RTL inherited from the MiSTer PCXT core, relocated under core/. The
-# PC/XT hardware itself is gone (2026-09-22): the CGA and Hercules cards, the
-# 16750s, the MC146818, the 8088, the 8255, the OPL2/CMS/Tandy sound and the
-# XT IDE window. What is left is the bus, the DMA/PIC/PIT and the floppy.
+# Shared RTL inherited from the upstream MiSTer core, relocated under core/.
+# The ISA-side hardware itself is gone (2026-09-22): the CGA and Hercules
+# cards, the 16750s, the MC146818, the 8088, the 8255, the OPL2/CMS/Tandy sound
+# and the IDE window. What is left is the bus, the DMA/PIC/PIT and the floppy.
 set_global_assignment -name SEARCH_PATH core/common
 # core/ itself: pc98_sdram_map.svh lives there and is `include`d from three
 # places, one of which (chipset/HDL/RAM.sv) is four directories away. The

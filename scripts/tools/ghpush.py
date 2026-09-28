@@ -64,7 +64,7 @@ def main():
     if "sha" not in tree:
         sys.exit(f"tree failed: {json.dumps(tree)[:300]}")
     commit = api("POST", f"/repos/{REPO}/git/commits",
-                 {"message": "pivot: PCXT-based chassis; PC-98 machine layer (WIP); CI build",
+                 {"message": "pivot: MiSTer-based chassis; PC-98 machine layer (WIP); CI build",
                   "tree": tree["sha"], "parents": []})
     if "sha" not in commit:
         sys.exit(f"commit failed: {json.dumps(commit)[:300]}")

@@ -7,7 +7,7 @@
 // box (docs/HANDOVER.md 3.6: the ITF picks that class when [0x0501] bit 7 is
 // clear, and the PIT is clocked for it), so its CPU speeds are 2.4576 x2 and
 // x4 -- the "5 MHz" and "10 MHz" of a PC-9801VM/VX front panel -- and NOT the
-// PC/XT's NTSC-derived 4.77/7.16/9.54.
+// ISA box's NTSC-derived 4.77/7.16/9.54.
 //
 // Counting edges over a window costs milliseconds. The first attempt at
 // checking this change booted the whole ITF for two hours to watch a memory

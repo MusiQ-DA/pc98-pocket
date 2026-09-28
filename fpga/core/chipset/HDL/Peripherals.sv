@@ -7,18 +7,15 @@
 `ifndef ENABLE_EMS
 `define ENABLE_EMS 0
 `endif
-// PC/XT peripherals with no PC-98 counterpart at the same ports. They were
+// AT-side peripherals with no PC-98 counterpart at the same ports. They were
 // synthesised into the PC-98 build because nothing gated them, and at 97 per
 // cent ALM occupancy that is not free: the fit report has the MC146818 at 349
-// ALMs, the two 16550s at 412 and the XT IDE pair at 216, none of which any
+// ALMs, the two 16550s at 412 and the IDE pair at 216, none of which any
 // PC-98 ROM can reach.
-//   RTC   this is the PCXT's at 0x02C0; a PC-98 has a uPD4990A at 0x20/0x22/0x33
+//   RTC   the AT's MC146818 at 0x02C0; a PC-98 has a uPD4990A at 0x20/0x22/0x33
 //   UART  0x3F8 / 0x2F8; a PC-98's serial is an 8251 at 0x30/0x32
-// config.tcl turns them off for MACHINE_PC98 and the PC/XT build keeps them.
-//
-// The XT IDE pair (216 ALMs at 0x0300) is NOT on this list on purpose: the
-// PC-98 build keeps it, so the storage path that exists stays reachable while
-// a PC-98 one is not written yet.
+// config.tcl turns them off for MACHINE_PC98. The IDE window at 0x0300 went
+// with them once the PC-9801-55 SCSI board at 0x0CC0 took over the storage path.
 
 module PERIPHERALS #(
 		parameter clk_rate = 28'd50000000
@@ -257,7 +254,7 @@ module PERIPHERALS #(
     //
     // The control-side ports around the real uPD765. The MSR and data
     // register come from floppy.v through pc98_fdc_glue; these three have no
-    // PC/XT counterpart so the glue answers them and the mux below selects
+    // counterpart on the uPD765 file so the glue answers them and the mux below selects
     // that answer -- or 0xFF for the window chgreg did not select.
     //
     //   0x00BE  FDD interface select ("chgreg"). Bit 0 picks which port group
@@ -346,7 +343,7 @@ module PERIPHERALS #(
     //
     // floppy.v is a uPD765, which is the right chip -- a PC-98's FDC is a
     // uPD765A -- and it holds the disk image and the DMA path. What was wrong
-    // was only WHERE it listened: 0x03F0-0x03F7, the PC/XT's window. A PC-98
+    // was only WHERE it listened: 0x03F0-0x03F7, the AT window. A PC-98
     // guest writes 0x90/0x92 (2HD) and 0xC8/0xCA (2DD).
     //
     // np21w io/fdc.c attaches both groups to the same four handlers
@@ -467,7 +464,7 @@ module PERIPHERALS #(
 
     wire    interrupt2_chip_select_n;
 
-    // The PC/XT floppy line has no PC-98 counterpart: the 2HD window's
+    // The AT floppy line has no PC-98 counterpart: the 2HD window's
     // interrupt is slave IRQ11 and the 2DD one's is slave IRQ10 -- never
     // master IRQ6.
     wire    pc98_master_irq6 = 1'b0;
@@ -503,7 +500,7 @@ module PERIPHERALS #(
         // above; without it the BIOS parks at FED44 for good. The drive's
         // own interrupts live on the slave (IRQ2 XTMASK, IRQ3 FDC).
         //
-        // MASTER IRQ6 IS NOT THE FLOPPY. That is the PC/XT's wiring; on a
+        // MASTER IRQ6 IS NOT THE FLOPPY. That is the AT wiring; on a
         // PC-98 IRQ6 is INT3, a free expansion line, and the FDC is slave
         // IRQ10/IRQ11 -- np21w io/fdc.c's fdc_intwait (pic_setirq 0x0a / 0x0b) and
         // the BIOS's own gates at FF438 and FF4B3, which read the SLAVE mask
@@ -1708,12 +1705,12 @@ module PERIPHERALS #(
     //
     // XT2IDE
     //
-    // GONE ON PC-98. The AT task-file at 0x300-0x30F is a PC/XT interface; a
+    // GONE ON PC-98. The task-file at 0x300-0x30F is an AT interface; a
     // PC-98 uses SASI (0x80/0x82), SCSI (0xCC0-0xCC6) or -- only from the
     // 9821 generation -- IDE at 0x640-0x64F. Neither bios.rom nor itf.rom
     // references 0x640-0x64F at all, in any addressing form, so nothing in
     // this machine's ROM set could ever drive what is here. It was inherited
-    // from the PC/XT base and instantiated unconditionally, so it has been
+    // from the upstream base and instantiated unconditionally, so it has been
     // occupying a device that is at 91% ALM.
     //
     // np21w agrees about the generation: SUPPORT_IDEIO is in its ia32 /
@@ -1968,7 +1965,7 @@ module PERIPHERALS #(
             write_to_fdd  <= write_to_fdd;
     end
 
-    // The PC-98 ports onto floppy.v's PC/XT register file. The MSR and FIFO
+    // The PC-98 ports onto floppy.v's AT register file. The MSR and FIFO
     // map straight across; the control port has to BECOME a Digital Output
     // Register, because a PC-98 has none and floppy.v will not run without
     // one. pc98_fdc_glue does that -- see it for what each bit becomes and

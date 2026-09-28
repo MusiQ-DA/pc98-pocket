@@ -1,7 +1,7 @@
 //
 // tb_ram_ab — drives the real RAM.sv and checks a byte round trip.
 //
-// Built after the hardware A/B failed: the PCXT base reached BIOS through
+// Built after the hardware A/B failed: the upstream base reached BIOS through
 // sdram_single but not through sdram_shim, so something in the integration
 // differs in a way the controller-level testbenches could not see. This runs
 // the actual RAM.sv so the two controllers can be compared directly.

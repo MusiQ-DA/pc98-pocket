@@ -57,7 +57,7 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # The real floppy controller, not the constant-returning stub.
 #
-# This was off because floppy0_chip_select_n decoded the PC/XT's 0x3F0-0x3F7,
+# This was off because floppy0_chip_select_n decoded the AT's 0x3F0-0x3F7,
 # which a PC-98 never writes: floppy.v was instantiated, cost 885 ALMs, and
 # could not be reached by the guest at all. The PC-98 ports were answered by
 # fdd_stub_data with canned values, so the machine has had no working floppy.
@@ -80,7 +80,7 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 #
 #   * The routing was wrong, not the acknowledge. A PC-98's FDC interrupt is a
 #     SLAVE line -- IRQ11 (INT 13h) for the 2HD register window, IRQ10 (INT 12h)
-#     for the 2DD one -- never master IRQ6, which is the PC/XT's floppy line and
+#     for the 2DD one -- never master IRQ6, which is the AT's floppy line and
 #     on this machine is INT3, an expansion interrupt with no handler. np21w
 #     io/fdc.c:46-51 picks between pic_setirq(0x0b) and pic_setirq(0x0a) on
 #     chgreg bit 0; the BIOS gates each of its own entry points on the SLAVE
@@ -116,7 +116,7 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # floppy.v now ends those commands properly, under a new NOT_READY_ENDS_COMMAND
 # parameter that Peripherals.sv sets from MACHINE_PC98 -- a PC-98's 2HD/2DD
 # drives drive a real READY line, a PC/AT's do not (pin 34 is DISK CHANGE), so
-# the PC/XT build passes 0, every wire the change adds constant-folds away and
+# an AT build passes 0, every wire the change adds constant-folds away and
 # its behaviour is unchanged. What an empty PC-98 drive answers instead comes
 # from np21w: READ/WRITE DATA and FORMAT go through FDC_DriveCheck (io/fdc.c:
 # 176-182) to ST0 = FDCRLT_IC0|FDCRLT_NR|(hd<<2)|us = 0x48, ST1 = ST2 = 0,

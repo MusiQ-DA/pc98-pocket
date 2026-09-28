@@ -1,7 +1,7 @@
 //
-// pc98_fdc_glue -- the PC-98 FDC ports, onto floppy.v's PC/XT register file.
+// pc98_fdc_glue -- the PC-98 FDC ports, onto floppy.v's AT register file.
 //
-// floppy.v is a uPD765 with a PC/XT skin: the chip's own MSR and FIFO sit at
+// floppy.v is a uPD765 with an AT skin: the chip's own MSR and FIFO sit at
 // its registers 4 and 5, and everything else it needs -- drive select, motor,
 // DMA/IRQ enable, reset -- arrives through the AT's Digital Output Register at
 // register 2, plus a data rate at 4 or 7.
@@ -22,7 +22,7 @@
 // interrupt, and that cost a hardware cycle: the on-screen POST panel stopped
 // at MEMORY 640KB OK reading LVL 41 -- master IRQ0 plus master IRQ6 asserted
 // and never cleared -- with the guest still inside the FDC code (IO 00BE 00CC).
-// Master IRQ6 is the PC/XT's floppy line. A PC-98 does not have one there.
+// Master IRQ6 is the AT's floppy line. A PC-98 does not have one there.
 //
 //   WHO ASSERTS IT. floppy.v's irq, on command completion -- see its
 //   raise_interrupt, gated by dma_irq_enable, which is DOR bit 3. On the

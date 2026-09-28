@@ -120,7 +120,7 @@ static void repaint_latched(void)
 
 // Visual rows for navigation: each is a contiguous, left-to-right span of
 // vkb_keys[] (function block + main block + keypad), matching the compiled
-// PC-98 or PC/XT table in vkb_layout.c.
+// table in vkb_layout.c.
 static const struct {
     uint8_t start, count;
 } vrows[] = {

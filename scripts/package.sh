@@ -39,8 +39,8 @@ rm -rf "$DIR"
 mkdir -p "$DIR/Cores/hiroya.PC9801" "$DIR/Assets/pc98/hiroya.PC9801" "$DIR/Platforms"
 
 # The core's definition files come from the REPOSITORY ROOT, not from a stale
-# build directory. They used to be copied from dist/testB24's PC/XT core, which
-# is how the packaged input.json kept the PC/AT era's button names long after
+# build directory. They used to be copied from dist/testB24's upstream core,
+# which is how the packaged input.json kept the PC/AT era's button names long after
 # the machine layer was PC-98 only. The Python below patches core/data/video/
 # interact/input on top of these; audio and variants are shipped as they are.
 for j in core.json data.json video.json audio.json input.json interact.json variants.json; do

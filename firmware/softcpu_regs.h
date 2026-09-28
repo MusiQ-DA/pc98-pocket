@@ -237,8 +237,7 @@ void fdd_unbind(uint32_t drive);
 int  fdd_is_inserted(uint32_t drive);
 uint32_t fdd_mounted_sectors(uint32_t drive);
 
-// Service entry points (scsi_service.c). PC-98 only -- the board is a
-// PC-9801-55 and the PC/XT build keeps its IDE instead.
+// Service entry points (scsi_service.c). PC-98 only -- the board is a PC-9801-55.
 void scsi_init(void);
 void scsi_mount(uint32_t sectors);
 void scsi_poll(void);

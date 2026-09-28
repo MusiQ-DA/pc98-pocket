@@ -1312,7 +1312,7 @@ module core_top (
         .reset        (reset),
         .buttons      (kb_buttons),
         // The game port this once fed is gone (the Tandy joystick and its
-        // routing were removed with the PC/XT layer). The mode still exists in
+        // routing were removed). The mode still exists in
         // the settings and still suppresses the pad->keys mapping, which is
         // what it did before -- there is simply nowhere for the bits to go
         // now. Remove the option only with a settings-blob migration.
@@ -1333,7 +1333,7 @@ module core_top (
     );
 
     //
-    // PC-98 keyboard: the Set-2 stream above is a PC/XT keyboard's language;
+    // PC-98 keyboard: the Set-2 stream above is the PS/2 scan language;
     // a PC-98 keyboard is a serial device on the 8251 at ports 0x41/0x43 that
     // sends one matrix byte per key, bit 7 set on release. pc98_kbd_ps2 taps
     // the SAME stream -- it never stalls it, ps2_keyboard's kb_ready keeps the
@@ -2290,9 +2290,8 @@ module core_top (
     wire [19:0] cpu_ad_out;
     reg  [19:0] cpu_address;
     wire [7:0] cpu_data_bus;
-    // The 16-bit memory path's extra lane. Under the PC/XT build the 8088
-    // drives cpu_data_bus and nothing asks for a word, so these are tied off
-    // below; the PC-98 build wires them to v30_cpu_bridge.
+    // The 16-bit memory path's extra lane. Under a narrow-CPU build these are
+    // tied off below; the PC-98 build wires them to v30_cpu_bridge.
     wire [7:0] cpu_data_bus_hi;
     wire [7:0] data_bus_hi;
     wire       cpu_word_access;

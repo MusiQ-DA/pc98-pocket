@@ -1,4 +1,4 @@
-// PicoRV32 crt0 + interrupt vector for the PCXT disk / OSD softcore.
+// PicoRV32 crt0 + interrupt vector for the PC-98 disk / OSD softcore.
 //
 // Reset lands at _start (ROM base); the interrupt vector sits at 0x10 (PROGADDR_IRQ).
 // The vector saves the interrupted context to irq_regs, calls the C handler irq(), then
