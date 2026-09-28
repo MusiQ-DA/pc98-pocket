@@ -2106,7 +2106,10 @@ module core_top (
     wire [7:0]  st_wdata_mux = jt_st_req ? jt_st_wdata : st_wdata;
     wire        st_we_mux    = jt_st_req ? jt_st_we    : st_we;
     wire        st_req_mux   = st_req | jt_st_req;
-    wire        st_strict    = jt_st_req & jt_st_walk;
+    // Strict is keyed on the walk flag (not req) so it stays up through the
+    // per-byte request gaps -- `run` then keeps the address bus held for the
+    // whole walk and ram_rw_complete cannot pulse for a guest CPU access.
+    wire        st_strict    = jt_st_walk;
 `else
     wire [19:0] st_addr_mux  = st_addr;
     wire [7:0]  st_wdata_mux = st_wdata;

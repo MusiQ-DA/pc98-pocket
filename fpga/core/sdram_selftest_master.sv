@@ -77,12 +77,21 @@ module sdram_selftest_master #(
     logic [15:0] guard;
     logic [3:0]  retries;
     logic [7:0]  grant_stable;
+    logic        saw_complete_low;
     wire         grant = req & ~loader_busy;
+    // Strict mode only counts a completion once the line has been seen low
+    // while our strobe is up -- a complete already high on entry belongs to
+    // an older access and would fold that byte into our checksum.
+    wire         complete_ok = strict ? (saw_complete_low & ram_rw_complete)
+                                      : ram_rw_complete;
 
     // bus_granted must stay high this many clocks before a strict access
     // strobes. HLDA (address_enable_n) only updates at cpu_ce boundaries
     // (~9 clk), so a stale-high grant with a drop already queued is flushed
-    // out by watching it for longer than one full cpu_ce period.
+    // out by watching it for longer than one full cpu_ce period. Strict also
+    // holds `run` across the whole requester sequence (see S_DRAIN), so once
+    // the first grant lands the bus never returns to the CPU mid-walk -- the
+    // ram_rw_complete line then cannot pulse for anyone else's access.
     localparam int GRANT_STABLE = 16;
 
     always_ff @(posedge clk or posedge rst) begin
@@ -96,16 +105,31 @@ module sdram_selftest_master #(
             guard   <= 16'd0;
             retries <= 4'd0;
             grant_stable <= 8'd0;
+            saw_complete_low <= 1'b0;
         end else begin
             case (state)
 
             S_IDLE: begin
-                run     <= 1'b0;
+                if (!strict)
+                    run <= 1'b0;
+                // Strict keeps `run` up between accesses so the arbiter never
+                // hands the address bus back to the CPU mid-walk. If the
+                // requester went away for good, release the bus anyway or the
+                // guest would starve.
+                else if (!req) begin
+                    guard <= guard + 16'd1;
+                    if (guard == 16'(GUARD)) begin
+                        run   <= 1'b0;
+                        guard <= 16'd0;
+                    end
+                end else
+                    guard <= 16'd0;
                 write_n <= 1'b1;
                 read_n  <= 1'b1;
                 done    <= 1'b0;
                 retries <= 4'd0;
                 grant_stable <= 8'd0;
+                saw_complete_low <= 1'b0;
                 if (grant && initilized_sdram) begin
                     run     <= 1'b1;    // request the bus, commands still idle
                     guard   <= 16'd0;
@@ -130,7 +154,12 @@ module sdram_selftest_master #(
                 // longer than one cpu_ce period cannot be in that window, and
                 // once taken it cannot tear mid-access because HLDA is sticky
                 // while ext_access_request stays up.
-                if (bus_granted)
+                // Count only cycles that are granted AND quiescent: a pending
+                // ram_rw_complete is someone else's access still draining --
+                // strobing through it lands our read on their byte. While the
+                // bus is held (strict) no new guest access can be accepted, so
+                // once this drains it stays drained.
+                if (bus_granted && !ram_rw_complete)
                     grant_stable <= (grant_stable != 8'hFF) ? grant_stable + 8'd1
                                                             : grant_stable;
                 else
@@ -152,14 +181,20 @@ module sdram_selftest_master #(
             // Hold the command until RAM.sv reports the access finished, or the
             // guard expires. Strict retries the access a bounded number of
             // times rather than summing a byte that never really completed.
+            // Strict also requires the complete line to have been LOW since
+            // the strobe went up: a complete already high on entry belongs to
+            // an older access and would fold that byte into our checksum.
             S_ACCESS: begin
                 guard <= guard + 16'd1;
-                if (ram_rw_complete || (guard == 16'(GUARD))) begin
-                    if (!ram_rw_complete && strict && retries != 4'hF) begin
+                if (~ram_rw_complete)
+                    saw_complete_low <= 1'b1;
+                if (complete_ok || (guard == 16'(GUARD))) begin
+                    if (!complete_ok && strict && retries != 4'hF) begin
                         write_n <= 1'b1;
                         read_n  <= 1'b1;
                         retries <= retries + 4'd1;
                         guard   <= 16'd0;
+                        saw_complete_low <= 1'b0;
                         state   <= S_GRANT;
                     end else begin
                         rdata   <= we ? 8'h00 : ext_rdata;
@@ -172,9 +207,13 @@ module sdram_selftest_master #(
             end
 
             // Drop the bus, then wait for the requester to see done and lower
-            // req, so one firmware write cannot launch two accesses.
+            // req, so one firmware write cannot launch two accesses. Strict
+            // keeps `run` up: releasing between walk bytes lets the arbiter
+            // hand the bus to the CPU for a few clocks, whose access can then
+            // complete inside our next access's window and get summed as ours.
             S_DRAIN: begin
-                run <= 1'b0;
+                if (!strict)
+                    run <= 1'b0;
                 if (~req) begin
                     done  <= 1'b0;
                     state <= S_IDLE;

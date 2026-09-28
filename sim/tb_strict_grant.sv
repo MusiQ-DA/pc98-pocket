@@ -65,7 +65,14 @@ module tb_strict_grant;
         $display("RESULT: PASS -- no strobe during stale window, read completed");
 
         // -- phase 3: aen never drops across the req gap; must not deadlock.
-        req <= 0; repeat (3) @(posedge clk);
+        //    Strict also holds `run` through the gap so the bus never returns
+        //    to the CPU mid-walk -- check run stayed high the whole time.
+        req <= 0;
+        repeat (4) @(posedge clk) if (!run) bad++;
+        if (bad != 0) begin
+            $display("RESULT: FAIL -- run released across the req gap");
+            $fatal;
+        end
         req <= 1;
         wait (!read_n);
         repeat (6) @(posedge clk);
@@ -75,7 +82,55 @@ module tb_strict_grant;
             $display("RESULT: FAIL -- strobe on short grant in phase 3");
             $fatal;
         end
-        $display("RESULT: PASS -- continuous grant does not deadlock");
+        $display("RESULT: PASS -- continuous grant does not deadlock, run held");
+
+        // -- phase 4: a guest access drains while we hold the grant. The
+        //    strobe must wait for the pending complete to clear.
+        req <= 0; repeat (3) @(posedge clk);
+        rw_complete <= 1;                    // foreign access still draining
+        req <= 1;
+        repeat (10) @(posedge clk);
+        if (!read_n) begin
+            $display("RESULT: FAIL -- strobed while a complete was pending");
+            $fatal;
+        end
+        rw_complete <= 0;                    // foreigner finished
+        wait (!read_n);
+        repeat (6) @(posedge clk);
+        rw_complete <= 1; @(posedge clk); rw_complete <= 0;
+        wait (done);
+        $display("RESULT: PASS -- pending complete drained before strobe");
+
+        // -- phase 5: a foreign complete is already up the instant our strobe
+        //    fires (in-flight guest access finishing as we enter). The line
+        //    was never low while our strobe was up, so it must not be
+        //    accepted; only the later genuine pulse may finish the access.
+        //    (A complete arriving 2+ clk into the access is indistinguishable
+        //    from our own on a shared line -- the held `run` grant is what
+        //    keeps that case from ever happening on the real bus.)
+        req <= 0; repeat (3) @(posedge clk);
+        req <= 1;
+        wait (!read_n);
+        rw_complete <= 1;                    // lands with/at the strobe
+        repeat (3) @(posedge clk);
+        if (done) begin
+            $display("RESULT: FAIL -- accepted a stale complete");
+            $fatal;
+        end
+        rw_complete <= 0;
+        if (done) begin
+            $display("RESULT: FAIL -- accepted a stale complete");
+            $fatal;
+        end
+        repeat (4) @(posedge clk);
+        ext_rdata <= 8'h5A;
+        rw_complete <= 1; @(posedge clk); rw_complete <= 0;
+        wait (done);
+        if (rdata !== 8'h5A) begin
+            $display("RESULT: FAIL -- rdata=%h, wanted 5A", rdata);
+            $fatal;
+        end
+        $display("RESULT: PASS -- foreign complete in window not accepted");
         $finish;
     end
 
