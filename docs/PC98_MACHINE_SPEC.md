@@ -181,8 +181,8 @@ pit 0x71, crtc 0x70, fdc 0xBE, dmac 0x01/0x21, serial 0x30/0x41)
 
 ## 開発モデル
 
-- ローカルDockerビルド(raetro/quartus:pocket, Rosetta)で反復
-- GitHub Actionsで回帰ビルド
+- GitHub Actionsでビルド(artifactにsof/rbf — JTAGフラッシュにもこれを使う)
+- ローカルのQuartusビルドは廃止(2026-09-28)。sim系Docker経路は継続
 - ハードウェアテストはユーザーがPocket実機で実施
 
 ---

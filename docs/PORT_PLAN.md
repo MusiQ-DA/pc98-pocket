@@ -86,5 +86,5 @@ NEC PC-9800シリーズ(PC-9801VX級)を Analogue Pocket openFPGA で動かす�
 
 ### 備考
 - ローカルDockerDesktopは本体欠損のため起動不可。CIビルドが主経路。
-- `scripts/build-docker.sh` はDocker Desktop復活時用に保持。
+- ローカルQuartusビルド(build-docker.sh/build-std.sh)は2026-09-28に廃止 — wine/Rosetta経由は不安定で、CI artifactにsof/rbfが揃うため不要。
 - Intelの直リンク(akdlm)は403になったため、イメージ経由のビルドが現実解。

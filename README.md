@@ -17,8 +17,7 @@ docs/               設計ドキュメント(PIVOT.md, PC98_MACHINE_SPEC.md, POR
 ## ビルド
 
 - **CI**: pushで`build`ワークフロー — sim/firmwareゲート + Quartus Standard 18.1(Windows runner)コンパイル → Actionsのartifactにsof/rbf
-- **ローカル**: `scripts/build-docker.sh`(raetro/quartus:pocketイメージ、Rosetta)
-- **ローカル(Standard)**: `scripts/build-std.sh`(quartus-wine:18.1イメージ、要license.dat)
+- **ローカル**: 廃止 — QuartusのローカルDockerビルド(wine/Rosetta)は不安定なため撤去。bitstreamはCI artifactの`.sof`/`.rbf`を使う(JTAGフラッシュは`scripts/jtag_flash.sh`にCIのsofを渡す)
 
 ## ロードマップ
 

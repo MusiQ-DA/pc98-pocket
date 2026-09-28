@@ -28,5 +28,7 @@ binaries only.
   `firmware.srchash` matches the sources — rebuild after ANY source edit
   (comments included, they change the hash).
 - Full bitstream: GitHub Actions `build.yml` (`quartus-win` job, native
-  Windows Quartus) on push to `main` or `workflow_dispatch`. Local
-  Docker/Rosetta Quartus is unreliable.
+  Windows Quartus) on push to `main` or `workflow_dispatch`. The local
+  Docker Quartus scripts were removed (unreliable under wine/Rosetta);
+  the CI artifact carries both `.sof` and `.rbf` — JTAG flashes take the
+  CI `.sof` directly.
