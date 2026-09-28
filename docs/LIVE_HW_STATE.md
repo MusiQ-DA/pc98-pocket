@@ -374,10 +374,18 @@ launch レート・late 発火行・fill 年齢をライブ観測。修正後は
   1clk 後に rv_shot=1→rv_done=1→strict=1 に反転。よって v3 が実測
   したのは「strict walk@+1.5ms」で、**non-strict borrow/release
   カデンスは現行ツリーで一度もテストされていなかった**。
-- **shotgun v4 (5bea7e9)**: 真の non-strict full walk@+3ms —
-  st_strict を ~rv_seq 駆動に修正 + 発射を b6c7ee0 と同一時刻に。
-  これが死ねばカデンスそのものが犯人 (era 差不要)、生きれば
-  b6c7ee0 固有のツリー差分が残る。
+- **shotgun v4 (414d1a2 slim)**: 真の non-strict full walk@+3ms を
+  最小構成で実装 (arm フラグ/シーケンサ/hold_only 全撤去、rv_delay
+  18bit、rv_auto で config 発射 walk のみ non-strict に)。
+- **v4 結果 — 犯人確定**: 現行ツリーで **POST 死亡を完全再現**
+  (0x1F=05FF0001 imr=FF/ticks=1、TVRAM 全空、0x2B=E71323B6 ゴミ、
+  walkaddr=FFFF 完走、rv_live=1 = walk 後に数サイクル回って停止)。
+  → **致死機構 = non-strict の per-byte borrow/release カデンス
+  × コールド POST 窓**、era 差は不要。b6c7ee0 の 3/3 死亡を完全説明。
+  隙間で aen が落ちた瞬間にゲストのバスサイクルが tear され、
+  初期化コードを直撃するのが死因 (strict walk は aen 不変ゆえ
+  +1.5ms でも生存 — 「窓」はカデンス無しでは無害)。
+  production の strict+遅延 walk は二重に安全と確認済み。
 - **era 分離 bisect (96eba7b, bisect-b6-nowalk)**: b6c7ee0 ツリーで
   rv_walk_go=0 だけの変更 → **POST 完走** (`How many files`,
   0x1F=053D0005)。同一ツリーで auto-walk ON=3/3死亡 vs OFF=起動
