@@ -1151,9 +1151,9 @@ module core_top (
             8'h2D:   probe_data = {rv_str_xor, jt_st_addr[15:0]};
             // 0x2E: bisect readback -- armed flags, shot counter, and the
             // liveness witness: rv_deadshot is the first shot that fired on
-            // an already-dead guest (killer = deadshot-1), rv_act[7:4]
-            // counts guest bus cycles since the last shot (0 = dead).
-            8'h2E:   probe_data = {12'h000, rv_deadshot, rv_act[7:4],
+            // an already-dead guest (killer = deadshot-1), rv_live is the
+            // guest-did-a-bus-cycle flag since the last shot.
+            8'h2E:   probe_data = {12'h000, rv_deadshot, 3'b000, rv_live,
                                    rv_seq, rv_single,
                                    rv_hold_only, rv_early, rv_short_walk,
                                    1'b0, rv_shot};
@@ -2065,7 +2065,7 @@ module core_top (
     reg         rv_seq       = 1'b1;   // shotgun armed from config
     reg  [2:0]  rv_shot      = 3'd0;
     reg         rv_short_walk = 1'b0;
-    reg  [7:0]  rv_act       = 8'd0;
+    reg         rv_live      = 1'b0;
     reg  [3:0]  rv_deadshot  = 4'hF;
     wire [11:0] rv_tgt_hi = rv_shot == 3'd0 ? 12'd1 : 12'd984; // +1.5 ms, +1.5 s
     wire        rv_done    = rv_seq ? (rv_shot == 3'd2) : rv_walked;
@@ -2091,15 +2091,15 @@ module core_top (
     end
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
-            rv_act      <= 8'd0;
+            rv_live     <= 1'b0;
             rv_deadshot <= 4'hF;
         end else begin
-            if (guest_cyc && rv_act != 8'hFF)
-                rv_act <= rv_act + 8'd1;
+            if (guest_cyc)
+                rv_live <= 1'b1;
             if (rv_walk_go) begin
-                if (rv_act < 8'd64 && rv_deadshot == 4'hF)
+                if (!rv_live && rv_deadshot == 4'hF)
                     rv_deadshot <= {1'b0, rv_shot};
-                rv_act <= 8'd0;
+                rv_live <= 1'b0;
             end
         end
     end
