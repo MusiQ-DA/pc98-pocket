@@ -1150,13 +1150,12 @@ module core_top (
             8'h2C:   probe_data = {rv_str_cnt, rv_str_add};
             8'h2D:   probe_data = {rv_str_xor, jt_st_addr[15:0]};
             // 0x2E: bisect readback -- armed flags, shot counter, and the
-            // liveness witness: rv_deadshot is the first shot that fired on
-            // an already-dead guest (killer = deadshot-1), rv_live is the
-            // guest-did-a-bus-cycle flag since the last shot.
-            8'h2E:   probe_data = {12'h000, rv_deadshot, 3'b000, rv_live,
+            // liveness flag: rv_live=1 iff the guest ran a bus cycle after
+            // the last walk completed (v3's post-storm survival witness).
+            8'h2E:   probe_data = {19'h00000, rv_live,
                                    rv_seq, rv_single,
-                                   rv_hold_only, rv_early, rv_short_walk,
-                                   1'b0, rv_shot};
+                                   rv_hold_only, rv_early, 2'b00,
+                                   rv_shot};
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:
@@ -2052,30 +2051,24 @@ module core_top (
     // inside the fragile window. But the lethal b6c7ee0 build predates the
     // strict-grant path: its walk dropped `run` after EVERY byte, i.e. the
     // bus was borrowed and handed back ~96K times in-window -- a cadence
-    // none of the survived shots exercised. v3 reproduces that exactly:
-    //   shot0 +1.5ms non-strict FULL walk  (b6c7ee0's borrow/release storm)
-    //   shot1 +1.5s  non-strict 256B walk  (fires after the storm; doubles
-    //          as the liveness checkpoint -- deadshot=1 means shot0 killed)
-    // During shot0's non-strict walk the bus returns to the guest between
-    // bytes, so guest_cyc still accumulates on a live guest: the liveness
-    // witness stays valid inside the storm itself.
+    // none of the survived shots exercised. v3 reproduces that exactly as
+    // a single shot (the fitter has ~zero LABs of slack):
+    //   +1.5ms  non-strict FULL walk  (b6c7ee0's borrow/release storm)
+    // Liveness is a post-storm flag: rv_live clears when the walk completes
+    // and latches the first guest bus cycle afterwards, so any later probe
+    // read answers "did the guest come back after the storm". A guest that
+    // died mid-walk leaves rv_live=0 forever; the walk engine itself still
+    // finishes and folds its signature into 0x2B as usual.
     reg         rv_hold_only = 1'b0;
     reg         rv_early     = 1'b0;
     reg         rv_single    = 1'b0;
     reg         rv_seq       = 1'b1;   // shotgun armed from config
     reg  [2:0]  rv_shot      = 3'd0;
-    reg         rv_short_walk = 1'b0;
     reg         rv_live      = 1'b0;
-    reg  [3:0]  rv_deadshot  = 4'hF;
-    wire [11:0] rv_tgt_hi = rv_shot == 3'd0 ? 12'd1 : 12'd984; // +1.5 ms, +1.5 s
-    wire        rv_done    = rv_seq ? (rv_shot == 3'd2) : rv_walked;
+    wire        rv_done    = rv_seq ? (rv_shot == 3'd1) : rv_walked;
     wire        rv_walk_go = ~rv_done & (rv_seq
-        ? (rv_delay[27:16] == rv_tgt_hi)
+        ? (rv_delay[27:16] == 12'd1)     // +1.5 ms
         : (rv_delay == (rv_early ? 28'd129_000 : 28'hFFFFFFF)));
-    // Both shots walk; the late one is the short (256 B) checkpoint.
-    wire        sh_walk    = 1'b1;
-    // v3 shots deliberately drop `run` between bytes: non-strict cadence.
-    wire        sh_strict  = 1'b0;
     wire        guest_cyc  = ~chipset_aen & (processor_status != 3'b111);
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
@@ -2089,18 +2082,17 @@ module core_top (
             rv_shot   <= rv_shot + 3'd1;
         end
     end
+    reg         rv_wd        = 1'b0;
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
-            rv_live     <= 1'b0;
-            rv_deadshot <= 4'hF;
+            rv_live <= 1'b0;
+            rv_wd   <= 1'b0;
         end else begin
-            if (guest_cyc)
+            rv_wd <= jt_st_done;
+            if (jt_st_done & ~rv_wd)
+                rv_live <= 1'b0;         // storm just ended: restart counting
+            else if (guest_cyc)
                 rv_live <= 1'b1;
-            if (rv_walk_go) begin
-                if (!rv_live && rv_deadshot == 4'hF)
-                    rv_deadshot <= {1'b0, rv_shot};
-                rv_live <= 1'b0;
-            end
         end
     end
     always_ff @(posedge clk_chipset) begin
@@ -2130,11 +2122,10 @@ module core_top (
             jt_st_we    <= 1'b0;
             jt_st_req   <= 1'b1;
             jt_st_done  <= 1'b0;
-            jt_st_walk  <= rv_seq ? sh_walk
+            jt_st_walk  <= rv_seq ? 1'b1
                                   : ~(rv_hold_only | rv_single);
             jt_walk_add <= 16'd0;
             jt_walk_xor <= 16'd0;
-            rv_short_walk <= rv_seq & sh_walk & rv_shot[0];
             rv_early    <= 1'b0;   // one-shot: a boot armed early fires once
         end else if (jt_st_req && st_done) begin
             jt_st_rdata <= st_rdata;
@@ -2145,9 +2136,8 @@ module core_top (
                     jt_walk_xor <= jt_walk_xor ^ {st_rdata, jt_walk_pair};
                 else
                     jt_walk_pair <= st_rdata;
-                if (jt_st_addr == (rv_short_walk ? 20'hE80FF : 20'hFFFFF)) begin
+                if (jt_st_addr == 20'hFFFFF) begin
                     jt_st_walk <= 1'b0;
-                    rv_short_walk <= 1'b0;
                     jt_st_done <= 1'b1;
                 end else
                     jt_st_addr <= jt_st_addr + 20'd1;
@@ -2189,10 +2179,11 @@ module core_top (
     // whole walk and ram_rw_complete cannot pulse for a guest CPU access.
     // hold_only rides the same settled-grant path: a bare freeze still must
     // not fire before the HLDA has provably landed.
-    // Sequence shots ride sh_strict (v3 runs them non-strict on purpose);
-    // manual JTAG walks -- including post-sequence ones -- stay strict.
+    // The v3 sequence shot deliberately runs non-strict (drop `run` per
+    // byte, b6c7ee0 cadence); manual JTAG walks -- including post-sequence
+    // ones -- stay strict.
     wire        st_strict    = rv_hold_only
-                             | (jt_st_walk & (~rv_seq | rv_done | sh_strict));
+                             | (jt_st_walk & (~rv_seq | rv_done));
     wire        st_hold_only = rv_hold_only;
 `else
     wire [19:0] st_addr_mux  = st_addr;
