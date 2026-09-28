@@ -110,14 +110,27 @@ module pc98_gvram_display #(
     end
     wire [8:0] line_now = gray2bin(gray_s2);
 
+    // The only legal moves are +1 and the 439->0 wrap. Gray codes promise
+    // single-bit transitions between CONSECUTIVE values only, and the wrap
+    // breaks it -- gray(439) and gray(0) differ in six bits, so the 2FF can
+    // land mid-transition and line_now flashes garbage for a cycle or two
+    // once a frame. A garbage line_now must never look like a new line: a
+    // phantom edge would step the fetch walk an extra PITCH and every fill
+    // for the rest of the frame would read shifted (wandering band edges).
+    // A torn value that happens to equal the expected next line is just
+    // the real edge arriving a cycle early, which is harmless -- and any
+    // other garbage is rejected, then the true value lands a cycle later.
+    localparam int V_LINES = 440;
     logic [8:0] line_q = 9'd0;
+    wire  [8:0] line_next = (line_q == 9'(V_LINES - 1)) ? 9'd0
+                                                        : line_q + 9'd1;
+    wire        line_edge = (line_now == line_next);
     always_ff @(posedge clk) begin
         if (rst)
             line_q <= 9'd0;
-        else if (line_now != line_q)
+        else if (line_edge)
             line_q <= line_now;
     end
-    wire line_edge = (line_now != line_q);
 
     // ---- the buffers -------------------------------------------------------
     //
