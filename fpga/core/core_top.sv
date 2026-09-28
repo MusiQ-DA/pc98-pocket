@@ -2020,7 +2020,10 @@ module core_top (
     reg  [15:0] jt_walk_xor  = 16'd0;
     reg         rv_walked    = 1'b0;
     reg  [16:0] rv_delay     = 17'd0;
-    wire        rv_walk_go   = (rv_delay == 17'h1FFFF) & ~rv_walked;
+    // Bisect: auto-walk disabled to isolate whether the early +3 ms walk or
+    // some other co-factor kills cold POST on this build. Manual JTAG walk
+    // (slot 0x84 bit30) still works.
+    wire        rv_walk_go   = 1'b0;
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
             rv_walked <= 1'b0;
