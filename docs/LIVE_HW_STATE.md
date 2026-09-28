@@ -270,3 +270,20 @@ launch レート・late 発火行・fill 年齢をライブ観測。修正後は
   無いと aen が落ちずエッジが来ない = walk ハング (単体ベンチで確認済)。
 - sim/tb_strict_grant.sv: stale window での strobe 禁止 + 連続 grant の
   非デッドロックを検証 (CI ステップ追加済み)
+
+**strict-v2 (run 543 / 355fe20) を実機投入してもまだ化ける件**:
+- 手動 walk 3 回: `2B=2AE5F91C / 31B94D92 / 2D4C57E1` — 依然非決定的。
+  `2C=C0003800` `2D=1C78FFFF` は常に正しい (stream 側は完璧)。
+- 第二の化け経路を特定: walk はバイト間で `run`(=ext_access_request) を
+  ~2clk 落とす → ギャップに cpu_ce_posedge が挟まると aen が落ち、その
+  窓で CPU のメモリアクセスが受理される。その完了は我々がバスを取り
+  返した**後**に COMPLETE へ到達しうる (`~read_flag→COMPLETE` は
+  strobe 切断後も発火) → `ram_rw_complete` が我々の S_ACCESS 中に発火
+  → **CPU の読み出しバイトを我々のデータとして加算**。単発 memrd が
+  常に正しいのは間隔が ms オーダーで競合窓に当たらないため。
+- strict-v3 (ec89281): **walk 中 `run` を保持** → aen が一度も落ちない
+  → CPU コマンドは常に 8288 でゲート → walk 中の complete は全て我々の
+  もの (≒ walk 中ゲストを ~100ms 凍結するのと同効果)。加えて
+  S_GRANT で `!ram_rw_complete` 排水 (初バイトの pre-grant 外国人完了を
+  待つ) + S_ACCESS で「strobe 中に line が low を見た」ことを受理条件化
+  (entry 時点の stale complete 拒否)。ベンチ 4 phase 全 PASS。
