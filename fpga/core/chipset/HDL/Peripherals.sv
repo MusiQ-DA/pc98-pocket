@@ -149,6 +149,7 @@ module PERIPHERALS #(
     output  logic   [1:0]   gdc_draw_req,
     output  logic   [1:0]   gdc_draw_busy,
     output  logic  [15:0]   gdc_draw_ops,
+    output  logic  [31:0]   gvram_dbg,
     output  logic [319:0]   gdc_draw_snaps,
     input   logic   [1:0]   gdc_srv_done_levels,
 
@@ -1210,7 +1211,8 @@ module PERIPHERALS #(
         .p_req(gv_rd_req), .p_addr(gv_rd_addr), .p_len(gv_rd_len),
         .p_ack(gv_rd_ack), .p_rvalid(gv_rd_valid), .p_rdata(gv_rd_data),
         .p_done(gv_rd_done),
-        .gfx_dot(gfx_dot_w)
+        .gfx_dot(gfx_dot_w),
+        .dbg(gvram_dbg)
     );
 
     // The layer also stays dark until the machine has written a graphics

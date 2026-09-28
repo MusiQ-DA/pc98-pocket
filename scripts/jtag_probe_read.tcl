@@ -60,6 +60,7 @@ set regs {
     38  JT_FDD=sectors,ok,ins,seq,drv,cmd
     39  MGMT=wrseen,last,fdd_req,fdd_present
     40  RESET_TERMS=dbg_bits
+    41  GVFILL=maxlen,skip,fills
     255 MAGIC
 }
 

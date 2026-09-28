@@ -73,7 +73,15 @@ module pc98_gvram_display #(
 
     // One dot of graphics, aligned with hcount delayed one rd_clk (the
     // buffer read is registered); zero when the plane is off.
-    output logic [3:0] gfx_dot            // {E, R, G, B}
+    output logic [3:0] gfx_dot,           // {E, R, G, B}
+
+    // Underrun telemetry for the wandering-band-edge hunt: a fill that is
+    // still running when the next line edge arrives leaves that line's bank
+    // stale, so the picture's horizontal boundaries sit a line low for one
+    // rasterline. dbg packs {worst fill length in clk, skipped-line count,
+    // launched-fill count}; the counters saturate at 0xFF so a runaway still
+    // reads as nonzero.
+    output logic [31:0] dbg
 );
 
     // ---- the scanline, gray-coded across the domains ----------------------
@@ -324,6 +332,41 @@ module pc98_gvram_display #(
         rd_g  <= buf_g[r_addr];
         rd_e  <= buf_e[r_addr];
     end
+
+    // ---- underrun telemetry ------------------------------------------------
+    //
+    // skip counts a line edge the running fill did not beat: the bank meant
+    // for the incoming line never launched, so the display adopts the older
+    // fill and that rasterline shows data a line stale. fills counts launches
+    // so the ratio is readable. max_fill is the worst launch->done length in
+    // clk cycles -- a line is ~3000 of them, so a number near that says the
+    // port-D budget itself is the problem rather than an occasional queue.
+    logic [7:0]  dbg_skip      = 8'd0;
+    logic [7:0]  dbg_fills     = 8'd0;
+    logic [15:0] dbg_fill_len  = 16'd0;
+    logic [15:0] dbg_max_fill  = 16'd0;
+    logic        f_act_d       = 1'b0;
+    always_ff @(posedge clk) begin
+        f_act_d <= f_active;
+        if (rst) begin
+            dbg_skip     <= 8'd0;
+            dbg_fills    <= 8'd0;
+            dbg_fill_len <= 16'd0;
+            dbg_max_fill <= 16'd0;
+        end else begin
+            if (line_edge && (line_now < 9'(LINES))) begin
+                if (f_active) dbg_skip  <= (dbg_skip  == 8'hFF) ? dbg_skip  : dbg_skip  + 8'd1;
+                else          dbg_fills <= (dbg_fills == 8'hFF) ? dbg_fills : dbg_fills + 8'd1;
+            end
+            if (f_active)
+                dbg_fill_len <= (dbg_fill_len == 16'hFFFF) ? dbg_fill_len : dbg_fill_len + 16'd1;
+            else
+                dbg_fill_len <= 16'd0;
+            if (f_act_d & ~f_active && (dbg_fill_len > dbg_max_fill))
+                dbg_max_fill <= dbg_fill_len;
+        end
+    end
+    assign dbg = {dbg_max_fill, dbg_skip, dbg_fills};
 
     wire pb = rd_b[bit_q];
     wire pr = rd_r[bit_q];
