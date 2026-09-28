@@ -357,3 +357,15 @@ launch レート・late 発火行・fill 年齢をライブ観測。修正後は
   rv_deadshot にラッチ (0x2E[19:16]、犯人 = deadshot-1) —
   ゲスト死後も残りショットは発射し続けるため、署名だけでは
   犯人ショットが特定できないことへの対策。
+- **shotgun v2 結果 (0718a7b の前の 56ebf4c ビルド、時刻は
+  rv_delay[27:16] マッチで ~1.5ms 解像度に削減)**: 全6ショット
+  **生存** — read@+1.5ms すら生きた (0x2E: deadshot=F, act=F,
+  shot=6 完走, BASIC 到達)。→「窓内の1ストローブ」は致死でない。
+  残る変数は**バス借り/解放のカデンス**: 致死ビルド b6c7ee0 は
+  strict-grant 前で、walk が毎バイト `run` を落とす (~96K回の
+  borrow/release)。v1/v2 の strict walk は連続保持だった。
+- **shotgun v3 (0718a7b)**: b6c7ee0 カデンス厳密再現 —
+  non-strict FULL walk@+1.5ms + non-strict 256B@+1.5s
+  (嵐後の liveness checkpoint; deadshot=1 なら shot0 が犯人)。
+  non-strict では byte 間ギャップでゲストが走るため walk 中も
+  guest_cyc が積算され、嵐の中でも生死判定可能。
