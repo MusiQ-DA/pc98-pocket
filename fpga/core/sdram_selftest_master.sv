@@ -76,7 +76,14 @@ module sdram_selftest_master #(
 
     logic [15:0] guard;
     logic [3:0]  retries;
+    logic [7:0]  grant_stable;
     wire         grant = req & ~loader_busy;
+
+    // bus_granted must stay high this many clocks before a strict access
+    // strobes. HLDA (address_enable_n) only updates at cpu_ce boundaries
+    // (~9 clk), so a stale-high grant with a drop already queued is flushed
+    // out by watching it for longer than one full cpu_ce period.
+    localparam int GRANT_STABLE = 16;
 
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -88,6 +95,7 @@ module sdram_selftest_master #(
             rdata   <= 8'h00;
             guard   <= 16'd0;
             retries <= 4'd0;
+            grant_stable <= 8'd0;
         end else begin
             case (state)
 
@@ -97,6 +105,7 @@ module sdram_selftest_master #(
                 read_n  <= 1'b1;
                 done    <= 1'b0;
                 retries <= 4'd0;
+                grant_stable <= 8'd0;
                 if (grant && initilized_sdram) begin
                     run     <= 1'b1;    // request the bus, commands still idle
                     guard   <= 16'd0;
@@ -110,13 +119,34 @@ module sdram_selftest_master #(
             // exactly what the old single-state behavior did.
             S_GRANT: begin
                 guard <= guard + 16'd1;
-                if (bus_granted || (guard == 16'(GUARD) && !strict)) begin
+                // Strict mode needs a grant that has provably settled: the
+                // arbiter's HLDA (address_enable_n) only updates at cpu_ce
+                // boundaries, so between back-to-back walk accesses it can
+                // read high while a drop is already queued in the request
+                // pipeline. Strobing then lands while the address mux has
+                // already switched back to the guest CPU, and the read
+                // returns whatever the CPU was fetching -- the non-repeatable
+                // walk sums seen on hardware. A grant that stays high for
+                // longer than one cpu_ce period cannot be in that window, and
+                // once taken it cannot tear mid-access because HLDA is sticky
+                // while ext_access_request stays up.
+                if (bus_granted)
+                    grant_stable <= (grant_stable != 8'hFF) ? grant_stable + 8'd1
+                                                            : grant_stable;
+                else
+                    grant_stable <= 8'd0;
+                if (bus_granted && (!strict || grant_stable >= 8'(GRANT_STABLE))) begin
                     write_n <= ~we;
                     read_n  <=  we;
                     guard   <= 16'd0;
                     state   <= S_ACCESS;
-                end else if (guard == 16'(GUARD))
-                    guard <= 16'd0;     // strict: keep waiting for a real HLDA
+                end else if (!strict && (guard == 16'(GUARD))) begin
+                    write_n <= ~we;
+                    read_n  <=  we;
+                    guard   <= 16'd0;
+                    state   <= S_ACCESS;
+                end else if (strict && (guard == 16'(GUARD)))
+                    guard <= 16'd0;     // keep waiting for a settled grant
             end
 
             // Hold the command until RAM.sv reports the access finished, or the

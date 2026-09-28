@@ -25,9 +25,12 @@ for i in $(seq 1 "$N"); do
     screen=$(openocd -f scripts/jtag_probe.cfg -f scripts/jtag_screen.tcl 2>/dev/null \
              | sed -n '/text plane/,/attributes/p' | grep '^|' \
              | tr -d '| ' | tr '\n' ' ')
-    pic1=$(openocd -f scripts/jtag_probe.cfg -f scripts/jtag_probe_read.tcl 2>/dev/null \
-           | grep -E '^0x1f ' | awk '{print $2}')
+    probes=$(openocd -f scripts/jtag_probe.cfg -f scripts/jtag_probe_read.tcl 2>/dev/null)
+    pic1=$(echo "$probes"  | grep -E '^0x1f ' | awk '{print $2}')
+    rvrfy=$(echo "$probes" | grep -E '^0x2[bcd] ' | awk '{printf "%s ", $2}')
     echo "attempt $i: PIC1=$pic1 (ticks in low byte)"
+    # Clean BIOS image reads: 2B=38001C78 2C=C0003800 2D=1C78FFFF (walk==stream==file)
+    echo "attempt $i: ROMVERIFY=$rvrfy"
     echo "screen: $screen"
     if echo "$screen" | grep -qiE "files|BASIC|How"; then
         echo "attempt $i: BOOT OK"

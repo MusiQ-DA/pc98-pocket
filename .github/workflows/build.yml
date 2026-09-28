@@ -90,6 +90,14 @@ jobs:
             grep -q "=== PASS ===" dma_$mode.log
           done
 
+      - name: the JTAG master's strict mode never strobes an unsettled grant
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_strict_grant \
+            -Isim sim/tb_strict_grant.sv fpga/core/sdram_selftest_master.sv \
+            -o sg --Mdir obj_sg
+          ./obj_sg/sg | tee sg.log
+          grep -q "RESULT: PASS" sg.log
+
       - name: RTC rollover equivalence — pipelined vs nested cascade
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_rtc_roll \
