@@ -246,3 +246,27 @@ launch レート・late 発火行・fill 年齢をライブ観測。修正後は
 - 解釈: str==期待値 かつ walk!=str → RAM.sv/sdram_mp 書き込み経路の損失 /
   str!=期待値 → bridge/host 側 / 全一致 → イメージ健全
 - 3 ブート x 8KB 手動スキャンは全て 0 diff — 破壊頻度は低い (~1/数ブート)
+
+**walk の読み出し経路自体が化ける件 (3475dca 系ビルドで実測)**:
+- stream 側は完全一致 (cnt=C000, add=3800, xor=1C78) なのに walk sum が
+  毎回全然違う値 (5041424B 等) — 非決定的 = **読み出し側**の問題
+- 原因特定 (BUS_ARBITER の精読): `address_enable_n`(=HLDA) は cpu_ce_posedge
+  でしか更新されず、walk はバイト間で ext_access_request を ~2clk しか
+  落とさない。ギャップに posedge が挟まると aen は 0 化 (mux は CPU 側に
+  復帰) するが、selftest master がその posedge **前**に aen=1 を読んで
+  strobe を出すと、アクセス途中で mux が CPU アドレスに切り替わる。
+  `memory_read_n` は `ab_memory_read_n`(=8288/DMA がコマンドを出していな
+  い) なら ext strobe を通すので、CPU の fetch アドレスを読んで完了する
+  = 再現性のないゴミバイト。単発の手動 memrd は JTAG 応答が ~ms 単位で
+  遅いためこの窓に当たらず正常だった。
+- 正しい証明: req 保持中は hold_request_ff_2 が sticky なので aen は
+  posedge ごとに hold_acknowledge=1 を取り続け落ちない。一方 aen=1 でも
+  ff_2=0 (降下予約済み) の stale 状態は次 posedge で必ず落ちる。よって
+  **「req 保持中に aen が 1 cpu_ce 周期以上連続 high」を持って真の
+  grant とする**のが必要十分。
+- strict-v1 (3475dca, flash済み) は stale-1 を即座に受けるためまだ化ける。
+  strict-v2 (2a6cdf4): `grant_stable` カウンタで連続 high ≥16clk を要求。
+  なお「low→high エッジ必須」版は棄却 — ギャップに cpu_ce_negedge が
+  無いと aen が落ちずエッジが来ない = walk ハング (単体ベンチで確認済)。
+- sim/tb_strict_grant.sv: stale window での strobe 禁止 + 連続 grant の
+  非デッドロックを検証 (CI ステップ追加済み)
