@@ -210,9 +210,6 @@ PY
 say "firmware.bin matches firmware.vh"
 
 cp firmware/firmware.bin dist/pc98/Assets/pc98/hiroya.PC9801/
-# Floppy A's data slot pins draw_test.hdm as its default image; ship it so the
-# pinned default actually binds on first boot instead of coming up empty.
-[ -f testdisk/draw_test.hdm ] && cp testdisk/draw_test.hdm dist/pc98/Assets/pc98/hiroya.PC9801/
 say "packaged with ROMs"
 
 # ---- 3. write --------------------------------------------------------------
@@ -236,6 +233,12 @@ mkdir -p "$VOL/Cores/hiroya.PC9801" "$VOL/Assets/pc98/hiroya.PC9801" "$VOL/Platf
 cp dist/pc98/Cores/hiroya.PC9801/* "$VOL/Cores/hiroya.PC9801/"
 cp dist/pc98/Assets/pc98/hiroya.PC9801/* "$VOL/Assets/pc98/hiroya.PC9801/"
 cp dist/pc98/Platforms/* "$VOL/Platforms/" 2>/dev/null || true
+# The file picker browses Assets/pc98/common/ (where the user's own disks live),
+# not the core's private assets dir -- the test image goes there so it can be
+# picked like any other disk. A pinned `filename` in data.json does NOT
+# auto-bind for deferload slots, it just makes same-name picks no-ops.
+mkdir -p "$VOL/Assets/pc98/common"
+[ -f testdisk/draw_test.hdm ] && cp -f testdisk/draw_test.hdm "$VOL/Assets/pc98/common/"
 sync
 
 # Verify everything that was written, not just the bitstream. The first run of
@@ -256,14 +259,20 @@ fail=0
 for f in Cores/hiroya.PC9801/bitstream.rbf_r Cores/hiroya.PC9801/core.json \
          Cores/hiroya.PC9801/data.json Assets/pc98/hiroya.PC9801/bios.rom \
          Assets/pc98/hiroya.PC9801/itf.rom Assets/pc98/hiroya.PC9801/font.rom \
-         Assets/pc98/hiroya.PC9801/firmware.bin Platforms/pc98.json \
-         $([ -f testdisk/draw_test.hdm ] && echo Assets/pc98/hiroya.PC9801/draw_test.hdm); do
+         Assets/pc98/hiroya.PC9801/firmware.bin Platforms/pc98.json; do
     if cmp -s "dist/pc98/$f" "$VOL/$f"; then
         say "  ok  $f"
     else
         say "  BAD $f"; fail=1
     fi
 done
+if [ -f testdisk/draw_test.hdm ]; then
+    if cmp -s testdisk/draw_test.hdm "$VOL/Assets/pc98/common/draw_test.hdm"; then
+        say "  ok  Assets/pc98/common/draw_test.hdm"
+    else
+        say "  BAD Assets/pc98/common/draw_test.hdm"; fail=1
+    fi
+fi
 [ $fail -eq 0 ] || { say "VERIFY FAILED"; note "deploy VERIFY FAILED"; exit 1; }
 say "written and verified to hiroya.PC9801"
 

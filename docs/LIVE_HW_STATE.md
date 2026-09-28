@@ -166,3 +166,31 @@ wedge の判定は TVRAM テキスト有無で行うこと。
 - N-88 BASIC `Ok` 到達、`PRINT TIME$` が tick で進行 (00:00:00→00:00:01)
   ※ JTAG ブートでは host が RTC を送らないため 00:00:00 開始は正常
 - `WIDTH 40` の TVRAM 偶数セル配置は正常 (描画側の stride 修正は ef77488+)
+
+## 2026-09-28 (後半): FDD bind の確定事実 — ピッカーは Assets/pc98/common/ を見る
+
+run 528 (c7547ce, clk_74a クリーン +2.827ns) をデプロイ → 起動は BIOS→ROM BASIC まで正常。
+draw_test.hdm が bind されない問題の追跡結果:
+
+**観測**
+- `0x27`: wr_seen=4, fdd_present=00 — BIOS 起動後も mount 書き込み無し
+- `FDCMD=mount` (JTAG 0x85): ok=0 — `FDD0_DISK_SIZE`=0 = **ホストが dataslot_update を一度も送っていない**
+- `pc98_test.hdm` をピック → Inserted 成功 (wr_seen 4→12, present=01) — **bind→update→mount 経路は完全動作**
+- `draw_test.hdm` をピック → 0x27 不変 (update すら来ない)
+
+**原因**: ピッカーは `Assets/pc98/common/` をブラウズする。そこに **0 バイトの draw_test.hdm スタブ**が残っていて
+(Sep 28 09:14 作成、過去のコピー失敗の残骸)、ユーザーが選んでいたのは常にその壊れた方。
+0 バイト bind → update size=0 → `stable_size`=0 → mount しない。pc98_test.hdm は実ファイルなので動いた。
+
+**data.json のパラメータ semantics (実測)**:
+- bit0 (0x01): user-reloadable — メニューにファイルピッカーを出す
+- bit1 (0x02): 起動時に `filename` をロード — **deferload スロットでは効かない** (0x203 で実験、update 来ず)
+- bit9 (0x200): ピックしたファイル名を永続化
+- `filename` を deferload スロットに pin しても自動 bind しない (0x201/0x203 両方で失敗)
+  → Floppy A の pin は除去 (同名ピックの no-op 化も回避)
+
+**対処 (deploy.sh)**: テストイメージは `Assets/pc98/common/draw_test.hdm` に配置 — 
+ピッカーが見る場所 = ユーザーの既存ディスクと同じフォルダ。
+0 バイトスタブは実ファイルで上書き済み。
+
+**残り検証**: draw_test.hdm (common/ 実ファイル) をピック → Inserted → コア再起動 → BIOS ブート確認。

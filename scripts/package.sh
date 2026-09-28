@@ -118,12 +118,12 @@ def data(j):
          "filename": "settings.dat", "extensions": ["dat"],
          "address": "0x10030000", "size_maximum": "0x1000"},
         {"name": "Floppy A",    "id": 3, "required": False, "parameters": "0x201",
-         # 0x201 = bit0 user-reloadable + bit9 persist-browsed-filename: the
-         # picked disk is remembered and re-mounted on every load/reload, and
-         # filename pins a default so drive A comes up with the image already
-         # bound. That's what lets a JTAG bitstream reload keep a floppy
-         # attached with no picker round-trip.
-         "filename": "draw_test.hdm",
+         # 0x201 = bit0 user-reloadable + bit9 persist-browsed-filename. No
+         # `filename` default: the host records a deferload slot's declared
+         # filename as its binding but never fires a dataslot update for it,
+         # and a same-name pick is then a no-op -- draw_test.hdm could not be
+         # mounted at all while it was pinned here (0x201 AND 0x203 tried).
+         # Without the pin every pick is a real rebind.
          # The schema allows at most FOUR extensions -- a longer list made the
          # Pocket browse on the first four only, and .hdm (seventh) was never
          # selectable. Keep the raw image formats the loader actually reads.
