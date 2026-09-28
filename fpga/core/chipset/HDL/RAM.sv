@@ -422,10 +422,15 @@ module RAM (
     // guest wedged. An operand match against the access in flight means
     // this strobe is satisfied by it: it waits held and the COMPLETE below
     // releases it. Only different operands are a new transfer to park.
+    // The high byte lane only counts for a word access: on a held byte
+    // write the master may drive anything up there (the next pipelined
+    // word, a turnaround byte), and comparing it could un-match the twin
+    // -- held forever with its copy already landed, a real wedge.
     wire write_strobe_match = (latch_address      == accept_address)
                             & (internal_data_bus    == accept_data)
-                            & (internal_data_bus_hi == accept_data_hi)
-                            & (word_now             == accept_word);
+                            & (word_now             == accept_word)
+                            & (~accept_word
+                               | (internal_data_bus_hi == accept_data_hi));
     wire read_strobe_match  = (latch_address == accept_address)
                             & (word_now      == accept_word);
     wire new_write_strobe = write_command && state != IDLE && !wc_pend

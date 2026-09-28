@@ -656,6 +656,16 @@ jobs:
             ap_core 2>&1 | { grep --line-buffered -vE '^\s*Info' || true; } || true
           ls -la fpga/sta_cpu*.txt fpga/sta_pico*.txt 2>/dev/null || true
 
+      - name: Detailed STA of the clk_74a bridge-domain violations
+        if: always()
+        shell: bash
+        run: |
+          cd fpga
+          quartus_sta.exe \
+            -t "$(cygpath -w "$GITHUB_WORKSPACE/scripts/sta_74a_paths.tcl")" \
+            ap_core 2>&1 | { grep --line-buffered -vE '^\s*Info' || true; } || true
+          ls -la fpga/sta_74a*.txt 2>/dev/null || true
+
       - name: Show fit summary
         if: always()
         shell: bash
@@ -682,6 +692,7 @@ jobs:
             fpga/sta_cpu_*.txt
             fpga/sta_pico_*.txt
             fpga/sta_sdram_*.txt
+            fpga/sta_74a_*.txt
 
       - name: Save incremental compile database
         # always() so a flaky later step (STA gate, upload) doesn't forfeit
