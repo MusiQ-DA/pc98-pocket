@@ -82,7 +82,8 @@ module pc98_gvram_display #(
     // rasterline. dbg packs {worst fill length in clk, skipped-line count,
     // launched-fill count}; the counters saturate at 0xFF so a runaway still
     // reads as nonzero.
-    output logic [31:0] dbg
+    output logic [31:0] dbg,
+    output logic [31:0] dbg2
 );
 
     // ---- the scanline, gray-coded across the domains ----------------------
@@ -338,21 +339,29 @@ module pc98_gvram_display #(
     logic [7:0]  dbg_late      = 8'd0;
     logic [15:0] dbg_fill_len  = 16'd0;
     logic [15:0] dbg_max_fill  = 16'd0;
+    logic [8:0]  dbg_late_line = 9'd0;        // line_now when late last fired
+    logic [15:0] dbg_nfill     = 16'd0;       // fills launched, wraps freely
     logic        f_act_d       = 1'b0;
     always_ff @(posedge clk) begin
         f_act_d <= f_active;
         if (rst) begin
-            dbg_skip     <= 8'd0;
-            dbg_late     <= 8'd0;
-            dbg_fill_len <= 16'd0;
-            dbg_max_fill <= 16'd0;
+            dbg_skip      <= 8'd0;
+            dbg_late      <= 8'd0;
+            dbg_fill_len  <= 16'd0;
+            dbg_max_fill  <= 16'd0;
+            dbg_late_line <= 9'd0;
+            dbg_nfill     <= 16'd0;
         end else begin
             if (line_edge && f_active) begin
-                if (line_now == act_tgt && (dbg_late != 8'hFF))
-                    dbg_late <= dbg_late + 8'd1;
+                if (line_now == act_tgt && (dbg_late != 8'hFF)) begin
+                    dbg_late      <= dbg_late + 8'd1;
+                    dbg_late_line <= line_now;
+                end
                 if (line_now < 9'(LINES) && (dbg_skip != 8'hFF))
                     dbg_skip <= dbg_skip + 8'd1;
             end
+            if (line_edge && !f_active && (line_now < 9'(LINES)))
+                dbg_nfill <= dbg_nfill + 16'd1;
             if (f_active)
                 dbg_fill_len <= (dbg_fill_len == 16'hFFFF) ? dbg_fill_len : dbg_fill_len + 16'd1;
             else
@@ -361,7 +370,11 @@ module pc98_gvram_display #(
                 dbg_max_fill <= dbg_fill_len;
         end
     end
-    assign dbg = {dbg_max_fill, dbg_skip, dbg_late};
+    assign dbg  = {dbg_max_fill, dbg_skip, dbg_late};
+    // Live view: fills launched so far (wraps at ~160 frames -- two samples
+    // a second apart should differ by ~22560 mod 65536), which rasterline
+    // late last fired on, and the in-flight fill's age in 512-clock units.
+    assign dbg2 = {dbg_nfill, dbg_late_line, dbg_fill_len[15:9]};
 
     wire pb = rd_b[bit_q];
     wire pr = rd_r[bit_q];

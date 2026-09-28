@@ -995,6 +995,7 @@ module core_top (
     wire  [1:0] gdc_draw_req, gdc_draw_busy, gdc_srv_done_levels;
     wire [15:0] gdc_draw_ops;
     wire [31:0]  gvram_dbg;
+    wire [31:0]  gvram_dbg2;
     wire [319:0] gdc_draw_snaps;
 
     // How far does a key get? key_count counts pc98_key_stb pulses and
@@ -1136,6 +1137,10 @@ module core_top (
             // in chipset clocks (a line is ~3000), skipped-line count,
             // launched-fill count}. A wandering band edge is a skip.
             8'h29:   probe_data = gvram_dbg;
+            // 0x2A: live fill telemetry -- {fill_len_now, last late line,
+            // last skip line/4}. fill_len >~1730 at sample time means a
+            // fill is stalling across lines despite the lookahead slack.
+            8'h2A:   probe_data = gvram_dbg2;
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:
@@ -2391,6 +2396,7 @@ module core_top (
         .gdc_draw_busy                      (gdc_draw_busy),
         .gdc_draw_ops                       (gdc_draw_ops),
         .gvram_dbg                          (gvram_dbg),
+        .gvram_dbg2                         (gvram_dbg2),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
         .tvram_dbg_cell                     (dbg_tvram_cell),

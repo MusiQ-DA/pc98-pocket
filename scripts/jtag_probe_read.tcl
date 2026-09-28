@@ -61,6 +61,7 @@ set regs {
     39  MGMT=wrseen,last,fdd_req,fdd_present
     40  RESET_TERMS=dbg_bits
     41  GVFILL=maxlen,skip,fills
+    42  GVLIVE=nfill,lateline,fillage512
     255 MAGIC
 }
 
