@@ -2048,10 +2048,8 @@ module core_top (
             rv_delay  <= 28'd0;
         end else if (!rv_walked && !rv_walk_go)
             rv_delay <= rv_delay + 28'd1;
-        else if (rv_walk_go) begin
+        else if (rv_walk_go)
             rv_walked <= 1'b1;
-            rv_early  <= 1'b0;   // one-shot: a boot armed early fires once
-        end
     end
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h04) begin
@@ -2081,6 +2079,7 @@ module core_top (
             jt_st_walk  <= ~rv_hold_only;
             jt_walk_add <= 16'd0;
             jt_walk_xor <= 16'd0;
+            rv_early    <= 1'b0;   // one-shot: a boot armed early fires once
         end else if (jt_st_req && st_done) begin
             jt_st_rdata <= st_rdata;
             jt_st_req   <= 1'b0;
