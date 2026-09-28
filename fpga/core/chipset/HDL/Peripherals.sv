@@ -1890,11 +1890,12 @@ module PERIPHERALS #(
     wire [23:0]  opna_adpcmb_addr;
     wire         opna_adpcmb_roe_n;
 
-    // USE_ADPCM=0 drops the ADPCM engines (rhythm + DELTA-T) and the 8 KB
-    // rhythm store; USE_PCM=1 keeps the stereo accumulator that respect the
-    // FM channels' L/R pan bits. ~1000 ALM standalone vs ~1733 for the full
-    // chip -- the difference between fitting and not.
-    pc98_opna #(.USE_ADPCM(0), .USE_PCM(1)) u_pc98_opna (
+    // USE_ADPCM=1 builds the ADPCM-A block: the six rhythm voices now actually
+    // sound, playing whatever the firmware loaded into the 8 KB rhythm store
+    // at boot. DELTA-T stays dark (pc98_opna wires use_adpcmb=0 -- its 256 KB
+    // SDRAM window is a known gap), and use_pcm is inert once ADPCM is on:
+    // the jt10_acc ADPCM path is the stereo accumulator already.
+    pc98_opna #(.USE_ADPCM(1), .USE_PCM(0)) u_pc98_opna (
         .clk          (clock),
         .rst          (reset),
         .cs           (opna_cs),

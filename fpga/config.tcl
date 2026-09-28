@@ -180,6 +180,15 @@ set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
 
 #   ---- DIAGNOSTIC: PC98_PROBE_EXTRA ---------------------------------------
 #   Extended JTAG probe taps (frame census, row-buffer counts, PIC/IRQ words,
-#   pad/button-gate words, DMAC/FDC-DMA handshakes): probe slots 0x01-0x05 and
-#   0x1E-0x24. Off in the shipping build -- the part is at ~99% ALMs.
-set_global_assignment -name VERILOG_MACRO "PC98_PROBE_EXTRA=1"
+#   pad/button-gate words, DMAC/FDC-DMA handshakes) plus the ROMWALK verify
+#   engine (0x2B-0x2D): probe slots 0x01-0x05 and 0x1E-0x2D.
+#
+#   OFF in the shipping build. It was enabled while hunting the "ROM SUM
+#   ERROR" -- which the walk itself was causing by borrowing the bus +3 ms
+#   into POST; commit 92f5f35 delayed the arm ~6.2 s, past POST's fragile
+#   window, and the failure is closed. With the hunt over, its ALMs went to
+#   the OPNA's ADPCM-A rhythm block: the 6-voice engine + 8 KB store wants
+#   ~500 ALM and the part sits at ~99%. A debug build that wants the probes
+#   back can re-enable this AND must also flip Peripherals' pc98_opna back
+#   to .USE_ADPCM(0)/.USE_PCM(1) to free the floor space.
+# set_global_assignment -name VERILOG_MACRO "PC98_PROBE_EXTRA=1"

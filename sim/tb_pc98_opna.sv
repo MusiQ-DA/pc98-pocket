@@ -46,7 +46,9 @@ module tb_pc98_opna;
     wire        adpcmb_roe_n;
     wire signed [15:0] snd_l, snd_r;
 
-    // Same parameters as the production instantiation in Peripherals.sv.
+    // Slim variant: the port window, register router and guest-visible
+    // behaviour are identical between configurations, so the bulk of the
+    // tests run here while the ADPCM-only paths go on dut_adpcm below.
     pc98_opna #(.USE_ADPCM(0), .USE_PCM(1)) dut (
         .clk(clk), .rst(rst),
         .cs(cs), .a2a1(a2a1),
@@ -59,9 +61,9 @@ module tb_pc98_opna;
         .snd_l(snd_l), .snd_r(snd_r)
     );
 
-    // Second instance in the ADPCM configuration -- the rhythm store only
-    // elaborates under USE_ADPCM, so the fill path is exercised on a full
-    // variant while the port/router tests above stay on the shipped slim one.
+    // Second instance, same parameters as the production instantiation in
+    // Peripherals.sv (ADPCM-A on, DELTA-T out): the rhythm store only
+    // elaborates under USE_ADPCM, so the fill path is exercised here.
     logic  [3:0] mg2_reg = 4'd0;
     logic        mg2_wr = 1'b0;
     logic [15:0] mg2_wdata = 16'h0000;
