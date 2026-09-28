@@ -317,3 +317,43 @@ launch レート・late 発火行・fill 年齢をライブ観測。修正後は
   (IVT 設定前〜割り込み初期化中) の凍結に特有の問題と確定。
 - walk は「何時でも撃てる」わけではなく「POST 安定後に撃つ」こと
   が条件と分かった — 遅延発射は対症療法ではなく正しい使い方。
+
+## +3ms POST 殺しのメカニズム bisect (セッション継続)
+
+残る謎「なぜ +3ms のバス借用が POST を殺すか」を2方向から攻めた:
+
+- **sim 再現 (tb_pc98_boot)**: arbiter の ff1/ff2/aen チェーンを忠実に
+  モデル化 (`+freeze_start_us`/`+freeze_len_us`)、bridge の
+  `address_enable_n` に接続。+3ms×46ms の凍結は発射→許可→解放まで
+  正常動作し、**ゲストは解放後に GDC 初期化を普通に続行** — 
+  凍結単体では sim の POST は殺せない (凍結以外の要因、つまり
+  ext 側がバスを駆動する事自体、が残る容疑)。
+- **ウォーム/コールド差 (実機で判明)**: Reset PC (ウォーム) 後の
+  +3ms ストローブ walk は POST が完走 (`How many files` 到達)。
+  一方コールドブート (JTAG リフラッシュ) で b6c7ee0 は**再び同じ
+  死亡** (imr=FF, ticks=1, TVRAM 空) — **+3ms 脆弱窓はコールド POST
+  固有**。BIOS が warm-boot 署名を検出して ITF/初期化をスキップする
+  ためと考えられる (warm でも `####` 進行バーは出た)。
+- **bisect 機構 (3b5132e)**: slot 0x84 bit31 で実験フラグをアーム —
+  [21]=rv_early (+3ms 発射, one-shot)、[20]=rv_hold_only (selftest
+  master が grant を取ったままストローブ無しで ~46ms バスを保持)。
+  tb_strict_grant phase 6 で hold_only 動作を検証済み。
+- **決定実験 (4ba2f60 debug build)**: rv_early=1, rv_hold_only=1 を
+  config 時点でアーム → **コールドブートで自動的に +3ms・46ms
+  純粋凍結が発射**。POST が死ねば犯人は「凍結そのもの(タイミング/
+  中断)」、生きれば「ストローブ駆動」。発射確認は 0x2D 下位16bit
+  (hold_only では jt_st_addr が E8000 に留まる)。
+- **hold-only 結果 (run 36448740328)**: コールド +3ms・46ms 凍結で
+  **POST 完走** (`How many files`, 0x2B=0, 0x2D=E8000) → 犯人は凍結
+  ではなく **ストローブ駆動**と確定。
+- **shotgun v1 (db03485)**: コールド1発で hold@3ms → read@65ms →
+  256B walk@125ms → full walk@188ms を順次発射。**全ショット生存**
+  (0x2E shot=4, 0x2B=38001C78 正値, BASIC 到達) → ストローブも
+  +65ms 以降なら安全。致死窓 = 「+3〜65ms 内のストローブ」に限定。
+- **shotgun v2**: 窓の閉じる境界を bracket — read@3/16/48ms と
+  256B walk@8/28/80ms を交互配置 + full walk@140ms 対照。
+  **liveness witness 追加**: ショット間のゲストバスサイクル数
+  (rv_act) を各発射時に採点し、活動 64 未満で発射したショットを
+  rv_deadshot にラッチ (0x2E[19:16]、犯人 = deadshot-1) —
+  ゲスト死後も残りショットは発射し続けるため、署名だけでは
+  犯人ショットが特定できないことへの対策。
