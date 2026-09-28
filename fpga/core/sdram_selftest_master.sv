@@ -28,7 +28,10 @@ module sdram_selftest_master #(
     // softcore. Also the normal path for addresses RAM.sv does not own --
     // the graphics VRAM window at 0xB0000-0xBFFFF never raises
     // ram_rw_complete.
-    parameter int GUARD = 200
+    parameter int GUARD = 200,
+    // Clocks to keep the bus borrowed in hold_only mode (~46 ms at 43 MHz --
+    // the same order as the whole BIOS verify walk).
+    parameter int HOLD_LEN = 2_000_000
 ) (
     input  wire        clk,              // clk_chipset
     input  wire        rst,
@@ -63,6 +66,12 @@ module sdram_selftest_master #(
     // retries a timed-out access (up to 15 times) instead of accepting it.
     input  wire        strict,
 
+    // Bisect mode for the early-POST kill: request and take the bus like a
+    // normal access, then simply sit on it for HOLD_LEN clocks without ever
+    // asserting write_n/read_n, and report done. POST dying under this is
+    // the bare freeze; surviving it means the walk's strobes do the damage.
+    input  wire        hold_only,
+
     // CHIPSET external-access port.
     output logic       run,              // drives ext_access_request and the muxes
     output logic       write_n,
@@ -78,6 +87,7 @@ module sdram_selftest_master #(
     logic [3:0]  retries;
     logic [7:0]  grant_stable;
     logic        saw_complete_low;
+    logic [21:0] hold_cnt;
     wire         grant = req & ~loader_busy;
     // Strict mode only counts a completion once the line has been seen low
     // while our strobe is up -- a complete already high on entry belongs to
@@ -106,6 +116,7 @@ module sdram_selftest_master #(
             retries <= 4'd0;
             grant_stable <= 8'd0;
             saw_complete_low <= 1'b0;
+            hold_cnt <= 22'd0;
         end else begin
             case (state)
 
@@ -165,10 +176,14 @@ module sdram_selftest_master #(
                 else
                     grant_stable <= 8'd0;
                 if (bus_granted && (!strict || grant_stable >= 8'(GRANT_STABLE))) begin
-                    write_n <= ~we;
-                    read_n  <=  we;
-                    guard   <= 16'd0;
-                    state   <= S_ACCESS;
+                    // hold_only takes the grant but never strobes: the bus
+                    // stays borrowed for HOLD_LEN clocks, then done -- the
+                    // pure-freeze half of the early-POST kill for bisecting.
+                    write_n  <= hold_only ? 1'b1 : ~we;
+                    read_n   <= hold_only ? 1'b1 :  we;
+                    hold_cnt <= 22'd0;
+                    guard    <= 16'd0;
+                    state    <= S_ACCESS;
                 end else if (!strict && (guard == 16'(GUARD))) begin
                     write_n <= ~we;
                     read_n  <=  we;
@@ -186,6 +201,14 @@ module sdram_selftest_master #(
             // an older access and would fold that byte into our checksum.
             S_ACCESS: begin
                 guard <= guard + 16'd1;
+                if (hold_only) begin
+                    hold_cnt <= hold_cnt + 22'd1;
+                    if (hold_cnt == 22'(HOLD_LEN)) begin
+                        rdata <= 8'h00;
+                        done  <= 1'b1;
+                        state <= S_DRAIN;
+                    end
+                end else begin
                 if (~ram_rw_complete)
                     saw_complete_low <= 1'b1;
                 if (complete_ok || (guard == 16'(GUARD))) begin
@@ -203,6 +226,7 @@ module sdram_selftest_master #(
                         done    <= 1'b1;
                         state   <= S_DRAIN;
                     end
+                end
                 end
             end
 

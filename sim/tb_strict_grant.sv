@@ -15,14 +15,15 @@ module tb_strict_grant;
     logic        granted = 0, loader_busy = 0;
     logic        rw_complete = 0;
     logic [7:0]  ext_rdata = 8'hA5;
+    logic        hold_only = 0;
 
     wire run, write_n, read_n, done;
     wire [7:0] rdata;
 
-    sdram_selftest_master #(.GUARD(200)) dut (
+    sdram_selftest_master #(.GUARD(200), .HOLD_LEN(64)) dut (
         .clk(clk), .rst(rst), .req(req), .we(we), .addr(addr), .wdata(wdata),
         .initilized_sdram(init), .loader_busy(loader_busy),
-        .strict(1'b1),
+        .strict(1'b1), .hold_only(hold_only),
         .bus_granted(granted), .ram_rw_complete(rw_complete),
         .ext_rdata(ext_rdata),
         .run(run), .write_n(write_n), .read_n(read_n),
@@ -34,6 +35,10 @@ module tb_strict_grant;
     always @(posedge clk) high_cnt <= granted ? high_cnt + 1 : 0;
     always @(negedge read_n) if (high_cnt < 10) bad++;
     always @(negedge write_n) if (high_cnt < 10) bad++;
+    // in hold_only ANY strobe at all is a failure
+    int ho_bad = 0;
+    always @(negedge read_n)  if (hold_only) ho_bad++;
+    always @(negedge write_n) if (hold_only) ho_bad++;
 
     initial begin
         repeat (4) @(posedge clk); rst <= 0;
@@ -131,6 +136,27 @@ module tb_strict_grant;
             $fatal;
         end
         $display("RESULT: PASS -- foreign complete in window not accepted");
+
+        // -- phase 6: hold_only borrows the bus and sits on it for HOLD_LEN
+        //    clocks without ever strobing, then reports done -- the bare
+        //    freeze half of the early-POST kill under bisect.
+        req <= 0; repeat (4) @(posedge clk);
+        rw_complete <= 0;
+        hold_only <= 1;
+        req <= 1;
+        wait (done);
+        if (ho_bad != 0) begin
+            $display("RESULT: FAIL -- %0d strobe(s) during hold_only", ho_bad);
+            $fatal;
+        end
+        req <= 0;
+        // strict-mode tail: run releases ~GUARD clk after req drops
+        repeat (220) @(posedge clk);
+        if (run) begin
+            $display("RESULT: FAIL -- run never released after hold_only");
+            $fatal;
+        end
+        $display("RESULT: PASS -- hold_only kept bus with no strobes, released");
         $finish;
     end
 

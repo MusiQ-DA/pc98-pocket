@@ -2030,18 +2030,35 @@ module core_top (
     reg  [27:0] rv_delay    = 28'd0;
     // 2^28 clk at ~43 MHz is ~6.2 s -- comfortably past POST init; the brief
     // bus hold then lands inside the memory-test display at worst.
-    wire        rv_walk_go  = (rv_delay == 28'hFFFFFFF) & ~rv_walked;
+    //
+    // Bisect knobs for the +3 ms kill: a slot-0x84 command with bit31 set
+    // writes no access and instead arms experiment flags from [21:20] --
+    // bit21 (early) moves the auto walk back to the fatal ~3 ms offset
+    // (one-shot, self-clears on fire) and bit20 (hold_only) makes the
+    // selftest master borrow the bus and sit on it for ~46 ms without ever
+    // strobing. POST dying under early+hold_only means the bare freeze is
+    // lethal; surviving it indicts the walk's strobes.
+    reg         rv_hold_only = 1'b0;
+    reg         rv_early     = 1'b0;
+    wire [27:0] rv_target    = rv_early ? 28'd129_000 : 28'hFFFFFFF;
+    wire        rv_walk_go   = (rv_delay == rv_target) & ~rv_walked;
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
             rv_walked <= 1'b0;
             rv_delay  <= 28'd0;
         end else if (!rv_walked && !rv_walk_go)
             rv_delay <= rv_delay + 28'd1;
-        else if (rv_walk_go)
+        else if (rv_walk_go) begin
             rv_walked <= 1'b1;
+            rv_early  <= 1'b0;   // one-shot: a boot armed early fires once
+        end
     end
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h04) begin
+            if (probe_wdata_c[31]) begin
+                rv_hold_only <= probe_wdata_c[20];
+                rv_early     <= probe_wdata_c[21];
+            end else begin
             jt_st_addr  <= probe_wdata_c[30] ? 20'hE8000 : probe_wdata_c[19:0];
             jt_st_wdata <= probe_wdata_c[27:20];
             jt_st_we    <= probe_wdata_c[28] & ~probe_wdata_c[30];
@@ -2055,12 +2072,13 @@ module core_top (
                 end
             end else
                 jt_st_req  <= 1'b0;
+            end
         end else if (rv_walk_go && !jt_st_req) begin
             jt_st_addr  <= 20'hE8000;
             jt_st_we    <= 1'b0;
             jt_st_req   <= 1'b1;
             jt_st_done  <= 1'b0;
-            jt_st_walk  <= 1'b1;
+            jt_st_walk  <= ~rv_hold_only;
             jt_walk_add <= 16'd0;
             jt_walk_xor <= 16'd0;
         end else if (jt_st_req && st_done) begin
@@ -2113,13 +2131,17 @@ module core_top (
     // Strict is keyed on the walk flag (not req) so it stays up through the
     // per-byte request gaps -- `run` then keeps the address bus held for the
     // whole walk and ram_rw_complete cannot pulse for a guest CPU access.
-    wire        st_strict    = jt_st_walk;
+    // hold_only rides the same settled-grant path: a bare freeze still must
+    // not fire before the HLDA has provably landed.
+    wire        st_strict    = jt_st_walk | rv_hold_only;
+    wire        st_hold_only = rv_hold_only;
 `else
     wire [19:0] st_addr_mux  = st_addr;
     wire [7:0]  st_wdata_mux = st_wdata;
     wire        st_we_mux    = st_we;
     wire        st_req_mux   = st_req;
     wire        st_strict    = 1'b0;
+    wire        st_hold_only = 1'b0;
 `endif
 
     wire [31:0] jt_fddctl;
@@ -2191,6 +2213,7 @@ module core_top (
         .loader_busy      (ioctl_download),
         .bus_granted      (chipset_aen),   // CHIPSET's address_enable_n = HLDA
         .strict           (st_strict),
+        .hold_only        (st_hold_only),
         .run              (st_run),
         .write_n          (st_wr_n),
         .read_n           (st_rd_n),

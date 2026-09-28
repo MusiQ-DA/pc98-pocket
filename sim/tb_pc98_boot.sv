@@ -116,6 +116,16 @@ module tb_pc98_boot;
     wire        lock_n, s6_3_mux;
     wire  [2:0] SEGMENT;
 
+    // bus-hold injection signals -- declared here because the bridge consumes
+    // test_aen above the machinery that produces it.
+    logic        freeze_req = 1'b0;
+    logic        frz_ff1 = 1'b0, frz_ff2 = 1'b0;
+    logic        test_aen = 1'b0;      // granted-to-hold, like the arbiter's
+    logic        dma_wait_b = 1'b0;
+    logic        cpu_rst_d = 1'b1;
+    logic [39:0] clk_since_rst = 40'd0;
+    logic [39:0] frz_start_clk = 40'd0, frz_end_clk = 40'd0;
+
 `ifdef CPU_V30
     // The nuV30 + the bridge, wired the way core_top wires them under
     // MACHINE_PC98. V30_BACKDOOR gives the bench dbg_regs for the trace
@@ -151,7 +161,7 @@ module tb_pc98_boot;
         .data_bus_hi       (din_hi),
         .data_bus          (din),
         .processor_ready   (bench_ready),
-        .address_enable_n  (1'b0),      // no other master in this bench
+        .address_enable_n  (test_aen),
         .pause_core        (1'b0),
         .biu_done          (biu_done)
     );
@@ -231,6 +241,62 @@ module tb_pc98_boot;
     wire        eu_cf = u_cpu.EU_CORE.eu_flags[0];
 `endif
 
+    // ---- bus-hold injection ------------------------------------------------
+    //
+    // The verifier walk's hold, faithfully: +freeze_start_us / +freeze_len_us
+    // pick the window, measured in chipset clocks from cpu_reset_w falling
+    // (the bench's reset_wire). The grant reproduces BUS_ARBITER's chain --
+    // ff_1 needs a passive CPU status on a posedge CE, ff_2 a following
+    // negedge, and aen registers hold_acknowledge on the next posedge -- so
+    // the hold lands at exactly the cycle boundary hardware would grant it,
+    // never mid-beat. Meaningful under REALMEM only: the flat memory has no
+    // READY to stall.
+    initial begin
+        int v;
+        if ($value$plusargs("freeze_start_us=%d", v))
+            frz_start_clk = 40'(v * 43);            // ~CLK_MHZ, close enough
+        if ($value$plusargs("freeze_len_us=%d", v))
+            frz_end_clk = frz_start_clk + 40'(v * 43);
+    end
+
+    wire frz_hlda = freeze_req ? frz_ff2 : 1'b0;   // hold_acknowledge
+    always_ff @(posedge clk_chipset) begin
+        cpu_rst_d <= cpu_reset_w;
+        if (cpu_rst_d & ~cpu_reset_w) begin
+            clk_since_rst <= 40'd1;
+            $display("  %8t  FREEZE: cpu_reset_w fell at %0t", $time, $time);
+        end else if (clk_since_rst != 40'd0)
+            clk_since_rst <= clk_since_rst + 40'd1;
+        freeze_req <= (clk_since_rst != 40'd0)
+                   && (clk_since_rst >= frz_start_clk)
+                   && (clk_since_rst <  frz_end_clk);
+        if (cpu_ce_posedge) begin
+            frz_ff1    <= processor_status[0] & processor_status[1] & lock_n & freeze_req;
+            test_aen   <= frz_hlda;
+            dma_wait_b <= test_aen;
+        end
+        if (cpu_ce_negedge) begin
+            if (~freeze_req)   frz_ff2 <= 1'b0;
+            else if (frz_ff2)  frz_ff2 <= 1'b1;
+            else               frz_ff2 <= frz_ff1;
+        end
+    end
+
+    logic frz_seen = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (freeze_req & ~frz_seen)
+            $display("  %8t  FREEZE: requesting hold (clk_since_rst %0d)",
+                     $time, clk_since_rst);
+        if (test_aen & ~frz_seen) begin
+            frz_seen <= 1'b1;
+            $display("  %8t  FREEZE: bus granted (eu_pc %05X, %0d clk after rst)",
+                     $time, eu_pc, clk_since_rst);
+        end else if (~test_aen & frz_seen) begin
+            frz_seen <= 1'b0;
+            $display("  %8t  FREEZE: released (eu_pc %05X)", $time, eu_pc);
+        end
+    end
+
     // ---- bus controller and address latch ----------------------------------
     wire mem_rd_n, mem_wr_n, adv_mem_wr_n;
     wire io_rd_n,  io_wr_n,  adv_io_wr_n;
@@ -241,8 +307,8 @@ module tb_pc98_boot;
         .cpu_ce_posedge                  (cpu_ce_posedge),
         .cpu_ce_negedge                  (cpu_ce_negedge),
         .reset                           (reset),
-        .address_enable_n                (1'b0),
-        .command_enable                  (1'b1),
+        .address_enable_n                (test_aen),
+        .command_enable                  (~test_aen),
         .io_bus_mode                     (1'b0),
         .processor_status                (processor_status),
         .enable_io_command               (en_io),
@@ -389,13 +455,13 @@ module tb_pc98_boot;
         .reset               (reset),
         .processor_ready     (bench_ready),
         .dma_ready           (),
-        .dma_wait_n          (1'b1),
+        .dma_wait_n          (~dma_wait_b),
         .io_channel_ready    (memory_access_ready),
         .io_read_n           (io_rd_n),
         .io_write_n          (io_wr_n),
         .memory_read_n       (mem_rd_n),
         .dma0_acknowledge_n  (1'b1),
-        .address_enable_n    (1'b0)
+        .address_enable_n    (test_aen)
     );
 
     // RAM.sv answers where it is selected; the mirror answers the rest
