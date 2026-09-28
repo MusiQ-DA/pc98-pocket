@@ -210,6 +210,9 @@ PY
 say "firmware.bin matches firmware.vh"
 
 cp firmware/firmware.bin dist/pc98/Assets/pc98/hiroya.PC9801/
+# Floppy A's data slot pins draw_test.hdm as its default image; ship it so the
+# pinned default actually binds on first boot instead of coming up empty.
+[ -f testdisk/draw_test.hdm ] && cp testdisk/draw_test.hdm dist/pc98/Assets/pc98/hiroya.PC9801/
 say "packaged with ROMs"
 
 # ---- 3. write --------------------------------------------------------------
@@ -253,7 +256,8 @@ fail=0
 for f in Cores/hiroya.PC9801/bitstream.rbf_r Cores/hiroya.PC9801/core.json \
          Cores/hiroya.PC9801/data.json Assets/pc98/hiroya.PC9801/bios.rom \
          Assets/pc98/hiroya.PC9801/itf.rom Assets/pc98/hiroya.PC9801/font.rom \
-         Assets/pc98/hiroya.PC9801/firmware.bin Platforms/pc98.json; do
+         Assets/pc98/hiroya.PC9801/firmware.bin Platforms/pc98.json \
+         $([ -f testdisk/draw_test.hdm ] && echo Assets/pc98/hiroya.PC9801/draw_test.hdm); do
     if cmp -s "dist/pc98/$f" "$VOL/$f"; then
         say "  ok  $f"
     else
