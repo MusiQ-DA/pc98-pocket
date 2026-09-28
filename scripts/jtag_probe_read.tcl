@@ -62,6 +62,9 @@ set regs {
     40  RESET_TERMS=dbg_bits
     41  GVFILL=maxlen,skip,fills
     42  GVLIVE=nfill,lateline,fillage512
+    43  ROMWALK=memadd,memxor
+    44  ROMSTR=strcnt,stradd
+    45  ROMSTR2=strxor,walkaddr
     255 MAGIC
 }
 

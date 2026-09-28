@@ -1141,6 +1141,14 @@ module core_top (
             // last skip line/4}. fill_len >~1730 at sample time means a
             // fill is stalling across lines despite the lookahead slack.
             8'h2A:   probe_data = gvram_dbg2;
+            // 0x2B/0x2C/0x2D: the BIOS-image verifier. The walk sums are what
+            // a full E8000-FFFFF pass found in SDRAM (auto-run ~3 ms after
+            // reset release, or 0x84 write with bit30); the str sums are what
+            // the loader FSM committed; cnt is BIOS words committed (0xC000
+            // for a complete 96 KB slot -- short means dropped words).
+            8'h2B:   probe_data = {jt_walk_add, jt_walk_xor};
+            8'h2C:   probe_data = {rv_str_cnt, rv_str_add};
+            8'h2D:   probe_data = {rv_str_xor, jt_st_addr[15:0]};
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:
@@ -2000,20 +2008,92 @@ module core_top (
     reg         jt_st_req   = 1'b0;
     reg  [7:0]  jt_st_rdata = 8'd0;
     reg         jt_st_done  = 1'b0;
+    // Whole-window verify walk. Bit30 of a slot-0x84 command walks
+    // E8000-FFFFF through the same borrowed-bus path, accumulating add- and
+    // xor-sums of every byte it actually finds in SDRAM. Auto-arms ~3 ms
+    // after reset_wire falls, so every boot reports whether the BIOS image
+    // landed intact: the intermittent "ROM SUM ERROR" was one flipped bit at
+    // F8004, and a 96 KB JTAG crawl per boot is too slow for statistics.
+    reg         jt_st_walk   = 1'b0;
+    reg  [7:0]  jt_walk_pair = 8'd0;
+    reg  [15:0] jt_walk_add  = 16'd0;
+    reg  [15:0] jt_walk_xor  = 16'd0;
+    reg         rv_walked    = 1'b0;
+    reg  [16:0] rv_delay     = 17'd0;
+    wire        rv_walk_go   = (rv_delay == 17'h1FFFF) & ~rv_walked;
+    always_ff @(posedge clk_chipset) begin
+        if (reset_wire) begin
+            rv_walked <= 1'b0;
+            rv_delay  <= 17'd0;
+        end else if (!rv_walked && !rv_walk_go)
+            rv_delay <= rv_delay + 17'd1;
+        else if (rv_walk_go)
+            rv_walked <= 1'b1;
+    end
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h04) begin
-            jt_st_addr  <= probe_wdata_c[19:0];
+            jt_st_addr  <= probe_wdata_c[30] ? 20'hE8000 : probe_wdata_c[19:0];
             jt_st_wdata <= probe_wdata_c[27:20];
-            jt_st_we    <= probe_wdata_c[28];
-            if (probe_wdata_c[29]) begin
+            jt_st_we    <= probe_wdata_c[28] & ~probe_wdata_c[30];
+            jt_st_walk  <= probe_wdata_c[30];
+            if (probe_wdata_c[29] | probe_wdata_c[30]) begin
                 jt_st_req  <= 1'b1;
                 jt_st_done <= 1'b0;
+                if (probe_wdata_c[30]) begin
+                    jt_walk_add <= 16'd0;
+                    jt_walk_xor <= 16'd0;
+                end
             end else
                 jt_st_req  <= 1'b0;
+        end else if (rv_walk_go && !jt_st_req) begin
+            jt_st_addr  <= 20'hE8000;
+            jt_st_we    <= 1'b0;
+            jt_st_req   <= 1'b1;
+            jt_st_done  <= 1'b0;
+            jt_st_walk  <= 1'b1;
+            jt_walk_add <= 16'd0;
+            jt_walk_xor <= 16'd0;
         end else if (jt_st_req && st_done) begin
-            jt_st_req   <= 1'b0;
-            jt_st_done  <= 1'b1;
             jt_st_rdata <= st_rdata;
+            jt_st_req   <= 1'b0;
+            if (jt_st_walk) begin
+                jt_walk_add <= jt_walk_add + {8'h00, st_rdata};
+                if (jt_st_addr[0])
+                    jt_walk_xor <= jt_walk_xor ^ {st_rdata, jt_walk_pair};
+                else
+                    jt_walk_pair <= st_rdata;
+                if (jt_st_addr == 20'hFFFFF) begin
+                    jt_st_walk <= 1'b0;
+                    jt_st_done <= 1'b1;
+                end else
+                    jt_st_addr <= jt_st_addr + 20'd1;
+            end else
+                jt_st_done  <= 1'b1;
+        end else if (jt_st_walk && !jt_st_req && !jt_st_done)
+            jt_st_req <= 1'b1;
+    end
+    // Stream-side signature of the BIOS slot: the exact byte values the
+    // loader FSM committed to write (post-patch rom_data_in), plus the word
+    // count. Three-way split for the corruption hunt:
+    //   rv_str_* == file sums && jt_walk_* != rv_str_*  -> loss in RAM.sv/mp
+    //   rv_str_* != file sums                          -> bridge/host side
+    //   all equal                                      -> image intact
+    // cnt also catches silent FIFO drops: a short count means missing words.
+    reg  [15:0] rv_str_add = 16'd0;
+    reg  [15:0] rv_str_xor = 16'd0;
+    reg  [15:0] rv_str_cnt = 16'd0;
+    wire        rv_commit  = (bios_load_state == 4'h01) & ioctl_download
+                           & ioctl_wr & ~bios_load_n & select_bios;
+    always_ff @(posedge clk_chipset) begin
+        if (load_active && !load_active_d) begin
+            rv_str_add <= 16'd0;
+            rv_str_xor <= 16'd0;
+            rv_str_cnt <= 16'd0;
+        end else if (rv_commit) begin
+            rv_str_add <= rv_str_add + {8'h00, rom_data_in[7:0]}
+                                    + {8'h00, rom_data_in[15:8]};
+            rv_str_xor <= rv_str_xor ^ rom_data_in;
+            rv_str_cnt <= rv_str_cnt + 16'd1;
         end
     end
     wire [19:0] st_addr_mux  = jt_st_req ? jt_st_addr  : st_addr;
