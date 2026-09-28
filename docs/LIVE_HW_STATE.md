@@ -368,10 +368,16 @@ launch レート・late 発火行・fill 年齢をライブ観測。修正後は
   厳密再現 — non-strict FULL walk@+1.5ms のみ (fitter 1848 LAB 制約で
   2nd shot を削除、rv_live は walk 完了でクリア→以後の guest_cyc で
   セットする sticky フラグに変更 = 「嵐を生き延びたか」の直接判定)。
-- **v3 結果**: **生存** — 0x2E=0x301 (shot=1, rv_live=1: walk 後も
-  ゲストがバスサイクル実行), 0x2B=38001C78 正値完走, BASIC 到達。
-  → b6c7ee0 の borrow/release カデンス・早期発射・ext 配線を
-  全て同じにしても現行ツリーでは死なない。**walk 機構は全て無罪**。
+- **v3 結果 + 重要な訂正**: 生存 (0x2E=0x301, 0x2B=38001C78 正値,
+  BASIC 到達) — ただし後のコード精読で **shot0 は strict に化けて
+  いた**と判明: `st_strict` に `rv_done` を食わせており、発射の
+  1clk 後に rv_shot=1→rv_done=1→strict=1 に反転。よって v3 が実測
+  したのは「strict walk@+1.5ms」で、**non-strict borrow/release
+  カデンスは現行ツリーで一度もテストされていなかった**。
+- **shotgun v4 (5bea7e9)**: 真の non-strict full walk@+3ms —
+  st_strict を ~rv_seq 駆動に修正 + 発射を b6c7ee0 と同一時刻に。
+  これが死ねばカデンスそのものが犯人 (era 差不要)、生きれば
+  b6c7ee0 固有のツリー差分が残る。
 - **era 分離 bisect (96eba7b, bisect-b6-nowalk)**: b6c7ee0 ツリーで
   rv_walk_go=0 だけの変更 → **POST 完走** (`How many files`,
   0x1F=053D0005)。同一ツリーで auto-walk ON=3/3死亡 vs OFF=起動

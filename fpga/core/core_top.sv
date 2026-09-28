@@ -1149,13 +1149,11 @@ module core_top (
             8'h2B:   probe_data = {jt_walk_add, jt_walk_xor};
             8'h2C:   probe_data = {rv_str_cnt, rv_str_add};
             8'h2D:   probe_data = {rv_str_xor, jt_st_addr[15:0]};
-            // 0x2E: bisect readback -- armed flags, shot counter, and the
-            // liveness flag: rv_live=1 iff the guest ran a bus cycle after
-            // the last walk completed (v3's post-storm survival witness).
-            8'h2E:   probe_data = {19'h00000, rv_live,
-                                   rv_seq, rv_single,
-                                   rv_hold_only, rv_early, 2'b00,
-                                   rv_shot};
+            // 0x2E: bisect readback -- liveness flag (rv_live=1 iff the
+            // guest ran a bus cycle after the last walk completed),
+            // rv_auto (the config-fired walk is/was non-strict), rv_walked.
+            8'h2E:   probe_data = {19'h00000, rv_live, 4'h0,
+                                   rv_auto, rv_walked, 6'h00};
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:
@@ -2034,53 +2032,28 @@ module core_top (
     reg  [15:0] jt_walk_add = 16'd0;
     reg  [15:0] jt_walk_xor = 16'd0;
     reg         rv_walked   = 1'b0;
-    reg  [27:0] rv_delay    = 28'd0;
-    // 2^28 clk at ~43 MHz is ~6.2 s -- comfortably past POST init; the brief
-    // bus hold then lands inside the memory-test display at worst.
-    //
-    // Bisect knobs for the +3 ms kill: a slot-0x84 command with bit31 set
-    // writes no access and instead arms experiment flags from [22:20] --
-    // bit21 (early) moves the auto walk back to the fatal ~3 ms offset
-    // (one-shot, self-clears on fire), bit20 (hold_only) makes the
-    // selftest master borrow the bus and sit on it for ~46 ms without ever
-    // strobing, and bit22 (single) issues one plain read instead of the
-    // whole-window walk.
-    //
-    // The hardware verdict so far: a cold-boot +3 ms bare hold is SURVIVED,
-    // and v1/v2 showed strict strobes and single reads are safe even deep
-    // inside the fragile window. But the lethal b6c7ee0 build predates the
-    // strict-grant path: its walk dropped `run` after EVERY byte, i.e. the
-    // bus was borrowed and handed back ~96K times in-window -- a cadence
-    // none of the survived shots exercised. v3 reproduces that exactly as
-    // a single shot (the fitter has ~zero LABs of slack):
-    //   +3ms    non-strict FULL walk  (v4: b6c7ee0's exact offset, same tree)
-    // Liveness is a post-storm flag: rv_live clears when the walk completes
-    // and latches the first guest bus cycle afterwards, so any later probe
-    // read answers "did the guest come back after the storm". A guest that
-    // died mid-walk leaves rv_live=0 forever; the walk engine itself still
-    // finishes and folds its signature into 0x2B as usual.
-    reg         rv_hold_only = 1'b0;
-    reg         rv_early     = 1'b0;
-    reg         rv_single    = 1'b0;
-    reg         rv_seq       = 1'b1;   // shotgun armed from config
-    reg  [2:0]  rv_shot      = 3'd0;
-    reg         rv_live      = 1'b0;
-    wire        rv_done    = rv_seq ? (rv_shot == 3'd1) : rv_walked;
-    wire        rv_walk_go = ~rv_done & (rv_seq
-        ? (rv_delay[27:16] == 12'd2)     // +3 ms: match b6c7ee0's window
-        : (rv_delay == (rv_early ? 28'd129_000 : 28'hFFFFFFF)));
+    reg  [17:0] rv_delay    = 18'd0;
+    // v4: TRUE non-strict full walk at b6c7ee0's exact +3 ms offset.
+    // (v3 intended this but rv_done fed st_strict, so its "non-strict"
+    // shot silently ran strict -- the borrow/release cadence has never
+    // actually run on the current tree.) rv_auto tags the walk the
+    // config itself fired; st_strict = jt_st_walk & ~rv_auto keeps it
+    // genuinely non-strict while manual JTAG walks stay strict.
+    // Liveness is a post-storm flag: rv_live clears when the walk
+    // completes and latches the first guest bus cycle afterwards, so a
+    // later probe read answers "did the guest come back after the storm".
+    reg         rv_auto     = 1'b0;
+    reg         rv_live     = 1'b0;
+    wire        rv_walk_go = ~rv_walked & (rv_delay == 18'd131071); // ~+3 ms
     wire        guest_cyc  = ~chipset_aen & (processor_status != 3'b111);
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
             rv_walked <= 1'b0;
-            rv_shot   <= 3'd0;
-            rv_delay  <= 28'd0;
-        end else if (!rv_done && !rv_walk_go)
-            rv_delay <= rv_delay + 28'd1;
-        else if (rv_walk_go) begin
+            rv_delay  <= 18'd0;
+        end else if (!rv_walked && !rv_walk_go)
+            rv_delay <= rv_delay + 18'd1;
+        else if (rv_walk_go)
             rv_walked <= 1'b1;
-            rv_shot   <= rv_shot + 3'd1;
-        end
     end
     reg         rv_wd        = 1'b0;
     always_ff @(posedge clk_chipset) begin
@@ -2097,12 +2070,6 @@ module core_top (
     end
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h04) begin
-            if (probe_wdata_c[31]) begin
-                rv_hold_only <= probe_wdata_c[20];
-                rv_early     <= probe_wdata_c[21];
-                rv_single    <= probe_wdata_c[22];
-                rv_seq       <= probe_wdata_c[23];
-            end else begin
             jt_st_addr  <= probe_wdata_c[30] ? 20'hE8000 : probe_wdata_c[19:0];
             jt_st_wdata <= probe_wdata_c[27:20];
             jt_st_we    <= probe_wdata_c[28] & ~probe_wdata_c[30];
@@ -2116,17 +2083,15 @@ module core_top (
                 end
             end else
                 jt_st_req  <= 1'b0;
-            end
         end else if (rv_walk_go && !jt_st_req) begin
             jt_st_addr  <= 20'hE8000;
             jt_st_we    <= 1'b0;
             jt_st_req   <= 1'b1;
             jt_st_done  <= 1'b0;
-            jt_st_walk  <= rv_seq ? 1'b1
-                                  : ~(rv_hold_only | rv_single);
+            jt_st_walk  <= 1'b1;
             jt_walk_add <= 16'd0;
             jt_walk_xor <= 16'd0;
-            rv_early    <= 1'b0;   // one-shot: a boot armed early fires once
+            rv_auto     <= 1'b1;   // config-fired walk: genuinely non-strict
         end else if (jt_st_req && st_done) begin
             jt_st_rdata <= st_rdata;
             jt_st_req   <= 1'b0;
@@ -2139,6 +2104,7 @@ module core_top (
                 if (jt_st_addr == 20'hFFFFF) begin
                     jt_st_walk <= 1'b0;
                     jt_st_done <= 1'b1;
+                    rv_auto    <= 1'b0;
                 end else
                     jt_st_addr <= jt_st_addr + 20'd1;
             end else
@@ -2179,15 +2145,13 @@ module core_top (
     // whole walk and ram_rw_complete cannot pulse for a guest CPU access.
     // hold_only rides the same settled-grant path: a bare freeze still must
     // not fire before the HLDA has provably landed.
-    // The v3/v4 sequence shot deliberately runs non-strict (drop `run` per
-    // byte, b6c7ee0 cadence); manual JTAG walks -- including post-sequence
-    // ones -- stay strict. NOTE: the first version fed `rv_done` into this
-    // term, which flips high the clock after shot0 fires -- the "non-strict"
-    // walk silently ran strict, so v3 never actually exercised the
-    // borrow/release cadence. Seq shots must ignore rv_done entirely.
-    wire        st_strict    = rv_hold_only
-                             | (jt_st_walk & ~rv_seq);
-    wire        st_hold_only = rv_hold_only;
+    // The config-fired walk deliberately runs non-strict (drop `run` per
+    // byte, b6c7ee0 cadence); manual JTAG walks stay strict. NOTE: v3 fed
+    // `rv_done` into this term, which flips high the clock after the shot
+    // fires -- the "non-strict" walk silently ran strict, so the cadence
+    // was never actually exercised. rv_auto tags config-fired walks only.
+    wire        st_strict    = jt_st_walk & ~rv_auto;
+    wire        st_hold_only = 1'b0;
 `else
     wire [19:0] st_addr_mux  = st_addr;
     wire [7:0]  st_wdata_mux = st_wdata;
