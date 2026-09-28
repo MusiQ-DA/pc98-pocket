@@ -191,4 +191,4 @@ set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
 #   ~500 ALM and the part sits at ~99%. A debug build that wants the probes
 #   back can re-enable this AND must also flip Peripherals' pc98_opna back
 #   to .USE_ADPCM(0)/.USE_PCM(1) to free the floor space.
-# set_global_assignment -name VERILOG_MACRO "PC98_PROBE_EXTRA=1"
+set_global_assignment -name VERILOG_MACRO "PC98_PROBE_EXTRA=1"

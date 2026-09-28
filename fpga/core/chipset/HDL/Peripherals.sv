@@ -1895,7 +1895,7 @@ module PERIPHERALS #(
     // at boot. DELTA-T stays dark (pc98_opna wires use_adpcmb=0 -- its 256 KB
     // SDRAM window is a known gap), and use_pcm is inert once ADPCM is on:
     // the jt10_acc ADPCM path is the stereo accumulator already.
-    pc98_opna #(.USE_ADPCM(1), .USE_PCM(0)) u_pc98_opna (
+    pc98_opna #(.USE_ADPCM(0), .USE_PCM(1)) u_pc98_opna (
         .clk          (clock),
         .rst          (reset),
         .cs           (opna_cs),
