@@ -124,7 +124,6 @@ module RAM (
     // live data bus, which a pulse-width strobe can legally release -- and
     // change -- before write_flag confirms the request.
     logic           wc_pend;
-    logic           live_served;
     logic           accept_live_wr;
     logic           accept_live_rd;
     logic   [22:0]  pend_address;
@@ -399,10 +398,13 @@ module RAM (
             end
             COMPLETE_RAM_RW: begin
                 // A live strobe holds the exit only when it belongs to the
-                // access just served (accept_live_*); a parked access has no
+                // access just served: for a write that is the operand match
+                // (the served strobe or its identical parked twin), for a
+                // read the accept_live_rd flag. A parked access has no
                 // strobe to wait on, and a strobe for someone else's next
                 // transfer must not strand the FSM here.
-                if ((~write_command | ~accept_live_wr) & (~read_command | ~accept_live_rd))
+                if ((~write_command | ~accept_live_wr | ~write_strobe_match)
+                    & (~read_command | ~accept_live_rd | ~read_strobe_match))
                     next_state = IDLE;
             end
             WAIT: begin
@@ -412,26 +414,27 @@ module RAM (
         endcase
     end
 
-    // The parking-slot bookkeeping lives in the same process as the state
-    // register so every condition below reads the pre-edge state value --
-    // state uses <= for exactly that reason. live_served marks a write whose
-    // strobe is still up: back-to-back strobes can hold write_command across
-    // a master switch with no falling edge at all, so "is this strobe new"
-    // is decided by operands, not by edges. A held strobe keeps its operands
-    // and never re-parks; a different address or data is a new transfer and
-    // parks on the spot.
+    // "Is this strobe new" is decided by operands, not by edges or by a
+    // served flag: back-to-back strobes can hold write_command across a
+    // master switch with no falling edge at all, and the strobe whose copy
+    // is in the pending slot is itself held while its twin runs -- taking
+    // !live_served as proof of newness re-parked that twin forever and the
+    // guest wedged. An operand match against the access in flight means
+    // this strobe is satisfied by it: it waits held and the COMPLETE below
+    // releases it. Only different operands are a new transfer to park.
+    wire write_strobe_match = (latch_address      == accept_address)
+                            & (internal_data_bus    == accept_data)
+                            & (internal_data_bus_hi == accept_data_hi)
+                            & (word_now             == accept_word);
+    wire read_strobe_match  = (latch_address == accept_address)
+                            & (word_now      == accept_word);
     wire new_write_strobe = write_command && state != IDLE && !wc_pend
-        && (!live_served
-            || (latch_address != accept_address)
-            || (internal_data_bus != accept_data)
-            || (internal_data_bus_hi != accept_data_hi)
-            || (word_now != accept_word));
+        && !write_strobe_match;
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
             state             <= IDLE;
             wc_pend           <= 1'b0;
-            live_served       <= 1'b0;
             accept_live_wr    <= 1'b0;
             accept_live_rd    <= 1'b0;
             pend_address      <= 23'd0;
@@ -448,8 +451,9 @@ module RAM (
             if (state == IDLE && next_state == RAM_WRITE_1) begin
                 // Accept: operands snapshot either from the slot (parked
                 // traffic wins, so write order holds) or off the live bus.
-                live_served    <= ~wc_pend & write_command;
-                accept_live_wr <= ~wc_pend & write_command;
+                // accept_live_wr now means "the completing access is a
+                // write" -- the live-twin test itself is write_strobe_match.
+                accept_live_wr <= 1'b1;
                 accept_live_rd <= 1'b0;
                 if (wc_pend) begin
                     accept_address <= pend_address;
@@ -466,14 +470,17 @@ module RAM (
                 wc_pend <= 1'b0;
             end
             else if (state == IDLE && next_state == RAM_READ_1) begin
+                // Snapshot the read's operands too: a different-address
+                // read strobe held across this access's COMPLETE must not
+                // see its ready (it would release early and be orphaned
+                // with this access's data, same class as the write drops).
                 accept_live_rd <= read_command;
                 accept_live_wr <= 1'b0;
+                accept_address <= latch_address;
+                accept_word    <= word_now;
             end
-            else if (~write_command)
-                live_served <= 1'b0;
             if (new_write_strobe) begin
                 wc_pend      <= 1'b1;
-                live_served  <= 1'b0;
                 pend_address <= latch_address;
                 pend_data    <= internal_data_bus;
                 pend_data_hi <= internal_data_bus_hi;
@@ -671,14 +678,17 @@ module RAM (
     // there and nowhere else makes this a real handshake for any master,
     // however it samples. The 8088 sees ready no earlier than it did; it just
     // no longer sees it before the data.
-    // Ready answers only for the strobe whose access was actually served
-    // (accept_live_*); a strobe that arrived while the FSM was busy used to
-    // see this COMPLETE and drop its transfer before anyone ran it -- the
-    // orphaned writes the parking slot now also catches.
+    // Ready answers only for the strobe whose access was actually served:
+    // a write must match the operands captured at acceptance (the served
+    // strobe and an identical held twin are the same transfer; the slot's
+    // copy finishing releases it), a read must be the flagged live strobe.
+    // A strobe that arrived while the FSM was busy used to see this
+    // COMPLETE and drop its transfer before anyone ran it -- the orphaned
+    // writes the parking slot now also catches.
     assign  memory_access_ready = ((~ram_address_select_n) && ((~memory_read_n) || (~memory_write_n)))
                                         ? ((state == COMPLETE_RAM_RW) & (
-                                              (write_command & accept_live_wr & (write_wait_count == 0))
-                                            | (read_command  & accept_live_rd & (read_wait_count  == 0)))) : 1'b1;
+                                              (write_command & accept_live_wr & write_strobe_match & (write_wait_count == 0))
+                                            | (read_command  & accept_live_rd & read_strobe_match  & (read_wait_count  == 0)))) : 1'b1;
 
     // ROM-load (Pocket): a clean per-access "done" pulse for core_top's BIOS
     // loader. COMPLETE_RAM_RW is reached only after the SDRAM write truly

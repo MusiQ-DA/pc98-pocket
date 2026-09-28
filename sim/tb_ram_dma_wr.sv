@@ -154,6 +154,43 @@ module tb_ram_dma_wr;
         repeat (2) @(posedge clock);
     endtask
 
+    // Deadlock regression: a write strobe asserted inside a read's
+    // COMPLETE window parks, and its twin is held on the bus while the
+    // parked copy runs. The served strobe is the slot's, so flag-only
+    // ready never answers the twin -- on hardware this wedged the guest
+    // in POST. Ready must come from the operand match.
+    task automatic read_then_held_write(input int raddr, input int waddr,
+                                        input logic [7:0] d);
+        int guard;
+        address = raddr;
+        internal_data_bus = 8'h00;
+        no_command_state = 0;
+        memory_read_n = 0;
+        repeat (4) @(posedge clock);
+        guard = 0;
+        while (!memory_access_ready && guard < 4000) begin
+            @(posedge clock); guard++;
+        end
+        // The FSM sits in the read's COMPLETE while the strobe is up;
+        // swapping strobes lands the write inside that window -> park.
+        address = waddr;
+        internal_data_bus = d;
+        memory_read_n = 1;
+        memory_write_n = 0;
+        repeat (4) @(posedge clock);
+        guard = 0;
+        while (!memory_access_ready && guard < 4000) begin
+            @(posedge clock); guard++;
+        end
+        if (guard >= 4000) begin
+            errors++;
+            $display("  HELD-TWIN DEADLOCK @%05h", waddr);
+        end
+        memory_write_n = 1;
+        no_command_state = 1;
+        repeat (2) @(posedge clock);
+    endtask
+
     function automatic logic [7:0] pat(input int a);
         pat = 8'((a * 8'h9D) ^ 8'h5A);
     endfunction
@@ -229,6 +266,23 @@ module tb_ram_dma_wr;
                 errors++;
                 $display("  cpu MISMATCH @%05h: got %02h want %02h",
                          32'h20400 + i, got, pat(i + 200));
+            end
+        end
+
+        // Held-twin: each write parks behind a read's COMPLETE and its
+        // strobe is held on the bus until ready -- the slot's copy must
+        // release it via the operand match, not a live flag.
+        for (int i = 0; i < 16; i++)
+            cpu_write(32'h20600 + i, 8'hFF);
+        for (int i = 0; i < 16; i++)
+            read_then_held_write(32'h1FE00 + (i & 7), 32'h20600 + i, pat(i + 64));
+        repeat (32) @(posedge clock);
+        for (int i = 0; i < 16; i++) begin
+            cpu_read(32'h20600 + i, got);
+            if (got !== pat(i + 64)) begin
+                errors++;
+                $display("  twin MISMATCH @%05h: got %02h want %02h",
+                         32'h20600 + i, got, pat(i + 64));
             end
         end
 
