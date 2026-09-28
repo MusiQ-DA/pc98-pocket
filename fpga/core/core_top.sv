@@ -2016,23 +2016,27 @@ module core_top (
     reg         jt_st_done  = 1'b0;
     // Whole-window verify walk. Bit30 of a slot-0x84 command walks
     // E8000-FFFFF through the same borrowed-bus path, accumulating add- and
-    // xor-sums of every byte it actually finds in SDRAM. Auto-arms ~3 ms
-    // after reset_wire falls, so every boot reports whether the BIOS image
-    // landed intact: the intermittent "ROM SUM ERROR" was one flipped bit at
-    // F8004, and a 96 KB JTAG crawl per boot is too slow for statistics.
+    // xor-sums of every byte it actually finds in SDRAM. Auto-arms ~3 s
+    // after reset_wire falls -- NOT ~3 ms: at +3 ms POST is mid-init and
+    // the borrowed bus still kills it deterministically (seen on b6c7ee0
+    // through ec89281; the exact tear is unresolved, so the walk waits for
+    // the machine to be safely past POST's fragile window instead). The
+    // image is static once loaded, so a later walk loses no detection power.
     reg         jt_st_walk  = 1'b0;
     reg  [7:0]  jt_walk_pair = 8'd0;
     reg  [15:0] jt_walk_add = 16'd0;
     reg  [15:0] jt_walk_xor = 16'd0;
     reg         rv_walked   = 1'b0;
-    reg  [16:0] rv_delay    = 17'd0;
-    wire        rv_walk_go  = (rv_delay == 17'h1FFFF) & ~rv_walked;
+    reg  [27:0] rv_delay    = 28'd0;
+    // 2^28 clk at ~43 MHz is ~6.2 s -- comfortably past POST init; the brief
+    // bus hold then lands inside the memory-test display at worst.
+    wire        rv_walk_go  = (rv_delay == 28'hFFFFFFF) & ~rv_walked;
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
             rv_walked <= 1'b0;
-            rv_delay  <= 17'd0;
+            rv_delay  <= 28'd0;
         end else if (!rv_walked && !rv_walk_go)
-            rv_delay <= rv_delay + 17'd1;
+            rv_delay <= rv_delay + 28'd1;
         else if (rv_walk_go)
             rv_walked <= 1'b1;
     end
