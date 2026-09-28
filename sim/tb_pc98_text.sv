@@ -66,13 +66,38 @@ module tb_pc98_text;
     // that fetched the wrong cell shows a misplaced dot, not a wrong byte.
     logic        percell    = 1'b0;
 
+    // colpat gives each cell its column number as the glyph, so a column's
+    // last dot (which reads bit 0) alternates between columns -- the one
+    // pattern that catches a last-dot leak from the next cell.
+    logic        colpat     = 1'b0;
+
     // Model the one-cycle latencies the real memories have.
     always_ff @(posedge clk) begin
         tv_attr  <= scr_attr;
-        font_row <= percell ? (8'h80 >> font_cell[2:0]) : glyph_row;
+        font_row <= percell ? (8'h80 >> font_cell[2:0])
+                  : colpat  ? 8'(font_cell >> 1)
+                  :           glyph_row;
     end
 
     int errors = 0;
+
+    // Mid-interval register sampler: read a dot-15's glyph source half a
+    // cycle after the posedge that ended dot 14, when nothing is in flight.
+    // (expect_pixel can't see boundary dots -- its post-edge sample already
+    // shows the next register state, and a same-timestep read after goto
+    // still sees the pre-edge one.)
+    logic       chk_en  = 1'b0;
+    logic [7:0] chk_cur = 8'd0;
+    always @(negedge clk) begin
+        if (chk_en) begin
+            chk_en <= 1'b0;
+            if (dut.cur_row !== chk_cur) begin
+                $display("  FAIL wide last dot: cur_row=%02x want %02x -- the cell's own glyph was swapped a dot early",
+                         dut.cur_row, chk_cur);
+                errors++;
+            end
+        end
+    end
 
     // Run to the given pixel of the given line and sample.
     task automatic goto(input int x, input int y);
@@ -212,6 +237,15 @@ module tb_pc98_text;
         // Columns past 40 are off the visible area anyway.
         expect_pixel(16*40 + 12, 0, 1'b0, "nothing beyond column 39");
         percell = 1'b0;
+
+        // The LAST dot of a wide cell must still be this column's bit 0 --
+        // a pipeline that loads at dot 14 instead of dot 15 shows the next
+        // column's bit 0 on the cell's last dot. colpat gives column c
+        // bit0 = c&1, so a leaked glyph reads as the next column's number.
+        colpat = 1'b1;
+        goto(16*10 + 14, 0); chk_cur = 8'h0a; chk_en = 1'b1; @(posedge clk);
+        goto(16*11 + 14, 0); chk_cur = 8'h0b; chk_en = 1'b1; @(posedge clk);
+        colpat = 1'b0;
 
         // The cursor still names a cell, so cur_addr 10 lights column 5.
         cur_en = 1'b1; cur_blink = 1'b0;

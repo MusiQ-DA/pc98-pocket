@@ -182,11 +182,14 @@ module pc98_text_render #(
     logic [7:0] nxt_row, nxt_attr;
 
     // The pipeline's three taps ride the character time: on a wide cell they
-    // land at dots 2, 6 and 14 of sixteen; on a narrow one, 1, 3 and 7 of
-    // eight. Either way the memories have had their cycle of latency.
+    // land at dots 2, 6 and 15 of sixteen; on a narrow one, 1, 3 and 7 of
+    // eight. Either way the memories have had their cycle of latency -- and
+    // the load has to be the LAST dot, not an early one: reloading cur_row
+    // at dot 14 leaves dot 15 shifting the NEXT cell's bit 0, which is the
+    // one-dot smear at every wide cell's right edge.
     wire ph_attr = wide ? (cdot == 4'd2 ) : (dot == 3'd1);
     wire ph_row  = wide ? (cdot == 4'd6 ) : (dot == 3'd3);
-    wire ph_load = wide ? (cdot == 4'd14) : (dot == 3'd7);
+    wire ph_load = wide ? (cdot == 4'd15) : (dot == 3'd7);
 
     always_ff @(posedge clk) begin
         if (pix_ce) begin
