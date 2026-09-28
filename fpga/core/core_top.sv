@@ -2053,7 +2053,7 @@ module core_top (
     // bus was borrowed and handed back ~96K times in-window -- a cadence
     // none of the survived shots exercised. v3 reproduces that exactly as
     // a single shot (the fitter has ~zero LABs of slack):
-    //   +1.5ms  non-strict FULL walk  (b6c7ee0's borrow/release storm)
+    //   +3ms    non-strict FULL walk  (v4: b6c7ee0's exact offset, same tree)
     // Liveness is a post-storm flag: rv_live clears when the walk completes
     // and latches the first guest bus cycle afterwards, so any later probe
     // read answers "did the guest come back after the storm". A guest that
@@ -2067,7 +2067,7 @@ module core_top (
     reg         rv_live      = 1'b0;
     wire        rv_done    = rv_seq ? (rv_shot == 3'd1) : rv_walked;
     wire        rv_walk_go = ~rv_done & (rv_seq
-        ? (rv_delay[27:16] == 12'd1)     // +1.5 ms
+        ? (rv_delay[27:16] == 12'd2)     // +3 ms: match b6c7ee0's window
         : (rv_delay == (rv_early ? 28'd129_000 : 28'hFFFFFFF)));
     wire        guest_cyc  = ~chipset_aen & (processor_status != 3'b111);
     always_ff @(posedge clk_chipset) begin
