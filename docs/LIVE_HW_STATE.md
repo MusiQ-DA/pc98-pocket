@@ -364,8 +364,23 @@ launch レート・late 発火行・fill 年齢をライブ観測。修正後は
   残る変数は**バス借り/解放のカデンス**: 致死ビルド b6c7ee0 は
   strict-grant 前で、walk が毎バイト `run` を落とす (~96K回の
   borrow/release)。v1/v2 の strict walk は連続保持だった。
-- **shotgun v3 (0718a7b)**: b6c7ee0 カデンス厳密再現 —
-  non-strict FULL walk@+1.5ms + non-strict 256B@+1.5s
-  (嵐後の liveness checkpoint; deadshot=1 なら shot0 が犯人)。
-  non-strict では byte 間ギャップでゲストが走るため walk 中も
-  guest_cyc が積算され、嵐の中でも生死判定可能。
+- **shotgun v3 (0718a7b→8d1cb28 single-shot 化)**: b6c7ee0 カデンス
+  厳密再現 — non-strict FULL walk@+1.5ms のみ (fitter 1848 LAB 制約で
+  2nd shot を削除、rv_live は walk 完了でクリア→以後の guest_cyc で
+  セットする sticky フラグに変更 = 「嵐を生き延びたか」の直接判定)。
+- **v3 結果**: **生存** — 0x2E=0x301 (shot=1, rv_live=1: walk 後も
+  ゲストがバスサイクル実行), 0x2B=38001C78 正値完走, BASIC 到達。
+  → b6c7ee0 の borrow/release カデンス・早期発射・ext 配線を
+  全て同じにしても現行ツリーでは死なない。**walk 機構は全て無罪**。
+- **era 分離 bisect (96eba7b, bisect-b6-nowalk)**: b6c7ee0 ツリーで
+  rv_walk_go=0 だけの変更 → **POST 完走** (`How many files`,
+  0x1F=053D0005)。同一ツリーで auto-walk ON=3/3死亡 vs OFF=起動
+  → **+3ms walk は死の必要条件確定** (co-factor 単独では殺さない)。
+- **b6nw 手動 walk (POST 後)**: 0x84 bit30 で full walk 発射 →
+  署名ゴミ (0x828B6D0C) だが**ゲスト生存** (0x1F=053D0005 維持)。
+  → b6c7ee0 時代の non-strict walk は安全時刻でも読み出し破損
+  (guest byte 折り込み = 4c5b18d/ec89281 で後に修正済みの既知バグ)。
+  誤読単体は致死でない → 死は「脆弱窓 + 時代固有の破損」の複合。
+- **shotgun v4 (e3b162e)**: v3 と同一ツリー・同一構成で発射時刻のみ
+  b6c7ee0 と一致 (+3ms, rv_delay[27:16]==2) — 「v3 が生きたのは
+  +1.5ms だったからか、ツリー内容が違うからか」を分離する対照。

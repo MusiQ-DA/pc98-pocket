@@ -2179,11 +2179,14 @@ module core_top (
     // whole walk and ram_rw_complete cannot pulse for a guest CPU access.
     // hold_only rides the same settled-grant path: a bare freeze still must
     // not fire before the HLDA has provably landed.
-    // The v3 sequence shot deliberately runs non-strict (drop `run` per
+    // The v3/v4 sequence shot deliberately runs non-strict (drop `run` per
     // byte, b6c7ee0 cadence); manual JTAG walks -- including post-sequence
-    // ones -- stay strict.
+    // ones -- stay strict. NOTE: the first version fed `rv_done` into this
+    // term, which flips high the clock after shot0 fires -- the "non-strict"
+    // walk silently ran strict, so v3 never actually exercised the
+    // borrow/release cadence. Seq shots must ignore rv_done entirely.
     wire        st_strict    = rv_hold_only
-                             | (jt_st_walk & (~rv_seq | rv_done));
+                             | (jt_st_walk & ~rv_seq);
     wire        st_hold_only = rv_hold_only;
 `else
     wire [19:0] st_addr_mux  = st_addr;
