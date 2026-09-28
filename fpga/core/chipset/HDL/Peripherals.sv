@@ -197,7 +197,13 @@ module PERIPHERALS #(
         // release. Passed through from core_top via CHIPSET.
         ,
         input   logic           pc98_key_stb,
-        input   logic   [7:0]   pc98_key_byte
+        input   logic   [7:0]   pc98_key_byte,
+        // Bus mouse: the shared pc98_mouse_src stream, same clock domain.
+        // ev strobes once per movement step; btn is {right, left} pressed.
+        input   logic signed [15:0] mouse_dx,
+        input   logic signed [15:0] mouse_dy,
+        input   logic               mouse_ev,
+        input   logic   [1:0]       mouse_btn
         
     );
 
@@ -529,6 +535,12 @@ module PERIPHERALS #(
     wire opna_irq = 1'b0;
 `endif
 
+    // The bus mouse's IRQ13 feeds slave bit 5; declared ahead of the slave
+    // PIC, the module itself sits with the other I/O below.
+    logic       busmouse_read_select;
+    logic [7:0] busmouse_read_data;
+    logic       busmouse_irq;
+
     // The slave PIC, 0008-000F even. Its INT feeds the master's IRQ7 and its
     // cascade lines close the loop, so an IRQ8-15 acknowledge gets its vector
     // from the slave exactly the way the metal does it.
@@ -569,9 +581,10 @@ module PERIPHERALS #(
         // pc98_fdc_glue, steered by chgreg exactly as np21w's fdc_intwait
         // steers pic_setirq (io/fdc.c:46-51): 2HD window -> IRQ11 (bit 3,
         // INT 13h, handler at FFAF6), 2DD window -> IRQ10 (bit 2, INT 12h,
-        // handler at FFB69).
-        .interrupt_request          ({3'b0, opna_irq, fdc_glue_irq_2hd,
-                                     fdc_glue_irq_2dd, 2'b0})
+        // handler at FFB69). Slave bit 5 is IRQ13, the bus mouse's line --
+        // np21w's mouseint pulses pic_setirq(0x0d) on its timer.
+        .interrupt_request          ({2'b0, busmouse_irq, opna_irq,
+                                     fdc_glue_irq_2hd, fdc_glue_irq_2dd, 2'b0})
     );
 
     always_ff @(posedge clock, posedge reset)
@@ -1092,6 +1105,37 @@ module PERIPHERALS #(
         .read_select        (kbd8251_read_select),
         .read_data          (kbd8251_read_data),
         .irq                (kbd8251_irq)
+    );
+
+    // ------------------------------------------------- bus mouse
+    //
+    // The second 8255 at 0x7FD9-0x7FDF (odd ports, low nibble 9/B/D/F) plus
+    // the interrupt-timing write at 0xBFDB -- np21w io/mouseif.c, documented
+    // in docs/PC98_IO_MAP.md 11.4. Full 16-bit decode: these sit above the
+    // classic pc98_io window, so they are matched on the whole address word
+    // rather than pc98_io_exact. The movement/button stream is the shared
+    // dock+gamepad source that also feeds the COM1 serial mouse. The
+    // interrupt is slave IRQ13, bit 5 of the slave's request vector.
+    wire bm_cs     = iorq & ~address_enable_n
+                   & (address[15:4] == 12'h7FD) & address[3] & address[0];
+    wire bm_tmr_cs = iorq & ~address_enable_n & (address[15:0] == 16'hBFDB);
+
+    pc98_busmouse #(.clk_rate(clk_rate)) u_pc98_busmouse (
+        .clk          (clock),
+        .rst          (reset),
+        .cs           (bm_cs),
+        .sel          (address[2:1]),
+        .wr           (~io_write_n),
+        .rd           (~io_read_n),
+        .tmr_cs       (bm_tmr_cs),
+        .din          (internal_data_bus),
+        .dout         (busmouse_read_data),
+        .read_select  (busmouse_read_select),
+        .irq          (busmouse_irq),
+        .m_dx         (mouse_dx),
+        .m_dy         (mouse_dy),
+        .m_ev         (mouse_ev),
+        .m_btn        (mouse_btn)
     );
 
     logic timer_interrupt_q;
@@ -2221,6 +2265,12 @@ module PERIPHERALS #(
             data_bus_out <= kbd8251_read_data;
         end
 `endif
+        // Bus mouse 0x7FD9/B/D -- 7FDF reads stay unclaimed, like np21w.
+        else if (busmouse_read_select)
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= busmouse_read_data;
+        end
         else if (scsi_rom_select && (~memory_read_n))
         begin
             data_bus_out_from_chipset <= 1'b1;

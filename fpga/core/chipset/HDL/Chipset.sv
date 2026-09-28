@@ -155,6 +155,11 @@ module CHIPSET #(
         // PC-98 keyboard injection, passed to PERIPHERALS' 8251 model.
         input   logic           pc98_key_stb,
         input   logic   [7:0]   pc98_key_byte,
+        // Bus mouse: the shared pc98_mouse_src stream out of core_top.
+        input   logic signed [15:0] mouse_dx,
+        input   logic signed [15:0] mouse_dy,
+        input   logic               mouse_ev,
+        input   logic   [1:0]       mouse_btn,
         // ROM-load (Pocket): expose the RAM access-complete pulse so core_top's
         // BIOS loader can pace on the real SDRAM write instead of a fixed delay.
         output  logic           ram_rw_complete
@@ -415,6 +420,10 @@ module CHIPSET #(
         .pause_core                         (pause_core)
         ,.pc98_key_stb                      (pc98_key_stb)
         ,.pc98_key_byte                     (pc98_key_byte)
+        ,.mouse_dx                          (mouse_dx)
+        ,.mouse_dy                          (mouse_dy)
+        ,.mouse_ev                          (mouse_ev)
+        ,.mouse_btn                         (mouse_btn)
     );
 
     // ---- the GRCG's plane expansion, ahead of RAM.sv -------------------

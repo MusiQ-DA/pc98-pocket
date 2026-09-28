@@ -1,102 +1,36 @@
 //
-// Pocket mouse: present the docked USB mouse (cont4_*) to the machine as a
-// two-button Microsoft serial mouse on COM1: an 'M' identification byte when
-// the driver asserts RTS, then three-byte movement packets at 1200 baud.
+// Pocket mouse: present the shared mouse source (pc98_mouse_src) to the
+// machine as a two-button Microsoft serial mouse on COM1: an 'M'
+// identification byte when the driver asserts RTS, then three-byte
+// movement packets at 1200 baud. The dock report capture, scaling and
+// gamepad merge live in pc98_mouse_src so the bus mouse sees the same
+// stream.
 //
 
 module pocket_mouse #(
-    parameter clk_rate = 28'd50000000   // clk frequency in Hz, sets the baud/tick divisors
+    parameter clk_rate = 28'd50000000   // clk frequency in Hz, sets the baud divisor
 ) (
-    input         clk,          // clk_chipset
-    input  [31:0] cont4_joy,    // docked USB: buttons [23:16], X delta [15:0]
-    input  [15:0] cont4_key,    // docked USB: report counter
-    input  [15:0] cont4_trig,   // docked USB: Y delta
-    input  [5:0]  pad,          // gamepad mouse mode: {B, A, right, left, down, up}, 0 when off
-    input         rts_n,        // COM1 RTS; the assert edge requests identification
-    output reg    rd = 1'b1     // serial data into COM1 RX
+    input               clk,          // clk_chipset
+    input  signed [15:0] ev_dx,       // movement step, valid while ev_v
+    input  signed [15:0] ev_dy,
+    input               ev_v,         // one step arrived this cycle
+    input         [1:0] btn_now,      // {right, left} merged buttons, 1 = pressed
+    input               rts_n,        // COM1 RTS; the assert edge requests identification
+    output reg          rd = 1'b1,    // serial data into COM1 RX
+    output              flush         // RTS assert edge; resets the source's scale residue
 );
 
     //
-    // Report capture. The dock rewrites the three cont4 words one at a time,
-    // so a raw crossing could pair a new report counter with a stale delta.
-    // Latch a snapshot only after all three words have held steady for
-    // ~160 us (longer than the gap between the dock's word writes, well
-    // inside its poll period): each snapshot is then one complete report,
-    // consumed once when its counter changes.
+    // Accumulate deltas between packets, saturating at the packet's signed
+    // 8-bit range; reports arriving while a packet is in flight sum into the
+    // next one.
     //
-    reg [31:0] joy_s0, joy_s1, joy_s;
-    reg [15:0] key_s0, key_s1, key_s;
-    reg [15:0] trig_s0, trig_s1, trig_s;
-    reg [12:0] rpt_stable;
-    wire       rpt_steady = (joy_s0 == joy_s1) && (key_s0 == key_s1) && (trig_s0 == trig_s1);
-
-    always @(posedge clk) begin
-        joy_s0  <= cont4_joy;  joy_s1  <= joy_s0;
-        key_s0  <= cont4_key;  key_s1  <= key_s0;
-        trig_s0 <= cont4_trig; trig_s1 <= trig_s0;
-        if (!rpt_steady)
-            rpt_stable <= 13'd0;
-        else if (!(&rpt_stable))
-            rpt_stable <= rpt_stable + 13'd1;
-        else begin
-            joy_s  <= joy_s1;
-            key_s  <= key_s1;
-            trig_s <= trig_s1;
-        end
-    end
-
-    // Report fields, little endian; deltas signed, Y positive downward as the
-    // serial protocol expects.
-    wire signed [15:0] rpt_dx  = {joy_s[7:0], joy_s[15:8]};
-    wire signed [15:0] rpt_dy  = {trig_s[7:0], trig_s[15:8]};
-    wire         [1:0] rpt_btn = joy_s[17:16];   // [0] = left, [1] = right
-
-    //
-    // Sensitivity: scale each arriving report's deltas by 1/8 (tuned on
-    // hardware), rounding toward zero so both directions quantise alike, and
-    // carry the remainder per axis so slow motion is scaled rather than lost.
-    //
-    reg signed [3:0] res_x = 4'sd0, res_y = 4'sd0;
-
-    function signed [16:0] tzshr3(input signed [16:0] v);
-        tzshr3 = v[16] ? -((-v) >>> 3) : (v >>> 3);
-    endfunction
-
-    wire signed [16:0] scl_x  = res_x + rpt_dx;
-    wire signed [16:0] scl_y  = res_y + rpt_dy;
-    wire signed [16:0] out_x  = tzshr3(scl_x);
-    wire signed [16:0] out_y  = tzshr3(scl_y);
-    wire signed [16:0] nres_x = scl_x - (out_x <<< 3);
-    wire signed [16:0] nres_y = scl_y - (out_y <<< 3);
-
-    //
-    // Accumulate scaled deltas between packets, saturating at the packet's
-    // signed 8-bit range; reports arriving while a packet is in flight sum
-    // into the next one.
-    //
-    reg  [15:0]       rpt_count = 16'd0;   // counter of the last consumed report
     reg  signed [7:0] acc_x = 8'sd0, acc_y = 8'sd0;
-    reg  [1:0]        btn = 2'd0, btn_sent = 2'd0;
-
-    wire rpt_new = (key_s != rpt_count);
+    reg  [1:0]        btn_sent = 2'd0;
 
     function signed [7:0] sat8(input signed [16:0] v);
         sat8 = (v > 17'sd127) ? 8'sd127 : (v < -17'sd127) ? -8'sd127 : v[7:0];
     endfunction
-
-    //
-    // Gamepad mouse: while a D-pad direction is held, step the accumulators
-    // at a fixed rate (tuned on hardware); A and B act as the left and right
-    // buttons alongside the docked mouse's.
-    //
-    localparam [17:0] PAD_DIV = clk_rate / 200 - 1;   // 200 counts per second, minus one
-
-    reg [17:0] pad_div = 18'd0;
-    wire       pad_tick = (pad_div == 18'd0) && (pad[3:0] != 4'd0);
-
-    wire signed [1:0] pad_dx = pad[3] ? 2'sd1 : pad[2] ? -2'sd1 : 2'sd0;
-    wire signed [1:0] pad_dy = pad[1] ? 2'sd1 : pad[0] ? -2'sd1 : 2'sd0;
-    wire        [1:0] btn_now = btn | {pad[5], pad[4]};
 
     //
     // Serial transmit: a 30-bit frame (three 10-bit 7N1 bytes, LSB first)
@@ -123,32 +57,23 @@ module pocket_mouse #(
 
     wire rts_assert = rts_n_q & ~rts_n;
     wire tx_idle    = (bits == 5'd0) && (baud == 16'd0);
-    wire pkt_load   = tx_idle && !rts_n &&
+    // A packet may not load in the cycle a step folds in: a report that
+    // changes buttons AND carries a delta would otherwise ship the button
+    // change with the pre-fold (zero) delta and send the movement in a
+    // second packet. Deferring one clock lets the accumulator see the step.
+    wire pkt_load   = tx_idle && !rts_n && !ev_v &&
                       ((acc_x != 8'sd0) || (acc_y != 8'sd0) || (btn_now != btn_sent));
 
-    // A packet load empties the accumulators; a report or pad step landing
-    // that same cycle still folds in.
-    wire signed [16:0] sum_x = (pkt_load ? 17'sd0 : acc_x) + (rpt_new ? out_x : 17'sd0)
-                             + (pad_tick ? pad_dx : 2'sd0);
-    wire signed [16:0] sum_y = (pkt_load ? 17'sd0 : acc_y) + (rpt_new ? out_y : 17'sd0)
-                             + (pad_tick ? pad_dy : 2'sd0);
+    // A packet load empties the accumulators; a step landing that same cycle
+    // still folds in.
+    wire signed [16:0] sum_x = (pkt_load ? 17'sd0 : acc_x) + (ev_v ? ev_dx : 17'sd0);
+    wire signed [16:0] sum_y = (pkt_load ? 17'sd0 : acc_y) + (ev_v ? ev_dy : 17'sd0);
+
+    assign flush = rts_assert;
 
     always @(posedge clk) begin
         rts_n_q <= rts_n;
 
-        pad_div <= (pad_div == 18'd0) ? PAD_DIV : pad_div - 18'd1;
-
-        if (rpt_new) begin
-            rpt_count <= key_s;
-            btn       <= rpt_btn;
-        end
-        if (rts_assert) begin
-            res_x <= 4'sd0;
-            res_y <= 4'sd0;
-        end else if (rpt_new) begin
-            res_x <= nres_x[3:0];
-            res_y <= nres_y[3:0];
-        end
         acc_x <= rts_assert ? 8'sd0 : sat8(sum_x);
         acc_y <= rts_assert ? 8'sd0 : sat8(sum_y);
 

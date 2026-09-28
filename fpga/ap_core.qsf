@@ -787,7 +787,11 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_opna.sv"
 set_global_assignment -name QIP_FILE core/sound/jt12/hdl/jt12_opna.qip
 
 
+# Shared dock+gamepad mouse stream feeding both front ends below.
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_mouse_src.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_mouse.sv
+# PC-98 bus mouse: the second 8255 at 0x7FD9-0x7FDF + 0xBFDB, IRQ13.
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_busmouse.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_video.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/video_sync_guard.sv
 

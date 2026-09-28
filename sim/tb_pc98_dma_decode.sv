@@ -130,6 +130,10 @@ module tb_pc98_dma_decode;
         .terminal_count         (terminal_count_n),
         .pc98_key_stb           (1'b0),
         .pc98_key_byte          (8'd0),
+        .mouse_dx               (16'sd0),
+        .mouse_dy               (16'sd0),
+        .mouse_ev               (1'b0),
+        .mouse_btn              (2'b00),
         .dma_chip_select_n      (dma_cs_n),
         .dma_page_chip_select_n (dma_page_cs_n)
     );
