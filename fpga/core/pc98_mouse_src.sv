@@ -1,8 +1,8 @@
 //
 // Shared mouse source: turn the docked USB mouse report stream (cont4_*)
-// and the gamepad's mouse mode into one event stream, so the serial COM1
-// front end (pocket_mouse) and the PC-98 bus mouse (pc98_busmouse) track
-// the same motion instead of running two snapshot filters that can drift.
+// and the gamepad's mouse mode into one event stream feeding the PC-98
+// bus mouse (pc98_busmouse). The Microsoft-serial front end that used to
+// share this stream is gone -- the core has no COM1 UART for it to feed.
 //
 // ev_v strobes once per movement step: a consumed report carries its scaled
 // delta, a held D-pad direction carries one pad unit, and a cycle that has
@@ -18,7 +18,6 @@ module pc98_mouse_src #(
     input        [15:0] cont4_key,    // docked USB: report counter
     input        [15:0] cont4_trig,   // docked USB: Y delta
     input        [5:0]  pad,          // gamepad mouse mode: {B, A, right, left, down, up}, 0 when off
-    input               flush,        // serial-mouse RTS assert: drop the scale residue
     output reg signed [15:0] ev_dx,
     output reg signed [15:0] ev_dy,
     output reg               ev_v,
@@ -103,13 +102,8 @@ module pc98_mouse_src #(
         if (rpt_new) begin
             rpt_count <= key_s;
             btn_q     <= rpt_btn;
-        end
-        if (flush) begin
-            res_x <= 4'sd0;
-            res_y <= 4'sd0;
-        end else if (rpt_new) begin
-            res_x <= nres_x[3:0];
-            res_y <= nres_y[3:0];
+            res_x     <= nres_x[3:0];
+            res_y     <= nres_y[3:0];
         end
 
         ev_v  <= rpt_new | pad_tick;

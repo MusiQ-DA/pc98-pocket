@@ -1,5 +1,4 @@
-// tb_pc98_mousesrc -- the shared mouse source and the serial front end that
-// was refactored onto it.
+// tb_pc98_mousesrc -- the shared mouse source feeding the bus mouse.
 //
 // The contract under test:
 //
@@ -7,10 +6,7 @@
 //      the snapshot window, and arrives on ev_* scaled by 1/8 with the
 //      remainder carried into the next report,
 //   2. a held D-pad direction steps once per pad tick and pad A/B merge
-//      into the button bits,
-//   3. pocket_mouse still answers an RTS assert with 'M' and serialises a
-//      movement packet (byte1 = 11 | L | R | dy7:6 | dx7:6, bytes 2/3 the
-//      six-bit deltas).
+//      into the button bits.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -26,21 +22,18 @@ module tb_pc98_mousesrc;
     logic clock = 0;
     always #(HALF_NS) clock = ~clock;
 
-    // Small clk_rate: the pad tick and the baud divisor both shrink.
+    // Small clk_rate: the pad tick shrinks.
     localparam int unsigned TEST_CLK = 48000;
     localparam int unsigned PAD_DIV  = TEST_CLK / 200;   // pad tick span
-    localparam int unsigned BIT_T    = TEST_CLK / 1200;  // serial bit time
 
     logic [31:0] cont4_joy  = 32'd0;
     logic [15:0] cont4_key  = 16'd0;
     logic [15:0] cont4_trig = 16'd0;
     logic  [5:0] pad        = 6'd0;
-    logic        rts_n      = 1'b1;
 
     wire signed [15:0] ev_dx, ev_dy;
     wire               ev_v;
     wire        [1:0]  btn;
-    wire               rd, flush;
 
     pc98_mouse_src #(.clk_rate(TEST_CLK)) src (
         .clk       (clock),
@@ -48,22 +41,10 @@ module tb_pc98_mousesrc;
         .cont4_key (cont4_key),
         .cont4_trig(cont4_trig),
         .pad       (pad),
-        .flush     (flush),
         .ev_dx     (ev_dx),
         .ev_dy     (ev_dy),
         .ev_v      (ev_v),
         .btn       (btn)
-    );
-
-    pocket_mouse #(.clk_rate(TEST_CLK)) ser (
-        .clk     (clock),
-        .ev_dx   (ev_dx),
-        .ev_dy   (ev_dy),
-        .ev_v    (ev_v),
-        .btn_now (btn),
-        .rts_n   (rts_n),
-        .rd      (rd),
-        .flush   (flush)
     );
 
     int errors = 0;
@@ -112,22 +93,6 @@ module tb_pc98_mousesrc;
         end
     endtask
 
-    // Serial receive, 7 data bits LSB-first, sampled mid-bit. The frame's
-    // bit-7-high is the stop position an 8-bit UART would see.
-    task automatic rx_byte(output logic [7:0] v);
-        int i;
-        begin
-            wait (rd === 1'b0);                          // start bit edge
-            repeat (BIT_T + BIT_T / 2) @(negedge clock); // mid data bit 0
-            v = 8'h00;
-            for (i = 0; i < 7; i++) begin
-                v[i] = rd;
-                repeat (BIT_T) @(negedge clock);
-            end
-        end
-    endtask
-
-    logic [7:0] b;
     int ev_count, i;
 
     initial begin
@@ -172,24 +137,6 @@ module tb_pc98_mousesrc;
             $display("FAIL: %0d pad steps in ~2.5 ticks, want 2", ev_count);
         end
         pad = 6'd0;
-
-        // ---- 5: serial path --------------------------------------------------
-        // RTS low answers 'M' (0x4D); a landed report then loads a packet.
-        rts_n = 1'b0;
-        rx_byte(b);
-        expect_eq({24'd0, b & 8'h7F}, 8'h4D, "ident byte is 'M'");
-
-        // The packet goes out as soon as the report lands (~8195 clks), so
-        // chain the three reads directly off report() and let each rx_byte
-        // wait out the snapshot window on its own.
-        report(2'b00, 16'sd64, 16'sd0, 16'd5); // +8 after scaling
-        rx_byte(b);
-        // byte 1 = {11, L, R, dy7:6, dx7:6}; 7-bit capture -> 0x40 | fields.
-        expect_eq({24'd0, b & 8'h7F}, 8'h40, "packet byte1");
-        rx_byte(b);                            // {1, dx[5:0]}
-        expect_eq({24'd0, b & 8'h3F}, 8'h08, "packet byte2 = dx");
-        rx_byte(b);                            // {1, dy[5:0]}
-        expect_eq({24'd0, b & 8'h3F}, 8'h00, "packet byte3 = dy");
 
         if (errors == 0)
             $display("RESULT: PASS");

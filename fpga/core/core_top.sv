@@ -1301,9 +1301,6 @@ module core_top (
     wire        kb_valid;
     wire        kb_ready;
 
-    wire        mouse_rd;
-    wire        mouse_rts_n;
-
     //
     // Keyboard: pad buttons + docked USB keyboard + VKB merged into one Set-2 byte
     // stream (kb_byte/kb_valid, paced by kb_ready). In mouse mode the D-pad and A/B
@@ -1438,16 +1435,17 @@ module core_top (
     );
 
     //
-    // Mouse: one shared source (pc98_mouse_src) feeds two guest interfaces --
-    // the Microsoft serial byte stream on COM1, paced by RTS, and the PC-98
-    // bus mouse's second 8255 inside CHIPSET. In mouse mode the pad's D-pad
-    // and A/B drive it too; quiet under an overlay.
+    // Mouse: the dock report stream lands on pc98_mouse_src and feeds the
+    // PC-98 bus mouse's second 8255 inside CHIPSET -- the only guest-facing
+    // mouse interface, since this machine has no COM1 UART for a serial
+    // mouse to feed. In mouse mode the pad's D-pad and A/B drive it too;
+    // quiet under an overlay.
     //
     wire [5:0] mouse_pad = (mousepad && !(osd_active | credits_mode_chip)) ?
                            cont1_key_chip[5:0] : 6'd0;
 
     wire signed [15:0] mouse_dx, mouse_dy;
-    wire               mouse_ev, mouse_flush;
+    wire               mouse_ev;
     wire        [1:0]  mouse_btn;
 
     pc98_mouse_src #(.clk_rate(cur_rate)) u_pc98_mouse_src (
@@ -1456,22 +1454,10 @@ module core_top (
         .cont4_key    (cont4_key),
         .cont4_trig   (cont4_trig),
         .pad          (mouse_pad),
-        .flush        (mouse_flush),
         .ev_dx        (mouse_dx),
         .ev_dy        (mouse_dy),
         .ev_v         (mouse_ev),
         .btn          (mouse_btn)
-    );
-
-    pocket_mouse #(.clk_rate(cur_rate)) u_pocket_mouse (
-        .clk          (clk_chipset),
-        .ev_dx        (mouse_dx),
-        .ev_dy        (mouse_dy),
-        .ev_v         (mouse_ev),
-        .btn_now      (mouse_btn),
-        .rts_n        (mouse_rts_n),
-        .rd           (mouse_rd),
-        .flush        (mouse_flush)
     );
 
     //
