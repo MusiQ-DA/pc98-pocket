@@ -69,56 +69,8 @@ module pocket_video (
     end
 
     //
-    // Presented window
-    //
-    // The guest programs arbitrary 6845 rasters, so present one fixed 720x350 window
-    // (720 dots from the guest active start each line, 350 lines opening CANVAS_VSKIP
-    // lines after the vsync fall) and pad the rest black. CANVAS_VSKIP must equal the
-    // scaler's frame anchor, or the window's top lines wrap to the bottom.
-    localparam CANVAS_W = 10'd720;
-    localparam CANVAS_H = 10'd350;
-    localparam CANVAS_VSKIP = 5'd16; // lines from the vsync fall to the window top
-    reg       src_hb_d = 1'b0;
-    reg       src_vs_d = 1'b0;
-    reg       v_arm    = 1'b0;   // vsync fell; window opens after the skip
-    reg [4:0] v_skip   = 5'd0;
-    reg [9:0] h_run    = 10'd0;  // dots left in this line's window
-    reg [9:0] v_run    = 10'd0;  // lines left in this frame's window
-    wire      line_open = src_hb_d & ~HBlank & (h_run == 10'd0);   // guest active start
-    always @(posedge clk_pix) begin
-        src_hb_d <= HBlank;
-        src_vs_d <= VSync;
-        if (~VSync & src_vs_d) begin
-            v_arm  <= 1'b1;
-            v_skip <= 5'd0;
-        end
-        if (line_open) begin
-            h_run <= CANVAS_W - 10'd1;   // this cycle is the window's first dot
-        end else if (h_run != 10'd0) begin
-            h_run <= h_run - 10'd1;
-            if (h_run == 10'd1) begin    // line end: settle v_run for the next line
-                if (v_arm) begin
-                    if (v_skip == CANVAS_VSKIP - 5'd1) begin
-                        v_run <= CANVAS_H;
-                        v_arm <= 1'b0;
-                    end else begin
-                        v_run  <= 10'd0;   // skip lines stay blank
-                        v_skip <= v_skip + 5'd1;
-                    end
-                end else if (v_run != 10'd0) begin
-                    v_run <= v_run - 10'd1;
-                end
-            end
-        end
-    end
-    wire canvas_hb = ~(line_open | (h_run != 10'd0));
-    wire canvas_vb = (v_run == 10'd0);
-
-    //
     // Card blanking
     //
-    // The machine raster's HBlank/VBlank (the window counters above already
-    // normalize the frame to the presented size).
     // -------------------------------------------------- rebuilt PC-98 blanking
     //
     // Not CHIPSET's HBlank/VBlank. Everything indexed by the counters derived
@@ -161,9 +113,7 @@ module pocket_video (
 
     wire vid_hb  = pc98_hb;
     wire vid_vb  = pc98_vb;
-    // Canvas padding (inside the window, outside the guest raster). The window's first
-    // line is sacrificial/black: the scaler captures the first DE line unreliably.
-    // No canvas to pad: the machine raster is the picture, edge to edge.
+    // No padding: the machine raster is the picture, edge to edge.
     wire vid_pad = 1'b0;
 
     //
