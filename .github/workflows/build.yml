@@ -435,7 +435,7 @@ jobs:
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_busmouse \
             -Isim -I$S sim/tb_pc98_busmouse.sv $S/pc98_busmouse.sv -o bm --Mdir obj_bm
           ./obj_bm/bm | tee bm.log
-          grep -q "PASS tb_pc98_busmouse" bm.log
+          grep -q "RESULT: PASS" bm.log
 
       - name: the shared mouse source and the serial front end still work
         run: |
@@ -444,7 +444,7 @@ jobs:
             -Isim -I$S sim/tb_pc98_mousesrc.sv $S/pc98_mouse_src.sv \
             $S/pocket_mouse.sv -o ms --Mdir obj_ms
           ./obj_ms/ms | tee ms.log
-          grep -q "PASS tb_pc98_mousesrc" ms.log
+          grep -q "RESULT: PASS" ms.log
 
       - name: the OPNA's port window and register router match np21w
         run: |
