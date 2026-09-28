@@ -194,3 +194,39 @@ draw_test.hdm が bind されない問題の追跡結果:
 0 バイトスタブは実ファイルで上書き済み。
 
 **残り検証**: draw_test.hdm (common/ 実ファイル) をピック → Inserted → コア再起動 → BIOS ブート確認。
+
+## 2026-09-28 (夜): draw_test ブート成功 + 縦揺れの原因特定
+
+**draw_test.hdm ブート確認** (run 531, JTAG フラッシュ): ピッカーで common/ の実ファイルを選択
+→ Inserted → BIOS がディスクブート → 16色バンド + GRCG cyan box + TVRAM テキストが全表示。
+GRCG・SDRAM 書き込み・表示 fetch が実機で全通し。
+
+**残症状**: カラーバンドの境界が縦方向にわずかに揺れる (静的画像なので描画側の問題)。
+
+**調査ログ (probe 0x29 = {max_fill_clk, skip, late})**:
+- LA=1 時代: underrun モードあり (fill が間に合わないと 2 行前のデータを表示)
+- LA=3 化 (2f3f689, 4-bank ring): max_fill=1559 clk (< 1730 = 1 ライン) なのに
+  skip=0xFF 飽和 + late ~1.2/s 増加 — **物理的に矛盾** → line_edge 偽発火の可能性
+
+**根本原因特定 (c673738)**: `vcount` の gray 化は連続値間のみ単ビット。
+wrap 439→0 では gray が 6bit 同時反転 (gray(439)=0b101101100 → 0) → 2FF が中間値を
+サンプル → `line_now` が 1-2clk のゴミ値 → 偽 line_edge → fetch walk が余分に PITCH 進む
+→ そのフレーム残りの fill がずれた行を読む (edge 396 の w_wrap で毎フレーム再同期、
+lines 0-2 は常に正しい、3-399 が k 行ずれ = バンド揺れ)。
+
+- skip 飽和: 偽 edge が busy 中に出るたび加算 (~50-130/s)
+- late ~1/s: ゴミ値が偶然 act_tgt に一致した時のみ
+- max_fill=1559: fill は常に 1 ライン以内で完了、deadline 超過ゼロ
+
+**修正**: `line_q`/`line_edge` を「+1 ステップ or 439→0 wrap」のみ受理に変更。
+ゴミ値は拒否、真値は 1clk 後に受理。self-healing (rst 後も次フレーム line 1 で再同期)。
+
+**probe 0x2A 追加**: {nfill[15:0], late_line[8:0], fill_len[15:9]} —
+launch レート・late 発火行・fill 年齢をライブ観測。修正後は skip/late=0 が期待値。
+
+**ROM SUM ERROR 調査ログ**:
+- run 531 JTAG フラッシュ後に SUM ERROR → guest F8004 が bios.rom[0x10004]=0x02 に対し 0x03
+  (1bit 反転、再読みで安定) — 他 5KB は一致。ROM 領域は write-protect で JTAG 修復不可。
+- **同 .sof 再フラッシュで F8004=0x02 に復旧** → ブートごとのランダムなロード破壊。
+  コード領域に当たればクラッシュ、検査領域なら SUM ERROR、無害なら正常起動 —
+  「起きたり起きなかったり」の wedge 機構と一致する最有力候補。
