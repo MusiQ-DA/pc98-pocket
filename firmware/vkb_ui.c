@@ -76,12 +76,6 @@ static void osd_origin_write(void)
     *OSD_ORIGIN = (y << 16) | x;
 }
 
-// True while the keyboard or the settings menu owns the framebuffer.
-int vkb_ui_overlay_open(void)
-{
-    return ui_mode != OSD_NONE;
-}
-
 // OSD control word: bit0 = an overlay is shown; the origin is refreshed first.
 static void osd_ctrl_write(void)
 {

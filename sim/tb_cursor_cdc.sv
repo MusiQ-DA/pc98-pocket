@@ -35,13 +35,10 @@ module tb_cursor_cdc;
     wire        cursor_en, cursor_blink_en;
     wire [4:0]  cursor_top, cursor_bottom;
     wire [5:0]  cursor_rate;
-    wire [7:0]  csr_wr_count;
-    wire [31:0] csr_trace;
     wire [1:0]  zoom_disp;
     wire        draw_req, draw_busy;
     wire [7:0]  draw_op;
     wire [31:0] draw_snap [0:4];
-    wire [7:0]  unk_cmd, unk_count;
 
     pc98_gdc #(.MASTER(1'b1)) gdc (
         .clk(clk), .reset(reset),
@@ -54,10 +51,8 @@ module tb_cursor_cdc;
         .cursor_en(cursor_en), .cursor_blink_en(cursor_blink_en),
         .cursor_top(cursor_top), .cursor_bottom(cursor_bottom),
         .cursor_rate(cursor_rate), .zoom_disp(zoom_disp),
-        .csr_wr_count(csr_wr_count), .csr_trace(csr_trace),
         .draw_req(draw_req), .draw_op(draw_op), .draw_busy(draw_busy),
-        .srv_done_stb(1'b0), .draw_snap(draw_snap),
-        .unk_cmd(unk_cmd), .unk_count(unk_count)
+        .srv_done_stb(1'b0), .draw_snap(draw_snap)
     );
 
     // ---- the raster, in the dot-clock domain -----------------------------------
@@ -196,9 +191,9 @@ module tb_cursor_cdc;
         cmd(8'h4B); par(8'h8F);
         cmd(8'h49); par(8'd82); par(8'h00);
 
-        $display("csr: en=%0d blink=%0d top=%0d bot=%0d addr=%0d cnt=%0d",
+        $display("csr: en=%0d blink=%0d top=%0d bot=%0d addr=%0d",
                  cursor_en, cursor_blink_en, cursor_top, cursor_bottom,
-                 cursor_addr, csr_wr_count);
+                 cursor_addr);
         if (cursor_top !== 0 || cursor_bottom !== 15) begin
             $display("FAIL span %0d-%0d want 0-15", cursor_top, cursor_bottom);
             errors++;
@@ -208,11 +203,6 @@ module tb_cursor_cdc;
         // high slot (0x5252 & 0x3FF). Single commit keeps it 82.
         if (cursor_addr !== 16'd82) begin
             $display("FAIL addr %0d want 82", cursor_addr); errors++;
-        end
-        // One CSRFORM + one CSRW command total. Multi-cycle io_write_n
-        // against the old level-sensitive port counted ~11 arrivals each.
-        if (csr_wr_count !== 8'd2) begin
-            $display("FAIL cnt %0d want 2", csr_wr_count); errors++;
         end
 
         // Let two full frames elapse so the vsync latch picks the values up,

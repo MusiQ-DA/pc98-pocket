@@ -50,16 +50,6 @@ static void sd_poke(uint32_t addr, uint8_t v)
     st_wait();
 }
 
-#endif // SDRAM_SELFTEST
-
-uint8_t sdram_peek(uint32_t addr)
-{
-    *ST_ADDR = addr;
-    *ST_TRIG = 2u; // read
-    return (uint8_t) (st_wait() & 0xFFu);
-}
-
-#ifdef SDRAM_SELFTEST
 
 static uint8_t sd_peek(uint32_t addr)
 {

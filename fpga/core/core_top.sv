@@ -2284,7 +2284,6 @@ module core_top (
     wire pause_core_chipset;
 
     wire [7:0] data_bus;
-    wire INTA_n;
     wire [19:0] cpu_ad_out;
     reg  [19:0] cpu_address;
     wire [7:0] cpu_data_bus;
@@ -2307,8 +2306,6 @@ module core_top (
 
     wire [3:0]   dma_acknowledge_n;
 
-    logic   [7:0]   port_b_out;
-    logic   [7:0]   port_c_in;
     wire    [1:0]   fdd_present;
     reg     [7:0]   sw;
 
@@ -2318,21 +2315,6 @@ module core_top (
     assign  sw_base = 6'b101101;
     assign  sw_floppy = fdd_present[1] ? 2'b01 : 2'b00;
     assign  sw = {sw_floppy, sw_base}; // DIP switches (display type and floppy count)
-
-    // 8255 port B is 0x0033, and on a PC-98 it is an INPUT: bit 3 is a DIP
-    // switch inverted, bits 7-5 are the RS-232C modem status, bit 0 is the
-    // calendar clock's data line, and everything else reads zero (np21w
-    // io/sysport.c, sysp_i33 -- behaviour reference, not code).
-    //
-    // It was wired to port_b_out, a PC/AT leftover where port B is an output
-    // and reading it back is harmless. Here it is not: the UX ITF reads 0x33
-    // at F889C and tests bit 2, and a set bit 2 means PARITY ERROR -- which is
-    // what it printed. Whatever the BIOS last wrote to port B decided whether
-    // this machine believed its own memory was faulty.
-    //
-    // No serial and no clock chip yet, so the modem bits and the clock bit are
-    // zero; bit 3 follows the display DIP the way the reference does.
-    wire [7:0] pc98_port_b_in = {3'b000, 1'b0, ~sw[0], 3'b000};
 
     // ---------------------------------------------------------------- ITF bank
     //
@@ -2639,7 +2621,6 @@ module core_top (
     assign SDRAM_DQ_IN = dram_dq;
     assign dram_dq     = ~SDRAM_DQ_IO ? SDRAM_DQ_OUT : 16'hZZZZ;
 
-    wire s6_3_mux;
     wire [2:0] SEGMENT;
 
     // ---------------------------------------------------------------- the CPU

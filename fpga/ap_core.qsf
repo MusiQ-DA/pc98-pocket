@@ -792,7 +792,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_mouse_src.sv
 # PC-98 bus mouse: the second 8255 at 0x7FD9-0x7FDF + 0xBFDB, IRQ13.
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_busmouse.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_video.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/video_sync_guard.sv
 
 # Audio back end: OpenGateware audio_mixer (MiSTer filter chain + I2S) and its
 # codec-clock PLL.
