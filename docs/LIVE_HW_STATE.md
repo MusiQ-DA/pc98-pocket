@@ -237,3 +237,12 @@ launch レート・late 発火行・fill 年齢をライブ観測。修正後は
 - 実機目視: **バンドの縦揺れ消失** — torn gray wrap が原因確定
 - 副次的効果: skip/late/launch が正しい計測値として使えるようになった
   (以前は偽 edge でカウンタが意味をなさなかった)
+
+**ROM イメージ検証器 (b6c7ee0, probe 0x2B-0x2D)**:
+- リセット解除 ~3ms 後に JTAG メモリマスタ系の経路で E8000-FFFFF を自動走査し
+  add/xor sum を計算 (0x84 書き込み bit30 で手動再実行も可)
+- loader FSM がコミットした書き込み値の stream sum + 語数も同時採取
+- クリーンなブートの期待値: `0x2B=38001C78` `0x2C=C0003800` `0x2D=1C78FFFF`
+- 解釈: str==期待値 かつ walk!=str → RAM.sv/sdram_mp 書き込み経路の損失 /
+  str!=期待値 → bridge/host 側 / 全一致 → イメージ健全
+- 3 ブート x 8KB 手動スキャンは全て 0 diff — 破壊頻度は低い (~1/数ブート)

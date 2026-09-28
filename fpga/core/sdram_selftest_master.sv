@@ -58,6 +58,11 @@ module sdram_selftest_master #(
     // any 8088 bus: raise HOLD, wait for HLDA, then command.
     input  wire        bus_granted,
 
+    // Strict mode for the JTAG verify walk: a guard-expired byte is garbage
+    // folded into the checksums, so strict waits for a real HLDA forever and
+    // retries a timed-out access (up to 15 times) instead of accepting it.
+    input  wire        strict,
+
     // CHIPSET external-access port.
     output logic       run,              // drives ext_access_request and the muxes
     output logic       write_n,
@@ -70,6 +75,7 @@ module sdram_selftest_master #(
     state_t state;
 
     logic [15:0] guard;
+    logic [3:0]  retries;
     wire         grant = req & ~loader_busy;
 
     always_ff @(posedge clk or posedge rst) begin
@@ -81,6 +87,7 @@ module sdram_selftest_master #(
             done    <= 1'b0;
             rdata   <= 8'h00;
             guard   <= 16'd0;
+            retries <= 4'd0;
         end else begin
             case (state)
 
@@ -89,6 +96,7 @@ module sdram_selftest_master #(
                 write_n <= 1'b1;
                 read_n  <= 1'b1;
                 done    <= 1'b0;
+                retries <= 4'd0;
                 if (grant && initilized_sdram) begin
                     run     <= 1'b1;    // request the bus, commands still idle
                     guard   <= 16'd0;
@@ -102,24 +110,34 @@ module sdram_selftest_master #(
             // exactly what the old single-state behavior did.
             S_GRANT: begin
                 guard <= guard + 16'd1;
-                if (bus_granted || (guard == 16'(GUARD))) begin
+                if (bus_granted || (guard == 16'(GUARD) && !strict)) begin
                     write_n <= ~we;
                     read_n  <=  we;
                     guard   <= 16'd0;
                     state   <= S_ACCESS;
-                end
+                end else if (guard == 16'(GUARD))
+                    guard <= 16'd0;     // strict: keep waiting for a real HLDA
             end
 
             // Hold the command until RAM.sv reports the access finished, or the
-            // guard expires.
+            // guard expires. Strict retries the access a bounded number of
+            // times rather than summing a byte that never really completed.
             S_ACCESS: begin
                 guard <= guard + 16'd1;
                 if (ram_rw_complete || (guard == 16'(GUARD))) begin
-                    rdata   <= we ? 8'h00 : ext_rdata;
-                    write_n <= 1'b1;
-                    read_n  <= 1'b1;
-                    done    <= 1'b1;
-                    state   <= S_DRAIN;
+                    if (!ram_rw_complete && strict && retries != 4'hF) begin
+                        write_n <= 1'b1;
+                        read_n  <= 1'b1;
+                        retries <= retries + 4'd1;
+                        guard   <= 16'd0;
+                        state   <= S_GRANT;
+                    end else begin
+                        rdata   <= we ? 8'h00 : ext_rdata;
+                        write_n <= 1'b1;
+                        read_n  <= 1'b1;
+                        done    <= 1'b1;
+                        state   <= S_DRAIN;
+                    end
                 end
             end
 

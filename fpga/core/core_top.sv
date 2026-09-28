@@ -1438,20 +1438,40 @@ module core_top (
     );
 
     //
-    // Mouse: docked USB mouse (cont4_*) -> Microsoft serial byte stream on COM1, paced
-    // by RTS. In mouse mode the pad's D-pad and A/B drive it too; quiet under an overlay.
+    // Mouse: one shared source (pc98_mouse_src) feeds two guest interfaces --
+    // the Microsoft serial byte stream on COM1, paced by RTS, and the PC-98
+    // bus mouse's second 8255 inside CHIPSET. In mouse mode the pad's D-pad
+    // and A/B drive it too; quiet under an overlay.
     //
     wire [5:0] mouse_pad = (mousepad && !(osd_active | credits_mode_chip)) ?
                            cont1_key_chip[5:0] : 6'd0;
 
-    pocket_mouse #(.clk_rate(cur_rate)) u_pocket_mouse (
+    wire signed [15:0] mouse_dx, mouse_dy;
+    wire               mouse_ev, mouse_flush;
+    wire        [1:0]  mouse_btn;
+
+    pc98_mouse_src #(.clk_rate(cur_rate)) u_pc98_mouse_src (
         .clk          (clk_chipset),
         .cont4_joy    (cont4_joy),
         .cont4_key    (cont4_key),
         .cont4_trig   (cont4_trig),
         .pad          (mouse_pad),
+        .flush        (mouse_flush),
+        .ev_dx        (mouse_dx),
+        .ev_dy        (mouse_dy),
+        .ev_v         (mouse_ev),
+        .btn          (mouse_btn)
+    );
+
+    pocket_mouse #(.clk_rate(cur_rate)) u_pocket_mouse (
+        .clk          (clk_chipset),
+        .ev_dx        (mouse_dx),
+        .ev_dy        (mouse_dy),
+        .ev_v         (mouse_ev),
+        .btn_now      (mouse_btn),
         .rts_n        (mouse_rts_n),
-        .rd           (mouse_rd)
+        .rd           (mouse_rd),
+        .flush        (mouse_flush)
     );
 
     //
@@ -2014,13 +2034,13 @@ module core_top (
     // after reset_wire falls, so every boot reports whether the BIOS image
     // landed intact: the intermittent "ROM SUM ERROR" was one flipped bit at
     // F8004, and a 96 KB JTAG crawl per boot is too slow for statistics.
-    reg         jt_st_walk   = 1'b0;
+    reg         jt_st_walk  = 1'b0;
     reg  [7:0]  jt_walk_pair = 8'd0;
-    reg  [15:0] jt_walk_add  = 16'd0;
-    reg  [15:0] jt_walk_xor  = 16'd0;
-    reg         rv_walked    = 1'b0;
-    reg  [16:0] rv_delay     = 17'd0;
-    wire        rv_walk_go   = (rv_delay == 17'h1FFFF) & ~rv_walked;
+    reg  [15:0] jt_walk_add = 16'd0;
+    reg  [15:0] jt_walk_xor = 16'd0;
+    reg         rv_walked   = 1'b0;
+    reg  [16:0] rv_delay    = 17'd0;
+    wire        rv_walk_go  = (rv_delay == 17'h1FFFF) & ~rv_walked;
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
             rv_walked <= 1'b0;
@@ -2100,11 +2120,13 @@ module core_top (
     wire [7:0]  st_wdata_mux = jt_st_req ? jt_st_wdata : st_wdata;
     wire        st_we_mux    = jt_st_req ? jt_st_we    : st_we;
     wire        st_req_mux   = st_req | jt_st_req;
+    wire        st_strict    = jt_st_req & jt_st_walk;
 `else
     wire [19:0] st_addr_mux  = st_addr;
     wire [7:0]  st_wdata_mux = st_wdata;
     wire        st_we_mux    = st_we;
     wire        st_req_mux   = st_req;
+    wire        st_strict    = 1'b0;
 `endif
 
     wire [31:0] jt_fddctl;
@@ -2175,6 +2197,7 @@ module core_top (
         .initilized_sdram (initilized_sdram),
         .loader_busy      (ioctl_download),
         .bus_granted      (chipset_aen),   // CHIPSET's address_enable_n = HLDA
+        .strict           (st_strict),
         .run              (st_run),
         .write_n          (st_wr_n),
         .read_n           (st_rd_n),
@@ -2561,6 +2584,10 @@ module core_top (
         .ram_rw_complete                    (ram_rw_complete)
         ,.pc98_key_stb                      (pc98_key_stb)
         ,.pc98_key_byte                     (pc98_key_code)
+        ,.mouse_dx                          (mouse_dx)
+        ,.mouse_dy                          (mouse_dy)
+        ,.mouse_ev                          (mouse_ev)
+        ,.mouse_btn                         (mouse_btn)
     );
 
     // CHIPSET per-access "done" pulse (COMPLETE_RAM_RW); drives the ROM-load FSM.
