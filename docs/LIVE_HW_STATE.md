@@ -287,3 +287,33 @@ launch レート・late 発火行・fill 年齢をライブ観測。修正後は
   S_GRANT で `!ram_rw_complete` 排水 (初バイトの pre-grant 外国人完了を
   待つ) + S_ACCESS で「strobe 中に line が low を見た」ことを受理条件化
   (entry 時点の stale complete 拒否)。ベンチ 4 phase 全 PASS。
+- **strict-v3 実機 (run 545): `0x2B=38001C78` — 期待値と完全一致**。
+  walk はついに信用できる: 格納イメージ 96KB 全バイト正しいと証明可。
+
+**重大な回帰発見 (POST が "MEMORY XXXKB OK" に到達しない件)**:
+- 症状: POST が早期に停滞。TVRAM 全空 (テキスト一切書かれず)、
+  IVT 全ゼロ、bios イメージは全 96KB JTAG 比較で 0 diff (完璧)、
+  CPU は実行中 (processor_ready 揺れ) だが PIC irr pending のまま
+  isr=0 で進まない。毎回再現 = 確定的。
+- バイセクト: c673738 = 正常に "How many files" プロンプトまでブート
+  (再フラッシュで再現確認)。b6c7ee0 = 同じ停滞症状 → **回帰は
+  b6c7ee0 (verifier コミット) で入った**。間に docs コミットのみ。
+- 容疑者 = 自動 walk: reset_wire 落下 +3ms (POST 最脆弱期) に 96K バイト
+  分のバス借用が走る。strict-v3 の完全保持でもダメだったので単なる
+  arbitration tear ではない — 未解決の teardown 機構が残っている
+  (guest access の中断/再開か、port 共有状態の不整合か)。
+- 暫定措置 (92f5f35): 自動 walk の発火を reset_wire 落下 +~6.2s に遅延
+  (POST の脆弱期を安全に通過してから。イメージは静的なので検出能力は
+  不変)。手動 walk (0x84 bit30) はそのまま。
+
+**遅延 walk (92f5f35, run 546) 実機結果 — POST 復活**:
+- フラッシュ後: BIOS POST が `How many files(0-15)?` (BASIC プロンプト)
+  まで完走。ファンクションキー行も正常表示。回帰解消を確認。
+- 自動 walk は +6.2s で発射し `0x2B=38001C78` 完走 (期待値一致)。
+  0x2C=C0003800 / 0x2D=1C78FFFF も全て正しい。
+- **実行中ゲストへの手動 walk も 38001C78 で完走しゲスト無傷**
+  (BASIC プロンプト維持、0x28 活動ビット揺れ継続) →
+  freeze/resume 機構自体は安全で、+3ms で死んだのは POST 超初期
+  (IVT 設定前〜割り込み初期化中) の凍結に特有の問題と確定。
+- walk は「何時でも撃てる」わけではなく「POST 安定後に撃つ」こと
+  が条件と分かった — 遅延発射は対症療法ではなく正しい使い方。
