@@ -1149,6 +1149,12 @@ module core_top (
             8'h2B:   probe_data = {jt_walk_add, jt_walk_xor};
             8'h2C:   probe_data = {rv_str_cnt, rv_str_add};
             8'h2D:   probe_data = {rv_str_xor, jt_st_addr[15:0]};
+            // 0x2E: bisect readback -- armed flags and, on the shotgun build,
+            // which shot fired last. A POST dying mid-sequence freezes this
+            // word on the lethal shot's index.
+            8'h2E:   probe_data = {20'h00000, rv_seq, rv_single,
+                                   rv_hold_only, rv_early, rv_short_walk,
+                                   1'b0, rv_shot};
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:
@@ -2032,33 +2038,60 @@ module core_top (
     // bus hold then lands inside the memory-test display at worst.
     //
     // Bisect knobs for the +3 ms kill: a slot-0x84 command with bit31 set
-    // writes no access and instead arms experiment flags from [21:20] --
+    // writes no access and instead arms experiment flags from [22:20] --
     // bit21 (early) moves the auto walk back to the fatal ~3 ms offset
-    // (one-shot, self-clears on fire) and bit20 (hold_only) makes the
+    // (one-shot, self-clears on fire), bit20 (hold_only) makes the
     // selftest master borrow the bus and sit on it for ~46 ms without ever
-    // strobing. POST dying under early+hold_only means the bare freeze is
-    // lethal; surviving it indicts the walk's strobes.
-    // DEBUG BUILD: both armed from config so the COLD boot (the only POST
-    // with the fragile window -- warm Reset-PC POSTs skip it) fires the
-    // +3 ms bare-hold shot with no JTAG race. Clear with slot-0x84 bit31.
-    reg         rv_hold_only = 1'b1;
-    reg         rv_early     = 1'b1;
-    wire [27:0] rv_target    = rv_early ? 28'd129_000 : 28'hFFFFFFF;
-    wire        rv_walk_go   = (rv_delay == rv_target) & ~rv_walked;
+    // strobing, and bit22 (single) issues one plain read instead of the
+    // whole-window walk.
+    //
+    // The hardware verdict so far: a cold-boot +3 ms bare hold is SURVIVED,
+    // so the strobes do the damage. This build runs a shotgun instead:
+    // four pre-armed shots on the cold boot, spaced ~60 ms -- a bare hold,
+    // one read, a 256-byte walk, then the whole-window walk. POST dying
+    // mid-sequence leaves the probe signature of the lethal shot:
+    //   shot0 hold   -> 0x2B=0,        0x2D=E8000
+    //   shot1 read   -> 0x2B=one byte, 0x2D=E8000
+    //   shot2 E80FF  -> 0x2B partial,  0x2D<=E80FF
+    //   shot3 walk   -> 0x2B grows,    0x2D climbs to FFFFF
+    // A warm boot (Reset PC) re-runs the sequence.
+    localparam [27:0] SHOT0_T = 28'd129_000;      // ~3 ms
+    localparam [27:0] SHOT1_T = 28'd2_800_000;    // ~65 ms
+    localparam [27:0] SHOT2_T = 28'd5_400_000;    // ~125 ms
+    localparam [27:0] SHOT3_T = 28'd8_100_000;    // ~188 ms
+    reg         rv_hold_only = 1'b0;
+    reg         rv_early     = 1'b0;
+    reg         rv_single    = 1'b0;
+    reg         rv_seq       = 1'b1;   // shotgun armed from config
+    reg  [2:0]  rv_shot      = 3'd0;
+    reg         rv_short_walk = 1'b0;
+    wire [27:0] rv_target = rv_seq
+        ? (rv_shot == 3'd0 ? SHOT0_T :
+           rv_shot == 3'd1 ? SHOT1_T :
+           rv_shot == 3'd2 ? SHOT2_T : SHOT3_T)
+        : (rv_early ? 28'd129_000 : 28'hFFFFFFF);
+    wire        rv_done    = rv_seq ? (rv_shot == 3'd4) : rv_walked;
+    wire        rv_walk_go = (rv_delay == rv_target) & ~rv_done;
+    wire        sh_hold    = rv_seq & (rv_shot == 3'd0);
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
             rv_walked <= 1'b0;
+            rv_shot   <= 3'd0;
             rv_delay  <= 28'd0;
-        end else if (!rv_walked && !rv_walk_go)
+        end else if (!rv_done && !rv_walk_go)
             rv_delay <= rv_delay + 28'd1;
-        else if (rv_walk_go)
+        else if (rv_walk_go) begin
             rv_walked <= 1'b1;
+            rv_shot   <= rv_shot + 3'd1;
+        end
     end
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h04) begin
             if (probe_wdata_c[31]) begin
                 rv_hold_only <= probe_wdata_c[20];
                 rv_early     <= probe_wdata_c[21];
+                rv_single    <= probe_wdata_c[22];
+                rv_seq       <= probe_wdata_c[23];
             end else begin
             jt_st_addr  <= probe_wdata_c[30] ? 20'hE8000 : probe_wdata_c[19:0];
             jt_st_wdata <= probe_wdata_c[27:20];
@@ -2079,9 +2112,11 @@ module core_top (
             jt_st_we    <= 1'b0;
             jt_st_req   <= 1'b1;
             jt_st_done  <= 1'b0;
-            jt_st_walk  <= ~rv_hold_only;
+            jt_st_walk  <= rv_seq ? (rv_shot >= 3'd2)
+                                  : ~(rv_hold_only | rv_single);
             jt_walk_add <= 16'd0;
             jt_walk_xor <= 16'd0;
+            rv_short_walk <= rv_seq & (rv_shot == 3'd2);
             rv_early    <= 1'b0;   // one-shot: a boot armed early fires once
         end else if (jt_st_req && st_done) begin
             jt_st_rdata <= st_rdata;
@@ -2092,8 +2127,9 @@ module core_top (
                     jt_walk_xor <= jt_walk_xor ^ {st_rdata, jt_walk_pair};
                 else
                     jt_walk_pair <= st_rdata;
-                if (jt_st_addr == 20'hFFFFF) begin
+                if (jt_st_addr == (rv_short_walk ? 20'hE80FF : 20'hFFFFF)) begin
                     jt_st_walk <= 1'b0;
+                    rv_short_walk <= 1'b0;
                     jt_st_done <= 1'b1;
                 end else
                     jt_st_addr <= jt_st_addr + 20'd1;
@@ -2135,8 +2171,8 @@ module core_top (
     // whole walk and ram_rw_complete cannot pulse for a guest CPU access.
     // hold_only rides the same settled-grant path: a bare freeze still must
     // not fire before the HLDA has provably landed.
-    wire        st_strict    = jt_st_walk | rv_hold_only;
-    wire        st_hold_only = rv_hold_only;
+    wire        st_strict    = jt_st_walk | rv_hold_only | sh_hold;
+    wire        st_hold_only = rv_hold_only | sh_hold;
 `else
     wire [19:0] st_addr_mux  = st_addr;
     wire [7:0]  st_wdata_mux = st_wdata;
