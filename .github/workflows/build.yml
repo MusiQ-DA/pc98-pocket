@@ -90,6 +90,13 @@ jobs:
             grep -q "=== PASS ===" dma_$mode.log
           done
 
+      - name: RTC rollover equivalence — pipelined vs nested cascade
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_rtc_roll \
+            -Isim sim/tb_rtc_roll.sv -o rtc --Mdir obj_rtc
+          ./obj_rtc/rtc | tee rtc.log
+          grep -q "=== PASS ===" rtc.log
+
       - name: ROM image lands where it should (no address folding)
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_bios_map \

@@ -708,43 +708,75 @@ module core_top (
     wire       cur_leap = (bcd2bin(rtc_time[7:0]) % 4) == 4'd0;
     wire [4:0] cur_dim  = days_in(cur_mo, cur_leap);
 
+    // clk_74a is the domain that fails setup, and the old code evaluated the
+    // whole rollover in one cycle: a six-deep nested compare+BCD chain whose
+    // day check reached through bcd2bin + %4 + days_in, plus the rtc_acc % 7
+    // (a 16-bit modulo) on the rtc_valid write. rtc_time only changes on the
+    // tick or a load, so every rollover term is registered continuously and
+    // the tick becomes a flat mux per field -- the arithmetic keeps a full
+    // cycle to settle.
+    wire roll_sec  = (rtc_time[47:40] == 8'h59);
+    wire roll_min  = roll_sec  & (rtc_time[39:32] == 8'h59);
+    wire roll_hour = roll_min  & (rtc_time[31:24] == 8'h23);
+    wire roll_day  = roll_hour & (bcd2bin(rtc_time[23:16]) == {2'd0, cur_dim});
+    wire roll_mo   = roll_day  & (cur_mo == 4'd12);
+
+    reg        roll_sec_q = 1'b0, roll_min_q = 1'b0, roll_hour_q = 1'b0,
+               roll_day_q = 1'b0, roll_mo_q = 1'b0;
+    reg  [7:0] sec_next_q = 8'd0, min_next_q = 8'd0, hr_next_q = 8'd0,
+               day_next_q = 8'd0, yr_next_q = 8'd0;
+    reg  [2:0] wday_next_q = 3'd0;
+    // rtc_acc's adds get a cycle, then the 16-bit %7 gets its own --
+    // rtc_date_bcd is a level held by the bridge, so the two-stage result is
+    // settled by the time the load commit fires two cycles after the edge.
+    reg [15:0] rtc_acc_q   = 16'd0;
+    reg  [2:0] rtc_wday_q  = 3'd0;
+    reg  [1:0] rtc_load_pend = 2'b00;
+
+    always_ff @(posedge clk_74a) begin
+        roll_sec_q  <= roll_sec;
+        roll_min_q  <= roll_min;
+        roll_hour_q <= roll_hour;
+        roll_day_q  <= roll_day;
+        roll_mo_q   <= roll_mo;
+        sec_next_q  <= bcd_inc(rtc_time[47:40]);
+        min_next_q  <= bcd_inc(rtc_time[39:32]);
+        hr_next_q   <= bcd_inc(rtc_time[31:24]);
+        day_next_q  <= bcd_inc(rtc_time[23:16]);
+        yr_next_q   <= (rtc_time[7:0] == 8'h99) ? 8'h00
+                                                : bcd_inc(rtc_time[7:0]);
+        wday_next_q <= (rtc_time[10:8] == 3'd6) ? 3'd0
+                                                : rtc_time[10:8] + 3'd1;
+        rtc_acc_q   <= rtc_acc;
+        rtc_wday_q  <= rtc_acc_q % 7;
+    end
+
     always_ff @(posedge clk_74a) begin
         rtc_valid_q <= rtc_valid;
-        if (rtc_valid && !rtc_valid_q) begin
+        rtc_load_pend <= {rtc_load_pend[0], rtc_valid & ~rtc_valid_q};
+        if (rtc_load_pend[1]) begin
             rtc_time <= {rtc_time_bcd[7:0],      // second
                          rtc_time_bcd[15:8],     // minute
                          rtc_time_bcd[23:16],    // hour
                          rtc_date_bcd[23:16],    // day
-                         {rtc_mo, rtc_acc % 7},  // month<<4 | weekday
+                         {1'b0, rtc_mo, rtc_wday_q},  // bit15 clear | month | wday
                          rtc_date_bcd[7:0]};     // year
             rtc_div <= 27'd0;
         end else if (rtc_tick) begin
             rtc_div <= 27'd0;
-            if (rtc_time[47:40] == 8'h59) begin
-                rtc_time[47:40] <= 8'h00;
-                if (rtc_time[39:32] == 8'h59) begin
-                    rtc_time[39:32] <= 8'h00;
-                    if (rtc_time[31:24] == 8'h23) begin
-                        rtc_time[31:24] <= 8'h00;
-                        rtc_time[10:8] <= (rtc_time[10:8] == 3'd6) ? 3'd0
-                                          : rtc_time[10:8] + 3'd1;
-                        if (bcd2bin(rtc_time[23:16]) == {2'd0, cur_dim}) begin
-                            rtc_time[23:16] <= 8'h01;
-                            if (cur_mo == 4'd12) begin
-                                rtc_time[14:11] <= 4'd1;
-                                rtc_time[7:0]   <= (rtc_time[7:0] == 8'h99)
-                                                   ? 8'h00
-                                                   : bcd_inc(rtc_time[7:0]);
-                            end else
-                                rtc_time[14:11] <= cur_mo + 4'd1;
-                        end else
-                            rtc_time[23:16] <= bcd_inc(rtc_time[23:16]);
-                    end else
-                        rtc_time[31:24] <= bcd_inc(rtc_time[31:24]);
-                end else
-                    rtc_time[39:32] <= bcd_inc(rtc_time[39:32]);
-            end else
-                rtc_time[47:40] <= bcd_inc(rtc_time[47:40]);
+            rtc_time[47:40] <= roll_sec_q ? 8'h00 : sec_next_q;
+            if (roll_sec_q)
+                rtc_time[39:32] <= roll_min_q ? 8'h00 : min_next_q;
+            if (roll_min_q)
+                rtc_time[31:24] <= roll_hour_q ? 8'h00 : hr_next_q;
+            if (roll_hour_q) begin
+                rtc_time[10:8]  <= wday_next_q;
+                rtc_time[23:16] <= roll_day_q ? 8'h01 : day_next_q;
+            end
+            if (roll_day_q)
+                rtc_time[14:11] <= roll_mo_q ? 4'd1 : cur_mo + 4'd1;
+            if (roll_mo_q)
+                rtc_time[7:0]   <= yr_next_q;
         end else
             rtc_div <= rtc_div + 27'd1;
     end
