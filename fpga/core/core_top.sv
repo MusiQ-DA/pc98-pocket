@@ -695,6 +695,18 @@ module core_top (
     function automatic [7:0] bcd_inc(input [7:0] b);
         bcd_inc = (b[3:0] == 4'd9) ? {b[7:4] + 4'd1, 4'd0} : b + 8'd1;
     endfunction
+    // mod-7 without a divider: 8 ≡ 1 (mod 7), so the octal digits can just be
+    // summed. Six 3-bit groups (< 50), one more fold (< 14), one subtract.
+    // The lpm_divide Quartus inferred for "% 7" needed ~14.3 ns -- the whole
+    // remaining -1.2 ns of clk_74a slack after the pipelining pass.
+    function automatic [2:0] mod7(input [15:0] v);
+        logic [6:0] s;
+        logic [3:0] t;
+        s = {4'd0, v[2:0]} + {4'd0, v[5:3]} + {4'd0, v[8:6]}
+          + {4'd0, v[11:9]} + {4'd0, v[14:12]} + {6'd0, v[15]};
+        t = {1'b0, s[2:0]} + {1'b0, s[6:3]};
+        mod7 = (t >= 4'd7) ? t[2:0] - 3'd7 : t[2:0];
+    endfunction
     function automatic [4:0] days_in(input [3:0] mo, input logic leap);
         case (mo)
         4'd4, 4'd6, 4'd9, 4'd11: days_in = 5'd30;
@@ -748,7 +760,7 @@ module core_top (
         wday_next_q <= (rtc_time[10:8] == 3'd6) ? 3'd0
                                                 : rtc_time[10:8] + 3'd1;
         rtc_acc_q   <= rtc_acc;
-        rtc_wday_q  <= rtc_acc_q % 7;
+        rtc_wday_q  <= mod7(rtc_acc_q);
     end
 
     always_ff @(posedge clk_74a) begin

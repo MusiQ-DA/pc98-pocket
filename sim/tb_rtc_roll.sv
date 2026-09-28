@@ -28,6 +28,14 @@ module tb_rtc_roll;
         default:               days_in = 5'd31;
         endcase
     endfunction
+    function automatic [2:0] mod7(input [15:0] v);   // octal digit sum
+        logic [6:0] s;
+        logic [3:0] t;
+        s = {4'd0, v[2:0]} + {4'd0, v[5:3]} + {4'd0, v[8:6]}
+          + {4'd0, v[11:9]} + {4'd0, v[14:12]} + {6'd0, v[15]};
+        t = {1'b0, s[2:0]} + {1'b0, s[6:3]};
+        mod7 = (t >= 4'd7) ? t[2:0] - 3'd7 : t[2:0];
+    endfunction
 
     // ---------------- DUT pair -------------------------------------------
     logic        rtc_valid = 0;
@@ -113,7 +121,7 @@ module tb_rtc_roll;
         hr_n  <= bcd_inc(t_new[31:24]); day_n <= bcd_inc(t_new[23:16]);
         yr_n  <= (t_new[7:0] == 8'h99) ? 8'h00 : bcd_inc(t_new[7:0]);
         wd_n  <= (t_new[10:8] == 3'd6) ? 3'd0 : t_new[10:8] + 3'd1;
-        acc_q <= m_acc;  wdy_q <= acc_q % 7;
+        acc_q <= m_acc;  wdy_q <= mod7(acc_q);
     end
     always_ff @(posedge clk) begin
         vq_new <= rtc_valid;
@@ -168,6 +176,13 @@ module tb_rtc_roll;
     initial begin
         int nticks, dim;
         // ---- random ticks with occasional rollovers ----------------------
+        // ---- mod7 exhaustive --------------------------------------------
+        for (longint v = 0; v < 65536; v++)
+            if (mod7(16'(v)) != v % 7) begin
+                errors++;
+                $display("mod7(%0d) = %0d, want %0d", v, mod7(16'(v)), v % 7);
+            end
+
         // ---- sanity: one fixed-value load first -------------------------
         rtc_date_bcd = 32'h00_05_05_66;   // day=05 mo=05 yr=66
         rtc_time_bcd = 32'h00_04_59_40;   // hh=04 mm=59 ss=40
