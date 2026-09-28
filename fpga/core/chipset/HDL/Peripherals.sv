@@ -1890,7 +1890,11 @@ module PERIPHERALS #(
     wire [23:0]  opna_adpcmb_addr;
     wire         opna_adpcmb_roe_n;
 
-    pc98_opna u_pc98_opna (
+    // USE_ADPCM=0 drops the ADPCM engines (rhythm + DELTA-T) and the 8 KB
+    // rhythm store; USE_PCM=1 keeps the stereo accumulator that respect the
+    // FM channels' L/R pan bits. ~1000 ALM standalone vs ~1733 for the full
+    // chip -- the difference between fitting and not.
+    pc98_opna #(.USE_ADPCM(0), .USE_PCM(1)) u_pc98_opna (
         .clk          (clock),
         .rst          (reset),
         .cs           (opna_cs),
@@ -1916,23 +1920,12 @@ module PERIPHERALS #(
         .snd_r        (opna_snd_r)
     );
 `else
-    // OFF BY DEFAULT, AND THE REASON IS THE DEVICE, NOT THE DESIGN.
-    //
-    // pc98_opna measures 1733 ALMs standalone against about 1806 free, which
-    // read as fitting with room to spare. It does not:
-    //
-    //   Error (170012): Fitter requires 1876 LABs to implement the design,
-    //                   but the device contains only 1848 LABs
-    //
-    // ALM count is not the binding constraint at this density. A LAB holds ten
-    // ALMs and cannot be packed arbitrarily, so 99 per cent of the ALM budget
-    // is more than 100 per cent of the LAB budget, and "73 ALMs to spare" was
-    // measuring the wrong thing.
-    //
-    // Everything stays: the vendored jt12, pc98_opna.sv, the decode above and
-    // tb_pc98_opna in CI. Define ENABLE_OPNA when there is real room -- the
-    // audio filter's fixed-coefficient rework is about 490 ALMs and is the
-    // nearest candidate.
+    // The build without the board: silent outputs, everything else stays.
+    // The full-ADPCM configuration measured 1733 ALMs standalone against a
+    // part where ALM count is not even the binding constraint -- a LAB holds
+    // ten ALMs and cannot be packed arbitrarily, so near-100% ALMs is already
+    // past 100% of the LAB budget. The slim configuration (~1000 ALM) is what
+    // ships; see config.tcl for the switch.
     assign opna_snd_l = 16'sd0;
     assign opna_snd_r = 16'sd0;
 `endif

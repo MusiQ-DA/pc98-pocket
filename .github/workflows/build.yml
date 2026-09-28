@@ -429,6 +429,33 @@ jobs:
           ./obj_scsi/sc | tee scsi.log
           grep -q "PASS tb_pc98_scsi" scsi.log
 
+      - name: the bus mouse's second 8255 matches np21w's mouseif
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_busmouse \
+            -Isim -I$S sim/tb_pc98_busmouse.sv $S/pc98_busmouse.sv -o bm --Mdir obj_bm
+          ./obj_bm/bm | tee bm.log
+          grep -q "PASS tb_pc98_busmouse" bm.log
+
+      - name: the shared mouse source and the serial front end still work
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_mousesrc \
+            -Isim -I$S sim/tb_pc98_mousesrc.sv $S/pc98_mouse_src.sv \
+            $S/pocket_mouse.sv -o ms --Mdir obj_ms
+          ./obj_ms/ms | tee ms.log
+          grep -q "PASS tb_pc98_mousesrc" ms.log
+
+      - name: the OPNA's port window and register router match np21w
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_opna \
+            -Isim -I$S -I$S/sound/jt12/hdl -I$S/sound/jt12/hdl/adpcm \
+            -I$S/sound/jt12/jt49/hdl \
+            sim/tb_pc98_opna.sv $S/pc98_opna.sv -o op --Mdir obj_opna
+          ./obj_opna/op | tee opna.log
+          grep -q "PASS tb_pc98_opna" opna.log
+
       - name: the GRCG's three operations match np21w's expressions
         run: |
           S=fpga/core

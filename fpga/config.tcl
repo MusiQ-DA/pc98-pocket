@@ -20,6 +20,13 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # bisect a suspect keyboard interaction on hardware.
 set_global_assignment -name VERILOG_MACRO "PC98_KBD_8251=1"
 
+# The PC-9801-86 sound board's YM2608 at 0x188-0x18F (pc98_opna.sv). On in the
+# SLIM configuration -- USE_ADPCM=0, USE_PCM=1 at the instantiation in
+# Peripherals.sv: 6-channel stereo FM + SSG, ~1000 ALM standalone. Rhythm and
+# DELTA-T stay off: full OPNA measured 1733 ALM and the fitter wants 1876
+# LABs against 1848 -- see the long note where ENABLE_OPNA is consumed.
+set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
+
 # PC98_DEBUG_BANDS replaces the picture with a free-running probe. It did its
 # job: it proved the softcore, the ROM load, the raster and the OSD chain were
 # all healthy, which left the CPU as the only suspect and sent the search to

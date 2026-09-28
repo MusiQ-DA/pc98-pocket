@@ -46,7 +46,8 @@ module tb_pc98_opna;
     wire        adpcmb_roe_n;
     wire signed [15:0] snd_l, snd_r;
 
-    pc98_opna dut (
+    // Same parameters as the production instantiation in Peripherals.sv.
+    pc98_opna #(.USE_ADPCM(0), .USE_PCM(1)) dut (
         .clk(clk), .rst(rst),
         .cs(cs), .a2a1(a2a1),
         .io_read_n(io_read_n), .io_write_n(io_write_n),

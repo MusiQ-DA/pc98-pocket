@@ -83,7 +83,15 @@
 module pc98_opna #(
     // ADPCM-A rhythm sample store, firmware-filled. 8 KB is 8 M10K out of the
     // ~111 the PC-98 fit leaves free, and 32 units of the 256-byte granularity
-    // the ADPCM-A start/end registers work in.
+    // the ADPCM-A start/end registers work in. USE_ADPCM=0 drops the ADPCM-A
+    // rhythm voices, the DELTA-T engine and this store outright: the guest
+    // writes still route, they just reach a chip with no ADPCM blocks, so
+    // rhythm and ADPCM-B are silent while FM and SSG keep working. The
+    // trade-off is floor space -- the ADPCM engines are the expensive half.
+    // USE_PCM picks the stereo accumulator when ADPCM is off: jt12's
+    // no-ADPCM default is the YM2203 mono path, and OPNA is stereo.
+    parameter bit USE_ADPCM = 1,
+    parameter bit USE_PCM   = 0,
     parameter int RHY_BYTES = 8192,
     parameter int RHY_AW    = 13,
     // clk / 7.9872 MHz as a 16-bit fraction -- see the header.
@@ -424,7 +432,6 @@ module pc98_opna #(
 
     // The ADPCM-A rhythm store. Read by jt12 through adpcma_addr, written by
     // the firmware one byte at a time.
-    (* ramstyle = "M10K" *) logic [7:0] rhy_mem [0:RHY_BYTES-1];
     logic [7:0] rhy_q;
 
     // adpcma_bank is the YM2610's extra ROM-select nibble and adpcma_roe_n its
@@ -434,10 +441,18 @@ module pc98_opna #(
     wire [ 4:0] adpcma_bank;
     wire        adpcma_roe_n;
 
-    always_ff @(posedge clk) begin
-        if (mg_wr && (mg_reg == 4'd1)) rhy_mem[mg_rhy_addr] <= mg_wdata[7:0];
-        rhy_q <= rhy_mem[adpcma_addr[RHY_AW-1:0]];
+    generate
+    if (USE_ADPCM) begin : g_rhy
+        (* ramstyle = "M10K" *) logic [7:0] rhy_mem [0:RHY_BYTES-1];
+
+        always_ff @(posedge clk) begin
+            if (mg_wr && (mg_reg == 4'd1)) rhy_mem[mg_rhy_addr] <= mg_wdata[7:0];
+            rhy_q <= rhy_mem[adpcma_addr[RHY_AW-1:0]];
+        end
+    end else begin : g_no_rhy
+        assign rhy_q = 8'h00;
     end
+    endgenerate
 
     always_ff @(posedge clk) begin
         if (rst)
@@ -472,8 +487,8 @@ module pc98_opna #(
         .use_lfo   (1),
         .use_ssg   (1),
         .num_ch    (6),
-        .use_pcm   (0),
-        .use_adpcm (1),
+        .use_pcm   (USE_PCM),
+        .use_adpcm (USE_ADPCM),
         .mask_div  (0)
     ) u_opna (
         .rst          (rst),

@@ -39,6 +39,9 @@ set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) jt12_si
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) jt12_sumch.v]
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) jt12_timers.v]
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) jt12_top.v]
+# use_pcm=1's accumulator path (the YM2612-style stereo accumulator, which is
+# also the only stereo FM path with use_adpcm=0) instantiates this.
+set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) jt12_pcm_interpol.v]
 # ADPCM-A drives the six rhythm voices, ADPCM-B the DELTA-T channel.
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) adpcm/jt10_adpcm.v]
 set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) adpcm/jt10_adpcm_acc.v]
