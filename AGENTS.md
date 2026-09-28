@@ -32,3 +32,16 @@ binaries only.
   Docker Quartus scripts were removed (unreliable under wine/Rosetta);
   the CI artifact carries both `.sof` and `.rbf` — JTAG flashes take the
   CI `.sof` directly.
+
+## Forbidden: local full-project Quartus builds
+
+NEVER run `quartus_sh --flow compile`, `quartus_fit`, `quartus_asm` or any
+full-project Quartus stage against `fpga/ap_core` locally — directly, via
+`docker run`, or via `docker exec` into a container that has this repo
+mounted. Reasons: emulated x86 Quartus takes hours, the incremental db
+(`fpga/db`, `fpga/incremental_db`, `fpga/output_files`) is shared state a
+second compile corrupts, and the result is throwaway anyway since CI is
+the shipping bitstream. Fit/resource questions go through a CI run; if a
+number is needed before pushing, use `scripts/measure_core.sh <top>
+<files>` — it synthesises ONE module in a scratch dir under /tmp, never
+touches `fpga/db`, and is the only sanctioned local Quartus invocation.
