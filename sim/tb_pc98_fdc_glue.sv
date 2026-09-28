@@ -1374,6 +1374,137 @@ module tb_pc98_fdc_glue;
             want("MSR idle after early TC", msr, 8'h80);
         end
 
+        // ================================================================
+        // Sequential DMA reads -- the FreeDOS(98) boot-load pattern. INT 1Bh
+        // re-arms channel 2 for every sector a kernel chain pulls, hops
+        // heads and cylinders, and expects an interrupt plus a clean result
+        // phase EVERY time. The single-IPL fetch only proves the first one:
+        // a controller that stalls on the second request, or a feed that
+        // serves the wrong LBA once CHS stops being C0H0R1, hangs the boot
+        // as "black screen, nothing but a cursor" -- which is what the
+        // metal does with a FreeDOS(98) disk today.
+        $display("--- sequential DMA reads (boot-load pattern) ---");
+        begin
+            logic [7:0] msr, st0;
+            int guard;
+            // CHS in boot-load order: consecutive sectors, a head hop, a
+            // cylinder hop, then a backwards jump like a FAT-chain walk.
+            // LBA = cyl*spt*heads + head*spt + (R-1), spt=8, heads=2.
+            logic [7:0] seq_c [0:5] = '{8'd0, 8'd0, 8'd0, 8'd0, 8'd1, 8'd0};
+            logic [7:0] seq_h [0:5] = '{8'd0, 8'd0, 8'd0, 8'd1, 8'd0, 8'd0};
+            logic [7:0] seq_r [0:5] = '{8'd1, 8'd2, 8'd8, 8'd1, 8'd1, 8'd3};
+            int         seq_l [0:5] = '{0, 1, 7, 8, 16, 2};
+            for (int s = 0; s < 6; s++) begin
+                // The BIOS's per-call channel setup: byte pointer clear,
+                // single write-transfer, page 3 (0x30000), 1024 bytes.
+                dma_wr(8'h19, 8'h00);
+                dma_wr(8'h17, 8'h46);
+                dma_wr(8'h09, 8'h00); dma_wr(8'h09, 8'h00);
+                dma_wr(8'h23, 8'h03);
+                dma_wr(8'h0B, 8'hFF); dma_wr(8'h0B, 8'h03);
+                dma_wr(8'h15, 8'h02);
+
+                wr(1, 8'h46); wr(1, {5'd0, seq_h[s], 2'd0});
+                wr(1, seq_c[s]); wr(1, seq_h[s]); wr(1, seq_r[s]);
+                wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'hFF);
+
+                guard = 0;
+                while (!fd_irq && guard < 40_000) begin
+                    @(negedge clk); guard++;
+                end
+                #1;
+                want1($sformatf("read #%0d C%0dH%0dR%0d interrupts",
+                                s, seq_c[s], seq_h[s], seq_r[s]),
+                      fd_irq, 1'b1);
+                want1($sformatf("read #%0d: feeder asked LBA %0d",
+                                s, seq_l[s]),
+                      feed_lba == 15'(seq_l[s]), 1'b1);
+                want($sformatf("read #%0d: last byte landed", s),
+                     dma_mem[20'h30000 + 1023], 8'hFF);
+                rd(1, st0);
+                // ST0 bit 2 echoes the head the command ran on (uPD765 HD),
+                // so a head-1 read legitimately answers 0x04.
+                want($sformatf("read #%0d: ST0 clean", s),
+                     st0, {5'd0, seq_h[s], 2'd0});
+                for (int b = 0; b < 6; b++) rd(1, msr);
+                rd(0, msr);
+                want($sformatf("read #%0d: MSR idle", s), msr, 8'h80);
+            end
+
+            // ---- one command, three sectors ------------------------------
+            // INT 1Bh can also pull a run in a single READ: count = 3*1024,
+            // EOT past the last wanted sector. The feeder must answer a
+            // fresh request per sector and the guest must get every byte.
+            dma_wr(8'h19, 8'h00);
+            dma_wr(8'h17, 8'h46);
+            dma_wr(8'h09, 8'h00); dma_wr(8'h09, 8'h00);
+            dma_wr(8'h23, 8'h04);                              // 0x40000
+            dma_wr(8'h0B, 8'hFF); dma_wr(8'h0B, 8'h0B);        // 3072 bytes
+            dma_wr(8'h15, 8'h02);
+
+            wr(1, 8'h46); wr(1, 8'h00);
+            wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h02);           // C0 H0 R2
+            wr(1, 8'h03); wr(1, 8'h04); wr(1, 8'h00); wr(1, 8'hFF);
+
+            guard = 0;
+            while (!fd_irq && guard < 60_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("three-sector read interrupts", fd_irq, 1'b1);
+            want1("feeder's last ask was R4 (LBA 3)", feed_lba == 15'd3, 1'b1);
+            want("sector 1 tail landed", dma_mem[20'h40000 + 1023], 8'hFF);
+            want("sector 2 tail landed", dma_mem[20'h40000 + 2047], 8'hFF);
+            want("sector 3 tail landed", dma_mem[20'h40000 + 3071], 8'hFF);
+            rd(1, st0);
+            want("multi-sector ST0 clean", st0, 8'h00);
+            for (int b = 0; b < 6; b++) rd(1, msr);
+            rd(0, msr);
+            want("MSR idle after multi-sector", msr, 8'h80);
+
+            // ---- explicit SEEK, SENSE, then read --------------------------
+            // A kernel chain also seeks by name: the BIOS waits for the
+            // seek interrupt, drains it with SENSE INTERRUPT STATUS, then
+            // reads. IRQ11 has to survive the seek's own completion edge.
+            wr(1, 8'h0F); wr(1, 8'h00); wr(1, 8'h02);           // SEEK u0 -> C2
+            guard = 0;
+            while (!fd_irq && guard < 40_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("SEEK interrupts", fd_irq, 1'b1);
+            wr(1, 8'h08);                                       // SENSE INT
+            rd(1, st0);
+            want("SEEK ST0 = seek end", st0 & 8'hE0, 8'h20);
+            rd(1, msr);
+            want("PCN reached cyl 2", msr, 8'h02);
+
+            dma_wr(8'h19, 8'h00);
+            dma_wr(8'h17, 8'h46);
+            dma_wr(8'h09, 8'h00); dma_wr(8'h09, 8'h00);
+            dma_wr(8'h23, 8'h05);                               // 0x50000
+            dma_wr(8'h0B, 8'hFF); dma_wr(8'h0B, 8'h03);
+            dma_wr(8'h15, 8'h02);
+
+            wr(1, 8'h46); wr(1, 8'h00);
+            wr(1, 8'h02); wr(1, 8'h00); wr(1, 8'h01);           // C2 H0 R1
+            wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'hFF);
+
+            guard = 0;
+            while (!fd_irq && guard < 40_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("post-SEEK read interrupts", fd_irq, 1'b1);
+            want1("feeder asked LBA 32 (C2H0R1)", feed_lba == 15'd32, 1'b1);
+            want("post-SEEK last byte", dma_mem[20'h50000 + 1023], 8'hFF);
+            rd(1, st0);
+            want("post-SEEK ST0 clean", st0, 8'h00);
+            for (int b = 0; b < 6; b++) rd(1, msr);
+            rd(0, msr);
+            want("MSR idle after SEEK+read", msr, 8'h80);
+        end
+
         // ---- the motor pulse waits out a result phase --------------------
         // POSTMON on metal counted two motor pulses inside the probe window:
         // each is a fresh INT13 edge, and the ISR it dispatches reads the
