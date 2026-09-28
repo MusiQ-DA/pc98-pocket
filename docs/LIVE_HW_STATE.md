@@ -136,3 +136,33 @@ TVRAM/GVRAM(0xA0000+, 0xB0000+ 等)はこの経路では `ram_rw_complete` が�
 
 再開するなら: IRQ0 をアンマスクして draw_test を発火させ、画面と probe 0x1b の
 TVRAM ラベルで確認するだけ。
+
+## 2026-09-28: no-media wedge = per-boot timing flake (not RAM regression)
+
+検証シーケンス:
+- `dc9a7e1` (RAM held-twin 修正版) 初回ブート wedge → RAM 修正を疑ったが
+- `8848e35` (RAM 変更前) でも同一 wedge 再現 → **同じ bitstream で起動/停止が揺れる**
+- `4a4aef0` / `8848e35` とも retry で "How many files" 到達 → 決定的バグではない
+
+定量化: `scripts/boot_flake_test.sh` (JTAG reflash = 新規ブート試行) で
+8848 を 5 連続 → **5/5 BOOT OK**。wedge 率は条件付きで低い。
+注意: 成功時も `PIC1=0x053D0005` (ticks=5 停止) は BIOS 入力待ちの正常状態 —
+wedge の判定は TVRAM テキスト有無で行うこと。
+
+タイミング側の犯人特定 (run 525 sta_74a_intra.txt):
+- 違反 -2.485ns、top100 全て同一 endpoint: `lpm_divide:Mod0` = `rtc_acc % 7`
+- 起点 `pmp_wr_data_latch` (ブリッジ生データ) → Sakamoto/bcd2bin/加算 → 剰余器
+- **ただしこのパスの出力は rtc_time (rtc_valid ロード 1 回のみ) — 実質休眠パス**
+  → wedge の直接原因ではない可能性が高い。違反解消しても wedge が残るなら別経路
+  (同期チェーンの metastability / SDRAM init 位相 / etc.) を疑う。
+
+同時に発見した実バグ (`b662321` で修正済み):
+- `{rtc_mo, rtc_acc % 7}` の `%7` が 32bit → concat 76bit → 48bit 代入で
+  sec/min/hour が捨てられていた。`rtc_valid` ロードは常に壊れていた
+  (weekday 機能追加以来)。`{1'b0, rtc_mo, rtc_wday_q}` に修正。
+- `tb_rtc_roll.sv` 等価ベンチ: 新旧 ~1000 tick + 全月/年末境界で一致。
+
+実機確認済み (8848):
+- N-88 BASIC `Ok` 到達、`PRINT TIME$` が tick で進行 (00:00:00→00:00:01)
+  ※ JTAG ブートでは host が RTC を送らないため 00:00:00 開始は正常
+- `WIDTH 40` の TVRAM 偶数セル配置は正常 (描画側の stride 修正は ef77488+)

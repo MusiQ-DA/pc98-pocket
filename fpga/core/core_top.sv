@@ -1126,6 +1126,11 @@ module core_top (
             // nothing" and "the write arrived but the FDC ignored it".
             8'h27:   probe_data = {mgmt_wr_seen, mgmt_last,
                                    2'b00, mgmt_req[7:6], 2'b00, fdd_present};
+            // 0x28: the reset_wire terms + boot gates (same word as the on-screen
+            // bands pocket_video draws). On a wedge this says which term is
+            // still holding the machine -- bios_ever_loaded / guest_hold_sync2 /
+            // soft_guest_hold name the release chain specifically.
+            8'h28:   probe_data = {16'h0, dbg_bits};
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:
