@@ -2038,8 +2038,11 @@ module core_top (
     // selftest master borrow the bus and sit on it for ~46 ms without ever
     // strobing. POST dying under early+hold_only means the bare freeze is
     // lethal; surviving it indicts the walk's strobes.
-    reg         rv_hold_only = 1'b0;
-    reg         rv_early     = 1'b0;
+    // DEBUG BUILD: both armed from config so the COLD boot (the only POST
+    // with the fragile window -- warm Reset-PC POSTs skip it) fires the
+    // +3 ms bare-hold shot with no JTAG race. Clear with slot-0x84 bit31.
+    reg         rv_hold_only = 1'b1;
+    reg         rv_early     = 1'b1;
     wire [27:0] rv_target    = rv_early ? 28'd129_000 : 28'hFFFFFFF;
     wire        rv_walk_go   = (rv_delay == rv_target) & ~rv_walked;
     always_ff @(posedge clk_chipset) begin
