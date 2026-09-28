@@ -469,6 +469,9 @@ module pc98_opna #(
             4'd5:    mg_rdata = {8'd0, status0};
             4'd6:    mg_rdata = {8'd0, status1};
             4'd7:    mg_rdata = {2'd0, rhy_tl, rhy_kon};
+            // Capability word: bit0 = the rhythm store and ADPCM-A exist, so
+            // the firmware knows whether a rhythm.bin load can land.
+            4'd8:    mg_rdata = {15'd0, USE_ADPCM};
             default: mg_rdata = 16'h0000;
         endcase
     end
@@ -489,6 +492,10 @@ module pc98_opna #(
         .num_ch    (6),
         .use_pcm   (USE_PCM),
         .use_adpcm (USE_ADPCM),
+        // DELTA-T stays dark even in the ADPCM build: it wants a 256 KB
+        // SDRAM window this core does not have, so drvB (~200 ALM) is left
+        // out while ADPCM-A keeps the rhythm voices alive.
+        .use_adpcmb(0),
         .mask_div  (0)
     ) u_opna (
         .rst          (rst),
@@ -532,9 +539,12 @@ module pc98_opna #(
     //    (np21w sound/adpcmc.c's adpcm_setreg). That needs a write path into the same
     //    SDRAM window, which jt10_adpcm_drvB does not have; the DELTA-T limit
     //    registers 0x10C/0x10D have no jt12 equivalent either.
-    //  * The rhythm store is empty until the firmware fills it. It needs a
-    //    WAV -> YM ADPCM-A transcoder beside fdd_service.c, and six start/end
-    //    pairs injected through mg_reg 3 afterwards.
+    //  * With USE_ADPCM=1 the firmware fills the rhythm store from the
+    //    rhythm.bin dataslot at boot (firmware/rhythm.c; the WAV -> ADPCM-A
+    //    pack lives in scripts/rhythm_pack.py) and injects the six
+    //    start/end pairs through mg_reg 3. With USE_ADPCM=0 the store and
+    //    both ADPCM engines are absent and mg_reg 8 reads 0, so the loader
+    //    skips itself -- the guest's rhythm writes then land on nothing.
     //  * There is no -86 16-bit PCM (0xA460-0xA46C, np21w cbus/pcm86io.c).
     //    Only bit 0 of 0xA460 is decoded, because extended mode depends on it.
 

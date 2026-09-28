@@ -76,6 +76,10 @@ module jt12_top (
 // defaults to YM2612
 parameter use_lfo=1, use_ssg=0, num_ch=6, use_pcm=1;
 parameter use_adpcm=0;
+// pc98-pocket local: splits the DELTA-T half of gen_adpcm out, so a build
+// can ship ADPCM-A (the PC-9801-86 rhythm section) without drvB, whose
+// 256 KB backing store this core does not implement. 1 = upstream behaviour.
+parameter use_adpcmb=1;
 parameter FULLFM=0;
 parameter JT49_DIV=2,
           YM2203_LUMPED=0;
@@ -223,6 +227,7 @@ if( use_adpcm==1 ) begin: gen_adpcm
         .ch_enable  ( ch_enable     )
     );
 
+    if( use_adpcmb==1 ) begin : gen_adpcmb
     jt10_adpcm_drvB u_adpcm_b(
         .rst_n      ( rst_n         ),
         .clk        ( clk           ),
@@ -250,6 +255,13 @@ if( use_adpcm==1 ) begin: gen_adpcm
         .pcm55_l    ( adpcmB_l      ),
         .pcm55_r    ( adpcmB_r      )
     );
+    end else begin : gen_no_adpcmb
+        assign adpcmb_flag  = 0;
+        assign adpcmB_l   = 16'sd0;
+        assign adpcmB_r   = 16'sd0;
+        assign adpcmb_addr  = 'd0;
+        assign adpcmb_roe_n = 1'b1;
+    end
 
     assign snd_sample   = zero;
     jt10_acc #(.FULLFM(FULLFM)) u_acc(

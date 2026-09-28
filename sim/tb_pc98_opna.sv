@@ -59,6 +59,34 @@ module tb_pc98_opna;
         .snd_l(snd_l), .snd_r(snd_r)
     );
 
+    // Second instance in the ADPCM configuration -- the rhythm store only
+    // elaborates under USE_ADPCM, so the fill path is exercised on a full
+    // variant while the port/router tests above stay on the shipped slim one.
+    logic  [3:0] mg2_reg = 4'd0;
+    logic        mg2_wr = 1'b0;
+    logic [15:0] mg2_wdata = 16'h0000;
+    wire  [15:0] mg2_rdata;
+    wire signed [15:0] snd2_l, snd2_r;
+
+    pc98_opna #(.USE_ADPCM(1), .USE_PCM(0)) dut_adpcm (
+        .clk(clk), .rst(rst),
+        .cs(1'b0), .a2a1(2'b00),
+        .io_read_n(1'b1), .io_write_n(1'b1),
+        .data_in(8'h00), .data_out(), .read_select(),
+        .ext_enable(1'b0), .irq(),
+        .mg_reg(mg2_reg), .mg_wr(mg2_wr), .mg_wdata(mg2_wdata), .mg_rdata(mg2_rdata),
+        .adpcmb_addr(), .adpcmb_roe_n(),
+        .adpcmb_data(8'h00),
+        .snd_l(snd2_l), .snd_r(snd2_r)
+    );
+
+    task automatic mgmt_wr2(input [3:0] r, input [15:0] v);
+        mg2_reg = r; mg2_wdata = v; mg2_wr = 1'b1;
+        @(posedge clk);
+        mg2_wr = 1'b0;
+        repeat (4) @(posedge clk);
+    endtask
+
     int errors = 0;
     task automatic want(input string what, input [7:0] got, input [7:0] exp);
         if (got !== exp) begin
@@ -354,6 +382,48 @@ module tb_pc98_opna;
         io_wr(2'b01, 8'h71);
         io_rd(2'b00, got);
         want_b("status 0 bit 7 is busy after a write", got[7], 1'b1);
+
+        // ================================================================
+        // 7. The ADPCM variant's rhythm store, on the second instance:
+        //    capability word, address auto-increment fill, and the part-1
+        //    injection the firmware uses for start/end pairs.
+        // ================================================================
+        mg2_reg = 4'd8;
+        repeat (2) @(posedge clk);
+        want("ADPCM build reports caps bit0", mg2_rdata[7:0], 8'h01);
+        mg_reg = 4'd8;
+        repeat (2) @(posedge clk);
+        want("slim build reports caps bit0 clear", mg_rdata[7:0], 8'h00);
+
+        mgmt_wr2(4'd0, 16'h0000);               // store address 0
+        mgmt_wr2(4'd1, 16'h00AB);               // byte -> mem[0], addr++
+        mgmt_wr2(4'd1, 16'h00CD);               // byte -> mem[1], addr++
+        repeat (2) @(posedge clk);
+        if (dut_adpcm.g_rhy.rhy_mem[0] !== 8'hAB ||
+            dut_adpcm.g_rhy.rhy_mem[1] !== 8'hCD) begin
+            $display("  FAIL rhythm store fill (mem[0]=%02h mem[1]=%02h)",
+                     dut_adpcm.g_rhy.rhy_mem[0], dut_adpcm.g_rhy.rhy_mem[1]);
+            errors++;
+        end else
+            $display("  ok   rhythm store fills byte-sequentially");
+        if (dut_adpcm.mg_rhy_addr !== 13'd2) begin
+            $display("  FAIL store address did not auto-increment (%0d)",
+                     dut_adpcm.mg_rhy_addr);
+            errors++;
+        end else
+            $display("  ok   store address auto-increments");
+
+        // A non-zero store base must be respected too: the loader keeps one
+        // OMGMT_RHYADDR write for the whole payload.
+        mgmt_wr2(4'd0, 16'h0100);
+        mgmt_wr2(4'd1, 16'h005A);
+        repeat (2) @(posedge clk);
+        if (dut_adpcm.g_rhy.rhy_mem[16'h100] !== 8'h5A) begin
+            $display("  FAIL store write at base 0x100 (%02h)",
+                     dut_adpcm.g_rhy.rhy_mem[16'h100]);
+            errors++;
+        end else
+            $display("  ok   store write honours a non-zero base");
 
         $display("");
         if (errors == 0)

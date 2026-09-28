@@ -239,6 +239,13 @@ cp dist/pc98/Platforms/* "$VOL/Platforms/" 2>/dev/null || true
 # auto-bind for deferload slots, it just makes same-name picks no-ops.
 mkdir -p "$VOL/Assets/pc98/common"
 [ -f testdisk/draw_test.hdm ] && cp -f testdisk/draw_test.hdm "$VOL/Assets/pc98/common/"
+# rhythm.bin is the deferload "Rhythm PCM" slot's pinned filename -- it binds
+# by name from the shared asset dir, same place the picker browses. Make it
+# with scripts/rhythm_pack.py <dir of 2608_*.wav> -o assets/rhythm.bin.
+if [ -f assets/rhythm.bin ]; then
+    cp -f assets/rhythm.bin "$VOL/Assets/pc98/common/"
+    cmp -s assets/rhythm.bin "$VOL/Assets/pc98/common/rhythm.bin" || say "  BAD rhythm.bin"
+fi
 sync
 
 # Verify everything that was written, not just the bitstream. The first run of

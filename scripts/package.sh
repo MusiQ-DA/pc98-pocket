@@ -135,6 +135,17 @@ def data(j):
         {"name": "Hard Disk",   "id": 5, "required": False, "parameters": 1,
          "extensions": ["hdi", "nhd", "thd", "hdd"],
          "deferload": True},
+        # Rhythm PCM: the OPNA's ADPCM-A sample store, packed by
+        # scripts/rhythm_pack.py from the six 2608_*.wav files. Deferload with
+        # a pinned filename: the binding is the file itself and nothing is
+        # streamed at boot -- firmware/rhythm.c pulls it through the
+        # target-dataslot path once it sees the store exists (OMGMT_CAPS).
+        # Bit 9 (persist) + bit 0 (browsable): if the pinned filename does not
+        # auto-bind the user picks rhythm.bin once and it sticks; when it does
+        # bind no menu step is ever needed.
+        {"name": "Rhythm PCM",  "id": 13, "required": False, "parameters": "0x201",
+         "filename": "rhythm.bin", "extensions": ["bin"],
+         "size_maximum": "0x2000", "deferload": True},
     ]
 
 def video(j):

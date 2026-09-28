@@ -179,9 +179,9 @@ module softcpu_fdd_bridge #(
     // Two bits, not one: the PC-9801-55 window is a third target and the old
     // single mgmt_ide bit could only name two. Bit 8 of the address register
     // keeps its meaning (1 = ide.v) so nothing that was already written moves,
-    // and bit 9 names the SCSI window.
+    // bit 9 names the SCSI window, and bit 10 names the pc98_opna window (0xF5).
     //
-    reg  [1:0] mgmt_tgt;
+    reg  [2:0] mgmt_tgt;
     reg        mgmt_drive;
     reg  [3:0] mgmt_reg;
     reg [15:0] mgmt_wdata_r;
@@ -191,7 +191,8 @@ module softcpu_fdd_bridge #(
     reg        mgmt_rd_req_d;
     reg [15:0] mgmt_rdata_cap;
 
-    wire [7:0] mgmt_tgt_byte = mgmt_tgt[1] ? 8'hF4
+    wire [7:0] mgmt_tgt_byte = mgmt_tgt[2] ? 8'hF5
+                             : mgmt_tgt[1] ? 8'hF4
                              : mgmt_tgt[0] ? 8'hF0 : 8'hF2;
     assign mgmt_addr = {mgmt_tgt_byte, mgmt_drive, 3'b000, mgmt_reg};
     assign mgmt_dout = mgmt_wdata_r;
@@ -317,7 +318,7 @@ module softcpu_fdd_bridge #(
         cpu_valid_prev <= cpu_valid;
 
         if (reset) begin
-            mgmt_tgt       <= 2'b00;
+            mgmt_tgt       <= 3'b000;
             mgmt_drive     <= 1'b0;
             mgmt_reg       <= 4'd0;
             mgmt_wdata_r   <= 16'd0;
@@ -333,7 +334,7 @@ module softcpu_fdd_bridge #(
             target_dataslot_length     <= 32'd512;
         end else if (cpu_valid && !cpu_valid_prev && (cpu_wstrb != 0)) begin
             case (cpu_addr[7:0])
-                8'h04: begin mgmt_tgt <= cpu_wdata[9:8]; mgmt_drive <= cpu_wdata[4]; mgmt_reg <= cpu_wdata[3:0]; end
+                8'h04: begin mgmt_tgt <= cpu_wdata[10:8]; mgmt_drive <= cpu_wdata[4]; mgmt_reg <= cpu_wdata[3:0]; end
                 8'h08: mgmt_wdata_r <= cpu_wdata[15:0];
                 8'h0C: begin
                     if (cpu_wdata[0]) mgmt_wr_req <= 1'b1;

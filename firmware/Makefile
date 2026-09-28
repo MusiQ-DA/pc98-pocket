@@ -2,7 +2,7 @@
 # Produces firmware.vh, the $readmemh init image for the softcore ROM.
 
 OBJS = start.o main.o disk_tds.o fdd_service.o scsi_service.o \
-       gdc_service.o \
+       gdc_service.o rhythm.o \
        vkb_draw.o vkb_layout.o vkb_ui.o \
        settings_ui.o key_bind.o dpad.o sdramtest.o osd_font.o
 DEPS = $(OBJS:.o=.d)

@@ -150,6 +150,15 @@
 // reg 0xF is the 16-bit sector data port (auto-incrementing).
 #define IDE_TARGET    (1 << 8) // FDD_MGMT_ADDR bit: select ide.v
 #define SCSI_TARGET   (1 << 9) // FDD_MGMT_ADDR bit: select pc98_scsi (mgmt 0xF4)
+#define OPNA_TARGET   (1 << 10) // FDD_MGMT_ADDR bit: select pc98_opna (mgmt 0xF5)
+
+// pc98_opna management registers (mgmt_address[3:0]). See pc98_opna.sv.
+#define OMGMT_RHYADDR  0x0     // W: rhythm-store byte address (reg1 writes auto-increment)
+#define OMGMT_RHYDATA  0x1     // W: rhythm-store byte
+#define OMGMT_INJ_P0   0x2     // W: {reg[15:8], data[7:0]} raw write, jt12 part 0
+#define OMGMT_INJ_P1   0x3     // W: same, part 1 (ADPCM-A start/end live here)
+#define OMGMT_BUSY     0x4     // R: bit0 = injected register still landing
+#define OMGMT_CAPS     0x8     // R: bit0 = ADPCM-A store present (USE_ADPCM build)
 
 // pc98_scsi management registers (mgmt_address[3:0]). See PERIPHERALS.
 #define SMGMT_CTRL    0x0      // R: {cmd_byte, req != ack}  W: bit0 acknowledges
@@ -203,6 +212,7 @@
 #define HDD0_SLOT_ID     5
 #define HDD1_SLOT_ID     6
 #define SETTINGS_SLOT_ID 7
+#define RHYTHM_SLOT_ID   13   // deferload: rhythm.bin, packed ADPCM-A voices
 // Bytes to declare for the nonvolatile Settings slot so it flushes on first boot.
 #define SETTINGS_SLOT_BYTES 64
 
@@ -212,6 +222,10 @@ int tds_transfer(uint32_t slot, uint32_t offset, uint32_t dir, uint32_t bytes);
 
 // APF datatable access by slot id (disk_tds.c).
 uint32_t slot_bytes(uint16_t id);
+
+// Rhythm store fill (rhythm.c): 1 once loaded, 0 while the slot is absent or
+// the build is slim -- retryable every service-loop pass.
+int rhythm_load(void);
 int slot_declare_size(uint16_t id, uint32_t bytes);
 
 // Service entry points (fdd_service.c).

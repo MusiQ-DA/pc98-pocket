@@ -53,6 +53,12 @@ int main(void)
                      // save
     settings_load();
 
+    // Fill the OPNA rhythm store while the guest is still held: the six ADPCM-A
+    // voices then play from the first key-on instead of mid-boot. Returns 0
+    // when rhythm.bin is absent or the build is slim -- the service loop
+    // retries anyway in case the deferload binding lands late.
+    uint32_t rhythm_done = rhythm_load();
+
 #ifdef SDRAM_SELFTEST
     // Diagnostic build (docs/P0_SELFTEST_SPEC.md): walk guest SDRAM from here,
     // with the 8088 still held, and leave the verdict on screen. Deliberately
@@ -90,6 +96,9 @@ int main(void)
         // softcore may run before the host has written the table).
         if (!settings_sized) {
             settings_sized = slot_declare_size(SETTINGS_SLOT_ID, SETTINGS_SLOT_BYTES);
+        }
+        if (!rhythm_done) {
+            rhythm_done = rhythm_load();
         }
 
         uint32_t rebind = *FDD_REBIND;
