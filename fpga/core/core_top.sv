@@ -1151,9 +1151,9 @@ module core_top (
             8'h2D:   probe_data = {rv_str_xor, jt_st_addr[15:0]};
             // 0x2E: bisect readback -- armed flags, shot counter, and the
             // liveness witness: rv_deadshot is the first shot that fired on
-            // an already-dead guest (killer = deadshot-1), rv_act[15:12]
+            // an already-dead guest (killer = deadshot-1), rv_act[7:4]
             // counts guest bus cycles since the last shot (0 = dead).
-            8'h2E:   probe_data = {12'h000, rv_deadshot, rv_act[15:12],
+            8'h2E:   probe_data = {12'h000, rv_deadshot, rv_act[7:4],
                                    rv_seq, rv_single,
                                    rv_hold_only, rv_early, rv_short_walk,
                                    1'b0, rv_shot};
@@ -2050,43 +2050,36 @@ module core_top (
     // The hardware verdict so far: a cold-boot +3 ms bare hold is SURVIVED,
     // and v1 showed strobes from ~+65 ms on are also survived -- the kill
     // needs strobe activity inside an early fragile window. v2 brackets the
-    // window's edge: alternating single reads and 256-byte walks at
-    // 3/8/16/28/48/80 ms, plus a full-walk control at ~140 ms.
-    //   shot0 +3ms   read    shot4 +48ms  read
-    //   shot1 +8ms   256B    shot5 +80ms  256B
-    //   shot2 +16ms  read    shot6 +140ms full walk
-    //   shot3 +28ms  256B
+    // window's edge: alternating single reads and 256-byte walks. Shot
+    // times are rv_delay[27:16] matches (~1.5 ms resolution) because a
+    // 28-bit x 6-entry constant mux does not fit this device.
+    //   shot0 +1.5ms read    shot3 +27ms  256B
+    //   shot1 +7.6ms 256B    shot4 +47ms  read
+    //   shot2 +15ms  read    shot5 +79ms  256B
     // Since shots keep firing after the guest dies (the walk engine is pure
     // hardware and BIOS SRAM outlives the guest), a liveness witness counts
     // guest bus cycles between shots: the first shot to fire on a dead
     // guest latches its index in rv_deadshot -- killer = deadshot-1.
-    localparam [27:0] SHOT0_T = 28'd129_000;      // ~3 ms
-    localparam [27:0] SHOT1_T = 28'd344_000;      // ~8 ms
-    localparam [27:0] SHOT2_T = 28'd688_000;      // ~16 ms
-    localparam [27:0] SHOT3_T = 28'd1_204_000;    // ~28 ms
-    localparam [27:0] SHOT4_T = 28'd2_064_000;    // ~48 ms
-    localparam [27:0] SHOT5_T = 28'd3_440_000;    // ~80 ms
-    localparam [27:0] SHOT6_T = 28'd6_020_000;    // ~140 ms
     reg         rv_hold_only = 1'b0;
     reg         rv_early     = 1'b0;
     reg         rv_single    = 1'b0;
     reg         rv_seq       = 1'b1;   // shotgun armed from config
     reg  [2:0]  rv_shot      = 3'd0;
     reg         rv_short_walk = 1'b0;
-    reg [15:0]  rv_act       = 16'd0;
+    reg  [7:0]  rv_act       = 8'd0;
     reg  [3:0]  rv_deadshot  = 4'hF;
-    wire [27:0] rv_target = rv_seq
-        ? (rv_shot == 3'd0 ? SHOT0_T :
-           rv_shot == 3'd1 ? SHOT1_T :
-           rv_shot == 3'd2 ? SHOT2_T :
-           rv_shot == 3'd3 ? SHOT3_T :
-           rv_shot == 3'd4 ? SHOT4_T :
-           rv_shot == 3'd5 ? SHOT5_T : SHOT6_T)
-        : (rv_early ? 28'd129_000 : 28'hFFFFFFF);
-    wire        rv_done    = rv_seq ? (rv_shot == 3'd7) : rv_walked;
-    wire        rv_walk_go = (rv_delay == rv_target) & ~rv_done;
-    // Walks on odd shots; shot 6 is the full-window control.
-    wire        sh_walk    = rv_shot[0] | (rv_shot == 3'd6);
+    wire [5:0]  rv_tgt_hi = rv_shot == 3'd0 ? 6'd1  :   // +1.5 ms
+                          rv_shot == 3'd1 ? 6'd5  :   // +7.6 ms
+                          rv_shot == 3'd2 ? 6'd10 :   // +15 ms
+                          rv_shot == 3'd3 ? 6'd18 :   // +27 ms
+                          rv_shot == 3'd4 ? 6'd31 :   // +47 ms
+                                            6'd52;    // +79 ms
+    wire        rv_done    = rv_seq ? (rv_shot == 3'd6) : rv_walked;
+    wire        rv_walk_go = ~rv_done & (rv_seq
+        ? (rv_delay[27:16] == rv_tgt_hi)
+        : (rv_delay == (rv_early ? 28'd129_000 : 28'hFFFFFFF)));
+    // Walks on odd shots, single reads on even ones.
+    wire        sh_walk    = rv_shot[0];
     wire        guest_cyc  = ~chipset_aen & (processor_status != 3'b111);
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
@@ -2102,15 +2095,15 @@ module core_top (
     end
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
-            rv_act      <= 16'd0;
+            rv_act      <= 8'd0;
             rv_deadshot <= 4'hF;
         end else begin
-            if (guest_cyc && rv_act != 16'hFFFF)
-                rv_act <= rv_act + 16'd1;
+            if (guest_cyc && rv_act != 8'hFF)
+                rv_act <= rv_act + 8'd1;
             if (rv_walk_go) begin
-                if (rv_act < 16'd64 && rv_deadshot == 4'hF)
+                if (rv_act < 8'd64 && rv_deadshot == 4'hF)
                     rv_deadshot <= {1'b0, rv_shot};
-                rv_act <= 16'd0;
+                rv_act <= 8'd0;
             end
         end
     end
@@ -2145,7 +2138,7 @@ module core_top (
                                   : ~(rv_hold_only | rv_single);
             jt_walk_add <= 16'd0;
             jt_walk_xor <= 16'd0;
-            rv_short_walk <= rv_seq & sh_walk & (rv_shot != 3'd6);
+            rv_short_walk <= rv_seq & sh_walk;
             rv_early    <= 1'b0;   // one-shot: a boot armed early fires once
         end else if (jt_st_req && st_done) begin
             jt_st_rdata <= st_rdata;
