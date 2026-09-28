@@ -239,13 +239,22 @@ cp dist/pc98/Platforms/* "$VOL/Platforms/" 2>/dev/null || true
 # auto-bind for deferload slots, it just makes same-name picks no-ops.
 mkdir -p "$VOL/Assets/pc98/common"
 [ -f testdisk/draw_test.hdm ] && cp -f testdisk/draw_test.hdm "$VOL/Assets/pc98/common/"
-# rhythm.bin is the deferload "Rhythm PCM" slot's pinned filename -- it binds
-# by name from the shared asset dir, same place the picker browses. Make it
-# with scripts/rhythm_pack.py <dir of 2608_*.wav> -o assets/rhythm.bin.
+# Rhythm voices come two ways: drop the six source WAVs (2608_bd.wav etc.)
+# into the per-voice "Rhythm BD..RIM" slots and firmware encodes them at
+# boot -- easiest -- or put a pre-packed rhythm.bin here for the "Rhythm
+# PCM" slot (scripts/rhythm_pack.py <dir of 2608_*.wav> -o assets/rhythm.bin).
+# Any bound WAV slot switches the loader to WAV mode and the bin is ignored.
 if [ -f assets/rhythm.bin ]; then
     cp -f assets/rhythm.bin "$VOL/Assets/pc98/common/"
     cmp -s assets/rhythm.bin "$VOL/Assets/pc98/common/rhythm.bin" || say "  BAD rhythm.bin"
 fi
+# per-voice WAVs are only copied when the caller put them in assets/wavs/
+# -- nothing ships them by default.
+for w in assets/wavs/*.wav; do
+    [ -f "$w" ] || continue
+    cp -f "$w" "$VOL/Assets/pc98/common/"
+    cmp -s "$w" "$VOL/Assets/pc98/common/$(basename "$w")" || say "  BAD $(basename "$w")"
+done
 sync
 
 # Verify everything that was written, not just the bitstream. The first run of

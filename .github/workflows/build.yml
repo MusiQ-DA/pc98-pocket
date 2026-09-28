@@ -464,6 +464,10 @@ jobs:
           ./obj_opna/op | tee opna.log
           grep -q "PASS tb_pc98_opna" opna.log
 
+      - name: the firmware ADPCM-A encoder matches the packer bit for bit
+        run: |
+          python3 scripts/rhythm_enc_test.py
+
       - name: the GRCG's three operations match np21w's expressions
         run: |
           S=fpga/core
