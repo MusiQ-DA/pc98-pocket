@@ -51,6 +51,7 @@ module tb_pc98_rowbuf;
     logic [11:0] font_wr_addr = 12'd0;
     logic [15:0] font_wr_data = 16'd0;
     logic        sel8 = 1'b0;
+    logic        wide = 1'b0;
 
     logic [6:0] rd_col = 7'd0;
     logic [3:0] rd_line = 4'd0;
@@ -59,7 +60,8 @@ module tb_pc98_rowbuf;
 
     pc98_glyph_rowbuf #(.COLS(COLS)) dut (
         .clk(clk), .rst(rst),
-        .fill_start(fill_start), .row_base(row_base), .bitac(bitac), .busy(busy),
+        .fill_start(fill_start), .row_base(row_base), .bitac(bitac),
+        .wide(wide), .sel8(sel8), .busy(busy),
         .tv_cell(tv_cell), .tv_char_lo(tv_char_lo), .tv_char_hi(tv_char_hi),
         .f_req(f_req), .f_addr(f_addr), .f_busy(f_busy),
         .f_valid(f_valid), .f_data(f_data),
@@ -282,6 +284,89 @@ module tb_pc98_rowbuf;
         end
         $display("  8x8 bank: every line pair reads row line>>1");
         sel8 = 1'b0;
+
+        // ---- 40-column mode (mode1 bit 2): cells stride by two -------------
+        //
+        // np21w maketext40 walks edi += 2 per column: the BIOS writes a
+        // character to every EVEN cell, odd cells are never consulted, and a
+        // kanji pair spans two COLUMNS -- cells 2c and 2c+2 -- the second
+        // cell's own contents counting for nothing. The fill must match that
+        // or a kanji's right half lands in a slot the renderer never reads,
+        // and the cell after the pair fills with whatever the second cell
+        // decoded to on its own.
+        begin
+            int ff;
+            ff = fetches;
+            wide = 1'b1;
+            for (int i = 0; i < 128; i++) begin
+                scr_lo[i] = 8'(8'h41 + i[7:0]);
+                scr_hi[i] = 8'h00;
+            end
+            // Columns 3 and 4 (cells 6 and 8) are one kanji; the second
+            // cell deliberately carries ANOTHER kanji code, which a
+            // sequential fill would happily decode as a fresh character.
+            scr_lo[6] = 8'h04; scr_hi[6] = 8'h22;
+            scr_lo[8] = 8'h09; scr_hi[8] = 8'h30;
+            // Odd cells hold an inviting kanji code: reading one must not
+            // happen and must not disturb the pairing.
+            scr_lo[7] = 8'h04; scr_hi[7] = 8'h22;
+
+            fill_start = 1'b1; @(posedge clk); fill_start = 1'b0;
+            wait (busy == 1'b0); repeat (4) @(posedge clk);
+            fill_start = 1'b1; @(posedge clk); fill_start = 1'b0;
+            wait (busy == 1'b0); repeat (4) @(posedge clk);
+
+            // Two kanji halves per fill, two fills: four fetches more.
+            $display("  wide: fetches +%0d (want +4)", fetches - ff);
+            if (fetches - ff !== 4) begin
+                $display("  FAIL wide fetch count"); errors++;
+            end
+
+            // Slot = cell index. Column 3's kanji left half at slot 6,
+            // the right half at slot 8 -- NOT cell 8's own kanji code.
+            for (int l = 0; l < 16; l += 5) begin
+                rd(6, l, got);
+                if (got !== 8'(8'h40 + l)) begin
+                    $display("  FAIL wide kanji left line %0d: %02h", l, got);
+                    errors++;
+                end
+                rd(8, l, got);
+                if (got !== 8'(8'h50 + l)) begin
+                    $display("  FAIL wide kanji right line %0d: %02h", l, got);
+                    errors++;
+                end
+                rd(10, l, got);
+                if (got !== ank_pat(8'(8'h41 + 10), 4'(l))) begin
+                    $display("  FAIL wide col 10 line %0d: %02h want %02h",
+                             l, got, ank_pat(8'h4B, 4'(l)));
+                    errors++;
+                end
+            end
+            $display("  wide: kanji pair spans cells 2c and 2c+2");
+
+            // 8x8 mode halves kanji too: burst bytes 0..7 each serve two
+            // cell lines (np21w's `curx[x] |= multiple` on kanji cells).
+            sel8 = 1'b1;
+            fill_start = 1'b1; @(posedge clk); fill_start = 1'b0;
+            wait (busy == 1'b0); repeat (4) @(posedge clk);
+            fill_start = 1'b1; @(posedge clk); fill_start = 1'b0;
+            wait (busy == 1'b0); repeat (4) @(posedge clk);
+            for (int l = 0; l < 16; l++) begin
+                rd(6, l, got);
+                if (got !== 8'(8'h40 + (l >> 1))) begin
+                    $display("  FAIL sel8 kanji left line %0d: %02h", l, got);
+                    errors++;
+                end
+                rd(8, l, got);
+                if (got !== 8'(8'h50 + (l >> 1))) begin
+                    $display("  FAIL sel8 kanji right line %0d: %02h", l, got);
+                    errors++;
+                end
+            end
+            $display("  sel8: kanji lines read burst byte l>>1");
+            sel8 = 1'b0;
+            wide = 1'b0;
+        end
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");

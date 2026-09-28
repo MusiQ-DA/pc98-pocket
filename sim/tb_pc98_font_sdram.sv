@@ -78,7 +78,8 @@ module tb_pc98_font_sdram;
 
     pc98_glyph_rowbuf #(.COLS(4)) u_rowbuf (
         .clk(clk), .rst(rst),
-        .fill_start(fill_start), .row_base(row_base), .bitac(8'hFF), .busy(busy),
+        .fill_start(fill_start), .row_base(row_base), .bitac(8'hFF),
+        .wide(1'b0), .sel8(1'b0), .busy(busy),
         .tv_cell(tv_cell), .tv_char_lo(tv_char_lo), .tv_char_hi(tv_char_hi),
         .f_req(f_req), .f_addr(f_addr), .f_busy(f_busy),
         .f_valid(f_valid), .f_data(f_data),

@@ -45,6 +45,8 @@ module pc98_glyph_rowbuf #(
     input  wire        fill_start,
     input  wire [11:0] row_base,
     input  wire  [7:0] bitac,          // GDC mode mask; 00 means every col is ANK
+    input  wire        wide,           // mode1 bit 2: 40 columns
+    input  wire        sel8,           // mode1 bit 3 clear: 8x8 halves lines
     output logic       busy,
 
     // TVRAM video port, one cycle of latency.
@@ -99,10 +101,17 @@ module pc98_glyph_rowbuf #(
     logic [3:0] beat;
     logic       pair_second;       // this col is a kanji's right half
     logic [7:0] hold_lo, hold_hi;
+    logic [7:0] hold8 [0:7];
+
+    // The column step: 40-column mode strides the cell space by two
+    // (np21w maketext40's `edi = LOW12(edi + 2)`) -- odd cells are never
+    // read, and a kanji's right half lands at the NEXT column's slot,
+    // col+2, not col+1.
+    wire [6:0] col_step = wide ? 7'd2 : 7'd1;
 
     typedef enum logic [3:0] {
-        S_IDLE, S_TV_REQ, S_TV_W1, S_TV_W2, S_FETCH, S_STREAM, S_NEXT,
-        S_ANK, S_ANK_W
+        S_IDLE, S_TV_REQ, S_TV_W1, S_TV_W2, S_FETCH, S_STREAM, S_EXPAND,
+        S_EXPAND_W, S_NEXT, S_ANK, S_ANK_W
     } state_t;
     state_t state;
 
@@ -229,9 +238,42 @@ module pc98_glyph_rowbuf #(
 
             S_STREAM: begin
                 if (f_valid) begin
-                    store[{bank, col, beat}] <= f_data;
-                    beat <= beat + 4'd1;
-                    if (beat == 4'd15) state <= S_NEXT;
+                    if (sel8) begin
+                        // 8x8 mode halves every glyph vertically, kanji
+                        // included (maketext sets `curx[x] |= multiple` on
+                        // kanji cells too, and its draw does fntline>>1):
+                        // only the burst's first eight bytes are ink. The
+                        // stream cannot pause and the store is one port,
+                        // so the bytes land in hold8 first and S_EXPAND
+                        // writes each to two cell lines afterwards.
+                        if (beat[3] == 1'b0) hold8[beat[2:0]] <= f_data;
+                        beat <= beat + 4'd1;
+                        if (beat == 4'd15) begin
+                            beat  <= 4'd0;
+                            state <= S_EXPAND;
+                        end
+                    end else begin
+                        store[{bank, col, beat}] <= f_data;
+                        beat <= beat + 4'd1;
+                        if (beat == 4'd15) state <= S_NEXT;
+                    end
+                end
+            end
+
+            // Two writes per captured byte, one port: even slot, odd slot.
+            S_EXPAND: begin
+                store[{bank, col, {beat[2:0], 1'b0}}] <= hold8[beat[2:0]];
+                state <= S_EXPAND_W;
+            end
+
+            S_EXPAND_W: begin
+                store[{bank, col, {beat[2:0], 1'b1}}] <= hold8[beat[2:0]];
+                if (beat[2:0] == 3'd7) begin
+                    beat  <= 4'd0;
+                    state <= S_NEXT;
+                end else begin
+                    beat  <= beat + 4'd1;
+                    state <= S_EXPAND;
                 end
             end
 
@@ -243,11 +285,11 @@ module pc98_glyph_rowbuf #(
                 if (ga_is_kanji && !pair_second) pair_second <= 1'b1;
                 else                             pair_second <= 1'b0;
 
-                if (col == 7'(COLS - 1)) begin
+                if ({1'b0, col} + {1'b0, col_step} >= 8'(COLS)) begin
                     busy  <= 1'b0;
                     state <= S_IDLE;
                 end else begin
-                    col  <= col + 7'd1;
+                    col  <= col + col_step;
                     // The right half does not re-read TVRAM: its own col holds
                     // no character, and reading it would replace the code the
                     // pair needs.

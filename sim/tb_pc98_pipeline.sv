@@ -118,7 +118,7 @@ module tb_pc98_pipeline;
     pc98_glyph_rowbuf u_rowbuf (
         .clk(clk), .rst(rst),
         .fill_start(pc98_row_fill), .row_base(row_base),
-        .bitac(8'hFF), .busy(fill_busy),
+        .bitac(8'hFF), .wide(1'b0), .sel8(1'b0), .busy(fill_busy),
         .tv_cell(fil_cell), .tv_char_lo(fil_char_lo), .tv_char_hi(fil_char_hi),
         .f_req(f_req), .f_addr(f_addr), .f_busy(f_busy),
         .f_valid(f_valid), .f_data(f_data),

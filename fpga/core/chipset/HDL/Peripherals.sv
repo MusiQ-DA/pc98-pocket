@@ -1475,18 +1475,23 @@ module PERIPHERALS #(
     // The font-bank select, latched at the frame boundary the way
     // gdc_wide_px is on the dot clock: the fill below runs a row ahead of the
     // raster, and taking mode1[3] raw could put a mixed bank into one row.
+    // The fill's column stride is the same story for mode1[2].
     logic pc98_ank8 = 1'b0;
+    logic pc98_wide = 1'b0;
     logic gdc_vs_q3 = 1'b0;
     always_ff @(posedge clock) begin
         gdc_vs_q3 <= gdc_vs_q;
-        if (gdc_vs_q & ~gdc_vs_q3)
+        if (gdc_vs_q & ~gdc_vs_q3) begin
             pc98_ank8 <= ~pc98_mode1[3];
+            pc98_wide <=  pc98_mode1[2];
+        end
     end
 
     pc98_glyph_rowbuf u_pc98_rowbuf (
         .clk(clock), .rst(reset),
         .fill_start(pc98_row_fill), .row_base(pc98_row_base),
-        .bitac(pc98_bitac), .busy(pc98_fill_busy),
+        .bitac(pc98_bitac), .wide(pc98_wide), .sel8(pc98_ank8),
+        .busy(pc98_fill_busy),
         .tv_cell(tvram_fil_cell),
         .tv_char_lo(tvram_vid_char_lo), .tv_char_hi(tvram_vid_char_hi),
         .f_req(pc98_f_req), .f_addr(pc98_f_addr), .f_busy(pc98_f_busy),
