@@ -18,11 +18,11 @@
 # for the decision -- so they must match PC98_BIOS_BASE / PC98_ITF_BASE there.
 #
 # The directory is hiroya.PC9801, not hiroya.PC98. The Pocket registers a core
-# against the platform its core.json declared the FIRST time it saw it, and the
-# first PC-98 package declared "pcxt" by mistake -- it left an empty
-# Assets/pcxt/hiroya.PC98/ behind, and correcting core.json afterwards did not
-# move the association. A new directory name is a new core to the Pocket, which
-# is the only reliable way back from that.
+# against the platform its core.json declared the FIRST time it saw it, and a
+# wrong declaration sticks -- it leaves the empty asset dir behind and
+# correcting core.json afterwards does not move the association. A new
+# directory name is a new core to the Pocket, which is the only reliable way
+# back from that.
 #
 # The ROMs are the user's own dumps and are NOT in this repository. The
 # deploy set is the coherent PC-9801UX trio (deploy.sh pins it by md5);
@@ -68,16 +68,16 @@ def rw(name, fn):
 
 def core(j):
     m = j['core']['metadata']
-    # MUST match the part of the directory name after the dot. Every other core
-    # on the card follows that -- hiroya.PCXTA/PCXTA, desaster.PCXT/PCXT -- and
-    # renaming the directory while leaving this at PC98 got "Load in core
-    # general error" until it was fixed.
+    # MUST match the part of the directory name after the dot. Every core on
+    # the card follows that (author.NAME/NAME) -- and renaming the directory
+    # while leaving this at PC98 got "Load in core general error" until it was
+    # fixed.
     m['shortname'] = 'PC9801'
     m['description'] = 'PC-98 machine layer (P1: ITF + BIOS fetch)'
     # The Pocket looks for a core's assets under Assets/<platform_id>/<core>/,
-    # so this has to match the directory the ROMs go in. Leaving it at 'pcxt'
-    # while writing to Assets/pc98/ puts the ROMs somewhere nothing reads, and
-    # the core comes up with no BIOS and no complaint.
+    # so this has to match the directory the ROMs go in. Pointing it at any
+    # platform but 'pc98' while writing to Assets/pc98/ puts the ROMs somewhere
+    # nothing reads, and the core comes up with no BIOS and no complaint.
     m['platform_ids'] = ['pc98']
     for c in j['core']['cores']:
         c['filename'] = 'bitstream.rbf_r'
