@@ -260,7 +260,11 @@ module v30u_biu (
     input      [15:0] ss_wdata,
     input             ss_we,
     output reg [15:0] ss_rdata,
-    output            ss_bus_quiet
+    output            ss_bus_quiet,
+    // --- JTAG probe (PC98_JTAG): the launch-law registers. On a wedge where
+    // the EU posts an access that never reaches the pins, these name which
+    // pending/slot/commit bit is holding it. Free when unconnected.
+    output     [31:0] dbg
 );
 
 import v30_ss_pkg::*;
@@ -2998,5 +3002,16 @@ end
 `endif
 
 wire _unused = &{1'b0, eu_word, ad_i[15:0], bkd_queue[47:0]};
+
+// Launch-law registers for the JTAG probe (dbg port). The EU's posted access
+// either sits in r_e_pend/r_rq_n waiting for a slot, rides r_cmt_* on the way
+// to the pins, or is on the pins (r_run). A wedged post has one of these
+// stuck -- the bundle names which.
+assign dbg = {r_q_head, r_q_cnt,
+              r_e_pend, r_halted, r_halt_pending,
+              r_run, r_cur_fetch, r_cur_halt, r_cur_wr, r_evald,
+              r_cmt_valid, r_cmt_fetch, r_cmt_wr, r_cmt_bs,
+              r_rq_n, r_slot_busy, slot_busy, r_opr_held,
+              r_absorb_ttl, r_ts};
 
 endmodule

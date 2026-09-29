@@ -138,7 +138,10 @@ module v30_core (
     output    [15:0]  dbg_core,
     // dbg_core2 is the posted access itself: the address+segment the EU is
     // trying to reach and the post/slot handshake state around it.
-    output    [31:0]  dbg_core2
+    output    [31:0]  dbg_core2,
+    // dbg_core3 is the BIU's own launch-law registers -- which pending/slot/
+    // commit bit is sitting on a posted access that never reaches the pins.
+    output    [31:0]  dbg_core3
 `ifdef V30_BACKDOOR
     // The BIU's pending-bus-cycle flag, a backdoor-only debug leg. Declared
     // here so the guarded connection below binds a PORT and not Verilator's
@@ -412,7 +415,8 @@ v30u_biu u_biu (
     .ss_wdata   (ss_wdata_q),
     .ss_we      (ss_we_q),
     .ss_rdata   (ss_biu_rdata),
-    .ss_bus_quiet(ss_biu_bus_quiet)
+    .ss_bus_quiet(ss_biu_bus_quiet),
+    .dbg        (dbg_core3)
 );
 
 v30u_eu u_eu (
