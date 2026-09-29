@@ -3,7 +3,20 @@ name: build
 on:
   push:
     branches: [main]
+    # Docs-only commits don't change the bitstream; skip the 20-minute
+    # Quartus build for them. CI config itself still triggers.
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'LICENSE'
+      - 'NOTICE.md'
   workflow_dispatch:
+
+# A newer push on the same ref supersedes a running build -- the old
+# bitstream would never be fetched anyway.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 # packages:read is for the stage-quartus-win job's ghcr image pull; the other
 # jobs get the same token scope, which is read-only anyway.
@@ -681,17 +694,32 @@ jobs:
           # by the crashed stage, so one extra attempt is cheap insurance.
           # Real failures (unfittable design, HDL errors) are deterministic
           # though -- only retry when the log shows an Internal/Fatal Error.
-          for attempt in 1 2; do
+          #
+          # Second failure class: the restored incremental db can disagree
+          # with fresh synthesis badly enough to kill Partition Merge
+          # (Error 15336, "floating DSP port" ghosts -- seen 2026-09-29 when
+          # a db from a different-parameter branch was restored). A clean
+          # compile with the db dropped is slower but always sound, so that
+          # case gets one self-healing attempt instead of a dead run.
+          for attempt in 1 2 3; do
             if quartus_sh.exe --flow compile ap_core 2>&1 \
                  | tee "compile_$attempt.log" \
                  | { grep --line-buffered -vE '^\s*Info' || true; }; then
               break
             fi
-            if [ "$attempt" = 2 ] \
-               || ! grep -qE 'Internal Error|Fatal Error' "compile_$attempt.log"; then
+            if [ "$attempt" = 3 ]; then
               exit 1
             fi
-            echo "::warning::quartus internal error on attempt $attempt; retrying"
+            if grep -qE 'Internal Error|Fatal Error' "compile_$attempt.log"; then
+              echo "::warning::quartus internal error on attempt $attempt; retrying"
+            elif [ "$attempt" = 1 ] \
+                 && grep -qE 'Error \(15336\)|Partition Merge was unsuccessful' \
+                      "compile_$attempt.log"; then
+              echo "::warning::stale incremental db suspected; dropping db/incremental_db and rebuilding clean"
+              rm -rf db incremental_db output_files
+            else
+              exit 1
+            fi
           done
 
       - name: SDRAM interface is actually timed (not just "green")
