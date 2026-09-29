@@ -1154,6 +1154,15 @@ module core_top (
             // rv_auto (the config-fired walk is/was non-strict), rv_walked.
             8'h2E:   probe_data = {19'h00000, rv_live, 4'h0,
                                    rv_auto, rv_walked, 6'h00};
+            // 0x2F/0x30/0x31: wedge-PC taps. {cycle-entry count, live
+            // processor_status, last io dir, last fetch addr} /
+            // {io read count, io write count, last io port} /
+            // {mem access count, last mem dir, last mem addr}.
+            8'h2F:   probe_data = {dbg_cyc_cnt, processor_status, dbg_io_wr,
+                                   dbg_fetch_addr};
+            8'h30:   probe_data = {dbg_ior_cnt, dbg_iow_cnt, dbg_io_port};
+            8'h31:   probe_data = {dbg_mem_cnt, 3'b000, dbg_mem_wr,
+                                   dbg_mem_addr};
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:
@@ -2044,7 +2053,11 @@ module core_top (
     // later probe read answers "did the guest come back after the storm".
     reg         rv_auto     = 1'b0;
     reg         rv_live     = 1'b0;
-    wire        rv_walk_go = ~rv_walked & (rv_delay == 18'd131071); // ~+3 ms
+    // Auto-walk DISARMED for the wedge-PC probe build: the +3 ms borrow is
+    // the prime suspect in the real-hardware POST kill, so this build lets
+    // POST run clean and answers "where did it stop" instead. A manual walk
+    // (slot 0x84 bit30) still works.
+    wire        rv_walk_go = 1'b0; // ~+3 ms shot removed: ~rv_walked & (rv_delay == 18'd131071)
     wire        guest_cyc  = ~chipset_aen & (processor_status != 3'b111);
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
@@ -2068,13 +2081,56 @@ module core_top (
                 rv_live <= 1'b1;
         end
     end
+    // Wedge-PC taps. processor_status carries the V30 bus code for the whole
+    // cycle window (v30_cpu_bridge srv_bs): 0=INTA 1=IOR 2=IOW 3=HALT 4=CODE
+    // 5=MEMR 6=MEMW 7=PASV. Latching the cycle address per class makes a
+    // wedge legible after the fact: the fetch tap names the loop, the io tap
+    // the port it polls, the mem tap the flag cell it spins on. dbg_cyc_cnt
+    // counts cycle-entry edges (PASV->active); a frozen count plus PASV
+    // status means the CPU left the bus entirely (HLT or a dead hold).
+    reg  [19:0] dbg_fetch_addr = 20'd0;
+    reg  [19:0] dbg_mem_addr   = 20'd0;
+    reg         dbg_mem_wr     = 1'b0;
+    reg  [15:0] dbg_io_port    = 16'd0;
+    reg         dbg_io_wr      = 1'b0;
+    reg  [7:0]  dbg_cyc_cnt    = 8'd0;
+    reg  [7:0]  dbg_ior_cnt    = 8'd0;
+    reg  [7:0]  dbg_iow_cnt    = 8'd0;
+    reg  [7:0]  dbg_mem_cnt    = 8'd0;
+    reg  [2:0]  ps_q           = 3'd7;
+    always_ff @(posedge clk_chipset) begin
+        ps_q <= processor_status;
+        if (ps_q == 3'b111 && processor_status != 3'b111
+            && dbg_cyc_cnt != 8'hFF)
+            dbg_cyc_cnt <= dbg_cyc_cnt + 8'd1;
+        if (processor_status == 3'b100)
+            dbg_fetch_addr <= cpu_address;
+        if (processor_status == 3'b001) begin
+            dbg_io_port <= cpu_address[15:0];
+            dbg_io_wr   <= 1'b0;
+            if (ps_q != 3'b001 && dbg_ior_cnt != 8'hFF)
+                dbg_ior_cnt <= dbg_ior_cnt + 8'd1;
+        end
+        if (processor_status == 3'b010) begin
+            dbg_io_port <= cpu_address[15:0];
+            dbg_io_wr   <= 1'b1;
+            if (ps_q != 3'b010 && dbg_iow_cnt != 8'hFF)
+                dbg_iow_cnt <= dbg_iow_cnt + 8'd1;
+        end
+        if (processor_status == 3'b101 || processor_status == 3'b110) begin
+            dbg_mem_addr <= cpu_address;
+            dbg_mem_wr   <= (processor_status == 3'b110);
+            if (ps_q != processor_status && dbg_mem_cnt != 8'hFF)
+                dbg_mem_cnt <= dbg_mem_cnt + 8'd1;
+        end
+    end
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h04) begin
             jt_st_addr  <= probe_wdata_c[30] ? 20'hE8000 : probe_wdata_c[19:0];
             jt_st_wdata <= probe_wdata_c[27:20];
             jt_st_we    <= probe_wdata_c[28] & ~probe_wdata_c[30];
             jt_st_walk  <= probe_wdata_c[30];
-            if (probe_wdata_c[29] | probe_wdata_c[30]) begin
+            if (probe_wdata_c[28] | probe_wdata_c[29] | probe_wdata_c[30]) begin
                 jt_st_req  <= 1'b1;
                 jt_st_done <= 1'b0;
                 if (probe_wdata_c[30]) begin
