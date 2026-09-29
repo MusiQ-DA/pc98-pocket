@@ -717,13 +717,16 @@ jobs:
             if [ "$attempt" = 3 ]; then
               exit 1
             fi
-            if grep -qE 'Internal Error|Fatal Error' "compile_$attempt.log"; then
-              echo "::warning::quartus internal error on attempt $attempt; retrying"
-            elif [ "$attempt" = 1 ] \
-                 && grep -qE 'Error \(15336\)|Partition Merge was unsuccessful|Error \(170012\)' \
-                      "compile_$attempt.log"; then
+            # Order matters: an unfittable attempt can ALSO end in a fitter
+            # access violation (quartus_fit crashes after reporting 170012),
+            # and that log must drop the db, not be classified as transient.
+            if [ "$attempt" -lt 3 ] \
+               && grep -qE 'Error \(15336\)|Partition Merge was unsuccessful|Error \(170012\)' \
+                    "compile_$attempt.log"; then
               echo "::warning::stale incremental db suspected; dropping db/incremental_db and rebuilding clean"
               rm -rf db incremental_db output_files
+            elif grep -qE 'Internal Error|Fatal Error' "compile_$attempt.log"; then
+              echo "::warning::quartus internal error on attempt $attempt; retrying"
             else
               exit 1
             fi
