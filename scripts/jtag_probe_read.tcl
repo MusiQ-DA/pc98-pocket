@@ -46,25 +46,28 @@ proc rd {addr} {
 }
 
 # Slots 0x01-0x24 were the POST panel's census and snoop words; they left
-# with postmon and read DEAD <addr> now. What remains:
+# with postmon and read DEAD <addr> now. Current map (PC98_JTAG builds):
+#   0x10-0x16  v30 dbg_regs, MSW-first: psw:pc, sreg3:sreg2, sreg1:sreg0,
+#              then gpr7:gpr6 down to gpr1:gpr0
+#   0x17       retired-instruction counter (frozen = wedged)
+#   0x18       current bus-cycle address
+#   0x19       {arbiter: hlda,aen_n,dma_hold,ext_req,drq3..0,  RAM FSM:
+#               wc_pend,refresh,read_flag,acc_rd,acc_wr,state[2:0]}
+#   0x1a       {proc_ready, mem_acc_ready, dma_ready, dack_n3..0, no_cmd}
+#   0x1d       keyboard count:last
 set regs {
-    27  TVRAM_DBG=attr,hi,lo
-    28  DBG_CELL
+    16  V30_PSW_PC
+    17  V30_SREG3_SREG2
+    18  V30_SREG1_SREG0
+    19  V30_GPR7_GPR6
+    20  V30_GPR5_GPR4
+    21  V30_GPR3_GPR2
+    22  V30_GPR1_GPR0
+    23  V30_RETIRED
+    24  V30_ADDR
+    25  ARB_HOLD+RAM_FSM
+    26  READY_CHAIN
     29  KEYS=count,last
-    30  PADS=cont2,cont1
-    31  PIC1=irr,imr,isr,timer_ticks
-    32  PIC2=irr,imr,isr,kbd_irqs
-    33  IRQ_LVL+kbd_rd
-    34  BTN_GATE=kbv,kbr,osd,mode,kb_buttons
-    37  MEMIF=done,busy,rdata
-    38  JT_FDD=sectors,ok,ins,seq,drv,cmd
-    39  MGMT=wrseen,last,fdd_req,fdd_present
-    40  RESET_TERMS=dbg_bits
-    41  GVFILL=maxlen,skip,fills
-    42  GVLIVE=nfill,lateline,fillage512
-    43  ROMWALK=memadd,memxor
-    44  ROMSTR=strcnt,stradd
-    45  ROMSTR2=strxor,walkaddr
     255 MAGIC
 }
 

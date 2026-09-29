@@ -74,6 +74,10 @@ module CHIPSET #(
         output  logic   [3:0]   dma_acknowledge_n,
         output  logic           address_enable_n,
         output  logic           terminal_count_n,
+        // JTAG probe (PC98_JTAG): arbiter hold/DRQ view and RAM.sv's FSM
+        // state, out to core_top's probe. Unconsumed they synthesise away.
+        output  logic   [15:0]  dbg_chipset,
+        output  logic   [7:0]   dbg_chipset2,
         // Peripherals
         output  logic   [2:0]   timer_counter_out,
         output  logic           speaker_out,
@@ -258,6 +262,7 @@ module CHIPSET #(
         .memory_write_n_direction           (memory_write_n_direction),
         .no_command_state                   (no_command_state),
         .ext_access_request                 (ext_access_request),
+        .dbg                                (arb_dbg),
         // DRQ is active-low on the PC-98 bus (the data book names the pins
         // DRQ3O..DRQ0O) and the BIOS programs the 71071's DREQ sense bit
         // (0x11 bit6) to match. The sources here are active-high "request
@@ -503,8 +508,16 @@ module CHIPSET #(
         .bios_protect_flag                  (bios_protect_flag),
         .wait_count_clk_en                  (wait_count_clk_en),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
-        .ram_write_wait_cycle               (ram_write_wait_cycle)
+        .ram_write_wait_cycle               (ram_write_wait_cycle),
+        .dbg                                (ram_dbg)
     );
+
+    // JTAG probe bundle: {arbiter hold/DRQ, RAM FSM state} plus the wait
+    // chain -- proc_ready is the term the CPU actually waits on.
+    wire [7:0] arb_dbg, ram_dbg;
+    assign  dbg_chipset  = {arb_dbg, ram_dbg};
+    assign  dbg_chipset2 = {processor_ready, memory_access_ready, dma_ready,
+                            dma_acknowledge_n[3:0], no_command_state};
 
     // The NEC EMS board's register half. Its port decode sits on the live
     // bus (same convention as PERIPHERALS); the window state it produces is

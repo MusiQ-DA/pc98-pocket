@@ -45,7 +45,11 @@ module BUS_ARBITER (
     input   logic   [3:0]   dma_request,
     output  logic   [3:0]   dma_acknowledge_n,
     output  logic           address_enable_n,
-    output  logic           terminal_count_n
+    output  logic           terminal_count_n,
+    // JTAG probe (PC98_JTAG): why the CPU is off the bus --
+    // {hold granted, bus released, dmac wants hold, external master wants
+    //  hold, DRQ3..DRQ0 seen as requests (pin low)}.
+    output  logic   [7:0]   dbg
 );
 
     //
@@ -208,6 +212,11 @@ module BUS_ARBITER (
     );
 
     assign  terminal_count_n = ~terminal_count;
+
+    assign  dbg = {hold_acknowledge, address_enable_n, dma_hold_request,
+                   ext_access_request,
+                   ~dma_request[3], ~dma_request[2], ~dma_request[1],
+                   ~dma_request[0]};
 
 
     //

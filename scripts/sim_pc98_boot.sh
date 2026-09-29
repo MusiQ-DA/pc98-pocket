@@ -15,7 +15,6 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYNTH=0
 REALMEM=0
 WORD=0
-DETACH=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --synth) SYNTH=1; shift ;;
@@ -26,7 +25,6 @@ while [ $# -gt 0 ]; do
         # --word: with --realmem, let a word memory access run as one bus
         # cycle (PC98_WORD_MEM). The real ITF is the acceptance test for it.
         --word)    WORD=1; REALMEM=1; shift ;;
-        -d)      DETACH=1; shift ;;
         *) break ;;
     esac
 done
@@ -36,7 +34,7 @@ ROMS="${PC98_ROMS:-$HOME/.pc98roms}"
 [ -f "$ROMS/itf.rom" ] && [ -f "$ROMS/bios.rom" ] \
     || { echo "need itf.rom and bios.rom in $ROMS"; exit 1; }
 
-OUT="${TMPDIR:-/tmp}/pc98boot"
+OUT="${SIM_OUT:-${TMPDIR:-/tmp}/pc98boot}"
 mkdir -p "$OUT"
 
 python3 - "$ROMS" "$OUT" "$SYNTH" <<'PY'
@@ -90,18 +88,6 @@ for name, size in (("itf", 0x8000), ("bios", 0x18000)):
     print("%-5s %6d bytes -> %s.hex" % (name, len(d), name))
 PY
 
-export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
-export DOCKER_HOST="unix://$HOME/.docker/run/docker.sock"
-CFG="${TMPDIR:-/tmp}/pc98-dockercfg"
-mkdir -p "$CFG"
-python3 - "$CFG/config.json" <<'PY'
-import json, os, sys
-c = json.load(open(os.path.expanduser('~/.docker/config.json')))
-c.pop('credsStore', None)
-json.dump(c, open(sys.argv[1], 'w'))
-PY
-export DOCKER_CONFIG="$CFG"
-
 S=fpga/core
 K=$S/chipset/HDL
 V=$S/v30
@@ -111,13 +97,10 @@ V=$S/v30
 mkdir -p "$OUT/hdl/rtl/ucore"
 cp $V/ucrom.hex $V/ucdecode.hex "$OUT/hdl/rtl/ucore/"
 
-CPU_FILES="/work/$V/v30u_ss_pkg.sv \
-  /work/$V/v30_core.sv /work/$V/v30u_biu.sv /work/$V/v30u_eu.sv \
-  /work/$V/v30u_ucrom.sv /work/$S/v30_cpu_bridge.sv"
+R="$PWD"
 CPU_DEF="+define+V30_BACKDOOR"
 [ "$REALMEM" = 1 ] && CPU_DEF="$CPU_DEF+REALMEM"
 [ "$WORD" = 1 ] && CPU_DEF="$CPU_DEF+PC98_WORD_MEM"
-CPU_INC="-I/work/$V"
 
 # The V30 build is pure CPU time in Verilator: compile the model for speed
 # (-O2, same reasoning as sim_pc98_v30.sh) and split the eval across cores.
@@ -127,40 +110,45 @@ SIM_OPT="${SIM_OPT:--O2}"
 SIM_THREADS="${SIM_THREADS:-4}"
 
 if [ "$REALMEM" = 1 ]; then
-    MEMFILES="/work/$K/RAM.sv /work/$K/Ready.sv /work/$S/sdram_shim.sv /work/$S/sdram_mp.sv /work/sim/sdram_board_model.sv /work/sim/sdram_model.sv"
+    MEMFILES="$K/RAM.sv $K/Ready.sv $S/sdram_shim.sv $S/sdram_mp.sv sim/sdram_board_model.sv sim/sdram_model.sv"
 else
     MEMFILES=""
 fi
 
-RUN_CMD="
-  set -e
-  verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot $CPU_DEF \
-    --threads $SIM_THREADS -MAKEFLAGS OPT_FAST=$SIM_OPT \
-    -I/work/sim -I/work/$S -I/work/$S/common $CPU_INC -I/work/$K -I/work/$K/i8288/HDL \
-    -I/work/$K/i8253/HDL -I/work/$K/i8259/HDL \
-    /work/sim/tb_pc98_boot.sv \
-    $CPU_FILES \
-    \$MEMFILES \
-    /work/$S/pc98_fdc_glue.sv /work/$S/common/floppy.v /work/$S/common/simple_fifo.v \
-    /work/sim/tb_fdd_dma_model.sv /work/$S/pc98_kbd8251.sv \
-    /work/$K/ce_generator.sv /work/$K/i8288/HDL/i8288.sv \
-    /work/$K/i8253/HDL/i8253.sv /work/$K/i8253/HDL/i8253_Counter.sv \
-    /work/$K/i8253/HDL/i8253_Control_Logic.sv \
-    /work/$K/i8259/HDL/i8259.sv /work/$K/i8259/HDL/i8259_Bus_Control_Logic.sv \
-    /work/$K/i8259/HDL/i8259_Control_Logic.sv /work/$K/i8259/HDL/i8259_In_Service.sv \
-    /work/$K/i8259/HDL/i8259_Interrupt_Request.sv \
-    /work/$K/i8259/HDL/i8259_Priority_Resolver.sv \
-    -o boot --Mdir /tmp/obj_boot
-  /tmp/obj_boot/boot \$SIMARGS
-"
-
-if [ "$DETACH" = 1 ]; then
-    NAME="${SIM_NAME:-pc98boot}"
-    docker rm -f "$NAME" >/dev/null 2>&1 || true
-    docker run -d --name "$NAME" -v "$PWD":/work -v "$OUT":/hex -w /hex \
-        -e "SIMARGS=$*" -e "MEMFILES=$MEMFILES" pc98-sim bash -lc "$RUN_CMD"
-    echo "detached: docker logs -f $NAME"
-else
-    docker run --rm -v "$PWD":/work -v "$OUT":/hex -w /hex \
-        -e "SIMARGS=$*" -e "MEMFILES=$MEMFILES" pc98-sim bash -lc "$RUN_CMD"
+# Native Verilator -- several times faster than the amd64 image was under
+# Rosetta. The bench's cwd is $OUT (where the .hex images and hdl/rtl/ucore
+# live). clang needs an explicit sysroot on some CLT installs or 'cstddef'
+# is not found.
+SYSROOT=""
+[ -d /usr/include ] || SYSROOT="-CFLAGS -isysroot -CFLAGS $(xcrun -sdk macosx --show-sdk-path)"
+# The CLT here lost its C++ headers ('cstddef' not found) -- use Homebrew's
+# clang++, which carries its own libcxx, whenever it exists.
+CXXFLAGS_MK=""
+if [ -x /opt/homebrew/opt/llvm/bin/clang++ ]; then
+    CXXFLAGS_MK="-MAKEFLAGS CXX=/opt/homebrew/opt/llvm/bin/clang++ -MAKEFLAGS LINK=/opt/homebrew/opt/llvm/bin/clang++"
 fi
+
+set -x
+verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot $CPU_DEF \
+    --threads $SIM_THREADS -MAKEFLAGS OPT_FAST=$SIM_OPT \
+    $CXXFLAGS_MK \
+    $SYSROOT \
+    -I"$R/sim" -I"$R/$S" -I"$R/$S/common" -I"$R/$V" -I"$R/$K" \
+    -I"$R/$K/i8288/HDL" -I"$R/$K/i8253/HDL" -I"$R/$K/i8259/HDL" \
+    "$R/sim/tb_pc98_boot.sv" \
+    $R/$V/v30u_ss_pkg.sv \
+    $R/$V/v30_core.sv $R/$V/v30u_biu.sv $R/$V/v30u_eu.sv \
+    $R/$V/v30u_ucrom.sv $R/$S/v30_cpu_bridge.sv \
+    $MEMFILES \
+    $R/$S/pc98_fdc_glue.sv $R/$S/common/floppy.v $R/$S/common/simple_fifo.v \
+    $R/sim/tb_fdd_dma_model.sv $R/$S/pc98_kbd8251.sv \
+    $R/$K/ce_generator.sv $R/$K/i8288/HDL/i8288.sv \
+    $R/$K/i8253/HDL/i8253.sv $R/$K/i8253/HDL/i8253_Counter.sv \
+    $R/$K/i8253/HDL/i8253_Control_Logic.sv \
+    $R/$K/i8259/HDL/i8259.sv $R/$K/i8259/HDL/i8259_Bus_Control_Logic.sv \
+    $R/$K/i8259/HDL/i8259_Control_Logic.sv $R/$K/i8259/HDL/i8259_In_Service.sv \
+    $R/$K/i8259/HDL/i8259_Interrupt_Request.sv \
+    $R/$K/i8259/HDL/i8259_Priority_Resolver.sv \
+    -o boot --Mdir "$OUT/obj_boot"
+set +x
+cd "$OUT" && exec ./obj_boot/boot "$@"
