@@ -1266,15 +1266,15 @@ module core_top (
 
     // Disk-access lamp: any management service request (floppy in mgmt_req[7:6],
     // IDE in [2:0]) lights an on-screen lamp for a beat. The request level is a
-    // short pulse per sector, so a stretcher keeps it visible -- 2^22 clk_pix
-    // ticks is about 0.4 s.
+    // short pulse per sector, so a stretcher keeps it visible -- 2^20 clk_pix
+    // ticks is about 0.1 s (was 2^22/0.4 s; the part is one LAB short of full).
     wire disk_act_chip = (|mgmt_req[7:6]) | (|mgmt_req[2:0]);
     wire disk_act_pix;
     synch_3 s_disk_act (disk_act_chip, disk_act_pix, clk_pix);
-    reg [21:0] disk_led_t = 22'd0;
+    reg [19:0] disk_led_t = 20'd0;
     always @(posedge clk_pix) begin
-        if (disk_act_pix)        disk_led_t <= 22'h3FFFFF;
-        else if (|disk_led_t)    disk_led_t <= disk_led_t - 22'd1;
+        if (disk_act_pix)        disk_led_t <= 20'hFFFFF;
+        else if (|disk_led_t)    disk_led_t <= disk_led_t - 20'd1;
     end
     wire disk_led_on = osd_disk_led & (|disk_led_t);
 

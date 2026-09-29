@@ -191,4 +191,9 @@ set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
 #   ~500 ALM and the part sits at ~99%. A debug build that wants the probes
 #   back can re-enable this AND must also flip Peripherals' pc98_opna back
 #   to .USE_ADPCM(0)/.USE_PCM(1) to free the floor space.
-set_global_assignment -name VERILOG_MACRO "PC98_PROBE_EXTRA=1"
+#
+#   It was briefly back on for the hold_only bisect (1494da9); that hunt is
+#   also closed, and with it live the fitter wants 1866 LABs against the
+#   device's 1848, so it is off again -- the machine boots, and the on-screen
+#   disk lamp covers the last thing the taps were still watching.
+# set_global_assignment -name VERILOG_MACRO "PC98_PROBE_EXTRA=1"
