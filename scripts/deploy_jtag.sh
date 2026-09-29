@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # deploy_jtag.sh [--run N | --sof path] [--no-check]
 #
-# The JTAG iteration loop as one command: wait for the CI quartus-win
+# The JTAG iteration loop as one command: wait for the CI quartus
 # bitstream (or take a local .sof), flash it over JTAG, then read the probe
 # table so the boot verdict is on screen before the SD card ever moves.
 #
@@ -42,8 +42,8 @@ if [ -z "$SOF" ]; then
     fi
 
     mkdir -p fpga/output_files
-    echo ">> downloading quartus-win-bitstream"
-    gh run download "$RUN" -n quartus-win-bitstream \
+    echo ">> downloading bitstream"
+    gh run download "$RUN" -n bitstream \
         -D fpga/output_files --clobber
     SOF="fpga/output_files/ap_core.sof"
 fi

@@ -18,8 +18,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# packages:read is for the stage-quartus-win job's ghcr image pull; the other
-# jobs get the same token scope, which is read-only anyway.
+# permissions stay minimal: every job only reads.
 permissions:
   contents: read
   packages: read
@@ -579,203 +578,116 @@ jobs:
       - name: firmware builds with no div/rem -- the softcore has no divider
         run: make -C firmware nodiv-verify
 
-  stage-quartus-win:
-    # Lifts the Windows Quartus install out of the wine image once and
-    # stashes it in actions/cache. The windows-2022 job below restores it
-    # (~1 min) instead of an image it cannot run -- GHA windows runners
-    # have no docker. Re-extract only runs when the cache is missing.
+  quartus:
+    # Quartus Prime Lite in the raetro/quartus:pocket image -- THE bitstream
+    # build. Lite covers this Cyclone V and needs no license file, so the
+    # staging job, the ghcr wine image, the FlexLM hostid dance and the
+    # Windows runner all go away. The quartus-win job this replaces kept
+    # crashing quartus_map/quartus_fit with access violations; a Linux
+    # container is Quartus's saner home anyway. The incremental-db cache
+    # is deliberately NOT carried over: a restored db pinned partitions
+    # badly enough to inflate the fitter count past the device twice in
+    # one day (170012 at 1850-1880 against a ~1800-LAB design). A clean
+    # compile is slower but always means what it says.
     runs-on: ubuntu-latest
-    steps:
-      - id: qinstall
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: quartus-install
-          key: quartus-install-win-v2
-          enableCrossOsArchive: true
-
-      - name: Log in to ghcr.io
-        if: steps.qinstall.outputs.cache-hit != 'true'
-        run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u musiq-da --password-stdin
-
-      - name: Extract intelFPGA from the wine image
-        if: steps.qinstall.outputs.cache-hit != 'true'
-        run: |
-          docker pull -q ghcr.io/musiq-da/quartus-wine:18.1-slim
-          cid=$(docker create ghcr.io/musiq-da/quartus-wine:18.1-slim)
-          mkdir -p quartus-install
-          docker cp "$cid":/opt/prefix/drive_c/intelFPGA quartus-install/intelFPGA
-          docker rm -f "$cid"
-          du -sh quartus-install/intelFPGA
-
-      - name: Cache the Quartus install
-        if: steps.qinstall.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: quartus-install
-          key: quartus-install-win-v2
-          enableCrossOsArchive: true
-
-  quartus-win:
-    # Quartus Prime Standard 18.1 running on a real Windows runner -- THE
-    # bitstream build; the Wine job that preceded it was retired because
-    # quartus_map crashes (Fatal access violation -> DMGR ref_count assert
-    # on the way out) whenever a previous db exists under Wine. Native
-    # Windows is Quartus's supported platform for exactly that
-    # incremental-synthesis path, so the db cache here keeps fpga/db too.
-    runs-on: windows-2022
-    needs: stage-quartus-win
-    timeout-minutes: 180
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # build_id_gen.tcl stamps the MIF with the last commit touching
-          # fpga/ or firmware/; a depth-1 clone cannot see past HEAD, so a
-          # commit elsewhere would read empty and fall back to a random
-          # stamp -- breaking incremental reuse exactly when it should hit.
+          # fpga/ or firmware/; a depth-1 clone cannot see past HEAD.
           fetch-depth: 0
 
-      - name: Restore the Quartus install
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: quartus-install
-          key: quartus-install-win-v2
-          enableCrossOsArchive: true
-
-      - name: Restore incremental compile database
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            fpga/db
-            fpga/incremental_db
-            fpga/output_files
-          key: quartus-incdb-win-v1-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: quartus-incdb-win-v1-
-
-      - name: Stage license.dat for this machine's FlexLM hostid
-        # shell: bash gives us Git Bash on the windows runner, so the same
-        # decode + sed rewrite works as on ubuntu. Difference vs Wine: there
-        # is no container MAC to pin, so instead of picking a MAC we ask
-        # FlexLM itself -- lmutil lmhostid reports the id this machine will
-        # present -- and rewrite the license's HOSTID placeholder to it.
-        shell: bash
+      - name: Free disk space
         run: |
-          set -e
-          LIC="$(cygpath "$RUNNER_TEMP")/license.dat"
-          printf '%s' "${{ secrets.QUARTUS_LICENSE_DAT }}" | base64 -d > "$LIC"
-          QBIN="$GITHUB_WORKSPACE/quartus-install/intelFPGA/18.1/quartus/bin64"
-          "$QBIN/lmutil.exe" lmhostid | tee lmhostid.txt
-          HOSTID_HEX=$(tr -d '\r' < lmhostid.txt | grep -oiE '[0-9a-f]{12}' | head -1)
-          echo "FlexLM hostid = $HOSTID_HEX"
-          test -n "$HOSTID_HEX"
-          LC_ALL=C sed -i.bak \
-            "s/HOSTID=[^[:space:]]*/HOSTID=$HOSTID_HEX/g" "$LIC"
-          grep -c "HOSTID=$HOSTID_HEX" "$LIC"
-          WIN_LIC="$(cygpath -w "$LIC")"
-          {
-            echo "LM_LICENSE_FILE=$WIN_LIC"
-            echo "ALTERAD_LICENSE_FILE=$WIN_LIC"
-            echo "QUARTUS_ROOTDIR=$(cygpath -w "$GITHUB_WORKSPACE/quartus-install/intelFPGA/18.1/quartus")"
-          } >> "$GITHUB_ENV"
-          cygpath -w "$QBIN" >> "$GITHUB_PATH"
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune -a -f || true
 
-      - name: Quartus smoke test
-        shell: bash
-        run: quartus_sh.exe --version
+      - name: Pull Quartus image
+        run: docker pull raetro/quartus:pocket
 
       - name: Compile (quartus_sh --flow compile)
         id: compile
-        shell: bash
         run: |
-          cd fpga
-          # Quartus 18.1's parallel workers are flaky -- we've seen three
-          # distinct internal errors (TDC slack calc, Tcl interp teardown,
-          # DYN_ENUM in the router) across runs on the same sources. They
-          # don't reproduce on retry, and a retry resumes from the db left
-          # by the crashed stage, so one extra attempt is cheap insurance.
-          # Real failures (unfittable design, HDL errors) are deterministic
-          # though -- only retry when the log shows an Internal/Fatal Error.
-          #
-          # Second failure class: the restored incremental db can disagree
-          # with fresh synthesis badly enough to kill Partition Merge
-          # (Error 15336, "floating DSP port" ghosts -- seen 2026-09-29 when
-          # a db from a different-parameter branch was restored). A clean
-          # compile with the db dropped is slower but always sound, so that
-          # case gets one self-healing attempt instead of a dead run.
-          #
-          # Third failure class: a restored db that doesn't crash but pins
-          # partitions badly, inflating the LAB count past the device
-          # (Error 170012 "requires N LABs" at 1850-1880 against a design
-          # that fits at ~1800 clean -- seen 2026-09-29 on the a20d548 and
-          # 0baffb0 builds). One drop-the-db attempt distinguishes that
-          # from a genuinely unfittable design.
-          for attempt in 1 2 3; do
-            if quartus_sh.exe --flow compile ap_core 2>&1 \
-                 | tee "compile_$attempt.log" \
-                 | { grep --line-buffered -vE '^\s*Info' || true; }; then
-              break
-            fi
-            if [ "$attempt" = 3 ]; then
-              exit 1
-            fi
-            # Order matters: an unfittable attempt can ALSO end in a fitter
-            # access violation (quartus_fit crashes after reporting 170012),
-            # and that log must drop the db, not be classified as transient.
-            if [ "$attempt" -lt 3 ] \
-               && grep -qE 'Error \(15336\)|Partition Merge was unsuccessful|Error \(170012\)' \
-                    "compile_$attempt.log"; then
-              echo "::warning::stale incremental db suspected; dropping db/incremental_db and rebuilding clean"
-              rm -rf db incremental_db output_files
-            elif grep -qE 'Internal Error|Fatal Error' "compile_$attempt.log"; then
-              echo "::warning::quartus internal error on attempt $attempt; retrying"
-            else
-              exit 1
-            fi
-          done
+          docker run --rm -v "$GITHUB_WORKSPACE":/work -w /work/fpga \
+            raetro/quartus:pocket bash -lc '
+              set -e
+              Q=""
+              for p in /opt/intelFPGA/quartus /opt/quartus /usr/local/quartus /opt/intelFPGA_lite /opt/altera; do
+                f=$(find "$p" -maxdepth 3 -name quartus_sh 2>/dev/null | head -1)
+                if [ -n "$f" ]; then Q=$(dirname "$f"); break; fi
+              done
+              if [ -z "$Q" ]; then echo "ERROR: quartus_sh not found"; exit 1; fi
+              echo "using quartus at $Q"
+              export PATH="$Q:$PATH"
+              export LD_LIBRARY_PATH="$Q:${LD_LIBRARY_PATH:-}"
+              quartus_sh --version
+              # Internal/Fatal Errors are flaky and do not reproduce on
+              # retry; unfittable designs and HDL errors are deterministic
+              # and must not be retried into a second identical failure.
+              for attempt in 1 2; do
+                if quartus_sh --flow compile ap_core 2>&1 \
+                     | tee "compile_$attempt.log" \
+                     | { grep --line-buffered -vE "^\s*Info" || true; }; then
+                  break
+                fi
+                [ "$attempt" = 2 ] && exit 1
+                grep -qE "Internal Error|Fatal Error" "compile_$attempt.log" || exit 1
+                echo "::warning::quartus internal error on attempt $attempt; retrying"
+              done
+            '
 
       - name: SDRAM interface is actually timed (not just "green")
         if: always()
-        shell: bash
         run: |
-          cd fpga
-          quartus_sta.exe \
-            -t "$(cygpath -w "$GITHUB_WORKSPACE/scripts/check_sdram_paths.tcl")" \
-            ap_core 2>&1 | { grep --line-buffered -vE '^\s*Info' || true; }
+          docker run --rm -v "$GITHUB_WORKSPACE":/work -w /work/fpga \
+            -v "$GITHUB_WORKSPACE/scripts":/repo-scripts:ro \
+            raetro/quartus:pocket bash -lc '
+              set -e
+              Q=""
+              for p in /opt/intelFPGA/quartus /opt/quartus /usr/local/quartus /opt/intelFPGA_lite /opt/altera; do
+                f=$(find "$p" -maxdepth 3 -name quartus_sta 2>/dev/null | head -1)
+                if [ -n "$f" ]; then Q=$(dirname "$f"); break; fi
+              done
+              if [ -z "$Q" ]; then echo "ERROR: quartus_sta not found"; exit 1; fi
+              export PATH="$Q:$PATH"
+              export LD_LIBRARY_PATH="$Q:${LD_LIBRARY_PATH:-}"
+              quartus_sta -t /repo-scripts/check_sdram_paths.tcl ap_core
+            '
 
       - name: Detailed STA of the CPU-domain violations
         if: always()
-        shell: bash
         run: |
-          cd fpga
-          quartus_sta.exe \
-            -t "$(cygpath -w "$GITHUB_WORKSPACE/scripts/sta_cpu_paths.tcl")" \
-            ap_core 2>&1 | { grep --line-buffered -vE '^\s*Info' || true; } || true
-          ls -la fpga/sta_cpu*.txt fpga/sta_pico*.txt 2>/dev/null || true
-
-      - name: Detailed STA of the clk_74a bridge-domain violations
-        if: always()
-        shell: bash
-        run: |
-          cd fpga
-          quartus_sta.exe \
-            -t "$(cygpath -w "$GITHUB_WORKSPACE/scripts/sta_74a_paths.tcl")" \
-            ap_core 2>&1 | { grep --line-buffered -vE '^\s*Info' || true; } || true
-          ls -la fpga/sta_74a*.txt 2>/dev/null || true
+          docker run --rm -v "$GITHUB_WORKSPACE":/work -w /work/fpga \
+            -v "$GITHUB_WORKSPACE/scripts":/repo-scripts:ro \
+            raetro/quartus:pocket bash -lc '
+              set -e
+              Q=""
+              for p in /opt/intelFPGA/quartus /opt/quartus /usr/local/quartus /opt/intelFPGA_lite /opt/altera; do
+                f=$(find "$p" -maxdepth 3 -name quartus_sta 2>/dev/null | head -1)
+                if [ -n "$f" ]; then Q=$(dirname "$f"); break; fi
+              done
+              export PATH="$Q:$PATH"
+              export LD_LIBRARY_PATH="$Q:${LD_LIBRARY_PATH:-}"
+              quartus_sta -t /repo-scripts/sta_cpu_paths.tcl ap_core || true
+              quartus_sta -t /repo-scripts/sta_74a_paths.tcl ap_core || true
+              ls -la sta_*.txt 2>/dev/null || true
+            '
 
       - name: Show fit summary
         if: always()
-        shell: bash
         run: |
           grep -A14 "Logic utilization" fpga/output_files/ap_core.fit.rpt 2>/dev/null | head -4 || true
+          grep -E "Total (registers|block memory bits|RAM Blocks|DSP Blocks|PLLs)" \
+            fpga/output_files/ap_core.fit.rpt 2>/dev/null || true
           grep -E "Flow Status|Successful|failed" \
             fpga/output_files/ap_core.fit.rpt 2>/dev/null || true
-          grep -iE "evaluation mode" fpga/output_files/*.smsg \
-            fpga/output_files/*.rpt 2>/dev/null | head -5 || true
           ls -la fpga/output_files/ 2>/dev/null || true
 
       - name: Upload bitstream and reports
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: quartus-win-bitstream
+          name: bitstream
           if-no-files-found: error
           path: |
             fpga/output_files/*.sof
@@ -788,17 +700,3 @@ jobs:
             fpga/sta_pico_*.txt
             fpga/sta_sdram_*.txt
             fpga/sta_74a_*.txt
-
-      - name: Save incremental compile database
-        # always() so a flaky later step (STA gate, upload) doesn't forfeit
-        # the db -- but NOT on a crashed compile: run a77f8a7 hit a Quartus
-        # TDC internal error mid-map and would have cached a half-written
-        # db for every later run to restore.
-        if: always() && steps.compile.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            fpga/db
-            fpga/incremental_db
-            fpga/output_files
-          key: quartus-incdb-win-v1-${{ github.run_id }}-${{ github.run_attempt }}

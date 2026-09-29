@@ -15,7 +15,7 @@
 #   scripts/jtag_flash.sh [path/to/ap_core.sof]
 # Default: fpga/output_files/ap_core.sof. Local Quartus builds are retired;
 # pass a CI artifact .sof downloaded from the build workflow's
-# quartus-win-bitstream artifact (output_files/ap_core.sof).
+# bitstream artifact (output_files/ap_core.sof).
 
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

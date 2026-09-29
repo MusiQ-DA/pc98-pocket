@@ -29,11 +29,11 @@ binaries only.
   CI runs `nodiv-verify`: compiles, links and disassembles to prove the
   image has no div/rem (the softcore is mul-only: `-march=rv32i_zmmul`,
   so a stray `/` is a link error, not a silent trap).
-- Full bitstream: GitHub Actions `build.yml` (`quartus-win` job, native
-  Windows Quartus) on push to `main` or `workflow_dispatch`. The local
-  Docker Quartus scripts were removed (unreliable under wine/Rosetta);
-  the CI artifact carries both `.sof` and `.rbf` — JTAG flashes take the
-  CI `.sof` directly.
+- Full bitstream: GitHub Actions `build.yml` (`quartus` job — Quartus Lite
+  in the `raetro/quartus:pocket` docker image, no license, no Windows
+  runner) on push to `main` or `workflow_dispatch`. The CI artifact
+  carries both `.sof` and `.rbf` — JTAG flashes take the CI `.sof`
+  directly.
 
 ## Forbidden: local full-project Quartus builds
 
@@ -52,7 +52,7 @@ touches `fpga/db`, and is the only sanctioned local Quartus invocation.
 
 - Prefer `scripts/jtag_flash.sh <path/to/ap_core.sof>` — it programs the
   Cyclone V directly over JTAG and does NOT touch the SD card. Pass the CI
-  artifact `.sof` (from the `quartus-win-bitstream` artifact of a `build`
+  artifact `.sof` (from the `bitstream` artifact of a `build`
   run; the artifact carries `output_files/ap_core.sof`). Docker converts
   .sof→.svf, openocd plays it. A core must be RUNNING on the Pocket for
   the bitstream to take (the menu leaves the fabric unconfigured).
