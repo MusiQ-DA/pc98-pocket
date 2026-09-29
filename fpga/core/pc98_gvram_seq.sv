@@ -37,9 +37,10 @@
 //          registers' load when ope 9:8 is 0b10), then write every plane
 //          whose access bit is CLEAR: plane = (plane & ~mask) | (data & mask),
 //          with data from pc98_egc's datapath.
-//   read   read every plane (latching the source for the next write), and
-//          answer with the plane fgbg 9:8 names, unless ope 0x2000 asks for
-//          the raw plane -- the same byte, until the shift pipeline exists.
+//   read   read every plane (pushing each byte onto the shift pipeline's
+//          queue, and on the last plane running one shift event), and
+//          answer with the byte the pipeline produced for the plane fgbg
+//          9:8 names, unless ope 0x400 (or 0x2000) asks for a raw byte.
 //
 // THE ACCESS PAGE (port 0xA6 bit 0, np21w's gdcs.access). Page one of the
 // graphics RAM has no guest address -- the real machine rebanks the same
@@ -149,10 +150,34 @@ module pc98_gvram_seq (
     // strobes and the plane walk are this FSM's business.
     wire [15:0] egc_access, egc_fgbg, egc_ope, egc_mask;
     wire [15:0] egc_fgc [0:3], egc_bgc [0:3], egc_patreg [0:3], egc_src [0:3];
-    wire [7:0]  egc_op_data;
-    reg         egc_pat_ld, egc_src_ld;
+    wire [7:0]  egc_op_data, egc_op_mask;
+    reg         egc_pat_ld;
     reg  [1:0]  egc_ld_plane;
     reg         egc_ld_ext;
+
+    // ---- the shift pipeline's strobes -----------------------------------
+    // Reads feed the queue while ope 0x400 is clear (egc_readbyte's shift
+    // input); writes push the CPU's byte where egc_opeb would consult the
+    // pipeline -- the raster-op mode, or the 0x1000 pattern source in its
+    // non-colour banks (EGCOPE_SHIFTB's call sites).
+    wire egc_rd_shift = ~egc_ope[10];
+    wire egc_wr_shift =  egc_ope[10]
+                       & ((egc_ope[12:11] == 2'b01)
+                        | ((egc_ope[12:11] == 2'b10)
+                         & ~(egc_fgbg[14] ^ egc_fgbg[13])));
+    // The last live plane of an EGC read: plane E takes analog mode.
+    wire egc_rd_last  = (gp == 2'd3) | ((gp == 2'd2) & ~analog_mode);
+    // sf_push is one strobe per live plane byte landing (each S_RDW); sf_evt
+    // runs once per access -- for a read on the last plane's byte landing,
+    // for a write-push on the first plane's read beat (the queue needs the
+    // produced byte before any plane's write goes out).
+    wire egc_sf_push = egc_here & is_read  & egc_rd_shift
+                     & (st == S_RDW) & mem_done;
+    wire egc_sf_evt  = egc_here
+                     & (is_read
+                        ? (egc_rd_shift & (st == S_RDW) & mem_done
+                         & egc_rd_last)
+                        : (egc_wr_shift & (st == S_RD) & (gp == 2'd0)));
 
     pc98_egc u_egc (
         .clk(clk), .rst(reset),
@@ -162,19 +187,18 @@ module pc98_gvram_seq (
         .fgc(egc_fgc), .bgc(egc_bgc),
         .pat_ld(egc_pat_ld), .pat_plane(egc_ld_plane),
         .pat_ext(egc_ld_ext), .pat_d(mem_rdata), .patreg(egc_patreg),
-        .src_ld(egc_src_ld), .src_plane(egc_ld_plane),
-        .src_ext(egc_ld_ext), .src_d(mem_rdata), .src_q(egc_src),
+        .src_q(egc_src),
+        .sf_push(egc_sf_push), .sf_push_plane(gp), .sf_push_d(mem_rdata),
+        .sf_evt(egc_sf_evt), .sf_evt_wr(~is_read), .sf_evt_d(cpu_wdata),
+        .sf_ext(cpu_addr[0]),
         .op_plane(gp), .op_ext(cpu_addr[0]),
-        .op_dst(rd_hold), .op_val(cpu_wdata), .op_data(egc_op_data)
+        .op_dst(rd_hold), .op_val(cpu_wdata), .op_data(egc_op_data),
+        .op_mask(egc_op_mask)
     );
 
     // Which plane an EGC read answers with, and the byte it gave.
     wire [1:0] egc_rd_plane = egc_fgbg[9:8];
-    reg  [7:0] egc_rd_q;
-    // The mask byte this write applies, np21w's mask2: the mask register's
-    // byte for THIS half of the word (egc_writebyte's ext). A zero byte
-    // suppresses the plane's write entirely, as egc_writebyte's `if` does.
-    wire [7:0] egc_mask_b = cpu_addr[0] ? egc_mask[15:8] : egc_mask[7:0];
+    reg  [7:0] egc_rd_q, egc_own_q;
     // The pattern registers load on a read when ope 9:8 is 0b01 and on a
     // write when 0b10 (egc_readbyte / egc_writebyte's ope & 0x0300 tests).
     wire egc_pat_on_rd = (egc_ope[9:8] == 2'b01);
@@ -199,7 +223,7 @@ module pc98_gvram_seq (
     function automatic logic wr_live_f(input logic [1:0] p);
         if (egc_here)
             wr_live_f = ((p != 2'd3) | analog_mode)
-                       & ~egc_access[p] & (egc_mask_b != 8'h00);
+                       & ~egc_access[p] & (egc_op_mask != 8'h00);
         else if (grcg_here)
             wr_live_f = ~grcg_mask[p] & ((p != 2'd3) | analog_mode);
         else
@@ -226,7 +250,7 @@ module pc98_gvram_seq (
     // the EGC masks the engine's byte into what is there; a plain access
     // writes the guest's byte unchanged.
     wire [7:0] wr_byte = egc_here
-        ? ((rd_hold & ~egc_mask_b) | (egc_op_data & egc_mask_b))
+        ? ((rd_hold & ~egc_op_mask) | (egc_op_data & egc_op_mask))
         : grcg_here
             ? (grcg_rmw
                 ? ((rd_hold & ~cpu_wdata) | (cpu_wdata & cur_tile))
@@ -240,7 +264,16 @@ module pc98_gvram_seq (
     // cpu_ready and dropped its strobes, `expand` is false, and the arm never
     // runs. The guest samples while its own command is still up, which is
     // exactly when this mux is valid.
-    assign cpu_rdata = (egc_here & is_read & (st == S_DONE)) ? egc_rd_q
+    // The EGC read's answer, egc_readbyte's tail: the shift pipeline's
+    // produced byte when ope 0x2000 is clear and the read fed the queue;
+    // the raw plane byte when 0x400 pushed from the write side instead;
+    // and the window's own byte when 0x2000 asks for it raw.
+    wire [7:0] egc_src_b = cpu_addr[0] ? egc_src[egc_rd_plane][15:8]
+                                     : egc_src[egc_rd_plane][7:0];
+    assign cpu_rdata = (egc_here & is_read & (st == S_DONE))
+                       ? (egc_ope[13] ? egc_own_q
+                          : egc_ope[10] ? egc_rd_q
+                          : egc_src_b)
                      : (grcg_here & is_read & (st == S_DONE)) ? ~tcr
                      : (plain_pg1 & is_read & (st == S_DONE)) ? rd_hold
                      : rdata_pass;
@@ -254,8 +287,8 @@ module pc98_gvram_seq (
             rd_hold   <= 8'h00;
             rdata_pass<= 8'h00;
             egc_rd_q  <= 8'h00;
+            egc_own_q <= 8'h00;
             egc_pat_ld<= 1'b0;
-            egc_src_ld<= 1'b0;
             egc_ld_plane <= 2'd0;
             egc_ld_ext   <= 1'b0;
             mem_addr  <= 20'h0;
@@ -264,9 +297,9 @@ module pc98_gvram_seq (
             mem_wr    <= 1'b0;
             mem_page1 <= 1'b0;
         end else begin
-            // The EGC's load strobes are one cycle each: cleared by default
+            // The EGC's load strobe is one cycle each: cleared by default
             // for the WHOLE non-reset path, set only by the cycle that has a
-            // byte in hand. They used to be cleared inside the expand arm
+            // byte in hand. It used to be cleared inside the expand arm
             // alone, and the pass-through arm -- which is where the cycle
             // after the LAST plane of an access lands, since the guest drops
             // its strobes as soon as cpu_ready rises -- left the pulse high
@@ -274,7 +307,6 @@ module pc98_gvram_seq (
             // stale plane number, which is how the blit's plane E came out
             // holding plane B's byte.
             egc_pat_ld <= 1'b0;
-            egc_src_ld <= 1'b0;
 
             if (!expand) begin
                 // Pass-through: the guest's own access, unchanged.
@@ -329,16 +361,17 @@ module pc98_gvram_seq (
                 mem_rd  <= 1'b0;
                 rd_hold <= mem_rdata;
                 if (egc_here) begin
-                    // The source latch takes every EGC read's plane bytes
-                    // (egc_readbyte's shift input -- aligned pipeline, so
-                    // what goes in is what comes out). The pattern registers
-                    // take them when ope asks, on either direction.
-                    egc_src_ld  <= is_read;
+                    // Each plane byte that lands goes into the shift
+                    // pipeline's queue (egc_sf_push is combinational over
+                    // this same cycle); the pattern registers take them when
+                    // ope asks, on either direction.
                     egc_pat_ld  <= is_read ? egc_pat_on_rd : egc_pat_on_wr;
                     egc_ld_plane<= gp;
                     egc_ld_ext  <= cpu_addr[0];
                     if (is_read & (gp == egc_rd_plane))
                         egc_rd_q <= mem_rdata;
+                    if (is_read & (gp == own))
+                        egc_own_q <= mem_rdata;
                 end else if (is_read) begin
                     // A GRCG read accumulates the match mask.
                     tcr <= tcr | (mem_rdata ^ cur_tile);

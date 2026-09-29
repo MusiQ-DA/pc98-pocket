@@ -13,6 +13,10 @@
 //   * a read latches the source; ope 0x0800 code 0xF0 (src) blits it -- the
 //     aligned REP MOVSW case, the reason the source latch exists
 //   * ope 9:8 = 0b10 loads the pattern registers from the planes on a write
+//   * the shift pipeline: a misaligned read->write stream (memegc.c's
+//     upr_sub/upl_sub/dnr_sub cases, the first/last byte masks, leng's
+//     run restart, and the srcbit/dstbit >= 8 byte-skip paths), plus the
+//     write-push input form (ope 0x400)
 //   * the access page banks every plane address through pc98_gvram_plane1
 //     with mem_page1 up, and a plain access with the page bit set lands on
 //     one plane only
@@ -96,7 +100,10 @@ module tb_pc98_egc;
             if (lat_n == LAT) begin
                 busy      <= 1'b0;
                 completed <= 1'b1;
-                if (mem_wr) store[banked(mem_addr)] <= mem_wdata;
+                // blocking: newer Verilator refuses a nonblocking write into
+                // an associative array (IEEE 1800-2023 6.21), and the store
+                // is a pure behavioural model either way.
+                if (mem_wr) store[banked(mem_addr)] = mem_wdata;
                 else        mem_rdata <= store[banked(mem_addr)];
             end
             lat_n <= lat_n + 1;
@@ -150,6 +157,50 @@ module tb_pc98_egc;
     endtask
 
     logic [7:0] rdb;
+
+    // ---- the shift-pipeline vectors, from np21w's memegc.c --------------
+    // srcA: eight bytes per plane of distinct data. expX[i][p] is what
+    // np21w's egc_writebyte lands in plane p on iteration i; retA is the
+    // produced byte the READ returns (unmasked -- the mask applies on the
+    // write). wdE is the byte stream the write-push case pushes.
+    logic [7:0] srcA [0:7][0:3] = '{
+        '{8'h9c, 8'h35, 8'h66, 8'ha7}, '{8'h12, 8'h48, 8'h80, 8'hf0},
+        '{8'haa, 8'h55, 8'h33, 8'hcc}, '{8'h01, 8'h23, 8'h45, 8'h67},
+        '{8'h89, 8'hab, 8'hcd, 8'hef}, '{8'h70, 8'h0e, 8'hd2, 8'h5a},
+        '{8'hff, 8'h00, 8'h81, 8'h7e}, '{8'h11, 8'h22, 8'h44, 8'h88}};
+    logic [7:0] retA [0:7] = '{8'h13, 8'h82, 8'h55, 8'h40,
+                               8'h31, 8'h2e, 8'h1f, 8'he2};
+    logic [7:0] rdbA [0:7];
+    logic [7:0] expA [0:7][0:3] = '{
+        '{8'h13, 8'h06, 8'h0c, 8'h14}, '{8'h82, 8'ha9, 8'hd0, 8'hfe},
+        '{8'h55, 8'h0a, 8'h06, 8'h19}, '{8'h40, 8'ha4, 8'h68, 8'h8c},
+        '{8'h31, 8'h75, 8'hb9, 8'hfd}, '{8'h20, 8'h60, 8'ha0, 8'he0},
+        '{8'h1f, 8'h00, 8'h10, 8'h0f}, '{8'he2, 8'h04, 8'h28, 8'hd1}};
+    logic [7:0] expB [0:7][0:3] = '{
+        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h20, 8'h2a, 8'h34, 8'h3f},
+        '{8'h95, 8'h42, 8'h01, 8'h86}, '{8'h50, 8'ha9, 8'h9a, 8'h63},
+        '{8'h0c, 8'h1d, 8'h2e, 8'h3f}, '{8'h40, 8'h40, 8'h40, 8'h40},
+        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h38, 8'h01, 8'h0a, 8'h34}};
+    logic [7:0] expD [0:7][0:3] = '{
+        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h88, 8'h10, 8'h20, 8'h40},
+        '{8'hf8, 8'h01, 8'h0a, 8'hf4}, '{8'h87, 8'h70, 8'h94, 8'hd3},
+        '{8'h4b, 8'h58, 8'h6e, 8'h7a}, '{8'h04, 8'h05, 8'h06, 8'h07},
+        '{8'h50, 8'ha8, 8'h98, 8'h60}, '{8'h95, 8'h42, 8'h01, 8'h86}};
+    logic [7:0] expE [0:5][0:3] = '{
+        '{8'h13, 8'h13, 8'h13, 8'h13}, '{8'h82, 8'h82, 8'h82, 8'h82},
+        '{8'h55, 8'h55, 8'h55, 8'h55}, '{8'h40, 8'h40, 8'h40, 8'h40},
+        '{8'h31, 8'h31, 8'h31, 8'h31}, '{8'h20, 8'h20, 8'h20, 8'h20}};
+    logic [7:0] wdE [0:5] = '{8'h9c, 8'h12, 8'haa, 8'h01, 8'h89, 8'h70};
+    logic [7:0] expF [0:7][0:3] = '{
+        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h13, 8'h06, 8'h0c, 8'h14},
+        '{8'h82, 8'ha9, 8'hd0, 8'hfe}, '{8'h55, 8'h0a, 8'h06, 8'h19},
+        '{8'h40, 8'ha0, 8'h60, 8'h80}, '{8'h00, 8'h00, 8'h00, 8'h00},
+        '{8'h0e, 8'h01, 8'h1a, 8'h0b}, '{8'h1f, 8'hc0, 8'h50, 8'h4f}};
+    logic [7:0] expG [0:7][0:3] = '{
+        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h13, 8'h06, 8'h0c, 8'h14},
+        '{8'h82, 8'ha9, 8'hd0, 8'hfe}, '{8'h55, 8'h0a, 8'h06, 8'h19},
+        '{8'h40, 8'ha4, 8'h68, 8'h8c}, '{8'h31, 8'h75, 8'hb9, 8'hfd},
+        '{8'h20, 8'h60, 8'ha0, 8'he0}, '{8'h00, 8'h00, 8'h00, 8'h00}};
 
     initial begin
         grcg_tile[0] = 8'h00; grcg_tile[1] = 8'h00;
@@ -246,7 +297,111 @@ module tb_pc98_egc;
         want("pat-raster G (no pattern)",        store[p0(20'hA8200, 2'd2)], 8'h00);
         want("pat-raster E (no pattern)",        store[p0(20'hA8200, 2'd3)], 8'h00);
 
-        // ---- 8. the access page ---------------------------------------
+        // ---- 8. the shift pipeline, misaligned copies -------------------
+        // The golden bytes below come from np21w's mem/memegc.c run as a
+        // reference model. Eight distinct bytes per plane seed the source,
+        // then a REP MOVSB-style stream alternates read + write one byte at
+        // a time -- ope 0x08F0 (the raster op's src code) throughout.
+        egc_set(4'h3, 8'h00); egc_set(4'h2, 8'hFF);   // fgbg 00FF (plane B answers)
+        egc_set(4'h5, 8'h08); egc_set(4'h4, 8'hF0);   // ope 0x08F0
+        for (int i = 0; i < 8; i++) begin
+            store[p0(20'hA8100 + 20'(i), 2'd0)] = srcA[i][0];
+            store[p0(20'hA8100 + 20'(i), 2'd1)] = srcA[i][1];
+            store[p0(20'hA8100 + 20'(i), 2'd2)] = srcA[i][2];
+            store[p0(20'hA8100 + 20'(i), 2'd3)] = srcA[i][3];
+        end
+
+        // A. sft 0x0030: direction up, dstbit 3, srcbit 0 (upr_sub). leng
+        //    0x0027 arms a 40-bit run: masks 1F, FF, FF, FF, FF, E0; the
+        //    sixth write is the run's last byte, then remain hits zero and
+        //    the pipeline re-arms for the next 40 bits.
+        egc_set(4'hC, 8'h30); egc_set(4'hD, 8'h00);   // sft
+        egc_set(4'hE, 8'h27); egc_set(4'hF, 8'h00);   // leng
+        for (int i = 0; i < 8; i++) begin
+            g_rd(20'hA8100 + 20'(i), rdb);
+            rdbA[i] = rdb;                  // the produced byte, unmasked
+            g_wr(20'hA8280 + 20'(i), 8'h00);
+        end
+        for (int i = 0; i < 8; i++)
+            want($sformatf("A rd byte %0d", i), rdbA[i], retA[i]);
+        for (int i = 0; i < 8; i++)
+            for (int p = 0; p < 4; p++)
+                want($sformatf("A dst[%0d] plane %0d", i, p),
+                     store[p0(20'hA8280 + 20'(i), 2'(p))], expA[i][p]);
+
+        // B. sft 0x0025: direction up, dstbit 2, srcbit 5 (upl_sub) -- the
+        //    head byte slides LEFT into the tail of the one after it; the
+        //    first access's stack is still under the byte's need, so it is
+        //    suppressed entirely (mask 00, nothing lands).
+        egc_set(4'hC, 8'h25); egc_set(4'hD, 8'h00);
+        egc_set(4'hE, 8'h1F); egc_set(4'hF, 8'h00);
+        for (int i = 0; i < 8; i++) begin
+            g_rd(20'hA8100 + 20'(i), rdb);
+            g_wr(20'hA8300 + 20'(i), 8'h00);
+        end
+        for (int i = 0; i < 8; i++)
+            for (int p = 0; p < 4; p++)
+                want($sformatf("B dst[%0d] plane %0d", i, p),
+                     store[p0(20'hA8300 + 20'(i), 2'(p))], expB[i][p]);
+
+        // D. down direction, sft 0x1030 (dnr_sub): the same funnel read
+        //    backwards -- a REP MOVSB with the direction flag set, source
+        //    and destination both walking to lower addresses.
+        egc_set(4'hC, 8'h30); egc_set(4'hD, 8'h10);
+        egc_set(4'hE, 8'h27); egc_set(4'hF, 8'h00);
+        for (int i = 0; i < 8; i++) begin
+            g_rd(20'hA8108 - 20'(i), rdb);
+            g_wr(20'hA8408 - 20'(i), 8'h00);
+        end
+        for (int i = 0; i < 8; i++)
+            for (int p = 0; p < 4; p++)
+                want($sformatf("D dst[%0d] plane %0d", i, p),
+                     store[p0(20'hA8408 - 20'(i), 2'(p))], expD[i][p]);
+
+        // E. the write-push input form: ope 0x0CF0 keeps the raster op but
+        //    sets 0x400, so each WRITE byte is pushed into the queue and the
+        //    shifted product is written -- all four planes take the same
+        //    byte in, so the shifted bytes come out equal.
+        egc_set(4'h5, 8'h0C);                         // ope 0x0CF0
+        egc_set(4'hC, 8'h30); egc_set(4'hD, 8'h00);
+        egc_set(4'hE, 8'h27); egc_set(4'hF, 8'h00);
+        for (int i = 0; i < 6; i++)
+            g_wr(20'hA8500 + 20'(i), wdE[i]);
+        for (int i = 0; i < 6; i++)
+            for (int p = 0; p < 4; p++)
+                want($sformatf("E dst[%0d] plane %0d", i, p),
+                     store[p0(20'hA8500 + 20'(i), 2'(p))], expE[i][p]);
+        egc_set(4'h5, 8'h08);                         // back to 0x08F0
+
+        // F. dstbit 9..15: sft 0x00B0 starts the run eleven bits into the
+        //    destination -- the x86 asm strides one whole byte per event
+        //    (dstbit -= 8 with a word-wide mask clear), so the first access
+        //    writes nothing and the second lands the first byte.
+        egc_set(4'hC, 8'hB0); egc_set(4'hD, 8'h00);
+        egc_set(4'hE, 8'h17); egc_set(4'hF, 8'h00);   // leng 24 bits
+        for (int i = 0; i < 8; i++) begin
+            g_rd(20'hA8100 + 20'(i), rdb);
+            g_wr(20'hA8600 + 20'(i), 8'h00);
+        end
+        for (int i = 0; i < 8; i++)
+            for (int p = 0; p < 4; p++)
+                want($sformatf("F dst[%0d] plane %0d", i, p),
+                     store[p0(20'hA8600 + 20'(i), 2'(p))], expF[i][p]);
+
+        // G. srcbit >= 8: sft 0x0038 spends the first input byte as eight
+        //    bits of lead-in credit, so the stream starts one byte later.
+        egc_set(4'hC, 8'h38); egc_set(4'hD, 8'h00);
+        egc_set(4'hE, 8'h27); egc_set(4'hF, 8'h00);
+        for (int i = 0; i < 8; i++) begin
+            g_rd(20'hA8100 + 20'(i), rdb);
+            g_wr(20'hA8700 + 20'(i), 8'h00);
+        end
+        for (int i = 0; i < 8; i++)
+            for (int p = 0; p < 4; p++)
+                want($sformatf("G dst[%0d] plane %0d", i, p),
+                     store[p0(20'hA8700 + 20'(i), 2'(p))], expG[i][p]);
+
+        // ---- 9. the access page ---------------------------------------
         egc_set(4'h5, 8'h00); egc_set(4'h4, 8'h00);   // ope 0x0000
         access_page = 1'b1;
         g_wr(20'hA8040, 8'h99);
