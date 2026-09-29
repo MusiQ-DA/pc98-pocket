@@ -1107,11 +1107,11 @@ module core_top (
             // 0x01-0x0B were the POST panel's census words (frame census, row
             // buffer counters, tvfill, GDC snoops) -- their producers are gone
             // with postmon, so the slots are retired rather than tied to 0.
-            8'h1b:   probe_data = {8'h00, tvram_dbg_word};   // {attr,hi,lo} at dbg cell; read auto-steps
-            8'h1c:   probe_data = {20'h0, dbg_tvram_cell};   // current debug cell
+            // 0x1b/0x1c/0x1e/0x22/0x29/0x2A/0x2B/0x2C/0x2D retired to fit the
+            // EGC shift pipeline (1864 LABs vs 1848): no script under
+            // scripts/ reads them -- the screen-cell WRITE (0x82) stays.
             8'h1d:   probe_data = {16'h0, key_count, key_last};
 `ifdef PC98_PROBE_EXTRA
-            8'h1e:   probe_data = {cont2_key_eff, cont1_key_eff};   // pad words, JTAG-held bits included
             8'h1f:   probe_data = {dbg_pic_irr, dbg_pic_imr, dbg_pic_isr, dbg_timer_count};
             8'h20:   probe_data = {dbg_pic2_irr, dbg_pic2_imr, dbg_pic2_isr, dbg_kbd_irq_count};
             8'h21:   probe_data = {dbg_irq_level, 7'h00, interrupt_to_cpu,
@@ -1134,27 +1134,11 @@ module core_top (
             // still holding the machine -- bios_ever_loaded / guest_hold_sync2 /
             // soft_guest_hold name the release chain specifically.
             8'h28:   probe_data = {16'h0, dbg_bits};
-            // 0x29: the GVRAM line-fill underrun meter -- {worst fill length
-            // in chipset clocks (a line is ~3000), skipped-line count,
-            // launched-fill count}. A wandering band edge is a skip.
-            8'h29:   probe_data = gvram_dbg;
-            // 0x2A: live fill telemetry -- {fill_len_now, last late line,
-            // last skip line/4}. fill_len >~1730 at sample time means a
-            // fill is stalling across lines despite the lookahead slack.
-            8'h2A:   probe_data = gvram_dbg2;
-            // 0x2B/0x2C/0x2D: the BIOS-image verifier. The walk sums are what
-            // a full E8000-FFFFF pass found in SDRAM (auto-run ~3 ms after
-            // reset release, or 0x84 write with bit30); the str sums are what
-            // the loader FSM committed; cnt is BIOS words committed (0xC000
-            // for a complete 96 KB slot -- short means dropped words).
-            8'h2B:   probe_data = {jt_walk_add, jt_walk_xor};
-            8'h2C:   probe_data = {rv_str_cnt, rv_str_add};
-            8'h2D:   probe_data = {rv_str_xor, jt_st_addr[15:0]};
             // 0x2E: bisect readback -- liveness flag (rv_live=1 iff the
-            // guest ran a bus cycle after the last walk completed),
-            // rv_auto (the config-fired walk is/was non-strict), rv_walked.
-            8'h2E:   probe_data = {19'h00000, rv_live, 4'h0,
-                                   rv_auto, rv_walked, 6'h00};
+            // guest ran a bus cycle after the last walk completed); the
+            // rv_auto/rv_walked bits read zero now -- the +3 ms shot was
+            // already disarmed and the flags were constant.
+            8'h2E:   probe_data = {19'h00000, rv_live, 12'h000};
             // 0x2F/0x30/0x31: wedge-PC taps. {cycle-entry count, live
             // processor_status, last io dir, last fetch addr} /
             // {unused, last io port} / {unused, last mem dir, last mem addr}.
@@ -2037,45 +2021,17 @@ module core_top (
     reg  [7:0]  jt_st_rdata = 8'd0;
     reg         jt_st_done  = 1'b0;
     // Whole-window verify walk. Bit30 of a slot-0x84 command walks
-    // E8000-FFFFF through the same borrowed-bus path, accumulating add- and
-    // xor-sums of every byte it actually finds in SDRAM. Auto-arms ~3 s
-    // after reset_wire falls -- NOT ~3 ms: at +3 ms POST is mid-init and
-    // the borrowed bus still kills it deterministically (seen on b6c7ee0
-    // through ec89281; the exact tear is unresolved, so the walk waits for
-    // the machine to be safely past POST's fragile window instead). The
-    // image is static once loaded, so a later walk loses no detection power.
+    // E8000-FFFFF through the same borrowed-bus path, leaving jt_st_done
+    // high at the end. The add/xor accumulators the walk used to report
+    // (taps 0x2B-0x2D) are gone for fit -- jtag_romscan.tcl scans by
+    // per-byte memrd anyway. The +3 ms auto-arm was already disarmed, so
+    // rv_walked/rv_auto were constant and went with it.
     reg         jt_st_walk  = 1'b0;
-    reg  [7:0]  jt_walk_pair = 8'd0;
-    reg  [15:0] jt_walk_add = 16'd0;
-    reg  [15:0] jt_walk_xor = 16'd0;
-    reg         rv_walked   = 1'b0;
-    reg  [17:0] rv_delay    = 18'd0;
-    // v4: TRUE non-strict full walk at b6c7ee0's exact +3 ms offset.
-    // (v3 intended this but rv_done fed st_strict, so its "non-strict"
-    // shot silently ran strict -- the borrow/release cadence has never
-    // actually run on the current tree.) rv_auto tags the walk the
-    // config itself fired; st_strict = jt_st_walk & ~rv_auto keeps it
-    // genuinely non-strict while manual JTAG walks stay strict.
     // Liveness is a post-storm flag: rv_live clears when the walk
     // completes and latches the first guest bus cycle afterwards, so a
     // later probe read answers "did the guest come back after the storm".
-    reg         rv_auto     = 1'b0;
     reg         rv_live     = 1'b0;
-    // Auto-walk DISARMED for the wedge-PC probe build: the +3 ms borrow is
-    // the prime suspect in the real-hardware POST kill, so this build lets
-    // POST run clean and answers "where did it stop" instead. A manual walk
-    // (slot 0x84 bit30) still works.
-    wire        rv_walk_go = 1'b0; // ~+3 ms shot removed: ~rv_walked & (rv_delay == 18'd131071)
     wire        guest_cyc  = ~chipset_aen & (processor_status != 3'b111);
-    always_ff @(posedge clk_chipset) begin
-        if (reset_wire) begin
-            rv_walked <= 1'b0;
-            rv_delay  <= 18'd0;
-        end else if (!rv_walked && !rv_walk_go)
-            rv_delay <= rv_delay + 18'd1;
-        else if (rv_walk_go)
-            rv_walked <= 1'b1;
-    end
     reg         rv_wd        = 1'b0;
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
@@ -2132,64 +2088,21 @@ module core_top (
             if (probe_wdata_c[28] | probe_wdata_c[29] | probe_wdata_c[30]) begin
                 jt_st_req  <= 1'b1;
                 jt_st_done <= 1'b0;
-                if (probe_wdata_c[30]) begin
-                    jt_walk_add <= 16'd0;
-                    jt_walk_xor <= 16'd0;
-                end
             end else
                 jt_st_req  <= 1'b0;
-        end else if (rv_walk_go && !jt_st_req) begin
-            jt_st_addr  <= 20'hE8000;
-            jt_st_we    <= 1'b0;
-            jt_st_req   <= 1'b1;
-            jt_st_done  <= 1'b0;
-            jt_st_walk  <= 1'b1;
-            jt_walk_add <= 16'd0;
-            jt_walk_xor <= 16'd0;
-            rv_auto     <= 1'b1;   // config-fired walk: genuinely non-strict
         end else if (jt_st_req && st_done) begin
             jt_st_rdata <= st_rdata;
             jt_st_req   <= 1'b0;
             if (jt_st_walk) begin
-                jt_walk_add <= jt_walk_add + {8'h00, st_rdata};
-                if (jt_st_addr[0])
-                    jt_walk_xor <= jt_walk_xor ^ {st_rdata, jt_walk_pair};
-                else
-                    jt_walk_pair <= st_rdata;
                 if (jt_st_addr == 20'hFFFFF) begin
                     jt_st_walk <= 1'b0;
                     jt_st_done <= 1'b1;
-                    rv_auto    <= 1'b0;
                 end else
                     jt_st_addr <= jt_st_addr + 20'd1;
             end else
                 jt_st_done  <= 1'b1;
         end else if (jt_st_walk && !jt_st_req && !jt_st_done)
             jt_st_req <= 1'b1;
-    end
-    // Stream-side signature of the BIOS slot: the exact byte values the
-    // loader FSM committed to write (post-patch rom_data_in), plus the word
-    // count. Three-way split for the corruption hunt:
-    //   rv_str_* == file sums && jt_walk_* != rv_str_*  -> loss in RAM.sv/mp
-    //   rv_str_* != file sums                          -> bridge/host side
-    //   all equal                                      -> image intact
-    // cnt also catches silent FIFO drops: a short count means missing words.
-    reg  [15:0] rv_str_add = 16'd0;
-    reg  [15:0] rv_str_xor = 16'd0;
-    reg  [15:0] rv_str_cnt = 16'd0;
-    wire        rv_commit  = (bios_load_state == 4'h01) & ioctl_download
-                           & ioctl_wr & ~bios_load_n & select_bios;
-    always_ff @(posedge clk_chipset) begin
-        if (load_active && !load_active_d) begin
-            rv_str_add <= 16'd0;
-            rv_str_xor <= 16'd0;
-            rv_str_cnt <= 16'd0;
-        end else if (rv_commit) begin
-            rv_str_add <= rv_str_add + {8'h00, rom_data_in[7:0]}
-                                    + {8'h00, rom_data_in[15:8]};
-            rv_str_xor <= rv_str_xor ^ rom_data_in;
-            rv_str_cnt <= rv_str_cnt + 16'd1;
-        end
     end
     wire [19:0] st_addr_mux  = jt_st_req ? jt_st_addr  : st_addr;
     wire [7:0]  st_wdata_mux = jt_st_req ? jt_st_wdata : st_wdata;
@@ -2200,12 +2113,7 @@ module core_top (
     // whole walk and ram_rw_complete cannot pulse for a guest CPU access.
     // hold_only rides the same settled-grant path: a bare freeze still must
     // not fire before the HLDA has provably landed.
-    // The config-fired walk deliberately runs non-strict (drop `run` per
-    // byte, b6c7ee0 cadence); manual JTAG walks stay strict. NOTE: v3 fed
-    // `rv_done` into this term, which flips high the clock after the shot
-    // fires -- the "non-strict" walk silently ran strict, so the cadence
-    // was never actually exercised. rv_auto tags config-fired walks only.
-    wire        st_strict    = jt_st_walk & ~rv_auto;
+    wire        st_strict    = jt_st_walk;
     wire        st_hold_only = 1'b0;
 `else
     wire [19:0] st_addr_mux  = st_addr;
