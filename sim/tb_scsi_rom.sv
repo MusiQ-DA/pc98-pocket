@@ -102,7 +102,7 @@ module tb_scsi_rom;
         .pause_core(),
         .pc98_key_stb(1'b0), .pc98_key_byte(8'h00),
         .mouse_dx(16'sd0), .mouse_dy(16'sd0), .mouse_ev(1'b0),
-        .mouse_btn(2'b00), .ram_rw_complete()
+        .mouse_btn(2'b00), .opna_joy(8'hFF), .ram_rw_complete()
     );
 
     int errors = 0;

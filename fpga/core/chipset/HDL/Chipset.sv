@@ -141,6 +141,8 @@ module CHIPSET #(
         input   logic signed [15:0] mouse_dy,
         input   logic               mouse_ev,
         input   logic   [1:0]       mouse_btn,
+        // -86 board joystick port byte, active low (np21w joymng.h order).
+        input   logic   [7:0]       opna_joy,
         // ROM-load (Pocket): expose the RAM access-complete pulse so core_top's
         // BIOS loader can pace on the real SDRAM write instead of a fixed delay.
         output  logic           ram_rw_complete
@@ -385,6 +387,7 @@ module CHIPSET #(
         ,.mouse_dy                          (mouse_dy)
         ,.mouse_ev                          (mouse_ev)
         ,.mouse_btn                         (mouse_btn)
+        ,.opna_joy                          (opna_joy)
     );
 
     // ---- the GRCG's plane expansion, ahead of RAM.sv -------------------

@@ -151,8 +151,12 @@ module PERIPHERALS #(
         input   logic signed [15:0] mouse_dx,
         input   logic signed [15:0] mouse_dy,
         input   logic               mouse_ev,
-        input   logic   [1:0]       mouse_btn
-        
+        input   logic   [1:0]       mouse_btn,
+        // The -86 board's joystick port, an active-low byte in np21w's
+        // joymng.h order -- core_top fills it from the pad when the OSD's
+        // Gamepad setting is "Joystick". 8'hFF reads as nothing fitted.
+        input   logic   [7:0]       opna_joy
+
     );
 
     //
@@ -1758,6 +1762,7 @@ module PERIPHERALS #(
         .data_out     (opna_data_out),
         .read_select  (opna_read_select),
         .ext_enable   (opna_extend),
+        .joy          (opna_joy),
         .irq          (opna_irq),
         .mg_reg       (mgmt_opna_reg),
         .mg_wr        (mgmt_opna_wr),

@@ -133,6 +133,7 @@ module tb_pc98_dma_decode;
         .mouse_dy               (16'sd0),
         .mouse_ev               (1'b0),
         .mouse_btn              (2'b00),
+        .opna_joy               (8'hFF),
         .dma_chip_select_n      (dma_cs_n),
         .dma_page_chip_select_n (dma_page_cs_n)
     );

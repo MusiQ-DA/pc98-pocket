@@ -36,6 +36,7 @@ module tb_pc98_opna;
     wire        read_select;
     logic       ext_enable = 1'b0;
     wire        irq;
+    logic [7:0] joy = 8'hFF;            // the -86's game port, active low
 
     logic  [3:0] mg_reg = 4'd0;
     logic        mg_wr = 1'b0;
@@ -54,7 +55,7 @@ module tb_pc98_opna;
         .cs(cs), .a2a1(a2a1),
         .io_read_n(io_read_n), .io_write_n(io_write_n),
         .data_in(data_in), .data_out(data_out), .read_select(read_select),
-        .ext_enable(ext_enable), .irq(irq),
+        .ext_enable(ext_enable), .joy(joy), .irq(irq),
         .mg_reg(mg_reg), .mg_wr(mg_wr), .mg_wdata(mg_wdata), .mg_rdata(mg_rdata),
         .adpcmb_addr(adpcmb_addr), .adpcmb_roe_n(adpcmb_roe_n),
         .adpcmb_data(8'h00),
@@ -75,7 +76,7 @@ module tb_pc98_opna;
         .cs(1'b0), .a2a1(2'b00),
         .io_read_n(1'b1), .io_write_n(1'b1),
         .data_in(8'h00), .data_out(), .read_select(),
-        .ext_enable(1'b0), .irq(),
+        .ext_enable(1'b0), .joy(8'hFF), .irq(),
         .mg_reg(mg2_reg), .mg_wr(mg2_wr), .mg_wdata(mg2_wdata), .mg_rdata(mg2_rdata),
         .adpcmb_addr(), .adpcmb_roe_n(),
         .adpcmb_data(8'h00),
@@ -244,7 +245,49 @@ module tb_pc98_opna;
         want("index FF is the presence probe", got, 8'h01);
 
         // ================================================================
-        // 2. Extended mode. It is not a chip register: np21w
+        // 2. The game port. Index 0x0E is SSG IOA, and on a real -86 the
+        //    joystick connector IS the IOA pins: np21w cbus/board86.c
+        //    (opna_i18a) answers it ahead of the SSG read, and
+        //    sound/fmboard.c (fmboard_getjoy) blanks it to 0xFF once a
+        //    write to IOB (index 0x0F) raises bit 6.
+        // ================================================================
+        io_wr(2'b00, 8'h0E);
+        repeat (8) @(posedge clk);
+        io_rd(2'b01, got);
+        want("index 0E reads the joystick byte", got, 8'hFF);
+
+        joy = 8'hC3;                    // L+R and both rapid buttons held
+        repeat (8) @(posedge clk);
+        io_rd(2'b01, got);
+        want("joystick byte tracks the port", got, 8'hC3);
+
+        chip_wr(1'b0, 8'h0F, 8'h40);    // IOB bit 6: port is not the stick's
+        repeat (8) @(posedge clk);
+        io_wr(2'b00, 8'h0E);            // chip_wr left the index at 0x0F
+        repeat (8) @(posedge clk);
+        io_rd(2'b01, got);
+        want("IOB bit 6 blanks the port", got, 8'hFF);
+
+        chip_wr(1'b0, 8'h0F, 8'h00);
+        repeat (8) @(posedge clk);
+        io_wr(2'b00, 8'h0E);
+        repeat (8) @(posedge clk);
+        io_rd(2'b01, got);
+        want("IOB bit 6 clear restores it", got, 8'hC3);
+        joy = 8'hFF;
+
+        // A neighbouring SSG register still reads the chip, not the port.
+        // jt12's index latch only moves on data writes (the 0x188 write stays
+        // inside this module), so re-arm reg 0 the same way section 1 did.
+        chip_wr(1'b0, 8'h00, 8'hA5);
+        repeat (64) @(posedge clk);
+        io_wr(2'b00, 8'h00);
+        repeat (32) @(posedge clk);
+        io_rd(2'b01, got);
+        want("SSG reg 0 still reads back", got, 8'hA5);
+
+        // ================================================================
+        // 3. Extended mode. It is not a chip register: np21w
         //    cbus/pcm86io.c:45-51 drives it from bit 0 of a write to 0xA460,
         //    and board86.c:80-105 makes 0x18C/0x18E open bus without it.
         // ================================================================
@@ -262,7 +305,7 @@ module tb_pc98_opna;
         io_rd(2'b10, got); want_ne("0x18C answers once extended", got, 8'hFF);
 
         // ================================================================
-        // 3. The router. Everything below is a claim about where a guest
+        // 4. The router. Everything below is a claim about where a guest
         //    register ends up inside jt12 -- see the table in pc98_opna.sv.
         // ================================================================
 
@@ -323,7 +366,7 @@ module tb_pc98_opna;
         want_dropped("part1 0x112 (jt12 ADPCM-A addr)");
 
         // ================================================================
-        // 4. The firmware's injection port, which is how those ADPCM-A
+        // 5. The firmware's injection port, which is how those ADPCM-A
         //    start/end registers DO get written.
         // ================================================================
         arm();
@@ -345,7 +388,7 @@ module tb_pc98_opna;
         want("rhythm KON shadow at mg_reg 7", mg_rdata[7:0], 8'h25);
 
         // ================================================================
-        // 5. Timer A and the IRQ line. This is the only test here that runs
+        // 6. Timer A and the IRQ line. This is the only test here that runs
         //    the synthesiser: it proves cen, the prescaler and part-0 routing
         //    of 0x24/0x25/0x27 all actually work, not just that the router
         //    computed the right address.
@@ -362,6 +405,10 @@ module tb_pc98_opna;
             waited++;
         end
         want_b("timer A raises IRQ", irq, 1'b1);
+        // irq is the live chip wire but the status byte rides the shadow
+        // sampler, which re-captures each view only once every four clocks
+        // (plus jt12_dout's own stage) -- give it a pass before reading.
+        repeat (8) @(posedge clk);
         io_rd(2'b00, got);
         want_b("status 0 bit 0 is flag A", got[0], 1'b1);
 
@@ -374,7 +421,7 @@ module tb_pc98_opna;
         $display("  info status 0 after flag reset             %02h", got);
 
         // ================================================================
-        // 6. Busy. The router adds two clocks on top of jt12's own busy and a
+        // 7. Busy. The router adds two clocks on top of jt12's own busy and a
         //    driver that polls bit 7 must see both.
         // ================================================================
         // jt12_mmr.v:431-444 holds busy for 32 synthesiser cycles, which at
@@ -386,7 +433,7 @@ module tb_pc98_opna;
         want_b("status 0 bit 7 is busy after a write", got[7], 1'b1);
 
         // ================================================================
-        // 7. The ADPCM variant's rhythm store, on the second instance:
+        // 8. The ADPCM variant's rhythm store, on the second instance:
         //    capability word, address auto-increment fill, and the part-1
         //    injection the firmware uses for start/end pairs.
         // ================================================================

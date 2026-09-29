@@ -1215,10 +1215,9 @@ module core_top (
         .clk          (clk_chipset),
         .reset        (reset),
         .buttons      (kb_buttons),
-        // The game port this once fed is gone. The mode still exists in
-        // the settings and still suppresses the pad->keys mapping, which is
-        // what it did before -- there is simply nowhere for the bits to go
-        // now. Remove the option only with a settings-blob migration.
+        // "Joystick" mode: the pad drives the -86 board's SSG game port
+        // (opna_joy below) instead of the mapped keys, so the pad->keys
+        // mapping stays suppressed here.
         .gamepad      (gamepad_mode == 2'd1),
         .osd_active   (osd_active),
         .vkb_key      (vkb_key),
@@ -1344,6 +1343,19 @@ module core_top (
     // quiet under an overlay.
     //
     wire [5:0] mouse_pad = (mousepad && !osd_active) ? cont1_key_chip[5:0] : 6'd0;
+
+    // In joystick mode the pad feeds the -86 board's game port instead: OPNA
+    // SSG index 0x0E (IOA) reads it back, active low, in np21w's joymng.h
+    // order {B, A, rapidB, rapidA, R, L, D, U}. Pad bits are {B, A, R, L, D,
+    // U} on [5:0] with X/Y as the rapid-fire pair on [7:6]; 8'hFF in the other
+    // modes reads as no stick fitted.
+    wire [7:0] opna_joy =
+        (gamepad_mode == 2'd1 && !osd_active)
+            ? ~{cont1_key_chip[5], cont1_key_chip[4],
+                cont1_key_chip[7], cont1_key_chip[6],
+                cont1_key_chip[3], cont1_key_chip[2],
+                cont1_key_chip[1], cont1_key_chip[0]}
+            : 8'hFF;
 
     wire signed [15:0] mouse_dx, mouse_dy;
     wire               mouse_ev;
@@ -2217,6 +2229,7 @@ module core_top (
         ,.mouse_dy                          (mouse_dy)
         ,.mouse_ev                          (mouse_ev)
         ,.mouse_btn                         (mouse_btn)
+        ,.opna_joy                          (opna_joy)
     );
 
     // CHIPSET per-access "done" pulse (COMPLETE_RAM_RW); drives the ROM-load FSM.

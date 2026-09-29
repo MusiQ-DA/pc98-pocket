@@ -116,6 +116,11 @@ module pc98_opna #(
     // bus; high is the 6-channel stereo OPNA every PC-98 FM driver wants.
     input  wire        ext_enable,
 
+    // The -86's joystick port sits on SSG IOA (read through index 0x0E).
+    // Active low, np21w's x11/joymng.h order: {BTN2, BTN1, RAPID2, RAPID1,
+    // R, L, D, U}. 8'hFF is "nothing fitted".
+    input  wire  [7:0] joy,
+
     output wire        irq,             // active high, INT5 on the -86 board
 
     // ---- softcore side ----------------------------------------------------
@@ -217,6 +222,11 @@ module pc98_opna #(
     logic [7:0] rhy_kon;         // 0x10, {dump, xx, mask[5:0]}
     logic [5:0] rhy_tl;          // 0x11, total level
 
+    // np21w sound/fmboard.c (fmboard_getjoy): the joystick read is gated by
+    // bit 6 of the value last written to IOB (SSG index 0x0F) -- set means the
+    // port is not the joystick's, and a 0x0E read answers 0xFF.
+    logic       joy_blk;
+
     // Decode a guest register write into the jt12 write it becomes.
     // `fwd` low means the write is deliberately dropped.
     function automatic logic route_fwd(input logic p, input logic [7:0] r);
@@ -283,6 +293,7 @@ module pc98_opna #(
             rq_data    <= 8'h00;
             rhy_kon    <= 8'h00;
             rhy_tl     <= 6'h00;
+            joy_blk    <= 1'b0;
         end else begin
             // The FSM consumes the request on the way out of idle; a new one
             // is only taken once that has happened. Two clk cycles at
@@ -301,6 +312,7 @@ module pc98_opna #(
                     if (!gw_part) begin
                         if (gw_reg == 8'h10) rhy_kon <= wr_data_q;
                         if (gw_reg == 8'h11) rhy_tl  <= wr_data_q[5:0];
+                        if (gw_reg == 8'h0F) joy_blk <= wr_data_q[6];
                     end
                     if (route_fwd(gw_part, gw_reg) && !rtr_busy) begin
                         rq_pend <= 1'b1;
@@ -399,6 +411,10 @@ module pc98_opna #(
     wire [7:0] ssg_rd  = sh[2'b01];
     wire [7:0] status1 = sh[2'b10];   // {adpcmb_flag, 1'b0, adpcma_flags}
 
+    // The board-level view of IOA: np21w fmboard_getjoy returns the joystick
+    // byte unless a write to IOB (index 0x0F) raised bit 6.
+    wire [7:0] joy_rd = joy_blk ? 8'hFF : joy;
+
     // The router adds its own latency on top of jt12's busy, and a driver that
     // polls bit 7 and then writes immediately must not outrun it.
     wire [7:0] status0_out = {status0[7] | rtr_busy, status0[6:0]};
@@ -408,12 +424,13 @@ module pc98_opna #(
     always_comb begin
         case (rd_port_q)
             2'b00: data_out = status0_out;
-            // np21w cbus/board86.c (opna_i18a): 0x18A returns the SSG register for
-            // index < 0x10, 0x01 for index 0xFF (the "is there a chip here"
-            // probe), and the data latch otherwise. Index 0x0E is the joystick
-            // port on a real board; nothing reads it here, and jt12's SSG
-            // returns its own IOA which is tied high.
-            2'b01: data_out = (addrl < 8'h10) ? ssg_rd
+            // np21w cbus/board86.c (opna_i18a): 0x18A returns the joystick byte
+            // for index 0x0E (the board's connector IS the IOA pins -- the
+            // branch sits before the SSG read in np21w too), the SSG register
+            // for the other indexes < 0x10, 0x01 for index 0xFF (the "is there
+            // a chip here" probe), and the data latch otherwise.
+            2'b01: data_out = (addrl == 8'h0E) ? joy_rd
+                            : (addrl < 8'h10) ? ssg_rd
                             : (addrl == 8'hFF) ? 8'h01
                             : data_latch;
             // 0x18C/0x18E are open bus unless the board is extended
@@ -514,7 +531,7 @@ module pc98_opna #(
         .adpcmb_addr  (adpcmb_addr),
         .adpcmb_roe_n (adpcmb_roe_n),
         .adpcmb_data  (adpcmb_data),
-        .IOA_in       (8'hFF),
+        .IOA_in       (joy_rd),
         .IOB_in       (8'hFF),
         .snd_left     (jt_snd_l),
         .snd_right    (jt_snd_r),
