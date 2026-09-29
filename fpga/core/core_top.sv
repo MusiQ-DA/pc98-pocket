@@ -961,7 +961,6 @@ module core_top (
     wire [3:0] osd_palette_idx;
     wire       osd_in_area;
     wire       osd_active;
-    wire       osd_credits_req;
     wire [8:0] vkb_key;
     wire       vkb_stb;
     wire [2:0] osd_palette;
@@ -1057,7 +1056,6 @@ module core_top (
         .dock_key_code              (dock_key_code),
         .dock_key_ext               (dock_key_ext),
         .dock_key_stb               (dock_key_stb),
-        .credits_active             (credits_mode_chip),
         .osd_open_req               (osd_open_req),
         .raster_w                   (osd_raster_w),
         .raster_h                   (osd_raster_h),
@@ -1065,7 +1063,6 @@ module core_top (
         .soft_guest_hold            (soft_guest_hold),
         .soft_vid_blank             (soft_vid_blank),
         .osd_active                 (osd_active),
-        .osd_credits_req            (osd_credits_req),
         .vkb_key                    (vkb_key),
         .vkb_stb                    (vkb_stb),
         .osd_palette                (osd_palette),
@@ -1161,13 +1158,13 @@ module core_top (
             //   [15:0] kb_buttons          = pocket_keyboard's buttons input
             //   [16]   mousepad            = gamepad_mode==2 (Mouse): masks dpad+face+shoulders
             //   [18:17] gamepad_mode       = 0 Keyboard / 1 Joystick / 2 Mouse
-            //   [19]   credits_mode_chip
+            //   [19]   (was credits_mode_chip, retired)
             //   [20]   osd_active          = softcore VKB_CTRL bit0 (an overlay is up)
-            //   [21]   osd gate into pk    = osd_active | credits_mode_chip (suppresses all keys)
+            //   [21]   osd gate into pk    = osd_active (suppresses all keys)
             //   [22]   kb_ready            = ps2 accept (level; may read 0 mid-byte)
             //   [23]   kb_valid            = framer emitting a Set-2 byte
             8'h22:   probe_data = {8'h00, kb_valid, kb_ready,
-                                   osd_active | credits_mode_chip, osd_active, credits_mode_chip,
+                                   osd_active, osd_active, 1'b0,
                                    gamepad_mode, mousepad, kb_buttons};
 `endif
             8'hFF:   probe_data = 32'h98C0_DE98;
@@ -1203,7 +1200,6 @@ module core_top (
     // Interact list settings: each latched write-only from its bridge address, then
     // synced into the core clock below.
     reg  [1:0] wp_cfg_74a        = 2'd0;   // floppy write-protect {B:, A:}
-    reg        credits_active_74a = 1'b0;  // credits showing: set by the menu action, cleared by any button
     // Pad button words come from an unvalidated ~1 ms poll and can bounce, so publish
     // a word only after it holds ~3.5 ms; analog axes are level-read and pass raw.
     reg [15:0] cont1_key_s = 16'd0;        // settled button words, all consumers below
@@ -1231,12 +1227,7 @@ module core_top (
     reg  [15:0] jtag_btn1 = 16'd0, jtag_btn2 = 16'd0;
     wire [15:0] cont1_key_eff = cont1_key_s | jtag_btn1;
     wire [15:0] cont2_key_eff = cont2_key_s | jtag_btn2;
-    wire       any_btn_74a;                // any Pocket controller-1 button, synced to this domain
-    synch_3 s_anybtn (|cont1_key_eff, any_btn_74a, clk_74a);
-    wire       osd_credits_req_74a;        // OSD Show Credits request, synced from the softcore
-    synch_3 s_osd_credits_74a (osd_credits_req, osd_credits_req_74a, clk_74a);
-    reg        any_btn_74a_d = 1'b0;
-    reg        osd_credits_req_74a_d = 1'b0;
+
     always @(posedge clk_74a) begin
         if (interact_reset_delay != 20'd0)
             interact_reset_delay <= interact_reset_delay - 20'd1;
@@ -1249,14 +1240,6 @@ module core_top (
                 32'h0000_006C: wp_cfg_74a        <= bridge_wr_data[1:0];
             endcase
         end
-        // Show Credits request (from the OSD) and the any-button dismiss are edge-detected: the
-        // button that picks Show Credits is still held, so a level dismiss would clear it at once.
-        any_btn_74a_d         <= any_btn_74a;
-        osd_credits_req_74a_d <= osd_credits_req_74a;
-        if (osd_credits_req_74a & ~osd_credits_req_74a_d)
-            credits_active_74a <= 1'b1;
-        else if (any_btn_74a & ~any_btn_74a_d)
-            credits_active_74a <= 1'b0;
     end
     wire       interact_reset;
     wire       osd_open_req;
@@ -1277,11 +1260,7 @@ module core_top (
     synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_eff,     cont1_key_chip, clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_eff,     cont2_key_chip, clk_chipset);
     synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
-    wire credits_mode_pix;
-    wire credits_mode_chip;
-    synch_3 s_credits_pix  (credits_active_74a, credits_mode_pix,  clk_pix);
-    synch_3 s_credits_chip (credits_active_74a, credits_mode_chip, clk_chipset);
-    wire pause_core = pause_core_chipset | credits_mode_chip;
+    wire pause_core = pause_core_chipset;
 
     // gamepad_mode picks what the pad drives: mapped keys, the game port, or the serial mouse. The
     // softcore's per-control key_cfg reaches pocket_keyboard unchanged.
@@ -1323,7 +1302,7 @@ module core_top (
         // what it did before -- there is simply nowhere for the bits to go
         // now. Remove the option only with a settings-blob migration.
         .gamepad      (gamepad_mode == 2'd1),
-        .osd_active   (osd_active | credits_mode_chip),
+        .osd_active   (osd_active),
         .vkb_key      (vkb_key),
         .vkb_stb      (vkb_stb),
         .key_cfg      (key_cfg),
@@ -1447,8 +1426,7 @@ module core_top (
     // mouse to feed. In mouse mode the pad's D-pad and A/B drive it too;
     // quiet under an overlay.
     //
-    wire [5:0] mouse_pad = (mousepad && !(osd_active | credits_mode_chip)) ?
-                           cont1_key_chip[5:0] : 6'd0;
+    wire [5:0] mouse_pad = (mousepad && !osd_active) ? cont1_key_chip[5:0] : 6'd0;
 
     wire signed [15:0] mouse_dx, mouse_dy;
     wire               mouse_ev;
@@ -2827,7 +2805,6 @@ module core_top (
         .HBlank             (HBlank),
         .VBlank             (VBlank),
         .palette_cfg        (palette_cfg),
-        .credits_mode_pix   (credits_mode_pix),
         .vid_blank          (vid_blank),
         .osd_active         (osd_active),
         .osd_palette_idx    (osd_palette_idx),

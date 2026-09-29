@@ -93,7 +93,6 @@ module softcpu_subsystem (
     input   [7:0] dock_key_code,  // last docked-keyboard make, for the key picker
     input         dock_key_ext,   // its E0 flag
     input         dock_key_stb,   // toggles per docked make; firmware change-detects it
-    input         credits_active, // credits overlay up: firmware suppresses OSD button input
     input         osd_open_req,   // interact "Extra Options" requests the settings OSD
     input   [9:0] raster_w,       // presented raster size, for overlay placement
     input   [9:0] raster_h,
@@ -117,7 +116,6 @@ module softcpu_subsystem (
     input [319:0]  gdc_draw_snaps,
     output  [1:0]  gdc_srv_done_levels,
     output        osd_active,
-    output        osd_credits_req,
 
     // Virtual-keyboard key event: {make, Set-2 code}, with a strobe that toggles
     // per firmware write so pocket_keyboard pushes exactly one queue entry.
@@ -246,19 +244,6 @@ module softcpu_subsystem (
             osd_active_r <= cpu_mem_wdata[0];
     end
     assign osd_active = osd_active_r;
-
-    // OSD action trigger at 0x20000010: bit1 the credits overlay. core_top edge-detects it
-    // (the firmware re-arms the register with a zero write before each request). A guest
-    // reset is orchestrated through soft_guest_hold below, not here.
-    reg osd_credits_req_r = 1'b0;
-    always @(posedge clk_pico) begin
-        if (reset) begin
-            osd_credits_req_r <= 1'b0;
-        end else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd4) begin
-            osd_credits_req_r <= cpu_mem_wdata[1];
-        end
-    end
-    assign osd_credits_req = osd_credits_req_r;
 
     // Boot-master guest hold at 0x2000001C: powers up asserted so the guest stays in reset until
     // the firmware releases it (writes 0); the firmware writes 1 to re-assert it for an
@@ -984,7 +969,7 @@ module softcpu_subsystem (
         casez (cpu_mem_addr)
             32'h0???_????: cpu_mem_rdata = rom_rdata;
             32'h1???_????: cpu_mem_rdata = ram_rdata;
-            32'h2000_0000: cpu_mem_rdata = {3'd0, dock_key_stb, dock_key_ext, dataslots_ready, osd_open_req, credits_active, dock_key_code, cont1_key};
+            32'h2000_0000: cpu_mem_rdata = {3'd0, dock_key_stb, dock_key_ext, dataslots_ready, osd_open_req, 1'b0, dock_key_code, cont1_key};
             32'h2000_0018: cpu_mem_rdata = {6'd0, raster_h, 6'd0, raster_w};
 
             32'h3???_????: cpu_mem_rdata = fdd_rdata;

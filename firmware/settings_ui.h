@@ -11,9 +11,6 @@ void settings_open(void);
 // screen. Used to return from the key picker to the row it was opened from.
 void settings_reopen(void);
 
-// Raise the credits overlay (edge-armed OSD_ACTION); used by the menu action and the Start button.
-void settings_show_credits(void);
-
 // Handle one tick of controller edges while the overlay is shown: navigate submenus and cycle
 // values. Returns nonzero when the user dismisses the overlay (B at the main menu).
 int settings_input(uint16_t pressed);

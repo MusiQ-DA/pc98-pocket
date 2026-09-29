@@ -54,14 +54,13 @@
 #define VKB_CTRL        ((volatile uint32_t *) 0x20000004) // W: bit0 = OSD overlay shown
 #define VKB_KEY         ((volatile uint32_t *) 0x20000008) // W: bit8 = make, bits[7:0] Set-2 code
 #define SETTINGS_REG    ((volatile uint32_t *) 0x2000000C) // W: {index[12:8], value[7:0]}
-#define OSD_ACTION      ((volatile uint32_t *) 0x20000010) // W: bit1 credits, bit2 video
+#define OSD_ACTION      ((volatile uint32_t *) 0x20000010) // W: bit2 video
 #define OSD_ORIGIN      ((volatile uint32_t *) 0x20000014) // W: {y[25:16], x[9:0]} framebuffer origin
 #define OSD_RASTER      ((volatile uint32_t *) 0x20000018) // R: {h[25:16], w[9:0]} presented raster size
 #define SOFT_GUEST_HOLD ((volatile uint32_t *) 0x2000001C) // W: bit0 = hold guest in reset, bit1 = blank video
 #define KEYCFG_REG      ((volatile uint32_t *) 0x20000020) // W: {id[12:9], ext[8], code[7:0]}
 
 // OSD_ACTION command bits.
-#define OSD_ACT_CREDITS 2u
 #define OSD_ACT_VIDEO   4u
 
 // cont1_key button bits (Analogue Pocket layout).
@@ -80,8 +79,7 @@
 
 // CONT1_KEY carries status flags in its upper bits (the low 16 are the buttons): the last
 // docked-keyboard make in code[23:16] + ext[27] with a change toggle[28] for the key picker,
-// credits[24], osd_open[25], dataslots_ready[26].
-#define CONT1_CREDITS(raw)   ((raw) & (1u << 24))
+// osd_open[25], dataslots_ready[26].
 #define CONT1_OSD_OPEN(raw)  ((raw) & (1u << 25))    // interact "Extra Options" requests the OSD
 #define DATASLOTS_READY(raw) ((raw) & (1u << 26))    // APF finished the initial dataslot load
 #define CONT1_DOCK_CODE(raw) (((raw) >> 16) & 0xFFu) // last docked-keyboard make: Set-2 code
@@ -96,7 +94,8 @@
 // bindings are typed by pocket_keyboard, not here).
 #define BTNFN_NONE     0u
 #define BTNFN_SETTINGS 1u
-#define BTNFN_CREDITS  2u
+// 2 (the retired credits overlay) stays reserved: a save blob can still carry a 0xF2 binding,
+// which decodes to it and dispatches to nothing.
 #define BTNFN_VIDEO    3u
 
 // FDD_REQUEST bits

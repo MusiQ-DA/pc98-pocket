@@ -11,9 +11,9 @@
 // Select/Start 8-9, R1 10. The D-pad (0-3) and diagonals (11-14) are filled elsewhere.
 static const uint8_t bind_keycfg_id[BIND_COUNT] = { 4, 5, 6, 7, 10, 8, 9 };
 
-// Default bindings: A=L-Ctrl, B=L-Alt, X=Space, Y=Enter, R1 unmapped, Select=Settings,
-// Start=Show Credits. All single-byte, so the ext bitmap defaults clear.
-static const uint8_t bind_default[BIND_COUNT] = { 0x14, 0x11, 0x29, 0x5A, 0x00, 0xF1, 0xF2 };
+// Default bindings: A=Return, B=L-Alt, X=Space, Y=L-Ctrl, R1/Start unmapped,
+// Select=Settings. All single-byte, so the ext bitmap defaults clear.
+static const uint8_t bind_default[BIND_COUNT] = { 0x5A, 0x11, 0x29, 0x14, 0x00, 0xF1, 0x00 };
 static uint8_t bind[BIND_COUNT];
 static uint8_t bind_ext;
 

@@ -115,7 +115,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_display),     // SET_DISPLAY
     SETTING_D(opt_dis_en, 1), // SET_EMS (default Enabled, as the fixed memory map was)
     SETTING(opt_ems_frame),   // SET_EMS_FRAME
-    SETTING(opt_dpad),        // SET_DPAD (default Numpad)
+    SETTING_D(opt_dpad, DPAD_ARROWS), // SET_DPAD
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
 };
 
@@ -141,7 +141,7 @@ typedef struct {
 } item_t;
 
 enum { MENU_MAIN, MENU_SYSTEM, MENU_AV, MENU_HW, MENU_CONTROLS, MENU_COUNT };
-enum { ACT_CREDITS, ACT_DEFAULTS, ACT_RESET_PC };
+enum { ACT_DEFAULTS, ACT_RESET_PC };
 
 static const item_t items_main[] = {
     { "System", IT_SUBMENU, MENU_SYSTEM },
@@ -149,7 +149,6 @@ static const item_t items_main[] = {
     { "Hardware", IT_SUBMENU, MENU_HW },
     { "Controls", IT_SUBMENU, MENU_CONTROLS },
     { "", IT_SPACER, 0 },
-    { "Show Credits", IT_ACTION, ACT_CREDITS },
     { "Reset to Defaults", IT_ACTION, ACT_DEFAULTS },
     { "", IT_SPACER, 0 },
     { "Reset PC", IT_ACTION, ACT_RESET_PC },
@@ -276,8 +275,6 @@ static const char *bind_name(int btn)
     switch (key_bind_function(btn)) {
     case BTNFN_SETTINGS:
         return "Open Settings";
-    case BTNFN_CREDITS:
-        return "Show Credits";
     case BTNFN_VIDEO:
         return "Switch Video";
     default:
@@ -310,7 +307,6 @@ static const char *bind_name(int btn)
 static const uint8_t keybind_cycle[] = {
     0x00,                   // Unmapped
     0xF0u + BTNFN_SETTINGS, // Open Settings
-    0xF0u + BTNFN_CREDITS,  // Show Credits
     BIND_KEY_SLOT, // pick a key
 };
 #define KEYBIND_CYCLE_COUNT ((int) (sizeof(keybind_cycle) / sizeof(keybind_cycle[0])))
@@ -473,12 +469,6 @@ void settings_reopen(void)
     settings_draw();
 }
 
-void settings_show_credits(void)
-{
-    *OSD_ACTION = 0;               // re-arm the edge (may still be set from a prior request)
-    *OSD_ACTION = OSD_ACT_CREDITS; // rising edge -> credits overlay
-}
-
 // Drive one setting into the machine: SET_DPAD expands to the D-pad key_cfg slots, every other
 // setting drives its osd_settings register.
 static void settings_push(uint32_t i)
@@ -609,9 +599,6 @@ int settings_input(uint16_t pressed)
                 return 1; // close the panel so the re-POST shows on a clean screen
             } else if (it->arg == ACT_DEFAULTS) {
                 settings_reset_defaults();
-            } else if (it->arg == ACT_CREDITS) {
-                settings_show_credits();
-                return 1; // close the panel so the credits scroll shows on a clean screen
             }
         }
     }
