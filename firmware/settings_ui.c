@@ -187,12 +187,14 @@ static const item_t items_av[] = {
 // The two Floppy rows are NOT stored settings: the drives' media lives in
 // fdd_service, the Pocket menu's data slots are the only way an image gets
 // in, and these rows show the live state and eject/re-insert it (A button).
+// The Lo-tech EMS rows are gone with the board (2026-09-29): ports
+// 260h-263h are the PC/AT card's, nothing on a PC-98 writes them, and the
+// NEC board above is the real EMS here. SET_EMS/SET_EMS_FRAME stay in the
+// enum and the save blob, same reason as Boot Splash above.
 static const item_t items_hw[] = {
     { "Floppy A", IT_FDD, 0 },
     { "Floppy B", IT_FDD, 1 },
     { "", IT_SPACER, 0 },
-    { "Lo-tech 2MB EMS", IT_OPTION, SET_EMS },
-    { "EMS Frame", IT_OPTION, SET_EMS_FRAME },
     { "NEC EMS (08E1h)", IT_OPTION, SET_EXTMEM },
     { "", IT_SPACER, 0 },
     { "Disk LED", IT_OPTION, SET_DISK_LED },
