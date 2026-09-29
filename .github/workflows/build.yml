@@ -243,8 +243,6 @@ jobs:
             -Isim -I$S sim/tb_pc98_osdwin.sv \
             $S/pocket_video.sv $S/pc98_video_timing.sv \
             fpga/apf/common.v \
-            $S/common/jtframe_credits.v $S/common/jtframe_dual_ram.v \
-            $S/common/jtframe_ram.v \
             -o w --Mdir obj_ow
           ./obj_ow/w | tee ow.log
           grep -q "^PASS" ow.log

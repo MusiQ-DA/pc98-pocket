@@ -13,6 +13,14 @@ fpga/games/
 fpga/hdd/
 fpga/SW/
 fpga/dist/
+# NEC copyrighted ROM images -- user-placed data slots, never tracked here
+bios.hex
+itf.hex
+bios.rom
+itf.rom
+font.rom
+*.hdm
+
 # picorv32 firmware build intermediates (firmware.vh itself is committed)
 firmware/*.o
 firmware/*.d
