@@ -1308,10 +1308,14 @@ module PERIPHERALS #(
         .dst_clk(clock), .dst_rst(reset), .dst_pulse(pc98_row_fill)
     );
 
-    // row * 80 for the row after the one on screen.
+    // LOW12(SAD + row*PITCH) for the row after the one on screen; falls
+    // back to row*80 while the master GDC is unprogrammed.
     wire [4:0]  pc98_next_row  = (pc98_v[8:4] == 5'd24) ? 5'd0 : pc98_v[8:4] + 5'd1;
-    wire [11:0] pc98_row_base  = {1'b0, pc98_next_row, 6'd0}
-                              + {3'd0, pc98_next_row, 4'd0};
+    wire [11:0] pc98_row_base;
+    pc98_text_rowbase u_pc98_text_rowbase (
+        .gdc_on(gdc_m_disp_on), .gdc_pitch(gdc_m_pitch),
+        .gdc_sad(gdc_m_sad[0]), .row(pc98_next_row), .base(pc98_row_base)
+    );
 
     wire        pc98_f_req, pc98_f_busy, pc98_f_valid;
     wire [19:0] pc98_f_addr;
