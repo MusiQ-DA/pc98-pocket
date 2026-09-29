@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [main, debug-jtag]
     # Docs-only commits don't change the bitstream; skip the 20-minute
     # Quartus build for them. CI config itself still triggers.
     paths-ignore:

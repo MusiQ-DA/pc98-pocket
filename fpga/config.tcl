@@ -12,7 +12,7 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # Peripherals.sv: 6-channel stereo FM + SSG, ~1000 ALM standalone. Rhythm and
 # DELTA-T stay off: full OPNA measured 1733 ALM and the fitter wants 1876
 # LABs against 1848 -- see the long note where ENABLE_OPNA is consumed.
-set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
+#set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 
 # JTAG debug build. OFF by default: the SLD hub, the probe mux, the
 # write-pipe and key injection together cost enough ALMs to put the fit
@@ -20,7 +20,7 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 # scripts/jtag_probe.cfg, jtag_probe_read.tcl and the *_jtag_* benches
 # still work -- enable this macro AND comment out ENABLE_OPNA above to
 # open the room the probe needs (the debug build does not need sound).
-#set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
+set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
 
 # Boot the ITF, not the BIOS.
 #
