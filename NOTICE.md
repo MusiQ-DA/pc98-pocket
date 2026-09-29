@@ -37,7 +37,8 @@ controller, uPD71071 DMAC, KFPS2KB PS/2 keyboard.
 
 **floppy.v** (`fpga/core/common/floppy.v`) — BSD-2
 (c) Aleksander Osman 2014, (c) Alexey Melnikov 2020; the uPD765-class FDC,
-from the MiSTer PCXT core.
+from the MiSTer PCXT core. **simple_fifo.v** in the same directory is
+Osman's BSD-2 as well.
 
 **PicoRV32** (`fpga/core/picorv32.v`) — ISC, (c) Claire Xenia Wolf / YosysHQ.
 
