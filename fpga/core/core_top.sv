@@ -1157,25 +1157,20 @@ module core_top (
                                    rv_auto, rv_walked, 6'h00};
             // 0x2F/0x30/0x31: wedge-PC taps. {cycle-entry count, live
             // processor_status, last io dir, last fetch addr} /
-            // {io read count, io write count, last io port} /
-            // {mem access count, last mem dir, last mem addr}.
+            // {unused, last io port} / {unused, last mem dir, last mem addr}.
             8'h2F:   probe_data = {dbg_cyc_cnt, processor_status, dbg_io_wr,
                                    dbg_fetch_addr};
-            8'h30:   probe_data = {dbg_ior_cnt, dbg_iow_cnt, dbg_io_port};
-            8'h31:   probe_data = {dbg_mem_cnt, 3'b000, dbg_mem_wr,
+            8'h30:   probe_data = {16'h0000, dbg_io_port};
+            8'h31:   probe_data = {8'h00, 3'b000, dbg_mem_wr,
                                    dbg_mem_addr};
-            // 0x32-0x38: the V30 register dump (v30_dbg_regs =
-            // {psw,pc,sreg3..0,gpr7..0}). 0x32 {pc,cs} 0x33 {psw,ss}
-            // 0x34 {sp,bp} 0x35 {ds,es} 0x36 {ax,bx} 0x37 {cx,dx}
-            // 0x38 {si,di} -- psw[9] is IF, which settles "halted with
-            // interrupts enabled" vs a dead interrupt pin.
+            // 0x32-0x34: the V30 register dump, the wedge-essential slice
+            // (v30_dbg_regs = {psw,pc,sreg3..0,gpr7..0}): 0x32 {pc,cs},
+            // 0x33 {psw,ss}, 0x34 {sp,bp} -- psw[9] is IF, settling
+            // "halted with interrupts enabled" vs a dead interrupt pin.
+            // The remaining gprs/sregs cost a LAB the part does not have.
             8'h32:   probe_data = {v30_dbg_regs[207:192], v30_dbg_regs[159:144]};
             8'h33:   probe_data = {v30_dbg_regs[223:208], v30_dbg_regs[175:160]};
             8'h34:   probe_data = {v30_dbg_regs[79:64],   v30_dbg_regs[95:80]};
-            8'h35:   probe_data = {v30_dbg_regs[191:176], v30_dbg_regs[143:128]};
-            8'h36:   probe_data = {v30_dbg_regs[15:0],    v30_dbg_regs[63:48]};
-            8'h37:   probe_data = {v30_dbg_regs[31:16],   v30_dbg_regs[47:32]};
-            8'h38:   probe_data = {v30_dbg_regs[111:96],  v30_dbg_regs[127:112]};
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:
@@ -2107,9 +2102,6 @@ module core_top (
     reg  [15:0] dbg_io_port    = 16'd0;
     reg         dbg_io_wr      = 1'b0;
     reg  [7:0]  dbg_cyc_cnt    = 8'd0;
-    reg  [7:0]  dbg_ior_cnt    = 8'd0;
-    reg  [7:0]  dbg_iow_cnt    = 8'd0;
-    reg  [7:0]  dbg_mem_cnt    = 8'd0;
     reg  [2:0]  ps_q           = 3'd7;
     always_ff @(posedge clk_chipset) begin
         ps_q <= processor_status;
@@ -2121,20 +2113,14 @@ module core_top (
         if (processor_status == 3'b001) begin
             dbg_io_port <= cpu_address[15:0];
             dbg_io_wr   <= 1'b0;
-            if (ps_q != 3'b001 && dbg_ior_cnt != 8'hFF)
-                dbg_ior_cnt <= dbg_ior_cnt + 8'd1;
         end
         if (processor_status == 3'b010) begin
             dbg_io_port <= cpu_address[15:0];
             dbg_io_wr   <= 1'b1;
-            if (ps_q != 3'b010 && dbg_iow_cnt != 8'hFF)
-                dbg_iow_cnt <= dbg_iow_cnt + 8'd1;
         end
         if (processor_status == 3'b101 || processor_status == 3'b110) begin
             dbg_mem_addr <= cpu_address;
             dbg_mem_wr   <= (processor_status == 3'b110);
-            if (ps_q != processor_status && dbg_mem_cnt != 8'hFF)
-                dbg_mem_cnt <= dbg_mem_cnt + 8'd1;
         end
     end
     always_ff @(posedge clk_chipset) begin
