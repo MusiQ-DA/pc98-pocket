@@ -42,8 +42,13 @@ module pc98_text_rowbase (
     wire  [7:0] pitch = live ? {gdc_pitch[7:1], 1'b0} : 8'd80;
     wire [11:0] sad   = live ? gdc_sad[11:0]           : 12'd0;
 
-    // Both terms are cell counts; the 12-bit sum IS the LOW12 wrap.
-    assign base = sad + 12'(row * pitch);
+    // Both terms are cell counts; the 12-bit sum IS the LOW12 wrap. The
+    // 5x8 product rides a DSP block (12 of 66 are in use) because the ALM
+    // fabric is at 99 per cent -- a LUT multiplier is what pushed the fit
+    // over the device edge.
+    (* multstyle = "dsp" *) logic [12:0] row_pitch;
+    always_comb row_pitch = row * pitch;
+    assign base = sad + row_pitch[11:0];
 
 endmodule
 
