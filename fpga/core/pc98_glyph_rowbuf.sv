@@ -40,8 +40,16 @@ module pc98_glyph_rowbuf #(
     input  wire        clk,
     input  wire        rst,
 
-    // Start filling the row whose first col index is `row_base`. Assert for
+    // Start filling the row whose first cell index is `row_base`. Assert for
     // one cycle; `busy` falls when the row is complete.
+    //
+    // row_base lives in the LOW12 cell space np21w's maketext walks: the
+    // GDC's scroll mapping is APPLIED BY WHOEVER COMPUTES IT -- today the
+    // parent drives row*80; the SAD/PITCH-aware form is LOW12(SAD +
+    // row*PITCH) as pc98_text_rowbase produces. The value is latched into
+    // base_q at fill_start the way pc98_gvram_display latches its own SAD
+    // walk at each line edge, so a register rewrite mid-fill cannot shear
+    // the row being fetched.
     input  wire        fill_start,
     input  wire [11:0] row_base,
     input  wire  [7:0] bitac,          // GDC mode mask; 00 means every col is ANK
@@ -97,6 +105,7 @@ module pc98_glyph_rowbuf #(
     (* ramstyle = "M10K" *) logic [7:0] store [0:4095];
 
     logic       bank;              // which half is being filled
+    logic [11:0] base_q;           // row_base, held for the whole fill
     logic [6:0] col;
     logic [3:0] beat;
     logic       pair_second;       // this col is a kanji's right half
@@ -177,11 +186,15 @@ module pc98_glyph_rowbuf #(
                 // there. Flipping earlier needs the DISPLAY row boundary, and
                 // fill_start is the only thing this side is handed.
                 bank        <= ~bank;
+                base_q      <= row_base;
                 state       <= S_TV_REQ;
             end
 
             S_TV_REQ: begin
-                tv_cell <= row_base + {5'd0, col};
+                // The 12-bit sum is LOW12(edi) itself: a line whose base plus
+                // col runs past cell 4095 wraps onto the TVRAM ring the way
+                // np21w's `edi = LOW12(edi + 1)` does.
+                tv_cell <= base_q + {5'd0, col};
                 state   <= S_TV_W1;
             end
 

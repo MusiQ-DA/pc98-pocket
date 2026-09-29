@@ -849,6 +849,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_tvram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_kbd8251.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_font_ank.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_text_render.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_text_rowbase.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_video_timing.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_glyph_addr.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_gdc_mode1.sv
