@@ -411,7 +411,7 @@ jobs:
           V=$S/v30
           mkdir -p hdl/rtl/ucore && cp $V/ucrom.hex $V/ucdecode.hex hdl/rtl/ucore/
           verilator --binary --timing -Wno-fatal --top-module tb_v30_mem \
-            +define+CPU_V30+V30_BACKDOOR+SDRAM_USE_MP \
+            +define+V30_BACKDOOR+SDRAM_USE_MP \
             -O2 -Isim -I$S -I$V -I$H -I$H/i8288/HDL \
             sim/tb_v30_mem.sv \
             $V/v30u_ss_pkg.sv $V/v30_core.sv $V/v30u_biu.sv $V/v30u_eu.sv \

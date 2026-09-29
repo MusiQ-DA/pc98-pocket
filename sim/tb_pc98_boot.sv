@@ -2,20 +2,10 @@
 // tb_pc98_boot -- run the real ITF on the real CPU core, and watch where it
 // goes.
 //
-// Two CPU configurations share this bench:
-//
-//   (default)      the 8088 -- the hardware's first CPU. On the ITF it
-//                  derails at F9476 (0x68 there is the undocumented JS the
-//                  8086-class decoder dispatches to; the ITF means PUSH
-//                  imm16), which is the measurement that sent the hardware
-//                  to the V30.
-//   +define+CPU_V30  the nuV30 through v30_cpu_bridge -- the machine the
-//                  hardware is becoming. The same flat memory and the same
-//                  I/O models now see the bridge's byte cycles, so this is
-//                  the end-to-end dress rehearsal of the hardware CPU path
-//                  (i8288 + 8-bit bus + real ROMs + 8251) before the
-//                  bitstream: the instruction the 8088 tripped on must
-//                  simply execute here.
+// The CPU is the nuV30 through v30_cpu_bridge. The same flat memory and the
+// same I/O models see the bridge's byte cycles, so this is the end-to-end
+// dress rehearsal of the hardware CPU path (i8288 + 8-bit bus + real ROMs +
+// 8251) before the bitstream.
 //
 // The hardware says BANK 1: the ITF bank register is still at its reset value,
 // so the guest has never executed OUT 043D, 12. Everything upstream of that is
@@ -43,10 +33,8 @@
 
 module tb_pc98_boot;
 
-    // clk_chipset is 42.954545 MHz; clk_core is twice it, as core_top's PLL
-    // makes them.
+    // clk_chipset is 42.954545 MHz, as core_top's PLL makes it.
     logic clk_chipset = 1'b0;
-    logic clk_core    = 1'b0;
     // DERIVED, not a rounded literal. 11.641 drifts 0.0016 ns per cycle against
     // sdram_board_model's CLK_MHZ-derived device clock -- a whole period by
     // cycle 14800 -- and under REALMEM that manufactures read failures that are
@@ -54,7 +42,6 @@ module tb_pc98_boot;
     localparam real CLK_MHZ = 42.954545;
     localparam real HALF_NS = 500.0 / CLK_MHZ;
     always #(HALF_NS) clk_chipset = ~clk_chipset;
-    always  #5.820 clk_core    = ~clk_core;
 
     logic reset = 1'b1;
     // OUT 0F0h resets the CPU and nothing else: memory keeps its contents and
@@ -77,9 +64,7 @@ module tb_pc98_boot;
 `endif
 
     // ---- clock enables and the CPU pin clock -------------------------------
-    wire       clk_cpu, cpu_ce_posedge, cpu_ce_negedge, peripheral_ce;
-    wire       cycle_accrate, shift_read_timing;
-    wire [7:0] ccc_div, ccc_dec;
+    wire       cpu_ce_posedge, cpu_ce_negedge, peripheral_ce;
     wire [1:0] ram_rd_wait, ram_wr_wait;
     wire       biu_done;
 
@@ -94,14 +79,14 @@ module tb_pc98_boot;
         // twenty. Timer-fed delays still take their full guest time, which is
         // the honest trade: the machine itself is faster, not the clocks.
         .clk_select                         (2'b10),      // the firmware default (PC-98: 19.66 MHz)
-        .cpu_clk_pin                        (clk_cpu),
+        .cpu_clk_pin                        (),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
         .peripheral_ce                      (peripheral_ce),
-        .cycle_accrate                      (cycle_accrate),
-        .clock_cycle_counter_division_ratio  (ccc_div),
-        .clock_cycle_counter_decrement_value (ccc_dec),
-        .shift_read_timing                  (shift_read_timing),
+        .cycle_accrate                      (),
+        .clock_cycle_counter_division_ratio  (),
+        .clock_cycle_counter_decrement_value (),
+        .shift_read_timing                  (),
         .ram_read_wait_cycle                (ram_rd_wait),
         .ram_write_wait_cycle               (ram_wr_wait)
     );
@@ -113,8 +98,7 @@ module tb_pc98_boot;
     wire        cpu_word_access;
     wire  [7:0] din;
     wire  [2:0] processor_status;
-    wire        lock_n, s6_3_mux;
-    wire  [2:0] SEGMENT;
+    wire        lock_n;
 
     // bus-hold injection signals -- declared here because the bridge consumes
     // test_aen above the machinery that produces it.
@@ -126,10 +110,8 @@ module tb_pc98_boot;
     logic [39:0] clk_since_rst = 40'd0;
     logic [39:0] frz_start_clk = 40'd0, frz_end_clk = 40'd0;
 
-`ifdef CPU_V30
-    // The nuV30 + the bridge, wired the way core_top wires them under
-    // V30_BACKDOOR gives the bench dbg_regs for the trace
-    // below (the 8088 build reads its registers hierarchically instead).
+    // The nuV30 + the bridge, wired the way core_top wires them.
+    // V30_BACKDOOR gives the bench dbg_regs for the trace below.
     wire [2:0]  v30_bs;
     wire [19:0] v30_addr;
     wire [15:0] v30_data_o, v30_data_i;
@@ -195,33 +177,9 @@ module tb_pc98_boot;
         .dbg_regs  (dbg_regs), .dbg_first_pop (dbg_first_pop),
         .dbg_pend  (dbg_pend)
     );
-`else
-    i8088 u_cpu (
-        .CORE_CLK  (clk_core),
-        .CLK       (clk_cpu),
-        .RESET     (cpu_reset_w),
-        .READY     (1'b1),           // flat memory answers immediately
-        .INTR      (pic1_to_cpu),
-        .NMI       (1'b0),
-        .ad_out    (cpu_ad_out),
-        .dout      (cpu_data_bus),
-        .din       (din),
-        .lock_n    (lock_n),
-        .s6_3_mux  (s6_3_mux),
-        .s2_s0_out (processor_status),
-        .SEGMENT   (SEGMENT),
-        .biu_done  (biu_done),
-        .cycle_accrate                       (cycle_accrate),
-        .clock_cycle_counter_division_ratio  (ccc_div),
-        .clock_cycle_counter_decrement_value (ccc_dec),
-        .shift_read_timing                   (shift_read_timing)
-    );
-`endif
 
-    // ---- the register view: one local name per quantity, both CPUs -------
-    // (the 8088 build reads mcl86's registers hierarchically; the V30 build
-    // reads the core's dbg_regs view, retired-instruction granularity)
-`ifdef CPU_V30
+    // ---- the register view: one local name per quantity --------------------
+    // (the core's dbg_regs view, retired-instruction granularity)
     wire [15:0] eu_ax = dbg_regs[15:0];
     wire [15:0] eu_bx = dbg_regs[63:48];
     wire [15:0] eu_dx = dbg_regs[47:32];
@@ -230,16 +188,6 @@ module tb_pc98_boot;
     wire [15:0] eu_sp = dbg_regs[79:64];
     wire [15:0] eu_ss = dbg_regs[175:160];
     wire        eu_cf = dbg_regs[208];
-`else
-    wire [15:0] eu_ax = u_cpu.EU_CORE.eu_register_ax;
-    wire [15:0] eu_bx = u_cpu.EU_CORE.eu_register_bx;
-    wire [15:0] eu_dx = u_cpu.EU_CORE.eu_register_dx;
-    wire [15:0] eu_si = u_cpu.EU_CORE.eu_register_si;
-    wire [15:0] eu_di = u_cpu.EU_CORE.eu_register_di;
-    wire [15:0] eu_sp = u_cpu.EU_CORE.eu_register_sp;
-    wire [15:0] eu_ss = u_cpu.BIU_CORE.biu_register_ss;
-    wire        eu_cf = u_cpu.EU_CORE.eu_flags[0];
-`endif
 
     // ---- bus-hold injection ------------------------------------------------
     //
@@ -719,11 +667,7 @@ module tb_pc98_boot;
     // putting it back. One number decides it: if the low-water mark of CX
     // walks down to zero the loop is completing and being re-entered; if it
     // never gets near zero, CX is being reset under the loop's feet.
-`ifdef CPU_V30
     wire [15:0] eu_cx = dbg_regs[31:16];
-`else
-    wire [15:0] eu_cx = u_cpu.EU_CORE.eu_register_cx;
-`endif
     logic [15:0] cx_min_chunk = 16'hFFFF;
 
     // Reset by the progress loop after every chunk it prints -- through a
@@ -908,7 +852,6 @@ module tb_pc98_boot;
                 $write("\n             ROM  F88D0:");
                 for (int sb = 0; sb < 32; sb++) $write(" %02X", rom_byte(20'hF88D0 + sb));
                 $write("\n");
-                trace_req <= ~trace_req;   // arm the clk_core tracer
                 $display("  %8t  OUT 043D, %02X   -> itf_bank %0d",
                          $time, cpu_data_bus, (cpu_data_bus == 8'h12) ? 0 : 1);
             end
@@ -1190,19 +1133,10 @@ module tb_pc98_boot;
     // Segment transfers: when CS changes, where the EU went matters more
     // than where it was. A stray vector lands the CPU in RAM.
     logic [15:0] eu_cs_d = 16'hFFFF;
-    int k;
     always_ff @(posedge clk_chipset) begin
         eu_cs_d <= eu_cs;
-        if (eu_cs != eu_cs_d) begin
+        if (eu_cs != eu_cs_d)
             $display("  %8t  CS %04X -> %04X  (pc %05X)", $time, eu_cs_d, eu_cs, eu_pc);
-            // Every segment transfer in this boot is worth its full context:
-            // there are five of them in ninety seconds, and one of them is the
-            // machine leaving the ROM for good.
-            for (k = 0; k < 48; k = k + 1)
-                $display("        %05X  op %02X",
-                         disp_pc[(disp_w + 64 - 48 + k) % 64],
-                         disp_op[(disp_w + 64 - 48 + k) % 64]);
-        end
     end
 
     // ---- keyboard: the real 8251 model, the shipped RTL -----------------------
@@ -1485,248 +1419,13 @@ module tb_pc98_boot;
     // say where the CPU stopped FETCHING and not where it stopped EXECUTING.
     //
     // The queue's read pointer is the EU's instruction pointer, so CS:PFQ_ADDR
-    // is the real program counter. The V30 build reads the same quantities off
-    // the core's dbg_regs view ({psw,ip,ds,ss,cs,es,di,si,bp,sp,bx,dx,cx,ax},
-    // retired-instruction granularity -- the same view tb_pc98_v30 traced).
-`ifdef CPU_V30
+    // is the real program counter. The dbg_regs view
+    // ({psw,ip,ds,ss,cs,es,di,si,bp,sp,bx,dx,cx,ax}, retired-instruction
+    // granularity) is the same one tb_pc98_v30 traced.
     wire [15:0] eu_ip = dbg_regs[207:192];
     wire [15:0] eu_cs = dbg_regs[159:144];
-`else
-    wire [15:0] eu_ip = u_cpu.t_pfq_addr_out;
-    wire [15:0] eu_cs = u_cpu.t_biu_register_cs;
-`endif
     wire [19:0] eu_pc = {eu_cs, 4'd0} + {4'd0, eu_ip};
 
-    // The microcode program counter. A stuck EU is either parked on one
-    // microinstruction or going round a small ring of them, and which it is
-    // decides where to look.
-`ifdef CPU_V30
-    wire [12:0] urom = 13'd0;
-`else
-    wire [12:0] urom = u_cpu.EU_CORE.eu_rom_address;
-`endif
-    logic [12:0] urom_min = 13'h1FFF, urom_max = 13'd0;
-    logic [12:0] urom_seen [0:15];
-    int          urom_w = 0;
-    // Once the F6 dispatch is seen, log every microinstruction. F7 has the same
-    // shape in the listing and works, so the divergence is what matters.
-    logic urom_log = 1'b0;
-    int   urom_log_n = 0;
-    logic [12:0] urom_core_d = 13'h1FFF;
-    logic [12:0] urom_d = 13'h1FFF;
-    always_ff @(posedge clk_core) begin
-        urom_core_d <= urom;
-        if (urom == 13'h01F6) urom_log <= 1'b1;
-        if (urom_log && (urom != urom_core_d) && (urom_log_n < 0)) begin
-            urom_log_n <= urom_log_n + 1;
-            $display("    u %04X", urom);
-        end
-    end
-    always_ff @(posedge clk_chipset) begin
-        urom_d <= urom;
-        if (urom != urom_d) begin
-            urom_seen[urom_w[3:0]] <= urom;
-            urom_w <= urom_w + 1;
-            if (urom < urom_min) urom_min <= urom;
-            if (urom > urom_max) urom_max <= urom;
-        end
-    end
-
-    // mcl86 dispatches an x86 instruction by jumping to 0x0100 + opcode, so
-    // while eu_rom_address[12:8] == 1 the low byte IS the opcode being started.
-    // That gives a true x86 instruction trace, which the bus cannot.
-    wire       is_dispatch = (urom[12:8] == 5'h01);
-    // From the moment the machine leaves the BIOS for the ROM BASIC at E800,
-    // every instruction, in order, until the trace is spent. The ring dumped
-    // at the CS change was all keyword table -- ASCII executed as code -- so
-    // the derailment happens earlier than any ring of the last few dozen
-    // instructions can reach. This starts at the entry and runs forwards.
-    logic basic_trace = 1'b0;
-    logic basic_entry_dumped = 1'b0;
-    int   basic_n = 0;
-    int   itf_ck_n = 0;
-    int   m;
-    logic [19:0] disp_pc [0:63];
-    logic [7:0]  disp_op [0:63];
-    int          disp_w = 0;
-    // trace_all is armed from the clk_chipset OUT-043D block and counted down
-    // here, on clk_core. Two always_ff blocks writing one variable is a
-    // MULTIDRIVEN net: Verilator splits it and the arming never stuck, which
-    // is why +trace_all printed nothing. The chipset side now only TOGGLES a
-    // request; this domain owns the counter and loads it when the toggle moves.
-    logic [7:0]  trace_all = 8'd0;
-    logic        trace_req = 1'b0;   // driven by the clk_chipset block
-    logic        trace_req_q = 1'b0; // driven here
-    logic [19:0] disp_last = 20'hFFFFF;
-    logic [19:0] disp_rec  = 20'hFFFFF;
-    logic [7:0] op_seen [0:63];
-    int         op_w = 0;
-
-    // ---- the fall into low memory, caught the FIRST time ------------------
-    //
-    // The collapsed ring above answers "where did it end up" and cannot answer
-    // "what sent it there": by the time the machine is cycling through
-    // 0x00000, every entry is 0x00000. This is an UNCOLLAPSED ring, always
-    // recording, dumped once -- the first time the PC drops into the interrupt
-    // vector table, which no legitimate ITF code does.
-    //
-    // The derail was previously read off the bank switch. It is upstream of
-    // it: at the switch the ring was ALREADY all zeros.
-    localparam int TRAPN = 192;
-    logic [19:0] trap_pc [0:TRAPN-1];
-    logic [7:0]  trap_op [0:TRAPN-1];
-    logic [15:0] trap_sp [0:TRAPN-1];
-    logic [15:0] trap_ss [0:TRAPN-1];
-    logic [15:0] trap_ax [0:TRAPN-1];
-    int          trap_w = 0;
-    logic        trap_done = 1'b0;
-    int          tq;
-    logic       is_dispatch_d = 1'b0;
-    // Sampled on the EU's own clock. On clk_chipset the microcode PC had often
-    // already advanced past the dispatch entry, and every opcode came out one
-    // too high.
-    always_ff @(posedge clk_core) begin
-        is_dispatch_d <= is_dispatch;
-        if (is_dispatch & ~is_dispatch_d) begin
-            op_seen[op_w[5:0]] <= urom[7:0];
-            op_w <= op_w + 1;
-
-            trap_pc[trap_w % TRAPN] <= eu_pc;
-            trap_op[trap_w % TRAPN] <= urom[7:0];
-            trap_sp[trap_w % TRAPN] <= eu_sp;
-            trap_ss[trap_w % TRAPN] <= eu_ss;
-            trap_ax[trap_w % TRAPN] <= eu_ax;
-            trap_w <= trap_w + 1;
-
-            // Executing below 0x00400 is the interrupt vector table. Nothing
-            // in the ROM does that on purpose, so the first time is the one
-            // that matters -- and the 192 instructions before it are what
-            // this whole bench exists to show.
-            if (!trap_done && trap_w > TRAPN && eu_pc < 20'h00400) begin
-                trap_done <= 1'b1;
-                $display("\n  %8t  *** FELL INTO LOW MEMORY at %05X ***",
-                         $time, eu_pc);
-                $display("  the %0d instructions before it, oldest first:", TRAPN);
-                for (tq = 0; tq < TRAPN; tq = tq + 1)
-                    $display("    %3d  %05X  op %02X   ss:sp %04X:%04X  ax %04X",
-                             tq,
-                             trap_pc[(trap_w + tq) % TRAPN],
-                             trap_op[(trap_w + tq) % TRAPN],
-                             trap_ss[(trap_w + tq) % TRAPN],
-                             trap_sp[(trap_w + tq) % TRAPN],
-                             trap_ax[(trap_w + tq) % TRAPN]);
-                $display("  *** end of the fall ***\n");
-            end
-            // The same trace, but keeping WHERE each opcode was dispatched
-            // from. A ring of addresses says the control flow went somewhere
-            // it should not have; a ring of address-and-opcode says which
-            // instruction sent it, which is the part that can be fixed.
-            //
-            // eu_pc is the prefetch queue's read pointer and has already moved
-            // past the opcode byte by the time the dispatch entry is seen, so
-            // read these as "the instruction ending just before here".
-            // Only the jumps. A 65536-iteration delay loop dispatches the
-            // same two instructions until the ring holds nothing else, and
-            // the ITF is mostly delay loops; keeping the discontinuities
-            // makes 64 entries reach back through the whole cycle.
-            // +trace_all: every fetch, uncollapsed, for a short window. The
-            // collapsed ring says "the PC came back to 0x00000 forty-eight
-            // times" and cannot say what it executed in between, which is
-            // exactly what the bank-switch failure needs.
-            trace_req_q <= trace_req;
-            if (trace_req != trace_req_q)
-                trace_all <= 8'd120;
-            else if (trace_all != 8'd0) begin
-                $display("    ALL %05X op %02X  ax %04x bx %04x cx %04x dx %04x",
-                         eu_pc, urom[7:0], eu_ax, eu_bx, eu_cx, eu_dx);
-                trace_all <= trace_all - 8'd1;
-            end
-
-            // Jumps only, and a run of the SAME jump collapses to one entry.
-            // A delay loop is one branch taken 65536 times and a poll loop is
-            // one branch taken until the port answers; recording either in
-            // full leaves 64 entries covering a few microseconds. Collapsed,
-            // they cover the whole 1.4-second cycle.
-            if ((eu_pc < disp_last || eu_pc > disp_last + 20'd8)
-                && eu_pc != disp_rec) begin
-                disp_pc[disp_w[5:0]] <= eu_pc;
-                disp_op[disp_w[5:0]] <= urom[7:0];
-                disp_w   <= disp_w + 1;
-                disp_rec <= eu_pc;
-                // Straight out, in order, rather than into a ring. Two turns
-                // of the 1.4-second cycle fit in a few thousand lines, and
-                // the edge that closes the loop is whichever branch appears
-                // in the second turn with a target the first turn reached
-                // from somewhere else.
-                if (disp_w < 4000)
-                    $display("    J%0d %05X op %02X", disp_w, eu_pc, urom[7:0]);
-            end
-            disp_last <= eu_pc;
-            if (eu_cs == 16'hE800) basic_trace <= 1'b1;
-            // BASIC-entry forensics (mirrors the V30 bench): when the machine
-            // first enters the BASIC segment, dump the POST stack, SP and the
-            // IVT[1E] entry -- the V30 machine derails here because the POP SS
-            // at F000:7D80 pops a stale printer-handler word, and the mcl86
-            // machine (which reached F3AD5) is the working reference.
-            if (eu_cs == 16'hE800 && !basic_entry_dumped) begin
-                basic_entry_dumped <= 1'b1;
-                $display("  %8t  BENTRY: sp=%04X ss=%04X IVT1E=%04X:%04X  stk F0:%02X%02X F2:%02X%02X F4:%02X%02X F6:%02X%02X F8:%02X%02X FA:%02X%02X FC:%02X%02X FE:%02X%02X",
-                         $time, eu_sp,
-                         eu_ss,
-                         ram[20'h0079],ram[20'h0078], ram[20'h007B],ram[20'h007A],
-                         ram[20'h003F1],ram[20'h003F0], ram[20'h003F3],ram[20'h003F2],
-                         ram[20'h003F5],ram[20'h003F4], ram[20'h003F7],ram[20'h003F6],
-                         ram[20'h003F9],ram[20'h003F8], ram[20'h003FB],ram[20'h003FA],
-                         ram[20'h003FD],ram[20'h003FC], ram[20'h003FF],ram[20'h003FE]);
-            end
-            // The ITF cycles back to its own ROM checksum about every 1.4
-            // seconds. Nothing in the image jumps there -- the early ITF has
-            // no stack and returns through JMP BP / JMP SP -- so the only way
-            // to see who sends it back is to catch the arrival.
-            // The ITF's memory sizing, at the two points where it has just
-            // verified a 64 KB pair: BX is the segment it tested, DH the
-            // running block count, and CF says whether the compare held. The
-            // count stops at 2 -- 128 KB -- and nothing above 1FFFF is ever
-            // written, so either the fill never ran or the compare that
-            // follows it is not doing what the ROM thinks.
-            // The size display itself: DX is the answer it is about to print
-            // (AH x 64 KB), and the branches that reach here name whoever
-            // decided it -- the 640 KB counting loop at F8AF0 never runs, so
-            // something else is setting DH.
-            if (eu_pc == 20'hF9678 && itf_ck_n < 2) begin
-                itf_ck_n <= itf_ck_n + 1;
-                $display("  %8t  SIZE DISPLAY  dx %04X  bx %04X", $time,
-                         eu_dx, eu_bx);
-                for (m = 0; m < 48; m = m + 1)
-                    $display("        %05X  op %02X",
-                             disp_pc[(disp_w + 64 - 48 + m) % 64],
-                             disp_op[(disp_w + 64 - 48 + m) % 64]);
-            end
-            if (eu_pc == 20'hF8880 || eu_pc == 20'hF8B1E
-             || eu_pc == 20'hF889A || eu_pc == 20'hF8B38) begin
-                $display("  %8t  MEMSIZE at %05X  bx %04X dx %04X ax %04X  CF=%0d",
-                         $time, eu_pc,
-                         eu_bx, eu_dx,
-                         eu_ax, eu_cf);
-            end
-            if (1'b0 && eu_pc == 20'hF8427) begin
-                itf_ck_n <= itf_ck_n + 1;
-                $display("  %8t  ITF cycle mark at F8427 (visit %0d)", $time, itf_ck_n);
-                for (m = 0; m < 48; m = m + 1)
-                    $display("        %05X  op %02X",
-                             disp_pc[(disp_w + 64 - 48 + m) % 64],
-                             disp_op[(disp_w + 64 - 48 + m) % 64]);
-            end
-            if (basic_trace && basic_n < 600) begin
-                basic_n <= basic_n + 1;
-                $display("    B%0d  %05X  op %02X  ax %04X bx %04X cx %04X dx %04X si %04X di %04X",
-                         basic_n, eu_pc, urom[7:0],
-                         eu_ax, eu_bx,
-                         eu_cx, eu_dx,
-                         eu_si, eu_di);
-            end
-        end
-    end
 
     logic [19:0] eu_pc_d = 20'hFFFFF;
     int          eu_steps = 0, eu_traced = 0;
@@ -1819,7 +1518,6 @@ module tb_pc98_boot;
         for (i = 0; i < 1048576; i = i + 1) ram[i] = 8'h00;
         $readmemh("itf.hex",  itf);
         $readmemh("bios.hex", bios);
-`ifdef CPU_V30
         // WORKAROUND (same as tb_pc98_v30's, see docs/NUV30_66_VERIFICATION.md
         // and docs/FRANKEN_ROM_LESSON.md): the 0x66 at BIOS.ROM+1 is
         // mid-instruction data in a mixed-generation image. nuV30 executes
@@ -1828,7 +1526,6 @@ module tb_pc98_boot;
         // intent; a NOP in its place runs the intended stream. Only patch
         // if present, so a fixed ROM needs no bench edit.
         if (bios[1] == 8'h66) bios[1] = 8'h90;
-`endif
 
         $display("ITF  reset vector F8000+7FF0: %02X %02X %02X %02X %02X",
                  itf[16'h7FF0], itf[16'h7FF1], itf[16'h7FF2],
@@ -1868,8 +1565,8 @@ module tb_pc98_boot;
         end
         for (i = 0; i < chunks; i = i + 1) begin
             repeat (5_000_000) @(posedge clk_chipset);
-            $display("  ... %0t  EU %05X  urom %04X  wr %05X-%05X n %0d  tvw %0d",
-                     $time, eu_pc, urom,
+            $display("  ... %0t  EU %05X  wr %05X-%05X n %0d  tvw %0d",
+                     $time, eu_pc,
                      wr_lo_chunk, wr_hi_chunk, wr_n_chunk, tvram_wr_count);
             kbd_state_dump;
             $write("        cx %04X min %04X  ax %04X bx %04X dx %04X  pc:",
@@ -1933,14 +1630,6 @@ module tb_pc98_boot;
         $display("port 043D written: %0d  last value %02X  itf_bank %0d",
                  saw_043d, last_043d, itf_bank);
         $display("EU steps      %0d", eu_steps);
-        $display("urom now      %04X   moves %0d   range %04X..%04X",
-                 urom, urom_w, urom_min, urom_max);
-        $display("x86 opcodes dispatched: %0d", op_w);
-        for (i = (op_w > 64 ? op_w - 64 : 0); i < op_w; i = i + 1)
-            $display("  op %02X", op_seen[i & 63]);
-        $display("last 16 microcode addresses:");
-        for (i = 0; i < 16; i = i + 1)
-            $display("  %04X", urom_seen[(urom_w + i) & 15]);
         $display("last 128 EU addresses (oldest first):");
         for (i = 0; i < 128; i = i + 1)
             $display("  %05X", eu_ring[(eu_ring_w + i) & 127]);

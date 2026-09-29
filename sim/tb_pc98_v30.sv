@@ -126,8 +126,7 @@ module tb_pc98_v30;
     );
 
     // The live register view: {psw,ip,ds,ss,cs,es,di,si,bp,sp,bx,dx,cx,ax},
-    // retired-instruction granularity. The old bench reached into mcl86 for
-    // these; the V30 core publishes them on a port.
+    // retired-instruction granularity, published on a port.
     wire [15:0] dbg_ax = dbg_regs[15:0];
     wire [15:0] dbg_cx = dbg_regs[31:16];
     wire [15:0] dbg_dx = dbg_regs[47:32];
@@ -2358,10 +2357,9 @@ module tb_pc98_v30;
     wire [19:0] eu_pc = {eu_cs, 4'd0} + {4'd0, eu_ip};
 
     // Instruction retirement: dbg_regs updates as each instruction retires,
-    // so watching eu_pc move gives the x86 trace the old bench read out of
-    // mcl86's microcode dispatch. Only the discontinuities are kept -- a
-    // delay loop is one branch taken 65536 times, and collapsed, 64 entries
-    // cover a whole 1.4-second ITF cycle.
+    // so watching eu_pc move gives the x86 trace. Only the discontinuities
+    // are kept -- a delay loop is one branch taken 65536 times, and
+    // collapsed, 64 entries cover a whole 1.4-second ITF cycle.
     logic basic_trace = 1'b0;
     int   basic_n = 0;
     int   ext_hook_n = 0;
