@@ -52,6 +52,10 @@ module pc98_gvram_display #(
     input  wire        disp_on,           // the slave GDC's START seen
     input  wire        disp_page,         // port 0xA4 bit 0: show page one
     input  wire        analog_mode,       // port 0x6A bit 0: plane E exists
+    // The "200 line" modes on this fixed 400-line raster: each guest line
+    // serves two rasterlines. Set by Peripherals from the slave's CSRFORM
+    // LR field / mode1 bit 4 / a ~200-line SYNC AL -- see the w_step note.
+    input  wire        dbl,
 
     // The slave GDC's display registers, live from pc98_gdc on this same
     // clock. They are latched at each line edge, so a mid-frame rewrite
@@ -214,12 +218,18 @@ module pc98_gvram_display #(
                                  : {pitch, 1'b0};
     wire  [9:0]  cur_len  = part_len[cur_part];
     wire  [15:0] sad_next = part_sad[cur_part + 2'd1];   // wraps to 0 at 3, unused there
+    // In the doubled modes each guest line covers a PAIR of rasterlines, so
+    // the walk steps only when the next fill target opens a new guest line
+    // -- the target's low bit, since fill_tgt counts rasterlines. The LENs
+    // keep counting guest lines, so the partition logic below is unchanged.
+    wire         w_step   = ~dbl | fill_tgt[0];
     wire         w_wrap   = (line_now == 9'(LINES - 1 - LOOKAHEAD));
-    wire         w_adv    = !w_wrap && (cur_part != 2'd3)
+    wire         w_adv    = w_step & !w_wrap && (cur_part != 2'd3)
                        && (({1'b0, part_rel} + 11'd1) >= {1'b0, cur_len});
     wire  [14:0] base_next = w_wrap ? 15'(part_sad[0] << 1)
                           : w_adv  ? 15'(sad_next << 1)
-                          :          run_base + 15'(pitch_b);
+                          : w_step ? run_base + 15'(pitch_b)
+                          :          run_base;
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -228,7 +238,9 @@ module pc98_gvram_display #(
             run_base <= 15'd0;
         end else if (line_edge && (line_now < 9'(LINES))) begin
             cur_part <= w_wrap ? 2'd0 : w_adv ? cur_part + 2'd1 : cur_part;
-            part_rel <= (w_wrap || w_adv) ? 10'd0 : part_rel + 10'd1;
+            part_rel <= (w_wrap || w_adv) ? 10'd0
+                      : w_step            ? part_rel + 10'd1
+                      :                     part_rel;
             run_base <= base_next;
         end
     end

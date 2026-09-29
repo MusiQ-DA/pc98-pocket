@@ -13,6 +13,7 @@ module tb_pc98_gvram_display;
     logic rst = 1;
     logic [9:0] h = 0, v = 0;
     logic disp_on = 1, disp_page = 0, analog_m = 1;
+    logic dbl = 0;
 
     logic [7:0]  pitch = 8'd40;
     logic        mhz5  = 1'b0;
@@ -29,7 +30,7 @@ module tb_pc98_gvram_display;
         .clk(clk), .rst(rst), .rd_clk(rd_clk),
         .hcount(h), .vcount(v), .disp_on(disp_on),
         .disp_page(disp_page), .analog_mode(analog_m),
-        .pitch(pitch), .mhz5(mhz5),
+        .pitch(pitch), .mhz5(mhz5), .dbl(dbl),
         .part_sad(part_sad), .part_len(part_len),
         .p_req(p_req), .p_addr(p_addr), .p_len(p_len),
         .p_ack(p_ack), .p_rvalid(p_rvalid), .p_rdata(p_rdata), .p_done(p_done),
@@ -133,7 +134,8 @@ module tb_pc98_gvram_display;
         if (!rst && frames >= 2 && !quiet && v >= 10 && v < 390
          && h > 10 && h < 400) begin
             logic [3:0] exp;
-            exp = exp_dot(int'(v), int'(h) - 1, disp_page ? 1 : 0);
+            exp = exp_dot(dbl ? int'(v) >> 1 : int'(v),
+                          int'(h) - 1, disp_page ? 1 : 0);
             checked++;
             if (gfx_dot !== exp) begin
                 errors++;
@@ -191,6 +193,13 @@ module tb_pc98_gvram_display;
         pitch = 8'd80;             //    PITCH=80, the same 80-byte line as A
         settle(3);
         $display("H: mhz5/80 checked=%0d errors=%0d", checked, errors);
+
+        quiet = 1'b1;              // I: 200-line doubling -- a 200-line
+        dbl = 1'b1;                //    partition fills all 400 rasterlines,
+        mhz5 = 1'b0; pitch = 8'd40;//    each guest line twice
+        part_len[0] = 10'd200;
+        settle(3);
+        $display("I: doubled checked=%0d errors=%0d", checked, errors);
 
         if (errors == 0 && checked > 200000)
             $display("PASS tb_pc98_gvram_display (%0d dots)", checked);

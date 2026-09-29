@@ -866,6 +866,8 @@ module PERIPHERALS #(
     wire [4:0]  gdc_m_cur_bot,   gdc_s_cur_bot;
     wire [5:0]  gdc_m_cur_rate,  gdc_s_cur_rate;
     wire [1:0]  gdc_m_zoom,      gdc_s_zoom;
+    wire [4:0]  gdc_s_lrep;                  // slave CSRFORM LR (GRPH_LR)
+    wire [9:0]  gdc_s_al;                    // slave SYNC AL field, raw
     // The drawing-server plumbing: the two channels' handshakes and the
     // done-level synchronisers (the softcore writes the level; the rising
     // edge here retires the EXECUTE in the GDC).
@@ -907,6 +909,7 @@ module PERIPHERALS #(
         .cursor_en(gdc_m_cur_en), .cursor_blink_en(gdc_m_cur_bl),
         .cursor_top(gdc_m_cur_top), .cursor_bottom(gdc_m_cur_bot),
         .cursor_rate(gdc_m_cur_rate), .zoom_disp(gdc_m_zoom),
+        .line_rep(), .vlines(),
         .draw_req(gdc_m_draw_req), .draw_op(gdc_m_draw_op),
         .draw_busy(gdc_m_draw_busy), .srv_done_stb(gdc_m_done_stb),
         .draw_snap(gdc_m_draw_snap)
@@ -924,6 +927,7 @@ module PERIPHERALS #(
         .cursor_en(gdc_s_cur_en), .cursor_blink_en(gdc_s_cur_bl),
         .cursor_top(gdc_s_cur_top), .cursor_bottom(gdc_s_cur_bot),
         .cursor_rate(gdc_s_cur_rate), .zoom_disp(gdc_s_zoom),
+        .line_rep(gdc_s_lrep), .vlines(gdc_s_al),
         .draw_req(gdc_s_draw_req), .draw_op(gdc_s_draw_op),
         .draw_busy(gdc_s_draw_busy), .srv_done_stb(gdc_s_done_stb),
         .draw_snap(gdc_s_draw_snap)
@@ -1256,6 +1260,7 @@ module PERIPHERALS #(
         .analog_mode(pc98_analog),
         .pitch(gdc_s_pitch),
         .mhz5(&gdc_clk),
+        .dbl(gdc_s_dbl),
         .part_sad(gdc_s_sad), .part_len(gdc_s_len),
         .p_req(gv_rd_req), .p_addr(gv_rd_addr), .p_len(gv_rd_len),
         .p_ack(gv_rd_ack), .p_rvalid(gv_rd_valid), .p_rdata(gv_rd_data),
@@ -1534,11 +1539,23 @@ module PERIPHERALS #(
     logic pc98_ank8 = 1'b0;
     logic pc98_wide = 1'b0;
     logic gdc_vs_q3 = 1'b0;
+    // A "200 line" graphics mode means each VRAM line serves two rasterlines
+    // on this fixed 400-line raster (np21w's GRPH_LR=1 walk, maketgrp).
+    // Three sources flag it, in the order software touches them: mode1 bit 4
+    // (the port 0x68 flip-flop the BIOS sets beside it), the slave GDC's
+    // CSRFORM LR field itself, and a true-15.98 kHz SYNC whose AL field is
+    // ~200 (np21w's 15kHz table writes 200 here, the 24kHz one 400).
+    // Latched at the frame edge like the text-mode bits so a mode flip
+    // tears at most one frame.
+    logic gdc_s_dbl = 1'b0;
     always_ff @(posedge clock) begin
         gdc_vs_q3 <= gdc_vs_q;
         if (gdc_vs_q & ~gdc_vs_q3) begin
             pc98_ank8 <= ~pc98_mode1[3];
             pc98_wide <=  pc98_mode1[2];
+            gdc_s_dbl <= pc98_mode1[4]
+                      || (gdc_s_lrep != 5'd0)
+                      || ((gdc_s_al != 10'd0) && (gdc_s_al < 10'd256));
         end
     end
 
