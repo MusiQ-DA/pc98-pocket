@@ -47,3 +47,16 @@ the shipping bitstream. Fit/resource questions go through a CI run; if a
 number is needed before pushing, use `scripts/measure_core.sh <top>
 <files>` — it synthesises ONE module in a scratch dir under /tmp, never
 touches `fpga/db`, and is the only sanctioned local Quartus invocation.
+
+## Deploying to hardware
+
+- Prefer `scripts/jtag_flash.sh <path/to/ap_core.sof>` — it programs the
+  Cyclone V directly over JTAG and does NOT touch the SD card. Pass the CI
+  artifact `.sof` (from the `quartus-win-bitstream` artifact of a `build`
+  run; the artifact carries `output_files/ap_core.sof`). Docker converts
+  .sof→.svf, openocd plays it. A core must be RUNNING on the Pocket for
+  the bitstream to take (the menu leaves the fabric unconfigured).
+- `scripts/deploy.sh` (the deploy skill's path) builds the full
+  `hiroya.PC9801` core directory onto the SD card — use it only when the
+  SD card route is explicitly wanted, e.g. when data-slot assets changed.
+  Do not deploy via the card by default.

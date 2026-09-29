@@ -60,11 +60,12 @@ module tb_pc98_fdc_glue;
     pc98_fdc_glue dut (
         .clk(clk), .rst(rst),
         .sel_stat(sel_stat), .sel_data(sel_data), .sel_ctrl(sel_ctrl),
-        .sel_mode(sel_mode), .port_2dd(port_2dd),
+        .sel_mode(sel_mode), .sel_mode144(1'b0), .port_2dd(port_2dd),
         .wr_stb(wr_stb), .wr_data(wr_data), .rd_stb(rd_stb),
         .fd_addr(fd_addr), .fd_write(fd_write), .fd_read(fd_read),
         .fd_wdata(fd_wdata), .fd_irq(fd_irq), .fd_busy(fd_busy),
         .ctrl_readback(ctrl_readback), .mode_readback(mode_readback),
+        .reg144_readback(),
         .group_live(group_live), .irq_2hd(irq_2hd), .irq_2dd(irq_2dd)
     );
 

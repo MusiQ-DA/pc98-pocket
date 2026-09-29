@@ -297,6 +297,7 @@ module PERIPHERALS #(
     // rather than the written byte. The glue is instantiated two thousand
     // lines down, beside floppy.v; these are its outputs reaching back.
     logic [7:0] fdc_mode_readback;   // 0xBE
+    logic [7:0] fdc_144_readback;    // 0x4BE (3-mode density)
     logic [7:0] fdc_ctrl_readback;   // 0x94 / 0xCC
     logic       fdc_group_live;      // this cycle's window is chgreg's choice
     logic       fdc_glue_irq_2hd;    // slave IRQ11 -> INT 13h
@@ -310,11 +311,17 @@ module PERIPHERALS #(
                          & ((address[7:0] == 8'h90) || (address[7:0] == 8'h92)
                          ||  (address[7:0] == 8'hC8) || (address[7:0] == 8'hCA));
 
+    // 0x4BE -- the 3-mode drive's density register, read on the live address.
+    // It sits in the 0x04 page, outside pc98_io_exact's 0x00-page window.
+    wire fdd_144_select = iorq & ~address_enable_n & (address[15:0] == 16'h04BE);
+
     wire fdd_stub_read = (fdd_be_select | fdd_94_select
-                          | fdd_cc_select | fdd_dead_select) & ~io_read_n;
+                          | fdd_cc_select | fdd_dead_select
+                          | fdd_144_select) & ~io_read_n;
     wire [7:0] fdd_stub_data = fdd_be_select   ? fdc_mode_readback
                              : (fdd_94_select | fdd_cc_select)
                                                ? fdc_ctrl_readback
+                             : fdd_144_select  ? fdc_144_readback
                              :                   8'hFF;   // the dead window
 
     // Enable Segment Map hx000, hx400, hx800, hxC00. Was a port; nothing past
@@ -2027,6 +2034,11 @@ module PERIPHERALS #(
     wire fdd_ctrl_win  = pc98_addr_win & ((fdc_addr_eff[7:0] == 8'h94)
                                         |  (fdc_addr_eff[7:0] == 8'hCC));
     wire fdd_mode_win  = pc98_addr_win &  (fdc_addr_eff[7:0] == 8'hBE);
+    // 0x4BE sits above the 0x00-page the FDC windows live in, so it is not on
+    // pc98_addr_win; it decodes the whole 16-bit address. This is the 3-mode
+    // drive's density select (np21w fdc_o4be), present when a 1.44-capable
+    // drive is attached.
+    wire fdd_mode144_win = ~fdc_aen_eff & (fdc_addr_eff[15:0] == 16'h04BE);
     // The MSR/FIFO pairs, the same set floppy0_chip_select_n covers, but off
     // the effective address so a write lands on the port it was issued to.
     wire fdd_fifo_win  = pc98_addr_win & ((fdc_addr_eff[7:0] == 8'h90)
@@ -2047,6 +2059,7 @@ module PERIPHERALS #(
         .sel_data      (fdd_fifo_win &  fdc_addr_eff[1]),
         .sel_ctrl      (fdd_ctrl_win),
         .sel_mode      (fdd_mode_win),
+        .sel_mode144   (fdd_mode144_win),
         .port_2dd      (fdc_addr_eff[6]),
         // The selects already carry the window -- and, on the end-of-write
         // cycle, the window of the write that just finished.
@@ -2061,6 +2074,7 @@ module PERIPHERALS #(
         .fd_busy       (fdd_busy),
         .ctrl_readback (fdc_ctrl_readback),
         .mode_readback (fdc_mode_readback),
+        .reg144_readback (fdc_144_readback),
         .group_live    (fdc_group_live),
         .irq_2hd       (fdc_glue_irq_2hd),
         .irq_2dd       (fdc_glue_irq_2dd),

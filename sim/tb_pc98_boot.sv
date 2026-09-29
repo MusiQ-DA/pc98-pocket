@@ -361,6 +361,25 @@ module tb_pc98_boot;
         else                            rom_byte = bios[a - 20'hE8000];
     endfunction
 
+    // ---- the built-in 3-mode FDD option ROM at D0000 ------------------
+    // Mirrors Chipset.sv's decode (address[19:8] == D00): the POST scans
+    // D0000-DFFFF for AA55h at offset 9. xrom.hex is generated from
+    // fpga/xrom.asm; the tail past the image stays FFh like the
+    // open bus does.
+    logic [7:0] xrom [0:255];
+    initial begin
+        for (int i = 0; i < 256; i = i + 1) xrom[i] = 8'hFF;
+        $readmemh("xrom.hex", xrom);
+    end
+
+    function automatic logic is_xrom(input logic [19:0] a);
+        is_xrom = (a[19:8] == 12'hD00);
+    endfunction
+
+    function automatic logic [7:0] xrom_byte(input logic [19:0] a);
+        xrom_byte = xrom[a[7:0]];
+    endfunction
+
     // The data bus is combinational, as the chipset's is. Registering it here
     // put a chipset clock between the strobe and the byte, and the core sampled
     // stale data: the first run stalled for seventeen milliseconds in the middle
@@ -467,9 +486,12 @@ module tb_pc98_boot;
     // RAM.sv answers where it is selected; the mirror answers the rest
     // (A0000-A7FFF and C0000-E7FFF are not in its select).
     wire [7:0] mem_read_byte = ~ram_address_select_n ? ram_dout
+                            : is_xrom(cpu_address)   ? xrom_byte(cpu_address)
                                                      : ram[cpu_address];
-    // The odd lane of a one-cycle word read; only the SDRAM serves those.
+    // The odd lane of a one-cycle word read; the SDRAM serves those, the
+    // option ROM serves its own.
     wire [7:0] din_hi = (~mem_rd_n & ~ram_address_select_n) ? ram_dout_hi
+                      : (~mem_rd_n & is_xrom(cpu_address))  ? xrom_byte(cpu_address | 20'h1)
                                                             : 8'hFF;
 
     // The mirror check. On the trailing edge of a read RAM.sv answered, what
@@ -493,8 +515,9 @@ module tb_pc98_boot;
         end
     end
 `else
-    wire [7:0] mem_read_byte = is_rom(cpu_address) ? rom_byte(cpu_address)
-                                                   : ram[cpu_address];
+    wire [7:0] mem_read_byte = is_rom(cpu_address)  ? rom_byte(cpu_address)
+                             : is_xrom(cpu_address) ? xrom_byte(cpu_address)
+                                                    : ram[cpu_address];
     wire bench_ready = 1'b1;          // flat memory answers immediately
     // The flat array is byte-wide, so no word cycle can be served from it.
     // PC98_WORD_MEM is not defined for this build, so none is asked for.
@@ -607,7 +630,22 @@ module tb_pc98_boot;
                      $time, kbd500_q, ram[20'h00500], eu_pc);
             kbd500_q <= ram[20'h00500];
         end
+        // The option ROM: first guest read inside the window, first
+        // registration write to the XROM dispatch table.
+        if (~mem_rd_n & is_xrom(cpu_address) & ~xrom_rd_seen) begin
+            xrom_rd_seen <= 1'b1;
+            $display("  %8t  XROM first read  [%05X]  (eu_pc %05X)",
+                     $time, cpu_address, eu_pc);
+        end
+        if ((ram[20'h004B3] !== 8'h00) & ~xrom_reg_seen) begin
+            xrom_reg_seen <= 1'b1;
+            $display("  %8t  XROM registered: 4B3=%02X 5AE=%02X 5F8=%02X:%02X%02X  (eu_pc %05X)",
+                     $time, ram[20'h004B3], ram[20'h005AE],
+                     {ram[20'h5FB], ram[20'h5FA]},
+                     ram[20'h5F9], ram[20'h5F8], eu_pc);
+        end
     end
+    logic xrom_rd_seen = 1'b0, xrom_reg_seen = 1'b0;
 
     wire [7:0] sysport_data = sysport_35_sel ? sysport_c
                             : sysport_31_sel ? 8'h10
@@ -637,6 +675,7 @@ module tb_pc98_boot;
     initial for (int q = 0; q < 256; q = q + 1) unanswered_seen[q] = 1'b0;
 
     logic io_wr_d = 1'b1, mem_wr_d = 1'b1, mem_rd_d = 1'b1, io_rd_d = 1'b1;
+    logic in_1b_region = 1'b0;
     logic [7:0] mem_wr_data_q = 8'h00;
     logic [7:0] io_wr_data_q  = 8'h00;
     logic [7:0] tvram_code [0:511];   // A0000-A01FF, first row of cells
@@ -814,6 +853,34 @@ module tb_pc98_boot;
                 gdc_poll_seen <= 1'b0;
                 $display("  %8t  IN  from %04X", $time, cpu_address[15:0]);
             end
+        end
+
+        // Boot-path vector fetches: a read of IVT[1B]/[1E]/[1F] names both the
+        // call site (eu_pc) and the handler the call lands on -- a resident
+        // handler, an int-0xC6 stub and a dead far jump all look identical in
+        // the port log without this.
+        if (~mem_rd_n && (cpu_address == 20'h0006C
+                      ||  cpu_address == 20'h00078
+                      ||  cpu_address == 20'h0007C))
+            $display("  %8t  INT vector[%02X] = %02X%02X:%02X%02X  (eu_pc %05X)",
+                     $time, cpu_address[6:0] >> 2,
+                     ram[cpu_address + 3], ram[cpu_address + 2],
+                     ram[cpu_address + 1], ram[cpu_address], eu_pc);
+
+        // Whether an int-0x1b call even reaches the resident handler. The FDC
+        // service block runs FF2C0-FF7FF; entry and exit get one line each,
+        // and a call that never lands here leaves exactly the no-I/O gap the
+        // last run's IPL window showed.
+        if (eu_pc >= 20'hFF2C0 && eu_pc <= 20'hFF7FF) begin
+            if (~in_1b_region) begin
+                in_1b_region <= 1'b1;
+                $display("  %8t  int1b region <- pc %05X  ax %04X bx %04X dx %04X",
+                         $time, eu_pc, eu_ax, eu_bx, eu_dx);
+            end
+        end else if (in_1b_region) begin
+            in_1b_region <= 1'b0;
+            $display("  %8t  int1b region -> pc %05X  ax %04X",
+                     $time, eu_pc, eu_ax);
         end
 
         // I/O write, on the trailing edge.
@@ -1280,6 +1347,7 @@ module tb_pc98_boot;
         .sel_data      (fdc_sel_data),
         .sel_ctrl      (fdd_ctrl_win),
         .sel_mode      (fdd_mode_win),
+        .sel_mode144   (1'b0),
         .port_2dd      (fdc_addr_eff[6]),
         .wr_stb        (fdc_wr_edge),
         .wr_data       (write_to_fdd),
@@ -1292,6 +1360,7 @@ module tb_pc98_boot;
         .fd_busy       (fdd_busy_wire),
         .ctrl_readback (fdc_ctrl_rb),
         .mode_readback (fdc_mode_rb),
+        .reg144_readback (),
         .group_live    (fdc_group_live),
         .irq_2hd       (fdc_irq3),
         .irq_2dd       (fdc_irq2),
@@ -1814,10 +1883,22 @@ module tb_pc98_boot;
             // The BIOS equipment/boot bytes the hardware panel cannot reach:
             // [0x480] 2HD flag, [0x55C]/[0x55D] the per-drive tables,
             // [0x494] DISK-EQUIP2, [0x584] DISK_BOOT (the live DAZUA).
-            $display("        disk: 480=%02X 485=%02X 492=%02X 493=%02X 494=%02X 55C=%02X 55D=%02X 55E=%02X 584=%02X 4b7=%02X 4b9=%02X 501=%02X",
+            $display("        disk: 480=%02X 485=%02X 492=%02X 493=%02X 494=%02X 55C=%02X 55D=%02X 55E=%02X 584=%02X 4b7=%02X 4b9=%02X 501=%02X 5ae=%02X 5f8=%02X%02X:%02X%02X",
                      ram[20'h480], ram[20'h485], ram[20'h492], ram[20'h493],
                      ram[20'h494], ram[20'h55C], ram[20'h55D], ram[20'h55E],
-                     ram[20'h584], ram[20'h4B7], ram[20'h4B9], ram[20'h501]);
+                     ram[20'h584], ram[20'h4B7], ram[20'h4B9], ram[20'h501],
+                     ram[20'h5AE], ram[20'h5FB], ram[20'h5FA],
+                     ram[20'h5F9], ram[20'h5F8]);
+            $display("        ivt: 1b=%04X:%04X 12=%04X:%04X 13=%04X:%04X 1e=%04X:%04X 1f=%04X:%04X 4b0=%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
+                     {ram[20'h6F],ram[20'h6E]}, {ram[20'h6D],ram[20'h6C]},
+                     {ram[20'h4B],ram[20'h4A]}, {ram[20'h49],ram[20'h48]},
+                     {ram[20'h4F],ram[20'h4E]}, {ram[20'h4D],ram[20'h4C]},
+                     {ram[20'h7B],ram[20'h7A]}, {ram[20'h79],ram[20'h78]},
+                     {ram[20'h7F],ram[20'h7E]}, {ram[20'h7D],ram[20'h7C]},
+                     ram[20'h4B0], ram[20'h4B1], ram[20'h4B2], ram[20'h4B3],
+                     ram[20'h4B4], ram[20'h4B5], ram[20'h4B6], ram[20'h4B7],
+                     ram[20'h4B8], ram[20'h4B9], ram[20'h4BA], ram[20'h4BB],
+                     ram[20'h4BC], ram[20'h4BD], ram[20'h4BE], ram[20'h4BF]);
             wr_clear_tog = ~wr_clear_tog;
         end
 
