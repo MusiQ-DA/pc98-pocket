@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [main, seed-sweep]
     # Docs-only commits don't change the bitstream; skip the 20-minute
     # Quartus build for them. CI config itself still triggers.
     paths-ignore:
@@ -571,6 +571,10 @@ jobs:
     # badly enough to inflate the fitter count past the device twice in
     # one day (170012 at 1850-1880 against a ~1800-LAB design). A clean
     # compile is slower but always means what it says.
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [5, 6, 7, 8, 9, 10, 11, 12]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -579,6 +583,9 @@ jobs:
           # build_id_gen.tcl stamps the MIF with the last commit touching
           # fpga/ or firmware/; a depth-1 clone cannot see past HEAD.
           fetch-depth: 0
+
+      - name: Set fitter seed
+        run: sed -i 's/-name SEED .*/-name SEED ${{ matrix.seed }}/' fpga/ap_core.qsf
 
       - name: Free disk space
         run: |
@@ -675,7 +682,7 @@ jobs:
       - name: Upload bitstream and reports
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bitstream
+          name: bitstream-seed${{ matrix.seed }}
           if-no-files-found: error
           path: |
             fpga/output_files/*.sof
