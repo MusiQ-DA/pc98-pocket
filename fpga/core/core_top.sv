@@ -1114,7 +1114,8 @@ module core_top (
             8'h1e:   probe_data = {cont2_key_eff, cont1_key_eff};   // pad words, JTAG-held bits included
             8'h1f:   probe_data = {dbg_pic_irr, dbg_pic_imr, dbg_pic_isr, dbg_timer_count};
             8'h20:   probe_data = {dbg_pic2_irr, dbg_pic2_imr, dbg_pic2_isr, dbg_kbd_irq_count};
-            8'h21:   probe_data = {dbg_irq_level, 8'h00, dbg_kbd_rd_count, key_count};
+            8'h21:   probe_data = {dbg_irq_level, 7'h00, interrupt_to_cpu,
+                                   dbg_kbd_rd_count, key_count};
             // 0x23/0x24 were the 71071's internal word and the FDC DMA
             // handshake view; both dbg chains are gone with postmon.
             // 0x25: the JTAG guest-memory master (slot 0x84). rdata is the last
@@ -1163,6 +1164,18 @@ module core_top (
             8'h30:   probe_data = {dbg_ior_cnt, dbg_iow_cnt, dbg_io_port};
             8'h31:   probe_data = {dbg_mem_cnt, 3'b000, dbg_mem_wr,
                                    dbg_mem_addr};
+            // 0x32-0x38: the V30 register dump (v30_dbg_regs =
+            // {psw,pc,sreg3..0,gpr7..0}). 0x32 {pc,cs} 0x33 {psw,ss}
+            // 0x34 {sp,bp} 0x35 {ds,es} 0x36 {ax,bx} 0x37 {cx,dx}
+            // 0x38 {si,di} -- psw[9] is IF, which settles "halted with
+            // interrupts enabled" vs a dead interrupt pin.
+            8'h32:   probe_data = {v30_dbg_regs[207:192], v30_dbg_regs[159:144]};
+            8'h33:   probe_data = {v30_dbg_regs[223:208], v30_dbg_regs[175:160]};
+            8'h34:   probe_data = {v30_dbg_regs[79:64],   v30_dbg_regs[95:80]};
+            8'h35:   probe_data = {v30_dbg_regs[191:176], v30_dbg_regs[143:128]};
+            8'h36:   probe_data = {v30_dbg_regs[15:0],    v30_dbg_regs[63:48]};
+            8'h37:   probe_data = {v30_dbg_regs[31:16],   v30_dbg_regs[47:32]};
+            8'h38:   probe_data = {v30_dbg_regs[111:96],  v30_dbg_regs[127:112]};
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:
