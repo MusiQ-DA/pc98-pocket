@@ -141,7 +141,11 @@ module v30_core (
     output    [31:0]  dbg_core2,
     // dbg_core3 is the BIU's own launch-law registers -- which pending/slot/
     // commit bit is sitting on a posted access that never reaches the pins.
-    output    [31:0]  dbg_core3
+    output    [31:0]  dbg_core3,
+    // dbg_core4 is the EU's own stall ledger: the microcode row it is on
+    // ({upc_page,upc_opc,upc_loc}) plus the outstanding-access counters and
+    // wait-condition wires that decide whether that row ever advances.
+    output    [31:0]  dbg_core4
 `ifdef V30_BACKDOOR
     // The BIU's pending-bus-cycle flag, a backdoor-only debug leg. Declared
     // here so the guarded connection below binds a PORT and not Verilator's
@@ -493,6 +497,7 @@ v30u_eu u_eu (
 `endif
     .dbg_regs      (dbg_regs),
     .dbg_first_pop (dbg_first_pop),
+    .dbg_eu        (dbg_core4),
     .ss_addr    (ss_addr_q),
     .ss_wdata   (ss_wdata_q),
     .ss_we      (ss_we_q),

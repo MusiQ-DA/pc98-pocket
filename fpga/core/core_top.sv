@@ -1071,6 +1071,7 @@ module core_top (
     wire  [15:0] v30_dbg_core;             // EU/BIU interlock: halt/queue/eu_bs
     wire  [31:0] v30_dbg_core2;            // posted access: eu_addr/seg + slots
     wire  [31:0] v30_dbg_core3;            // BIU launch-law registers
+    wire  [31:0] v30_dbg_core4;            // EU stall ledger: ucode row + wait wires
     wire         v30_first_pop;            // EU consumed an instruction's byte 0
     reg  [23:0]  retired_cnt = 24'd0;      // saturating instruction counter
     reg          first_pop_q = 1'b0;
@@ -1137,6 +1138,7 @@ module core_top (
             // slot_busys, opr_held, absorb_ttl, ts}. The posted MEMW has to
             // be sitting on exactly one of these stages.
             8'h22:   probe_data_c = v30_dbg_core3;
+            8'h23:   probe_data_c = v30_dbg_core4;
             // 0x1e/0x1f: the pad words. 1e is what the softcore actually sees
             // (settled | injected, in clk_chipset); 1f is the probe-held mask
             // itself -- a bit stuck there reads as a button held forever, so
@@ -2417,6 +2419,7 @@ module core_top (
         .dbg_core      (v30_dbg_core),
         .dbg_core2     (v30_dbg_core2),
         .dbg_core3     (v30_dbg_core3),
+        .dbg_core4     (v30_dbg_core4),
 `endif
         .UBE_N      (v30_ube_n),
         .BUSLOCK_N  (),

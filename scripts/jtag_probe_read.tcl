@@ -85,6 +85,7 @@ set regs {
     32  V30_DIN+EU_BIU
     33  EU_POST_ADDR
     34  BIU_LAUNCH
+    35  EU_STALL
     255 MAGIC
 }
 
