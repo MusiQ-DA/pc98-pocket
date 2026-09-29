@@ -971,10 +971,12 @@ module core_top (
     wire [15:0] gdc_draw_ops;
     wire [319:0] gdc_draw_snaps;
 
+`ifdef PC98_JTAG
     // How far does a key get? key_count counts pc98_key_stb pulses and
     // key_last keeps the last {make, code}; the probe's key slot reads them.
     logic [7:0] key_count = 8'h00;
     logic [7:0] key_last  = 8'h00;
+`endif
 
     softcpu_subsystem u_softcpu (
         .fw_wr_clk                  (clk_chipset),
@@ -1053,6 +1055,7 @@ module core_top (
         .gdc_srv_done_levels        (gdc_srv_done_levels)
     );
 
+`ifdef PC98_JTAG
     //
     // JTAG probe -- the panel's readout without a camera.
     //
@@ -1085,6 +1088,7 @@ module core_top (
         .wr_data        (probe_wr_data),
         .rd_adv         (probe_rd_adv)
     );
+`endif
 
     //
     // SETTINGS
@@ -1125,9 +1129,14 @@ module core_top (
     // Every consumer downstream -- the any-button wake, the chipset-domain pad words,
     // pocket_keyboard's pad->key mapper, mouse mode -- sees them as real presses.
     // The masks change only on JTAG writes, so the cross-domain OR is a quasi-static level.
+`ifdef PC98_JTAG
     reg  [15:0] jtag_btn1 = 16'd0, jtag_btn2 = 16'd0;
     wire [15:0] cont1_key_eff = cont1_key_s | jtag_btn1;
     wire [15:0] cont2_key_eff = cont2_key_s | jtag_btn2;
+`else
+    wire [15:0] cont1_key_eff = cont1_key_s;
+    wire [15:0] cont2_key_eff = cont2_key_s;
+`endif
 
     always @(posedge clk_74a) begin
         if (interact_reset_delay != 20'd0)
@@ -1264,6 +1273,7 @@ module core_top (
     // this did at first, adds one per CLOCK for as long as the toggle sits
     // high: KEY saturated at FF within microseconds of the first key and said
     // nothing. Count transitions, so KEY is comparable with IRQ below it.
+`ifdef PC98_JTAG
     logic pc98_key_stb_q = 1'b0;
     always @(posedge clk_chipset) begin
         pc98_key_stb_q <= pc98_key_stb;
@@ -1272,6 +1282,7 @@ module core_top (
             if (key_count != 8'hFF) key_count <= key_count + 8'd1;
         end
     end
+`endif
 
     pc98_kbd_ps2 u_pc98_kbd_ps2 (
         .clk      (clk_chipset),
@@ -1284,6 +1295,7 @@ module core_top (
         .key_code (kbd_key_code)
     );
 
+`ifdef PC98_JTAG
     // Probe writes land in clk_chipset once, as a pulse with the payload
     // copied alongside it. Slot 0x81 is a PC-98 matrix byte for the key line;
     logic [2:0] jw_sync = 3'd0;
@@ -1319,6 +1331,11 @@ module core_top (
         .key_make (pc98_key_make),
         .key_code (pc98_key_code)
     );
+`else
+    assign pc98_key_stb  = kbd_key_stb;
+    assign pc98_key_make = kbd_key_make;
+    assign pc98_key_code = kbd_key_code;
+`endif
 
     //
     // Mouse: the dock report stream lands on pc98_mouse_src and feeds the
