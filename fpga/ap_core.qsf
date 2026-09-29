@@ -925,4 +925,6 @@ set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_cas_n
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_we_n
 
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
-set_global_assignment -name SEED 3
+# Fitter seed is the free dial while the design sits at ~100% of the LABs:
+# PC98_WORD_MEM put HEAD 11 LABs over at SEED 3 (1859 vs 1848).
+set_global_assignment -name SEED 4
