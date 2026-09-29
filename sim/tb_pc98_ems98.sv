@@ -78,6 +78,7 @@ module tb_pc98_ems98;
         .clock(clock), .reset(reset),
         .address(address), .internal_data_bus(internal_data_bus),
         .io_write_n(io_write_n), .address_enable_n(1'b0),
+        .maxmem(4'd8),                       // the full pool
         .map(ems98_map), .status(ems98_status)
     );
 

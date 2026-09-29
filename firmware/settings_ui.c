@@ -69,6 +69,7 @@ enum {
     SET_GAMEPAD,
     // OSD
     SET_DISK_LED,
+    SET_EXTMEM,
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
@@ -83,6 +84,9 @@ static const char *const opt_boost[] = { "None", "2x", "4x" };
 static const char *const opt_level4[] = { "1", "2", "3", "4" };
 static const char *const opt_stereo[] = { "None", "25%", "50%", "100%" };
 static const char *const opt_dis_en[] = { "Disabled", "Enabled" };
+// NEC-style EMS board (ports 08E1h-08E9h): megabytes reported fitted. The
+// values must match core_top's osd_extmem decode {0, 2, 4, 8}.
+static const char *const opt_extmem[] = { "None", "2 MB", "4 MB", "8 MB" };
 static const char *const opt_display[] = { "Full Color", "Green", "Amber", "B&W", "Red", "Blue",
     "Fuchsia", "Purple" };
 static const char *const opt_ems_frame[] = { "C000", "D000", "E000" };
@@ -123,6 +127,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING_D(opt_dpad, DPAD_ARROWS), // SET_DPAD
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
     SETTING_D(opt_dis_en, 1), // SET_DISK_LED (default on)
+    SETTING_D(opt_extmem, 3), // SET_EXTMEM (default 8 MB: the full SDRAM pool)
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
@@ -188,6 +193,7 @@ static const item_t items_hw[] = {
     { "", IT_SPACER, 0 },
     { "Lo-tech 2MB EMS", IT_OPTION, SET_EMS },
     { "EMS Frame", IT_OPTION, SET_EMS_FRAME },
+    { "NEC EMS (08E1h)", IT_OPTION, SET_EXTMEM },
     { "", IT_SPACER, 0 },
     { "Disk LED", IT_OPTION, SET_DISK_LED },
 };

@@ -134,6 +134,9 @@ module CHIPSET #(
         // EMS
         input   logic           ems_enabled,
         input   logic   [1:0]   ems_address,
+        // NEC-style EMS board (pc98_ems98): how many megabytes it reports
+        // fitted -- the OSD's extended-memory capacity.
+        input   logic   [3:0]   ems98_maxmem,
         // BIOS
         input  logic    [1:0]   bios_protect_flag,
         // FDD
@@ -564,6 +567,7 @@ module CHIPSET #(
         .internal_data_bus                  (internal_data_bus),
         .io_write_n                         (io_write_n),
         .address_enable_n                   (address_enable_n),
+        .maxmem                             (ems98_maxmem),
         .map                                (ems98_map),
         .status                             (ems98_status)
     );

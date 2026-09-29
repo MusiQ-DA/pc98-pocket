@@ -972,6 +972,7 @@ module core_top (
     wire       osd_ems;
     wire [1:0] osd_ems_frame;
     wire       osd_disk_led;
+    wire [1:0] osd_extmem;
     wire [1:0] osd_gamepad;
     wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
 
@@ -1076,6 +1077,7 @@ module core_top (
         .osd_ems_frame              (osd_ems_frame),
         .osd_gamepad                (osd_gamepad),
         .osd_disk_led               (osd_disk_led),
+        .osd_extmem                 (osd_extmem),
         .key_cfg_flat               (key_cfg),
         .st_addr                    (st_addr),
         .st_wdata                   (st_wdata),
@@ -2427,6 +2429,8 @@ module core_top (
 
     wire ems_enabled_sel = `ENABLE_EMS ? ems_en_cfg : 1'b0;
     wire [1:0] ems_address_sel = `ENABLE_EMS ? ems_frame_cfg : 2'b00;
+    // The NEC EMS board's fitted size from the OSD: None/2/4/8 MB -> 0/2/4/8.
+    wire [3:0] ems98_maxmem = (osd_extmem == 2'd3) ? 4'd8 : {osd_extmem, 1'b0};
 
     always @(posedge clk_chipset)
     begin
@@ -2539,6 +2543,7 @@ module core_top (
         .sdram_udqm                         (SDRAM_DQMH),
         .ems_enabled                        (ems_enabled_sel),
         .ems_address                        (ems_address_sel),
+        .ems98_maxmem                       (ems98_maxmem),
         .bios_protect_flag                  (bios_protect_flag),
         .mgmt_readdata                      (mgmt_din),
         .mgmt_writedata                     (mgmt_dout_m),

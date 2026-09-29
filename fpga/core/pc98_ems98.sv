@@ -53,12 +53,10 @@ module pc98_ems98 (
     input  logic [7:0]  internal_data_bus,
     input  logic        io_write_n,
     input  logic        address_enable_n,
+    input  logic [3:0]  maxmem,              // megabytes fitted (OSD setting; 8 fills the pool)
     output logic [10:0] map [0:3],           // {mapped, word[23:14]} per window
     output logic [7:0]  status               // the IN 08E9h answer
 );
-
-    // Megabytes of board memory fitted: the pool is 8 MB, targets 1-8.
-    localparam logic [3:0] MAXMEM = 4'd8;
 
     logic [3:0] target;
 
@@ -77,12 +75,12 @@ module pc98_ems98 (
                     // pos = (port >> 1) & 3 is just address[2:1].
                     if (target == 4'd0)
                         map[address[2:1]] <= {1'b1, 10'h030 + {8'h00, address[2:1]}};
-                    else if (target <= MAXMEM)
+                    else if (target <= maxmem)
                         // target[2:0]-1 wraps 8->7, which is exactly the bank
                         // the eighth megabyte needs.
                         map[address[2:1]] <= {1'b1, 1'b1, target[2:0] - 3'd1,
                                               internal_data_bus[7:2]};
-                    // t > MAXMEM: keep the last mapping, per np21w.
+                    // t > maxmem: keep the last mapping, per np21w.
                 end
                 16'h08E9: target <= internal_data_bus[3:0];
                 default: ;
@@ -90,7 +88,7 @@ module pc98_ems98 (
         end
     end
 
-    assign status = ((target != 4'd0) && (target <= MAXMEM)) ? 8'h00 : 8'hFF;
+    assign status = ((target != 4'd0) && (target <= maxmem)) ? 8'h00 : 8'hFF;
 
 endmodule
 
