@@ -24,6 +24,13 @@
 // read, never to a hang.
 #define ST_SPIN 2000u
 
+// The self-test's own pokes and readout (docs/P0_SELFTEST_SPEC.md) compile
+// only into the diagnostic build: main.c runs them solely under
+// SDRAM_SELFTEST. That is not just tidiness -- the shipping image's 24 KB ROM
+// has no room for two kilobytes of test that cannot run, a budget the
+// boot-time OSD font load (osd_font.c) now spends to the last byte.
+#ifdef SDRAM_SELFTEST
+
 static uint32_t st_wait(void)
 {
     uint32_t s = 0;
@@ -34,13 +41,6 @@ static uint32_t st_wait(void)
     }
     return s; // still busy: caller sees the stale byte, which shows up as a miss
 }
-
-// The self-test's own pokes and readout (docs/P0_SELFTEST_SPEC.md) compile
-// only into the diagnostic build: main.c runs them solely under
-// SDRAM_SELFTEST. That is not just tidiness -- the shipping image's 24 KB ROM
-// has no room for two kilobytes of test that cannot run, a budget the
-// boot-time OSD font load (osd_font.c) now spends to the last byte.
-#ifdef SDRAM_SELFTEST
 
 static void sd_poke(uint32_t addr, uint8_t v)
 {
