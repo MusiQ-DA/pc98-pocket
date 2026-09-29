@@ -1062,7 +1062,7 @@ module core_top (
     // A USB Blaster on the FPGA's JTAG port reads these over the SLD hub:
     // scripts/jtag_probe.cfg + jtag_probe_read.tcl drive USER1/USER0.
     // The magic word proves the protocol end-to-end before any value is trusted.
-    logic [31:0] probe_data;
+    logic [31:0] probe_data, probe_data_c;
     wire   [7:0] probe_addr;
     // The V30's architectural state, live. dbg_regs leaves the EU every
     // cycle so the probe snapshot is "the CPU is executing THIS" -- a frozen
@@ -1077,28 +1077,35 @@ module core_top (
             retired_cnt <= retired_cnt + 24'd1;
     end
 
+    // Register the readout: the dbg cones through this mux into the SLD
+    // capture were one giant combinational path that crashes Quartus 18.1's
+    // timing-driven clustering (VPR20KMAIN tdc_util internal error). One
+    // pipeline stage hides the cone; at JTAG speeds the extra clock is free.
+    always_ff @(posedge clk_chipset)
+        probe_data <= probe_data_c;
+
     always_comb begin
         case (probe_addr)
             // The bisect-era taps (PIC/timer/keyboard counts, the wedge-PC
             // taps, the JTAG guest-memory master, the JTAG FDD/mgmt
             // channels) went out with PC98_PROBE_EXTRA -- the dbg_regs dump
             // below is what replaced them for "where is the CPU".
-            8'h10:   probe_data = v30_dbg_regs[223:192];  // psw:pc
-            8'h11:   probe_data = v30_dbg_regs[191:160];  // sreg3:sreg2
-            8'h12:   probe_data = v30_dbg_regs[159:128];  // sreg1:sreg0
-            8'h13:   probe_data = v30_dbg_regs[127:96];   // gpr7:gpr6
-            8'h14:   probe_data = v30_dbg_regs[95:64];    // gpr5:gpr4
-            8'h15:   probe_data = v30_dbg_regs[63:32];    // gpr3:gpr2
-            8'h16:   probe_data = v30_dbg_regs[31:0];     // gpr1:gpr0
-            8'h17:   probe_data = {8'h00, retired_cnt};   // liveness
-            8'h18:   probe_data = {12'h000, v30_addr};    // current bus cycle
+            8'h10:   probe_data_c = v30_dbg_regs[223:192];  // psw:pc
+            8'h11:   probe_data_c = v30_dbg_regs[191:160];  // sreg3:sreg2
+            8'h12:   probe_data_c = v30_dbg_regs[159:128];  // sreg1:sreg0
+            8'h13:   probe_data_c = v30_dbg_regs[127:96];   // gpr7:gpr6
+            8'h14:   probe_data_c = v30_dbg_regs[95:64];    // gpr5:gpr4
+            8'h15:   probe_data_c = v30_dbg_regs[63:32];    // gpr3:gpr2
+            8'h16:   probe_data_c = v30_dbg_regs[31:0];     // gpr1:gpr0
+            8'h17:   probe_data_c = {8'h00, retired_cnt};   // liveness
+            8'h18:   probe_data_c = {12'h000, v30_addr};    // current bus cycle
             // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
             // never completes; 0x1a: the ready chain the CPU waits on.
-            8'h19:   probe_data = {16'h0, chipset_dbg};
-            8'h1a:   probe_data = {24'h0, chipset_dbg2};
-            8'h1d:   probe_data = {16'h0, key_count, key_last};
-            8'hFF:   probe_data = 32'h98C0_DE98;
-            default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
+            8'h19:   probe_data_c = {16'h0, chipset_dbg};
+            8'h1a:   probe_data_c = {24'h0, chipset_dbg2};
+            8'h1d:   probe_data_c = {16'h0, key_count, key_last};
+            8'hFF:   probe_data_c = 32'h98C0_DE98;
+            default: probe_data_c = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
     end
 
