@@ -51,13 +51,7 @@ module RAM (
     output  logic           sdram_dq_io,
     output  logic           sdram_ldqm,
     output  logic           sdram_udqm,
-     // EMS
-     input   logic   [6:0]   map_ems[0:3],
-     input   logic           ems_b1,
-     input   logic           ems_b2,
-     input   logic           ems_b3,
-     input   logic           ems_b4,
-     // NEC-style EMS (pc98_ems98): {mapped, SDRAM word[23:14]} per window of
+     // EMS board (pc98_ems98): {mapped, SDRAM word[23:14]} per window of
      // C0000-CFFFF. The V30's bus stops at 0xFFFFF, so banked windows like
      // this are the only way the guest ever reaches SDRAM past its megabyte
      // -- this board's pool is 0x800000-0xFFFFFF, 8 MB of word space. An
@@ -167,15 +161,11 @@ module RAM (
 `include "pc98_sdram_map.svh"
 
     // The EMS windows sit in C0000-DFFFF, which the flat map leaves open on
-    // purpose -- so a claimed window has to select the SDRAM by itself. This
-    // OR was missing for the Lo-tech board: ems_b* remapped the latch but
-    // never made the select, which is why enabling it only ever read the
-    // hole's 0xFF. ems98_win is the same deal for the NEC board's frame.
+    // purpose -- so a claimed window has to select the SDRAM by itself.
     wire ems98_win = (address[19:16] == 4'hC)
                   && ems98_map[address[15:14]][10];
     assign ram_address_select_n = ~(enable_sdram && (gvram_page1_flag
                                          || pc98_sdram_hits(address, analog_mode)
-                                         || ems_b1 || ems_b2 || ems_b3 || ems_b4
                                          || ems98_win));
 	 
 
@@ -209,16 +199,8 @@ module RAM (
             // seventeen-bit plane-and-offset; the guest's own map, every EMS
             // window, and the font bank all stay out of the way.
             latch_address   = 24'h600000 + {7'h00, address[16:0]};
-        else if (ems_b1)
-            latch_address   = {2'b00, 1'b1, map_ems[0], address[13:0]};
-        else if (ems_b2)
-            latch_address   = {2'b00, 1'b1, map_ems[1], address[13:0]};
-        else if (ems_b3)
-            latch_address   = {2'b00, 1'b1, map_ems[2], address[13:0]};
-        else if (ems_b4)
-            latch_address   = {2'b00, 1'b1, map_ems[3], address[13:0]};
         else if (ems98_win)
-            // The NEC board's window claims C0000-CFFFF; its map entry is
+            // The EMS board's window claims C0000-CFFFF; its map entry is
             // the page's top ten word bits, so the low fourteen come from
             // the guest.
             latch_address   = {ems98_map[address[15:14]][9:0], address[13:0]};

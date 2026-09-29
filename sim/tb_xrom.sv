@@ -94,7 +94,7 @@ module tb_xrom;
         .sdram_ras(), .sdram_cas(), .sdram_we(), .sdram_ba(),
         .sdram_dq_in(16'h0000), .sdram_dq_out(), .sdram_dq_io(),
         .sdram_ldqm(), .sdram_udqm(),
-        .ems_enabled(1'b0), .ems_address(2'b00), .bios_protect_flag(2'b00),
+        .ems98_maxmem(4'd8), .bios_protect_flag(2'b00),
         .mgmt_address(16'h0000), .mgmt_read(1'b0), .mgmt_readdata(),
         .mgmt_write(1'b0), .mgmt_writedata(16'h0000),
         .floppy_wp(2'b00), .rtc_time(48'h0),

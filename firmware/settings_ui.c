@@ -62,8 +62,8 @@ enum {
     SET_STEREO,
     SET_DISPLAY,
     // Hardware
-    SET_EMS,
-    SET_EMS_FRAME,
+    SET_EMS,        // retired Lo-tech EMS enable -- slot kept for save compat
+    SET_EMS_FRAME,  // retired Lo-tech EMS frame -- same
     // Controls
     SET_DPAD,
     SET_GAMEPAD,
@@ -89,7 +89,7 @@ static const char *const opt_dis_en[] = { "Disabled", "Enabled" };
 static const char *const opt_extmem[] = { "None", "2 MB", "4 MB", "8 MB" };
 static const char *const opt_display[] = { "Full Color", "Green", "Amber", "B&W", "Red", "Blue",
     "Fuchsia", "Purple" };
-static const char *const opt_ems_frame[] = { "C000", "D000", "E000" };
+
 static const char *const opt_dpad[] = { "Numpad", "Numpad w/ Diag.", "Arrows", "WASD", "HJKL",
     "HJKL w/ YUBN" };
 static const char *const opt_gamepad[] = { "Keyboard", "Joystick", "Mouse" };
@@ -122,8 +122,8 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_level4),      // SET_SPK_VOL
     SETTING(opt_stereo),      // SET_STEREO
     SETTING(opt_display),     // SET_DISPLAY
-    SETTING_D(opt_dis_en, 1), // SET_EMS (default Enabled, as the fixed memory map was)
-    SETTING(opt_ems_frame),   // SET_EMS_FRAME
+    SETTING_D(opt_dis_en, 1), // SET_EMS -- retired Lo-tech board, index kept for the save blob
+    SETTING_D(opt_dis_en, 0), // SET_EMS_FRAME -- same
     SETTING_D(opt_dpad, DPAD_ARROWS), // SET_DPAD
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
     SETTING_D(opt_dis_en, 1), // SET_DISK_LED (default on)
@@ -189,13 +189,13 @@ static const item_t items_av[] = {
 // in, and these rows show the live state and eject/re-insert it (A button).
 // The Lo-tech EMS rows are gone with the board (2026-09-29): ports
 // 260h-263h are the PC/AT card's, nothing on a PC-98 writes them, and the
-// NEC board above is the real EMS here. SET_EMS/SET_EMS_FRAME stay in the
-// enum and the save blob, same reason as Boot Splash above.
+// board above is the EMS this machine actually has. SET_EMS/SET_EMS_FRAME
+// stay in the enum and the save blob, same reason as Boot Splash above.
 static const item_t items_hw[] = {
     { "Floppy A", IT_FDD, 0 },
     { "Floppy B", IT_FDD, 1 },
     { "", IT_SPACER, 0 },
-    { "NEC EMS (08E1h)", IT_OPTION, SET_EXTMEM },
+    { "EMS", IT_OPTION, SET_EXTMEM },
     { "", IT_SPACER, 0 },
     { "Disk LED", IT_OPTION, SET_DISK_LED },
 };

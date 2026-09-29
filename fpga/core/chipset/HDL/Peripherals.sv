@@ -4,9 +4,6 @@
 //
 // Based on chipset written by @kitune-san
 //
-`ifndef ENABLE_EMS
-`define ENABLE_EMS 0
-`endif
 // AT-side peripherals with no PC-98 counterpart at the same ports. They were
 // synthesised into the PC-98 build because nothing gated them, and at 97 per
 // cent ALM occupancy that is not free: the fit report has the MC146818 at 349
@@ -162,14 +159,6 @@ module PERIPHERALS #(
         // C/MS Audio
         // TANDY
         // UART
-        // EMS
-        input   logic           ems_enabled,
-        input   logic   [1:0]   ems_address,
-        output  reg     [6:0]   map_ems[0:3], // Segment hx000, hx400, hx800, hxC00
-        output  logic           ems_b1,
-        output  logic           ems_b2,
-        output  logic           ems_b3,
-        output  logic           ems_b4,
         // FDD
         input   logic   [15:0]  mgmt_address,
         input   logic           mgmt_read,
@@ -324,16 +313,9 @@ module PERIPHERALS #(
                              : fdd_144_select  ? fdc_144_readback
                              :                   8'hFF;   // the dead window
 
-    // Enable Segment Map hx000, hx400, hx800, hxC00. Was a port; nothing past
-    // the module boundary reads it, the EMS windows and the register readback
-    // below do.
-    logic               ena_ems[0:3];
-    wire    [3:0] ems_page_address  = (ems_address == 2'b00) ? 4'b1100 : (ems_address == 2'b01) ? 4'b1101 : 4'b1110;
-    wire    ems_chip_select         = `ENABLE_EMS ? (iorq && ~address_enable_n && ems_enabled && ({address[15:2], 2'd0} == 16'h0260)) : 1'b0;          // 260h..263h
-    assign  ems_b1                  = `ENABLE_EMS ? (~iorq && ena_ems[0] && (address[19:14] == {ems_page_address, 2'b00})) : 1'b0; // C0000h - D0000h - E0000h
-    assign  ems_b2                  = `ENABLE_EMS ? (~iorq && ena_ems[1] && (address[19:14] == {ems_page_address, 2'b01})) : 1'b0; // C4000h - D4000h - E4000h
-    assign  ems_b3                  = `ENABLE_EMS ? (~iorq && ena_ems[2] && (address[19:14] == {ems_page_address, 2'b10})) : 1'b0; // C8000h - D8000h - E0000h
-    assign  ems_b4                  = `ENABLE_EMS ? (~iorq && ena_ems[3] && (address[19:14] == {ems_page_address, 2'b11})) : 1'b0; // CC000h - DC000h - EC000h
+    // (The Lo-tech EMS board that used to live at ports 260h-263h is gone
+    // -- it was the PC/AT card, and pc98_ems98 at 08E1h-08E9h is the EMS a
+    // PC-98 actually has.)
     // PC-98 text VRAM, A0000-A3FFF: characters at A0000 (two bytes per cell)
     // and attributes at A2000. A BRAM in the guest's address space, qualified
     // with AEN so a DMA cycle carrying a matching address cannot reach it.
@@ -374,56 +356,12 @@ module PERIPHERALS #(
                                      && ((address[7:0] == 8'h90) || (address[7:0] == 8'h92)
                                       || (address[7:0] == 8'hC8) || (address[7:0] == 8'hCA)));
 
-    logic   [1:0]   ems_access_address;
-    logic           ems_write_enable;
-    logic   [7:0]   write_map_ems_data;
-    logic           write_map_ena_data;
-	 
     //
     // I/O Ports
     //
     // Address
     always_comb begin
         latch_address   = address;
-    end
-
-    always_ff @(posedge clock, posedge reset)
-    begin
-        if (reset)
-        begin
-            ems_access_address  <= 2'b11;
-            ems_write_enable    <= 1'b0;
-            write_map_ems_data  <= 8'd0;
-            write_map_ena_data  <= 1'b0;
-        end
-        else if (`ENABLE_EMS)
-        begin
-            ems_access_address  <= address[1:0];
-            ems_write_enable    <= ems_chip_select && ~io_write_n;
-            write_map_ems_data  <= (internal_data_bus == 8'hFF) ? 8'hFF : (internal_data_bus < 8'h80) ? internal_data_bus[6:0] : map_ems[address[1:0]];
-            write_map_ena_data  <= (internal_data_bus == 8'hFF) ? 1'b0  : (internal_data_bus < 8'h80) ? 1'b1 : ena_ems[address[1:0]];
-        end
-        else
-        begin
-            ems_access_address  <= 2'b11;
-            ems_write_enable    <= 1'b0;
-            write_map_ems_data  <= 8'd0;
-            write_map_ena_data  <= 1'b0;
-        end
-    end
-
-    always_ff @(posedge clock, posedge reset)
-    begin
-        if (reset || !`ENABLE_EMS)
-        begin
-            map_ems = '{7'h00, 7'h00, 7'h00, 7'h00};
-            ena_ems = '{1'b0, 1'b0, 1'b0, 1'b0};
-        end
-        else if (ems_write_enable)
-        begin
-            map_ems[ems_access_address] <= write_map_ems_data;
-            ena_ems[ems_access_address] <= write_map_ena_data;
-        end
     end
 
 
@@ -2348,11 +2286,6 @@ module PERIPHERALS #(
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= cgwin_q;
-        end
-        else if (`ENABLE_EMS && (ems_chip_select) && (~io_read_n))
-        begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= ena_ems[address[1:0]] ? map_ems[address[1:0]] : 8'hFF;
         end
         else if ((~floppy0_chip_select_n || fdd_dma_read) && (~io_read_n))
         begin

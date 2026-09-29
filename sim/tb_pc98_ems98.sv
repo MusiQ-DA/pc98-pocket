@@ -11,10 +11,7 @@
 //   * IN 08E9h answers 00h/FFh by fitted megabyte, which is how software
 //     sizes the board;
 //   * target 0 maps the window's own base frame, and t > 8 drops the write
-//     (np21w io/emsio.c semantics);
-//   * the Lo-tech windows (ems_b*) now claim the SDRAM too -- they never
-//     did, the select OR was missing them -- and keep priority if both
-//     boards land on the same window.
+//     (np21w io/emsio.c semantics).
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -43,12 +40,6 @@ module tb_pc98_ems98;
     wire s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
 
-    logic [6:0]  map_ems [0:3] = '{7'd0, 7'd0, 7'd0, 7'd0};
-    // The Lo-tech window-enable Peripherals would make for a programmed page:
-    // ena_ems AND the frame address. b1_on plays ena_ems[0], frame C0000.
-    logic        b1_on = 1'b0;
-    wire         ems_b1 = b1_on && (address[19:14] == 6'h30);
-
     logic [10:0] ems98_map [0:3];
     logic [7:0]  ems98_status;
 
@@ -66,8 +57,6 @@ module tb_pc98_ems98;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
-        .map_ems(map_ems),
-        .ems_b1(ems_b1), .ems_b2(1'b0), .ems_b3(1'b0), .ems_b4(1'b0),
         .ems98_map(ems98_map),
         .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(1'b1),
@@ -268,15 +257,6 @@ module tb_pc98_ems98;
         bus_write(32'hC4789, 8'h66);
         check_store("t0 win1 base alias -> 0xC4789", 24'h0C4789, 16'h0066);
         check    ("t0 win1 readback",                  32'hC4789, 8'h66);
-
-        // The Lo-tech board: ems_b1 with map_ems[0]=0x10 banks C0000-C3FFF at
-        // 0x200000 + 0x10*0x4000 = 0x240000 -- and wins over the NEC window.
-        map_ems[0] = 7'h10;
-        b1_on = 1;
-        bus_write(32'hC0777, 8'h77);
-        check_store("lotech win0 -> 0x240777", 24'h240777, 16'h0077);
-        check    ("lotech wins over ems98",    32'hC0777, 8'h77);
-        b1_on = 0;
 
         $display("\n=== summary ===");
         $display("  protocol violations : %0d", sdr.violations);

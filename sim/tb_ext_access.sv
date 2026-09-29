@@ -43,7 +43,6 @@ module tb_ext_access;
     // for an ext access: this isolates "does the ext sequence make RAM.sv do
     // the access" from the arbiter's hold handshake, which is exercised
     // separately by the BIOS loader on real hardware.
-    logic [6:0] unused_map [0:3] = '{7'd0, 7'd0, 7'd0, 7'd0};
     logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
     logic       initilized_sdram;
     wire        memory_access_ready, ram_address_select_n;
@@ -62,8 +61,6 @@ module tb_ext_access;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
-        .map_ems(unused_map),
-        .ems_b1(1'b0), .ems_b2(1'b0), .ems_b3(1'b0), .ems_b4(1'b0),
         .ems98_map(ems98_unused),
         .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(1'b1),

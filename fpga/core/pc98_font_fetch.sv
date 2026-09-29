@@ -28,7 +28,7 @@
 //
 // (RAM.sv "0x400000 upward: past EMS, which owns bit 21"), and core_top picks
 // the slot address so that the low twenty bits ARE the file offset. 0x200000 is
-// the bottom of the EMS window -- {1'b0, 1'b1, map_ems[0], address[13:0]} --
+// the bottom of the EMS window -- {1'b0, 1'b1, page, address[13:0]} --
 // so every glyph this module fetched came out of an EMS page instead of the
 // font, which nothing has written at power-on. That is why the ITF's CG test
 // has failed on every build: the character generator window prefetches through

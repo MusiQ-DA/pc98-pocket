@@ -20,9 +20,7 @@
     // FEATURE CONFIGURATION
     //
 
-`ifndef ENABLE_EMS
-`define ENABLE_EMS 0
-`endif
+
 `ifndef CHIPSET_HZ
 `define CHIPSET_HZ 42954545
 `endif
@@ -969,8 +967,6 @@ module core_top (
     wire [1:0] osd_boost;
     wire [1:0] osd_spk_vol;
     wire [1:0] osd_stereo;
-    wire       osd_ems;
-    wire [1:0] osd_ems_frame;
     wire       osd_disk_led;
     wire [1:0] osd_extmem;
     wire [1:0] osd_gamepad;
@@ -1073,8 +1069,6 @@ module core_top (
         .osd_boost                  (osd_boost),
         .osd_spk_vol                (osd_spk_vol),
         .osd_stereo                 (osd_stereo),
-        .osd_ems                    (osd_ems),
-        .osd_ems_frame              (osd_ems_frame),
         .osd_gamepad                (osd_gamepad),
         .osd_disk_led               (osd_disk_led),
         .osd_extmem                 (osd_extmem),
@@ -1256,8 +1250,6 @@ module core_top (
     wire [1:0] boost_cfg      = osd_boost;
     wire [1:0] spk_vol_cfg    = osd_spk_vol;
     wire [1:0] stereo_mix_cfg = osd_stereo;
-    wire       ems_en_cfg     = osd_ems;
-    wire [1:0] ems_frame_cfg  = osd_ems_frame;
     synch_3              s_interact_reset (|interact_reset_delay, interact_reset, clk_chipset);
     synch_3              s_osd_open       (|osd_open_delay,    osd_open_req,  clk_chipset);
     synch_3 #(.WIDTH(2)) s_wp_cfg         (wp_cfg_74a,        wp_cfg,        clk_chipset);
@@ -2427,9 +2419,7 @@ module core_top (
     // Only ever set during a loader write: the guest has no font bank to see.
     wire font_bank_load  = ~bios_write_n & font_bank_write;
 
-    wire ems_enabled_sel = `ENABLE_EMS ? ems_en_cfg : 1'b0;
-    wire [1:0] ems_address_sel = `ENABLE_EMS ? ems_frame_cfg : 2'b00;
-    // The NEC EMS board's fitted size from the OSD: None/2/4/8 MB -> 0/2/4/8.
+    // The EMS board's fitted size from the OSD: None/2/4/8 MB -> 0/2/4/8.
     wire [3:0] ems98_maxmem = (osd_extmem == 2'd3) ? 4'd8 : {osd_extmem, 1'b0};
 
     always @(posedge clk_chipset)
@@ -2541,8 +2531,6 @@ module core_top (
         .sdram_dq_io                        (SDRAM_DQ_IO),
         .sdram_ldqm                         (SDRAM_DQML),
         .sdram_udqm                         (SDRAM_DQMH),
-        .ems_enabled                        (ems_enabled_sel),
-        .ems_address                        (ems_address_sel),
         .ems98_maxmem                       (ems98_maxmem),
         .bios_protect_flag                  (bios_protect_flag),
         .mgmt_readdata                      (mgmt_din),

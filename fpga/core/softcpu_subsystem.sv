@@ -132,8 +132,7 @@ module softcpu_subsystem (
     output  [1:0] osd_boost,
     output  [1:0] osd_spk_vol,
     output  [1:0] osd_stereo,
-    output        osd_ems,
-    output  [1:0] osd_ems_frame,
+
     output  [1:0] osd_gamepad,
 
     // Per-control key config {ext, Set-2 code}, one 9-bit entry per D-pad direction and button,
@@ -369,8 +368,9 @@ module softcpu_subsystem (
     localparam SET_IDX_SPK_VOL   = 5'd3;
     localparam SET_IDX_STEREO    = 5'd4;
     localparam SET_IDX_DISPLAY   = 5'd5;
-    localparam SET_IDX_EMS       = 5'd6;   // Hardware
-    localparam SET_IDX_EMS_FRAME = 5'd7;
+    // indices 6/7 were the Lo-tech EMS board's enable and frame -- retired
+    // with the board (it was never a PC-98 card); the firmware keeps the
+    // enum slots so the save blob's indexing doesn't shift.
     localparam SET_IDX_DISK_LED  = 5'd10;  // on-screen access lamp
     localparam SET_IDX_EXTMEM    = 5'd11;  // NEC EMS board's fitted size
     // index 8 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
@@ -388,8 +388,7 @@ module softcpu_subsystem (
     assign osd_boost     = osd_settings[SET_IDX_BOOST][1:0];
     assign osd_spk_vol   = osd_settings[SET_IDX_SPK_VOL][1:0];
     assign osd_stereo    = osd_settings[SET_IDX_STEREO][1:0];
-    assign osd_ems       = osd_settings[SET_IDX_EMS][0];
-    assign osd_ems_frame = osd_settings[SET_IDX_EMS_FRAME][1:0];
+
     assign osd_gamepad   = osd_settings[SET_IDX_GAMEPAD][1:0];
     assign osd_disk_led  = osd_settings[SET_IDX_DISK_LED][0];
     assign osd_extmem    = osd_settings[SET_IDX_EXTMEM][1:0];

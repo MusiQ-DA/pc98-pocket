@@ -155,7 +155,6 @@ module tb_selftest_soc;
     wire [12:0] s_a; wire [1:0] s_ba;
     wire s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
-    logic [6:0] unused_map [0:3] = '{7'd0, 7'd0, 7'd0, 7'd0};
     logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
     wire        memory_access_ready, ram_address_select_n;
 
@@ -173,8 +172,6 @@ module tb_selftest_soc;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
-        .map_ems(unused_map),
-        .ems_b1(1'b0), .ems_b2(1'b0), .ems_b3(1'b0), .ems_b4(1'b0),
         .ems98_map(ems98_unused),
         .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(1'b1),

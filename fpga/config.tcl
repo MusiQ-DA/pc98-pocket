@@ -6,16 +6,9 @@
 set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
 # The Tandy/CGA/HGC/OPL2/CMS switches are gone with the hardware they gated
 # (2026-09-22): this is a PC-98, and the RTL no longer has a second machine to
-# choose between. EMS stays a switch because RAM.sv still has both paths.
-#
-# OFF in the shipping build (2026-09-29): the board this decodes is the
-# PC/AT Lo-tech EMS (ports 260h-263h banking C/D/E0000h), which is not the
-# PC-98's EMS -- no PC-98 software writes those ports. The NEC-style board
-# (pc98_ems98, ports 08E1h-08E9h, OSD "NEC EMS") provides the real one, so
-# the decode, the four map registers and the RAM.sv window muxes were paying
-# ALMs for a board nothing drives. The machinery stays parked behind the
-# switch, like PC98_PROBE_EXTRA; the Settings rows are gone with it.
-# set_global_assignment -name VERILOG_MACRO "ENABLE_EMS=1"
+# choose between. The Lo-tech EMS board went the same way (2026-09-29): its
+# 260h-263h ports were the PC/AT card's, no PC-98 software drives them, and
+# pc98_ems98 is the EMS this machine actually has.
 
 set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 

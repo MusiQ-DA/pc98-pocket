@@ -131,11 +131,8 @@ module CHIPSET #(
         output  logic           sdram_dq_io,
         output  logic           sdram_ldqm,
         output  logic           sdram_udqm,
-        // EMS
-        input   logic           ems_enabled,
-        input   logic   [1:0]   ems_address,
-        // NEC-style EMS board (pc98_ems98): how many megabytes it reports
-        // fitted -- the OSD's extended-memory capacity.
+        // EMS board (pc98_ems98): how many megabytes it reports fitted --
+        // the OSD's extended-memory capacity.
         input   logic   [3:0]   ems98_maxmem,
         // BIOS
         input  logic    [1:0]   bios_protect_flag,
@@ -189,13 +186,8 @@ module CHIPSET #(
     logic           prev_timer_count_1;
     logic           DRQ0;
 
-    logic   [6:0]   map_ems[0:3];
-    logic           ems_b1;
-    logic           ems_b2;
-    logic           ems_b3;
-    logic           ems_b4;
-    // The NEC-style EMS board (pc98_ems98): ports 08E1h-08E9h bank four
-    // 16 KB windows at C0000-CFFFF into the SDRAM pool at 0x800000-0xFFFFFF.
+    // The EMS board (pc98_ems98): ports 08E1h-08E9h bank four 16 KB
+    // windows at C0000-CFFFF into the SDRAM pool at 0x800000-0xFFFFFF.
     // On a V30 this banking is the only way past the 20-bit bus, so this is
     // what "extended memory" means here -- details in pc98_ems98.sv.
     logic   [10:0]  ems98_map[0:3];
@@ -403,13 +395,6 @@ module CHIPSET #(
         .kb_ready                           (kb_ready),
         .opna_snd_l                         (opna_snd_l),
         .opna_snd_r                         (opna_snd_r),
-        .ems_enabled                       (ems_enabled),
-        .ems_address                       (ems_address),
-        .map_ems                           (map_ems),
-        .ems_b1                            (ems_b1),
-        .ems_b2                            (ems_b2),
-        .ems_b3                            (ems_b3),
-        .ems_b4                            (ems_b4),
         .mgmt_address                       (mgmt_address),
         .mgmt_read                          (mgmt_read),
         .mgmt_readdata                      (mgmt_readdata),
@@ -544,11 +529,6 @@ module CHIPSET #(
         .sdram_dq_io                        (sdram_dq_io),
         .sdram_ldqm                         (sdram_ldqm),
         .sdram_udqm                         (sdram_udqm),
-        .map_ems                            (map_ems),
-        .ems_b1                             (ems_b1),
-        .ems_b2                             (ems_b2),
-        .ems_b3                             (ems_b3),
-        .ems_b4                             (ems_b4),
         .ems98_map                          (ems98_map),
         .bios_protect_flag                  (bios_protect_flag),
         .wait_count_clk_en                  (wait_count_clk_en),
