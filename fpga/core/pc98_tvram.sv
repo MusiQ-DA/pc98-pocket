@@ -219,7 +219,17 @@ module pc98_tvram (
             attr[clr_cell]    <= 8'd0;
         end
         else if (cpu_wren & ~memsw_wr_block) begin
-            if (is_attr)      attr[cpu_cell]    <= cpu_wdata;
+            // The attribute region's odd bytes do not exist: np21w writes
+            // them nowhere (memtram_wr8's `!(address & 1)`), so a word write
+            // lands ONLY its low byte at the even address. Storing the odd
+            // half here aliases it into the same cell, so every word fill of
+            // the attribute plane (rep stosw with the attribute in AL, e.g.
+            // AX=00E1h) leaves each cell holding the word's high byte --
+            // usually zero, which is the secret bit and hides the whole
+            // plane: correct character codes, no visible text.
+            if (is_attr) begin
+                if (~cpu_hi)  attr[cpu_cell]    <= cpu_wdata;
+            end
             else if (cpu_hi)  char_hi[cpu_cell] <= cpu_wdata;
             else              char_lo[cpu_cell] <= cpu_wdata;
         end
