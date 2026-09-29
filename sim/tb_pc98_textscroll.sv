@@ -65,8 +65,7 @@ module tb_pc98_textscroll;
         .cpu_q(cpu_q),
         .fil_clk(clk),   .fil_cell(fil_cell),
         .fil_char_lo(fil_char_lo), .fil_char_hi(fil_char_hi),
-        .vid_clk(clk_dot), .vid_cell(vid_cell), .vid_attr(vid_attr),
-        .dbg_cell(12'd0), .dbg_own(1'b0), .dbg_word()
+        .vid_clk(clk_dot), .vid_cell(vid_cell), .vid_attr(vid_attr)
     );
 
     // --------------------------------------------- the row-base mapper
