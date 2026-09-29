@@ -179,7 +179,13 @@ module softcpu_subsystem (
         // seventeen uses, and
         // it is inside the core rather than a separate 216-ALM block. Verified
         // by objdump: the image contains no div/divu/rem/remu.
-        .ENABLE_DIV(0)
+        .ENABLE_DIV(0),
+        // Fit headroom: the trap output is deliberately unmonitored (see the
+        // cpu_trap wire above), so the misalign/illegal-insn catchers buy
+        // nothing, and rdcycle in vkb_ui.c reads only the low word.
+        .CATCH_MISALIGN(0),
+        .CATCH_ILLINSN(0),
+        .ENABLE_COUNTERS64(0)
     ) pico (
         .clk       (clk_pico),
         .resetn    (~reset),

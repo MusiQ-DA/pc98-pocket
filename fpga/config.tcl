@@ -160,6 +160,14 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 #          is NOT the culprit. See docs/HANDOVER.md 1.8.
 set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
 
+#   One V30 word memory access becomes one bus cycle: RAM.sv keeps one guest
+#   byte per 16-bit SDRAM word, so bytes N and N+1 are consecutive SDRAM words
+#   and the pair is a single burst of two (452ad85 measured the path at
+#   1.5-1.7x). Only meaningful alongside SDRAM_USE_MP -- the shim's port A can
+#   count read beats where stock sdram_single's cannot. The bench half is
+#   sim_pc98_boot.sh --word, which runs the real ITF on this path.
+set_global_assignment -name VERILOG_MACRO "PC98_WORD_MEM=1"
+
 #   ---- DIAGNOSTIC BUILD: SDRAM_SELFTEST -----------------------------------
 #   Turns the core into an SDRAM test rig: the softcore walks guest memory with
 #   the 8088 held in reset and leaves the first mismatching address on the OSD,
