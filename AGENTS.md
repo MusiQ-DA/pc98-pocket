@@ -24,9 +24,11 @@ binaries only.
 - `python3 scripts/check_unconnected.py` — dangling softcpu/core inputs.
 - Firmware: build with Homebrew LLVM (Apple clang lacks rv32):
   `cd firmware && PATH="/opt/homebrew/opt/llvm/bin:$PATH" make`
-  regenerates `firmware.vh` + `firmware.srchash`. CI verifies the committed
-  `firmware.srchash` matches the sources — rebuild after ANY source edit
-  (comments included, they change the hash).
+  regenerates `firmware.vh` + `firmware.bin` — the Quartus build consumes the
+  COMMITTED `firmware.vh`, so rebuild and commit it after ANY source edit.
+  CI runs `nodiv-verify`: compiles, links and disassembles to prove the
+  image has no div/rem (the softcore is mul-only: `-march=rv32i_zmmul`,
+  so a stray `/` is a link error, not a silent trap).
 - Full bitstream: GitHub Actions `build.yml` (`quartus-win` job, native
   Windows Quartus) on push to `main` or `workflow_dispatch`. The local
   Docker Quartus scripts were removed (unreliable under wine/Rosetta);

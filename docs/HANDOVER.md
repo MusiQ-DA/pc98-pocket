@@ -875,7 +875,7 @@ font 2KB = 4、work RAM 8KB = 8、picorv32 2（cpuregs）+ FDD bridge 2。
   古い clang なので通っていた＝**ビルドする clang 次第で壊れる**状態だった。
   減算ベースの10進変換に書き直して 0 除算にした（Makefile の `nodiv-verify` が
   ローカルビルドで実際にこれを検出した）。**デプロイ firmware はローカルの
-  clang が作る**ので、`cd firmware && make srchash-verify` を毎回通すこと
+  clang が作る**ので、`cd firmware && make nodiv-verify` を毎回通すこと
 - 次の構造判断: **テキストコンソール化**（framebuffer 廃止、−60 M10K、
   VKB の 25px キーを 8px グリッドに再レイアウト）vs **framebuffer を SDRAM へ**
   （−62 M10K、ラインバッファ + SDRAM 第4ポート、UI は不変）

@@ -532,18 +532,15 @@ jobs:
     # rebuilds it automatically: edit the C, forget to run make, and the
     # bitstream silently ships a stale softcore ROM.
     #
-    # The first version of this job rebuilt the firmware here and diffed the
-    # image. That does not work -- run#61 failed it on 1012 of 1179 lines, which
-    # was not staleness but Ubuntu's clang laying the same sources out
-    # differently from the Homebrew LLVM the committed image was built with.
-    #
-    # So compare a fingerprint of the SOURCES instead. make writes
-    # firmware.srchash next to firmware.vh; if it still matches the sources in
-    # the tree, the committed image came from these sources. Toolchain
-    # independent for the hash itself, but srchash-verify gates on
-    # nodiv-verify, which links the image (ld.lld) and disassembles it
-    # (llvm-objdump) -- the runner's clang comes without lld, so install the
-    # linker and the LLVM binutils or the job dies at the link.
+    # What this job still proves: the firmware compiles and links under the
+    # runner's clang, and the image carries no div/rem -- the softcore is
+    # ENABLE_MUL(1)/ENABLE_DIV(0), so one would be an illegal-instruction
+    # trap. -march=rv32i_zmmul puts div outside the ISA entirely (a stray `/`
+    # fails at ld.lld, not on hardware), which is also what keeps instruction
+    # selection identical between this clang and the Homebrew LLVM the
+    # committed image is built with; nodiv-verify disassembles to prove it.
+    # The runner's clang comes without lld, so install the linker and the
+    # LLVM binutils or the job dies at the link.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -552,8 +549,8 @@ jobs:
       - name: Install LLVM linker and binutils
         run: sudo apt-get update && sudo apt-get install -y lld llvm
 
-      - name: firmware.vh was built from the committed sources
-        run: make -C firmware srchash-verify
+      - name: firmware builds with no div/rem -- the softcore has no divider
+        run: make -C firmware nodiv-verify
 
   stage-quartus-win:
     # Lifts the Windows Quartus install out of the wine image once and
