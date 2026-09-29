@@ -14,6 +14,14 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # LABs against 1848 -- see the long note where ENABLE_OPNA is consumed.
 set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 
+# JTAG debug build. OFF by default: the SLD hub, the probe mux, the
+# write-pipe and key injection together cost enough ALMs to put the fit
+# over the 1848-LAB edge on top of everything else that ships.
+# scripts/jtag_probe.cfg, jtag_probe_read.tcl and the *_jtag_* benches
+# still work -- enable this macro AND comment out ENABLE_OPNA above to
+# open the room the probe needs (the debug build does not need sound).
+#set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
+
 # Boot the ITF, not the BIOS.
 #
 # The core has powered on into the BIOS since the retrobios ITF was found to
