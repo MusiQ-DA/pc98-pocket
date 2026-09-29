@@ -4,15 +4,6 @@
 //
 // Based on chipset written by @kitune-san
 //
-// AT-side peripherals with no PC-98 counterpart at the same ports. They were
-// synthesised into the PC-98 build because nothing gated them, and at 97 per
-// cent ALM occupancy that is not free: the fit report has the MC146818 at 349
-// ALMs, the two 16550s at 412 and the IDE pair at 216, none of which any
-// PC-98 ROM can reach.
-//   RTC   the AT's MC146818 at 0x02C0; a PC-98 has a uPD4990A at 0x20/0x22/0x33
-//   UART  0x3F8 / 0x2F8; a PC-98's serial is an 8251 at 0x30/0x32
-// config.tcl turns them off for MACHINE_PC98. The IDE window at 0x0300 went
-// with them once the PC-9801-55 SCSI board at 0x0CC0 took over the storage path.
 
 module PERIPHERALS #(
 		parameter clk_rate = 28'd50000000
@@ -90,6 +81,9 @@ module PERIPHERALS #(
         input   logic   [7:0]   internal_data_bus,
         output  logic   [7:0]   data_bus_out,
         output  logic           data_bus_out_from_chipset,
+        // The SCSI option ROM's odd byte, for the data_bus_hi mux in Chipset
+        // -- the low lane alone cannot deliver the AA55 signature word.
+        output  wire    [7:0]   scsi_rom_hi,
         input   logic   [7:0]   interrupt_request,
         input   logic           io_read_n,
         input   logic           io_write_n,
@@ -113,28 +107,6 @@ module PERIPHERALS #(
     // not follow writes one region and displays another -- which is exactly
     // what "the characters are in TVRAM but the screen is blank" looks like.
     // unk_cmd/unk_count are the commands the decode did not recognise.
-    // The keyboard's last two hops. KEY (core_top) says the translator emitted
-    // the event; these say whether the 8251 raised IRQ1 for it and whether the
-    // guest ever came to collect the byte at 0x41.
-    // The master PIC's eight request lines as a level, and a count of timer
-    // ticks. INT (core_top) says the CPU stopped being interrupted; these say
-    // whether anything is still ASKING.
-    // The master PIC's own registers. INTR going quiet while a request line
-    // is high is either a mask or an un-EOI'd in-service bit, and nothing
-    // outside the chip can tell those apart.
-    output  logic    [7:0]  dbg_pic_irr,
-    output  logic    [7:0]  dbg_pic_imr,
-    output  logic    [7:0]  dbg_pic_isr,
-    // The slave PIC's own three, and the motor timer's progress. The drive
-    // probe's interrupt dies somewhere between a 0xCC write and the slave's
-    // IRR; these four say exactly which link gave out.
-    output  logic    [7:0]  dbg_pic2_irr,
-    output  logic    [7:0]  dbg_pic2_imr,
-    output  logic    [7:0]  dbg_pic2_isr,
-    output  logic    [7:0]  dbg_irq_level,
-    output  logic    [7:0]  dbg_timer_count,
-    output  logic    [7:0]  dbg_kbd_irq_count,
-    output  logic    [7:0]  dbg_kbd_rd_count,
     // The drawing server: the softcore's GDC engine. Two channels, master
     // and slave; each carries the EXECUTE handshake (req/busy + opcode) and
     // the five snapshot words, and takes back a done LEVEL whose rising
@@ -143,22 +115,11 @@ module PERIPHERALS #(
     output  logic   [1:0]   gdc_draw_req,
     output  logic   [1:0]   gdc_draw_busy,
     output  logic  [15:0]   gdc_draw_ops,
-    output  logic  [31:0]   gvram_dbg,
-    output  logic  [31:0]   gvram_dbg2,
     output  logic [319:0]   gdc_draw_snaps,
     input   logic   [1:0]   gdc_srv_done_levels,
-
-    // TVRAM debug read port: while the guest is not selecting the window,
-    // the CPU port's read side answers dbg_cell with {attr,hi,lo} one cycle
-    // later in tvram_dbg_word. The JTAG probe drives dbg_cell.
-    input   logic   [11:0]  tvram_dbg_cell,
-    output  logic   [23:0]  tvram_dbg_word,
         // PC-9801-86 OPNA, stereo. Zero on a non-PC-98 build.
     output  logic signed [15:0] opna_snd_l,
     output  logic signed [15:0] opna_snd_r,
-        // C/MS Audio
-        // TANDY
-        // UART
         // FDD
         input   logic   [15:0]  mgmt_address,
         input   logic           mgmt_read,
@@ -172,6 +133,7 @@ module PERIPHERALS #(
         input   logic   [47:0]  rtc_time,
         output  logic   [1:0]   fdd_present,
         output  logic   [1:0]   fdd_request,
+        output  logic           scsi_request,
         output  logic           fdd_dma_req,
         input   logic           fdd_dma_ack,
         input   logic           terminal_count,
@@ -202,7 +164,7 @@ module PERIPHERALS #(
     // On a PC-98, A0 says WHICH CHIP, not which register. Two devices
     // interleave through the same range on even and odd addresses, and the
     // register within a device is selected by the bits above A0. Nothing about
-    // the PC/AT decode above survives that: it splits I/O space into 32-byte
+    // the upstream decode above survives that: it splits I/O space into 32-byte
     // blocks by address[7:5] and hands each block to one device.
     //
     //   0x00-0x0F  even  8259 PIC     odd  8237 DMA
@@ -215,7 +177,7 @@ module PERIPHERALS #(
     //
     // The register selects change with the map: the 8259's A0 comes from
     // address[1], and the 8253's and 8255's two bits from address[2:1].
-    // Qualified the way the PC/AT decode above qualifies: A9 and A8 low, and
+    // Qualified the way the upstream decode above qualifies: A9 and A8 low, and
     // nothing said about A15-A10 -- which is not just what the original did,
     // but what a PC-98 does. The machine's own I/O map mirrors 0000-00FF at
     // 0100-03FF, 0400-0FFF and beyond, so the upper lines are genuinely
@@ -279,7 +241,7 @@ module PERIPHERALS #(
     end
 
     // 0x90/0x92 and 0xC8/0xCA now come from the real controller. 0xBE, 0x94
-    // and 0xCC have no XT counterpart at all, so pc98_fdc_glue answers them:
+    // and 0xCC have no upstream counterpart at all, so pc98_fdc_glue answers them:
     // 0xBE is a real latch (the BIOS steers itself with the readback -- ITF
     // FAFD0 tests bit 0 to pick between 0x90 and 0xC8, BIOS FF3C3 does a
     // read-modify-write of it), and 0x94/0xCC are np21w's fdc_i94 constants
@@ -313,9 +275,6 @@ module PERIPHERALS #(
                              : fdd_144_select  ? fdc_144_readback
                              :                   8'hFF;   // the dead window
 
-    // (The Lo-tech EMS board that used to live at ports 260h-263h is gone
-    // -- it was the PC/AT card, and pc98_ems98 at 08E1h-08E9h is the EMS a
-    // PC-98 actually has.)
     // PC-98 text VRAM, A0000-A3FFF: characters at A0000 (two bytes per cell)
     // and attributes at A2000. A BRAM in the guest's address space, qualified
     // with AEN so a DMA cycle carrying a matching address cannot reach it.
@@ -341,12 +300,11 @@ module PERIPHERALS #(
     //
     //     0x90 / 0xC8   read: main status (MSR)
     //     0x92 / 0xCA   read/write: the data register
-    //     0x94 / 0xCC   control -- NOT the same shape as the XT's DOR, so it
-    //                   keeps the PC-98 handling below rather than being
-    //                   translated
+    //     0x94 / 0xCC   control -- PC-98-specific, so it keeps the handling
+    //                   below rather than being translated
     //
     // The translation is therefore only of the two that do correspond: MSR at
-    // the XT's offset 4, data at 5. sim/tb_pc98_fdc_glue runs the BIOS's own
+    // the upstream offset 4, data at 5. sim/tb_pc98_fdc_glue runs the BIOS's own
     // sequence against the real floppy.v behind the real glue, interrupt loop
     // and all, and against an EMPTY DRIVE, which used to hang floppy.v with
     // CB set forever and now ends in a not-ready result phase (see
@@ -457,15 +415,11 @@ module PERIPHERALS #(
         .interrupt_request          ({interrupt2_to_cpu,
                                         pc98_master_irq6,
                                         interrupt_request[5],
-                                        1'b0,   // was the XT UART pair
+                                        1'b0,
                                         1'b0,
                                         crt_vsync_irq,
                                         keybord_interrupt,
                                         timer_interrupt})
-        ,
-        .dbg_irr                    (dbg_pic_irr),
-        .dbg_imr                    (dbg_pic_imr),
-        .dbg_isr                    (dbg_pic_isr)
     );
 
     // Declared here rather than beside pc98_opna: the board's interrupt is a
@@ -501,9 +455,6 @@ module PERIPHERALS #(
         .data_bus_in                (internal_data_bus),
         .data_bus_out               (interrupt2_data_bus_out),
         .data_bus_io                (interrupt2_data_bus_io),
-        .dbg_irr                    (dbg_pic2_irr),
-        .dbg_imr                    (dbg_pic2_imr),
-        .dbg_isr                    (dbg_pic2_isr),
 
         // I/O
         .cascade_in                 (interrupt_cascade_out),
@@ -543,7 +494,7 @@ module PERIPHERALS #(
     //
     // The PC-98 interval timer counts at the machine's 2.4576 MHz PIT clock
     // (1.9968 MHz on the 8 MHz class; np21w's clk_base for this VM is 2.4576).
-    // The XT's 1.193181 MHz below is half that and halves every programmed
+    // A 1.193181 MHz source is half that and halves every programmed
     // rate: the BIOS's FDE20 load of 0x6000 ticks at 50 Hz instead of 100 Hz.
     // 42.954545 MHz is not an integer multiple (17.48...), so phase-accumulate
     // and toggle on carry: a square wave whose falling edges -- what the chip
@@ -590,7 +541,7 @@ module PERIPHERALS #(
     // The beeper's MUTE is system-port C bit 3, INVERTED: 1 = silent,
     // 0 = sounding (np21w sound/beepc.c: buz = (sysport.c & 8) ? 0 : 1), and
     // the latch resets to 0xF9 -- muted. The gate is the LATCH, the thing
-    // 0x35 reads back, not the XT 8255's port C pin: the BIOS only ever
+    // 0x35 reads back, not the 8255's port C pin: the BIOS only ever
     // issues bit set/reset words to 0x37, never a mode word, so the chip
     // holds port C in input mode and port_c_io[3] never drops. Keying the
     // enable on ~port_c_io muted the beeper forever -- the machine's boot
@@ -630,14 +581,14 @@ module PERIPHERALS #(
     //
     // ps2_keyboard -- kept for the pacing, not for the keycodes.
     //
-    // Nothing on this machine reads its XT keycode buffer: a PC-98's keyboard
+    // Nothing on this machine reads its legacy keycode buffer: a PC-98's keyboard
     // is the 8251 at 0x41/0x43, and pc98_kbd_ps2 taps the Set-2 stream
     // UPSTREAM of this converter. What it still does is pace that stream --
     // kb_ready is the only thing stopping pocket_keyboard's queue from
     // running ahead of the consumer.
     //
     // Its output side is drained unconditionally (clear_keycode = 1). Left to
-    // wait for the port-0x61 PB7 acknowledge an XT BIOS would send, the irq
+    // wait for the port-0x61 PB7 acknowledge its legacy BIOS handshake expects, the irq
     // latch would stay high after the first byte, kb_ready would never come
     // back, and exactly one key event would ever cross.
     //
@@ -679,16 +630,10 @@ module PERIPHERALS #(
         end
         else
         begin
-            // PC-98: IRQ1 is the 8251's RxRDY line, not the XT PS/2
-            // keyboard's -- the machine has no port 0x60 keyboard, and a
-            // PS/2 byte raising IRQ1 there only made the BIOS's FE65D
-            // handler read a phantom 0x41. With the 8251 model compiled out
-            // the XT line stands in, which is what the build did before.
-`ifdef PC98_KBD_8251
+            // PC-98: IRQ1 is the 8251's RxRDY line -- the machine has no
+            // port 0x60 keyboard, and a PS/2 byte raising IRQ1 only made the
+            // BIOS's FE65D handler read a phantom 0x41.
             keybord_interrupt_ff    <= kbd8251_irq;
-`else
-            keybord_interrupt_ff    <= keybord_irq;
-`endif
             keybord_interrupt       <= keybord_interrupt_ff;
         end
     end
@@ -696,8 +641,7 @@ module PERIPHERALS #(
     // ---------------------------------------------------------- PC-98 video
     //
     // One plane, one mode: 640x400 text on the 21.0526 MHz dot clock, which
-    // core_top routes in as clk_pc98_dot. The CGA and HGC generators went
-    // with the PC/AT machine layer; nothing here looks at them.
+    // core_top routes in as clk_pc98_dot.
     wire [11:0] tvram_vid_cell_w;   // renderer -> TVRAM, instanced further down
     wire [9:0] pc98_h, pc98_v;
     wire       pc98_hs, pc98_vs, pc98_hb, pc98_vb, pc98_de, pc98_fs;
@@ -706,11 +650,8 @@ module PERIPHERALS #(
     //
     // Held by `reset`, the timing generator stops whenever the guest does --
     // and the OSD is composited into the frame this produces, so holding the
-    // 8088 takes the display with it. That makes every diagnostic that needs
-    // the guest stopped, the SDRAM self-test above all, impossible to read: it
-    // holds the guest, and the screen goes dark exactly when it has something
-    // to say. The splash and the boot hold have the same problem in smaller
-    // form.
+    // guest takes the display with it -- the screen would go dark exactly when
+    // a held-guest state has something to say.
     //
     // These are free-running counters with no state worth resetting, and the
     // dot clock is up long before anything else, so there is nothing to hold
@@ -1084,41 +1025,7 @@ module PERIPHERALS #(
         .m_btn        (mouse_btn)
     );
 
-    logic timer_interrupt_q;
-    always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
-            timer_interrupt_q <= 1'b0;
-            dbg_timer_count   <= 8'h00;
-        end else begin
-            timer_interrupt_q <= timer_interrupt;
-            if (timer_interrupt & ~timer_interrupt_q && dbg_timer_count != 8'hFF)
-                dbg_timer_count <= dbg_timer_count + 8'd1;
-        end
-    end
-    // The MASTER's eight request lines, as levels -- what LVL on the POST
-    // panel reads. Bit 6 is whatever the master is actually given, which with
-    // the real FDC is nothing: the drive's interrupt is a SLAVE line now, and
-    // a panel that kept showing fdd_interrupt here would be reporting a wire
-    // that no longer goes anywhere. LVL 41 -- bit 0 and bit 6 -- is the
-    // reading this replaced.
-    assign dbg_irq_level = {interrupt2_to_cpu, pc98_master_irq6, interrupt_request[5],
-                            1'b0, 1'b0, crt_vsync_irq,
-                            keybord_interrupt, timer_interrupt};
 
-    logic kbd8251_irq_q;
-    always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
-            kbd8251_irq_q     <= 1'b0;
-            dbg_kbd_irq_count <= 8'h00;
-            dbg_kbd_rd_count  <= 8'h00;
-        end else begin
-            kbd8251_irq_q <= kbd8251_irq;
-            if (kbd8251_irq & ~kbd8251_irq_q && dbg_kbd_irq_count != 8'hFF)
-                dbg_kbd_irq_count <= dbg_kbd_irq_count + 8'd1;
-            if (kbd_data_select & ~io_read_n && dbg_kbd_rd_count != 8'hFF)
-                dbg_kbd_rd_count <= dbg_kbd_rd_count + 8'd1;
-        end
-    end
 
     wire [7:0] pc98_font_row;      // driven by the row buffer below
     wire [6:0] pc98_font_cell;
@@ -1203,8 +1110,7 @@ module PERIPHERALS #(
         .p_req(gv_rd_req), .p_addr(gv_rd_addr), .p_len(gv_rd_len),
         .p_ack(gv_rd_ack), .p_rvalid(gv_rd_valid), .p_rdata(gv_rd_data),
         .p_done(gv_rd_done),
-        .gfx_dot(gfx_dot_w),
-        .dbg(gvram_dbg), .dbg2(gvram_dbg2)
+        .gfx_dot(gfx_dot_w)
     );
 
     // The layer also stays dark until the machine has written a graphics
@@ -1661,30 +1567,8 @@ module PERIPHERALS #(
         // The attribute to the renderer, on the dot clock.
         .vid_clk     (clk_pc98_dot),
         .vid_cell    (tvram_vid_cell),
-        .vid_attr    (tvram_vid_attr),
-        .dbg_cell    (tvram_dbg_cell),
-        .dbg_own     (~tvram_mem_select),
-        .dbg_word    (tvram_dbg_word)
+        .vid_attr    (tvram_vid_attr)
     );
-
-
-    //
-    // XT2IDE
-    //
-    // GONE ON PC-98. The task-file at 0x300-0x30F is an AT interface; a
-    // PC-98 uses SASI (0x80/0x82), SCSI (0xCC0-0xCC6) or -- only from the
-    // 9821 generation -- IDE at 0x640-0x64F. Neither bios.rom nor itf.rom
-    // references 0x640-0x64F at all, in any addressing form, so nothing in
-    // this machine's ROM set could ever drive what is here. It was inherited
-    // from the upstream base and instantiated unconditionally, so it has been
-    // occupying a device that is at 91% ALM.
-    //
-    // np21w agrees about the generation: SUPPORT_IDEIO is in its ia32 /
-    // PC-9821 definitions only, while the V30/286 common build gets
-    // SUPPORT_SCSI. SCSI at 0xCC0 is what replaces this.
-    // (Nothing is left to read out of that block: the request output it used
-    // to drive went with it, and the softcore's side of that wire is gone
-    // too.)
 
 
     //
@@ -1720,9 +1604,14 @@ module PERIPHERALS #(
     wire [7:0] scsi_rom_q;
 
     pc98_scsi_rom u_pc98_scsi_rom (
-        .clk  (clock),
-        .addr (address[11:0]),
-        .q    (scsi_rom_q)
+        .clk     (clock),
+        .addr    (address[11:0]),
+        // The signature's 55h sits at the ODD offset 9: it reaches the CPU on
+        // the high lane, so the odd byte gets its own read port and a wire up
+        // to the data_bus_hi mux in Chipset.
+        .addr_hi (address[11:0] | 12'h001),
+        .q       (scsi_rom_q),
+        .q_hi    (scsi_rom_hi)
     );
 
     logic        mgmt_scsi_cs;
@@ -1738,6 +1627,7 @@ module PERIPHERALS #(
     wire   [7:0] scsi_mg_reg_rdata;
     wire   [7:0] scsi_mg_buf_rdata;
     wire         scsi_cmd_req;
+    assign       scsi_request = scsi_cmd_req ^ scsi_cmd_ack;
     wire   [7:0] scsi_cmd_byte;
     wire   [7:0] scsi_data_out;
     wire         scsi_read_select;
@@ -2081,9 +1971,8 @@ module PERIPHERALS #(
             fdd_dma_tc <= 1'b0;
     end
 
-    // NOT_READY_ENDS_COMMAND is a property of the DRIVES, not of the register
-    // mapping, so it follows MACHINE_PC98 rather than PC98_FDC_REAL: a PC-98's
-    // 2HD/2DD drives return READY and a PC/AT's do not (see floppy.v). With no
+    // NOT_READY_ENDS_COMMAND is a property of the DRIVES: a PC-98's
+    // 2HD/2DD drives return READY and the upstream model's do not (see floppy.v). With no
     // disk in the drive -- this core's normal state -- it is the difference
     // between a result phase carrying ST0 = 48h and a CB bit that never clears.
 
@@ -2216,19 +2105,11 @@ module PERIPHERALS #(
         // The decode is exact so nothing above can collide with it; this
         // entry sits after the timer/interrupt/sysport ones only to keep the
         // mux's history.
-        //
-        // Default ON (config.tcl defines PC98_KBD_8251): without it nobody
-        // answers 0x41/0x43, the ITF takes its no-keyboard path, [0x0500]
-        // bit 7 never gets set, and BASIC has no keyboard at all. Undefine
-        // the macro to fall back to the dead ports -- e.g. to bisect a
-        // suspect keyboard interaction on hardware.
-`ifdef PC98_KBD_8251
         else if (kbd8251_read_select)
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= kbd8251_read_data;
         end
-`endif
         // Bus mouse 0x7FD9/B/D -- 7FDF reads stay unclaimed, like np21w.
         else if (busmouse_read_select)
         begin

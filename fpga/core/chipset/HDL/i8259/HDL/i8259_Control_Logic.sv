@@ -283,7 +283,7 @@ module i8259_Control_Logic (
     //
     // Initialization command word 2
     //
-    // A15-A8 (MCS-80) or T7-T3 (8086, 8088)
+    // A15-A8 (MCS-80) or T7-T3 (8086)
     always_ff @(posedge clock, posedge reset) begin
         if (reset)
             interrupt_vector_address[10:3] <= 3'b000;

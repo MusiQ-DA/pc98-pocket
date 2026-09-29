@@ -5,8 +5,7 @@
 // jotego's jt12_top, parameterised as an OPNA: num_ch=6, use_ssg=1, use_lfo=1,
 // use_pcm=0, use_adpcm=1. Measured standalone on the 5CEBA4 with
 // scripts/measure_core.sh, that configuration is 1334 ALM / 1946 regs /
-// 8003 block-RAM bits -- against a free budget of about 1806 ALM once the IDE
-// block (216.6 ALM) was gated out of the PC-98 build. jt03 (the YM2203 on the
+// 8003 block-RAM bits. jt03 (the YM2203 on the
 // -26K board) would have been 854 and jt10 (YM2610) 1674.
 //
 // THE PORTS. np21w cbus/board86.c (board86_bind) binds the board with

@@ -26,7 +26,6 @@ module pocket_video (
     input             vid_blank,
     // OSD framebuffer handshake (softcore)
     input             osd_active,
-    input     [15:0]  dbg_bits,
     input      [3:0]  osd_palette_idx,
     input             osd_in_area,
     output     [9:0]  osd_hcnt,
@@ -126,7 +125,7 @@ module pocket_video (
 
     // No guard on this machine.
     //
-    // The guard exists because a PC/AT guest can program the CRTC to stall
+    // The guard exists because a guest can program the CRTC to stall
     // HSYNC or suppress VSYNC, and an open overlay then has no stable frame to
     // ride on. This machine has one raster, fixed at 640x400 by
     // pc98_video_timing, and no way to leave spec.
@@ -181,8 +180,7 @@ module pocket_video (
 
     // Presented raster size, read by the softcore to place the overlay window;
     // the canvas reports its 349 usable lines, excluding the sacrificial one.
-    // One raster, 640x400. The PC/AT pair this module was built around (CGA
-    // and the Hercules canvas) does not exist here -- and reporting 200 lines
+    // One raster, 640x400. Reporting 200 lines
     // put the softcore's panel in the top half of a 400-line picture.
     assign osd_raster_w = 10'd640;
     assign osd_raster_h = 10'd400;
@@ -227,246 +225,14 @@ module pocket_video (
     // (in the overlay mux below) rather than starving DE, so the scaler sees
     // an ordinary all-black frame and cannot treat the input as lost.
     wire        vid_de_now = ~(sel_hb_d1 | sel_vb_d1);
-    // Debug bands: 64px-wide stripes down the left edge, 32 lines tall each,
-    // lit white when the bit is high and dark grey when it is low, so a dark
-    // band is still distinguishable from the picture behind it. Compiled in
-    // only under PC98_DEBUG_BANDS.
-`ifdef PC98_DEBUG_BANDS
-    // ---------------------------------------------------- free-running probe
-    //
-    // The first version of this drew its bands inside the normal picture, which
-    // was useless: the bands rode on vid_de_now, and vid_de_now rides on the
-    // blanking CHIPSET produces. CHIPSET is held by the guest reset, and the
-    // guest reset shares a term (load_active) with the softcore's -- so in the
-    // one situation worth debugging, the raster is stopped, DE never asserts,
-    // and the bands are as invisible as the OSD they were meant to explain.
-    // What reaches the screen then is the scaler's own uninitialised memory: a
-    // fine checkerboard that changes with video.json and with nothing else,
-    // which is exactly what the hardware has been showing.
-    //
-    // So this generates its own 640x400 raster from clk_pix alone -- no reset,
-    // no CHIPSET, no softcore, no guest -- and drives the APF output directly.
-    // It answers a question the picture path cannot: is the bitstream running
-    // and is the scaler accepting our frames at all?
-    //
-    //   left 64 px   eight status bands, 32 lines each, white = 1
-    //   the rest     eight vertical colour bars, so the frame is unmistakable
-    //
-    // If the screen shows bars, clock, PLL, bitstream and scaler are all fine
-    // and the bands say why nothing else runs. If it still shows the
-    // checkerboard, the fault is upstream of every one of them.
-    reg [15:0] dbg_bits_s1 = 16'd0, dbg_bits_pix = 16'd0;
-    always @(posedge clk_pix) begin
-        dbg_bits_s1  <= dbg_bits;
-        dbg_bits_pix <= dbg_bits_s1;
-    end
 
-    // Bit 7: does CHIPSET's raster run at all? HSync arrives on clk_pix already,
-    // so this needs no crossing -- just an edge and a timeout. About 50 ms of
-    // stillness (a PC-98 line is 848 dots) counts as stopped.
-    reg        hs_seen = 1'b0;
-    reg [19:0] hs_idle = 20'd0;
-    reg        raster_alive = 1'b0;
-    always @(posedge clk_pix) begin
-        hs_seen <= HSync;
-        if (HSync != hs_seen) begin
-            raster_alive <= 1'b1;
-            hs_idle      <= 20'd0;
-        end else if (hs_idle == 20'hFFFFF)
-            raster_alive <= 1'b0;
-        else
-            hs_idle <= hs_idle + 20'd1;
-    end
-    // VSync liveness, same shape as HSync's.
-    reg        vs_seen = 1'b0;
-    reg [21:0] vs_idle = 22'd0;
-    reg        vsync_alive = 1'b0;
-    always @(posedge clk_pix) begin
-        vs_seen <= VSync;
-        if (VSync != vs_seen) begin
-            vsync_alive <= 1'b1;
-            vs_idle     <= 22'd0;
-        end else if (vs_idle == 22'h3FFFFF)
-            vsync_alive <= 1'b0;
-        else
-            vs_idle <= vs_idle + 22'd1;
-    end
-
-    // Per-frame "did this ever happen" flags, published at the probe's own frame
-    // boundary so each reads as the state of the frame just gone.
-    reg pb_vs_d = 1'b0;
-    reg de_acc = 1'b0, ia_acc = 1'b0, px_acc = 1'b0, hb_acc = 1'b0, vb_acc = 1'b0;
-    reg de_any = 1'b0, ia_any = 1'b0, px_any = 1'b0, hb_any = 1'b0, vb_any = 1'b0;
-    always @(posedge clk_pix) begin
-        pb_vs_d <= pb_vs;
-        if (pb_vs & ~pb_vs_d) begin
-            de_any <= de_acc; ia_any <= ia_acc; px_any <= px_acc;
-            hb_any <= hb_acc; vb_any <= vb_acc;
-            de_acc <= 1'b0; ia_acc <= 1'b0; px_acc <= 1'b0;
-            hb_acc <= 1'b0; vb_acc <= 1'b0;
-        end else begin
-            if (vid_de_now)                                  de_acc <= 1'b1;
-            if (osd_in_area)                                 ia_acc <= 1'b1;
-            if (osd_in_area && (osd_palette_idx != 4'd0))    px_acc <= 1'b1;
-            if (~sel_hb)                                     hb_acc <= 1'b1;
-            if (~sel_vb)                                     vb_acc <= 1'b1;
-        end
-    end
-
-    // Left column is core_top's; the right column is measured here.
-    //
-    //   9  raster_alive   HSync moves
-    //   10 vsync_alive    VSync moves
-    //   11 de_any         the picture path asserted DE this frame
-    //   12 hb_any         the presented hblank ever cleared
-    //   13 vb_any         the presented vblank ever cleared
-    //   14 osd_enable     osd_active, synced to clk_pix
-    //   15 ia_any         the softcore returned in-area for some probe pixel
-    //   16 px_any         and returned a non-zero palette index there
-    // What the guest-derived counters actually reach over the DE-active pixels
-    // of a frame. The panel window is a range test on exactly these two, so
-    // their span is the whole remaining question.
-    reg [9:0] vg_min_acc = 10'h3FF, vg_max_acc = 10'd0, hg_max_acc = 10'd0;
-    reg [9:0] vg_min = 10'h3FF, vg_max = 10'd0, hg_max = 10'd0;
-    always @(posedge clk_pix) begin
-        if (pb_vs & ~pb_vs_d) begin
-            vg_min <= vg_min_acc; vg_max <= vg_max_acc; hg_max <= hg_max_acc;
-            vg_min_acc <= 10'h3FF; vg_max_acc <= 10'd0; hg_max_acc <= 10'd0;
-        end else if (vid_de_now) begin
-            if (osd_vcnt_g < vg_min_acc) vg_min_acc <= osd_vcnt_g;
-            if (osd_vcnt_g > vg_max_acc) vg_max_acc <= osd_vcnt_g;
-            if (osd_hcnt_g > hg_max_acc) hg_max_acc <= osd_hcnt_g;
-        end
-    end
-
-    // RETIRED, 2026-09-22: the band strip and its colour bars no longer
-    // draw. core_top's eight reset terms moved to the POST panel's RST field
-    // (MMIO 0x50000134), which is legible without a decoder ring; the probe
-    // measurements below stay as the source they always were, wired to
-    // nothing. pb_rgb's fallback is plain black now.
-    //
-    //   A  core_top's eight, as before, then two dark
-    //   B  raster_alive, vsync_alive, vb_any, hb_any, de_any,
-    //      ia_any, px_any, osd_enable, guard_run, then one dark
-    //   C  osd_vcnt_g minimum over the frame, ten bits, MSB at the top
-    //   D  osd_vcnt_g maximum
-    //   E  osd_hcnt_g maximum
-    wire [9:0] dbg_colA = {2'b00, dbg_bits_pix[7:0]};
-    wire [9:0] dbg_colB = {1'b0, guard_run, osd_enable, px_any, ia_any,
-                           de_any, hb_any, vb_any, vsync_alive, raster_alive};
-    wire [9:0] dbg_colC = vg_min;
-    wire [9:0] dbg_colD = vg_max;
-    wire [9:0] dbg_colE = hg_max;
-
-    wire [9:0] pb_h, pb_v;
-    wire       pb_hs, pb_vs, pb_hb, pb_vb, pb_de;
-    pc98_video_timing u_probe_timing (
-        .clk         (clk_pix),
-        .ce          (1'b1),
-        .rst         (1'b0),
-        .hcount      (pb_h),
-        .vcount      (pb_v),
-        .hsync       (pb_hs),
-        .vsync       (pb_vs),
-        .hblank      (pb_hb),
-        .vblank      (pb_vb),
-        .de          (pb_de),
-        .frame_start ()
-    );
-
-    // The probe reads the softcore's framebuffer with its OWN raster, so the
-    // whole OSD chain can be tested with CHIPSET out of the picture entirely.
-    // Keep feeding the softcore the probe's raster: that is the configuration
-    // that renders a readable panel, and the panel carries the guest readouts
-    // this whole exercise was for. The guest counters do not have to be routed
-    // through the softcore to be measured -- vg_min/vg_max/hg_max below watch
-    // them directly.
-    assign osd_hcnt = pb_h;
-    assign osd_vcnt = pb_v;
-
-    // Two columns of eight: 0-63 is bits 0-7, 64-127 is bits 8-15.
-    // Five columns of ten bands, in a strip along the BOTTOM of the frame:
-    // 64 px wide, 8 lines tall, red rules between. The bottom is where the
-    // softcore's 640x200 panel is not, so the readouts stay legible.
-    wire       pb_band_area = (pb_h < 10'd320) && (pb_v >= 10'd320);
-    wire [2:0] pb_col       = pb_h[8:6];
-    wire [3:0] pb_row       = (pb_v - 10'd320) >> 3;
-    reg  [9:0] pb_colsel;
-    always @(*) begin
-        case (pb_col)
-            3'd0:    pb_colsel = dbg_colA;
-            3'd1:    pb_colsel = dbg_colB;
-            3'd2:    pb_colsel = dbg_colC;
-            3'd3:    pb_colsel = dbg_colD;
-            default: pb_colsel = dbg_colE;
-        endcase
-    end
-    // MSB first in the numeric columns, so they read top to bottom as binary.
-    wire pb_lit = (pb_col >= 3'd2) ? pb_colsel[4'd9 - pb_row]
-                                   : pb_colsel[pb_row];
-    // 128 px per bar, offset by one so no bar is black -- a black bar next to
-    // the bands would read as "nothing here" and defeat the point.
-    wire [2:0] pb_bar       = pb_h[9:7] + 3'd1;
-    // A one-pixel rule between the two band columns, so they cannot be misread
-    // as one column of sixteen.
-    wire       pb_rule      = (pb_v >= 10'd320) && (pb_h >= 10'd64)
-                              && (pb_h < 10'd320) && (pb_h[5:0] < 6'd2);
-    wire [23:0] pb_bar_rgb  = {{8{pb_bar[2]}}, {8{pb_bar[1]}}, {8{pb_bar[0]}}};
-    // The overlay, on a flat backdrop. Colour bars showing through the panel's
-    // transparent pixels made the text unreadable, and the text is the point.
-    //
-    // Mid grey, not black: the label colour is 0x101010, so anywhere the panel
-    // body did not get filled a black backdrop would hide the very text this is
-    // for. Grey keeps both the light body (0xF1E5D5) and the near-black label
-    // legible against it.
-    // The hardware-band strip and its colour bars are gone: the reset terms
-    // moved to the POST panel's RST field (0x50000134), which is legible,
-    // and a dead machine now shows plain black behind the panel rather than
-    // sixteen stripes that needed a decoder ring.
-    wire [23:0] pb_rgb      = osd_show     ? osd_color
-                            : osd_in_area  ? 24'h606060
-                            :                24'h000000;
-
-    reg [23:0] pb_vid_rgb = 24'd0;
-    reg        pb_vid_de  = 1'b0;
-    reg        pb_vid_hs  = 1'b0;
-    reg        pb_vid_vs  = 1'b0;
-    always @(posedge clk_pix) begin
-        pb_vid_de  <= pb_de;
-        pb_vid_rgb <= pb_de ? pb_rgb : 24'd0;   // slot 0 through blanking
-        pb_vid_hs  <= pb_hs;
-        pb_vid_vs  <= pb_vs;
-    end
-
-    wire        dbg_in    = 1'b0;
-    wire [23:0] dbg_color = 24'd0;
-`else
-    wire        dbg_in    = 1'b0;
-    wire [23:0] dbg_color = 24'd0;
-`endif
-
-    // A 16x16 white square at the origin of the OSD's own coordinate system,
-    // drawn from osd_hcnt/osd_vcnt -- the two counters the overlay is indexed
-    // by. It costs one corner of the picture and makes the next hardware round
-    // trip decisive either way: square but no panel means the counters are fine
-    // and the fault is in the framebuffer read; neither means the counters
-    // still never reach the window. Remove it once the OSD is up.
-`ifdef PC98_OSD_MARK
-    wire        mark_in  = (osd_hcnt < 10'd16) && (osd_vcnt < 10'd16);
-    wire [23:0] mark_rgb = 24'hFFFFFF;
-`else
-    wire        mark_in  = 1'b0;
-    wire [23:0] mark_rgb = 24'd0;
-`endif
 
     // Disk-access lamp: a 12x12 amber square tucked just inside the top-right
     // corner of the raster, over the picture and under the OSD.
     wire lamp_in = disk_led && (rb_h >= PC98_H_ACTIVE - 10'd20) && (rb_h < PC98_H_ACTIVE - 10'd8)
                             && (rb_v >= 10'd8) && (rb_v < 10'd20);
 
-    wire [23:0] overlay    = mark_in       ? mark_rgb
-                           : dbg_in        ? dbg_color
-                           : vid_blank_pix ? 24'd0
+    wire [23:0] overlay    = vid_blank_pix ? 24'd0
                            : osd_show      ? osd_color
                            : guard_run     ? 24'd0
                            : lamp_in       ? 24'hE0A020
@@ -478,21 +244,12 @@ module pocket_video (
         vid_vs  <= sel_vs_d1;
     end
 
-`ifdef PC98_DEBUG_BANDS
-    assign video_rgb          = pb_vid_rgb;
-    assign video_de           = pb_vid_de;
-    assign video_hs           = pb_vid_hs;
-    assign video_vs           = pb_vid_vs;
-`else
     assign video_rgb          = vid_rgb;
     assign video_de           = vid_de;
     assign video_hs           = vid_hs;
     assign video_vs           = vid_vs;
-`endif
-`ifndef PC98_DEBUG_BANDS
     assign osd_hcnt = osd_hcnt_g;
     assign osd_vcnt = osd_vcnt_g;
-`endif
 
     assign video_skip         = 1'b0;
     assign video_rgb_clock    = clk_pix;

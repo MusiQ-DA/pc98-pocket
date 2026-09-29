@@ -183,7 +183,7 @@ module RAM (
     //
     // Write protect
     //
-    // PC-98's ROM is E8000-FFFFF (96 KB), not the PC/AT's F0000-FFFFF plus the
+    // PC-98's ROM is E8000-FFFFF (96 KB), not a 64 KB F0000-FFFFF page plus the
     // EC00 option-ROM window. bios_protect_flag[1] covers the whole of it.
     assign write_protect = bios_protect_flag[1] & ((address[19:16] == 4'b1111)
                                                 |  (address[19:15] == 5'b11101));
@@ -673,7 +673,7 @@ module RAM (
     //   st=4 rdcmd=1 rdflag=1 ardy=0 prdy=0 dout=10   <- ready finally drops
     //   st=4 ...                               dout=8b <- the real byte
     //
-    // The 8088 never fell in: it samples READY once, deep in T3, a whole CPU
+    // The CPU never fell in: it samples READY once, deep in T3, a whole CPU
     // clock (nine chipset cycles at 4.77 MHz) after the command. v30_cpu_bridge
     // samples at EVERY posedge CE from its third T state on, and the 8288
     // raises the command around that same edge -- so the byte engine could
@@ -686,7 +686,7 @@ module RAM (
     // finished -- it is what access_complete already means for the ROM loader
     // -- and data_bus_out_reg holds the captured byte by then. Saying ready
     // there and nowhere else makes this a real handshake for any master,
-    // however it samples. The 8088 sees ready no earlier than it did; it just
+    // however it samples. The CPU sees ready no earlier than it did; it just
     // no longer sees it before the data.
     // Ready answers only for the strobe whose access was actually served:
     // a write must match the operands captured at acceptance (the served

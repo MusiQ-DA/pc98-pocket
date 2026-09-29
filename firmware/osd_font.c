@@ -39,7 +39,7 @@
 
 // Slot id candidates for font.rom, tried in order. First the PC-98's CURRENT
 // numbering (Font=11, since the floppies took 3/4 and the firmware 12), then
-// the earlier PC-98 numbering (Font=3) and the XT-era one (Font=201), kept in
+// the earlier numbering (Font=3) and the older still (Font=201), kept in
 // case the ids ever get renumbered again. Ordering is load-bearing: id 3 is
 // Floppy A now, and a disk in drive A would stage its first 2 KB as glyphs
 // when 11 -- a REQUIRED slot -- has failed for some other reason. The BIOS at

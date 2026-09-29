@@ -42,12 +42,9 @@
 
 static const osd_fb_t panel = { PANEL_X, PANEL_Y, PANEL_W, PANEL_H };
 
-// PC-98 builds drop the XT-only hardware knobs (BIOS ROM window, OPL2, C/MS,
-// composite) from the menus by #ifndef MACHINE_PC98 -- hidden, never removed:
-// the save blob stores setting values by enum index, so the enum order (and
-// with it every later setting's slot) is frozen. The settings themselves stay
-// compiled in and are still pushed to the machine at boot with their default
-// values, exactly as if the rows were there and untouched.
+// The save blob stores setting values by enum index, so the enum order (and
+// with it every later setting's slot) is frozen: retired settings keep a
+// reserved slot rather than shifting the indices that follow.
 
 // Every option-valued setting, addressed by id. `value` is the current selection (an index into
 // `opts`); it starts at the first option here, and the option order/default is reconciled with the
@@ -62,8 +59,8 @@ enum {
     SET_STEREO,
     SET_DISPLAY,
     // Hardware
-    SET_EMS,        // retired Lo-tech EMS enable -- slot kept for save compat
-    SET_EMS_FRAME,  // retired Lo-tech EMS frame -- same
+    SET_EMS,        // reserved -- slot kept for save compatibility
+    SET_EMS_FRAME,  // reserved -- same
     // Controls
     SET_DPAD,
     SET_GAMEPAD,
@@ -103,9 +100,7 @@ typedef struct {
 #define SETTING(a)      { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), 0 }
 #define SETTING_D(a, d) { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), (d) }
 
-// The rows whose hardware left the machine (CGA/HGC graphics, the video 1st
-// card, the splash, OPL2, C/MS, composite, the game port) are gone from the
-// enum with it. Older blobs still load -- settings_load remaps their indices
+// Older blobs still load -- settings_load remaps their indices
 // through the version tables below -- and the next save writes version 6.
 static setting_t settings[SET_COUNT] = {
     // Index 1 is the faithful clock: a PC-9801VM/VX's V30 at 2.4576 MHz x4.
@@ -122,7 +117,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_level4),      // SET_SPK_VOL
     SETTING(opt_stereo),      // SET_STEREO
     SETTING(opt_display),     // SET_DISPLAY
-    SETTING_D(opt_dis_en, 1), // SET_EMS -- retired Lo-tech board, index kept for the save blob
+    SETTING_D(opt_dis_en, 1), // SET_EMS -- reserved, index kept for the save blob
     SETTING_D(opt_dis_en, 0), // SET_EMS_FRAME -- same
     SETTING_D(opt_dpad, DPAD_ARROWS), // SET_DPAD
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
@@ -187,10 +182,8 @@ static const item_t items_av[] = {
 // The two Floppy rows are NOT stored settings: the drives' media lives in
 // fdd_service, the Pocket menu's data slots are the only way an image gets
 // in, and these rows show the live state and eject/re-insert it (A button).
-// The Lo-tech EMS rows are gone with the board (2026-09-29): ports
-// 260h-263h are the PC/AT card's, nothing on a PC-98 writes them, and the
-// board above is the EMS this machine actually has. SET_EMS/SET_EMS_FRAME
-// stay in the enum and the save blob, same reason as Boot Splash above.
+// SET_EMS/SET_EMS_FRAME stay in the enum and the save blob, same reason as
+// Boot Splash above.
 static const item_t items_hw[] = {
     { "Floppy A", IT_FDD, 0 },
     { "Floppy B", IT_FDD, 1 },
@@ -262,7 +255,7 @@ static void draw_frame(void)
 }
 
 // Names for the common keys a docked keyboard can bind that the 83-key virtual keyboard omits: the
-// E0-extended keys (ext = 1) and the 101-key extras beyond the XT layout (F11/F12, Print Screen,
+// E0-extended keys (ext = 1) and the 101-key extras (F11/F12, Print Screen,
 // Pause). Set-2 codes and ext flag per hid_to_ps2; anything rarer falls back to its raw code.
 static const struct {
     uint8_t ext;
@@ -688,7 +681,7 @@ void settings_reset_tick(void)
 #define ENTRY_WORDS  (BLOCK_WORDS + 2)   // hash, ~hash, then the block
 #define ENTRY_COUNT  17
 
-// Version 4's enum order: CPU, CGA, HGC, video-1st, BIOS-wr, splash, OPL2, boost, speaker, stereo,
+// Version 4's enum order: CPU, gfx0, gfx1, video-1st, BIOS-wr, splash, audio, boost, speaker, stereo,
 // C/MS, composite, display, EMS, EMS-frame, A000, joy1, joy2, swap-joy, sync-joy, d-pad, gamepad.
 // 0xFF means the row's hardware is gone and its value is dropped. The table lands on the version-5
 // index; the v5_to_v6 pass below carries it the rest of the way.

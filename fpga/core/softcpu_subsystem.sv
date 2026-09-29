@@ -5,7 +5,7 @@
 // on-screen keyboard. It runs firmware from an on-chip ROM, with work RAM for its
 // stack and buffers, and reaches the disk bridge (softcpu_fdd_bridge) through
 // memory-mapped registers at 0x3xxxxxxx; the bridge pulls sectors from an APF
-// dataslot and streams them into the floppy and IDE controllers' mgmt FIFOs. It
+// dataslot and streams them into the floppy controller's mgmt FIFO. It
 // also owns the OSD framebuffer, read out below in the video clock domain.
 //
 // The CPU runs on clk_pico, a clock derived from clk_sys by gating it down to a
@@ -49,10 +49,6 @@ module softcpu_subsystem (
     // firmware re-mounts a swapped image even at an unchanged size.
     input        fdd0_rebind,
     input        fdd1_rebind,
-    // JTAG FDD command channel (probe write slot 0x85 / read slot 0x26,
-    // PC98_PROBE_EXTRA builds). See softcpu_fdd_bridge for the register map.
-    input  [31:0] jt_fddctl,
-    output [31:0] jt_fddstat,
 
     // Management-bus master to floppy.v via CHIPSET
     output [15:0] mgmt_addr,
@@ -99,15 +95,6 @@ module softcpu_subsystem (
     input         dataslots_ready, // APF has finished the initial dataslot load
     output        soft_guest_hold, // boot-master guest reset: held until settings are staged
     output        soft_vid_blank,  // bit1 of the same register: force the presented frame dark
-    // SDRAM self-test window (docs/P0_SELFTEST_SPEC.md). The firmware drives
-    // guest SDRAM through core_top's ext-port master while the 8088 is held,
-    // so a failing address can be reported instead of inferred from a beep.
-    output [19:0] st_addr,
-    output  [7:0] st_wdata,
-    output        st_we,    // 1 = write, 0 = read
-    output        st_req,   // level; held until st_done comes back
-    input         st_done,
-    input   [7:0] st_rdata,
     // The drawing server's view of the two GDCs, already in this domain via
     // the synchronisers below; the done LEVEL the engine writes back.
     input   [1:0]  gdc_draw_req,
@@ -211,13 +198,10 @@ module softcpu_subsystem (
     wire sel_rom    = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h0);
     wire sel_ram    = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h1);
     wire sel_status = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h2);
+
+
     wire sel_fdd    = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h3);
     wire sel_fb     = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h4);
-    // Region 0x5: SDRAM self-test. It gets a region of its own rather than a
-    // few spare words in 0x2, because every decode there matches on
-    // cpu_mem_addr[4:2] and ignores bit 5 -- 0x20000030 would also have fired
-    // OSD_ACTION at 0x20000010, 0x34 the compositor origin, and so on.
-    wire sel_st     = cpu_mem_valid && (cpu_mem_addr[31:28] == 4'h5);
     // Region 0x7: the OSD font load window (see the font RAM below). Not 0x6:
     // that prefix is the bridge RAM's APF-side address space (FDD_BRIDGE_BASE),
     // which the CPU never addresses directly but which shares a number with it
@@ -272,47 +256,6 @@ module softcpu_subsystem (
     assign soft_guest_hold = soft_guest_hold_r;
     assign soft_vid_blank  = soft_vid_blank_r;
 
-    // SDRAM self-test registers, 0x50000000/04/08/0C.
-    //   00 W  address[19:0]
-    //   04 W  write data[7:0]
-    //   08 W  bit0 = start a write, bit1 = start a read
-    //   0C R  {busy, rdata[7:0]}
-    // clk_pico is clk_chipset gated one-in-six, so st_req is stable for six
-    // chipset cycles and core_top's sequencer can sample it directly; the
-    // request stays up until st_done returns, which is what stops one firmware
-    // write from launching several accesses.
-    reg [19:0] st_addr_r  = 20'd0;
-    reg  [7:0] st_wdata_r = 8'd0;
-    reg        st_we_r    = 1'b0;
-    reg        st_req_r   = 1'b0;
-    wire       st_trig    = sel_st && cpu_mem_wstrb[0] && cpu_mem_ready
-                                   && cpu_mem_addr[3:2] == 2'd2;
-
-    always @(posedge clk_pico) begin
-        if (reset) begin
-            st_addr_r  <= 20'd0;
-            st_wdata_r <= 8'd0;
-            st_we_r    <= 1'b0;
-            st_req_r   <= 1'b0;
-        end else begin
-            if (sel_st && cpu_mem_wstrb[0] && cpu_mem_ready && cpu_mem_addr[3:2] == 2'd0)
-                st_addr_r <= cpu_mem_wdata[19:0];
-            if (sel_st && cpu_mem_wstrb[0] && cpu_mem_ready && cpu_mem_addr[3:2] == 2'd1)
-                st_wdata_r <= cpu_mem_wdata[7:0];
-            if (st_trig && !st_req_r && (cpu_mem_wdata[1:0] != 2'b00)) begin
-                st_we_r  <= cpu_mem_wdata[0];
-                st_req_r <= 1'b1;
-            end else if (st_req_r && st_done) begin
-                st_req_r <= 1'b0;
-            end
-        end
-    end
-
-    assign st_addr  = st_addr_r;
-    assign st_wdata = st_wdata_r;
-    assign st_we    = st_we_r;
-    assign st_req   = st_req_r;
-
     // Compositor origin at 0x20000014: {y[25:16], x[9:0]}, the raster position of
     // the framebuffer's top-left; the firmware derives it from the presented
     // raster size (read back at 0x20000018).
@@ -359,20 +302,16 @@ module softcpu_subsystem (
     // The file deliberately survives machine resets (registers power up 0): reset-latched
     // consumers sample it at reset release, before the restarted firmware can re-push
     // values.
-    // The index order is the firmware's SET_* enum (settings_ui.c), version 5:
-    // the settings whose hardware left the machine (CGA/HGC, video 1st, splash,
-    // OPL2, C/MS, composite, the game port pair) are gone from both sides.
+    // The index order is the firmware's SET_* enum (settings_ui.c): indices
+    // 6/7 are reserved so the save blob's numbering does not shift.
     localparam SET_IDX_CPU_SPEED = 5'd0;   // System
     localparam SET_IDX_BIOS_WR   = 5'd1;
     localparam SET_IDX_BOOST     = 5'd2;   // Audio & Video
     localparam SET_IDX_SPK_VOL   = 5'd3;
     localparam SET_IDX_STEREO    = 5'd4;
     localparam SET_IDX_DISPLAY   = 5'd5;
-    // indices 6/7 were the Lo-tech EMS board's enable and frame -- retired
-    // with the board (it was never a PC-98 card); the firmware keeps the
-    // enum slots so the save blob's indexing doesn't shift.
     localparam SET_IDX_DISK_LED  = 5'd10;  // on-screen access lamp
-    localparam SET_IDX_EXTMEM    = 5'd11;  // NEC EMS board's fitted size
+    localparam SET_IDX_EXTMEM    = 5'd11;  // EMS board's fitted size
     // index 8 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
     localparam SET_IDX_GAMEPAD   = 5'd9;   // Controls
     reg [7:0] osd_settings [0:31];
@@ -960,9 +899,6 @@ module softcpu_subsystem (
         .datatable_q(datatable_q),
         .fdd0_rebind(fdd0_rebind),
         .fdd1_rebind(fdd1_rebind),
-        .jt_fddctl (jt_fddctl),
-        .jt_fddstat(jt_fddstat),
-
         .mgmt_addr  (mgmt_addr),
         .mgmt_dout  (mgmt_dout),
         .mgmt_wr    (mgmt_wr),
@@ -999,7 +935,6 @@ module softcpu_subsystem (
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
             32'h4???_????: cpu_mem_rdata = gpu_status;
             32'h7???_????: cpu_mem_rdata = font_cpu_q;
-            32'h5000_000C: cpu_mem_rdata = {23'd0, st_req_r, st_rdata};
             // ---- the drawing server --------------------------------------
             // 0x140/0x180: {busy, req, opcode} for master/slave; +4..+0x14:
             // the five snapshot words. 0x15C/0x19C (writes): the done LEVEL

@@ -76,16 +76,7 @@ module pc98_tvram (
     // Render side: the attribute, on the dot clock.
     input  wire        vid_clk,
     input  wire [11:0] vid_cell,
-    output logic [7:0] vid_attr,
-
-    // Debug side: while dbg_own is high the CPU-port read address is ours
-    // (the parent drives it with ~tvram_mem_select, so the guest always wins
-    // and never sees a disturbed read-back). dbg_cell indexes a cell; a cycle
-    // later dbg_word holds {attr_or_memsw, char_hi, char_lo} for it and keeps
-    // refreshing while the port stays ours -- quasi-static for JTAG reads.
-    input  wire [11:0] dbg_cell,
-    input  wire        dbg_own,
-    output logic [23:0] dbg_word
+    output logic [7:0] vid_attr
 );
 
     // A0000-A1FFF is the character region, A2000-A3FFF the attribute region;
@@ -130,16 +121,12 @@ module pc98_tvram (
     wire memsw_cells    = is_attr & (cpu_cell[11:4] == 8'hFF);  // cells 0xFF0-0xFFF
     wire memsw_wr_block = memsw_cells & cpu_cell[0];            // the eight bytes
 
-    // Read side: while dbg_own holds, the port's read address is the debug
-    // cell instead of the guest bus. The bank reads and the post-mux selects
-    // all follow rd_* so a guest access is untouched; the write path keeps
-    // the cpu_* signals because cpu_wren implies !dbg_own anyway.
-    // The debug read sits on the cell's ATTRIBUTE address (0x2000+cell*2):
-    // rd_cell is the cell index either way, all three banks answer together,
-    // and attr-region addressing makes the memory-switch cells read back the
-    // battery-backed registers instead of the always-zero bank underneath.
-    wire [13:0] rd_addr   = dbg_own ? (14'h2000 | {1'b0, dbg_cell, 1'b0})
-                                    : cpu_addr;
+    // All three banks answer every read and the mux sits after them, so a
+    // guest access is never disturbed.
+    // Attr-region addressing also makes the memory-switch cells read back
+    // the battery-backed registers instead of the always-zero bank
+    // underneath (the switch mux rides the same registered stage).
+    wire [13:0] rd_addr   = cpu_addr;
     wire        rd_attr   = rd_addr[13];
     wire [11:0] rd_cell   = rd_addr[12:1];
     wire        rd_hi     = rd_addr[0];
@@ -209,8 +196,6 @@ module pc98_tvram (
     logic       q_is_attr, q_hi;
     logic       q_memsw;
     logic [2:0] q_memsw_idx;
-    logic       dbg_own_d = 1'b0;
-
     always_ff @(posedge clk) begin
         if (rst) begin
             clr_cell          <= clr_cell + 12'd1;
@@ -245,11 +230,6 @@ module pc98_tvram (
         q_hi       <= rd_hi;
         q_memsw    <= rd_memsw;
         q_memsw_idx <= rd_cell[3:1];
-
-        dbg_own_d <= dbg_own;
-        if (dbg_own_d)
-            dbg_word <= {q_memsw ? memsw[q_memsw_idx] : q_attr,
-                         q_char_hi, q_char_lo};
     end
 
     always_ff @(posedge fil_clk) begin

@@ -254,13 +254,9 @@ module core_top (
     wire clk_pix_90;             // pixel clock, 90 deg
 
     // System PLL: chipset 42.95, dram 42.95@180, and the 28.64 MHz clock whose
-    // half drives the boot hold's 14.3 MHz tick.
-    //
-    // THE UNUSED OUTPUTS ARE OPEN since the XT hardware left: their only
-    // consumers were the 8088 core clock and the CGA/HGC generators. The
-    // megafunction still generates them -- repinning a generated PLL is
-    // riskier than leaving wires unrouted -- and the remaining consumers
-    // (the V30's CE generator, clk_28_636) are the same as before.
+    // half drives the boot hold's 14.3 MHz tick. The open outputs are
+    // unrouted on purpose -- repinning a generated PLL is riskier than
+    // leaving wires open.
     pll pll
     (
         .refclk   (clk_74a),
@@ -279,8 +275,8 @@ module core_top (
     always @(posedge clk_28_636)
         ce_14_318 <= ~ce_14_318;
 
-    // CPU clock: ce_generator derives the 8088 pin clock and its CE strobes;
-    // clk_select sets the speed and is reloaded each bus cycle (biu_done).
+    // CPU clock: ce_generator derives the V30's CE strobes; clk_select sets
+    // the speed and is reloaded each bus cycle (biu_done).
     logic  biu_done;
     logic  [7:0] clock_cycle_counter_division_ratio;
     logic  [7:0] clock_cycle_counter_decrement_value;
@@ -289,9 +285,7 @@ module core_top (
     logic  [1:0] ram_write_wait_cycle;
     logic        cycle_accrate;
     logic  [1:0] clk_select;
-    // The CPU speed is the OSD's alone. It used to be overridable by a guest
-    // write to 0x8888 (the XT heritage's control port, xtctl); nothing on a
-    // PC-98 writes it, and the register is gone.
+    // The CPU speed is the OSD's alone.
     wire   [1:0] clk_select_next = cpu_speed_cfg;
 
     always @(posedge clk_chipset, posedge reset)
@@ -308,7 +302,7 @@ module core_top (
         .reset                              (reset),
         .clk_select_load                    (biu_done),
         .clk_select                         (clk_select_next),
-        // The 8088 pin clock output is open: the V30 takes the CEs, not a
+        // The pin clock output is open: the V30 takes the CEs, not a
         // pin clock, and nothing else ever read it.
         .cpu_clk_pin                        (),
         .cpu_ce_posedge                     (cpu_ce_posedge),
@@ -322,16 +316,12 @@ module core_top (
         .ram_write_wait_cycle               (ram_write_wait_cycle)
     );
 
-    // One video mode: no card swap, no pixel-pair select. swap_video and
-    // pix_sel were the PC/AT pair's, and the register that raised them went
-    // with the CGA. vid_blank is the softcore's (SOFT_GUEST_HOLD bit1): it
-    // forces the presented frame dark through an orchestrated guest reset,
-    // so the stale VRAM picture cannot sit on screen until the BIOS repaints.
+    // vid_blank is the softcore's (SOFT_GUEST_HOLD bit1): it forces the
+    // presented frame dark through an orchestrated guest reset, so the
+    // stale VRAM picture cannot sit on screen until the BIOS repaints.
     wire vid_blank = soft_vid_blank;
 
-    // One video mode, so no switch: the dot clock goes straight out. The CGA
-    // and HGC pairs and the swap machinery above are PC/AT things that this
-    // machine has no equivalent of.
+    // One video mode, so no switch: the dot clock goes straight out.
     wire clk_pc98_dot, clk_pc98_dot_90, pll_pc98_locked;
     pll_video_pc98 u_pll_pc98 (
         .refclk   (clk_74b),
@@ -892,8 +882,8 @@ module core_top (
     wire [15:0] mgmt_addr;             // softcore -> CHIPSET address
     wire        mgmt_rd;               // softcore -> CHIPSET read strobe
     wire        mgmt_wr;               // softcore -> CHIPSET write strobe
-    wire  [7:0] mgmt_req;              // [7:6] fdd request, [2:0] ide0 (from CHIPSET)
-    assign mgmt_req[5:3] = 3'b000;
+    wire  [7:0] mgmt_req;              // [7:6] fdd request, [0] scsi pending (from CHIPSET)
+    assign mgmt_req[5:1] = 5'b00000;
 
     // Floppy image size arrives in the dataslot-update event (bytes); latch it per drive.
     // A hot-swapped floppy delivers its new size in the same event, so it is race-free with
@@ -977,22 +967,8 @@ module core_top (
     wire       dock_key_ext;
     wire       dock_key_stb;
 
-    // The interrupt path's liveness taps, from CHIPSET, for the JTAG probe's
-    // interrupt-word slots (0x1f-0x21 under PC98_PROBE_EXTRA).
-    wire  [7:0] dbg_pic_irr;
-    wire  [7:0] dbg_pic_imr;
-    wire  [7:0] dbg_pic_isr;
-    wire  [7:0] dbg_pic2_irr;
-    wire  [7:0] dbg_pic2_imr;
-    wire  [7:0] dbg_pic2_isr;
-    wire  [7:0] dbg_irq_level;
-    wire  [7:0] dbg_timer_count;
-    wire  [7:0] dbg_kbd_irq_count;
-    wire  [7:0] dbg_kbd_rd_count;
     wire  [1:0] gdc_draw_req, gdc_draw_busy, gdc_srv_done_levels;
     wire [15:0] gdc_draw_ops;
-    wire [31:0]  gvram_dbg;
-    wire [31:0]  gvram_dbg2;
     wire [319:0] gdc_draw_snaps;
 
     // How far does a key get? key_count counts pc98_key_stb pulses and
@@ -1019,9 +995,6 @@ module core_top (
         .datatable_q                (datatable_q),
         .fdd0_rebind                (fdd0_rebind),
         .fdd1_rebind                (fdd1_rebind),
-        .jt_fddctl                  (jt_fddctl),
-        .jt_fddstat                 (jt_fddstat),
-
         .mgmt_addr                  (mgmt_addr),
         .mgmt_dout                  (mgmt_dout),
         .mgmt_wr                    (mgmt_wr),
@@ -1073,12 +1046,6 @@ module core_top (
         .osd_disk_led               (osd_disk_led),
         .osd_extmem                 (osd_extmem),
         .key_cfg_flat               (key_cfg),
-        .st_addr                    (st_addr),
-        .st_wdata                   (st_wdata),
-        .st_we                      (st_we),
-        .st_req                     (st_req),
-        .st_done                    (st_done),
-        .st_rdata                   (st_rdata),
         .gdc_draw_req               (gdc_draw_req),
         .gdc_draw_busy              (gdc_draw_busy),
         .gdc_draw_ops               (gdc_draw_ops),
@@ -1096,75 +1063,11 @@ module core_top (
     wire   [7:0] probe_addr;
     always_comb begin
         case (probe_addr)
-            // Extended taps live under PC98_PROBE_EXTRA: at 99% ALM usage the
-            // shipping build cannot afford them. Enable the macro in
-            // config.tcl for a debug build.
-            // 0x01-0x0B were the POST panel's census words (frame census, row
-            // buffer counters, tvfill, GDC snoops) -- their producers are gone
-            // with postmon, so the slots are retired rather than tied to 0.
-            // 0x1b/0x1c/0x1e/0x22/0x29/0x2A/0x2B/0x2C/0x2D retired to fit the
-            // EGC shift pipeline (1864 LABs vs 1848): no script under
-            // scripts/ reads them -- the screen-cell WRITE (0x82) stays.
+            // The bisect-era taps (PIC/timer/keyboard counts, the wedge-PC
+            // taps, the V30 register dump, the JTAG guest-memory master,
+            // the JTAG FDD/mgmt channels) went out with PC98_PROBE_EXTRA --
+            // the debug build is history, and the bring-up is done.
             8'h1d:   probe_data = {16'h0, key_count, key_last};
-`ifdef PC98_PROBE_EXTRA
-            8'h1f:   probe_data = {dbg_pic_irr, dbg_pic_imr, dbg_pic_isr, dbg_timer_count};
-            8'h20:   probe_data = {dbg_pic2_irr, dbg_pic2_imr, dbg_pic2_isr, dbg_kbd_irq_count};
-            8'h21:   probe_data = {dbg_irq_level, 7'h00, interrupt_to_cpu,
-                                   dbg_kbd_rd_count, key_count};
-            // 0x23/0x24 were the 71071's internal word and the FDC DMA
-            // handshake view; both dbg chains are gone with postmon.
-            // 0x25: the JTAG guest-memory master (slot 0x84). rdata is the last
-            // byte read back; busy clears and done sets once an access lands.
-            8'h25:   probe_data = {16'h0000, jt_st_done, jt_st_req, 6'h00, jt_st_rdata};
-            // 0x26: the firmware's answer to the slot-0x85 FDD command --
-            // {sectors[11:0], ok, inserted, seq echo, drive, cmd}.
-            8'h26:   probe_data = jt_fddstat;
-            // 0x27: the management bus itself -- {writes seen, last address,
-            // fdd_request, fdd_present}. Decides between "firmware wrote
-            // nothing" and "the write arrived but the FDC ignored it".
-            8'h27:   probe_data = {mgmt_wr_seen, mgmt_last,
-                                   2'b00, mgmt_req[7:6], 2'b00, fdd_present};
-            // 0x28: the reset_wire terms + boot gates (same word as the on-screen
-            // bands pocket_video draws). On a wedge this says which term is
-            // still holding the machine -- bios_ever_loaded / guest_hold_sync2 /
-            // soft_guest_hold name the release chain specifically.
-            8'h28:   probe_data = {16'h0, dbg_bits};
-            // 0x2E: bisect readback -- liveness flag (rv_live=1 iff the
-            // guest ran a bus cycle after the last walk completed); the
-            // rv_auto/rv_walked bits read zero now -- the +3 ms shot was
-            // already disarmed and the flags were constant.
-            8'h2E:   probe_data = {19'h00000, rv_live, 12'h000};
-            // 0x2F/0x30/0x31: wedge-PC taps. {cycle-entry count, live
-            // processor_status, last io dir, last fetch addr} /
-            // {unused, last io port} / {unused, last mem dir, last mem addr}.
-            8'h2F:   probe_data = {dbg_cyc_cnt, processor_status, dbg_io_wr,
-                                   dbg_fetch_addr};
-            8'h30:   probe_data = {16'h0000, dbg_io_port};
-            8'h31:   probe_data = {8'h00, 3'b000, dbg_mem_wr,
-                                   dbg_mem_addr};
-            // 0x32-0x34: the V30 register dump, the wedge-essential slice
-            // (v30_dbg_regs = {psw,pc,sreg3..0,gpr7..0}): 0x32 {pc,cs},
-            // 0x33 {psw,ss}, 0x34 {sp,bp} -- psw[9] is IF, settling
-            // "halted with interrupts enabled" vs a dead interrupt pin.
-            // The remaining gprs/sregs cost a LAB the part does not have.
-            8'h32:   probe_data = {v30_dbg_regs[207:192], v30_dbg_regs[159:144]};
-            8'h33:   probe_data = {v30_dbg_regs[223:208], v30_dbg_regs[175:160]};
-            8'h34:   probe_data = {v30_dbg_regs[79:64],   v30_dbg_regs[95:80]};
-            // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
-            // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
-            // would strip a pressed bit before it can queue a key event:
-            //   [15:0] kb_buttons          = pocket_keyboard's buttons input
-            //   [16]   mousepad            = gamepad_mode==2 (Mouse): masks dpad+face+shoulders
-            //   [18:17] gamepad_mode       = 0 Keyboard / 1 Joystick / 2 Mouse
-            //   [19]   (was credits_mode_chip, retired)
-            //   [20]   osd_active          = softcore VKB_CTRL bit0 (an overlay is up)
-            //   [21]   osd gate into pk    = osd_active (suppresses all keys)
-            //   [22]   kb_ready            = ps2 accept (level; may read 0 mid-byte)
-            //   [23]   kb_valid            = framer emitting a Set-2 byte
-            8'h22:   probe_data = {8'h00, kb_valid, kb_ready,
-                                   osd_active, osd_active, 1'b0,
-                                   gamepad_mode, mousepad, kb_buttons};
-`endif
             8'hFF:   probe_data = 32'h98C0_DE98;
             default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -1259,10 +1162,10 @@ module core_top (
     wire pause_core = pause_core_chipset;
 
     // Disk-access lamp: any management service request (floppy in mgmt_req[7:6],
-    // IDE in [2:0]) lights an on-screen lamp for a beat. The request level is a
+    // SCSI pending in mgmt_req[0]) lights an on-screen lamp for a beat. The request level is a
     // short pulse per sector, so a stretcher keeps it visible -- 2^20 clk_pix
     // ticks is about 0.1 s (was 2^22/0.4 s; the part is one LAB short of full).
-    wire disk_act_chip = (|mgmt_req[7:6]) | (|mgmt_req[2:0]);
+    wire disk_act_chip = (|mgmt_req[7:6]) | mgmt_req[0];
     wire disk_act_pix;
     synch_3 s_disk_act (disk_act_chip, disk_act_pix, clk_pix);
     reg [19:0] disk_led_t = 20'd0;
@@ -1281,8 +1184,6 @@ module core_top (
 
     // Game-port options from the settings OSD: [4]=Sync-to-CPU turbo timing, [3:2]=Joystick 2,
     // [1:0]=Joystick 1; each 2-bit field is 0=Analog, 1=Digital, 2=Disabled.
-    // (The composite/CGA/HGC settings rows went with their hardware; the
-    // softcore's matching outputs are gone too.)
 
 
     // MiSTer front-panel buttons; the Pocket has none.
@@ -1306,8 +1207,7 @@ module core_top (
         .clk          (clk_chipset),
         .reset        (reset),
         .buttons      (kb_buttons),
-        // The game port this once fed is gone (the Tandy joystick and its
-        // routing were removed). The mode still exists in
+        // The game port this once fed is gone. The mode still exists in
         // the settings and still suppresses the pad->keys mapping, which is
         // what it did before -- there is simply nowhere for the bits to go
         // now. Remove the option only with a settings-blob migration.
@@ -1334,8 +1234,8 @@ module core_top (
     // the SAME stream -- it never stalls it, ps2_keyboard's kb_ready keeps the
     // pace -- and re-emits each key as a PC-98 event.
     //
-    // INTEGRATION CONTRACT (whoever wires the 8251 model, see PC98_KBD_8251
-    // in Peripherals.sv): DONE -- these now feed the 8251 model's key-
+    // INTEGRATION CONTRACT (the 8251 model in Peripherals.sv): these feed
+    // its key-
     // injection port through CHIPSET (pc98_kbd8251's key_stb/key_byte; the
     // byte rides as-is because bit 7 is already set on a release). The
     // simulation +keys channel is bench-side only (tb_pc98_v30.sv drives its
@@ -1386,26 +1286,17 @@ module core_top (
 
     // Probe writes land in clk_chipset once, as a pulse with the payload
     // copied alongside it. Slot 0x81 is a PC-98 matrix byte for the key line;
-    // slot 0x82 selects the TVRAM debug cell. A completed read of 0x1B steps
-    // the cell so a screen dump runs one scan per cell.
     logic [2:0] jw_sync = 3'd0;
     logic       probe_wr_pulse;
     logic [6:0] probe_waddr_c;
     logic [31:0] probe_wdata_c;
-    logic [11:0] dbg_tvram_cell = 12'd0;
-    logic [2:0]  adv_sync = 3'd0;
     always_ff @(posedge clk_chipset) begin
         jw_sync  <= {jw_sync[1:0], probe_wr_tog};
-        adv_sync <= {adv_sync[1:0], probe_rd_adv};
         probe_wr_pulse <= jw_sync[2] != jw_sync[1];
         if (jw_sync[2] != jw_sync[1]) begin
             probe_waddr_c <= probe_wr_addr;
             probe_wdata_c <= probe_wr_data;
         end
-        if (probe_wr_pulse && probe_waddr_c == 7'h02)
-            dbg_tvram_cell <= probe_wdata_c[11:0];
-        else if (adv_sync[2] != adv_sync[1])
-            dbg_tvram_cell <= dbg_tvram_cell + 12'd1;
         // Slot 0x83: {cont2, cont1} held-button masks, OR-ed onto the settled
         // pad words in clk_74a. A set bit stays down until the mask clears.
         if (probe_wr_pulse && probe_waddr_c == 7'h03) begin
@@ -1691,9 +1582,8 @@ module core_top (
     // PC-98: BIOS.ROM is 0x18000 bytes at physical 0x0E8000, which is where np21w
     // reads it to and what the file size says (docs/PC98_MACHINE_SPEC.md F1).
     // Ninety-six KB, so the slot's address needs seventeen bits, not sixteen --
-    // the PC/AT form below masks addr[24:16] to zero and lands everything in
-    // one 64 KB page at F0000, which would fold the top third of the image back
-    // over the bottom.
+    // masking addr[24:16] to zero would land everything in one 64 KB page at
+    // F0000 and fold the top third of the image back over the bottom.
     localparam [19:0] PC98_BIOS_BASE = 20'h E8000;
     localparam [19:0] PC98_ITF_BASE  = 20'h F8000;
     // Which ROM a word belongs to is decided by the slot's bridge ADDRESS
@@ -1969,242 +1859,16 @@ module core_top (
     end
 
     //
-    // SDRAM SELF-TEST MASTER  (docs/P0_SELFTEST_SPEC.md)
-    //
-    // sdram_mp does not boot the board and every logical hypothesis is spent,
-    // with all simulation green; the only signal from hardware has been a POST
-    // beep count. This lets the softcore read and write guest SDRAM directly
-    // while the 8088 is held in reset, so the firmware can report the first
-    // mismatching address instead of us guessing from a beep.
-    //
-    // It borrows CHIPSET's external-access port -- the one the BIOS loader
-    // already uses, so the write direction is proven. The read direction is
-    // the same port's memory_read_n_ext, which existed but was tied off.
-    //
-    // Arbitration is strictly time-sliced and the loader always wins: a slot
-    // download and a self-test cannot overlap in practice (the test runs after
-    // the load, before the guest is released), but nothing here relies on that.
-
-    wire  [7:0] chipset_ext_rdata;   // RAM.sv read byte, tapped out of CHIPSET
-    wire [19:0] st_addr;
-    wire  [7:0] st_wdata;
-    wire        st_we;
-    wire        st_req;
-    wire        st_done;
-    wire  [7:0] st_rdata;
-    wire        st_run, st_wr_n, st_rd_n;
-
-    // JTAG guest-memory master (debug builds only). Probe slot 0x84 packs a
-    // whole access into one write: {go, we, addr[19:0], wdata[7:0]} laid out
-    // as {2'b0,go,we,wdata,addr}. Setting go borrows the BIOS-loader port
-    // (u_selftest, HOLD/HLDA) to drop a byte into live guest RAM; the access
-    // self-releases once st_done comes back. Read slot 0x25 returns
-    // {done,busy,rdata}. This is what lets a probe load draw_test.bin (or
-    // poke a VRAM cell) without touching the SD card.
-`ifdef PC98_PROBE_EXTRA
-    reg  [19:0] jt_st_addr  = 20'd0;
-    reg  [7:0]  jt_st_wdata = 8'd0;
-    reg         jt_st_we    = 1'b0;
-    reg         jt_st_req   = 1'b0;
-    reg  [7:0]  jt_st_rdata = 8'd0;
-    reg         jt_st_done  = 1'b0;
-    // Whole-window verify walk. Bit30 of a slot-0x84 command walks
-    // E8000-FFFFF through the same borrowed-bus path, leaving jt_st_done
-    // high at the end. The add/xor accumulators the walk used to report
-    // (taps 0x2B-0x2D) are gone for fit -- jtag_romscan.tcl scans by
-    // per-byte memrd anyway. The +3 ms auto-arm was already disarmed, so
-    // rv_walked/rv_auto were constant and went with it.
-    reg         jt_st_walk  = 1'b0;
-    // Liveness is a post-storm flag: rv_live clears when the walk
-    // completes and latches the first guest bus cycle afterwards, so a
-    // later probe read answers "did the guest come back after the storm".
-    reg         rv_live     = 1'b0;
-    wire        guest_cyc  = ~chipset_aen & (processor_status != 3'b111);
-    reg         rv_wd        = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        if (reset_wire) begin
-            rv_live <= 1'b0;
-            rv_wd   <= 1'b0;
-        end else begin
-            rv_wd <= jt_st_done;
-            if (jt_st_done & ~rv_wd)
-                rv_live <= 1'b0;         // storm just ended: restart counting
-            else if (guest_cyc)
-                rv_live <= 1'b1;
-        end
-    end
-    // Wedge-PC taps. processor_status carries the V30 bus code for the whole
-    // cycle window (v30_cpu_bridge srv_bs): 0=INTA 1=IOR 2=IOW 3=HALT 4=CODE
-    // 5=MEMR 6=MEMW 7=PASV. Latching the cycle address per class makes a
-    // wedge legible after the fact: the fetch tap names the loop, the io tap
-    // the port it polls, the mem tap the flag cell it spins on. dbg_cyc_cnt
-    // counts cycle-entry edges (PASV->active); a frozen count plus PASV
-    // status means the CPU left the bus entirely (HLT or a dead hold).
-    reg  [19:0] dbg_fetch_addr = 20'd0;
-    reg  [19:0] dbg_mem_addr   = 20'd0;
-    reg         dbg_mem_wr     = 1'b0;
-    reg  [15:0] dbg_io_port    = 16'd0;
-    reg         dbg_io_wr      = 1'b0;
-    reg  [7:0]  dbg_cyc_cnt    = 8'd0;
-    reg  [2:0]  ps_q           = 3'd7;
-    always_ff @(posedge clk_chipset) begin
-        ps_q <= processor_status;
-        if (ps_q == 3'b111 && processor_status != 3'b111
-            && dbg_cyc_cnt != 8'hFF)
-            dbg_cyc_cnt <= dbg_cyc_cnt + 8'd1;
-        if (processor_status == 3'b100)
-            dbg_fetch_addr <= cpu_address;
-        if (processor_status == 3'b001) begin
-            dbg_io_port <= cpu_address[15:0];
-            dbg_io_wr   <= 1'b0;
-        end
-        if (processor_status == 3'b010) begin
-            dbg_io_port <= cpu_address[15:0];
-            dbg_io_wr   <= 1'b1;
-        end
-        if (processor_status == 3'b101 || processor_status == 3'b110) begin
-            dbg_mem_addr <= cpu_address;
-            dbg_mem_wr   <= (processor_status == 3'b110);
-        end
-    end
-    always_ff @(posedge clk_chipset) begin
-        if (probe_wr_pulse && probe_waddr_c == 7'h04) begin
-            jt_st_addr  <= probe_wdata_c[30] ? 20'hE8000 : probe_wdata_c[19:0];
-            jt_st_wdata <= probe_wdata_c[27:20];
-            jt_st_we    <= probe_wdata_c[28] & ~probe_wdata_c[30];
-            jt_st_walk  <= probe_wdata_c[30];
-            if (probe_wdata_c[28] | probe_wdata_c[29] | probe_wdata_c[30]) begin
-                jt_st_req  <= 1'b1;
-                jt_st_done <= 1'b0;
-            end else
-                jt_st_req  <= 1'b0;
-            end
-        end else if (jt_st_req && st_done) begin
-            jt_st_rdata <= st_rdata;
-            jt_st_req   <= 1'b0;
-            if (jt_st_walk) begin
-                if (jt_st_addr == 20'hFFFFF) begin
-                    jt_st_walk <= 1'b0;
-                    jt_st_done <= 1'b1;
-                end else
-                    jt_st_addr <= jt_st_addr + 20'd1;
-            end else
-                jt_st_done  <= 1'b1;
-        end else if (jt_st_walk && !jt_st_req && !jt_st_done)
-            jt_st_req <= 1'b1;
-    end
-    wire [19:0] st_addr_mux  = jt_st_req ? jt_st_addr  : st_addr;
-    wire [7:0]  st_wdata_mux = jt_st_req ? jt_st_wdata : st_wdata;
-    wire        st_we_mux    = jt_st_req ? jt_st_we    : st_we;
-    wire        st_req_mux   = st_req | jt_st_req;
-    // Strict is keyed on the walk flag (not req) so it stays up through the
-    // per-byte request gaps -- `run` then keeps the address bus held for the
-    // whole walk and ram_rw_complete cannot pulse for a guest CPU access.
-    // hold_only rides the same settled-grant path: a bare freeze still must
-    // not fire before the HLDA has provably landed.
-    wire        st_strict    = jt_st_walk;
-    wire        st_hold_only = 1'b0;
-`else
-    wire [19:0] st_addr_mux  = st_addr;
-    wire [7:0]  st_wdata_mux = st_wdata;
-    wire        st_we_mux    = st_we;
-    wire        st_req_mux   = st_req;
-    wire        st_strict    = 1'b0;
-    wire        st_hold_only = 1'b0;
-`endif
-
-    wire [31:0] jt_fddctl;
-    wire [31:0] jt_fddstat;
-    // JTAG FDD command channel (debug builds). Probe write slot 0x85 latches
-    // one command word {seq[15:8], drive[5:4], cmd[3:0]} that the softcore
-    // polls at 0x30000048 and answers through JTSTAT (0x3000004C), read back
-    // over probe slot 0x26. cmd: 1 eject / 2 insert / 3 (re)mount the bound
-    // image / 4 unbind / 5 status only.
-`ifdef PC98_PROBE_EXTRA
-    reg [31:0] jt_fddctl_r = 32'd0;
-    always_ff @(posedge clk_chipset) begin
-        if (probe_wr_pulse && probe_waddr_c == 7'h05)
-            jt_fddctl_r <= probe_wdata_c;
-    end
-    assign jt_fddctl = jt_fddctl_r;
-`else
-    assign jt_fddctl = 32'd0;
-`endif
-
-    // JTAG -> CHIPSET management bus (probe write slot 0x86): one scan latches
-    // {addr[15:0], data[15:0]} and pulses mgmt_write for a clk_chipset cycle.
-    // The softcore is bypassed entirely, so FDD mount/FIFO fills work with the
-    // firmware dead, stale, or mid-hang -- the diagnosis path must not depend
-    // on the thing being diagnosed.
-`ifdef PC98_PROBE_EXTRA
-    reg [15:0] jt_mgmt_addr = 16'h0;
-    reg [15:0] jt_mgmt_data = 16'h0;
-    reg        jt_mgmt_wr   = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        jt_mgmt_wr <= 1'b0;
-        if (probe_wr_pulse && probe_waddr_c == 7'h06) begin
-            jt_mgmt_addr <= probe_wdata_c[31:16];
-            jt_mgmt_data <= probe_wdata_c[15:0];
-            jt_mgmt_wr   <= 1'b1;
-        end
-    end
-`else
-    wire [15:0] jt_mgmt_addr = 16'h0;
-    wire [15:0] jt_mgmt_data = 16'h0;
-    wire        jt_mgmt_wr   = 1'b0;
-`endif
-    wire        mgmt_wr_m   = mgmt_wr | jt_mgmt_wr;
-    wire [15:0] mgmt_addr_m = jt_mgmt_wr ? jt_mgmt_addr : mgmt_addr;
-    wire [15:0] mgmt_dout_m = jt_mgmt_wr ? jt_mgmt_data : mgmt_dout;
-
-    // mgmt bus witness for probe 0x27: a saturating count of writes the
-    // CHIPSET actually saw, and the last address -- answers "did the mount
-    // writes ever arrive" without a firmware round-trip.
-    reg [7:0]  mgmt_wr_seen = 8'h0;
-    reg [15:0] mgmt_last    = 16'h0;
-    always_ff @(posedge clk_chipset)
-        if (mgmt_wr_m) begin
-            if (mgmt_wr_seen != 8'hFF)
-                mgmt_wr_seen <= mgmt_wr_seen + 8'd1;
-            mgmt_last <= mgmt_addr_m;
-        end
-
-    sdram_selftest_master u_selftest (
-        .clk              (clk_chipset),
-        .rst              (reset_sdram),
-        .req              (st_req_mux),
-        .we               (st_we_mux),
-        .addr             (st_addr_mux),
-        .wdata            (st_wdata_mux),
-        .done             (st_done),
-        .rdata            (st_rdata),
-        .initilized_sdram (initilized_sdram),
-        .loader_busy      (ioctl_download),
-        .bus_granted      (chipset_aen),   // CHIPSET's address_enable_n = HLDA
-        .strict           (st_strict),
-        .hold_only        (st_hold_only),
-        .run              (st_run),
-        .write_n          (st_wr_n),
-        .read_n           (st_rd_n),
-        .ram_rw_complete  (ram_rw_complete),
-        .ext_rdata        (chipset_ext_rdata)
-    );
-
-    //
     // CHIPSET bus
     //
     wire [19:0] chipset_address;
     wire        chipset_io_write_n, chipset_memory_read_n, chipset_memory_write_n;
     wire        chipset_aen;
-    wire [23:0] tvram_dbg_word;
 
     //
     // BOOT HOLD
     //
-    // This was the splash. The picture it drew went into CGA VRAM through the
-    // CGA generator, so on a PC-98 it showed nothing at all -- and every boot
-    // still paid for it: five seconds of invisible wait, then a reset hold
-    // behind it. What is kept is the synchronisation that merely shared the
+    // What is kept is the synchronisation that merely shared the
     // name: hold the guest in reset until the BIOS dataslot has streamed in
     // and the softcore has pushed the saved settings, so the machine does not
     // start executing against a half-loaded ROM.
@@ -2308,7 +1972,7 @@ module core_top (
     // The ITF is a 386 image. docs/PC98_ITF_TRACE.md has the disassembly: it
     // uses 66-prefixed REP STOSD, LGDT/LIDT, SMSW/LMSW and SHL EAX,16, prints
     // "Processor is 80386", and runs two of its extended-memory tests in
-    // protected mode. On an 8088 it cannot reach its own hand-over, however
+    // protected mode. On a real-mode V30 it cannot reach its own hand-over, however
     // much of the I/O map is in place -- and this session put the map in place
     // and watched it get as far as the GDC vsync wait at F80388.
     //
@@ -2410,12 +2074,8 @@ module core_top (
     // at 1FD800 instead of the BIOS at FD800. The ITF
     // image holds nothing but zero padding from file offset 0x5800 up, so the
     // panel read BAD 0EC: 236 of 256 bytes "wrong", which is exactly 256 minus
-    // the 20 bytes the BIOS entry itself holds as zero. While st_run owns the
-    // ext port the CPU is parked on hold acknowledge and the DMA controller's
-    // acknowledge is masked, so steering the shadow out from under the peek
-    // disturbs no fetch.
-    wire bios_shadow_flag = st_run      ? 1'b0 :
-                           bios_write_n ? itf_bank : bios_shadow_write;
+    // the 20 bytes the BIOS entry itself holds as zero.
+    wire bios_shadow_flag = bios_write_n ? itf_bank : bios_shadow_write;
     // Only ever set during a loader write: the guest has no font bank to see.
     wire font_bank_load  = ~bios_write_n & font_bank_write;
 
@@ -2451,25 +2111,13 @@ module core_top (
         .processor_ready                    (processor_ready),
         .interrupt_to_cpu                   (interrupt_to_cpu),
         .clk_pc98_dot                       (clk_pc98_dot),
-        .dbg_pic_irr                        (dbg_pic_irr),
-        .dbg_pic_imr                        (dbg_pic_imr),
-        .dbg_pic_isr                        (dbg_pic_isr),
-        .dbg_pic2_irr                       (dbg_pic2_irr),
-        .dbg_pic2_imr                       (dbg_pic2_imr),
-        .dbg_pic2_isr                       (dbg_pic2_isr),
-        .dbg_irq_level                      (dbg_irq_level),
-        .dbg_timer_count                    (dbg_timer_count),
-        .dbg_kbd_irq_count                  (dbg_kbd_irq_count),
-        .dbg_kbd_rd_count                   (dbg_kbd_rd_count),
+
         .gdc_draw_req                       (gdc_draw_req),
         .gdc_draw_busy                      (gdc_draw_busy),
         .gdc_draw_ops                       (gdc_draw_ops),
-        .gvram_dbg                          (gvram_dbg),
-        .gvram_dbg2                         (gvram_dbg2),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
-        .tvram_dbg_cell                     (dbg_tvram_cell),
-        .tvram_dbg_word                     (tvram_dbg_word),
+
         .VID_R                              (r),
         .VID_G                              (g),
         .VID_B                              (b),
@@ -2478,12 +2126,11 @@ module core_top (
         .VID_HBlank                         (HBlank),
         .VID_VBlank                         (VBlank),
         .address                            (chipset_address),
-        .address_ext                        (st_run ? st_addr_mux : bios_access_address),
-        .ext_access_request                 (st_run | bios_access_request),
-        .data_bus_ext_out                   (chipset_ext_rdata),
+        .address_ext                        (bios_access_address),
+        .ext_access_request                 (bios_access_request),
         .address_direction                  (address_direction),
         .data_bus                           (data_bus),
-        .data_bus_ext                       (st_run ? st_wdata_mux : bios_write_data[7:0]),
+        .data_bus_ext                       (bios_write_data[7:0]),
     //  .data_bus_direction                 (data_bus_direction),
         .address_latch_enable               (address_latch_enable),
         .io_channel_ready                   (1'b1),
@@ -2495,10 +2142,10 @@ module core_top (
         .io_write_n_ext                     (1'b1),
     //  .io_write_n_direction               (io_write_n_direction),
         .memory_read_n                      (chipset_memory_read_n),
-        .memory_read_n_ext                  (st_rd_n),
+        .memory_read_n_ext                  (1'b1),
     //  .memory_read_n_direction            (memory_read_n_direction),
         .memory_write_n                     (chipset_memory_write_n),
-        .memory_write_n_ext                 (st_run ? st_wr_n : bios_write_n),
+        .memory_write_n_ext                 (bios_write_n),
     //  .memory_write_n_direction           (memory_write_n_direction),
         .dma_request                        (0),    // use? -> I don't know if it will ever be necessary, at least not during testing.
         .dma_acknowledge_n                  (dma_acknowledge_n),
@@ -2534,14 +2181,15 @@ module core_top (
         .ems98_maxmem                       (ems98_maxmem),
         .bios_protect_flag                  (bios_protect_flag),
         .mgmt_readdata                      (mgmt_din),
-        .mgmt_writedata                     (mgmt_dout_m),
-        .mgmt_address                       (mgmt_addr_m),
-        .mgmt_write                         (mgmt_wr_m),
+        .mgmt_writedata                     (mgmt_dout),
+        .mgmt_address                       (mgmt_addr),
+        .mgmt_write                         (mgmt_wr),
         .mgmt_read                          (mgmt_rd),
         .floppy_wp                          (wp_cfg),
         .rtc_time                           (rtc_time),
         .fdd_present                        (fdd_present),
         .fdd_request                        (mgmt_req[7:6]),
+        .scsi_request                       (mgmt_req[0]),
         .wait_count_clk_en                  (cpu_ce_negedge),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),
@@ -2594,16 +2242,15 @@ module core_top (
     // ---------------------------------------------------------------- the CPU
     //
     // nuV30 (the real part whose microcode the ROMs expect -- the ITF's
-    // F9476 pushes imm16, which an 8088 dispatches to an undocumented JS
-    // alias) through v30_cpu_bridge, which splits its 16-bit cycles into
+    // F9476 pushes imm16, a 186-class opcode an 8086 dispatches to an
+    // undocumented JS alias) through v30_cpu_bridge, which splits its 16-bit cycles into
     // the 8288 world's byte cycles. The wiring follows tb_pc98_v30, the
     // bench that booted N88-BASIC on this core, and tb_v30_bridge, the
     // bench that proved the bridge: CLK=clk_chipset, CE gated by the
     // bridge, INT from the PIC, DATA_I assembled by the bridge.
     //
-    // The 8088-only loops (SEGMENT, cycle_accrate and the BIU's counter
-    // programming) simply do not exist here: the CE generator's outputs
-    // still pace the CHIPSET's RAM waits, which is where they are consumed.
+    // The CE generator's outputs still pace the CHIPSET's RAM waits, which
+    // is where they are consumed.
     wire [2:0]  v30_bs;
     wire [19:0] v30_addr;
     wire [15:0] v30_data_o, v30_data_i;
@@ -2638,9 +2285,6 @@ module core_top (
         .biu_done          (biu_done)
     );
 
-    wire [223:0] v30_dbg_regs;
-    wire        v30_first_pop;
-
     v30_core u_cpu (
         .CLK        (clk_chipset),
         .CE         (v30_ce),
@@ -2663,9 +2307,7 @@ module core_top (
         .SS_WE      (1'b0),
         .SS_RDATA   (v30_ss_rdata_unused),
         .SS_ERR     (v30_ss_err_unused),
-        .SS_BUS_QUIET (v30_ss_quiet_unused),
-        .dbg_regs     (v30_dbg_regs),
-        .dbg_first_pop(v30_first_pop)
+        .SS_BUS_QUIET (v30_ss_quiet_unused)
     );
 
     //
@@ -2791,18 +2433,6 @@ module core_top (
     // guest_hold_sync2 | soft_guest_hold, and the bands are every one of those
     // still unaccounted for. Whichever is lit is the one holding the machine.
     //
-    // guest_hold is the one to watch: it powers up asserted and clears only
-    // when bios_ever_loaded & ~soft_guest_hold, on clk_28_636 -- a clock this
-    // machine does not otherwise use.
-    wire [15:0] dbg_bits = {
-        ~RESET, load_active, osd_active, reset_soft,
-        reset_cpu, processor_ready, initilized_sdram, dataslots_ready,
-        ~RESET, reset,
-        interact_reset, bios_ever_loaded,
-        1'b0, 1'b0, guest_hold_sync2,
-        soft_guest_hold
-    };
-
     pocket_video u_pocket_video (
         .clk_pix            (clk_pix),
         .clk_pix_90         (clk_pix_90),
@@ -2820,7 +2450,6 @@ module core_top (
         .osd_active         (osd_active),
         .osd_palette_idx    (osd_palette_idx),
         .osd_in_area        (osd_in_area),
-        .dbg_bits           (dbg_bits),
         .osd_hcnt           (osd_hcnt),
         .osd_vcnt           (osd_vcnt_sel),
         .osd_raster_w       (osd_raster_w),

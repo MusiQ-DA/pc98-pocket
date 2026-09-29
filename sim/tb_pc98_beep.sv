@@ -5,7 +5,7 @@
 // The machine's beep never sounded, and the ITF was doing its job -- the IO
 // history filled with 0037 -- so the question was what those writes never
 // reached. This bench rebuilds the wiring under test exactly as
-// Peripherals.sv has it under MACHINE_PC98:
+// Peripherals.sv has it:
 //
 //   - the i8253 chip model, selected by the PC-98 decode (0x71/73/75/77)
 //   - the system-port C latch (0x35 whole-byte, 0x37 bit set/reset; np21w
@@ -125,7 +125,7 @@ module tb_pc98_beep;
         end
     end
 
-    // ---- the beeper, exactly as Peripherals.sv wires it (MACHINE_PC98) ----
+    // ---- the beeper, exactly as Peripherals.sv wires it ----
     wire [2:0] timer_counter_out;
     wire tim2gatespk = 1'b1;                   // PC-98: all PIT gates high
     wire spktone     = timer_counter_out[1];   // the beep IS counter 1

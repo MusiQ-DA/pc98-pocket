@@ -37,15 +37,6 @@ A V30-class PC-9801: the VX/UV-era machine, not a 9821. Concretely:
   keyboard, and the PC-98 bus mouse.
 - **RTC / misc**: μPD4990 real-time clock, system control ports, beeper.
 
-## What it is not
-
-This used to carry the PC/XT/AT-era hardware it grew from; that has all
-been removed rather than parked. There is no XT/AT IDE, no CGA/VGA, no
-Tandy/CMS sound, no 16550 UARTs, no RTC of the MC146818 kind, and no
-Lo-tech EMS card (its 260h-263h ports are a PC/AT convention -- PC-98
-EMS lives at 08E1h). Historical comparisons remain in comments where they
-explain why a decode or timing is the way it is.
-
 ## Using it
 
 - Disk images go in the Pocket's data slots (fdd A/B, SCSI HDD); the

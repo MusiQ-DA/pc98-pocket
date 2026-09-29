@@ -15,8 +15,8 @@
 //   composes one mgmt transaction at a time (a target + register, optional write
 //   data, and a read or write trigger); this drives it as a single clk_sys-cycle
 //   strobe and captures the read data. CHIPSET routes on mgmt_address[15:8]: 0xF2
-//   selects floppy.v, 0xF0 selects ide.v; the firmware picks the target, with the
-//   drive in bit 7 and the register in bits [3:0].
+//   selects floppy.v, 0xF4 the SCSI window, 0xF5 the OPNA's rhythm store; the
+//   firmware picks the target, with the drive in bit 7 and the register in bits [3:0].
 //
 // Clock-domain note: clk_pico is a gated clk_sys (its edges are clk_sys edges), so
 // registers the firmware writes are stable across clk_sys and need no synchroniser.
@@ -62,12 +62,6 @@ module softcpu_fdd_bridge #(
     // Per-floppy-drive image-rebind toggle (flips on every dataslot update), clk_sys
     input  wire        fdd0_rebind,
     input  wire        fdd1_rebind,
-
-    // JTAG FDD command channel (probe write slot 0x85, PC98_PROBE_EXTRA builds):
-    // {seq[15:8], drive[5:4], cmd[3:0]}, a clk_sys level the firmware polls, runs
-    // on a seq change, and answers by writing JTSTAT (probe read slot 0x26).
-    input  wire [31:0] jt_fddctl,
-    output reg  [31:0] jt_fddstat,
 
     // Management-bus master to floppy.v via CHIPSET, clk_sys
     output wire [15:0] mgmt_addr,
@@ -173,13 +167,8 @@ module softcpu_fdd_bridge #(
     // from those clk_pico registers (stable across the whole period); the trigger
     // pulses are edge-detected in clk_sys into a single-cycle mgmt_wr / mgmt_rd, and
     // a read captures mgmt_din the cycle the strobe is asserted. mgmt_tgt selects the
-    // top address byte, so the same master reaches floppy.v (0xF2), ide.v (0xF0) or
-    // pc98_scsi (0xF4).
-    //
-    // Two bits, not one: the PC-9801-55 window is a third target and the old
-    // single mgmt_ide bit could only name two. Bit 8 of the address register
-    // keeps its meaning (1 = ide.v) so nothing that was already written moves,
-    // bit 9 names the SCSI window, and bit 10 names the pc98_opna window (0xF5).
+    // top address byte, so the same master reaches floppy.v (0xF2), pc98_scsi (0xF4)
+    // or the pc98_opna rhythm window (0xF5).
     //
     reg  [2:0] mgmt_tgt;
     reg        mgmt_drive;
@@ -192,8 +181,7 @@ module softcpu_fdd_bridge #(
     reg [15:0] mgmt_rdata_cap;
 
     wire [7:0] mgmt_tgt_byte = mgmt_tgt[2] ? 8'hF5
-                             : mgmt_tgt[1] ? 8'hF4
-                             : mgmt_tgt[0] ? 8'hF0 : 8'hF2;
+                             : mgmt_tgt[1] ? 8'hF4 : 8'hF2;
     assign mgmt_addr = {mgmt_tgt_byte, mgmt_drive, 3'b000, mgmt_reg};
     assign mgmt_dout = mgmt_wdata_r;
 
@@ -291,7 +279,6 @@ module softcpu_fdd_bridge #(
                 8'h34:   cpu_rdata = {28'd0, tds_err, tds_done};
                 8'h3C:   cpu_rdata = fdd0_disk_size;
                 8'h40:   cpu_rdata = fdd1_disk_size;
-                8'h48:   cpu_rdata = jt_fddctl;
                 8'h50:   cpu_rdata = {30'd0, fdd1_rebind, fdd0_rebind};
                 8'h58:   cpu_rdata = datatable_q;
                 default: cpu_rdata = 32'd0;
@@ -326,7 +313,6 @@ module softcpu_fdd_bridge #(
             bram_data_b    <= 32'd0;
             dtbl_addr_r    <= 8'd0;
             dtbl_data_r    <= 32'd0;
-            jt_fddstat     <= 32'd0;
             cpu_valid_prev <= 1'b0;
             target_dataslot_id         <= 16'd0;
             target_dataslot_slotoffset <= 32'd0;
@@ -351,7 +337,6 @@ module softcpu_fdd_bridge #(
                     if (cpu_wdata[1]) tds_write_pulse <= 1'b1;
                 end
                 8'h38: if (cpu_wdata[0]) clr_done_pulse <= 1'b1;
-                8'h4C: jt_fddstat <= cpu_wdata;
                 8'h54: dtbl_addr_r <= cpu_wdata[7:0];
                 8'h58: begin dtbl_data_r <= cpu_wdata; dtbl_wren_r <= 1'b1; end
             endcase

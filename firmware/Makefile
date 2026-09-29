@@ -14,7 +14,7 @@
 OBJS = start.o main.o disk_tds.o fdd_service.o scsi_service.o \
        gdc_service.o rhythm.o adpcma_enc.o \
        vkb_draw.o vkb_layout.o vkb_ui.o \
-       settings_ui.o key_bind.o dpad.o sdramtest.o osd_font.o
+       settings_ui.o key_bind.o dpad.o osd_font.o
 DEPS = $(OBJS:.o=.d)
 
 CC      = clang
@@ -28,12 +28,6 @@ OBJDUMP = llvm-objdump
 # -Wundef makes an #if on a macro that failed to arrive a hard error, not a silent 0.
 HW_CONFIG   = ../fpga/config.tcl
 # Anchored at the start of the line so a COMMENTED-OUT macro is not picked up.
-# The old pattern was '.*VERILOG_MACRO', which matched
-#     # set_global_assignment -name VERILOG_MACRO "SDRAM_SELFTEST=1"
-# just as happily as the live line, so commenting a macro out in config.tcl
-# disabled it for Quartus and left it defined for the firmware. That is how a
-# build ended up with the self-test compiled in after it had been switched off,
-# and it applies equally to SDRAM_USE_MP.
 HW_DEFINES := $(addprefix -D,$(shell sed -n 's/^[[:space:]]*set_global_assignment.*VERILOG_MACRO "\(.*\)"/\1/p' $(HW_CONFIG)))
 
 # -MMD -MP write per-object header dependencies (.d), pulled in by -include below, so
@@ -54,7 +48,7 @@ CFLAGS  = --target=riscv32 -march=rv32i_zmmul -std=c99 -Oz -mno-relax -ffreestan
 # savings (settings_ui 340 B, scsi_service 108 B) are what make the ROM
 # budget at all. If those two misbehave it is the settings menu or SCSI,
 # never the keyboard.
-main.o vkb_ui.o vkb_draw.o vkb_layout.o dpad.o key_bind.o osd_font.o fdd_service.o disk_tds.o gdc_service.o sdramtest.o: CFLAGS := $(subst -Oz,-Os,$(CFLAGS))
+main.o vkb_ui.o vkb_draw.o vkb_layout.o dpad.o key_bind.o osd_font.o fdd_service.o disk_tds.o gdc_service.o: CFLAGS := $(subst -Oz,-Os,$(CFLAGS))
 ASFLAGS = --target=riscv32 -march=rv32i_zmmul -mno-relax -Wall -Werror -MMD -MP
 
 all: firmware.vh

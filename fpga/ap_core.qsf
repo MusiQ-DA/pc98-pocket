@@ -847,7 +847,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/v30_cpu_bridge.sv
 set_global_assignment -name SEARCH_PATH core/v30
 set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/sdram_single/HDL/sdram_single.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_mp.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_selftest_master.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_tvram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_kbd8251.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_font_ank.sv

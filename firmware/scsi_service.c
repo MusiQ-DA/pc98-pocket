@@ -9,7 +9,7 @@
 // block in control registers 0x03 onwards -- SCSICTR_CDB in np21w's table --
 // and this code reads it out, works against the HDD image dataslot, fills or
 // drains the buffer and writes the status back. The bridge RAM and the
-// target-dataslot engine are shared with the floppy and IDE paths.
+// target-dataslot engine are shared with the floppy path.
 //
 // Same division of labour np21w uses: its scsibios.res is `CB 90 90` entries
 // plus a `55 AA` signature, about a kilobyte of nothing, with every command

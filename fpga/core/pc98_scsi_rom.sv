@@ -21,16 +21,21 @@
 // 4 KB apart from D000. D200 is the third of them, which is where the 55
 // board sits and where np21w copies its own stub (cbus/scsiio.c:735).
 //
-// WHAT IS HERE. The window and a stub that survives the scan: the signature,
-// and an entry that marks the window as claimed and returns. It does NOT
-// install a disk BIOS yet -- that is the INT 1Bh contract, the drive table and
-// the DA/UA numbering, and getting it wrong means a far call into nothing.
-// This machine has been there before: memsw[3] was set to 0x08 once, BASIC
-// far-called the empty CC00 window and never came back.
+// WHAT IS HERE. The image assembled from fpga/scsi_rom.asm: all four POST
+// entries (the BIOS runs one pass per entry offset -- 0x000C, 0x000F, 0x0012,
+// 0x0015), a real disk BIOS behind the 0x4B0 XROM table for the SCSI
+// devtypes 0x2x and 0xAx, and the HDD boot the system BIOS never had -- its
+// per-class boot iterator only serves the FDD classes, so entry 0x12 reads
+// the IPL to 1FC0:0000 and far-calls it, exactly what a -55's own ROM does.
 //
-// Which is why A3FEE stays 0x00 in pc98_tvram.sv for now. The window exists
-// and can be read; turning the scan on is a separate step and comes after the
-// handler does something.
+// The image is $readmemh'd rather than written in Verilog literals; the two
+// builds look for it from different working directories, so the path is
+// picked the same way v30u_ucrom picks HEXDIR.
+//
+// The window is a byte ROM on a machine that reads WORDS: byte 9 of the
+// signature lives on the HIGH lane. q_hi is the same array read at
+// addr|1, registered the same clock as q, so a word read gets both lanes in
+// the same cycle and Chipset can mux the odd byte onto data_bus_hi.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -40,67 +45,40 @@
 module pc98_scsi_rom (
     input  wire        clk,
     input  wire [11:0] addr,        // offset within the 4 KB window
-    output logic [7:0] q
+    input  wire [11:0] addr_hi,     // addr|1 -- the odd byte for the hi lane
+    output logic [7:0] q,
+    output logic [7:0] q_hi
 );
 
-    // 256 bytes of real storage; the rest of the window reads 00. The stub is
-    // sixteen bytes and a disk BIOS will not be written in Verilog literals --
-    // when there is one it becomes a $readmemh image like the font and splash
-    // ROMs, and this array grows to match.
-    localparam int ROM_BYTES = 256;
+`ifdef SYNTHESIS
+    // Quartus resolves $readmemh against the project directory (fpga/).
+    localparam string ROMFILE = "core/scsi_rom.hex";
+`else
+    // The benches run Verilator from the repository root.
+    localparam string ROMFILE = "fpga/core/scsi_rom.hex";
+`endif
 
-    (* ramstyle = "M10K" *) logic [7:0] rom [0:ROM_BYTES-1];
+    (* ramstyle = "M10K" *) logic [7:0] rom [0:4095];
+    initial $readmemh(ROMFILE, rom);
 
-    initial begin
-        for (int i = 0; i < ROM_BYTES; i++) rom[i] = 8'h00;
-
-        // 0000: three far-return entry slots, the shape np21w's stub uses. A
-        // board that is asked for a service it does not implement returns
-        // rather than faulting.
-        rom[8'h00] = 8'hCB; rom[8'h01] = 8'h90; rom[8'h02] = 8'h90;  // retf
-        rom[8'h03] = 8'hCB; rom[8'h04] = 8'h90; rom[8'h05] = 8'h90;  // retf
-        rom[8'h06] = 8'hCB; rom[8'h07] = 8'h90; rom[8'h08] = 8'h90;  // retf
-
-        // 0009: the signature the scan at FFF30 looks for, and the size byte
-        // after it (np21w's stub carries 02).
-        rom[8'h09] = 8'h55; rom[8'h0A] = 8'hAA; rom[8'h0B] = 8'h02;
-
-        // 000C: the initialisation entry, far-called with BX pointing at this
-        // window's byte in the 0000:04D0 flag table. Claim the window so the
-        // scan does not offer it again, and return.
-        //
-        //   000C  C6 07 FF    mov byte [bx],0FFh
-        //   000F  CB          retf
-        //
-        // A byte, not np21w's word: the scan reads one byte at [bx] and the next
-        // byte belongs to the next window, which must stay zero or that window
-        // is silently skipped.
-        rom[8'h0C] = 8'hC6; rom[8'h0D] = 8'h07; rom[8'h0E] = 8'hFF;
-        rom[8'h0F] = 8'hCB;
-
-        // 0012 and 0015: THE OTHER TWO ENTRY POINTS. The POST does not scan
-        // once -- bios.rom runs FOUR passes over the window, one per option-
-        // ROM SIZE CLASS, and the class picks the entry offset: 0x000C, then
-        // 0x000F, then 0x0012, then 0x0015 (FFF23, FFF57, FFF5F, FFF91).
-        // This stub's storage past the signature was ZERO, and 0x00 0x00 is
-        // `add [bx+si],al` -- a two-byte walk through four kilobytes of
-        // nothing and on into open RAM. The metal derailed exactly here on
-        // every boot: the first two passes returned (the ring saw their
-        // wrapper pops), the third stepped off the retf at 0x0F into the
-        // zeros and never came back. A far return at every entry the ROM's
-        // own scan can pick.
-        rom[8'h12] = 8'hCB;
-        rom[8'h15] = 8'hCB;
-    end
-
-    logic [7:0] rq;
-    logic       in_rom;
+    // Two registered ports of the same array: a true dual-port M10K, so the
+    // odd byte is free. Lane timing matches the data_bus_out path that has
+    // always served this window.
     always_ff @(posedge clk) begin
-        rq     <= rom[addr[7:0]];
-        in_rom <= (addr < 12'(ROM_BYTES));
+        q    <= rom[addr];
+        q_hi <= rom[addr_hi];
     end
 
-    assign q = in_rom ? rq : 8'h00;
+`ifndef SYNTHESIS
+    // The F44 lesson from v30u_ucrom applies here: a wrong path is two
+    // warnings and a silent all-zero ROM. Probe the signature after the load
+    // and take the run down if it did not arrive.
+    initial begin
+        #1;
+        if (rom[9] !== 8'h55 || rom[10] !== 8'hAA)
+            $fatal(1, "pc98_scsi_rom: scsi_rom.hex did not load (ROMFILE=%s)", ROMFILE);
+    end
+`endif
 
 endmodule
 

@@ -3,8 +3,8 @@
 //  v30_cpu_bridge -- put the nuV30 (16-bit bus) on the i8288 world (8-bit).
 //
 //  WHY THIS EXISTS. The machine's ROMs are V30 ROMs (the ITF's F9476 pushes
-//  an immediate word -- a 186-class instruction the 8088 dispatched to its
-//  undocumented JS alias), so the hardware CPU is the vendored nuV30. That
+//  an immediate word -- a 186-class instruction -- so the hardware CPU is
+//  the vendored nuV30. That
 //  core has a 16-bit bus and no 8-bit mode, and everything on the other side
 //  of it here -- i8288, Peripherals, RAM, the DMA controller -- is the
 //  the 8-bit bus this chipset presents. On a real PC-98 the V30 talks to 16-bit memory and
@@ -64,11 +64,11 @@
 //   ever dropped or reordered.
 //
 //  THE BYTE ENGINE, for whichever access it is serving, impersonates the
-//  8088 the i8288 was built for:
+//  8-bit CPU the i8288 was built for:
 //
 //   * processor_status carries the cycle code per byte and passive between
 //     bytes, so the 8288 re-arms its ALE/command machinery per byte
-//     exactly as it does per 8088 cycle;
+//     exactly as it does per CPU cycle;
 //   * ad_out carries the BYTE address (even lane first, then odd for a
 //     word), latched by core_top's ALE-follower into cpu_address;
 //   * cpu_data_bus carries the addressed lane of the write word -- A0=0
@@ -79,7 +79,7 @@
 //   * each byte runs >= 3 posedge-CE "T states" and completes only when
 //     processor_ready is high at a posedge-CE with the bus not granted
 //     away (address_enable_n == 0), which is what paces the SDRAM and the
-//     peripherals -- the same handshake the 8088's READY ran;
+//     peripherals -- the same handshake the CPU's READY ran;
 //   * read bytes are latched from data_bus at the completing edge, and
 //     DATA_I is assembled at release: {odd, even} for a word read, {b, b}
 //     for a byte read, {8'h00, vector} for INTA (the forms the working
@@ -100,7 +100,7 @@
 //
 //  HALT cycles (BS=011) are not accesses: the core runs them through
 //  un-parked with READY high, the bridge stays passive, and the arbiter
-//  can grant DMA holds meanwhile exactly as it did against the 8088's TI.
+//  can grant DMA holds meanwhile exactly as it did against the CPU's TI.
 //
 //  SPDX-License-Identifier: GPL-2.0-or-later  (the nuV30 it serves is
 //  GPL-2.0; see core/v30/LICENSE.nuV30)
@@ -127,7 +127,7 @@ module v30_cpu_bridge (
     output wire         v30_ready,
     output wire         v30_ce,             // gated posedge CE to the core
 
-    // the 8088's pins, as the chipset sees them
+    // the CPU-side pins, as the chipset sees them
     output reg   [2:0]  processor_status,   // S2-S0 to the i8288 / arbiter
     output reg   [19:0] ad_out,             // to core_top's ALE address latch
     output reg   [7:0]  cpu_data_bus,       // the addressed write lane
@@ -460,7 +460,7 @@ module v30_cpu_bridge (
                 // says ready AND the bus is still ours (the AEN race: see
                 // the header). Waiting here is the wait-state path -- the
                 // SDRAM's access stretches this state, exactly as it
-                // stretched the 8088's T3/Tw.
+                // stretched the CPU's T3/Tw.
                 if ((t_cnt >= 3'd3) && cpu_ce_posedge
                     && processor_ready && bus_ours) begin
                     if (cur_read && (byte_idx == 2'd0)) rd_lo <= data_bus;

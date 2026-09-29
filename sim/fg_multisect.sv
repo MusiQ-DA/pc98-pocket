@@ -81,9 +81,9 @@ module tb_pc98_fdc_glue;
     logic [3:0]  mgmt_address = 4'd0;
     logic [15:0] mgmt_writedata = 16'd0;
 
-    // NOT_READY_ENDS_COMMAND is what Peripherals.sv passes under MACHINE_PC98:
+    // NOT_READY_ENDS_COMMAND is what Peripherals.sv passes:
     // a PC-98's drives report READY, so an empty one ends a command instead of
-    // parking CB. An AT build passes 0 and keeps floppy.v's old behaviour.
+    // parking CB.
     // ---- the DMAC + sector feeder, tb_fdd_dma_model -------------------------
     //
     // The glue's own guests never touch the DMA registers -- the model's

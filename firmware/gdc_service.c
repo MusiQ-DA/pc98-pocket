@@ -82,7 +82,7 @@ static uint8_t bitreverse[256];
 static int gdc_inited = 0;
 
 // The softcore has no divider (nodiv-verify gates it), so every division
-// here goes through the restoring long divide ide_service.c uses.
+// here goes through a restoring long divide.
 static uint32_t udiv32(uint32_t n, uint32_t d, uint32_t *rem)
 {
     uint32_t q = 0u, r = 0u;

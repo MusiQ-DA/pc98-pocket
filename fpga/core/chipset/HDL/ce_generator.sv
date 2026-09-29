@@ -60,10 +60,10 @@ module ce_generator (
         // three within 0.0001% of the exact frequency, and 184/201 still fits
         // the 9-bit accumulator.
         //
-        // The clock_cycle_counter_* and shift_read_timing outputs below are the
-        // 8088 BIU's, and the 8088 is not instantiated in this build (core_top
-        // puts the nuV30 + v30_cpu_bridge there); only the edge ratio and the
-        // RAM waits are consumed here.
+        // The clock_cycle_counter_* and shift_read_timing outputs below belong
+        // to the CPU this generator was built against, which is not the part
+        // instantiated here (core_top puts the nuV30 + v30_cpu_bridge there);
+        // only the edge ratio and the RAM waits are consumed.
         case (active_clk_select)
             2'b00:
             begin                                   // 4.915197 MHz ("5 MHz")

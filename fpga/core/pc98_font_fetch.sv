@@ -5,7 +5,7 @@
 // sdram_mp wants a word address, a length and a held request. This is the
 // adapter between them.
 //
-// One byte per 16-bit word, which is how RAM.sv stores everything -- the PC/AT
+// One byte per 16-bit word, which is how RAM.sv stores everything -- the
 // machine layer needs byte addressing and cannot get it any other way. Packing
 // the font two-to-a-word would halve the space and the burst, but then the
 // loader could not write it through the path that already exists, and a second

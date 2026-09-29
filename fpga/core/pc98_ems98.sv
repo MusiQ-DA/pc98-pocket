@@ -6,10 +6,6 @@
 // interface np21w models in io/emsio.c, four 16 KB page windows at
 // C0000-CFFFF programmed through byte registers at 08E1h-08E7h, with 08E9h
 // selecting WHICH megabyte of board memory a page number addresses into.
-// (The other EMS board in this machine -- Lo-tech, ports 0260h-0263h, the
-// OSD "EMS" switch -- is a different card with a different frame and page
-// granularity; the two coexist, and RAM.sv gives it priority if both map
-// the same window.)
 //
 //   OUT 08E1h, p    window 0 (C0000-C3FFF) := 16 KB page p of the selected
 //   OUT 08E3h, p    window 1 (C4000-C7FFF)    megabyte. Only p[7:2] count --

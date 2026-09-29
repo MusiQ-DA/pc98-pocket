@@ -118,7 +118,7 @@ module sdram_shim #(
     //
     // The controller is instanced with two ports on BOTH machines rather than
     // conditionally, because making the port count depend on a macro makes
-    // every signal width depend on it too. On PC/AT b_req is tied low, the
+    // every signal width depend on it too. Tie b_req low if unused: the
     // round-robin never grants it, and the guest path behaves as it did.
     input  wire                               b_req,      /* tie low if unused */
     input  wire  [ADDR_BITS_PUB-1:0]          b_addr,
@@ -262,7 +262,7 @@ module sdram_shim #(
     //     else if (state == IDLE) access_ready <= idle;
     //
     // taken in the very cycle the command appears, and then held. Nothing waits
-    // for the access to finish. What protects the 8088 is only the length of
+    // for the access to finish. What protects the CPU is only the length of
     // its bus cycle: it asserts MEMR in T2 and latches at the end of T3, one CPU
     // clock later, which at 4.77 MHz is nine chipset cycles. sdram_single answers in
     // five, so it fits; sdram_mp answers in ten, so it does not, and the CPU
@@ -290,7 +290,7 @@ module sdram_shim #(
     // it does not depend on which value of RAM.sv's `state` the access_ready
     // block happens to see (RAM.sv assigns state with a BLOCKING assignment
     // inside always_ff, so that ordering is not even well defined in
-    // simulation). Holding it through the transaction makes the 8088 insert
+    // simulation). Holding it through the transaction makes the CPU insert
     // wait states until COMPLETE_RAM_RW puts access_ready back up -- a real
     // handshake instead of a race against the bus-cycle length.
     //

@@ -4,7 +4,6 @@
 
 #include "key_bind.h"
 #include "settings_ui.h"
-#include "sdramtest.h"
 #include "softcpu_regs.h"
 
 void gdc_poll(void);
@@ -35,8 +34,7 @@ int main(void)
 {
     // Start with both hard disks absent so the BIOS boots from floppy until (and unless)
     // an image mounts.
-    // No IDE on a PC-98 -- see PERIPHERALS' XT2IDE block. The disk is the
-    // PC-9801-55 SCSI window instead.
+    // The hard disk is the PC-9801-55 SCSI window.
     scsi_init();
     vkb_ui_init();
 
@@ -59,19 +57,7 @@ int main(void)
     // retries anyway in case the deferload binding lands late.
     uint32_t rhythm_done = rhythm_load();
 
-#ifdef SDRAM_SELFTEST
-    // Diagnostic build (docs/P0_SELFTEST_SPEC.md): walk guest SDRAM from here,
-    // with the 8088 still held, and leave the verdict on screen. Deliberately
-    // never releases the guest -- the point of this build is the readout, and
-    // letting a machine with broken RAM run would only overwrite it.
-    sdram_selftest_run();
-    for (;;)
-        ;
-#endif
-
-#ifndef SDRAM_SELFTEST
     scsi_init();
-#endif
 
     *SOFT_GUEST_HOLD = 0;
 
@@ -89,7 +75,6 @@ int main(void)
     uint32_t mounted_hdd = 0;
     uint32_t settings_sized = 0;        // Settings size declared in the datatable yet
     uint32_t rebind_seen = *FDD_REBIND; // last-seen rebind toggles
-    uint32_t jt_fdd_seen = 0;           // last-executed JTAG FDD command seq
 
     for (;;) {
         // Declare the Settings size once the datatable is populated (retried because the
@@ -117,54 +102,6 @@ int main(void)
             }
         }
         rebind_seen = rebind;
-
-        // JTAG FDD commands (probe write slot 0x85 -> FDD_JTCTL, debug builds
-        // only: the register reads 0 without PC98_PROBE_EXTRA). A seq change
-        // runs cmd once; FDD_JTSTAT echoes the result for probe read 0x26.
-        // A JTAG eject survives the auto-mount because mounted_x stays set --
-        // same shape as the OSD eject -- and an unbind is only re-armed by a
-        // real host rebind.
-        uint32_t jt = *FDD_JTCTL;
-        if (((jt >> 8) & 0xFF) != jt_fdd_seen) {
-            jt_fdd_seen = (jt >> 8) & 0xFF;
-            uint32_t cmd = jt & 0xF;
-            uint32_t drv = (jt >> 4) & 0x3;
-            uint32_t ok = 0;
-            if (drv < 2) {
-                switch (cmd) {
-                case JT_FDD_EJECT:
-                    fdd_eject(drv);
-                    ok = 1;
-                    break;
-                case JT_FDD_INSERT:
-                    fdd_insert(drv);
-                    ok = fdd_is_inserted(drv);
-                    break;
-                case JT_FDD_MOUNT: {
-                    uint32_t s = stable_size(drv ? FDD1_DISK_SIZE : FDD0_DISK_SIZE);
-                    if (s != 0) {
-                        fdd_mount(drv, s);
-                        if (drv == 0) mounted_a = 1; else mounted_b = 1;
-                        ok = 1;
-                    }
-                    break;
-                }
-                case JT_FDD_UNBIND:
-                    fdd_unbind(drv);
-                    ok = 1;
-                    break;
-                case JT_FDD_STAT:
-                    ok = 1;
-                    break;
-                default:
-                    break;
-                }
-            }
-            *FDD_JTSTAT = ((fdd_mounted_sectors(drv) & 0xFFF) << 20) |
-                          ((ok & 1) << 17) |
-                          ((uint32_t) fdd_is_inserted(drv) << 16) |
-                          (jt_fdd_seen << 8) | (drv << 4) | cmd;
-        }
 
         if (!mounted_hdd) {
             uint32_t sectors = slot_bytes(HDD0_SLOT_ID) / SECTOR_BYTES;

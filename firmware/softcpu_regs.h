@@ -21,9 +21,6 @@
 #define FDD_TDS_CLR    ((volatile uint32_t *) 0x30000038) // W: bit0 clear done
 #define FDD0_DISK_SIZE ((volatile uint32_t *) 0x3000003C) // R: floppy-0 image size in sectors
 #define FDD1_DISK_SIZE ((volatile uint32_t *) 0x30000040) // R: floppy-1 image size in sectors
-#define IDE_REQUEST    ((volatile uint32_t *) 0x30000044) // R: ide0 request [2:0]
-#define FDD_JTCTL      ((volatile uint32_t *) 0x30000048) // R: JTAG FDD command word (0 without PC98_PROBE_EXTRA)
-#define FDD_JTSTAT     ((volatile uint32_t *) 0x3000004C) // W: answer word, read back over probe slot 0x26
 #define FDD_REBIND     ((volatile uint32_t *) 0x30000050) // R: per-floppy image-rebind toggles
 #define DTBL_ADDR      ((volatile uint32_t *) 0x30000054) // W: datatable word index
 #define DTBL_DATA      ((volatile uint32_t *) 0x30000058) // R: datatable word at the index; W: write it
@@ -112,16 +109,6 @@
 #define FDD0_REBIND_BIT (1 << 0)
 #define FDD1_REBIND_BIT (1 << 1)
 
-// FDD_JTCTL word (probe write slot 0x85): {seq[15:8], drive[5:4], cmd[3:0]}.
-// A seq change runs cmd once; FDD_JTSTAT answers {sectors[31:20], ok[17],
-// inserted[16], seq[15:8], drive[5:4], cmd[3:0]} for the addressed drive.
-#define JT_FDD_NOP    0x0
-#define JT_FDD_EJECT  0x1 // media out; the image stays bound (insert brings it back)
-#define JT_FDD_INSERT 0x2 // re-insert the remembered image
-#define JT_FDD_MOUNT  0x3 // (re)mount whatever is bound in the drive's dataslot
-#define JT_FDD_UNBIND 0x4 // eject and forget the image; a host rebind mounts again
-#define JT_FDD_STAT   0x5 // no action, refresh the answer word only
-
 // FDD_MGMT_TRIG bits
 #define FDD_MGMT_WR (1 << 0)
 #define FDD_MGMT_RD (1 << 1)
@@ -149,11 +136,8 @@
 #define FDD_LBA_MASK  0x7FFF
 #define FDD_LBA_DRIVE 0x8000
 
-// ide.v management registers (mgmt_address[3:0]). IDE_TARGET is a FDD_MGMT_ADDR bit
-// that routes the transaction to ide.v (0xF0) instead of floppy.v (0xF2). The
-// taskfile (regs 0-5) is packed/unpacked in ide_service.c per ide.v's register map;
-// reg 0xF is the 16-bit sector data port (auto-incrementing).
-#define IDE_TARGET    (1 << 8) // FDD_MGMT_ADDR bit: select ide.v
+// Management-bus target selects (FDD_MGMT_ADDR bits): the byte routes the
+// transaction to a service target instead of floppy.v (0xF2).
 #define SCSI_TARGET   (1 << 9) // FDD_MGMT_ADDR bit: select pc98_scsi (mgmt 0xF4)
 #define OPNA_TARGET   (1 << 10) // FDD_MGMT_ADDR bit: select pc98_opna (mgmt 0xF5)
 
@@ -174,37 +158,12 @@
 #define SMGMT_AUXSTAT 0x5      // W: the byte 0xCC0 hands the guest
 #define SMGMT_STATUS  0x6      // W: the byte index 0x17 hands the guest
 #define SMGMT_PTRCLR  0x7      // W: bit0 rewinds read ptr, bit1 write ptr
-#define IMGMT_PRESENT 0x6      // drive present / config register
-#define IMGMT_DATA    0xF      // sector data port
-#define IDE_DRV0_WE   (1 << 3) // reg 6: commit drive-0 present/hob bits
-#define IDE_DRV1_WE   (1 << 7) // reg 6: commit drive-1 present/hob bits
-#define IDE_PRESENT   (1 << 0) // reg 6: drive-0 present (drive-1 present is this << 4)
-
-// ATA status byte, placed in the reg-5 high byte and bit-decoded by ide.v. END
-// doubles as last_read (stops re-requesting), RDP as fast_read, IRQ pulses the
-// guest interrupt.
-#define ATA_BSY      0x80
-#define ATA_RDY      0x40
-#define ATA_RDP      0x20
-#define ATA_DSC      0x10
-#define ATA_DRQ      0x08
-#define ATA_IRQ      0x04
-#define ATA_END      0x02
-#define ATA_ERR      0x01
-#define ATA_ERR_ABRT 0x04 // error register: command aborted
-
-// ide0 request encoding (IDE_REQUEST): reset, new command, data phase, idle.
-#define IDE_REQ_RESET 6
-#define IDE_REQ_CMD   4
-#define IDE_REQ_DATA  5
-#define IDE_REQ_IDLE  0
-
 // APF bridge-RAM base and the sector geometry the transfers use.
 #define FDD_BRIDGE_BASE 0x60000000
 #define SECTOR_BYTES    512
 #define SECTOR_WORDS    128
 
-// Bounded spin for disk waits (dataslot transfers and IDE data-phase handshakes) so a
+// Bounded spin for disk waits (dataslot transfers and SCSI data-phase handshakes) so a
 // stalled transfer or a guest that abandons one cannot hang the softcore, which serves
 // both disks and draws the OSD. A real wait resolves in well under a millisecond; this
 // is a few seconds of margin, never a false trip.

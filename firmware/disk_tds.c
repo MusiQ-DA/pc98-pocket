@@ -1,4 +1,4 @@
-// Shared target-dataslot sector transfer for the floppy and IDE services.
+// Shared target-dataslot sector transfer for the floppy and SCSI services.
 
 #include "softcpu_regs.h"
 

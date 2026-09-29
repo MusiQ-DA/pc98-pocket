@@ -4,22 +4,8 @@
 # macro by itself for .sv inputs -- without this the PC-98 build dies
 # elaborating $test$plusargs (Error 10174).
 set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
-# The Tandy/CGA/HGC/OPL2/CMS switches are gone with the hardware they gated
-# (2026-09-22): this is a PC-98, and the RTL no longer has a second machine to
-# choose between. The Lo-tech EMS board went the same way (2026-09-29): its
-# 260h-263h ports were the PC/AT card's, no PC-98 software drives them, and
-# pc98_ems98 is the EMS this machine actually has.
 
 set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
-
-# The keyboard 8251 at 0x41/0x43 (pc98_kbd8251.sv). On by default: without it
-# nobody answers the keyboard, the ITF's probe times out on every pass,
-# [0x0500] bit 7 never gets set, and BASIC has no input at all. The first
-# version of the model blanked the ITF by arming ACKs on writes that were
-# not the 8251's (0x73 is the beep port); the model now arms only on the
-# break edge, exactly as np21w does, so it can stay on. Comment it out to
-# bisect a suspect keyboard interaction on hardware.
-set_global_assignment -name VERILOG_MACRO "PC98_KBD_8251=1"
 
 # The PC-9801-86 sound board's YM2608 at 0x188-0x18F (pc98_opna.sv). On in the
 # SLIM configuration -- USE_ADPCM=0, USE_PCM=1 at the instantiation in
@@ -28,25 +14,10 @@ set_global_assignment -name VERILOG_MACRO "PC98_KBD_8251=1"
 # LABs against 1848 -- see the long note where ENABLE_OPNA is consumed.
 set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 
-# PC98_DEBUG_BANDS replaces the picture with a free-running probe. It did its
-# job: it proved the softcore, the ROM load, the raster and the OSD chain were
-# all healthy, which left the CPU as the only suspect and sent the search to
-# simulation, where the microcode ROM's out-of-range read turned up. Off now --
-# the machine has a picture to show.
-# set_global_assignment -name VERILOG_MACRO "PC98_DEBUG_BANDS=1"
-
-# A 16x16 white square at the OSD's coordinate origin, to prove osd_hcnt and
-# osd_vcnt reach the window at all. Its own comment said to remove it once the
-# OSD was up; the OSD has been up for a while and the square has been sitting
-# in the top-left corner of every build since, reading as a double-width tofu
-# because that is exactly the size of one. It is first in pocket_video's
-# overlay mux, so it covers whatever the guest draws there.
-# set_global_assignment -name VERILOG_MACRO "PC98_OSD_MARK=1"
-
 # Boot the ITF, not the BIOS.
 #
 # The core has powered on into the BIOS since the retrobios ITF was found to
-# be a 386 image that cannot reach its own hand-over on an 8088. The ITF now
+# be a 386 image that cannot reach its own hand-over on a V30. The ITF now
 # shipped is the PC-9801UX one: no 32-bit instructions anywhere in it, a
 # 70116 (V30) branch, and a checksum that passes. In simulation it runs the
 # text VRAM test, sizes memory 128 KB at a time up to MEMORY 640KB OK, and
@@ -115,10 +86,10 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # bytes meaning "no drive", which is the only reason the machine ever booted.
 #
 # floppy.v now ends those commands properly, under a new NOT_READY_ENDS_COMMAND
-# parameter that Peripherals.sv sets from MACHINE_PC98 -- a PC-98's 2HD/2DD
-# drives drive a real READY line, a PC/AT's do not (pin 34 is DISK CHANGE), so
-# an AT build passes 0, every wire the change adds constant-folds away and
-# its behaviour is unchanged. What an empty PC-98 drive answers instead comes
+# parameter that Peripherals.sv sets -- a PC-98's 2HD/2DD
+# drives drive a real READY line, the upstream model's do not (pin 34 is DISK CHANGE), so
+# the constant parameter folds the added wires away.
+# What an empty PC-98 drive answers instead comes
 # from np21w: READ/WRITE DATA and FORMAT go through FDC_DriveCheck (io/fdc.c:
 # 176-182) to ST0 = FDCRLT_IC0|FDCRLT_NR|(hd<<2)|us = 0x48, ST1 = ST2 = 0,
 # C/H/R/N echoed, seven bytes and an interrupt (fdcsend_error7, io/fdc.c:
@@ -168,41 +139,3 @@ set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
 #   count read beats where stock sdram_single's cannot. The bench half is
 #   sim_pc98_boot.sh --word, which runs the real ITF on this path.
 set_global_assignment -name VERILOG_MACRO "PC98_WORD_MEM=1"
-
-#   ---- DIAGNOSTIC BUILD: SDRAM_SELFTEST -----------------------------------
-#   Turns the core into an SDRAM test rig: the softcore walks guest memory with
-#   the 8088 held in reset and leaves the first mismatching address on the OSD,
-#   then stops. It NEVER releases the guest, so that build does not boot.
-#
-#   OFF now: it did its job. testB14 reported PILOT A5/A5, PILOT2 5A/5A (bank 1)
-#   and PASS 64K on hardware, which proved the SDRAM was never the problem and
-#   pointed at the CPU handshake instead -- see docs/HANDOVER.md and
-#   sim/tb_cpu_timing.sv.
-#
-#   The firmware Makefile reads its -D flags out of this file, so this one macro
-#   arms both the RTL and the C. Comment it out to get a normal core back, and
-#   REBUILD THE FIRMWARE (firmware.vh is committed, CI does not rebuild it).
-#   Re-enable to turn the core back into a test rig. Rebuild the firmware after
-#   flipping it (firmware.vh is committed; CI checks it against the sources but
-#   does not regenerate it).
-# set_global_assignment -name VERILOG_MACRO "SDRAM_SELFTEST=1"
-
-#   ---- DIAGNOSTIC: PC98_PROBE_EXTRA ---------------------------------------
-#   Extended JTAG probe taps (frame census, row-buffer counts, PIC/IRQ words,
-#   pad/button-gate words, DMAC/FDC-DMA handshakes) plus the ROMWALK verify
-#   engine (0x2B-0x2D): probe slots 0x01-0x05 and 0x1E-0x2D.
-#
-#   OFF in the shipping build. It was enabled while hunting the "ROM SUM
-#   ERROR" -- which the walk itself was causing by borrowing the bus +3 ms
-#   into POST; commit 92f5f35 delayed the arm ~6.2 s, past POST's fragile
-#   window, and the failure is closed. With the hunt over, its ALMs went to
-#   the OPNA's ADPCM-A rhythm block: the 6-voice engine + 8 KB store wants
-#   ~500 ALM and the part sits at ~99%. A debug build that wants the probes
-#   back can re-enable this AND must also flip Peripherals' pc98_opna back
-#   to .USE_ADPCM(0)/.USE_PCM(1) to free the floor space.
-#
-#   It was briefly back on for the hold_only bisect (1494da9); that hunt is
-#   also closed, and with it live the fitter wants 1866 LABs against the
-#   device's 1848, so it is off again -- the machine boots, and the on-screen
-#   disk lamp covers the last thing the taps were still watching.
-# set_global_assignment -name VERILOG_MACRO "PC98_PROBE_EXTRA=1"

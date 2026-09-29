@@ -134,7 +134,7 @@ struct fdd_geom {
 // 9-sector 720 KB variant). 1.44 MB is a later PC-9821 format, listed ahead of
 // 2HD because its sector count is higher -- each row's count is computed from
 // its own sector width, so the ordering picks the right row for every size
-// that exists. The PC/AT table would answer 1.2 MB (80/15/2 of 512s) for a
+// that exists. An 80/15/2 table would answer 1.2 MB for a
 // 1232 KB image, which no PC-98 disk is.
 static const struct fdd_geom fdd_geoms[] = {
     { 2880, 80, 18, 2, 0 }, // 1.44 MB (PC-9821)

@@ -33,7 +33,6 @@ import sys
 CORE_TOP = "fpga/core/core_top.sv"
 MODULES = {
     "softcpu_subsystem": "fpga/core/softcpu_subsystem.sv",
-    "sdram_selftest_master": "fpga/core/sdram_selftest_master.sv",
     # The CPU-side swap of 2026-09: the bridge carries every pin the V30
     # sees, so a dangling input there reads as a dead machine, not a zero.
     "v30_cpu_bridge": "fpga/core/v30_cpu_bridge.sv",

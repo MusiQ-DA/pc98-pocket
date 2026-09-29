@@ -128,7 +128,7 @@ module tb_pc98_boot;
 
 `ifdef CPU_V30
     // The nuV30 + the bridge, wired the way core_top wires them under
-    // MACHINE_PC98. V30_BACKDOOR gives the bench dbg_regs for the trace
+    // V30_BACKDOOR gives the bench dbg_regs for the trace
     // below (the 8088 build reads its registers hierarchically instead).
     wire [2:0]  v30_bs;
     wire [19:0] v30_addr;

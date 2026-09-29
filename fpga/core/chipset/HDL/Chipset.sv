@@ -34,26 +34,11 @@ module CHIPSET #(
         output  logic           interrupt_to_cpu,
         // PC-98 video
         input   logic           clk_pc98_dot,
-        // The interrupt path's liveness taps, carried for the JTAG probe.
-        output  logic    [7:0]  dbg_pic_irr,
-        output  logic    [7:0]  dbg_pic_imr,
-        output  logic    [7:0]  dbg_pic_isr,
-        output  logic    [7:0]  dbg_pic2_irr,
-        output  logic    [7:0]  dbg_pic2_imr,
-        output  logic    [7:0]  dbg_pic2_isr,
-        output  logic    [7:0]  dbg_irq_level,
-        output  logic    [7:0]  dbg_timer_count,
-        output  logic    [7:0]  dbg_kbd_irq_count,
-        output  logic    [7:0]  dbg_kbd_rd_count,
         output  logic   [1:0]   gdc_draw_req,
         output  logic   [1:0]   gdc_draw_busy,
         output  logic  [15:0]   gdc_draw_ops,
-        output  logic  [31:0]   gvram_dbg,
-        output  logic  [31:0]   gvram_dbg2,
         output  logic [319:0]   gdc_draw_snaps,
         input   logic   [1:0]   gdc_srv_done_levels,
-        input   logic   [11:0]  tvram_dbg_cell,
-        output  logic   [23:0]  tvram_dbg_word,
         output  logic           de_o,
         output  logic   [5:0]   VID_R,
         output  logic   [5:0]   VID_G,
@@ -85,11 +70,6 @@ module CHIPSET #(
         input   logic           memory_write_n_ext,
         output  logic           memory_write_n_direction,
         input   logic           ext_access_request,
-        // Read data for the external-access port. RAM.sv's read byte is
-        // otherwise consumed only by the internal bus mux below, so an external
-        // master (the BIOS loader, and now the SDRAM self-test) could write but
-        // never read back. See docs/P0_SELFTEST_SPEC.md.
-        output  logic   [7:0]   data_bus_ext_out,
         input   logic   [3:0]   dma_request,
         output  logic   [3:0]   dma_acknowledge_n,
         output  logic           address_enable_n,
@@ -146,6 +126,7 @@ module CHIPSET #(
         input   logic   [47:0]  rtc_time,
         output  logic   [1:0]   fdd_present,
         output  logic   [1:0]   fdd_request,
+        output  logic           scsi_request,
         // RAM wait mode
         input   logic           wait_count_clk_en,
         input   logic   [1:0]   ram_read_wait_cycle,
@@ -216,13 +197,10 @@ module CHIPSET #(
     end
 
     // tandy_snd_rdy was ANDed in here and, on a PC-98 build, was 1'b1 by
-    // construction (`ENABLE_TANDY_AUDIO ? ... : 1'b1`). The XT hardware's
-    // removal deleted the PERIPHERALS output that drove it but left this
-    // use, and an undriven net synthesises to GND -- io_channel_ready
-    // became a constant zero, processor_ready never asserted, and the CPU
-    // hung forever on its first cycle (LIVE pinned at FFFF0, no fetches,
-    // PC frozen in its reset state). The term was the Tandy sound's, and
-    // the Tandy sound is gone; the expression keeps the two that remain.
+    // io_channel_ready used to AND in a third term whose producer is gone;
+    // an undriven net synthesised to GND, processor_ready never asserted, and
+    // the CPU hung on its first cycle (LIVE pinned at FFFF0, no fetches). The
+    // expression keeps the two terms that remain.
     READY u_READY 
     (
         .clock                              (clock),
@@ -351,25 +329,11 @@ module CHIPSET #(
         .dma_page_chip_select_n             (dma_page_chip_select_n),
         .clk_pc98_dot                       (clk_pc98_dot),
         .de_o                               (de_o),
-        .dbg_pic_irr                        (dbg_pic_irr),
-        .dbg_pic_imr                        (dbg_pic_imr),
-        .dbg_pic_isr                        (dbg_pic_isr),
-        .dbg_pic2_irr                       (dbg_pic2_irr),
-        .dbg_pic2_imr                       (dbg_pic2_imr),
-        .dbg_pic2_isr                       (dbg_pic2_isr),
-        .dbg_irq_level                      (dbg_irq_level),
-        .dbg_timer_count                    (dbg_timer_count),
-        .dbg_kbd_irq_count                  (dbg_kbd_irq_count),
-        .dbg_kbd_rd_count                   (dbg_kbd_rd_count),
         .gdc_draw_req                       (gdc_draw_req),
         .gdc_draw_busy                      (gdc_draw_busy),
         .gdc_draw_ops                       (gdc_draw_ops),
-        .gvram_dbg                          (gvram_dbg),
-        .gvram_dbg2                         (gvram_dbg2),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
-        .tvram_dbg_cell                     (tvram_dbg_cell),
-        .tvram_dbg_word                     (tvram_dbg_word),
         .VID_R                              (VID_R),
         .VID_G                              (VID_G),
         .VID_B                              (VID_B),
@@ -382,6 +346,7 @@ module CHIPSET #(
         .internal_data_bus                  (internal_data_bus),
         .data_bus_out                       (internal_data_bus_chipset),
         .data_bus_out_from_chipset          (data_bus_out_from_chipset),
+        .scsi_rom_hi                        (scsi_rom_hi),
         .interrupt_request                  (interrupt_request),
         .io_read_n                          (io_read_n),
         .io_write_n                         (io_write_n),
@@ -404,6 +369,7 @@ module CHIPSET #(
         .rtc_time                           (rtc_time),
         .fdd_present                        (fdd_present),
         .fdd_request                        (fdd_request),
+        .scsi_request                       (scsi_request),
         .fdd_dma_req                        (fdd_dma_req),
         // The BIOS runs 2HD (0x90 window) transfers on channel 2 and 2DD
         // (0xC8 window) on channel 3 -- the arbiter pairs ack[2] with page
@@ -554,9 +520,7 @@ module CHIPSET #(
 
     assign  data_bus = internal_data_bus;
 
-    // Straight tap on RAM.sv's read byte, valid while the RAM read is in
-    // flight; the external master latches it on ram_rw_complete.
-    assign  data_bus_ext_out = internal_data_bus_ram;
+
 
     // The odd lane inside the option ROM. Reads here must answer on
     // both lanes the way SDRAM does: the high lane always carries the
@@ -565,8 +529,15 @@ module CHIPSET #(
     // signature's 55h at offset 9. Undecoded space reports 0 here, so
     // without the injection the ROM's odd bytes never reach the CPU.
     wire xrom_read = (~memory_read_n) && (address[19:8] == 12'hD00);
-    assign data_bus_hi = xrom_read ? xrom_byte(address[7:0] | 8'h01)
-                                   : ram_dout_hi_w;
+    // The SCSI option ROM at D2000 has the same problem -- its AA55 signature
+    // halves sit one byte apart on different lanes -- so Peripherals brings
+    // the odd byte up on its own read port, and this mux puts it on the high
+    // lane whenever the window is being read. Without it the scan's signature
+    // word never reaches the CPU.
+    wire scsi_rom_hi_read = (~memory_read_n) && (address[19:12] == 8'hD2);
+    assign data_bus_hi = xrom_read         ? xrom_byte(address[7:0] | 8'h01)
+                       : scsi_rom_hi_read  ? scsi_rom_hi
+                       :                     ram_dout_hi_w;
 
     // fpga/xrom.asm (nasm -f bin). The NEC option-ROM format: AA55h at
     // offset 9, POST entries at 0x0C/0x0F/0x12/0x15, and the disk-BIOS
