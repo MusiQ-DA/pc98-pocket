@@ -64,6 +64,8 @@ enum {
     // Controls
     SET_DPAD,
     SET_GAMEPAD,
+    // OSD
+    SET_DISK_LED,
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
@@ -117,6 +119,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_ems_frame),   // SET_EMS_FRAME
     SETTING_D(opt_dpad, DPAD_ARROWS), // SET_DPAD
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
+    SETTING_D(opt_dis_en, 1), // SET_DISK_LED (default on)
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
@@ -182,6 +185,8 @@ static const item_t items_hw[] = {
     { "", IT_SPACER, 0 },
     { "Lo-tech 2MB EMS", IT_OPTION, SET_EMS },
     { "EMS Frame", IT_OPTION, SET_EMS_FRAME },
+    { "", IT_SPACER, 0 },
+    { "Disk LED", IT_OPTION, SET_DISK_LED },
 };
 
 // Gamepad Mode picks what controller 1 drives: the D-pad preset and button binds below take effect

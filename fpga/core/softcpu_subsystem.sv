@@ -116,6 +116,7 @@ module softcpu_subsystem (
     input [319:0]  gdc_draw_snaps,
     output  [1:0]  gdc_srv_done_levels,
     output        osd_active,
+    output        osd_disk_led,
 
     // Virtual-keyboard key event: {make, Set-2 code}, with a strobe that toggles
     // per firmware write so pocket_keyboard pushes exactly one queue entry.
@@ -363,6 +364,7 @@ module softcpu_subsystem (
     localparam SET_IDX_DISPLAY   = 5'd5;
     localparam SET_IDX_EMS       = 5'd6;   // Hardware
     localparam SET_IDX_EMS_FRAME = 5'd7;
+    localparam SET_IDX_DISK_LED  = 5'd10;  // on-screen access lamp
     // index 8 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
     localparam SET_IDX_GAMEPAD   = 5'd9;   // Controls
     reg [7:0] osd_settings [0:31];
@@ -381,6 +383,7 @@ module softcpu_subsystem (
     assign osd_ems       = osd_settings[SET_IDX_EMS][0];
     assign osd_ems_frame = osd_settings[SET_IDX_EMS_FRAME][1:0];
     assign osd_gamepad   = osd_settings[SET_IDX_GAMEPAD][1:0];
+    assign osd_disk_led  = osd_settings[SET_IDX_DISK_LED][0];
 
     // Per-control key config, written at KEYCFG_REG (0x20000020) as {id[12:9], ext[8], code[7:0]}.
     // pocket_keyboard reads one 9-bit {ext, code} per D-pad direction (ids 0-3) and button (ids 4-10);

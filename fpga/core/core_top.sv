@@ -971,6 +971,7 @@ module core_top (
     wire [1:0] osd_stereo;
     wire       osd_ems;
     wire [1:0] osd_ems_frame;
+    wire       osd_disk_led;
     wire [1:0] osd_gamepad;
     wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
 
@@ -1074,6 +1075,7 @@ module core_top (
         .osd_ems                    (osd_ems),
         .osd_ems_frame              (osd_ems_frame),
         .osd_gamepad                (osd_gamepad),
+        .osd_disk_led               (osd_disk_led),
         .key_cfg_flat               (key_cfg),
         .st_addr                    (st_addr),
         .st_wdata                   (st_wdata),
@@ -1261,6 +1263,20 @@ module core_top (
     synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_eff,     cont2_key_chip, clk_chipset);
     synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
     wire pause_core = pause_core_chipset;
+
+    // Disk-access lamp: any management service request (floppy in mgmt_req[7:6],
+    // IDE in [2:0]) lights an on-screen lamp for a beat. The request level is a
+    // short pulse per sector, so a stretcher keeps it visible -- 2^22 clk_pix
+    // ticks is about 0.4 s.
+    wire disk_act_chip = (|mgmt_req[7:6]) | (|mgmt_req[2:0]);
+    wire disk_act_pix;
+    synch_3 s_disk_act (disk_act_chip, disk_act_pix, clk_pix);
+    reg [21:0] disk_led_t = 22'd0;
+    always @(posedge clk_pix) begin
+        if (disk_act_pix)        disk_led_t <= 22'h3FFFFF;
+        else if (|disk_led_t)    disk_led_t <= disk_led_t - 22'd1;
+    end
+    wire disk_led_on = osd_disk_led & (|disk_led_t);
 
     // gamepad_mode picks what the pad drives: mapped keys, the game port, or the serial mouse. The
     // softcore's per-control key_cfg reaches pocket_keyboard unchanged.
@@ -2805,6 +2821,7 @@ module core_top (
         .HBlank             (HBlank),
         .VBlank             (VBlank),
         .palette_cfg        (palette_cfg),
+        .disk_led           (disk_led_on),
         .vid_blank          (vid_blank),
         .osd_active         (osd_active),
         .osd_palette_idx    (osd_palette_idx),

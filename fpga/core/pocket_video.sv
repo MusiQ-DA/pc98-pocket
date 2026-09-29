@@ -22,6 +22,7 @@ module pocket_video (
     input             VBlank,
     // Config / clock-mux state
     input      [2:0]  palette_cfg,
+    input             disk_led,   // on-screen disk-access lamp (stretched level)
     input             vid_blank,
     // OSD framebuffer handshake (softcore)
     input             osd_active,
@@ -458,11 +459,17 @@ module pocket_video (
     wire [23:0] mark_rgb = 24'd0;
 `endif
 
+    // Disk-access lamp: a 12x12 amber square tucked just inside the top-right
+    // corner of the raster, over the picture and under the OSD.
+    wire lamp_in = disk_led && (rb_h >= PC98_H_ACTIVE - 10'd20) && (rb_h < PC98_H_ACTIVE - 10'd8)
+                            && (rb_v >= 10'd8) && (rb_v < 10'd20);
+
     wire [23:0] overlay    = mark_in       ? mark_rgb
                            : dbg_in        ? dbg_color
                            : vid_blank_pix ? 24'd0
                            : osd_show      ? osd_color
                            : guard_run     ? 24'd0
+                           : lamp_in       ? 24'hE0A020
                            :                 {tr, tg, tb};
     always @(posedge clk_pix) begin
         vid_de  <= vid_de_now;
