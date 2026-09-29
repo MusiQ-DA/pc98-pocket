@@ -1064,12 +1064,34 @@ module core_top (
     // The magic word proves the protocol end-to-end before any value is trusted.
     logic [31:0] probe_data;
     wire   [7:0] probe_addr;
+    // The V30's architectural state, live. dbg_regs leaves the EU every
+    // cycle so the probe snapshot is "the CPU is executing THIS" -- a frozen
+    // CS:IP on a dead machine reads exactly like the wedge-era PC tap did.
+    wire [223:0] v30_dbg_regs;             // {psw, pc, sreg3..0, gpr7..0}
+    wire         v30_first_pop;            // EU consumed an instruction's byte 0
+    reg  [23:0]  retired_cnt = 24'd0;      // saturating instruction counter
+    reg          first_pop_q = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        first_pop_q <= v30_first_pop;
+        if (v30_first_pop && !first_pop_q && retired_cnt != 24'hFF_FFFF)
+            retired_cnt <= retired_cnt + 24'd1;
+    end
+
     always_comb begin
         case (probe_addr)
             // The bisect-era taps (PIC/timer/keyboard counts, the wedge-PC
-            // taps, the V30 register dump, the JTAG guest-memory master,
-            // the JTAG FDD/mgmt channels) went out with PC98_PROBE_EXTRA --
-            // the debug build is history, and the bring-up is done.
+            // taps, the JTAG guest-memory master, the JTAG FDD/mgmt
+            // channels) went out with PC98_PROBE_EXTRA -- the dbg_regs dump
+            // below is what replaced them for "where is the CPU".
+            8'h10:   probe_data = v30_dbg_regs[223:192];  // psw:pc
+            8'h11:   probe_data = v30_dbg_regs[191:160];  // sreg3:sreg2
+            8'h12:   probe_data = v30_dbg_regs[159:128];  // sreg1:sreg0
+            8'h13:   probe_data = v30_dbg_regs[127:96];   // gpr7:gpr6
+            8'h14:   probe_data = v30_dbg_regs[95:64];    // gpr5:gpr4
+            8'h15:   probe_data = v30_dbg_regs[63:32];    // gpr3:gpr2
+            8'h16:   probe_data = v30_dbg_regs[31:0];     // gpr1:gpr0
+            8'h17:   probe_data = {8'h00, retired_cnt};   // liveness
+            8'h18:   probe_data = {12'h000, v30_addr};    // current bus cycle
             8'h1d:   probe_data = {16'h0, key_count, key_last};
             8'hFF:   probe_data = 32'h98C0_DE98;
             default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
@@ -2329,6 +2351,10 @@ module core_top (
         .QS         (),
         .BS         (v30_bs),
         .RD_N       (),
+`ifdef PC98_JTAG
+        .dbg_regs      (v30_dbg_regs),
+        .dbg_first_pop (v30_first_pop),
+`endif
         .UBE_N      (v30_ube_n),
         .BUSLOCK_N  (),
         .SS_ADDR    ('0),
