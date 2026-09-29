@@ -912,3 +912,77 @@ font 2KB = 4、work RAM 8KB = 8、picorv32 2（cpuregs）+ FDD bridge 2。
   ワード {hash, ~hash, block}。ドライブ A のイメージ識別はファイル名が
   取れないので先頭+中間 512B の FNV-1a (fdd_service.c)。マウントで適用、
   変更はそのディスクのエントリへ、ディスク無しはグローバルへ。
+
+## §11 2026-09-29: 「XMS 対応」調査 → NEC 型 EMS ボード (pc98_ems98) 実装
+
+### §11.1 結論: リニア XMS はアーキテクチャ上不可能
+
+最初に確認した構造的事実: **V30 のアドレスバスは 20bit** で、`cpu_address` →
+`latch_address` → `RAM.sv` の `address` まで全経路 20bit。ゲストのメモリ
+サイクルは 0x100000 以上を物理的に発行できないので、RAM.sv のデコードを
+伸ばすだけでは絶対に届かない。286 以降の「リニアな拡張メモリ + INT15h
+AH=87/88 + HIMEM.SYS」という形態はこのマシンでは存在し得ない。
+
+実機 PC-98 では V30 級の「拡張メモリ」は EMS ボード(PC-9801-53 系)の
+バンキングで実現されていた。np21w も同じ構造で、`pccore.extmem` は 1MB を
+越える別領域に置かれ `io/emsio.c` の窓越しにのみ触れる。
+
+### §11.2 副次的発見: 既存の Lo-tech EMS は完全に死んでいた
+
+`Peripherals.sv` の `ems_b1..b4`(Lo-tech ボード、ポート 0x260-0x263、
+OSD "EMS" スイッチで有効化)は RAM.sv のラッチをリマップするが、
+**`ram_address_select_n` に ems_b* が含まれていなかった**ため、ウィンドウ
+アクセスはセレクトされず、書き込みは捨てられ・読みは穴の 0xFF が返る
+だけだった。つまり OSD で EMS を有効にしても今まで一度も動いていない。
+今回の select 修正で `ems_b*` も `ems98_win` も select に入れたので、
+Lo-tech 側もようやく実動作するはず(フレーム位置は OSD で C/D/E0000
+選択可。frame=C0000 で NEC ボードと衝突した場合は Lo-tech が優先)。
+
+### §11.3 実装
+
+| 部分 | ファイル | 内容 |
+|---|---|---|
+| レジスタ | `fpga/core/pc98_ems98.sv` (新規) | ポート 08E1h-08E7h(ページ)、08E9h(ターゲット OUT / ステータス IN)。np21w `io/emsio.c` の意味論を忠実に写す |
+| 窓リマップ | `fpga/core/chipset/HDL/RAM.sv` | `ems98_map[0:3]` = {mapped, SDRAM word[23:14]} を latch に合成。latch/pend/accept を 23→24bit に拡幅して 0x800000 以上へ到達 |
+| 結線 | `fpga/core/chipset/HDL/Chipset.sv` | 宣言 + インスタンス + RAM へのポート + IN 08E9h の読み出し 1 分岐(最小限、他の作業領域は不触) |
+| ファイルリスト | `fpga/ap_core.qsf` | `core/pc98_ems98.sv` を追加 |
+
+**バンク先**: SDRAM ワード 0x800000-0xFFFFFF = 32MB デバイスの後半 8MB
+(1 ゲストバイト = 1 ワードなので実容量 8MB)。既存の内部バンク
+(ITF シャドウ 0x1F8000、Lo-tech プール 0x200000-0x3FFFFF、フォント
+0x400000、GVRAM page1 0x600000)と非衝突。ターゲット t=1..8 が
+`t<<20` の物理メガバイトに対応(np21w 互換)。
+
+**リセット時は全窓アンマップ** — np21w はリセットでベースフレームに
+張るが、実機 UX の C0000 は RAM が存在しない空き窓なので、こちらが
+実機に近いし、未初期化 SDRAM が POST のオプションROMスキャン
+(AA55 シグネチャ)を誤検出させるリスクも潰せる。`t=0` でのページ書き込みは
+np21w 同様にベースフレームエイリアス(SDRAM 0xC0000+pos*0x4000)に張る。
+`t>8` のページ書き込みは破棄(np21w 同様)。
+
+### §11.4 ユーザーから見た使い方
+
+- **ドライバ不要**: EMS を使うソフトが `OUT 08E9h,t` + `OUT 08E1h-08E7h,page`
+  で C0000-CFFFF の窓を直接バンクするだけ。np21w と同じ手順。
+- **容量検出**: `IN 08E9h` を t=1 からスキャンし、0x00 が返る間が実装
+  メガバイト数(このコアは 8MB)。np21w の `emsio_i08e9` と同じ契約。
+- **XMS/HIMEM 系ソフトについて**: HIMEM.SYS 互換 API (INT 2Fh AH=43xx) は
+  V30/8086 の実機でも BIOS からは出ない(ドライバ製品が別途存在した)。
+  「メモリが 1MB を超えて使える」の本体はこの EMS 窓であり、XMS API を
+  話すものが必要なら EMS をバックにしたドライバを書く/探すことになる。
+- Lo-tech EMS (OSD "EMS") は別ボードとして存続。同じ SDRAM とは別プール
+  (0x200000-0x3FFFFF、2MB)を使う。
+
+### §11.5 検証
+
+- `sim/tb_pc98_ems98.sv` (新規): 窓未マップ時の穴保持、バンク式の
+  SDRAM ワードアドレス検証(t1/pg2→0x808000 系)、IN 08E9h スキャン、
+  t=0 ベースエイリアス、t>8 書き込み破棄、Lo-tech との優先順位 —
+  **全 PASS、SDRAM プロトコル違反 0**。
+- 既存ベンチ回帰: tb_ram_ab / tb_ram_ab_ph / tb_ram_dma_wr /
+  tb_ext_access / tb_bios_memtest / tb_cpu_timing / tb_v30_mem 全 PASS。
+  tb_pc98_boot --v30 --realmem (実 RAM 経路で ITF ブート) も確認。
+- `bash scripts/lint_core.sh` 通過。
+- ALM 見積もり: レジスタ ~44bit + デコーダ + RAM latch の 1bit 拡幅で
+  数十 ALM 程度の見込み(フィット結果は CI の quartus-win / Show fit
+  summary で確認)。

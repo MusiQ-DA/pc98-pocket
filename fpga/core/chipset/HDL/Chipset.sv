@@ -191,6 +191,12 @@ module CHIPSET #(
     logic           ems_b2;
     logic           ems_b3;
     logic           ems_b4;
+    // The NEC-style EMS board (pc98_ems98): ports 08E1h-08E9h bank four
+    // 16 KB windows at C0000-CFFFF into the SDRAM pool at 0x800000-0xFFFFFF.
+    // On a V30 this banking is the only way past the 20-bit bus, so this is
+    // what "extended memory" means here -- details in pc98_ems98.sv.
+    logic   [10:0]  ems98_map[0:3];
+    logic   [7:0]   ems98_status;
     logic           fdd_dma_req;
 
 
@@ -540,10 +546,26 @@ module CHIPSET #(
         .ems_b2                             (ems_b2),
         .ems_b3                             (ems_b3),
         .ems_b4                             (ems_b4),
+        .ems98_map                          (ems98_map),
         .bios_protect_flag                  (bios_protect_flag),
         .wait_count_clk_en                  (wait_count_clk_en),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle)
+    );
+
+    // The NEC EMS board's register half. Its port decode sits on the live
+    // bus (same convention as PERIPHERALS); the window state it produces is
+    // consumed inside RAM.sv's address latch. SDRAM_CLK == clock, so there
+    // is no domain crossing on ems98_map.
+    pc98_ems98 u_ems98 (
+        .clock                              (clock),
+        .reset                              (reset),
+        .address                            (address),
+        .internal_data_bus                  (internal_data_bus),
+        .io_write_n                         (io_write_n),
+        .address_enable_n                   (address_enable_n),
+        .map                                (ems98_map),
+        .status                             (ems98_status)
     );
 
     assign  data_bus = internal_data_bus;
@@ -613,6 +635,15 @@ module CHIPSET #(
         else if (xrom_read)
         begin
             internal_data_bus_ext = xrom_byte(address[7:0]);
+            data_bus_direction    = 1'b0;
+        end
+        // IN 08E9h: the NEC EMS board answers "is this megabyte fitted".
+        // Its window reads never reach here -- a mapped window is claimed
+        // by the SDRAM branch above, an unmapped one by the hole below.
+        else if ((~io_read_n) && (~address_enable_n)
+                 && (address[15:0] == 16'h08E9))
+        begin
+            internal_data_bus_ext = ems98_status;
             data_bus_direction    = 1'b0;
         end
         // The empty option-ROM window. C0000-E7FFF is deliberately not

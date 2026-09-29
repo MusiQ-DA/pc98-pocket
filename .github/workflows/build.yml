@@ -90,6 +90,22 @@ jobs:
             grep -q "=== PASS ===" dma_$mode.log
           done
 
+      - name: NEC-style EMS board — 08E1-08E9 windows bank into SDRAM
+        run: |
+          S=fpga/core
+          for mode in ref mp; do
+            DEF=""; [ "$mode" = "mp" ] && DEF="+define+SDRAM_USE_MP"
+            verilator --binary --timing -Wno-fatal --top-module tb_pc98_ems98 $DEF \
+              -Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/sdram_single/HDL \
+              sim/tb_pc98_ems98.sv sim/sdram_model.sv \
+              $S/chipset/HDL/RAM.sv $S/pc98_ems98.sv \
+              $S/chipset/HDL/sdram_single/HDL/sdram_single.sv \
+              $S/sdram_shim.sv $S/sdram_mp.sv \
+              -o r --Mdir obj_ems_$mode
+            ./obj_ems_$mode/r | tee ems_$mode.log
+            grep -q "RESULT: PASS" ems_$mode.log
+          done
+
       - name: the JTAG master's strict mode never strobes an unsettled grant
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_strict_grant \

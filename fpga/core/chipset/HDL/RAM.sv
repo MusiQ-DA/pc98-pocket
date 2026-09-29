@@ -57,6 +57,12 @@ module RAM (
      input   logic           ems_b2,
      input   logic           ems_b3,
      input   logic           ems_b4,
+     // NEC-style EMS (pc98_ems98): {mapped, SDRAM word[23:14]} per window of
+     // C0000-CFFFF. The V30's bus stops at 0xFFFFF, so banked windows like
+     // this are the only way the guest ever reaches SDRAM past its megabyte
+     // -- this board's pool is 0x800000-0xFFFFFF, 8 MB of word space. An
+     // empty entry leaves the window to the map's hole.
+     input   logic   [10:0]  ems98_map[0:3],
      // BIOS
      input  logic    [1:0]  bios_protect_flag,
     // Font bank: while set, guest addresses are redirected above the machine's
@@ -98,7 +104,9 @@ module RAM (
 
     state_t         state;
     state_t         next_state;
-    logic   [22:0]  latch_address;
+    // 24 bits of word address now: the NEC EMS's pool at 0x800000-0xFFFFFF
+    // needs bit 23, which the old 23-bit latch could not carry.
+    logic   [23:0]  latch_address;
     logic   [7:0]   latch_data;
     logic   [7:0]   latch_data_hi;
     logic           write_command;
@@ -126,11 +134,11 @@ module RAM (
     logic           wc_pend;
     logic           accept_live_wr;
     logic           accept_live_rd;
-    logic   [22:0]  pend_address;
+    logic   [23:0]  pend_address;
     logic   [7:0]   pend_data;
     logic   [7:0]   pend_data_hi;
     logic           pend_word;
-    logic   [22:0]  accept_address;
+    logic   [23:0]  accept_address;
     logic   [7:0]   accept_data;
     logic   [7:0]   accept_data_hi;
     logic           accept_word;
@@ -157,8 +165,18 @@ module RAM (
     // The predicate itself lives in pc98_sdram_map.svh, because v30_cpu_bridge
     // needs the same answer one step earlier -- see that file.
 `include "pc98_sdram_map.svh"
+
+    // The EMS windows sit in C0000-DFFFF, which the flat map leaves open on
+    // purpose -- so a claimed window has to select the SDRAM by itself. This
+    // OR was missing for the Lo-tech board: ems_b* remapped the latch but
+    // never made the select, which is why enabling it only ever read the
+    // hole's 0xFF. ems98_win is the same deal for the NEC board's frame.
+    wire ems98_win = (address[19:16] == 4'hC)
+                  && ems98_map[address[15:14]][10];
     assign ram_address_select_n = ~(enable_sdram && (gvram_page1_flag
-                                         || pc98_sdram_hits(address, analog_mode)));
+                                         || pc98_sdram_hits(address, analog_mode)
+                                         || ems_b1 || ems_b2 || ems_b3 || ems_b4
+                                         || ems98_win));
 	 
 
     // The ITF bank. F8000-FFFFF, 32 KB, mapped to the shadow copy at 1F8000
@@ -190,20 +208,25 @@ module RAM (
             // GVRAM page one: 0x600000 upward. The sequencer hands a
             // seventeen-bit plane-and-offset; the guest's own map, every EMS
             // window, and the font bank all stay out of the way.
-            latch_address   = 25'h600000 + {8'h00, address[16:0]};
+            latch_address   = 24'h600000 + {7'h00, address[16:0]};
         else if (ems_b1)
-            latch_address   = {1'b0, 1'b1, map_ems[0], address[13:0]};
+            latch_address   = {2'b00, 1'b1, map_ems[0], address[13:0]};
         else if (ems_b2)
-            latch_address   = {1'b0, 1'b1, map_ems[1], address[13:0]};
+            latch_address   = {2'b00, 1'b1, map_ems[1], address[13:0]};
         else if (ems_b3)
-            latch_address   = {1'b0, 1'b1, map_ems[2], address[13:0]};
+            latch_address   = {2'b00, 1'b1, map_ems[2], address[13:0]};
         else if (ems_b4)
-            latch_address   = {1'b0, 1'b1, map_ems[3], address[13:0]};
+            latch_address   = {2'b00, 1'b1, map_ems[3], address[13:0]};
+        else if (ems98_win)
+            // The NEC board's window claims C0000-CFFFF; its map entry is
+            // the page's top ten word bits, so the low fourteen come from
+            // the guest.
+            latch_address   = {ems98_map[address[15:14]][9:0], address[13:0]};
         else if (font_bank_flag)
             // 0x400000 upward: past EMS, which owns bit 21.
-            latch_address   = {1'b1, 2'b00, address};
+            latch_address   = {1'b0, 1'b1, 2'b00, address};
         else
-            latch_address   = {2'b00, bios_shadow_select, address};
+            latch_address   = {3'b000, bios_shadow_select, address};
     end
 
     // Data
@@ -442,11 +465,11 @@ module RAM (
             wc_pend           <= 1'b0;
             accept_live_wr    <= 1'b0;
             accept_live_rd    <= 1'b0;
-            pend_address      <= 23'd0;
+            pend_address      <= 24'd0;
             pend_data         <= 8'd0;
             pend_data_hi      <= 8'd0;
             pend_word         <= 1'b0;
-            accept_address    <= 23'd0;
+            accept_address    <= 24'd0;
             accept_data       <= 8'd0;
             accept_data_hi    <= 8'd0;
             accept_word       <= 1'b0;
@@ -514,7 +537,7 @@ module RAM (
                 // fire a live strobe here: with wc_pend set the accepted
                 // write in RAM_WRITE_1 uses the parked operands, and a live
                 // request out of IDLE would run one slot ahead of it.
-                access_address  = {6'h00, latch_address};
+                access_address  = {1'b0, latch_address};
                 access_num      = access_words;
                 access_data_in  = {8'h00, latch_data};
                 access_data_in_hi = {8'h00, latch_data_hi};
@@ -524,7 +547,7 @@ module RAM (
                 sdram_udqm      = 1'b0;
             end
             RAM_WRITE_1: begin
-                access_address  = {6'h00, accept_address};
+                access_address  = {1'b0, accept_address};
                 access_num      = accept_word ? 10'h002 : 10'h001;
                 access_data_in  = {8'h00, accept_data};
                 access_data_in_hi = {8'h00, accept_data_hi};
@@ -534,7 +557,7 @@ module RAM (
                 sdram_udqm      = 1'b0;
             end
             RAM_WRITE_2: begin
-                access_address  = {6'h00, accept_address};
+                access_address  = {1'b0, accept_address};
                 access_num      = accept_word ? 10'h002 : 10'h001;
                 access_data_in  = {8'h00, accept_data};
                 access_data_in_hi = {8'h00, accept_data_hi};
@@ -544,7 +567,7 @@ module RAM (
                 sdram_udqm      = 1'b0;
             end
             RAM_READ_1: begin
-                access_address  = {6'h00, latch_address};
+                access_address  = {1'b0, latch_address};
                 access_num      = access_words;
                 access_data_in  = 16'h0000;
                 access_data_in_hi = 16'h0000;
@@ -554,7 +577,7 @@ module RAM (
                 sdram_udqm      = 1'b0;
             end
             RAM_READ_2: begin
-                access_address  = {6'h00, latch_address};
+                access_address  = {1'b0, latch_address};
                 access_num      = access_words;
                 access_data_in  = 16'h0000;
                 access_data_in_hi = 16'h0000;

@@ -423,6 +423,7 @@ module tb_pc98_boot;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
     logic [6:0] ems_map [0:3] = '{7'd0, 7'd0, 7'd0, 7'd0};
+    logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
 
     RAM u_ram (
         .clock(clk_chipset), .reset(reset),
@@ -444,6 +445,7 @@ module tb_pc98_boot;
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
         .map_ems(ems_map), .ems_b1(1'b0), .ems_b2(1'b0), .ems_b3(1'b0),
         .ems_b4(1'b0),
+        .ems98_map(ems98_unused),
         // The ITF window is the SHADOW, the way RAM.sv does it on hardware:
         // F8000-FFFFF redirected to 1F8000 while the flag is set. itf_bank is
         // this bench's copy of core_top's, so the images are loaded once and

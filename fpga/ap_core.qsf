@@ -774,6 +774,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gvram_seq.sv"
 # sequencer but never added here, so every build after it failed to elaborate.
 # WIP: tb_pc98_egc still fails one case (blit, plane E).
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_egc.sv"
+# The NEC-style EMS board's bank registers at 0x08E1-0x08E9: the V30's only
+# route past its 20-bit bus. RAM.sv holds the window remap half.
+set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_ems98.sv"
 # The PC-9801-55 SCSI board's register window at 0x0CC0-0x0CC7.
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_scsi.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_scsi_rom.sv"
