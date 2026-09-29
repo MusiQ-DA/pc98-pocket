@@ -701,6 +701,13 @@ jobs:
           # a db from a different-parameter branch was restored). A clean
           # compile with the db dropped is slower but always sound, so that
           # case gets one self-healing attempt instead of a dead run.
+          #
+          # Third failure class: a restored db that doesn't crash but pins
+          # partitions badly, inflating the LAB count past the device
+          # (Error 170012 "requires N LABs" at 1850-1880 against a design
+          # that fits at ~1800 clean -- seen 2026-09-29 on the a20d548 and
+          # 0baffb0 builds). One drop-the-db attempt distinguishes that
+          # from a genuinely unfittable design.
           for attempt in 1 2 3; do
             if quartus_sh.exe --flow compile ap_core 2>&1 \
                  | tee "compile_$attempt.log" \
@@ -713,7 +720,7 @@ jobs:
             if grep -qE 'Internal Error|Fatal Error' "compile_$attempt.log"; then
               echo "::warning::quartus internal error on attempt $attempt; retrying"
             elif [ "$attempt" = 1 ] \
-                 && grep -qE 'Error \(15336\)|Partition Merge was unsuccessful' \
+                 && grep -qE 'Error \(15336\)|Partition Merge was unsuccessful|Error \(170012\)' \
                       "compile_$attempt.log"; then
               echo "::warning::stale incremental db suspected; dropping db/incremental_db and rebuilding clean"
               rm -rf db incremental_db output_files
