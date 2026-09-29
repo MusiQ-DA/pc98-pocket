@@ -42,6 +42,13 @@ jobs:
         # silently-dead TVRAM later, this is the gate.
         run: ./scripts/lint_core.sh
 
+      - name: Option ROMs — XROM and SCSI windows decode on the real Chipset
+        # Both benches drive guest reads at the Chipset's memory pins and
+        # check the low AND high data lanes, so they elaborate the whole
+        # core: the signature's odd byte rides the high lane, which is the
+        # failure mode the POST scan would hit first.
+        run: ./scripts/sim_roms.sh
+
       - name: SDRAM controller — integrity and single-port bandwidth
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_sdram_mp \
@@ -61,7 +68,7 @@ jobs:
             -o tbl --Mdir obj_load
           ./obj_load/tbl | tee load.log
           grep -q "RESULT: PASS" load.log
-      - name: SDRAM controller — sdram_single shim handshake
+      - name: SDRAM controller — shim handshake
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_sdram_shim \
             -Isim -Ifpga/core \
@@ -72,51 +79,39 @@ jobs:
           ./obj_shim/tbs | tee shim.log
           grep -q "RESULT: PASS" shim.log
 
-      - name: RAM.sv integration — sdram_single reference then sdram_mp
+      - name: RAM.sv integration — sdram_mp
         run: |
           S=fpga/core
-          for mode in ref mp; do
-            DEF=""; [ "$mode" = "mp" ] && DEF="+define+SDRAM_USE_MP"
-            verilator --binary --timing -Wno-fatal --top-module tb_ram_ab $DEF \
-              -Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/sdram_single/HDL \
-              sim/tb_ram_ab.sv sim/sdram_model.sv \
-              $S/chipset/HDL/RAM.sv $S/chipset/HDL/sdram_single/HDL/sdram_single.sv \
-              $S/sdram_shim.sv $S/sdram_mp.sv \
-              -o r --Mdir obj_$mode
-            ./obj_$mode/r | tee ram_$mode.log
-            grep -q "RESULT: PASS" ram_$mode.log
-          done
+          verilator --binary --timing -Wno-fatal --top-module tb_ram_ab \
+            -Isim -I$S -I$S/chipset/HDL \
+            sim/tb_ram_ab.sv sim/sdram_model.sv \
+            $S/chipset/HDL/RAM.sv $S/sdram_shim.sv $S/sdram_mp.sv \
+            -o r --Mdir obj_ram_ab
+          ./obj_ram_ab/r | tee ram_ab.log
+          grep -q "RESULT: PASS" ram_ab.log
 
       - name: RAM.sv DMA-strobe regression — held writes, phase swept
         run: |
           S=fpga/core
-          for mode in ref mp; do
-            DEF=""; [ "$mode" = "mp" ] && DEF="+define+SDRAM_USE_MP"
-            verilator --binary --timing -Wno-fatal --top-module tb_ram_dma_wr $DEF \
-              -Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/sdram_single/HDL \
-              sim/tb_ram_dma_wr.sv sim/sdram_model.sv \
-              $S/chipset/HDL/RAM.sv $S/chipset/HDL/sdram_single/HDL/sdram_single.sv \
-              $S/sdram_shim.sv $S/sdram_mp.sv \
-              -o r --Mdir obj_dma_$mode
-            ./obj_dma_$mode/r | tee dma_$mode.log
-            grep -q "=== PASS ===" dma_$mode.log
-          done
+          verilator --binary --timing -Wno-fatal --top-module tb_ram_dma_wr \
+            -Isim -I$S -I$S/chipset/HDL \
+            sim/tb_ram_dma_wr.sv sim/sdram_model.sv \
+            $S/chipset/HDL/RAM.sv $S/sdram_shim.sv $S/sdram_mp.sv \
+            -o r --Mdir obj_dma
+          ./obj_dma/r | tee dma.log
+          grep -q "=== PASS ===" dma.log
 
       - name: NEC-style EMS board — 08E1-08E9 windows bank into SDRAM
         run: |
           S=fpga/core
-          for mode in ref mp; do
-            DEF=""; [ "$mode" = "mp" ] && DEF="+define+SDRAM_USE_MP"
-            verilator --binary --timing -Wno-fatal --top-module tb_pc98_ems98 $DEF \
-              -Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/sdram_single/HDL \
-              sim/tb_pc98_ems98.sv sim/sdram_model.sv \
-              $S/chipset/HDL/RAM.sv $S/pc98_ems98.sv \
-              $S/chipset/HDL/sdram_single/HDL/sdram_single.sv \
-              $S/sdram_shim.sv $S/sdram_mp.sv \
-              -o r --Mdir obj_ems_$mode
-            ./obj_ems_$mode/r | tee ems_$mode.log
-            grep -q "RESULT: PASS" ems_$mode.log
-          done
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_ems98 \
+            -Isim -I$S -I$S/chipset/HDL \
+            sim/tb_pc98_ems98.sv sim/sdram_model.sv \
+            $S/chipset/HDL/RAM.sv $S/pc98_ems98.sv \
+            $S/sdram_shim.sv $S/sdram_mp.sv \
+            -o e --Mdir obj_ems
+          ./obj_ems/e | tee ems.log
+          grep -q "RESULT: PASS" ems.log
 
       - name: RTC rollover equivalence — pipelined vs nested cascade
         run: |
@@ -391,18 +386,13 @@ jobs:
         run: |
           S=fpga/core
           H=$S/chipset/HDL
-          for mode in ref mp mp_ref; do
-            DEF="+define+SDRAM_USE_MP"
-            [ "$mode" = ref ] && DEF=""
-            [ "$mode" = mp_ref ] && DEF="+define+SDRAM_USE_MP+SDRAM_MP_REF"
-            verilator --binary --timing -Wno-fatal --top-module tb_cpu_timing $DEF \
-              -Isim -I$S -I$H -I$H/sdram_single/HDL \
-              sim/tb_cpu_timing.sv sim/sdram_board_model.sv sim/sdram_model.sv \
-              $H/RAM.sv $H/ce_generator.sv $H/sdram_single/HDL/sdram_single.sv $S/sdram_shim.sv $S/sdram_mp.sv \
-              -o c --Mdir obj_ct_$mode
-            ./obj_ct_$mode/c | tee ct_$mode.log
-            grep -q "RESULT: PASS" ct_$mode.log
-          done
+          verilator --binary --timing -Wno-fatal --top-module tb_cpu_timing \
+            -Isim -I$S -I$H \
+            sim/tb_cpu_timing.sv sim/sdram_board_model.sv sim/sdram_model.sv \
+            $H/RAM.sv $H/ce_generator.sv $S/sdram_shim.sv $S/sdram_mp.sv \
+            -o c --Mdir obj_ct
+          ./obj_ct/c | tee ct.log
+          grep -q "RESULT: PASS" ct.log
 
       - name: the V30 on the real memory path, at every CE index
         run: |
@@ -411,7 +401,7 @@ jobs:
           V=$S/v30
           mkdir -p hdl/rtl/ucore && cp $V/ucrom.hex $V/ucdecode.hex hdl/rtl/ucore/
           verilator --binary --timing -Wno-fatal --top-module tb_v30_mem \
-            +define+V30_BACKDOOR+SDRAM_USE_MP \
+            +define+V30_BACKDOOR \
             -O2 -Isim -I$S -I$V -I$H -I$H/i8288/HDL \
             sim/tb_v30_mem.sv \
             $V/v30u_ss_pkg.sv $V/v30_core.sv $V/v30u_biu.sv $V/v30u_eu.sv \
@@ -532,17 +522,13 @@ jobs:
       - name: RAM.sv integration at board timing (antiphase device clock)
         run: |
           S=fpga/core
-          for mode in ref mp; do
-            DEF=""; [ "$mode" = "mp" ] && DEF="+define+SDRAM_USE_MP"
-            verilator --binary --timing -Wno-fatal --top-module tb_ram_ab_ph $DEF \
-              -Isim -I$S -I$S/chipset/HDL -I$S/chipset/HDL/sdram_single/HDL \
-              sim/tb_ram_ab_ph.sv sim/sdram_model.sv sim/sdram_board_model.sv \
-              $S/chipset/HDL/RAM.sv $S/chipset/HDL/sdram_single/HDL/sdram_single.sv \
-              $S/sdram_shim.sv $S/sdram_mp.sv \
-              -o p --Mdir obj_ph_$mode
-            ./obj_ph_$mode/p | tee ram_ph_$mode.log
-            grep -q "RESULT: PASS" ram_ph_$mode.log
-          done
+          verilator --binary --timing -Wno-fatal --top-module tb_ram_ab_ph \
+            -Isim -I$S -I$S/chipset/HDL \
+            sim/tb_ram_ab_ph.sv sim/sdram_model.sv sim/sdram_board_model.sv \
+            $S/chipset/HDL/RAM.sv $S/sdram_shim.sv $S/sdram_mp.sv \
+            -o p --Mdir obj_ph
+          ./obj_ph/p | tee ram_ph.log
+          grep -q "RESULT: PASS" ram_ph.log
 
   firmware:
     # firmware.vh is committed and the Quartus build $readmemh's it, so nothing

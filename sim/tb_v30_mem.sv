@@ -413,8 +413,8 @@ module tb_v30_mem;
     always_ff @(posedge clk) begin
         if (ram_at >= 0 && ram_run != 0)
             $display("cyc=%0d %0t  cmd=%s rvalid=%b rdata=%04x dq_in=%04x dout=%02x",
-                     cyc, $time, cmd_name(), u_ram.u_sdram_single.p_rvalid,
-                     u_ram.u_sdram_single.p_rdata, s_dq_in, ram_dout);
+                     cyc, $time, cmd_name(), u_ram.u_sdram.p_rvalid,
+                     u_ram.u_sdram.p_rdata, s_dq_in, ram_dout);
     end
 
     // How many cycles actually ran as ONE word. Without this the word path

@@ -195,11 +195,7 @@ module tb_bios_memtest;
     endtask
 
     initial begin
-`ifdef SDRAM_USE_MP
         $display("=== BIOS base-64K memory test through sdram_mp ===");
-`else
-        $display("=== BIOS base-64K memory test through sdram_single (reference) ===");
-`endif
         $display("    rep stosw / lodsw, %0d words, back-to-back bus cycles", WORDS);
         repeat (8) @(posedge clock);
         reset = 0;

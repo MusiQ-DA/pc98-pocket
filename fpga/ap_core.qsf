@@ -845,7 +845,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_eu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_ucrom.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/v30_cpu_bridge.sv
 set_global_assignment -name SEARCH_PATH core/v30
-set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/sdram_single/HDL/sdram_single.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_mp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_tvram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_kbd8251.sv
@@ -908,10 +907,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/chipset/HDL/Bus_Arbiter.sv"
 # placement from drifting between builds -- the build-to-build variability is
 # the actual disease here, not any single build's number.
 #
-# This works for BOTH arms of the hardware A/B, which matters because the
-# sdram_single reference has to stay valid: packing requires the flop to be fed only
-# by the pin, and both `p_rdata <= sdram_dq_in` (sdram_mp) and
-# `data_out <= sdram_dq_in` (sdram_single) qualify.
+# Packing requires the flop to be fed only by the pin, which
+# `p_rdata <= sdram_dq_in` (sdram_mp) satisfies.
 set_instance_assignment -name FAST_INPUT_REGISTER ON -to dram_dq[*]
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_dq[*]
 set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to dram_dq[*]

@@ -1,16 +1,6 @@
 //
-// tb_ram_ab — drives the real RAM.sv and checks a byte round trip.
-//
-// Built after the hardware A/B failed: the upstream base reached BIOS through
-// sdram_single but not through sdram_shim, so something in the integration
-// differs in a way the controller-level testbenches could not see. This runs
-// the actual RAM.sv so the two controllers can be compared directly.
-//
-// Select the controller with +define+SDRAM_USE_MP (the same macro config.tcl
-// sets for the FPGA build).
-//
-// The test deliberately runs long enough to collide with refreshes, since
-// refresh handling is the most visible behavioural difference between the two.
+// tb_ram_ab — drives the real RAM.sv and checks a byte round trip,
+// refresh collisions and the BIOS loader's cadence included.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -62,13 +52,9 @@ module tb_ram_ab;
 
     // sdram_mp samples DQ on the controller negedge, mid-way through the part's
     // real one-period window, so it needs PHYSICAL_DQ's honest window slot.
-    // sdram_single samples at a posedge that the legacy forgiving window was
-    // tuned for, so the reference build keeps the wide window.
     sdram_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
                   .T_RAS(2), .T_RC(3), .T_REF(335)
-`ifdef SDRAM_USE_MP
                   ,.PHYSICAL_DQ(1'b1)
-`endif
                   ) sdr (
         .clk(clock), .a(s_a), .ba(s_ba), .cke(s_cke),
         .ras_n(s_ras), .cas_n(s_cas), .we_n(s_we), .dqm({s_udqm, s_ldqm}),
@@ -142,9 +128,8 @@ module tb_ram_ab;
     // The BIOS loader's cadence, copied from core_top's bios_load_state 02-04:
     // hold the write strobe until ram_rw_complete, then a five-clock settle
     // before the next byte. Not a fixed short pulse -- an unconditional
-    // back-to-back burst makes the sdram_single reference violate tRP, and sdram_single
-    // boots the real board, so that stimulus would be wrong rather than
-    // revealing.
+    // back-to-back burst would violate tRP against the part model, so that
+    // stimulus would be wrong rather than revealing.
     task automatic bus_write_loader(input int addr, input logic [7:0] d);
         int guard;
         int t0;
@@ -175,11 +160,7 @@ module tb_ram_ab;
     always @(posedge clock) if (ld_timing) ld_clocks++;
 
     initial begin
-`ifdef SDRAM_USE_MP
         $display("=== RAM.sv + sdram_shim (sdram_mp) ===");
-`else
-        $display("=== RAM.sv + sdram_single (reference) ===");
-`endif
         repeat (8) @(posedge clock);
         reset = 0;
 
@@ -243,20 +224,12 @@ module tb_ram_ab;
         // refresh collision would leave the image wrong in memory before the
         // guest ever reads it.
         //
-        // sdram_mp only. At this cadence -- which is core_top's, not something
-        // invented for the bench -- sdram_single racks up tRP violations against the
-        // model (41 over 2048 writes) while its DATA still comes back correct.
-        // sdram_single boots the real board, so that is either a part more forgiving
-        // than the model's T_RP=2 or a corner the reference has always cut. It
-        // is not a finding about sdram_mp and must not gate this bench.
-`ifdef SDRAM_USE_MP
         ld_timing = 1;
         for (int i = 0; i < 2048; i++)
             bus_write_loader(32'hFC000 + i, pat(i + 33));
         ld_timing = 0;
-        // The number this whole change exists to move. sdram_single, measured the
-        // same way before any of it, costs 8.08 clocks/byte; sdram_mp cost
-        // 19.11, and APF's delivery rate allows about 10.9.
+        // The number this whole change exists to move. APF's delivery rate
+        // allows about 10.9 clocks/byte.
         $display("  loader cost: %0d clocks for %0d bytes = %0d.%02d clocks/byte (budget 10.9)",
                  ld_clocks, ld_bytes, ld_clocks / ld_bytes,
                  ((ld_clocks * 100) / ld_bytes) % 100);
@@ -272,9 +245,7 @@ module tb_ram_ab;
             end
         end
         $display("  loader cadence: %0d errors", load_errors);
-`else
-        $display("  loader cadence: skipped (reference cuts tRP at this rate)");
-`endif
+
         errors += bios_errors + load_errors;
 
         $display("\n=== summary ===");

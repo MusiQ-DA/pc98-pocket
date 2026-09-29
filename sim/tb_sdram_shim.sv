@@ -1,5 +1,5 @@
 //
-// tb_sdram_shim — drives sdram_shim the way RAM.sv drives sdram_single.
+// tb_sdram_shim — drives sdram_shim the way RAM.sv drives it.
 //
 // RAM.sv holds write_request/read_request high and edges its state machine on
 // the flag rising and falling, one word per access. This checks that the shim
@@ -32,13 +32,20 @@ module tb_sdram_shim;
         .sdram_clock(clk), .sdram_reset(rst),
         .address(address), .access_num(access_num),
         .data_in(data_in), .data_out(data_out),
+        .data_in_hi(16'h0), .data_out_hi(),
         .write_request(write_request), .read_request(read_request),
         .enable_refresh(1'b1),
         .write_flag(write_flag), .read_flag(read_flag),
         .refresh_mode(refresh_mode), .idle(idle),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
-        .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io));
+        .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
+        .b_req(1'b0), .b_addr(24'd0), .b_len(4'd0),
+        .b_ack(), .b_rvalid(), .b_rdata(), .b_done(),
+        .c_req(1'b0), .c_addr(24'd0), .c_len(4'd0),
+        .c_ack(), .c_rvalid(), .c_rdata(), .c_done(),
+        .d_req(1'b0), .d_addr(24'd0), .d_len(4'd0),
+        .d_ack(), .d_rvalid(), .d_rdata(), .d_done());
 
     sdram_model #(.T_RCD(2), .T_RP(2), .T_WR(2), .T_RFC(4),
                   .PHYSICAL_DQ(1'b1)) sdr (

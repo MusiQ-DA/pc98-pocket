@@ -30,7 +30,7 @@ S=fpga/core
 K=$S/chipset/HDL
 V=$S/v30
 
-DEF="+define+V30_BACKDOOR+SDRAM_USE_MP"
+DEF="+define+V30_BACKDOOR"
 [ "$WORD" = 1 ] && DEF="$DEF+PC98_WORD_MEM"
 
 OUT="${TMPDIR:-/tmp}/v30mem"

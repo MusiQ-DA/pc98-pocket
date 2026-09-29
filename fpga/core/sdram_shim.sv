@@ -1,22 +1,13 @@
 //
-// sdram_shim — sdram_single-compatible wrapper around sdram_mp.
+// sdram_shim — wraps sdram_mp in the request/flag handshake RAM.sv speaks.
 //
-// Exists to get sdram_mp onto real hardware underneath a system whose correct
-// behaviour is already known. Our simulation coverage is good (0 protocol
-// violations, verified read-back, even with the board's antiphase device
-// clock modelled) but both testB2 builds failed on hardware while every
-// simulation passed, so the gap is being closed by bisection on real hardware.
-//
-// The port list is sdram_single's, so this is a drop-in replacement in RAM.sv:
-// select it with `SDRAM_USE_MP` (see config.tcl).
-//
-// sdram_single's callers use a level-request / pulse-flag protocol for one word at a
-// time, which is a subset of what sdram_mp does. The mapping is:
+// RAM.sv uses a level-request / pulse-flag protocol for one word at a time,
+// which is a subset of what sdram_mp does. The mapping is:
 //
 //   write_request/read_request  ->  p_req + p_we, one word (p_len = 0)
 //   write_flag / read_flag      ->  held while the transaction is in flight
 //   idle                        ->  "a command can be accepted now", low
-//                                   during refresh, like sdram_single's own idle
+//                                   during refresh
 //   data_out                    ->  latched from p_rdata on p_rvalid
 //
 // `enable_refresh` is ignored: sdram_mp refreshes on its own interval counter
@@ -25,15 +16,7 @@
 // refresh.
 //
 // Clocking: this runs the controller at whatever `sdram_clock` the chipset
-// supplies (clk_chipset, 42.95 MHz) rather than at clk_core. Raising the clock
-// is a separate change with its own timing closure; keeping it here means the
-// hardware A/B has exactly one variable, the controller itself.
-//
-// Bisection rung 1 (`SDRAM_MP_REF`, 2026-09-07): define it and the far end
-// becomes the STOCK sdram_single translated onto sdram_mp's request interface,
-// with this file's glue otherwise unchanged. sdram_single boots the board, so:
-//   boots   -> the failure is inside sdram_mp
-//   fails   -> the failure is in this glue / the RAM.sv-facing handshake
+// supplies (clk_chipset, 42.95 MHz) rather than at clk_core.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -62,7 +45,7 @@ module sdram_shim #(
     // pin relationship between the part launching data and the FPGA capturing
     // it, and CL changes when the data comes out, not how it is caught.
     parameter int CAS_LATENCY      = 2,
-    parameter int INIT_NOP         = 10000,  // 233 us: matches the sdram_single the board boots with
+    parameter int INIT_NOP         = 10000,  // 233 us: the SDRAM's own init wait
     parameter int REFRESH_INT      = 320     // <= 7.8 us at 42.95 MHz
 ) (
     input  wire                               sdram_clock,
@@ -82,12 +65,9 @@ module sdram_shim #(
     // column clock. access_num picks the shape -- 1 or 2, nothing else -- and
     // these two carry the second word in each direction.
     //
-    // Only the sdram_mp far end bursts here. Under SDRAM_MP_REF the port
-    // stays one word per transaction (stock sdram_single holds read_flag as a level
-    // rather than pulsing per beat, so a beat counter would miscount), and
-    // data_out_hi reads back zero -- which is why RAM.sv asks for two words
-    // only when PC98_WORD_MEM is defined, and config.tcl only defines that
-    // alongside SDRAM_USE_MP.
+    // A two-word read lands beat by beat: the first word is the addressed
+    // byte, the second its odd half. RAM.sv only asks for two words when
+    // PC98_WORD_MEM is defined.
     input  wire  [sdram_data_width-1:0]       data_in_hi,
     output logic [sdram_data_width-1:0]       data_out_hi,
     input  wire                               write_request,
@@ -160,7 +140,7 @@ module sdram_shim #(
     localparam int ADDR_BITS = sdram_col_width + sdram_row_width + sdram_bank_width;
     localparam int MASK_BITS = sdram_data_width/8;
 
-    // sdram_single's callers only ever ask for one word, so port A never bursts and
+    // Port A's caller only ever asks for one word at a time, so it never bursts and
     // its address never has to be checked against a column boundary. BURST_MAX
     // is 16 for port B: a glyph is sixteen bytes and RAM.sv stores one byte per
     // word, so that is one transaction instead of sixteen.
@@ -168,12 +148,10 @@ module sdram_shim #(
     localparam int LEN_BITS  = (BURST_MAX > 1) ? $clog2(BURST_MAX) : 1;
     localparam int PORTS     = 4;
 
-    // sdram_mp schedules its own refresh; the REF far end is stock sdram_single
-    // and consumes enable_refresh directly (see its instantiation below).
+    // sdram_mp schedules its own refresh and has no cs pin: the SDRAM's chip
+    // select is permanently asserted.
     wire _unused_refresh = enable_refresh;
-`ifndef SDRAM_MP_REF
-    assign sdram_cs = 1'b0;      // stock sdram_single drives its own cs in the REF build
-`endif
+    assign sdram_cs = 1'b0;
 
     logic        req, we_r, busy;
     logic [ADDR_BITS-1:0] addr_r;
@@ -197,8 +175,8 @@ module sdram_shim #(
     // COMPLETE_RAM_RW -- after p_done; a µPD71071 DMA write drops its strobe
     // at S4 but the FDC's byte stays driven on data_bus_out until the next
     // beat, dozens of clocks past any plausible commit. Sampled live at the
-    // WRITE command instead -- which is what sdram_single got away with by
-    // never queueing behind other ports -- a delayed grant committed whatever
+    // WRITE command instead -- which is what a single-port controller got away
+    // with by never queueing behind other ports -- a delayed grant committed whatever
     // the bus had moved on to, and the sector image landed shifted.
     always_ff @(posedge sdram_clock or posedge sdram_reset) begin
         if (sdram_reset) begin
@@ -217,11 +195,6 @@ module sdram_shim #(
                 wdata_r    <= data_in;
                 wdata_hi_r <= data_in_hi;
             end
-`ifdef SDRAM_MP_REF
-            // Stock sdram_single holds read_flag as a LEVEL, not a per-beat pulse,
-            // so a beat counter would miscount it. No burst on this far end.
-            if (p_rvalid) data_out <= p_rdata;
-`else
             // Read beats arrive in address order, so the first belongs to the
             // addressed byte and the second to the odd half.
             if (p_rvalid) begin
@@ -229,7 +202,6 @@ module sdram_shim #(
                 else               data_out_hi <= p_rdata;
                 rbeat <= ~rbeat;
             end
-`endif
 
             if (!busy) begin
                 if (write_request || read_request) begin
@@ -249,12 +221,12 @@ module sdram_shim #(
         end
     end
 
-    // sdram_single raises the flag for the duration of the access and drops it when
-    // the word has landed; RAM.sv's state machine edges on both transitions.
+    // The flag rises for the duration of the access and drops when the word
+    // has landed; RAM.sv's state machine edges on both transitions.
     assign write_flag   = busy &  we_r;
     assign read_flag    = busy & ~we_r;
-    // sdram_single's idle is (state == IDLE), which is low during refresh. Matching
-    // that matters: RAM.sv latches access_ready from it.
+    // idle means "the controller can take a command now" and is low during
+    // refresh. RAM.sv latches access_ready from it.
     //
     // ...and it matters far more than "matching" suggests. RAM.sv's CPU-facing
     // ready is OPEN LOOP:
@@ -264,8 +236,8 @@ module sdram_shim #(
     // taken in the very cycle the command appears, and then held. Nothing waits
     // for the access to finish. What protects the CPU is only the length of
     // its bus cycle: it asserts MEMR in T2 and latches at the end of T3, one CPU
-    // clock later, which at 4.77 MHz is nine chipset cycles. sdram_single answers in
-    // five, so it fits; sdram_mp answers in ten, so it does not, and the CPU
+    // clock later, which at 4.77 MHz is nine chipset cycles. A controller that
+    // answers in five fits; sdram_mp answers in ten, so it does not, and the CPU
     // latches the PREVIOUS access's byte every single time (tb_cpu_timing:
     // 64/64 wrong on CPU timing, 0/64 when the same reads wait for completion).
     // That is the whole bisection: every testbench passed because every
@@ -298,110 +270,13 @@ module sdram_shim #(
     // exactly one consumer in RAM.sv and this is what it is for.
     assign refresh_mode = stat_refresh | busy;
 
-`ifdef SDRAM_MP_REF
-    // ---------------------------------------------------------------------
-    // Bisection rung 1: stock sdram_single on sdram_mp's interface. Level protocol
-    // translated 1:1; refresh via sdram_single's own force backstop (exactly what
-    // boots the board as testB3).
-    // ---------------------------------------------------------------------
-    logic        kf_idle, kf_write_flag, kf_read_flag, kf_refresh_mode;
-    logic        kf_idle_q;
-    logic        kf_seen_idle;
-    logic [sdram_data_width-1:0] kf_data_out;
-
-    // stat_idle mirrors sdram_single's own idle, qualified by "initialisation has
-    // finished" so requests are not taken during the init sequence.
-    assign stat_idle    = kf_idle & kf_seen_idle;
-    assign stat_refresh = kf_refresh_mode;
-    // mp-interface view of sdram_single: a request is accepted in the cycle it is
-    // seen while idle; the transaction is complete once the FSM parks in IDLE
-    // again; read data is valid exactly while read_flag pulses.
-    assign p_ack     = stat_idle & req;
-    assign p_rvalid  = kf_read_flag;
-    assign p_rdata   = kf_data_out;
-    // p_done must be transaction-scoped: the request latch now claims a
-    // request the cycle it is seen -- possibly while the single is still in a
-    // refresh -- so a bare idle rising edge is not necessarily OUR completion.
-    // It only counts once this request has actually been taken (p_ack).
-    logic ref_started;
-    assign p_done    = ref_started & kf_idle & ~kf_idle_q;
-
-    always_ff @(posedge sdram_clock or posedge sdram_reset) begin
-        if (sdram_reset) begin
-            kf_idle_q    <= 1'b0;
-            kf_seen_idle <= 1'b0;
-            ref_started  <= 1'b0;
-        end else begin
-            kf_idle_q <= kf_idle;
-            if (kf_idle) kf_seen_idle <= 1'b1;
-            if (p_ack)                        ref_started <= 1'b1;
-            else if (kf_idle & ~kf_idle_q)    ref_started <= 1'b0;
-        end
-    end
-
-    sdram_single #(
-        .sdram_col_width    (sdram_col_width),
-        .sdram_row_width    (sdram_row_width),
-        .sdram_bank_width   (sdram_bank_width),
-        .sdram_data_width   (sdram_data_width)
-    ) u_sdram_single (
-        .sdram_clock        (sdram_clock),
-        .sdram_reset        (sdram_reset),
-        .address            (addr_r),
-        .access_num         (sdram_col_width'(1)),
-        .data_in            (wdata_r),
-        .data_out           (kf_data_out),
-        .write_request      (req &  we_r),
-        .read_request       (req & ~we_r),
-        .enable_refresh     (enable_refresh),
-        .write_flag         (kf_write_flag),
-        .read_flag          (kf_read_flag),
-        .refresh_mode       (kf_refresh_mode),
-        .idle               (kf_idle),
-        .sdram_address      (sdram_address),
-        .sdram_cke          (sdram_cke),
-        .sdram_cs           (sdram_cs),
-        .sdram_ras          (sdram_ras),
-        .sdram_cas          (sdram_cas),
-        .sdram_we           (sdram_we),
-        .sdram_ba           (sdram_ba),
-        .sdram_dq_in        (sdram_dq_in),
-        .sdram_dq_out       (sdram_dq_out),
-        .sdram_dq_io        (sdram_dq_io)
-    );
-
-    // The REF far end is single-master by construction: port B has no
-    // meaning against stock sdram_single, so it reads back nothing.
-    assign b_ack    = 1'b0;
-    assign b_done   = 1'b0;
-    assign b_rvalid = 1'b0;
-    assign b_rdata  = '0;
-    assign c_ack    = 1'b0;
-    assign c_done   = 1'b0;
-    assign c_rvalid = 1'b0;
-    assign c_rdata  = '0;
-    assign d_ack    = 1'b0;
-    assign d_done   = 1'b0;
-    assign d_rvalid = 1'b0;
-    assign d_rdata  = '0;
-    wire _unused_b  = &{1'b0, b_req, b_addr, b_len, c_req, c_addr, c_len,
-                        d_req, d_addr, d_len, 1'b0};
-
-    wire _unused_mp_if = &{1'b0, kf_write_flag, 1'b0};
-    // No burst on this far end (see the data_in_hi comment above). len_r and
-    // rbeat still exist -- the request latch is shared -- but nothing reads
-    // them here, and the second word never lands.
-    wire _unused_kf_word = &{1'b0, len_r, rbeat, data_in_hi, 1'b0};
-
-`else
-    // ---------------------------------------------------------------------
-    // Shipping far end: sdram_mp.
+    // Far end: sdram_mp, the four-port controller.
     // ---------------------------------------------------------------------
     logic init_done;
     logic [MASK_BITS-1:0] dqm_unused;
 
-    // Port A is the guest (sdram_single's protocol, one word at a time), port B the
-    // font fetch. Packed so the widths follow the controller's parameters.
+    // Port A is the guest (the request/flag handshake, one word at a time),
+    // port B the font fetch. Packed so the widths follow the controller's parameters.
     wire [PORTS-1:0] mp_req  = {d_req, c_req, b_req, req};
     wire [PORTS-1:0] mp_we   = {1'b0,  1'b0,  1'b0, we_r};
     wire [PORTS-1:0][ADDR_BITS-1:0] mp_addr  = {d_addr, c_addr, b_addr, addr_r};
@@ -483,7 +358,6 @@ module sdram_shim #(
     );
 
     wire _unused_init_done = init_done;
-`endif
 
 endmodule
 

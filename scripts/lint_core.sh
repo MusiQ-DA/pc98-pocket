@@ -49,11 +49,11 @@ verilator --lint-only --timing -Wno-fatal --top-module core_top \
   +define+$DEFINES \
   -Isim -I$S -I$S/chipset/HDL -I$S/v30 \
   -I$S/chipset/HDL/i8288/HDL -I$S/chipset/HDL/i8253/HDL -I$S/chipset/HDL/i8259/HDL \
-  -I$S/chipset/HDL/upd71071/HDL -I$S/chipset/HDL/sdram_single/HDL \
+  -I$S/chipset/HDL/upd71071/HDL \
   -I$S/chipset/HDL/ps2_keyboard/HDL -I$S/common -I$S/audio \
   -I$S/sound/jt12/hdl -I$S/sound/jt12/hdl/adpcm -I$S/sound/jt12/jt49/hdl \
   $(cat "$LIST") \
-  sim/stub_altsyncram.sv sim/stub_vhdl.sv sim/stub_saa1099.sv sim/stub_pll.sv \
+  sim/stub_altsyncram.sv sim/stub_vhdl.sv sim/stub_pll.sv \
   sim/stub_dcfifo.sv sim/stub_sld_virtual_jtag.sv \
   >"$OUT" 2>&1
 

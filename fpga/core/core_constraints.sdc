@@ -99,7 +99,7 @@ set_multicycle_path -hold -end 5 \
 # NOT ported: that core's `set_multicycle_path -from <chip clk> -setup -end 2`.
 # It is correct for ITS controller and WRONG for ours. dram_clk here is
 # clk_chipset inverted, so the part launches read data on our falling edge and
-# sdram_mp/sdram_single both capture it on the very NEXT rising edge -- a genuine
+# the controller captures it on the very NEXT rising edge -- a genuine
 # single-cycle transfer with a half-period (11.64 ns) window. Crediting two
 # periods would hide a real violation, which is the trap this file exists to
 # avoid. If these paths fail, fix the pipelining, do not relax the check.
@@ -124,7 +124,7 @@ set dram_chip_clk "ic|pll|altera_pll_i|general[2].gpll~PLL_OUTPUT_COUNTER|divclk
 #
 # ★ 2026-09-07, CALIBRATED AGAINST THE BOOTING REFERENCE. The sibling core's
 # 5.9 ns was tried first and is too pessimistic here. Proof: run#59 built pure
-# sdram_single -- which boots this board -- against these constraints and it missed
+# the first controller that booted this board -- against these constraints and it missed
 # the 5.9 ns read path by 2.357 ns, essentially the same as sdram_mp's 2.408.
 # A constraint that the known-good configuration cannot meet is not measuring
 # the interface, it is just miscalibrated, and an unreachable goal also makes
@@ -140,7 +140,7 @@ set dram_chip_clk "ic|pll|altera_pll_i|general[2].gpll~PLL_OUTPUT_COUNTER|divclk
 # worse. Do not re-apply the number without understanding that first.
 #
 # Back to 5.9 -- the value the hardware build that finally produced a POST beep
-# (testB7b / run#58) was built with, and the value the sdram_single reference was
+# (testB7b / run#58) was built with, and the value the earlier controller was
 # measured against, so the two stay comparable.
 set_input_delay -clock $dram_chip_clk -reference_pin [get_ports {dram_clk}] \
     -max 5.9 [get_ports {dram_dq[*]}]

@@ -105,11 +105,7 @@ module tb_ext_access;
     bit done;
 
     initial begin
-`ifdef SDRAM_USE_MP
         $display("=== ext-port access through sdram_shim (sdram_mp) ===");
-`else
-        $display("=== ext-port access through sdram_single (reference) ===");
-`endif
         repeat (8) @(posedge clock);
         reset = 0;
         wait (initilized_sdram);

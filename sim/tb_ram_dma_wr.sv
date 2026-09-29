@@ -72,9 +72,7 @@ module tb_ram_dma_wr;
 
     sdram_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
                   .T_RAS(2), .T_RC(3), .T_REF(335)
-`ifdef SDRAM_USE_MP
                   ,.PHYSICAL_DQ(1'b1)
-`endif
                   ) sdr (
         .clk(clock), .a(s_a), .ba(s_ba), .cke(s_cke),
         .ras_n(s_ras), .cas_n(s_cas), .we_n(s_we), .dqm({s_udqm, s_ldqm}),
@@ -198,11 +196,7 @@ module tb_ram_dma_wr;
     int n;
 
     initial begin
-`ifdef SDRAM_USE_MP
         $display("=== DMA fixed-strobe write test (sdram_shim/mp) ===");
-`else
-        $display("=== DMA fixed-strobe write test (sdram_single) ===");
-`endif
         repeat (8) @(posedge clock);
         reset = 0;
         wait (initilized_sdram);

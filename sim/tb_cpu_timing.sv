@@ -210,11 +210,7 @@ module tb_cpu_timing;
     endtask
 
     initial begin
-`ifdef SDRAM_USE_MP
         $display("=== V30 read timing through sdram_mp (CE-paced) ===");
-`else
-        $display("=== V30 read timing through sdram_single (reference, CE-paced) ===");
-`endif
         repeat (8) @(posedge clock);
         reset = 0;
         wait (initilized_sdram);

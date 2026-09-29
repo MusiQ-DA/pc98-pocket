@@ -7,11 +7,8 @@
 // hardware actually presents: dram_clk is pll outclk_2 at +11.64 ns while the
 // controller runs on clk_chipset.
 //
-// Validity condition: the sdram_single reference must still PASS here, because
-// sdram_single boots the real board. If the reference fails, the board model is
-// wrong, not the DUT. The sdram_mp answer is only meaningful after that.
-//
-// Select the controller with +define+SDRAM_USE_MP (same as config.tcl).
+// The part-side timing comes from sdram_board_model -- the board's antiphase
+// device clock included, so a pass here is the honest one.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -115,9 +112,8 @@ module tb_ram_ab_ph;
     // The BIOS loader's cadence, copied from core_top's bios_load_state 02-04:
     // hold the write strobe until ram_rw_complete, then a five-clock settle
     // before the next byte. Not a fixed short pulse -- an unconditional
-    // back-to-back burst makes the sdram_single reference violate tRP, and sdram_single
-    // boots the real board, so that stimulus would be wrong rather than
-    // revealing.
+    // back-to-back burst would violate tRP against the part model, so that
+    // stimulus would be wrong rather than revealing.
     task automatic bus_write_loader(input int addr, input logic [7:0] d);
         int guard;
         address = 20'(addr);
@@ -147,11 +143,7 @@ module tb_ram_ab_ph;
     logic [7:0] got;
 
     initial begin
-`ifdef SDRAM_USE_MP
         $display("=== [board timing] RAM.sv + sdram_shim (sdram_mp) ===");
-`else
-        $display("=== [board timing] RAM.sv + sdram_single (reference) ===");
-`endif
         repeat (8) @(posedge clock);
         reset = 0;
 
@@ -184,8 +176,7 @@ module tb_ram_ab_ph;
         // ---------------------------------------------------------------
         // Bank crossing. The two passes above sit inside ONE 512-word column
         // block each, so with sdram_mp's {row, bank, col} mapping they land
-        // entirely in bank 0 -- which is also the only bank sdram_single's mapping
-        // ever uses. The testbench therefore never exercised sdram_mp's
+        // entirely in bank 0. The testbench therefore never exercised sdram_mp's
         // multi-bank behaviour at all: bank switching, per-bank precharge, and
         // refresh while several banks have seen traffic.
         //
@@ -247,13 +238,6 @@ module tb_ram_ab_ph;
         // refresh collision would leave the image wrong in memory before the
         // guest ever reads it.
         //
-        // sdram_mp only. At this cadence -- which is core_top's, not something
-        // invented for the bench -- sdram_single racks up tRP violations against the
-        // model (41 over 2048 writes) while its DATA still comes back correct.
-        // sdram_single boots the real board, so that is either a part more forgiving
-        // than the model's T_RP=2 or a corner the reference has always cut. It
-        // is not a finding about sdram_mp and must not gate this bench.
-`ifdef SDRAM_USE_MP
         for (int i = 0; i < 2048; i++)
             bus_write_loader(32'hFC000 + i, pat(i + 33));
         for (int i = 0; i < 2048; i++) begin
@@ -268,9 +252,7 @@ module tb_ram_ab_ph;
             end
         end
         $display("  loader cadence: %0d errors", load_errors);
-`else
-        $display("  loader cadence: skipped (reference cuts tRP at this rate)");
-`endif
+
         errors += bios_errors + load_errors;
 
         $display("\n=== summary ===");

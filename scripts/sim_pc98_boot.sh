@@ -115,7 +115,7 @@ CPU_FILES="/work/$V/v30u_ss_pkg.sv \
   /work/$V/v30_core.sv /work/$V/v30u_biu.sv /work/$V/v30u_eu.sv \
   /work/$V/v30u_ucrom.sv /work/$S/v30_cpu_bridge.sv"
 CPU_DEF="+define+V30_BACKDOOR"
-[ "$REALMEM" = 1 ] && CPU_DEF="$CPU_DEF+REALMEM+SDRAM_USE_MP"
+[ "$REALMEM" = 1 ] && CPU_DEF="$CPU_DEF+REALMEM"
 [ "$WORD" = 1 ] && CPU_DEF="$CPU_DEF+PC98_WORD_MEM"
 CPU_INC="-I/work/$V"
 

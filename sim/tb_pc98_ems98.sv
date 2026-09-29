@@ -73,9 +73,7 @@ module tb_pc98_ems98;
 
     sdram_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
                   .T_RAS(2), .T_RC(3), .T_REF(335)
-`ifdef SDRAM_USE_MP
                   ,.PHYSICAL_DQ(1'b1)
-`endif
                   ) sdr (
         .clk(clock), .a(s_a), .ba(s_ba), .cke(s_cke),
         .ras_n(s_ras), .cas_n(s_cas), .we_n(s_we), .dqm({s_udqm, s_ldqm}),
@@ -143,16 +141,11 @@ module tb_pc98_ems98;
 
     // The model keys its store by the flat word reconstructed from the PINS
     // -- {row, bank, col}. sdram_mp's address bus is already {row,bank,col},
-    // so the pool's word index IS the key. sdram_single puts the bank on top
-    // ({bank,row,col}), so under it the same pool word keys differently.
-    // Either way the window readback is the functional proof; this helper
-    // only asks "which key does this controller produce for pool word w".
+    // so the pool's word index IS the key. The window readback is the
+    // functional proof; this helper only asks which key the controller
+    // produced for pool word w.
     function automatic int mkey(input int w);
-`ifdef SDRAM_USE_MP
         mkey = w;
-`else
-        mkey = ((w & 32'h3FFE00) << 2) | (((w >> 22) & 3) << 9) | (w & 32'h1FF);
-`endif
     endfunction
 
     task automatic check_store(input string what, input int word,

@@ -252,10 +252,10 @@ module RAM (
     logic   [15:0]  access_data_out;
     logic   [15:0]  access_data_out_hi;
 
-    // A word access is two words only where the far end can burst; config.tcl
-    // defines PC98_WORD_MEM alongside SDRAM_USE_MP and nowhere else, and the
-    // shim's REF far end cannot count read beats. Undefined, this file is
-    // byte-at-a-time exactly as before and word_access is dead.
+    // A word access is two words where the far end can burst; config.tcl
+    // defines PC98_WORD_MEM, and a guest word becomes one two-word SDRAM
+    // transaction. Undefined, this file is byte-at-a-time and word_access
+    // is dead.
 `ifdef PC98_WORD_MEM
     wire            word_now = word_access;
 `else
@@ -270,11 +270,10 @@ module RAM (
     logic           idle;
     logic           refresh_mode;
 
-`ifdef SDRAM_USE_MP
-    // sdram_shim presents sdram_single's port list on top of sdram_mp, so the
-    // new controller drops in under the unmodified address/data plumbing.
+    // sdram_shim wraps sdram_mp, the multi-port controller: port A is this
+    // guest path, B the font fetch, C the CG window, D the graphics display.
     // See docs/P0_SDRAM_DESIGN.md.
-    sdram_shim u_sdram_single (
+    sdram_shim u_sdram (
         .sdram_clock        (clock),
         .sdram_reset        (reset),
         .address            (access_address),
@@ -322,47 +321,6 @@ module RAM (
         .d_rdata            (gv_rd_data),
         .d_done             (gv_rd_done)
     );
-`else
-    sdram_single u_sdram_single (
-        .sdram_clock        (clock),
-        .sdram_reset        (reset),
-        .address            (access_address),
-        .access_num         (access_num),
-        .data_in            (access_data_in),
-        .data_out           (access_data_out),
-        .write_request      (write_request),
-        .read_request       (read_request),
-        .enable_refresh     (enable_refresh),
-        .write_flag         (write_flag),
-        .read_flag          (read_flag),
-        .idle               (idle),
-        .refresh_mode       (refresh_mode),
-        .sdram_address      (sdram_address),
-        .sdram_cke          (sdram_cke),
-        .sdram_cs           (sdram_cs),
-        .sdram_ras          (sdram_ras),
-        .sdram_cas          (sdram_cas),
-        .sdram_we           (sdram_we),
-        .sdram_ba           (sdram_ba),
-        .sdram_dq_in        (sdram_dq_in),
-        .sdram_dq_out       (sdram_dq_out),
-        .sdram_dq_io        (sdram_dq_io)
-    );
-    // Stock sdram_single has neither a second master nor a burst on this port.
-    assign access_data_out_hi = 16'h0000;
-    assign font_rd_ack   = 1'b0;
-    assign font_rd_valid = 1'b0;
-    assign font_rd_data  = 16'h0000;
-    assign font_rd_done  = 1'b0;
-    assign cg_rd_ack     = 1'b0;
-    assign cg_rd_valid   = 1'b0;
-    assign cg_rd_data    = 16'h0000;
-    assign cg_rd_done    = 1'b0;
-    assign gv_rd_ack     = 1'b0;
-    assign gv_rd_valid   = 1'b0;
-    assign gv_rd_data    = 16'h0000;
-    assign gv_rd_done    = 1'b0;
-`endif
 
 
     //

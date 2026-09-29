@@ -111,31 +111,13 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # PC98_FDC_REAL is gone with the stub it used to select against: the real
 # floppy.v behind pc98_fdc_glue is the only FDC now.
 
-# Route SDRAM through sdram_mp (via sdram_shim) instead of sdram_single.
-# RAM.sv tests this with `ifdef, so setting it to 0 would still select the shim
-# -- COMMENT THE LINE OUT to fall back to the stock controller for a hardware A/B.
-#
-# Bisection status (2026-09-07):
-#   testB2 (sdram_mp)              FAIL  -- splash then black
-#   testB3 (pure sdram_single)          PASS  -- tree + sdram_single path healthy
-#   testB4 (shim glue + sdram_single)   PASS  -- glue exonerated; failure inside sdram_mp
-#   testB5 (sdram_mp, width-cast timer constants + 233 us wait)  FAIL
-#   testB6 (sdram_mp, negedge DQ capture)                        FAIL -- a
-#          regression; the antiphase clock puts mid-window on the POSEDGE
-#   testB7/7b (sdram_mp, posedge restored, dram_* finally constrained)
-#
-#   testB7ref (#59, measurement only): pure sdram_single against the new SDRAM
-#          constraints. ANSWERED the question it was built for -- sdram_single, which
-#          boots this board, reports the SAME read-path violation as sdram_mp
-#          (-2.357 / TNS -17.784 vs -2.408 / TNS -17.914). So the -2.4 ns is a
-#          property of the constraint values, not of sdram_mp, and the read path
-#          is NOT the culprit. See docs/HANDOVER.md 1.8.
-set_global_assignment -name VERILOG_MACRO "SDRAM_USE_MP=1"
+# SDRAM runs through sdram_mp (via sdram_shim): the only controller in the
+# tree -- the single-port reference and the MP_REF bisection far end were
+# retired 2026-09-29 once the machine shipped on mp.
 
 #   One V30 word memory access becomes one bus cycle: RAM.sv keeps one guest
 #   byte per 16-bit SDRAM word, so bytes N and N+1 are consecutive SDRAM words
 #   and the pair is a single burst of two (452ad85 measured the path at
-#   1.5-1.7x). Only meaningful alongside SDRAM_USE_MP -- the shim's port A can
-#   count read beats where stock sdram_single's cannot. The bench half is
-#   sim_pc98_boot.sh --word, which runs the real ITF on this path.
+#   1.5-1.7x). The bench half is sim_pc98_boot.sh --word, which runs the real
+#   ITF on this path.
 set_global_assignment -name VERILOG_MACRO "PC98_WORD_MEM=1"

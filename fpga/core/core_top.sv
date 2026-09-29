@@ -1468,7 +1468,7 @@ module core_top (
     // there is no backpressure to the APF bridge and these 256 entries are the
     // only elasticity in the path. How fast this drains depends on how long
     // RAM.sv takes per byte, which depends on the SDRAM controller: the shim
-    // answers in ten cycles where sdram_single answers in five, so a change of
+    // answers in ten cycles where the old single-port answered in five, so a change of
     // controller changes whether the assumption holds.
     //
     // That matters because run#106 showed the BIOS image arriving incomplete:
