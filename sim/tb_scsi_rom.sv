@@ -1,22 +1,24 @@
 //
-// tb_xrom -- the built-in 3-mode FDD option ROM, on the real Chipset.
+// tb_scsi_rom -- the PC-9801-55 option ROM window at D2000, on the real
+// Chipset.
 //
-// The POST scans D0000-DFFFF in 4KB slots and checks word [seg:9] for
-// AA55h, so the signature's first byte sits at an ODD address -- it
-// answers on the high lane (BHE), while the code bytes the prefetcher
-// reads as words need the low lane at even addresses plus the odd byte
-// on the high lane. This bench drives reads straight at the Chipset's
-// guest-memory interface (cpu_address + memory_read_n_ext) and checks
-// both lanes, in and around the 256-byte ROM window.
+// Same shape as tb_xrom: the POST's signature check reads word [seg:9] and
+// byte 9 sits on the HIGH lane, which this bench drives and samples
+// directly. The window's storage is the 4 KB $readmemh image assembled
+// from fpga/scsi_rom.asm -- signature, all four POST entry points and the
+// 0x18 INT 1Bh dispatch entry -- so the checks pin bytes that have to be
+// there for the ROM scan, the XROM registration and the IPL load to work,
+// plus the boundary: inside D2000-D2FFF the byte comes from the ROM, outside
+// it reads like the empty window it shares the decode region with.
 //
-// It deliberately exercises the boundary: the first slot's tail and the
-// neighbouring slots must still read 0xFF like the empty window they
-// share the decode region with.
+// The low lane arrives through Peripherals' registered data_bus_out; the
+// high lane is the ROM's second read port muxed in Chipset, so this bench
+// is what proves the signature word can reach the CPU at all.
 //
 `default_nettype none
 `timescale 1ns/1ps
 
-module tb_xrom;
+module tb_scsi_rom;
 
     localparam real CLK_MHZ = 42.954545;
     localparam real HALF_NS = 500.0 / CLK_MHZ;
@@ -108,7 +110,7 @@ module tb_xrom;
     task automatic check(input int a, input logic [7:0] lo, input logic [7:0] hi);
         cpu_address = 20'(a);
         memory_read_n_ext = 1'b0;
-        repeat (4) @(posedge clock);
+        repeat (6) @(posedge clock);
         if (data_bus !== lo) begin
             errors++;
             $display("  LO MISMATCH @%05h: got %02h want %02h", a, data_bus, lo);
@@ -122,47 +124,51 @@ module tb_xrom;
     endtask
 
     initial begin
-        $display("=== xrom option-ROM decode ===");
+        $display("=== scsi rom option-ROM decode ===");
         repeat (20) @(posedge clock);
         reset = 0; sdram_reset = 0;
         repeat (20) @(posedge clock);
 
-        // The signature: word [D0009] = AA55h. Byte@9 (odd) must show on
+        // The signature: word [D2009] = AA55h. Byte@9 (odd) must show on
         // the high lane; byte@10 (even) on the low lane.
-        check(20'hD0009, 8'h55, 8'h55);   // odd byte: hi lane carries it
-        check(20'hD000A, 8'hAA, 8'h90);   // even byte: lo=AA, hi=pad byte
-        // The four POST phase entries are jmp stubs at
-        // 0x0C/0x0F/0x12/0x15; the dispatch entry sits at 0x18.
-        check(20'hD000C, 8'hE9, 8'h85);   // word@0x0C = 85 E9 = jmp near init
-        check(20'hD000F, 8'hE9, 8'hE9);   // odd byte: hi lane = the byte itself
-        check(20'hD0012, 8'hE9, 8'h7F);
-        check(20'hD0015, 8'hEB, 8'hEB);   // odd byte: hi lane = the byte itself
-        check(20'hD0018, 8'h56, 8'h57);   // xrom_disk: push si / push di
-        check(20'hD002E, 8'hC7, 8'h06);   // mov word [5F8],fdpara
-        check(20'hD0032, 8'hB1, 8'h00);   //   fdpara immediate = 00B1
-        check(20'hD0050, 8'hCD, 8'h1B);   // int 1Bh re-dispatch
-        // The parameter table inside the image: fdpara at 0xB1 points
-        // all four units at rec144 (0xB9); its N=2 record is the 1.44MB
-        // geometry at 0xC9.
-        check(20'hD0094, 8'h50, 8'h1E);   // init: push ax / push ds
-        check(20'hD00B1, 8'hB9, 8'hB9);   // fdpara[0] = rec144 (odd: hi=lo)
-        check(20'hD00C9, 8'h12, 8'h12);   // N=2: EOT=18 (odd: hi=lo)
-        check(20'hD00CA, 8'h1B, 8'h12);   // GPL=1B, SC=18 for the fmt pair
-        // Tail of the image and the open window around it.
-        check(20'hD00D8, 8'h00, 8'hFF);   // byte 216 = last image byte
-        check(20'hD00D9, 8'hFF, 8'hFF);   // beyond the image -> open slot
-        check(20'hD00FF, 8'hFF, 8'hFF);   // end of the 256B window
-        check(20'hD0100, 8'hFF, 8'h00);   // next page: the empty window
-        check(20'hD1000, 8'hFF, 8'h00);   // the next 4KB scan slot
-        check(20'hC0000, 8'hFF, 8'h00);   // below the window
+        check(20'hD2009, 8'h55, 8'h55);   // odd byte: hi lane carries it
+        check(20'hD200A, 8'hAA, 8'h90);   // even byte: lo=AA, hi=pad byte
+        // The four POST phase entries are at 0x0C/0x0F/0x12/0x15 and the
+        // INT 1Bh dispatch entry at 0x18.
+        check(20'hD200C, 8'hE9, 8'hF8);   // word@0x0C = F8 E9 -> jmp post_init
+        check(20'hD200F, 8'hE9, 8'hE9);   // odd byte: hi lane = the byte itself
+        check(20'hD2012, 8'hE9, 8'h11);   // word@0x12 = 11 E9 -> jmp post_boot
+        check(20'hD2015, 8'hCB, 8'hCB);   // pass-4 entry: retf (odd: hi=lo)
+        check(20'hD2018, 8'h56, 8'h57);   // handler: push si / push di
+        check(20'hD201E, 8'h50, 8'h50);   // the locals pushes
+        // Bytes the dispatch table registration must contain: post_common
+        // at 0x4F9 claims the flag and writes the segment byte to
+        // 0x4B2/0x4BA (the 0x2x and 0xAx devtype slots).
+        check(20'hD24F9, 8'hC6, 8'hC6);   // mov byte [bx],0FFh (odd: hi=lo)
+        check(20'hD2500, 8'hA2, 8'hB2);   // mov [0x04B2],al
+        check(20'hD2504, 8'hBA, 8'h04);   // mov [0x04BA],al
+        // The transfer loop rebuilds CX after issue_xfer -- the mailbox
+        // poll consumes it, and pull_in/pull_skip take their count from it.
+        check(20'hD2222, 8'h8B, 8'h4E);   // mov cx,[bp-14]; shl cx,9
+        check(20'hD2225, 8'hC1, 8'hC1);   //   (odd: hi=lo)
+        // The disk-init and boot paths exist inside the image.
+        check(20'hD246E, 8'hBF, 8'hA0);   // disk_init: mov di,0x05A0
+        check(20'hD25C2, 8'hCB, 8'hFF);   // post_ret's retf, then open pad
+        // Image padding and the window boundary.
+        check(20'hD25C3, 8'hFF, 8'hFF);   // odd byte past the code
+        check(20'hD2FFF, 8'hFF, 8'hFF);   // last byte of the window
+        check(20'hD3000, 8'hFF, 8'h00);   // next 4KB slot: the empty window
+        check(20'hD1FFF, 8'hFF, 8'h00);   // the slot below
+        check(20'hD1000, 8'hFF, 8'h00);   // the FDD xrom's slot is separate
+        check(20'hC0000, 8'hFF, 8'h00);   // below the scan region
         check(20'hDFFFF, 8'hFF, 8'h00);   // top of the scan region
-        // An even byte read (word_access low) still places the odd pair
-        // byte on the high lane, matching the SDRAM lane convention.
+        // A word read at D2008: the signature word reaches the CPU as one
+        // unit -- lo=00 (pad byte), hi=55 (the signature's first half).
         cpu_word_access = 1'b1;
-        check(20'hD0008, 8'h00, 8'h55);   // word@8: lo=00, hi=55 (offset 9)
+        check(20'hD2008, 8'h00, 8'h55);   // word@8: lo=00, hi=55 (offset 9)
         cpu_word_access = 1'b0;
 
-        $display("%s  (errors %0d)", errors ? "FAIL" : "PASS", errors);
+        $display("%s tb_scsi_rom  (errors %0d)", errors ? "FAIL" : "PASS", errors);
         $finish;
     end
 

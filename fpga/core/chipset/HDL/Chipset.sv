@@ -160,6 +160,7 @@ module CHIPSET #(
     logic   [7:0]   internal_data_bus_ext;
     logic   [7:0]   internal_data_bus_chipset;
     logic   [7:0]   internal_data_bus_ram;
+    wire    [7:0]   scsi_rom_hi;
     logic           data_bus_out_from_chipset;
     logic           internal_data_bus_direction;
     logic           no_command_state;

@@ -50,16 +50,17 @@ module pc98_scsi_rom (
     output logic [7:0] q_hi
 );
 
+    (* ramstyle = "M10K" *) logic [7:0] rom [0:4095];
+
 `ifdef SYNTHESIS
-    // Quartus resolves $readmemh against the project directory (fpga/).
-    localparam string ROMFILE = "core/scsi_rom.hex";
+    // Quartus resolves $readmemh against the project directory (fpga/),
+    // and 18.1 refuses a `parameter string` here ("aggregate value"), so
+    // the path stays a literal in each branch.
+    initial $readmemh("core/scsi_rom.hex", rom);
 `else
     // The benches run Verilator from the repository root.
-    localparam string ROMFILE = "fpga/core/scsi_rom.hex";
+    initial $readmemh("fpga/core/scsi_rom.hex", rom);
 `endif
-
-    (* ramstyle = "M10K" *) logic [7:0] rom [0:4095];
-    initial $readmemh(ROMFILE, rom);
 
     // Two registered ports of the same array: a true dual-port M10K, so the
     // odd byte is free. Lane timing matches the data_bus_out path that has
@@ -76,7 +77,7 @@ module pc98_scsi_rom (
     initial begin
         #1;
         if (rom[9] !== 8'h55 || rom[10] !== 8'hAA)
-            $fatal(1, "pc98_scsi_rom: scsi_rom.hex did not load (ROMFILE=%s)", ROMFILE);
+            $fatal(1, "pc98_scsi_rom: scsi_rom.hex did not load");
     end
 `endif
 

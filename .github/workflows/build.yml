@@ -49,6 +49,11 @@ jobs:
         # failure mode the POST scan would hit first.
         run: ./scripts/sim_roms.sh
 
+      - name: scsi_rom.hex is the assembled scsi_rom.asm, not a stale image
+        run: |
+          sudo apt-get update && sudo apt-get install -y nasm
+          ./scripts/check_scsi_rom.sh
+
       - name: SDRAM controller — integrity and single-port bandwidth
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_sdram_mp \
