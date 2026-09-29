@@ -216,6 +216,10 @@ def load_font():
     from the bytes that will actually be drawn.
     """
     text = GLYPHS.read_text()
+    # Only the 8x8 bank's table is the VKB's: osd_own_glyphs16[] (the 16-row
+    # patches for the tall bank, same file) would trip the row-count assert.
+    start = text.index("osd_own_glyphs[]")
+    text = text[start:text.index("};", start)]
     own = {}
     for m in re.finditer(r"\{\s*(0x[0-9A-Fa-f]{2})\s*,\s*\{\s*([0-9a-fA-Fx,\s]+?)\s*\}\s*\}", text):
         code = int(m.group(1), 16)

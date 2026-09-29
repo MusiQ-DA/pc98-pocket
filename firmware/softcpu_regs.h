@@ -35,19 +35,25 @@
 #define GPU_FILL    ((volatile uint32_t *) 0x40000008) // W: color[3:0] -> fill XY/WH rectangle
 #define GPU_STATUS  ((volatile uint32_t *) 0x40000010) // R: bit0 = busy
 #define GPU_OUTLINE ((volatile uint32_t *) 0x40000014) // W: {round[4], color[3:0]} -> outline rect
-#define GPU_CHAR    ((volatile uint32_t *) 0x40000018) // W: {transp,bg[15:12],fg[11:8],char[7:0]}
+#define GPU_CHAR    ((volatile uint32_t *) 0x40000018) // W: {tall,transp,bg[15:12],fg[11:8],char[7:0]}
 
-// OSD font window (softcpu_subsystem region 0x7): the GPU's 256-glyph x 8-byte
-// font RAM, word-addressed with byte enables (any store width lands; the loader
-// copies in words). Powers up blank; osd_font.c fills it from font.rom's 8x8 ANK
-// bank at boot and patches in this core's own glyphs (the old baked-in image was
-// CP437/NEC-derived and cannot ship in the repository or the bitstream).
+// OSD font window (softcpu_subsystem region 0x7): the GPU's glyph RAM,
+// word-addressed with byte enables (any store width lands; the loader copies
+// in words). The window holds font.rom's two ANK banks at the file's own
+// offsets: bytes 0x000-0x7FF the 8x8 bank (256 glyphs x 8 bytes), bytes
+// 0x800-0x17FF the 8x16 bank (256 x 16). Powers up blank; osd_font.c fills it
+// from font.rom at boot and patches in this core's own glyphs (the old
+// baked-in image was CP437/NEC-derived and cannot ship in the repository or
+// the bitstream).
 #define FONT_WIN ((volatile uint8_t *) 0x70000000u)
 
 // GPU_OUTLINE flag: omit the four corner pixels (1px-rounded look).
 #define GPU_OUTLINE_ROUND (1u << 4)
 // GPU_CHAR flag: draw only the glyph's lit pixels, leaving the background untouched.
 #define GPU_CHAR_TRANSP (1u << 16)
+// GPU_CHAR flag: draw an 8x16 cell from the 8x16 ANK bank (the window's 0x800+
+// region) instead of the default 8x8 cell from the 8x8 bank.
+#define GPU_CHAR_TALL (1u << 17)
 
 // Status / control (0x2 region).
 #define CONT1_KEY       ((volatile uint32_t *) 0x20000000) // R: pocket controller-1 buttons

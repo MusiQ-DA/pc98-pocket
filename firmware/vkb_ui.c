@@ -296,7 +296,7 @@ static void picker_close(void)
 }
 
 // A banner in the strip the keyboard leaves free, so pick mode reads differently from typing into
-// the guest.
+// the guest. The message draws in the 8x16 bank, so the 16px bar is exactly one text row.
 static void picker_draw_prompt(void)
 {
     static const char msg[] = "A: assign    B: cancel";
@@ -306,7 +306,7 @@ static void picker_draw_prompt(void)
     int y0 = ui_osd_top ? (osd.y0 + osd.height + 8) : (osd.y0 - 24);
     osd_fb_t bar = { 0, y0, OSD_FB_WIDTH, 16 };
     osd_fill_rect(&bar, bx, 0, bw, 16, OSD_BODY);
-    osd_draw_string(&bar, bx + 8, 4, msg, OSD_LABEL);
+    osd_draw_string16(&bar, bx + 8, 0, msg, OSD_LABEL);
 }
 
 // Run a button's configured OSD function. Only ever called in normal mode (no overlay open), so

@@ -77,23 +77,44 @@ void osd_border(const osd_fb_t *fb, int x, int y, int w, int h, uint8_t color)
     osd_rect_outline(fb, x, y, w, h, color, 1);
 }
 
-// One 8x8 glyph drawn by the GPU: lit pixels take the colour and the rest stay transparent,
-// so the key face shows through. The whole cell must lie within the framebuffer.
-void osd_draw_char(const osd_fb_t *fb, int x, int y, uint8_t ch, uint8_t color)
+// One glyph cell drawn by the GPU: lit pixels take the colour and the rest stay
+// transparent, so the key face shows through. tall picks the 8x16 ANK bank and a
+// 16-row cell instead of the 8x8 bank's 8-row one. The whole cell must lie within
+// the framebuffer.
+static void draw_glyph(const osd_fb_t *fb, int x, int y, uint8_t ch, uint8_t color, uint32_t tall)
 {
-    if (x < 0 || y < 0 || x + 8 > fb->width || y + 8 > fb->height) {
+    int h = tall ? 16 : 8;
+    if (x < 0 || y < 0 || x + 8 > fb->width || y + h > fb->height) {
         return;
     }
     gpu_begin();
     *GPU_XY = ((uint32_t) (fb->y0 + y) << 16) | (uint32_t) (fb->x0 + x);
-    *GPU_CHAR = GPU_CHAR_TRANSP | ((uint32_t) (color & 0x0F) << 8) | (uint32_t) ch;
+    *GPU_CHAR = GPU_CHAR_TRANSP | tall | ((uint32_t) (color & 0x0F) << 8) | (uint32_t) ch;
     gpu_end();
+}
+
+void osd_draw_char(const osd_fb_t *fb, int x, int y, uint8_t ch, uint8_t color)
+{
+    draw_glyph(fb, x, y, ch, color, 0);
+}
+
+void osd_draw_char16(const osd_fb_t *fb, int x, int y, uint8_t ch, uint8_t color)
+{
+    draw_glyph(fb, x, y, ch, color, GPU_CHAR_TALL);
 }
 
 void osd_draw_string(const osd_fb_t *fb, int x, int y, const char *s, uint8_t color)
 {
     for (; *s; s++) {
         osd_draw_char(fb, x, y, (uint8_t) *s, color);
+        x += 8;
+    }
+}
+
+void osd_draw_string16(const osd_fb_t *fb, int x, int y, const char *s, uint8_t color)
+{
+    for (; *s; s++) {
+        osd_draw_char16(fb, x, y, (uint8_t) *s, color);
         x += 8;
     }
 }

@@ -42,8 +42,13 @@ void osd_rect_outline(const osd_fb_t *fb, int x, int y, int w, int h, uint8_t co
 // 1px-rounded outline (corners omitted), which reads as a 1px-rounded key over the body.
 void osd_border(const osd_fb_t *fb, int x, int y, int w, int h, uint8_t color);
 
-// One 8x8 glyph / a string of them from the CGA font, top-left at (x, y).
+// One 8x8 glyph / a string of them from the ANK font, top-left at (x, y).
 void osd_draw_char(const osd_fb_t *fb, int x, int y, uint8_t ch, uint8_t color);
 void osd_draw_string(const osd_fb_t *fb, int x, int y, const char *s, uint8_t color);
+
+// Same, but 8x16 cells from font.rom's 8x16 ANK bank -- the PC-98's own text
+// face, twice the height, for menu text over the VKB's key-size legends.
+void osd_draw_char16(const osd_fb_t *fb, int x, int y, uint8_t ch, uint8_t color);
+void osd_draw_string16(const osd_fb_t *fb, int x, int y, const char *s, uint8_t color);
 
 #endif

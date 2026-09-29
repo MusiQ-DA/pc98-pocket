@@ -11,18 +11,21 @@
 // framebuffer and navigated with the D-pad. Each edit updates the value in RAM and pushes it to the
 // softcore settings register that drives the machine.
 
-// Panel geometry in 8px character cells, centred in the framebuffer. The last content row before
-// the bottom border carries the control hint.
+// Panel geometry in character cells, centred in the framebuffer: 8px columns,
+// 16px rows (the GPU CHAR op's tall bank -- font.rom's 8x16 ANK, the machine's
+// own text face, twice the VKB legend's height). The title row doubles as the
+// control-hint row, right-aligned, which leaves nine item rows -- exactly the
+// longest menu.
 #define PANEL_COLS 44
-#define PANEL_ROWS 15
+#define PANEL_ROWS 12
 #define PANEL_W    (PANEL_COLS * 8)
-#define PANEL_H    (PANEL_ROWS * 8)
+#define PANEL_H    (PANEL_ROWS * 16)
 #define PANEL_X    ((OSD_FB_WIDTH - PANEL_W) / 2)
 #define PANEL_Y    ((OSD_FB_HEIGHT - PANEL_H) / 2)
 
 // Content cells within the frame.
 #define ROW_TITLE  1
-#define ROW_FIRST  3 // first menu-item row
+#define ROW_FIRST  2 // first menu-item row
 #define COL_TITLE  2
 #define COL_CURSOR 2
 #define COL_LABEL  4
@@ -236,17 +239,17 @@ static uint8_t  evict_i;
 
 static void draw_frame(void)
 {
-    osd_draw_char(&panel, 0, 0, G_TL, OSD_KEYEDGE);
-    osd_draw_char(&panel, (PANEL_COLS - 1) * 8, 0, G_TR, OSD_KEYEDGE);
-    osd_draw_char(&panel, 0, (PANEL_ROWS - 1) * 8, G_BL, OSD_KEYEDGE);
-    osd_draw_char(&panel, (PANEL_COLS - 1) * 8, (PANEL_ROWS - 1) * 8, G_BR, OSD_KEYEDGE);
+    osd_draw_char16(&panel, 0, 0, G_TL, OSD_KEYEDGE);
+    osd_draw_char16(&panel, (PANEL_COLS - 1) * 8, 0, G_TR, OSD_KEYEDGE);
+    osd_draw_char16(&panel, 0, (PANEL_ROWS - 1) * 16, G_BL, OSD_KEYEDGE);
+    osd_draw_char16(&panel, (PANEL_COLS - 1) * 8, (PANEL_ROWS - 1) * 16, G_BR, OSD_KEYEDGE);
     for (int c = 1; c < PANEL_COLS - 1; c++) {
-        osd_draw_char(&panel, c * 8, 0, G_HORIZ, OSD_KEYEDGE);
-        osd_draw_char(&panel, c * 8, (PANEL_ROWS - 1) * 8, G_HORIZ, OSD_KEYEDGE);
+        osd_draw_char16(&panel, c * 8, 0, G_HORIZ, OSD_KEYEDGE);
+        osd_draw_char16(&panel, c * 8, (PANEL_ROWS - 1) * 16, G_HORIZ, OSD_KEYEDGE);
     }
     for (int r = 1; r < PANEL_ROWS - 1; r++) {
-        osd_draw_char(&panel, 0, r * 8, G_VERT, OSD_KEYEDGE);
-        osd_draw_char(&panel, (PANEL_COLS - 1) * 8, r * 8, G_VERT, OSD_KEYEDGE);
+        osd_draw_char16(&panel, 0, r * 16, G_VERT, OSD_KEYEDGE);
+        osd_draw_char16(&panel, (PANEL_COLS - 1) * 8, r * 16, G_VERT, OSD_KEYEDGE);
     }
 }
 
@@ -376,25 +379,25 @@ static void keybind_sync(void)
 static void draw_row(int i)
 {
     const item_t *it = &menus[cur_menu].items[i];
-    int y = (ROW_FIRST + i) * 8;
+    int y = (ROW_FIRST + i) * 16;
 
-    osd_fill_rect(&panel, 8, y, (PANEL_COLS - 2) * 8, 8, OSD_KEYFACE);
+    osd_fill_rect(&panel, 8, y, (PANEL_COLS - 2) * 8, 16, OSD_KEYFACE);
     if (it->type == IT_SPACER) {
         return; // a blank row that visually groups the items around it
     }
     if (i == cur_row) {
-        osd_draw_char(&panel, COL_CURSOR * 8, y, G_MARKER, OSD_CURSOR);
+        osd_draw_char16(&panel, COL_CURSOR * 8, y, G_MARKER, OSD_CURSOR);
     }
-    osd_draw_string(&panel, COL_LABEL * 8, y, it->label, OSD_LABEL);
+    osd_draw_string16(&panel, COL_LABEL * 8, y, it->label, OSD_LABEL);
     if (it->type == IT_OPTION) {
         const setting_t *s = &settings[it->arg];
-        osd_draw_string(&panel, COL_VALUE * 8, y, s->opts[s->value], OSD_LABEL);
+        osd_draw_string16(&panel, COL_VALUE * 8, y, s->opts[s->value], OSD_LABEL);
     } else if (it->type == IT_KEYBIND) {
         int on_key = keybind_cycle[keybind_sel[it->arg]] == BIND_KEY_SLOT;
         const char *val = (on_key && !keybind_is_key(it->arg)) ? "[Set key]" : bind_name(it->arg);
-        osd_draw_string(&panel, COL_VALUE * 8, y, val, OSD_LABEL);
+        osd_draw_string16(&panel, COL_VALUE * 8, y, val, OSD_LABEL);
     } else if (it->type == IT_SUBMENU) {
-        osd_draw_char(&panel, COL_VALUE * 8, y, G_MARKER, OSD_LABEL);
+        osd_draw_char16(&panel, COL_VALUE * 8, y, G_MARKER, OSD_LABEL);
     } else if (it->type == IT_FDD) {
         // Live state, formatted here: "Inserted 1232K" or "Ejected". The size
         // is sectors/2 in KB (512-byte sectors), which is what every PC-98
@@ -428,7 +431,7 @@ static void draw_row(int i)
             for (int k = 0; word[k]; k++) buf[n++] = word[k];
         }
         buf[n] = 0;
-        osd_draw_string(&panel, COL_VALUE * 8, y, buf, OSD_LABEL);
+        osd_draw_string16(&panel, COL_VALUE * 8, y, buf, OSD_LABEL);
     }
 }
 
@@ -436,14 +439,15 @@ static void settings_draw(void)
 {
     osd_fill_rect(&panel, 0, 0, PANEL_W, PANEL_H, OSD_KEYFACE);
     draw_frame();
-    osd_draw_string(&panel, COL_TITLE * 8, ROW_TITLE * 8, menus[cur_menu].title, OSD_LABEL);
+    osd_draw_string16(&panel, COL_TITLE * 8, ROW_TITLE * 16, menus[cur_menu].title, OSD_LABEL);
     for (int i = 0; i < menus[cur_menu].count; i++) {
         draw_row(i);
     }
-    // Control hint along the bottom row (CP437 arrows for Left/Right), dimmed as secondary text.
+    // Control hint on the title row, right-aligned (CP437 arrows for
+    // Left/Right), dimmed as secondary text.
     static const char hint[] = "\x1b\x1a Change   A/B Enter/Back";
     int hx = (PANEL_COLS - 1 - (int) (sizeof(hint) - 1)) * 8;
-    osd_draw_string(&panel, hx, (PANEL_ROWS - 2) * 8, hint, OSD_DISABLED);
+    osd_draw_string16(&panel, hx, ROW_TITLE * 16, hint, OSD_DISABLED);
 }
 
 // Move the cursor within the current menu (wrapping), repainting only the two affected rows.
