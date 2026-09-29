@@ -774,6 +774,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gvram_seq.sv"
 # sequencer but never added here, so every build after it failed to elaborate.
 # WIP: tb_pc98_egc still fails one case (blit, plane E).
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_egc.sv"
+# The NEC-style EMS board's bank registers at 0x08E1-0x08E9: the V30's only
+# route past its 20-bit bus. RAM.sv holds the window remap half.
+set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_ems98.sv"
 # The PC-9801-55 SCSI board's register window at 0x0CC0-0x0CC7.
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_scsi.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_scsi_rom.sv"
@@ -792,7 +795,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_mouse_src.sv
 # PC-98 bus mouse: the second 8255 at 0x7FD9-0x7FDF + 0xBFDB, IRQ13.
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_busmouse.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_video.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/video_sync_guard.sv
 
 # Audio back end: OpenGateware audio_mixer (MiSTer filter chain + I2S) and its
 # codec-clock PLL.
@@ -818,10 +820,10 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/softcpu_fdd_bridge.sv
 # (pll_video_pc98.v, below); the CGA and Hercules PLLs went with the cards.
 set_global_assignment -name VERILOG_FILE core/pll.v
 
-# Shared RTL inherited from the MiSTer PCXT core, relocated under core/. The
-# PC/XT hardware itself is gone (2026-09-22): the CGA and Hercules cards, the
-# 16750s, the MC146818, the 8088, the 8255, the OPL2/CMS/Tandy sound and the
-# XT IDE window. What is left is the bus, the DMA/PIC/PIT and the floppy.
+# Shared RTL inherited from the upstream MiSTer core, relocated under core/.
+# The ISA-side hardware itself is gone (2026-09-22): the CGA and Hercules
+# cards, the 16750s, the MC146818, the 8088, the 8255, the OPL2/CMS/Tandy sound
+# and the IDE window. What is left is the bus, the DMA/PIC/PIT and the floppy.
 set_global_assignment -name SEARCH_PATH core/common
 # core/ itself: pc98_sdram_map.svh lives there and is `include`d from three
 # places, one of which (chipset/HDL/RAM.sv) is four directories away. The
@@ -850,6 +852,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_tvram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_kbd8251.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_font_ank.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_text_render.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_text_rowbase.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_video_timing.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_glyph_addr.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_gdc_mode1.sv

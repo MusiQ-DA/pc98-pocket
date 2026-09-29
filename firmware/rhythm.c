@@ -236,9 +236,11 @@ static int wav_step(void)
         opna_mgmt_write(OMGMT_RHYADDR, wav_cursor);
         wav_pos = data_off;
         // Whole frames only: a tail shorter than a frame is dropped here so
-        // the chunk loop below never hits a zero-length iteration.
-        wav_left = data_len - data_len % ((uint32_t)wav_ch *
-                                        (wav_bits == 16 ? 2u : 1u));
+        // the chunk loop below never hits a zero-length iteration. A frame
+        // is 1, 2 or 4 bytes (the probe above rejects any other channel/bit
+        // mix), so a mask stands in for % -- the softcore has no divider.
+        wav_left = data_len & ~(((uint32_t)wav_ch *
+                                 (wav_bits == 16 ? 2u : 1u)) - 1u);
         wav_written = 0;
         wav_failed = 0;
         wav_open = 1;
@@ -252,7 +254,7 @@ static int wav_step(void)
     // One 512-byte source chunk per call.
     uint32_t n = wav_left > SECTOR_BYTES ? SECTOR_BYTES : wav_left;
     uint32_t frame = (uint32_t)wav_ch * (wav_bits == 16 ? 2u : 1u);
-    n -= n % frame;
+    n -= n & (frame - 1);
     if (n && !wav_read(wav_slot, wav_pos, n)) {
         wav_failed = 1;
     } else if (n) {
@@ -263,17 +265,20 @@ static int wav_step(void)
             uint32_t w = *FDD_BRAM_RDATA;
             for (uint32_t b = 0; b < 4; b++) {
                 uint32_t byte_i = wi * 4 + b;
-                if (byte_i % frame != 0 || byte_i >= n)
+                if ((byte_i & (frame - 1)) || byte_i >= n)
                     continue;               // keep only frame-leading bytes
                 int32_t s;
+                // Stereo pairs average with a shift: >>1 floors exactly like
+                // the Python packer's //2, where /2 truncates -- and the
+                // softcore has no divider for it anyway.
                 if (wav_bits == 16) {
                     s = (int16_t)((w >> (b * 8)) & 0xFFFF);
                     if (wav_ch == 2)
-                        s = (s + (int16_t)((w >> (b * 8 + 16)) & 0xFFFF)) / 2;
+                        s = (s + (int16_t)((w >> (b * 8 + 16)) & 0xFFFF)) >> 1;
                 } else {
                     s = (int32_t)((w >> (b * 8)) & 0xFF);
                     if (wav_ch == 2)
-                        s = (s + (int32_t)((w >> (b * 8 + 8)) & 0xFF)) / 2;
+                        s = (s + (int32_t)((w >> (b * 8 + 8)) & 0xFF)) >> 1;
                     s = (s - 128) << 8;
                 }
                 if (adpcm_enc_push(&wav_enc, (int16_t)s))

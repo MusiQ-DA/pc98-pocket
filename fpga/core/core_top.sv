@@ -961,7 +961,6 @@ module core_top (
     wire [3:0] osd_palette_idx;
     wire       osd_in_area;
     wire       osd_active;
-    wire       osd_credits_req;
     wire [8:0] vkb_key;
     wire       vkb_stb;
     wire [2:0] osd_palette;
@@ -972,6 +971,7 @@ module core_top (
     wire [1:0] osd_stereo;
     wire       osd_ems;
     wire [1:0] osd_ems_frame;
+    wire       osd_disk_led;
     wire [1:0] osd_gamepad;
     wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
 
@@ -1057,7 +1057,6 @@ module core_top (
         .dock_key_code              (dock_key_code),
         .dock_key_ext               (dock_key_ext),
         .dock_key_stb               (dock_key_stb),
-        .credits_active             (credits_mode_chip),
         .osd_open_req               (osd_open_req),
         .raster_w                   (osd_raster_w),
         .raster_h                   (osd_raster_h),
@@ -1065,7 +1064,6 @@ module core_top (
         .soft_guest_hold            (soft_guest_hold),
         .soft_vid_blank             (soft_vid_blank),
         .osd_active                 (osd_active),
-        .osd_credits_req            (osd_credits_req),
         .vkb_key                    (vkb_key),
         .vkb_stb                    (vkb_stb),
         .osd_palette                (osd_palette),
@@ -1077,6 +1075,7 @@ module core_top (
         .osd_ems                    (osd_ems),
         .osd_ems_frame              (osd_ems_frame),
         .osd_gamepad                (osd_gamepad),
+        .osd_disk_led               (osd_disk_led),
         .key_cfg_flat               (key_cfg),
         .st_addr                    (st_addr),
         .st_wdata                   (st_wdata),
@@ -1107,14 +1106,15 @@ module core_top (
             // 0x01-0x0B were the POST panel's census words (frame census, row
             // buffer counters, tvfill, GDC snoops) -- their producers are gone
             // with postmon, so the slots are retired rather than tied to 0.
-            8'h1b:   probe_data = {8'h00, tvram_dbg_word};   // {attr,hi,lo} at dbg cell; read auto-steps
-            8'h1c:   probe_data = {20'h0, dbg_tvram_cell};   // current debug cell
+            // 0x1b/0x1c/0x1e/0x22/0x29/0x2A/0x2B/0x2C/0x2D retired to fit the
+            // EGC shift pipeline (1864 LABs vs 1848): no script under
+            // scripts/ reads them -- the screen-cell WRITE (0x82) stays.
             8'h1d:   probe_data = {16'h0, key_count, key_last};
 `ifdef PC98_PROBE_EXTRA
-            8'h1e:   probe_data = {cont2_key_eff, cont1_key_eff};   // pad words, JTAG-held bits included
             8'h1f:   probe_data = {dbg_pic_irr, dbg_pic_imr, dbg_pic_isr, dbg_timer_count};
             8'h20:   probe_data = {dbg_pic2_irr, dbg_pic2_imr, dbg_pic2_isr, dbg_kbd_irq_count};
-            8'h21:   probe_data = {dbg_irq_level, 8'h00, dbg_kbd_rd_count, key_count};
+            8'h21:   probe_data = {dbg_irq_level, 7'h00, interrupt_to_cpu,
+                                   dbg_kbd_rd_count, key_count};
             // 0x23/0x24 were the 71071's internal word and the FDC DMA
             // handshake view; both dbg chains are gone with postmon.
             // 0x25: the JTAG guest-memory master (slot 0x84). rdata is the last
@@ -1133,35 +1133,40 @@ module core_top (
             // still holding the machine -- bios_ever_loaded / guest_hold_sync2 /
             // soft_guest_hold name the release chain specifically.
             8'h28:   probe_data = {16'h0, dbg_bits};
-            // 0x29: the GVRAM line-fill underrun meter -- {worst fill length
-            // in chipset clocks (a line is ~3000), skipped-line count,
-            // launched-fill count}. A wandering band edge is a skip.
-            8'h29:   probe_data = gvram_dbg;
-            // 0x2A: live fill telemetry -- {fill_len_now, last late line,
-            // last skip line/4}. fill_len >~1730 at sample time means a
-            // fill is stalling across lines despite the lookahead slack.
-            8'h2A:   probe_data = gvram_dbg2;
-            // 0x2B/0x2C/0x2D: the BIOS-image verifier. The walk sums are what
-            // a full E8000-FFFFF pass found in SDRAM (auto-run ~3 ms after
-            // reset release, or 0x84 write with bit30); the str sums are what
-            // the loader FSM committed; cnt is BIOS words committed (0xC000
-            // for a complete 96 KB slot -- short means dropped words).
-            8'h2B:   probe_data = {jt_walk_add, jt_walk_xor};
-            8'h2C:   probe_data = {rv_str_cnt, rv_str_add};
-            8'h2D:   probe_data = {rv_str_xor, jt_st_addr[15:0]};
+            // 0x2E: bisect readback -- liveness flag (rv_live=1 iff the
+            // guest ran a bus cycle after the last walk completed); the
+            // rv_auto/rv_walked bits read zero now -- the +3 ms shot was
+            // already disarmed and the flags were constant.
+            8'h2E:   probe_data = {19'h00000, rv_live, 12'h000};
+            // 0x2F/0x30/0x31: wedge-PC taps. {cycle-entry count, live
+            // processor_status, last io dir, last fetch addr} /
+            // {unused, last io port} / {unused, last mem dir, last mem addr}.
+            8'h2F:   probe_data = {dbg_cyc_cnt, processor_status, dbg_io_wr,
+                                   dbg_fetch_addr};
+            8'h30:   probe_data = {16'h0000, dbg_io_port};
+            8'h31:   probe_data = {8'h00, 3'b000, dbg_mem_wr,
+                                   dbg_mem_addr};
+            // 0x32-0x34: the V30 register dump, the wedge-essential slice
+            // (v30_dbg_regs = {psw,pc,sreg3..0,gpr7..0}): 0x32 {pc,cs},
+            // 0x33 {psw,ss}, 0x34 {sp,bp} -- psw[9] is IF, settling
+            // "halted with interrupts enabled" vs a dead interrupt pin.
+            // The remaining gprs/sregs cost a LAB the part does not have.
+            8'h32:   probe_data = {v30_dbg_regs[207:192], v30_dbg_regs[159:144]};
+            8'h33:   probe_data = {v30_dbg_regs[223:208], v30_dbg_regs[175:160]};
+            8'h34:   probe_data = {v30_dbg_regs[79:64],   v30_dbg_regs[95:80]};
             // 0x22: the button->key gate, end to end. kb_buttons is the word pocket_keyboard
             // actually scans (post-mousepad-mask, post-JTAG-hold). The flags name which gate
             // would strip a pressed bit before it can queue a key event:
             //   [15:0] kb_buttons          = pocket_keyboard's buttons input
             //   [16]   mousepad            = gamepad_mode==2 (Mouse): masks dpad+face+shoulders
             //   [18:17] gamepad_mode       = 0 Keyboard / 1 Joystick / 2 Mouse
-            //   [19]   credits_mode_chip
+            //   [19]   (was credits_mode_chip, retired)
             //   [20]   osd_active          = softcore VKB_CTRL bit0 (an overlay is up)
-            //   [21]   osd gate into pk    = osd_active | credits_mode_chip (suppresses all keys)
+            //   [21]   osd gate into pk    = osd_active (suppresses all keys)
             //   [22]   kb_ready            = ps2 accept (level; may read 0 mid-byte)
             //   [23]   kb_valid            = framer emitting a Set-2 byte
             8'h22:   probe_data = {8'h00, kb_valid, kb_ready,
-                                   osd_active | credits_mode_chip, osd_active, credits_mode_chip,
+                                   osd_active, osd_active, 1'b0,
                                    gamepad_mode, mousepad, kb_buttons};
 `endif
             8'hFF:   probe_data = 32'h98C0_DE98;
@@ -1197,7 +1202,6 @@ module core_top (
     // Interact list settings: each latched write-only from its bridge address, then
     // synced into the core clock below.
     reg  [1:0] wp_cfg_74a        = 2'd0;   // floppy write-protect {B:, A:}
-    reg        credits_active_74a = 1'b0;  // credits showing: set by the menu action, cleared by any button
     // Pad button words come from an unvalidated ~1 ms poll and can bounce, so publish
     // a word only after it holds ~3.5 ms; analog axes are level-read and pass raw.
     reg [15:0] cont1_key_s = 16'd0;        // settled button words, all consumers below
@@ -1225,12 +1229,7 @@ module core_top (
     reg  [15:0] jtag_btn1 = 16'd0, jtag_btn2 = 16'd0;
     wire [15:0] cont1_key_eff = cont1_key_s | jtag_btn1;
     wire [15:0] cont2_key_eff = cont2_key_s | jtag_btn2;
-    wire       any_btn_74a;                // any Pocket controller-1 button, synced to this domain
-    synch_3 s_anybtn (|cont1_key_eff, any_btn_74a, clk_74a);
-    wire       osd_credits_req_74a;        // OSD Show Credits request, synced from the softcore
-    synch_3 s_osd_credits_74a (osd_credits_req, osd_credits_req_74a, clk_74a);
-    reg        any_btn_74a_d = 1'b0;
-    reg        osd_credits_req_74a_d = 1'b0;
+
     always @(posedge clk_74a) begin
         if (interact_reset_delay != 20'd0)
             interact_reset_delay <= interact_reset_delay - 20'd1;
@@ -1243,14 +1242,6 @@ module core_top (
                 32'h0000_006C: wp_cfg_74a        <= bridge_wr_data[1:0];
             endcase
         end
-        // Show Credits request (from the OSD) and the any-button dismiss are edge-detected: the
-        // button that picks Show Credits is still held, so a level dismiss would clear it at once.
-        any_btn_74a_d         <= any_btn_74a;
-        osd_credits_req_74a_d <= osd_credits_req_74a;
-        if (osd_credits_req_74a & ~osd_credits_req_74a_d)
-            credits_active_74a <= 1'b1;
-        else if (any_btn_74a & ~any_btn_74a_d)
-            credits_active_74a <= 1'b0;
     end
     wire       interact_reset;
     wire       osd_open_req;
@@ -1271,11 +1262,21 @@ module core_top (
     synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_eff,     cont1_key_chip, clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_eff,     cont2_key_chip, clk_chipset);
     synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
-    wire credits_mode_pix;
-    wire credits_mode_chip;
-    synch_3 s_credits_pix  (credits_active_74a, credits_mode_pix,  clk_pix);
-    synch_3 s_credits_chip (credits_active_74a, credits_mode_chip, clk_chipset);
-    wire pause_core = pause_core_chipset | credits_mode_chip;
+    wire pause_core = pause_core_chipset;
+
+    // Disk-access lamp: any management service request (floppy in mgmt_req[7:6],
+    // IDE in [2:0]) lights an on-screen lamp for a beat. The request level is a
+    // short pulse per sector, so a stretcher keeps it visible -- 2^20 clk_pix
+    // ticks is about 0.1 s (was 2^22/0.4 s; the part is one LAB short of full).
+    wire disk_act_chip = (|mgmt_req[7:6]) | (|mgmt_req[2:0]);
+    wire disk_act_pix;
+    synch_3 s_disk_act (disk_act_chip, disk_act_pix, clk_pix);
+    reg [19:0] disk_led_t = 20'd0;
+    always @(posedge clk_pix) begin
+        if (disk_act_pix)        disk_led_t <= 20'hFFFFF;
+        else if (|disk_led_t)    disk_led_t <= disk_led_t - 20'd1;
+    end
+    wire disk_led_on = osd_disk_led & (|disk_led_t);
 
     // gamepad_mode picks what the pad drives: mapped keys, the game port, or the serial mouse. The
     // softcore's per-control key_cfg reaches pocket_keyboard unchanged.
@@ -1312,12 +1313,12 @@ module core_top (
         .reset        (reset),
         .buttons      (kb_buttons),
         // The game port this once fed is gone (the Tandy joystick and its
-        // routing were removed with the PC/XT layer). The mode still exists in
+        // routing were removed). The mode still exists in
         // the settings and still suppresses the pad->keys mapping, which is
         // what it did before -- there is simply nowhere for the bits to go
         // now. Remove the option only with a settings-blob migration.
         .gamepad      (gamepad_mode == 2'd1),
-        .osd_active   (osd_active | credits_mode_chip),
+        .osd_active   (osd_active),
         .vkb_key      (vkb_key),
         .vkb_stb      (vkb_stb),
         .key_cfg      (key_cfg),
@@ -1333,7 +1334,7 @@ module core_top (
     );
 
     //
-    // PC-98 keyboard: the Set-2 stream above is a PC/XT keyboard's language;
+    // PC-98 keyboard: the Set-2 stream above is the PS/2 scan language;
     // a PC-98 keyboard is a serial device on the 8251 at ports 0x41/0x43 that
     // sends one matrix byte per key, bit 7 set on release. pc98_kbd_ps2 taps
     // the SAME stream -- it never stalls it, ps2_keyboard's kb_ready keeps the
@@ -1441,8 +1442,7 @@ module core_top (
     // mouse to feed. In mouse mode the pad's D-pad and A/B drive it too;
     // quiet under an overlay.
     //
-    wire [5:0] mouse_pad = (mousepad && !(osd_active | credits_mode_chip)) ?
-                           cont1_key_chip[5:0] : 6'd0;
+    wire [5:0] mouse_pad = (mousepad && !osd_active) ? cont1_key_chip[5:0] : 6'd0;
 
     wire signed [15:0] mouse_dx, mouse_dy;
     wire               mouse_ev;
@@ -2015,80 +2015,80 @@ module core_top (
     reg  [7:0]  jt_st_rdata = 8'd0;
     reg         jt_st_done  = 1'b0;
     // Whole-window verify walk. Bit30 of a slot-0x84 command walks
-    // E8000-FFFFF through the same borrowed-bus path, accumulating add- and
-    // xor-sums of every byte it actually finds in SDRAM. Auto-arms ~3 s
-    // after reset_wire falls -- NOT ~3 ms: at +3 ms POST is mid-init and
-    // the borrowed bus still kills it deterministically (seen on b6c7ee0
-    // through ec89281; the exact tear is unresolved, so the walk waits for
-    // the machine to be safely past POST's fragile window instead). The
-    // image is static once loaded, so a later walk loses no detection power.
+    // E8000-FFFFF through the same borrowed-bus path, leaving jt_st_done
+    // high at the end. The add/xor accumulators the walk used to report
+    // (taps 0x2B-0x2D) are gone for fit -- jtag_romscan.tcl scans by
+    // per-byte memrd anyway. The +3 ms auto-arm was already disarmed, so
+    // rv_walked/rv_auto were constant and went with it.
     reg         jt_st_walk  = 1'b0;
-    reg  [7:0]  jt_walk_pair = 8'd0;
-    reg  [15:0] jt_walk_add = 16'd0;
-    reg  [15:0] jt_walk_xor = 16'd0;
-    reg         rv_walked   = 1'b0;
-    reg  [27:0] rv_delay    = 28'd0;
-    // 2^28 clk at ~43 MHz is ~6.2 s -- comfortably past POST init; the brief
-    // bus hold then lands inside the memory-test display at worst.
-    //
-    // Bisect knobs for the +3 ms kill: a slot-0x84 command with bit31 set
-    // writes no access and instead arms experiment flags from [21:20] --
-    // bit21 (early) moves the auto walk back to the fatal ~3 ms offset
-    // (one-shot, self-clears on fire) and bit20 (hold_only) makes the
-    // selftest master borrow the bus and sit on it for ~46 ms without ever
-    // strobing. POST dying under early+hold_only means the bare freeze is
-    // lethal; surviving it indicts the walk's strobes.
-    reg         rv_hold_only = 1'b0;
-    reg         rv_early     = 1'b0;
-    wire [27:0] rv_target    = rv_early ? 28'd129_000 : 28'hFFFFFFF;
-    wire        rv_walk_go   = (rv_delay == rv_target) & ~rv_walked;
+    // Liveness is a post-storm flag: rv_live clears when the walk
+    // completes and latches the first guest bus cycle afterwards, so a
+    // later probe read answers "did the guest come back after the storm".
+    reg         rv_live     = 1'b0;
+    wire        guest_cyc  = ~chipset_aen & (processor_status != 3'b111);
+    reg         rv_wd        = 1'b0;
     always_ff @(posedge clk_chipset) begin
         if (reset_wire) begin
-            rv_walked <= 1'b0;
-            rv_delay  <= 28'd0;
-        end else if (!rv_walked && !rv_walk_go)
-            rv_delay <= rv_delay + 28'd1;
-        else if (rv_walk_go)
-            rv_walked <= 1'b1;
+            rv_live <= 1'b0;
+            rv_wd   <= 1'b0;
+        end else begin
+            rv_wd <= jt_st_done;
+            if (jt_st_done & ~rv_wd)
+                rv_live <= 1'b0;         // storm just ended: restart counting
+            else if (guest_cyc)
+                rv_live <= 1'b1;
+        end
+    end
+    // Wedge-PC taps. processor_status carries the V30 bus code for the whole
+    // cycle window (v30_cpu_bridge srv_bs): 0=INTA 1=IOR 2=IOW 3=HALT 4=CODE
+    // 5=MEMR 6=MEMW 7=PASV. Latching the cycle address per class makes a
+    // wedge legible after the fact: the fetch tap names the loop, the io tap
+    // the port it polls, the mem tap the flag cell it spins on. dbg_cyc_cnt
+    // counts cycle-entry edges (PASV->active); a frozen count plus PASV
+    // status means the CPU left the bus entirely (HLT or a dead hold).
+    reg  [19:0] dbg_fetch_addr = 20'd0;
+    reg  [19:0] dbg_mem_addr   = 20'd0;
+    reg         dbg_mem_wr     = 1'b0;
+    reg  [15:0] dbg_io_port    = 16'd0;
+    reg         dbg_io_wr      = 1'b0;
+    reg  [7:0]  dbg_cyc_cnt    = 8'd0;
+    reg  [2:0]  ps_q           = 3'd7;
+    always_ff @(posedge clk_chipset) begin
+        ps_q <= processor_status;
+        if (ps_q == 3'b111 && processor_status != 3'b111
+            && dbg_cyc_cnt != 8'hFF)
+            dbg_cyc_cnt <= dbg_cyc_cnt + 8'd1;
+        if (processor_status == 3'b100)
+            dbg_fetch_addr <= cpu_address;
+        if (processor_status == 3'b001) begin
+            dbg_io_port <= cpu_address[15:0];
+            dbg_io_wr   <= 1'b0;
+        end
+        if (processor_status == 3'b010) begin
+            dbg_io_port <= cpu_address[15:0];
+            dbg_io_wr   <= 1'b1;
+        end
+        if (processor_status == 3'b101 || processor_status == 3'b110) begin
+            dbg_mem_addr <= cpu_address;
+            dbg_mem_wr   <= (processor_status == 3'b110);
+        end
     end
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h04) begin
-            if (probe_wdata_c[31]) begin
-                rv_hold_only <= probe_wdata_c[20];
-                rv_early     <= probe_wdata_c[21];
-            end else begin
             jt_st_addr  <= probe_wdata_c[30] ? 20'hE8000 : probe_wdata_c[19:0];
             jt_st_wdata <= probe_wdata_c[27:20];
             jt_st_we    <= probe_wdata_c[28] & ~probe_wdata_c[30];
             jt_st_walk  <= probe_wdata_c[30];
-            if (probe_wdata_c[29] | probe_wdata_c[30]) begin
+            if (probe_wdata_c[28] | probe_wdata_c[29] | probe_wdata_c[30]) begin
                 jt_st_req  <= 1'b1;
                 jt_st_done <= 1'b0;
-                if (probe_wdata_c[30]) begin
-                    jt_walk_add <= 16'd0;
-                    jt_walk_xor <= 16'd0;
-                end
             end else
                 jt_st_req  <= 1'b0;
             end
-        end else if (rv_walk_go && !jt_st_req) begin
-            jt_st_addr  <= 20'hE8000;
-            jt_st_we    <= 1'b0;
-            jt_st_req   <= 1'b1;
-            jt_st_done  <= 1'b0;
-            jt_st_walk  <= ~rv_hold_only;
-            jt_walk_add <= 16'd0;
-            jt_walk_xor <= 16'd0;
-            rv_early    <= 1'b0;   // one-shot: a boot armed early fires once
         end else if (jt_st_req && st_done) begin
             jt_st_rdata <= st_rdata;
             jt_st_req   <= 1'b0;
             if (jt_st_walk) begin
-                jt_walk_add <= jt_walk_add + {8'h00, st_rdata};
-                if (jt_st_addr[0])
-                    jt_walk_xor <= jt_walk_xor ^ {st_rdata, jt_walk_pair};
-                else
-                    jt_walk_pair <= st_rdata;
                 if (jt_st_addr == 20'hFFFFF) begin
                     jt_st_walk <= 1'b0;
                     jt_st_done <= 1'b1;
@@ -2099,30 +2099,6 @@ module core_top (
         end else if (jt_st_walk && !jt_st_req && !jt_st_done)
             jt_st_req <= 1'b1;
     end
-    // Stream-side signature of the BIOS slot: the exact byte values the
-    // loader FSM committed to write (post-patch rom_data_in), plus the word
-    // count. Three-way split for the corruption hunt:
-    //   rv_str_* == file sums && jt_walk_* != rv_str_*  -> loss in RAM.sv/mp
-    //   rv_str_* != file sums                          -> bridge/host side
-    //   all equal                                      -> image intact
-    // cnt also catches silent FIFO drops: a short count means missing words.
-    reg  [15:0] rv_str_add = 16'd0;
-    reg  [15:0] rv_str_xor = 16'd0;
-    reg  [15:0] rv_str_cnt = 16'd0;
-    wire        rv_commit  = (bios_load_state == 4'h01) & ioctl_download
-                           & ioctl_wr & ~bios_load_n & select_bios;
-    always_ff @(posedge clk_chipset) begin
-        if (load_active && !load_active_d) begin
-            rv_str_add <= 16'd0;
-            rv_str_xor <= 16'd0;
-            rv_str_cnt <= 16'd0;
-        end else if (rv_commit) begin
-            rv_str_add <= rv_str_add + {8'h00, rom_data_in[7:0]}
-                                    + {8'h00, rom_data_in[15:8]};
-            rv_str_xor <= rv_str_xor ^ rom_data_in;
-            rv_str_cnt <= rv_str_cnt + 16'd1;
-        end
-    end
     wire [19:0] st_addr_mux  = jt_st_req ? jt_st_addr  : st_addr;
     wire [7:0]  st_wdata_mux = jt_st_req ? jt_st_wdata : st_wdata;
     wire        st_we_mux    = jt_st_req ? jt_st_we    : st_we;
@@ -2132,8 +2108,8 @@ module core_top (
     // whole walk and ram_rw_complete cannot pulse for a guest CPU access.
     // hold_only rides the same settled-grant path: a bare freeze still must
     // not fire before the HLDA has provably landed.
-    wire        st_strict    = jt_st_walk | rv_hold_only;
-    wire        st_hold_only = rv_hold_only;
+    wire        st_strict    = jt_st_walk;
+    wire        st_hold_only = 1'b0;
 `else
     wire [19:0] st_addr_mux  = st_addr;
     wire [7:0]  st_wdata_mux = st_wdata;
@@ -2284,13 +2260,11 @@ module core_top (
     wire pause_core_chipset;
 
     wire [7:0] data_bus;
-    wire INTA_n;
     wire [19:0] cpu_ad_out;
     reg  [19:0] cpu_address;
     wire [7:0] cpu_data_bus;
-    // The 16-bit memory path's extra lane. Under the PC/XT build the 8088
-    // drives cpu_data_bus and nothing asks for a word, so these are tied off
-    // below; the PC-98 build wires them to v30_cpu_bridge.
+    // The 16-bit memory path's extra lane. Under a narrow-CPU build these are
+    // tied off below; the PC-98 build wires them to v30_cpu_bridge.
     wire [7:0] cpu_data_bus_hi;
     wire [7:0] data_bus_hi;
     wire       cpu_word_access;
@@ -2307,8 +2281,6 @@ module core_top (
 
     wire [3:0]   dma_acknowledge_n;
 
-    logic   [7:0]   port_b_out;
-    logic   [7:0]   port_c_in;
     wire    [1:0]   fdd_present;
     reg     [7:0]   sw;
 
@@ -2318,21 +2290,6 @@ module core_top (
     assign  sw_base = 6'b101101;
     assign  sw_floppy = fdd_present[1] ? 2'b01 : 2'b00;
     assign  sw = {sw_floppy, sw_base}; // DIP switches (display type and floppy count)
-
-    // 8255 port B is 0x0033, and on a PC-98 it is an INPUT: bit 3 is a DIP
-    // switch inverted, bits 7-5 are the RS-232C modem status, bit 0 is the
-    // calendar clock's data line, and everything else reads zero (np21w
-    // io/sysport.c, sysp_i33 -- behaviour reference, not code).
-    //
-    // It was wired to port_b_out, a PC/AT leftover where port B is an output
-    // and reading it back is harmless. Here it is not: the UX ITF reads 0x33
-    // at F889C and tests bit 2, and a set bit 2 means PARITY ERROR -- which is
-    // what it printed. Whatever the BIOS last wrote to port B decided whether
-    // this machine believed its own memory was faulty.
-    //
-    // No serial and no clock chip yet, so the modem bits and the clock bit are
-    // zero; bit 3 follows the display DIP the way the reference does.
-    wire [7:0] pc98_port_b_in = {3'b000, 1'b0, ~sw[0], 3'b000};
 
     // ---------------------------------------------------------------- ITF bank
     //
@@ -2639,7 +2596,6 @@ module core_top (
     assign SDRAM_DQ_IN = dram_dq;
     assign dram_dq     = ~SDRAM_DQ_IO ? SDRAM_DQ_OUT : 16'hZZZZ;
 
-    wire s6_3_mux;
     wire [2:0] SEGMENT;
 
     // ---------------------------------------------------------------- the CPU
@@ -2866,7 +2822,7 @@ module core_top (
         .HBlank             (HBlank),
         .VBlank             (VBlank),
         .palette_cfg        (palette_cfg),
-        .credits_mode_pix   (credits_mode_pix),
+        .disk_led           (disk_led_on),
         .vid_blank          (vid_blank),
         .osd_active         (osd_active),
         .osd_palette_idx    (osd_palette_idx),

@@ -259,8 +259,8 @@ sync
 
 # Verify everything that was written, not just the bitstream. The first run of
 # this script reported "written and verified" while the ROMs sat in a directory
-# nothing reads: core.json still said platform_ids ["pcxt"] and the Pocket looks
-# for assets under Assets/<platform_id>/<core>/. A core with no BIOS comes up
+# nothing reads: core.json's platform_ids did not match the asset dir, and the
+# Pocket looks for assets under Assets/<platform_id>/<core>/. A core with no BIOS comes up
 # with no complaint, so the check has to cover the assets and the path.
 PLAT=$(python3 -c "
 import json

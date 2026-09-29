@@ -7,18 +7,15 @@
 `ifndef ENABLE_EMS
 `define ENABLE_EMS 0
 `endif
-// PC/XT peripherals with no PC-98 counterpart at the same ports. They were
+// AT-side peripherals with no PC-98 counterpart at the same ports. They were
 // synthesised into the PC-98 build because nothing gated them, and at 97 per
 // cent ALM occupancy that is not free: the fit report has the MC146818 at 349
-// ALMs, the two 16550s at 412 and the XT IDE pair at 216, none of which any
+// ALMs, the two 16550s at 412 and the IDE pair at 216, none of which any
 // PC-98 ROM can reach.
-//   RTC   this is the PCXT's at 0x02C0; a PC-98 has a uPD4990A at 0x20/0x22/0x33
+//   RTC   the AT's MC146818 at 0x02C0; a PC-98 has a uPD4990A at 0x20/0x22/0x33
 //   UART  0x3F8 / 0x2F8; a PC-98's serial is an 8251 at 0x30/0x32
-// config.tcl turns them off for MACHINE_PC98 and the PC/XT build keeps them.
-//
-// The XT IDE pair (216 ALMs at 0x0300) is NOT on this list on purpose: the
-// PC-98 build keeps it, so the storage path that exists stays reachable while
-// a PC-98 one is not written yet.
+// config.tcl turns them off for MACHINE_PC98. The IDE window at 0x0300 went
+// with them once the PC-9801-55 SCSI board at 0x0CC0 took over the storage path.
 
 module PERIPHERALS #(
 		parameter clk_rate = 28'd50000000
@@ -257,7 +254,7 @@ module PERIPHERALS #(
     //
     // The control-side ports around the real uPD765. The MSR and data
     // register come from floppy.v through pc98_fdc_glue; these three have no
-    // PC/XT counterpart so the glue answers them and the mux below selects
+    // counterpart on the uPD765 file so the glue answers them and the mux below selects
     // that answer -- or 0xFF for the window chgreg did not select.
     //
     //   0x00BE  FDD interface select ("chgreg"). Bit 0 picks which port group
@@ -300,6 +297,7 @@ module PERIPHERALS #(
     // rather than the written byte. The glue is instantiated two thousand
     // lines down, beside floppy.v; these are its outputs reaching back.
     logic [7:0] fdc_mode_readback;   // 0xBE
+    logic [7:0] fdc_144_readback;    // 0x4BE (3-mode density)
     logic [7:0] fdc_ctrl_readback;   // 0x94 / 0xCC
     logic       fdc_group_live;      // this cycle's window is chgreg's choice
     logic       fdc_glue_irq_2hd;    // slave IRQ11 -> INT 13h
@@ -313,11 +311,17 @@ module PERIPHERALS #(
                          & ((address[7:0] == 8'h90) || (address[7:0] == 8'h92)
                          ||  (address[7:0] == 8'hC8) || (address[7:0] == 8'hCA));
 
+    // 0x4BE -- the 3-mode drive's density register, read on the live address.
+    // It sits in the 0x04 page, outside pc98_io_exact's 0x00-page window.
+    wire fdd_144_select = iorq & ~address_enable_n & (address[15:0] == 16'h04BE);
+
     wire fdd_stub_read = (fdd_be_select | fdd_94_select
-                          | fdd_cc_select | fdd_dead_select) & ~io_read_n;
+                          | fdd_cc_select | fdd_dead_select
+                          | fdd_144_select) & ~io_read_n;
     wire [7:0] fdd_stub_data = fdd_be_select   ? fdc_mode_readback
                              : (fdd_94_select | fdd_cc_select)
                                                ? fdc_ctrl_readback
+                             : fdd_144_select  ? fdc_144_readback
                              :                   8'hFF;   // the dead window
 
     // Enable Segment Map hx000, hx400, hx800, hxC00. Was a port; nothing past
@@ -346,7 +350,7 @@ module PERIPHERALS #(
     //
     // floppy.v is a uPD765, which is the right chip -- a PC-98's FDC is a
     // uPD765A -- and it holds the disk image and the DMA path. What was wrong
-    // was only WHERE it listened: 0x03F0-0x03F7, the PC/XT's window. A PC-98
+    // was only WHERE it listened: 0x03F0-0x03F7, the AT window. A PC-98
     // guest writes 0x90/0x92 (2HD) and 0xC8/0xCA (2DD).
     //
     // np21w io/fdc.c attaches both groups to the same four handlers
@@ -467,7 +471,7 @@ module PERIPHERALS #(
 
     wire    interrupt2_chip_select_n;
 
-    // The PC/XT floppy line has no PC-98 counterpart: the 2HD window's
+    // The AT floppy line has no PC-98 counterpart: the 2HD window's
     // interrupt is slave IRQ11 and the 2DD one's is slave IRQ10 -- never
     // master IRQ6.
     wire    pc98_master_irq6 = 1'b0;
@@ -503,7 +507,7 @@ module PERIPHERALS #(
         // above; without it the BIOS parks at FED44 for good. The drive's
         // own interrupts live on the slave (IRQ2 XTMASK, IRQ3 FDC).
         //
-        // MASTER IRQ6 IS NOT THE FLOPPY. That is the PC/XT's wiring; on a
+        // MASTER IRQ6 IS NOT THE FLOPPY. That is the AT wiring; on a
         // PC-98 IRQ6 is INT3, a free expansion line, and the FDC is slave
         // IRQ10/IRQ11 -- np21w io/fdc.c's fdc_intwait (pic_setirq 0x0a / 0x0b) and
         // the BIOS's own gates at FF438 and FF4B3, which read the SLAVE mask
@@ -862,6 +866,8 @@ module PERIPHERALS #(
     wire [4:0]  gdc_m_cur_bot,   gdc_s_cur_bot;
     wire [5:0]  gdc_m_cur_rate,  gdc_s_cur_rate;
     wire [1:0]  gdc_m_zoom,      gdc_s_zoom;
+    wire [4:0]  gdc_s_lrep;                  // slave CSRFORM LR (GRPH_LR)
+    wire [9:0]  gdc_s_al;                    // slave SYNC AL field, raw
     // The drawing-server plumbing: the two channels' handshakes and the
     // done-level synchronisers (the softcore writes the level; the rising
     // edge here retires the EXECUTE in the GDC).
@@ -903,6 +909,7 @@ module PERIPHERALS #(
         .cursor_en(gdc_m_cur_en), .cursor_blink_en(gdc_m_cur_bl),
         .cursor_top(gdc_m_cur_top), .cursor_bottom(gdc_m_cur_bot),
         .cursor_rate(gdc_m_cur_rate), .zoom_disp(gdc_m_zoom),
+        .line_rep(), .vlines(),
         .draw_req(gdc_m_draw_req), .draw_op(gdc_m_draw_op),
         .draw_busy(gdc_m_draw_busy), .srv_done_stb(gdc_m_done_stb),
         .draw_snap(gdc_m_draw_snap)
@@ -920,6 +927,7 @@ module PERIPHERALS #(
         .cursor_en(gdc_s_cur_en), .cursor_blink_en(gdc_s_cur_bl),
         .cursor_top(gdc_s_cur_top), .cursor_bottom(gdc_s_cur_bot),
         .cursor_rate(gdc_s_cur_rate), .zoom_disp(gdc_s_zoom),
+        .line_rep(gdc_s_lrep), .vlines(gdc_s_al),
         .draw_req(gdc_s_draw_req), .draw_op(gdc_s_draw_op),
         .draw_busy(gdc_s_draw_busy), .srv_done_stb(gdc_s_done_stb),
         .draw_snap(gdc_s_draw_snap)
@@ -1252,6 +1260,7 @@ module PERIPHERALS #(
         .analog_mode(pc98_analog),
         .pitch(gdc_s_pitch),
         .mhz5(&gdc_clk),
+        .dbl(gdc_s_dbl),
         .part_sad(gdc_s_sad), .part_len(gdc_s_len),
         .p_req(gv_rd_req), .p_addr(gv_rd_addr), .p_len(gv_rd_len),
         .p_ack(gv_rd_ack), .p_rvalid(gv_rd_valid), .p_rdata(gv_rd_data),
@@ -1311,10 +1320,14 @@ module PERIPHERALS #(
         .dst_clk(clock), .dst_rst(reset), .dst_pulse(pc98_row_fill)
     );
 
-    // row * 80 for the row after the one on screen.
+    // LOW12(SAD + row*PITCH) for the row after the one on screen; falls
+    // back to row*80 while the master GDC is unprogrammed.
     wire [4:0]  pc98_next_row  = (pc98_v[8:4] == 5'd24) ? 5'd0 : pc98_v[8:4] + 5'd1;
-    wire [11:0] pc98_row_base  = {1'b0, pc98_next_row, 6'd0}
-                              + {3'd0, pc98_next_row, 4'd0};
+    wire [11:0] pc98_row_base;
+    pc98_text_rowbase u_pc98_text_rowbase (
+        .gdc_on(gdc_m_disp_on), .gdc_pitch(gdc_m_pitch),
+        .gdc_sad(gdc_m_sad[0]), .row(pc98_next_row), .base(pc98_row_base)
+    );
 
     wire        pc98_f_req, pc98_f_busy, pc98_f_valid;
     wire [19:0] pc98_f_addr;
@@ -1526,11 +1539,23 @@ module PERIPHERALS #(
     logic pc98_ank8 = 1'b0;
     logic pc98_wide = 1'b0;
     logic gdc_vs_q3 = 1'b0;
+    // A "200 line" graphics mode means each VRAM line serves two rasterlines
+    // on this fixed 400-line raster (np21w's GRPH_LR=1 walk, maketgrp).
+    // Three sources flag it, in the order software touches them: mode1 bit 4
+    // (the port 0x68 flip-flop the BIOS sets beside it), the slave GDC's
+    // CSRFORM LR field itself, and a true-15.98 kHz SYNC whose AL field is
+    // ~200 (np21w's 15kHz table writes 200 here, the 24kHz one 400).
+    // Latched at the frame edge like the text-mode bits so a mode flip
+    // tears at most one frame.
+    logic gdc_s_dbl = 1'b0;
     always_ff @(posedge clock) begin
         gdc_vs_q3 <= gdc_vs_q;
         if (gdc_vs_q & ~gdc_vs_q3) begin
             pc98_ank8 <= ~pc98_mode1[3];
             pc98_wide <=  pc98_mode1[2];
+            gdc_s_dbl <= pc98_mode1[4]
+                      || (gdc_s_lrep != 5'd0)
+                      || ((gdc_s_al != 10'd0) && (gdc_s_al < 10'd256));
         end
     end
 
@@ -1708,12 +1733,12 @@ module PERIPHERALS #(
     //
     // XT2IDE
     //
-    // GONE ON PC-98. The AT task-file at 0x300-0x30F is a PC/XT interface; a
+    // GONE ON PC-98. The task-file at 0x300-0x30F is an AT interface; a
     // PC-98 uses SASI (0x80/0x82), SCSI (0xCC0-0xCC6) or -- only from the
     // 9821 generation -- IDE at 0x640-0x64F. Neither bios.rom nor itf.rom
     // references 0x640-0x64F at all, in any addressing form, so nothing in
     // this machine's ROM set could ever drive what is here. It was inherited
-    // from the PC/XT base and instantiated unconditionally, so it has been
+    // from the upstream base and instantiated unconditionally, so it has been
     // occupying a device that is at 91% ALM.
     //
     // np21w agrees about the generation: SUPPORT_IDEIO is in its ia32 /
@@ -1968,7 +1993,7 @@ module PERIPHERALS #(
             write_to_fdd  <= write_to_fdd;
     end
 
-    // The PC-98 ports onto floppy.v's PC/XT register file. The MSR and FIFO
+    // The PC-98 ports onto floppy.v's AT register file. The MSR and FIFO
     // map straight across; the control port has to BECOME a Digital Output
     // Register, because a PC-98 has none and floppy.v will not run without
     // one. pc98_fdc_glue does that -- see it for what each bit becomes and
@@ -2026,6 +2051,11 @@ module PERIPHERALS #(
     wire fdd_ctrl_win  = pc98_addr_win & ((fdc_addr_eff[7:0] == 8'h94)
                                         |  (fdc_addr_eff[7:0] == 8'hCC));
     wire fdd_mode_win  = pc98_addr_win &  (fdc_addr_eff[7:0] == 8'hBE);
+    // 0x4BE sits above the 0x00-page the FDC windows live in, so it is not on
+    // pc98_addr_win; it decodes the whole 16-bit address. This is the 3-mode
+    // drive's density select (np21w fdc_o4be), present when a 1.44-capable
+    // drive is attached.
+    wire fdd_mode144_win = ~fdc_aen_eff & (fdc_addr_eff[15:0] == 16'h04BE);
     // The MSR/FIFO pairs, the same set floppy0_chip_select_n covers, but off
     // the effective address so a write lands on the port it was issued to.
     wire fdd_fifo_win  = pc98_addr_win & ((fdc_addr_eff[7:0] == 8'h90)
@@ -2046,6 +2076,7 @@ module PERIPHERALS #(
         .sel_data      (fdd_fifo_win &  fdc_addr_eff[1]),
         .sel_ctrl      (fdd_ctrl_win),
         .sel_mode      (fdd_mode_win),
+        .sel_mode144   (fdd_mode144_win),
         .port_2dd      (fdc_addr_eff[6]),
         // The selects already carry the window -- and, on the end-of-write
         // cycle, the window of the write that just finished.
@@ -2060,6 +2091,7 @@ module PERIPHERALS #(
         .fd_busy       (fdd_busy),
         .ctrl_readback (fdc_ctrl_readback),
         .mode_readback (fdc_mode_readback),
+        .reg144_readback (fdc_144_readback),
         .group_live    (fdc_group_live),
         .irq_2hd       (fdc_glue_irq_2hd),
         .irq_2dd       (fdc_glue_irq_2dd),

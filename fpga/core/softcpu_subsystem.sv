@@ -93,7 +93,6 @@ module softcpu_subsystem (
     input   [7:0] dock_key_code,  // last docked-keyboard make, for the key picker
     input         dock_key_ext,   // its E0 flag
     input         dock_key_stb,   // toggles per docked make; firmware change-detects it
-    input         credits_active, // credits overlay up: firmware suppresses OSD button input
     input         osd_open_req,   // interact "Extra Options" requests the settings OSD
     input   [9:0] raster_w,       // presented raster size, for overlay placement
     input   [9:0] raster_h,
@@ -117,7 +116,7 @@ module softcpu_subsystem (
     input [319:0]  gdc_draw_snaps,
     output  [1:0]  gdc_srv_done_levels,
     output        osd_active,
-    output        osd_credits_req,
+    output        osd_disk_led,
 
     // Virtual-keyboard key event: {make, Set-2 code}, with a strobe that toggles
     // per firmware write so pocket_keyboard pushes exactly one queue entry.
@@ -247,19 +246,6 @@ module softcpu_subsystem (
     end
     assign osd_active = osd_active_r;
 
-    // OSD action trigger at 0x20000010: bit1 the credits overlay. core_top edge-detects it
-    // (the firmware re-arms the register with a zero write before each request). A guest
-    // reset is orchestrated through soft_guest_hold below, not here.
-    reg osd_credits_req_r = 1'b0;
-    always @(posedge clk_pico) begin
-        if (reset) begin
-            osd_credits_req_r <= 1'b0;
-        end else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[4:2] == 3'd4) begin
-            osd_credits_req_r <= cpu_mem_wdata[1];
-        end
-    end
-    assign osd_credits_req = osd_credits_req_r;
-
     // Boot-master guest hold at 0x2000001C: powers up asserted so the guest stays in reset until
     // the firmware releases it (writes 0); the firmware writes 1 to re-assert it for an
     // orchestrated guest reset. Re-armed only by the softcore reset, not a guest reset.
@@ -378,6 +364,7 @@ module softcpu_subsystem (
     localparam SET_IDX_DISPLAY   = 5'd5;
     localparam SET_IDX_EMS       = 5'd6;   // Hardware
     localparam SET_IDX_EMS_FRAME = 5'd7;
+    localparam SET_IDX_DISK_LED  = 5'd10;  // on-screen access lamp
     // index 8 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
     localparam SET_IDX_GAMEPAD   = 5'd9;   // Controls
     reg [7:0] osd_settings [0:31];
@@ -396,6 +383,7 @@ module softcpu_subsystem (
     assign osd_ems       = osd_settings[SET_IDX_EMS][0];
     assign osd_ems_frame = osd_settings[SET_IDX_EMS_FRAME][1:0];
     assign osd_gamepad   = osd_settings[SET_IDX_GAMEPAD][1:0];
+    assign osd_disk_led  = osd_settings[SET_IDX_DISK_LED][0];
 
     // Per-control key config, written at KEYCFG_REG (0x20000020) as {id[12:9], ext[8], code[7:0]}.
     // pocket_keyboard reads one 9-bit {ext, code} per D-pad direction (ids 0-3) and button (ids 4-10);
@@ -593,7 +581,9 @@ module softcpu_subsystem (
     //   0x40000008 FILL color[3:0]                  -> fill the XY/WH rectangle
     //   0x40000010 STATUS (read) bit0 = busy
     //   0x40000014 OUTLINE {round, color[3:0]}       -> outline the XY/WH rectangle
-    //   0x40000018 CHAR {transp, bg[3:0], fg[3:0], char[7:0]} -> 8x8 glyph at XY
+    //   0x40000018 CHAR {tall, transp, bg[3:0], fg[3:0], char[7:0]} -> glyph at XY;
+    //                 tall=0 draws an 8x8 cell from the 8x8 bank, tall=1 an 8x16
+    //                 cell from the 8x16 bank (see the font RAM below)
     // A launch write toggles gpu_req; the FSM acknowledges when the command completes.
     // clk_pico is a gated clk_sys pulse, so the parameter registers are stable when the
     // FSM samples them; req/ack cross the domains through two-flop synchronisers.
@@ -607,6 +597,7 @@ module softcpu_subsystem (
     reg  [1:0] gpu_op;
     reg        gpu_round;             // OUTLINE: omit the four corner pixels (1px-rounded look)
     reg        gpu_transp;            // CHAR: leave background pixels untouched
+    reg        gpu_tall;              // CHAR: 16-row glyph from the 8x16 bank
     reg        gpu_req;
     // A PicoRV32 store holds the bus for two clk_pico cycles, so a raw write select asserts
     // twice. Committing on cpu_mem_ready (asserted only on the single accept cycle) fires each
@@ -638,6 +629,7 @@ module softcpu_subsystem (
                         gpu_color  <= cpu_mem_wdata[11:8];
                         gpu_bg     <= cpu_mem_wdata[15:12];
                         gpu_transp <= cpu_mem_wdata[16];
+                        gpu_tall   <= cpu_mem_wdata[17];
                         gpu_op     <= OP_CHAR;
                     end
                     default: ;
@@ -680,11 +672,16 @@ module softcpu_subsystem (
     reg [15:0] row_base, baddr;
     reg        nib;
     reg  [3:0] draw_col, gs_bg;
-    reg        gs_outline, gs_round, gs_char, gs_transp;
+    reg        gs_outline, gs_round, gs_char, gs_transp, gs_tall;
     reg  [7:0] gs_glyph;
-    reg  [2:0] gx, gy;                // glyph-local column/row within the 8x8 cell
+    reg  [2:0] gx;                    // glyph-local column within the 8-dot-wide cell
+    reg  [3:0] gy;                    // glyph-local row: 8 or 16 per cell
 
-    // OSD font RAM: 256 glyphs x 8 rows, one 8-pixel row bitmap per byte (bit 7 = leftmost).
+    // OSD font RAM: two ANK banks, each one 8-pixel row bitmap per byte (bit 7 =
+    // leftmost). Byte 0x0000-0x07FF is the 8x8 bank (256 glyphs x 8 rows) and
+    // 0x0800-0x17FF the 8x16 bank (256 x 16) -- font.rom's own offsets, so the
+    // boot load is a straight copy of the file's first 6 KB (osd_font.c). A CHAR
+    // command's tall bit picks the bank and the row count.
     // Port B (clk_sys) is the glyph read the CHAR op drives; port A (clk_pico) is the
     // firmware's load window at 0x7xxxxxxx, word-addressed with byte enables so any
     // store width lands (the loader's copy uses words; the glyph patch could use bytes).
@@ -694,12 +691,11 @@ module softcpu_subsystem (
     // The contents are deliberately NOT in the bitstream. The font this panel
     // showed was IBM CP437 / NEC font.rom lineage baked in through $readmemh,
     // which put copyrighted glyph data into a public repository and every build
-    // artifact. Instead the firmware copies font.rom's 8x8 ANK bank (the first
-    // 2 KB of a file the user must already place as a required data slot) into
-    // this RAM at boot and patches in this core's own symbol glyphs; until that
-    // load the glyphs read as zero, and nothing draws before it (see osd_font.c
-    // and main.c's boot order). The CPU-side read serves the same window for
-    // bring-up checks.
+    // artifact. Instead the firmware copies font.rom's ANK banks (a file the
+    // user must already place as a required data slot) into this RAM at boot
+    // and patches in this core's own symbol glyphs; until that load the glyphs
+    // read as zero, and nothing draws before it (see osd_font.c and main.c's
+    // boot order). The CPU-side read serves the same window for bring-up checks.
     // (font_q / font_cpu_q are declared with the font RAM below)
 
     wire [1:0]  cur_lane = baddr[1:0];
@@ -738,9 +734,11 @@ module softcpu_subsystem (
     wire [31:0] font_cpu_q;
     // A concatenation cannot be bit-selected directly in Quartus's Verilog
     // front-end (Error 10170 at the "["), so the byte address lands on a wire
-    // first and is sliced off it.
-    wire [10:0] font_addr = {gs_glyph, gy};
-    wire [8:0]  font_waddr = font_addr[10:2];
+    // first and is sliced off it. The tall bank sits at byte 0x0800, which
+    // overlaps the glyph field's own bit 11, so it has to be an add.
+    wire [13:0] font_addr = gs_tall ? (14'h0800 + {2'b00, gs_glyph, gy})
+                                    : {3'b000, gs_glyph, gy[2:0]};
+    wire [10:0] font_waddr = font_addr[12:2];
     wire [1:0]  font_lane  = font_addr[1:0];
     wire [7:0] font_a_lane0, font_a_lane1, font_a_lane2, font_a_lane3;
     wire [7:0] font_b_lane0, font_b_lane1, font_b_lane2, font_b_lane3;
@@ -748,13 +746,13 @@ module softcpu_subsystem (
     // Four hand-written instances: Quartus's front-end wants no unpacked-array
     // wires and no generate-conditional assigns here, so plain is plainest.
     altsyncram #(
-        .operation_mode ("BIDIR_DUAL_PORT"), .width_a (8), .widthad_a (9),
-        .numwords_a (512), .width_b (8), .widthad_b (9), .numwords_b (512),
+        .operation_mode ("BIDIR_DUAL_PORT"), .width_a (8), .widthad_a (11),
+        .numwords_a (2048), .width_b (8), .widthad_b (11), .numwords_b (2048),
         .address_reg_b ("CLOCK1"), .outdata_reg_a ("UNREGISTERED"),
         .outdata_reg_b ("UNREGISTERED"), .lpm_type ("altsyncram"),
         .intended_device_family ("Cyclone V")
     ) font_lane0 (
-        .clock0 (clk_pico), .address_a (cpu_mem_addr[10:2]),
+        .clock0 (clk_pico), .address_a (cpu_mem_addr[12:2]),
         .data_a (cpu_mem_wdata[7:0]), .wren_a (sel_font && cpu_mem_wstrb[0]),
         .q_a (font_a_lane0),
         .clock1 (clk_sys), .address_b (font_waddr), .data_b (8'd0),
@@ -765,13 +763,13 @@ module softcpu_subsystem (
         .eccstatus (), .rden_a (1'b1), .rden_b (1'b1)
     );
     altsyncram #(
-        .operation_mode ("BIDIR_DUAL_PORT"), .width_a (8), .widthad_a (9),
-        .numwords_a (512), .width_b (8), .widthad_b (9), .numwords_b (512),
+        .operation_mode ("BIDIR_DUAL_PORT"), .width_a (8), .widthad_a (11),
+        .numwords_a (2048), .width_b (8), .widthad_b (11), .numwords_b (2048),
         .address_reg_b ("CLOCK1"), .outdata_reg_a ("UNREGISTERED"),
         .outdata_reg_b ("UNREGISTERED"), .lpm_type ("altsyncram"),
         .intended_device_family ("Cyclone V")
     ) font_lane1 (
-        .clock0 (clk_pico), .address_a (cpu_mem_addr[10:2]),
+        .clock0 (clk_pico), .address_a (cpu_mem_addr[12:2]),
         .data_a (cpu_mem_wdata[15:8]), .wren_a (sel_font && cpu_mem_wstrb[1]),
         .q_a (font_a_lane1),
         .clock1 (clk_sys), .address_b (font_waddr), .data_b (8'd0),
@@ -782,13 +780,13 @@ module softcpu_subsystem (
         .eccstatus (), .rden_a (1'b1), .rden_b (1'b1)
     );
     altsyncram #(
-        .operation_mode ("BIDIR_DUAL_PORT"), .width_a (8), .widthad_a (9),
-        .numwords_a (512), .width_b (8), .widthad_b (9), .numwords_b (512),
+        .operation_mode ("BIDIR_DUAL_PORT"), .width_a (8), .widthad_a (11),
+        .numwords_a (2048), .width_b (8), .widthad_b (11), .numwords_b (2048),
         .address_reg_b ("CLOCK1"), .outdata_reg_a ("UNREGISTERED"),
         .outdata_reg_b ("UNREGISTERED"), .lpm_type ("altsyncram"),
         .intended_device_family ("Cyclone V")
     ) font_lane2 (
-        .clock0 (clk_pico), .address_a (cpu_mem_addr[10:2]),
+        .clock0 (clk_pico), .address_a (cpu_mem_addr[12:2]),
         .data_a (cpu_mem_wdata[23:16]), .wren_a (sel_font && cpu_mem_wstrb[2]),
         .q_a (font_a_lane2),
         .clock1 (clk_sys), .address_b (font_waddr), .data_b (8'd0),
@@ -799,13 +797,13 @@ module softcpu_subsystem (
         .eccstatus (), .rden_a (1'b1), .rden_b (1'b1)
     );
     altsyncram #(
-        .operation_mode ("BIDIR_DUAL_PORT"), .width_a (8), .widthad_a (9),
-        .numwords_a (512), .width_b (8), .widthad_b (9), .numwords_b (512),
+        .operation_mode ("BIDIR_DUAL_PORT"), .width_a (8), .widthad_a (11),
+        .numwords_a (2048), .width_b (8), .widthad_b (11), .numwords_b (2048),
         .address_reg_b ("CLOCK1"), .outdata_reg_a ("UNREGISTERED"),
         .outdata_reg_b ("UNREGISTERED"), .lpm_type ("altsyncram"),
         .intended_device_family ("Cyclone V")
     ) font_lane3 (
-        .clock0 (clk_pico), .address_a (cpu_mem_addr[10:2]),
+        .clock0 (clk_pico), .address_a (cpu_mem_addr[12:2]),
         .data_a (cpu_mem_wdata[31:24]), .wren_a (sel_font && cpu_mem_wstrb[3]),
         .q_a (font_a_lane3),
         .clock1 (clk_sys), .address_b (font_waddr), .data_b (8'd0),
@@ -840,15 +838,18 @@ module softcpu_subsystem (
                         gs_round   <= gpu_round;
                         gs_char    <= (gpu_op == OP_CHAR);
                         gs_transp  <= gpu_transp;
+                        gs_tall    <= gpu_tall;
                         gs_glyph   <= gpu_char;
                         gx         <= 3'd0;
-                        gy         <= 3'd0;
+                        gy         <= 4'd0;
                         beg_x      <= gpu_x;
                         cur_x      <= gpu_x;
                         beg_y      <= gpu_y;
                         cur_y      <= gpu_y;
                         end_x      <= (gpu_op == OP_CHAR) ? (gpu_x + 16'd7) : (gpu_x + gpu_w - 16'd1);
-                        end_y      <= (gpu_op == OP_CHAR) ? (gpu_y + 16'd7) : (gpu_y + gpu_h - 16'd1);
+                        end_y      <= (gpu_op == OP_CHAR)
+                                      ? (gpu_y + (gpu_tall ? 16'd15 : 16'd7))
+                                      : (gpu_y + gpu_h - 16'd1);
                         row_base   <= gpu_y * OSD_STRIDE;
                         baddr      <= gpu_y * OSD_STRIDE + {1'b0, gpu_x[15:1]};
                         nib        <= gpu_x[0];
@@ -867,7 +868,7 @@ module softcpu_subsystem (
                             baddr    <= row_base + OSD_STRIDE + {1'b0, beg_x[15:1]};
                             nib      <= beg_x[0];
                             gx       <= 3'd0;
-                            gy       <= gy + 3'd1;
+                            gy       <= gy + 4'd1;
                             gs       <= GS_RD;
                         end
                     end else if (fill_byte) begin
@@ -984,7 +985,7 @@ module softcpu_subsystem (
         casez (cpu_mem_addr)
             32'h0???_????: cpu_mem_rdata = rom_rdata;
             32'h1???_????: cpu_mem_rdata = ram_rdata;
-            32'h2000_0000: cpu_mem_rdata = {3'd0, dock_key_stb, dock_key_ext, dataslots_ready, osd_open_req, credits_active, dock_key_code, cont1_key};
+            32'h2000_0000: cpu_mem_rdata = {3'd0, dock_key_stb, dock_key_ext, dataslots_ready, osd_open_req, 1'b0, dock_key_code, cont1_key};
             32'h2000_0018: cpu_mem_rdata = {6'd0, raster_h, 6'd0, raster_w};
 
             32'h3???_????: cpu_mem_rdata = fdd_rdata;

@@ -6,7 +6,7 @@
 // is for: "Turning this on trades a known-good stub for an untested path; it
 // wants a bench that gets there first." The first version of this bench covered
 // the register mapping and NOT the interrupt, and the hardware said so: POST
-// stopped at MEMORY 640KB OK with LVL 41 -- master IRQ6, the PC/XT's floppy
+// stopped at MEMORY 640KB OK with LVL 41 -- master IRQ6, the AT floppy
 // line, asserted and never cleared, on a machine whose FDC interrupt is a SLAVE
 // line. So the second half of this bench is the routing.
 //
@@ -60,11 +60,12 @@ module tb_pc98_fdc_glue;
     pc98_fdc_glue dut (
         .clk(clk), .rst(rst),
         .sel_stat(sel_stat), .sel_data(sel_data), .sel_ctrl(sel_ctrl),
-        .sel_mode(sel_mode), .port_2dd(port_2dd),
+        .sel_mode(sel_mode), .sel_mode144(1'b0), .port_2dd(port_2dd),
         .wr_stb(wr_stb), .wr_data(wr_data), .rd_stb(rd_stb),
         .fd_addr(fd_addr), .fd_write(fd_write), .fd_read(fd_read),
         .fd_wdata(fd_wdata), .fd_irq(fd_irq), .fd_busy(fd_busy),
         .ctrl_readback(ctrl_readback), .mode_readback(mode_readback),
+        .reg144_readback(),
         .group_live(group_live), .irq_2hd(irq_2hd), .irq_2dd(irq_2dd)
     );
 
@@ -82,7 +83,7 @@ module tb_pc98_fdc_glue;
 
     // NOT_READY_ENDS_COMMAND is what Peripherals.sv passes under MACHINE_PC98:
     // a PC-98's drives report READY, so an empty one ends a command instead of
-    // parking CB. The PC/XT build passes 0 and keeps floppy.v's old behaviour.
+    // parking CB. An AT build passes 0 and keeps floppy.v's old behaviour.
     // ---- the DMAC + sector feeder, tb_fdd_dma_model -------------------------
     //
     // The glue's own guests never touch the DMA registers -- the model's

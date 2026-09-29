@@ -120,7 +120,7 @@ if [ "$V30" = 1 ]; then
     /work/$V/v30u_ucrom.sv /work/$S/v30_cpu_bridge.sv"
   # MACHINE_PC98 always: ce_generator keys its speed table on it, and
   # under --realmem so do RAM.sv's PC-98 address select and its ITF shadow.
-  # A V30 bench running the PC/XT frequencies or the PC/AT memory map would
+  # A V30 bench running the ISA frequencies or the PC/AT memory map would
   # not be the hardware rehearsal it is meant to be.
   CPU_DEF="+define+CPU_V30+V30_BACKDOOR+MACHINE_PC98"
   [ "$REALMEM" = 1 ] && CPU_DEF="$CPU_DEF+REALMEM+SDRAM_USE_MP"

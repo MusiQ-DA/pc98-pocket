@@ -20,7 +20,7 @@ module pocket_keyboard #(
     input        reset,
     input [15:0] buttons,      // cont1_key
     input        gamepad,      // 1 = joystick mode: buttons drive the game port, not keys
-    input        osd_active,   // 1 = an overlay (OSD or credits) is up: suppress button typing
+    input        osd_active,   // 1 = an overlay (OSD) is up: suppress button typing
     input  [8:0] vkb_key,      // virtual-keyboard event: {make, Set-2 code}
     input        vkb_stb,      // toggles per firmware-emitted event
     input [16*9-1:0] key_cfg,  // per-control {ext, Set-2 code} file; ids 4-10 are the buttons (code 0 = unmapped/function)

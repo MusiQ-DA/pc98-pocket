@@ -1,7 +1,7 @@
 //
-// pc98_fdc_glue -- the PC-98 FDC ports, onto floppy.v's PC/XT register file.
+// pc98_fdc_glue -- the PC-98 FDC ports, onto floppy.v's AT register file.
 //
-// floppy.v is a uPD765 with a PC/XT skin: the chip's own MSR and FIFO sit at
+// floppy.v is a uPD765 with an AT skin: the chip's own MSR and FIFO sit at
 // its registers 4 and 5, and everything else it needs -- drive select, motor,
 // DMA/IRQ enable, reset -- arrives through the AT's Digital Output Register at
 // register 2, plus a data rate at 4 or 7.
@@ -22,7 +22,7 @@
 // interrupt, and that cost a hardware cycle: the on-screen POST panel stopped
 // at MEMORY 640KB OK reading LVL 41 -- master IRQ0 plus master IRQ6 asserted
 // and never cleared -- with the guest still inside the FDC code (IO 00BE 00CC).
-// Master IRQ6 is the PC/XT's floppy line. A PC-98 does not have one there.
+// Master IRQ6 is the AT's floppy line. A PC-98 does not have one there.
 //
 //   WHO ASSERTS IT. floppy.v's irq, on command completion -- see its
 //   raise_interrupt, gated by dma_irq_enable, which is DOR bit 3. On the
@@ -141,7 +141,12 @@
 
 `default_nettype none
 
-module pc98_fdc_glue (
+module pc98_fdc_glue #(
+    // 1 puts a 3-mode (1.44 MB-capable) drive on the bus -- the 0x4BE register
+    // a PC-9821, or a 9801 with such a drive attached, answers. np21w's
+    // fdc.support144. 0 leaves the port undecoded, as on a plain 9801.
+    parameter SUPPORT_144 = 1
+) (
     input  wire        clk,
     input  wire        rst,
 
@@ -154,6 +159,7 @@ module pc98_fdc_glue (
     input  wire        sel_data,
     input  wire        sel_ctrl,
     input  wire        sel_mode,
+    input  wire        sel_mode144,   // 0x4BE: the 3-mode drive's density select
     input  wire        port_2dd,     // 0 = 0x90/0x92/0x94, 1 = 0xC8/0xCA/0xCC
     input  wire        wr_stb,
     input  wire  [7:0] wr_data,
@@ -187,7 +193,8 @@ module pc98_fdc_glue (
     // 0x94 bit 4 (DMAE): the flip-flop the hardware data book puts on the
     // DRQ/DACK lines. Peripherals ANDs it with floppy.v's dma_req -- a
     // control write with bit 4 clear is how the BIOS closes the channel.
-    output logic       dma_enable
+    output logic       dma_enable,
+    output logic [7:0] reg144_readback   // 0x4BE read
 );
 
     logic [7:0] ctrl_q;
@@ -289,6 +296,36 @@ module pc98_fdc_glue (
         if (rst) chgreg <= 8'h03;
         else if (wr_stb && sel_mode) chgreg <= wr_data;
     end
+
+    // ---- 0x4BE, the 3-mode drive's density select --------------------------
+    //
+    // np21w io/fdc.c's fdc_o4be / fdc_i4be (io/fdc.c:1203-1219), attached only
+    // when the machine is 1.44-capable (fdc.support144 -- a PC-9821, or a 9801
+    // carrying a 3-mode drive). A write names a drive and a density, a read
+    // reports the last-stored density for the drive the register last named:
+    //
+    //     write  bit 6:5  drive (0-3)      bit 4  strobe     bit 0  mode
+    //            -> if (dat & 0x10) rpm[(dat >> 5) & 3] = dat & 1
+    //     read   rpm[reg144[6:5]] | 0xFE
+    //
+    // The mode is bookkeeping for the guest, exactly as it is in np21w: the
+    // drive serves whatever the mounted image actually is (the firmware's
+    // geometry comes from the image size), so rpm[] records the selection
+    // without changing what the media is.
+    logic [7:0] reg144;
+    logic [3:0] fdd_rpm;
+    always_ff @(posedge clk, posedge rst) begin
+        if (rst) begin
+            reg144  <= 8'h00;
+            fdd_rpm <= 4'h0;
+        end
+        else if (wr_stb && sel_mode144) begin
+            reg144 <= wr_data;
+            if (wr_data[4]) fdd_rpm[wr_data[6:5]] <= wr_data[0];
+        end
+    end
+    assign reg144_readback = ~SUPPORT_144[0] ? 8'hFF
+                                             : (8'hFE | {7'd0, fdd_rpm[reg144[6:5]]});
 
     // np21w's guard, ((port >> 4) ^ chgreg) & 1, with (port >> 4) & 1 written as
     // ~port_2dd: live when chgreg[0] and port_2dd disagree.

@@ -40,6 +40,7 @@ module tb_ram_ab_ph;
     wire [15:0] s_dq_out, s_dq_in;
 
     logic [6:0] map_ems [0:3] = '{7'd0, 7'd0, 7'd0, 7'd0};
+    logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
 
     RAM dut (
         .clock(clock), .reset(reset),
@@ -57,6 +58,7 @@ module tb_ram_ab_ph;
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
         .map_ems(map_ems),
         .ems_b1(1'b0), .ems_b2(1'b0), .ems_b3(1'b0), .ems_b4(1'b0),
+        .ems98_map(ems98_unused),
         .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(1'b1),
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)

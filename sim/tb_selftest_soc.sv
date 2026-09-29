@@ -14,9 +14,10 @@
 //
 // Since the OSD font became a boot-time load from font.rom's dataslot
 // (osd_font.c), this bench also answers for that path: a small APF stand-in
-// answers the target-dataslot read by DMAing a synthetic 8x8 ANK into the
-// bridge RAM, so the glyphs that reach the panel went through the whole
-// firmware handshake, the bridge RAM, and the region-0x7 font window.
+// answers the target-dataslot reads by DMAing a synthetic ANK bank into the
+// bridge RAM (six 1 KB chunks now: the 8x8 and 8x16 banks), so the glyphs
+// that reach the panel went through the whole firmware handshake, the
+// bridge RAM, and the region-0x7 font window.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -37,14 +38,14 @@ module tb_selftest_soc;
 
     // ---- APF stand-in for the target-dataslot read (the boot font load)
     //
-    // The firmware asks for font.rom's first kilobytes by slot id; the real
-    // host reads the file off the SD card. This answers the handshake the way
-    // core_bridge_cmd expects -- ack on command, data, done -- and DMAs a
-    // synthetic ANK bank into the bridge RAM one word per pulse, byte 0 of the
-    // chunk in bridge_wr_data[31:24] like the real bridge. The pattern (even
-    // bytes solid, odd bytes striped) puts ink in every glyph, which is all
-    // the visibility checks below need; the font-window content check at the
-    // end compares against it exactly.
+    // The firmware asks for font.rom's first 6 KB by slot id, one 1 KB read
+    // per chunk; the real host reads the file off the SD card. This answers
+    // each handshake the way core_bridge_cmd expects -- ack on command,
+    // data, done -- and DMAs a synthetic ANK bank into the bridge RAM one
+    // word per pulse, byte 0 of the chunk in bridge_wr_data[31:24] like the
+    // real bridge. The pattern (even bytes solid, odd bytes striped) puts
+    // ink in every glyph, which is all the visibility checks below need;
+    // the font-window content check at the end compares against it exactly.
     logic        tds_ack = 0, tds_done = 0;
     logic        bridge_wr_r = 0;
     logic [31:0] bridge_addr_r = 0, bridge_data_r = 0;
@@ -65,6 +66,7 @@ module tb_selftest_soc;
         case (tds_state)
             0: if (target_dataslot_read && !tds_read_d) begin
                    tds_ack  <= 1'b1;
+                   tds_done <= 1'b0;   // the APF drops done when it takes a command
                    tds_word <= 0;
                    tds_state <= 1;
                end
@@ -78,12 +80,12 @@ module tb_selftest_soc;
                        tds_word <= tds_word + 1;
                end
             2: begin
-                   tds_done  <= 1'b1;   // one pulse: the bridge edge-detects it
+                   // Hold done high until the next command, like the real APF:
+                   // the bridge edge-detects it through a clk_sys synch_3, so a
+                   // one-clk_74a pulse is narrower than the sampling period and
+                   // gets missed.
+                   tds_done  <= 1'b1;
                    tds_ack   <= 1'b0;
-                   tds_state <= 3;
-               end
-            3: begin
-                   tds_done  <= 1'b0;
                    tds_state <= 0;
                end
         endcase
@@ -116,13 +118,13 @@ module tb_selftest_soc;
         .clk_pix(clk_pix), .osd_hcnt(osd_hcnt), .osd_vcnt(osd_vcnt),
         .osd_palette_idx(osd_palette_idx), .osd_in_area(osd_in_area),
         .cont1_key(16'd0), .dock_key_code(8'd0), .dock_key_ext(1'b0),
-        .dock_key_stb(1'b0), .credits_active(1'b0), .osd_open_req(1'b0),
+        .dock_key_stb(1'b0), .osd_open_req(1'b0),
         .raster_w(osd_raster_w), .raster_h(osd_raster_h),
         .dataslots_ready(1'b1),           // pretend APF finished the load
         .soft_guest_hold(soft_guest_hold),
         .st_addr(st_addr), .st_wdata(st_wdata), .st_we(st_we), .st_req(st_req),
         .st_done(st_done), .st_rdata(st_rdata),
-        .osd_active(), .osd_credits_req(),
+        .osd_active(),
         .vkb_key(), .vkb_stb(), .osd_palette(), .osd_cpu_speed(),
         .osd_bios_wr(), .osd_boost(), .osd_spk_vol(), .osd_stereo(),
         .osd_ems(), .osd_ems_frame(),
@@ -154,6 +156,7 @@ module tb_selftest_soc;
     wire s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
     logic [6:0] unused_map [0:3] = '{7'd0, 7'd0, 7'd0, 7'd0};
+    logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
     wire        memory_access_ready, ram_address_select_n;
 
     RAM u_ram (
@@ -172,6 +175,7 @@ module tb_selftest_soc;
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
         .map_ems(unused_map),
         .ems_b1(1'b0), .ems_b2(1'b0), .ems_b3(1'b0), .ems_b4(1'b0),
+        .ems98_map(ems98_unused),
         .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(1'b1),
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)
@@ -218,7 +222,7 @@ module tb_selftest_soc;
         .clk_pix(clk_pix), .clk_pix_90(clk_pix), .RESET(reset),
         .r(6'd0), .g(6'd0), .b(6'd0),          // black picture: overlay only
         .HSync(hs), .VSync(vs), .HBlank(hb), .VBlank(vb),
-        .palette_cfg(3'd0), .credits_mode_pix(1'b0),
+        .palette_cfg(3'd0), .disk_led(1'b0),
         .vid_blank(1'b0),
         .osd_active(u_soft.osd_active_r),
         .osd_palette_idx(osd_palette_idx), .osd_in_area(osd_in_area),
@@ -309,26 +313,40 @@ module tb_selftest_soc;
         $display("  overlay pixels       : %0d (any non-black)", any_overlay_pixels);
         $display("  VISIBLE pixels       : %0d  <-- bright enough to read",
                  shown_pixels);
-        // The font window itself: one staged ANK byte and two patched glyphs
-        // (osd_font.c's table). Wrong lane order, wrong endianness, or a patch
-        // off by a row all show up here even when the panel still draws.
-        // The RAM is four same-width lanes now, so a byte address splits into
-        // {lane = [1:0], word = [10:2]}.
+        // The font window itself: staged ANK bytes from both banks and two
+        // patched glyphs (osd_font.c's tables). Wrong lane order, wrong
+        // endianness, or a patch off by a row all show up here even when the
+        // panel still draws. The RAM is four same-width lanes now, so a byte
+        // address splits into {lane = [1:0], word = [12:2]}.
         font_bad = 0;
-        if (u_soft.font_lane0.mem[9'h004] !== 8'h80) begin
+        if (u_soft.font_lane0.mem[11'h004] !== 8'h80) begin
             font_bad++;
             $display("  font[0x010] = %02h, want 80 (G_HOME row 0, patched)",
-                     u_soft.font_lane0.mem[9'h004]);
+                     u_soft.font_lane0.mem[11'h004]);
         end
-        if (u_soft.font_lane0.mem[9'h082] !== 8'hFF) begin
+        if (u_soft.font_lane0.mem[11'h082] !== 8'hFF) begin
             font_bad++;
-            $display("  font[0x208] = %02h, want FF ('A' row 0, staged pattern)",
-                     u_soft.font_lane0.mem[9'h082]);
+            $display("  font[0x208] = %02h, want FF ('A' 8x8 row 0, staged pattern)",
+                     u_soft.font_lane0.mem[11'h082]);
         end
-        if (u_soft.font_lane3.mem[9'h1B4] !== 8'h1F) begin
+        if (u_soft.font_lane3.mem[11'h1B4] !== 8'h1F) begin
             font_bad++;
             $display("  font[0x6D3] = %02h, want 1F (G_TL row 3, patched)",
-                     u_soft.font_lane3.mem[9'h1B4]);
+                     u_soft.font_lane3.mem[11'h1B4]);
+        end
+        // The 8x16 bank (window byte 0x800 + code x 16): 'A' row 0 lands at
+        // byte 0xC10 -- staged chunk pattern word 0xC10>>2 = 0x304, lane 0.
+        if (u_soft.font_lane0.mem[11'h304] !== 8'hFF) begin
+            font_bad++;
+            $display("  font[0xC10] = %02h, want FF ('A' 8x16 row 0, staged pattern)",
+                     u_soft.font_lane0.mem[11'h304]);
+        end
+        // G_TL in the tall bank: byte 0x800 + 0xDA*16 + row 8 = 0x15A8 -> word
+        // 0x56A, lane 0; the 16-row patch puts the junction bar on row 8.
+        if (u_soft.font_lane0.mem[11'h56A] !== 8'h1F) begin
+            font_bad++;
+            $display("  font[0x15A8] = %02h, want 1F (G_TL row 8, 16-row patch)",
+                     u_soft.font_lane0.mem[11'h56A]);
         end
         $display("  font window samples  : %0d wrong", font_bad);
         if (shown_pixels == 0)

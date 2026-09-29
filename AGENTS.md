@@ -24,9 +24,11 @@ binaries only.
 - `python3 scripts/check_unconnected.py` — dangling softcpu/core inputs.
 - Firmware: build with Homebrew LLVM (Apple clang lacks rv32):
   `cd firmware && PATH="/opt/homebrew/opt/llvm/bin:$PATH" make`
-  regenerates `firmware.vh` + `firmware.srchash`. CI verifies the committed
-  `firmware.srchash` matches the sources — rebuild after ANY source edit
-  (comments included, they change the hash).
+  regenerates `firmware.vh` + `firmware.bin` — the Quartus build consumes the
+  COMMITTED `firmware.vh`, so rebuild and commit it after ANY source edit.
+  CI runs `nodiv-verify`: compiles, links and disassembles to prove the
+  image has no div/rem (the softcore is mul-only: `-march=rv32i_zmmul`,
+  so a stray `/` is a link error, not a silent trap).
 - Full bitstream: GitHub Actions `build.yml` (`quartus-win` job, native
   Windows Quartus) on push to `main` or `workflow_dispatch`. The local
   Docker Quartus scripts were removed (unreliable under wine/Rosetta);
@@ -45,3 +47,16 @@ the shipping bitstream. Fit/resource questions go through a CI run; if a
 number is needed before pushing, use `scripts/measure_core.sh <top>
 <files>` — it synthesises ONE module in a scratch dir under /tmp, never
 touches `fpga/db`, and is the only sanctioned local Quartus invocation.
+
+## Deploying to hardware
+
+- Prefer `scripts/jtag_flash.sh <path/to/ap_core.sof>` — it programs the
+  Cyclone V directly over JTAG and does NOT touch the SD card. Pass the CI
+  artifact `.sof` (from the `quartus-win-bitstream` artifact of a `build`
+  run; the artifact carries `output_files/ap_core.sof`). Docker converts
+  .sof→.svf, openocd plays it. A core must be RUNNING on the Pocket for
+  the bitstream to take (the menu leaves the fabric unconfigured).
+- `scripts/deploy.sh` (the deploy skill's path) builds the full
+  `hiroya.PC9801` core directory onto the SD card — use it only when the
+  SD card route is explicitly wanted, e.g. when data-slot assets changed.
+  Do not deploy via the card by default.

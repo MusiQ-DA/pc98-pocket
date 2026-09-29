@@ -38,7 +38,6 @@ enum { OSD_NONE = 0, OSD_VKB, OSD_SETTINGS };
 static osd_fb_t osd;
 static uint16_t ui_prev;          // previous button state, for edge detection
 static uint8_t ui_mode;           // OSD_NONE / OSD_VKB / OSD_SETTINGS
-static uint8_t credits_shown;     // credits overlay up (latches core_top's flag across the dismiss)
 static uint8_t osd_open_prev;     // previous interact "Extra Options" request, for edge detection
 static uint8_t ui_osd_top;        // VKB at the top of the screen instead of the bottom
 static uint32_t ui_raster;        // presented raster size, {h[25:16], w[9:0]}
@@ -74,12 +73,6 @@ static void osd_origin_write(void)
         y = (h - OSD_FB_HEIGHT) / 2;
     }
     *OSD_ORIGIN = (y << 16) | x;
-}
-
-// True while the keyboard or the settings menu owns the framebuffer.
-int vkb_ui_overlay_open(void)
-{
-    return ui_mode != OSD_NONE;
 }
 
 // OSD control word: bit0 = an overlay is shown; the origin is refreshed first.
@@ -126,7 +119,7 @@ static void repaint_latched(void)
 
 // Visual rows for navigation: each is a contiguous, left-to-right span of
 // vkb_keys[] (function block + main block + keypad), matching the compiled
-// PC-98 or PC/XT table in vkb_layout.c.
+// table in vkb_layout.c.
 static const struct {
     uint8_t start, count;
 } vrows[] = {
@@ -303,7 +296,7 @@ static void picker_close(void)
 }
 
 // A banner in the strip the keyboard leaves free, so pick mode reads differently from typing into
-// the guest.
+// the guest. The message draws in the 8x16 bank, so the 16px bar is exactly one text row.
 static void picker_draw_prompt(void)
 {
     static const char msg[] = "A: assign    B: cancel";
@@ -313,7 +306,7 @@ static void picker_draw_prompt(void)
     int y0 = ui_osd_top ? (osd.y0 + osd.height + 8) : (osd.y0 - 24);
     osd_fb_t bar = { 0, y0, OSD_FB_WIDTH, 16 };
     osd_fill_rect(&bar, bx, 0, bw, 16, OSD_BODY);
-    osd_draw_string(&bar, bx + 8, 4, msg, OSD_LABEL);
+    osd_draw_string16(&bar, bx + 8, 0, msg, OSD_LABEL);
 }
 
 // Run a button's configured OSD function. Only ever called in normal mode (no overlay open), so
@@ -323,9 +316,6 @@ static void button_function(uint8_t fn)
     switch (fn) {
     case BTNFN_SETTINGS:
         osd_enter_settings();
-        break;
-    case BTNFN_CREDITS:
-        settings_show_credits();
         break;
     case BTNFN_VIDEO:
         *OSD_ACTION = 0;             // re-arm the edge
@@ -444,15 +434,6 @@ void vkb_ui_tick(void)
         osd_origin_write();
     }
 
-    // Credits overlay: any button dismisses it (core_top does that); swallow input so the
-    // dismissing press doesn't also run a binding or re-trigger credits. credits_shown latches the
-    // flag so the press is caught even as core_top clears it the same tick.
-    if (credits_shown || CONT1_CREDITS(raw)) {
-        credits_shown = CONT1_CREDITS(raw) != 0;
-        ui_prev = buttons;
-        return;
-    }
-
     // The interact "Extra Options" action toggles the settings OSD, edge-detected so a held level
     // cannot double-fire. Pressing it again while the menu is up closes it -- the guaranteed
     // opener is also the guaranteed closer regardless of the bindings.
@@ -502,6 +483,10 @@ void vkb_ui_tick(void)
         if (key_bind_function(bind_map[i].btn) == BTNFN_SETTINGS)
             settings_mask |= bind_map[i].mask;
     }
+    // B never carries the close shortcut: in every overlay it is the dedicated
+    // back/cancel press, and a user binding of Open Settings on it must not turn
+    // "back one menu" into "drop the whole overlay".
+    settings_mask &= ~BTN_B;
     if (pressed & settings_mask) {
         // Consume the bit only where this check acts: from the menu it closes,
         // from the keyboard it swaps. In normal mode the press belongs to

@@ -173,17 +173,26 @@ module tb_pc98_tvram;
         // the bench covered it. The old screen test wrote 2000 cells the way
         // the BIOS writes them; the ITF sweeps the FULL plane, including the
         // last cells before the memory switch.
+        //
+        // np21w's backing is a plain byte array (memtram.c): byte writes AND
+        // word writes in the attribute region only ever land the even lane,
+        // so the odd bytes are never written and read back the array's zeroed
+        // default. The ITF's own SCASB/INC DI pair steps DI by two for the
+        // same reason -- only the even lane is an attribute -- but this loop
+        // still reads every byte and checks each against np21w's value.
         begin : itf_vram_test
             int bad;
+            logic [7:0] want;
             bad = 0;
             for (int a = 0; a < 'h3FE0; a++)
                 wr(14'(a), 8'hFF);
             for (int a = 0; a < 'h3FE0; a++) begin
                 rd(14'(a), got);
-                if (got !== 8'hFF) begin
+                want = (a >= 'h2000 && (a & 1)) ? 8'h00 : 8'hFF;
+                if (got !== want) begin
                     if (bad < 8)
-                        $display("  FAIL ITF VRAM test at %04h: %02h (want FF)",
-                                 a, got);
+                        $display("  FAIL ITF VRAM test at %04h: %02h (want %02h)",
+                                 a, got, want);
                     bad++;
                 end
             end

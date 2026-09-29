@@ -10,6 +10,30 @@
 // Step-index adaptation per magnitude nibble -- jt10_adpcm.v's step_next.
 static const int8_t STEP_ADAPT[8] = { -1, -1, -1, -1, 2, 5, 7, 9 };
 
+// The softcore has no divider (nodiv-verify gates it), so division goes
+// through the same restoring long divide gdc_service.c carries.
+static uint32_t udiv32(uint32_t n, uint32_t d, uint32_t *rem)
+{
+    uint32_t q = 0u, r = 0u;
+    if (d == 0u) {
+        if (rem) {
+            *rem = 0u;
+        }
+        return 0u;
+    }
+    for (int i = 31; i >= 0; i--) {
+        r = (r << 1) | ((n >> i) & 1u);
+        if (r >= d) {
+            r -= d;
+            q |= 1u << i;
+        }
+    }
+    if (rem) {
+        *rem = r;
+    }
+    return q;
+}
+
 void adpcm_enc_init(adpcm_enc *e, uint32_t src_rate)
 {
     if (!src_rate)
@@ -19,7 +43,8 @@ void adpcm_enc_init(adpcm_enc *e, uint32_t src_rate)
     // to 512/62500 * src_rate, split as quotient*512 + remainder*512/62500.
     // src*432 <= 192000*432 < 2^27, so every intermediate fits in 32 bits.
     uint32_t t = src_rate * ADPCMA_RATE_DIV;
-    e->ratio = (t / 62500u << 9) + ((t % 62500u) << 9) / 62500u;
+    uint32_t rem;
+    e->ratio = (udiv32(t, 62500u, &rem) << 9) + udiv32(rem << 9, 62500u, 0);
     e->pos = 0;
     e->idx = 0;
     e->prev = e->cur = 0;

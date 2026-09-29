@@ -94,6 +94,17 @@ module pc98_gdc #(
     output wire [4:0]  cursor_bottom,
     output wire [5:0]  cursor_rate,
     output wire [1:0]  zoom_disp,
+    // CSRFORM P1's low five bits are TEXT_LR on the master (lines per text
+    // row minus one) and GRPH_LR on the slave -- np21w's maketgrp walks the
+    // graphics partitions one PITCH-step every GRPH_LR+1 rasterlines, which
+    // is exactly the line doubling a 200-line mode runs on a 24 kHz raster.
+    // The BIOS writes 1 for it (bios18.c: `gdc.s.para[GDC_CSRFORM] = 1`).
+    output wire [4:0]  line_rep,
+    // SYNC P6:P7 carry the programmed vertical: the low ten bits hold the
+    // active-line field (np21w dispsync's `((LOADINTELWORD(para+6)-1) &
+    // 0x3ff) + 1`), the top six the VBP. 200 is what the 15.98 kHz table
+    // writes, 400 the 24.83 kHz one.
+    output wire [9:0]  vlines,
 
     // ---- the drawing server (the softcore's GDC engine) ---------------------
     // EXECUTE-class commands (VECTE 0x6C, TEXTE 0x68) stop being counted as
@@ -490,6 +501,10 @@ module pc98_gdc #(
     assign cursor_blink_en  = ~csr_p2[5];
 
     assign zoom_disp = para[P_ZOOM][1:0];
+    assign line_rep  = para[P_CSRFORM + 0][4:0];
+
+    wire [15:0] sync_vw = {para[P_SYNC + 7], para[P_SYNC + 6]};
+    assign vlines = sync_vw[9:0];
 
     // The light pen's three bytes are read back, never driven from here.
     wire _unused = &{1'b0, para[P_LPEN], para[P_MASK], para[P_SYNC], 1'b0};

@@ -1,20 +1,21 @@
-# PicoRV32 disk-softcore firmware build (LLVM toolchain, rv32im).
+# PicoRV32 disk-softcore firmware build (LLVM toolchain, rv32i_zmmul).
 # Produces firmware.vh, the $readmemh init image for the softcore ROM.
+#
+# Zmmul is the ratified multiply-only subset of M -- exactly what the softcore
+# implements (ENABLE_MUL(1), ENABLE_DIV(0) in softcpu_subsystem.sv). rv32im
+# leaves div/rem in the ISA, and whether a bare `/` or `%` becomes a real
+# division instruction or a strength-reduced sequence is a per-version size
+# heuristic: LLVM 23 emits six that Ubuntu's older clang did not, and every
+# one is an illegal-instruction trap on hardware. Under zmmul no compiler can
+# emit them at all -- division lowers to a __divsi3-family libcall this
+# bare-metal link does not provide, so a stray `/` fails the BUILD on every
+# toolchain instead of shipping in the ROM.
 
 OBJS = start.o main.o disk_tds.o fdd_service.o scsi_service.o \
        gdc_service.o rhythm.o adpcma_enc.o \
        vkb_draw.o vkb_layout.o vkb_ui.o \
        settings_ui.o key_bind.o dpad.o sdramtest.o osd_font.o
 DEPS = $(OBJS:.o=.d)
-
-# Everything that can change the built image. Hashed into firmware.srchash so CI
-# can tell a genuinely stale firmware.vh from a mere toolchain difference:
-# different clang versions lay identical sources out differently, so rebuilding
-# in CI and byte-comparing the image is pure noise. What actually needs catching
-# is someone editing the C and not re-running make, and a source hash catches
-# exactly that -- with no compiler needed on the checking side.
-SRC_FINGERPRINT = $(sort $(wildcard *.c) $(wildcard *.h) $(wildcard *.S)) \
-                  system.ld Makefile ../fpga/config.tcl
 
 CC      = clang
 LD      = ld.lld
@@ -45,7 +46,7 @@ HW_DEFINES := $(addprefix -D,$(shell sed -n 's/^[[:space:]]*set_global_assignmen
 # The firmware rides on an SD slot, so a marker costs seconds rather than a
 # fifteen-minute bitstream -- but only if there is a way to switch one on.
 EXTRA_DEFINES ?=
-CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Oz -mno-relax -ffreestanding -Wall -Werror -Wundef -MMD -MP $(HW_DEFINES) $(EXTRA_DEFINES)
+CFLAGS  = --target=riscv32 -march=rv32i_zmmul -std=c99 -Oz -mno-relax -ffreestanding -Wall -Werror -Wundef -MMD -MP $(HW_DEFINES) $(EXTRA_DEFINES)
 # -Oz's first hardware run drew a panel with missing fields and never opened
 # the keyboard; the -Os build hours earlier was fine, and nothing static
 # explains it -- so every file that draws, reads input, or moves disk sectors
@@ -54,15 +55,9 @@ CFLAGS  = --target=riscv32 -march=rv32im -std=c99 -Oz -mno-relax -ffreestanding 
 # budget at all. If those two misbehave it is the settings menu or SCSI,
 # never the keyboard.
 main.o vkb_ui.o vkb_draw.o vkb_layout.o dpad.o key_bind.o osd_font.o fdd_service.o disk_tds.o gdc_service.o sdramtest.o: CFLAGS := $(subst -Oz,-Os,$(CFLAGS))
-ASFLAGS = --target=riscv32 -march=rv32im -mno-relax -Wall -Werror -MMD -MP
+ASFLAGS = --target=riscv32 -march=rv32i_zmmul -mno-relax -Wall -Werror -MMD -MP
 
-# The digest the fingerprint uses, portable across the two CI worlds:
-# Linux has sha256sum and no shasum, macOS the reverse. Output formats agree
-# ("<hash>  <file>" and "<hash>  -" for stdin), so the fingerprint is the same
-# bytes on both -- which is the whole point of a source-only hash.
-SHA256 = $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo 'shasum -a 256')
-
-all: firmware.vh firmware.srchash
+all: firmware.vh
 
 # The -D values are baked into every object, so a config change rebuilds them all.
 $(OBJS): $(HW_CONFIG)
@@ -83,24 +78,12 @@ firmware.bin: firmware.elf
 firmware.vh: firmware.bin
 	hexdump -v -e '4/4 "%08x " "\n"' $< > $@
 
-firmware.srchash: $(SRC_FINGERPRINT)
-	@$(SHA256) $(SRC_FINGERPRINT) | $(SHA256) | cut -d' ' -f1 > $@
-	@echo "source fingerprint: $$(cat $@)"
-
-# The single definition of the fingerprint, so CI cannot drift from the build.
-# Computing the file list in a shell instead invites exactly that: an unquoted
-# $(ls ...) word-splits in bash and does not in zsh, which is how the first
-# attempt at this silently hashed one long filename.
-.PHONY: srchash-print srchash-verify
-srchash-print:
-	@$(SHA256) $(SRC_FINGERPRINT) | $(SHA256) | cut -d' ' -f1
-
 # The softcore is built with ENABLE_DIV(0) -- picorv32_pcpi_div was 216 ALMs
 # on a device that is 97 per cent full. A div/rem instruction would not be a
-# wrong answer there, it would be an ILLEGAL INSTRUCTION TRAP, and the compiler
-# emits them from a bare `/` or `%` without a word. So the absence is a claim,
-# and this is the gate: gdc_service.c's udiv32 and the menu's compares are what
-# keep it true.
+# wrong answer there, it would be an ILLEGAL INSTRUCTION TRAP. rv32i_zmmul
+# already makes emitting one a link failure (the __divsi3-family libcalls do
+# not exist here), so this gate should never fire -- it stays as the CI job
+# because disassembling the real image is the check that cannot drift.
 nodiv-verify: firmware.elf
 	@n=$$($(OBJDUMP) -d firmware.elf | awk '{print $$3}' \
 	      | grep -cE '^(div|divu|rem|remu)$$' || true); \
@@ -113,16 +96,6 @@ nodiv-verify: firmware.elf
 	 fi; \
 	 echo "no division instructions -- the softcore needs no divider"
 
-srchash-verify: nodiv-verify
-	@want=$$($(SHA256) $(SRC_FINGERPRINT) | $(SHA256) | cut -d' ' -f1); \
-	 have=$$(cat firmware.srchash 2>/dev/null || echo "<missing>"); \
-	 echo "sources  : $$want"; echo "committed: $$have"; \
-	 if [ "$$want" != "$$have" ]; then \
-	   echo "firmware.vh is stale for these sources -- run make and commit firmware.vh + firmware.srchash"; \
-	   exit 1; \
-	 fi; \
-	 echo "firmware.vh matches its sources"
-
 clean:
 	rm -f *.o *.d firmware.elf firmware.bin firmware.vh firmware.srchash
 
@@ -131,4 +104,4 @@ check-format:
 
 -include $(DEPS)
 
-.PHONY: all clean check-format
+.PHONY: all clean check-format nodiv-verify

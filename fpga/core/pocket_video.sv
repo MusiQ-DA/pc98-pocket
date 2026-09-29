@@ -2,7 +2,7 @@
 // Pocket video output: composite the machine's raster and the softcore's OSD
 // framebuffer into the Analogue APF scaler stream. The machine raster is the
 // pass-through default; the stages below special-case only what differs from
-// it: the palette tint, the credits and sync-guard overlays, and the final
+// it: the palette tint, the sync-guard overlay, and the final
 // pack of RGB + single-cycle HS/VS + DE with the scaler-slot word held
 // through blanking. Runs on clk_pix, the dot clock's half-rate sibling (one
 // pixel per edge).
@@ -22,7 +22,7 @@ module pocket_video (
     input             VBlank,
     // Config / clock-mux state
     input      [2:0]  palette_cfg,
-    input             credits_mode_pix,
+    input             disk_led,   // on-screen disk-access lamp (stretched level)
     input             vid_blank,
     // OSD framebuffer handshake (softcore)
     input             osd_active,
@@ -114,45 +114,6 @@ module pocket_video (
     wire vid_hb  = pc98_hb;
     wire vid_vb  = pc98_vb;
     // No padding: the machine raster is the picture, edge to edge.
-    wire vid_pad = 1'b0;
-
-    //
-    // Credits overlay
-    //
-    wire [23:0] credits_rgb;
-    wire        credits_rst;
-    synch_3 s_credits_rst (RESET, credits_rst, clk_pix);
-
-    jtframe_credits #(
-        .PAGES  (4),
-        .COLW   (8),
-        .BLKPOL (1)
-    ) u_credits(
-        .rst        ( credits_rst ),
-        .clk        ( clk_pix ),
-        .pxl_cen    ( 1'b1 ),
-
-        // input image
-        .HB         ( vid_hb  ),
-        .VB         ( vid_vb ),
-        .rgb_in     ( vid_pad ? 24'd0 : {tr, tg, tb} ),   // live picture; the credits dim it behind the scrolling text
-        .rotate     ( 2'd0  ),
-        .toggle     ( 1'b0  ),
-        .fast_scroll( 1'b0  ),
-        .border     ( 1'b0 ),
-
-        .vram_din   ( 8'h0  ),
-        .vram_dout  (       ),
-        .vram_addr  ( 8'h0  ),
-        .vram_we    ( 1'b0  ),
-        .vram_ctrl  ( 3'b0  ),
-        .enable     ( credits_mode_pix ),
-
-        // output image
-        .HB_out     (             ),
-        .VB_out     (             ),
-        .rgb_out    ( credits_rgb )
-    );
 
     //
     // Overlay sync guard
@@ -190,8 +151,8 @@ module pocket_video (
     wire sel_hb = guard_run ? gen_hb : vid_hb;
     wire sel_vb = guard_run ? gen_vb : vid_vb;
 
-    // The credits overlay delays its picture one clk_pix; stage the presented sync/blanking
-    // to match, so both align with the composited RGB at the final register. sel_hb_d1 also
+    // The output register delays the composited RGB one clk_pix; stage the presented
+    // sync/blanking to match, so both align at the final register. sel_hb_d1 also
     // gives the OSD line counter its hblank-fall edge.
     reg sel_hs_d1 = 1'b0, sel_vs_d1 = 1'b0;
     reg sel_hb_d1 = 1'b0, sel_vb_d1 = 1'b0;
@@ -498,12 +459,18 @@ module pocket_video (
     wire [23:0] mark_rgb = 24'd0;
 `endif
 
+    // Disk-access lamp: a 12x12 amber square tucked just inside the top-right
+    // corner of the raster, over the picture and under the OSD.
+    wire lamp_in = disk_led && (rb_h >= PC98_H_ACTIVE - 10'd20) && (rb_h < PC98_H_ACTIVE - 10'd8)
+                            && (rb_v >= 10'd8) && (rb_v < 10'd20);
+
     wire [23:0] overlay    = mark_in       ? mark_rgb
                            : dbg_in        ? dbg_color
                            : vid_blank_pix ? 24'd0
                            : osd_show      ? osd_color
                            : guard_run     ? 24'd0
-                           :                 credits_rgb;
+                           : lamp_in       ? 24'hE0A020
+                           :                 {tr, tg, tb};
     always @(posedge clk_pix) begin
         vid_de  <= vid_de_now;
         vid_rgb <= vid_de_now ? overlay : {8'd0, vid_slot, 13'd0};

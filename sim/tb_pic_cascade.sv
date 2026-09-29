@@ -167,6 +167,37 @@ module tb_pic_cascade;
         end
     endtask
 
+    // Register reads through the real port path.  A0=1 always returns the
+    // IMR; A0=0 returns whatever OCW3 last selected (power-on state: IRR).
+    // The BIOS exercises both -- it reads the slave's IMR at 0x0A to refuse
+    // a disk call while the drive's IRQ is still masked, and polls the ISR
+    // through OCW3 to spot an interrupt still in service.
+    task automatic s_read(input logic a, output logic [7:0] d);
+        begin
+            @(negedge clk);
+            s_a = a; s_cs_n = 1'b0; s_rd_n = 1'b0;
+            repeat (4) @(negedge clk);
+            d = s_dout;
+            s_rd_n = 1'b1;
+            @(negedge clk);
+            s_cs_n = 1'b1;
+            repeat (8) @(negedge clk);
+        end
+    endtask
+
+    task automatic m_read(input logic a, output logic [7:0] d);
+        begin
+            @(negedge clk);
+            m_a = a; m_cs_n = 1'b0; m_rd_n = 1'b0;
+            repeat (4) @(negedge clk);
+            d = m_dout;
+            m_rd_n = 1'b1;
+            @(negedge clk);
+            m_cs_n = 1'b1;
+            repeat (8) @(negedge clk);
+        end
+    endtask
+
     // Two INTA pulses the way the 8288 sequences them; the vector comes
     // back on the second.  Also reports who was driving it.
     task automatic inta_cycle(output logic [7:0] vec, output bit slave_drove);
@@ -330,6 +361,55 @@ module tb_pic_cascade;
         s_ir2 = 1'b0;
         s_write(1'b0, 8'h62);
         m_write(1'b0, 8'h67);
+
+        // ================================================================
+        // G. The BIOS's own register pokes, through the real read port.
+        //    The disk BIOS reads the slave's IMR at 0x0A to refuse a call
+        //    while the drive line is still masked, and does its mask dance
+        //    with cli + in 0x0A + and/or + out 0x0A.  It also reads the ISR
+        //    via OCW3 before deciding whether a result may still be coming.
+        $display("G: port-level reads the BIOS relies on");
+        begin
+            logic [7:0] rd;
+            // Mask everything, then read the mask back at A0=1 (port 0x0A).
+            s_write(1'b1, 8'hFF);
+            s_read (1'b1, rd);
+            check(rd == 8'hFF,          $sformatf("slave IMR reads back FF (got %02h)", rd));
+            // The BIOS mask dance: in 0x0A, clear the IRQ11 bit, out 0x0A.
+            s_read (1'b1, rd);
+            s_write(1'b1, rd & ~8'h08);
+            s_read (1'b1, rd);
+            check(rd == 8'hF7,          $sformatf("unmasked IRQ11 via port path (IMR %02h)", rd));
+            // A request that reaches service: raise IR3, INTA it.
+            s_ir3 = 1'b1;
+            wait_m_int(400, got);
+            check(got,                "IR3 rose with only bit 3 unmasked");
+            inta_cycle(vec, slave_drove);
+            check(vec == 8'h13,       $sformatf("vector 0x13 (got %02h)", vec));
+            s_ir3 = 1'b0;
+            // OCW3 selects what A0=0 reads: RR|RIS -- 0x0B reads the ISR,
+            // 0x0A the IRR.  The BIOS reads the ISR to see IRQ11 in service.
+            s_write(1'b0, 8'h0B);
+            s_read (1'b0, rd);
+            check(rd == 8'h08,        $sformatf("OCW3->ISR shows IR3 in service (got %02h)", rd));
+            s_write(1'b0, 8'h0A);
+            s_read (1'b0, rd);
+            check(rd == 8'h00,        $sformatf("OCW3->IRR clean after INTA (got %02h)", rd));
+            // A fresh request lands in IRR before service.
+            s_ir2 = 1'b1;
+            repeat (10) @(negedge clk);
+            s_read (1'b0, rd);
+            check(rd[2],              $sformatf("OCW3->IRR shows new IR2 (got %02h)", rd));
+            s_ir2 = 1'b0;
+            s_write(1'b0, 8'h63);                          // EOI IR3
+            s_write(1'b0, 8'h0B);
+            s_read (1'b0, rd);
+            check(rd == 8'h00,        $sformatf("ISR back to zero after EOI (got %02h)", rd));
+            s_write(1'b1, 8'h00);                          // reopen slave mask
+            // The master's IMR at 0x02 reads what was written (0x3D).
+            m_read (1'b1, rd);
+            check(rd == 8'h3D,        $sformatf("master IMR reads back 3D (got %02h)", rd));
+        end
 
         if (errors == 0) $display("PASS tb_pic_cascade");
         else             $display("FAIL tb_pic_cascade: %0d", errors);

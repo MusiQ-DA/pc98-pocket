@@ -11,9 +11,6 @@ void settings_open(void);
 // screen. Used to return from the key picker to the row it was opened from.
 void settings_reopen(void);
 
-// Raise the credits overlay (edge-armed OSD_ACTION); used by the menu action and the Start button.
-void settings_show_credits(void);
-
 // Handle one tick of controller edges while the overlay is shown: navigate submenus and cycle
 // values. Returns nonzero when the user dismisses the overlay (B at the main menu).
 int settings_input(uint16_t pressed);
@@ -32,5 +29,11 @@ void settings_service(void);
 // Flag the save dirty so settings_service() flushes it. For changes made outside this module (a
 // rebind from the key picker) that must persist alongside the settings.
 void settings_mark_dirty(void);
+
+// Drive-A mount notification, from fdd_service: `hash` is the mounted image's
+// content identity on every mount and 0 on unbind. A disk the per-disk table
+// knows gets its saved profile applied live; a new disk inherits the global
+// blob, and unbinding returns to it. Later edits persist to that disk's entry.
+void settings_disk_mounted(uint32_t hash);
 
 #endif

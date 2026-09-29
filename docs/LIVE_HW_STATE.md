@@ -317,3 +317,84 @@ launch レート・late 発火行・fill 年齢をライブ観測。修正後は
   (IVT 設定前〜割り込み初期化中) の凍結に特有の問題と確定。
 - walk は「何時でも撃てる」わけではなく「POST 安定後に撃つ」こと
   が条件と分かった — 遅延発射は対症療法ではなく正しい使い方。
+
+## +3ms POST 殺しのメカニズム bisect (セッション継続)
+
+残る謎「なぜ +3ms のバス借用が POST を殺すか」を2方向から攻めた:
+
+- **sim 再現 (tb_pc98_boot)**: arbiter の ff1/ff2/aen チェーンを忠実に
+  モデル化 (`+freeze_start_us`/`+freeze_len_us`)、bridge の
+  `address_enable_n` に接続。+3ms×46ms の凍結は発射→許可→解放まで
+  正常動作し、**ゲストは解放後に GDC 初期化を普通に続行** — 
+  凍結単体では sim の POST は殺せない (凍結以外の要因、つまり
+  ext 側がバスを駆動する事自体、が残る容疑)。
+- **ウォーム/コールド差 (実機で判明)**: Reset PC (ウォーム) 後の
+  +3ms ストローブ walk は POST が完走 (`How many files` 到達)。
+  一方コールドブート (JTAG リフラッシュ) で b6c7ee0 は**再び同じ
+  死亡** (imr=FF, ticks=1, TVRAM 空) — **+3ms 脆弱窓はコールド POST
+  固有**。BIOS が warm-boot 署名を検出して ITF/初期化をスキップする
+  ためと考えられる (warm でも `####` 進行バーは出た)。
+- **bisect 機構 (3b5132e)**: slot 0x84 bit31 で実験フラグをアーム —
+  [21]=rv_early (+3ms 発射, one-shot)、[20]=rv_hold_only (selftest
+  master が grant を取ったままストローブ無しで ~46ms バスを保持)。
+  tb_strict_grant phase 6 で hold_only 動作を検証済み。
+- **決定実験 (4ba2f60 debug build)**: rv_early=1, rv_hold_only=1 を
+  config 時点でアーム → **コールドブートで自動的に +3ms・46ms
+  純粋凍結が発射**。POST が死ねば犯人は「凍結そのもの(タイミング/
+  中断)」、生きれば「ストローブ駆動」。発射確認は 0x2D 下位16bit
+  (hold_only では jt_st_addr が E8000 に留まる)。
+- **hold-only 結果 (run 36448740328)**: コールド +3ms・46ms 凍結で
+  **POST 完走** (`How many files`, 0x2B=0, 0x2D=E8000) → 犯人は凍結
+  ではなく **ストローブ駆動**と確定。
+- **shotgun v1 (db03485)**: コールド1発で hold@3ms → read@65ms →
+  256B walk@125ms → full walk@188ms を順次発射。**全ショット生存**
+  (0x2E shot=4, 0x2B=38001C78 正値, BASIC 到達) → ストローブも
+  +65ms 以降なら安全。致死窓 = 「+3〜65ms 内のストローブ」に限定。
+- **shotgun v2**: 窓の閉じる境界を bracket — read@3/16/48ms と
+  256B walk@8/28/80ms を交互配置 + full walk@140ms 対照。
+  **liveness witness 追加**: ショット間のゲストバスサイクル数
+  (rv_act) を各発射時に採点し、活動 64 未満で発射したショットを
+  rv_deadshot にラッチ (0x2E[19:16]、犯人 = deadshot-1) —
+  ゲスト死後も残りショットは発射し続けるため、署名だけでは
+  犯人ショットが特定できないことへの対策。
+- **shotgun v2 結果 (0718a7b の前の 56ebf4c ビルド、時刻は
+  rv_delay[27:16] マッチで ~1.5ms 解像度に削減)**: 全6ショット
+  **生存** — read@+1.5ms すら生きた (0x2E: deadshot=F, act=F,
+  shot=6 完走, BASIC 到達)。→「窓内の1ストローブ」は致死でない。
+  残る変数は**バス借り/解放のカデンス**: 致死ビルド b6c7ee0 は
+  strict-grant 前で、walk が毎バイト `run` を落とす (~96K回の
+  borrow/release)。v1/v2 の strict walk は連続保持だった。
+- **shotgun v3 (0718a7b→8d1cb28 single-shot 化)**: b6c7ee0 カデンス
+  厳密再現 — non-strict FULL walk@+1.5ms のみ (fitter 1848 LAB 制約で
+  2nd shot を削除、rv_live は walk 完了でクリア→以後の guest_cyc で
+  セットする sticky フラグに変更 = 「嵐を生き延びたか」の直接判定)。
+- **v3 結果 + 重要な訂正**: 生存 (0x2E=0x301, 0x2B=38001C78 正値,
+  BASIC 到達) — ただし後のコード精読で **shot0 は strict に化けて
+  いた**と判明: `st_strict` に `rv_done` を食わせており、発射の
+  1clk 後に rv_shot=1→rv_done=1→strict=1 に反転。よって v3 が実測
+  したのは「strict walk@+1.5ms」で、**non-strict borrow/release
+  カデンスは現行ツリーで一度もテストされていなかった**。
+- **shotgun v4 (414d1a2 slim)**: 真の non-strict full walk@+3ms を
+  最小構成で実装 (arm フラグ/シーケンサ/hold_only 全撤去、rv_delay
+  18bit、rv_auto で config 発射 walk のみ non-strict に)。
+- **v4 結果 — 犯人確定**: 現行ツリーで **POST 死亡を完全再現**
+  (0x1F=05FF0001 imr=FF/ticks=1、TVRAM 全空、0x2B=E71323B6 ゴミ、
+  walkaddr=FFFF 完走、rv_live=1 = walk 後に数サイクル回って停止)。
+  → **致死機構 = non-strict の per-byte borrow/release カデンス
+  × コールド POST 窓**、era 差は不要。b6c7ee0 の 3/3 死亡を完全説明。
+  隙間で aen が落ちた瞬間にゲストのバスサイクルが tear され、
+  初期化コードを直撃するのが死因 (strict walk は aen 不変ゆえ
+  +1.5ms でも生存 — 「窓」はカデンス無しでは無害)。
+  production の strict+遅延 walk は二重に安全と確認済み。
+- **era 分離 bisect (96eba7b, bisect-b6-nowalk)**: b6c7ee0 ツリーで
+  rv_walk_go=0 だけの変更 → **POST 完走** (`How many files`,
+  0x1F=053D0005)。同一ツリーで auto-walk ON=3/3死亡 vs OFF=起動
+  → **+3ms walk は死の必要条件確定** (co-factor 単独では殺さない)。
+- **b6nw 手動 walk (POST 後)**: 0x84 bit30 で full walk 発射 →
+  署名ゴミ (0x828B6D0C) だが**ゲスト生存** (0x1F=053D0005 維持)。
+  → b6c7ee0 時代の non-strict walk は安全時刻でも読み出し破損
+  (guest byte 折り込み = 4c5b18d/ec89281 で後に修正済みの既知バグ)。
+  誤読単体は致死でない → 死は「脆弱窓 + 時代固有の破損」の複合。
+- **shotgun v4 (e3b162e)**: v3 と同一ツリー・同一構成で発射時刻のみ
+  b6c7ee0 と一致 (+3ms, rv_delay[27:16]==2) — 「v3 が生きたのは
+  +1.5ms だったからか、ツリー内容が違うからか」を分離する対照。

@@ -191,6 +191,12 @@ module CHIPSET #(
     logic           ems_b2;
     logic           ems_b3;
     logic           ems_b4;
+    // The NEC-style EMS board (pc98_ems98): ports 08E1h-08E9h bank four
+    // 16 KB windows at C0000-CFFFF into the SDRAM pool at 0x800000-0xFFFFFF.
+    // On a V30 this banking is the only way past the 20-bit bus, so this is
+    // what "extended memory" means here -- details in pc98_ems98.sv.
+    logic   [10:0]  ems98_map[0:3];
+    logic   [7:0]   ems98_status;
     logic           fdd_dma_req;
 
 
@@ -453,6 +459,7 @@ module CHIPSET #(
     wire [7:0]  ram_wdata_w;
     wire        ram_rd_w, ram_wr_w;
     wire [7:0]  ram_dout_w;
+    wire [7:0]  ram_dout_hi_w;
     wire        ram_complete_w, ram_ready_w;
     wire        gvram_sel = ~ram_address_select_n;
 
@@ -515,7 +522,7 @@ module CHIPSET #(
         .analog_mode                        (pc98_analog),
         .word_access                        (cpu_word_access),
         .internal_data_bus_hi               (cpu_data_bus_hi),
-        .data_bus_out_hi                    (data_bus_hi),
+        .data_bus_out_hi                    (ram_dout_hi_w),
         .memory_read_n                      (~ram_rd_w),
         .memory_write_n                     (~ram_wr_w),
         .no_command_state                   (no_command_state),
@@ -539,10 +546,26 @@ module CHIPSET #(
         .ems_b2                             (ems_b2),
         .ems_b3                             (ems_b3),
         .ems_b4                             (ems_b4),
+        .ems98_map                          (ems98_map),
         .bios_protect_flag                  (bios_protect_flag),
         .wait_count_clk_en                  (wait_count_clk_en),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle)
+    );
+
+    // The NEC EMS board's register half. Its port decode sits on the live
+    // bus (same convention as PERIPHERALS); the window state it produces is
+    // consumed inside RAM.sv's address latch. SDRAM_CLK == clock, so there
+    // is no domain crossing on ems98_map.
+    pc98_ems98 u_ems98 (
+        .clock                              (clock),
+        .reset                              (reset),
+        .address                            (address),
+        .internal_data_bus                  (internal_data_bus),
+        .io_write_n                         (io_write_n),
+        .address_enable_n                   (address_enable_n),
+        .map                                (ems98_map),
+        .status                             (ems98_status)
     );
 
     assign  data_bus = internal_data_bus;
@@ -550,6 +573,45 @@ module CHIPSET #(
     // Straight tap on RAM.sv's read byte, valid while the RAM read is in
     // flight; the external master latches it on ram_rw_complete.
     assign  data_bus_ext_out = internal_data_bus_ram;
+
+    // The odd lane inside the option ROM. Reads here must answer on
+    // both lanes the way SDRAM does: the high lane always carries the
+    // byte at addr|1, which covers word fetches (aligned pair) and byte
+    // reads at odd addresses (BHE selects this lane) such as the
+    // signature's 55h at offset 9. Undecoded space reports 0 here, so
+    // without the injection the ROM's odd bytes never reach the CPU.
+    wire xrom_read = (~memory_read_n) && (address[19:8] == 12'hD00);
+    assign data_bus_hi = xrom_read ? xrom_byte(address[7:0] | 8'h01)
+                                   : ram_dout_hi_w;
+
+    // fpga/xrom.asm (nasm -f bin). The NEC option-ROM format: AA55h at
+    // offset 9, POST entries at 0x0C/0x0F/0x12/0x15, and the disk-BIOS
+    // extension entry at 0x18 which the BIOS tail-jumps to through the
+    // 0x4B0 devtype table.
+    localparam logic [7:0] XROM_BYTES [0:216] = '{
+            8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h55, 8'hAA, 8'h90,
+            8'hE9, 8'h85, 8'h00, 8'hE9, 8'h82, 8'h00, 8'hE9, 8'h7F, 8'h00, 8'hEB, 8'h7D, 8'h90,
+            8'h56, 8'h57, 8'h8B, 8'h76, 8'h00, 8'h8A, 8'h46, 8'h01, 8'h24, 8'h0F, 8'h3C, 8'h04,
+            8'h74, 8'h38, 8'hFF, 8'h36, 8'hFA, 8'h05, 8'hFF, 8'h36, 8'hF8, 8'h05, 8'hC7, 8'h06,
+            8'hF8, 8'h05, 8'hB1, 8'h00, 8'h8C, 8'hC8, 8'hA3, 8'hFA, 8'h05, 8'h89, 8'hF0, 8'h24,
+            8'h0F, 8'h0C, 8'h90, 8'h8B, 8'h5E, 8'h02, 8'h8B, 8'h4E, 8'h04, 8'h8B, 8'h56, 8'h06,
+            8'h8E, 8'h46, 8'h0A, 8'h8B, 8'h7E, 8'h08, 8'h87, 8'hFD, 8'hCD, 8'h1B, 8'h87, 8'hFD,
+            8'h8F, 8'h06, 8'hF8, 8'h05, 8'h8F, 8'h06, 8'hFA, 8'h05, 8'hEB, 8'h1A, 8'h89, 8'hF0,
+            8'h30, 8'hE4, 8'hA8, 8'h80, 8'h74, 8'h03, 8'h80, 8'hCC, 8'h01, 8'h89, 8'hF1, 8'h81,
+            8'hE1, 8'h40, 8'h8F, 8'h81, 8'hF9, 8'h00, 8'h84, 8'h75, 8'h03, 8'h80, 8'hCC, 8'h0C,
+            8'h88, 8'h66, 8'h01, 8'h80, 8'h66, 8'h16, 8'hFE, 8'h80, 8'hFC, 8'h20, 8'h72, 8'h04,
+            8'h80, 8'h4E, 8'h16, 8'h01, 8'h5F, 8'h5E, 8'h58, 8'h5B, 8'h59, 8'h5A, 8'h5D, 8'h07,
+            8'h5F, 8'h5E, 8'h1F, 8'hCF, 8'h50, 8'h1E, 8'h31, 8'hC0, 8'h8E, 8'hD8, 8'hC6, 8'h06,
+            8'hD0, 8'h04, 8'hFF, 8'h80, 8'h0E, 8'hAE, 8'h05, 8'h03, 8'h8C, 8'hC8, 8'h88, 8'hE0,
+            8'hA2, 8'hB3, 8'h04, 8'hA2, 8'hBB, 8'h04, 8'h1F, 8'h58, 8'hCB, 8'hB9, 8'h00, 8'hB9,
+            8'h00, 8'hB9, 8'h00, 8'hB9, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h1A, 8'h07, 8'h1A,
+            8'h1B, 8'h1A, 8'h0E, 8'h1A, 8'h36, 8'h0F, 8'h0E, 8'h0F, 8'h2A, 8'h12, 8'h1B, 8'h12,
+            8'h54, 8'h08, 8'h1B, 8'h08, 8'h3A, 8'h08, 8'h35, 8'h08, 8'h74, 8'h00, 8'h00, 8'h00,
+            8'h00 };
+
+    function automatic logic [7:0] xrom_byte(input logic [7:0] a);
+        xrom_byte = (a < 8'd217) ? XROM_BYTES[a] : 8'hFF;
+    endfunction
 
     always_comb
     begin
@@ -561,6 +623,27 @@ module CHIPSET #(
         else if ((~ram_address_select_n) && (~memory_read_n))
         begin
             internal_data_bus_ext = internal_data_bus_ram;
+            data_bus_direction    = 1'b0;
+        end
+        // The built-in 3-mode FDD option ROM. A real adapter carried a
+        // BIOS-extension ROM in the D0000 scan slot; ours is the stub
+        // assembled from fpga/xrom.asm. It claims the NEC devtype
+        // 0x3x/0xBx calls through the 0x4B0 XROM table, marks drives 0/1
+        // as 1.44-capable in work-area 0x5AE, and hands INT 1Bh a
+        // 1.44-aware F2HD parameter table. Bytes past the image read
+        // 0xFF like the empty window that surrounds the slot.
+        else if (xrom_read)
+        begin
+            internal_data_bus_ext = xrom_byte(address[7:0]);
+            data_bus_direction    = 1'b0;
+        end
+        // IN 08E9h: the NEC EMS board answers "is this megabyte fitted".
+        // Its window reads never reach here -- a mapped window is claimed
+        // by the SDRAM branch above, an unmapped one by the hole below.
+        else if ((~io_read_n) && (~address_enable_n)
+                 && (address[15:0] == 16'h08E9))
+        begin
+            internal_data_bus_ext = ems98_status;
             data_bus_direction    = 1'b0;
         end
         // The empty option-ROM window. C0000-E7FFF is deliberately not

@@ -219,7 +219,17 @@ module pc98_tvram (
             attr[clr_cell]    <= 8'd0;
         end
         else if (cpu_wren & ~memsw_wr_block) begin
-            if (is_attr)      attr[cpu_cell]    <= cpu_wdata;
+            // The attribute region's odd bytes do not exist: np21w writes
+            // them nowhere (memtram_wr8's `!(address & 1)`), so a word write
+            // lands ONLY its low byte at the even address. Storing the odd
+            // half here aliases it into the same cell, so every word fill of
+            // the attribute plane (rep stosw with the attribute in AL, e.g.
+            // AX=00E1h) leaves each cell holding the word's high byte --
+            // usually zero, which is the secret bit and hides the whole
+            // plane: correct character codes, no visible text.
+            if (is_attr) begin
+                if (~cpu_hi)  attr[cpu_cell]    <= cpu_wdata;
+            end
             else if (cpu_hi)  char_hi[cpu_cell] <= cpu_wdata;
             else              char_lo[cpu_cell] <= cpu_wdata;
         end
@@ -251,9 +261,18 @@ module pc98_tvram (
         vid_attr <= attr[vid_cell];
     end
 
+    // The attribute region's odd bytes are plain RAM reads in np21w, not
+    // aliases of the cell: memtram_rd8 returns mem[address] for every byte
+    // in the window, and the write path (above) never lands an odd byte, so
+    // what a read finds there is the unwritten default -- 0x00. The same
+    // falls out of a word read: its high lane is the odd byte, so the word
+    // comes back {0x00, attr} exactly as LOADINTELWORD(mem + a) gives it.
+    // The memory-switch registers are even-byte objects; their odd byte is
+    // the same unwritten 0x00, not a second copy of the switch.
     always_comb begin
-        if (q_memsw)        cpu_q = memsw[q_memsw_idx];
-        else if (q_is_attr) cpu_q = q_attr;
+        if (q_is_attr)      cpu_q = q_hi ? 8'h00
+                                         : (q_memsw ? memsw[q_memsw_idx]
+                                                    : q_attr);
         else if (q_hi)      cpu_q = q_char_hi;
         else                cpu_q = q_char_lo;
     end

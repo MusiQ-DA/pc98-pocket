@@ -39,8 +39,8 @@ module tb_draw_boot;
         .disp_on(s_disp_on), .pitch(s_pitch), .part_sad(s_sad), .part_len(s_len),
         .cursor_addr(s_caddr), .cursor_dot(), .cursor_en(), .cursor_blink_en(),
         .cursor_top(), .cursor_bottom(), .cursor_rate(), .zoom_disp(),
-        .csr_wr_count(), .csr_trace(), .draw_req(), .draw_op(), .draw_busy(),
-        .srv_done_stb(1'b0), .draw_snap(), .unk_cmd(), .unk_count());
+        .draw_req(), .draw_op(), .draw_busy(),
+        .srv_done_stb(1'b0), .draw_snap());
     pc98_gdc #(.MASTER(1)) gm (
         .clk(clk), .reset(reset),
         .cs(cs_m), .a1(a1_m), .io_read_n(io_read_n), .io_write_n(io_write_n),
@@ -49,8 +49,8 @@ module tb_draw_boot;
         .cursor_addr(m_caddr), .cursor_dot(), .cursor_en(m_cen),
         .cursor_blink_en(m_cblink), .cursor_top(m_ctop), .cursor_bottom(m_cbot),
         .cursor_rate(), .zoom_disp(),
-        .csr_wr_count(), .csr_trace(), .draw_req(), .draw_op(), .draw_busy(),
-        .srv_done_stb(1'b0), .draw_snap(), .unk_cmd(), .unk_count());
+        .draw_req(), .draw_op(), .draw_busy(),
+        .srv_done_stb(1'b0), .draw_snap());
 
     int errors = 0;
     task automatic want(input string w, input int g, input int e);

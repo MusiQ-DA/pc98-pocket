@@ -2,8 +2,8 @@
 """check_vkb_layout.py -- is the on-screen keyboard's table sane?
 
 The virtual keyboard's key rectangles are hand-computed pixel coordinates in
-vkb_layout.c. A single PC-9801 layout lives there now (the PC/XT table went
-away with that build), and it additionally substitutes made-up Set-2 codes
+vkb_layout.c. A single PC-9801 layout lives there now, and it additionally
+substitutes made-up Set-2 codes
 for keys no real keyboard has.
 None of that is visible from a photograph of a handheld screen, so check it
 mechanically, the way check_osd_layout.py does for the POST panel:
@@ -216,6 +216,10 @@ def load_font():
     from the bytes that will actually be drawn.
     """
     text = GLYPHS.read_text()
+    # Only the 8x8 bank's table is the VKB's: osd_own_glyphs16[] (the 16-row
+    # patches for the tall bank, same file) would trip the row-count assert.
+    start = text.index("osd_own_glyphs[]")
+    text = text[start:text.index("};", start)]
     own = {}
     for m in re.finditer(r"\{\s*(0x[0-9A-Fa-f]{2})\s*,\s*\{\s*([0-9a-fA-Fx,\s]+?)\s*\}\s*\}", text):
         code = int(m.group(1), 16)
@@ -253,7 +257,7 @@ def main():
     shipping = config_defines()
 
     # Check the configuration that will actually ship. There is only the one
-    # table now -- the PC/XT branch went away with that build.
+    # table now.
     bad = check_layout(shipping, font, reachable, verbose=True)
     if bad:
         print(f"check_vkb_layout: PC-9801: {bad} problem(s)")

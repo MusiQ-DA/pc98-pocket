@@ -35,33 +35,38 @@
 #define GPU_FILL    ((volatile uint32_t *) 0x40000008) // W: color[3:0] -> fill XY/WH rectangle
 #define GPU_STATUS  ((volatile uint32_t *) 0x40000010) // R: bit0 = busy
 #define GPU_OUTLINE ((volatile uint32_t *) 0x40000014) // W: {round[4], color[3:0]} -> outline rect
-#define GPU_CHAR    ((volatile uint32_t *) 0x40000018) // W: {transp,bg[15:12],fg[11:8],char[7:0]}
+#define GPU_CHAR    ((volatile uint32_t *) 0x40000018) // W: {tall,transp,bg[15:12],fg[11:8],char[7:0]}
 
-// OSD font window (softcpu_subsystem region 0x7): the GPU's 256-glyph x 8-byte
-// font RAM, word-addressed with byte enables (any store width lands; the loader
-// copies in words). Powers up blank; osd_font.c fills it from font.rom's 8x8 ANK
-// bank at boot and patches in this core's own glyphs (the old baked-in image was
-// CP437/NEC-derived and cannot ship in the repository or the bitstream).
+// OSD font window (softcpu_subsystem region 0x7): the GPU's glyph RAM,
+// word-addressed with byte enables (any store width lands; the loader copies
+// in words). The window holds font.rom's two ANK banks at the file's own
+// offsets: bytes 0x000-0x7FF the 8x8 bank (256 glyphs x 8 bytes), bytes
+// 0x800-0x17FF the 8x16 bank (256 x 16). Powers up blank; osd_font.c fills it
+// from font.rom at boot and patches in this core's own glyphs (the old
+// baked-in image was CP437/NEC-derived and cannot ship in the repository or
+// the bitstream).
 #define FONT_WIN ((volatile uint8_t *) 0x70000000u)
 
 // GPU_OUTLINE flag: omit the four corner pixels (1px-rounded look).
 #define GPU_OUTLINE_ROUND (1u << 4)
 // GPU_CHAR flag: draw only the glyph's lit pixels, leaving the background untouched.
 #define GPU_CHAR_TRANSP (1u << 16)
+// GPU_CHAR flag: draw an 8x16 cell from the 8x16 ANK bank (the window's 0x800+
+// region) instead of the default 8x8 cell from the 8x8 bank.
+#define GPU_CHAR_TALL (1u << 17)
 
 // Status / control (0x2 region).
 #define CONT1_KEY       ((volatile uint32_t *) 0x20000000) // R: pocket controller-1 buttons
 #define VKB_CTRL        ((volatile uint32_t *) 0x20000004) // W: bit0 = OSD overlay shown
 #define VKB_KEY         ((volatile uint32_t *) 0x20000008) // W: bit8 = make, bits[7:0] Set-2 code
 #define SETTINGS_REG    ((volatile uint32_t *) 0x2000000C) // W: {index[12:8], value[7:0]}
-#define OSD_ACTION      ((volatile uint32_t *) 0x20000010) // W: bit1 credits, bit2 video
+#define OSD_ACTION      ((volatile uint32_t *) 0x20000010) // W: bit2 video
 #define OSD_ORIGIN      ((volatile uint32_t *) 0x20000014) // W: {y[25:16], x[9:0]} framebuffer origin
 #define OSD_RASTER      ((volatile uint32_t *) 0x20000018) // R: {h[25:16], w[9:0]} presented raster size
 #define SOFT_GUEST_HOLD ((volatile uint32_t *) 0x2000001C) // W: bit0 = hold guest in reset, bit1 = blank video
 #define KEYCFG_REG      ((volatile uint32_t *) 0x20000020) // W: {id[12:9], ext[8], code[7:0]}
 
 // OSD_ACTION command bits.
-#define OSD_ACT_CREDITS 2u
 #define OSD_ACT_VIDEO   4u
 
 // cont1_key button bits (Analogue Pocket layout).
@@ -80,8 +85,7 @@
 
 // CONT1_KEY carries status flags in its upper bits (the low 16 are the buttons): the last
 // docked-keyboard make in code[23:16] + ext[27] with a change toggle[28] for the key picker,
-// credits[24], osd_open[25], dataslots_ready[26].
-#define CONT1_CREDITS(raw)   ((raw) & (1u << 24))
+// osd_open[25], dataslots_ready[26].
 #define CONT1_OSD_OPEN(raw)  ((raw) & (1u << 25))    // interact "Extra Options" requests the OSD
 #define DATASLOTS_READY(raw) ((raw) & (1u << 26))    // APF finished the initial dataslot load
 #define CONT1_DOCK_CODE(raw) (((raw) >> 16) & 0xFFu) // last docked-keyboard make: Set-2 code
@@ -96,7 +100,8 @@
 // bindings are typed by pocket_keyboard, not here).
 #define BTNFN_NONE     0u
 #define BTNFN_SETTINGS 1u
-#define BTNFN_CREDITS  2u
+// 2 (the retired credits overlay) stays reserved: a save blob can still carry a 0xF2 binding,
+// which decodes to it and dispatches to nothing.
 #define BTNFN_VIDEO    3u
 
 // FDD_REQUEST bits
@@ -215,7 +220,9 @@
 #define RHYTHM_SLOT_ID   13   // deferload: rhythm.bin, packed ADPCM-A voices
 #define RHY_WAV_SLOT_BASE 14  // deferload ids 14-19: per-voice *.wav sources
 // Bytes to declare for the nonvolatile Settings slot so it flushes on first boot.
-#define SETTINGS_SLOT_BYTES 64
+// The whole upper half of the 1 KB bridge RAM: the global settings blob plus
+// the per-disk profile table (settings_ui.c).
+#define SETTINGS_SLOT_BYTES 512
 
 // Shared disk-bridge sector transfer (disk_tds.c). The length is the media's
 // sector width, because the image file is laid out in that width.
@@ -237,8 +244,7 @@ void fdd_unbind(uint32_t drive);
 int  fdd_is_inserted(uint32_t drive);
 uint32_t fdd_mounted_sectors(uint32_t drive);
 
-// Service entry points (scsi_service.c). PC-98 only -- the board is a
-// PC-9801-55 and the PC/XT build keeps its IDE instead.
+// Service entry points (scsi_service.c). PC-98 only -- the board is a PC-9801-55.
 void scsi_init(void);
 void scsi_mount(uint32_t sectors);
 void scsi_poll(void);
