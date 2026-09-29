@@ -261,9 +261,18 @@ module pc98_tvram (
         vid_attr <= attr[vid_cell];
     end
 
+    // The attribute region's odd bytes are plain RAM reads in np21w, not
+    // aliases of the cell: memtram_rd8 returns mem[address] for every byte
+    // in the window, and the write path (above) never lands an odd byte, so
+    // what a read finds there is the unwritten default -- 0x00. The same
+    // falls out of a word read: its high lane is the odd byte, so the word
+    // comes back {0x00, attr} exactly as LOADINTELWORD(mem + a) gives it.
+    // The memory-switch registers are even-byte objects; their odd byte is
+    // the same unwritten 0x00, not a second copy of the switch.
     always_comb begin
-        if (q_memsw)        cpu_q = memsw[q_memsw_idx];
-        else if (q_is_attr) cpu_q = q_attr;
+        if (q_is_attr)      cpu_q = q_hi ? 8'h00
+                                         : (q_memsw ? memsw[q_memsw_idx]
+                                                    : q_attr);
         else if (q_hi)      cpu_q = q_char_hi;
         else                cpu_q = q_char_lo;
     end
