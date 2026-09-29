@@ -38,6 +38,10 @@ module RAM (
     // ROM-load (Pocket): read-only tap on the write/read completion state.
     output  logic           access_complete,
     output  logic           ram_address_select_n,
+    // JTAG probe (PC98_JTAG): the FSM's own view of a stalled access --
+    // {parked write, refresh busy, read in flight, completing-is-read,
+    //  completing-is-write, state[2:0]}. Unconsumed it synthesises away.
+    output  logic   [7:0]   dbg,
     // SDRAM
     output  logic   [12:0]  sdram_address,
     output  logic           sdram_cke,
@@ -662,5 +666,8 @@ module RAM (
     // loader. COMPLETE_RAM_RW is reached only after the SDRAM write truly
     // finishes (refresh-safe) and is independent of the CPU-bus wait throttle.
     assign  access_complete = (state == COMPLETE_RAM_RW);
+
+    assign  dbg = {wc_pend, refresh_mode, read_flag,
+                   accept_live_rd, accept_live_wr, state[2:0]};
 
 endmodule

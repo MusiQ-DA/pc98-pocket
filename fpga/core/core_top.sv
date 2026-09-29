@@ -1092,6 +1092,10 @@ module core_top (
             8'h16:   probe_data = v30_dbg_regs[31:0];     // gpr1:gpr0
             8'h17:   probe_data = {8'h00, retired_cnt};   // liveness
             8'h18:   probe_data = {12'h000, v30_addr};    // current bus cycle
+            // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
+            // never completes; 0x1a: the ready chain the CPU waits on.
+            8'h19:   probe_data = {16'h0, chipset_dbg};
+            8'h1a:   probe_data = {24'h0, chipset_dbg2};
             8'h1d:   probe_data = {16'h0, key_count, key_last};
             8'hFF:   probe_data = 32'h98C0_DE98;
             default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
@@ -1988,6 +1992,11 @@ module core_top (
     wire [2:0]processor_status;
 
     wire [3:0]   dma_acknowledge_n;
+    // PC98_JTAG probe taps from deep inside the chipset: arbiter hold/DRQ
+    // and RAM FSM state (0x19), the ready chain (0x1a). Costs nothing when
+    // the macro is off -- the cone prunes.
+    wire [15:0]  chipset_dbg;
+    wire  [7:0]  chipset_dbg2;
 
     wire    [1:0]   fdd_present;
     reg     [7:0]   sw;
@@ -2200,6 +2209,8 @@ module core_top (
         .dma_request                        (0),    // use? -> I don't know if it will ever be necessary, at least not during testing.
         .dma_acknowledge_n                  (dma_acknowledge_n),
         .address_enable_n                   (chipset_aen),
+        .dbg_chipset                        (chipset_dbg),
+        .dbg_chipset2                       (chipset_dbg2),
     //  .terminal_count_n                   (terminal_count_n)
         .speaker_out                        (speaker_out),
         .kb_byte                            (kb_byte),

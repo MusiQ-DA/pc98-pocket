@@ -51,6 +51,9 @@ proc rd {addr} {
 #              then gpr7:gpr6 down to gpr1:gpr0
 #   0x17       retired-instruction counter (frozen = wedged)
 #   0x18       current bus-cycle address
+#   0x19       {arbiter: hlda,aen_n,dma_hold,ext_req,drq3..0,  RAM FSM:
+#               wc_pend,refresh,read_flag,acc_rd,acc_wr,state[2:0]}
+#   0x1a       {proc_ready, mem_acc_ready, dma_ready, dack_n3..0, no_cmd}
 #   0x1d       keyboard count:last
 set regs {
     16  V30_PSW_PC
@@ -62,6 +65,8 @@ set regs {
     22  V30_GPR1_GPR0
     23  V30_RETIRED
     24  V30_ADDR
+    25  ARB_HOLD+RAM_FSM
+    26  READY_CHAIN
     29  KEYS=count,last
     255 MAGIC
 }
