@@ -1,0 +1,398 @@
+Info: *******************************************************************
+Info: Running Quartus Prime Shell
+    Info: Version 18.1.1 Build 646 04/11/2019 SJ Lite Edition
+    Info: Copyright (C) 2019  Intel Corporation. All rights reserved.
+    Info: Your use of Intel Corporation's design tools, logic functions 
+    Info: and other software and tools, and any partner logic 
+    Info: functions, and any output files from any of the foregoing 
+    Info: (including device programming or simulation files), and any 
+    Info: associated documentation or information are expressly subject 
+    Info: to the terms and conditions of the Intel Program License 
+    Info: Subscription Agreement, the Intel Quartus Prime License Agreement,
+    Info: the Intel FPGA IP License Agreement, or other applicable license
+    Info: agreement, including, without limitation, that your use is for
+    Info: the sole purpose of programming logic devices manufactured by
+    Info: Intel and sold by Intel or its authorized distributors.  Please
+    Info: refer to the applicable agreement for further details, at
+    Info: https://fpgasoftware.intel.com/eula.
+    Info: Processing started: Tue Sep 29 11:55:53 2026
+Info: Command: quartus_sh --flow compile ap_core
+Info: Quartus(args): compile ap_core
+Info: Project Name = /work/fpga/ap_core
+Info: Revision Name = ap_core
+Info: *******************************************************************
+Info: Running Quartus Prime Shell
+    Info: Version 18.1.1 Build 646 04/11/2019 SJ Lite Edition
+    Info: Processing started: Tue Sep 29 11:55:55 2026
+Info: Command: quartus_sh -t apf/build_id_gen.tcl compile ap_core ap_core
+Info: Quartus(args): compile ap_core ap_core
+Info: APF core build date/time generated: /work/fpga/apf/build_id.mif
+Info (23030): Evaluation of Tcl script apf/build_id_gen.tcl was successful
+Info: Quartus Prime Shell was successful. 0 errors, 0 warnings
+    Info: Peak virtual memory: 1071 megabytes
+    Info: Processing ended: Tue Sep 29 11:55:55 2026
+    Info: Elapsed time: 00:00:00
+    Info: Total CPU time (on all processors): 00:00:00
+Info: *******************************************************************
+Info: Running Quartus Prime Analysis & Synthesis
+    Info: Version 18.1.1 Build 646 04/11/2019 SJ Lite Edition
+    Info: Processing started: Tue Sep 29 11:55:57 2026
+Info: Command: quartus_map --read_settings_files=on --write_settings_files=off ap_core -c ap_core
+Critical Warning (138067): Current license file does not support incremental compilation. The Quartus Prime software removes all the user-specified design partitions in the design automatically.
+Info (16303): Aggressive Area optimization mode selected -- logic area will be prioritized at the potential cost of reduced timing performance
+Warning (18236): Number of processors has not been specified which may cause overloading on shared machines.  Set the global assignment NUM_PARALLEL_PROCESSORS in your QSF to an appropriate value for best performance.
+Info (20030): Parallel compilation is enabled and will use 16 of the 20 processors detected
+Info (12021): Found 1 design units, including 1 entities, in source file apf/apf_top.v
+    Info (12023): Found entity 1: apf_top File: /work/fpga/apf/apf_top.v Line: 44
+Info (12021): Found 4 design units, including 4 entities, in source file apf/common.v
+    Info (12023): Found entity 1: synch_2 File: /work/fpga/apf/common.v Line: 39
+    Info (12023): Found entity 2: synch_3 File: /work/fpga/apf/common.v Line: 62
+    Info (12023): Found entity 3: bram_block_dp File: /work/fpga/apf/common.v Line: 82
+    Info (12023): Found entity 4: bram_block_dp_nonstd File: /work/fpga/apf/common.v Line: 120
+Info (12021): Found 1 design units, including 1 entities, in source file apf/io_bridge_peripheral.v
+    Info (12023): Found entity 1: io_bridge_peripheral File: /work/fpga/apf/io_bridge_peripheral.v Line: 52
+Info (12021): Found 1 design units, including 1 entities, in source file apf/io_pad_controller.v
+    Info (12023): Found entity 1: io_pad_controller File: /work/fpga/apf/io_pad_controller.v Line: 41
+Info (12021): Found 1 design units, including 1 entities, in source file apf/mf_ddio_bidir_12.v
+    Info (12023): Found entity 1: mf_ddio_bidir_12 File: /work/fpga/apf/mf_ddio_bidir_12.v Line: 40
+Info (12021): Found 1 design units, including 1 entities, in source file apf/mf_datatable.v
+    Info (12023): Found entity 1: mf_datatable File: /work/fpga/apf/mf_datatable.v Line: 40
+Info (12021): Found 1 design units, including 1 entities, in source file core/core_top.sv
+    Info (12023): Found entity 1: core_top File: /work/fpga/core/core_top.sv Line: 27
+Info (12021): Found 1 design units, including 1 entities, in source file core/core_bridge_cmd.v
+    Info (12023): Found entity 1: core_bridge_cmd File: /work/fpga/core/core_bridge_cmd.v Line: 18
+Info (12021): Found 1 design units, including 1 entities, in source file core/data_loader.sv
+    Info (12023): Found entity 1: data_loader File: /work/fpga/core/data_loader.sv Line: 29
+Info (12021): Found 1 design units, including 1 entities, in source file core/sync_fifo.sv
+    Info (12023): Found entity 1: sync_fifo File: /work/fpga/core/sync_fifo.sv Line: 27
+Info (12021): Found 1 design units, including 1 entities, in source file core/hid_to_ps2.sv
+    Info (12023): Found entity 1: hid_to_ps2 File: /work/fpga/core/hid_to_ps2.sv Line: 13
+Info (12021): Found 1 design units, including 1 entities, in source file core/pocket_keyboard.sv
+    Info (12023): Found entity 1: pocket_keyboard File: /work/fpga/core/pocket_keyboard.sv Line: 16
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_kbd_ps2.sv
+    Info (12023): Found entity 1: pc98_kbd_ps2 File: /work/fpga/core/pc98_kbd_ps2.sv Line: 38
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_key_inject.sv
+    Info (12023): Found entity 1: pc98_key_inject File: /work/fpga/core/pc98_key_inject.sv Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_gdc.sv
+    Info (12023): Found entity 1: pc98_gdc File: /work/fpga/core/pc98_gdc.sv Line: 57
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_grcg.sv
+    Info (12023): Found entity 1: pc98_grcg File: /work/fpga/core/pc98_grcg.sv Line: 71
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_gdc_mode2.sv
+    Info (12023): Found entity 1: pc98_gdc_mode2 File: /work/fpga/core/pc98_gdc_mode2.sv Line: 60
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_gvram_seq.sv
+    Info (12023): Found entity 1: pc98_gvram_seq File: /work/fpga/core/pc98_gvram_seq.sv Line: 62
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_egc.sv
+    Info (12023): Found entity 1: pc98_egc File: /work/fpga/core/pc98_egc.sv Line: 82
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_ems98.sv
+    Info (12023): Found entity 1: pc98_ems98 File: /work/fpga/core/pc98_ems98.sv Line: 45
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_scsi.sv
+    Info (12023): Found entity 1: pc98_scsi File: /work/fpga/core/pc98_scsi.sv Line: 30
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_scsi_rom.sv
+    Info (12023): Found entity 1: pc98_scsi_rom File: /work/fpga/core/pc98_scsi_rom.sv Line: 45
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_fdc_glue.sv
+    Info (12023): Found entity 1: pc98_fdc_glue File: /work/fpga/core/pc98_fdc_glue.sv Line: 144
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_upd4990.sv
+    Info (12023): Found entity 1: pc98_upd4990 File: /work/fpga/core/pc98_upd4990.sv Line: 23
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_opna.sv
+    Info (12023): Found entity 1: pc98_opna File: /work/fpga/core/pc98_opna.sv Line: 82
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt10_acc.v
+    Info (12023): Found entity 1: jt10_acc File: /work/fpga/core/sound/jt12/hdl/jt10_acc.v Line: 38
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_acc.v
+    Info (12023): Found entity 1: jt12_acc File: /work/fpga/core/sound/jt12/hdl/jt12_acc.v Line: 36
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_csr.v
+    Info (12023): Found entity 1: jt12_csr File: /work/fpga/core/sound/jt12/hdl/jt12_csr.v Line: 23
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_div.v
+    Info (12023): Found entity 1: jt12_div File: /work/fpga/core/sound/jt12/hdl/jt12_div.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_dout.v
+    Info (12023): Found entity 1: jt12_dout File: /work/fpga/core/sound/jt12/hdl/jt12_dout.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_eg.v
+    Info (12023): Found entity 1: jt12_eg File: /work/fpga/core/sound/jt12/hdl/jt12_eg.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_eg_cnt.v
+    Info (12023): Found entity 1: jt12_eg_cnt File: /work/fpga/core/sound/jt12/hdl/jt12_eg_cnt.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_eg_comb.v
+    Info (12023): Found entity 1: jt12_eg_comb File: /work/fpga/core/sound/jt12/hdl/jt12_eg_comb.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_eg_ctrl.v
+    Info (12023): Found entity 1: jt12_eg_ctrl File: /work/fpga/core/sound/jt12/hdl/jt12_eg_ctrl.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_eg_final.v
+    Info (12023): Found entity 1: jt12_eg_final File: /work/fpga/core/sound/jt12/hdl/jt12_eg_final.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_eg_pure.v
+    Info (12023): Found entity 1: jt12_eg_pure File: /work/fpga/core/sound/jt12/hdl/jt12_eg_pure.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_eg_step.v
+    Info (12023): Found entity 1: jt12_eg_step File: /work/fpga/core/sound/jt12/hdl/jt12_eg_step.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_exprom.v
+    Info (12023): Found entity 1: jt12_exprom File: /work/fpga/core/sound/jt12/hdl/jt12_exprom.v Line: 29
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_kon.v
+    Info (12023): Found entity 1: jt12_kon File: /work/fpga/core/sound/jt12/hdl/jt12_kon.v Line: 25
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_lfo.v
+    Info (12023): Found entity 1: jt12_lfo File: /work/fpga/core/sound/jt12/hdl/jt12_lfo.v Line: 64
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_logsin.v
+    Info (12023): Found entity 1: jt12_logsin File: /work/fpga/core/sound/jt12/hdl/jt12_logsin.v Line: 27
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_mmr.v
+    Info (12023): Found entity 1: jt12_mmr File: /work/fpga/core/sound/jt12/hdl/jt12_mmr.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_mod.v
+    Info (12023): Found entity 1: jt12_mod File: /work/fpga/core/sound/jt12/hdl/jt12_mod.v Line: 25
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_op.v
+    Info (12023): Found entity 1: jt12_op File: /work/fpga/core/sound/jt12/hdl/jt12_op.v Line: 28
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_pg.v
+    Info (12023): Found entity 1: jt12_pg File: /work/fpga/core/sound/jt12/hdl/jt12_pg.v Line: 34
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_pg_comb.v
+    Info (12023): Found entity 1: jt12_pg_comb File: /work/fpga/core/sound/jt12/hdl/jt12_pg_comb.v Line: 26
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_pg_dt.v
+    Info (12023): Found entity 1: jt12_pg_dt File: /work/fpga/core/sound/jt12/hdl/jt12_pg_dt.v Line: 29
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_pg_inc.v
+    Info (12023): Found entity 1: jt12_pg_inc File: /work/fpga/core/sound/jt12/hdl/jt12_pg_inc.v Line: 27
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_pg_sum.v
+    Info (12023): Found entity 1: jt12_pg_sum File: /work/fpga/core/sound/jt12/hdl/jt12_pg_sum.v Line: 27
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_pm.v
+    Info (12023): Found entity 1: jt12_pm File: /work/fpga/core/sound/jt12/hdl/jt12_pm.v Line: 24
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_reg.v
+    Info (12023): Found entity 1: jt12_reg File: /work/fpga/core/sound/jt12/hdl/jt12_reg.v Line: 23
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_reg_ch.v
+    Info (12023): Found entity 1: jt12_reg_ch File: /work/fpga/core/sound/jt12/hdl/jt12_reg_ch.v Line: 27
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_rst.v
+    Info (12023): Found entity 1: jt12_rst File: /work/fpga/core/sound/jt12/hdl/jt12_rst.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_sh.v
+    Info (12023): Found entity 1: jt12_sh File: /work/fpga/core/sound/jt12/hdl/jt12_sh.v Line: 23
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_sh24.v
+    Info (12023): Found entity 1: jt12_sh24 File: /work/fpga/core/sound/jt12/hdl/jt12_sh24.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_sh_rst.v
+    Info (12023): Found entity 1: jt12_sh_rst File: /work/fpga/core/sound/jt12/hdl/jt12_sh_rst.v Line: 23
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_single_acc.v
+    Info (12023): Found entity 1: jt12_single_acc File: /work/fpga/core/sound/jt12/hdl/jt12_single_acc.v Line: 27
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_sumch.v
+    Info (12023): Found entity 1: jt12_sumch File: /work/fpga/core/sound/jt12/hdl/jt12_sumch.v Line: 25
+Info (12021): Found 2 design units, including 2 entities, in source file core/sound/jt12/hdl/jt12_timers.v
+    Info (12023): Found entity 1: jt12_timers File: /work/fpga/core/sound/jt12/hdl/jt12_timers.v Line: 26
+    Info (12023): Found entity 2: jt12_timer File: /work/fpga/core/sound/jt12/hdl/jt12_timers.v Line: 88
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_top.v
+    Info (12023): Found entity 1: jt12_top File: /work/fpga/core/sound/jt12/hdl/jt12_top.v Line: 27
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/jt12_pcm_interpol.v
+    Info (12023): Found entity 1: jt12_pcm_interpol File: /work/fpga/core/sound/jt12/hdl/jt12_pcm_interpol.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcm.v
+    Info (12023): Found entity 1: jt10_adpcm File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcm.v Line: 24
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcm_acc.v
+    Info (12023): Found entity 1: jt10_adpcm_acc File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcm_acc.v Line: 25
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcm_cnt.v
+    Info (12023): Found entity 1: jt10_adpcm_cnt File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcm_cnt.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcm_comb.v
+    Info (12023): Found entity 1: jt10_adpcm_comb File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcm_comb.v Line: 24
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcm_dbrom.v
+    Info (12023): Found entity 1: jt10_adpcm_dbrom File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcm_dbrom.v Line: 24
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcm_div.v
+    Info (12023): Found entity 1: jt10_adpcm_div File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcm_div.v Line: 25
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcm_drvA.v
+    Info (12023): Found entity 1: jt10_adpcm_drvA File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcm_drvA.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcm_drvB.v
+    Info (12023): Found entity 1: jt10_adpcm_drvB File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcm_drvB.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcm_dt.v
+    Info (12023): Found entity 1: jt10_adpcm_dt File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcm_dt.v Line: 24
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcm_gain.v
+    Info (12023): Found entity 1: jt10_adpcm_gain File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcm_gain.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcma_lut.v
+    Info (12023): Found entity 1: jt10_adpcma_lut File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcma_lut.v Line: 27
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcmb.v
+    Info (12023): Found entity 1: jt10_adpcmb File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcmb.v Line: 24
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcmb_cnt.v
+    Info (12023): Found entity 1: jt10_adpcmb_cnt File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcmb_cnt.v Line: 24
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcmb_gain.v
+    Info (12023): Found entity 1: jt10_adpcmb_gain File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcmb_gain.v Line: 24
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_adpcmb_interpol.v
+    Info (12023): Found entity 1: jt10_adpcmb_interpol File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_adpcmb_interpol.v Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/hdl/adpcm/jt10_cen_burst.v
+    Info (12023): Found entity 1: jt10_cen_burst File: /work/fpga/core/sound/jt12/hdl/adpcm/jt10_cen_burst.v Line: 24
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/jt49/hdl/jt49.v
+    Info (12023): Found entity 1: jt49 File: /work/fpga/core/sound/jt12/jt49/hdl/jt49.v Line: 24
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/jt49/hdl/jt49_bus.v
+    Info (12023): Found entity 1: jt49_bus File: /work/fpga/core/sound/jt12/jt49/hdl/jt49_bus.v Line: 26
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/jt49/hdl/jt49_cen.v
+    Info (12023): Found entity 1: jt49_cen File: /work/fpga/core/sound/jt12/jt49/hdl/jt49_cen.v Line: 24
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/jt49/hdl/jt49_div.v
+    Info (12023): Found entity 1: jt49_div File: /work/fpga/core/sound/jt12/jt49/hdl/jt49_div.v Line: 25
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/jt49/hdl/jt49_eg.v
+    Info (12023): Found entity 1: jt49_eg File: /work/fpga/core/sound/jt12/jt49/hdl/jt49_eg.v Line: 24
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/jt49/hdl/jt49_exp.v
+    Info (12023): Found entity 1: jt49_exp File: /work/fpga/core/sound/jt12/jt49/hdl/jt49_exp.v Line: 30
+Info (12021): Found 1 design units, including 1 entities, in source file core/sound/jt12/jt49/hdl/jt49_noise.v
+    Info (12023): Found entity 1: jt49_noise File: /work/fpga/core/sound/jt12/jt49/hdl/jt49_noise.v Line: 25
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_mouse_src.sv
+    Info (12023): Found entity 1: pc98_mouse_src File: /work/fpga/core/pc98_mouse_src.sv Line: 13
+Warning (10259): Verilog HDL error at pc98_busmouse.sv(71): constant value overflow File: /work/fpga/core/pc98_busmouse.sv Line: 71
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_busmouse.sv
+    Info (12023): Found entity 1: pc98_busmouse File: /work/fpga/core/pc98_busmouse.sv Line: 23
+Info (12021): Found 1 design units, including 1 entities, in source file core/pocket_video.sv
+    Info (12023): Found entity 1: pocket_video File: /work/fpga/core/pocket_video.sv Line: 11
+Info (12021): Found 1 design units, including 1 entities, in source file core/audio/audio_mixer.sv
+    Info (12023): Found entity 1: audio_mixer File: /work/fpga/core/audio/audio_mixer.sv Line: 33
+Info (12021): Found 1 design units, including 1 entities, in source file core/audio/sound_i2s.sv
+    Info (12023): Found entity 1: sound_i2s File: /work/fpga/core/audio/sound_i2s.sv Line: 26
+Info (12021): Found 1 design units, including 1 entities, in source file core/audio/filters/audio_filters.sv
+    Info (12023): Found entity 1: audio_filters File: /work/fpga/core/audio/filters/audio_filters.sv Line: 29
+Info (12021): Found 1 design units, including 1 entities, in source file core/audio/filters/audio_mix.sv
+    Info (12023): Found entity 1: audio_mix File: /work/fpga/core/audio/filters/audio_mix.sv Line: 29
+Info (12021): Found 1 design units, including 1 entities, in source file core/audio/filters/dc_blocker.sv
+    Info (12023): Found entity 1: dc_blocker File: /work/fpga/core/audio/filters/dc_blocker.sv Line: 36
+Info (12021): Found 1 design units, including 1 entities, in source file core/audio/filters/iir_filter.sv
+    Info (12023): Found entity 1: iir_filter File: /work/fpga/core/audio/filters/iir_filter.sv Line: 35
+Info (12021): Found 1 design units, including 1 entities, in source file core/audio/filters/iir_filter_tap.sv
+    Info (12023): Found entity 1: iir_filter_tap File: /work/fpga/core/audio/filters/iir_filter_tap.sv Line: 41
+Info (12021): Found 1 design units, including 1 entities, in source file core/audio_pll.v
+    Info (12023): Found entity 1: audio_pll File: /work/fpga/core/audio_pll.v Line: 7
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(331) File: /work/fpga/core/picorv32.v Line: 331
+Warning (10335): Unrecognized synthesis attribute "full_case" at core/picorv32.v(402) File: /work/fpga/core/picorv32.v Line: 402
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1119) File: /work/fpga/core/picorv32.v Line: 1119
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1251) File: /work/fpga/core/picorv32.v Line: 1251
+Warning (10335): Unrecognized synthesis attribute "full_case" at core/picorv32.v(1251) File: /work/fpga/core/picorv32.v Line: 1251
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1268) File: /work/fpga/core/picorv32.v Line: 1268
+Warning (10335): Unrecognized synthesis attribute "full_case" at core/picorv32.v(1268) File: /work/fpga/core/picorv32.v Line: 1268
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1314) File: /work/fpga/core/picorv32.v Line: 1314
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1485) File: /work/fpga/core/picorv32.v Line: 1485
+Warning (10335): Unrecognized synthesis attribute "full_case" at core/picorv32.v(1485) File: /work/fpga/core/picorv32.v Line: 1485
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1497) File: /work/fpga/core/picorv32.v Line: 1497
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1583) File: /work/fpga/core/picorv32.v Line: 1583
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1627) File: /work/fpga/core/picorv32.v Line: 1627
+Warning (10335): Unrecognized synthesis attribute "full_case" at core/picorv32.v(1627) File: /work/fpga/core/picorv32.v Line: 1627
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1735) File: /work/fpga/core/picorv32.v Line: 1735
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1766) File: /work/fpga/core/picorv32.v Line: 1766
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1836) File: /work/fpga/core/picorv32.v Line: 1836
+Warning (10335): Unrecognized synthesis attribute "full_case" at core/picorv32.v(1836) File: /work/fpga/core/picorv32.v Line: 1836
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1844) File: /work/fpga/core/picorv32.v Line: 1844
+Warning (10335): Unrecognized synthesis attribute "full_case" at core/picorv32.v(1844) File: /work/fpga/core/picorv32.v Line: 1844
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1859) File: /work/fpga/core/picorv32.v Line: 1859
+Warning (10335): Unrecognized synthesis attribute "full_case" at core/picorv32.v(1859) File: /work/fpga/core/picorv32.v Line: 1859
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1884) File: /work/fpga/core/picorv32.v Line: 1884
+Warning (10335): Unrecognized synthesis attribute "full_case" at core/picorv32.v(1884) File: /work/fpga/core/picorv32.v Line: 1884
+Warning (10335): Unrecognized synthesis attribute "parallel_case" at core/picorv32.v(1901) File: /work/fpga/core/picorv32.v Line: 1901
+Warning (10335): Unrecognized synthesis attribute "full_case" at core/picorv32.v(1901) File: /work/fpga/core/picorv32.v Line: 1901
+Info (12021): Found 8 design units, including 8 entities, in source file core/picorv32.v
+    Info (12023): Found entity 1: picorv32 File: /work/fpga/core/picorv32.v Line: 62
+    Info (12023): Found entity 2: picorv32_regs File: /work/fpga/core/picorv32.v Line: 2174
+    Info (12023): Found entity 3: picorv32_pcpi_mul File: /work/fpga/core/picorv32.v Line: 2197
+    Info (12023): Found entity 4: picorv32_pcpi_fast_mul File: /work/fpga/core/picorv32.v Line: 2318
+    Info (12023): Found entity 5: picorv32_pcpi_div File: /work/fpga/core/picorv32.v Line: 2420
+    Info (12023): Found entity 6: picorv32_axi File: /work/fpga/core/picorv32.v Line: 2517
+    Info (12023): Found entity 7: picorv32_axi_adapter File: /work/fpga/core/picorv32.v Line: 2731
+    Info (12023): Found entity 8: picorv32_wb File: /work/fpga/core/picorv32.v Line: 2815
+Info (12021): Found 1 design units, including 1 entities, in source file core/sprom.v
+    Info (12023): Found entity 1: sprom File: /work/fpga/core/sprom.v Line: 28
+Info (12021): Found 1 design units, including 1 entities, in source file core/softcpu_subsystem.sv
+    Info (12023): Found entity 1: softcpu_subsystem File: /work/fpga/core/softcpu_subsystem.sv Line: 20
+Info (12021): Found 1 design units, including 1 entities, in source file core/softcpu_fdd_bridge.sv
+    Info (12023): Found entity 1: softcpu_fdd_bridge File: /work/fpga/core/softcpu_fdd_bridge.sv Line: 33
+Info (12021): Found 1 design units, including 1 entities, in source file core/pll.v
+    Info (12023): Found entity 1: pll File: /work/fpga/core/pll.v Line: 14
+Info (12021): Found 1 design units, including 1 entities, in source file core/common/floppy.v
+    Info (12023): Found entity 1: floppy File: /work/fpga/core/common/floppy.v Line: 28
+Info (12021): Found 1 design units, including 1 entities, in source file core/common/simple_fifo.v
+    Info (12023): Found entity 1: simple_fifo File: /work/fpga/core/common/simple_fifo.v Line: 27
+Info (12021): Found 1 design units, including 0 entities, in source file core/v30/v30u_ss_pkg.sv
+    Info (12022): Found design unit 1: v30_ss_pkg (SystemVerilog) File: /work/fpga/core/v30/v30u_ss_pkg.sv Line: 61
+Info (12021): Found 1 design units, including 1 entities, in source file core/v30/v30_core.sv
+    Info (12023): Found entity 1: v30_core File: /work/fpga/core/v30/v30_core.sv Line: 80
+Info (12021): Found 1 design units, including 1 entities, in source file core/v30/v30u_biu.sv
+    Info (12023): Found entity 1: v30u_biu File: /work/fpga/core/v30/v30u_biu.sv Line: 146
+Info (12021): Found 1 design units, including 1 entities, in source file core/v30/v30u_eu.sv
+    Info (12023): Found entity 1: v30u_eu File: /work/fpga/core/v30/v30u_eu.sv Line: 63
+Warning (10335): Unrecognized synthesis attribute "attribute" at core/v30/v30u_ucrom.sv(34) File: /work/fpga/core/v30/v30u_ucrom.sv Line: 34
+Info (12021): Found 1 design units, including 1 entities, in source file core/v30/v30u_ucrom.sv
+    Info (12023): Found entity 1: v30u_ucrom File: /work/fpga/core/v30/v30u_ucrom.sv Line: 43
+Info (12021): Found 1 design units, including 1 entities, in source file core/v30_cpu_bridge.sv
+    Info (12023): Found entity 1: v30_cpu_bridge File: /work/fpga/core/v30_cpu_bridge.sv Line: 112
+Info (12021): Found 1 design units, including 1 entities, in source file core/sdram_mp.sv
+    Info (12023): Found entity 1: sdram_mp File: /work/fpga/core/sdram_mp.sv Line: 41
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_tvram.sv
+    Info (12023): Found entity 1: pc98_tvram File: /work/fpga/core/pc98_tvram.sv Line: 60
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_kbd8251.sv
+    Info (12023): Found entity 1: pc98_kbd8251 File: /work/fpga/core/pc98_kbd8251.sv Line: 80
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_font_ank.sv
+    Info (12023): Found entity 1: pc98_font_ank File: /work/fpga/core/pc98_font_ank.sv Line: 28
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_text_render.sv
+    Info (12023): Found entity 1: pc98_text_render File: /work/fpga/core/pc98_text_render.sv Line: 26
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_text_rowbase.sv
+    Info (12023): Found entity 1: pc98_text_rowbase File: /work/fpga/core/pc98_text_rowbase.sv Line: 31
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_video_timing.sv
+    Info (12023): Found entity 1: pc98_video_timing File: /work/fpga/core/pc98_video_timing.sv Line: 27
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_glyph_addr.sv
+    Info (12023): Found entity 1: pc98_glyph_addr File: /work/fpga/core/pc98_glyph_addr.sv Line: 45
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_gdc_mode1.sv
+    Info (12023): Found entity 1: pc98_gdc_mode1 File: /work/fpga/core/pc98_gdc_mode1.sv Line: 48
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_glyph_rowbuf.sv
+    Info (12023): Found entity 1: pc98_glyph_rowbuf File: /work/fpga/core/pc98_glyph_rowbuf.sv Line: 37
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_font_fetch.sv
+    Info (12023): Found entity 1: pc98_font_fetch File: /work/fpga/core/pc98_font_fetch.sv Line: 42
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_jtag_probe.sv
+    Info (12023): Found entity 1: pc98_jtag_probe File: /work/fpga/core/pc98_jtag_probe.sv Line: 22
+Info (12021): Found 1 design units, including 1 entities, in source file core/pulse_cdc.sv
+    Info (12023): Found entity 1: pulse_cdc File: /work/fpga/core/pulse_cdc.sv Line: 29
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_cgwindow.sv
+    Info (12023): Found entity 1: pc98_cgwindow File: /work/fpga/core/pc98_cgwindow.sv Line: 53
+Info (12021): Found 1 design units, including 1 entities, in source file core/pc98_gvram_display.sv
+    Info (12023): Found entity 1: pc98_gvram_display File: /work/fpga/core/pc98_gvram_display.sv Line: 41
+Info (12021): Found 1 design units, including 1 entities, in source file core/pll_video_pc98.v
+    Info (12023): Found entity 1: pll_video_pc98 File: /work/fpga/core/pll_video_pc98.v Line: 21
+Info (12021): Found 1 design units, including 1 entities, in source file core/sdram_shim.sv
+    Info (12023): Found entity 1: sdram_shim File: /work/fpga/core/sdram_shim.sv Line: 26
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/ps2_keyboard/HDL/ps2_keyboard_Byte_Accept.sv
+    Info (12023): Found entity 1: ps2_keyboard_Byte_Accept File: /work/fpga/core/chipset/HDL/ps2_keyboard/HDL/ps2_keyboard_Byte_Accept.sv Line: 9
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/ps2_keyboard/HDL/ps2_keyboard.sv
+    Info (12023): Found entity 1: ps2_keyboard File: /work/fpga/core/chipset/HDL/ps2_keyboard/HDL/ps2_keyboard.sv Line: 12
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/i8288/HDL/i8288.sv
+    Info (12023): Found entity 1: i8288 File: /work/fpga/core/chipset/HDL/i8288/HDL/i8288.sv Line: 8
+Info (12021): Found 2 design units, including 1 entities, in source file core/chipset/HDL/i8259/HDL/i8259_Priority_Resolver.sv
+    Info (12022): Found design unit 1: i8259_Common_Package (SystemVerilog) File: /work/fpga/core/chipset/HDL/i8259/HDL/i8259_Common_Package.svh Line: 9
+    Info (12023): Found entity 1: i8259_Priority_Resolver File: /work/fpga/core/chipset/HDL/i8259/HDL/i8259_Priority_Resolver.sv Line: 8
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/i8259/HDL/i8259_Interrupt_Request.sv
+    Info (12023): Found entity 1: i8259_Interrupt_Request File: /work/fpga/core/chipset/HDL/i8259/HDL/i8259_Interrupt_Request.sv Line: 6
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/i8259/HDL/i8259_In_Service.sv
+    Info (12023): Found entity 1: i8259_In_Service File: /work/fpga/core/chipset/HDL/i8259/HDL/i8259_In_Service.sv Line: 8
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/i8259/HDL/i8259_Control_Logic.sv
+    Info (12023): Found entity 1: i8259_Control_Logic File: /work/fpga/core/chipset/HDL/i8259/HDL/i8259_Control_Logic.sv Line: 8
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/i8259/HDL/i8259_Bus_Control_Logic.sv
+    Info (12023): Found entity 1: i8259_Bus_Control_Logic File: /work/fpga/core/chipset/HDL/i8259/HDL/i8259_Bus_Control_Logic.sv Line: 7
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/i8259/HDL/i8259.sv
+    Info (12023): Found entity 1: i8259 File: /work/fpga/core/chipset/HDL/i8259/HDL/i8259.sv Line: 7
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/i8253/HDL/i8253_Counter.sv
+    Info (12023): Found entity 1: i8253_Counter File: /work/fpga/core/chipset/HDL/i8253/HDL/i8253_Counter.sv Line: 10
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/i8253/HDL/i8253_Control_Logic.sv
+    Info (12023): Found entity 1: i8253_Control_Logic File: /work/fpga/core/chipset/HDL/i8253/HDL/i8253_Control_Logic.sv Line: 8
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/i8253/HDL/i8253.sv
+    Info (12023): Found entity 1: i8253 File: /work/fpga/core/chipset/HDL/i8253/HDL/i8253.sv Line: 8
+Info (12021): Found 2 design units, including 1 entities, in source file core/chipset/HDL/upd71071/HDL/upd71071_Timing_And_Control.sv
+    Info (12022): Found design unit 1: upd71071_Common_Package (SystemVerilog) File: /work/fpga/core/chipset/HDL/upd71071/HDL/upd71071_Common_Package.svh Line: 9
+    Info (12023): Found entity 1: upd71071_Timing_And_Control File: /work/fpga/core/chipset/HDL/upd71071/HDL/upd71071_Timing_And_Control.sv Line: 19
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/upd71071/HDL/upd71071_Priority_Encoder.sv
+    Info (12023): Found entity 1: upd71071_Priority_Encoder File: /work/fpga/core/chipset/HDL/upd71071/HDL/upd71071_Priority_Encoder.sv Line: 9
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/upd71071/HDL/upd71071_Bus_Control_Logic.sv
+    Info (12023): Found entity 1: upd71071_Bus_Control_Logic File: /work/fpga/core/chipset/HDL/upd71071/HDL/upd71071_Bus_Control_Logic.sv Line: 8
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/upd71071/HDL/upd71071_Address_And_Count_Registers.sv
+    Info (12023): Found entity 1: upd71071_Address_And_Count_Registers File: /work/fpga/core/chipset/HDL/upd71071/HDL/upd71071_Address_And_Count_Registers.sv Line: 9
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/upd71071/HDL/upd71071.sv
+    Info (12023): Found entity 1: upd71071 File: /work/fpga/core/chipset/HDL/upd71071/HDL/upd71071.sv Line: 8
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/ce_generator.sv
+    Info (12023): Found entity 1: ce_generator File: /work/fpga/core/chipset/HDL/ce_generator.sv Line: 7
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/Ready.sv
+    Info (12023): Found entity 1: READY File: /work/fpga/core/chipset/HDL/Ready.sv Line: 5
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/RAM.sv
+    Info (12023): Found entity 1: RAM File: /work/fpga/core/chipset/HDL/RAM.sv Line: 7
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/Peripherals.sv
+    Info (12023): Found entity 1: PERIPHERALS File: /work/fpga/core/chipset/HDL/Peripherals.sv Line: 8
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/Chipset.sv
+    Info (12023): Found entity 1: CHIPSET File: /work/fpga/core/chipset/HDL/Chipset.sv Line: 7
+Info (12021): Found 1 design units, including 1 entities, in source file core/chipset/HDL/Bus_Arbiter.sv
+    Info (12023): Found entity 1: BUS_ARBITER File: /work/fpga/core/chipset/HDL/Bus_Arbiter.sv Line: 5
+Error (10686): SystemVerilog error at pc98_scsi_rom.sv(62): ROMFILE has an aggregate value File: /work/fpga/core/pc98_scsi_rom.sv Line: 62
+Info (144001): Generated suppressed messages file /work/fpga/output_files/ap_core.map.smsg
+Error: Quartus Prime Analysis & Synthesis was unsuccessful. 1 error, 30 warnings
+    Error: Peak virtual memory: 1282 megabytes
+    Error: Processing ended: Tue Sep 29 11:56:23 2026
+    Error: Elapsed time: 00:00:26
+    Error: Total CPU time (on all processors): 00:00:37
+Error (293001): Quartus Prime Full Compilation was unsuccessful. 3 errors, 30 warnings
+Error: Flow compile (for project /work/fpga/ap_core) was not successful
+Error: ERROR: Error(s) found while running an executable. See report file(s) for error message(s). Message log indicates which executable was run last.
+
+Error (23031): Evaluation of Tcl script /opt/intelFPGA/quartus/common/tcl/internal/qsh_flow.tcl unsuccessful
+Error: Quartus Prime Shell was unsuccessful. 10 errors, 30 warnings
+    Error: Peak virtual memory: 1105 megabytes
+    Error: Processing ended: Tue Sep 29 11:56:23 2026
+    Error: Elapsed time: 00:00:30
+    Error: Total CPU time (on all processors): 00:00:40

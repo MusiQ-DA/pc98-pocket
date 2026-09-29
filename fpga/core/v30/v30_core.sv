@@ -135,7 +135,10 @@ module v30_core (
     // EU/BIU interlock view for the JTAG probe: on a wedged core this is
     // what separates "halted", "EU waits on a queue byte" and "the EU asked
     // for a cycle the BIU never launched" -- none of which show on the pins.
-    output    [15:0]  dbg_core
+    output    [15:0]  dbg_core,
+    // dbg_core2 is the posted access itself: the address+segment the EU is
+    // trying to reach and the post/slot handshake state around it.
+    output    [31:0]  dbg_core2
 `ifdef V30_BACKDOOR
     // The BIU's pending-bus-cycle flag, a backdoor-only debug leg. Declared
     // here so the guarded connection below binds a PORT and not Verilator's
@@ -528,5 +531,12 @@ assign BUSLOCK_N = 1'b1;
 assign dbg_core = {biu_halted, q_ripe, q_ripe_lead_n, q_cnt,
                    eu_bs, eu_pop, eu_flush, eu_susp, eu_halt,
                    eu_rd_done_n, eu_wr_done_n};
+
+// The posted access the BIU is ignoring, and why it might be: eu_addr/eu_seg
+// is the operand target, the rest is the slot/post handshake.
+assign dbg_core2 = {1'b0, eu_addr, eu_seg,
+                    eu_post, eu_post_hold, eu_access_active,
+                    eu_slot_busy, eu_slot_busy_n, eu_split,
+                    eu_word, eu_pair, eu_opr_free};
 
 endmodule

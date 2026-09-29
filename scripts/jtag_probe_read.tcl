@@ -83,6 +83,7 @@ set regs {
     30  PADS=cont2,cont1
     31  JTAGBTN=held2,held1
     32  V30_DIN+EU_BIU
+    33  EU_POST_ADDR
     255 MAGIC
 }
 

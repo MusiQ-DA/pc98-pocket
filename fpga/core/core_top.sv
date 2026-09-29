@@ -1069,6 +1069,7 @@ module core_top (
     // CS:IP on a dead machine reads exactly like the wedge-era PC tap did.
     wire [223:0] v30_dbg_regs;             // {psw, pc, sreg3..0, gpr7..0}
     wire  [15:0] v30_dbg_core;             // EU/BIU interlock: halt/queue/eu_bs
+    wire  [31:0] v30_dbg_core2;            // posted access: eu_addr/seg + slots
     wire         v30_first_pop;            // EU consumed an instruction's byte 0
     reg  [23:0]  retired_cnt = 24'd0;      // saturating instruction counter
     reg          first_pop_q = 1'b0;
@@ -1127,6 +1128,9 @@ module core_top (
             // what it last consumed, dbg_core says whether the EU waits on
             // the queue (q_cnt=0, ripe=0) or is halted (biu_halted).
             8'h20:   probe_data_c = {v30_data_i, v30_dbg_core};
+            // 0x21: the posted access itself -- where the EU's MEMW wants to
+            // land and which handshake bits are holding the slot.
+            8'h21:   probe_data_c = v30_dbg_core2;
             // 0x1e/0x1f: the pad words. 1e is what the softcore actually sees
             // (settled | injected, in clk_chipset); 1f is the probe-held mask
             // itself -- a bit stuck there reads as a button held forever, so
@@ -2405,6 +2409,7 @@ module core_top (
         .dbg_regs      (v30_dbg_regs),
         .dbg_first_pop (v30_first_pop),
         .dbg_core      (v30_dbg_core),
+        .dbg_core2     (v30_dbg_core2),
 `endif
         .UBE_N      (v30_ube_n),
         .BUSLOCK_N  (),
