@@ -39,10 +39,6 @@ module tb_pc98_tvram;
     // race.
     logic rst = 1'b1;
 
-    logic [11:0] dbg_cell = 12'h0;
-    logic        dbg_own = 1'b0;           // driven like ~tvram_mem_select
-    wire  [23:0] dbg_word;
-
     pc98_tvram dut (
         .clk(clk),
         .rst(rst),
@@ -50,28 +46,23 @@ module tb_pc98_tvram;
         .cpu_q(cpu_q),
         .fil_clk(clk), .fil_cell(fil_cell),
         .fil_char_lo(vid_char_lo), .fil_char_hi(vid_char_hi),
-        .vid_clk(clk), .vid_cell(vid_cell), .vid_attr(vid_attr),
-        .dbg_cell(dbg_cell), .dbg_own(dbg_own), .dbg_word(dbg_word)
+        .vid_clk(clk), .vid_cell(vid_cell), .vid_attr(vid_attr)
     );
 
     int errors = 0;
 
     task automatic wr(input [13:0] a, input [7:0] d);
-        dbg_own = 1'b0;                    // guest selected: port is the bus's
         cpu_addr = a; cpu_wdata = d; cpu_wren = 1'b1;
         @(posedge clk);
         cpu_wren = 1'b0;
         @(posedge clk);
-        dbg_own = 1'b1;
     endtask
 
     task automatic rd(input [13:0] a, output [7:0] d);
-        dbg_own = 1'b0;
         cpu_addr = a;
         @(posedge clk);
         @(posedge clk);
         d = cpu_q;
-        dbg_own = 1'b1;
     endtask
 
     logic [7:0] got;
@@ -121,19 +112,8 @@ module tb_pc98_tvram;
             end
         end
 
-        // The debug read port: one cell index returns all three bank bytes at
-        // once, while the guest is not on the port.
-        dbg_own = 1'b1;
-        for (int i = 0; i < 2000; i += 53) begin
-            dbg_cell = 12'(i);
-            @(posedge clk); @(posedge clk); @(posedge clk);
-            if (dbg_word !== {8'((i*3) & 8'hFF), 8'((i >> 8) & 8'hFF),
-                              8'(i & 8'hFF)}) begin
-                $display("  FAIL dbg cell %0d: %06h", i, dbg_word);
-                errors++;
-            end
-        end
-        $display("  debug port: %0d cells sampled", 2000/53 + 1);
+        // (The JTAG debug read port this block used to exercise is gone with
+        // the probe trims: the guest port is the only read path now.)
 
         // The regions must not alias. Writing an attribute must not disturb the
         // character bytes of the same cell -- the exact failure the old layout

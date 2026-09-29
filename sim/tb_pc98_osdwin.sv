@@ -54,7 +54,6 @@ module tb_pc98_osdwin;
         .disk_led        (1'b0),
         .vid_blank       (1'b0),
         .osd_active      (1'b1),
-        .dbg_bits        (16'd0),
         .osd_palette_idx (4'd0),
         .osd_in_area     (1'b0),
         .osd_hcnt        (osd_hcnt),
