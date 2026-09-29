@@ -30,4 +30,10 @@ void settings_service(void);
 // rebind from the key picker) that must persist alongside the settings.
 void settings_mark_dirty(void);
 
+// Drive-A mount notification, from fdd_service: `hash` is the mounted image's
+// content identity on every mount and 0 on unbind. A disk the per-disk table
+// knows gets its saved profile applied live; a new disk inherits the global
+// blob, and unbinding returns to it. Later edits persist to that disk's entry.
+void settings_disk_mounted(uint32_t hash);
+
 #endif

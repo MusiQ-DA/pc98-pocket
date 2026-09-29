@@ -221,6 +221,14 @@ static uint8_t cur_row;        // cursor index within that menu
 static uint8_t return_row;     // main-menu row to restore when a submenu is left
 static volatile uint8_t dirty; // a value changed since the last persist
 
+// Per-disk save context (the per-disk table is described with the blob layout
+// below): the mounted drive-A image's content hash, its entry index, whether
+// the table magic validated, and the round-robin eviction cursor.
+static uint8_t  have_table;
+static uint32_t disk_hash;
+static int      disk_slot = -1;
+static uint8_t  evict_i;
+
 static void draw_frame(void)
 {
     osd_draw_char(&panel, 0, 0, G_TL, OSD_KEYEDGE);
@@ -480,15 +488,22 @@ static void settings_push(uint32_t i)
     }
 }
 
-// Restore every setting and button binding to its compiled default, apply it live, and flag the
-// save dirty.
-static void settings_reset_defaults(void)
+// Restore every setting and button binding to its compiled default and apply
+// it live. Also the mount path's fallback when no blob exists to adopt.
+static void apply_defaults(void)
 {
     for (uint32_t i = 0; i < SET_COUNT; i++) {
         settings[i].value = settings_default[i];
         settings_push(i);
     }
     key_bind_reset();
+}
+
+// Restore every setting and button binding to its compiled default, apply it live, and flag the
+// save dirty.
+static void settings_reset_defaults(void)
+{
+    apply_defaults();
     dirty = 1;
     settings_draw();
 }
@@ -634,9 +649,27 @@ void settings_reset_tick(void)
 // RAM flag was never read). Each old index maps through the tables below to its new index, or is
 // read past when the setting is gone; the blob is rewritten at the current version on the next
 // save, so each remap runs once.
+//
+// VERSION 7 APPENDS THE PER-DISK TABLE. The global blob's bytes are unchanged -- the version bump
+// only marks the firmware as table-aware -- so the same bytes still load on version-6 readers.
+// TABLE_WORD carries a second magic: the table region was never written by older saves and reads
+// back bridge-RAM residue, so the magic (not the version) says the table exists. Each entry is
+// {hash, ~hash, block}: hash is the mounted drive-A image's identity (fdd_service.c), ~hash is the
+// validity tag that keeps a half-written or stale slot from passing for a profile, and block is
+// the same five-word values+bindings packing the blob uses. While a disk is mounted saves go to
+// its entry and mounting applies it; with no disk mounted, saves and the live set are global.
 #define SETTINGS_MAGIC   0x50435853u
-#define SETTINGS_VERSION 6u
+#define SETTINGS_VERSION 7u
 #define SETTINGS_WORD    128
+
+// The table occupies the rest of the window: magic at word 135, then seventeen
+// 7-word entries through word 254. TABLE_WORD + 1 + ENTRY_COUNT*ENTRY_WORDS =
+// 255, so the region ends exactly at the window's last word.
+#define TABLE_WORD   (SETTINGS_WORD + 7) // the global blob is seven words
+#define TABLE_MAGIC  0x504B5444u         // 'PKTD'
+#define BLOCK_WORDS  5                   // the packed values + bindings a profile is
+#define ENTRY_WORDS  (BLOCK_WORDS + 2)   // hash, ~hash, then the block
+#define ENTRY_COUNT  17
 
 // Version 4's enum order: CPU, CGA, HGC, video-1st, BIOS-wr, splash, OPL2, boost, speaker, stereo,
 // C/MS, composite, display, EMS, EMS-frame, A000, joy1, joy2, swap-joy, sync-joy, d-pad, gamepad.
@@ -655,92 +688,12 @@ static const uint8_t v5_to_v6[11] = {
 };
 #define SETTINGS_V5_COUNT 11
 
-void settings_load(void)
+// Write the live values+bindings as one five-word block at `addr`: SET_COUNT
+// values packed four per word, then the seven binding codes and the ext
+// bitmap. The layout the global blob and every per-disk entry share.
+static void block_write(uint32_t addr)
 {
-    for (uint32_t i = 0; i < SET_COUNT; i++) {
-        settings_default[i] = settings[i].value; // capture defaults before the save overwrites them
-    }
-    *FDD_BRAM_ADDR = SETTINGS_WORD;
-    uint32_t magic = *FDD_BRAM_RDATA;
-    uint32_t head = *FDD_BRAM_RDATA;
-    uint32_t version = head & 0xFF;
-    if (magic == SETTINGS_MAGIC && version >= 4 && version <= SETTINGS_VERSION) {
-        uint32_t count = (head >> 8) & 0xFF;
-        uint32_t values = count;
-        if (version == 4) {
-            // The v4 blob's count is 22; read every byte (the words are consumed
-            // in fours, so the block must be walked whole) and land each on its
-            // v5 index where one exists.
-            if (values > SETTINGS_V4_COUNT) {
-                values = SETTINGS_V4_COUNT;
-            }
-        } else if (version == 5) {
-            // v5 wrote eleven values; all eleven are read so the d-pad and
-            // gamepad bytes at the tail still reach their v6 indices.
-            if (values > SETTINGS_V5_COUNT) {
-                values = SETTINGS_V5_COUNT;
-            }
-        } else if (values > SET_COUNT) {
-            values = SET_COUNT;
-        }
-        uint32_t word = 0;
-        for (uint32_t i = 0; i < values; i++) {
-            if ((i & 3) == 0) {
-                word = *FDD_BRAM_RDATA;
-            }
-            uint8_t v = (word >> ((i & 3) * 8)) & 0xFF;
-            uint32_t t = i;
-            if (version == 4) {
-                t = v4_to_v5[i];
-            }
-            if (version <= 5 && t != 0xFF) {
-                t = v5_to_v6[t];
-            }
-            // Ignore an out-of-range value from an older blob.
-            if (t != 0xFF && v < settings[t].count) {
-                settings[t].value = v;
-            }
-        }
-        // The binding block follows the values (auto-incrementing read pointer): seven code bytes
-        // then the ext bitmap.
-        uint8_t codes[BIND_COUNT];
-        uint8_t ext = 0;
-        for (uint32_t i = 0; i < BIND_COUNT + 1; i++) {
-            if ((i & 3) == 0) {
-                word = *FDD_BRAM_RDATA;
-            }
-            uint8_t b = (word >> ((i & 3) * 8)) & 0xFF;
-            if (i < BIND_COUNT) {
-                codes[i] = b;
-            } else {
-                ext = b;
-            }
-        }
-        for (uint32_t i = 0; i < BIND_COUNT; i++) {
-            key_bind_set(i, codes[i], (ext >> i) & 1);
-        }
-    }
-    // Drive every setting into the machine so it follows the compiled defaults on a fresh boot and
-    // the saved values once a blob exists.
-    for (uint32_t i = 0; i < SET_COUNT; i++) {
-        settings_push(i);
-    }
-}
-
-void settings_mark_dirty(void)
-{
-    dirty = 1;
-}
-
-void settings_service(void)
-{
-    if (!dirty) {
-        return;
-    }
-    dirty = 0;
-    *FDD_BRAM_ADDR = SETTINGS_WORD;
-    *FDD_BRAM_WDATA = SETTINGS_MAGIC;
-    *FDD_BRAM_WDATA = SETTINGS_VERSION | ((uint32_t) SET_COUNT << 8);
+    *FDD_BRAM_ADDR = addr;
     uint32_t word = 0;
     for (uint32_t i = 0; i < SET_COUNT; i++) {
         word |= (uint32_t) settings[i].value << ((i & 3) * 8);
@@ -749,7 +702,6 @@ void settings_service(void)
             word = 0;
         }
     }
-    // key-binding block: seven code bytes then the ext bitmap, four bytes per word.
     uint8_t ext = 0;
     for (uint32_t i = 0; i < BIND_COUNT; i++) {
         ext |= (uint8_t) (key_bind_ext(i) << i);
@@ -763,4 +715,261 @@ void settings_service(void)
             word = 0;
         }
     }
+}
+
+// Adopt a five-word block (the layout block_write makes) as the live settings
+// and bindings. Values are index-checked the way settings_load's are, so an
+// out-of-range byte keeps the index it had.
+static void block_apply(uint32_t addr)
+{
+    *FDD_BRAM_ADDR = addr;
+    uint32_t word = 0;
+    for (uint32_t i = 0; i < SET_COUNT; i++) {
+        if ((i & 3) == 0) {
+            word = *FDD_BRAM_RDATA;
+        }
+        uint8_t v = (word >> ((i & 3) * 8)) & 0xFF;
+        if (v < settings[i].count) {
+            settings[i].value = v;
+        }
+    }
+    // The binding block follows the values (auto-incrementing read pointer):
+    // seven code bytes then the ext bitmap.
+    uint8_t codes[BIND_COUNT];
+    uint8_t ext = 0;
+    for (uint32_t i = 0; i < BIND_COUNT + 1; i++) {
+        if ((i & 3) == 0) {
+            word = *FDD_BRAM_RDATA;
+        }
+        uint8_t b = (word >> ((i & 3) * 8)) & 0xFF;
+        if (i < BIND_COUNT) {
+            codes[i] = b;
+        } else {
+            ext = b;
+        }
+    }
+    for (uint32_t i = 0; i < BIND_COUNT; i++) {
+        key_bind_set(i, codes[i], (ext >> i) & 1);
+    }
+    // Drive every setting into the machine so the adopted block takes effect.
+    for (uint32_t i = 0; i < SET_COUNT; i++) {
+        settings_push(i);
+    }
+}
+
+// The global blob, whole: magic, {version, count} and the block.
+// settings_load calls this to normalise a remapped older blob in place;
+// settings_service calls it on every flush while no disk is mounted.
+static void global_write(void)
+{
+    *FDD_BRAM_ADDR = SETTINGS_WORD;
+    *FDD_BRAM_WDATA = SETTINGS_MAGIC;
+    *FDD_BRAM_WDATA = SETTINGS_VERSION | ((uint32_t) SET_COUNT << 8);
+    block_write(SETTINGS_WORD + 2);
+}
+
+// The context when no profiled disk is mounted -- and the starting point for a
+// disk the table has never seen: the global blob if a save exists, else the
+// compiled defaults. Older-version blobs were normalised at load, so the block
+// is always readable here.
+static void apply_global(void)
+{
+    *FDD_BRAM_ADDR = SETTINGS_WORD;
+    uint32_t magic = *FDD_BRAM_RDATA;
+    uint32_t head = *FDD_BRAM_RDATA;
+    uint32_t version = head & 0xFF;
+    if (magic == SETTINGS_MAGIC && version >= 6 && version <= SETTINGS_VERSION) {
+        block_apply(SETTINGS_WORD + 2);
+    } else {
+        apply_defaults();
+    }
+}
+
+// The table index for a mounted image's hash, or -1. Both hash words must
+// agree -- ~hash is the entry's validity tag, so a half-written or stale slot
+// never matches.
+static int table_find(uint32_t hash)
+{
+    if (!have_table) {
+        return -1;
+    }
+    for (int e = 0; e < ENTRY_COUNT; e++) {
+        *FDD_BRAM_ADDR = (uint32_t) (TABLE_WORD + 1 + e * ENTRY_WORDS);
+        uint32_t h = *FDD_BRAM_RDATA;
+        uint32_t nh = *FDD_BRAM_RDATA;
+        if (h == hash && nh == ~hash) {
+            return e;
+        }
+    }
+    return -1;
+}
+
+// Where a new disk's profile goes: the first free or corrupt slot, else the
+// round-robin victim -- the evicted disk reverts to the global blob next mount.
+static int table_alloc(void)
+{
+    int free_e = -1;
+    for (int e = 0; e < ENTRY_COUNT; e++) {
+        *FDD_BRAM_ADDR = (uint32_t) (TABLE_WORD + 1 + e * ENTRY_WORDS);
+        uint32_t h = *FDD_BRAM_RDATA;
+        uint32_t nh = *FDD_BRAM_RDATA;
+        if (free_e < 0 && (h == 0 || nh != ~h)) {
+            free_e = e;
+        }
+    }
+    if (free_e >= 0) {
+        return free_e;
+    }
+    int e = evict_i;
+    evict_i = (uint8_t) ((evict_i + 1) >= ENTRY_COUNT ? 0 : evict_i + 1);
+    return e;
+}
+
+void settings_load(void)
+{
+    for (uint32_t i = 0; i < SET_COUNT; i++) {
+        settings_default[i] = settings[i].value; // capture defaults before the save overwrites them
+    }
+    *FDD_BRAM_ADDR = SETTINGS_WORD;
+    uint32_t magic = *FDD_BRAM_RDATA;
+    uint32_t head = *FDD_BRAM_RDATA;
+    uint32_t version = head & 0xFF;
+    if (magic == SETTINGS_MAGIC && version >= 4 && version <= SETTINGS_VERSION) {
+        if (version >= 6) {
+            // Versions 6 and 7 lay the global block out identically; the
+            // per-disk table lives behind its own magic.
+            block_apply(SETTINGS_WORD + 2);
+        } else {
+            uint32_t count = (head >> 8) & 0xFF;
+            uint32_t values = count;
+            if (version == 4) {
+                // The v4 blob's count is 22; read every byte (the words are consumed
+                // in fours, so the block must be walked whole) and land each on its
+                // v5 index where one exists.
+                if (values > SETTINGS_V4_COUNT) {
+                    values = SETTINGS_V4_COUNT;
+                }
+            } else {
+                // v5 wrote eleven values; all eleven are read so the d-pad and
+                // gamepad bytes at the tail still reach their v6 indices.
+                if (values > SETTINGS_V5_COUNT) {
+                    values = SETTINGS_V5_COUNT;
+                }
+            }
+            uint32_t word = 0;
+            for (uint32_t i = 0; i < values; i++) {
+                if ((i & 3) == 0) {
+                    word = *FDD_BRAM_RDATA;
+                }
+                uint8_t v = (word >> ((i & 3) * 8)) & 0xFF;
+                uint32_t t = i;
+                if (version == 4) {
+                    t = v4_to_v5[i];
+                }
+                if (version <= 5 && t != 0xFF) {
+                    t = v5_to_v6[t];
+                }
+                // Ignore an out-of-range value from an older blob.
+                if (t != 0xFF && v < settings[t].count) {
+                    settings[t].value = v;
+                }
+            }
+            // The binding block follows the values (auto-incrementing read pointer): seven code
+            // bytes then the ext bitmap.
+            uint8_t codes[BIND_COUNT];
+            uint8_t ext = 0;
+            for (uint32_t i = 0; i < BIND_COUNT + 1; i++) {
+                if ((i & 3) == 0) {
+                    word = *FDD_BRAM_RDATA;
+                }
+                uint8_t b = (word >> ((i & 3) * 8)) & 0xFF;
+                if (i < BIND_COUNT) {
+                    codes[i] = b;
+                } else {
+                    ext = b;
+                }
+            }
+            for (uint32_t i = 0; i < BIND_COUNT; i++) {
+                key_bind_set(i, codes[i], (ext >> i) & 1);
+            }
+            // Normalise a remapped blob in place so the global block the mount
+            // paths re-apply is always a current-version one.
+            global_write();
+        }
+    }
+    // Drive every setting into the machine so it follows the compiled defaults on a fresh boot and
+    // the saved values once a blob exists.
+    for (uint32_t i = 0; i < SET_COUNT; i++) {
+        settings_push(i);
+    }
+    // The table magic sits right after the blob; its presence decides whether
+    // the per-disk entries mean anything at all.
+    *FDD_BRAM_ADDR = TABLE_WORD;
+    have_table = (uint8_t) (*FDD_BRAM_RDATA == TABLE_MAGIC);
+}
+
+void settings_mark_dirty(void)
+{
+    dirty = 1;
+}
+
+void settings_service(void)
+{
+    if (!dirty) {
+        return;
+    }
+    dirty = 0;
+    if (!have_table) {
+        // First table-aware save: claim the region with its magic and clear
+        // every entry, so an older blob's tail or bridge-RAM residue can
+        // never read as a profile.
+        have_table = 1;
+        *FDD_BRAM_ADDR = TABLE_WORD;
+        *FDD_BRAM_WDATA = TABLE_MAGIC;
+        for (uint32_t w = 0; w < ENTRY_COUNT * ENTRY_WORDS; w++) {
+            *FDD_BRAM_WDATA = 0;
+        }
+    }
+    if (!disk_hash) {
+        global_write();
+        return;
+    }
+    int e = disk_slot;
+    if (e < 0 || e >= ENTRY_COUNT) {
+        e = table_find(disk_hash);
+        if (e < 0) {
+            e = table_alloc();
+        }
+        disk_slot = e;
+    }
+    *FDD_BRAM_ADDR = (uint32_t) (TABLE_WORD + 1 + e * ENTRY_WORDS);
+    *FDD_BRAM_WDATA = disk_hash;
+    *FDD_BRAM_WDATA = ~disk_hash;
+    block_write((uint32_t) (TABLE_WORD + 1 + e * ENTRY_WORDS + 2));
+}
+
+// Follow the image mounted in drive A -- fdd_service calls this with the
+// image's content hash on every mount and 0 on unbind. Whatever the outgoing
+// context still owes is flushed first, then the incoming disk's profile goes
+// live; a disk the table has never seen inherits the global blob, and unbind
+// returns to it.
+void settings_disk_mounted(uint32_t hash)
+{
+    if (hash == disk_hash) {
+        return; // the re-insert or re-mount of the image already in context
+    }
+    settings_service(); // pending edits belong to the outgoing disk
+    disk_hash = hash;
+    if (!hash) {
+        disk_slot = -1;
+        apply_global();
+    } else {
+        disk_slot = table_find(hash);
+        if (disk_slot >= 0) {
+            block_apply((uint32_t) (TABLE_WORD + 1 + disk_slot * ENTRY_WORDS + 2));
+        } else {
+            apply_global();
+        }
+    }
+    keybind_sync(); // the Controls rows cache each button's slot and key
 }

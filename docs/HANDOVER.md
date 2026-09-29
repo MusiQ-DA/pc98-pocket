@@ -900,3 +900,15 @@ font 2KB = 4、work RAM 8KB = 8、picorv32 2（cpuregs）+ FDD bridge 2。
 - `.gamepad(gamepad)` の残骸（pocket_keyboard の入力）も同じ lint が見つけた。
   ゲームポートはもう無いが、設定 "Gamepad Mode" の Joystick は
   「パッドのキー入力を止める」意味だけが残っている（移行無しで消さない）
+
+### §10.13 ディスク毎の設定保存 + Settings スロットの配線修復 (firmware)
+
+- **Settings スロットは壊れていた**: package.sh が `address 0x10030000` /
+  `parameters 0x02` / nonvolatile 無しを吐いていた = APF のロードは
+  ROM loader (0x1xxxxxxx) に捨てられ、flush の readback は常に 0。
+  `0x60000200` + `nonvolatile: true` + `0x22` (bit5=無ければ 0xFF 充填) に修正。
+- **設定の永続化はディスク毎**: グローバル blob (words 128-134, version 7
+  -- バイト互換のまま) の後ろに TABLE_MAGIC (word 135) + 17 エントリ x 7
+  ワード {hash, ~hash, block}。ドライブ A のイメージ識別はファイル名が
+  取れないので先頭+中間 512B の FNV-1a (fdd_service.c)。マウントで適用、
+  変更はそのディスクのエントリへ、ディスク無しはグローバルへ。

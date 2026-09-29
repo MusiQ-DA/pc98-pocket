@@ -14,6 +14,7 @@
 // The geometry table and the register protocol follow MiSTer's x86 support
 // (Main_MiSTer support/x86/x86.cpp), retargeted from the HPS to this softcore.
 
+#include "settings_ui.h"
 #include "softcpu_regs.h"
 
 // One management-bus write: latch drive + register + 16-bit data, then trigger.
@@ -157,6 +158,41 @@ static void spin(uint32_t n)
 static uint32_t fdd_sectors[2];
 static uint8_t  fdd_inserted[2];
 
+// The mounted image's identity for the per-disk settings table
+// (settings_ui.c). The bridge never sees the picked file's name, so the disk's
+// own bytes stand in: a 32-bit FNV-1a over the first and the middle 512-byte
+// block of the raw image, folded with the sector count. The IPL alone would
+// collide across same-format DOS disks, and any single sector could be one a
+// save game rewrites -- two spread samples keep both failures rare. A hash of
+// 0 is the "no disk" sentinel to the settings side, so it is never returned.
+static uint32_t fdd_image_hash(uint32_t drive, uint32_t sectors)
+{
+    uint32_t h = 2166136261u; // FNV-1a offset basis; the prime is a zmmul mul
+    h ^= sectors;
+    h *= 16777619u;
+    uint32_t bytes = sectors * SECTOR_BYTES;
+    for (uint32_t s = 0; s < 2; s++) {
+        if (s && bytes < 2 * SECTOR_BYTES) {
+            break; // a one-sector image has only the one block to sample
+        }
+        uint32_t off = fdd_base[drive]
+                     + (s ? ((bytes >> 1) & ~(SECTOR_BYTES - 1u)) : 0);
+        if (!tds_transfer(drive ? FDD1_SLOT_ID : FDD0_SLOT_ID,
+                          off, FDD_TDS_READ, SECTOR_BYTES)) {
+            continue;
+        }
+        *FDD_BRAM_ADDR = 0;
+        for (int i = 0; i < SECTOR_WORDS; i++) {
+            uint32_t w = *FDD_BRAM_RDATA;
+            h ^= w & 0xFF;         h *= 16777619u;
+            h ^= (w >> 8) & 0xFF;  h *= 16777619u;
+            h ^= (w >> 16) & 0xFF; h *= 16777619u;
+            h ^= w >> 24;          h *= 16777619u;
+        }
+    }
+    return h ? h : 1;
+}
+
 // Derive a drive's geometry from its image size (in sectors) and push it to the
 // controller, ejecting first so the controller flags a media change, then marking
 // the media present and writable. drive selects the controller's drive A (0) or B
@@ -187,6 +223,11 @@ void fdd_mount(uint32_t drive, uint32_t sectors)
     mgmt_write(drive, FMGMT_PRESENT, 1);
     fdd_sectors[drive] = sectors;
     fdd_inserted[drive] = 1;
+    if (!drive) {
+        // Drive A's image picks the settings profile: mount applies the disk's
+        // own saved settings (or the global set), unbind returns to global.
+        settings_disk_mounted(fdd_image_hash(drive, sectors));
+    }
 }
 
 // Eject: the controller stops reporting media, so the guest sees NOT READY
@@ -219,6 +260,9 @@ void fdd_unbind(uint32_t drive)
     }
     fdd_eject(drive);
     fdd_sectors[drive] = 0;
+    if (!drive) {
+        settings_disk_mounted(0); // no image: the settings context is global again
+    }
 }
 
 int fdd_is_inserted(uint32_t drive)

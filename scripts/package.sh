@@ -114,9 +114,16 @@ def data(j):
         {"name": "Firmware",    "id": 12, "required": False, "parameters": "0x202",
          "filename": "firmware.bin", "extensions": ["bin"],
          "address": "0x10040000", "size_maximum": "0x8000"},
-        {"name": "Settings",    "id": 7, "required": False, "parameters": "0x02",
-         "filename": "settings.dat", "extensions": ["dat"],
-         "address": "0x10030000", "size_maximum": "0x1000"},
+        # The save window IS the disk bridge RAM: 0x6xxxxxxx is the only
+        # address the host DMA can both write and read back there (0x1xxxxxxx
+        # streams go to the ROM loader and are dropped -- the old 0x10030000
+        # threw the slot away on load and answered 0 on flush, so nothing ever
+        # persisted). parameters 0x22 = bit5, fill 0xFF when no .sav exists,
+        # plus bit1, core-specific file. 0x200 bytes is the whole window past
+        # the sector buffer -- the global blob and the per-disk profile table.
+        {"name": "Settings",    "id": 7, "required": False, "parameters": "0x22",
+         "nonvolatile": True, "filename": "settings.dat", "extensions": ["dat"],
+         "address": "0x60000200", "size_maximum": "0x200"},
         {"name": "Floppy A",    "id": 3, "required": False, "parameters": "0x201",
          # 0x201 = bit0 user-reloadable + bit9 persist-browsed-filename. No
          # `filename` default: the host records a deferload slot's declared

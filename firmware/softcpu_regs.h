@@ -214,7 +214,9 @@
 #define RHYTHM_SLOT_ID   13   // deferload: rhythm.bin, packed ADPCM-A voices
 #define RHY_WAV_SLOT_BASE 14  // deferload ids 14-19: per-voice *.wav sources
 // Bytes to declare for the nonvolatile Settings slot so it flushes on first boot.
-#define SETTINGS_SLOT_BYTES 64
+// The whole upper half of the 1 KB bridge RAM: the global settings blob plus
+// the per-disk profile table (settings_ui.c).
+#define SETTINGS_SLOT_BYTES 512
 
 // Shared disk-bridge sector transfer (disk_tds.c). The length is the media's
 // sector width, because the image file is laid out in that width.
