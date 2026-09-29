@@ -59,6 +59,9 @@ proc rd {addr} {
 #   0x1c       {cpu_ad_out[19:0], v30_bs, pause, reset_cpu, reset_chipset,
 #               reset, soft_reset_cpu, cpu_ce_posedge}
 #   0x1d       keyboard count:last
+#   0x20       {v30_data_i[15:0], dbg_core}: the byte pair last fed to the
+#              core + {halted,q_ripe,ripe_lead_n,q_cnt,eu_bs,eu_pop,eu_flush,
+#              eu_susp,eu_halt,rd_done_n,wr_done_n} -- EU/BIU interlock state
 #   0x1e       {cont2, cont1} pad words as the softcore sees them (settled|jtag)
 #   0x1f       {jtag_btn2, jtag_btn1} held-button inject mask -- a stuck bit
 #              here means that pad bit reads held forever (no edge for fw)
@@ -79,6 +82,7 @@ set regs {
     29  KEYS=count,last
     30  PADS=cont2,cont1
     31  JTAGBTN=held2,held1
+    32  V30_DIN+EU_BIU
     255 MAGIC
 }
 

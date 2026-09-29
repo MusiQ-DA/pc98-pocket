@@ -131,6 +131,11 @@ module v30_core (
     output    [223:0] dbg_regs     // ip slot holds the retired-instruction IP
     ,
     output            dbg_first_pop
+    ,
+    // EU/BIU interlock view for the JTAG probe: on a wedged core this is
+    // what separates "halted", "EU waits on a queue byte" and "the EU asked
+    // for a cycle the BIU never launched" -- none of which show on the pins.
+    output    [15:0]  dbg_core
 `ifdef V30_BACKDOOR
     // The BIU's pending-bus-cycle flag, a backdoor-only debug leg. Declared
     // here so the guarded connection below binds a PORT and not Verilator's
@@ -516,5 +521,12 @@ assign AD_OE = {{4{ad_oe_addr | ad_oe_ps}}, {16{ad_oe_addr | ad_oe_data}}};
 // BUSLOCK is not implemented (inherited scope note; the FSM core drives it
 // from the EU's LOCK prefix, which U2 restores).
 assign BUSLOCK_N = 1'b1;
+
+// The probe's EU/BIU wedge window. eu_bs is the cycle the EU is ASKING for
+// (distinct from the BS pins the BIU launched); q_cnt/q_ripe say whether a
+// queued byte exists and is offered; halted is the tell-tale for HLT.
+assign dbg_core = {biu_halted, q_ripe, q_ripe_lead_n, q_cnt,
+                   eu_bs, eu_pop, eu_flush, eu_susp, eu_halt,
+                   eu_rd_done_n, eu_wr_done_n};
 
 endmodule

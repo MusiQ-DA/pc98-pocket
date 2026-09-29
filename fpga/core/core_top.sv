@@ -1068,6 +1068,7 @@ module core_top (
     // cycle so the probe snapshot is "the CPU is executing THIS" -- a frozen
     // CS:IP on a dead machine reads exactly like the wedge-era PC tap did.
     wire [223:0] v30_dbg_regs;             // {psw, pc, sreg3..0, gpr7..0}
+    wire  [15:0] v30_dbg_core;             // EU/BIU interlock: halt/queue/eu_bs
     wire         v30_first_pop;            // EU consumed an instruction's byte 0
     reg  [23:0]  retired_cnt = 24'd0;      // saturating instruction counter
     reg          first_pop_q = 1'b0;
@@ -1118,9 +1119,14 @@ module core_top (
             // 0x1c: {ALE'd bus address, v30_bs, the reset/pause terms}.
             // cpu_ad_out vs slot 0x18's v30_addr separates "the engine is
             // driving this cycle" from "the core's pins are frozen".
-            8'h1c:   probe_data_c = {4'h0, cpu_ad_out, v30_bs,
+            8'h1c:   probe_data_c = {3'h0, cpu_ad_out, v30_bs,
                                      pause_core, reset_cpu, reset_chipset,
                                      reset, soft_reset_cpu, cpu_ce_posedge};
+            // 0x20: {last byte-pair fed to the core, EU/BIU state}. The
+            // pins say PASV while the core does not move: v30_data_i shows
+            // what it last consumed, dbg_core says whether the EU waits on
+            // the queue (q_cnt=0, ripe=0) or is halted (biu_halted).
+            8'h20:   probe_data_c = {v30_data_i, v30_dbg_core};
             // 0x1e/0x1f: the pad words. 1e is what the softcore actually sees
             // (settled | injected, in clk_chipset); 1f is the probe-held mask
             // itself -- a bit stuck there reads as a button held forever, so
@@ -2398,6 +2404,7 @@ module core_top (
 `ifdef PC98_JTAG
         .dbg_regs      (v30_dbg_regs),
         .dbg_first_pop (v30_first_pop),
+        .dbg_core      (v30_dbg_core),
 `endif
         .UBE_N      (v30_ube_n),
         .BUSLOCK_N  (),
