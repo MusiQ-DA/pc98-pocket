@@ -622,6 +622,10 @@ jobs:
               export PATH="$Q:$PATH"
               export LD_LIBRARY_PATH="$Q:${LD_LIBRARY_PATH:-}"
               quartus_sh --version
+              # pipefail: the compile's status flows through tee/grep -- the
+              # old pipeline reported "success" through a failed fitter and
+              # let the STA step trip over the missing netlist instead.
+              set -o pipefail
               # Internal/Fatal Errors are flaky and do not reproduce on
               # retry; unfittable designs and HDL errors are deterministic
               # and must not be retried into a second identical failure.
