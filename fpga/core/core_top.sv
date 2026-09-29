@@ -1084,6 +1084,14 @@ module core_top (
     always_ff @(posedge clk_chipset)
         probe_data <= probe_data_c;
 
+    // cpu_ce liveness: every chip-side wait eventually needs a posedge, so
+    // a ce_count that moves between probe reads separates "clock enable
+    // died" (engine/park frozen, everything else looks ready) from "the
+    // engine is stuck on a condition" (count still ticks).
+    reg  [15:0] ce_count = 16'd0;
+    always_ff @(posedge clk_chipset)
+        if (cpu_ce_posedge) ce_count <= ce_count + 16'd1;
+
     always_comb begin
         case (probe_addr)
             // The bisect-era taps (PIC/timer/keyboard counts, the wedge-PC
@@ -1103,6 +1111,22 @@ module core_top (
             // never completes; 0x1a: the ready chain the CPU waits on.
             8'h19:   probe_data_c = {16'h0, chipset_dbg};
             8'h1a:   probe_data_c = {24'h0, chipset_dbg2};
+            // 0x1b: {bridge park/engine FSM, ce edge counter}. parked=1 with a
+            // frozen ce_count is the dead-CE signature; a live count with
+            // parked=1 points at the engine's release conditions instead.
+            8'h1b:   probe_data_c = {bridge_dbg, ce_count};
+            // 0x1c: {ALE'd bus address, v30_bs, the reset/pause terms}.
+            // cpu_ad_out vs slot 0x18's v30_addr separates "the engine is
+            // driving this cycle" from "the core's pins are frozen".
+            8'h1c:   probe_data_c = {4'h0, cpu_ad_out, v30_bs,
+                                     pause_core, reset_cpu, reset_chipset,
+                                     reset, soft_reset_cpu, cpu_ce_posedge};
+            // 0x1e/0x1f: the pad words. 1e is what the softcore actually sees
+            // (settled | injected, in clk_chipset); 1f is the probe-held mask
+            // itself -- a bit stuck there reads as a button held forever, so
+            // edge-detection in firmware never fires ("B does nothing").
+            8'h1e:   probe_data_c = {cont2_key_chip, cont1_key_chip};
+            8'h1f:   probe_data_c = {jtag_btn2, jtag_btn1};
             8'h1d:   probe_data_c = {16'h0, key_count, key_last};
             8'hFF:   probe_data_c = 32'h98C0_DE98;
             default: probe_data_c = {8'hDE, 8'hAD, 8'h00, probe_addr};
@@ -2324,6 +2348,7 @@ module core_top (
     wire [19:0] v30_addr;
     wire [15:0] v30_data_o, v30_data_i;
     wire        v30_ube_n, v30_ce, v30_ready;
+    wire [15:0] bridge_dbg;
     wire        v30_ss_err_unused, v30_ss_quiet_unused;
     wire [15:0] v30_ss_rdata_unused;
 
@@ -2351,7 +2376,8 @@ module core_top (
         .processor_ready   (processor_ready),
         .address_enable_n  (chipset_aen),
         .pause_core        (pause_core),
-        .biu_done          (biu_done)
+        .biu_done          (biu_done),
+        .dbg               (bridge_dbg)
     );
 
     v30_core u_cpu (

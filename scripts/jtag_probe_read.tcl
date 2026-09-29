@@ -54,7 +54,14 @@ proc rd {addr} {
 #   0x19       {arbiter: hlda,aen_n,dma_hold,ext_req,drq3..0,  RAM FSM:
 #               wc_pend,refresh,read_flag,acc_rd,acc_wr,state[2:0]}
 #   0x1a       {proc_ready, mem_acc_ready, dma_ready, dack_n3..0, no_cmd}
+#   0x1b       {bridge: parked,cyc_active,bstate,wr_cnt,byte_idx,t_cnt,gap,cur_bs,
+#               cpu_ce edge counter} -- ce_count frozen = the clock enable died
+#   0x1c       {cpu_ad_out[19:0], v30_bs, pause, reset_cpu, reset_chipset,
+#               reset, soft_reset_cpu, cpu_ce_posedge}
 #   0x1d       keyboard count:last
+#   0x1e       {cont2, cont1} pad words as the softcore sees them (settled|jtag)
+#   0x1f       {jtag_btn2, jtag_btn1} held-button inject mask -- a stuck bit
+#              here means that pad bit reads held forever (no edge for fw)
 set regs {
     16  V30_PSW_PC
     17  V30_SREG3_SREG2
@@ -67,7 +74,11 @@ set regs {
     24  V30_ADDR
     25  ARB_HOLD+RAM_FSM
     26  READY_CHAIN
+    27  BRIDGE+CE_CNT
+    28  ALE_ADDR+BS+RST
     29  KEYS=count,last
+    30  PADS=cont2,cont1
+    31  JTAGBTN=held2,held1
     255 MAGIC
 }
 

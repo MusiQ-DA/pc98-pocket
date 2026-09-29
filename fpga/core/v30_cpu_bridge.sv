@@ -153,9 +153,15 @@ module v30_cpu_bridge (
     input  wire         address_enable_n,   // 0 = the 8288 world is ours
     input  wire         pause_core,         // freeze the CPU when set
 
-    output wire         biu_done            // one clk pulse per finished
+    output wire         biu_done,           // one clk pulse per finished
                                             // V30 cycle, for the CE
                                             // generator's speed reload
+
+    // JTAG probe bundle (PC98_JTAG): the park/byte-engine view -- the wedge
+    // question the chipset-side bundle cannot answer is whether the core's
+    // CE is parked and which FSM state is holding the release. Costs nothing
+    // when core_top leaves it unconnected.
+    output wire  [15:0] dbg
 );
 
     localparam [2:0] BS_INTA = 3'b000;
@@ -509,6 +515,9 @@ module v30_cpu_bridge (
             endcase
         end
     end
+
+    assign dbg = {parked, cyc_active, bstate, wr_count, byte_idx,
+                  t_cnt, gap_cnt, cur_bs};
 
 endmodule
 
