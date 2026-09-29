@@ -592,7 +592,6 @@ module PERIPHERALS #(
     // latch would stay high after the first byte, kb_ready would never come
     // back, and exactly one key event would ever cross.
     //
-    logic           keybord_irq;
     wire            clear_keycode = 1'b1;
     logic           kb_ready_int;
     assign  kb_ready = kb_ready_int;
@@ -609,7 +608,7 @@ module PERIPHERALS #(
         .kb_ready                   (kb_ready_int),
 
         // I/O
-        .irq                        (keybord_irq),
+        .irq                        (),
         .keycode                    (),
         .clear_keycode              (clear_keycode),
         .pause_core                 (pause_core)

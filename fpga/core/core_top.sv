@@ -1079,14 +1079,13 @@ module core_top (
     wire        probe_wr_tog;
     wire [6:0]  probe_wr_addr;
     wire [31:0] probe_wr_data;
-    wire        probe_rd_adv;
     pc98_jtag_probe u_jtag_probe (
         .probe_addr_sel (probe_addr),
         .probe_data     (probe_data),
         .wr_tog         (probe_wr_tog),
         .wr_addr        (probe_wr_addr),
         .wr_data        (probe_wr_data),
-        .rd_adv         (probe_rd_adv)
+        .rd_adv         ()
     );
 `endif
 
