@@ -136,6 +136,9 @@ module PERIPHERALS #(
         input   logic   [47:0]  rtc_time,
         output  logic   [1:0]   fdd_present,
         output  logic   [1:0]   fdd_request,
+        // fdd_request qualified by the requesting drive's media: the access
+        // lamp's view (the softcore keeps the raw bits).
+        output  logic           fdd_media_req,
         output  logic           scsi_request,
         output  logic           fdd_dma_req,
         // JTAG probe readout of the floppy transfer engine: dbg_fdc packs
@@ -2059,6 +2062,15 @@ module PERIPHERALS #(
                        fdc_dbg_drops, fdc_dbg_accepts,
                        fdc_dbg_xfer };
     assign dbg_fdc_cmd = fdc_dbg_command;
+
+    // The lamp's view of the sector request. floppy.v's request bits name the
+    // command kind, not the drive -- the drive a pending request targets is
+    // the in-flight command's selected_drive, which reaches this file in
+    // dbg_sector_info[15] (the same bit mgmt register 0 reports as
+    // FDD_LBA_DRIVE). Media is only tested at command start, so an eject
+    // mid-command leaves the bit raised while the softcore drains the dying
+    // transfer; count it for the lamp only while that drive still has media.
+    assign fdd_media_req = |(fdd_request & {2{fdd_present[fdc_dbg_sector_info[15]]}});
 
     always_ff @(posedge clock)
     begin

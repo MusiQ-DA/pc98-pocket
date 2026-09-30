@@ -348,6 +348,10 @@ static void scsi_execute(const uint8_t *cdb)
 void scsi_mount(uint32_t sectors)
 {
     scsi_sectors = sectors;
+    // Publish the mount state to RTL for the disk lamp: the probes this poll
+    // answers on an empty machine still toggle the request line, so the lamp
+    // needs a media flag to tell a real transfer from a probe on nothing.
+    *SOFT_SCSI_MEDIA = (sectors != 0);
     scsi_sense_key = SENSE_NO_SENSE;
     scsi_asc = 0x00;
 }
@@ -355,6 +359,7 @@ void scsi_mount(uint32_t sectors)
 void scsi_init(void)
 {
     scsi_sectors = 0;
+    *SOFT_SCSI_MEDIA = 0;
     scsi_sense_key = SENSE_NO_SENSE;
     scsi_asc = 0x00;
     scsi_ack = 0;

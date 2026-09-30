@@ -95,6 +95,7 @@ module softcpu_subsystem (
     input         dataslots_ready, // APF has finished the initial dataslot load
     output        soft_guest_hold, // boot-master guest reset: held until settings are staged
     output        soft_vid_blank,  // bit1 of the same register: force the presented frame dark
+    output        scsi_media,      // firmware's HDD-mounted flag, for the disk lamp's scsi gate
     // The drawing server's view of the two GDCs, already in this domain via
     // the synchronisers below; the done LEVEL the engine writes back.
     input   [1:0]  gdc_draw_req,
@@ -256,6 +257,21 @@ module softcpu_subsystem (
     end
     assign soft_guest_hold = soft_guest_hold_r;
     assign soft_vid_blank  = soft_vid_blank_r;
+
+    // HDD-mounted flag at 0x20000030, bit0: the firmware's "an image is fitted"
+    // for the on-screen disk lamp. The SCSI poll answers the option ROM's TEST
+    // UNIT READY probes even on an empty machine, and every probe still toggles
+    // the request line -- this bit is how the lamp tells a real transfer from
+    // one of those. Its own address rather than a spare bit in SOFT_GUEST_HOLD
+    // et al., because the firmware writes those registers whole-word.
+    reg scsi_media_r = 1'b0;
+    always @(posedge clk_pico) begin
+        if (reset)
+            scsi_media_r <= 1'b0;
+        else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[7:0] == 8'h30)
+            scsi_media_r <= cpu_mem_wdata[0];
+    end
+    assign scsi_media = scsi_media_r;
 
     // Compositor origin at 0x20000014: {y[25:16], x[9:0]}, the raster position of
     // the framebuffer's top-left; the firmware derives it from the presented

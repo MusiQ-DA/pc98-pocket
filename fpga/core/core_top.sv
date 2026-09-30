@@ -1036,6 +1036,7 @@ module core_top (
         .dataslots_ready            (dataslots_ready),
         .soft_guest_hold            (soft_guest_hold),
         .soft_vid_blank             (soft_vid_blank),
+        .scsi_media                 (scsi_media),
         .osd_active                 (osd_active),
         .vkb_key                    (vkb_key),
         .vkb_stb                    (vkb_stb),
@@ -1266,11 +1267,18 @@ module core_top (
     synch_3              s_dbl_skip_pix (osd_dbl_skip & dbl200, dbl_skip_pix, clk_pix);
     wire pause_core = pause_core_chipset;
 
-    // Disk-access lamp: any management service request (floppy in mgmt_req[7:6],
-    // SCSI pending in mgmt_req[0]) lights an on-screen lamp for a beat. The request level is a
-    // short pulse per sector, so a stretcher keeps it visible -- 2^20 clk_pix
-    // ticks is about 0.1 s (was 2^22/0.4 s; the part is one LAB short of full).
-    wire disk_act_chip = (|mgmt_req[7:6]) | mgmt_req[0];
+    // Disk-access lamp: a management service request lights an on-screen lamp for a
+    // beat, but only one with media behind it. The floppy side arrives already
+    // qualified by the requesting drive's present bit (an eject can leave a
+    // request raised while the softcore drains the dying command), and the SCSI
+    // side is qualified by the firmware's image-mounted flag because the option
+    // ROM's TEST UNIT READY probes toggle the request through POST on an empty
+    // machine. The request level is a short pulse per sector, so a stretcher
+    // keeps it visible -- 2^20 clk_pix ticks is about 0.1 s (was 2^22/0.4 s;
+    // the part is one LAB short of full).
+    wire fdd_media_req;
+    wire scsi_media;
+    wire disk_act_chip = fdd_media_req | (mgmt_req[0] & scsi_media);
     wire disk_act_pix;
     synch_3 s_disk_act (disk_act_chip, disk_act_pix, clk_pix);
     reg [19:0] disk_led_t = 20'd0;
@@ -2324,6 +2332,7 @@ module core_top (
         .rtc_time                           (rtc_time),
         .fdd_present                        (fdd_present),
         .fdd_request                        (mgmt_req[7:6]),
+        .fdd_media_req                      (fdd_media_req),
         .scsi_request                       (mgmt_req[0]),
         .dbg_fdc                            (fdc_dbg),
         .dbg_fdc_cmd                        (fdc_dbg_cmd),

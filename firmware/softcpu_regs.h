@@ -62,6 +62,7 @@
 #define OSD_RASTER      ((volatile uint32_t *) 0x20000018) // R: {h[25:16], w[9:0]} presented raster size
 #define SOFT_GUEST_HOLD ((volatile uint32_t *) 0x2000001C) // W: bit0 = hold guest in reset, bit1 = blank video
 #define KEYCFG_REG      ((volatile uint32_t *) 0x20000020) // W: {id[12:9], ext[8], code[7:0]}
+#define SOFT_SCSI_MEDIA ((volatile uint32_t *) 0x20000030) // W: bit0 = HDD image mounted (gates the disk lamp)
 
 // OSD_ACTION command bits.
 #define OSD_ACT_VIDEO   4u

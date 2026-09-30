@@ -133,6 +133,9 @@ module CHIPSET #(
         input   logic   [47:0]  rtc_time,
         output  logic   [1:0]   fdd_present,
         output  logic   [1:0]   fdd_request,
+        // fdd_request masked by the requesting drive's media -- the access
+        // lamp's view; the softcore still gets the raw bits.
+        output  logic           fdd_media_req,
         output  logic           scsi_request,
         // JTAG probe: the floppy engine's transfer state and live command.
         output  wire    [63:0]  dbg_fdc,
@@ -384,6 +387,7 @@ module CHIPSET #(
         .rtc_time                           (rtc_time),
         .fdd_present                        (fdd_present),
         .fdd_request                        (fdd_request),
+        .fdd_media_req                      (fdd_media_req),
         .scsi_request                       (scsi_request),
         .fdd_dma_req                        (fdd_dma_req),
         .dbg_fdc                            (dbg_fdc),
