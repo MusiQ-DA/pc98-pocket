@@ -144,32 +144,43 @@ def data(j):
          "deferload": True},
         # Rhythm PCM: the OPNA's ADPCM-A sample store, packed by
         # scripts/rhythm_pack.py from the six 2608_*.wav files. Deferload with
-        # a pinned filename: the binding is the file itself and nothing is
-        # streamed at boot -- firmware/rhythm.c pulls it through the
+        # a pinned filename and parameters 0 -- no user pick anywhere: the
+        # host still records the bound file's id+size in the datatable (a
+        # deferload slot's size is always written; 008A updates go out only
+        # on a USER reload, which is the bit-0 picker these slots no longer
+        # have) and firmware/rhythm.c pulls the bytes through the
         # target-dataslot path once it sees the store exists (OMGMT_CAPS).
-        # Bit 9 (persist) + bit 0 (browsable): if the pinned filename does not
-        # auto-bind the user picks rhythm.bin once and it sticks; when it does
-        # bind no menu step is ever needed.
-        {"name": "Rhythm PCM",  "id": 13, "required": False, "parameters": "0x201",
+        # Bit 9 stays clear as well -- a browser-persisted filename would
+        # override the pin. The file resolves in Assets/pc98/common/ (bit 1
+        # clear), where deploy.sh puts it; absent, the store stays empty.
+        {"name": "Rhythm PCM",  "id": 13, "required": False, "parameters": 0,
          "filename": "rhythm.bin", "extensions": ["bin"],
          "size_maximum": "0x2000", "deferload": True},
-        # Per-voice rhythm sources: drop any 2608_*.wav (or a substitute hit)
-        # into the matching slot and the firmware encodes it into the OPNA's
-        # ADPCM-A store at boot -- no offline packer step. Any bound WAV slot
-        # switches the loader to this mode entirely (rhythm.bin is then
-        # ignored): each path packs its own sequential layout, so mixing
-        # would corrupt the offsets. Unbound voices stay silent.
-        {"name": "Rhythm BD",   "id": 14, "required": False, "parameters": "0x201",
+        # Per-voice rhythm sources, pinned to the canonical np21w filenames so
+        # dropping the 2608_*.wav set into Assets/pc98/common/ is the whole
+        # setup: the firmware encodes each bound file into the OPNA's ADPCM-A
+        # store at boot -- no offline packer step, and no Load picker to bind
+        # them through. Any bound WAV slot switches the loader to this mode
+        # entirely (rhythm.bin is then ignored): each path packs its own
+        # sequential layout, so mixing would corrupt the offsets. Unbound
+        # voices stay silent.
+        {"name": "Rhythm BD",   "id": 14, "required": False, "parameters": 0,
+         "filename": "2608_bd.wav",
          "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
-        {"name": "Rhythm SD",   "id": 15, "required": False, "parameters": "0x201",
+        {"name": "Rhythm SD",   "id": 15, "required": False, "parameters": 0,
+         "filename": "2608_sd.wav",
          "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
-        {"name": "Rhythm TOP",  "id": 16, "required": False, "parameters": "0x201",
+        {"name": "Rhythm TOP",  "id": 16, "required": False, "parameters": 0,
+         "filename": "2608_top.wav",
          "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
-        {"name": "Rhythm HH",   "id": 17, "required": False, "parameters": "0x201",
+        {"name": "Rhythm HH",   "id": 17, "required": False, "parameters": 0,
+         "filename": "2608_hh.wav",
          "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
-        {"name": "Rhythm TOM",  "id": 18, "required": False, "parameters": "0x201",
+        {"name": "Rhythm TOM",  "id": 18, "required": False, "parameters": 0,
+         "filename": "2608_tom.wav",
          "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
-        {"name": "Rhythm RIM",  "id": 19, "required": False, "parameters": "0x201",
+        {"name": "Rhythm RIM",  "id": 19, "required": False, "parameters": 0,
+         "filename": "2608_rim.wav",
          "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
     ]
 
