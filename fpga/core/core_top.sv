@@ -959,6 +959,7 @@ module core_top (
     wire [1:0] osd_stereo;
     wire       osd_disk_led;
     wire [1:0] osd_extmem;
+    wire       osd_dbl_skip;
     wire [1:0] osd_gamepad;
     wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
 
@@ -1047,6 +1048,7 @@ module core_top (
         .osd_gamepad                (osd_gamepad),
         .osd_disk_led               (osd_disk_led),
         .osd_extmem                 (osd_extmem),
+        .osd_dbl_skip               (osd_dbl_skip),
         .key_cfg_flat               (key_cfg),
         .gdc_draw_req               (gdc_draw_req),
         .gdc_draw_busy              (gdc_draw_busy),
@@ -1256,6 +1258,12 @@ module core_top (
     synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_eff,     cont1_key_chip, clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_eff,     cont2_key_chip, clk_chipset);
     synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
+    // The 200-line skip's two terms are both chipset-domain: the OSD bit and
+    // CHIPSET's doubled-mode flag. Their product crosses to clk_pix once --
+    // a quasi-static pair, so tearing between them is at most one frame.
+    wire       dbl200;                  // CHIPSET video: a doubled 200-line mode is up
+    wire       dbl_skip_pix;
+    synch_3              s_dbl_skip_pix (osd_dbl_skip & dbl200, dbl_skip_pix, clk_pix);
     wire pause_core = pause_core_chipset;
 
     // Disk-access lamp: any management service request (floppy in mgmt_req[7:6],
@@ -2249,6 +2257,7 @@ module core_top (
         .VID_VSYNC                          (VSync),
         .VID_HBlank                         (HBlank),
         .VID_VBlank                         (VBlank),
+        .dbl200                             (dbl200),
         .address                            (chipset_address),
         .address_ext                        (bios_access_address),
         .ext_access_request                 (bios_access_request),
@@ -2588,6 +2597,7 @@ module core_top (
         .palette_cfg        (palette_cfg),
         .disk_led           (disk_led_on),
         .vid_blank          (vid_blank),
+        .dbl_skip           (dbl_skip_pix),
         .osd_active         (osd_active),
         .osd_palette_idx    (osd_palette_idx),
         .osd_in_area        (osd_in_area),

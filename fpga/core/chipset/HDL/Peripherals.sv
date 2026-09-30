@@ -75,6 +75,9 @@ module PERIPHERALS #(
         output  logic           VID_VSYNC,
         output  logic           VID_HBlank,
         output  logic           VID_VBlank,
+        // The guest's graphics is in a doubled 200-line mode (gdc_s_dbl
+        // below); the compositor's "Skip" 200-line presentation reads it.
+        output  logic           dbl200,
         // I/O Ports
         input   logic   [19:0]  address,
         output  logic   [19:0]  latch_address,
@@ -1553,6 +1556,7 @@ module PERIPHERALS #(
     assign VID_HBlank = pc98_hb;
     assign VID_VBlank = pc98_vb;
     assign de_o      = pc98_de;
+    assign dbl200    = gdc_s_dbl;
 
     wire [7:0]  tvram_cpu_q;
     wire [11:0] tvram_vid_cell = tvram_vid_cell_w;   // renderer, attributes

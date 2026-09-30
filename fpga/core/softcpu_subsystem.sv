@@ -105,6 +105,7 @@ module softcpu_subsystem (
     output        osd_active,
     output        osd_disk_led,
     output  [1:0] osd_extmem,
+    output        osd_dbl_skip,
 
     // Virtual-keyboard key event: {make, Set-2 code}, with a strobe that toggles
     // per firmware write so pocket_keyboard pushes exactly one queue entry.
@@ -302,14 +303,16 @@ module softcpu_subsystem (
     // The file deliberately survives machine resets (registers power up 0): reset-latched
     // consumers sample it at reset release, before the restarted firmware can re-push
     // values.
-    // The index order is the firmware's SET_* enum (settings_ui.c): indices
-    // 6/7 are reserved so the save blob's numbering does not shift.
+    // The index order is the firmware's SET_* enum (settings_ui.c): index 6 is
+    // reserved so the save blob's numbering does not shift; 7 is the retired
+    // EMS-frame slot, reused for the 200-line presentation.
     localparam SET_IDX_CPU_SPEED = 5'd0;   // System
     localparam SET_IDX_BIOS_WR   = 5'd1;
     localparam SET_IDX_BOOST     = 5'd2;   // Audio & Video
     localparam SET_IDX_SPK_VOL   = 5'd3;
     localparam SET_IDX_STEREO    = 5'd4;
     localparam SET_IDX_DISPLAY   = 5'd5;
+    localparam SET_IDX_MODE200   = 5'd7;   // 200-line presentation: 0 = double, 1 = skip
     localparam SET_IDX_DISK_LED  = 5'd10;  // on-screen access lamp
     localparam SET_IDX_EXTMEM    = 5'd11;  // EMS board's fitted size
     // index 8 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
@@ -331,6 +334,7 @@ module softcpu_subsystem (
     assign osd_gamepad   = osd_settings[SET_IDX_GAMEPAD][1:0];
     assign osd_disk_led  = osd_settings[SET_IDX_DISK_LED][0];
     assign osd_extmem    = osd_settings[SET_IDX_EXTMEM][1:0];
+    assign osd_dbl_skip  = osd_settings[SET_IDX_MODE200][0];
 
     // Per-control key config, written at KEYCFG_REG (0x20000020) as {id[12:9], ext[8], code[7:0]}.
     // pocket_keyboard reads one 9-bit {ext, code} per D-pad direction (ids 0-3) and button (ids 4-10);

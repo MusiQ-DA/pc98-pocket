@@ -47,6 +47,9 @@ module CHIPSET #(
         output  logic           VID_VSYNC,
         output  logic           VID_HBlank,
         output  logic           VID_VBlank,
+        // The guest's graphics is in a doubled 200-line mode; pocket_video's
+        // "Skip" 200-line presentation reads it.
+        output  logic           dbl200,
         // I/O Ports
         output  logic   [19:0]  address,
         input   logic   [19:0]  address_ext,
@@ -352,6 +355,7 @@ module CHIPSET #(
         .VID_VSYNC                          (VID_VSYNC),
         .VID_HBlank                         (VID_HBlank),
         .VID_VBlank                         (VID_VBlank),
+        .dbl200                             (dbl200),
         .address                            (address),
 	    .latch_address                      (latch_address),
         .internal_data_bus                  (internal_data_bus),

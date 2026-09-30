@@ -62,7 +62,12 @@ enum {
     SET_DISPLAY,
     // Hardware
     SET_EMS,        // reserved -- slot kept for save compatibility
-    SET_EMS_FRAME,  // reserved -- same
+    // Audio & Video again, positionally: this index was SET_EMS_FRAME's
+    // reserved slot -- the blob stores values by index, so reusing it keeps
+    // the packed layout (and the per-disk table) unchanged, and every blob
+    // written while it was reserved carries a 0 here anyway, which is this
+    // setting's default. The menu row itself is in items_av.
+    SET_MODE200,
     // Controls
     SET_DPAD,
     SET_GAMEPAD,
@@ -88,6 +93,11 @@ static const char *const opt_dis_en[] = { "Disabled", "Enabled" };
 static const char *const opt_extmem[] = { "None", "2 MB", "4 MB", "8 MB" };
 static const char *const opt_display[] = { "Full Color", "Green", "Amber", "B&W", "Red", "Blue",
     "Fuchsia", "Purple" };
+// 200-line presentation on the fixed 400-line raster: Double serves each guest
+// line to a pair of rasterlines (today's picture); Skip blacks the second of
+// the pair -- the mabiki look a real 200-line program has on a 400-line field.
+// The values must match pocket_video's dbl_skip decode.
+static const char *const opt_mode200[] = { "Double", "Skip" };
 
 static const char *const opt_dpad[] = { "Numpad", "Numpad w/ Diag.", "Arrows", "WASD", "HJKL",
     "HJKL w/ YUBN" };
@@ -120,7 +130,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_stereo),      // SET_STEREO
     SETTING(opt_display),     // SET_DISPLAY
     SETTING_D(opt_dis_en, 1), // SET_EMS -- reserved, index kept for the save blob
-    SETTING_D(opt_dis_en, 0), // SET_EMS_FRAME -- same
+    SETTING(opt_mode200),     // SET_MODE200 -- the reused slot; default Double
     SETTING_D(opt_dpad, DPAD_ARROWS), // SET_DPAD
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
     SETTING_D(opt_dis_en, 1), // SET_DISK_LED (default on)
@@ -174,6 +184,7 @@ static const item_t items_av[] = {
     { "Speaker Volume", IT_OPTION, SET_SPK_VOL },
     { "Stereo Mix", IT_OPTION, SET_STEREO },
     { "Display", IT_OPTION, SET_DISPLAY },
+    { "200-Line Mode", IT_OPTION, SET_MODE200 },
 };
 
 // The four joystick rows are gone with the game port: Peripherals answers
@@ -184,8 +195,8 @@ static const item_t items_av[] = {
 // The two Floppy rows are NOT stored settings: the drives' media lives in
 // fdd_service, the Pocket menu's data slots are the only way an image gets
 // in, and these rows show the live state and eject/re-insert it (A button).
-// SET_EMS/SET_EMS_FRAME stay in the enum and the save blob, same reason as
-// Boot Splash above.
+// SET_EMS stays in the enum and the save blob, same reason as Boot Splash
+// above; SET_EMS_FRAME's slot was reclaimed for SET_MODE200 (see the enum).
 static const item_t items_hw[] = {
     { "Floppy A", IT_FDD, 0 },
     { "Floppy B", IT_FDD, 1 },
