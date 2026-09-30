@@ -58,6 +58,9 @@ int main(void)
     // build has no voices to fill, so it compiles no loader at all.
 #ifdef ENABLE_OPNA
     uint32_t rhythm_done = rhythm_load();
+    // The drive-noise kit encodes into the rhythm store's upper half; same
+    // chunked loader, retried in the loop for late-bound fddsnd.bin.
+    uint32_t drive_done  = drive_sound_load();
 #endif
 
     scsi_init();
@@ -88,6 +91,9 @@ int main(void)
 #ifdef ENABLE_OPNA
         if (!rhythm_done) {
             rhythm_done = rhythm_load();
+        }
+        if (!drive_done) {
+            drive_done = drive_sound_load();
         }
 #endif
 
@@ -125,8 +131,14 @@ int main(void)
         // Each poll reports whether it serviced a request, so the spacing
         // below can skip working passes and still quiet the idle ones.
         uint32_t busy = 0;
-        if (mounted_a || mounted_b)
+        if (mounted_a || mounted_b) {
             busy |= fdd_poll();
+#ifdef ENABLE_OPNA
+            // Mechanism noise follows the drives' event taps; nothing to
+            // poll while nothing is mounted.
+            drive_sound_poll();
+#endif
+        }
         busy |= gdc_poll();
         // scsi_poll stays unconditional: the option ROM posts TEST UNIT READY
         // at POST whether or not an image is mounted, and every post toggles

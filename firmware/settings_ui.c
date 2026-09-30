@@ -126,10 +126,10 @@ static const char *const opt_mode200[] = { "Double", "Skip" };
 // purpose -- blob slot 6's resting value is 1 (see the enum), which has to
 // mean Off -- and the softcore register inverts the index into the bit.
 static const char *const opt_fdd_turbo[] = { "On", "Off" };
-// Drive-mechanism noise: fdd_sound.sv takes the mode as the raw index -- 0
+// Drive-mechanism noise: drive_sound.c reads the mode as the raw index -- 0
 // off, 1 the 5.25-inch cabinet, 2 the quieter 3.5-inch -- so the option order
-// is the wire order with no decode table. 5.25 is the default: the louder
-// mechanism the synth is built around.
+// maps straight onto the playback level. 5.25 is the default: the louder
+// mechanism the sample pack is built around.
 static const char *const opt_drv_sound[] = { "Off", "5.25\"", "3.5\"" };
 
 // The machine-config rows drive the dipsw2 / A3FE* compose bytes in
@@ -1199,6 +1199,11 @@ void settings_load(void)
     // the per-disk entries mean anything at all.
     *FDD_BRAM_ADDR = TABLE_WORD;
     have_table = (uint8_t) (*FDD_BRAM_RDATA == TABLE_MAGIC);
+}
+
+uint8_t settings_drive_sound(void)
+{
+    return settings[SET_DRV_SOUND].value;
 }
 
 void settings_mark_dirty(void)

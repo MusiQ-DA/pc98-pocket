@@ -48,9 +48,6 @@ module audio_mixer #(
     input  logic          is_signed,   //! Signed Audio
     input  logic [DW-1:0] core_l,      //! Left  Channel Audio from Core
     input  logic [DW-1:0] core_r,      //! Right Channel Audio from Core
-    // Drive noise: one mono signed 16-bit tap (fdd_sound.sv), summed into
-    // both channels at unity. The source bounds itself under +-9k.
-    input  logic signed [15:0] fdd,
     // Pocket I2S
     output logic          audio_mclk,  //! Serial Master Clock
     output logic          audio_lrck,  //! Left/Right clock
@@ -73,54 +70,25 @@ module audio_mixer #(
 
   //! ------------------------------------------------------------------------
   //! Pad core_l/core_r with zeros to maintain a consistent size of 16 bits,
-  //! then sum in the drive noise. The saturating add matches the core_top
-  //! clamp idiom so a hot OPNA peak cannot wrap the mix.
+  //! then feed the output path. The drive-noise tap that used to sum in
+  //! here is gone: mechanism samples now play on the OPNA's own ADPCM-A
+  //! voices, so they arrive inside core_l/core_r already mixed.
   //! ------------------------------------------------------------------------
-  logic [15:0] pad_l, pad_r;
   logic [15:0] core_al, core_ar;
-  logic signed [16:0] fdd_l, fdd_r;
 
   always_comb begin
-    pad_l  = DW == 16 ? core_l : {core_l, {16 - DW{1'b0}}};
-    pad_r  = STEREO ? DW == 16 ? core_r : {core_r, {16 - DW{1'b0}}} : pad_l;
-    // fdd is signed; the padded core word is too when is_signed is set (the
-    // only configuration this core uses).
-    fdd_l  = $signed(pad_l) + fdd;
-    fdd_r  = $signed(pad_r) + fdd;
-    core_al = (^fdd_l[16:15]) ? {fdd_l[16], {15{fdd_l[15]}}} : fdd_l[15:0];
-    core_ar = (^fdd_r[16:15]) ? {fdd_r[16], {15{fdd_r[15]}}} : fdd_r[15:0];
+    core_al = DW == 16 ? core_l : {core_l, {16 - DW{1'b0}}};
+    core_ar = STEREO ? DW == 16 ? core_r : {core_r, {16 - DW{1'b0}}} : core_al;
   end
 
   //! ------------------------------------------------------------------------
   //! Low Pass Filter
   //! ------------------------------------------------------------------------
-  localparam [31:0] aflt_rate = 32'd7056000;  // Sampling Frequency
-  localparam [39:0] acx = 40'd4258969;  // Base gain
-  localparam [ 7:0] acx0 = 8'd3;  // gain scale for X0
-  localparam [ 7:0] acx1 = 8'd3;  // gain scale for X1
-  localparam [ 7:0] acx2 = 8'd1;  // gain scale for X2
-  localparam [23:0] acy0 = -24'd6216759;  // gain scale for Y0
-  localparam [23:0] acy1 = 24'd6143386;  // gain scale for Y1
-  localparam [23:0] acy2 = -24'd2023767;  // gain scale for Y2
-
-  // logic [31:0] aflt_rate;
-  // logic [39:0] acx;
-  // logic  [7:0] acx0, acx1, acx2;
-  // logic [23:0] acy0, acy1, acy2;
-
-  // arcade_filters arcade_filters
-  //                (
-  //                    .clk        ( audio_mclk ),
-  //                    .afilter_sw ( afilter_sw ),
-  //                    .aflt_rate  ( aflt_rate  ),
-  //                    .acx        ( acx        ),
-  //                    .acx0       ( acx0       ),
-  //                    .acx1       ( acx1       ),
-  //                    .acx2       ( acx2       ),
-  //                    .acy0       ( acy0       ),
-  //                    .acy1       ( acy1       ),
-  //                    .acy2       ( acy2       )
-  //                );
+  // The MiSTer 3-tap IIR + DC blocker chain (audio_filters) was the largest
+  // single block in the audio path -- ~500-700 ALMs of 40-bit datapath --
+  // while this core's OPNA/SSG/beep mix barely exercises what it buys. It
+  // was removed for fit headroom (jt12 OPNA), keeping only the lightweight
+  // audio_mix crossfeed+attenuation stage below.
 
   //! ------------------------------------------------------------------------
   //! Synchronization
@@ -156,34 +124,42 @@ module audio_mixer #(
   end
 
   //! ------------------------------------------------------------------------
-  //! Audio Filters
+  //! Crossfeed + attenuation (was the tail of audio_filters)
   //! ------------------------------------------------------------------------
   logic [15:0] audio_l, audio_r;
-  //   logic mute_audio = MUTE_PAUSE ? pause_core : 1'b0;
 
-  audio_filters audio_filters (
-      .clk      (audio_mclk),
-      .reset    (reset),
-      // Controls
-      .att      ({1'b0, vol_att}),
-      .mix      (mix),
-      // Audio Filter
-      .flt_rate (aflt_rate),
-      .cx       (acx),
-      .cx0      (acx0),
-      .cx1      (acx1),
-      .cx2      (acx2),
-      .cy0      (acy0),
-      .cy1      (acy1),
-      .cy2      (acy2),
-      // Audio from Core
-      .is_signed(is_signed),
-      .core_l   (core_al_s),
-      .core_r   (core_ar_s),
-      // Filtered Audio Output
-      .audio_l  (audio_l),
-      .audio_r  (audio_r)
-  );
+  wire [15:0] din_l = {~is_signed ^ core_al_s[15], core_al_s[14:0]};
+  wire [15:0] din_r = {~is_signed ^ core_ar_s[15], core_ar_s[14:0]};
+
+  wire [15:0] audio_l_pre;
+  audio_mix audmix_l
+            (
+                .clk         ( audio_mclk  ),
+                .ce          ( 1'b1        ),
+                .att         ( {1'b0, vol_att} ),
+                .mix         ( mix         ),
+
+                .core_audio  ( din_l       ),
+                .pre_in      ( audio_r_pre ),
+
+                .pre_out     ( audio_l_pre ),
+                .out         ( audio_l     )
+            );
+
+  wire [15:0] audio_r_pre;
+  audio_mix audmix_r
+            (
+                .clk         ( audio_mclk  ),
+                .ce          ( 1'b1        ),
+                .att         ( {1'b0, vol_att} ),
+                .mix         ( mix         ),
+
+                .core_audio  ( din_r       ),
+                .pre_in      ( audio_l_pre ),
+
+                .pre_out     ( audio_r_pre ),
+                .out         ( audio_r     )
+            );
 
   //! ------------------------------------------------------------------------
   //! Pocket I2S Output

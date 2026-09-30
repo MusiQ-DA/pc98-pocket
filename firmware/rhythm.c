@@ -40,21 +40,24 @@
 
 #define RHYTHM_MAGIC 0x31415952u // 'RYA1' little-endian
 #define RHYTHM_HDR_WORDS 8
-#define RHY_STORE_BYTES 8192u
+// Drums pack under the drive-noise kit: the hardware store is 32 KB, the
+// upper half belongs to drive_sound.c's mechanism samples, so a voice's own
+// data may not run past 16 KB.
+#define RHY_STORE_BYTES 16384u
 
 #define RIFF_RIFF 0x46464952u // 'RIFF'
 #define RIFF_WAVE 0x45564157u // 'WAVE'
 #define RIFF_FMT  0x20746D66u // 'fmt '
 #define RIFF_DATA 0x61746164u // 'data'
 
-static void opna_mgmt_write(uint32_t reg, uint32_t data)
+void opna_mgmt_write(uint32_t reg, uint32_t data)
 {
     *FDD_MGMT_ADDR = OPNA_TARGET | (reg & 0xF);
     *FDD_MGMT_WDATA = data & 0xFFFF;
     *FDD_MGMT_TRIG = FDD_MGMT_WR;
 }
 
-static uint32_t opna_mgmt_read(uint32_t reg)
+uint32_t opna_mgmt_read(uint32_t reg)
 {
     *FDD_MGMT_ADDR = OPNA_TARGET | (reg & 0xF);
     *FDD_MGMT_TRIG = FDD_MGMT_RD;
@@ -97,14 +100,23 @@ static int bin_load(void)
     uint32_t payload = *FDD_BRAM_RDATA;
     if (payload < RHYTHM_HDR_WORDS * 4 || payload >= total)
         return 0;
-    uint16_t start[6], end[6];
     for (uint32_t i = 0; i < 6; i++) {
         uint32_t w = *FDD_BRAM_RDATA;
-        start[i] = w & 0xFFFF;
-        end[i]   = w >> 16;
+        rhythm_start[i] = w & 0xFFFF;
+        rhythm_end[i]   = w >> 16;
+        // Pairs naming bytes at or past the drum region's top would point a
+        // voice into the drive-noise half; clamp them inside.
+        if (rhythm_start[i] >= (RHY_STORE_BYTES >> 8))
+            rhythm_start[i] = 0;
+        if (rhythm_end[i] >= (RHY_STORE_BYTES >> 8))
+            rhythm_end[i] = (RHY_STORE_BYTES >> 8) - 1;
     }
 
+    // Payload lands at store offset 0; cap it at the drum region so an
+    // oversized pack can never bleed into the drive-noise half.
     uint32_t payload_bytes = total - payload;
+    if (payload_bytes > RHY_STORE_BYTES)
+        payload_bytes = RHY_STORE_BYTES;
 
     // Stream the payload into the store. The BRAM window is 1 KB but the low
     // 512 bytes are the disk sector buffer and word 128 up is the settings
@@ -125,7 +137,7 @@ static int bin_load(void)
     }
 
     for (uint32_t ch = 0; ch < 6; ch++)
-        inject_pair(ch, start[ch], end[ch]);
+        inject_pair(ch, rhythm_start[ch], rhythm_end[ch]);
     return 1;
 }
 
@@ -138,6 +150,11 @@ static int bin_load(void)
 static uint32_t wav_voice;     // channel being attempted
 static uint32_t wav_cursor;    // next free store byte (always 256-aligned)
 static uint8_t  wav_done[6];   // channel resolved (loaded, skipped, failed)
+
+// The start/end each voice was last programmed with, in 256-byte units --
+// drive_sound.c restores these after borrowing a channel for a mechanism
+// sample. A channel with no kit voice reads {0,0}, which plays silence.
+uint16_t rhythm_start[6], rhythm_end[6];
 
 // In-flight voice state.
 static adpcm_enc wav_enc;
@@ -251,6 +268,11 @@ static int wav_step(void)
     if (wav_cursor + wav_written >= RHY_STORE_BYTES)
         wav_left = 0;
 
+    // Re-arm the auto-increment every call: drive_sound.c writes its own
+    // region through the same address register between calls, so the
+    // continuation address has to be re-latched rather than assumed.
+    opna_mgmt_write(OMGMT_RHYADDR, wav_cursor + wav_written);
+
     // One 512-byte source chunk per call.
     uint32_t n = wav_left > SECTOR_BYTES ? SECTOR_BYTES : wav_left;
     uint32_t frame = (uint32_t)wav_ch * (wav_bits == 16 ? 2u : 1u);
@@ -294,6 +316,8 @@ static int wav_step(void)
             uint32_t start256 = wav_cursor >> 8;
             uint32_t end256 = (wav_cursor + wav_written - 1) >> 8;
             inject_pair(wav_voice, start256, end256);
+            rhythm_start[wav_voice] = start256;
+            rhythm_end[wav_voice]   = end256;
             wav_cursor += wav_written;
         }
         wav_done[wav_voice] = 1;

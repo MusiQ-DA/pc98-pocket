@@ -164,12 +164,6 @@ module PERIPHERALS #(
         // register {op,unit,C,H,R,N,EOT,GPL}.
         output  wire    [63:0]  dbg_fdc,
         output  wire    [63:0]  dbg_fdc_cmd,
-        // Drive-noise taps for fdd_sound, straight out of floppy.v: head-step
-        // pulse, head-load level, transfer data phase, motor run.
-        output  logic           fdd_snd_step,
-        output  logic           fdd_snd_head,
-        output  logic           fdd_snd_xfer,
-        output  logic           fdd_snd_motor,
         input   logic           fdd_dma_ack,
         input   logic           terminal_count,
         // Others
@@ -1970,11 +1964,10 @@ module PERIPHERALS #(
     );
 `else
     // The build without the board: silent outputs, everything else stays.
-    // The full-ADPCM configuration measured 1733 ALMs standalone against a
-    // part where ALM count is not even the binding constraint -- a LAB holds
-    // ten ALMs and cannot be packed arbitrarily, so near-100% ALMs is already
-    // past 100% of the LAB budget. The slim configuration (~1000 ALM) is what
-    // ships; see config.tcl for the switch.
+    // The full-ADPCM configuration measured 1733 ALMs standalone; it ships
+    // because the text beam-tracker, the MiSTer IIR chain's retirement, the
+    // DSP-backed softcore multiplier and fdd_sound's removal together made
+    // that room. See config.tcl for the switch.
     assign opna_snd_l = 16'sd0;
     assign opna_snd_r = 16'sd0;
 `endif
@@ -2285,11 +2278,29 @@ module PERIPHERALS #(
     //
     // mgmt_readdata
     //
+    // Drive-noise taps as a polled event channel. The fdd_sound sample player
+    // is gone; the softcore plays mechanism noise through the OPNA's ADPCM-A
+    // voices, so what it needs is the edge/level picture, not an audio
+    // stream. Reg 0xE: an 8-bit step counter (firmware takes deltas, so it
+    // never misses a burst of steps) plus the live head/xfer/motor levels.
+    logic fdd_snd_step, fdd_snd_head, fdd_snd_xfer, fdd_snd_motor;
+    logic [7:0] snd_step_cnt;
+    always_ff @(posedge clock) begin
+        if (reset)           snd_step_cnt <= 8'd0;
+        else if (fdd_snd_step) snd_step_cnt <= snd_step_cnt + 8'd1;
+    end
+
+    wire [15:0] sndev_readdata = {snd_step_cnt, 5'd0, fdd_snd_head,
+                                  fdd_snd_xfer, fdd_snd_motor};
+    wire        sndev_cs = mgmt_fdd_cs && (mgmt_address[3:0] == 4'hE);
+
 `ifdef ENABLE_OPNA
     assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
-                         : mgmt_opna_cs ? mgmt_opna_readdata : mgmt_fdd_readdata;
+                         : mgmt_opna_cs ? mgmt_opna_readdata
+                         : sndev_cs ? sndev_readdata : mgmt_fdd_readdata;
 `else
-    assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata : mgmt_fdd_readdata;
+    assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
+                         : sndev_cs ? sndev_readdata : mgmt_fdd_readdata;
 `endif
 
 

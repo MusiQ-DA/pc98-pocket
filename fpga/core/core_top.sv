@@ -963,7 +963,6 @@ module core_top (
     wire [1:0] osd_extmem;
     wire       osd_dbl_skip;
     wire       osd_fdd_turbo;
-    wire [1:0] osd_snd_mode;
     wire [7:0] osd_dipsw2;
     wire [7:0] osd_a3fea;
     wire [7:0] osd_a3fee;
@@ -1059,7 +1058,6 @@ module core_top (
         .osd_extmem                 (osd_extmem),
         .osd_dbl_skip               (osd_dbl_skip),
         .osd_fdd_turbo              (osd_fdd_turbo),
-        .osd_snd_mode               (osd_snd_mode),
         .osd_dipsw2                 (osd_dipsw2),
         .osd_a3fea                  (osd_a3fea),
         .osd_a3fee                  (osd_a3fee),
@@ -1703,11 +1701,13 @@ module core_top (
     // data.json puts firmware.bin at bridge 0x10040000. data_loader hands over
     // sixteen bits at a time and the ROM is 32 bits wide, so two transfers make
     // a word -- low half first, matching the little-endian image.
-    wire        fw_dl_hit  = dl_wr && fw_dl_slot;
-    wire [12:0] fw_word    = dl_addr[14:2];
+    // The slot's 64 KB decode window is wider than the 48 KB ROM; past the
+    // top the word address would wrap and corrupt the image from below.
+    wire        fw_dl_hit  = dl_wr && fw_dl_slot && (dl_addr[15:0] < 16'hC000);
+    wire [13:0] fw_word    = dl_addr[15:2];
     reg  [15:0] fw_lo;
     reg         fw_wr_en_r;
-    reg  [12:0] fw_wr_addr_r;
+    reg  [13:0] fw_wr_addr_r;
     reg  [31:0] fw_wr_data_r;
 
     always @(posedge clk_chipset) begin
@@ -2364,10 +2364,6 @@ module core_top (
         .fdd_present                        (fdd_present),
         .fdd_request                        (mgmt_req[7:6]),
         .fdd_media_req                      (fdd_media_req),
-        .fdd_snd_step                       (fdd_snd_step),
-        .fdd_snd_head                       (fdd_snd_head),
-        .fdd_snd_xfer                       (fdd_snd_xfer),
-        .fdd_snd_motor                      (fdd_snd_motor),
         .scsi_request                       (mgmt_req[0]),
         .dbg_fdc                            (fdc_dbg),
         .dbg_fdc_cmd                        (fdc_dbg_cmd),
@@ -2571,36 +2567,15 @@ module core_top (
         cmp_r <= compr(out_r);
     end
 
-    // Filter chain + I2S: audio_mixer supplies the anti-aliasing low-pass + DC blocker
-    // (the raw mix has square-wave harmonics past Nyquist), the crossfeed, and codec clocks.
+    // Audio out: audio_mixer runs the crossfeed mix and drives the codec
+    // clocks. The MiSTer IIR/DC-blocker chain was cut for OPNA fit headroom
+    // -- raw audio reaches the codec unfiltered.
     wire [15:0] audio_l = pause_core ? 16'd0 : (boost_cfg ? cmp_l : out_l);
     wire [15:0] audio_r = pause_core ? 16'd0 : (boost_cfg ? cmp_r : out_r);
 
-    // Drive noise: fdd_sound plays back recorded mechanism samples, timed by
-    // floppy.v's own step/head/xfer/motor signals, all in clk_chipset. The
-    // samples stream in over the same dl_* path as the ROMs -- the "FDD sound"
-    // slot lands at bridge 0x10200000 -> dl_addr 0x200000..0x207FFF. Its
-    // window overlaps none of rom_dl_wanted's predicates, so the ROM FIFO
-    // never sees it. osd_snd_mode is an osd_* setting, already this domain.
-    wire        snd_dl_hit = dl_wr && (dl_addr[27:16] == 12'h020)
-                                  && !dl_addr[15];
-    wire [13:0] snd_dl_addr = dl_addr[14:1];
-    wire fdd_snd_step, fdd_snd_head, fdd_snd_xfer, fdd_snd_motor;
-    wire signed [15:0] fdd_audio;
-    fdd_sound fdd_sound (
-        .clk         (clk_chipset),
-        .reset       (reset),
-        .mode        (osd_snd_mode),
-        .step_pulse  (fdd_snd_step),
-        .head_load   (fdd_snd_head),
-        .xfer_active (fdd_snd_xfer),
-        .motor_on    (fdd_snd_motor),
-        .snd_we      (snd_dl_hit),
-        .snd_waddr   (snd_dl_addr),
-        .snd_wdata   (dl_data),
-        .audio       (fdd_audio)
-    );
-
+    // Drive noise lives in the OPNA's ADPCM-A voices now: the softcore polls
+    // floppy's taps over mgmt reg 0xE and keys its own samples, so it arrives
+    // inside core_l/core_r already mixed.
     audio_mixer #(.DW(16), .STEREO(1)) audio_mixer (
         .clk_74b    (clk_74b),
         .clk_audio  (clk_chipset),
@@ -2610,7 +2585,7 @@ module core_top (
         .is_signed  (1'b1),
         .core_l     (audio_l),
         .core_r     (audio_r),
-        .fdd        (fdd_audio),
+
         .audio_mclk (audio_mclk),
         .audio_lrck (audio_lrck),
         .audio_dac  (audio_dac)

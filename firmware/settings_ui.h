@@ -36,4 +36,8 @@ void settings_mark_dirty(void);
 // blob, and unbinding returns to it. Later edits persist to that disk's entry.
 void settings_disk_mounted(uint32_t hash);
 
+// The Drive Sound option's raw index (0 off, 1 = 5.25", 2 = 3.5") for the
+// drive-noise service in drive_sound.c.
+uint8_t settings_drive_sound(void);
+
 #endif

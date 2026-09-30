@@ -25,7 +25,7 @@ module softcpu_subsystem (
     // are the default; this overwrites them when a slot supplies a file.
     input        fw_wr_clk,
     input        fw_wr_en,
-    input [12:0] fw_wr_addr,
+    input [13:0] fw_wr_addr,
     input [31:0] fw_wr_data,
 
     // Softcore clock, exported so core_top can clock the datatable's port A with it.
@@ -108,7 +108,6 @@ module softcpu_subsystem (
     output  [1:0] osd_extmem,
     output        osd_dbl_skip,
     output        osd_fdd_turbo,
-    output  [1:0] osd_snd_mode,
     // Machine configuration, composed from the Settings rows into the bytes
     // the guest actually reads: DIP switch 2 on port 0x31 and the three
     // memory-switch cells pc98_tvram exposes.
@@ -177,6 +176,9 @@ module softcpu_subsystem (
         // it is inside the core rather than a separate 216-ALM block. Verified
         // by objdump: the image contains no div/divu/rem/remu.
         .ENABLE_DIV(0),
+        // The fast multiplier is a DSP block instead of ~140 ALMs of
+        // iterative shift-add; firmware never notices the cycle gain.
+        .ENABLE_FAST_MUL(1),
         // Fit headroom: the trap output is deliberately unmonitored (see the
         // cpu_trap wire above), so the misalign/illegal-insn catchers buy
         // nothing, and rdcycle in vkb_ui.c reads only the low word.
@@ -346,7 +348,9 @@ module softcpu_subsystem (
     localparam SET_IDX_MODE200   = 5'd7;   // 200-line presentation: 0 = double, 1 = skip
     localparam SET_IDX_DISK_LED  = 5'd10;  // on-screen access lamp
     localparam SET_IDX_EXTMEM    = 5'd11;  // EMS board's fitted size
-    localparam SET_IDX_SND_MODE  = 5'd12;  // drive-noise synth: 0 off / 1 = 5.25" / 2 = 3.5"
+    // Index 12 is the firmware's Drive Sound row; the RTL no longer reads
+    // it (mechanism noise is firmware-driven) but the slot stays reserved
+    // so the persisted indices below do not move.
     localparam SET_IDX_TXT_LINES = 5'd13;  // 0 = 25 rows / 1 = 20 rows (dipsw2 bit 3)
     localparam SET_IDX_TXT_COLS  = 5'd14;  // 0 = 80 cols / 1 = 40 cols (dipsw2 bit 2)
     localparam SET_IDX_BOOT_BSC  = 5'd15;  // 0 = disks first / 1 = ROM BASIC (inverted dipsw2 bit 0)
@@ -375,7 +379,6 @@ module softcpu_subsystem (
     assign osd_extmem    = osd_settings[SET_IDX_EXTMEM][1:0];
     assign osd_dbl_skip  = osd_settings[SET_IDX_MODE200][0];
     assign osd_fdd_turbo = ~osd_settings[SET_IDX_FDD_TURBO][0];
-    assign osd_snd_mode  = osd_settings[SET_IDX_SND_MODE][1:0];
 
     // Machine configuration bytes. Bits the Settings rows do not own are
     // pinned to the 0xE3 / 0x04 / 0x00 / 0x01 defaults the machine has always
@@ -465,25 +468,26 @@ module softcpu_subsystem (
     assign cpu_mem_ready = cpu_mem_ready_rom | cpu_mem_ready_other;
 
     //
-    // Firmware ROM: 24 KB (6144 x 32), initialised from the built firmware image.
+    // Firmware ROM, initialised from the built firmware image.
     // The path is relative to the Quartus project directory (src/fpga).
     //
     wire [31:0] rom_rdata;
 
     sprom #(
-        .aw(13),
+        .aw(14),
         .dw(32),
-        // 8192 words = 32 KB. The drawing server (gdc_service.c) needs more
-        // than the old 24 KB held; the M10K budget has the room (47% used)
-        // and the data_loader's fw_word is 13 bits already.
-        .numwords(8192),
+        // 12288 words = 48 KB. OPNA brought the rhythm loader, the ADPCM-A
+        // encoder and the drive-noise service, which the 32 KB image no
+        // longer held; the M10K budget (~70 blocks free) has the room and
+        // the data_loader's fw_word widens the same way.
+        .numwords(12288),
         .MEM_INIT_FILE("../firmware/firmware.vh")
     ) pico_rom (
         .clk  (clk_pico),
         .rst  (reset),
         .ce   (sel_rom),
         .oe   (1'b1),
-        .addr (cpu_mem_addr[14:2]),
+        .addr (cpu_mem_addr[15:2]),
         .dout (rom_rdata),
         .wr_clk  (fw_wr_clk),
         .wr_en   (fw_wr_en),

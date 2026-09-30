@@ -7,12 +7,13 @@ set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
 
 set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 
-# The PC-9801-86 sound board's YM2608 at 0x188-0x18F (pc98_opna.sv). On in the
-# SLIM configuration -- USE_ADPCM=0, USE_PCM=1 at the instantiation in
-# Peripherals.sv: 6-channel stereo FM + SSG, ~1000 ALM standalone. Rhythm and
-# DELTA-T stay off: full OPNA measured 1733 ALM and the fitter wants 1876
-# LABs against 1848 -- see the long note where ENABLE_OPNA is consumed.
-#set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
+# The PC-9801-86 sound board's YM2608 at 0x188-0x18F (pc98_opna.sv). Full
+# configuration -- USE_ADPCM=1, USE_PCM=0 in Peripherals.sv: 6-channel stereo
+# FM + SSG + the ADPCM-A rhythm voices, ~1733 ALM standalone. The headroom
+# for it came from the text beam-tracker, the retired MiSTer IIR/DC-blocker
+# chain, the DSP-backed softcore multiplier, and moving drive noise off its
+# own sample player (fdd_sound) onto the rhythm voices the firmware drives.
+set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 
 # JTAG debug build. OFF for the current fit: the SLD hub, the probe mux,
 # the write-pipe and key injection together cost enough ALMs to put the

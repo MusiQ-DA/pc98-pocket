@@ -11,7 +11,7 @@
  * built today. softcpu_subsystem.sv carries the same numbers; keep them in
  * step if either side moves. */
 MEMORY {
-    ROM (rx)  : ORIGIN = 0x00000000, LENGTH = 32K
+    ROM (rx)  : ORIGIN = 0x00000000, LENGTH = 48K
     RAM (rwx) : ORIGIN = 0x10000000, LENGTH = 2K
 }
 

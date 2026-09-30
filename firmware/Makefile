@@ -34,8 +34,8 @@ HW_DEFINES := $(addprefix -D,$(shell sed -n 's/^[[:space:]]*set_global_assignmen
 # jt12, which a build without ENABLE_OPNA does not contain. Linking them
 # anyway spent ~2.5 KB of ROM.
 ifneq ($(findstring ENABLE_OPNA,$(HW_DEFINES)),)
-OBJS += rhythm.o adpcma_enc.o
-DEPS += rhythm.d adpcma_enc.d
+OBJS += rhythm.o adpcma_enc.o drive_sound.o
+DEPS += rhythm.d adpcma_enc.d drive_sound.d
 endif
 
 # -MMD -MP write per-object header dependencies (.d), pulled in by -include below, so

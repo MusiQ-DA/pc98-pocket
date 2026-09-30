@@ -132,6 +132,7 @@
 #define FMGMT_TOTAL   0x4
 #define FMGMT_HEADS   0x5
 #define FMGMT_SECSIZE 0x6   // bit0: sectors are 1024 bytes (PC-98 2HD), not 512
+#define FMGMT_SNDEV   0xE   // R: drive-noise events {step_cnt[15:8], 5'd0, head, xfer, motor}
 #define FMGMT_FIFO    0xF
 
 // LBA read from register 0: 15-bit block, bit 15 selects drive B.
@@ -149,7 +150,10 @@
 #define OMGMT_INJ_P0   0x2     // W: {reg[15:8], data[7:0]} raw write, jt12 part 0
 #define OMGMT_INJ_P1   0x3     // W: same, part 1 (ADPCM-A start/end live here)
 #define OMGMT_BUSY     0x4     // R: bit0 = injected register still landing
+#define OMGMT_STATUS0  0x5     // R: jt12 status0 {busy,5'd0,flag_B,flag_A}
+#define OMGMT_STATUS1  0x6     // R: jt12 status1 {adpcmb_flag,1'b0,adpcma_flags[5:0]}
 #define OMGMT_CAPS     0x8     // R: bit0 = ADPCM-A store present (USE_ADPCM build)
+#define OMGMT_LR0      0x9     // R: guest's last LR+AL per voice (9..14 = ch0..5)
 
 // pc98_scsi management registers (mgmt_address[3:0]). See PERIPHERALS.
 #define SMGMT_CTRL    0x0      // R: {cmd_byte, req != ack}  W: bit0 acknowledges
@@ -180,6 +184,7 @@
 #define SETTINGS_SLOT_ID 7
 #define RHYTHM_SLOT_ID   13   // deferload: rhythm.bin, packed ADPCM-A voices
 #define RHY_WAV_SLOT_BASE 14  // deferload ids 14-19: per-voice *.wav sources
+#define FDDSND_SLOT_ID   20   // deferload: fddsnd.bin mechanism samples (s8/24k)
 // Bytes to declare for the nonvolatile Settings slot so it flushes on first boot.
 // The whole upper half of the 1 KB bridge RAM: the global settings blob plus
 // the per-disk profile table (settings_ui.c).
@@ -196,9 +201,18 @@ int tds_transfer_to(uint32_t slot, uint32_t offset, uint32_t dir, uint32_t bytes
 // APF datatable access by slot id (disk_tds.c).
 uint32_t slot_bytes(uint16_t id);
 
-// Rhythm store fill (rhythm.c): 1 once loaded, 0 while the slot is absent or
-// the build is slim -- retryable every service-loop pass.
-int rhythm_load(void);
+// OPNA management window (rhythm.c): store writes and jt12 register
+// injection. drive_sound.c shares both.
+void     opna_mgmt_write(uint32_t reg, uint32_t data);
+uint32_t opna_mgmt_read(uint32_t reg);
+// The six ADPCM-A start/end pairs the drum kit last programmed (256-byte
+// units). drive_sound.c restores them after borrowing a voice.
+extern uint16_t rhythm_start[6], rhythm_end[6];
+// Chunked loaders / services; both return nonzero when finished.
+int  rhythm_load(void);
+int  drive_sound_load(void);
+void drive_sound_poll(void);
+
 int slot_declare_size(uint16_t id, uint32_t bytes);
 
 // Service entry points (fdd_service.c).

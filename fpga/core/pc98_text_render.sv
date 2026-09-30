@@ -217,7 +217,7 @@ module pc98_text_render #(
     wire [4:0]  n_rel   = n_part[16:12];
     // row * pitch. Kept as a multiplier only when the GDC is driving it; the
     // 80-column case is still the shift pair it always was.
-    wire [11:0] n_relmul  = n_rel * eff_pitch;
+    (* multstyle = "dsp" *) wire [11:0] n_relmul  = n_rel * eff_pitch;
     wire [11:0] n_rowoff  = {1'b0, next_row, 6'd0} + {3'b000, next_row, 4'd0};
     wire [11:0] next_rowbase = gdc_live ? n_relmul : n_rowoff;
     // In the cell index space a wide column occupies two slots (np21w's
@@ -235,7 +235,7 @@ module pc98_text_render #(
     wire [16:0] d_part  = gdc_live ? d_partf : {draw_row, 12'd0};
     wire [11:0] d_start = d_part[11:0];
     wire [4:0]  d_rel   = d_part[16:12];
-    wire [11:0] d_relmul  = d_rel * eff_pitch;
+    (* multstyle = "dsp" *) wire [11:0] d_relmul  = d_rel * eff_pitch;
     wire [11:0] d_rowoff  = {1'b0, draw_row, 6'd0} + {3'b000, draw_row, 4'd0};
     wire [11:0] draw_rowbase = gdc_live ? d_relmul : d_rowoff;
     wire [11:0] draw_coff  = wide ? {5'd0, col[5:0], 1'b0} : {5'd0, col};

@@ -51,7 +51,7 @@
           "bin"
         ],
         "address": "0x10040000",
-        "size_maximum": "0x8000"
+        "size_maximum": "0xC000"
       },
       {
         "name": "Settings",
@@ -118,7 +118,7 @@
         "extensions": [
           "bin"
         ],
-        "size_maximum": "0x2000",
+        "size_maximum": "0x4000",
         "deferload": true
       },
       {
@@ -202,8 +202,8 @@
         "extensions": [
           "bin"
         ],
-        "address": "0x10200000",
-        "size_maximum": "0x8000"
+        "size_maximum": "0x8000",
+        "deferload": true
       }
     ]
   }

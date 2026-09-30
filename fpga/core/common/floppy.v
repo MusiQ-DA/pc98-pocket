@@ -119,10 +119,11 @@ module floppy
 	// request named, and which unit's image it went to.
 	output     [16:0] dbg_sector_info,
 
-	// Drive-noise taps for fdd_sound (clk domain): one pulse per head step,
-	// the head-load proxy, the data phase of any transfer (reads, writes and
+	// Drive-noise event taps (clk domain): one pulse per head step, the
+	// head-load proxy, the data phase of any transfer (reads, writes and
 	// formats -- a head on media makes the same noise either way) and the
-	// motor run level the synth gates everything under.
+	// motor run level. The softcore polls these through the FDD management
+	// window and plays mechanism samples on the OPNA's ADPCM-A voices.
 	output            snd_step,
 	output            snd_head,
 	output            snd_xfer,
@@ -756,8 +757,8 @@ end
 wire delay_last_cycle = !delay_steps && !delay_srt && delay_rate == 16'd1;
 
 // ---------------------------------------------------------------------------
-// Drive-noise taps for fdd_sound. Everything the synthesiser needs already
-// exists in the timing engine; these only name the moments.
+// Drive-noise event taps. Everything the mechanism-noise service needs
+// already exists in the timing engine; these only name the moments.
 //
 // snd_step: one clk pulse per physical head step. The seek/recalibrate START
 // terms cover the first step of a move -- delay_steps counts steps REMAINING
