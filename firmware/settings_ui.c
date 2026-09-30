@@ -165,14 +165,12 @@ typedef struct {
 // current version.
 static setting_t settings[SET_COUNT] = {
     // Index 1 is the faithful clock: a PC-9801VM/VX's V30 at 2.4576 MHz x4.
-    // The default is index 2 anyway, because v30_cpu_bridge splits every word
-    // access into two byte cycles on the 8-bit chipset -- about 12 CPU clocks
-    // where a real 16-bit V30 spends 4 -- so index 2 is the setting whose
-    // THROUGHPUT lands nearest a real 10 MHz machine, not index 1. Move the
-    // default down to 1 when the 16-bit memory path lands and the split goes
-    // away. At index 0 the ITF's 640 KB memory test is a long wait with nothing
-    // on screen but its own test pattern.
-    SETTING_D(opt_cpu, 2),    // SET_CPU_SPEED
+    // With PC98_WORD_MEM the SDRAM answers a guest word in one bus cycle, so
+    // index 1's throughput IS a real 10 MHz machine's -- index 2 is a roughly
+    // 2x step up, no longer a compensation for a split that went away. At
+    // index 0 the ITF's 640 KB memory test is a long wait with nothing on
+    // screen but its own test pattern.
+    SETTING_D(opt_cpu, 1),    // SET_CPU_SPEED
     SETTING(opt_bios_wr),     // SET_BIOS_WR
     SETTING(opt_boost),       // SET_BOOST
     SETTING(opt_level4),      // SET_SPK_VOL

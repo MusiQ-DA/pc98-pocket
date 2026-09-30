@@ -74,8 +74,10 @@
 //   * cpu_data_bus carries the addressed lane of the write word -- A0=0
 //     takes DATA_O[7:0], A0=1 takes DATA_O[15:8] (the core publishes the
 //     write word "in bus byte order (swapped on an odd address)");
-//   * a word cycle (A0=0, UBE_N=0) becomes byte(even) then byte(odd);
-//     everything else is one byte cycle;
+//   * a word cycle (A0=0, UBE_N=0) becomes byte(even) then byte(odd) --
+//     or ONE cycle carrying both lanes when PC98_WORD_MEM is on and the
+//     SDRAM answers the address (word_1cyc; the _hi bus pair moves the odd
+//     half alongside, RAM.sv bursts it as two words);
 //   * each byte runs >= 3 posedge-CE "T states" and completes only when
 //     processor_ready is high at a posedge-CE with the bus not granted
 //     away (address_enable_n == 0), which is what paces the SDRAM and the
