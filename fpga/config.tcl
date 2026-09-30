@@ -11,8 +11,11 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # configuration -- USE_ADPCM=1, USE_PCM=0 in Peripherals.sv: 6-channel stereo
 # FM + SSG + the ADPCM-A rhythm voices, ~1733 ALM standalone. The headroom
 # for it came from the text beam-tracker, the retired MiSTer IIR/DC-blocker
-# chain, the DSP-backed softcore multiplier, and moving drive noise off its
-# own sample player (fdd_sound) onto the rhythm voices the firmware drives.
+# chain, the DSP-backed softcore multiplier, moving drive noise off its own
+# sample player (fdd_sound) onto the rhythm voices the firmware drives, and
+# -- the big one -- leaving the EGC raster engine out of the shipped build
+# (.EGC(1'b0) on pc98_gvram_seq: 873 ALMs it could not carry on top of
+# everything else; GRCG still covers the common charger work).
 set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 
 # JTAG debug build. OFF for the current fit: the SLD hub, the probe mux,

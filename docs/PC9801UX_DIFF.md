@@ -24,9 +24,9 @@ at all — only the beeper**; the OPNA material below describes what
 | CPU | V30 (μPD70116) 8 MHz **or** i80286 10 MHz board (man:817, 2689) | V30 only (`fpga/core/v30/`), OSD-selectable 4.915 / 9.830 / 19.66 / 21.48 MHz (`fpga/core/chipset/HDL/ce_generator.sv:59-89`, `core_top.sv:287-296`) — the 9.83 MHz "10 MHz" step is cycle-paced like the real speeds |
 | RAM | 640 KB | 640 KB (SDRAM, `pc98_sdram_map.svh:43-47`) |
 | ROM | 96 KB BIOS + ITF | 96 KB at E8000-FFFFF; ships **the PC-9801UX ITF** + PC-9801VM BIOS (`config.tcl:25-37`) — the UX BIOS is not usable on a V30 (PUSHA/SMSW at FDA35+) |
-| Graphics | 2× μPD7220A, GVRAM 256 KB, **EGC present** | 2× `pc98_gdc`, 3+1 planes, second 640×400 page → total 256 KB (`pc98_sdram_map.svh:51-71`, `Chipset.sv`), EGC present (`pc98_egc.sv`) |
+| Graphics | 2× μPD7220A, GVRAM 256 KB, **EGC present** | 2× `pc98_gdc`, 3+1 planes, second 640×400 page → total 256 KB (`pc98_sdram_map.svh:51-71`, `Chipset.sv`), EGC modelled (`pc98_egc.sv`) but **parked out of the shipped build** (`.EGC(1'b0)` on `pc98_gvram_seq` — 873 ALMs the device could not carry) |
 | Display | 640×400 and 640×200 | 640×400 fixed; 200-line modes via line-doubling |
-| Sound | onboard FM source: FM×3 + SSG×3 (YM2203/OPN class) (man:270, 1349-1373) | OPNA (YM2608) model, compile-time optional, off in shipped config |
+| Sound | onboard FM source: FM×3 + SSG×3 (YM2203/OPN class) (man:270, 1349-1373) | OPNA (YM2608, the -86 board) with ADPCM-A rhythm + drive noise (`pc98_opna.sv`, `firmware/drive_sound.c`) |
 | FDC | μPD765A, 1MB(2HD) and 640KB(2DD) interfaces | μPD765 model + PC-98 glue, both interfaces |
 | HDD | UX41 only: internal HDD via μPD7261 HDC | none; a PC-9801-55-class SCSI board instead |
 | Misc | PIC 2× PD71059C, DMA PD8237A-5, PIT PD8253-5, RTC uPD4990A, kbd/RS-232C PD8251A, printer PD8255A-5 | see below |
@@ -121,7 +121,7 @@ The core is a **V30-machine**; everything that only exists on the 80286 board
 | Text pitch / 20-line mode | CRTC bl/cl | real — `pc98_text_render.sv:54-66` | **I** |
 | Palette | 16-colour analog palette 0xA8-0xAE | :1381-1419; digital 8-colour remap **not** implemented (:1378-1380) | **I** (digital palette gap) |
 | GRCG | 0x7C/0x7E | `pc98_grcg.sv` + `pc98_gvram_seq.sv` (TDW/RMW/TCR) | **I** |
-| EGC | **present on UX** (man:296, decode row 19 = 0x4A0-0x4AE even) | `pc98_egc.sv` all 8 regs + ROP engine in `pc98_gvram_seq.sv`; arming 0x6A bits 2&3 :1349-1354; decode :1426-1439 (write-only, same as np21w) | **I** |
+| EGC | **present on UX** (man:296, decode row 19 = 0x4A0-0x4AE even) | `pc98_egc.sv` all 8 regs + ROP engine inside `pc98_gvram_seq.sv`; **parked via `.EGC(1'b0)`** in the shipped build (873 ALMs over the 1848-LAB budget); 0x4A0-0x4AF decode removed, so writes go nowhere and reads float | **I** (parked) |
 | CG / fonts | ANK + JIS1/JIS2 kanji ROM | FONT.ROM loaded to SDRAM; CG window + ANK BRAM (`pc98_font_ank.sv`) | **I** |
 
 ## 6. FDC — μPD765A
@@ -280,7 +280,7 @@ Correctly absent (the manual doesn't have them): NMI ports, NDP/A20 ports
 | 0xA1/0xA3/0xA5 | CG code ports | :1563-1566 |
 | 0xA4/0xA6 | GVRAM pages | :1360-1371 |
 | 0xA8-0xAE even | analog palette | :1381-1419 |
-| 0x4A0-0x4AF | EGC (write-only) | :1426-1439 |
+| 0x4A0-0x4AF | EGC (write-only) | parked — no decode in shipped build |
 | 0xCC0-0xCC6 | SCSI regs | :1725 |
 | D2000-D2FFF | SCSI option ROM | :1732 |
 | 0x188-0x18F, 0xA460 | OPNA (if ENABLE_OPNA) | :1886-1896 |

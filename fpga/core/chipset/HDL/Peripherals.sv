@@ -21,13 +21,6 @@ module PERIPHERALS #(
         // 0xA6's access bit banks the CPU's plane windows (pc98_gvram_seq).
         output  logic           gvram_disp_page,
         output  logic           gvram_access_page,
-        // The EGC's state: the arm-and-switch pair off mode2, and the
-        // 0x4A0-0x4AF register writes, forwarded to the sequencer that owns
-        // the engine.
-        output  logic           egc_active,
-        output  logic           egc_wr,
-        output  logic   [3:0]   egc_rg,
-        output  logic   [7:0]   egc_d,
         input   logic           cpu_ce_negedge,
         input   logic   [1:0]   clk_select,
         input   logic           reset,
@@ -1356,7 +1349,6 @@ module PERIPHERALS #(
 
     logic [7:0] mode2_q;
     logic [1:0] gdc_clk;
-    logic       egc_prev_wr_n;
 
     pc98_gdc_mode2 u_gdc_mode2 (
         .clk            (clock),
@@ -1370,13 +1362,6 @@ module PERIPHERALS #(
         .gdc_clk        (gdc_clk),
         .analog         (pc98_analog)
     );
-
-    // Bits 3 and 2 of the same register are the EGC's arm and switch: np21w
-    // only honours bit 2 (VOPBIT_EGC) while bit 3 is set AND the G-RCG is
-    // the EGC-capable one (io/gdc.c gdc_o6a's `mode2 & 0x08` and
-    // `grcg.chip == 3`). This machine's charger is, so the gate is those two
-    // flip-flops and nothing else.
-    assign egc_active = mode2_q[3] & mode2_q[2];
 
     // Ports 0xA4/0xA6: the display and access page bits (np21w gdc_oa4/
     // gdc_oa6 -- gdcs.disp and gdcs.access). The access bit banks every
@@ -1442,26 +1427,6 @@ module PERIPHERALS #(
         if (pc98_vs_px & ~pc98_vs_px_d)
             for (int i = 0; i < 16; i++) apal_px[i] <= apal[i];
     end
-
-    // Ports 0x4A0-0x4AF: the EGC register file, forwarded one strobe at a
-    // time to the sequencer that owns the engine. np21w hangs no read
-    // handlers on these (iocore_attachout only), so neither does this.
-    // The 0x04 page sits outside pc98_io_exact's 0x00-page window (same
-    // reason fdd_144_select bypasses it), so decode raw iorq here.
-    wire egc_cs = iorq & ~address_enable_n & (address[15:4] == 12'h04A);
-    assign egc_rg = address[3:0];
-
-    always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
-            egc_prev_wr_n <= 1'b1;
-            egc_d         <= 8'h00;
-        end else begin
-            egc_prev_wr_n <= io_write_n;
-            if (egc_cs & ~io_write_n) egc_d <= internal_data_bus;
-        end
-    end
-
-    assign egc_wr = io_write_n & ~egc_prev_wr_n & egc_cs;
 
     // ---- CRTC text-cell geometry ---------------------------------------
     //
@@ -1931,9 +1896,10 @@ module PERIPHERALS #(
     wire [23:0]  opna_adpcmb_addr;
     wire         opna_adpcmb_roe_n;
 
-    // USE_ADPCM=1 builds the ADPCM-A block: the six rhythm voices now actually
-    // sound, playing whatever the firmware loaded into the 8 KB rhythm store
-    // at boot. DELTA-T stays dark (pc98_opna wires use_adpcmb=0 -- its 256 KB
+    // USE_ADPCM=1 builds the ADPCM-A block: the six rhythm voices actually
+    // sound, playing whatever the firmware loaded into the 32 KB rhythm
+    // store at boot (the upper half is drive_sound.c's mechanism kit).
+    // DELTA-T stays dark (pc98_opna wires use_adpcmb=0 -- its 256 KB
     // SDRAM window is a known gap), and use_pcm is inert once ADPCM is on:
     // the jt10_acc ADPCM path is the stereo accumulator already.
     pc98_opna #(.USE_ADPCM(1), .USE_PCM(0)) u_pc98_opna (
@@ -1964,10 +1930,7 @@ module PERIPHERALS #(
     );
 `else
     // The build without the board: silent outputs, everything else stays.
-    // The full-ADPCM configuration measured 1733 ALMs standalone; it ships
-    // because the text beam-tracker, the MiSTer IIR chain's retirement, the
-    // DSP-backed softcore multiplier and fdd_sound's removal together made
-    // that room. See config.tcl for the switch.
+    // See config.tcl for the switch.
     assign opna_snd_l = 16'sd0;
     assign opna_snd_r = 16'sd0;
 `endif

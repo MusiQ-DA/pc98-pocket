@@ -8,13 +8,14 @@
 // dataslot. The same jt12 rhythm voices then play them, keyed by injection
 // through the management window.
 //
-// Channel policy: a mechanism sample borrows whichever voice is not
-// sounding (status1's per-channel flags), scanned from channel 5 down so a
-// kit that only fills the low channels never collides. The borrow programs
-// that channel's start/end pair for the drive segment, keys it on, and on
-// completion restores the drum pair rhythm.c recorded plus the guest's
-// last-written LR+AL (mgmt regs 9-14). A guest key-on landing mid-borrow
-// plays the drive sample: bounded, rare, and only on channels a kit uses.
+// Channel policy: a mechanism sample borrows whichever voice is certainly
+// free -- the ADPCM-A status bits are sticky end flags, so a set flag means
+// a finished voice; cleared-flag channels come second. The borrow clears
+// the flag fresh, programs that channel's start/end pair for the drive
+// segment, keys it on, and on completion restores the drum pair rhythm.c
+// recorded plus the guest's last-written LR+AL (mgmt regs 9-14). A guest
+// key-on landing mid-borrow plays the drive sample: bounded, rare, and
+// only on channels a kit uses.
 //
 // Loop voices (seek rattle, read hiss, motor hum) are one-shots in ADPCM-A,
 // so looping is re-armed by the poll: a borrowed channel is re-keyed
@@ -26,7 +27,8 @@
 #include "adpcma_enc.h"
 #include "settings_ui.h"
 
-#define FDDSND_MAGIC   0x4446u   // 'FD'
+#define FDDSND_MAGIC   0x4446u   // 'FD' (word 0; word 1 is 'S1' = 0x3153)
+#define FDDSND_MAGIC2  0x3153u   // 'S1'
 #define FDDSND_RATE    24000u    // s8 sample rate inside fddsnd.bin
 #define DRV_STORE_BASE 16384u    // upper half of the 32 KB rhythm store
 #define DRV_STORE_END  32768u
@@ -69,16 +71,18 @@ int drive_sound_load(void)
         return 1;
 
     if (!dl_hdr_done) {
-        // fddsnd.bin: u16 'FD', six reserved words, then five {off,len}
-        // pairs in 16-bit word units; s8 payload follows.
+        // fddsnd.bin: u16 'FD', u16 'S1', u16 version, u16 segment count,
+        // then five {off,len} pairs in 16-bit word units; s8 payload
+        // follows (24 kHz, two per word, low byte first).
         if (!slot_bytes(FDDSND_SLOT_ID) ||
             !tds_transfer(FDDSND_SLOT_ID, 0, FDD_TDS_READ, 28))
             return 0;
         *FDD_BRAM_ADDR = 0;
-        if ((*FDD_BRAM_RDATA & 0xFFFF) != FDDSND_MAGIC)
+        if ((*FDD_BRAM_RDATA & 0xFFFF) != FDDSND_MAGIC ||
+            (*FDD_BRAM_RDATA & 0xFFFF) != FDDSND_MAGIC2)
             return 1;                       // no kit: stay quiet forever
-        for (uint32_t i = 0; i < 3; i++)
-            (void)*FDD_BRAM_RDATA;
+        (void)*FDD_BRAM_RDATA;              // version
+        (void)*FDD_BRAM_RDATA;              // segment count
         for (uint32_t i = 0; i < DRV_SEGS; i++) {
             seg_off[i] = *FDD_BRAM_RDATA & 0xFFFF;
             seg_len[i] = *FDD_BRAM_RDATA & 0xFFFF;
