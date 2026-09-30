@@ -145,7 +145,12 @@ module v30_core (
     // dbg_core4 is the EU's own stall ledger: the microcode row it is on
     // ({upc_page,upc_opc,upc_loc}) plus the outstanding-access counters and
     // wait-condition wires that decide whether that row ever advances.
-    output    [31:0]  dbg_core4
+    output    [31:0]  dbg_core4,
+    // dbg_core5/6 are the prefetch queue's raw bytes and the live fetch
+    // pointer -- the wedged instruction stream, byte for byte, for a
+    // fingerprint match against the ROM the ITF copied it from.
+    output    [31:0]  dbg_core5,
+    output    [31:0]  dbg_core6
 `ifdef V30_BACKDOOR
     // The BIU's pending-bus-cycle flag, a backdoor-only debug leg. Declared
     // here so the guarded connection below binds a PORT and not Verilator's
@@ -420,7 +425,9 @@ v30u_biu u_biu (
     .ss_we      (ss_we_q),
     .ss_rdata   (ss_biu_rdata),
     .ss_bus_quiet(ss_biu_bus_quiet),
-    .dbg        (dbg_core3)
+    .dbg        (dbg_core3),
+    .dbg2       (dbg_core5),
+    .dbg3       (dbg_core6)
 );
 
 v30u_eu u_eu (

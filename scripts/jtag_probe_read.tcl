@@ -86,6 +86,8 @@ set regs {
     33  EU_POST_ADDR
     34  BIU_LAUNCH
     35  EU_STALL
+    36  QMEM0-3
+    37  QMEM4-5+FPTR
     255 MAGIC
 }
 
