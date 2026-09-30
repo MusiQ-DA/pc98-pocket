@@ -45,6 +45,13 @@ static uint32_t fdd_sector_words[2] = { 128, 128 };
 // FDI wraps it in (see fdd_probe_fdi).
 static uint32_t fdd_base[2] = { 0, 0 };
 
+// The geometry an FDI header declared for the mounted image, in
+// {spt, cyls, heads, is_1024} -- zero spt means the image is not an FDI
+// and fdd_mount falls back to the size table. The header's geometry wins
+// because the size table only knows the standard formats: a 15-sector
+// 2HD or 16-sector BASIC disk lands on the wrong row by sector count.
+static uint32_t fdd_fdi_geom[2][4];
+
 // FDI (the T98/np21w family's format): a 0x20-byte header in front of the raw
 // image -- {dummy, fddtype, headersize, fddsize, sectorsize, sectors,
 // surfaces, cylinders}, little-endian words (np21w diskimage/fd/fdd_xdf.c).
@@ -74,12 +81,19 @@ static void fdd_probe_fdi(uint32_t drive, uint32_t sectors)
     uint32_t cyl    = w[7];           // cylinders
     uint32_t raw    = ssize * spt * surf * cyl;
     uint32_t file   = sectors * 512;  // the slot's size, truncated to sectors
+    fdd_fdi_geom[drive][0] = 0;
     if (hsize >= 0x20 && hsize <= 0x1000
         && ssize >= 128 && ssize <= 4096
         && spt >= 1 && spt <= 255
         && surf == 2 && cyl >= 1 && cyl <= 127
         && raw + hsize > file - 1024 && raw + hsize < file + 1024) {
         fdd_base[drive] = hsize;
+        fdd_fdi_geom[drive][0] = spt;
+        fdd_fdi_geom[drive][1] = cyl;
+        fdd_fdi_geom[drive][2] = surf;
+        // The controller's N accepts only 512 or 1024; a size between or
+        // above them is unusable either way, so only the 1024 case sets it.
+        fdd_fdi_geom[drive][3] = (ssize == 1024) ? 1 : 0;
     }
 }
 
@@ -199,14 +213,19 @@ static uint32_t fdd_image_hash(uint32_t drive, uint32_t sectors)
 // (1) via the management-bus drive bit.
 void fdd_mount(uint32_t drive, uint32_t sectors)
 {
-    const struct fdd_geom *g = &fdd_geoms[0];
-    for (int i = 0; i < (int) (sizeof(fdd_geoms) / sizeof(fdd_geoms[0])); i++) {
-        if (sectors >= fdd_geoms[i].min_sectors) {
-            g = &fdd_geoms[i];
-            break;
+    fdd_probe_fdi(drive, sectors);   // sets fdd_base+geometry when the file is an FDI
+    struct fdd_geom fdi = { 0, fdd_fdi_geom[drive][1], fdd_fdi_geom[drive][0],
+                            fdd_fdi_geom[drive][2], fdd_fdi_geom[drive][3] };
+    const struct fdd_geom *g = &fdi;
+    if (!fdi.spt) {
+        g = &fdd_geoms[0];
+        for (int i = 0; i < (int) (sizeof(fdd_geoms) / sizeof(fdd_geoms[0])); i++) {
+            if (sectors >= fdd_geoms[i].min_sectors) {
+                g = &fdd_geoms[i];
+                break;
+            }
         }
     }
-    fdd_probe_fdi(drive, sectors);   // sets fdd_base when the file is an FDI
 
     mgmt_write(drive, FMGMT_PRESENT, 0);
     spin(100000);
