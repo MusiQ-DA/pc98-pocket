@@ -88,6 +88,13 @@ module floppy
 
 	input      [27:0] clock_rate,
 
+	// FDD Turbo, from the OSD's settings file (via CHIPSET/PERIPHERALS, same
+	// clock domain): relaxes the two pacing terms this engine owns -- the
+	// SRT-derived step-train delay and the fixed per-sector wait -- while the
+	// command/status protocol, the request/FIFO handshake and the interrupt
+	// behaviour are untouched. Low is the authentic pace.
+	input             turbo,
+
 	output      [1:0] request,
 
 	// Debug witnesses. A write to the FIFO is only a command byte if the
@@ -710,7 +717,11 @@ always @(posedge clk) begin
 	else if(!delay_rate && delay_steps) delay_srt <= specify_srt;
 end
 
-wire [27:0] delay_adder = (data_rate == 2'd0)? 28'd1000 : (data_rate == 2'd1)? 28'd600 : (data_rate == 2'd2)? 28'd500 : 28'd2000;
+// turbo shifts the per-rate adder three places up: every tick the delay engine
+// counts is an eighth of the authentic one, so a seek's step train -- and the
+// recalibrate walk, the same chain -- lands eight times sooner while still
+// arriving as timed steps, not a teleport.
+wire [27:0] delay_adder = ((data_rate == 2'd0)? 28'd1000 : (data_rate == 2'd1)? 28'd600 : (data_rate == 2'd2)? 28'd500 : 28'd2000) << (turbo ? 3'd3 : 3'd0);
 
 reg [27:0] delay_adder_r;
 always @(posedge clk) begin
@@ -996,7 +1007,7 @@ end
 reg [15:0] command_wait_counter;
 always @(posedge clk) begin
 	if(~rst_n)                                       command_wait_counter <= 0;
-	else if(state != S_WAIT)                         command_wait_counter <= 4000; // was calculated floppy_wait_cycles but was buggy, so use fixed wait time
+	else if(state != S_WAIT)                         command_wait_counter <= turbo ? 16'd500 : 16'd4000; // was calculated floppy_wait_cycles but was buggy, so use fixed wait time; turbo takes an eighth of it
 	else if(state == S_WAIT && command_wait_counter) command_wait_counter <= command_wait_counter - 16'd1;
 end
 

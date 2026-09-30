@@ -1376,6 +1376,7 @@ module tb_pc98_boot;
         .mgmt_readdata  (fdd_mgmt_rdata),
         .wp             (2'b00),
         .clock_rate     (28'd42_954_545),
+        .turbo          (1'b0),
         .request        (fdd_req_w),
         .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer ()
     );

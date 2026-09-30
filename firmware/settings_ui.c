@@ -60,8 +60,16 @@ enum {
     SET_SPK_VOL,
     SET_STEREO,
     SET_DISPLAY,
-    // Hardware
-    SET_EMS,        // reserved -- slot kept for save compatibility
+    // Hardware -- positionally, the way SET_MODE200's slot is Audio & Video
+    // below: this index was SET_EMS's reserved slot, and the blob stores
+    // values by index, so reusing it keeps the packed layout (and the
+    // per-disk table) unchanged. The resting value differs, though: this
+    // slot's is 1, not 0 -- the reserved entry's compiled default -- so the
+    // option table puts the default (Off) at index 1 and the FPGA inverts
+    // the bit. Every blob written while it sat reserved carries that Off;
+    // a v6/v7 blob written while the EMS row was still live can hold a 0,
+    // which reads as On -- rare, self-correcting, and the price of the slot.
+    SET_FDD_TURBO,
     // Audio & Video again, positionally: this index was SET_EMS_FRAME's
     // reserved slot -- the blob stores values by index, so reusing it keeps
     // the packed layout (and the per-disk table) unchanged, and every blob
@@ -98,6 +106,11 @@ static const char *const opt_display[] = { "Full Color", "Green", "Amber", "B&W"
 // the pair -- the mabiki look a real 200-line program has on a 400-line field.
 // The values must match pocket_video's dbl_skip decode.
 static const char *const opt_mode200[] = { "Double", "Skip" };
+// FDD pacing: floppy.v's turbo relaxes the SRT step-train delay and the fixed
+// per-sector wait eightfold when the bit is set. The order is On-then-Off on
+// purpose -- blob slot 6's resting value is 1 (see the enum), which has to
+// mean Off -- and the softcore register inverts the index into the bit.
+static const char *const opt_fdd_turbo[] = { "On", "Off" };
 
 static const char *const opt_dpad[] = { "Numpad", "Numpad w/ Diag.", "Arrows", "WASD", "HJKL",
     "HJKL w/ YUBN" };
@@ -129,7 +142,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_level4),      // SET_SPK_VOL
     SETTING(opt_stereo),      // SET_STEREO
     SETTING(opt_display),     // SET_DISPLAY
-    SETTING_D(opt_dis_en, 1), // SET_EMS -- reserved, index kept for the save blob
+    SETTING_D(opt_fdd_turbo, 1), // SET_FDD_TURBO -- the reused slot; index 1 (Off) is its resting value
     SETTING(opt_mode200),     // SET_MODE200 -- the reused slot; default Double
     SETTING_D(opt_dpad, DPAD_ARROWS), // SET_DPAD
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
@@ -195,11 +208,12 @@ static const item_t items_av[] = {
 // The two Floppy rows are NOT stored settings: the drives' media lives in
 // fdd_service, the Pocket menu's data slots are the only way an image gets
 // in, and these rows show the live state and eject/re-insert it (A button).
-// SET_EMS stays in the enum and the save blob, same reason as Boot Splash
-// above; SET_EMS_FRAME's slot was reclaimed for SET_MODE200 (see the enum).
+// SET_EMS's slot was reclaimed for SET_FDD_TURBO and SET_EMS_FRAME's for
+// SET_MODE200 -- the enum comments say why the blob layout is unchanged.
 static const item_t items_hw[] = {
     { "Floppy A", IT_FDD, 0 },
     { "Floppy B", IT_FDD, 1 },
+    { "FDD Turbo", IT_OPTION, SET_FDD_TURBO },
     { "", IT_SPACER, 0 },
     { "EMS", IT_OPTION, SET_EXTMEM },
     { "", IT_SPACER, 0 },
@@ -758,9 +772,11 @@ static const uint8_t v4_to_v5[22] = {
 #define SETTINGS_V4_COUNT 22
 
 // Version 5's enum order: CPU, BIOS-wr, boost, speaker, stereo, display, EMS, EMS-frame, A000,
-// d-pad, gamepad.
+// d-pad, gamepad. EMS lands nowhere: the slot is FDD turbo's now and a live
+// EMS row meant a 0 there was user-chosen, so the byte is dropped and the
+// slot keeps its default rather than reading the old switch as a speed pick.
 static const uint8_t v5_to_v6[11] = {
-    0, 1, 2, 3, 4, 5, 6, 7, 0xFF, 8, 9,
+    0, 1, 2, 3, 4, 5, 0xFF, 7, 0xFF, 8, 9,
 };
 #define SETTINGS_V5_COUNT 11
 

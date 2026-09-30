@@ -130,6 +130,10 @@ module CHIPSET #(
         input   logic           mgmt_write,
         input   logic   [15:0]  mgmt_writedata,
         input   logic   [1:0]   floppy_wp,
+        // OSD FDD Turbo: floppy.v relaxes its authentic seek and per-sector
+        // pacing while set. The settings file and this module share a clock
+        // domain, so the bit arrives on a plain wire.
+        input   logic           fdd_turbo,
         input   logic   [47:0]  rtc_time,
         output  logic   [1:0]   fdd_present,
         output  logic   [1:0]   fdd_request,
@@ -384,6 +388,7 @@ module CHIPSET #(
         .mgmt_write                         (mgmt_write),
         .mgmt_writedata                     (mgmt_writedata),
         .floppy_wp                          (floppy_wp),
+        .fdd_turbo                          (fdd_turbo),
         .rtc_time                           (rtc_time),
         .fdd_present                        (fdd_present),
         .fdd_request                        (fdd_request),

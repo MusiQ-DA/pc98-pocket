@@ -230,6 +230,7 @@ module tb_v30_fdcrd;
         .mgmt_readdata  (),
         .wp             (2'b00),
         .clock_rate     (28'd42_954_545),
+        .turbo          (1'b0),
         .request        (),
         .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer ()
     );

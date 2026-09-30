@@ -130,6 +130,10 @@ module PERIPHERALS #(
         input   logic           mgmt_write,
         input   logic   [15:0]  mgmt_writedata,
         input   logic   [1:0]   floppy_wp,
+        // OSD FDD Turbo, into floppy.v's turbo input: relaxes the SRT step
+        // pacing and the fixed per-sector wait. The settings file lives on
+        // this clock (clk_sys IS this clock), so no synchroniser.
+        input   logic           fdd_turbo,
         // The calendar, packed the way pc98_upd4990 wants it (see the module):
         // year BCD, month<<4|week, day, hour, min, sec -- from the Pocket's
         // bridge RTC. A PC-98 reads the date off this chip's serial line.
@@ -2031,6 +2035,7 @@ module PERIPHERALS #(
         .clock_rate                 (clk_select[1] == 1'b0 ? clk_rate :
                                      clk_select[0] == 1'b0 ? {1'b0, clk_rate[27:1]} : {2'b00, clk_rate[27:2]}),
 
+        .turbo                      (fdd_turbo),
         .request                    (fdd_request),
 
         .dbg_cmd_accepts            (fdc_dbg_accepts),

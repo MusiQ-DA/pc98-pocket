@@ -960,6 +960,7 @@ module core_top (
     wire       osd_disk_led;
     wire [1:0] osd_extmem;
     wire       osd_dbl_skip;
+    wire       osd_fdd_turbo;
     wire [1:0] osd_gamepad;
     wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
 
@@ -1050,6 +1051,7 @@ module core_top (
         .osd_disk_led               (osd_disk_led),
         .osd_extmem                 (osd_extmem),
         .osd_dbl_skip               (osd_dbl_skip),
+        .osd_fdd_turbo              (osd_fdd_turbo),
         .key_cfg_flat               (key_cfg),
         .gdc_draw_req               (gdc_draw_req),
         .gdc_draw_busy              (gdc_draw_busy),
@@ -2329,6 +2331,9 @@ module core_top (
         .mgmt_write                         (mgmt_wr),
         .mgmt_read                          (mgmt_rd),
         .floppy_wp                          (wp_cfg),
+        // The FDC's domain IS clk_chipset, so the setting bit arrives on a
+        // plain wire, the way osd_extmem reaches the EMS board below it.
+        .fdd_turbo                          (osd_fdd_turbo),
         .rtc_time                           (rtc_time),
         .fdd_present                        (fdd_present),
         .fdd_request                        (mgmt_req[7:6]),

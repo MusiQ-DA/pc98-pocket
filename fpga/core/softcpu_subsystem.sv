@@ -107,6 +107,7 @@ module softcpu_subsystem (
     output        osd_disk_led,
     output  [1:0] osd_extmem,
     output        osd_dbl_skip,
+    output        osd_fdd_turbo,
 
     // Virtual-keyboard key event: {make, Set-2 code}, with a strobe that toggles
     // per firmware write so pocket_keyboard pushes exactly one queue entry.
@@ -320,7 +321,7 @@ module softcpu_subsystem (
     // consumers sample it at reset release, before the restarted firmware can re-push
     // values.
     // The index order is the firmware's SET_* enum (settings_ui.c): index 6 is
-    // reserved so the save blob's numbering does not shift; 7 is the retired
+    // the retired Lo-tech EMS slot, reused for FDD turbo, and 7 is the retired
     // EMS-frame slot, reused for the 200-line presentation.
     localparam SET_IDX_CPU_SPEED = 5'd0;   // System
     localparam SET_IDX_BIOS_WR   = 5'd1;
@@ -328,6 +329,12 @@ module softcpu_subsystem (
     localparam SET_IDX_SPK_VOL   = 5'd3;
     localparam SET_IDX_STEREO    = 5'd4;
     localparam SET_IDX_DISPLAY   = 5'd5;
+    // The slot's resting value in old blobs is 1 (the reserved entry's
+    // default), so the firmware stores Off at index 1 and the bit below is
+    // inverted: slot 0 = turbo on, slot 1 = authentic pacing. Power-up rests
+    // at turbo-on until the first push lands -- harmless, the guest is held
+    // in reset while settings are staged.
+    localparam SET_IDX_FDD_TURBO = 5'd6;   // Hardware: floppy seek/sector pacing
     localparam SET_IDX_MODE200   = 5'd7;   // 200-line presentation: 0 = double, 1 = skip
     localparam SET_IDX_DISK_LED  = 5'd10;  // on-screen access lamp
     localparam SET_IDX_EXTMEM    = 5'd11;  // EMS board's fitted size
@@ -351,6 +358,7 @@ module softcpu_subsystem (
     assign osd_disk_led  = osd_settings[SET_IDX_DISK_LED][0];
     assign osd_extmem    = osd_settings[SET_IDX_EXTMEM][1:0];
     assign osd_dbl_skip  = osd_settings[SET_IDX_MODE200][0];
+    assign osd_fdd_turbo = ~osd_settings[SET_IDX_FDD_TURBO][0];
 
     // Per-control key config, written at KEYCFG_REG (0x20000020) as {id[12:9], ext[8], code[7:0]}.
     // pocket_keyboard reads one 9-bit {ext, code} per D-pad direction (ids 0-3) and button (ids 4-10);

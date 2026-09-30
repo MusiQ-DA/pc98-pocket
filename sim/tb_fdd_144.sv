@@ -80,6 +80,7 @@ module tb_fdd_144;
         .mgmt_readdata  (mgmt_rdata),
         .wp             (2'b00),
         .clock_rate     (28'd2000),
+        .turbo          (1'b0),
         .request        (fdd_request)
     );
 

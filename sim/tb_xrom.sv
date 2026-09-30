@@ -93,7 +93,7 @@ module tb_xrom;
         .ems98_maxmem(4'd8), .bios_protect_flag(2'b00),
         .mgmt_address(16'h0000), .mgmt_read(1'b0), .mgmt_readdata(),
         .mgmt_write(1'b0), .mgmt_writedata(16'h0000),
-        .floppy_wp(2'b00), .rtc_time(48'h0),
+        .floppy_wp(2'b00), .fdd_turbo(1'b0), .rtc_time(48'h0),
         .fdd_present(), .fdd_request(), .scsi_request(),
         .wait_count_clk_en(1'b0),
         .ram_read_wait_cycle(2'b00), .ram_write_wait_cycle(2'b00),
