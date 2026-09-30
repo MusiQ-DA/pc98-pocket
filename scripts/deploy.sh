@@ -239,10 +239,14 @@ cp dist/pc98/Platforms/* "$VOL/Platforms/" 2>/dev/null || true
 # auto-bind for deferload slots, it just makes same-name picks no-ops.
 mkdir -p "$VOL/Assets/pc98/common"
 [ -f testdisk/draw_test.hdm ] && cp -f testdisk/draw_test.hdm "$VOL/Assets/pc98/common/"
-# Rhythm voices come two ways: drop the six source WAVs (2608_bd.wav etc.)
-# into the per-voice "Rhythm BD..RIM" slots and firmware encodes them at
-# boot -- easiest -- or put a pre-packed rhythm.bin here for the "Rhythm
-# PCM" slot (scripts/rhythm_pack.py <dir of 2608_*.wav> -o assets/rhythm.bin).
+# Same picker directory for the raw SCSI test disk (testdisk/build_hdd.sh);
+# the Hard Disk slot browses hdi/nhd/thd/hdd.
+[ -f testdisk/hdd_test.hdd ] && cp -f testdisk/hdd_test.hdd "$VOL/Assets/pc98/common/"
+# Rhythm voices come two ways: put the six source WAVs here under their
+# canonical names (2608_bd.wav etc. -- the data.json slots pin those exact
+# filenames, no picking) and firmware encodes them at boot -- easiest --
+# or put a pre-packed rhythm.bin here for the "Rhythm PCM" slot
+# (scripts/rhythm_pack.py <dir of 2608_*.wav> -o assets/rhythm.bin).
 # Any bound WAV slot switches the loader to WAV mode and the bin is ignored.
 if [ -f assets/rhythm.bin ]; then
     cp -f assets/rhythm.bin "$VOL/Assets/pc98/common/"
@@ -287,6 +291,13 @@ if [ -f testdisk/draw_test.hdm ]; then
         say "  ok  Assets/pc98/common/draw_test.hdm"
     else
         say "  BAD Assets/pc98/common/draw_test.hdm"; fail=1
+    fi
+fi
+if [ -f testdisk/hdd_test.hdd ]; then
+    if cmp -s testdisk/hdd_test.hdd "$VOL/Assets/pc98/common/hdd_test.hdd"; then
+        say "  ok  Assets/pc98/common/hdd_test.hdd"
+    else
+        say "  BAD Assets/pc98/common/hdd_test.hdd"; fail=1
     fi
 fi
 [ $fail -eq 0 ] || { say "VERIFY FAILED"; note "deploy VERIFY FAILED"; exit 1; }
