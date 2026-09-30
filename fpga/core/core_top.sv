@@ -1269,6 +1269,7 @@ module core_top (
     wire       dbl200;                  // CHIPSET video: a doubled 200-line mode is up
     wire       dbl_skip_pix;
     synch_3              s_dbl_skip_pix (osd_dbl_skip & dbl200, dbl_skip_pix, clk_pix);
+    wire       vid_txt;                 // CHIPSET video: the composited dot is text's
     wire pause_core = pause_core_chipset;
 
     // Disk-access lamp: a management service request lights an on-screen lamp for a
@@ -2270,6 +2271,7 @@ module core_top (
         .VID_HBlank                         (HBlank),
         .VID_VBlank                         (VBlank),
         .dbl200                             (dbl200),
+        .VID_TXT                            (vid_txt),
         .address                            (chipset_address),
         .address_ext                        (bios_access_address),
         .ext_access_request                 (bios_access_request),
@@ -2635,6 +2637,7 @@ module core_top (
         .disk_led           (disk_led_on),
         .vid_blank          (vid_blank),
         .dbl_skip           (dbl_skip_pix),
+        .txt_pix            (vid_txt),
         .osd_active         (osd_active),
         .osd_palette_idx    (osd_palette_idx),
         .osd_in_area        (osd_in_area),

@@ -78,9 +78,10 @@ from a NEC dump.
   firmware shuttles sectors between the slots and the chipset.
 - The Settings overlay (per-gamepad button) configures CPU speed, BIOS
   write protection, sound/stereo, display colour set, the 200-line
-  presentation (Double or hardware-style line Skip), EMS capacity,
-  the disk-access lamp and the controller bindings, and persists them
-  per mounted image.
+  presentation (Double or hardware-style line Skip), FDD Turbo
+  (authentic seek/sector pacing or ~8x), the drive-mechanism sound
+  (Off, 5.25" or 3.5"), EMS capacity, the disk-access lamp and the
+  controller bindings, and persists them per mounted image.
 - Default pad mapping: A = Return, B = NFER, X = Space, Y = Ctrl,
   D-pad = cursor arrows, Select = Settings (Start and R1 are unbound; all
   of it is remappable in Settings). The binding names are the keys the

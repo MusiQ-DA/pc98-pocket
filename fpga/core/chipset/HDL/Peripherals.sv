@@ -78,6 +78,11 @@ module PERIPHERALS #(
         // The guest's graphics is in a doubled 200-line mode (gdc_s_dbl
         // below); the compositor's "Skip" 200-line presentation reads it.
         output  logic           dbl200,
+        // Registered in lockstep with VID_R/G/B: the composited dot is a text
+        // cell's, not the graphics planes'. The text plane runs the master's
+        // own 400-line timing even under a doubled graphics mode, so the
+        // 200-line "Skip" presentation must not thin it.
+        output  logic           VID_TXT,
         // I/O Ports
         input   logic   [19:0]  address,
         output  logic   [19:0]  latch_address,
@@ -1570,6 +1575,7 @@ module PERIPHERALS #(
     assign VID_VBlank = pc98_vb;
     assign de_o      = pc98_de;
     assign dbl200    = gdc_s_dbl;
+    assign VID_TXT   = t_pix_q;
 
     wire [7:0]  tvram_cpu_q;
     wire [11:0] tvram_vid_cell = tvram_vid_cell_w;   // renderer, attributes

@@ -27,6 +27,10 @@ module pocket_video (
     // The "Skip" 200-line presentation ANDed with CHIPSET's doubled-mode flag
     // upstream -- asserted here only while the guest really is in one.
     input             dbl_skip,
+    // Text-plane dot, registered alongside r/g/b in the compositor. The text
+    // plane runs the master GDC's own 400-line timing even under a doubled
+    // graphics mode, so the thinning must not touch it.
+    input             txt_pix,
     // OSD framebuffer handshake (softcore)
     input             osd_active,
     input      [3:0]  osd_palette_idx,
@@ -240,9 +244,11 @@ module pocket_video (
     // PAIR of rasterlines, so the second of the pair (rb_v odd) carries a copy
     // and can simply be driven black. What is left is each source line on an
     // even rasterline with black between: the mabiki look a real 200-line
-    // program reads as on a 400-line field. It sits under the lamp and the
-    // OSD so neither overlay is thinned.
-    wire thin_line = dbl_skip & rb_v[0];
+    // program reads as on a 400-line field. The text plane is exempt -- on the
+    // machine the master's 400-line timing is untouched by the slave's doubled
+    // mode, so a text row lives on both halves of the pair. It sits under the
+    // lamp and the OSD so neither overlay is thinned.
+    wire thin_line = dbl_skip & rb_v[0] & ~txt_pix;
 
     wire [23:0] overlay    = vid_blank_pix ? 24'd0
                            : osd_show      ? osd_color

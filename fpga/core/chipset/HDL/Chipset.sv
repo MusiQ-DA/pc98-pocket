@@ -50,6 +50,9 @@ module CHIPSET #(
         // The guest's graphics is in a doubled 200-line mode; pocket_video's
         // "Skip" 200-line presentation reads it.
         output  logic           dbl200,
+        // In lockstep with VID_R/G/B: the dot belongs to the text plane, which
+        // the "Skip" presentation must leave alone.
+        output  logic           VID_TXT,
         // I/O Ports
         output  logic   [19:0]  address,
         input   logic   [19:0]  address_ext,
@@ -368,6 +371,7 @@ module CHIPSET #(
         .VID_HBlank                         (VID_HBlank),
         .VID_VBlank                         (VID_VBlank),
         .dbl200                             (dbl200),
+        .VID_TXT                            (VID_TXT),
         .address                            (address),
 	    .latch_address                      (latch_address),
         .internal_data_bus                  (internal_data_bus),
