@@ -120,8 +120,14 @@ int main(void)
         if (mounted_a || mounted_b)
             fdd_poll();
         gdc_poll();
-        if (mounted_hdd)
-            scsi_poll();
+        // scsi_poll stays unconditional: the option ROM posts TEST UNIT READY
+        // at POST whether or not an image is mounted, and every post toggles
+        // cmd_req -- a toggle nobody acks leaves scsi_request (and so the
+        // disk lamp) high forever, which is exactly what a diskless boot
+        // showed. When idle the poll is a single register read; when no image
+        // is fitted the service answers NOT READY, which also frees the guest
+        // from each probe's timeout wait.
+        scsi_poll();
         settings_service(); // persist any OSD changes into the save window
 
         // Quiet the polls.
