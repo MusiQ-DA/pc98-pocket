@@ -75,7 +75,6 @@
           "hdm",
           "fdi",
           "d88",
-          "2hd",
           "fdd"
         ],
         "size_maximum": 8388608,
@@ -90,7 +89,6 @@
           "hdm",
           "fdi",
           "d88",
-          "2hd",
           "fdd"
         ],
         "size_maximum": 8388608,
@@ -197,7 +195,7 @@
         "name": "FDD Sound",
         "id": 20,
         "required": false,
-        "parameters": "0x202",
+        "parameters": "0x2",
         "filename": "fddsnd.bin",
         "extensions": [
           "bin"

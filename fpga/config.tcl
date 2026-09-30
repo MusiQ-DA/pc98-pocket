@@ -20,12 +20,11 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 
 # JTAG debug build. OFF for the current fit: the SLD hub, the probe mux,
 # the write-pipe and key injection together cost enough ALMs to put the
-# fit over the 1848-LAB edge on top of everything else that ships (the
-# text-pitch + ARTIC + live EGC + FDD-work additions already needed
+# fit over the 1848-LAB edge (the run that included them needed
 # 1888-1917). scripts/jtag_probe.cfg, jtag_probe_read.tcl and the
 # *_jtag_* benches still work -- enable this macro again when a debug
-# session needs the probe, and free the room it wants the same way
-# ENABLE_OPNA is kept off above.
+# session needs the probe; the room for it is the same one the OPNA found
+# -- .EGC(1'b0) on pc98_gvram_seq parks the ~870-ALM raster engine.
 #set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
 
 # Boot the ITF, not the BIOS.

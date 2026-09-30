@@ -18,9 +18,12 @@
 #define FDDSND_HDR_BYTES 28u
 #define FDDSND_SEGS      5u
 
-// Returns nonzero on a bad magic or a count too small to cover the five
-// mechanism segments.
+// Returns nonzero on a bad magic, a count too small to cover the five
+// mechanism segments, or a segment whose byte range runs past file_bytes
+// (the bound slot's real size -- without the bound a corrupt pack makes
+// the loader read out-of-range slot space and play whatever answered).
 static inline int fddsnd_hdr_parse(const uint32_t *words,
+                                   uint32_t file_bytes,
                                    uint16_t *off, uint16_t *len)
 {
     if (words[0] != 0x31534446u)            // 'FDS1'
@@ -28,8 +31,12 @@ static inline int fddsnd_hdr_parse(const uint32_t *words,
     if ((words[1] >> 16) < FDDSND_SEGS)
         return -1;
     for (uint32_t i = 0; i < FDDSND_SEGS; i++) {
-        off[i] = (uint16_t)(words[2 + i] & 0xFFFF);
-        len[i] = (uint16_t)(words[2 + i] >> 16);
+        uint32_t o = words[2 + i] & 0xFFFF;
+        uint32_t l = words[2 + i] >> 16;
+        if (o * 2 + l * 2 > file_bytes)     // word units -> file bytes
+            return -1;
+        off[i] = (uint16_t)o;
+        len[i] = (uint16_t)l;
     }
     return 0;
 }

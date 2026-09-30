@@ -80,6 +80,16 @@ def main():
         sys.exit('corrupt magic accepted')
     print('reject:  bad magic correctly refused')
 
+    # A segment whose range runs past the real file size must be rejected --
+    # otherwise the loader streams out-of-range slot space into the store.
+    data[0] ^= 0xFF  # restore the magic
+    data[8:12] = struct.pack('<HH', len(data) // 2, 8)  # seg 0 off past EOF
+    with open(bad, 'wb') as f:
+        f.write(bytes(data))
+    if subprocess.call([BIN, bad]) == 0:
+        sys.exit('out-of-range segment accepted')
+    print('reject:  out-of-range segment correctly refused')
+
     print('PASS')
 
 

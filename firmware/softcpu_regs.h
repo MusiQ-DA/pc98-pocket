@@ -184,7 +184,7 @@
 #define SETTINGS_SLOT_ID 7
 #define RHYTHM_SLOT_ID   13   // deferload: rhythm.bin, packed ADPCM-A voices
 #define RHY_WAV_SLOT_BASE 14  // deferload ids 14-19: per-voice *.wav sources
-#define FDDSND_SLOT_ID   20   // deferload: fddsnd.bin mechanism samples (s8/24k)
+#define FDDSND_SLOT_ID   20   // deferload, filename-bound: fddsnd.bin mechanism samples (s8/24k)
 // Bytes to declare for the nonvolatile Settings slot so it flushes on first boot.
 // The whole upper half of the 1 KB bridge RAM: the global settings blob plus
 // the per-disk profile table (settings_ui.c).

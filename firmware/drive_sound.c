@@ -72,14 +72,15 @@ int drive_sound_load(void)
     if (!dl_hdr_done) {
         // fddsnd.bin's 28-byte header is seven 32-bit words through the
         // auto-incrementing port; fddsnd_hdr.h has the layout.
-        if (!slot_bytes(FDDSND_SLOT_ID) ||
+        uint32_t fbytes = slot_bytes(FDDSND_SLOT_ID);
+        if (!fbytes ||
             !tds_transfer(FDDSND_SLOT_ID, 0, FDD_TDS_READ, FDDSND_HDR_BYTES))
             return 0;
         uint32_t hdr[FDDSND_HDR_BYTES / 4];
         *FDD_BRAM_ADDR = 0;
         for (uint32_t i = 0; i < FDDSND_HDR_BYTES / 4; i++)
             hdr[i] = *FDD_BRAM_RDATA;
-        if (fddsnd_hdr_parse(hdr, seg_off, seg_len))
+        if (fddsnd_hdr_parse(hdr, fbytes, seg_off, seg_len))
             return 1;                       // no kit: stay quiet forever
         dl_cursor = DRV_STORE_BASE;
         dl_seg    = 0;

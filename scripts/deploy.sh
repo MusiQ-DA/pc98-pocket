@@ -167,8 +167,10 @@ say "have $(stat -f%z "$ART/ap_core.rbf") bytes of bitstream"
 
 bash scripts/package.sh "$ART" || exit 1
 cp "$ROMS/bios.rom" "$ROMS/itf.rom" "$ROMS/font.rom" dist/pc98/Assets/pc98/hiroya.PC9801/
-# Optional drive-noise sample pack (scripts/fddsnd_pack.py); the core stays
-# silent without it, so absence is not a failure.
+# Optional drive-noise sample pack (scripts/fddsnd_pack.py writes
+# assets/fddsnd.bin by default); the core stays silent without it, so
+# absence is not a failure. The slot is deferload + filename-bound, so the
+# file lands in the core's own asset dir, not the browsable common/ one.
 [ -f assets/fddsnd.bin ] && cp -f assets/fddsnd.bin dist/pc98/Assets/pc98/hiroya.PC9801/
 # The softcore's firmware rides along as a slot, so a change to an on-screen
 # readout is a file copy rather than a Quartus compile. Built here rather than
@@ -301,6 +303,13 @@ if [ -f testdisk/hdd_test.hdd ]; then
         say "  ok  Assets/pc98/common/hdd_test.hdd"
     else
         say "  BAD Assets/pc98/common/hdd_test.hdd"; fail=1
+    fi
+fi
+if [ -f assets/fddsnd.bin ]; then
+    if cmp -s assets/fddsnd.bin "$VOL/Assets/pc98/hiroya.PC9801/fddsnd.bin"; then
+        say "  ok  Assets/pc98/hiroya.PC9801/fddsnd.bin"
+    else
+        say "  BAD Assets/pc98/hiroya.PC9801/fddsnd.bin"; fail=1
     fi
 fi
 [ $fail -eq 0 ] || { say "VERIFY FAILED"; note "deploy VERIFY FAILED"; exit 1; }

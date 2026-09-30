@@ -28,7 +28,16 @@ int main(int argc, char **argv)
                 (int)sizeof b);
         return 1;
     }
+    if (fseek(f, 0, SEEK_END)) {
+        perror(argv[1]);
+        return 1;
+    }
+    long fsz = ftell(f);
     fclose(f);
+    if (fsz < 0) {
+        perror(argv[1]);
+        return 1;
+    }
 
     uint32_t w[FDDSND_HDR_BYTES / 4];
     for (uint32_t i = 0; i < FDDSND_HDR_BYTES / 4; i++)
@@ -36,7 +45,7 @@ int main(int argc, char **argv)
              | ((uint32_t)b[i * 4 + 2] << 16) | ((uint32_t)b[i * 4 + 3] << 24);
 
     uint16_t off[FDDSND_SEGS], len[FDDSND_SEGS];
-    if (fddsnd_hdr_parse(w, off, len)) {
+    if (fddsnd_hdr_parse(w, (uint32_t)fsz, off, len)) {
         fprintf(stderr, "%s: bad header\n", argv[1]);
         return 1;
     }

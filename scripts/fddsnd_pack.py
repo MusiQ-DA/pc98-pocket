@@ -18,8 +18,11 @@ The windows below are cuts from a recording of a real 5.25" PC-98 drive;
 transients inside loop cuts are crushed with a fast limiter so the discrete
 one-shot voices own the percussive edge, then the ends are crossfaded so the
 loop wraps without a click.
+
+Default output is assets/fddsnd.bin -- the path deploy.sh already picks up
+for the FDD Sound dataslot.
 """
-import struct, sys, wave, math
+import os, struct, sys, wave, math
 
 SEG_NAMES = ["tick", "clunk", "seek", "read", "motor"]
 
@@ -105,7 +108,10 @@ def main():
     for o, l in offs:
         hdr += struct.pack("<HH", o, l)
     buf[:64] = hdr + b"\0" * (64 - len(hdr))
-    out = sys.argv[2] if len(sys.argv) > 2 else "fddsnd.bin"
+    out = sys.argv[2] if len(sys.argv) > 2 else os.path.join("assets", "fddsnd.bin")
+    d = os.path.dirname(out)
+    if d:
+        os.makedirs(d, exist_ok=True)
     open(out, "wb").write(bytes(buf))
     print(out, len(buf), "bytes;",
           {n: f"off={o} len={l}" for n, (o, l) in zip(SEG_NAMES, offs)})
