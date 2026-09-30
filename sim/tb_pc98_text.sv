@@ -103,10 +103,21 @@ module tb_pc98_text;
     end
 
     // Run to the given pixel of the given line and sample.
+    int cur_y = 0;
     task automatic goto(input int x, input int y);
+        // Walk the lines one at a time: the renderer tracks (row, raster)
+        // with the beam, it cannot teleport, and neither can the real
+        // timing source.
+        while (cur_y != y) begin
+            vcount = 10'(cur_y);
+            hcount = 10'd0;
+            @(posedge clk);
+            @(posedge clk);
+            cur_y = (cur_y == 10'd439) ? 0 : cur_y + 1;
+        end
+        vcount = 10'(y);
         // Walk from the start of the line so the cell pipeline fills the way it
         // does in hardware.
-        vcount = 10'(y);
         for (int i = 0; i <= x; i++) begin
             hcount = 10'(i);
             @(posedge clk);

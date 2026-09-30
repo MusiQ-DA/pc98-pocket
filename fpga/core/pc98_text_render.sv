@@ -113,32 +113,36 @@ module pc98_text_render #(
     wire [2:0] dot  = hcount[2:0];     // dot within a narrow cell
     wire [3:0] cdot = hcount[3:0];     // dot within a wide cell
 
-    // Row geometry is combinational on vcount -- the pitch comes from the
-    // master GDC's CSRFORM raster count, so raster-within-cell and
-    // row-within-frame are vcount mod and div by line_rep+1. The case covers
-    // the pitches the BIOS's mode table actually writes (16, 20, and the
-    // 200-line pair 8/10); the constant divisors cost a couple of small
-    // adders. Anything else falls back to the 16-raster cell this always was.
-    function automatic [4:0] cell_raster(input [9:0] v);
-        case (line_rep)
-            5'h0F:   cell_raster = {1'b0, v[3:0]};
-            5'h13:   cell_raster = 5'(v % 10'd20);
-            5'h07:   cell_raster = {2'b00, v[2:0]};
-            5'h09:   cell_raster = 5'(v % 10'd10);
-            default: cell_raster = {1'b0, v[3:0]};
-        endcase
-    endfunction
-    function automatic [4:0] cell_row(input [9:0] v);
-        case (line_rep)
-            5'h0F:   cell_row = v[8:4];
-            5'h13:   cell_row = 5'(v / 10'd20);
-            5'h07:   cell_row = v[8:3];
-            5'h09:   cell_row = 5'(v / 10'd10);
-            default: cell_row = v[8:4];
-        endcase
-    endfunction
-    wire [4:0] raster_q = cell_raster(vcount);   // raster being drawn
-    wire [4:0] row_q    = cell_row(vcount);      // text row being drawn
+    // Row geometry used to be three vcount mod/div sites against the CSRFORM
+    // raster count; the /10 and /20 pitches synthesised as lpm_divide chains
+    // (several hundred ALM across the module's instances). The beam only
+    // steps one raster at a time, so a (row, raster) pair walking the frame
+    // carries the same information: its combinational next-state IS this
+    // line's decomposition, +1 raster is the fetch position, and
+    // vcount+pitch always lands in row+1. The whole arithmetic collapses to
+    // a counter and a wrap compare -- and unlike the old case it honours
+    // EVERY line_rep, not just the BIOS table's {8,10,16,20}.
+    wire [9:0] pitch_p1 = {5'd0, line_rep} + 10'd1;
+
+    reg  [9:0] trk_v;
+    reg  [4:0] trk_raster, trk_row;
+    wire       new_line = (vcount != trk_v);
+    wire       trk_full = ({5'd0, trk_raster} >= pitch_p1 - 10'd1);
+
+    wire [4:0] raster_q = (vcount == 10'd0) ? 5'd0
+                        : new_line ? (trk_full ? 5'd0 : trk_raster + 5'd1)
+                        :            trk_raster;
+    wire [4:0] row_q    = (vcount == 10'd0) ? 5'd0
+                        : new_line ? (trk_full ? trk_row + 5'd1 : trk_row)
+                        :            trk_row;
+
+    always_ff @(posedge clk) begin
+        if (new_line) begin
+            trk_v      <= vcount;
+            trk_raster <= raster_q;
+            trk_row    <= row_q;
+        end
+    end
 
     // The FETCH position: the raster cell one character time ahead of the one
     // being drawn, which is where the memories' one cycle of latency is paid
@@ -164,13 +168,20 @@ module pc98_text_render #(
     // cell of every line shows the slice above it.
     wire        last_char = wide ? (hcount >= 10'(H_TOTAL - 16))
                                  : (hcount >= 10'(H_TOTAL - 8));
-    wire [9:0]  next_v    = last_char
-                          ? ((vcount == 10'(V_TOTAL - 1)) ? 10'd0 : vcount + 10'd1)
-                          : vcount;
     wire [6:0]  next_col  = last_char ? 7'd0 : col + 7'd1;
-    // The fetch's position in (row, raster) space is the next scanline's.
-    wire [4:0]  pf_raster = cell_raster(next_v);
-    wire [4:0]  next_row  = cell_row(next_v);
+    // The fetch's position in (row, raster) space is the next scanline's --
+    // one tracked step further than raster_q/row_q; on the frame's last
+    // line the next scanline is (0, 0).
+    wire       pf_full   = ({5'd0, raster_q} >= pitch_p1 - 10'd1);
+    wire       frame_end = last_char & (vcount == 10'(V_TOTAL - 1));
+    wire [4:0] pf_raster = !last_char ? raster_q
+                         : frame_end  ? 5'd0
+                         : pf_full    ? 5'd0
+                         :              raster_q + 5'd1;
+    wire [4:0] next_row  = !last_char ? row_q
+                         : frame_end  ? 5'd0
+                         : pf_full    ? row_q + 5'd1
+                         :              row_q;
 
     // ---- where the screen starts, and how wide a row is -------------------
     //
@@ -320,9 +331,10 @@ module pc98_text_render #(
     // would begin past the visible frame).
     assign txt_row_tick = pix_ce & (hcount == 10'd0) & (raster_q == 5'd0)
                         & (vcount < 10'd400);
-    wire [9:0] row_pitch  = {5'd0, line_rep} + 10'd1;
-    wire [9:0] next_row_v = vcount + row_pitch;
-    assign txt_next_row = (next_row_v >= 10'd400) ? 5'd0 : cell_row(next_row_v);
+    // vcount+pitch is always the same raster of the next row, so its row is
+    // row_q+1; past the visible frame the next fill is row 0.
+    wire [9:0] next_row_v = vcount + pitch_p1;
+    assign txt_next_row = (next_row_v >= 10'd400) ? 5'd0 : row_q + 5'd1;
 
     always_comb begin
         logic lit;
