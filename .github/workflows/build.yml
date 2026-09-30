@@ -480,6 +480,10 @@ jobs:
         run: |
           python3 scripts/rhythm_enc_test.py
 
+      - name: the fddsnd.bin header parse matches the packer's layout
+        run: |
+          python3 scripts/fddsnd_hdr_test.py
+
       - name: the GRCG's three operations match np21w's expressions
         run: |
           S=fpga/core

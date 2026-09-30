@@ -1431,11 +1431,13 @@ module PERIPHERALS #(
     // ---- CRTC text-cell geometry ---------------------------------------
     //
     // np21w io/crtc.c: even ports 0x70-0x7A write b[0..5] = {pl, bl, cl,
-    // ssl, sur, sdr}, five bits each. bl+1 is the text row's raster pitch
-    // (maketext's TEXT_BL) and cl how many of them carry font (TEXT_CL,
-    // clamped to 16): the BIOS writes bl=0x13 for the 20-line mode that
-    // dipsw2 bit 3 selects. pl/ssl/sur/sdr are the scroll-split registers --
-    // captured for completeness, unused until smooth scroll is modelled.
+    // ssl, sur, sdr}, five bits each. bl+1 marks the underline raster
+    // (maketext's TEXT_BL, nowline+1 == lines) and cl how many rasters carry
+    // font (TEXT_CL, clamped to 16): the BIOS writes bl=0x11 for the 20-line
+    // mode that dipsw2 bit 3 selects -- 0x13 is the matching GDC CSRFORM
+    // raster count, a different register (np21w bios/bios18.c crtdata).
+    // pl/ssl/sur/sdr are the scroll-split registers -- captured for
+    // completeness, unused until smooth scroll is modelled.
     wire crtc_cs = pc98_io & ~address[0] & (address[7:4] == 4'h7)
                  & (address[3:1] <= 3'd5);
     always_ff @(posedge clock) begin

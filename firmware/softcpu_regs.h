@@ -224,12 +224,10 @@ int  fdd_is_inserted(uint32_t drive);
 uint32_t fdd_mounted_sectors(uint32_t drive);
 
 // Service entry points (fdd_service.c, scsi_service.c). PC-98 only -- the
-// board is a PC-9801-55. The polls return nonzero when they serviced a
-// request this pass; the main loop uses that to drop its idle spacing while
-// real work is in flight.
+// board is a PC-9801-55.
 void scsi_init(void);
 void scsi_mount(uint32_t sectors);
-int  scsi_poll(void);
-int  fdd_poll(void);
+void scsi_poll(void);
+void fdd_poll(void);
 
 #endif

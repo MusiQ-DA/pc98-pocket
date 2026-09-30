@@ -497,19 +497,14 @@ static void retire(int ch)
     *GDCD_DONE(ch) = 0u;
 }
 
-// Returns nonzero when a request was retired or drawn this pass, so the main
-// loop's idle spacing can skip working passes: a pending EXECUTE throttles the
-// guest's FIFO status, and the spacing would otherwise stretch each draw to
-// the poll period.
-int gdc_poll(void)
+// Called from the main loop. np21w draws only on the slave; the master's
+// EXECUTEs still retire so its throttle releases.
+void gdc_poll(void)
 {
     if (!gdc_inited) {
         init_bitreverse();
         gdc_inited = 1;
     }
-    int serviced = 0;
-    // np21w draws only on the slave; the master's EXECUTEs still retire so
-    // its throttle releases.
     for (int ch = GDC_CH_SLAVE; ch >= GDC_CH_MASTER; ch--) {
         uint32_t st = *GDCD_STATUS(ch);
         if (!(st & 2u)) { // no request pending
@@ -555,7 +550,5 @@ int gdc_poll(void)
             }
         }
         retire(ch);
-        serviced = 1;
     }
-    return serviced;
 }

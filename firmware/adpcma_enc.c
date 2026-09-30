@@ -83,9 +83,15 @@ static void emit_nibble(adpcm_enc *e, int32_t target12)
     if (e->half < 0) {
         e->half = (int8_t)best;
     } else {
-        e->out[e->out_n++] = (uint8_t)((e->half << 4) | best);
+        // The nibble pick must run for every emit position so the decoder
+        // model (x, step) stays coherent, but out[] saturates at
+        // ADPCMA_OUT_MAX: a push can only overflow it far below 4 kHz
+        // source rates, and the byte then drops rather than desyncing.
+        if (e->out_n < ADPCMA_OUT_MAX) {
+            e->out[e->out_n++] = (uint8_t)((e->half << 4) | best);
+            e->bytes++;
+        }
         e->half = -1;
-        e->bytes++;
     }
 }
 
@@ -134,11 +140,11 @@ uint32_t adpcm_enc_push(adpcm_enc *e, int16_t s)
         // An output at pos needs source samples floor(pos) and floor(pos)+1;
         // the window holds [idx-1, idx], so it is serviceable exactly while
         // floor(pos) <= idx-1 -- which is when pos>>16 == idx-1 always.
-        while ((e->pos >> 16) == e->idx - 1) {
+        // The loop must run the window out: bailing on a full out[] would
+        // leave pos behind, and the positions can never be re-emitted once
+        // the next push moves the window on.
+        while ((e->pos >> 16) == e->idx - 1)
             emit_sample(e, 0);
-            if (e->out_n >= ADPCMA_OUT_MAX)
-                return e->out_n;
-        }
     } else {
         e->primed = 1;
     }

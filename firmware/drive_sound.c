@@ -25,14 +25,13 @@
 
 #include "softcpu_regs.h"
 #include "adpcma_enc.h"
+#include "fddsnd_hdr.h"
 #include "settings_ui.h"
 
-#define FDDSND_MAGIC   0x4446u   // 'FD' (word 0; word 1 is 'S1' = 0x3153)
-#define FDDSND_MAGIC2  0x3153u   // 'S1'
 #define FDDSND_RATE    24000u    // s8 sample rate inside fddsnd.bin
 #define DRV_STORE_BASE 16384u    // upper half of the 32 KB rhythm store
 #define DRV_STORE_END  32768u
-#define DRV_SEGS       5
+#define DRV_SEGS       FDDSND_SEGS
 
 // Segment indices inside the file: tick, clunk, seek, read, motor -- the
 // same order the old synth's VSEG table used.
@@ -71,22 +70,17 @@ int drive_sound_load(void)
         return 1;
 
     if (!dl_hdr_done) {
-        // fddsnd.bin: u16 'FD', u16 'S1', u16 version, u16 segment count,
-        // then five {off,len} pairs in 16-bit word units; s8 payload
-        // follows (24 kHz, two per word, low byte first).
+        // fddsnd.bin's 28-byte header is seven 32-bit words through the
+        // auto-incrementing port; fddsnd_hdr.h has the layout.
         if (!slot_bytes(FDDSND_SLOT_ID) ||
-            !tds_transfer(FDDSND_SLOT_ID, 0, FDD_TDS_READ, 28))
+            !tds_transfer(FDDSND_SLOT_ID, 0, FDD_TDS_READ, FDDSND_HDR_BYTES))
             return 0;
+        uint32_t hdr[FDDSND_HDR_BYTES / 4];
         *FDD_BRAM_ADDR = 0;
-        if ((*FDD_BRAM_RDATA & 0xFFFF) != FDDSND_MAGIC ||
-            (*FDD_BRAM_RDATA & 0xFFFF) != FDDSND_MAGIC2)
+        for (uint32_t i = 0; i < FDDSND_HDR_BYTES / 4; i++)
+            hdr[i] = *FDD_BRAM_RDATA;
+        if (fddsnd_hdr_parse(hdr, seg_off, seg_len))
             return 1;                       // no kit: stay quiet forever
-        (void)*FDD_BRAM_RDATA;              // version
-        (void)*FDD_BRAM_RDATA;              // segment count
-        for (uint32_t i = 0; i < DRV_SEGS; i++) {
-            seg_off[i] = *FDD_BRAM_RDATA & 0xFFFF;
-            seg_len[i] = *FDD_BRAM_RDATA & 0xFFFF;
-        }
         dl_cursor = DRV_STORE_BASE;
         dl_seg    = 0;
         dl_hdr_done = 1;
@@ -213,10 +207,12 @@ static void inj_pair(uint32_t ch, uint32_t start256, uint32_t end256)
 }
 
 // The kit's level per menu mode: 5.25" is the louder mechanism the pack was
-// built around; 3.5" sits lower. Both speakers get the voice (l=r=1).
+// built around; 3.5" sits lower. The ADPCM-A AL is a level, not an
+// attenuation -- in jt10_adpcm_gain the shift is ~AL + ~atl, so a larger
+// value sounds louder. Both speakers get the voice (l=r=1).
 static uint32_t mode_al(void)
 {
-    return settings_drive_sound() == 2 ? 14u : 6u;
+    return settings_drive_sound() == 2 ? 6u : 14u;
 }
 
 static void chan_restore(uint32_t ch)

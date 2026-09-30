@@ -142,6 +142,7 @@ static void fdd_probe_d88(uint32_t drive, uint32_t sectors)
     uint32_t file = sectors * 512;
     fdd_d88[drive] = 0;
     fdd_d88_wp[drive] = 0;
+    fdd_base[drive] = 0;          // no raw base unless an FDI probe sets it
     fdd_img_geom[drive][0] = 0;   // no wrapped geometry unless a probe sets it
     // The bridge RAM is 1 KB -- bytes 512+ hold the settings window -- so the
     // 688-byte header lands in two reads: 512 B at 0 covers the name/type/
@@ -510,7 +511,7 @@ uint32_t fdd_dbg_seen, fdd_dbg_pushed, fdd_dbg_err, fdd_dbg_lba, fdd_dbg_aft;
 uint32_t fdd_dbg_gap;
 static uint32_t gap_polls;
 
-int fdd_poll(void)
+void fdd_poll(void)
 {
     uint32_t req = *FDD_REQUEST;
     if (!req) {
@@ -518,7 +519,7 @@ int fdd_poll(void)
         // sector re-asks within a few loops, a parked drain only after the
         // guest's own timeout, so the gap separates them by orders.
         gap_polls++;
-        return 0;
+        return;
     }
     fdd_dbg_gap = gap_polls;
     gap_polls = 0;
@@ -584,5 +585,4 @@ int fdd_poll(void)
         }
         pref_lba[drv] = ~0u;
     }
-    return 1;
 }

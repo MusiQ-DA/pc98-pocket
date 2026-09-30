@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Pack FDD mechanism-noise samples into fddsnd.bin for the FDD sound dataslot.
 
-The blob is streamed by the APF dataslot loader into fdd_sound's sample RAM
-(16K x 16-bit words; bytes land little-endian, two s8 samples per word).
-Layout:
+The blob is fetched through the APF dataslot into the bridge RAM and decoded
+on the softcore; the firmware then re-encodes the s8 payload to ADPCM-A in
+the rhythm store's upper half (fddsnd_hdr.h documents the header).
+Layout (all integers little-endian, offsets/lengths in 16-bit words):
 
-    word 0-1  u32 magic 'FDS1' (0x31534446, word 0 reads 0x4446)
-    word 2    u16 version (1)
-    word 3    u16 segment count (5)
-    words 4.. per segment: u16 word_offset, u16 word_length (bytes/2)
-    payload   s8 PCM at 24 kHz, each segment 128-word aligned
+    bytes 0-3   u32 magic 'FDS1' (0x31534446)
+    bytes 4-5   u16 version (1)
+    bytes 6-7   u16 segment count (5)
+    bytes 8-27  per segment: u16 word_offset, u16 word_length
+    payload     s8 PCM at 24 kHz, each segment 128-word aligned
 
 Segments, in order: step tick (one-shot), head-load clunk (one-shot),
 seek whine (loop), media xfer hiss (loop), motor idle whir (loop).
