@@ -413,16 +413,17 @@ module v30_cpu_bridge (
                                            input logic ube_n);
         if (((bs == BS_IOR) || (bs == BS_IOW))
             && (a[0] == 1'b0) && (ube_n == 1'b0) && (a[11:10] == 2'b00))
+        // np21w's tables also list odd ports (word_term 0x01-0x29 odd,
+        // plus_term 0x71/0x75/0x79/0xad/0xaf): they terminate a word
+        // instruction at an odd port. On the bus an odd word is already
+        // split into two byte cycles the decoder sees singly, so those
+        // arms can never match here and are left out.
         case (a[7:0])
-          8'h01, 8'h03, 8'h05, 8'h07, 8'h09, 8'h0b, 8'h0d, 8'h0f,
-          8'h15, 8'h19, 8'h1f,
-          8'h21, 8'h23, 8'h25, 8'h27, 8'h29,
           8'hf2, 8'hf6:              io_term = TERM_WORD;
           8'hd0, 8'hd2, 8'hd4, 8'hd6, 8'hd8, 8'hdc, 8'hde:
                                      io_term = TERM_ACTIVE;
           8'h30, 8'h32, 8'h34, 8'h36,
-          8'h40, 8'h42, 8'h44, 8'h46,
-          8'h71, 8'h75, 8'h79, 8'had, 8'haf:
+          8'h40, 8'h42, 8'h44, 8'h46:
                                      io_term = TERM_PLUS;
           8'h60, 8'h62, 8'h64, 8'h68, 8'h6a, 8'h6c,
           8'h70, 8'h72, 8'h74, 8'h76, 8'h7a, 8'h7c,

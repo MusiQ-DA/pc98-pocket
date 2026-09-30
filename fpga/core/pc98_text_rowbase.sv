@@ -48,8 +48,10 @@ module pc98_text_rowbase (
     // partition 0 to the whole height, which makes this the old SAD+row
     // expression; a split starts a new partition mid-screen. Unprogrammed
     // the fallback is still eighty columns from cell 0.
-    wire [16:0] part = live ? pc98_text_part(row, gdc_sad, gdc_len)
-                            : {row, 12'd0};
+    // (The call is a separate statement: Verilator 5.020's V3Gate trips on
+    // a function call inlined inside a conditional -- internal error.)
+    wire [16:0] partf = pc98_text_part(row, gdc_sad, gdc_len);
+    wire [16:0] part = live ? partf : {row, 12'd0};
     wire  [4:0] rel   = part[16:12];
     wire [11:0] sad   = part[11:0];
 

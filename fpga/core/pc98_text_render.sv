@@ -198,35 +198,37 @@ module pc98_text_render #(
     // each row's cell run starts at its own partition's SAD plus the
     // row's index WITHIN the partition times the pitch. A one-area screen
     // keeps every row in partition 0, which reduces to the old SAD+row*pitch.
-    wire [16:0] n_part  = gdc_live
-        ? pc98_text_part(next_row, gdc_sad, gdc_len) : {next_row, 12'd0};
+    // (The calls are separate statements: Verilator 5.020's V3Gate trips
+    // on a function call inlined inside a conditional -- internal error.)
+    wire [16:0] n_partf = pc98_text_part(next_row, gdc_sad, gdc_len);
+    wire [16:0] n_part  = gdc_live ? n_partf : {next_row, 12'd0};
     wire [11:0] n_start = n_part[11:0];
     wire [4:0]  n_rel   = n_part[16:12];
     // row * pitch. Kept as a multiplier only when the GDC is driving it; the
     // 80-column case is still the shift pair it always was.
-    wire [11:0] next_rowbase = gdc_live
-        ? 12'(n_rel * eff_pitch)
-        : ({1'b0, next_row, 6'd0} + {3'b000, next_row, 4'd0});
+    wire [11:0] n_relmul  = n_rel * eff_pitch;
+    wire [11:0] n_rowoff  = {1'b0, next_row, 6'd0} + {3'b000, next_row, 4'd0};
+    wire [11:0] next_rowbase = gdc_live ? n_relmul : n_rowoff;
     // In the cell index space a wide column occupies two slots (np21w's
     // edi += 2 per column), so the column term doubles.
-    wire [11:0] next_cell    = n_start + next_rowbase
-                             + (wide ? {5'd0, next_col[5:0], 1'b0}
-                                     : {5'd0, next_col});
+    wire [11:0] next_coff    = wide ? {5'd0, next_col[5:0], 1'b0}
+                                    : {5'd0, next_col};
+    wire [11:0] next_cell    = n_start + next_rowbase + next_coff;
 
     // The cell being DRAWN: the current row and column against the same
     // start and pitch. next_* above is where the memories are pointed (one
     // character time ahead); this is where the shift register is emptying.
     // (Named draw_row because cur_row is the glyph register below.)
     wire [4:0]  draw_row  = row_q;
-    wire [16:0] d_part  = gdc_live
-        ? pc98_text_part(draw_row, gdc_sad, gdc_len) : {draw_row, 12'd0};
+    wire [16:0] d_partf = pc98_text_part(draw_row, gdc_sad, gdc_len);
+    wire [16:0] d_part  = gdc_live ? d_partf : {draw_row, 12'd0};
     wire [11:0] d_start = d_part[11:0];
     wire [4:0]  d_rel   = d_part[16:12];
-    wire [11:0] draw_rowbase = gdc_live
-        ? 12'(d_rel * eff_pitch)
-        : ({1'b0, draw_row, 6'd0} + {3'b000, draw_row, 4'd0});
-    wire [11:0] drawn_cell = d_start + draw_rowbase
-                           + (wide ? {5'd0, col[5:0], 1'b0} : {5'd0, col});
+    wire [11:0] d_relmul  = d_rel * eff_pitch;
+    wire [11:0] d_rowoff  = {1'b0, draw_row, 6'd0} + {3'b000, draw_row, 4'd0};
+    wire [11:0] draw_rowbase = gdc_live ? d_relmul : d_rowoff;
+    wire [11:0] draw_coff  = wide ? {5'd0, col[5:0], 1'b0} : {5'd0, col};
+    wire [11:0] drawn_cell = d_start + draw_rowbase + draw_coff;
 
     // The GDC's cursor: a blinking reverse block over cursor_top..cursor_bot
     // of the one cell CSRW names. Blink rides the attribute blink phase --
