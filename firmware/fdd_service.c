@@ -493,13 +493,21 @@ int fdd_poll(void)
         uint32_t bytes = fdd_sector_words[drv] * 4;
         uint32_t slot = drv ? FDD1_SLOT_ID : FDD0_SLOT_ID;
         uint32_t lba = reg0 & FDD_LBA_MASK;
-        uint32_t off = fdd_d88[drv] ? d88_offset(drv, lba)
-                                  : fdd_base[drv] + lba * bytes;
+        uint32_t off, found;
+        if (fdd_d88[drv]) {
+            off = d88_offset(drv, lba);
+            found = off != 0;
+        } else {
+            // A raw/FDI image's LBA 0 legitimately sits at byte 0 -- offset 0
+            // is only "not found" for the D88 walk, which returns it on a miss.
+            off = fdd_base[drv] + lba * bytes;
+            found = 1;
+        }
         fdd_dbg_seen++;
         fdd_dbg_lba = reg0;
         // Push only on a good read; a failed transfer (or a D88 walk that
         // found no such sector) must not stream stale bytes.
-        if (off && tds_transfer(slot, off, FDD_TDS_READ, bytes)) {
+        if (found && tds_transfer(slot, off, FDD_TDS_READ, bytes)) {
             push_sector(drv);
             fdd_dbg_pushed++;
             fdd_dbg_aft = *FDD_REQUEST;
@@ -515,9 +523,10 @@ int fdd_poll(void)
         uint32_t off = fdd_d88[drv] ? d88_offset(drv, lba)
                                   : fdd_base[drv] + lba * bytes;
         // pull_fifo already completes the controller's write; a failed persist has no
-        // path back to the guest, so the result is not acted on here.
+        // path back to the guest, so the result is not acted on here. off==0 is a
+        // legal file offset on the raw path -- only the D88 walk uses it as a miss.
         pull_fifo(drv);
-        if (off) {
+        if (!fdd_d88[drv] || off) {
             tds_transfer(slot, off, FDD_TDS_WRITE, bytes);
         }
     }
