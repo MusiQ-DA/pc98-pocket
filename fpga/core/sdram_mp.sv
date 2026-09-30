@@ -127,7 +127,7 @@ module sdram_mp #(
 
     typedef enum logic [3:0] {
         S_INIT_NOP, S_INIT_PRE, S_INIT_REF, S_INIT_MRS,
-        S_IDLE, S_ACT, S_RW, S_TAIL, S_REF_PRE, S_REF, S_PRE_MISS
+        S_IDLE, S_ACT, S_RW, S_RD_GAP, S_TAIL, S_REF_PRE, S_REF, S_PRE_MISS
     } state_t;
 
     state_t state;
@@ -449,8 +449,22 @@ module sdram_mp #(
                         timer <= 16'(RD_DELAY);
                         state <= S_TAIL;
                     end
+                // Back-to-back READ beats put each beat's capture negedge
+                // exactly on the NEXT beat's launch edge (the negedge inside
+                // the rvalid cycle is where the part starts driving the next
+                // word). On hardware that boundary is a coin flip -- when the
+                // new word wins early, both beats present the same data and
+                // the guest sees every byte of a word fetch doubled (measured:
+                // queue filled FA FA 47 47 54 54, the CPU then wedged on an
+                // illegal LES). One NOP between the guest port's read beats
+                // moves every capture to the middle of its own window. Cost:
+                // one clock per extra word; ports B-D keep full-rate bursts.
+                end else if (!cur_we && (grant == GRANT_BITS'(0))) begin
+                    state <= S_RD_GAP;
                 end
             end
+
+            S_RD_GAP: state <= S_RW;
 
             // Reads only: drain the pipeline so p_rvalid has presented before
             // the transaction is declared done. Writes never come here.
