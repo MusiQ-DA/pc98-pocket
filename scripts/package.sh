@@ -139,7 +139,11 @@ def data(j):
         {"name": "Floppy B",    "id": 4, "required": False, "parameters": "0x201",
          "extensions": ["hdm", "fdi", "2hd", "fdd"],
          "size_maximum": 8388608, "deferload": True},
-        {"name": "Hard Disk",   "id": 5, "required": False, "parameters": 1,
+        # Same 0x201 as the floppies: bit9 persists the browsed filename --
+        # without it a picked .hdd unbinds on the pick-triggered core reload,
+        # so the slot reads empty at boot and the SCSI ROM's TEST UNIT READY
+        # finds no drive.
+        {"name": "Hard Disk",   "id": 5, "required": False, "parameters": "0x201",
          "extensions": ["hdi", "nhd", "thd", "hdd"],
          "deferload": True},
         # Rhythm PCM: the OPNA's ADPCM-A sample store, packed by

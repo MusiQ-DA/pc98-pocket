@@ -98,7 +98,7 @@
         "name": "Hard Disk",
         "id": 5,
         "required": false,
-        "parameters": 1,
+        "parameters": "0x201",
         "extensions": [
           "hdi",
           "nhd",
