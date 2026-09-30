@@ -208,8 +208,10 @@ module fdd_sound #(
     // ------------------------------------------------------- sample fetch
     //
     // Right after each tick, six consecutive clks present each voice's word
-    // address; the read data lands the next clk and is latched into vword.
-    // vlsb keeps the byte-select bit from fetch time so it tracks the word.
+    // address. rd_addr is registered and the RAM read is registered too, so
+    // voice k's word is in rd_data while fcnt==k+2 -- the capture lands at
+    // vword[fcnt-2], one slot later than the address phase. vlsb keeps the
+    // byte-select bit from fetch time so it tracks the word.
     logic [2:0] fcnt = 3'd7;
     always_ff @(posedge clk) begin
         if (smp_ce)           fcnt <= 3'd0;
@@ -221,8 +223,8 @@ module fdd_sound #(
             rd_addr    <= seg_off[VSEG(fcnt)] + 14'(vpos[fcnt] >> 1);
             vlsb[fcnt] <= vpos[fcnt][0];
         end
-        if (hdr_done && fcnt >= 3'd1 && fcnt <= 3'd6)
-            vword[fcnt - 3'd1] <= rd_data;
+        if (hdr_done && fcnt >= 3'd2)
+            vword[fcnt - 3'd2] <= rd_data;
     end
 
     function automatic logic signed [7:0] vsample(input int v);
