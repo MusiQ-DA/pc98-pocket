@@ -232,7 +232,16 @@ module PERIPHERALS #(
 
     assign dma_chip_select_n        = ~(pc98_io &  address[0] & ~address[7] & ~address[6] & ~address[5]);
     wire   interrupt_chip_select_n  = ~(pc98_io & ~address[0] & (address[7:3] == 5'b00000));
-    wire   timer_chip_select_n      = ~(pc98_io &  address[0] & (address[7:4] == 4'h7));
+    // The 8253 answers twice on this bus: 0x71-0x77 odd, and again at
+    // 0x3FD9-0x3FDF odd -- the alias np21w io/pit.c (itimer_bind) attaches
+    // pit_o71/o73/o75/o77 to. Beep-pitch code that walks the alias (DEPTH.EXE
+    // loads dx=3FDB/3FDF) otherwise writes into nothing and the tone never
+    // moves.
+    wire   timer_alias_cs           = iorq & ~address_enable_n
+                                      & (address[15:4] == 12'h3FD)
+                                      & address[3] & address[0];
+    wire   timer_chip_select_n      = ~((pc98_io &  address[0] & (address[7:4] == 4'h7))
+                                       | timer_alias_cs);
 
     // 0x21-0x2F odd: the DMA bank (page) registers.
     assign dma_page_chip_select_n   = ~(pc98_io &  address[0] & (address[7:4] == 4'h2));
@@ -965,6 +974,35 @@ module PERIPHERALS #(
     );
     wire sysport_read      = (sysport_31_select | sysport_33_select
                             | sysport_35_select | sysport_42_select) & ~io_read_n;
+
+    // ---- ARTIC -- the relative counter at 0x5C-0x5F (np21w io/artic.c).
+    //
+    // A free-running 24-bit counter the guest reads for elapsed time:
+    // np21w derives it as CPU_clocks*2/mul with mul=16 (hi-res) or 13 (8 MHz
+    // mode), which lands on ~1.25 MHz in both cases -- a fixed-rate counter.
+    // The accumulator below counts 42.95 MHz up to 42950 and ticks, giving
+    // exactly 1.25 MHz. Reads: 0x5C = byte 0, 0x5D/0x5E = byte 1, 0x5F =
+    // byte 2; the 0x5F write only costs time on the real chip, so it is left
+    // unclaimed. Games that pace their main loop off 0x5D (DEPTH.EXE polls
+    // it ~96 sites deep) hang at the title screen when it never advances.
+    logic [23:0] artic_cnt;
+    logic [15:0] artic_acc;
+    always_ff @(posedge clock) begin
+        if (reset) begin
+            artic_cnt <= 24'd0;
+            artic_acc <= 16'd0;
+        end
+        else if (artic_acc >= 16'd41700) begin
+            artic_acc <= artic_acc - 16'd41700;
+            artic_cnt <= artic_cnt + 24'd1;
+        end
+        else
+            artic_acc <= artic_acc + 16'd1250;
+    end
+    wire       artic_sel  = pc98_io & (address[7:2] == 6'b010111);
+    wire [7:0] artic_data = address[1]
+                          ? (address[0] ? artic_cnt[23:16] : artic_cnt[15:8])
+                          : (address[0] ? artic_cnt[15:8]  : artic_cnt[7:0]);
     // 0x42 bit 1: this machine has no protected mode.
     //
     // The UX ITF tests it at F8B95 and, with the bit CLEAR, walks into
@@ -2260,6 +2298,12 @@ module PERIPHERALS #(
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= sysport_data;
+        end
+        // ARTIC: 0x5C-0x5F, the free-running counter games pace loops off.
+        else if (artic_sel & ~io_read_n)
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= artic_data;
         end
         // The keyboard 8251 at 0x41/0x43, claiming exactly those two ports.
         // The decode is exact so nothing above can collide with it; this
