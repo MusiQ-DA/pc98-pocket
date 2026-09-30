@@ -82,6 +82,10 @@ enum {
     // OSD
     SET_DISK_LED,
     SET_EXTMEM,
+    // Hardware -- appended above SET_COUNT, so a version-7 blob simply has no
+    // byte for this index and it keeps its compiled default on load. The menu
+    // row itself is in items_hw, right after FDD Turbo.
+    SET_DRV_SOUND,
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
@@ -111,6 +115,11 @@ static const char *const opt_mode200[] = { "Double", "Skip" };
 // purpose -- blob slot 6's resting value is 1 (see the enum), which has to
 // mean Off -- and the softcore register inverts the index into the bit.
 static const char *const opt_fdd_turbo[] = { "On", "Off" };
+// Drive-mechanism noise: fdd_sound.sv takes the mode as the raw index -- 0
+// off, 1 the 5.25-inch cabinet, 2 the quieter 3.5-inch -- so the option order
+// is the wire order with no decode table. 5.25 is the default: the louder
+// mechanism the synth is built around.
+static const char *const opt_drv_sound[] = { "Off", "5.25\"", "3.5\"" };
 
 static const char *const opt_dpad[] = { "Numpad", "Numpad w/ Diag.", "Arrows", "WASD", "HJKL",
     "HJKL w/ YUBN" };
@@ -148,6 +157,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
     SETTING_D(opt_dis_en, 1), // SET_DISK_LED (default on)
     SETTING_D(opt_extmem, 3), // SET_EXTMEM (default 8 MB: the full SDRAM pool)
+    SETTING_D(opt_drv_sound, 1), // SET_DRV_SOUND -- the appended index; default 5.25"
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
@@ -214,6 +224,7 @@ static const item_t items_hw[] = {
     { "Floppy A", IT_FDD, 0 },
     { "Floppy B", IT_FDD, 1 },
     { "FDD Turbo", IT_OPTION, SET_FDD_TURBO },
+    { "Drive Sound", IT_OPTION, SET_DRV_SOUND },
     { "", IT_SPACER, 0 },
     { "EMS", IT_OPTION, SET_EXTMEM },
     { "", IT_SPACER, 0 },
@@ -746,20 +757,42 @@ void settings_reset_tick(void)
 // back bridge-RAM residue, so the magic (not the version) says the table exists. Each entry is
 // {hash, ~hash, block}: hash is the mounted drive-A image's identity (fdd_service.c), ~hash is the
 // validity tag that keeps a half-written or stale slot from passing for a profile, and block is
-// the same five-word values+bindings packing the blob uses. While a disk is mounted saves go to
-// its entry and mounting applies it; with no disk mounted, saves and the live set are global.
+// the same values+bindings packing the blob uses. While a disk is mounted saves go to its entry
+// and mounting applies it; with no disk mounted, saves and the live set are global.
+//
+// VERSION 8 APPENDS ONE SETTING (index 12, drive sound), and a thirteenth
+// value crosses a word boundary: the block grows to six words, the global
+// blob to eight, and the table shifts up a word -- word 136, eight-word
+// entries, fourteen of which fit (136 + 1 + 14*8 = 249; version 7's table
+// ended exactly on the window's last word). Older blocks still load:
+// block_apply walks the header's stored value count, so a version-6/7
+// five-word block applies its twelve values and index 12 keeps its compiled
+// default. A version-7 table is carried across by table_migrate at load, and
+// the blob is rewritten at version 8 so the move runs once.
 #define SETTINGS_MAGIC   0x50435853u
-#define SETTINGS_VERSION 7u
+#define SETTINGS_VERSION 8u
 #define SETTINGS_WORD    128
 
-// The table occupies the rest of the window: magic at word 135, then seventeen
-// 7-word entries through word 254. TABLE_WORD + 1 + ENTRY_COUNT*ENTRY_WORDS =
-// 255, so the region ends exactly at the window's last word.
-#define TABLE_WORD   (SETTINGS_WORD + 7) // the global blob is seven words
-#define TABLE_MAGIC  0x504B5444u         // 'PKTD'
-#define BLOCK_WORDS  5                   // the packed values + bindings a profile is
-#define ENTRY_WORDS  (BLOCK_WORDS + 2)   // hash, ~hash, then the block
-#define ENTRY_COUNT  17
+// The block a profile is: the packed values, then the binding block (the
+// seven codes and the ext byte), everything four bytes per word.
+#define VALUE_WORDS ((SET_COUNT + 3) / 4)
+#define BIND_WORDS  ((BIND_COUNT + 1 + 3) / 4)
+#define BLOCK_WORDS (VALUE_WORDS + BIND_WORDS)
+
+// The table occupies the rest of the window: magic at TABLE_WORD, then the
+// entries through the window's last word at 255 -- fourteen 8-word entries
+// ending at word 248, the longer block leaving the tail unclaimed.
+#define TABLE_WORD   (SETTINGS_WORD + 2 + BLOCK_WORDS) // right after the global blob
+#define TABLE_MAGIC  0x504B5444u                       // 'PKTD'
+#define ENTRY_WORDS  (BLOCK_WORDS + 2)                 // hash, ~hash, then the block
+#define ENTRY_COUNT  ((255 - TABLE_WORD) / ENTRY_WORDS)
+
+// Version 7's table geometry, kept only to carry its entries across at load:
+// the blob was a word shorter (twelve values pack into three words), so the
+// table began at word 135 and ran seventeen 7-word entries through word 254.
+#define V7_TABLE_WORD  (SETTINGS_WORD + 7)
+#define V7_ENTRY_WORDS 7
+#define V7_ENTRY_COUNT 17
 
 // Version 4's enum order: CPU, gfx0, gfx1, video-1st, BIOS-wr, splash, audio, boost, speaker, stereo,
 // C/MS, composite, display, EMS, EMS-frame, A000, joy1, joy2, swap-joy, sync-joy, d-pad, gamepad.
@@ -780,7 +813,7 @@ static const uint8_t v5_to_v6[11] = {
 };
 #define SETTINGS_V5_COUNT 11
 
-// Write the live values+bindings as one five-word block at `addr`: SET_COUNT
+// Write the live values+bindings as one BLOCK_WORDS block at `addr`: the
 // values packed four per word, then the seven binding codes and the ext
 // bitmap. The layout the global blob and every per-disk entry share.
 static void block_write(uint32_t addr)
@@ -809,19 +842,24 @@ static void block_write(uint32_t addr)
     }
 }
 
-// Adopt a five-word block (the layout block_write makes) as the live settings
-// and bindings. Values are index-checked the way settings_load's are, so an
-// out-of-range byte keeps the index it had.
-static void block_apply(uint32_t addr)
+// Adopt a block (the layout block_write makes) as the live settings and
+// bindings. `count` is the value byte count the block was WRITTEN with -- the
+// blob header's count field, or SET_COUNT for a per-disk entry, which is
+// always current-version. The binding words follow ceil(count/4) value words,
+// so the read pointer walks the stored count even though only the first
+// SET_COUNT bytes can land: a version-6/7 block carries twelve, and index 12
+// keeps its compiled default. Values are index-checked the way
+// settings_load's are, so an out-of-range byte keeps the index it had.
+static void block_apply(uint32_t addr, uint32_t count)
 {
     *FDD_BRAM_ADDR = addr;
     uint32_t word = 0;
-    for (uint32_t i = 0; i < SET_COUNT; i++) {
+    for (uint32_t i = 0; i < count; i++) {
         if ((i & 3) == 0) {
             word = *FDD_BRAM_RDATA;
         }
         uint8_t v = (word >> ((i & 3) * 8)) & 0xFF;
-        if (v < settings[i].count) {
+        if (i < SET_COUNT && v < settings[i].count) {
             settings[i].value = v;
         }
     }
@@ -871,7 +909,7 @@ static void apply_global(void)
     uint32_t head = *FDD_BRAM_RDATA;
     uint32_t version = head & 0xFF;
     if (magic == SETTINGS_MAGIC && version >= 6 && version <= SETTINGS_VERSION) {
-        block_apply(SETTINGS_WORD + 2);
+        block_apply(SETTINGS_WORD + 2, (head >> 8) & 0xFF);
     } else {
         apply_defaults();
     }
@@ -917,6 +955,88 @@ static int table_alloc(void)
     return e;
 }
 
+// Rewrite a version-7 table entry at new-format slot e: the hash pair and the
+// three value words through, the appended index's compiled default as the
+// fourth value word, then the two binding words unmoved.
+static void entry_write(int e, const uint32_t *b)
+{
+    *FDD_BRAM_ADDR = (uint32_t) (TABLE_WORD + 1 + e * ENTRY_WORDS);
+    *FDD_BRAM_WDATA = b[0];
+    *FDD_BRAM_WDATA = b[1];
+    *FDD_BRAM_WDATA = b[2];
+    *FDD_BRAM_WDATA = b[3];
+    *FDD_BRAM_WDATA = b[4];
+    *FDD_BRAM_WDATA = settings_default[SET_DRV_SOUND];
+    *FDD_BRAM_WDATA = b[5];
+    *FDD_BRAM_WDATA = b[6];
+}
+
+// Move a version-7 table to the version-8 layout. The two regions overlap --
+// new entry k lands k+1 words into old entry k and reaches into old k+1/k+2 --
+// so every source word has to be read before its slot can be rewritten. Old
+// slots 14-16 have no same-index destination (and new slots 12/13 overlap
+// them), so the valid ones are stashed first; the shared range then copies
+// top-down, each old entry read whole before its new-format rewrite, and the
+// stashed tails fill whichever new slots stayed free.
+static void table_migrate(void)
+{
+    *FDD_BRAM_ADDR = V7_TABLE_WORD;
+    if (*FDD_BRAM_RDATA != TABLE_MAGIC) {
+        return; // a pre-table blob: nothing to carry across
+    }
+    // Drop the old magic before touching anything: a reset mid-move then finds
+    // no table at all, rather than re-running over half-rewritten entries.
+    *FDD_BRAM_ADDR = V7_TABLE_WORD;
+    *FDD_BRAM_WDATA = 0;
+    uint32_t stash[V7_ENTRY_COUNT - ENTRY_COUNT][V7_ENTRY_WORDS];
+    int tails = 0;
+    for (int e = V7_ENTRY_COUNT - 1; e >= ENTRY_COUNT; e--) {
+        *FDD_BRAM_ADDR = (uint32_t) (V7_TABLE_WORD + 1 + e * V7_ENTRY_WORDS);
+        uint32_t h = *FDD_BRAM_RDATA;
+        uint32_t nh = *FDD_BRAM_RDATA;
+        if (h != 0 && nh == ~h) {
+            stash[tails][0] = h;
+            stash[tails][1] = nh;
+            for (int w = 2; w < V7_ENTRY_WORDS; w++) {
+                stash[tails][w] = *FDD_BRAM_RDATA;
+            }
+            tails++;
+        }
+    }
+    uint16_t filled = 0; // bitmask of new slots holding a migrated profile
+    for (int e = ENTRY_COUNT - 1; e >= 0; e--) {
+        uint32_t b[V7_ENTRY_WORDS];
+        *FDD_BRAM_ADDR = (uint32_t) (V7_TABLE_WORD + 1 + e * V7_ENTRY_WORDS);
+        for (int w = 0; w < V7_ENTRY_WORDS; w++) {
+            b[w] = *FDD_BRAM_RDATA;
+        }
+        if (b[0] != 0 && b[1] == ~b[0]) {
+            entry_write(e, b);
+            filled |= (uint16_t) (1u << e);
+        } else {
+            // A free slot is a null hash pair, never a fragment of the old
+            // layout posing as a profile.
+            *FDD_BRAM_ADDR = (uint32_t) (TABLE_WORD + 1 + e * ENTRY_WORDS);
+            for (int w = 0; w < ENTRY_WORDS; w++) {
+                *FDD_BRAM_WDATA = 0;
+            }
+        }
+    }
+    int e = 0;
+    for (int t = 0; t < tails; t++) {
+        while (e < ENTRY_COUNT && (filled & (uint16_t) (1u << e))) {
+            e++;
+        }
+        if (e >= ENTRY_COUNT) {
+            break; // the table was full -- the extra tail drops
+        }
+        entry_write(e, stash[t]);
+        e++;
+    }
+    *FDD_BRAM_ADDR = TABLE_WORD;
+    *FDD_BRAM_WDATA = TABLE_MAGIC;
+}
+
 void settings_load(void)
 {
     for (uint32_t i = 0; i < SET_COUNT; i++) {
@@ -928,9 +1048,10 @@ void settings_load(void)
     uint32_t version = head & 0xFF;
     if (magic == SETTINGS_MAGIC && version >= 4 && version <= SETTINGS_VERSION) {
         if (version >= 6) {
-            // Versions 6 and 7 lay the global block out identically; the
-            // per-disk table lives behind its own magic.
-            block_apply(SETTINGS_WORD + 2);
+            // The block layout is unchanged since version 6 apart from the
+            // packed value count, which the header carries; the per-disk
+            // table lives behind its own magic.
+            block_apply(SETTINGS_WORD + 2, (head >> 8) & 0xFF);
         } else {
             uint32_t count = (head >> 8) & 0xFF;
             uint32_t values = count;
@@ -984,8 +1105,13 @@ void settings_load(void)
             for (uint32_t i = 0; i < BIND_COUNT; i++) {
                 key_bind_set(i, codes[i], (ext >> i) & 1);
             }
-            // Normalise a remapped blob in place so the global block the mount
-            // paths re-apply is always a current-version one.
+        }
+        if (version < SETTINGS_VERSION) {
+            // An older blob can carry version-7's per-disk table at its old
+            // offset; migrate whatever validates there, then normalise the
+            // blob to the current version in place -- so the global block the
+            // mount paths re-apply is current, and the move never re-runs.
+            table_migrate();
             global_write();
         }
     }
@@ -1058,7 +1184,8 @@ void settings_disk_mounted(uint32_t hash)
     } else {
         disk_slot = table_find(hash);
         if (disk_slot >= 0) {
-            block_apply((uint32_t) (TABLE_WORD + 1 + disk_slot * ENTRY_WORDS + 2));
+            // Table entries are always written at the current block layout.
+            block_apply((uint32_t) (TABLE_WORD + 1 + disk_slot * ENTRY_WORDS + 2), SET_COUNT);
         } else {
             apply_global();
         }
