@@ -100,6 +100,7 @@ set regs {
     39  FDC_REQ+LBA+DMA
     40  FDC_CMD_LO (EOT/GPL/N/R)
     41  FDC_CMD_HI (op/unit/C/H)
+    48  SCSI=mg_rd,post,rom_rd
     255 MAGIC
 }
 

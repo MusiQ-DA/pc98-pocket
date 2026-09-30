@@ -1165,7 +1165,12 @@ module core_top (
             // command bytes themselves -- a failed boot keeps the failing
             // transaction visible here.
             8'h26:   probe_data_c = fdc_dbg[31:0];
-            8'h30:   probe_data_c = {5'b0, scsi_media, dbg_scsi};
+            // SCSI boot witness: the probe window reads only the low 32 bits,
+            // so the counters pack under the state flags. Fields, MSB first:
+            // scsi_media | cmd_ack | cmd_req | mg_rd[4:0] | post[7:0] |
+            // rom_rd[15:0].
+            8'h30:   probe_data_c = {scsi_media, dbg_scsi[33:32],
+                                   dbg_scsi[28:24], dbg_scsi[23:0]};
             8'h27:   probe_data_c = fdc_dbg[63:32];
             8'h28:   probe_data_c = fdc_dbg_cmd[31:0];
             8'h29:   probe_data_c = fdc_dbg_cmd[63:32];
