@@ -50,6 +50,15 @@ module pc98_text_render #(
     // text_tblx2).
     input  wire        wide,
 
+    // The CRTC's text-cell geometry, np21w io/crtc.c ports 0x70-0x7A even:
+    // bl is the rasters per text row MINUS ONE (0x0F = 16 for 25-line mode,
+    // 0x13 = 20 for the 20-line mode dipsw2 bit 3 selects), cl is how many of
+    // those rasters the font occupies (0x10, clamped to 16 by np21w's
+    // TEXT_CL). Rasters cl..bl of a cell are blank -- that gap under the
+    // glyph is exactly what 20-line mode looks like on hardware.
+    input  wire [4:0]  crtc_bl,
+    input  wire [4:0]  crtc_cl,
+
     // The cursor, as the master GDC's CSRW/CSRFORM leave it. The address is
     // a WORD index into the text plane -- the same space gdc_sad and the
     // cell counter below count in -- so the comparison is direct.
@@ -75,7 +84,15 @@ module pc98_text_render #(
     input  wire  [7:0] font_row,
 
     output logic [2:0] grb,             // G,R,B as the attribute orders them
-    output logic       pixel            // this pixel is lit
+    output logic       pixel,           // this pixel is lit
+
+    // Row-boundary strobes for the glyph row buffer, which fills a row ahead
+    // of the raster: tick at the first dot of each row's raster 0, and the
+    // row index that fetch should target (wrapping to 0 when the next row
+    // would start beyond the visible frame -- pitch does not always divide
+    // 400, and the last partial row's fill is the next frame's row 0).
+    output wire        txt_row_tick,
+    output wire [4:0]  txt_next_row
 );
 
     wire visible = (hcount < 10'd640) && (vcount < 10'd400);
@@ -83,9 +100,35 @@ module pc98_text_render #(
     // `col` counts COLUMNS, not cells: a wide column is sixteen dots (two
     // cells' worth), a narrow one eight.
     wire [6:0] col  = wide ? {1'b0, hcount[9:4]} : hcount[9:3];
-    wire [3:0] line = vcount[3:0];     // the line being DRAWN; the fetch's is below
     wire [2:0] dot  = hcount[2:0];     // dot within a narrow cell
     wire [3:0] cdot = hcount[3:0];     // dot within a wide cell
+
+    // Row geometry is combinational on vcount -- the pitch comes from the
+    // CRTC's BL register, so raster-within-cell and row-within-frame are
+    // vcount mod and div by bl+1. The case covers the pitches the BIOS's
+    // mode table actually writes (16, 20, and the 200-line pair 8/10); the
+    // constant divisors cost a couple of small adders. Anything else falls
+    // back to the 16-raster cell this always was.
+    function automatic [4:0] cell_raster(input [9:0] v);
+        case (crtc_bl)
+            5'h0F:   cell_raster = {1'b0, v[3:0]};
+            5'h13:   cell_raster = 5'(v % 10'd20);
+            5'h07:   cell_raster = {2'b00, v[2:0]};
+            5'h09:   cell_raster = 5'(v % 10'd10);
+            default: cell_raster = {1'b0, v[3:0]};
+        endcase
+    endfunction
+    function automatic [4:0] cell_row(input [9:0] v);
+        case (crtc_bl)
+            5'h0F:   cell_row = v[8:4];
+            5'h13:   cell_row = 5'(v / 10'd20);
+            5'h07:   cell_row = v[8:3];
+            5'h09:   cell_row = 5'(v / 10'd10);
+            default: cell_row = v[8:4];
+        endcase
+    endfunction
+    wire [4:0] raster_q = cell_raster(vcount);   // raster being drawn
+    wire [4:0] row_q    = cell_row(vcount);      // text row being drawn
 
     // The FETCH position: the raster cell one character time ahead of the one
     // being drawn, which is where the memories' one cycle of latency is paid
@@ -115,7 +158,9 @@ module pc98_text_render #(
                           ? ((vcount == 10'(V_TOTAL - 1)) ? 10'd0 : vcount + 10'd1)
                           : vcount;
     wire [6:0]  next_col  = last_char ? 7'd0 : col + 7'd1;
-    wire [4:0]  next_row  = next_v[8:4];
+    // The fetch's position in (row, raster) space is the next scanline's.
+    wire [4:0]  pf_raster = cell_raster(next_v);
+    wire [4:0]  next_row  = cell_row(next_v);
 
     // ---- where the screen starts, and how wide a row is -------------------
     //
@@ -153,7 +198,7 @@ module pc98_text_render #(
     // start and pitch. next_* above is where the memories are pointed (one
     // character time ahead); this is where the shift register is emptying.
     // (Named draw_row because cur_row is the glyph register below.)
-    wire [4:0]  draw_row  = vcount[8:4];
+    wire [4:0]  draw_row  = row_q;
     wire [11:0] draw_rowbase = gdc_live
         ? 12'(draw_row * eff_pitch)
         : ({1'b0, draw_row, 6'd0} + {3'b000, draw_row, 4'd0});
@@ -165,14 +210,14 @@ module pc98_text_render #(
     // close enough to the machine's own ~2 Hz until someone needs the exact
     // CSRFORM rate.
     wire cursor_here = cur_en & (drawn_cell == cur_addr[11:0]);
-    wire cursor_line = cursor_here & (line >= cur_top) & (line <= cur_bot);
+    wire cursor_line = cursor_here & (raster_q >= cur_top) & (raster_q <= cur_bot);
     wire cursor_show = cursor_line & (~cur_blink | blink_on);
 
     assign tv_cell = next_cell;
 
     // Latched at the point the TVRAM answer is valid.
     logic [7:0] q_attr;
-    assign font_line = next_v[3:0];
+    assign font_line = pf_raster[3:0];
     // The row buffer's slot equals the cell's offset within the row: double
     // the column when wide.
     assign font_cell = wide ? {next_col[5:0], 1'b0} : next_col;
@@ -215,14 +260,29 @@ module pc98_text_render #(
     wire underline =  cur_attr[3];
     wire vertline  =  cur_attr[4];
 
-    // Underline is the bottom line of the cell; the vertical line sits at the
-    // left edge.
-    wire deco = (underline && (line == 4'd15))
+    // Underline is the cell's LAST raster -- np21w maketext.c draws it at
+    // nowline+1 == TEXT_BL, so at 20-line pitch it rides raster 19, not 15.
+    // The vertical line sits at the left edge.
+    wire deco = (underline && (raster_q == crtc_bl))
               || (vertline && (wide ? (cdot == 4'd0) : (dot == 3'd0)));
+
+    // Rasters cl..bl of a cell carry no font at all (np21w gates the fetch on
+    // nowline < TEXT_CL; cl itself is clamped to the font's 16 rows).
+    wire [4:0] cl_eff    = (crtc_cl > 5'd16) ? 5'd16 : crtc_cl;
+    wire       row_blank = (raster_q >= cl_eff);
+
+    // The row-buffer cadence the glyph prefetcher runs on: raster 0 of every
+    // row, and the row that starts one pitch hence (row 0 once the next row
+    // would begin past the visible frame).
+    assign txt_row_tick = pix_ce & (hcount == 10'd0) & (raster_q == 5'd0)
+                        & (vcount < 10'd400);
+    wire [9:0] row_pitch  = {5'd0, crtc_bl} + 10'd1;
+    wire [9:0] next_row_v = vcount + row_pitch;
+    assign txt_next_row = (next_row_v >= 10'd400) ? 5'd0 : cell_row(next_row_v);
 
     always_comb begin
         logic lit;
-        lit = glyph | deco;
+        lit = (glyph & ~row_blank) | deco;
         if (secret)                lit = 1'b0;
         else if (blink & ~blink_on) lit = 1'b0;
         if (reverse)               lit = ~lit;

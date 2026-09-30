@@ -86,6 +86,17 @@ enum {
     // byte for this index and it keeps its compiled default on load. The menu
     // row itself is in items_hw, right after FDD Turbo.
     SET_DRV_SOUND,
+    // Machine -- appended above SET_COUNT, so a version-8 blob has no bytes
+    // for these indices and they keep their compiled defaults on load. The
+    // menu rows live in items_machine; the index order is the SET_IDX_*
+    // decode softcpu_subsystem composes the machine-config bytes from.
+    SET_TXT_LINES,
+    SET_TXT_COLS,
+    SET_BOOT_BSC,
+    SET_BOOT_DEV,
+    SET_RAM_SZ,
+    SET_DEL_BS,
+    SET_EXTROM,
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
@@ -121,6 +132,21 @@ static const char *const opt_fdd_turbo[] = { "On", "Off" };
 // mechanism the synth is built around.
 static const char *const opt_drv_sound[] = { "Off", "5.25\"", "3.5\"" };
 
+// The machine-config rows drive the dipsw2 / A3FE* compose bytes in
+// softcpu_subsystem, where the option index IS the decoded value: Boot
+// Device's packed list matches the boot_nib case exactly, and opt_ram_sz
+// puts 640 KB at index 0 because an unwritten register reads 0 and the RTL
+// maps any index outside 1-4 to the full 640 as well. Boot Order reads
+// disks-first at index 0 -- the RTL inverts it into dipsw2 bit 0.
+static const char *const opt_txt_lines[] = { "25 Lines", "20 Lines" };
+static const char *const opt_txt_cols[] = { "80 Cols", "40 Cols" };
+static const char *const opt_boot_bsc[] = { "Disks First", "ROM BASIC" };
+static const char *const opt_boot_dev[] = { "Standard", "640KB FDD", "1MB FDD", "ROM BASIC",
+    "HDD #1", "HDD #2", "SCSI HDD" };
+static const char *const opt_ram_sz[] = { "640 KB", "128 KB", "256 KB", "384 KB", "512 KB" };
+static const char *const opt_off_on[] = { "Off", "On" };
+static const char *const opt_extrom[] = { "Absent", "Present" };
+
 static const char *const opt_dpad[] = { "Numpad", "Numpad w/ Diag.", "Arrows", "WASD", "HJKL",
     "HJKL w/ YUBN" };
 static const char *const opt_gamepad[] = { "Keyboard", "Joystick", "Mouse" };
@@ -135,7 +161,8 @@ typedef struct {
 #define SETTING_D(a, d) { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), (d) }
 
 // Older blobs still load -- settings_load remaps their indices
-// through the version tables below -- and the next save writes version 6.
+// through the version tables below -- and the next save writes the
+// current version.
 static setting_t settings[SET_COUNT] = {
     // Index 1 is the faithful clock: a PC-9801VM/VX's V30 at 2.4576 MHz x4.
     // The default is index 2 anyway, because v30_cpu_bridge splits every word
@@ -158,6 +185,16 @@ static setting_t settings[SET_COUNT] = {
     SETTING_D(opt_dis_en, 1), // SET_DISK_LED (default on)
     SETTING_D(opt_extmem, 3), // SET_EXTMEM (default 8 MB: the full SDRAM pool)
     SETTING_D(opt_drv_sound, 1), // SET_DRV_SOUND -- the appended index; default 5.25"
+    // The v9-appended indices. Everything defaults to option 0 except Ext
+    // ROM: the SCSI option ROM at D2000 is always fitted, so the window
+    // ships Present.
+    SETTING(opt_txt_lines),      // SET_TXT_LINES
+    SETTING(opt_txt_cols),       // SET_TXT_COLS
+    SETTING(opt_boot_bsc),       // SET_BOOT_BSC
+    SETTING(opt_boot_dev),       // SET_BOOT_DEV
+    SETTING(opt_ram_sz),         // SET_RAM_SZ -- index 0, like an unwritten slot, means 640 KB
+    SETTING(opt_off_on),         // SET_DEL_BS
+    SETTING_D(opt_extrom, 1),    // SET_EXTROM
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
@@ -181,13 +218,14 @@ typedef struct {
     uint8_t arg;
 } item_t;
 
-enum { MENU_MAIN, MENU_SYSTEM, MENU_AV, MENU_HW, MENU_CONTROLS, MENU_COUNT };
+enum { MENU_MAIN, MENU_SYSTEM, MENU_AV, MENU_HW, MENU_MACHINE, MENU_CONTROLS, MENU_COUNT };
 enum { ACT_DEFAULTS, ACT_RESET_PC };
 
 static const item_t items_main[] = {
     { "System", IT_SUBMENU, MENU_SYSTEM },
     { "Audio & Video", IT_SUBMENU, MENU_AV },
     { "Hardware", IT_SUBMENU, MENU_HW },
+    { "Machine", IT_SUBMENU, MENU_MACHINE },
     { "Controls", IT_SUBMENU, MENU_CONTROLS },
     { "", IT_SPACER, 0 },
     { "Reset to Defaults", IT_ACTION, ACT_DEFAULTS },
@@ -231,6 +269,22 @@ static const item_t items_hw[] = {
     { "Disk LED", IT_OPTION, SET_DISK_LED },
 };
 
+// The machine-config bytes: DIP SW2's text geometry and boot switches,
+// then the A3FE* system-control fields. RAM Size sits unseparated with the
+// DEL/Ext-ROM pair it shares those bytes with -- the panel's nine item
+// rows leave no room for a third spacer.
+static const item_t items_machine[] = {
+    { "Text Rows", IT_OPTION, SET_TXT_LINES },
+    { "Text Cols", IT_OPTION, SET_TXT_COLS },
+    { "", IT_SPACER, 0 },
+    { "Boot Order", IT_OPTION, SET_BOOT_BSC },
+    { "Boot Device", IT_OPTION, SET_BOOT_DEV },
+    { "", IT_SPACER, 0 },
+    { "RAM Size", IT_OPTION, SET_RAM_SZ },
+    { "DEL as BS", IT_OPTION, SET_DEL_BS },
+    { "Ext ROM D0000", IT_OPTION, SET_EXTROM },
+};
+
 // Gamepad Mode picks what controller 1 drives: the D-pad preset and button binds below take effect
 // only in its Keyboard mode. L1 is absent because it stays the fixed VKB toggle. Each button row
 // cycles its binding through Unmapped, the OSD functions, the named key set in keybind_cycle, and a
@@ -260,6 +314,7 @@ static const menu_t menus[MENU_COUNT] = {
     MENU("System", items_system),
     MENU("Audio & Video", items_av),
     MENU("Hardware", items_hw),
+    MENU("Machine", items_machine),
     MENU("Controls", items_controls),
 };
 
@@ -769,8 +824,18 @@ void settings_reset_tick(void)
 // five-word block applies its twelve values and index 12 keeps its compiled
 // default. A version-7 table is carried across by table_migrate at load, and
 // the blob is rewritten at version 8 so the move runs once.
+//
+// VERSION 9 APPENDS SEVEN SETTINGS (indices 13-19, the Machine rows), and a
+// twentieth value crosses the next word boundary: the block grows to seven
+// words, the global blob to nine, and the table shifts up a word -- word
+// 137, nine-word entries, thirteen of which fit (137 + 1 + 13*9 = 255).
+// Older blocks still load the same way: a version-8 block applies its
+// thirteen values and indices 13-19 keep their compiled defaults. A
+// version-8 table is carried across by table_migrate at load -- only the
+// immediately-prior layout is, so a version-7 table drops -- and the blob
+// is rewritten at version 9 so the move runs once.
 #define SETTINGS_MAGIC   0x50435853u
-#define SETTINGS_VERSION 8u
+#define SETTINGS_VERSION 9u
 #define SETTINGS_WORD    128
 
 // The block a profile is: the packed values, then the binding block (the
@@ -780,19 +845,19 @@ void settings_reset_tick(void)
 #define BLOCK_WORDS (VALUE_WORDS + BIND_WORDS)
 
 // The table occupies the rest of the window: magic at TABLE_WORD, then the
-// entries through the window's last word at 255 -- fourteen 8-word entries
-// ending at word 248, the longer block leaving the tail unclaimed.
+// entries through the window's last word at 255 -- thirteen 9-word entries
+// ending at word 254, the longer block leaving the tail unclaimed.
 #define TABLE_WORD   (SETTINGS_WORD + 2 + BLOCK_WORDS) // right after the global blob
 #define TABLE_MAGIC  0x504B5444u                       // 'PKTD'
 #define ENTRY_WORDS  (BLOCK_WORDS + 2)                 // hash, ~hash, then the block
 #define ENTRY_COUNT  ((255 - TABLE_WORD) / ENTRY_WORDS)
 
-// Version 7's table geometry, kept only to carry its entries across at load:
-// the blob was a word shorter (twelve values pack into three words), so the
-// table began at word 135 and ran seventeen 7-word entries through word 254.
-#define V7_TABLE_WORD  (SETTINGS_WORD + 7)
-#define V7_ENTRY_WORDS 7
-#define V7_ENTRY_COUNT 17
+// Version 8's table geometry, kept only to carry its entries across at load:
+// the blob was a word shorter (thirteen values pack into four words), so the
+// table began at word 136 and ran fourteen 8-word entries through word 248.
+#define V8_TABLE_WORD  (SETTINGS_WORD + 8)
+#define V8_ENTRY_WORDS 8
+#define V8_ENTRY_COUNT 14
 
 // Version 4's enum order: CPU, gfx0, gfx1, video-1st, BIOS-wr, splash, audio, boost, speaker, stereo,
 // C/MS, composite, display, EMS, EMS-frame, A000, joy1, joy2, swap-joy, sync-joy, d-pad, gamepad.
@@ -955,9 +1020,12 @@ static int table_alloc(void)
     return e;
 }
 
-// Rewrite a version-7 table entry at new-format slot e: the hash pair and the
-// three value words through, the appended index's compiled default as the
-// fourth value word, then the two binding words unmoved.
+// Rewrite a version-8 table entry at new-format slot e: the hash pair and
+// the four value words through -- the old block's last value word pads
+// indices 13-15 with zeroes, which is every one of those settings'
+// compiled default -- then the appended indices 16-19 as one word of
+// compiled defaults packed the way block_write packs them, and the two
+// binding words unmoved.
 static void entry_write(int e, const uint32_t *b)
 {
     *FDD_BRAM_ADDR = (uint32_t) (TABLE_WORD + 1 + e * ENTRY_WORDS);
@@ -966,38 +1034,43 @@ static void entry_write(int e, const uint32_t *b)
     *FDD_BRAM_WDATA = b[2];
     *FDD_BRAM_WDATA = b[3];
     *FDD_BRAM_WDATA = b[4];
-    *FDD_BRAM_WDATA = settings_default[SET_DRV_SOUND];
     *FDD_BRAM_WDATA = b[5];
+    uint32_t word = 0;
+    for (uint32_t i = SET_BOOT_DEV; i < SET_COUNT; i++) {
+        word |= (uint32_t) settings_default[i] << ((i & 3) * 8);
+    }
+    *FDD_BRAM_WDATA = word;
     *FDD_BRAM_WDATA = b[6];
+    *FDD_BRAM_WDATA = b[7];
 }
 
-// Move a version-7 table to the version-8 layout. The two regions overlap --
+// Move a version-8 table to the version-9 layout. The two regions overlap --
 // new entry k lands k+1 words into old entry k and reaches into old k+1/k+2 --
 // so every source word has to be read before its slot can be rewritten. Old
-// slots 14-16 have no same-index destination (and new slots 12/13 overlap
-// them), so the valid ones are stashed first; the shared range then copies
-// top-down, each old entry read whole before its new-format rewrite, and the
-// stashed tails fill whichever new slots stayed free.
+// slot 13 has no same-index destination (and new slots 11/12 overlap it), so
+// a valid tail is stashed first; the shared range then copies top-down, each
+// old entry read whole before its new-format rewrite, and the stashed tail
+// fills whichever new slot stayed free.
 static void table_migrate(void)
 {
-    *FDD_BRAM_ADDR = V7_TABLE_WORD;
+    *FDD_BRAM_ADDR = V8_TABLE_WORD;
     if (*FDD_BRAM_RDATA != TABLE_MAGIC) {
         return; // a pre-table blob: nothing to carry across
     }
     // Drop the old magic before touching anything: a reset mid-move then finds
     // no table at all, rather than re-running over half-rewritten entries.
-    *FDD_BRAM_ADDR = V7_TABLE_WORD;
+    *FDD_BRAM_ADDR = V8_TABLE_WORD;
     *FDD_BRAM_WDATA = 0;
-    uint32_t stash[V7_ENTRY_COUNT - ENTRY_COUNT][V7_ENTRY_WORDS];
+    uint32_t stash[V8_ENTRY_COUNT - ENTRY_COUNT][V8_ENTRY_WORDS];
     int tails = 0;
-    for (int e = V7_ENTRY_COUNT - 1; e >= ENTRY_COUNT; e--) {
-        *FDD_BRAM_ADDR = (uint32_t) (V7_TABLE_WORD + 1 + e * V7_ENTRY_WORDS);
+    for (int e = V8_ENTRY_COUNT - 1; e >= ENTRY_COUNT; e--) {
+        *FDD_BRAM_ADDR = (uint32_t) (V8_TABLE_WORD + 1 + e * V8_ENTRY_WORDS);
         uint32_t h = *FDD_BRAM_RDATA;
         uint32_t nh = *FDD_BRAM_RDATA;
         if (h != 0 && nh == ~h) {
             stash[tails][0] = h;
             stash[tails][1] = nh;
-            for (int w = 2; w < V7_ENTRY_WORDS; w++) {
+            for (int w = 2; w < V8_ENTRY_WORDS; w++) {
                 stash[tails][w] = *FDD_BRAM_RDATA;
             }
             tails++;
@@ -1005,9 +1078,9 @@ static void table_migrate(void)
     }
     uint16_t filled = 0; // bitmask of new slots holding a migrated profile
     for (int e = ENTRY_COUNT - 1; e >= 0; e--) {
-        uint32_t b[V7_ENTRY_WORDS];
-        *FDD_BRAM_ADDR = (uint32_t) (V7_TABLE_WORD + 1 + e * V7_ENTRY_WORDS);
-        for (int w = 0; w < V7_ENTRY_WORDS; w++) {
+        uint32_t b[V8_ENTRY_WORDS];
+        *FDD_BRAM_ADDR = (uint32_t) (V8_TABLE_WORD + 1 + e * V8_ENTRY_WORDS);
+        for (int w = 0; w < V8_ENTRY_WORDS; w++) {
             b[w] = *FDD_BRAM_RDATA;
         }
         if (b[0] != 0 && b[1] == ~b[0]) {
@@ -1107,11 +1180,15 @@ void settings_load(void)
             }
         }
         if (version < SETTINGS_VERSION) {
-            // An older blob can carry version-7's per-disk table at its old
-            // offset; migrate whatever validates there, then normalise the
-            // blob to the current version in place -- so the global block the
-            // mount paths re-apply is current, and the move never re-runs.
-            table_migrate();
+            // Only the immediately-prior blob version's per-disk table is
+            // carried -- an older blob's table sits at an offset this
+            // firmware does not read, so it drops. Migrate whatever
+            // validates there, then normalise the blob to the current
+            // version in place -- so the global block the mount paths
+            // re-apply is current, and the move never re-runs.
+            if (version == SETTINGS_VERSION - 1) {
+                table_migrate();
+            }
             global_write();
         }
     }

@@ -69,7 +69,8 @@ module tb_pc98_firstcell;
         .wide(1'b0),
         .tv_cell(tv_cell), .tv_attr(tv_attr),
         .font_cell(font_cell), .font_line(font_line), .font_row(font_row),
-        .grb(grb), .pixel(pixel)
+        .grb(grb), .pixel(pixel),
+        .crtc_bl(5'h0F), .crtc_cl(5'h10)
     );
 
     // ------------------------------------------------------------ the screen

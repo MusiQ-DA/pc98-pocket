@@ -139,6 +139,14 @@ module PERIPHERALS #(
         // pacing and the fixed per-sector wait. The settings file lives on
         // this clock (clk_sys IS this clock), so no synchroniser.
         input   logic           fdd_turbo,
+        // Machine configuration, composed in the softcore from the Settings
+        // rows. cfg_dipsw2 is the whole DIP-switch-2 byte port 0x31 returns;
+        // the cfg_a3f* bytes override the tvram's memory-switch cells A3FEA /
+        // A3FEE / A3FF2 on read.
+        input   logic   [7:0]   cfg_dipsw2,
+        input   logic   [7:0]   cfg_a3fea,
+        input   logic   [7:0]   cfg_a3fee,
+        input   logic   [7:0]   cfg_a3ff2,
         // The calendar, packed the way pc98_upd4990 wants it (see the module):
         // year BCD, month<<4|week, day, hour, min, sec -- from the Pocket's
         // bridge RTC. A PC-98 reads the date off this chip's serial line.
@@ -989,8 +997,10 @@ module PERIPHERALS #(
     // the tvram's to hold, pre-seeded at reset, not the ROM's to rewrite.
     // Bit 0 is boot-first (int 1E, skip IVT[1F]) and bit 1 skips the
     // protected-mode block described above.
+    // The byte itself now comes from the softcore's settings composition
+    // (cfg_dipsw2); its default is still 0xE3.
     wire [7:0] sysport_data = sysport_35_select ? pc98_sysport_c
-                            : sysport_31_select ? 8'hE3
+                            : sysport_31_select ? cfg_dipsw2
                             : sysport_33_select ? (8'h08 | {7'd0, upd4990_cdat})
                             : sysport_42_select ? 8'h02
                             :                     8'h00;
@@ -1086,6 +1096,8 @@ module PERIPHERALS #(
     logic        gdc_wide_px;
     logic gdc_cur_en_s1, gdc_cur_en_px;
     logic gdc_cur_bl_s1, gdc_cur_bl_px;
+    logic [4:0] crtc_bl_px = 5'h0F, crtc_cl_px = 5'h10;
+    logic [4:0] crtc_b [0:5];     // the CRTC file -- written at 0x70-0x7A below
 
     always_ff @(posedge clk_pc98_dot) begin
         gdc_on_s1  <= gdc_m_disp_on;  gdc_on_px  <= gdc_on_s1;
@@ -1103,13 +1115,16 @@ module PERIPHERALS #(
             // The 40-column switch, sampled the same way: a mode flip mid-frame
             // would only tear one frame's worth of columns.
             gdc_wide_px     <= pc98_mode1[2];
+            // CRTC cell geometry -- bl+1 rasters per row, cl of them font.
+            crtc_bl_px      <= crtc_b[1];
+            crtc_cl_px      <= crtc_b[2];
         end
     end
 
     pc98_text_render u_pc98_text (
         .clk(clk_pc98_dot), .pix_ce(1'b1),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px), .gdc_sad(gdc_sad_px),
-        .wide(gdc_wide_px),
+        .wide(gdc_wide_px), .crtc_bl(crtc_bl_px), .crtc_cl(crtc_cl_px),
         .cur_addr(gdc_cur_addr_px), .cur_en(gdc_cur_en_px),
         .cur_blink(gdc_cur_bl_px),
         .cur_top(gdc_cur_top_px), .cur_bot(gdc_cur_bot_px),
@@ -1117,7 +1132,8 @@ module PERIPHERALS #(
         .tv_cell(tvram_vid_cell_w), .tv_attr(tvram_vid_attr),
         .font_cell(pc98_font_cell), .font_line(pc98_font_line),
         .font_row(pc98_font_row),
-        .grb(pc98_grb), .pixel(pc98_pixel)
+        .grb(pc98_grb), .pixel(pc98_pixel),
+        .txt_row_tick(txt_row_tick), .txt_next_row(txt_next_row)
     );
 
     // The graphics half of the picture: the slave GDC's planes, fetched a
@@ -1181,9 +1197,14 @@ module PERIPHERALS #(
     wire       pc98_fill_busy;
 
     // One pulse at the top of each text row, on the dot clock: line 0 of the
-    // cell, first dot. The row FETCHED is the NEXT one, because the buffer is
-    // double-buffered and the renderer is reading the row being displayed.
-    wire pc98_row_tick = pc98_de && (pc98_h == 10'd0) && (pc98_v[3:0] == 4'd0);
+    // cell, first dot. The renderer owns the cadence now -- its raster/row
+    // counters track the CRTC's cell pitch, so the tick and the row index it
+    // hands out stay right when the BIOS picks a 20-line mode.
+    // The row FETCHED is the NEXT one, because the buffer is double-buffered
+    // and the renderer is reading the row being displayed.
+    wire       txt_row_tick;
+    wire [4:0] txt_next_row;
+    wire       pc98_row_tick = txt_row_tick;
     logic pc98_row_tick_q;
     always_ff @(posedge clk_pc98_dot) pc98_row_tick_q <= pc98_row_tick;
     wire pc98_row_start = pc98_row_tick & ~pc98_row_tick_q;
@@ -1196,7 +1217,7 @@ module PERIPHERALS #(
 
     // LOW12(SAD + row*PITCH) for the row after the one on screen; falls
     // back to row*80 while the master GDC is unprogrammed.
-    wire [4:0]  pc98_next_row  = (pc98_v[8:4] == 5'd24) ? 5'd0 : pc98_v[8:4] + 5'd1;
+    wire [4:0]  pc98_next_row  = txt_next_row;
     wire [11:0] pc98_row_base;
     pc98_text_rowbase u_pc98_text_rowbase (
         .gdc_on(gdc_m_disp_on), .gdc_pitch(gdc_m_pitch),
@@ -1368,6 +1389,30 @@ module PERIPHERALS #(
     end
 
     assign egc_wr = io_write_n & ~egc_prev_wr_n & egc_cs;
+
+    // ---- CRTC text-cell geometry ---------------------------------------
+    //
+    // np21w io/crtc.c: even ports 0x70-0x7A write b[0..5] = {pl, bl, cl,
+    // ssl, sur, sdr}, five bits each. bl+1 is the text row's raster pitch
+    // (maketext's TEXT_BL) and cl how many of them carry font (TEXT_CL,
+    // clamped to 16): the BIOS writes bl=0x13 for the 20-line mode that
+    // dipsw2 bit 3 selects. pl/ssl/sur/sdr are the scroll-split registers --
+    // captured for completeness, unused until smooth scroll is modelled.
+    wire crtc_cs = pc98_io & ~address[0] & (address[7:4] == 4'h7)
+                 & (address[3:1] <= 3'd5);
+    always_ff @(posedge clock) begin
+        if (reset) begin
+            // np21w crtc_biosreset, the dipsw[0] bit-0-clear (24 kHz) set.
+            crtc_b[0] <= 5'd0;              // pl
+            crtc_b[1] <= 5'h0F;             // bl: 16-raster cells, 25 rows
+            crtc_b[2] <= 5'h10;             // cl: all sixteen font rasters
+            crtc_b[3] <= 5'd0;              // ssl
+            crtc_b[4] <= 5'd0;              // sur
+            crtc_b[5] <= 5'd0;              // sdr
+        end else if (crtc_cs & ~io_write_n) begin
+            crtc_b[address[3:1]] <= internal_data_bus[4:0];
+        end
+    end
 
     // The GRCG's own two ports. 0x7C is the mode register (and writing it
     // resets the tile counter); 0x7E walks the four tile registers.
@@ -1599,7 +1644,12 @@ module PERIPHERALS #(
         // The attribute to the renderer, on the dot clock.
         .vid_clk     (clk_pc98_dot),
         .vid_cell    (tvram_vid_cell),
-        .vid_attr    (tvram_vid_attr)
+        .vid_attr    (tvram_vid_attr),
+        // Settings-driven overrides for the memory-switch bytes the Settings
+        // UI owns (A3FEA RAM size, A3FEE option-ROM mask, A3FF2 boot device).
+        .cfg_a3fea   (cfg_a3fea),
+        .cfg_a3fee   (cfg_a3fee),
+        .cfg_a3ff2   (cfg_a3ff2)
     );
 
 

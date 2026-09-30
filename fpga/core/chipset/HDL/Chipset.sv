@@ -138,6 +138,12 @@ module CHIPSET #(
         // pacing while set. The settings file and this module share a clock
         // domain, so the bit arrives on a plain wire.
         input   logic           fdd_turbo,
+        // Machine configuration bytes, composed in the softcore: DIP switch 2
+        // for port 0x31 and the Settings-owned memory-switch cells.
+        input   logic   [7:0]   cfg_dipsw2,
+        input   logic   [7:0]   cfg_a3fea,
+        input   logic   [7:0]   cfg_a3fee,
+        input   logic   [7:0]   cfg_a3ff2,
         input   logic   [47:0]  rtc_time,
         output  logic   [1:0]   fdd_present,
         output  logic   [1:0]   fdd_request,
@@ -399,6 +405,10 @@ module CHIPSET #(
         .mgmt_writedata                     (mgmt_writedata),
         .floppy_wp                          (floppy_wp),
         .fdd_turbo                          (fdd_turbo),
+        .cfg_dipsw2                         (cfg_dipsw2),
+        .cfg_a3fea                          (cfg_a3fea),
+        .cfg_a3fee                          (cfg_a3fee),
+        .cfg_a3ff2                          (cfg_a3ff2),
         .rtc_time                           (rtc_time),
         .fdd_present                        (fdd_present),
         .fdd_request                        (fdd_request),

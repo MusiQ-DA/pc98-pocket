@@ -112,7 +112,8 @@ module tb_cursor_cdc;
         .cur_top(gdc_cur_top_px), .cur_bot(gdc_cur_bot_px),
         .tv_cell(tv_cell), .tv_attr(tv_attr),
         .font_cell(font_cell), .font_line(font_line), .font_row(font_row),
-        .grb(grb), .pixel(pixel)
+        .grb(grb), .pixel(pixel),
+        .crtc_bl(5'h0F), .crtc_cl(5'h10)
     );
 
     int errors = 0;

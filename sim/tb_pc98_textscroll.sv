@@ -66,7 +66,8 @@ module tb_pc98_textscroll;
         .fil_clk(clk),   .fil_cell(fil_cell),
         .fil_char_lo(fil_char_lo), .fil_char_hi(fil_char_hi),
         .vid_clk(clk_dot), .vid_cell(vid_cell), .vid_attr(vid_attr),
-        .dbg_cell(12'd0), .dbg_own(1'b0), .dbg_word()
+        .dbg_cell(12'd0), .dbg_own(1'b0), .dbg_word(),
+        .cfg_a3fea(8'h04), .cfg_a3fee(8'h00), .cfg_a3ff2(8'h01)
     );
 
     // --------------------------------------------- the row-base mapper
@@ -128,7 +129,8 @@ module tb_pc98_textscroll;
         .cur_top(5'd0), .cur_bot(5'd15),
         .tv_cell(vid_cell), .tv_attr(vid_attr),
         .font_cell(font_cell), .font_line(font_line),
-        .font_row(8'h00), .grb(grb), .pixel(pixel)
+        .font_row(8'h00), .grb(grb), .pixel(pixel),
+        .crtc_bl(5'h0F), .crtc_cl(5'h10)
     );
 
     // The raster free-runs like pc98_video_timing's 848x440.

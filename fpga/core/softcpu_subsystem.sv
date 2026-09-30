@@ -109,6 +109,13 @@ module softcpu_subsystem (
     output        osd_dbl_skip,
     output        osd_fdd_turbo,
     output  [1:0] osd_snd_mode,
+    // Machine configuration, composed from the Settings rows into the bytes
+    // the guest actually reads: DIP switch 2 on port 0x31 and the three
+    // memory-switch cells pc98_tvram exposes.
+    output  [7:0] osd_dipsw2,
+    output  [7:0] osd_a3fea,
+    output  [7:0] osd_a3fee,
+    output  [7:0] osd_a3ff2,
 
     // Virtual-keyboard key event: {make, Set-2 code}, with a strobe that toggles
     // per firmware write so pocket_keyboard pushes exactly one queue entry.
@@ -340,6 +347,13 @@ module softcpu_subsystem (
     localparam SET_IDX_DISK_LED  = 5'd10;  // on-screen access lamp
     localparam SET_IDX_EXTMEM    = 5'd11;  // EMS board's fitted size
     localparam SET_IDX_SND_MODE  = 5'd12;  // drive-noise synth: 0 off / 1 = 5.25" / 2 = 3.5"
+    localparam SET_IDX_TXT_LINES = 5'd13;  // 0 = 25 rows / 1 = 20 rows (dipsw2 bit 3)
+    localparam SET_IDX_TXT_COLS  = 5'd14;  // 0 = 80 cols / 1 = 40 cols (dipsw2 bit 2)
+    localparam SET_IDX_BOOT_BSC  = 5'd15;  // 0 = disks first / 1 = ROM BASIC (inverted dipsw2 bit 0)
+    localparam SET_IDX_BOOT_DEV  = 5'd16;  // A3FF2 high nibble: 0 std / 2 = 640K FD / 4 = 1M FD / 8 = BASIC / A = HD1 / B = HD2 / C = SCSI
+    localparam SET_IDX_RAM_SZ    = 5'd17;  // 1-5 = 128-640 KB in 128 KB units (0 = unset -> 640)
+    localparam SET_IDX_DEL_BS    = 5'd18;  // A3FEA bit 7: DEL key emits BS
+    localparam SET_IDX_EXTROM    = 5'd19;  // A3FEE bit 4: option ROM present in the D0000 window
     // index 8 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
     localparam SET_IDX_GAMEPAD   = 5'd9;   // Controls
     reg [7:0] osd_settings [0:31];
@@ -362,6 +376,40 @@ module softcpu_subsystem (
     assign osd_dbl_skip  = osd_settings[SET_IDX_MODE200][0];
     assign osd_fdd_turbo = ~osd_settings[SET_IDX_FDD_TURBO][0];
     assign osd_snd_mode  = osd_settings[SET_IDX_SND_MODE][1:0];
+
+    // Machine configuration bytes. Bits the Settings rows do not own are
+    // pinned to the 0xE3 / 0x04 / 0x00 / 0x01 defaults the machine has always
+    // shipped: dipsw2 bit 4 must stay clear (it asks the ROM to re-initialise
+    // the memory switch, which the tvram write-protects) and bit 1 set (it
+    // skips the BIOS's 286 protected-mode sizing block). An unwritten
+    // osd_settings word reads zero, and every compose below is arranged so
+    // that zero means the default byte.
+    assign osd_dipsw2 = {3'b111, 1'b0,
+                         osd_settings[SET_IDX_TXT_LINES][0],
+                         osd_settings[SET_IDX_TXT_COLS][0],
+                         1'b1, ~osd_settings[SET_IDX_BOOT_BSC][0]};
+    wire [2:0] ram_units = ((osd_settings[SET_IDX_RAM_SZ] >= 8'd1)
+                         && (osd_settings[SET_IDX_RAM_SZ] <= 8'd5))
+                         ? 3'(osd_settings[SET_IDX_RAM_SZ][2:0] - 3'd1)
+                         : 3'd4;
+    assign osd_a3fea  = {osd_settings[SET_IDX_DEL_BS][0], 4'b0000, ram_units};
+    assign osd_a3fee  = {3'b000, osd_settings[SET_IDX_EXTROM][0], 4'b0000};
+    // BOOT_DEV packs the SW5 nibble values without holes so the Settings row
+    // can be a plain list: 0 = std, 1 = 640K FD, 2 = 1M FD, 3 = BASIC,
+    // 4 = HD#1, 5 = HD#2, 6 = SCSI HD.
+    logic [3:0] boot_nib;
+    always_comb begin
+        case (osd_settings[SET_IDX_BOOT_DEV])
+            8'd1:    boot_nib = 4'h2;
+            8'd2:    boot_nib = 4'h4;
+            8'd3:    boot_nib = 4'h8;
+            8'd4:    boot_nib = 4'hA;
+            8'd5:    boot_nib = 4'hB;
+            8'd6:    boot_nib = 4'hC;
+            default: boot_nib = 4'h0;
+        endcase
+    end
+    assign osd_a3ff2  = {boot_nib, 4'h1};
 
     // Per-control key config, written at KEYCFG_REG (0x20000020) as {id[12:9], ext[8], code[7:0]}.
     // pocket_keyboard reads one 9-bit {ext, code} per D-pad direction (ids 0-3) and button (ids 4-10);

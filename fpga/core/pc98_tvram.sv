@@ -76,7 +76,16 @@ module pc98_tvram (
     // Render side: the attribute, on the dot clock.
     input  wire        vid_clk,
     input  wire [11:0] vid_cell,
-    output logic [7:0] vid_attr
+    output logic [7:0] vid_attr,
+
+    // Live overrides for the memory-switch bytes the Settings UI owns:
+    // A3FEA (RAM size, DEL=BS), A3FEE (option-ROM mask), A3FF2 (boot
+    // device). They ride the READ mux, so the guest-write protection and
+    // the power-on defaults below are untouched; a byte the Settings row
+    // leaves at default reads back the reset value.
+    input  wire [7:0]  cfg_a3fea,
+    input  wire [7:0]  cfg_a3fee,
+    input  wire [7:0]  cfg_a3ff2
 );
 
     // A0000-A1FFF is the character region, A2000-A3FFF the attribute region;
@@ -249,9 +258,15 @@ module pc98_tvram (
     // comes back {0x00, attr} exactly as LOADINTELWORD(mem + a) gives it.
     // The memory-switch registers are even-byte objects; their odd byte is
     // the same unwritten 0x00, not a second copy of the switch.
+    // The Settings-owned cells: index 2 is A3FEA, 3 is A3FEE, 4 is A3FF2.
+    wire [7:0] memsw_rd = (q_memsw_idx == 3'd2) ? cfg_a3fea
+                        : (q_memsw_idx == 3'd3) ? cfg_a3fee
+                        : (q_memsw_idx == 3'd4) ? cfg_a3ff2
+                        :                          memsw[q_memsw_idx];
+
     always_comb begin
         if (q_is_attr)      cpu_q = q_hi ? 8'h00
-                                         : (q_memsw ? memsw[q_memsw_idx]
+                                         : (q_memsw ? memsw_rd
                                                     : q_attr);
         else if (q_hi)      cpu_q = q_char_hi;
         else                cpu_q = q_char_lo;
