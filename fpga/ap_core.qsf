@@ -772,7 +772,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gdc_mode2.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gvram_seq.sv"
 # The EGC's blitter, instantiated by the sequencer above. Landed with the
 # sequencer but never added here, so every build after it failed to elaborate.
-# WIP: tb_pc98_egc still fails one case (blit, plane E).
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_egc.sv"
 # The NEC-style EMS board's bank registers at 0x08E1-0x08E9: the V30's only
 # route past its 20-bit bus. RAM.sv holds the window remap half.

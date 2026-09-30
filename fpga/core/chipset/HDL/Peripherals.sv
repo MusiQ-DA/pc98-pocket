@@ -1421,7 +1421,9 @@ module PERIPHERALS #(
     // Ports 0x4A0-0x4AF: the EGC register file, forwarded one strobe at a
     // time to the sequencer that owns the engine. np21w hangs no read
     // handlers on these (iocore_attachout only), so neither does this.
-    wire egc_cs = pc98_io_exact & (address[15:4] == 12'h04A);
+    // The 0x04 page sits outside pc98_io_exact's 0x00-page window (same
+    // reason fdd_144_select bypasses it), so decode raw iorq here.
+    wire egc_cs = iorq & ~address_enable_n & (address[15:4] == 12'h04A);
     assign egc_rg = address[3:0];
 
     always_ff @(posedge clock, posedge reset) begin
