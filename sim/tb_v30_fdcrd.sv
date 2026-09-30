@@ -232,7 +232,8 @@ module tb_v30_fdcrd;
         .clock_rate     (28'd42_954_545),
         .turbo          (1'b0),
         .request        (),
-        .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer ()
+        .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer (),
+        .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()
     );
 
     // ---- the read mux, same shape as tb_pc98_v30's din_of -------------------

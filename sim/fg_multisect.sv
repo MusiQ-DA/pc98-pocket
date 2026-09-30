@@ -186,7 +186,8 @@ module tb_pc98_fdc_glue;
         .clock_rate     (28'd2000),
         .turbo          (1'b0),
         .request        (fdd_request),
-        .dbg_xfer       ()
+        .dbg_xfer       (),
+        .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()
     );
 
     // fd_read is a one-cycle strobe, so looking at it after a read task has

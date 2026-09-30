@@ -189,7 +189,8 @@ module tb_pc98_fdc_glue;
         // shift shows as a real ratio rather than the two-cycle floor.
         .clock_rate     (clk_rate_r),
         .turbo          (turbo_r),
-        .request        (fdd_request)
+        .request        (fdd_request),
+        .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()
     );
 
     logic [27:0] clk_rate_r = 28'd2000;

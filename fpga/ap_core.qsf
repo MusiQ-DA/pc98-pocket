@@ -799,6 +799,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_video.sv
 # Audio back end: OpenGateware audio_mixer (MiSTer filter chain + I2S) and its
 # codec-clock PLL.
 set_global_assignment -name SYSTEMVERILOG_FILE core/audio/audio_mixer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/audio/fdd_sound.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/audio/sound_i2s.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/audio_filters.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/audio_mix.sv

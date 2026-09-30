@@ -150,6 +150,12 @@ module PERIPHERALS #(
         // register {op,unit,C,H,R,N,EOT,GPL}.
         output  wire    [63:0]  dbg_fdc,
         output  wire    [63:0]  dbg_fdc_cmd,
+        // Drive-noise taps for fdd_sound, straight out of floppy.v: head-step
+        // pulse, head-load level, transfer data phase, motor run.
+        output  logic           fdd_snd_step,
+        output  logic           fdd_snd_head,
+        output  logic           fdd_snd_xfer,
+        output  logic           fdd_snd_motor,
         input   logic           fdd_dma_ack,
         input   logic           terminal_count,
         // Others
@@ -2043,7 +2049,12 @@ module PERIPHERALS #(
         .dbg_reply_left             (fdc_dbg_reply_left),
         .dbg_xfer                   (fdc_dbg_xfer),
         .dbg_command                (fdc_dbg_command),
-        .dbg_sector_info            (fdc_dbg_sector_info)
+        .dbg_sector_info            (fdc_dbg_sector_info),
+
+        .snd_step                   (fdd_snd_step),
+        .snd_head                   (fdd_snd_head),
+        .snd_xfer                   (fdd_snd_xfer),
+        .snd_motor                  (fdd_snd_motor)
     );
 
     logic   [7:0]   fdc_dbg_accepts;

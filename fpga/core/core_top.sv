@@ -961,6 +961,7 @@ module core_top (
     wire [1:0] osd_extmem;
     wire       osd_dbl_skip;
     wire       osd_fdd_turbo;
+    wire [1:0] osd_snd_mode;
     wire [1:0] osd_gamepad;
     wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
 
@@ -1052,6 +1053,7 @@ module core_top (
         .osd_extmem                 (osd_extmem),
         .osd_dbl_skip               (osd_dbl_skip),
         .osd_fdd_turbo              (osd_fdd_turbo),
+        .osd_snd_mode               (osd_snd_mode),
         .key_cfg_flat               (key_cfg),
         .gdc_draw_req               (gdc_draw_req),
         .gdc_draw_busy              (gdc_draw_busy),
@@ -2338,6 +2340,10 @@ module core_top (
         .fdd_present                        (fdd_present),
         .fdd_request                        (mgmt_req[7:6]),
         .fdd_media_req                      (fdd_media_req),
+        .fdd_snd_step                       (fdd_snd_step),
+        .fdd_snd_head                       (fdd_snd_head),
+        .fdd_snd_xfer                       (fdd_snd_xfer),
+        .fdd_snd_motor                      (fdd_snd_motor),
         .scsi_request                       (mgmt_req[0]),
         .dbg_fdc                            (fdc_dbg),
         .dbg_fdc_cmd                        (fdc_dbg_cmd),
@@ -2543,6 +2549,22 @@ module core_top (
     wire [15:0] audio_l = pause_core ? 16'd0 : (boost_cfg ? cmp_l : out_l);
     wire [15:0] audio_r = pause_core ? 16'd0 : (boost_cfg ? cmp_r : out_r);
 
+    // Drive noise: fdd_sound synthesises the seek rattle, head-load clunk,
+    // transfer buzz and motor whir from floppy.v's own timing signals, all in
+    // clk_chipset. osd_snd_mode is an osd_* setting, already this domain.
+    wire fdd_snd_step, fdd_snd_head, fdd_snd_xfer, fdd_snd_motor;
+    wire signed [15:0] fdd_audio;
+    fdd_sound fdd_sound (
+        .clk         (clk_chipset),
+        .reset       (reset),
+        .mode        (osd_snd_mode),
+        .step_pulse  (fdd_snd_step),
+        .head_load   (fdd_snd_head),
+        .xfer_active (fdd_snd_xfer),
+        .motor_on    (fdd_snd_motor),
+        .audio       (fdd_audio)
+    );
+
     audio_mixer #(.DW(16), .STEREO(1)) audio_mixer (
         .clk_74b    (clk_74b),
         .clk_audio  (clk_chipset),
@@ -2552,6 +2574,7 @@ module core_top (
         .is_signed  (1'b1),
         .core_l     (audio_l),
         .core_r     (audio_r),
+        .fdd        (fdd_audio),
         .audio_mclk (audio_mclk),
         .audio_lrck (audio_lrck),
         .audio_dac  (audio_dac)

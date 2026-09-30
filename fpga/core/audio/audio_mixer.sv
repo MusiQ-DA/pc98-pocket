@@ -48,6 +48,9 @@ module audio_mixer #(
     input  logic          is_signed,   //! Signed Audio
     input  logic [DW-1:0] core_l,      //! Left  Channel Audio from Core
     input  logic [DW-1:0] core_r,      //! Right Channel Audio from Core
+    // Drive noise: one mono signed 16-bit tap (fdd_sound.sv), summed into
+    // both channels at unity. The source bounds itself under +-9k.
+    input  logic signed [15:0] fdd,
     // Pocket I2S
     output logic          audio_mclk,  //! Serial Master Clock
     output logic          audio_lrck,  //! Left/Right clock
@@ -69,13 +72,23 @@ module audio_mixer #(
   );
 
   //! ------------------------------------------------------------------------
-  //! Pad core_l/core_r with zeros to maintain a consistent size of 16 bits
+  //! Pad core_l/core_r with zeros to maintain a consistent size of 16 bits,
+  //! then sum in the drive noise. The saturating add matches the core_top
+  //! clamp idiom so a hot OPNA peak cannot wrap the mix.
   //! ------------------------------------------------------------------------
+  logic [15:0] pad_l, pad_r;
   logic [15:0] core_al, core_ar;
+  logic signed [16:0] fdd_l, fdd_r;
 
   always_comb begin
-    core_al = DW == 16 ? core_l : {core_l, {16 - DW{1'b0}}};
-    core_ar = STEREO ? DW == 16 ? core_r : {core_r, {16 - DW{1'b0}}} : core_al;
+    pad_l  = DW == 16 ? core_l : {core_l, {16 - DW{1'b0}}};
+    pad_r  = STEREO ? DW == 16 ? core_r : {core_r, {16 - DW{1'b0}}} : pad_l;
+    // fdd is signed; the padded core word is too when is_signed is set (the
+    // only configuration this core uses).
+    fdd_l  = $signed(pad_l) + fdd;
+    fdd_r  = $signed(pad_r) + fdd;
+    core_al = (^fdd_l[16:15]) ? {fdd_l[16], {15{fdd_l[15]}}} : fdd_l[15:0];
+    core_ar = (^fdd_r[16:15]) ? {fdd_r[16], {15{fdd_r[15]}}} : fdd_r[15:0];
   end
 
   //! ------------------------------------------------------------------------

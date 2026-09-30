@@ -2096,7 +2096,8 @@ module tb_pc98_v30;
         .clock_rate     (28'd42_954_545),
         .turbo          (1'b0),
         .request        (srv_request),
-        .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer ()
+        .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer (),
+        .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()
     );
 
     // ---- the disk server: what fdd_service.c does on hardware -------------

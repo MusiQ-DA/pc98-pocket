@@ -81,7 +81,8 @@ module tb_fdd_144;
         .wp             (2'b00),
         .clock_rate     (28'd2000),
         .turbo          (1'b0),
-        .request        (fdd_request)
+        .request        (fdd_request),
+        .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()
     );
 
     tb_fdd_dma_model u_dma (
