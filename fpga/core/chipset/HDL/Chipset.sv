@@ -84,6 +84,7 @@ module CHIPSET #(
         // state, out to core_top's probe. Unconsumed they synthesise away.
         output  logic   [15:0]  dbg_chipset,
         output  logic   [7:0]   dbg_chipset2,
+        output  logic   [33:0]  dbg_scsi,
         // Peripherals
         output  logic   [2:0]   timer_counter_out,
         output  logic           speaker_out,
@@ -403,6 +404,7 @@ module CHIPSET #(
         .fdd_request                        (fdd_request),
         .fdd_media_req                      (fdd_media_req),
         .scsi_request                       (scsi_request),
+        .dbg_scsi                           (dbg_scsi),
         .fdd_dma_req                        (fdd_dma_req),
         .dbg_fdc                            (dbg_fdc),
         .dbg_fdc_cmd                        (dbg_fdc_cmd),

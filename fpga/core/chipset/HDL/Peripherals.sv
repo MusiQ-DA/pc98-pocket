@@ -149,6 +149,7 @@ module PERIPHERALS #(
         // lamp's view (the softcore keeps the raw bits).
         output  logic           fdd_media_req,
         output  logic           scsi_request,
+        output  logic  [33:0]   dbg_scsi,
         output  logic           fdd_dma_req,
         // JTAG probe readout of the floppy transfer engine: dbg_fdc packs
         // where the transaction stands, dbg_fdc_cmd is the live command
@@ -1729,6 +1730,39 @@ module PERIPHERALS #(
         .mg_rdptr_clr       (mgmt_scsi_wr & (mgmt_scsi_reg == 4'd7) & mgmt_writedata[0]),
         .mg_wrptr_clr       (mgmt_scsi_wr & (mgmt_scsi_reg == 4'd7) & mgmt_writedata[1])
     );
+
+    // Debug witnesses for the JTAG probe: did the BIOS scan fetch the ROM, did
+    // the firmware's mgmt reads happen, did the guest ever post a command.
+    // Each counts a rising edge of its source so one bus cycle is one count.
+    logic        scsi_rom_rd_d, scsi_cmd_req_d, scsi_mg_rd_d;
+    logic [15:0] scsi_rom_rd_count;
+    logic [7:0]  scsi_cmd_post_count, scsi_mg_rd_count;
+    wire         scsi_rom_rd = scsi_rom_select & ~memory_read_n;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            scsi_rom_rd_d       <= 1'b0;
+            scsi_cmd_req_d      <= 1'b0;
+            scsi_mg_rd_d        <= 1'b0;
+            scsi_rom_rd_count   <= 16'd0;
+            scsi_cmd_post_count <= 8'd0;
+            scsi_mg_rd_count    <= 8'd0;
+        end else begin
+            scsi_rom_rd_d  <= scsi_rom_rd;
+            scsi_cmd_req_d <= scsi_cmd_req;
+            scsi_mg_rd_d   <= mgmt_scsi_rd;
+            if (scsi_rom_rd & ~scsi_rom_rd_d)
+                scsi_rom_rd_count <= scsi_rom_rd_count + 16'd1;
+            if (scsi_cmd_req ^ scsi_cmd_req_d)
+                scsi_cmd_post_count <= scsi_cmd_post_count + 8'd1;
+            if (mgmt_scsi_rd & ~scsi_mg_rd_d)
+                scsi_mg_rd_count <= scsi_mg_rd_count + 8'd1;
+        end
+    end
+
+    assign dbg_scsi = {scsi_cmd_ack, scsi_cmd_req,
+                       scsi_mg_rd_count, scsi_cmd_post_count,
+                       scsi_rom_rd_count};
 
 `ifdef ENABLE_OPNA
     //
