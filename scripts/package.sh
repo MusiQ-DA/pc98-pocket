@@ -134,10 +134,10 @@ def data(j):
          # The schema allows at most FOUR extensions -- a longer list made the
          # Pocket browse on the first four only, and .hdm (seventh) was never
          # selectable. Keep the raw image formats the loader actually reads.
-         "extensions": ["hdm", "fdi", "2hd", "fdd"],
+         "extensions": ["hdm", "fdi", "d88", "fdd"],
          "size_maximum": 8388608, "deferload": True},
         {"name": "Floppy B",    "id": 4, "required": False, "parameters": "0x201",
-         "extensions": ["hdm", "fdi", "2hd", "fdd"],
+         "extensions": ["hdm", "fdi", "d88", "fdd"],
          "size_maximum": 8388608, "deferload": True},
         # Same 0x201 as the floppies: bit9 persists the browsed filename --
         # without it a picked .hdd unbinds on the pick-triggered core reload,
@@ -186,6 +186,12 @@ def data(j):
         {"name": "Rhythm RIM",  "id": 19, "required": False, "parameters": 0,
          "filename": "2608_rim.wav",
          "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
+        # FDD mechanism-noise sample pack (scripts/fddsnd_pack.py) -- an
+        # 0x202 boot stream like the ROMs, but optional: absent file -> the
+        # store keeps its uninit magic-mismatch -> fdd_sound stays silent.
+        {"name": "FDD Sound",   "id": 20, "required": False, "parameters": "0x202",
+         "filename": "fddsnd.bin", "extensions": ["bin"],
+         "address": "0x10200000", "size_maximum": "0x8000"},
     ]
 
 def video(j):
