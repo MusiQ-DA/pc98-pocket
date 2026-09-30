@@ -133,27 +133,15 @@ int main(void)
         busy |= scsi_poll();
         settings_service(); // persist any OSD changes into the save window
 
-        // Quiet the idle polls.
-        //
-        // Every management-bus access takes the guest's bus through the
-        // arbiter, so this loop was the only traffic this core added while the
-        // guest booted -- tens of thousands of holds a second, unmodelled by
-        // any bench and new since the last build that reached BASIC (the GDC
-        // engine and the disk service are both recent). ~1 ms of spacing keeps
-        // the FDD far inside its budget (a 1024-byte sector every ~16 ms) and
-        // the GDC engine inside its draw latency, and cuts the hold rate ~100x.
-        //
-        // A pass that serviced a request skips the spacing entirely: the
-        // service itself just spent real time on the bus answering a raised
-        // request, which is the traffic this loop exists to make, and pausing
-        // would only stretch each sector or draw to the poll period (~1
-        // sector/ms on SCSI, whose protocol has no pacing of its own). The
-        // requests stay raised while work waits, so busy passes run
-        // back-to-back; only a pass where nothing was pending pays the delay.
-        if (!busy) {
-            for (volatile uint32_t q = 0; q < 40000u; q++) {
-            }
-        }
+        // No idle spacing: every poll above goes through the softcore's own
+        // register files (the mgmt mailbox is a dedicated port on
+        // PERIPHERALS, not a guest-bus cycle), so an idle pass costs the
+        // guest nothing and a sleep only stretches whatever is in flight.
+        // Between a sector drain and the controller's next request the
+        // request line is low for ~1 ms -- a slept pass used to sit out
+        // that whole window, and at 40000 iterations the "spacing" was
+        // ~100 ms per idle pass, several times a real 2HD sector period.
+        (void) busy;
     }
 
     return 0;

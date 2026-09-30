@@ -717,13 +717,16 @@ always @(posedge clk) begin
 	else if(!delay_rate && !delay_srt && delay_steps) delay_steps <= delay_steps - 8'd1;
 end
 
-reg [3:0] delay_srt;
+// The uPD765's step rate is the count's complement: (16 - SRT) ms per step
+// at 500 kbps, so SRT=B is 5 ms and SRT=0 is the slowest walk at 16 ms.
+// Five bits to hold the SRT=0 case's full sixteen.
+reg [4:0] delay_srt;
 always @(posedge clk) begin
-	if(~rst_n)                          delay_srt <= 4'd0;
-	else if(cmd_recalibrate_start)      delay_srt <= specify_srt;
-	else if(cmd_seek_start)             delay_srt <= specify_srt;
-	else if(!delay_rate && delay_srt)   delay_srt <= delay_srt - 4'd1;
-	else if(!delay_rate && delay_steps) delay_srt <= specify_srt;
+	if(~rst_n)                          delay_srt <= 5'd0;
+	else if(cmd_recalibrate_start)      delay_srt <= 5'd16 - {1'b0, specify_srt};
+	else if(cmd_seek_start)             delay_srt <= 5'd16 - {1'b0, specify_srt};
+	else if(!delay_rate && delay_srt)   delay_srt <= delay_srt - 5'd1;
+	else if(!delay_rate && delay_steps) delay_srt <= 5'd16 - {1'b0, specify_srt};
 end
 
 // turbo shifts the per-rate adder three places up: every tick the delay engine
