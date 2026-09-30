@@ -238,13 +238,16 @@ def input_map(j):
     # from the inherited list, so those three could not be remapped at all.
     j['input']['controllers'] = [
         {"type": "default", "mappings": [
-            {"id": 0, "name": "A: Ctrl",  "key": "pad_btn_a"},
-            {"id": 1, "name": "B: Alt",   "key": "pad_btn_b"},
-            {"id": 2, "name": "X: Space", "key": "pad_btn_x"},
-            {"id": 3, "name": "Y: Enter", "key": "pad_btn_y"},
+            # The names mirror the firmware's binding roller (keybind_cycle in
+            # settings_ui.c): PC-98 destination names, not host-key names --
+            # docked L-Alt arrives as NFER, so B says NFER, not Alt.
+            {"id": 0, "name": "A: Return", "key": "pad_btn_a"},
+            {"id": 1, "name": "B: NFER",   "key": "pad_btn_b"},
+            {"id": 2, "name": "X: Space",  "key": "pad_btn_x"},
+            {"id": 3, "name": "Y: Ctrl",   "key": "pad_btn_y"},
             {"id": 4, "name": "L: Virtual Keyboard", "key": "pad_trig_l"},
             {"id": 5, "name": "R: unmapped",         "key": "pad_trig_r"},
-            {"id": 6, "name": "Start: POST Overlay", "key": "pad_btn_start"},
+            {"id": 6, "name": "Start: unmapped",     "key": "pad_btn_start"},
             {"id": 7, "name": "Select: Settings",    "key": "pad_btn_select"},
         ]},
     ]
