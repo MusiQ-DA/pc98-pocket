@@ -6,7 +6,7 @@
 #include "settings_ui.h"
 #include "softcpu_regs.h"
 
-void gdc_poll(void);
+int gdc_poll(void);
 #include "osd_font.h"
 #include "vkb_ui.h"
 
@@ -117,9 +117,12 @@ int main(void)
         // models it (the benches have no softcore). With nothing mounted
         // there is nothing to poll: gate the traffic on a disk being present,
         // and a diskless boot runs with the guest bus entirely its own.
+        // Each poll reports whether it serviced a request, so the spacing
+        // below can skip working passes and still quiet the idle ones.
+        uint32_t busy = 0;
         if (mounted_a || mounted_b)
-            fdd_poll();
-        gdc_poll();
+            busy |= fdd_poll();
+        busy |= gdc_poll();
         // scsi_poll stays unconditional: the option ROM posts TEST UNIT READY
         // at POST whether or not an image is mounted, and every post toggles
         // cmd_req -- a toggle nobody acks leaves scsi_request (and so the
@@ -127,10 +130,10 @@ int main(void)
         // showed. When idle the poll is a single register read; when no image
         // is fitted the service answers NOT READY, which also frees the guest
         // from each probe's timeout wait.
-        scsi_poll();
+        busy |= scsi_poll();
         settings_service(); // persist any OSD changes into the save window
 
-        // Quiet the polls.
+        // Quiet the idle polls.
         //
         // Every management-bus access takes the guest's bus through the
         // arbiter, so this loop was the only traffic this core added while the
@@ -139,7 +142,17 @@ int main(void)
         // engine and the disk service are both recent). ~1 ms of spacing keeps
         // the FDD far inside its budget (a 1024-byte sector every ~16 ms) and
         // the GDC engine inside its draw latency, and cuts the hold rate ~100x.
-        for (volatile uint32_t q = 0; q < 40000u; q++) {
+        //
+        // A pass that serviced a request skips the spacing entirely: the
+        // service itself just spent real time on the bus answering a raised
+        // request, which is the traffic this loop exists to make, and pausing
+        // would only stretch each sector or draw to the poll period (~1
+        // sector/ms on SCSI, whose protocol has no pacing of its own). The
+        // requests stay raised while work waits, so busy passes run
+        // back-to-back; only a pass where nothing was pending pays the delay.
+        if (!busy) {
+            for (volatile uint32_t q = 0; q < 40000u; q++) {
+            }
         }
     }
 

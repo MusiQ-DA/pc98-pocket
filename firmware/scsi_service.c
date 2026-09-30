@@ -369,11 +369,14 @@ void scsi_init(void)
 
 // Called from the main loop. Register 0 bit 0 is (cmd_req != our ack), so a
 // command is a level we can poll and clear rather than a pulse we can miss.
-void scsi_poll(void)
+// The return is nonzero when a command ran, so the main loop can drop its
+// idle spacing while commands are in flight: the protocol has no pacing of
+// its own, and the spacing was the whole per-command cost (~1 sector/ms).
+int scsi_poll(void)
 {
     uint32_t ctrl = scsi_mgmt_read(SMGMT_CTRL);
     if (!(ctrl & 1))
-        return;
+        return 0;
 
     // Acknowledge first. A second command cannot arrive until the guest has
     // read the status, and clearing late would re-run this one.
@@ -383,4 +386,5 @@ void scsi_poll(void)
     uint8_t cdb[CDB_MAX];
     scsi_get_cdb(cdb);
     scsi_execute(cdb);
+    return 1;
 }

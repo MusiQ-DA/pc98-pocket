@@ -281,7 +281,10 @@ uint32_t fdd_mounted_sectors(uint32_t drive)
 // streams it to the controller FIFO; a write drains the FIFO and persists it to that
 // dataslot. The reg-0 read and the FIFO are drive-agnostic in floppy.v, so only the
 // slot id and the sector width are keyed on the drive. Writes reach the SD file
-// directly, so nothing else is needed here.
+// directly, so nothing else is needed here. The return is nonzero when a
+// request was serviced, so the main loop's idle spacing can skip working
+// passes -- the sector traffic IS the bus load the spacing exists to limit,
+// and the request stays raised while more sectors wait.
 // POSTMON-visible counters, one per leg of a read request, so a stalled boot
 // says which link died: SEEN polls that found the request up, PUSH sectors
 // streamed into the controller fifo, ERR dataslot transfers that failed or
@@ -292,7 +295,7 @@ uint32_t fdd_dbg_seen, fdd_dbg_pushed, fdd_dbg_err, fdd_dbg_lba, fdd_dbg_aft;
 uint32_t fdd_dbg_gap;
 static uint32_t gap_polls;
 
-void fdd_poll(void)
+int fdd_poll(void)
 {
     uint32_t req = *FDD_REQUEST;
     if (!req) {
@@ -300,7 +303,7 @@ void fdd_poll(void)
         // sector re-asks within a few loops, a parked drain only after the
         // guest's own timeout, so the gap separates them by orders.
         gap_polls++;
-        return;
+        return 0;
     }
     fdd_dbg_gap = gap_polls;
     gap_polls = 0;
@@ -331,4 +334,5 @@ void fdd_poll(void)
         pull_fifo(drv);
         tds_transfer(slot, off, FDD_TDS_WRITE, bytes);
     }
+    return 1;
 }
