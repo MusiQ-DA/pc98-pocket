@@ -137,22 +137,17 @@ static void fdd_probe_d88(uint32_t drive, uint32_t sectors)
     // The bridge RAM is 1 KB -- bytes 512+ hold the settings window -- so the
     // 688-byte header lands in two reads: 512 B at 0 covers the name/type/
     // size fields plus track entries 0-119, the remaining 176 B at 0x200
-    // the rest of the table.
-    if (!fdd_read_at(drive, 0, 512) || !fdd_read_at(drive, 0x200, 176)) {
+    // the rest. Both windows are streamed off the RAM rather than buffered:
+    // the firmware stack has no room for a 688-byte copy.
+    if (!fdd_read_at(drive, 0x200, 176)) {
         return;
     }
-    // The second transfer landed in the same window, so pull the table tail
-    // into a scratch array first, then re-fetch the head window.
-    uint32_t tail[44];
-    uint32_t fd_size, first, protect;
+    uint32_t fd_size = 0, first = 0, protect = 0;
     int populated = 0, last = 0, odd = 0;
     *FDD_BRAM_ADDR = 0;
     for (int i = 0; i < 44; i++) {
-        tail[i] = *FDD_BRAM_RDATA;
-    }
-    for (int i = 0; i < 44; i++) {
         int idx = 120 + i;
-        uint32_t t = tail[i];
+        uint32_t t = *FDD_BRAM_RDATA;
         if (t) {
             if (t < D88_HDRSIZE || t >= file + 512) {
                 return;                  // points outside the image
@@ -166,22 +161,22 @@ static void fdd_probe_d88(uint32_t drive, uint32_t sectors)
         return;
     }
     *FDD_BRAM_ADDR = 0;
-    uint32_t w[128];
     for (int i = 0; i < 128; i++) {
-        w[i] = *FDD_BRAM_RDATA;
-    }
-    fd_size = w[7];                      // bytes 0x1C-0x1F
-    protect = w[6];                      // bytes 0x18-0x1B (protect = 0x1A)
-    first   = w[8];                      // trackp[0], byte 0x20
-    for (int i = 0; i < 120; i++) {
-        uint32_t t = w[8 + i];
-        if (t) {
-            if (t < D88_HDRSIZE || t >= fd_size) {
-                return;                  // points outside the image
+        uint32_t t = *FDD_BRAM_RDATA;
+        if (i == 6) {
+            protect = t;                 // bytes 0x18-0x1B (protect = 0x1A)
+        } else if (i == 7) {
+            fd_size = t;                 // bytes 0x1C-0x1F
+        } else if (i >= 8 && t) {        // trackp[0..119]
+            if (i == 8) {
+                first = t;
+            }
+            if (t < D88_HDRSIZE || t >= file + 512) {
+                return;
             }
             populated++;
-            last = i;
-            odd |= i & 1;
+            last = i - 8;
+            odd |= (i - 8) & 1;
         }
     }
     if (!populated || first != D88_HDRSIZE
