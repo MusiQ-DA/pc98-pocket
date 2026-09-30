@@ -1,5 +1,7 @@
 #include "settings_ui.h"
 
+#include <stddef.h>
+
 #include "dpad.h"
 #include "key_bind.h"
 #include "softcpu_regs.h"
@@ -195,8 +197,8 @@ static const item_t items_hw[] = {
 
 // Gamepad Mode picks what controller 1 drives: the D-pad preset and button binds below take effect
 // only in its Keyboard mode. L1 is absent because it stays the fixed VKB toggle. Each button row
-// cycles its binding through Unmapped, the OSD functions, and a key (picked on the virtual
-// keyboard); see the IT_KEYBIND handling in settings_input.
+// cycles its binding through Unmapped, the OSD functions, the named key set in keybind_cycle, and a
+// "pick any key" slot (the virtual keyboard); see the IT_KEYBIND handling in settings_input.
 static const item_t items_controls[] = {
     { "Gamepad Mode", IT_OPTION, SET_GAMEPAD },
     { "D-pad", IT_OPTION, SET_DPAD },
@@ -254,18 +256,18 @@ static void draw_frame(void)
     }
 }
 
-// Names for the common keys a docked keyboard can bind that the 83-key virtual keyboard omits: the
-// E0-extended keys (ext = 1) and the 101-key extras (F11/F12, Print Screen,
-// Pause). Set-2 codes and ext flag per hid_to_ps2; anything rarer falls back to its raw code.
+// Names for keys a docked keyboard can bind that neither the 83-key virtual keyboard nor the
+// binding roller's keybind_cycle names: the E0 nav block past the arrows and the 101-key extras
+// (F11/F12, Print Screen, Pause). Set-2 codes and ext flag per hid_to_ps2; anything rarer falls
+// back to its raw code.
 static const struct {
     uint8_t ext;
     uint8_t code;
     const char *name;
-} extra_names[] = { { 1, 0x75, "Up" }, { 1, 0x72, "Down" }, { 1, 0x6B, "Left" },
-    { 1, 0x74, "Right" }, { 1, 0x6C, "Home" }, { 1, 0x69, "End" }, { 1, 0x7D, "PgUp" },
+} extra_names[] = { { 1, 0x6C, "Home" }, { 1, 0x69, "End" }, { 1, 0x7D, "PgUp" },
     { 1, 0x7A, "PgDn" }, { 1, 0x70, "Insert" }, { 1, 0x71, "Delete" }, { 1, 0x4A, "KP /" },
-    { 1, 0x5A, "KP Enter" }, { 1, 0x14, "R Ctrl" }, { 1, 0x11, "R Alt" }, { 0, 0x78, "F11" },
-    { 0, 0x07, "F12" }, { 0, 0xE2, "PrtSc" }, { 0, 0xE1, "Pause" } };
+    { 1, 0x5A, "KP Enter" }, { 0, 0x78, "F11" }, { 0, 0x07, "F12" }, { 0, 0xE2, "PrtSc" },
+    { 0, 0xE1, "Pause" } };
 
 // An unnamed key's raw Set-2 scancode in hex ("E0 " prefixing an extended one), so it stays
 // identifiable rather than blank.
@@ -285,8 +287,66 @@ static const char *hex_scancode(int ext, uint8_t code)
     return buf;
 }
 
-// The current binding for a button's row value: a function or Unmapped label, a plain key's
-// virtual-keyboard legend (blank-legend space bar named), a named extra key, else the raw scancode.
+// One row of the binding roller: the {ext, code} pair key_bind stores plus the name the row shows.
+// Real Set-2 make codes top out at 0xE2 (key_bind.c), so a code byte at 0xF0+ is free for sentinels
+// -- the BTNFN_* functions (BTNFN_* + 0xF0) and BIND_KEY_SLOT -- that no {ext, code} pair can spell.
+// A NULL name falls through to bind_name's own label (Unmapped, the function names, [Set key]).
+typedef struct {
+    uint8_t ext;
+    uint8_t code;
+    const char *name;
+} keybind_opt_t;
+
+#define BIND_KEY_SLOT 0xFFu // the roller's "pick a key" marker -- never a stored code
+
+// Left/Right on a binding row rolls this list: Unmapped, the OSD function, then the keys a PC-98
+// game is likeliest to want on a button -- action keys, modifiers, the cursor keys and the function
+// row -- and last a slot that opens the virtual keyboard as a picker instead of storing a code.
+//
+// The names are the PC-98 keys the codes ARRIVE AS (pc98_kbd_ps2's tables), not host-key names:
+// this board has no Alt and no right Ctrl -- a docked keyboard's left Alt is NFER, its right Alt
+// XFER, its right Ctrl GRPH -- so the roller offers the key the guest sees, and a docked-keyboard
+// pick of the same encoding displays the same name.
+static const keybind_opt_t keybind_cycle[] = {
+    { 0, 0x00, NULL },                 // Unmapped
+    { 0, 0xF0u + BTNFN_SETTINGS, NULL }, // Open Settings
+    { 0, 0x5A, "Return" },
+    { 0, 0x29, "Space" },
+    { 0, 0x76, "Esc" },
+    { 0, 0x1A, "Z" },
+    { 0, 0x22, "X" },
+    { 0, 0x21, "C" },
+    { 0, 0x12, "L Shift" },
+    { 0, 0x59, "R Shift" },
+    { 0, 0x14, "Ctrl" },
+    { 1, 0x14, "GRPH" },               // docked right Ctrl  -> PC-98 GRPH
+    { 0, 0x11, "NFER" },               // docked left Alt    -> PC-98 NFER
+    { 1, 0x11, "XFER" },               // docked right Alt   -> PC-98 XFER
+    { 0, 0x08, "STOP" },               // vkb_layout's synthetic code: makes and breaks cleanly,
+                                       // unlike a docked Pause's make-only 0xE1 sequence
+    { 0, 0x0D, "Tab" },
+    { 0, 0x66, "Backspace" },
+    { 1, 0x75, "Up" },
+    { 1, 0x72, "Down" },
+    { 1, 0x6B, "Left" },
+    { 1, 0x74, "Right" },
+    { 0, 0x05, "F1" },
+    { 0, 0x06, "F2" },
+    { 0, 0x04, "F3" },
+    { 0, 0x0C, "F4" },
+    { 0, 0x03, "F5" },
+    { 0, 0x0B, "F6" },
+    { 0, 0x83, "F7" },
+    { 0, 0x0A, "F8" },
+    { 0, 0x01, "F9" },
+    { 0, 0x09, "F10" },
+    { 0, BIND_KEY_SLOT, NULL },        // [Set key] -- A opens the VKB picker
+};
+#define KEYBIND_CYCLE_COUNT ((int) (sizeof(keybind_cycle) / sizeof(keybind_cycle[0])))
+
+// The current binding for a button's row value: a function or Unmapped label, a named roller key,
+// a plain key's virtual-keyboard legend (blank-legend space bar named), a named extra key, else
+// the raw scancode.
 static const char *bind_name(int btn)
 {
     switch (key_bind_function(btn)) {
@@ -302,6 +362,11 @@ static const char *bind_name(int btn)
         return "Unmapped";
     }
     int ext = key_bind_ext(btn);
+    for (int i = 0; i < KEYBIND_CYCLE_COUNT; i++) {
+        if (keybind_cycle[i].name && keybind_cycle[i].code == code && keybind_cycle[i].ext == ext) {
+            return keybind_cycle[i].name;
+        }
+    }
     if (!ext) {
         for (int i = 0; i < vkb_key_count; i++) {
             if (vkb_keys[i].scancode == code) {
@@ -317,24 +382,14 @@ static const char *bind_name(int btn)
     return hex_scancode(ext, code);
 }
 
-// A button binding row cycles through Unmapped, the OSD functions, and a final "pick a key" slot;
-// landing on that slot opens the key picker rather than storing a code. The functions carry their
-// BTNFN_* sentinel (BTNFN_* + 0xF0); BIND_KEY_SLOT is not a storable code.
-#define BIND_KEY_SLOT 0xFFu
-static const uint8_t keybind_cycle[] = {
-    0x00,                   // Unmapped
-    0xF0u + BTNFN_SETTINGS, // Open Settings
-    BIND_KEY_SLOT, // pick a key
-};
-#define KEYBIND_CYCLE_COUNT ((int) (sizeof(keybind_cycle) / sizeof(keybind_cycle[0])))
-
-// Which cycle slot a button's current binding sits on; a keyboard key (matching no code above)
-// rests on the final key slot.
+// Which cycle slot a button's current binding sits on; a key the roller does not offer (a VKB or
+// docked-keyboard pick) rests on the final key slot.
 static int keybind_slot(int btn)
 {
     uint8_t code = key_bind_code(btn);
+    int ext = key_bind_ext(btn);
     for (int i = 0; i < KEYBIND_CYCLE_COUNT; i++) {
-        if (keybind_cycle[i] == code) {
+        if (keybind_cycle[i].code == code && keybind_cycle[i].ext == ext) {
             return i;
         }
     }
@@ -394,7 +449,7 @@ static void draw_row(int i)
         const setting_t *s = &settings[it->arg];
         osd_draw_string16(&panel, COL_VALUE * 8, y, s->opts[s->value], OSD_LABEL);
     } else if (it->type == IT_KEYBIND) {
-        int on_key = keybind_cycle[keybind_sel[it->arg]] == BIND_KEY_SLOT;
+        int on_key = keybind_cycle[keybind_sel[it->arg]].code == BIND_KEY_SLOT;
         const char *val = (on_key && !keybind_is_key(it->arg)) ? "[Set key]" : bind_name(it->arg);
         osd_draw_string16(&panel, COL_VALUE * 8, y, val, OSD_LABEL);
     } else if (it->type == IT_SUBMENU) {
@@ -574,7 +629,7 @@ int settings_input(uint16_t pressed)
     } else if (it->type == IT_KEYBIND) {
         int btn = it->arg;
         int slot = keybind_sel[btn];
-        if ((pressed & BTN_A) && keybind_cycle[slot] == BIND_KEY_SLOT) {
+        if ((pressed & BTN_A) && keybind_cycle[slot].code == BIND_KEY_SLOT) {
             // Parked on the key slot: open the virtual keyboard as a key picker. It stores the key
             // and returns to this row, or leaves the binding unchanged if cancelled.
             vkb_ui_open_picker(btn);
@@ -582,7 +637,7 @@ int settings_input(uint16_t pressed)
             int dir = (pressed & BTN_RIGHT) ? 1 : (pressed & BTN_LEFT) ? -1 : 0;
             if (dir) {
                 // Remember the key being left so rolling back to the key slot restores it.
-                if (keybind_cycle[slot] == BIND_KEY_SLOT) {
+                if (keybind_cycle[slot].code == BIND_KEY_SLOT) {
                     keybind_remember(btn);
                 }
                 // dir is +1 or -1, so one step can leave the range by one.
@@ -590,11 +645,11 @@ int settings_input(uint16_t pressed)
                 if (slot < 0)                     slot = KEYBIND_CYCLE_COUNT - 1;
                 else if (slot >= KEYBIND_CYCLE_COUNT) slot = 0;
                 keybind_sel[btn] = (uint8_t) slot;
-                uint8_t code = keybind_cycle[slot];
-                if (code == BIND_KEY_SLOT) {
+                const keybind_opt_t *opt = &keybind_cycle[slot];
+                if (opt->code == BIND_KEY_SLOT) {
                     key_bind_set(btn, keybind_key[btn], (keybind_key_ext >> btn) & 1);
                 } else {
-                    key_bind_set(btn, code, 0);
+                    key_bind_set(btn, opt->code, opt->ext);
                 }
                 settings_mark_dirty();
                 draw_row(cur_row);
