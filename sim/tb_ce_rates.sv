@@ -46,7 +46,7 @@ module tb_ce_rates;
         .clock_cycle_counter_division_ratio(ccc_div),
         .clock_cycle_counter_decrement_value(ccc_dec),
         .shift_read_timing(shift_read_timing),
-        .ram_read_wait_cycle(rd_wait), .ram_write_wait_cycle(wr_wait)
+        .ram_read_wait_cycle(rd_wait), .ram_write_wait_cycle(wr_wait), .vram_wait_en()
     );
 
     // What each index is meant to be. A posedge of the CPU pin clock per

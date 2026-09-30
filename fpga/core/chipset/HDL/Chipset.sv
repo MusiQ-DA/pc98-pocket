@@ -163,6 +163,10 @@ module CHIPSET #(
         input   logic           wait_count_clk_en,
         input   logic   [1:0]   ram_read_wait_cycle,
         input   logic   [1:0]   ram_write_wait_cycle,
+        // The faithful CPU speeds also carry np21w's MEMWAIT_VRAM: the GDC's
+        // display refresh shares the VRAM bus, so a guest access to a
+        // graphics plane costs extra CPU cycles while the beam is out.
+        input   logic           vram_wait_en,
         // Others
         output  logic           pause_core,
         // PC-98 keyboard injection, passed to PERIPHERALS' 8251 model.
@@ -492,6 +496,30 @@ module CHIPSET #(
     // sequencer's pass-through and sees the memory's own completion.
     assign ram_rw_complete = ram_complete_w;
 
+    // np21w MEMWAIT_VRAM/GRCG (pccore.c's wait[] defaults {1,1,6,1,8,1}):
+    // while the beam is out a graphics-plane access costs six extra CPU
+    // cycles, and eight when the GRCG/EGC path owns the window; in vertical
+    // blank the contention goes away and every region costs one. Only the
+    // faithful clocks ask for it -- vram_wait_en -- and the decode runs on
+    // the guest's address, before the sequencer's plane remap. An RMW-class
+    // guest write runs through the sequencer as a read+write pair, so it
+    // takes half the charge on each leg and still pays eight in total.
+    wire vram_hit = (address[19:16] == 4'hA && address[15])   // A8000-AFFFF
+                  | (address[19:16] == 4'hB)                  // B0000-BFFFF
+                  | (pc98_analog & (address[19:15] == 5'b11100)); // E0000-E7FFF
+    wire accel_hit = grcg_active | egc_active_w;
+    wire rmw_guest_wr = accel_hit & ~memory_write_n & (grcg_rmw | egc_wr_w);
+    wire [3:0] vram_rd_wait = !vram_wait_en || !vram_hit ? 4'd0
+                            : VID_VBlank                   ? 4'd1
+                            : rmw_guest_wr                 ? 4'd4
+                            : accel_hit                    ? 4'd8
+                            :                                4'd6;
+    wire [3:0] vram_wr_wait = !vram_wait_en || !vram_hit ? 4'd0
+                            : VID_VBlank                   ? 4'd1
+                            : rmw_guest_wr                 ? 4'd4
+                            : accel_hit                    ? 4'd8
+                            :                                4'd6;
+
     RAM u_RAM 
     (
         .gvram_page1_flag                   (gvram_mem_page1),
@@ -552,6 +580,8 @@ module CHIPSET #(
         .wait_count_clk_en                  (wait_count_clk_en),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),
+        .vram_rd_wait_cycle                 (vram_rd_wait),
+        .vram_wr_wait_cycle                 (vram_wr_wait),
         .dbg                                (ram_dbg)
     );
 

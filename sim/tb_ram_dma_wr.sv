@@ -67,7 +67,7 @@ module tb_ram_dma_wr;
         .gv_rd_req(1'b0), .gv_rd_addr(24'd0), .gv_rd_len(4'd0),
         .gv_rd_ack(), .gv_rd_valid(), .gv_rd_data(), .gv_rd_done(),
         .wait_count_clk_en(1'b1),
-        .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)
+        .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0)
     );
 
     sdram_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),

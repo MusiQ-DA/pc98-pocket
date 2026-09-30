@@ -58,7 +58,7 @@ module tb_v30_dmac;
         .clock_cycle_counter_decrement_value (ccc_dec),
         .shift_read_timing                  (shift_read_timing),
         .ram_read_wait_cycle                (ram_rd_wait),
-        .ram_write_wait_cycle               (ram_wr_wait)
+        .ram_write_wait_cycle               (ram_wr_wait), .vram_wait_en()
     );
 
     // ---- the CPU: nuV30 ----------------------------------------------------

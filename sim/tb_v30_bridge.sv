@@ -60,7 +60,7 @@ module tb_v30_bridge;
         .clock_cycle_counter_decrement_value (ccc_dec),
         .shift_read_timing                  (shift_read_timing),
         .ram_read_wait_cycle                (ram_rd_wait),
-        .ram_write_wait_cycle               (ram_wr_wait)
+        .ram_write_wait_cycle               (ram_wr_wait), .vram_wait_en()
     );
 
     // ---- the CPU: nuV30, de-muxed, exactly as core_top will wire it -------

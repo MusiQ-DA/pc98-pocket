@@ -284,6 +284,7 @@ module core_top (
     logic  [1:0] ram_read_wait_cycle;
     logic  [1:0] ram_write_wait_cycle;
     logic        cycle_accrate;
+    logic        vram_wait_en;
     logic  [1:0] clk_select;
     // The CPU speed is the OSD's alone.
     wire   [1:0] clk_select_next = cpu_speed_cfg;
@@ -313,7 +314,8 @@ module core_top (
         .clock_cycle_counter_decrement_value(clock_cycle_counter_decrement_value),
         .shift_read_timing                  (shift_read_timing),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
-        .ram_write_wait_cycle               (ram_write_wait_cycle)
+        .ram_write_wait_cycle               (ram_write_wait_cycle),
+        .vram_wait_en                       (vram_wait_en)
     );
 
     // vid_blank is the softcore's (SOFT_GUEST_HOLD bit1): it forces the
@@ -2372,6 +2374,7 @@ module core_top (
         .wait_count_clk_en                  (cpu_ce_negedge),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),
+        .vram_wait_en                       (vram_wait_en),
         .pause_core                         (pause_core_chipset),
         .ram_rw_complete                    (ram_rw_complete)
         ,.pc98_key_stb                      (pc98_key_stb)

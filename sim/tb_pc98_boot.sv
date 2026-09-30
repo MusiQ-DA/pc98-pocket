@@ -88,7 +88,7 @@ module tb_pc98_boot;
         .clock_cycle_counter_decrement_value (),
         .shift_read_timing                  (),
         .ram_read_wait_cycle                (ram_rd_wait),
-        .ram_write_wait_cycle               (ram_wr_wait)
+        .ram_write_wait_cycle               (ram_wr_wait), .vram_wait_en()
     );
 
     // ---- the CPU -----------------------------------------------------------
@@ -402,7 +402,7 @@ module tb_pc98_boot;
         .cg_rd_req(1'b0), .cg_rd_addr(24'h0), .cg_rd_len(4'h0),
         .cg_rd_ack(), .cg_rd_valid(), .cg_rd_data(), .cg_rd_done(),
         .wait_count_clk_en(cpu_ce_negedge),
-        .ram_read_wait_cycle(ram_rd_wait), .ram_write_wait_cycle(ram_wr_wait)
+        .ram_read_wait_cycle(ram_rd_wait), .ram_write_wait_cycle(ram_wr_wait), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0)
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
