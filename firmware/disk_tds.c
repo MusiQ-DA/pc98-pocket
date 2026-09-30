@@ -8,11 +8,12 @@
 // format (an FDI's 0x20-byte header, say) sit in front of the raw image.
 // Bounded so a stalled transfer cannot hang the softcore, which serves both disks
 // and the OSD. Non-zero on success, zero on timeout or a transfer error.
-int tds_transfer(uint32_t slot, uint32_t offset, uint32_t dir, uint32_t bytes)
+int tds_transfer_to(uint32_t slot, uint32_t offset, uint32_t dir, uint32_t bytes,
+                    uint32_t bridge_addr)
 {
     *FDD_TDS_ID = slot;
     *FDD_TDS_OFFSET = offset;
-    *FDD_TDS_BRIDGE = FDD_BRIDGE_BASE;
+    *FDD_TDS_BRIDGE = bridge_addr;
     *FDD_TDS_LENGTH = bytes;
     *FDD_TDS_CLR = 1;
     *FDD_TDS_TRIG = dir;
@@ -21,6 +22,11 @@ int tds_transfer(uint32_t slot, uint32_t offset, uint32_t dir, uint32_t bytes)
     while (!((st = *FDD_TDS_STATUS) & FDD_TDS_DONE) && --to) {
     }
     return to != 0 && !(st & FDD_TDS_ERR);
+}
+
+int tds_transfer(uint32_t slot, uint32_t offset, uint32_t dir, uint32_t bytes)
+{
+    return tds_transfer_to(slot, offset, dir, bytes, FDD_BRIDGE_BASE);
 }
 
 // The APF datatable holds two words per slot: word 2k = id, word 2k+1 = size in bytes,

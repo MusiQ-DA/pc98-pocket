@@ -59,6 +59,15 @@ static uint32_t fdd_img_geom[2][4];
 static uint8_t fdd_d88[2];
 static uint8_t fdd_d88_wp[2];
 
+// Sequential-read prefetch: after a read is served, LBA+1 is staged into the
+// bridge RAM's second half (words 256-511) while the guest drains. A hit
+// skips the whole dataslot round trip; a miss just fetches normally. The tag
+// must be dropped on mount and on any write -- the guest may have rewritten
+// the very sector the buffer holds.
+#define PREF_WORD 256u
+#define PREF_BYTE (PREF_WORD * 4u)
+static uint32_t pref_lba[2] = { ~0u, ~0u };
+
 // FDI (the T98/np21w family's format): a 0x20-byte header in front of the raw
 // image -- {dummy, fddtype, headersize, fddsize, sectorsize, sectors,
 // surfaces, cylinders}, little-endian words (np21w diskimage/fd/fdd_xdf.c).
@@ -212,44 +221,68 @@ static void fdd_probe_d88(uint32_t drive, uint32_t sectors)
 // (np21w searchsector_d88 matches by r, which keeps interleaved tracks
 // right). Returns 0 on an empty track, a short/overrun walk, or a bad
 // header -- the caller treats 0 as "sector not found" and stops.
+// Per-drive cache of the last-walked track's resolved offsets, indexed by
+// r-1: the header walk costs a host round trip per sector header, so a
+// sequential reader re-pays ~spt transfers per sector without it. Entries
+// are zero for IDs not present on the track; the tag also fails fast on a
+// remount because every image walk starts cold.
+#define D88_CACHE_SPT 32
+static uint32_t d88_cache_trk[2] = { ~0u, ~0u };
+static uint32_t d88_cache_off[2][D88_CACHE_SPT];
+
 static uint32_t d88_offset(uint32_t drive, uint32_t lba)
 {
     uint32_t spt = fdd_img_geom[drive][0];
+    if (!spt || spt > D88_CACHE_SPT) {
+        return 0;
+    }
     uint32_t trk = 0, l = lba;
     while (l >= spt) {                    // mul-only softcore: subtract-loop
         l -= spt;
         trk++;
     }
-    uint32_t want_r = l + 1;
-    if (!fdd_read_at(drive, 0x20 + trk * 4, 4)) {
-        return 0;
-    }
-    *FDD_BRAM_ADDR = 0;
-    uint32_t pos = *FDD_BRAM_RDATA;
-    if (!pos) {
-        return 0;
-    }
-    for (uint32_t i = 0; i < spt; i++) {
-        if (!fdd_read_at(drive, pos, D88_SECHDR)) {
+    if (d88_cache_trk[drive] != trk) {
+        // Cold track: one table read plus one header read per sector fills
+        // every entry, keyed by the header's r (np21w searchsector_d88 also
+        // matches by r, which keeps interleaved tracks right).
+        d88_cache_trk[drive] = ~0u;      // claim only after the walk
+        for (uint32_t i = 0; i < D88_CACHE_SPT; i++) {
+            d88_cache_off[drive][i] = 0;
+        }
+        if (!fdd_read_at(drive, 0x20 + trk * 4, 4)) {
             return 0;
         }
         *FDD_BRAM_ADDR = 0;
-        uint32_t h0 = *FDD_BRAM_RDATA;   // bytes 0-3: c, h, r, n
-        uint32_t h1 = *FDD_BRAM_RDATA;   // bytes 4-7: count, mfm, del, stat
-        *FDD_BRAM_RDATA;                 // bytes 8-11: stat tail, seektime, rsv
-        uint32_t h3 = *FDD_BRAM_RDATA;   // bytes 12-15: rsv, rpm, size
-        (void) h1;
-        uint32_t r     = (h0 >> 16) & 0xFF;
-        uint32_t dsize = (h3 >> 16) & 0xFFFF;
-        if (r == want_r) {
-            return pos + D88_SECHDR;
+        uint32_t pos = *FDD_BRAM_RDATA;
+        if (!pos) {
+            d88_cache_trk[drive] = trk;  // empty track: all misses
+            return 0;
         }
-        if (!dsize || dsize > 4096) {
-            return 0;                    // corrupt walk, stop
+        for (uint32_t i = 0; i < spt; i++) {
+            if (!fdd_read_at(drive, pos, D88_SECHDR)) {
+                break;
+            }
+            *FDD_BRAM_ADDR = 0;
+            uint32_t h0 = *FDD_BRAM_RDATA;   // bytes 0-3: c, h, r, n
+            uint32_t h1 = *FDD_BRAM_RDATA;   // bytes 4-7: count, mfm, del, stat
+            *FDD_BRAM_RDATA;                 // bytes 8-11: stat tail, seektime, rsv
+            uint32_t h3 = *FDD_BRAM_RDATA;   // bytes 12-15: rsv, rpm, size
+            (void) h1;
+            uint32_t r     = (h0 >> 16) & 0xFF;
+            uint32_t dsize = (h3 >> 16) & 0xFFFF;
+            if (r >= 1 && r <= spt) {
+                d88_cache_off[drive][r - 1] = pos + D88_SECHDR;
+            }
+            if (!dsize || dsize > 4096) {
+                break;                   // corrupt walk, stop
+            }
+            pos += D88_SECHDR + dsize;
         }
-        pos += D88_SECHDR + dsize;
+        // A partial walk still claims the track: the missing IDs land on
+        // zeroed entries and read back as "not found", same as a miss.
+        d88_cache_trk[drive] = trk;
     }
-    return 0;
+    return d88_cache_off[drive][l];
 }
 
 
@@ -257,15 +290,14 @@ static uint32_t d88_offset(uint32_t drive, uint32_t lba)
 // the earlier file byte. The FIFO register address is set once for the whole run.
 // The length is the mounted media's sector width -- 512 bytes for every format
 // but a PC-98 2HD, whose sectors are 1024.
-static void push_sector(uint32_t drive)
+static void push_sector(uint32_t drive, uint32_t woff)
 {
-    *FDD_BRAM_ADDR = 0;
+    *FDD_BRAM_ADDR = woff;
     *FDD_MGMT_ADDR = (drive << 4) | FMGMT_FIFO;
     for (int i = 0; i < (int) fdd_sector_words[drive]; i++) {
         uint32_t w = *FDD_BRAM_RDATA;
         for (int b = 0; b < 4; b++) {
-            *FDD_MGMT_WDATA = (w >> (b * 8)) & 0xFF;
-            *FDD_MGMT_TRIG = FDD_MGMT_WR;
+            *FDD_MGMT_PUSH = (w >> (b * 8)) & 0xFF;
         }
     }
 }
@@ -371,6 +403,8 @@ void fdd_mount(uint32_t drive, uint32_t sectors)
     // D88 first: its checks (fd_size == file, trackp[0] == 0x2B0) are
     // structural and strong, and an FDI's own arithmetic could otherwise
     // pass on a D88's header words. FDI runs only for non-D88 images.
+    d88_cache_trk[drive] = ~0u;
+    pref_lba[drive] = ~0u;
     fdd_probe_d88(drive, sectors);
     if (!fdd_d88[drive]) {
         fdd_probe_fdi(drive, sectors); // sets fdd_base+geometry for an FDI
@@ -419,6 +453,7 @@ void fdd_eject(uint32_t drive)
     }
     mgmt_write(drive, FMGMT_PRESENT, 0);
     fdd_inserted[drive] = 0;
+    pref_lba[drive] = ~0u;
 }
 
 // Insert: put the remembered image back. A drive that has never been mounted
@@ -505,14 +540,32 @@ int fdd_poll(void)
         }
         fdd_dbg_seen++;
         fdd_dbg_lba = reg0;
-        // Push only on a good read; a failed transfer (or a D88 walk that
-        // found no such sector) must not stream stale bytes.
-        if (found && tds_transfer(slot, off, FDD_TDS_READ, bytes)) {
-            push_sector(drv);
+        if (pref_lba[drv] == lba) {
+            // Staged during the previous sector's drain: push straight from
+            // the prefetch half and skip the dataslot round trip entirely.
+            push_sector(drv, PREF_WORD);
+            fdd_dbg_pushed++;
+            fdd_dbg_aft = *FDD_REQUEST;
+        } else if (found && tds_transfer(slot, off, FDD_TDS_READ, bytes)) {
+            // Push only on a good read; a failed transfer (or a D88 walk that
+            // found no such sector) must not stream stale bytes.
+            push_sector(drv, 0);
             fdd_dbg_pushed++;
             fdd_dbg_aft = *FDD_REQUEST;
         } else {
             fdd_dbg_err++;
+        }
+        // Stage LBA+1 into the prefetch half while the guest drains. On a D88
+        // the offset walk is free when it stays in the cached track.
+        pref_lba[drv] = ~0u;
+        uint32_t nl = lba + 1;
+        if (nl * bytes < fdd_sectors[drv] * 512u) {
+            uint32_t noff = fdd_d88[drv] ? d88_offset(drv, nl)
+                                       : fdd_base[drv] + nl * bytes;
+            if (noff && tds_transfer_to(slot, noff, FDD_TDS_READ, bytes,
+                                        FDD_BRIDGE_BASE + PREF_BYTE)) {
+                pref_lba[drv] = nl;
+            }
         }
     } else if (req & FDD_REQ_WRITE) {
         uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);
@@ -529,6 +582,7 @@ int fdd_poll(void)
         if (!fdd_d88[drv] || off) {
             tds_transfer(slot, off, FDD_TDS_WRITE, bytes);
         }
+        pref_lba[drv] = ~0u;
     }
     return 1;
 }

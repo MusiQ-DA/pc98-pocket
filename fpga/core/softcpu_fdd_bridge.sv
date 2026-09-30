@@ -90,16 +90,19 @@ module softcpu_fdd_bridge #(
 );
 
     //
-    // Bridge RAM: 256 x 32, bidirectional dual-port.
+    // Bridge RAM: 512 x 32, bidirectional dual-port.
     //   Port A (clk_74a): APF DMA writes for reads, read-back for writes.
     //   Port B (clk_pico): firmware access via the FDD_BRAM registers.
+    // Two 1 KB halves: words 0-255 are the legacy staging area (sector fetch,
+    // font chunks, and the settings window at words 128-255), words 256-511
+    // hold the sector prefetch the read path stages a track ahead.
     // Port-A writes reverse the four bytes so dataslot byte 0 lands little-endian;
     // the read-back reverses them again so byte 0 leaves in the high bus byte.
     //
     wire [31:0] bram_q_a;
     wire [31:0] bram_q_b;
 
-    reg  [7:0]  bram_addr_b;
+    reg  [8:0]  bram_addr_b;
     reg  [31:0] bram_data_b;
     reg         bram_wren_b;
 
@@ -108,7 +111,7 @@ module softcpu_fdd_bridge #(
 
     altsyncram bridgeram (
         .clock0    (clk_74a),
-        .address_a (bridge_addr[9:2]),
+        .address_a (bridge_addr[10:2]),
         .data_a    ({bridge_wr_data[7:0], bridge_wr_data[15:8],
                      bridge_wr_data[23:16], bridge_wr_data[31:24]}),
         .wren_a    (bridge_wr && bridge_addr[31:28] == BRIDGE_ADDR[31:28]),
@@ -137,14 +140,14 @@ module softcpu_fdd_bridge #(
     defparam
         bridgeram.operation_mode = "BIDIR_DUAL_PORT",
         bridgeram.width_a = 32,
-        bridgeram.widthad_a = 8,
+        bridgeram.widthad_a = 9,
         bridgeram.width_b = 32,
-        bridgeram.widthad_b = 8,
+        bridgeram.widthad_b = 9,
         bridgeram.address_reg_b = "CLOCK1",
         bridgeram.outdata_reg_a = "UNREGISTERED",
         bridgeram.outdata_reg_b = "CLOCK1",
-        bridgeram.numwords_a = 256,
-        bridgeram.numwords_b = 256,
+        bridgeram.numwords_a = 512,
+        bridgeram.numwords_b = 512,
         bridgeram.lpm_type = "altsyncram",
         bridgeram.intended_device_family = "Cyclone V";
 
@@ -309,7 +312,7 @@ module softcpu_fdd_bridge #(
             mgmt_drive     <= 1'b0;
             mgmt_reg       <= 4'd0;
             mgmt_wdata_r   <= 16'd0;
-            bram_addr_b    <= 8'd0;
+            bram_addr_b    <= 9'd0;
             bram_data_b    <= 32'd0;
             dtbl_addr_r    <= 8'd0;
             dtbl_data_r    <= 32'd0;
@@ -326,7 +329,10 @@ module softcpu_fdd_bridge #(
                     if (cpu_wdata[0]) mgmt_wr_req <= 1'b1;
                     if (cpu_wdata[1]) mgmt_rd_req <= 1'b1;
                 end
-                8'h14: bram_addr_b <= cpu_wdata[7:0];
+                // Fused WDATA+TRIG: the streaming loops in fdd_service spend
+                // two stores per FIFO byte; one store here does the same.
+                8'h5C: begin mgmt_wdata_r <= cpu_wdata[15:0]; mgmt_wr_req <= 1'b1; end
+                8'h14: bram_addr_b <= cpu_wdata[8:0];
                 8'h1C: begin bram_data_b <= cpu_wdata; bram_wren_b <= 1'b1; end
                 8'h20: target_dataslot_id         <= cpu_wdata[15:0];
                 8'h24: target_dataslot_slotoffset <= cpu_wdata;
@@ -344,8 +350,8 @@ module softcpu_fdd_bridge #(
 
         if (!reset && cpu_valid && cpu_valid_prev) begin
             case (cpu_addr[7:0])
-                8'h18: bram_addr_b <= bram_addr_b + 8'd1;
-                8'h1C: bram_addr_b <= bram_addr_b + 8'd1;
+                8'h18: bram_addr_b <= bram_addr_b + 9'd1;
+                8'h1C: bram_addr_b <= bram_addr_b + 9'd1;
             endcase
         end
     end

@@ -979,13 +979,17 @@ module PERIPHERALS #(
     // ---- ARTIC -- the relative counter at 0x5C-0x5F (np21w io/artic.c).
     //
     // A free-running 24-bit counter the guest reads for elapsed time:
-    // np21w derives it as CPU_clocks*2/mul with mul=16 (hi-res) or 13 (8 MHz
-    // mode), which lands on ~1.25 MHz in both cases -- a fixed-rate counter.
-    // The accumulator below counts 42.95 MHz up to 42950 and ticks, giving
-    // exactly 1.25 MHz. Reads: 0x5C = byte 0, 0x5D/0x5E = byte 1, 0x5F =
-    // byte 2; the 0x5F write only costs time on the real chip, so it is left
-    // unclaimed. Games that pace their main loop off 0x5D (DEPTH.EXE polls
-    // it ~96 sites deep) hang at the title screen when it never advances.
+    // np21w derives it as CPU_clocks*2/mul with mul=16, which lands on
+    // 2457600*2/16 = 307.2 kHz -- a fixed-rate counter that does not scale
+    // with the CPU speed setting. The accumulator below ticks 307/42950 of
+    // the 42.95 MHz clock per cycle, giving
+    // exactly 307.2 kHz -- the chip runs off its own 2.4576 MHz crystal /8
+    // (np21w io/artic.c: 2*baseclock/16 with baseclock 2457600; the host
+    // CPU's speed setting does not scale it). Reads: 0x5C = byte 0,
+    // 0x5D/0x5E = byte 1, 0x5F = byte 2; the 0x5F write only costs time on
+    // the real chip, so it is left unclaimed. Games that pace their main
+    // loop off 0x5D (DEPTH.EXE polls it ~96 sites deep) hang at the title
+    // screen when it never advances.
     logic [23:0] artic_cnt;
     logic [15:0] artic_acc;
     always_ff @(posedge clock) begin
@@ -993,12 +997,12 @@ module PERIPHERALS #(
             artic_cnt <= 24'd0;
             artic_acc <= 16'd0;
         end
-        else if (artic_acc >= 16'd41700) begin
-            artic_acc <= artic_acc - 16'd41700;
+        else if (artic_acc + 16'd307 >= 16'd42950) begin
+            artic_acc <= artic_acc + 16'd307 - 16'd42950;
             artic_cnt <= artic_cnt + 24'd1;
         end
         else
-            artic_acc <= artic_acc + 16'd1250;
+            artic_acc <= artic_acc + 16'd307;
     end
     wire       artic_sel  = pc98_io & (address[7:2] == 6'b010111);
     wire [7:0] artic_data = address[1]

@@ -8,6 +8,7 @@
 #define FDD_MGMT_ADDR  ((volatile uint32_t *) 0x30000004) // W: {drive << 4, reg[3:0]}
 #define FDD_MGMT_WDATA ((volatile uint32_t *) 0x30000008) // W: mgmt write data [15:0]
 #define FDD_MGMT_TRIG  ((volatile uint32_t *) 0x3000000C) // W: bit0 write, bit1 read
+#define FDD_MGMT_PUSH  ((volatile uint32_t *) 0x3000005C) // W: fused WDATA+write-trigger
 #define FDD_MGMT_RDATA ((volatile uint32_t *) 0x30000010) // R: captured mgmt read data
 #define FDD_BRAM_ADDR  ((volatile uint32_t *) 0x30000014) // W: bridge-RAM word address
 #define FDD_BRAM_RDATA ((volatile uint32_t *) 0x30000018) // R: bridge-RAM word (auto-inc)
@@ -186,7 +187,11 @@
 
 // Shared disk-bridge sector transfer (disk_tds.c). The length is the media's
 // sector width, because the image file is laid out in that width.
+// tds_transfer_to lands the bytes at an explicit bridge-RAM byte address --
+// the read path's prefetch buffer lives at FDD_BRIDGE_BASE + 1024.
 int tds_transfer(uint32_t slot, uint32_t offset, uint32_t dir, uint32_t bytes);
+int tds_transfer_to(uint32_t slot, uint32_t offset, uint32_t dir, uint32_t bytes,
+                    uint32_t bridge_addr);
 
 // APF datatable access by slot id (disk_tds.c).
 uint32_t slot_bytes(uint16_t id);
