@@ -123,7 +123,7 @@ module PERIPHERALS #(
     output  logic   [1:0]   gdc_draw_req,
     output  logic   [1:0]   gdc_draw_busy,
     output  logic  [15:0]   gdc_draw_ops,
-    output  logic [319:0]   gdc_draw_snaps,
+    output  logic [383:0]   gdc_draw_snaps,
     input   logic   [1:0]   gdc_srv_done_levels,
         // PC-9801-86 OPNA, stereo. Zero on a non-PC-98 build.
     output  logic signed [15:0] opna_snd_l,
@@ -728,20 +728,36 @@ module PERIPHERALS #(
     // ------------------------------------------------------ GDC status
     //
     // The CRT interrupt. The text GDC raises IRQ2 once per frame in vertical
-    // retrace; the BIOS's FED23 sequence installs a handler on INT 0x0A,
+    // retrace while ARMED (np21w io/gdc.c): any write to 0x64 sets vsyncint
+    // (gdc_o64), the vsync consumes it for one shot (pccore.c screenvsync),
+    // and the PIC taking IRQ2 into service re-arms it (io/pic.c) -- so a
+    // serviced IRQ2 fires every frame and a masked one costs exactly one
+    // shot. The BIOS's FED23 sequence installs a handler on INT 0x0A,
     // unmasks IRQ2 (IMR bit 2), and spins at FED44 until the handler clears
-    // 0x53C bit 6 -- which is where the machine sits without this. The raster
-    // is already running (it drew the cursor), so its vsync edge IS the
-    // interrupt; the 8259 is edge-triggered and one clean edge per frame is
-    // exactly what the real GDC gives it. The flag lives here rather than in
-    // core_top because everything else the BIOS polls is answered here too.
+    // 0x53C bit 6 -- which is where the machine sits without this.
+    //
+    // The edge is detected in the chipset clock domain -- the arm flag and
+    // the 8259 both live here, and the pulse the edge-triggered PIC latches
+    // is then a full chipset clock wide. The service edge is the master PIC
+    // driving IRQ2's vector (ICW2 base 0x08 + IR2 = INT 0x0A) during INTA.
     logic vs_irq_s1 = 1'b0, vs_irq_s2 = 1'b0, vs_irq_s3 = 1'b0;
-    always_ff @(posedge clk_pc98_dot) begin
+    always_ff @(posedge clock) begin
         vs_irq_s1 <= pc98_vs;
         vs_irq_s2 <= vs_irq_s1;
         vs_irq_s3 <= vs_irq_s2;
     end
-    wire crt_vsync_irq = vs_irq_s2 & ~vs_irq_s3;
+    wire crt_vsync_edge = vs_irq_s2 & ~vs_irq_s3;
+
+    wire gdc_arm_w = pc98_io_exact & ~io_write_n & (address[7:0] == 8'h64);
+    wire crt_isr   = ~interrupt_acknowledge_n
+                   & (interrupt_data_bus_out == 8'h0A);
+    logic crt_armed = 1'b0;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset)                    crt_armed <= 1'b0;
+        else if (gdc_arm_w | crt_isr) crt_armed <= 1'b1;
+        else if (crt_vsync_edge)      crt_armed <= 1'b0;
+    end
+    wire crt_vsync_irq = crt_vsync_edge & crt_armed;
 
     // The ITF's first hard gate. At F80388 it does IN AL,60h / TEST AL,20h and
     // waits for bit 5 to go low, high, low -- twice -- before it will go on.
@@ -801,8 +817,8 @@ module PERIPHERALS #(
     wire        gdc_m_draw_req, gdc_m_draw_busy, gdc_m_done_stb;
     wire        gdc_s_draw_req, gdc_s_draw_busy, gdc_s_done_stb;
     wire [7:0]  gdc_m_draw_op,  gdc_s_draw_op;
-    wire [31:0] gdc_m_draw_snap [0:4];
-    wire [31:0] gdc_s_draw_snap [0:4];
+    wire [31:0] gdc_m_draw_snap [0:5];
+    wire [31:0] gdc_s_draw_snap [0:5];
 
     logic [1:0] srv_done_s1 = 2'b00, srv_done_s2 = 2'b00, srv_done_s3 = 2'b00;
     always_ff @(posedge clock) begin
@@ -818,9 +834,9 @@ module PERIPHERALS #(
     assign gdc_s_done_stb = srv_done_s2[1] & ~srv_done_s3[1];
     genvar dsg;
     generate
-        for (dsg = 0; dsg < 5; dsg = dsg + 1) begin : g_dsnap
+        for (dsg = 0; dsg < 6; dsg = dsg + 1) begin : g_dsnap
             assign gdc_draw_snaps[dsg*32 +: 32]      = gdc_m_draw_snap[dsg];
-            assign gdc_draw_snaps[160 + dsg*32 +: 32] = gdc_s_draw_snap[dsg];
+            assign gdc_draw_snaps[192 + dsg*32 +: 32] = gdc_s_draw_snap[dsg];
         end
     endgenerate
 
@@ -862,6 +878,9 @@ module PERIPHERALS #(
 
     wire       gdc_stat_read = (gdc_m_cs | gdc_s_cs) & ~io_read_n;
     wire [7:0] gdc_status    = gdc_m_cs ? gdc_m_dout : gdc_s_dout;
+    // np21w gdc_i68/gdc_i6a: the mode flip-flops read back -- save/restore
+    // code (TSRs, mode switches) depends on seeing what it wrote.
+    wire       gdc_mode_read = (mode68_select | mode6a_select) & ~io_read_n;
 
     // ------------------------------------------------- system port stubs
     //
@@ -1133,7 +1152,8 @@ module PERIPHERALS #(
     logic gdc_s_on_s1, gdc_s_on_px;
     logic pc98_vs_s1, pc98_vs_px, pc98_vs_px_d;
     logic [7:0]  gdc_pitch_px;
-    logic [15:0] gdc_sad_px;
+    logic [15:0] gdc_sad_px [0:3];
+    logic [9:0]  gdc_len_px [0:3];
     logic [15:0] gdc_cur_addr_px;
     logic [4:0]  gdc_cur_top_px, gdc_cur_bot_px;
     logic        gdc_wide_px;
@@ -1153,7 +1173,12 @@ module PERIPHERALS #(
         gdc_cur_bl_s1 <= gdc_m_cur_bl; gdc_cur_bl_px <= gdc_cur_bl_s1;
         if (pc98_vs_px & ~pc98_vs_px_d) begin
             gdc_pitch_px <= gdc_m_pitch;
-            gdc_sad_px   <= gdc_m_sad[0];
+            // All four PRAM partitions, sampled like the rest so a mid-frame
+            // SCROLL rewrite tears at most the frame it lands in
+            // (pc98_text_part.svh walks them -- split screens reach the
+            // renderer as {SAD,LEN} quartets, not one start address).
+            gdc_sad_px   <= gdc_m_sad;
+            gdc_len_px   <= gdc_m_len;
             gdc_cur_addr_px <= gdc_m_cur_addr;
             gdc_cur_top_px  <= gdc_m_cur_top;
             gdc_cur_bot_px  <= gdc_m_cur_bot;
@@ -1172,7 +1197,8 @@ module PERIPHERALS #(
 
     pc98_text_render u_pc98_text (
         .clk(clk_pc98_dot), .pix_ce(1'b1),
-        .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px), .gdc_sad(gdc_sad_px),
+        .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px),
+        .gdc_sad(gdc_sad_px), .gdc_len(gdc_len_px),
         .wide(gdc_wide_px), .crtc_pl(crtc_pl_px),
         .crtc_bl(crtc_bl_px), .crtc_cl(crtc_cl_px), .line_rep(gdc_lrep_px),
         .cur_addr(gdc_cur_addr_px), .cur_en(gdc_cur_en_px),
@@ -1271,7 +1297,8 @@ module PERIPHERALS #(
     wire [11:0] pc98_row_base;
     pc98_text_rowbase u_pc98_text_rowbase (
         .gdc_on(gdc_m_disp_on), .gdc_pitch(gdc_m_pitch),
-        .gdc_sad(gdc_m_sad[0]), .row(pc98_next_row), .base(pc98_row_base)
+        .gdc_sad(gdc_m_sad), .gdc_len(gdc_m_len),
+        .row(pc98_next_row), .base(pc98_row_base)
     );
 
     wire        pc98_f_req, pc98_f_busy, pc98_f_valid;
@@ -2370,6 +2397,11 @@ module PERIPHERALS #(
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= gdc_status;
+        end
+        else if (gdc_mode_read)
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= (address[7:0] == 8'h68) ? pc98_mode1 : mode2_q;
         end
         else if (fdd_stub_read)
         begin

@@ -976,7 +976,7 @@ module core_top (
 
     wire  [1:0] gdc_draw_req, gdc_draw_busy, gdc_srv_done_levels;
     wire [15:0] gdc_draw_ops;
-    wire [319:0] gdc_draw_snaps;
+    wire [383:0] gdc_draw_snaps;
 
 `ifdef PC98_JTAG
     // How far does a key get? key_count counts pc98_key_stb pulses and
@@ -2073,8 +2073,8 @@ module core_top (
     wire [19:0] cpu_ad_out;
     reg  [19:0] cpu_address;
     wire [7:0] cpu_data_bus;
-    // The 16-bit memory path's extra lane. Under a narrow-CPU build these are
-    // tied off below; the PC-98 build wires them to v30_cpu_bridge.
+    // The 16-bit memory path's extra lane, between v30_cpu_bridge and the
+    // chipset's RAM/option-ROM muxes.
     wire [7:0] cpu_data_bus_hi;
     wire [7:0] data_bus_hi;
     wire       cpu_word_access;
@@ -2423,8 +2423,10 @@ module core_top (
     //
     // nuV30 (the real part whose microcode the ROMs expect -- the ITF's
     // F9476 pushes imm16, a 186-class opcode an 8086 dispatches to an
-    // undocumented JS alias) through v30_cpu_bridge, which splits its 16-bit cycles into
-    // the 8288 world's byte cycles. The wiring follows tb_pc98_v30, the
+    // undocumented JS alias) through v30_cpu_bridge, which runs each 16-bit
+    // cycle as one two-lane cycle where the SDRAM answers and two byte
+    // cycles everywhere else on the eight-bit bus. The wiring follows
+    // tb_pc98_v30, the
     // bench that booted N88-BASIC on this core, and tb_v30_bridge, the
     // bench that proved the bridge: CLK=clk_chipset, CE gated by the
     // bridge, INT from the PIC, DATA_I assembled by the bridge.

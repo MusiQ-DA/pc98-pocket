@@ -101,7 +101,7 @@ module softcpu_subsystem (
     input   [1:0]  gdc_draw_req,
     input   [1:0]  gdc_draw_busy,
     input  [15:0]  gdc_draw_ops,
-    input [319:0]  gdc_draw_snaps,
+    input [383:0]  gdc_draw_snaps,
     output  [1:0]  gdc_srv_done_levels,
     output        osd_active,
     output        osd_disk_led,
@@ -1026,13 +1026,15 @@ module softcpu_subsystem (
             32'h5000_014C: cpu_mem_rdata = gdc_draw_snaps[95:64];
             32'h5000_0150: cpu_mem_rdata = gdc_draw_snaps[127:96];
             32'h5000_0154: cpu_mem_rdata = gdc_draw_snaps[159:128];
+            32'h5000_0158: cpu_mem_rdata = gdc_draw_snaps[191:160];
             32'h5000_0180: cpu_mem_rdata = {22'd0, draw_req_s[1],
                                             draw_busy_s[1], gdc_draw_ops[15:8]};
-            32'h5000_0184: cpu_mem_rdata = gdc_draw_snaps[191:160];
-            32'h5000_0188: cpu_mem_rdata = gdc_draw_snaps[223:192];
-            32'h5000_018C: cpu_mem_rdata = gdc_draw_snaps[255:224];
-            32'h5000_0190: cpu_mem_rdata = gdc_draw_snaps[287:256];
-            32'h5000_0194: cpu_mem_rdata = gdc_draw_snaps[319:288];
+            32'h5000_0184: cpu_mem_rdata = gdc_draw_snaps[223:192];
+            32'h5000_0188: cpu_mem_rdata = gdc_draw_snaps[255:224];
+            32'h5000_018C: cpu_mem_rdata = gdc_draw_snaps[287:256];
+            32'h5000_0190: cpu_mem_rdata = gdc_draw_snaps[319:288];
+            32'h5000_0194: cpu_mem_rdata = gdc_draw_snaps[351:320];
+            32'h5000_0198: cpu_mem_rdata = gdc_draw_snaps[383:352];
             default:       cpu_mem_rdata = 32'd0;
         endcase
     end

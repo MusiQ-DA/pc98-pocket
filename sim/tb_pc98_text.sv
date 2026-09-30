@@ -30,7 +30,8 @@ module tb_pc98_text;
     // that the numbers the renderer receives put the block on the right cell.
     logic        gdc_on = 1'b0;      // fallback: 80 columns from cell 0
     logic [7:0]  gdc_pitch = 8'd0;
-    logic [15:0] gdc_sad = 16'd0;
+    logic [15:0] gdc_sad [0:3] = '{default: 16'd0};
+    logic [9:0]  gdc_len [0:3] = '{default: 10'd0};
     logic [15:0] cur_addr = 16'd0;
     logic        cur_en = 1'b0, cur_blink = 1'b0;
     logic [4:0]  cur_top = 5'd0, cur_bot = 5'd0;
@@ -47,7 +48,8 @@ module tb_pc98_text;
     pc98_text_render dut (
         .clk(clk), .pix_ce(pix_ce), .hcount(hcount), .vcount(vcount),
         .blink_on(blink_on),
-        .gdc_on(gdc_on), .gdc_pitch(gdc_pitch), .gdc_sad(gdc_sad),
+        .gdc_on(gdc_on), .gdc_pitch(gdc_pitch),
+        .gdc_sad(gdc_sad), .gdc_len(gdc_len),
         .wide(wide),
         .cur_addr(cur_addr), .cur_en(cur_en), .cur_blink(cur_blink),
         .cur_top(cur_top), .cur_bot(cur_bot),

@@ -16,11 +16,11 @@ module CHIPSET #(
         // CPU
         input   logic   [19:0]  cpu_address,
         input   logic   [7:0]   cpu_data_bus,
-        // The 16-bit memory path (PC98_WORD_MEM): v30_cpu_bridge asks for a
+        // The 16-bit memory path: v30_cpu_bridge asks for a
         // word, RAM.sv turns it into one two-word SDRAM burst instead of two
         // bus cycles, and the odd lane travels on its own pair of wires rather
-        // than widening the chipset's eight-bit bus. Tied off in every other
-        // build -- see pc98_sdram_map.svh for which addresses can take one.
+        // than widening the chipset's eight-bit bus. Only the addresses
+        // pc98_sdram_map.svh selects can take one -- see that file.
         input   logic           cpu_word_access,
         input   logic   [7:0]   cpu_data_bus_hi,
         output  logic   [7:0]   data_bus_hi,
@@ -37,7 +37,7 @@ module CHIPSET #(
         output  logic   [1:0]   gdc_draw_req,
         output  logic   [1:0]   gdc_draw_busy,
         output  logic  [15:0]   gdc_draw_ops,
-        output  logic [319:0]   gdc_draw_snaps,
+        output  logic [383:0]   gdc_draw_snaps,
         input   logic   [1:0]   gdc_srv_done_levels,
         output  logic           de_o,
         output  logic   [5:0]   VID_R,
@@ -686,7 +686,10 @@ module CHIPSET #(
             end
             else
             begin
-                internal_data_bus_ext = 0;
+                // Nothing claimed the read: the open bus reads high.
+                // np21w io/iocore.c definp8 returns 0xff; device probes
+                // compare against that, not 0.
+                internal_data_bus_ext = 8'hFF;
                 data_bus_direction    = 1'b0;
             end
         end

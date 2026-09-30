@@ -51,7 +51,8 @@ module tb_pc98_textscroll;
     // row-base mapper (row buffer side) and the renderer (attribute side).
     logic        gdc_on    = 1'b0;
     logic  [7:0] gdc_pitch = 8'd0;
-    logic [15:0] gdc_sad   = 16'd0;
+    logic [15:0] gdc_sad [0:3] = '{default: 16'd0};
+    logic [9:0]  gdc_len [0:3] = '{default: 10'd0};
 
     // ------------------------------------------------------------ TVRAM
     wire [11:0] fil_cell;
@@ -66,7 +67,6 @@ module tb_pc98_textscroll;
         .fil_clk(clk),   .fil_cell(fil_cell),
         .fil_char_lo(fil_char_lo), .fil_char_hi(fil_char_hi),
         .vid_clk(clk_dot), .vid_cell(vid_cell), .vid_attr(vid_attr),
-        .dbg_cell(12'd0), .dbg_own(1'b0), .dbg_word(),
         .cfg_a3fea(8'h04), .cfg_a3fee(8'h00), .cfg_a3ff2(8'h01)
     );
 
@@ -75,7 +75,8 @@ module tb_pc98_textscroll;
     wire  [11:0] row_base;
 
     pc98_text_rowbase u_map (
-        .gdc_on(gdc_on), .gdc_pitch(gdc_pitch), .gdc_sad(gdc_sad),
+        .gdc_on(gdc_on), .gdc_pitch(gdc_pitch),
+        .gdc_sad(gdc_sad), .gdc_len(gdc_len),
         .row(fill_row), .base(row_base)
     );
 
@@ -123,7 +124,8 @@ module tb_pc98_textscroll;
     pc98_text_render #(.H_TOTAL(848), .V_TOTAL(440)) u_render (
         .clk(clk_dot), .pix_ce(1'b1),
         .hcount(hcnt), .vcount(vcnt), .blink_on(1'b1),
-        .gdc_on(gdc_on), .gdc_pitch(gdc_pitch), .gdc_sad(gdc_sad),
+        .gdc_on(gdc_on), .gdc_pitch(gdc_pitch),
+        .gdc_sad(gdc_sad), .gdc_len(gdc_len),
         .wide(1'b0),
         .cur_addr(cur_addr), .cur_en(cur_en), .cur_blink(1'b0),
         .cur_top(5'd0), .cur_bot(5'd15),
@@ -299,16 +301,16 @@ module tb_pc98_textscroll;
 
         // ------------------------------------------------ 1. the mapper
         // Unprogrammed GDC: today's row*80 picture must survive.
-        gdc_on = 1'b0; gdc_pitch = 8'd0; gdc_sad = 16'd0;
+        gdc_on = 1'b0; gdc_pitch = 8'd0; gdc_sad[0] = 16'd0;
         fill_row = 5'd7;  base_check(5'd7, 12'd560, "GDC off falls back");
         // START but no PITCH yet: same fallback.
         gdc_on = 1'b1; gdc_pitch = 8'd0;
         base_check(5'd7, 12'd560, "pitch 0 falls back");
         // Programmed but trivial: SAD 0, PITCH 80 -- the old expression.
-        gdc_pitch = 8'h50; gdc_sad = 16'h0000;
+        gdc_pitch = 8'h50; gdc_sad[0] = 16'h0000;
         base_check(5'd7, 12'd560, "SAD 0 pitch 80 parity");
         // Scrolled by one line: SAD = pitch.
-        gdc_sad = 16'h0080;
+        gdc_sad[0] = 16'h0080;
         fill_row = 5'd3; base_check(5'd3, 12'h170, "SAD 0x80 row 3");
         // A narrow pitch, and an odd register value losing its low bit.
         gdc_pitch = 8'h28;
@@ -316,10 +318,20 @@ module tb_pc98_textscroll;
         gdc_pitch = 8'h29;
         base_check(5'd4, 12'h120, "pitch 0x29 reads as 0x28");
         // The ring: SAD near the top wraps LOW12.
-        gdc_pitch = 8'h50; gdc_sad = 16'h0FE0;
+        gdc_pitch = 8'h50; gdc_sad[0] = 16'h0FE0;
         fill_row = 5'd0;  base_check(5'd0,  12'hFE0, "wrap row 0");
         fill_row = 5'd1;  base_check(5'd1,  12'h030, "wrap row 1");
         fill_row = 5'd24; base_check(5'd24, 12'h760, "wrap row 24");
+
+        // The four PRAM partitions tile rows (np21w maketext.c): ten rows
+        // in partition 0, then partition 1 to the bottom -- a LEN of zero
+        // never ends, so the "rest" partition needs no height of its own.
+        gdc_len[0] = 10'd10; gdc_len[1] = 10'd0;
+        gdc_sad[0] = 16'h0100; gdc_sad[1] = 16'h0300;
+        fill_row = 5'd9;  base_check(5'd9,  12'h3D0, "part0 last row");
+        fill_row = 5'd10; base_check(5'd10, 12'h300, "part1 first row");
+        fill_row = 5'd24; base_check(5'd24, 12'h760, "part1 rel 14");
+        gdc_len[0] = 10'd0; gdc_sad[1] = 16'd0;   // every row in part0 again
 
         // ----------------------------------- 2. the fill walks those cells
         // Codes name their position: cell (base + c) gets code c+1, so the
@@ -327,7 +339,7 @@ module tb_pc98_textscroll;
         for (int c = 0; c < 80; c++)
             put_cell((16'hFE0 + c) & 16'hFFF, 16'(c + 1), 8'hE1);
 
-        gdc_on = 1'b1; gdc_pitch = 8'h50; gdc_sad = 16'h0FE0;
+        gdc_on = 1'b1; gdc_pitch = 8'h50; gdc_sad[0] = 16'h0FE0;
         do_fill(5'd0);           // fills cells FE0..FFF, 000..02F
         do_fill(5'd1);           // second fill flips the bank for reads
 
@@ -340,7 +352,7 @@ module tb_pc98_textscroll;
         // A non-0x50 pitch moves the same rows elsewhere: base 0x1A0.
         for (int c = 0; c < 80; c++)
             put_cell(16'h1A0 + c, 16'h60 + c, 8'hE1);
-        gdc_sad = 16'h0100; gdc_pitch = 8'h28;   // effective 40
+        gdc_sad[0] = 16'h0100; gdc_pitch = 8'h28;   // effective 40
         do_fill(5'd4);                            // base = 100 + 4*40 = 1A0
         do_fill(5'd5);
         rd_glyph_check(7'd0,  4'd0,  8'h00, "pitch40 row, slot 0");
@@ -368,7 +380,7 @@ module tb_pc98_textscroll;
 
         // --------------------------------- 4. the renderer's mapped space
         // SAD 0x100, pitch 80: screen row 0 draws cells 100+, row 1 180+.
-        gdc_sad = 16'h0100; gdc_pitch = 8'h50;
+        gdc_sad[0] = 16'h0100; gdc_pitch = 8'h50;
         // vertline attribute only at the MAPPED col 7 (cell 0x107); the
         // cursor at the MAPPED col 20 (cell 0x114) with a blank attribute.
         put_cell(16'h107, 16'h0000, 8'h11);
@@ -406,7 +418,7 @@ module tb_pc98_textscroll;
         px_check(px_cur_next, 1'b0, "cursor stops at the cell edge");
 
         // A re-pitch mid-run moves the row base the NEXT frame uses.
-        gdc_sad = 16'h0200; gdc_pitch = 8'h28;
+        gdc_sad[0] = 16'h0200; gdc_pitch = 8'h28;
         wait (vcnt == 10'd439);
         wait (vcnt == 10'd20);
         if (vc_row1_base !== 12'h228) begin

@@ -41,7 +41,8 @@ module pc98_text_render #(
     // behaves exactly as it did before they existed.
     input  wire        gdc_on,          // START seen
     input  wire [7:0]  gdc_pitch,       // words per row
-    input  wire [15:0] gdc_sad,         // partition 0's start, RAW
+    input  wire [15:0] gdc_sad[0:3],    // the four partitions' starts, RAW
+    input  wire [9:0]  gdc_len[0:3],    // and their line counts, decoded
     // 40 columns: mode1 bit 2 (the port 0x68 register) makes each cell
     // sixteen dots -- the glyph byte shifts at half rate so every bit lasts
     // two dots, and a column consumes TWO cells, the even one carrying the
@@ -190,16 +191,25 @@ module pc98_text_render #(
     // now keeps working and is the regression test for this change.
     wire        gdc_live  = gdc_on & (gdc_pitch != 8'd0);
     wire [7:0]  eff_pitch = gdc_live ? {gdc_pitch[7:1], 1'b0} : 8'd80;
-    wire [11:0] eff_start = gdc_live ? gdc_sad[11:0]          : 12'd0;
 
+`include "pc98_text_part.svh"
+
+    // The four PRAM partitions tile the screen's rows (np21w maketext.c):
+    // each row's cell run starts at its own partition's SAD plus the
+    // row's index WITHIN the partition times the pitch. A one-area screen
+    // keeps every row in partition 0, which reduces to the old SAD+row*pitch.
+    wire [16:0] n_part  = gdc_live
+        ? pc98_text_part(next_row, gdc_sad, gdc_len) : {next_row, 12'd0};
+    wire [11:0] n_start = n_part[11:0];
+    wire [4:0]  n_rel   = n_part[16:12];
     // row * pitch. Kept as a multiplier only when the GDC is driving it; the
     // 80-column case is still the shift pair it always was.
     wire [11:0] next_rowbase = gdc_live
-        ? 12'(next_row * eff_pitch)
+        ? 12'(n_rel * eff_pitch)
         : ({1'b0, next_row, 6'd0} + {3'b000, next_row, 4'd0});
     // In the cell index space a wide column occupies two slots (np21w's
     // edi += 2 per column), so the column term doubles.
-    wire [11:0] next_cell    = eff_start + next_rowbase
+    wire [11:0] next_cell    = n_start + next_rowbase
                              + (wide ? {5'd0, next_col[5:0], 1'b0}
                                      : {5'd0, next_col});
 
@@ -208,10 +218,14 @@ module pc98_text_render #(
     // character time ahead); this is where the shift register is emptying.
     // (Named draw_row because cur_row is the glyph register below.)
     wire [4:0]  draw_row  = row_q;
+    wire [16:0] d_part  = gdc_live
+        ? pc98_text_part(draw_row, gdc_sad, gdc_len) : {draw_row, 12'd0};
+    wire [11:0] d_start = d_part[11:0];
+    wire [4:0]  d_rel   = d_part[16:12];
     wire [11:0] draw_rowbase = gdc_live
-        ? 12'(draw_row * eff_pitch)
+        ? 12'(d_rel * eff_pitch)
         : ({1'b0, draw_row, 6'd0} + {3'b000, draw_row, 4'd0});
-    wire [11:0] drawn_cell = eff_start + draw_rowbase
+    wire [11:0] drawn_cell = d_start + draw_rowbase
                            + (wide ? {5'd0, col[5:0], 1'b0} : {5'd0, col});
 
     // The GDC's cursor: a blinking reverse block over cursor_top..cursor_bot
