@@ -441,8 +441,8 @@ module tb_v30_mem;
     // Poked straight into the part's storage. RAM.sv keeps ONE GUEST BYTE PER
     // 16-BIT WORD -- access_data_in is {8'h00, byte} -- so the word address is
     // the guest's byte address and the high byte is zero. That layout is what
-    // makes a word access two consecutive words, which is what PC98_WORD_MEM
-    // turns into a burst; this bench is the place it has to hold.
+    // makes a word access two consecutive words, which is what RAM.sv bursts
+    // as one transaction; this bench is the place it has to hold.
     int pc;
     task automatic emit(input logic [7:0] b);
         sdr.u_part.poke(pc, {8'h00, b});
@@ -693,17 +693,12 @@ module tb_v30_mem;
         end
 
         $display("one-cycle word accesses: %0d", word_cycles);
-`ifdef PC98_WORD_MEM
+        // The word path is unconditional: an SDRAM word that came back as two
+        // byte cycles is a regression, not a configuration.
         if (word_cycles == 0) begin
-            $display("FAIL PC98_WORD_MEM is defined but no word cycle ran");
+            $display("FAIL no one-cycle word access ran");
             errors++;
         end
-`else
-        if (word_cycles != 0) begin
-            $display("FAIL word cycles ran without PC98_WORD_MEM");
-            errors++;
-        end
-`endif
 
         if (errors == 0) $display("PASS tb_v30_mem");
         else             $display("FAILED tb_v30_mem: %0d", errors);

@@ -14,17 +14,14 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SYNTH=0
 REALMEM=0
-WORD=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --synth) SYNTH=1; shift ;;
         # --realmem: run the ITF through the REAL memory path -- RAM.sv on
         # sdram_shim on sdram_mp on the part, with the board's clock skew --
-        # instead of the flat array.
+        # instead of the flat array. The word path is unconditional either
+        # way: the flat model answers the odd lane at addr|1.
         --realmem) REALMEM=1; shift ;;
-        # --word: with --realmem, let a word memory access run as one bus
-        # cycle (PC98_WORD_MEM). The real ITF is the acceptance test for it.
-        --word)    WORD=1; REALMEM=1; shift ;;
         *) break ;;
     esac
 done
@@ -100,7 +97,6 @@ cp $V/ucrom.hex $V/ucdecode.hex "$OUT/hdl/rtl/ucore/"
 R="$PWD"
 CPU_DEF="+define+V30_BACKDOOR"
 [ "$REALMEM" = 1 ] && CPU_DEF="$CPU_DEF+REALMEM"
-[ "$WORD" = 1 ] && CPU_DEF="$CPU_DEF+PC98_WORD_MEM"
 
 # The V30 build is pure CPU time in Verilator: compile the model for speed
 # (-O2, same reasoning as sim_pc98_v30.sh) and split the eval across cores.

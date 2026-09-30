@@ -18,7 +18,7 @@ module RAM (
     // N+1 sit in consecutive SDRAM words: a V30 word cycle is one burst of
     // two, not two bus cycles. word_access says the cycle is a word, and the
     // _hi pair carries its odd half. Held low, everything below behaves
-    // exactly as it did byte-at-a-time.
+    // byte-at-a-time.
     // Sixteen-colour mode (port 0x6A bit 0). It moves the memory map: the
     // fourth graphics plane at E0000-E7FFF exists only while this is set.
     input   logic           analog_mode,
@@ -256,16 +256,9 @@ module RAM (
     logic   [15:0]  access_data_out;
     logic   [15:0]  access_data_out_hi;
 
-    // A word access is two words where the far end can burst; config.tcl
-    // defines PC98_WORD_MEM, and a guest word becomes one two-word SDRAM
-    // transaction. Undefined, this file is byte-at-a-time and word_access
-    // is dead.
-`ifdef PC98_WORD_MEM
+    // A word access is two words where the far end can burst: with
+    // word_access up, a guest word becomes one two-word SDRAM transaction.
     wire            word_now = word_access;
-`else
-    wire            word_now = 1'b0;
-    wire _unused_word = &{1'b0, word_access, internal_data_bus_hi, 1'b0};
-`endif
     wire    [9:0]   access_words = word_now ? 10'h002 : 10'h001;
     logic           write_request;
     logic           read_request;
