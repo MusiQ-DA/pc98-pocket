@@ -1,7 +1,8 @@
 // gdc_service.c -- the GDC drawing processor, served by the softcore.
 //
 // The RTL (pc98_gdc) latches each EXECUTE-class command (VECTE 0x6C, TEXTE
-// 0x68) with a snapshot of the vector parameters and throttles the guest --
+// 0x68) and each completed WDAT run with a snapshot of the parameters and
+// throttles the guest --
 // the FIFO-empty status bit stays clear -- until this engine retires it.
 // What runs here is np21w's engine (io/gdc_sub.c + io/gdc_pset.c) with the
 // VRAM layer retargeted: every pixel is a read-modify-write of one guest
@@ -36,9 +37,11 @@
 #define GDC_OP_VECTE  0x6Cu
 #define GDC_OP_TEXTE  0x68u
 
-// The snapshot, nineteen bytes in the order the RTL packs them: VECTW's
+// The snapshot, twenty-three bytes in the order the RTL packs them: VECTW's
 // eleven, CSRW's four (np21w reads a dword -- the fourth byte's high nibble
-// is the dot address), TEXTW's two, ZOOM, the WRITE-mode byte.
+// is the dot address), TEXTW's two, ZOOM, the WRITE-mode byte, then MASK's
+// two and the CODE parameter pair -- the last four exist for WDAT, whose
+// draw needs what np21w's gdcsub_write reads (io/gdc_sub.c).
 struct gdc_snap {
     uint8_t ope;
     uint8_t dc_lo, dc_hi;
@@ -50,6 +53,8 @@ struct gdc_snap {
     uint8_t textw[2];
     uint8_t zoom;
     uint8_t write_mode;
+    uint8_t mask[2];
+    uint8_t code[2];
 };
 
 // np21w's direction table: {x, y, x2, y2} steps for octants 0-7 and the
@@ -426,6 +431,60 @@ static void gdc_text(const struct gdc_snap *g)
     }
 }
 
+// ---- WDAT: np21w's gdcsub_write -------------------------------------------
+// A completed 0x2x run arrives here with the command byte in write_mode and
+// its transfer parameters in code[]. np21w's command family also covers
+// RDAT (0xAx): the RTL absorbs those parameters identically but never
+// dispatches, matching np21w where gdcsub_write fires slave-side only and
+// the read-back FIFO stays empty -- IN at the read port answers 0xFF.
+static void gdc_wdat(const struct gdc_snap *g)
+{
+    uint16_t mask = (uint16_t) (g->mask[0] | ((uint16_t) g->mask[1] << 8));
+    uint16_t data;
+    switch (g->write_mode & 0x18u) {
+    case 0x00:
+        data = (uint16_t) (g->code[0] | ((uint16_t) g->code[1] << 8));
+        break;
+    case 0x10:
+        mask &= 0x00FFu;
+        data = g->code[0];
+        break;
+    case 0x18:
+        mask &= 0xFF00u;
+        data = (uint16_t) (g->code[0] << 8);
+        break;
+    default:
+        return;
+    }
+    uint32_t csrw = g->csrw[0] | ((uint32_t) g->csrw[1] << 8) | ((uint32_t) g->csrw[2] << 16) |
+                    ((uint32_t) g->csrw[3] << 24);
+    uint32_t adrs = (csrw & 0x3FFFu) << 1;
+    uint16_t leng = (uint16_t) ((((uint16_t) g->dc_lo | ((uint16_t) g->dc_hi << 8)) & 0x3FFFu) + 1u);
+    uint32_t base = plane_base[(csrw >> 14) & 3u];
+    data &= mask;
+    do {
+        uint16_t v = (uint16_t) (vr_read8(base + adrs)
+                     | ((uint16_t) vr_read8(base + adrs + 1u) << 8));
+        switch (g->write_mode & 3u) {
+        case 0: // replace
+            v = (uint16_t) ((v & (uint16_t) ~mask) | data);
+            break;
+        case 1: // complement
+            v = (uint16_t) (v ^ data);
+            break;
+        case 2: // clear
+            v = (uint16_t) (v & data);
+            break;
+        default: // set
+            v = (uint16_t) (v | data);
+            break;
+        }
+        vr_write8(base + adrs, (uint8_t) v);
+        vr_write8(base + adrs + 1u, (uint8_t) (v >> 8));
+        adrs = (adrs + 2u) & 0x7FFEu;
+    } while (--leng);
+}
+
 // ---- the service loop entry ----------------------------------------------
 
 // The done protocol: level 1, then 0. Peripherals edge-detects the rise and
@@ -459,35 +518,40 @@ int gdc_poll(void)
         if (ch == GDC_CH_SLAVE) {
             struct gdc_snap g;
             const volatile uint32_t *w0 = GDCD_SNAPW(ch);
-            uint32_t w[5];
-            for (int i = 0; i < 5; i++) {
+            uint32_t w[6];
+            for (int i = 0; i < 6; i++) {
                 w[i] = w0[i];
             }
             uint8_t *b = (uint8_t *) &g;
-            for (int i = 0; i < 19; i++) {
+            for (int i = 0; i < 23; i++) {
                 b[i] = (uint8_t) (w[i >> 2] >> ((i & 3) * 8));
             }
             uint32_t csrw = g.csrw[0] | ((uint32_t) g.csrw[1] << 8) | ((uint32_t) g.csrw[2] << 16) |
                             ((uint32_t) g.csrw[3] << 24);
             uint16_t textw = g.textw[0] | ((uint16_t) g.textw[1] << 8);
-            pset_prepare(csrw, textw, g.write_mode);
-            if (!(g.ope & 0x78u)) {
-                pset_at(pset.x, pset.y); // vectp: a single dot
-            }
-            if (g.ope & 0x08u) {
-                vectl(&g);
-            }
-            if (g.ope & 0x10u) {
-                vectt(&g, textw);
-            }
-            if (g.ope & 0x20u) {
-                vectc(&g);
-            }
-            if (g.ope & 0x40u) {
-                vectr(&g);
-            }
-            if ((st & 0xFFu) == GDC_OP_TEXTE) {
-                gdc_text(&g);
+            if ((st & 0xE4u) == 0x20u) {
+                // A completed WDAT run: gdcsub_write, np21w io/gdc_sub.c.
+                gdc_wdat(&g);
+            } else {
+                pset_prepare(csrw, textw, g.write_mode);
+                if (!(g.ope & 0x78u)) {
+                    pset_at(pset.x, pset.y); // vectp: a single dot
+                }
+                if (g.ope & 0x08u) {
+                    vectl(&g);
+                }
+                if (g.ope & 0x10u) {
+                    vectt(&g, textw);
+                }
+                if (g.ope & 0x20u) {
+                    vectc(&g);
+                }
+                if (g.ope & 0x40u) {
+                    vectr(&g);
+                }
+                if ((st & 0xFFu) == GDC_OP_TEXTE) {
+                    gdc_text(&g);
+                }
             }
         }
         retire(ch);

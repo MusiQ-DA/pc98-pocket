@@ -165,7 +165,7 @@ typedef struct {
 // current version.
 static setting_t settings[SET_COUNT] = {
     // Index 1 is the faithful clock: a PC-9801VM/VX's V30 at 2.4576 MHz x4.
-    // With PC98_WORD_MEM the SDRAM answers a guest word in one bus cycle, so
+    // The SDRAM answers a guest word in one bus cycle, so
     // index 1's throughput IS a real 10 MHz machine's -- index 2 is a roughly
     // 2x step up, no longer a compensation for a split that went away. At
     // index 0 the ITF's 640 KB memory test is a long wait with nothing on

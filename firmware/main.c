@@ -54,8 +54,11 @@ int main(void)
     // Fill the OPNA rhythm store while the guest is still held: the six ADPCM-A
     // voices then play from the first key-on instead of mid-boot. Returns 0
     // when rhythm.bin is absent or the build is slim -- the service loop
-    // retries anyway in case the deferload binding lands late.
+    // retries anyway in case the deferload binding lands late. An OPNA-less
+    // build has no voices to fill, so it compiles no loader at all.
+#ifdef ENABLE_OPNA
     uint32_t rhythm_done = rhythm_load();
+#endif
 
     scsi_init();
 
@@ -82,9 +85,11 @@ int main(void)
         if (!settings_sized) {
             settings_sized = slot_declare_size(SETTINGS_SLOT_ID, SETTINGS_SLOT_BYTES);
         }
+#ifdef ENABLE_OPNA
         if (!rhythm_done) {
             rhythm_done = rhythm_load();
         }
+#endif
 
         uint32_t rebind = *FDD_REBIND;
         if (!mounted_a || ((rebind ^ rebind_seen) & FDD0_REBIND_BIT)) {
