@@ -65,6 +65,14 @@ proc rd {addr} {
 #   0x1e       {cont2, cont1} pad words as the softcore sees them (settled|jtag)
 #   0x1f       {jtag_btn2, jtag_btn1} held-button inject mask -- a stuck bit
 #              here means that pad bit reads held forever (no edge for fw)
+#   0x26       fdc_dbg[31:0]  = {reply_left[0], cmd_drops[7:0],
+#              cmd_accepts[7:0], dbg_xfer[14:0]: state[3:0]@14..11 +
+#              fifo_count[10:0]} -- parked state says which wait died
+#   0x27       fdc_dbg[63:32] = {4'b0, drive[1:0], lba[14:0], busy, irq,
+#              dma_enable, dma_tc, dma_ack, dma_req, request[1:0],
+#              reply_left[3:1]} -- the LBA the in-flight request named
+#   0x28/0x29  live FDC command register: {op, unit, C, H | R, N, EOT, GPL}
+#              -- the transaction the engine is parked on or last rejected
 set regs {
     16  V30_PSW_PC
     17  V30_SREG3_SREG2
@@ -88,6 +96,10 @@ set regs {
     35  EU_STALL
     36  QMEM0-3
     37  QMEM4-5+FPTR
+    38  FDC_XFER+ACC/DROP
+    39  FDC_REQ+LBA+DMA
+    40  FDC_CMD_LO (EOT/GPL/N/R)
+    41  FDC_CMD_HI (op/unit/C/H)
     255 MAGIC
 }
 

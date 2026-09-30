@@ -135,6 +135,11 @@ module PERIPHERALS #(
         output  logic   [1:0]   fdd_request,
         output  logic           scsi_request,
         output  logic           fdd_dma_req,
+        // JTAG probe readout of the floppy transfer engine: dbg_fdc packs
+        // where the transaction stands, dbg_fdc_cmd is the live command
+        // register {op,unit,C,H,R,N,EOT,GPL}.
+        output  wire    [63:0]  dbg_fdc,
+        output  wire    [63:0]  dbg_fdc_cmd,
         input   logic           fdd_dma_ack,
         input   logic           terminal_count,
         // Others
@@ -2019,8 +2024,37 @@ module PERIPHERALS #(
         .clock_rate                 (clk_select[1] == 1'b0 ? clk_rate :
                                      clk_select[0] == 1'b0 ? {1'b0, clk_rate[27:1]} : {2'b00, clk_rate[27:2]}),
 
-        .request                    (fdd_request)
+        .request                    (fdd_request),
+
+        .dbg_cmd_accepts            (fdc_dbg_accepts),
+        .dbg_cmd_drops              (fdc_dbg_drops),
+        .dbg_reply_left             (fdc_dbg_reply_left),
+        .dbg_xfer                   (fdc_dbg_xfer),
+        .dbg_command                (fdc_dbg_command),
+        .dbg_sector_info            (fdc_dbg_sector_info)
     );
+
+    logic   [7:0]   fdc_dbg_accepts;
+    logic   [7:0]   fdc_dbg_drops;
+    logic   [3:0]   fdc_dbg_reply_left;
+    logic   [14:0]  fdc_dbg_xfer;
+    logic   [63:0]  fdc_dbg_command;
+    logic   [16:0]  fdc_dbg_sector_info;
+
+    // Where a failed floppy boot is parked: the engine state and how much
+    // of the sector is still buffered, command-level counters, the SD-side
+    // request bits, the LBA the request named, and the DMA handshake. A
+    // stall in S_SD_* with request up says the softcore never served it;
+    // fifo_count>0 with no acks says the 71071 never came.
+    assign dbg_fdc = { 4'd0,
+                       fdc_dbg_sector_info,
+                       fdd_busy, fdd_interrupt, fdc_dma_enable,
+                       fdd_dma_tc, fdd_dma_rw_ack, fdd_dma_req_wire,
+                       fdd_request,
+                       fdc_dbg_reply_left,
+                       fdc_dbg_drops, fdc_dbg_accepts,
+                       fdc_dbg_xfer };
+    assign dbg_fdc_cmd = fdc_dbg_command;
 
     always_ff @(posedge clock)
     begin

@@ -103,7 +103,14 @@ module floppy
 	// {state[3:0], fifo_count[10:0]} -- which wait the transfer died in and
 	// how much of the sector is still buffered. The PC-98 boot stalls are
 	// visible only from the POST panel, so the state comes out raw.
-	output     [14:0] dbg_xfer
+	output     [14:0] dbg_xfer,
+	// The live command register, {op,unit,C,H,R,N,EOT,GPL} -- while the
+	// engine is parked in a wait or sitting in a result phase this still
+	// names the transaction that got it there, so no latch is needed.
+	output     [63:0] dbg_command,
+	// {drive[1:0], sd_sector[14:0]}: the LBA the in-flight (or last) SD
+	// request named, and which unit's image it went to.
+	output     [16:0] dbg_sector_info
 );
 
 reg [27:0] clk_rate;
@@ -1105,7 +1112,9 @@ wire        fifo_empty;
 wire        fifo_full = (fifo_count >= sector_len);
 wire [7:0]  fifo_q;
 
-assign dbg_xfer = {state, fifo_count};
+assign dbg_xfer        = {state, fifo_count};
+assign dbg_command     = command[71:8];
+assign dbg_sector_info = {selected_drive, sd_sector[14:0]};
 
 reg  [7:0] fifo_readdata;
 always @(posedge clk) begin

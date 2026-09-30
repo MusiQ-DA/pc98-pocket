@@ -131,6 +131,9 @@ module CHIPSET #(
         output  logic   [1:0]   fdd_present,
         output  logic   [1:0]   fdd_request,
         output  logic           scsi_request,
+        // JTAG probe: the floppy engine's transfer state and live command.
+        output  wire    [63:0]  dbg_fdc,
+        output  wire    [63:0]  dbg_fdc_cmd,
         // RAM wait mode
         input   logic           wait_count_clk_en,
         input   logic   [1:0]   ram_read_wait_cycle,
@@ -379,6 +382,8 @@ module CHIPSET #(
         .fdd_request                        (fdd_request),
         .scsi_request                       (scsi_request),
         .fdd_dma_req                        (fdd_dma_req),
+        .dbg_fdc                            (dbg_fdc),
+        .dbg_fdc_cmd                        (dbg_fdc_cmd),
         // The BIOS runs 2HD (0x90 window) transfers on channel 2 and 2DD
         // (0xC8 window) on channel 3 -- the arbiter pairs ack[2] with page
         // register 1 (port 0x23) and ack[3] with page register 2 (0x25),

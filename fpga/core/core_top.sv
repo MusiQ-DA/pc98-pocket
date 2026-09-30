@@ -1145,6 +1145,14 @@ module core_top (
             // wedged stream itself, for a fingerprint match against the ROM.
             8'h24:   probe_data_c = v30_dbg_core5;
             8'h25:   probe_data_c = v30_dbg_core6;
+            // FDD engine: where a disk boot is parked (state/fifo), how many
+            // commands stuck, the request bits, the LBA it named, and the
+            // command bytes themselves -- a failed boot keeps the failing
+            // transaction visible here.
+            8'h26:   probe_data_c = fdc_dbg[31:0];
+            8'h27:   probe_data_c = fdc_dbg[63:32];
+            8'h28:   probe_data_c = fdc_dbg_cmd[31:0];
+            8'h29:   probe_data_c = fdc_dbg_cmd[63:32];
             // 0x1e/0x1f: the pad words. 1e is what the softcore actually sees
             // (settled | injected, in clk_chipset); 1f is the probe-held mask
             // itself -- a bit stuck there reads as a button held forever, so
@@ -2052,6 +2060,8 @@ module core_top (
     // the macro is off -- the cone prunes.
     wire [15:0]  chipset_dbg;
     wire  [7:0]  chipset_dbg2;
+    wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
+    wire [63:0]  fdc_dbg_cmd;  // live command {op,unit,C,H,R,N,EOT,GPL}
 
     wire    [1:0]   fdd_present;
     reg     [7:0]   sw;
@@ -2306,6 +2316,8 @@ module core_top (
         .fdd_present                        (fdd_present),
         .fdd_request                        (mgmt_req[7:6]),
         .scsi_request                       (mgmt_req[0]),
+        .dbg_fdc                            (fdc_dbg),
+        .dbg_fdc_cmd                        (fdc_dbg_cmd),
         .wait_count_clk_en                  (cpu_ce_negedge),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),
