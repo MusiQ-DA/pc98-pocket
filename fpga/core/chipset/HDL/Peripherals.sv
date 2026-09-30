@@ -790,6 +790,7 @@ module PERIPHERALS #(
     wire        gdc_m_cur_bl,    gdc_s_cur_bl;
     wire [4:0]  gdc_m_cur_top,   gdc_s_cur_top;
     wire [4:0]  gdc_m_cur_bot,   gdc_s_cur_bot;
+    wire [4:0]  gdc_m_lrep;
     wire [5:0]  gdc_m_cur_rate,  gdc_s_cur_rate;
     wire [1:0]  gdc_m_zoom,      gdc_s_zoom;
     wire [4:0]  gdc_s_lrep;                  // slave CSRFORM LR (GRPH_LR)
@@ -835,7 +836,7 @@ module PERIPHERALS #(
         .cursor_en(gdc_m_cur_en), .cursor_blink_en(gdc_m_cur_bl),
         .cursor_top(gdc_m_cur_top), .cursor_bottom(gdc_m_cur_bot),
         .cursor_rate(gdc_m_cur_rate), .zoom_disp(gdc_m_zoom),
-        .line_rep(), .vlines(),
+        .line_rep(gdc_m_lrep), .vlines(),
         .draw_req(gdc_m_draw_req), .draw_op(gdc_m_draw_op),
         .draw_busy(gdc_m_draw_busy), .srv_done_stb(gdc_m_done_stb),
         .draw_snap(gdc_m_draw_snap)
@@ -1135,6 +1136,8 @@ module PERIPHERALS #(
     logic gdc_cur_en_s1, gdc_cur_en_px;
     logic gdc_cur_bl_s1, gdc_cur_bl_px;
     logic [4:0] crtc_bl_px = 5'h0F, crtc_cl_px = 5'h10;
+    logic [4:0] crtc_pl_px = 5'd0;
+    logic [4:0] gdc_lrep_px = 5'h0F;
     logic [4:0] crtc_b [0:5];     // the CRTC file -- written at 0x70-0x7A below
 
     always_ff @(posedge clk_pc98_dot) begin
@@ -1153,16 +1156,21 @@ module PERIPHERALS #(
             // The 40-column switch, sampled the same way: a mode flip mid-frame
             // would only tear one frame's worth of columns.
             gdc_wide_px     <= pc98_mode1[2];
-            // CRTC cell geometry -- bl+1 rasters per row, cl of them font.
+            // CRTC cell geometry -- pl is the topline offset, bl/cl the
+            // font window; the row pitch itself is the master GDC's
+            // CSRFORM raster count (line_rep), np21w maketext.c's TEXT_LR.
+            crtc_pl_px      <= crtc_b[0];
             crtc_bl_px      <= crtc_b[1];
             crtc_cl_px      <= crtc_b[2];
+            gdc_lrep_px     <= gdc_m_lrep;
         end
     end
 
     pc98_text_render u_pc98_text (
         .clk(clk_pc98_dot), .pix_ce(1'b1),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px), .gdc_sad(gdc_sad_px),
-        .wide(gdc_wide_px), .crtc_bl(crtc_bl_px), .crtc_cl(crtc_cl_px),
+        .wide(gdc_wide_px), .crtc_pl(crtc_pl_px),
+        .crtc_bl(crtc_bl_px), .crtc_cl(crtc_cl_px), .line_rep(gdc_lrep_px),
         .cur_addr(gdc_cur_addr_px), .cur_en(gdc_cur_en_px),
         .cur_blink(gdc_cur_bl_px),
         .cur_top(gdc_cur_top_px), .cur_bot(gdc_cur_bot_px),

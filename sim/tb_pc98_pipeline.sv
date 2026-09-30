@@ -208,7 +208,7 @@ module tb_pc98_pipeline;
         .tv_cell(vid_cell), .tv_attr(vid_attr),
         .font_cell(font_cell), .font_line(font_line), .font_row(font_row),
         .grb(grb), .pixel(pixel),
-        .crtc_bl(5'h0F), .crtc_cl(5'h10)
+        .crtc_pl(5'd0), .crtc_bl(5'h0F), .crtc_cl(5'h10), .line_rep(5'h0F)
     );
 
     // ------------------------------------------------- what is on screen
