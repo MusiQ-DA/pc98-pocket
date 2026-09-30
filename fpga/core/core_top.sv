@@ -2571,9 +2571,15 @@ module core_top (
     wire [15:0] audio_l = pause_core ? 16'd0 : (boost_cfg ? cmp_l : out_l);
     wire [15:0] audio_r = pause_core ? 16'd0 : (boost_cfg ? cmp_r : out_r);
 
-    // Drive noise: fdd_sound synthesises the seek rattle, head-load clunk,
-    // transfer buzz and motor whir from floppy.v's own timing signals, all in
-    // clk_chipset. osd_snd_mode is an osd_* setting, already this domain.
+    // Drive noise: fdd_sound plays back recorded mechanism samples, timed by
+    // floppy.v's own step/head/xfer/motor signals, all in clk_chipset. The
+    // samples stream in over the same dl_* path as the ROMs -- the "FDD sound"
+    // slot lands at bridge 0x10200000 -> dl_addr 0x200000..0x207FFF. Its
+    // window overlaps none of rom_dl_wanted's predicates, so the ROM FIFO
+    // never sees it. osd_snd_mode is an osd_* setting, already this domain.
+    wire        snd_dl_hit = dl_wr && (dl_addr[27:16] == 12'h020)
+                                  && !dl_addr[15];
+    wire [13:0] snd_dl_addr = dl_addr[14:1];
     wire fdd_snd_step, fdd_snd_head, fdd_snd_xfer, fdd_snd_motor;
     wire signed [15:0] fdd_audio;
     fdd_sound fdd_sound (
@@ -2584,6 +2590,9 @@ module core_top (
         .head_load   (fdd_snd_head),
         .xfer_active (fdd_snd_xfer),
         .motor_on    (fdd_snd_motor),
+        .snd_we      (snd_dl_hit),
+        .snd_waddr   (snd_dl_addr),
+        .snd_wdata   (dl_data),
         .audio       (fdd_audio)
     );
 

@@ -192,6 +192,18 @@
         ],
         "size_maximum": "0x400000",
         "deferload": true
+      },
+      {
+        "name": "FDD Sound",
+        "id": 20,
+        "required": false,
+        "parameters": "0x202",
+        "filename": "fddsnd.bin",
+        "extensions": [
+          "bin"
+        ],
+        "address": "0x10200000",
+        "size_maximum": "0x8000"
       }
     ]
   }

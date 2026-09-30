@@ -1,47 +1,43 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// fdd_sound -- a floppy drive's mechanism noise, synthesised into the mix.
+// fdd_sound -- a floppy drive's mechanism noise, played back from recorded
+// samples of a real 5.25" PC-98 drive (this core's reference unit).
 //
-// A real drive's sound is percussive, not tonal: each head step is a short
-// mechanical knock (a broadband snap plus a low resonant body that decays
-// in a few milliseconds), the head-load solenoid is a deeper, louder thud,
-// and the media under the head is a steady hiss while it spins. So every
-// voice here is an exponentially-decaying envelope driving noise and one
-// low square -- the envelope falls as env -= env>>K, no multipliers.
+// Synthesis never matched the mechanism -- the seek's stepped-motor whine,
+// the rattle's micro-bounce texture, the clunk's metallic ring all resist
+// oscillator+noise approximations. So instead the "FDD sound" data slot
+// (fddsnd.bin, scripts/fddsnd_pack.py) streams straight into this module's
+// sample store via the data_loader write path, and the voices below play
+// those cuts back: one-shots fire per event, loops ride gain envelopes.
 //
-//   STEP KNOCK ("グッ" / the "ガガガ" of a long seek) -- step_pulse, one clk
-//   pulse per head step (floppy.v's seek terms). Each pulse reloads the
-//   knock envelope; it decays in ~3 ms, so a burst of steps chains knocks at
-//   the step rate exactly the way the actuator does. Body ~380 Hz on the
-//   5.25" voice, ~560 Hz on a 3.5".
+//   STEP TICK -- step_pulse, one clk pulse per head step (floppy.v's seek
+//   terms). Two tick voices ping-pong so a burst's overlapping decays are
+//   not retriggered mid-ring.
 //
-//   HEAD-LOAD THUD ("カコン") -- the rising edge of head_load: the solenoid
-//   thud, ~10 ms decay on a ~190 Hz body, the loudest voice. (head_load
-//   tracks motor_on here, so the release edge can never play -- the gate
-//   mutes the same cycle. If a real head-load line ever lands, give the
-//   falling edge a click of its own.)
+//   HEAD-LOAD CLUNK -- rising edge of head_load.
 //
-//   MEDIA HISS ("シャー", the contact friction of a transfer) -- xfer_active
-//   level, pure LFSR noise with a ~5.5 Hz rotational wobble between two
-//   levels; sector gaps gate it, so a sequential read chugs with the drive's
-//   own rhythm. Track hops inside the transfer still land as knocks.
+//   SEEK WHINE -- the continuous loop while steps keep arriving (a ~50 ms
+//   holdover re-arms on every step_pulse and releases ~50 ms after the
+//   last). This is the "プープー"/ジーコジーコ band.
 //
-//   MOTOR WHIR -- while motor_on, a ±low noise whir with a faint ~300 Hz
-//   hum under it; nearly subliminal, it exists so a spinning drive is not
-//   the same silence as an off one.
+//   MEDIA HISS -- loop while xfer_active (sectors flowing under the head).
 //
-//   mode picks the cabinet: 1 = loud 5.25" (deep thud, heavy knock),
-//   2 = 3.5" (higher knock, quiet everything -- the drives self-load on
-//   insert, so their load click is small too), 0 = off.
-//   motor_on && mode!=0 is the master gate: low freezes every counter,
-//   clears the envelopes, and forces audio to exactly 0.
+//   MOTOR WHIR -- loop while motor_on; quiet background.
 //
-// Timing: everything advances on an internal ~48 kHz sample tick divided
-// out of clk -- the cadence audio_mixer expects -- so `audio` holds between
-// ticks and the mixer's change-detect FIFO sees ~48 kHz of writes.
+// Blob layout (16-bit little-endian words in the store):
+//   word 0    u16 magic low 'FD' = 0x4446 (word 1 = 'S1' = 0x3153)
+//   word 2    u16 version, word 3 u16 segment count
+//   words 4.. per segment: u16 word_offset, u16 word_length (bytes/2)
+//   payload   s8 PCM at 24 kHz, two samples per word, low byte first
 //
-// Area: one LFSR, two envelopes, three toggle dividers, two shift-decays.
-// No multipliers, no ROMs.
+// Segments (index): 0 tick, 1 clunk, 2 seek, 3 read, 4 motor.
+// No blob -> magic mismatch -> loaded=0 -> silence.
+//
+// Timing: ~48 kHz sample tick divided out of clk; voice positions advance
+// every other tick (24 kHz playback, zero-order hold). Six voices fetch
+// one word each across the six clks after every tick -- the store's single
+// read port is ample at ~890 clk/tick. Store writes (the dataslot stream)
+// share clk (data_loader's clk_memory = clk_chipset).
 //
 // SPDX-FileType: SOURCE
 //
@@ -58,142 +54,212 @@ module fdd_sound #(
     input  logic               head_load,
     input  logic               xfer_active,
     input  logic               motor_on,
+    // sample store write port: data_loader (dl_*) tap
+    input  logic               snd_we,
+    input  logic [13:0]        snd_waddr,
+    input  logic [15:0]        snd_wdata,
     output logic signed [15:0] audio
 );
 
-    wire mode35   = (mode == 2'd2);
-    wire drive_en = motor_on && (mode != 2'd0);
+    // ----------------------------------------------------------- the store
+    localparam int WORDS = 16384;
+    (* ramstyle = "M10K" *) logic [15:0] sram [0:WORDS-1];
+
+    logic [13:0] rd_addr;
+    logic [15:0] rd_data;
+    always_ff @(posedge clk) begin
+        if (snd_we) sram[snd_waddr] <= snd_wdata;
+        rd_data <= sram[rd_addr];
+    end
+
+    // -------------------------------------------------------- header walk
+    //
+    // After reset, stream words {0,4..13} through the read port into the
+    // segment table. rd_addr is registered, so word f(k) lands in rd_data
+    // while hdr_cnt==k+2 -- the case below captures f(hdr_cnt-2).
+    logic        hdr_done = 1'b0;
+    logic        loaded   = 1'b0;
+    logic [3:0]  hdr_cnt  = 4'd0;
+    logic [13:0] seg_off [0:4];
+    logic [13:0] seg_len [0:4];
+    wire  [13:0] hdr_addr = (hdr_cnt == 4'd0) ? 14'd0 : 14'(hdr_cnt + 4'd3);
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            hdr_cnt  <= 4'd0;
+            hdr_done <= 1'b0;
+            loaded   <= 1'b0;
+        end else if (!hdr_done) begin
+            hdr_cnt <= hdr_cnt + 4'd1;
+            if (hdr_cnt >= 4'd2)
+                case (hdr_cnt)
+                    4'd2:  loaded     <= (rd_data == 16'h4446);
+                    4'd3:  seg_off[0] <= rd_data[13:0];
+                    4'd4:  seg_len[0] <= rd_data[13:0];
+                    4'd5:  seg_off[1] <= rd_data[13:0];
+                    4'd6:  seg_len[1] <= rd_data[13:0];
+                    4'd7:  seg_off[2] <= rd_data[13:0];
+                    4'd8:  seg_len[2] <= rd_data[13:0];
+                    4'd9:  seg_off[3] <= rd_data[13:0];
+                    4'd10: seg_len[3] <= rd_data[13:0];
+                    4'd11: seg_off[4] <= rd_data[13:0];
+                    4'd12: seg_len[4] <= rd_data[13:0];
+                    default: ;
+                endcase
+            if (hdr_cnt == 4'd12)
+                hdr_done <= 1'b1;
+        end
+    end
 
     // ------------------------------------------------------------- timing
-    //
-    // Sample tick: a plain integer divider, CLK_HZ/SMP_HZ = 894 clocks at
-    // 42.95 MHz (~48.0 kHz; needs CLK_HZ/SMP_HZ < 1024).
     localparam int SMP_DIV = CLK_HZ / SMP_HZ;
     logic [9:0] smp_div;
     wire        smp_ce = (smp_div == 10'(SMP_DIV - 1));
     always_ff @(posedge clk) begin
-        if (reset || !drive_en) smp_div <= 10'd0;
-        else                    smp_div <= smp_ce ? 10'd0 : smp_div + 10'd1;
+        if (reset)  smp_div <= 10'd0;
+        else        smp_div <= smp_ce ? 10'd0 : smp_div + 10'd1;
     end
 
-    // ------------------------------------------------------------ noise
-    //
-    // One 16-bit Fibonacci LFSR (x^16 + x^14 + x^13 + x^11 + 1) supplies
-    // every noise source; different taps decorrelate the voices.
-    logic [15:0] lfsr;
-    wire         lfsr_fb = lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10];
-    always_ff @(posedge clk) begin
-        if (reset)          lfsr <= 16'hACE1;
-        else if (smp_ce)    lfsr <= {lfsr[14:0], lfsr_fb};
-    end
+    wire drive_en = loaded && (mode != 2'd0);
 
-    // --------------------------------------------------- body resonators
+    // ---------------------------------------------------------- voices
     //
-    // Low squares pace the percussive voices -- what the ear hears as the
-    // "thock"/"thud" pitch is this, not a filter:
-    //   sq380 ~381 Hz (SMP/126)  -- 5.25" step-knock body (560 Hz on 3.5")
-    //   sq560 ~571 Hz (SMP/84)   -- 3.5" step-knock body
-    //   sq190 ~190 Hz (SMP/252)  -- head-load thud body
-    //   sq300 ~298 Hz (SMP/161)  -- motor hum
-    logic [6:0] c380;
-    logic [6:0] c560;
-    logic [7:0] c190;
-    logic [7:0] c300;
-    logic       sq380, sq560, sq190, sq300;
+    //   0,1 tick (one-shot, ping-pong)   2 clunk (one-shot)
+    //   3 seek (loop)   4 read (loop)   5 motor (loop)
+    function automatic logic [2:0] VSEG(input int v);
+        case (v)
+            0, 1:    return 3'd0;
+            2:       return 3'd1;
+            3:       return 3'd2;
+            4:       return 3'd3;
+            default: return 3'd4;
+        endcase
+    endfunction
+
+    logic [14:0] vpos  [0:5];    // byte index within segment (len*2 can exceed 14 bits)
+    logic        vact  [0:5];    // one-shots only
+    logic [7:0]  vgain [0:5];    // loop voices only
+    logic [15:0] vword [0:5];    // last fetched word
+    logic        vlsb  [0:5];    // pos[0] latched at fetch time
+    logic        ph;             // 24 kHz advance phase
+    logic        tick_sel;
+    logic        head_q;
+    logic [12:0] step_hold;      // seek-loop holdover, ~50 ms at 48 kHz
+
+    integer vi;
     always_ff @(posedge clk) begin
-        if (reset || !drive_en) begin
-            c380 <= 7'd0;    sq380 <= 1'b0;
-            c560 <= 7'd0;    sq560 <= 1'b0;
-            c190 <= 8'd0;    sq190 <= 1'b0;
-            c300 <= 8'd0;    sq300 <= 1'b0;
-        end else if (smp_ce) begin
-            if (c380 == 7'd62)   begin c380 <= 7'd0;  sq380 <= ~sq380; end
-            else                      c380 <= c380 + 7'd1;
-            if (c560 == 7'd41)   begin c560 <= 7'd0;  sq560 <= ~sq560; end
-            else                      c560 <= c560 + 7'd1;
-            if (c190 == 8'd125)  begin c190 <= 8'd0;  sq190 <= ~sq190; end
-            else                      c190 <= c190 + 8'd1;
-            if (c300 == 8'd80)   begin c300 <= 8'd0;  sq300 <= ~sq300; end
-            else                      c300 <= c300 + 8'd1;
+        if (reset) begin
+            ph        <= 1'b0;
+            tick_sel  <= 1'b0;
+            head_q    <= 1'b0;
+            step_hold <= 13'd0;
+            for (vi = 0; vi < 6; vi = vi + 1) begin
+                vact[vi]  <= 1'b0;
+                vpos[vi]  <= 15'd0;
+                vgain[vi] <= 8'd0;
+            end
+        end else begin
+            head_q <= head_load;
+            if (head_load && !head_q) begin
+                vact[2] <= 1'b1;
+                vpos[2] <= 15'd0;
+            end
+            if (step_pulse) begin
+                step_hold      <= 13'd2400;
+                vact[tick_sel] <= 1'b1;
+                vpos[tick_sel] <= 15'd0;
+                tick_sel       <= ~tick_sel;
+            end else if (smp_ce) begin
+                if (|step_hold) step_hold <= step_hold - 13'd1;
+                ph <= ~ph;
+                for (vi = 0; vi < 6; vi = vi + 1) begin
+                    if (vi >= 3) begin
+                        if (vtgt(vi) && vgain[vi] < 8'd252)
+                            vgain[vi] <= vgain[vi] + 8'd3;
+                        else if (!vtgt(vi) && |vgain[vi])
+                            vgain[vi] <= vgain[vi] - 8'd3;
+                    end
+                    if (ph) begin
+                        if (vi < 3) begin
+                            if (vact[vi]) begin
+                                if (vpos[vi] >= {1'b0, seg_len[VSEG(vi)], 1'b0} - 15'd1)
+                                    vact[vi] <= 1'b0;
+                                else
+                                    vpos[vi] <= vpos[vi] + 15'd1;
+                            end
+                        end else if (vpos[vi] >= {1'b0, seg_len[VSEG(vi)], 1'b0} - 15'd1)
+                            vpos[vi] <= 15'd0;
+                        else
+                            vpos[vi] <= vpos[vi] + 15'd1;
+                    end
+                end
+            end
         end
     end
 
-    // ----------------------------------------------------- the envelopes
+    function automatic logic vtgt(input int v);
+        case (v)
+            3:       return |step_hold;
+            4:       return xfer_active;
+            5:       return motor_on;
+            default: return 1'b0;
+        endcase
+    endfunction
+
+    // ------------------------------------------------------- sample fetch
     //
-    // Exponential decay as env -= (env>>K)|1 per sample tick: tau ~ 2^K
-    // samples up top (the part that reads as the decay time) and the |1
-    // walks the tail to zero. K=7 -> ~2.7 ms knock, K=9 -> ~10.7 ms thud.
-    // A strike reloads the envelope outright -- every step is one identical
-    // knock, and fast step bursts just retrigger.
-
-    // knock: one per head step.
-    localparam logic [11:0] KNOCK_AMP = 12'h900;
-    logic [11:0] knock_env;
+    // Right after each tick, six consecutive clks present each voice's word
+    // address; the read data lands the next clk and is latched into vword.
+    // vlsb keeps the byte-select bit from fetch time so it tracks the word.
+    logic [2:0] fcnt = 3'd7;
     always_ff @(posedge clk) begin
-        if (reset || !drive_en)  knock_env <= 12'd0;
-        else if (step_pulse)     knock_env <= KNOCK_AMP;
-        else if (smp_ce && |knock_env)
-            knock_env <= knock_env - (12'(knock_env >> 7) | 12'd1);
+        if (smp_ce)           fcnt <= 3'd0;
+        else if (fcnt != 3'd7) fcnt <= fcnt + 3'd1;
+
+        if (!hdr_done)
+            rd_addr <= hdr_addr;
+        else if (fcnt < 3'd6) begin
+            rd_addr    <= seg_off[VSEG(fcnt)] + 14'(vpos[fcnt] >> 1);
+            vlsb[fcnt] <= vpos[fcnt][0];
+        end
+        if (hdr_done && fcnt >= 3'd1 && fcnt <= 3'd6)
+            vword[fcnt - 3'd1] <= rd_data;
     end
 
-    // thud: the head-load (motor-on) rising edge, the loudest voice.
-    logic        head_load_q;
-    logic [11:0] clunk_env;
-    always_ff @(posedge clk) begin
-        if (reset) head_load_q <= 1'b0;
-        else       head_load_q <= head_load;
+    function automatic logic signed [7:0] vsample(input int v);
+        return vlsb[v] ? $signed(vword[v][15:8]) : $signed(vword[v][7:0]);
+    endfunction
+
+    // ------------------------------------------------------------- mixer
+    // One-shots at s8<<6; loops at s8*gain/4 -- same full-scale weight.
+    logic signed [18:0] mix;
+    always_comb begin
+        logic signed [18:0] acc;
+        acc = 19'sd0;
+        for (int v = 0; v < 3; v = v + 1)
+            if (vact[v]) acc = acc + ($signed(vsample(v)) <<< 6);
+        for (int v = 3; v < 6; v = v + 1)
+            acc = acc + (($signed(vsample(v)) * $signed({1'b0, vgain[v]})) >>> 2);
+        mix = acc;
     end
-    wire head_edge = head_load ^ head_load_q;
+
+    // master gain ramps with the drive gate so it never pops
+    logic [7:0] mgain;
     always_ff @(posedge clk) begin
-        if (reset || !drive_en)          clunk_env <= 12'd0;
-        else if (head_edge && head_load) clunk_env <= mode35 ? 12'h600 : 12'hFFF;
-        else if (smp_ce && |clunk_env)
-            clunk_env <= clunk_env - (12'(clunk_env >> 9) | 12'd1);
+        if (reset) mgain <= 8'd0;
+        else if (smp_ce) begin
+            if (drive_en && mgain < 8'd252) mgain <= mgain + 8'd4;
+            else if (!drive_en && |mgain)   mgain <= mgain - 8'd4;
+        end
     end
 
-    // Rotational wobble for the hiss: ~5.5 Hz at the sample rate, 60% of the
-    // period at the louder level -- the disk's surface modulates the contact
-    // noise once per revolution.
-    logic [13:0] wobble;
+    wire signed [27:0] scaled = mix * $signed({1'b0, mgain});
+    wire signed [19:0] mixg   = scaled[27:8];       // >>>8
     always_ff @(posedge clk) begin
-        if (reset || !drive_en) wobble <= 14'd0;
-        else if (smp_ce)        wobble <= (wobble == 14'd8730) ? 14'd0 : wobble + 14'd1;
-    end
-    wire hiss_hi = (wobble < 14'd5300);
-
-    // ------------------------------------------------------------- voice
-    //
-    // Each voice is a sign flip of its envelope (or a fixed level for the
-    // continuous noises) -- a signed ±1 multiplier is free. The knock and
-    // thud sum a body square and a noise snap under the same envelope.
-    wire signed [13:0] knock_a = $signed({2'b00, knock_env});
-    wire signed [13:0] clunk_a = $signed({2'b00, clunk_env});
-    wire        knock_body = mode35 ? sq560 : sq380;
-    wire signed [13:0] knock_term =
-        (knock_body ? knock_a : -knock_a) +
-        (lfsr[0]   ? knock_a : -knock_a);
-
-    wire signed [13:0] clunk_term =
-        (sq190   ? (clunk_a <<< 1) : -(clunk_a <<< 1)) +
-        (lfsr[5] ? clunk_a         : -clunk_a);
-
-    wire [11:0] hiss_amp = xfer_active ? (hiss_hi ? 12'd1600 : 12'd1000) : 12'd0;
-    wire signed [13:0] hiss_a    = $signed({2'b00, hiss_amp});
-    wire signed [13:0] hiss_term = lfsr[9] ? hiss_a : -hiss_a;
-
-    wire [7:0]  motor_amp = mode35 ? 8'd48 : 8'd96;
-    wire signed [13:0] motor_a    = $signed({6'b000000, motor_amp});
-    wire signed [13:0] motor_term =
-        (sq300   ? motor_a : -motor_a) +
-        (lfsr[3] ? motor_a : -motor_a);
-
-    // Peak |mix| ~= knock 2*0x900 + thud 3*0x400-ish + hiss + whir << 15 bits.
-    wire signed [15:0] mix =
-        knock_term + clunk_term + hiss_term + motor_term;
-
-    always_ff @(posedge clk) begin
-        if (reset || !drive_en) audio <= 16'sd0;
-        else if (smp_ce)        audio <= mix;
+        if (reset) audio <= 16'sd0;
+        else if (smp_ce)
+            audio <= (mixg > 20'sd32767)  ? 16'sd32767  :
+                     (mixg < -20'sd32768) ? -16'sd32768 :
+                      16'(mixg);
     end
 
 endmodule

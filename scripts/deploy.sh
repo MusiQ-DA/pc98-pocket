@@ -167,6 +167,9 @@ say "have $(stat -f%z "$ART/ap_core.rbf") bytes of bitstream"
 
 bash scripts/package.sh "$ART" || exit 1
 cp "$ROMS/bios.rom" "$ROMS/itf.rom" "$ROMS/font.rom" dist/pc98/Assets/pc98/hiroya.PC9801/
+# Optional drive-noise sample pack (scripts/fddsnd_pack.py); the core stays
+# silent without it, so absence is not a failure.
+[ -f assets/fddsnd.bin ] && cp -f assets/fddsnd.bin dist/pc98/Assets/pc98/hiroya.PC9801/
 # The softcore's firmware rides along as a slot, so a change to an on-screen
 # readout is a file copy rather than a Quartus compile. Built here rather than
 # assumed present: firmware.bin is gitignored, being a build product.
