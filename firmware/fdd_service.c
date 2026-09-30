@@ -45,12 +45,19 @@ static uint32_t fdd_sector_words[2] = { 128, 128 };
 // FDI wraps it in (see fdd_probe_fdi).
 static uint32_t fdd_base[2] = { 0, 0 };
 
-// The geometry an FDI header declared for the mounted image, in
-// {spt, cyls, heads, is_1024} -- zero spt means the image is not an FDI
-// and fdd_mount falls back to the size table. The header's geometry wins
-// because the size table only knows the standard formats: a 15-sector
-// 2HD or 16-sector BASIC disk lands on the wrong row by sector count.
-static uint32_t fdd_fdi_geom[2][4];
+// The geometry a wrapped image (FDI or D88) declared for the mounted
+// media, in {spt, cyls, heads, is_1024} -- zero spt means the image is a
+// plain raw stream and fdd_mount falls back to the size table. The
+// header's geometry wins because the size table only knows the standard
+// formats: a 15-sector 2HD or 16-sector BASIC disk lands on the wrong
+// row by sector count.
+static uint32_t fdd_img_geom[2][4];
+
+// Set when the mounted image is a D88 (track-offset table + per-sector
+// headers): fdd_poll then maps LBAs through d88_offset instead of the
+// raw base + lba*width arithmetic.
+static uint8_t fdd_d88[2];
+static uint8_t fdd_d88_wp[2];
 
 // FDI (the T98/np21w family's format): a 0x20-byte header in front of the raw
 // image -- {dummy, fddtype, headersize, fddsize, sectorsize, sectors,
@@ -81,23 +88,176 @@ static void fdd_probe_fdi(uint32_t drive, uint32_t sectors)
     uint32_t cyl    = w[7];           // cylinders
     uint32_t raw    = ssize * spt * surf * cyl;
     uint32_t file   = sectors * 512;  // the slot's size, truncated to sectors
-    fdd_fdi_geom[drive][0] = 0;
+    fdd_img_geom[drive][0] = 0;
     if (hsize >= 0x20 && hsize <= 0x1000
         && ssize >= 128 && ssize <= 4096
         && spt >= 1 && spt <= 255
         && surf == 2 && cyl >= 1 && cyl <= 127
         && raw + hsize > file - 1024 && raw + hsize < file + 1024) {
         fdd_base[drive] = hsize;
-        fdd_fdi_geom[drive][0] = spt;
-        fdd_fdi_geom[drive][1] = cyl;
-        fdd_fdi_geom[drive][2] = surf;
+        fdd_img_geom[drive][0] = spt;
+        fdd_img_geom[drive][1] = cyl;
+        fdd_img_geom[drive][2] = surf;
         // The controller's N accepts only 512 or 1024; a size between or
         // above them is unusable either way, so only the 1024 case sets it.
-        fdd_fdi_geom[drive][3] = (ssize == 1024) ? 1 : 0;
+        fdd_img_geom[drive][3] = (ssize == 1024) ? 1 : 0;
     }
 }
 
-// Stream the sector now in the bridge RAM into the controller FIFO, in order.
+// D88 (the emulator family's tagged format): a 0x2B0 header -- 0x20 bytes
+// of name/type/size, then 164 track-base offsets -- followed by track
+// blobs, each a run of 16-byte sector headers {c,h,r,n,count,...} glued
+// to their data (np21w diskimage/fd/fdd_head_d88.h). Tracks index as
+// cyl*2 + head, which is exactly what the controller's CHS->LBA walk
+// produces, so lba/spt is the track slot and lba%spt+1 the R to find.
+#define D88_TRACKS   164
+#define D88_HDRSIZE  (0x20 + D88_TRACKS * 4)
+#define D88_SECHDR   16
+
+// Fetch `bytes` from a byte offset into the bridge RAM. Thin wrapper so the
+// D88 walkers read headers and data through one path.
+static int fdd_read_at(uint32_t drive, uint32_t off, uint32_t bytes)
+{
+    return tds_transfer(drive ? FDD1_SLOT_ID : FDD0_SLOT_ID, off,
+                        FDD_TDS_READ, bytes);
+}
+
+// Probe the mounted image for a D88 header. The format has no magic, so the
+// check is structural: fd_size must equal the file, the first track must
+// sit exactly past the header, and every populated track must point inside
+// the file. On success fdd_img_geom is filled from the image's own records
+// (track 0's sector count and N, the table's last used cylinder), which --
+// like the FDI path -- beats guessing from the byte count.
+static void fdd_probe_d88(uint32_t drive, uint32_t sectors)
+{
+    uint32_t file = sectors * 512;
+    fdd_d88[drive] = 0;
+    fdd_d88_wp[drive] = 0;
+    fdd_img_geom[drive][0] = 0;   // no wrapped geometry unless a probe sets it
+    // The bridge RAM is 1 KB -- bytes 512+ hold the settings window -- so the
+    // 688-byte header lands in two reads: 512 B at 0 covers the name/type/
+    // size fields plus track entries 0-119, the remaining 176 B at 0x200
+    // the rest of the table.
+    if (!fdd_read_at(drive, 0, 512) || !fdd_read_at(drive, 0x200, 176)) {
+        return;
+    }
+    // The second transfer landed in the same window, so pull the table tail
+    // into a scratch array first, then re-fetch the head window.
+    uint32_t tail[44];
+    uint32_t fd_size, first, protect;
+    int populated = 0, last = 0, odd = 0;
+    *FDD_BRAM_ADDR = 0;
+    for (int i = 0; i < 44; i++) {
+        tail[i] = *FDD_BRAM_RDATA;
+    }
+    for (int i = 0; i < 44; i++) {
+        int idx = 120 + i;
+        uint32_t t = tail[i];
+        if (t) {
+            if (t < D88_HDRSIZE || t >= file + 512) {
+                return;                  // points outside the image
+            }
+            populated++;
+            last = idx;
+            odd |= idx & 1;
+        }
+    }
+    if (!fdd_read_at(drive, 0, 512)) {
+        return;
+    }
+    *FDD_BRAM_ADDR = 0;
+    uint32_t w[128];
+    for (int i = 0; i < 128; i++) {
+        w[i] = *FDD_BRAM_RDATA;
+    }
+    fd_size = w[7];                      // bytes 0x1C-0x1F
+    protect = w[6];                      // bytes 0x18-0x1B (protect = 0x1A)
+    first   = w[8];                      // trackp[0], byte 0x20
+    for (int i = 0; i < 120; i++) {
+        uint32_t t = w[8 + i];
+        if (t) {
+            if (t < D88_HDRSIZE || t >= fd_size) {
+                return;                  // points outside the image
+            }
+            populated++;
+            last = i;
+            odd |= i & 1;
+        }
+    }
+    if (!populated || first != D88_HDRSIZE
+        || fd_size + 512 < file || fd_size > file + 512) {
+        return;                          // empty, or size mismatch
+    }
+    // Track 0's first sector header supplies spt and the media's N.
+    if (!fdd_read_at(drive, first, D88_SECHDR)) {
+        return;
+    }
+    *FDD_BRAM_ADDR = 0;
+    uint32_t h[4];
+    for (int i = 0; i < 4; i++) {
+        h[i] = *FDD_BRAM_RDATA;
+    }
+    uint32_t n       = (h[0] >> 24) & 0xFF;
+    uint32_t trk_spt = h[1] & 0xFFFF;    // sectors-in-track count
+    if (!trk_spt || trk_spt > 32) {
+        return;
+    }
+    fdd_d88[drive] = 1;
+    fdd_d88_wp[drive] = (protect & 0x00100000) ? 1 : 0;  // protect bit4, byte 0x1A
+    fdd_img_geom[drive][0] = trk_spt;
+    // Double-sided media runs tracks cyl*2+head; a D88 can mark a disk
+    // single-sided by leaving every odd slot empty.
+    fdd_img_geom[drive][1] = last / 2 + 1;
+    fdd_img_geom[drive][2] = odd ? 2 : 1;
+    fdd_img_geom[drive][3] = (n == 3) ? 1 : 0;
+}
+
+// Resolve an LBA to a data byte offset in a D88 image: the track's base
+// from the table, then a walk of the sector headers until one's r matches
+// (np21w searchsector_d88 matches by r, which keeps interleaved tracks
+// right). Returns 0 on an empty track, a short/overrun walk, or a bad
+// header -- the caller treats 0 as "sector not found" and stops.
+static uint32_t d88_offset(uint32_t drive, uint32_t lba)
+{
+    uint32_t spt = fdd_img_geom[drive][0];
+    uint32_t trk = 0, l = lba;
+    while (l >= spt) {                    // mul-only softcore: subtract-loop
+        l -= spt;
+        trk++;
+    }
+    uint32_t want_r = l + 1;
+    if (!fdd_read_at(drive, 0x20 + trk * 4, 4)) {
+        return 0;
+    }
+    *FDD_BRAM_ADDR = 0;
+    uint32_t pos = *FDD_BRAM_RDATA;
+    if (!pos) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < spt; i++) {
+        if (!fdd_read_at(drive, pos, D88_SECHDR)) {
+            return 0;
+        }
+        *FDD_BRAM_ADDR = 0;
+        uint32_t h0 = *FDD_BRAM_RDATA;   // bytes 0-3: c, h, r, n
+        uint32_t h1 = *FDD_BRAM_RDATA;   // bytes 4-7: count, mfm, del, stat
+        *FDD_BRAM_RDATA;                 // bytes 8-11: stat tail, seektime, rsv
+        uint32_t h3 = *FDD_BRAM_RDATA;   // bytes 12-15: rsv, rpm, size
+        (void) h1;
+        uint32_t r     = (h0 >> 16) & 0xFF;
+        uint32_t dsize = (h3 >> 16) & 0xFFFF;
+        if (r == want_r) {
+            return pos + D88_SECHDR;
+        }
+        if (!dsize || dsize > 4096) {
+            return 0;                    // corrupt walk, stop
+        }
+        pos += D88_SECHDR + dsize;
+    }
+    return 0;
+}
+
+
 // The bridge RAM holds the sector little-endian, so the low byte of each word is
 // the earlier file byte. The FIFO register address is set once for the whole run.
 // The length is the mounted media's sector width -- 512 bytes for every format
@@ -213,9 +373,15 @@ static uint32_t fdd_image_hash(uint32_t drive, uint32_t sectors)
 // (1) via the management-bus drive bit.
 void fdd_mount(uint32_t drive, uint32_t sectors)
 {
-    fdd_probe_fdi(drive, sectors);   // sets fdd_base+geometry when the file is an FDI
-    struct fdd_geom fdi = { 0, fdd_fdi_geom[drive][1], fdd_fdi_geom[drive][0],
-                            fdd_fdi_geom[drive][2], fdd_fdi_geom[drive][3] };
+    // D88 first: its checks (fd_size == file, trackp[0] == 0x2B0) are
+    // structural and strong, and an FDI's own arithmetic could otherwise
+    // pass on a D88's header words. FDI runs only for non-D88 images.
+    fdd_probe_d88(drive, sectors);
+    if (!fdd_d88[drive]) {
+        fdd_probe_fdi(drive, sectors); // sets fdd_base+geometry for an FDI
+    }
+    struct fdd_geom fdi = { 0, fdd_img_geom[drive][1], fdd_img_geom[drive][0],
+                            fdd_img_geom[drive][2], fdd_img_geom[drive][3] };
     const struct fdd_geom *g = &fdi;
     if (!fdi.spt) {
         g = &fdd_geoms[0];
@@ -238,7 +404,7 @@ void fdd_mount(uint32_t drive, uint32_t sectors)
     // table row, so both always agree with what the media was declared to be.
     mgmt_write(drive, FMGMT_SECSIZE, g->is_1024);
     fdd_sector_words[drive] = g->is_1024 ? 256 : 128;
-    mgmt_write(drive, FMGMT_WRPROT, 0);
+    mgmt_write(drive, FMGMT_WRPROT, fdd_d88_wp[drive]);
     mgmt_write(drive, FMGMT_PRESENT, 1);
     fdd_sectors[drive] = sectors;
     fdd_inserted[drive] = 1;
@@ -331,11 +497,14 @@ int fdd_poll(void)
         uint32_t drv = (reg0 & FDD_LBA_DRIVE) ? 1 : 0;
         uint32_t bytes = fdd_sector_words[drv] * 4;
         uint32_t slot = drv ? FDD1_SLOT_ID : FDD0_SLOT_ID;
-        uint32_t off = fdd_base[drv] + (reg0 & FDD_LBA_MASK) * bytes;
+        uint32_t lba = reg0 & FDD_LBA_MASK;
+        uint32_t off = fdd_d88[drv] ? d88_offset(drv, lba)
+                                  : fdd_base[drv] + lba * bytes;
         fdd_dbg_seen++;
         fdd_dbg_lba = reg0;
-        // Push only on a good read; a failed transfer must not stream stale bytes.
-        if (tds_transfer(slot, off, FDD_TDS_READ, bytes)) {
+        // Push only on a good read; a failed transfer (or a D88 walk that
+        // found no such sector) must not stream stale bytes.
+        if (off && tds_transfer(slot, off, FDD_TDS_READ, bytes)) {
             push_sector(drv);
             fdd_dbg_pushed++;
             fdd_dbg_aft = *FDD_REQUEST;
@@ -347,11 +516,15 @@ int fdd_poll(void)
         uint32_t drv = (reg0 & FDD_LBA_DRIVE) ? 1 : 0;
         uint32_t bytes = fdd_sector_words[drv] * 4;
         uint32_t slot = drv ? FDD1_SLOT_ID : FDD0_SLOT_ID;
-        uint32_t off = fdd_base[drv] + (reg0 & FDD_LBA_MASK) * bytes;
+        uint32_t lba = reg0 & FDD_LBA_MASK;
+        uint32_t off = fdd_d88[drv] ? d88_offset(drv, lba)
+                                  : fdd_base[drv] + lba * bytes;
         // pull_fifo already completes the controller's write; a failed persist has no
         // path back to the guest, so the result is not acted on here.
         pull_fifo(drv);
-        tds_transfer(slot, off, FDD_TDS_WRITE, bytes);
+        if (off) {
+            tds_transfer(slot, off, FDD_TDS_WRITE, bytes);
+        }
     }
     return 1;
 }
