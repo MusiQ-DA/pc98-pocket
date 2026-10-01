@@ -282,7 +282,7 @@ module Next186_CPU(
 					FETCH[0][1:0] <= 2'b11;	
 					ICODE1 <= 54;
 					STAGE <= 4'b1000;
-					FETCH[5][2:0] <= {HALT, 2'b00};
+					FETCH[5][2:0] <= {HALT | (IRQ & (IRQL == 3'b110)), 2'b00};	// bad-op traps resume past IP (V30)
 					if(IRQ) FETCH[2] <= IRQL != 3'b010 ? {5'b00000, IRQL} : FETCH[1];
 					else if(NMIACK) begin
 						FETCH[2] <= 8'h02;
@@ -1039,14 +1039,13 @@ module Next186_CPU(
 					BBSEL = FETCH[0][1] ? 2'b01 : 2'b10; // imm/reg
 					RBSEL = 3'b001;		// CL
 					ISEL = ISELS;
-					IRQ = REG == 3'b110;					
-					MREQ = ~&MOD && ~NULLSHIFT && ~ALUCONT && ~IRQ;
+					// modrm.reg=110 is the undocumented SHL alias (V30 sft group /6)
+					MREQ = ~&MOD && ~NULLSHIFT && ~ALUCONT;
 					WR = MREQ;
-					WE = NULLSHIFT || IRQ ? 5'b00000 : ALUCONT ? 5'b11000 : {3'b100, WRBIT};		// flags, TMP16, RASEL_HI, RASEL_LO
-					IFETCH = ~ALUCONT || IRQ;
+					WE = NULLSHIFT ? 5'b00000 : ALUCONT ? 5'b11000 : {3'b100, WRBIT};		// flags, TMP16, RASEL_HI, RASEL_LO
+					IFETCH = ~ALUCONT;
 					ALUSTAGE = 1'b1;
-					if(IRQ) ISIZE = 0;
-					else case({|FETCH[0][4:1], DISP16, AEXT})
+					case({|FETCH[0][4:1], DISP16, AEXT})
 						3'b100:	ISIZE = 2;
 						3'b000, 3'b101: ISIZE = 3;
 						3'b001, 3'b110: ISIZE = 4;
@@ -1640,6 +1639,12 @@ module Next186_CPU(
 					IRQ = 1'b1;
 				end
 			
+// --------------------------------  reserved opcodes (63/66/67 on V30) --------------------------------
+			56: begin	// consume opcode+modrm operand, no effect (nuV30 pla3: HAS_MODRM only)
+				MREQ = 1'b0;
+				ISIZE = ISIZES;
+			end
+			
 // --------------------------------  bad opcode/esc --------------------------------
 			default: begin
 				MREQ = 1'b0;
@@ -1806,6 +1811,11 @@ function [5:0]ICODE;
 // (opcode 0x0F is POP CS on the 8086/V30; the internal reset/irq/intr
 //  sequence still enters ICODE 54 by writing ICODE1 directly, so no decode
 //  entry is needed here)
+// --------------------------------  undoc V30 forms --------------------------------
+			8'b11010110: ICODE = 17;	// 0xD6 = XLAT alias (nuV30 D6==D7; np21w v30patch: v30_xlat)
+			8'b01100100, 8'b01100101: ICODE = 5;	// REPNC/REPC rep-prefix aliases (undoc)
+			8'b11110001: ICODE = 6;	// 0xF1 = LOCK prefix alias (undoc)
+			8'b01100011, 8'b01100110, 8'b01100111: ICODE = 56;	// reserved: consume modrm, no effect
 // --------------------------------  bad opcode/esc --------------------------------
 			default: ICODE = 55;
 		endcase

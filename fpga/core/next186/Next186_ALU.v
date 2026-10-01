@@ -159,13 +159,14 @@ module Next186_ALU(
 			default: SUMOP21 = RB;
 		endcase
 	
-		if(ALUOP[0]) 
-			case({WORD, EXOP[2:1]})
-				3'b000:	SHNOPT = {2'b00, RB[2:0]};
-				3'b001, 3'b101:  SHNOPT = RB[4:0];
-				3'b010, 3'b011: SHNOPT = |RB[4:3] ? 5'b01000 : RB[4:0];
-				3'b100:	SHNOPT = {1'b0, RB[3:0]};
-				3'b110, 3'b111: SHNOPT = RB[4] ? 5'b10000 : RB[4:0];	
+		if(ALUOP[0])
+			case({WORD, EXOP[2:1]})	// V30 count semantics (np21w i286c/v30patch.c rotatebase*)
+				3'b000:	SHNOPT = {2'b00, RB[2:0]};							// ROL8/ROR8: n mod 8
+				3'b001:	SHNOPT = RB[7:0] % 9;								// RCL8/RCR8: n mod 9
+				3'b101:	SHNOPT = RB[7:0] % 17;								// RCL16/RCR16: n mod 17
+				3'b010, 3'b011: SHNOPT = RB[7:0] > 8'd9  ? 5'd9  : {2'b00, RB[3:0]};	// SHL/SHR/SAR8: min(n,9)
+				3'b100:	SHNOPT = {1'b0, RB[3:0]};							// ROL16/ROR16: n mod 16
+				3'b110, 3'b111: SHNOPT = RB[7:0] > 8'd17 ? 5'd17 : RB[4:0];	// SHL/SHR/SAR16: min(n,17)
 			endcase
 		else SHNOPT = 5'b00001;
 		
