@@ -103,6 +103,18 @@ module softcpu_subsystem (
     input  [15:0]  gdc_draw_ops,
     input [383:0]  gdc_draw_snaps,
     output  [1:0]  gdc_srv_done_levels,
+
+    // The guest-VRAM service channel: the firmware's vr_read8/vr_write8
+    // (firmware/gdc_service.c) drive 0x5000_0000-0x5000_000C and the GVRAM
+    // sequencer in CHIPSET runs the byte op -- through the GRCG/EGC charger
+    // when one is armed, which is what the drawing engine wants.
+    output           st_req,
+    output           st_we,
+    output    [19:0] st_addr,
+    output     [7:0] st_wdata,
+    input            st_done,
+    input      [7:0] st_rdata,
+    input      [7:0] accel_status,
     output        osd_active,
     output        osd_disk_led,
     output  [1:0] osd_extmem,
@@ -238,6 +250,53 @@ module softcpu_subsystem (
             gdc_srv_done_levels_r[1] <= cpu_mem_wdata[0];
     end
     assign gdc_srv_done_levels = gdc_srv_done_levels_r;
+
+    // The guest-VRAM self-test/service window -- the register half of the
+    // channel removed with sdram_selftest_master in dabf4e1 and now back as
+    // the GVRAM sequencer's svc port. Exact-word decode, not a region: the
+    // drawing server's registers live at 0x5000_0140+ in this same nibble,
+    // and the removed version's whole-region claim would shadow them.
+    //
+    //   0x5000_0000  W  guest byte address (20 bits)
+    //   0x5000_0004  W  write data (8 bits)
+    //   0x5000_0008  W  trigger: low two bits nonzero launches; bit0 = write
+    //   0x5000_000C  R  {23'b0, req-in-flight, rdata[7:0]} -- the sequencer's
+    //                    svc_done clears the pending bit; reads poll it.
+    //   0x5000_0010  R  charger state: {4'b0, access_page, egc, rmw, grcg}
+    //
+    // The request holds until the sequencer acks, and a trigger write while
+    // one is in flight is ignored -- same shape as the removed master's.
+    reg        st_req_r   = 1'b0;
+    reg        st_we_r    = 1'b0;
+    reg [19:0] st_addr_r  = 20'd0;
+    reg  [7:0] st_wdata_r = 8'd0;
+    wire       st_trig    = cpu_mem_valid && cpu_mem_wstrb[0] &&
+                            (cpu_mem_addr == 32'h5000_0008);
+    always @(posedge clk_pico) begin
+        if (reset) begin
+            st_req_r   <= 1'b0;
+            st_we_r    <= 1'b0;
+            st_addr_r  <= 20'd0;
+            st_wdata_r <= 8'd0;
+        end else begin
+            if (cpu_mem_valid && cpu_mem_wstrb[0]) begin
+                if (cpu_mem_addr == 32'h5000_0000)
+                    st_addr_r  <= cpu_mem_wdata[19:0];
+                if (cpu_mem_addr == 32'h5000_0004)
+                    st_wdata_r <= cpu_mem_wdata[7:0];
+            end
+            if (st_trig && !st_req_r && (cpu_mem_wdata[1:0] != 2'b00)) begin
+                st_we_r  <= cpu_mem_wdata[0];
+                st_req_r <= 1'b1;
+            end else if (st_req_r && st_done) begin
+                st_req_r <= 1'b0;
+            end
+        end
+    end
+    assign st_req   = st_req_r;
+    assign st_we    = st_we_r;
+    assign st_addr  = st_addr_r;
+    assign st_wdata = st_wdata_r;
 
     // OSD control at 0x20000004: bit0 = overlay shown.
     reg osd_active_r = 1'b0;
@@ -1018,6 +1077,10 @@ module softcpu_subsystem (
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
             32'h4???_????: cpu_mem_rdata = gpu_status;
             32'h7???_????: cpu_mem_rdata = font_cpu_q;
+            // ---- the guest-VRAM service window ----------------------------
+            // Pending bit + the byte the sequencer's svc port last returned.
+            32'h5000_000C: cpu_mem_rdata = {23'd0, st_req, st_rdata};
+            32'h5000_0010: cpu_mem_rdata = {24'd0, accel_status};
             // ---- the drawing server --------------------------------------
             // 0x140/0x180: {busy, req, opcode} for master/slave; +4..+0x14:
             // the five snapshot words. 0x15C/0x19C (writes): the done LEVEL

@@ -24,6 +24,18 @@ module CHIPSET #(
         input   logic           cpu_word_access,
         input   logic   [7:0]   cpu_data_bus_hi,
         output  logic   [7:0]   data_bus_hi,
+        // The softcore's byte-wide guest-VRAM service channel, into the
+        // GVRAM sequencer: the firmware GDC engine's vr_read8/vr_write8.
+        // One level req/ack pair; accel_status tells the firmware whether
+        // a charger (GRCG/EGC) is armed so it knows its writes go through
+        // the charger on this side.
+        input   logic           st_req,
+        input   logic           st_we,
+        input   logic   [19:0]  st_addr,
+        input   logic   [7:0]   st_wdata,
+        output  logic           st_done,
+        output  logic   [7:0]   st_rdata,
+        output  logic   [7:0]   accel_status,
         // Sixteen-colour mode, out to core_top for v30_cpu_bridge: it and
         // RAM.sv must agree on whether E0000-E7FFF is memory.
         output  logic           pc98_analog,
@@ -84,6 +96,9 @@ module CHIPSET #(
         // state, out to core_top's probe. Unconsumed they synthesise away.
         output  logic   [15:0]  dbg_chipset,
         output  logic   [7:0]   dbg_chipset2,
+        // The GVRAM sequencer's own view: where the plane walk (or the
+        // service channel) is parked -- see pc98_gvram_seq's dbg port.
+        output  logic   [7:0]   dbg_gvram,
         output  logic   [33:0]  dbg_scsi,
         // Peripherals
         output  logic   [2:0]   timer_counter_out,
@@ -458,9 +473,11 @@ module CHIPSET #(
 
     wire [19:0] ram_addr_w;
     wire [7:0]  ram_wdata_w;
+    wire        ram_word_w;
     wire        ram_rd_w, ram_wr_w;
     wire [7:0]  ram_dout_w;
     wire [7:0]  ram_dout_hi_w;
+    wire [7:0]  seq_rdata_hi_w;
     wire        ram_complete_w, ram_ready_w;
     wire        gvram_sel = ~ram_address_select_n;
 
@@ -468,23 +485,42 @@ module CHIPSET #(
     // (rhythm voices and the drive-sound mechanism kit) to pay for it, so
     // this machine now answers yes to the mode2 arm check EGC software
     // keys on. GRCG and EGC share the sequencer's plane pipeline below.
+    //
+    // The guest's WORD cycles go through the sequencer too: an expanded
+    // access runs the plane walk twice, once per byte lane, and RAM sees
+    // mem_word low for every leg. cpu_data_bus_hi stays wired to RAM
+    // directly -- the burst's odd byte only matters when the sequencer
+    // passes the word flag through, which is exactly when mem_word is set.
     pc98_gvram_seq #(.EGC(1'b1)) u_gvram_seq (
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
         .cpu_rd(~memory_read_n), .cpu_wr(~memory_write_n),
+        .cpu_word(cpu_word_access),
         .cpu_addr(latch_address), .cpu_wdata(internal_data_bus),
-        .cpu_rdata(internal_data_bus_ram), .cpu_ready(memory_access_ready),
+        .cpu_wdata_hi(cpu_data_bus_hi),
+        .cpu_rdata(internal_data_bus_ram), .cpu_rdata_hi(seq_rdata_hi_w),
+        .cpu_ready(memory_access_ready),
         .grcg_active(grcg_active), .grcg_rmw(grcg_rmw),
         .grcg_mask(grcg_mask), .grcg_tile(grcg_tile),
         .analog_mode(pc98_analog),
         .access_page(gvram_access_page_w), .mem_page1(gvram_mem_page1),
         .egc_active(egc_active_w), .egc_wr(egc_wr_w),
         .egc_rg(egc_rg_w), .egc_d(egc_d_w),
+        .svc_req(st_req), .svc_we(st_we), .svc_addr(st_addr),
+        .svc_wdata(st_wdata), .svc_done(st_done), .svc_rdata(st_rdata),
+        .dbg(dbg_gvram),
         .mem_addr(ram_addr_w), .mem_wdata(ram_wdata_w),
+        .mem_word(ram_word_w),
         .mem_rd(ram_rd_w), .mem_wr(ram_wr_w),
-        .mem_rdata(ram_dout_w), .mem_done(ram_complete_w),
+        .mem_rdata(ram_dout_w), .mem_rdata_hi(ram_dout_hi_w),
+        .mem_done(ram_complete_w),
         .mem_ready(ram_ready_w)
     );
+
+    // What the firmware asks about the charger state before its writes:
+    // bit0 GRCG armed, bit1 RMW mode, bit2 EGC armed, bit3 access page.
+    assign accel_status = {4'b0000, gvram_access_page_w, egc_active_w,
+                           grcg_rmw, grcg_active};
 
     // The ROM loader's per-access done pulse still comes from RAM.sv itself:
     // it writes E8000-FFFFF, which is never a graphics window, so it takes the
@@ -503,7 +539,11 @@ module CHIPSET #(
                   | (address[19:16] == 4'hB)                  // B0000-BFFFF
                   | (pc98_analog & (address[19:15] == 5'b11100)); // E0000-E7FFF
     wire accel_hit = grcg_active | egc_active_w;
-    wire rmw_guest_wr = accel_hit & ~memory_write_n & (grcg_rmw | egc_wr_w);
+    // An EGC write is always a read-modify-write pair in the sequencer (the
+    // raster op reads every plane's dst first), so it takes the split
+    // charge too. This used to key on the EGC port-write strobe, which
+    // almost never coincides with a memory cycle.
+    wire rmw_guest_wr = accel_hit & ~memory_write_n & (grcg_rmw | egc_active_w);
     wire [3:0] vram_rd_wait = !vram_wait_en || !vram_hit ? 4'd0
                             : VID_VBlank                   ? 4'd1
                             : rmw_guest_wr                 ? 4'd4
@@ -549,7 +589,7 @@ module CHIPSET #(
         .internal_data_bus                  (ram_wdata_w),
         .data_bus_out                       (ram_dout_w),
         .analog_mode                        (pc98_analog),
-        .word_access                        (cpu_word_access),
+        .word_access                        (ram_word_w),
         .internal_data_bus_hi               (cpu_data_bus_hi),
         .data_bus_out_hi                    (ram_dout_hi_w),
         .memory_read_n                      (~ram_rd_w),
@@ -622,7 +662,7 @@ module CHIPSET #(
     wire scsi_rom_hi_read = (~memory_read_n) && (address[19:12] == 8'hD2);
     assign data_bus_hi = xrom_read         ? xrom_byte(address[7:0] | 8'h01)
                        : scsi_rom_hi_read  ? scsi_rom_hi
-                       :                     ram_dout_hi_w;
+                       :                     seq_rdata_hi_w;
 
     // fpga/xrom.asm (nasm -f bin). The NEC option-ROM format: AA55h at
     // offset 9, POST entries at 0x0C/0x0F/0x12/0x15, and the disk-BIOS

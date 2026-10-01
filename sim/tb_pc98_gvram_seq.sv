@@ -24,9 +24,12 @@ module tb_pc98_gvram_seq;
 
     logic        reset = 1'b1;
     logic        cpu_gvram = 1'b0, cpu_rd = 1'b0, cpu_wr = 1'b0;
+    logic        cpu_word = 1'b0;
     logic [19:0] cpu_addr = 20'h0;
     logic [7:0]  cpu_wdata = 8'h00;
+    logic [7:0]  cpu_wdata_hi = 8'h00;
     wire  [7:0]  cpu_rdata;
+    wire  [7:0]  cpu_rdata_hi;
     wire         cpu_ready;
 
     logic        grcg_active = 1'b0, grcg_rmw = 1'b0;
@@ -36,9 +39,14 @@ module tb_pc98_gvram_seq;
 
     wire [19:0] mem_addr;
     wire [7:0]  mem_wdata;
+    wire        mem_word;
     wire        mem_rd, mem_wr;
     logic [7:0] mem_rdata;
+    logic [7:0] mem_rdata_hi;
     logic       mem_done;
+    // Chipset feeds the RAM's high byte straight from the CPU bus: during
+    // expansion mem_word stays low and RAM ignores it.
+    wire [7:0]  mem_wdata_hi = cpu_wdata_hi;
     // RAM.sv's memory_access_ready, modelled as RAM.sv actually behaves: it
     // goes HIGH AT COMPLETE_RAM_RW WHILE THE COMMAND IS STILL UP -- that is
     // how it tells the CPU the data has arrived -- and reads 1 whenever no
@@ -50,17 +58,23 @@ module tb_pc98_gvram_seq;
     pc98_gvram_seq dut (
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
+        .cpu_word(cpu_word),
         .cpu_addr(cpu_addr), .cpu_wdata(cpu_wdata),
-        .cpu_rdata(cpu_rdata), .cpu_ready(cpu_ready),
+        .cpu_wdata_hi(cpu_wdata_hi),
+        .cpu_rdata(cpu_rdata), .cpu_rdata_hi(cpu_rdata_hi),
+        .cpu_ready(cpu_ready),
         .grcg_active(grcg_active), .grcg_rmw(grcg_rmw),
         .grcg_mask(grcg_mask), .grcg_tile(grcg_tile),
         .analog_mode(analog_mode),
         .access_page(access_page), .mem_page1(mem_page1),
         .egc_active(egc_active), .egc_wr(egc_wr),
         .egc_rg(egc_rg), .egc_d(egc_d),
-        .mem_addr(mem_addr), .mem_wdata(mem_wdata),
+        .svc_req(svc_req), .svc_we(svc_we), .svc_addr(svc_addr),
+        .svc_wdata(svc_wdata), .svc_done(svc_done), .svc_rdata(svc_rdata), .dbg(),
+        .mem_addr(mem_addr), .mem_wdata(mem_wdata), .mem_word(mem_word),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
-        .mem_rdata(mem_rdata), .mem_done(mem_done), .mem_ready(mem_ready)
+        .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
+        .mem_done(mem_done), .mem_ready(mem_ready)
     );
 
     // The EGC's register writes, driven as PERIPHERALS forwards them.
@@ -70,6 +84,13 @@ module tb_pc98_gvram_seq;
     logic [7:0] egc_d = 8'h00;
     logic       access_page = 1'b0;
     wire        mem_page1;
+
+    // The softcore guest-VRAM service channel (firmware GDC engine).
+    logic        svc_req = 1'b0, svc_we = 1'b0;
+    logic [19:0] svc_addr = 20'h0;
+    logic [7:0]  svc_wdata = 8'h00;
+    wire         svc_done;
+    wire  [7:0]  svc_rdata;
 
     task automatic egc_set(input [3:0] rg, input [7:0] v);
         begin
@@ -84,9 +105,10 @@ module tb_pc98_gvram_seq;
     int         lat_n = 0;
     logic       busy = 1'b0;
 
-    // What the sequencer asked for, in order.
-    typedef struct packed { logic [19:0] a; logic [7:0] d; logic wr; } acc_t;
-    acc_t log_a [0:31];
+    // What the sequencer asked for, in order. `wd` records whether RAM saw
+    // the access as a word -- an expanded half must NEVER ask for one.
+    typedef struct packed { logic [19:0] a; logic [7:0] d; logic wr; logic wd; } acc_t;
+    acc_t log_a [0:47];
     int   log_n = 0;
 
     // RAM.sv does not start a second access while the command is still up: it
@@ -112,18 +134,22 @@ module tb_pc98_gvram_seq;
                 mem_done <= 1'b1;
                 if (mem_wr) begin
                     store[int'(mem_addr)] = mem_wdata;
-                    log_a[log_n[4:0]] <= '{mem_addr, mem_wdata, 1'b1};
+                    if (mem_word)
+                        store[int'(mem_addr) + 1] = mem_wdata_hi;
+                    log_a[log_n[5:0]] <= '{mem_addr, mem_wdata, 1'b1, mem_word};
                 end else begin
-                    log_a[log_n[4:0]] <= '{mem_addr, 8'h00, 1'b0};
+                    log_a[log_n[5:0]] <= '{mem_addr, 8'h00, 1'b0, mem_word};
                 end
                 log_n <= log_n + 1;
             end
         end
-        if (mem_rd)
+        if (mem_rd) begin
             mem_rdata <= store.exists(int'(mem_addr)) ? store[int'(mem_addr)] : 8'h00;
+            mem_rdata_hi <= store.exists(int'(mem_addr) + 1) ? store[int'(mem_addr) + 1] : 8'h00;
+        end
     end
 
-    logic [7:0] last_rdata;
+    logic [7:0] last_rdata, last_rdata_hi;
     int errors = 0;
     task automatic want(input string what, input int got, input int exp);
         if (got !== exp) begin
@@ -136,9 +162,16 @@ module tb_pc98_gvram_seq;
 
     task automatic guest(input logic rd, input logic [19:0] a,
                          input logic [7:0] d);
+        guestx(rd, a, d, 8'h00, 1'b0);
+    endtask
+
+    task automatic guestx(input logic rd, input logic [19:0] a,
+                          input logic [7:0] d, input logic [7:0] dh,
+                          input logic wd);
         log_n = 0;
         @(posedge clk);
-        cpu_gvram = 1'b1; cpu_addr = a; cpu_wdata = d;
+        cpu_gvram = 1'b1; cpu_addr = a; cpu_wdata = d; cpu_wdata_hi = dh;
+        cpu_word = wd;
         cpu_rd = rd; cpu_wr = ~rd;
         // One edge before looking at ready. The strobes were only just
         // assigned, so cpu_ready still carries its previous value in this time
@@ -153,14 +186,29 @@ module tb_pc98_gvram_seq;
         // Sample the answer while the command is still up, as the chipset
         // does: cpu_rdata is valid exactly while cpu_ready is.
         last_rdata = cpu_rdata;
-        cpu_rd = 1'b0; cpu_wr = 1'b0; cpu_gvram = 1'b0;
+        last_rdata_hi = cpu_rdata_hi;
+        cpu_rd = 1'b0; cpu_wr = 1'b0; cpu_gvram = 1'b0; cpu_word = 1'b0;
         repeat (3) @(posedge clk);
+    endtask
+
+    // The firmware service channel: request a byte op, wait for done, read
+    // the answer back.
+    task automatic svc(input logic we, input logic [19:0] a,
+                       input logic [7:0] d);
+        log_n = 0;
+        svc_addr = a; svc_wdata = d; svc_we = we;
+        @(posedge clk);
+        svc_req = 1'b1;
+        while (!svc_done) @(posedge clk);
+        last_rdata = svc_rdata;
+        svc_req = 1'b0;
+        repeat (4) @(posedge clk);
     endtask
 
     initial begin
         grcg_tile[0] = 8'h00; grcg_tile[1] = 8'h00;
         grcg_tile[2] = 8'h00; grcg_tile[3] = 8'h00;
-        mem_rdata = 8'h00;
+        mem_rdata = 8'h00; mem_rdata_hi = 8'h00;
         repeat (8) @(posedge clk);
         reset = 1'b0;
         repeat (4) @(posedge clk);
@@ -222,6 +270,145 @@ module tb_pc98_gvram_seq;
         want("GRCG off: one access",         log_n, 1);
         want("  at the guest's own address", log_a[0].a, 20'hA8123);
         want("  with the guest's own byte",  log_a[0].d, 8'h5A);
+
+        // ---- TDW WORD write: both halves expand, neither bursts ----------
+        // The old RTL passed the two-SDRAM-word burst through whole: the
+        // even byte got the tile and the odd byte kept the guest's raw data
+        // -- the regular-interval byte-lane corruption on ruled lines.
+        grcg_active = 1'b1; grcg_rmw = 1'b0; grcg_mask = 4'h0;
+        analog_mode = 1'b0;
+        grcg_tile[0] = 8'h11; grcg_tile[1] = 8'h22;
+        grcg_tile[2] = 8'h44; grcg_tile[3] = 8'h88;
+        store[20'hA8200] = 8'h00; store[20'hA8201] = 8'h00;
+        store[20'hB0200] = 8'h00; store[20'hB0201] = 8'h00;
+        store[20'hB8200] = 8'h00; store[20'hB8201] = 8'h00;
+        guestx(1'b0, 20'hA8200, 8'hCD, 8'hAB, 1'b1);
+        want("TDW word: accesses",           log_n, 6);
+        want("  half0 plane B addr",         log_a[0].a, 20'hA8200);
+        want("  half1 plane B addr",         log_a[3].a, 20'hA8201);
+        want("  half1 plane G addr",         log_a[5].a, 20'hB8201);
+        want("  no burst on half0",          log_a[0].wd, 0);
+        want("  no burst on half1",          log_a[3].wd, 0);
+        want("  B lo = tile0",               store[20'hA8200], 8'h11);
+        want("  B hi = tile0, not raw",      store[20'hA8201], 8'h11);
+        want("  R hi = tile1, not raw",      store[20'hB0201], 8'h22);
+        want("  G hi = tile2, not raw",      store[20'hB8201], 8'h44);
+
+        // ---- ITF tiles: 33h/55h through a word WDAT-shaped write --------
+        // The ITF loads tile[0]=33 tile[1]=55 tile[2]=00 tile[3]=00 (its
+        // four OUT 7Eh writes) with mask=0, then its WDAT word fill must
+        // leave A8000=3333 B0000=5555 B8000=0000.
+        grcg_tile[0] = 8'h33; grcg_tile[1] = 8'h55;
+        grcg_tile[2] = 8'h00; grcg_tile[3] = 8'h00;
+        grcg_mask = 4'b0000;
+        guestx(1'b0, 20'hA8000, 8'hFF, 8'hFF, 1'b1);
+        want("ITF tiles: accesses",          log_n, 6);
+        want("  A8000 = 33",                 store[20'hA8000], 8'h33);
+        want("  A8001 = 33",                 store[20'hA8001], 8'h33);
+        want("  B0000 = 55",                 store[20'hB0000], 8'h55);
+        want("  B0001 = 55",                 store[20'hB0001], 8'h55);
+        want("  B8000 = 00",                 store[20'hB8000], 8'h00);
+
+        // ---- RMW WORD write: rd+wr per plane, per half -------------------
+        // Tiles are still the ITF's 33/55/00/00 from the test above.
+        grcg_mask = 4'h0; grcg_rmw = 1'b1;
+        store[20'hA8200] = 8'h55; store[20'hA8201] = 8'hAA;
+        store[20'hB0200] = 8'h55; store[20'hB0201] = 8'hAA;
+        store[20'hB8200] = 8'h55; store[20'hB8201] = 8'hAA;
+        guestx(1'b0, 20'hA8200, 8'h3C, 8'hC3, 1'b1);
+        want("RMW word: accesses",           log_n, 12);
+        want("  half1 rd is B+1",            log_a[6].a, 20'hA8201);
+        want("  half1 rd is a READ",         log_a[6].wr, 0);
+        want("  B lo = (55&~3C)|(3C&33)",
+             log_a[1].d, (8'h55 & ~8'h3C) | (8'h3C & 8'h33));
+        want("  B hi = (AA&~C3)|(C3&33)",
+             log_a[7].d, (8'hAA & ~8'hC3) | (8'hC3 & 8'h33));
+
+        // ---- TCR WORD read: two match masks, one access ------------------
+        grcg_rmw = 1'b0; grcg_active = 1'b1;
+        grcg_tile[0] = 8'h11; grcg_tile[1] = 8'h22; grcg_tile[2] = 8'h44;
+        store[20'hA8300] = 8'h11; store[20'hA8301] = 8'h11;
+        store[20'hB0300] = 8'h22; store[20'hB0301] = 8'h23;
+        store[20'hB8300] = 8'h44; store[20'hB8301] = 8'h44;
+        guestx(1'b1, 20'hA8300, 8'h00, 8'h00, 1'b1);
+        want("TCR word: accesses",           log_n, 6);
+        want("  lo = FF (all match)",        last_rdata, 8'hFF);
+        want("  hi = FE (one bit differs)",  last_rdata_hi, 8'hFE);
+
+        // ---- pass-through word stays one burst ---------------------------
+        grcg_active = 1'b0;
+        store[20'hA8400] = 8'h00; store[20'hA8401] = 8'h00;
+        guestx(1'b0, 20'hA8400, 8'h5A, 8'hA5, 1'b1);
+        want("GRCG off word: one access",    log_n, 1);
+        want("  still a word burst",         log_a[0].wd, 1);
+        want("  lo byte stored",             store[20'hA8400], 8'h5A);
+        want("  hi byte stored",             store[20'hA8401], 8'hA5);
+
+        // ---- the softcore service channel -------------------------------
+        // Unarmed svc write = a plain own-plane byte write; svc read returns
+        // the byte. This is the channel gdc_service.c's vr_read8/vr_write8
+        // drive after the 0x50000000 window comes back.
+        svc(1'b1, 20'hA8500, 8'h77);
+        want("svc unarmed write: accesses",  log_n, 1);
+        want("  at its own address",         log_a[0].a, 20'hA8500);
+        want("  its own byte",               log_a[0].d, 8'h77);
+        svc(1'b0, 20'hA8500, 8'h00);
+        want("svc unarmed read: accesses",   log_n, 1);
+        want("  returns stored byte",        last_rdata, 8'h77);
+
+        // Armed svc write goes through the charger: the ITF WDAT fill.
+        grcg_active = 1'b1; grcg_rmw = 1'b0; grcg_mask = 4'b0000;
+        grcg_tile[0] = 8'h33; grcg_tile[1] = 8'h55;
+        grcg_tile[2] = 8'h00; grcg_tile[3] = 8'h00;
+        svc(1'b1, 20'hA8002, 8'hFF);
+        want("svc TDW write: accesses",      log_n, 3);
+        want("  A8002 = 33",                 store[20'hA8002], 8'h33);
+        want("  B0002 = 55",                 store[20'hB0002], 8'h55);
+        want("  B8002 = 00",                 store[20'hB8002], 8'h00);
+
+        // A svc request raised while a guest access is in flight waits for
+        // the guest; the memory order must stay guest-then-svc.
+        grcg_active = 1'b0;
+        log_n = 0;
+        @(posedge clk);
+        cpu_gvram = 1'b1; cpu_addr = 20'hA8600; cpu_wdata = 8'h01;
+        cpu_wr = 1'b1;
+        svc_addr = 20'hA8601; svc_wdata = 8'h02; svc_we = 1'b1;
+        @(posedge clk);
+        svc_req = 1'b1;
+        while (!cpu_ready) @(posedge clk);
+        cpu_wr = 1'b0; cpu_gvram = 1'b0;
+        while (!svc_done) @(posedge clk);
+        svc_req = 1'b0;
+        repeat (4) @(posedge clk);
+        want("svc vs guest: two accesses",   log_n, 2);
+        want("  guest first",                log_a[0].a, 20'hA8600);
+        want("  svc second",                 log_a[1].a, 20'hA8601);
+        want("  guest byte",                 log_a[0].d, 8'h01);
+        want("  svc byte",                   log_a[1].d, 8'h02);
+
+        // The reverse hazard: a guest access raised MID-SVC-OP must not take
+        // the svc's S_DONE ready -- it would sample a stale rdata_pass for a
+        // read that never reached memory. The ~svc_hold gate keeps ready low
+        // until the guest's own walk (here, its pass-through read) runs.
+        store[20'hA8701] = 8'h42;
+        log_n = 0;
+        svc_addr = 20'hA8700; svc_wdata = 8'h77; svc_we = 1'b1;
+        @(posedge clk);
+        svc_req = 1'b1;
+        while (log_n == 0) @(posedge clk);  // the svc write is in flight
+        cpu_gvram = 1'b1; cpu_addr = 20'hA8701; cpu_rd = 1'b1;
+        while (!cpu_ready) @(posedge clk);  // ready was low the whole walk
+        last_rdata = cpu_rdata;
+        cpu_rd = 1'b0; cpu_gvram = 1'b0;
+        while (!svc_done) @(posedge clk);
+        svc_req = 1'b0;
+        repeat (4) @(posedge clk);
+        want("guest mid-svc: two accesses",  log_n, 2);
+        want("  svc write first",            log_a[0].a, 20'hA8700);
+        want("  guest read second",          log_a[1].a, 20'hA8701);
+        want("  guest read is a READ",       log_a[1].wr, 0);
+        want("  guest got the real byte",    last_rdata, 8'h42);
 
         if (errors == 0) $display("PASS tb_pc98_gvram_seq");
         else             $display("FAILED tb_pc98_gvram_seq: %0d", errors);

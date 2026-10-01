@@ -5,17 +5,20 @@
 // throttles the guest --
 // the FIFO-empty status bit stays clear -- until this engine retires it.
 // What runs here is np21w's engine (io/gdc_sub.c + io/gdc_pset.c) with the
-// VRAM layer retargeted: every pixel is a read-modify-write of one guest
-// byte through the self-test master, which takes the bus through hold --
-// cycle stealing, exactly what the real chip's memory cycles did.
+// VRAM layer retargeted: every guest byte goes through the service channel
+// into the GVRAM sequencer -- which passes it through the GRCG/EGC charger
+// when one is armed, the same data path the real GDC's accesses take.
 //
 // np21w's own scoping is kept: only the SLAVE draws (np21w gdc.c guards with
 // "id != GDCWORK_MASTER"); the master's EXECUTEs retire immediately. GRCG-
-// with-GDC (port 0x7C bit 3) is not carried over yet -- its tile registers
-// live in RTL this side cannot see -- so drawing in that mode falls back to
-// plain replacement on the selected plane. TEXTE currently draws the 16-bit
-// TEXTW pattern rather than the full 8-byte PRAM pattern; the snapshot
-// widens when a title proves it matters.
+// with-GDC and the EGC DO carry over: the service channel runs the byte op
+// through the GVRAM sequencer's charger, so an armed write is np21w
+// gdc_pset.c's withtdw/withrmw/withegc -- the pattern bit gates the dot and
+// the hardware does the plane expansion. Reads through the channel always
+// come back raw (the GDC's own bus view); writes are what the charger
+// transforms. TEXTE currently draws the 16-bit TEXTW pattern rather than
+// the full 8-byte PRAM pattern; the snapshot widens when a title proves it
+// matters.
 
 #include "softcpu_regs.h"
 
@@ -25,6 +28,8 @@
 #define ST_TRIG   ((volatile uint32_t *) 0x50000008)
 #define ST_STATUS ((volatile uint32_t *) 0x5000000C)
 #define ST_PEND   (1u << 8)
+// {access_page, egc, rmw, grcg} -- which charger owns guest-VRAM writes.
+#define ST_ACCEL  ((volatile uint32_t *) 0x50000010)
 
 // The two channels' register windows. The 0x140 block is the master, 0x180
 // the slave: {status, snap0..snap4} then the done register at +0x1C.
@@ -156,6 +161,9 @@ static struct {
     uint16_t x, y;
     uint32_t base;
     uint8_t op; // 0 replace 1 complement 2 clear 3 set
+    uint8_t armed;  // a charger owns writes: GRCG or EGC (np21w func[1])
+    uint8_t rmw;    // GRCG RMW: byte-wide write of the dot mask
+    uint8_t egc;    // EGC: the raster op does the merge
 } pset;
 
 static void pset_prepare(uint32_t csrw, uint16_t pat, uint8_t ope)
@@ -163,6 +171,14 @@ static void pset_prepare(uint32_t csrw, uint16_t pat, uint8_t ope)
     pset.pattern = pat;
     pset.base = plane_base[(csrw >> 14) & 3u];
     pset.op = ope & 3u;
+    // With a charger armed np21w selects func[0]=_nop / func[1]=with{tdw,
+    // rmw,egc}: the dot gates the access and the hardware transforms the
+    // write. Our charger lives on the service channel, so the same split
+    // is just "is a charger armed".
+    uint8_t accel = (uint8_t) *ST_ACCEL; // {page, egc, rmw, grcg}
+    pset.armed = (uint8_t) ((accel & 5u) != 0u);
+    pset.egc   = (uint8_t) ((accel & 4u) != 0u);
+    pset.rmw   = (uint8_t) ((accel & 2u) != 0u);
     // np21w hardcodes forty words per drawing line (640 dots); PITCH unused.
     uint32_t rem;
     pset.y = (uint16_t) udiv32(csrw & 0x3FFFu, 40u, &rem);
@@ -180,6 +196,25 @@ static void pset_at(int x, int y)
     }
     uint32_t addr = pset.base + (uint32_t) y * 80u + (uint32_t) (x >> 3);
     uint8_t bit = (uint8_t) (0x80u >> (x & 7));
+    if (pset.armed) {
+        // withtdw/withrmw/withegc (np21w io/gdc_pset.c): the dot gates the
+        // access and the charger does the merge. withrmw is byte-wide and
+        // the operand IS the dot mask; withtdw and withegc are WORD writes
+        // -- the GDC's own data path is 16 bits -- so a dot lands on the
+        // aligned word: TDW lays the tile byte both halves (its data is
+        // discarded), EGC runs the raster op on both lanes with the mask
+        // in the addressed one. An off dot touches nothing.
+        if (!dot) {
+            return;
+        }
+        if (pset.rmw && !pset.egc) {
+            vr_write8(addr, bit);
+        } else {
+            vr_write8(addr & ~1u, (addr & 1u) ? 0u : bit);
+            vr_write8(addr | 1u, (addr & 1u) ? bit : 0u);
+        }
+        return;
+    }
     uint8_t v = vr_read8(addr);
     switch (pset.op) {
     case 0: // replace: the pattern bit decides
