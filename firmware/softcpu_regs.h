@@ -65,6 +65,19 @@
 #define KEYCFG_REG      ((volatile uint32_t *) 0x20000020) // W: {id[12:9], ext[8], code[7:0]}
 #define SOFT_SCSI_MEDIA ((volatile uint32_t *) 0x20000030) // W: bit0 = HDD image mounted (gates the disk lamp)
 
+// Debug heartbeat (DBG_HB builds only): SOFT_SCSI_MEDIA bit0 is probe slot
+// 0x30 bit31 -- toggling it every loop pass makes the bit blink while the
+// service loop runs. Stage markers go out as break-only vkb events (a code
+// the PC-98 side never sees pressed, so the guest gets no phantom input):
+// probe slot 0x1d key_last then names the last section entered.
+#ifdef DBG_HB
+#define HB_MARK(c) (*VKB_KEY = (uint32_t) (c))
+#define HB_TICK(t) (*SOFT_SCSI_MEDIA = ((t) & 1u))
+#else
+#define HB_MARK(c) ((void) 0)
+#define HB_TICK(t) ((void) 0)
+#endif
+
 // OSD_ACTION command bits.
 #define OSD_ACT_VIDEO   4u
 

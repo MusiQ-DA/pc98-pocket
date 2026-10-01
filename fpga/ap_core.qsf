@@ -925,4 +925,4 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # (1859 vs 1848). A seeds
 # 5-20 sweep with the JTAG probe off found 18 at 18,326/18,480 ALMs --
 # ~150 ALMs of margin under the LAB ceiling.
-set_global_assignment -name SEED 23
+set_global_assignment -name SEED 18

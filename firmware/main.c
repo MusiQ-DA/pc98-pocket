@@ -10,6 +10,10 @@ void gdc_poll(void);
 #include "osd_font.h"
 #include "vkb_ui.h"
 
+#ifdef DBG_HB
+static uint8_t hb_tog;
+#endif
+
 // The OSD runs from a periodic timer interrupt (see irq() and start.S) so blocking disk
 // transfers cannot starve it. ~1 ms at the softcore clock (clk_chipset / 6).
 #ifndef CHIPSET_HZ
@@ -42,14 +46,17 @@ int main(void)
     // reads it), adopt the saved settings, then release.
     while (!DATASLOTS_READY(*CONT1_KEY))
         ;
+    HB_MARK(0x41); // past the dataslot wait
     // Load the OSD font before anything can draw it: the glyph RAM is blank at
     // reset (its old baked-in image was CP437/NEC-derived and had to leave the
     // bitstream), so the first CHAR op must not run until font.rom's ANK bank
     // and this core's own glyphs have landed. See osd_font.c.
     osd_font_load();
+    HB_MARK(0x42);
     key_bind_init(); // stage the default button map, which settings_load then overrides from the
                      // save
     settings_load();
+    HB_MARK(0x43);
 
     // Fill the OPNA rhythm store while the guest is still held: the six ADPCM-A
     // voices then play from the first key-on instead of mid-boot. Returns 0
@@ -64,6 +71,7 @@ int main(void)
 #endif
 
     scsi_init();
+    HB_MARK(0x44); // init done, releasing the guest
 
     *SOFT_GUEST_HOLD = 0;
 
@@ -82,7 +90,9 @@ int main(void)
     uint32_t settings_sized = 0;        // Settings size declared in the datatable yet
     uint32_t rebind_seen = *FDD_REBIND; // last-seen rebind toggles
 
+    HB_MARK(0x45); // guest released, first loop pass next
     for (;;) {
+        HB_TICK(hb_tog++);
         // Declare the Settings size once the datatable is populated (retried because the
         // softcore may run before the host has written the table).
         if (!settings_sized) {
@@ -101,22 +111,28 @@ int main(void)
         if (!mounted_a || ((rebind ^ rebind_seen) & FDD0_REBIND_BIT)) {
             uint32_t sectors = stable_size(FDD0_DISK_SIZE);
             if (sectors != 0) {
+                HB_MARK(0x46);
                 fdd_mount(0, sectors);
                 mounted_a = 1;
+                HB_MARK(0x75);
             }
         }
         if (!mounted_b || ((rebind ^ rebind_seen) & FDD1_REBIND_BIT)) {
             uint32_t sectors = stable_size(FDD1_DISK_SIZE);
             if (sectors != 0) {
+                HB_MARK(0x4A);
                 fdd_mount(1, sectors);
                 mounted_b = 1;
+                HB_MARK(0x76);
             }
         }
         rebind_seen = rebind;
 
         if (!mounted_hdd) {
+            HB_MARK(0x7C);
             uint32_t sectors = slot_bytes(HDD0_SLOT_ID) / SECTOR_BYTES;
             if (sectors != 0) {
+                HB_MARK(0x49);
                 scsi_mount(sectors);
                 mounted_hdd = 1;
             }
@@ -146,6 +162,10 @@ int main(void)
         // from each probe's timeout wait.
         scsi_poll();
         settings_service(); // persist any OSD changes into the save window
+#ifdef DBG_HB
+        if (!(hb_tog & 0xFF))
+            HB_MARK(0x55);   // loop-alive breadcrumb, ~a couple keys/sec
+#endif
 
         // No idle spacing: every poll above goes through the softcore's own
         // register files (the mgmt mailbox is a dedicated port on

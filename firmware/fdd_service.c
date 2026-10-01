@@ -152,6 +152,7 @@ static void fdd_probe_d88(uint32_t drive, uint32_t sectors)
     if (!fdd_read_at(drive, 0x200, 176)) {
         return;
     }
+    HB_MARK(0x71);
     uint32_t fd_size = 0, first = 0, protect = 0;
     int populated = 0, last = 0, odd = 0;
     *FDD_BRAM_ADDR = 0;
@@ -170,6 +171,7 @@ static void fdd_probe_d88(uint32_t drive, uint32_t sectors)
     if (!fdd_read_at(drive, 0, 512)) {
         return;
     }
+    HB_MARK(0x72);
     *FDD_BRAM_ADDR = 0;
     for (int i = 0; i < 128; i++) {
         uint32_t t = *FDD_BRAM_RDATA;
@@ -197,6 +199,7 @@ static void fdd_probe_d88(uint32_t drive, uint32_t sectors)
     if (!fdd_read_at(drive, first, D88_SECHDR)) {
         return;
     }
+    HB_MARK(0x73);
     *FDD_BRAM_ADDR = 0;
     uint32_t h[4];
     for (int i = 0; i < 4; i++) {
@@ -406,10 +409,13 @@ void fdd_mount(uint32_t drive, uint32_t sectors)
     // pass on a D88's header words. FDI runs only for non-D88 images.
     d88_cache_trk[drive] = ~0u;
     pref_lba[drive] = ~0u;
+    HB_MARK(0x61);
     fdd_probe_d88(drive, sectors);
+    HB_MARK(0x66);
     if (!fdd_d88[drive]) {
         fdd_probe_fdi(drive, sectors); // sets fdd_base+geometry for an FDI
     }
+    HB_MARK(0x69);
     struct fdd_geom fdi = { 0, fdd_img_geom[drive][1], fdd_img_geom[drive][0],
                             fdd_img_geom[drive][2], fdd_img_geom[drive][3] };
     const struct fdd_geom *g = &fdi;
@@ -438,11 +444,13 @@ void fdd_mount(uint32_t drive, uint32_t sectors)
     mgmt_write(drive, FMGMT_PRESENT, 1);
     fdd_sectors[drive] = sectors;
     fdd_inserted[drive] = 1;
+    HB_MARK(0x6B);
     if (!drive) {
         // Drive A's image picks the settings profile: mount applies the disk's
         // own saved settings (or the global set), unbind returns to global.
         settings_disk_mounted(fdd_image_hash(drive, sectors));
     }
+    HB_MARK(0x6C);
 }
 
 // Eject: the controller stops reporting media, so the guest sees NOT READY
@@ -523,6 +531,7 @@ void fdd_poll(void)
     }
     fdd_dbg_gap = gap_polls;
     gap_polls = 0;
+    HB_MARK(0x33);  // serving a controller request
     if (req & FDD_REQ_READ) {
         uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);
         uint32_t drv = (reg0 & FDD_LBA_DRIVE) ? 1 : 0;
@@ -556,6 +565,7 @@ void fdd_poll(void)
         } else {
             fdd_dbg_err++;
         }
+        HB_MARK(0x34);  // sector staged to fifo
         // Stage LBA+1 into the prefetch half while the guest drains. On a D88
         // the offset walk is free when it stays in the cached track.
         pref_lba[drv] = ~0u;
@@ -567,6 +577,7 @@ void fdd_poll(void)
                                         FDD_BRIDGE_BASE + PREF_BYTE)) {
                 pref_lba[drv] = nl;
             }
+            HB_MARK(0x35);  // prefetch staged
         }
     } else if (req & FDD_REQ_WRITE) {
         uint32_t reg0 = mgmt_read(0, FMGMT_PRESENT);
