@@ -209,7 +209,10 @@ uint32_t opna_mgmt_read(uint32_t reg);
 // units). drive_sound.c restores them after borrowing a voice.
 extern uint16_t rhythm_start[6], rhythm_end[6];
 // Chunked loaders / services; both return nonzero when finished.
+// drive_sound_present reads OMGMT_CAPS bit0 -- 0 on a slim (USE_ADPCM=0)
+// OPNA build, where the voices and the store do not exist.
 int  rhythm_load(void);
+int  drive_sound_present(void);
 int  drive_sound_load(void);
 void drive_sound_poll(void);
 

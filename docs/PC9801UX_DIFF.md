@@ -24,9 +24,9 @@ at all — only the beeper**; the OPNA material below describes what
 | CPU | V30 (μPD70116) 8 MHz **or** i80286 10 MHz board (man:817, 2689) | V30 only (`fpga/core/v30/`), OSD-selectable 4.915 / 9.830 / 19.66 / 21.48 MHz (`fpga/core/chipset/HDL/ce_generator.sv:59-89`, `core_top.sv:287-296`) — the 9.83 MHz "10 MHz" step is cycle-paced like the real speeds |
 | RAM | 640 KB | 640 KB (SDRAM, `pc98_sdram_map.svh:43-47`) |
 | ROM | 96 KB BIOS + ITF | 96 KB at E8000-FFFFF; ships **the PC-9801UX ITF** + PC-9801VM BIOS (`config.tcl:25-37`) — the UX BIOS is not usable on a V30 (PUSHA/SMSW at FDA35+) |
-| Graphics | 2× μPD7220A, GVRAM 256 KB, **EGC present** | 2× `pc98_gdc`, 3+1 planes, second 640×400 page → total 256 KB (`pc98_sdram_map.svh:51-71`, `Chipset.sv`), EGC modelled (`pc98_egc.sv`) but **parked out of the shipped build** (`.EGC(1'b0)` on `pc98_gvram_seq` — 873 ALMs the device could not carry) |
+| Graphics | 2× μPD7220A, GVRAM 256 KB, **EGC present** | 2× `pc98_gdc`, 3+1 planes, second 640×400 page → total 256 KB (`pc98_sdram_map.svh:51-71`, `Chipset.sv`), EGC fitted (`pc98_egc.sv`, `.EGC(1'b1)` on `pc98_gvram_seq` — room came from parking OPNA's ADPCM-A) |
 | Display | 640×400 and 640×200 | 640×400 fixed; 200-line modes via line-doubling |
-| Sound | onboard FM source: FM×3 + SSG×3 (YM2203/OPN class) (man:270, 1349-1373) | OPNA (YM2608, the -86 board) with ADPCM-A rhythm + drive noise (`pc98_opna.sv`, `firmware/drive_sound.c`) |
+| Sound | onboard FM source: FM×3 + SSG×3 (YM2203/OPN class) (man:270, 1349-1373) | OPNA (YM2608, the -86 board), FM+SSG only — ADPCM-A rhythm and the drive noise that borrowed it parked (`USE_ADPCM(0)` in `Peripherals.sv`; `firmware/drive_sound.c` sleeps on `OMGMT_CAPS` bit0) |
 | FDC | μPD765A, 1MB(2HD) and 640KB(2DD) interfaces | μPD765 model + PC-98 glue, both interfaces |
 | HDD | UX41 only: internal HDD via μPD7261 HDC | none; a PC-9801-55-class SCSI board instead |
 | Misc | PIC 2× PD71059C, DMA PD8237A-5, PIT PD8253-5, RTC uPD4990A, kbd/RS-232C PD8251A, printer PD8255A-5 | see below |
@@ -121,7 +121,7 @@ The core is a **V30-machine**; everything that only exists on the 80286 board
 | Text pitch / 20-line mode | CRTC bl/cl | real — `pc98_text_render.sv:54-66` | **I** |
 | Palette | 16-colour analog palette 0xA8-0xAE | :1381-1419; digital 8-colour remap **not** implemented (:1378-1380) | **I** (digital palette gap) |
 | GRCG | 0x7C/0x7E | `pc98_grcg.sv` + `pc98_gvram_seq.sv` (TDW/RMW/TCR) | **I** |
-| EGC | **present on UX** (man:296, decode row 19 = 0x4A0-0x4AE even) | `pc98_egc.sv` all 8 regs + ROP engine inside `pc98_gvram_seq.sv`; **parked via `.EGC(1'b0)`** in the shipped build (873 ALMs over the 1848-LAB budget); 0x4A0-0x4AF decode removed, so writes go nowhere and reads float | **I** (parked) |
+| EGC | **present on UX** (man:296, decode row 19 = 0x4A0-0x4AE even) | `pc98_egc.sv` all 8 regs + ROP engine inside `pc98_gvram_seq.sv`, fitted (`.EGC(1'b1)`); 0x4A0-0x4AF decode live in `Peripherals.sv` — ADPCM-A was parked to pay for it | **I** |
 | CG / fonts | ANK + JIS1/JIS2 kanji ROM | FONT.ROM loaded to SDRAM; CG window + ANK BRAM (`pc98_font_ank.sv`) | **I** |
 
 ## 6. FDC — μPD765A
@@ -177,9 +177,9 @@ SCSI board serves the same role through its own BIOS.
 | | Manual | RTL | Status |
 |---|---|---|---|
 | Beeper | PIT-driven | `speaker_out` :626 | **I** |
-| Onboard FM source | YM2203-class OPN: FM×3 + SSG×3 (man:270, §2.4) | `pc98_opna` is a **YM2608 OPNA** at 0x188-0x18F + 0xA460 ext latch (:1886-1896) — in non-extended mode it answers as the 3-channel OPN the UX has, at the standard -86 board base 0x188 (the manual's own decode row assigns a "sound" window around 0x88-0x8F; OCR ambiguous, np21w only ever binds 0x188/0x288) | **P** — superset silicon, off in the shipped config |
-| FM enable | — | `ENABLE_OPNA` commented out, `config.tcl:15` — shipped build has **no FM sound** | **M** (build-time) |
-| Rhythm/ADPCM-A | not on OPN | rhythm voices via firmware-loaded 8 KB ADPCM-A store (`pc98_opna.sv:461-490`); instantiated `USE_ADPCM(1), USE_PCM(0)` (`Peripherals.sv:1914`) — note the stale `config.tcl` comment which still describes the slim `USE_ADPCM=0/USE_PCM=1` build | **P** (beyond-UX) |
+| Onboard FM source | YM2203-class OPN: FM×3 + SSG×3 (man:270, §2.4) | `pc98_opna` is a **YM2608 OPNA** at 0x188-0x18F + 0xA460 ext latch (:1886-1896) — in non-extended mode it answers as the 3-channel OPN the UX has, at the standard -86 board base 0x188 (the manual's own decode row assigns a "sound" window around 0x88-0x8F; OCR ambiguous, np21w only ever binds 0x188/0x288) | **I** — superset silicon |
+| FM enable | — | `ENABLE_OPNA=1` (`config.tcl:18`) — FM + SSG sound ships; ADPCM-A is the parked half (below) | **I** |
+| Rhythm/ADPCM-A | not on OPN | rhythm voices via firmware-loaded 32 KB ADPCM-A store (`pc98_opna.sv:470-480`) — **parked** in the shipped build (`USE_ADPCM(0)` in `Peripherals.sv`) to make room for the EGC; `OMGMT_CAPS` bit0 reads 0 so the firmware loaders sleep, `USE_ADPCM(1)` restores everything | **P** (parked, beyond-UX) |
 | **DELTA-T / ADPCM-B 256 KB** | **not a UX feature** — the UX's OPN has no ADPCM at all; this is the -86 board's extra | `use_adpcmb=0` (`pc98_opna.sv:514`), `adpcmb_data` tied `8'h00` (:1931-1936) — "No fourth sdram_mp.sv port yet"; gap list at `pc98_opna.sv:548-564`: no 256 KB SDRAM window, jt12 ADPCM-B is read-only, DELTA-T regs 0x0C/0x0D/data-port 0x08 dropped (:243-250) | **M** |
 | OPNA interrupt | -86 INT5 (IRQ12) | wired `opna_irq` :527 | **I** (when built) |
 | Joystick port (-86 SSG IOA) | option | `opna_joy` input, gamepad "Joystick" mode (`core_top.sv:1476`) | **I** |
@@ -280,7 +280,7 @@ Correctly absent (the manual doesn't have them): NMI ports, NDP/A20 ports
 | 0xA1/0xA3/0xA5 | CG code ports | :1563-1566 |
 | 0xA4/0xA6 | GVRAM pages | :1360-1371 |
 | 0xA8-0xAE even | analog palette | :1381-1419 |
-| 0x4A0-0x4AF | EGC (write-only) | parked — no decode in shipped build |
+| 0x4A0-0x4AF | EGC (write-only) | decoded — raw-iorq window forwarded to the sequencer |
 | 0xCC0-0xCC6 | SCSI regs | :1725 |
 | D2000-D2FFF | SCSI option ROM | :1732 |
 | 0x188-0x18F, 0xA460 | OPNA (if ENABLE_OPNA) | :1886-1896 |

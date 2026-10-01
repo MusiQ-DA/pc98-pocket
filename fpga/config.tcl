@@ -7,15 +7,15 @@ set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
 
 set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 
-# The PC-9801-86 sound board's YM2608 at 0x188-0x18F (pc98_opna.sv). Full
-# configuration -- USE_ADPCM=1, USE_PCM=0 in Peripherals.sv: 6-channel stereo
-# FM + SSG + the ADPCM-A rhythm voices, ~1733 ALM standalone. The headroom
-# for it came from the text beam-tracker, the retired MiSTer IIR/DC-blocker
-# chain, the DSP-backed softcore multiplier, moving drive noise off its own
-# sample player (fdd_sound) onto the rhythm voices the firmware drives, and
-# -- the big one -- leaving the EGC raster engine out of the shipped build
-# (.EGC(1'b0) on pc98_gvram_seq: 873 ALMs it could not carry on top of
-# everything else; GRCG still covers the common charger work).
+# The PC-9801-86 sound board's YM2608 at 0x188-0x18F (pc98_opna.sv). Slim
+# configuration -- USE_ADPCM=0, USE_PCM=1 in Peripherals.sv: 6-channel
+# stereo FM + SSG, no ADPCM-A (use_pcm=1 is the only stereo FM path jt12
+# has without ADPCM; use_pcm=0 falls back to the YM2203 mono accumulator).
+# The EGC raster engine is fitted again (.EGC(1'b1) on pc98_gvram_seq) and
+# the device could not carry it next to the ADPCM engines (~720 ALMs):
+# rhythm voices and the drive-mechanism kit that borrowed them stay silent
+# -- OMGMT_CAPS bit0 reads 0, which is what the firmware loaders key on.
+# USE_ADPCM=1 brings the whole path back unchanged once floor space exists.
 set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 
 # JTAG debug build. OFF for the current fit: the SLD hub, the probe mux,
@@ -23,8 +23,8 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 # fit over the 1848-LAB edge (the run that included them needed
 # 1888-1917). scripts/jtag_probe.cfg, jtag_probe_read.tcl and the
 # *_jtag_* benches still work -- enable this macro again when a debug
-# session needs the probe; the room for it is the same one the OPNA found
-# -- .EGC(1'b0) on pc98_gvram_seq parks the ~870-ALM raster engine.
+# session needs the probe, and expect to park something big (USE_ADPCM=0
+# is already taken; the EGC is the ~870-ALM lever now).
 #set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
 
 # Boot the ITF, not the BIOS.

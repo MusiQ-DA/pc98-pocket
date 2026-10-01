@@ -21,6 +21,13 @@ module PERIPHERALS #(
         // 0xA6's access bit banks the CPU's plane windows (pc98_gvram_seq).
         output  logic           gvram_disp_page,
         output  logic           gvram_access_page,
+        // The EGC's state: the arm-and-switch pair off mode2, and the
+        // 0x4A0-0x4AF register writes, forwarded to the sequencer that owns
+        // the engine.
+        output  logic           egc_active,
+        output  logic           egc_wr,
+        output  logic   [3:0]   egc_rg,
+        output  logic   [7:0]   egc_d,
         input   logic           cpu_ce_negedge,
         input   logic   [1:0]   clk_select,
         input   logic           reset,
@@ -1349,6 +1356,7 @@ module PERIPHERALS #(
 
     logic [7:0] mode2_q;
     logic [1:0] gdc_clk;
+    logic       egc_prev_wr_n;
 
     pc98_gdc_mode2 u_gdc_mode2 (
         .clk            (clock),
@@ -1362,6 +1370,13 @@ module PERIPHERALS #(
         .gdc_clk        (gdc_clk),
         .analog         (pc98_analog)
     );
+
+    // Bits 3 and 2 of the same register are the EGC's arm and switch: np21w
+    // only honours bit 2 (VOPBIT_EGC) while bit 3 is set AND the G-RCG is
+    // the EGC-capable one (io/gdc.c gdc_o6a's `mode2 & 0x08` and
+    // `grcg.chip == 3`). This machine's charger is, so the gate is those two
+    // flip-flops and nothing else.
+    assign egc_active = mode2_q[3] & mode2_q[2];
 
     // Ports 0xA4/0xA6: the display and access page bits (np21w gdc_oa4/
     // gdc_oa6 -- gdcs.disp and gdcs.access). The access bit banks every
@@ -1427,6 +1442,26 @@ module PERIPHERALS #(
         if (pc98_vs_px & ~pc98_vs_px_d)
             for (int i = 0; i < 16; i++) apal_px[i] <= apal[i];
     end
+
+    // Ports 0x4A0-0x4AF: the EGC register file, forwarded one strobe at a
+    // time to the sequencer that owns the engine. np21w hangs no read
+    // handlers on these (iocore_attachout only), so neither does this.
+    // The 0x04 page sits outside pc98_io_exact's 0x00-page window (same
+    // reason fdd_144_select bypasses it), so decode raw iorq here.
+    wire egc_cs = iorq & ~address_enable_n & (address[15:4] == 12'h04A);
+    assign egc_rg = address[3:0];
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            egc_prev_wr_n <= 1'b1;
+            egc_d         <= 8'h00;
+        end else begin
+            egc_prev_wr_n <= io_write_n;
+            if (egc_cs & ~io_write_n) egc_d <= internal_data_bus;
+        end
+    end
+
+    assign egc_wr = io_write_n & ~egc_prev_wr_n & egc_cs;
 
     // ---- CRTC text-cell geometry ---------------------------------------
     //
@@ -1898,13 +1933,21 @@ module PERIPHERALS #(
     wire [23:0]  opna_adpcmb_addr;
     wire         opna_adpcmb_roe_n;
 
-    // USE_ADPCM=1 builds the ADPCM-A block: the six rhythm voices actually
-    // sound, playing whatever the firmware loaded into the 32 KB rhythm
-    // store at boot (the upper half is drive_sound.c's mechanism kit).
-    // DELTA-T stays dark (pc98_opna wires use_adpcmb=0 -- its 256 KB
-    // SDRAM window is a known gap), and use_pcm is inert once ADPCM is on:
-    // the jt10_acc ADPCM path is the stereo accumulator already.
-    pc98_opna #(.USE_ADPCM(1), .USE_PCM(0)) u_pc98_opna (
+    // USE_ADPCM=0 ships the slim OPNA: FM6 + SSG keep working but the
+    // ADPCM-A block is absent -- the EGC raster engine came back and the
+    // 1848-LAB device cannot carry both, and the ADPCM engines are the
+    // cheaper half to park. The guest's rhythm writes still route, they
+    // just reach a chip with no ADPCM blocks, so rhythm -- and the drive
+    // mechanism kit, which borrows the rhythm voices -- stay silent.
+    // OMGMT_CAPS (mg_reg 8) bit0 reads 0, which is what tells rhythm.c and
+    // drive_sound.c to skip their loads, so the firmware path is dormant
+    // rather than broken: USE_ADPCM=1 restores everything verbatim once
+    // floor space exists. USE_PCM stays 1 in the slim build: with ADPCM
+    // off it is the only stereo FM path jt12 has (use_pcm=0 falls back to
+    // the YM2203 mono accumulator), and the OPNA is a stereo chip.
+    // DELTA-T stays dark either way (pc98_opna wires use_adpcmb=0 -- its
+    // 256 KB SDRAM window is a known gap).
+    pc98_opna #(.USE_ADPCM(0), .USE_PCM(1)) u_pc98_opna (
         .clk          (clock),
         .rst          (reset),
         .cs           (opna_cs),

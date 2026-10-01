@@ -351,6 +351,10 @@ module CHIPSET #(
         .grcg_tile                          (grcg_tile),
         .gvram_disp_page                    (gvram_disp_page_w),
         .gvram_access_page                  (gvram_access_page_w),
+        .egc_active                         (egc_active_w),
+        .egc_wr                             (egc_wr_w),
+        .egc_rg                             (egc_rg_w),
+        .egc_d                              (egc_d_w),
         .cpu_ce_negedge                     (cpu_ce_negedge),
         .clk_select                         (clk_select),
         .reset                              (reset),
@@ -445,8 +449,11 @@ module CHIPSET #(
     wire [3:0]  grcg_mask;
     wire [7:0]  grcg_tile [0:3];
 
-    // The graphics pages, PERIPHERALS to the sequencer.
+    // The graphics pages and the EGC, PERIPHERALS to the sequencer.
     wire        gvram_disp_page_w, gvram_access_page_w;
+    wire        egc_active_w, egc_wr_w;
+    wire [3:0]  egc_rg_w;
+    wire [7:0]  egc_d_w;
     wire        gvram_mem_page1;
 
     wire [19:0] ram_addr_w;
@@ -457,12 +464,11 @@ module CHIPSET #(
     wire        ram_complete_w, ram_ready_w;
     wire        gvram_sel = ~ram_address_select_n;
 
-    // EGC=0: this machine ships without the charger -- the raster engine
-    // measured 873 ALMs in design and the 1848-LAB device could not carry it
-    // next to the full OPNA. GRCG still does the common charger work; the
-    // engine and its register page come back with .EGC(1'b1) if headroom
-    // shows up.
-    pc98_gvram_seq #(.EGC(1'b0)) u_gvram_seq (
+    // EGC=1: the charger is fitted again -- OPNA gave up its ADPCM-A block
+    // (rhythm voices and the drive-sound mechanism kit) to pay for it, so
+    // this machine now answers yes to the mode2 arm check EGC software
+    // keys on. GRCG and EGC share the sequencer's plane pipeline below.
+    pc98_gvram_seq #(.EGC(1'b1)) u_gvram_seq (
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
         .cpu_rd(~memory_read_n), .cpu_wr(~memory_write_n),
@@ -472,8 +478,8 @@ module CHIPSET #(
         .grcg_mask(grcg_mask), .grcg_tile(grcg_tile),
         .analog_mode(pc98_analog),
         .access_page(gvram_access_page_w), .mem_page1(gvram_mem_page1),
-        .egc_active(1'b0), .egc_wr(1'b0),
-        .egc_rg(4'd0), .egc_d(8'd0),
+        .egc_active(egc_active_w), .egc_wr(egc_wr_w),
+        .egc_rg(egc_rg_w), .egc_d(egc_d_w),
         .mem_addr(ram_addr_w), .mem_wdata(ram_wdata_w),
         .mem_rd(ram_rd_w), .mem_wr(ram_wr_w),
         .mem_rdata(ram_dout_w), .mem_done(ram_complete_w),
@@ -496,8 +502,8 @@ module CHIPSET #(
     wire vram_hit = (address[19:16] == 4'hA && address[15])   // A8000-AFFFF
                   | (address[19:16] == 4'hB)                  // B0000-BFFFF
                   | (pc98_analog & (address[19:15] == 5'b11100)); // E0000-E7FFF
-    wire accel_hit = grcg_active;
-    wire rmw_guest_wr = accel_hit & ~memory_write_n & grcg_rmw;
+    wire accel_hit = grcg_active | egc_active_w;
+    wire rmw_guest_wr = accel_hit & ~memory_write_n & (grcg_rmw | egc_wr_w);
     wire [3:0] vram_rd_wait = !vram_wait_en || !vram_hit ? 4'd0
                             : VID_VBlank                   ? 4'd1
                             : rmw_guest_wr                 ? 4'd4

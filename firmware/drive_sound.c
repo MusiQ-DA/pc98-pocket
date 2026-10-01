@@ -63,10 +63,19 @@ static adpcm_enc dl_enc;
 static uint32_t  dl_src_off, dl_src_left;
 static uint16_t  seg_off[DRV_SEGS], seg_len[DRV_SEGS];
 
+// ADPCM-A voices only exist when pc98_opna was built USE_ADPCM=1 -- the
+// shipped slim OPNA parks them to pay for the EGC, so this whole service
+// is dormant hardware today. OMGMT_CAPS bit0 is the tell; the Settings
+// row shows "N/A" off the same read.
+int drive_sound_present(void)
+{
+    return (int) (opna_mgmt_read(OMGMT_CAPS) & 1);
+}
+
 int drive_sound_load(void)
 {
     // Slim builds have no store and no drvA; OMGMT_CAPS bit0 tells us.
-    if (!(opna_mgmt_read(OMGMT_CAPS) & 1))
+    if (!drive_sound_present())
         return 1;
 
     if (!dl_hdr_done) {

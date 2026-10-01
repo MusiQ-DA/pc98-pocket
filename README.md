@@ -22,12 +22,13 @@ A V30-class PC-9801: the VX/UV-era machine, not a 9821. Concretely:
   On a V30 banked EMS is the only kind of extended memory that exists, so
   this is what PC-98 software that wants "extended memory" actually uses.
 - **Video**: the μPD7220 GDC pair -- master for text, slave for graphics --
-  with GRCG and 8-/16-colour modes. The EGC raster-op engine is parked in
-  this build (the FPGA is full; `.EGC(1'b0)` on `pc98_gvram_seq` brings it
-  back). Output is a fixed 640x400 panel: 200-line graphics modes are
-  line-doubled to fill it.
-- **Sound**: OPNA (YM2608, the PC-9801-86 board): FM + SSG + ADPCM rhythm
-  and drive mechanism noise.
+  with GRCG, the EGC raster-op engine, and 8-/16-colour modes. Output is
+  a fixed 640x400 panel: 200-line graphics modes are line-doubled to
+  fill it.
+- **Sound**: OPNA (YM2608, the PC-9801-86 board): FM + SSG. The ADPCM-A
+  rhythm voices (and the drive mechanism noise that borrowed them) are
+  parked in this build -- `USE_ADPCM(0)` in `Peripherals.sv` brings the
+  room the EGC costs back.
 - **Floppy**: two drives, images mounted from Pocket dataslots, with a
   built-in 3-mode option ROM so 1.44 MB media boot like the real BIOS
   expects.

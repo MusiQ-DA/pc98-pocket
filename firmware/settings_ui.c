@@ -536,7 +536,14 @@ static void draw_row(int i)
     osd_draw_string16(&panel, COL_LABEL * 8, y, it->label, OSD_LABEL);
     if (it->type == IT_OPTION) {
         const setting_t *s = &settings[it->arg];
-        osd_draw_string16(&panel, COL_VALUE * 8, y, s->opts[s->value], OSD_LABEL);
+        // Drive Sound has no hardware on a slim-OPNA build (OMGMT_CAPS
+        // bit0): the stored choice keeps its blob slot for the build that
+        // has the voices, but here the row reads N/A and cannot cycle.
+        if (it->arg == SET_DRV_SOUND && !drive_sound_present()) {
+            osd_draw_string16(&panel, COL_VALUE * 8, y, "N/A", OSD_DISABLED);
+        } else {
+            osd_draw_string16(&panel, COL_VALUE * 8, y, s->opts[s->value], OSD_LABEL);
+        }
     } else if (it->type == IT_KEYBIND) {
         int on_key = keybind_cycle[keybind_sel[it->arg]].code == BIND_KEY_SLOT;
         const char *val = (on_key && !keybind_is_key(it->arg)) ? "[Set key]" : bind_name(it->arg);
@@ -690,7 +697,10 @@ int settings_input(uint16_t pressed)
         // instructions in this firmware, on a device that is 97 per cent full
         // with the GDC still to come -- and a menu index is always already
         // inside its range, so one compare does what a modulo did.
-        if (pressed & BTN_RIGHT) {
+        // (No ADPCM-A voices on this build -> Drive Sound is display-only.)
+        if (it->arg == SET_DRV_SOUND && !drive_sound_present()) {
+            changed = 0;
+        } else if (pressed & BTN_RIGHT) {
             uint8_t v = (uint8_t) (s->value + 1u);
             s->value = (v >= s->count) ? 0u : v;
         } else if (pressed & BTN_LEFT) {
