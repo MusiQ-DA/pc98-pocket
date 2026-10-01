@@ -73,9 +73,13 @@ module tb_zet_resume;
     always_ff @(posedge clk)
         if (ale) cpu_address <= ad_out;
 
-    // port 35h answers 79h (bit7 clear: "this is a resume"); other ports FF.
+    // port 35h answers 79h (bit7 clear: "this is a resume"); port 42h
+    // answers 02h -- the real RTL's value (Peripherals.sv sysport_data);
+    // bit1=1 is the "V30 machine" answer that makes the ITF SKIP the
+    // 286-only FNINIT/FSTSW/SMSW/LMSW block at F94D2.
     wire [7:0] din    = ~mem_rd_n ? ram[cpu_address]
                       : ~io_rd_n  ? ((cpu_address[15:0] == 16'h35) ? 8'h79
+                                   : (cpu_address[15:0] == 16'h42) ? 8'h02
                                                                  : 8'hFF)
                       : 8'hFF;
     wire [7:0] din_hi = ~mem_rd_n ? ram[cpu_address | 20'h1] : 8'hFF;
@@ -155,6 +159,33 @@ module tb_zet_resume;
         if (io_rd_d & ~io_rd_n)
             $display("  %8t  IORD %04X -> %02X  (pc %05x)", $time,
                      cpu_address[15:0], din, zet_pc);
+        // stack-window reads: watch every byte the retf pops
+        if (mem_rd_d & ~mem_rd_n && cpu_address >= 20'h3F0 && cpu_address < 20'h410)
+            $display("  %8t  RD %05X -> %02X%s  (pc %05x)", $time, cpu_address,
+                     din, word_access ? " word" : "", zet_pc);
+    end
+
+    // Wishbone trace while PC is near the retf (f8020..f8040) -- every bus
+    // beat of the resume pop sequence.
+    logic zwb_ack_d = 0;
+    logic [15:0] imm_l_d = 0;
+    always_ff @(posedge clk) begin
+        zwb_ack_d <= zwb_ack;
+        if (zwb_ack & ~zwb_ack_d &&
+            ((zet_pc >= 20'hf8009 && zet_pc <= 20'hf8040)
+             || ({zwb_adr, 1'b0} >= 20'h3F0 && {zwb_adr, 1'b0} < 20'h410)))
+            $display("  %8t  WB %s adr=%05X sel=%b di=%04X do=%04X  (pc %05x)",
+                     $time, zwb_we ? "WR" : "RD", {zwb_adr, 1'b0}, zwb_sel,
+                     zwb_dat_i, zwb_dat_o, zet_pc);
+        // fetch internals: watch imm_l capture around the push imm16
+        if (u_cpu.core.fetch.imm_l != 16'h0000
+            && u_cpu.core.fetch.imm_l != imm_l_d
+            && zet_pc >= 20'hf8009 && zet_pc <= 20'hf8020)
+            $display("  %8t  FETCH st=%0d nst=%0d data=%04X imm_l=%04X cdi=%04X (pc %05x)",
+                     $time, u_cpu.core.fetch.state, u_cpu.core.fetch.next_state,
+                     u_cpu.core.fetch.data, u_cpu.core.fetch.imm_l,
+                     u_cpu.wb_master.cpu_dat_i, zet_pc);
+        imm_l_d <= u_cpu.core.fetch.imm_l;
     end
 
     // CS trace: the retf landing shows up here
@@ -170,19 +201,25 @@ module tb_zet_resume;
         repeat (20) @(posedge clk);
         reset <= 1'b0;
         repeat (300000) @(posedge clk);
-        $display("DONE. pc=%05X  [0200]=%04X  [0404]=%04X [0406]=%04X  stack 30F8: %02X %02X %02X %02X %02X %02X",
+        $display("DONE. pc=%05X  [0200]=%04X [0202]=%04X  [0404]=%04X [0406]=%04X  stack 30F8: %02X %02X %02X %02X %02X %02X",
                  zet_pc,
                  {ram[20'h201], ram[20'h200]},
+                 {ram[20'h203], ram[20'h202]},
                  {ram[20'h405], ram[20'h404]},
                  {ram[20'h407], ram[20'h406]},
-                 ram[20'h30F8], ram[20'h30F9], ram[20'h30FA],
-                 ram[20'h30FB], ram[20'h30FC], ram[20'h30FD]);
-        if ({ram[20'h201], ram[20'h200]} == 16'hBEEF)
-            $display("RESUME PASS: retf landed at CS:1497");
+                 ram[20'h003F8], ram[20'h003F9], ram[20'h003FA],
+                 ram[20'h003FB], ram[20'h003FC], ram[20'h003FD]);
+        if ({ram[20'h201], ram[20'h200]} == 16'hBEEF) begin
+            if ({ram[20'h203], ram[20'h202]} == 16'hFF97)
+                $display("RESUME PASS: retf+post-resume block landed at F854E, push imm8 sign-extends");
+            else
+                $display("RESUME PASS+MIXED: landed but push imm8 gave [0202]=%04X (want FF97)",
+                         {ram[20'h203], ram[20'h202]});
+        end
         else if ({ram[20'h201], ram[20'h200]} == 16'hDEAD)
             $display("RESUME FAIL: in 35h read bit7 set (took cold-boot path)");
         else
-            $display("RESUME FAIL: [0200]=%04X never written", {ram[20'h201], ram[20'h200]});
+            $display("RESUME FAIL: [0200]=%04X never written (pc=%05X)", {ram[20'h201], ram[20'h200]}, zet_pc);
         $finish;
     end
 

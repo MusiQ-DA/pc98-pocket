@@ -41,11 +41,71 @@ prog = bytes([
 ])
 d[0xF8000:0xF8000+len(prog)] = prog
 
-# resume landing: F800:1497 = linear F9497
-d[0xF9497:0xF9497+7] = bytes([
+# resume landing: F800:1497 = linear F9497 -- the REAL ITF post-resume
+# block (F9497-F94EC), verbatim. Port 42h answers 00h in the bench, same
+# as the RTL -- so "test al,2 / jnz" is NOT taken and the CPU must chew
+# through FNINIT / FWAIT+FSTSW / SMSW / LMSW before jumping to F854E.
+# On real V30 hardware (and np21w) port 42h bit1 is the "CPU is a V30"
+# detect, which skips this 286-only block -- our 00h lies about that.
+post_resume = bytes([
+    0x33, 0xC0,                    # 9497 xor ax,ax
+    0x8E, 0xD8,                    # 9499 mov ds,ax
+    0xE4, 0x42,                    # 949B in al,0x42        -> 00h
+    0x8A, 0xE0,                    # 949D mov ah,al
+    0xD0, 0xEC,                    # 949F shr ah,1
+    0xD0, 0xEC,                    # 94A1 shr ah,1
+    0x80, 0xE4, 0x30,              # 94A3 and ah,0x30
+    0x80, 0xCC, 0x40,              # 94A6 or ah,0x40
+    0xA8, 0x02,                    # 94A9 test al,0x02
+    0x75, 0x08,                    # 94AB jnz 94B5
+    0x80, 0xE4, 0xBF,              # 94AD and ah,0xBF
+    0x80, 0x0E, 0x80, 0x04, 0x01,  # 94B0 or byte [0x0480],0x01
+    0xA8, 0x20,                    # 94B5 test al,0x20
+    0x74, 0x03,                    # 94B7 jz 94BC
+    0x80, 0xCC, 0x80,              # 94B9 or ah,0x80
+    0x80, 0x26, 0x01, 0x05, 0x07,  # 94BC and byte [0x0501],0x07
+    0xB0, 0x01,                    # 94C1 mov al,0x01
+    0x09, 0x06, 0x00, 0x05,        # 94C3 or [0x0500],ax
+    0x80, 0x0E, 0x80, 0x04, 0x40,  # 94C7 or byte [0x0480],0x40
+    0xE4, 0x42,                    # 94CC in al,0x42        -> 00h again
+    0xA8, 0x02,                    # 94CE test al,0x02
+    0x75, 0x13,                    # 94D0 jnz 94E5          (not taken)
+    0xDB, 0xE3,                    # 94D2 fninit            (ESC, modrm 11)
+    0x9B,                          # 94D4 fwait
+    0xDF, 0xE0,                    # 94D5 fstsw ax          (ESC, modrm 11)
+    0x0A, 0xC0,                    # 94D7 or al,al
+    0x75, 0x0A,                    # 94D9 jnz 94E5
+    0x0F, 0x01, 0xE0,              # 94DB smsw ax           (0F = POP CS on 186!)
+    0x0C, 0x02,                    # 94DE or al,0x02
+    0x0F, 0x01, 0xF0,              # 94E0 lmsw ax           (286-only)
+    0xEB, 0x00,                    # 94E3 jmp short 94E5
+    0x33, 0xC0,                    # 94E5 xor ax,ax
+    0x8E, 0xD8,                    # 94E7 mov ds,ax
+    0xBC, 0xEF, 0x14,              # 94E9 mov sp,0x14EF
+    0xE9, 0x5F, 0xF0,              # 94EC jmp 0x854E
+])
+d[0xF9497:0xF9497+len(post_resume)] = post_resume
+
+# If zet INVOPs opcode 0Fh into an INT6 trap, the vector at 0000:0018
+# lands at 0000:0600 -- mark the trap and IRET back.
+d[0x0018:0x001C] = bytes([0x00, 0x06, 0x00, 0x00])
+i6 = bytes([
+    0xC7, 0x06, 0x02, 0x02, 0x66, 0x06,   # mov word [0x0202],0x0666
+    0xCF,                                  # iret
+])
+d[0x0600:0x0600+len(i6)] = i6
+
+# jmp target F800:054E = linear F854E -- success marker, plus a push
+# imm8 (6A) regression check: push byte 97h must stack FFFF-extended FF97,
+# not 0097 -- the PUSHI microcode is shared by 68 and 6A.
+marker = bytes([
+    0x6A, 0x97,                           # push byte 0x97 (sign-extend)
+    0x5F,                                 # pop di
+    0x89, 0x3E, 0x02, 0x02,               # mov [0x0202],di
     0xC7, 0x06, 0x00, 0x02, 0xEF, 0xBE,   # mov word [0x0200],0xBEEF
     0xF4,                                 # hlt
 ])
+d[0xF854E:0xF854E+len(marker)] = marker
 
 with open(os.path.join(out, "resume.hex"), "w") as f:
     for i in range(0, 0x100000, 16):
