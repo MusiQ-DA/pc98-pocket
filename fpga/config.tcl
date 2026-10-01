@@ -40,6 +40,13 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 # MAME chip dumps and 8086 throughout. The UX BIOS is not usable here: its
 # POST uses PUSHA at FDA35 and SMSW/LGDT/LIDT after it.
 set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
+
+# EXPERIMENTAL CPU SWAP (zet-cpu branch): build with the Zet 80186-class
+# core instead of nuV30. Zet has the full 186 instruction set -- the ITF's
+# `push imm16` that derailed the old i8088 is legal for it -- but it is not
+# cycle-accurate and carries none of the V30's NEC extensions. nuV30 stays
+# the shipping CPU; this exists to measure the ~5.6k-ALM headroom claim.
+set_global_assignment -name VERILOG_MACRO "PC98_ZET=1"
 # The real floppy controller, not the constant-returning stub.
 #
 # This was off because floppy0_chip_select_n decoded the AT's 0x3F0-0x3F7,

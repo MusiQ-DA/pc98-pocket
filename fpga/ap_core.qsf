@@ -843,6 +843,43 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_eu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_ucrom.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/v30_cpu_bridge.sv
 set_global_assignment -name SEARCH_PATH core/v30
+
+# The Zet 80186-class experiment (zet-cpu branch): vendored GPLv3 core,
+# only elaborated when PC98_ZET is defined -- the file list costs nothing
+# on the shipping build. micro_rom.dat / rom_def.v / defines.v resolve
+# through the SEARCH_PATH; zet_micro_rom.v picks DATDIR per tool.
+set_global_assignment -name VERILOG_FILE core/zet/zet.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_core.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_fetch.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_decode.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_exec.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_memory_regs.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_micro_data.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_micro_rom.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_regfile.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_wb_master.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_addsub.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_alu.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_arlog.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_bitlog.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_conv.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_div_su.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_div_uu.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_fulladd16.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_jmp_cond.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_muldiv.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_mux8_1.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_mux8_16.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_next_or_not.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_nstate.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_opcode_deco.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_othop.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_rxr8.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_rxr16.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_shrot.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_signmul17.v
+set_global_assignment -name SYSTEMVERILOG_FILE core/zet_cpu_bridge.sv
+set_global_assignment -name SEARCH_PATH core/zet
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_mp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_tvram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_kbd8251.sv

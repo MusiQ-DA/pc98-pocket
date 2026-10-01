@@ -2482,11 +2482,82 @@ module core_top (
     //
     // The CE generator's outputs still pace the CHIPSET's RAM waits, which
     // is where they are consumed.
+    wire [15:0] bridge_dbg;
+
+`ifdef PC98_ZET
+    // --------------------------------------------------------------------
+    // EXPERIMENTAL (zet-cpu branch): the Zet 80186-class core on a Wishbone
+    // master, bridged to the same 8288 byte world. See zet_cpu_bridge.sv's
+    // header for the contract. This is NOT the shipping CPU -- nuV30 is.
+    // --------------------------------------------------------------------
+    wire        zet_clk;
+    wire [15:0] zwb_dat_i, zwb_dat_o;
+    wire [19:1] zwb_adr;
+    wire        zwb_we, zwb_tga, zwb_stb, zwb_cyc, zwb_ack;
+    wire [ 1:0] zwb_sel;
+    wire        zwb_inta, zwb_nmia;
+    wire [19:0] zet_pc;
+
+    zet_cpu_bridge u_zet_bridge (
+        .clk               (clk_chipset),
+        .cpu_ce_posedge    (cpu_ce_posedge),
+        .reset             (reset_cpu),
+        .zet_clk           (zet_clk),
+        .wb_dat_o          (zwb_dat_o),
+        .wb_dat_i          (zwb_dat_i),
+        .wb_adr_o          (zwb_adr),
+        .wb_we_o           (zwb_we),
+        .wb_tga_o          (zwb_tga),
+        .wb_sel_o          (zwb_sel),
+        .wb_stb_o          (zwb_stb),
+        .wb_cyc_o          (zwb_cyc),
+        .wb_ack_i          (zwb_ack),
+        .wb_tgc_o          (zwb_inta),
+        .nmia              (zwb_nmia),
+        .processor_status  (processor_status),
+        .ad_out            (cpu_ad_out),
+        .cpu_data_bus      (cpu_data_bus),
+        .lock_n            (lock_n),
+        .analog_mode       (pc98_analog),
+        .word_access       (cpu_word_access),
+        .cpu_data_bus_hi   (cpu_data_bus_hi),
+        .data_bus_hi       (data_bus_hi),
+        .data_bus          (data_bus),
+        .processor_ready   (processor_ready),
+        .address_enable_n  (chipset_aen),
+        .pause_core        (pause_core),
+        .biu_done          (biu_done),
+        .dbg               (bridge_dbg)
+    );
+
+    zet u_cpu (
+        .wb_clk_i  (zet_clk),
+        .wb_rst_i  (reset_cpu),
+        .wb_dat_i  (zwb_dat_i),
+        .wb_dat_o  (zwb_dat_o),
+        .wb_adr_o  (zwb_adr),
+        .wb_we_o   (zwb_we),
+        .wb_tga_o  (zwb_tga),
+        .wb_sel_o  (zwb_sel),
+        .wb_stb_o  (zwb_stb),
+        .wb_cyc_o  (zwb_cyc),
+        .wb_ack_i  (zwb_ack),
+        .wb_tgc_i  (interrupt_to_cpu),
+        .wb_tgc_o  (zwb_inta),
+        .nmi       (1'b0),
+        .nmia      (zwb_nmia),
+        .pc        (zet_pc)
+    );
+
+    // The probe slots that usually expose V30 guts get the Zet view instead.
+    wire [19:0] v30_addr = zet_pc;
+    wire [2:0]  v30_bs   = processor_status;
+    wire [15:0] v30_data_i = zwb_dat_i;
+`else
     wire [2:0]  v30_bs;
     wire [19:0] v30_addr;
     wire [15:0] v30_data_o, v30_data_i;
     wire        v30_ube_n, v30_ce, v30_ready;
-    wire [15:0] bridge_dbg;
     wire        v30_ss_err_unused, v30_ss_quiet_unused;
     wire [15:0] v30_ss_rdata_unused;
 
@@ -2552,6 +2623,7 @@ module core_top (
         .SS_ERR     (v30_ss_err_unused),
         .SS_BUS_QUIET (v30_ss_quiet_unused)
     );
+`endif // PC98_ZET
 
     //
     // AUDIO

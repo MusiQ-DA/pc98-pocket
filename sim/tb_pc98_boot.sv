@@ -110,14 +110,83 @@ module tb_pc98_boot;
     logic [39:0] clk_since_rst = 40'd0;
     logic [39:0] frz_start_clk = 40'd0, frz_end_clk = 40'd0;
 
-    // The nuV30 + the bridge, wired the way core_top wires them.
-    // V30_BACKDOOR gives the bench dbg_regs for the trace below.
+    // The CPU + bridge, wired the way core_top wires them. Default nuV30;
+    // +define+ZET_CPU swaps in the experimental Zet on the same downstream
+    // pins. V30_BACKDOOR gives the bench dbg_regs for the trace below.
+    wire [223:0] dbg_regs;
+    wire        dbg_first_pop, dbg_pend;
+
+`ifdef ZET_CPU
+    wire        zet_clk;
+    wire [15:0] zwb_dat_i, zwb_dat_o;
+    wire [19:1] zwb_adr;
+    wire        zwb_we, zwb_tga, zwb_stb, zwb_cyc, zwb_ack;
+    wire [ 1:0] zwb_sel;
+    wire        zwb_inta, zwb_nmia;
+    wire [19:0] zet_pc;
+    wire [15:0] zbridge_dbg;
+
+    zet_cpu_bridge u_bridge (
+        .clk               (clk_chipset),
+        .cpu_ce_posedge    (cpu_ce_posedge),
+        .reset             (cpu_reset_w),
+        .zet_clk           (zet_clk),
+        .wb_dat_o          (zwb_dat_o),
+        .wb_dat_i          (zwb_dat_i),
+        .wb_adr_o          (zwb_adr),
+        .wb_we_o           (zwb_we),
+        .wb_tga_o          (zwb_tga),
+        .wb_sel_o          (zwb_sel),
+        .wb_stb_o          (zwb_stb),
+        .wb_cyc_o          (zwb_cyc),
+        .wb_ack_i          (zwb_ack),
+        .wb_tgc_o          (zwb_inta),
+        .nmia              (zwb_nmia),
+        .processor_status  (processor_status),
+        .ad_out            (cpu_ad_out),
+        .cpu_data_bus      (cpu_data_bus),
+        .lock_n            (lock_n),
+        .analog_mode       (1'b0),
+        .word_access       (cpu_word_access),
+        .cpu_data_bus_hi   (cpu_data_bus_hi),
+        .data_bus_hi       (din_hi),
+        .data_bus          (din),
+        .processor_ready   (bench_ready),
+        .address_enable_n  (test_aen),
+        .pause_core        (1'b0),
+        .biu_done          (biu_done),
+        .dbg               (zbridge_dbg)
+    );
+
+    zet u_cpu (
+        .wb_clk_i  (zet_clk),
+        .wb_rst_i  (cpu_reset_w),
+        .wb_dat_i  (zwb_dat_i),
+        .wb_dat_o  (zwb_dat_o),
+        .wb_adr_o  (zwb_adr),
+        .wb_we_o   (zwb_we),
+        .wb_tga_o  (zwb_tga),
+        .wb_sel_o  (zwb_sel),
+        .wb_stb_o  (zwb_stb),
+        .wb_cyc_o  (zwb_cyc),
+        .wb_ack_i  (zwb_ack),
+        .wb_tgc_i  (pic1_to_cpu),
+        .wb_tgc_o  (zwb_inta),
+        .nmi       (1'b0),
+        .nmia      (zwb_nmia),
+        .pc        (zet_pc)
+    );
+
+    // Zet has no dbg_regs: the trace fields read 0, eu_pc below reads the
+    // core's real linear-PC debug pin instead.
+    assign dbg_regs = '0;
+    assign dbg_first_pop = 1'b0;
+    assign dbg_pend = 1'b0;
+`else
     wire [2:0]  v30_bs;
     wire [19:0] v30_addr;
     wire [15:0] v30_data_o, v30_data_i;
     wire        v30_ube_n, v30_ce, v30_ready;
-    wire [223:0] dbg_regs;
-    wire        dbg_first_pop, dbg_pend;
     wire [15:0] v30_ss_rdata_unused;
     wire        v30_ss_err_unused, v30_ss_quiet_unused;
 
@@ -177,6 +246,7 @@ module tb_pc98_boot;
         .dbg_regs  (dbg_regs), .dbg_first_pop (dbg_first_pop),
         .dbg_pend  (dbg_pend)
     );
+`endif // ZET_CPU
 
     // ---- the register view: one local name per quantity --------------------
     // (the core's dbg_regs view, retired-instruction granularity)
@@ -1441,9 +1511,69 @@ module tb_pc98_boot;
     // is the real program counter. The dbg_regs view
     // ({psw,ip,ds,ss,cs,es,di,si,bp,sp,bx,dx,cx,ax}, retired-instruction
     // granularity) is the same one tb_pc98_v30 traced.
+`ifdef ZET_CPU
+    wire [15:0] eu_cs = zet_pc[19:4];   // for the CS-change trace only
+    wire [19:0] eu_pc = zet_pc;
+
+    // First-cycles bus trace: what the Zet actually asked for and got.
+    int zet_tr_n = 0;
+    always_ff @(posedge clk_chipset) begin
+        if (zet_tr_n < 200) begin
+            if (mem_rd_d & ~mem_rd_n) begin
+                $display("  %8t  ZRD %05X -> %02X (wb adr %05x sel %b ack %b)",
+                         $time, cpu_address, din, {zwb_adr,1'b0}, zwb_sel, zwb_ack);
+                zet_tr_n <= zet_tr_n + 1;
+            end
+            if (mem_wr_n & ~mem_wr_d) begin
+                $display("  %8t  ZWR %05X <- %02X", $time, cpu_address, mem_wr_data_q);
+                zet_tr_n <= zet_tr_n + 1;
+            end
+            if (io_rd_d & ~io_rd_n) begin
+                $display("  %8t  ZIRD %04X -> %02X", $time, cpu_address[15:0], din);
+                zet_tr_n <= zet_tr_n + 1;
+            end
+            if (io_wr_n & ~io_wr_d) begin
+                $display("  %8t  ZIWR %04X <- %02X", $time, cpu_address[15:0], io_wr_data_q);
+                zet_tr_n <= zet_tr_n + 1;
+            end
+        end
+    end
+    always_ff @(posedge clk_chipset)
+        if (zwb_inta && zet_tr_n < 300) begin
+            $display("  %8t  ZINTA asserted (vec on wb_dat_i %04X)", $time, zwb_dat_i);
+            zet_tr_n <= zet_tr_n + 1;
+        end
+
+    // Wishbone settle trace: while stb is up, watch the master's tracked
+    // outputs converge to the exec stage's combinational operands.
+    int zwb_tr_n = 0;
+    always_ff @(posedge zet_clk) begin
+        if (!cpu_reset_w && zwb_stb && zwb_tr_n < 600) begin
+            $display("  %8t  ZWB %s adr %05x sel %b dat_o %04x c_dat %04x c_adr %05x age %0d",
+                     $time, zwb_we ? "WR" : "RD", {zwb_adr,1'b0}, zwb_sel,
+                     zwb_dat_o, u_cpu.cpu_dat_o, u_cpu.cpu_adr_o,
+                     u_bridge.req_age);
+            zwb_tr_n <= zwb_tr_n + 1;
+        end
+    end
+
+    // Arm trace: what the byte engine actually latched for each byte.
+    int zarm_tr_n = 0;
+    always_ff @(posedge clk_chipset) begin
+        if (!cpu_reset_w && u_bridge.bstate == 0 && u_bridge.srv_any
+            && zarm_tr_n < 600) begin
+            $display("  %8t  ARM bs %0d adr %05x dat %04x idx %0d -> bus %02x ad_out %05x",
+                     $time, u_bridge.srv_bs, u_bridge.srv_addr,
+                     u_bridge.srv_data, u_bridge.byte_idx,
+                     u_bridge.srv_byte_data, u_bridge.srv_byte_addr);
+            zarm_tr_n <= zarm_tr_n + 1;
+        end
+    end
+`else
     wire [15:0] eu_ip = dbg_regs[207:192];
     wire [15:0] eu_cs = dbg_regs[159:144];
     wire [19:0] eu_pc = {eu_cs, 4'd0} + {4'd0, eu_ip};
+`endif
 
 
     logic [19:0] eu_pc_d = 20'hFFFFF;
