@@ -520,7 +520,7 @@ wire [7:0] src_b = op_ext ? src_q[op_plane][15:8] : src_q[op_plane][7:0];
     wire [7:0] patreg_b = op_ext ? patreg[op_plane][15:8]
                                  : patreg[op_plane][7:0];
     wire [7:0] pat_b = (fgbg_r[14:13] == 2'b00)
-                     ? (ope_r[8] ? src_b : patreg_b)
+                     ? ((ope_r[9:8] == 2'b01) ? src_b : patreg_b)
                      : (op_ext ? fgbg_col[15:8] : fgbg_col[7:0]);
 
     // The general three-input form, ope_xx: eight minterms, MSB first --
@@ -562,14 +562,16 @@ wire [7:0] src_b = op_ext ? src_q[op_plane][15:8] : src_q[op_plane][7:0];
     // egc_opeb's source select, by ope 11:10. This follows the BYTE model
     // (egc_opeb), because the sequencer below this is a byte engine: 2'b00
     // and 2'b11 fall to the written byte itself; 2'b01 is the raster-op
-    // table; 2'b10 is the pattern -- the fg/bg colours by bank, and the
-    // SOURCE latch for bank zero, which is where the byte and word models
-    // disagree (egc_opew returns patreg there). They read the same for any
-    // aligned run, which is every run until the shift pipeline exists.
+    // table; 2'b10 is the pattern -- np21w returns the fg/bg colours only
+    // for banks 0x2000/0x4000 and the SOURCE latch for banks 0 and 3
+    // (memegc.c's `default:` also runs EGCOPE_SHIFTB, which sf_in_op covers
+    // on the mask side). The word model disagrees on the colour banks'
+    // little corners; they read the same for aligned runs.
     assign op_data = (ope_r[12:11] == 2'b01) ? opefn_result
                    : (ope_r[12:11] == 2'b10)
-                       ? ((fgbg_r[14:13] == 2'b00) ? src_b
-                                 : (op_ext ? fgbg_col[15:8] : fgbg_col[7:0]))
+                       ? ((fgbg_r[14:13] == 2'b01 || fgbg_r[14:13] == 2'b10)
+                                 ? (op_ext ? fgbg_col[15:8] : fgbg_col[7:0])
+                                 : src_b)
                    :                                 op_val;
 
     // mask2's byte for this access's parity. egc_opeb ANDs srcmask in only

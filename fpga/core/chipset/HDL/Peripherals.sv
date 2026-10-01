@@ -2365,7 +2365,12 @@ module PERIPHERALS #(
                          : mgmt_opna_cs ? mgmt_opna_readdata
                          : sndev_cs ? sndev_readdata : mgmt_fdd_readdata;
 `else
+    // OPNA parked: its mgmt window must answer ABSENT, not alias onto the
+    // floppy readback -- a stray 1 in OMGMT_CAPS's bit0 convinces the
+    // firmware a board is fitted and every injection then burns a full
+    // DISK_SPIN_LIMIT wait on a busy flag that never clears.
     assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
+                         : mgmt_opna_cs ? 16'h0000
                          : sndev_cs ? sndev_readdata : mgmt_fdd_readdata;
 `endif
 
