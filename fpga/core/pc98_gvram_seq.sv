@@ -134,6 +134,7 @@ module pc98_gvram_seq #(
     // latches svc_rdata for a read.
     input  wire        svc_req,
     input  wire        svc_we,           // 1 = write, 0 = read
+    input  wire        svc_raw,          // 1 = bypass the charger (WDAT)
     input  wire [19:0] svc_addr,
     input  wire [7:0]  svc_wdata,
     output reg         svc_done,
@@ -191,6 +192,7 @@ module pc98_gvram_seq #(
     // ------------------------------------------------------------------
     reg        svc_hold;
     reg        svc_we_r;
+    reg        svc_raw_r;
     reg [19:0] svc_addr_r;
     reg [7:0]  svc_wdata_r;
 
@@ -227,6 +229,15 @@ module pc98_gvram_seq #(
     // when one is armed.
     wire svc_raw_rd = svc_hold & ~svc_we_r;
 
+    // A svc op marked raw is the drawing engine's own view of video memory
+    // on the WRITE side too: np21w io/gdc_sub.c (gdcsub_write) scribbles on
+    // `mem[]` directly -- no charger transform, no EGC raster op, no shift
+    // input, not even a destination read. Excluding it from the here-flags
+    // puts the walk back on the plain own-plane path with cur_wdata, and
+    // the arm skips the read phase entirely.
+    wire svc_raw_wr = in_svc & (svc_hold ? svc_raw_r : svc_raw)
+                    & (svc_hold ? svc_we_r  : svc_we);
+
     // Claimed: a charger expands it, the page bit banks even a plain one,
     // or the softcore is being served (a svc op always goes through the
     // sequencer so the charger state applies to it too).
@@ -239,8 +250,8 @@ module pc98_gvram_seq #(
     // parked write in RAM.sv could reorder behind it.
     wire window    = pc98_gvram_hits(cur_addr, analog_mode);
     wire egc_arm   = EGC & egc_active;
-    wire egc_here  = egc_arm & window;
-    wire grcg_here = ~egc_arm & grcg_active & window;
+    wire egc_here  = egc_arm & window & ~svc_raw_wr;
+    wire grcg_here = ~egc_arm & grcg_active & window & ~svc_raw_wr;
     wire plain_pg1 = ~egc_arm & ~grcg_active & window & access_page;
     wire expand    = in_svc | egc_here | grcg_here | plain_pg1;
     wire [1:0] own = own_plane(cur_addr);
@@ -254,9 +265,6 @@ module pc98_gvram_seq #(
     wire [15:0] egc_access, egc_fgbg, egc_ope, egc_mask;
     wire [15:0] egc_fgc [0:3], egc_bgc [0:3], egc_patreg [0:3], egc_src [0:3];
     wire [7:0]  egc_op_data, egc_op_mask;
-    reg         egc_pat_ld;
-    reg  [1:0]  egc_ld_plane;
-    reg         egc_ld_ext;
 
     // ---- the shift pipeline's strobes -----------------------------------
     // Reads feed the queue while ope 0x400 is clear (egc_readbyte's shift
@@ -293,8 +301,8 @@ module pc98_gvram_seq #(
             .access_r(egc_access), .fgbg_r(egc_fgbg), .ope_r(egc_ope),
             .mask_r(egc_mask), .sft_r(), .leng_r(),
             .fgc(egc_fgc), .bgc(egc_bgc),
-            .pat_ld(egc_pat_ld), .pat_plane(egc_ld_plane),
-            .pat_ext(egc_ld_ext), .pat_d(mem_rdata), .patreg(egc_patreg),
+            .pat_ld(egc_pat_ld), .pat_plane(gp),
+            .pat_ext(op_ext), .pat_d(mem_rdata), .patreg(egc_patreg),
             .src_q(egc_src),
             .sf_push(egc_sf_push), .sf_push_plane(gp), .sf_push_d(mem_rdata),
             .sf_evt(egc_sf_evt), .sf_evt_wr(~is_read), .sf_evt_d(cur_wdata),
@@ -327,6 +335,13 @@ module pc98_gvram_seq #(
     // write when 0b10 (egc_readbyte / egc_writebyte's ope & 0x0300 tests).
     wire egc_pat_on_rd = (egc_ope[9:8] == 2'b01);
     wire egc_pat_on_wr = (egc_ope[9:8] == 2'b10);
+    // The load strobe has to fire DURING the byte's landing cycle: RAM.sv
+    // drops read_command as mem_rd falls, so the cycle after mem_done its
+    // data output is already 0x00 -- a registered strobe saw every pattern
+    // register fill with zero. plane/ext are the in-flight leg's values.
+    wire egc_pat_ld = egc_here & ~svc_raw_rd
+                    & (st == S_RDW) & mem_done
+                    & (is_read ? egc_pat_on_rd : egc_pat_on_wr);
 
     // Plane liveness, split by phase:
     //   read  GRCG: the grcg mask (a TCR read skips masked planes); EGC: all
@@ -436,9 +451,6 @@ module pc98_gvram_seq #(
             rdata_pass<= 8'h00;
             egc_rd_q  <= 8'h00;
             egc_own_q <= 8'h00;
-            egc_pat_ld<= 1'b0;
-            egc_ld_plane <= 2'd0;
-            egc_ld_ext   <= 1'b0;
             mem_addr  <= 20'h0;
             mem_wdata <= 8'h00;
             mem_rd    <= 1'b0;
@@ -453,16 +465,10 @@ module pc98_gvram_seq #(
             svc_gap   <= 1'b0;
             svc_req_s <= 1'b0;
         end else begin
-            // The EGC's load strobe is one cycle each: cleared by default
-            // for the WHOLE non-reset path, set only by the cycle that has a
-            // byte in hand. It used to be cleared inside the expand arm
-            // alone, and the pass-through arm -- which is where the cycle
-            // after the LAST plane of an access lands, since the guest drops
-            // its strobes as soon as cpu_ready rises -- left the pulse high
-            // forever. The engine then kept latching mem_rdata with the
-            // stale plane number, which is how the blit's plane E came out
-            // holding plane B's byte.
-            egc_pat_ld <= 1'b0;
+            // The EGC's pattern-load strobe is combinational now (see the
+            // egc_pat_ld wire): it must fire while mem_rdata still carries
+            // the landing byte, because RAM.sv's data output goes to 0x00
+            // the cycle after mem_done.
             // The service channel's done is a level: it drops when the
             // requester does (one clock after, through the sync stage).
             svc_req_s <= svc_req;
@@ -512,6 +518,7 @@ module pc98_gvram_seq #(
                     // WDAT/drawing land on real VRAM the way hardware does.
                     svc_hold   <= 1'b1;
                     svc_we_r   <= svc_we;
+                    svc_raw_r  <= svc_raw;
                     svc_addr_r <= svc_addr;
                     svc_wdata_r<= svc_wdata;
                     is_read    <= ~svc_we;
@@ -522,9 +529,13 @@ module pc98_gvram_seq #(
                         // cur_addr is already svc_addr this cycle (svc_eval):
                         // window/here/own above are the svc operand's. A svc
                         // READ walks only the plane its window names -- the
-                        // GDC's own bus view, no charger on reads.
+                        // GDC's own bus view, no charger on reads. A RAW
+                        // write (WDAT) skips the read phase as well:
+                        // gdcsub_write computes the result in firmware and
+                        // scribbles it back verbatim.
                         gp <= (svc_we & (egc_here | grcg_here)) ? 2'd0 : own;
-                        st <= (~svc_we | grcg_rmw | egc_here) ? S_RD : S_WR;
+                        st <= (~svc_we | ((grcg_rmw & ~svc_raw_wr) | egc_here))
+                            ? S_RD : S_WR;
                     end else begin
                         // Outside the windows there is nothing to walk and
                         // nothing to transform: ack without a RAM access.
@@ -557,10 +568,8 @@ module pc98_gvram_seq #(
                     // Each plane byte that lands goes into the shift
                     // pipeline's queue (egc_sf_push is combinational over
                     // this same cycle); the pattern registers take them when
-                    // ope asks, on either direction.
-                    egc_pat_ld  <= is_read ? egc_pat_on_rd : egc_pat_on_wr;
-                    egc_ld_plane<= gp;
-                    egc_ld_ext  <= op_ext;
+                    // ope asks, on either direction -- egc_pat_ld is
+                    // combinational for exactly this cycle too.
                     if (is_read & (gp == egc_rd_plane))
                         egc_rd_q <= mem_rdata;
                     if (is_read & (gp == own))

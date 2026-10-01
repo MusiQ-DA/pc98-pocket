@@ -155,6 +155,21 @@ static void vr_write8(uint32_t addr, uint8_t v)
     }
 }
 
+// Raw write: bit2 asks the sequencer to bypass the charger entirely. np21w
+// gdcsub_write scribbles on mem[] directly -- WDAT is the engine's own bus
+// view, not a guest access through the EGC/GRCG data path.
+static void vr_write8_raw(uint32_t addr, uint8_t v)
+{
+    *ST_ADDR = addr & 0xFFFFFu;
+    *ST_WDATA = v;
+    *ST_TRIG = 5u; // write | raw
+    for (uint32_t i = 0; i < 2000u; i++) {
+        if (!(*ST_STATUS & ST_PEND)) {
+            break;
+        }
+    }
+}
+
 // The pset state np21w's gdcpset_prepare/gdcpset carry.
 static struct {
     uint16_t pattern;
@@ -514,9 +529,12 @@ static void gdc_wdat(const struct gdc_snap *g)
             v = (uint16_t) (v | data);
             break;
         }
-        vr_write8(base + adrs, (uint8_t) v);
-        vr_write8(base + adrs + 1u, (uint8_t) (v >> 8));
+        vr_write8_raw(base + adrs, (uint8_t) v);
+        vr_write8_raw(base + adrs + 1u, (uint8_t) (v >> 8));
         adrs = (adrs + 2u) & 0x7FFEu;
+#ifdef DBG_HB
+        if (!(adrs & 0xFFF)) HB_MARK(0x5F); // still grinding a long WDAT
+#endif
     } while (--leng);
 }
 
@@ -563,9 +581,11 @@ void gdc_poll(void)
             uint32_t csrw = g.csrw[0] | ((uint32_t) g.csrw[1] << 8) | ((uint32_t) g.csrw[2] << 16) |
                             ((uint32_t) g.csrw[3] << 24);
             uint16_t textw = g.textw[0] | ((uint16_t) g.textw[1] << 8);
+            HB_MARK(0x50 | ((st >> 2) & 0x0F)); // claimed: opcode family visible
             if ((st & 0xE4u) == 0x20u) {
                 // A completed WDAT run: gdcsub_write, np21w io/gdc_sub.c.
                 gdc_wdat(&g);
+                HB_MARK(0x5E); // wdat returned
             } else {
                 pset_prepare(csrw, textw, g.write_mode);
                 if (!(g.ope & 0x78u)) {

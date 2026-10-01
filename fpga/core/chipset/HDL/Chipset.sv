@@ -31,6 +31,7 @@ module CHIPSET #(
         // the charger on this side.
         input   logic           st_req,
         input   logic           st_we,
+        input   logic           st_raw,
         input   logic   [19:0]  st_addr,
         input   logic   [7:0]   st_wdata,
         output  logic           st_done,
@@ -514,7 +515,8 @@ module CHIPSET #(
         .access_page(gvram_access_page_w), .mem_page1(gvram_mem_page1),
         .egc_active(egc_active_w), .egc_wr(egc_wr_w),
         .egc_rg(egc_rg_w), .egc_d(egc_d_w),
-        .svc_req(st_req), .svc_we(st_we), .svc_addr(st_addr),
+        .svc_req(st_req), .svc_we(st_we), .svc_raw(st_raw),
+        .svc_addr(st_addr),
         .svc_wdata(st_wdata), .svc_done(st_done), .svc_rdata(st_rdata),
         .dbg(dbg_gvram),
         .mem_addr(ram_addr_w), .mem_wdata(ram_wdata_w),
