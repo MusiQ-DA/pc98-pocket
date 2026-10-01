@@ -165,7 +165,8 @@ module pc98_gvram_seq #(
                      S_RDW  = 3'd2,   // wait for it
                      S_WR   = 3'd3,   // write this plane
                      S_WRW  = 3'd4,   // wait for it
-                     S_DONE = 3'd5;
+                     S_DONE = 3'd5,
+                     S_EVT2 = 3'd6;   // a word read's second lane event
 
     reg [2:0] st;
     reg [1:0] gp;             // which plane
@@ -215,10 +216,15 @@ module pc98_gvram_seq #(
     wire        in_svc   = svc_hold | svc_eval;
     wire [19:0] cur_addr = svc_hold ? svc_addr_r
                          : svc_eval ? svc_addr : cpu_addr;
-    wire [19:0] op_addr  = cur_addr | {19'd0, half};
+    // legpar is the leg's address parity. A dn-direction EGC word WRITE
+    // walks the odd byte first: the pipeline's lane 1 product is the high
+    // half (egcsftw_dn*'s sub(EGCADDR_H) runs first), so the leg that needs
+    // it has to come first. legpar is assigned once egc_here/egc_dn exist.
+    wire        legpar;
+    wire [19:0] op_addr  = cur_addr | {19'd0, legpar};
     wire        op_ext   = op_addr[0];
     wire [7:0]  cur_wdata = svc_hold ? svc_wdata_r
-                         : half ? cpu_wdata_hi : cpu_wdata;
+                         : legpar ? cpu_wdata_hi : cpu_wdata;
 
     // A svc READ is the GDC's own bus view: raw memory, the plane its window
     // names, never the TCR mask or the EGC read transform. On hardware the
@@ -287,18 +293,30 @@ module pc98_gvram_seq #(
     // on the even leg (both bus bytes are live then) and a read's on the
     // odd leg's last plane (both legs' pushes are in the queue by then).
     wire egc_dn      = egc_sft[12];
+    wire word_dnwr   = is_word & ~is_read & egc_here & egc_dn;
+    assign legpar    = half ^ word_dnwr;
     wire egc_sf_push = egc_here & is_read  & egc_rd_shift
                      & (st == S_RDW) & mem_done & ~svc_raw_rd;
-    // The push slot offset splits a word's two legs into adjacent queue
-    // slots; dn walks place the even byte behind the odd (inptr[-1]=L,
+    // The push slot offset splits a word read's two legs into adjacent
+    // queue slots; dn walks place the even byte behind the odd (inptr[-1]=L,
     // inptr[0]=H then inptr-=2 -- the pair is H-then-L in queue order).
     wire egc_sf_off  = is_word & (egc_dn ? ~half : half);
+    // A word access is TWO events one walk apart, sharing the engine's
+    // single lane datapath: the head event does the word's input
+    // accounting and lane 1, the tail event runs lane 2. A write's tail
+    // fires on the odd leg's first read beat, a read's in S_EVT2 -- the
+    // dead cycle the FSM now takes between the last push and the answer.
     wire egc_sf_evt  = egc_here
                      & (is_read
                         ? (egc_rd_shift & (st == S_RDW) & mem_done
                          & egc_rd_last & ~svc_raw_rd & (~is_word | half))
                         : (egc_wr_shift & (st == S_RD) & (gp == 2'd0)
                          & (~is_word | ~half)));
+    wire egc_sf_evt2 = egc_here & is_word
+                     & (is_read
+                        ? (egc_rd_shift & (st == S_EVT2) & ~svc_raw_rd)
+                        : (egc_wr_shift & (st == S_RD) & (gp == 2'd0)
+                         & half));
 
     generate
     if (EGC) begin : g_egc
@@ -315,7 +333,9 @@ module pc98_gvram_seq #(
             .pat_ext(op_ext), .pat_d(mem_rdata), .patreg(egc_patreg),
             .src_q(egc_src),
             .sf_push(egc_sf_push), .sf_push_plane(gp), .sf_push_d(mem_rdata),
-            .sf_evt(egc_sf_evt), .sf_evt_wr(~is_read), .sf_evt_d(cur_wdata),
+            .sf_evt(egc_sf_evt | egc_sf_evt2), .sf_evt_tail(egc_sf_evt2),
+            .sf_evt_wr(~is_read),
+            .sf_evt_d(is_word ? cpu_wdata : cur_wdata),
             .sf_evt_d2(cpu_wdata_hi), .sf_evt_word(is_word),
             .sf_push_off(egc_sf_off),
             .sf_ext(op_ext),
@@ -591,11 +611,20 @@ module pc98_gvram_seq #(
                     tcr <= tcr | (mem_rdata ^ cur_tile);
                 end
                 if (is_read) begin
-                    if (last_gp) st <= S_DONE;
+                    if (is_word & half & egc_here & egc_rd_shift
+                      & ~svc_raw_rd & egc_rd_last)
+                        st <= S_EVT2;
+                    else if (last_gp) st <= S_DONE;
                     else begin gp <= gp + 2'd1; st <= S_RD; end
                 end else
                     st <= S_WR;
               end
+
+              // ---- a word read's second lane ----------------------------
+              // The head event ran on the last plane's byte landing; the
+              // queue shifted under it. One dead cycle lets the tail event
+              // produce lane 2 before S_DONE assembles the answer.
+              S_EVT2: st <= S_DONE;
 
               // ---- write this plane -----------------------------------
               S_WR: begin
