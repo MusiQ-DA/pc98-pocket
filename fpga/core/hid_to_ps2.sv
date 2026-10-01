@@ -52,120 +52,34 @@ function automatic code_in;
 		code == pdata[15:8]  || code == pdata[7:0]);
 endfunction
 
-// HID usage code to PS/2 Set 2 scancode
-function automatic [7:0] hid2ps2;
-	input [7:0] h;
-	case (h)
-		8'h04: hid2ps2 = 8'h1C; // A
-		8'h05: hid2ps2 = 8'h32; // B
-		8'h06: hid2ps2 = 8'h21; // C
-		8'h07: hid2ps2 = 8'h23; // D
-		8'h08: hid2ps2 = 8'h24; // E
-		8'h09: hid2ps2 = 8'h2B; // F
-		8'h0A: hid2ps2 = 8'h34; // G
-		8'h0B: hid2ps2 = 8'h33; // H
-		8'h0C: hid2ps2 = 8'h43; // I
-		8'h0D: hid2ps2 = 8'h3B; // J
-		8'h0E: hid2ps2 = 8'h42; // K
-		8'h0F: hid2ps2 = 8'h4B; // L
-		8'h10: hid2ps2 = 8'h3A; // M
-		8'h11: hid2ps2 = 8'h31; // N
-		8'h12: hid2ps2 = 8'h44; // O
-		8'h13: hid2ps2 = 8'h4D; // P
-		8'h14: hid2ps2 = 8'h15; // Q
-		8'h15: hid2ps2 = 8'h2D; // R
-		8'h16: hid2ps2 = 8'h1B; // S
-		8'h17: hid2ps2 = 8'h2C; // T
-		8'h18: hid2ps2 = 8'h3C; // U
-		8'h19: hid2ps2 = 8'h2A; // V
-		8'h1A: hid2ps2 = 8'h1D; // W
-		8'h1B: hid2ps2 = 8'h22; // X
-		8'h1C: hid2ps2 = 8'h35; // Y
-		8'h1D: hid2ps2 = 8'h1A; // Z
+// HID usage code to PS/2 Set-2 scancode, plus the E0-extension flag: the
+// table is a 256x9 block ROM ({ext, code}) read through two registered
+// ports -- port A looks up the CURRENT report's slot byte, port B the
+// previous report's. The ~150-entry case table it replaced cost ALMs a
+// hardware scan this size cannot spare; the ROM costs one M10K, which is
+// the resource the fit has headroom in.
+//
+// The price is one clock of latency: map[...] lands in roma_q/romb_q the
+// cycle AFTER slot presents the byte, so every scan state runs one beat
+// past its last slot while slot_q/c_at_q/p_at_q/mc_q/mp_q drain -- the
+// press/release decisions evaluate the registered copies, never the live
+// slot. state_q guards the boundary so a lookup issued by the previous
+// state cannot emit in this one.
+(* ramstyle = "M10K" *) reg [8:0] map [0:255];
 
-		8'h1E: hid2ps2 = 8'h16; // 1
-		8'h1F: hid2ps2 = 8'h1E; // 2
-		8'h20: hid2ps2 = 8'h26; // 3
-		8'h21: hid2ps2 = 8'h25; // 4
-		8'h22: hid2ps2 = 8'h2E; // 5
-		8'h23: hid2ps2 = 8'h36; // 6
-		8'h24: hid2ps2 = 8'h3D; // 7
-		8'h25: hid2ps2 = 8'h3E; // 8
-		8'h26: hid2ps2 = 8'h46; // 9
-		8'h27: hid2ps2 = 8'h45; // 0
+`ifdef SYNTHESIS
+	// Quartus resolves $readmemh against the project directory (fpga/).
+	initial $readmemh("core/hid2ps2.hex", map);
+`else
+	// The benches run Verilator from the repository root.
+	initial $readmemh("fpga/core/hid2ps2.hex", map);
+`endif
 
-		8'h28: hid2ps2 = 8'h5A; // enter
-		8'h29: hid2ps2 = 8'h76; // esc
-		8'h2A: hid2ps2 = 8'h66; // bksp
-		8'h2B: hid2ps2 = 8'h0D; // tab
-		8'h2C: hid2ps2 = 8'h29; // space
-		8'h2D: hid2ps2 = 8'h4E; // -
-		8'h2E: hid2ps2 = 8'h55; // =
-		8'h2F: hid2ps2 = 8'h54; // [
-		8'h30: hid2ps2 = 8'h5B; // ]
-		8'h31: hid2ps2 = 8'h5D; // backslash
-		8'h32: hid2ps2 = 8'h5D; // non-US # / ~
-		8'h64: hid2ps2 = 8'h61; // ISO 102nd key (< >)
-		8'h33: hid2ps2 = 8'h4C; // ;
-		8'h34: hid2ps2 = 8'h52; // '
-		8'h35: hid2ps2 = 8'h0E; // `
-		8'h36: hid2ps2 = 8'h41; // ,
-		8'h37: hid2ps2 = 8'h49; // .
-		8'h38: hid2ps2 = 8'h4A; // /
-		8'h39: hid2ps2 = 8'h58; // capslock
-
-		8'h3A: hid2ps2 = 8'h05; // F1
-		8'h3B: hid2ps2 = 8'h06; // F2
-		8'h3C: hid2ps2 = 8'h04; // F3
-		8'h3D: hid2ps2 = 8'h0C; // F4
-		8'h3E: hid2ps2 = 8'h03; // F5
-		8'h3F: hid2ps2 = 8'h0B; // F6
-		8'h40: hid2ps2 = 8'h83; // F7
-		8'h41: hid2ps2 = 8'h0A; // F8
-		8'h42: hid2ps2 = 8'h01; // F9
-		8'h43: hid2ps2 = 8'h09; // F10
-		8'h44: hid2ps2 = 8'h78; // F11
-		8'h45: hid2ps2 = 8'h07; // F12
-
-		// Print Screen and Pause are multi-byte sequences; return a sentinel the framer expands.
-		8'h46: hid2ps2 = 8'hE2; // print screen (sequence)
-		8'h48: hid2ps2 = 8'hE1; // pause (sequence)
-
-		// Nav/arrows reuse the keypad codes and keypad / + Enter the main codes; hid_ext
-		// flags these so the framer adds the E0 prefix that distinguishes them from the twins.
-		8'h47: hid2ps2 = 8'h7E; // scroll lock
-		8'h49: hid2ps2 = 8'h70; // insert
-		8'h4A: hid2ps2 = 8'h6C; // home
-		8'h4B: hid2ps2 = 8'h7D; // pgup
-		8'h4C: hid2ps2 = 8'h71; // del
-		8'h4D: hid2ps2 = 8'h69; // end
-		8'h4E: hid2ps2 = 8'h7A; // pgdn
-		8'h4F: hid2ps2 = 8'h74; // right
-		8'h50: hid2ps2 = 8'h6B; // left
-		8'h51: hid2ps2 = 8'h72; // down
-		8'h52: hid2ps2 = 8'h75; // up
-
-		8'h53: hid2ps2 = 8'h77; // num lock
-		8'h54: hid2ps2 = 8'h4A; // keypad / -> main / code
-		8'h55: hid2ps2 = 8'h7C; // keypad *
-		8'h56: hid2ps2 = 8'h7B; // keypad -
-		8'h57: hid2ps2 = 8'h79; // keypad +
-		8'h58: hid2ps2 = 8'h5A; // keypad enter -> main enter code
-		8'h59: hid2ps2 = 8'h69; // keypad 1
-		8'h5A: hid2ps2 = 8'h72; // keypad 2
-		8'h5B: hid2ps2 = 8'h7A; // keypad 3
-		8'h5C: hid2ps2 = 8'h6B; // keypad 4
-		8'h5D: hid2ps2 = 8'h73; // keypad 5
-		8'h5E: hid2ps2 = 8'h74; // keypad 6
-		8'h5F: hid2ps2 = 8'h6C; // keypad 7
-		8'h60: hid2ps2 = 8'h75; // keypad 8
-		8'h61: hid2ps2 = 8'h7D; // keypad 9
-		8'h62: hid2ps2 = 8'h70; // keypad 0
-		8'h63: hid2ps2 = 8'h71; // keypad .
-
-		default: hid2ps2 = 8'h00;
-	endcase
-endfunction
+reg [8:0] roma_q, romb_q;   // {ext, code} for the curr / prev slot bytes
+reg [7:0] c_at_q,  p_at_q;  // those bytes themselves, aligned with the ROM
+reg [2:0] slot_q;
+reg [2:0] state_q;
+reg       mc_q, mp_q;       // modifier byte bits for slot_q
 
 function automatic [7:0] mod2ps2;
 	input [2:0] idx;
@@ -181,17 +95,6 @@ function automatic [7:0] mod2ps2;
 	endcase
 endfunction
 
-// 1 for keys the framer must prefix with E0 (extended keys).
-function automatic hid_ext;
-	input [7:0] h;
-	case (h)
-		8'h49, 8'h4A, 8'h4B, 8'h4C, 8'h4D, 8'h4E, // insert home pgup del end pgdn
-		8'h4F, 8'h50, 8'h51, 8'h52,               // arrows
-		8'h54, 8'h58: hid_ext = 1'b1;             // keypad / and Enter
-		default:      hid_ext = 1'b0;
-	endcase
-endfunction
-
 // Right Ctrl / Right Alt are E0-extended.
 function automatic mod_ext;
 	input [2:0] idx;
@@ -200,17 +103,31 @@ endfunction
 
 wire [7:0] curr_at   = slot_code(scan_curr, slot);
 wire [7:0] prev_at   = slot_code(scan_prev, slot);
-wire [7:0] ps2_curr  = hid2ps2(curr_at);
-wire [7:0] ps2_prev  = hid2ps2(prev_at);
-wire [7:0] ps2_mod   = mod2ps2(slot);
-wire       curr_ext  = hid_ext(curr_at);
-wire       prev_ext  = hid_ext(prev_at);
-wire       mod_ext_w = mod_ext(slot);
 
-wire is_new_press   = (curr_at != 0) && (ps2_curr != 0) && !code_in(curr_at, scan_prev);
-wire is_new_release = (prev_at != 0) && (ps2_prev != 0) && !code_in(prev_at, scan_curr);
-wire is_mod_press   = scan_mcurr[slot] && !scan_mprev[slot] && (ps2_mod != 0);
-wire is_mod_release = !scan_mcurr[slot] && scan_mprev[slot] && (ps2_mod != 0);
+always @(posedge clk) begin
+	roma_q  <= map[curr_at];
+	romb_q  <= map[prev_at];
+	c_at_q  <= curr_at;
+	p_at_q  <= prev_at;
+	mc_q    <= scan_mcurr[slot];
+	mp_q    <= scan_mprev[slot];
+	slot_q  <= slot;
+	state_q <= state;
+end
+
+wire [7:0] ps2_curr  = roma_q[7:0];
+wire       curr_ext  = roma_q[8];
+wire [7:0] ps2_prev  = romb_q[7:0];
+wire       prev_ext  = romb_q[8];
+wire [7:0] ps2_mod   = mod2ps2(slot_q);
+wire       mod_ext_w = mod_ext(slot_q);
+
+wire is_new_press   = (c_at_q != 8'h00) && (ps2_curr != 8'h00)
+                    && !code_in(c_at_q, scan_prev);
+wire is_new_release = (p_at_q != 8'h00) && (ps2_prev != 8'h00)
+                    && !code_in(p_at_q, scan_curr);
+wire is_mod_press   = mc_q && !mp_q && (ps2_mod != 8'h00);
+wire is_mod_release = !mc_q && mp_q && (ps2_mod != 8'h00);
 
 // A phantom-rollover report (ErrorRollOver 0x01 in the key slots) is ignored so held
 // keys are not spuriously released when more keys are down than the keyboard can report.
@@ -232,7 +149,7 @@ always @(posedge clk) begin
 		ps2_key   <= 0;
 		prev_raw  <= 0;
 		prev_mods <= 0;
-	end else begin
+			end else begin
 		case (state)
 
 		S_IDLE: begin
@@ -248,10 +165,16 @@ always @(posedge clk) begin
 			end
 		end
 
+		// Each scan state presents one slot's addresses per beat and emits
+		// the PREVIOUS beat's decision -- the map ROM reads a cycle late.
+		// `slot` therefore walks one step past the last real index: the
+		// drain beat evaluates slot count-1 while presenting slot 0 again,
+		// and `state_q == <state>` blocks the pipeline tail the previous
+		// state left behind on the entry beat.
 		S_MPRESS: begin
-			if (is_mod_press)
+			if (state_q == S_MPRESS && is_mod_press)
 				ps2_key <= {~ps2_key[10], 1'b1, mod_ext_w, ps2_mod};
-			if (slot == 3'd7) begin
+			if (slot == 3'd8) begin
 				state <= S_PRESS;
 				slot  <= 0;
 			end else
@@ -259,9 +182,9 @@ always @(posedge clk) begin
 		end
 
 		S_PRESS: begin
-			if (is_new_press)
+			if (state_q == S_PRESS && is_new_press)
 				ps2_key <= {~ps2_key[10], 1'b1, curr_ext, ps2_curr};
-			if (slot == 3'd5) begin
+			if (slot == 3'd6) begin
 				state <= S_RELEASE;
 				slot  <= 0;
 			end else
@@ -269,9 +192,9 @@ always @(posedge clk) begin
 		end
 
 		S_RELEASE: begin
-			if (is_new_release)
+			if (state_q == S_RELEASE && is_new_release)
 				ps2_key <= {~ps2_key[10], 1'b0, prev_ext, ps2_prev};
-			if (slot == 3'd5) begin
+			if (slot == 3'd6) begin
 				state <= S_MRELEASE;
 				slot  <= 0;
 			end else
@@ -279,9 +202,9 @@ always @(posedge clk) begin
 		end
 
 		S_MRELEASE: begin
-			if (is_mod_release)
+			if (state_q == S_MRELEASE && is_mod_release)
 				ps2_key <= {~ps2_key[10], 1'b0, mod_ext_w, ps2_mod};
-			if (slot == 3'd7)
+			if (slot == 3'd8)
 				state <= S_IDLE;
 			else
 				slot <= slot + 1'd1;

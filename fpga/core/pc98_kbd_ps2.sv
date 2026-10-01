@@ -50,151 +50,65 @@ module pc98_kbd_ps2 (
     localparam [7:0] KC_NONE = 8'hFF;
 
     //
-    // Non-extended Set-2 -> PC-98, listed in ANSI keyboard order. The Set-2
-    // column matches hid_to_ps2's output byte for byte.
+    // Non-extended Set-2 -> PC-98 (ROM page 0), ANSI keyboard order. The
+    // Set-2 column matches hid_to_ps2's output byte for byte; the choices
+    // are np21w's (sdl/kbtrans.c, the 101/106 tables): the JIS bracket row
+    // sits one key left of the ANSI one, US `~ doubles as the JIS yen key,
+    // and Set-2 0x61 is the JIS _/ro key. Modifiers map as KEYS: shifts
+    // 0x70/0x7D, CTRL 0x74, GRPH 0x73, NFER 0x51, XFER 0x35 -- the BIOS
+    // builds its shift state from those bytes exactly as from the real
+    // keyboard. PC-98-only keys ride Set-2 codes a USB keyboard never emits
+    // (STOP 0x08, KANA 0x0F, GRPH 0x10, XFER 0x13, NFER 0x17, HMCR 0x27,
+    // HELP 0x18, ROLL UP 0x19, ROLL DOWN 0x1F, INS 0x20, DEL 0x28, _/RO
+    // 0x2F, keypad / 0x30) -- vkb_layout.c's table produces them.
     //
-    function automatic [7:0] set2_pc98;
-        input [7:0] s;
-        case (s)
-            8'h76: set2_pc98 = 8'h00; // ESC
-            8'h16: set2_pc98 = 8'h01; // 1
-            8'h1E: set2_pc98 = 8'h02; // 2
-            8'h26: set2_pc98 = 8'h03; // 3
-            8'h25: set2_pc98 = 8'h04; // 4
-            8'h2E: set2_pc98 = 8'h05; // 5
-            8'h36: set2_pc98 = 8'h06; // 6
-            8'h3D: set2_pc98 = 8'h07; // 7
-            8'h3E: set2_pc98 = 8'h08; // 8
-            8'h46: set2_pc98 = 8'h09; // 9
-            8'h45: set2_pc98 = 8'h0A; // 0
-            8'h4E: set2_pc98 = 8'h0B; // -   (JIS -)
-            8'h55: set2_pc98 = 8'h0C; // =   (JIS ^)
-            8'h0E: set2_pc98 = 8'h0D; // `   (JIS yen)
-            8'h66: set2_pc98 = 8'h0E; // backspace
-            8'h0D: set2_pc98 = 8'h0F; // tab
-            8'h15: set2_pc98 = 8'h10; // Q
-            8'h1D: set2_pc98 = 8'h11; // W
-            8'h24: set2_pc98 = 8'h12; // E
-            8'h2D: set2_pc98 = 8'h13; // R
-            8'h2C: set2_pc98 = 8'h14; // T
-            8'h35: set2_pc98 = 8'h15; // Y
-            8'h3C: set2_pc98 = 8'h16; // U
-            8'h43: set2_pc98 = 8'h17; // I
-            8'h44: set2_pc98 = 8'h18; // O
-            8'h4D: set2_pc98 = 8'h19; // P
-            8'h54: set2_pc98 = 8'h1A; // [   (JIS @)
-            8'h5B: set2_pc98 = 8'h1B; // ]   (JIS [)
-            8'h5A: set2_pc98 = 8'h1C; // enter
-            8'h1C: set2_pc98 = 8'h1D; // A
-            8'h1B: set2_pc98 = 8'h1E; // S
-            8'h23: set2_pc98 = 8'h1F; // D
-            8'h2B: set2_pc98 = 8'h20; // F
-            8'h34: set2_pc98 = 8'h21; // G
-            8'h33: set2_pc98 = 8'h22; // H
-            8'h3B: set2_pc98 = 8'h23; // J
-            8'h42: set2_pc98 = 8'h24; // K
-            8'h4B: set2_pc98 = 8'h25; // L
-            8'h4C: set2_pc98 = 8'h26; // ;   (JIS ;)
-            8'h52: set2_pc98 = 8'h27; // '   (JIS :)
-            8'h5D: set2_pc98 = 8'h28; // \   (JIS ])
-            8'h1A: set2_pc98 = 8'h29; // Z
-            8'h22: set2_pc98 = 8'h2A; // X
-            8'h21: set2_pc98 = 8'h2B; // C
-            8'h2A: set2_pc98 = 8'h2C; // V
-            8'h32: set2_pc98 = 8'h2D; // B
-            8'h31: set2_pc98 = 8'h2E; // N
-            8'h3A: set2_pc98 = 8'h2F; // M
-            8'h41: set2_pc98 = 8'h30; // ,
-            8'h49: set2_pc98 = 8'h31; // .
-            8'h4A: set2_pc98 = 8'h32; // /
-            8'h61: set2_pc98 = 8'h33; // ISO backslash (JIS _ / ro)
-            8'h29: set2_pc98 = 8'h34; // space
-            8'h7B: set2_pc98 = 8'h40; // keypad -
-            8'h7C: set2_pc98 = 8'h45; // keypad *
-            8'h79: set2_pc98 = 8'h49; // keypad +
-            8'h6C: set2_pc98 = 8'h42; // keypad 7
-            8'h75: set2_pc98 = 8'h43; // keypad 8
-            8'h7D: set2_pc98 = 8'h44; // keypad 9
-            8'h6B: set2_pc98 = 8'h46; // keypad 4
-            8'h73: set2_pc98 = 8'h47; // keypad 5
-            8'h74: set2_pc98 = 8'h48; // keypad 6
-            8'h69: set2_pc98 = 8'h4A; // keypad 1
-            8'h72: set2_pc98 = 8'h4B; // keypad 2
-            8'h7A: set2_pc98 = 8'h4C; // keypad 3
-            8'h70: set2_pc98 = 8'h4E; // keypad 0
-            8'h71: set2_pc98 = 8'h50; // keypad .
-            8'h03: set2_pc98 = 8'h66; // F5
-            8'h04: set2_pc98 = 8'h64; // F3
-            8'h05: set2_pc98 = 8'h62; // F1
-            8'h06: set2_pc98 = 8'h63; // F2
-            8'h09: set2_pc98 = 8'h6B; // F10
-            8'h0A: set2_pc98 = 8'h69; // F8
-            8'h0B: set2_pc98 = 8'h67; // F6
-            8'h0C: set2_pc98 = 8'h65; // F4
-            8'h83: set2_pc98 = 8'h68; // F7
-            8'h01: set2_pc98 = 8'h6A; // F9
-            8'h12: set2_pc98 = 8'h70; // left shift
-            8'h58: set2_pc98 = 8'h71; // caps lock (a plain key to a PC-98)
-            8'h11: set2_pc98 = 8'h51; // left alt  -> NFER
-            8'h14: set2_pc98 = 8'h74; // left ctrl -> CTRL
-            8'h59: set2_pc98 = 8'h7D; // right shift
+    // Page 1 is the extended (0xE0-prefixed) map: the nav block, the keypad
+    // twins, right-Ctrl/Alt, and Print Screen -> COPY.
+    //
+    // Both tables live in one 512x8 block ROM, and BOTH pages are read when
+    // a byte is captured -- which page applies is the parser's business a
+    // cycle later (the E0 prefix only changes state at decode), so the
+    // dual-port read keeps the ROM synchronous without the FSM knowing the
+    // byte's class ahead of time. The case tables this replaced (~110
+    // entries) cost the fit more ALMs than the M10K, which is the resource
+    // with headroom.
+    (* ramstyle = "M10K" *) reg [7:0] map [0:511];
 
-            // PC-98-only keys the VIRTUAL keyboard sends on Set-2 codes that a
-            // real USB keyboard never emits (verified against hid_to_ps2's
-            // output table). These codes belong to vkb_layout.c's PC-9801
-            // table; a docked keyboard reaches the same PC-98 keys through the
-            // entries above and the extended block instead.
-            8'h08: set2_pc98 = 8'h60; // STOP   (Pause key on a docked kbd)
-            8'h0F: set2_pc98 = 8'h72; // KANA
-            8'h10: set2_pc98 = 8'h73; // GRPH   (right ctrl on a docked kbd)
-            8'h13: set2_pc98 = 8'h35; // XFER   (right alt on a docked kbd)
-            8'h17: set2_pc98 = 8'h51; // NFER   (left alt on a docked kbd)
-            8'h27: set2_pc98 = 8'h3E; // HOME CLR (bare sentinel; 0x3E = np21w "HMCR")
-            8'h18: set2_pc98 = 8'h3F; // HELP
-            8'h19: set2_pc98 = 8'h36; // ROLL UP
-            8'h1F: set2_pc98 = 8'h37; // ROLL DOWN
-            8'h20: set2_pc98 = 8'h38; // INS
-            8'h28: set2_pc98 = 8'h39; // DEL
-            8'h2F: set2_pc98 = 8'h33; // _ / RO
-            8'h30: set2_pc98 = 8'h41; // keypad /
-            default: set2_pc98 = KC_NONE;
-        endcase
-    endfunction
+`ifdef SYNTHESIS
+    // Quartus resolves $readmemh against the project directory (fpga/).
+    initial $readmemh("core/pc98_kbd_ps2.hex", map);
+`else
+    // The benches run Verilator from the repository root.
+    initial $readmemh("fpga/core/pc98_kbd_ps2.hex", map);
+`endif
+
+    // The byte queue: every handshake captures into q_byte and raises q_v
+    // for one beat, so no stream byte can land while its map is in flight
+    // -- a byte is always either captured or decoded, never dropped.
+    reg [7:0] q_byte, roma_q, romb_q;
+    reg       q_v;
+
+    always @(posedge clk) begin
+        if (reset) begin
+            q_v <= 1'b0;
+        end else if (kb_valid && kb_ready) begin
+            q_byte <= kb_byte;
+            roma_q <= map[{1'b0, kb_byte}];
+            romb_q <= map[{1'b1, kb_byte}];
+            q_v    <= 1'b1;
+        end else if (q_v) begin
+            q_v <= 1'b0;                    // consumed this beat
+        end
+    end
 
     //
-    // Extended (0xE0-prefixed) Set-2 -> PC-98: the nav block, the keypad
-    // twins, right-Ctrl/Alt, and Print Screen. With the E0 prefix 0x7C is
-    // Print Screen -> COPY, not the keypad *.
-    //
-    function automatic [7:0] set2e_pc98;
-        input [7:0] s;
-        case (s)
-            8'h11: set2e_pc98 = 8'h35; // right alt  -> XFER
-            8'h14: set2e_pc98 = 8'h73; // right ctrl -> GRPH
-            8'h4A: set2e_pc98 = 8'h41; // keypad /
-            8'h5A: set2e_pc98 = 8'h1C; // keypad enter -> RETURN
-            8'h69: set2e_pc98 = 8'h3F; // end   -> HELP
-            8'h6B: set2e_pc98 = 8'h3B; // left
-            8'h6C: set2e_pc98 = 8'h3E; // home  -> HOME/CLR
-            8'h70: set2e_pc98 = 8'h38; // insert -> INS
-            8'h71: set2e_pc98 = 8'h39; // delete -> DEL
-            8'h72: set2e_pc98 = 8'h3D; // down
-            8'h74: set2e_pc98 = 8'h3C; // right
-            8'h75: set2e_pc98 = 8'h3A; // up
-            8'h7A: set2e_pc98 = 8'h37; // pgdn  -> ROLLDOWN
-            8'h7C: set2e_pc98 = 8'h61; // print screen -> COPY
-            8'h7D: set2e_pc98 = 8'h36; // pgup  -> ROLLUP
-            default: set2e_pc98 = KC_NONE;
-        endcase
-    endfunction
-
-    //
-    // Byte-stream parser. pocket_keyboard's framer emits well-formed Set-2:
-    // make [E0] code, break [E0] F0 code, plus the fixed Print Screen and
-    // Pause sequences. E0 12 / E0 59 inside Print Screen are fake shifts, not
-    // keys -- both are discarded so COPY does not leave a phantom shift held.
-    // Pause arrives as the 8-byte E1 sequence and is make-only: it becomes a
-    // STOP make and the remaining 7 bytes are swallowed.
+    // Byte-stream parser, one beat behind the wire. pocket_keyboard's framer
+    // emits well-formed Set-2: make [E0] code, break [E0] F0 code, plus the
+    // fixed Print Screen and Pause sequences. E0 12 / E0 59 inside Print
+    // Screen are fake shifts, not keys -- both are discarded so COPY does
+    // not leave a phantom shift held. Pause arrives as the 8-byte E1
+    // sequence and is make-only: it becomes a STOP make and the remaining
+    // 7 bytes are swallowed.
     //
     localparam [2:0] S_IDLE = 3'd0, S_EXT = 3'd1, S_BRK = 3'd2,
                      S_EXT_BRK = 3'd3, S_SKIP = 3'd4;
@@ -208,10 +122,10 @@ module pc98_kbd_ps2 (
             key_make <= 1'b0;
             key_code <= 8'd0;
             skip_cnt <= 3'd0;
-        end else if (kb_valid && kb_ready) begin
+        end else if (q_v) begin
             case (state)
                 S_IDLE: begin
-                    case (kb_byte)
+                    case (q_byte)
                         8'hE0: state <= S_EXT;
                         8'hF0: state <= S_BRK;
                         8'hE1: begin                       // Pause: a make-only STOP
@@ -222,48 +136,48 @@ module pc98_kbd_ps2 (
                             state    <= S_SKIP;
                         end
                         default: begin
-                            if (set2_pc98(kb_byte) != KC_NONE) begin
+                            if (roma_q != KC_NONE) begin
                                 key_stb  <= ~key_stb;
                                 key_make <= 1'b1;
-                                key_code <= set2_pc98(kb_byte);
+                                key_code <= roma_q;
                             end
                         end
                     endcase
                 end
 
                 S_EXT: begin
-                    if (kb_byte == 8'hE0)
+                    if (q_byte == 8'hE0)
                         state <= S_EXT;                    // consecutive prefixes
-                    else if (kb_byte == 8'hF0)
+                    else if (q_byte == 8'hF0)
                         state <= S_EXT_BRK;                // extended break
-                    else if (kb_byte == 8'h12 || kb_byte == 8'h59)
+                    else if (q_byte == 8'h12 || q_byte == 8'h59)
                         state <= S_IDLE;                   // Print Screen fake shift
                     else begin
                         state <= S_IDLE;
-                        if (set2e_pc98(kb_byte) != KC_NONE) begin
+                        if (romb_q != KC_NONE) begin
                             key_stb  <= ~key_stb;
                             key_make <= 1'b1;
-                            key_code <= set2e_pc98(kb_byte);
+                            key_code <= romb_q;
                         end
                     end
                 end
 
                 S_BRK: begin                               // release of a plain key
                     state <= S_IDLE;
-                    if (set2_pc98(kb_byte) != KC_NONE) begin
+                    if (roma_q != KC_NONE) begin
                         key_stb  <= ~key_stb;
                         key_make <= 1'b0;
-                        key_code <= set2_pc98(kb_byte) | 8'h80;
+                        key_code <= roma_q | 8'h80;
                     end
                 end
 
                 S_EXT_BRK: begin                           // release of an extended key
                     state <= S_IDLE;
-                    if (kb_byte != 8'h12 && kb_byte != 8'h59   // fake shift break
-                            && set2e_pc98(kb_byte) != KC_NONE) begin
+                    if (q_byte != 8'h12 && q_byte != 8'h59   // fake shift break
+                            && romb_q != KC_NONE) begin
                         key_stb  <= ~key_stb;
                         key_make <= 1'b0;
-                        key_code <= set2e_pc98(kb_byte) | 8'h80;
+                        key_code <= romb_q | 8'h80;
                     end
                 end
 

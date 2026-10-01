@@ -111,7 +111,7 @@ module pc98_cgwindow (
     logic  [4:0] a5_line;       // and the line it named
 
     // Two halves of sixteen lines.
-    (* ramstyle = "M10K" *) logic [7:0] win [0:31];
+    logic [7:0] win [0:31];
 
     // Which slots the guest has written since the last code change. The code
     // write kicks off a refill from the font store, and the CPU can reach its
@@ -152,10 +152,8 @@ module pc98_cgwindow (
     // says whether this access reaches the RAM at all; the half bit is
     // right_sel either way.
     wire        win_gaiji = gaiji_sel & (mem_wr | mem_rd);
-    wire [12:0] g_raddr  = win_gaiji ? {code[14:8], code[0], right_sel,
-                                        rd_addr[4:1]}
-                                     : {code[14:8], code[0], right_sel,
-                                        a5_line[3:0]};
+    wire  [3:0] g_rline  = win_gaiji ? rd_addr[4:1] : a5_line[3:0];
+    wire [12:0] g_raddr  = {code[14:8], code[0], right_sel, g_rline};
 
     // Writes register address and data with the enable: g_we commits a cycle
     // after the guest's bus cycle, and by then the bus lines are already
@@ -166,19 +164,33 @@ module pc98_cgwindow (
     assign g_addr  = g_we ? g_waddr : g_raddr;
     assign g_wdata = g_wdata_q;
 
+    // win[] carries THREE read consumers but the guest bus performs one
+    // access at a time -- a window read or a port read, never both -- so a
+    // single read port serves them all and mem_rd picks the index. The
+    // read is registered, which is what lets the array finally honour its
+    // M10K attribute: an asynchronous read cannot live in block RAM and
+    // was costing the array's 256 cells plus a 32:1 mux per consumer in
+    // ALMs. One cycle is invisible here -- every consumer (the
+    // data_bus_out capture, the testbench's two-clock sample) reads at
+    // least a clock after the index, the same rhythm the gaiji RAM's
+    // registered output already sets for a9_data.
+    wire       hi_nz     = (code[15:8] != 8'h00);
+    wire [4:0] win_ridx  = mem_rd ? {rd_addr[0], rd_addr[4:1]}
+                                  : {hi_nz & right_sel, a5_line[3:0]};
+    logic [7:0] win_rdata;
+    always_ff @(posedge clk) win_rdata <= win[win_ridx];
+
     // Window reads of a gaiji code: odd offsets answer from the RAM, even
     // from the prefetch window (np21w's `low` dummy region stands there).
-    assign rd_data = (gaiji_sel & rd_addr[0]) ? g_rdata
-                                              : win[{rd_addr[0], rd_addr[4:1]}];
+    assign rd_data = (gaiji_sel & rd_addr[0]) ? g_rdata : win_rdata;
 
     // Port 0xA9 reads: gaiji codes hit the RAM; other kanji-class codes read
     // the prefetched half/line (np21w returns fontrom at the same offsets);
-    // ANK codes come from the window's left half while line bit 4 stays clear,
-    // the `!(cr->line & 0x10)` gate in cgrom_ia9.
-    assign a9_data = gaiji_sel            ? g_rdata
-                   : (code[15:8] != 8'h00) ? win[{right_sel, a5_line[3:0]}]
-                   : a5_line[4]            ? 8'h00
-                                           : win[{1'b0, a5_line[3:0]}];
+    // ANK codes come from the window's left half while line bit 4 stays
+    // clear, the `!(cr->line & 0x10)` gate in cgrom_ia9.
+    assign a9_data = gaiji_sel ? g_rdata
+                   : (a5_line[4] & ~hi_nz) ? 8'h00
+                                           : win_rdata;
 
     typedef enum logic [1:0] { S_IDLE, S_FETCH, S_STREAM, S_NEXT } state_t;
     state_t state;

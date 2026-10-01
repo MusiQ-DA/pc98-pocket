@@ -68,7 +68,7 @@ module pc98_busmouse #(
 
     // np21w clamps the latched snapshot to [-128, +127].
     function signed [7:0] cap8(input signed [16:0] v);
-        cap8 = (v > 17'sd127) ? 8'sd127 : (v < -17'sd128) ? -8'sd128 : v[7:0];
+        cap8 = (v > 17'sd127) ? 8'sd127 : (v < -17'sd128) ? 8'sh80 : v[7:0];
     endfunction
 
     //
