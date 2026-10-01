@@ -292,6 +292,15 @@ jobs:
           ./obj_kb/k | tee kb.log
           grep -q "RESULT: PASS" kb.log
 
+      - name: Docked USB keyboard reports become Set-2 events
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_hid_to_ps2 \
+            -Isim -Ifpga/core \
+            sim/tb_hid_to_ps2.sv fpga/core/hid_to_ps2.sv \
+            -o h --Mdir obj_hid
+          ./obj_hid/h | tee hid.log
+          grep -q "RESULT: PASS" hid.log
+
       - name: ITF bank switches on 0x043D and not on a glitch
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_itf_bank \

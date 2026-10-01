@@ -140,7 +140,7 @@ localparam S_IDLE     = 3'd0,
            S_MRELEASE = 3'd4;
 
 reg [2:0] state;
-reg [2:0] slot;
+reg [3:0] slot;   // 0..8: the drain beat presents one past the last slot
 
 always @(posedge clk) begin
 	if (reset) begin
@@ -174,7 +174,7 @@ always @(posedge clk) begin
 		S_MPRESS: begin
 			if (state_q == S_MPRESS && is_mod_press)
 				ps2_key <= {~ps2_key[10], 1'b1, mod_ext_w, ps2_mod};
-			if (slot == 3'd8) begin
+			if (slot == 4'd8) begin
 				state <= S_PRESS;
 				slot  <= 0;
 			end else
@@ -184,7 +184,7 @@ always @(posedge clk) begin
 		S_PRESS: begin
 			if (state_q == S_PRESS && is_new_press)
 				ps2_key <= {~ps2_key[10], 1'b1, curr_ext, ps2_curr};
-			if (slot == 3'd6) begin
+			if (slot == 4'd6) begin
 				state <= S_RELEASE;
 				slot  <= 0;
 			end else
@@ -194,7 +194,7 @@ always @(posedge clk) begin
 		S_RELEASE: begin
 			if (state_q == S_RELEASE && is_new_release)
 				ps2_key <= {~ps2_key[10], 1'b0, prev_ext, ps2_prev};
-			if (slot == 3'd6) begin
+			if (slot == 4'd6) begin
 				state <= S_MRELEASE;
 				slot  <= 0;
 			end else
@@ -204,7 +204,7 @@ always @(posedge clk) begin
 		S_MRELEASE: begin
 			if (state_q == S_MRELEASE && is_mod_release)
 				ps2_key <= {~ps2_key[10], 1'b0, mod_ext_w, ps2_mod};
-			if (slot == 3'd8)
+			if (slot == 4'd8)
 				state <= S_IDLE;
 			else
 				slot <= slot + 1'd1;
