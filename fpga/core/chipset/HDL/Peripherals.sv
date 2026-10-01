@@ -1567,6 +1567,9 @@ module PERIPHERALS #(
         // port between them and the screen.
         .ank_code(pc98_ank_code), .ank_line(pc98_ank_line),
         .ank_row(pc98_ank_row),
+        // Gaiji cells (ku 0x56/0x57) read the user-defined character RAM --
+        // the same store the guest fills through port 0xA9 / the CG window.
+        .gaiji_addr(pc98_gaiji_b_addr), .gaiji_data(pc98_gaiji_b_rdata),
         // Indexed by the cell the renderer is FETCHING, not the one it is
         // drawing: it runs one cell ahead, and using the current column here
         // would shift every line by one.
@@ -1590,7 +1593,8 @@ module PERIPHERALS #(
     wire cg_io_hit = ~io_write_n & ~address_enable_n
                    & ((address[15:0] == 16'h00A1)
                    |  (address[15:0] == 16'h00A3)
-                   |  (address[15:0] == 16'h00A5));
+                   |  (address[15:0] == 16'h00A5)
+                   |  (address[15:0] == 16'h00A9));
     logic cg_io_q, cg_io_qq;
     logic  [7:0] cg_io_data;
     logic [15:0] cg_io_port;
@@ -1616,12 +1620,34 @@ module PERIPHERALS #(
     wire [19:0] cg_f_addr;
     wire  [7:0] cg_f_data;
 
+    // The gaiji store: user-definable characters at ku 0x56/0x57, written
+    // through port 0xA9 or the CG window and drawn by the text row buffer.
+    // np21w io/cgrom.c keeps them in fontrom; here they get their own M10K
+    // because the renderer's kanji bytes live in SDRAM.
+    wire        pc98_gaiji_a_we;
+    wire [12:0] pc98_gaiji_a_addr;
+    wire  [7:0] pc98_gaiji_a_wdata, pc98_gaiji_a_rdata;
+    wire [12:0] pc98_gaiji_b_addr;
+    wire  [7:0] pc98_gaiji_b_rdata;
+    wire  [7:0] cg_a9_data;
+
+    pc98_gaiji_ram u_pc98_gaiji (
+        .clk(clock),
+        .a_we(pc98_gaiji_a_we), .a_addr(pc98_gaiji_a_addr),
+        .a_wdata(pc98_gaiji_a_wdata), .a_rdata(pc98_gaiji_a_rdata),
+        .b_addr(pc98_gaiji_b_addr), .b_rdata(pc98_gaiji_b_rdata)
+    );
+
     pc98_cgwindow u_pc98_cgwin (
         .clk(clock), .rst(reset),
         .io_wr(cg_io_commit), .io_port(cg_io_port), .io_data(cg_io_data),
         .mem_wr(cgwin_mem_select & ~memory_write_n),
+        .mem_rd(cgwin_mem_select & ~memory_read_n),
         .wr_addr(address[11:0]), .wr_data(internal_data_bus),
         .rd_addr(address[11:0]), .rd_data(cgwin_q),
+        .a9_data(cg_a9_data),
+        .g_we(pc98_gaiji_a_we), .g_addr(pc98_gaiji_a_addr),
+        .g_wdata(pc98_gaiji_a_wdata), .g_rdata(pc98_gaiji_a_rdata),
         .f_req(cg_f_req), .f_addr(cg_f_addr), .f_busy(cg_f_busy),
         .f_valid(cg_f_valid), .f_data(cg_f_data), .busy()
     );
@@ -2436,6 +2462,15 @@ module PERIPHERALS #(
         begin
             data_bus_out_from_chipset <= 1'b1;
             data_bus_out <= cgwin_q;
+        end
+        // CG data port (np21w cgrom_ia9): the glyph byte at the code/line/half
+        // the guest last set on 0xA1/A3/A5. The gaiji RAM's read registers on
+        // this clock, so the value settles while the read strobe is still low
+        // and is captured here on the cycles that follow.
+        else if ((address[15:0] == 16'h00A9) && (~io_read_n))
+        begin
+            data_bus_out_from_chipset <= 1'b1;
+            data_bus_out <= cg_a9_data;
         end
         else if ((~floppy0_chip_select_n || fdd_dma_read) && (~io_read_n))
         begin

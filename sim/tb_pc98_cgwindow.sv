@@ -24,10 +24,15 @@ module tb_pc98_cgwindow;
     logic [15:0] io_port = 0;
     logic  [7:0] io_data = 0;
     logic        mem_wr = 0;
+    logic        mem_rd = 0;
     logic [11:0] wr_addr = 0;
     logic  [7:0] wr_data = 0;
     logic [11:0] rd_addr = 0;
     wire   [7:0] rd_data;
+    wire   [7:0] a9_data;
+    wire         g_we;
+    wire  [12:0] g_addr;
+    wire   [7:0] g_wdata, g_rdata;
     wire         f_req, busy;
     wire  [19:0] f_addr;
     logic        f_busy = 0, f_valid = 0;
@@ -36,10 +41,18 @@ module tb_pc98_cgwindow;
     pc98_cgwindow dut (
         .clk(clk), .rst(rst),
         .io_wr(io_wr), .io_port(io_port), .io_data(io_data),
-        .mem_wr(mem_wr), .wr_addr(wr_addr), .wr_data(wr_data),
-        .rd_addr(rd_addr), .rd_data(rd_data),
+        .mem_wr(mem_wr), .mem_rd(mem_rd), .wr_addr(wr_addr), .wr_data(wr_data),
+        .rd_addr(rd_addr), .rd_data(rd_data), .a9_data(a9_data),
+        .g_we(g_we), .g_addr(g_addr), .g_wdata(g_wdata), .g_rdata(g_rdata),
         .f_req(f_req), .f_addr(f_addr), .f_busy(f_busy),
         .f_valid(f_valid), .f_data(f_data), .busy(busy)
+    );
+
+    // The real user CG RAM, port B unused on this side.
+    pc98_gaiji_ram u_gaiji (
+        .clk(clk),
+        .a_we(g_we), .a_addr(g_addr), .a_wdata(g_wdata), .a_rdata(g_rdata),
+        .b_addr(13'd0), .b_rdata()
     );
 
     // Model font: byte at A is A's low eight bits.
@@ -79,9 +92,18 @@ module tb_pc98_cgwindow;
     endtask
 
     task automatic rd(input int k, output logic [7:0] v);
-        rd_addr = 12'(k);
-        @(posedge clk);
+        rd_addr = 12'(k); mem_rd = 1'b1;
+        @(posedge clk); @(posedge clk);   // the gaiji RAM reads on the clock
         v = rd_data;
+        mem_rd = 1'b0;
+    endtask
+
+    // 0xA9 is a real guest read: present the code on A1/A3, the line/half on
+    // A5, then watch a9_data -- the RAM registers the read on the clock, so
+    // sample a cycle on.
+    task automatic a9rd(output logic [7:0] v);
+        @(posedge clk); @(posedge clk);
+        v = a9_data;
     endtask
 
     initial begin
@@ -252,6 +274,83 @@ module tb_pc98_cgwindow;
             end
         end
         $display("  the ITF's KANJI CG RAM test reads back what it wrote");
+
+        // ---- port 0xA9: the CG data port (np21w cgrom_oa9/cgrom_ia9) -------
+        //
+        // SuperDepth's loader does this: OUT A1/A3 a gaiji code, OUT A5 a
+        // line+half, then sixteen pattern bytes through 0xA9 -- and later a
+        // backup pass that reads them back. A glyph stored for one code must
+        // survive a code change, because the game uploads 256 and THEN draws.
+        port(16'h00A1, 8'h30);           // index 0x30
+        port(16'h00A3, 8'h56);           // ku 0x56
+        repeat (80) @(posedge clk);      // let the refill finish
+        for (int l = 0; l < 16; l++) begin
+            port(16'h00A5, 8'(l));       // bit5 clear = right half (lr=0x800)
+            port(16'h00A9, 8'hC0 ^ 8'(l));
+            port(16'h00A5, 8'h20 | 8'(l));
+            port(16'h00A9, 8'hD0 ^ 8'(l));
+        end
+        // Read both halves back through the port.
+        for (int l = 0; l < 16; l++) begin
+            port(16'h00A5, 8'(l));
+            a9rd(got);
+            if (got !== (8'hC0 ^ 8'(l))) begin
+                $display("  FAIL A9 read right line %0d: %02h", l, got); errors++;
+            end
+            port(16'h00A5, 8'h20 | 8'(l));
+            a9rd(got);
+            if (got !== (8'hD0 ^ 8'(l))) begin
+                $display("  FAIL A9 read left line %0d: %02h", l, got); errors++;
+            end
+        end
+        $display("  0xA9 writes land in the gaiji RAM and read back");
+
+        // Persistence: select another gaiji code, come back, the glyph stays.
+        port(16'h00A1, 8'h31);
+        port(16'h00A3, 8'h56);
+        repeat (80) @(posedge clk);
+        port(16'h00A1, 8'h30);
+        port(16'h00A3, 8'h56);
+        repeat (80) @(posedge clk);
+        port(16'h00A5, 8'h05);
+        a9rd(got);
+        if (got !== (8'hC0 ^ 8'h05)) begin
+            $display("  FAIL gaiji glyph lost across a code change: %02h", got);
+            errors++;
+        end
+        $display("  a stored glyph survives a code change");
+
+        // The window sees the same bytes: odd offsets, a5-selected half.
+        // A5=00 picked the right half above, so the odd-offset read returns
+        // the 0xC0^n bytes.
+        port(16'h00A5, 8'h00);
+        rd(2 * 3 + 1, got);
+        if (got !== (8'hC0 ^ 8'h03)) begin
+            $display("  FAIL window read of port-stored gaiji: %02h", got);
+            errors++;
+        end
+        // And the port sees what the window stored.
+        wr_addr = 12'(2 * 7 + 1); wr_data = 8'h5A; mem_wr = 1'b1;
+        @(posedge clk); mem_wr = 1'b0;
+        port(16'h00A5, 8'h07);           // same half, line 7
+        a9rd(got);
+        if (got !== 8'h5A) begin
+            $display("  FAIL A9 read of window-stored gaiji: %02h", got);
+            errors++;
+        end
+        $display("  window and port reach the same gaiji cells");
+
+        // A9 reads of a non-gaiji code hand back the prefetched font bytes:
+        // hiragana A's right half fetched at 0x3C50, so line l is 0x50+l.
+        port(16'h00A1, 8'h22);
+        port(16'h00A3, 8'h04);
+        repeat (80) @(posedge clk);
+        port(16'h00A5, 8'h02);           // bit5 clear = right half, line 2
+        a9rd(got);
+        if (got !== 8'h52) begin
+            $display("  FAIL A9 font read: %02h want 52", got); errors++;
+        end
+        $display("  0xA9 reads ROM glyphs too");
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");

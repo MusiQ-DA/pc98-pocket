@@ -124,6 +124,8 @@ module tb_pc98_pipeline;
         .f_req(f_req), .f_addr(f_addr), .f_busy(f_busy),
         .f_valid(f_valid), .f_data(f_data),
         .ank_code(ank_code), .ank_line(ank_line), .ank_row(ank_row),
+        // No gaiji cells in this script -- tie the RAM's read port off.
+        .gaiji_addr(), .gaiji_data(8'h00),
         .rd_clk(clk_dot), .rd_cell(rd_cell_w[6:0]), .rd_line(rd_line_w),
         .rd_byte(rd_byte), .kanji_seen(kanji_seen)
     );

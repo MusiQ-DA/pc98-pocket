@@ -85,6 +85,14 @@ module pc98_glyph_rowbuf #(
     output logic [3:0]  ank_line,
     input  wire  [7:0]  ank_row,
 
+    // Gaiji RAM side (pc98_gaiji_ram port B), same clock. Cells whose ku is
+    // 0x56/0x57 are user-defined RAM, not FONT.ROM -- np21w draws them out of
+    // the same array its cgrom_oa9 writes, so the read here must reach the
+    // store the guest's 0xA9 and window writes fill. Two clocks per byte,
+    // the same rhythm as the ANK path.
+    output logic [12:0] gaiji_addr,
+    input  wire  [7:0]  gaiji_data,
+
     // Renderer side: the row NOT being filled.
     //
     // On its OWN clock. The fill runs on the chipset clock, because that is
@@ -120,12 +128,18 @@ module pc98_glyph_rowbuf #(
 
     typedef enum logic [3:0] {
         S_IDLE, S_TV_REQ, S_TV_W1, S_TV_W2, S_FETCH, S_STREAM, S_EXPAND,
-        S_EXPAND_W, S_NEXT, S_ANK, S_ANK_W
+        S_EXPAND_W, S_NEXT, S_ANK, S_ANK_W, S_GAIJI, S_GAIJI_W
     } state_t;
     state_t state;
 
     wire        ga_is_kanji;
     wire [19:0] ga_addr;
+
+    // Gaiji: a kanji-class cell whose ku is 0x56/0x57 -- the same test
+    // np21w's cgrom_oa9 applies, (code & 0x007e) == 0x0056. char_hi is the
+    // glyph index the guest uploaded under port 0xA1.
+    wire        ga_is_gaiji = ga_is_kanji & ((hold_lo[6:0] & 7'h7E) == 7'h56);
+    logic [3:0] gaiji_line;
 
     pc98_glyph_addr u_addr (
         .char_lo    (hold_lo),
@@ -136,6 +150,11 @@ module pc98_glyph_rowbuf #(
         .is_kanji   (ga_is_kanji),
         .addr       (ga_addr)
     );
+
+    // {index, ku0, half, line} -- pc98_gaiji_ram's port B. hold_* still carry
+    // the cell's code during the second column's fetch, so pair_second is the
+    // right-half select for a gaiji pair exactly as it is for the font burst.
+    assign gaiji_addr = {hold_hi[6:0], hold_lo[0], pair_second, gaiji_line};
 
     // Registered, so it infers a BRAM port rather than a wide mux. One cycle of
     // latency, which the renderer's cell pipeline already allows for.
@@ -157,6 +176,7 @@ module pc98_glyph_rowbuf #(
             tv_cell     <= 12'd0;
             ank_code    <= 8'h00;
             ank_line    <= 4'd0;
+            gaiji_line  <= 4'd0;
         end else begin
             f_req <= 1'b0;
 
@@ -213,11 +233,17 @@ module pc98_glyph_rowbuf #(
             end
 
             // An ANK cell never touches the SDRAM port: the bytes come out of
-            // the local BRAM, two clocks apiece. ga_is_kanji is the same
-            // decision the address path makes, so the two paths cannot
-            // disagree about what a cell is.
+            // the local BRAM, two clocks apiece. Gaiji cells take the same
+            // kind of path against pc98_gaiji_ram -- the SDRAM font region
+            // has nothing where the guest-defined glyphs live. ga_is_kanji
+            // is the same decision the address path makes, so the three
+            // paths cannot disagree about what a cell is.
             S_FETCH: if (!f_busy) begin
-                if (ga_is_kanji) begin
+                if (ga_is_gaiji) begin
+                    gaiji_line <= 4'd0;
+                    beat       <= 4'd0;
+                    state      <= S_GAIJI;
+                end else if (ga_is_kanji) begin
                     f_req  <= 1'b1;
                     f_addr <= ga_addr;
                     beat   <= 4'd0;
@@ -246,6 +272,36 @@ module pc98_glyph_rowbuf #(
                     ank_line <= beat + 4'd1;
                     beat     <= beat + 4'd1;
                     state    <= S_ANK;
+                end
+            end
+
+            // The gaiji cell's sixteen bytes, the same two-clock rhythm as
+            // ANK -- the RAM's b_rdata is registered, so the byte asked for
+            // in S_GAIJI lands in S_GAIJI_W. The address is the compressed
+            // np21w fontrom offset: {index, ku0, half, line}, the half being
+            // pair_second for the pair's second column.
+            S_GAIJI: state <= S_GAIJI_W;
+
+            S_GAIJI_W: begin
+                gaiji_line <= beat + 4'd1;
+                beat       <= beat + 4'd1;
+                if (sel8) begin
+                    // 8x8 halves gaiji the way it halves kanji: only lines
+                    // 0-7 are ink, each drawn on two cell lines.
+                    if (beat[3] == 1'b0) hold8[beat[2:0]] <= gaiji_data;
+                    if (beat == 4'd15) begin
+                        beat  <= 4'd0;
+                        state <= S_EXPAND;
+                    end else begin
+                        state <= S_GAIJI;
+                    end
+                end else begin
+                    store[{bank, col, beat}] <= gaiji_data;
+                    if (beat == 4'd15) begin
+                        state <= S_NEXT;
+                    end else begin
+                        state <= S_GAIJI;
+                    end
                 end
             end
 
