@@ -1098,6 +1098,34 @@ module core_top (
             retired_cnt <= retired_cnt + 24'd1;
     end
 
+    // Slot 0x33: the last guest I/O write, from the chipset pins -- same
+    // two-cycle qualification as itf_port_write/f0_port_write below, so a
+    // write strobing its way to another port cannot leave a false record.
+    // The latch keeps sampling for as long as the strobe holds (a write
+    // whose cycle never completes still names its port), the count ticks
+    // once per write, so between two probe reads it separates "parked
+    // after this port" from "still writing" -- a beep loop keeps it
+    // moving. Pure witness: it reads pins the peripherals already see.
+    reg        io_snoop_q = 1'b0, io_snoop_qq = 1'b0;
+    reg        io_snoop_armed = 1'b1;
+    reg  [7:0] io_wr_count  = 8'h00;
+    reg [15:0] last_io_port = 16'h0000;
+    reg  [7:0] last_io_data = 8'h00;
+    wire       io_port_write = ~chipset_io_write_n & ~chipset_aen;
+    always_ff @(posedge clk_chipset) begin
+        io_snoop_q  <= io_port_write;
+        io_snoop_qq <= io_snoop_q;
+        if (io_snoop_qq && io_port_write) begin
+            last_io_port <= chipset_address[15:0];
+            last_io_data <= cpu_data_bus;
+            if (io_snoop_armed) begin
+                io_wr_count    <= io_wr_count + 8'd1;
+                io_snoop_armed <= 1'b0;
+            end
+        end else if (!io_port_write)
+            io_snoop_armed <= 1'b1;
+    end
+
     // Register the readout: the dbg cones through this mux into the SLD
     // capture were one giant combinational path that crashes Quartus 18.1's
     // timing-driven clustering (VPR20KMAIN tdc_util internal error). One
@@ -1174,6 +1202,12 @@ module core_top (
             8'h27:   probe_data_c = fdc_dbg[63:32];
             8'h28:   probe_data_c = fdc_dbg_cmd[31:0];
             8'h29:   probe_data_c = fdc_dbg_cmd[63:32];
+            // 0x33: {writes seen, last port, last byte} -- the ITF's
+            // error path talks to 0x35/0x37; a moving count with port
+            // 0x37 last is the beep loop, a parked one is the write it
+            // died on.
+            8'h33:   probe_data_c = {io_wr_count, last_io_port,
+                                     last_io_data};
             // 0x1e/0x1f: the pad words. 1e is what the softcore actually sees
             // (settled | injected, in clk_chipset); 1f is the probe-held mask
             // itself -- a bit stuck there reads as a button held forever, so
