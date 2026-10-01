@@ -618,6 +618,17 @@ wire cmd_read_write_finish =
 reg cmd_read_write_was_ndma_terminal;
 always @(posedge clk) begin
     if(~rst_n)                                                                                 cmd_read_write_was_ndma_terminal <= 1'd0;
+    // The flag belongs to the command that raised it: without this clear it
+    // survives into the NEXT read/write, where cmd_read_write_finish is true
+    // from the drain's first clock -- the fifo exits S_WAIT_FOR_EMPTY_READ_FIFO
+    // untouched, S_UPDATE_SECTOR advances CHRN as if a sector had moved, and
+    // the caller gets a clean seven-byte result for bytes nobody transferred.
+    // A stub BIOS doing PIO reads booted exactly like that: IPL came back,
+    // the FreeDOS kernel read returned nothing-but-success, and the boot
+    // looped on " Err!". cmd_read_write_start is the last command byte, still
+    // ahead of execution, and cannot fire mid-command (busy drops
+    // command_first).
+    else if(cmd_read_write_start)                                                            cmd_read_write_was_ndma_terminal <= 1'd0;
     else if(state == S_UPDATE_SECTOR && sector[selected_drive[0]] == eot[selected_drive[0]] && 
 	        (~cmd_read_write_multitrack || {1'b0, head[selected_drive[0]] } == (media_heads[selected_drive[0]] - 2'd1))) cmd_read_write_was_ndma_terminal <= 1'd1;
     else if(state == S_UPDATE_SECTOR)                                                          cmd_read_write_was_ndma_terminal <= 1'd0;
