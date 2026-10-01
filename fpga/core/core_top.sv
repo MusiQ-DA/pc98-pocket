@@ -980,7 +980,7 @@ module core_top (
     wire        egc_flag_w;               // 0000:054D bit6 write seen (sticky)
     // The firmware GDC engine's guest-VRAM channel (subsystem <-> CHIPSET's
     // GVRAM sequencer).
-    wire        st_req_w, st_we_w, st_done_w;
+    wire        st_req_w, st_we_w, st_raw_w, st_done_w;
     wire [19:0] st_addr_w;
     wire  [7:0] st_wdata_w, st_rdata_w, accel_status_w;
     wire [15:0] gdc_draw_ops;
@@ -1079,6 +1079,7 @@ module core_top (
         // the chipset's GVRAM sequencer (through the charger when armed).
         .st_req                     (st_req_w),
         .st_we                      (st_we_w),
+        .st_raw                     (st_raw_w),
         .st_addr                    (st_addr_w),
         .st_wdata                   (st_wdata_w),
         .st_done                    (st_done_w),
@@ -2357,6 +2358,7 @@ module core_top (
         .gdc_srv_done_levels                (gdc_srv_done_levels),
         .st_req                             (st_req_w),
         .st_we                              (st_we_w),
+        .st_raw                             (st_raw_w),
         .st_addr                            (st_addr_w),
         .st_wdata                           (st_wdata_w),
         .st_done                            (st_done_w),

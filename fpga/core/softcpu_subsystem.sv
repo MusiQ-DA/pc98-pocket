@@ -110,6 +110,7 @@ module softcpu_subsystem (
     // when one is armed, which is what the drawing engine wants.
     output           st_req,
     output           st_we,
+    output           st_raw,
     output    [19:0] st_addr,
     output     [7:0] st_wdata,
     input            st_done,
@@ -268,14 +269,16 @@ module softcpu_subsystem (
     // one is in flight is ignored -- same shape as the removed master's.
     reg        st_req_r   = 1'b0;
     reg        st_we_r    = 1'b0;
+    reg        st_raw_r   = 1'b0;
     reg [19:0] st_addr_r  = 20'd0;
-    reg  [7:0] st_wdata_r = 8'd0;
+    reg [7:0] st_wdata_r = 8'd0;
     wire       st_trig    = cpu_mem_valid && cpu_mem_wstrb[0] &&
                             (cpu_mem_addr == 32'h5000_0008);
     always @(posedge clk_pico) begin
         if (reset) begin
             st_req_r   <= 1'b0;
             st_we_r    <= 1'b0;
+            st_raw_r   <= 1'b0;
             st_addr_r  <= 20'd0;
             st_wdata_r <= 8'd0;
         end else begin
@@ -287,6 +290,10 @@ module softcpu_subsystem (
             end
             if (st_trig && !st_req_r && (cpu_mem_wdata[1:0] != 2'b00)) begin
                 st_we_r  <= cpu_mem_wdata[0];
+                // bit2 = bypass the charger: the GDC engine's WDAT is a raw
+                // write into video memory in np21w (io/gdc_sub.c
+                // gdcsub_write), not an access through the EGC/GRCG path.
+                st_raw_r <= cpu_mem_wdata[2];
                 st_req_r <= 1'b1;
             end else if (st_req_r && st_done) begin
                 st_req_r <= 1'b0;
@@ -295,6 +302,7 @@ module softcpu_subsystem (
     end
     assign st_req   = st_req_r;
     assign st_we    = st_we_r;
+    assign st_raw   = st_raw_r;
     assign st_addr  = st_addr_r;
     assign st_wdata = st_wdata_r;
 
