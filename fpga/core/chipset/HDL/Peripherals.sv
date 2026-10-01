@@ -125,6 +125,14 @@ module PERIPHERALS #(
     output  logic  [15:0]   gdc_draw_ops,
     output  logic [383:0]   gdc_draw_snaps,
     input   logic   [1:0]   gdc_srv_done_levels,
+    // Watchdog pulses {slave, master}: a draw the server never answered.
+    // Probe-only plumbing -- the pulses are latched in core_top's JTAG
+    // block, where a set bit reads "the same undispatched-draw stall".
+    output  logic   [1:0]   gdc_draw_to,
+    // Sticky: a guest byte write set 0000:054D bit 6 -- the ITF/BIOS
+    // GRCG-works flag the ITF test ORs in after its A800/B000 readback
+    // passes. One flop; the probe reads it as "detection succeeded".
+    output  logic           dbg_egc_flag,
         // PC-9801-86 OPNA, stereo. Zero on a non-PC-98 build.
     output  logic signed [15:0] opna_snd_l,
     output  logic signed [15:0] opna_snd_r,
@@ -810,6 +818,7 @@ module PERIPHERALS #(
     // edge here retires the EXECUTE in the GDC).
     wire        gdc_m_draw_req, gdc_m_draw_busy, gdc_m_done_stb;
     wire        gdc_s_draw_req, gdc_s_draw_busy, gdc_s_done_stb;
+    wire        gdc_m_draw_to,  gdc_s_draw_to;
     wire [7:0]  gdc_m_draw_op,  gdc_s_draw_op;
     wire [31:0] gdc_m_draw_snap [0:5];
     wire [31:0] gdc_s_draw_snap [0:5];
@@ -848,7 +857,8 @@ module PERIPHERALS #(
         .cursor_rate(gdc_m_cur_rate), .zoom_disp(gdc_m_zoom),
         .line_rep(gdc_m_lrep), .vlines(),
         .draw_req(gdc_m_draw_req), .draw_op(gdc_m_draw_op),
-        .draw_busy(gdc_m_draw_busy), .srv_done_stb(gdc_m_done_stb),
+        .draw_busy(gdc_m_draw_busy), .draw_timeout(gdc_m_draw_to),
+        .srv_done_stb(gdc_m_done_stb),
         .draw_snap(gdc_m_draw_snap)
     );
 
@@ -866,12 +876,28 @@ module PERIPHERALS #(
         .cursor_rate(gdc_s_cur_rate), .zoom_disp(gdc_s_zoom),
         .line_rep(gdc_s_lrep), .vlines(gdc_s_al),
         .draw_req(gdc_s_draw_req), .draw_op(gdc_s_draw_op),
-        .draw_busy(gdc_s_draw_busy), .srv_done_stb(gdc_s_done_stb),
+        .draw_busy(gdc_s_draw_busy), .draw_timeout(gdc_s_draw_to),
+        .srv_done_stb(gdc_s_done_stb),
         .draw_snap(gdc_s_draw_snap)
     );
 
     wire       gdc_stat_read = (gdc_m_cs | gdc_s_cs) & ~io_read_n;
     wire [7:0] gdc_status    = gdc_m_cs ? gdc_m_dout : gdc_s_dout;
+
+    assign gdc_draw_to = {gdc_s_draw_to, gdc_m_draw_to};
+
+    // The guest-visible "GRCG/EGC present" bit: the ITF probe ORs 40h into
+    // 0000:054D only after its tile-fill readback matches (trace F81F12).
+    // Software like egcview keys off that flag, so latch the write that
+    // sets it -- probe slot 0x32 reports detection without a display.
+    logic egc_flag_seen;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) egc_flag_seen <= 1'b0;
+        else if (~memory_write_n & ~address_enable_n
+                 & (address == 20'h0054D) & internal_data_bus[6])
+            egc_flag_seen <= 1'b1;
+    end
+    assign dbg_egc_flag = egc_flag_seen;
     // np21w gdc_i68/gdc_i6a: the mode flip-flops read back -- save/restore
     // code (TSRs, mode switches) depends on seeing what it wrote.
     wire       gdc_mode_read = (mode68_select | mode6a_select) & ~io_read_n;

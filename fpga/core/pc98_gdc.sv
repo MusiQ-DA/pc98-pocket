@@ -118,6 +118,7 @@ module pc98_gdc #(
     output wire        draw_req,       // a draw awaits the server
     output wire [7:0]  draw_op,
     output wire        draw_busy,      // status: the server is drawing
+    output wire        draw_timeout,   // pulse: the watchdog retired this draw
     input  wire        srv_done_stb,   // the engine finished this draw
     // The snapshot the engine reads, latched the moment the draw lands so
     // the guest cannot race it: 23 bytes = VECTW (11), CSRW (4), TEXTW (2),
@@ -166,9 +167,10 @@ module pc98_gdc #(
     // the last byte of word 5 is padding. It has to exist, or the pack below
     // indexes past the array -- which Verilator allows and Quartus rejects.
     reg [7:0]  snap [0:23];
-    assign draw_req  = draw_pending;
-    assign draw_op   = draw_op_r;
-    assign draw_busy = draw_busy_r;
+    assign draw_req     = draw_pending;
+    assign draw_timeout = draw_timeouts;
+    assign draw_op      = draw_op_r;
+    assign draw_busy    = draw_busy_r;
     genvar sk;
     generate
         for (sk = 0; sk < 6; sk = sk + 1) begin : g_snap

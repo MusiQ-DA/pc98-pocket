@@ -73,6 +73,13 @@ proc rd {addr} {
 #              reply_left[3:1]} -- the LBA the in-flight request named
 #   0x28/0x29  live FDC command register: {op, unit, C, H | R, N, EOT, GPL}
 #              -- the transaction the engine is parked on or last rejected
+#   0x31       GVRAM sequencer {svc_req, svc_done, svc_hold, fsm[2:0],
+#              plane[1:0]} -- a stalled GDC draw names its stage
+#   0x32       {gdc_draw_ops[15:0] (slave op in the high byte),
+#               egc_flag_seen (054D bit6 written = EGC flag up),
+#               draw_to_seen[1:0] {s,m} (watchdog fired = the old stall),
+#               gdc_draw_busy[1:0], gdc_draw_req[1:0], accel_status[3:0]
+#               = {page, EGC, RMW, GRCG armed}}
 set regs {
     16  V30_PSW_PC
     17  V30_SREG3_SREG2
@@ -101,6 +108,8 @@ set regs {
     40  FDC_CMD_LO=EOT/GPL/N/R
     41  FDC_CMD_HI=op/unit/C/H
     48  SCSI=mg_rd,post,rom_rd
+    49  GVRAMSEQ=req,done,hold,fsm,pl
+    50  GDC_DRAW=ops,flag,to,busy,req
     255 MAGIC
 }
 
