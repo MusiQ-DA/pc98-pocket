@@ -976,6 +976,8 @@ module core_top (
     wire       dock_key_stb;
 
     wire  [1:0] gdc_draw_req, gdc_draw_busy, gdc_srv_done_levels;
+    wire  [1:0] gdc_draw_to;              // {slave, master} watchdog pulses
+    wire        egc_flag_w;               // 0000:054D bit6 write seen (sticky)
     // The firmware GDC engine's guest-VRAM channel (subsystem <-> CHIPSET's
     // GVRAM sequencer).
     wire        st_req_w, st_we_w, st_done_w;
@@ -1140,6 +1142,14 @@ module core_top (
             io_snoop_armed <= 1'b1;
     end
 
+    // Watchdog retirement is a one-clock pulse per channel -- latch it so a
+    // probe read seconds later still reports "a draw went unanswered"
+    // (slot 0x32). Same clock domain as the GDC block that emits it.
+    reg [1:0] draw_to_seen = 2'b00;
+    always_ff @(posedge clk_chipset)
+        if (reset) draw_to_seen <= 2'b00;
+        else       draw_to_seen <= draw_to_seen | gdc_draw_to;
+
     // Register the readout: the dbg cones through this mux into the SLD
     // capture were one giant combinational path that crashes Quartus 18.1's
     // timing-driven clustering (VPR20KMAIN tdc_util internal error). One
@@ -1180,6 +1190,15 @@ module core_top (
             // = guest strobe never dropped, svc_req alone = nobody granted
             // the channel (the guest bus is saturated or a hold/HLDA).
             8'h31:   probe_data_c = {24'h0, gvram_dbg};
+            // 0x32: the drawing server's health, one read. Ops = the two
+            // channels' live opcode bytes {slave, master}; flag = the
+            // ITF's EGC-present write to 0000:054D landed; to_seen latches
+            // a watchdog retirement (stays set until reset -- a set bit
+            // here IS the old stall signature). busy/req are the live
+            // handshake; accel_status = {page, EGC, RMW, GRCG armed}.
+            8'h32:   probe_data_c = {gdc_draw_ops, egc_flag_w,
+                                    draw_to_seen, gdc_draw_busy,
+                                    gdc_draw_req, accel_status_w[3:0], 5'b0};
             // 0x1b: {bridge park/engine FSM, ce edge counter}. parked=1 with a
             // frozen ce_count is the dead-CE signature; a live count with
             // parked=1 points at the engine's release conditions instead.
@@ -2332,6 +2351,8 @@ module core_top (
         .gdc_draw_req                       (gdc_draw_req),
         .gdc_draw_busy                      (gdc_draw_busy),
         .gdc_draw_ops                       (gdc_draw_ops),
+        .gdc_draw_to                        (gdc_draw_to),
+        .dbg_egc_flag                       (egc_flag_w),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
         .st_req                             (st_req_w),
