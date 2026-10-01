@@ -132,6 +132,7 @@ static int scsi_push_sector(uint32_t lba)
         scsi_put((uint8_t) ((w >> 16) & 0xFF));
         scsi_put((uint8_t) ((w >> 24) & 0xFF));
     }
+    HB_MARK(0x32);  // bram drained to scsi buffer
     return 1;
 }
 
@@ -169,6 +170,7 @@ static void scsi_do_read(uint32_t lba, uint32_t blocks)
             scsi_fail(SENSE_NOT_READY, 0x11); // unrecovered read error
             return;
         }
+        HB_MARK(0x31);  // block pushed
     }
     scsi_rewind_read();
     scsi_ok();
@@ -374,6 +376,7 @@ void scsi_poll(void)
     uint32_t ctrl = scsi_mgmt_read(SMGMT_CTRL);
     if (!(ctrl & 1))
         return;
+    HB_MARK(0x3A);  // command claimed
 
     // Acknowledge first. A second command cannot arrive until the guest has
     // read the status, and clearing late would re-run this one.
@@ -382,5 +385,7 @@ void scsi_poll(void)
 
     uint8_t cdb[CDB_MAX];
     scsi_get_cdb(cdb);
+    HB_MARK(0x3B);  // cdb read
     scsi_execute(cdb);
+    HB_MARK(0x3D);  // execute done
 }
