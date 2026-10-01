@@ -286,7 +286,10 @@ module pc98_gvram_seq #(
     if (EGC) begin : g_egc
         pc98_egc u_egc (
             .clk(clk), .rst(reset),
-            .wr(egc_wr), .rg(egc_rg), .d(egc_d),
+            // np21w egc_o4a0/egc_w16 drop register writes while the engine
+            // is off -- the first line is `if (!VOPBIT_EGC) return`. Gate
+            // the strobe the same way so pre-arm pokes cannot leave state.
+            .wr(egc_wr & egc_active), .rg(egc_rg), .d(egc_d),
             .access_r(egc_access), .fgbg_r(egc_fgbg), .ope_r(egc_ope),
             .mask_r(egc_mask), .sft_r(), .leng_r(),
             .fgc(egc_fgc), .bgc(egc_bgc),
