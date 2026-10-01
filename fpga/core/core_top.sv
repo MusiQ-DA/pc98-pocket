@@ -1198,7 +1198,7 @@ module core_top (
                 pc_hist[pc_hist_w] <= pc_now;
                 pc_hist_w          <= pc_hist_w + 5'd1;
             end
-            if (f0_port_write || pc_in_errhalt)
+            if (f0_port_write || pc_in_errhalt || zet_fault)
                 pc_hist_frozen <= 1'b1;
         end
     end
@@ -1218,7 +1218,7 @@ module core_top (
     always_ff @(posedge clk_chipset) begin
         if (reset)
             pc_snap_valid <= 1'b0;
-        else if (!pc_snap_valid && (f0_port_write || pc_in_errhalt)) begin
+        else if (!pc_snap_valid && (f0_port_write || pc_in_errhalt || zet_fault)) begin
             pc_snap_valid <= 1'b1;
             for (int i = 0; i < 32; i++)
                 pc_snap[i] <= pc_hist[i];
@@ -2628,6 +2628,7 @@ module core_top (
     wire [ 1:0] zwb_sel;
     wire        zwb_inta, zwb_nmia;
     wire [19:0] zet_pc;
+    wire        zet_fault;
 
     zet_cpu_bridge u_zet_bridge (
         .clk               (clk_chipset),
@@ -2677,7 +2678,8 @@ module core_top (
         .wb_tgc_o  (zwb_inta),
         .nmi       (1'b0),
         .nmia      (zwb_nmia),
-        .pc        (zet_pc)
+        .pc        (zet_pc),
+        .dbg_fault (zet_fault)
     );
 
     // The probe slots that usually expose V30 guts get the Zet view instead.
@@ -2691,6 +2693,7 @@ module core_top (
     wire        v30_ube_n, v30_ce, v30_ready;
     wire        v30_ss_err_unused, v30_ss_quiet_unused;
     wire [15:0] v30_ss_rdata_unused;
+    wire        zet_fault = 1'b0;
 
     v30_cpu_bridge u_v30_bridge (
         .clk               (clk_chipset),

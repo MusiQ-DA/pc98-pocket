@@ -40,7 +40,8 @@ module zet_core (
     output        cpu_m_io,
     output        cpu_we_o,
 
-    output [19:0] pc  // for debugging purposes
+    output [19:0] pc,  // for debugging purposes
+    output        dbg_fault  // seq_addr enters INVOP or INTD (1-zet_clk pulse)
   );
 
   // Net declarations
@@ -69,6 +70,7 @@ module zet_core (
   // wire decode - microcode
   wire [`MICRO_ADDR_WIDTH-1:0] seq_addr;
   wire [3:0] src;
+  assign dbg_fault = (seq_addr == `INVOP) | (seq_addr == `INTD);
   wire [3:0] dst;
   wire [3:0] base;
   wire [3:0] index;
