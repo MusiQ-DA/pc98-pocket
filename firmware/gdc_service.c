@@ -542,7 +542,11 @@ void gdc_poll(void)
     }
     for (int ch = GDC_CH_SLAVE; ch >= GDC_CH_MASTER; ch--) {
         uint32_t st = *GDCD_STATUS(ch);
-        if (!(st & 2u)) { // no request pending
+        // Status word is {.., draw_req bit9, draw_busy bit8, opcode[7:0]}:
+        // the request flag sits ABOVE the opcode -- testing bit 1 only ever
+        // saw an opcode bit, so opcodes with it clear (WDAT 20h, VECTE 6Ch,
+        // TEXTE 68h) went undispatched to the watchdog.
+        if (!(st & (1u << 9))) { // no request pending
             continue;
         }
         if (ch == GDC_CH_SLAVE) {
