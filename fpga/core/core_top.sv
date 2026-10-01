@@ -1150,6 +1150,37 @@ module core_top (
             io_snoop_armed <= 1'b1;
     end
 
+    // Slots 0x40-0x5F: a 32-deep ring of the guest's fetch cursor (v30_addr
+    // alias = zet_pc under PC98_ZET, n186_pc under PC98_NEXT186), frozen
+    // when the guest writes port 0xF0 (the PC-98 shutdown/soft-reset) or
+    // parks in the ITF error halt (f99e5: cli; jmp $). The ITF failure
+    // path resets through 0xF0, which wipes the live cursor before anyone
+    // can read it -- this ring survives the reset long enough to name the
+    // check that dispatched to the error handler (the entries just before
+    // the 0x995d-region jump are the failing test's own instructions).
+    // Entries fill oldest-first at write-pointer order; freeze latches the
+    // pointer so 0x40+w is the LAST pre-freeze fetch.
+    reg [19:0] pc_hist [0:31];
+    reg  [4:0] pc_hist_w    = 5'd0;
+    reg [19:0] pc_hist_prev = 20'h0;
+    reg        pc_hist_frozen = 1'b0;
+    wire [19:0] pc_now = v30_addr;
+    wire       pc_in_errhalt = (pc_now == 20'hF99E5);
+    always_ff @(posedge clk_chipset) begin
+        if (reset || soft_reset_cpu) begin
+            pc_hist_frozen <= 1'b0;
+            pc_hist_w      <= 5'd0;
+        end else if (!pc_hist_frozen) begin
+            if (pc_now != pc_hist_prev) begin
+                pc_hist_prev       <= pc_now;
+                pc_hist[pc_hist_w] <= pc_now;
+                pc_hist_w          <= pc_hist_w + 5'd1;
+            end
+            if (f0_port_write || pc_in_errhalt)
+                pc_hist_frozen <= 1'b1;
+        end
+    end
+
     // Register the readout: the dbg cones through this mux into the SLD
     // capture were one giant combinational path that crashes Quartus 18.1's
     // timing-driven clustering (VPR20KMAIN tdc_util internal error). One
@@ -1205,6 +1236,14 @@ module core_top (
             // died on.
             8'h33:   probe_data_c = {io_wr_count, last_io_port,
                                      last_io_data};
+            // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
+            // readable while the post-0xF0 reboot runs.
+            8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
+            8'h48,8'h49,8'h4a,8'h4b,8'h4c,8'h4d,8'h4e,8'h4f,
+            8'h50,8'h51,8'h52,8'h53,8'h54,8'h55,8'h56,8'h57,
+            8'h58,8'h59,8'h5a,8'h5b,8'h5c,8'h5d,8'h5e,8'h5f:
+                       probe_data_c = {7'h00, pc_hist_frozen, pc_hist_w,
+                                       pc_hist[probe_addr[4:0]]};
             // 0x1b: {bridge park/engine FSM, ce edge counter}. parked=1 with a
             // frozen ce_count is the dead-CE signature; a live count with
             // parked=1 points at the engine's release conditions instead.
