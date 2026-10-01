@@ -666,7 +666,7 @@ module CHIPSET #(
     // lane whenever the window is being read. Without it the scan's signature
     // word never reaches the CPU.
     wire scsi_rom_hi_read = (~memory_read_n) && (address[19:12] == 8'hD2);
-    assign data_bus_hi = xrom_read         ? xrom_byte(address[7:0] | 8'h01)
+    assign data_bus_hi = xrom_read         ? xrom_q_hi
                        : scsi_rom_hi_read  ? scsi_rom_hi
                        :                     seq_rdata_hi_w;
 
@@ -695,9 +695,21 @@ module CHIPSET #(
             8'h1A, 8'h0E, 8'h1A, 8'h36, 8'h0F, 8'h0E, 8'h0F, 8'h2A, 8'h12, 8'h1B, 8'h12, 8'h54,
             8'h08, 8'h1B, 8'h08, 8'h3A, 8'h08, 8'h35, 8'h08, 8'h74, 8'h00, 8'h00, 8'h00, 8'h00 };
 
-    function automatic logic [7:0] xrom_byte(input logic [7:0] a);
-        xrom_byte = (a < 8'd228) ? XROM_BYTES[a] : 8'hFF;
-    endfunction
+    // The two-lane read as a combinational 228-entry lookup was a several-
+    // hundred-ALM cone at ~99% fit -- the same pattern pc98_scsi_rom uses
+    // (registered M10K, dual read) recovers it. The window's data path is
+    // already registered before the guest sees it, so the clock of read
+    // latency is invisible at the bus.
+    (* ramstyle = "M10K" *) logic [7:0] xrom_rom [0:255];
+    initial begin : xrom_init
+        for (int i = 0; i < 256; i++)
+            xrom_rom[i] = (i < 228) ? XROM_BYTES[i] : 8'hFF;
+    end
+    logic [7:0] xrom_q, xrom_q_hi;
+    always_ff @(posedge clock) begin
+        xrom_q    <= xrom_rom[address[7:0]];
+        xrom_q_hi <= xrom_rom[address[7:0] | 8'h01];
+    end
 
     always_comb
     begin
@@ -720,7 +732,7 @@ module CHIPSET #(
         // 0xFF like the empty window that surrounds the slot.
         else if (xrom_read)
         begin
-            internal_data_bus_ext = xrom_byte(address[7:0]);
+            internal_data_bus_ext = xrom_q;
             data_bus_direction    = 1'b0;
         end
         // IN 08E9h: the NEC EMS board answers "is this megabyte fitted".
