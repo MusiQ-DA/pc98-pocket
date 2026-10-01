@@ -1150,6 +1150,28 @@ module core_top (
             io_snoop_armed <= 1'b1;
     end
 
+    // Slot 0x34: the resume-flag read witness. The ITF reads 0035h once per
+    // entry (F8005B: in al,35h / test al,80h) to tell a cold boot from a
+    // return from OUT 0F0h; the hardware boots the memtest over and over,
+    // which is exactly what a stuck bit-7 produces. Latch the value the
+    // data bus actually carried on each 0035h read (sampled mid-strobe,
+    // same two-cycle qualification as the write snoop), plus a per-read
+    // counter, plus the live pc98_sysport_c so a write that never landed
+    // is distinguishable from a read that returned stale data.
+    reg        rd35_q = 1'b0, rd35_qq = 1'b0;
+    reg  [7:0] in35_count = 8'h00;
+    reg  [7:0] in35_data  = 8'h00;
+    wire       io_port_read = ~chipset_io_read_n & ~chipset_aen;
+    wire [7:0] dbg_sysport_w;
+    always_ff @(posedge clk_chipset) begin
+        rd35_q  <= io_port_read && (chipset_address[15:0] == 16'h0035);
+        rd35_qq <= rd35_q;
+        if (rd35_q && ~rd35_qq) begin
+            in35_data  <= data_bus;
+            in35_count <= in35_count + 8'd1;
+        end
+    end
+
     // Slots 0x40-0x5F: a 32-deep ring of the guest's fetch cursor (v30_addr
     // alias = zet_pc under PC98_ZET, n186_pc under PC98_NEXT186), frozen
     // when the guest writes port 0xF0 (the PC-98 shutdown/soft-reset) or
@@ -1261,6 +1283,12 @@ module core_top (
             // died on.
             8'h33:   probe_data_c = {io_wr_count, last_io_port,
                                      last_io_data};
+            // 0x34: the resume-flag witness -- {sysport_c, in35 count,
+            // in35 data}. bit 7 of the first byte is what the ITF's
+            // in-al-35h/test-80h decides cold-boot vs resume on; the last
+            // byte is what the data bus actually gave that read.
+            8'h34:   probe_data_c = {dbg_sysport_w, 8'h00, in35_count,
+                                   in35_data};
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -2157,6 +2185,7 @@ module core_top (
     //
     wire [19:0] chipset_address;
     wire        chipset_io_write_n, chipset_memory_read_n, chipset_memory_write_n;
+    wire        chipset_io_read_n;
     wire        chipset_aen;
 
     //
@@ -2420,6 +2449,7 @@ module core_top (
         .gdc_draw_ops                       (gdc_draw_ops),
         .gdc_draw_to                        (gdc_draw_to),
         .dbg_egc_flag                       (egc_flag_w),
+        .dbg_sysport                        (dbg_sysport_w),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
         .st_req                             (st_req_w),
@@ -2449,7 +2479,7 @@ module core_top (
         .address_latch_enable               (address_latch_enable),
         .io_channel_ready                   (1'b1),
         .interrupt_request                  (0),    // use? -> It does not seem to be necessary.
-    //  .io_read_n                          (io_read_n),
+        .io_read_n                          (chipset_io_read_n),
         .io_read_n_ext                      (1'b1),
     //  .io_read_n_direction                (io_read_n_direction),
         .io_write_n                         (chipset_io_write_n),

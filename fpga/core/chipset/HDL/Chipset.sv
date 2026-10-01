@@ -55,6 +55,7 @@ module CHIPSET #(
         // pulses, and the sticky 0000:054D-bit6 (EGC flag) write witness.
         output  logic   [1:0]   gdc_draw_to,
         output  logic           dbg_egc_flag,
+        output  logic   [7:0]   dbg_sysport,
         output  logic           de_o,
         output  logic   [5:0]   VID_R,
         output  logic   [5:0]   VID_G,
@@ -388,6 +389,7 @@ module CHIPSET #(
         .gdc_draw_ops                       (gdc_draw_ops),
         .gdc_draw_to                        (gdc_draw_to),
         .dbg_egc_flag                       (dbg_egc_flag),
+        .dbg_sysport                        (dbg_sysport),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
         .VID_R                              (VID_R),

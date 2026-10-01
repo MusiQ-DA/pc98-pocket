@@ -133,6 +133,10 @@ module PERIPHERALS #(
     // GRCG-works flag the ITF test ORs in after its A800/B000 readback
     // passes. One flop; the probe reads it as "detection succeeded".
     output  logic           dbg_egc_flag,
+    // pc98_sysport_c as the guest sees it -- the shutdown/resume flag in
+    // bit 7 is the ITF's cold-boot-vs-OUT-0F0h test at F8005B, and the
+    // probe reads it to check the 0x37 BSR write really cleared it.
+    output  logic   [7:0]   dbg_sysport,
         // PC-9801-86 OPNA, stereo. Zero on a non-PC-98 build.
     output  logic signed [15:0] opna_snd_l,
     output  logic signed [15:0] opna_snd_r,
@@ -904,6 +908,7 @@ module PERIPHERALS #(
 `else
     assign dbg_egc_flag = 1'b0;
 `endif
+    assign dbg_sysport = pc98_sysport_c;
     // np21w gdc_i68/gdc_i6a: the mode flip-flops read back -- save/restore
     // code (TSRs, mode switches) depends on seeing what it wrote.
     wire       gdc_mode_read = (mode68_select | mode6a_select) & ~io_read_n;

@@ -1221,10 +1221,14 @@ module tb_pc98_boot;
     // Segment transfers: when CS changes, where the EU went matters more
     // than where it was. A stray vector lands the CPU in RAM.
     logic [15:0] eu_cs_d = 16'hFFFF;
+    int cs_tr_n = 0;
     always_ff @(posedge clk_chipset) begin
         eu_cs_d <= eu_cs;
-        if (eu_cs != eu_cs_d)
-            $display("  %8t  CS %04X -> %04X  (pc %05X)", $time, eu_cs_d, eu_cs, eu_pc);
+        if (eu_cs != eu_cs_d && cs_tr_n < 2000) begin
+            cs_tr_n <= cs_tr_n + 1;
+            if (cs_tr_n < 400)
+                $display("  %8t  CS %04X -> %04X  (pc %05X)", $time, eu_cs_d, eu_cs, eu_pc);
+        end
     end
 
     // ---- keyboard: the real 8251 model, the shipped RTL -----------------------
