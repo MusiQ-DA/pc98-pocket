@@ -126,6 +126,9 @@ module pc98_egc (
     input  wire         sf_evt,
     input  wire         sf_evt_wr,
     input  wire  [7:0]  sf_evt_d,
+    input  wire  [7:0]  sf_evt_d2,   // a word write's odd byte (cpu_wdata_hi)
+    input  wire         sf_evt_word, // this event is a whole 16-bit access
+    input  wire         sf_push_off, // read byte lands one slot past the tail
     input  wire         sf_ext,
 
     // ---- the write datapath, one plane and one byte at a time -----------
@@ -176,7 +179,7 @@ module pc98_egc (
     logic [12:0] sf_remain;
     logic [15:0] sf_srcmask;
     logic [2:0]  sf_qd;
-    logic [7:0]  sf_q [0:3][0:4];
+    logic [7:0]  sf_q [0:3][0:6];           // seven: word push + pop window
 
     // A byte written to sft or leng re-arms everything (io/egc.c calls
     // egcshift on all four ports); the register byte itself is still on the
@@ -224,7 +227,7 @@ module pc98_egc (
             sf_qd      <= 3'd0;
             sf_remain  <= 13'd16;          // leng resets to 0x000F
             for (int k = 0; k < 4; k++)
-                for (int i = 0; i < 5; i++)
+                for (int i = 0; i < 7; i++)
                     sf_q[k][i] <= 8'h00;
         end else begin
             // The register write, byte model: the low byte of a register at
@@ -260,30 +263,35 @@ module pc98_egc (
 
             // ---- the shift pipeline ------------------------------------
             // One plane byte landed for the queue: it goes to the shared
-            // tail slot of that plane's half of buf.
+            // tail slot of that plane's half of buf. sf_push_off puts the
+            // second byte of a word push one slot further (and a dn word's
+            // even byte behind its odd one -- the decw layout in np21w
+            // places the pair L-behind-H since the buffer fills downward).
             if (sf_push)
-                sf_q[sf_push_plane][sf_qd] <= sf_push_d;
+                sf_q[sf_push_plane][sf_qd + {2'b00, sf_push_off}] <= sf_push_d;
 
-            // One byte-position event. The combinational block below did
-            // the arithmetic; here it all commits at once.
+            // One access event. The combinational block below did the
+            // arithmetic; here it all commits at once. A word event can
+            // produce BOTH source-latch lanes and pop up to three queue
+            // bytes (the srcbit>=8 pre-pop plus one per lane sub).
             if (sf_evt) begin
                 if (ev_prod) begin
                     for (int p = 0; p < 4; p++)
-                        if (sf_ext) src_q[p][15:8] <= ev_out[p];
-                        else        src_q[p][7:0]  <= ev_out[p];
+                        if (ev_ext1) src_q[p][15:8] <= ev_out[p];
+                        else         src_q[p][7:0]  <= ev_out[p];
                 end
-                if (ev_pop) begin
-                    // outptr moved: slot i takes slot i+1's byte, and the
-                    // tail slot keeps what was pushed (pv already merged it).
-                    for (int p = 0; p < 4; p++) begin
-                        for (int i = 0; i < 4; i++)
-                            sf_q[p][i] <= pv[p][i+1];
-                        sf_q[p][4] <= pv[p][4];
-                    end
-                end else begin
+                if (ev_prod2) begin
                     for (int p = 0; p < 4; p++)
-                        sf_q[p][sf_qd] <= pv[p][sf_qd];
+                        if (ev_ext1) src_q[p][7:0]   <= ev_out2[p];
+                        else         src_q[p][15:8]  <= ev_out2[p];
                 end
+                // outptr moved: the window slides left by the pop count,
+                // the tail slots keep what was pushed (pv merged them).
+                // With no pops the merged pushes still land via pv.
+                for (int p = 0; p < 4; p++)
+                    for (int i = 0; i < 7; i++)
+                        sf_q[p][i] <= (i + ev_pops > 3'd6) ? pv[p][i]
+                                      : pv[p][i + {1'b0, ev_pops}];
                 // the mask byte updates on EVERY event, including the run's
                 // last -- egcshift() does not touch srcmask, so the final
                 // partial-byte mask still reaches the write that consumes it
@@ -331,12 +339,15 @@ module pc98_egc (
     // clear on the suppressed paths and its dstbit -= 8 for dstbit fields
     // over eight)
     // ------------------------------------------------------------------
-    // pv[p][i] is plane p's queue AFTER this event's push: slot sf_qd is
-    // the tail, so a write event injects the CPU byte there, and a read
-    // event's last-plane byte is still in flight on sf_push_d.
-    logic [7:0]  pv [0:3][0:4];
-    logic [7:0]  ev_out [0:3];
-    logic        ev_prod, ev_pop, ev_insub, ev_last;
+    // pv[p][i] is plane p's queue AFTER this event's pushes: slots sf_qd
+    // and sf_qd+1 are the tail, so a write event injects the CPU bytes
+    // there (a dn word puts the even byte behind the odd one, matching
+    // decw's downward-filling pair), and a read event's in-flight last-plane
+    // byte merges on sf_push_d.
+    logic [7:0]  pv [0:3][0:6];
+    logic [7:0]  ev_out [0:3], ev_out2 [0:3];
+    logic        ev_prod, ev_prod2, ev_insub, ev_last, ev_ext1;
+    logic [1:0]  ev_pops;
     logic [5:0]  nx_stack;
     logic [12:0] nx_remain;
     logic [3:0]  nx_srcbit, nx_dstbit;
@@ -346,24 +357,46 @@ module pc98_egc (
     // inside always blocks (the rtc notes the same)
     logic        v_acc, v_first;
     logic [7:0]  v_mask;
+    // word-event temps: the second lane's mask/produce and the running
+    // pop count (the prepop and each lane's sub may each take a byte)
+    logic [1:0]  w_pos;
+    logic        w_pop, w_first, w_dn;
+    logic [7:0]  w_mask;
 
     always_comb begin
+        w_dn = sf_func[0];
         for (int p = 0; p < 4; p++) begin
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 7; i++)
                 pv[p][i] = sf_q[p][i];
-            pv[p][sf_qd] = sf_evt_wr ? sf_evt_d
-                : ((sf_push & (sf_push_plane == 2'(p))) ? sf_push_d
-                                                        : sf_q[p][sf_qd]);
+            if (sf_evt_wr & sf_evt_word) begin
+                // word write push: up queues {L,H}, dn queues {H,L}
+                if (w_dn) begin
+                    pv[p][sf_qd]            = sf_evt_d2;
+                    pv[p][sf_qd + 3'd1]     = sf_evt_d;
+                end else begin
+                    pv[p][sf_qd]            = sf_evt_d;
+                    pv[p][sf_qd + 3'd1]     = sf_evt_d2;
+                end
+            end else if (sf_evt_wr) begin
+                pv[p][sf_qd] = sf_evt_d;
+            end else if (sf_push & (sf_push_plane == 2'(p))) begin
+                pv[p][sf_qd + {2'b00, sf_push_off}] = sf_push_d;
+            end
         end
 
         v_acc = 1'b0; v_first = 1'b0; v_mask = 8'hFF;
         nx_stack   = sf_stack;  nx_remain  = sf_remain;
         nx_srcbit  = sf_srcbit; nx_dstbit  = sf_dstbit;
         nx_srcmask = sf_srcmask; nx_qd     = sf_qd;
-        ev_prod = 1'b0; ev_pop = 1'b0; ev_insub = 1'b0; ev_last = 1'b0;
-        for (int p = 0; p < 4; p++) ev_out[p] = 8'h00;
+        ev_prod = 1'b0; ev_prod2 = 1'b0; ev_insub = 1'b0; ev_last = 1'b0;
+        ev_pops = 2'd0; ev_ext1 = sf_ext;
+        w_pos = 2'd0; w_pop = 1'b0; w_first = 1'b0; w_mask = 8'hFF;
+        for (int p = 0; p < 4; p++) begin
+            ev_out[p]  = 8'h00;
+            ev_out2[p] = 8'h00;
+        end
 
-        if (sf_evt) begin
+        if (sf_evt & ~sf_evt_word) begin
             // shiftinput_byte: the new byte sits at the tail (pv); it earns
             // stack credit only while stack <= 16. A srcbit >= 8 spends one
             // push as a whole byte with no credit.
@@ -453,22 +486,200 @@ module pc98_egc (
                     ev_prod = 1'b1;
                     // the aligned and left forms consume the head always;
                     // the right forms' first byte is a look, not a pop.
-                    ev_pop  = ~v_first | ((sf_func != 3'd2)
-                                        & (sf_func != 3'd3));
+                    ev_pops = {1'b0, ~v_first | ((sf_func != 3'd2)
+                                               & (sf_func != 3'd3))};
                 end
             end
 
             // queue depth: one byte arrived if it earned credit, one left
-            // if outptr moved. Saturation and the underflow fix-up are both
-            // unreachable -- stack <= 24 bits of pending input bounds it --
-            // but the wrap has to land somewhere sane.
-            nx_qd = sf_qd + {2'b00, v_acc} - {2'b00, ev_pop};
+            // if outptr moved.
+            nx_qd = sf_qd + {2'b00, v_acc} - {1'b0, ev_pops};
             if (nx_qd == 3'd7)      nx_qd = 3'd0;
-            else if (nx_qd > 3'd4)  nx_qd = 3'd4;
+            else if (nx_qd > 3'd6)  nx_qd = 3'd6;
 
             // remain hitting zero inside _sub re-arms the run (egcshift on
             // the current registers) -- this is what makes leng the bit
             // count and not just a write enable.
+            ev_last = ev_insub & (nx_remain == 13'd0);
+        end
+
+        if (sf_evt & sf_evt_word) begin
+            // ---- shiftinput_incw/decw + egcsftw_* --------------------
+            // The word model: one stack check and one deduction for both
+            // lanes, the lanes run in direction order (up: L then H;
+            // dn: H then L), and a remain==0 mid-word suppresses the
+            // second lane and re-arms.
+            ev_ext1 = ~w_dn;  // up: lane1 is the even byte; dn: the odd
+            if (sf_stack <= 6'd16) begin
+                v_acc = 1'b1;
+                // srcbit >= 8: one queued byte was fully consumed on the
+                // source side -- outptr++/-- drops it before any produce.
+                if (sf_srcbit >= 4'd8) w_pos = 2'd1;
+                nx_stack  = sf_stack + (6'd16 - {2'b00, sf_srcbit});
+                nx_srcbit = 4'd0;
+            end
+            nx_srcmask = 16'hFFFF;
+            if (nx_stack < (6'd16 - {2'b00, nx_dstbit})) begin
+                // not enough input for a whole word -- nothing produced
+                nx_srcmask = 16'h0000;
+            end else begin
+                nx_stack = nx_stack - (6'd16 - {2'b00, nx_dstbit});
+                ev_insub = 1'b1;
+
+                // ---- lane 1's sub ----------------------------------
+                if (nx_dstbit > 4'd8) begin
+                    nx_dstbit = nx_dstbit - 4'd8;
+                    if (ev_ext1) nx_srcmask[15:8] = 8'h00;
+                    else         nx_srcmask[7:0]  = 8'h00;
+                end else if (nx_dstbit == 4'd8) begin
+                    nx_dstbit = 4'd0;
+                    if (ev_ext1) nx_srcmask[15:8] = 8'h00;
+                    else         nx_srcmask[7:0]  = 8'h00;
+                end else begin
+                    if (nx_dstbit != 0) begin
+                        w_first = 1'b1;
+                        if (({9'd0, nx_dstbit} + nx_remain) >= 13'd8) begin
+                            w_mask    = w_dn ? (8'hFF << nx_dstbit[2:0])
+                                             : (8'hFF >> nx_dstbit[2:0]);
+                            nx_remain = nx_remain
+                                      - (13'd8 - {9'd0, nx_dstbit});
+                        end else begin
+                            w_mask    = w_dn
+                                      ? ((8'hFF << nx_dstbit[2:0]) &
+                                         (8'hFF >> (4'd8 - nx_dstbit
+                                                  - {1'b0, nx_remain[2:0]})))
+                                      : ((8'hFF >> nx_dstbit[2:0]) &
+                                         (8'hFF << (4'd8 - nx_dstbit
+                                                  - {1'b0, nx_remain[2:0]})));
+                            nx_remain = 13'd0;
+                        end
+                        nx_dstbit = 4'd0;
+                    end else if (nx_remain >= 13'd8) begin
+                        nx_remain = nx_remain - 13'd8;
+                    end else begin
+                        w_mask    = w_dn
+                                  ? (8'hFF >> (4'd8 - {1'b0, nx_remain[2:0]}))
+                                  : (8'hFF << (4'd8 - {1'b0, nx_remain[2:0]}));
+                        nx_remain = 13'd0;
+                    end
+                    if (ev_ext1) nx_srcmask[15:8] = w_mask;
+                    else         nx_srcmask[7:0]  = w_mask;
+                    for (int p = 0; p < 4; p++) begin
+                        case (sf_func)
+                            3'd0, 3'd1:
+                                ev_out[p] = pv[p][w_pos];
+                            3'd2:
+                                ev_out[p] = w_first
+                                          ? (pv[p][w_pos] >> sf_shr)
+                                          : ((pv[p][w_pos] << sf_shl)
+                                           | (pv[p][w_pos + 2'd1]
+                                              >> sf_shr));
+                            3'd3:
+                                ev_out[p] = w_first
+                                          ? (pv[p][w_pos] << sf_shr)
+                                          : ((pv[p][w_pos] >> sf_shl)
+                                           | (pv[p][w_pos + 2'd1]
+                                              << sf_shr));
+                            3'd4:
+                                ev_out[p] = (pv[p][w_pos] << sf_shl)
+                                          | (pv[p][w_pos + 2'd1]
+                                             >> sf_shr);
+                            default:
+                                ev_out[p] = (pv[p][w_pos] >> sf_shl)
+                                          | (pv[p][w_pos + 2'd1]
+                                             << sf_shr);
+                        endcase
+                    end
+                    ev_prod = 1'b1;
+                    w_pop   = ~w_first | ((sf_func != 3'd2)
+                                        & (sf_func != 3'd3));
+                    if (w_pop) w_pos = w_pos + 2'd1;
+                end
+
+                // ---- lane 2's sub, only while the run has bits left --
+                if (nx_remain != 13'd0) begin
+                    w_first = 1'b0;
+                    if (nx_dstbit > 4'd8) begin
+                        nx_dstbit = nx_dstbit - 4'd8;
+                        if (!ev_ext1) nx_srcmask[15:8] = 8'h00;
+                        else          nx_srcmask[7:0]  = 8'h00;
+                    end else if (nx_dstbit == 4'd8) begin
+                        nx_dstbit = 4'd0;
+                        if (!ev_ext1) nx_srcmask[15:8] = 8'h00;
+                        else          nx_srcmask[7:0]  = 8'h00;
+                    end else begin
+                        if (nx_dstbit != 0) begin
+                            w_first = 1'b1;
+                            if (({9'd0, nx_dstbit} + nx_remain) >= 13'd8) begin
+                                w_mask    = w_dn
+                                          ? (8'hFF << nx_dstbit[2:0])
+                                          : (8'hFF >> nx_dstbit[2:0]);
+                                nx_remain = nx_remain
+                                          - (13'd8 - {9'd0, nx_dstbit});
+                            end else begin
+                                w_mask    = w_dn
+                                      ? ((8'hFF << nx_dstbit[2:0]) &
+                                         (8'hFF >> (4'd8 - nx_dstbit
+                                                  - {1'b0, nx_remain[2:0]})))
+                                      : ((8'hFF >> nx_dstbit[2:0]) &
+                                         (8'hFF << (4'd8 - nx_dstbit
+                                                  - {1'b0, nx_remain[2:0]})));
+                                nx_remain = 13'd0;
+                            end
+                            nx_dstbit = 4'd0;
+                        end else if (nx_remain >= 13'd8) begin
+                            nx_remain = nx_remain - 13'd8;
+                        end else begin
+                            w_mask    = w_dn
+                                  ? (8'hFF >> (4'd8 - {1'b0, nx_remain[2:0]}))
+                                  : (8'hFF << (4'd8 - {1'b0, nx_remain[2:0]}));
+                            nx_remain = 13'd0;
+                        end
+                        if (!ev_ext1) nx_srcmask[15:8] = w_mask;
+                        else          nx_srcmask[7:0]  = w_mask;
+                        for (int p = 0; p < 4; p++) begin
+                            case (sf_func)
+                                3'd0, 3'd1:
+                                    ev_out2[p] = pv[p][w_pos];
+                                3'd2:
+                                    ev_out2[p] = w_first
+                                          ? (pv[p][w_pos] >> sf_shr)
+                                          : ((pv[p][w_pos] << sf_shl)
+                                           | (pv[p][w_pos + 2'd1]
+                                              >> sf_shr));
+                                3'd3:
+                                    ev_out2[p] = w_first
+                                          ? (pv[p][w_pos] << sf_shr)
+                                          : ((pv[p][w_pos] >> sf_shl)
+                                           | (pv[p][w_pos + 2'd1]
+                                              << sf_shr));
+                                3'd4:
+                                    ev_out2[p] = (pv[p][w_pos] << sf_shl)
+                                          | (pv[p][w_pos + 2'd1]
+                                             >> sf_shr);
+                                default:
+                                    ev_out2[p] = (pv[p][w_pos] >> sf_shl)
+                                          | (pv[p][w_pos + 2'd1]
+                                             << sf_shr);
+                            endcase
+                        end
+                        ev_prod2 = 1'b1;
+                        w_pop    = ~w_first | ((sf_func != 3'd2)
+                                             & (sf_func != 3'd3));
+                        if (w_pop) w_pos = w_pos + 2'd1;
+                    end
+                end else begin
+                    // remain hit zero mid-word: the second lane's byte is
+                    // suppressed, then egcshift() re-arms the run.
+                    if (!ev_ext1) nx_srcmask[15:8] = 8'h00;
+                    else          nx_srcmask[7:0]  = 8'h00;
+                end
+            end
+
+            ev_pops = w_pos;
+            nx_qd   = sf_qd + {1'b0, v_acc, 1'b0} - {1'b0, ev_pops};
+            if (nx_qd == 3'd7)      nx_qd = 3'd0;
+            else if (nx_qd > 3'd6)  nx_qd = 3'd6;
             ev_last = ev_insub & (nx_remain == 13'd0);
         end
     end
