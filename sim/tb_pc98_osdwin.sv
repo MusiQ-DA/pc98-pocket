@@ -53,6 +53,8 @@ module tb_pc98_osdwin;
         .palette_cfg     (3'd0),
         .disk_led        (1'b0),
         .vid_blank       (1'b0),
+        .dbl_skip        (1'b0),
+        .txt_pix         (1'b0),
         .osd_active      (1'b1),
         .osd_palette_idx (4'd0),
         .osd_in_area     (1'b0),

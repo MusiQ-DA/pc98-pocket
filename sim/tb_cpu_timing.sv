@@ -59,7 +59,8 @@ module tb_cpu_timing;
         .clock_cycle_counter_division_ratio(),
         .clock_cycle_counter_decrement_value(),
         .shift_read_timing(),
-        .ram_read_wait_cycle(rd_wait), .ram_write_wait_cycle(wr_wait)
+        .ram_read_wait_cycle(rd_wait), .ram_write_wait_cycle(wr_wait),
+        .vram_wait_en()
     );
 
     logic [19:0] address = '0;
@@ -73,6 +74,10 @@ module tb_cpu_timing;
     wire s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
     logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
+
+    // The graphics-region wait share that Chipset resolves per access;
+    // driven by hand here so the test owns the number.
+    logic [3:0] vram_rd = 4'd0, vram_wr = 4'd0;
 
     // RAM is wired as Chipset.sv wires it: the wait counter ticks on
     // cpu_ce_negedge and reloads from the generator's own wait-cycle outputs.
@@ -93,7 +98,8 @@ module tb_cpu_timing;
         .ems98_map(ems98_unused),
         .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(ce_neg),
-        .ram_read_wait_cycle(rd_wait), .ram_write_wait_cycle(wr_wait)
+        .ram_read_wait_cycle(rd_wait), .ram_write_wait_cycle(wr_wait),
+        .vram_rd_wait_cycle(vram_rd), .vram_wr_wait_cycle(vram_wr)
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
@@ -224,6 +230,31 @@ module tb_cpu_timing;
         for (int i = 0; i < 64; i++) begin
             waited_read(32'h01000 + i, got);
             if (got !== pat(i)) waited_errors++;
+        end
+
+        // The graphics-region share: np21w's MEMWAIT_VRAM is six CPU cycles
+        // with the beam out, and the counter ticks on cpu_ce_negedge -- one
+        // tick per CPU cycle. The bench owns the share Chipset would decode,
+        // so six in means six extra low-READY samples at this clock.
+        begin
+            int plain_waits, vram_waits;
+            clk_select = 2'd1;
+            @(negedge clock) sel_load = 1;
+            @(negedge clock) sel_load = 0;
+            repeat (8) ce_posedge_wait();
+            cpu_read(32'h01000, got, plain_waits);
+            vram_rd = 4'd6;
+            cpu_read(32'h01000, got, vram_waits);
+            vram_rd = 4'd0;
+            $display("  region wait: %0d vs %0d low-ready samples", vram_waits, plain_waits);
+            // The count ticks on ce_negedge, the sample on ce_posedge: the
+            // phase where the transaction completes decides whether the
+            // six ticks hide one posedge -- five or six extra is the 6.
+            if (vram_waits - plain_waits < 5 || vram_waits - plain_waits > 6) begin
+                $display("  FAIL MEMWAIT_VRAM share: want ~6 extra, got %0d",
+                         vram_waits - plain_waits);
+                errors++;
+            end
         end
 
         $display("\n=== summary ===");

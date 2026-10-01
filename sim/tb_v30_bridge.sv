@@ -4,9 +4,11 @@
 // What this bench proves, by running a real V30 program through the real
 // i8288 and the real READY module:
 //
-//   * a word write at an even address lands as TWO byte cycles, even
-//     address first, with the low lane's data on the even byte and the high
-//     lane's on the odd one (the adjacency assertions);
+//   * a word access at an SDRAM address runs as ONE bus cycle carrying
+//     both lanes (the odd half on the _hi pair -- the flat array answers
+//     it at addr|1, the same byte RAM.sv's second burst word carries);
+//   * a word access into a hole the SDRAM does not serve still lands as
+//     TWO byte cycles, even address first (the C0000 pair's adjacency);
 //   * a word read at an even address returns {odd, even} to the core and
 //     the program reads back what it wrote (the marker bytes);
 //   * odd byte reads and writes take the upper lane and come back right;
@@ -58,7 +60,7 @@ module tb_v30_bridge;
         .clock_cycle_counter_decrement_value (ccc_dec),
         .shift_read_timing                  (shift_read_timing),
         .ram_read_wait_cycle                (ram_rd_wait),
-        .ram_write_wait_cycle               (ram_wr_wait)
+        .ram_write_wait_cycle               (ram_wr_wait), .vram_wait_en()
     );
 
     // ---- the CPU: nuV30, de-muxed, exactly as core_top will wire it -------
@@ -96,6 +98,8 @@ module tb_v30_bridge;
     wire [2:0] processor_status;
     wire [19:0] ad_out;
     wire [7:0]  cpu_data_bus;
+    wire        word_access;
+    wire [7:0]  cpu_data_bus_hi;
     wire        lock_n;
 
     v30_cpu_bridge u_bridge (
@@ -114,12 +118,13 @@ module tb_v30_bridge;
         .ad_out            (ad_out),
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
-        // No word path here: this bench's memory is a flat byte array and
-        // PC98_WORD_MEM is never defined for it, so word_access stays low.
+        // The word path is unconditional now: a word at an SDRAM address is
+        // one cycle, and this bench's flat array answers the odd lane the
+        // way RAM.sv would -- din_hi is mem[addr|1], writes take both lanes.
         .analog_mode       (1'b0),
-        .word_access       (),
-        .cpu_data_bus_hi   (),
-        .data_bus_hi       (8'hFF),
+        .word_access       (word_access),
+        .cpu_data_bus_hi   (cpu_data_bus_hi),
+        .data_bus_hi       (din_hi),
         .data_bus          (din),
         .processor_ready   (processor_ready),
         .address_enable_n  (1'b0),     // no other master in this bench
@@ -258,15 +263,22 @@ module tb_v30_bridge;
                     : ~inta_n   ? pic_dout
                     : pic_iocs & ~io_rd_n ? pic_dout
                                 : 8'hFF;
+    // The odd lane of a one-cycle word: the flat array answers it at addr|1,
+    // the same byte RAM.sv's second burst word would carry.
+    wire [7:0] din_hi = ~mem_rd_n ? mem[cpu_address | 20'h1] : 8'hFF;
 
     // Memory writes commit on the command's trailing edge, the 8-bit bus
-    // way: one byte per cycle, data from the lane the bridge selected.
+    // way: one byte per cycle, data from the lane the bridge selected --
+    // and the odd byte off the _hi lane when the cycle is a word.
     logic mem_wr_d = 1'b1;
     logic io_wr_d = 1'b1;
     always_ff @(posedge clk) begin
         mem_wr_d <= mem_wr_n;
         io_wr_d  <= io_wr_n;
-        if (mem_wr_n & ~mem_wr_d) mem[cpu_address] <= cpu_data_bus;
+        if (mem_wr_n & ~mem_wr_d) begin
+            mem[cpu_address] <= cpu_data_bus;
+            if (word_access) mem[cpu_address | 20'h1] <= cpu_data_bus_hi;
+        end
     end
 
     // ---- the byte-cycle log (order assertions) -----------------------------
@@ -338,15 +350,25 @@ module tb_v30_bridge;
     //   0037 A3 20 02          mov [0220],ax
     //   003A 8B 06 21 02       mov ax,[0221]           word R odd (V30 splits)
     //   003E A3 24 02          mov [0224],ax
-    //   0041 C6 06 30 02 C3    mov byte [0230],C3      "data phase done"
-    //   0046 B0 13 E6 00       ICW1: edge, single, ICW4   (A0=0)
-    //   004A B0 48 E6 02       ICW2: vectors at 48h       (A0=1)
-    //   004E B0 01 E6 02       ICW4: 8086 mode            (A0=1)
-    //   0052 B0 FE E6 02       OCW1: unmask IRQ0 only     (A0=1)
-    //   0056 FB                sti
-    //   0057 F4                hlt
-    //   0058 C6 06 32 02 66    mov byte [0232],66      "woke and continued"
-    //   005D EB FE             jmp $
+    //   0041 B8 00 C0          mov ax,C000
+    //   0044 8E C0             mov es,ax
+    //   0046 B8 BC 9A          mov ax,9ABC
+    //   0049 26 A3 00 02       mov es:[0200],ax        word W in a hole
+    //   004D 26 A1 00 02       mov ax,es:[0200]        word R from a hole:
+    //                                                     C0000 is not in
+    //                                                     pc98_sdram_hits,
+    //                                                     so both are still
+    //                                                     two byte cycles
+    //   0051 A3 26 02          mov [0226],ax           one cycle, SDRAM answers
+    //   0054 C6 06 30 02 C3    mov byte [0230],C3      "data phase done"
+    //   0059 B0 13 E6 00       ICW1: edge, single, ICW4   (A0=0)
+    //   005D B0 48 E6 02       ICW2: vectors at 48h       (A0=1)
+    //   0061 B0 01 E6 02       ICW4: 8086 mode            (A0=1)
+    //   0065 B0 FE E6 02       OCW1: unmask IRQ0 only     (A0=1)
+    //   0069 FB                sti
+    //   006A F4                hlt
+    //   006B C6 06 32 02 66    mov byte [0232],66      "woke and continued"
+    //   0070 EB FE             jmp $
     //
     //  0100 C6 06 31 02 5A     the IRQ0 handler: mov byte [0231],5A
     //  0105 CF                 iret
@@ -384,6 +406,23 @@ module tb_v30_bridge;
                 errors = errors + 1;
                 $display("  FAIL %s: no (%04X,%02X,%b)->(%04X,%02X,%b) pair in %0d cycles",
                          what, a1, d1, w1, a2, d2, w2, cyc_n);
+            end
+        end
+    endtask
+
+    // The opposite for a one-cycle word: its odd byte rides the _hi lane, so
+    // the odd address must never appear as a cycle of its own.
+    task automatic expect_absent(input logic [19:0] a, input logic w,
+                                 input string what);
+        int k;
+        begin
+            for (k = 0; k < cyc_n; k++)
+                if (cyclog[k].addr == a && cyclog[k].wr == w)
+                    break;
+            if (k < cyc_n) begin
+                errors = errors + 1;
+                $display("  FAIL %s: (%05X,wr=%b) is a cycle of its own in %0d",
+                         what, a, w, cyc_n);
             end
         end
     endtask
@@ -461,6 +500,25 @@ module tb_v30_bridge;
         poke(16'h0000 + i, 8'hA3); i = i + 1;   // mov [0224],ax
         poke(16'h0000 + i, 8'h24); i = i + 1;
         poke(16'h0000 + i, 8'h02); i = i + 1;
+        poke(16'h0000 + i, 8'hB8); i = i + 1;   // mov ax,C000
+        poke(16'h0000 + i, 8'h00); i = i + 1;
+        poke(16'h0000 + i, 8'hC0); i = i + 1;
+        poke(16'h0000 + i, 8'h8E); i = i + 1;   // mov es,ax
+        poke(16'h0000 + i, 8'hC0); i = i + 1;
+        poke(16'h0000 + i, 8'hB8); i = i + 1;   // mov ax,9ABC
+        poke(16'h0000 + i, 8'hBC); i = i + 1;
+        poke(16'h0000 + i, 8'h9A); i = i + 1;
+        poke(16'h0000 + i, 8'h26); i = i + 1;   // mov es:[0200],ax -- word in a
+        poke(16'h0000 + i, 8'hA3); i = i + 1;   //   hole, still two byte cycles
+        poke(16'h0000 + i, 8'h00); i = i + 1;
+        poke(16'h0000 + i, 8'h02); i = i + 1;
+        poke(16'h0000 + i, 8'h26); i = i + 1;   // mov ax,es:[0200] -- same
+        poke(16'h0000 + i, 8'hA1); i = i + 1;
+        poke(16'h0000 + i, 8'h00); i = i + 1;
+        poke(16'h0000 + i, 8'h02); i = i + 1;
+        poke(16'h0000 + i, 8'hA3); i = i + 1;   // mov [0226],ax -- SDRAM word,
+        poke(16'h0000 + i, 8'h26); i = i + 1;   //   one cycle
+        poke(16'h0000 + i, 8'h02); i = i + 1;
         poke(16'h0000 + i, 8'hC6); i = i + 1;   // mov byte [0230],C3
         poke(16'h0000 + i, 8'h06); i = i + 1;
         poke(16'h0000 + i, 8'h30); i = i + 1;
@@ -534,18 +592,29 @@ module tb_v30_bridge;
         expect8(20'h00224, 8'hEF, "odd word R, first byte");
         expect8(20'h00225, 8'h00, "odd word R, second byte");
 
+        // The hole round trip: the word landed in C0000's two byte cycles,
+        // came back through the same split, and stored into SDRAM as one.
+        expect8(20'hC0200, 8'hBC, "hole word W, low lane");
+        expect8(20'hC0201, 8'h9A, "hole word W, high lane");
+        expect8(20'h00226, 8'hBC, "hole word R back, low");
+        expect8(20'h00227, 8'h9A, "hole word R back, high");
+
         // The markers: data phase, interrupt handler, post-HLT.
         expect8(20'h00230, 8'hC3, "data phase marker");
         expect8(20'h00231, 8'h5A, "INTA handler marker");
         expect8(20'h00232, 8'h66, "post-HLT marker");
 
-        // The ORDER of a word's two bytes in the byte-cycle log.
-        expect_adjacent(20'h00200, 8'h34, 1'b1,
-                        20'h00201, 8'h12, 1'b1, "word W split order");
-        expect_adjacent(20'h00200, 8'h34, 1'b0,
-                        20'h00201, 8'h12, 1'b0, "word R split order");
-        expect_adjacent(20'h00204, 8'h78, 1'b1,
-                        20'h00205, 8'h56, 1'b1, "second word W split order");
+        // An SDRAM word is ONE cycle now: the odd byte rides the _hi lane and
+        // must not appear as a cycle of its own. A word into a hole the SDRAM
+        // does not serve is still two byte cycles, even address first.
+        expect_absent(20'h00201, 1'b1, "word W odd byte");
+        expect_absent(20'h00201, 1'b0, "word R odd byte");
+        expect_absent(20'h00205, 1'b1, "second word W odd byte");
+        expect_absent(20'h00227, 1'b1, "word W odd byte after the hole");
+        expect_adjacent(20'hC0200, 8'hBC, 1'b1,
+                        20'hC0201, 8'h9A, 1'b1, "hole word W split order");
+        expect_adjacent(20'hC0200, 8'hBC, 1'b0,
+                        20'hC0201, 8'h9A, 1'b0, "hole word R split order");
         expect_adjacent(20'h00221, 8'hEF, 1'b0,
                         20'h00222, 8'h00, 1'b0, "V30 odd-word split order");
 

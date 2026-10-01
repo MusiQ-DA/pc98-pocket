@@ -129,7 +129,7 @@ module tb_ext_arbiter;
         .ems98_map(ems98_unused),
         .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(1'b1),
-        .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)
+        .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0)
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),

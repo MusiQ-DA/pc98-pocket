@@ -99,7 +99,8 @@ module tb_pc98_pipeline;
         .cpu_q    (tvram_cpu_q),
         .fil_clk  (clk),      .fil_cell(fil_cell),
         .fil_char_lo(fil_char_lo), .fil_char_hi(fil_char_hi),
-        .vid_clk  (clk_dot),  .vid_cell(vid_cell), .vid_attr(vid_attr)
+        .vid_clk  (clk_dot),  .vid_cell(vid_cell), .vid_attr(vid_attr),
+        .cfg_a3fea(8'h04), .cfg_a3fee(8'h00), .cfg_a3ff2(8'h01)
     );
 
     // ------------------------------------------------------- row buffer
@@ -123,6 +124,8 @@ module tb_pc98_pipeline;
         .f_req(f_req), .f_addr(f_addr), .f_busy(f_busy),
         .f_valid(f_valid), .f_data(f_data),
         .ank_code(ank_code), .ank_line(ank_line), .ank_row(ank_row),
+        // No gaiji cells in this script -- tie the RAM's read port off.
+        .gaiji_addr(), .gaiji_data(8'h00),
         .rd_clk(clk_dot), .rd_cell(rd_cell_w[6:0]), .rd_line(rd_line_w),
         .rd_byte(rd_byte), .kanji_seen(kanji_seen)
     );
@@ -201,12 +204,14 @@ module tb_pc98_pipeline;
     pc98_text_render u_render (
         .clk(clk_dot), .pix_ce(1'b1),
         .hcount(pc98_h), .vcount(pc98_v), .blink_on(1'b1),
-        .gdc_on(1'b0), .gdc_pitch(8'd0), .gdc_sad(16'd0), .wide(1'b0),
+        .gdc_on(1'b0), .gdc_pitch(8'd0),
+        .gdc_sad('{default:16'd0}), .gdc_len('{default:10'd0}), .wide(1'b0),
         .cur_addr(16'hFFFF), .cur_en(1'b0), .cur_blink(1'b0),
         .cur_top(5'd0), .cur_bot(5'd0),
         .tv_cell(vid_cell), .tv_attr(vid_attr),
         .font_cell(font_cell), .font_line(font_line), .font_row(font_row),
-        .grb(grb), .pixel(pixel)
+        .grb(grb), .pixel(pixel),
+        .crtc_pl(5'd0), .crtc_bl(5'h0F), .crtc_cl(5'h10), .line_rep(5'h0F)
     );
 
     // ------------------------------------------------- what is on screen

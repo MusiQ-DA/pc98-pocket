@@ -1,5 +1,6 @@
 //
-// pc98_cgwindow -- the character generator window at A4000-A4FFF.
+// pc98_cgwindow -- the character generator window at A4000-A4FFF, plus the
+// CG data port 0x00A9.
 //
 // PC-98 lets software read glyphs itself, which is not decoration: the BIOS
 // uses it, and a read that never answers hangs the guest rather than looking
@@ -11,10 +12,15 @@
 //   0x00A3  code[7:0]       cgrom_oa3: code = (code & 0xff00) | dat
 //   0x00A5  line and side   cgrom_oa5: line = dat & 0x1f,
 //                                      lr   = ((~dat) & 0x20) << 6
+//   0x00A9  pattern data    cgrom_oa9/cgrom_ia9: writes land only when
+//                           (code & 0x007e) == 0x0056 -- the gaiji region --
+//                           at fontrom[(code & 0x7f7f) << 4 + lr + line];
+//                           reads return the same offset for any code with a
+//                           nonzero high byte, and the ANK set for hi == 0.
 //
-// so bit 5 CLEAR selects the right half. The code is encoded the way a TVRAM
-// cell is -- low byte the ku index, high byte the raw ten -- so the address
-// arithmetic is pc98_glyph_addr's, unchanged.
+// so bit 5 CLEAR on 0xA5 selects the right half. The code is encoded the way a
+// TVRAM cell is -- low byte the ku index, high byte the raw ten -- so the
+// address arithmetic is pc98_glyph_addr's, unchanged.
 //
 // The window itself, from memtram_rd8:
 //
@@ -31,19 +37,26 @@
 // costs one fetch per character instead of one per byte, and a read never has
 // to wait on SDRAM.
 //
-// NOT YET: cgwindowset's special cases -- gaiji at ku 0x56/0x57, the 0x09-0x0C
-// and 0x58-0x60 ranges, and the "grcg.chip >= 2" gate. Those change which
-// halves map where for particular ku, and none of them is reachable until a
-// guest asks for those characters. Left explicit rather than approximated.
+// GAIJI -- ku 0x56/0x57 -- are user RAM, not ROM. np21w's cgwindowset leaves
+// `low` pointing at a dummy region for those codes and sets `high` to the
+// a5-selected half of the glyph, so the window's ODD addresses reach the RAM
+// while even ones see scratch; the port path (0xA9) reads/writes
+// {code, lr, line} directly. Here the backing store is pc98_gaiji_ram, shared
+// with the text row buffer, so a glyph the guest uploads is both read back
+// and drawn -- which is what software like SuperDepth's DEPTH.FNT loader
+// needs: it stores glyphs through 0xA9 and then displays them on the text
+// layer.
 //
-// ALSO NOT YET: a backing store for the gaiji RAM. On a real machine ku
-// 0x56/0x57 are 192 characters of user-definable RAM, 6 KB, and what the guest
-// writes there survives a code change and is drawn by the text renderer. Here a
-// write lives only in these thirty-two bytes, until the guest selects another
-// character. That is enough for the ITF's test, which writes and reads one code
-// at a time, and it is not enough for software that defines characters and then
-// displays them -- which would want the 6 KB and a second source in the row
-// buffer, not a change here.
+// For a gaiji code, then:
+//
+//   * window ODD offsets  -> gaiji[{idx, ku0, right_sel, line}] (read+write)
+//   * window even offsets -> the prefetch window, as a harmless dummy stand-in
+//   * 0xA9 writes         -> gaiji[{idx, ku0, right_sel, a5_line}]
+//   * 0xA9 reads          -> same, or win[] for ROM codes
+//
+// NOT YET: cgwindowset's other special cases -- the 0x09-0x0C and 0x58-0x60
+// ranges and the "grcg.chip >= 2" gate. None of them is reachable until a
+// guest asks for those characters. Left explicit rather than approximated.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -59,19 +72,29 @@ module pc98_cgwindow (
     input  wire [15:0] io_port,
     input  wire  [7:0] io_data,
 
-    // Guest writes to A4000-A4FFF, same qualification shape as the text VRAM's
+    // Guest access to A4000-A4FFF, same qualification shape as the text VRAM's
     // (select & ~memory_write_n). The window is RAM on machines this BIOS
     // family knows: the ITF's own test writes a pattern through the window and
     // reads it back, and user-defined characters are loaded the same way. A
     // write lands in the same slot a read at that address would come from, so
     // what the guest wrote is what the guest reads.
     input  wire        mem_wr,
+    input  wire        mem_rd,
     input  wire [11:0] wr_addr,
     input  wire  [7:0] wr_data,
 
     // Guest read of A4000-A4FFF; offset within the window.
     input  wire [11:0] rd_addr,
     output wire  [7:0] rd_data,
+
+    // Port 0x00A9 read data -- the {code, lr, line} the guest last selected.
+    output wire  [7:0] a9_data,
+
+    // Gaiji RAM port A (the guest side); the renderer owns port B.
+    output logic        g_we,
+    output wire  [12:0] g_addr,
+    output wire   [7:0] g_wdata,
+    input  wire   [7:0] g_rdata,
 
     // Font fetch, same shape as the row buffer's.
     output logic        f_req,
@@ -85,9 +108,10 @@ module pc98_cgwindow (
 
     logic [15:0] code;
     logic        right_sel;     // the half port 0x00A5 last selected
+    logic  [4:0] a5_line;       // and the line it named
 
     // Two halves of sixteen lines.
-    (* ramstyle = "M10K" *) logic [7:0] win [0:31];
+    logic [7:0] win [0:31];
 
     // Which slots the guest has written since the last code change. The code
     // write kicks off a refill from the font store, and the CPU can reach its
@@ -116,9 +140,57 @@ module pc98_cgwindow (
         .addr       (ga_addr)
     );
 
-    // The address supplies the line and bit 0 picks the half, so the window
-    // repeats every 32 bytes across the 4 KB.
-    assign rd_data = win[{rd_addr[0], rd_addr[4:1]}];
+    // ---- gaiji side --------------------------------------------------------
+    //
+    // np21w `(code & 0x007e) == 0x0056`: the low byte masked to 7 bits is
+    // 0x56/0x57. code[15:8] is the glyph index, code[7:0] the ku.
+    wire gaiji_sel = (code[7:0] & 8'h7E) == 8'h56;
+
+    // The RAM index compresses np21w's `(code & 0x7f7f) << 4 + lr + line`:
+    // {idx, ku0, half, line}. Window access exposes the a5-SELECTED half on
+    // the odd offsets (cgwindowset folds lr into `high`), so rd_addr[0] only
+    // says whether this access reaches the RAM at all; the half bit is
+    // right_sel either way.
+    wire        win_gaiji = gaiji_sel & (mem_wr | mem_rd);
+    wire  [3:0] g_rline  = win_gaiji ? rd_addr[4:1] : a5_line[3:0];
+    wire [12:0] g_raddr  = {code[14:8], code[0], right_sel, g_rline};
+
+    // Writes register address and data with the enable: g_we commits a cycle
+    // after the guest's bus cycle, and by then the bus lines are already
+    // carrying the next access. Latching late -- off the live bus -- wrote
+    // the byte to the next slot over with the previous port's data.
+    logic [12:0] g_waddr;
+    logic  [7:0] g_wdata_q;
+    assign g_addr  = g_we ? g_waddr : g_raddr;
+    assign g_wdata = g_wdata_q;
+
+    // win[] carries THREE read consumers but the guest bus performs one
+    // access at a time -- a window read or a port read, never both -- so a
+    // single read port serves them all and mem_rd picks the index. The
+    // read is registered, which is what lets the array finally honour its
+    // M10K attribute: an asynchronous read cannot live in block RAM and
+    // was costing the array's 256 cells plus a 32:1 mux per consumer in
+    // ALMs. One cycle is invisible here -- every consumer (the
+    // data_bus_out capture, the testbench's two-clock sample) reads at
+    // least a clock after the index, the same rhythm the gaiji RAM's
+    // registered output already sets for a9_data.
+    wire       hi_nz     = (code[15:8] != 8'h00);
+    wire [4:0] win_ridx  = mem_rd ? {rd_addr[0], rd_addr[4:1]}
+                                  : {hi_nz & right_sel, a5_line[3:0]};
+    logic [7:0] win_rdata;
+    always_ff @(posedge clk) win_rdata <= win[win_ridx];
+
+    // Window reads of a gaiji code: odd offsets answer from the RAM, even
+    // from the prefetch window (np21w's `low` dummy region stands there).
+    assign rd_data = (gaiji_sel & rd_addr[0]) ? g_rdata : win_rdata;
+
+    // Port 0xA9 reads: gaiji codes hit the RAM; other kanji-class codes read
+    // the prefetched half/line (np21w returns fontrom at the same offsets);
+    // ANK codes come from the window's left half while line bit 4 stays
+    // clear, the `!(cr->line & 0x10)` gate in cgrom_ia9.
+    assign a9_data = gaiji_sel ? g_rdata
+                   : (a5_line[4] & ~hi_nz) ? 8'h00
+                                           : win_rdata;
 
     typedef enum logic [1:0] { S_IDLE, S_FETCH, S_STREAM, S_NEXT } state_t;
     state_t state;
@@ -129,28 +201,31 @@ module pc98_cgwindow (
         if (rst) begin
             code       <= 16'h0000;
             right_sel  <= 1'b0;
+            a5_line    <= 5'd0;
             state      <= S_IDLE;
             f_req      <= 1'b0;
             busy       <= 1'b0;
             reload     <= 1'b0;
             fetch_half <= 1'b0;
             dirty      <= 32'h0;
+            g_we       <= 1'b0;
         end else begin
             f_req <= 1'b0;
+            g_we  <= 1'b0;
 
             if (io_wr) begin
                 case (io_port)
                     16'h00A1: begin code[15:8] <= io_data; reload <= 1'b1; end
                     16'h00A3: begin code[7:0]  <= io_data; reload <= 1'b1; end
-                    // 0x00A5 carries the line and the half, and NEITHER of
-                    // those is part of this window: the thirty-two bytes hold
+                    // 0x00A5 carries the line and the half. The window holds
                     // both halves' sixteen lines at once, indexed out of the
-                    // address (see rd_data above), so `right_sel` has nothing
-                    // to select and a refill would fetch the same bytes again.
+                    // address (see rd_data above), so for window access the
+                    // write is a no-op -- but port 0xA9 needs both fields, so
+                    // they are latched here.
                     //
-                    // It must therefore also not touch `dirty`, and that is
-                    // the whole KANJI CG RAM ERROR. The ITF's test is
-                    // itf.rom F8743-F87D5:
+                    // It must not touch `dirty`, and that is the whole KANJI
+                    // CG RAM ERROR story. The ITF's test is itf.rom
+                    // F8743-F87D5:
                     //
                     //   OUT A1/A3          ku 0x56, the gaiji region
                     //   OUT A5,00 + 16 x STOSB      write the pattern
@@ -167,7 +242,17 @@ module pc98_cgwindow (
                     // 128/128 in tb_pc98_cgwindow before this change, 0/128
                     // after). The test cannot pass while a selector write
                     // discards what the guest stored.
-                    16'h00A5: right_sel <= ~io_data[5];
+                    16'h00A5: begin right_sel <= ~io_data[5];
+                                    a5_line   <= io_data[4:0]; end
+                    // cgrom_oa9: writes land only in the gaiji RAM. The M10K
+                    // register stage means the store commits next clock, which
+                    // is long before a 4.77 MHz guest's next bus cycle.
+                    16'h00A9: if (gaiji_sel) begin
+                        g_we      <= 1'b1;
+                        g_waddr   <= {code[14:8], code[0], right_sel,
+                                      a5_line[3:0]};
+                        g_wdata_q <= io_data;
+                    end
                     default: ;
                 endcase
                 // A code change hands the window back to the font store -- but
@@ -220,13 +305,22 @@ module pc98_cgwindow (
             // first. One cycle in thirty-two per glyph is not a risk worth
             // leaving in a path whose failure mode is a wrong character.
             if (mem_wr) begin
-                win[{wr_addr[0], wr_addr[4:1]}] <= wr_data;
-                dirty[{wr_addr[0], wr_addr[4:1]}] <= 1'b1;
+                if (gaiji_sel & wr_addr[0]) begin
+                    // Odd offsets on a gaiji code reach the RAM -- the
+                    // a5-selected half, the window offset's line.
+                    g_we      <= 1'b1;
+                    g_waddr   <= {code[14:8], code[0], right_sel,
+                                  wr_addr[4:1]};
+                    g_wdata_q <= wr_data;
+                end else begin
+                    win[{wr_addr[0], wr_addr[4:1]}] <= wr_data;
+                    dirty[{wr_addr[0], wr_addr[4:1]}] <= 1'b1;
+                end
             end
         end
     end
 
-    wire _unused = &{1'b0, ga_kanji, right_sel, rd_addr[11:5], 1'b0};
+    wire _unused = &{1'b0, ga_kanji, rd_addr[11:5], wr_addr[11:5], 1'b0};
 
 endmodule
 

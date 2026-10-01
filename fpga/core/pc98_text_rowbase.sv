@@ -31,23 +31,36 @@
 module pc98_text_rowbase (
     input  wire        gdc_on,      // master GDC START seen
     input  wire  [7:0] gdc_pitch,   // PITCH register, raw
-    input  wire [15:0] gdc_sad,     // partition 0's SAD, raw
+    input  wire [15:0] gdc_sad [0:3], // the four partitions' SADs, raw
+    input  wire  [9:0] gdc_len [0:3], // and their line counts, decoded
     input  wire  [4:0] row,         // the text row being addressed, 0-24
-    output wire [11:0] base         // LOW12(SAD + row*PITCH), or row*80
+    output wire [11:0] base         // LOW12(SAD[p] + rel*PITCH), or row*80
 );
 
     wire        live  = gdc_on & (gdc_pitch != 8'd0);
     // np21w masks with 0xfe -- an odd register value loses its low bit, it
     // does not round.
     wire  [7:0] pitch = live ? {gdc_pitch[7:1], 1'b0} : 8'd80;
-    wire [11:0] sad   = live ? gdc_sad[11:0]           : 12'd0;
+
+`include "pc98_text_part.svh"
+
+    // The row's partition and its index inside it. A one-area screen sets
+    // partition 0 to the whole height, which makes this the old SAD+row
+    // expression; a split starts a new partition mid-screen. Unprogrammed
+    // the fallback is still eighty columns from cell 0.
+    // (The call is a separate statement: Verilator 5.020's V3Gate trips on
+    // a function call inlined inside a conditional -- internal error.)
+    wire [16:0] partf = pc98_text_part(row, gdc_sad, gdc_len);
+    wire [16:0] part = live ? partf : {row, 12'd0};
+    wire  [4:0] rel   = part[16:12];
+    wire [11:0] sad   = part[11:0];
 
     // Both terms are cell counts; the 12-bit sum IS the LOW12 wrap. The
     // 5x8 product rides a DSP block (12 of 66 are in use) because the ALM
     // fabric is at 99 per cent -- a LUT multiplier is what pushed the fit
     // over the device edge.
     (* multstyle = "dsp" *) logic [12:0] row_pitch;
-    always_comb row_pitch = row * pitch;
+    always_comb row_pitch = rel * pitch;
     assign base = sad + row_pitch[11:0];
 
 endmodule

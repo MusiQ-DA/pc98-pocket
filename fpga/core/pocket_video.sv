@@ -24,6 +24,13 @@ module pocket_video (
     input      [2:0]  palette_cfg,
     input             disk_led,   // on-screen disk-access lamp (stretched level)
     input             vid_blank,
+    // The "Skip" 200-line presentation ANDed with CHIPSET's doubled-mode flag
+    // upstream -- asserted here only while the guest really is in one.
+    input             dbl_skip,
+    // Text-plane dot, registered alongside r/g/b in the compositor. The text
+    // plane runs the master GDC's own 400-line timing even under a doubled
+    // graphics mode, so the thinning must not touch it.
+    input             txt_pix,
     // OSD framebuffer handshake (softcore)
     input             osd_active,
     input      [3:0]  osd_palette_idx,
@@ -232,10 +239,22 @@ module pocket_video (
     wire lamp_in = disk_led && (rb_h >= PC98_H_ACTIVE - 10'd20) && (rb_h < PC98_H_ACTIVE - 10'd8)
                             && (rb_v >= 10'd8) && (rb_v < 10'd20);
 
+    // The "Skip" 200-line presentation (Settings -> 200-Line Mode): the fetch
+    // walk is untouched -- in a doubled mode each guest line still lands on a
+    // PAIR of rasterlines, so the second of the pair (rb_v odd) carries a copy
+    // and can simply be driven black. What is left is each source line on an
+    // even rasterline with black between: the mabiki look a real 200-line
+    // program reads as on a 400-line field. The text plane is exempt -- on the
+    // machine the master's 400-line timing is untouched by the slave's doubled
+    // mode, so a text row lives on both halves of the pair. It sits under the
+    // lamp and the OSD so neither overlay is thinned.
+    wire thin_line = dbl_skip & rb_v[0] & ~txt_pix;
+
     wire [23:0] overlay    = vid_blank_pix ? 24'd0
                            : osd_show      ? osd_color
                            : guard_run     ? 24'd0
                            : lamp_in       ? 24'hE0A020
+                           : thin_line     ? 24'd0
                            :                 {tr, tg, tb};
     always @(posedge clk_pix) begin
         vid_de  <= vid_de_now;

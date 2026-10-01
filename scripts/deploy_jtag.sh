@@ -43,8 +43,13 @@ if [ -z "$SOF" ]; then
 
     mkdir -p fpga/output_files
     echo ">> downloading bitstream"
-    gh run download "$RUN" -n bitstream \
-        -D fpga/output_files --clobber
+    # gh has no --clobber on this version; the artifact also nests its
+    # upload path (fpga/output_files/...) inside the extract dir.
+    TMPDL="$(mktemp -d)"
+    gh run download "$RUN" -n bitstream -D "$TMPDL"
+    cp -f "$TMPDL"/output_files/*.sof fpga/output_files/ 2>/dev/null \
+        || cp -f "$TMPDL"/*.sof fpga/output_files/
+    rm -rf "$TMPDL"
     SOF="fpga/output_files/ap_core.sof"
 fi
 

@@ -20,7 +20,11 @@ module ce_generator (
     output  logic   [7:0]   clock_cycle_counter_decrement_value,
     output  logic           shift_read_timing,
     output  logic   [1:0]   ram_read_wait_cycle,
-    output  logic   [1:0]   ram_write_wait_cycle
+    output  logic   [1:0]   ram_write_wait_cycle,
+    // The faithful speeds model the GDC's display-refresh bus sharing --
+    // the fast settings bought their speed by not modelling it (np21w's
+    // MEMWAIT_VRAM, charged per CPU cycle by RAM.sv's wait counters).
+    output  logic           vram_wait_en
 );
 
     localparam logic [8:0] PERIPHERAL_CE_NUM = 9'd1;
@@ -47,6 +51,7 @@ module ce_generator (
         shift_read_timing = 1'b0;
         ram_read_wait_cycle = 2'd0;
         ram_write_wait_cycle = 2'd0;
+        vram_wait_en = 1'b0;
         cpu_edge_num = 9'd2;
         cpu_edge_den = 9'd9;
 
@@ -69,12 +74,14 @@ module ce_generator (
             begin                                   // 4.915197 MHz ("5 MHz")
                 cpu_edge_num = 9'd46;
                 cpu_edge_den = 9'd201;
+                vram_wait_en = 1'b1;
             end
 
             2'b01:
             begin                                   // 9.830393 MHz ("10 MHz")
                 cpu_edge_num = 9'd92;
                 cpu_edge_den = 9'd201;
+                vram_wait_en = 1'b1;
             end
 
             2'b10:

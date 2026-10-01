@@ -74,8 +74,16 @@
 //   * cpu_data_bus carries the addressed lane of the write word -- A0=0
 //     takes DATA_O[7:0], A0=1 takes DATA_O[15:8] (the core publishes the
 //     write word "in bus byte order (swapped on an odd address)");
-//   * a word cycle (A0=0, UBE_N=0) becomes byte(even) then byte(odd);
-//     everything else is one byte cycle;
+//   * a word cycle (A0=0, UBE_N=0) becomes byte(even) then byte(odd) --
+//     or ONE cycle carrying both lanes when the SDRAM answers the
+//     address (word_1cyc; the _hi bus pair moves the odd half alongside,
+//     RAM.sv bursts it as two words);
+//   * a word I/O cycle terminates the way the real 8-bit peripherals do
+//     (np21w io/iocore.c ioterminate[]/iocore16.tbl): most swallow the
+//     second byte instead of letting it touch port+1, and a read comes
+//     back with the class's fixed upper lane rather than a second read
+//     (the EXT08/PLUS/MINUS constants -- so OUT DX,AX at 0x70 cannot
+//     clobber the neighbouring 0x71 the naive two-byte version did);
 //   * each byte runs >= 3 posedge-CE "T states" and completes only when
 //     processor_ready is high at a posedge-CE with the bus not granted
 //     away (address_enable_n == 0), which is what paces the SDRAM and the
@@ -133,12 +141,12 @@ module v30_cpu_bridge (
     output reg   [7:0]  cpu_data_bus,       // the addressed write lane
     output wire         lock_n,             // the core ties BUSLOCK_N high
 
-    // The 16-bit memory path (PC98_WORD_MEM). RAM.sv keeps one guest byte per
+    // The 16-bit memory path. RAM.sv keeps one guest byte per
     // 16-bit SDRAM word, so the guest's byte N and byte N+1 are consecutive
     // SDRAM WORDS and a word access is one burst of two rather than two bus
     // cycles. word_access says this cycle is a word; the _hi pair carries its
-    // odd half. Undefined, these are tied off and every word still runs as two
-    // byte cycles, which is what everything that is not the SDRAM needs.
+    // odd half. Everywhere the SDRAM does not answer, a word still runs as
+    // two byte cycles, which is what the eight-bit targets need.
     // Sixteen-colour mode, for the same reason RAM.sv needs it: with E0000
     // open, a word access there is as burstable as one at A8000, and the two
     // must agree or a word cycle lands where only a byte is served.
@@ -153,9 +161,15 @@ module v30_cpu_bridge (
     input  wire         address_enable_n,   // 0 = the 8288 world is ours
     input  wire         pause_core,         // freeze the CPU when set
 
-    output wire         biu_done            // one clk pulse per finished
+    output wire         biu_done,           // one clk pulse per finished
                                             // V30 cycle, for the CE
                                             // generator's speed reload
+
+    // JTAG probe bundle (PC98_JTAG): the park/byte-engine view -- the wedge
+    // question the chipset-side bundle cannot answer is whether the core's
+    // CE is parked and which FSM state is holding the release. Costs nothing
+    // when core_top leaves it unconnected.
+    output wire  [15:0] dbg
 );
 
     localparam [2:0] BS_INTA = 3'b000;
@@ -348,6 +362,7 @@ module v30_cpu_bridge (
     reg  [19:0] cur_addr;
     reg         cur_ube_n;
     reg  [15:0] cur_data;
+    reg  [2:0]  cur_term;     // the I/O word's termination class
 
     wire cur_read = (cur_bs == BS_INTA) || (cur_bs == BS_IOR)
                  || (cur_bs == BS_CODE) || (cur_bs == BS_MEMR);
@@ -370,17 +385,61 @@ module v30_cpu_bridge (
     function automatic logic word_1cyc(input logic [2:0] bs,
                                        input logic [19:0] a,
                                        input logic ube_n);
-`ifdef PC98_WORD_MEM
         word_1cyc = (a[0] == 1'b0) && (ube_n == 1'b0)
                  && ((bs == BS_CODE) || (bs == BS_MEMR) || (bs == BS_MEMW))
                  && pc98_sdram_hits(a, analog_mode);
-`else
-        word_1cyc = 1'b0;
-`endif
+    endfunction
+
+    // Word-I/O termination. np21w io/iocore.c: the 8-bit peripherals the
+    // odd byte of a word access would land on are grouped by what they do
+    // with a 16-bit cycle -- ioterminate[] in iocore16.tbl. A classified
+    // port absorbs the access in ONE bus cycle: a write drops the odd
+    // byte (or everything, TERM_WORD) instead of touching port+1, and a
+    // read answers its own byte plus the class's fixed upper lane.
+    // Only the even entries can fire: this bus never announces a word at
+    // an odd address, so the odd entries np21w keeps for 286+ inpc16 are
+    // dead code here -- transcribed anyway so the table reads like his.
+    // Ports at 0x400 and above skip the table entirely (his
+    // !(port & 0x0c00) gate).
+    localparam [2:0] TERM_NONE   = 3'd0;
+    localparam [2:0] TERM_WORD   = 3'd1;
+    localparam [2:0] TERM_ACTIVE = 3'd2;
+    localparam [2:0] TERM_PLUS   = 3'd3;
+    localparam [2:0] TERM_MINUS  = 3'd4;
+    localparam [2:0] TERM_EXT08  = 3'd5;
+
+    function automatic logic [2:0] io_term(input logic [2:0] bs,
+                                           input logic [19:0] a,
+                                           input logic ube_n);
+        if (((bs == BS_IOR) || (bs == BS_IOW))
+            && (a[0] == 1'b0) && (ube_n == 1'b0) && (a[11:10] == 2'b00))
+        // np21w's tables also list odd ports (word_term 0x01-0x29 odd,
+        // plus_term 0x71/0x75/0x79/0xad/0xaf): they terminate a word
+        // instruction at an odd port. On the bus an odd word is already
+        // split into two byte cycles the decoder sees singly, so those
+        // arms can never match here and are left out.
+        case (a[7:0])
+          8'hf2, 8'hf6:              io_term = TERM_WORD;
+          8'hd0, 8'hd2, 8'hd4, 8'hd6, 8'hd8, 8'hdc, 8'hde:
+                                     io_term = TERM_ACTIVE;
+          8'h30, 8'h32, 8'h34, 8'h36,
+          8'h40, 8'h42, 8'h44, 8'h46:
+                                     io_term = TERM_PLUS;
+          8'h60, 8'h62, 8'h64, 8'h68, 8'h6a, 8'h6c,
+          8'h70, 8'h72, 8'h74, 8'h76, 8'h7a, 8'h7c,
+          8'ha0, 8'ha2, 8'ha4, 8'ha6, 8'ha8, 8'hac:
+                                     io_term = TERM_MINUS;
+          8'h20, 8'h22, 8'h24, 8'h26: io_term = TERM_EXT08;
+          default:                   io_term = TERM_NONE;
+        endcase
+        else io_term = TERM_NONE;
     endfunction
 
     wire cur_1cyc  = word_1cyc(cur_bs, cur_addr, cur_ube_n);
-    wire last_byte = cur_1cyc || (byte_idx == 2'd1) || !cur_word;
+    // A classified I/O port ends the pair after its one byte -- the odd
+    // half is the termination's business, not port+1's.
+    wire last_byte = cur_1cyc || (byte_idx == 2'd1) || !cur_word
+                  || (cur_word && (cur_term != TERM_NONE));
 
     wire bus_ours = (address_enable_n == 1'b0);
 
@@ -392,6 +451,7 @@ module v30_cpu_bridge (
     wire [19:0] srv_addr  = srv_queue ? wr_q_addr[0] : cyc_addr;
     wire        srv_ube   = srv_queue ? wr_q_ube [0] : cyc_ube_n;
     wire [15:0] srv_data  = srv_queue ? wr_q_data[0] : 16'h0000;
+    wire [2:0]  srv_term  = io_term(srv_bs, srv_addr, srv_ube);
 
     // The engine may drive the 8288 world while the core is parked, or
     // while no cycle is out at all (between cycles, or halted).
@@ -422,6 +482,7 @@ module v30_cpu_bridge (
             cur_addr         <= 20'h0;
             cur_ube_n        <= 1'b1;
             cur_data         <= 16'h0;
+            cur_term         <= TERM_NONE;
             processor_status <= BS_PASV;
             ad_out           <= 20'h0;
             cpu_data_bus     <= 8'h00;
@@ -438,7 +499,13 @@ module v30_cpu_bridge (
                     cur_addr         <= srv_addr;
                     cur_ube_n        <= srv_ube;
                     cur_data         <= srv_data;
-                    processor_status <= srv_bs;
+                    cur_term         <= srv_term;
+                    // TERM_WORD swallows the whole access: the bus cycle
+                    // still runs (the queue and the finish mechanics want
+                    // one), but a passive status means the 8288 never
+                    // pulses a strobe, so no port sees it happen.
+                    processor_status <= (srv_term == TERM_WORD)
+                                      ? BS_PASV : srv_bs;
                     ad_out           <= srv_byte_addr;
                     cpu_data_bus     <= srv_byte_data;
                     // Held from here to the end of the pair, because RAM.sv
@@ -486,9 +553,26 @@ module v30_cpu_bridge (
                     if (last_byte) begin
                         if (!from_queue) begin
                             // The parked READ is done: assemble what the
-                            // core will capture at its next CE edge.
+                            // core will capture at its next CE edge. A
+                            // terminated word I/O read answers its byte
+                            // plus the class's upper lane (np21w
+                            // iocore_inp16): ACTIVE's upper is the lane
+                            // that was not driven, which np21w models as
+                            // AX's old top -- the closest thing this side
+                            // of the core's registers is the last value
+                            // the bridge itself returned.
                             if (cur_bs == BS_INTA)
                                 v30_data_i <= {8'h00, rd_lo};
+                            else if (cur_term == TERM_WORD)
+                                v30_data_i <= 16'h2588;
+                            else if (cur_term == TERM_ACTIVE)
+                                v30_data_i <= {v30_data_i[15:8], rd_lo};
+                            else if (cur_term == TERM_PLUS)
+                                v30_data_i <= {8'hFF, rd_lo};
+                            else if (cur_term == TERM_MINUS)
+                                v30_data_i <= {8'h00, rd_lo};
+                            else if (cur_term == TERM_EXT08)
+                                v30_data_i <= {8'h08, rd_lo};
                             else if (cur_word)
                                 v30_data_i <= {rd_hi, rd_lo};
                             else
@@ -509,6 +593,9 @@ module v30_cpu_bridge (
             endcase
         end
     end
+
+    assign dbg = {parked, cyc_active, bstate, wr_count, byte_idx,
+                  t_cnt, gap_cnt, cur_bs};
 
 endmodule
 

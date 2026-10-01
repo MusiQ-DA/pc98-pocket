@@ -32,6 +32,9 @@ module tb_draw_boot;
     wire        m_cen, m_cblink;
     wire [4:0]  m_ctop, m_cbot;
 
+    wire        s_draw_req, m_draw_req;
+    wire  [7:0] s_draw_op;
+
     pc98_gdc #(.MASTER(0)) gs (
         .clk(clk), .reset(reset),
         .cs(cs_s), .a1(a1_s), .io_read_n(io_read_n), .io_write_n(io_write_n),
@@ -39,7 +42,7 @@ module tb_draw_boot;
         .disp_on(s_disp_on), .pitch(s_pitch), .part_sad(s_sad), .part_len(s_len),
         .cursor_addr(s_caddr), .cursor_dot(), .cursor_en(), .cursor_blink_en(),
         .cursor_top(), .cursor_bottom(), .cursor_rate(), .zoom_disp(),
-        .draw_req(), .draw_op(), .draw_busy(),
+        .draw_req(s_draw_req), .draw_op(s_draw_op), .draw_busy(),
         .srv_done_stb(1'b0), .draw_snap());
     pc98_gdc #(.MASTER(1)) gm (
         .clk(clk), .reset(reset),
@@ -49,7 +52,7 @@ module tb_draw_boot;
         .cursor_addr(m_caddr), .cursor_dot(), .cursor_en(m_cen),
         .cursor_blink_en(m_cblink), .cursor_top(m_ctop), .cursor_bottom(m_cbot),
         .cursor_rate(), .zoom_disp(),
-        .draw_req(), .draw_op(), .draw_busy(),
+        .draw_req(m_draw_req), .draw_op(), .draw_busy(),
         .srv_done_stb(1'b0), .draw_snap());
 
     int errors = 0;
@@ -104,6 +107,42 @@ module tb_draw_boot;
         want("cursor top 0",          m_ctop,   0);
         want("cursor bottom 15",      m_cbot,   15);
         want("cursor cell 480",       m_caddr,  16'd480);
+
+        // ---------- WDAT: the 0x20 family, np21w gdc_work's decode -------
+        // The command byte itself lands in para[53] (GDC_WRITE, what
+        // vectdraw later reads as the op); the type field says how many
+        // CODE parameters follow -- a word-mode WDAT (0x20) wants two --
+        // and the slave fires the drawing server when the run completes.
+        sc(8'h49); sp(8'h40); sp(8'h00); sp(8'h00); // CSRW EAD = 0x0040
+        sc(8'h4C); sp(8'h00); sp(8'h03); sp(8'h00); // VECTW: DC = 3
+        repeat (8) sp(8'h00);                        // the rest of VECTW
+        sc(8'h4A); sp(8'hFF); sp(8'hFF);             // MASK = 0xFFFF
+        sc(8'h20);                                   // WDAT, word, replace
+        sp(8'h34);                                   // CODE0
+        want("slave para[53]=cmd",      gs.para[53], 8'h20);
+        want("no draw before last par", s_draw_req,  0);
+        sp(8'h12);                                   // CODE1: the run completes
+        repeat (2) @(posedge clk);
+        want("WDAT fires on last param", s_draw_req, 1);
+        want("draw_op is the WDAT cmd",  s_draw_op,  8'h20);
+        want("CODE0 landed",            gs.para[54], 8'h34);
+        want("CODE1 landed",            gs.para[55], 8'h12);
+
+        // RDAT (0xA0): the family absorbs its parameters the same way but
+        // never dispatches -- np21w leaves the read-back FIFO empty too.
+        // (s_draw_req is still high from the WDAT above; nobody retired it.)
+        sc(8'hA0);
+        want("RDAT stores para[53]",    gs.para[53], 8'hA0);
+        sp(8'h00); sp(8'h00);           // RDAT's two CODE slots, absorbed
+        repeat (2) @(posedge clk);
+        want("RDAT never fires",        s_draw_req,  1); // still the WDAT one
+
+        // The master's own WDAT run is absorbed without a draw, np21w's
+        // GDCWORK_MASTER scoping -- params land, the request port stays low.
+        mc(8'h20); mp(8'h55); mp(8'h66);
+        want("master para[53]=cmd",     gm.para[53], 8'h20);
+        want("master CODE0 landed",     gm.para[54], 8'h55);
+        want("master never draws",      m_draw_req,  0);
 
         if (errors == 0) $display("PASS tb_draw_boot");
         else             $display("FAIL tb_draw_boot (%0d)", errors);

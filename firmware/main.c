@@ -54,8 +54,14 @@ int main(void)
     // Fill the OPNA rhythm store while the guest is still held: the six ADPCM-A
     // voices then play from the first key-on instead of mid-boot. Returns 0
     // when rhythm.bin is absent or the build is slim -- the service loop
-    // retries anyway in case the deferload binding lands late.
+    // retries anyway in case the deferload binding lands late. An OPNA-less
+    // build has no voices to fill, so it compiles no loader at all.
+#ifdef ENABLE_OPNA
     uint32_t rhythm_done = rhythm_load();
+    // The drive-noise kit encodes into the rhythm store's upper half; same
+    // chunked loader, retried in the loop for late-bound fddsnd.bin.
+    uint32_t drive_done  = drive_sound_load();
+#endif
 
     scsi_init();
 
@@ -82,9 +88,14 @@ int main(void)
         if (!settings_sized) {
             settings_sized = slot_declare_size(SETTINGS_SLOT_ID, SETTINGS_SLOT_BYTES);
         }
+#ifdef ENABLE_OPNA
         if (!rhythm_done) {
             rhythm_done = rhythm_load();
         }
+        if (!drive_done) {
+            drive_done = drive_sound_load();
+        }
+#endif
 
         uint32_t rebind = *FDD_REBIND;
         if (!mounted_a || ((rebind ^ rebind_seen) & FDD0_REBIND_BIT)) {
@@ -117,24 +128,33 @@ int main(void)
         // models it (the benches have no softcore). With nothing mounted
         // there is nothing to poll: gate the traffic on a disk being present,
         // and a diskless boot runs with the guest bus entirely its own.
-        if (mounted_a || mounted_b)
+        if (mounted_a || mounted_b) {
             fdd_poll();
+#ifdef ENABLE_OPNA
+            // Mechanism noise follows the drives' event taps; nothing to
+            // poll while nothing is mounted.
+            drive_sound_poll();
+#endif
+        }
         gdc_poll();
-        if (mounted_hdd)
-            scsi_poll();
+        // scsi_poll stays unconditional: the option ROM posts TEST UNIT READY
+        // at POST whether or not an image is mounted, and every post toggles
+        // cmd_req -- a toggle nobody acks leaves scsi_request (and so the
+        // disk lamp) high forever, which is exactly what a diskless boot
+        // showed. When idle the poll is a single register read; when no image
+        // is fitted the service answers NOT READY, which also frees the guest
+        // from each probe's timeout wait.
+        scsi_poll();
         settings_service(); // persist any OSD changes into the save window
 
-        // Quiet the polls.
-        //
-        // Every management-bus access takes the guest's bus through the
-        // arbiter, so this loop was the only traffic this core added while the
-        // guest booted -- tens of thousands of holds a second, unmodelled by
-        // any bench and new since the last build that reached BASIC (the GDC
-        // engine and the disk service are both recent). ~1 ms of spacing keeps
-        // the FDD far inside its budget (a 1024-byte sector every ~16 ms) and
-        // the GDC engine inside its draw latency, and cuts the hold rate ~100x.
-        for (volatile uint32_t q = 0; q < 40000u; q++) {
-        }
+        // No idle spacing: every poll above goes through the softcore's own
+        // register files (the mgmt mailbox is a dedicated port on
+        // PERIPHERALS, not a guest-bus cycle), so an idle pass costs the
+        // guest nothing and a sleep only stretches whatever is in flight.
+        // Between a sector drain and the controller's next request the
+        // request line is low for ~1 ms -- a slept pass used to sit out
+        // that whole window, and at 40000 iterations the "spacing" was
+        // ~100 ms per idle pass, several times a real 2HD sector period.
     }
 
     return 0;

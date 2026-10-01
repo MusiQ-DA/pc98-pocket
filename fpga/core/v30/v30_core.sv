@@ -131,6 +131,26 @@ module v30_core (
     output    [223:0] dbg_regs     // ip slot holds the retired-instruction IP
     ,
     output            dbg_first_pop
+    ,
+    // EU/BIU interlock view for the JTAG probe: on a wedged core this is
+    // what separates "halted", "EU waits on a queue byte" and "the EU asked
+    // for a cycle the BIU never launched" -- none of which show on the pins.
+    output    [15:0]  dbg_core,
+    // dbg_core2 is the posted access itself: the address+segment the EU is
+    // trying to reach and the post/slot handshake state around it.
+    output    [31:0]  dbg_core2,
+    // dbg_core3 is the BIU's own launch-law registers -- which pending/slot/
+    // commit bit is sitting on a posted access that never reaches the pins.
+    output    [31:0]  dbg_core3,
+    // dbg_core4 is the EU's own stall ledger: the microcode row it is on
+    // ({upc_page,upc_opc,upc_loc}) plus the outstanding-access counters and
+    // wait-condition wires that decide whether that row ever advances.
+    output    [31:0]  dbg_core4,
+    // dbg_core5/6 are the prefetch queue's raw bytes and the live fetch
+    // pointer -- the wedged instruction stream, byte for byte, for a
+    // fingerprint match against the ROM the ITF copied it from.
+    output    [31:0]  dbg_core5,
+    output    [31:0]  dbg_core6
 `ifdef V30_BACKDOOR
     // The BIU's pending-bus-cycle flag, a backdoor-only debug leg. Declared
     // here so the guarded connection below binds a PORT and not Verilator's
@@ -404,7 +424,10 @@ v30u_biu u_biu (
     .ss_wdata   (ss_wdata_q),
     .ss_we      (ss_we_q),
     .ss_rdata   (ss_biu_rdata),
-    .ss_bus_quiet(ss_biu_bus_quiet)
+    .ss_bus_quiet(ss_biu_bus_quiet),
+    .dbg        (dbg_core3),
+    .dbg2       (dbg_core5),
+    .dbg3       (dbg_core6)
 );
 
 v30u_eu u_eu (
@@ -481,6 +504,7 @@ v30u_eu u_eu (
 `endif
     .dbg_regs      (dbg_regs),
     .dbg_first_pop (dbg_first_pop),
+    .dbg_eu        (dbg_core4),
     .ss_addr    (ss_addr_q),
     .ss_wdata   (ss_wdata_q),
     .ss_we      (ss_we_q),
@@ -516,5 +540,19 @@ assign AD_OE = {{4{ad_oe_addr | ad_oe_ps}}, {16{ad_oe_addr | ad_oe_data}}};
 // BUSLOCK is not implemented (inherited scope note; the FSM core drives it
 // from the EU's LOCK prefix, which U2 restores).
 assign BUSLOCK_N = 1'b1;
+
+// The probe's EU/BIU wedge window. eu_bs is the cycle the EU is ASKING for
+// (distinct from the BS pins the BIU launched); q_cnt/q_ripe say whether a
+// queued byte exists and is offered; halted is the tell-tale for HLT.
+assign dbg_core = {biu_halted, q_ripe, q_ripe_lead_n, q_cnt,
+                   eu_bs, eu_pop, eu_flush, eu_susp, eu_halt,
+                   eu_rd_done_n, eu_wr_done_n};
+
+// The posted access the BIU is ignoring, and why it might be: eu_addr/eu_seg
+// is the operand target, the rest is the slot/post handshake.
+assign dbg_core2 = {1'b0, eu_addr, eu_seg,
+                    eu_post, eu_post_hold, eu_access_active,
+                    eu_slot_busy, eu_slot_busy_n, eu_split,
+                    eu_word, eu_pair, eu_opr_free};
 
 endmodule

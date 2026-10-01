@@ -30,7 +30,8 @@ module tb_pc98_text;
     // that the numbers the renderer receives put the block on the right cell.
     logic        gdc_on = 1'b0;      // fallback: 80 columns from cell 0
     logic [7:0]  gdc_pitch = 8'd0;
-    logic [15:0] gdc_sad = 16'd0;
+    logic [15:0] gdc_sad [0:3] = '{default: 16'd0};
+    logic [9:0]  gdc_len [0:3] = '{default: 10'd0};
     logic [15:0] cur_addr = 16'd0;
     logic        cur_en = 1'b0, cur_blink = 1'b0;
     logic [4:0]  cur_top = 5'd0, cur_bot = 5'd0;
@@ -47,13 +48,15 @@ module tb_pc98_text;
     pc98_text_render dut (
         .clk(clk), .pix_ce(pix_ce), .hcount(hcount), .vcount(vcount),
         .blink_on(blink_on),
-        .gdc_on(gdc_on), .gdc_pitch(gdc_pitch), .gdc_sad(gdc_sad),
+        .gdc_on(gdc_on), .gdc_pitch(gdc_pitch),
+        .gdc_sad(gdc_sad), .gdc_len(gdc_len),
         .wide(wide),
         .cur_addr(cur_addr), .cur_en(cur_en), .cur_blink(cur_blink),
         .cur_top(cur_top), .cur_bot(cur_bot),
         .tv_cell(tv_cell), .tv_attr(tv_attr),
         .font_cell(font_cell), .font_line(font_line), .font_row(font_row),
-        .grb(grb), .pixel(pixel)
+        .grb(grb), .pixel(pixel),
+        .crtc_pl(5'd0), .crtc_bl(5'h0F), .crtc_cl(5'h10), .line_rep(5'h0F)
     );
 
     // A screen: every cell holds the same character and attribute, which is
@@ -100,10 +103,21 @@ module tb_pc98_text;
     end
 
     // Run to the given pixel of the given line and sample.
+    int cur_y = 0;
     task automatic goto(input int x, input int y);
+        // Walk the lines one at a time: the renderer tracks (row, raster)
+        // with the beam, it cannot teleport, and neither can the real
+        // timing source.
+        while (cur_y != y) begin
+            vcount = 10'(cur_y);
+            hcount = 10'd0;
+            @(posedge clk);
+            @(posedge clk);
+            cur_y = (cur_y == 10'd439) ? 0 : cur_y + 1;
+        end
+        vcount = 10'(y);
         // Walk from the start of the line so the cell pipeline fills the way it
         // does in hardware.
-        vcount = 10'(y);
         for (int i = 0; i <= x; i++) begin
             hcount = 10'(i);
             @(posedge clk);

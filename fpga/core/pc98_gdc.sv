@@ -107,21 +107,23 @@ module pc98_gdc #(
     output wire [9:0]  vlines,
 
     // ---- the drawing server (the softcore's GDC engine) ---------------------
-    // EXECUTE-class commands (VECTE 0x6C, TEXTE 0x68) stop being counted as
-    // unknown and land here instead: the snapshot ports hand the softcore the
-    // opcode and the whole parameter file, and the done port returns the
-    // engine's final EAD (the drawing cursor moves). While a snapshot is
-    // pending or the server is drawing, the FIFO-empty status bit clears --
-    // the throttle a real 7220 applies through its FIFO depth, which is what
-    // software's "wait FIFO empty" loops are for.
-    output wire        draw_req,       // an EXECUTE awaits the server
+    // EXECUTE-class commands (VECTE 0x6C, TEXTE 0x68) and completed WDAT
+    // runs stop being counted as unknown and land here instead: the
+    // snapshot ports hand the softcore the opcode and the whole parameter
+    // file, and the done port returns the engine's final EAD (the drawing
+    // cursor moves). While a snapshot is pending or the server is drawing,
+    // the FIFO-empty status bit clears -- the throttle a real 7220 applies
+    // through its FIFO depth, which is what software's "wait FIFO empty"
+    // loops are for.
+    output wire        draw_req,       // a draw awaits the server
     output wire [7:0]  draw_op,
     output wire        draw_busy,      // status: the server is drawing
-    input  wire        srv_done_stb,   // the engine finished this EXECUTE
-    // The snapshot the engine reads, latched the moment the EXECUTE lands so
-    // the guest cannot race it: 19 bytes = VECTW (11), CSRW (4), TEXTW (2),
-    // ZOOM (1), the WRITE-mode byte (1). Served a word at a time.
-    output wire [31:0] draw_snap [0:4]
+    input  wire        srv_done_stb,   // the engine finished this draw
+    // The snapshot the engine reads, latched the moment the draw lands so
+    // the guest cannot race it: 23 bytes = VECTW (11), CSRW (4), TEXTW (2),
+    // ZOOM (1), the WRITE-mode byte (1), MASK (2), CODE (2). Served a word
+    // at a time.
+    output wire [31:0] draw_snap [0:5]
 );
 
     // ------------------------------------------------------------------
@@ -138,6 +140,8 @@ module pc98_gdc #(
     localparam int P_VECTW   = 32;
     localparam int P_CSRW    = 43;
     localparam int P_MASK    = 46;
+    localparam int P_WRITE   = 53;   // the last 0x20-family command byte (np21w GDC_WRITE)
+    localparam int P_CODE    = 54;   // WDAT/RDAT parameter bytes (np21w GDC_CODE)
     localparam int P_LAST    = 55;
 
     reg [7:0] para [0:P_LAST];
@@ -158,27 +162,31 @@ module pc98_gdc #(
     reg        draw_pending;
     reg [7:0]  draw_op_r;
     reg        draw_busy_r;
-    // 19 bytes of snapshot in 20 slots: draw_snap packs four to a word, so
-    // the last byte of word 4 is padding. It has to exist, or the pack below
+    // 23 bytes of snapshot in 24 slots: draw_snap packs four to a word, so
+    // the last byte of word 5 is padding. It has to exist, or the pack below
     // indexes past the array -- which Verilator allows and Quartus rejects.
-    reg [7:0]  snap [0:19];
+    reg [7:0]  snap [0:23];
     assign draw_req  = draw_pending;
     assign draw_op   = draw_op_r;
     assign draw_busy = draw_busy_r;
     genvar sk;
     generate
-        for (sk = 0; sk < 5; sk = sk + 1) begin : g_snap
+        for (sk = 0; sk < 6; sk = sk + 1) begin : g_snap
             assign draw_snap[sk] = {snap[4*sk+3], snap[4*sk+2], snap[4*sk+1], snap[4*sk]};
         end
     endgenerate
 
-    // Where each snapshot byte comes from.
+    // Where each snapshot byte comes from. The last four exist for the WDAT
+    // family: MASK and the CODE parameter bytes np21w's gdcsub_write reads.
     function automatic logic [5:0] snap_src(input int k);
-        if (k <= 10)     snap_src = 6'(P_VECTW + k);      // 32..42
+        if (k <= 10)     snap_src = 6'(P_VECTW + k);       // 32..42
         else if (k <= 14) snap_src = 6'(P_CSRW + k - 11);  // 43..46
         else if (k <= 16) snap_src = 6'(20 + k - 15);      // TEXTW 20..21
         else if (k == 17) snap_src = 6'(P_ZOOM);           // 8
-        else              snap_src = 6'd53;                // the WRITE mode
+        else if (k == 18) snap_src = 6'(P_WRITE);          // 53: the op byte
+        else if (k <= 20) snap_src = 6'(P_MASK + k - 19);  // 46..47
+        else if (k <= 22) snap_src = 6'(P_CODE + k - 21);  // 54..55
+        else              snap_src = 6'd0;                 // 23: the pad slot
     endfunction
 
     wire exec_cmd = (wr_d == 8'h6C)   // VECTE
@@ -197,6 +205,10 @@ module pc98_gdc #(
     // command cuts a run short, which is the point of np21w's bit-8 tag.
     reg [5:0] p_dst;
     reg [4:0] p_left;
+    // The run's class: a WDAT-write command (0x2x with the read/set bits
+    // the way np21w's (cmd & 0xe4) == 0x20 reads them) executes when its
+    // parameters complete; anything else just fills the store.
+    reg       p_wdat;
 
     reg       disp_on_r;
 
@@ -209,7 +221,15 @@ module pc98_gdc #(
         logic [5:0] d;
         logic [4:0] n;
         d = 6'd0; n = 5'd0;
-        casez (c)
+        if ((c & 8'h60) == 8'h20) begin
+            // The drawing family (np21w gdc_work's (data&0x60)==0x20):
+            // WDAT at 0x2x, RDAT at 0xAx. The command byte itself is stored
+            // into GDC_WRITE by the caller; the transfer's parameter bytes
+            // land in the CODE slots, 0-2 of them by the type field.
+            d = P_CODE[5:0];
+            n = (c[4:3] == 2'b00) ? 5'd2 :
+                (c[4:3] == 2'b01) ? 5'd0 : 5'd1;
+        end else casez (c)
             8'h00:          begin d = P_SYNC[5:0];    n = 5'd8;  end // RESET
             8'h0E, 8'h0F:   begin d = P_SYNC[5:0];    n = 5'd8;  end // SYNC off/on
             8'h46:          begin d = P_ZOOM[5:0];    n = 5'd1;  end // ZOOM
@@ -262,12 +282,13 @@ module pc98_gdc #(
         if (reset) begin
             p_dst     <= 6'd0;
             p_left    <= 5'd0;
+            p_wdat    <= 1'b0;
             disp_on_r <= 1'b0;
             rb_wr <= 3'd0;
             draw_pending <= 1'b0;
             draw_op_r    <= 8'h00;
             draw_busy_r  <= 1'b0;
-            for (i = 0; i <= 19; i = i + 1) snap[i] <= 8'h00;
+            for (i = 0; i <= 23; i = i + 1) snap[i] <= 8'h00;
             for (i = 0; i <= P_LAST; i = i + 1) para[i] <= 8'h00;
             // The CSRFORM power-on values, and why the cursor is nothing
             // without them: the BIOS's boot sends CSRFORM as ONE byte --
@@ -290,24 +311,28 @@ module pc98_gdc #(
                 para[P_CSRFORM + 0] <= 8'h01;
             end
         end else begin
-            // The server's completion: retire the request and run the
-            // post-command reset np21w's gdc_vectreset applies -- the 7220
-            // clears the vector parameters after every EXECUTE. Independent
-            // of the command port: the engine finishes on its own clock.
+            // The server's completion: retire the request and, for the
+            // EXECUTE ops, run the post-command reset np21w's gdc_vectreset
+            // applies -- the 7220 clears the vector parameters after a
+            // figure draw. WDAT leaves them alone: gdcsub_write ends with
+            // DC still valid, and software that writes blocks back to back
+            // reprograms nothing between them.
             if (srv_done_stb || draw_timeouts) begin
                 draw_pending <= 1'b0;
                 draw_watch   <= 23'd0;
                 draw_busy_r  <= 1'b1;      // one-cycle hold for stability
-                para[P_VECTW + 1]  <= 8'h00;   // DC = 0
-                para[P_VECTW + 2]  <= 8'h00;
-                para[P_VECTW + 3]  <= 8'h08;   // D  = 8
-                para[P_VECTW + 4]  <= 8'h00;
-                para[P_VECTW + 5]  <= 8'h08;   // D2 = 8
-                para[P_VECTW + 6]  <= 8'h00;
-                para[P_VECTW + 7]  <= 8'hFF;   // D1 = FFFF
-                para[P_VECTW + 8]  <= 8'hFF;
-                para[P_VECTW + 9]  <= 8'hFF;   // DM = FFFF
-                para[P_VECTW + 10] <= 8'hFF;
+                if ((draw_op_r == 8'h6C) | (draw_op_r == 8'h68)) begin
+                    para[P_VECTW + 1]  <= 8'h00;   // DC = 0
+                    para[P_VECTW + 2]  <= 8'h00;
+                    para[P_VECTW + 3]  <= 8'h08;   // D  = 8
+                    para[P_VECTW + 4]  <= 8'h00;
+                    para[P_VECTW + 5]  <= 8'h08;   // D2 = 8
+                    para[P_VECTW + 6]  <= 8'h00;
+                    para[P_VECTW + 7]  <= 8'hFF;   // D1 = FFFF
+                    para[P_VECTW + 8]  <= 8'hFF;
+                    para[P_VECTW + 9]  <= 8'hFF;   // DM = FFFF
+                    para[P_VECTW + 10] <= 8'hFF;
+                end
             end else if (draw_busy_r) begin
                 draw_busy_r <= 1'b0;
             end else if (draw_pending) begin
@@ -320,6 +345,15 @@ module pc98_gdc #(
                 p_dst  <= dn[10:5];
                 p_left <= dn[4:0];
 
+                // np21w stores the drawing-family byte itself in GDC_WRITE
+                // (para[53] -- vectdraw reads it as the write op), and a
+                // WDAT-write variant's run is armed to fire when its
+                // parameters complete. A new command rewrites both -- a run
+                // cut short by the next command simply never fires.
+                p_wdat <= (wr_d & 8'he4) == 8'h20;
+                if ((wr_d & 8'h60) == 8'h20)
+                    para[P_WRITE] <= wr_d;
+
                 // EXECUTE-class: hand it to the drawing server. The snapshot
                 // lands with the latch; further EXECUTEs while pending are
                 // dropped (the FIFO-empty bit is already clear, so software
@@ -327,9 +361,9 @@ module pc98_gdc #(
                 if (exec_cmd && !draw_pending && !draw_busy_r) begin
                     draw_pending <= 1'b1;
                     draw_op_r    <= wr_d;
-                    for (i = 0; i <= 18; i = i + 1)
+                    for (i = 0; i <= 22; i = i + 1)
                         snap[i] <= para[snap_src(i)];
-                    snap[19] <= 8'h00;                 // the pad byte
+                    snap[23] <= 8'h00;                 // the pad byte
                 end
 
                 // CSRR: five bytes off CSRW, np21w's fill verbatim -- the
@@ -368,6 +402,24 @@ module pc98_gdc #(
                     para[p_dst] <= wr_d;
                     p_dst       <= p_dst + 6'd1;
                     p_left      <= p_left - 5'd1;
+
+                    // A WDAT-write run executes as its last parameter
+                    // lands -- np21w's rcv countdown firing gdcsub_write,
+                    // slave side only (the master's run is absorbed like
+                    // RDAT's: parameters taken, nothing drawn, and the
+                    // read-back FIFO stays empty so IN reads 0xFF either
+                    // way). The byte in flight is the last CODE slot's
+                    // contents, so it is merged into the snapshot instead
+                    // of latched a cycle stale.
+                    if ((p_left == 5'd1) && p_wdat && !MASTER
+                        && !draw_pending && !draw_busy_r) begin
+                        draw_pending <= 1'b1;
+                        draw_op_r    <= para[P_WRITE];
+                        for (i = 0; i <= 22; i = i + 1)
+                            snap[i] <= (snap_src(i) == p_dst)
+                                     ? wr_d : para[snap_src(i)];
+                        snap[23] <= 8'h00;
+                    end
                 end
             end
         end

@@ -1,108 +1,208 @@
 {
-    "data": {
-        "magic": "APF_VER_1",
-        "data_slots": [
-            {
-                "name": "BIOS ROM",
-                "id": "200",
-                "required": true,
-                "parameters": 0,
-                "filename": "bios.rom",
-                "extensions": [
-                    "rom"
-                ],
-                "size_maximum": 98304,
-                "address": "0x10000000"
-            },
-            {
-                "name": "Font ROM",
-                "id": "201",
-                "required": true,
-                "parameters": 0,
-                "filename": "font.rom",
-                "extensions": [
-                    "rom",
-                    "bin"
-                ],
-                "size_maximum": 1048576,
-                "address": "0x20000000"
-            },
-            {
-                "name": "Sound ROM",
-                "id": "202",
-                "required": false,
-                "parameters": 0,
-                "filename": "sound.rom",
-                "extensions": [
-                    "rom",
-                    "bin"
-                ],
-                "size_maximum": 131072
-            },
-            {
-                "name": "Floppy 1",
-                "id": "210",
-                "required": false,
-                "parameters": 1,
-                "extensions": [
-                    "d88",
-                    "d98",
-                    "fdi",
-                    "fdd",
-                    "2hd",
-                    "tfd",
-                    "hdm",
-                    "xdf"
-                ],
-                "size_maximum": 8388608,
-                "deferload": true
-            },
-            {
-                "name": "Floppy 2",
-                "id": "211",
-                "required": false,
-                "parameters": 1,
-                "extensions": [
-                    "d88",
-                    "d98",
-                    "fdi",
-                    "fdd",
-                    "2hd",
-                    "tfd",
-                    "hdm",
-                    "xdf"
-                ],
-                "size_maximum": 8388608,
-                "deferload": true
-            },
-            {
-                "name": "Hard Disk 1",
-                "id": "310",
-                "required": false,
-                "parameters": 1,
-                "extensions": [
-                    "hdi",
-                    "nhd",
-                    "thd",
-                    "hdd",
-                    "hdn"
-                ],
-                "deferload": true
-            },
-            {
-                "name": "Hard Disk 2",
-                "id": "311",
-                "required": false,
-                "parameters": 1,
-                "extensions": [
-                    "hdi",
-                    "nhd",
-                    "thd",
-                    "hdd",
-                    "hdn"
-                ],
-                "deferload": true
-            }
-        ]
-    }
+  "data": {
+    "magic": "APF_VER_1",
+    "data_slots": [
+      {
+        "name": "PC-98 BIOS",
+        "id": 1,
+        "required": true,
+        "parameters": "0x202",
+        "filename": "bios.rom",
+        "extensions": [
+          "rom",
+          "bin"
+        ],
+        "address": "0x10000000",
+        "size_maximum": "0x18000"
+      },
+      {
+        "name": "PC-98 ITF",
+        "id": 2,
+        "required": true,
+        "parameters": "0x202",
+        "filename": "itf.rom",
+        "extensions": [
+          "rom",
+          "bin"
+        ],
+        "address": "0x10020000",
+        "size_maximum": "0x8000"
+      },
+      {
+        "name": "PC-98 Font",
+        "id": 11,
+        "required": true,
+        "parameters": "0x202",
+        "filename": "font.rom",
+        "extensions": [
+          "rom",
+          "bin"
+        ],
+        "address": "0x10100000",
+        "size_maximum": "0x46800"
+      },
+      {
+        "name": "Firmware",
+        "id": 12,
+        "required": false,
+        "parameters": "0x202",
+        "filename": "firmware.bin",
+        "extensions": [
+          "bin"
+        ],
+        "address": "0x10040000",
+        "size_maximum": "0xC000"
+      },
+      {
+        "name": "Settings",
+        "id": 7,
+        "required": false,
+        "parameters": "0x22",
+        "nonvolatile": true,
+        "filename": "settings.dat",
+        "extensions": [
+          "dat"
+        ],
+        "address": "0x60000200",
+        "size_maximum": "0x200"
+      },
+      {
+        "name": "Floppy A",
+        "id": 3,
+        "required": false,
+        "parameters": "0x201",
+        "extensions": [
+          "hdm",
+          "fdi",
+          "d88",
+          "fdd"
+        ],
+        "size_maximum": 8388608,
+        "deferload": true
+      },
+      {
+        "name": "Floppy B",
+        "id": 4,
+        "required": false,
+        "parameters": "0x201",
+        "extensions": [
+          "hdm",
+          "fdi",
+          "d88",
+          "fdd"
+        ],
+        "size_maximum": 8388608,
+        "deferload": true
+      },
+      {
+        "name": "Hard Disk",
+        "id": 5,
+        "required": false,
+        "parameters": "0x201",
+        "extensions": [
+          "hdi",
+          "nhd",
+          "thd",
+          "hdd"
+        ],
+        "deferload": true
+      },
+      {
+        "name": "Rhythm PCM",
+        "id": 13,
+        "required": false,
+        "parameters": 0,
+        "filename": "rhythm.bin",
+        "extensions": [
+          "bin"
+        ],
+        "size_maximum": "0x4000",
+        "deferload": true
+      },
+      {
+        "name": "Rhythm BD",
+        "id": 14,
+        "required": false,
+        "parameters": 0,
+        "filename": "2608_bd.wav",
+        "extensions": [
+          "wav"
+        ],
+        "size_maximum": "0x400000",
+        "deferload": true
+      },
+      {
+        "name": "Rhythm SD",
+        "id": 15,
+        "required": false,
+        "parameters": 0,
+        "filename": "2608_sd.wav",
+        "extensions": [
+          "wav"
+        ],
+        "size_maximum": "0x400000",
+        "deferload": true
+      },
+      {
+        "name": "Rhythm TOP",
+        "id": 16,
+        "required": false,
+        "parameters": 0,
+        "filename": "2608_top.wav",
+        "extensions": [
+          "wav"
+        ],
+        "size_maximum": "0x400000",
+        "deferload": true
+      },
+      {
+        "name": "Rhythm HH",
+        "id": 17,
+        "required": false,
+        "parameters": 0,
+        "filename": "2608_hh.wav",
+        "extensions": [
+          "wav"
+        ],
+        "size_maximum": "0x400000",
+        "deferload": true
+      },
+      {
+        "name": "Rhythm TOM",
+        "id": 18,
+        "required": false,
+        "parameters": 0,
+        "filename": "2608_tom.wav",
+        "extensions": [
+          "wav"
+        ],
+        "size_maximum": "0x400000",
+        "deferload": true
+      },
+      {
+        "name": "Rhythm RIM",
+        "id": 19,
+        "required": false,
+        "parameters": 0,
+        "filename": "2608_rim.wav",
+        "extensions": [
+          "wav"
+        ],
+        "size_maximum": "0x400000",
+        "deferload": true
+      },
+      {
+        "name": "FDD Sound",
+        "id": 20,
+        "required": false,
+        "parameters": "0x2",
+        "filename": "fddsnd.bin",
+        "extensions": [
+          "bin"
+        ],
+        "size_maximum": "0x8000",
+        "deferload": true
+      }
+    ]
+  }
 }

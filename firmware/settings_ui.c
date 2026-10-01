@@ -1,5 +1,7 @@
 #include "settings_ui.h"
 
+#include <stddef.h>
+
 #include "dpad.h"
 #include "key_bind.h"
 #include "softcpu_regs.h"
@@ -58,15 +60,43 @@ enum {
     SET_SPK_VOL,
     SET_STEREO,
     SET_DISPLAY,
-    // Hardware
-    SET_EMS,        // reserved -- slot kept for save compatibility
-    SET_EMS_FRAME,  // reserved -- same
+    // Hardware -- positionally, the way SET_MODE200's slot is Audio & Video
+    // below: this index was SET_EMS's reserved slot, and the blob stores
+    // values by index, so reusing it keeps the packed layout (and the
+    // per-disk table) unchanged. The resting value differs, though: this
+    // slot's is 1, not 0 -- the reserved entry's compiled default -- so the
+    // option table puts the default (Off) at index 1 and the FPGA inverts
+    // the bit. Every blob written while it sat reserved carries that Off;
+    // a v6/v7 blob written while the EMS row was still live can hold a 0,
+    // which reads as On -- rare, self-correcting, and the price of the slot.
+    SET_FDD_TURBO,
+    // Audio & Video again, positionally: this index was SET_EMS_FRAME's
+    // reserved slot -- the blob stores values by index, so reusing it keeps
+    // the packed layout (and the per-disk table) unchanged, and every blob
+    // written while it was reserved carries a 0 here anyway, which is this
+    // setting's default. The menu row itself is in items_av.
+    SET_MODE200,
     // Controls
     SET_DPAD,
     SET_GAMEPAD,
     // OSD
     SET_DISK_LED,
     SET_EXTMEM,
+    // Hardware -- appended above SET_COUNT, so a version-7 blob simply has no
+    // byte for this index and it keeps its compiled default on load. The menu
+    // row itself is in items_hw, right after FDD Turbo.
+    SET_DRV_SOUND,
+    // Machine -- appended above SET_COUNT, so a version-8 blob has no bytes
+    // for these indices and they keep their compiled defaults on load. The
+    // menu rows live in items_machine; the index order is the SET_IDX_*
+    // decode softcpu_subsystem composes the machine-config bytes from.
+    SET_TXT_LINES,
+    SET_TXT_COLS,
+    SET_BOOT_BSC,
+    SET_BOOT_DEV,
+    SET_RAM_SZ,
+    SET_DEL_BS,
+    SET_EXTROM,
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
@@ -86,6 +116,36 @@ static const char *const opt_dis_en[] = { "Disabled", "Enabled" };
 static const char *const opt_extmem[] = { "None", "2 MB", "4 MB", "8 MB" };
 static const char *const opt_display[] = { "Full Color", "Green", "Amber", "B&W", "Red", "Blue",
     "Fuchsia", "Purple" };
+// 200-line presentation on the fixed 400-line raster: Double serves each guest
+// line to a pair of rasterlines (today's picture); Skip blacks the second of
+// the pair -- the mabiki look a real 200-line program has on a 400-line field.
+// The values must match pocket_video's dbl_skip decode.
+static const char *const opt_mode200[] = { "Double", "Skip" };
+// FDD pacing: floppy.v's turbo relaxes the SRT step-train delay and the fixed
+// per-sector wait eightfold when the bit is set. The order is On-then-Off on
+// purpose -- blob slot 6's resting value is 1 (see the enum), which has to
+// mean Off -- and the softcore register inverts the index into the bit.
+static const char *const opt_fdd_turbo[] = { "On", "Off" };
+// Drive-mechanism noise: drive_sound.c reads the mode as the raw index -- 0
+// off, 1 the 5.25-inch cabinet, 2 the quieter 3.5-inch -- so the option order
+// maps straight onto the playback level. 5.25 is the default: the louder
+// mechanism the sample pack is built around.
+static const char *const opt_drv_sound[] = { "Off", "5.25\"", "3.5\"" };
+
+// The machine-config rows drive the dipsw2 / A3FE* compose bytes in
+// softcpu_subsystem, where the option index IS the decoded value: Boot
+// Device's packed list matches the boot_nib case exactly, and opt_ram_sz
+// puts 640 KB at index 0 because an unwritten register reads 0 and the RTL
+// maps any index outside 1-4 to the full 640 as well. Boot Order reads
+// disks-first at index 0 -- the RTL inverts it into dipsw2 bit 0.
+static const char *const opt_txt_lines[] = { "25 Lines", "20 Lines" };
+static const char *const opt_txt_cols[] = { "80 Cols", "40 Cols" };
+static const char *const opt_boot_bsc[] = { "Disks First", "ROM BASIC" };
+static const char *const opt_boot_dev[] = { "Standard", "640KB FDD", "1MB FDD", "ROM BASIC",
+    "HDD #1", "HDD #2", "SCSI HDD" };
+static const char *const opt_ram_sz[] = { "640 KB", "128 KB", "256 KB", "384 KB", "512 KB" };
+static const char *const opt_off_on[] = { "Off", "On" };
+static const char *const opt_extrom[] = { "Absent", "Present" };
 
 static const char *const opt_dpad[] = { "Numpad", "Numpad w/ Diag.", "Arrows", "WASD", "HJKL",
     "HJKL w/ YUBN" };
@@ -101,28 +161,38 @@ typedef struct {
 #define SETTING_D(a, d) { (a), (uint8_t) (sizeof(a) / sizeof((a)[0])), (d) }
 
 // Older blobs still load -- settings_load remaps their indices
-// through the version tables below -- and the next save writes version 6.
+// through the version tables below -- and the next save writes the
+// current version.
 static setting_t settings[SET_COUNT] = {
     // Index 1 is the faithful clock: a PC-9801VM/VX's V30 at 2.4576 MHz x4.
-    // The default is index 2 anyway, because v30_cpu_bridge splits every word
-    // access into two byte cycles on the 8-bit chipset -- about 12 CPU clocks
-    // where a real 16-bit V30 spends 4 -- so index 2 is the setting whose
-    // THROUGHPUT lands nearest a real 10 MHz machine, not index 1. Move the
-    // default down to 1 when the 16-bit memory path lands and the split goes
-    // away. At index 0 the ITF's 640 KB memory test is a long wait with nothing
-    // on screen but its own test pattern.
-    SETTING_D(opt_cpu, 2),    // SET_CPU_SPEED
+    // The SDRAM answers a guest word in one bus cycle, so
+    // index 1's throughput IS a real 10 MHz machine's -- index 2 is a roughly
+    // 2x step up, no longer a compensation for a split that went away. At
+    // index 0 the ITF's 640 KB memory test is a long wait with nothing on
+    // screen but its own test pattern.
+    SETTING_D(opt_cpu, 1),    // SET_CPU_SPEED
     SETTING(opt_bios_wr),     // SET_BIOS_WR
     SETTING(opt_boost),       // SET_BOOST
     SETTING(opt_level4),      // SET_SPK_VOL
     SETTING(opt_stereo),      // SET_STEREO
     SETTING(opt_display),     // SET_DISPLAY
-    SETTING_D(opt_dis_en, 1), // SET_EMS -- reserved, index kept for the save blob
-    SETTING_D(opt_dis_en, 0), // SET_EMS_FRAME -- same
+    SETTING_D(opt_fdd_turbo, 1), // SET_FDD_TURBO -- the reused slot; index 1 (Off) is its resting value
+    SETTING(opt_mode200),     // SET_MODE200 -- the reused slot; default Double
     SETTING_D(opt_dpad, DPAD_ARROWS), // SET_DPAD
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
     SETTING_D(opt_dis_en, 1), // SET_DISK_LED (default on)
     SETTING_D(opt_extmem, 3), // SET_EXTMEM (default 8 MB: the full SDRAM pool)
+    SETTING_D(opt_drv_sound, 1), // SET_DRV_SOUND -- the appended index; default 5.25"
+    // The v9-appended indices. Everything defaults to option 0 except Ext
+    // ROM: the SCSI option ROM at D2000 is always fitted, so the window
+    // ships Present.
+    SETTING(opt_txt_lines),      // SET_TXT_LINES
+    SETTING(opt_txt_cols),       // SET_TXT_COLS
+    SETTING(opt_boot_bsc),       // SET_BOOT_BSC
+    SETTING(opt_boot_dev),       // SET_BOOT_DEV
+    SETTING(opt_ram_sz),         // SET_RAM_SZ -- index 0, like an unwritten slot, means 640 KB
+    SETTING(opt_off_on),         // SET_DEL_BS
+    SETTING_D(opt_extrom, 1),    // SET_EXTROM
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
@@ -146,13 +216,14 @@ typedef struct {
     uint8_t arg;
 } item_t;
 
-enum { MENU_MAIN, MENU_SYSTEM, MENU_AV, MENU_HW, MENU_CONTROLS, MENU_COUNT };
+enum { MENU_MAIN, MENU_SYSTEM, MENU_AV, MENU_HW, MENU_MACHINE, MENU_CONTROLS, MENU_COUNT };
 enum { ACT_DEFAULTS, ACT_RESET_PC };
 
 static const item_t items_main[] = {
     { "System", IT_SUBMENU, MENU_SYSTEM },
     { "Audio & Video", IT_SUBMENU, MENU_AV },
     { "Hardware", IT_SUBMENU, MENU_HW },
+    { "Machine", IT_SUBMENU, MENU_MACHINE },
     { "Controls", IT_SUBMENU, MENU_CONTROLS },
     { "", IT_SPACER, 0 },
     { "Reset to Defaults", IT_ACTION, ACT_DEFAULTS },
@@ -172,6 +243,7 @@ static const item_t items_av[] = {
     { "Speaker Volume", IT_OPTION, SET_SPK_VOL },
     { "Stereo Mix", IT_OPTION, SET_STEREO },
     { "Display", IT_OPTION, SET_DISPLAY },
+    { "200-Line Mode", IT_OPTION, SET_MODE200 },
 };
 
 // The four joystick rows are gone with the game port: Peripherals answers
@@ -182,21 +254,39 @@ static const item_t items_av[] = {
 // The two Floppy rows are NOT stored settings: the drives' media lives in
 // fdd_service, the Pocket menu's data slots are the only way an image gets
 // in, and these rows show the live state and eject/re-insert it (A button).
-// SET_EMS/SET_EMS_FRAME stay in the enum and the save blob, same reason as
-// Boot Splash above.
+// SET_EMS's slot was reclaimed for SET_FDD_TURBO and SET_EMS_FRAME's for
+// SET_MODE200 -- the enum comments say why the blob layout is unchanged.
 static const item_t items_hw[] = {
     { "Floppy A", IT_FDD, 0 },
     { "Floppy B", IT_FDD, 1 },
+    { "FDD Turbo", IT_OPTION, SET_FDD_TURBO },
+    { "Drive Sound", IT_OPTION, SET_DRV_SOUND },
     { "", IT_SPACER, 0 },
     { "EMS", IT_OPTION, SET_EXTMEM },
     { "", IT_SPACER, 0 },
     { "Disk LED", IT_OPTION, SET_DISK_LED },
 };
 
+// The machine-config bytes: DIP SW2's text geometry and boot switches,
+// then the A3FE* system-control fields. RAM Size sits unseparated with the
+// DEL/Ext-ROM pair it shares those bytes with -- the panel's nine item
+// rows leave no room for a third spacer.
+static const item_t items_machine[] = {
+    { "Text Rows", IT_OPTION, SET_TXT_LINES },
+    { "Text Cols", IT_OPTION, SET_TXT_COLS },
+    { "", IT_SPACER, 0 },
+    { "Boot Order", IT_OPTION, SET_BOOT_BSC },
+    { "Boot Device", IT_OPTION, SET_BOOT_DEV },
+    { "", IT_SPACER, 0 },
+    { "RAM Size", IT_OPTION, SET_RAM_SZ },
+    { "DEL as BS", IT_OPTION, SET_DEL_BS },
+    { "Ext ROM D0000", IT_OPTION, SET_EXTROM },
+};
+
 // Gamepad Mode picks what controller 1 drives: the D-pad preset and button binds below take effect
 // only in its Keyboard mode. L1 is absent because it stays the fixed VKB toggle. Each button row
-// cycles its binding through Unmapped, the OSD functions, and a key (picked on the virtual
-// keyboard); see the IT_KEYBIND handling in settings_input.
+// cycles its binding through Unmapped, the OSD functions, the named key set in keybind_cycle, and a
+// "pick any key" slot (the virtual keyboard); see the IT_KEYBIND handling in settings_input.
 static const item_t items_controls[] = {
     { "Gamepad Mode", IT_OPTION, SET_GAMEPAD },
     { "D-pad", IT_OPTION, SET_DPAD },
@@ -222,6 +312,7 @@ static const menu_t menus[MENU_COUNT] = {
     MENU("System", items_system),
     MENU("Audio & Video", items_av),
     MENU("Hardware", items_hw),
+    MENU("Machine", items_machine),
     MENU("Controls", items_controls),
 };
 
@@ -254,18 +345,18 @@ static void draw_frame(void)
     }
 }
 
-// Names for the common keys a docked keyboard can bind that the 83-key virtual keyboard omits: the
-// E0-extended keys (ext = 1) and the 101-key extras (F11/F12, Print Screen,
-// Pause). Set-2 codes and ext flag per hid_to_ps2; anything rarer falls back to its raw code.
+// Names for keys a docked keyboard can bind that neither the 83-key virtual keyboard nor the
+// binding roller's keybind_cycle names: the E0 nav block past the arrows and the 101-key extras
+// (F11/F12, Print Screen, Pause). Set-2 codes and ext flag per hid_to_ps2; anything rarer falls
+// back to its raw code.
 static const struct {
     uint8_t ext;
     uint8_t code;
     const char *name;
-} extra_names[] = { { 1, 0x75, "Up" }, { 1, 0x72, "Down" }, { 1, 0x6B, "Left" },
-    { 1, 0x74, "Right" }, { 1, 0x6C, "Home" }, { 1, 0x69, "End" }, { 1, 0x7D, "PgUp" },
+} extra_names[] = { { 1, 0x6C, "Home" }, { 1, 0x69, "End" }, { 1, 0x7D, "PgUp" },
     { 1, 0x7A, "PgDn" }, { 1, 0x70, "Insert" }, { 1, 0x71, "Delete" }, { 1, 0x4A, "KP /" },
-    { 1, 0x5A, "KP Enter" }, { 1, 0x14, "R Ctrl" }, { 1, 0x11, "R Alt" }, { 0, 0x78, "F11" },
-    { 0, 0x07, "F12" }, { 0, 0xE2, "PrtSc" }, { 0, 0xE1, "Pause" } };
+    { 1, 0x5A, "KP Enter" }, { 0, 0x78, "F11" }, { 0, 0x07, "F12" }, { 0, 0xE2, "PrtSc" },
+    { 0, 0xE1, "Pause" } };
 
 // An unnamed key's raw Set-2 scancode in hex ("E0 " prefixing an extended one), so it stays
 // identifiable rather than blank.
@@ -285,8 +376,66 @@ static const char *hex_scancode(int ext, uint8_t code)
     return buf;
 }
 
-// The current binding for a button's row value: a function or Unmapped label, a plain key's
-// virtual-keyboard legend (blank-legend space bar named), a named extra key, else the raw scancode.
+// One row of the binding roller: the {ext, code} pair key_bind stores plus the name the row shows.
+// Real Set-2 make codes top out at 0xE2 (key_bind.c), so a code byte at 0xF0+ is free for sentinels
+// -- the BTNFN_* functions (BTNFN_* + 0xF0) and BIND_KEY_SLOT -- that no {ext, code} pair can spell.
+// A NULL name falls through to bind_name's own label (Unmapped, the function names, [Set key]).
+typedef struct {
+    uint8_t ext;
+    uint8_t code;
+    const char *name;
+} keybind_opt_t;
+
+#define BIND_KEY_SLOT 0xFFu // the roller's "pick a key" marker -- never a stored code
+
+// Left/Right on a binding row rolls this list: Unmapped, the OSD function, then the keys a PC-98
+// game is likeliest to want on a button -- action keys, modifiers, the cursor keys and the function
+// row -- and last a slot that opens the virtual keyboard as a picker instead of storing a code.
+//
+// The names are the PC-98 keys the codes ARRIVE AS (pc98_kbd_ps2's tables), not host-key names:
+// this board has no Alt and no right Ctrl -- a docked keyboard's left Alt is NFER, its right Alt
+// XFER, its right Ctrl GRPH -- so the roller offers the key the guest sees, and a docked-keyboard
+// pick of the same encoding displays the same name.
+static const keybind_opt_t keybind_cycle[] = {
+    { 0, 0x00, NULL },                 // Unmapped
+    { 0, 0xF0u + BTNFN_SETTINGS, NULL }, // Open Settings
+    { 0, 0x5A, "Return" },
+    { 0, 0x29, "Space" },
+    { 0, 0x76, "Esc" },
+    { 0, 0x1A, "Z" },
+    { 0, 0x22, "X" },
+    { 0, 0x21, "C" },
+    { 0, 0x12, "L Shift" },
+    { 0, 0x59, "R Shift" },
+    { 0, 0x14, "Ctrl" },
+    { 1, 0x14, "GRPH" },               // docked right Ctrl  -> PC-98 GRPH
+    { 0, 0x11, "NFER" },               // docked left Alt    -> PC-98 NFER
+    { 1, 0x11, "XFER" },               // docked right Alt   -> PC-98 XFER
+    { 0, 0x08, "STOP" },               // vkb_layout's synthetic code: makes and breaks cleanly,
+                                       // unlike a docked Pause's make-only 0xE1 sequence
+    { 0, 0x0D, "Tab" },
+    { 0, 0x66, "Backspace" },
+    { 1, 0x75, "Up" },
+    { 1, 0x72, "Down" },
+    { 1, 0x6B, "Left" },
+    { 1, 0x74, "Right" },
+    { 0, 0x05, "F1" },
+    { 0, 0x06, "F2" },
+    { 0, 0x04, "F3" },
+    { 0, 0x0C, "F4" },
+    { 0, 0x03, "F5" },
+    { 0, 0x0B, "F6" },
+    { 0, 0x83, "F7" },
+    { 0, 0x0A, "F8" },
+    { 0, 0x01, "F9" },
+    { 0, 0x09, "F10" },
+    { 0, BIND_KEY_SLOT, NULL },        // [Set key] -- A opens the VKB picker
+};
+#define KEYBIND_CYCLE_COUNT ((int) (sizeof(keybind_cycle) / sizeof(keybind_cycle[0])))
+
+// The current binding for a button's row value: a function or Unmapped label, a named roller key,
+// a plain key's virtual-keyboard legend (blank-legend space bar named), a named extra key, else
+// the raw scancode.
 static const char *bind_name(int btn)
 {
     switch (key_bind_function(btn)) {
@@ -302,6 +451,11 @@ static const char *bind_name(int btn)
         return "Unmapped";
     }
     int ext = key_bind_ext(btn);
+    for (int i = 0; i < KEYBIND_CYCLE_COUNT; i++) {
+        if (keybind_cycle[i].name && keybind_cycle[i].code == code && keybind_cycle[i].ext == ext) {
+            return keybind_cycle[i].name;
+        }
+    }
     if (!ext) {
         for (int i = 0; i < vkb_key_count; i++) {
             if (vkb_keys[i].scancode == code) {
@@ -317,24 +471,14 @@ static const char *bind_name(int btn)
     return hex_scancode(ext, code);
 }
 
-// A button binding row cycles through Unmapped, the OSD functions, and a final "pick a key" slot;
-// landing on that slot opens the key picker rather than storing a code. The functions carry their
-// BTNFN_* sentinel (BTNFN_* + 0xF0); BIND_KEY_SLOT is not a storable code.
-#define BIND_KEY_SLOT 0xFFu
-static const uint8_t keybind_cycle[] = {
-    0x00,                   // Unmapped
-    0xF0u + BTNFN_SETTINGS, // Open Settings
-    BIND_KEY_SLOT, // pick a key
-};
-#define KEYBIND_CYCLE_COUNT ((int) (sizeof(keybind_cycle) / sizeof(keybind_cycle[0])))
-
-// Which cycle slot a button's current binding sits on; a keyboard key (matching no code above)
-// rests on the final key slot.
+// Which cycle slot a button's current binding sits on; a key the roller does not offer (a VKB or
+// docked-keyboard pick) rests on the final key slot.
 static int keybind_slot(int btn)
 {
     uint8_t code = key_bind_code(btn);
+    int ext = key_bind_ext(btn);
     for (int i = 0; i < KEYBIND_CYCLE_COUNT; i++) {
-        if (keybind_cycle[i] == code) {
+        if (keybind_cycle[i].code == code && keybind_cycle[i].ext == ext) {
             return i;
         }
     }
@@ -392,9 +536,16 @@ static void draw_row(int i)
     osd_draw_string16(&panel, COL_LABEL * 8, y, it->label, OSD_LABEL);
     if (it->type == IT_OPTION) {
         const setting_t *s = &settings[it->arg];
-        osd_draw_string16(&panel, COL_VALUE * 8, y, s->opts[s->value], OSD_LABEL);
+        // Drive Sound has no hardware on a slim-OPNA build (OMGMT_CAPS
+        // bit0): the stored choice keeps its blob slot for the build that
+        // has the voices, but here the row reads N/A and cannot cycle.
+        if (it->arg == SET_DRV_SOUND && !drive_sound_present()) {
+            osd_draw_string16(&panel, COL_VALUE * 8, y, "N/A", OSD_DISABLED);
+        } else {
+            osd_draw_string16(&panel, COL_VALUE * 8, y, s->opts[s->value], OSD_LABEL);
+        }
     } else if (it->type == IT_KEYBIND) {
-        int on_key = keybind_cycle[keybind_sel[it->arg]] == BIND_KEY_SLOT;
+        int on_key = keybind_cycle[keybind_sel[it->arg]].code == BIND_KEY_SLOT;
         const char *val = (on_key && !keybind_is_key(it->arg)) ? "[Set key]" : bind_name(it->arg);
         osd_draw_string16(&panel, COL_VALUE * 8, y, val, OSD_LABEL);
     } else if (it->type == IT_SUBMENU) {
@@ -546,7 +697,10 @@ int settings_input(uint16_t pressed)
         // instructions in this firmware, on a device that is 97 per cent full
         // with the GDC still to come -- and a menu index is always already
         // inside its range, so one compare does what a modulo did.
-        if (pressed & BTN_RIGHT) {
+        // (No ADPCM-A voices on this build -> Drive Sound is display-only.)
+        if (it->arg == SET_DRV_SOUND && !drive_sound_present()) {
+            changed = 0;
+        } else if (pressed & BTN_RIGHT) {
             uint8_t v = (uint8_t) (s->value + 1u);
             s->value = (v >= s->count) ? 0u : v;
         } else if (pressed & BTN_LEFT) {
@@ -574,7 +728,7 @@ int settings_input(uint16_t pressed)
     } else if (it->type == IT_KEYBIND) {
         int btn = it->arg;
         int slot = keybind_sel[btn];
-        if ((pressed & BTN_A) && keybind_cycle[slot] == BIND_KEY_SLOT) {
+        if ((pressed & BTN_A) && keybind_cycle[slot].code == BIND_KEY_SLOT) {
             // Parked on the key slot: open the virtual keyboard as a key picker. It stores the key
             // and returns to this row, or leaves the binding unchanged if cancelled.
             vkb_ui_open_picker(btn);
@@ -582,7 +736,7 @@ int settings_input(uint16_t pressed)
             int dir = (pressed & BTN_RIGHT) ? 1 : (pressed & BTN_LEFT) ? -1 : 0;
             if (dir) {
                 // Remember the key being left so rolling back to the key slot restores it.
-                if (keybind_cycle[slot] == BIND_KEY_SLOT) {
+                if (keybind_cycle[slot].code == BIND_KEY_SLOT) {
                     keybind_remember(btn);
                 }
                 // dir is +1 or -1, so one step can leave the range by one.
@@ -590,11 +744,11 @@ int settings_input(uint16_t pressed)
                 if (slot < 0)                     slot = KEYBIND_CYCLE_COUNT - 1;
                 else if (slot >= KEYBIND_CYCLE_COUNT) slot = 0;
                 keybind_sel[btn] = (uint8_t) slot;
-                uint8_t code = keybind_cycle[slot];
-                if (code == BIND_KEY_SLOT) {
+                const keybind_opt_t *opt = &keybind_cycle[slot];
+                if (opt->code == BIND_KEY_SLOT) {
                     key_bind_set(btn, keybind_key[btn], (keybind_key_ext >> btn) & 1);
                 } else {
-                    key_bind_set(btn, code, 0);
+                    key_bind_set(btn, opt->code, opt->ext);
                 }
                 settings_mark_dirty();
                 draw_row(cur_row);
@@ -666,20 +820,52 @@ void settings_reset_tick(void)
 // back bridge-RAM residue, so the magic (not the version) says the table exists. Each entry is
 // {hash, ~hash, block}: hash is the mounted drive-A image's identity (fdd_service.c), ~hash is the
 // validity tag that keeps a half-written or stale slot from passing for a profile, and block is
-// the same five-word values+bindings packing the blob uses. While a disk is mounted saves go to
-// its entry and mounting applies it; with no disk mounted, saves and the live set are global.
+// the same values+bindings packing the blob uses. While a disk is mounted saves go to its entry
+// and mounting applies it; with no disk mounted, saves and the live set are global.
+//
+// VERSION 8 APPENDS ONE SETTING (index 12, drive sound), and a thirteenth
+// value crosses a word boundary: the block grows to six words, the global
+// blob to eight, and the table shifts up a word -- word 136, eight-word
+// entries, fourteen of which fit (136 + 1 + 14*8 = 249; version 7's table
+// ended exactly on the window's last word). Older blocks still load:
+// block_apply walks the header's stored value count, so a version-6/7
+// five-word block applies its twelve values and index 12 keeps its compiled
+// default. A version-7 table is carried across by table_migrate at load, and
+// the blob is rewritten at version 8 so the move runs once.
+//
+// VERSION 9 APPENDS SEVEN SETTINGS (indices 13-19, the Machine rows), and a
+// twentieth value crosses the next word boundary: the block grows to seven
+// words, the global blob to nine, and the table shifts up a word -- word
+// 137, nine-word entries, thirteen of which fit (137 + 1 + 13*9 = 255).
+// Older blocks still load the same way: a version-8 block applies its
+// thirteen values and indices 13-19 keep their compiled defaults. A
+// version-8 table is carried across by table_migrate at load -- only the
+// immediately-prior layout is, so a version-7 table drops -- and the blob
+// is rewritten at version 9 so the move runs once.
 #define SETTINGS_MAGIC   0x50435853u
-#define SETTINGS_VERSION 7u
+#define SETTINGS_VERSION 9u
 #define SETTINGS_WORD    128
 
-// The table occupies the rest of the window: magic at word 135, then seventeen
-// 7-word entries through word 254. TABLE_WORD + 1 + ENTRY_COUNT*ENTRY_WORDS =
-// 255, so the region ends exactly at the window's last word.
-#define TABLE_WORD   (SETTINGS_WORD + 7) // the global blob is seven words
-#define TABLE_MAGIC  0x504B5444u         // 'PKTD'
-#define BLOCK_WORDS  5                   // the packed values + bindings a profile is
-#define ENTRY_WORDS  (BLOCK_WORDS + 2)   // hash, ~hash, then the block
-#define ENTRY_COUNT  17
+// The block a profile is: the packed values, then the binding block (the
+// seven codes and the ext byte), everything four bytes per word.
+#define VALUE_WORDS ((SET_COUNT + 3) / 4)
+#define BIND_WORDS  ((BIND_COUNT + 1 + 3) / 4)
+#define BLOCK_WORDS (VALUE_WORDS + BIND_WORDS)
+
+// The table occupies the rest of the window: magic at TABLE_WORD, then the
+// entries through the window's last word at 255 -- thirteen 9-word entries
+// ending at word 254, the longer block leaving the tail unclaimed.
+#define TABLE_WORD   (SETTINGS_WORD + 2 + BLOCK_WORDS) // right after the global blob
+#define TABLE_MAGIC  0x504B5444u                       // 'PKTD'
+#define ENTRY_WORDS  (BLOCK_WORDS + 2)                 // hash, ~hash, then the block
+#define ENTRY_COUNT  ((255 - TABLE_WORD) / ENTRY_WORDS)
+
+// Version 8's table geometry, kept only to carry its entries across at load:
+// the blob was a word shorter (thirteen values pack into four words), so the
+// table began at word 136 and ran fourteen 8-word entries through word 248.
+#define V8_TABLE_WORD  (SETTINGS_WORD + 8)
+#define V8_ENTRY_WORDS 8
+#define V8_ENTRY_COUNT 14
 
 // Version 4's enum order: CPU, gfx0, gfx1, video-1st, BIOS-wr, splash, audio, boost, speaker, stereo,
 // C/MS, composite, display, EMS, EMS-frame, A000, joy1, joy2, swap-joy, sync-joy, d-pad, gamepad.
@@ -692,13 +878,15 @@ static const uint8_t v4_to_v5[22] = {
 #define SETTINGS_V4_COUNT 22
 
 // Version 5's enum order: CPU, BIOS-wr, boost, speaker, stereo, display, EMS, EMS-frame, A000,
-// d-pad, gamepad.
+// d-pad, gamepad. EMS lands nowhere: the slot is FDD turbo's now and a live
+// EMS row meant a 0 there was user-chosen, so the byte is dropped and the
+// slot keeps its default rather than reading the old switch as a speed pick.
 static const uint8_t v5_to_v6[11] = {
-    0, 1, 2, 3, 4, 5, 6, 7, 0xFF, 8, 9,
+    0, 1, 2, 3, 4, 5, 0xFF, 7, 0xFF, 8, 9,
 };
 #define SETTINGS_V5_COUNT 11
 
-// Write the live values+bindings as one five-word block at `addr`: SET_COUNT
+// Write the live values+bindings as one BLOCK_WORDS block at `addr`: the
 // values packed four per word, then the seven binding codes and the ext
 // bitmap. The layout the global blob and every per-disk entry share.
 static void block_write(uint32_t addr)
@@ -727,19 +915,24 @@ static void block_write(uint32_t addr)
     }
 }
 
-// Adopt a five-word block (the layout block_write makes) as the live settings
-// and bindings. Values are index-checked the way settings_load's are, so an
-// out-of-range byte keeps the index it had.
-static void block_apply(uint32_t addr)
+// Adopt a block (the layout block_write makes) as the live settings and
+// bindings. `count` is the value byte count the block was WRITTEN with -- the
+// blob header's count field, or SET_COUNT for a per-disk entry, which is
+// always current-version. The binding words follow ceil(count/4) value words,
+// so the read pointer walks the stored count even though only the first
+// SET_COUNT bytes can land: a version-6/7 block carries twelve, and index 12
+// keeps its compiled default. Values are index-checked the way
+// settings_load's are, so an out-of-range byte keeps the index it had.
+static void block_apply(uint32_t addr, uint32_t count)
 {
     *FDD_BRAM_ADDR = addr;
     uint32_t word = 0;
-    for (uint32_t i = 0; i < SET_COUNT; i++) {
+    for (uint32_t i = 0; i < count; i++) {
         if ((i & 3) == 0) {
             word = *FDD_BRAM_RDATA;
         }
         uint8_t v = (word >> ((i & 3) * 8)) & 0xFF;
-        if (v < settings[i].count) {
+        if (i < SET_COUNT && v < settings[i].count) {
             settings[i].value = v;
         }
     }
@@ -789,7 +982,7 @@ static void apply_global(void)
     uint32_t head = *FDD_BRAM_RDATA;
     uint32_t version = head & 0xFF;
     if (magic == SETTINGS_MAGIC && version >= 6 && version <= SETTINGS_VERSION) {
-        block_apply(SETTINGS_WORD + 2);
+        block_apply(SETTINGS_WORD + 2, (head >> 8) & 0xFF);
     } else {
         apply_defaults();
     }
@@ -835,6 +1028,96 @@ static int table_alloc(void)
     return e;
 }
 
+// Rewrite a version-8 table entry at new-format slot e: the hash pair and
+// the four value words through -- the old block's last value word pads
+// indices 13-15 with zeroes, which is every one of those settings'
+// compiled default -- then the appended indices 16-19 as one word of
+// compiled defaults packed the way block_write packs them, and the two
+// binding words unmoved.
+static void entry_write(int e, const uint32_t *b)
+{
+    *FDD_BRAM_ADDR = (uint32_t) (TABLE_WORD + 1 + e * ENTRY_WORDS);
+    *FDD_BRAM_WDATA = b[0];
+    *FDD_BRAM_WDATA = b[1];
+    *FDD_BRAM_WDATA = b[2];
+    *FDD_BRAM_WDATA = b[3];
+    *FDD_BRAM_WDATA = b[4];
+    *FDD_BRAM_WDATA = b[5];
+    uint32_t word = 0;
+    for (uint32_t i = SET_BOOT_DEV; i < SET_COUNT; i++) {
+        word |= (uint32_t) settings_default[i] << ((i & 3) * 8);
+    }
+    *FDD_BRAM_WDATA = word;
+    *FDD_BRAM_WDATA = b[6];
+    *FDD_BRAM_WDATA = b[7];
+}
+
+// Move a version-8 table to the version-9 layout. The two regions overlap --
+// new entry k lands k+1 words into old entry k and reaches into old k+1/k+2 --
+// so every source word has to be read before its slot can be rewritten. Old
+// slot 13 has no same-index destination (and new slots 11/12 overlap it), so
+// a valid tail is stashed first; the shared range then copies top-down, each
+// old entry read whole before its new-format rewrite, and the stashed tail
+// fills whichever new slot stayed free.
+static void table_migrate(void)
+{
+    *FDD_BRAM_ADDR = V8_TABLE_WORD;
+    if (*FDD_BRAM_RDATA != TABLE_MAGIC) {
+        return; // a pre-table blob: nothing to carry across
+    }
+    // Drop the old magic before touching anything: a reset mid-move then finds
+    // no table at all, rather than re-running over half-rewritten entries.
+    *FDD_BRAM_ADDR = V8_TABLE_WORD;
+    *FDD_BRAM_WDATA = 0;
+    uint32_t stash[V8_ENTRY_COUNT - ENTRY_COUNT][V8_ENTRY_WORDS];
+    int tails = 0;
+    for (int e = V8_ENTRY_COUNT - 1; e >= ENTRY_COUNT; e--) {
+        *FDD_BRAM_ADDR = (uint32_t) (V8_TABLE_WORD + 1 + e * V8_ENTRY_WORDS);
+        uint32_t h = *FDD_BRAM_RDATA;
+        uint32_t nh = *FDD_BRAM_RDATA;
+        if (h != 0 && nh == ~h) {
+            stash[tails][0] = h;
+            stash[tails][1] = nh;
+            for (int w = 2; w < V8_ENTRY_WORDS; w++) {
+                stash[tails][w] = *FDD_BRAM_RDATA;
+            }
+            tails++;
+        }
+    }
+    uint16_t filled = 0; // bitmask of new slots holding a migrated profile
+    for (int e = ENTRY_COUNT - 1; e >= 0; e--) {
+        uint32_t b[V8_ENTRY_WORDS];
+        *FDD_BRAM_ADDR = (uint32_t) (V8_TABLE_WORD + 1 + e * V8_ENTRY_WORDS);
+        for (int w = 0; w < V8_ENTRY_WORDS; w++) {
+            b[w] = *FDD_BRAM_RDATA;
+        }
+        if (b[0] != 0 && b[1] == ~b[0]) {
+            entry_write(e, b);
+            filled |= (uint16_t) (1u << e);
+        } else {
+            // A free slot is a null hash pair, never a fragment of the old
+            // layout posing as a profile.
+            *FDD_BRAM_ADDR = (uint32_t) (TABLE_WORD + 1 + e * ENTRY_WORDS);
+            for (int w = 0; w < ENTRY_WORDS; w++) {
+                *FDD_BRAM_WDATA = 0;
+            }
+        }
+    }
+    int e = 0;
+    for (int t = 0; t < tails; t++) {
+        while (e < ENTRY_COUNT && (filled & (uint16_t) (1u << e))) {
+            e++;
+        }
+        if (e >= ENTRY_COUNT) {
+            break; // the table was full -- the extra tail drops
+        }
+        entry_write(e, stash[t]);
+        e++;
+    }
+    *FDD_BRAM_ADDR = TABLE_WORD;
+    *FDD_BRAM_WDATA = TABLE_MAGIC;
+}
+
 void settings_load(void)
 {
     for (uint32_t i = 0; i < SET_COUNT; i++) {
@@ -846,9 +1129,10 @@ void settings_load(void)
     uint32_t version = head & 0xFF;
     if (magic == SETTINGS_MAGIC && version >= 4 && version <= SETTINGS_VERSION) {
         if (version >= 6) {
-            // Versions 6 and 7 lay the global block out identically; the
-            // per-disk table lives behind its own magic.
-            block_apply(SETTINGS_WORD + 2);
+            // The block layout is unchanged since version 6 apart from the
+            // packed value count, which the header carries; the per-disk
+            // table lives behind its own magic.
+            block_apply(SETTINGS_WORD + 2, (head >> 8) & 0xFF);
         } else {
             uint32_t count = (head >> 8) & 0xFF;
             uint32_t values = count;
@@ -902,8 +1186,17 @@ void settings_load(void)
             for (uint32_t i = 0; i < BIND_COUNT; i++) {
                 key_bind_set(i, codes[i], (ext >> i) & 1);
             }
-            // Normalise a remapped blob in place so the global block the mount
-            // paths re-apply is always a current-version one.
+        }
+        if (version < SETTINGS_VERSION) {
+            // Only the immediately-prior blob version's per-disk table is
+            // carried -- an older blob's table sits at an offset this
+            // firmware does not read, so it drops. Migrate whatever
+            // validates there, then normalise the blob to the current
+            // version in place -- so the global block the mount paths
+            // re-apply is current, and the move never re-runs.
+            if (version == SETTINGS_VERSION - 1) {
+                table_migrate();
+            }
             global_write();
         }
     }
@@ -916,6 +1209,11 @@ void settings_load(void)
     // the per-disk entries mean anything at all.
     *FDD_BRAM_ADDR = TABLE_WORD;
     have_table = (uint8_t) (*FDD_BRAM_RDATA == TABLE_MAGIC);
+}
+
+uint8_t settings_drive_sound(void)
+{
+    return settings[SET_DRV_SOUND].value;
 }
 
 void settings_mark_dirty(void)
@@ -976,7 +1274,8 @@ void settings_disk_mounted(uint32_t hash)
     } else {
         disk_slot = table_find(hash);
         if (disk_slot >= 0) {
-            block_apply((uint32_t) (TABLE_WORD + 1 + disk_slot * ENTRY_WORDS + 2));
+            // Table entries are always written at the current block layout.
+            block_apply((uint32_t) (TABLE_WORD + 1 + disk_slot * ENTRY_WORDS + 2), SET_COUNT);
         } else {
             apply_global();
         }

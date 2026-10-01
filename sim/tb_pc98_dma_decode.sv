@@ -116,12 +116,12 @@ module tb_pc98_dma_decode;
         .kb_byte                (8'd0),
         .kb_valid               (1'b0),
         .gdc_srv_done_levels    (2'b00),
-        .ems98_maxmem           (4'd8),
         .mgmt_address           (16'd0),
         .mgmt_read              (1'b0),
         .mgmt_write             (1'b0),
         .mgmt_writedata         (16'd0),
         .floppy_wp              (2'b00),
+        .fdd_turbo              (1'b0),
         .rtc_time               (48'd0),
         .fdd_dma_ack            (1'b0),
         // The arbiter's terminal_count_n is misnamed: it is ~EOP_n, an

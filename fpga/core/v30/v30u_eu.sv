@@ -157,6 +157,7 @@ module v30u_eu (
     output    [223:0] dbg_regs,
     output            dbg_first_pop,
     output            dbg_pend,
+    output    [31:0]  dbg_eu,
 
     // save-state
     input       [8:0] ss_addr,
@@ -2638,6 +2639,17 @@ assign dbg_regs = {psw, pc, sreg[3], sreg[2], sreg[1], sreg[0],
                    gpr[3], gpr[2], gpr[1], gpr[0]};
 assign dbg_first_pop = first_pop_seen;
 assign dbg_pend = (rd_pending != 2'd0) || (rdq_n != 2'd0) || poste;
+
+// dbg_eu -- WHICH microcode row is running and WHY it is not advancing.
+// {upc_page, upc_opc, upc_loc} is the ucode address (so the opcode under
+// execution); st is the EU FSM; wr_out/rd_pending are the outstanding
+// accesses the row may be waiting on; the rest are the wait-condition
+// wires from the §87.A illegal-form stall and the retire/eval deadlines.
+assign dbg_eu = {upc_page, upc_opc, upc_loc, st,
+                 wr_out, rd_pending,
+                 opr_loaded, opr_fresh,
+                 opr_starved, nr_wait, f_wait, retire_ok_n,
+                 row_posted};
 
 //--------------------------------------------------------------------------
 // THE RESET NEXT-STATE (U4 pass 3, second structural pass -- sec.52.3)

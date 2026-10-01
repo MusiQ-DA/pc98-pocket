@@ -47,7 +47,7 @@ module tb_v30_fdcrd;
         .clock_cycle_counter_decrement_value (ccc_dec),
         .shift_read_timing                  (shift_read_timing),
         .ram_read_wait_cycle                (ram_rd_wait),
-        .ram_write_wait_cycle               (ram_wr_wait)
+        .ram_write_wait_cycle               (ram_wr_wait), .vram_wait_en()
     );
 
     // ---- the CPU, wired the tb_pc98_v30 way: bare, READY high -------------
@@ -230,8 +230,10 @@ module tb_v30_fdcrd;
         .mgmt_readdata  (),
         .wp             (2'b00),
         .clock_rate     (28'd42_954_545),
+        .turbo          (1'b0),
         .request        (),
-        .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer ()
+        .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer (),
+        .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()
     );
 
     // ---- the read mux, same shape as tb_pc98_v30's din_of -------------------

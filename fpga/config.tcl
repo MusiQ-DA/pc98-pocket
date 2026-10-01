@@ -7,19 +7,24 @@ set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
 
 set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 
-# The PC-9801-86 sound board's YM2608 at 0x188-0x18F (pc98_opna.sv). On in the
-# SLIM configuration -- USE_ADPCM=0, USE_PCM=1 at the instantiation in
-# Peripherals.sv: 6-channel stereo FM + SSG, ~1000 ALM standalone. Rhythm and
-# DELTA-T stay off: full OPNA measured 1733 ALM and the fitter wants 1876
-# LABs against 1848 -- see the long note where ENABLE_OPNA is consumed.
+# The PC-9801-86 sound board's YM2608 at 0x188-0x18F (pc98_opna.sv). Slim
+# configuration -- USE_ADPCM=0, USE_PCM=1 in Peripherals.sv: 6-channel
+# stereo FM + SSG, no ADPCM-A (use_pcm=1 is the only stereo FM path jt12
+# has without ADPCM; use_pcm=0 falls back to the YM2203 mono accumulator).
+# The EGC raster engine is fitted again (.EGC(1'b1) on pc98_gvram_seq) and
+# the device could not carry it next to the ADPCM engines (~720 ALMs):
+# rhythm voices and the drive-mechanism kit that borrowed them stay silent
+# -- OMGMT_CAPS bit0 reads 0, which is what the firmware loaders key on.
+# USE_ADPCM=1 brings the whole path back unchanged once floor space exists.
 set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 
-# JTAG debug build. OFF by default: the SLD hub, the probe mux, the
-# write-pipe and key injection together cost enough ALMs to put the fit
-# over the 1848-LAB edge on top of everything else that ships.
-# scripts/jtag_probe.cfg, jtag_probe_read.tcl and the *_jtag_* benches
-# still work -- enable this macro AND comment out ENABLE_OPNA above to
-# open the room the probe needs (the debug build does not need sound).
+# JTAG debug build. OFF for the current fit: the SLD hub, the probe mux,
+# the write-pipe and key injection together cost enough ALMs to put the
+# fit over the 1848-LAB edge (the run that included them needed
+# 1888-1917). scripts/jtag_probe.cfg, jtag_probe_read.tcl and the
+# *_jtag_* benches still work -- enable this macro again when a debug
+# session needs the probe, and expect to park something big (USE_ADPCM=0
+# is already taken; the EGC is the ~870-ALM lever now).
 #set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
 
 # Boot the ITF, not the BIOS.
@@ -123,9 +128,8 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # tree -- the single-port reference and the MP_REF bisection far end were
 # retired 2026-09-29 once the machine shipped on mp.
 
-#   One V30 word memory access becomes one bus cycle: RAM.sv keeps one guest
-#   byte per 16-bit SDRAM word, so bytes N and N+1 are consecutive SDRAM words
-#   and the pair is a single burst of two (452ad85 measured the path at
-#   1.5-1.7x). The bench half is sim_pc98_boot.sh --word, which runs the real
-#   ITF on this path.
-set_global_assignment -name VERILOG_MACRO "PC98_WORD_MEM=1"
+#   One V30 word memory access becomes one bus cycle where the SDRAM answers
+#   (pc98_sdram_map.svh): RAM.sv keeps one guest byte per 16-bit SDRAM word,
+#   so bytes N and N+1 are consecutive SDRAM words and the pair is a single
+#   burst of two (452ad85 measured the path at 1.5-1.7x). It is the only
+#   configuration now -- PC98_WORD_MEM was removed once nothing else shipped.

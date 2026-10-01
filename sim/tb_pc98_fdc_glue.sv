@@ -185,9 +185,16 @@ module tb_pc98_fdc_glue;
         // Small, so the step-rate chain in floppy.v lands on delay_last_cycle
         // in a handful of cycles instead of a hardware second. It only scales
         // the seek delay; nothing about the interrupt depends on its value.
-        .clock_rate     (28'd2000),
-        .request        (fdd_request)
+        // The turbo section at the end widens it to 80_000 so the adder's
+        // shift shows as a real ratio rather than the two-cycle floor.
+        .clock_rate     (clk_rate_r),
+        .turbo          (turbo_r),
+        .request        (fdd_request),
+        .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()
     );
+
+    logic [27:0] clk_rate_r = 28'd2000;
+    logic        turbo_r    = 1'b0;
 
     // fd_read is a one-cycle strobe, so looking at it after a read task has
     // returned proves nothing. Latch whether it ever fired.
@@ -1588,6 +1595,79 @@ module tb_pc98_fdc_glue;
             #1;
             want1("a fresh read re-raises the request", fdd_request[0], 1'b1);
             rd(0, msr);
+        end
+
+        // ======== FDD TURBO: same protocol, an eighth of the pacing =========
+        //
+        // The OSD bit scales the step-rate adder and the per-sector wait by
+        // eight; a SEEK is the cleanest stopwatch, since SPECIFY's SRT counts
+        // the ticks between command and interrupt. clock_rate widens to
+        // 80_000 for this section so one tick is 80 clocks of headroom --
+        // at the bench's usual 2000 both sides would sit on the two-cycle
+        // floor and the shift would measure nothing.
+        begin
+            logic [7:0] msr, st0, pcn;
+            int         cyc_auth, cyc_turbo, guard;
+
+            $display("--- FDD turbo: the same seek, an eighth the wait ---");
+            clk_rate_r = 28'd80_000;
+            turbo_r    = 1'b0;
+            rst = 1'b1;
+            repeat (4) @(posedge clk);
+            rst = 1'b0;
+            repeat (2) @(posedge clk);
+            loop_mode = 1'b1;
+            window(1'b0);
+            @(negedge clk);
+            mgmt_address = 4'd0; mgmt_writedata = 16'h0001; mgmt_write = 1'b1;
+            @(negedge clk);
+            mgmt_write = 1'b0;
+            #1;
+            wr(2, 8'h3C);
+            wr(1, 8'h03); wr(1, 8'hF0); wr(1, 8'h32);   // SPECIFY, SRT=15
+
+            // Authentic pace: SEEK unit 0 to cylinder 40, then count clocks
+            // to the interrupt. Steps x SRT x tick -- about 640 ticks of 80.
+            wr(1, 8'h0F); wr(1, 8'h00); wr(1, 8'd40);
+            cyc_auth = 0;
+            guard = 0;
+            while (!fd_irq && guard < 1_000_000) begin
+                @(posedge clk); cyc_auth++; guard++;
+            end
+            #1;
+            want1("authentic seek completes", fd_irq, 1'b1);
+            wr(1, 8'h08); rd(1, st0); rd(1, pcn);       // SENSE + result
+
+            // Same seek, turbo. The command/issue/ack bytes are identical;
+            // only the pacing underneath moves.
+            turbo_r = 1'b1;
+            rst = 1'b1;
+            repeat (4) @(posedge clk);
+            rst = 1'b0;
+            repeat (2) @(posedge clk);
+            wr(2, 8'h3C);
+            wr(1, 8'h03); wr(1, 8'hF0); wr(1, 8'h32);
+            wr(1, 8'h0F); wr(1, 8'h00); wr(1, 8'd40);
+            cyc_turbo = 0;
+            guard = 0;
+            while (!fd_irq && guard < 1_000_000) begin
+                @(posedge clk); cyc_turbo++; guard++;
+            end
+            #1;
+            want1("turbo seek completes", fd_irq, 1'b1);
+            want1("and lands at least 4x sooner",
+                  cyc_turbo <= cyc_auth / 4, 1'b1);
+            $display("      (authentic %0d clks, turbo %0d clks)",
+                     cyc_auth, cyc_turbo);
+            // The interrupt contract is untouched: SENSE, two bytes, drop.
+            wr(1, 8'h08);
+            rd(1, st0);
+            want("turbo ST0 is still a seek end", st0 & 8'hE0, 8'h20);
+            rd(1, pcn);
+            want("turbo PCN is the seek target", pcn, 8'd40);
+            want1("and the line still drops on the result read", fd_irq, 1'b0);
+            turbo_r = 1'b0;
+            clk_rate_r = 28'd2000;
         end
 
         $display("\n  errors: %0d", errors);

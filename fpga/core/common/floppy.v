@@ -88,6 +88,13 @@ module floppy
 
 	input      [27:0] clock_rate,
 
+	// FDD Turbo, from the OSD's settings file (via CHIPSET/PERIPHERALS, same
+	// clock domain): relaxes the two pacing terms this engine owns -- the
+	// SRT-derived step-train delay and the fixed per-sector wait -- while the
+	// command/status protocol, the request/FIFO handshake and the interrupt
+	// behaviour are untouched. Low is the authentic pace.
+	input             turbo,
+
 	output      [1:0] request,
 
 	// Debug witnesses. A write to the FIFO is only a command byte if the
@@ -103,7 +110,24 @@ module floppy
 	// {state[3:0], fifo_count[10:0]} -- which wait the transfer died in and
 	// how much of the sector is still buffered. The PC-98 boot stalls are
 	// visible only from the POST panel, so the state comes out raw.
-	output     [14:0] dbg_xfer
+	output     [14:0] dbg_xfer,
+	// The live command register, {op,unit,C,H,R,N,EOT,GPL} -- while the
+	// engine is parked in a wait or sitting in a result phase this still
+	// names the transaction that got it there, so no latch is needed.
+	output     [63:0] dbg_command,
+	// {drive[1:0], sd_sector[14:0]}: the LBA the in-flight (or last) SD
+	// request named, and which unit's image it went to.
+	output     [16:0] dbg_sector_info,
+
+	// Drive-noise event taps (clk domain): one pulse per head step, the
+	// head-load proxy, the data phase of any transfer (reads, writes and
+	// formats -- a head on media makes the same noise either way) and the
+	// motor run level. The softcore polls these through the FDD management
+	// window and plays mechanism samples on the OPNA's ADPCM-A voices.
+	output            snd_step,
+	output            snd_head,
+	output            snd_xfer,
+	output            snd_motor
 );
 
 reg [27:0] clk_rate;
@@ -694,16 +718,23 @@ always @(posedge clk) begin
 	else if(!delay_rate && !delay_srt && delay_steps) delay_steps <= delay_steps - 8'd1;
 end
 
-reg [3:0] delay_srt;
+// The uPD765's step rate is the count's complement: (16 - SRT) ms per step
+// at 500 kbps, so SRT=B is 5 ms and SRT=0 is the slowest walk at 16 ms.
+// Five bits to hold the SRT=0 case's full sixteen.
+reg [4:0] delay_srt;
 always @(posedge clk) begin
-	if(~rst_n)                          delay_srt <= 4'd0;
-	else if(cmd_recalibrate_start)      delay_srt <= specify_srt;
-	else if(cmd_seek_start)             delay_srt <= specify_srt;
-	else if(!delay_rate && delay_srt)   delay_srt <= delay_srt - 4'd1;
-	else if(!delay_rate && delay_steps) delay_srt <= specify_srt;
+	if(~rst_n)                          delay_srt <= 5'd0;
+	else if(cmd_recalibrate_start)      delay_srt <= 5'd16 - {1'b0, specify_srt};
+	else if(cmd_seek_start)             delay_srt <= 5'd16 - {1'b0, specify_srt};
+	else if(!delay_rate && delay_srt)   delay_srt <= delay_srt - 5'd1;
+	else if(!delay_rate && delay_steps) delay_srt <= 5'd16 - {1'b0, specify_srt};
 end
 
-wire [27:0] delay_adder = (data_rate == 2'd0)? 28'd1000 : (data_rate == 2'd1)? 28'd600 : (data_rate == 2'd2)? 28'd500 : 28'd2000;
+// turbo shifts the per-rate adder three places up: every tick the delay engine
+// counts is an eighth of the authentic one, so a seek's step train -- and the
+// recalibrate walk, the same chain -- lands eight times sooner while still
+// arriving as timed steps, not a teleport.
+wire [27:0] delay_adder = ((data_rate == 2'd0)? 28'd1000 : (data_rate == 2'd1)? 28'd600 : (data_rate == 2'd2)? 28'd500 : 28'd2000) << (turbo ? 3'd3 : 3'd0);
 
 reg [27:0] delay_adder_r;
 always @(posedge clk) begin
@@ -724,6 +755,34 @@ always @(posedge clk) begin
 end
 
 wire delay_last_cycle = !delay_steps && !delay_srt && delay_rate == 16'd1;
+
+// ---------------------------------------------------------------------------
+// Drive-noise event taps. Everything the mechanism-noise service needs
+// already exists in the timing engine; these only name the moments.
+//
+// snd_step: one clk pulse per physical head step. The seek/recalibrate START
+// terms cover the first step of a move -- delay_steps counts steps REMAINING
+// after it (|Δ|-1), so a one-track seek emits no decrement pulse at all. The
+// S_UPDATE_SECTOR term is the track hop inside a sequential transfer, the
+// "ガッ" punctuation in a long read.
+assign snd_step = (cmd_seek_start        && cylinder[selected_drive[0]] != io_writedata) ||
+                  (cmd_recalibrate_start && cylinder[selected_drive[0]] != 8'd0)         ||
+                  (!delay_rate && !delay_srt && |delay_steps)                            ||
+                  (state == S_UPDATE_SECTOR && increment_cylinder);
+
+// snd_head: the head-load proxy. This model has no load solenoid of its own;
+// motor spin-up is the moment the heads meet the media, so the rising edge of
+// "any motor on" is the ガチャン.
+assign snd_head  = motor_enable[0] | motor_enable[1];
+assign snd_motor = motor_enable[0] | motor_enable[1];
+
+// snd_xfer: the data phase of reads, writes and formats. The SD path raises
+// request in its per-sector wait states; the nDMA path's equivalents are the
+// CPU-served FIFO waits.
+assign snd_xfer = (|request) ||
+                  state == S_WAIT_FOR_EMPTY_READ_FIFO  ||
+                  state == S_WAIT_FOR_FULL_WRITE_FIFO  ||
+                  state == S_WAIT_FOR_FORMAT_INPUT;
 
 reg [7:0] status_reg0_temp;
 always @(posedge clk) begin
@@ -989,7 +1048,7 @@ end
 reg [15:0] command_wait_counter;
 always @(posedge clk) begin
 	if(~rst_n)                                       command_wait_counter <= 0;
-	else if(state != S_WAIT)                         command_wait_counter <= 4000; // was calculated floppy_wait_cycles but was buggy, so use fixed wait time
+	else if(state != S_WAIT)                         command_wait_counter <= turbo ? 16'd500 : 16'd4000; // was calculated floppy_wait_cycles but was buggy, so use fixed wait time; turbo takes an eighth of it
 	else if(state == S_WAIT && command_wait_counter) command_wait_counter <= command_wait_counter - 16'd1;
 end
 
@@ -1105,7 +1164,9 @@ wire        fifo_empty;
 wire        fifo_full = (fifo_count >= sector_len);
 wire [7:0]  fifo_q;
 
-assign dbg_xfer = {state, fifo_count};
+assign dbg_xfer        = {state, fifo_count};
+assign dbg_command     = command[71:8];
+assign dbg_sector_info = {selected_drive, sd_sector[14:0]};
 
 reg  [7:0] fifo_readdata;
 always @(posedge clk) begin

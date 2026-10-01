@@ -125,6 +125,17 @@ init:
         mov  al, ah             ; seg>>8 for the XROM dispatch table
         mov  [0x04B3], al       ; devtype 0x3x -> this ROM
         mov  [0x04BB], al       ; devtype 0xBx -> this ROM
+        ; The BIOS reports the drive it booted under its own FDD devtype
+        ; (0x9x), so a 1.44MB IPL's kernel reads bypass the 0x3x/0xBx
+        ; claims above and run through the native 2HD handler. That
+        ; handler reads its params through MEMW_F2HD_P (0x5F8) -- point
+        ; it at our hybrid table permanently so the N=2 record carries
+        ; EOT/SC=18. Harmless to a real 2DD: the controller still bounds
+        ; R by the mounted image's own sectors-per-track, so S>8 keeps
+        ; failing there exactly as before.
+        mov  word [0x05F8], fdpara
+        mov  ax, cs
+        mov  [0x05FA], ax
         pop  ds
         pop  ax
         retf

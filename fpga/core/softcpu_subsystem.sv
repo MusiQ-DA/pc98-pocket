@@ -25,7 +25,7 @@ module softcpu_subsystem (
     // are the default; this overwrites them when a slot supplies a file.
     input        fw_wr_clk,
     input        fw_wr_en,
-    input [12:0] fw_wr_addr,
+    input [13:0] fw_wr_addr,
     input [31:0] fw_wr_data,
 
     // Softcore clock, exported so core_top can clock the datatable's port A with it.
@@ -95,16 +95,26 @@ module softcpu_subsystem (
     input         dataslots_ready, // APF has finished the initial dataslot load
     output        soft_guest_hold, // boot-master guest reset: held until settings are staged
     output        soft_vid_blank,  // bit1 of the same register: force the presented frame dark
+    output        scsi_media,      // firmware's HDD-mounted flag, for the disk lamp's scsi gate
     // The drawing server's view of the two GDCs, already in this domain via
     // the synchronisers below; the done LEVEL the engine writes back.
     input   [1:0]  gdc_draw_req,
     input   [1:0]  gdc_draw_busy,
     input  [15:0]  gdc_draw_ops,
-    input [319:0]  gdc_draw_snaps,
+    input [383:0]  gdc_draw_snaps,
     output  [1:0]  gdc_srv_done_levels,
     output        osd_active,
     output        osd_disk_led,
     output  [1:0] osd_extmem,
+    output        osd_dbl_skip,
+    output        osd_fdd_turbo,
+    // Machine configuration, composed from the Settings rows into the bytes
+    // the guest actually reads: DIP switch 2 on port 0x31 and the three
+    // memory-switch cells pc98_tvram exposes.
+    output  [7:0] osd_dipsw2,
+    output  [7:0] osd_a3fea,
+    output  [7:0] osd_a3fee,
+    output  [7:0] osd_a3ff2,
 
     // Virtual-keyboard key event: {make, Set-2 code}, with a strobe that toggles
     // per firmware write so pocket_keyboard pushes exactly one queue entry.
@@ -166,6 +176,9 @@ module softcpu_subsystem (
         // it is inside the core rather than a separate 216-ALM block. Verified
         // by objdump: the image contains no div/divu/rem/remu.
         .ENABLE_DIV(0),
+        // The fast multiplier is a DSP block instead of ~140 ALMs of
+        // iterative shift-add; firmware never notices the cycle gain.
+        .ENABLE_FAST_MUL(1),
         // Fit headroom: the trap output is deliberately unmonitored (see the
         // cpu_trap wire above), so the misalign/illegal-insn catchers buy
         // nothing, and rdcycle in vkb_ui.c reads only the low word.
@@ -256,6 +269,21 @@ module softcpu_subsystem (
     assign soft_guest_hold = soft_guest_hold_r;
     assign soft_vid_blank  = soft_vid_blank_r;
 
+    // HDD-mounted flag at 0x20000030, bit0: the firmware's "an image is fitted"
+    // for the on-screen disk lamp. The SCSI poll answers the option ROM's TEST
+    // UNIT READY probes even on an empty machine, and every probe still toggles
+    // the request line -- this bit is how the lamp tells a real transfer from
+    // one of those. Its own address rather than a spare bit in SOFT_GUEST_HOLD
+    // et al., because the firmware writes those registers whole-word.
+    reg scsi_media_r = 1'b0;
+    always @(posedge clk_pico) begin
+        if (reset)
+            scsi_media_r <= 1'b0;
+        else if (sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[7:0] == 8'h30)
+            scsi_media_r <= cpu_mem_wdata[0];
+    end
+    assign scsi_media = scsi_media_r;
+
     // Compositor origin at 0x20000014: {y[25:16], x[9:0]}, the raster position of
     // the framebuffer's top-left; the firmware derives it from the presented
     // raster size (read back at 0x20000018).
@@ -302,16 +330,34 @@ module softcpu_subsystem (
     // The file deliberately survives machine resets (registers power up 0): reset-latched
     // consumers sample it at reset release, before the restarted firmware can re-push
     // values.
-    // The index order is the firmware's SET_* enum (settings_ui.c): indices
-    // 6/7 are reserved so the save blob's numbering does not shift.
+    // The index order is the firmware's SET_* enum (settings_ui.c): index 6 is
+    // the retired Lo-tech EMS slot, reused for FDD turbo, and 7 is the retired
+    // EMS-frame slot, reused for the 200-line presentation.
     localparam SET_IDX_CPU_SPEED = 5'd0;   // System
     localparam SET_IDX_BIOS_WR   = 5'd1;
     localparam SET_IDX_BOOST     = 5'd2;   // Audio & Video
     localparam SET_IDX_SPK_VOL   = 5'd3;
     localparam SET_IDX_STEREO    = 5'd4;
     localparam SET_IDX_DISPLAY   = 5'd5;
+    // The slot's resting value in old blobs is 1 (the reserved entry's
+    // default), so the firmware stores Off at index 1 and the bit below is
+    // inverted: slot 0 = turbo on, slot 1 = authentic pacing. Power-up rests
+    // at turbo-on until the first push lands -- harmless, the guest is held
+    // in reset while settings are staged.
+    localparam SET_IDX_FDD_TURBO = 5'd6;   // Hardware: floppy seek/sector pacing
+    localparam SET_IDX_MODE200   = 5'd7;   // 200-line presentation: 0 = double, 1 = skip
     localparam SET_IDX_DISK_LED  = 5'd10;  // on-screen access lamp
     localparam SET_IDX_EXTMEM    = 5'd11;  // EMS board's fitted size
+    // Index 12 is the firmware's Drive Sound row; the RTL no longer reads
+    // it (mechanism noise is firmware-driven) but the slot stays reserved
+    // so the persisted indices below do not move.
+    localparam SET_IDX_TXT_LINES = 5'd13;  // 0 = 25 rows / 1 = 20 rows (dipsw2 bit 3)
+    localparam SET_IDX_TXT_COLS  = 5'd14;  // 0 = 80 cols / 1 = 40 cols (dipsw2 bit 2)
+    localparam SET_IDX_BOOT_BSC  = 5'd15;  // 0 = disks first / 1 = ROM BASIC (inverted dipsw2 bit 0)
+    localparam SET_IDX_BOOT_DEV  = 5'd16;  // A3FF2 high nibble: 0 std / 2 = 640K FD / 4 = 1M FD / 8 = BASIC / A = HD1 / B = HD2 / C = SCSI
+    localparam SET_IDX_RAM_SZ    = 5'd17;  // 1-5 = 128-640 KB in 128 KB units (0 = unset -> 640)
+    localparam SET_IDX_DEL_BS    = 5'd18;  // A3FEA bit 7: DEL key emits BS
+    localparam SET_IDX_EXTROM    = 5'd19;  // A3FEE bit 4: option ROM present in the D0000 window
     // index 8 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
     localparam SET_IDX_GAMEPAD   = 5'd9;   // Controls
     reg [7:0] osd_settings [0:31];
@@ -331,6 +377,42 @@ module softcpu_subsystem (
     assign osd_gamepad   = osd_settings[SET_IDX_GAMEPAD][1:0];
     assign osd_disk_led  = osd_settings[SET_IDX_DISK_LED][0];
     assign osd_extmem    = osd_settings[SET_IDX_EXTMEM][1:0];
+    assign osd_dbl_skip  = osd_settings[SET_IDX_MODE200][0];
+    assign osd_fdd_turbo = ~osd_settings[SET_IDX_FDD_TURBO][0];
+
+    // Machine configuration bytes. Bits the Settings rows do not own are
+    // pinned to the 0xE3 / 0x04 / 0x00 / 0x01 defaults the machine has always
+    // shipped: dipsw2 bit 4 must stay clear (it asks the ROM to re-initialise
+    // the memory switch, which the tvram write-protects) and bit 1 set (it
+    // skips the BIOS's 286 protected-mode sizing block). An unwritten
+    // osd_settings word reads zero, and every compose below is arranged so
+    // that zero means the default byte.
+    assign osd_dipsw2 = {3'b111, 1'b0,
+                         osd_settings[SET_IDX_TXT_LINES][0],
+                         osd_settings[SET_IDX_TXT_COLS][0],
+                         1'b1, ~osd_settings[SET_IDX_BOOT_BSC][0]};
+    wire [2:0] ram_units = ((osd_settings[SET_IDX_RAM_SZ] >= 8'd1)
+                         && (osd_settings[SET_IDX_RAM_SZ] <= 8'd5))
+                         ? 3'(osd_settings[SET_IDX_RAM_SZ][2:0] - 3'd1)
+                         : 3'd4;
+    assign osd_a3fea  = {osd_settings[SET_IDX_DEL_BS][0], 4'b0000, ram_units};
+    assign osd_a3fee  = {3'b000, osd_settings[SET_IDX_EXTROM][0], 4'b0000};
+    // BOOT_DEV packs the SW5 nibble values without holes so the Settings row
+    // can be a plain list: 0 = std, 1 = 640K FD, 2 = 1M FD, 3 = BASIC,
+    // 4 = HD#1, 5 = HD#2, 6 = SCSI HD.
+    logic [3:0] boot_nib;
+    always_comb begin
+        case (osd_settings[SET_IDX_BOOT_DEV])
+            8'd1:    boot_nib = 4'h2;
+            8'd2:    boot_nib = 4'h4;
+            8'd3:    boot_nib = 4'h8;
+            8'd4:    boot_nib = 4'hA;
+            8'd5:    boot_nib = 4'hB;
+            8'd6:    boot_nib = 4'hC;
+            default: boot_nib = 4'h0;
+        endcase
+    end
+    assign osd_a3ff2  = {boot_nib, 4'h1};
 
     // Per-control key config, written at KEYCFG_REG (0x20000020) as {id[12:9], ext[8], code[7:0]}.
     // pocket_keyboard reads one 9-bit {ext, code} per D-pad direction (ids 0-3) and button (ids 4-10);
@@ -386,25 +468,26 @@ module softcpu_subsystem (
     assign cpu_mem_ready = cpu_mem_ready_rom | cpu_mem_ready_other;
 
     //
-    // Firmware ROM: 24 KB (6144 x 32), initialised from the built firmware image.
+    // Firmware ROM, initialised from the built firmware image.
     // The path is relative to the Quartus project directory (src/fpga).
     //
     wire [31:0] rom_rdata;
 
     sprom #(
-        .aw(13),
+        .aw(14),
         .dw(32),
-        // 8192 words = 32 KB. The drawing server (gdc_service.c) needs more
-        // than the old 24 KB held; the M10K budget has the room (47% used)
-        // and the data_loader's fw_word is 13 bits already.
-        .numwords(8192),
+        // 12288 words = 48 KB. OPNA brought the rhythm loader, the ADPCM-A
+        // encoder and the drive-noise service, which the 32 KB image no
+        // longer held; the M10K budget (~70 blocks free) has the room and
+        // the data_loader's fw_word widens the same way.
+        .numwords(12288),
         .MEM_INIT_FILE("../firmware/firmware.vh")
     ) pico_rom (
         .clk  (clk_pico),
         .rst  (reset),
         .ce   (sel_rom),
         .oe   (1'b1),
-        .addr (cpu_mem_addr[14:2]),
+        .addr (cpu_mem_addr[15:2]),
         .dout (rom_rdata),
         .wr_clk  (fw_wr_clk),
         .wr_en   (fw_wr_en),
@@ -947,13 +1030,15 @@ module softcpu_subsystem (
             32'h5000_014C: cpu_mem_rdata = gdc_draw_snaps[95:64];
             32'h5000_0150: cpu_mem_rdata = gdc_draw_snaps[127:96];
             32'h5000_0154: cpu_mem_rdata = gdc_draw_snaps[159:128];
+            32'h5000_0158: cpu_mem_rdata = gdc_draw_snaps[191:160];
             32'h5000_0180: cpu_mem_rdata = {22'd0, draw_req_s[1],
                                             draw_busy_s[1], gdc_draw_ops[15:8]};
-            32'h5000_0184: cpu_mem_rdata = gdc_draw_snaps[191:160];
-            32'h5000_0188: cpu_mem_rdata = gdc_draw_snaps[223:192];
-            32'h5000_018C: cpu_mem_rdata = gdc_draw_snaps[255:224];
-            32'h5000_0190: cpu_mem_rdata = gdc_draw_snaps[287:256];
-            32'h5000_0194: cpu_mem_rdata = gdc_draw_snaps[319:288];
+            32'h5000_0184: cpu_mem_rdata = gdc_draw_snaps[223:192];
+            32'h5000_0188: cpu_mem_rdata = gdc_draw_snaps[255:224];
+            32'h5000_018C: cpu_mem_rdata = gdc_draw_snaps[287:256];
+            32'h5000_0190: cpu_mem_rdata = gdc_draw_snaps[319:288];
+            32'h5000_0194: cpu_mem_rdata = gdc_draw_snaps[351:320];
+            32'h5000_0198: cpu_mem_rdata = gdc_draw_snaps[383:352];
             default:       cpu_mem_rdata = 32'd0;
         endcase
     end

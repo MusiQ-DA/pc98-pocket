@@ -91,8 +91,11 @@ module pc98_opna #(
     // no-ADPCM default is the YM2203 mono path, and OPNA is stereo.
     parameter bit USE_ADPCM = 1,
     parameter bit USE_PCM   = 0,
-    parameter int RHY_BYTES = 8192,
-    parameter int RHY_AW    = 13,
+    // 32 KB: the low 16 KB is the six-voice rhythm kit and the upper 16 KB is
+    // the drive-mechanism kit the softcore plays for floppy noise. The store
+    // used to be 8 KB; it grew when fdd_sound's own sample SRAM retired.
+    parameter int RHY_BYTES = 32768,
+    parameter int RHY_AW    = 15,
     // clk / 7.9872 MHz as a 16-bit fraction -- see the header.
     parameter int CEN_INC   = 12185
 ) (
@@ -218,9 +221,15 @@ module pc98_opna #(
     // read-back for its ADPCM-A control registers and a YM2608 has none for
     // its rhythm ones either, so this exists only so the service loop can see
     // whether the guest is using rhythm at all before it spends time loading
-    // samples.
+    // samples. Only populated under USE_ADPCM; the slim build drives them
+    // constant so the mg_reg reads answer zero and the registers cost
+    // nothing.
     logic [7:0] rhy_kon;         // 0x10, {dump, xx, mask[5:0]}
     logic [5:0] rhy_tl;          // 0x11, total level
+    // Per-voice LR+AL (0x18-0x1D), cached so the firmware's drive-noise
+    // service can restore a channel's level after borrowing it: ADPCM-A
+    // start/end pairs and this byte are what the borrow has to put back.
+    logic [7:0] rhy_lr [0:5];
 
     // np21w sound/fmboard.c (fmboard_getjoy): the joystick read is gated by
     // bit 6 of the value last written to IOB (SSG index 0x0F) -- set means the
@@ -291,8 +300,6 @@ module pc98_opna #(
             rq_part    <= 1'b0;
             rq_reg     <= 8'h00;
             rq_data    <= 8'h00;
-            rhy_kon    <= 8'h00;
-            rhy_tl     <= 6'h00;
             joy_blk    <= 1'b0;
         end else begin
             // The FSM consumes the request on the way out of idle; a new one
@@ -310,8 +317,6 @@ module pc98_opna #(
                     else         addrl <= wr_data_q;
                 end else begin
                     if (!gw_part) begin
-                        if (gw_reg == 8'h10) rhy_kon <= wr_data_q;
-                        if (gw_reg == 8'h11) rhy_tl  <= wr_data_q[5:0];
                         if (gw_reg == 8'h0F) joy_blk <= wr_data_q[6];
                     end
                     if (route_fwd(gw_part, gw_reg) && !rtr_busy) begin
@@ -321,7 +326,7 @@ module pc98_opna #(
                         rq_data <= wr_data_q;
                     end
                 end
-            end else if (mg_wr && (mg_reg == 4'd2 || mg_reg == 4'd3) && !rtr_busy) begin
+            end else if (USE_ADPCM && mg_wr && (mg_reg == 4'd2 || mg_reg == 4'd3) && !rtr_busy) begin
                 // The firmware's raw injection path. It is how the six
                 // ADPCM-A start/end pairs (jt12 part 1, 0x110-0x12D) get
                 // programmed after the rhythm store is filled -- registers the
@@ -444,8 +449,6 @@ module pc98_opna #(
     // ------------------------------------------------------------------
     // Softcore window
     // ------------------------------------------------------------------
-    logic [RHY_AW-1:0] mg_rhy_addr;
-
     // The ADPCM-A rhythm store. Read by jt12 through adpcma_addr, written by
     // the firmware one byte at a time.
     logic [7:0] rhy_q;
@@ -460,24 +463,45 @@ module pc98_opna #(
     generate
     if (USE_ADPCM) begin : g_rhy
         (* ramstyle = "M10K" *) logic [7:0] rhy_mem [0:RHY_BYTES-1];
+        logic [RHY_AW-1:0] mg_rhy_addr_q;
 
         always_ff @(posedge clk) begin
-            if (mg_wr && (mg_reg == 4'd1)) rhy_mem[mg_rhy_addr] <= mg_wdata[7:0];
+            if (rst)
+                mg_rhy_addr_q <= '0;
+            else if (mg_wr && (mg_reg == 4'd0))
+                mg_rhy_addr_q <= mg_wdata[RHY_AW-1:0];
+            else if (mg_wr && (mg_reg == 4'd1))
+                mg_rhy_addr_q <= mg_rhy_addr_q + 1'b1;
+
+            if (mg_wr && (mg_reg == 4'd1)) rhy_mem[mg_rhy_addr_q] <= mg_wdata[7:0];
             rhy_q <= rhy_mem[adpcma_addr[RHY_AW-1:0]];
         end
+
+        // The guest-visible rhythm shadows: kon/tl so the firmware can see
+        // rhythm in use (mg_reg 7), and per-voice LR+AL so a borrowed channel
+        // can be put back (mg_reg 9-14). They only exist with the voices.
+        always_ff @(posedge clk) begin
+            if (rst) begin
+                rhy_kon <= 8'h00;
+                rhy_tl  <= 6'h00;
+                for (int v = 0; v < 6; v++) rhy_lr[v] <= 8'h00;
+            end else if (wr_commit && gw_allowed && gw_is_data && !gw_part) begin
+                if (gw_reg == 8'h10) rhy_kon <= wr_data_q;
+                if (gw_reg == 8'h11) rhy_tl  <= wr_data_q[5:0];
+                if (gw_reg >= 8'h18 && gw_reg <= 8'h1D)
+                    rhy_lr[gw_reg - 8'h18] <= wr_data_q;
+            end
+        end
     end else begin : g_no_rhy
-        assign rhy_q = 8'h00;
+        genvar gi;
+        for (gi = 0; gi < 6; gi++) begin : g_tie
+            assign rhy_lr[gi] = 8'h00;
+        end
+        assign rhy_q   = 8'h00;
+        assign rhy_kon = 8'h00;
+        assign rhy_tl  = 6'h00;
     end
     endgenerate
-
-    always_ff @(posedge clk) begin
-        if (rst)
-            mg_rhy_addr <= '0;
-        else if (mg_wr && (mg_reg == 4'd0))
-            mg_rhy_addr <= mg_wdata[RHY_AW-1:0];
-        else if (mg_wr && (mg_reg == 4'd1))
-            mg_rhy_addr <= mg_rhy_addr + 1'b1;
-    end
 
     always_comb begin
         case (mg_reg)
@@ -488,6 +512,10 @@ module pc98_opna #(
             // Capability word: bit0 = the rhythm store and ADPCM-A exist, so
             // the firmware knows whether a rhythm.bin load can land.
             4'd8:    mg_rdata = {15'd0, USE_ADPCM};
+            // 9..14: the guest's last-written LR+AL per voice -- the
+            // drive-noise service restores this after a borrowed channel.
+            4'd9, 4'd10, 4'd11, 4'd12, 4'd13, 4'd14:
+                     mg_rdata = {8'd0, rhy_lr[mg_reg - 4'd9]};
             default: mg_rdata = 16'h0000;
         endcase
     end

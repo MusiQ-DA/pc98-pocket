@@ -321,6 +321,9 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 set_global_assignment -name FITTER_EFFORT "AUTO FIT"
+# The design lives within a few LABs of the 1848 ceiling; pay placement
+# effort for the extra fraction of a percent AUTO FIT leaves behind.
+set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 4.0
 set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION ON
 
 # Assembler Assignments
@@ -772,7 +775,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gdc_mode2.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gvram_seq.sv"
 # The EGC's blitter, instantiated by the sequencer above. Landed with the
 # sequencer but never added here, so every build after it failed to elaborate.
-# WIP: tb_pc98_egc still fails one case (blit, plane E).
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_egc.sv"
 # The NEC-style EMS board's bank registers at 0x08E1-0x08E9: the V30's only
 # route past its 20-bit bus. RAM.sv holds the window remap half.
@@ -796,15 +798,11 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_mouse_src.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_busmouse.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_video.sv
 
-# Audio back end: OpenGateware audio_mixer (MiSTer filter chain + I2S) and its
-# codec-clock PLL.
+# Audio back end: audio_mixer (lightweight crossfeed/attenuation + I2S; the
+# MiSTer IIR/DC-blocker chain was retired for fit headroom) and the codec PLL.
 set_global_assignment -name SYSTEMVERILOG_FILE core/audio/audio_mixer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/audio/sound_i2s.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/audio_filters.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/audio_mix.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/dc_blocker.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/iir_filter.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/iir_filter_tap.sv
 set_global_assignment -name VERILOG_FILE core/audio_pll.v
 
 # Disk-service softcore: a PicoRV32 CPU with a firmware ROM. Runs the
@@ -859,6 +857,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_font_fetch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_jtag_probe.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pulse_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_cgwindow.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_gaiji_ram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_gvram_display.sv
 set_global_assignment -name VERILOG_FILE core/pll_video_pc98.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_shim.sv
@@ -922,7 +921,8 @@ set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to dram_we_n
 
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
 # Fitter seed is the free dial while the design sits at ~100% of the LABs:
-# PC98_WORD_MEM put HEAD 11 LABs over at SEED 3 (1859 vs 1848). A seeds
+# the 16-bit word path (then PC98_WORD_MEM) put HEAD 11 LABs over at SEED 3
+# (1859 vs 1848). A seeds
 # 5-20 sweep with the JTAG probe off found 18 at 18,326/18,480 ALMs --
 # ~150 ALMs of margin under the LAB ceiling.
-set_global_assignment -name SEED 18
+set_global_assignment -name SEED 23

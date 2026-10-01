@@ -63,8 +63,10 @@ module tb_pc98_opna;
     );
 
     // Second instance, same parameters as the production instantiation in
-    // Peripherals.sv (ADPCM-A on, DELTA-T out): the rhythm store only
-    // elaborates under USE_ADPCM, so the fill path is exercised here.
+    // Peripherals.sv (ADPCM-A on, DELTA-T out): the rhythm store and its
+    // shadow registers only elaborate under USE_ADPCM, so the fill path and
+    // the injection/rhythm-shadow tests run here. It shares the guest write
+    // bus with dut so chip_wr lands on both; reads stay on dut.
     logic  [3:0] mg2_reg = 4'd0;
     logic        mg2_wr = 1'b0;
     logic [15:0] mg2_wdata = 16'h0000;
@@ -73,9 +75,9 @@ module tb_pc98_opna;
 
     pc98_opna #(.USE_ADPCM(1), .USE_PCM(0)) dut_adpcm (
         .clk(clk), .rst(rst),
-        .cs(1'b0), .a2a1(2'b00),
-        .io_read_n(1'b1), .io_write_n(1'b1),
-        .data_in(8'h00), .data_out(), .read_select(),
+        .cs(cs), .a2a1(a2a1),
+        .io_read_n(1'b1), .io_write_n(io_write_n),
+        .data_in(data_in), .data_out(), .read_select(),
         .ext_enable(1'b0), .joy(8'hFF), .irq(),
         .mg_reg(mg2_reg), .mg_wr(mg2_wr), .mg_wdata(mg2_wdata), .mg_rdata(mg2_rdata),
         .adpcmb_addr(), .adpcmb_roe_n(),
@@ -176,8 +178,42 @@ module tb_pc98_opna;
         end
     end
 
+    // The same probe on the ADPCM instance, for the tests that only make
+    // sense with the rhythm store fitted.
+    int         nreq2 = 0;
+    int         mark2 = 0;
+    logic       req2_part;
+    logic [7:0] req2_reg, req2_data;
+    wire        saw_req2 = (nreq2 != mark2);
+
+    always @(posedge clk) begin
+        if (dut_adpcm.rtr_state == 2'd1) begin
+            nreq2     <= nreq2 + 1;
+            req2_part <= dut_adpcm.rq_part;
+            req2_reg  <= dut_adpcm.rq_reg;
+            req2_data <= dut_adpcm.rq_data;
+        end
+    end
+
     task automatic arm();
         mark = nreq;
+    endtask
+
+    task automatic arm2();
+        mark2 = nreq2;
+    endtask
+
+    task automatic want_route2(input string what, input logic part,
+                               input [7:0] r, input [7:0] v);
+        if (!saw_req2) begin
+            $display("  FAIL %-40s no router request", what);
+            errors++;
+        end else if (req2_part !== part || req2_reg !== r || req2_data !== v) begin
+            $display("  FAIL %-40s part %0d reg %02h data %02h (want %0d/%02h/%02h)",
+                     what, req2_part, req2_reg, req2_data, part, r, v);
+            errors++;
+        end else
+            $display("  ok   %-40s part %0d reg %02h", what, req2_part, req2_reg);
     endtask
 
     // Write a chip register the way a driver does: index to the even port,
@@ -367,25 +403,36 @@ module tb_pc98_opna;
 
         // ================================================================
         // 5. The firmware's injection port, which is how those ADPCM-A
-        //    start/end registers DO get written.
+        //    start/end registers DO get written. It is gated by USE_ADPCM --
+        //    the slim build has no voices to program -- so it is exercised on
+        //    dut_adpcm.
         // ================================================================
-        arm();
-        mgmt_wr(4'd3, 16'h1105);        // part 1, reg 0x110 = 0x05
+        arm2();
+        mgmt_wr2(4'd3, 16'h1105);       // part 1, reg 0x110 = 0x05
         repeat (8) @(posedge clk);
-        want_route("firmware inject reaches part1 0x110", 1'b1, 8'h11, 8'h05);
+        want_route2("firmware inject reaches part1 0x110", 1'b1, 8'h11, 8'h05);
 
-        arm();
-        mgmt_wr(4'd2, 16'h2802);        // part 0, reg 0x28 = 0x02
+        arm2();
+        mgmt_wr2(4'd2, 16'h2802);       // part 0, reg 0x28 = 0x02
         repeat (8) @(posedge clk);
-        want_route("firmware inject reaches part0 0x28", 1'b0, 8'h28, 8'h02);
+        want_route2("firmware inject reaches part0 0x28", 1'b0, 8'h28, 8'h02);
+
+        // ...and the slim build ignores it outright.
+        arm();
+        mgmt_wr(4'd3, 16'h1105);
+        repeat (8) @(posedge clk);
+        want_dropped("slim build ignores firmware inject");
 
         // The rhythm shadow the service loop polls before it bothers loading
-        // samples at all.
+        // samples at all -- dut_adpcm's is real, the slim build reads zero.
         chip_wr(1'b0, 8'h10, 8'h25);
         repeat (8) @(posedge clk);
+        mg2_reg = 4'd7;
+        repeat (2) @(posedge clk);
+        want("rhythm KON shadow at mg_reg 7", mg2_rdata[7:0], 8'h25);
         mg_reg = 4'd7;
         repeat (2) @(posedge clk);
-        want("rhythm KON shadow at mg_reg 7", mg_rdata[7:0], 8'h25);
+        want("slim build's shadow reads zero", mg_rdata[7:0], 8'h00);
 
         // ================================================================
         // 6. Timer A and the IRQ line. This is the only test here that runs
@@ -455,9 +502,9 @@ module tb_pc98_opna;
             errors++;
         end else
             $display("  ok   rhythm store fills byte-sequentially");
-        if (dut_adpcm.mg_rhy_addr !== 13'd2) begin
+        if (dut_adpcm.g_rhy.mg_rhy_addr_q !== 13'd2) begin
             $display("  FAIL store address did not auto-increment (%0d)",
-                     dut_adpcm.mg_rhy_addr);
+                     dut_adpcm.g_rhy.mg_rhy_addr_q);
             errors++;
         end else
             $display("  ok   store address auto-increments");

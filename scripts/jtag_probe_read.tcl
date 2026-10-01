@@ -54,7 +54,25 @@ proc rd {addr} {
 #   0x19       {arbiter: hlda,aen_n,dma_hold,ext_req,drq3..0,  RAM FSM:
 #               wc_pend,refresh,read_flag,acc_rd,acc_wr,state[2:0]}
 #   0x1a       {proc_ready, mem_acc_ready, dma_ready, dack_n3..0, no_cmd}
+#   0x1b       {bridge: parked,cyc_active,bstate,wr_cnt,byte_idx,t_cnt,gap,cur_bs,
+#               cpu_ce edge counter} -- ce_count frozen = the clock enable died
+#   0x1c       {cpu_ad_out[19:0], v30_bs, pause, reset_cpu, reset_chipset,
+#               reset, soft_reset_cpu, cpu_ce_posedge}
 #   0x1d       keyboard count:last
+#   0x20       {v30_data_i[15:0], dbg_core}: the byte pair last fed to the
+#              core + {halted,q_ripe,ripe_lead_n,q_cnt,eu_bs,eu_pop,eu_flush,
+#              eu_susp,eu_halt,rd_done_n,wr_done_n} -- EU/BIU interlock state
+#   0x1e       {cont2, cont1} pad words as the softcore sees them (settled|jtag)
+#   0x1f       {jtag_btn2, jtag_btn1} held-button inject mask -- a stuck bit
+#              here means that pad bit reads held forever (no edge for fw)
+#   0x26       fdc_dbg[31:0]  = {reply_left[0], cmd_drops[7:0],
+#              cmd_accepts[7:0], dbg_xfer[14:0]: state[3:0]@14..11 +
+#              fifo_count[10:0]} -- parked state says which wait died
+#   0x27       fdc_dbg[63:32] = {4'b0, drive[1:0], lba[14:0], busy, irq,
+#              dma_enable, dma_tc, dma_ack, dma_req, request[1:0],
+#              reply_left[3:1]} -- the LBA the in-flight request named
+#   0x28/0x29  live FDC command register: {op, unit, C, H | R, N, EOT, GPL}
+#              -- the transaction the engine is parked on or last rejected
 set regs {
     16  V30_PSW_PC
     17  V30_SREG3_SREG2
@@ -67,7 +85,22 @@ set regs {
     24  V30_ADDR
     25  ARB_HOLD+RAM_FSM
     26  READY_CHAIN
+    27  BRIDGE+CE_CNT
+    28  ALE_ADDR+BS+RST
     29  KEYS=count,last
+    30  PADS=cont2,cont1
+    31  JTAGBTN=held2,held1
+    32  V30_DIN+EU_BIU
+    33  EU_POST_ADDR
+    34  BIU_LAUNCH
+    35  EU_STALL
+    36  QMEM0-3
+    37  QMEM4-5+FPTR
+    38  FDC_XFER+ACC/DROP
+    39  FDC_REQ+LBA+DMA
+    40  FDC_CMD_LO=EOT/GPL/N/R
+    41  FDC_CMD_HI=op/unit/C/H
+    48  SCSI=mg_rd,post,rom_rd
     255 MAGIC
 }
 

@@ -71,7 +71,7 @@ module tb_pc98_v30;
         .clock_cycle_counter_decrement_value (ccc_dec),
         .shift_read_timing                  (shift_read_timing),
         .ram_read_wait_cycle                (ram_rd_wait),
-        .ram_write_wait_cycle               (ram_wr_wait)
+        .ram_write_wait_cycle               (ram_wr_wait), .vram_wait_en()
     );
 
     // ---- the CPU: nuV30, the real part -------------------------------------
@@ -2094,8 +2094,10 @@ module tb_pc98_v30;
         .mgmt_readdata  (srv_mgmt_readdata),
         .wp             (2'b00),
         .clock_rate     (28'd42_954_545),
+        .turbo          (1'b0),
         .request        (srv_request),
-        .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer ()
+        .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer (),
+        .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()
     );
 
     // ---- the disk server: what fdd_service.c does on hardware -------------

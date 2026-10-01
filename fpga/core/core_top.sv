@@ -284,6 +284,7 @@ module core_top (
     logic  [1:0] ram_read_wait_cycle;
     logic  [1:0] ram_write_wait_cycle;
     logic        cycle_accrate;
+    logic        vram_wait_en;
     logic  [1:0] clk_select;
     // The CPU speed is the OSD's alone.
     wire   [1:0] clk_select_next = cpu_speed_cfg;
@@ -313,7 +314,8 @@ module core_top (
         .clock_cycle_counter_decrement_value(clock_cycle_counter_decrement_value),
         .shift_read_timing                  (shift_read_timing),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
-        .ram_write_wait_cycle               (ram_write_wait_cycle)
+        .ram_write_wait_cycle               (ram_write_wait_cycle),
+        .vram_wait_en                       (vram_wait_en)
     );
 
     // vid_blank is the softcore's (SOFT_GUEST_HOLD bit1): it forces the
@@ -959,6 +961,12 @@ module core_top (
     wire [1:0] osd_stereo;
     wire       osd_disk_led;
     wire [1:0] osd_extmem;
+    wire       osd_dbl_skip;
+    wire       osd_fdd_turbo;
+    wire [7:0] osd_dipsw2;
+    wire [7:0] osd_a3fea;
+    wire [7:0] osd_a3fee;
+    wire [7:0] osd_a3ff2;
     wire [1:0] osd_gamepad;
     wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
 
@@ -969,7 +977,7 @@ module core_top (
 
     wire  [1:0] gdc_draw_req, gdc_draw_busy, gdc_srv_done_levels;
     wire [15:0] gdc_draw_ops;
-    wire [319:0] gdc_draw_snaps;
+    wire [383:0] gdc_draw_snaps;
 
 `ifdef PC98_JTAG
     // How far does a key get? key_count counts pc98_key_stb pulses and
@@ -1035,6 +1043,7 @@ module core_top (
         .dataslots_ready            (dataslots_ready),
         .soft_guest_hold            (soft_guest_hold),
         .soft_vid_blank             (soft_vid_blank),
+        .scsi_media                 (scsi_media),
         .osd_active                 (osd_active),
         .vkb_key                    (vkb_key),
         .vkb_stb                    (vkb_stb),
@@ -1047,6 +1056,12 @@ module core_top (
         .osd_gamepad                (osd_gamepad),
         .osd_disk_led               (osd_disk_led),
         .osd_extmem                 (osd_extmem),
+        .osd_dbl_skip               (osd_dbl_skip),
+        .osd_fdd_turbo              (osd_fdd_turbo),
+        .osd_dipsw2                 (osd_dipsw2),
+        .osd_a3fea                  (osd_a3fea),
+        .osd_a3fee                  (osd_a3fee),
+        .osd_a3ff2                  (osd_a3ff2),
         .key_cfg_flat               (key_cfg),
         .gdc_draw_req               (gdc_draw_req),
         .gdc_draw_busy              (gdc_draw_busy),
@@ -1062,12 +1077,18 @@ module core_top (
     // A USB Blaster on the FPGA's JTAG port reads these over the SLD hub:
     // scripts/jtag_probe.cfg + jtag_probe_read.tcl drive USER1/USER0.
     // The magic word proves the protocol end-to-end before any value is trusted.
-    logic [31:0] probe_data;
+    logic [31:0] probe_data, probe_data_c;
     wire   [7:0] probe_addr;
     // The V30's architectural state, live. dbg_regs leaves the EU every
     // cycle so the probe snapshot is "the CPU is executing THIS" -- a frozen
     // CS:IP on a dead machine reads exactly like the wedge-era PC tap did.
     wire [223:0] v30_dbg_regs;             // {psw, pc, sreg3..0, gpr7..0}
+    wire  [15:0] v30_dbg_core;             // EU/BIU interlock: halt/queue/eu_bs
+    wire  [31:0] v30_dbg_core2;            // posted access: eu_addr/seg + slots
+    wire  [31:0] v30_dbg_core3;            // BIU launch-law registers
+    wire  [31:0] v30_dbg_core4;            // EU stall ledger: ucode row + wait wires
+    wire  [31:0] v30_dbg_core5;            // queue bytes r_q_mem[0..3]
+    wire  [31:0] v30_dbg_core6;            // queue bytes r_q_mem[4..5] + fetch_ptr
     wire         v30_first_pop;            // EU consumed an instruction's byte 0
     reg  [23:0]  retired_cnt = 24'd0;      // saturating instruction counter
     reg          first_pop_q = 1'b0;
@@ -1077,28 +1098,91 @@ module core_top (
             retired_cnt <= retired_cnt + 24'd1;
     end
 
+    // Register the readout: the dbg cones through this mux into the SLD
+    // capture were one giant combinational path that crashes Quartus 18.1's
+    // timing-driven clustering (VPR20KMAIN tdc_util internal error). One
+    // pipeline stage hides the cone; at JTAG speeds the extra clock is free.
+    always_ff @(posedge clk_chipset)
+        probe_data <= probe_data_c;
+
+    // cpu_ce liveness: every chip-side wait eventually needs a posedge, so
+    // a ce_count that moves between probe reads separates "clock enable
+    // died" (engine/park frozen, everything else looks ready) from "the
+    // engine is stuck on a condition" (count still ticks).
+    reg  [15:0] ce_count = 16'd0;
+    always_ff @(posedge clk_chipset)
+        if (cpu_ce_posedge) ce_count <= ce_count + 16'd1;
+
     always_comb begin
         case (probe_addr)
             // The bisect-era taps (PIC/timer/keyboard counts, the wedge-PC
             // taps, the JTAG guest-memory master, the JTAG FDD/mgmt
             // channels) went out with PC98_PROBE_EXTRA -- the dbg_regs dump
             // below is what replaced them for "where is the CPU".
-            8'h10:   probe_data = v30_dbg_regs[223:192];  // psw:pc
-            8'h11:   probe_data = v30_dbg_regs[191:160];  // sreg3:sreg2
-            8'h12:   probe_data = v30_dbg_regs[159:128];  // sreg1:sreg0
-            8'h13:   probe_data = v30_dbg_regs[127:96];   // gpr7:gpr6
-            8'h14:   probe_data = v30_dbg_regs[95:64];    // gpr5:gpr4
-            8'h15:   probe_data = v30_dbg_regs[63:32];    // gpr3:gpr2
-            8'h16:   probe_data = v30_dbg_regs[31:0];     // gpr1:gpr0
-            8'h17:   probe_data = {8'h00, retired_cnt};   // liveness
-            8'h18:   probe_data = {12'h000, v30_addr};    // current bus cycle
+            8'h10:   probe_data_c = v30_dbg_regs[223:192];  // psw:pc
+            8'h11:   probe_data_c = v30_dbg_regs[191:160];  // sreg3:sreg2
+            8'h12:   probe_data_c = v30_dbg_regs[159:128];  // sreg1:sreg0
+            8'h13:   probe_data_c = v30_dbg_regs[127:96];   // gpr7:gpr6
+            8'h14:   probe_data_c = v30_dbg_regs[95:64];    // gpr5:gpr4
+            8'h15:   probe_data_c = v30_dbg_regs[63:32];    // gpr3:gpr2
+            8'h16:   probe_data_c = v30_dbg_regs[31:0];     // gpr1:gpr0
+            8'h17:   probe_data_c = {8'h00, retired_cnt};   // liveness
+            8'h18:   probe_data_c = {12'h000, v30_addr};    // current bus cycle
             // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
             // never completes; 0x1a: the ready chain the CPU waits on.
-            8'h19:   probe_data = {16'h0, chipset_dbg};
-            8'h1a:   probe_data = {24'h0, chipset_dbg2};
-            8'h1d:   probe_data = {16'h0, key_count, key_last};
-            8'hFF:   probe_data = 32'h98C0_DE98;
-            default: probe_data = {8'hDE, 8'hAD, 8'h00, probe_addr};
+            8'h19:   probe_data_c = {16'h0, chipset_dbg};
+            8'h1a:   probe_data_c = {24'h0, chipset_dbg2};
+            // 0x1b: {bridge park/engine FSM, ce edge counter}. parked=1 with a
+            // frozen ce_count is the dead-CE signature; a live count with
+            // parked=1 points at the engine's release conditions instead.
+            8'h1b:   probe_data_c = {bridge_dbg, ce_count};
+            // 0x1c: {ALE'd bus address, v30_bs, the reset/pause terms}.
+            // cpu_ad_out vs slot 0x18's v30_addr separates "the engine is
+            // driving this cycle" from "the core's pins are frozen".
+            8'h1c:   probe_data_c = {3'h0, cpu_ad_out, v30_bs,
+                                     pause_core, reset_cpu, reset_chipset,
+                                     reset, soft_reset_cpu, cpu_ce_posedge};
+            // 0x20: {last byte-pair fed to the core, EU/BIU state}. The
+            // pins say PASV while the core does not move: v30_data_i shows
+            // what it last consumed, dbg_core says whether the EU waits on
+            // the queue (q_cnt=0, ripe=0) or is halted (biu_halted).
+            8'h20:   probe_data_c = {v30_data_i, v30_dbg_core};
+            // 0x21: the posted access itself -- where the EU's MEMW wants to
+            // land and which handshake bits are holding the slot.
+            8'h21:   probe_data_c = v30_dbg_core2;
+            // 0x22: the BIU's launch-law registers -- {q_head,q_cnt, e_pend,
+            // halted, halt_pending, run,cur_fetch/halt/wr,evald, cmt_*, rq_n,
+            // slot_busys, opr_held, absorb_ttl, ts}. The posted MEMW has to
+            // be sitting on exactly one of these stages.
+            8'h22:   probe_data_c = v30_dbg_core3;
+            8'h23:   probe_data_c = v30_dbg_core4;
+            // 0x24/0x25: the prefetch queue raw bytes + fetch pointer -- the
+            // wedged stream itself, for a fingerprint match against the ROM.
+            8'h24:   probe_data_c = v30_dbg_core5;
+            8'h25:   probe_data_c = v30_dbg_core6;
+            // FDD engine: where a disk boot is parked (state/fifo), how many
+            // commands stuck, the request bits, the LBA it named, and the
+            // command bytes themselves -- a failed boot keeps the failing
+            // transaction visible here.
+            8'h26:   probe_data_c = fdc_dbg[31:0];
+            // SCSI boot witness: the probe window reads only the low 32 bits,
+            // so the counters pack under the state flags. Fields, MSB first:
+            // scsi_media | cmd_ack | cmd_req | mg_rd[4:0] | post[7:0] |
+            // rom_rd[15:0].
+            8'h30:   probe_data_c = {scsi_media, dbg_scsi[33:32],
+                                   dbg_scsi[28:24], dbg_scsi[23:0]};
+            8'h27:   probe_data_c = fdc_dbg[63:32];
+            8'h28:   probe_data_c = fdc_dbg_cmd[31:0];
+            8'h29:   probe_data_c = fdc_dbg_cmd[63:32];
+            // 0x1e/0x1f: the pad words. 1e is what the softcore actually sees
+            // (settled | injected, in clk_chipset); 1f is the probe-held mask
+            // itself -- a bit stuck there reads as a button held forever, so
+            // edge-detection in firmware never fires ("B does nothing").
+            8'h1e:   probe_data_c = {cont2_key_chip, cont1_key_chip};
+            8'h1f:   probe_data_c = {jtag_btn2, jtag_btn1};
+            8'h1d:   probe_data_c = {16'h0, key_count, key_last};
+            8'hFF:   probe_data_c = 32'h98C0_DE98;
+            default: probe_data_c = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
     end
 
@@ -1193,13 +1277,27 @@ module core_top (
     synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_eff,     cont1_key_chip, clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_eff,     cont2_key_chip, clk_chipset);
     synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
+    // The 200-line skip's two terms are both chipset-domain: the OSD bit and
+    // CHIPSET's doubled-mode flag. Their product crosses to clk_pix once --
+    // a quasi-static pair, so tearing between them is at most one frame.
+    wire       dbl200;                  // CHIPSET video: a doubled 200-line mode is up
+    wire       dbl_skip_pix;
+    synch_3              s_dbl_skip_pix (osd_dbl_skip & dbl200, dbl_skip_pix, clk_pix);
+    wire       vid_txt;                 // CHIPSET video: the composited dot is text's
     wire pause_core = pause_core_chipset;
 
-    // Disk-access lamp: any management service request (floppy in mgmt_req[7:6],
-    // SCSI pending in mgmt_req[0]) lights an on-screen lamp for a beat. The request level is a
-    // short pulse per sector, so a stretcher keeps it visible -- 2^20 clk_pix
-    // ticks is about 0.1 s (was 2^22/0.4 s; the part is one LAB short of full).
-    wire disk_act_chip = (|mgmt_req[7:6]) | mgmt_req[0];
+    // Disk-access lamp: a management service request lights an on-screen lamp for a
+    // beat, but only one with media behind it. The floppy side arrives already
+    // qualified by the requesting drive's present bit (an eject can leave a
+    // request raised while the softcore drains the dying command), and the SCSI
+    // side is qualified by the firmware's image-mounted flag because the option
+    // ROM's TEST UNIT READY probes toggle the request through POST on an empty
+    // machine. The request level is a short pulse per sector, so a stretcher
+    // keeps it visible -- 2^20 clk_pix ticks is about 0.1 s (was 2^22/0.4 s;
+    // the part is one LAB short of full).
+    wire fdd_media_req;
+    wire scsi_media;
+    wire disk_act_chip = fdd_media_req | (mgmt_req[0] & scsi_media);
     wire disk_act_pix;
     synch_3 s_disk_act (disk_act_chip, disk_act_pix, clk_pix);
     reg [19:0] disk_led_t = 20'd0;
@@ -1603,11 +1701,13 @@ module core_top (
     // data.json puts firmware.bin at bridge 0x10040000. data_loader hands over
     // sixteen bits at a time and the ROM is 32 bits wide, so two transfers make
     // a word -- low half first, matching the little-endian image.
-    wire        fw_dl_hit  = dl_wr && fw_dl_slot;
-    wire [12:0] fw_word    = dl_addr[14:2];
+    // The slot's 64 KB decode window is wider than the 48 KB ROM; past the
+    // top the word address would wrap and corrupt the image from below.
+    wire        fw_dl_hit  = dl_wr && fw_dl_slot && (dl_addr[15:0] < 16'hC000);
+    wire [13:0] fw_word    = dl_addr[15:2];
     reg  [15:0] fw_lo;
     reg         fw_wr_en_r;
-    reg  [12:0] fw_wr_addr_r;
+    reg  [13:0] fw_wr_addr_r;
     reg  [31:0] fw_wr_data_r;
 
     always @(posedge clk_chipset) begin
@@ -1975,8 +2075,8 @@ module core_top (
     wire [19:0] cpu_ad_out;
     reg  [19:0] cpu_address;
     wire [7:0] cpu_data_bus;
-    // The 16-bit memory path's extra lane. Under a narrow-CPU build these are
-    // tied off below; the PC-98 build wires them to v30_cpu_bridge.
+    // The 16-bit memory path's extra lane, between v30_cpu_bridge and the
+    // chipset's RAM/option-ROM muxes.
     wire [7:0] cpu_data_bus_hi;
     wire [7:0] data_bus_hi;
     wire       cpu_word_access;
@@ -1997,6 +2097,9 @@ module core_top (
     // the macro is off -- the cone prunes.
     wire [15:0]  chipset_dbg;
     wire  [7:0]  chipset_dbg2;
+    wire [33:0]  dbg_scsi;   // {ack,req,mg_rd_cnt,post_cnt,rom_rd_cnt}
+    wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
+    wire [63:0]  fdc_dbg_cmd;  // live command {op,unit,C,H,R,N,EOT,GPL}
 
     wire    [1:0]   fdd_present;
     reg     [7:0]   sw;
@@ -2184,6 +2287,8 @@ module core_top (
         .VID_VSYNC                          (VSync),
         .VID_HBlank                         (HBlank),
         .VID_VBlank                         (VBlank),
+        .dbl200                             (dbl200),
+        .VID_TXT                            (vid_txt),
         .address                            (chipset_address),
         .address_ext                        (bios_access_address),
         .ext_access_request                 (bios_access_request),
@@ -2211,6 +2316,7 @@ module core_top (
         .address_enable_n                   (chipset_aen),
         .dbg_chipset                        (chipset_dbg),
         .dbg_chipset2                       (chipset_dbg2),
+        .dbg_scsi                           (dbg_scsi),
     //  .terminal_count_n                   (terminal_count_n)
         .speaker_out                        (speaker_out),
         .kb_byte                            (kb_byte),
@@ -2247,13 +2353,24 @@ module core_top (
         .mgmt_write                         (mgmt_wr),
         .mgmt_read                          (mgmt_rd),
         .floppy_wp                          (wp_cfg),
+        // The FDC's domain IS clk_chipset, so the setting bit arrives on a
+        // plain wire, the way osd_extmem reaches the EMS board below it.
+        .fdd_turbo                          (osd_fdd_turbo),
+        .cfg_dipsw2                         (osd_dipsw2),
+        .cfg_a3fea                          (osd_a3fea),
+        .cfg_a3fee                          (osd_a3fee),
+        .cfg_a3ff2                          (osd_a3ff2),
         .rtc_time                           (rtc_time),
         .fdd_present                        (fdd_present),
         .fdd_request                        (mgmt_req[7:6]),
+        .fdd_media_req                      (fdd_media_req),
         .scsi_request                       (mgmt_req[0]),
+        .dbg_fdc                            (fdc_dbg),
+        .dbg_fdc_cmd                        (fdc_dbg_cmd),
         .wait_count_clk_en                  (cpu_ce_negedge),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),
+        .vram_wait_en                       (vram_wait_en),
         .pause_core                         (pause_core_chipset),
         .ram_rw_complete                    (ram_rw_complete)
         ,.pc98_key_stb                      (pc98_key_stb)
@@ -2305,8 +2422,10 @@ module core_top (
     //
     // nuV30 (the real part whose microcode the ROMs expect -- the ITF's
     // F9476 pushes imm16, a 186-class opcode an 8086 dispatches to an
-    // undocumented JS alias) through v30_cpu_bridge, which splits its 16-bit cycles into
-    // the 8288 world's byte cycles. The wiring follows tb_pc98_v30, the
+    // undocumented JS alias) through v30_cpu_bridge, which runs each 16-bit
+    // cycle as one two-lane cycle where the SDRAM answers and two byte
+    // cycles everywhere else on the eight-bit bus. The wiring follows
+    // tb_pc98_v30, the
     // bench that booted N88-BASIC on this core, and tb_v30_bridge, the
     // bench that proved the bridge: CLK=clk_chipset, CE gated by the
     // bridge, INT from the PIC, DATA_I assembled by the bridge.
@@ -2317,6 +2436,7 @@ module core_top (
     wire [19:0] v30_addr;
     wire [15:0] v30_data_o, v30_data_i;
     wire        v30_ube_n, v30_ce, v30_ready;
+    wire [15:0] bridge_dbg;
     wire        v30_ss_err_unused, v30_ss_quiet_unused;
     wire [15:0] v30_ss_rdata_unused;
 
@@ -2344,7 +2464,8 @@ module core_top (
         .processor_ready   (processor_ready),
         .address_enable_n  (chipset_aen),
         .pause_core        (pause_core),
-        .biu_done          (biu_done)
+        .biu_done          (biu_done),
+        .dbg               (bridge_dbg)
     );
 
     v30_core u_cpu (
@@ -2365,6 +2486,12 @@ module core_top (
 `ifdef PC98_JTAG
         .dbg_regs      (v30_dbg_regs),
         .dbg_first_pop (v30_first_pop),
+        .dbg_core      (v30_dbg_core),
+        .dbg_core2     (v30_dbg_core2),
+        .dbg_core3     (v30_dbg_core3),
+        .dbg_core4     (v30_dbg_core4),
+        .dbg_core5     (v30_dbg_core5),
+        .dbg_core6     (v30_dbg_core6),
 `endif
         .UBE_N      (v30_ube_n),
         .BUSLOCK_N  (),
@@ -2440,11 +2567,15 @@ module core_top (
         cmp_r <= compr(out_r);
     end
 
-    // Filter chain + I2S: audio_mixer supplies the anti-aliasing low-pass + DC blocker
-    // (the raw mix has square-wave harmonics past Nyquist), the crossfeed, and codec clocks.
+    // Audio out: audio_mixer runs the crossfeed mix and drives the codec
+    // clocks. The MiSTer IIR/DC-blocker chain was cut for OPNA fit headroom
+    // -- raw audio reaches the codec unfiltered.
     wire [15:0] audio_l = pause_core ? 16'd0 : (boost_cfg ? cmp_l : out_l);
     wire [15:0] audio_r = pause_core ? 16'd0 : (boost_cfg ? cmp_r : out_r);
 
+    // Drive noise lives in the OPNA's ADPCM-A voices now: the softcore polls
+    // floppy's taps over mgmt reg 0xE and keys its own samples, so it arrives
+    // inside core_l/core_r already mixed.
     audio_mixer #(.DW(16), .STEREO(1)) audio_mixer (
         .clk_74b    (clk_74b),
         .clk_audio  (clk_chipset),
@@ -2454,6 +2585,7 @@ module core_top (
         .is_signed  (1'b1),
         .core_l     (audio_l),
         .core_r     (audio_r),
+
         .audio_mclk (audio_mclk),
         .audio_lrck (audio_lrck),
         .audio_dac  (audio_dac)
@@ -2513,6 +2645,8 @@ module core_top (
         .palette_cfg        (palette_cfg),
         .disk_led           (disk_led_on),
         .vid_blank          (vid_blank),
+        .dbl_skip           (dbl_skip_pix),
+        .txt_pix            (vid_txt),
         .osd_active         (osd_active),
         .osd_palette_idx    (osd_palette_idx),
         .osd_in_area        (osd_in_area),

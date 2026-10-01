@@ -18,7 +18,7 @@ module RAM (
     // N+1 sit in consecutive SDRAM words: a V30 word cycle is one burst of
     // two, not two bus cycles. word_access says the cycle is a word, and the
     // _hi pair carries its odd half. Held low, everything below behaves
-    // exactly as it did byte-at-a-time.
+    // byte-at-a-time.
     // Sixteen-colour mode (port 0x6A bit 0). It moves the memory map: the
     // fourth graphics plane at E0000-E7FFF exists only while this is set.
     input   logic           analog_mode,
@@ -95,7 +95,13 @@ module RAM (
     // Wait mode
     input   logic           wait_count_clk_en,
     input   logic   [1:0]   ram_read_wait_cycle,
-    input   logic   [1:0]   ram_write_wait_cycle
+    input   logic   [1:0]   ram_write_wait_cycle,
+    // The MEMWAIT_VRAM share, resolved by Chipset on the guest address:
+    // extra CPU cycles owed for a graphics-plane access while the GDC's
+    // refresh owns that memory. Zero on a main-RAM address and at the
+    // speeds that do not model the contention.
+    input   logic   [3:0]   vram_rd_wait_cycle,
+    input   logic   [3:0]   vram_wr_wait_cycle
 );
 
     typedef enum {IDLE, RAM_WRITE_1, RAM_WRITE_2, RAM_READ_1, RAM_READ_2, COMPLETE_RAM_RW, WAIT} state_t;
@@ -141,8 +147,15 @@ module RAM (
     logic   [7:0]   accept_data_hi;
     logic           accept_word;
 
+    // Two counters per direction: the two-bit base keeps its original
+    // floor behaviour (it drains while the transaction runs), and the
+    // graphics-region share is ADDITIVE -- np21w charges MEMWAIT_VRAM on
+    // top of the access, so its count only starts once the FSM sits in
+    // COMPLETE_RAM_RW holding the strobe's READY.
     logic   [1:0]   read_wait_count;
     logic   [1:0]   write_wait_count;
+    logic   [3:0]   vram_rd_wait_count;
+    logic   [3:0]   vram_wr_wait_count;
     logic           access_ready;
 
     //
@@ -256,16 +269,9 @@ module RAM (
     logic   [15:0]  access_data_out;
     logic   [15:0]  access_data_out_hi;
 
-    // A word access is two words where the far end can burst; config.tcl
-    // defines PC98_WORD_MEM, and a guest word becomes one two-word SDRAM
-    // transaction. Undefined, this file is byte-at-a-time and word_access
-    // is dead.
-`ifdef PC98_WORD_MEM
+    // A word access is two words where the far end can burst: with
+    // word_access up, a guest word becomes one two-word SDRAM transaction.
     wire            word_now = word_access;
-`else
-    wire            word_now = 1'b0;
-    wire _unused_word = &{1'b0, word_access, internal_data_bus_hi, 1'b0};
-`endif
     wire    [9:0]   access_words = word_now ? 10'h002 : 10'h001;
     logic           write_request;
     logic           read_request;
@@ -602,25 +608,33 @@ module RAM (
     end
 
     always_ff @(posedge clock, posedge reset) begin
-        if (reset)
+        if (reset) begin
             read_wait_count     <= 0;
-        else if (~read_command)
+            vram_rd_wait_count  <= 0;
+        end else if (~read_command) begin
             read_wait_count     <= ram_read_wait_cycle;
-        else if ((wait_count_clk_en) && (read_wait_count != 0))
-            read_wait_count     <= read_wait_count - 1;
-        else
-            read_wait_count     <= read_wait_count;
+            vram_rd_wait_count  <= vram_rd_wait_cycle;
+        end else if (wait_count_clk_en) begin
+            if (read_wait_count != 0)
+                read_wait_count     <= read_wait_count - 1;
+            else if ((vram_rd_wait_count != 0) && (state == COMPLETE_RAM_RW))
+                vram_rd_wait_count  <= vram_rd_wait_count - 1;
+        end
     end
 
     always_ff @(posedge clock, posedge reset) begin
-        if (reset)
+        if (reset) begin
             write_wait_count    <= 0;
-        else if (~write_command)
+            vram_wr_wait_count  <= 0;
+        end else if (~write_command) begin
             write_wait_count    <= ram_write_wait_cycle;
-        else if ((wait_count_clk_en) && (write_wait_count != 0))
-            write_wait_count    <= write_wait_count - 1;
-        else
-            write_wait_count    <= write_wait_count;
+            vram_wr_wait_count  <= vram_wr_wait_cycle;
+        end else if (wait_count_clk_en) begin
+            if (write_wait_count != 0)
+                write_wait_count    <= write_wait_count - 1;
+            else if ((vram_wr_wait_count != 0) && (state == COMPLETE_RAM_RW))
+                vram_wr_wait_count  <= vram_wr_wait_count - 1;
+        end
     end
 
     // Ready comes from the STATE, not from the access_ready register.
@@ -659,8 +673,8 @@ module RAM (
     // writes the parking slot now also catches.
     assign  memory_access_ready = ((~ram_address_select_n) && ((~memory_read_n) || (~memory_write_n)))
                                         ? ((state == COMPLETE_RAM_RW) & (
-                                              (write_command & accept_live_wr & write_strobe_match & (write_wait_count == 0))
-                                            | (read_command  & accept_live_rd & read_strobe_match  & (read_wait_count  == 0)))) : 1'b1;
+                                              (write_command & accept_live_wr & write_strobe_match & (write_wait_count == 0) & (vram_wr_wait_count == 0))
+                                            | (read_command  & accept_live_rd & read_strobe_match  & (read_wait_count  == 0) & (vram_rd_wait_count == 0)))) : 1'b1;
 
     // ROM-load (Pocket): a clean per-access "done" pulse for core_top's BIOS
     // loader. COMPLETE_RAM_RW is reached only after the SDRAM write truly

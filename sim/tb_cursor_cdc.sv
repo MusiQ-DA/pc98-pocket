@@ -38,7 +38,7 @@ module tb_cursor_cdc;
     wire [1:0]  zoom_disp;
     wire        draw_req, draw_busy;
     wire [7:0]  draw_op;
-    wire [31:0] draw_snap [0:4];
+    wire [31:0] draw_snap [0:5];
 
     pc98_gdc #(.MASTER(1'b1)) gdc (
         .clk(clk), .reset(reset),
@@ -65,7 +65,8 @@ module tb_cursor_cdc;
     logic gdc_on_s1, gdc_on_px;
     logic pc98_vs_s1, pc98_vs_px, pc98_vs_px_d;
     logic [7:0]  gdc_pitch_px;
-    logic [15:0] gdc_sad_px;
+    logic [15:0] gdc_sad_px [0:3];
+    logic [9:0]  gdc_len_px [0:3];
     logic [15:0] gdc_cur_addr_px;
     logic [4:0]  gdc_cur_top_px, gdc_cur_bot_px;
     logic gdc_cur_en_s1, gdc_cur_en_px;
@@ -79,7 +80,8 @@ module tb_cursor_cdc;
         gdc_cur_bl_s1 <= cursor_blink_en; gdc_cur_bl_px <= gdc_cur_bl_s1;
         if (pc98_vs_px & ~pc98_vs_px_d) begin
             gdc_pitch_px    <= pitch;
-            gdc_sad_px      <= part_sad[0];
+            gdc_sad_px      <= part_sad;
+            gdc_len_px      <= part_len;
             gdc_cur_addr_px <= cursor_addr;
             gdc_cur_top_px  <= cursor_top;
             gdc_cur_bot_px  <= cursor_bottom;
@@ -105,14 +107,16 @@ module tb_cursor_cdc;
     pc98_text_render #(.H_TOTAL(848), .V_TOTAL(440)) rnd (
         .clk(clk_dot), .pix_ce(1'b1),
         .hcount(hcount), .vcount(vcount), .blink_on(blink_on),
-        .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px), .gdc_sad(gdc_sad_px),
+        .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px),
+        .gdc_sad(gdc_sad_px), .gdc_len(gdc_len_px),
         .wide(1'b0),
         .cur_addr(gdc_cur_addr_px), .cur_en(gdc_cur_en_px),
         .cur_blink(gdc_cur_bl_px),
         .cur_top(gdc_cur_top_px), .cur_bot(gdc_cur_bot_px),
         .tv_cell(tv_cell), .tv_attr(tv_attr),
         .font_cell(font_cell), .font_line(font_line), .font_row(font_row),
-        .grb(grb), .pixel(pixel)
+        .grb(grb), .pixel(pixel),
+        .crtc_pl(5'd0), .crtc_bl(5'h0F), .crtc_cl(5'h10), .line_rep(5'h0F)
     );
 
     int errors = 0;
@@ -216,7 +220,7 @@ module tb_cursor_cdc;
 
         $display("px: en=%0d top=%0d bot=%0d addr=%0d  sad=%0d pitch=%0d",
                  gdc_cur_en_px, gdc_cur_top_px, gdc_cur_bot_px,
-                 gdc_cur_addr_px, gdc_sad_px, gdc_pitch_px);
+                 gdc_cur_addr_px, gdc_sad_px[0], gdc_pitch_px);
 
         // Per-dot trace across the cursor cell on its first line (vcount=16):
         // col, drawn_cell, cursor_show, glyph bit, lit, pixel.

@@ -93,7 +93,9 @@ module tb_xrom;
         .ems98_maxmem(4'd8), .bios_protect_flag(2'b00),
         .mgmt_address(16'h0000), .mgmt_read(1'b0), .mgmt_readdata(),
         .mgmt_write(1'b0), .mgmt_writedata(16'h0000),
-        .floppy_wp(2'b00), .rtc_time(48'h0),
+        .floppy_wp(2'b00), .fdd_turbo(1'b0),
+        .cfg_dipsw2(8'hE3), .cfg_a3fea(8'h04),
+        .cfg_a3fee(8'h00), .cfg_a3ff2(8'h01), .rtc_time(48'h0),
         .fdd_present(), .fdd_request(), .scsi_request(),
         .wait_count_clk_en(1'b0),
         .ram_read_wait_cycle(2'b00), .ram_write_wait_cycle(2'b00),
@@ -139,18 +141,21 @@ module tb_xrom;
         check(20'hD0015, 8'hEB, 8'hEB);   // odd byte: hi lane = the byte itself
         check(20'hD0018, 8'h56, 8'h57);   // xrom_disk: push si / push di
         check(20'hD002E, 8'hC7, 8'h06);   // mov word [5F8],fdpara
-        check(20'hD0032, 8'hB1, 8'h00);   //   fdpara immediate = 00B1
+        check(20'hD0032, 8'hBC, 8'h00);   //   fdpara immediate = 00BC
         check(20'hD0050, 8'hCD, 8'h1B);   // int 1Bh re-dispatch
-        // The parameter table inside the image: fdpara at 0xB1 points
-        // all four units at rec144 (0xB9); its N=2 record is the 1.44MB
-        // geometry at 0xC9.
+        // The parameter table inside the image: fdpara at 0xBC points
+        // all four units at rec144 (0xC4); its N=2 record is the 1.44MB
+        // geometry at 0xD4. Init also writes the [5F8] repoint itself at
+        // 0xAE so the BIOS's own 0x9x path sees the same table.
         check(20'hD0094, 8'h50, 8'h1E);   // init: push ax / push ds
-        check(20'hD00B1, 8'hB9, 8'hB9);   // fdpara[0] = rec144 (odd: hi=lo)
-        check(20'hD00C9, 8'h12, 8'h12);   // N=2: EOT=18 (odd: hi=lo)
-        check(20'hD00CA, 8'h1B, 8'h12);   // GPL=1B, SC=18 for the fmt pair
+        check(20'hD00AE, 8'hC7, 8'h06);   // init: mov word [5F8],fdpara
+        check(20'hD00B2, 8'hBC, 8'h00);   //   fdpara immediate = 00BC
+        check(20'hD00BC, 8'hC4, 8'h00);   // fdpara[0] = rec144
+        check(20'hD00D4, 8'h12, 8'h1B);   // N=2: EOT=18, GPL=1B
+        check(20'hD00D6, 8'h12, 8'h54);   //       SC=18, GPL=54
         // Tail of the image and the open window around it.
-        check(20'hD00D8, 8'h00, 8'hFF);   // byte 216 = last image byte
-        check(20'hD00D9, 8'hFF, 8'hFF);   // beyond the image -> open slot
+        check(20'hD00E3, 8'h00, 8'h00);   // byte 227 = last image byte
+        check(20'hD00E4, 8'hFF, 8'hFF);   // beyond the image -> open slot
         check(20'hD00FF, 8'hFF, 8'hFF);   // end of the 256B window
         check(20'hD0100, 8'hFF, 8'h00);   // next page: the empty window
         check(20'hD1000, 8'hFF, 8'h00);   // the next 4KB scan slot

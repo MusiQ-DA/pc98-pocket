@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [main, debug-jtag]
     # Docs-only commits don't change the bitstream; skip the 20-minute
     # Quartus build for them. CI config itself still triggers.
     paths-ignore:
@@ -146,7 +146,8 @@ jobs:
           S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_cgwindow \
             -Isim -I$S sim/tb_pc98_cgwindow.sv \
-            $S/pc98_cgwindow.sv $S/pc98_glyph_addr.sv -o c --Mdir obj_cg
+            $S/pc98_cgwindow.sv $S/pc98_glyph_addr.sv $S/pc98_gaiji_ram.sv \
+            -o c --Mdir obj_cg
           ./obj_cg/c | tee cg.log
           grep -q "RESULT: PASS" cg.log
 
@@ -164,7 +165,7 @@ jobs:
           S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_font_sdram \
             -Isim -I$S sim/tb_pc98_font_sdram.sv sim/sdram_model.sv \
-            $S/pc98_glyph_rowbuf.sv $S/pc98_glyph_addr.sv \
+            $S/pc98_glyph_rowbuf.sv $S/pc98_glyph_addr.sv $S/pc98_gaiji_ram.sv \
             $S/pc98_font_fetch.sv $S/sdram_mp.sv \
             -o f --Mdir obj_fs
           ./obj_fs/f | tee fs.log
@@ -175,7 +176,7 @@ jobs:
           S=fpga/core
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_font_stress \
             -Isim -I$S sim/tb_pc98_font_stress.sv sim/sdram_model.sv \
-            $S/pc98_glyph_rowbuf.sv $S/pc98_glyph_addr.sv \
+            $S/pc98_glyph_rowbuf.sv $S/pc98_glyph_addr.sv $S/pc98_gaiji_ram.sv \
             $S/pc98_font_fetch.sv $S/sdram_mp.sv \
             -o s --Mdir obj_fstress
           ./obj_fstress/s | tee fstress.log
@@ -187,7 +188,8 @@ jobs:
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_pipeline \
             -Isim -I$S sim/tb_pc98_pipeline.sv sim/sdram_model.sv \
             $S/pc98_tvram.sv $S/pc98_glyph_rowbuf.sv $S/pc98_glyph_addr.sv \
-            $S/pc98_font_ank.sv $S/pc98_font_fetch.sv $S/sdram_mp.sv \
+            $S/pc98_gaiji_ram.sv $S/pc98_font_ank.sv $S/pc98_font_fetch.sv \
+            $S/sdram_mp.sv \
             $S/pc98_text_render.sv $S/pc98_video_timing.sv $S/pulse_cdc.sv \
             -o p --Mdir obj_pipe
           ./obj_pipe/p | tee pipe.log
@@ -198,7 +200,8 @@ jobs:
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_rowbuf \
             -Isim -Ifpga/core sim/tb_pc98_rowbuf.sv \
             fpga/core/pc98_glyph_rowbuf.sv \
-            fpga/core/pc98_glyph_addr.sv \
+            fpga/core/pc98_glyph_addr.sv fpga/core/pc98_gaiji_ram.sv \
+            fpga/core/pc98_font_ank.sv \
             -o b --Mdir obj_rb
           ./obj_rb/b | tee rb.log
           grep -q "RESULT: PASS" rb.log
@@ -288,6 +291,15 @@ jobs:
             -o k --Mdir obj_kb
           ./obj_kb/k | tee kb.log
           grep -q "RESULT: PASS" kb.log
+
+      - name: Docked USB keyboard reports become Set-2 events
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_hid_to_ps2 \
+            -Isim -Ifpga/core \
+            sim/tb_hid_to_ps2.sv fpga/core/hid_to_ps2.sv \
+            -o h --Mdir obj_hid
+          ./obj_hid/h | tee hid.log
+          grep -q "RESULT: PASS" hid.log
 
       - name: ITF bank switches on 0x043D and not on a glitch
         run: |
@@ -479,6 +491,10 @@ jobs:
       - name: the firmware ADPCM-A encoder matches the packer bit for bit
         run: |
           python3 scripts/rhythm_enc_test.py
+
+      - name: the fddsnd.bin header parse matches the packer's layout
+        run: |
+          python3 scripts/fddsnd_hdr_test.py
 
       - name: the GRCG's three operations match np21w's expressions
         run: |

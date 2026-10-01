@@ -67,7 +67,7 @@ module sdram_shim #(
     //
     // A two-word read lands beat by beat: the first word is the addressed
     // byte, the second its odd half. RAM.sv only asks for two words when
-    // PC98_WORD_MEM is defined.
+    // word_access is up -- a guest word at an address the SDRAM serves.
     input  wire  [sdram_data_width-1:0]       data_in_hi,
     output logic [sdram_data_width-1:0]       data_out_hi,
     input  wire                               write_request,

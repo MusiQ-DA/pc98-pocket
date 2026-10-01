@@ -83,95 +83,90 @@ def core(j):
         c['filename'] = 'bitstream.rbf_r'
 
 def data(j):
-    # THE DISTRIBUTED ASSETS ARE NOT MENU ITEMS. Parameters bit 0 is
-    # "user-reloadable in the Core UI", and it was set on the BIOS, ITF, Font,
-    # Firmware and Settings slots -- so the Pocket's Core Settings list offered
-    # to swap the BIOS by hand, mixed in with the floppies that actually want
-    # picking. They load from the core's own Assets folder (bit 1 and the
-    # filename see to that); the bit is clear now.
+    # THE ROOT data.json IS THE SLOT TABLE. This function no longer writes
+    # one -- it verifies the one that was copied in. It used to REPLACE
+    # data_slots with a second hardcoded table (leftover from when the root
+    # file was the inherited PC/AT one), and the copy drifted: root had been
+    # bumped to 48 KB for the firmware slot and 16 KB for the rhythm store
+    # while the packaged table still said 0x8000/0x2000, so every packaged
+    # install refused its own firmware.bin -- the "error in framework file
+    # id [12] too large" the old comment warned about. One table plus
+    # assertions kills the drift path; what each check encodes was a real
+    # failure once:
     #
-    # The floppy and hard-disk ids are the ones the firmware's slot map
-    # (softcpu_regs.h) and core_top's dataslot_update decode expect: 3/4 are
-    # the two floppy drives, 5 is the SCSI image the PC-98 disk BIOS would
-    # talk to. The ROMs used to squat on 3 and 4 -- harmless while nothing
-    # mounted a floppy, and wrong now that something can: a dataslot_update
-    # for id 3 is read by core_top as "floppy A's size", so the FONT's byte
-    # count was being mounted as a disk. The bridge addresses, not the ids,
-    # are what routes the ROM streams, so renumbering them is free.
-    j['data']['data_slots'] = [
-        {"name": "PC-98 BIOS",  "id": 1, "required": True,  "parameters": "0x202",
-         "filename": "bios.rom", "extensions": ["rom", "bin"],
-         "address": "0x10000000", "size_maximum": "0x18000"},
-        {"name": "PC-98 ITF",   "id": 2, "required": True,  "parameters": "0x202",
-         "filename": "itf.rom",  "extensions": ["rom", "bin"],
-         "address": "0x10020000", "size_maximum": "0x8000"},
-        {"name": "PC-98 Font",  "id": 11, "required": True,  "parameters": "0x202",
-         "filename": "font.rom", "extensions": ["rom", "bin"],
-         "address": "0x10100000", "size_maximum": "0x46800"},
-        # 0x8000: the softcore ROM is 32 KB since the drawing server landed;
-        # the old 0x6000 (24 KB) made the framework refuse the file with
-        # "error in framework file id [12] too large" the moment it grew.
-        {"name": "Firmware",    "id": 12, "required": False, "parameters": "0x202",
-         "filename": "firmware.bin", "extensions": ["bin"],
-         "address": "0x10040000", "size_maximum": "0x8000"},
-        # The save window IS the disk bridge RAM: 0x6xxxxxxx is the only
-        # address the host DMA can both write and read back there (0x1xxxxxxx
-        # streams go to the ROM loader and are dropped -- the old 0x10030000
-        # threw the slot away on load and answered 0 on flush, so nothing ever
-        # persisted). parameters 0x22 = bit5, fill 0xFF when no .sav exists,
-        # plus bit1, core-specific file. 0x200 bytes is the whole window past
-        # the sector buffer -- the global blob and the per-disk profile table.
-        {"name": "Settings",    "id": 7, "required": False, "parameters": "0x22",
-         "nonvolatile": True, "filename": "settings.dat", "extensions": ["dat"],
-         "address": "0x60000200", "size_maximum": "0x200"},
-        {"name": "Floppy A",    "id": 3, "required": False, "parameters": "0x201",
-         # 0x201 = bit0 user-reloadable + bit9 persist-browsed-filename. No
-         # `filename` default: the host records a deferload slot's declared
-         # filename as its binding but never fires a dataslot update for it,
-         # and a same-name pick is then a no-op -- draw_test.hdm could not be
-         # mounted at all while it was pinned here (0x201 AND 0x203 tried).
-         # Without the pin every pick is a real rebind.
-         # The schema allows at most FOUR extensions -- a longer list made the
-         # Pocket browse on the first four only, and .hdm (seventh) was never
-         # selectable. Keep the raw image formats the loader actually reads.
-         "extensions": ["hdm", "fdi", "2hd", "fdd"],
-         "size_maximum": 8388608, "deferload": True},
-        {"name": "Floppy B",    "id": 4, "required": False, "parameters": "0x201",
-         "extensions": ["hdm", "fdi", "2hd", "fdd"],
-         "size_maximum": 8388608, "deferload": True},
-        {"name": "Hard Disk",   "id": 5, "required": False, "parameters": 1,
-         "extensions": ["hdi", "nhd", "thd", "hdd"],
-         "deferload": True},
-        # Rhythm PCM: the OPNA's ADPCM-A sample store, packed by
-        # scripts/rhythm_pack.py from the six 2608_*.wav files. Deferload with
-        # a pinned filename: the binding is the file itself and nothing is
-        # streamed at boot -- firmware/rhythm.c pulls it through the
-        # target-dataslot path once it sees the store exists (OMGMT_CAPS).
-        # Bit 9 (persist) + bit 0 (browsable): if the pinned filename does not
-        # auto-bind the user picks rhythm.bin once and it sticks; when it does
-        # bind no menu step is ever needed.
-        {"name": "Rhythm PCM",  "id": 13, "required": False, "parameters": "0x201",
-         "filename": "rhythm.bin", "extensions": ["bin"],
-         "size_maximum": "0x2000", "deferload": True},
-        # Per-voice rhythm sources: drop any 2608_*.wav (or a substitute hit)
-        # into the matching slot and the firmware encodes it into the OPNA's
-        # ADPCM-A store at boot -- no offline packer step. Any bound WAV slot
-        # switches the loader to this mode entirely (rhythm.bin is then
-        # ignored): each path packs its own sequential layout, so mixing
-        # would corrupt the offsets. Unbound voices stay silent.
-        {"name": "Rhythm BD",   "id": 14, "required": False, "parameters": "0x201",
-         "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
-        {"name": "Rhythm SD",   "id": 15, "required": False, "parameters": "0x201",
-         "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
-        {"name": "Rhythm TOP",  "id": 16, "required": False, "parameters": "0x201",
-         "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
-        {"name": "Rhythm HH",   "id": 17, "required": False, "parameters": "0x201",
-         "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
-        {"name": "Rhythm TOM",  "id": 18, "required": False, "parameters": "0x201",
-         "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
-        {"name": "Rhythm RIM",  "id": 19, "required": False, "parameters": "0x201",
-         "extensions": ["wav"], "size_maximum": "0x400000", "deferload": True},
-    ]
+    #  * The disk ids are the firmware's slot map (softcpu_regs.h) and
+    #    core_top's dataslot_update decode: 3/4 are the floppy drives, 5 is
+    #    the SCSI image. The bridge addresses, not the ids, route the ROM
+    #    streams -- a dataslot_update for id 3 is read as "floppy A's size",
+    #    which is why the ROMs moved to 1/2/11/12.
+    #  * Parameters bit 0 is "user-reloadable in the Core UI". It once sat
+    #    on the BIOS/ITF/Font/Firmware/Settings slots and the settings list
+    #    offered to swap the BIOS by hand; it belongs only on the browsed
+    #    disk slots (0x201 = bit0 + bit9 persist-browsed-filename -- without
+    #    bit9 a picked image unbinds on the pick-triggered core reload).
+    #  * A picker slot carries at most FOUR extensions: a longer list made
+    #    the Pocket browse the first four only, and .hdm was never
+    #    selectable while it sat seventh.
+    #  * deferload slots are BOUND, not streamed: filename + size land in
+    #    the datatable and the firmware pulls bytes with tds_transfer
+    #    (rhythm.bin, the 2608_*.wav voices, fddsnd.bin). An `address` on a
+    #    deferload slot is dead weight -- it streamed to 0x10200000 once,
+    #    an address nothing in core_top decodes -- and a non-deferload slot
+    #    without one has nowhere to go.
+    #  * Bit 1 of parameters resolves a pinned filename in the core's own
+    #    Assets/<platform>/<core>/ dir; clear means Assets/<platform>/common/.
+    #  * A slot's size_maximum must cover the file actually shipped -- the
+    #    framework refuses the file outright when it does not.
+    slots = j['data']['data_slots']
+    by_id = {s['id']: s for s in slots}
+    want = {1, 2, 3, 4, 5, 7, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+    missing = sorted(want - by_id.keys())
+    assert not missing, f"data_slots is missing ids {missing}"
+
+    def pnum(s):
+        p = s.get('parameters', 0)
+        return int(p, 0) if isinstance(p, str) else p
+
+    def smax(s):
+        m = s.get('size_maximum')
+        return None if m is None else (
+            int(m, 0) if isinstance(m, str) else m)
+
+    for s in slots:
+        sid = s['id']
+        assert len(s.get('extensions', ())) <= 4, \
+            f"slot {sid}: {len(s.get('extensions', ()))} extensions -- " \
+            "the picker browses four at most"
+        if pnum(s) & 1:
+            assert s.get('deferload'), \
+                f"slot {sid}: bit0 user picker on a boot-stream slot"
+        assert ('address' in s) != bool(s.get('deferload')), \
+            f"slot {sid}: deferload slots bind, streamed slots need an " \
+            "address -- exactly one of the two"
+
+    # Files this repo ships must fit their declared cap, checked against the
+    # real file rather than a remembered number. Optional assets are checked
+    # only when present.
+    shipped = {
+        'firmware.bin': 'firmware/firmware.bin',
+        'fddsnd.bin':   'assets/fddsnd.bin',
+        'rhythm.bin':   'assets/rhythm.bin',
+    }
+    for v in ('bd', 'sd', 'top', 'hh', 'tom', 'rim'):
+        shipped[f'2608_{v}.wav'] = f'assets/wavs/2608_{v}.wav'
+    for s in slots:
+        fn, mx = s.get('filename'), smax(s)
+        p = shipped.get(fn or '')
+        if p and os.path.exists(p) and mx is not None:
+            sz = os.path.getsize(p)
+            assert sz <= mx, \
+                f"{p} is {sz} bytes but slot {s['id']} caps at {mx} -- " \
+                "the framework will refuse it at load"
+    # And the firmware cap itself must fit the softcore ROM window -- the
+    # RTL's fw_dl_hit drops writes at >= 0xC000, so a larger declared cap
+    # would accept a file that then silently truncates.
+    assert smax(by_id[12]) <= 0xC000, \
+        "Firmware slot's size_maximum exceeds the 48 KB ROM window"
 
 def video(j):
     # The PC-98 raster is 640x400 (pc98_video_timing.sv, from np21w's clock
@@ -223,13 +218,16 @@ def input_map(j):
     # from the inherited list, so those three could not be remapped at all.
     j['input']['controllers'] = [
         {"type": "default", "mappings": [
-            {"id": 0, "name": "A: Ctrl",  "key": "pad_btn_a"},
-            {"id": 1, "name": "B: Alt",   "key": "pad_btn_b"},
-            {"id": 2, "name": "X: Space", "key": "pad_btn_x"},
-            {"id": 3, "name": "Y: Enter", "key": "pad_btn_y"},
+            # The names mirror the firmware's binding roller (keybind_cycle in
+            # settings_ui.c): PC-98 destination names, not host-key names --
+            # docked L-Alt arrives as NFER, so B says NFER, not Alt.
+            {"id": 0, "name": "A: Return", "key": "pad_btn_a"},
+            {"id": 1, "name": "B: NFER",   "key": "pad_btn_b"},
+            {"id": 2, "name": "X: Space",  "key": "pad_btn_x"},
+            {"id": 3, "name": "Y: Ctrl",   "key": "pad_btn_y"},
             {"id": 4, "name": "L: Virtual Keyboard", "key": "pad_trig_l"},
             {"id": 5, "name": "R: unmapped",         "key": "pad_trig_r"},
-            {"id": 6, "name": "Start: POST Overlay", "key": "pad_btn_start"},
+            {"id": 6, "name": "Start: unmapped",     "key": "pad_btn_start"},
             {"id": 7, "name": "Select: Settings",    "key": "pad_btn_select"},
         ]},
     ]

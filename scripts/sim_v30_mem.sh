@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
 # sim_v30_mem.sh -- the V30 against the real memory path (tb_v30_mem).
 #
-#   scripts/sim_v30_mem.sh              # byte-at-a-time, as the machine is now
-#   scripts/sim_v30_mem.sh --word       # with PC98_WORD_MEM: word = one burst
+#   scripts/sim_v30_mem.sh              # the word path is unconditional now:
+#                                       # an SDRAM word is one burst
 #
 # Needs no ROMs: the program is poked into the part's storage by the bench.
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-WORD=0
 PRISTINE=0
 PR_RAM=0
 PR_BRIDGE=0
 while :; do
   case "${1:-}" in
-    --word)     WORD=1; shift ;;
     # --pristine: build against the f3aa15c copies of RAM.sv, the shim and the
     # bridge, extracted into /tmp/pristine. The control for "did this bench find
     # a bug that was already there, or one I just introduced?".
@@ -31,7 +29,6 @@ K=$S/chipset/HDL
 V=$S/v30
 
 DEF="+define+V30_BACKDOOR"
-[ "$WORD" = 1 ] && DEF="$DEF+PC98_WORD_MEM"
 
 OUT="${TMPDIR:-/tmp}/v30mem"
 mkdir -p "$OUT/hdl/rtl/ucore"

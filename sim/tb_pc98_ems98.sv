@@ -60,7 +60,7 @@ module tb_pc98_ems98;
         .ems98_map(ems98_map),
         .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(1'b1),
-        .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0)
+        .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0)
     );
 
     pc98_ems98 u_ems98 (

@@ -47,7 +47,7 @@ module tb_pc98_gdc;
     wire [5:0]  cursor_rate;
     wire        draw_req, draw_busy;
     wire [7:0]  draw_op;
-    wire [31:0] draw_snap [0:4];
+    wire [31:0] draw_snap [0:5];
     logic       srv_done = 1'b0;
     logic [7:0] st_v;
 

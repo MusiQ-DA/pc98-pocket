@@ -59,7 +59,14 @@
 
 `default_nettype none
 
-module pc98_gvram_seq (
+module pc98_gvram_seq #(
+    // EGC=0 drops the raster engine outright: the machine then answers like
+    // a GRCG-only model -- mode2's VOPBIT_EGC bits still latch, but nothing
+    // consumes them, ports 0x4A0-0x4AF decode nowhere, and every graphics
+    // access is GRCG or plain. The engine stays in the tree (tb_pc98_egc and
+    // this module's own bench still build with EGC=1).
+    parameter bit EGC = 1
+) (
     input  wire        clk,
     input  wire        reset,
 
@@ -125,10 +132,13 @@ module pc98_gvram_seq (
     endfunction
 
     // Claimed: a charger expands it, or the page bit banks even a plain one.
+    // egc_arm masks the input with the build flag so EGC=0 answers like a
+    // GRCG-only machine no matter what the caller still drives.
     wire window    = cpu_gvram & pc98_gvram_hits(cpu_addr, analog_mode);
-    wire egc_here  = egc_active & window;
-    wire grcg_here = ~egc_active & grcg_active & window;
-    wire plain_pg1 = ~egc_active & ~grcg_active & window & access_page;
+    wire egc_arm   = EGC & egc_active;
+    wire egc_here  = egc_arm & window;
+    wire grcg_here = ~egc_arm & grcg_active & window;
+    wire plain_pg1 = ~egc_arm & ~grcg_active & window & access_page;
     wire expand    = egc_here | grcg_here | plain_pg1;
     wire [1:0] own = own_plane(cpu_addr);
 
@@ -179,22 +189,40 @@ module pc98_gvram_seq (
                          & egc_rd_last)
                         : (egc_wr_shift & (st == S_RD) & (gp == 2'd0)));
 
-    pc98_egc u_egc (
-        .clk(clk), .rst(reset),
-        .wr(egc_wr), .rg(egc_rg), .d(egc_d),
-        .access_r(egc_access), .fgbg_r(egc_fgbg), .ope_r(egc_ope),
-        .mask_r(egc_mask), .sft_r(), .leng_r(),
-        .fgc(egc_fgc), .bgc(egc_bgc),
-        .pat_ld(egc_pat_ld), .pat_plane(egc_ld_plane),
-        .pat_ext(egc_ld_ext), .pat_d(mem_rdata), .patreg(egc_patreg),
-        .src_q(egc_src),
-        .sf_push(egc_sf_push), .sf_push_plane(gp), .sf_push_d(mem_rdata),
-        .sf_evt(egc_sf_evt), .sf_evt_wr(~is_read), .sf_evt_d(cpu_wdata),
-        .sf_ext(cpu_addr[0]),
-        .op_plane(gp), .op_ext(cpu_addr[0]),
-        .op_dst(rd_hold), .op_val(cpu_wdata), .op_data(egc_op_data),
-        .op_mask(egc_op_mask)
-    );
+    generate
+    if (EGC) begin : g_egc
+        pc98_egc u_egc (
+            .clk(clk), .rst(reset),
+            .wr(egc_wr), .rg(egc_rg), .d(egc_d),
+            .access_r(egc_access), .fgbg_r(egc_fgbg), .ope_r(egc_ope),
+            .mask_r(egc_mask), .sft_r(), .leng_r(),
+            .fgc(egc_fgc), .bgc(egc_bgc),
+            .pat_ld(egc_pat_ld), .pat_plane(egc_ld_plane),
+            .pat_ext(egc_ld_ext), .pat_d(mem_rdata), .patreg(egc_patreg),
+            .src_q(egc_src),
+            .sf_push(egc_sf_push), .sf_push_plane(gp), .sf_push_d(mem_rdata),
+            .sf_evt(egc_sf_evt), .sf_evt_wr(~is_read), .sf_evt_d(cpu_wdata),
+            .sf_ext(cpu_addr[0]),
+            .op_plane(gp), .op_ext(cpu_addr[0]),
+            .op_dst(rd_hold), .op_val(cpu_wdata), .op_data(egc_op_data),
+            .op_mask(egc_op_mask)
+        );
+    end else begin : g_no_egc
+        assign egc_access  = '0;
+        assign egc_fgbg    = '0;
+        assign egc_ope     = '0;
+        assign egc_mask    = '0;
+        assign egc_op_data = 8'h00;
+        assign egc_op_mask = 8'h00;
+        genvar i;
+        for (i = 0; i < 4; i++) begin : g_tie
+            assign egc_fgc[i]    = '0;
+            assign egc_bgc[i]    = '0;
+            assign egc_patreg[i] = '0;
+            assign egc_src[i]    = '0;
+        end
+    end
+    endgenerate
 
     // Which plane an EGC read answers with, and the byte it gave.
     wire [1:0] egc_rd_plane = egc_fgbg[9:8];

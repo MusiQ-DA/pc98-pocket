@@ -16,11 +16,11 @@ module CHIPSET #(
         // CPU
         input   logic   [19:0]  cpu_address,
         input   logic   [7:0]   cpu_data_bus,
-        // The 16-bit memory path (PC98_WORD_MEM): v30_cpu_bridge asks for a
+        // The 16-bit memory path: v30_cpu_bridge asks for a
         // word, RAM.sv turns it into one two-word SDRAM burst instead of two
         // bus cycles, and the odd lane travels on its own pair of wires rather
-        // than widening the chipset's eight-bit bus. Tied off in every other
-        // build -- see pc98_sdram_map.svh for which addresses can take one.
+        // than widening the chipset's eight-bit bus. Only the addresses
+        // pc98_sdram_map.svh selects can take one -- see that file.
         input   logic           cpu_word_access,
         input   logic   [7:0]   cpu_data_bus_hi,
         output  logic   [7:0]   data_bus_hi,
@@ -37,7 +37,7 @@ module CHIPSET #(
         output  logic   [1:0]   gdc_draw_req,
         output  logic   [1:0]   gdc_draw_busy,
         output  logic  [15:0]   gdc_draw_ops,
-        output  logic [319:0]   gdc_draw_snaps,
+        output  logic [383:0]   gdc_draw_snaps,
         input   logic   [1:0]   gdc_srv_done_levels,
         output  logic           de_o,
         output  logic   [5:0]   VID_R,
@@ -47,6 +47,12 @@ module CHIPSET #(
         output  logic           VID_VSYNC,
         output  logic           VID_HBlank,
         output  logic           VID_VBlank,
+        // The guest's graphics is in a doubled 200-line mode; pocket_video's
+        // "Skip" 200-line presentation reads it.
+        output  logic           dbl200,
+        // In lockstep with VID_R/G/B: the dot belongs to the text plane, which
+        // the "Skip" presentation must leave alone.
+        output  logic           VID_TXT,
         // I/O Ports
         output  logic   [19:0]  address,
         input   logic   [19:0]  address_ext,
@@ -78,6 +84,7 @@ module CHIPSET #(
         // state, out to core_top's probe. Unconsumed they synthesise away.
         output  logic   [15:0]  dbg_chipset,
         output  logic   [7:0]   dbg_chipset2,
+        output  logic   [33:0]  dbg_scsi,
         // Peripherals
         output  logic   [2:0]   timer_counter_out,
         output  logic           speaker_out,
@@ -127,14 +134,34 @@ module CHIPSET #(
         input   logic           mgmt_write,
         input   logic   [15:0]  mgmt_writedata,
         input   logic   [1:0]   floppy_wp,
+        // OSD FDD Turbo: floppy.v relaxes its authentic seek and per-sector
+        // pacing while set. The settings file and this module share a clock
+        // domain, so the bit arrives on a plain wire.
+        input   logic           fdd_turbo,
+        // Machine configuration bytes, composed in the softcore: DIP switch 2
+        // for port 0x31 and the Settings-owned memory-switch cells.
+        input   logic   [7:0]   cfg_dipsw2,
+        input   logic   [7:0]   cfg_a3fea,
+        input   logic   [7:0]   cfg_a3fee,
+        input   logic   [7:0]   cfg_a3ff2,
         input   logic   [47:0]  rtc_time,
         output  logic   [1:0]   fdd_present,
         output  logic   [1:0]   fdd_request,
+        // fdd_request masked by the requesting drive's media -- the access
+        // lamp's view; the softcore still gets the raw bits.
+        output  logic           fdd_media_req,
         output  logic           scsi_request,
+        // JTAG probe: the floppy engine's transfer state and live command.
+        output  wire    [63:0]  dbg_fdc,
+        output  wire    [63:0]  dbg_fdc_cmd,
         // RAM wait mode
         input   logic           wait_count_clk_en,
         input   logic   [1:0]   ram_read_wait_cycle,
         input   logic   [1:0]   ram_write_wait_cycle,
+        // The faithful CPU speeds also carry np21w's MEMWAIT_VRAM: the GDC's
+        // display refresh shares the VRAM bus, so a guest access to a
+        // graphics plane costs extra CPU cycles while the beam is out.
+        input   logic           vram_wait_en,
         // Others
         output  logic           pause_core,
         // PC-98 keyboard injection, passed to PERIPHERALS' 8251 model.
@@ -349,6 +376,8 @@ module CHIPSET #(
         .VID_VSYNC                          (VID_VSYNC),
         .VID_HBlank                         (VID_HBlank),
         .VID_VBlank                         (VID_VBlank),
+        .dbl200                             (dbl200),
+        .VID_TXT                            (VID_TXT),
         .address                            (address),
 	    .latch_address                      (latch_address),
         .internal_data_bus                  (internal_data_bus),
@@ -374,11 +403,20 @@ module CHIPSET #(
         .mgmt_write                         (mgmt_write),
         .mgmt_writedata                     (mgmt_writedata),
         .floppy_wp                          (floppy_wp),
+        .fdd_turbo                          (fdd_turbo),
+        .cfg_dipsw2                         (cfg_dipsw2),
+        .cfg_a3fea                          (cfg_a3fea),
+        .cfg_a3fee                          (cfg_a3fee),
+        .cfg_a3ff2                          (cfg_a3ff2),
         .rtc_time                           (rtc_time),
         .fdd_present                        (fdd_present),
         .fdd_request                        (fdd_request),
+        .fdd_media_req                      (fdd_media_req),
         .scsi_request                       (scsi_request),
+        .dbg_scsi                           (dbg_scsi),
         .fdd_dma_req                        (fdd_dma_req),
+        .dbg_fdc                            (dbg_fdc),
+        .dbg_fdc_cmd                        (dbg_fdc_cmd),
         // The BIOS runs 2HD (0x90 window) transfers on channel 2 and 2DD
         // (0xC8 window) on channel 3 -- the arbiter pairs ack[2] with page
         // register 1 (port 0x23) and ack[3] with page register 2 (0x25),
@@ -426,7 +464,11 @@ module CHIPSET #(
     wire        ram_complete_w, ram_ready_w;
     wire        gvram_sel = ~ram_address_select_n;
 
-    pc98_gvram_seq u_gvram_seq (
+    // EGC=1: the charger is fitted again -- OPNA gave up its ADPCM-A block
+    // (rhythm voices and the drive-sound mechanism kit) to pay for it, so
+    // this machine now answers yes to the mode2 arm check EGC software
+    // keys on. GRCG and EGC share the sequencer's plane pipeline below.
+    pc98_gvram_seq #(.EGC(1'b1)) u_gvram_seq (
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
         .cpu_rd(~memory_read_n), .cpu_wr(~memory_write_n),
@@ -448,6 +490,30 @@ module CHIPSET #(
     // it writes E8000-FFFFF, which is never a graphics window, so it takes the
     // sequencer's pass-through and sees the memory's own completion.
     assign ram_rw_complete = ram_complete_w;
+
+    // np21w MEMWAIT_VRAM/GRCG (pccore.c's wait[] defaults {1,1,6,1,8,1}):
+    // while the beam is out a graphics-plane access costs six extra CPU
+    // cycles, and eight when the GRCG/EGC path owns the window; in vertical
+    // blank the contention goes away and every region costs one. Only the
+    // faithful clocks ask for it -- vram_wait_en -- and the decode runs on
+    // the guest's address, before the sequencer's plane remap. An RMW-class
+    // guest write runs through the sequencer as a read+write pair, so it
+    // takes half the charge on each leg and still pays eight in total.
+    wire vram_hit = (address[19:16] == 4'hA && address[15])   // A8000-AFFFF
+                  | (address[19:16] == 4'hB)                  // B0000-BFFFF
+                  | (pc98_analog & (address[19:15] == 5'b11100)); // E0000-E7FFF
+    wire accel_hit = grcg_active | egc_active_w;
+    wire rmw_guest_wr = accel_hit & ~memory_write_n & (grcg_rmw | egc_wr_w);
+    wire [3:0] vram_rd_wait = !vram_wait_en || !vram_hit ? 4'd0
+                            : VID_VBlank                   ? 4'd1
+                            : rmw_guest_wr                 ? 4'd4
+                            : accel_hit                    ? 4'd8
+                            :                                4'd6;
+    wire [3:0] vram_wr_wait = !vram_wait_en || !vram_hit ? 4'd0
+                            : VID_VBlank                   ? 4'd1
+                            : rmw_guest_wr                 ? 4'd4
+                            : accel_hit                    ? 4'd8
+                            :                                4'd6;
 
     RAM u_RAM 
     (
@@ -509,6 +575,8 @@ module CHIPSET #(
         .wait_count_clk_en                  (wait_count_clk_en),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),
+        .vram_rd_wait_cycle                 (vram_rd_wait),
+        .vram_wr_wait_cycle                 (vram_wr_wait),
         .dbg                                (ram_dbg)
     );
 
@@ -560,12 +628,12 @@ module CHIPSET #(
     // offset 9, POST entries at 0x0C/0x0F/0x12/0x15, and the disk-BIOS
     // extension entry at 0x18 which the BIOS tail-jumps to through the
     // 0x4B0 devtype table.
-    localparam logic [7:0] XROM_BYTES [0:216] = '{
+    localparam logic [7:0] XROM_BYTES [0:227] = '{
             8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h55, 8'hAA, 8'h90,
             8'hE9, 8'h85, 8'h00, 8'hE9, 8'h82, 8'h00, 8'hE9, 8'h7F, 8'h00, 8'hEB, 8'h7D, 8'h90,
             8'h56, 8'h57, 8'h8B, 8'h76, 8'h00, 8'h8A, 8'h46, 8'h01, 8'h24, 8'h0F, 8'h3C, 8'h04,
             8'h74, 8'h38, 8'hFF, 8'h36, 8'hFA, 8'h05, 8'hFF, 8'h36, 8'hF8, 8'h05, 8'hC7, 8'h06,
-            8'hF8, 8'h05, 8'hB1, 8'h00, 8'h8C, 8'hC8, 8'hA3, 8'hFA, 8'h05, 8'h89, 8'hF0, 8'h24,
+            8'hF8, 8'h05, 8'hBC, 8'h00, 8'h8C, 8'hC8, 8'hA3, 8'hFA, 8'h05, 8'h89, 8'hF0, 8'h24,
             8'h0F, 8'h0C, 8'h90, 8'h8B, 8'h5E, 8'h02, 8'h8B, 8'h4E, 8'h04, 8'h8B, 8'h56, 8'h06,
             8'h8E, 8'h46, 8'h0A, 8'h8B, 8'h7E, 8'h08, 8'h87, 8'hFD, 8'hCD, 8'h1B, 8'h87, 8'hFD,
             8'h8F, 8'h06, 8'hF8, 8'h05, 8'h8F, 8'h06, 8'hFA, 8'h05, 8'hEB, 8'h1A, 8'h89, 8'hF0,
@@ -575,14 +643,14 @@ module CHIPSET #(
             8'h80, 8'h4E, 8'h16, 8'h01, 8'h5F, 8'h5E, 8'h58, 8'h5B, 8'h59, 8'h5A, 8'h5D, 8'h07,
             8'h5F, 8'h5E, 8'h1F, 8'hCF, 8'h50, 8'h1E, 8'h31, 8'hC0, 8'h8E, 8'hD8, 8'hC6, 8'h06,
             8'hD0, 8'h04, 8'hFF, 8'h80, 8'h0E, 8'hAE, 8'h05, 8'h03, 8'h8C, 8'hC8, 8'h88, 8'hE0,
-            8'hA2, 8'hB3, 8'h04, 8'hA2, 8'hBB, 8'h04, 8'h1F, 8'h58, 8'hCB, 8'hB9, 8'h00, 8'hB9,
-            8'h00, 8'hB9, 8'h00, 8'hB9, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h1A, 8'h07, 8'h1A,
-            8'h1B, 8'h1A, 8'h0E, 8'h1A, 8'h36, 8'h0F, 8'h0E, 8'h0F, 8'h2A, 8'h12, 8'h1B, 8'h12,
-            8'h54, 8'h08, 8'h1B, 8'h08, 8'h3A, 8'h08, 8'h35, 8'h08, 8'h74, 8'h00, 8'h00, 8'h00,
-            8'h00 };
+            8'hA2, 8'hB3, 8'h04, 8'hA2, 8'hBB, 8'h04, 8'hC7, 8'h06, 8'hF8, 8'h05, 8'hBC, 8'h00,
+            8'h8C, 8'hC8, 8'hA3, 8'hFA, 8'h05, 8'h1F, 8'h58, 8'hCB, 8'hC4, 8'h00, 8'hC4, 8'h00,
+            8'hC4, 8'h00, 8'hC4, 8'h00, 8'h00, 8'h00, 8'h00, 8'h00, 8'h1A, 8'h07, 8'h1A, 8'h1B,
+            8'h1A, 8'h0E, 8'h1A, 8'h36, 8'h0F, 8'h0E, 8'h0F, 8'h2A, 8'h12, 8'h1B, 8'h12, 8'h54,
+            8'h08, 8'h1B, 8'h08, 8'h3A, 8'h08, 8'h35, 8'h08, 8'h74, 8'h00, 8'h00, 8'h00, 8'h00 };
 
     function automatic logic [7:0] xrom_byte(input logic [7:0] a);
-        xrom_byte = (a < 8'd217) ? XROM_BYTES[a] : 8'hFF;
+        xrom_byte = (a < 8'd228) ? XROM_BYTES[a] : 8'hFF;
     endfunction
 
     always_comb
@@ -643,7 +711,10 @@ module CHIPSET #(
             end
             else
             begin
-                internal_data_bus_ext = 0;
+                // Nothing claimed the read: the open bus reads high.
+                // np21w io/iocore.c definp8 returns 0xff; device probes
+                // compare against that, not 0.
+                internal_data_bus_ext = 8'hFF;
                 data_bus_direction    = 1'b0;
             end
         end

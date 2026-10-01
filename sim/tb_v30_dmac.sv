@@ -58,7 +58,7 @@ module tb_v30_dmac;
         .clock_cycle_counter_decrement_value (ccc_dec),
         .shift_read_timing                  (shift_read_timing),
         .ram_read_wait_cycle                (ram_rd_wait),
-        .ram_write_wait_cycle               (ram_wr_wait)
+        .ram_write_wait_cycle               (ram_wr_wait), .vram_wait_en()
     );
 
     // ---- the CPU: nuV30 ----------------------------------------------------
@@ -96,6 +96,8 @@ module tb_v30_dmac;
     wire [2:0] processor_status;
     wire [19:0] ad_out;
     wire [7:0]  cpu_data_bus;
+    wire        word_access;
+    wire [7:0]  cpu_data_bus_hi;
     wire        lock_n;
 
     v30_cpu_bridge u_bridge (
@@ -114,10 +116,13 @@ module tb_v30_dmac;
         .ad_out            (ad_out),
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
+        // The word path is unconditional: a word at an SDRAM address is one
+        // cycle, so this bench's flat array answers the odd lane at addr|1
+        // and takes both lanes of a word write -- the way RAM.sv would.
         .analog_mode       (1'b0),
-        .word_access       (),
-        .cpu_data_bus_hi   (),
-        .data_bus_hi       (8'hFF),
+        .word_access       (word_access),
+        .cpu_data_bus_hi   (cpu_data_bus_hi),
+        .data_bus_hi       (din_hi),
         .data_bus          (din),
         .processor_ready   (processor_ready),
         .address_enable_n  (aen_n),
@@ -266,13 +271,19 @@ module tb_v30_dmac;
     wire [7:0] din = ~mem_rd_n ? mem[cpu_address]
                     : (~dmac_cs_n & ~ab_io_read_n) ? dmac_dout
                                 : 8'hFF;
+    // The odd lane of a one-cycle word: the flat array answers it at addr|1,
+    // the same byte RAM.sv's second burst word would carry.
+    wire [7:0] din_hi = ~mem_rd_n ? mem[cpu_address | 20'h1] : 8'hFF;
 
     logic mem_wr_d = 1'b1;
     logic io_wr_d  = 1'b1;
     always_ff @(posedge clk) begin
         mem_wr_d <= mem_wr_n;
         io_wr_d  <= io_wr_n;
-        if (mem_wr_n & ~mem_wr_d) mem[cpu_address] <= cpu_data_bus;
+        if (mem_wr_n & ~mem_wr_d) begin
+            mem[cpu_address] <= cpu_data_bus;
+            if (word_access) mem[cpu_address | 20'h1] <= cpu_data_bus_hi;
+        end
     end
 
     // The DMA transfer's memory side: while the DMAC owns the bus it reads the

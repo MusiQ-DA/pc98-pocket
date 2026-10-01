@@ -47,6 +47,11 @@ module tb_pc98_rowbuf;
     wire  [7:0] ank_code;
     wire  [3:0] ank_line;
     wire  [7:0] ank_row;
+    wire [12:0] gaiji_addr;
+    wire  [7:0] gaiji_data;
+    logic       gaiji_we = 1'b0;
+    logic [12:0] gaiji_waddr = 13'd0;
+    logic  [7:0] gaiji_wdata = 8'd0;
     logic       font_wr_en = 1'b0;
     logic [11:0] font_wr_addr = 12'd0;
     logic [15:0] font_wr_data = 16'd0;
@@ -66,6 +71,7 @@ module tb_pc98_rowbuf;
         .f_req(f_req), .f_addr(f_addr), .f_busy(f_busy),
         .f_valid(f_valid), .f_data(f_data),
         .ank_code(ank_code), .ank_line(ank_line), .ank_row(ank_row),
+        .gaiji_addr(gaiji_addr), .gaiji_data(gaiji_data),
         .rd_clk(clk), .rd_cell(rd_col), .rd_line(rd_line), .rd_byte(rd_byte), .kanji_seen(kanji_seen)
     );
 
@@ -73,6 +79,15 @@ module tb_pc98_rowbuf;
         .wr_clk(clk), .wr_en(font_wr_en), .wr_addr(font_wr_addr),
         .wr_data(font_wr_data),
         .rd_clk(clk), .code(ank_code), .line(ank_line), .sel8(sel8), .row(ank_row)
+    );
+
+    // The real gaiji store: the bench plays the guest on port A, the row
+    // buffer reads port B.
+    pc98_gaiji_ram u_gaiji (
+        .clk(clk),
+        .a_we(gaiji_we), .a_addr(gaiji_waddr), .a_wdata(gaiji_wdata),
+        .a_rdata(),
+        .b_addr(gaiji_addr), .b_rdata(gaiji_data)
     );
 
     function automatic logic [7:0] ank_pat(input logic [7:0] code,
@@ -144,8 +159,23 @@ module tb_pc98_rowbuf;
         // Columns 3 and 4 are one kanji: hiragana A, ku index 4 ten 0x22.
         scr_lo[3] = 8'h04; scr_hi[3] = 8'h22;
         scr_lo[4] = 8'hFF; scr_hi[4] = 8'hFF;   // deliberately not a character
+        // Columns 5 and 6 are a gaiji pair: ku 0x56, index 0x21 -- the bytes
+        // must come out of the gaiji RAM, not the SDRAM burst and not the
+        // ANK BRAM.
+        scr_lo[5] = 8'h56; scr_hi[5] = 8'h21;
+        scr_lo[6] = 8'hFF; scr_hi[6] = 8'hFF;
 
         repeat (2) @(posedge clk);
+        // Preload the gaiji RAM the way a guest's 0xA9 stores would: left
+        // half 0xE0+line, right half 0xF0+line.
+        for (int l = 0; l < 16; l++) begin
+            gaiji_we = 1'b1;
+            gaiji_waddr = {7'h21, 1'b0, 1'b0, 4'(l)}; gaiji_wdata = 8'hE0 + 8'(l);
+            @(posedge clk);
+            gaiji_waddr = {7'h21, 1'b0, 1'b1, 4'(l)}; gaiji_wdata = 8'hF0 + 8'(l);
+            @(posedge clk);
+        end
+        gaiji_we = 1'b0;
         // Load the ANK BRAM the way the loader does: sixteen bits at a time,
         // low byte at the even offset.
         for (int w = 0; w < 2048; w++) begin
@@ -214,6 +244,23 @@ module tb_pc98_rowbuf;
             end
         end
         $display("  ANK bytes from BRAM, kanji bytes from the burst");
+
+        // The gaiji pair read the RAM: col 5 the left half, col 6 the right.
+        for (int l = 0; l < 16; l++) begin
+            rd(5, l, got);
+            if (got !== 8'hE0 + 8'(l)) begin
+                $display("  FAIL gaiji col 5 line %0d: %02h want %02h",
+                         l, got, 8'hE0 + 8'(l));
+                errors++;
+            end
+            rd(6, l, got);
+            if (got !== 8'hF0 + 8'(l)) begin
+                $display("  FAIL gaiji col 6 line %0d: %02h want %02h",
+                         l, got, 8'hF0 + 8'(l));
+                errors++;
+            end
+        end
+        $display("  gaiji cells drew their glyph from the user CG RAM");
 
         // The bank must flip on the ROW BOUNDARY, not on fill completion.
         //

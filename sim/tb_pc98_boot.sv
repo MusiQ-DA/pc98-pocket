@@ -3,7 +3,7 @@
 // goes.
 //
 // The CPU is the nuV30 through v30_cpu_bridge. The same flat memory and the
-// same I/O models see the bridge's byte cycles, so this is the end-to-end
+// same I/O models see the bridge's bus cycles, so this is the end-to-end
 // dress rehearsal of the hardware CPU path (i8288 + 8-bit bus + real ROMs +
 // 8251) before the bitstream.
 //
@@ -88,7 +88,7 @@ module tb_pc98_boot;
         .clock_cycle_counter_decrement_value (),
         .shift_read_timing                  (),
         .ram_read_wait_cycle                (ram_rd_wait),
-        .ram_write_wait_cycle               (ram_wr_wait)
+        .ram_write_wait_cycle               (ram_wr_wait), .vram_wait_en()
     );
 
     // ---- the CPU -----------------------------------------------------------
@@ -402,7 +402,7 @@ module tb_pc98_boot;
         .cg_rd_req(1'b0), .cg_rd_addr(24'h0), .cg_rd_len(4'h0),
         .cg_rd_ack(), .cg_rd_valid(), .cg_rd_data(), .cg_rd_done(),
         .wait_count_clk_en(cpu_ce_negedge),
-        .ram_read_wait_cycle(ram_rd_wait), .ram_write_wait_cycle(ram_wr_wait)
+        .ram_read_wait_cycle(ram_rd_wait), .ram_write_wait_cycle(ram_wr_wait), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0)
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
@@ -466,9 +466,15 @@ module tb_pc98_boot;
                              : is_xrom(cpu_address) ? xrom_byte(cpu_address)
                                                     : ram[cpu_address];
     wire bench_ready = 1'b1;          // flat memory answers immediately
-    // The flat array is byte-wide, so no word cycle can be served from it.
-    // PC98_WORD_MEM is not defined for this build, so none is asked for.
-    wire [7:0] din_hi = 8'hFF;
+    // The flat array is byte-wide but still answers a word's odd lane at
+    // addr|1 -- the word path is unconditional, so a one-cycle read at an
+    // SDRAM-map address asks for it.
+    wire [7:0] mem_read_byte_hi = is_rom(cpu_address | 20'h1)
+                                  ? rom_byte(cpu_address | 20'h1)
+                                : is_xrom(cpu_address | 20'h1)
+                                  ? xrom_byte(cpu_address | 20'h1)
+                                : ram[cpu_address | 20'h1];
+    wire [7:0] din_hi = ~mem_rd_n ? mem_read_byte_hi : 8'hFF;
 `endif
 
     // True when the read above fell through to the FF default -- i.e. nothing
@@ -624,6 +630,10 @@ module tb_pc98_boot;
     logic io_wr_d = 1'b1, mem_wr_d = 1'b1, mem_rd_d = 1'b1, io_rd_d = 1'b1;
     logic in_1b_region = 1'b0;
     logic [7:0] mem_wr_data_q = 8'h00;
+    // The odd lane and the word flag of a one-cycle write, sampled with the
+    // same continuously-held discipline as mem_wr_data_q.
+    logic [7:0] mem_wr_hi_q   = 8'h00;
+    logic       mem_wr_word_q = 1'b0;
     logic [7:0] io_wr_data_q  = 8'h00;
     logic [7:0] tvram_code [0:511];   // A0000-A01FF, first row of cells
     logic [7:0] tvram_attr [0:511];   // A2000-A21FF
@@ -697,7 +707,14 @@ module tb_pc98_boot;
         // bus already moving on -- the IVT write at FDA76 landed 21 02 23 FD
         // where the BIOS put BC 02 80 FD, and INT 08 went astray on exactly
         // that. Sample continuously while the cycle is live and keep the last.
-        if (~mem_wr_n) mem_wr_data_q <= cpu_data_bus;
+        if (~mem_wr_n) begin
+            mem_wr_data_q <= cpu_data_bus;
+            // A one-cycle word write carries its odd byte on the _hi lane;
+            // the flat array takes it too, so the mirror stays complete
+            // (under REALMEM this block is the mirror, not the storage).
+            mem_wr_hi_q   <= cpu_data_bus_hi;
+            mem_wr_word_q <= cpu_word_access;
+        end
         // Same trailing-edge hazard as the memory write: the I/O write data
         // is live only while io_wr_n is low, so latch it here.
         if (~io_wr_n) io_wr_data_q <= cpu_data_bus;
@@ -705,6 +722,7 @@ module tb_pc98_boot;
         // Memory write, on the trailing edge, and never into ROM.
         if (mem_wr_n & ~mem_wr_d & ~is_rom(cpu_address)) begin
             ram[cpu_address] <= mem_wr_data_q;
+            if (mem_wr_word_q) ram[cpu_address | 20'h1] <= mem_wr_hi_q;
             // The ITF's reset-resume state (0000:03F0-0410): every write here
             // is part of the OUT-0F0h dance, and a save that goes missing is
             // the difference between a resume and a derail.
@@ -1376,6 +1394,7 @@ module tb_pc98_boot;
         .mgmt_readdata  (fdd_mgmt_rdata),
         .wp             (2'b00),
         .clock_rate     (28'd42_954_545),
+        .turbo          (1'b0),
         .request        (fdd_req_w),
         .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer ()
     );
