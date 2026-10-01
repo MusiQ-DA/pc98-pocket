@@ -12,7 +12,7 @@
 #define CLK_FREQ      (CHIPSET_HZ / 6u)
 #define REPEAT_DELAY  (CLK_FREQ / 2)  // hold this long before the cursor repeats
 #define REPEAT_RATE   (CLK_FREQ / 10) // then step at ~10 Hz
-#define MOVE_COOLDOWN (CLK_FREQ / 25) // debounce between moves
+#define BTN_SETTLE    (CLK_FREQ / 100u) // a button word must hold ~10 ms before it counts
 #define BTN_DPAD      (BTN_UP | BTN_DOWN | BTN_LEFT | BTN_RIGHT)
 
 // The 636x81 keyboard sits flush against the bottom (or top) edge of the 640x200
@@ -49,7 +49,6 @@ static uint8_t dock_stb_prev;     // last docked-key change toggle seen, to catc
 static uint32_t latch_bits[3];    // one bit per key index: latched keys stay down
 static uint32_t ui_repeat_timer;  // cycle deadline for the next auto-repeat
 static uint16_t ui_repeat_btn;    // dpad direction(s) held for repeat
-static uint32_t ui_move_cooldown; // cycle deadline suppressing the next move
 
 // Push one make/break event to pocket_keyboard's event queue. The register
 // strobe toggles per write, so each call is exactly one queued key event.
@@ -182,8 +181,8 @@ static void cursor_move(int dx, int dy)
 }
 
 // D-pad cursor stepping, shared by typing and pick modes: a fresh press moves once; holding past
-// REPEAT_DELAY repeats at REPEAT_RATE; a short cooldown debounces each move; diagonals resolve to
-// vertical.
+// REPEAT_DELAY repeats at REPEAT_RATE; diagonals resolve to vertical. The press/release edges here
+// are already settle-filtered by vkb_ui_tick, so a move needs no further debounce of its own.
 static void cursor_navigate(uint16_t pressed, uint16_t buttons)
 {
     uint16_t dpad_ev = pressed & BTN_DPAD;
@@ -193,16 +192,12 @@ static void cursor_navigate(uint16_t pressed, uint16_t buttons)
         if (pressed & BTN_DPAD) {
             ui_repeat_btn = buttons & BTN_DPAD;
             ui_repeat_timer = now + REPEAT_DELAY;
-            if ((int32_t) (now - ui_move_cooldown) < 0) {
-                dpad_ev = 0;
-            }
         } else if ((int32_t) (now - ui_repeat_timer) >= 0) {
             dpad_ev |= ui_repeat_btn;
             ui_repeat_timer = now + REPEAT_RATE;
         }
     } else {
         ui_repeat_btn = 0;
-        ui_move_cooldown = now;
     }
     if ((dpad_ev & (BTN_UP | BTN_DOWN)) && (dpad_ev & (BTN_LEFT | BTN_RIGHT))) {
         dpad_ev &= BTN_UP | BTN_DOWN;
@@ -218,9 +213,6 @@ static void cursor_navigate(uint16_t pressed, uint16_t buttons)
     }
     if (dpad_ev & BTN_RIGHT) {
         cursor_move(1, 0);
-    }
-    if (dpad_ev) {
-        ui_move_cooldown = now + MOVE_COOLDOWN;
     }
 }
 
@@ -426,6 +418,23 @@ void vkb_ui_tick(void)
 
     uint32_t raw = *CONT1_KEY;
     uint16_t buttons = raw & 0xFFFF;
+
+    // The pad word arrives through core_top's ~3.5 ms settle, which only asks that a value
+    // hold one plateau -- and a mechanical D-pad can hold a wrong state that long: a hard
+    // press trips the opposite rocker contact for a few ms, and switch chatter turns the
+    // word into a train of short plateaus. Each plateau landed as a fresh `pressed` edge,
+    // which is the cursor sprinting several keys per burst, and an opposite-contact plateau
+    // stepped it backward. Adopt a word only after it has read the same for BTN_SETTLE; a
+    // shorter excursion never presses, and the frozen last-adopted word hides the wobble.
+    static uint16_t btn_cand;       // button word being timed
+    static uint32_t btn_cand_since; // rdcycle when it first appeared
+    if (buttons != btn_cand) {
+        btn_cand = buttons;
+        btn_cand_since = rdcycle();
+    }
+    if ((int32_t) (rdcycle() - btn_cand_since) < (int32_t) BTN_SETTLE) {
+        buttons = ui_prev; // still settling: report the last adopted word
+    }
 
     // A raster-size change (the displayed card switched) re-bases any overlay on screen.
     uint32_t raster = *OSD_RASTER;
