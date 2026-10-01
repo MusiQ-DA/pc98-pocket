@@ -484,7 +484,7 @@ module pc98_opna #(
             if (rst) begin
                 rhy_kon <= 8'h00;
                 rhy_tl  <= 6'h00;
-                rhy_lr  <= '{default: 8'h00};
+                for (int v = 0; v < 6; v++) rhy_lr[v] <= 8'h00;
             end else if (wr_commit && gw_allowed && gw_is_data && !gw_part) begin
                 if (gw_reg == 8'h10) rhy_kon <= wr_data_q;
                 if (gw_reg == 8'h11) rhy_tl  <= wr_data_q[5:0];
@@ -493,11 +493,13 @@ module pc98_opna #(
             end
         end
     end else begin : g_no_rhy
+        genvar gi;
+        for (gi = 0; gi < 6; gi++) begin : g_tie
+            assign rhy_lr[gi] = 8'h00;
+        end
         assign rhy_q   = 8'h00;
         assign rhy_kon = 8'h00;
         assign rhy_tl  = 6'h00;
-        for (genvar i = 0; i < 6; i++)
-            assign rhy_lr[i] = 8'h00;
     end
     endgenerate
 
