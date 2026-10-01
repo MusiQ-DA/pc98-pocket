@@ -25,6 +25,7 @@ module zet_decode (
     input [7:0] opcode,
     input [7:0] modrm,
     input       rep,
+    input       f0f,
     input block,
     input exec_st,
     input div_exc,
@@ -77,7 +78,7 @@ module zet_decode (
   reg [4:0] div_cnt;
 
   // Module instantiations
-  zet_opcode_deco opcode_deco (opcode, modrm, rep, sop_l, base_addr, need_modrm,
+  zet_opcode_deco opcode_deco (opcode, modrm, rep, f0f, sop_l, base_addr, need_modrm,
                              need_off, need_imm, off_size, imm_size, src, dst,
                              base, index, seg);
 

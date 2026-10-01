@@ -102,6 +102,18 @@ marker = bytes([
     0x6A, 0x97,                           # push byte 0x97 (sign-extend)
     0x5F,                                 # pop di
     0x89, 0x3E, 0x02, 0x02,               # mov [0x0202],di
+    # 0F 01 stub coverage: lidt word [bp+0] (mem form, disp8) / sidt / lgdt /
+    # sgdt / smsw ax / lmsw ax -- all must consume modrm(+disp) and NOP
+    # without trapping. If a byte desyncs the stream, execution lands on
+    # garbage and the BEEF marker never appears.
+    0xBD, 0x00, 0x80,                     # mov bp,0x8000  (scratch EA)
+    0x0F, 0x01, 0x5E, 0x00,               # lidt word [es:bp+0]  (F8BBC form)
+    0x0F, 0x01, 0x56, 0x00,               # lgdt word [es:bp+0]
+    0x0F, 0x01, 0x4E, 0x00,               # sidt word [es:bp+0]
+    0x0F, 0x01, 0x46, 0x00,               # sgdt word [es:bp+0]
+    0x0F, 0x01, 0xE0,                     # smsw ax
+    0x0F, 0x01, 0xF0,                     # lmsw ax
+    0xC7, 0x06, 0x04, 0x02, 0x34, 0x12,   # mov word [0x0204],0x1234
     0xC7, 0x06, 0x00, 0x02, 0xEF, 0xBE,   # mov word [0x0200],0xBEEF
     0xF4,                                 # hlt
 ])

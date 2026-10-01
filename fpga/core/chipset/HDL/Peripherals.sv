@@ -1058,21 +1058,29 @@ module PERIPHERALS #(
     wire [7:0] artic_data = address[1]
                           ? (address[0] ? artic_cnt[23:16] : artic_cnt[15:8])
                           : (address[0] ? artic_cnt[15:8]  : artic_cnt[7:0]);
-    // 0x42 bit 1: this machine has no protected mode.
+    // 0x42 bit 1: 1 = "V30-class CPU", 0 = "286-class" (np21w printif.c
+    // prt_i42: base 0x84, +0x20 at 8 MHz, +dip bits, +0x02 when V30).
     //
-    // The UX ITF tests it at F8B95 and, with the bit CLEAR, walks into
+    // EXPERIMENT: report 0x84 -- bit1 clear -- so the ITF takes its 286
+    // branch instead of the V30 shortcut. Two consequences:
     //
-    //     F8BBC  lidt [es:bp+0]
-    //     F8BC4  lgdt [es:bp+0]
+    //   F8B95 block: bit1=0 runs the 286-detection probe (lidt/lgdt then
+    //   sidt/sgdt + repe scasw over a FFFF-filled buffer). Zet consumes
+    //   0F 01 as a NOP, so nothing is stored, the four-pass pattern loop
+    //   (FFFF/AAAA/5555/0000) matches untouched and the ITF concludes
+    //   "no descriptor registers" on its own -- the honest answer.
     //
-    // to size memory above 1 MB. Those are 286 instructions, and on an 8086
-    // 0F is POP CS -- so the machine popped a word off the stack into CS and
-    // left the ROM. That is the CS f800 -> 0000 jump that ended every run
-    // right after MEMORY 640KB OK was printed.
+    //   F94D2 block: fninit/fstsw then smsw/lmsw run only when fstsw
+    //   returns AL=0 (FPU present). With 0x84 the IN result sits in AL,
+    //   Zet's ESC ops are NOPs, AL stays non-zero and the jz skips the
+    //   286 ops -- matching a real FPU-less machine.
     //
-    // With the bit SET the ITF branches to F8FA2 and skips the whole
-    // protected-mode block, which is the truth about this CPU rather than a
-    // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
+    // Any remaining genuine 286 instruction (or an app that tries to
+    // enter protected mode) traps through INVOP/INTD and the pc_hist
+    // probe freeze names it. (Before this experiment the port answered
+    // 8'h02 -- bit1 set, V30 class -- so the ITF branched to F8FA2 and
+    // skipped both blocks entirely.)
+    // The BIOS never looks at bit 1 -- it tests bits
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
     // 0x31 = 0xE3. The detour through 0x12 is worth recording.
     //
@@ -1095,7 +1103,7 @@ module PERIPHERALS #(
     wire [7:0] sysport_data = sysport_35_select ? pc98_sysport_c
                             : sysport_31_select ? cfg_dipsw2
                             : sysport_33_select ? (8'h08 | {7'd0, upd4990_cdat})
-                            : sysport_42_select ? 8'h02
+                            : sysport_42_select ? 8'h84
                             :                     8'h00;
 
     // ------------------------------------------------- keyboard 8251

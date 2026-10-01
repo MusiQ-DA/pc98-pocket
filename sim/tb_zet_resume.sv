@@ -79,7 +79,7 @@ module tb_zet_resume;
     // 286-only FNINIT/FSTSW/SMSW/LMSW block at F94D2.
     wire [7:0] din    = ~mem_rd_n ? ram[cpu_address]
                       : ~io_rd_n  ? ((cpu_address[15:0] == 16'h35) ? 8'h79
-                                   : (cpu_address[15:0] == 16'h42) ? 8'h02
+                                   : (cpu_address[15:0] == 16'h42) ? 8'h84
                                                                  : 8'hFF)
                       : 8'hFF;
     wire [7:0] din_hi = ~mem_rd_n ? ram[cpu_address | 20'h1] : 8'hFF;
@@ -201,17 +201,22 @@ module tb_zet_resume;
         repeat (20) @(posedge clk);
         reset <= 1'b0;
         repeat (300000) @(posedge clk);
-        $display("DONE. pc=%05X  [0200]=%04X [0202]=%04X  [0404]=%04X [0406]=%04X  stack 30F8: %02X %02X %02X %02X %02X %02X",
+        $display("DONE. pc=%05X  [0200]=%04X [0202]=%04X [0204]=%04X  [0404]=%04X [0406]=%04X  stack 30F8: %02X %02X %02X %02X %02X %02X",
                  zet_pc,
                  {ram[20'h201], ram[20'h200]},
                  {ram[20'h203], ram[20'h202]},
+                 {ram[20'h205], ram[20'h204]},
                  {ram[20'h405], ram[20'h404]},
                  {ram[20'h407], ram[20'h406]},
                  ram[20'h003F8], ram[20'h003F9], ram[20'h003FA],
                  ram[20'h003FB], ram[20'h003FC], ram[20'h003FD]);
         if ({ram[20'h201], ram[20'h200]} == 16'hBEEF) begin
-            if ({ram[20'h203], ram[20'h202]} == 16'hFF97)
-                $display("RESUME PASS: retf+post-resume block landed at F854E, push imm8 sign-extends");
+            if ({ram[20'h203], ram[20'h202]} == 16'hFF97
+                && {ram[20'h205], ram[20'h204]} == 16'h1234)
+                $display("RESUME PASS: retf+post-resume block landed at F854E, push imm8 sign-extends, 0F01 stubs consumed");
+            else if ({ram[20'h205], ram[20'h204]} != 16'h1234)
+                $display("RESUME PASS+MIXED: landed but 0F01 stub path lost sync ([0204]=%04X, want 1234)",
+                         {ram[20'h205], ram[20'h204]});
             else
                 $display("RESUME PASS+MIXED: landed but push imm8 gave [0202]=%04X (want FF97)",
                          {ram[20'h203], ram[20'h202]});

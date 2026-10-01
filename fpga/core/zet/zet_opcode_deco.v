@@ -23,6 +23,7 @@ module zet_opcode_deco (
     input [7:0] op,
     input [7:0] modrm,
     input       rep,
+    input       f0f,
     input [2:0] sovr_pr,
 
     output reg [`MICRO_ADDR_WIDTH-1:0] seq_addr,
@@ -68,7 +69,36 @@ module zet_opcode_deco (
 
   // Behaviour
   always @(op or dm or b or need_off_mod or srcm or sm or dstm
-           or mod or rm or regm or rep or modrm)
+           or mod or rm or regm or rep or modrm or f0f)
+    if (f0f)
+      // 0Fh prefix consumed: only the 0F 01 system-control group is
+      // honoured, and only as a stub -- modrm + EA bytes are walked like
+      // any other memory op so the stream stays aligned, then the NOP
+      // sequence runs so nothing is stored and nothing traps. The ITF's
+      // own LIDT/SIDT store-check then correctly reports "not a 286".
+      // Every other second byte is a genuine trap so the probe can name
+      // the opcode that is missing.
+      if (op == 8'h01)
+        begin
+          seq_addr   <= `NOP;
+          need_modrm <= 1'b1;
+          need_off   <= need_off_mod;
+          need_imm   <= 1'b0;
+          imm_size   <= 1'b0;
+          src        <= 4'b0;
+          dst        <= 4'b0;
+        end
+      else
+        begin
+          seq_addr   <= `INVOP;
+          need_modrm <= 1'b0;
+          need_off   <= 1'b0;
+          need_imm   <= 1'b0;
+          imm_size   <= 1'b0;
+          src        <= 4'b0;
+          dst        <= 4'b0;
+        end
+    else
     casex (op)
       8'b00xx_x00x: // add/or/adc/sbb/and/sub/xor/cmp r->r, r->m
         begin
