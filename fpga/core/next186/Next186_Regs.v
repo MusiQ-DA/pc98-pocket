@@ -101,7 +101,7 @@ module Next186_Regs(
 	wire [7:0]FASTDINH = WORD || &WE[1:0] ? DIN[15:8] : DIN[7:0]; // fast data path for AH/DH (tweak for speed)
 	wire [15:0]CXM1 = CX + 16'hffff;
 
-	assign FOUT = {4'b0000, FLG[8:3], 1'b0, FLG[2], 1'b0, FLG[1], 1'b1, FLG[0]};
+	assign FOUT = {4'b1111, FLG[8:3], 1'b0, FLG[2], 1'b0, FLG[1], 1'b1, FLG[0]};	// flags pushed to memory keep bits 15:12 set, as on the 8086/V30
 	assign CS = SREG[1];
 	assign CXZ = {|CX[15:1], CX[0]};
 	

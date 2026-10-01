@@ -575,10 +575,21 @@ module Next186_CPU(
 				RSSEL = 2'b10;			// SS
 				EAC = 4'b1000;			// SP - 2
 				DISEL = 2'b10;			// ADDR
-				WE[1:0] = 2'b11;		// RASEL_HI/RASEL_LO
-				ALUOP = 31;				// PASS B
-				WR = 1'b1;
-				ISIZE = 1;
+				// V30/8086 PUSH SP stores the post-decrement SP, not the
+				// pre-decrement value the 186 microcode would read off RB.
+				// Stage 1 parks SP-2 in TMP16; stage 2 writes TMP16 out and
+				// commits SP <= SP-2, so the stack word holds the new SP.
+				if(FETCH[0][6] && FETCH[0][2:0] == 3'b100 && !STAGE[0]) begin
+					WE[3] = 1'b1;		// TMP16 <- ADDR16 (SP-2)
+					MREQ = 1'b0;
+					IFETCH = 1'b0;
+				end else begin
+					DOSEL = {FETCH[0][6] && FETCH[0][2:0] == 3'b100, 1'b0};	// DOUT = TMP16 for push sp
+					WE[1:0] = 2'b11;	// RASEL_HI/RASEL_LO
+					ALUOP = 31;			// PASS B
+					WR = 1'b1;
+					ISIZE = 1;
+				end
 			end
 // --------------------------------  push Imm --------------------------------
 			9: begin		
@@ -1676,7 +1687,7 @@ function [5:0]ICODE;
 			8'b10001111: ICODE = 11;			
 // --------------------------------  pop R / SR --------------------------------
 			8'b01011_000, 8'b01011_001, 8'b01011_010, 8'b01011_011, 8'b01011_100, 8'b01011_101, 8'b01011_110, 8'b01011_111,
-			8'b000_00_111, 8'b000_10_111, 8'b000_11_111: ICODE = 12;
+			8'b000_00_111, 8'b000_01_111, 8'b000_10_111, 8'b000_11_111: ICODE = 12;	// 0x0F is POP CS on the 8086/V30
 // --------------------------------  popa --------------------------------
 			8'b01100001: ICODE = 13;
 // --------------------------------  xchg R with R/M/Acc --------------------------------
@@ -1792,7 +1803,9 @@ function [5:0]ICODE;
 // --------------------------------  aam --------------------------------
 			8'b11010100: ICODE = 53;	
 // --------------------------------  reset, irq, nmi, intr --------------------------------
-			8'b00001111: ICODE = 54;		
+// (opcode 0x0F is POP CS on the 8086/V30; the internal reset/irq/intr
+//  sequence still enters ICODE 54 by writing ICODE1 directly, so no decode
+//  entry is needed here)
 // --------------------------------  bad opcode/esc --------------------------------
 			default: ICODE = 55;
 		endcase
