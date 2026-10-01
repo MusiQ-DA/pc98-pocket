@@ -1947,6 +1947,11 @@ module PERIPHERALS #(
                        scsi_mg_rd_count, scsi_cmd_post_count,
                        scsi_rom_rd_count};
 
+    // The mgmt chip-select decodes even when the board is parked: the
+    // window has to answer ABSENT, not alias onto the floppy readback.
+    logic        mgmt_opna_cs;
+    assign       mgmt_opna_cs = (mgmt_address[15:8] == 8'hF5);
+
 `ifdef ENABLE_OPNA
     //
     // OPNA -- the PC-9801-86 sound board's YM2608 at 0x0188-0x018F
@@ -1980,8 +1985,6 @@ module PERIPHERALS #(
         else if (opna_a460_wr) opna_extend <= internal_data_bus[0];
     end
 
-    logic        mgmt_opna_cs;
-    assign       mgmt_opna_cs = (mgmt_address[15:8] == 8'hF5);
     wire         mgmt_opna_wr = mgmt_write & mgmt_opna_cs;
     wire  [3:0]  mgmt_opna_reg = mgmt_address[3:0];
     wire [15:0]  mgmt_opna_readdata;
