@@ -976,6 +976,11 @@ module core_top (
     wire       dock_key_stb;
 
     wire  [1:0] gdc_draw_req, gdc_draw_busy, gdc_srv_done_levels;
+    // The firmware GDC engine's guest-VRAM channel (subsystem <-> CHIPSET's
+    // GVRAM sequencer).
+    wire        st_req_w, st_we_w, st_done_w;
+    wire [19:0] st_addr_w;
+    wire  [7:0] st_wdata_w, st_rdata_w, accel_status_w;
     wire [15:0] gdc_draw_ops;
     wire [383:0] gdc_draw_snaps;
 
@@ -1067,7 +1072,16 @@ module core_top (
         .gdc_draw_busy              (gdc_draw_busy),
         .gdc_draw_ops               (gdc_draw_ops),
         .gdc_draw_snaps             (gdc_draw_snaps),
-        .gdc_srv_done_levels        (gdc_srv_done_levels)
+        .gdc_srv_done_levels        (gdc_srv_done_levels),
+        // The firmware GDC engine's guest-VRAM byte channel, terminated in
+        // the chipset's GVRAM sequencer (through the charger when armed).
+        .st_req                     (st_req_w),
+        .st_we                      (st_we_w),
+        .st_addr                    (st_addr_w),
+        .st_wdata                   (st_wdata_w),
+        .st_done                    (st_done_w),
+        .st_rdata                   (st_rdata_w),
+        .accel_status               (accel_status_w)
     );
 
 `ifdef PC98_JTAG
@@ -1132,6 +1146,12 @@ module core_top (
             // never completes; 0x1a: the ready chain the CPU waits on.
             8'h19:   probe_data_c = {16'h0, chipset_dbg};
             8'h1a:   probe_data_c = {24'h0, chipset_dbg2};
+            // 0x31: the GVRAM sequencer -- {svc_req, svc_done, svc_hold,
+            // fsm[2:0], plane[1:0]}. A GDC-draw stall reads differently by
+            // where it parks: S_RDW = RAM never answered, S_DONE+svc_hold
+            // = guest strobe never dropped, svc_req alone = nobody granted
+            // the channel (the guest bus is saturated or a hold/HLDA).
+            8'h31:   probe_data_c = {24'h0, gvram_dbg};
             // 0x1b: {bridge park/engine FSM, ce edge counter}. parked=1 with a
             // frozen ce_count is the dead-CE signature; a live count with
             // parked=1 points at the engine's release conditions instead.
@@ -2097,6 +2117,7 @@ module core_top (
     // the macro is off -- the cone prunes.
     wire [15:0]  chipset_dbg;
     wire  [7:0]  chipset_dbg2;
+    wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
     wire [33:0]  dbg_scsi;   // {ack,req,mg_rd_cnt,post_cnt,rom_rd_cnt}
     wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
     wire [63:0]  fdc_dbg_cmd;  // live command {op,unit,C,H,R,N,EOT,GPL}
@@ -2279,6 +2300,13 @@ module core_top (
         .gdc_draw_ops                       (gdc_draw_ops),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
+        .st_req                             (st_req_w),
+        .st_we                              (st_we_w),
+        .st_addr                            (st_addr_w),
+        .st_wdata                           (st_wdata_w),
+        .st_done                            (st_done_w),
+        .st_rdata                           (st_rdata_w),
+        .accel_status                       (accel_status_w),
 
         .VID_R                              (r),
         .VID_G                              (g),
@@ -2316,6 +2344,7 @@ module core_top (
         .address_enable_n                   (chipset_aen),
         .dbg_chipset                        (chipset_dbg),
         .dbg_chipset2                       (chipset_dbg2),
+        .dbg_gvram                          (gvram_dbg),
         .dbg_scsi                           (dbg_scsi),
     //  .terminal_count_n                   (terminal_count_n)
         .speaker_out                        (speaker_out),
