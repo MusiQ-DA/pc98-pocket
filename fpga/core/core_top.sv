@@ -1166,13 +1166,8 @@ module core_top (
     reg        pc_hist_frozen = 1'b0;
     wire [19:0] pc_now = v30_addr;
     wire       pc_in_errhalt = (pc_now == 20'hF99E5);
-    // NOTE: soft_reset_cpu must NOT clear the freeze -- that reset IS what
-    // the 0xF0 write triggers, ~2clks later; unfreezing on it would let the
-    // reboot's fetches overwrite the trail we froze to keep. Only the hard
-    // reset (config/power-up) re-arms the ring, so a repeated boot loop
-    // keeps the FIRST failure's trail (each cycle fails the same way).
     always_ff @(posedge clk_chipset) begin
-        if (reset) begin
+        if (reset || soft_reset_cpu) begin
             pc_hist_frozen <= 1'b0;
             pc_hist_w      <= 5'd0;
         end else if (!pc_hist_frozen) begin
@@ -1186,20 +1181,37 @@ module core_top (
         end
     end
 
+    // The freeze has to outlive the soft reset the 0xF0 write triggers,
+    // but dropping soft_reset_cpu from the block above deterministically
+    // crashes Quartus 18.1's fitter (VPR20KMAIN tdc_util) -- so keep the
+    // proven structure and snapshot the ring+pointer into a second bank
+    // on the trigger instead. The snapshot clears only on hard reset, so
+    // a repeated boot loop keeps the FIRST failure's trail. The fetch
+    // landing this same cycle (the jmp$ right after `out`) misses the
+    // bulk copy, so it is written into snap[w] explicitly.
+    reg [19:0] pc_snap [0:31];
+    reg  [4:0] pc_snap_w     = 5'd0;
+    reg        pc_snap_valid = 1'b0;
+    wire       pc_hist_new   = (pc_now != pc_hist_prev);
+    always_ff @(posedge clk_chipset) begin
+        if (reset)
+            pc_snap_valid <= 1'b0;
+        else if (!pc_snap_valid && (f0_port_write || pc_in_errhalt)) begin
+            pc_snap_valid <= 1'b1;
+            for (int i = 0; i < 32; i++)
+                pc_snap[i] <= pc_hist[i];
+            if (pc_hist_new)
+                pc_snap[pc_hist_w] <= pc_now;
+            pc_snap_w <= pc_hist_w + {4'd0, pc_hist_new};
+        end
+    end
+
     // Register the readout: the dbg cones through this mux into the SLD
     // capture were one giant combinational path that crashes Quartus 18.1's
     // timing-driven clustering (VPR20KMAIN tdc_util internal error). One
     // pipeline stage hides the cone; at JTAG speeds the extra clock is free.
-    // pc_hist's frozen flag and write pointer feed the SAME cone via the
-    // 0x40 header word -- give them their own stage too or the fitter
-    // internal error comes back.
-    reg       pc_hist_frozen_q = 1'b0;
-    reg [4:0] pc_hist_w_q      = 5'd0;
-    always_ff @(posedge clk_chipset) begin
-        pc_hist_frozen_q <= pc_hist_frozen;
-        pc_hist_w_q      <= pc_hist_w;
-        probe_data       <= probe_data_c;
-    end
+    always_ff @(posedge clk_chipset)
+        probe_data <= probe_data_c;
 
     // cpu_ce liveness: every chip-side wait eventually needs a posedge, so
     // a ce_count that moves between probe reads separates "clock enable
@@ -1255,7 +1267,10 @@ module core_top (
             8'h48,8'h49,8'h4a,8'h4b,8'h4c,8'h4d,8'h4e,8'h4f,
             8'h50,8'h51,8'h52,8'h53,8'h54,8'h55,8'h56,8'h57,
             8'h58,8'h59,8'h5a,8'h5b,8'h5c,8'h5d,8'h5e,8'h5f:
-                       probe_data_c = {7'h00, pc_hist_frozen_q, pc_hist_w_q,
+                       probe_data_c = pc_snap_valid
+                                    ? {7'h00, 1'b1, pc_snap_w,
+                                       pc_snap[probe_addr[4:0]]}
+                                    : {7'h00, pc_hist_frozen, pc_hist_w,
                                        pc_hist[probe_addr[4:0]]};
             // 0x1b: {bridge park/engine FSM, ce edge counter}. parked=1 with a
             // frozen ce_count is the dead-CE signature; a live count with
