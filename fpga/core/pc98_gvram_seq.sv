@@ -262,7 +262,7 @@ module pc98_gvram_seq #(
 
     // The EGC engine's registers and datapath live one module down; the load
     // strobes and the plane walk are this FSM's business.
-    wire [15:0] egc_access, egc_fgbg, egc_ope, egc_mask;
+    wire [15:0] egc_access, egc_fgbg, egc_ope, egc_mask, egc_sft;
     wire [15:0] egc_fgc [0:3], egc_bgc [0:3], egc_patreg [0:3], egc_src [0:3];
     wire [7:0]  egc_op_data, egc_op_mask;
 
@@ -279,16 +279,26 @@ module pc98_gvram_seq #(
     // The last live plane of an EGC read: plane E takes analog mode.
     wire egc_rd_last  = (gp == 2'd3) | ((gp == 2'd2) & ~analog_mode);
     // sf_push is one strobe per live plane byte landing (each S_RDW); sf_evt
-    // runs once per access -- for a read on the last plane's byte landing,
-    // for a write-push on the first plane's read beat (the queue needs the
-    // produced byte before any plane's write goes out).
+    // runs once per access -- for a byte read on the last plane's byte
+    // landing, for a byte write-push on the first plane's read beat (the
+    // queue needs the produced byte before any plane's write goes out).
+    // A WORD access is one event, not two: np21w's shiftinput_incw/decw
+    // push the whole word then run egcsftw_* once, so a write's event fires
+    // on the even leg (both bus bytes are live then) and a read's on the
+    // odd leg's last plane (both legs' pushes are in the queue by then).
+    wire egc_dn      = egc_sft[12];
     wire egc_sf_push = egc_here & is_read  & egc_rd_shift
                      & (st == S_RDW) & mem_done & ~svc_raw_rd;
+    // The push slot offset splits a word's two legs into adjacent queue
+    // slots; dn walks place the even byte behind the odd (inptr[-1]=L,
+    // inptr[0]=H then inptr-=2 -- the pair is H-then-L in queue order).
+    wire egc_sf_off  = is_word & (egc_dn ? ~half : half);
     wire egc_sf_evt  = egc_here
                      & (is_read
                         ? (egc_rd_shift & (st == S_RDW) & mem_done
-                         & egc_rd_last & ~svc_raw_rd)
-                        : (egc_wr_shift & (st == S_RD) & (gp == 2'd0)));
+                         & egc_rd_last & ~svc_raw_rd & (~is_word | half))
+                        : (egc_wr_shift & (st == S_RD) & (gp == 2'd0)
+                         & (~is_word | ~half)));
 
     generate
     if (EGC) begin : g_egc
@@ -299,13 +309,15 @@ module pc98_gvram_seq #(
             // the strobe the same way so pre-arm pokes cannot leave state.
             .wr(egc_wr & egc_active), .rg(egc_rg), .d(egc_d),
             .access_r(egc_access), .fgbg_r(egc_fgbg), .ope_r(egc_ope),
-            .mask_r(egc_mask), .sft_r(), .leng_r(),
+            .mask_r(egc_mask), .sft_r(egc_sft), .leng_r(),
             .fgc(egc_fgc), .bgc(egc_bgc),
             .pat_ld(egc_pat_ld), .pat_plane(gp),
             .pat_ext(op_ext), .pat_d(mem_rdata), .patreg(egc_patreg),
             .src_q(egc_src),
             .sf_push(egc_sf_push), .sf_push_plane(gp), .sf_push_d(mem_rdata),
             .sf_evt(egc_sf_evt), .sf_evt_wr(~is_read), .sf_evt_d(cur_wdata),
+            .sf_evt_d2(cpu_wdata_hi), .sf_evt_word(is_word),
+            .sf_push_off(egc_sf_off),
             .sf_ext(op_ext),
             .op_plane(gp), .op_ext(op_ext),
             .op_dst(rd_hold), .op_val(cur_wdata), .op_data(egc_op_data),
@@ -633,6 +645,15 @@ module pc98_gvram_seq #(
                     gp     <= plain_pg1 ? own : 2'd0;
                     tcr    <= 8'h00;
                     st     <= (is_read | grcg_rmw | egc_here) ? S_RD : S_WR;
+                end else if (is_word & half & is_read & egc_here
+                           & ~svc_raw_rd & ~egc_ope[13] & ~egc_ope[10]) begin
+                    // An EGC word READ runs its shift event on the odd
+                    // leg's last plane (both pushed bytes must be queued
+                    // before egcsftw_* sees them), so the even leg's answer
+                    // -- latched above before the event existed -- is the
+                    // produced low lane NOW.
+                    lo_ans <= egc_src[egc_rd_plane][7:0];
+                    if (!(cpu_rd | cpu_wr)) st <= S_IDLE;
                 end else if (!(cpu_rd | cpu_wr)) st <= S_IDLE;
               end
 
