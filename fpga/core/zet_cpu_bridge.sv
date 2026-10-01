@@ -249,47 +249,12 @@ module zet_cpu_bridge (
                     :               rd_word;
 
     // ------------------------------------------------------------------------
-    // the byte engine: v30_cpu_bridge's structure on a SHORTER T-state grid
+    // the byte engine: identical pacing to v30_cpu_bridge's
     // ------------------------------------------------------------------------
-    //
-    // How few CE ticks a byte really needs is the i8288's business, not a
-    // guess: its status is strobed on cpu_ce_negedge ticks, machine_cycle
-    // shifts 000->001->011->111 on the same ticks once machine_cycle_period
-    // has been cleared by a posedge tick that saw the status non-passive,
-    // and the command strobes ride machine_cycle[0] (reads, INTA, and the
-    // advanced-write strobes Bus_Arbiter actually uses) / machine_cycle[1]
-    // (the late write strobes the benches print). P and N ticks strictly
-    // alternate -- ce_generator toggles the pin per tick -- so with the
-    // status up by some clk edge:
-    //
-    //   * the FIRST posedge-CE tick in B_CMD clears machine_cycle_period
-    //     (ALE falls -- the address latch is done by then);
-    //   * the first negedge tick after it advances machine_cycle to 001:
-    //     the read/INTA/advanced-write strobe asserts. Reads may therefore
-    //     sample at the SECOND posedge tick -- the strobe has been low for
-    //     at least the one clk between those two ticks in every CE phase,
-    //     and every consumer off this bus answers combinationally inside
-    //     that window (SDRAM stretches the byte through processor_ready
-    //     instead);
-    //   * the second negedge tick brings 011 -- the LATE write strobe the
-    //     smoke and boot benches snoop -- so writes hold the status one
-    //     posedge longer and drop it at the THIRD tick.
-    //
-    // The gap is likewise minimal: after the status falls at a posedge tick
-    // the next negedge tick clears machine_cycle and the strobes, and the
-    // posedge tick after that sees mc==0 & passive and re-arms
-    // machine_cycle_period -- ALE's only source. One passive posedge is the
-    // whole turnaround; a pair's odd byte re-arms on that very edge, a pair
-    // boundary falls back to B_IDLE and asserts a clk later. (The old
-    // gap_cnt==1 wait added a second posedge "for certainty" plus an idle
-    // clk -- 8288 needs neither.)
+
     localparam [1:0] B_IDLE = 2'd0;   // nothing to do / waiting for the bus
     localparam [1:0] B_CMD  = 2'd1;   // status up: ALE, command, wait ready
     localparam [1:0] B_GAP  = 2'd2;   // status down, letting the 8288 re-arm
-
-    // Completion thresholds, in whole posedge-CE ticks of B_CMD.
-    localparam [2:0] T_READ_DONE  = 3'd1;   // strobe up >= 1 clk at sample
-    localparam [2:0] T_WRITE_DONE = 3'd2;   // machine_cycle reaches 011
 
     reg  [1:0] bstate;
     reg  [1:0] byte_idx;      // 0 = the addressed byte, 1 = the odd half
@@ -385,9 +350,7 @@ module zet_cpu_bridge (
                               ? (srv_addr[0] ? srv_data[15:8] : srv_data[7:0])
                               : srv_data[15:8];
 
-    // The pair's finish instant is the gap's re-arming posedge (see the
-    // T-state note above): single-clk pulse, same contract as before.
-    wire pair_finish = (bstate == B_GAP) && cpu_ce_posedge;
+    wire pair_finish = (bstate == B_GAP) && (gap_cnt == 2'd1);
     wire pair_done   = pair_finish && last_byte;
     wire inta_done   = pair_done && cur_inta;
 
@@ -442,12 +405,7 @@ module zet_cpu_bridge (
                 if (cpu_ce_posedge)
                     t_cnt <= (t_cnt != 3'd7) ? (t_cnt + 3'd1) : 3'd7;
 
-                // Reads retire at the second posedge tick, writes at the
-                // third -- the i8288 strobe timing in the header note.
-                // processor_ready still gates, so SDRAM waits and AEN
-                // stretch behave exactly as the old grid.
-                if ((t_cnt >= (cur_read ? T_READ_DONE : T_WRITE_DONE))
-                    && cpu_ce_posedge
+                if ((t_cnt >= 3'd3) && cpu_ce_posedge
                     && processor_ready && bus_ours) begin
                     if (cur_read && (byte_idx == 2'd0)) rd_lo <= data_bus;
                     if (cur_read && (byte_idx == 2'd1)) rd_hi <= data_bus;
@@ -459,17 +417,10 @@ module zet_cpu_bridge (
               end
 
               B_GAP: begin
-                // The first posedge-CE here is the 8288's re-arm tick --
-                // the negedge between the exit edge and it already cleared
-                // machine_cycle and the strobes, and this edge reloads
-                // machine_cycle_period. The status may re-assert from this
-                // edge on, so a pair's odd byte is armed right here instead
-                // of paying B_IDLE's extra clk. (gap_cnt is kept counting
-                // for the dbg view; it gates nothing now.)
                 if (cpu_ce_posedge)
                     gap_cnt <= gap_cnt + 2'd1;
 
-                if (cpu_ce_posedge) begin
+                if (gap_cnt == 2'd1) begin
                     if (last_byte) begin
                         if (cur_inta) begin
                             int_vector  <= rd_hi;   // ACK2's byte
@@ -496,23 +447,7 @@ module zet_cpu_bridge (
                         byte_idx    <= 2'd0;
                         word_access <= 1'b0;
                         bstate      <= B_IDLE;
-                    end else if (bus_ours) begin
-                        // Arm the odd byte on the re-arm edge itself: the
-                        // 8288 sampled the status still passive this edge,
-                        // so machine_cycle_period is back to 1 the moment
-                        // the new status lands. Same pins B_IDLE would
-                        // drive for byte 1, from the pair's latched params.
-                        byte_idx         <= 2'd1;
-                        processor_status <= cur_bs;
-                        ad_out           <= {cur_addr[19:1], 1'b1};
-                        cpu_data_bus     <= cur_data[15:8];
-                        cpu_data_bus_hi  <= cur_data[15:8];
-                        t_cnt            <= 3'd0;
-                        bstate           <= B_CMD;
                     end else begin
-                        // Bus granted away mid-pair: defer the odd byte to
-                        // B_IDLE, whose srv_any && bus_ours gate re-arms it
-                        // the same way once AEN falls again.
                         byte_idx <= 2'd1;
                         bstate   <= B_IDLE;
                     end

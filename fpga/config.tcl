@@ -25,7 +25,10 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 # *_jtag_* benches still work -- enable this macro again when a debug
 # session needs the probe, and expect to park something big (USE_ADPCM=0
 # is already taken; the EGC is the ~870-ALM lever now).
-#set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
+#
+# ON for the zet-cpu debug build: the Zet swap frees the headroom the V30
+# build could not afford (slot 0x33 = last guest I/O write + count).
+set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
 
 # Boot the ITF, not the BIOS.
 #
