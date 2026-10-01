@@ -961,5 +961,7 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # the 16-bit word path (then PC98_WORD_MEM) put HEAD 11 LABs over at SEED 3
 # (1859 vs 1848). A seeds
 # 5-20 sweep with the JTAG probe off found 18 at 18,326/18,480 ALMs --
-# ~150 ALMs of margin under the LAB ceiling.
-set_global_assignment -name SEED 18
+# ~150 ALMs of margin under the LAB ceiling. Bumped to 19 on the zet-cpu
+# branch: at ~79% utilization the tuned seed no longer matters, and 18 hit
+# a deterministic VPR20KMAIN tdc_util fitter internal error there.
+set_global_assignment -name SEED 19

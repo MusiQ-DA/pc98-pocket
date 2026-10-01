@@ -1190,8 +1190,16 @@ module core_top (
     // capture were one giant combinational path that crashes Quartus 18.1's
     // timing-driven clustering (VPR20KMAIN tdc_util internal error). One
     // pipeline stage hides the cone; at JTAG speeds the extra clock is free.
-    always_ff @(posedge clk_chipset)
-        probe_data <= probe_data_c;
+    // pc_hist's frozen flag and write pointer feed the SAME cone via the
+    // 0x40 header word -- give them their own stage too or the fitter
+    // internal error comes back.
+    reg       pc_hist_frozen_q = 1'b0;
+    reg [4:0] pc_hist_w_q      = 5'd0;
+    always_ff @(posedge clk_chipset) begin
+        pc_hist_frozen_q <= pc_hist_frozen;
+        pc_hist_w_q      <= pc_hist_w;
+        probe_data       <= probe_data_c;
+    end
 
     // cpu_ce liveness: every chip-side wait eventually needs a posedge, so
     // a ce_count that moves between probe reads separates "clock enable
@@ -1247,7 +1255,7 @@ module core_top (
             8'h48,8'h49,8'h4a,8'h4b,8'h4c,8'h4d,8'h4e,8'h4f,
             8'h50,8'h51,8'h52,8'h53,8'h54,8'h55,8'h56,8'h57,
             8'h58,8'h59,8'h5a,8'h5b,8'h5c,8'h5d,8'h5e,8'h5f:
-                       probe_data_c = {7'h00, pc_hist_frozen, pc_hist_w,
+                       probe_data_c = {7'h00, pc_hist_frozen_q, pc_hist_w_q,
                                        pc_hist[probe_addr[4:0]]};
             // 0x1b: {bridge park/engine FSM, ce edge counter}. parked=1 with a
             // frozen ce_count is the dead-CE signature; a live count with
