@@ -16,7 +16,8 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # rhythm voices and the drive-mechanism kit that borrowed them stay silent
 # -- OMGMT_CAPS bit0 reads 0, which is what the firmware loaders key on.
 # USE_ADPCM=1 brings the whole path back unchanged once floor space exists.
-set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
+# DEBUG BUILD: OPNA parked (~1500 ALM) to fit the JTAG probe below.
+#set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 
 # JTAG debug build. OFF for the current fit: the SLD hub, the probe mux,
 # the write-pipe and key injection together cost enough ALMs to put the
@@ -25,7 +26,7 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 # *_jtag_* benches still work -- enable this macro again when a debug
 # session needs the probe, and expect to park something big (USE_ADPCM=0
 # is already taken; the EGC is the ~870-ALM lever now).
-#set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
+set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
 
 # Boot the ITF, not the BIOS.
 #

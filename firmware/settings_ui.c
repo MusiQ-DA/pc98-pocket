@@ -9,6 +9,12 @@
 #include "vkb_layout.h"
 #include "vkb_ui.h"
 
+// The Makefile leaves drive_sound.o out of a no-OPNA link; the Drive Sound
+// row still asks, so answer "no voices" here.
+#ifndef ENABLE_OPNA
+int drive_sound_present(void) { return 0; }
+#endif
+
 // The settings overlay: a CP437-framed panel of submenus, drawn on demand into the shared OSD
 // framebuffer and navigated with the D-pad. Each edit updates the value in RAM and pushes it to the
 // softcore settings register that drives the machine.
