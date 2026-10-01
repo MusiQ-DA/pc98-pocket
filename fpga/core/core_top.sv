@@ -1166,8 +1166,13 @@ module core_top (
     reg        pc_hist_frozen = 1'b0;
     wire [19:0] pc_now = v30_addr;
     wire       pc_in_errhalt = (pc_now == 20'hF99E5);
+    // NOTE: soft_reset_cpu must NOT clear the freeze -- that reset IS what
+    // the 0xF0 write triggers, ~2clks later; unfreezing on it would let the
+    // reboot's fetches overwrite the trail we froze to keep. Only the hard
+    // reset (config/power-up) re-arms the ring, so a repeated boot loop
+    // keeps the FIRST failure's trail (each cycle fails the same way).
     always_ff @(posedge clk_chipset) begin
-        if (reset || soft_reset_cpu) begin
+        if (reset) begin
             pc_hist_frozen <= 1'b0;
             pc_hist_w      <= 5'd0;
         end else if (!pc_hist_frozen) begin
