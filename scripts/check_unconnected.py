@@ -36,6 +36,10 @@ MODULES = {
     # The CPU-side swap of 2026-09: the bridge carries every pin the V30
     # sees, so a dangling input there reads as a dead machine, not a zero.
     "v30_cpu_bridge": "fpga/core/v30_cpu_bridge.sv",
+    # The EXPERIMENTAL Next186 bridge (next186-cpu branch, behind
+    # PC98_NEXT186): same "dangling input = dead machine" rule. The regex
+    # reads the ifdef'd instantiation text whether or not the macro is set.
+    "next186_cpu_bridge": "fpga/core/next186_cpu_bridge.sv",
 }
 
 

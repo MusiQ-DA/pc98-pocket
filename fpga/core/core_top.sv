@@ -2432,11 +2432,73 @@ module core_top (
     //
     // The CE generator's outputs still pace the CHIPSET's RAM waits, which
     // is where they are consumed.
+    wire [15:0] bridge_dbg;
+
+`ifdef PC98_NEXT186
+    // --------------------------------------------------------------------
+    // EXPERIMENTAL (next186-cpu branch): the vendored freecores Next186
+    // (80186-class) CPU + BIU behind next186_cpu_bridge, driving the same
+    // 8288 byte world. The unit has NO handshake -- the bridge stalls it by
+    // withholding its one shared CE and serves each BIU dword request as
+    // sequential 8-bit cycles (word bursts where the SDRAM answers), ports
+    // as byte cycles through the np21w ioterminate table, and the i8259's
+    // double acknowledge as a BS_INTA pair. See the bridge's header and
+    // core/next186/INTEGRATION_NOTES.md for the contract. This is NOT the
+    // shipping CPU -- nuV30 is.
+    // --------------------------------------------------------------------
+    wire [19:0] n186_pc;
+    wire [15:0] n186_din;
+
+    next186_cpu_bridge u_next186_bridge (
+        .clk               (clk_chipset),
+        .cpu_ce_posedge    (cpu_ce_posedge),
+        .reset             (reset_cpu),
+        .intr              (interrupt_to_cpu),
+        .nmi               (1'b0),
+        .processor_status  (processor_status),
+        .ad_out            (cpu_ad_out),
+        .cpu_data_bus      (cpu_data_bus),
+        .lock_n            (lock_n),
+        .analog_mode       (pc98_analog),
+        .word_access       (cpu_word_access),
+        .cpu_data_bus_hi   (cpu_data_bus_hi),
+        .data_bus_hi       (data_bus_hi),
+        .data_bus          (data_bus),
+        .processor_ready   (processor_ready),
+        .address_enable_n  (chipset_aen),
+        .pause_core        (pause_core),
+        .biu_done          (biu_done),
+        .dbg_pc            (n186_pc),
+        .dbg_din           (n186_din),
+        .dbg               (bridge_dbg)
+    );
+
+    // The probe slots that usually expose V30 guts get the Next186 view
+    // instead: 0x18 reads the fetch cursor (IADDR), 0x1c the bus-status
+    // pins, 0x20 the CPU's DIN pin.
+    wire [19:0] v30_addr   = n186_pc;
+    wire [2:0]  v30_bs     = processor_status;
+    wire [15:0] v30_data_i = n186_din;
+
+`ifdef PC98_JTAG
+    // The register-dump taps (0x10-0x16, 0x20-0x25) have no V30 instance to
+    // lean on: give them the Next186 view -- the unit has no architectural
+    // debug port, so 0x10-0x16 read 0, 0x20 keeps {DIN, bridge FSM}, 0x21
+    // the fetch cursor, and the 0x17 liveness counter counts biu_done.
+    assign v30_dbg_regs  = 224'h0;
+    assign v30_dbg_core  = bridge_dbg;
+    assign v30_dbg_core2 = {12'h000, n186_pc};
+    assign v30_dbg_core3 = 32'h0;
+    assign v30_dbg_core4 = 32'h0;
+    assign v30_dbg_core5 = 32'h0;
+    assign v30_dbg_core6 = 32'h0;
+    assign v30_first_pop = biu_done;
+`endif
+`else
     wire [2:0]  v30_bs;
     wire [19:0] v30_addr;
     wire [15:0] v30_data_o, v30_data_i;
     wire        v30_ube_n, v30_ce, v30_ready;
-    wire [15:0] bridge_dbg;
     wire        v30_ss_err_unused, v30_ss_quiet_unused;
     wire [15:0] v30_ss_rdata_unused;
 
@@ -2502,6 +2564,7 @@ module core_top (
         .SS_ERR     (v30_ss_err_unused),
         .SS_BUS_QUIET (v30_ss_quiet_unused)
     );
+`endif // PC98_NEXT186
 
     //
     // AUDIO

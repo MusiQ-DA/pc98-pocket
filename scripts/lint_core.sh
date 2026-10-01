@@ -47,7 +47,7 @@ trap 'rm -f "$LIST" "$OUT"' EXIT
 # shellcheck disable=SC2086
 verilator --lint-only --timing -Wno-fatal --top-module core_top \
   +define+$DEFINES \
-  -Isim -I$S -I$S/chipset/HDL -I$S/v30 \
+  -Isim -I$S -I$S/chipset/HDL -I$S/v30 -I$S/next186 \
   -I$S/chipset/HDL/i8288/HDL -I$S/chipset/HDL/i8253/HDL -I$S/chipset/HDL/i8259/HDL \
   -I$S/chipset/HDL/upd71071/HDL \
   -I$S/chipset/HDL/ps2_keyboard/HDL -I$S/common -I$S/audio \

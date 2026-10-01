@@ -40,6 +40,13 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 # MAME chip dumps and 8086 throughout. The UX BIOS is not usable here: its
 # POST uses PUSHA at FDA35 and SMSW/LGDT/LIDT after it.
 set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
+
+# EXPERIMENTAL (next186-cpu branch): replace the nuV30 with the vendored
+# freecores Next186 behind next186_cpu_bridge. A real 80186 -- the ITF's
+# `push imm16` is legal for it -- but NOT a V30: no NEC extensions, no
+# cycle accuracy, and a far slower prefetch pipe. V30 stays the shipping
+# CPU; this macro only exists on this branch.
+set_global_assignment -name VERILOG_MACRO "PC98_NEXT186=1"
 # The real floppy controller, not the constant-returning stub.
 #
 # This was off because floppy0_chip_select_n decoded the AT's 0x3F0-0x3F7,

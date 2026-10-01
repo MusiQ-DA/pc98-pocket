@@ -110,14 +110,69 @@ module tb_pc98_boot;
     logic [39:0] clk_since_rst = 40'd0;
     logic [39:0] frz_start_clk = 40'd0, frz_end_clk = 40'd0;
 
-    // The nuV30 + the bridge, wired the way core_top wires them.
-    // V30_BACKDOOR gives the bench dbg_regs for the trace below.
+    // The CPU + bridge, wired the way core_top wires them. Default nuV30;
+    // +define+NEXT186_CPU swaps in the experimental Next186 on the same
+    // downstream pins (the bridge carries CPU+BIU inside). V30_BACKDOOR
+    // gives the bench dbg_regs for the trace below; under NEXT186_CPU the
+    // same bundle is rebuilt off the core's register file instead.
+    wire [223:0] dbg_regs;
+    wire        dbg_first_pop, dbg_pend;
+
+`ifdef NEXT186_CPU
+    wire [19:0] n186_pc;
+    wire [15:0] n186_din;
+    wire [15:0] nbridge_dbg;
+
+    next186_cpu_bridge u_bridge (
+        .clk               (clk_chipset),
+        .cpu_ce_posedge    (cpu_ce_posedge),
+        .reset             (cpu_reset_w),
+        .intr              (pic1_to_cpu),
+        .nmi               (1'b0),
+        .processor_status  (processor_status),
+        .ad_out            (cpu_ad_out),
+        .cpu_data_bus      (cpu_data_bus),
+        .lock_n            (lock_n),
+        .analog_mode       (1'b0),
+        .word_access       (cpu_word_access),
+        .cpu_data_bus_hi   (cpu_data_bus_hi),
+        .data_bus_hi       (din_hi),
+        .data_bus          (din),
+        .processor_ready   (bench_ready),
+        .address_enable_n  (test_aen),
+        .pause_core        (1'b0),
+        .biu_done          (biu_done),
+        .dbg_pc            (n186_pc),
+        .dbg_din           (n186_din),
+        .dbg               (nbridge_dbg)
+    );
+
+    // The V30 dbg_regs layout, rebuilt off the Next186 register file so the
+    // whole trace/verifier below runs unchanged: {psw,pc,ds,ss,cs,es,di,si,
+    // bp,sp,bx,dx,cx,ax}. REGS.FLG is the CPU's 9-bit flag word (bit0 = CF).
+    // IP here is the executing instruction's pointer -- a real PC, not the
+    // fetch cursor (n186_pc carries IADDR for the raw view).
+    assign dbg_regs = {7'b0, u_bridge.u_cpu.REGS.FLG,
+                       u_bridge.u_cpu.REGS.IP,
+                       u_bridge.u_cpu.REGS.SREG[3],
+                       u_bridge.u_cpu.REGS.SREG[2],
+                       u_bridge.u_cpu.REGS.SREG[1],
+                       u_bridge.u_cpu.REGS.SREG[0],
+                       u_bridge.u_cpu.REGS.DI,
+                       u_bridge.u_cpu.REGS.SI,
+                       u_bridge.u_cpu.REGS.BP,
+                       u_bridge.u_cpu.REGS.SP,
+                       u_bridge.u_cpu.REGS.BX,
+                       u_bridge.u_cpu.REGS.DX,
+                       u_bridge.u_cpu.REGS.CX,
+                       u_bridge.u_cpu.REGS.AX};
+    assign dbg_first_pop = 1'b0;
+    assign dbg_pend      = 1'b0;
+`else
     wire [2:0]  v30_bs;
     wire [19:0] v30_addr;
     wire [15:0] v30_data_o, v30_data_i;
     wire        v30_ube_n, v30_ce, v30_ready;
-    wire [223:0] dbg_regs;
-    wire        dbg_first_pop, dbg_pend;
     wire [15:0] v30_ss_rdata_unused;
     wire        v30_ss_err_unused, v30_ss_quiet_unused;
 
@@ -177,6 +232,7 @@ module tb_pc98_boot;
         .dbg_regs  (dbg_regs), .dbg_first_pop (dbg_first_pop),
         .dbg_pend  (dbg_pend)
     );
+`endif // NEXT186_CPU
 
     // ---- the register view: one local name per quantity --------------------
     // (the core's dbg_regs view, retired-instruction granularity)
@@ -1495,6 +1551,48 @@ module tb_pc98_boot;
             end
         end
     end
+
+`ifdef NEXT186_CPU
+    // ---- Next186 first-cycles trace ----------------------------------------
+    //
+    // The same "what did it actually ask the bus for" view the Zet bench
+    // carried: an N-prefixed line per bus command (NIWR/NIWRD/NWR/NRD), the
+    // unit's per-tick microcode trace for the bring-up window, and the halt.
+    int n186_tr_n = 0;
+    always_ff @(posedge clk_chipset) begin
+        if (n186_tr_n < 200) begin
+            if (io_wr_n & ~io_wr_d) begin
+                $display("  %8t  NIWR %04X <- %02X", $time, cpu_address[15:0],
+                         io_wr_data_q);
+                n186_tr_n <= n186_tr_n + 1;
+            end
+            if (io_rd_n & ~io_rd_d) begin
+                $display("  %8t  NIRD %04X -> %02X", $time, cpu_address[15:0],
+                         din);
+                n186_tr_n <= n186_tr_n + 1;
+            end
+        end
+    end
+    int nutk_n = 0;
+    always_ff @(posedge clk_chipset) begin
+        if (u_bridge.unit_ce && u_bridge.ce186 && !cpu_reset_w
+            && nutk_n < 400) begin
+            $display("  %8t  NUTK icode=%0d stage=%0d%s%s ip=%04x iaddr=%05x",
+                     $time, u_bridge.u_cpu.ICODE1, u_bridge.u_cpu.STAGE,
+                     u_bridge.u_iorq ? " IORQ" : "",
+                     u_bridge.u_inta ? " INTA" : "",
+                     u_bridge.u_cpu.REGS.IP, u_bridge.u_iaddr);
+            nutk_n <= nutk_n + 1;
+        end
+    end
+    logic n186_halt_d = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (u_bridge.u_cpu.HALT & ~n186_halt_d)
+            $display("  %8t  NHALT at iaddr %05X (ip %04x)",
+                     $time, u_bridge.u_iaddr, u_bridge.u_cpu.REGS.IP);
+        n186_halt_d <= u_bridge.u_cpu.HALT;
+    end
+`endif
 
     // ---- bus fetch trace ---------------------------------------------------
     //
