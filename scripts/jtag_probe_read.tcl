@@ -11,8 +11,10 @@
 #   1. USER1 (IR 0x0E), DR 64 x 0    -> select hub, arm hub-info read
 #   2. USER0 (IR 0x0C), 8 x DR 4     -> HUB_INFO (LSB nibble first)
 #   3. another 8 x DR 4             -> NODE1_INFO
-#   4. USER1 DR 5 bits = {addr[0], VIR[3:0]}; 0x18 selects node 1
-#      (addr=1 in bit 4, VIR_VALUE bit 3 must be 1 per Intel/SLD spec)
+#   4. USER1 DR (m_width+4) bits = {node[m_width-1:0], VIR[3:0]}; 0x18 selects
+#      node 1 (node addr 1 above the VIR nibble, VIR_VALUE bit 3 must be 1
+#      per Intel/SLD spec). m_width comes from HUB_INFO[7:0] -- 1 on a
+#      one-node build, 2 once the ramimg stream sink joins.
 #   5. USER0 DR scans reach our node's 40-bit register. Each Capture-DR
 #      loads {8'h00, probe_data[addr_q]} and TDO returns it LSB-first;
 #      Update-DR latches the new address from the top byte shifted in.
@@ -33,10 +35,11 @@ for {set i 0} {$i < 8} {incr i} {
 set nnodes [expr {($hub >> 19) & 0xff}]
 puts [format "HUB_INFO=0x%08X  nodes=%d m_width=%d" $hub $nnodes [expr {$hub & 0xff}]]
 if {$nnodes < 1} { puts "no SLD nodes -- is the core running?"; shutdown; exit 1 }
+set virw [expr {($hub & 0xff) + 4}]
 
 # --- select node 1 ----------------------------------------------------------
 irscan fpga.tap 0x0e
-drscan fpga.tap 5 0x18 -endstate idle
+drscan fpga.tap $virw 0x18 -endstate idle
 
 proc rd {addr} {
     irscan fpga.tap 0x0c

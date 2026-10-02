@@ -70,7 +70,10 @@ module tb_bios_memtest;
         .ems98_map(ems98_unused),
         .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(1'b1),
-        .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0)
+        .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0),
+        .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
+        .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
+        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),

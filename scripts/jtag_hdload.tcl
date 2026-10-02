@@ -1,0 +1,183 @@
+# jtag_hdload.tcl -- push a raw .hdm floppy image into the SDRAM carve-out and
+# boot it, entirely over JTAG. No SD card, no menu mount, no firmware.
+#
+#   openocd -f scripts/jtag_probe.cfg -f scripts/jtag_hdload.tcl
+#   env: HDIMG=path/to/img.hdm   (required -- the raw 2HD image,
+#                                 77c*8s*2h*1024B = 1261568 bytes)
+#        HDNORESET=1             skip the guest reset (mount only)
+#        HDNOBOOT=1              upload + verify, no mount and no reset
+#        HDCHUNK=bytes           bytes per drscan (default 8192)
+#
+# Two SLD nodes live in the image:
+#   node 1 -- pc98_jtag_probe (the 40-bit {addr,data} register). Write slot
+#             0x87 is fdd_ramimg's control word; slot 0x88 arms the byte-offset
+#             readback probe; reads 0x35/0x36/0x37 report status.
+#   node 2 -- the stream sink: every 32 TDI bits become one 32-bit word in the
+#             upload FIFO, which the chipset side writes as four bytes of image
+#             into the carve-out. One drscan carries a whole chunk.
+#
+# Hub select: the USER1 DR is {node_addr, VIR[3:0]}, VIR 8 (bit 3 set per the
+# SLD spec). Its width is m_width+4, read back from HUB_INFO[7:0] -- one node
+# ships m_width=1 (5-bit select), this build ships two (m_width=2, 6-bit
+# select), so the width is computed, not baked.
+
+init
+
+# --- hub discovery + node select -------------------------------------------
+irscan fpga.tap 0x0e
+drscan fpga.tap 64 0 -endstate idle
+irscan fpga.tap 0x0c
+set hub 0
+for {set i 0} {$i < 8} {incr i} {
+    scan [drscan fpga.tap 4 0 -endstate idle] %x nib
+    set hub [expr {$hub | ($nib << (4*$i))}]
+}
+set nnodes [expr {($hub >> 19) & 0xff}]
+set mw     [expr {$hub & 0xff}]
+puts [format "HUB_INFO=0x%08X  nodes=%d m_width=%d" $hub $nnodes $mw]
+if {$nnodes < 2} {
+    puts "need two SLD nodes (probe + stream) -- PC98_JTAG build with fdd_ramimg?"
+    shutdown; exit 1
+}
+set virw [expr {$mw + 4}]
+
+proc select_node {n} {
+    global virw
+    irscan fpga.tap 0x0e
+    drscan fpga.tap $virw [expr {($n << 4) | 8}] -endstate idle
+}
+
+# --- node 1 (probe): the existing 40-bit {addr,data} register ---------------
+proc rd {addr} {
+    irscan fpga.tap 0x0c
+    drscan fpga.tap 40 [expr {($addr << 32) & 0xFFFFFFFFFF}] -endstate idle
+    set raw [drscan fpga.tap 40 0 -endstate idle]
+    return 0x[string range $raw end-7 end]
+}
+proc wr {addr data} {
+    irscan fpga.tap 0x0c
+    drscan fpga.tap 40 [expr {(($addr << 32) | $data) & 0xFFFFFFFFFF}] -endstate idle
+}
+
+# control word on slot 0x87: [0]en [1]flush [2]greset [3]remount [4]arm
+proc ctl {v} { wr 0x87 [expr {$v & 0xFFFFFFFF}] }
+# readback probe: arm slot 0x88 with an image offset, then 0x37 reports
+# {pend, 0, off, byte} -- pend clears when the carve-out read landed.
+proc rdback {off} {
+    wr 0x88 [expr {$off & 0x1FFFFF}]
+    for {set i 0} {$i < 2000} {incr i} {
+        set v [rd 0x37]
+        if {($v >> 31) == 0} { return [expr {$v & 0xff}] }
+        after 1
+    }
+    puts "readback probe stuck"; return -1
+}
+
+if {![info exists ::env(HDIMG)]} {
+    puts "set HDIMG to the raw .hdm image path"; shutdown; exit 1
+}
+set IMG $env(HDIMG)
+set fh [open $IMG rb]
+set bytes [read $fh]
+close $fh
+set nby [string length $bytes]
+set IMGBYTES 1261568
+if {$nby > $IMGBYTES} {
+    puts [format "%s is %d bytes; the 2HD carve-out holds %d -- truncating" \
+        $IMG $nby $IMGBYTES]
+    set bytes [string range $bytes 0 [expr {$IMGBYTES - 1}]]
+    set nby $IMGBYTES
+}
+
+# --- status before we touch anything ---------------------------------------
+select_node 1
+puts [format "0x35 (ramimg)  = 0x%08X  (tag 52/en/mnt/arm/flush/fsm/lba)" [rd 0x35]]
+
+# --- clear the sink: flush high then low ------------------------------------
+ctl 0x02
+ctl 0x00
+ctl 0x10          ;# arm the stream sink
+
+# --- stream the image on node 2 ---------------------------------------------
+# select_node leaves USER1 in the IR -- its DR is the hub's node select, not
+# ours. USER0 must be reloaded before the stream scans reach the node.
+select_node 2
+irscan fpga.tap 0x0c
+# The stream word packs four image bytes little-endian (first byte = LSB),
+# which is exactly what "binary scan iu*" hands us -- no repacking needed.
+# A short tail is zero-padded to the next word: the pad lands inside the
+# carve-out bounds and is never addressed by a sector.
+set rem [expr {$nby % 4}]
+if {$rem} { append bytes [string repeat \0 [expr {4 - $rem}]] }
+binary scan $bytes iu* vals
+set nwords [llength $vals]
+set CHUNK  [expr {[info exists ::env(HDCHUNK)] ? $env(HDCHUNK) : 8192}]
+set WPC    [expr {$CHUNK / 4}]          ;# words per drscan (must divide CHUNK)
+set sent   0
+# One drscan carries a list of 32-bit fields -- the pairs form matters, not
+# one giant numeric field (u64-capped on some openocds). Field 0 shifts out
+# first, so word order in the arg list is image order.
+for {set i 0} {$i < $nwords} {incr i $WPC} {
+    set args {}
+    foreach w [lrange $vals $i [expr {$i + $WPC - 1}]] {
+        lappend args 32 [format 0x%08X $w]
+    }
+    drscan fpga.tap {*}$args -endstate idle
+    incr sent [llength [lrange $vals $i [expr {$i + $WPC - 1}]]]
+    if {($sent & 0x7FFF) == 0} {
+        puts [format "  pushed %d words (%d bytes)" $sent [expr {$sent*4}]]
+    }
+}
+puts [format "streamed %d words" $sent]
+
+# --- wait for the drain to catch up -----------------------------------------
+# up_off counts bytes actually written to the carve-out; words past the image
+# end are dropped without advancing it, so the target is what we sent,
+# clamped to the image size.
+select_node 1
+set drainwant [expr {$sent * 4 > $IMGBYTES ? $IMGBYTES : $sent * 4}]
+set off 0
+for {set i 0} {$i < 2000} {incr i} {
+    set v [rd 0x36]
+    set off [expr {$v & 0x1FFFFF}]
+    if {$off >= $drainwant} break
+    after 5
+}
+puts [format "drained: up_off=%d (want %d), fifo_used=%d" $off $drainwant \
+    [expr {($v >> 21) & 0x1FF}]]
+if {$off < $drainwant} { puts "WARNING: image did not finish landing" }
+
+# --- verify: spot-read back through the carve-out ---------------------------
+if {![info exists ::env(HDNOVERIFY)]} {
+    set bad 0
+    foreach off {0 1 1023 1024 4096 65536 262144 1261564 1261567} {
+        if {$off >= $nby} continue
+        # byte $off lives at bits [8*($off%4) +: 8] of word [$off/4]
+        set w    [lindex $vals [expr {$off / 4}]]
+        set want [expr {($w >> (8 * ($off % 4))) & 0xFF}]
+        set got  [rdback $off]
+        if {$got != $want} {
+            puts [format "  MISMATCH @%d: got %02x want %02x" $off $got $want]
+            incr bad
+        }
+    }
+    puts [expr {$bad ? "verify: $bad mismatches" : "verify: clean"}]
+}
+
+if {[info exists ::env(HDNOBOOT)]} { shutdown; exit 0 }
+
+# --- mount + (optionally) reset into a boot ---------------------------------
+ctl 0x01          ;# enable -> the mount pass runs
+for {set i 0} {$i < 2000} {incr i} {
+    set v [rd 0x35]
+    if {($v >> 22) & 1} break     ;# mounted
+    after 1
+}
+puts [format "0x35 (ramimg)  = 0x%08X  mounted=%d" $v [expr {($v >> 22) & 1}]]
+
+if {![info exists ::env(HDNORESET)]} {
+    ctl 0x05      ;# enable + greset: one pulse into reset_wire, guest boots
+    puts "guest reset pulsed -- BIOS should boot drive A"
+}
+shutdown
+exit 0

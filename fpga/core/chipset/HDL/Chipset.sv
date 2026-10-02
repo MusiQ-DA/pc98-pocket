@@ -197,7 +197,17 @@ module CHIPSET #(
         input   logic   [7:0]       opna_joy,
         // ROM-load (Pocket): expose the RAM access-complete pulse so core_top's
         // BIOS loader can pace on the real SDRAM write instead of a fixed delay.
-        output  logic           ram_rw_complete
+        output  logic           ram_rw_complete,
+        // fdd_ramimg's SDRAM carve-out port, straight through to u_RAM's port E.
+        input   logic           ramimg_req,
+        input   logic           ramimg_we,
+        input   logic   [23:0]  ramimg_addr,
+        input   logic   [3:0]   ramimg_len,
+        input   logic   [15:0]  ramimg_wdata,
+        output  logic           ramimg_ack,
+        output  logic           ramimg_rvalid,
+        output  logic   [15:0]  ramimg_rdata,
+        output  logic           ramimg_done
 
     );
 
@@ -591,6 +601,15 @@ module CHIPSET #(
         .gv_rd_valid                        (gv_rd_valid),
         .gv_rd_data                         (gv_rd_data),
         .gv_rd_done                         (gv_rd_done),
+        .ramimg_req                         (ramimg_req),
+        .ramimg_we                          (ramimg_we),
+        .ramimg_addr                        (ramimg_addr),
+        .ramimg_len                         (ramimg_len),
+        .ramimg_wdata                       (ramimg_wdata),
+        .ramimg_ack                         (ramimg_ack),
+        .ramimg_rvalid                      (ramimg_rvalid),
+        .ramimg_rdata                       (ramimg_rdata),
+        .ramimg_done                        (ramimg_done),
         .clock                              (sdram_clock),
         .reset                              (sdram_reset),
         .enable_sdram                       (enable_sdram),

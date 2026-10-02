@@ -258,7 +258,10 @@ module tb_v30_mem;
         .cg_rd_req(1'b0), .cg_rd_addr(24'h0), .cg_rd_len(4'h0),
         .cg_rd_ack(), .cg_rd_valid(), .cg_rd_data(), .cg_rd_done(),
         .wait_count_clk_en(cpu_ce_negedge),
-        .ram_read_wait_cycle(ram_rd_wait), .ram_write_wait_cycle(ram_wr_wait), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0)
+        .ram_read_wait_cycle(ram_rd_wait), .ram_write_wait_cycle(ram_wr_wait), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0),
+        .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
+        .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
+        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
     );
 
     // The board's half-period skew and pin flight times, not the controller's

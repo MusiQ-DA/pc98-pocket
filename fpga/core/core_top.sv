@@ -351,8 +351,11 @@ module core_top (
     // Guest reset terms: PLL lock (RESET), ROM load and the first-BIOS gate, the interact
     // Reset PC, the boot hold, and the softcore's boot-master hold (soft_guest_hold), which
     // keeps the guest in reset until the softcore has staged settings. sdram holds on lock only.
+    // ri_greset is fdd_ramimg's boot-from-RAM-image term (PC98_JTAG): a probe
+    // write pulses it after a mount so the BIOS walks into drive A on its own.
+    wire ri_greset;
     wire reset_wire = RESET | load_active | ~bios_ever_loaded | interact_reset
-                    | guest_hold_sync2 | soft_guest_hold;
+                    | guest_hold_sync2 | soft_guest_hold | ri_greset;
     wire reset_sdram_wire = RESET;
 
     logic reset = 1'b1;
@@ -887,6 +890,62 @@ module core_top (
     wire  [7:0] mgmt_req;              // [7:6] fdd request, [0] scsi pending (from CHIPSET)
     assign mgmt_req[5:1] = 5'b00000;
 
+    // fdd_ramimg (PC98_JTAG): the RAM-disk floppy server. Two fences keep it
+    // and the firmware from ever touching the controller at once:
+    //
+    //   * The request mask -- while `own` is high the softcore sees
+    //     fdd_request == 0, so fdd_poll parks. Mount/write requests the
+    //     firmware raises anyway (a dataslot rebind mid-session) hit the
+    //     second fence: its F2-window strobes are dropped for as long as own
+    //     is high. Everything else on the bus -- the SCSI window at F4, OPNA
+    //     at F5 -- still belongs to the softcore, on every cycle the RAM
+    //     server is not itself strobing.
+    //
+    //   * The strobe mux -- on a cycle the RAM server reads or writes, the
+    //     bus carries its operands; otherwise the softcore's. Two strobes can
+    //     never land together and the firmware's non-F2 traffic keeps flowing
+    //     between the RAM server's beats.
+    //
+    // Without the JTAG build flag the mux is a pass-through and nothing else
+    // changes.
+    wire [15:0] cs_mgmt_addr;          // muxed -> CHIPSET
+    wire [15:0] cs_mgmt_dout;
+    wire        cs_mgmt_rd;
+    wire        cs_mgmt_wr;
+    // The CHIPSET-facing carve-out port; tied off without the JTAG build.
+    wire        ramimg_req, ramimg_we, ramimg_ack, ramimg_rvalid, ramimg_done;
+    wire [23:0] ramimg_addr;
+    wire  [3:0] ramimg_len;
+    wire [15:0] ramimg_wdata, ramimg_rdata;
+    wire  [1:0] fdd_req_fw;
+`ifdef PC98_JTAG
+    wire [15:0] ri_mgmt_addr, ri_mgmt_dout;
+    wire        ri_mgmt_wr, ri_mgmt_rd, ri_own, ri_stb;
+    wire [31:0] ri_dbg0, ri_dbg1, ri_dbg2;
+    // The firmware's view of the FDC window is fenced while own is high; a
+    // softcore strobe at any other window goes through between the RAM
+    // server's own.
+    wire        fw_fdd_hit = mgmt_addr[15:8] == 8'hF2;
+    assign ri_stb       = ri_mgmt_wr | ri_mgmt_rd;
+    assign cs_mgmt_addr = ri_stb ? ri_mgmt_addr : mgmt_addr;
+    assign cs_mgmt_dout = ri_stb ? ri_mgmt_dout : mgmt_dout;
+    assign cs_mgmt_wr   = ri_mgmt_wr | (mgmt_wr & ~(ri_own & fw_fdd_hit));
+    assign cs_mgmt_rd   = ri_mgmt_rd | (mgmt_rd & ~(ri_own & fw_fdd_hit));
+    assign fdd_req_fw   = mgmt_req[7:6] & ~{2{ri_own}};
+`else
+    assign ri_greset    = 1'b0;
+    assign ramimg_req   = 1'b0;
+    assign ramimg_we    = 1'b0;
+    assign ramimg_addr  = 24'd0;
+    assign ramimg_len   = 4'd0;
+    assign ramimg_wdata = 16'd0;
+    assign cs_mgmt_addr = mgmt_addr;
+    assign cs_mgmt_dout = mgmt_dout;
+    assign cs_mgmt_wr   = mgmt_wr;
+    assign cs_mgmt_rd   = mgmt_rd;
+    assign fdd_req_fw   = mgmt_req[7:6];
+`endif
+
     // Floppy image size arrives in the dataslot-update event (bytes); latch it per drive.
     // A hot-swapped floppy delivers its new size in the same event, so it is race-free with
     // the media-change edge below. HDD and Settings sizes instead come from the datatable
@@ -1003,7 +1062,7 @@ module core_top (
         .reset                      (reset_soft),
         .clk_pico                   (clk_pico),
 
-        .fdd_request                (mgmt_req[7:6]),
+        .fdd_request                (fdd_req_fw),
         .fdd0_disk_size             (fdd0_disk_sectors),
         .fdd1_disk_size             (fdd1_disk_sectors),
         .datatable_addr             (datatable_addr),
@@ -1290,6 +1349,14 @@ module core_top (
             // byte is what the data bus actually gave that read.
             8'h34:   probe_data_c = {dbg_sysport_w, 8'h00, in35_count,
                                    in35_data};
+            // 0x35-0x37: the RAM-image floppy server's witness -- enough to
+            // prove the feature is in the image ('R'=0x52 tag at the top),
+            // that a mount ran, how much image has landed, and what a
+            // readback probe of any byte offset returns. See fdd_ramimg for
+            // the field layout.
+            8'h35:   probe_data_c = ri_dbg0;
+            8'h36:   probe_data_c = ri_dbg1;
+            8'h37:   probe_data_c = ri_dbg2;
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -2531,10 +2598,10 @@ module core_top (
         .ems98_maxmem                       (ems98_maxmem),
         .bios_protect_flag                  (bios_protect_flag),
         .mgmt_readdata                      (mgmt_din),
-        .mgmt_writedata                     (mgmt_dout),
-        .mgmt_address                       (mgmt_addr),
-        .mgmt_write                         (mgmt_wr),
-        .mgmt_read                          (mgmt_rd),
+        .mgmt_writedata                     (cs_mgmt_dout),
+        .mgmt_address                       (cs_mgmt_addr),
+        .mgmt_write                         (cs_mgmt_wr),
+        .mgmt_read                          (cs_mgmt_rd),
         .floppy_wp                          (wp_cfg),
         // The FDC's domain IS clk_chipset, so the setting bit arrives on a
         // plain wire, the way osd_extmem reaches the EMS board below it.
@@ -2563,7 +2630,54 @@ module core_top (
         ,.mouse_ev                          (mouse_ev)
         ,.mouse_btn                         (mouse_btn)
         ,.opna_joy                          (opna_joy)
+        ,.ramimg_req                        (ramimg_req)
+        ,.ramimg_we                         (ramimg_we)
+        ,.ramimg_addr                       (ramimg_addr)
+        ,.ramimg_len                        (ramimg_len)
+        ,.ramimg_wdata                      (ramimg_wdata)
+        ,.ramimg_ack                        (ramimg_ack)
+        ,.ramimg_rvalid                     (ramimg_rvalid)
+        ,.ramimg_rdata                      (ramimg_rdata)
+        ,.ramimg_done                       (ramimg_done)
     );
+
+`ifdef PC98_JTAG
+    // The RAM-disk floppy server: streams a JTAG-uploaded image into its
+    // SDRAM carve-out, mounts the 2HD geometry on drive A over the shared
+    // management bus (the mux is above the softcore's instance), and serves
+    // the controller's sector requests straight from SDRAM. reset aborts an
+    // in-flight transfer only -- the mounted disk survives the guest reset
+    // that boots from it, because floppy.v's media_present has no reset.
+    fdd_ramimg u_fdd_ramimg (
+        .clk             (clk_chipset),
+        .reset           (reset),
+        .power_reset     (reset_sdram),
+        .fdd_request     (mgmt_req[7:6]),
+        .fw_busy         ((mgmt_wr | mgmt_rd) & ~fw_fdd_hit),
+        .mgmt_addr       (ri_mgmt_addr),
+        .mgmt_dout       (ri_mgmt_dout),
+        .mgmt_wr         (ri_mgmt_wr),
+        .mgmt_rd         (ri_mgmt_rd),
+        .mgmt_din        (mgmt_din),
+        .sd_req          (ramimg_req),
+        .sd_we           (ramimg_we),
+        .sd_addr         (ramimg_addr),
+        .sd_len          (ramimg_len),
+        .sd_wdata        (ramimg_wdata),
+        .sd_ack          (ramimg_ack),
+        .sd_rvalid       (ramimg_rvalid),
+        .sd_rdata        (ramimg_rdata),
+        .sd_done         (ramimg_done),
+        .ctl_pulse       (probe_wr_pulse),
+        .ctl_addr        (probe_waddr_c),
+        .ctl_data        (probe_wdata_c),
+        .own             (ri_own),
+        .guest_reset_req (ri_greset),
+        .dbg0            (ri_dbg0),
+        .dbg1            (ri_dbg1),
+        .dbg2            (ri_dbg2)
+    );
+`endif
 
     // CHIPSET per-access "done" pulse (COMPLETE_RAM_RW); drives the ROM-load FSM.
     wire        ram_rw_complete;

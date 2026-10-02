@@ -45,7 +45,10 @@ module tb_sdram_shim;
         .c_req(1'b0), .c_addr(24'd0), .c_len(4'd0),
         .c_ack(), .c_rvalid(), .c_rdata(), .c_done(),
         .d_req(1'b0), .d_addr(24'd0), .d_len(4'd0),
-        .d_ack(), .d_rvalid(), .d_rdata(), .d_done());
+        .d_ack(), .d_rvalid(), .d_rdata(), .d_done(),
+        .e_req(1'b0), .e_we(1'b0), .e_addr(24'd0), .e_len(4'd0),
+        .e_wdata(16'h0000),
+        .e_ack(), .e_rvalid(), .e_rdata(), .e_done());
 
     sdram_model #(.T_RCD(2), .T_RP(2), .T_WR(2), .T_RFC(4),
                   .PHYSICAL_DQ(1'b1)) sdr (

@@ -91,6 +91,17 @@ module RAM (
      output logic           gv_rd_valid,
      output logic   [15:0]  gv_rd_data,
      output logic           gv_rd_done,
+    // fdd_ramimg's carve-out port (controller port E): writes while a JTAG
+    // upload fills the image, read bursts while it serves sectors.
+     input  logic           ramimg_req,
+     input  logic           ramimg_we,
+     input  logic   [23:0]  ramimg_addr,
+     input  logic    [3:0]  ramimg_len,
+     input  logic   [15:0]  ramimg_wdata,
+     output logic           ramimg_ack,
+     output logic           ramimg_rvalid,
+     output logic   [15:0]  ramimg_rdata,
+     output logic           ramimg_done,
      input  logic           bios_shadow_flag,
     // Wait mode
     input   logic           wait_count_clk_en,
@@ -281,7 +292,8 @@ module RAM (
     logic           refresh_mode;
 
     // sdram_shim wraps sdram_mp, the multi-port controller: port A is this
-    // guest path, B the font fetch, C the CG window, D the graphics display.
+    // guest path, B the font fetch, C the CG window, D the graphics display,
+    // E fdd_ramimg's image carve-out.
     // See docs/P0_SDRAM_DESIGN.md.
     sdram_shim u_sdram (
         .sdram_clock        (clock),
@@ -329,7 +341,16 @@ module RAM (
         .d_ack              (gv_rd_ack),
         .d_rvalid           (gv_rd_valid),
         .d_rdata            (gv_rd_data),
-        .d_done             (gv_rd_done)
+        .d_done             (gv_rd_done),
+        .e_req              (ramimg_req),
+        .e_we               (ramimg_we),
+        .e_addr             (ramimg_addr),
+        .e_len              (ramimg_len),
+        .e_wdata            (ramimg_wdata),
+        .e_ack              (ramimg_ack),
+        .e_rvalid           (ramimg_rvalid),
+        .e_rdata            (ramimg_rdata),
+        .e_done             (ramimg_done)
     );
 
 
