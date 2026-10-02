@@ -210,11 +210,17 @@ module tb_pc98_egc;
         '{8'h55, 8'h55, 8'h55, 8'h55}, '{8'h40, 8'h40, 8'h40, 8'h40},
         '{8'h31, 8'h31, 8'h31, 8'h31}, '{8'h20, 8'h20, 8'h20, 8'h20}};
     logic [7:0] wdE [0:5] = '{8'h9c, 8'h12, 8'haa, 8'h01, 8'h89, 8'h70};
+    // expF: np21w rev106 suppresses a byte event at dstbit 9..15 FOREVER --
+    // the front-end guard `(UINT)(8 - dstbit)` wraps to a huge count, so the
+    // stack check fails every time and the *_sub's `dstbit >= 8` decrement
+    // is unreachable (it fires only for dstbit == 8, where 8-8 slips under
+    // the guard). The old x86 asm strided dstbit -= 8 instead; this table
+    // pins np21w's actual behaviour: nothing lands, ever.
     logic [7:0] expF [0:7][0:3] = '{
-        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h13, 8'h06, 8'h0c, 8'h14},
-        '{8'h82, 8'ha9, 8'hd0, 8'hfe}, '{8'h55, 8'h0a, 8'h06, 8'h19},
-        '{8'h40, 8'ha0, 8'h60, 8'h80}, '{8'h00, 8'h00, 8'h00, 8'h00},
-        '{8'h0e, 8'h01, 8'h1a, 8'h0b}, '{8'h1f, 8'hc0, 8'h50, 8'h4f}};
+        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h00, 8'h00, 8'h00, 8'h00},
+        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h00, 8'h00, 8'h00, 8'h00},
+        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h00, 8'h00, 8'h00, 8'h00},
+        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h00, 8'h00, 8'h00, 8'h00}};
     logic [7:0] expG [0:7][0:3] = '{
         '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h13, 8'h06, 8'h0c, 8'h14},
         '{8'h82, 8'ha9, 8'hd0, 8'hfe}, '{8'h55, 8'h0a, 8'h06, 8'h19},
@@ -229,6 +235,10 @@ module tb_pc98_egc;
         reset = 1'b0;
         repeat (2) @(negedge clk);
 
+        // np21w i286c/cpumem.c vacctbl: the EGC intercepts the graphics
+        // windows only while the GRCG arm (modereg[7]) is also set -- the
+        // engine-enable bit alone leaves rows 0x02/0x03 as plain VRAM.
+        grcg_active = 1'b1;
         egc_active = 1'b1;
 
         // ---- 1. reset state: mask FFFF, access FFF0, ope 0000 ----------
@@ -496,7 +506,10 @@ module tb_pc98_egc;
         access_page = 1'b0;
 
         // A plain access with the page bit set touches ONE plane: its own.
+        // GRCG comes off with the EGC so the window is genuinely plain --
+        // with modereg[7] still set this would be a TDW write instead.
         egc_active = 1'b0;
+        grcg_active = 1'b0;
         access_page = 1'b1;
         g_wr(20'hB0060, 8'h66);          // the R window
         want("plain page 1: own plane only",
