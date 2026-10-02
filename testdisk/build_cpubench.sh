@@ -64,7 +64,9 @@ cbdir = os.environ["CBDIR"]
 files = [
     ("KERNEL  SYS", kernel),
     ("COMMAND COM", command),
-    ("AUTOEXECBAT", b"@ECHO OFF\r\nCPUBENCH -p > RESULT.TXT\r\nTYPE RESULT.TXT\r\n"),
+    # The RAM-disk mount is write-protected: `> RESULT.TXT` would hit DOS's
+    # Abort/Retry/Fail prompt and block. Screen-only; JTAG scrapes TVRAM.
+    ("AUTOEXECBAT", b"@ECHO OFF\r\nCPUBENCH -p\r\n"),
     ("CPUBENCHEXE", open(os.path.join(cbdir, "CPUBENCH.EXE"), "rb").read()),
     ("CPUBENCHDOC", open(os.path.join(cbdir, "CPUBENCH.DOC"), "rb").read()),
     ("CPURACE TXT", open(os.path.join(cbdir, "CPURACE.TXT"), "rb").read()),
