@@ -60,3 +60,13 @@ touches `fpga/db`, and is the only sanctioned local Quartus invocation.
   `hiroya.PC9801` core directory onto the SD card — use it only when the
   SD card route is explicitly wanted, e.g. when data-slot assets changed.
   Do not deploy via the card by default.
+
+### Local sim toolchain caveat
+
+CI's sim job runs Verilator 5.020 (Debian apt). Homebrew's newer Verilator
+(5.052 observed) mis-schedules `while(cond) @(posedge clk)` wait loops under
+`--timing` — `tb_pc98_font_stress` reports false "wedged" fills locally while
+the identical files pass in CI. For an authoritative local run of a
+`--timing` bench, use the `pc98-sim` docker image (`docker build -t pc98-sim
+sim/`, then the CI invocation from `.github/workflows/build.yml`). Lint and
+non-`--timing` benches are unaffected.
