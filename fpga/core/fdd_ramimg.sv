@@ -304,6 +304,7 @@ module fdd_ramimg #(
     logic  [1:0] up_bi;
     logic        up_wpend;   // a popped word still owes SDRAM writes
     logic [20:0] rb_off;
+    logic        rb_abs;
     logic        rb_pend;
     logic  [7:0] rb_byte;
     logic [14:0] last_lba;
@@ -338,7 +339,10 @@ module fdd_ramimg #(
     //   [3] remount  -- writing 1 while enabled re-runs the mount pass
     //   [4] arm      -- stream-sink push enable for the second SLD node
     // Slot 0x88 (ctl_addr 7'h08): rb_off[20:0] -- a byte offset into the
-    // image, read back through dbg2 for upload verify.
+    // image, read back through dbg2 for upload verify. Bit 21 switches the
+    // readback to absolute SDRAM word space, so the same probe can inspect
+    // conventional guest RAM (byte N == word N) -- vectors, work area, a
+    // result mailbox -- not just the carve-out.
     wire ctl_wr  = ctl_pulse && (ctl_addr == 7'h07);
     wire ctl_rba = ctl_pulse && (ctl_addr == 7'h08);
 
@@ -368,6 +372,7 @@ module fdd_ramimg #(
             up_bi           <= 2'd0;
             up_wpend        <= 1'b0;
             rb_off          <= 21'd0;
+            rb_abs          <= 1'b0;
             rb_pend         <= 1'b0;
             rb_byte         <= 8'd0;
             last_lba        <= 15'd0;
@@ -417,6 +422,7 @@ module fdd_ramimg #(
             end
             if (ctl_rba) begin
                 rb_off  <= ctl_data[20:0];
+                rb_abs  <= ctl_data[21];
                 rb_pend <= 1'b1;
             end
 
@@ -665,7 +671,7 @@ module fdd_ramimg #(
             end
             S_RB_REQ: begin
                 sd_req  = 1'b1;
-                sd_addr = CARVE_BASE + 24'(rb_off);
+                sd_addr = rb_abs ? {3'b000, rb_off} : CARVE_BASE + 24'(rb_off);
             end
             default: ;
         endcase

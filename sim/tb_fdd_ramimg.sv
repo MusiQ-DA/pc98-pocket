@@ -127,6 +127,12 @@ module tb_fdd_ramimg;
     logic  [3:0] rd_len  = 0;
     logic  [3:0] wr_pend = 0;
 
+    // carve-relative addresses subtract BASE; absolute-mode reads below BASE
+    // index the array directly (the model only has this one array anyway).
+    function automatic int mem_idx(input logic [23:0] a);
+        return (a >= BASE) ? int'(a - BASE) : int'(a);
+    endfunction
+
     always_ff @(posedge clk) begin
         sd_ack    <= 1'b0;
         sd_rvalid <= 1'b0;
@@ -138,10 +144,10 @@ module tb_fdd_ramimg;
         if (sd_req && !sd_ack && wr_pend == 0 && burst_left == 0) begin
             sd_ack <= 1'b1;
             if (sd_we) begin
-                carve_mem[sd_addr - BASE] <= sd_wdata[7:0];
+                carve_mem[mem_idx(sd_addr)] <= sd_wdata[7:0];
                 wr_pend <= 4'd3;
             end else begin
-                rd_base    <= sd_addr - BASE;   // carve_mem is offset-indexed
+                rd_base    <= mem_idx(sd_addr); // carve_mem is offset-indexed
                 rd_len     <= sd_len;
                 burst_left <= int'(sd_len) + 1;
             end
@@ -296,6 +302,15 @@ module tb_fdd_ramimg;
         check(dbg2[7:0] == 8'h77, "readback probe returns the carved byte");
         if (dbg2[7:0] != 8'h77)
             $display("  dbg: dbg2=%08h mem[12345]=%02h", dbg2, carve_mem[12345]);
+
+        // bit 21 of the 0x88 write switches the probe to absolute SDRAM
+        // word space -- the guest-RAM peek for vectors/mailboxes.
+        carve_mem[16'h1234] = 8'h5A;
+        rba_write(32'h0020_1234);
+        repeat (100) @(negedge clk);
+        check(dbg2[7:0] == 8'h5A, "absolute readback returns guest RAM");
+        if (dbg2[7:0] != 8'h5A)
+            $display("  dbg: dbg2=%08h mem[1234h]=%02h", dbg2, carve_mem[16'h1234]);
 
         // ---------- unmount -----------------------------------------
         mnt_n = 0;
