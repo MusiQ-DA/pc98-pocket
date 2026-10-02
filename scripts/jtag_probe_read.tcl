@@ -83,6 +83,9 @@ proc rd {addr} {
 #   0x36       TVRAM debug cell {attr,char_hi,char_lo} -- each read steps
 #              the cell; write slot 0x82 re-seeks (jtag_screen.tcl)
 #   0x37       the TVRAM debug cell index itself
+#   0x38       guest-mem read: {busy, svc_addr[19:0], rdata} -- write slot
+#              0x84 launches an address, each read launches the next
+#              (jtag_gvram.tcl)
 set regs {
     16  V30_PSW_PC
     17  V30_SREG3_SREG2
@@ -115,6 +118,7 @@ set regs {
     50  GDC_DRAW=ops,flag,to,busy,req
     54  TVRAM_CELL=attr,hi,lo
     55  TVRAM_CELL_IDX
+    56  GVRAM_RD=busy,addr,data
     255 MAGIC
 }
 

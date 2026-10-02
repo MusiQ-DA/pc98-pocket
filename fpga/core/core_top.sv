@@ -1296,6 +1296,12 @@ module core_top (
             // one scan per cell. 0x37 echoes the index being sampled.
             8'h36:   probe_data_c = {8'h00, tvram_dbg_word};
             8'h37:   probe_data_c = {20'h0, dbg_tvram_cell};
+            // 0x38: a guest-VRAM byte through the sequencer's service
+            // channel -- write slot 0x84 launches the address's read, the
+            // word below reports {busy, addr, data} and each completed
+            // read launches the next address. jtag_gvram.tcl walks ranges.
+            8'h38:   probe_data_c = {gv_dbg_req | gv_dbg_busy, 3'b000,
+                                   gv_srv_addr, gv_dbg_data};
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -1365,13 +1371,15 @@ module core_top (
     wire [6:0]  probe_wr_addr;
     wire [31:0] probe_wr_data;
     wire        probe_rd_adv;
+    wire        probe_rd_adv_gv;
     pc98_jtag_probe u_jtag_probe (
         .probe_addr_sel (probe_addr),
         .probe_data     (probe_data),
         .wr_tog         (probe_wr_tog),
         .wr_addr        (probe_wr_addr),
         .wr_data        (probe_wr_data),
-        .rd_adv         (probe_rd_adv)
+        .rd_adv         (probe_rd_adv),
+        .rd_adv_gv      (probe_rd_adv_gv)
     );
 `endif
 
@@ -1598,12 +1606,18 @@ module core_top (
     // copied alongside it. Slot 0x81 is a PC-98 matrix byte for the key line;
     logic [2:0] jw_sync = 3'd0;
     logic [2:0] adv_sync = 3'd0;
+    logic [2:0] gva_sync = 3'd0;
+    logic [2:0] gvd_sync = 3'd0;
+    logic [2:0] gvi_sync = 3'd0;
     logic       probe_wr_pulse;
     logic [6:0] probe_waddr_c;
     logic [31:0] probe_wdata_c;
     always_ff @(posedge clk_chipset) begin
         jw_sync  <= {jw_sync[1:0], probe_wr_tog};
         adv_sync <= {adv_sync[1:0], probe_rd_adv};
+        gva_sync <= {gva_sync[1:0], probe_rd_adv_gv};
+        gvd_sync <= {gvd_sync[1:0], st_done_w};
+        gvi_sync <= {gvi_sync[1:0], st_req_w};
         probe_wr_pulse <= jw_sync[2] != jw_sync[1];
         if (jw_sync[2] != jw_sync[1]) begin
             probe_waddr_c <= probe_wr_addr;
@@ -1622,6 +1636,31 @@ module core_top (
             dbg_tvram_cell <= probe_wdata_c[11:0];
         else if (adv_sync[2] != adv_sync[1])
             dbg_tvram_cell <= dbg_tvram_cell + 12'd1;
+
+        // Slot 0x84 launches a guest-VRAM byte read on the service channel;
+        // every completed 0x38 read re-arms it at the next address, so a
+        // dump is one scan per byte. The claim waits for the firmware's
+        // request to be idle (a level, synced) and holds to done.
+        if (probe_wr_pulse && probe_waddr_c == 7'h04) begin
+            gv_dbg_addr <= probe_wdata_c[19:0];
+            gv_dbg_req  <= 1'b1;
+        end else if (gva_sync[2] != gva_sync[1] && !gv_dbg_req
+                     && !gv_dbg_busy) begin
+            // Never move the address while a read is in flight -- the mux
+            // feeds it straight to the sequencer.
+            gv_dbg_addr <= gv_dbg_addr + 20'd1;
+            gv_dbg_req  <= 1'b1;
+        end
+        if (gv_dbg_req && !gv_dbg_busy && !gvi_sync[2]) begin
+            // The address the sequencer sees is latched at the claim, so a
+            // probe write that lands mid-read cannot bend it.
+            gv_srv_addr <= gv_dbg_addr;
+            gv_dbg_req  <= 1'b0;
+            gv_dbg_busy <= 1'b1;
+        end else if (gv_dbg_busy && (gvd_sync[2] != gvd_sync[1])) begin
+            gv_dbg_busy <= 1'b0;
+            gv_dbg_data <= st_rdata_w;
+        end
     end
 
     // JTAG-injected keystrokes ride the same event line the 8251 drains; a
@@ -2286,6 +2325,20 @@ module core_top (
     wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
     wire [23:0]  tvram_dbg_word; // screen probe: {attr,char_hi,char_lo}
     logic [11:0] dbg_tvram_cell; // screen probe: the cell being sampled
+    // Probe-driven guest-VRAM reads ride the sequencer's service channel
+    // the firmware owns (softcpu 0x5000_0000). A pending probe read claims
+    // the channel whenever the firmware isn't requesting, holds until the
+    // sequencer's done edge, then answers slot 0x38.
+    logic [19:0] gv_dbg_addr = 20'd0;
+    logic [19:0] gv_srv_addr = 20'd0;
+    logic        gv_dbg_req  = 1'b0;
+    logic        gv_dbg_busy = 1'b0;
+    logic [7:0]  gv_dbg_data = 8'h00;
+    wire        st_req_m = gv_dbg_busy ? 1'b1         : st_req_w;
+    wire        st_we_m  = gv_dbg_busy ? 1'b0         : st_we_w;
+    wire        st_raw_m = gv_dbg_busy ? 1'b0         : st_raw_w;
+    wire [19:0] st_addr_m  = gv_dbg_busy ? gv_srv_addr : st_addr_w;
+    wire [7:0]  st_wdata_m = gv_dbg_busy ? 8'h00      : st_wdata_w;
     wire [33:0]  dbg_scsi;   // {ack,req,mg_rd_cnt,post_cnt,rom_rd_cnt}
     wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
     wire [63:0]  fdc_dbg_cmd;  // live command {op,unit,C,H,R,N,EOT,GPL}
@@ -2473,11 +2526,11 @@ module core_top (
         .tvram_dbg_word                     (tvram_dbg_word),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
-        .st_req                             (st_req_w),
-        .st_we                              (st_we_w),
-        .st_raw                             (st_raw_w),
-        .st_addr                            (st_addr_w),
-        .st_wdata                           (st_wdata_w),
+        .st_req                             (st_req_m),
+        .st_we                              (st_we_m),
+        .st_raw                             (st_raw_m),
+        .st_addr                            (st_addr_m),
+        .st_wdata                           (st_wdata_m),
         .st_done                            (st_done_w),
         .st_rdata                           (st_rdata_w),
         .accel_status                       (accel_status_w),
