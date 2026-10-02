@@ -453,6 +453,24 @@ jobs:
           ./obj_fdcglue/fg | tee fdcglue.log
           grep -q "PASS tb_pc98_fdc_glue" fdcglue.log
 
+      - name: RAM-image serve keeps sector bytes in order under firmware mgmt traffic
+        run: |
+          S=fpga/core
+          # The whole serve chain with the real arbiter: fdd_ramimg pushes
+          # FIFO bytes through the management bus while a firmware-traffic
+          # generator lands non-F2 reads on the push cycles. Without the
+          # mgmt_arb strobe fence those reads arrive as nibble-F FIFO pops
+          # and the guest receives the sector rotated -- the regression this
+          # step locks out.
+          verilator --binary --timing -Wno-fatal --top-module tb_ramimg_fdc \
+            -Isim \
+            $S/common/floppy.v $S/common/simple_fifo.v \
+            $S/mgmt_arb.sv $S/fdd_ramimg.sv \
+            sim/stub_dcfifo.sv sim/tb_fdd_dma_model.sv \
+            sim/tb_ramimg_fdc.sv -o rf --Mdir obj_ramimgfdc
+          ./obj_ramimgfdc/rf | tee ramimgfdc.log
+          grep -q "PASS tb_ramimg_fdc" ramimgfdc.log
+
       - name: the SCSI register window indexes and increments like the board
         run: |
           S=fpga/core
