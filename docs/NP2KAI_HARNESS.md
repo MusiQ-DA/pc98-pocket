@@ -84,11 +84,15 @@ jtag_bench.sh, which wraps upload+mount+wait+scrape).
 
 Gotchas observed 2026-10:
 
-* The i386c core ignores any notion of V30 pace: default mult=4 gives
-  Ratio 36.17 (~486DX/33 class); `NP2_CLK_MULT=1` gives 1.79. np2kai is
-  an upper bound only -- real V30@10MHz is ~3.11 (CPURACE.TXT).
-* Numbers move ~5x under host load (other emulators/agents running
-  concurrently dilate virtual time). Bench on an idle machine.
+* The i386c core ignores any notion of V30 pace: default mult=4 (the
+  9.83MHz VM setting) gives Ratio 7.22 / 9.57s; `NP2_CLK_MULT=1` gives
+  1.79 / 38.47s. np2kai is an upper bound only -- real V30@10MHz is
+  ~3.11 / 22.17s and V30@5MHz ~1.34 / 51.21s (CPURACE.TXT). Even at the
+  same nominal clock np2kai executes ~2.3x faster than real hardware.
+* An early run showed Ratio 36.17 -- stale np2kai.cfg leaking in before
+  the `rm -f` discipline; always delete np2kai/np2kai.cfg first.
+* Keep the machine idle during runs: background emulators dilate the
+  virtual-time pacing.
 * CAUTION when editing ~/NP2kai: a leftover debug hook in bios.c once
   retargeted INT 1Eh to FD80:0A05 and silently derailed every disk boot
   (ITF -> 0000:04F8 -> garbage). If DOS never boots, `git diff bios/` there.
