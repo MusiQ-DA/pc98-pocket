@@ -80,6 +80,9 @@ proc rd {addr} {
 #               draw_to_seen[1:0] {s,m} (watchdog fired = the old stall),
 #               gdc_draw_busy[1:0], gdc_draw_req[1:0], accel_status[3:0]
 #               = {page, EGC, RMW, GRCG armed}}
+#   0x36       TVRAM debug cell {attr,char_hi,char_lo} -- each read steps
+#              the cell; write slot 0x82 re-seeks (jtag_screen.tcl)
+#   0x37       the TVRAM debug cell index itself
 set regs {
     16  V30_PSW_PC
     17  V30_SREG3_SREG2
@@ -110,6 +113,8 @@ set regs {
     48  SCSI=mg_rd,post,rom_rd
     49  GVRAMSEQ=req,done,hold,fsm,pl
     50  GDC_DRAW=ops,flag,to,busy,req
+    54  TVRAM_CELL=attr,hi,lo
+    55  TVRAM_CELL_IDX
     255 MAGIC
 }
 

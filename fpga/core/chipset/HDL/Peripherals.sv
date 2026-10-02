@@ -137,6 +137,9 @@ module PERIPHERALS #(
     // bit 7 is the ITF's cold-boot-vs-OUT-0F0h test at F8005B, and the
     // probe reads it to check the 0x37 BSR write really cleared it.
     output  logic   [7:0]   dbg_sysport,
+        // The JTAG screen probe: cell index in, {attr,char_hi,char_lo} out.
+        input   logic   [11:0]  tvram_dbg_cell,
+        output  logic   [23:0]  tvram_dbg_word,
         // PC-9801-86 OPNA, stereo. Zero on a non-PC-98 build.
     output  logic signed [15:0] opna_snd_l,
     output  logic signed [15:0] opna_snd_r,
@@ -1780,6 +1783,10 @@ module PERIPHERALS #(
         .cpu_wren    (tvram_mem_select & ~memory_write_n),
         .cpu_wdata   (internal_data_bus),
         .cpu_q       (tvram_cpu_q),
+        // The JTAG screen probe's cell, read back over the guest read stage.
+        .cpu_sel     (tvram_mem_select),
+        .dbg_cell    (tvram_dbg_cell),
+        .dbg_word    (tvram_dbg_word),
         // Character codes to the row buffer, on the chipset clock.
         .fil_clk     (clock),
         .fil_cell    (tvram_fil_cell),

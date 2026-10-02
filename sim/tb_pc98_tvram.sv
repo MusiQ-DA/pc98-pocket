@@ -33,6 +33,10 @@ module tb_pc98_tvram;
     wire   [7:0] vid_char_lo, vid_char_hi, vid_attr;
     logic [11:0] fil_cell = 12'h0;
 
+    logic        cpu_sel  = 1'b1;
+    logic [11:0] dbg_cell = 12'h0;
+    wire  [23:0] dbg_word;
+
     // Held over the first edge so the memory switch registers come out of
     // reset loaded with the np21w defaults, the way the core's reset does it.
     // Released with #1 clear of the edge so the flop and the release cannot
@@ -47,6 +51,7 @@ module tb_pc98_tvram;
         .fil_clk(clk), .fil_cell(fil_cell),
         .fil_char_lo(vid_char_lo), .fil_char_hi(vid_char_hi),
         .vid_clk(clk), .vid_cell(vid_cell), .vid_attr(vid_attr),
+        .cpu_sel(cpu_sel), .dbg_cell(dbg_cell), .dbg_word(dbg_word),
         .cfg_a3fea(8'h04), .cfg_a3fee(8'h00), .cfg_a3ff2(8'h01)
     );
 
@@ -113,8 +118,42 @@ module tb_pc98_tvram;
             end
         end
 
-        // (The JTAG debug read port this block used to exercise is gone with
-        // the probe trims: the guest port is the only read path now.)
+        // The JTAG debug read port borrows the guest read stage while the
+        // window is unselected: cpu_sel low swaps rd_addr to the
+        // attribute-space address of dbg_cell, and dbg_word returns all
+        // three banks at once one clock later -- {attr,char_hi,char_lo},
+        // the same bytes the guest would read.
+        begin : dbg_port_test
+            int bad;
+            bad = 0;
+            wr(14'h0000, 8'h5A);  wr(14'h0001, 8'hA5);  wr(14'h2000, 8'h3C);
+            wr(14'h0F0A, 8'h11);  wr(14'h0F0B, 8'h22);  wr(14'h2F0A, 8'h33);
+            cpu_sel = 1'b0;
+            dbg_cell = 12'h000;
+            @(posedge clk); @(posedge clk);
+            if (dbg_word !== 24'h3C_A5_5A) begin
+                $display("  FAIL dbg cell 0: %06h (want 3CA55A)", dbg_word);
+                bad++;
+            end
+            dbg_cell = 12'h785;
+            @(posedge clk); @(posedge clk);
+            if (dbg_word !== 24'h33_22_11) begin
+                $display("  FAIL dbg cell 0x785: %06h (want 332211)", dbg_word);
+                bad++;
+            end
+            // A memory-switch cell answers its register, not the bank:
+            // cell 0xFF3 is A3FE6 = memsw[1] = 0x05.
+            dbg_cell = 12'hFF3;
+            @(posedge clk); @(posedge clk);
+            if (dbg_word[23:16] !== 8'h05) begin
+                $display("  FAIL dbg memsw cell 0xFF3: attr %02h (want 05)",
+                         dbg_word[23:16]);
+                bad++;
+            end
+            cpu_sel = 1'b1;
+            if (bad != 0) errors += bad;
+            else $display("  debug port: cells and memory switch read back");
+        end
 
         // The regions must not alias. Writing an attribute must not disturb the
         // character bytes of the same cell -- the exact failure the old layout

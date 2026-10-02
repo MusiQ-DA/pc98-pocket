@@ -1,14 +1,13 @@
 # jtag_screen.tcl -- dump the PC-98 text screen through the JTAG probe.
 #
 # Probe write slot 0x82 sets the debug cell; every completed read of slot
-# 0x1B returns {attr,hi,lo} for the current cell and steps it, so the whole
+# 0x36 returns {attr,hi,lo} for the current cell and steps it, so the whole
 # 80x25 screen is one 40-bit scan per cell.
 #
 #   openocd -f scripts/jtag_probe.cfg -f scripts/jtag_screen.tcl
 #
 # Prints the text plane as characters (ASCII glyphs decode directly; kanji
-# cells show as '#'), then a second grid of attribute bytes, then the GDC
-# display-start word from register 0x0C for scroll mapping.
+# cells show as '#'), then a second grid of attribute bytes.
 
 init
 irscan fpga.tap 0x0e
@@ -27,20 +26,16 @@ proc rd {addr} {
     return 0x[string range $raw end-7 end]
 }
 
-# --- SAD (display start) first, for scroll mapping ---------------------------
-set sadword [rd 0x0c]
-puts [format "GDC 0x0C = 0x%08X (SAD in low bits)" $sadword]
-
 # --- seek cell 0, prime the auto-advance slot --------------------------------
 wr 2 0
 irscan fpga.tap 0x0c
-# The first scan at 0x1B only primes the address (its TDO carried the slot
+# The first scan at 0x36 only primes the address (its TDO carried the slot
 # read before it); every scan after it returns one cell and auto-steps.
-drscan fpga.tap 40 [expr {0x1B << 32}] -endstate idle   ;# prime addr_q=0x1B
+drscan fpga.tap 40 [expr {0x36 << 32}] -endstate idle   ;# prime addr_q=0x36
 
 set cells {}
 for {set c 0} {$c < 2000} {incr c} {
-    set raw [drscan fpga.tap 40 [expr {0x1B << 32}] -endstate idle]
+    set raw [drscan fpga.tap 40 [expr {0x36 << 32}] -endstate idle]
     scan [string range $raw end-5 end] %x v
     lappend cells $v                        ;# {attr,hi,lo} packed in 24 bits
 }

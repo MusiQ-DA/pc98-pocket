@@ -1290,6 +1290,12 @@ module core_top (
             // byte is what the data bus actually gave that read.
             8'h34:   probe_data_c = {dbg_sysport_w, 8'h00, in35_count,
                                    in35_data};
+            // 0x36: the screen-readback cell {attr,char_hi,char_lo} at
+            // dbg_tvram_cell -- each completed read also steps the cell
+            // (rd_adv below), so scripts/jtag_screen.tcl dumps the plane
+            // one scan per cell. 0x37 echoes the index being sampled.
+            8'h36:   probe_data_c = {8'h00, tvram_dbg_word};
+            8'h37:   probe_data_c = {20'h0, dbg_tvram_cell};
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -1358,13 +1364,14 @@ module core_top (
     wire        probe_wr_tog;
     wire [6:0]  probe_wr_addr;
     wire [31:0] probe_wr_data;
+    wire        probe_rd_adv;
     pc98_jtag_probe u_jtag_probe (
         .probe_addr_sel (probe_addr),
         .probe_data     (probe_data),
         .wr_tog         (probe_wr_tog),
         .wr_addr        (probe_wr_addr),
         .wr_data        (probe_wr_data),
-        .rd_adv         ()
+        .rd_adv         (probe_rd_adv)
     );
 `endif
 
@@ -1590,11 +1597,13 @@ module core_top (
     // Probe writes land in clk_chipset once, as a pulse with the payload
     // copied alongside it. Slot 0x81 is a PC-98 matrix byte for the key line;
     logic [2:0] jw_sync = 3'd0;
+    logic [2:0] adv_sync = 3'd0;
     logic       probe_wr_pulse;
     logic [6:0] probe_waddr_c;
     logic [31:0] probe_wdata_c;
     always_ff @(posedge clk_chipset) begin
         jw_sync  <= {jw_sync[1:0], probe_wr_tog};
+        adv_sync <= {adv_sync[1:0], probe_rd_adv};
         probe_wr_pulse <= jw_sync[2] != jw_sync[1];
         if (jw_sync[2] != jw_sync[1]) begin
             probe_waddr_c <= probe_wr_addr;
@@ -1606,6 +1615,13 @@ module core_top (
             jtag_btn1 <= probe_wdata_c[15:0];
             jtag_btn2 <= probe_wdata_c[31:16];
         end
+        // Slot 0x82 selects the TVRAM cell the screen probe samples; every
+        // completed screen-slot read (the rd_adv toggle) steps it instead,
+        // so a dump is one JTAG scan per cell.
+        if (probe_wr_pulse && probe_waddr_c == 7'h02)
+            dbg_tvram_cell <= probe_wdata_c[11:0];
+        else if (adv_sync[2] != adv_sync[1])
+            dbg_tvram_cell <= dbg_tvram_cell + 12'd1;
     end
 
     // JTAG-injected keystrokes ride the same event line the 8251 drains; a
@@ -2268,6 +2284,8 @@ module core_top (
     wire [15:0]  chipset_dbg;
     wire  [7:0]  chipset_dbg2;
     wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
+    wire [23:0]  tvram_dbg_word; // screen probe: {attr,char_hi,char_lo}
+    logic [11:0] dbg_tvram_cell; // screen probe: the cell being sampled
     wire [33:0]  dbg_scsi;   // {ack,req,mg_rd_cnt,post_cnt,rom_rd_cnt}
     wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
     wire [63:0]  fdc_dbg_cmd;  // live command {op,unit,C,H,R,N,EOT,GPL}
@@ -2451,6 +2469,8 @@ module core_top (
         .gdc_draw_to                        (gdc_draw_to),
         .dbg_egc_flag                       (egc_flag_w),
         .dbg_sysport                        (dbg_sysport_w),
+        .tvram_dbg_cell                     (dbg_tvram_cell),
+        .tvram_dbg_word                     (tvram_dbg_word),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
         .st_req                             (st_req_w),
