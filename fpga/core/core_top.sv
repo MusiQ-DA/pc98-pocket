@@ -910,10 +910,16 @@ module core_top (
     //     at F5 -- still belongs to the softcore, on every cycle the RAM
     //     server is not itself strobing.
     //
-    //   * The strobe mux -- on a cycle the RAM server reads or writes, the
-    //     bus carries its operands; otherwise the softcore's. Two strobes can
-    //     never land together and the firmware's non-F2 traffic keeps flowing
-    //     between the RAM server's beats.
+    //   * The strobe arbitration -- on a cycle the RAM server reads or
+    //     writes, the bus carries its operands and the firmware strobes
+    //     are fenced entirely, not just the F2-windowed ones: a softcore
+    //     strobe landing on a server cycle would execute against the
+    //     server's address. Observed on hardware: firmware F4/F5 polls
+    //     (scsi_poll, OPNA) coinciding with 0xF20F pushes arrived as
+    //     nibble-F reads -- floppy.v decodes that as a FIFO pop, the
+    //     fill ends a byte short, the level-triggered re-serve appends
+    //     the head bytes, and the guest receives the sector rotated
+    //     (sim/tb_ramimg_fdc.sv reproduces it byte-for-byte).
     //
     // Without the JTAG build flag the mux is a pass-through and nothing else
     // changes.
@@ -929,17 +935,17 @@ module core_top (
     wire  [1:0] fdd_req_fw;
 `ifdef PC98_JTAG
     wire [15:0] ri_mgmt_addr, ri_mgmt_dout;
-    wire        ri_mgmt_wr, ri_mgmt_rd, ri_own, ri_stb;
+    wire        ri_mgmt_wr, ri_mgmt_rd, ri_own;
     wire [31:0] ri_dbg0, ri_dbg1, ri_dbg2;
-    // The firmware's view of the FDC window is fenced while own is high; a
-    // softcore strobe at any other window goes through between the RAM
-    // server's own.
     wire        fw_fdd_hit = mgmt_addr[15:8] == 8'hF2;
-    assign ri_stb       = ri_mgmt_wr | ri_mgmt_rd;
-    assign cs_mgmt_addr = ri_stb ? ri_mgmt_addr : mgmt_addr;
-    assign cs_mgmt_dout = ri_stb ? ri_mgmt_dout : mgmt_dout;
-    assign cs_mgmt_wr   = ri_mgmt_wr | (mgmt_wr & ~(ri_own & fw_fdd_hit));
-    assign cs_mgmt_rd   = ri_mgmt_rd | (mgmt_rd & ~(ri_own & fw_fdd_hit));
+    mgmt_arb u_mgmt_arb (
+        .fw_addr (mgmt_addr),  .fw_dout (mgmt_dout),
+        .fw_rd   (mgmt_rd),    .fw_wr   (mgmt_wr),
+        .ri_addr (ri_mgmt_addr), .ri_dout (ri_mgmt_dout),
+        .ri_rd   (ri_mgmt_rd), .ri_wr   (ri_mgmt_wr), .ri_own (ri_own),
+        .cs_addr (cs_mgmt_addr), .cs_dout (cs_mgmt_dout),
+        .cs_rd   (cs_mgmt_rd), .cs_wr   (cs_mgmt_wr)
+    );
     assign fdd_req_fw   = mgmt_req[7:6] & ~{2{ri_own}};
 `else
     assign ri_greset    = 1'b0;

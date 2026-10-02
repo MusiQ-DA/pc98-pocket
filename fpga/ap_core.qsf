@@ -893,6 +893,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_glyph_rowbuf.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_font_fetch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_jtag_probe.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/fdd_ramimg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/mgmt_arb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pulse_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_cgwindow.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_gaiji_ram.sv
