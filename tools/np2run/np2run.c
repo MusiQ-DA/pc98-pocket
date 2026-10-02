@@ -81,7 +81,8 @@ static int pixfmt = RETRO_PIXEL_FORMAT_XRGB8888;
 static const char *var_lookup(const char *key) {
     if (!strcmp(key, "np2kai_model"))        return "PC-9801VM";
     if (!strcmp(key, "np2kai_clk_base"))     return "2.4576 MHz";
-    if (!strcmp(key, "np2kai_clk_mult"))     return "4";
+    { const char *m = getenv("NP2_CLK_MULT");
+      if (!strcmp(key, "np2kai_clk_mult"))  return m ? m : "4"; }
     if (!strcmp(key, "np2kai_keyboard"))     return "Reset";
     if (!strcmp(key, "np2kai_FastMC"))       return "ON";
     return NULL;

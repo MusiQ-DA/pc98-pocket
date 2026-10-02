@@ -58,3 +58,35 @@ clk_base=2.4576 MHz, system dir = CWD (ROMs under ./np2kai/).
   (that writer's maximum is FEA=2, the 512 KB class).
 * Port 0x42 (prt_i42 in io/printif.c): 0x84 | 0x02(V30) | ... -- only
   consulted by the ROM writer we now bypass.
+
+## Headless benchmark runs (cpubench)
+
+`tools/np2run/np2run.c` is a minimal libretro driver: `retro_load_game`
+mounts an .hdm as FDD0, guest RAM is read via `dlsym("mem")` (the 2MB
+flat array -- RETRO_MEMORY_SYSTEM_RAM only covers CPU_EXTMEM which is
+NULL on the 640KB VM), and the 80x25 text layer at 0xA0000 is decoded to
+ASCII. `-mark STR` exits early when the string hits the screen; `-dump`
+writes raw RAM for grep.
+
+```sh
+cc -O2 -o np2run tools/np2run/np2run.c -ldl
+mkdir -p /tmp/np2run/np2kai && cp np2run ~/NP2kai/sdl/np2kai_libretro.dylib /tmp/np2run/
+cp ~/.pc98roms/{bios,itf,font}.rom /tmp/np2run/np2kai/
+cd /tmp/np2run && rm -f np2kai/np2kai.cfg
+./np2run 7200 ../repo/pc98-pocket-zet/testdisk/cpubench.hdm
+```
+
+testdisk/build_cpubench.sh packs FreeDOS(98) + CPUBENCH 0.980 +
+`CPUBENCH -p > RESULT.TXT`, so the score lands both on screen and inside
+the image (FAT file -- readable back from a RAM-resident copy via JTAG).
+
+Gotchas observed 2026-10:
+
+* The i386c core ignores any notion of V30 pace: default mult=4 gives
+  Ratio 36.17 (~486DX/33 class); `NP2_CLK_MULT=1` gives 1.79. np2kai is
+  an upper bound only -- real V30@10MHz is ~3.11 (CPURACE.TXT).
+* Numbers move ~5x under host load (other emulators/agents running
+  concurrently dilate virtual time). Bench on an idle machine.
+* CAUTION when editing ~/NP2kai: a leftover debug hook in bios.c once
+  retargeted INT 1Eh to FD80:0A05 and silently derailed every disk boot
+  (ITF -> 0000:04F8 -> garbage). If DOS never boots, `git diff bios/` there.

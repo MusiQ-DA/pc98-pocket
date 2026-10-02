@@ -64,7 +64,7 @@ cbdir = os.environ["CBDIR"]
 files = [
     ("KERNEL  SYS", kernel),
     ("COMMAND COM", command),
-    ("AUTOEXECBAT", b"@ECHO OFF\r\nCPUBENCH -p\r\n"),
+    ("AUTOEXECBAT", b"@ECHO OFF\r\nCPUBENCH -p > RESULT.TXT\r\nTYPE RESULT.TXT\r\n"),
     ("CPUBENCHEXE", open(os.path.join(cbdir, "CPUBENCH.EXE"), "rb").read()),
     ("CPUBENCHDOC", open(os.path.join(cbdir, "CPUBENCH.DOC"), "rb").read()),
     ("CPURACE TXT", open(os.path.join(cbdir, "CPURACE.TXT"), "rb").read()),
