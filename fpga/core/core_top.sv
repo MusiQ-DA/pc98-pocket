@@ -286,8 +286,17 @@ module core_top (
     logic        cycle_accrate;
     logic        vram_wait_en;
     logic  [1:0] clk_select;
+`ifdef PC98_JTAG
+    // JTAG slot 0x89 can pin the speed for scripted benchmark runs;
+    // otherwise the OSD setting owns clk_select_next exactly as before.
+    logic        jtag_spd_ovr = 1'b0;
+    logic  [1:0] jtag_spd_sel = 2'b00;
+    wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
+                                              : cpu_speed_cfg;
+`else
     // The CPU speed is the OSD's alone.
     wire   [1:0] clk_select_next = cpu_speed_cfg;
+`endif
 
     always @(posedge clk_chipset, posedge reset)
     begin
@@ -1672,6 +1681,13 @@ module core_top (
         if (probe_wr_pulse && probe_waddr_c == 7'h03) begin
             jtag_btn1 <= probe_wdata_c[15:0];
             jtag_btn2 <= probe_wdata_c[31:16];
+        end
+        // Slot 0x89: CPU-speed override for scripted runs -- wdata[2] forces
+        // clk_select_next to wdata[1:0] instead of the OSD setting. Same
+        // handoff the menu uses (ce_generator reloads on the next biu_done).
+        if (probe_wr_pulse && probe_waddr_c == 7'h09) begin
+            jtag_spd_ovr  <= probe_wdata_c[2];
+            jtag_spd_sel  <= probe_wdata_c[1:0];
         end
     end
 

@@ -166,6 +166,22 @@ if {![info exists ::env(HDNOVERIFY)]} {
 
 if {[info exists ::env(HDNOBOOT)]} { shutdown; exit 0 }
 
+# CPU-speed override (probe write slot 0x89): HDSPEED=0..3 forces
+# 5/10/20/max regardless of the OSD setting for scripted runs;
+# HDSPEED=clear hands it back.
+#
+#   env HDIMG=img.hdm HDSPEED=1
+if {[info exists ::env(HDSPEED)]} {
+    select_node 1
+    if {$env(HDSPEED) eq "clear"} {
+        wr 0x89 0
+        puts "speed override cleared (OSD setting restored)"
+    } else {
+        wr 0x89 [expr {4 | ($env(HDSPEED) & 3)}]
+        puts [format "speed override: clk_select=%d" $env(HDSPEED)]
+    }
+}
+
 # --- mount + (optionally) reset into a boot ---------------------------------
 ctl 0x01          ;# enable -> the mount pass runs
 for {set i 0} {$i < 2000} {incr i} {
