@@ -25,11 +25,14 @@
 //
 //  THE BRIDGE'S ANSWER:
 //
-//   * Zet runs on a GATED clock (zet_clk = clk & ce_arm): the cpu_ce
-//     posedge train is latched on the negedge so `clk & ce_arm` delivers
-//     one clean posedge per CE pulse at the NEXT clk edge, pacing Zet at
-//     the same ~9.54 MHz the V30's CE train gives. (An FPGA clock gate,
-//     not a PLL -- skew vs clk is covered by the explicit WB handshake.)
+//   * Zet runs on a GATED clock (zet_clk = clk & (run_arm | reset)): the
+//     gate is open unless an INTA service or pause_core has closed it, so
+//     the core free-runs at clk_chipset and only the 8288 byte engine
+//     below stays on the cpu_ce train. Bus cycles keep their PC-98
+//     pacing (T-states, AEN stretch, SDRAM waits are all counted in CE
+//     pulses); the CE setting now shapes the bus, not the core's issue
+//     rate. (An FPGA clock gate, not a PLL -- skew vs clk is covered by
+//     the explicit WB handshake.)
 //   * A Wishbone cycle needs no parking trick: ack is simply withheld
 //     while the byte engine below runs the access, exactly as the v30
 //     bridge's byte engine works (T-state pacing, AEN stretch, word
@@ -106,34 +109,35 @@ module zet_cpu_bridge (
     localparam [2:0] BS_PASV = 3'b111;
 
     // ------------------------------------------------------------------------
-    // the gated core clock: one posedge per CE pulse, delivered one clk late
+    // the gated core clock: every clk edge reaches the core unless halted
     // ------------------------------------------------------------------------
     //
-    // ce_arm is latched on the FALLING edge, so it only changes while clk is
-    // low -- `clk & ce_arm` can then never glitch mid-high. A CE pulse in
-    // period N sets ce_arm at N's negedge; the zet_clk posedge lands at the
-    // posedge that ends N. In this clk domain "Zet gets an edge this cycle"
-    // is therefore just `ce_arm` as seen at posedge time.
+    // run_arm is latched on the FALLING edge, so it only changes while clk
+    // is low -- `clk & run_arm` can then never glitch mid-high. The gate
+    // stays open in normal operation, so zet_clk posedges come at every
+    // clk posedge: the core's issue rate is clk_chipset, and the CE train
+    // only paces the byte engine below. In this clk domain "Zet gets an
+    // edge this cycle" is therefore just `run_arm` as seen at posedge
+    // time.
     //
-    // zet_halt starves the core from the very clk wb_tgc_o rises (the level
-    // itself closes the gate -- waiting a clk for a registered freeze would
-    // let one armed edge slip and the iid sample would land on a stale
-    // vector) through the end of the INTA service; int_served re-opens the
-    // gate so the release edge can clear the pulse. During reset the edges
+    // zet_halt starves the core from the very clk wb_tgc_o rises (the
+    // level is sampled at the next negedge, closing the gate before the
+    // following posedge -- the iid sample cannot land on a stale vector)
+    // through the end of the INTA service; int_served re-opens the gate
+    // so the release edge can clear the pulse. During reset the edges
     // must flow regardless (Zet's reset is synchronous -- no edges, no
     // reset), and pause_core is the OSD's freeze.
     wire zet_halt = ((wb_tgc_o || inta_active) && !int_served)
                  || (pause_core && !reset);
-    reg  ce_arm;
-    always @(negedge clk) ce_arm <= cpu_ce_posedge && !zet_halt;
-    // `| reset`: Zet's reset is SYNCHRONOUS and the CE generator does not
-    // emit the train while reset is held -- pass every clk edge through so
-    // the core's reset can actually latch (v30 gets away without this
-    // because its reset is asynchronous).
-    assign zet_clk = clk & (ce_arm | reset);
+    reg  run_arm;
+    always @(negedge clk) run_arm <= !zet_halt;
+    // `| reset`: Zet's reset is SYNCHRONOUS -- no edges, no reset -- so the
+    // gate is forced open while reset is held. (v30 gets away without this
+    // because its reset is asynchronous.)
+    assign zet_clk = clk & (run_arm | reset);
 
-    // A zet edge lands at this posedge when ce_arm was latched.
-    wire zet_edge = ce_arm;
+    // A zet edge lands at this posedge when run_arm was latched.
+    wire zet_edge = run_arm;
 
     assign lock_n   = 1'b1;
 
@@ -166,10 +170,13 @@ module zet_cpu_bridge (
                                 : (wb_we_o ? BS_MEMW : BS_MEMR);
     wire       wb_req = wb_cyc_o && wb_stb_o;
 
-    // Ack timing: pulse ack, hold it until a delivered Zet edge samples it,
-    // drop it before the edge after that. wb_dat_i stays parked on the read
-    // result register -- valid through the ack edge and beyond.
-    reg        ack_seen;
+    // Ack timing: pulse ack once the byte pair is done, drop it on the clk
+    // after the delivering Zet edge so the pulse spans exactly one edge.
+    // (The core is a clk-rate master now: a two-edge-wide pulse would be
+    // sampled twice and the odd-word's second byte would complete off the
+    // stale read word without ever touching the 8288.) wb_dat_i stays
+    // parked on the read result register -- valid through the ack edge
+    // and beyond.
     reg [15:0] rd_word;         // last assembled read data
     reg        inta_active;     // serving a vector fetch for wb_tgc_o
     reg        int_served;      // the INTA pair ran -- keeps zet_halt open
@@ -181,7 +188,6 @@ module zet_cpu_bridge (
             req_busy      <= 1'b0;
             req_age       <= 2'd0;
             wb_ack_i      <= 1'b0;
-            ack_seen      <= 1'b0;
             inta_active   <= 1'b0;
             int_served    <= 1'b0;
             tgc_q         <= 1'b0;
@@ -203,7 +209,7 @@ module zet_cpu_bridge (
             // ack -- gated on !wb_ack_i, the earliest capture lands the
             // clk after it drops.) No parameters are captured -- see the
             // header note; the engine samples the live outputs at arm.
-            if (wb_req && !req_busy && !wb_ack_i && !ack_seen
+            if (wb_req && !req_busy && !wb_ack_i
                 && !inta_active && !wb_tgc_o) begin
                 req_busy <= 1'b1;
                 req_age  <= 2'd0;
@@ -218,17 +224,15 @@ module zet_cpu_bridge (
             if (req_busy && zet_edge && (req_age != 2'd2))
                 req_age <= req_age + 2'd1;
 
-            // The engine finished the pair: pulse ack, remember it must be
-            // consumed by one (and only one) Zet edge.
+            // The engine finished the pair: pulse ack, drop it the clk
+            // after the Zet edge that consumed it -- one edge wide, so a
+            // clk-rate master cannot double-sample. If the core is halted
+            // the pulse simply holds until an edge is delivered.
             if (pair_done && req_busy) begin
                 req_busy     <= 1'b0;
                 wb_ack_i     <= 1'b1;
             end
-            if (wb_ack_i && zet_edge) ack_seen <= 1'b1;
-            if (ack_seen) begin
-                wb_ack_i <= 1'b0;
-                ack_seen <= 1'b0;
-            end
+            if (wb_ack_i && zet_edge) wb_ack_i <= 1'b0;
 
             // INTA service complete: the vector is on wb_dat_i; release
             // the clock. inta clears at the first edge it gets, which is
