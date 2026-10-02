@@ -256,9 +256,25 @@ module pc98_gvram_seq #(
     // parked write in RAM.sv could reorder behind it.
     wire window    = pc98_gvram_hits(cur_addr, analog_mode);
     wire egc_arm   = EGC & egc_active;
-    wire egc_here  = egc_arm & window & ~svc_raw_wr;
-    wire grcg_here = ~egc_arm & grcg_active & window & ~svc_raw_wr;
-    wire plain_pg1 = ~egc_arm & ~grcg_active & window & access_page;
+    // np21w i286c/cpumem.c vacctbl: the EGC rows (0x0a/0x0b/0x0e/0x0f) need
+    // the GRCG arm -- operate bit3, modereg[7]. The EGC-enable bit alone
+    // (rows 0x02/0x03, and 0x06/0x07 under a stale RMW flag) still answers
+    // with plain VRAM; the engine is genuinely blind until the charger is
+    // switched in. The service channel is exempt -- io/gdc_pset.c consults
+    // VOPBIT_EGC alone, so an svc op runs the EGC whenever it is armed.
+    wire egc_on    = egc_arm & (in_svc | grcg_active);
+    wire egc_here  = egc_on & window & ~svc_raw_wr;
+    // np21w i286c/cpumem.c vacctbl[0x0c/0x0d]: with the GRCG's RMW bit set a
+    // guest READ is plain VRAM -- the modify half applies to writes only,
+    // and the TCR answer exists only in TDW mode (rows 0x08/0x09). The read
+    // still expands for page-1 banking through plain_pg1 below. ~in_svc
+    // keeps a guest strobe that is merely WAITING from de-expanding the
+    // service channel's own op.
+    wire grcg_rd_raw = ~in_svc & cpu_rd & ~cpu_wr & grcg_rmw;
+    wire grcg_here = ~egc_on & grcg_active & window & ~svc_raw_wr
+                   & ~grcg_rd_raw;
+    wire plain_pg1 = ~egc_on & window & access_page
+                   & (~grcg_active | grcg_rd_raw);
     wire expand    = in_svc | egc_here | grcg_here | plain_pg1;
     wire [1:0] own = own_plane(cur_addr);
 
@@ -278,10 +294,19 @@ module pc98_gvram_seq #(
     // pipeline -- the raster-op mode, or the 0x1000 pattern source in its
     // non-colour banks (EGCOPE_SHIFTB's call sites).
     wire egc_rd_shift = ~egc_ope[10];
-    wire egc_wr_shift =  egc_ope[10]
+    // memegc.c's write-side queue pushes are NOT symmetric by access size:
+    // egc_opeb pushes (EGCOPE_SHIFTB) only where ope 12:11 consults the
+    // pipeline AND ope 0x400 asks for it; egc_opew pushes on EVERY word
+    // write -- the raster bank runs EGCOPE_SHIFTW (0x400-guarded) while the
+    // pattern and replicate banks run EGCOPE_SHIFTW2 unconditionally, so a
+    // word write always advances the pipeline even when it does not feed
+    // the written byte.
+    wire egc_wr_shift = is_word
+                      ? ((egc_ope[12:11] == 2'b01) ? egc_ope[10] : 1'b1)
+                      : (egc_ope[10]
                        & ((egc_ope[12:11] == 2'b01)
                         | ((egc_ope[12:11] == 2'b10)
-                         & ~(egc_fgbg[14] ^ egc_fgbg[13])));
+                         & ~(egc_fgbg[14] ^ egc_fgbg[13]))));
     // The last live plane of an EGC read: plane E takes analog mode.
     wire egc_rd_last  = (gp == 2'd3) | ((gp == 2'd2) & ~analog_mode);
     // sf_push is one strobe per live plane byte landing (each S_RDW); sf_evt
@@ -339,7 +364,7 @@ module pc98_gvram_seq #(
             .sf_evt_d2(cpu_wdata_hi), .sf_evt_word(is_word),
             .sf_push_off(egc_sf_off),
             .sf_ext(op_ext),
-            .op_plane(gp), .op_ext(op_ext),
+            .op_plane(gp), .op_ext(op_ext), .op_word(is_word),
             .op_dst(rd_hold), .op_val(cur_wdata), .op_data(egc_op_data),
             .op_mask(egc_op_mask)
         );
@@ -465,9 +490,19 @@ module pc98_gvram_seq #(
     // fin_read: the cycle the guest can take an expanded read's answer. For
     // a word read that is the SECOND walk's S_DONE -- the even byte went
     // into lo_ans at the half boundary, the odd byte is live here.
+    // One exception: an EGC word read's shift event runs on the ODD leg
+    // (S_EVT2), so the even byte's answer only exists post-shift -- the
+    // S_DONE-time re-latch of lo_ans lands a cycle after the guest already
+    // sampled it. Drive that lane combinationally instead, exactly the
+    // condition the re-latch below covers.
+    wire egc_lo_post = is_read & egc_here & ~svc_raw_rd
+                     & ~egc_ope[13] & ~egc_ope[10];
     wire fin_read = expand & is_read & (st == S_DONE) & (~is_word | half);
-    assign cpu_rdata    = fin_read ? (is_word ? lo_ans : ans_byte)
-                                   : rdata_pass;
+    assign cpu_rdata    = fin_read
+                          ? (is_word ? (egc_lo_post ? egc_src[egc_rd_plane][7:0]
+                                                    : lo_ans)
+                                     : ans_byte)
+                          : rdata_pass;
     assign cpu_rdata_hi = fin_read ? ans_byte : mem_rdata_hi;
 
     always_ff @(posedge clk) begin
