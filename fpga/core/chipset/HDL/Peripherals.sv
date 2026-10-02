@@ -1061,25 +1061,11 @@ module PERIPHERALS #(
     // 0x42 bit 1: 1 = "V30-class CPU", 0 = "286-class" (np21w printif.c
     // prt_i42: base 0x84, +0x20 at 8 MHz, +dip bits, +0x02 when V30).
     //
-    // EXPERIMENT: report 0x84 -- bit1 clear -- so the ITF takes its 286
-    // branch instead of the V30 shortcut. Two consequences:
-    //
-    //   F8B95 block: bit1=0 runs the 286-detection probe (lidt/lgdt then
-    //   sidt/sgdt + repe scasw over a FFFF-filled buffer). Zet consumes
-    //   0F 01 as a NOP, so nothing is stored, the four-pass pattern loop
-    //   (FFFF/AAAA/5555/0000) matches untouched and the ITF concludes
-    //   "no descriptor registers" on its own -- the honest answer.
-    //
-    //   F94D2 block: fninit/fstsw then smsw/lmsw run only when fstsw
-    //   returns AL=0 (FPU present). With 0x84 the IN result sits in AL,
-    //   Zet's ESC ops are NOPs, AL stays non-zero and the jz skips the
-    //   286 ops -- matching a real FPU-less machine.
-    //
-    // Any remaining genuine 286 instruction (or an app that tries to
-    // enter protected mode) traps through INVOP/INTD and the pc_hist
-    // probe freeze names it. (Before this experiment the port answered
-    // 8'h02 -- bit1 set, V30 class -- so the ITF branched to F8FA2 and
-    // skipped both blocks entirely.)
+    // This branch answers 8'h02 -- bit1 set, V30 class, the pre-experiment
+    // value -- because the 286 presentation experiment (8'h84 + the 0F 01
+    // stub) loops after "640KB OK" on real hardware (freeze ring parks in
+    // the F8061-F808E resume block). The bench needs a booting machine;
+    // the experiment continues on zet-cpu.
     // The BIOS never looks at bit 1 -- it tests bits
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
     // 0x31 = 0xE3. The detour through 0x12 is worth recording.
@@ -1103,7 +1089,7 @@ module PERIPHERALS #(
     wire [7:0] sysport_data = sysport_35_select ? pc98_sysport_c
                             : sysport_31_select ? cfg_dipsw2
                             : sysport_33_select ? (8'h08 | {7'd0, upd4990_cdat})
-                            : sysport_42_select ? 8'h84
+                            : sysport_42_select ? 8'h02
                             :                     8'h00;
 
     // ------------------------------------------------- keyboard 8251

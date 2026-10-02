@@ -33,7 +33,8 @@ for {set i 0} {$i < 8} {incr i} {
     set hub [expr {$hub | ($nib << (4*$i))}]
 }
 set nnodes [expr {($hub >> 19) & 0xff}]
-set mw     [expr {$hub & 0xff}]
+set mw     1
+while {(1 << $mw) < $nnodes + 1} { incr mw }
 puts [format "HUB_INFO=0x%08X  nodes=%d m_width=%d" $hub $nnodes $mw]
 if {$nnodes < 2} {
     puts "need two SLD nodes (probe + stream) -- PC98_JTAG build with fdd_ramimg?"
@@ -76,18 +77,12 @@ proc rdback {off} {
 if {![info exists ::env(HDIMG)]} {
     puts "set HDIMG to the raw .hdm image path"; shutdown; exit 1
 }
-set IMG $env(HDIMG)
-set fh [open $IMG rb]
-set bytes [read $fh]
-close $fh
-set nby [string length $bytes]
+# jimtcl has no `binary scan`: scripts/hdstream.py pre-packs the image into
+# literal drscan lines (env HDSTREAM, or <HDIMG>.stream.tcl). Generate it
+# first, e.g. through scripts/jtag_bench.sh.
+set HDSTREAM [expr {[info exists ::env(HDSTREAM)] ? $env(HDSTREAM) \
+                  : "$env(HDIMG).stream.tcl"}]
 set IMGBYTES 1261568
-if {$nby > $IMGBYTES} {
-    puts [format "%s is %d bytes; the 2HD carve-out holds %d -- truncating" \
-        $IMG $nby $IMGBYTES]
-    set bytes [string range $bytes 0 [expr {$IMGBYTES - 1}]]
-    set nby $IMGBYTES
-}
 
 # --- status before we touch anything ---------------------------------------
 select_node 1
@@ -103,31 +98,12 @@ ctl 0x10          ;# arm the stream sink
 # ours. USER0 must be reloaded before the stream scans reach the node.
 select_node 2
 irscan fpga.tap 0x0c
-# The stream word packs four image bytes little-endian (first byte = LSB),
-# which is exactly what "binary scan iu*" hands us -- no repacking needed.
-# A short tail is zero-padded to the next word: the pad lands inside the
-# carve-out bounds and is never addressed by a sector.
-set rem [expr {$nby % 4}]
-if {$rem} { append bytes [string repeat \0 [expr {4 - $rem}]] }
-binary scan $bytes iu* vals
-set nwords [llength $vals]
-set CHUNK  [expr {[info exists ::env(HDCHUNK)] ? $env(HDCHUNK) : 8192}]
-set WPC    [expr {$CHUNK / 4}]          ;# words per drscan (must divide CHUNK)
-set sent   0
-# One drscan carries a list of 32-bit fields -- the pairs form matters, not
-# one giant numeric field (u64-capped on some openocds). Field 0 shifts out
-# first, so word order in the arg list is image order.
-for {set i 0} {$i < $nwords} {incr i $WPC} {
-    set args {}
-    foreach w [lrange $vals $i [expr {$i + $WPC - 1}]] {
-        lappend args 32 [format 0x%08X $w]
-    }
-    drscan fpga.tap {*}$args -endstate idle
-    incr sent [llength [lrange $vals $i [expr {$i + $WPC - 1}]]]
-    if {($sent & 0x7FFF) == 0} {
-        puts [format "  pushed %d words (%d bytes)" $sent [expr {$sent*4}]]
-    }
-}
+# The generated file carries the literal drscan lines plus hdimg_nby,
+# hdimg_sent and hdimg_spot. Each line is one chunk of 32-bit fields --
+# field 0 shifts out first, so word order in the arg list is image order.
+source $HDSTREAM
+set nby   $hdimg_nby
+set sent  $hdimg_sent
 puts [format "streamed %d words" $sent]
 
 # --- wait for the drain to catch up -----------------------------------------
@@ -150,11 +126,7 @@ if {$off < $drainwant} { puts "WARNING: image did not finish landing" }
 # --- verify: spot-read back through the carve-out ---------------------------
 if {![info exists ::env(HDNOVERIFY)]} {
     set bad 0
-    foreach off {0 1 1023 1024 4096 65536 262144 1261564 1261567} {
-        if {$off >= $nby} continue
-        # byte $off lives at bits [8*($off%4) +: 8] of word [$off/4]
-        set w    [lindex $vals [expr {$off / 4}]]
-        set want [expr {($w >> (8 * ($off % 4))) & 0xFF}]
+    foreach {off want} $hdimg_spot {
         set got  [rdback $off]
         if {$got != $want} {
             puts [format "  MISMATCH @%d: got %02x want %02x" $off $got $want]

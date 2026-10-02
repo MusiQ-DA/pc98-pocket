@@ -35,7 +35,10 @@ for {set i 0} {$i < 8} {incr i} {
 set nnodes [expr {($hub >> 19) & 0xff}]
 puts [format "HUB_INFO=0x%08X  nodes=%d m_width=%d" $hub $nnodes [expr {$hub & 0xff}]]
 if {$nnodes < 1} { puts "no SLD nodes -- is the core running?"; shutdown; exit 1 }
-set virw [expr {($hub & 0xff) + 4}]
+set nnodes [expr {($hub >> 19) & 0xff}]
+set mw 1
+while {(1 << $mw) < $nnodes + 1} { incr mw }
+set virw [expr {$mw + 4}]
 
 # --- select node 1 ----------------------------------------------------------
 irscan fpga.tap 0x0e

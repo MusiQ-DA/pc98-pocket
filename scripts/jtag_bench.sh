@@ -18,8 +18,13 @@ MARK=${3:-"Execute time"}
 LIMIT=${4:-420}
 
 echo "== upload+mount $IMG (speed=$SPD) =="
-HDIMG="$IMG" HDSPEED="$SPD" openocd -f scripts/jtag_probe.cfg \
-    -f scripts/jtag_hdload.tcl 2>&1 | grep -v "^Info\|clock speed\|TapName" | tail -12
+# openocd's jimtcl has no `binary scan` -- pack the image into literal
+# drscan lines on the host first.
+HDSTREAM="${IMG}.stream.tcl"
+python3 scripts/hdstream.py "$IMG" "$HDSTREAM"
+HDIMG="$IMG" HDSTREAM="$HDSTREAM" HDSPEED="$SPD" openocd \
+    -f scripts/jtag_probe.cfg -f scripts/jtag_hdload.tcl 2>&1 \
+    | grep -v "^Info\|clock speed\|TapName" | tail -12
 
 echo "== waiting for '$MARK' (timeout ${LIMIT}s) =="
 t0=$SECONDS
