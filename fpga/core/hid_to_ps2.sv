@@ -101,17 +101,20 @@ function automatic mod_ext;
 	mod_ext = (idx == 3'd4) || (idx == 3'd6);
 endfunction
 
-wire [7:0] curr_at   = slot_code(scan_curr, slot);
-wire [7:0] prev_at   = slot_code(scan_prev, slot);
+// slot is 4 bits so the drain beat can count one past the last index; every
+// consumer below wants the low 3 -- at slot==8 that wraps to slot 0, which is
+// exactly the re-present the drain beat relies on.
+wire [7:0] curr_at   = slot_code(scan_curr, slot[2:0]);
+wire [7:0] prev_at   = slot_code(scan_prev, slot[2:0]);
 
 always @(posedge clk) begin
 	roma_q  <= map[curr_at];
 	romb_q  <= map[prev_at];
 	c_at_q  <= curr_at;
 	p_at_q  <= prev_at;
-	mc_q    <= scan_mcurr[slot];
-	mp_q    <= scan_mprev[slot];
-	slot_q  <= slot;
+	mc_q    <= scan_mcurr[slot[2:0]];
+	mp_q    <= scan_mprev[slot[2:0]];
+	slot_q  <= slot[2:0];
 	state_q <= state;
 end
 
