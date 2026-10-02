@@ -172,9 +172,10 @@ int main(int argc, char **argv) {
     const char *mark = NULL;
     long frames = 0;
     int poll_n = 0;
+    long beef_addr = -1; /* mailbox sentinel address, e.g. 0x70000 */
 
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <frames> <image.hdm> [-sysdir D] [-lib P] [-dump F] [-poll N] [-mark STR]\n", argv[0]);
+        fprintf(stderr, "usage: %s <frames> <image.hdm> [-sysdir D] [-lib P] [-dump F] [-poll N] [-mark STR] [-beef ADDR]\n", argv[0]);
         return 2;
     }
     frames = atol(argv[1]);
@@ -185,6 +186,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "-dump")) dumpfile = argv[i+1];
         else if (!strcmp(argv[i], "-poll")) poll_n = atoi(argv[i+1]);
         else if (!strcmp(argv[i], "-mark")) mark = argv[i+1];
+        else if (!strcmp(argv[i], "-beef")) beef_addr = strtol(argv[i+1], NULL, 0);
     }
 
     void *dl = dlopen(libpath, RTLD_NOW | RTLD_LOCAL);
@@ -246,6 +248,22 @@ int main(int argc, char **argv) {
                     if (strstr(scr[r], mark)) { found = 1; break; }
                 if (found) { fprintf(stderr, "[np2run] mark hit at frame %ld\n", f); break; }
             }
+        }
+        /* bench.asm mailbox: word0=0xBEEF sentinel, word1=count, then
+         * records {id, tick_lo, tick_hi, units_lo, units_hi} 5 words each. */
+        if (ramp && beef_addr >= 0 &&
+            ramp[beef_addr] == 0xEF && ramp[beef_addr+1] == 0xBE) {
+            int n = ramp[beef_addr+2] | (ramp[beef_addr+3] << 8);
+            fprintf(stderr, "[np2run] mailbox sentinel at frame %ld, %d records\n", f, n);
+            for (int i = 0; i < n && i < 60; i++) {
+                uint8_t *p = ramp + beef_addr + 4 + i*10;
+                uint16_t id   = p[0] | p[1]<<8;
+                uint32_t tick = p[2] | p[3]<<8 | ((uint32_t)(p[4]|p[5]<<8))<<16;
+                uint32_t unit = p[6] | p[7]<<8 | ((uint32_t)(p[8]|p[9]<<8))<<16;
+                printf("MBX %02u ticks=%u units=%u\n", id, tick, unit);
+            }
+            found = 1;
+            break;
         }
     }
 
