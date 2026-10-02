@@ -70,7 +70,12 @@ module zet_core (
   // wire decode - microcode
   wire [`MICRO_ADDR_WIDTH-1:0] seq_addr;
   wire [3:0] src;
-  assign dbg_fault = (seq_addr == `INVOP) | (seq_addr == `INTD);
+  // Fault = the sequence actually enters INVOP/INTD. Bare decode of
+  // seq_addr pulses on every prefix fetch (26/2E/36/3E/F0/F2/F3 and the
+  // 0F escape all decode INVOP for a cycle), which made the pc_hist
+  // freeze name the byte AFTER the real fault. ld_base only asserts as
+  // a sequence loads into execu_st, so prefix fetches can't reach it.
+  assign dbg_fault = ld_base & ((seq_addr == `INVOP) | (seq_addr == `INTD));
   wire [3:0] dst;
   wire [3:0] base;
   wire [3:0] index;
