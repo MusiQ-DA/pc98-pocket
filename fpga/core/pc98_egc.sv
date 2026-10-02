@@ -140,8 +140,12 @@ module pc98_egc (
     // dst is what the sequencer just read from this plane; val is the CPU's
     // byte. op_mask is mask2's byte for op_ext -- the mask register's half,
     // and-ed with srcmask where the op's mode calls for the shift mask.
+    // op_word marks a 16-bit access: egc_opew ANDs srcmask into mask2 on
+    // EVERY bank (EGCOPE_SHIFTW/SHIFTW2's shared tail), where egc_opeb does
+    // so only through the pipeline-consulting banks -- sf_in_op's case.
     input  wire  [1:0]  op_plane,
     input  wire         op_ext,
+    input  wire         op_word,
     input  wire  [7:0]  op_dst,
     input  wire  [7:0]  op_val,
     output wire  [7:0]  op_data,
@@ -265,13 +269,19 @@ module pc98_egc (
             end
 
             // ---- the shift pipeline ------------------------------------
-            // One plane byte landed for the queue: it goes to the shared
-            // tail slot of that plane's half of buf. sf_push_off puts the
-            // second byte of a word push one slot further (and a dn word's
-            // even byte behind its odd one -- the decw layout in np21w
-            // places the pair L-behind-H since the buffer fills downward).
-            if (sf_push)
-                sf_q[sf_push_plane][sf_qd + {2'b00, sf_push_off}] <= sf_push_d;
+            // The queue commits from pv every cycle: the comb block already
+            // merged any pushed byte and its cross-plane alias into pv, and
+            // an access event additionally slides the whole window left by
+            // its pop count (np21w moves outptr instead -- same thing, since
+            // the window is indexed from the consume head). sf_push_off puts
+            // the second byte of a word push one slot further (and a dn
+            // word's even byte behind its odd one -- the decw layout in
+            // np21w places the pair L-behind-H since the buffer fills
+            // downward).
+            for (int p = 0; p < 4; p++)
+                for (int i = 0; i < 7; i++)
+                    sf_q[p][i] <= (i + ev_pops > 3'd6) ? pv[p][i]
+                                  : pv[p][i + {1'b0, ev_pops}];
 
             // One access event. The combinational block below did the
             // arithmetic; here it all commits at once. A word event can
@@ -283,13 +293,6 @@ module pc98_egc (
                         if (ev_ext) src_q[p][15:8] <= ev_out[p];
                         else        src_q[p][7:0]  <= ev_out[p];
                 end
-                // outptr moved: the window slides left by the pop count,
-                // the tail slots keep what was pushed (pv merged them).
-                // With no pops the merged pushes still land via pv.
-                for (int p = 0; p < 4; p++)
-                    for (int i = 0; i < 7; i++)
-                        sf_q[p][i] <= (i + ev_pops > 3'd6) ? pv[p][i]
-                                      : pv[p][i + {1'b0, ev_pops}];
                 // the mask byte updates on EVERY event, including the run's
                 // last -- egcshift() does not touch srcmask, so the final
                 // partial-byte mask still reaches the write that consumes it
@@ -357,6 +360,7 @@ module pc98_egc (
     logic        v_acc, v_prepop, v_first;
     logic [7:0]  v_mask;
     logic        w_dn;
+    int          pv_ial;
     // the shared _sub's call site: the event front-end fills these, the
     // lane body below reads them once.
     logic        sub_en, sub_ext, sub_pop;
@@ -375,6 +379,40 @@ module pc98_egc (
                 pv[p][sf_qd] = sf_evt_d;
             end else if (sf_push & (sf_push_plane == 2'(p))) begin
                 pv[p][sf_qd + {2'b00, sf_push_off}] = sf_push_d;
+            end
+        end
+
+        // Cross-plane bleed: np21w's queue is ONE flat byte stream -- egc.buf
+        // holds plane p's index k at buf[out +/- k + 4p] -- so a push far
+        // enough into the queue lands inside a neighbouring plane's live
+        // window. In consume order the pushed byte on plane p slot k also
+        // occupies plane (p+1)'s slot k-4 going up, plane (p-1)'s going down
+        // (memegc.c: inptr[4p] is a byte write at one shared position). Bytes
+        // that reach indices <0 or >6 fall out of the window exactly like
+        // they fall out of reach of np21w's taps.
+        for (int p = 0; p < 4; p++) begin
+            if (sf_evt & sf_evt_wr & sf_evt_word & ~sf_evt_tail) begin
+                for (int q = 0; q < 4; q++) begin
+                    pv_ial = sf_qd + (w_dn ? 4*(q - p) : 4*(p - q));
+                    if ((pv_ial >= 0) && (pv_ial <= 6))
+                        pv[q][pv_ial] = w_dn ? sf_evt_d2 : sf_evt_d;
+                    pv_ial = sf_qd + 1 + (w_dn ? 4*(q - p) : 4*(p - q));
+                    if ((pv_ial >= 0) && (pv_ial <= 6))
+                        pv[q][pv_ial] = w_dn ? sf_evt_d : sf_evt_d2;
+                end
+            end else if (sf_evt & sf_evt_wr & ~sf_evt_word) begin
+                for (int q = 0; q < 4; q++) begin
+                    pv_ial = sf_qd + (w_dn ? 4*(q - p) : 4*(p - q));
+                    if ((pv_ial >= 0) && (pv_ial <= 6))
+                        pv[q][pv_ial] = sf_evt_d;
+                end
+            end else if (sf_push & (sf_push_plane == 2'(p))) begin
+                for (int q = 0; q < 4; q++) begin
+                    pv_ial = sf_qd + {2'b00, sf_push_off}
+                             + (w_dn ? 4*(q - p) : 4*(p - q));
+                    if ((pv_ial >= 0) && (pv_ial <= 6))
+                        pv[q][pv_ial] = sf_push_d;
+                end
             end
         end
 
@@ -406,17 +444,19 @@ module pc98_egc (
                 end
             end
 
-            // egcsft_byte: the fresh mask byte first, then the guards, in
-            // the asm's order.
+            // egcsft_byte: the fresh mask byte first, then the stack guard
+            // in egcsftb_*0's order. dstbit 9..15 makes (8 - dstbit) wrap
+            // to a huge count in np21w's unsigned compare -- the lane is
+            // suppressed while dstbit itself stays put (dstbit == 8 slips
+            // under the guard, spends nothing, and the *_sub's >=8 test
+            // decrements it to zero). Suppression clears only THIS lane's
+            // srcmask byte -- the register persists into the next access.
             if (sf_ext) nx_srcmask[15:8] = 8'hFF;
             else        nx_srcmask[7:0]  = 8'hFF;
-            if (nx_dstbit > 4'd8) begin
-                // dstbit 9..15 skips one whole destination byte per event.
-                nx_dstbit  = nx_dstbit - 4'd8;
-                nx_srcmask = 16'h0000;
-            end else if (nx_stack < (6'd8 - {2'b00, nx_dstbit})) begin
-                // the input for this position has not arrived yet
-                nx_srcmask = 16'h0000;
+            if ((nx_dstbit > 4'd8)
+              | (nx_stack < (6'd8 - {2'b00, nx_dstbit}))) begin
+                if (sf_ext) nx_srcmask[15:8] = 8'h00;
+                else        nx_srcmask[7:0]  = 8'h00;
             end else begin
                 nx_stack = nx_stack - (6'd8 - {2'b00, nx_dstbit});
                 ev_insub = 1'b1;
@@ -637,26 +677,28 @@ wire [7:0] src_b = op_ext ? src_q[op_plane][15:8] : src_q[op_plane][7:0];
                              : (kind == K_NP) ? np_terms
                              :                 minterms;
 
-    // egc_opeb's source select, by ope 11:10. This follows the BYTE model
-    // (egc_opeb), because the sequencer below this is a byte engine: 2'b00
-    // and 2'b11 fall to the written byte itself; 2'b01 is the raster-op
-    // table; 2'b10 is the pattern -- np21w returns the fg/bg colours only
-    // for banks 0x2000/0x4000 and the SOURCE latch for banks 0 and 3
-    // (memegc.c's `default:` also runs EGCOPE_SHIFTB, which sf_in_op covers
-    // on the mask side). The word model disagrees on the colour banks'
-    // little corners; they read the same for aligned runs.
+    // egc_opeb's source select, by ope 11:10 -- 2'b00 and 2'b11 fall to the
+    // written byte itself; 2'b01 is the raster-op table; 2'b10 is the
+    // pattern bank, whose non-colour corner (fgbg 14:13 not 01/10)
+    // DIFFERS between np21w's byte and word models: egc_opeb returns the
+    // source latch (egc_src) while egc_opew returns the pattern registers
+    // (egc.patreg). Since the sequencer evaluates op_data per byte lane of
+    // a word access too, op_word picks between the two.
     assign op_data = (ope_r[12:11] == 2'b01) ? opefn_result
                    : (ope_r[12:11] == 2'b10)
                        ? ((fgbg_r[14:13] == 2'b01 || fgbg_r[14:13] == 2'b10)
                                  ? (op_ext ? fgbg_col[15:8] : fgbg_col[7:0])
-                                 : src_b)
+                                 : (op_word ? patreg_b : src_b))
                    :                                 op_val;
 
     // mask2's byte for this access's parity. egc_opeb ANDs srcmask in only
     // where the shift pipeline was consulted: the raster-op mode (0x0800)
     // and the non-colour 0x1000 pattern source; the colours and the
-    // replicate modes mask with the mask register alone.
-    wire       sf_in_op = (ope_r[12:11] == 2'b01)
+    // replicate modes mask with the mask register alone. For a WORD write
+    // egc_opew narrows mask2 by srcmask on every bank -- the unconditional
+    // EGCOPE_SHIFTW2 tail -- so op_word turns the term on outright.
+    wire       sf_in_op = op_word
+                        | (ope_r[12:11] == 2'b01)
                         | ((ope_r[12:11] == 2'b10)
                          & ~(fgbg_r[14] ^ fgbg_r[13]));
     wire [7:0] sm_b = op_ext ? sf_srcmask[15:8] : sf_srcmask[7:0];
