@@ -390,28 +390,35 @@ module pc98_egc (
         // (memegc.c: inptr[4p] is a byte write at one shared position). Bytes
         // that reach indices <0 or >6 fall out of the window exactly like
         // they fall out of reach of np21w's taps.
-        for (int p = 0; p < 4; p++) begin
-            if (sf_evt & sf_evt_wr & sf_evt_word & ~sf_evt_tail) begin
-                for (int q = 0; q < 4; q++) begin
-                    pv_ial = sf_qd + (w_dn ? 4*(q - p) : 4*(p - q));
-                    if ((pv_ial >= 0) && (pv_ial <= 6))
-                        pv[q][pv_ial] = w_dn ? sf_evt_d2 : sf_evt_d;
-                    pv_ial = sf_qd + 1 + (w_dn ? 4*(q - p) : 4*(p - q));
-                    if ((pv_ial >= 0) && (pv_ial <= 6))
-                        pv[q][pv_ial] = w_dn ? sf_evt_d : sf_evt_d2;
-                end
-            end else if (sf_evt & sf_evt_wr & ~sf_evt_word) begin
-                for (int q = 0; q < 4; q++) begin
-                    pv_ial = sf_qd + (w_dn ? 4*(q - p) : 4*(p - q));
-                    if ((pv_ial >= 0) && (pv_ial <= 6))
-                        pv[q][pv_ial] = sf_evt_d;
-                end
-            end else if (sf_push & (sf_push_plane == 2'(p))) begin
-                for (int q = 0; q < 4; q++) begin
-                    pv_ial = sf_qd + {2'b00, sf_push_off}
-                             + (w_dn ? 4*(q - p) : 4*(p - q));
-                    if ((pv_ial >= 0) && (pv_ial <= 6))
-                        pv[q][pv_ial] = sf_push_d;
+        // One event lands at most one byte per (q, j) slot -- the sources are
+        // strides of +-4, so the alias is applied per slot instead of as a
+        // dynamic-index write (Quartus rejects pv[q][pv_ial] in always_comb).
+        for (int q = 0; q < 4; q++) begin
+            for (int j = 0; j < 7; j++) begin
+                pv_ial = j - {4'b0, sf_qd};
+                // slot j of plane q shows plane p's push at k when
+                // j-k == 4*(p-q) going up, 4*(q-p) going down; within the
+                // 0..6 window only offsets {0, +4, -4} can land, and the
+                // +/-4 sources exist only when p = q+/-1 stays in 0..3.
+                if (sf_evt & sf_evt_wr & sf_evt_word & ~sf_evt_tail) begin
+                    if ((pv_ial == 0)
+                      | ((pv_ial ==  4) & (w_dn ? (q >= 1) : (q <= 2)))
+                      | ((pv_ial == -4) & (w_dn ? (q <= 2) : (q >= 1))))
+                        pv[q][j] = w_dn ? sf_evt_d2 : sf_evt_d;
+                    if (((pv_ial - 1) == 0)
+                      | ((pv_ial - 1 ==  4) & (w_dn ? (q >= 1) : (q <= 2)))
+                      | ((pv_ial - 1 == -4) & (w_dn ? (q <= 2) : (q >= 1))))
+                        pv[q][j] = w_dn ? sf_evt_d : sf_evt_d2;
+                end else if (sf_evt & sf_evt_wr & ~sf_evt_word) begin
+                    if ((pv_ial == 0)
+                      | ((pv_ial ==  4) & (w_dn ? (q >= 1) : (q <= 2)))
+                      | ((pv_ial == -4) & (w_dn ? (q <= 2) : (q >= 1))))
+                        pv[q][j] = sf_evt_d;
+                end else if (sf_push) begin
+                    if (pv_ial - {4'b0, sf_push_off}
+                            == (w_dn ? 4*(q - sf_push_plane)
+                                     : 4*(sf_push_plane - q)))
+                        pv[q][j] = sf_push_d;
                 end
             end
         end
