@@ -54,12 +54,18 @@
 //
 // A read request is served the way fdd_poll serves it: management register 0
 // reports the in-flight command's {drive, lba}; the sector's 1024 bytes come
-// out of the carve-out as 64 sixteen-word bursts on sdram_shim's port E,
+// out of the carve-out as 1024 single-word reads on sdram_shim's port E,
 // each rvalid beat pushed straight into the controller's FIFO at 0xF2_0F.
-// Pushing sd_rdata[7:0] on the rvalid cycle is the same landing window
-// pc98_font_fetch relies on -- the word is captured mid-cycle and the FIFO
-// write strobes it in at the closing edge. Write and format requests are
-// drained and dropped -- media_writeprotected already makes the controller
+// Sixteen-word bursts were the original form, but on hardware every beat of
+// a full-rate port-E burst samples the NEXT word -- the boundary hazard
+// sdram_mp's S_RD_GAP comment describes ("the new word wins early, both
+// beats present the same data"), which sdram_mp only papers over for port 0.
+// The guest saw exactly that signature: each burst delivered bytes 1..15
+// followed by a repeat of byte 15. Single-word reads have no in-burst
+// neighbour and are the same path the byte-exact readback probe takes, so
+// the serve uses them; ~8-10 clocks a byte still outruns the FIFO drain.
+// Write and format requests are drained and dropped --
+// media_writeprotected already makes the controller
 // refuse them at command start, so the drain is a safety net only.
 //
 // The FIFO discipline is exactly the firmware's: a read push is always a
@@ -279,7 +285,7 @@ module fdd_ramimg #(
         S_MNT_GAP  = 5'd2,   // the eject/insert separation
         S_UMNT     = 5'd3,   // the disable-time eject
         S_RD_LBA   = 5'd4,   // management read of request register 0
-        S_RD_REQ   = 5'd5,   // issue a sixteen-word carve-out read
+        S_RD_REQ   = 5'd5,   // issue a one-word carve-out read
         S_RD_BEAT  = 5'd6,   // an rvalid beat pushes one FIFO byte
         S_WR_DR    = 5'd7,   // drain a write/format FIFO, drop the bytes
         S_UP_POP   = 5'd8,
@@ -298,7 +304,6 @@ module fdd_ramimg #(
     logic  [7:0] gap_cnt;
     logic [14:0] req_lba;
     logic [10:0] beat_cnt;   // bytes received this sector, 0..1024
-    logic  [3:0] burst_beat; // beats inside the current burst, 0..15
     logic [20:0] up_off;     // image byte offset the next word lands at
     logic [31:0] up_word;
     logic  [1:0] up_bi;
@@ -311,26 +316,15 @@ module fdd_ramimg #(
     logic  [7:0] serve_cnt;
     logic [15:0] wd;         // watchdog -- no wait outlives ~1.5 ms
 
-    // The skid: every rvalid beat lands a byte here, and a free-running drain
-    // pushes them at the FIFO window whenever the management bus is free.
-    // sdram_mp's burst beats are back-to-back and cannot be deferred, while a
-    // firmware strobe arriving the same cycle MUST keep the bus -- a collision
-    // would silently drop it. Depth 16 covers one whole burst; the next burst
-    // is not requested until the skid is empty, so it can never overflow.
-    logic  [7:0] skid     [0:15];
-    logic  [3:0] skid_rd, skid_wr;
-    logic  [4:0] skid_cnt;                 // 0..16 bytes queued
-
-    // The bus grant: the firmware's strobes always win (see fw_busy).
-    wire grant      = ~fw_busy;
-    // States that drive their own management strobe; the skid drain fills the
-    // cycles between them.
-    wire fsm_wants  = (st == S_MNT) | (st == S_UMNT) | (st == S_RD_LBA)
-                    | (st == S_WR_DR);
-    wire skid_push  = (skid_cnt != 5'd0) & grant & ~fsm_wants;
-
     assign own             = en | unmount_pending;
     assign guest_reset_req = greset_req;
+
+    // fw_busy is kept on the port list for the mux contract, but nothing here
+    // defers to it anymore: the only strobe that cannot wait is the rvalid
+    // push, which must fire on the beat's own cycle -- it wins the mux by
+    // construction (ri_stb), and the firmware's fenced F2 traffic is the side
+    // that can be safely dropped.
+    wire _unused_fw = fw_busy;
 
     // Slot 0x87 (ctl_addr 7'h07), one 32-bit word:
     //   [0] enable   -- level; the rising edge mounts, a fall ejects
@@ -352,11 +346,6 @@ module fdd_ramimg #(
     // lba*1024 + beat_cnt, and byte-per-word makes that the word address.
     wire [23:0] sec_word  = CARVE_BASE + (24'(req_lba) << 10)
                           + 24'(beat_cnt);
-
-    // A beat lands on the skid only while a live serve is taking it --
-    // the abort path flushes the queue rather than push stale bytes.
-    wire beat_land = (st == S_RD_BEAT) & sd_rvalid
-                   & fdd_request[0] & ~&wd;
 
     always_ff @(posedge clk or posedge power_reset) begin
         if (power_reset) begin
@@ -382,10 +371,6 @@ module fdd_ramimg #(
             gap_cnt         <= 8'd0;
             req_lba         <= 15'd0;
             beat_cnt        <= 11'd0;
-            burst_beat      <= 4'd0;
-            skid_rd         <= 4'd0;
-            skid_wr         <= 4'd0;
-            skid_cnt        <= 5'd0;
             wd              <= 16'd0;
         end else if (reset) begin
             // Abort in-flight work; the configuration -- en, mounted, the
@@ -395,10 +380,6 @@ module fdd_ramimg #(
             gap_cnt     <= 8'd0;
             req_lba     <= 15'd0;
             beat_cnt    <= 11'd0;
-            burst_beat  <= 4'd0;
-            skid_rd     <= 4'd0;
-            skid_wr     <= 4'd0;
-            skid_cnt    <= 5'd0;
             wd          <= 16'd0;
             up_bi       <= 2'd0;
             greset_req  <= 1'b0;
@@ -491,7 +472,6 @@ module fdd_ramimg #(
                     req_lba    <= mgmt_din[14:0];
                     last_lba   <= mgmt_din[14:0];
                     beat_cnt   <= 11'd0;
-                    burst_beat <= 4'd0;
                     wd         <= 16'd0;
                     st         <= S_RD_REQ;
                 end
@@ -507,19 +487,17 @@ module fdd_ramimg #(
                 S_RD_BEAT: begin
                     wd <= wd + 16'd1;
                     if (sd_rvalid) begin
+                        // One word per request: this beat IS the whole
+                        // transaction -- push it, then either stop at 1024
+                        // or ask for the next word.
                         wd       <= 16'd0;
                         beat_cnt <= beat_cnt + 11'd1;
-                        if (burst_beat == 4'd15) begin
-                            burst_beat <= 4'd0;
-                            if (beat_cnt == 11'd1023) begin
-                                if (serve_cnt != 8'hFF)
-                                    serve_cnt <= serve_cnt + 8'd1;
-                                st <= S_IDLE;
-                            end else begin
-                                st <= S_RD_REQ;
-                            end
+                        if (beat_cnt == 11'd1023) begin
+                            if (serve_cnt != 8'hFF)
+                                serve_cnt <= serve_cnt + 8'd1;
+                            st <= S_IDLE;
                         end else begin
-                            burst_beat <= burst_beat + 4'd1;
+                            st <= S_RD_REQ;
                         end
                     end
                     if (!fdd_request[0] || &wd) st <= S_IDLE;
@@ -639,7 +617,7 @@ module fdd_ramimg #(
             S_RD_REQ: begin
                 sd_req  = 1'b1;
                 sd_addr = sec_word;
-                sd_len  = 4'd15;        // sixteen words -- sixteen bytes
+                sd_len  = 4'd0;         // one word -- see the header on why
             end
             S_RD_BEAT: begin
                 if (sd_rvalid) begin

@@ -91,7 +91,21 @@ puts [format "0x35 (ramimg)  = 0x%08X  (tag 52/en/mnt/arm/flush/fsm/lba)" [rd 0x
 # --- clear the sink: flush high then low ------------------------------------
 ctl 0x02
 ctl 0x00
-ctl 0x10          ;# arm the stream sink
+# Arm must be confirmed by readback: right after a JTAG reflash the SDRAM
+# reset (power_reset) still holds these registers and control writes are
+# eaten silently -- the whole stream then shifts into a disarmed sink and
+# lands nothing while every later write works. Retry until bit21 reads 1.
+set armed 0
+for {set i 0} {$i < 400} {incr i} {
+    ctl 0x10          ;# arm the stream sink
+    set v [rd 0x35]
+    if {($v >> 21) & 1} { set armed 1; break }
+    after 5
+}
+if {!$armed} {
+    puts "stream sink never armed -- core still in power_reset?"
+    shutdown; exit 1
+}
 
 # --- stream the image on node 2 ---------------------------------------------
 # select_node leaves USER1 in the IR -- its DR is the hub's node select, not
