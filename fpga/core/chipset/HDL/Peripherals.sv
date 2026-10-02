@@ -1064,22 +1064,20 @@ module PERIPHERALS #(
     // EXPERIMENT: report 0x84 -- bit1 clear -- so the ITF takes its 286
     // branch instead of the V30 shortcut. Two consequences:
     //
-    //   F8B95 block: bit1=0 runs the 286-detection probe (lidt/lgdt then
-    //   sidt/sgdt + repe scasw over a FFFF-filled buffer). Zet consumes
-    //   0F 01 as a NOP, so nothing is stored, the four-pass pattern loop
-    //   (FFFF/AAAA/5555/0000) matches untouched and the ITF concludes
-    //   "no descriptor registers" on its own -- the honest answer.
+    //   F8B95 block: bit1=0 runs the 286-detection probe -- rep stosw
+    //   fills [0:8000], sidt/sgdt store to [0:9000], repe scasw compares
+    //   the two over four fill passes. The check needs the stores to
+    //   round-trip: with NOP stubs [0:9000] stays stale, the first pass
+    //   mismatches, and the fail path is out 0x37,0x0B -> out 0xF0 = a
+    //   soft RESET (proved in sim + hardware: "640KB OK" then loop).
+    //   Making the 286 path work needs real descriptor registers, MSW,
+    //   #GP -- a CPU-core project, not a stub. So the port stays V30.
     //
-    //   F94D2 block: fninit/fstsw then smsw/lmsw run only when fstsw
-    //   returns AL=0 (FPU present). With 0x84 the IN result sits in AL,
-    //   Zet's ESC ops are NOPs, AL stays non-zero and the jz skips the
-    //   286 ops -- matching a real FPU-less machine.
-    //
-    // Any remaining genuine 286 instruction (or an app that tries to
-    // enter protected mode) traps through INVOP/INTD and the pc_hist
-    // probe freeze names it. (Before this experiment the port answered
-    // 8'h02 -- bit1 set, V30 class -- so the ITF branched to F8FA2 and
-    // skipped both blocks entirely.)
+    // The 0F 01 NOP-consume microcode stays in place (dead on the V30
+    // path, harmless) -- a genuine 286 instruction still traps through
+    // INVOP/INTD and the pc_hist freeze names it.
+    // (Before this experiment the port answered 8'h02 -- bit1 set, V30
+    // class -- so the ITF branched to F8FA2 and skipped both blocks.)
     // The BIOS never looks at bit 1 -- it tests bits
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
     // 0x31 = 0xE3. The detour through 0x12 is worth recording.
@@ -1103,7 +1101,7 @@ module PERIPHERALS #(
     wire [7:0] sysport_data = sysport_35_select ? pc98_sysport_c
                             : sysport_31_select ? cfg_dipsw2
                             : sysport_33_select ? (8'h08 | {7'd0, upd4990_cdat})
-                            : sysport_42_select ? 8'h84
+                            : sysport_42_select ? 8'h02
                             :                     8'h00;
 
     // ------------------------------------------------- keyboard 8251
