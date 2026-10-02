@@ -77,8 +77,10 @@ cd /tmp/np2run && rm -f np2kai/np2kai.cfg
 ```
 
 testdisk/build_cpubench.sh packs FreeDOS(98) + CPUBENCH 0.980 +
-`CPUBENCH -p > RESULT.TXT`, so the score lands both on screen and inside
-the image (FAT file -- readable back from a RAM-resident copy via JTAG).
+`CPUBENCH -p` in AUTOEXEC. The score is screen-only on purpose: the
+fdd_ramimg mount is write-protected, and a `>` redirect would hit DOS's
+Abort/Retry/Fail prompt. Scrape TVRAM via scripts/jtag_screen.tcl (or
+jtag_bench.sh, which wraps upload+mount+wait+scrape).
 
 Gotchas observed 2026-10:
 
