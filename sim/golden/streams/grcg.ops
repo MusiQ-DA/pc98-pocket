@@ -1,0 +1,66 @@
+# grcg.ops -- directed GRCG coverage against np21w's mem/memvram.c.
+# TDW lays tiles down ignoring the guest byte, TCR reads compare against
+# the tiles and return ~diff, RMW writes read-modify through the tile, and
+# an RMW-mode read is a PLAIN read (vacctbl rows 0x0c/0x0d) -- the exact
+# spot this harness caught the sequencer expanding as TCR before.
+# p columns: B=0xA8000 R=0xB0000 G=0xB8000 E=0xE0000; masks are modereg[3:0]
+# with a SET bit meaning "leave this plane alone".
+
+# P 0
+M 0
+F a8000 12
+F b0000 34
+F b8000 56
+F e0000 78
+F a8010 99
+F b0010 aa
+F b8010 bb
+F e0010 cc
+F b8004 f0
+F b8005 0f
+
+# ---- TDW: tiles drop in wherever modereg's plane bit is clear ----------
+GM 80            # GRCG on, TDW, mask 0 -- all four planes write
+GT 0 f0f0
+GT 1 2222
+GT 2 3333
+GT 3 4444
+M 1
+W8 a8000 5a      # tile write: guest value 5a is discarded
+W8 a8004 5a
+R8 a8000         # TCR: ~or(plane^tile) -- B was NOT written (R window's
+                 # write above is its own thing); reads compare the tiles
+R16 a8000
+R8 a8004
+W16 a8010 0f0f   # word tile write: both bytes, all unmasked planes
+
+# partial mask: planes B and G skipped (bits 0 and 2)
+GM 85
+W8 a8008 cc
+R8 a8008
+
+# ---- RMW: reads are plain, writes fold value&tile into the old byte ----
+GM c0            # rmw=1, mask 0
+W8 a8020 0f      # RMW: vram &= ~0f, |= 0f & tile
+R8 a8020         # plain read -- the byte just written
+R16 a8020
+W16 a8022 f0f0
+R8 a8023
+
+# ---- page 1: same walks one page up -------------------------------------
+# P 1
+GM 80
+W8 a8300 7e      # TDW on page 1
+R8 a8300         # TCR on page 1
+GM c0
+W8 a8302 a5      # RMW on page 1
+R8 a8302
+# P 0
+R8 a8300         # page-0 byte at that offset (untouched: 00)
+
+# ---- charger off: plain again -------------------------------------------
+GM 00
+M 0
+W8 a8400 66
+R8 a8400
+X
