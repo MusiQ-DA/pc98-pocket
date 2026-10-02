@@ -7,6 +7,7 @@
  *
  * Usage:
  *   ./np2run <frames> <image.hdm> [-sysdir DIR] [-dump FILE] [-poll N]
+ *                                  [-mark STR] [-beef ADDR] [-shot FILE.ppm]
  *
  *     <frames>     emulated frames (~fps each; see av_info, usually 60)
  *     <image.hdm>  passed to retro_load_game -> mounted as FDD
@@ -15,6 +16,8 @@
  *     -dump FILE   after the run, write raw SYSTEM_RAM to FILE
  *     -poll N      dump the 80x25 text screen every N frames (0=only end)
  *     -mark STR    stop early once STR appears on the text screen
+ *     -shot FILE   save the final video frame as a binary PPM (P6)
+ *     -beef ADDR   poll bench.asm mailbox at ADDR, print records, stop
  *
  * Build:
  *   cc -O2 -o np2run np2run.c -ldl
@@ -134,8 +137,45 @@ static bool env_cb(unsigned cmd, void *data) {
     }
 }
 
+static const char *shotfile;              /* -shot FILE: save last frame as PPM */
+static uint8_t    *shot_fb;
+static unsigned    shot_w, shot_h, shot_pitch;
+
 static void video_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
-    (void)data; (void)w; (void)h; (void)pitch;
+    if (!shotfile || !data || !w || !h) return;
+    if (w != shot_w || h != shot_h || pitch != shot_pitch) {
+        free(shot_fb);
+        shot_fb = malloc((size_t)h * pitch);
+        shot_w = w; shot_h = h; shot_pitch = pitch;
+    }
+    if (shot_fb) memcpy(shot_fb, data, (size_t)h * pitch);
+}
+
+/* Write the latest frame as a binary PPM (P6). The core delivers RGB565 or
+ * XRGB8888 depending on the negotiated pixfmt; expand both to RGB888. */
+static void write_shot(const char *path) {
+    if (!shot_fb) { fprintf(stderr, "[np2run] -shot: no frame seen\n"); return; }
+    FILE *fp = fopen(path, "wb");
+    if (!fp) { perror("shot"); return; }
+    fprintf(fp, "P6\n%u %u\n255\n", shot_w, shot_h);
+    int bpp = (pixfmt == RETRO_PIXEL_FORMAT_XRGB8888) ? 4 : 2;
+    for (unsigned y = 0; y < shot_h; y++) {
+        const uint8_t *row = shot_fb + (size_t)y * shot_pitch;
+        for (unsigned x = 0; x < shot_w; x++) {
+            uint8_t rgb[3];
+            if (bpp == 4) {
+                rgb[0] = row[x*4+2]; rgb[1] = row[x*4+1]; rgb[2] = row[x*4];
+            } else {
+                uint16_t v = row[x*2] | (row[x*2+1] << 8);
+                rgb[0] = ((v >> 11) & 0x1F) * 255 / 31;
+                rgb[1] = ((v >>  5) & 0x3F) * 255 / 63;
+                rgb[2] = ( v        & 0x1F) * 255 / 31;
+            }
+            fwrite(rgb, 1, 3, fp);
+        }
+    }
+    fclose(fp);
+    fprintf(stderr, "[np2run] frame -> %s (%ux%d)\n", path, shot_w, shot_h);
 }
 static void audio_cb(int16_t l, int16_t r) { (void)l; (void)r; }
 static size_t audio_batch_cb(const int16_t *d, size_t frames) { (void)d; return frames; }
@@ -175,7 +215,7 @@ int main(int argc, char **argv) {
     long beef_addr = -1; /* mailbox sentinel address, e.g. 0x70000 */
 
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <frames> <image.hdm> [-sysdir D] [-lib P] [-dump F] [-poll N] [-mark STR] [-beef ADDR]\n", argv[0]);
+        fprintf(stderr, "usage: %s <frames> <image.hdm> [-sysdir D] [-lib P] [-dump F] [-poll N] [-mark STR] [-beef ADDR] [-shot F.ppm]\n", argv[0]);
         return 2;
     }
     frames = atol(argv[1]);
@@ -187,6 +227,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "-poll")) poll_n = atoi(argv[i+1]);
         else if (!strcmp(argv[i], "-mark")) mark = argv[i+1];
         else if (!strcmp(argv[i], "-beef")) beef_addr = strtol(argv[i+1], NULL, 0);
+        else if (!strcmp(argv[i], "-shot")) shotfile = argv[i+1];
     }
 
     void *dl = dlopen(libpath, RTLD_NOW | RTLD_LOCAL);
@@ -274,6 +315,7 @@ int main(int argc, char **argv) {
         if (fp) { fwrite(ramp, 1, 0x200000, fp); fclose(fp); }
         fprintf(stderr, "[np2run] dumped 2MB -> %s\n", dumpfile);
     }
+    if (shotfile) write_shot(shotfile);
     r_unload_game();
     r_deinit();
     return found ? 0 : 0;
