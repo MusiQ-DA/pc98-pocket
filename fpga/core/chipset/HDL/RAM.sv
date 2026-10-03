@@ -151,12 +151,17 @@ module RAM (
     // live data bus, which a pulse-width strobe can legally release -- and
     // change -- before write_flag confirms the request.
     logic           wc_pend;
+    logic           wc_pend2;
     logic           accept_live_wr;
     logic           accept_live_rd;
     logic   [23:0]  pend_address;
     logic   [7:0]   pend_data;
     logic   [7:0]   pend_data_hi;
     logic           pend_word;
+    logic   [23:0]  pend2_address;
+    logic   [7:0]   pend2_data;
+    logic   [7:0]   pend2_data_hi;
+    logic           pend2_word;
     logic   [23:0]  accept_address;
     logic   [7:0]   accept_data;
     logic   [7:0]   accept_data_hi;
@@ -431,19 +436,44 @@ module RAM (
                                | (internal_data_bus_hi == accept_data_hi));
     wire read_strobe_match  = (latch_address == accept_address)
                             & (word_now      == accept_word);
+    // Parked-operand matches: a held strobe whose copy already sits in a
+    // slot must neither re-park nor count as blocked/lost when it falls.
+    // The hi lane only counts on word writes (same caveat as the match
+    // against the in-flight access).
+    wire parked_match  = (latch_address        == pend_address)
+                       & (internal_data_bus    == pend_data)
+                       & (word_now             == pend_word)
+                       & (~pend_word
+                          | (internal_data_bus_hi == pend_data_hi));
+    wire parked2_match = (latch_address        == pend2_address)
+                       & (internal_data_bus    == pend2_data)
+                       & (word_now             == pend2_word)
+                       & (~pend2_word
+                          | (internal_data_bus_hi == pend2_data_hi));
+
     wire new_write_strobe = write_command && state != IDLE && !wc_pend
         && !write_strobe_match;
+    // Second-depth capture: a strobe arriving while the first slot is full
+    // parks here too -- the uPD71071's early-released pulses are gone before
+    // either slot could free, and capture-on-arrival is what survives them.
+    wire new_write_strobe2 = write_command && state != IDLE && wc_pend
+        && !wc_pend2 && !write_strobe_match && !parked_match;
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
             state             <= IDLE;
             wc_pend           <= 1'b0;
+            wc_pend2          <= 1'b0;
             accept_live_wr    <= 1'b0;
             accept_live_rd    <= 1'b0;
             pend_address      <= 24'd0;
             pend_data         <= 8'd0;
             pend_data_hi      <= 8'd0;
             pend_word         <= 1'b0;
+            pend2_address     <= 24'd0;
+            pend2_data        <= 8'd0;
+            pend2_data_hi     <= 8'd0;
+            pend2_word        <= 1'b0;
             accept_address    <= 24'd0;
             accept_data       <= 8'd0;
             accept_data_hi    <= 8'd0;
@@ -463,14 +493,26 @@ module RAM (
                     accept_data    <= pend_data;
                     accept_data_hi <= pend_data_hi;
                     accept_word    <= pend_word;
+                    // Depth-2 FIFO: slot 2 promotes into slot 1 as the
+                    // accepted write leaves, so parked order is preserved.
+                    if (wc_pend2) begin
+                        pend_address <= pend2_address;
+                        pend_data    <= pend2_data;
+                        pend_data_hi <= pend2_data_hi;
+                        pend_word    <= pend2_word;
+                        wc_pend      <= 1'b1;
+                        wc_pend2     <= 1'b0;
+                    end
+                    else
+                        wc_pend <= 1'b0;
                 end
                 else begin
                     accept_address <= latch_address;
                     accept_data    <= internal_data_bus;
                     accept_data_hi <= internal_data_bus_hi;
                     accept_word    <= word_now;
+                    wc_pend <= 1'b0;
                 end
-                wc_pend <= 1'b0;
             end
             else if (state == IDLE && next_state == RAM_READ_1) begin
                 // Snapshot the read's operands too: a different-address
@@ -488,6 +530,13 @@ module RAM (
                 pend_data    <= internal_data_bus;
                 pend_data_hi <= internal_data_bus_hi;
                 pend_word    <= word_now;
+            end
+            else if (new_write_strobe2) begin
+                wc_pend2      <= 1'b1;
+                pend2_address <= latch_address;
+                pend2_data    <= internal_data_bus;
+                pend2_data_hi <= internal_data_bus_hi;
+                pend2_word    <= word_now;
             end
         end
     end
@@ -711,19 +760,19 @@ module RAM (
 
     // Drop witness (PC98_JTAG). Two kinds of event matter here:
     //
-    //   blocked -- a NEW write strobe rises while the park slot is already
-    //   full (busy & wc_pend, operands match neither the in-flight access
-    //   nor the parked twin). It is not lost yet: a strobe the master holds
-    //   parks as soon as the slot frees. It is the precursor population.
+    //   blocked -- a NEW write strobe rises while BOTH park slots are full
+    //   (busy & wc_pend & wc_pend2, operands matching nothing in flight or
+    //   parked). It is not lost yet: a strobe the master holds parks as
+    //   soon as a slot frees. It is the precursor population.
     //
     //   lost -- a blocked strobe FALLS while still unaccepted. That byte is
     //   gone for good: it never reached the FSM, never parked, and the
     //   master has moved on. A held strobe never produces this; the
     //   uPD71071's early-released write pulse does.
     //
-    // The parked twin's own fall is NOT a loss -- its operands are already
-    // safe in pend_*, which is exactly why it may release early. parked_match
-    // keeps it out of the count.
+    // A parked twin's own fall is NOT a loss -- its operands are already
+    // safe in pend_*/pend2_*, which is exactly why it may release early.
+    // parked_match/parked2_match keep it out of the count.
     logic        write_command_d;
     logic [15:0] dbg_parks;
     logic [15:0] dbg_drops;
@@ -734,15 +783,12 @@ module RAM (
 
     wire write_strobe_fell = write_command_d & ~write_command;
     wire write_strobe_rose = ~write_command_d & write_command;
-    wire parked_match      = (latch_address   == pend_address)
-                           & (internal_data_bus   == pend_data)
-                           & (word_now            == pend_word)
-                           & (~pend_word
-                              | (internal_data_bus_hi == pend_data_hi));
-    wire blocked_ev = write_command & (state != IDLE) & wc_pend
-                    & ~write_strobe_match & ~parked_match;
-    wire lost_ev    = write_strobe_fell & (state != IDLE) & wc_pend
-                    & ~write_strobe_match & ~parked_match;
+    wire blocked_ev = write_command & (state != IDLE) & wc_pend & wc_pend2
+                    & ~write_strobe_match & ~parked_match
+                    & ~(wc_pend2 & parked2_match);
+    wire lost_ev    = write_strobe_fell & (state != IDLE) & wc_pend & wc_pend2
+                    & ~write_strobe_match & ~parked_match
+                    & ~(wc_pend2 & parked2_match);
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
@@ -755,7 +801,8 @@ module RAM (
             dbg_drop_st     <= 3'd0;
         end else begin
             write_command_d <= write_command;
-            if (new_write_strobe && (dbg_parks != 16'hFFFF))
+            if ((new_write_strobe | new_write_strobe2)
+                && (dbg_parks != 16'hFFFF))
                 dbg_parks <= dbg_parks + 16'd1;
             if (write_strobe_rose & blocked_ev & (dbg_blocked != 8'hFF))
                 dbg_blocked <= dbg_blocked + 8'd1;

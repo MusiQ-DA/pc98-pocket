@@ -282,7 +282,6 @@ module CHIPSET #(
         .io_read_n                          (io_read_n),
         .io_write_n                         (io_write_n),
         .memory_read_n                      (memory_read_n),
-        .memory_write_n                     (memory_write_n),
         .dma0_acknowledge_n                 (dma_acknowledge_n[0]),
         .address_enable_n                   (address_enable_n)
     );

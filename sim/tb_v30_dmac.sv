@@ -179,7 +179,6 @@ module tb_v30_dmac;
         .io_read_n           (io_rd_n),
         .io_write_n          (io_wr_n),
         .memory_read_n       (mem_rd_n),
-        .memory_write_n      (mem_wr_n),
         .dma0_acknowledge_n  (1'b1),
         .address_enable_n    (aen_n)
     );

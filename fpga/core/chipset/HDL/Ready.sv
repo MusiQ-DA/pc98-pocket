@@ -17,7 +17,6 @@ module READY (
     input   logic           io_read_n,
     input   logic           io_write_n,
     input   logic           memory_read_n,
-    input   logic           memory_write_n,
     input   logic           dma0_acknowledge_n,
     input   logic           address_enable_n
 );
@@ -31,39 +30,17 @@ module READY (
     logic   ready_n_or_wait_Qn;
     logic   prev_ready_n_or_wait;
 
-    // The DMA write phase must count as a bus cycle too. Without it a ready
-    // sequence still settling from the transfer's I/O phase fires inside SW
-    // and the uPD71071 releases memory_write_n early -- a fixed-width pulse
-    // RAM may still be too busy to accept, so the byte silently drops.
-    // Re-arming the toggle at the write strobe's rise flushes any stale
-    // pulse; the write then completes only on its own io_channel_ready.
-    wire    memwr_cmd  = dma0_acknowledge_n & ~memory_write_n & address_enable_n;
-    logic   prev_memwr_cmd;
-    wire    memwr_start = memwr_cmd & ~prev_memwr_cmd;
-
-    wire    bus_state = ~io_read_n | ~io_write_n
-                      | (dma0_acknowledge_n & ~memory_read_n & address_enable_n)
-                      | memwr_cmd;
+    wire    bus_state = ~io_read_n | ~io_write_n | (dma0_acknowledge_n & ~memory_read_n & address_enable_n);
 
     always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
+        if (reset)
             prev_bus_state <= 1'b1;
-            prev_memwr_cmd <= 1'b0;
-        end else begin
+        else
             prev_bus_state <= bus_state;
-            prev_memwr_cmd <= memwr_cmd;
-        end
     end
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
-            ready_n_or_wait     <= 1'b1;
-            ready_n_or_wait_Qn  <= 1'b0;
-        end
-        else if (memwr_start) begin
-            // First in the chain: a write strobe starting flushes whatever
-            // ready sequence was still settling, so a stale pulse can never
-            // fire inside SW. The write's own completion re-fires it.
             ready_n_or_wait     <= 1'b1;
             ready_n_or_wait_Qn  <= 1'b0;
         end

@@ -210,7 +210,6 @@ module tb_ram_dma_fill;
         .io_read_n           (ab_io_read_n),
         .io_write_n          (ab_io_write_n),
         .memory_read_n       (ab_mem_rd_n),
-        .memory_write_n      (ab_mem_wr_n),
         .dma0_acknowledge_n  (1'b1),
         .address_enable_n    (aen_n)
     );
@@ -477,6 +476,10 @@ module tb_ram_dma_fill;
               "mode set ch2 = single");
 
         // The fill: DRQ up, bytes stream until the count exhausts (TC).
+        // Wait for SDRAM init first -- on the metal the FDC fill runs long
+        // after the controller is up; losses inside the init stall are a
+        // bench artifact, not the bug under test.
+        while (!u_ram.u_sdram.u_mp.init_done) @(posedge clk);
         want_drq = 1'b1;
         guard = 0;
         while (memw_pulses < FILL_LEN && guard < 40_000_000) begin
