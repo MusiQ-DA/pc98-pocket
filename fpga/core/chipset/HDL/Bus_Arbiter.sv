@@ -63,7 +63,8 @@ module BUS_ARBITER (
     // this is how a byte-0 that the fill wrote correctly still ends
     // up 0x00 afterwards can be attributed to its overwriter.
     input   logic   [19:0]  watch_addr,
-    output  logic   [127:0] dbg_dma3
+    output  logic   [127:0] dbg_dma3,
+    output  logic   [127:0] dbg_dma4
 );
 
     //
@@ -296,6 +297,7 @@ module BUS_ARBITER (
     logic   [31:0]  head_log  [0:2];
     logic   [31:0]  first_log [0:3];
     logic   [31:0]  watch_log [0:2];
+    logic   [31:0]  watch_first [0:3];
 
     wire    fdc_ack  = ~dma_acknowledge_n[2] | ~dma_acknowledge_n[3];
     wire    dma_own  = ~dma_enable_n && ~(&dma_acknowledge_n);
@@ -330,6 +332,11 @@ module BUS_ARBITER (
                                      internal_data_bus};
                     if (watch_cnt != 8'hff)
                         watch_cnt <= watch_cnt + 8'd1;
+                    if (watch_cnt < 8'd4)
+                        watch_first[watch_cnt[1:0]] <=
+                            {~address_enable_n && ~dma_own, dma_own,
+                             internal_data_bus != data_bus_ext,
+                             ~io_write_n, address, internal_data_bus};
                 end
                 if (fdc_ack) begin
                     // Log every address break in the DMA stream, and every
@@ -370,6 +377,8 @@ module BUS_ARBITER (
                        first_log[1], first_log[0]};
     assign dbg_dma3 = {watch_cnt, 24'h0, watch_log[2],
                        watch_log[1], watch_log[0]};
+    assign dbg_dma4 = {watch_first[3], watch_first[2],
+                       watch_first[1], watch_first[0]};
 
 
     //

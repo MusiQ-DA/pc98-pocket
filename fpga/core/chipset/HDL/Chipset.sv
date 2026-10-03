@@ -119,6 +119,8 @@ module CHIPSET #(
         // the slot-full counters cannot see.
         output  logic   [31:0]  dbg_chipset8,
         output  logic   [31:0]  dbg_chipset9,
+        // The watchpoint's first four hits, latched sticky.
+        output  logic   [127:0] dbg_chipset10,
         // The GVRAM sequencer's own view: where the plane walk (or the
         // service channel) is parked -- see pc98_gvram_seq's dbg port.
         output  logic   [7:0]   dbg_gvram,
@@ -342,6 +344,7 @@ module CHIPSET #(
         .dbg_dma2                           (dbg_chipset6),
         .watch_addr                         (dbg_watch_addr),
         .dbg_dma3                           (dbg_chipset7),
+        .dbg_dma4                           (dbg_chipset10),
         // DRQ is active-low on the PC-98 bus (the data book names the pins
         // DRQ3O..DRQ0O) and the BIOS programs the 71071's DREQ sense bit
         // (0x11 bit6) to match. The sources here are active-high "request
