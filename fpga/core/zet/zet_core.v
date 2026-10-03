@@ -71,7 +71,10 @@ module zet_core (
   // wire decode - microcode
   wire [`MICRO_ADDR_WIDTH-1:0] seq_addr;
   wire [3:0] src;
-  assign dbg_fault = (seq_addr == `INVOP) | (seq_addr == `INTD);
+  // seq_addr is combinational on the live fetch byte while state==opcod_st,
+  // so a stale byte sitting on data[7:0] during a bus stall decodes to INVOP
+  // transiently without ever being committed.  Only report dispatched faults.
+  assign dbg_fault = exec_st & ((seq_addr == `INVOP) | (seq_addr == `INTD));
 
   // First fault wins: the byte that decoded to INVOP/INTD is the evidence --
   // comparing it against the image at pc tells fetch corruption from a real
