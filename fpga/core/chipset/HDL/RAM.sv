@@ -709,37 +709,57 @@ module RAM (
     assign  dbg = {wc_pend, refresh_mode, read_flag,
                    accept_live_rd, accept_live_wr, state[2:0]};
 
-    // Drop witness (PC98_JTAG): a write strobe seen while the park slot is
-    // already full is lost for good -- neither served nor parked. On the
-    // metal this is the rare second strobe of a back-to-back DMA fill
-    // landing inside a slow access's window (row miss, refresh, svc hold):
-    // count each lost strobe once and keep the first one's address and the
-    // FSM state it collided with. drop_counted rearms when the bus strobe
-    // releases so a held strobe counts once, not per clock.
-    logic        drop_counted;
+    // Drop witness (PC98_JTAG). Two kinds of event matter here:
+    //
+    //   blocked -- a NEW write strobe rises while the park slot is already
+    //   full (busy & wc_pend, operands match neither the in-flight access
+    //   nor the parked twin). It is not lost yet: a strobe the master holds
+    //   parks as soon as the slot frees. It is the precursor population.
+    //
+    //   lost -- a blocked strobe FALLS while still unaccepted. That byte is
+    //   gone for good: it never reached the FSM, never parked, and the
+    //   master has moved on. A held strobe never produces this; the
+    //   uPD71071's early-released write pulse does.
+    //
+    // The parked twin's own fall is NOT a loss -- its operands are already
+    // safe in pend_*, which is exactly why it may release early. parked_match
+    // keeps it out of the count.
+    logic        write_command_d;
     logic [15:0] dbg_parks;
     logic [15:0] dbg_drops;
+    logic [7:0]  dbg_blocked;
     logic [23:0] dbg_drop_addr;
     logic        dbg_drop_wr;
     logic [2:0]  dbg_drop_st;
 
-    wire drop_ev = write_command & (state != IDLE) & wc_pend
-                 & ~write_strobe_match;
+    wire write_strobe_fell = write_command_d & ~write_command;
+    wire write_strobe_rose = ~write_command_d & write_command;
+    wire parked_match      = (latch_address   == pend_address)
+                           & (internal_data_bus   == pend_data)
+                           & (word_now            == pend_word)
+                           & (~pend_word
+                              | (internal_data_bus_hi == pend_data_hi));
+    wire blocked_ev = write_command & (state != IDLE) & wc_pend
+                    & ~write_strobe_match & ~parked_match;
+    wire lost_ev    = write_strobe_fell & (state != IDLE) & wc_pend
+                    & ~write_strobe_match & ~parked_match;
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
-            drop_counted  <= 1'b0;
-            dbg_parks     <= 16'd0;
-            dbg_drops     <= 16'd0;
-            dbg_drop_addr <= 24'd0;
-            dbg_drop_wr   <= 1'b0;
-            dbg_drop_st   <= 3'd0;
+            write_command_d <= 1'b0;
+            dbg_parks       <= 16'd0;
+            dbg_drops       <= 16'd0;
+            dbg_blocked     <= 8'd0;
+            dbg_drop_addr   <= 24'd0;
+            dbg_drop_wr     <= 1'b0;
+            dbg_drop_st     <= 3'd0;
         end else begin
+            write_command_d <= write_command;
             if (new_write_strobe && (dbg_parks != 16'hFFFF))
                 dbg_parks <= dbg_parks + 16'd1;
-            if (~write_command)   drop_counted <= 1'b0;
-            else if (drop_ev)     drop_counted <= 1'b1;
-            if (drop_ev & ~drop_counted) begin
+            if (write_strobe_rose & blocked_ev & (dbg_blocked != 8'hFF))
+                dbg_blocked <= dbg_blocked + 8'd1;
+            if (lost_ev) begin
                 if (dbg_drops != 16'hFFFF) dbg_drops <= dbg_drops + 16'd1;
                 if (dbg_drops == 16'd0) begin
                     dbg_drop_addr <= latch_address;
@@ -751,7 +771,7 @@ module RAM (
     end
 
     assign  dbg2 = {dbg_drop_st, dbg_drop_wr, dbg_drop_addr[19:0],
-                    dbg_drops[7:0]};          // {st,wr,addr[19:0],drops}
-    assign  dbg3 = {16'd0, dbg_parks};        // parked-write count
+                    dbg_drops[7:0]};          // {st,wr,addr[19:0],lost}
+    assign  dbg3 = {8'd0, dbg_blocked, dbg_parks}; // {blocked,parked}
 
 endmodule
