@@ -16,7 +16,7 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # rhythm voices and the drive-mechanism kit that borrowed them stay silent
 # -- OMGMT_CAPS bit0 reads 0, which is what the firmware loaders key on.
 # USE_ADPCM=1 brings the whole path back unchanged once floor space exists.
-set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
+#set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 
 # JTAG debug build. OFF for the current fit: the SLD hub, the probe mux,
 # the write-pipe and key injection together cost enough ALMs to put the
