@@ -541,7 +541,14 @@ module CHIPSET #(
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
         .cpu_rd(~memory_read_n), .cpu_wr(~memory_write_n),
-        .cpu_word(cpu_word_access),
+        // cpu_word_access belongs to the CPU's own bus cycle and stays
+        // stale through a DMA grant (the bridge is frozen mid-cycle when
+        // hold_acknowledge lands).  address_enable_n is high for the whole
+        // DMA-owned window, so qualify the flag: a DMA byte write must
+        // never become a 2-word burst -- at column 511 sdram_mp's cur_col
+        // wraps to column 0 of the same bank and beat 2 clobbers the
+        // block's first word (the fill buffer's byte0).
+        .cpu_word(cpu_word_access & ~address_enable_n),
         .cpu_addr(latch_address), .cpu_wdata(internal_data_bus),
         .cpu_wdata_hi(cpu_data_bus_hi),
         .cpu_rdata(internal_data_bus_ram), .cpu_rdata_hi(seq_rdata_hi_w),

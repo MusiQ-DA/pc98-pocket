@@ -137,6 +137,10 @@ module tb_ram_dma_fill;
     // P1LEN clocks starting n clocks after want_drq rises -- models the
     // gvram sequencer's mem_page1 window overlapping a fill byte.
     logic       p1_flag = 1'b0;
+    // +WORDFILL drives RAM's word_access high for the whole run, matching
+    // the metal condition where the CPU bridge's flag stays stale-1
+    // through the DMA grant.
+    logic       word_r;
     int         p1_at = -1, p1_len = 8;
     int         p1_tick = 0;
     always_ff @(posedge clk) begin
@@ -324,7 +328,11 @@ module tb_ram_dma_fill;
         .address(bus_addr), .internal_data_bus(internal_data_bus),
         .data_bus_out(ram_dout),
         .analog_mode(1'b0),
-        .word_access(1'b0),
+        // +WORDFILL emulates the metal bug: cpu_word_access stays stale-1
+        // through the DMA grant so every byte runs as a 2-word burst --
+        // each 512-block's last byte wraps cur_col 511->0 and clobbers
+        // the block's first byte.
+        .word_access(word_r),
         .internal_data_bus_hi(8'h00),
         .data_bus_out_hi(ram_dout_hi),
         .memory_read_n(all_mem_rd_n), .memory_write_n(ab_mem_wr_n),
@@ -474,6 +482,7 @@ module tb_ram_dma_fill;
         void'($value$plusargs("CLIPW=%d", clipw));
         void'($value$plusargs("P1AT=%d", p1_at));
         void'($value$plusargs("P1LEN=%d", p1_len));
+        word_r = $test$plusargs("WORDFILL");
         repeat (40) @(posedge clk);
         reset = 1'b0;
         repeat (100) @(posedge clk);

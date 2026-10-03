@@ -97,7 +97,7 @@ set s69 [rd 0x69]
 puts "-- RAM uncovered-write witness --"
 puts [format "  uncov_cnt=%d  first_addr=%06x" \
     [expr {($s68 >> 24) & 0xff}] [expr {$s68 & 0xffffff}]]
-puts [format "  first_data=%02x  last_addr[15:0]=%04x  last_data=%02x" \
+puts [format "  first_data=%02x  last_addr_lo=%04x  last_data=%02x" \
     [expr {$s69 & 0xff}] [expr {($s69 >> 8) & 0xffff}] [expr {$s69 >> 24}]]
 
 puts "-- RAM accept ring (sink side, mapped addrs) --"
