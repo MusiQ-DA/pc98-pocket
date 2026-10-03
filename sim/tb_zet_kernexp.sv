@@ -18,11 +18,21 @@ module tb_zet_kernexp;
 
     logic reset = 1'b1;
     logic cpu_ce_posedge = 1'b0;
+    logic cpu_ce_negedge = 1'b0;      // pulse, like ce_generator's (not ~posedge)
     int   ce_cnt = 0;
+    int   ce_gap = 0;                 // 0 = stock 5/11 pattern; N = 1 CE/N clks
     always_ff @(posedge clk) begin
-        ce_cnt <= (ce_cnt == 10) ? 0 : ce_cnt + 1;
-        cpu_ce_posedge <= (ce_cnt == 0) || (ce_cnt == 2) || (ce_cnt == 5)
-                       || (ce_cnt == 7) || (ce_cnt == 9);
+        if (ce_gap > 0) begin
+            ce_cnt <= (ce_cnt >= ce_gap - 1) ? 0 : ce_cnt + 1;
+            cpu_ce_posedge <= (ce_cnt == 0);
+            cpu_ce_negedge <= (ce_cnt == (ce_gap >> 1));
+        end else begin
+            ce_cnt <= (ce_cnt == 10) ? 0 : ce_cnt + 1;
+            cpu_ce_posedge <= (ce_cnt == 0) || (ce_cnt == 2) || (ce_cnt == 5)
+                           || (ce_cnt == 7) || (ce_cnt == 9);
+            cpu_ce_negedge <= (ce_cnt == 1) || (ce_cnt == 3) || (ce_cnt == 6)
+                           || (ce_cnt == 8) || (ce_cnt == 10);
+        end
     end
 
     // flat memory: 1 MiB
@@ -46,7 +56,7 @@ module tb_zet_kernexp;
     i8288 u_8288 (
         .clock                           (clk),
         .cpu_ce_posedge                  (cpu_ce_posedge),
-        .cpu_ce_negedge                  (~cpu_ce_posedge),
+        .cpu_ce_negedge                  (cpu_ce_negedge),
         .reset                           (reset),
         .address_enable_n                (1'b0),
         .command_enable                  (1'b1),
@@ -72,42 +82,96 @@ module tb_zet_kernexp;
     int         inta_cnt = 0;
     wire  [7:0] pic_dout = (inta_cnt >= 1) ? 8'h40 : 8'hFF;
 
-    // SDRAM-latency model: RAM.sv holds the data bus on the PREVIOUS access's
-    // byte while a command is in flight (data_bus_out_reg), and ready only
-    // rises in COMPLETE_RAM_RW. Here every memory command parks ready for
-    // `acc_wait` chipset clocks; while parked the bus shows the last
-    // completed read's bytes -- the stale window the bridge must not sample.
-    // +accwait=0 restores the old always-ready behaviour.
+    // Faithful memory model (RAM.sv semantics):
+    //   * a memory command parks the FSM for acc_wait clks (accept->latency),
+    //   * the read data lands in a HOLD REGISTER only at completion --
+    //     data_bus keeps showing the previous access's bytes meanwhile
+    //     (RAM.sv data_bus_out_reg's stale window),
+    //   * memory_access_ready is 0 while the access is in flight and rises
+    //     for one clk at completion,
+    //   * writes commit at completion too.
+    // +accwait=N sets the access latency (0 = instant, near the old model).
     int         acc_wait = 0;
     int         acc_timer = -1;
-    logic [7:0] last_lo = 8'hFF, last_hi = 8'hFF;
-    logic       mem_cmd_d = 1'b1;
+    logic       acc_busy  = 1'b0;
+    logic [19:0] acc_addr = 20'h0;
+    logic        acc_we   = 1'b0;
+    logic        acc_word = 1'b0;
+    logic [7:0]  acc_wlo = 8'h00, acc_whi = 8'h00;
+    logic [7:0]  hold_lo = 8'hFF, hold_hi = 8'hFF;
+    logic        mem_cmd_d = 1'b1;
+    logic        mem_done = 1'b0;
 
     wire        mem_cmd_n = mem_rd_n & mem_wr_n;
-    wire        acc_pend  = (acc_timer >= 0);
-    wire        cpu_ready = ~acc_pend;
+    wire        mem_acc_rdy = acc_busy ? mem_done : 1'b1;
 
     always_ff @(posedge clk) begin
         mem_cmd_d <= mem_cmd_n;
-        if (mem_cmd_d & ~mem_cmd_n)          // memory command asserts
+        mem_done  <= 1'b0;
+        if (mem_cmd_d & ~mem_cmd_n & ~acc_busy) begin  // command accepts
+            acc_addr  <= cpu_address;
+            acc_we    <= ~mem_wr_n;
+            acc_word  <= word_access;
+            acc_wlo   <= cpu_data_bus;
+            acc_whi   <= cpu_data_bus_hi;
             acc_timer <= acc_wait;
-        else if (acc_pend) begin
-            acc_timer <= acc_timer - 1;
-            if (acc_timer == 0) begin
-                if (~mem_rd_n) begin
-                    last_lo <= ram[cpu_address];
-                    last_hi <= ram[cpu_address | 20'h1];
+            acc_busy  <= 1'b1;
+        end else if (acc_busy) begin
+            if (acc_timer <= 0) begin
+                if (acc_we) begin
+                    ram[acc_addr]              <= acc_wlo;
+                    if (acc_word) ram[acc_addr | 20'h1] <= acc_whi;
+                end else begin
+                    hold_lo <= ram[acc_addr];
+                    hold_hi <= ram[acc_addr | 20'h1];
                 end
-                acc_timer <= -1;
-            end
+                acc_busy <= 1'b0;
+                mem_done <= 1'b1;
+            end else
+                acc_timer <= acc_timer - 1;
         end
     end
 
+    // data_bus semantics: the held bytes are what the bus shows during a
+    // read (stale until THIS access completes); off the mem window it floats FF.
     wire [7:0] din    = ~inta_n   ? pic_dout
-                      : ~mem_rd_n ? (acc_pend ? last_lo : ram[cpu_address])
+                      : ~mem_rd_n ? hold_lo
                                   : 8'hFF;
-    wire [7:0] din_hi = ~mem_rd_n ? (acc_pend ? last_hi : ram[cpu_address | 20'h1])
+    wire [7:0] din_hi = ~mem_rd_n ? hold_hi
                                   : 8'hFF;
+
+    // The real CE-synced READY chain -- processor_ready can only change on
+    // cpu_ce edges, exactly as hardware paces it.
+    wire cpu_ready;
+    READY u_ready (
+        .clock              (clk),
+        .cpu_ce_posedge     (cpu_ce_posedge),
+        .cpu_ce_negedge     (cpu_ce_negedge),
+        .reset              (reset),
+        .processor_ready    (cpu_ready),
+        .dma_ready          (),
+        .dma_wait_n         (1'b1),
+        .io_channel_ready   (mem_acc_rdy),   // Chipset ANDs its own io_ch term;
+                                            // none here: 1 while no mem busy
+        .io_read_n          (io_rd_n),
+        .io_write_n         (io_wr_n),
+        .memory_read_n      (mem_rd_n),
+        .dma0_acknowledge_n (1'b1),
+        .address_enable_n   (aen_r)
+    );
+
+    // DMA/AEN injection: +aen=K parks the CPU bus every 2048 clks for K clks,
+    // modelling the FDC DMA steal the flat bench never sees.
+    int     aen_len = 0;
+    int     aen_cnt = 0;
+    logic   aen_r   = 1'b0;
+    always_ff @(posedge clk) begin
+        if (aen_len > 0 && !reset) begin
+            aen_cnt <= aen_cnt + 1;
+            aen_r   <= (aen_cnt > 2048 && aen_cnt <= 2048 + aen_len);
+            if (aen_cnt > 2048 + aen_len) aen_cnt <= 0;
+        end
+    end
 
     // periodic INTR stimulus: vector 40h -> F000:0200, handler is a bare
     // IRET. irq_period==0 disables it. The point is to run the extractor
@@ -180,7 +244,7 @@ module tb_zet_kernexp;
         .data_bus_hi       (din_hi),
         .data_bus          (din),
         .processor_ready   (cpu_ready),
-        .address_enable_n  (1'b0),
+        .address_enable_n  (aen_r),
         .pause_core        (1'b0),
         .biu_done          (),
         .dbg               ()
@@ -209,6 +273,65 @@ module tb_zet_kernexp;
     logic mem_rd_d = 1;
     int   rd_n = 0, rd_max = 60;
     int   wr_lo = 20'hFFFFF, wr_hi = 0, wr_n = 0;
+    // Handshake integrity: each engine arm queues the byte0/byte1 addresses it
+    // must put on the bus; every memory command must then match the queued
+    // address (ALE latched cpu_address). A mismatch means the 8288 cycle ran
+    // on a stale address -- the class of corruption the slow-CE wedge implies.
+    logic [19:0] exp_addr [0:15];
+    logic [ 1:0] exp_cnt = 0;
+    int          exp_w = 0, exp_r = 0, mismatch = 0;
+    wire  [1:0]  eng_bstate = u_bridge.bstate;
+    logic [1:0]  eng_bstate_d = 0;
+    always_ff @(posedge clk) begin
+        eng_bstate_d <= eng_bstate;
+        // B_IDLE->B_CMD transition = arm for a byte of the pair
+        if (eng_bstate_d == 2'd0 && eng_bstate == 2'd1 && !u_bridge.cur_inta) begin
+            exp_addr[exp_w & 15] <= ad_out;
+            exp_w <= exp_w + 1;
+        end
+        if ((mem_rd_d & ~mem_rd_n) | (mem_wr_d & ~mem_wr_n)) begin
+            if (exp_r < exp_w) begin
+                if (cpu_address !== exp_addr[exp_r & 15]) begin
+                    $display("  %8t  !! ADDR MISMATCH cmd@%05X expected %05X",
+                             $time, cpu_address, exp_addr[exp_r & 15]);
+                    mismatch <= mismatch + 1;
+                end
+                exp_r <= exp_r + 1;
+            end
+        end
+        // stale-data check: the byte the bridge is about to latch must equal
+        // the memory's true content -- a completion on the stale window or a
+        // re-issued access would diverge here.
+        if (u_bridge.bstate == 2'd1 && u_bridge.t_cnt >= 3'd3
+            && cpu_ce_posedge && cpu_ready && !aen_r
+            && u_bridge.cur_read && !u_bridge.cur_inta) begin
+            if (din !== ram[cpu_address]) begin
+                $display("  %8t  !! RDSTALE @%05X bus=%02X mem=%02X",
+                         $time, cpu_address, din, ram[cpu_address]);
+                stale <= stale + 1;
+            end
+            if (u_bridge.cur_1cyc && din_hi !== ram[cpu_address | 20'h1]) begin
+                $display("  %8t  !! RDSTALE_HI @%05X bus=%02X mem=%02X",
+                         $time, cpu_address, din_hi, ram[cpu_address | 20'h1]);
+                stale <= stale + 1;
+            end
+            // a completion that never saw ready fall sampled the stale
+            // window by definition -- count them even when the value
+            // coincidentally matches.
+            if (!rdy_fell) nofall <= nofall + 1;
+        end
+        // ready-fell bookkeeping per byte: set once proc_ready has been
+        // low during this command -- the RAM actually took the access.
+        if (eng_bstate_d == 2'd0 && eng_bstate == 2'd1)
+            rdy_fell <= 1'b0;
+        else if (eng_bstate == 2'd1 && !cpu_ready)
+            rdy_fell <= 1'b1;
+        else if (eng_bstate != 2'd1)
+            rdy_fell <= 1'b0;
+    end
+    int stale = 0;
+    int nofall = 0;
+    logic rdy_fell = 1'b0;
     always_ff @(posedge clk) begin
         mem_wr_d <= mem_wr_n;
         mem_rd_d <= mem_rd_n;
@@ -261,10 +384,13 @@ module tb_zet_kernexp;
         if ($value$plusargs("irqp=%d", v))   irq_period = v;
         if ($value$plusargs("irqhold=%d", v)) irq_hold = v;
         if ($value$plusargs("accwait=%d", v)) acc_wait = v;
+        if ($value$plusargs("aen=%d", v))     aen_len  = v;
+        if ($value$plusargs("cegap=%d", v))   ce_gap = v;
         repeat (20) @(posedge clk);
         reset = 1'b0;
         repeat (cycles) @(posedge clk);
         $display("--- done after %0d clks ---", cycles);
+        $display("armed %0d cmds %0d mismatches %0d stale %0d nofall %0d", exp_w, exp_r, mismatch, stale, nofall);
         $display("writes %0d  range %05X..%05X  pc %05X", wr_n, wr_lo, wr_hi, zet_pc);
         $write("pc ring:");
         for (int j = 0; j < 16; j = j + 1)

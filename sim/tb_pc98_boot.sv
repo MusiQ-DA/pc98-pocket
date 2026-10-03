@@ -68,6 +68,12 @@ module tb_pc98_boot;
     wire [1:0] ram_rd_wait, ram_wr_wait;
     wire       biu_done;
 
+    // +speed=N overrides the firmware-default CE rate (2'b10). Speed 0 is
+    // the ~4.9 MHz setting the real hardware wedges on in cold POST.
+    logic [1:0] clk_select_r = 2'b10;
+    initial if ($value$plusargs("speed=%d", clk_select_r))
+        $display("clk_select override: %d", clk_select_r);
+
     ce_generator u_ce (
         .clock                              (clk_chipset),
         .reset                              (reset),
@@ -78,7 +84,7 @@ module tb_pc98_boot;
         // wall minutes to reach the reset at 18.5 s of guest time should take
         // twenty. Timer-fed delays still take their full guest time, which is
         // the honest trade: the machine itself is faster, not the clocks.
-        .clk_select                         (2'b10),      // the firmware default (PC-98: 19.66 MHz)
+        .clk_select                         (clk_select_r), // the firmware default (PC-98: 19.66 MHz)
         .cpu_clk_pin                        (),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
@@ -124,6 +130,8 @@ module tb_pc98_boot;
     wire [ 1:0] zwb_sel;
     wire        zwb_inta, zwb_nmia;
     wire [19:0] zet_pc;
+    wire        zet_fault;
+    wire [7:0]  zet_opc;
     wire [15:0] zbridge_dbg;
 
     zet_cpu_bridge u_bridge (
@@ -174,8 +182,61 @@ module tb_pc98_boot;
         .wb_tgc_o  (zwb_inta),
         .nmi       (1'b0),
         .nmia      (zwb_nmia),
-        .pc        (zet_pc)
+        .pc        (zet_pc),
+        .dbg_fault (zet_fault),
+        .dbg_opc   (zet_opc)
     );
+
+    // End-to-end readback: every acked Wishbone memory read must equal the
+    // architectural byte the guest was meant to see (mirror/ROM model). A
+    // stale-byte or dropped-command completion in the bridge path shows up
+    // here even when the cycle looked protocol-clean from outside. C0000-
+    // E7FFF is open bus on the machine, so it is outside the check.
+    int          ack_rd_mismatches = 0;
+    logic [19:0] ack_bad_addr = 20'h0;
+    function automatic logic [7:0] expected_byte(input logic [19:0] a);
+        if (is_rom(a))       expected_byte = rom_byte(a);
+        else if (is_xrom(a)) expected_byte = xrom_byte(a);
+        else                 expected_byte = ram[a];
+    endfunction
+    function automatic logic in_e2e_check(input logic [19:0] a);
+        in_e2e_check = (a < 20'hC0000) | (a >= 20'hE8000);
+    endfunction
+    always_ff @(posedge clk_chipset) begin
+        if (zwb_ack && !zwb_we && !zwb_tga) begin
+            if (zwb_sel[0] && in_e2e_check({zwb_adr, 1'b0})
+                && zwb_dat_i[7:0] !== expected_byte({zwb_adr, 1'b0})) begin
+                ack_rd_mismatches++;
+                ack_bad_addr <= {zwb_adr, 1'b0};
+                if (ack_rd_mismatches <= 20)
+                    $display("  %8t  E2E lo [%05X] gave %02X, want %02X  (zet_pc %05X)",
+                             $time, {zwb_adr, 1'b0}, zwb_dat_i[7:0],
+                             expected_byte({zwb_adr, 1'b0}), zet_pc);
+            end
+            if (zwb_sel[1] && in_e2e_check({zwb_adr, 1'b1})
+                && zwb_dat_i[15:8] !== expected_byte({zwb_adr, 1'b1})) begin
+                ack_rd_mismatches++;
+                ack_bad_addr <= {zwb_adr, 1'b1};
+                if (ack_rd_mismatches <= 20)
+                    $display("  %8t  E2E hi [%05X] gave %02X, want %02X  (zet_pc %05X)",
+                             $time, {zwb_adr, 1'b1}, zwb_dat_i[15:8],
+                             expected_byte({zwb_adr, 1'b1}), zet_pc);
+            end
+        end
+    end
+
+    // The decode-side witness core_top ships to probe slot 0x38: log the
+    // first INVOP/INTD with the PC it faulted on and the byte it decoded,
+    // so a sim corruption event is directly comparable to the JTAG read.
+    int zet_fault_count = 0;
+    always_ff @(posedge clk_chipset)
+        if (zet_fault) begin
+            zet_fault_count++;
+            if (zet_fault_count <= 10)
+                $display("  %8t  ZET FAULT #%0d  pc=%05X opc=%02X (rom %02X)",
+                         $time, zet_fault_count, zet_pc, zet_opc,
+                         expected_byte(zet_pc));
+        end
 
     // Zet has no dbg_regs: the trace fields read 0, eu_pc below reads the
     // core's real linear-PC debug pin instead.
@@ -717,6 +778,8 @@ module tb_pc98_boot;
     wire  gdc_stat_port  = (cpu_address[15:0] == 16'h0060)
                          | (cpu_address[15:0] == 16'h00A0);
     logic gdc_poll_seen  = 1'b0;
+    logic [7:0] io60_live = 8'h00;
+    int         gdc60_n   = 0;
 
     // The last sixteen DISTINCT execution addresses.
     //
@@ -876,12 +939,18 @@ module tb_pc98_boot;
                      $time, cpu_address[15:0], eu_pc);
         end
 
+        if (~io_rd_n & gdc_stat_port) io60_live <= din;
         if (io_rd_n & ~io_rd_d) begin
             if (gdc_stat_port) begin
                 if (~gdc_poll_seen) begin
                     $display("  %8t  IN  from %04X  (poll begins, eu_pc %05X)",
                              $time, cpu_address[15:0], eu_pc);
                     gdc_poll_seen <= 1'b1;
+                end
+                if (gdc60_n < 48) begin
+                    $display("  %8t  IN60 -> %02X  (vsync %b, pc %05X)", $time,
+                             io60_live, crt_vsync_mock, eu_pc);
+                    gdc60_n <= gdc60_n + 1;
                 end
             end else begin
                 gdc_poll_seen <= 1'b0;
@@ -1124,6 +1193,7 @@ module tb_pc98_boot;
     logic [19:0] crt_period_cnt = 20'd0;
     logic [15:0] crt_pulse_cnt  = 16'd0;
     logic        crt_vsync_mock = 1'b0;
+    logic        vsync_mock_d   = 1'b0;
     always_ff @(posedge clk_chipset) begin
         if (crt_pulse_cnt == 16'd0) begin
             crt_period_cnt <= crt_period_cnt + 20'd1;
@@ -1137,8 +1207,12 @@ module tb_pc98_boot;
             if (crt_pulse_cnt >= 16'd20_000) begin   // ~460 us, like a retrace
                 crt_vsync_mock <= 1'b0;
                 crt_pulse_cnt  <= 16'd0;
+                $display("  %8t  VSYNC low", $time);
             end
         end
+        if (crt_vsync_mock & ~vsync_mock_d)
+            $display("  %8t  VSYNC high", $time);
+        vsync_mock_d <= crt_vsync_mock;
     end
 
     wire [7:0] pic1_dout, pic2_dout;
@@ -1704,7 +1778,15 @@ module tb_pc98_boot;
 
         $display("--- trace (first 400 distinct fetch addresses) ---");
 
-        repeat (40) @(posedge clk_chipset);
+        // +roff=N: hold reset N extra chipset clocks. The CE accumulator is
+        // not touched by the CPU reset, so this shifts which edge the first
+        // bus cycle lands on -- a cold-boot phase sweep for the speed-0
+        // wedge that hardware hits only some of the time.
+        begin
+            int roff;
+            if ($value$plusargs("roff=%d", roff)) repeat (40 + roff) @(posedge clk_chipset);
+            else                                 repeat (40) @(posedge clk_chipset);
+        end
         reset = 1'b0;
 
         // One chunk is 5M chipset clocks, which is 116 ms of guest time --
@@ -1755,6 +1837,10 @@ module tb_pc98_boot;
         end
 
         $display("--- done ---");
+`ifdef ZET_CPU
+        $display("E2E ack reads %0d mismatches (last bad %05X)", ack_rd_mismatches, ack_bad_addr);
+        $display("ZET faults    %0d", zet_fault_count);
+`endif
         $display("PIT gate2     %0d  (counters now %04X %04X %04X)", gate2,
                  u_pit.u_i8253_Counter_0.count[15:0],
                  u_pit.u_i8253_Counter_1.count[15:0],

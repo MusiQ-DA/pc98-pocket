@@ -41,7 +41,8 @@ module zet_core (
     output        cpu_we_o,
 
     output [19:0] pc,  // for debugging purposes
-    output        dbg_fault  // seq_addr enters INVOP or INTD (1-zet_clk pulse)
+    output        dbg_fault, // seq_addr enters INVOP or INTD (1-zet_clk pulse)
+    output [7:0]  dbg_opc    // opcode being decoded when dbg_fault fired
   );
 
   // Net declarations
@@ -71,6 +72,21 @@ module zet_core (
   wire [`MICRO_ADDR_WIDTH-1:0] seq_addr;
   wire [3:0] src;
   assign dbg_fault = (seq_addr == `INVOP) | (seq_addr == `INTD);
+
+  // First fault wins: the byte that decoded to INVOP/INTD is the evidence --
+  // comparing it against the image at pc tells fetch corruption from a real
+  // bad opcode.
+  reg [7:0] opc_fault = 8'h00;
+  reg       opc_seen  = 1'b0;
+  always @(posedge clk)
+    if (rst) begin
+      opc_fault <= 8'h00;
+      opc_seen  <= 1'b0;
+    end else if (dbg_fault && !opc_seen) begin
+      opc_fault <= opcode;
+      opc_seen  <= 1'b1;
+    end
+  assign dbg_opc = opc_seen ? opc_fault : opcode;
   wire [3:0] dst;
   wire [3:0] base;
   wire [3:0] index;

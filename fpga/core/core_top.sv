@@ -1286,6 +1286,11 @@ module core_top (
     // a repeated boot loop keeps the FIRST failure's trail. The fetch
     // landing this same cycle (the jmp$ right after `out`) misses the
     // bulk copy, so it is written into snap[w] explicitly.
+    // A legit OUT 0F0h still freezes the live ring (pc_hist_frozen above)
+    // but must not burn the snapshot: the POST ends every healthy boot
+    // with one, and it would mask the trail of a later real fault. Slot
+    // 0x40+ then reads back the live ring, which resets with soft_reset_cpu
+    // and refreezes at the first post-reset trigger -- the trail we want.
     reg [19:0] pc_snap [0:31];
     reg  [4:0] pc_snap_w     = 5'd0;
     reg        pc_snap_valid = 1'b0;
@@ -1293,13 +1298,28 @@ module core_top (
     always_ff @(posedge clk_chipset) begin
         if (reset)
             pc_snap_valid <= 1'b0;
-        else if (!pc_snap_valid && (f0_port_write || pc_in_errhalt || zet_fault)) begin
+        else if (!pc_snap_valid && (pc_in_errhalt || zet_fault)) begin
             pc_snap_valid <= 1'b1;
             for (int i = 0; i < 32; i++)
                 pc_snap[i] <= pc_hist[i];
             if (pc_hist_new)
                 pc_snap[pc_hist_w] <= pc_now;
             pc_snap_w <= pc_hist_w + {4'd0, pc_hist_new};
+        end
+    end
+
+    // The first zet fault's decode-side evidence: which PC's instruction
+    // decoded to INVOP/INTD. Pairs with dbg_opc (the byte it saw, latched
+    // inside the core); expected-vs-seen at that PC is the corruption
+    // signature. Re-arms with each CPU reset like the opc latch does.
+    reg [19:0] fault_pc   = 20'h00000;
+    reg        fault_seen = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (reset || soft_reset_cpu)
+            fault_seen <= 1'b0;
+        else if (zet_fault && !fault_seen) begin
+            fault_seen <= 1'b1;
+            fault_pc   <= zet_pc;
         end
     end
 
@@ -1372,6 +1392,10 @@ module core_top (
             8'h35:   probe_data_c = ri_dbg0;
             8'h36:   probe_data_c = ri_dbg1;
             8'h37:   probe_data_c = ri_dbg2;
+            // 0x38: first zet fault's {seen, opcode-seen, pc}. opc=00 with
+            // seen=0 just means no fault yet; seen=1 pins the instruction
+            // whose decode faulted, and opc is the byte it decoded.
+            8'h38:   probe_data_c = {3'b000, fault_seen, zet_opc, fault_pc};
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -2767,6 +2791,7 @@ module core_top (
     wire        zwb_inta, zwb_nmia;
     wire [19:0] zet_pc;
     wire        zet_fault;
+    wire [7:0]  zet_opc;
 
     zet_cpu_bridge u_zet_bridge (
         .clk               (clk_chipset),
@@ -2817,7 +2842,8 @@ module core_top (
         .nmi       (1'b0),
         .nmia      (zwb_nmia),
         .pc        (zet_pc),
-        .dbg_fault (zet_fault)
+        .dbg_fault (zet_fault),
+        .dbg_opc   (zet_opc)
     );
 
     // The probe slots that usually expose V30 guts get the Zet view instead.
@@ -2832,6 +2858,8 @@ module core_top (
     wire        v30_ss_err_unused, v30_ss_quiet_unused;
     wire [15:0] v30_ss_rdata_unused;
     wire        zet_fault = 1'b0;
+    wire [7:0]  zet_opc   = 8'h00;
+    wire [19:0] zet_pc    = 20'h00000;
 
     v30_cpu_bridge u_v30_bridge (
         .clk               (clk_chipset),

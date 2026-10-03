@@ -40,7 +40,8 @@ module zet (
     output        nmia,
 
     output [19:0] pc,  // for debugging purposes
-    output        dbg_fault
+    output        dbg_fault,
+    output [7:0]  dbg_opc
   );
 
   // Net declarations
@@ -76,7 +77,8 @@ module zet (
     .cpu_we_o   (cpu_we_o),
 
     .pc (pc),
-    .dbg_fault (dbg_fault)
+    .dbg_fault (dbg_fault),
+    .dbg_opc   (dbg_opc)
   );
 
   zet_wb_master wb_master (
