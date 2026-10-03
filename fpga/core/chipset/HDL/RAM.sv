@@ -46,6 +46,8 @@ module RAM (
     //         drop count}, dbg3 = parked-write count. DMA-fill loss witness.
     output  logic   [31:0]  dbg2,
     output  logic   [31:0]  dbg3,
+    output  logic   [31:0]  dbg4,
+    output  logic   [31:0]  dbg5,
     // SDRAM
     output  logic   [12:0]  sdram_address,
     output  logic           sdram_cke,
@@ -817,8 +819,60 @@ module RAM (
         end
     end
 
+    // Universal coverage: a write strobe is covered when the FSM accepts
+    // it live (IDLE with nothing parked), it lands in a park slot, or its
+    // operands match the access in flight / already parked (a held twin).
+    // A strobe falling while uncovered is a TRUE loss -- and unlike
+    // lost_ev it does not need both park slots full: a strobe arriving on
+    // the exact IDLE&&wc_pend cycle (park wins the accept, live cannot
+    // park because state==IDLE) then falling early escapes that counter
+    // completely. byte0-of-fill writes are prime suspects: they arrive
+    // right as the previous grant's tail retires.
+    logic        wr_covered;
+    logic [15:0] dbg_uncov;
+    logic [19:0] dbg_uncov_addr;    // first loss
+    logic  [7:0] dbg_uncov_data;
+    logic  [2:0] dbg_uncov_st;
+    logic [19:0] dbg_uncov_addr2;   // most recent loss
+    logic  [7:0] dbg_uncov_data2;
+
+    wire wr_accept_live = write_command & (state == IDLE) & ~wc_pend;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            wr_covered       <= 1'b0;
+            dbg_uncov        <= 16'd0;
+            dbg_uncov_addr   <= 20'd0;
+            dbg_uncov_data   <= 8'd0;
+            dbg_uncov_st     <= 3'd0;
+            dbg_uncov_addr2  <= 20'd0;
+            dbg_uncov_data2  <= 8'd0;
+        end else begin
+            if (~write_command)
+                wr_covered <= 1'b0;
+            else if (wr_accept_live | new_write_strobe | new_write_strobe2
+                     | write_strobe_match | parked_match | parked2_match)
+                wr_covered <= 1'b1;
+            if (write_strobe_fell & ~wr_covered) begin
+                if (dbg_uncov != 16'hFFFF)
+                    dbg_uncov <= dbg_uncov + 16'd1;
+                if (dbg_uncov == 16'd0) begin
+                    dbg_uncov_addr <= latch_address[19:0];
+                    dbg_uncov_data <= internal_data_bus;
+                    dbg_uncov_st   <= state;
+                end
+                dbg_uncov_addr2 <= latch_address[19:0];
+                dbg_uncov_data2 <= internal_data_bus;
+            end
+        end
+    end
+
     assign  dbg2 = {dbg_drop_st, dbg_drop_wr, dbg_drop_addr[19:0],
                     dbg_drops[7:0]};          // {st,wr,addr[19:0],lost}
     assign  dbg3 = {8'd0, dbg_blocked, dbg_parks}; // {blocked,parked}
+    assign  dbg4 = {dbg_uncov[7:0], 1'b0, dbg_uncov_st,
+                    dbg_uncov_addr};          // {cnt, st, first-lost addr}
+    assign  dbg5 = {dbg_uncov_data2, dbg_uncov_addr2,
+                    dbg_uncov_data};          // {last d, last addr, first d}
 
 endmodule

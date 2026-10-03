@@ -1423,6 +1423,10 @@ module core_top (
             8'h65:   probe_data_c = chipset_dbg7[63:32];
             8'h66:   probe_data_c = chipset_dbg7[95:64];
             8'h67:   probe_data_c = chipset_dbg7[127:96];
+            // 0x68: RAM's uncovered-write witness {cnt, st, first addr};
+            // 0x69: {last data, last addr, first data}.
+            8'h68:   probe_data_c = chipset_dbg8;
+            8'h69:   probe_data_c = chipset_dbg9;
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -2416,6 +2420,8 @@ module core_top (
     wire [127:0] chipset_dbg5;
     wire [127:0] chipset_dbg6;
     wire [127:0] chipset_dbg7;
+    wire  [31:0] chipset_dbg8;
+    wire  [31:0] chipset_dbg9;
     wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
     wire [33:0]  dbg_scsi;   // {ack,req,mg_rd_cnt,post_cnt,rom_rd_cnt}
     wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
@@ -2653,6 +2659,8 @@ module core_top (
         .dbg_chipset6                       (chipset_dbg6),
         .dbg_watch_addr                     (jtag_watch_addr),
         .dbg_chipset7                       (chipset_dbg7),
+        .dbg_chipset8                       (chipset_dbg8),
+        .dbg_chipset9                       (chipset_dbg9),
         .dbg_gvram                          (gvram_dbg),
         .dbg_scsi                           (dbg_scsi),
     //  .terminal_count_n                   (terminal_count_n)
