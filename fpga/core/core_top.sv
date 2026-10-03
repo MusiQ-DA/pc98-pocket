@@ -1191,8 +1191,12 @@ module core_top (
     wire       pc_in_errhalt = (pc_now == 20'hF99E5);
     // Probe write 0x85 re-arms the history: the boot-time F0 write fires
     // the freeze long before any guest crash, so without this the snapshot
-    // can never see a guest fault's trail.
-    wire       pc_rearm = probe_wr_pulse && (probe_waddr_c == 7'h05);
+    // can never see a guest fault's trail. Registered, like the readout
+    // stage below -- a raw decode into the ring's reset feeds the same
+    // combinational cone that trips Quartus 18.1's fitter (VPR20KMAIN).
+    wire       pc_rearm_c = probe_wr_pulse && (probe_waddr_c == 7'h05);
+    reg        pc_rearm = 1'b0;
+    always_ff @(posedge clk_chipset) pc_rearm <= pc_rearm_c;
     always_ff @(posedge clk_chipset) begin
         if (reset || soft_reset_cpu || pc_rearm) begin
             pc_hist_frozen <= 1'b0;
