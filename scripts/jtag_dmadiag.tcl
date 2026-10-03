@@ -54,16 +54,16 @@ proc acc {v} {
 
 select_node 1
 
+if {[info exists ::env(WATCH)]} {
+    wr 0x8a [expr {$env(WATCH) & 0xFFFFF}]
+    puts [format "watch armed at %05x" [expr {$env(WATCH) & 0xFFFFF}]]
+}
 if {[info exists ::env(RESET)] && $env(RESET)} {
     wr 0x87 5            ;# en + greset pulse
     after 50
     wr 0x87 1
     after 200
     puts "guest reset pulsed"
-}
-if {[info exists ::env(WATCH)]} {
-    wr 0x8a [expr {$env(WATCH) & 0xFFFFF}]
-    puts [format "watch armed at %05x" [expr {$env(WATCH) & 0xFFFFF}]]
 }
 
 puts [format "0x18 live PC    = 0x%08X" [rd 0x18]]
