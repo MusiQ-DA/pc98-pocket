@@ -290,7 +290,6 @@ module BUS_ARBITER (
 
     wire    fdc_ack  = ~dma_acknowledge_n[2] | ~dma_acknowledge_n[3];
     wire    dma_own  = ~dma_enable_n && ~(&dma_acknowledge_n);
-    wire    drq_pin  = ~dma_request[2] | ~dma_request[3];
 
     always_ff @(posedge clock) begin
         if (reset) begin
@@ -321,8 +320,12 @@ module BUS_ARBITER (
                         address != prev_dma_addr + 20'd1) begin
                         head_log[2] <= head_log[1];
                         head_log[1] <= head_log[0];
+                        // flags: {cpu-owned write, dma-owned write,
+                        //         bus != data_bus_ext (mux picked another
+                        //         source), io_write_n low during the write}
                         head_log[0] <= {~address_enable_n && ~dma_own, dma_own,
-                                        drq_pin, 1'b0, address,
+                                        internal_data_bus != data_bus_ext,
+                                        ~io_write_n, address,
                                         internal_data_bus};
                         if (break_cnt != 8'hff)
                             break_cnt <= break_cnt + 8'd1;
