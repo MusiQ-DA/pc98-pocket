@@ -49,6 +49,8 @@ module RAM (
     output  logic   [31:0]  dbg4,
     output  logic   [31:0]  dbg5,
     output  logic   [103:0] dbg6,
+    output  logic   [55:0]  dbg7,
+    input   logic   [19:0]  dbg_watch_addr,
     // SDRAM
     output  logic   [12:0]  sdram_address,
     output  logic           sdram_cke,
@@ -894,6 +896,42 @@ module RAM (
         end
     end
 
+    // Watch-accept witnesses, keyed on the arbiter's watchpoint address:
+    //   wseen  -- write_command cycles whose (mapped) address is the watch
+    //             point. If the arbiter's watch count exceeds this, writes
+    //             reached the bus but never became a write_command here --
+    //             swallowed upstream (sequencer expansion) or sel-missed.
+    //   wacc   -- accepts whose mapped operand equals the watch point, and
+    //             the sticky {pend,word,addr,data} of the last one. A mapped
+    //             redirect shows here as addr != watch point (and no count).
+    logic  [7:0]  wseen_cnt;
+    logic  [7:0]  wacc_cnt;
+    logic  [31:0] wacc_rec;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            wseen_cnt <= 8'd0;
+            wacc_cnt  <= 8'd0;
+            wacc_rec  <= 32'd0;
+        end else begin
+            // Count strobe RISES at the watch address so this compares
+            // one-for-one with the arbiter's watch count (strobe falls).
+            if (write_strobe_rose && (latch_address[19:0] == dbg_watch_addr)
+                && (wseen_cnt != 8'hFF))
+                wseen_cnt <= wseen_cnt + 8'd1;
+            if (state == IDLE && next_state == RAM_WRITE_1
+                && ((wc_pend ? pend_address[19:0] : latch_address[19:0])
+                    == dbg_watch_addr)) begin
+                wacc_rec <= {2'b01, wc_pend,
+                             (wc_pend ? pend_word    : word_now),
+                             (wc_pend ? pend_address[19:0]
+                                      : latch_address[19:0]),
+                             (wc_pend ? pend_data    : internal_data_bus)};
+                if (wacc_cnt != 8'hFF)
+                    wacc_cnt <= wacc_cnt + 8'd1;
+            end
+        end
+    end
+
     assign  dbg2 = {dbg_drop_st, dbg_drop_wr, dbg_drop_addr[19:0],
                     dbg_drops[7:0]};          // {st,wr,addr[19:0],lost}
     assign  dbg3 = {8'd0, dbg_blocked, dbg_parks}; // {blocked,parked}
@@ -901,5 +939,6 @@ module RAM (
     assign  dbg5 = {dbg_uncov_data2, dbg_uncov_addr2[15:0],
                     dbg_uncov_data};          // {last d, last addr, first d}
     assign  dbg6 = {acc_cnt, acc_ring[2], acc_ring[1], acc_ring[0]};
+    assign  dbg7 = {8'h00, wseen_cnt, wacc_cnt, wacc_rec};
 
 endmodule

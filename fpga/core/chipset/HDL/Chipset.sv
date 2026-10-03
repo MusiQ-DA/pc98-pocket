@@ -124,6 +124,9 @@ module CHIPSET #(
         // RAM.sv's accept-side record: the last three writes the FSM
         // committed to serve ({parked?, word, addr[19:0], data}).
         output  logic   [103:0] dbg_chipset11,
+        // Watch-address seen/accept counts plus the last accepted record --
+        // {8'h00, wseen[7:0], wacc[7:0], rec[31:0]}, see RAM.sv.
+        output  logic   [55:0]  dbg_chipset12,
         // The GVRAM sequencer's own view: where the plane walk (or the
         // service channel) is parked -- see pc98_gvram_seq's dbg port.
         output  logic   [7:0]   dbg_gvram,
@@ -678,7 +681,9 @@ module CHIPSET #(
         .dbg3                               (dbg_chipset4),
         .dbg4                               (dbg_chipset8),
         .dbg5                               (dbg_chipset9),
-        .dbg6                               (dbg_chipset11)
+        .dbg6                               (dbg_chipset11),
+        .dbg7                               (dbg_chipset12),
+        .dbg_watch_addr                     (dbg_watch_addr)
     );
 
     // JTAG probe bundle: {arbiter hold/DRQ, RAM FSM state} plus the wait

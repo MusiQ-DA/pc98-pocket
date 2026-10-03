@@ -1438,6 +1438,13 @@ module core_top (
             8'h6f:   probe_data_c = chipset_dbg11[63:32];
             8'h70:   probe_data_c = chipset_dbg11[95:64];
             8'h71:   probe_data_c = {24'h0, chipset_dbg11[103:96]};
+            // 0x72: last accepted write to the watch address
+            // ({1,pend,word,addr[19:0],data}); 0x73: {wseen,wacc} counts --
+            // wseen < arbiter watch_cnt means writes die before write_command
+            // (sequencer swallow); wacc < wseen means accepted elsewhere or
+            // mapped away (gvram_page1 redirect shows a wrong addr in 0x72).
+            8'h72:   probe_data_c = chipset_dbg12[31:0];
+            8'h73:   probe_data_c = {16'h0, chipset_dbg12[55:32]};
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -2435,6 +2442,7 @@ module core_top (
     wire  [31:0] chipset_dbg9;
     wire [127:0] chipset_dbg10;
     wire [103:0] chipset_dbg11;
+    wire  [55:0] chipset_dbg12;
     wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
     wire [33:0]  dbg_scsi;   // {ack,req,mg_rd_cnt,post_cnt,rom_rd_cnt}
     wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
@@ -2676,6 +2684,7 @@ module core_top (
         .dbg_chipset9                       (chipset_dbg9),
         .dbg_chipset10                      (chipset_dbg10),
         .dbg_chipset11                      (chipset_dbg11),
+        .dbg_chipset12                      (chipset_dbg12),
         .dbg_gvram                          (gvram_dbg),
         .dbg_scsi                           (dbg_scsi),
     //  .terminal_count_n                   (terminal_count_n)

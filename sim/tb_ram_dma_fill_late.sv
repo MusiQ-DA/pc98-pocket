@@ -29,7 +29,7 @@
 `default_nettype none
 `timescale 1ns/1ps
 
-module tb_ram_dma_fill;
+module tb_ram_dma_fill_late;
 
     // clk_chipset is 42.954545 MHz.
     logic clk = 1'b0;
@@ -41,6 +41,7 @@ module tb_ram_dma_fill;
     // The DMA engine steps on cpu_ce_posedge; the metal default during the
     // boot fill is the 9.54 MHz pacing.
     wire  clk_cpu, cpu_ce_posedge, cpu_ce_negedge, peripheral_ce;
+    logic [1:0] spd = 2'b00;
     wire  cycle_accrate, shift_read_timing;
     wire  [7:0] ccc_div, ccc_dec;
     wire  [1:0] ram_rd_wait, ram_wr_wait;
@@ -50,7 +51,7 @@ module tb_ram_dma_fill;
         .clock                              (clk),
         .reset                              (reset),
         .clk_select_load                    (biu_done),
-        .clk_select                         (2'b00),      // 4.9 MHz
+        .clk_select                         (spd),        // +SPEED=n
         .cpu_clk_pin                        (clk_cpu),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
@@ -133,21 +134,6 @@ module tb_ram_dma_fill;
     // DRQ per byte, the way pc98_fdc_glue shapes it: the request drops for
     // the whole width of each ack, so every byte is a fresh request edge.
     logic       want_drq = 1'b0;
-    // gvram_page1_flag glitch injection: +P1AT=n pulses the flag for
-    // P1LEN clocks starting n clocks after want_drq rises -- models the
-    // gvram sequencer's mem_page1 window overlapping a fill byte.
-    logic       p1_flag = 1'b0;
-    int         p1_at = -1, p1_len = 8;
-    int         p1_tick = 0;
-    always_ff @(posedge clk) begin
-        if (!want_drq) begin
-            p1_tick <= 0;
-            p1_flag <= 1'b0;
-        end else if (p1_at >= 0) begin
-            p1_tick <= p1_tick + 1;
-            p1_flag <= (p1_tick >= p1_at && p1_tick < p1_at + p1_len);
-        end
-    end
     logic [3:0] dreq = 4'b0000;
     always_ff @(posedge clk) begin
         if (reset)
@@ -203,7 +189,20 @@ module tb_ram_dma_fill;
 
     // internal_data_bus: Bus_Arbiter's default is the external bus; a bench
     // CPU-side write owns it during its own strobe.
-    wire [7:0]  data_bus_ext = fdc_byte;
+    // +LATEDATA=1 models the metal path: fifo_q -> fdd_readdata (reg) ->
+    // data_bus_out (reg) -> data_bus_ext, i.e. the bus carries the fifo byte
+    // two chipset clocks after fdd_dma_read goes up.
+    int         latedata = 0;
+    int         extwr = 0;
+    wire        dev_rd = (~dack_n[2] | ~dack_n[3]) & ~ab_io_read_n;
+    logic [7:0] fdd_readdata = 8'h00;
+    logic [7:0] dbo = 8'h00;
+    always_ff @(posedge clk) begin
+        if (latedata && dev_rd) fdd_readdata <= fdc_byte;
+        if (latedata && dev_rd) dbo          <= fdd_readdata;
+        if (!latedata)          dbo          <= fdc_byte;
+    end
+    wire [7:0]  data_bus_ext = latedata ? dbo : fdc_byte;
     wire [7:0]  internal_data_bus = (~bench_memwr_n & ~aen_n) ? bench_wdata
                                                             : data_bus_ext;
 
@@ -320,7 +319,7 @@ module tb_ram_dma_fill;
     RAM u_ram (
         .clock(clk), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram_w),
-        .gvram_page1_flag(p1_flag),
+        .gvram_page1_flag(1'b0),
         .address(bus_addr), .internal_data_bus(internal_data_bus),
         .data_bus_out(ram_dout),
         .analog_mode(1'b0),
@@ -332,9 +331,8 @@ module tb_ram_dma_fill;
         .memory_access_ready(ram_ready_w),
         .access_complete(access_complete_w),
         .ram_address_select_n(ram_address_select_n),
-        .dbg(), .dbg2(ram_dbg2), .dbg3(ram_dbg3),
-        .dbg4(), .dbg5(), .dbg6(), .dbg7(),
         .dbg_watch_addr(20'hFFFFF),
+        .dbg(), .dbg2(ram_dbg2), .dbg3(ram_dbg3),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
@@ -472,8 +470,12 @@ module tb_ram_dma_fill;
         logic [7:0] got;
 
         void'($value$plusargs("CLIPW=%d", clipw));
-        void'($value$plusargs("P1AT=%d", p1_at));
-        void'($value$plusargs("P1LEN=%d", p1_len));
+        void'($value$plusargs("LATEDATA=%d", latedata));
+        begin : speedp
+            int tmp;
+            if ($value$plusargs("SPEED=%d", tmp)) spd = tmp[1:0];
+        end
+        void'($value$plusargs("EXTWR=%d", extwr));
         repeat (40) @(posedge clk);
         reset = 1'b0;
         repeat (100) @(posedge clk);
@@ -486,6 +488,7 @@ module tb_ram_dma_fill;
         dmac_wr(4'h4, FILL_BASE[15:8]);          // base high
         dmac_wr(4'h5, (FILL_LEN-1) & 8'hFF);     // count low
         dmac_wr(4'h5, 8'((FILL_LEN-1) >> 8));    // count high
+        if (extwr != 0) dmac_wr(4'h8, 8'h20);    // command: extended write
         dmac_wr(4'hA, 8'h02);                    // unmask ch2
         repeat (8) @(posedge clk);               // let the mask write land
         if (u_dmac.u_Priority_Encoder.mask_register != 4'b1011)
