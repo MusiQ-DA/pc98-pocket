@@ -1402,6 +1402,14 @@ module core_top (
             // count is a byte the guest asked to store and nobody wrote.
             8'h39:   probe_data_c = chipset_dbg3;
             8'h3a:   probe_data_c = chipset_dbg4;
+            // 0x3b-0x3e: Bus_Arbiter's channel-2 burst witness -- the first
+            // four memory writes of the latest burst. Each slot is
+            // {4 spare bits, addr[19:0], data[7:0]}; 0x3b's spare nibble
+            // carries the burst counter instead.
+            8'h3b:   probe_data_c = chipset_dbg5[31:0];
+            8'h3c:   probe_data_c = chipset_dbg5[63:32];
+            8'h3d:   probe_data_c = chipset_dbg5[95:64];
+            8'h3e:   probe_data_c = chipset_dbg5[127:96];
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -2388,6 +2396,7 @@ module core_top (
     wire  [7:0]  chipset_dbg2;
     wire [31:0]  chipset_dbg3;
     wire [31:0]  chipset_dbg4;
+    wire [127:0] chipset_dbg5;
     wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
     wire [33:0]  dbg_scsi;   // {ack,req,mg_rd_cnt,post_cnt,rom_rd_cnt}
     wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
@@ -2621,6 +2630,7 @@ module core_top (
         .dbg_chipset2                       (chipset_dbg2),
         .dbg_chipset3                       (chipset_dbg3),
         .dbg_chipset4                       (chipset_dbg4),
+        .dbg_chipset5                       (chipset_dbg5),
         .dbg_gvram                          (gvram_dbg),
         .dbg_scsi                           (dbg_scsi),
     //  .terminal_count_n                   (terminal_count_n)

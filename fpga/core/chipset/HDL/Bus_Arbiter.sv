@@ -49,7 +49,15 @@ module BUS_ARBITER (
     // JTAG probe (PC98_JTAG): why the CPU is off the bus --
     // {hold granted, bus released, dmac wants hold, external master wants
     //  hold, DRQ3..DRQ0 seen as requests (pin low)}.
-    output  logic   [7:0]   dbg
+    output  logic   [7:0]   dbg,
+    // JTAG probe (PC98_JTAG): the first four memory writes of the latest
+    // channel-2 burst. A fresh burst begins when DACK2 falls; each falling
+    // edge of the arbiter's memory-write strobe records {address, data} --
+    // exactly what the RAM port is offered -- so a byte-0 that arrived
+    // stale, at the wrong address, or not at all stays visible afterwards.
+    // [27:0] = write0 {addr[19:0], data[7:0]}, [31:28] = burst counter,
+    // then write1..3 packed in 28-bit fields above it.
+    output  logic   [127:0] dbg_dma
 );
 
     //
@@ -256,6 +264,40 @@ module BUS_ARBITER (
     assign  memory_write_n              = memory_write_n_direction ? memory_write_n_ext : ab_memory_write_n;
     assign  memory_read_n               = memory_read_n_direction  ? memory_read_n_ext  : ab_memory_read_n;
     assign no_command_state             = io_write_n & io_read_n & memory_write_n & memory_read_n;
+
+
+    //
+    // DMA burst witness (JTAG probe)
+    //
+    logic   [2:0]   burst_idx;
+    logic           prev_dack2;
+    logic           prev_ab_mw;
+    logic   [3:0]   burst_cnt;
+    logic   [27:0]  burst_log [0:3];
+
+    always_ff @(posedge clock) begin
+        if (reset) begin
+            prev_dack2 <= 1'b1;
+            prev_ab_mw <= 1'b1;
+            burst_idx  <= 3'd0;
+            burst_cnt  <= 4'd0;
+        end
+        else begin
+            prev_dack2 <= dma_acknowledge_n[2];
+            prev_ab_mw <= ab_memory_write_n;
+            if (prev_dack2 & ~dma_acknowledge_n[2]) begin
+                burst_idx <= 3'd0;
+                burst_cnt <= burst_cnt + 4'd1;
+            end
+            else if (prev_ab_mw & ~ab_memory_write_n && burst_idx < 3'd4) begin
+                burst_log[burst_idx] <= {address, internal_data_bus};
+                burst_idx <= burst_idx + 3'd1;
+            end
+        end
+    end
+
+    assign dbg_dma = {4'h0, burst_log[3], 4'h0, burst_log[2],
+                      4'h0, burst_log[1], burst_cnt, burst_log[0]};
 
 
     //

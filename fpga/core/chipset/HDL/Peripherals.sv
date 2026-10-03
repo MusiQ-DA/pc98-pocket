@@ -2536,7 +2536,14 @@ module PERIPHERALS #(
 
     always_comb
     begin
-        if (fdd_dma_read)
+        // The fifo head is already registered inside the floppy, so it can
+        // reach the bus combinationally for the whole acknowledged slot --
+        // not only while io_read_n is low -- which removes every setup gap
+        // a memory-write strobe could otherwise sample stale data through.
+        // io_write_n stays high for a read byte; on a write byte it falls
+        // inside the slot and hands the bus back to the registered path
+        // before the memory data arrives.
+        if (fdd_dma_ack && io_write_n)
         begin
             data_bus_out_from_chipset = 1'b1;
             data_bus_out = fdd_dma_readdata;
