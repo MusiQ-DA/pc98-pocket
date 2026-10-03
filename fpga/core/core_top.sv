@@ -1189,8 +1189,12 @@ module core_top (
     reg        pc_hist_frozen = 1'b0;
     wire [19:0] pc_now = v30_addr;
     wire       pc_in_errhalt = (pc_now == 20'hF99E5);
+    // Probe write 0x85 re-arms the history: the boot-time F0 write fires
+    // the freeze long before any guest crash, so without this the snapshot
+    // can never see a guest fault's trail.
+    wire       pc_rearm = probe_wr_pulse && (probe_waddr_c == 7'h05);
     always_ff @(posedge clk_chipset) begin
-        if (reset || soft_reset_cpu) begin
+        if (reset || soft_reset_cpu || pc_rearm) begin
             pc_hist_frozen <= 1'b0;
             pc_hist_w      <= 5'd0;
         end else if (!pc_hist_frozen) begin
@@ -1217,7 +1221,7 @@ module core_top (
     reg        pc_snap_valid = 1'b0;
     wire       pc_hist_new   = (pc_now != pc_hist_prev);
     always_ff @(posedge clk_chipset) begin
-        if (reset)
+        if (reset || pc_rearm)
             pc_snap_valid <= 1'b0;
         else if (!pc_snap_valid && (f0_port_write || pc_in_errhalt || zet_fault)) begin
             pc_snap_valid <= 1'b1;

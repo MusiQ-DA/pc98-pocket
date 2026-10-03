@@ -86,6 +86,12 @@ proc rd {addr} {
 #   0x38       guest-mem read: {busy, svc_addr[19:0], rdata} -- write slot
 #              0x84 launches an address, each read launches the next
 #              (jtag_gvram.tcl)
+#
+#   write 0x85 re-arms the PC-history snapshot: clears pc_hist_frozen and
+#              pc_snap_valid so the NEXT freeze trigger (F0 write, errhalt
+#              PC, or zet_fault) captures a fresh trail. Needed because the
+#              boot-time F0 write otherwise consumes the snapshot before
+#              any guest fault can.
 set regs {
     16  V30_PSW_PC
     17  V30_SREG3_SREG2
