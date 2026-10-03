@@ -42,6 +42,10 @@ module RAM (
     // {parked write, refresh busy, read in flight, completing-is-read,
     //  completing-is-write, state[2:0]}. Unconsumed it synthesises away.
     output  logic   [7:0]   dbg,
+    // dbg2 = {first-drop FSM state, in-flight-was-write, dropped addr,
+    //         drop count}, dbg3 = parked-write count. DMA-fill loss witness.
+    output  logic   [31:0]  dbg2,
+    output  logic   [31:0]  dbg3,
     // SDRAM
     output  logic   [12:0]  sdram_address,
     output  logic           sdram_cke,
@@ -704,5 +708,50 @@ module RAM (
 
     assign  dbg = {wc_pend, refresh_mode, read_flag,
                    accept_live_rd, accept_live_wr, state[2:0]};
+
+    // Drop witness (PC98_JTAG): a write strobe seen while the park slot is
+    // already full is lost for good -- neither served nor parked. On the
+    // metal this is the rare second strobe of a back-to-back DMA fill
+    // landing inside a slow access's window (row miss, refresh, svc hold):
+    // count each lost strobe once and keep the first one's address and the
+    // FSM state it collided with. drop_counted rearms when the bus strobe
+    // releases so a held strobe counts once, not per clock.
+    logic        drop_counted;
+    logic [15:0] dbg_parks;
+    logic [15:0] dbg_drops;
+    logic [23:0] dbg_drop_addr;
+    logic        dbg_drop_wr;
+    logic [2:0]  dbg_drop_st;
+
+    wire drop_ev = write_command & (state != IDLE) & wc_pend
+                 & ~write_strobe_match;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            drop_counted  <= 1'b0;
+            dbg_parks     <= 16'd0;
+            dbg_drops     <= 16'd0;
+            dbg_drop_addr <= 24'd0;
+            dbg_drop_wr   <= 1'b0;
+            dbg_drop_st   <= 3'd0;
+        end else begin
+            if (new_write_strobe && (dbg_parks != 16'hFFFF))
+                dbg_parks <= dbg_parks + 16'd1;
+            if (~write_command)   drop_counted <= 1'b0;
+            else if (drop_ev)     drop_counted <= 1'b1;
+            if (drop_ev & ~drop_counted) begin
+                if (dbg_drops != 16'hFFFF) dbg_drops <= dbg_drops + 16'd1;
+                if (dbg_drops == 16'd0) begin
+                    dbg_drop_addr <= latch_address;
+                    dbg_drop_wr   <= accept_live_wr;
+                    dbg_drop_st   <= state;
+                end
+            end
+        end
+    end
+
+    assign  dbg2 = {dbg_drop_st, dbg_drop_wr, dbg_drop_addr[19:0],
+                    dbg_drops[7:0]};          // {st,wr,addr[19:0],drops}
+    assign  dbg3 = {16'd0, dbg_parks};        // parked-write count
 
 endmodule

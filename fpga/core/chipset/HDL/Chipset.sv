@@ -102,6 +102,9 @@ module CHIPSET #(
         // state, out to core_top's probe. Unconsumed they synthesise away.
         output  logic   [15:0]  dbg_chipset,
         output  logic   [7:0]   dbg_chipset2,
+        // RAM.sv's DMA-fill loss witness -- drop count + first collision.
+        output  logic   [31:0]  dbg_chipset3,
+        output  logic   [31:0]  dbg_chipset4,
         // The GVRAM sequencer's own view: where the plane walk (or the
         // service channel) is parked -- see pc98_gvram_seq's dbg port.
         output  logic   [7:0]   dbg_gvram,
@@ -646,7 +649,9 @@ module CHIPSET #(
         .ram_write_wait_cycle               (ram_write_wait_cycle),
         .vram_rd_wait_cycle                 (vram_rd_wait),
         .vram_wr_wait_cycle                 (vram_wr_wait),
-        .dbg                                (ram_dbg)
+        .dbg                                (ram_dbg),
+        .dbg2                               (dbg_chipset3),
+        .dbg3                               (dbg_chipset4)
     );
 
     // JTAG probe bundle: {arbiter hold/DRQ, RAM FSM state} plus the wait

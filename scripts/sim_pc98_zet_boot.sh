@@ -80,7 +80,9 @@ CPU_DEF="+define+ZET_CPU"
 [ "$REALMEM" = 1 ] && CPU_DEF="$CPU_DEF+REALMEM"
 
 if [ "$REALMEM" = 1 ]; then
-    MEMFILES="$K/RAM.sv $K/Ready.sv $S/sdram_shim.sv $S/sdram_mp.sv sim/sdram_board_model.sv sim/sdram_model.sv"
+    MEMFILES="$K/RAM.sv $K/Ready.sv $S/sdram_shim.sv $S/sdram_mp.sv \
+        $S/pc98_gvram_seq.sv $S/pc98_grcg.sv $S/pc98_egc.sv \
+        sim/sdram_board_model.sv sim/sdram_model.sv"
 else
     MEMFILES=""
 fi

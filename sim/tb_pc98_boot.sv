@@ -192,6 +192,13 @@ module tb_pc98_boot;
     // stale-byte or dropped-command completion in the bridge path shows up
     // here even when the cycle looked protocol-clean from outside. C0000-
     // E7FFF is open bus on the machine, so it is outside the check.
+`ifdef REALMEM
+    // Graphics-path state, declared ahead of in_e2e_check (declared later at
+    // the datapath it drives).
+    logic       pc98_analog_q = 1'b0;
+    logic       access_page_q = 1'b0;
+    wire        grcg_active;
+`endif
     int          ack_rd_mismatches = 0;
     logic [19:0] ack_bad_addr = 20'h0;
     function automatic logic [7:0] expected_byte(input logic [19:0] a);
@@ -200,7 +207,17 @@ module tb_pc98_boot;
         else                 expected_byte = ram[a];
     endfunction
     function automatic logic in_e2e_check(input logic [19:0] a);
+`ifdef REALMEM
+        // A graphics-window read the sequencer expanded answers with a
+        // transform (TCR/EGC), not the stored byte -- uncheckable flat.
+        logic in_gv;
+        in_gv = (a[19:15] == 5'b10101) | (a[19:16] == 4'hB)
+              | (pc98_analog_q & (a[19:15] == 5'b11100));
+        in_e2e_check = ((a < 20'hC0000) | (a >= 20'hE8000))
+                     & ~(in_gv & (grcg_active | access_page_q));
+`else
         in_e2e_check = (a < 20'hC0000) | (a >= 20'hE8000);
+`endif
     endfunction
     always_ff @(posedge clk_chipset) begin
         if (zwb_ack && !zwb_we && !zwb_tga) begin
@@ -497,24 +514,91 @@ module tb_pc98_boot;
 `ifdef REALMEM
     wire [7:0]  ram_dout, ram_dout_hi;
     wire        memory_access_ready, ram_address_select_n;
+    wire        ram_ready_w;
     wire        initilized_sdram_w, access_complete_w;
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
     logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
 
+    // ---- the graphics path, as core_top wires it --------------------------
+    //
+    // pc98_gvram_seq sits between the guest strobes and RAM.sv exactly the
+    // way Chipset.sv has it: pass-through when no charger is armed, one
+    // SDRAM op per live plane when the GRCG/EGC is on. The ITF's f87d5 test
+    // (analog on, RMW fill both pages, TCR verify) exercises the real
+    // expand path here -- without this the bench's flat A8000 window passes
+    // the verify vacuously, by storing and returning the same bytes.
+    //
+    // The charger registers the POST programs: 0x7C mode (and tile-count
+    // reset), 0x7E tile bytes, 0xA6 access page, 0x6A bit0 the E0000 plane.
+    wire        io_w_active = ~io_wr_n & ~test_aen & (cpu_address[15:8] == 8'h00);
+    always_ff @(posedge clk_chipset) begin
+        if (io_w_active) begin
+            if (cpu_address[7:0] == 8'h6A) pc98_analog_q <= cpu_data_bus[0];
+            if (cpu_address[7:0] == 8'hA6) access_page_q <= cpu_data_bus[0];
+        end
+    end
+
+    wire        grcg_rmw;
+    wire [3:0]  grcg_mask;
+    wire [7:0]  grcg_tile [0:3];
+    pc98_grcg u_grcg (
+        .clk(clk_chipset), .reset(reset),
+        .cs_mode(io_w_active & (cpu_address[7:0] == 8'h7C)),
+        .cs_tile(io_w_active & (cpu_address[7:0] == 8'h7E)),
+        .io_read_n(io_rd_n), .io_write_n(io_wr_n),
+        .io_data_in(cpu_data_bus), .io_data_out(),
+        .active(grcg_active), .rmw(grcg_rmw), .plane_mask(grcg_mask),
+        .tile_o(grcg_tile),
+        .cpu_wdata(8'h00),
+        .plane_rdata('{8'h00, 8'h00, 8'h00, 8'h00}),
+        .plane_wdata(), .plane_we(), .cpu_rdata()
+    );
+
+    wire [19:0] seq_mem_addr;
+    wire [7:0]  seq_mem_wdata, seq_cpu_rdata, seq_cpu_rdata_hi;
+    wire        seq_mem_word, seq_mem_rd, seq_mem_wr, seq_mem_page1;
+    wire [7:0]  dbg_gvram;
+    pc98_gvram_seq #(.EGC(1'b1)) u_gvram_seq (
+        .clk(clk_chipset), .reset(reset),
+        .cpu_gvram(~ram_address_select_n),
+        .cpu_rd(~mem_rd_n), .cpu_wr(~mem_wr_n),
+        .cpu_word(cpu_word_access),
+        .cpu_addr(cpu_address), .cpu_wdata(cpu_data_bus),
+        .cpu_wdata_hi(cpu_data_bus_hi),
+        .cpu_rdata(seq_cpu_rdata), .cpu_rdata_hi(seq_cpu_rdata_hi),
+        .cpu_ready(memory_access_ready),
+        .grcg_active(grcg_active), .grcg_rmw(grcg_rmw),
+        .grcg_mask(grcg_mask), .grcg_tile(grcg_tile),
+        .analog_mode(pc98_analog_q),
+        .access_page(access_page_q), .mem_page1(seq_mem_page1),
+        .egc_active(1'b0), .egc_wr(1'b0), .egc_rg(4'h0), .egc_d(8'h0),
+        .svc_req(1'b0), .svc_we(1'b0), .svc_raw(1'b0),
+        .svc_addr(20'h0), .svc_wdata(8'h0),
+        .svc_done(), .svc_rdata(),
+        .dbg(dbg_gvram),
+        .mem_addr(seq_mem_addr), .mem_wdata(seq_mem_wdata),
+        .mem_word(seq_mem_word),
+        .mem_rd(seq_mem_rd), .mem_wr(seq_mem_wr),
+        .mem_rdata(ram_dout), .mem_rdata_hi(ram_dout_hi),
+        .mem_done(access_complete_w),
+        .mem_ready(ram_ready_w)
+    );
+
     RAM u_ram (
         .clock(clk_chipset), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram_w),
-        .address(cpu_address), .internal_data_bus(cpu_data_bus),
+        .gvram_page1_flag(seq_mem_page1),
+        .address(seq_mem_addr), .internal_data_bus(seq_mem_wdata),
         .data_bus_out(ram_dout),
-        .analog_mode(1'b0),
-        .word_access(cpu_word_access),
+        .analog_mode(pc98_analog_q),
+        .word_access(seq_mem_word),
         .internal_data_bus_hi(cpu_data_bus_hi),
         .data_bus_out_hi(ram_dout_hi),
-        .memory_read_n(mem_rd_n), .memory_write_n(mem_wr_n),
+        .memory_read_n(~seq_mem_rd), .memory_write_n(~seq_mem_wr),
         .no_command_state(mem_rd_n & mem_wr_n & io_rd_n & io_wr_n),
-        .memory_access_ready(memory_access_ready),
+        .memory_access_ready(ram_ready_w),
         .access_complete(access_complete_w),
         .ram_address_select_n(ram_address_select_n),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
@@ -565,25 +649,31 @@ module tb_pc98_boot;
     );
 
     // RAM.sv answers where it is selected; the mirror answers the rest
-    // (A0000-A7FFF and C0000-E7FFF are not in its select).
-    wire [7:0] mem_read_byte = ~ram_address_select_n ? ram_dout
+    // (A0000-A7FFF and C0000-E7FFF are not in its select). The sequencer's
+    // cpu_rdata/cpu_rdata_hi are what the guest lanes see, pass-through or
+    // transformed -- same mux Chipset.sv drives onto internal_data_bus_ram.
+    wire [7:0] mem_read_byte = ~ram_address_select_n ? seq_cpu_rdata
                             : is_xrom(cpu_address)   ? xrom_byte(cpu_address)
                                                      : ram[cpu_address];
     // The odd lane of a one-cycle word read; the SDRAM serves those, the
     // option ROM serves its own.
-    wire [7:0] din_hi = (~mem_rd_n & ~ram_address_select_n) ? ram_dout_hi
+    wire [7:0] din_hi = (~mem_rd_n & ~ram_address_select_n) ? seq_cpu_rdata_hi
                       : (~mem_rd_n & is_xrom(cpu_address))  ? xrom_byte(cpu_address | 20'h1)
                                                             : 8'hFF;
 
     // The mirror check. On the trailing edge of a read RAM.sv answered, what
-    // it gave against what the guest put there.
+    // it gave against what the guest put there. A read the sequencer expanded
+    // (charger armed, or the page bit banking the window) returns a
+    // transform -- the TCR match mask or the EGC pipeline byte -- not the
+    // raw mirror byte, so those are skipped.
     logic       mrd_d = 1'b1;
     logic [7:0] mrd_live;
     int         mem_mismatches = 0;
     always_ff @(posedge clk_chipset) begin
         mrd_d <= mem_rd_n;
         if (~mem_rd_n) mrd_live <= mem_read_byte;
-        if (mem_rd_n & ~mrd_d & ~ram_address_select_n) begin
+        if (mem_rd_n & ~mrd_d & ~ram_address_select_n
+          & ~(grcg_active | access_page_q)) begin
             logic [7:0] want_b;
             want_b = is_rom(cpu_address) ? rom_byte(cpu_address)
                                          : ram[cpu_address];

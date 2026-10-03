@@ -1396,6 +1396,12 @@ module core_top (
             // seen=0 just means no fault yet; seen=1 pins the instruction
             // whose decode faulted, and opc is the byte it decoded.
             8'h38:   probe_data_c = {3'b000, fault_seen, zet_opc, fault_pc};
+            // 0x39/0x3a: RAM.sv's DMA-fill loss witness -- 0x39 =
+            // {first-drop FSM state, in-flight-was-write, dropped addr,
+            //  drop count}, 0x3a = parked-write count. A nonzero drop
+            // count is a byte the guest asked to store and nobody wrote.
+            8'h39:   probe_data_c = chipset_dbg3;
+            8'h3a:   probe_data_c = chipset_dbg4;
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -2380,6 +2386,8 @@ module core_top (
     // the macro is off -- the cone prunes.
     wire [15:0]  chipset_dbg;
     wire  [7:0]  chipset_dbg2;
+    wire [31:0]  chipset_dbg3;
+    wire [31:0]  chipset_dbg4;
     wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
     wire [33:0]  dbg_scsi;   // {ack,req,mg_rd_cnt,post_cnt,rom_rd_cnt}
     wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
@@ -2611,6 +2619,8 @@ module core_top (
         .address_enable_n                   (chipset_aen),
         .dbg_chipset                        (chipset_dbg),
         .dbg_chipset2                       (chipset_dbg2),
+        .dbg_chipset3                       (chipset_dbg3),
+        .dbg_chipset4                       (chipset_dbg4),
         .dbg_gvram                          (gvram_dbg),
         .dbg_scsi                           (dbg_scsi),
     //  .terminal_count_n                   (terminal_count_n)
