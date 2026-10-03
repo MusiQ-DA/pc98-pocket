@@ -2380,6 +2380,17 @@ module PERIPHERALS #(
     //
     // data_bus_out
     //
+    // The mux below registers every source one clock deep. For the FDC's
+    // DMA-read byte that makes the bus three stages late overall (floppy
+    // fifo head -> fdd_readdata -> data_bus_out), so the first clocks of
+    // each io_read_n window still carry the previous byte. A 71071 memory
+    // write strobe sampled inside that window lands the stale byte, which
+    // is how byte 0 of every sector fill arrives as 0x00. fdd_dma_readdata
+    // is the fifo head and is already registered inside the floppy, so it
+    // is forwarded combinationally while a DMA read is in flight; every
+    // other source keeps the registered path.
+    logic   [7:0]   data_bus_out_q;
+    logic           data_bus_out_from_chipset_q;
 
     always_ff @(posedge clock)
     begin
@@ -2388,24 +2399,24 @@ module PERIPHERALS #(
             // During the acknowledge the master either drives its own vector
             // or puts the slave's ID on the cascade lines and stands down --
             // data_bus_io is how the slave says it recognized itself.
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= (~interrupt2_data_bus_io) ? interrupt2_data_bus_out
-                                                      : interrupt_data_bus_out;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= (~interrupt2_data_bus_io) ? interrupt2_data_bus_out
+                                                        : interrupt_data_bus_out;
         end
         else if ((~interrupt2_chip_select_n) && (~io_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= interrupt2_data_bus_out;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= interrupt2_data_bus_out;
         end
         else if ((~interrupt_chip_select_n) && (~io_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= interrupt_data_bus_out;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= interrupt_data_bus_out;
         end
         else if ((~timer_chip_select_n) && (~io_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= timer_data_bus_out;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= timer_data_bus_out;
         end
         // BEFORE the 8255, and this order is the whole point.
         //
@@ -2421,14 +2432,14 @@ module PERIPHERALS #(
         // is supposed to catch rather than create.
         else if (sysport_read)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= sysport_data;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= sysport_data;
         end
         // ARTIC: 0x5C-0x5F, the free-running counter games pace loops off.
         else if (artic_sel & ~io_read_n)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= artic_data;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= artic_data;
         end
         // The keyboard 8251 at 0x41/0x43, claiming exactly those two ports.
         // The decode is exact so nothing above can collide with it; this
@@ -2436,71 +2447,71 @@ module PERIPHERALS #(
         // mux's history.
         else if (kbd8251_read_select)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= kbd8251_read_data;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= kbd8251_read_data;
         end
         // Bus mouse 0x7FD9/B/D -- 7FDF reads stay unclaimed, like np21w.
         else if (busmouse_read_select)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= busmouse_read_data;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= busmouse_read_data;
         end
         else if (scsi_rom_select && (~memory_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= scsi_rom_q;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= scsi_rom_q;
         end
         else if (scsi_read_select)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= scsi_data_out;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= scsi_data_out;
         end
 `ifdef ENABLE_OPNA
         else if (opna_read_select)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= opna_data_out;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= opna_data_out;
         end
 `endif
         else if (grcg_mode_cs & ~io_read_n)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= grcg_mode_rd;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= grcg_mode_rd;
         end
         else if (pg_a4_cs & ~io_read_n)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= {7'b0, gvram_disp_page};   // np21w gdc_ia4
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= {7'b0, gvram_disp_page};   // np21w gdc_ia4
         end
         else if (pg_a6_cs & ~io_read_n)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= {7'b0, gvram_access_page}; // np21w gdc_ia6
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= {7'b0, gvram_access_page}; // np21w gdc_ia6
         end
         else if (gdc_stat_read)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= gdc_status;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= gdc_status;
         end
         else if (gdc_mode_read)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= (address[7:0] == 8'h68) ? pc98_mode1 : mode2_q;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= (address[7:0] == 8'h68) ? pc98_mode1 : mode2_q;
         end
         else if (fdd_stub_read)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= fdd_stub_data;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= fdd_stub_data;
         end
         else if (tvram_mem_select && (~memory_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= tvram_cpu_q;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= tvram_cpu_q;
         end
         else if (cgwin_mem_select && (~memory_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= cgwin_q;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= cgwin_q;
         end
         // CG data port (np21w cgrom_ia9): the glyph byte at the code/line/half
         // the guest last set on 0xA1/A3/A5. The gaiji RAM's read registers on
@@ -2508,18 +2519,32 @@ module PERIPHERALS #(
         // and is captured here on the cycles that follow.
         else if ((address[15:0] == 16'h00A9) && (~io_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= cg_a9_data;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= cg_a9_data;
         end
         else if ((~floppy0_chip_select_n || fdd_dma_read) && (~io_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= fdd_readdata;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= fdd_readdata;
         end
         else
         begin
-            data_bus_out_from_chipset <= 1'b0;
-            data_bus_out <= 8'b00000000;
+            data_bus_out_from_chipset_q <= 1'b0;
+            data_bus_out_q <= 8'b00000000;
+        end
+    end
+
+    always_comb
+    begin
+        if (fdd_dma_read)
+        begin
+            data_bus_out_from_chipset = 1'b1;
+            data_bus_out = fdd_dma_readdata;
+        end
+        else
+        begin
+            data_bus_out_from_chipset = data_bus_out_from_chipset_q;
+            data_bus_out = data_bus_out_q;
         end
     end
 
