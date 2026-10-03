@@ -267,39 +267,79 @@ module BUS_ARBITER (
 
 
     //
-    // DMA burst witness (JTAG probe)
+    // DMA sector-head witness (JTAG probe)
     //
-    logic   [2:0]   burst_idx;
-    logic           prev_dack2;
+    // A fresh head write is armed by (a) the FDC grant going active
+    // (DACK2 or DACK3 low -- the BIOS may program either channel), or
+    // (b) a long write gap inside a held grant: floppy.v only leaves
+    // S_WAIT_FOR_EMPTY_READ_FIFO once the fifo is EMPTY, then refills the
+    // whole next sector, so every sector boundary shows up as hundreds of
+    // idle clocks between memory-write strobes while the ack stays low.
+    // Each logged entry is {cpu_owned, dma_owned, drq_pin, 1'b0,
+    // addr[19:0], data[7:0]} so a head write can be told apart as a real
+    // DMA write, a CPU store that slipped into the window, or a PIO-mode
+    // fill where no ack was ever asserted.
+    //
     logic           prev_ab_mw;
-    logic   [3:0]   burst_cnt;
-    logic   [27:0]  burst_log [0:3];
+    logic           prev_fdc_ack;
+    logic   [15:0]  gap_cnt;
+    logic           fresh;
+    logic   [7:0]   head_cnt;
+    logic   [7:0]   grant_cnt;
+    logic   [15:0]  ack_wr_cnt;
+    logic   [31:0]  head_log [0:2];
+
+    localparam logic [15:0] GAP_THRESH = 16'd256;
+
+    wire    fdc_ack  = ~dma_acknowledge_n[2] | ~dma_acknowledge_n[3];
+    wire    dma_own  = ~dma_enable_n && ~(&dma_acknowledge_n);
+    wire    drq_pin  = ~dma_request[2] | ~dma_request[3];
 
     always_ff @(posedge clock) begin
         if (reset) begin
-            prev_dack2 <= 1'b0;
-            prev_ab_mw <= 1'b1;
-            burst_idx  <= 3'd0;
-            burst_cnt  <= 4'd0;
+            prev_ab_mw   <= 1'b1;
+            prev_fdc_ack <= 1'b0;
+            gap_cnt      <= 16'd0;
+            fresh        <= 1'b1;
+            head_cnt     <= 8'd0;
+            grant_cnt    <= 8'd0;
+            ack_wr_cnt   <= 16'd0;
         end
         else begin
-            // The FDC answers either channel 2 or 3 -- the BIOS programs the
-            // pair, so a fresh burst is either pin falling.
-            prev_dack2 <= ~dma_acknowledge_n[2] | ~dma_acknowledge_n[3];
-            prev_ab_mw <= ab_memory_write_n;
-            if (~prev_dack2 & (~dma_acknowledge_n[2] | ~dma_acknowledge_n[3])) begin
-                burst_idx <= 3'd0;
-                burst_cnt <= burst_cnt + 4'd1;
+            prev_ab_mw   <= ab_memory_write_n;
+            prev_fdc_ack <= fdc_ack;
+
+            if (~prev_fdc_ack & fdc_ack) begin
+                if (grant_cnt != 8'hff) grant_cnt <= grant_cnt + 8'd1;
+                fresh <= 1'b1;
             end
-            else if (prev_ab_mw & ~ab_memory_write_n && burst_idx < 3'd4) begin
-                burst_log[burst_idx] <= {address, internal_data_bus};
-                burst_idx <= burst_idx + 3'd1;
+
+            if (prev_ab_mw & ~ab_memory_write_n) begin
+                gap_cnt <= 16'd0;
+                if (fdc_ack && ack_wr_cnt != 16'hffff)
+                    ack_wr_cnt <= ack_wr_cnt + 16'd1;
+                if (fresh && head_cnt != 8'hff) begin
+                    head_log[2] <= head_log[1];
+                    head_log[1] <= head_log[0];
+                    head_log[0] <= {~address_enable_n && ~dma_own, dma_own,
+                                    drq_pin, 1'b0, address, internal_data_bus};
+                    head_cnt <= head_cnt + 8'd1;
+                end
+                fresh <= 1'b0;
             end
+            else if (fdc_ack) begin
+                if (gap_cnt != 16'hffff)
+                    gap_cnt <= gap_cnt + 16'd1;
+                if (gap_cnt >= GAP_THRESH)
+                    fresh <= 1'b1;
+            end
+            else
+                gap_cnt <= 16'd0;
         end
     end
 
-    assign dbg_dma = {4'h0, burst_log[3], 4'h0, burst_log[2],
-                      4'h0, burst_log[1], burst_cnt, burst_log[0]};
+    assign dbg_dma = {head_cnt, grant_cnt, ack_wr_cnt,
+                      head_log[2], head_log[1], head_log[0]};
 
 
     //
