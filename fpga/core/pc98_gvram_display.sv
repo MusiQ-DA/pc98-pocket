@@ -54,7 +54,9 @@ module pc98_gvram_display #(
     input  wire        analog_mode,       // port 0x6A bit 0: plane E exists
     // The "200 line" modes on this fixed 400-line raster: each guest line
     // serves two rasterlines. Set by Peripherals from the slave's CSRFORM
-    // LR field / mode1 bit 4 / a ~200-line SYNC AL -- see the w_step note.
+    // LR field / a ~200-line SYNC AL -- see the w_step note. (mode1 bit 4
+    // is NOT a source: np21w uses it only to keep the odd rasterlines
+    // dark -- the mabiki presentation, handled on the output side.)
     input  wire        dbl,
 
     // The slave GDC's display registers, live from pc98_gdc on this same

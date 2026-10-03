@@ -1480,8 +1480,13 @@ module core_top (
     // CHIPSET's doubled-mode flag. Their product crosses to clk_pix once --
     // a quasi-static pair, so tearing between them is at most one frame.
     wire       dbl200;                  // CHIPSET video: a doubled 200-line mode is up
+    wire       mabiki;                  // mode1[4]: odd rasterlines stay dark
     wire       dbl_skip_pix;
-    synch_3              s_dbl_skip_pix (osd_dbl_skip & dbl200, dbl_skip_pix, clk_pix);
+    // The odd-line skip fires for the machine's own mabiki flag (mode1[4] --
+    // software's 200-line display bit, np21w makegrph) OR when the user
+    // asked for the "Skip" presentation of a doubled mode.
+    synch_3              s_dbl_skip_pix ((osd_dbl_skip & dbl200) | mabiki,
+                                         dbl_skip_pix, clk_pix);
     wire       vid_txt;                 // CHIPSET video: the composited dot is text's
     wire pause_core = pause_core_chipset;
 
@@ -2560,6 +2565,7 @@ module core_top (
         .VID_HBlank                         (HBlank),
         .VID_VBlank                         (VBlank),
         .dbl200                             (dbl200),
+        .mabiki                             (mabiki),
         .VID_TXT                            (vid_txt),
         .address                            (chipset_address),
         .address_ext                        (bios_access_address),
