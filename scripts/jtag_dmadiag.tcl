@@ -73,18 +73,9 @@ puts [format "0x39 ram dbg2  = 0x%08X  (retired)"                  [rd 0x39]]
 puts [format "0x3a ram dbg3  = 0x%08X  {parks}"                    [rd 0x3a]]
 
 set s3e [rd 0x3e]
-puts [format "-- head_log (DMA-stream breaks / CPU writes in ack window) --"]
+puts [format "-- DMA-stream counters (break/watch rings trimmed for LABs) --"]
 puts [format "breaks=%d grants=%d ackwr=%d" \
     [expr {($s3e >> 24) & 0xff}] [expr {($s3e >> 16) & 0xff}] [expr {$s3e & 0xffff}]]
-puts [format "  newest  %s" [ent [rd 0x3b]]]
-puts [format "          %s"          [ent [rd 0x3c]]]
-puts [format "  oldest  %s" [ent [rd 0x3d]]]
-
-puts "-- first-4 sticky watch hits --"
-puts [format "  #0 %s" [ent [rd 0x6a]]]
-puts [format "  #1 %s" [ent [rd 0x6b]]]
-puts [format "  #2 %s" [ent [rd 0x6c]]]
-puts [format "  #3 %s" [ent [rd 0x6d]]]
 
 puts "-- watch ring (slot 0x8a target) --"
 puts [format "  watch_cnt=%d" [expr {[rd 0x67] >> 24}]]

@@ -50,11 +50,9 @@ module BUS_ARBITER (
     // {hold granted, bus released, dmac wants hold, external master wants
     //  hold, DRQ3..DRQ0 seen as requests (pin low)}.
     output  logic   [7:0]   dbg,
-    // JTAG probe (PC98_JTAG): DMA-stream address breaks. Fills are
-    // contiguous ascending, so every new buffer head (and every stray
-    // write escaping the stream) shows up as address != prev+1 inside
-    // the FDC ack window. dbg_dma keeps the last three breaks plus
-    // counters.
+    // JTAG probe (PC98_JTAG): DMA-stream counters. dbg_dma packs
+    // {break_cnt, grant_cnt, ack_wr_cnt}; the break/watch entry rings were
+    // dropped for LAB headroom once the byte0 wrap-clobber was found.
     output  logic   [127:0] dbg_dma,
     // Write watchpoint: probe slot 0x8a arms a 20-bit guest address;
     // every memory write landing on it is logged, CPU or DMA alike --
@@ -286,15 +284,11 @@ module BUS_ARBITER (
     //
     logic           prev_ab_mw;
     logic           prev_fdc_ack;
-    logic           have_prev;
-    logic   [19:0]  prev_dma_addr;
     logic   [7:0]   break_cnt;
     logic   [7:0]   grant_cnt;
     logic   [15:0]  ack_wr_cnt;
     logic   [7:0]   watch_cnt;
-    logic   [31:0]  head_log  [0:2];
     logic   [31:0]  watch_log [0:2];
-    logic   [31:0]  watch_first [0:3];
 
     wire    fdc_ack  = ~dma_acknowledge_n[2] | ~dma_acknowledge_n[3];
     wire    dma_own  = ~dma_enable_n && ~(&dma_acknowledge_n);
@@ -303,8 +297,6 @@ module BUS_ARBITER (
         if (reset) begin
             prev_ab_mw    <= 1'b1;
             prev_fdc_ack  <= 1'b0;
-            have_prev     <= 1'b0;
-            prev_dma_addr <= 20'd0;
             break_cnt     <= 8'd0;
             grant_cnt     <= 8'd0;
             ack_wr_cnt    <= 16'd0;
@@ -329,46 +321,17 @@ module BUS_ARBITER (
                                      internal_data_bus};
                     if (watch_cnt != 8'hff)
                         watch_cnt <= watch_cnt + 8'd1;
-                    if (watch_cnt < 8'd4)
-                        watch_first[watch_cnt[1:0]] <=
-                            {~address_enable_n && ~dma_own, dma_own,
-                             internal_data_bus != data_bus_ext,
-                             ~io_write_n, address, internal_data_bus};
                 end
-                if (fdc_ack) begin
-                    // Log every address break in the DMA stream, and every
-                    // write the CPU manages to slip into the ack window --
-                    // both are where a buffer's first byte can go missing
-                    // or land somewhere it should not.
-                    if (!dma_own || !have_prev ||
-                        address != prev_dma_addr + 20'd1) begin
-                        head_log[2] <= head_log[1];
-                        head_log[1] <= head_log[0];
-                        // flags: {cpu-owned write, dma-owned write,
-                        //         bus != data_bus_ext (mux picked another
-                        //         source), io_write_n low during the write}
-                        head_log[0] <= {~address_enable_n && ~dma_own, dma_own,
-                                        internal_data_bus != data_bus_ext,
-                                        ~io_write_n, address,
-                                        internal_data_bus};
-                        if (break_cnt != 8'hff)
-                            break_cnt <= break_cnt + 8'd1;
-                    end
-                    if (dma_own) begin
-                        prev_dma_addr <= address;
-                        have_prev <= 1'b1;
-                    end
-                end
+                if (fdc_ack && break_cnt != 8'hff)
+                    break_cnt <= break_cnt + 8'd1;
             end
         end
     end
 
-    assign dbg_dma = {break_cnt, grant_cnt, ack_wr_cnt,
-                      head_log[2], head_log[1], head_log[0]};
+    assign dbg_dma = {break_cnt, grant_cnt, ack_wr_cnt, 96'd0};
     assign dbg_dma3 = {watch_cnt, 24'h0, watch_log[2],
                        watch_log[1], watch_log[0]};
-    assign dbg_dma4 = {watch_first[3], watch_first[2],
-                       watch_first[1], watch_first[0]};
+    assign dbg_dma4 = 128'd0;
 
 
     //
