@@ -267,29 +267,26 @@ module BUS_ARBITER (
 
 
     //
-    // DMA sector-head witness (JTAG probe)
+    // DMA sequence-break witness (JTAG probe)
     //
-    // A fresh head write is armed by (a) the FDC grant going active
-    // (DACK2 or DACK3 low -- the BIOS may program either channel), or
-    // (b) a long write gap inside a held grant: floppy.v only leaves
-    // S_WAIT_FOR_EMPTY_READ_FIFO once the fifo is EMPTY, then refills the
-    // whole next sector, so every sector boundary shows up as hundreds of
-    // idle clocks between memory-write strobes while the ack stays low.
-    // Each logged entry is {cpu_owned, dma_owned, drq_pin, 1'b0,
-    // addr[19:0], data[7:0]} so a head write can be told apart as a real
-    // DMA write, a CPU store that slipped into the window, or a PIO-mode
-    // fill where no ack was ever asserted.
+    // The 71071 grants per byte in this design, so "burst boundary" does
+    // not isolate anything -- every write is its own grant. What marks a
+    // new FDC fill is an address break inside the ack window: fills are
+    // contiguous ascending, so the first write of each buffer (and any
+    // stray write that escapes the stream) is where address != prev+1.
+    // The ring holds the last three such writes as
+    // {cpu_owned, dma_owned, drq_pin, 1'b0, addr[19:0], data[7:0]} -- a
+    // head write landing on the previous buffer's base or carrying stale
+    // data stays visible afterwards.
     //
     logic           prev_ab_mw;
     logic           prev_fdc_ack;
-    logic   [15:0]  gap_cnt;
-    logic           fresh;
-    logic   [7:0]   head_cnt;
+    logic           have_prev;
+    logic   [19:0]  prev_dma_addr;
+    logic   [7:0]   break_cnt;
     logic   [7:0]   grant_cnt;
     logic   [15:0]  ack_wr_cnt;
     logic   [31:0]  head_log [0:2];
-
-    localparam logic [15:0] GAP_THRESH = 16'd256;
 
     wire    fdc_ack  = ~dma_acknowledge_n[2] | ~dma_acknowledge_n[3];
     wire    dma_own  = ~dma_enable_n && ~(&dma_acknowledge_n);
@@ -297,48 +294,49 @@ module BUS_ARBITER (
 
     always_ff @(posedge clock) begin
         if (reset) begin
-            prev_ab_mw   <= 1'b1;
-            prev_fdc_ack <= 1'b0;
-            gap_cnt      <= 16'd0;
-            fresh        <= 1'b1;
-            head_cnt     <= 8'd0;
-            grant_cnt    <= 8'd0;
-            ack_wr_cnt   <= 16'd0;
+            prev_ab_mw    <= 1'b1;
+            prev_fdc_ack  <= 1'b0;
+            have_prev     <= 1'b0;
+            prev_dma_addr <= 20'd0;
+            break_cnt     <= 8'd0;
+            grant_cnt     <= 8'd0;
+            ack_wr_cnt    <= 16'd0;
         end
         else begin
             prev_ab_mw   <= ab_memory_write_n;
             prev_fdc_ack <= fdc_ack;
 
-            if (~prev_fdc_ack & fdc_ack) begin
-                if (grant_cnt != 8'hff) grant_cnt <= grant_cnt + 8'd1;
-                fresh <= 1'b1;
-            end
+            if (~prev_fdc_ack & fdc_ack && grant_cnt != 8'hff)
+                grant_cnt <= grant_cnt + 8'd1;
 
             if (prev_ab_mw & ~ab_memory_write_n) begin
-                gap_cnt <= 16'd0;
                 if (fdc_ack && ack_wr_cnt != 16'hffff)
                     ack_wr_cnt <= ack_wr_cnt + 16'd1;
-                if (fresh && head_cnt != 8'hff) begin
-                    head_log[2] <= head_log[1];
-                    head_log[1] <= head_log[0];
-                    head_log[0] <= {~address_enable_n && ~dma_own, dma_own,
-                                    drq_pin, 1'b0, address, internal_data_bus};
-                    head_cnt <= head_cnt + 8'd1;
+                if (fdc_ack) begin
+                    // Log every address break in the DMA stream, and every
+                    // write the CPU manages to slip into the ack window --
+                    // both are where a buffer's first byte can go missing
+                    // or land somewhere it should not.
+                    if (!dma_own || !have_prev ||
+                        address != prev_dma_addr + 20'd1) begin
+                        head_log[2] <= head_log[1];
+                        head_log[1] <= head_log[0];
+                        head_log[0] <= {~address_enable_n && ~dma_own, dma_own,
+                                        drq_pin, 1'b0, address,
+                                        internal_data_bus};
+                        if (break_cnt != 8'hff)
+                            break_cnt <= break_cnt + 8'd1;
+                    end
+                    if (dma_own) begin
+                        prev_dma_addr <= address;
+                        have_prev <= 1'b1;
+                    end
                 end
-                fresh <= 1'b0;
             end
-            else if (fdc_ack) begin
-                if (gap_cnt != 16'hffff)
-                    gap_cnt <= gap_cnt + 16'd1;
-                if (gap_cnt >= GAP_THRESH)
-                    fresh <= 1'b1;
-            end
-            else
-                gap_cnt <= 16'd0;
         end
     end
 
-    assign dbg_dma = {head_cnt, grant_cnt, ack_wr_cnt,
+    assign dbg_dma = {break_cnt, grant_cnt, ack_wr_cnt,
                       head_log[2], head_log[1], head_log[0]};
 
 
