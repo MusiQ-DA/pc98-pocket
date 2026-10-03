@@ -48,6 +48,7 @@ module RAM (
     output  logic   [31:0]  dbg3,
     output  logic   [31:0]  dbg4,
     output  logic   [31:0]  dbg5,
+    output  logic   [103:0] dbg6,
     // SDRAM
     output  logic   [12:0]  sdram_address,
     output  logic           sdram_cke,
@@ -830,10 +831,10 @@ module RAM (
     // right as the previous grant's tail retires.
     logic        wr_covered;
     logic [15:0] dbg_uncov;
-    logic [19:0] dbg_uncov_addr;    // first loss
+    logic [23:0] dbg_uncov_addr;    // first loss, full mapped address
     logic  [7:0] dbg_uncov_data;
     logic  [2:0] dbg_uncov_st;
-    logic [19:0] dbg_uncov_addr2;   // most recent loss
+    logic [23:0] dbg_uncov_addr2;   // most recent loss
     logic  [7:0] dbg_uncov_data2;
 
     wire wr_accept_live = write_command & (state == IDLE) & ~wc_pend;
@@ -842,10 +843,10 @@ module RAM (
         if (reset) begin
             wr_covered       <= 1'b0;
             dbg_uncov        <= 16'd0;
-            dbg_uncov_addr   <= 20'd0;
+            dbg_uncov_addr   <= 24'd0;
             dbg_uncov_data   <= 8'd0;
             dbg_uncov_st     <= 3'd0;
-            dbg_uncov_addr2  <= 20'd0;
+            dbg_uncov_addr2  <= 24'd0;
             dbg_uncov_data2  <= 8'd0;
         end else begin
             if (~write_command)
@@ -857,22 +858,48 @@ module RAM (
                 if (dbg_uncov != 16'hFFFF)
                     dbg_uncov <= dbg_uncov + 16'd1;
                 if (dbg_uncov == 16'd0) begin
-                    dbg_uncov_addr <= latch_address[19:0];
+                    dbg_uncov_addr <= latch_address;
                     dbg_uncov_data <= internal_data_bus;
                     dbg_uncov_st   <= state;
                 end
-                dbg_uncov_addr2 <= latch_address[19:0];
+                dbg_uncov_addr2 <= latch_address;
                 dbg_uncov_data2 <= internal_data_bus;
             end
+        end
+    end
+
+    // Sink-side record: the operands of the last three writes the FSM
+    // actually accepted -- the arbiter logs the bus side, this logs what
+    // RAM committed to serve. A fill's byte-0 that goes missing shows up
+    // here with a stale/mapped-away operand, or not at all.
+    logic  [7:0]  acc_cnt;
+    logic  [31:0] acc_ring [0:2];
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            acc_cnt <= 8'd0;
+            acc_ring[0] <= 32'd0;
+            acc_ring[1] <= 32'd0;
+            acc_ring[2] <= 32'd0;
+        end else if (state == IDLE && next_state == RAM_WRITE_1) begin
+            acc_ring[2] <= acc_ring[1];
+            acc_ring[1] <= acc_ring[0];
+            // {2'b0, was-parked, word, addr[19:0], data}
+            acc_ring[0] <= {2'b00, wc_pend,
+                            (wc_pend ? pend_word    : word_now),
+                            (wc_pend ? pend_address[19:0]
+                                     : latch_address[19:0]),
+                            (wc_pend ? pend_data    : internal_data_bus)};
+            if (acc_cnt != 8'hFF)
+                acc_cnt <= acc_cnt + 8'd1;
         end
     end
 
     assign  dbg2 = {dbg_drop_st, dbg_drop_wr, dbg_drop_addr[19:0],
                     dbg_drops[7:0]};          // {st,wr,addr[19:0],lost}
     assign  dbg3 = {8'd0, dbg_blocked, dbg_parks}; // {blocked,parked}
-    assign  dbg4 = {dbg_uncov[7:0], 1'b0, dbg_uncov_st,
-                    dbg_uncov_addr};          // {cnt, st, first-lost addr}
-    assign  dbg5 = {dbg_uncov_data2, dbg_uncov_addr2,
+    assign  dbg4 = {dbg_uncov[7:0], dbg_uncov_addr}; // {cnt, first addr24}
+    assign  dbg5 = {dbg_uncov_data2, dbg_uncov_addr2[15:0],
                     dbg_uncov_data};          // {last d, last addr, first d}
+    assign  dbg6 = {acc_cnt, acc_ring[2], acc_ring[1], acc_ring[0]};
 
 endmodule
