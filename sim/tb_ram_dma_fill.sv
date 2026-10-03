@@ -89,7 +89,26 @@ module tb_ram_dma_fill;
     // bench master (gated by ~aen_n), the DMAC side its own strobes.
     wire        ab_io_write_n = ~(~bench_iow_n | ~dmac_iow_out_n);
     wire        ab_io_read_n  = dmac_ior_out_n;
-    wire        ab_mem_wr_n   = ~((~bench_memwr_n & ~aen_n) | ~dmac_memwr_n);
+
+    // +CLIPW=n clips every DMA write strobe to n clk at the RAM input,
+    // modeling the metal's early-released ~1-CE-tick pulses (dma_ready is
+    // still high from the previous byte when SW starts). The DMAC output
+    // itself keeps its proper shape; only what RAM sees is shortened.
+    int         clipw = 0;
+    int         clip_cnt = 0;
+    logic       clip_active = 1'b0;
+    wire        dmac_memwr_vis = clip_active ? 1'b1 : dmac_memwr_n;
+    always_ff @(posedge clk) begin
+        if (reset || dmac_memwr_n) begin
+            clip_cnt    <= 0;
+            clip_active <= 1'b0;
+        end else if (clipw != 0) begin
+            if (clip_cnt == clipw - 1) clip_active <= 1'b1;
+            else                       clip_cnt    <= clip_cnt + 1;
+        end
+    end
+
+    wire        ab_mem_wr_n   = ~((~bench_memwr_n & ~aen_n) | ~dmac_memwr_vis);
     wire        ab_mem_rd_n   = ~((~bench_memrd_n & ~aen_n) | ~dmac_memrd_n);
 
     // The arbiter's hold handshake, flattened like tb_v30_dmac's: grant on
@@ -191,6 +210,7 @@ module tb_ram_dma_fill;
         .io_read_n           (ab_io_read_n),
         .io_write_n          (ab_io_write_n),
         .memory_read_n       (ab_mem_rd_n),
+        .memory_write_n      (ab_mem_wr_n),
         .dma0_acknowledge_n  (1'b1),
         .address_enable_n    (aen_n)
     );
@@ -435,6 +455,7 @@ module tb_ram_dma_fill;
         int miss = 0;
         logic [7:0] got;
 
+        void'($value$plusargs("CLIPW=%d", clipw));
         repeat (40) @(posedge clk);
         reset = 1'b0;
         repeat (100) @(posedge clk);
