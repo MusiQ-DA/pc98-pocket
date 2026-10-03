@@ -49,7 +49,7 @@ set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
 # `push imm16` that derailed the old i8088 is legal for it -- but it is not
 # cycle-accurate and carries none of the V30's NEC extensions. nuV30 stays
 # the shipping CPU; this exists to measure the ~5.6k-ALM headroom claim.
-set_global_assignment -name VERILOG_MACRO "PC98_ZET=1"
+#set_global_assignment -name VERILOG_MACRO "PC98_ZET=1"
 # The real floppy controller, not the constant-returning stub.
 #
 # This was off because floppy0_chip_select_n decoded the AT's 0x3F0-0x3F7,
