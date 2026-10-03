@@ -1410,6 +1410,11 @@ module core_top (
             8'h3c:   probe_data_c = chipset_dbg5[63:32];
             8'h3d:   probe_data_c = chipset_dbg5[95:64];
             8'h3e:   probe_data_c = chipset_dbg5[127:96];
+            // 0x60-0x63: first four DMA-stream address breaks, sticky.
+            8'h60:   probe_data_c = chipset_dbg6[31:0];
+            8'h61:   probe_data_c = chipset_dbg6[63:32];
+            8'h62:   probe_data_c = chipset_dbg6[95:64];
+            8'h63:   probe_data_c = chipset_dbg6[127:96];
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -2397,6 +2402,7 @@ module core_top (
     wire [31:0]  chipset_dbg3;
     wire [31:0]  chipset_dbg4;
     wire [127:0] chipset_dbg5;
+    wire [127:0] chipset_dbg6;
     wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
     wire [33:0]  dbg_scsi;   // {ack,req,mg_rd_cnt,post_cnt,rom_rd_cnt}
     wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
@@ -2631,6 +2637,7 @@ module core_top (
         .dbg_chipset3                       (chipset_dbg3),
         .dbg_chipset4                       (chipset_dbg4),
         .dbg_chipset5                       (chipset_dbg5),
+        .dbg_chipset6                       (chipset_dbg6),
         .dbg_gvram                          (gvram_dbg),
         .dbg_scsi                           (dbg_scsi),
     //  .terminal_count_n                   (terminal_count_n)

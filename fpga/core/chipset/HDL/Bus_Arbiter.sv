@@ -50,14 +50,14 @@ module BUS_ARBITER (
     // {hold granted, bus released, dmac wants hold, external master wants
     //  hold, DRQ3..DRQ0 seen as requests (pin low)}.
     output  logic   [7:0]   dbg,
-    // JTAG probe (PC98_JTAG): the first four memory writes of the latest
-    // channel-2 burst. A fresh burst begins when DACK2 falls; each falling
-    // edge of the arbiter's memory-write strobe records {address, data} --
-    // exactly what the RAM port is offered -- so a byte-0 that arrived
-    // stale, at the wrong address, or not at all stays visible afterwards.
-    // [27:0] = write0 {addr[19:0], data[7:0]}, [31:28] = burst counter,
-    // then write1..3 packed in 28-bit fields above it.
-    output  logic   [127:0] dbg_dma
+    // JTAG probe (PC98_JTAG): DMA-stream address breaks. Fills are
+    // contiguous ascending, so every new buffer head (and every stray
+    // write escaping the stream) shows up as address != prev+1 inside
+    // the FDC ack window. dbg_dma keeps the last three breaks plus
+    // counters; dbg_dma2 latches the first four breaks sticky -- the
+    // boot's early fills never age out of the ring.
+    output  logic   [127:0] dbg_dma,
+    output  logic   [127:0] dbg_dma2
 );
 
     //
@@ -286,7 +286,8 @@ module BUS_ARBITER (
     logic   [7:0]   break_cnt;
     logic   [7:0]   grant_cnt;
     logic   [15:0]  ack_wr_cnt;
-    logic   [31:0]  head_log [0:2];
+    logic   [31:0]  head_log  [0:2];
+    logic   [31:0]  first_log [0:3];
 
     wire    fdc_ack  = ~dma_acknowledge_n[2] | ~dma_acknowledge_n[3];
     wire    dma_own  = ~dma_enable_n && ~(&dma_acknowledge_n);
@@ -327,6 +328,11 @@ module BUS_ARBITER (
                                         internal_data_bus != data_bus_ext,
                                         ~io_write_n, address,
                                         internal_data_bus};
+                        if (break_cnt < 8'd4)
+                            first_log[break_cnt[1:0]] <=
+                                {~address_enable_n && ~dma_own, dma_own,
+                                 internal_data_bus != data_bus_ext,
+                                 ~io_write_n, address, internal_data_bus};
                         if (break_cnt != 8'hff)
                             break_cnt <= break_cnt + 8'd1;
                     end
@@ -341,6 +347,8 @@ module BUS_ARBITER (
 
     assign dbg_dma = {break_cnt, grant_cnt, ack_wr_cnt,
                       head_log[2], head_log[1], head_log[0]};
+    assign dbg_dma2 = {first_log[3], first_log[2],
+                       first_log[1], first_log[0]};
 
 
     //

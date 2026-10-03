@@ -108,6 +108,8 @@ module CHIPSET #(
         // Bus_Arbiter's channel-2 burst witness -- the first four writes of
         // the latest burst as {addr[19:0], data[7:0]}.
         output  logic   [127:0] dbg_chipset5,
+        // The first four DMA-stream address breaks, latched sticky.
+        output  logic   [127:0] dbg_chipset6,
         // The GVRAM sequencer's own view: where the plane walk (or the
         // service channel) is parked -- see pc98_gvram_seq's dbg port.
         output  logic   [7:0]   dbg_gvram,
@@ -328,6 +330,7 @@ module CHIPSET #(
         .ext_access_request                 (ext_access_request),
         .dbg                                (arb_dbg),
         .dbg_dma                            (dbg_chipset5),
+        .dbg_dma2                           (dbg_chipset6),
         // DRQ is active-low on the PC-98 bus (the data book names the pins
         // DRQ3O..DRQ0O) and the BIOS programs the 71071's DREQ sense bit
         // (0x11 bit6) to match. The sources here are active-high "request
