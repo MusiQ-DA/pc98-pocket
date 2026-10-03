@@ -42,8 +42,8 @@ module RAM (
     // {parked write, refresh busy, read in flight, completing-is-read,
     //  completing-is-write, state[2:0]}. Unconsumed it synthesises away.
     output  logic   [7:0]   dbg,
-    // dbg2 = {first-drop FSM state, in-flight-was-write, dropped addr,
-    //         drop count}, dbg3 = parked-write count. DMA-fill loss witness.
+    // dbg2 = 0 (the old lost_ev witness is superseded by dbg4/dbg5's
+    //         universal coverage), dbg3 = parked-write count.
     output  logic   [31:0]  dbg2,
     output  logic   [31:0]  dbg3,
     output  logic   [31:0]  dbg4,
@@ -780,45 +780,19 @@ module RAM (
     // parked_match/parked2_match keep it out of the count.
     logic        write_command_d;
     logic [15:0] dbg_parks;
-    logic [15:0] dbg_drops;
-    logic [7:0]  dbg_blocked;
-    logic [23:0] dbg_drop_addr;
-    logic        dbg_drop_wr;
-    logic [2:0]  dbg_drop_st;
 
     wire write_strobe_fell = write_command_d & ~write_command;
     wire write_strobe_rose = ~write_command_d & write_command;
-    wire blocked_ev = write_command & (state != IDLE) & wc_pend & wc_pend2
-                    & ~write_strobe_match & ~parked_match
-                    & ~(wc_pend2 & parked2_match);
-    wire lost_ev    = write_strobe_fell & (state != IDLE) & wc_pend & wc_pend2
-                    & ~write_strobe_match & ~parked_match
-                    & ~(wc_pend2 & parked2_match);
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
             write_command_d <= 1'b0;
             dbg_parks       <= 16'd0;
-            dbg_drops       <= 16'd0;
-            dbg_blocked     <= 8'd0;
-            dbg_drop_addr   <= 24'd0;
-            dbg_drop_wr     <= 1'b0;
-            dbg_drop_st     <= 3'd0;
         end else begin
             write_command_d <= write_command;
             if ((new_write_strobe | new_write_strobe2)
                 && (dbg_parks != 16'hFFFF))
                 dbg_parks <= dbg_parks + 16'd1;
-            if (write_strobe_rose & blocked_ev & (dbg_blocked != 8'hFF))
-                dbg_blocked <= dbg_blocked + 8'd1;
-            if (lost_ev) begin
-                if (dbg_drops != 16'hFFFF) dbg_drops <= dbg_drops + 16'd1;
-                if (dbg_drops == 16'd0) begin
-                    dbg_drop_addr <= latch_address;
-                    dbg_drop_wr   <= accept_live_wr;
-                    dbg_drop_st   <= state;
-                end
-            end
         end
     end
 
@@ -932,9 +906,8 @@ module RAM (
         end
     end
 
-    assign  dbg2 = {dbg_drop_st, dbg_drop_wr, dbg_drop_addr[19:0],
-                    dbg_drops[7:0]};          // {st,wr,addr[19:0],lost}
-    assign  dbg3 = {8'd0, dbg_blocked, dbg_parks}; // {blocked,parked}
+    assign  dbg2 = 32'd0;                   // drop witness removed -- uncov covers it
+    assign  dbg3 = {24'd0, dbg_parks};       // parked count only
     assign  dbg4 = {dbg_uncov[7:0], dbg_uncov_addr}; // {cnt, first addr24}
     assign  dbg5 = {dbg_uncov_data2, dbg_uncov_addr2[15:0],
                     dbg_uncov_data};          // {last d, last addr, first d}

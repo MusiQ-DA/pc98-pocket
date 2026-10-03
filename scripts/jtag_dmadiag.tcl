@@ -69,18 +69,18 @@ if {[info exists ::env(WATCH)]} {
 puts [format "0x18 live PC    = 0x%08X" [rd 0x18]]
 puts [format "0x35 ramimg    = 0x%08X" [rd 0x35]]
 puts [format "0x38 fault     = 0x%08X" [rd 0x38]]
-puts [format "0x39 ram dbg3  = 0x%08X  {drop_st,drop_wr,addr,lost}" [rd 0x39]]
-puts [format "0x3a ram dbg4  = 0x%08X  {blocked,parks}"              [rd 0x3a]]
+puts [format "0x39 ram dbg2  = 0x%08X  (retired)"                  [rd 0x39]]
+puts [format "0x3a ram dbg3  = 0x%08X  {parks}"                    [rd 0x3a]]
 
-set s63 [rd 0x63]
+set s3e [rd 0x3e]
 puts [format "-- head_log (DMA-stream breaks / CPU writes in ack window) --"]
 puts [format "breaks=%d grants=%d ackwr=%d" \
-    [expr {($s63 >> 24) & 0xff}] [expr {($s63 >> 16) & 0xff}] [expr {$s63 & 0xffff}]]
-puts [format "  newest  %s" [ent [rd 0x60]]]
-puts [format "          %s"          [ent [rd 0x61]]]
-puts [format "  oldest  %s" [ent [rd 0x62]]]
+    [expr {($s3e >> 24) & 0xff}] [expr {($s3e >> 16) & 0xff}] [expr {$s3e & 0xffff}]]
+puts [format "  newest  %s" [ent [rd 0x3b]]]
+puts [format "          %s"          [ent [rd 0x3c]]]
+puts [format "  oldest  %s" [ent [rd 0x3d]]]
 
-puts "-- first-4 sticky breaks --"
+puts "-- first-4 sticky watch hits --"
 puts [format "  #0 %s" [ent [rd 0x6a]]]
 puts [format "  #1 %s" [ent [rd 0x6b]]]
 puts [format "  #2 %s" [ent [rd 0x6c]]]
@@ -105,5 +105,12 @@ puts [format "  acc_cnt=%d" [expr {[rd 0x71] & 0xff}]]
 puts [format "  newest  %s" [acc [rd 0x6e]]]
 puts [format "          %s" [acc [rd 0x6f]]]
 puts [format "  oldest  %s" [acc [rd 0x70]]]
+
+set s72 [rd 0x72]
+set s73 [rd 0x73]
+puts "-- RAM watch-address sink side --"
+puts [format "  wseen=%d  wacc=%d" \
+    [expr {($s73 >> 8) & 0xff}] [expr {$s73 & 0xff}]]
+puts [format "  last accepted %s" [acc $s72]]
 
 shutdown

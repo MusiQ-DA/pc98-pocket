@@ -108,8 +108,6 @@ module CHIPSET #(
         // Bus_Arbiter's channel-2 burst witness -- the first four writes of
         // the latest burst as {addr[19:0], data[7:0]}.
         output  logic   [127:0] dbg_chipset5,
-        // The first four DMA-stream address breaks, latched sticky.
-        output  logic   [127:0] dbg_chipset6,
         // Write watchpoint armed from the probe (slot 0x8a): the last
         // three memory writes to that guest address.
         input   logic   [19:0]  dbg_watch_addr,
@@ -347,7 +345,6 @@ module CHIPSET #(
         .ext_access_request                 (ext_access_request),
         .dbg                                (arb_dbg),
         .dbg_dma                            (dbg_chipset5),
-        .dbg_dma2                           (dbg_chipset6),
         .watch_addr                         (dbg_watch_addr),
         .dbg_dma3                           (dbg_chipset7),
         .dbg_dma4                           (dbg_chipset10),

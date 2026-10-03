@@ -54,10 +54,8 @@ module BUS_ARBITER (
     // contiguous ascending, so every new buffer head (and every stray
     // write escaping the stream) shows up as address != prev+1 inside
     // the FDC ack window. dbg_dma keeps the last three breaks plus
-    // counters; dbg_dma2 latches the first four breaks sticky -- the
-    // boot's early fills never age out of the ring.
+    // counters.
     output  logic   [127:0] dbg_dma,
-    output  logic   [127:0] dbg_dma2,
     // Write watchpoint: probe slot 0x8a arms a 20-bit guest address;
     // every memory write landing on it is logged, CPU or DMA alike --
     // this is how a byte-0 that the fill wrote correctly still ends
@@ -295,7 +293,6 @@ module BUS_ARBITER (
     logic   [15:0]  ack_wr_cnt;
     logic   [7:0]   watch_cnt;
     logic   [31:0]  head_log  [0:2];
-    logic   [31:0]  first_log [0:3];
     logic   [31:0]  watch_log [0:2];
     logic   [31:0]  watch_first [0:3];
 
@@ -354,11 +351,6 @@ module BUS_ARBITER (
                                         internal_data_bus != data_bus_ext,
                                         ~io_write_n, address,
                                         internal_data_bus};
-                        if (break_cnt < 8'd4)
-                            first_log[break_cnt[1:0]] <=
-                                {~address_enable_n && ~dma_own, dma_own,
-                                 internal_data_bus != data_bus_ext,
-                                 ~io_write_n, address, internal_data_bus};
                         if (break_cnt != 8'hff)
                             break_cnt <= break_cnt + 8'd1;
                     end
@@ -373,8 +365,6 @@ module BUS_ARBITER (
 
     assign dbg_dma = {break_cnt, grant_cnt, ack_wr_cnt,
                       head_log[2], head_log[1], head_log[0]};
-    assign dbg_dma2 = {first_log[3], first_log[2],
-                       first_log[1], first_log[0]};
     assign dbg_dma3 = {watch_cnt, 24'h0, watch_log[2],
                        watch_log[1], watch_log[0]};
     assign dbg_dma4 = {watch_first[3], watch_first[2],
