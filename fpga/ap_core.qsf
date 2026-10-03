@@ -880,6 +880,17 @@ set_global_assignment -name VERILOG_FILE core/zet/zet_shrot.v
 set_global_assignment -name VERILOG_FILE core/zet/zet_signmul17.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/zet_cpu_bridge.sv
 set_global_assignment -name SEARCH_PATH core/zet
+
+# The Next186 experiment (next186-cpu branch): vendored freecores 80186
+# (LGPL), only elaborated when PC98_NEXT186 is defined -- the file list
+# costs nothing on the shipping build. Plain Verilog-2001, no includes,
+# so no SEARCH_PATH is needed; the bridge picks up pc98_sdram_map.svh
+# through the existing core/ search path.
+set_global_assignment -name VERILOG_FILE core/next186/Next186_CPU.v
+set_global_assignment -name VERILOG_FILE core/next186/Next186_ALU.v
+set_global_assignment -name VERILOG_FILE core/next186/Next186_Regs.v
+set_global_assignment -name VERILOG_FILE core/next186/Next186_BIU_2T_delayread.v
+set_global_assignment -name SYSTEMVERILOG_FILE core/next186_cpu_bridge.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_mp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_tvram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_kbd8251.sv
