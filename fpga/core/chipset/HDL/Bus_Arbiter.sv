@@ -277,15 +277,17 @@ module BUS_ARBITER (
 
     always_ff @(posedge clock) begin
         if (reset) begin
-            prev_dack2 <= 1'b1;
+            prev_dack2 <= 1'b0;
             prev_ab_mw <= 1'b1;
             burst_idx  <= 3'd0;
             burst_cnt  <= 4'd0;
         end
         else begin
-            prev_dack2 <= dma_acknowledge_n[2];
+            // The FDC answers either channel 2 or 3 -- the BIOS programs the
+            // pair, so a fresh burst is either pin falling.
+            prev_dack2 <= ~dma_acknowledge_n[2] | ~dma_acknowledge_n[3];
             prev_ab_mw <= ab_memory_write_n;
-            if (prev_dack2 & ~dma_acknowledge_n[2]) begin
+            if (~prev_dack2 & (~dma_acknowledge_n[2] | ~dma_acknowledge_n[3])) begin
                 burst_idx <= 3'd0;
                 burst_cnt <= burst_cnt + 4'd1;
             end
