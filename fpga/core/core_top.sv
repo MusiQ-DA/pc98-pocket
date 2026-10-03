@@ -1310,6 +1310,13 @@ module core_top (
             // read launches the next address. jtag_gvram.tcl walks ranges.
             8'h38:   probe_data_c = {gv_dbg_req | gv_dbg_busy, 3'b000,
                                    gv_srv_addr, gv_dbg_data};
+            // 0x39/0x3a: the slave GDC's display registers as the graphics
+            // fetch consumes them -- {disp_on, page-0xA4, analogue, 5MHz,
+            // doubled-200, CSRFORM LR, SYNC AL, PITCH} low and
+            // {SAD0, LEN0} high. A mis-shaped picture reads back against
+            // what the guest programmed.
+            8'h39:   probe_data_c = dbg_gdc_s[31:0];
+            8'h3a:   probe_data_c = dbg_gdc_s[63:32];
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -2350,6 +2357,8 @@ module core_top (
     wire [33:0]  dbg_scsi;   // {ack,req,mg_rd_cnt,post_cnt,rom_rd_cnt}
     wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
     wire [63:0]  fdc_dbg_cmd;  // live command {op,unit,C,H,R,N,EOT,GPL}
+    wire [63:0]  dbg_gdc_s;    // slave GDC display regs: {SAD0,LEN0} hi,
+                             // {disp_on,page,analog,5MHz,dbl,LR,AL,PITCH} lo
 
     wire    [1:0]   fdd_present;
     reg     [7:0]   sw;
@@ -2631,6 +2640,7 @@ module core_top (
         .scsi_request                       (mgmt_req[0]),
         .dbg_fdc                            (fdc_dbg),
         .dbg_fdc_cmd                        (fdc_dbg_cmd),
+        .dbg_gdc_s                          (dbg_gdc_s),
         .wait_count_clk_en                  (cpu_ce_negedge),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),

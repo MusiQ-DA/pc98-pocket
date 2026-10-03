@@ -179,6 +179,11 @@ module PERIPHERALS #(
         // register {op,unit,C,H,R,N,EOT,GPL}.
         output  wire    [63:0]  dbg_fdc,
         output  wire    [63:0]  dbg_fdc_cmd,
+        // JTAG probe readout of the slave GDC's display state -- the wires
+        // pc98_gvram_display actually consumes, so a mis-shaped picture can
+        // be read back against what the guest programmed: {sad0,len0} in
+        // the high word, flags/LR/AL/PITCH in the low.
+        output  wire    [63:0]  dbg_gdc_s,
         input   logic           fdd_dma_ack,
         input   logic           terminal_count,
         // Others
@@ -1598,6 +1603,16 @@ module PERIPHERALS #(
                       || ((gdc_s_al != 10'd0) && (gdc_s_al < 10'd256));
         end
     end
+
+    // Probe snapshot of the slave's display registers, exactly as the
+    // graphics fetch consumes them: {sad0,len0} high, then the flags that
+    // shape the raster -- disp_on, the 0xA4 page bit, analogue mode, the
+    // 5MHz clock field, the doubled-200-line flag, CSRFORM's LR, SYNC's AL
+    // and PITCH.
+    assign dbg_gdc_s = { 6'd0, gdc_s_sad[0], gdc_s_len[0],
+                         4'd0, gdc_s_disp_on, gvram_disp_page,
+                         pc98_analog, &gdc_clk, gdc_s_dbl,
+                         gdc_s_lrep, gdc_s_al, gdc_s_pitch };
 
     pc98_glyph_rowbuf u_pc98_rowbuf (
         .clk(clock), .rst(reset),

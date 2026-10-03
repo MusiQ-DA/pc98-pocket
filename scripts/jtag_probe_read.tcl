@@ -86,6 +86,10 @@ proc rd {addr} {
 #   0x38       guest-mem read: {busy, svc_addr[19:0], rdata} -- write slot
 #              0x84 launches an address, each read launches the next
 #              (jtag_gvram.tcl)
+#   0x39       slave GDC display regs, low: {disp_on, page-0xA4, analogue,
+#              5MHz clk, doubled-200, CSRFORM LR[4:0], SYNC AL[9:0],
+#              PITCH[7:0]}
+#   0x3a       slave GDC display regs, high: {SAD0[15:0], LEN0[9:0]}
 #
 #   write 0x85 re-arms the PC-history snapshot: clears pc_hist_frozen and
 #              pc_snap_valid so the NEXT freeze trigger (F0 write, errhalt

@@ -178,6 +178,8 @@ module CHIPSET #(
         // JTAG probe: the floppy engine's transfer state and live command.
         output  wire    [63:0]  dbg_fdc,
         output  wire    [63:0]  dbg_fdc_cmd,
+        // JTAG probe: the slave GDC's display registers.
+        output  wire    [63:0]  dbg_gdc_s,
         // RAM wait mode
         input   logic           wait_count_clk_en,
         input   logic   [1:0]   ram_read_wait_cycle,
@@ -446,6 +448,7 @@ module CHIPSET #(
         .fdd_dma_req                        (fdd_dma_req),
         .dbg_fdc                            (dbg_fdc),
         .dbg_fdc_cmd                        (dbg_fdc_cmd),
+        .dbg_gdc_s                          (dbg_gdc_s),
         // The BIOS runs 2HD (0x90 window) transfers on channel 2 and 2DD
         // (0xC8 window) on channel 3 -- the arbiter pairs ack[2] with page
         // register 1 (port 0x23) and ack[3] with page register 2 (0x25),
