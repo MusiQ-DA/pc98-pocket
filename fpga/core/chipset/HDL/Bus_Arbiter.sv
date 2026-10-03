@@ -57,7 +57,13 @@ module BUS_ARBITER (
     // counters; dbg_dma2 latches the first four breaks sticky -- the
     // boot's early fills never age out of the ring.
     output  logic   [127:0] dbg_dma,
-    output  logic   [127:0] dbg_dma2
+    output  logic   [127:0] dbg_dma2,
+    // Write watchpoint: probe slot 0x8a arms a 20-bit guest address;
+    // every memory write landing on it is logged, CPU or DMA alike --
+    // this is how a byte-0 that the fill wrote correctly still ends
+    // up 0x00 afterwards can be attributed to its overwriter.
+    input   logic   [19:0]  watch_addr,
+    output  logic   [127:0] dbg_dma3
 );
 
     //
@@ -286,8 +292,10 @@ module BUS_ARBITER (
     logic   [7:0]   break_cnt;
     logic   [7:0]   grant_cnt;
     logic   [15:0]  ack_wr_cnt;
+    logic   [7:0]   watch_cnt;
     logic   [31:0]  head_log  [0:2];
     logic   [31:0]  first_log [0:3];
+    logic   [31:0]  watch_log [0:2];
 
     wire    fdc_ack  = ~dma_acknowledge_n[2] | ~dma_acknowledge_n[3];
     wire    dma_own  = ~dma_enable_n && ~(&dma_acknowledge_n);
@@ -301,6 +309,7 @@ module BUS_ARBITER (
             break_cnt     <= 8'd0;
             grant_cnt     <= 8'd0;
             ack_wr_cnt    <= 16'd0;
+            watch_cnt     <= 8'd0;
         end
         else begin
             prev_ab_mw   <= ab_memory_write_n;
@@ -312,6 +321,16 @@ module BUS_ARBITER (
             if (prev_ab_mw & ~ab_memory_write_n) begin
                 if (fdc_ack && ack_wr_cnt != 16'hffff)
                     ack_wr_cnt <= ack_wr_cnt + 16'd1;
+                if (address == watch_addr) begin
+                    watch_log[2] <= watch_log[1];
+                    watch_log[1] <= watch_log[0];
+                    watch_log[0] <= {~address_enable_n && ~dma_own, dma_own,
+                                     internal_data_bus != data_bus_ext,
+                                     ~io_write_n, address,
+                                     internal_data_bus};
+                    if (watch_cnt != 8'hff)
+                        watch_cnt <= watch_cnt + 8'd1;
+                end
                 if (fdc_ack) begin
                     // Log every address break in the DMA stream, and every
                     // write the CPU manages to slip into the ack window --
@@ -349,6 +368,8 @@ module BUS_ARBITER (
                       head_log[2], head_log[1], head_log[0]};
     assign dbg_dma2 = {first_log[3], first_log[2],
                        first_log[1], first_log[0]};
+    assign dbg_dma3 = {watch_cnt, 24'h0, watch_log[2],
+                       watch_log[1], watch_log[0]};
 
 
     //

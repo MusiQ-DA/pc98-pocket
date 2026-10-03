@@ -110,6 +110,10 @@ module CHIPSET #(
         output  logic   [127:0] dbg_chipset5,
         // The first four DMA-stream address breaks, latched sticky.
         output  logic   [127:0] dbg_chipset6,
+        // Write watchpoint armed from the probe (slot 0x8a): the last
+        // three memory writes to that guest address.
+        input   logic   [19:0]  dbg_watch_addr,
+        output  logic   [127:0] dbg_chipset7,
         // The GVRAM sequencer's own view: where the plane walk (or the
         // service channel) is parked -- see pc98_gvram_seq's dbg port.
         output  logic   [7:0]   dbg_gvram,
@@ -331,6 +335,8 @@ module CHIPSET #(
         .dbg                                (arb_dbg),
         .dbg_dma                            (dbg_chipset5),
         .dbg_dma2                           (dbg_chipset6),
+        .watch_addr                         (dbg_watch_addr),
+        .dbg_dma3                           (dbg_chipset7),
         // DRQ is active-low on the PC-98 bus (the data book names the pins
         // DRQ3O..DRQ0O) and the BIOS programs the 71071's DREQ sense bit
         // (0x11 bit6) to match. The sources here are active-high "request

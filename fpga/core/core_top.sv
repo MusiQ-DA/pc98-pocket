@@ -291,11 +291,13 @@ module core_top (
     // otherwise the OSD setting owns clk_select_next exactly as before.
     logic        jtag_spd_ovr = 1'b0;
     logic  [1:0] jtag_spd_sel = 2'b00;
+    logic [19:0] jtag_watch_addr = 20'hFFFFF;
     wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
                                               : cpu_speed_cfg;
 `else
     // The CPU speed is the OSD's alone.
     wire   [1:0] clk_select_next = cpu_speed_cfg;
+    wire  [19:0] jtag_watch_addr = 20'hFFFFF;
 `endif
 
     always @(posedge clk_chipset, posedge reset)
@@ -1415,6 +1417,12 @@ module core_top (
             8'h61:   probe_data_c = chipset_dbg6[63:32];
             8'h62:   probe_data_c = chipset_dbg6[95:64];
             8'h63:   probe_data_c = chipset_dbg6[127:96];
+            // 0x64-0x66: last three writes to the watch address (0x8a);
+            // 0x67: {watch count, 24'h0}.
+            8'h64:   probe_data_c = chipset_dbg7[31:0];
+            8'h65:   probe_data_c = chipset_dbg7[63:32];
+            8'h66:   probe_data_c = chipset_dbg7[95:64];
+            8'h67:   probe_data_c = chipset_dbg7[127:96];
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -1738,6 +1746,10 @@ module core_top (
             jtag_spd_ovr  <= probe_wdata_c[2];
             jtag_spd_sel  <= probe_wdata_c[1:0];
         end
+        // Slot 0x8a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
+        // every memory write landing on it is logged (CPU or DMA alike).
+        if (probe_wr_pulse && probe_waddr_c == 7'h0a)
+            jtag_watch_addr <= probe_wdata_c[19:0];
     end
 
     // JTAG-injected keystrokes ride the same event line the 8251 drains; a
@@ -2403,6 +2415,7 @@ module core_top (
     wire [31:0]  chipset_dbg4;
     wire [127:0] chipset_dbg5;
     wire [127:0] chipset_dbg6;
+    wire [127:0] chipset_dbg7;
     wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
     wire [33:0]  dbg_scsi;   // {ack,req,mg_rd_cnt,post_cnt,rom_rd_cnt}
     wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
@@ -2638,6 +2651,8 @@ module core_top (
         .dbg_chipset4                       (chipset_dbg4),
         .dbg_chipset5                       (chipset_dbg5),
         .dbg_chipset6                       (chipset_dbg6),
+        .dbg_watch_addr                     (jtag_watch_addr),
+        .dbg_chipset7                       (chipset_dbg7),
         .dbg_gvram                          (gvram_dbg),
         .dbg_scsi                           (dbg_scsi),
     //  .terminal_count_n                   (terminal_count_n)
