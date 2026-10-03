@@ -1816,9 +1816,10 @@ function [5:0]ICODE;
 			8'b01100100, 8'b01100101: ICODE = 5;	// REPNC/REPC rep-prefix aliases (undoc)
 			8'b11110001: ICODE = 6;	// 0xF1 = LOCK prefix alias (undoc)
 			8'b01100011, 8'b01100110, 8'b01100111: ICODE = 56;	// reserved: consume modrm, no effect
-			8'b11011_???: ICODE = 56;	// D8-DF esc: no coprocessor fitted, consume the operand and continue.
-									// Trapping to int7 would re-enter at the same IP (the bad-op path never
-									// advances ISIZE) and loop forever on the first fp opcode.
+			8'b11011000, 8'b11011001, 8'b11011010, 8'b11011011,	// D8-DF esc: no coprocessor fitted, consume
+			8'b11011100, 8'b11011101, 8'b11011110, 8'b11011111: ICODE = 56;	// the operand and continue. Trapping to int7
+									// would re-enter at the same IP (the bad-op path never advances ISIZE)
+									// and loop forever on the first fp opcode. Plain case: no '?' wildcards.
 // --------------------------------  bad opcode/esc --------------------------------
 			default: ICODE = 55;
 		endcase
