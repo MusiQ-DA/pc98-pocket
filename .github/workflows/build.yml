@@ -531,6 +531,24 @@ jobs:
           ./obj_gseq/gs | tee gseq.log
           grep -q "PASS tb_pc98_gvram_seq" gseq.log
 
+      - name: the service-channel launch captures the trigger's own byte
+        # Boots the REAL softcpu_subsystem (picorv32 + sprom + launch block)
+        # on an injected micro-program and proves ST_WDATA=0xFF followed by
+        # ST_TRIG=1 launches a clean non-raw write -- the wdata-lag theory
+        # behind the raw-armed WDAT witness. Runs from fpga/ so the ROM's
+        # ../firmware/firmware.vh default resolves; fw_wr overwrites it.
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style \
+            --top-module tb_softcpu_trig \
+            -Isim -I$S -I$S/common -Ifpga/apf \
+            sim/tb_softcpu_trig.sv sim/stub_altsyncram.sv sim/stub_vhdl.sv \
+            sim/stub_pll.sv fpga/apf/common.v \
+            $S/softcpu_subsystem.sv $S/picorv32.v $S/sprom.v \
+            $S/softcpu_fdd_bridge.sv -o st --Mdir obj_strig
+          cd fpga && ../obj_strig/st | tee ../strig.log
+          grep -q "RESULT: PASS" ../strig.log
+
       - name: the graphics fetch shows what the slave GDC's partitions say
         run: |
           S=fpga/core
