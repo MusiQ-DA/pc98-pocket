@@ -378,8 +378,8 @@ module zet_cpu_bridge (
     // INTA pairs keep the faithful count: for the 8259's two-acknowledge
     // sequence the pacing IS the contract.
     wire fast_pair = fast_pace && !cur_inta;
-    wire pair_finish = (bstate == B_GAP)
-                     && (fast_pair ? cpu_ce_negedge : (gap_cnt == 2'd1));
+    // BISECT V4: faithful gap again -- isolate the t_cnt>=2 accept.
+    wire pair_finish = (bstate == B_GAP) && (gap_cnt == 2'd1);
     wire pair_done   = pair_finish && last_byte;
     wire inta_done   = pair_done && cur_inta;
 
