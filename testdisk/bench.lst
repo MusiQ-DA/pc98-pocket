@@ -1,0 +1,651 @@
+     1                                  ; ============================================================================
+     2                                  ; bench.asm -- bare-metal PC-9801 benchmark IPL (no DOS).
+     3                                  ;
+     4                                  ; Two stages, one NASM -f bin output:
+     5                                  ;
+     6                                  ;   section .ipl  (file offset 0,      sector C0/H0/R1, loaded by BIOS at
+     7                                  ;                 1FE0:0000, only the low 512 bytes are guaranteed delivered)
+     8                                  ;   section .s2   (file offset 1024.., sectors C0/H0/R2..R8, loaded by stage1
+     9                                  ;                 through BIOS INT 1Bh to 0x2000:0000, then far-jumped to)
+    10                                  ;
+    11                                  ; Timing: PIT counter0 (uPD8253) is reprogrammed to mode 2, divisor 0
+    12                                  ; (65536).  Mode 2 is chosen over the BIOS's mode 3 because a real 8253
+    13                                  ; decrements once per clock in mode 2 (clean full-range down-count, period
+    14                                  ; 65536 clocks = 26.67ms at the 2.4576MHz input); np2kai/np21w model both
+    15                                  ; modes as the same remaining-clocks-to-event counter, so the numbers stay
+    16                                  ; comparable between FPGA RTL and emulator.
+    17                                  ;
+    18                                  ; Short tests are chunked so each chunk is < one 65536-tick period; the
+    19                                  ; elapsed ticks are (v0 - v1) mod 65536 summed per chunk -- immune to IRQ
+    20                                  ; behaviour.  The FDC test exceeds one period, so an INT 08h handler (chained
+    21                                  ; to the BIOS tick handler, which does the EOI itself) counts counter0 wraps
+    22                                  ; and the measurement uses an absolute position: pos = wraps*65536 - count.
+    23                                  ;
+    24                                  ; Results: each test prints "NN NAME .... TTTTTTTTTT" to text VRAM (0xA000)
+    25                                  ; and appends a record {id, tick_lo, tick_hi, units_lo, units_hi} to the
+    26                                  ; mailbox at physical 0x70000 (word array).  word[0] = 0xBEEF is written
+    27                                  ; only after ALL tests are done -- that flag tells the host the mailbox is
+    28                                  ; valid.  word[1] = number of test records written (record i at word 2+5i).
+    29                                  ;
+    30                                  ; The program then far-jumps to the stage1 "done" loop at linear 0x1FF00
+    31                                  ; (1FE0:0100).  The np2kai watch hook prints the mailbox when PC hits it.
+    32                                  ; ============================================================================
+    33                                  
+    34                                  BITS 16
+    35                                  CPU 186                             ; V30 supports the 186 set
+    36                                  
+    37                                  ; ---- I/O ports ----
+    38                                  PIT_CH0     equ 0x71                ; counter0 data
+    39                                  PIT_CMD     equ 0x77                ; control
+    40                                  PIC_CMD     equ 0x00                ; master i8259 command (OCW2/OCW3/ICW1)
+    41                                  PIC_IMR     equ 0x02                ; master i8259 mask register
+    42                                  GR_MODE     equ 0x7C                ; GRCG mode (0 = off -> planar writes)
+    43                                  TVRAM       equ 0xA000              ; text vram segment (80x25, char+attr)
+    44                                  MBX_SEG     equ 0x7000              ; mailbox segment (phys 0x70000)
+    45                                  SCR_SEG     equ 0x5000              ; scratch buffer A (phys 0x50000)
+    46                                  SCR2_SEG    equ 0x5800              ; scratch buffer B (phys 0x58000)
+    47                                  S2_SEG      equ 0x2000              ; stage2 load/exec segment
+    48                                  
+    49                                  MBX_SENT    equ 0                   ; mailbox word offsets
+    50                                  MBX_COUNT   equ 1
+    51                                  MBX_RECS    equ 2                   ; first record word index, 5 words each
+    52                                  
+    53                                  MEMB_DISK_BOOT equ 0x0584           ; BIOS BDA: boot drive byte (0x90+drv 2HD)
+    54                                  
+    55                                  NTESTS      equ 12                  ; number of test records emitted
+    56                                  
+    57                                  ; ============================================================================
+    58                                  section .ipl vstart=0x0000
+    59                                  ; ============================================================================
+    60                                  
+    61 00000000 EB1E                            jmp short s1_start
+    62 00000002 00<rep 1Eh>                     times 0x20-($-$$) db 0      ; PC-98 IPL header area
+    63                                  
+    64                                  s1_start:
+    65 00000020 FA                              cli
+    66 00000021 FC                              cld
+    67 00000022 8CC8                            mov ax, cs                  ; 1FE0
+    68 00000024 8ED8                            mov ds, ax
+    69 00000026 B80030                          mov ax, 0x3000              ; stack in unused RAM (must NOT sit inside
+    70 00000029 8ED0                            mov ss, ax                  ; the 0x20000 staging area -- the DMA read
+    71 0000002B BC0004                          mov sp, 0x0400              ; below would smash a stack there)
+    72                                  
+    73                                          ; ---- load C0/H0/R2..R8 (7 sectors = 7168 B) -> 2000:0000 ----------
+    74 0000002E B80020                          mov ax, S2_SEG
+    75 00000031 8EC0                            mov es, ax
+    76 00000033 31ED                            xor bp, bp                  ; ES:BP = destination buffer
+    77 00000035 BB001C                          mov bx, 7*1024              ; byte count
+    78 00000038 E86000                          call s1_bootdrv             ; AL = BDA boot-drive byte (0x90+drv 2HD)
+    79 0000003B B496                            mov ah, 0x96                ; read(06) | seek(10) | 2HD-2head(80)
+    80 0000003D 30C9                            xor cl, cl                  ; C = 0
+    81 0000003F 30F6                            xor dh, dh                  ; H = 0
+    82 00000041 B202                            mov dl, 2                   ; R = 2 (first sector after the IPL)
+    83 00000043 B503                            mov ch, 3                   ; N = 3 -> 1024 B/sector
+    84 00000045 CD1B                            int 0x1b
+    85 00000047 84E4                            test ah, ah
+    86 00000049 7505                            jnz .s1err
+    87 0000004B EA00000020                      jmp S2_SEG:0x0000           ; far jump -> CS=2000 IP=0 = s2_start
+    88                                  
+    89                                  .s1err:                             ; 'E' + AH hex on row 0, then halt
+    90 00000050 B900A0                          mov cx, 0xA000
+    91 00000053 8EC1                            mov es, cx
+    92 00000055 31FF                            xor di, di
+    93 00000057 26C606000045                    mov byte [es:0], 'E'
+    94 0000005D 26C606010000                    mov byte [es:1], 0
+    95 00000063 26C6060020E1                    mov byte [es:0x2000], 0xE1
+    96 00000069 BF0200                          mov di, 2
+    97 0000006C 88E3                            mov bl, ah
+    98 0000006E C0EB04                          shr bl, 4
+    99 00000071 E80700                          call .nib
+   100 00000074 88E3                            mov bl, ah
+   101 00000076 E80200                          call .nib
+   102 00000079 EBFE                    .h:     jmp short .h
+   103                                  .nib:                               ; bl lo-nibble -> hex char at es:di
+   104 0000007B 80E30F                          and bl, 0x0F
+   105 0000007E 80C330                          add bl, '0'
+   106 00000081 80FB39                          cmp bl, '9'
+   107 00000084 7603                            jbe .n2
+   108 00000086 80C307                          add bl, 'A'-'9'-1
+   109 00000089 26881D                  .n2:    mov [es:di], bl
+   110 0000008C 26C6450100                      mov byte [es:di+1], 0
+   111 00000091 26C6850020E1                    mov byte [es:di+0x2000], 0xE1
+   112 00000097 83C702                          add di, 2
+   113 0000009A C3                              ret
+   114                                  
+   115                                  ; s1_bootdrv -> AL = BIOS boot-drive byte (BDA 0x584), >=0x90 else 0x90
+   116                                  s1_bootdrv:
+   117 0000009B 06                              push es
+   118 0000009C 31C0                            xor  ax, ax
+   119 0000009E 8EC0                            mov  es, ax
+   120 000000A0 26A08405                        mov  al, [es:MEMB_DISK_BOOT]
+   121 000000A4 07                              pop  es
+   122 000000A5 3C90                            cmp  al, 0x90
+   123 000000A7 7302                            jae  .r
+   124 000000A9 B090                            mov  al, 0x90
+   125 000000AB C3                      .r:     ret
+   126                                  
+   127 000000AC 00<rep 54h>                     times 0x100-($-$$) db 0
+   128                                  bench_done:                         ; linear 0x1FF00 -- np2kai hook watches it
+   129 00000100 EBFE                            jmp short bench_done
+   130                                  
+   131 00000102 90<rep FEh>                     times 512-($-$$) db 0x90    ; end of the BIOS-delivered window
+   132 00000200 90<rep 200h>                    times 1024-($-$$) db 0x90   ; pad stage1 to the full 1024-byte sector
+   133                                  
+   134                                  ; ============================================================================
+   135                                  section .s2 vstart=0x0000
+   136                                  ; ============================================================================
+   137                                  
+   138                                  s2_start:
+   139 00000000 8CC8                            mov ax, cs                  ; 2000
+   140 00000002 8ED8                            mov ds, ax
+   141 00000004 8ED0                            mov ss, ax
+   142 00000006 BC0060                          mov sp, 0x6000              ; stack phys 0x26000, clear of everything
+   143 00000009 FC                              cld
+   144                                  
+   145                                          ; ---- banner on row 0 ----
+   146 0000000A B800A0                          mov ax, TVRAM
+   147 0000000D 8EC0                            mov es, ax
+   148 0000000F BE[5703]                        mov si, str_title
+   149 00000012 31DB                            xor bx, bx
+   150 00000014 E89301                          call putstr
+   151 00000017 C706[C504]A000                  mov word [rowpos], 160      ; first result row
+   152                                  
+   153 0000001D EB11                            jmp s2_init_cont            ; keep the helper below out of the flow
+   154                                  ; ----------------------------------------------------------------------------
+   155                                  ; bootdrv -> AL = BIOS boot-drive byte (BDA 0x584), >=0x90 else 0x90 fallback
+   156                                  bootdrv:
+   157 0000001F 06                              push es
+   158 00000020 31C0                            xor  ax, ax
+   159 00000022 8EC0                            mov  es, ax
+   160 00000024 26A08405                        mov  al, [es:MEMB_DISK_BOOT]
+   161 00000028 07                              pop  es
+   162 00000029 3C90                            cmp  al, 0x90
+   163 0000002B 7302                            jae  .r
+   164 0000002D B090                            mov  al, 0x90
+   165 0000002F C3                      .r:     ret
+   166                                  s2_init_cont:
+   167                                  
+   168                                          ; ---- zero the mailbox ----
+   169 00000030 B80070                          mov ax, MBX_SEG
+   170 00000033 8EC0                            mov es, ax
+   171 00000035 31FF                            xor di, di
+   172 00000037 31C0                            xor ax, ax
+   173 00000039 B94000                          mov cx, 64
+   174 0000003C F3AB                            rep stosw
+   175                                  
+   176                                          ; ---- install INT 08h (IRQ0) handler, chained to the BIOS tick ----
+   177 0000003E FA                              cli
+   178 0000003F 31C0                            xor ax, ax
+   179 00000041 8EC0                            mov es, ax
+   180 00000043 268B1E2000                      mov bx, [es:0x20]           ; vector 08h lives at 0000:0020
+   181 00000048 891E[B904]                      mov [old08], bx
+   182 0000004C 268B1E2200                      mov bx, [es:0x22]
+   183 00000051 891E[BB04]                      mov [old08+2], bx
+   184 00000055 26C7062000[CF00]                mov word [es:0x20], int8_isr
+   185 0000005C 268C0E2200                      mov [es:0x22], cs
+   186                                  
+   187                                          ; ---- reprogram PIT counter0: mode 2, divisor 0 = 65536 ----------
+   188 00000061 B034                            mov al, 0x34                ; ch0 | lobyte+hibyte | mode 2
+   189 00000063 E677                            out PIT_CMD, al
+   190 00000065 30C0                            xor al, al
+   191 00000067 E671                            out PIT_CH0, al
+   192 00000069 E671                            out PIT_CH0, al
+   193 0000006B C706[B704]0000                  mov word [wraps], 0
+   194                                  
+   195                                          ; ---- unmask IRQ0 in the master PIC ----
+   196 00000071 E402                            in  al, PIC_IMR
+   197 00000073 24FE                            and al, 0xFE
+   198 00000075 E602                            out PIC_IMR, al
+   199 00000077 FB                              sti
+   200                                  
+   201                                          ; ---- GRCG off so the A800 window is a plain plane ----------------
+   202 00000078 30C0                            xor al, al
+   203 0000007A E67C                            out GR_MODE, al
+   204                                  
+   205                                          ; ---- run the test table ----
+   206 0000007C BE[8903]                        mov si, test_table
+   207                                  .next:
+   208 0000007F AD                              lodsw                       ; id (0 = end)
+   209 00000080 85C0                            test ax, ax
+   210 00000082 741C                            jz  .alldone
+   211 00000084 A3[C704]                        mov [m_id], ax
+   212 00000087 AD                              lodsw
+   213 00000088 A3[C904]                        mov [m_proc], ax
+   214 0000008B AD                              lodsw
+   215 0000008C A3[CB04]                        mov [m_nch], ax
+   216 0000008F AD                              lodsw
+   217 00000090 A3[CD04]                        mov [m_u0], ax
+   218 00000093 AD                              lodsw
+   219 00000094 A3[CF04]                        mov [m_u1], ax
+   220 00000097 AD                              lodsw
+   221 00000098 A3[D104]                        mov [m_name], ax
+   222 0000009B E85A00                          call measure
+   223 0000009E EBDF                            jmp .next
+   224                                  
+   225                                  .alldone:
+   226                                          ; mailbox[1] = record count, mailbox[0] = 0xBEEF sentinel LAST
+   227 000000A0 B80070                          mov ax, MBX_SEG
+   228 000000A3 8EC0                            mov es, ax
+   229 000000A5 26C70602000C00                  mov word [es:MBX_COUNT*2], NTESTS
+   230 000000AC 26C7060000EFBE                  mov word [es:MBX_SENT*2], 0xBEEF
+   231                                  
+   232                                          ; restore the BIOS tick vector (politeness), then halt on the
+   233                                          ; watched address so the emulator-side hook sees final results
+   234 000000B3 FA                              cli
+   235 000000B4 31C0                            xor ax, ax
+   236 000000B6 8EC0                            mov es, ax
+   237 000000B8 8B1E[B904]                      mov bx, [old08]
+   238 000000BC 26891E2000                      mov [es:0x20], bx
+   239 000000C1 8B1E[BB04]                      mov bx, [old08+2]
+   240 000000C5 26891E2200                      mov [es:0x22], bx
+   241 000000CA EA[000F]0020                    jmp S2_SEG:bench_done2      ; linear 0x20F00 -> np2kai hook dumps mbox
+   242                                  
+   243                                  ; ----------------------------------------------------------------------------
+   244                                  ; int8_isr -- IRQ0 (PIT counter0 wrap): bump [cs:wraps], chain to the BIOS
+   245                                  ; tick handler with an iret-shaped frame (its own EOI+IRET returns to us).
+   246                                  int8_isr:
+   247 000000CF 2EFF06[B704]                    inc  word [cs:wraps]
+   248 000000D4 9C                              pushf
+   249 000000D5 2EFF1E[B904]                    call far [cs:old08]
+   250 000000DA CF                              iret
+   251                                  
+   252                                  ; ----------------------------------------------------------------------------
+   253                                  ; latch_read -> AX = counter0 latched count (down-counting, period 65536)
+   254                                  latch_read:
+   255 000000DB B000                            mov al, 0x00                ; latch counter0
+   256 000000DD E677                            out PIT_CMD, al
+   257 000000DF E471                            in  al, PIT_CH0
+   258 000000E1 88C4                            mov ah, al
+   259 000000E3 E471                            in  al, PIT_CH0
+   260 000000E5 86C4                            xchg al, ah
+   261 000000E7 C3                              ret
+   262                                  
+   263                                  ; ----------------------------------------------------------------------------
+   264                                  ; snap -> DX:AX = absolute tick position = wraps*65536 - count.
+   265                                  ; Only used for the FDC test (a call can exceed one 26.7ms period).
+   266                                  snap:
+   267 000000E8 FA                              cli
+   268 000000E9 E8EFFF                          call latch_read
+   269 000000EC 2E8B16[B704]                    mov dx, [cs:wraps]
+   270 000000F1 FB                              sti
+   271 000000F2 F7D8                            neg ax                      ; -count mod 65536; CF set unless 0
+   272 000000F4 83DA00                          sbb dx, 0
+   273 000000F7 C3                              ret
+   274                                  
+   275                                  ; ----------------------------------------------------------------------------
+   276                                  ; measure -- run one table entry.
+   277                                  ;   [m_proc]  chunk routine, called [m_nch] times; each chunk < 65536 ticks.
+   278                                  ;             procs may clobber all registers; state lives in CS variables.
+   279                                  ;   id 12 (FDC) uses absolute-position timing instead of chunked deltas.
+   280                                  measure:
+   281 000000F8 B800A0                          mov ax, TVRAM
+   282 000000FB 8EC0                            mov es, ax
+   283 000000FD 8B1E[C504]                      mov bx, [rowpos]
+   284 00000101 8B36[D104]                      mov si, [m_name]
+   285 00000105 E8A200                          call putstr
+   286                                  
+   287 00000108 C706[C104]0000                  mov word [acc], 0
+   288 0000010E C706[C304]0000                  mov word [acc+2], 0
+   289                                  
+   290 00000114 803E[C704]0C                    cmp byte [m_id], 12
+   291 00000119 7425                            je  .abs
+   292                                  
+   293                                  .mloop:                             ; chunked path
+   294 0000011B E8BDFF                          call latch_read
+   295 0000011E A3[BD04]                        mov [vtmp], ax
+   296 00000121 FF16[C904]                      call word [m_proc]
+   297 00000125 E8B3FF                          call latch_read
+   298 00000128 89C3                            mov bx, ax
+   299 0000012A A1[BD04]                        mov ax, [vtmp]
+   300 0000012D 29D8                            sub ax, bx                  ; (v0 - v1) mod 65536; chunk < period
+   301 0000012F 0106[C104]                      add [acc], ax
+   302 00000133 8316[C304]00                    adc word [acc+2], 0
+   303 00000138 FF0E[CB04]                      dec word [m_nch]
+   304 0000013C 75DD                            jnz .mloop
+   305 0000013E EB20                            jmp .report
+   306                                  
+   307                                  .abs:
+   308 00000140 E8A5FF                          call snap
+   309 00000143 A3[BD04]                        mov [vtmp], ax              ; pos0 lo
+   310 00000146 8916[BF04]                      mov [vtmp+2], dx            ; pos0 hi
+   311 0000014A FF16[C904]                      call word [m_proc]
+   312 0000014E E897FF                          call snap                   ; dx:ax = pos1
+   313 00000151 2B06[BD04]                      sub ax, [vtmp]
+   314 00000155 1B16[BF04]                      sbb dx, [vtmp+2]
+   315 00000159 A3[C104]                        mov [acc], ax
+   316 0000015C 8916[C304]                      mov [acc+2], dx
+   317                                  
+   318                                  .report:
+   319                                          ; append mailbox record {id, tick_lo, tick_hi, units_lo, units_hi}
+   320 00000160 1E                              push ds
+   321 00000161 B80070                          mov ax, MBX_SEG
+   322 00000164 8ED8                            mov ds, ax
+   323 00000166 8B1E[D304]                      mov bx, [m_rec]
+   324 0000016A A1[C704]                        mov ax, [m_id]
+   325 0000016D 8907                            mov [bx], ax
+   326 0000016F A1[C104]                        mov ax, [acc]
+   327 00000172 894702                          mov [bx+2], ax
+   328 00000175 A1[C304]                        mov ax, [acc+2]
+   329 00000178 894704                          mov [bx+4], ax
+   330 0000017B A1[CD04]                        mov ax, [m_u0]
+   331 0000017E 894706                          mov [bx+6], ax
+   332 00000181 A1[CF04]                        mov ax, [m_u1]
+   333 00000184 894708                          mov [bx+8], ax
+   334 00000187 1F                              pop ds
+   335 00000188 8306[D304]0A                    add word [m_rec], 10
+   336                                  
+   337                                          ; print decimal ticks at column 12 of this row
+   338 0000018D B800A0                          mov ax, TVRAM
+   339 00000190 8EC0                            mov es, ax
+   340 00000192 8B1E[C504]                      mov bx, [rowpos]
+   341 00000196 83C318                          add bx, 24
+   342 00000199 A1[C104]                        mov ax, [acc]
+   343 0000019C 8B16[C304]                      mov dx, [acc+2]
+   344 000001A0 E82000                          call putu32
+   345 000001A3 8106[C504]A000                  add word [rowpos], 160
+   346 000001A9 C3                              ret
+   347                                  
+   348                                  ; ----------------------------------------------------------------------------
+   349                                  ; putstr -- ds:si NUL-terminated -> es:bx (char at +0, attr 0xE1 at +0x2000)
+   350                                  putstr:
+   351 000001AA AC                      .l:     lodsb
+   352 000001AB 84C0                            test al, al
+   353 000001AD 7413                            jz .d
+   354 000001AF 268807                          mov [es:bx], al
+   355 000001B2 26C6470100                      mov byte [es:bx+1], 0
+   356 000001B7 26C6870020E1                    mov byte [es:bx+0x2000], 0xE1
+   357 000001BD 83C302                          add bx, 2
+   358 000001C0 EBE8                            jmp .l
+   359 000001C2 C3                      .d:     ret
+   360                                  
+   361                                  ; ----------------------------------------------------------------------------
+   362                                  ; putu32 -- DX:AX unsigned -> decimal at es:bx, 10 columns, leading spaces.
+   363                                  putu32:
+   364 000001C3 55                              push bp
+   365 000001C4 89E5                            mov  bp, sp
+   366 000001C6 83EC0C                          sub  sp, 12                 ; digit buffer at [bp-11..bp-2]
+   367 000001C9 89DE                            mov  si, bx                  ; screen position
+   368 000001CB 89EF                            mov  di, bp
+   369 000001CD 4F                              dec  di                      ; write digits downward from bp-1
+   370 000001CE BB0A00                          mov  bx, 10
+   371 000001D1 B90A00                          mov  cx, 10
+   372 000001D4 51                      .dl:    push cx
+   373 000001D5 89C1                            mov  cx, ax                  ; save lo
+   374 000001D7 89D0                            mov  ax, dx                  ; hi
+   375 000001D9 31D2                            xor  dx, dx
+   376 000001DB F7F3                            div  bx                      ; ax = hi/10, dx = hi%10
+   377 000001DD 91                              xchg ax, cx                  ; ax = lo, cx = hi/10
+   378 000001DE F7F3                            div  bx                      ; ax = lo' quot, dx = remainder
+   379 000001E0 80C230                          add  dl, '0'
+   380 000001E3 8815                            mov  [di], dl
+   381 000001E5 4F                              dec  di
+   382 000001E6 89CA                            mov  dx, cx                  ; dx:ax = full quotient
+   383 000001E8 59                              pop  cx
+   384 000001E9 E2E9                            loop .dl
+   385                                          ; copy 10 chars to screen, blanking leading zeros
+   386 000001EB 47                              inc  di
+   387 000001EC B90A00                          mov  cx, 10
+   388 000001EF 31DB                            xor  bx, bx                  ; bx=0 until first nonzero digit
+   389 000001F1 8A05                    .cp:    mov  al, [di]
+   390 000001F3 3C30                            cmp  al, '0'
+   391 000001F5 750D                            jne  .keep
+   392 000001F7 85DB                            test bx, bx
+   393 000001F9 7509                            jnz  .keep
+   394 000001FB 83F901                          cmp  cx, 1                   ; always print the last digit
+   395 000001FE 7404                            je   .keep
+   396 00000200 B020                            mov  al, ' '
+   397 00000202 EB03                            jmp  .emit
+   398 00000204 BB0100                  .keep:  mov  bx, 1
+   399 00000207 268804                  .emit:  mov  [es:si], al
+   400 0000020A 26C6440100                      mov  byte [es:si+1], 0
+   401 0000020F 26C6840020E1                    mov  byte [es:si+0x2000], 0xE1
+   402 00000215 47                              inc  di
+   403 00000216 83C602                          add  si, 2
+   404 00000219 E2D6                            loop .cp
+   405 0000021B 89EC                            mov  sp, bp
+   406 0000021D 5D                              pop  bp
+   407 0000021E C3                              ret
+   408                                  
+   409                                  ; ----------------------------------------------------------------------------
+   410                                  ; test chunk routines ---------------------------------------------------------
+   411                                  ; ----------------------------------------------------------------------------
+   412                                  
+   413                                  ; 1: ALU chain -- 500 iterations of add/adc/xor/sub/add
+   414                                  t_alu:
+   415 0000021F B9F401                          mov cx, 500
+   416 00000222 B83412                          mov ax, 0x1234
+   417 00000225 BBBC9A                          mov bx, 0x9ABC
+   418 00000228 BA5555                          mov dx, 0x5555
+   419 0000022B BE0F0F                          mov si, 0x0F0F
+   420 0000022E BD3300                          mov bp, 0x0033
+   421 00000231 01D8                    .l:     add ax, bx
+   422 00000233 11D0                            adc ax, dx
+   423 00000235 31F0                            xor ax, si
+   424 00000237 29E8                            sub ax, bp
+   425 00000239 01C3                            add bx, ax
+   426 0000023B E2F4                            loop .l
+   427 0000023D C3                              ret
+   428                                  
+   429                                  ; 2: loop instruction itself -- 500 x loop (empty body baseline)
+   430                                  t_loop:
+   431 0000023E B9F401                          mov cx, 500
+   432 00000241 E2FE                    .l:     loop .l
+   433 00000243 C3                              ret
+   434                                  
+   435                                  ; 3: mul -- 200 x mul bx
+   436                                  t_mul:
+   437 00000244 B9C800                          mov cx, 200
+   438 00000247 B85476                          mov ax, 0x7654
+   439 0000024A BB1100                          mov bx, 17
+   440 0000024D F7E3                    .l:     mul bx                      ; dx:ax = ax*bx
+   441 0000024F 01D0                            add ax, dx                  ; keep ax moving
+   442 00000251 E2FA                            loop .l
+   443 00000253 C3                              ret
+   444                                  
+   445                                  ; 4: rep stosw 2048 words (4KB) into 0x5000:cycling offset
+   446                                  t_stosw:
+   447 00000254 B80050                          mov ax, SCR_SEG
+   448 00000257 8EC0                            mov es, ax
+   449 00000259 8B3E[D504]                      mov di, [scr_off]
+   450 0000025D B8AA55                          mov ax, 0x55AA
+   451 00000260 B90008                          mov cx, 2048
+   452 00000263 F3AB                            rep stosw
+   453 00000265 8106[D504]0010                  add word [scr_off], 4096
+   454 0000026B 8126[D504]FF7F                  and word [scr_off], 0x7FFF  ; stay inside the 32KB window
+   455 00000271 C3                              ret
+   456                                  
+   457                                  ; 5: rep movsw 2048 words: 0x50000+off -> 0x58000+off
+   458                                  t_movsw:
+   459 00000272 B80058                          mov ax, SCR2_SEG
+   460 00000275 8EC0                            mov es, ax
+   461 00000277 B80050                          mov ax, SCR_SEG
+   462 0000027A 8ED8                            mov ds, ax
+   463 0000027C 8B36[D504]                      mov si, [scr_off]
+   464 00000280 8B3E[D504]                      mov di, [scr_off]
+   465 00000284 B90008                          mov cx, 2048
+   466 00000287 F3A5                            rep movsw
+   467 00000289 8106[D504]0010                  add word [scr_off], 4096
+   468 0000028F 8126[D504]FF7F                  and word [scr_off], 0x7FFF
+   469 00000295 0E                              push cs
+   470 00000296 1F                              pop  ds
+   471 00000297 C3                              ret
+   472                                  
+   473                                  ; 6: rep lodsw 2048 words from 0x50000+off (pure read)
+   474                                  t_lodsw:
+   475 00000298 B80050                          mov ax, SCR_SEG
+   476 0000029B 8ED8                            mov ds, ax
+   477 0000029D 8B36[D504]                      mov si, [scr_off]
+   478 000002A1 B90008                          mov cx, 2048
+   479 000002A4 F3AD                            rep lodsw
+   480 000002A6 8106[D504]0010                  add word [scr_off], 4096
+   481 000002AC 8126[D504]FF7F                  and word [scr_off], 0x7FFF
+   482 000002B2 0E                              push cs
+   483 000002B3 1F                              pop  ds
+   484 000002B4 C3                              ret
+   485                                  
+   486                                  ; 7: rep stosw 2048 words into TVRAM (8KB window over 2 chunks)
+   487                                  t_tvram:
+   488 000002B5 B800A0                          mov ax, TVRAM
+   489 000002B8 8EC0                            mov es, ax
+   490 000002BA 8B3E[D704]                      mov di, [tv_off]
+   491 000002BE B820E1                          mov ax, 0xE120
+   492 000002C1 B90008                          mov cx, 2048
+   493 000002C4 F3AB                            rep stosw
+   494 000002C6 8106[D704]0010                  add word [tv_off], 4096
+   495 000002CC 8126[D704]FF1F                  and word [tv_off], 0x1FFF   ; 8KB window
+   496 000002D2 C3                              ret
+   497                                  
+   498                                  ; 8: rep stosb 4096 bytes into the GVRAM plane window at A800
+   499                                  t_gvram:
+   500 000002D3 B800A8                          mov ax, 0xA800
+   501 000002D6 8EC0                            mov es, ax
+   502 000002D8 8B3E[D904]                      mov di, [gv_off]
+   503 000002DC B03C                            mov al, 0x3C
+   504 000002DE B90010                          mov cx, 4096
+   505 000002E1 F3AA                            rep stosb
+   506 000002E3 8106[D904]0010                  add word [gv_off], 4096
+   507 000002E9 8126[D904]FF3F                  and word [gv_off], 0x3FFF   ; 16KB worth
+   508 000002EF C3                              ret
+   509                                  
+   510                                  ; 9: in al,0x71 x512 (I/O read latency)
+   511                                  t_in:
+   512 000002F0 B90002                          mov cx, 512
+   513 000002F3 BA7100                          mov dx, PIT_CH0
+   514 000002F6 EC                      .l:     in  al, dx
+   515 000002F7 E2FD                            loop .l
+   516 000002F9 C3                              ret
+   517                                  
+   518                                  ; 10: near call x500
+   519                                  t_near:
+   520 000002FA B9F401                          mov cx, 500
+   521 000002FD E80300                  .l:     call near_sub
+   522 00000300 E2FB                            loop .l
+   523 00000302 C3                              ret
+   524                                  near_sub:
+   525 00000303 C3                              ret
+   526                                  
+   527                                  ; 11: far call x500 (same-segment far call + retf)
+   528                                  t_far:
+   529 00000304 B9F401                          mov cx, 500
+   530 00000307 9A[0F03]0020            .l:     call S2_SEG:far_sub
+   531 0000030C E2F9                            loop .l
+   532 0000030E C3                              ret
+   533                                  far_sub:
+   534 0000030F CB                              retf
+   535                                  
+   536                                  ; 12: FDC -- two INT 1Bh calls, whole cylinders 0 and 1 (32 x 1024B).
+   537                                  ;     fdc_st collects the AH status bytes into the units_hi record field.
+   538                                  t_fdc:
+   539 00000310 C706[DB04]0000                  mov word [fdc_st], 0
+   540 00000316 B80050                          mov ax, SCR_SEG             ; buffer phys 0x50000, 16KB per call
+   541 00000319 8EC0                            mov es, ax
+   542 0000031B 31ED                            xor bp, bp
+   543 0000031D BB0040                          mov bx, 16*1024
+   544 00000320 E8FCFC                          call bootdrv                ; AL = 0x90+unit
+   545 00000323 B496                            mov ah, 0x96                ; read|seek|2HD
+   546 00000325 30C9                            xor cl, cl                  ; cyl 0
+   547 00000327 30F6                            xor dh, dh                  ; head 0
+   548 00000329 B201                            mov dl, 1                   ; R = 1
+   549 0000032B B503                            mov ch, 3                   ; N = 3
+   550 0000032D CD1B                            int 0x1b
+   551 0000032F 8826[DB04]                      mov [fdc_st], ah
+   552 00000333 B80050                          mov ax, SCR_SEG
+   553 00000336 8EC0                            mov es, ax
+   554 00000338 31ED                            xor bp, bp
+   555 0000033A BB0040                          mov bx, 16*1024
+   556 0000033D E8DFFC                          call bootdrv
+   557 00000340 B496                            mov ah, 0x96
+   558 00000342 B101                            mov cl, 1                   ; cyl 1
+   559 00000344 30F6                            xor dh, dh
+   560 00000346 B201                            mov dl, 1
+   561 00000348 B503                            mov ch, 3
+   562 0000034A CD1B                            int 0x1b
+   563 0000034C 8826[DC04]                      mov [fdc_st+1], ah
+   564 00000350 A1[DB04]                        mov ax, [fdc_st]
+   565 00000353 A3[CF04]                        mov [m_u1], ax              ; AH status -> units_hi of the record
+   566 00000356 C3                              ret
+   567                                  
+   568                                  ; ----------------------------------------------------------------------------
+   569                                  ; data ------------------------------------------------------------------------
+   570 00000357 504339382042454E43-     str_title:  db "PC98 BENCH  pit0 mode2 div65536  tick=1/2.4576MHz", 0
+   570 00000360 48202070697430206D-
+   570 00000369 6F6465322064697636-
+   570 00000372 353533362020746963-
+   570 0000037B 6B3D312F322E343537-
+   570 00000384 364D487A00         
+   571                                  
+   572                                  ; test table: id, proc, nchunks, units_lo, units_hi, name
+   573                                  test_table:
+   574 00000389 0100[1F02]14001027-             dw 1,  t_alu,   20, 10000, 0, s_alu
+   574 00000391 0000[1B04]         
+   575 00000395 0200[3E02]14001027-             dw 2,  t_loop,  20, 10000, 0, s_loop
+   575 0000039D 0000[2804]         
+   576 000003A1 0300[4402]1400A00F-             dw 3,  t_mul,   20,  4000, 0, s_mul
+   576 000003A9 0000[3504]         
+   577 000003AD 0400[5402]08000080-             dw 4,  t_stosw,  8, 32768, 0, s_stosw
+   577 000003B5 0000[4204]         
+   578 000003B9 0500[7202]08000080-             dw 5,  t_movsw,  8, 32768, 0, s_movsw
+   578 000003C1 0000[4F04]         
+   579 000003C5 0600[9802]08000080-             dw 6,  t_lodsw,  8, 32768, 0, s_lodsw
+   579 000003CD 0000[5C04]         
+   580 000003D1 0700[B502]02000020-             dw 7,  t_tvram,  2,  8192, 0, s_tvram
+   580 000003D9 0000[6904]         
+   581 000003DD 0800[D302]04000040-             dw 8,  t_gvram,  4, 16384, 0, s_gvram
+   581 000003E5 0000[7604]         
+   582 000003E9 0900[F002]10000020-             dw 9,  t_in,    16,  8192, 0, s_in
+   582 000003F1 0000[8304]         
+   583 000003F5 0A00[FA02]14001027-             dw 10, t_near,  20, 10000, 0, s_near
+   583 000003FD 0000[9004]         
+   584 00000401 0B00[0403]14001027-             dw 11, t_far,   20, 10000, 0, s_far
+   584 00000409 0000[9D04]         
+   585 0000040D 0C00[1003]01002000-             dw 12, t_fdc,    1,    32, 0, s_fdc
+   585 00000415 0000[AA04]         
+   586 00000419 0000                            dw 0
+   587                                  
+   588 0000041B 303120414C55354F50-     s_alu:   db "01 ALU5OP   ", 0
+   588 00000424 20202000           
+   589 00000428 3032204C4F4F502020-     s_loop:  db "02 LOOP     ", 0
+   589 00000431 20202000           
+   590 00000435 3033204D554C202020-     s_mul:   db "03 MUL      ", 0
+   590 0000043E 20202000           
+   591 00000442 30342053544F535733-     s_stosw: db "04 STOSW32K ", 0
+   591 0000044B 324B2000           
+   592 0000044F 3035204D4F56535733-     s_movsw: db "05 MOVSW32K ", 0
+   592 00000458 324B2000           
+   593 0000045C 3036204C4F44535733-     s_lodsw: db "06 LODSW32K ", 0
+   593 00000465 324B2000           
+   594 00000469 303720545652414D38-     s_tvram: db "07 TVRAM8K  ", 0
+   594 00000472 4B202000           
+   595 00000476 303820475652414D31-     s_gvram: db "08 GVRAM16K ", 0
+   595 0000047F 364B2000           
+   596 00000483 303920494E37312020-     s_in:    db "09 IN71     ", 0
+   596 0000048C 20202000           
+   597 00000490 3130204E4541524341-     s_near:  db "10 NEARCALL ", 0
+   597 00000499 4C4C2000           
+   598 0000049D 31312046415243414C-     s_far:   db "11 FARCALL  ", 0
+   598 000004A6 4C202000           
+   599 000004AA 313220464443333253-     s_fdc:   db "12 FDC32SEC ", 0
+   599 000004B3 45432000           
+   600                                  
+   601                                  ; ----------------------------------------------------------------------------
+   602                                  ; variables (all in CS = 0x2000)
+   603 000004B7 0000                    wraps:      dw 0                    ; counter0 wrap count (IRQ0 handler)
+   604 000004B9 00000000                old08:      dd 0                    ; saved INT 08h vector
+   605 000004BD 00000000                vtmp:       dd 0
+   606 000004C1 00000000                acc:        dd 0
+   607 000004C5 A000                    rowpos:     dw 160
+   608 000004C7 0000                    m_id:       dw 0
+   609 000004C9 0000                    m_proc:     dw 0
+   610 000004CB 0000                    m_nch:      dw 0
+   611 000004CD 0000                    m_u0:       dw 0
+   612 000004CF 0000                    m_u1:       dw 0
+   613 000004D1 0000                    m_name:     dw 0
+   614 000004D3 0400                    m_rec:      dw MBX_RECS*2           ; mailbox record cursor (byte offset)
+   615 000004D5 0000                    scr_off:    dw 0
+   616 000004D7 0000                    tv_off:     dw 0
+   617 000004D9 0000                    gv_off:     dw 0
+   618 000004DB 0000                    fdc_st:     dw 0
+   619                                  
+   620 000004DD 00<rep A23h>                    times 0x0F00-($-$$) db 0    ; park the done loop at a fixed address:
+   621                                  bench_done2:                        ; linear 0x20F00 -- np2kai hook watches it
+   622 00000F00 EBFE                            jmp short bench_done2

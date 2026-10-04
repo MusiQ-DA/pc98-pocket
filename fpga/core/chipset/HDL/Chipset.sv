@@ -68,6 +68,9 @@ module CHIPSET #(
         // The guest's graphics is in a doubled 200-line mode; pocket_video's
         // "Skip" 200-line presentation reads it.
         output  logic           dbl200,
+        // mode1 bit 4: the graphics layer's mabiki flag -- odd rasterlines
+        // are never drawn while it is set (np21w makegrph.c).
+        output  logic           mabiki,
         // In lockstep with VID_R/G/B: the dot belongs to the text plane, which
         // the "Skip" presentation must leave alone.
         output  logic           VID_TXT,
@@ -438,6 +441,7 @@ module CHIPSET #(
         .VID_HBlank                         (VID_HBlank),
         .VID_VBlank                         (VID_VBlank),
         .dbl200                             (dbl200),
+        .mabiki                             (mabiki),
         .VID_TXT                            (VID_TXT),
         .address                            (address),
 	    .latch_address                      (latch_address),

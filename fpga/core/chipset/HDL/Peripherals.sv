@@ -78,6 +78,12 @@ module PERIPHERALS #(
         // The guest's graphics is in a doubled 200-line mode (gdc_s_dbl
         // below); the compositor's "Skip" 200-line presentation reads it.
         output  logic           dbl200,
+        // mode1 bit 4 (port 0x68): the 200-line mabiki flag -- on hardware
+        // the odd rasterlines of the graphics layer are never drawn while
+        // this is set. np21w makegrph.c checks `!(liney & 1) || !(mode1 &
+        // 0x10)`. It is NOT the doubling itself (that is the slave's
+        // CSRFORM LR); it only darkens the odd rasterlines.
+        output  logic           mabiki,
         // Registered in lockstep with VID_R/G/B: the composited dot is a text
         // cell's, not the graphics planes'. The text plane runs the master's
         // own 400-line timing even under a doubled graphics mode, so the
@@ -1566,20 +1572,24 @@ module PERIPHERALS #(
     logic gdc_vs_q3 = 1'b0;
     // A "200 line" graphics mode means each VRAM line serves two rasterlines
     // on this fixed 400-line raster (np21w's GRPH_LR=1 walk, maketgrp).
-    // Three sources flag it, in the order software touches them: mode1 bit 4
-    // (the port 0x68 flip-flop the BIOS sets beside it), the slave GDC's
-    // CSRFORM LR field itself, and a true-15.98 kHz SYNC whose AL field is
-    // ~200 (np21w's 15kHz table writes 200 here, the 24kHz one 400).
-    // Latched at the frame edge like the text-mode bits so a mode flip
-    // tears at most one frame.
+    // Two sources flag it: the slave GDC's CSRFORM LR field (np21w
+    // makegrph's `mg.lr = (para[GDC_CSRFORM] & 0x1f) + 1`) and a ~200-line
+    // SYNC AL (a guest programming 200 active lines means a shorter frame
+    // on hardware; doubling is how the fixed 400-line raster presents it).
+    // mode1 bit 4 is deliberately NOT here: in np21w it only keeps the odd
+    // rasterlines dark (mabiki) and does not stretch the picture -- folding
+    // it into the repeat doubled every 400-line display, which is how the
+    // BIOS leaves the machine. Latched at the frame edge like the text-mode
+    // bits so a mode flip tears at most one frame.
     logic gdc_s_dbl = 1'b0;
+    logic gdc_s_mab = 1'b0;
     always_ff @(posedge clock) begin
         gdc_vs_q3 <= gdc_vs_q;
         if (gdc_vs_q & ~gdc_vs_q3) begin
             pc98_ank8 <= ~pc98_mode1[3];
             pc98_wide <=  pc98_mode1[2];
-            gdc_s_dbl <= pc98_mode1[4]
-                      || (gdc_s_lrep != 5'd0)
+            gdc_s_mab <=  pc98_mode1[4];
+            gdc_s_dbl <= (gdc_s_lrep != 5'd0)
                       || ((gdc_s_al != 10'd0) && (gdc_s_al < 10'd256));
         end
     end
@@ -1753,6 +1763,7 @@ module PERIPHERALS #(
     assign VID_VBlank = pc98_vb;
     assign de_o      = pc98_de;
     assign dbl200    = gdc_s_dbl;
+    assign mabiki    = gdc_s_mab;
     assign VID_TXT   = t_pix_q;
 
     wire [7:0]  tvram_cpu_q;
