@@ -369,9 +369,9 @@ module zet_cpu_bridge (
     // up and ends on the first passive negedge, instead of four up and
     // two passive -- ~6 slots to ~3. INTA pairs keep the faithful count:
     // for the 8259's two-acknowledge sequence the pacing IS the contract.
+    // BISECT: gap stays faithful -- testing the t_cnt shrink alone.
     wire fast_pair = fast_pace && !cur_inta;
-    wire pair_finish = (bstate == B_GAP)
-                     && (fast_pair ? cpu_ce_negedge : (gap_cnt == 2'd1));
+    wire pair_finish = (bstate == B_GAP) && (gap_cnt == 2'd1);
     wire pair_done   = pair_finish && last_byte;
     wire inta_done   = pair_done && cur_inta;
 
@@ -441,7 +441,7 @@ module zet_cpu_bridge (
                 if (cpu_ce_posedge)
                     gap_cnt <= gap_cnt + 2'd1;
 
-                if (fast_pair ? cpu_ce_negedge : (gap_cnt == 2'd1)) begin
+                if (gap_cnt == 2'd1) begin
                     if (last_byte) begin
                         if (cur_inta) begin
                             int_vector  <= rd_hi;   // ACK2's byte
