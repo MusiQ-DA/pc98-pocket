@@ -368,12 +368,15 @@ module zet_cpu_bridge (
     // ea/00/00/80/fd as 00/ea/00/00), so the early count is qualified on
     // saw_low, the fall that marks THIS byte's access actually started.
     // Bytes whose access never drops ready fall back to the faithful
-    // count. The gap is NOT shrunk: ending the machine cycle early makes
-    // the next byte's accept race the ready/data settle (same stale-data
-    // signature on the E2E mirror). INTA pairs keep the faithful count:
-    // for the 8259's two-acknowledge sequence the pacing IS the contract.
+    // count. The gap ends at the first passive negedge -- pair_finish is
+    // the pair's ONLY terminator: rd_word assembly, biu_done, the byte
+    // transition and the Wishbone ack must all move on the same edge, or
+    // the ack lands before the data (the stale-word signature returns).
+    // INTA pairs keep the faithful count: for the 8259's two-acknowledge
+    // sequence the pacing IS the contract.
     wire fast_pair = fast_pace && !cur_inta;
-    wire pair_finish = (bstate == B_GAP) && (gap_cnt == 2'd1);
+    wire pair_finish = (bstate == B_GAP)
+                     && (fast_pair ? cpu_ce_negedge : (gap_cnt == 2'd1));
     wire pair_done   = pair_finish && last_byte;
     wire inta_done   = pair_done && cur_inta;
 
@@ -452,7 +455,7 @@ module zet_cpu_bridge (
                 if (cpu_ce_posedge)
                     gap_cnt <= gap_cnt + 2'd1;
 
-                if (gap_cnt == 2'd1) begin
+                if (pair_finish) begin
                     if (last_byte) begin
                         if (cur_inta) begin
                             int_vector  <= rd_hi;   // ACK2's byte
