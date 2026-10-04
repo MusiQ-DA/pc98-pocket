@@ -1364,6 +1364,10 @@ module core_top (
             // where it parks: S_RDW = RAM never answered, S_DONE+svc_hold
             // = guest strobe never dropped, svc_req alone = nobody granted
             // the channel (the guest bus is saturated or a hold/HLDA).
+            // While fsm is IDLE the low five bits instead carry the last
+            // svc-write arm's {svc_raw_wr, egc_here, grcg_active, window,
+            // grcg_here} -- which term denied the charger, see the seq's
+            // dbg port comment.
             8'h31:   probe_data_c = {24'h0, gvram_dbg};
             // 0x32: the drawing server's health, one read. Ops = the two
             // channels' live opcode bytes {slave, master}; flag = the
@@ -1412,11 +1416,6 @@ module core_top (
             8'h3c:   probe_data_c = chipset_dbg5[63:32];
             8'h3d:   probe_data_c = chipset_dbg5[95:64];
             8'h3e:   probe_data_c = chipset_dbg5[127:96];
-            // 0x3f: the GVRAM sequencer's svc-write charger witness --
-            // {sticky flags, legs count, leg ctx, arm ctx}, see
-            // pc98_gvram_seq's dbg2 port for the bit plan. 0x40-0x5f
-            // belongs to the pc_hist ring below.
-            8'h3f:   probe_data_c = gvram_dbg2;
             // 0x64-0x66: last three writes to the watch address (0x8a);
             // 0x67: {watch count, 24'h0}.
             8'h64:   probe_data_c = chipset_dbg7[31:0];
@@ -2448,7 +2447,6 @@ module core_top (
     wire [103:0] chipset_dbg11;
     wire  [55:0] chipset_dbg12;
     wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
-    wire [31:0]  gvram_dbg2;  // svc-write charger witness (slot 0x40)
     wire [33:0]  dbg_scsi;   // {ack,req,mg_rd_cnt,post_cnt,rom_rd_cnt}
     wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
     wire [63:0]  fdc_dbg_cmd;  // live command {op,unit,C,H,R,N,EOT,GPL}
@@ -2691,7 +2689,6 @@ module core_top (
         .dbg_chipset11                      (chipset_dbg11),
         .dbg_chipset12                      (chipset_dbg12),
         .dbg_gvram                          (gvram_dbg),
-        .dbg_gvram2                         (gvram_dbg2),
         .dbg_scsi                           (dbg_scsi),
     //  .terminal_count_n                   (terminal_count_n)
         .speaker_out                        (speaker_out),

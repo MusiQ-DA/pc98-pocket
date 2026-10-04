@@ -71,7 +71,7 @@ module tb_pc98_egc;
         .cpu_rdata_hi(cpu_rdata_hi),
         .cpu_rdata(cpu_rdata), .cpu_ready(cpu_ready),
         .svc_req(1'b0), .svc_we(1'b0), .svc_raw(1'b0), .svc_addr(20'h0),
-        .svc_wdata(8'h00), .svc_done(), .svc_rdata(), .dbg(), .dbg2(),
+        .svc_wdata(8'h00), .svc_done(), .svc_rdata(), .dbg(),
         .grcg_active(grcg_active), .grcg_rmw(grcg_rmw),
         .grcg_mask(grcg_mask), .grcg_tile(grcg_tile),
         .analog_mode(analog_mode),
