@@ -55,6 +55,7 @@ module zet (
   wire [15:0] cpu_dat_i;
   wire        cpu_we_o;
   wire [15:0] iid_dat_i;
+  wire        exec_st;
 
   // Module instantiations
   zet_core core (
@@ -78,14 +79,17 @@ module zet (
 
     .pc (pc),
     .dbg_fault (dbg_fault),
-    .dbg_opc   (dbg_opc)
+    .dbg_opc   (dbg_opc),
+    .exec_st_o (exec_st)
   );
 
   zet_wb_master wb_master (
     .cpu_byte_o (cpu_byte_o),
     .cpu_memop  (cpu_mem_op),
     .cpu_m_io   (cpu_m_io),
+    .cpu_fetch  (~exec_st),
     .cpu_adr_o  (cpu_adr_o),
+    .pc         (pc),
     .cpu_block  (cpu_block),
     .cpu_dat_i  (cpu_dat_i),
     .cpu_dat_o  (cpu_dat_o),

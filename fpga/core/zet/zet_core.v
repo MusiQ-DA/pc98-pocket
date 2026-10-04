@@ -42,7 +42,8 @@ module zet_core (
 
     output [19:0] pc,  // for debugging purposes
     output        dbg_fault, // seq_addr enters INVOP or INTD (1-zet_clk pulse)
-    output [7:0]  dbg_opc    // opcode being decoded when dbg_fault fired
+    output [7:0]  dbg_opc,   // opcode being decoded when dbg_fault fired
+    output        exec_st_o  // 1 while executing (0 => bus op is instr fetch)
   );
 
   // Net declarations
@@ -289,6 +290,7 @@ module zet_core (
   );
 
   // Assignments
+  assign exec_st_o  = exec_st;
   assign cpu_adr_o  = exec_st ? addr_exec : pc;
   assign cpu_byte_o = exec_st ? byte_exec : byte_fetch;
   assign cpu_mem_op = ir[`MEM_OP];
