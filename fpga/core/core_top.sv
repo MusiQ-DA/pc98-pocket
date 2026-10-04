@@ -1418,15 +1418,15 @@ module core_top (
             8'h3e:   probe_data_c = chipset_dbg5[127:96];
             // 0x3f: the service channel's launched operands, read straight
             // off the softcpu-subsystem wires -- {st_addr[19:0],
-            // st_wdata[7:0], st_req, st_we, st_raw}. They hold the LAST
-            // trigger's values through the park, so when 0x31's arm ctx
-            // says a write armed raw this slot answers whether the
-            // subsystem really latched raw (st_raw=1 -> the launch saw
-            // wdata[2]=1) or the seq armed it anyway (st_raw=0 -> the
-            // corruption is on the svc_raw path, not the launch).
-            // Existing wires only: a fresh port chain here hits the same
-            // VPR tdc_util crash the dbg2 chain did, so the trigger-byte
-            // witness lives in tb_softcpu_trig instead.
+            // st_wdata[7:0], st_req, st_we, st_raw}. st_addr holds the
+            // last op's operand address; st_wdata holds the operand until
+            // the op's st_done, when the subsystem parks the byte
+            // cpu_mem_wdata carried AT THE LAUNCH (st_tbyte). So a parked
+            // read shows {op addr, TRIGGER byte, req, we, raw}: when the
+            // raw bit is set, the byte right beside it is the decisive
+            // witness -- 5/FF means the bus really carried a non-trigger
+            // value into the launch (CPU side), 1 means the launch saw a
+            // clean byte and st_raw itself is corrupted (downstream).
             8'h3f:   probe_data_c = {1'b0, st_addr_w, st_wdata_w,
                                      st_req_w, st_we_w, st_raw_w};
             // 0x64-0x66: last three writes to the watch address (0x8a);

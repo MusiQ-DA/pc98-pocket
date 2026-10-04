@@ -142,13 +142,20 @@ module tb_softcpu_trig;
     // the operand register (set by the 0x5000_0004 store). Launch 3 is the
     // wdata-lag probe: 0xFF in the operand register means ANY bleed into
     // the trigger's launch shows up as raw=1.
+    //
+    // st_wdata is also the witness-park wire: when an op's st_done lands
+    // the subsystem copies st_tbyte (the byte cpu_mem_wdata carried at
+    // the launch) into it, so a launch made WITHOUT a fresh operand
+    // store reads the PREVIOUS launch's trigger byte back. Launches
+    // 2/4/5 therefore expect 0x01/0x01/0x05 -- and launch 5 seeing 0x05
+    // is itself the proof that the park path surfaces a raw trigger.
     function automatic [9:0] exp_launch(input integer n);
         case (n)
-            1: exp_launch = {1'b1, 1'b0, 8'hAA}; // trig=1
-            2: exp_launch = {1'b0, 1'b0, 8'hAA}; // trig=2
-            3: exp_launch = {1'b1, 1'b0, 8'hFF}; // FF then 1
-            4: exp_launch = {1'b1, 1'b1, 8'hFF}; // trig=5
-            5: exp_launch = {1'b1, 1'b0, 8'hFF}; // trig=1
+            1: exp_launch = {1'b1, 1'b0, 8'hAA}; // trig=1, operand AA
+            2: exp_launch = {1'b0, 1'b0, 8'h01}; // trig=2; parks L1's byte
+            3: exp_launch = {1'b1, 1'b0, 8'hFF}; // operand FF then trig=1
+            4: exp_launch = {1'b1, 1'b1, 8'h01}; // trig=5; parks L3's byte
+            5: exp_launch = {1'b1, 1'b0, 8'h05}; // trig=1; parks L4's byte
             default: exp_launch = 10'd0;
         endcase
     endfunction
