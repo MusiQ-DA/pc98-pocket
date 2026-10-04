@@ -137,6 +137,8 @@ module tb_pc98_boot;
     zet_cpu_bridge u_bridge (
         .clk               (clk_chipset),
         .cpu_ce_posedge    (cpu_ce_posedge),
+        .cpu_ce_negedge    (cpu_ce_negedge),
+        .fast_pace         (1'b0),
         .reset             (cpu_reset_w),
         .zet_clk           (zet_clk),
         .wb_dat_o          (zwb_dat_o),

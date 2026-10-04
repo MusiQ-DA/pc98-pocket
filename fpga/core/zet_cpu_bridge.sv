@@ -63,6 +63,10 @@ module zet_cpu_bridge (
     // chipset domain
     input  wire         clk,                // clk_chipset
     input  wire         cpu_ce_posedge,     // the CE train the 8288 runs on
+    input  wire         cpu_ce_negedge,     // its falling half: the fast-pair
+                                            // gap ends on a PASV negedge
+    input  wire         fast_pace,          // clk_select[1]: the fast settings
+                                            // trade T-state fidelity for speed
     input  wire         reset,              // reset_cpu
 
     // the Zet's Wishbone pins
@@ -354,7 +358,20 @@ module zet_cpu_bridge (
                               ? (srv_addr[0] ? srv_data[15:8] : srv_data[7:0])
                               : srv_data[15:8];
 
-    wire pair_finish = (bstate == B_GAP) && (gap_cnt == 2'd1);
+    // fast_pace = clk_select[1], the beyond-real-hardware settings, where
+    // the T-state model gives up fidelity it no longer needs. What cannot
+    // shrink is set by the 8288, not by this engine: machine_cycle shifts
+    // one bit per live-status negedge, so the strobes need TWO negedges
+    // inside the byte -- machine_cycle[0] (reads, advanced writes, INTA)
+    // AND machine_cycle[1] (the late write strobes, which some models tap)
+    // both get there. The gap likewise ends only on a PASV negedge so
+    // machine_cycle re-arms. A fast byte therefore keeps three posedges
+    // up and ends on the first passive negedge, instead of four up and
+    // two passive -- ~6 slots to ~3. INTA pairs keep the faithful count:
+    // for the 8259's two-acknowledge sequence the pacing IS the contract.
+    wire fast_pair = fast_pace && !cur_inta;
+    wire pair_finish = (bstate == B_GAP)
+                     && (fast_pair ? cpu_ce_negedge : (gap_cnt == 2'd1));
     wire pair_done   = pair_finish && last_byte;
     wire inta_done   = pair_done && cur_inta;
 
@@ -409,7 +426,7 @@ module zet_cpu_bridge (
                 if (cpu_ce_posedge)
                     t_cnt <= (t_cnt != 3'd7) ? (t_cnt + 3'd1) : 3'd7;
 
-                if ((t_cnt >= 3'd3) && cpu_ce_posedge
+                if ((t_cnt >= (fast_pair ? 3'd2 : 3'd3)) && cpu_ce_posedge
                     && processor_ready && bus_ours) begin
                     if (cur_read && (byte_idx == 2'd0)) rd_lo <= data_bus;
                     if (cur_read && (byte_idx == 2'd1)) rd_hi <= data_bus;
@@ -424,7 +441,7 @@ module zet_cpu_bridge (
                 if (cpu_ce_posedge)
                     gap_cnt <= gap_cnt + 2'd1;
 
-                if (gap_cnt == 2'd1) begin
+                if (fast_pair ? cpu_ce_negedge : (gap_cnt == 2'd1)) begin
                     if (last_byte) begin
                         if (cur_inta) begin
                             int_vector  <= rd_hi;   // ACK2's byte
