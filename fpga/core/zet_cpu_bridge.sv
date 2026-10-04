@@ -267,6 +267,7 @@ module zet_cpu_bridge (
     reg  [1:0] bstate;
     reg  [1:0] byte_idx;      // 0 = the addressed byte, 1 = the odd half
     reg  [2:0] t_cnt;         // posedge-CE edges since this byte went up
+    reg        saw_low;       // processor_ready fell during THIS byte's command
     reg  [1:0] gap_cnt;
     reg  [7:0] rd_lo;
     reg  [7:0] rd_hi;
@@ -359,17 +360,18 @@ module zet_cpu_bridge (
                               : srv_data[15:8];
 
     // fast_pace = clk_select[1], the beyond-real-hardware settings, where
-    // the T-state model gives up fidelity it no longer needs. What cannot
-    // shrink is set by the 8288, not by this engine: machine_cycle shifts
-    // one bit per live-status negedge, so the strobes need TWO negedges
-    // inside the byte -- machine_cycle[0] (reads, advanced writes, INTA)
-    // AND machine_cycle[1] (the late write strobes, which some models tap)
-    // both get there. The gap likewise ends only on a PASV negedge so
-    // machine_cycle re-arms. A fast byte therefore keeps three posedges
-    // up and ends on the first passive negedge, instead of four up and
-    // two passive -- ~6 slots to ~3. INTA pairs keep the faithful count:
+    // the T-state model gives up fidelity it no longer needs. The shrink
+    // is one posedge out of the command phase -- and only on a FRESH
+    // ready: processor_ready can still be high from the previous byte's
+    // completion when this byte's accept would fire (realmem E2E showed
+    // byte data arriving one access stale, e.g. the reset vector reading
+    // ea/00/00/80/fd as 00/ea/00/00), so the early count is qualified on
+    // saw_low, the fall that marks THIS byte's access actually started.
+    // Bytes whose access never drops ready fall back to the faithful
+    // count. The gap is NOT shrunk: ending the machine cycle early makes
+    // the next byte's accept race the ready/data settle (same stale-data
+    // signature on the E2E mirror). INTA pairs keep the faithful count:
     // for the 8259's two-acknowledge sequence the pacing IS the contract.
-    // BISECT: gap stays faithful -- testing the t_cnt shrink alone.
     wire fast_pair = fast_pace && !cur_inta;
     wire pair_finish = (bstate == B_GAP) && (gap_cnt == 2'd1);
     wire pair_done   = pair_finish && last_byte;
@@ -382,6 +384,7 @@ module zet_cpu_bridge (
             bstate           <= B_IDLE;
             byte_idx         <= 2'd0;
             t_cnt            <= 3'd0;
+            saw_low          <= 1'b0;
             gap_cnt          <= 2'd0;
             rd_lo            <= 8'h00;
             rd_hi            <= 8'h00;
@@ -418,16 +421,24 @@ module zet_cpu_bridge (
                                       : word_1cyc(srv_bs, srv_addr, srv_ube);
                     cpu_data_bus_hi  <= srv_data[15:8];
                     t_cnt            <= 3'd0;
+                    saw_low          <= 1'b0;
                     bstate           <= B_CMD;
                 end
               end
 
               B_CMD: begin
+                if (!processor_ready)
+                    saw_low <= 1'b1;
                 if (cpu_ce_posedge)
                     t_cnt <= (t_cnt != 3'd7) ? (t_cnt + 3'd1) : 3'd7;
 
-                if ((t_cnt >= (fast_pair ? 3'd2 : 3'd3)) && cpu_ce_posedge
-                    && processor_ready && bus_ours) begin
+                // Fast accept (t_cnt>=2) only on a FRESH ready: the level can
+                // still be the previous byte's residue, which would capture
+                // stale bus data. The t_cnt>=3 fallback keeps never-dropping
+                // accesses (instant I/O) on the faithful count.
+                if ((t_cnt >= 3'd3
+                     || (fast_pair && (t_cnt >= 3'd2) && saw_low))
+                    && cpu_ce_posedge && processor_ready && bus_ours) begin
                     if (cur_read && (byte_idx == 2'd0)) rd_lo <= data_bus;
                     if (cur_read && (byte_idx == 2'd1)) rd_hi <= data_bus;
                     if (cur_read && cur_1cyc)           rd_hi <= data_bus_hi;
