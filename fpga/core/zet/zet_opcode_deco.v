@@ -267,6 +267,28 @@ module zet_opcode_deco (
           dst <= 4'b0;
         end
 
+      8'b0110_110x: // ins
+        begin
+          seq_addr <= rep ? `INVOP : (b ? `INSB : `INSW);
+          need_modrm <= 1'b0;
+          need_off <= 1'b0;
+          need_imm <= 1'b0;
+          imm_size <= 1'b0;
+          src <= 4'b0;
+          dst <= 4'b0;
+        end
+
+      8'b0110_111x: // outs
+        begin
+          seq_addr <= rep ? (b ? `INVOP : `OUTSWR) : (b ? `OUTSB : `OUTSW);
+          need_modrm <= 1'b0;
+          need_off <= 1'b0;
+          need_imm <= 1'b0;
+          imm_size <= 1'b0;
+          src <= 4'b0;
+          dst <= 4'b0;
+        end
+
       8'b0110_10x0: // push imm
         begin
           seq_addr <= `PUSHI;

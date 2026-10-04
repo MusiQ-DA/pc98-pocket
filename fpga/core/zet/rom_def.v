@@ -174,3 +174,11 @@
 `define PUSHA	9'b111001110
 `define POPA	9'b111011011
 `define INVOP	9'b111100110
+
+// 80186 string I/O: sequences live in the tail block 9'h1F3-9'h1FF.
+// OUTSWR is REP-only: its single cx-1 micro-op falls through into OUTSW.
+`define OUTSB	9'b0111110011
+`define OUTSW	9'b0111110111
+`define OUTSWR	9'b0111110110
+`define INSB	9'b0111111010
+`define INSW	9'b0111111101
