@@ -113,8 +113,6 @@ module softcpu_subsystem (
     output           st_raw,
     output    [19:0] st_addr,
     output     [7:0] st_wdata,
-    output     [7:0] st_twd,
-    output     [7:0] st_twd2,
     input            st_done,
     input      [7:0] st_rdata,
     input      [7:0] accel_status,
@@ -274,14 +272,6 @@ module softcpu_subsystem (
     reg        st_raw_r   = 1'b0;
     reg [19:0] st_addr_r  = 20'd0;
     reg [7:0] st_wdata_r = 8'd0;
-    // Witness regs: st_twd holds cpu_mem_wdata's low byte on every st_trig
-    // cycle (what was on the bus during the last trigger-store window);
-    // st_twd2 holds it only on cycles that actually launch. Firmware only
-    // ever stores 1 or 2, so a parked read of 5/7/0xFF would prove the bus
-    // carried a non-trigger value -- the wdata-lag class of bug -- while a
-    // clean pair points the raw arm back at the svc_raw path itself.
-    reg [7:0] st_twd_r  = 8'd0;
-    reg [7:0] st_twd2_r = 8'd0;
     wire       st_trig    = cpu_mem_valid && cpu_mem_wstrb[0] &&
                             (cpu_mem_addr == 32'h5000_0008);
     always @(posedge clk_pico) begin
@@ -291,8 +281,6 @@ module softcpu_subsystem (
             st_raw_r   <= 1'b0;
             st_addr_r  <= 20'd0;
             st_wdata_r <= 8'd0;
-            st_twd_r   <= 8'd0;
-            st_twd2_r  <= 8'd0;
         end else begin
             if (cpu_mem_valid && cpu_mem_wstrb[0]) begin
                 if (cpu_mem_addr == 32'h5000_0000)
@@ -300,8 +288,6 @@ module softcpu_subsystem (
                 if (cpu_mem_addr == 32'h5000_0004)
                     st_wdata_r <= cpu_mem_wdata[7:0];
             end
-            if (st_trig)
-                st_twd_r <= cpu_mem_wdata[7:0];
             if (st_trig && !st_req_r && (cpu_mem_wdata[1:0] != 2'b00)) begin
                 st_we_r  <= cpu_mem_wdata[0];
                 // bit2 = bypass the charger: the GDC engine's WDAT is a raw
@@ -309,7 +295,6 @@ module softcpu_subsystem (
                 // gdcsub_write), not an access through the EGC/GRCG path.
                 st_raw_r <= cpu_mem_wdata[2];
                 st_req_r <= 1'b1;
-                st_twd2_r <= cpu_mem_wdata[7:0];
             end else if (st_req_r && st_done) begin
                 st_req_r <= 1'b0;
             end
@@ -320,8 +305,6 @@ module softcpu_subsystem (
     assign st_raw   = st_raw_r;
     assign st_addr  = st_addr_r;
     assign st_wdata = st_wdata_r;
-    assign st_twd   = st_twd_r;
-    assign st_twd2  = st_twd2_r;
 
     // OSD control at 0x20000004: bit0 = overlay shown.
     reg osd_active_r = 1'b0;

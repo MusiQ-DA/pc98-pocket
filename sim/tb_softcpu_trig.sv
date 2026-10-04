@@ -5,21 +5,20 @@
 //
 // The mystery on the metal: slot 0x31's arm ctx said a WDAT write armed
 // RAW even though the firmware only ever stores 1/2 to the trigger. The
-// 0x3f/0x60 probes were added to split "the trigger byte carried the raw
-// bit" from "the seq armed it anyway". This bench exercises the same
-// logic the probes watch:
+// 0x3f probe slot reads the launched {addr,wdata,req,we,raw} straight off
+// these wires; this bench exercises the same launch logic it watches:
 //
 //   * ST_WDATA = 0xFF then ST_TRIG = 1 — if the trigger launch could ever
-//     see the previous store's data, this is where st_raw/st_twd2 would
-//     show it (wdata-lag theory).
+//     see the previous store's data, this is where st_raw would show it
+//     (bit 2 of 0xFF is the raw flag itself; the wdata-lag theory).
 //   * ST_TRIG = 5 — sanity that raw CAN be latched when actually stored.
 //
 // Expected launches (addr=0x4008 throughout):
-//   1: we=1 raw=0 wdata=AA twd=01 twd2=01
-//   2: we=0 raw=0 wdata=AA twd=02 twd2=02   (read trigger)
-//   3: we=1 raw=0 wdata=FF twd=01 twd2=01  (the bleed-through probe)
-//   4: we=1 raw=1 wdata=FF twd=05 twd2=05  (explicit raw)
-//   5: we=1 raw=0 wdata=FF twd=01 twd2=01
+//   1: we=1 raw=0 wdata=AA
+//   2: we=0 raw=0 wdata=AA   (read trigger)
+//   3: we=1 raw=0 wdata=FF   (the bleed-through probe)
+//   4: we=1 raw=1 wdata=FF   (explicit raw)
+//   5: we=1 raw=0 wdata=FF
 //
 `timescale 1ns/1ps
 
@@ -44,7 +43,7 @@ module tb_softcpu_trig;
     wire clk_pico;
     wire        st_req, st_we, st_raw;
     wire [19:0] st_addr;
-    wire  [7:0] st_wdata, st_twd, st_twd2;
+    wire  [7:0] st_wdata;
 
     softcpu_subsystem dut (
         .clk_sys (clk_sys),
@@ -105,8 +104,6 @@ module tb_softcpu_trig;
         .st_raw   (st_raw),
         .st_addr  (st_addr),
         .st_wdata (st_wdata),
-        .st_twd   (st_twd),
-        .st_twd2  (st_twd2),
         .st_done  (st_done_r),
         .st_rdata (st_rdata_r),
         .accel_status (8'd0),
@@ -140,37 +137,38 @@ module tb_softcpu_trig;
     integer errors  = 0;
     reg st_req_q = 0;
 
-    // {we, raw, wdata, twd, twd2} expected per launch, packed for a
-    // case-index compare. The launch's raw/we come from the trigger byte;
-    // wdata is the operand register (set by the 0x5000_0004 store).
-    function automatic [25:0] exp_launch(input integer n);
+    // {we, raw, wdata} expected per launch, packed for a case-index
+    // compare. The launch's raw/we come from the trigger byte; wdata is
+    // the operand register (set by the 0x5000_0004 store). Launch 3 is the
+    // wdata-lag probe: 0xFF in the operand register means ANY bleed into
+    // the trigger's launch shows up as raw=1.
+    function automatic [9:0] exp_launch(input integer n);
         case (n)
-            1: exp_launch = {1'b1, 1'b0, 8'hAA, 8'h01, 8'h01}; // trig=1
-            2: exp_launch = {1'b0, 1'b0, 8'hAA, 8'h02, 8'h02}; // trig=2
-            3: exp_launch = {1'b1, 1'b0, 8'hFF, 8'h01, 8'h01}; // FF then 1
-            4: exp_launch = {1'b1, 1'b1, 8'hFF, 8'h05, 8'h05}; // trig=5
-            5: exp_launch = {1'b1, 1'b0, 8'hFF, 8'h01, 8'h01}; // trig=1
-            default: exp_launch = 26'd0;
+            1: exp_launch = {1'b1, 1'b0, 8'hAA}; // trig=1
+            2: exp_launch = {1'b0, 1'b0, 8'hAA}; // trig=2
+            3: exp_launch = {1'b1, 1'b0, 8'hFF}; // FF then 1
+            4: exp_launch = {1'b1, 1'b1, 8'hFF}; // trig=5
+            5: exp_launch = {1'b1, 1'b0, 8'hFF}; // trig=1
+            default: exp_launch = 10'd0;
         endcase
     endfunction
 
     // Log every service launch (rising edge of st_req), plus the fall, and
-    // every CPU store into the 0x5xxxxxxx window with its wdata -- the last
-    // is the actual bus view behind the wdata-lag theory.
+    // every CPU store into the 0x5xxxxxxx window with its wdata -- the
+    // actual bus view behind the wdata-lag theory.
     always @(posedge clk_pico) begin
-        reg [25:0] exp;
+        reg [9:0] exp;
         st_req_q <= st_req;
         if (st_req && !st_req_q) begin
             nlaunch <= nlaunch + 1;
             exp = exp_launch(nlaunch + 1);
-            $display("%0t LAUNCH %0d: addr=%05x wdata=%02x we=%0d raw=%0d twd=%02x twd2=%02x",
-                     $time, nlaunch + 1, st_addr, st_wdata, st_we, st_raw,
-                     st_twd, st_twd2);
+            $display("%0t LAUNCH %0d: addr=%05x wdata=%02x we=%0d raw=%0d",
+                     $time, nlaunch + 1, st_addr, st_wdata, st_we, st_raw);
             if (st_addr !== 20'h04008 ||
-                {st_we, st_raw, st_wdata, st_twd, st_twd2} !== exp) begin
+                {st_we, st_raw, st_wdata} !== exp) begin
                 errors <= errors + 1;
-                $display("%0t   ^^ MISMATCH: expected we=%0d raw=%0d wdata=%02x twd=%02x twd2=%02x",
-                         $time, exp[25], exp[24], exp[23:16], exp[15:8], exp[7:0]);
+                $display("%0t   ^^ MISMATCH: expected we=%0d raw=%0d wdata=%02x",
+                         $time, exp[9], exp[8], exp[7:0]);
             end
         end
         if (!st_req && st_req_q)
@@ -264,8 +262,8 @@ module tb_softcpu_trig;
         repeat (30000) @(posedge clk_sys);
 
         $display("DONE: %0d launches, %0d mismatches", nlaunch, errors);
-        $display("final: twd=%02x twd2=%02x raw=%0d we=%0d addr=%05x wdata=%02x",
-                 st_twd, st_twd2, st_raw, st_we, st_addr, st_wdata);
+        $display("final: raw=%0d we=%0d addr=%05x wdata=%02x",
+                 st_raw, st_we, st_addr, st_wdata);
         if (nlaunch != 5 || errors != 0)
             $display("RESULT: FAIL");
         else
