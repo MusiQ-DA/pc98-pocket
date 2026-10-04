@@ -549,6 +549,24 @@ jobs:
           cd fpga && ../obj_strig/st | tee ../strig.log
           grep -q "RESULT: PASS" ../strig.log
 
+      - name: the shipped firmware never stores a non-1/2 to the trigger
+        # Boots the REAL firmware.vh (the sprom default) and drives two
+        # slave-channel WDAT ops through gdc_draw_*; every store into
+        # 0x5000_0008 must carry exactly 1 or 2. A TDS ack/done model lets
+        # boot reach the poll loop. Exonerates (or convicts) the firmware
+        # side of the raw-armed WDAT witness seen on hardware.
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style \
+            --top-module tb_softcpu_fw \
+            -Isim -I$S -I$S/common -Ifpga/apf \
+            sim/tb_softcpu_fw.sv sim/stub_altsyncram.sv sim/stub_vhdl.sv \
+            sim/stub_pll.sv fpga/apf/common.v \
+            $S/softcpu_subsystem.sv $S/picorv32.v $S/sprom.v \
+            $S/softcpu_fdd_bridge.sv -o fw --Mdir obj_fw
+          cd fpga && ../obj_fw/fw | tee ../fwtrig.log
+          grep -q "RESULT: PASS" ../fwtrig.log
+
       - name: the graphics fetch shows what the slave GDC's partitions say
         run: |
           S=fpga/core
