@@ -1315,6 +1315,79 @@ module core_top (
         end
     end
 
+    // Reset-boundary trail: the first reset_wire OR soft_reset_cpu rise
+    // after release banks pc_hist wholesale -- the array survives a guest
+    // reset (only its pointer is cleared), so the snapshot keeps the last
+    // 32 bus addresses of the dying pass plus the write pointer to order
+    // them -- and the reset terms, so a POST reset-loop names both the
+    // code that ran into the reset and the line that fired it. The F0
+    // hand-over soft reset does not touch reset_wire, so it is its own
+    // trigger and its own cause bit.
+    // rst_snap_valid clears on RESET only: the guest reset the trigger
+    // starts must not drop the evidence, and the loop's second pass must
+    // not overwrite the first. The edge detectors seed high so the
+    // power-on assertion is not mistaken for a boundary.
+    reg [19:0] rst_snap [0:31];
+    reg  [4:0] rst_snap_w     = 5'd0;
+    reg  [7:0] rst_snap_cause = 8'd0;
+    reg        rst_snap_valid = 1'b0;
+    reg        reset_wire_d   = 1'b1;
+    reg        soft_rst_d     = 1'b0;
+    // Address-triggered capture, probe-writable via write slot 0x0c
+    // ({en,addr[19:0]}). Defaults to the reset vector: every reset path
+    // -- hard, soft, watchdog -- ends with a FFFF0 fetch, so a reset the
+    // cause bits cannot name still leaves its trail.
+    reg [19:0] trig_addr = 20'hFFFF0;
+    reg        trig_en   = 1'b1;
+    wire       trig_hit  = trig_en && (pc_now == trig_addr);
+    wire [6:0] rst_terms = {RESET, load_active, ~bios_ever_loaded,
+                            interact_reset, guest_hold_sync2,
+                            soft_guest_hold, ri_greset};
+    always_ff @(posedge clk_chipset) begin
+        reset_wire_d <= reset_wire;
+        soft_rst_d   <= soft_reset_cpu;
+        if (RESET)
+            rst_snap_valid <= 1'b0;
+        else if (!rst_snap_valid &&
+                 ((reset_wire && !reset_wire_d) ||
+                  (soft_reset_cpu && !soft_rst_d) || trig_hit)) begin
+            rst_snap_valid <= 1'b1;
+            for (int i = 0; i < 32; i++)
+                rst_snap[i] <= pc_hist[i];
+            if (pc_hist_new)
+                rst_snap[pc_hist_w] <= pc_now;
+            rst_snap_w     <= pc_hist_w + {4'd0, pc_hist_new};
+            rst_snap_cause <= {rst_terms, soft_reset_cpu | trig_hit};
+        end
+    end
+
+    // And the other half of the boundary: the first 32 bus cycles AFTER
+    // a guest reset releases -- the F0 hand-over's resume path, which
+    // decides within microseconds whether POST re-runs or the boot
+    // continues. Re-arms on every guest reset so the bank always holds
+    // the MOST RECENT resume trail -- in a reset loop that is the
+    // failing transition itself, still warm.
+    reg [19:0] post_snap [0:31];
+    reg  [4:0] post_snap_w = 5'd0;
+    reg        post_armed  = 1'b0;
+    reg        post_valid  = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (RESET) begin
+            post_valid <= 1'b0;
+            post_armed <= 1'b0;
+        end else if (reset || soft_reset_cpu) begin
+            post_armed <= 1'b1;
+        end else if (post_armed && !pc_hist_frozen &&
+                     pc_hist_new && pc_hist_w == 5'd31) begin
+            post_armed <= 1'b0;
+            post_valid <= 1'b1;
+            for (int i = 0; i < 32; i++)
+                post_snap[i] <= pc_hist[i];
+            post_snap[31] <= pc_now;
+            post_snap_w   <= pc_hist_w;
+        end
+    end
+
     // The first zet fault's decode-side evidence: which PC's instruction
     // decoded to INVOP/INTD. Pairs with dbg_opc (the byte it saw, latched
     // inside the core); expected-vs-seen at that PC is the corruption
@@ -1464,6 +1537,31 @@ module core_top (
             // mapped away (gvram_page1 redirect shows a wrong addr in 0x72).
             8'h72:   probe_data_c = chipset_dbg12[31:0];
             8'h73:   probe_data_c = {16'h0, chipset_dbg12[55:32]};
+            // 0x60: rst_snap header -- {valid, cause[7:0], w[4:0],
+            // post_valid, post_w[4:0]}. cause bit order: RESET,
+            // load_active, ~bios_ever_loaded, interact_reset,
+            // guest_hold_sync2, soft_guest_hold, ri_greset,
+            // soft_reset_cpu|trig_hit (bit26..bit19).
+            // 0x61: the reset_wire terms LIVE -- for a wedge that never
+            // falls there is no boundary edge to catch.
+            // 0xA0-0xBF: pre-reset trail (write order).
+            // 0xC0-0xDF: post-reset trail (entry order == fetch order).
+            8'h60:   probe_data_c = {3'h0, rst_snap_valid, rst_snap_cause,
+                                       rst_snap_w, post_valid,
+                                       post_snap_w, 9'h000};
+            8'h61:   probe_data_c = {25'h0, rst_terms};
+            8'ha0,8'ha1,8'ha2,8'ha3,8'ha4,8'ha5,8'ha6,8'ha7,
+            8'ha8,8'ha9,8'haa,8'hab,8'hac,8'had,8'hae,8'haf,
+            8'hb0,8'hb1,8'hb2,8'hb3,8'hb4,8'hb5,8'hb6,8'hb7,
+            8'hb8,8'hb9,8'hba,8'hbb,8'hbc,8'hbd,8'hbe,8'hbf:
+                       probe_data_c = {12'h000,
+                                       rst_snap[probe_addr[4:0]]};
+            8'hc0,8'hc1,8'hc2,8'hc3,8'hc4,8'hc5,8'hc6,8'hc7,
+            8'hc8,8'hc9,8'hca,8'hcb,8'hcc,8'hcd,8'hce,8'hcf,
+            8'hd0,8'hd1,8'hd2,8'hd3,8'hd4,8'hd5,8'hd6,8'hd7,
+            8'hd8,8'hd9,8'hda,8'hdb,8'hdc,8'hdd,8'hde,8'hdf:
+                       probe_data_c = {12'h000,
+                                       post_snap[probe_addr[4:0]]};
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -1802,6 +1900,11 @@ module core_top (
         // Slot 0x8b: arm the text-VRAM dump cell (readback on slot 0x74).
         if (probe_wr_pulse && probe_waddr_c == 7'h0b)
             tvram_dbg_cell <= probe_wdata_c[11:0];
+        // Slot 0x0c: the rst_snap address trigger -- {en,addr[19:0]}.
+        if (probe_wr_pulse && probe_waddr_c == 7'h0c) begin
+            trig_addr <= probe_wdata_c[19:0];
+            trig_en   <= probe_wdata_c[31];
+        end
     end
 
     // JTAG-injected keystrokes ride the same event line the 8251 drains; a
