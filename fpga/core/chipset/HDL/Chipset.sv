@@ -57,6 +57,9 @@ module CHIPSET #(
         output  logic   [1:0]   gdc_draw_to,
         output  logic           dbg_egc_flag,
         output  logic   [7:0]   dbg_sysport,
+        // JTAG TVRAM dump -- cell index in, {echo, attr, char_hi, char_lo} out.
+        input   logic   [11:0]  tvram_dbg_cell,
+        output  logic   [31:0]  tvram_dbg_q,
         output  logic           de_o,
         output  logic   [5:0]   VID_R,
         output  logic   [5:0]   VID_G,
@@ -431,6 +434,8 @@ module CHIPSET #(
         .gdc_draw_to                        (gdc_draw_to),
         .dbg_egc_flag                       (dbg_egc_flag),
         .dbg_sysport                        (dbg_sysport),
+        .tvram_dbg_cell                     (tvram_dbg_cell),
+        .tvram_dbg_q                        (tvram_dbg_q),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
         .VID_R                              (VID_R),

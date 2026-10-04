@@ -1240,6 +1240,11 @@ module core_top (
     reg  [7:0] in35_data  = 8'h00;
     wire       io_port_read = ~chipset_io_read_n & ~chipset_aen;
     wire [7:0] dbg_sysport_w;
+    // JTAG TVRAM dump: write slot 0x8B arms a cell, read slot 0x74 returns
+    // {cell[7:0] echo, attr, char_hi, char_lo}. The read rides tvram's guest
+    // pipeline whenever no guest read owns it -- never steals a cycle.
+    reg  [11:0] tvram_dbg_cell = 12'h000;
+    wire [31:0] tvram_dbg_q;
     always_ff @(posedge clk_chipset) begin
         rd35_q  <= io_port_read && (chipset_address[15:0] == 16'h0035);
         rd35_qq <= rd35_q;
@@ -1519,6 +1524,9 @@ module core_top (
             8'h1e:   probe_data_c = {cont2_key_chip, cont1_key_chip};
             8'h1f:   probe_data_c = {jtag_btn2, jtag_btn1};
             8'h1d:   probe_data_c = {16'h0, key_count, key_last};
+            // 0x74: text-VRAM dump -- armed by write slot 0x8b; returns
+            // {cell[7:0] echo, attr, char_hi, char_lo} for that cell.
+            8'h74:   probe_data_c = tvram_dbg_q;
             8'hFF:   probe_data_c = 32'h98C0_DE98;
             default: probe_data_c = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -1791,6 +1799,9 @@ module core_top (
         // every memory write landing on it is logged (CPU or DMA alike).
         if (probe_wr_pulse && probe_waddr_c == 7'h0a)
             jtag_watch_addr <= probe_wdata_c[19:0];
+        // Slot 0x8b: arm the text-VRAM dump cell (readback on slot 0x74).
+        if (probe_wr_pulse && probe_waddr_c == 7'h0b)
+            tvram_dbg_cell <= probe_wdata_c[11:0];
     end
 
     // JTAG-injected keystrokes ride the same event line the 8251 drains; a
@@ -2645,6 +2656,8 @@ module core_top (
         .gdc_draw_to                        (gdc_draw_to),
         .dbg_egc_flag                       (egc_flag_w),
         .dbg_sysport                        (dbg_sysport_w),
+        .tvram_dbg_cell                     (tvram_dbg_cell),
+        .tvram_dbg_q                        (tvram_dbg_q),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
         .st_req                             (st_req_w),
