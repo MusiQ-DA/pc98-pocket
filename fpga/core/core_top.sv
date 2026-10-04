@@ -1412,10 +1412,11 @@ module core_top (
             8'h3c:   probe_data_c = chipset_dbg5[63:32];
             8'h3d:   probe_data_c = chipset_dbg5[95:64];
             8'h3e:   probe_data_c = chipset_dbg5[127:96];
-            // 0x40: the GVRAM sequencer's svc-write charger witness --
+            // 0x3f: the GVRAM sequencer's svc-write charger witness --
             // {sticky flags, legs count, leg ctx, arm ctx}, see
-            // pc98_gvram_seq's dbg2 port for the bit plan.
-            8'h40:   probe_data_c = gvram_dbg2;
+            // pc98_gvram_seq's dbg2 port for the bit plan. 0x40-0x5f
+            // belongs to the pc_hist ring below.
+            8'h3f:   probe_data_c = gvram_dbg2;
             // 0x64-0x66: last three writes to the watch address (0x8a);
             // 0x67: {watch count, 24'h0}.
             8'h64:   probe_data_c = chipset_dbg7[31:0];
