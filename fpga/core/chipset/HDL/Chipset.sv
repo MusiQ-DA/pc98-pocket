@@ -131,6 +131,7 @@ module CHIPSET #(
         // The GVRAM sequencer's own view: where the plane walk (or the
         // service channel) is parked -- see pc98_gvram_seq's dbg port.
         output  logic   [7:0]   dbg_gvram,
+        output  logic   [31:0]  dbg_gvram2,
         output  logic   [33:0]  dbg_scsi,
         // Peripherals
         output  logic   [2:0]   timer_counter_out,
@@ -566,7 +567,7 @@ module CHIPSET #(
         .svc_req(st_req), .svc_we(st_we), .svc_raw(st_raw),
         .svc_addr(st_addr),
         .svc_wdata(st_wdata), .svc_done(st_done), .svc_rdata(st_rdata),
-        .dbg(dbg_gvram),
+        .dbg(dbg_gvram), .dbg2(dbg_gvram2),
         .mem_addr(ram_addr_w), .mem_wdata(ram_wdata_w),
         .mem_word(ram_word_w),
         .mem_rd(ram_rd_w), .mem_wr(ram_wr_w),

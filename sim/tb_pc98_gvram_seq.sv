@@ -71,7 +71,7 @@ module tb_pc98_gvram_seq;
         .egc_rg(egc_rg), .egc_d(egc_d),
         .svc_req(svc_req), .svc_we(svc_we), .svc_raw(1'b0),
         .svc_addr(svc_addr),
-        .svc_wdata(svc_wdata), .svc_done(svc_done), .svc_rdata(svc_rdata), .dbg(),
+        .svc_wdata(svc_wdata), .svc_done(svc_done), .svc_rdata(svc_rdata), .dbg(), .dbg2(),
         .mem_addr(mem_addr), .mem_wdata(mem_wdata), .mem_word(mem_word),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),

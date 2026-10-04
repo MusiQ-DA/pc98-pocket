@@ -145,7 +145,16 @@ module pc98_gvram_seq #(
     // the plane walk is parked (a read stuck in S_RDW is RAM not answering;
     // S_DONE forever is the guest's strobe never dropping). Combined with
     // Chipset's dbg_chipset (arbiter hold, RAM FSM) a stall is localised.
-    output wire [7:0]  dbg
+    output wire [7:0]  dbg,
+
+    // ---- JTAG probe word -------------------------------------------------
+    // The svc-write charger witness: what the ARM cycle's here-terms
+    // evaluated to, what the last write LEG ran, how many write legs the
+    // last svc op issued, and sticky flags recording whether any leg ever
+    // saw the charger live. Plain vs charger reads straight off the slot:
+    // a TDW svc write issues four legs and sets flag[0]; a plain one
+    // issues one and sets flag[1].
+    output wire [31:0] dbg2
 );
 
 `include "pc98_sdram_map.svh"
@@ -531,6 +540,10 @@ module pc98_gvram_seq #(
             svc_rdata <= 8'h00;
             svc_gap   <= 1'b0;
             svc_req_s <= 1'b0;
+            dbg_arm   <= 8'h00;
+            dbg_leg   <= 6'h00;
+            dbg_legs  <= 8'h00;
+            dbg_fl    <= 4'h0;
         end else begin
             // The EGC's pattern-load strobe is combinational now (see the
             // egc_pat_ld wire): it must fire while mem_rdata still carries
@@ -592,6 +605,16 @@ module pc98_gvram_seq #(
                     is_word    <= 1'b0;
                     half       <= 1'b0;
                     tcr        <= 8'h00;
+                    dbg_legs   <= 8'h00;
+                    if (svc_we) begin
+                        // The terms grcg_here is built from, at the moment
+                        // the arm evaluated them -- the slot's arm byte.
+                        dbg_arm <= {svc_raw, grcg_active, grcg_rmw,
+                                    egc_active, window, grcg_here,
+                                    egc_here, svc_raw_wr};
+                        dbg_fl[0] <= dbg_fl[0] | grcg_here;
+                        dbg_fl[1] <= dbg_fl[1] | ~grcg_here;
+                    end
                     if (window) begin
                         // cur_addr is already svc_addr this cycle (svc_eval):
                         // window/here/own above are the svc operand's. A svc
@@ -675,6 +698,14 @@ module pc98_gvram_seq #(
                     mem_wdata <= wr_byte;
                     mem_wr    <= 1'b1;
                     st        <= S_WRW;
+                    if (svc_hold & svc_we_r) begin
+                        // What the leg actually ran with: plane, own-plane,
+                        // and whether the charger was live for it.
+                        dbg_leg  <= {gp, own, grcg_here, cur_live};
+                        dbg_legs <= dbg_legs + 8'd1;
+                        dbg_fl[2] <= dbg_fl[2] | grcg_here;
+                        dbg_fl[3] <= dbg_fl[3] | ~grcg_here;
+                    end
                 end
               end
 
@@ -731,6 +762,19 @@ module pc98_gvram_seq #(
     // here because "the softcore raised it and nobody moved" is itself the
     // diagnostic.
     assign dbg = {svc_req, svc_done, svc_hold, st, gp};
+
+    // dbg2 bit plan (slot 0x40):
+    //   [ 7:0]  arm ctx  {svc_raw, grcg_active, grcg_rmw, egc_active,
+    //                     window, grcg_here, egc_here, svc_raw_wr}
+    //   [13:8]  leg ctx  {gp, own, grcg_here, cur_live} at last write issue
+    //   [21:14] dbg_legs write legs issued by the most recent svc write op
+    //   [25:22] sticky   {leg ran plain, leg ran charger,
+    //                     arm saw plain, arm saw charger}
+    reg [7:0] dbg_arm;
+    reg [5:0] dbg_leg;
+    reg [7:0] dbg_legs;
+    reg [3:0] dbg_fl;
+    assign dbg2 = {6'b000000, dbg_fl, dbg_legs, dbg_leg, dbg_arm};
 
     // cpu_gvram was the window qualifier until `window` moved onto the
     // address alone (see above); it stays on the port list because Chipset
