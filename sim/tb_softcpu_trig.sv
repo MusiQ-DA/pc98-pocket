@@ -13,12 +13,13 @@
 //     (bit 2 of 0xFF is the raw flag itself; the wdata-lag theory).
 //   * ST_TRIG = 5 — sanity that raw CAN be latched when actually stored.
 //
-// Expected launches (addr=0x4008 throughout):
-//   1: we=1 raw=0 wdata=AA
-//   2: we=0 raw=0 wdata=AA   (read trigger)
-//   3: we=1 raw=0 wdata=FF   (the bleed-through probe)
-//   4: we=1 raw=1 wdata=FF   (explicit raw)
-//   5: we=1 raw=0 wdata=FF
+// Expected launches (st_addr reads 0x4008 only on launch 1; launches 2-5
+// sample it after the previous op's st_done parked the fingerprint):
+//   1: we=1 raw=0 wdata=AA addr=04008
+//   2: we=0 raw=0 wdata=01 addr=F0001  (read trigger; parks L1's sw-1)
+//   3: we=1 raw=0 wdata=FF addr=F0002  (bleed probe; parks L2's sw-2)
+//   4: we=1 raw=1 wdata=01 addr=F0001  (explicit raw; parks L3's sw-1)
+//   5: we=1 raw=0 wdata=05 addr=F0005  (parks L4's sw-5 -- the raw sig)
 //
 `timescale 1ns/1ps
 
@@ -143,12 +144,13 @@ module tb_softcpu_trig;
     // wdata-lag probe: 0xFF in the operand register means ANY bleed into
     // the trigger's launch shows up as raw=1.
     //
-    // st_wdata is also the witness-park wire: when an op's st_done lands
-    // the subsystem copies st_tbyte (the byte cpu_mem_wdata carried at
-    // the launch) into it, so a launch made WITHOUT a fresh operand
-    // store reads the PREVIOUS launch's trigger byte back. Launches
-    // 2/4/5 therefore expect 0x01/0x01/0x05 -- and launch 5 seeing 0x05
-    // is itself the proof that the park path surfaces a raw trigger.
+    // st_wdata/st_addr are also the witness-park wires: when an op's
+    // st_done lands, the subsystem copies st_tbyte (the launch's
+    // wdata[7:0]) into st_wdata and st_taddr ({wstrb,wdata[15:0]}) into
+    // st_addr, so a launch made WITHOUT a fresh operand store reads the
+    // PREVIOUS launch's trigger fingerprint back. All trigger stores are
+    // `sw` (wstrb=F), so the addr field parks 0xF000x -- and launch 5
+    // seeing F0005/05 is itself the proof the park surfaces a raw store.
     function automatic [9:0] exp_launch(input integer n);
         case (n)
             1: exp_launch = {1'b1, 1'b0, 8'hAA}; // trig=1, operand AA
@@ -160,22 +162,35 @@ module tb_softcpu_trig;
         endcase
     endfunction
 
+    function automatic [19:0] exp_addr(input integer n);
+        case (n)
+            1: exp_addr = 20'h04008; // fresh ST_ADDR store
+            2: exp_addr = 20'hF0001; // L1 parked sw-1 fingerprint
+            3: exp_addr = 20'hF0002; // L2 parked sw-2 fingerprint
+            4: exp_addr = 20'hF0001; // L3 parked sw-1 fingerprint
+            5: exp_addr = 20'hF0005; // L4 parked sw-5 fingerprint
+            default: exp_addr = 20'd0;
+        endcase
+    endfunction
+
     // Log every service launch (rising edge of st_req), plus the fall, and
     // every CPU store into the 0x5xxxxxxx window with its wdata -- the
     // actual bus view behind the wdata-lag theory.
     always @(posedge clk_pico) begin
-        reg [9:0] exp;
+        reg [9:0]  exp;
+        reg [19:0] expa;
         st_req_q <= st_req;
         if (st_req && !st_req_q) begin
             nlaunch <= nlaunch + 1;
-            exp = exp_launch(nlaunch + 1);
+            exp  = exp_launch(nlaunch + 1);
+            expa = exp_addr(nlaunch + 1);
             $display("%0t LAUNCH %0d: addr=%05x wdata=%02x we=%0d raw=%0d",
                      $time, nlaunch + 1, st_addr, st_wdata, st_we, st_raw);
-            if (st_addr !== 20'h04008 ||
+            if (st_addr !== expa ||
                 {st_we, st_raw, st_wdata} !== exp) begin
                 errors <= errors + 1;
-                $display("%0t   ^^ MISMATCH: expected we=%0d raw=%0d wdata=%02x",
-                         $time, exp[9], exp[8], exp[7:0]);
+                $display("%0t   ^^ MISMATCH: expected addr=%05x we=%0d raw=%0d wdata=%02x",
+                         $time, expa, exp[9], exp[8], exp[7:0]);
             end
         end
         if (!st_req && st_req_q)

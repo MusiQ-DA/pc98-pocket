@@ -1418,15 +1418,17 @@ module core_top (
             8'h3e:   probe_data_c = chipset_dbg5[127:96];
             // 0x3f: the service channel's launched operands, read straight
             // off the softcpu-subsystem wires -- {st_addr[19:0],
-            // st_wdata[7:0], st_req, st_we, st_raw}. st_addr holds the
-            // last op's operand address; st_wdata holds the operand until
-            // the op's st_done, when the subsystem parks the byte
-            // cpu_mem_wdata carried AT THE LAUNCH (st_tbyte). So a parked
-            // read shows {op addr, TRIGGER byte, req, we, raw}: when the
-            // raw bit is set, the byte right beside it is the decisive
-            // witness -- 5/FF means the bus really carried a non-trigger
-            // value into the launch (CPU side), 1 means the launch saw a
-            // clean byte and st_raw itself is corrupted (downstream).
+            // st_wdata[7:0], st_req, st_we, st_raw}. During the op these
+            // are the operand {addr, wdata}; when the op's st_done lands
+            // the subsystem parks the TRIGGER STORE's own fingerprint:
+            // st_addr <= {cpu_mem_wstrb[3:0], cpu_mem_wdata[15:0]} and
+            // st_wdata <= cpu_mem_wdata[7:0], all sampled at the launch.
+            // So a parked read shows the trigger store's {wstrb,
+            // wdata[15:0]} | {wdata[7:0], req, we, raw}: when raw is set,
+            // the fingerprint beside it is the decisive witness -- a
+            // clean sw-1 parks 0xF0001/0x01 (st_raw corrupted downstream),
+            // a sw-5 parks 0xF0005/0x05 (bus really carried a 5), an sb-5
+            // parks 0x10505/0x05, an s5=0x2FF leak parks 0xF02FF/0xFF.
             8'h3f:   probe_data_c = {1'b0, st_addr_w, st_wdata_w,
                                      st_req_w, st_we_w, st_raw_w};
             // 0x64-0x66: last three writes to the watch address (0x8a);

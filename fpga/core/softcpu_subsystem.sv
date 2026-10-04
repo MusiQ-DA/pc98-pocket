@@ -272,14 +272,18 @@ module softcpu_subsystem (
     reg        st_raw_r   = 1'b0;
     reg [19:0] st_addr_r  = 20'd0;
     reg [7:0] st_wdata_r = 8'd0;
-    // Witness: the byte cpu_mem_wdata carried the cycle the launch fired.
-    // The firmware only ever stores 1/2 to the trigger, so when slot 0x3f
-    // parks raw=1, this byte splits the fault: 5/FF means the bus really
-    // carried a non-trigger value (CPU-side), 1 means st_raw_r itself is
-    // what went wrong. Surfaced on st_wdata_r after st_done because the
-    // operand is consumed by then and no module-boundary nets are free
-    // (a new output port here trips the VPR tdc_util crash again).
-    reg [7:0] st_tbyte_r = 8'd0;
+    // Witness regs: capture the TRIGGER STORE's own fingerprint at the
+    // accepted launch -- {wstrb, wdata[15:0]} plus wdata[7:0] -- because the
+    // firmware only ever stores 1/2 there, so whatever the bus carried is
+    // the decisive split for a parked raw arm. They are parked onto
+    // st_addr/st_wdata when the op's st_done retires it (the seq latched
+    // the operands at accept, and no module-boundary nets are free: a new
+    // output port here trips the VPR tdc_util crash again). A parked 0x3f
+    // then reads {trig wstrb, trig wdata[15:0], trig wdata[7:0], req,we,
+    // raw}: a clean sw-1 parks 0xF0001/0x01, a raw sw-5 parks 0xF0005/0x05,
+    // an sb-5 parks 0x10505/0x05, an s5=0x2FF leak parks 0xF02FF/0xFF.
+    reg [19:0] st_taddr_r = 20'd0;
+    reg  [7:0] st_tbyte_r = 8'd0;
     wire       st_trig    = cpu_mem_valid && cpu_mem_wstrb[0] &&
                             (cpu_mem_addr == 32'h5000_0008);
     always @(posedge clk_pico) begin
@@ -289,11 +293,14 @@ module softcpu_subsystem (
             st_raw_r   <= 1'b0;
             st_addr_r  <= 20'd0;
             st_wdata_r <= 8'd0;
+            st_taddr_r <= 20'd0;
             st_tbyte_r <= 8'd0;
         end else begin
-            // Copy first so a same-cycle new operand store wins.
-            if (st_req_r && st_done)
+            // Park first so a same-cycle new operand store wins.
+            if (st_req_r && st_done) begin
+                st_addr_r  <= st_taddr_r;
                 st_wdata_r <= st_tbyte_r;
+            end
             if (cpu_mem_valid && cpu_mem_wstrb[0]) begin
                 if (cpu_mem_addr == 32'h5000_0000)
                     st_addr_r  <= cpu_mem_wdata[19:0];
@@ -306,6 +313,7 @@ module softcpu_subsystem (
                 // write into video memory in np21w (io/gdc_sub.c
                 // gdcsub_write), not an access through the EGC/GRCG path.
                 st_raw_r   <= cpu_mem_wdata[2];
+                st_taddr_r <= {cpu_mem_wstrb, cpu_mem_wdata[15:0]};
                 st_tbyte_r <= cpu_mem_wdata[7:0];
                 st_req_r   <= 1'b1;
             end else if (st_req_r && st_done) begin
