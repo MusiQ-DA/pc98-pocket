@@ -267,7 +267,7 @@ module zet_cpu_bridge (
     reg  [1:0] bstate;
     reg  [1:0] byte_idx;      // 0 = the addressed byte, 1 = the odd half
     reg  [2:0] t_cnt;         // posedge-CE edges since this byte went up
-    reg        saw_low;       // processor_ready fell during THIS byte's command
+    reg        saw_low;       // processor_ready fell on OUR bus during this byte
     reg  [1:0] gap_cnt;
     reg  [7:0] rd_lo;
     reg  [7:0] rd_hi;
@@ -367,11 +367,14 @@ module zet_cpu_bridge (
     // byte data arriving one access stale, e.g. the reset vector reading
     // ea/00/00/80/fd as 00/ea/00/00), so the early count is qualified on
     // saw_low, the fall that marks THIS byte's access actually started.
-    // Bytes whose access never drops ready fall back to the faithful
-    // count. The gap ends at the first passive negedge -- pair_finish is
-    // the pair's ONLY terminator: rd_word assembly, biu_done, the byte
-    // transition and the Wishbone ack must all move on the same edge, or
-    // the ack lands before the data (the stale-word signature returns).
+    // The fall must happen while we own the bus: dma_wait_n also pulls
+    // processor_ready during the DMAC's tenure, and counting that would
+    // accept a byte that never ran. Bytes whose access never drops
+    // ready fall back to the faithful count. The gap ends at the first
+    // passive negedge -- pair_finish is the pair's ONLY terminator:
+    // rd_word assembly, biu_done, the byte transition and the Wishbone
+    // ack must all move on the same edge, or the ack lands before the
+    // data (the stale-word signature returns).
     // INTA pairs keep the faithful count: for the 8259's two-acknowledge
     // sequence the pacing IS the contract.
     wire fast_pair = fast_pace && !cur_inta;
@@ -430,7 +433,7 @@ module zet_cpu_bridge (
               end
 
               B_CMD: begin
-                if (!processor_ready)
+                if (!processor_ready && bus_ours)
                     saw_low <= 1'b1;
                 if (cpu_ce_posedge)
                     t_cnt <= (t_cnt != 3'd7) ? (t_cnt + 3'd1) : 3'd7;
