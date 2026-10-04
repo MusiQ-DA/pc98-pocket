@@ -138,7 +138,7 @@ module tb_pc98_boot;
         .clk               (clk_chipset),
         .cpu_ce_posedge    (cpu_ce_posedge),
         .cpu_ce_negedge    (cpu_ce_negedge),
-        .fast_pace         (1'b0),
+        .fast_pace         (clk_select_r[1]),
         .reset             (cpu_reset_w),
         .zet_clk           (zet_clk),
         .wb_dat_o          (zwb_dat_o),
@@ -349,13 +349,29 @@ module tb_pc98_boot;
     // the hold lands at exactly the cycle boundary hardware would grant it,
     // never mid-beat. Meaningful under REALMEM only: the flat memory has no
     // READY to stall.
+    logic [39:0] frz_period_clk = 40'd0;
     initial begin
         int v;
         if ($value$plusargs("freeze_start_us=%d", v))
             frz_start_clk = 40'(v * 43);            // ~CLK_MHZ, close enough
         if ($value$plusargs("freeze_len_us=%d", v))
             frz_end_clk = frz_start_clk + 40'(v * 43);
+        if ($value$plusargs("freeze_period_us=%d", v))
+            frz_period_clk = 40'(v * 43);
     end
+
+    // +freeze_period_us turns the one-shot window into a sawtooth: the same
+    // length, re-armed every period, sweeping the hold across every byte
+    // phase a long boot can present. With no period the window is one-shot.
+    wire [39:0] frz_len_clk = frz_end_clk - frz_start_clk;
+    wire [39:0] frz_phase   = (frz_period_clk != 40'd0)
+                          ? ((clk_since_rst - frz_start_clk) % frz_period_clk)
+                          : (clk_since_rst - frz_start_clk);
+    wire        frz_in_win  = (clk_since_rst != 40'd0)
+                           && (clk_since_rst >= frz_start_clk)
+                           && ((frz_period_clk != 40'd0)
+                               ? (frz_phase < frz_len_clk)
+                               : (clk_since_rst < frz_end_clk));
 
     wire frz_hlda = freeze_req ? frz_ff2 : 1'b0;   // hold_acknowledge
     always_ff @(posedge clk_chipset) begin
@@ -365,9 +381,7 @@ module tb_pc98_boot;
             $display("  %8t  FREEZE: cpu_reset_w fell at %0t", $time, $time);
         end else if (clk_since_rst != 40'd0)
             clk_since_rst <= clk_since_rst + 40'd1;
-        freeze_req <= (clk_since_rst != 40'd0)
-                   && (clk_since_rst >= frz_start_clk)
-                   && (clk_since_rst <  frz_end_clk);
+        freeze_req <= frz_in_win;
         if (cpu_ce_posedge) begin
             frz_ff1    <= processor_status[0] & processor_status[1] & lock_n & freeze_req;
             test_aen   <= frz_hlda;

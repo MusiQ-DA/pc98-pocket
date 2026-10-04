@@ -268,6 +268,7 @@ module zet_cpu_bridge (
     reg  [1:0] byte_idx;      // 0 = the addressed byte, 1 = the odd half
     reg  [2:0] t_cnt;         // posedge-CE edges since this byte went up
     reg        saw_low;       // processor_ready fell on OUR bus during this byte
+    reg        ready_d1;      // processor_ready, one clk back: edge detect
     reg  [1:0] gap_cnt;
     reg  [7:0] rd_lo;
     reg  [7:0] rd_hi;
@@ -366,11 +367,15 @@ module zet_cpu_bridge (
     // completion when this byte's accept would fire (realmem E2E showed
     // byte data arriving one access stale, e.g. the reset vector reading
     // ea/00/00/80/fd as 00/ea/00/00), so the early count is qualified on
-    // saw_low, the fall that marks THIS byte's access actually started.
-    // The fall must happen while we own the bus: dma_wait_n also pulls
-    // processor_ready during the DMAC's tenure, and counting that would
-    // accept a byte that never ran. Bytes whose access never drops
-    // ready fall back to the faithful count. The gap ends at the first
+    // saw_low, a ready FALLING EDGE that marks THIS byte's access having
+    // actually started. Level-testing "ready low while we own the bus" is
+    // not enough: at the AEN release, bus_ours returns while the ready
+    // chain is still draining dma_wait, and the falsely-armed byte then
+    // accepts as the drain completes -- before the re-asserted strobe's
+    // access could ever finish (realmem+freeze: f801d read as fe, the
+    // same signature hardware showed at f95b3). Bytes whose access never
+    // drops ready fall back to the faithful count. The gap ends at the
+    // first
     // passive negedge -- pair_finish is the pair's ONLY terminator:
     // rd_word assembly, biu_done, the byte transition and the Wishbone
     // ack must all move on the same edge, or the ack lands before the
@@ -378,8 +383,8 @@ module zet_cpu_bridge (
     // INTA pairs keep the faithful count: for the 8259's two-acknowledge
     // sequence the pacing IS the contract.
     wire fast_pair = fast_pace && !cur_inta;
-    // BISECT V4: faithful gap again -- isolate the t_cnt>=2 accept.
-    wire pair_finish = (bstate == B_GAP) && (gap_cnt == 2'd1);
+    wire pair_finish = (bstate == B_GAP)
+                     && (fast_pair ? cpu_ce_negedge : (gap_cnt == 2'd1));
     wire pair_done   = pair_finish && last_byte;
     wire inta_done   = pair_done && cur_inta;
 
@@ -391,6 +396,7 @@ module zet_cpu_bridge (
             byte_idx         <= 2'd0;
             t_cnt            <= 3'd0;
             saw_low          <= 1'b0;
+            ready_d1         <= 1'b0;
             gap_cnt          <= 2'd0;
             rd_lo            <= 8'h00;
             rd_hi            <= 8'h00;
@@ -410,6 +416,7 @@ module zet_cpu_bridge (
             biu_done_r       <= 1'b0;
         end else begin
             biu_done_r <= 1'b0;
+            ready_d1   <= processor_ready;
             case (bstate)
               B_IDLE: begin
                 if (srv_any && bus_ours) begin
@@ -433,7 +440,18 @@ module zet_cpu_bridge (
               end
 
               B_CMD: begin
-                if (!processor_ready && bus_ours)
+                // The dip must be a falling edge while we own the bus. A
+                // level test fails at the AEN release: bus_ours returns on
+                // the combinational address_enable_n while the ready chain
+                // is still draining dma_wait, so processor_ready sits low
+                // for a couple of clks with the byte's access never having
+                // run -- saw_low armed falsely, and the fast accept then
+                // fired the moment the chain drained, far ahead of the
+                // re-asserted strobe's real data (realmem+freeze repro:
+                // fetch at f801d accepted 3 clks after release and came
+                // back fe, the hardware signature). A genuine access dips
+                // ready AFTER it was seen high -- the edge marks it.
+                if (ready_d1 && !processor_ready && bus_ours)
                     saw_low <= 1'b1;
                 if (cpu_ce_posedge)
                     t_cnt <= (t_cnt != 3'd7) ? (t_cnt + 3'd1) : 3'd7;
