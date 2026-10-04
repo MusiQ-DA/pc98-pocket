@@ -1059,6 +1059,7 @@ module core_top (
     wire        st_req_w, st_we_w, st_raw_w, st_done_w;
     wire [19:0] st_addr_w;
     wire  [7:0] st_wdata_w, st_rdata_w, accel_status_w;
+    wire  [7:0] st_twd_w, st_twd2_w;
     wire [15:0] gdc_draw_ops;
     wire [383:0] gdc_draw_snaps;
 
@@ -1158,6 +1159,8 @@ module core_top (
         .st_raw                     (st_raw_w),
         .st_addr                    (st_addr_w),
         .st_wdata                   (st_wdata_w),
+        .st_twd                     (st_twd_w),
+        .st_twd2                    (st_twd2_w),
         .st_done                    (st_done_w),
         .st_rdata                   (st_rdata_w),
         .accel_status               (accel_status_w)
@@ -1416,6 +1419,23 @@ module core_top (
             8'h3c:   probe_data_c = chipset_dbg5[63:32];
             8'h3d:   probe_data_c = chipset_dbg5[95:64];
             8'h3e:   probe_data_c = chipset_dbg5[127:96];
+            // 0x3f: the service channel's launched operands, read straight
+            // off the softcpu-subsystem wires -- {st_addr[19:0],
+            // st_wdata[7:0], st_req, st_we, st_raw}. They hold the LAST
+            // trigger's values through the park, so when 0x31's arm ctx
+            // says a write armed raw this slot answers whether the
+            // subsystem really latched raw (st_raw=1 -> the launch saw
+            // wdata[2]=1) or the seq armed it anyway (st_raw=0 -> the
+            // corruption is on the svc_raw path, not the launch).
+            8'h3f:   probe_data_c = {1'b0, st_addr_w, st_wdata_w,
+                                     st_req_w, st_we_w, st_raw_w};
+            // 0x60: {wdata byte on the last st_trig cycle, wdata byte on
+            // the last ACCEPTED launch}. Firmware only stores 1/2 to the
+            // trigger; a 5/7/FF here means the bus presented a non-trigger
+            // value during the trigger window (the wdata-lag theory) --
+            // and a divergence between the two bytes means the bus data
+            // changed mid-window, mid-handshake.
+            8'h60:   probe_data_c = {16'h0, st_twd_w, st_twd2_w};
             // 0x64-0x66: last three writes to the watch address (0x8a);
             // 0x67: {watch count, 24'h0}.
             8'h64:   probe_data_c = chipset_dbg7[31:0];
