@@ -1181,6 +1181,80 @@ module core_top (
         end
     end
 
+    // Reset-boundary trail: the first reset_wire OR soft_reset_cpu rise
+    // after release banks pc_hist wholesale -- the array survives a guest
+    // reset (only its pointer is cleared), so the snapshot keeps the last
+    // 32 bus addresses of the dying pass plus the write pointer to order
+    // them -- and the reset terms, so a POST reset-loop names both the
+    // code that ran into the reset and the line that fired it. The F0
+    // hand-over soft reset does not touch reset_wire, so it is its own
+    // trigger and its own cause bit.
+    // rst_snap_valid clears on RESET only: the guest reset the trigger
+    // starts must not drop the evidence, and the loop's second pass must
+    // not overwrite the first. The edge detectors seed high so the
+    // power-on assertion is not mistaken for a boundary.
+    reg [19:0] rst_snap [0:31];
+    reg  [4:0] rst_snap_w     = 5'd0;
+    reg  [6:0] rst_snap_cause = 7'd0;
+    reg        rst_snap_valid = 1'b0;
+    reg        reset_wire_d   = 1'b1;
+    reg        soft_rst_d     = 1'b0;
+    // Address-triggered capture, probe-writable via write slot 0x04
+    // ({en,addr[19:0]}, handled with the other probe writes below).
+    // Defaults to the reset vector: every reset path -- hard, soft,
+    // watchdog -- ends with a FFFF0 fetch, so a reset the cause bits
+    // cannot name still leaves its trail.
+    reg [19:0] trig_addr = 20'hFFFF0;
+    reg        trig_en   = 1'b1;
+    wire       trig_hit  = trig_en && (pc_now == trig_addr);
+    wire       pc_hist_new = (pc_now != pc_hist_prev);
+    always_ff @(posedge clk_chipset) begin
+        reset_wire_d <= reset_wire;
+        soft_rst_d   <= soft_reset_cpu;
+        if (RESET)
+            rst_snap_valid <= 1'b0;
+        else if (!rst_snap_valid &&
+                 ((reset_wire && !reset_wire_d) ||
+                  (soft_reset_cpu && !soft_rst_d) || trig_hit)) begin
+            rst_snap_valid <= 1'b1;
+            for (int i = 0; i < 32; i++)
+                rst_snap[i] <= pc_hist[i];
+            if (pc_hist_new)
+                rst_snap[pc_hist_w] <= pc_now;
+            rst_snap_w     <= pc_hist_w + {4'd0, pc_hist_new};
+            rst_snap_cause <= {RESET, load_active, ~bios_ever_loaded,
+                               interact_reset, guest_hold_sync2,
+                               soft_guest_hold, soft_reset_cpu | trig_hit};
+        end
+    end
+
+    // And the other half of the boundary: the first 32 bus cycles AFTER
+    // a guest reset releases -- the F0 hand-over's resume path, which
+    // decides within microseconds whether POST re-runs or the boot
+    // continues. Re-arms on every guest reset so the bank always holds
+    // the MOST RECENT resume trail -- in a reset loop that is the
+    // failing transition itself, still warm.
+    reg [19:0] post_snap [0:31];
+    reg  [4:0] post_snap_w = 5'd0;
+    reg        post_armed  = 1'b0;
+    reg        post_valid  = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (RESET) begin
+            post_valid <= 1'b0;
+            post_armed <= 1'b0;
+        end else if (reset || soft_reset_cpu) begin
+            post_armed <= 1'b1;
+        end else if (post_armed && !pc_hist_frozen &&
+                     pc_hist_new && pc_hist_w == 5'd31) begin
+            post_armed <= 1'b0;
+            post_valid <= 1'b1;
+            for (int i = 0; i < 32; i++)
+                post_snap[i] <= pc_hist[i];
+            post_snap[31] <= pc_now;
+            post_snap_w   <= pc_hist_w;
+        end
+    end
+
     // Register the readout: the dbg cones through this mux into the SLD
     // capture were one giant combinational path that crashes Quartus 18.1's
     // timing-driven clustering (VPR20KMAIN tdc_util internal error). One
@@ -1244,6 +1318,28 @@ module core_top (
             8'h58,8'h59,8'h5a,8'h5b,8'h5c,8'h5d,8'h5e,8'h5f:
                        probe_data_c = {7'h00, pc_hist_frozen, pc_hist_w,
                                        pc_hist[probe_addr[4:0]]};
+            // 0x60: rst_snap header -- {valid, cause[6:0], w[4:0],
+            // post_valid, post_w[4:0]}. cause bit order: RESET,
+            // load_active, ~bios_ever_loaded, interact_reset,
+            // guest_hold_sync2, soft_guest_hold, soft_reset_cpu|trig_hit
+            // (bit27..bit21). 0x61-0x80: pre-reset trail (write order).
+            // 0xA0-0xBF: post-reset trail (entry order == fetch order).
+            8'h60:   probe_data_c = {3'h0, rst_snap_valid, rst_snap_cause,
+                                       rst_snap_w, post_valid,
+                                       post_snap_w, 10'h000};
+            8'h61,8'h62,8'h63,8'h64,8'h65,8'h66,8'h67,
+            8'h68,8'h69,8'h6a,8'h6b,8'h6c,8'h6d,8'h6e,8'h6f,
+            8'h70,8'h71,8'h72,8'h73,8'h74,8'h75,8'h76,8'h77,
+            8'h78,8'h79,8'h7a,8'h7b,8'h7c,8'h7d,8'h7e,8'h7f,
+            8'h80:
+                       probe_data_c = {12'h000,
+                                       rst_snap[probe_addr[4:0] - 5'd1]};
+            8'ha0,8'ha1,8'ha2,8'ha3,8'ha4,8'ha5,8'ha6,8'ha7,
+            8'ha8,8'ha9,8'haa,8'hab,8'hac,8'had,8'hae,8'haf,
+            8'hb0,8'hb1,8'hb2,8'hb3,8'hb4,8'hb5,8'hb6,8'hb7,
+            8'hb8,8'hb9,8'hba,8'hbb,8'hbc,8'hbd,8'hbe,8'hbf:
+                       probe_data_c = {12'h000,
+                                       post_snap[probe_addr[4:0]]};
             // 0x1b: {bridge park/engine FSM, ce edge counter}. parked=1 with a
             // frozen ce_count is the dead-CE signature; a live count with
             // parked=1 points at the engine's release conditions instead.
@@ -1548,6 +1644,11 @@ module core_top (
         if (probe_wr_pulse && probe_waddr_c == 7'h03) begin
             jtag_btn1 <= probe_wdata_c[15:0];
             jtag_btn2 <= probe_wdata_c[31:16];
+        end
+        // Slot 0x04: the rst_snap address trigger -- {en,addr[19:0]}.
+        if (probe_wr_pulse && probe_waddr_c == 7'h04) begin
+            trig_addr <= probe_wdata_c[19:0];
+            trig_en   <= probe_wdata_c[31];
         end
     end
 
