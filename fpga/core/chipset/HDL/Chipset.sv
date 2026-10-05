@@ -134,6 +134,11 @@ module CHIPSET #(
         // Watch-address seen/accept counts plus the last accepted record --
         // {8'h00, wseen[7:0], wacc[7:0], rec[31:0]}, see RAM.sv.
         output  logic   [55:0]  dbg_chipset12,
+        // sdram_mp's arbiter counters for the JTAG probe (slots 0x01-0x0B):
+        // the packed {cycles, stall, grant} readout from sdram_shim, and the
+        // probe-write pulse (slot 0x0C) that re-zeroes them.
+        input   logic           sdram_perf_clear,
+        output  logic   [351:0] dbg_chipset13,
         // The GVRAM sequencer's own view: where the plane walk (or the
         // service channel) is parked -- see pc98_gvram_seq's dbg port.
         output  logic   [7:0]   dbg_gvram,
@@ -703,7 +708,9 @@ module CHIPSET #(
         .dbg5                               (dbg_chipset9),
         .dbg6                               (dbg_chipset11),
         .dbg7                               (dbg_chipset12),
-        .dbg_watch_addr                     (dbg_watch_addr)
+        .dbg_watch_addr                     (dbg_watch_addr),
+        .perf_clear                         (sdram_perf_clear),
+        .dbg8                               (dbg_chipset13)
     );
 
     // JTAG probe bundle: {arbiter hold/DRQ, RAM FSM state} plus the wait

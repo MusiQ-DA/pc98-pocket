@@ -292,12 +292,17 @@ module core_top (
     logic        jtag_spd_ovr = 1'b0;
     logic  [1:0] jtag_spd_sel = 2'b00;
     logic [19:0] jtag_watch_addr = 20'hFFFFF;
+    // Write slot 0x8C re-zeroes the SDRAM arbiter counters (probe reads
+    // 0x01-0x0B); the pulse itself is driven off the write decode below.
+    logic        sdram_perf_clear_r = 1'b0;
+    wire         sdram_perf_clear = sdram_perf_clear_r;
     wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
                                               : cpu_speed_cfg;
 `else
     // The CPU speed is the OSD's alone.
     wire   [1:0] clk_select_next = cpu_speed_cfg;
     wire  [19:0] jtag_watch_addr = 20'hFFFFF;
+    wire         sdram_perf_clear = 1'b0;
 `endif
 
     always @(posedge clk_chipset, posedge reset)
@@ -1254,7 +1259,7 @@ module core_top (
     // JTAG TVRAM dump: write slot 0x0B arms the shared dbg_tvram_cell,
     // read slot 0xF7 returns {cell[7:0] echo, attr, char_hi, char_lo}
     // (remapped from bench-next186's 0x8B/0x74 -- 0x74 lives inside the
-    // rst_snap ring's 0x61-0x80 window on this branch). The read rides
+    // pre-reset trail's 0x61-0x80 window on branches that keep it). The read rides
     // tvram's guest pipeline whenever no guest read owns it -- never
     // steals a cycle.
     wire [31:0] tvram_dbg_q;
@@ -1358,25 +1363,7 @@ module core_top (
         end
     end
 
-    // Reset-boundary trail: the first reset_wire OR soft_reset_cpu rise
-    // after release banks pc_hist wholesale -- the array survives a guest
-    // reset (only its pointer is cleared), so the snapshot keeps the last
-    // 32 bus addresses of the dying pass plus the write pointer to order
-    // them -- and the reset terms, so a POST reset-loop names both the
-    // code that ran into the reset and the line that fired it. The F0
-    // hand-over soft reset does not touch reset_wire, so it is its own
-    // trigger and its own cause bit.
-    // rst_snap_valid clears on RESET only: the guest reset the trigger
-    // starts must not drop the evidence, and the loop's second pass must
-    // not overwrite the first. The edge detectors seed high so the
-    // power-on assertion is not mistaken for a boundary.
-    reg [19:0] rst_snap [0:31];
-    reg  [4:0] rst_snap_w     = 5'd0;
-    reg  [6:0] rst_snap_cause = 7'd0;
-    reg        rst_snap_valid = 1'b0;
-    reg        reset_wire_d   = 1'b1;
-    reg        soft_rst_d     = 1'b0;
-    // Address-triggered capture, probe-writable via write slot 0x04
+    // Address-triggered capture, probe-writable via write slot 0x86
     // ({en,addr[19:0]}, handled with the other probe writes below).
     // Defaults to the reset vector: every reset path -- hard, soft,
     // watchdog -- ends with a FFFF0 fetch, so a reset the cause bits
@@ -1384,20 +1371,15 @@ module core_top (
     reg [19:0] trig_addr = 20'hFFFF0;
     reg        trig_en   = 1'b1;
     reg        trig_freeze = 1'b0;
-    // bit29 of write slot 0x04: delay the trig freeze ~24 fetches so the
+    // bit29 of write slot 0x86: delay the trig freeze ~24 fetches so the
     // ring keeps the code AFTER the hit (e.g. the landing of the resume
     // retf at f8069 when armed on f8061).
     reg        trig_delay  = 1'b0;
     reg  [4:0] delay_cnt   = 5'd0;
-    // bit28 of write slot 0x04: record raw bus addresses (fetches AND
+    // bit28 of write slot 0x86: record raw bus addresses (fetches AND
     // data accesses) instead of just the fetch stream, so a restore's
     // [0x404]/[0x406] reads and the retf's stack pops are visible.
     reg        trig_bus    = 1'b0;
-    // bit27 of write slot 0x04: f0_snap records only WRITE commands
-    // (memory or I/O). Display DMA is read-only, so the ring stops
-    // drowning in framebuffer sweeps and keeps the 32 cycles of guest
-    // writes leading into the F0 -- the whole save sequence's addresses.
-    reg        trig_wronly = 1'b0;
     wire       trig_hit  = trig_en && (pc_now == trig_addr);
     wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
 
@@ -1464,111 +1446,6 @@ module core_top (
     wire       w43d_10   = io_port_write &&
                            (chipset_address[15:0] == 16'h043D) &&
                            (cpu_data_bus == 8'h10);
-    wire       pc_hist_new = (hist_src != pc_hist_prev);
-    always_ff @(posedge clk_chipset) begin
-        reset_wire_d <= reset_wire;
-        soft_rst_d   <= soft_reset_cpu;
-        if (RESET)
-            rst_snap_valid <= 1'b0;
-        else if (!rst_snap_valid &&
-                 ((reset_wire && !reset_wire_d) ||
-                  (soft_reset_cpu && !soft_rst_d) || trig_hit)) begin
-            rst_snap_valid <= 1'b1;
-            for (int i = 0; i < 32; i++)
-                rst_snap[i] <= pc_hist[i];
-            if (pc_hist_new)
-                rst_snap[pc_hist_w] <= pc_now;
-            rst_snap_w     <= pc_hist_w + {4'd0, pc_hist_new};
-            rst_snap_cause <= {RESET, load_active, ~bios_ever_loaded,
-                               interact_reset, guest_hold_sync2,
-                               soft_guest_hold, soft_reset_cpu | trig_hit};
-        end
-    end
-
-    // And the other half of the boundary: the first 32 bus cycles AFTER
-    // a guest reset releases -- the F0 hand-over's resume path, which
-    // decides within microseconds whether POST re-runs or the boot
-    // continues. Re-arms on every guest reset so the bank always holds
-    // the MOST RECENT resume trail -- in a reset loop that is the
-    // failing transition itself, still warm.
-    reg [19:0] post_snap [0:31];
-    reg  [4:0] post_snap_w = 5'd0;
-    reg        post_armed  = 1'b0;
-    reg        post_valid  = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        if (RESET) begin
-            post_valid <= 1'b0;
-            post_armed <= 1'b0;
-        end else if (reset || soft_reset_cpu) begin
-            post_armed <= 1'b1;
-        end else if (post_armed && !pc_hist_frozen &&
-                     pc_hist_new && pc_hist_w == 5'd31) begin
-            post_armed <= 1'b0;
-            post_valid <= 1'b1;
-            for (int i = 0; i < 32; i++)
-                post_snap[i] <= pc_hist[i];
-            post_snap[31] <= pc_now;
-            post_snap_w   <= pc_hist_w;
-        end
-    end
-
-    // f0_snap: an independent always-recording bus ring whose write
-    // pointer is banked at every F0 port write -- unlike pc_hist it is
-    // never frozen and never cleared by guest resets, so slots
-    // 0xC1-0xE0 always hold the 32 cycles leading INTO the most recent
-    // F0 (the loop's exit path), whatever froze the main ring earlier.
-    reg [19:0] f0_snap [0:31];
-    reg  [4:0] f0_hist_w   = 5'd0;
-    reg [19:0] f0_hist_prev = 20'h0;
-    // In writes-only mode the recorded address is always the bus address
-    // (the write's target); otherwise it follows the pc_hist source.
-    wire [19:0] f0_src = trig_wronly ? chipset_address : hist_src;
-    reg  [4:0] f0_snap_w     = 5'd0;
-    reg        f0_snap_valid = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        if (RESET)
-            f0_snap_valid <= 1'b0;
-        if (f0_src != f0_hist_prev
-            && (!trig_wronly
-                || ~chipset_memory_write_n || ~chipset_io_write_n)) begin
-            f0_hist_prev      <= f0_src;
-            f0_snap[f0_hist_w] <= f0_src;
-            f0_hist_w         <= f0_hist_w + 5'd1;
-        end
-        if (f0_port_write) begin
-            f0_snap_valid <= 1'b1;
-            f0_snap_w     <= f0_hist_w;
-        end
-    end
-
-    // The freeze has to outlive the soft reset the 0xF0 write triggers,
-    // but dropping soft_reset_cpu from the block above deterministically
-    // crashes Quartus 18.1's fitter (VPR20KMAIN tdc_util) -- so keep the
-    // proven structure and snapshot the ring+pointer into a second bank
-    // on the trigger instead. The snapshot clears only on hard reset, so
-    // a repeated boot loop keeps the FIRST failure's trail. The fetch
-    // landing this same cycle (the jmp$ right after `out`) misses the
-    // bulk copy, so it is written into snap[w] explicitly.
-    // A legit OUT 0F0h still freezes the live ring (pc_hist_frozen above)
-    // but must not burn the snapshot: the POST ends every healthy boot
-    // with one, and it would mask the trail of a later real fault. Slot
-    // 0x40+ then reads back the live ring, which resets with soft_reset_cpu
-    // and refreezes at the first post-reset trigger -- the trail we want.
-    reg [19:0] pc_snap [0:31];
-    reg  [4:0] pc_snap_w     = 5'd0;
-    reg        pc_snap_valid = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        if (reset || pc_rearm)
-            pc_snap_valid <= 1'b0;
-        else if (!pc_snap_valid && (pc_in_errhalt || zet_fault)) begin
-            pc_snap_valid <= 1'b1;
-            for (int i = 0; i < 32; i++)
-                pc_snap[i] <= pc_hist[i];
-            if (pc_hist_new)
-                pc_snap[pc_hist_w] <= pc_now;
-            pc_snap_w <= pc_hist_w + {4'd0, pc_hist_new};
-        end
-    end
 
     // The first zet fault's decode-side evidence: which PC's instruction
     // decoded to INVOP/INTD. Pairs with dbg_opc (the byte it saw, latched
@@ -1695,7 +1572,7 @@ module core_top (
             8'h99:   probe_data_c = {12'h0, w3fc_pc};
             // bench-next186 probe block, remapped off 0x35-0x3A (owned by
             // the sysport/TVRAM/GVRAM/GDC slots above) and 0x64-0x74 (inside
-            // this branch's rst_snap ring, 0x61-0x80):
+            // the pre-reset trail's 0x61-0x80 window where it exists):
             //
             // 0x9A-0x9C: the RAM-image floppy server's witness -- enough to
             // prove the feature is in the image ('R'=0x52 tag at the top),
@@ -1775,43 +1652,12 @@ module core_top (
             8'h48,8'h49,8'h4a,8'h4b,8'h4c,8'h4d,8'h4e,8'h4f,
             8'h50,8'h51,8'h52,8'h53,8'h54,8'h55,8'h56,8'h57,
             8'h58,8'h59,8'h5a,8'h5b,8'h5c,8'h5d,8'h5e,8'h5f:
-                       probe_data_c = pc_snap_valid
-                                    ? {7'h00, 1'b1, pc_snap_w,
-                                       pc_snap[probe_addr[4:0]]}
-                                    : {7'h00, pc_hist_frozen, pc_hist_w,
+                       probe_data_c = {7'h00, pc_hist_frozen, pc_hist_w,
                                        pc_hist[probe_addr[4:0]]};
-            // 0x60: rst_snap header -- {valid, cause[6:0], w[4:0],
-            // post_valid, post_w[4:0]}. cause bit order: RESET,
-            // load_active, ~bios_ever_loaded, interact_reset,
-            // guest_hold_sync2, soft_guest_hold, soft_reset_cpu|trig_hit
-            // (bit27..bit21). 0x61-0x80: pre-reset trail (write order).
-            // 0xA0-0xBF: post-reset trail (entry order == fetch order).
-            8'h60:   probe_data_c = {3'h0, rst_snap_valid, rst_snap_cause,
-                                       rst_snap_w, post_valid,
-                                       post_snap_w, 10'h000};
-            8'h61,8'h62,8'h63,8'h64,8'h65,8'h66,8'h67,
-            8'h68,8'h69,8'h6a,8'h6b,8'h6c,8'h6d,8'h6e,8'h6f,
-            8'h70,8'h71,8'h72,8'h73,8'h74,8'h75,8'h76,8'h77,
-            8'h78,8'h79,8'h7a,8'h7b,8'h7c,8'h7d,8'h7e,8'h7f,
-            8'h80:
-                       probe_data_c = {12'h000,
-                                       rst_snap[probe_addr[4:0] - 5'd1]};
-            8'ha0,8'ha1,8'ha2,8'ha3,8'ha4,8'ha5,8'ha6,8'ha7,
-            8'ha8,8'ha9,8'haa,8'hab,8'hac,8'had,8'hae,8'haf,
-            8'hb0,8'hb1,8'hb2,8'hb3,8'hb4,8'hb5,8'hb6,8'hb7,
-            8'hb8,8'hb9,8'hba,8'hbb,8'hbc,8'hbd,8'hbe,8'hbf:
-                       probe_data_c = {12'h000,
-                                       post_snap[probe_addr[4:0]]};
-            // 0xC0: f0_snap header {valid,w}; 0xC1-0xE0: trail into the
-            // most recent F0 write (write-pointer order, oldest first).
-            8'hc0:   probe_data_c = {26'h0, f0_snap_valid, f0_snap_w};
-            8'hc1,8'hc2,8'hc3,8'hc4,8'hc5,8'hc6,8'hc7,
-            8'hc8,8'hc9,8'hca,8'hcb,8'hcc,8'hcd,8'hce,8'hcf,
-            8'hd0,8'hd1,8'hd2,8'hd3,8'hd4,8'hd5,8'hd6,8'hd7,
-            8'hd8,8'hd9,8'hda,8'hdb,8'hdc,8'hdd,8'hde,8'hdf,
-            8'he0:
-                       probe_data_c = {12'h000,
-                                       f0_snap[probe_addr[4:0] - 5'd1]};
+            // 0x60-0x80, 0xA0-0xE0 used to carry the rst/post/f0 snapshot
+            // trails; this instrumentation build drops them -- the four
+            // snapshot banks' ~2.5k registers paid for the SDRAM arbiter
+            // counters (slots 0x01-0x0B) without growing the device.
             // 0x1b: {bridge park/engine FSM, ce edge counter}. parked=1 with a
             // frozen ce_count is the dead-CE signature; a live count with
             // parked=1 points at the engine's release conditions instead.
@@ -1864,6 +1710,22 @@ module core_top (
             // 0x74: text-VRAM dump -- armed by write slot 0x8b; returns
             // {cell[7:0] echo, attr, char_hi, char_lo} for that cell.
             8'h74:   probe_data_c = tvram_dbg_q;
+            // 0x01-0x0B: sdram_mp's arbiter tallies (sdram_shim packs them):
+            // {grant,stall} pairs for ports A,B,C,D,E on 0x01-0x0A, then the
+            // total controller-cycle count on 0x0B. A stall cycle is one
+            // where the port's request was up and the arbiter did not take
+            // it -- stall/cycles is the wait that port felt; port A is the
+            // guest's channel. Write slot 0x8C re-zeroes the whole set.
+            // The tallies sit below 0x80 on purpose: a probe scan whose
+            // address byte has bit 7 set is a WRITE to addr[6:0], so reads
+            // anywhere in 0x80-0xFE alias onto live write slots (0x87 would
+            // eject the RAM image via fdd_ramimg's ctl word). The other
+            // free windows are already taken anyway -- 0xA0-0xBF is the
+            // post-reset trail above.
+            8'h01,8'h02,8'h03,8'h04,8'h05,8'h06,8'h07,
+            8'h08,8'h09,8'h0a,8'h0b:
+                       probe_data_c = chipset_dbg13[32*(probe_addr - 8'h01)
+                                                    +: 32];
             8'hFF:   probe_data_c = 32'h98C0_DE98;
             default: probe_data_c = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -2168,18 +2030,18 @@ module core_top (
             gv_dbg_busy <= 1'b0;
             gv_dbg_data <= st_rdata_w;
         end
-        // Write slot 0x06: the rst_snap address trigger --
-        // {en,freeze,delay,bus,wronly,addr[19:0]}. freeze additionally
+        // Write slot 0x06: the pc_hist address trigger --
+        // {en,freeze,delay,bus,--,addr[19:0]}. freeze additionally
         // stops pc_hist on a hit so the ring holds whatever led to the
         // watched address. (rstprobe used slot 0x04; here that slot
-        // launches GVRAM dumps, so the trigger moved to 0x06.)
+        // launches GVRAM dumps, so the trigger moved to 0x06. Bit 27 was
+        // f0_snap's writes-only mode; that bank is gone on this branch.)
         if (probe_wr_pulse && probe_waddr_c == 7'h06) begin
             trig_addr   <= probe_wdata_c[19:0];
             trig_en     <= probe_wdata_c[31];
             trig_freeze <= probe_wdata_c[30];
             trig_delay  <= probe_wdata_c[29];
             trig_bus    <= probe_wdata_c[28];
-            trig_wronly <= probe_wdata_c[27];
         end
         // Slot 0x09: CPU-speed override for scripted runs -- wdata[2] forces
         // clk_select_next to wdata[1:0] instead of the OSD setting. Same
@@ -2197,6 +2059,10 @@ module core_top (
         // every completed 0x36 read).
         if (probe_wr_pulse && probe_waddr_c == 7'h0b)
             dbg_tvram_cell <= probe_wdata_c[11:0];
+        // Slot 0x0c: re-zero the SDRAM arbiter counters (readback on slots
+        // 0x01-0x0B). Clear, let a benchmark run accumulate for a window,
+        // then read -- or clear again to retake the window.
+        sdram_perf_clear_r <= probe_wr_pulse && (probe_waddr_c == 7'h0c);
     end
 
     // JTAG-injected keystrokes ride the same event line the 8251 drains; a
@@ -2867,6 +2733,9 @@ module core_top (
     wire [127:0] chipset_dbg10;
     wire [103:0] chipset_dbg11;
     wire  [55:0] chipset_dbg12;
+    // sdram_mp's arbiter tallies -- {cycles, stallE..stallA, grantE..grantA},
+    // 32 bits a field, packed by sdram_shim. Probe slots 0x01-0x0B.
+    wire [351:0] chipset_dbg13;
     wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
     wire [23:0]  tvram_dbg_word; // screen probe: {attr,char_hi,char_lo}
     logic [11:0] dbg_tvram_cell; // screen probe: the cell being sampled
@@ -3130,6 +2999,8 @@ module core_top (
         .dbg_chipset10                      (chipset_dbg10),
         .dbg_chipset11                      (chipset_dbg11),
         .dbg_chipset12                      (chipset_dbg12),
+        .sdram_perf_clear                   (sdram_perf_clear),
+        .dbg_chipset13                      (chipset_dbg13),
         .dbg_gvram                          (gvram_dbg),
         .dbg_scsi                           (dbg_scsi),
     //  .terminal_count_n                   (terminal_count_n)

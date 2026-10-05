@@ -23,6 +23,9 @@ module tb_sdram_shim;
     logic [DW-1:0] data_out;
     logic write_request = 0, read_request = 0;
     logic write_flag, read_flag, refresh_mode, idle;
+    // JTAG perf counters (PC98_JTAG): the clear pulse + packed readout.
+    logic          perf_clear = 1'b0;
+    wire  [351:0]  perf;
 
     wire [12:0] s_a; wire [1:0] s_ba;
     wire s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io;
@@ -48,7 +51,8 @@ module tb_sdram_shim;
         .d_ack(), .d_rvalid(), .d_rdata(), .d_done(),
         .e_req(1'b0), .e_we(1'b0), .e_addr(24'd0), .e_len(4'd0),
         .e_wdata(16'h0000),
-        .e_ack(), .e_rvalid(), .e_rdata(), .e_done());
+        .e_ack(), .e_rvalid(), .e_rdata(), .e_done(),
+        .perf_clear(perf_clear), .perf(perf));
 
     sdram_model #(.T_RCD(2), .T_RP(2), .T_WR(2), .T_RFC(4),
                   .PHYSICAL_DQ(1'b1)) sdr (
@@ -86,6 +90,38 @@ module tb_sdram_shim;
                 errors++;
             end
         end
+
+`ifdef PC98_JTAG
+        // Arbiter counters (probe slots 0x01-0x0B): after 64 port-A
+        // accesses the grant tally must be nonzero and bounded by the
+        // cycle count, and a perf_clear pulse must re-zero the lot.
+        begin : perf_check
+            automatic int grants = int'(perf[31:0]);   // port A grants
+            automatic int cycles = int'(perf[351:320]);
+            if (grants == 0) begin
+                $display("  PERF FAIL: port A grant count is 0");
+                errors++;
+            end
+            if (cycles < grants) begin
+                $display("  PERF FAIL: cycles %0d < grants %0d", cycles, grants);
+                errors++;
+            end
+            perf_clear = 1'b1;
+            @(posedge clk);
+            perf_clear = 1'b0;
+            @(posedge clk);
+            @(posedge clk);
+            // Two clocks on, the cycle counter may have ticked up again --
+            // but every grant/stall field must still read back zero.
+            if (perf[319:0] === 320'h0 && perf[351:320] < 32'd20)
+                $display("  perf: %0d A-grants, %0d cycles, cleared clean",
+                         grants, cycles);
+            else begin
+                $display("  PERF FAIL: clear left %h", perf);
+                errors++;
+            end
+        end
+`endif
 
         $display("\n=== shim summary ===");
         $display("  protocol violations : %0d", sdr.violations);

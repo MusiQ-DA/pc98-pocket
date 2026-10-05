@@ -109,7 +109,8 @@ module tb_scsi_rom;
         .mouse_btn(2'b00), .opna_joy(8'hFF), .ram_rw_complete(),
         .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
         .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
-        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
+        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done(),
+        .sdram_perf_clear(1'b0), .dbg_chipset13()
     );
 
     int errors = 0;

@@ -51,6 +51,12 @@ module RAM (
     output  logic   [103:0] dbg6,
     output  logic   [55:0]  dbg7,
     input   logic   [19:0]  dbg_watch_addr,
+    // The SDRAM shim's JTAG arbiter counters: a clear pulse down from
+    // core_top's probe-write decode (slot 0x0C), and the packed
+    // grant/stall/cycles readout out -- layout in sdram_shim, probe slots
+    // 0x01-0x0B.
+    input   logic           perf_clear,
+    output  logic   [351:0] dbg8,
     // SDRAM
     output  logic   [12:0]  sdram_address,
     output  logic           sdram_cke,
@@ -364,7 +370,9 @@ module RAM (
         .e_ack              (ramimg_ack),
         .e_rvalid           (ramimg_rvalid),
         .e_rdata            (ramimg_rdata),
-        .e_done             (ramimg_done)
+        .e_done             (ramimg_done),
+        .perf_clear         (perf_clear),
+        .perf               (dbg8)
     );
 
 

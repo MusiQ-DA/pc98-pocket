@@ -151,7 +151,18 @@ module sdram_shim #(
     output logic                              e_ack,
     output logic                              e_rvalid,
     output logic [sdram_data_width-1:0]       e_rdata,
-    output logic                              e_done
+    output logic                              e_done,
+
+    // ---------------------------------------------------------------- perf
+    //
+    // JTAG probe counters (PC98_JTAG): per-port grant/stall tallies plus a
+    // total-cycle count, packed into perf -- the layout comment sits with the
+    // counters at the bottom of the file. perf_clear is a clk_chipset pulse
+    // from core_top's probe-write decode (slot 0x0C) that re-zeroes them
+    // mid-run. With the macro off the counters are never built and perf
+    // reads back all zero.
+    input  wire                               perf_clear,
+    output logic [351:0]                      perf
 );
 
     localparam int ADDR_BITS = sdram_col_width + sdram_row_width + sdram_bank_width;
@@ -384,6 +395,58 @@ module sdram_shim #(
     );
 
     wire _unused_init_done = init_done;
+
+    // ------------------------------------------------------------ perf tap
+    //
+    // JTAG probe counters: one grant tally and one stall tally per port plus
+    // a total-cycle count, all 32 bits wide and saturating so a long capture
+    // can never wrap into a plausible-looking small number.
+    //
+    //   grant[p]  counts p_ack[p] pulses     -- transactions the arbiter took
+    //   stall[p]  counts cycles p_req[p] was up and not taken -- the wait the
+    //             port actually felt (arbiter busy elsewhere, or refreshing)
+    //   cycles    counts every clock from init_done on
+    //
+    // perf packs them 32 bits a field, port A lowest:
+    //   perf[ 63: 32] = port A stalls        perf[351:320] = total cycles
+    //   perf[ 31:  0] = port A grants        (grant,stall pairs for B..E in
+    //   between). core_top indexes fields straight off probe_addr, so the
+    //   read slots land at 0x01-0x0B and a write to slot 0x0C re-zeroes.
+`ifdef PC98_JTAG
+    logic [31:0] perf_cycles_r;
+    logic [31:0] perf_grant_r [PORTS];
+    logic [31:0] perf_stall_r [PORTS];
+
+    always_ff @(posedge sdram_clock) begin
+        if (sdram_reset || perf_clear) begin
+            perf_cycles_r <= '0;
+            for (int p = 0; p < PORTS; p = p + 1) begin
+                perf_grant_r[p] <= '0;
+                perf_stall_r[p] <= '0;
+            end
+        end else if (init_done) begin
+            if (perf_cycles_r != 32'hFFFF_FFFF)
+                perf_cycles_r <= perf_cycles_r + 32'd1;
+            for (int p = 0; p < PORTS; p = p + 1) begin
+                if (mp_ack[p]) begin
+                    if (perf_grant_r[p] != 32'hFFFF_FFFF)
+                        perf_grant_r[p] <= perf_grant_r[p] + 32'd1;
+                end else if (mp_req[p]
+                             && perf_stall_r[p] != 32'hFFFF_FFFF)
+                    perf_stall_r[p] <= perf_stall_r[p] + 32'd1;
+            end
+        end
+    end
+
+    assign perf = {perf_cycles_r,
+                   perf_stall_r[4], perf_grant_r[4],
+                   perf_stall_r[3], perf_grant_r[3],
+                   perf_stall_r[2], perf_grant_r[2],
+                   perf_stall_r[1], perf_grant_r[1],
+                   perf_stall_r[0], perf_grant_r[0]};
+`else
+    assign perf = '0;
+`endif
 
 endmodule
 

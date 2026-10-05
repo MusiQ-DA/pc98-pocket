@@ -123,6 +123,7 @@ module tb_ext_arbiter;
         .access_complete(ram_rw_complete),
         .ram_address_select_n(ram_address_select_n),
         .dbg_watch_addr(20'hFFFFF),
+        .perf_clear(1'b0), .dbg8(),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
