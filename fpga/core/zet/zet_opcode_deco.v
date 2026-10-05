@@ -267,6 +267,23 @@ module zet_opcode_deco (
           dst <= 4'b0;
         end
 
+      // BOUND r16,m16 (np21w i286c_mn.c `_bound`): on a real 286 (and on
+      // the V30) an out-of-range operand raises int5. The microcode ROM
+      // has no free entries and seq_addr is fixed at 9 bits, so this
+      // borrows PUSHA's address and lets zet_micro_data overlay the
+      // whole microprogram; src=4'hF is the overlay marker and dst
+      // carries the register operand.
+      8'b0110_0010: // bound
+        begin
+          seq_addr <= `PUSHA;
+          need_modrm <= 1'b1;
+          need_off <= need_off_mod;
+          need_imm <= 1'b0;
+          imm_size <= 1'b0;
+          src <= 4'hF;
+          dst <= { 1'b0, regm };
+        end
+
       8'b0110_110x: // ins
         begin
           seq_addr <= rep ? `INVOP : (b ? `INSB : `INSW);

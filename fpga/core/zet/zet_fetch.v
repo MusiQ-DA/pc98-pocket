@@ -93,7 +93,7 @@ module zet_fetch (
   zet_next_or_not next_or_not(pref_l, opcode[7:1], cx_zero, zf, ext_int, next_in_opco,
                   next_in_exec);
   zet_nstate nstate (state, prefix, need_modrm, need_off, need_imm, end_seq,
-             ftype, of, next_in_opco, next_in_exec, block, div_exc,
+             ftype, of, zf, next_in_opco, next_in_exec, block, div_exc,
              tflm, intr, iflm, nmir, iflss, next_state);
 
   // Assignments

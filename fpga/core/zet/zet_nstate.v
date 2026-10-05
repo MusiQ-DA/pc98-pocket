@@ -26,6 +26,7 @@ module zet_nstate (
     input end_seq,
     input [5:0] ftype,
     input of,
+    input zf,
     input next_in_opco,
     input next_in_exec,
     input block,
@@ -44,14 +45,19 @@ module zet_nstate (
   parameter offse_st = 3'h2;
   parameter immed_st = 3'h3;
   parameter execu_st = 3'h4;
-  wire into, end_instr, end_into;
+  wire into, bound_z, end_instr, end_into, end_chk;
   wire [2:0] n_state;
   wire       intr_iflm;
   wire       intrs_tni;
 
   // Assignments
   assign into = (ftype==6'b111_010);
-  assign end_into = into ? ~of : end_seq;
+  // BOUND's exit marker is conv func 3 (cnv[15:0]==0, also used to zero
+  // tmp12 before the push ops): when zf says the range check passed the
+  // sequence stops here and the int5 dispatch tail is skipped.
+  assign bound_z = (ftype==6'b011_010);
+  assign end_chk = bound_z ? zf : end_seq;
+  assign end_into = into ? ~of : end_chk;
   assign end_instr = !div_exc && !intrs_tni && end_into && !next_in_exec;
   assign intr_iflm = intr & iflm;
   assign intrs_tni = (tflm | nmir | intr_iflm) & iflss;
