@@ -270,9 +270,9 @@ module zet_opcode_deco (
       // BOUND r16,m16 (np21w i286c_mn.c `_bound`): on a real 286 (and on
       // the V30) an out-of-range operand raises int5. The microcode ROM
       // has no free entries and seq_addr is fixed at 9 bits, so this
-      // borrows PUSHA's address and lets zet_micro_data overlay the
-      // whole microprogram; src=4'hF is the overlay marker and dst
-      // carries the register operand.
+      // borrows PUSHA's address; zet_core substitutes the whole
+      // microprogram when it sees bound's spec bit. dst carries the
+      // register operand.
       8'b0110_0010: // bound
         begin
           seq_addr <= `PUSHA;
@@ -280,7 +280,7 @@ module zet_opcode_deco (
           need_off <= need_off_mod;
           need_imm <= 1'b0;
           imm_size <= 1'b0;
-          src <= 4'hF;
+          src <= 4'b0;
           dst <= { 1'b0, regm };
         end
 
@@ -863,15 +863,15 @@ module zet_opcode_deco (
       8'b1101_0110: // salc
         begin
           // No rom slot is free, so the op rides the NOP sequence and
-          // zet_micro_data swaps `SALC_OP in when it sees the marker
-          // operand pair -- src=dst=4'hF, which no real decode emits.
+          // zet_core swaps the SALC micro-op in when it sees salc's spec
+          // bit.
           seq_addr <= `NOP;
           need_modrm <= 1'b0;
           need_off <= 1'b0;
           need_imm <= 1'b0;
           imm_size <= 1'b0;
-          src <= 4'hF;
-          dst <= 4'hF;
+          src <= 4'b0;
+          dst <= 4'b0;
         end
 
       8'b1101_0111: // xlat

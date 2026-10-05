@@ -130,6 +130,7 @@ module zet_core (
   wire             end_seq_rom;
   wire [15:0]      off_rom;
   wire [`IR_SIZE-1:0] ir_ov;
+  wire [1:0]         spec;
 
   // wires and regs for hlt
   wire block_or_hlt;
@@ -233,6 +234,7 @@ module zet_core (
     .iflss   (iflss),
 
     .seq_addr (seq_addr),
+    .spec     (spec),
     .src      (src),
     .dst      (dst),
     .base     (base),
@@ -275,76 +277,73 @@ module zet_core (
   // src/dst/seq_addr are combinational decode-cone outputs (the whole
   // 256-entry opcode case sits behind them).  Every build that let a
   // comparator on them drive consumed logic -- on the ROM q net, on ir,
-  // anywhere -- crashed Quartus' S2T timing-map stage, so the marker is
-  // latched into a flop while the front-end is decoding (exec_st low):
-  // the mux selects below then hang off clean register outputs only.
+  // anywhere -- crashed Quartus' S2T timing-map stage, so the marker
+  // comes out of decode as a dedicated spec flag, latched while the
+  // front-end is decoding (exec_st low): every overlay select below is
+  // a single register bit -- no comparators anywhere in this path.
   reg [1:0] spec_r;
   always @(posedge clk)
     if (rst) spec_r <= 2'd0;
-    else if (!exec_st)
-      spec_r <= (src == 4'hF && dst == 4'hF) ? 2'd1   // salc
-              : (src == 4'hF)                  ? 2'd2   // bound
-                                               : 2'd0;
-  wire is_salc  = (spec_r == 2'd1);
-  wire is_bound = (spec_r == 2'd2);  // spec_r==2 implies bound was
-                                     // dispatched, so seq_addr is
-                                     // already inside the borrowed range
+    else if (!exec_st) spec_r <= spec;
+  wire is_salc  = spec_r[0];
+  wire is_bound = spec_r[1];  // implies bound was dispatched, so
+                              // seq_addr is inside the borrowed range
 
   // SALC: al <- al - al - cf, flags preserved (t=1 addsub f=4 sbb,
-  // byte op via ir1=23h).  BOUND ops are the 50-bit micro-words
-  // pre-expanded into the {ir1,f,t,ir0,wr_d,wr_mem,wr_flag,d,c,b,a,s}
-  // vector with var_* resolved against base/index/seg/dst; +9..+19
-  // mirror the INT dispatch tail (flags, IF/TF clear, push bound IP
-  // from r14, push CS, vector through IVT[5]).
+  // byte op via ir1=23h).
   localparam [`IR_SIZE-1:0] SALC_IR =
       {7'h23, 3'd4, 3'd1, 2'b00, 1'b1, 1'b0, 1'b0,
        4'd0, 4'd0, 4'd0, 4'd0, 2'd0};
-  reg [`IR_SIZE-1:0] bound_ir;
-  always @(*) case (seq_addr)
-    9'h1ce: bound_ir = {7'h04,3'd0,3'd7,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,index,base,seg}; // r13 <- mem[EA]
-    9'h1cf: bound_ir = {7'h00,3'd5,3'd5,2'b00,1'b0,1'b0,1'b1,4'd0,4'd0,4'd13,dst,2'd0};    // dst - r13
-    9'h1d0: bound_ir = {7'h12,3'd0,3'd0,2'b01,1'b0,1'b0,1'b0,4'd12,4'd0,4'd12,4'd0,2'd0}; // jl -> r12=1
-    9'h1d1: bound_ir = {7'h04,3'd1,3'd7,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,index,base,seg}; // r13 <- mem[EA+2]
-    9'h1d2: bound_ir = {7'h00,3'd5,3'd5,2'b00,1'b0,1'b0,1'b1,4'd0,4'd0,4'd13,dst,2'd0};    // dst - r13
-    9'h1d3: bound_ir = {7'h12,3'd0,3'd0,2'b01,1'b0,1'b0,1'b0,4'd12,4'd0,4'd15,4'd0,2'd0}; // jg -> r12=1
-    9'h1d4: bound_ir = {7'h12,3'd5,3'd5,2'b00,1'b0,1'b0,1'b1,4'd0,4'd0,4'd0,4'd12,2'd0};  // zf <- (r12==0)
-    9'h1d5: bound_ir = {7'h02,3'd3,3'd2,2'b00,1'b1,1'b0,1'b0,4'd12,4'd0,4'd0,4'd0,2'd0};  // r12<-0, exit if zf
-    9'h1d6: bound_ir = {7'h12,3'd5,3'd1,2'b00,1'b1,1'b0,1'b0,4'd4,4'd0,4'd0,4'd4,2'd0};   // sp <- sp-2
-    9'h1d7: bound_ir = {7'h12,3'd5,3'd7,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd0,2'd0};  // r13 <- flags
-    9'h1d8: bound_ir = {7'h04,3'd0,3'd7,2'b00,1'b0,1'b1,1'b0,4'd0,4'd13,4'd12,4'd4,2'd2}; // push flags
-    9'h1d9: bound_ir = {7'h12,3'd6,3'd7,2'b00,1'b0,1'b0,1'b1,4'd0,4'd0,4'd0,4'd0,2'd0};   // flags &= ~{IF,TF}
-    9'h1da: bound_ir = {7'h12,3'd5,3'd1,2'b00,1'b1,1'b0,1'b0,4'd4,4'd0,4'd0,4'd4,2'd0};   // sp <- sp-4
-    9'h1db: bound_ir = {7'h04,3'd0,3'd7,2'b00,1'b0,1'b1,1'b0,4'd0,4'd14,4'd12,4'd4,2'd2}; // push r14 (bound IP)
-    9'h1dc: bound_ir = {7'h04,3'd1,3'd7,2'b00,1'b0,1'b1,1'b0,4'd0,4'd9,4'd12,4'd4,2'd2};  // push r9 (CS)
-    9'h1dd: bound_ir = {7'h12,3'd0,3'd0,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd0,2'd0};  // r13 <- 4
-    9'h1de: bound_ir = {7'h12,3'd1,3'd1,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd13,2'd0}; // r13 <- r13+1
-    9'h1df: bound_ir = {7'h12,3'd4,3'd6,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd13,2'd0}; // r13 <- r13<<2
-    9'h1e0: bound_ir = {7'h14,3'd1,3'd1,2'b00,1'b1,1'b0,1'b0,4'd9,4'd0,4'd0,4'd13,2'd0};  // r9 <- mem[22]
-    default: bound_ir = {7'h14,3'd1,3'd1,2'b00,1'b1,1'b0,1'b0,4'd15,4'd0,4'd0,4'd13,2'd0};// r15 <- mem[20]
-  endcase
 
-  // immediate constants the overlaid ops consume (the native ops
-  // underneath would hand exec the wrong value)
-  reg [15:0] bound_imm;
-  always @(*) case (seq_addr)
-    9'h1d0, 9'h1d3: bound_imm = 16'd1; // condition-met write data
-    9'h1d6: bound_imm = 16'd2;         // sp -= 2
-    9'h1da, 9'h1dd: bound_imm = 16'd4; // sp -= 4 / r13 <- 4
-    9'h1de: bound_imm = 16'd1;         // r13 += 1
-    9'h1df, 9'h1e0: bound_imm = 16'd2; // r13 <<= 2 / read offset
-    default: bound_imm = 16'd0;
-  endcase
+  // BOUND's 20 micro-ops as a packed lookup: the seq_addr-keyed case
+  // table this replaces was the last S2T-crashing structure standing,
+  // so the ops live in a plain reg array indexed by seq_addr[4:0]
+  // (PUSHA=9'h1ce aliases to slot 14; ops wrap to slots 0,1).
+  // Entry: {end, off_sel, b_sel, a_sel[1:0], s_sel, imm[15:0],
+  //         ir1,f,t,ir0,wr_d,wr_mem,wr_flag,d,c,b,a,s}
+  // *_sel picks the live decode value (base/index/seg/dst) for the EA
+  // read and compare ops; everything else is stored verbatim.
+  reg [57:0] bound_rom [0:31];
+  initial begin : bound_fill
+    integer i;
+    for (i = 0; i < 32; i = i + 1) bound_rom[i] = 58'd0;
+    // op +0..+19 sit at seq_addr[4:0] = 14..31,0,1
+    bound_rom[14] = {1'b0,1'b1,1'b1,2'b01,1'b1,16'd0,7'h04,3'd0,3'd7,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd0,2'd0};  // r13 <- mem[EA]
+    bound_rom[15] = {1'b0,1'b0,1'b0,2'b10,1'b0,16'd0,7'h00,3'd5,3'd5,2'b00,1'b0,1'b0,1'b1,4'd0,4'd0,4'd13,4'd0,2'd0}; // dst - r13
+    bound_rom[16] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd1,7'h12,3'd0,3'd0,2'b01,1'b0,1'b0,1'b0,4'd12,4'd0,4'd12,4'd0,2'd0}; // jl -> r12=1
+    bound_rom[17] = {1'b0,1'b1,1'b1,2'b01,1'b1,16'd0,7'h04,3'd1,3'd7,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd0,2'd0};  // r13 <- mem[EA+2]
+    bound_rom[18] = bound_rom[15];                                                                                  // dst - r13
+    bound_rom[19] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd1,7'h12,3'd0,3'd0,2'b01,1'b0,1'b0,1'b0,4'd12,4'd0,4'd15,4'd0,2'd0}; // jg -> r12=1
+    bound_rom[20] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd0,7'h12,3'd5,3'd5,2'b00,1'b0,1'b0,1'b1,4'd0,4'd0,4'd0,4'd12,2'd0};  // zf <- (r12==0)
+    bound_rom[21] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd0,7'h02,3'd3,3'd2,2'b00,1'b1,1'b0,1'b0,4'd12,4'd0,4'd0,4'd0,2'd0};  // r12<-0, exit if zf
+    bound_rom[22] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd2,7'h12,3'd5,3'd1,2'b00,1'b1,1'b0,1'b0,4'd4,4'd0,4'd0,4'd4,2'd0};   // sp <- sp-2
+    bound_rom[23] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd0,7'h12,3'd5,3'd7,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd0,2'd0};  // r13 <- flags
+    bound_rom[24] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd0,7'h04,3'd0,3'd7,2'b00,1'b0,1'b1,1'b0,4'd0,4'd13,4'd12,4'd4,2'd2}; // push flags
+    bound_rom[25] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd0,7'h12,3'd6,3'd7,2'b00,1'b0,1'b0,1'b1,4'd0,4'd0,4'd0,4'd0,2'd0};   // flags &= ~{IF,TF}
+    bound_rom[26] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd4,7'h12,3'd5,3'd1,2'b00,1'b1,1'b0,1'b0,4'd4,4'd0,4'd0,4'd4,2'd0};   // sp <- sp-4
+    bound_rom[27] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd0,7'h04,3'd0,3'd7,2'b00,1'b0,1'b1,1'b0,4'd0,4'd14,4'd12,4'd4,2'd2}; // push r14 (bound IP)
+    bound_rom[28] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd0,7'h04,3'd1,3'd7,2'b00,1'b0,1'b1,1'b0,4'd0,4'd9,4'd12,4'd4,2'd2};  // push r9 (CS)
+    bound_rom[29] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd4,7'h12,3'd0,3'd0,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd0,2'd0};  // r13 <- 4
+    bound_rom[30] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd1,7'h12,3'd1,3'd1,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd13,2'd0}; // r13 <- r13+1
+    bound_rom[31] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd2,7'h12,3'd4,3'd6,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd13,2'd0}; // r13 <- r13<<2
+    bound_rom[ 0] = {1'b0,1'b0,1'b0,2'b00,1'b0,16'd2,7'h14,3'd1,3'd1,2'b00,1'b1,1'b0,1'b0,4'd9,4'd0,4'd0,4'd13,2'd0};  // r9 <- mem[22]
+    bound_rom[ 1] = {1'b1,1'b0,1'b0,2'b00,1'b0,16'd0,7'h14,3'd1,3'd1,2'b00,1'b1,1'b0,1'b0,4'd15,4'd0,4'd0,4'd13,2'd0}; // r15 <- mem[20],end
+  end
+
+  wire [57:0] bword = bound_rom[seq_addr[4:0]];
+  wire [ 3:0] bnd_b = bword[55] ? index : bword[9:6];
+  wire [ 3:0] bnd_a = (bword[54:53] == 2'b01) ? base
+                    : (bword[54:53] == 2'b10) ? dst : bword[5:2];
+  wire [ 1:0] bnd_s = bword[52] ? seg : bword[1:0];
+  wire [`IR_SIZE-1:0] bound_ir = {bword[35:10], bnd_b, bnd_a, bnd_s};
 
   assign ir_ov   = is_salc ? SALC_IR
                  : is_bound ? bound_ir : rom_ir;
   assign div     = (is_salc | is_bound) ? 1'b0 : div_rom;
+  // end/off/imm all ride table bits now -- no seq_addr compares left
   assign end_seq = is_salc ? 1'b1
-                 : is_bound ? (seq_addr == `PUSHA + 9'd19)
-                            : end_seq_rom;
-  // bound's two EA reads (low/high bound) take the displacement;
-  // every other overlaid op works on registers only
-  assign off     = is_bound ? ((seq_addr == 9'h1ce || seq_addr == 9'h1d1)
-                              ? off_l : 16'h0000) : off_rom;
+                 : is_bound ? bword[57] : end_seq_rom;
+  assign off     = is_bound ? (bword[56] ? off_l : 16'h0000) : off_rom;
 
   zet_exec exec (
     .clk     (clk),
@@ -385,7 +384,7 @@ module zet_core (
   assign cpu_mem_op = ir[`MEM_OP];
 
   assign ir    = exec_st ? ir_ov : `ADD_IP;
-  assign imm   = exec_st ? (is_bound ? bound_imm : imm_d) : imm_f;
+  assign imm   = exec_st ? (is_bound ? bword[51:36] : imm_d) : imm_f;
   assign ftype = ir_ov[28:23];
 
   assign hlt_op = ((opcode == `OP_HLT) && exec_st); 

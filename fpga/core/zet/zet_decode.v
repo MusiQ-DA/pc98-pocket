@@ -54,6 +54,7 @@ module zet_decode (
 
     // to microcode
     output [`MICRO_ADDR_WIDTH-1:0] seq_addr,
+    output [1:0] spec,
     output [3:0] src,
     output [3:0] dst,
     output [3:0] base,
@@ -85,6 +86,13 @@ module zet_decode (
   // Assignments
   assign seq_addr = (tfle ? `INTT : (dive ? `INTD
     : (ext_int ? (rep ? `EINTP : `EINT) : base_addr))) + seq;
+
+  // Overlay markers for zet_core: [0]=salc (0xD6), [1]=bound (0x62).
+  // Compared directly on the latched opcode byte -- the src/dst=4'hF
+  // markers these replaced forced comparators onto the opcode_deco
+  // combinational cone, which Quartus Lite's S2T map could not process.
+  // 0Fxx escapes decode elsewhere, so f0f suppresses both.
+  assign spec = {opcode == 8'h62 && !f0f, opcode == 8'hD6 && !f0f};
 
   assign f = opcode[7] ? modrm[5:3] : opcode[5:3];
 
