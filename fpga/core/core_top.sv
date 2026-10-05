@@ -1298,10 +1298,18 @@ module core_top (
     reg [15:0] wr_3fa = 16'h0, wr_3fc = 16'h0;
     reg [15:0] rd_404 = 16'h0, rd_406 = 16'h0;
     reg [15:0] wr_404 = 16'h0, wr_406 = 16'h0;
+    // byte-level detail for the frame word: the odd byte 0x3FB carries the
+    // pushed IP high byte (0x14) -- watched separately to split a
+    // byte-write drop from a wrong-data word write. w*_w record the last
+    // write's cpu_word_access so a byte push is distinguishable.
+    reg [15:0] rd_3fb = 16'h0, wr_3fb = 16'h0;
+    reg  [3:0] w_word = 4'h0;
     always_ff @(posedge clk_chipset) begin
         if (~chipset_memory_read_n && ~chipset_aen) begin
             if (chipset_address == 20'h003FA)
                 rd_3fa <= {data_bus_hi, data_bus};
+            if (chipset_address == 20'h003FB)
+                rd_3fb <= {data_bus_hi, data_bus};
             if (chipset_address == 20'h003FC)
                 rd_3fc <= {data_bus_hi, data_bus};
             if (chipset_address == 20'h00404)
@@ -1310,14 +1318,24 @@ module core_top (
                 rd_406 <= {data_bus_hi, data_bus};
         end
         if (~chipset_memory_write_n && ~chipset_aen) begin
-            if (chipset_address == 20'h003FA)
+            if (chipset_address == 20'h003FA) begin
                 wr_3fa <= {cpu_data_bus_hi, cpu_data_bus};
-            if (chipset_address == 20'h003FC)
+                w_word[0] <= cpu_word_access;
+            end
+            if (chipset_address == 20'h003FB)
+                wr_3fb <= {cpu_data_bus_hi, cpu_data_bus};
+            if (chipset_address == 20'h003FC) begin
                 wr_3fc <= {cpu_data_bus_hi, cpu_data_bus};
-            if (chipset_address == 20'h00404)
+                w_word[1] <= cpu_word_access;
+            end
+            if (chipset_address == 20'h00404) begin
                 wr_404 <= {cpu_data_bus_hi, cpu_data_bus};
-            if (chipset_address == 20'h00406)
+                w_word[2] <= cpu_word_access;
+            end
+            if (chipset_address == 20'h00406) begin
                 wr_406 <= {cpu_data_bus_hi, cpu_data_bus};
+                w_word[3] <= cpu_word_access;
+            end
         end
     end
     // The BIOS->ITF hand-back always ends in an OUT 0x43D,0x10 -- the
@@ -1468,6 +1486,8 @@ module core_top (
             8'h37:   probe_data_c = {wr_3fa, wr_3fc};
             8'h38:   probe_data_c = {rd_404, rd_406};
             8'h39:   probe_data_c = {wr_404, wr_406};
+            8'h3a:   probe_data_c = {rd_3fb, wr_3fb};
+            8'h3b:   probe_data_c = {28'h0, w_word};
             8'h35:   probe_data_c = {bios_branch, in42_count,
                                      last_42_rdata, w43d_10_count[3:0],
                                      w43d_12_count[3:0]};
