@@ -1237,7 +1237,8 @@ module core_top (
                 pc_hist[pc_hist_w] <= pc_now;
                 pc_hist_w          <= pc_hist_w + 5'd1;
             end
-            if (f0_port_write || pc_in_errhalt)
+            if (f0_port_write || pc_in_errhalt || w43d_10 ||
+                (trig_hit && trig_freeze))
                 pc_hist_frozen <= 1'b1;
         end
     end
@@ -1267,7 +1268,15 @@ module core_top (
     // cannot name still leaves its trail.
     reg [19:0] trig_addr = 20'hFFFF0;
     reg        trig_en   = 1'b1;
+    reg        trig_freeze = 1'b0;
     wire       trig_hit  = trig_en && (pc_now == trig_addr);
+    // The BIOS->ITF hand-back always ends in an OUT 0x43D,0x10 -- the
+    // cold path's bank restore -- so freezing the ring on that write
+    // keeps the ~32 fetches that led into the bounce, whichever code
+    // path took it there.
+    wire       w43d_10   = io_port_write &&
+                           (chipset_address[15:0] == 16'h043D) &&
+                           (cpu_data_bus == 8'h10);
     wire       pc_hist_new = (pc_now != pc_hist_prev);
     always_ff @(posedge clk_chipset) begin
         reset_wire_d <= reset_wire;
@@ -1719,10 +1728,13 @@ module core_top (
             jtag_btn1 <= probe_wdata_c[15:0];
             jtag_btn2 <= probe_wdata_c[31:16];
         end
-        // Slot 0x04: the rst_snap address trigger -- {en,addr[19:0]}.
+        // Slot 0x04: the rst_snap address trigger -- {en,freeze,addr[19:0]}.
+        // freeze additionally stops pc_hist on a hit so the ring holds
+        // whatever led to the watched address.
         if (probe_wr_pulse && probe_waddr_c == 7'h04) begin
-            trig_addr <= probe_wdata_c[19:0];
-            trig_en   <= probe_wdata_c[31];
+            trig_addr   <= probe_wdata_c[19:0];
+            trig_en     <= probe_wdata_c[31];
+            trig_freeze <= probe_wdata_c[30];
         end
     end
 
