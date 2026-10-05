@@ -1136,6 +1136,7 @@ module core_top (
     reg [15:0] last_io_port = 16'h0000;
     reg  [7:0] last_io_data = 8'h00;
     wire       io_port_write = ~chipset_io_write_n & ~chipset_aen;
+    wire       io_port_read  = ~chipset_io_read_n  & ~chipset_aen;
     always_ff @(posedge clk_chipset) begin
         io_snoop_q  <= io_port_write;
         io_snoop_qq <= io_snoop_q;
@@ -1148,6 +1149,33 @@ module core_top (
             end
         end else if (!io_port_write)
             io_snoop_armed <= 1'b1;
+    end
+
+    // 0x35/0x37 forensics: the byte the guest actually reads back from the
+    // 8255 port-C latch decides cold vs resume at the ITF entry (F805B).
+    // last_35_rdata is what the CPU got; entry_branch records which path
+    // the entry took afterwards -- F8061 = resume (bit7 read 0), F806A =
+    // cold (bit7 read 1), F9497 = the resume landing, F9A30/F9A2A = the
+    // shutdown OUT-0xF0 sites. Sticky: the first observation per boot
+    // wins, and the loop supplies plenty.
+    reg [7:0] last_35_rdata = 8'h00;
+    reg [7:0] last_37_wdata = 8'h00;
+    reg [7:0] in35_count    = 8'h00;
+    reg [3:0] entry_branch  = 4'h0;
+    reg       f0_seen       = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (io_port_read && (chipset_address[15:0] == 16'h0035)) begin
+            last_35_rdata <= data_bus;
+            in35_count    <= in35_count + 8'd1;
+        end
+        if (io_port_write && (chipset_address[15:0] == 16'h0037))
+            last_37_wdata <= cpu_data_bus;
+        if (f0_port_write) f0_seen <= 1'b1;
+        if (pc_now == 20'hF8061) entry_branch[0] <= 1'b1;
+        if (pc_now == 20'hF806A) entry_branch[1] <= 1'b1;
+        if (pc_now == 20'hF9497) entry_branch[2] <= 1'b1;
+        if (pc_now == 20'hF9A30 || pc_now == 20'hF9A2A)
+            entry_branch[3] <= 1'b1;
     end
 
     // Slots 0x40-0x5F: a 32-deep ring of the guest's fetch cursor (v30_addr
@@ -1310,6 +1338,13 @@ module core_top (
             // died on.
             8'h33:   probe_data_c = {io_wr_count, last_io_port,
                                      last_io_data};
+            // 0x34: {itf_bank, f0_seen, entry_branch[3:0], in35_count,
+            //        last_35_rdata, last_37_wdata} -- the 0x35 readback
+            // bit 7 decides cold vs resume; entry_branch says which way
+            // the entry actually went (b0 resume b1 cold b2 landed b3 F0).
+            8'h34:   probe_data_c = {2'b00, itf_bank, f0_seen,
+                                     entry_branch, in35_count,
+                                     last_35_rdata, last_37_wdata};
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -2230,6 +2265,7 @@ module core_top (
     //
     wire [19:0] chipset_address;
     wire        chipset_io_write_n, chipset_memory_read_n, chipset_memory_write_n;
+    wire        chipset_io_read_n;
     wire        chipset_aen;
 
     //
@@ -2522,7 +2558,7 @@ module core_top (
         .address_latch_enable               (address_latch_enable),
         .io_channel_ready                   (1'b1),
         .interrupt_request                  (0),    // use? -> It does not seem to be necessary.
-    //  .io_read_n                          (io_read_n),
+        .io_read_n                          (chipset_io_read_n),
         .io_read_n_ext                      (1'b1),
     //  .io_read_n_direction                (io_read_n_direction),
         .io_write_n                         (chipset_io_write_n),
