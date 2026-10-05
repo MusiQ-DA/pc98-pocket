@@ -1231,15 +1231,23 @@ module core_top (
         if (reset || soft_reset_cpu) begin
             pc_hist_frozen <= 1'b0;
             pc_hist_w      <= 5'd0;
+            delay_cnt      <= 5'd0;
         end else if (!pc_hist_frozen) begin
             if (pc_now != pc_hist_prev) begin
                 pc_hist_prev       <= pc_now;
                 pc_hist[pc_hist_w] <= pc_now;
                 pc_hist_w          <= pc_hist_w + 5'd1;
+                if (delay_cnt != 5'd0) begin
+                    delay_cnt <= delay_cnt - 5'd1;
+                    if (delay_cnt == 5'd1)
+                        pc_hist_frozen <= 1'b1;
+                end
             end
             if (f0_port_write || pc_in_errhalt || w43d_10 ||
-                (trig_hit && trig_freeze))
+                (trig_hit && trig_freeze && !trig_delay))
                 pc_hist_frozen <= 1'b1;
+            if (trig_hit && trig_freeze && trig_delay)
+                delay_cnt <= 5'd24;
         end
     end
 
@@ -1269,6 +1277,11 @@ module core_top (
     reg [19:0] trig_addr = 20'hFFFF0;
     reg        trig_en   = 1'b1;
     reg        trig_freeze = 1'b0;
+    // bit29 of write slot 0x04: delay the trig freeze ~24 fetches so the
+    // ring keeps the code AFTER the hit (e.g. the landing of the resume
+    // retf at f8069 when armed on f8061).
+    reg        trig_delay  = 1'b0;
+    reg  [4:0] delay_cnt   = 5'd0;
     wire       trig_hit  = trig_en && (pc_now == trig_addr);
     // The BIOS->ITF hand-back always ends in an OUT 0x43D,0x10 -- the
     // cold path's bank restore -- so freezing the ring on that write
@@ -1735,6 +1748,7 @@ module core_top (
             trig_addr   <= probe_wdata_c[19:0];
             trig_en     <= probe_wdata_c[31];
             trig_freeze <= probe_wdata_c[30];
+            trig_delay  <= probe_wdata_c[29];
         end
     end
 
