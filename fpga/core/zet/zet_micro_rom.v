@@ -39,24 +39,10 @@ module zet_micro_rom #(
   );
 
   // Registers, nets and parameters
-  // The microcode space grew a 10th address bit for SALC (10'h200) but a
-  // flat 1024-deep x 50-bit $readmemb array trips a Quartus Lite S2T
-  // internal error (tsm/s2t/s2t_sgate_tdb_map.cpp:395) in the full ap_core
-  // map -- the 512-deep shape is what has always shipped.  The entire high
-  // page holds exactly one micro-op, so keep the table at 512 entries and
-  // decode the high page structurally: 10'h200 -> SALC, any other high
-  // address -> the same end-of-sequence NOP the pad entries carried.
-  reg [`MICRO_DATA_WIDTH-1:0] rom[0:511];
-
-  localparam [`MICRO_DATA_WIDTH-1:0] SALC_UOP =
-      50'b10000000000000010001110000100100000000000000000000;
-  localparam [`MICRO_DATA_WIDTH-1:0] TAIL_NOP =
-      {1'b1, {(`MICRO_DATA_WIDTH-1){1'b0}}};
+  reg [`MICRO_DATA_WIDTH-1:0] rom[0:2**`MICRO_ADDR_WIDTH-1];
 
   // Assignments
-  assign q = addr[`MICRO_ADDR_WIDTH-1]
-           ? (addr[`MICRO_ADDR_WIDTH-2:0] == 0 ? SALC_UOP : TAIL_NOP)
-           : rom[addr[`MICRO_ADDR_WIDTH-2:0]];
+  assign q = rom[addr];
 
   // Behaviour
   initial $readmemb({DATDIR, "micro_rom.dat"}, rom);
