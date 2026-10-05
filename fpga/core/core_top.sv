@@ -1171,11 +1171,44 @@ module core_top (
         if (io_port_write && (chipset_address[15:0] == 16'h0037))
             last_37_wdata <= cpu_data_bus;
         if (f0_port_write) f0_seen <= 1'b1;
-        if (pc_now == 20'hF8061) entry_branch[0] <= 1'b1;
-        if (pc_now == 20'hF806A) entry_branch[1] <= 1'b1;
-        if (pc_now == 20'hF9497) entry_branch[2] <= 1'b1;
-        if (pc_now == 20'hF9A30 || pc_now == 20'hF9A2A)
+        if (itf_bank && pc_now == 20'hF8061) entry_branch[0] <= 1'b1;
+        if (itf_bank && pc_now == 20'hF806A) entry_branch[1] <= 1'b1;
+        if (itf_bank && pc_now == 20'hF9497) entry_branch[2] <= 1'b1;
+        if (itf_bank && (pc_now == 20'hF9A30 || pc_now == 20'hF9A2A))
             entry_branch[3] <= 1'b1;
+    end
+
+    // BIOS-side milestones: once resume+handover land, the question moves
+    // to where the BIOS hands control back. b0=FD802 hand-over landing,
+    // b1=FD834 init entry, b2=FD880 IVT copy, b3=fetch in the 0x4F0-0x4FF
+    // trampoline window (either side re-running the bank-switch stub),
+    // b4=0:0064-0x0067 (int19 vector fetch = boot attempted),
+    // b5=FD8E7 (int18 ROM-BASIC call), b6=BIOS-bank reset entry FD800,
+    // b7=ITF errhalt F99E5 reached.
+    reg [7:0] bios_branch = 8'h00;
+    reg [7:0] in42_count   = 8'h00;
+    reg [7:0] last_42_rdata = 8'h00;
+    reg [7:0] w43d_10_count = 8'h00;
+    reg [7:0] w43d_12_count = 8'h00;
+    always_ff @(posedge clk_chipset) begin
+        if (io_port_read && (chipset_address[15:0] == 16'h0042)) begin
+            last_42_rdata <= data_bus;
+            in42_count    <= in42_count + 8'd1;
+        end
+        if (io_port_write && (chipset_address[15:0] == 16'h043D)) begin
+            if (cpu_data_bus == 8'h10) w43d_10_count <= w43d_10_count + 1'b1;
+            if (cpu_data_bus == 8'h12) w43d_12_count <= w43d_12_count + 1'b1;
+        end
+        if (!itf_bank && pc_now == 20'hFD802) bios_branch[0] <= 1'b1;
+        if (!itf_bank && pc_now == 20'hFD834) bios_branch[1] <= 1'b1;
+        if (!itf_bank && pc_now == 20'hFD880) bios_branch[2] <= 1'b1;
+        if ((pc_now >= 20'h004F0) && (pc_now <= 20'h00500))
+            bios_branch[3] <= 1'b1;
+        if ((pc_now >= 20'h00060) && (pc_now <= 20'h00068))
+            bios_branch[4] <= 1'b1;
+        if (!itf_bank && pc_now == 20'hFD8E7) bios_branch[5] <= 1'b1;
+        if (!itf_bank && pc_now == 20'hFD800) bios_branch[6] <= 1'b1;
+        if (itf_bank && pc_now == 20'hF99E5) bios_branch[7] <= 1'b1;
     end
 
     // Slots 0x40-0x5F: a 32-deep ring of the guest's fetch cursor (v30_addr
@@ -1345,6 +1378,12 @@ module core_top (
             8'h34:   probe_data_c = {2'b00, itf_bank, f0_seen,
                                      entry_branch, in35_count,
                                      last_35_rdata, last_37_wdata};
+            // 0x35: BIOS-side milestones + the 0x43D write tally
+            // {bios_branch[7:0], in42_count, last_42_rdata,
+            //  w43d_10_count[3:0], w43d_12_count[3:0]}
+            8'h35:   probe_data_c = {bios_branch, in42_count,
+                                     last_42_rdata, w43d_10_count[3:0],
+                                     w43d_12_count[3:0]};
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
