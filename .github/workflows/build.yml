@@ -392,7 +392,7 @@ jobs:
         run: |
           S=fpga/core
           H=$S/chipset/HDL
-          for tb in tb_pic_irq0_edge tb_pit_boot_seq tb_pic_cascade; do
+          for tb in tb_pic_irq0_edge tb_pit_boot_seq tb_pic_cascade tb_pic_level_sfnm; do
             verilator --binary --timing -Wno-fatal --top-module $tb \
               -Isim -I$S -I$H -I$H/i8253/HDL -I$H/i8259/HDL \
               sim/$tb.sv -o e --Mdir obj_$tb

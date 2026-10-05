@@ -3,7 +3,19 @@
 //
 // Written by Kitune-san
 //
-module i8259_Interrupt_Request (
+module i8259_Interrupt_Request #(
+    // Request lines that are discrete events rather than levels: a set bit
+    // makes the latch below take the pin's rising edge even when ICW1
+    // selected level-triggered mode.  np21w has no level-following path at
+    // all -- every source arrives through pic_setirq (io/pic.c) -- and the
+    // interval timer is the case that bites: mode 0 leaves counter 0's OUT
+    // high for good, so in level mode IRR0 re-arms the clock after every
+    // acknowledge, and with SFNM set (the BIOS's ICW4=0x1D) the resolver
+    // re-asserts INT while IRQ0 is still in service.  The CPU then re-enters
+    // the handler on every STI without ever reaching its body -- the storm
+    // sim/tb_pic_level_sfnm.sv reproduces and hardware showed at FDE38.
+    parameter logic [7:0]   edge_requests = 8'h00
+) (
     input   logic           clock,
     input   logic           reset,
 
@@ -119,7 +131,7 @@ module i8259_Interrupt_Request (
                 interrupt_request_register[ir_bit_no] <= interrupt_request_register[ir_bit_no];
             else if (external_irr_clear[ir_bit_no])
                 interrupt_request_register[ir_bit_no] <= 1'b0;
-            else if (level_or_edge_toriggered_config)
+            else if (level_or_edge_toriggered_config && !edge_requests[ir_bit_no])
                 interrupt_request_register[ir_bit_no] <= interrupt_request_pin[ir_bit_no];
             else
                 interrupt_request_register[ir_bit_no] <= interrupt_request_register[ir_bit_no]

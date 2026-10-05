@@ -1,5 +1,6 @@
 # jtag_memrd.tcl -- read guest RAM / ramdisk carve-out bytes over JTAG via
-# fdd_ramimg's readback probe (slot 0x88 arm + slot 0x37 result).
+# fdd_ramimg's readback probe (slot 0x88 arm + slot 0x9C result; the read
+# slots moved in the zet-cpu merge -- 0x9A-0x9C are the ri_dbg witnesses).
 #
 #   openocd -f scripts/jtag_probe.cfg -f scripts/jtag_memrd.tcl
 #   env: MRADDR=0x1ff00   first guest-RAM byte offset (default 0x1ff80)
@@ -45,7 +46,7 @@ proc wr {addr data} {
 proc rdabs {off} {
     wr 0x88 [expr {($off & 0x1FFFFF) | 0x200000}]
     for {set i 0} {$i < 2000} {incr i} {
-        set v [rd 0x37]
+        set v [rd 0x9c]
         if {($v >> 31) == 0} { return [expr {$v & 0xff}] }
         after 1
     }
@@ -54,7 +55,7 @@ proc rdabs {off} {
 proc rdimg {off} {
     wr 0x88 [expr {$off & 0x1FFFFF}]
     for {set i 0} {$i < 2000} {incr i} {
-        set v [rd 0x37]
+        set v [rd 0x9c]
         if {($v >> 31) == 0} { return [expr {$v & 0xff}] }
         after 1
     }
@@ -62,8 +63,8 @@ proc rdimg {off} {
 }
 
 select_node 1
-puts [format "0x35 (ramimg)  = 0x%08X" [rd 0x35]]
-puts [format "0x38 (fault)   = 0x%08X" [rd 0x38]]
+puts [format "0x9A (ramimg)  = 0x%08X" [rd 0x9a]]
+puts [format "0x9D (fault)   = 0x%08X" [rd 0x9d]]
 puts [format "0x18 (live PC) = 0x%08X" [rd 0x18]]
 
 set base [expr {[info exists ::env(MRADDR)] ? $env(MRADDR) : 0x1ff80}]

@@ -444,7 +444,11 @@ module PERIPHERALS #(
     // master IRQ6.
     wire    pc98_master_irq6 = 1'b0;
 
-    i8259 u_i8259
+    // np21w io/pic.c + io/pit.c: the timer interrupt is a discrete event
+    // (pic_setirq at terminal count), not a level.  Forcing IRQ0 to edge
+    // capture keeps a guest's ICW1.LTIM=1 write from turning the PIT's
+    // parked-high OUT pin into an interrupt storm under SFNM.
+    i8259 #(.edge_requests (8'h01)) u_i8259
     (
         // Bus
         .clock                      (clock),

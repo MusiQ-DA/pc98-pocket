@@ -4,7 +4,12 @@
 //
 // Written by Kitune-san
 //
-module i8259 (
+module i8259 #(
+    // Request lines delivered as edge events even in level-triggered mode
+    // (see i8259_Interrupt_Request).  The master ties IRQ0 -- the interval
+    // timer's OUT parks high for good after a mode-0 terminal count.
+    parameter logic [7:0]   edge_requests = 8'h00
+) (
     // Bus
     input   logic           clock,
     input   logic           reset,
@@ -141,7 +146,8 @@ module i8259 (
     //
     logic   [7:0]   interrupt_request_register;
 
-    i8259_Interrupt_Request u_Interrupt_Request (
+    i8259_Interrupt_Request #(.edge_requests (edge_requests))
+    u_Interrupt_Request (
         // Bus
         .clock                              (clock),
         .reset                              (reset),

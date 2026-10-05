@@ -42,3 +42,6 @@ fddsnd.bin
 # np2run build output (compile from tools/np2run/np2run.c)
 tools/np2run/np2run
 sim/obj_*/
+# Verilator --Mdir output when benches are built from the repo root
+# (the CI sim step builds them there)
+/obj_*/
