@@ -116,7 +116,10 @@ module zet_exec (
   assign zf  = flags[3];
 
   assign iflags = oflags;
-  assign alu_iflags = { 4'b1111, flags[8:3], 1'b0, flags[2], 1'b0, flags[1],
+  // FLAGS[15:12]: an 80286 in real mode forces them to 0 (no NT/IOPL) --
+  // 8086/V30 hardware-tie them to 1. Presenting 0 is how software tells
+  // 286-class CPUs apart from the 8086 family.
+  assign alu_iflags = { 4'b0000, flags[8:3], 1'b0, flags[2], 1'b0, flags[1],
                         1'b1, flags[0] };
   assign logic_flags = { flags[8], flags[4], flags[3], flags[1], flags[0] };
 
