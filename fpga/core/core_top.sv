@@ -1375,6 +1375,30 @@ module core_top (
         end
     end
 
+    // f0_snap: an independent always-recording bus ring whose write
+    // pointer is banked at every F0 port write -- unlike pc_hist it is
+    // never frozen and never cleared by guest resets, so slots
+    // 0xC1-0xE0 always hold the 32 cycles leading INTO the most recent
+    // F0 (the loop's exit path), whatever froze the main ring earlier.
+    reg [19:0] f0_snap [0:31];
+    reg  [4:0] f0_hist_w   = 5'd0;
+    reg [19:0] f0_hist_prev = 20'h0;
+    reg  [4:0] f0_snap_w     = 5'd0;
+    reg        f0_snap_valid = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (RESET)
+            f0_snap_valid <= 1'b0;
+        if (hist_src != f0_hist_prev) begin
+            f0_hist_prev      <= hist_src;
+            f0_snap[f0_hist_w] <= hist_src;
+            f0_hist_w         <= f0_hist_w + 5'd1;
+        end
+        if (f0_port_write) begin
+            f0_snap_valid <= 1'b1;
+            f0_snap_w     <= f0_hist_w;
+        end
+    end
+
     // Register the readout: the dbg cones through this mux into the SLD
     // capture were one giant combinational path that crashes Quartus 18.1's
     // timing-driven clustering (VPR20KMAIN tdc_util internal error). One
@@ -1477,6 +1501,16 @@ module core_top (
             8'hb8,8'hb9,8'hba,8'hbb,8'hbc,8'hbd,8'hbe,8'hbf:
                        probe_data_c = {12'h000,
                                        post_snap[probe_addr[4:0]]};
+            // 0xC0: f0_snap header {valid,w}; 0xC1-0xE0: trail into the
+            // most recent F0 write (write-pointer order, oldest first).
+            8'hc0:   probe_data_c = {26'h0, f0_snap_valid, f0_snap_w};
+            8'hc1,8'hc2,8'hc3,8'hc4,8'hc5,8'hc6,8'hc7,
+            8'hc8,8'hc9,8'hca,8'hcb,8'hcc,8'hcd,8'hce,8'hcf,
+            8'hd0,8'hd1,8'hd2,8'hd3,8'hd4,8'hd5,8'hd6,8'hd7,
+            8'hd8,8'hd9,8'hda,8'hdb,8'hdc,8'hdd,8'hde,8'hdf,
+            8'he0:
+                       probe_data_c = {12'h000,
+                                       f0_snap[probe_addr[4:0] - 5'd1]};
             // 0x1b: {bridge park/engine FSM, ce edge counter}. parked=1 with a
             // frozen ce_count is the dead-CE signature; a live count with
             // parked=1 points at the engine's release conditions instead.
