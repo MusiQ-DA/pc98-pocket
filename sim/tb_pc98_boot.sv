@@ -1559,6 +1559,12 @@ module tb_pc98_boot;
                      u_bridge.req_age);
             zwb_tr_n <= zwb_tr_n + 1;
         end
+        if (!cpu_reset_w && zwb_stb && zwb_ack && !zwb_we && zwb_tr_n < 1200) begin
+            $display("  %8t  ZAK RD adr %05x sel %b dat_i %04x c_dat_i %04x rdw %04x imm_l %04x",
+                     $time, {zwb_adr,1'b0}, zwb_sel, zwb_dat_i,
+                     u_cpu.cpu_dat_i, u_bridge.rd_word, u_cpu.core.fetch.imm_l);
+            zwb_tr_n <= zwb_tr_n + 1;
+        end
     end
 
     // Arm trace: what the byte engine actually latched for each byte.
