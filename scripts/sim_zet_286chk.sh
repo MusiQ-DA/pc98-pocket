@@ -67,6 +67,20 @@ prog += bytes([0xF8])                            # CLC
 prog += bytes([0xD6])                            # SALC -> AL=00
 prog += ck(0x16)                                 # OUT 0116 = AL
 
+# ---- T7: shift-count masking (286 masks counts to 5 bits; 86/V30 don't) ----
+prog += bytes([0xB1, 0x21])                        # MOV CL,33
+prog += bytes([0xB8, 0x01, 0x00])                  # MOV AX,1
+prog += bytes([0xD3, 0xE0])                        # SHL AX,CL -> 286:2  86:0
+prog += ck(0x18)                                   # OUT 0118 = AL
+prog += bytes([0xB1, 0x10])                        # MOV CL,16
+prog += bytes([0xB0, 0x55])                        # MOV AL,55h
+prog += bytes([0xD2, 0xE0])                        # SHL AL,CL -> 286:0
+prog += ck(0x19)                                   # OUT 0119 = AL
+prog += bytes([0xB1, 0x20])                        # MOV CL,32
+prog += bytes([0xB8, 0x77, 0x00])                  # MOV AX,0077h
+prog += bytes([0xD3, 0xE0])                        # SHL AX,CL -> 286:unchanged
+prog += ck(0x1A)                                   # OUT 011A = AL (77h)
+
 # ---- T6: int6 pushed-IP check ----
 # int6 handler records low byte of pushed IP to port 11D, bumps IP+1, iret.
 # Execute FF FF (invalid) at a known point; report tells us fault-IP behaviour.
