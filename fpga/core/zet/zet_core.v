@@ -125,6 +125,12 @@ module zet_core (
   // wires fetch - exec
   wire [15:0] imm_f;
 
+  // raw micro_data outputs before the bound/salc overlay
+  wire             div_rom;
+  wire             end_seq_rom;
+  wire [15:0]      off_rom;
+  wire [`IR_SIZE-1:0] ir_ov;
+
   // wires and regs for hlt
   wire block_or_hlt;
   wire hlt_op;
@@ -248,14 +254,83 @@ module zet_core (
     .index   (index),
     .seg     (seg),
     .fdec    (fdec),
-    .div     (div),
-    .end_seq (end_seq),
+    .div     (div_rom),
+    .end_seq (end_seq_rom),
 
     // to exec
     .ir    (rom_ir),
-    .off_o (off),
+    .off_o (off_rom),
     .imm_o (imm_d)
   );
+
+  // ROM-overlay for instructions the 512x50 microcode table cannot
+  // hold.  Decode flags SALC (0xD6) as NOP with src=dst=4'hF and BOUND
+  // (0x62) as PUSHA with src=4'hF (dst carries the reg operand) -- both
+  // operand pairs are impossible for native decodes.  The substitution
+  // lives HERE, on the exec_st mux boundary, because every variant that
+  // put it inside zet_micro_data (a mux on the ROM q net, or on the
+  // assembled ir) crashed Quartus Lite's S2T map in the full ap_core
+  // build -- tsm/s2t/s2t_sgate_tdb_map.cpp:395 -- while this exec_st
+  // mux has shipped since the core was vendored.
+  wire is_salc  = (seq_addr == `NOP) & (src == 4'hF) & (dst == 4'hF);
+  wire is_bound = (src == 4'hF) & (seq_addr >= `PUSHA)
+                              & (seq_addr <= `PUSHA + 9'd19);
+
+  // SALC: al <- al - al - cf, flags preserved (t=1 addsub f=4 sbb,
+  // byte op via ir1=23h).  BOUND ops are the 50-bit micro-words
+  // pre-expanded into the {ir1,f,t,ir0,wr_d,wr_mem,wr_flag,d,c,b,a,s}
+  // vector with var_* resolved against base/index/seg/dst; +9..+19
+  // mirror the INT dispatch tail (flags, IF/TF clear, push bound IP
+  // from r14, push CS, vector through IVT[5]).
+  localparam [`IR_SIZE-1:0] SALC_IR =
+      {7'h23, 3'd4, 3'd1, 2'b00, 1'b1, 1'b0, 1'b0,
+       4'd0, 4'd0, 4'd0, 4'd0, 2'd0};
+  reg [`IR_SIZE-1:0] bound_ir;
+  always @(*) case (seq_addr)
+    9'h1ce: bound_ir = {7'h04,3'd0,3'd7,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,index,base,seg}; // r13 <- mem[EA]
+    9'h1cf: bound_ir = {7'h00,3'd5,3'd5,2'b00,1'b0,1'b0,1'b1,4'd0,4'd0,4'd13,dst,2'd0};    // dst - r13
+    9'h1d0: bound_ir = {7'h12,3'd0,3'd0,2'b01,1'b0,1'b0,1'b0,4'd12,4'd0,4'd12,4'd0,2'd0}; // jl -> r12=1
+    9'h1d1: bound_ir = {7'h04,3'd1,3'd7,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,index,base,seg}; // r13 <- mem[EA+2]
+    9'h1d2: bound_ir = {7'h00,3'd5,3'd5,2'b00,1'b0,1'b0,1'b1,4'd0,4'd0,4'd13,dst,2'd0};    // dst - r13
+    9'h1d3: bound_ir = {7'h12,3'd0,3'd0,2'b01,1'b0,1'b0,1'b0,4'd12,4'd0,4'd15,4'd0,2'd0}; // jg -> r12=1
+    9'h1d4: bound_ir = {7'h12,3'd5,3'd5,2'b00,1'b0,1'b0,1'b1,4'd0,4'd0,4'd0,4'd12,2'd0};  // zf <- (r12==0)
+    9'h1d5: bound_ir = {7'h02,3'd3,3'd2,2'b00,1'b1,1'b0,1'b0,4'd12,4'd0,4'd0,4'd0,2'd0};  // r12<-0, exit if zf
+    9'h1d6: bound_ir = {7'h12,3'd5,3'd1,2'b00,1'b1,1'b0,1'b0,4'd4,4'd0,4'd0,4'd4,2'd0};   // sp <- sp-2
+    9'h1d7: bound_ir = {7'h12,3'd5,3'd7,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd0,2'd0};  // r13 <- flags
+    9'h1d8: bound_ir = {7'h04,3'd0,3'd7,2'b00,1'b0,1'b1,1'b0,4'd0,4'd13,4'd12,4'd4,2'd2}; // push flags
+    9'h1d9: bound_ir = {7'h12,3'd6,3'd7,2'b00,1'b0,1'b0,1'b1,4'd0,4'd0,4'd0,4'd0,2'd0};   // flags &= ~{IF,TF}
+    9'h1da: bound_ir = {7'h12,3'd5,3'd1,2'b00,1'b1,1'b0,1'b0,4'd4,4'd0,4'd0,4'd4,2'd0};   // sp <- sp-4
+    9'h1db: bound_ir = {7'h04,3'd0,3'd7,2'b00,1'b0,1'b1,1'b0,4'd0,4'd14,4'd12,4'd4,2'd2}; // push r14 (bound IP)
+    9'h1dc: bound_ir = {7'h04,3'd1,3'd7,2'b00,1'b0,1'b1,1'b0,4'd0,4'd9,4'd12,4'd4,2'd2};  // push r9 (CS)
+    9'h1dd: bound_ir = {7'h12,3'd0,3'd0,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd0,2'd0};  // r13 <- 4
+    9'h1de: bound_ir = {7'h12,3'd1,3'd1,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd13,2'd0}; // r13 <- r13+1
+    9'h1df: bound_ir = {7'h12,3'd4,3'd6,2'b00,1'b1,1'b0,1'b0,4'd13,4'd0,4'd0,4'd13,2'd0}; // r13 <- r13<<2
+    9'h1e0: bound_ir = {7'h14,3'd1,3'd1,2'b00,1'b1,1'b0,1'b0,4'd9,4'd0,4'd0,4'd13,2'd0};  // r9 <- mem[22]
+    default: bound_ir = {7'h14,3'd1,3'd1,2'b00,1'b1,1'b0,1'b0,4'd15,4'd0,4'd0,4'd13,2'd0};// r15 <- mem[20]
+  endcase
+
+  // immediate constants the overlaid ops consume (the native ops
+  // underneath would hand exec the wrong value)
+  reg [15:0] bound_imm;
+  always @(*) case (seq_addr)
+    9'h1d0, 9'h1d3: bound_imm = 16'd1; // condition-met write data
+    9'h1d6: bound_imm = 16'd2;         // sp -= 2
+    9'h1da, 9'h1dd: bound_imm = 16'd4; // sp -= 4 / r13 <- 4
+    9'h1de: bound_imm = 16'd1;         // r13 += 1
+    9'h1df, 9'h1e0: bound_imm = 16'd2; // r13 <<= 2 / read offset
+    default: bound_imm = 16'd0;
+  endcase
+
+  assign ir_ov   = is_salc ? SALC_IR
+                 : is_bound ? bound_ir : rom_ir;
+  assign div     = (is_salc | is_bound) ? 1'b0 : div_rom;
+  assign end_seq = is_salc ? 1'b1
+                 : is_bound ? (seq_addr == `PUSHA + 9'd19)
+                            : end_seq_rom;
+  // bound's two EA reads (low/high bound) take the displacement;
+  // every other overlaid op works on registers only
+  assign off     = is_bound ? ((seq_addr == 9'h1ce || seq_addr == 9'h1d1)
+                              ? off_l : 16'h0000) : off_rom;
 
   zet_exec exec (
     .clk     (clk),
@@ -295,9 +370,9 @@ module zet_core (
   assign cpu_byte_o = exec_st ? byte_exec : byte_fetch;
   assign cpu_mem_op = ir[`MEM_OP];
 
-  assign ir    = exec_st ? rom_ir : `ADD_IP;
-  assign imm   = exec_st ? imm_d  : imm_f;
-  assign ftype = rom_ir[28:23];
+  assign ir    = exec_st ? ir_ov : `ADD_IP;
+  assign imm   = exec_st ? (is_bound ? bound_imm : imm_d) : imm_f;
+  assign ftype = ir_ov[28:23];
 
   assign hlt_op = ((opcode == `OP_HLT) && exec_st); 
   assign hlt_in = (hlt_op && !hlt_op_old && !hlt_out);
