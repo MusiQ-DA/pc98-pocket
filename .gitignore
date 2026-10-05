@@ -41,3 +41,4 @@ fddsnd.bin
 
 # np2run build output (compile from tools/np2run/np2run.c)
 tools/np2run/np2run
+sim/obj_*/

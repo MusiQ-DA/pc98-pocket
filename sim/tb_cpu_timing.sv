@@ -99,7 +99,10 @@ module tb_cpu_timing;
         .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(ce_neg),
         .ram_read_wait_cycle(rd_wait), .ram_write_wait_cycle(wr_wait),
-        .vram_rd_wait_cycle(vram_rd), .vram_wr_wait_cycle(vram_wr)
+        .vram_rd_wait_cycle(vram_rd), .vram_wr_wait_cycle(vram_wr),
+        .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
+        .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
+        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),

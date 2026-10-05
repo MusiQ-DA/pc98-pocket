@@ -41,7 +41,9 @@ module zet_core (
     output        cpu_we_o,
 
     output [19:0] pc,  // for debugging purposes
-    output        dbg_fault  // seq_addr enters INVOP or INTD (1-zet_clk pulse)
+    output        dbg_fault, // seq_addr enters INVOP or INTD (1-zet_clk pulse)
+    output [7:0]  dbg_opc,   // opcode being decoded when dbg_fault fired
+    output        exec_st_o  // 1 while executing (0 => bus op is instr fetch)
   );
 
   // Net declarations
@@ -70,12 +72,25 @@ module zet_core (
   // wire decode - microcode
   wire [`MICRO_ADDR_WIDTH-1:0] seq_addr;
   wire [3:0] src;
-  // Fault = the sequence actually enters INVOP/INTD. Bare decode of
-  // seq_addr pulses on every prefix fetch (26/2E/36/3E/F0/F2/F3 and the
-  // 0F escape all decode INVOP for a cycle), which made the pc_hist
-  // freeze name the byte AFTER the real fault. ld_base only asserts as
-  // a sequence loads into execu_st, so prefix fetches can't reach it.
-  assign dbg_fault = ld_base & ((seq_addr == `INVOP) | (seq_addr == `INTD));
+  // seq_addr is combinational on the live fetch byte while state==opcod_st,
+  // so a stale byte sitting on data[7:0] during a bus stall decodes to INVOP
+  // transiently without ever being committed.  Only report dispatched faults.
+  assign dbg_fault = exec_st & ((seq_addr == `INVOP) | (seq_addr == `INTD));
+
+  // First fault wins: the byte that decoded to INVOP/INTD is the evidence --
+  // comparing it against the image at pc tells fetch corruption from a real
+  // bad opcode.
+  reg [7:0] opc_fault = 8'h00;
+  reg       opc_seen  = 1'b0;
+  always @(posedge clk)
+    if (rst) begin
+      opc_fault <= 8'h00;
+      opc_seen  <= 1'b0;
+    end else if (dbg_fault && !opc_seen) begin
+      opc_fault <= opcode;
+      opc_seen  <= 1'b1;
+    end
+  assign dbg_opc = opc_seen ? opc_fault : opcode;
   wire [3:0] dst;
   wire [3:0] base;
   wire [3:0] index;
@@ -275,6 +290,7 @@ module zet_core (
   );
 
   // Assignments
+  assign exec_st_o  = exec_st;
   assign cpu_adr_o  = exec_st ? addr_exec : pc;
   assign cpu_byte_o = exec_st ? byte_exec : byte_fetch;
   assign cpu_mem_op = ir[`MEM_OP];

@@ -49,7 +49,18 @@ module BUS_ARBITER (
     // JTAG probe (PC98_JTAG): why the CPU is off the bus --
     // {hold granted, bus released, dmac wants hold, external master wants
     //  hold, DRQ3..DRQ0 seen as requests (pin low)}.
-    output  logic   [7:0]   dbg
+    output  logic   [7:0]   dbg,
+    // JTAG probe (PC98_JTAG): DMA-stream counters. dbg_dma packs
+    // {break_cnt, grant_cnt, ack_wr_cnt}; the break/watch entry rings were
+    // dropped for LAB headroom once the byte0 wrap-clobber was found.
+    output  logic   [127:0] dbg_dma,
+    // Write watchpoint: probe slot 0x8a arms a 20-bit guest address;
+    // every memory write landing on it is logged, CPU or DMA alike --
+    // this is how a byte-0 that the fill wrote correctly still ends
+    // up 0x00 afterwards can be attributed to its overwriter.
+    input   logic   [19:0]  watch_addr,
+    output  logic   [127:0] dbg_dma3,
+    output  logic   [127:0] dbg_dma4
 );
 
     //
@@ -256,6 +267,71 @@ module BUS_ARBITER (
     assign  memory_write_n              = memory_write_n_direction ? memory_write_n_ext : ab_memory_write_n;
     assign  memory_read_n               = memory_read_n_direction  ? memory_read_n_ext  : ab_memory_read_n;
     assign no_command_state             = io_write_n & io_read_n & memory_write_n & memory_read_n;
+
+
+    //
+    // DMA sequence-break witness (JTAG probe)
+    //
+    // The 71071 grants per byte in this design, so "burst boundary" does
+    // not isolate anything -- every write is its own grant. What marks a
+    // new FDC fill is an address break inside the ack window: fills are
+    // contiguous ascending, so the first write of each buffer (and any
+    // stray write that escapes the stream) is where address != prev+1.
+    // The ring holds the last three such writes as
+    // {cpu_owned, dma_owned, drq_pin, 1'b0, addr[19:0], data[7:0]} -- a
+    // head write landing on the previous buffer's base or carrying stale
+    // data stays visible afterwards.
+    //
+    logic           prev_ab_mw;
+    logic           prev_fdc_ack;
+    logic   [7:0]   break_cnt;
+    logic   [7:0]   grant_cnt;
+    logic   [15:0]  ack_wr_cnt;
+    logic   [7:0]   watch_cnt;
+    logic   [31:0]  watch_log [0:2];
+
+    wire    fdc_ack  = ~dma_acknowledge_n[2] | ~dma_acknowledge_n[3];
+    wire    dma_own  = ~dma_enable_n && ~(&dma_acknowledge_n);
+
+    always_ff @(posedge clock) begin
+        if (reset) begin
+            prev_ab_mw    <= 1'b1;
+            prev_fdc_ack  <= 1'b0;
+            break_cnt     <= 8'd0;
+            grant_cnt     <= 8'd0;
+            ack_wr_cnt    <= 16'd0;
+            watch_cnt     <= 8'd0;
+        end
+        else begin
+            prev_ab_mw   <= ab_memory_write_n;
+            prev_fdc_ack <= fdc_ack;
+
+            if (~prev_fdc_ack & fdc_ack && grant_cnt != 8'hff)
+                grant_cnt <= grant_cnt + 8'd1;
+
+            if (prev_ab_mw & ~ab_memory_write_n) begin
+                if (fdc_ack && ack_wr_cnt != 16'hffff)
+                    ack_wr_cnt <= ack_wr_cnt + 16'd1;
+                if (address == watch_addr) begin
+                    watch_log[2] <= watch_log[1];
+                    watch_log[1] <= watch_log[0];
+                    watch_log[0] <= {~address_enable_n && ~dma_own, dma_own,
+                                     internal_data_bus != data_bus_ext,
+                                     ~io_write_n, address,
+                                     internal_data_bus};
+                    if (watch_cnt != 8'hff)
+                        watch_cnt <= watch_cnt + 8'd1;
+                end
+                if (fdc_ack && break_cnt != 8'hff)
+                    break_cnt <= break_cnt + 8'd1;
+            end
+        end
+    end
+
+    assign dbg_dma = {break_cnt, grant_cnt, ack_wr_cnt, 96'd0};
+    assign dbg_dma3 = {watch_cnt, 24'h0, watch_log[2],
+                       watch_log[1], watch_log[0]};
+    assign dbg_dma4 = 128'd0;
 
 
     //

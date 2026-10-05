@@ -25,11 +25,14 @@
 //
 //  THE BRIDGE'S ANSWER:
 //
-//   * Zet runs on a GATED clock (zet_clk = clk & ce_arm): the cpu_ce
-//     posedge train is latched on the negedge so `clk & ce_arm` delivers
-//     one clean posedge per CE pulse at the NEXT clk edge, pacing Zet at
-//     the same ~9.54 MHz the V30's CE train gives. (An FPGA clock gate,
-//     not a PLL -- skew vs clk is covered by the explicit WB handshake.)
+//   * Zet runs on a GATED clock (zet_clk = clk & (run_arm | reset)): the
+//     gate is open unless an INTA service or pause_core has closed it, so
+//     the core free-runs at clk_chipset and only the 8288 byte engine
+//     below stays on the cpu_ce train. Bus cycles keep their PC-98
+//     pacing (T-states, AEN stretch, SDRAM waits are all counted in CE
+//     pulses); the CE setting now shapes the bus, not the core's issue
+//     rate. (An FPGA clock gate, not a PLL -- skew vs clk is covered by
+//     the explicit WB handshake.)
 //   * A Wishbone cycle needs no parking trick: ack is simply withheld
 //     while the byte engine below runs the access, exactly as the v30
 //     bridge's byte engine works (T-state pacing, AEN stretch, word
@@ -60,6 +63,10 @@ module zet_cpu_bridge (
     // chipset domain
     input  wire         clk,                // clk_chipset
     input  wire         cpu_ce_posedge,     // the CE train the 8288 runs on
+    input  wire         cpu_ce_negedge,     // its falling half: the fast-pair
+                                            // gap ends on a PASV negedge
+    input  wire         fast_pace,          // clk_select[1]: the fast settings
+                                            // trade T-state fidelity for speed
     input  wire         reset,              // reset_cpu
 
     // the Zet's Wishbone pins
@@ -106,34 +113,35 @@ module zet_cpu_bridge (
     localparam [2:0] BS_PASV = 3'b111;
 
     // ------------------------------------------------------------------------
-    // the gated core clock: one posedge per CE pulse, delivered one clk late
+    // the gated core clock: every clk edge reaches the core unless halted
     // ------------------------------------------------------------------------
     //
-    // ce_arm is latched on the FALLING edge, so it only changes while clk is
-    // low -- `clk & ce_arm` can then never glitch mid-high. A CE pulse in
-    // period N sets ce_arm at N's negedge; the zet_clk posedge lands at the
-    // posedge that ends N. In this clk domain "Zet gets an edge this cycle"
-    // is therefore just `ce_arm` as seen at posedge time.
+    // run_arm is latched on the FALLING edge, so it only changes while clk
+    // is low -- `clk & run_arm` can then never glitch mid-high. The gate
+    // stays open in normal operation, so zet_clk posedges come at every
+    // clk posedge: the core's issue rate is clk_chipset, and the CE train
+    // only paces the byte engine below. In this clk domain "Zet gets an
+    // edge this cycle" is therefore just `run_arm` as seen at posedge
+    // time.
     //
-    // zet_halt starves the core from the very clk wb_tgc_o rises (the level
-    // itself closes the gate -- waiting a clk for a registered freeze would
-    // let one armed edge slip and the iid sample would land on a stale
-    // vector) through the end of the INTA service; int_served re-opens the
-    // gate so the release edge can clear the pulse. During reset the edges
+    // zet_halt starves the core from the very clk wb_tgc_o rises (the
+    // level is sampled at the next negedge, closing the gate before the
+    // following posedge -- the iid sample cannot land on a stale vector)
+    // through the end of the INTA service; int_served re-opens the gate
+    // so the release edge can clear the pulse. During reset the edges
     // must flow regardless (Zet's reset is synchronous -- no edges, no
     // reset), and pause_core is the OSD's freeze.
     wire zet_halt = ((wb_tgc_o || inta_active) && !int_served)
                  || (pause_core && !reset);
-    reg  ce_arm;
-    always @(negedge clk) ce_arm <= cpu_ce_posedge && !zet_halt;
-    // `| reset`: Zet's reset is SYNCHRONOUS and the CE generator does not
-    // emit the train while reset is held -- pass every clk edge through so
-    // the core's reset can actually latch (v30 gets away without this
-    // because its reset is asynchronous).
-    assign zet_clk = clk & (ce_arm | reset);
+    reg  run_arm;
+    always @(negedge clk) run_arm <= !zet_halt;
+    // `| reset`: Zet's reset is SYNCHRONOUS -- no edges, no reset -- so the
+    // gate is forced open while reset is held. (v30 gets away without this
+    // because its reset is asynchronous.)
+    assign zet_clk = clk & (run_arm | reset);
 
-    // A zet edge lands at this posedge when ce_arm was latched.
-    wire zet_edge = ce_arm;
+    // A zet edge lands at this posedge when run_arm was latched.
+    wire zet_edge = run_arm;
 
     assign lock_n   = 1'b1;
 
@@ -166,10 +174,13 @@ module zet_cpu_bridge (
                                 : (wb_we_o ? BS_MEMW : BS_MEMR);
     wire       wb_req = wb_cyc_o && wb_stb_o;
 
-    // Ack timing: pulse ack, hold it until a delivered Zet edge samples it,
-    // drop it before the edge after that. wb_dat_i stays parked on the read
-    // result register -- valid through the ack edge and beyond.
-    reg        ack_seen;
+    // Ack timing: pulse ack once the byte pair is done, drop it on the clk
+    // after the delivering Zet edge so the pulse spans exactly one edge.
+    // (The core is a clk-rate master now: a two-edge-wide pulse would be
+    // sampled twice and the odd-word's second byte would complete off the
+    // stale read word without ever touching the 8288.) wb_dat_i stays
+    // parked on the read result register -- valid through the ack edge
+    // and beyond.
     reg [15:0] rd_word;         // last assembled read data
     reg        inta_active;     // serving a vector fetch for wb_tgc_o
     reg        int_served;      // the INTA pair ran -- keeps zet_halt open
@@ -181,7 +192,6 @@ module zet_cpu_bridge (
             req_busy      <= 1'b0;
             req_age       <= 2'd0;
             wb_ack_i      <= 1'b0;
-            ack_seen      <= 1'b0;
             inta_active   <= 1'b0;
             int_served    <= 1'b0;
             tgc_q         <= 1'b0;
@@ -203,7 +213,7 @@ module zet_cpu_bridge (
             // ack -- gated on !wb_ack_i, the earliest capture lands the
             // clk after it drops.) No parameters are captured -- see the
             // header note; the engine samples the live outputs at arm.
-            if (wb_req && !req_busy && !wb_ack_i && !ack_seen
+            if (wb_req && !req_busy && !wb_ack_i
                 && !inta_active && !wb_tgc_o) begin
                 req_busy <= 1'b1;
                 req_age  <= 2'd0;
@@ -218,17 +228,15 @@ module zet_cpu_bridge (
             if (req_busy && zet_edge && (req_age != 2'd2))
                 req_age <= req_age + 2'd1;
 
-            // The engine finished the pair: pulse ack, remember it must be
-            // consumed by one (and only one) Zet edge.
+            // The engine finished the pair: pulse ack, drop it the clk
+            // after the Zet edge that consumed it -- one edge wide, so a
+            // clk-rate master cannot double-sample. If the core is halted
+            // the pulse simply holds until an edge is delivered.
             if (pair_done && req_busy) begin
                 req_busy     <= 1'b0;
                 wb_ack_i     <= 1'b1;
             end
-            if (wb_ack_i && zet_edge) ack_seen <= 1'b1;
-            if (ack_seen) begin
-                wb_ack_i <= 1'b0;
-                ack_seen <= 1'b0;
-            end
+            if (wb_ack_i && zet_edge) wb_ack_i <= 1'b0;
 
             // INTA service complete: the vector is on wb_dat_i; release
             // the clock. inta clears at the first edge it gets, which is
@@ -259,6 +267,8 @@ module zet_cpu_bridge (
     reg  [1:0] bstate;
     reg  [1:0] byte_idx;      // 0 = the addressed byte, 1 = the odd half
     reg  [2:0] t_cnt;         // posedge-CE edges since this byte went up
+    reg        saw_low;       // processor_ready fell on OUR bus during this byte
+    reg        ready_d1;      // processor_ready, one clk back: edge detect
     reg  [1:0] gap_cnt;
     reg  [7:0] rd_lo;
     reg  [7:0] rd_hi;
@@ -350,7 +360,31 @@ module zet_cpu_bridge (
                               ? (srv_addr[0] ? srv_data[15:8] : srv_data[7:0])
                               : srv_data[15:8];
 
-    wire pair_finish = (bstate == B_GAP) && (gap_cnt == 2'd1);
+    // fast_pace = clk_select[1], the beyond-real-hardware settings, where
+    // the T-state model gives up fidelity it no longer needs. The shrink
+    // is one posedge out of the command phase -- and only on a FRESH
+    // ready: processor_ready can still be high from the previous byte's
+    // completion when this byte's accept would fire (realmem E2E showed
+    // byte data arriving one access stale, e.g. the reset vector reading
+    // ea/00/00/80/fd as 00/ea/00/00), so the early count is qualified on
+    // saw_low, a ready FALLING EDGE that marks THIS byte's access having
+    // actually started. Level-testing "ready low while we own the bus" is
+    // not enough: at the AEN release, bus_ours returns while the ready
+    // chain is still draining dma_wait, and the falsely-armed byte then
+    // accepts as the drain completes -- before the re-asserted strobe's
+    // access could ever finish (realmem+freeze: f801d read as fe, the
+    // same signature hardware showed at f95b3). Bytes whose access never
+    // drops ready fall back to the faithful count. The gap ends at the
+    // first
+    // passive negedge -- pair_finish is the pair's ONLY terminator:
+    // rd_word assembly, biu_done, the byte transition and the Wishbone
+    // ack must all move on the same edge, or the ack lands before the
+    // data (the stale-word signature returns).
+    // INTA pairs keep the faithful count: for the 8259's two-acknowledge
+    // sequence the pacing IS the contract.
+    wire fast_pair = fast_pace && !cur_inta;
+    wire pair_finish = (bstate == B_GAP)
+                     && (fast_pair ? cpu_ce_negedge : (gap_cnt == 2'd1));
     wire pair_done   = pair_finish && last_byte;
     wire inta_done   = pair_done && cur_inta;
 
@@ -361,6 +395,8 @@ module zet_cpu_bridge (
             bstate           <= B_IDLE;
             byte_idx         <= 2'd0;
             t_cnt            <= 3'd0;
+            saw_low          <= 1'b0;
+            ready_d1         <= 1'b0;
             gap_cnt          <= 2'd0;
             rd_lo            <= 8'h00;
             rd_hi            <= 8'h00;
@@ -380,6 +416,7 @@ module zet_cpu_bridge (
             biu_done_r       <= 1'b0;
         end else begin
             biu_done_r <= 1'b0;
+            ready_d1   <= processor_ready;
             case (bstate)
               B_IDLE: begin
                 if (srv_any && bus_ours) begin
@@ -397,16 +434,35 @@ module zet_cpu_bridge (
                                       : word_1cyc(srv_bs, srv_addr, srv_ube);
                     cpu_data_bus_hi  <= srv_data[15:8];
                     t_cnt            <= 3'd0;
+                    saw_low          <= 1'b0;
                     bstate           <= B_CMD;
                 end
               end
 
               B_CMD: begin
+                // The dip must be a falling edge while we own the bus. A
+                // level test fails at the AEN release: bus_ours returns on
+                // the combinational address_enable_n while the ready chain
+                // is still draining dma_wait, so processor_ready sits low
+                // for a couple of clks with the byte's access never having
+                // run -- saw_low armed falsely, and the fast accept then
+                // fired the moment the chain drained, far ahead of the
+                // re-asserted strobe's real data (realmem+freeze repro:
+                // fetch at f801d accepted 3 clks after release and came
+                // back fe, the hardware signature). A genuine access dips
+                // ready AFTER it was seen high -- the edge marks it.
+                if (ready_d1 && !processor_ready && bus_ours)
+                    saw_low <= 1'b1;
                 if (cpu_ce_posedge)
                     t_cnt <= (t_cnt != 3'd7) ? (t_cnt + 3'd1) : 3'd7;
 
-                if ((t_cnt >= 3'd3) && cpu_ce_posedge
-                    && processor_ready && bus_ours) begin
+                // Fast accept (t_cnt>=2) only on a FRESH ready: the level can
+                // still be the previous byte's residue, which would capture
+                // stale bus data. The t_cnt>=3 fallback keeps never-dropping
+                // accesses (instant I/O) on the faithful count.
+                if ((t_cnt >= 3'd3
+                     || (fast_pair && (t_cnt >= 3'd2) && saw_low))
+                    && cpu_ce_posedge && processor_ready && bus_ours) begin
                     if (cur_read && (byte_idx == 2'd0)) rd_lo <= data_bus;
                     if (cur_read && (byte_idx == 2'd1)) rd_hi <= data_bus;
                     if (cur_read && cur_1cyc)           rd_hi <= data_bus_hi;
@@ -420,7 +476,7 @@ module zet_cpu_bridge (
                 if (cpu_ce_posedge)
                     gap_cnt <= gap_cnt + 2'd1;
 
-                if (gap_cnt == 2'd1) begin
+                if (pair_finish) begin
                     if (last_byte) begin
                         if (cur_inta) begin
                             int_vector  <= rd_hi;   // ACK2's byte

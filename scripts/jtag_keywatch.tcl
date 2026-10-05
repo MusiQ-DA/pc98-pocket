@@ -17,8 +17,18 @@
 init
 irscan fpga.tap 0x0e
 drscan fpga.tap 64 0 -endstate idle        ;# arm hub
+irscan fpga.tap 0x0c
+set hub 0
+for {set i 0} {$i < 8} {incr i} {
+    scan [drscan fpga.tap 4 0 -endstate idle] %x nib
+    set hub [expr {$hub | ($nib << (4*$i))}]
+}
+set nnodes [expr {($hub >> 19) & 0xff}]
+set mw 1
+while {(1 << $mw) < $nnodes + 1} { incr mw }
+set virw [expr {$mw + 4}]
 irscan fpga.tap 0x0e
-drscan fpga.tap 5 0x18 -endstate idle      ;# select probe node 1
+drscan fpga.tap $virw 0x18 -endstate idle  ;# select probe node 1
 
 proc rd {addr} {
     irscan fpga.tap 0x0c

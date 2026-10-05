@@ -880,6 +880,7 @@ set_global_assignment -name VERILOG_FILE core/zet/zet_shrot.v
 set_global_assignment -name VERILOG_FILE core/zet/zet_signmul17.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/zet_cpu_bridge.sv
 set_global_assignment -name SEARCH_PATH core/zet
+
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_mp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_tvram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_kbd8251.sv
@@ -892,6 +893,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_gdc_mode1.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_glyph_rowbuf.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_font_fetch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_jtag_probe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/fdd_ramimg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/mgmt_arb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pulse_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_cgwindow.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_gaiji_ram.sv
@@ -964,4 +967,6 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # ~150 ALMs of margin under the LAB ceiling. Bumped to 19 on the zet-cpu
 # branch: at ~79% utilization the tuned seed no longer matters, and 18 hit
 # a deterministic VPR20KMAIN tdc_util fitter internal error there.
-set_global_assignment -name SEED 19
+# 19 hit the same deterministic tdc_util crash on the dbg2-witness netlist
+# (CI runs 37180392100 / 37183164481 / 37185049118, all Line 2138); 20 next.
+set_global_assignment -name SEED 20

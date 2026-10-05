@@ -155,21 +155,6 @@ static void vr_write8(uint32_t addr, uint8_t v)
     }
 }
 
-// Raw write: bit2 asks the sequencer to bypass the charger entirely. np21w
-// gdcsub_write scribbles on mem[] directly -- WDAT is the engine's own bus
-// view, not a guest access through the EGC/GRCG data path.
-static void vr_write8_raw(uint32_t addr, uint8_t v)
-{
-    *ST_ADDR = addr & 0xFFFFFu;
-    *ST_WDATA = v;
-    *ST_TRIG = 5u; // write | raw
-    for (uint32_t i = 0; i < 2000u; i++) {
-        if (!(*ST_STATUS & ST_PEND)) {
-            break;
-        }
-    }
-}
-
 // The pset state np21w's gdcpset_prepare/gdcpset carry.
 static struct {
     uint16_t pattern;
@@ -529,8 +514,15 @@ static void gdc_wdat(const struct gdc_snap *g)
             v = (uint16_t) (v | data);
             break;
         }
-        vr_write8_raw(base + adrs, (uint8_t) v);
-        vr_write8_raw(base + adrs + 1u, (uint8_t) (v >> 8));
+        // The write rides the charger like any other bus write: on the real
+        // GRCG the GDC's VRAM writes pass the same tile fan-out a guest
+        // write does -- the NEC ITF self-test proves it by WDAT-ing 0xFFFF
+        // under GRCG and comparing each plane against its tile. np21w's
+        // gdcsub_write scribbles on mem[] directly, but that model never
+        // has to pass the probe. With no charger armed vr_write8 lands in
+        // the addressed plane alone, same as a raw write.
+        vr_write8(base + adrs, (uint8_t) v);
+        vr_write8(base + adrs + 1u, (uint8_t) (v >> 8));
         adrs = (adrs + 2u) & 0x7FFEu;
 #ifdef DBG_HB
         if (!(adrs & 0xFFF)) HB_MARK(0x5F); // still grinding a long WDAT

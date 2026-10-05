@@ -286,8 +286,19 @@ module core_top (
     logic        cycle_accrate;
     logic        vram_wait_en;
     logic  [1:0] clk_select;
+`ifdef PC98_JTAG
+    // JTAG slot 0x89 can pin the speed for scripted benchmark runs;
+    // otherwise the OSD setting owns clk_select_next exactly as before.
+    logic        jtag_spd_ovr = 1'b0;
+    logic  [1:0] jtag_spd_sel = 2'b00;
+    logic [19:0] jtag_watch_addr = 20'hFFFFF;
+    wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
+                                              : cpu_speed_cfg;
+`else
     // The CPU speed is the OSD's alone.
     wire   [1:0] clk_select_next = cpu_speed_cfg;
+    wire  [19:0] jtag_watch_addr = 20'hFFFFF;
+`endif
 
     always @(posedge clk_chipset, posedge reset)
     begin
@@ -351,8 +362,11 @@ module core_top (
     // Guest reset terms: PLL lock (RESET), ROM load and the first-BIOS gate, the interact
     // Reset PC, the boot hold, and the softcore's boot-master hold (soft_guest_hold), which
     // keeps the guest in reset until the softcore has staged settings. sdram holds on lock only.
+    // ri_greset is fdd_ramimg's boot-from-RAM-image term (PC98_JTAG): a probe
+    // write pulses it after a mount so the BIOS walks into drive A on its own.
+    wire ri_greset;
     wire reset_wire = RESET | load_active | ~bios_ever_loaded | interact_reset
-                    | guest_hold_sync2 | soft_guest_hold;
+                    | guest_hold_sync2 | soft_guest_hold | ri_greset;
     wire reset_sdram_wire = RESET;
 
     logic reset = 1'b1;
@@ -887,6 +901,68 @@ module core_top (
     wire  [7:0] mgmt_req;              // [7:6] fdd request, [0] scsi pending (from CHIPSET)
     assign mgmt_req[5:1] = 5'b00000;
 
+    // fdd_ramimg (PC98_JTAG): the RAM-disk floppy server. Two fences keep it
+    // and the firmware from ever touching the controller at once:
+    //
+    //   * The request mask -- while `own` is high the softcore sees
+    //     fdd_request == 0, so fdd_poll parks. Mount/write requests the
+    //     firmware raises anyway (a dataslot rebind mid-session) hit the
+    //     second fence: its F2-window strobes are dropped for as long as own
+    //     is high. Everything else on the bus -- the SCSI window at F4, OPNA
+    //     at F5 -- still belongs to the softcore, on every cycle the RAM
+    //     server is not itself strobing.
+    //
+    //   * The strobe arbitration -- on a cycle the RAM server reads or
+    //     writes, the bus carries its operands and the firmware strobes
+    //     are fenced entirely, not just the F2-windowed ones: a softcore
+    //     strobe landing on a server cycle would execute against the
+    //     server's address. Observed on hardware: firmware F4/F5 polls
+    //     (scsi_poll, OPNA) coinciding with 0xF20F pushes arrived as
+    //     nibble-F reads -- floppy.v decodes that as a FIFO pop, the
+    //     fill ends a byte short, the level-triggered re-serve appends
+    //     the head bytes, and the guest receives the sector rotated
+    //     (sim/tb_ramimg_fdc.sv reproduces it byte-for-byte).
+    //
+    // Without the JTAG build flag the mux is a pass-through and nothing else
+    // changes.
+    wire [15:0] cs_mgmt_addr;          // muxed -> CHIPSET
+    wire [15:0] cs_mgmt_dout;
+    wire        cs_mgmt_rd;
+    wire        cs_mgmt_wr;
+    // The CHIPSET-facing carve-out port; tied off without the JTAG build.
+    wire        ramimg_req, ramimg_we, ramimg_ack, ramimg_rvalid, ramimg_done;
+    wire [23:0] ramimg_addr;
+    wire  [3:0] ramimg_len;
+    wire [15:0] ramimg_wdata, ramimg_rdata;
+    wire  [1:0] fdd_req_fw;
+`ifdef PC98_JTAG
+    wire [15:0] ri_mgmt_addr, ri_mgmt_dout;
+    wire        ri_mgmt_wr, ri_mgmt_rd, ri_own;
+    wire [31:0] ri_dbg0, ri_dbg1, ri_dbg2;
+    wire        fw_fdd_hit = mgmt_addr[15:8] == 8'hF2;
+    mgmt_arb u_mgmt_arb (
+        .fw_addr (mgmt_addr),  .fw_dout (mgmt_dout),
+        .fw_rd   (mgmt_rd),    .fw_wr   (mgmt_wr),
+        .ri_addr (ri_mgmt_addr), .ri_dout (ri_mgmt_dout),
+        .ri_rd   (ri_mgmt_rd), .ri_wr   (ri_mgmt_wr), .ri_own (ri_own),
+        .cs_addr (cs_mgmt_addr), .cs_dout (cs_mgmt_dout),
+        .cs_rd   (cs_mgmt_rd), .cs_wr   (cs_mgmt_wr)
+    );
+    assign fdd_req_fw   = mgmt_req[7:6] & ~{2{ri_own}};
+`else
+    assign ri_greset    = 1'b0;
+    assign ramimg_req   = 1'b0;
+    assign ramimg_we    = 1'b0;
+    assign ramimg_addr  = 24'd0;
+    assign ramimg_len   = 4'd0;
+    assign ramimg_wdata = 16'd0;
+    assign cs_mgmt_addr = mgmt_addr;
+    assign cs_mgmt_dout = mgmt_dout;
+    assign cs_mgmt_wr   = mgmt_wr;
+    assign cs_mgmt_rd   = mgmt_rd;
+    assign fdd_req_fw   = mgmt_req[7:6];
+`endif
+
     // Floppy image size arrives in the dataslot-update event (bytes); latch it per drive.
     // A hot-swapped floppy delivers its new size in the same event, so it is race-free with
     // the media-change edge below. HDD and Settings sizes instead come from the datatable
@@ -1003,7 +1079,7 @@ module core_top (
         .reset                      (reset_soft),
         .clk_pico                   (clk_pico),
 
-        .fdd_request                (mgmt_req[7:6]),
+        .fdd_request                (fdd_req_fw),
         .fdd0_disk_size             (fdd0_disk_sectors),
         .fdd1_disk_size             (fdd1_disk_sectors),
         .datatable_addr             (datatable_addr),
@@ -1175,6 +1251,13 @@ module core_top (
     reg [7:0] last_37_wdata = 8'h00;
     reg [3:0] entry_branch  = 4'h0;
     reg       f0_seen       = 1'b0;
+    // JTAG TVRAM dump: write slot 0x0B arms the shared dbg_tvram_cell,
+    // read slot 0xF7 returns {cell[7:0] echo, attr, char_hi, char_lo}
+    // (remapped from bench-next186's 0x8B/0x74 -- 0x74 lives inside the
+    // rst_snap ring's 0x61-0x80 window on this branch). The read rides
+    // tvram's guest pipeline whenever no guest read owns it -- never
+    // steals a cycle.
+    wire [31:0] tvram_dbg_q;
     always_ff @(posedge clk_chipset) begin
         rd35_q  <= io_port_read && (chipset_address[15:0] == 16'h0035);
         rd35_qq <= rd35_q;
@@ -1228,7 +1311,7 @@ module core_top (
     end
 
     // Slots 0x40-0x5F: a 32-deep ring of the guest's fetch cursor (v30_addr
-    // alias = zet_pc under PC98_ZET, n186_pc under PC98_NEXT186), frozen
+    // alias = zet_pc under PC98_ZET), frozen
     // when the guest writes port 0xF0 (the PC-98 shutdown/soft-reset) or
     // parks in the ITF error halt (f99e5: cli; jmp $). The ITF failure
     // path resets through 0xF0, which wipes the live cursor before anyone
@@ -1466,19 +1549,39 @@ module core_top (
     // a repeated boot loop keeps the FIRST failure's trail. The fetch
     // landing this same cycle (the jmp$ right after `out`) misses the
     // bulk copy, so it is written into snap[w] explicitly.
+    // A legit OUT 0F0h still freezes the live ring (pc_hist_frozen above)
+    // but must not burn the snapshot: the POST ends every healthy boot
+    // with one, and it would mask the trail of a later real fault. Slot
+    // 0x40+ then reads back the live ring, which resets with soft_reset_cpu
+    // and refreezes at the first post-reset trigger -- the trail we want.
     reg [19:0] pc_snap [0:31];
     reg  [4:0] pc_snap_w     = 5'd0;
     reg        pc_snap_valid = 1'b0;
     always_ff @(posedge clk_chipset) begin
         if (reset || pc_rearm)
             pc_snap_valid <= 1'b0;
-        else if (!pc_snap_valid && (f0_port_write || pc_in_errhalt || zet_fault)) begin
+        else if (!pc_snap_valid && (pc_in_errhalt || zet_fault)) begin
             pc_snap_valid <= 1'b1;
             for (int i = 0; i < 32; i++)
                 pc_snap[i] <= pc_hist[i];
             if (pc_hist_new)
                 pc_snap[pc_hist_w] <= pc_now;
             pc_snap_w <= pc_hist_w + {4'd0, pc_hist_new};
+        end
+    end
+
+    // The first zet fault's decode-side evidence: which PC's instruction
+    // decoded to INVOP/INTD. Pairs with dbg_opc (the byte it saw, latched
+    // inside the core); expected-vs-seen at that PC is the corruption
+    // signature. Re-arms with each CPU reset like the opc latch does.
+    reg [19:0] fault_pc   = 20'h00000;
+    reg        fault_seen = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (reset || soft_reset_cpu)
+            fault_seen <= 1'b0;
+        else if (zet_fault && !fault_seen) begin
+            fault_seen <= 1'b1;
+            fault_pc   <= zet_pc;
         end
     end
 
@@ -1521,6 +1624,10 @@ module core_top (
             // where it parks: S_RDW = RAM never answered, S_DONE+svc_hold
             // = guest strobe never dropped, svc_req alone = nobody granted
             // the channel (the guest bus is saturated or a hold/HLDA).
+            // While fsm is IDLE the low five bits instead carry the last
+            // svc-write arm's {svc_raw_wr, egc_here, grcg_active, window,
+            // grcg_here} -- which term denied the charger, see the seq's
+            // dbg port comment.
             8'h31:   probe_data_c = {24'h0, gvram_dbg};
             // 0x32: the drawing server's health, one read. Ops = the two
             // channels' live opcode bytes {slave, master}; flag = the
@@ -1586,6 +1693,82 @@ module core_top (
             8'h97:   probe_data_c = {12'h0, w3fa_pc};
             8'h98:   probe_data_c = {12'h0, w3fb_pc};
             8'h99:   probe_data_c = {12'h0, w3fc_pc};
+            // bench-next186 probe block, remapped off 0x35-0x3A (owned by
+            // the sysport/TVRAM/GVRAM/GDC slots above) and 0x64-0x74 (inside
+            // this branch's rst_snap ring, 0x61-0x80):
+            //
+            // 0x9A-0x9C: the RAM-image floppy server's witness -- enough to
+            // prove the feature is in the image ('R'=0x52 tag at the top),
+            // that a mount ran, how much image has landed, and what a
+            // readback probe of any byte offset returns. See fdd_ramimg for
+            // the field layout.
+            8'h9a:   probe_data_c = ri_dbg0;
+            8'h9b:   probe_data_c = ri_dbg1;
+            8'h9c:   probe_data_c = ri_dbg2;
+            // 0x9D: first zet fault's {seen, opcode-seen, pc}. opc=00 with
+            // seen=0 just means no fault yet; seen=1 pins the instruction
+            // whose decode faulted, and opc is the byte it decoded.
+            8'h9d:   probe_data_c = {3'b000, fault_seen, zet_opc, fault_pc};
+            // 0x9E/0x9F: RAM.sv's DMA-fill loss witness -- 0x9E =
+            // {first-drop FSM state, in-flight-was-write, dropped addr,
+            //  drop count}, 0x9F = parked-write count. A nonzero drop
+            // count is a byte the guest asked to store and nobody wrote.
+            8'h9e:   probe_data_c = chipset_dbg3;
+            8'h9f:   probe_data_c = chipset_dbg4;
+            // 0x3b-0x3e: Bus_Arbiter's channel-2 burst witness -- the first
+            // four memory writes of the latest burst. Each slot is
+            // {4 spare bits, addr[19:0], data[7:0]}; 0x3b's spare nibble
+            // carries the burst counter instead.
+            8'h3b:   probe_data_c = chipset_dbg5[31:0];
+            8'h3c:   probe_data_c = chipset_dbg5[63:32];
+            8'h3d:   probe_data_c = chipset_dbg5[95:64];
+            8'h3e:   probe_data_c = chipset_dbg5[127:96];
+            // 0x3f: the service channel's launched operands, read straight
+            // off the softcpu-subsystem wires -- {st_addr[19:0],
+            // st_wdata[7:0], st_req, st_we, st_raw}. During the op these
+            // are the operand {addr, wdata}; when the op's st_done lands
+            // the subsystem parks the TRIGGER STORE's own fingerprint:
+            // st_addr <= {cpu_mem_wstrb[3:0], cpu_mem_wdata[15:0]} and
+            // st_wdata <= cpu_mem_wdata[7:0], all sampled at the launch.
+            // So a parked read shows the trigger store's {wstrb,
+            // wdata[15:0]} | {wdata[7:0], req, we, raw}: when raw is set,
+            // the fingerprint beside it is the decisive witness -- a
+            // clean sw-1 parks 0xF0001/0x01 (st_raw corrupted downstream),
+            // a sw-5 parks 0xF0005/0x05 (bus really carried a 5), an sb-5
+            // parks 0x10505/0x05, an s5=0x2FF leak parks 0xF02FF/0xFF.
+            8'h3f:   probe_data_c = {1'b0, st_addr_w, st_wdata_w,
+                                     st_req_w, st_we_w, st_raw_w};
+            // 0xE1-0xE4: last three writes to the watch address (write slot
+            // 0x0A); 0xE4's top word is {watch count, 24'h0}.
+            8'he1:   probe_data_c = chipset_dbg7[31:0];
+            8'he2:   probe_data_c = chipset_dbg7[63:32];
+            8'he3:   probe_data_c = chipset_dbg7[95:64];
+            8'he4:   probe_data_c = chipset_dbg7[127:96];
+            // 0xE5: RAM's uncovered-write witness {cnt, st, first addr};
+            // 0xE6: {last data, last addr, first data}.
+            8'he5:   probe_data_c = chipset_dbg8;
+            8'he6:   probe_data_c = chipset_dbg9;
+            // 0xE7-0xEA: watchpoint's first four hits, sticky.
+            8'he7:   probe_data_c = chipset_dbg10[31:0];
+            8'he8:   probe_data_c = chipset_dbg10[63:32];
+            8'he9:   probe_data_c = chipset_dbg10[95:64];
+            8'hea:   probe_data_c = chipset_dbg10[127:96];
+            // 0xEB-0xED: RAM accept-side write ring (newest last at 0xEB);
+            // 0xEE: accepted-write count.
+            8'heb:   probe_data_c = chipset_dbg11[31:0];
+            8'hec:   probe_data_c = chipset_dbg11[63:32];
+            8'hed:   probe_data_c = chipset_dbg11[95:64];
+            8'hee:   probe_data_c = {24'h0, chipset_dbg11[103:96]};
+            // 0xEF: last accepted write to the watch address
+            // ({1,pend,word,addr[19:0],data}); 0xF0: {wseen,wacc} counts --
+            // wseen < arbiter watch_cnt means writes die before write_command
+            // (sequencer swallow); wacc < wseen means accepted elsewhere or
+            // mapped away (gvram_page1 redirect shows a wrong addr in 0xEF).
+            8'hef:   probe_data_c = chipset_dbg12[31:0];
+            8'hf0:   probe_data_c = {16'h0, chipset_dbg12[55:32]};
+            // 0xF7: TVRAM cell readback {cell echo, attr, char_hi, char_lo}
+            // armed by write slot 0x0B (bench-next186 used 0x74/0x8B).
+            8'hf7:   probe_data_c = tvram_dbg_q;
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
             8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
@@ -1678,6 +1861,9 @@ module core_top (
             8'h1e:   probe_data_c = {cont2_key_chip, cont1_key_chip};
             8'h1f:   probe_data_c = {jtag_btn2, jtag_btn1};
             8'h1d:   probe_data_c = {16'h0, key_count, key_last};
+            // 0x74: text-VRAM dump -- armed by write slot 0x8b; returns
+            // {cell[7:0] echo, attr, char_hi, char_lo} for that cell.
+            8'h74:   probe_data_c = tvram_dbg_q;
             8'hFF:   probe_data_c = 32'h98C0_DE98;
             default: probe_data_c = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -1995,6 +2181,22 @@ module core_top (
             trig_bus    <= probe_wdata_c[28];
             trig_wronly <= probe_wdata_c[27];
         end
+        // Slot 0x09: CPU-speed override for scripted runs -- wdata[2] forces
+        // clk_select_next to wdata[1:0] instead of the OSD setting. Same
+        // handoff the menu uses (ce_generator reloads on the next biu_done).
+        if (probe_wr_pulse && probe_waddr_c == 7'h09) begin
+            jtag_spd_ovr  <= probe_wdata_c[2];
+            jtag_spd_sel  <= probe_wdata_c[1:0];
+        end
+        // Slot 0x0a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
+        // every memory write landing on it is logged (CPU or DMA alike).
+        if (probe_wr_pulse && probe_waddr_c == 7'h0a)
+            jtag_watch_addr <= probe_wdata_c[19:0];
+        // Slot 0x0b: arm the text-VRAM dump cell (readback on slot 0xF7;
+        // shared with the screen probe's cell, which also auto-advances on
+        // every completed 0x36 read).
+        if (probe_wr_pulse && probe_waddr_c == 7'h0b)
+            dbg_tvram_cell <= probe_wdata_c[11:0];
     end
 
     // JTAG-injected keystrokes ride the same event line the 8251 drains; a
@@ -2656,6 +2858,15 @@ module core_top (
     // the macro is off -- the cone prunes.
     wire [15:0]  chipset_dbg;
     wire  [7:0]  chipset_dbg2;
+    wire [31:0]  chipset_dbg3;
+    wire [31:0]  chipset_dbg4;
+    wire [127:0] chipset_dbg5;
+    wire [127:0] chipset_dbg7;
+    wire  [31:0] chipset_dbg8;
+    wire  [31:0] chipset_dbg9;
+    wire [127:0] chipset_dbg10;
+    wire [103:0] chipset_dbg11;
+    wire  [55:0] chipset_dbg12;
     wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
     wire [23:0]  tvram_dbg_word; // screen probe: {attr,char_hi,char_lo}
     logic [11:0] dbg_tvram_cell; // screen probe: the cell being sampled
@@ -2860,6 +3071,7 @@ module core_top (
         .dbg_sysport                        (dbg_sysport_w),
         .tvram_dbg_cell                     (dbg_tvram_cell),
         .tvram_dbg_word                     (tvram_dbg_word),
+        .tvram_dbg_q                        (tvram_dbg_q),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
         .st_req                             (st_req_m),
@@ -2908,6 +3120,16 @@ module core_top (
         .address_enable_n                   (chipset_aen),
         .dbg_chipset                        (chipset_dbg),
         .dbg_chipset2                       (chipset_dbg2),
+        .dbg_chipset3                       (chipset_dbg3),
+        .dbg_chipset4                       (chipset_dbg4),
+        .dbg_chipset5                       (chipset_dbg5),
+        .dbg_watch_addr                     (jtag_watch_addr),
+        .dbg_chipset7                       (chipset_dbg7),
+        .dbg_chipset8                       (chipset_dbg8),
+        .dbg_chipset9                       (chipset_dbg9),
+        .dbg_chipset10                      (chipset_dbg10),
+        .dbg_chipset11                      (chipset_dbg11),
+        .dbg_chipset12                      (chipset_dbg12),
         .dbg_gvram                          (gvram_dbg),
         .dbg_scsi                           (dbg_scsi),
     //  .terminal_count_n                   (terminal_count_n)
@@ -2941,10 +3163,10 @@ module core_top (
         .ems98_maxmem                       (ems98_maxmem),
         .bios_protect_flag                  (bios_protect_flag),
         .mgmt_readdata                      (mgmt_din),
-        .mgmt_writedata                     (mgmt_dout),
-        .mgmt_address                       (mgmt_addr),
-        .mgmt_write                         (mgmt_wr),
-        .mgmt_read                          (mgmt_rd),
+        .mgmt_writedata                     (cs_mgmt_dout),
+        .mgmt_address                       (cs_mgmt_addr),
+        .mgmt_write                         (cs_mgmt_wr),
+        .mgmt_read                          (cs_mgmt_rd),
         .floppy_wp                          (wp_cfg),
         // The FDC's domain IS clk_chipset, so the setting bit arrives on a
         // plain wire, the way osd_extmem reaches the EMS board below it.
@@ -2974,7 +3196,54 @@ module core_top (
         ,.mouse_ev                          (mouse_ev)
         ,.mouse_btn                         (mouse_btn)
         ,.opna_joy                          (opna_joy)
+        ,.ramimg_req                        (ramimg_req)
+        ,.ramimg_we                         (ramimg_we)
+        ,.ramimg_addr                       (ramimg_addr)
+        ,.ramimg_len                        (ramimg_len)
+        ,.ramimg_wdata                      (ramimg_wdata)
+        ,.ramimg_ack                        (ramimg_ack)
+        ,.ramimg_rvalid                     (ramimg_rvalid)
+        ,.ramimg_rdata                      (ramimg_rdata)
+        ,.ramimg_done                       (ramimg_done)
     );
+
+`ifdef PC98_JTAG
+    // The RAM-disk floppy server: streams a JTAG-uploaded image into its
+    // SDRAM carve-out, mounts the 2HD geometry on drive A over the shared
+    // management bus (the mux is above the softcore's instance), and serves
+    // the controller's sector requests straight from SDRAM. reset aborts an
+    // in-flight transfer only -- the mounted disk survives the guest reset
+    // that boots from it, because floppy.v's media_present has no reset.
+    fdd_ramimg u_fdd_ramimg (
+        .clk             (clk_chipset),
+        .reset           (reset),
+        .power_reset     (reset_sdram),
+        .fdd_request     (mgmt_req[7:6]),
+        .fw_busy         ((mgmt_wr | mgmt_rd) & ~fw_fdd_hit),
+        .mgmt_addr       (ri_mgmt_addr),
+        .mgmt_dout       (ri_mgmt_dout),
+        .mgmt_wr         (ri_mgmt_wr),
+        .mgmt_rd         (ri_mgmt_rd),
+        .mgmt_din        (mgmt_din),
+        .sd_req          (ramimg_req),
+        .sd_we           (ramimg_we),
+        .sd_addr         (ramimg_addr),
+        .sd_len          (ramimg_len),
+        .sd_wdata        (ramimg_wdata),
+        .sd_ack          (ramimg_ack),
+        .sd_rvalid       (ramimg_rvalid),
+        .sd_rdata        (ramimg_rdata),
+        .sd_done         (ramimg_done),
+        .ctl_pulse       (probe_wr_pulse),
+        .ctl_addr        (probe_waddr_c),
+        .ctl_data        (probe_wdata_c),
+        .own             (ri_own),
+        .guest_reset_req (ri_greset),
+        .dbg0            (ri_dbg0),
+        .dbg1            (ri_dbg1),
+        .dbg2            (ri_dbg2)
+    );
+`endif
 
     // CHIPSET per-access "done" pulse (COMPLETE_RAM_RW); drives the ROM-load FSM.
     wire        ram_rw_complete;
@@ -3042,10 +3311,13 @@ module core_top (
     wire        zwb_inta, zwb_nmia;
     wire [19:0] zet_pc;
     wire        zet_fault;
+    wire [7:0]  zet_opc;
 
     zet_cpu_bridge u_zet_bridge (
         .clk               (clk_chipset),
         .cpu_ce_posedge    (cpu_ce_posedge),
+        .cpu_ce_negedge    (cpu_ce_negedge),
+        .fast_pace         (clk_select[1]),
         .reset             (reset_cpu),
         .zet_clk           (zet_clk),
         .wb_dat_o          (zwb_dat_o),
@@ -3092,7 +3364,8 @@ module core_top (
         .nmi       (1'b0),
         .nmia      (zwb_nmia),
         .pc        (zet_pc),
-        .dbg_fault (zet_fault)
+        .dbg_fault (zet_fault),
+        .dbg_opc   (zet_opc)
     );
 
     // The probe slots that usually expose V30 guts get the Zet view instead.
@@ -3107,6 +3380,8 @@ module core_top (
     wire        v30_ss_err_unused, v30_ss_quiet_unused;
     wire [15:0] v30_ss_rdata_unused;
     wire        zet_fault = 1'b0;
+    wire [7:0]  zet_opc   = 8'h00;
+    wire [19:0] zet_pc    = 20'h00000;
 
     v30_cpu_bridge u_v30_bridge (
         .clk               (clk_chipset),

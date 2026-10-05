@@ -95,8 +95,10 @@ module tb_pc98_pipeline;
         .clk(clk), .rst(rst),
         .cpu_addr (address[13:0]),
         .cpu_wren (tvram_mem_select & ~memory_write_n),
+        .cpu_rden (1'b0),   // this bench only writes; debug port reads
         .cpu_wdata(internal_data_bus),
         .cpu_q    (tvram_cpu_q),
+        .dbg_cell (12'h000),  .dbg_q(),
         .fil_clk  (clk),      .fil_cell(fil_cell),
         .fil_char_lo(fil_char_lo), .fil_char_hi(fil_char_hi),
         .vid_clk  (clk_dot),  .vid_cell(vid_cell), .vid_attr(vid_attr),

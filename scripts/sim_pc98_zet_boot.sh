@@ -10,9 +10,11 @@ set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SYNTH=0
+REALMEM=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --synth) SYNTH=1; shift ;;
+        --realmem) REALMEM=1; shift ;;
         *) break ;;
     esac
 done
@@ -74,6 +76,17 @@ R="$PWD"
 SIM_OPT="${SIM_OPT:--O2}"
 SIM_THREADS="${SIM_THREADS:-4}"
 
+CPU_DEF="+define+ZET_CPU"
+[ "$REALMEM" = 1 ] && CPU_DEF="$CPU_DEF+REALMEM"
+
+if [ "$REALMEM" = 1 ]; then
+    MEMFILES="$K/RAM.sv $K/Ready.sv $S/sdram_shim.sv $S/sdram_mp.sv \
+        $S/pc98_gvram_seq.sv $S/pc98_grcg.sv $S/pc98_egc.sv \
+        sim/sdram_board_model.sv sim/sdram_model.sv"
+else
+    MEMFILES=""
+fi
+
 SYSROOT=""
 [ -d /usr/include ] || SYSROOT="-CFLAGS -isysroot -CFLAGS $(xcrun -sdk macosx --show-sdk-path)"
 CXXFLAGS_MK=""
@@ -82,14 +95,14 @@ if [ -x /opt/homebrew/opt/llvm/bin/clang++ ]; then
 fi
 
 set -x
-verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot \
-    +define+ZET_CPU \
+verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot $CPU_DEF \
     --threads $SIM_THREADS -MAKEFLAGS OPT_FAST=$SIM_OPT \
     $CXXFLAGS_MK \
     $SYSROOT \
     -I"$R/sim" -I"$R/$S" -I"$R/$S/common" -I"$R/$Z" -I"$R/$K" \
     -I"$R/$K/i8288/HDL" -I"$R/$K/i8253/HDL" -I"$R/$K/i8259/HDL" \
     "$R/sim/tb_pc98_boot.sv" \
+    $MEMFILES \
     $R/$Z/zet.v $R/$Z/zet_core.v $R/$Z/zet_fetch.v $R/$Z/zet_decode.v \
     $R/$Z/zet_exec.v $R/$Z/zet_memory_regs.v $R/$Z/zet_micro_data.v \
     $R/$Z/zet_micro_rom.v $R/$Z/zet_regfile.v $R/$Z/zet_wb_master.v \

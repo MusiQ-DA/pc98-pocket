@@ -57,9 +57,12 @@ module CHIPSET #(
         output  logic   [1:0]   gdc_draw_to,
         output  logic           dbg_egc_flag,
         output  logic   [7:0]   dbg_sysport,
-        // The JTAG screen probe: cell index in, {attr,char_hi,char_lo} out.
+        // JTAG screen probe + TVRAM dump: cell index in; dbg_word is the
+        // memsw-aware {attr,char_hi,char_lo}, dbg_q the echo+raw {cell,
+        // attr,char_hi,char_lo} through the guest read pipeline.
         input   logic   [11:0]  tvram_dbg_cell,
         output  logic   [23:0]  tvram_dbg_word,
+        output  logic   [31:0]  tvram_dbg_q,
         output  logic           de_o,
         output  logic   [5:0]   VID_R,
         output  logic   [5:0]   VID_G,
@@ -108,6 +111,29 @@ module CHIPSET #(
         // state, out to core_top's probe. Unconsumed they synthesise away.
         output  logic   [15:0]  dbg_chipset,
         output  logic   [7:0]   dbg_chipset2,
+        // RAM.sv's DMA-fill loss witness -- drop count + first collision.
+        output  logic   [31:0]  dbg_chipset3,
+        output  logic   [31:0]  dbg_chipset4,
+        // Bus_Arbiter's channel-2 burst witness -- the first four writes of
+        // the latest burst as {addr[19:0], data[7:0]}.
+        output  logic   [127:0] dbg_chipset5,
+        // Write watchpoint armed from the probe (slot 0x8a): the last
+        // three memory writes to that guest address.
+        input   logic   [19:0]  dbg_watch_addr,
+        output  logic   [127:0] dbg_chipset7,
+        // RAM.sv's universal uncovered-write witness: a strobe that fell
+        // while neither accepted, parked nor twin-matched is a true loss
+        // the slot-full counters cannot see.
+        output  logic   [31:0]  dbg_chipset8,
+        output  logic   [31:0]  dbg_chipset9,
+        // The watchpoint's first four hits, latched sticky.
+        output  logic   [127:0] dbg_chipset10,
+        // RAM.sv's accept-side record: the last three writes the FSM
+        // committed to serve ({parked?, word, addr[19:0], data}).
+        output  logic   [103:0] dbg_chipset11,
+        // Watch-address seen/accept counts plus the last accepted record --
+        // {8'h00, wseen[7:0], wacc[7:0], rec[31:0]}, see RAM.sv.
+        output  logic   [55:0]  dbg_chipset12,
         // The GVRAM sequencer's own view: where the plane walk (or the
         // service channel) is parked -- see pc98_gvram_seq's dbg port.
         output  logic   [7:0]   dbg_gvram,
@@ -205,7 +231,17 @@ module CHIPSET #(
         input   logic   [7:0]       opna_joy,
         // ROM-load (Pocket): expose the RAM access-complete pulse so core_top's
         // BIOS loader can pace on the real SDRAM write instead of a fixed delay.
-        output  logic           ram_rw_complete
+        output  logic           ram_rw_complete,
+        // fdd_ramimg's SDRAM carve-out port, straight through to u_RAM's port E.
+        input   logic           ramimg_req,
+        input   logic           ramimg_we,
+        input   logic   [23:0]  ramimg_addr,
+        input   logic   [3:0]   ramimg_len,
+        input   logic   [15:0]  ramimg_wdata,
+        output  logic           ramimg_ack,
+        output  logic           ramimg_rvalid,
+        output  logic   [15:0]  ramimg_rdata,
+        output  logic           ramimg_done
 
     );
 
@@ -319,6 +355,10 @@ module CHIPSET #(
         .no_command_state                   (no_command_state),
         .ext_access_request                 (ext_access_request),
         .dbg                                (arb_dbg),
+        .dbg_dma                            (dbg_chipset5),
+        .watch_addr                         (dbg_watch_addr),
+        .dbg_dma3                           (dbg_chipset7),
+        .dbg_dma4                           (dbg_chipset10),
         // DRQ is active-low on the PC-98 bus (the data book names the pins
         // DRQ3O..DRQ0O) and the BIOS programs the 71071's DREQ sense bit
         // (0x11 bit6) to match. The sources here are active-high "request
@@ -401,6 +441,7 @@ module CHIPSET #(
         .dbg_sysport                        (dbg_sysport),
         .tvram_dbg_cell                     (tvram_dbg_cell),
         .tvram_dbg_word                     (tvram_dbg_word),
+        .tvram_dbg_q                        (tvram_dbg_q),
         .gdc_draw_snaps                     (gdc_draw_snaps),
         .gdc_srv_done_levels                (gdc_srv_done_levels),
         .VID_R                              (VID_R),
@@ -516,7 +557,14 @@ module CHIPSET #(
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
         .cpu_rd(~memory_read_n), .cpu_wr(~memory_write_n),
-        .cpu_word(cpu_word_access),
+        // cpu_word_access belongs to the CPU's own bus cycle and stays
+        // stale through a DMA grant (the bridge is frozen mid-cycle when
+        // hold_acknowledge lands).  address_enable_n is high for the whole
+        // DMA-owned window, so qualify the flag: a DMA byte write must
+        // never become a 2-word burst -- at column 511 sdram_mp's cur_col
+        // wraps to column 0 of the same bank and beat 2 clobbers the
+        // block's first word (the fill buffer's byte0).
+        .cpu_word(cpu_word_access & ~address_enable_n),
         .cpu_addr(latch_address), .cpu_wdata(internal_data_bus),
         .cpu_wdata_hi(cpu_data_bus_hi),
         .cpu_rdata(internal_data_bus_ram), .cpu_rdata_hi(seq_rdata_hi_w),
@@ -603,6 +651,15 @@ module CHIPSET #(
         .gv_rd_valid                        (gv_rd_valid),
         .gv_rd_data                         (gv_rd_data),
         .gv_rd_done                         (gv_rd_done),
+        .ramimg_req                         (ramimg_req),
+        .ramimg_we                          (ramimg_we),
+        .ramimg_addr                        (ramimg_addr),
+        .ramimg_len                         (ramimg_len),
+        .ramimg_wdata                       (ramimg_wdata),
+        .ramimg_ack                         (ramimg_ack),
+        .ramimg_rvalid                      (ramimg_rvalid),
+        .ramimg_rdata                       (ramimg_rdata),
+        .ramimg_done                        (ramimg_done),
         .clock                              (sdram_clock),
         .reset                              (sdram_reset),
         .enable_sdram                       (enable_sdram),
@@ -639,7 +696,14 @@ module CHIPSET #(
         .ram_write_wait_cycle               (ram_write_wait_cycle),
         .vram_rd_wait_cycle                 (vram_rd_wait),
         .vram_wr_wait_cycle                 (vram_wr_wait),
-        .dbg                                (ram_dbg)
+        .dbg                                (ram_dbg),
+        .dbg2                               (dbg_chipset3),
+        .dbg3                               (dbg_chipset4),
+        .dbg4                               (dbg_chipset8),
+        .dbg5                               (dbg_chipset9),
+        .dbg6                               (dbg_chipset11),
+        .dbg7                               (dbg_chipset12),
+        .dbg_watch_addr                     (dbg_watch_addr)
     );
 
     // JTAG probe bundle: {arbiter hold/DRQ, RAM FSM state} plus the wait

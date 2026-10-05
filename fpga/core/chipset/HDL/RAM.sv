@@ -42,6 +42,15 @@ module RAM (
     // {parked write, refresh busy, read in flight, completing-is-read,
     //  completing-is-write, state[2:0]}. Unconsumed it synthesises away.
     output  logic   [7:0]   dbg,
+    // dbg2 = 0 (the old lost_ev witness is superseded by dbg4/dbg5's
+    //         universal coverage), dbg3 = parked-write count.
+    output  logic   [31:0]  dbg2,
+    output  logic   [31:0]  dbg3,
+    output  logic   [31:0]  dbg4,
+    output  logic   [31:0]  dbg5,
+    output  logic   [103:0] dbg6,
+    output  logic   [55:0]  dbg7,
+    input   logic   [19:0]  dbg_watch_addr,
     // SDRAM
     output  logic   [12:0]  sdram_address,
     output  logic           sdram_cke,
@@ -91,6 +100,17 @@ module RAM (
      output logic           gv_rd_valid,
      output logic   [15:0]  gv_rd_data,
      output logic           gv_rd_done,
+    // fdd_ramimg's carve-out port (controller port E): writes while a JTAG
+    // upload fills the image, read bursts while it serves sectors.
+     input  logic           ramimg_req,
+     input  logic           ramimg_we,
+     input  logic   [23:0]  ramimg_addr,
+     input  logic    [3:0]  ramimg_len,
+     input  logic   [15:0]  ramimg_wdata,
+     output logic           ramimg_ack,
+     output logic           ramimg_rvalid,
+     output logic   [15:0]  ramimg_rdata,
+     output logic           ramimg_done,
      input  logic           bios_shadow_flag,
     // Wait mode
     input   logic           wait_count_clk_en,
@@ -136,12 +156,17 @@ module RAM (
     // live data bus, which a pulse-width strobe can legally release -- and
     // change -- before write_flag confirms the request.
     logic           wc_pend;
+    logic           wc_pend2;
     logic           accept_live_wr;
     logic           accept_live_rd;
     logic   [23:0]  pend_address;
     logic   [7:0]   pend_data;
     logic   [7:0]   pend_data_hi;
     logic           pend_word;
+    logic   [23:0]  pend2_address;
+    logic   [7:0]   pend2_data;
+    logic   [7:0]   pend2_data_hi;
+    logic           pend2_word;
     logic   [23:0]  accept_address;
     logic   [7:0]   accept_data;
     logic   [7:0]   accept_data_hi;
@@ -281,7 +306,8 @@ module RAM (
     logic           refresh_mode;
 
     // sdram_shim wraps sdram_mp, the multi-port controller: port A is this
-    // guest path, B the font fetch, C the CG window, D the graphics display.
+    // guest path, B the font fetch, C the CG window, D the graphics display,
+    // E fdd_ramimg's image carve-out.
     // See docs/P0_SDRAM_DESIGN.md.
     sdram_shim u_sdram (
         .sdram_clock        (clock),
@@ -329,7 +355,16 @@ module RAM (
         .d_ack              (gv_rd_ack),
         .d_rvalid           (gv_rd_valid),
         .d_rdata            (gv_rd_data),
-        .d_done             (gv_rd_done)
+        .d_done             (gv_rd_done),
+        .e_req              (ramimg_req),
+        .e_we               (ramimg_we),
+        .e_addr             (ramimg_addr),
+        .e_len              (ramimg_len),
+        .e_wdata            (ramimg_wdata),
+        .e_ack              (ramimg_ack),
+        .e_rvalid           (ramimg_rvalid),
+        .e_rdata            (ramimg_rdata),
+        .e_done             (ramimg_done)
     );
 
 
@@ -406,19 +441,44 @@ module RAM (
                                | (internal_data_bus_hi == accept_data_hi));
     wire read_strobe_match  = (latch_address == accept_address)
                             & (word_now      == accept_word);
+    // Parked-operand matches: a held strobe whose copy already sits in a
+    // slot must neither re-park nor count as blocked/lost when it falls.
+    // The hi lane only counts on word writes (same caveat as the match
+    // against the in-flight access).
+    wire parked_match  = (latch_address        == pend_address)
+                       & (internal_data_bus    == pend_data)
+                       & (word_now             == pend_word)
+                       & (~pend_word
+                          | (internal_data_bus_hi == pend_data_hi));
+    wire parked2_match = (latch_address        == pend2_address)
+                       & (internal_data_bus    == pend2_data)
+                       & (word_now             == pend2_word)
+                       & (~pend2_word
+                          | (internal_data_bus_hi == pend2_data_hi));
+
     wire new_write_strobe = write_command && state != IDLE && !wc_pend
         && !write_strobe_match;
+    // Second-depth capture: a strobe arriving while the first slot is full
+    // parks here too -- the uPD71071's early-released pulses are gone before
+    // either slot could free, and capture-on-arrival is what survives them.
+    wire new_write_strobe2 = write_command && state != IDLE && wc_pend
+        && !wc_pend2 && !write_strobe_match && !parked_match;
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
             state             <= IDLE;
             wc_pend           <= 1'b0;
+            wc_pend2          <= 1'b0;
             accept_live_wr    <= 1'b0;
             accept_live_rd    <= 1'b0;
             pend_address      <= 24'd0;
             pend_data         <= 8'd0;
             pend_data_hi      <= 8'd0;
             pend_word         <= 1'b0;
+            pend2_address     <= 24'd0;
+            pend2_data        <= 8'd0;
+            pend2_data_hi     <= 8'd0;
+            pend2_word        <= 1'b0;
             accept_address    <= 24'd0;
             accept_data       <= 8'd0;
             accept_data_hi    <= 8'd0;
@@ -438,14 +498,26 @@ module RAM (
                     accept_data    <= pend_data;
                     accept_data_hi <= pend_data_hi;
                     accept_word    <= pend_word;
+                    // Depth-2 FIFO: slot 2 promotes into slot 1 as the
+                    // accepted write leaves, so parked order is preserved.
+                    if (wc_pend2) begin
+                        pend_address <= pend2_address;
+                        pend_data    <= pend2_data;
+                        pend_data_hi <= pend2_data_hi;
+                        pend_word    <= pend2_word;
+                        wc_pend      <= 1'b1;
+                        wc_pend2     <= 1'b0;
+                    end
+                    else
+                        wc_pend <= 1'b0;
                 end
                 else begin
                     accept_address <= latch_address;
                     accept_data    <= internal_data_bus;
                     accept_data_hi <= internal_data_bus_hi;
                     accept_word    <= word_now;
+                    wc_pend <= 1'b0;
                 end
-                wc_pend <= 1'b0;
             end
             else if (state == IDLE && next_state == RAM_READ_1) begin
                 // Snapshot the read's operands too: a different-address
@@ -463,6 +535,13 @@ module RAM (
                 pend_data    <= internal_data_bus;
                 pend_data_hi <= internal_data_bus_hi;
                 pend_word    <= word_now;
+            end
+            else if (new_write_strobe2) begin
+                wc_pend2      <= 1'b1;
+                pend2_address <= latch_address;
+                pend2_data    <= internal_data_bus;
+                pend2_data_hi <= internal_data_bus_hi;
+                pend2_word    <= word_now;
             end
         end
     end
@@ -683,5 +762,156 @@ module RAM (
 
     assign  dbg = {wc_pend, refresh_mode, read_flag,
                    accept_live_rd, accept_live_wr, state[2:0]};
+
+    // Drop witness (PC98_JTAG). Two kinds of event matter here:
+    //
+    //   blocked -- a NEW write strobe rises while BOTH park slots are full
+    //   (busy & wc_pend & wc_pend2, operands matching nothing in flight or
+    //   parked). It is not lost yet: a strobe the master holds parks as
+    //   soon as a slot frees. It is the precursor population.
+    //
+    //   lost -- a blocked strobe FALLS while still unaccepted. That byte is
+    //   gone for good: it never reached the FSM, never parked, and the
+    //   master has moved on. A held strobe never produces this; the
+    //   uPD71071's early-released write pulse does.
+    //
+    // A parked twin's own fall is NOT a loss -- its operands are already
+    // safe in pend_*/pend2_*, which is exactly why it may release early.
+    // parked_match/parked2_match keep it out of the count.
+    logic        write_command_d;
+    logic [15:0] dbg_parks;
+
+    wire write_strobe_fell = write_command_d & ~write_command;
+    wire write_strobe_rose = ~write_command_d & write_command;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            write_command_d <= 1'b0;
+            dbg_parks       <= 16'd0;
+        end else begin
+            write_command_d <= write_command;
+            if ((new_write_strobe | new_write_strobe2)
+                && (dbg_parks != 16'hFFFF))
+                dbg_parks <= dbg_parks + 16'd1;
+        end
+    end
+
+    // Universal coverage: a write strobe is covered when the FSM accepts
+    // it live (IDLE with nothing parked), it lands in a park slot, or its
+    // operands match the access in flight / already parked (a held twin).
+    // A strobe falling while uncovered is a TRUE loss -- and unlike
+    // lost_ev it does not need both park slots full: a strobe arriving on
+    // the exact IDLE&&wc_pend cycle (park wins the accept, live cannot
+    // park because state==IDLE) then falling early escapes that counter
+    // completely. byte0-of-fill writes are prime suspects: they arrive
+    // right as the previous grant's tail retires.
+    logic        wr_covered;
+    logic [15:0] dbg_uncov;
+    logic [23:0] dbg_uncov_addr;    // first loss, full mapped address
+    logic  [7:0] dbg_uncov_data;
+    logic  [2:0] dbg_uncov_st;
+    logic [23:0] dbg_uncov_addr2;   // most recent loss
+    logic  [7:0] dbg_uncov_data2;
+
+    wire wr_accept_live = write_command & (state == IDLE) & ~wc_pend;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            wr_covered       <= 1'b0;
+            dbg_uncov        <= 16'd0;
+            dbg_uncov_addr   <= 24'd0;
+            dbg_uncov_data   <= 8'd0;
+            dbg_uncov_st     <= 3'd0;
+            dbg_uncov_addr2  <= 24'd0;
+            dbg_uncov_data2  <= 8'd0;
+        end else begin
+            if (~write_command)
+                wr_covered <= 1'b0;
+            else if (wr_accept_live | new_write_strobe | new_write_strobe2
+                     | write_strobe_match | parked_match | parked2_match)
+                wr_covered <= 1'b1;
+            if (write_strobe_fell & ~wr_covered) begin
+                if (dbg_uncov != 16'hFFFF)
+                    dbg_uncov <= dbg_uncov + 16'd1;
+                if (dbg_uncov == 16'd0) begin
+                    dbg_uncov_addr <= latch_address;
+                    dbg_uncov_data <= internal_data_bus;
+                    dbg_uncov_st   <= state;
+                end
+                dbg_uncov_addr2 <= latch_address;
+                dbg_uncov_data2 <= internal_data_bus;
+            end
+        end
+    end
+
+    // Sink-side record: the operands of the last three writes the FSM
+    // actually accepted -- the arbiter logs the bus side, this logs what
+    // RAM committed to serve. A fill's byte-0 that goes missing shows up
+    // here with a stale/mapped-away operand, or not at all.
+    logic  [7:0]  acc_cnt;
+    logic  [31:0] acc_ring [0:2];
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            acc_cnt <= 8'd0;
+            acc_ring[0] <= 32'd0;
+            acc_ring[1] <= 32'd0;
+            acc_ring[2] <= 32'd0;
+        end else if (state == IDLE && next_state == RAM_WRITE_1) begin
+            acc_ring[2] <= acc_ring[1];
+            acc_ring[1] <= acc_ring[0];
+            // {2'b0, was-parked, word, addr[19:0], data}
+            acc_ring[0] <= {2'b00, wc_pend,
+                            (wc_pend ? pend_word    : word_now),
+                            (wc_pend ? pend_address[19:0]
+                                     : latch_address[19:0]),
+                            (wc_pend ? pend_data    : internal_data_bus)};
+            if (acc_cnt != 8'hFF)
+                acc_cnt <= acc_cnt + 8'd1;
+        end
+    end
+
+    // Watch-accept witnesses, keyed on the arbiter's watchpoint address:
+    //   wseen  -- write_command cycles whose (mapped) address is the watch
+    //             point. If the arbiter's watch count exceeds this, writes
+    //             reached the bus but never became a write_command here --
+    //             swallowed upstream (sequencer expansion) or sel-missed.
+    //   wacc   -- accepts whose mapped operand equals the watch point, and
+    //             the sticky {pend,word,addr,data} of the last one. A mapped
+    //             redirect shows here as addr != watch point (and no count).
+    logic  [7:0]  wseen_cnt;
+    logic  [7:0]  wacc_cnt;
+    logic  [31:0] wacc_rec;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            wseen_cnt <= 8'd0;
+            wacc_cnt  <= 8'd0;
+            wacc_rec  <= 32'd0;
+        end else begin
+            // Count strobe RISES at the watch address so this compares
+            // one-for-one with the arbiter's watch count (strobe falls).
+            if (write_strobe_rose && (latch_address[19:0] == dbg_watch_addr)
+                && (wseen_cnt != 8'hFF))
+                wseen_cnt <= wseen_cnt + 8'd1;
+            if (state == IDLE && next_state == RAM_WRITE_1
+                && ((wc_pend ? pend_address[19:0] : latch_address[19:0])
+                    == dbg_watch_addr)) begin
+                wacc_rec <= {2'b01, wc_pend,
+                             (wc_pend ? pend_word    : word_now),
+                             (wc_pend ? pend_address[19:0]
+                                      : latch_address[19:0]),
+                             (wc_pend ? pend_data    : internal_data_bus)};
+                if (wacc_cnt != 8'hFF)
+                    wacc_cnt <= wacc_cnt + 8'd1;
+            end
+        end
+    end
+
+    assign  dbg2 = 32'd0;                   // drop witness removed -- uncov covers it
+    assign  dbg3 = {24'd0, dbg_parks};       // parked count only
+    assign  dbg4 = {dbg_uncov[7:0], dbg_uncov_addr}; // {cnt, first addr24}
+    assign  dbg5 = {dbg_uncov_data2, dbg_uncov_addr2[15:0],
+                    dbg_uncov_data};          // {last d, last addr, first d}
+    assign  dbg6 = {acc_cnt, acc_ring[2], acc_ring[1], acc_ring[0]};
+    assign  dbg7 = {8'h00, wseen_cnt, wacc_cnt, wacc_rec};
 
 endmodule

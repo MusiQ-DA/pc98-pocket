@@ -63,7 +63,8 @@ module tb_pc98_textscroll;
     pc98_tvram u_tvram (
         .clk(clk), .rst(rst),
         .cpu_addr(cpu_addr), .cpu_wren(cpu_wren), .cpu_wdata(cpu_wdata),
-        .cpu_q(cpu_q),
+        .cpu_rden(1'b1), .cpu_q(cpu_q),
+        .dbg_cell(12'h000), .dbg_q(),
         .fil_clk(clk),   .fil_cell(fil_cell),
         .fil_char_lo(fil_char_lo), .fil_char_hi(fil_char_hi),
         .vid_clk(clk_dot), .vid_cell(vid_cell), .vid_attr(vid_attr),

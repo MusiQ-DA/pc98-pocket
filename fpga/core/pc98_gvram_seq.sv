@@ -145,6 +145,13 @@ module pc98_gvram_seq #(
     // the plane walk is parked (a read stuck in S_RDW is RAM not answering;
     // S_DONE forever is the guest's strobe never dropping). Combined with
     // Chipset's dbg_chipset (arbiter hold, RAM FSM) a stall is localised.
+    //
+    // While the FSM sits IDLE the {st,gp} field carries the last svc-write
+    // arm's charger witness instead of the dead state: dbg[4:0] =
+    // {svc_raw_wr, egc_here, grcg_active, window, grcg_here}. grcg_here=0
+    // there names which term denied the charger -- window, the mode bit,
+    // a raw request, or the EGC stealing it -- and every-else-set-but-here
+    // means egc_on fired on egc_active (slot 0x32's accel view).
     output wire [7:0]  dbg
 );
 
@@ -531,6 +538,7 @@ module pc98_gvram_seq #(
             svc_rdata <= 8'h00;
             svc_gap   <= 1'b0;
             svc_req_s <= 1'b0;
+            dbg_arm   <= 5'h00;
         end else begin
             // The EGC's pattern-load strobe is combinational now (see the
             // egc_pat_ld wire): it must fire while mem_rdata still carries
@@ -592,6 +600,12 @@ module pc98_gvram_seq #(
                     is_word    <= 1'b0;
                     half       <= 1'b0;
                     tcr        <= 8'h00;
+                    if (svc_we) begin
+                        // The terms grcg_here is built from, at the moment
+                        // the arm evaluated them -- the slot's arm nibble.
+                        dbg_arm <= {svc_raw_wr, egc_here, grcg_active,
+                                    window, grcg_here};
+                    end
                     if (window) begin
                         // cur_addr is already svc_addr this cycle (svc_eval):
                         // window/here/own above are the svc operand's. A svc
@@ -729,8 +743,12 @@ module pc98_gvram_seq #(
 
     // {requester up, answered, in flight, FSM, plane}. svc_req is an input
     // here because "the softcore raised it and nobody moved" is itself the
-    // diagnostic.
-    assign dbg = {svc_req, svc_done, svc_hold, st, gp};
+    // diagnostic. While st is IDLE the {st,gp} field carries dbg_arm -- the
+    // last svc-write arm's here-terms, see the port comment -- because an
+    // idle FSM has no plane position worth reporting.
+    reg [4:0] dbg_arm;
+    assign dbg = {svc_req, svc_done, svc_hold,
+                  (st == S_IDLE) ? dbg_arm : {st, gp}};
 
     // cpu_gvram was the window qualifier until `window` moved onto the
     // address alone (see above); it stays on the port list because Chipset

@@ -454,6 +454,24 @@ jobs:
           ./obj_fdcglue/fg | tee fdcglue.log
           grep -q "PASS tb_pc98_fdc_glue" fdcglue.log
 
+      - name: RAM-image serve keeps sector bytes in order under firmware mgmt traffic
+        run: |
+          S=fpga/core
+          # The whole serve chain with the real arbiter: fdd_ramimg pushes
+          # FIFO bytes through the management bus while a firmware-traffic
+          # generator lands non-F2 reads on the push cycles. Without the
+          # mgmt_arb strobe fence those reads arrive as nibble-F FIFO pops
+          # and the guest receives the sector rotated -- the regression this
+          # step locks out.
+          verilator --binary --timing -Wno-fatal --top-module tb_ramimg_fdc \
+            -Isim \
+            $S/common/floppy.v $S/common/simple_fifo.v \
+            $S/mgmt_arb.sv $S/fdd_ramimg.sv \
+            sim/stub_dcfifo.sv sim/tb_fdd_dma_model.sv \
+            sim/tb_ramimg_fdc.sv -o rf --Mdir obj_ramimgfdc
+          ./obj_ramimgfdc/rf | tee ramimgfdc.log
+          grep -q "PASS tb_ramimg_fdc" ramimgfdc.log
+
       - name: the SCSI register window indexes and increments like the board
         run: |
           S=fpga/core
@@ -513,6 +531,42 @@ jobs:
             $S/pc98_egc.sv -o gs --Mdir obj_gseq
           ./obj_gseq/gs | tee gseq.log
           grep -q "PASS tb_pc98_gvram_seq" gseq.log
+
+      - name: the service-channel launch captures the trigger's own byte
+        # Boots the REAL softcpu_subsystem (picorv32 + sprom + launch block)
+        # on an injected micro-program and proves ST_WDATA=0xFF followed by
+        # ST_TRIG=1 launches a clean non-raw write -- the wdata-lag theory
+        # behind the raw-armed WDAT witness. Runs from fpga/ so the ROM's
+        # ../firmware/firmware.vh default resolves; fw_wr overwrites it.
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style \
+            --top-module tb_softcpu_trig \
+            -Isim -I$S -I$S/common -Ifpga/apf \
+            sim/tb_softcpu_trig.sv sim/stub_altsyncram.sv sim/stub_vhdl.sv \
+            sim/stub_pll.sv fpga/apf/common.v \
+            $S/softcpu_subsystem.sv $S/picorv32.v $S/sprom.v \
+            $S/softcpu_fdd_bridge.sv -o st --Mdir obj_strig
+          cd fpga && ../obj_strig/st | tee ../strig.log
+          grep -q "RESULT: PASS" ../strig.log
+
+      - name: the shipped firmware never stores a non-1/2 to the trigger
+        # Boots the REAL firmware.vh (the sprom default) and drives two
+        # slave-channel WDAT ops through gdc_draw_*; every store into
+        # 0x5000_0008 must carry exactly 1 or 2. A TDS ack/done model lets
+        # boot reach the poll loop. Exonerates (or convicts) the firmware
+        # side of the raw-armed WDAT witness seen on hardware.
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style \
+            --top-module tb_softcpu_fw \
+            -Isim -I$S -I$S/common -Ifpga/apf \
+            sim/tb_softcpu_fw.sv sim/stub_altsyncram.sv sim/stub_vhdl.sv \
+            sim/stub_pll.sv fpga/apf/common.v \
+            $S/softcpu_subsystem.sv $S/picorv32.v $S/sprom.v \
+            $S/softcpu_fdd_bridge.sv -o fw --Mdir obj_fw
+          cd fpga && ../obj_fw/fw | tee ../fwtrig.log
+          grep -q "RESULT: PASS" ../fwtrig.log
 
       - name: the graphics fetch shows what the slave GDC's partitions say
         run: |

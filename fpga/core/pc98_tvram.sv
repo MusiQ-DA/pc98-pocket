@@ -64,8 +64,19 @@ module pc98_tvram (
     // Guest side, byte addressed within A0000-A3FFF.
     input  wire [13:0] cpu_addr,       // offset from A0000
     input  wire        cpu_wren,
+    // High while the guest is actually reading (tvram_mem_select &
+    // ~memory_read_n). The shared read pipeline parks on dbg_cell whenever
+    // the guest is not using it, so the JTAG probe can dump any cell without
+    // ever stealing a guest access.
+    input  wire        cpu_rden,
     input  wire  [7:0] cpu_wdata,
     output logic [7:0] cpu_q,
+
+    // Debug read-back: q-cell echo in the top byte, then all three banks at
+    // that cell -- {q_cell[7:0], attr, char_hi, char_lo}. The echo lets the
+    // reader detect a guest access that briefly owned the pipeline.
+    input  wire [11:0] dbg_cell,
+    output wire [31:0] dbg_q,
 
     // Fill side: character codes, on the clock the row buffer runs on.
     input  wire        fil_clk,
@@ -79,15 +90,13 @@ module pc98_tvram (
     output logic [7:0] vid_attr,
 
     // Debug side: a fourth read on the chipset clock that borrows the
-    // guest read stage whenever the window is unselected (cpu_sel low).
-    // JTAG reads the whole text screen through it, one cell per probe
-    // scan (scripts/jtag_screen.tcl). The stage already realises all
-    // three banks in parallel, so the word below is the full cell at
-    // once, one clk behind the index. The index drives attribute-space
-    // addressing, so the memory-switch cells return their registers --
-    // what the guest sees when it reads them.
-    input  wire        cpu_sel,
-    input  wire [11:0] dbg_cell,
+    // guest read stage whenever the guest is not reading (cpu_rden low --
+    // writes and idle both leave it free). JTAG reads the whole text
+    // screen through it, one cell per probe scan (scripts/jtag_screen.tcl).
+    // The stage already realises all three banks in parallel, so the word
+    // below is the full cell at once, one clk behind the index. The index
+    // drives attribute-space addressing, so the memory-switch cells return
+    // their registers -- what the guest sees when it reads them.
     output wire [23:0] dbg_word,
 
     // Live overrides for the memory-switch bytes the Settings UI owns:
@@ -149,7 +158,7 @@ module pc98_tvram (
     // Attr-region addressing also makes the memory-switch cells read back
     // the battery-backed registers instead of the always-zero bank
     // underneath (the switch mux rides the same registered stage).
-    wire [13:0] rd_addr   = cpu_sel ? cpu_addr : {1'b1, dbg_cell, 1'b0};
+    wire [13:0] rd_addr   = cpu_rden ? cpu_addr : {1'b1, dbg_cell, 1'b0};
     wire        rd_attr   = rd_addr[13];
     wire [11:0] rd_cell   = rd_addr[12:1];
     wire        rd_hi     = rd_addr[0];
@@ -215,10 +224,11 @@ module pc98_tvram (
     // if it wraps again.
     logic [11:0] clr_cell;
 
-    logic [7:0] q_char_lo, q_char_hi, q_attr;
-    logic       q_is_attr, q_hi;
-    logic       q_memsw;
-    logic [2:0] q_memsw_idx;
+    logic [7:0]  q_char_lo, q_char_hi, q_attr;
+    logic        q_is_attr, q_hi;
+    logic        q_memsw;
+    logic [2:0]  q_memsw_idx;
+    logic [11:0] q_cell;
     always_ff @(posedge clk) begin
         if (rst) begin
             clr_cell          <= clr_cell + 12'd1;
@@ -253,6 +263,7 @@ module pc98_tvram (
         q_hi       <= rd_hi;
         q_memsw    <= rd_memsw;
         q_memsw_idx <= rd_cell[3:1];
+        q_cell     <= rd_cell;
     end
 
     always_ff @(posedge fil_clk) begin
@@ -290,6 +301,8 @@ module pc98_tvram (
         else if (q_hi)      cpu_q = q_char_hi;
         else                cpu_q = q_char_lo;
     end
+
+    assign dbg_q = {q_cell[7:0], q_attr, q_char_hi, q_char_lo};
 
 endmodule
 
