@@ -99,8 +99,9 @@ module zet_micro_data (
     default: bound_op = 50'b10000000000000001010000100100100111100000000110100; // r15 <- mem[20], end
   endcase
 
-  wire [`MICRO_DATA_WIDTH-1:0] micro_o = is_salc ? `SALC_OP
-                                      : is_bound ? bound_op : micro_raw;
+  // CI S2T bisect: overlay dead-coded -- micro_o goes straight through.
+  // If this build fails the comparators/decode are the trigger, not the mux.
+  wire [`MICRO_DATA_WIDTH-1:0] micro_o = micro_raw;
 
   // Assignments
   assign micro_s = micro_o[1:0];
