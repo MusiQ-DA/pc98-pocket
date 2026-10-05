@@ -472,8 +472,12 @@ module PERIPHERALS #(
         // np21w (io/pit.c): writing the interval timer -- a count byte for
         // channel 0, or a control word aimed at it -- clears the master's IRR
         // bit 0, so an interrupt latched before the reprogram cannot fire
-        // after it.  The strobe is decoded below, next to the PIT.
-        .external_irr_clear         ({7'b0, pit0_write_clears_irr0}),
+        // after it.  The strobe is decoded below, next to the PIT. Bit 2 is
+        // the same shape for the CRT interrupt: np21w pccore.c screendisp
+        // clears a CRTV request the CPU never took (pi->irr &= ~PIC_CRTV)
+        // and re-arms the GDC flag -- see crt_cancel above.
+        .external_irr_clear         ({5'b0, crt_cancel, 1'b0,
+                                        pit0_write_clears_irr0}),
         // IRQ7 is the slave's cascade line; the machine's own IRQ7 has to
         // stand down for it. IRQ2 is the CRT interrupt -- see crt_vsync_irq
         // above; without it the BIOS parks at FED44 for good. The drive's
@@ -755,35 +759,67 @@ module PERIPHERALS #(
 
     // ------------------------------------------------------ GDC status
     //
-    // The CRT interrupt. The text GDC raises IRQ2 once per frame in vertical
-    // retrace while ARMED (np21w io/gdc.c): any write to 0x64 sets vsyncint
-    // (gdc_o64), the vsync consumes it for one shot (pccore.c screenvsync),
-    // and the PIC taking IRQ2 into service re-arms it (io/pic.c) -- so a
-    // serviced IRQ2 fires every frame and a masked one costs exactly one
-    // shot. The BIOS's FED23 sequence installs a handler on INT 0x0A,
-    // unmasks IRQ2 (IMR bit 2), and spins at FED44 until the handler clears
-    // 0x53C bit 6 -- which is where the machine sits without this.
+    // The CRT interrupt, np21w's vsyncint lifecycle (io/gdc.c gdc_o64,
+    // pccore.c screenvsync/screendisp, io/pic.c pic_setirq):
     //
-    // The edge is detected in the chipset clock domain -- the arm flag and
+    //   * any write to 0x64 ARMS (gdc_o64: gdc.vsyncint = 1);
+    //   * screenvsync -- the start of vblank, the END of the last display
+    //     line -- consumes the arm and delivers IRQ2 (pic_setirq(2));
+    //   * if the request is STILL PENDING at screendisp (masked, or the CPU
+    //     never took it) the request is cancelled and the arm is restored --
+    //     the shot retries next frame;
+    //   * pic_setirq landing while CRTV is still in service drops the new
+    //     request and re-arms, same net effect;
+    //   * a request the CPU acknowledges is CONSUMED -- np21w re-arms only
+    //     on another 0x64 write or the two collision paths, NOT on service.
+    //
+    // The BIOS's FED23 sequence installs a handler on INT 0x0A, unmasks IRQ2
+    // (IMR bit 2), and spins at FED44 until the handler clears 0x53C bit 6 --
+    // which is where the machine sits without this.
+    //
+    // The edges are detected in the chipset clock domain -- the arm flag and
     // the 8259 both live here, and the pulse the edge-triggered PIC latches
     // is then a full chipset clock wide. The service edge is the master PIC
     // driving IRQ2's vector (ICW2 base 0x08 + IR2 = INT 0x0A) during INTA.
+    // crt_pend shadows the PIC's IRR bit 2: np21w inspects pi->irr at
+    // screendisp, and the only way to cancel a latched request here is the
+    // external_irr_clear port the timer's IRR0 quirk already uses.
+    //
+    // The edge source is VBLANK, not the sync pulse: np21w pccore.c's
+    // screenvsync -- where gdc.vsync sets and the armed request is delivered
+    // -- runs at the END of the last display line, and screendisp clears it
+    // at the top of the frame. Both the status bit and the IRQ therefore
+    // ride the whole non-display interval.
     logic vs_irq_s1 = 1'b0, vs_irq_s2 = 1'b0, vs_irq_s3 = 1'b0;
     always_ff @(posedge clock) begin
-        vs_irq_s1 <= pc98_vs;
+        vs_irq_s1 <= pc98_vb;
         vs_irq_s2 <= vs_irq_s1;
         vs_irq_s3 <= vs_irq_s2;
     end
-    wire crt_vsync_edge = vs_irq_s2 & ~vs_irq_s3;
+    wire crt_vsync_edge = vs_irq_s2 & ~vs_irq_s3;   // vblank IN: screenvsync
+    wire crt_dispe_edge = ~vs_irq_s2 & vs_irq_s3;   // vblank OUT: screendisp
 
     wire gdc_arm_w = pc98_io_exact & ~io_write_n & (address[7:0] == 8'h64);
     wire crt_isr   = ~interrupt_acknowledge_n
                    & (interrupt_data_bus_out == 8'h0A);
     logic crt_armed = 1'b0;
+    logic crt_pend  = 1'b0;
+    // Unserviced by the time the picture comes back: drop the latched IRR
+    // bit and KEEP the arm -- np21w's screendisp path, the retry that keeps
+    // a masked IRQ2 from being lost forever.
+    wire crt_cancel = crt_dispe_edge & crt_pend;
     always_ff @(posedge clock, posedge reset) begin
-        if (reset)                    crt_armed <= 1'b0;
-        else if (gdc_arm_w | crt_isr) crt_armed <= 1'b1;
-        else if (crt_vsync_edge)      crt_armed <= 1'b0;
+        if (reset) begin
+            crt_armed <= 1'b0;
+            crt_pend  <= 1'b0;
+        end else begin
+            if (gdc_arm_w)       crt_armed <= 1'b1;
+            else if (crt_isr)    crt_armed <= 1'b0;   // service consumes
+            if (crt_vsync_edge & crt_armed)
+                                 crt_pend <= 1'b1;
+            else if (crt_isr | crt_cancel)
+                                 crt_pend <= 1'b0;
+        end
     end
     wire crt_vsync_irq = crt_vsync_edge & crt_armed;
 
@@ -794,22 +830,22 @@ module PERIPHERALS #(
     // offset 0383 because (F8000 + off) & FFFF is 8000 + off.
     //
     // uPD7220 status: [7] light pen, [6] HBLANK, [5] VSYNC, [4] DMA execute,
-    // [3] drawing, [2] FIFO empty, [1] FIFO full, [0] data ready. Nothing here
-    // has a command FIFO yet, so it reports permanently empty and ready, and
-    // the two timing bits come from the raster the renderer is already running.
+    // [3] drawing, [2] FIFO empty, [1] FIFO full, [0] data ready. Bit 5 is
+    // np21w's gdc.vsync flag -- the WHOLE non-display interval, so the input
+    // is vblank (pc98_vb), not the sync pulse.
     //
     // Crossing into the chipset clock: two flops, because a status bit read one
     // cycle stale is a status bit, and a metastable one is a coin toss.
-    logic gdc_vs_s1, gdc_vs_q, gdc_hb_s1, gdc_hb_q;
+    logic gdc_vs_s1, gdc_vb_q, gdc_hb_s1, gdc_hb_q;
     always_ff @(posedge clock) begin
-        gdc_vs_s1 <= pc98_vs;  gdc_vs_q <= gdc_vs_s1;
+        gdc_vs_s1 <= pc98_vb;  gdc_vb_q <= gdc_vs_s1;
         gdc_hb_s1 <= pc98_hb;  gdc_hb_q <= gdc_hb_s1;
     end
     // THE MOCK IS GONE. pc98_gdc is the real command and parameter interface --
     // see docs/PC98_GDC_DESIGN.md for what it does and does not implement, and
     // the module header for the two things np21w's enum would have got wrong.
-    // One note carried over: the mock's bit 7 was CLEAR, and np21w's gdc_i60
-    // sets it unconditionally. The real module sets it.
+    // Bit 7 (light-pen detect) stays CLEAR in there: no pen is fitted, and a
+    // set bit walks the BIOS into the LPRD/DRDY poll at F307C forever.
     //
     // Text GDC at 0x60/0x62, graphics GDC at 0xA0/0xA2. The even port is
     // status (read) and parameter (write); the odd-numbered one two up is the
@@ -820,14 +856,17 @@ module PERIPHERALS #(
 
     wire [7:0] gdc_m_dout, gdc_s_dout;
 
-    // The display registers are not consumed yet: pc98_text_render still
-    // derives its cell index from the raster. Wiring them in is the next step
-    // and its regression test is that one partition at SAD 0 reduces to the
-    // expression the renderer uses today.
+    // The display registers are consumed below: the master's SAD/pitch/bend
+    // drive pc98_text_render and pc98_text_rowbase, the slave's drive
+    // pc98_gvram_display. One partition at SAD 0 is the regression shape --
+    // it reduces to the fixed cell index the renderer had before.
     wire        gdc_m_disp_on, gdc_s_disp_on;
     wire [7:0]  gdc_m_pitch,   gdc_s_pitch;
     wire [15:0] gdc_m_sad [0:3], gdc_s_sad [0:3];
     wire [9:0]  gdc_m_len [0:3], gdc_s_len [0:3];
+    // Row-unit partition boundaries for the text consumers -- np21w counts
+    // the master's LEN in rasterlines, pc98_gdc divides by the row height.
+    wire [5:0]  gdc_m_bend [0:2];
     wire [15:0] gdc_m_cur_addr,  gdc_s_cur_addr;
     wire [3:0]  gdc_m_cur_dot,   gdc_s_cur_dot;
     wire        gdc_m_cur_en,    gdc_s_cur_en;
@@ -874,9 +913,10 @@ module PERIPHERALS #(
         .cs(gdc_m_cs), .a1(address[1]),
         .io_read_n(io_read_n), .io_write_n(io_write_n),
         .data_in(internal_data_bus), .data_out(gdc_m_dout),
-        .hblank(gdc_hb_q), .vsync(gdc_vs_q),
+        .hblank(gdc_hb_q), .vblank(gdc_vb_q),
         .disp_on(gdc_m_disp_on), .pitch(gdc_m_pitch),
         .part_sad(gdc_m_sad), .part_len(gdc_m_len),
+        .part_bend(gdc_m_bend),
         .cursor_addr(gdc_m_cur_addr), .cursor_dot(gdc_m_cur_dot),
         .cursor_en(gdc_m_cur_en), .cursor_blink_en(gdc_m_cur_bl),
         .cursor_top(gdc_m_cur_top), .cursor_bottom(gdc_m_cur_bot),
@@ -893,9 +933,10 @@ module PERIPHERALS #(
         .cs(gdc_s_cs), .a1(address[1]),
         .io_read_n(io_read_n), .io_write_n(io_write_n),
         .data_in(internal_data_bus), .data_out(gdc_s_dout),
-        .hblank(gdc_hb_q), .vsync(gdc_vs_q),
+        .hblank(gdc_hb_q), .vblank(gdc_vb_q),
         .disp_on(gdc_s_disp_on), .pitch(gdc_s_pitch),
         .part_sad(gdc_s_sad), .part_len(gdc_s_len),
+        .part_bend(),
         .cursor_addr(gdc_s_cur_addr), .cursor_dot(gdc_s_cur_dot),
         .cursor_en(gdc_s_cur_en), .cursor_blink_en(gdc_s_cur_bl),
         .cursor_top(gdc_s_cur_top), .cursor_bottom(gdc_s_cur_bot),
@@ -1206,7 +1247,7 @@ module PERIPHERALS #(
     logic pc98_vs_s1, pc98_vs_px, pc98_vs_px_d;
     logic [7:0]  gdc_pitch_px;
     logic [15:0] gdc_sad_px [0:3];
-    logic [9:0]  gdc_len_px [0:3];
+    logic [5:0]  gdc_bend_px [0:2];
     logic [15:0] gdc_cur_addr_px;
     logic [4:0]  gdc_cur_top_px, gdc_cur_bot_px;
     logic        gdc_wide_px;
@@ -1229,9 +1270,9 @@ module PERIPHERALS #(
             // All four PRAM partitions, sampled like the rest so a mid-frame
             // SCROLL rewrite tears at most the frame it lands in
             // (pc98_text_part.svh walks them -- split screens reach the
-            // renderer as {SAD,LEN} quartets, not one start address).
+            // renderer as {SAD,bend} quartets, not one start address).
             gdc_sad_px   <= gdc_m_sad;
-            gdc_len_px   <= gdc_m_len;
+            gdc_bend_px  <= gdc_m_bend;
             gdc_cur_addr_px <= gdc_m_cur_addr;
             gdc_cur_top_px  <= gdc_m_cur_top;
             gdc_cur_bot_px  <= gdc_m_cur_bot;
@@ -1251,7 +1292,7 @@ module PERIPHERALS #(
     pc98_text_render u_pc98_text (
         .clk(clk_pc98_dot), .pix_ce(1'b1),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px),
-        .gdc_sad(gdc_sad_px), .gdc_len(gdc_len_px),
+        .gdc_sad(gdc_sad_px), .gdc_bend(gdc_bend_px),
         .wide(gdc_wide_px), .crtc_pl(crtc_pl_px),
         .crtc_bl(crtc_bl_px), .crtc_cl(crtc_cl_px), .line_rep(gdc_lrep_px),
         .cur_addr(gdc_cur_addr_px), .cur_en(gdc_cur_en_px),
@@ -1350,7 +1391,7 @@ module PERIPHERALS #(
     wire [11:0] pc98_row_base;
     pc98_text_rowbase u_pc98_text_rowbase (
         .gdc_on(gdc_m_disp_on), .gdc_pitch(gdc_m_pitch),
-        .gdc_sad(gdc_m_sad), .gdc_len(gdc_m_len),
+        .gdc_sad(gdc_m_sad), .gdc_bend(gdc_m_bend),
         .row(pc98_next_row), .base(pc98_row_base)
     );
 
@@ -1591,7 +1632,7 @@ module PERIPHERALS #(
     // The fill's column stride is the same story for mode1[2].
     logic pc98_ank8 = 1'b0;
     logic pc98_wide = 1'b0;
-    logic gdc_vs_q3 = 1'b0;
+    logic gdc_vb_q3 = 1'b0;
     // A "200 line" graphics mode means each VRAM line serves two rasterlines
     // on this fixed 400-line raster (np21w's GRPH_LR=1 walk, maketgrp).
     // Two sources flag it: the slave GDC's CSRFORM LR field (np21w
@@ -1606,8 +1647,8 @@ module PERIPHERALS #(
     logic gdc_s_dbl = 1'b0;
     logic gdc_s_mab = 1'b0;
     always_ff @(posedge clock) begin
-        gdc_vs_q3 <= gdc_vs_q;
-        if (gdc_vs_q & ~gdc_vs_q3) begin
+        gdc_vb_q3 <= gdc_vb_q;
+        if (gdc_vb_q & ~gdc_vb_q3) begin
             pc98_ank8 <= ~pc98_mode1[3];
             pc98_wide <=  pc98_mode1[2];
             gdc_s_mab <=  pc98_mode1[4];

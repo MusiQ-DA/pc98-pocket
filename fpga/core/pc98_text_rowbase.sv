@@ -32,7 +32,8 @@ module pc98_text_rowbase (
     input  wire        gdc_on,      // master GDC START seen
     input  wire  [7:0] gdc_pitch,   // PITCH register, raw
     input  wire [15:0] gdc_sad [0:3], // the four partitions' SADs, raw
-    input  wire  [9:0] gdc_len [0:3], // and their line counts, decoded
+    input  wire  [5:0] gdc_bend [0:2], // their boundaries, in ROWS (pc98_gdc
+                                     // divides np21w's rasterline LENs)
     input  wire  [4:0] row,         // the text row being addressed, 0-24
     output wire [11:0] base         // LOW12(SAD[p] + rel*PITCH), or row*80
 );
@@ -50,7 +51,7 @@ module pc98_text_rowbase (
     // the fallback is still eighty columns from cell 0.
     // (The call is a separate statement: Verilator 5.020's V3Gate trips on
     // a function call inlined inside a conditional -- internal error.)
-    wire [16:0] partf = pc98_text_part(row, gdc_sad, gdc_len);
+    wire [16:0] partf = pc98_text_part(row, gdc_sad, gdc_bend);
     wire [16:0] part = live ? partf : {row, 12'd0};
     wire  [4:0] rel   = part[16:12];
     wire [11:0] sad   = part[11:0];

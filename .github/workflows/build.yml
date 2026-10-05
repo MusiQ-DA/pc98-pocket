@@ -441,6 +441,16 @@ jobs:
           ./obj_gdc/g | tee gdc.log
           grep -q "PASS tb_pc98_gdc" gdc.log
 
+      - name: the CRT interrupt follows np21w's vsyncint lifecycle, end to end
+        run: |
+          # Whole-PERIPHERALS bench: the real 8259 pair, the real raster, the
+          # real 0x64 arm and the real INTA vector path. Checks arm -> vblank
+          # -> INT 0x0A, that service consumes the arm, and that a masked
+          # (never-acknowledged) request is cancelled at the display edge
+          # and retried next frame -- np21w's screendisp path.
+          bash scripts/sim_crt_irq.sh | tee crt.log
+          grep -q "PASS tb_crt_irq" crt.log
+
       - name: the PC-98 FDC ports land on floppy.v's register file
         run: |
           S=fpga/core

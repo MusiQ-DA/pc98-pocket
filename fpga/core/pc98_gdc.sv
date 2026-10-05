@@ -69,8 +69,13 @@ module pc98_gdc #(
     output wire [7:0]  data_out,
 
     // ---- what the raster is doing (status bits 6 and 5) --------------------
+    // Bit 5 is np21w's gdc.vsync flag, which is NOT the sync pulse: pccore.c
+    // sets it in screenvsync (end of the last display line) and clears it in
+    // screendisp (start of the first) -- the whole vertical non-display
+    // interval, i.e. vblank. The BIOS's "wait low / wait high" retrace polls
+    // read exactly that.
     input  wire        hblank,
-    input  wire        vsync,
+    input  wire        vblank,
 
     // ---- what the display side of the core needs ---------------------------
     output wire        disp_on,       // START seen, STOP not
@@ -85,6 +90,16 @@ module pc98_gdc #(
     // it was baked in as the graphics form, and that was wrong for text.
     output wire [15:0] part_sad [0:3],
     output wire [9:0]  part_len [0:3],
+    // Row-unit boundaries for the TEXT walker: bend[k] is the first row of
+    // partition k+1, i.e. floor(cum(len[0..k]) / (TEXT_LR+1)), 63 = beyond
+    // the deepest row. np21w maketext.c counts LEN in emitted RASTERLINES
+    // (`if (!(--scroll))` once per `y++`) and reloads esi mid-row when the
+    // count lands there, so the row CONTAINING the boundary is already the
+    // new partition's row 0 -- a floor, not a ceil. LEN is not comparable
+    // to a row index until divided by the row height, which is why the
+    // text consumers take these instead of part_len. The slave side
+    // (graphics) counts guest lines directly and does use part_len.
+    output wire [5:0]  part_bend [0:2],
     // The cursor, as CSRW and CSRFORM leave it.
     output wire [15:0] cursor_addr,
     output wire [3:0]  cursor_dot,    // dot address within the word
@@ -141,20 +156,23 @@ module pc98_gdc #(
     localparam int P_VECTW   = 32;
     localparam int P_CSRW    = 43;
     localparam int P_MASK    = 46;
+    localparam int P_CSRR    = 48;   // read-back staging for CSRR (np21w GDC_CSRR)
     localparam int P_WRITE   = 53;   // the last 0x20-family command byte (np21w GDC_WRITE)
     localparam int P_CODE    = 54;   // WDAT/RDAT parameter bytes (np21w GDC_CODE)
     localparam int P_LAST    = 55;
 
     reg [7:0] para [0:P_LAST];
 
-    // The read-back FIFO: CSRR queues five bytes off CSRW (np21w gdc.c's
-    // fill: the three address bytes, the high one masked to its two live
-    // bits, then two zeros), LPEN queues the latched pen position -- and no
-    // pen is fitted, so that is three zero bytes. What the queue buys is the
-    // contract: software that issues either command and polls DRDY gets its
-    // bytes and DRDY falls, instead of timing out against a silent port.
-    reg [7:0] rb_fifo [0:7];
-    reg [2:0] rb_wr = 3'd0, rb_rd = 3'd0;
+    // The read-back half, np21w's {snd, ptr} pair rather than a FIFO: every
+    // command assigns item->snd = gdc_cmd[data].indatas, so a NEW command
+    // discards whatever a previous read-back left unread. CSRR stages five
+    // bytes into para[GDC_CSRR] at command time (the three CSRW address
+    // bytes, the high one masked to its two live bits, then two zeros) and
+    // reads walk ptr through them; LPEN points at the pen latch and no pen
+    // is fitted, so para[GDC_LPEN..+2] stays its reset zeros. A read with
+    // snd == 0 returns 0xFF, np21w gdc_i62 verbatim.
+    reg [2:0] rb_snd;
+    reg [5:0] rb_ptr;
 
     // The drawing server's handshake. draw_pending latches the first EXECUTE
     // with a SNAPSHOT of everything the engine reads (the guest cannot race
@@ -232,7 +250,10 @@ module pc98_gdc #(
             n = (c[4:3] == 2'b00) ? 5'd2 :
                 (c[4:3] == 2'b01) ? 5'd0 : 5'd1;
         end else casez (c)
-            8'h00:          begin d = P_SYNC[5:0];    n = 5'd8;  end // RESET
+            // RESET is {0,0,0} in np21w's table -- it takes NO parameters
+            // and does not touch SYNC or the display-enable flag; the BIOS's
+            // own init (ITF trace F804E5) sends bare RESET then SYNC_OFF.
+            8'h00:          begin d = 6'd0;           n = 5'd0;  end // RESET
             8'h0E, 8'h0F:   begin d = P_SYNC[5:0];    n = 5'd8;  end // SYNC off/on
             8'h46:          begin d = P_ZOOM[5:0];    n = 5'd1;  end // ZOOM
             8'h47:          begin d = P_PITCH[5:0];   n = 5'd1;  end // PITCH
@@ -279,6 +300,11 @@ module pc98_gdc #(
     wire cmd_wr = wr_commit &  wr_a1;
     wire par_wr = wr_commit & ~wr_a1;
 
+    // The read strobe's level version of the same dedup: the data-port read
+    // pops the read-back byte once, as the strobe lifts.
+    wire   data_rd_now = cs & a1 & ~io_read_n;
+    logic  data_rd_q = 1'b0;
+
     integer i;
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -286,12 +312,42 @@ module pc98_gdc #(
             p_left    <= 5'd0;
             p_wdat    <= 1'b0;
             disp_on_r <= 1'b0;
-            rb_wr <= 3'd0;
+            rb_snd <= 3'd0;
+            rb_ptr <= 6'd0;
+            data_rd_q <= 1'b0;
             draw_pending <= 1'b0;
             draw_op_r    <= 8'h00;
             draw_busy_r  <= 1'b0;
             for (i = 0; i <= 23; i = i + 1) snap[i] <= 8'h00;
             for (i = 0; i <= P_LAST; i = i + 1) para[i] <= 8'h00;
+            // np21w gdc_biosreset's other power-on seeds. SYNC is the 24 kHz
+            // table this machine's raster runs (the ITF trace's SYNC_OFF
+            // writes match defsyncm24/defsyncs24 byte for byte), PITCH is
+            // 80 on the master and 40 on the slave, and gdc_vectreset
+            // leaves the drawing registers at their post-figure state.
+            if (MASTER) begin
+                para[P_SYNC + 0] <= 8'h10; para[P_SYNC + 1] <= 8'h4E;
+                para[P_SYNC + 2] <= 8'h07; para[P_SYNC + 3] <= 8'h25;
+                para[P_SYNC + 4] <= 8'h07; para[P_SYNC + 5] <= 8'h07;
+                para[P_SYNC + 6] <= 8'h90; para[P_SYNC + 7] <= 8'h65;
+                para[P_PITCH]    <= 8'd80;
+            end else begin
+                para[P_SYNC + 0] <= 8'h06; para[P_SYNC + 1] <= 8'h26;
+                para[P_SYNC + 2] <= 8'h03; para[P_SYNC + 3] <= 8'h11;
+                para[P_SYNC + 4] <= 8'h83; para[P_SYNC + 5] <= 8'h07;
+                para[P_SYNC + 6] <= 8'h90; para[P_SYNC + 7] <= 8'h65;
+                para[P_PITCH]    <= 8'd40;
+            end
+            para[P_VECTW + 1]  <= 8'h00;   // DC = 0
+            para[P_VECTW + 2]  <= 8'h00;
+            para[P_VECTW + 3]  <= 8'h08;   // D  = 8
+            para[P_VECTW + 4]  <= 8'h00;
+            para[P_VECTW + 5]  <= 8'h08;   // D2 = 8
+            para[P_VECTW + 6]  <= 8'h00;
+            para[P_VECTW + 7]  <= 8'hFF;   // D1 = FFFF
+            para[P_VECTW + 8]  <= 8'hFF;
+            para[P_VECTW + 9]  <= 8'hFF;   // DM = FFFF
+            para[P_VECTW + 10] <= 8'hFF;
             // The CSRFORM power-on values, and why the cursor is nothing
             // without them: the BIOS's boot sends CSRFORM as ONE byte --
             // [0x53B]|0x80, the enable with TEXT_LR -- and never sends the
@@ -321,7 +377,7 @@ module pc98_gdc #(
             // reprograms nothing between them.
             if (srv_done_stb || draw_timeouts) begin
                 draw_pending <= 1'b0;
-                draw_watch   <= 23'd0;
+                draw_watch   <= 27'd0;
                 draw_busy_r  <= 1'b1;      // one-cycle hold for stability
                 if ((draw_op_r == 8'h6C) | (draw_op_r == 8'h68)) begin
                     para[P_VECTW + 1]  <= 8'h00;   // DC = 0
@@ -338,7 +394,18 @@ module pc98_gdc #(
             end else if (draw_busy_r) begin
                 draw_busy_r <= 1'b0;
             end else if (draw_pending) begin
-                draw_watch <= draw_watch + 23'd1;
+                draw_watch <= draw_watch + 27'd1;
+            end
+
+            // The read-back pop: one byte per data-port read, charged when
+            // the read strobe ends (the keyboard 8251's idiom -- the byte
+            // the CPU latched was the head). A command write below can
+            // reassign rb_snd/rb_ptr in the same cycle; that ordering is
+            // np21w's (the command's snd/ptr assignment wins).
+            data_rd_q <= data_rd_now;
+            if (data_rd_q && !data_rd_now && drdy) begin
+                rb_snd <= rb_snd - 3'd1;
+                rb_ptr <= rb_ptr + 6'd1;
             end
 
             if (cmd_wr) begin
@@ -368,36 +435,37 @@ module pc98_gdc #(
                     snap[23] <= 8'h00;                 // the pad byte
                 end
 
-                // CSRR: five bytes off CSRW, np21w's fill verbatim -- the
-                // three address bytes (the high one masked to two bits) and
-                // two zeros. LPEN: the pen latch, and no pen is fitted.
-                // Both queue only when there is room; a guest that reissues
-                // without draining loses the new bytes, which is what a
-                // five-deep FIFO on a real chip would do to it too.
-                if (wr_d == 8'hE0 && (3'd7 - (rb_wr - rb_rd)) >= 3'd4) begin
-                    rb_fifo[rb_wr]           <= para[P_CSRW + 0];
-                    rb_fifo[rb_wr + 3'd1]    <= para[P_CSRW + 1];
-                    rb_fifo[rb_wr + 3'd2]    <= para[P_CSRW + 2] & 8'h03;
-                    rb_fifo[rb_wr + 3'd3]    <= 8'h00;
-                    rb_fifo[rb_wr + 3'd4]    <= 8'h00;
-                    rb_wr <= rb_wr + 3'd5;
-                end
-                if (wr_d == 8'hC0 && (3'd7 - (rb_wr - rb_rd)) >= 3'd2) begin
-                    rb_fifo[rb_wr]        <= 8'h00;   // no pen: the latch reads zero
-                    rb_fifo[rb_wr + 3'd1] <= 8'h00;
-                    rb_fifo[rb_wr + 3'd2] <= 8'h00;
-                    rb_wr <= rb_wr + 3'd3;
+                // The read-back pair, np21w's `item->snd = indatas` /
+                // `item->ptr = pos`: EVERY command rewrites both, so an
+                // undrained CSRR is discarded by whatever command follows
+                // it. CSRR stages its five bytes into para[P_CSRR] now --
+                // the CSRW snapshot np21w takes at command execution, not a
+                // live view the guest could race. LPEN aims ptr at the pen
+                // latch, which a penless machine leaves at reset zero.
+                if (wr_d == 8'hE0) begin
+                    rb_snd <= 3'd5;
+                    rb_ptr <= 6'(P_CSRR);
+                    para[P_CSRR + 0] <= para[P_CSRW + 0];
+                    para[P_CSRR + 1] <= para[P_CSRW + 1];
+                    para[P_CSRR + 2] <= para[P_CSRW + 2] & 8'h03;
+                    para[P_CSRR + 3] <= 8'h00;
+                    para[P_CSRR + 4] <= 8'h00;
+                end else if (wr_d == 8'hC0) begin
+                    rb_snd <= 3'd3;
+                    rb_ptr <= 6'(P_LPEN);
+                end else begin
+                    rb_snd <= 3'd0;
+                    rb_ptr <= 6'd0;
                 end
 
-
-                // The immediate ones.
-                if (wr_d == 8'h0D || wr_d == 8'h6B) disp_on_r <= 1'b1;
-                if (wr_d == 8'h0C || wr_d == 8'h05) disp_on_r <= 1'b0;
-                if (wr_d == 8'h00) begin
-                    // RESET stops the display and takes SYNC parameters; it
-                    // does NOT clear the PRAM (np21w does not either).
+                // The immediate ones, np21w gdc_work's switch: START and
+                // SYNC_ON set the display enable, STOP and SYNC_OFF clear
+                // it. RESET is not in that switch -- the enable survives a
+                // RESET command on np21w, so it survives here too.
+                if (wr_d == 8'h0D || wr_d == 8'h6B || wr_d == 8'h0F)
+                    disp_on_r <= 1'b1;
+                if (wr_d == 8'h0C || wr_d == 8'h05 || wr_d == 8'h0E)
                     disp_on_r <= 1'b0;
-                end
 
             end else if (par_wr) begin
                 if (p_left != 5'd0) begin
@@ -432,8 +500,6 @@ module pc98_gdc #(
     // ------------------------------------------------------------------
     // np21w gdc_i60: 0x80 always, 0x40 hblank, 0x20 vsync (gdc.vsync is set
     // to 0x20 in pccore.c), 0x04 FIFO empty, 0x02 FIFO full, 0x01 data ready.
-    // Nothing here queues read-back data yet, so empty is true and full and
-    // ready are false.
     //
     // BIT 7 IS LIGHT PEN DETECT, AND IT IS CLEAR: no light pen is fitted.
     //
@@ -460,42 +526,33 @@ module pc98_gdc #(
     // F3062 on the first test, so LPRD is never issued. The alternative --
     // keeping bit 7 and queueing three bytes for LPRD -- answers a question
     // the hardware should not be asking.
-    // np21w gdc_i60: 0x80 always, 0x40 hblank, 0x20 vsync (gdc.vsync is set
-    // to 0x20 in pccore.c), 0x04 FIFO empty, 0x02 FIFO full, 0x01 data ready.
+    // np21w gdc_i60/gdc_ia0: 0x80 always, 0x40 hblank, 0x20 vsync (the
+    // whole non-display interval -- pccore.c sets gdc.vsync at screenvsync
+    // and clears it at screendisp), 0x04 FIFO empty, 0x02 FIFO full,
+    // 0x01 data ready, and on the SLAVE 0x08 while a raster op runs
+    // (gdc.s_drawing; the master's `| m_drawing` is commented out in
+    // np21w). Bit 1 stays 0: np21w's cnt >= GDCCMD_MAX(32) needs a 32-byte
+    // burst between command drains, and a guest that floods the command
+    // port loses bytes on the real chip anyway.
+    //
     // BIT 2 (FIFO EMPTY) IS ALSO THE DRAWING THROTTLE: while an EXECUTE sits
     // pending for the softcore server or the server is drawing, the bit
     // clears -- the backpressure a real 7220 applies by filling its FIFO,
     // which is exactly what software's "wait FIFO empty" loops consume.
     wire fifo_empty = ~draw_pending & ~draw_busy_r;
-    // DRDY (bit 0): the read-back FIFO holds CSRR/LPEN results. BIT 7 IS
-    // LIGHT PEN DETECT AND IT STAYS CLEAR: no pen is fitted, and a set bit
-    // walks the BIOS into the LPRD/DRDY poll at F307C that nothing would
-    // ever satisfy (see the history above the status word).
-    wire drdy = (rb_wr != rb_rd);
-    wire [7:0] status = {1'b0, hblank, vsync, 1'b0, 1'b0, fifo_empty, 1'b0, drdy};
+    // DRDY (bit 0): np21w's `if (snd) ret |= 1` -- read-back bytes pending.
+    // BIT 7 IS LIGHT PEN DETECT AND IT STAYS CLEAR: no pen is fitted, and a
+    // set bit walks the BIOS into the LPRD/DRDY poll at F307C that nothing
+    // would ever satisfy (see the history above the status word).
+    wire drdy = (rb_snd != 3'd0);
+    wire drawing = ~MASTER & (draw_pending | draw_busy_r);
+    wire [7:0] status = {1'b0, hblank, vblank, 1'b0, drawing,
+                         fifo_empty, 1'b0, drdy};
 
-    // The data port answers with the read-back head while DRDY is set, and
-    // with the status otherwise -- np21w's gdc_i60/gdc_i62 split: the STATUS
-    // port (0x60, a1=0) always returns the status, whose bit 0 says data is
-    // ready, and the DATA port (0x62, a1=1) returns and pops one byte per
-    // read. The pop happens after the read strobe ends, the keyboard 8251's
-    // idiom, so the byte the CPU latched is the head.
-    wire data_rd_now = cs & a1 & ~io_read_n;
-    logic data_rd_q = 1'b0;
-    // rb_rd is reset here rather than with the rest of the state above: it is
-    // written here too, and a register driven from two always blocks is a
-    // multiple-driver error to Quartus however unreachable the overlap is.
-    always_ff @(posedge clk) begin
-        data_rd_q <= data_rd_now;
-        if (reset) begin
-            data_rd_q <= 1'b0;
-            rb_rd     <= 3'd0;
-        end
-        else if (data_rd_q && !data_rd_now && drdy)
-            rb_rd <= rb_rd + 3'd1;
-    end
-
-    assign data_out = a1 ? rb_fifo[rb_rd] : status;
+    // The data port (0x62, a1=1) returns and pops one read-back byte per
+    // read, or 0xFF when nothing is queued -- np21w gdc_i62 verbatim. The
+    // STATUS port (0x60, a1=0) always returns the status.
+    assign data_out = a1 ? (drdy ? para[rb_ptr] : 8'hFF) : status;
 
     // ------------------------------------------------------------------
     // the display registers, as the rest of the core wants them
@@ -512,6 +569,83 @@ module pc98_gdc #(
             // lines = (LEN & 0x3FFF) >> 4
             assign part_len[g] = 10'((len_raw & 16'h3FFF) >> 4);
         end
+    endgenerate
+
+    // ---- the text walker's ROW-unit boundaries ------------------------------
+    // np21w maketext.c counts a partition's LEN in emitted RASTERLINES
+    // (`if (!(--scroll))` once per `y++`), so which partition row R belongs
+    // to depends on how many rasterlines the earlier partitions spent:
+    // partition k+1 starts at row floor(S_k / P) with S_k = LEN[0..k] summed
+    // and P = TEXT_LR+1. FLOOR, not ceil: the boundary can land mid-row, and
+    // np21w's scroll reload then sets reloadline so the new partition's SAD
+    // feeds the row's REMAINING rasters -- the boundary row IS the new
+    // partition's row 0 (the head rasters still showing the old partition are
+    // the part the row-granular model cannot express). Every later row is
+    // exact: rel = row - bend counts the new partition's cell rows the same
+    // way np21w's esi += pitch does.
+    //
+    // A zero LEN never ends -- the UINT countdown wraps instead of firing --
+    // which reads here as "boundary 63", past the deepest row a text screen
+    // has, and it swallows the partitions after it too: the ZERO-LEN
+    // partition itself then owns every remaining row.
+    //
+    // floor(S/P) by subtraction, one boundary at a time, free-running: P is
+    // 1..32 and S at most 3069, but the quotient saturates at 63 so a pass
+    // costs three loads plus at most 192 subtracts -- converged long before
+    // the px-domain registers sample it at vsync. The slave's boundaries
+    // have no consumer (graphics walks part_len in guest lines), so the
+    // divider is only built on the master.
+    generate
+    if (MASTER) begin : g_bend
+        logic [1:0]  bd_i;      // boundary in progress
+        logic [11:0] bd_cum;    // rasterlines spent by partitions 0..i
+        logic [11:0] bd_rem;    // the same sum, mid-subtraction
+        logic [5:0]  bd_q;      // quotient so far (saturates at 63)
+        logic        bd_abs;    // a zero LEN seen -- absorbing, unreachable
+        logic        bd_load;   // 1 = this cycle folds len[i] into the sum
+        logic [5:0]  bend_r [0:2];
+        wire  [5:0]  p_rows = {1'b0, line_rep} + 6'd1;
+
+        always_ff @(posedge clk) begin
+            if (reset) begin
+                bd_i    <= 2'd0;
+                bd_cum  <= 12'd0;
+                bd_rem  <= 12'd0;
+                bd_q    <= 6'd0;
+                bd_abs  <= 1'b0;
+                bd_load <= 1'b1;
+                bend_r[0] <= 6'd63;
+                bend_r[1] <= 6'd63;
+                bend_r[2] <= 6'd63;
+            end else if (bd_load) begin
+                bd_rem  <= bd_cum + 12'(part_len[bd_i]);
+                bd_cum  <= bd_cum + 12'(part_len[bd_i]);
+                bd_abs  <= bd_abs | (part_len[bd_i] == 10'd0);
+                bd_q    <= 6'd0;
+                bd_load <= 1'b0;
+            end else if (bd_abs || (bd_q == 6'd63)
+                              || (bd_rem < {6'd0, p_rows})) begin
+                // floor(S/P): bd_q already counts the whole-row crossings
+                // and the mid-row remainder belongs to the NEW partition's
+                // row 0 (the reload fires inside it) -- nothing to add.
+                bend_r[bd_i] <= (bd_abs || (bd_q == 6'd63)) ? 6'd63 : bd_q;
+                if (bd_i == 2'd2) begin
+                    bd_i   <= 2'd0;
+                    bd_cum <= 12'd0;
+                    bd_abs <= 1'b0;
+                end else begin
+                    bd_i   <= bd_i + 2'd1;
+                end
+                bd_load <= 1'b1;
+            end else begin
+                bd_rem <= bd_rem - {6'd0, p_rows};
+                bd_q   <= bd_q + 6'd1;
+            end
+        end
+        assign part_bend = '{bend_r[0], bend_r[1], bend_r[2]};
+    end else begin : g_bend_s
+        assign part_bend = '{6'd63, 6'd63, 6'd63};
+    end
     endgenerate
 
     // CSRW: the address is a PLAIN little-endian 16-bit word. np21w's text

@@ -42,7 +42,9 @@ module pc98_text_render #(
     input  wire        gdc_on,          // START seen
     input  wire [7:0]  gdc_pitch,       // words per row
     input  wire [15:0] gdc_sad[0:3],    // the four partitions' starts, RAW
-    input  wire [9:0]  gdc_len[0:3],    // and their line counts, decoded
+    input  wire [5:0]  gdc_bend[0:2],   // their boundaries in ROWS (pc98_gdc
+                                       // divides np21w's rasterline LENs by
+                                       // the CSRFORM row height)
     // 40 columns: mode1 bit 2 (the port 0x68 register) makes each cell
     // sixteen dots -- the glyph byte shifts at half rate so every bit lasts
     // two dots, and a column consumes TWO cells, the even one carrying the
@@ -211,7 +213,7 @@ module pc98_text_render #(
     // keeps every row in partition 0, which reduces to the old SAD+row*pitch.
     // (The calls are separate statements: Verilator 5.020's V3Gate trips
     // on a function call inlined inside a conditional -- internal error.)
-    wire [16:0] n_partf = pc98_text_part(next_row, gdc_sad, gdc_len);
+    wire [16:0] n_partf = pc98_text_part(next_row, gdc_sad, gdc_bend);
     wire [16:0] n_part  = gdc_live ? n_partf : {next_row, 12'd0};
     wire [11:0] n_start = n_part[11:0];
     wire [4:0]  n_rel   = n_part[16:12];
@@ -231,7 +233,7 @@ module pc98_text_render #(
     // character time ahead); this is where the shift register is emptying.
     // (Named draw_row because cur_row is the glyph register below.)
     wire [4:0]  draw_row  = row_q;
-    wire [16:0] d_partf = pc98_text_part(draw_row, gdc_sad, gdc_len);
+    wire [16:0] d_partf = pc98_text_part(draw_row, gdc_sad, gdc_bend);
     wire [16:0] d_part  = gdc_live ? d_partf : {draw_row, 12'd0};
     wire [11:0] d_start = d_part[11:0];
     wire [4:0]  d_rel   = d_part[16:12];

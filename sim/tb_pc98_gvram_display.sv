@@ -69,23 +69,31 @@ module tb_pc98_gvram_display;
         end
     end
 
-    // The same partition walk the DUT applies: line -> (sad + rel*pitch)*2,
-    // where the PITCH register counts words at 2.5MHz and bytes at 5MHz
-    // (np21w maketgrp's `s_pitch <<= 1` while the flag is clear) -- so the
-    // word count here halves in 5MHz mode, and an odd byte pitch is floored
-    // by the same `& 0xfe` np21w applies.
+    // The same partition walk the DUT applies, written the way np21w
+    // maketgrp.c does it: a partition pointer, a line counter inside it,
+    // and `ebp += s_pitch` per guest line. Three np21w rules the old
+    // L%-total model got wrong:
+    //   * a ZERO LEN is absorbing -- `s_scr--; if (!s_scr)` wraps the UINT
+    //     to 0xFFFFFFFF instead of firing, so the walk parks in that
+    //     partition forever rather than skipping it;
+    //   * the pointer is CYCLIC -- `s_scrp = (s_scrp + 4) & 0x0c` runs
+    //     partition three back to partition zero, so a screen taller than
+    //     the summed LENs repeats the whole quartet (each partition from
+    //     its own SAD);
+    //   * the PITCH register counts words at 2.5MHz and bytes at 5MHz
+    //     (`s_pitch <<= 1` while the clock flag is clear), floored even.
     function automatic int line_base(input int L);
-        int total, rel, wa, wp;
-        wp    = mhz5 ? (pitch >> 1) : pitch;
-        total = part_len[0] + part_len[1] + part_len[2] + part_len[3];
-        rel   = (total != 0) ? L % total : L;
-        if      (rel < part_len[0]) wa = part_sad[0] + rel * wp;
-        else if (rel < part_len[0] + part_len[1])
-            wa = part_sad[1] + (rel - part_len[0]) * wp;
-        else if (rel < part_len[0] + part_len[1] + part_len[2])
-            wa = part_sad[2] + (rel - part_len[0] - part_len[1]) * wp;
-        else
-            wa = part_sad[3] + (rel - part_len[0] - part_len[1] - part_len[2]) * wp;
+        int p, rel, wa, wp;
+        wp = mhz5 ? (pitch >> 1) : pitch;
+        p = 0; rel = 0;
+        for (int i = 0; i <= L; i++) begin
+            wa = part_sad[p] + rel * wp;
+            if (part_len[p] != 0 && rel + 1 >= int'(part_len[p])) begin
+                p = (p + 1) & 3; rel = 0;
+            end else begin
+                rel = rel + 1;
+            end
+        end
         return (wa * 2) & 32'h7FFF;
     endfunction
 
@@ -200,6 +208,23 @@ module tb_pc98_gvram_display;
         part_len[0] = 10'd200;
         settle(3);
         $display("I: doubled checked=%0d errors=%0d", checked, errors);
+
+        quiet = 1'b1;              // J: a ZERO middle LEN absorbs -- np21w's
+        dbl = 1'b0;                //    UINT countdown wraps instead of
+        part_sad[0] = 16'h0000; part_len[0] = 10'd100;   // firing, so lines
+        part_sad[1] = 16'h0800; part_len[1] = 10'd0;     // 100+ are all
+        part_sad[2] = 16'h2000; part_len[2] = 10'd80;    // partition one's,
+        part_sad[3] = 16'h0000; part_len[3] = 10'd0;     // never two's
+        settle(3);
+        $display("J: zeroLEN checked=%0d errors=%0d", checked, errors);
+
+        quiet = 1'b1;              // K: cyclic -- the four LENs sum to 180,
+        part_sad[0] = 16'h0000; part_len[0] = 10'd50;    // so the walk wraps
+        part_sad[1] = 16'h0800; part_len[1] = 10'd60;    // partition three
+        part_sad[2] = 16'h2000; part_len[2] = 10'd40;    // back to partition
+        part_sad[3] = 16'h3000; part_len[3] = 10'd30;    // zero at line 180
+        settle(3);
+        $display("K: cyclic  checked=%0d errors=%0d", checked, errors);
 
         if (errors == 0 && checked > 200000)
             $display("PASS tb_pc98_gvram_display (%0d dots)", checked);

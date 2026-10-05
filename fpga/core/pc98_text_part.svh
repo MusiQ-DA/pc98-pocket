@@ -3,15 +3,20 @@
 //
 // The master GDC's SCROLL PRAM is four partitions of {SAD, LEN} and the
 // display walks them in order (np21w vram/maketext.c): each partition
-// contributes LEN text rows, then the walk jumps to the next partition's
-// SAD. A screen with one area sets partition 0 to the whole height and the
-// walk never advances; a status-line split sets two.
+// contributes its LEN of lines, then the walk jumps to the next
+// partition's SAD. A screen with one area sets partition 0 to the whole
+// height and the walk never advances; a status-line split sets two.
 //
-// LEN means the PRAM field's low 14 bits >> 4 -- already decoded in
-// pc98_gdc's part_len. A partition whose LEN is zero never ends: np21w's
-// UINT countdown wraps to 0xFFFFFFFF rather than firing, so the row stays
-// in that partition forever. Written as a bound check it is the same rule:
-// a zero LEN compares true for every row.
+// THE BOUNDARIES ARRIVE ALREADY IN ROWS. np21w counts LEN in emitted
+// rasterlines, so the row where partition k+1 begins is
+// floor((LEN[0]+..+LEN[k]) / (TEXT_LR+1)) -- pc98_gdc's part_bend does
+// that divide (the rasterline count is not row-comparable on its own, and
+// a boundary that lands mid-row opens the new partition AT that row --
+// np21w's esi reload runs mid-row and the boundary row is its row 0).
+// bend[k] here is the first row of partition k+1, 6 bits, 63 = beyond the
+// deepest row: a zero LEN is absorbing in np21w (the UINT countdown wraps
+// rather than firing) and arrives here as 63, which also swallows every
+// later partition.
 //
 // Written once because two modules have to agree: pc98_text_rowbase (the
 // glyph row buffer's fetch address) and pc98_text_render (the attribute
@@ -29,21 +34,17 @@
 function automatic logic [16:0] pc98_text_part(
         input logic [4:0]  row,
         input logic [15:0] sad [0:3],
-        input logic [9:0]  len [0:3]);
-    logic [9:0]  e0, e1, e2;
-    logic [9:0]  r;
-    e0 = len[0];
-    e1 = len[0] + len[1];
-    e2 = e1 + len[2];
-    r  = {5'd0, row};
-    if ((len[0] == 10'd0) || (r < e0)) begin
+        input logic [5:0]  bend [0:2]);
+    logic [5:0] r;
+    r = {1'b0, row};
+    if (r < bend[0]) begin
         pc98_text_part = {row, sad[0][11:0]};
-    end else if ((len[1] == 10'd0) || (r < e1)) begin
-        pc98_text_part = {5'(r - e0), sad[1][11:0]};
-    end else if ((len[2] == 10'd0) || (r < e2)) begin
-        pc98_text_part = {5'(r - e1), sad[2][11:0]};
+    end else if (r < bend[1]) begin
+        pc98_text_part = {5'(r - bend[0]), sad[1][11:0]};
+    end else if (r < bend[2]) begin
+        pc98_text_part = {5'(r - bend[1]), sad[2][11:0]};
     end else begin
-        pc98_text_part = {5'(r - e2), sad[3][11:0]};
+        pc98_text_part = {5'(r - bend[2]), sad[3][11:0]};
     end
 endfunction
 /* verilator lint_on UNUSEDSIGNAL */

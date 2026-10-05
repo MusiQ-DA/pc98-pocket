@@ -30,6 +30,7 @@ module tb_cursor_cdc;
     wire [7:0]  pitch;
     wire [15:0] part_sad [0:3];
     wire [9:0]  part_len [0:3];
+    wire [5:0]  part_bend [0:2];
     wire [15:0] cursor_addr;
     wire [3:0]  cursor_dot;
     wire        cursor_en, cursor_blink_en;
@@ -44,15 +45,16 @@ module tb_cursor_cdc;
         .clk(clk), .reset(reset),
         .cs(cs), .a1(a1), .io_read_n(1'b1), .io_write_n(io_write_n),
         .data_in(data_in), .data_out(data_out),
-        .hblank(hblank), .vsync(vsync_in),
+        .hblank(hblank), .vblank(vsync_in),
         .disp_on(disp_on), .pitch(pitch),
         .part_sad(part_sad), .part_len(part_len),
+        .part_bend(part_bend), .line_rep(), .vlines(),
         .cursor_addr(cursor_addr), .cursor_dot(cursor_dot),
         .cursor_en(cursor_en), .cursor_blink_en(cursor_blink_en),
         .cursor_top(cursor_top), .cursor_bottom(cursor_bottom),
         .cursor_rate(cursor_rate), .zoom_disp(zoom_disp),
         .draw_req(draw_req), .draw_op(draw_op), .draw_busy(draw_busy),
-        .srv_done_stb(1'b0), .draw_snap(draw_snap)
+        .draw_timeout(), .srv_done_stb(1'b0), .draw_snap(draw_snap)
     );
 
     // ---- the raster, in the dot-clock domain -----------------------------------
@@ -66,7 +68,7 @@ module tb_cursor_cdc;
     logic pc98_vs_s1, pc98_vs_px, pc98_vs_px_d;
     logic [7:0]  gdc_pitch_px;
     logic [15:0] gdc_sad_px [0:3];
-    logic [9:0]  gdc_len_px [0:3];
+    logic [5:0]  gdc_bend_px [0:2];
     logic [15:0] gdc_cur_addr_px;
     logic [4:0]  gdc_cur_top_px, gdc_cur_bot_px;
     logic gdc_cur_en_s1, gdc_cur_en_px;
@@ -81,7 +83,7 @@ module tb_cursor_cdc;
         if (pc98_vs_px & ~pc98_vs_px_d) begin
             gdc_pitch_px    <= pitch;
             gdc_sad_px      <= part_sad;
-            gdc_len_px      <= part_len;
+            gdc_bend_px     <= part_bend;
             gdc_cur_addr_px <= cursor_addr;
             gdc_cur_top_px  <= cursor_top;
             gdc_cur_bot_px  <= cursor_bottom;
@@ -108,7 +110,7 @@ module tb_cursor_cdc;
         .clk(clk_dot), .pix_ce(1'b1),
         .hcount(hcount), .vcount(vcount), .blink_on(blink_on),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px),
-        .gdc_sad(gdc_sad_px), .gdc_len(gdc_len_px),
+        .gdc_sad(gdc_sad_px), .gdc_bend(gdc_bend_px),
         .wide(1'b0),
         .cur_addr(gdc_cur_addr_px), .cur_en(gdc_cur_en_px),
         .cur_blink(gdc_cur_bl_px),

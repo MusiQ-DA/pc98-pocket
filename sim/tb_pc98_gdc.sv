@@ -40,6 +40,9 @@ module tb_pc98_gdc;
     wire [7:0]  pitch;
     wire [15:0] part_sad [0:3];
     wire [9:0]  part_len [0:3];
+    wire [5:0]  part_bend [0:2];   // row-unit boundaries (rasterline LEN
+                                 // divided by the CSRFORM row height)
+    wire [4:0]  line_rep;
     wire [15:0] cursor_addr;
     wire [3:0]  cursor_dot;
     wire        cursor_en, cursor_blink_en;
@@ -64,18 +67,20 @@ module tb_pc98_gdc;
         io_read_n = 1'b1; cs = 1'b0;
     endtask
     wire [1:0]  zoom_disp;
+    wire [9:0]  vlines;
 
     pc98_gdc dut (
         .clk(clk), .reset(reset),
         .cs(cs), .a1(a1), .io_read_n(io_read_n), .io_write_n(io_write_n),
         .data_in(data_in), .data_out(data_out),
-        .hblank(hblank), .vsync(vsync),
+        .hblank(hblank), .vblank(vsync),
         .disp_on(disp_on), .pitch(pitch),
-        .part_sad(part_sad), .part_len(part_len),
+        .part_sad(part_sad), .part_len(part_len), .part_bend(part_bend),
         .cursor_addr(cursor_addr), .cursor_dot(cursor_dot),
         .cursor_en(cursor_en), .cursor_blink_en(cursor_blink_en),
         .cursor_top(cursor_top), .cursor_bottom(cursor_bottom),
-        .cursor_rate(cursor_rate), .zoom_disp(zoom_disp),
+        .cursor_rate(cursor_rate), .zoom_disp(zoom_disp), .vlines(vlines),
+        .line_rep(line_rep),
         .draw_req(draw_req), .draw_op(draw_op), .draw_busy(draw_busy),
         .srv_done_stb(srv_done), .draw_snap(draw_snap)
     );
@@ -126,11 +131,18 @@ module tb_pc98_gdc;
         want("reset cursor bottom 15",    cursor_bottom,     5'd15);
 
         // ---- START and STOP ------------------------------------------------
+        // np21w gdc_work's switch: START/START_/SYNC_ON set the display
+        // enable, STOP/STOP_/SYNC_OFF clear it -- and RESET is not in the
+        // switch, so the enable survives one.
         cmd(8'h0D);  want("START -> disp_on", disp_on, 1);
         cmd(8'h0C);  want("STOP  -> disp_on", disp_on, 0);
         cmd(8'h6B);  want("START_ (0x6B)",    disp_on, 1);
         cmd(8'h05);  want("STOP_  (0x05)",    disp_on, 0);
-        cmd(8'h0D);
+        cmd(8'h0D);  want("START again",      disp_on, 1);
+        cmd(8'h00);  want("RESET keeps disp_on", disp_on, 1);  // np21w: ENABLE untouched
+        cmd(8'h0E);  want("SYNC_OFF clears",  disp_on, 0);
+        // SYNC_OFF started an 8-byte run; the next command cuts it short.
+        cmd(8'h0F);  want("SYNC_ON sets",     disp_on, 1);
 
         // ---- PITCH ---------------------------------------------------------
         cmd(8'h47); par(8'd80);
@@ -176,6 +188,26 @@ module tb_pc98_gdc;
         want("PITCH after a cut-short run", pitch, 40);
         want("partition 0 SAD took the two", part_sad[0], 16'hBBAA);
 
+        // ---- RESET takes no parameters --------------------------------------
+        // np21w's table entry for 0x00 is {0,0,0}: bytes that follow a bare
+        // RESET are discarded, not SYNC parameters. vlines reads SYNC P6:P7
+        // (the defsyncm24 seed's 0x6590 -> 400), so junk landing in SYNC
+        // would move it.
+        cmd(8'h00);
+        par(8'hFF); par(8'hFF); par(8'hFF); par(8'hFF);
+        want("RESET takes no params (vlines)", vlines, 10'd400);
+
+        // ---- row-unit partition boundaries -----------------------------------
+        // np21w counts LEN in emitted rasterlines; the boundary in ROWS is
+        // floor(cumsum / (TEXT_LR+1)). CSRFORM P1 is still its 0x0F seed
+        // (16-line rows): len = {25, 1, 32, 0} rasterlines ->
+        // bend = {floor(25/16), floor(26/16), floor(58/16)} = {1, 1, 3}.
+        // The sequential divider needs a few hundred clocks to converge.
+        repeat (400) @(posedge clk);
+        want("bend0 = 25 lines / 16",  part_bend[0], 6'd1);
+        want("bend1 = 26 lines / 16",  part_bend[1], 6'd1);
+        want("bend2 = 58 lines / 16",  part_bend[2], 6'd3);
+
         // ---- CSRW / CSRFORM -------------------------------------------------
         // The address is a plain little-endian word (np21w maketext:
         // LOADINTELWORD(para + GDC_CSRW)); the manual's interleaved reading
@@ -197,6 +229,11 @@ module tb_pc98_gdc;
         cmd(8'h4B); par(8'hC1); par(8'h05); par(8'h88); // top=5, blinking
         want("cursor blinking (P2 bit5 clear)", cursor_blink_en, 1);
         want("cursor top from P2 low bits", cursor_top, 5'd5);
+        // CSRFORM P1 = 0xC1 -> TEXT_LR 1 -> two-raster rows; the boundaries
+        // redivide: floor({25,26,58}/2) = {12, 13, 29}.
+        repeat (400) @(posedge clk);
+        want("bend0 redivides for LR=1", part_bend[0], 6'd12);
+        want("bend2 redivides for LR=1", part_bend[2], 6'd29);
 
         // ---- the status register --------------------------------------------
         // bit 6 hblank, bit 5 vsync, bit 2 FIFO empty, and bit 7 CLEAR.
@@ -263,22 +300,16 @@ module tb_pc98_gdc;
         cmd(8'hE0);                        // zero-parameter START and CSRR.
         want("no spurious request from strays", draw_req, 0);
 
-        // ---- the read-back FIFO: CSRR and LPEN answer with bytes ---------
-        // CSRR queues five off CSRW (the high address byte masked to two
-        // bits, then two zeros); LPEN queues three zeros -- no pen fitted.
-        // DRDY (status bit 0) sets while the queue holds data, a data-port
-        // read returns the head and pops it AFTER the strobe ends, and bit
-        // 7 (pen detect) never sets, so the BIOS's F305E exit stays the
-        // path a penless machine takes.
-        // Drain whatever the earlier CSRR test queued (five bytes of the
-        // old CSRW) before issuing a fresh one: the FIFO is only eight deep.
-        for (int d = 0; d < 5; d++) begin
-            cs = 1'b1; a1 = 1'b1; io_read_n = 1'b0;
-            @(posedge clk);
-            io_read_n = 1'b1; cs = 1'b0; @(posedge clk);
-        end
+        // ---- the read-back path, np21w's snd/ptr model ----------------------
+        // CSRR stages five bytes off CSRW (the high address byte masked to
+        // two bits, then two zeros); LPEN's three come from the pen latch,
+        // which a penless machine leaves zero. DRDY (status bit 0) is
+        // snd != 0, a data-port read returns para[ptr] and pops it AFTER
+        // the strobe ends, an EMPTY read is 0xFF (gdc_i62 verbatim), and
+        // the next command REPLACES the queue rather than appending --
+        // gdc_work assigns `snd = indatas` for every command byte.
         cmd(8'h49); par(8'hCD); par(8'hAB); par(8'h06);  // CSRW = 0x06ABCD
-        cmd(8'hE0);                                        // CSRR
+        cmd(8'hE0);                                      // CSRR -> 5 bytes
         status_rd(st_v);
         want("CSRR sets DRDY", st_v & 8'h01, 8'h01);
         want("and bit 7 stays clear", st_v & 8'h80, 8'h00);
@@ -317,6 +348,37 @@ module tb_pc98_gdc;
         io_read_n = 1'b1; cs = 1'b0; @(posedge clk);
         status_rd(st_v);
         want("LPEN drained too", st_v & 8'h01, 8'h00);
+
+        // np21w's replacement rule, observed: issue CSRR, read TWO of its
+        // five bytes, then let a command discard the tail -- the next data
+        // read is the NEW command's first byte, not the old third.
+        cmd(8'hE0);                                      // CSRR again
+        cs = 1'b1; a1 = 1'b1; io_read_n = 1'b0;
+        @(posedge clk);
+        want("replaced CSRR byte 0", data_out, 8'hCD);
+        io_read_n = 1'b1; @(posedge clk); io_read_n = 1'b0;
+        @(posedge clk);
+        want("replaced CSRR byte 1", data_out, 8'hAB);
+        io_read_n = 1'b1; cs = 1'b0; @(posedge clk);
+        cmd(8'hC0);                                      // LPEN discards 3 bytes
+        cs = 1'b1; a1 = 1'b1; io_read_n = 1'b0;
+        @(posedge clk);
+        want("new cmd replaces queue", data_out, 8'h00);
+        io_read_n = 1'b1; cs = 1'b0; @(posedge clk);
+
+        // And when nothing is queued the port answers 0xFF -- the floating
+        // bus a real 7220's data port drives.
+        repeat (3) begin                                   // drain LPEN's 3
+            cs = 1'b1; a1 = 1'b1; io_read_n = 1'b0;
+            @(posedge clk);
+            io_read_n = 1'b1; cs = 1'b0; @(posedge clk);
+        end
+        status_rd(st_v);
+        want("empty: DRDY clear", st_v & 8'h01, 8'h00);
+        cs = 1'b1; a1 = 1'b1; io_read_n = 1'b0;
+        @(posedge clk);
+        want("empty data read is 0xFF", data_out, 8'hFF);
+        io_read_n = 1'b1; cs = 1'b0; @(posedge clk);
 
         if (errors == 0) $display("PASS tb_pc98_gdc");
         else             $display("FAILED tb_pc98_gdc: %0d", errors);

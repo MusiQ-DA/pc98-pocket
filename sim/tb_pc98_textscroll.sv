@@ -52,7 +52,11 @@ module tb_pc98_textscroll;
     logic        gdc_on    = 1'b0;
     logic  [7:0] gdc_pitch = 8'd0;
     logic [15:0] gdc_sad [0:3] = '{default: 16'd0};
-    logic [9:0]  gdc_len [0:3] = '{default: 10'd0};
+    // Row-unit partition boundaries (pc98_gdc's part_bend output): bend[k]
+    // is the first row of partition k+1, 63 = unreachable. The np21w LENs
+    // are rasterline counts; the GDC's divider does the conversion, and its
+    // own bench proves it, so this bench drives the divided form directly.
+    logic [5:0]  gdc_bend [0:2] = '{default: 6'd63};
 
     // ------------------------------------------------------------ TVRAM
     wire [11:0] fil_cell;
@@ -77,7 +81,7 @@ module tb_pc98_textscroll;
 
     pc98_text_rowbase u_map (
         .gdc_on(gdc_on), .gdc_pitch(gdc_pitch),
-        .gdc_sad(gdc_sad), .gdc_len(gdc_len),
+        .gdc_sad(gdc_sad), .gdc_bend(gdc_bend),
         .row(fill_row), .base(row_base)
     );
 
@@ -126,7 +130,7 @@ module tb_pc98_textscroll;
         .clk(clk_dot), .pix_ce(1'b1),
         .hcount(hcnt), .vcount(vcnt), .blink_on(1'b1),
         .gdc_on(gdc_on), .gdc_pitch(gdc_pitch),
-        .gdc_sad(gdc_sad), .gdc_len(gdc_len),
+        .gdc_sad(gdc_sad), .gdc_bend(gdc_bend),
         .wide(1'b0),
         .cur_addr(cur_addr), .cur_en(cur_en), .cur_blink(1'b0),
         .cur_top(5'd0), .cur_bot(5'd15),
@@ -327,12 +331,13 @@ module tb_pc98_textscroll;
         // The four PRAM partitions tile rows (np21w maketext.c): ten rows
         // in partition 0, then partition 1 to the bottom -- a LEN of zero
         // never ends, so the "rest" partition needs no height of its own.
-        gdc_len[0] = 10'd10; gdc_len[1] = 10'd0;
+        // In boundary form that is bend0=10 with the rest unreachable.
+        gdc_bend = '{6'd10, 6'd63, 6'd63};
         gdc_sad[0] = 16'h0100; gdc_sad[1] = 16'h0300;
         fill_row = 5'd9;  base_check(5'd9,  12'h3D0, "part0 last row");
         fill_row = 5'd10; base_check(5'd10, 12'h300, "part1 first row");
         fill_row = 5'd24; base_check(5'd24, 12'h760, "part1 rel 14");
-        gdc_len[0] = 10'd0; gdc_sad[1] = 16'd0;   // every row in part0 again
+        gdc_bend = '{default: 6'd63}; gdc_sad[1] = 16'd0;   // part0 again
 
         // ----------------------------------- 2. the fill walks those cells
         // Codes name their position: cell (base + c) gets code c+1, so the

@@ -173,15 +173,13 @@ module pc98_gvram_display #(
     // The byte a line starts from: the uPD7220 never multiplies -- inside a
     // partition it just adds PITCH words a line to the running address, and
     // running off the partition's LEN restarts from the next entry's SAD.
-    // Track it the same way: a 2-bit partition pointer, a line counter
-    // inside it, and a base that steps by {pitch, 1'b0} bytes. A rasterline
-    // past all four LENs keeps extending partition three -- the address
-    // counter has nowhere else to go -- and the PRAM entries are meant to
-    // cover the raster anyway. Replaces a multiply, four compares and three
-    // subtracts with one adder and two small muxes. One corner is cheaper
-    // than the absolute model: a zero-length partition is crossed one line
-    // late instead of instantly (the walk advances once a line) -- an
-    // underspecified-PRAM case the BIOS never writes.
+    // Track it the way np21w maketgrp.c does: a 2-bit partition pointer
+    // that wraps MOD 4 (`s_scrp = (s_scrp + 4) & 0x0c` -- running off
+    // partition three goes back to partition zero, not into a fifth area),
+    // a line counter inside it, and a base that steps by {pitch, 1'b0}
+    // bytes. A zero LEN never ends: np21w's `s_scr--; if (!s_scr)` wraps
+    // the UINT to 0xFFFFFFFF instead of firing, so the walk parks in that
+    // partition forever -- an absorbing state, not a skipped one.
     //
     // The walk leads the raster by LOOKAHEAD lines: when the edge for
     // line_now fires, run_base holds the byte offset of display line
@@ -210,14 +208,20 @@ module pc98_gvram_display #(
     wire  [8:0]  pitch_b  = mhz5 ? {1'b0, pitch[7:1], 1'b0}
                                  : {pitch, 1'b0};
     wire  [9:0]  cur_len  = part_len[cur_part];
-    wire  [15:0] sad_next = part_sad[cur_part + 2'd1];   // wraps to 0 at 3, unused there
+    // The next partition CYCLICALLY -- np21w's s_scrp mask wraps partition
+    // three back to partition zero, so the bare `+1` index must wrap too
+    // (an unmasked cur_part=3 read lands one slot past the array).
+    wire  [15:0] sad_next = part_sad[(cur_part + 2'd1) & 2'd3];
     // In the doubled modes each guest line covers a PAIR of rasterlines, so
     // the walk steps only when the next fill target opens a new guest line
     // -- the target's low bit, since fill_tgt counts rasterlines. The LENs
     // keep counting guest lines, so the partition logic below is unchanged.
     wire         w_step   = ~dbl | fill_tgt[0];
     wire         w_wrap   = (line_now == 9'(LINES - 1 - LOOKAHEAD));
-    wire         w_adv    = w_step & !w_wrap && (cur_part != 2'd3)
+    // Advance when the next guest line would pass the current partition's
+    // LEN -- a zero LEN never advances (the absorbing case above), and the
+    // pointer wraps mod 4 so partition three's end reopens partition zero.
+    wire         w_adv    = w_step & !w_wrap && (cur_len != 10'd0)
                        && (({1'b0, part_rel} + 11'd1) >= {1'b0, cur_len});
     wire  [14:0] base_next = w_wrap ? 15'(part_sad[0] << 1)
                           : w_adv  ? 15'(sad_next << 1)
