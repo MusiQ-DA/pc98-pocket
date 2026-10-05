@@ -98,10 +98,8 @@ module zet_shrot (
   );
 
   // Continous assignments
-  // A 286 masks every count to five bits -- byte ops included -- so the
-  // zero-count "leave flags alone" test must look at y[4:0] for both sizes.
-  // (np21w i286c/i286c_sf.mcr BYTE_SHLCL: (c) &= 0x1f.)
-  assign unchanged = (y[4:0]==5'b0);
+  assign unchanged = word_op ? (y[4:0]==8'b0)
+                             : (y[3:0]==4'b0);
 
   // rotates
   assign ror16 = { 1'b0, y[3:0] };
@@ -111,13 +109,8 @@ module zet_shrot (
 
   assign rcr16 = (y[4:0] <= 5'd16) ? y[4:0] : { 1'b0, y[3:0] - 4'b1 };
   assign rcl16 = (y[4:0] <= 5'd17) ? 5'd17 - y[4:0] : 5'd2 - y[4:0];
-  // Through-carry byte rotates reduce the masked 5-bit count modulo 9
-  // (one byte plus the carry bit); rcl is rcr's complement.
-  assign rcr8  = (y[4:0] <= 5'd8)  ? y[4:0]
-               : (y[4:0] <= 5'd17) ? y[4:0] - 5'd9
-               : (y[4:0] <= 5'd26) ? y[4:0] - 5'd18
-                                   : y[4:0] - 5'd27;
-  assign rcl8  = (rcr8 == 5'd0) ? 5'd0 : 5'd9 - rcr8;
+  assign rcr8  = y[3:0] <= 4'd8 ? y[3:0] : { 1'b0, y[2:0] - 3'b1 };
+  assign rcl8  = y[3:0] <= 4'd9 ? 4'd9 - y[3:0] : 4'd2 - y[3:0];
 
   assign rot8 = func[1] ? (func[0] ? rcr8 : rcl8 )
                         : (func[0] ? ror8 : rol8 );
@@ -126,19 +119,18 @@ module zet_shrot (
 
   assign rot = word_op ? outr16 : { x[15:8], outr8 };
 
-  // shifts -- the 286's 5-bit count mask applies to the shift itself too,
-  // so a count of 33 shifts by one rather than emptying the register.
-  assign { cfo_sal16, sal16 } = x << y[4:0];
-  assign { sar16, cfo_sar16 } = (y[4:0] > 5'd16) ? 17'h1ffff
-    : (({x,1'b0} >> y[4:0]) | (x[15] ? (17'h1ffff << (17 - y[4:0]))
+  // shifts
+  assign { cfo_sal16, sal16 } = x << y;
+  assign { sar16, cfo_sar16 } = (y > 5'd16) ? 17'h1ffff
+    : (({x,1'b0} >> y) | (x[15] ? (17'h1ffff << (17 - y))
                                      : 17'h0));
-  assign { shr16, cfo_shr16 } = ({x,1'b0} >> y[4:0]);
+  assign { shr16, cfo_shr16 } = ({x,1'b0} >> y);
 
-  assign { cfo_sal8, sal8 } = x[7:0] << y[4:0];
-  assign { sar8, cfo_sar8 } = (y[4:0] > 5'd8) ? 9'h1ff
-    : (({x[7:0],1'b0} >> y[4:0]) | (x[7] ? (9'h1ff << (9 - y[4:0]))
+  assign { cfo_sal8, sal8 } = x[7:0] << y;
+  assign { sar8, cfo_sar8 } = (y > 5'd8) ? 9'h1ff
+    : (({x[7:0],1'b0} >> y) | (x[7] ? (9'h1ff << (9 - y))
                                          : 9'h0));
-  assign { shr8, cfo_shr8 } = ({x[7:0],1'b0} >> y[4:0]);
+  assign { shr8, cfo_shr8 } = ({x[7:0],1'b0} >> y);
 
   assign sal     = word_op ? sal16 : { 8'd0, sal8 };
   assign shr     = word_op ? shr16 : { 8'd0, shr8 };
