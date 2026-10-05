@@ -1304,6 +1304,9 @@ module core_top (
     // write's cpu_word_access so a byte push is distinguishable.
     reg [15:0] rd_3fb = 16'h0, wr_3fb = 16'h0;
     reg  [3:0] w_word = 4'h0;
+    // fetch address live at each watched write -- which instruction put
+    // the value on the bus (the push, or a third-party clobber).
+    reg [19:0] w3fa_pc = 20'h0, w3fb_pc = 20'h0, w3fc_pc = 20'h0;
     always_ff @(posedge clk_chipset) begin
         if (~chipset_memory_read_n && ~chipset_aen) begin
             if (chipset_address == 20'h003FA)
@@ -1321,12 +1324,16 @@ module core_top (
             if (chipset_address == 20'h003FA) begin
                 wr_3fa <= {cpu_data_bus_hi, cpu_data_bus};
                 w_word[0] <= cpu_word_access;
+                w3fa_pc  <= v30_addr;
             end
-            if (chipset_address == 20'h003FB)
-                wr_3fb <= {cpu_data_bus_hi, cpu_data_bus};
+            if (chipset_address == 20'h003FB) begin
+                wr_3fb  <= {cpu_data_bus_hi, cpu_data_bus};
+                w3fb_pc <= v30_addr;
+            end
             if (chipset_address == 20'h003FC) begin
                 wr_3fc <= {cpu_data_bus_hi, cpu_data_bus};
                 w_word[1] <= cpu_word_access;
+                w3fc_pc <= v30_addr;
             end
             if (chipset_address == 20'h00404) begin
                 wr_404 <= {cpu_data_bus_hi, cpu_data_bus};
@@ -1488,6 +1495,9 @@ module core_top (
             8'h39:   probe_data_c = {wr_404, wr_406};
             8'h3a:   probe_data_c = {rd_3fb, wr_3fb};
             8'h3b:   probe_data_c = {28'h0, w_word};
+            8'h3c:   probe_data_c = {12'h0, w3fa_pc};
+            8'h3d:   probe_data_c = {12'h0, w3fb_pc};
+            8'h3e:   probe_data_c = {12'h0, w3fc_pc};
             8'h35:   probe_data_c = {bios_branch, in42_count,
                                      last_42_rdata, w43d_10_count[3:0],
                                      w43d_12_count[3:0]};
