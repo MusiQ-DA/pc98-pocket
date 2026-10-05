@@ -1288,6 +1288,38 @@ module core_top (
     reg        trig_bus    = 1'b0;
     wire       trig_hit  = trig_en && (pc_now == trig_addr);
     wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
+
+    // Resume-frame watch: the save at f9488 pushes {IP=1497,CS=F800} to
+    // SS:00FA (linear 0x3FA) and the retf at f8069 pops them back. Last
+    // write vs last read split "store was corrupted" from "read returns
+    // stale data" -- landing f8097 = IP high byte 0x14 reading as 0x00
+    // would show up here as rd_3fa == 0x0097.
+    reg [15:0] rd_3fa = 16'h0, rd_3fc = 16'h0;
+    reg [15:0] wr_3fa = 16'h0, wr_3fc = 16'h0;
+    reg [15:0] rd_404 = 16'h0, rd_406 = 16'h0;
+    reg [15:0] wr_404 = 16'h0, wr_406 = 16'h0;
+    always_ff @(posedge clk_chipset) begin
+        if (~chipset_memory_read_n && ~chipset_aen) begin
+            if (chipset_address == 20'h003FA)
+                rd_3fa <= {data_bus_hi, data_bus};
+            if (chipset_address == 20'h003FC)
+                rd_3fc <= {data_bus_hi, data_bus};
+            if (chipset_address == 20'h00404)
+                rd_404 <= {data_bus_hi, data_bus};
+            if (chipset_address == 20'h00406)
+                rd_406 <= {data_bus_hi, data_bus};
+        end
+        if (~chipset_memory_write_n && ~chipset_aen) begin
+            if (chipset_address == 20'h003FA)
+                wr_3fa <= {cpu_data_bus_hi, cpu_data_bus};
+            if (chipset_address == 20'h003FC)
+                wr_3fc <= {cpu_data_bus_hi, cpu_data_bus};
+            if (chipset_address == 20'h00404)
+                wr_404 <= {cpu_data_bus_hi, cpu_data_bus};
+            if (chipset_address == 20'h00406)
+                wr_406 <= {cpu_data_bus_hi, cpu_data_bus};
+        end
+    end
     // The BIOS->ITF hand-back always ends in an OUT 0x43D,0x10 -- the
     // cold path's bank restore -- so freezing the ring on that write
     // keeps the ~32 fetches that led into the bounce, whichever code
@@ -1408,6 +1440,10 @@ module core_top (
             // 0x35: BIOS-side milestones + the 0x43D write tally
             // {bios_branch[7:0], in42_count, last_42_rdata,
             //  w43d_10_count[3:0], w43d_12_count[3:0]}
+            8'h36:   probe_data_c = {rd_3fa, rd_3fc};
+            8'h37:   probe_data_c = {wr_3fa, wr_3fc};
+            8'h38:   probe_data_c = {rd_404, rd_406};
+            8'h39:   probe_data_c = {wr_404, wr_406};
             8'h35:   probe_data_c = {bios_branch, in42_count,
                                      last_42_rdata, w43d_10_count[3:0],
                                      w43d_12_count[3:0]};
