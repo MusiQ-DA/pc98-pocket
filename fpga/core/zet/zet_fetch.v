@@ -112,7 +112,11 @@ module zet_fetch (
 
   assign sovr_pr = (opcode[7:5]==3'b001 && opcode[2:0]==3'b110);
   assign repz_pr = (opcode[7:1]==7'b1111_001);
-  assign lock_pr = (opcode[7:0]==8'b1111_0000);
+  // F1 aliases LOCK on the V30 and on np21w's 286 (i286c_mn.c maps both
+  // to _lock) -- Intel lists it as the undocumented int1, but matching
+  // the NEC-centric reference keeps the probe batteries happy: consume
+  // it like any other prefix and the next opcode executes untouched.
+  assign lock_pr = (opcode[7:1]==7'b1111_000);
   // Two-byte escape: on a 286-class machine 0Fh introduces the system-control
   // group (SGDT/SIDT/LGDT/LIDT/SMSW/LMSW under 0F 01). We consume it like a
   // prefix so decode sees the real opcode and modrm in the right places; the

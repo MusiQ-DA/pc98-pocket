@@ -1002,20 +1002,6 @@ module zet_opcode_deco (
           dst <= 4'b0;
         end
 
-      8'b1111_0001: // int1 -- undocumented single-byte int 1 on 186/286
-        begin
-          // Runs the INT sequence with the vector forced to 1: the same
-          // src=dst=4'hF marker pair tells zet_micro_data to feed imm=1
-          // to the sequence's one imm-consuming op.
-          seq_addr <= `INT;
-          need_modrm <= 1'b0;
-          need_off <= 1'b0;
-          need_imm <= 1'b0;
-          imm_size <= 1'b0;
-          src <= 4'hF;
-          dst <= 4'hF;
-        end
-
       8'b1111_0100: // hlt
         begin
           seq_addr <= `NOP; // hlt processing is in zet_core.v

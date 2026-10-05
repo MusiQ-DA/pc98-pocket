@@ -61,12 +61,9 @@ module zet_micro_data (
   // SALC (0xD6): the opcode decode cannot afford a seq_addr of its own --
   // the 10-bit MICRO_ADDR_WIDTH this used to take crashed Quartus' SCL
   // map -- so it decodes to NOP with the marker operand pair src=dst=4'hF
-  // and the op is swapped in here instead. The same marker on the INT
-  // sequence is 0xF1 (single-byte int1), whose vector the imm mux below
-  // forces to 1. See rom_def.v.
+  // and the op is swapped in here instead. See rom_def.v.
   wire [`MICRO_DATA_WIDTH-1:0] micro_raw;
-  wire marked  = (src == 4'hF) & (dst == 4'hF);
-  wire is_salc = marked & (n_micro == `NOP);
+  wire is_salc = (n_micro == `NOP) & (src == 4'hF) & (dst == 4'hF);
   wire [`MICRO_DATA_WIDTH-1:0] micro_o = is_salc ? `SALC_OP : micro_raw;
 
   // Assignments
@@ -91,8 +88,7 @@ module zet_micro_data (
   assign var_imm = micro_o[48:46];
   assign end_seq = micro_o[49];
 
-  assign imm_o = (marked & (var_imm == 3'd4)) ? 16'd1
-               : var_imm == 3'd0 ? (16'h0000)
+  assign imm_o = var_imm == 3'd0 ? (16'h0000)
                : (var_imm == 3'd1 ? (16'h0002)
                : (var_imm == 3'd2 ? (16'h0004)
                : (var_imm == 3'd3 ? off_i
