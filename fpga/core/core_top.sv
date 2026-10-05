@@ -1286,6 +1286,11 @@ module core_top (
     // data accesses) instead of just the fetch stream, so a restore's
     // [0x404]/[0x406] reads and the retf's stack pops are visible.
     reg        trig_bus    = 1'b0;
+    // bit27 of write slot 0x04: f0_snap records only WRITE commands
+    // (memory or I/O). Display DMA is read-only, so the ring stops
+    // drowning in framebuffer sweeps and keeps the 32 cycles of guest
+    // writes leading into the F0 -- the whole save sequence's addresses.
+    reg        trig_wronly = 1'b0;
     wire       trig_hit  = trig_en && (pc_now == trig_addr);
     wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
 
@@ -1408,14 +1413,19 @@ module core_top (
     reg [19:0] f0_snap [0:31];
     reg  [4:0] f0_hist_w   = 5'd0;
     reg [19:0] f0_hist_prev = 20'h0;
+    // In writes-only mode the recorded address is always the bus address
+    // (the write's target); otherwise it follows the pc_hist source.
+    wire [19:0] f0_src = trig_wronly ? chipset_address : hist_src;
     reg  [4:0] f0_snap_w     = 5'd0;
     reg        f0_snap_valid = 1'b0;
     always_ff @(posedge clk_chipset) begin
         if (RESET)
             f0_snap_valid <= 1'b0;
-        if (hist_src != f0_hist_prev) begin
-            f0_hist_prev      <= hist_src;
-            f0_snap[f0_hist_w] <= hist_src;
+        if (f0_src != f0_hist_prev
+            && (!trig_wronly
+                || ~chipset_memory_write_n || ~chipset_io_write_n)) begin
+            f0_hist_prev      <= f0_src;
+            f0_snap[f0_hist_w] <= f0_src;
             f0_hist_w         <= f0_hist_w + 5'd1;
         end
         if (f0_port_write) begin
@@ -1855,6 +1865,7 @@ module core_top (
             trig_freeze <= probe_wdata_c[30];
             trig_delay  <= probe_wdata_c[29];
             trig_bus    <= probe_wdata_c[28];
+            trig_wronly <= probe_wdata_c[27];
         end
     end
 
