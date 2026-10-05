@@ -254,8 +254,6 @@ module tb_pc98_v30;
         .vid_clk      (clk_chipset),
         .vid_cell     (12'd0),
         .vid_attr     (tvram_fil_dummy),
-        .cpu_sel      (1'b1),
-        .dbg_cell     (12'd0),
         .dbg_word     ()
     );
 

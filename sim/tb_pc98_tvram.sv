@@ -33,7 +33,7 @@ module tb_pc98_tvram;
     wire   [7:0] vid_char_lo, vid_char_hi, vid_attr;
     logic [11:0] fil_cell = 12'h0;
 
-    logic        cpu_sel  = 1'b1;
+    logic        cpu_rden = 1'b1;
     logic [11:0] dbg_cell = 12'h0;
     wire  [23:0] dbg_word;
 
@@ -47,12 +47,11 @@ module tb_pc98_tvram;
         .clk(clk),
         .rst(rst),
         .cpu_addr(cpu_addr), .cpu_wren(cpu_wren), .cpu_wdata(cpu_wdata),
-        .cpu_rden(1'b1), .cpu_q(cpu_q),
-        .dbg_cell(12'h000), .dbg_q(),
+        .cpu_rden(cpu_rden), .cpu_q(cpu_q),
         .fil_clk(clk), .fil_cell(fil_cell),
         .fil_char_lo(vid_char_lo), .fil_char_hi(vid_char_hi),
         .vid_clk(clk), .vid_cell(vid_cell), .vid_attr(vid_attr),
-        .cpu_sel(cpu_sel), .dbg_cell(dbg_cell), .dbg_word(dbg_word),
+        .dbg_cell(dbg_cell), .dbg_q(), .dbg_word(dbg_word),
         .cfg_a3fea(8'h04), .cfg_a3fee(8'h00), .cfg_a3ff2(8'h01)
     );
 
@@ -120,7 +119,7 @@ module tb_pc98_tvram;
         end
 
         // The JTAG debug read port borrows the guest read stage while the
-        // window is unselected: cpu_sel low swaps rd_addr to the
+        // window is unselected: cpu_rden low swaps rd_addr to the
         // attribute-space address of dbg_cell, and dbg_word returns all
         // three banks at once one clock later -- {attr,char_hi,char_lo},
         // the same bytes the guest would read.
@@ -129,7 +128,7 @@ module tb_pc98_tvram;
             bad = 0;
             wr(14'h0000, 8'h5A);  wr(14'h0001, 8'hA5);  wr(14'h2000, 8'h3C);
             wr(14'h0F0A, 8'h11);  wr(14'h0F0B, 8'h22);  wr(14'h2F0A, 8'h33);
-            cpu_sel = 1'b0;
+            cpu_rden = 1'b0;
             dbg_cell = 12'h000;
             @(posedge clk); @(posedge clk);
             if (dbg_word !== 24'h3C_A5_5A) begin
@@ -151,7 +150,7 @@ module tb_pc98_tvram;
                          dbg_word[23:16]);
                 bad++;
             end
-            cpu_sel = 1'b1;
+            cpu_rden = 1'b1;
             if (bad != 0) errors += bad;
             else $display("  debug port: cells and memory switch read back");
         end
