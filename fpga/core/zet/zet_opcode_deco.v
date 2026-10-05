@@ -843,6 +843,20 @@ module zet_opcode_deco (
           dst <= 4'b0;
         end
 
+      8'b1101_0110: // salc
+        begin
+          // No rom slot is free, so the op rides the NOP sequence and
+          // zet_micro_data swaps `SALC_OP in when it sees the marker
+          // operand pair -- src=dst=4'hF, which no real decode emits.
+          seq_addr <= `NOP;
+          need_modrm <= 1'b0;
+          need_off <= 1'b0;
+          need_imm <= 1'b0;
+          imm_size <= 1'b0;
+          src <= 4'hF;
+          dst <= 4'hF;
+        end
+
       8'b1101_0111: // xlat
         begin
           seq_addr <= `XLAT;
@@ -986,6 +1000,20 @@ module zet_opcode_deco (
           imm_size <= 1'b0;
           src <= 4'b0;
           dst <= 4'b0;
+        end
+
+      8'b1111_0001: // int1 -- undocumented single-byte int 1 on 186/286
+        begin
+          // Runs the INT sequence with the vector forced to 1: the same
+          // src=dst=4'hF marker pair tells zet_micro_data to feed imm=1
+          // to the sequence's one imm-consuming op.
+          seq_addr <= `INT;
+          need_modrm <= 1'b0;
+          need_off <= 1'b0;
+          need_imm <= 1'b0;
+          imm_size <= 1'b0;
+          src <= 4'hF;
+          dst <= 4'hF;
         end
 
       8'b1111_0100: // hlt

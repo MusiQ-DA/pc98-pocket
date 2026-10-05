@@ -182,3 +182,13 @@
 `define OUTSWR	9'b0111110110
 `define INSB	9'b0111111010
 `define INSW	9'b0111111101
+
+// SALC (0xD6) is the 8086/286's undocumented set-al-on-carry -- a V30
+// aliases it to XLAT instead, so it discriminates Intel from NEC. The
+// 512-entry rom is full and growing MICRO_ADDR_WIDTH to 10 crashed
+// Quartus' SCL hierarchy map twice (runs 37318885685, 37332488580), so
+// instead the opcode decode emits the NOP sequence with an impossible
+// operand pair (src=dst=4'hF) and zet_micro_data swaps the op in. The
+// op is AL-AL-CF through addsub (t=1/f=4): FF when CF, else 00, and
+// wr_flag stays clear so the flags survive, matching Intel silicon.
+`define SALC_OP	50'b10000000000000010001110000100100000000000000000000
