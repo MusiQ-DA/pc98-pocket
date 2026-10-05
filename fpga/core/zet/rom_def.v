@@ -1,5 +1,5 @@
 `define MICRO_DATA_WIDTH 50
-`define MICRO_ADDR_WIDTH 9
+`define MICRO_ADDR_WIDTH 10
 
 `define MOVRRB	9'b000000000
 `define MOVRRW	9'b000000001
@@ -182,3 +182,8 @@
 `define OUTSWR	9'b0111110110
 `define INSB	9'b0111111010
 `define INSW	9'b0111111101
+
+// 286 pad block: the 512-entry ROM is full, so these live past 9'h1FF.
+// SALC (0xD6) is the 8086/286's undocumented set-al-on-carry; a V30 answers
+// it with an XLAT alias instead.  Zet implements the Intel semantics.
+`define SALC	10'b10_0000_0000
