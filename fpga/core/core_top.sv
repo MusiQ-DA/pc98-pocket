@@ -1233,9 +1233,9 @@ module core_top (
             pc_hist_w      <= 5'd0;
             delay_cnt      <= 5'd0;
         end else if (!pc_hist_frozen) begin
-            if (pc_now != pc_hist_prev) begin
-                pc_hist_prev       <= pc_now;
-                pc_hist[pc_hist_w] <= pc_now;
+            if (hist_src != pc_hist_prev) begin
+                pc_hist_prev       <= hist_src;
+                pc_hist[pc_hist_w] <= hist_src;
                 pc_hist_w          <= pc_hist_w + 5'd1;
                 if (delay_cnt != 5'd0) begin
                     delay_cnt <= delay_cnt - 5'd1;
@@ -1282,7 +1282,12 @@ module core_top (
     // retf at f8069 when armed on f8061).
     reg        trig_delay  = 1'b0;
     reg  [4:0] delay_cnt   = 5'd0;
+    // bit28 of write slot 0x04: record raw bus addresses (fetches AND
+    // data accesses) instead of just the fetch stream, so a restore's
+    // [0x404]/[0x406] reads and the retf's stack pops are visible.
+    reg        trig_bus    = 1'b0;
     wire       trig_hit  = trig_en && (pc_now == trig_addr);
+    wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
     // The BIOS->ITF hand-back always ends in an OUT 0x43D,0x10 -- the
     // cold path's bank restore -- so freezing the ring on that write
     // keeps the ~32 fetches that led into the bounce, whichever code
@@ -1290,7 +1295,7 @@ module core_top (
     wire       w43d_10   = io_port_write &&
                            (chipset_address[15:0] == 16'h043D) &&
                            (cpu_data_bus == 8'h10);
-    wire       pc_hist_new = (pc_now != pc_hist_prev);
+    wire       pc_hist_new = (hist_src != pc_hist_prev);
     always_ff @(posedge clk_chipset) begin
         reset_wire_d <= reset_wire;
         soft_rst_d   <= soft_reset_cpu;
@@ -1749,6 +1754,7 @@ module core_top (
             trig_en     <= probe_wdata_c[31];
             trig_freeze <= probe_wdata_c[30];
             trig_delay  <= probe_wdata_c[29];
+            trig_bus    <= probe_wdata_c[28];
         end
     end
 
