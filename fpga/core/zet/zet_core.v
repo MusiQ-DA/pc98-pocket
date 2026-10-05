@@ -272,9 +272,23 @@ module zet_core (
   // assembled ir) crashed Quartus Lite's S2T map in the full ap_core
   // build -- tsm/s2t/s2t_sgate_tdb_map.cpp:395 -- while this exec_st
   // mux has shipped since the core was vendored.
-  wire is_salc  = (seq_addr == `NOP) & (src == 4'hF) & (dst == 4'hF);
-  wire is_bound = (src == 4'hF) & (seq_addr >= `PUSHA)
-                              & (seq_addr <= `PUSHA + 9'd19);
+  // src/dst/seq_addr are combinational decode-cone outputs (the whole
+  // 256-entry opcode case sits behind them).  Every build that let a
+  // comparator on them drive consumed logic -- on the ROM q net, on ir,
+  // anywhere -- crashed Quartus' S2T timing-map stage, so the marker is
+  // latched into a flop while the front-end is decoding (exec_st low):
+  // the mux selects below then hang off clean register outputs only.
+  reg [1:0] spec_r;
+  always @(posedge clk)
+    if (rst) spec_r <= 2'd0;
+    else if (!exec_st)
+      spec_r <= (src == 4'hF && dst == 4'hF) ? 2'd1   // salc
+              : (src == 4'hF)                  ? 2'd2   // bound
+                                               : 2'd0;
+  wire is_salc  = (spec_r == 2'd1);
+  wire is_bound = (spec_r == 2'd2);  // spec_r==2 implies bound was
+                                     // dispatched, so seq_addr is
+                                     // already inside the borrowed range
 
   // SALC: al <- al - al - cf, flags preserved (t=1 addsub f=4 sbb,
   // byte op via ir1=23h).  BOUND ops are the 50-bit micro-words
