@@ -11,7 +11,7 @@
 # Two SLD nodes live in the image:
 #   node 1 -- pc98_jtag_probe (the 40-bit {addr,data} register). Write slot
 #             0x87 is fdd_ramimg's control word; slot 0x88 arms the byte-offset
-#             readback probe; reads 0x35/0x36/0x37 report status.
+#             readback probe; reads 0x9a/0x9b/0x9c report status.
 #   node 2 -- the stream sink: every 32 TDI bits become one 32-bit word in the
 #             upload FIFO, which the chipset side writes as four bytes of image
 #             into the carve-out. One drscan carries a whole chunk.
@@ -62,12 +62,12 @@ proc wr {addr data} {
 
 # control word on slot 0x87: [0]en [1]flush [2]greset [3]remount [4]arm
 proc ctl {v} { wr 0x87 [expr {$v & 0xFFFFFFFF}] }
-# readback probe: arm slot 0x88 with an image offset, then 0x37 reports
+# readback probe: arm slot 0x88 with an image offset, then 0x9c reports
 # {pend, 0, off, byte} -- pend clears when the carve-out read landed.
 proc rdback {off} {
     wr 0x88 [expr {$off & 0x1FFFFF}]
     for {set i 0} {$i < 2000} {incr i} {
-        set v [rd 0x37]
+        set v [rd 0x9c]
         if {($v >> 31) == 0} { return [expr {$v & 0xff}] }
         after 1
     }
@@ -86,7 +86,7 @@ set IMGBYTES 1261568
 
 # --- status before we touch anything ---------------------------------------
 select_node 1
-puts [format "0x35 (ramimg)  = 0x%08X  (tag 52/en/mnt/arm/flush/fsm/lba)" [rd 0x35]]
+puts [format "0x9a (ramimg)  = 0x%08X  (tag 52/en/mnt/arm/flush/fsm/lba)" [rd 0x9a]]
 
 # --- clear the sink: flush high then low ------------------------------------
 ctl 0x02
@@ -98,7 +98,7 @@ ctl 0x00
 set armed 0
 for {set i 0} {$i < 400} {incr i} {
     ctl 0x10          ;# arm the stream sink
-    set v [rd 0x35]
+    set v [rd 0x9a]
     if {($v >> 21) & 1} { set armed 1; break }
     after 5
 }
@@ -128,7 +128,7 @@ select_node 1
 set drainwant [expr {$sent * 4 > $IMGBYTES ? $IMGBYTES : $sent * 4}]
 set off 0
 for {set i 0} {$i < 2000} {incr i} {
-    set v [rd 0x36]
+    set v [rd 0x9b]
     set off [expr {$v & 0x1FFFFF}]
     if {$off >= $drainwant} break
     after 5
@@ -171,11 +171,11 @@ if {[info exists ::env(HDSPEED)]} {
 # --- mount + (optionally) reset into a boot ---------------------------------
 ctl 0x01          ;# enable -> the mount pass runs
 for {set i 0} {$i < 2000} {incr i} {
-    set v [rd 0x35]
+    set v [rd 0x9a]
     if {($v >> 22) & 1} break     ;# mounted
     after 1
 }
-puts [format "0x35 (ramimg)  = 0x%08X  mounted=%d" $v [expr {($v >> 22) & 1}]]
+puts [format "0x9a (ramimg)  = 0x%08X  mounted=%d" $v [expr {($v >> 22) & 1}]]
 
 if {![info exists ::env(HDNORESET)]} {
     ctl 0x05      ;# enable + greset: one pulse into reset_wire, guest boots
