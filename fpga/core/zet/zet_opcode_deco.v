@@ -65,7 +65,8 @@ module zet_opcode_deco (
   assign off_size_mod = (base == 4'b1100 && index == 4'b1100) ? 1'b1 : mod[1];
   assign need_off_mod = (base == 4'b1100 && index == 4'b1100) || ^mod;
   assign off_size_from_mod = !op[7] | (!op[5] & !op[4]) | (op[6] & op[4]);
-  assign off_size = !off_size_from_mod | off_size_mod;
+  assign off_size = (op == 8'b1100_1000) ? 1'b1
+                  : (!off_size_from_mod | off_size_mod);
 
   // Behaviour
   always @(op or dm or b or need_off_mod or srcm or sm or dstm
@@ -740,7 +741,7 @@ module zet_opcode_deco (
         begin
           seq_addr <= `ENTER;
           need_modrm <= 1'b0;
-          need_off <= need_off_mod;
+          need_off <= 1'b1;
           need_imm <= 1'b1;
           imm_size <= 1'b0;
           src <= 4'b0;

@@ -14,6 +14,7 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SYNTH=0
 REALMEM=0
+ZET=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --synth) SYNTH=1; shift ;;
@@ -22,6 +23,9 @@ while [ $# -gt 0 ]; do
         # instead of the flat array. The word path is unconditional either
         # way: the flat model answers the odd lane at addr|1.
         --realmem) REALMEM=1; shift ;;
+        # --zet: swap the nuV30 for the experimental Zet through
+        # zet_cpu_bridge (tb's `ifdef ZET_CPU) on the same downstream bus.
+        --zet) ZET=1; shift ;;
         *) break ;;
     esac
 done
@@ -97,6 +101,14 @@ cp $V/ucrom.hex $V/ucdecode.hex "$OUT/hdl/rtl/ucore/"
 R="$PWD"
 CPU_DEF="+define+V30_BACKDOOR"
 [ "$REALMEM" = 1 ] && CPU_DEF="$CPU_DEF+REALMEM"
+[ "$ZET" = 1 ] && CPU_DEF="$CPU_DEF+ZET_CPU"
+
+# zet_micro_rom reads {DATDIR}micro_rom.dat where DATDIR="fpga/core/zet/"
+# relative to the bench cwd -- materialise it under $OUT like the ucrom dir.
+if [ "$ZET" = 1 ]; then
+    mkdir -p "$OUT/fpga/core/zet"
+    cp fpga/core/zet/micro_rom.dat "$OUT/fpga/core/zet/"
+fi
 
 # The V30 build is pure CPU time in Verilator: compile the model for speed
 # (-O2, same reasoning as sim_pc98_v30.sh) and split the eval across cores.
@@ -109,6 +121,22 @@ if [ "$REALMEM" = 1 ]; then
     MEMFILES="$K/RAM.sv $K/Ready.sv $S/sdram_shim.sv $S/sdram_mp.sv sim/sdram_board_model.sv sim/sdram_model.sv"
 else
     MEMFILES=""
+fi
+
+if [ "$ZET" = 1 ]; then
+    Z=$S/zet
+    ZETFILES="$R/$Z/zet.v $R/$Z/zet_core.v $R/$Z/zet_fetch.v $R/$Z/zet_decode.v \
+    $R/$Z/zet_exec.v $R/$Z/zet_memory_regs.v $R/$Z/zet_micro_data.v \
+    $R/$Z/zet_micro_rom.v $R/$Z/zet_regfile.v $R/$Z/zet_wb_master.v \
+    $R/$Z/zet_addsub.v $R/$Z/zet_alu.v $R/$Z/zet_arlog.v $R/$Z/zet_bitlog.v \
+    $R/$Z/zet_conv.v $R/$Z/zet_div_su.v $R/$Z/zet_div_uu.v \
+    $R/$Z/zet_fulladd16.v $R/$Z/zet_jmp_cond.v $R/$Z/zet_muldiv.v \
+    $R/$Z/zet_mux8_1.v $R/$Z/zet_mux8_16.v $R/$Z/zet_next_or_not.v \
+    $R/$Z/zet_nstate.v $R/$Z/zet_opcode_deco.v $R/$Z/zet_othop.v \
+    $R/$Z/zet_rxr8.v $R/$Z/zet_rxr16.v $R/$Z/zet_shrot.v \
+    $R/$Z/zet_signmul17.v $R/$S/zet_cpu_bridge.sv"
+else
+    ZETFILES=""
 fi
 
 # Native Verilator -- several times faster than the amd64 image was under
@@ -130,11 +158,12 @@ verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot $CPU_DEF \
     $CXXFLAGS_MK \
     $SYSROOT \
     -I"$R/sim" -I"$R/$S" -I"$R/$S/common" -I"$R/$V" -I"$R/$K" \
-    -I"$R/$K/i8288/HDL" -I"$R/$K/i8253/HDL" -I"$R/$K/i8259/HDL" \
+    -I"$R/$S/zet" -I"$R/$K/i8288/HDL" -I"$R/$K/i8253/HDL" -I"$R/$K/i8259/HDL" \
     "$R/sim/tb_pc98_boot.sv" \
     $R/$V/v30u_ss_pkg.sv \
     $R/$V/v30_core.sv $R/$V/v30u_biu.sv $R/$V/v30u_eu.sv \
     $R/$V/v30u_ucrom.sv $R/$S/v30_cpu_bridge.sv \
+    $ZETFILES \
     $MEMFILES \
     $R/$S/pc98_fdc_glue.sv $R/$S/common/floppy.v $R/$S/common/simple_fifo.v \
     $R/sim/tb_fdd_dma_model.sv $R/$S/pc98_kbd8251.sv \
