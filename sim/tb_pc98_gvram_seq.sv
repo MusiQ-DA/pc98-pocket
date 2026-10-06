@@ -41,9 +41,20 @@ module tb_pc98_gvram_seq;
     wire [7:0]  mem_wdata;
     wire        mem_word;
     wire        mem_rd, mem_wr;
-    logic [7:0] mem_rdata;
+    logic [7:0] mem_rdata_r;
     logic [7:0] mem_rdata_hi;
-    logic       mem_done;
+    // RAM.sv's access_complete splits into two events in the real machine:
+    // the seq's own leg completing, and a POSTED write draining ahead of a
+    // conflicting read (rd_conflicts). Only the first is access_own. The
+    // model emits model_done for accesses it served; the test can inject a
+    // foreign_done pulse mid-leg that must NOT satisfy the wait -- and
+    // during it mem_rdata carries 5Ah the way RAM's data_bus_out carries a
+    // foreign/stale byte, not the requested one.
+    logic       model_done;
+    logic       foreign_done = 1'b0;
+    wire [7:0]  mem_rdata = foreign_done ? 8'h5A : mem_rdata_r;
+    wire        mem_done  = model_done | foreign_done;
+    wire        mem_own   = ~foreign_done;
     // Chipset feeds the RAM's high byte straight from the CPU bus: during
     // expansion mem_word stays low and RAM ignores it.
     wire [7:0]  mem_wdata_hi = cpu_wdata_hi;
@@ -75,7 +86,7 @@ module tb_pc98_gvram_seq;
         .mem_addr(mem_addr), .mem_wdata(mem_wdata), .mem_word(mem_word),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
-        .mem_done(mem_done), .mem_ready(mem_ready)
+        .mem_done(mem_done), .mem_own(mem_own), .mem_ready(mem_ready)
     );
 
     // The EGC's register writes, driven as PERIPHERALS forwards them.
@@ -120,7 +131,7 @@ module tb_pc98_gvram_seq;
     logic armed = 1'b1;
 
     always_ff @(posedge clk) begin
-        mem_done <= 1'b0;
+        model_done <= 1'b0;
         if (reset) begin busy <= 1'b0; lat_n <= 0; armed <= 1'b1; end
         else if (!(mem_rd | mem_wr)) begin armed <= 1'b1; completed <= 1'b0; end
         else if (!busy && armed && (mem_rd | mem_wr)) begin
@@ -132,7 +143,7 @@ module tb_pc98_gvram_seq;
                 busy <= 1'b0;
                 armed <= 1'b0;          // not again until the command drops
                 completed <= 1'b1;
-                mem_done <= 1'b1;
+                model_done <= 1'b1;
                 if (mem_wr) begin
                     store[int'(mem_addr)] = mem_wdata;
                     if (mem_word)
@@ -145,7 +156,7 @@ module tb_pc98_gvram_seq;
             end
         end
         if (mem_rd) begin
-            mem_rdata <= store.exists(int'(mem_addr)) ? store[int'(mem_addr)] : 8'h00;
+            mem_rdata_r <= store.exists(int'(mem_addr)) ? store[int'(mem_addr)] : 8'h00;
             mem_rdata_hi <= store.exists(int'(mem_addr) + 1) ? store[int'(mem_addr) + 1] : 8'h00;
         end
     end
@@ -209,7 +220,7 @@ module tb_pc98_gvram_seq;
     initial begin
         grcg_tile[0] = 8'h00; grcg_tile[1] = 8'h00;
         grcg_tile[2] = 8'h00; grcg_tile[3] = 8'h00;
-        mem_rdata = 8'h00; mem_rdata_hi = 8'h00;
+        mem_rdata_r = 8'h00; mem_rdata_hi = 8'h00;
         repeat (8) @(posedge clk);
         reset = 1'b0;
         repeat (4) @(posedge clk);
@@ -264,6 +275,33 @@ module tb_pc98_gvram_seq;
         store[20'hB0300] = 8'h23;       // one bit differs
         guest(1'b1, 20'hA8300, 8'h00);
         want("TCR one bit differs",          last_rdata, 8'hFE);
+
+        // ---- a foreign completion is not this leg's done ---------------
+        // RAM.sv's posted-write queue drains a parked write ahead of a
+        // conflicting read and pulses access_complete for IT. An
+        // unqualified mem_done made S_RDW take the pulse: mem_rd dropped,
+        // the read was never served, and the leg sailed on with whatever
+        // data_bus_out held -- 5Ah here. The own-qualified edge (mem_own)
+        // must hold the leg until its real completion lands.
+        store[20'hA8400] = 8'h11; store[20'hB0400] = 8'h22;
+        store[20'hB8400] = 8'h44;
+        log_n = 0;
+        @(posedge clk);
+        cpu_gvram = 1'b1; cpu_addr = 20'hA8400; cpu_word = 1'b0;
+        cpu_wdata = 8'h00; cpu_wdata_hi = 8'h00;
+        cpu_rd = 1'b1;
+        // mid-latency on the first plane's read leg, fire a completion the
+        // seq did not ask for. @(negedge) sees mem_rd settled.
+        @(negedge clk);
+        while (mem_rd !== 1'b1) @(negedge clk);
+        foreign_done = 1'b1;            // covers exactly one posedge
+        @(negedge clk); foreign_done = 1'b0;
+        while (!cpu_ready) @(posedge clk);
+        last_rdata = cpu_rdata;
+        cpu_rd = 1'b0; cpu_gvram = 1'b0;
+        repeat (3) @(posedge clk);
+        want("foreign done: still three reads", log_n, 3);
+        want("  answer is real data, not 5Ah", last_rdata, 8'hFF);
 
         // ---- pass-through: the GRCG off is one access, unchanged --------
         grcg_active = 1'b0;

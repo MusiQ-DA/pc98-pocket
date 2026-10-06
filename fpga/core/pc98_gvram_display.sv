@@ -174,8 +174,14 @@ module pc98_gvram_display #(
     // the guest-linear windows are their own indices). Page one has no guest
     // address -- RAM.sv banks it at 0x600000 + plane*0x8000, where
     // pc98_gvram_seq's access-page writes land it.
+    //
+    // fill_page is disp_page LATCHED AT LAUNCH: np21w reads gdcs.disp once
+    // per line in makegrph, so a page flip mid-fill must not change the
+    // base for the bursts still to run -- unlatched, one port-0xA4 write
+    // would leave a line half from each page for a whole frame.
+    logic        fill_page = 1'b0;
     function automatic [23:0] plane_base(input [1:0] p);
-        if (disp_page)
+        if (fill_page)
             plane_base = 24'h600000 + {7'd0, p, 15'd0};
         else case (p)
             2'd0:    plane_base = 24'hA8000;   // B
@@ -305,6 +311,7 @@ module pc98_gvram_display #(
             f_word   <= 4'd0;
             req_q    <= 1'b0;
             fill_bank <= 2'd0;
+            fill_page <= 1'b0;
             act_tgt  <= 9'd0;
         end else begin
             if (p_ack) req_q <= 1'b0;
@@ -318,9 +325,12 @@ module pc98_gvram_display #(
                     // out into its own bank. The walk is already positioned
                     // at that target, so run_base is its byte offset --
                     // latching both freezes them for the whole fill against
-                    // a mid-line SAD/PITCH rewrite.
+                    // a mid-line SAD/PITCH rewrite. The page bit latches
+                    // with them: per-line atomic, the way np21w's makegrph
+                    // samples gdcs.disp.
                     fill_base <= run_base;
                     fill_bank <= fill_tgt[1:0];
+                    fill_page <= disp_page;
                     act_tgt   <= fill_tgt;
                     f_plane   <= 3'd0;
                     f_chunk   <= 4'd0;

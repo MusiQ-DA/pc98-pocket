@@ -545,6 +545,10 @@ module CHIPSET #(
     wire [7:0]  ram_dout_hi_w;
     wire [7:0]  seq_rdata_hi_w;
     wire        ram_complete_w, ram_ready_w;
+    // COMPLETE_RAM_RW belonging to the seq's held strobe specifically --
+    // parked-write drains pulse access_complete too, and a leg that waits
+    // on the bare pulse can eat one of those and read pre-write data.
+    wire        ram_own_w;
     wire        gvram_sel = ~ram_address_select_n;
 
     // EGC=0: the raster engine is dropped -- this machine is a GRCG-only
@@ -590,6 +594,7 @@ module CHIPSET #(
         .mem_rd(ram_rd_w), .mem_wr(ram_wr_w),
         .mem_rdata(ram_dout_w), .mem_rdata_hi(ram_dout_hi_w),
         .mem_done(ram_complete_w),
+        .mem_own(ram_own_w),
         .mem_ready(ram_ready_w)
     );
 
@@ -682,6 +687,7 @@ module CHIPSET #(
         .no_command_state                   (no_command_state),
         .memory_access_ready                (ram_ready_w),
         .access_complete                    (ram_complete_w),
+        .access_own                         (ram_own_w),
         .ram_address_select_n               (ram_address_select_n),
         .sdram_address                      (sdram_address),
         .sdram_cke                          (sdram_cke),

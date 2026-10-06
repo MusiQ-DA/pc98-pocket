@@ -37,6 +37,16 @@ module RAM (
     input   logic           gvram_page1_flag,
     // ROM-load (Pocket): read-only tap on the write/read completion state.
     output  logic           access_complete,
+    // A COMPLETE_RAM_RW that belongs to the strobe on the pins RIGHT NOW:
+    // the same own-access tests memory_access_ready applies, minus the
+    // wait-cycle counts. Bare access_complete pulses for ANY finishing
+    // access -- including a parked write draining ahead of a conflicting
+    // read -- so a waiter that just needs "my access ended" must qualify
+    // with this or it eats a foreign completion (pc98_gvram_seq's legs did:
+    // the parked-write drains of a posted queue fed S_RDW garbage and the
+    // real read never ran -- the EGC's write-then-RMW-read stream is
+    // exactly the traffic that parks writes).
+    output  logic           access_own,
     output  logic           ram_address_select_n,
     // JTAG probe (PC98_JTAG): the FSM's own view of a stalled access --
     // {parked write, refresh busy, read in flight, completing-is-read,
@@ -987,6 +997,11 @@ module RAM (
     // loader. COMPLETE_RAM_RW is reached only after the SDRAM write truly
     // finishes (refresh-safe) and is independent of the CPU-bus wait throttle.
     assign  access_complete = (state == COMPLETE_RAM_RW);
+    assign  access_own      = (state == COMPLETE_RAM_RW)
+                            & ((write_command & accept_live_wr
+                                               & write_strobe_match)
+                             | (read_command & accept_live_rd
+                                               & read_strobe_match));
 
     assign  dbg = {wc_pend, refresh_mode, read_flag,
                    accept_live_rd, accept_live_wr, state[2:0]};

@@ -106,7 +106,10 @@ module tb_pc98_egc_golden;
         .mem_addr(mem_addr), .mem_wdata(mem_wdata), .mem_word(mem_word),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
-        .mem_done(mem_done), .mem_ready(mem_ready)
+        // Every access this model flies came from the seq's own strobes --
+        // the parked slot promotes only into the held strobe's slot -- so
+        // each done pulse is the own edge by construction.
+        .mem_done(mem_done), .mem_own(1'b1), .mem_ready(mem_ready)
     );
 
     task automatic egc_set(input [3:0] rg, input [7:0] v);

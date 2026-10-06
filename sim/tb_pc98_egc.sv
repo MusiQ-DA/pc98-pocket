@@ -80,7 +80,10 @@ module tb_pc98_egc;
         .egc_rg(egc_rg), .egc_d(egc_d),
         .mem_addr(mem_addr), .mem_wdata(mem_wdata),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
-        .mem_rdata(mem_rdata), .mem_done(mem_done), .mem_ready(mem_ready)
+        .mem_rdata(mem_rdata), .mem_done(mem_done),
+        // This model only ever completes the seq's own access -- no posted
+        // writes, no foreign drain -- so every done is the own edge.
+        .mem_own(1'b1), .mem_ready(mem_ready)
     );
 
     task automatic egc_set(input [3:0] rg, input [7:0] v);

@@ -98,6 +98,14 @@ module pc98_gvram_seq #(
     input  wire [7:0]  mem_rdata,
     input  wire [7:0]  mem_rdata_hi,     // the burst's second byte on reads
     input  wire        mem_done,         // RAM.sv's access_complete
+    // RAM.sv's access_own: the completing access is the one this strobe is
+    // holding for. mem_done alone also pulses when a POSTED write drains --
+    // a leg parked in S_RDW behind rd_conflicts sees that pulse, drops
+    // mem_rd, and walks on carrying whatever data_bus_out_reg happened to
+    // hold (RAM never served the read at all). Every wait below is on
+    // leg_done, the qualified edge. Benches whose model memory only ever
+    // completes the seq's own access may tie this high.
+    input  wire        mem_own,
     // RAM.sv's memory_access_ready, which is NOT access_complete: it is 1
     // whenever no selected access is in flight, which is the semantics the
     // guest's READY has always had. Pass-through must hand that through
@@ -179,6 +187,10 @@ module pc98_gvram_seq #(
     reg [1:0] gp;             // which plane
     reg       is_read;        // this access is a read
     reg       is_word;        // this access is a 16-bit bus cycle
+    // A completion that belongs to the leg in flight -- see the mem_own
+    // port comment. RAM.sv's access_own already implies access_complete,
+    // but keeping mem_done in the term documents (and benches) the contract.
+    wire leg_done = mem_done & mem_own;
     reg       half;           // a word access's odd-byte walk
     reg [7:0] tcr;            // the match mask being accumulated
     reg [7:0] rd_hold;        // what the last plane read gave
@@ -328,7 +340,7 @@ module pc98_gvram_seq #(
     wire word_dnwr   = is_word & ~is_read & egc_here & egc_dn;
     assign legpar    = half ^ word_dnwr;
     wire egc_sf_push = egc_here & is_read  & egc_rd_shift
-                     & (st == S_RDW) & mem_done & ~svc_raw_rd;
+                     & (st == S_RDW) & leg_done & ~svc_raw_rd;
     // The push slot offset splits a word read's two legs into adjacent
     // queue slots; dn walks place the even byte behind the odd (inptr[-1]=L,
     // inptr[0]=H then inptr-=2 -- the pair is H-then-L in queue order).
@@ -340,7 +352,7 @@ module pc98_gvram_seq #(
     // dead cycle the FSM now takes between the last push and the answer.
     wire egc_sf_evt  = egc_here
                      & (is_read
-                        ? (egc_rd_shift & (st == S_RDW) & mem_done
+                        ? (egc_rd_shift & (st == S_RDW) & leg_done
                          & egc_rd_last & ~svc_raw_rd & (~is_word | half))
                         : (egc_wr_shift & (st == S_RD) & (gp == 2'd0)
                          & (~is_word | ~half)));
@@ -404,7 +416,7 @@ module pc98_gvram_seq #(
     // data output is already 0x00 -- a registered strobe saw every pattern
     // register fill with zero. plane/ext are the in-flight leg's values.
     wire egc_pat_ld = egc_here & ~svc_raw_rd
-                    & (st == S_RDW) & mem_done
+                    & (st == S_RDW) & leg_done
                     & (is_read ? egc_pat_on_rd : egc_pat_on_wr);
 
     // Plane liveness, split by phase:
@@ -642,7 +654,7 @@ module pc98_gvram_seq #(
                 end
               end
 
-              S_RDW: if (mem_done) begin
+              S_RDW: if (leg_done) begin
                 mem_rd  <= 1'b0;
                 rd_hold <= mem_rdata;
                 if (egc_here && !svc_raw_rd) begin
@@ -692,7 +704,7 @@ module pc98_gvram_seq #(
                 end
               end
 
-              S_WRW: if (mem_done) begin
+              S_WRW: if (leg_done) begin
                 mem_wr <= 1'b0;
                 if (last_gp) st <= S_DONE;
                 else begin

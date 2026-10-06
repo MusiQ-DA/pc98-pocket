@@ -1632,19 +1632,36 @@ module PERIPHERALS #(
     // mode6a_addr/mode68_addr already decode this way for the same reason;
     // the address still names the port while the strobe completes.
     wire egc_cs = ~address_enable_n & (address[15:4] == 12'h04A);
-    assign egc_rg = address[3:0];
+
+    // ...and latch the decode, the register number and the byte while the
+    // strobe is low. The release edge runs one cycle after io_write_n
+    // rises, where the bus bridge is already free to move address onto the
+    // next prefetch -- the live decode held on hardware because the bridge
+    // idles the pins, but the write should be bound to the port the STROBE
+    // named, the way the FDC's own release-edge handlers capture theirs.
+    logic       egc_cs_q;
+    logic [3:0] egc_rg_q;
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
             egc_prev_wr_n <= 1'b1;
+            egc_cs_q      <= 1'b0;
+            egc_rg_q      <= 4'h0;
             egc_d         <= 8'h00;
         end else begin
             egc_prev_wr_n <= io_write_n;
-            if (egc_cs & ~io_write_n) egc_d <= internal_data_bus;
+            if (~io_write_n) begin
+                egc_cs_q <= egc_cs;
+                if (egc_cs) begin
+                    egc_rg_q <= address[3:0];
+                    egc_d    <= internal_data_bus;
+                end
+            end
         end
     end
 
-    assign egc_wr = io_write_n & ~egc_prev_wr_n & egc_cs;
+    assign egc_rg = egc_rg_q;
+    assign egc_wr = io_write_n & ~egc_prev_wr_n & egc_cs_q;
 
     // ---- CRTC text-cell geometry ---------------------------------------
     //

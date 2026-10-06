@@ -463,6 +463,7 @@ module tb_pc98_boot;
     wire        memory_access_ready, ram_address_select_n;
     wire        ram_ready_w;
     wire        initilized_sdram_w, access_complete_w;
+    wire        access_own_w;
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
@@ -530,6 +531,7 @@ module tb_pc98_boot;
         .mem_rd(seq_mem_rd), .mem_wr(seq_mem_wr),
         .mem_rdata(ram_dout), .mem_rdata_hi(ram_dout_hi),
         .mem_done(access_complete_w),
+        .mem_own(access_own_w),
         .mem_ready(ram_ready_w)
     );
 
@@ -547,6 +549,7 @@ module tb_pc98_boot;
         .no_command_state(mem_rd_n & mem_wr_n & io_rd_n & io_wr_n),
         .memory_access_ready(ram_ready_w),
         .access_complete(access_complete_w),
+        .access_own(access_own_w),
         .ram_address_select_n(ram_address_select_n),
         .dbg_watch_addr(20'hFFFFF),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
