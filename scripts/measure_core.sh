@@ -40,8 +40,9 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 echo "PROJECT_REVISION = \"m\"" > "$OUT/m.qpf"
 
 # $readmemh paths in the RTL are relative to the PROJECT directory, so mirror
-# the real project's rtl/ (the symlinked microcode tables) next to the scratch
-# qsf. Without it v30u_ucrom fails elaboration rather than reporting an area.
+# the real project's rtl/ (the microcode tables) next to the scratch
+# qsf. Without it a core's $readmemh fails elaboration rather than reporting
+# an area.
 # MEASURE_COPY: a directory whose contents belong next to the scratch qsf
 # (data files a core $readmem's from its project directory).
 if [ -n "${MEASURE_COPY:-}" ]; then cp -RL "$MEASURE_COPY"/. "$OUT/"; fi

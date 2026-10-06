@@ -34,7 +34,8 @@
 // np21w (whose keyboard only re-sends held keys there, io/keystat.c
 // keystat_resendstat) nor the ROMs leave much doubt about the speed: a real
 // keyboard answers in ~10 ms, far inside the ITF's 82 ms poll window (the
-// V30 bench agrees: tb_pc98_v30 with +kbdpass1 catches even an 80 ms ACK).
+// V30 bench agreed: the old tb_pc98_v30 with +kbdpass1 caught even an 80 ms
+// ACK).
 // The window exists precisely to catch the answer: the ITF sets the
 // [0x0500] flag the BIOS branches on (FD897) only if it reads the 0x60
 // itself.
@@ -48,9 +49,9 @@
 // one: the ITF times out, runs its memory test and display, and the BIOS
 // enters its no-keyboard two-pass flow (whose pass-2 "keyboard arrived"
 // step still needs machine work outside this module -- the dirty pass-1
-// BASIC cannot reach its own reset yet, which tb_pc98_v30 works around by
-// forcing it). So the model answers late enough that the ITF takes the
-// path this machine can walk, while the 8251 itself stays fully alive for
+// BASIC cannot reach its own reset yet, which the old V30 boot bench worked
+// around by forcing it). So the model answers late enough that the ITF takes
+// the path this machine can walk, while the 8251 itself stays fully alive for
 // the BIOS's INT 18h AH=3 reset (whose 0x60 then arrives through IRQ1) and
 // for the key stream, once something injects it. When the direct
 // keyboard-present boot works end to end, set ACK_DELAY_TICKS back to

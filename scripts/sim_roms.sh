@@ -26,8 +26,7 @@ open(sys.argv[1], 'w').write('\n'.join(files))
 PY
 
 # The project macros minus SYNTHESIS: it picks the fpga/-relative readmemh
-# paths and gates v30's simulation-only blocks, neither of which a bench
-# wants.
+# paths a bench does not want.
 DEFINES=$(sed -n 's/^[[:space:]]*set_global_assignment.*VERILOG_MACRO "\(.*\)"/\1/p' fpga/config.tcl \
           | grep -v '^SYNTHESIS=' | tr '\n' ' ' | sed 's/ /+/g')
 
@@ -35,7 +34,7 @@ for TB in tb_xrom tb_scsi_rom; do
     # shellcheck disable=SC2086
     verilator --binary --timing -Wno-fatal --top-module "$TB" \
       +define+$DEFINES \
-      -Isim -I$S -I$S/chipset/HDL -I$S/v30 -I$S/zet \
+      -Isim -I$S -I$S/chipset/HDL -I$S/zet \
       -I$S/chipset/HDL/i8288/HDL -I$S/chipset/HDL/i8253/HDL -I$S/chipset/HDL/i8259/HDL \
       -I$S/chipset/HDL/upd71071/HDL \
       -I$S/common -I$S/audio \

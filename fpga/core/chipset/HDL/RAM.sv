@@ -198,7 +198,7 @@ module RAM (
     // SDRAM (the loader writes it there, the guest fetches it from there),
     // and taking it out of the select -- which one revision did -- starved
     // the loader into DROP 38190 and left BAD 0F2 on the compare.
-    // The predicate itself lives in pc98_sdram_map.svh, because v30_cpu_bridge
+    // The predicate itself lives in pc98_sdram_map.svh, because zet_cpu_bridge
     // needs the same answer one step earlier -- see that file.
 `include "pc98_sdram_map.svh"
 
@@ -721,7 +721,8 @@ module RAM (
     // access_ready is a clock behind the command: it is latched from `idle` in
     // the IDLE state, so for the first one or two chipset clocks after a
     // command rises it still reads 1 while read_flag is still 0 and
-    // data_bus_out is THE PREVIOUS ACCESS'S BYTE. Measured in tb_v30_mem:
+    // data_bus_out is THE PREVIOUS ACCESS'S BYTE. Measured on the old V30
+    // memory bench:
     //
     //   st=3 rdcmd=1 rdflag=0 ardy=1 prdy=1 dout=10   <- command up, stale
     //   st=4 rdcmd=1 rdflag=1 ardy=1 prdy=1 dout=10   <- a CE edge lands here
@@ -729,7 +730,7 @@ module RAM (
     //   st=4 ...                               dout=8b <- the real byte
     //
     // The CPU never fell in: it samples READY once, deep in T3, a whole CPU
-    // clock (nine chipset cycles at 4.77 MHz) after the command. v30_cpu_bridge
+    // clock (nine chipset cycles at 4.77 MHz) after the command. zet_cpu_bridge
     // samples at EVERY posedge CE from its third T state on, and the 8288
     // raises the command around that same edge -- so the byte engine could
     // complete in the stale window and latch the previous byte. It did: the

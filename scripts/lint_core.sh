@@ -5,7 +5,7 @@
 #
 # Why this exists: core_top.sv carries `default_nettype none`, so Quartus turns
 # a name with no declaration into a hard error -- but Verilator only warns
-# (%Warning-IMPLICIT) and infers a 1-bit wire, and the v30 testbench assembles
+# (%Warning-IMPLICIT) and infers a 1-bit wire, and the boot testbench assembles
 # its own machine without core_top or the CHIPSET at all, so the sims never
 # compile the files where this happens.  Two Quartus runs died at line 2461
 # and line 1298 in core_top for exactly this before this script did.
@@ -47,7 +47,7 @@ trap 'rm -f "$LIST" "$OUT"' EXIT
 # shellcheck disable=SC2086
 verilator --lint-only --timing -Wno-fatal --top-module core_top \
   +define+$DEFINES \
-  -Isim -I$S -I$S/chipset/HDL -I$S/v30 -I$S/zet \
+  -Isim -I$S -I$S/chipset/HDL -I$S/zet \
   -I$S/chipset/HDL/i8288/HDL -I$S/chipset/HDL/i8253/HDL -I$S/chipset/HDL/i8259/HDL \
   -I$S/chipset/HDL/upd71071/HDL \
   -I$S/chipset/HDL/ps2_keyboard/HDL -I$S/common -I$S/audio \

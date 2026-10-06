@@ -831,22 +831,9 @@ set_global_assignment -name SEARCH_PATH core/common
 #   Error (10054): can't open Verilog Design File "pc98_sdram_map.svh"
 set_global_assignment -name SEARCH_PATH core
 set_global_assignment -name QIP_FILE core/common/common.qip
-# The nuV30 (the PC-98's CPU) and its 8-bit-bus bridge. v30u_ucrom
-# $readmemh's its two tables from HEXDIR "rtl/ucore/" (its SYNTHESIS
-# default, relative to this project directory) -- rtl/ucore/ holds
-# symlinks to the vendored hex so there is one copy of each table.
-# SEARCH_PATH lets Quartus find the .svh files v30u_eu.sv includes.
-set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_ss_pkg.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30_core.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_biu.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_eu.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_ucrom.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/v30_cpu_bridge.sv
-set_global_assignment -name SEARCH_PATH core/v30
-
-# The Zet 80186-class experiment (zet-cpu branch): vendored GPLv3 core,
-# only elaborated when PC98_ZET is defined -- the file list costs nothing
-# on the shipping build. micro_rom.dat / rom_def.v / defines.v resolve
+# The Zet 80186-class core (the PC-98's CPU here): vendored GPLv3 core on a
+# Wishbone master, bridged to the 8288 byte world by zet_cpu_bridge.
+# micro_rom.dat / rom_def.v / defines.v resolve
 # through the SEARCH_PATH; zet_micro_rom.v picks DATDIR per tool.
 set_global_assignment -name VERILOG_FILE core/zet/zet.v
 set_global_assignment -name VERILOG_FILE core/zet/zet_core.v

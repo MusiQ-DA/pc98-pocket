@@ -84,12 +84,12 @@ the end.
 
 ## Method
 
-`scripts/sim_pc98_zet_boot.sh --realmem`, BIOS/ITF from `~/.pc98roms`,
+`scripts/sim_pc98_boot.sh --realmem`, BIOS/ITF from `~/.pc98roms`,
 `+chunks=1` = 5,000,000 chipset clocks ≈ 116 ms of guest time after SDRAM
 init.  The guest reaches the ITF's GDC-init + vsync-poll loop
 (PC `F8483`-`F848B`, polling port 0x60/GDC FIFO) — a steady mix of fetches,
 data r/w and I/O; it does not reach DOS or an app in one chunk.  CPU is the
-experimental Zet free-running at clk_chipset; its *bus cycles* are paced by
+Zet free-running at clk_chipset; its *bus cycles* are paced by
 the 8288 byte engine on the cpu_ce train (default speed = 4.915 MHz mode),
 so `zwb pending` includes deliberate T-state pacing, not just SDRAM time.
 
