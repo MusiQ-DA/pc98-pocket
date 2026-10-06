@@ -970,3 +970,11 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # 19 hit the same deterministic tdc_util crash on the dbg2-witness netlist
 # (CI runs 37180392100 / 37183164481 / 37185049118, all Line 2138); 20 next.
 set_global_assignment -name SEED 20
+# clk_pico is u_softcpu's fabric-generated clk_sys/6 pulse train (~7 MHz) and
+# it drives the whole PicoRV32 + OSD domain (~1.5k loads). Left on LAB
+# routing it accumulates enough skew for intra-domain hold violations -- the
+# 695b84c fit reported -0.962 ns worst, and the firmware-side OSD went
+# missing on hardware that build. The clock itself is cheap and legal (every
+# edge coincides with a clk_sys edge); it just has to ride a global buffer
+# so the skew budget closes.
+set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "core_top:ic|softcpu_subsystem:u_softcpu|clk_pico"

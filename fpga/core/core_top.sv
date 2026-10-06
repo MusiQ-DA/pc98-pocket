@@ -1069,6 +1069,8 @@ module core_top (
     logic [7:0] key_last  = 8'h00;
 `endif
 
+    wire [31:0] dbg_pico_w;    // pico-domain liveness for probe slot 0x2A
+
     softcpu_subsystem u_softcpu (
         .fw_wr_clk                  (clk_chipset),
         .fw_wr_en                   (fw_wr_en_r),
@@ -1160,7 +1162,8 @@ module core_top (
         .st_wdata                   (st_wdata_w),
         .st_done                    (st_done_w),
         .st_rdata                   (st_rdata_w),
-        .accel_status               (accel_status_w)
+        .accel_status               (accel_status_w),
+        .dbg_pico                   (dbg_pico_w)
     );
 
 `ifdef PC98_JTAG
@@ -1851,6 +1854,12 @@ module core_top (
             // rom_rd[15:0].
             8'h30:   probe_data_c = {scsi_media, dbg_scsi[33:32],
                                    dbg_scsi[28:24], dbg_scsi[23:0]};
+            // 0x2A: softcore liveness, sampled raw out of the clk_pico domain
+            // -- {fetch completions[15:0], 0x2000_0000 polls[7:0], 2'b00,
+            // firmware cpu_speed[1:0], osd_req seen, trap seen, trap live,
+            // osd_open_req live}. A frozen fetch word is a dead pico; a
+            // frozen poll byte beside a moving fetch word is a wedged loop.
+            8'h2a:   probe_data_c = dbg_pico_w;
             8'h27:   probe_data_c = fdc_dbg[63:32];
             8'h28:   probe_data_c = fdc_dbg_cmd[31:0];
             8'h29:   probe_data_c = fdc_dbg_cmd[63:32];

@@ -147,7 +147,12 @@ module softcpu_subsystem (
 
     // Per-control key config {ext, Set-2 code}, one 9-bit entry per D-pad direction and button,
     // driven out to pocket_keyboard via core_top. Slot ids are documented at KEYCFG_REG.
-    output [16*9-1:0] key_cfg_flat
+    output [16*9-1:0] key_cfg_flat,
+
+    // JTAG-probe window into this domain (core_top slot 0x2A): fetch/poll
+    // counters plus the OSD-request and trap flags -- the only way to tell a
+    // dead softcore from a dead OSD path from outside.
+    output [31:0] dbg_pico
 );
 
     //
@@ -467,6 +472,29 @@ module softcpu_subsystem (
     assign osd_extmem    = osd_settings[SET_IDX_EXTMEM][1:0];
     assign osd_dbl_skip  = osd_settings[SET_IDX_MODE200][0];
     assign osd_fdd_turbo = ~osd_settings[SET_IDX_FDD_TURBO][0];
+
+    // Probe-visible liveness (clk_pico domain, read raw from clk_sys -- pico
+    // regs hold for the whole pico period so the sample is clean). A frozen
+    // fetch count is a dead softcore; a frozen poll count with a moving
+    // fetch count is a wedged main loop; the sticky bits keep one-cycle
+    // events. Free-running from power-up: guest resets must not wipe the
+    // evidence of what the softcore was doing.
+    reg [15:0] pico_fetch_cnt = 16'd0;
+    reg  [7:0] pico_poll_cnt  = 8'd0;
+    reg        pico_osd_seen  = 1'b0;
+    reg        pico_trap_seen = 1'b0;
+    always @(posedge clk_pico) begin
+        if (cpu_mem_valid && cpu_mem_ready && cpu_mem_instr)
+            pico_fetch_cnt <= pico_fetch_cnt + 16'd1;
+        if (sel_status && cpu_mem_ready && (cpu_mem_addr == 32'h2000_0000)
+            && (cpu_mem_wstrb == 4'b0000))
+            pico_poll_cnt <= pico_poll_cnt + 8'd1;
+        pico_osd_seen  <= pico_osd_seen  | osd_open_req;
+        pico_trap_seen <= pico_trap_seen | cpu_trap;
+    end
+    assign dbg_pico = {pico_fetch_cnt, pico_poll_cnt,
+                       2'b00, osd_cpu_speed,
+                       pico_osd_seen, pico_trap_seen, cpu_trap, osd_open_req};
 
     // Machine configuration bytes. Bits the Settings rows do not own are
     // pinned to the 0xE3 / 0x04 / 0x00 / 0x01 defaults the machine has always
