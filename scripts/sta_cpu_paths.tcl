@@ -25,15 +25,25 @@ report_timing -nworst 40 -setup \
   -from_clock $cpuclk -to_clock $cpuclk \
   -file sta_cpu_intra.txt
 
-# --- 2. HONEST: multicycle the CE-gated core, cut the phantom ROM write
+# --- 2. HONEST: multicycle the CE-gated cores, cut the phantom ROM write
 # enables (a $readmemh ROM never writes; its WE registers are constants whose
 # fan-out STA still traces), then report deep enough to see past them.
+# (read_sdc ap_core.sdc above 404s -- the file isn't generated -- so this
+# report must reproduce the project constraints itself: v30 at 5/4, zet at
+# 2/1, matching core_constraints.sdc.)
 set core [get_keepers core_top:ic|v30_core:u_cpu*]
 if {[llength $core] > 0} {
     set_multicycle_path -setup 5 -end -from $core -to $core
     set_multicycle_path -hold 4 -end -from $core -to $core
 } else {
-    puts "warning: no keepers matched the core pattern"
+    puts "warning: no keepers matched the v30 core pattern"
+}
+set zcore [get_keepers core_top:ic|zet:u_cpu*]
+if {[llength $zcore] > 0} {
+    set_multicycle_path -setup 2 -end -from $zcore -to $zcore
+    set_multicycle_path -hold 1 -end -from $zcore -to $zcore
+} else {
+    puts "warning: no keepers matched the zet core pattern"
 }
 set we [get_keepers *u_ucrom*PORT_A_WRITE_ENABLE_REG]
 if {[llength $we] > 0} {
