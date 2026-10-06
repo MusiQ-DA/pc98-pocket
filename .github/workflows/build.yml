@@ -521,6 +521,15 @@ jobs:
           ./obj_egc/eg | tee egc.log
           grep -q "PASS tb_pc98_egc" egc.log
 
+      - name: guest writes to 0x4A0-0x4AF strobe the EGC register file
+        run: |
+          # Whole-PERIPHERALS bench: the guest's io write rides the real
+          # BUS_ARBITER into the real decode. Guards the release-edge bug
+          # where an iorq-qualified egc_cs made egc_wr unreachable, dropping
+          # every guest EGC register write on hardware (EGCVIEW).
+          bash scripts/sim_egc_iow.sh | tee egciow.log
+          grep -q "PASS tb_pc98_egc_iow" egciow.log
+
       - name: CE generator makes the frequencies the speed menu names
         run: |
           H=fpga/core/chipset/HDL

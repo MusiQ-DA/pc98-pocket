@@ -1624,8 +1624,14 @@ module PERIPHERALS #(
     // time to the sequencer that owns the engine. np21w hangs no read
     // handlers on these (iocore_attachout only), so neither does this.
     // The 0x04 page sits outside pc98_io_exact's 0x00-page window (same
-    // reason fdd_144_select bypasses it), so decode raw iorq here.
-    wire egc_cs = iorq & ~address_enable_n & (address[15:4] == 12'h04A);
+    // reason fdd_144_select bypasses it), so it decodes the raw address.
+    // No iorq term -- egc_wr is a RELEASE-edge strobe, and iorq falls with
+    // io_write_n's own rise, so an iorq-qualified chip select makes egc_wr
+    // unreachable: on hardware every guest write to the register file was
+    // dropped (the engine armed through 0x6A but stayed all zeroes).
+    // mode6a_addr/mode68_addr already decode this way for the same reason;
+    // the address still names the port while the strobe completes.
+    wire egc_cs = ~address_enable_n & (address[15:4] == 12'h04A);
     assign egc_rg = address[3:0];
 
     always_ff @(posedge clock, posedge reset) begin

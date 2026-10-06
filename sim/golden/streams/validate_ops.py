@@ -5,6 +5,8 @@ Format (hex digits, lowercase, no 0x prefix):
     E <rg> <vv>         EGC register byte write  rg: 0..f   vv: 00..ff
     GT <p> <vvvv>       GRCG tile write          p:  0..3   vvvv: duplicated byte
     GM <vv>             GRCG mode register byte  (port 0x7C)
+    P  <v>              graphics access page     (port 0xA6 bit 0)
+    F  <a> <vv>         flat VRAM seed           a: byte offset
     W8  <a> <vv>        guest VRAM write 8-bit
     W16 <a> <vvvv>      guest VRAM write 16-bit
     R8  <a> <vv>        guest VRAM read 8-bit  (value returned)
@@ -90,6 +92,17 @@ def main(path):
                     fail(lineno, f"{op}: bad addr {f[1]!r}")
                 if not HEX16.match(f[2]):
                     fail(lineno, f"{op}: bad val {f[2]!r}")
+            elif op == "P":
+                if len(f) != 2:
+                    fail(lineno, "P: expected 1 field")
+                check_int(f[1], 0, 1, lineno, "P page")
+            elif op == "F":
+                if len(f) != 3:
+                    fail(lineno, "F: expected 2 fields")
+                if not ADDR.match(f[1]):
+                    fail(lineno, f"F: bad addr {f[1]!r}")
+                if not HEX8.match(f[2]):
+                    fail(lineno, f"F: bad val {f[2]!r}")
             elif op == "M":
                 if len(f) != 2:
                     fail(lineno, "M: expected 1 field")
@@ -109,7 +122,7 @@ def main(path):
         fail(0, "no X end-of-stream marker")
 
     print(f"{path}: OK")
-    for k in ("M", "E", "GM", "GT", "W8", "W16", "R8", "R16", "X"):
+    for k in ("M", "E", "GM", "GT", "P", "F", "W8", "W16", "R8", "R16", "X"):
         if counts[k]:
             print(f"  {k:3s} {counts[k]}")
     return counts
