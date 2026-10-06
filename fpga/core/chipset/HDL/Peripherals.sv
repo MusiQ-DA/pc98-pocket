@@ -98,6 +98,15 @@ module PERIPHERALS #(
         // The SCSI option ROM's odd byte, for the data_bus_hi mux in Chipset
         // -- the low lane alone cannot deliver the AA55 signature word.
         output  wire    [7:0]   scsi_rom_hi,
+        // The TVRAM window's odd byte, for the same mux -- word reads and
+        // odd-address byte reads in A0000-A3FFF take their high half here.
+        output  wire    [7:0]   tvram_q_hi,
+        // The CPU's own bus-cycle flags, needed by the byte-wide TVRAM:
+        // the odd write half and the 16-bit marker that says it is valid.
+        // cpu_word is cpu_word_access already qualified with
+        // ~address_enable_n, same term the GVRAM sequencer consumes.
+        input   logic   [7:0]   cpu_data_bus_hi,
+        input   logic           cpu_word,
         input   logic   [7:0]   interrupt_request,
         input   logic           io_read_n,
         input   logic           io_write_n,
@@ -1853,6 +1862,9 @@ module PERIPHERALS #(
         .cpu_rden    (tvram_mem_select & ~memory_read_n),
         .cpu_wdata   (internal_data_bus),
         .cpu_q       (tvram_cpu_q),
+        .cpu_word    (cpu_word),
+        .cpu_wdata_hi(cpu_data_bus_hi),
+        .cpu_q_hi    (tvram_q_hi),
         // JTAG debug read port -- shares the guest read stage's idle
         // cycles; see the module header for the two output views.
         .dbg_cell    (tvram_dbg_cell),

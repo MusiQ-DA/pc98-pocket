@@ -71,6 +71,22 @@ module pc98_tvram (
     input  wire        cpu_rden,
     input  wire  [7:0] cpu_wdata,
     output logic [7:0] cpu_q,
+    // The word halves of the access. cpu_word marks a 16-bit bus cycle
+    // (qualified with ~address_enable_n upstream, exactly as the GVRAM
+    // sequencer sees it); cpu_wdata_hi carries the odd byte. A word access
+    // is always even-aligned -- the CPU splits odd word accesses into two
+    // byte bus cycles -- so the high byte's home is always the same cell's
+    // char_hi/attr-odd slot.
+    input  wire        cpu_word,
+    input  wire  [7:0] cpu_wdata_hi,
+    // The odd-byte lane for reads. The read pipeline already realises the
+    // whole cell, so this is just a second tap: for an even-aligned word
+    // read it is the next byte (char_hi), for a byte read at an odd
+    // address (BHE) it is that byte itself (char_hi) -- one wire covers
+    // both. np21w memtram_rd8 returns mem[odd] for the attribute region,
+    // which is never written, so the attr-region odd byte is the same
+    // unwritten 0 the byte path gives.
+    output wire  [7:0] cpu_q_hi,
 
     // Debug read-back: q-cell echo in the top byte, then all three banks at
     // that cell -- {q_cell[7:0], attr, char_hi, char_lo}. The echo lets the
@@ -249,7 +265,17 @@ module pc98_tvram (
                 if (~cpu_hi)  attr[cpu_cell]    <= cpu_wdata;
             end
             else if (cpu_hi)  char_hi[cpu_cell] <= cpu_wdata;
-            else              char_lo[cpu_cell] <= cpu_wdata;
+            else begin
+                char_lo[cpu_cell] <= cpu_wdata;
+                // Word write (memtram_wr16's STOREINTELWORD): the odd byte
+                // lands too. np21w drops it only in the attribute region,
+                // handled by the is_attr branch above; here it is real RAM.
+                // Without this the even half writes and the odd half keeps
+                // its reset byte -- the POST's VRAM test reads the pair
+                // back, sees the stale odd byte, and halts on
+                // "TEXT VIDEO RAM ERROR".
+                if (cpu_word) char_hi[cpu_cell] <= cpu_wdata_hi;
+            end
         end
 
         // Read-back for the guest, one cycle late, selected after the fact so
@@ -301,6 +327,12 @@ module pc98_tvram (
         else if (q_hi)      cpu_q = q_char_hi;
         else                cpu_q = q_char_lo;
     end
+
+    // The odd-byte lane of the same registered access: the cell's high byte
+    // in the character region, the never-written odd byte in the attribute
+    // region. A word read's high half and an odd-address byte read's BHE
+    // half both want exactly this.
+    assign cpu_q_hi = q_is_attr ? 8'h00 : q_char_hi;
 
     assign dbg_q = {q_cell[7:0], q_attr, q_char_hi, q_char_lo};
 

@@ -259,6 +259,7 @@ module CHIPSET #(
     logic   [7:0]   internal_data_bus_chipset;
     logic   [7:0]   internal_data_bus_ram;
     wire    [7:0]   scsi_rom_hi;
+    wire    [7:0]   tvram_q_hi;
     logic           data_bus_out_from_chipset;
     logic           internal_data_bus_direction;
     logic           no_command_state;
@@ -460,6 +461,9 @@ module CHIPSET #(
         .data_bus_out                       (internal_data_bus_chipset),
         .data_bus_out_from_chipset          (data_bus_out_from_chipset),
         .scsi_rom_hi                        (scsi_rom_hi),
+        .tvram_q_hi                         (tvram_q_hi),
+        .cpu_data_bus_hi                    (cpu_data_bus_hi),
+        .cpu_word                           (cpu_word_access & ~address_enable_n),
         .interrupt_request                  (interrupt_request),
         .io_read_n                          (io_read_n),
         .io_write_n                         (io_write_n),
@@ -746,8 +750,17 @@ module CHIPSET #(
     // lane whenever the window is being read. Without it the scan's signature
     // word never reaches the CPU.
     wire scsi_rom_hi_read = (~memory_read_n) && (address[19:12] == 8'hD2);
+    // The text-VRAM window (A0000-A3FFF) owns its odd lane the same way:
+    // word reads take their high half from the cell's char_hi byte and odd
+    // byte reads (BHE) take that same byte -- Peripherals' tvram_q_hi is
+    // the registered answer for both. Without this entry the high lane
+    // fell through to the GVRAM sequencer, so the BIOS's VRAM verify read
+    // back a stale byte and halted on "TEXT VIDEO RAM ERROR".
+    wire tvram_hi_read = (~memory_read_n) && ~address_enable_n
+                       && (address[19:14] == 6'b101000);
     assign data_bus_hi = xrom_read         ? xrom_q_hi
                        : scsi_rom_hi_read  ? scsi_rom_hi
+                       : tvram_hi_read     ? tvram_q_hi
                        :                     seq_rdata_hi_w;
 
     // fpga/xrom.asm (nasm -f bin). The NEC option-ROM format: AA55h at
