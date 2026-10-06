@@ -48,7 +48,7 @@ module tb_cursor_cdc;
         .hblank(hblank), .vblank(vsync_in),
         .disp_on(disp_on), .pitch(pitch),
         .part_sad(part_sad), .part_len(part_len),
-        .part_bend(part_bend), .line_rep(), .vlines(),
+        .part_pbyte(), .part_bend(part_bend), .line_rep(), .vlines(),
         .cursor_addr(cursor_addr), .cursor_dot(cursor_dot),
         .cursor_en(cursor_en), .cursor_blink_en(cursor_blink_en),
         .cursor_top(cursor_top), .cursor_bottom(cursor_bottom),

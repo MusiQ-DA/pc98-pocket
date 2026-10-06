@@ -34,7 +34,7 @@ module pc98_text_rowbase (
     input  wire [15:0] gdc_sad [0:3], // the four partitions' SADs, raw
     input  wire  [5:0] gdc_bend [0:2], // their boundaries, in ROWS (pc98_gdc
                                      // divides np21w's rasterline LENs)
-    input  wire  [4:0] row,         // the text row being addressed, 0-24
+    input  wire  [5:0] row,         // the text row being addressed, 0-49
     output wire [11:0] base         // LOW12(SAD[p] + rel*PITCH), or row*80
 );
 
@@ -51,16 +51,16 @@ module pc98_text_rowbase (
     // the fallback is still eighty columns from cell 0.
     // (The call is a separate statement: Verilator 5.020's V3Gate trips on
     // a function call inlined inside a conditional -- internal error.)
-    wire [16:0] partf = pc98_text_part(row, gdc_sad, gdc_bend);
-    wire [16:0] part = live ? partf : {row, 12'd0};
-    wire  [4:0] rel   = part[16:12];
+    wire [17:0] partf = pc98_text_part(row, gdc_sad, gdc_bend);
+    wire [17:0] part = live ? partf : {row, 12'd0};
+    wire  [5:0] rel   = part[17:12];
     wire [11:0] sad   = part[11:0];
 
     // Both terms are cell counts; the 12-bit sum IS the LOW12 wrap. The
-    // 5x8 product rides a DSP block (12 of 66 are in use) because the ALM
+    // 6x8 product rides a DSP block (12 of 66 are in use) because the ALM
     // fabric is at 99 per cent -- a LUT multiplier is what pushed the fit
     // over the device edge.
-    (* multstyle = "dsp" *) logic [12:0] row_pitch;
+    (* multstyle = "dsp" *) logic [13:0] row_pitch;
     always_comb row_pitch = rel * pitch;
     assign base = sad + row_pitch[11:0];
 

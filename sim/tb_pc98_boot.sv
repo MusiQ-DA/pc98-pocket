@@ -704,8 +704,9 @@ module tb_pc98_boot;
         .rd_clk(dot_clk), .hcount(vid_h), .vcount(vid_v),
         .disp_on(disp_on_r), .disp_page(disp_page_r),
         .analog_mode(analog4_r), .dbl(dbl_r),
-        .pitch(8'd40), .mhz5(1'b0),
+        .pitch(8'd40), .mhz5(1'b0), .lrep(5'd0),
         .part_sad(disp_sad), .part_len(disp_len),
+        .part_pbyte(4'h0),
         .p_req(gv_req), .p_addr(gv_addr), .p_len(gv_len),
         .p_ack(gv_ack), .p_rvalid(gv_rvalid), .p_rdata(gv_rdata),
         .p_done(gv_done), .gfx_dot(gv_dot_unused)

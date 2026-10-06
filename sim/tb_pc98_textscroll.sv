@@ -76,7 +76,7 @@ module tb_pc98_textscroll;
     );
 
     // --------------------------------------------- the row-base mapper
-    logic [4:0]  fill_row = 5'd0;
+    logic [5:0]  fill_row = 6'd0;
     wire  [11:0] row_base;
 
     pc98_text_rowbase u_map (
@@ -188,7 +188,7 @@ module tb_pc98_textscroll;
         end
     endtask
 
-    task automatic base_check(input [4:0] r, input [11:0] want,
+    task automatic base_check(input [5:0] r, input [11:0] want,
                               input string what);
         #1;
         if (row_base !== want) begin
@@ -198,7 +198,7 @@ module tb_pc98_textscroll;
         end
     endtask
 
-    task automatic do_fill(input [4:0] r);
+    task automatic do_fill(input [5:0] r);
         @(negedge clk);
         fill_row   = r;
         fill_start = 1'b1;

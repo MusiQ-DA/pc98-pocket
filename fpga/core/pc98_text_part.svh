@@ -21,30 +21,31 @@
 // Written once because two modules have to agree: pc98_text_rowbase (the
 // glyph row buffer's fetch address) and pc98_text_render (the attribute
 // fetch and the cursor's cell compare). The function returns
-// {rel_row[4:0], sad[11:0]} -- the row's index INSIDE its partition and
+// {rel_row[5:0], sad[11:0]} -- the row's index INSIDE its partition and
 // that partition's LOW12 SAD -- so each consumer adds its own pitch
 // product; the callers keep the unprogrammed-GDC fallback (partition 0,
-// rel = row) themselves.
+// rel = row) themselves. Six bits: an 8-line font puts 50 rows on the
+// raster and np21w has no wrap at 32.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // NO INCLUDE GUARD, deliberately -- see pc98_sdram_map.svh for why.
 
 /* verilator lint_off UNUSEDSIGNAL */
-function automatic logic [16:0] pc98_text_part(
-        input logic [4:0]  row,
+function automatic logic [17:0] pc98_text_part(
+        input logic [5:0]  row,
         input logic [15:0] sad [0:3],
         input logic [5:0]  bend [0:2]);
     logic [5:0] r;
-    r = {1'b0, row};
+    r = row;
     if (r < bend[0]) begin
         pc98_text_part = {row, sad[0][11:0]};
     end else if (r < bend[1]) begin
-        pc98_text_part = {5'(r - bend[0]), sad[1][11:0]};
+        pc98_text_part = {6'(r - bend[0]), sad[1][11:0]};
     end else if (r < bend[2]) begin
-        pc98_text_part = {5'(r - bend[1]), sad[2][11:0]};
+        pc98_text_part = {6'(r - bend[1]), sad[2][11:0]};
     end else begin
-        pc98_text_part = {5'(r - bend[2]), sad[3][11:0]};
+        pc98_text_part = {6'(r - bend[2]), sad[3][11:0]};
     end
 endfunction
 /* verilator lint_on UNUSEDSIGNAL */

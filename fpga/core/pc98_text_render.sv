@@ -104,7 +104,7 @@ module pc98_text_render #(
     // would start beyond the visible frame -- pitch does not always divide
     // 400, and the last partial row's fill is the next frame's row 0).
     output wire        txt_row_tick,
-    output wire [4:0]  txt_next_row
+    output wire [5:0]  txt_next_row
 );
 
     wire visible = (hcount < 10'd640) && (vcount < 10'd400);
@@ -127,15 +127,16 @@ module pc98_text_render #(
     wire [9:0] pitch_p1 = {5'd0, line_rep} + 10'd1;
 
     reg  [9:0] trk_v;
-    reg  [4:0] trk_raster, trk_row;
+    reg  [4:0] trk_raster;
+    reg  [5:0] trk_row;
     wire       new_line = (vcount != trk_v);
     wire       trk_full = ({5'd0, trk_raster} >= pitch_p1 - 10'd1);
 
     wire [4:0] raster_q = (vcount == 10'd0) ? 5'd0
                         : new_line ? (trk_full ? 5'd0 : trk_raster + 5'd1)
                         :            trk_raster;
-    wire [4:0] row_q    = (vcount == 10'd0) ? 5'd0
-                        : new_line ? (trk_full ? trk_row + 5'd1 : trk_row)
+    wire [5:0] row_q    = (vcount == 10'd0) ? 6'd0
+                        : new_line ? (trk_full ? trk_row + 6'd1 : trk_row)
                         :            trk_row;
 
     always_ff @(posedge clk) begin
@@ -180,9 +181,9 @@ module pc98_text_render #(
                          : frame_end  ? 5'd0
                          : pf_full    ? 5'd0
                          :              raster_q + 5'd1;
-    wire [4:0] next_row  = !last_char ? row_q
-                         : frame_end  ? 5'd0
-                         : pf_full    ? row_q + 5'd1
+    wire [5:0] next_row  = !last_char ? row_q
+                         : frame_end  ? 6'd0
+                         : pf_full    ? row_q + 6'd1
                          :              row_q;
 
     // ---- where the screen starts, and how wide a row is -------------------
@@ -213,15 +214,15 @@ module pc98_text_render #(
     // keeps every row in partition 0, which reduces to the old SAD+row*pitch.
     // (The calls are separate statements: Verilator 5.020's V3Gate trips
     // on a function call inlined inside a conditional -- internal error.)
-    wire [16:0] n_partf = pc98_text_part(next_row, gdc_sad, gdc_bend);
-    wire [16:0] n_part  = gdc_live ? n_partf : {next_row, 12'd0};
+    wire [17:0] n_partf = pc98_text_part(next_row, gdc_sad, gdc_bend);
+    wire [17:0] n_part  = gdc_live ? n_partf : {next_row, 12'd0};
     wire [11:0] n_start = n_part[11:0];
-    wire [4:0]  n_rel   = n_part[16:12];
+    wire [5:0]  n_rel   = n_part[17:12];
     // row * pitch. Kept as a multiplier only when the GDC is driving it; the
     // 80-column case is still the shift pair it always was.
     (* multstyle = "dsp" *) wire [11:0] n_relmul  = n_rel * eff_pitch;
-    wire [11:0] n_rowoff  = {1'b0, next_row, 6'd0} + {3'b000, next_row, 4'd0};
-    wire [11:0] next_rowbase = gdc_live ? n_relmul : n_rowoff;
+    wire [12:0] n_rowoff_w = {1'b0, next_row, 6'd0} + {3'b000, next_row, 4'd0};
+    wire [11:0] next_rowbase = gdc_live ? n_relmul : n_rowoff_w[11:0];
     // In the cell index space a wide column occupies two slots (np21w's
     // edi += 2 per column), so the column term doubles.
     wire [11:0] next_coff    = wide ? {5'd0, next_col[5:0], 1'b0}
@@ -232,14 +233,14 @@ module pc98_text_render #(
     // start and pitch. next_* above is where the memories are pointed (one
     // character time ahead); this is where the shift register is emptying.
     // (Named draw_row because cur_row is the glyph register below.)
-    wire [4:0]  draw_row  = row_q;
-    wire [16:0] d_partf = pc98_text_part(draw_row, gdc_sad, gdc_bend);
-    wire [16:0] d_part  = gdc_live ? d_partf : {draw_row, 12'd0};
+    wire [5:0]  draw_row  = row_q;
+    wire [17:0] d_partf = pc98_text_part(draw_row, gdc_sad, gdc_bend);
+    wire [17:0] d_part  = gdc_live ? d_partf : {draw_row, 12'd0};
     wire [11:0] d_start = d_part[11:0];
-    wire [4:0]  d_rel   = d_part[16:12];
+    wire [5:0]  d_rel   = d_part[17:12];
     (* multstyle = "dsp" *) wire [11:0] d_relmul  = d_rel * eff_pitch;
-    wire [11:0] d_rowoff  = {1'b0, draw_row, 6'd0} + {3'b000, draw_row, 4'd0};
-    wire [11:0] draw_rowbase = gdc_live ? d_relmul : d_rowoff;
+    wire [12:0] d_rowoff_w = {1'b0, draw_row, 6'd0} + {3'b000, draw_row, 4'd0};
+    wire [11:0] draw_rowbase = gdc_live ? d_relmul : d_rowoff_w[11:0];
     wire [11:0] draw_coff  = wide ? {5'd0, col[5:0], 1'b0} : {5'd0, col};
     wire [11:0] drawn_cell = d_start + draw_rowbase + draw_coff;
 
@@ -336,7 +337,7 @@ module pc98_text_render #(
     // vcount+pitch is always the same raster of the next row, so its row is
     // row_q+1; past the visible frame the next fill is row 0.
     wire [9:0] next_row_v = vcount + pitch_p1;
-    assign txt_next_row = (next_row_v >= 10'd400) ? 5'd0 : row_q + 5'd1;
+    assign txt_next_row = (next_row_v >= 10'd400) ? 6'd0 : row_q + 6'd1;
 
     always_comb begin
         logic lit;

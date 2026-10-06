@@ -54,10 +54,16 @@ module pc98_gvram_display #(
     input  wire        analog_mode,       // port 0x6A bit 0: plane E exists
     // The "200 line" modes on this fixed 400-line raster: each guest line
     // serves two rasterlines. Set by Peripherals from the slave's CSRFORM
-    // LR field / a ~200-line SYNC AL -- see the w_step note. (mode1 bit 4
-    // is NOT a source: np21w uses it only to keep the odd rasterlines
-    // dark -- the mabiki presentation, handled on the output side.)
+    // LR field / a ~200-line SYNC AL. (mode1 bit 4 is NOT a source: np21w
+    // uses it only to keep the odd rasterlines dark -- the mabiki
+    // presentation, handled on the output side.)
     input  wire        dbl,
+    // The slave's CSRFORM LR field, raw (np21w's `mg.lr = (para[CSRFORM] &
+    // 0x1f) + 1`): rasterlines each VRAM line is held for. When software
+    // signals 200 lines through SYNC AL instead (`dbl` with LR=0), the walk
+    // still has to double for the fixed raster, so the effective stride is
+    // two rasterlines.
+    input  wire  [4:0]  lrep,
 
     // The slave GDC's display registers, live from pc98_gdc on this same
     // clock. They are latched at each line edge, so a mid-frame rewrite
@@ -66,7 +72,8 @@ module pc98_gvram_display #(
     input  wire  [7:0]  pitch,            // PITCH register value
     input  wire         mhz5,             // port 0x6A clock field == 3
     input  wire  [15:0] part_sad [0:3],   // partition start, word address
-    input  wire  [9:0]  part_len [0:3],   // partition length, lines
+    input  wire  [9:0]  part_len [0:3],   // partition length, rasterlines
+    input  wire  [3:0]  part_pbyte,       // per-partition LEN[14] pitch unit
 
     // sdram_mp port side -- the controller's port D, a read-only master of
     // its own so the twenty bursts a line never queue behind the font's five.
@@ -183,15 +190,15 @@ module pc98_gvram_display #(
     localparam int CHUNKS = 80 / BURST;   // 5
 
     // The byte a line starts from: the uPD7220 never multiplies -- inside a
-    // partition it just adds PITCH words a line to the running address, and
-    // running off the partition's LEN restarts from the next entry's SAD.
-    // Track it the way np21w maketgrp.c does: a 2-bit partition pointer
-    // that wraps MOD 4 (`s_scrp = (s_scrp + 4) & 0x0c` -- running off
-    // partition three goes back to partition zero, not into a fifth area),
-    // a line counter inside it, and a base that steps by {pitch, 1'b0}
-    // bytes. A zero LEN never ends: np21w's `s_scr--; if (!s_scr)` wraps
-    // the UINT to 0xFFFFFFFF instead of firing, so the walk parks in that
-    // partition forever -- an absorbing state, not a skipped one.
+    // partition it just adds PITCH to the running address every LR
+    // rasterlines, and running off the partition's LEN restarts from the
+    // next entry's SAD. Track it the way np21w makegrph.c does: a 2-bit
+    // partition pointer that wraps MOD 4 (`s_scrp = (s_scrp + 4) & 0x0c` --
+    // running off partition three goes back to partition zero, not into a
+    // fifth area), a rasterline counter inside it, and a `mul` stride for
+    // the pitch steps. A zero LEN never ends: np21w's `remain--; if
+    // (!remain)` wraps the UINT instead of firing, so the walk parks in
+    // that partition forever -- an absorbing state, not a skipped one.
     //
     // The walk leads the raster by LOOKAHEAD lines: when the edge for
     // line_now fires, run_base holds the byte offset of display line
@@ -202,7 +209,7 @@ module pc98_gvram_display #(
     // overrun), and a fill that still misses just leaves a bank stale rather
     // than corrupting the walk.
     logic [1:0]  cur_part  = 2'd0;
-    logic [9:0]  part_rel  = 10'd0;     // line index inside the partition
+    logic [9:0]  part_rel  = 10'd0;     // rasterlines spent in the partition
     logic [14:0] run_base  = 15'd0;     // byte offset of the walked line
 
     // The line the next fill must bring in, wrapped into the display range.
@@ -213,43 +220,51 @@ module pc98_gvram_display #(
     wire [8:0] fill_tgt = (tgt_sum >= 10'(LINES)) ? 9'(tgt_sum - 10'(LINES))
                                                 : 9'(tgt_sum);
 
-    // The clock field changes what PITCH counts (np21w maketgrp: s_pitch is
-    // doubled while the 5MHz flag is clear): at 2.5MHz the register is words
-    // per line, at 5MHz it is bytes per line -- and forced even, np21w's
-    // `s_pitch &= 0xfe`. SAD stays a word address in both modes.
-    wire  [8:0]  pitch_b  = mhz5 ? {1'b0, pitch[7:1], 1'b0}
-                                 : {pitch, 1'b0};
+    // np21w vram/makegrph.c grphput_indirty0: per OUTPUT rasterline the
+    // partition's remaining LEN decrements (`remain--; if (!remain)`), and
+    // independently a `mul` counter steps the VRAM address by PITCH every
+    // `mg.lr` rasterlines (`mul--; if (!mul) { mul = mg.lr; vad += pitch; }`).
+    // The pitch unit has two selectors in np21w -- makegrph.c tests the
+    // partition's LEN bit 14, maketgrp.c (the text+graphics composite)
+    // tests the 5MHz clock flag, and either marks the register as counting
+    // bytes; otherwise it counts words and is doubled into bytes. Both
+    // `&= 0xfe` floor it even.
+    wire  [8:0]  pitch_b  = (part_pbyte[cur_part] | mhz5)
+                                              ? {1'b0, pitch[7:1], 1'b0}
+                                              : {1'b0, pitch[6:0], 1'b0};
     wire  [9:0]  cur_len  = part_len[cur_part];
     // The next partition CYCLICALLY -- np21w's s_scrp mask wraps partition
     // three back to partition zero, so the bare `+1` index must wrap too
     // (an unmasked cur_part=3 read lands one slot past the array).
     wire  [15:0] sad_next = part_sad[(cur_part + 2'd1) & 2'd3];
-    // In the doubled modes each guest line covers a PAIR of rasterlines, so
-    // the walk steps only when the next fill target opens a new guest line
-    // -- the target's low bit, since fill_tgt counts rasterlines. The LENs
-    // keep counting guest lines, so the partition logic below is unchanged.
-    wire         w_step   = ~dbl | fill_tgt[0];
+    // mg.lr: programmed LR+1 when CSRFORM carries it, else the doubled-mode
+    // default of two rasterlines per line so the AL<256 heuristic keeps
+    // fetching each line twice.
+    wire  [4:0]  mul_lr   = (lrep != 5'd0) ? (lrep + 5'd1)
+                                         : (dbl ? 5'd2 : 5'd1);
+    logic [4:0]  mul_q    = 5'd1;         // rasterlines to the next vad step
     wire         w_wrap   = (line_now == 9'(LINES - 1 - LOOKAHEAD));
-    // Advance when the next guest line would pass the current partition's
-    // LEN -- a zero LEN never advances (the absorbing case above), and the
-    // pointer wraps mod 4 so partition three's end reopens partition zero.
-    wire         w_adv    = w_step & !w_wrap && (cur_len != 10'd0)
+    // Advance when this rasterline was the partition's last -- a zero LEN
+    // never advances (the absorbing case above), and the pointer wraps
+    // mod 4 so partition three's end reopens partition zero.
+    wire         w_adv    = !w_wrap && (cur_len != 10'd0)
                        && (({1'b0, part_rel} + 11'd1) >= {1'b0, cur_len});
-    wire  [14:0] base_next = w_wrap ? 15'(part_sad[0] << 1)
-                          : w_adv  ? 15'(sad_next << 1)
-                          : w_step ? run_base + 15'(pitch_b)
-                          :          run_base;
+    wire         w_pstep  = (mul_q <= 5'd1);
+    wire  [14:0] base_next = w_wrap  ? 15'(part_sad[0] << 1)
+                          : w_adv   ? 15'(sad_next << 1)
+                          : w_pstep ? run_base + 15'(pitch_b)
+                          :           run_base;
 
     always_ff @(posedge clk) begin
         if (rst) begin
             cur_part <= 2'd0;
             part_rel <= 10'd0;
+            mul_q    <= 5'd1;
             run_base <= 15'd0;
         end else if (line_edge && (line_now < 9'(LINES))) begin
             cur_part <= w_wrap ? 2'd0 : w_adv ? cur_part + 2'd1 : cur_part;
-            part_rel <= (w_wrap || w_adv) ? 10'd0
-                      : w_step            ? part_rel + 10'd1
-                      :                     part_rel;
+            part_rel <= (w_wrap || w_adv) ? 10'd0 : part_rel + 10'd1;
+            mul_q    <= (w_wrap || w_adv || w_pstep) ? mul_lr : mul_q - 5'd1;
             run_base <= base_next;
         end
     end

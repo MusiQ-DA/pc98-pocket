@@ -90,6 +90,11 @@ module pc98_gdc #(
     // it was baked in as the graphics form, and that was wrong for text.
     output wire [15:0] part_sad [0:3],
     output wire [9:0]  part_len [0:3],
+    // LEN bit 14 per partition: np21w vram/makegrph.c tests it on the slave's
+    // LEN word to pick the PITCH unit -- CLEAR means the PITCH register
+    // counts words (shift left to bytes), SET means it already counts bytes.
+    // Only the graphics walk consumes it; text takes part_bend.
+    output wire [3:0]  part_pbyte,
     // Row-unit boundaries for the TEXT walker: bend[k] is the first row of
     // partition k+1, i.e. floor(cum(len[0..k]) / (TEXT_LR+1)), 63 = beyond
     // the deepest row. np21w maketext.c counts LEN in emitted RASTERLINES
@@ -98,7 +103,8 @@ module pc98_gdc #(
     // new partition's row 0 -- a floor, not a ceil. LEN is not comparable
     // to a row index until divided by the row height, which is why the
     // text consumers take these instead of part_len. The slave side
-    // (graphics) counts guest lines directly and does use part_len.
+    // (graphics) counts emitted rasterlines -- makegrph.c decrements
+    // `remain` once per output `liney++` -- and does use part_len.
     output wire [5:0]  part_bend [0:2],
     // The cursor, as CSRW and CSRFORM leave it.
     output wire [15:0] cursor_addr,
@@ -568,6 +574,7 @@ module pc98_gdc #(
             assign part_sad[g] = sad_raw;
             // lines = (LEN & 0x3FFF) >> 4
             assign part_len[g] = 10'((len_raw & 16'h3FFF) >> 4);
+            assign part_pbyte[g] = len_raw[14];
         end
     endgenerate
 

@@ -494,7 +494,10 @@ static void gdc_wdat(const struct gdc_snap *g)
     uint32_t csrw = g->csrw[0] | ((uint32_t) g->csrw[1] << 8) | ((uint32_t) g->csrw[2] << 16) |
                     ((uint32_t) g->csrw[3] << 24);
     uint32_t adrs = (csrw & 0x3FFFu) << 1;
-    uint16_t leng = (uint16_t) ((((uint16_t) g->dc_lo | ((uint16_t) g->dc_hi << 8)) & 0x3FFFu) + 1u);
+    // np21w io/gdc_sub.c loads the count as the raw little-endian word at
+    // VECTW+1 and increments -- no 14-bit mask; whatever DC[15:14] held
+    // participates in the run length.
+    uint16_t leng = (uint16_t) (((uint16_t) g->dc_lo | ((uint16_t) g->dc_hi << 8)) + 1u);
     uint32_t base = plane_base[(csrw >> 14) & 3u];
     data &= mask;
     do {

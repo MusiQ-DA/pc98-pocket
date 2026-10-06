@@ -887,6 +887,7 @@ module PERIPHERALS #(
     wire [1:0]  gdc_m_zoom,      gdc_s_zoom;
     wire [4:0]  gdc_s_lrep;                  // slave CSRFORM LR (GRPH_LR)
     wire [9:0]  gdc_s_al;                    // slave SYNC AL field, raw
+    wire [3:0]  gdc_s_pbyte;                 // per-partition LEN[14] pitch unit
     // The drawing-server plumbing: the two channels' handshakes and the
     // done-level synchronisers (the softcore writes the level; the rising
     // edge here retires the EXECUTE in the GDC).
@@ -925,6 +926,7 @@ module PERIPHERALS #(
         .hblank(gdc_hb_q), .vblank(gdc_vb_q),
         .disp_on(gdc_m_disp_on), .pitch(gdc_m_pitch),
         .part_sad(gdc_m_sad), .part_len(gdc_m_len),
+        .part_pbyte(),
         .part_bend(gdc_m_bend),
         .cursor_addr(gdc_m_cur_addr), .cursor_dot(gdc_m_cur_dot),
         .cursor_en(gdc_m_cur_en), .cursor_blink_en(gdc_m_cur_bl),
@@ -945,6 +947,7 @@ module PERIPHERALS #(
         .hblank(gdc_hb_q), .vblank(gdc_vb_q),
         .disp_on(gdc_s_disp_on), .pitch(gdc_s_pitch),
         .part_sad(gdc_s_sad), .part_len(gdc_s_len),
+        .part_pbyte(gdc_s_pbyte),
         .part_bend(),
         .cursor_addr(gdc_s_cur_addr), .cursor_dot(gdc_s_cur_dot),
         .cursor_en(gdc_s_cur_en), .cursor_blink_en(gdc_s_cur_bl),
@@ -1330,8 +1333,9 @@ module PERIPHERALS #(
         .analog_mode(pc98_analog),
         .pitch(gdc_s_pitch),
         .mhz5(&gdc_clk),
-        .dbl(gdc_s_dbl),
+        .dbl(gdc_s_dbl), .lrep(gdc_s_lrep),
         .part_sad(gdc_s_sad), .part_len(gdc_s_len),
+        .part_pbyte(gdc_s_pbyte),
         .p_req(gv_rd_req), .p_addr(gv_rd_addr), .p_len(gv_rd_len),
         .p_ack(gv_rd_ack), .p_rvalid(gv_rd_valid), .p_rdata(gv_rd_data),
         .p_done(gv_rd_done),
@@ -1382,7 +1386,7 @@ module PERIPHERALS #(
     // The row FETCHED is the NEXT one, because the buffer is double-buffered
     // and the renderer is reading the row being displayed.
     wire       txt_row_tick;
-    wire [4:0] txt_next_row;
+    wire [5:0] txt_next_row;
     wire       pc98_row_tick = txt_row_tick;
     logic pc98_row_tick_q;
     always_ff @(posedge clk_pc98_dot) pc98_row_tick_q <= pc98_row_tick;
@@ -1396,7 +1400,7 @@ module PERIPHERALS #(
 
     // LOW12(SAD + row*PITCH) for the row after the one on screen; falls
     // back to row*80 while the master GDC is unprogrammed.
-    wire [4:0]  pc98_next_row  = txt_next_row;
+    wire [5:0]  pc98_next_row  = txt_next_row;
     wire [11:0] pc98_row_base;
     pc98_text_rowbase u_pc98_text_rowbase (
         .gdc_on(gdc_m_disp_on), .gdc_pitch(gdc_m_pitch),
