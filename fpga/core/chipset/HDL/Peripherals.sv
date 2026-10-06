@@ -1098,6 +1098,70 @@ module PERIPHERALS #(
     wire sysport_read      = (sysport_31_select | sysport_33_select
                             | sysport_35_select | sysport_42_select) & ~io_read_n;
 
+    // ---- gate A20 -- the CPU control pair at 0xF0/0xF2 (np21w io/cpuio.c).
+    //
+    // cpuio_bind attaches an eight-entry table at 0x00F0 with mask 0x0CF1,
+    // so only the even addresses decode. Of the eight, the 286 build fills
+    // exactly these:
+    //
+    //   OUT 0F0h  gate A20 OFF and reset the CPU   (cpuio_of0)
+    //   OUT 0F2h  gate A20 ON                      (cpuio_of2)
+    //   IN  0F0h  sound detect                     (cpuio_if0)
+    //   IN  0F2h  A20 status                       (cpuio_if2)
+    //
+    // The reset half of OUT 0F0h is core_top's f0_port_write ->
+    // soft_reset_cpu; this block owns the A20 half. np21w drops the gate in
+    // the same write handler that asks for the reset -- so the flag cannot
+    // live on reset_chipset, which OUT 0F0h deliberately does NOT pulse --
+    // and it must clear on this write even though the CPU is the only thing
+    // that restarts. Power-on state is MASKED (np21w i286c/i286c.c:178,
+    // I286_ADRSMASK = 0xfffff).
+    //
+    // IN 0F2h is cpuio_if2's `0xFF - ((CPU_ADRSMASK >> 20) & 1)`: FEh with
+    // the gate open, FFh masked -- bit 0 low means A20 enabled, and drivers
+    // that enable the gate poll exactly that bit to confirm it took.
+    //
+    // IN 0F0h answers cpuio_if0's non-AMD-98 branch, 0x00 (an AMD-98 would
+    // read 0x18; this machine is OPNA). Claiming it matters: left open the
+    // port reads 0xFF, whose bits 3 and 4 are the AMD-98 signature software
+    // probes for.
+    //
+    // The mask itself needs no address path. np21w applies CPU_ADRSMASK
+    // inside cpumem on every CPU access, but here the Zet's cpu_adr_o is 20
+    // bits and every downstream port -- ad_out, the Chipset address, RAM's
+    // -- is [19:0]: the bus can never carry bit 20 at all, so "masked" is
+    // the only behaviour the memory path can express in EITHER state, and
+    // the flag is what software actually observes. (HMA software would
+    // additionally need RAM at 0x100000, which this machine does not fit:
+    // pc98_sdram_map.svh tops the guest space at 0xFFFFF.)
+    //
+    // 0xF6, the data-driven gate, is IA32-only in np21w's cpuio table --
+    // this is a 286-class machine, so the port is left unclaimed.
+    logic       a20_en;
+    wire a20_f0_sel = ~address_enable_n & (address[15:8] == 8'h00)
+                    & (address[7:0] == 8'hF0);
+    wire a20_f2_sel = ~address_enable_n & (address[15:8] == 8'h00)
+                    & (address[7:0] == 8'hF2);
+
+    always_ff @(posedge clock or posedge reset) begin
+        if (reset)
+            a20_en <= 1'b0;
+        // Apply at the end of the write strobe, when the latched address
+        // names the port actually written -- the address sweep through F0
+        // while ALE is still open cannot reach here (the strobe has not
+        // fallen yet), which is the same qualification core_top gives the
+        // write before it pulses soft_reset_cpu.
+        else if (io_write_n & ~prev_io_write_n) begin
+            if (a20_f0_sel)      a20_en <= 1'b0;
+            else if (a20_f2_sel) a20_en <= 1'b1;
+        end
+    end
+
+    wire a20_f0_read = pc98_io_exact & (address[7:0] == 8'hF0) & ~io_read_n;
+    wire a20_f2_read = pc98_io_exact & (address[7:0] == 8'hF2) & ~io_read_n;
+    wire cpuif_read  = a20_f0_read | a20_f2_read;
+    wire [7:0] cpuif_data = a20_f2_read ? {7'b1111111, ~a20_en} : 8'h00;
+
     // ---- ARTIC -- the relative counter at 0x5C-0x5F (np21w io/artic.c).
     //
     // A free-running 24-bit counter the guest reads for elapsed time:
@@ -2536,6 +2600,13 @@ module PERIPHERALS #(
         begin
             data_bus_out_from_chipset_q <= 1'b1;
             data_bus_out_q <= sysport_data;
+        end
+        // The CPU control pair: IN 0F0h the sound detect, IN 0F2h the gate
+        // A20 status (np21w io/cpuio.c, cpuio_if0/cpuio_if2).
+        else if (cpuif_read)
+        begin
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= cpuif_data;
         end
         // ARTIC: 0x5C-0x5F, the free-running counter games pace loops off.
         else if (artic_sel & ~io_read_n)
