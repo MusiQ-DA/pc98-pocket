@@ -107,6 +107,18 @@ module pc98_gvram_display #(
     end
     wire [8:0] line_now = gray2bin(gray_s2);
 
+    // disp_on arrives on rd_clk; the fetch FSM is on clk. The real slave
+    // GDC scans display RAM only while STARTed (np21w gdc.c -- display
+    // refresh is a START-state behaviour), so a stopped display must not
+    // fetch: it would burn a fifth of the SDRAM frame on planes nobody is
+    // showing. Two-flop into this domain; the walk keeps tracking while
+    // off so a mid-frame START resumes on the right line.
+    logic disp_s1 = 1'b0, disp_on_c = 1'b0;
+    always_ff @(posedge clk) begin
+        disp_s1   <= disp_on;
+        disp_on_c <= disp_s1;
+    end
+
     // The only legal moves are +1 and the 439->0 wrap. Gray codes promise
     // single-bit transitions between CONSECUTIVE values only, and the wrap
     // breaks it -- gray(439) and gray(0) differ in six bits, so the 2FF can
@@ -282,7 +294,11 @@ module pc98_gvram_display #(
         end else begin
             if (p_ack) req_q <= 1'b0;
             if (!f_active) begin
-                if (line_edge && (line_now < 9'(LINES))) begin
+                // Launch only while the display runs: STOP means no
+                // display-refresh traffic on a real GDC, so no fills here
+                // either. A fill already in flight finishes -- its bank is
+                // simply stale.
+                if (disp_on_c && line_edge && (line_now < 9'(LINES))) begin
                     // A new line just began: fill the one LOOKAHEAD lines
                     // out into its own bank. The walk is already positioned
                     // at that target, so run_base is its byte offset --

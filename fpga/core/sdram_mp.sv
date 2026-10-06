@@ -204,9 +204,22 @@ module sdram_mp #(
     logic [RD_DELAY:0] rd_pipe;
 
     wire [ROW_BITS-1:0]  act_row  = p_addr[winner][ADDR_BITS-1 -: ROW_BITS];
-    wire [BANK_BITS-1:0] act_bank = p_addr[winner][COL_BITS +: BANK_BITS];
+    // Physical bank = the two low bits XOR the 32KB-pair field. Straight
+    // a[10:9] puts every client that walks a 32KB-aligned region -- the four
+    // GVRAM display planes at A8000/B0000/B8000/E0000 being the load-bearing
+    // case -- into the same bank, so each plane switch in a display fill pays
+    // a PRECHARGE+ACTIVATE against whichever row the CPU or another plane
+    // left open (measured: port A and port D each spent ~90K clocks per 5M
+    // in the PRE_MISS/ACT states). XOR spreads the four planes across all
+    // four banks while keeping the 512-word rotation for sequential traffic.
+    // The map is injective in {row,bank,col}: same row fixes a[16:15], so
+    // equal banks still imply equal a[10:9]. sim/sdram_model.sv's flat()
+    // un-XORs to rebuild the guest-linear address.
+    wire [BANK_BITS-1:0] act_bank = p_addr[winner][COL_BITS +: BANK_BITS]
+                                  ^ p_addr[winner][COL_BITS + 6 +: BANK_BITS];
     wire [COL_BITS-1:0]  act_col  = p_addr[winner][COL_BITS-1:0];
-    wire [BANK_BITS-1:0] cur_bank = cur_addr[COL_BITS +: BANK_BITS];
+    wire [BANK_BITS-1:0] cur_bank = cur_addr[COL_BITS +: BANK_BITS]
+                                  ^ cur_addr[COL_BITS + 6 +: BANK_BITS];
 
     // ------------------------------------------------------- open-row policy
     //

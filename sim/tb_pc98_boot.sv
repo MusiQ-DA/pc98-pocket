@@ -629,15 +629,22 @@ module tb_pc98_boot;
         // the switch is an address bit, not a copy.
         .bios_protect_flag(2'b10), .bios_shadow_flag(itf_bank),
         .font_bank_flag(1'b0),
-        .font_rd_req(1'b0), .font_rd_addr(24'h0), .font_rd_len(4'h0),
-        .font_rd_ack(), .font_rd_valid(), .font_rd_data(), .font_rd_done(),
+        .font_rd_req(fontb_req), .font_rd_addr(fontb_addr),
+        .font_rd_len(fontb_len),
+        .font_rd_ack(fontb_ack), .font_rd_valid(fontb_rvalid),
+        .font_rd_data(fontb_rdata), .font_rd_done(fontb_done),
         .cg_rd_req(1'b0), .cg_rd_addr(24'h0), .cg_rd_len(4'h0),
         .cg_rd_ack(), .cg_rd_valid(), .cg_rd_data(), .cg_rd_done(),
+        .gv_rd_req(gv_req), .gv_rd_addr(gv_addr), .gv_rd_len(gv_len),
+        .gv_rd_ack(gv_ack), .gv_rd_valid(gv_rvalid),
+        .gv_rd_data(gv_rdata), .gv_rd_done(gv_done),
         .wait_count_clk_en(cpu_ce_negedge),
         .ram_read_wait_cycle(ram_rd_wait), .ram_write_wait_cycle(ram_wr_wait), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0),
-        .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
-        .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
-        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
+        .ramimg_req(ramimg_req_t), .ramimg_we(1'b0),
+        .ramimg_addr(ramimg_addr_t),
+        .ramimg_len(ramimg_len_t), .ramimg_wdata(16'h0000),
+        .ramimg_ack(ramimg_ack_t), .ramimg_rvalid(ramimg_rvalid_t),
+        .ramimg_rdata(), .ramimg_done(ramimg_done_t)
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
@@ -646,6 +653,271 @@ module tb_pc98_boot;
         .ras_n(s_ras), .cas_n(s_cas), .we_n(s_we), .dqm({s_udqm, s_ldqm}),
         .dq_out(s_dq_out), .dq_io(s_dq_io), .dq_in(s_dq_in)
     );
+
+    // ---- the video-side ports: the REAL display fetch on D ---------------
+    //
+    // This is the client the multiport controller exists for, and the bench
+    // historically left it tied off -- which made every port-A latency this
+    // bench measured a best case, not the machine's case. Peripherals wires
+    // pc98_gvram_display to port D; here it is instantiated with the real
+    // pc98_video_timing on a halved chipset clock for the dot domain
+    // (21.48 MHz against the part's 21.05 -- 2% fast, i.e. conservative by
+    // the same amount on line rate).
+    //
+    // The slave-GDC registers are constants shaped like the 640x400 default:
+    // one partition of LEN 400 at SAD 0, PITCH 40 words (mhz5 clear, so the
+    // display module doubles it to the 80-byte line). disp_on is a plusarg
+    // -- +disp=0 leaves port D silent so the same binary measures baseline
+    // vs loaded. +analog4=1 adds the fourth plane (E0000), which is what
+    // sixteen-colour games pay.
+    logic        disp_on_r = 1'b1;
+    logic        analog4_r = 1'b0;
+    logic        disp_page_r = 1'b0;
+    logic        dbl_r = 1'b0;
+    logic [15:0] disp_sad [0:3] = '{16'd0, 16'd0, 16'd0, 16'd0};
+    logic [9:0]  disp_len [0:3] = '{10'd400, 10'd0, 10'd0, 10'd0};
+    initial begin
+        int v;
+        if ($value$plusargs("disp=%d", v))    disp_on_r  = (v != 0);
+        if ($value$plusargs("analog4=%d", v)) analog4_r  = (v != 0);
+        if ($value$plusargs("disppage=%d", v)) disp_page_r = (v != 0);
+        if ($value$plusargs("dbl=%d", v))     dbl_r      = (v != 0);
+    end
+
+    logic        dot_clk = 1'b0;
+    always_ff @(posedge clk_chipset) dot_clk <= ~dot_clk;
+    wire  [9:0] vid_h, vid_v;
+    wire        vid_hs, vid_vs, vid_hb, vid_vb, vid_de, vid_fs;
+    pc98_video_timing u_vtiming (
+        .clk(dot_clk), .ce(1'b1), .rst(1'b0),
+        .hcount(vid_h), .vcount(vid_v), .hsync(vid_hs), .vsync(vid_vs),
+        .hblank(vid_hb), .vblank(vid_vb), .de(vid_de), .frame_start(vid_fs)
+    );
+
+    wire        gv_req, gv_ack, gv_rvalid, gv_done;
+    wire [23:0] gv_addr;
+    wire  [3:0] gv_len;
+    wire [15:0] gv_rdata;
+    wire  [3:0] gv_dot_unused;
+    pc98_gvram_display u_gvram_disp (
+        .clk(clk_chipset), .rst(reset),
+        .rd_clk(dot_clk), .hcount(vid_h), .vcount(vid_v),
+        .disp_on(disp_on_r), .disp_page(disp_page_r),
+        .analog_mode(analog4_r), .dbl(dbl_r),
+        .pitch(8'd40), .mhz5(1'b0),
+        .part_sad(disp_sad), .part_len(disp_len),
+        .p_req(gv_req), .p_addr(gv_addr), .p_len(gv_len),
+        .p_ack(gv_ack), .p_rvalid(gv_rvalid), .p_rdata(gv_rdata),
+        .p_done(gv_done), .gfx_dot(gv_dot_unused)
+    );
+
+    // ---- optional synthetic pressure on ports B and E ----------------------
+    //
+    // Port B is the kanji font fetcher -- quiet while the screen is ASCII
+    // (ANK glyphs live in BRAM). +fontb=N issues one 16-word burst every N
+    // chipset clocks: the glyph rowbuf's worst case is 80 cells per text row
+    // (16 lines), i.e. 5 per scanline -- fontb=340 approximates a fully
+    // kanji screen.
+    // Port E is fdd_ramimg's carve-out: 16-word sector-read bursts while it
+    // serves a RAM-image floppy. +porte=N does the same there. Both default
+    // off: the honest answer comes from the ports that actually run.
+    logic        fontb_req = 1'b0;
+    logic [23:0] fontb_addr = 24'h400000;
+    logic  [3:0] fontb_len = 4'd15;
+    wire         fontb_ack, fontb_rvalid, fontb_done;
+    wire [15:0]  fontb_rdata;
+    int          fontb_per = 0, fontb_cnt = 0;
+
+    logic        ramimg_req_t = 1'b0;
+    logic [23:0] ramimg_addr_t = 24'h620000;
+    logic  [3:0] ramimg_len_t = 4'd15;
+    wire         ramimg_ack_t, ramimg_rvalid_t, ramimg_done_t;
+    int          porte_per = 0, porte_cnt = 0;
+    initial begin
+        int v;
+        if ($value$plusargs("fontb=%d", v)) fontb_per = v;
+        if ($value$plusargs("porte=%d", v)) porte_per = v;
+    end
+    always_ff @(posedge clk_chipset) begin
+        if (reset) begin
+            fontb_req <= 1'b0; fontb_cnt <= 0;
+            ramimg_req_t <= 1'b0; porte_cnt <= 0;
+        end else begin
+            if (fontb_req) begin
+                if (fontb_ack) begin
+                    fontb_req  <= 1'b0;
+                    fontb_addr <= fontb_addr + 24'd16;
+                end
+            end else if (fontb_per > 0) begin
+                fontb_cnt <= fontb_cnt + 1;
+                if (fontb_cnt >= fontb_per) begin
+                    fontb_cnt <= 0; fontb_req <= 1'b1;
+                end
+            end
+            if (ramimg_req_t) begin
+                if (ramimg_ack_t) begin
+                    ramimg_req_t  <= 1'b0;
+                    ramimg_addr_t <= ramimg_addr_t + 24'd16;
+                end
+            end else if (porte_per > 0) begin
+                porte_cnt <= porte_cnt + 1;
+                if (porte_cnt >= porte_per) begin
+                    porte_cnt <= 0; ramimg_req_t <= 1'b1;
+                end
+            end
+        end
+    end
+
+    // ---- SDRAM occupancy monitor (sim only, hierarchical taps) ------------
+    //
+    // Everything the arbiter knows, counted per port, printed per chunk by
+    // the run loop (the OCC line) and summed at the end. "own" cycles are
+    // the number of clocks the port's transaction occupies the controller
+    // (grant held while the FSM is anywhere but IDLE/refresh); "wait" cycles
+    // are req-up-not-yet-acked -- the arbitration queue depth, per port.
+    //
+    // sdram_mp state encoding (must match sdram_mp.sv's state_t order):
+    //   0..3 init, 4 IDLE, 5 ACT, 6 RW, 7 RD_GAP, 8 TAIL, 9 REF_PRE,
+    //   10 REF, 11 PRE_MISS.
+    localparam int MP_S_IDLE = 4;
+    localparam int MP_S_RW   = 6;
+    // grant-owned states: the port's transaction is on the device.
+    wire        mp_busy   = (u_ram.u_sdram.u_mp.state > MP_S_IDLE)
+                        & (u_ram.u_sdram.u_mp.state != 4'd9)
+                        & (u_ram.u_sdram.u_mp.state != 4'd10);
+    wire [2:0]  mp_grant  = u_ram.u_sdram.u_mp.grant;
+    wire [4:0]  mp_reqs   = u_ram.u_sdram.u_mp.p_req;
+    wire [4:0]  mp_acks   = u_ram.u_sdram.u_mp.p_ack;
+    wire [4:0]  mp_dones  = u_ram.u_sdram.u_mp.p_done;
+    wire        mp_rvalid = u_ram.u_sdram.u_mp.p_rvalid;
+    wire        mp_wrbeat = mp_busy & u_ram.u_sdram.u_mp.cur_we
+                        & (u_ram.u_sdram.u_mp.state == MP_S_RW);
+    wire        mp_refresh= u_ram.u_sdram.u_mp.stat_refresh;
+    wire        mp_initd  = u_ram.u_sdram.u_mp.init_done;
+    wire        mp_act    = (u_ram.u_sdram.u_mp.state == 4'd5)
+                        | (u_ram.u_sdram.u_mp.state == 4'd11);
+
+    longint unsigned occ_cyc      = 0;   // cycles since init_done
+    longint unsigned occ_refresh  = 0;
+    longint unsigned occ_own  [0:4] = '{0,0,0,0,0};
+    longint unsigned occ_wait [0:4] = '{0,0,0,0,0};
+    longint unsigned occ_trans[0:4] = '{0,0,0,0,0};
+    longint unsigned occ_rd   [0:4] = '{0,0,0,0,0};
+    longint unsigned occ_wr   [0:4] = '{0,0,0,0,0};
+    longint unsigned occ_act        = 0;  // cycles paying ACT/PRE-miss
+    longint unsigned occ_actp [0:4] = '{0,0,0,0,0}; // same, per port
+    // port A latency, per transaction: a_w = req-up cycles before ack,
+    // a_d = grant-to-done cycles, hist over the sum.
+    int unsigned     a_w = 0, a_d = 0;
+    logic            a_flight = 1'b0, a_acked = 1'b0;
+    longint unsigned a_wait_sum = 0, a_wait_max = 0, a_wait_n = 0;
+    longint unsigned a_lat_sum  = 0, a_lat_max  = 0;
+    // port A latency buckets: 0-9,10-19,20-39,40-79,80+
+    longint unsigned a_lat_hist [0:4] = '{0,0,0,0,0};
+    // display fetch vs raster phase: D grant cycles inside vs outside hblank
+    longint unsigned d_in_hb = 0, d_in_vis = 0, d_in_vb = 0;
+    // CPU-visible stall: zet wishbone pending cycles + RAM FSM busy cycles
+    longint unsigned cpu_wb_pend = 0, cpu_wb_ack = 0;
+    longint unsigned ramfsm_busy = 0, ramfsm_done = 0;
+    longint unsigned guest_stall = 0;  // cmd up, ready down
+    // gvram sequencer occupancy: cycles an expansion owns the port-A path
+    longint unsigned seq_busy = 0, seq_legs = 0;
+    int            seq_leg_d = 0;
+
+    always_ff @(posedge clk_chipset) begin
+        if (mp_initd) begin
+            occ_cyc <= occ_cyc + 1;
+            if (mp_refresh) occ_refresh <= occ_refresh + 1;
+            if (mp_act)     occ_act     <= occ_act + 1;
+            for (int p = 0; p < 5; p++) begin
+                if (mp_busy & (mp_grant == 3'(p)))   occ_own[p]  <= occ_own[p] + 1;
+                if (mp_reqs[p] & ~mp_acks[p])        occ_wait[p] <= occ_wait[p] + 1;
+                if (mp_acks[p])                      occ_trans[p]<= occ_trans[p] + 1;
+                if (mp_rvalid & (mp_grant == 3'(p))) occ_rd[p]   <= occ_rd[p] + 1;
+                if (mp_wrbeat & (mp_grant == 3'(p))) occ_wr[p]   <= occ_wr[p] + 1;
+                if (mp_act & mp_busy & (mp_grant == 3'(p)))
+                    occ_actp[p] <= occ_actp[p] + 1;
+            end
+            // port A transaction latency: req edge to done pulse. The shim
+            // drops its req at ack, so the wait half and the granted half are
+            // tracked separately and summed at done.
+            if (!a_flight && mp_reqs[0]) begin
+                a_flight <= 1'b1; a_acked <= 1'b0; a_w <= 0; a_d <= 0;
+            end else if (a_flight) begin
+                if (mp_acks[0]) begin
+                    a_acked    <= 1'b1;
+                    a_wait_n   <= a_wait_n + 1;
+                    a_wait_sum <= a_wait_sum + a_w;
+                    if (a_w > a_wait_max) a_wait_max <= a_w;
+                end else if (!a_acked) a_w <= a_w + 1;
+                else                   a_d <= a_d + 1;
+                if (mp_dones[0]) begin
+                    a_flight  <= 1'b0;
+                    a_lat_sum <= a_lat_sum + a_w + a_d + 1;
+                    if ((a_w + a_d + 1) > a_lat_max)
+                        a_lat_max <= a_w + a_d + 1;
+                    a_lat_hist[(a_w + a_d + 1) < 10 ? 0
+                        : (a_w + a_d + 1) < 20 ? 1
+                        : (a_w + a_d + 1) < 40 ? 2
+                        : (a_w + a_d + 1) < 80 ? 3 : 4]
+                      <= a_lat_hist[(a_w + a_d + 1) < 10 ? 0
+                        : (a_w + a_d + 1) < 20 ? 1
+                        : (a_w + a_d + 1) < 40 ? 2
+                        : (a_w + a_d + 1) < 80 ? 3 : 4] + 1;
+                end
+            end
+            // D's grant cycles against the raster phase.
+            if (mp_busy & (mp_grant == 3'd3)) begin
+                if (vid_vb)      d_in_vb  <= d_in_vb + 1;
+                else if (vid_hb) d_in_hb  <= d_in_hb + 1;
+                else             d_in_vis <= d_in_vis + 1;
+            end
+`ifdef ZET_CPU
+            if (zwb_stb & ~zwb_ack) cpu_wb_pend <= cpu_wb_pend + 1;
+            if (zwb_stb & zwb_ack)  cpu_wb_ack  <= cpu_wb_ack + 1;
+`endif
+            if (u_ram.state != u_ram.IDLE) ramfsm_busy <= ramfsm_busy + 1;
+            if (u_ram.state == u_ram.COMPLETE_RAM_RW)
+                ramfsm_done <= ramfsm_done + 1;
+            if ((~mem_rd_n | ~mem_wr_n) & ~ram_ready_w)
+                guest_stall <= guest_stall + 1;
+            if (u_gvram_seq.st != 3'd0) begin
+                seq_busy <= seq_busy + 1;
+                seq_leg_d <= seq_leg_d + 1;
+            end else if (seq_leg_d != 0) begin
+                seq_legs  <= seq_legs + seq_leg_d;
+                seq_leg_d <= 0;
+            end
+        end
+    end
+
+    task automatic occ_report;
+        real busy_tot;
+        $display("  OCC cyc=%0d ref=%0d(%0d%%) | act/pre=%0d",
+                 occ_cyc, occ_refresh,
+                 occ_cyc ? int'(occ_refresh * 100 / occ_cyc) : 0, occ_act);
+        for (int p = 0; p < 5; p++)
+            $display("    port %0d: trans=%0d rd=%0d wr=%0d own=%0d(%0d%%) wait=%0d act=%0d",
+                     p, occ_trans[p], occ_rd[p], occ_wr[p], occ_own[p],
+                     occ_cyc ? int'(occ_own[p] * 100 / occ_cyc) : 0,
+                     occ_wait[p], occ_actp[p]);
+        $display("    portA req->ack avg %0d max %0d n=%0d | req->done avg %0d max %0d",
+                 a_wait_n ? int'(a_wait_sum / a_wait_n) : 0, a_wait_max,
+                 a_wait_n,
+                 occ_trans[0] ? int'(a_lat_sum / occ_trans[0]) : 0, a_lat_max);
+        $display("    portA lat hist <10:%0d 10-19:%0d 20-39:%0d 40-79:%0d 80+:%0d",
+                 a_lat_hist[0], a_lat_hist[1], a_lat_hist[2],
+                 a_lat_hist[3], a_lat_hist[4]);
+        $display("    D grant phase: vis=%0d hb=%0d vb=%0d",
+                 d_in_vis, d_in_hb, d_in_vb);
+        $display("    ramfsm busy=%0d done=%0d | guest stall cyc=%0d | seq busy=%0d legs=%0d",
+                 ramfsm_busy, ramfsm_done, guest_stall, seq_busy, seq_legs);
+`ifdef ZET_CPU
+        $display("    zwb pending=%0d ack=%0d avg_lat=%0d",
+                 cpu_wb_pend, cpu_wb_ack,
+                 cpu_wb_ack ? int'(cpu_wb_pend / cpu_wb_ack) : 0);
+`endif
+    endtask
 
     // Chipset.sv: io_channel_ready & memory_access_ready.
     wire bench_ready;
@@ -1946,6 +2218,9 @@ module tb_pc98_boot;
                      ram[20'h4B4], ram[20'h4B5], ram[20'h4B6], ram[20'h4B7],
                      ram[20'h4B8], ram[20'h4B9], ram[20'h4BA], ram[20'h4BB],
                      ram[20'h4BC], ram[20'h4BD], ram[20'h4BE], ram[20'h4BF]);
+`ifdef REALMEM
+            occ_report();
+`endif
             wr_clear_tog = ~wr_clear_tog;
         end
 
@@ -1953,6 +2228,9 @@ module tb_pc98_boot;
 `ifdef ZET_CPU
         $display("E2E ack reads %0d mismatches (last bad %05X)", ack_rd_mismatches, ack_bad_addr);
         $display("ZET faults    %0d", zet_fault_count);
+`endif
+`ifdef REALMEM
+        occ_report();
 `endif
         $display("PIT gate2     %0d  (counters now %04X %04X %04X)", gate2,
                  u_pit.u_i8253_Counter_0.count[15:0],
