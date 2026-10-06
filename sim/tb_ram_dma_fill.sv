@@ -377,6 +377,10 @@ module tb_ram_dma_fill;
     // ---- bookkeeping ----------------------------------------------------------
     int memw_pulses = 0;
     int wc_seen = 0, wr_accept = 0, sdr_writes = 0;
+    int cov_al = 0, cov_nw1 = 0, cov_nw2 = 0, cov_inf = 0, cov_p1 = 0, cov_p2 = 0;
+    int parks1 = 0, parks2 = 0;
+    int uncovered = 0;
+    logic st_cov = 1'b0, st_park = 1'b0;
     int tail_trace = 0;
     logic [23:0] acc_prev = 24'h0;
     logic dmac_memwr_d = 1'b1;
@@ -391,6 +395,40 @@ module tb_ram_dma_fill;
                          bus_addr, $time);
         end
         if (u_ram.write_command) wc_seen <= wc_seen + 1;
+        // Strobe lifecycle: flag the pulses that fall with no coverage at
+        // all -- never parked, never accepted, never matched -- and dump
+        // the FSM context around their fall.
+        if (!reset && ~ab_mem_wr_n && dmac_memwr_d) begin
+            st_cov <= 1'b0; st_park <= 1'b0;
+        end
+        if (u_ram.wr_cov_now && u_ram.write_command) st_cov <= 1'b1;
+        if (u_ram.new_write_strobe | u_ram.new_write_strobe2
+            | u_ram.new_write_strobe3 | u_ram.idle_park | u_ram.new_cap)
+            st_park <= 1'b1;
+        if (!reset && ab_mem_wr_n && ~dmac_memwr_d && want_drq && !st_cov && !st_park
+            && uncovered < 12) begin
+            uncovered <= uncovered + 1;
+            $display("    NOCOV fall ba=%06x st=%0d nst=%0d p=%b/%b/%b p3a=%06x cv=%b ca=%06x acc_a=%06x alw=%b alr=%b wsm=%b pm=%b mrdy=%b drdy=%b dst=%0d t=%0t",
+                     bus_addr, u_ram.state, u_ram.next_state,
+                     u_ram.wc_pend, u_ram.wc_pend2, u_ram.wc_pend3,
+                     u_ram.pend3_address, u_ram.cap_valid,
+                     u_ram.cap_address, u_ram.accept_address,
+                     u_ram.accept_live_wr, u_ram.accept_live_rd,
+                     u_ram.write_strobe_match, u_ram.parked_match,
+                     memory_access_ready, dma_ready,
+                     u_dmac.u_Timing_And_Control.state, $time);
+        end
+        // Coverage forensics: where each released strobe's operands went.
+        if (!reset && u_ram.write_command && u_ram.wr_cov_now && !u_ram.wr_covered) begin
+            cov_al   <= cov_al   + u_ram.wr_accept_live;
+            cov_nw1  <= cov_nw1  + u_ram.new_write_strobe;
+            cov_nw2  <= cov_nw2  + u_ram.new_write_strobe2;
+            cov_inf  <= cov_inf  + u_ram.cov_inflight;
+            cov_p1   <= cov_p1   + u_ram.cov_pend1;
+            cov_p2   <= cov_p2   + u_ram.cov_pend2;
+        end
+        if (!reset && u_ram.new_write_strobe)  parks1 <= parks1 + 1;
+        if (!reset && u_ram.new_write_strobe2) parks2 <= parks2 + 1;
         if (u_ram.state == u_ram.IDLE && u_ram.next_state == u_ram.RAM_WRITE_1) begin
             wr_accept <= wr_accept + 1;
             if (wr_accept >= FILL_LEN - 10 || wr_accept < 12 ||
@@ -535,6 +573,9 @@ module tb_ram_dma_fill;
         $display("  ram_dbg2=%08x (st=%0d wr=%0b addr=%05x lost=%0d)  ram_dbg3.blocked=%0d parks=%0d",
                  ram_dbg2, ram_dbg2[31:29], ram_dbg2[28],
                  ram_dbg2[27:8], ram_dbg2[7:0], ram_dbg3[23:16], ram_dbg3[15:0]);
+        $display("  coverage: al=%0d nw1=%0d nw2=%0d inf=%0d p1=%0d p2=%0d | parks1=%0d parks2=%0d accepts=%0d",
+                 cov_al, cov_nw1, cov_nw2, cov_inf, cov_p1, cov_p2,
+                 parks1, parks2, wr_accept);
         check(miss == 0, "every filled byte landed in SDRAM");
 
         if (errors == 0)

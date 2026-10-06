@@ -157,6 +157,7 @@ module RAM (
     // change -- before write_flag confirms the request.
     logic           wc_pend;
     logic           wc_pend2;
+    logic           wc_pend3;
     logic           accept_live_wr;
     logic           accept_live_rd;
     logic   [23:0]  pend_address;
@@ -167,6 +168,17 @@ module RAM (
     logic   [7:0]   pend2_data;
     logic   [7:0]   pend2_data_hi;
     logic           pend2_word;
+    logic   [23:0]  pend3_address;
+    logic   [7:0]   pend3_data;
+    logic   [7:0]   pend3_data_hi;
+    logic           pend3_word;
+    // cap: the tail capture register -- a write strobe with no other
+    // capture path lands here (see new_cap). Always the queue tail.
+    logic           cap_valid;
+    logic   [23:0]  cap_address;
+    logic   [7:0]   cap_data;
+    logic   [7:0]   cap_data_hi;
+    logic           cap_word;
     logic   [23:0]  accept_address;
     logic   [7:0]   accept_data;
     logic   [7:0]   accept_data_hi;
@@ -375,7 +387,16 @@ module RAM (
         next_state = state;
         casez (state)
             IDLE: begin
-                if (write_command | wc_pend)
+                // Posted writes made the parked queue the normal case, so a
+                // non-conflicting read may pass it: write order is only owed
+                // where the address ranges actually collide (rd_conflicts).
+                // A live write strobe still wins -- matching the master-side
+                // ordering this FSM always had.
+                if (write_command)
+                    next_state = RAM_WRITE_1;
+                else if (read_command & ~rd_conflicts)
+                    next_state = RAM_READ_1;
+                else if (wc_pend)
                     next_state = RAM_WRITE_1;
                 else if (read_command)
                     next_state = RAM_READ_1;
@@ -422,6 +443,25 @@ module RAM (
         endcase
     end
 
+    // Read-bypass ranges (mapped/latch space): a read with no pending-write
+    // overlap may pass the parked-write queue -- program order only matters
+    // where the addresses actually collide. A word access covers two SDRAM
+    // words, so both ranges carry their own length.
+    wire [24:0] rd_beg = {1'b0, latch_address};
+    wire [24:0] rd_end = rd_beg + (word_now ? 25'd2 : 25'd1);
+    wire [24:0] p1_beg = {1'b0, pend_address};
+    wire [24:0] p1_end = p1_beg + (pend_word ? 25'd2 : 25'd1);
+    wire [24:0] p2_beg = {1'b0, pend2_address};
+    wire [24:0] p2_end = p2_beg + (pend2_word ? 25'd2 : 25'd1);
+    wire [24:0] p3_beg = {1'b0, pend3_address};
+    wire [24:0] p3_end = p3_beg + (pend3_word ? 25'd2 : 25'd1);
+    wire [24:0] cp_beg = {1'b0, cap_address};
+    wire [24:0] cp_end = cp_beg + (cap_word ? 25'd2 : 25'd1);
+    wire        rd_conflicts = (wc_pend  & (rd_beg < p1_end) & (rd_end > p1_beg))
+                             | (wc_pend2 & (rd_beg < p2_end) & (rd_end > p2_beg))
+                             | (wc_pend3 & (rd_beg < p3_end) & (rd_end > p3_beg))
+                             | (cap_valid & (rd_beg < cp_end) & (rd_end > cp_beg));
+
     // "Is this strobe new" is decided by operands, not by edges or by a
     // served flag: back-to-back strobes can hold write_command across a
     // master switch with no falling edge at all, and the strobe whose copy
@@ -455,20 +495,68 @@ module RAM (
                        & (word_now             == pend2_word)
                        & (~pend2_word
                           | (internal_data_bus_hi == pend2_data_hi));
+    wire parked3_match = (latch_address        == pend3_address)
+                       & (internal_data_bus    == pend3_data)
+                       & (word_now             == pend3_word)
+                       & (~pend3_word
+                          | (internal_data_bus_hi == pend3_data_hi));
+    wire cap_match     = (latch_address        == cap_address)
+                       & (internal_data_bus    == cap_data)
+                       & (word_now             == cap_word)
+                       & (~cap_word
+                          | (internal_data_bus_hi == cap_data_hi));
+
+    // Already covered? Only a match against a register that is actually
+    // live counts: the in-flight accept while it is being served, and the
+    // parked slots while occupied. A stale-register match used to block
+    // the park for a cycle -- fine for a held strobe, fatal for a pulse.
+    wire cov_inflight = write_strobe_match & accept_live_wr & (state != IDLE);
+    wire cov_pend1    = parked_match  & wc_pend;
+    wire cov_pend2    = parked2_match & wc_pend2;
+    wire cov_pend3    = parked3_match & wc_pend3;
+    wire cov_cap      = cap_match     & cap_valid;
+    wire dup_covered  = cov_inflight | cov_pend1 | cov_pend2 | cov_pend3
+                      | cov_cap;
+
+    // The live strobe takes the accept directly at IDLE only when the
+    // queue is empty; anything else must park or capture.
+    wire wr_accept_live = write_command & (state == IDLE) & ~wc_pend;
 
     wire new_write_strobe = write_command && state != IDLE && !wc_pend
-        && !write_strobe_match;
+        && !dup_covered;
     // Second-depth capture: a strobe arriving while the first slot is full
     // parks here too -- the uPD71071's early-released pulses are gone before
     // either slot could free, and capture-on-arrival is what survives them.
     wire new_write_strobe2 = write_command && state != IDLE && wc_pend
-        && !wc_pend2 && !write_strobe_match && !parked_match;
+        && !wc_pend2 && !dup_covered;
+    // Third-depth capture: with posted writes the queue sits full far more
+    // often -- the shared READY line can release a strobe on a pulse that
+    // belonged to a different access, so a strobe arriving while both
+    // shallower slots are taken still needs somewhere durable to land.
+    wire new_write_strobe3 = write_command && state != IDLE && wc_pend
+        && wc_pend2 && !wc_pend3 && !dup_covered;
+    // The IDLE&&wc_pend blind spot: the accept edge takes the parked head
+    // and shifts the FIFO down, freeing the deepest occupied slot -- a
+    // live strobe may drop straight into it in the same cycle. Without
+    // this, a strobe arriving on exactly this cycle had no capture path
+    // at all (the case dbg_uncov was built to expose).
+    wire idle_park = write_command && (state == IDLE) && wc_pend
+        && (next_state == RAM_WRITE_1) && !dup_covered;
+    // Tail capture: whatever has no other place to go lands in cap -- the
+    // shared READY chain can end a strobe on a pulse that belonged to a
+    // different access entirely, so capture cannot wait for a park slot
+    // to exist. cap is the queue tail: it promotes into pend3 when the
+    // shift frees a slot.
+    wire new_cap = write_command && !cap_valid && !dup_covered
+        && !wr_accept_live && !new_write_strobe && !new_write_strobe2
+        && !new_write_strobe3 && !idle_park;
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
             state             <= IDLE;
             wc_pend           <= 1'b0;
             wc_pend2          <= 1'b0;
+            wc_pend3          <= 1'b0;
             accept_live_wr    <= 1'b0;
             accept_live_rd    <= 1'b0;
             pend_address      <= 24'd0;
@@ -479,6 +567,15 @@ module RAM (
             pend2_data        <= 8'd0;
             pend2_data_hi     <= 8'd0;
             pend2_word        <= 1'b0;
+            pend3_address     <= 24'd0;
+            pend3_data        <= 8'd0;
+            pend3_data_hi     <= 8'd0;
+            pend3_word        <= 1'b0;
+            cap_valid         <= 1'b0;
+            cap_address       <= 24'd0;
+            cap_data          <= 8'd0;
+            cap_data_hi       <= 8'd0;
+            cap_word          <= 1'b0;
             accept_address    <= 24'd0;
             accept_data       <= 8'd0;
             accept_data_hi    <= 8'd0;
@@ -498,18 +595,61 @@ module RAM (
                     accept_data    <= pend_data;
                     accept_data_hi <= pend_data_hi;
                     accept_word    <= pend_word;
-                    // Depth-2 FIFO: slot 2 promotes into slot 1 as the
-                    // accepted write leaves, so parked order is preserved.
-                    if (wc_pend2) begin
-                        pend_address <= pend2_address;
-                        pend_data    <= pend2_data;
-                        pend_data_hi <= pend2_data_hi;
-                        pend_word    <= pend2_word;
-                        wc_pend      <= 1'b1;
-                        wc_pend2     <= 1'b0;
+                    // Depth-3 FIFO: the queue shifts down one as the head
+                    // is accepted, so parked order is preserved. The tail
+                    // slot the shift frees takes the live strobe when one
+                    // is waiting (idle_park) -- capture-on-arrival even at
+                    // the one cycle where the old depth-1 scheme had no
+                    // place to put it.
+                    pend_address   <= pend2_address;
+                    pend_data      <= pend2_data;
+                    pend_data_hi   <= pend2_data_hi;
+                    pend_word      <= pend2_word;
+                    wc_pend        <= wc_pend2;
+                    pend2_address  <= pend3_address;
+                    pend2_data     <= pend3_data;
+                    pend2_data_hi  <= pend3_data_hi;
+                    pend2_word     <= pend3_word;
+                    wc_pend2       <= wc_pend3;
+                    pend3_address  <= cap_address;
+                    pend3_data     <= cap_data;
+                    pend3_data_hi  <= cap_data_hi;
+                    pend3_word     <= cap_word;
+                    wc_pend3       <= cap_valid;
+                    cap_valid      <= 1'b0;
+                    if (idle_park) begin
+                        // The live strobe takes the deepest slot the shift
+                        // freed: cap if one promoted out, else the deepest
+                        // occupied slot's vacancy.
+                        if (cap_valid) begin
+                            cap_address <= latch_address;
+                            cap_data    <= internal_data_bus;
+                            cap_data_hi <= internal_data_bus_hi;
+                            cap_word    <= word_now;
+                            cap_valid   <= 1'b1;
+                        end
+                        else if (wc_pend3) begin
+                            pend3_address <= latch_address;
+                            pend3_data    <= internal_data_bus;
+                            pend3_data_hi <= internal_data_bus_hi;
+                            pend3_word    <= word_now;
+                            wc_pend3      <= 1'b1;
+                        end
+                        else if (wc_pend2) begin
+                            pend2_address <= latch_address;
+                            pend2_data    <= internal_data_bus;
+                            pend2_data_hi <= internal_data_bus_hi;
+                            pend2_word    <= word_now;
+                            wc_pend2      <= 1'b1;
+                        end
+                        else begin
+                            pend_address <= latch_address;
+                            pend_data    <= internal_data_bus;
+                            pend_data_hi <= internal_data_bus_hi;
+                            pend_word    <= word_now;
+                            wc_pend      <= 1'b1;
+                        end
                     end
-                    else
-                        wc_pend <= 1'b0;
                 end
                 else begin
                     accept_address <= latch_address;
@@ -542,6 +682,20 @@ module RAM (
                 pend2_data    <= internal_data_bus;
                 pend2_data_hi <= internal_data_bus_hi;
                 pend2_word    <= word_now;
+            end
+            else if (new_write_strobe3) begin
+                wc_pend3      <= 1'b1;
+                pend3_address <= latch_address;
+                pend3_data    <= internal_data_bus;
+                pend3_data_hi <= internal_data_bus_hi;
+                pend3_word    <= word_now;
+            end
+            else if (new_cap) begin
+                cap_valid     <= 1'b1;
+                cap_address   <= latch_address;
+                cap_data      <= internal_data_bus;
+                cap_data_hi   <= internal_data_bus_hi;
+                cap_word      <= word_now;
             end
         end
     end
@@ -751,10 +905,83 @@ module RAM (
     // A strobe that arrived while the FSM was busy used to see this
     // COMPLETE and drop its transfer before anyone ran it -- the orphaned
     // writes the parking slot now also catches.
+    //
+    // Posted-write early release: a write strobe may also let go once its
+    // operands are COVERED -- accepted live, parked in a slot, captured at
+    // the IDLE promotion edge, or matching the access in flight or an
+    // already-parked twin. The write then drains in the background while
+    // the guest moves on; a conflicting read still waits behind the
+    // matching parked write (rd_conflicts).
+    // The operand matches (cov_*) are only valid while their registers
+    // are -- they are defined next to the park wires where dup_covered
+    // guards every capture path.
+    wire wr_cov_now   = wr_accept_live | new_write_strobe | new_write_strobe2
+                      | new_write_strobe3 | idle_park | new_cap
+                      | cov_inflight | cov_pend1 | cov_pend2 | cov_pend3
+                      | cov_cap;
+
+    // The release must be REGISTERED, not combinational: wr_cov_now means
+    // "the capture commits at this edge" -- accept takes the strobe or a
+    // park slot fills -- but a ready asserted in that same cycle lets the
+    // master drop the strobe BEFORE the edge, and the registering logic
+    // then sees write_command already low and captures nothing (the
+    // tb_ram_dma_wr UNCOV falls). One clock later the park/accept is a
+    // fact, so the covered flag -- not the coverage condition -- gates the
+    // release. The cost is one extra held cycle per write.
+    logic        wr_covered;
+    // Operands that were covered -- a different strobe appearing on the
+    // bus without a write_command gap must not inherit this coverage. The
+    // hi byte has to match too: a word write whose lo byte coincides with
+    // the covered operands but whose hi byte differs is a different write.
+    logic [23:0] cov_addr;
+    logic  [7:0] cov_data;
+    logic  [7:0] cov_data_hi;
+    logic        cov_word;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset)
+            wr_covered <= 1'b0;
+        else if (~write_command)
+            wr_covered <= 1'b0;
+        else if (wr_cov_now) begin
+            wr_covered  <= 1'b1;
+            cov_addr    <= latch_address;
+            cov_data    <= internal_data_bus;
+            cov_data_hi <= internal_data_bus_hi;
+            cov_word    <= word_now;
+        end
+    end
+
+    wire cov_same = (latch_address == cov_addr)
+                  & (internal_data_bus == cov_data)
+                  & (word_now == cov_word)
+                  & (~cov_word | (internal_data_bus_hi == cov_data_hi));
+
+    // Ready suppression while a write strobe is up but not yet durably
+    // captured. io_channel_ready feeds READY.sv, whose dma_ready pulses on
+    // ANY memory_access_ready rise -- a completing read's pulse releases the
+    // uPD71071's current write strobe whether or not that strobe was ever
+    // captured (the NOCOV falls in tb_ram_dma_fill: park slots full, cap
+    // holding the previous early-released byte, drdy=1). Posting makes those
+    // pulses far more frequent, so a strobe that has nowhere to go yet must
+    // not see any ready until its operands are registered.
+    //
+    // Deadlock: impossible on this bus. Only one master's strobes are on
+    // the pins at a time (the arbiter grants the bus exclusively), so a
+    // held-until-ready read cannot coexist with an uncovered write strobe.
+    // The completing access's strobe drops on access_complete / the
+    // fixed-width fgn pulse regardless of this line, the FSM keeps cycling,
+    // a park/cap slot frees, the strobe captures, and the gate opens.
+    wire wr_strobe_open = write_command
+                        & ~(wr_covered & cov_same)
+                        & ~((state == COMPLETE_RAM_RW)
+                            & accept_live_wr & write_strobe_match);
+
     assign  memory_access_ready = ((~ram_address_select_n) && ((~memory_read_n) || (~memory_write_n)))
-                                        ? ((state == COMPLETE_RAM_RW) & (
+                                        ? (~wr_strobe_open & (((state == COMPLETE_RAM_RW) & (
                                               (write_command & accept_live_wr & write_strobe_match & (write_wait_count == 0) & (vram_wr_wait_count == 0))
-                                            | (read_command  & accept_live_rd & read_strobe_match  & (read_wait_count  == 0) & (vram_rd_wait_count == 0)))) : 1'b1;
+                                            | (read_command  & accept_live_rd & read_strobe_match  & (read_wait_count  == 0) & (vram_rd_wait_count == 0))))
+                                           | (write_command & wr_covered & cov_same))) : 1'b1;
 
     // ROM-load (Pocket): a clean per-access "done" pulse for core_top's BIOS
     // loader. COMPLETE_RAM_RW is reached only after the SDRAM write truly
@@ -791,8 +1018,8 @@ module RAM (
             dbg_parks       <= 16'd0;
         end else begin
             write_command_d <= write_command;
-            if ((new_write_strobe | new_write_strobe2)
-                && (dbg_parks != 16'hFFFF))
+            if ((new_write_strobe | new_write_strobe2 | new_write_strobe3
+                 | idle_park | new_cap) && (dbg_parks != 16'hFFFF))
                 dbg_parks <= dbg_parks + 16'd1;
         end
     end
@@ -806,7 +1033,6 @@ module RAM (
     // park because state==IDLE) then falling early escapes that counter
     // completely. byte0-of-fill writes are prime suspects: they arrive
     // right as the previous grant's tail retires.
-    logic        wr_covered;
     logic [15:0] dbg_uncov;
     logic [23:0] dbg_uncov_addr;    // first loss, full mapped address
     logic  [7:0] dbg_uncov_data;
@@ -814,11 +1040,8 @@ module RAM (
     logic [23:0] dbg_uncov_addr2;   // most recent loss
     logic  [7:0] dbg_uncov_data2;
 
-    wire wr_accept_live = write_command & (state == IDLE) & ~wc_pend;
-
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
-            wr_covered       <= 1'b0;
             dbg_uncov        <= 16'd0;
             dbg_uncov_addr   <= 24'd0;
             dbg_uncov_data   <= 8'd0;
@@ -826,12 +1049,7 @@ module RAM (
             dbg_uncov_addr2  <= 24'd0;
             dbg_uncov_data2  <= 8'd0;
         end else begin
-            if (~write_command)
-                wr_covered <= 1'b0;
-            else if (wr_accept_live | new_write_strobe | new_write_strobe2
-                     | write_strobe_match | parked_match | parked2_match)
-                wr_covered <= 1'b1;
-            if (write_strobe_fell & ~wr_covered) begin
+            if (write_strobe_fell & ~(wr_covered & cov_same)) begin
                 if (dbg_uncov != 16'hFFFF)
                     dbg_uncov <= dbg_uncov + 16'd1;
                 if (dbg_uncov == 16'd0) begin

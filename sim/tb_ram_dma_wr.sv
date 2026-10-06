@@ -92,6 +92,11 @@ module tb_ram_dma_wr;
             parks_full++;
         if (!reset && dut.state == 0 && dut.next_state == 1)
             served++;
+        if (!reset && dut.write_strobe_fell && !dut.wr_covered)
+            $display("  UNCOV fall @%05h st=%0d data=%02h pend=%b/%b acc_a=%05h acc_d=%02h t=%0t",
+                     dut.latch_address, dut.state, dut.internal_data_bus,
+                     dut.wc_pend, dut.wc_pend2, dut.accept_address,
+                     dut.accept_data, $time);
     end
 
     // 71071-style write: the strobe is asserted and released when the READY
