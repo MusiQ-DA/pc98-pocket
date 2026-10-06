@@ -547,17 +547,19 @@ module CHIPSET #(
     wire        ram_complete_w, ram_ready_w;
     wire        gvram_sel = ~ram_address_select_n;
 
-    // EGC=1: the charger is fitted again -- OPNA gave up its ADPCM-A block
-    // (rhythm voices and the drive-sound mechanism kit) to pay for it, so
-    // this machine now answers yes to the mode2 arm check EGC software
-    // keys on. GRCG and EGC share the sequencer's plane pipeline below.
+    // EGC=0: the raster engine is dropped -- this machine is a GRCG-only
+    // PC-9801 (the uPD7220 class). The freed LABs pay for OPNA's ADPCM-A
+    // block coming back (USE_ADPCM=1 in Peripherals); the 1848-ALM device
+    // cannot carry both. EGC-targeted software finds no engine: the mode2
+    // bits latch but decode nowhere, every graphics access is GRCG/plain.
+    // GRCG uses the sequencer's plane pipeline below.
     //
     // The guest's WORD cycles go through the sequencer too: an expanded
     // access runs the plane walk twice, once per byte lane, and RAM sees
     // mem_word low for every leg. cpu_data_bus_hi stays wired to RAM
     // directly -- the burst's odd byte only matters when the sequencer
     // passes the word flag through, which is exactly when mem_word is set.
-    pc98_gvram_seq #(.EGC(1'b1)) u_gvram_seq (
+    pc98_gvram_seq #(.EGC(1'b0)) u_gvram_seq (
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
         .cpu_rd(~memory_read_n), .cpu_wr(~memory_write_n),

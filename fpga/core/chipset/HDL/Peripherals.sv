@@ -2169,21 +2169,18 @@ module PERIPHERALS #(
     wire [23:0]  opna_adpcmb_addr;
     wire         opna_adpcmb_roe_n;
 
-    // USE_ADPCM=0 ships the slim OPNA: FM6 + SSG keep working but the
-    // ADPCM-A block is absent -- the EGC raster engine came back and the
-    // 1848-LAB device cannot carry both, and the ADPCM engines are the
-    // cheaper half to park. The guest's rhythm writes still route, they
-    // just reach a chip with no ADPCM blocks, so rhythm -- and the drive
-    // mechanism kit, which borrows the rhythm voices -- stay silent.
-    // OMGMT_CAPS (mg_reg 8) bit0 reads 0, which is what tells rhythm.c and
-    // drive_sound.c to skip their loads, so the firmware path is dormant
-    // rather than broken: USE_ADPCM=1 restores everything verbatim once
-    // floor space exists. USE_PCM stays 1 in the slim build: with ADPCM
-    // off it is the only stereo FM path jt12 has (use_pcm=0 falls back to
+    // USE_ADPCM=1 restores the ADPCM-A block (rhythm voices, the drive-
+    // sound kit): the EGC raster engine was dropped, so the LABs it paid
+    // for are free again -- the 1848-ALM device cannot carry both. The
+    // guest's rhythm writes now reach a chip with ADPCM blocks; the
+    // firmware fills the 32 KB rhythm store at boot when rhythm.bin is
+    // present. OMGMT_CAPS (mg_reg 8) bit0 reads 1, which is what tells
+    // rhythm.c and drive_sound.c to run their loads. USE_PCM stays 1:
+    // it is the only stereo FM path jt12 has (use_pcm=0 falls back to
     // the YM2203 mono accumulator), and the OPNA is a stereo chip.
     // DELTA-T stays dark either way (pc98_opna wires use_adpcmb=0 -- its
     // 256 KB SDRAM window is a known gap).
-    pc98_opna #(.USE_ADPCM(0), .USE_PCM(1)) u_pc98_opna (
+    pc98_opna #(.USE_ADPCM(1), .USE_PCM(1)) u_pc98_opna (
         .clk          (clock),
         .rst          (reset),
         .cs           (opna_cs),
