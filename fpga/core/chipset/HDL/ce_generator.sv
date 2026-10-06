@@ -67,7 +67,7 @@ module ce_generator (
         //
         // The clock_cycle_counter_* and shift_read_timing outputs below belong
         // to the CPU this generator was built against, which is not the part
-        // instantiated here (core_top puts the nuV30 + v30_cpu_bridge there);
+        // instantiated here (core_top puts the Zet + zet_cpu_bridge there);
         // only the edge ratio and the RAM waits are consumed.
         case (active_clk_select)
             2'b00:

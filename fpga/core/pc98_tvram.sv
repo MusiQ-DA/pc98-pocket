@@ -48,7 +48,7 @@
 // bytes live in dedicated registers, reset-loaded with the np21w defaults, and
 // guest writes anywhere in the 0xFF0-0xFFF cell range are silently dropped:
 // the pre-seeded switch survives every clear exactly as the battery-backed
-// original survives a power cycle. Confirmed in sim/tb_pc98_v30.sv, where
+// original survives a power cycle. Confirmed in sim/tb_pc98_boot.sv, where
 // the pre-seed plus the write gate is what carries the boot to int 1E with
 // a 640 KB machine underneath it.
 //

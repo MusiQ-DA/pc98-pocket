@@ -111,7 +111,7 @@ module tb_ram_dma_fill;
     wire        ab_mem_wr_n   = ~((~bench_memwr_n & ~aen_n) | ~dmac_memwr_vis);
     wire        ab_mem_rd_n   = ~((~bench_memrd_n & ~aen_n) | ~dmac_memrd_n);
 
-    // The arbiter's hold handshake, flattened like tb_v30_dmac's: grant on
+    // The arbiter's hold handshake, flattened like the old tb_v30_dmac's: grant on
     // the cpu_ce edge, aen_n one tick behind, dma_wait one more.
     logic       hlda = 1'b0;
     logic       aen_n = 1'b1;

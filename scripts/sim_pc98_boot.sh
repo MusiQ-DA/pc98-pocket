@@ -1,39 +1,29 @@
 #!/usr/bin/env bash
-# sim_pc98_boot.sh -- run the real ITF on the real CPU core, in simulation.
+# sim_pc98_boot.sh -- run the real ITF on the real CPU core, in simulation:
+# the Zet + zet_cpu_bridge pair core_top ships, on tb_pc98_boot's machine.
 #
-# The hardware readout says BANK 1: the guest never executes OUT 043D, 12. Where
-# it goes instead is an execution question, and execution questions are far
-# cheaper to answer here than on a fifteen-minute bitstream.
+#   scripts/sim_pc98_boot.sh [+plusarg ...]
+#   scripts/sim_pc98_boot.sh --synth    # hand-written ITF, no ROMs needed
+#   scripts/sim_pc98_boot.sh --realmem  # ... on the REAL memory path
 #
-#   scripts/sim_pc98_boot.sh [+plusarg ...]        # the nuV30 + v30_cpu_bridge
-#   scripts/sim_pc98_boot.sh --realmem ...         # ... on the REAL memory path
-#
-# Not part of CI: it needs bios.rom and itf.rom, which are not in the tree.
+# Not part of CI: it needs bios.rom and itf.rom, which are not in the tree,
+# unless --synth.
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SYNTH=0
 REALMEM=0
-ZET=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --synth) SYNTH=1; shift ;;
-        # --realmem: run the ITF through the REAL memory path -- RAM.sv on
-        # sdram_shim on sdram_mp on the part, with the board's clock skew --
-        # instead of the flat array. The word path is unconditional either
-        # way: the flat model answers the odd lane at addr|1.
         --realmem) REALMEM=1; shift ;;
-        # --zet: swap the nuV30 for the experimental Zet through
-        # zet_cpu_bridge (tb's `ifdef ZET_CPU) on the same downstream bus.
-        --zet) ZET=1; shift ;;
         *) break ;;
     esac
 done
-# Anything left over goes straight to the simulator binary (e.g. +gate2=0).
 
 ROMS="${PC98_ROMS:-$HOME/.pc98roms}"
-[ -f "$ROMS/itf.rom" ] && [ -f "$ROMS/bios.rom" ] \
-    || { echo "need itf.rom and bios.rom in $ROMS"; exit 1; }
+[ "$SYNTH" = 1 ] || { [ -f "$ROMS/itf.rom" ] && [ -f "$ROMS/bios.rom" ] ; } \
+    || { echo "need itf.rom and bios.rom in $ROMS (or --synth)"; exit 1; }
 
 OUT="${SIM_OUT:-${TMPDIR:-/tmp}/pc98boot}"
 mkdir -p "$OUT"
@@ -43,30 +33,16 @@ import sys, os
 roms, out, synth = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 
 if synth:
-    # A hand-written ITF, to separate "the core is wrong" from "the model is
-    # wrong". Each step writes a distinct port before moving on, so the I/O
-    # trace says exactly how far the core got. Same instructions the real ITF
-    # uses at the point it stops.
-    # The real ITF's opening sequence, instruction for instruction, with a
-    # checkpoint OUT between every step. Each conditional jump there is a
-    # two-byte jump to itself, so a failed test spins inside the prefetch queue
-    # and puts nothing on the bus -- which is why the fetch trace could say
-    # where the CPU stopped fetching but not where it stopped executing.
-    #
-    # MOV DX,imm and OUT DX,AL touch no flags, so the checkpoints do not perturb
-    # what is being tested.
     def ck(n):
         return bytes([0xBA, n, 0x01, 0xEE])          # MOV DX,01nn ; OUT DX,AL
-    # Is it the F6 group specifically, or every group opcode? 0x80 and 0xD0 have
-    # the same shape in the microcode (CALC_EA_BYTE, FETCH_EA_BYTE, Jump-Type6),
-    # so if they consume correctly and F6 does not, the fault is F6's alone.
     prog = (bytes([0xFA]) + ck(0x00)
-        + bytes([0x80, 0xC0, 0x01]) + ck(0x01)       # 0x80 group: ADD AL,1
-        + bytes([0xD0, 0xE0])       + ck(0x02)       # 0xD0 group: SHL AL,1
-        + bytes([0xFE, 0xC0])       + ck(0x03)       # 0xFE group: INC AL
-        + bytes([0xF7, 0xE3])       + ck(0x04)       # 0xF7 group: MUL BX
-        + bytes([0xF6, 0xE4])       + ck(0x05)       # 0xF6 group: MUL AH
-        + bytes([0xF4]))                             # HLT
+        + bytes([0x80, 0xC0, 0x01]) + ck(0x01)
+        + bytes([0xD0, 0xE0])       + ck(0x02)
+        + bytes([0xFE, 0xC0])       + ck(0x03)
+        + bytes([0xF7, 0xE3])       + ck(0x04)
+        + bytes([0xF6, 0xE4])       + ck(0x05)
+        + bytes([0x68, 0x34, 0x12]) + ck(0x06)       # PUSH imm16 -- the ITF's
+        + bytes([0xF4]))                             #   F9476 that killed i8088
     d = bytearray(b"\xff" * 0x8000)
     d[0:len(prog)] = prog
     d[0x7FF0:0x7FF5] = bytes([0xEA, 0x00, 0x00, 0x00, 0xF8])
@@ -91,62 +67,30 @@ PY
 
 S=fpga/core
 K=$S/chipset/HDL
-V=$S/v30
+Z=$S/zet
 
-# v30u_ucrom's simulation default is HEXDIR="hdl/rtl/ucore/" relative to the
-# working directory -- and an empty microcode ROM is a $fatal, not a warning.
-mkdir -p "$OUT/hdl/rtl/ucore"
-cp $V/ucrom.hex $V/ucdecode.hex "$OUT/hdl/rtl/ucore/"
+# zet_micro_rom's simulation default is DATDIR="fpga/core/zet/" relative to
+# the bench's cwd ($OUT) -- mirror the part's data file next to the hexes.
+mkdir -p "$OUT/fpga/core/zet"
+cp $Z/micro_rom.dat "$OUT/fpga/core/zet/"
 
 R="$PWD"
-CPU_DEF="+define+V30_BACKDOOR"
-[ "$REALMEM" = 1 ] && CPU_DEF="$CPU_DEF+REALMEM"
-[ "$ZET" = 1 ] && CPU_DEF="$CPU_DEF+ZET_CPU"
-
-# zet_micro_rom reads {DATDIR}micro_rom.dat where DATDIR="fpga/core/zet/"
-# relative to the bench cwd -- materialise it under $OUT like the ucrom dir.
-if [ "$ZET" = 1 ]; then
-    mkdir -p "$OUT/fpga/core/zet"
-    cp fpga/core/zet/micro_rom.dat "$OUT/fpga/core/zet/"
-fi
-
-# The V30 build is pure CPU time in Verilator: compile the model for speed
-# (-O2, same reasoning as sim_pc98_v30.sh) and split the eval across cores.
-# NOT --x-assign/--x-initial fast: sim_pc98_v30.sh measured those changing
-# the boot.
 SIM_OPT="${SIM_OPT:--O2}"
 SIM_THREADS="${SIM_THREADS:-4}"
 
+CPU_DEF=""
+[ "$REALMEM" = 1 ] && CPU_DEF="+define+REALMEM"
+
 if [ "$REALMEM" = 1 ]; then
-    MEMFILES="$K/RAM.sv $K/Ready.sv $S/sdram_shim.sv $S/sdram_mp.sv sim/sdram_board_model.sv sim/sdram_model.sv"
+    MEMFILES="$K/RAM.sv $K/Ready.sv $S/sdram_shim.sv $S/sdram_mp.sv \
+        $S/pc98_gvram_seq.sv $S/pc98_grcg.sv $S/pc98_egc.sv \
+        sim/sdram_board_model.sv sim/sdram_model.sv"
 else
     MEMFILES=""
 fi
 
-if [ "$ZET" = 1 ]; then
-    Z=$S/zet
-    ZETFILES="$R/$Z/zet.v $R/$Z/zet_core.v $R/$Z/zet_fetch.v $R/$Z/zet_decode.v \
-    $R/$Z/zet_exec.v $R/$Z/zet_memory_regs.v $R/$Z/zet_micro_data.v \
-    $R/$Z/zet_micro_rom.v $R/$Z/zet_regfile.v $R/$Z/zet_wb_master.v \
-    $R/$Z/zet_addsub.v $R/$Z/zet_alu.v $R/$Z/zet_arlog.v $R/$Z/zet_bitlog.v \
-    $R/$Z/zet_conv.v $R/$Z/zet_div_su.v $R/$Z/zet_div_uu.v \
-    $R/$Z/zet_fulladd16.v $R/$Z/zet_jmp_cond.v $R/$Z/zet_muldiv.v \
-    $R/$Z/zet_mux8_1.v $R/$Z/zet_mux8_16.v $R/$Z/zet_next_or_not.v \
-    $R/$Z/zet_nstate.v $R/$Z/zet_opcode_deco.v $R/$Z/zet_othop.v \
-    $R/$Z/zet_rxr8.v $R/$Z/zet_rxr16.v $R/$Z/zet_shrot.v \
-    $R/$Z/zet_signmul17.v $R/$S/zet_cpu_bridge.sv"
-else
-    ZETFILES=""
-fi
-
-# Native Verilator -- several times faster than the amd64 image was under
-# Rosetta. The bench's cwd is $OUT (where the .hex images and hdl/rtl/ucore
-# live). clang needs an explicit sysroot on some CLT installs or 'cstddef'
-# is not found.
 SYSROOT=""
 [ -d /usr/include ] || SYSROOT="-CFLAGS -isysroot -CFLAGS $(xcrun -sdk macosx --show-sdk-path)"
-# The CLT here lost its C++ headers ('cstddef' not found) -- use Homebrew's
-# clang++, which carries its own libcxx, whenever it exists.
 CXXFLAGS_MK=""
 if [ -x /opt/homebrew/opt/llvm/bin/clang++ ]; then
     CXXFLAGS_MK="-MAKEFLAGS CXX=/opt/homebrew/opt/llvm/bin/clang++ -MAKEFLAGS LINK=/opt/homebrew/opt/llvm/bin/clang++"
@@ -157,14 +101,21 @@ verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot $CPU_DEF \
     --threads $SIM_THREADS -MAKEFLAGS OPT_FAST=$SIM_OPT \
     $CXXFLAGS_MK \
     $SYSROOT \
-    -I"$R/sim" -I"$R/$S" -I"$R/$S/common" -I"$R/$V" -I"$R/$K" \
-    -I"$R/$S/zet" -I"$R/$K/i8288/HDL" -I"$R/$K/i8253/HDL" -I"$R/$K/i8259/HDL" \
+    -I"$R/sim" -I"$R/$S" -I"$R/$S/common" -I"$R/$Z" -I"$R/$K" \
+    -I"$R/$K/i8288/HDL" -I"$R/$K/i8253/HDL" -I"$R/$K/i8259/HDL" \
     "$R/sim/tb_pc98_boot.sv" \
-    $R/$V/v30u_ss_pkg.sv \
-    $R/$V/v30_core.sv $R/$V/v30u_biu.sv $R/$V/v30u_eu.sv \
-    $R/$V/v30u_ucrom.sv $R/$S/v30_cpu_bridge.sv \
-    $ZETFILES \
     $MEMFILES \
+    $R/$Z/zet.v $R/$Z/zet_core.v $R/$Z/zet_fetch.v $R/$Z/zet_decode.v \
+    $R/$Z/zet_exec.v $R/$Z/zet_memory_regs.v $R/$Z/zet_micro_data.v \
+    $R/$Z/zet_micro_rom.v $R/$Z/zet_regfile.v $R/$Z/zet_wb_master.v \
+    $R/$Z/zet_addsub.v $R/$Z/zet_alu.v $R/$Z/zet_arlog.v \
+    $R/$Z/zet_bitlog.v $R/$Z/zet_conv.v $R/$Z/zet_div_su.v \
+    $R/$Z/zet_div_uu.v $R/$Z/zet_fulladd16.v $R/$Z/zet_jmp_cond.v \
+    $R/$Z/zet_muldiv.v $R/$Z/zet_mux8_1.v $R/$Z/zet_mux8_16.v \
+    $R/$Z/zet_next_or_not.v $R/$Z/zet_nstate.v $R/$Z/zet_opcode_deco.v \
+    $R/$Z/zet_othop.v $R/$Z/zet_rxr8.v $R/$Z/zet_rxr16.v \
+    $R/$Z/zet_shrot.v $R/$Z/zet_signmul17.v \
+    $R/$S/zet_cpu_bridge.sv \
     $R/$S/pc98_fdc_glue.sv $R/$S/common/floppy.v $R/$S/common/simple_fifo.v \
     $R/sim/tb_fdd_dma_model.sv $R/$S/pc98_kbd8251.sv \
     $R/$K/ce_generator.sv $R/$K/i8288/HDL/i8288.sv \

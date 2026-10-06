@@ -2,7 +2,7 @@
 // tb_pc98_boot -- run the real ITF on the real CPU core, and watch where it
 // goes.
 //
-// The CPU is the nuV30 through v30_cpu_bridge. The same flat memory and the
+// The CPU is the Zet through zet_cpu_bridge. The same flat memory and the
 // same I/O models see the bridge's bus cycles, so this is the end-to-end
 // dress rehearsal of the hardware CPU path (i8288 + 8-bit bus + real ROMs +
 // 8251) before the bitstream.
@@ -38,7 +38,7 @@ module tb_pc98_boot;
     // DERIVED, not a rounded literal. 11.641 drifts 0.0016 ns per cycle against
     // sdram_board_model's CLK_MHZ-derived device clock -- a whole period by
     // cycle 14800 -- and under REALMEM that manufactures read failures that are
-    // not in the RTL. It did exactly that once; see tb_v30_mem's comment.
+    // not in the RTL. It did exactly that once, on the old V30 mem bench.
     localparam real CLK_MHZ = 42.954545;
     localparam real HALF_NS = 500.0 / CLK_MHZ;
     always #(HALF_NS) clk_chipset = ~clk_chipset;
@@ -116,13 +116,10 @@ module tb_pc98_boot;
     logic [39:0] clk_since_rst = 40'd0;
     logic [39:0] frz_start_clk = 40'd0, frz_end_clk = 40'd0;
 
-    // The CPU + bridge, wired the way core_top wires them. Default nuV30;
-    // +define+ZET_CPU swaps in the experimental Zet on the same downstream
-    // pins. V30_BACKDOOR gives the bench dbg_regs for the trace below.
+    // The CPU + bridge, wired the way core_top wires them.
     wire [223:0] dbg_regs;
     wire        dbg_first_pop, dbg_pend;
 
-`ifdef ZET_CPU
     wire        zet_clk;
     wire [15:0] zwb_dat_i, zwb_dat_o;
     wire [19:1] zwb_adr;
@@ -262,71 +259,6 @@ module tb_pc98_boot;
     assign dbg_regs = '0;
     assign dbg_first_pop = 1'b0;
     assign dbg_pend = 1'b0;
-`else
-    wire [2:0]  v30_bs;
-    wire [19:0] v30_addr;
-    wire [15:0] v30_data_o, v30_data_i;
-    wire        v30_ube_n, v30_ce, v30_ready;
-    wire [15:0] v30_ss_rdata_unused;
-    wire        v30_ss_err_unused, v30_ss_quiet_unused;
-
-    v30_cpu_bridge u_bridge (
-        .clk               (clk_chipset),
-        .cpu_ce_posedge    (cpu_ce_posedge),
-        .cpu_ce_negedge    (cpu_ce_negedge),
-        .reset             (cpu_reset_w),
-        .v30_bs            (v30_bs),
-        .v30_addr          (v30_addr),
-        .v30_ube_n         (v30_ube_n),
-        .v30_data_o        (v30_data_o),
-        .v30_data_i        (v30_data_i),
-        .v30_ready         (v30_ready),
-        .v30_ce            (v30_ce),
-        .processor_status  (processor_status),
-        .ad_out            (cpu_ad_out),
-        .cpu_data_bus      (cpu_data_bus),
-        .lock_n            (lock_n),
-        .analog_mode       (1'b0),
-        .word_access       (cpu_word_access),
-        .cpu_data_bus_hi   (cpu_data_bus_hi),
-        .data_bus_hi       (din_hi),
-        .data_bus          (din),
-        .processor_ready   (bench_ready),
-        .address_enable_n  (test_aen),
-        .pause_core        (1'b0),
-        .biu_done          (biu_done)
-    );
-
-    v30_core u_cpu (
-        .CLK       (clk_chipset),
-        .CE        (v30_ce),
-        .RESET     (cpu_reset_w),
-        .READY     (v30_ready),
-        .INT       (pic1_to_cpu),
-        .NMI       (1'b0),
-        .POLL_N    (1'b1),
-        .DATA_I    (v30_data_i),
-        .ADDR_O    (v30_addr),
-        .DATA_O    (v30_data_o),
-        .STATUS_O  (),
-        .QS        (),
-        .BS        (v30_bs),
-        .RD_N      (),
-        .UBE_N     (v30_ube_n),
-        .BUSLOCK_N (),
-        .SS_ADDR   ('0),
-        .SS_WDATA  ('0),
-        .SS_WE     (1'b0),
-        .SS_RDATA  (v30_ss_rdata_unused),
-        .SS_ERR    (v30_ss_err_unused),
-        .SS_BUS_QUIET (v30_ss_quiet_unused),
-        .bkd_load  (1'b0), .bkd_regs ('0), .bkd_queue ('0),
-        .bkd_qlen  (3'd0), .bkd_fetch_ip (16'h0000),
-        .scr_en    (1'b0), .scr_qop (2'b00),
-        .dbg_regs  (dbg_regs), .dbg_first_pop (dbg_first_pop),
-        .dbg_pend  (dbg_pend)
-    );
-`endif // ZET_CPU
 
     // ---- the register view: one local name per quantity --------------------
     // (the core's dbg_regs view, retired-instruction granularity)
@@ -517,8 +449,7 @@ module tb_pc98_boot;
     //
     // The flat array above is a model of memory; this is the memory. RAM.sv on
     // sdram_shim on sdram_mp on the part, with the board's half-period clock
-    // skew -- what core_top instantiates. tb_v30_mem proved the bridge against
-    // that path with a program of its own; this runs the REAL ITF through it,
+    // skew -- what core_top instantiates. This runs the REAL ITF through it,
     // which is the only way to ask whether the machine's memory test fails for
     // a reason that lives in the memory path.
     //
@@ -873,10 +804,8 @@ module tb_pc98_boot;
                 else if (vid_hb) d_in_hb  <= d_in_hb + 1;
                 else             d_in_vis <= d_in_vis + 1;
             end
-`ifdef ZET_CPU
             if (zwb_stb & ~zwb_ack) cpu_wb_pend <= cpu_wb_pend + 1;
             if (zwb_stb & zwb_ack)  cpu_wb_ack  <= cpu_wb_ack + 1;
-`endif
             if (u_ram.state != u_ram.IDLE) ramfsm_busy <= ramfsm_busy + 1;
             if (u_ram.state == u_ram.COMPLETE_RAM_RW)
                 ramfsm_done <= ramfsm_done + 1;
@@ -913,11 +842,9 @@ module tb_pc98_boot;
                  d_in_vis, d_in_hb, d_in_vb);
         $display("    ramfsm busy=%0d done=%0d | guest stall cyc=%0d | seq busy=%0d legs=%0d",
                  ramfsm_busy, ramfsm_done, guest_stall, seq_busy, seq_legs);
-`ifdef ZET_CPU
         $display("    zwb pending=%0d ack=%0d avg_lat=%0d",
                  cpu_wb_pend, cpu_wb_ack,
                  cpu_wb_ack ? int'(cpu_wb_pend / cpu_wb_ack) : 0);
-`endif
     endtask
 
     // Chipset.sv: io_channel_ready & memory_access_ready.
@@ -1852,7 +1779,7 @@ module tb_pc98_boot;
     // Read side follows the glue combinationally and the held byte is the
     // FDC's combinational answer captured at the strobe -- the byte has to
     // be on the bus before the CPU's read-data latch, not three clocks
-    // after the strobe (see tb_pc98_v30, where the nuV30's T2->T3 sample
+    // after the strobe (on the old nuV30 bench the core's T2->T3 sample
     // raced the staged path and every other read came back one byte
     // stale).  The write path keeps its staging: write strobes arrive at
     // cycle end and need the registered address.
@@ -1971,8 +1898,8 @@ module tb_pc98_boot;
     // The queue's read pointer is the EU's instruction pointer, so CS:PFQ_ADDR
     // is the real program counter. The dbg_regs view
     // ({psw,ip,ds,ss,cs,es,di,si,bp,sp,bx,dx,cx,ax}, retired-instruction
-    // granularity) is the same one tb_pc98_v30 traced.
-`ifdef ZET_CPU
+    // granularity) is the same one the old V30 bench traced. Zet exposes no
+    // dbg_regs, so eu_pc reads the core's linear-PC pin directly.
     wire [15:0] eu_cs = zet_pc[19:4];   // for the CS-change trace only
     wire [19:0] eu_pc = zet_pc;
 
@@ -2036,11 +1963,6 @@ module tb_pc98_boot;
             zarm_tr_n <= zarm_tr_n + 1;
         end
     end
-`else
-    wire [15:0] eu_ip = dbg_regs[207:192];
-    wire [15:0] eu_cs = dbg_regs[159:144];
-    wire [19:0] eu_pc = {eu_cs, 4'd0} + {4'd0, eu_ip};
-`endif
 
 
     logic [19:0] eu_pc_d = 20'hFFFFF;
@@ -2134,7 +2056,7 @@ module tb_pc98_boot;
         for (i = 0; i < 1048576; i = i + 1) ram[i] = 8'h00;
         $readmemh("itf.hex",  itf);
         $readmemh("bios.hex", bios);
-        // WORKAROUND (same as tb_pc98_v30's, see docs/NUV30_66_VERIFICATION.md
+        // WORKAROUND (see docs/NUV30_66_VERIFICATION.md
         // and docs/FRANKEN_ROM_LESSON.md): the 0x66 at BIOS.ROM+1 is
         // mid-instruction data in a mixed-generation image. nuV30 executes
         // it silicon-accurately as a 2-byte ModR/M-consuming NOP, which
@@ -2226,10 +2148,8 @@ module tb_pc98_boot;
         end
 
         $display("--- done ---");
-`ifdef ZET_CPU
         $display("E2E ack reads %0d mismatches (last bad %05X)", ack_rd_mismatches, ack_bad_addr);
         $display("ZET faults    %0d", zet_fault_count);
-`endif
 `ifdef REALMEM
         occ_report();
 `endif

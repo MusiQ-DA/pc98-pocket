@@ -25,7 +25,7 @@
 
 module zet_micro_rom #(
     // The .dat lives next to the RTL; the two tools run from different
-    // working directories (same problem as v30u_ucrom's HEXDIR):
+    // working directories (same problem the removed v30u_ucrom's HEXDIR had):
     //   Quartus resolves $readmemb from the project dir -> fpga/
     //   the sim benches run from the repo root.
 `ifdef SYNTHESIS

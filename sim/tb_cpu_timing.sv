@@ -1,5 +1,6 @@
 //
-// tb_cpu_timing -- does the V30 get its data in time, at the real CE rates?
+// tb_cpu_timing -- does the guest CPU get its data in time, at the real CE
+// rates?
 //
 // The in-core self-test passes the whole base 64 KB through sdram_mp (hardware,
 // testB14: PILOT A5/A5, PILOT2 5A/5A, PASS 64K), while the BIOS running on the
@@ -13,7 +14,7 @@
 // two faster cycle-paced steps -- none of them anywhere near the 8088's 4.77
 // MHz this bench used to model.
 //
-// The contract the bridge actually runs (v30_cpu_bridge.sv):
+// The contract the bridge actually runs (zet_cpu_bridge.sv):
 //   * the 8288 strobes processor_status on cpu_ce_negedge -- commands assert
 //     on a negedge
 //   * READY is sampled at every cpu_ce_posedge from the third T state on;
@@ -219,7 +220,7 @@ module tb_cpu_timing;
     endtask
 
     initial begin
-        $display("=== V30 read timing through sdram_mp (CE-paced) ===");
+        $display("=== guest CPU read timing through sdram_mp (CE-paced) ===");
         repeat (8) @(posedge clock);
         reset = 0;
         wait (initilized_sdram);

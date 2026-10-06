@@ -53,21 +53,20 @@ proc rd {addr} {
 
 # Slots 0x01-0x24 were the POST panel's census and snoop words; they left
 # with postmon and read DEAD <addr> now. Current map (PC98_JTAG builds):
-#   0x10-0x16  v30 dbg_regs, MSW-first: psw:pc, sreg3:sreg2, sreg1:sreg0,
-#              then gpr7:gpr6 down to gpr1:gpr0
-#   0x17       retired-instruction counter (frozen = wedged)
-#   0x18       current bus-cycle address
+#   0x10-0x16  were the nuV30's dbg_regs (psw:pc, sregs, gprs) -- Zet has no
+#              equivalent tap, so they read 0 now
+#   0x17       nuV30 retired-instruction counter -- reads 0 on the Zet build
+#   0x18       zet_pc, the core's current linear PC
 #   0x19       {arbiter: hlda,aen_n,dma_hold,ext_req,drq3..0,  RAM FSM:
 #               wc_pend,refresh,read_flag,acc_rd,acc_wr,state[2:0]}
 #   0x1a       {proc_ready, mem_acc_ready, dma_ready, dack_n3..0, no_cmd}
 #   0x1b       {bridge: parked,cyc_active,bstate,wr_cnt,byte_idx,t_cnt,gap,cur_bs,
 #               cpu_ce edge counter} -- ce_count frozen = the clock enable died
-#   0x1c       {cpu_ad_out[19:0], v30_bs, pause, reset_cpu, reset_chipset,
-#               reset, soft_reset_cpu, cpu_ce_posedge}
+#   0x1c       {cpu_ad_out[19:0], processor_status, pause, reset_cpu,
+#               reset_chipset, reset, soft_reset_cpu, cpu_ce_posedge}
 #   0x1d       keyboard count:last
-#   0x20       {v30_data_i[15:0], dbg_core}: the byte pair last fed to the
-#              core + {halted,q_ripe,ripe_lead_n,q_cnt,eu_bs,eu_pop,eu_flush,
-#              eu_susp,eu_halt,rd_done_n,wr_done_n} -- EU/BIU interlock state
+#   0x20       {zwb_dat_i[15:0], dbg_core}: the byte pair last fed to the
+#              core; the low half was the nuV30 EU/BIU interlock and reads 0
 #   0x1e       {cont2, cont1} pad words as the softcore sees them (settled|jtag)
 #   0x1f       {jtag_btn2, jtag_btn1} held-button inject mask -- a stuck bit
 #              here means that pad bit reads held forever (no edge for fw)
@@ -103,15 +102,15 @@ proc rd {addr} {
 #              boot-time F0 write otherwise consumes the snapshot before
 #              any guest fault can.
 set regs {
-    16  V30_PSW_PC
-    17  V30_SREG3_SREG2
-    18  V30_SREG1_SREG0
-    19  V30_GPR7_GPR6
-    20  V30_GPR5_GPR4
-    21  V30_GPR3_GPR2
-    22  V30_GPR1_GPR0
-    23  V30_RETIRED
-    24  V30_ADDR
+    16  NUV30_PSW_PC=0
+    17  NUV30_SREG3_SREG2=0
+    18  NUV30_SREG1_SREG0=0
+    19  NUV30_GPR7_GPR6=0
+    20  NUV30_GPR5_GPR4=0
+    21  NUV30_GPR3_GPR2=0
+    22  NUV30_GPR1_GPR0=0
+    23  NUV30_RETIRED=0
+    24  ZET_PC
     25  ARB_HOLD+RAM_FSM
     26  READY_CHAIN
     27  BRIDGE+CE_CNT
@@ -119,12 +118,12 @@ set regs {
     29  KEYS=count,last
     30  PADS=cont2,cont1
     31  JTAGBTN=held2,held1
-    32  V30_DIN+EU_BIU
-    33  EU_POST_ADDR
-    34  BIU_LAUNCH
-    35  EU_STALL
-    36  QMEM0-3
-    37  QMEM4-5+FPTR
+    32  ZWB_DIN (+nuV30 EU_BIU=0)
+    33  NUV30_POST_ADDR=0
+    34  NUV30_BIU_LAUNCH=0
+    35  NUV30_EU_STALL=0
+    36  NUV30_QMEM0-3=0
+    37  NUV30_QMEM4-5+FPTR=0
     38  FDC_XFER+ACC/DROP
     39  FDC_REQ+LBA+DMA
     40  FDC_CMD_LO=EOT/GPL/N/R

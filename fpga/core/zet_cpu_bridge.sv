@@ -1,13 +1,14 @@
 //============================================================================
 //
 //  zet_cpu_bridge -- put the Zet (16-bit Wishbone master) on the i8288
-//  world (8-bit), the same downstream contract v30_cpu_bridge drives.
+//  world (8-bit), the downstream contract the removed nuV30 bridge drove.
 //
-//  EXPERIMENTAL (branch zet-cpu). Zet is a plain 80186-class microcoded
-//  core: it knows PUSHI/ENTER/LEAVE/PUSHA/IMUL-imm/INS/OUTS, so the ITF's
+//  Zet is a plain 80186-class microcoded core: it knows
+//  PUSHI/ENTER/LEAVE/PUSHA/IMUL-imm/INS/OUTS, so the ITF's
 //  F9476 `push imm16` that killed the i8088 does not derail it. It is NOT
 //  a V30: no NEC extensions (BRKEM/INS/EXT bitfield, the flag quirks), and
-//  it makes no attempt at cycle accuracy. nuV30 stays the shipping CPU.
+//  it makes no attempt at cycle accuracy. It is the shipping CPU -- nuV30
+//  was removed when the swap landed.
 //
 //  THE UPSTREAM CONTRACT (zet_wb_master, measured, not assumed):
 //   * wb_cyc_o == wb_stb_o, asserted in the master's stb states and held
@@ -272,7 +273,7 @@ module zet_cpu_bridge (
                     :               rd_word;
 
     // ------------------------------------------------------------------------
-    // the byte engine: identical pacing to v30_cpu_bridge's
+    // the byte engine: identical pacing to the removed v30_cpu_bridge's
     // ------------------------------------------------------------------------
 
     localparam [1:0] B_IDLE = 2'd0;   // nothing to do / waiting for the bus
@@ -312,8 +313,8 @@ module zet_cpu_bridge (
                  && pc98_sdram_hits(a, analog_mode);
     endfunction
 
-    // Word-I/O termination -- same table as v30_cpu_bridge (np21w
-    // io/iocore.c ioterminate[]/iocore16.tbl).
+    // Word-I/O termination -- same table the removed v30_cpu_bridge ran
+    // (np21w io/iocore.c ioterminate[]/iocore16.tbl).
     localparam [2:0] TERM_NONE   = 3'd0;
     localparam [2:0] TERM_WORD   = 3'd1;
     localparam [2:0] TERM_ACTIVE = 3'd2;

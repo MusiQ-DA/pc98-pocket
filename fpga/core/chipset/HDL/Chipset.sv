@@ -16,7 +16,7 @@ module CHIPSET #(
         // CPU
         input   logic   [19:0]  cpu_address,
         input   logic   [7:0]   cpu_data_bus,
-        // The 16-bit memory path: v30_cpu_bridge asks for a
+        // The 16-bit memory path: zet_cpu_bridge asks for a
         // word, RAM.sv turns it into one two-word SDRAM burst instead of two
         // bus cycles, and the odd lane travels on its own pair of wires rather
         // than widening the chipset's eight-bit bus. Only the addresses
@@ -37,7 +37,7 @@ module CHIPSET #(
         output  logic           st_done,
         output  logic   [7:0]   st_rdata,
         output  logic   [7:0]   accel_status,
-        // Sixteen-colour mode, out to core_top for v30_cpu_bridge: it and
+        // Sixteen-colour mode, out to core_top for zet_cpu_bridge: it and
         // RAM.sv must agree on whether E0000-E7FFF is memory.
         output  logic           pc98_analog,
         input   logic   [2:0]   processor_status,

@@ -30,7 +30,7 @@
 //
 // The image is $readmemh'd rather than written in Verilog literals; the two
 // builds look for it from different working directories, so the path is
-// picked the same way v30u_ucrom picks HEXDIR.
+// picked the same way zet_micro_rom picks DATDIR.
 //
 // The window is a byte ROM on a machine that reads WORDS: byte 9 of the
 // signature lives on the HIGH lane. q_hi is the same array read at
@@ -71,7 +71,7 @@ module pc98_scsi_rom (
     end
 
 `ifndef SYNTHESIS
-    // The F44 lesson from v30u_ucrom applies here: a wrong path is two
+    // The F44 lesson from the old v30u_ucrom applies here: a wrong path is two
     // warnings and a silent all-zero ROM. Probe the signature after the load
     // and take the run down if it did not arrive.
     initial begin

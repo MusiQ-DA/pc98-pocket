@@ -275,8 +275,8 @@ module core_top (
     always @(posedge clk_28_636)
         ce_14_318 <= ~ce_14_318;
 
-    // CPU clock: ce_generator derives the V30's CE strobes; clk_select sets
-    // the speed and is reloaded each bus cycle (biu_done).
+    // CPU clock: ce_generator derives the guest CPU's CE strobes;
+    // clk_select sets the speed and is reloaded each bus cycle (biu_done).
     logic  biu_done;
     logic  [7:0] clock_cycle_counter_division_ratio;
     logic  [7:0] clock_cycle_counter_decrement_value;
@@ -314,7 +314,7 @@ module core_top (
         .reset                              (reset),
         .clk_select_load                    (biu_done),
         .clk_select                         (clk_select_next),
-        // The pin clock output is open: the V30 takes the CEs, not a
+        // The pin clock output is open: the CPU takes the CEs, not a
         // pin clock, and nothing else ever read it.
         .cpu_clk_pin                        (),
         .cpu_ce_posedge                     (cpu_ce_posedge),
@@ -1175,17 +1175,17 @@ module core_top (
     // The magic word proves the protocol end-to-end before any value is trusted.
     logic [31:0] probe_data, probe_data_c;
     wire   [7:0] probe_addr;
-    // The V30's architectural state, live. dbg_regs leaves the EU every
-    // cycle so the probe snapshot is "the CPU is executing THIS" -- a frozen
-    // CS:IP on a dead machine reads exactly like the wedge-era PC tap did.
-    wire [223:0] v30_dbg_regs;             // {psw, pc, sreg3..0, gpr7..0}
-    wire  [15:0] v30_dbg_core;             // EU/BIU interlock: halt/queue/eu_bs
-    wire  [31:0] v30_dbg_core2;            // posted access: eu_addr/seg + slots
-    wire  [31:0] v30_dbg_core3;            // BIU launch-law registers
-    wire  [31:0] v30_dbg_core4;            // EU stall ledger: ucode row + wait wires
-    wire  [31:0] v30_dbg_core5;            // queue bytes r_q_mem[0..3]
-    wire  [31:0] v30_dbg_core6;            // queue bytes r_q_mem[4..5] + fetch_ptr
-    wire         v30_first_pop;            // EU consumed an instruction's byte 0
+    // The nuV30's architectural state, live -- was. These taps were the old
+    // core's dbg pins; Zet has no equivalent so every one is tied to 0 now
+    // and the slots below keep their addresses only for map compatibility.
+    wire [223:0] v30_dbg_regs  = '0;       // {psw, pc, sreg3..0, gpr7..0}
+    wire  [15:0] v30_dbg_core  = '0;       // EU/BIU interlock: halt/queue/eu_bs
+    wire  [31:0] v30_dbg_core2 = '0;       // posted access: eu_addr/seg + slots
+    wire  [31:0] v30_dbg_core3 = '0;       // BIU launch-law registers
+    wire  [31:0] v30_dbg_core4 = '0;       // EU stall ledger: ucode row + wait wires
+    wire  [31:0] v30_dbg_core5 = '0;       // queue bytes r_q_mem[0..3]
+    wire  [31:0] v30_dbg_core6 = '0;       // queue bytes r_q_mem[4..5] + fetch_ptr
+    wire         v30_first_pop = 1'b0;     // EU consumed an instruction's byte 0
     reg  [23:0]  retired_cnt = 24'd0;      // saturating instruction counter
     reg          first_pop_q = 1'b0;
     always_ff @(posedge clk_chipset) begin
@@ -1313,8 +1313,8 @@ module core_top (
         if (itf_bank && pc_now == 20'hF99E5) bios_branch[7] <= 1'b1;
     end
 
-    // Slots 0x40-0x5F: a 32-deep ring of the guest's fetch cursor (v30_addr
-    // alias = zet_pc under PC98_ZET), frozen
+    // Slots 0x40-0x5F: a 32-deep ring of the guest's fetch cursor (zet_pc),
+    // frozen
     // when the guest writes port 0xF0 (the PC-98 shutdown/soft-reset) or
     // parks in the ITF error halt (f99e5: cli; jmp $). The ITF failure
     // path resets through 0xF0, which wipes the live cursor before anyone
@@ -1327,7 +1327,7 @@ module core_top (
     reg  [4:0] pc_hist_w    = 5'd0;
     reg [19:0] pc_hist_prev = 20'h0;
     reg        pc_hist_frozen = 1'b0;
-    wire [19:0] pc_now = v30_addr;
+    wire [19:0] pc_now = zet_pc;
     wire       pc_in_errhalt = (pc_now == 20'hF99E5);
     // Probe write 0x85 re-arms the history: the boot-time F0 write fires
     // the freeze long before any guest crash, so without this the snapshot
@@ -1439,16 +1439,16 @@ module core_top (
             if (chipset_address == 20'h003FA) begin
                 wr_3fa <= {cpu_data_bus_hi, cpu_data_bus};
                 w_word[0] <= cpu_word_access;
-                w3fa_pc  <= v30_addr;
+                w3fa_pc  <= zet_pc;
             end
             if (chipset_address == 20'h003FB) begin
                 wr_3fb  <= {cpu_data_bus_hi, cpu_data_bus};
-                w3fb_pc <= v30_addr;
+                w3fb_pc <= zet_pc;
             end
             if (chipset_address == 20'h003FC) begin
                 wr_3fc <= {cpu_data_bus_hi, cpu_data_bus};
                 w_word[1] <= cpu_word_access;
-                w3fc_pc <= v30_addr;
+                w3fc_pc <= zet_pc;
             end
             if (chipset_address == 20'h00404) begin
                 wr_404 <= {cpu_data_bus_hi, cpu_data_bus};
@@ -1608,7 +1608,9 @@ module core_top (
             // The bisect-era taps (PIC/timer/keyboard counts, the wedge-PC
             // taps, the JTAG guest-memory master, the JTAG FDD/mgmt
             // channels) went out with PC98_PROBE_EXTRA -- the dbg_regs dump
-            // below is what replaced them for "where is the CPU".
+            // below is what replaced them for "where is the CPU". With the
+            // nuV30 gone the dbg_regs slots read 0; slot 0x18 (zet_pc) is
+            // the live PC now.
             8'h10:   probe_data_c = v30_dbg_regs[223:192];  // psw:pc
             8'h11:   probe_data_c = v30_dbg_regs[191:160];  // sreg3:sreg2
             8'h12:   probe_data_c = v30_dbg_regs[159:128];  // sreg1:sreg0
@@ -1617,7 +1619,7 @@ module core_top (
             8'h15:   probe_data_c = v30_dbg_regs[63:32];    // gpr3:gpr2
             8'h16:   probe_data_c = v30_dbg_regs[31:0];     // gpr1:gpr0
             8'h17:   probe_data_c = {8'h00, retired_cnt};   // liveness
-            8'h18:   probe_data_c = {12'h000, v30_addr};    // current bus cycle
+            8'h18:   probe_data_c = {12'h000, zet_pc};      // current bus cycle
             // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
             // never completes; 0x1a: the ready chain the CPU waits on.
             8'h19:   probe_data_c = {16'h0, chipset_dbg};
@@ -1819,20 +1821,21 @@ module core_top (
             // frozen ce_count is the dead-CE signature; a live count with
             // parked=1 points at the engine's release conditions instead.
             8'h1b:   probe_data_c = {bridge_dbg, ce_count};
-            // 0x1c: {ALE'd bus address, v30_bs, the reset/pause terms}.
-            // cpu_ad_out vs slot 0x18's v30_addr separates "the engine is
-            // driving this cycle" from "the core's pins are frozen".
-            8'h1c:   probe_data_c = {3'h0, cpu_ad_out, v30_bs,
+            // 0x1c: {ALE'd bus address, processor_status, the reset/pause
+            // terms}. cpu_ad_out vs slot 0x18's zet_pc separates "the engine
+            // is driving this cycle" from "the core's pins are frozen".
+            8'h1c:   probe_data_c = {3'h0, cpu_ad_out, processor_status,
                                      pause_core, reset_cpu, reset_chipset,
                                      reset, soft_reset_cpu, cpu_ce_posedge};
-            // 0x20: {last byte-pair fed to the core, EU/BIU state}. The
-            // pins say PASV while the core does not move: v30_data_i shows
-            // what it last consumed, dbg_core says whether the EU waits on
-            // the queue (q_cnt=0, ripe=0) or is halted (biu_halted).
-            8'h20:   probe_data_c = {v30_data_i, v30_dbg_core};
+            // 0x20: {last byte-pair fed to the core, dbg_core}. The pins say
+            // PASV while the core does not move: zwb_dat_i shows what it
+            // last consumed. dbg_core was the nuV30's EU/BIU interlock --
+            // Zet has no equivalent tap and the half reads 0.
+            8'h20:   probe_data_c = {zwb_dat_i, v30_dbg_core};
             // 0x21: the posted access itself -- where the EU's MEMW wants to
             // land and which handshake bits are holding the slot.
             8'h21:   probe_data_c = v30_dbg_core2;
+            // 0x22-0x25: nuV30 internals, all 0 on the Zet build.
             // 0x22: the BIU's launch-law registers -- {q_head,q_cnt, e_pend,
             // halted, halt_pending, run,cur_fetch/halt/wr,evald, cmt_*, rq_n,
             // slot_busys, opr_held, absorb_ttl, ts}. The posted MEMW has to
@@ -2069,7 +2072,7 @@ module core_top (
     // its key-
     // injection port through CHIPSET (pc98_kbd8251's key_stb/key_byte; the
     // byte rides as-is because bit 7 is already set on a release). The
-    // simulation +keys channel is bench-side only (tb_pc98_v30.sv drives its
+    // simulation +keys channel is bench-side only (tb_pc98_boot.sv drives its
     // own model), so the two sources never meet in RTL.
     //
     // ps2_keyboard's keybord_interrupt is OFF the master PIC's IRQ1 in the PC-98
@@ -2845,7 +2848,7 @@ module core_top (
     wire [19:0] cpu_ad_out;
     reg  [19:0] cpu_address;
     wire [7:0] cpu_data_bus;
-    // The 16-bit memory path's extra lane, between v30_cpu_bridge and the
+    // The 16-bit memory path's extra lane, between zet_cpu_bridge and the
     // chipset's RAM/option-ROM muxes.
     wire [7:0] cpu_data_bus_hi;
     wire [7:0] data_bus_hi;
@@ -3292,26 +3295,18 @@ module core_top (
 
     // ---------------------------------------------------------------- the CPU
     //
-    // nuV30 (the real part whose microcode the ROMs expect -- the ITF's
-    // F9476 pushes imm16, a 186-class opcode an 8086 dispatches to an
-    // undocumented JS alias) through v30_cpu_bridge, which runs each 16-bit
-    // cycle as one two-lane cycle where the SDRAM answers and two byte
-    // cycles everywhere else on the eight-bit bus. The wiring follows
-    // tb_pc98_v30, the
-    // bench that booted N88-BASIC on this core, and tb_v30_bridge, the
-    // bench that proved the bridge: CLK=clk_chipset, CE gated by the
-    // bridge, INT from the PIC, DATA_I assembled by the bridge.
+    // Zet, the 80186-class core, on a Wishbone master, bridged to the 8288
+    // byte world -- zet_cpu_bridge runs each 16-bit cycle as one two-lane
+    // cycle where the SDRAM answers and two byte cycles everywhere else on
+    // the eight-bit bus. See zet_cpu_bridge.sv's header for the contract.
+    // Zet has the full 186 instruction set -- the ITF's `push imm16` that
+    // derailed the old i8088 is legal for it -- but it is not
+    // cycle-accurate and carries none of the V30's NEC extensions.
     //
     // The CE generator's outputs still pace the CHIPSET's RAM waits, which
     // is where they are consumed.
     wire [15:0] bridge_dbg;
 
-`ifdef PC98_ZET
-    // --------------------------------------------------------------------
-    // EXPERIMENTAL (zet-cpu branch): the Zet 80186-class core on a Wishbone
-    // master, bridged to the same 8288 byte world. See zet_cpu_bridge.sv's
-    // header for the contract. This is NOT the shipping CPU -- nuV30 is.
-    // --------------------------------------------------------------------
     wire        zet_clk;
     wire [15:0] zwb_dat_i, zwb_dat_o;
     wire [19:1] zwb_adr;
@@ -3377,84 +3372,9 @@ module core_top (
         .dbg_opc   (zet_opc)
     );
 
-    // The probe slots that usually expose V30 guts get the Zet view instead.
-    wire [19:0] v30_addr = zet_pc;
-    wire [2:0]  v30_bs   = processor_status;
-    wire [15:0] v30_data_i = zwb_dat_i;
-`else
-    wire [2:0]  v30_bs;
-    wire [19:0] v30_addr;
-    wire [15:0] v30_data_o, v30_data_i;
-    wire        v30_ube_n, v30_ce, v30_ready;
-    wire        v30_ss_err_unused, v30_ss_quiet_unused;
-    wire [15:0] v30_ss_rdata_unused;
-    wire        zet_fault = 1'b0;
-    wire [7:0]  zet_opc   = 8'h00;
-    wire [19:0] zet_pc    = 20'h00000;
-
-    v30_cpu_bridge u_v30_bridge (
-        .clk               (clk_chipset),
-        .cpu_ce_posedge    (cpu_ce_posedge),
-        .cpu_ce_negedge    (cpu_ce_negedge),
-        .reset             (reset_cpu),
-        .v30_bs            (v30_bs),
-        .v30_addr          (v30_addr),
-        .v30_ube_n         (v30_ube_n),
-        .v30_data_o        (v30_data_o),
-        .v30_data_i        (v30_data_i),
-        .v30_ready         (v30_ready),
-        .v30_ce            (v30_ce),
-        .processor_status  (processor_status),
-        .ad_out            (cpu_ad_out),
-        .cpu_data_bus      (cpu_data_bus),
-        .lock_n            (lock_n),
-        .analog_mode       (pc98_analog),
-        .word_access       (cpu_word_access),
-        .cpu_data_bus_hi   (cpu_data_bus_hi),
-        .data_bus_hi       (data_bus_hi),
-        .data_bus          (data_bus),
-        .processor_ready   (processor_ready),
-        .address_enable_n  (chipset_aen),
-        .pause_core        (pause_core),
-        .biu_done          (biu_done),
-        .dbg               (bridge_dbg)
-    );
-
-    v30_core u_cpu (
-        .CLK        (clk_chipset),
-        .CE         (v30_ce),
-        .RESET      (reset_cpu),
-        .READY      (v30_ready),
-        .INT        (interrupt_to_cpu),
-        .NMI        (1'b0),
-        .POLL_N     (1'b1),
-        .DATA_I     (v30_data_i),
-        .ADDR_O     (v30_addr),
-        .DATA_O     (v30_data_o),
-        .STATUS_O   (),
-        .QS         (),
-        .BS         (v30_bs),
-        .RD_N       (),
-`ifdef PC98_JTAG
-        .dbg_regs      (v30_dbg_regs),
-        .dbg_first_pop (v30_first_pop),
-        .dbg_core      (v30_dbg_core),
-        .dbg_core2     (v30_dbg_core2),
-        .dbg_core3     (v30_dbg_core3),
-        .dbg_core4     (v30_dbg_core4),
-        .dbg_core5     (v30_dbg_core5),
-        .dbg_core6     (v30_dbg_core6),
-`endif
-        .UBE_N      (v30_ube_n),
-        .BUSLOCK_N  (),
-        .SS_ADDR    ('0),
-        .SS_WDATA   ('0),
-        .SS_WE      (1'b0),
-        .SS_RDATA   (v30_ss_rdata_unused),
-        .SS_ERR     (v30_ss_err_unused),
-        .SS_BUS_QUIET (v30_ss_quiet_unused)
-    );
-`endif // PC98_ZET
+    // The probe slots that used to expose nuV30 guts read the Zet view where
+    // one exists (0x18/0x1c/0x20 = zet_pc / processor_status / the Wishbone
+    // data-in); the dbg_regs/dbg_core taps Zet has no answer for read 0.
 
     //
     // AUDIO
