@@ -218,3 +218,19 @@ if {[llength $v30_core] > 0} {
 # for real and the parked core must present stable outputs to it.)
 set_multicycle_path -setup -end 5 -to $v30_core
 set_multicycle_path -hold  -end 4 -to $v30_core
+
+# The Zet core (experimental, zet-cpu branch): zet_clk = clk & run_arm &
+# zph delivers every OTHER chipset edge, so a zet->zet path honestly has
+# two cycles. This is a DESCRIPTION, not a relaxation: the fetch FSM's
+# state->modrm_l/f0f_l cones came back -12.5 ns single-cycle (slow
+# corner, 2026-10 run 37404787115), and on hardware that decode miss is
+# the intermittent tvram "starfield". Boundary paths stay single-cycle:
+# a bridge register's change can still be sampled by the very next
+# delivered edge, and a zet register's change reaches the clk-domain
+# bridge one clk later.
+set zet_core [get_keepers -nocase {core_top:ic|zet:u_cpu*}]
+if {[llength $zet_core] > 0} {
+    set_multicycle_path -setup -end 2 -from $zet_core -to $zet_core
+    set_multicycle_path -hold  -end 1 -from $zet_core -to $zet_core
+    puts "sdc: multicycled [llength $zet_core] (handle) zet core-core paths"
+}

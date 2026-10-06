@@ -138,10 +138,25 @@ module zet_cpu_bridge (
     // `| reset`: Zet's reset is SYNCHRONOUS -- no edges, no reset -- so the
     // gate is forced open while reset is held. (v30 gets away without this
     // because its reset is asynchronous.)
-    assign zet_clk = clk & (run_arm | reset);
+    //
+    // zph halves the delivered rate: the fetch FSM's state->next_state->
+    // latch cones don't close single-cycle at 42.95 MHz (slow-corner STA
+    // showed ~41 ns on a 23.3 ns budget into modrm_l/f0f_l), and on the
+    // real chip that marginal path corrupts instruction decode
+    // intermittently -- the tvram "starfield" symptom. With zph in the
+    // gate, delivered posedges are at least two clk apart, so every
+    // core-internal path honestly has two cycles (the SDC says the same
+    // via a setup-2 multicycle on the zet:u_cpu keepers); bus pacing is
+    // untouched -- the byte engine below still runs on the CE train.
+    // zph is latched on the FALLING edge, same as run_arm, so the
+    // three-input AND can never glitch mid-high.
+    reg  zph = 1'b0;
+    always @(negedge clk) zph <= !zph;
+    assign zet_clk = clk & (run_arm | reset) & zph;
 
-    // A zet edge lands at this posedge when run_arm was latched.
-    wire zet_edge = run_arm;
+    // A zet edge lands at this posedge when the gate was open AND zph
+    // is the passing half.
+    wire zet_edge = (run_arm | reset) & zph;
 
     assign lock_n   = 1'b1;
 
