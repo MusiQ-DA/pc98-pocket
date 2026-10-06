@@ -704,7 +704,17 @@ module pc98_gvram_seq #(
                 end
               end
 
-              S_WRW: if (leg_done) begin
+              // mem_ready, not mem_done: RAM.sv's posted-write release means
+              // "the operands are durably covered" -- parked in a queue slot,
+              // accepted into the FSM, or matching the write completing now
+              // (same address and data, which makes this leg's byte land
+              // identically). The parked FIFO keeps the plane order and
+              // rd_conflicts holds a conflicting read behind the drain, so a
+              // write leg is free to retire at coverage -- the drain runs in
+              // the background while the next leg walks in. Reads still wait
+              // for leg_done: their data is not back until COMPLETE_RAM_RW,
+              // and a parked drain's pulse is not theirs (mem_own).
+              S_WRW: if (leg_done | mem_ready) begin
                 mem_wr <= 1'b0;
                 if (last_gp) st <= S_DONE;
                 else begin
