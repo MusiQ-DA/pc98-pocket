@@ -2699,7 +2699,14 @@ module core_top (
 
                     // Hold the external write until ram_rw_complete, or a safety
                     // timeout (a hang backstop; a normal write never reaches it).
-                    if (ram_rw_complete || (bios_write_wait_cnt == 8'd63))
+                    //
+                    // ram_rw_complete is memory_access_ready now: it reads 1
+                    // while no access is in flight, so honour it only after
+                    // the write has had time to reach RAM's pins through the
+                    // arbiter hold and the sequencer -- four clocks. Before
+                    // that, a 1 is the idle default, not coverage.
+                    if (((bios_write_wait_cnt >= 8'd4) && ram_rw_complete)
+                        || (bios_write_wait_cnt == 8'd63))
                     begin
                         bios_write_n        <= 1'b1;
                         bios_write_wait_cnt <= 8'h0;
