@@ -606,7 +606,14 @@ module CHIPSET #(
     // The ROM loader's per-access done pulse still comes from RAM.sv itself:
     // it writes E8000-FFFFF, which is never a graphics window, so it takes the
     // sequencer's pass-through and sees the memory's own completion.
-    assign ram_rw_complete = ram_complete_w;
+    //
+    // Qualify it the same way the sequencer does: parked-write drains pulse
+    // access_complete too, and deep in the APF stream the posted queue has
+    // enough depth that those pulses land inside the loader's hold state. An
+    // eaten foreign pulse drops bios_write_n before RAM captures the operand
+    // -- the F8000-FFFFF tail arrives exactly in that regime, and run#823's
+    // SDRAM held per-bit merges of BIOS bytes with 0x55.
+    assign ram_rw_complete = ram_complete_w & ram_own_w;
 
     // np21w MEMWAIT_VRAM/GRCG (pccore.c's wait[] defaults {1,1,6,1,8,1}):
     // while the beam is out a graphics-plane access costs six extra CPU
