@@ -87,7 +87,11 @@ module pc98_gvram_display #(
 
     // One dot of graphics, aligned with hcount delayed one rd_clk (the
     // buffer read is registered); zero when the plane is off.
-    output logic [3:0] gfx_dot            // {E, R, G, B}
+    output logic [3:0] gfx_dot,           // {E, R, G, B}
+
+    // Underrun telemetry for the JTAG probe -- the counters described at
+    // the bottom of the file, plus the live FSM/line state.
+    output wire [63:0] dbg
 );
 
     // ---- the scanline, gray-coded across the domains ----------------------
@@ -398,6 +402,39 @@ module pc98_gvram_display #(
     // rasterline: the wandering band edge. max_fill is the worst launch->done
     // length in clk cycles; a line is ~1730 of them, so a number near 5200
     // says the deadline itself is the problem.
+    logic [15:0] fill_tmr  = 16'd0;
+    logic [15:0] max_fill  = 16'd0;
+    logic [7:0]  skip_cnt  = 8'd0;
+    logic [7:0]  late_cnt  = 8'd0;
+    logic        f_active_q = 1'b0;
+    wire         fill_done = f_active_q && !f_active;
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            f_active_q <= 1'b0;
+            fill_tmr   <= 16'd0;
+            max_fill   <= 16'd0;
+            skip_cnt   <= 8'd0;
+            late_cnt   <= 8'd0;
+        end else begin
+            f_active_q <= f_active;
+            if (f_active && (fill_tmr != 16'hffff))
+                fill_tmr <= fill_tmr + 16'd1;
+            if (fill_done) begin
+                fill_tmr <= 16'd0;
+                if (fill_tmr > max_fill) max_fill <= fill_tmr;
+            end
+            if (disp_on_c && line_edge && (line_now < 9'(LINES)) && f_active
+                && (skip_cnt != 8'hff))
+                skip_cnt <= skip_cnt + 8'd1;
+            if (line_edge && f_active && (act_tgt == line_now)
+                && (late_cnt != 8'hff))
+                late_cnt <= late_cnt + 8'd1;
+        end
+    end
+    assign dbg = { line_now, act_tgt, f_chunk, f_plane, cur_part,
+                   dbl, disp_page, disp_on_c, fill_page, f_active,
+                   skip_cnt, late_cnt, max_fill };
+
     wire pb = rd_b[bit_q];
     wire pr = rd_r[bit_q];
     wire pg = rd_g[bit_q];

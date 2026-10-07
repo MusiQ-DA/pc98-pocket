@@ -643,7 +643,7 @@ module tb_pc98_boot;
         .part_pbyte(4'h0),
         .p_req(gv_req), .p_addr(gv_addr), .p_len(gv_len),
         .p_ack(gv_ack), .p_rvalid(gv_rvalid), .p_rdata(gv_rdata),
-        .p_done(gv_done), .gfx_dot(gv_dot_unused)
+        .p_done(gv_done), .gfx_dot(gv_dot_unused), .dbg()
     );
 
     // ---- optional synthetic pressure on ports B and E ----------------------

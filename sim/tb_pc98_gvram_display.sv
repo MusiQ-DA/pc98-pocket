@@ -37,7 +37,7 @@ module tb_pc98_gvram_display;
         .part_pbyte(part_pbyte),
         .p_req(p_req), .p_addr(p_addr), .p_len(p_len),
         .p_ack(p_ack), .p_rvalid(p_rvalid), .p_rdata(p_rdata), .p_done(p_done),
-        .gfx_dot(gfx_dot)
+        .gfx_dot(gfx_dot), .dbg()
     );
 
     // raster: 848 dots x 440 lines on rd_clk

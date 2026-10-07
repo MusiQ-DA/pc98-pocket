@@ -203,6 +203,9 @@ module PERIPHERALS #(
         // be read back against what the guest programmed: {sad0,len0} in
         // the high word, flags/LR/AL/PITCH in the low.
         output  wire    [63:0]  dbg_gdc_s,
+        // Graphics display-fetch underrun telemetry -- skip/late/max_fill in
+        // the low word, live fill-FSM and line state in the high word.
+        output  wire    [63:0]  dbg_gvdisp,
         input   logic           fdd_dma_ack,
         input   logic           terminal_count,
         // Others
@@ -1403,7 +1406,8 @@ module PERIPHERALS #(
         .p_req(gv_rd_req), .p_addr(gv_rd_addr), .p_len(gv_rd_len),
         .p_ack(gv_rd_ack), .p_rvalid(gv_rd_valid), .p_rdata(gv_rd_data),
         .p_done(gv_rd_done),
-        .gfx_dot(gfx_dot_w)
+        .gfx_dot(gfx_dot_w),
+        .dbg(dbg_gvdisp)
     );
 
     // The layer also stays dark until the machine has written a graphics

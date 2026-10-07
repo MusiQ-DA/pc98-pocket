@@ -1674,6 +1674,12 @@ module core_top (
             // what the guest programmed.
             8'h39:   probe_data_c = dbg_gdc_s[31:0];
             8'h3a:   probe_data_c = dbg_gdc_s[63:32];
+            // 0x40/0x41: graphics display-fetch underrun telemetry.
+            // Low word {skip_cnt, late_cnt, max_fill}; high word the live
+            // {line_now, act_tgt, f_chunk, f_plane, cur_part, dbl,
+            // disp_page, disp_on_c, fill_page, f_active}.
+            8'h40:   probe_data_c = dbg_gvdisp[31:0];
+            8'h41:   probe_data_c = dbg_gvdisp[63:32];
             // 0x35: BIOS-side milestones + the 0x43D write tally
             // {bios_branch[7:0], in42_count, last_42_rdata,
             //  w43d_10_count[3:0], w43d_12_count[3:0]}
@@ -2908,6 +2914,8 @@ module core_top (
     wire [63:0]  fdc_dbg_cmd;  // live command {op,unit,C,H,R,N,EOT,GPL}
     wire [63:0]  dbg_gdc_s;    // slave GDC display regs: {SAD0,LEN0} hi,
                              // {disp_on,page,analog,5MHz,dbl,LR,AL,PITCH} lo
+    wire [63:0]  dbg_gvdisp;   // graphics display fetch: {line,fill FSM} hi,
+                             // {skip,late,max_fill} lo
 
     wire    [1:0]   fdd_present;
     reg     [7:0]   sw;
@@ -3202,6 +3210,7 @@ module core_top (
         .dbg_fdc                            (fdc_dbg),
         .dbg_fdc_cmd                        (fdc_dbg_cmd),
         .dbg_gdc_s                          (dbg_gdc_s),
+        .dbg_gvdisp                         (dbg_gvdisp),
         .wait_count_clk_en                  (cpu_ce_negedge),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),
