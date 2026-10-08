@@ -74,7 +74,16 @@ module zet_regfile (
   assign s = r[{2'b10,addr_s}];
 
   assign cs = r[9];
-  assign cx_zero = (addr_d==4'd1) ? (d==16'd0) : (r[1]==16'd0);
+  // The only CX writes observable through cx_zero are the REP/LOOP count
+  // decrements (CX:=CX-1): next_in_opco/next_in_exec are both masked by
+  // pref_l[1] && a string opcode, and every micro-op with micro_d==CX in
+  // those sequences is the a=CX+0xFFFF decrement. "The incoming value is
+  // zero" is then the same question as "the stored value is one", asked
+  // of a register instead of the ALU result that is still propagating --
+  // this keeps the cpu_dat_i->opcode->decode->b->othop->d->cx_zero->
+  // nstate chain (worst negative slack in the full-rate core) out of the
+  // capture enables.
+  assign cx_zero = (addr_d==4'd1) ? (r[1]==16'd1) : (r[1]==16'd0);
 
   assign ip = r[15];
 
