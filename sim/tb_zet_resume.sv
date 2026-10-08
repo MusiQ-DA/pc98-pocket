@@ -73,6 +73,21 @@ module tb_zet_resume;
     always_ff @(posedge clk)
         if (ale) cpu_address <= ad_out;
 
+`ifdef ZET_DBG_WQ
+    // Per-clk view of the 8288 machine-cycle vs the bridge's pair engine,
+    // triggered by queue-drain completion and held open for 40 clocks.
+    int st_watch = 0;
+    always_ff @(posedge clk) begin
+        if (u_bridge.cur_dq) st_watch <= 40;
+        else if (st_watch > 0) st_watch <= st_watch - 1;
+        if (st_watch > 0)
+            $display("  %8t  ST=%03b mc=%b mcp=%b ale=%b ca=%05X rd_n=%b wr_n=%b db=%02x",
+                     $time, processor_status, u_8288.machine_cycle,
+                     u_8288.machine_cycle_period, ale, cpu_address,
+                     mem_rd_n, mem_wr_n, din);
+    end
+`endif
+
     // port 35h answers 79h (bit7 clear: "this is a resume"); port 42h
     // answers 02h -- the real RTL's value (Peripherals.sv sysport_data);
     // bit1=1 is the "V30 machine" answer that makes the ITF SKIP the
@@ -115,6 +130,9 @@ module tb_zet_resume;
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (),
         .analog_mode       (1'b0),
+        .pf_req_len        (),
+        .pf_beat_v         (1'b0),
+        .pf_beat_dat       (8'h00),
         .word_access       (word_access),
         .cpu_data_bus_hi   (cpu_data_bus_hi),
         .data_bus_hi       (din_hi),

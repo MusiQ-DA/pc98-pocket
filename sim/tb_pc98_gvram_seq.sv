@@ -69,6 +69,7 @@ module tb_pc98_gvram_seq;
     pc98_gvram_seq dut (
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
+        .cpu_pf_len(5'd0),
         .cpu_word(cpu_word),
         .cpu_addr(cpu_addr), .cpu_wdata(cpu_wdata),
         .cpu_wdata_hi(cpu_wdata_hi),
@@ -83,7 +84,8 @@ module tb_pc98_gvram_seq;
         .svc_req(svc_req), .svc_we(svc_we), .svc_raw(1'b0),
         .svc_addr(svc_addr),
         .svc_wdata(svc_wdata), .svc_done(svc_done), .svc_rdata(svc_rdata), .dbg(),
-        .mem_addr(mem_addr), .mem_wdata(mem_wdata), .mem_word(mem_word),
+        .mem_addr(mem_addr), .mem_wdata(mem_wdata), .mem_pf_len(),
+        .mem_word(mem_word),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
         .mem_done(mem_done), .mem_own(mem_own), .mem_ready(mem_ready)

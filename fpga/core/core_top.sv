@@ -2866,6 +2866,12 @@ module core_top (
     wire [7:0] cpu_data_bus_hi;
     wire [7:0] data_bus_hi;
     wire       cpu_word_access;
+    // The prefetch engine's side channel on the same path: cpu_pf_len asks
+    // RAM for a multi-word read burst and pf_beat_* streams the words
+    // back one at a time for the bridge's queue.
+    wire [4:0] cpu_pf_len;
+    wire       pf_beat_v;
+    wire [7:0] pf_beat_dat;
     // Sixteen-colour mode: CHIPSET decides it (port 0x6A) and the bridge has
     // to know, because it and RAM.sv must agree on where memory is.
     wire       pc98_analog;
@@ -3080,6 +3086,9 @@ module core_top (
         .cpu_address                        (cpu_address),
         .cpu_data_bus                       (cpu_data_bus),
         .cpu_word_access                    (cpu_word_access),
+        .cpu_pf_len                         (cpu_pf_len),
+        .pf_beat_v                          (pf_beat_v),
+        .pf_beat_dat                        (pf_beat_dat),
         .cpu_data_bus_hi                    (cpu_data_bus_hi),
         .data_bus_hi                        (data_bus_hi),
         .pc98_analog                        (pc98_analog),
@@ -3357,6 +3366,9 @@ module core_top (
         .lock_n            (lock_n),
         .analog_mode       (pc98_analog),
         .word_access       (cpu_word_access),
+        .pf_req_len        (cpu_pf_len),
+        .pf_beat_v         (pf_beat_v),
+        .pf_beat_dat       (pf_beat_dat),
         .cpu_data_bus_hi   (cpu_data_bus_hi),
         .data_bus_hi       (data_bus_hi),
         .data_bus          (data_bus),

@@ -155,6 +155,9 @@ module tb_pc98_boot;
         .lock_n            (lock_n),
         .analog_mode       (1'b0),
         .word_access       (cpu_word_access),
+        .pf_req_len        (cpu_pf_len),
+        .pf_beat_v         (pf_beat_v),
+        .pf_beat_dat       (pf_beat_dat),
         .cpu_data_bus_hi   (cpu_data_bus_hi),
         .data_bus_hi       (din_hi),
         .data_bus          (din),
@@ -507,11 +510,16 @@ module tb_pc98_boot;
     wire [19:0] seq_mem_addr;
     wire [7:0]  seq_mem_wdata, seq_cpu_rdata, seq_cpu_rdata_hi;
     wire        seq_mem_word, seq_mem_rd, seq_mem_wr, seq_mem_page1;
+    wire [4:0]  seq_mem_pf_len;
     wire [7:0]  dbg_gvram;
+    wire [4:0]  cpu_pf_len;
+    wire        pf_beat_v;
+    wire [7:0]  pf_beat_dat;
     pc98_gvram_seq #(.EGC(1'b1)) u_gvram_seq (
         .clk(clk_chipset), .reset(reset),
         .cpu_gvram(~ram_address_select_n),
         .cpu_rd(~mem_rd_n), .cpu_wr(~mem_wr_n),
+        .cpu_pf_len(cpu_pf_len),
         .cpu_word(cpu_word_access),
         .cpu_addr(cpu_address), .cpu_wdata(cpu_data_bus),
         .cpu_wdata_hi(cpu_data_bus_hi),
@@ -527,7 +535,7 @@ module tb_pc98_boot;
         .svc_done(), .svc_rdata(),
         .dbg(dbg_gvram),
         .mem_addr(seq_mem_addr), .mem_wdata(seq_mem_wdata),
-        .mem_word(seq_mem_word),
+        .mem_word(seq_mem_word), .mem_pf_len(seq_mem_pf_len),
         .mem_rd(seq_mem_rd), .mem_wr(seq_mem_wr),
         .mem_rdata(ram_dout), .mem_rdata_hi(ram_dout_hi),
         .mem_done(access_complete_w),
@@ -543,6 +551,8 @@ module tb_pc98_boot;
         .data_bus_out(ram_dout),
         .analog_mode(pc98_analog_q),
         .word_access(seq_mem_word),
+        .prefetch_len(seq_mem_pf_len),
+        .pf_beat_v(pf_beat_v), .pf_beat_dat(pf_beat_dat),
         .internal_data_bus_hi(cpu_data_bus_hi),
         .data_bus_out_hi(ram_dout_hi),
         .memory_read_n(~seq_mem_rd), .memory_write_n(~seq_mem_wr),

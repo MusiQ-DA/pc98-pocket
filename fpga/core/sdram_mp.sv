@@ -55,7 +55,10 @@ module sdram_mp #(
     parameter int T_RFC       = 7,      // AUTO REFRESH cycle
     parameter int T_MRD       = 2,      // MODE REGISTER SET -> any command
     parameter int INIT_NOP    = 8600,   // >= 100 us of NOP after power-up
-    parameter int REFRESH_INT = 320,    // <= 7.8 us between AUTO REFRESH
+    parameter int REFRESH_INT = 288,    // <= 7.8 us between AUTO REFRESH,
+                                        // less the wait a due refresh can
+                                        // spend behind a 16-beat burst (~36
+                                        // cyc) so the gap stays < 335 cyc spec
 
     // Derived. Do not override.
     parameter int ADDR_BITS   = ROW_BITS + BANK_BITS + COL_BITS,

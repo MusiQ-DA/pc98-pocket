@@ -75,6 +75,9 @@ module pc98_gvram_seq #(
     input  wire        cpu_rd,           // level, as the 8288's commands are
     input  wire        cpu_wr,
     input  wire        cpu_word,         // a 16-bit bus cycle (both halves)
+    input  wire [4:0]  cpu_pf_len,       // prefetch burst length on a
+                                        // pass-through read -- forwarded
+                                        // with mem_rd, never on seq legs
     input  wire [19:0] cpu_addr,
     input  wire [7:0]  cpu_wdata,
     input  wire [7:0]  cpu_wdata_hi,     // the odd byte of a word cycle
@@ -93,6 +96,7 @@ module pc98_gvram_seq #(
     output reg  [19:0] mem_addr,
     output reg  [7:0]  mem_wdata,
     output wire        mem_word,         // word burst: pass-through only
+    output wire [4:0]  mem_pf_len,       // prefetch burst: pass-through only
     output reg         mem_rd,
     output reg         mem_wr,
     input  wire [7:0]  mem_rdata,
@@ -300,6 +304,10 @@ module pc98_gvram_seq #(
     // Pass-through keeps the CPU's word flag for RAM's two-word burst; an
     // expanded access must always reach memory as byte-wide SDRAM words.
     assign mem_word = cpu_word & ~expand;
+    // Same rule as mem_word: the prefetch length belongs to the guest's own
+    // pass-through strobe. A sequencer leg (svc or expanded) must never run
+    // as a multi-word burst -- its reads expect one byte at a time.
+    assign mem_pf_len = cpu_pf_len & {5{~expand}};
 
     // The EGC engine's registers and datapath live one module down; the load
     // strobes and the plane walk are this FSM's business.

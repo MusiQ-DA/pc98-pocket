@@ -104,6 +104,9 @@ module tb_mem_perf;
         .lock_n            (),
         .analog_mode       (pc98_analog_w),
         .word_access       (cpu_word_access),
+        .pf_req_len        (cpu_pf_len_w),
+        .pf_beat_v         (pf_beat_v_w),
+        .pf_beat_dat       (pf_beat_dat_w),
         .cpu_data_bus_hi   (cpu_data_bus_hi),
         .data_bus_hi       (din_hi),
         .data_bus          (din),
@@ -224,11 +227,16 @@ module tb_mem_perf;
     wire [7:0]  seq_mem_wdata, seq_cpu_rdata, seq_cpu_rdata_hi;
     wire        seq_mem_word, seq_mem_rd, seq_mem_wr, seq_mem_page1;
     wire        ram_ready_w, access_complete_w, access_own_w;
+    wire [4:0]  seq_mem_pf_len;
+    wire        pf_beat_v_w;
+    wire [7:0]  pf_beat_dat_w;
+    wire [4:0]  cpu_pf_len_w;
 
     pc98_gvram_seq #(.EGC(1'b1)) u_seq (
         .clk(clk), .reset(reset),
         .cpu_gvram(~ram_sel_n),
         .cpu_rd(~mem_rd_n), .cpu_wr(~mem_wr_n),
+        .cpu_pf_len(cpu_pf_len_w),
         .cpu_word(cpu_word_access),
         .cpu_addr(cpu_address), .cpu_wdata(cpu_data_bus),
         .cpu_wdata_hi(cpu_data_bus_hi),
@@ -244,7 +252,7 @@ module tb_mem_perf;
         .svc_addr(20'h0), .svc_wdata(8'h0),
         .svc_done(), .svc_rdata(), .dbg(),
         .mem_addr(seq_mem_addr), .mem_wdata(seq_mem_wdata),
-        .mem_word(seq_mem_word),
+        .mem_word(seq_mem_word), .mem_pf_len(seq_mem_pf_len),
         .mem_rd(seq_mem_rd), .mem_wr(seq_mem_wr),
         .mem_rdata(ram_dout), .mem_rdata_hi(ram_dout_hi),
         .mem_done(access_complete_w), .mem_own(access_own_w),
@@ -267,6 +275,8 @@ module tb_mem_perf;
         .data_bus_out(ram_dout),
         .analog_mode(pc98_analog_w),
         .word_access(seq_mem_word),
+        .prefetch_len(seq_mem_pf_len),
+        .pf_beat_v(pf_beat_v_w), .pf_beat_dat(pf_beat_dat_w),
         .internal_data_bus_hi(cpu_data_bus_hi),
         .data_bus_out_hi(ram_dout_hi),
         .memory_read_n(~seq_mem_rd), .memory_write_n(~seq_mem_wr),
@@ -543,6 +553,10 @@ module tb_mem_perf;
     longint unsigned c_drn_sum = 0;
     longint unsigned c_drn_n   = 0;
     logic            drain_fly = 1'b0;
+    longint unsigned c_phit   = 0;     // window hits served with no bus cycle
+    longint unsigned c_pfill  = 0;     // fill pairs armed
+    longint unsigned c_pbeats = 0;     // beats appended to the window
+    longint unsigned c_pkill  = 0;     // invalidations (write/io/DMA)
 
     localparam int MP_S_IDLE = 4, MP_S_RW = 6;
     wire mp_busy    = (u_ram.u_sdram.u_mp.state > MP_S_IDLE)
@@ -588,6 +602,16 @@ module tb_mem_perf;
             if ((~mem_rd_n | ~mem_wr_n) & ~guest_ready)
                 c_gstall <= c_gstall + 1;
             if (u_ram.state == u_ram.COMPLETE_RAM_RW) c_done <= c_done + 1;
+            if (u_bridge.hit_serve) c_phit  <= c_phit + 1;
+            if (u_bridge.arm_fill)  c_pfill <= c_pfill + 1;
+            if (u_bridge.pf_beat_v && u_bridge.cur_pf && u_bridge.fill_ok
+                && (u_bridge.bstate == u_bridge.B_CMD))
+                c_pbeats <= c_pbeats + 1;
+            if ((!u_bridge.bus_ours
+                 || (u_bridge.arm_wr && (u_bridge.wr_ovl0 || u_bridge.wr_ovl1))
+                 || u_bridge.arm_iow)
+                && ((u_bridge.pf_cnt0 | u_bridge.pf_cnt1) != 6'd0))
+                c_pkill <= c_pkill + 1;
             // release latency on each guest write strobe
             if (mem_wr_d & ~mem_wr_n) begin
                 rel_fly <= 1'b1; rel_lat <= 0;
@@ -646,6 +670,7 @@ module tb_mem_perf;
         longint unsigned qdep, qfull, pa_wait, pa_own, pa_ack, pd_own, refr;
         longint unsigned wrbeats, rdbeats, gwr, grd;
         longint unsigned rel_sum, rel_max, rel_n, drn_sum, drn_n;
+        longint unsigned phit, pfill, pbeats, pkill;
         int qmax;
     } snap_t;
     snap_t s0;
@@ -662,6 +687,7 @@ module tb_mem_perf;
         s0.gwr=c_gwr; s0.grd=c_grd;
         s0.rel_sum=c_rel_sum; s0.rel_max=c_rel_max; s0.rel_n=c_rel_n;
         s0.drn_sum=c_drn_sum; s0.drn_n=c_drn_n; s0.qmax=c_qmax;
+        s0.phit=c_phit; s0.pfill=c_pfill; s0.pbeats=c_pbeats; s0.pkill=c_pkill;
     endtask
 
     int cur_phase = -1;
@@ -704,6 +730,9 @@ module tb_mem_perf;
         $display("   beats: wr=%0d rd=%0d | guest wr-strobes=%0d rd=%0d | fsm dones=%0d",
                  c_wrbeats-s0.wrbeats, c_rdbeats-s0.rdbeats,
                  c_gwr-s0.gwr, c_grd-s0.grd, c_done-s0.done);
+        $display("   prefetch: hits=%0d fills=%0d fillbeats=%0d kills=%0d",
+                 c_phit-s0.phit, c_pfill-s0.pfill,
+                 c_pbeats-s0.pbeats, c_pkill-s0.pkill);
         $display("   wr release: n=%0d avg=%0d max=%0d | drain: n=%0d avg=%0d cyc",
                  c_rel_n-s0.rel_n,
                  (c_rel_n-s0.rel_n) ? int'((c_rel_sum-s0.rel_sum)/(c_rel_n-s0.rel_n)) : 0,
@@ -744,7 +773,37 @@ module tb_mem_perf;
                      zet_pc, cpu_address, u_bridge.bstate, u_ram.state,
                      u_seq.st, u_ram.wc_pend + u_ram.wc_pend2 +
                      u_ram.wc_pend3 + u_ram.cap_valid, cur_phase);
+            $display("      pf0=%05x/%0d pf1=%05x/%0d live=%0b cur_pf=%0d/%0d m1=%0d req_ad=%05x",
+                     u_bridge.pf_base0, u_bridge.pf_cnt0,
+                     u_bridge.pf_base1, u_bridge.pf_cnt1,
+                     u_bridge.pf_live, u_bridge.cur_pf,
+                     u_bridge.cur_pf_w, u_bridge.pf_miss1,
+                     u_bridge.srv_addr);
             $fflush;
+        end
+    end
+
+    // first events of the prefetch engine's life, for bring-up
+    int pfdbg = 0;
+    always_ff @(posedge clk) if (pfdbg < 300) begin
+        if (u_bridge.hit_serve) begin
+            $display("PFHIT t=%0t ad=%05x w=%0d",
+                     $time, u_bridge.srv_addr, u_bridge.pf_hw);
+            pfdbg++;
+        end
+        if (u_bridge.arm_fill) begin
+            $display("PFFILL t=%0t next=%05x len=%0d",
+                     $time, u_bridge.pf_next[19:0], u_bridge.pf_fill_len);
+            pfdbg++;
+        end
+        if (u_bridge.arm_rd_ok) begin
+            $display("PFMISS t=%0t ad=%05x b0=%05x/%0d b1=%05x/%0d c0=%0d c1=%0d m1=%0d",
+                     $time, u_bridge.srv_addr,
+                     u_bridge.pf_base0, u_bridge.pf_cnt0,
+                     u_bridge.pf_base1, u_bridge.pf_cnt1,
+                     u_bridge.cont0, u_bridge.cont1,
+                     u_bridge.pf_miss1);
+            pfdbg++;
         end
     end
 

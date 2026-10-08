@@ -66,7 +66,9 @@ module tb_ramimg_serve;
         .sdram_clock(clk), .sdram_reset(power_reset),
         // port A: the guest's legacy single-word interface -- idle here
         .address(25'd0), .access_num(10'd0),
-        .data_in(16'd0), .data_out(), .data_in_hi(16'd0), .data_out_hi(),
+        .data_in(16'd0), .data_out(), .data_in_hi(16'd0), .a_rvalid         (),
+        .a_beat            (),
+        .data_out_hi(),
         .write_request(1'b0), .read_request(1'b0), .enable_refresh(1'b0),
         .write_flag(), .read_flag(), .idle(), .refresh_mode(),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(),

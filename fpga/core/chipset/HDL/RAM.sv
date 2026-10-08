@@ -28,6 +28,15 @@ module RAM (
     input   logic           memory_read_n,
     input   logic           memory_write_n,
     input   logic           no_command_state,
+    // Prefetch burst (Pocket): nonzero while the bus cycle on the pins is the
+    // CPU bridge's prefetch fill -- the read then moves prefetch_len SDRAM
+    // words in one transaction instead of access_words. Held the whole
+    // command phase, like word_access. The beat stream comes back on
+    // pf_beat_*: pf_beat_v pulses once per returned word with that word's
+    // byte on pf_beat_dat.
+    input   logic   [4:0]   prefetch_len,
+    output  logic           pf_beat_v,
+    output  logic   [7:0]   pf_beat_dat,
     output  logic           memory_access_ready,
     // Graphics VRAM page one (Pocket): set only by pc98_gvram_seq, for its
     // own plane walks -- the page has no guest address, so this banks the
@@ -320,12 +329,19 @@ module RAM (
     // word_access up, a guest word becomes one two-word SDRAM transaction.
     wire            word_now = word_access;
     wire    [9:0]   access_words = word_now ? 10'h002 : 10'h001;
+    // A prefetch fill overrides the shape: prefetch_len words in one burst,
+    // whether or not word_access is up (it never is -- the fill runs as a
+    // byte-style cycle so the pair ends after one strobe).
+    wire    [9:0]   read_words = (prefetch_len != 5'd0)
+                               ? {5'b00000, prefetch_len} : access_words;
     logic           write_request;
     logic           read_request;
     logic           write_flag;
     logic           read_flag;
     logic           idle;
     logic           refresh_mode;
+    logic   [15:0]  pf_beat_w;
+    assign  pf_beat_dat = pf_beat_w[7:0];
 
     // sdram_shim wraps sdram_mp, the multi-port controller: port A is this
     // guest path, B the font fetch, C the CG window, D the graphics display,
@@ -340,6 +356,8 @@ module RAM (
         .data_out           (access_data_out),
         .data_in_hi         (access_data_in_hi),
         .data_out_hi        (access_data_out_hi),
+        .a_rvalid           (pf_beat_v),
+        .a_beat             (pf_beat_w),
         .write_request      (write_request),
         .read_request       (read_request),
         .enable_refresh     (enable_refresh),
@@ -456,9 +474,11 @@ module RAM (
     // Read-bypass ranges (mapped/latch space): a read with no pending-write
     // overlap may pass the parked-write queue -- program order only matters
     // where the addresses actually collide. A word access covers two SDRAM
-    // words, so both ranges carry their own length.
+    // words, so both ranges carry their own length; a prefetch fill covers
+    // prefetch_len and must wait behind any parked write it would fetch
+    // ahead of.
     wire [24:0] rd_beg = {1'b0, latch_address};
-    wire [24:0] rd_end = rd_beg + (word_now ? 25'd2 : 25'd1);
+    wire [24:0] rd_end = rd_beg + {15'b0, read_words};
     wire [24:0] p1_beg = {1'b0, pend_address};
     wire [24:0] p1_end = p1_beg + (pend_word ? 25'd2 : 25'd1);
     wire [24:0] p2_beg = {1'b0, pend2_address};
@@ -731,7 +751,7 @@ module RAM (
                 // write in RAM_WRITE_1 uses the parked operands, and a live
                 // request out of IDLE would run one slot ahead of it.
                 access_address  = {1'b0, latch_address};
-                access_num      = access_words;
+                access_num      = read_words;
                 access_data_in  = {8'h00, latch_data};
                 access_data_in_hi = {8'h00, latch_data_hi};
                 write_request   = (write_command & ~wc_pend) ? 1'b1 : 1'b0;
@@ -761,7 +781,7 @@ module RAM (
             end
             RAM_READ_1: begin
                 access_address  = {1'b0, latch_address};
-                access_num      = access_words;
+                access_num      = read_words;
                 access_data_in  = 16'h0000;
                 access_data_in_hi = 16'h0000;
                 write_request   = 1'b0;

@@ -46,7 +46,10 @@ module sdram_shim #(
     // it, and CL changes when the data comes out, not how it is caught.
     parameter int CAS_LATENCY      = 2,
     parameter int INIT_NOP         = 10000,  // 233 us: the SDRAM's own init wait
-    parameter int REFRESH_INT      = 320     // <= 7.8 us at 42.95 MHz
+    parameter int REFRESH_INT      = 288     // <= 7.8 us at 42.95 MHz, with
+                                             // headroom for a 16-beat burst
+                                             // in flight when the timer dues
+                                             // (wait ~36 -> 324 < 335 spec)
 ) (
     input  wire                               sdram_clock,
     input  wire                               sdram_reset,
@@ -70,6 +73,11 @@ module sdram_shim #(
     // word_access is up -- a guest word at an address the SDRAM serves.
     input  wire  [sdram_data_width-1:0]       data_in_hi,
     output logic [sdram_data_width-1:0]       data_out_hi,
+    // Per-beat read taps for the prefetch engine: a_rvalid pulses the cycle
+    // AFTER each p_rvalid, so a_beat already holds that beat's word. Only
+    // port A produces them; a burst's beats arrive in address order.
+    output logic                              a_rvalid,
+    output logic [sdram_data_width-1:0]       a_beat,
     input  wire                               write_request,
     input  wire                               read_request,
     input  wire                               enable_refresh,
@@ -207,6 +215,8 @@ module sdram_shim #(
             wdata_hi_r  <= '0;
             data_out    <= '0;
             data_out_hi <= '0;
+            a_rvalid    <= 1'b0;
+            a_beat      <= '0;
         end else begin
             if (busy && we_r) begin
                 wdata_r    <= data_in;
@@ -219,15 +229,24 @@ module sdram_shim #(
                 else               data_out_hi <= p_rdata;
                 rbeat <= ~rbeat;
             end
+            // One-beat-delayed view for prefetch captures: at a_rvalid's
+            // cycle, a_beat and data_out/data_out_hi are all settled.
+            a_rvalid <= p_rvalid;
+            if (p_rvalid) a_beat <= p_rdata;
 
             if (!busy) begin
                 if (write_request || read_request) begin
                     req        <= 1'b1;
                     we_r       <= write_request;
                     addr_r     <= address[ADDR_BITS-1:0];
-                    // Exactly two shapes, tested rather than truncated: a
-                    // wider access_num cannot silently become a long burst.
-                    len_r  <= (access_num >= 'd2) ? LEN_BITS'(1) : LEN_BITS'(0);
+                    // One to BURST_MAX words now: prefetch reads ask for the
+                    // whole run and clamp at the port's ceiling. The burst
+                    // must still fit inside one column -- the caller keeps it
+                    // below the 512-word boundary by construction.
+                    len_r  <= (access_num > sdram_col_width'(BURST_MAX))
+                            ? LEN_BITS'(BURST_MAX - 1)
+                            : (access_num == '0) ? '0
+                            : LEN_BITS'(access_num - 1'b1);
                     rbeat  <= 1'b0;
                     busy   <= 1'b1;
                 end

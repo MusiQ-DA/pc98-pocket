@@ -92,6 +92,7 @@ module tb_pc98_egc_golden;
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_addr(cpu_addr), .cpu_wdata(cpu_wdata),
+        .cpu_pf_len(5'd0),
         .cpu_word(cpu_word), .cpu_wdata_hi(cpu_wdata_hi),
         .cpu_rdata_hi(cpu_rdata_hi),
         .cpu_rdata(cpu_rdata), .cpu_ready(cpu_ready),
@@ -103,7 +104,8 @@ module tb_pc98_egc_golden;
         .access_page(access_page), .mem_page1(mem_page1),
         .egc_active(egc_active), .egc_wr(egc_wr),
         .egc_rg(egc_rg), .egc_d(egc_d),
-        .mem_addr(mem_addr), .mem_wdata(mem_wdata), .mem_word(mem_word),
+        .mem_addr(mem_addr), .mem_wdata(mem_wdata), .mem_pf_len(),
+        .mem_word(mem_word),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
         // Every access this model flies came from the seq's own strobes --

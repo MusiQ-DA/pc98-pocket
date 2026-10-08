@@ -67,6 +67,7 @@ module tb_pc98_egc;
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_addr(cpu_addr), .cpu_wdata(cpu_wdata),
+        .cpu_pf_len(5'd0),
         .cpu_word(cpu_word), .cpu_wdata_hi(cpu_wdata_hi),
         .cpu_rdata_hi(cpu_rdata_hi),
         .cpu_rdata(cpu_rdata), .cpu_ready(cpu_ready),
@@ -79,6 +80,7 @@ module tb_pc98_egc;
         .egc_active(egc_active), .egc_wr(egc_wr),
         .egc_rg(egc_rg), .egc_d(egc_d),
         .mem_addr(mem_addr), .mem_wdata(mem_wdata),
+        .mem_pf_len(),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_done(mem_done),
         // This model only ever completes the seq's own access -- no posted

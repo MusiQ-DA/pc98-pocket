@@ -22,6 +22,13 @@ module CHIPSET #(
         // than widening the chipset's eight-bit bus. Only the addresses
         // pc98_sdram_map.svh selects can take one -- see that file.
         input   logic           cpu_word_access,
+        // Prefetch burst (Pocket): while the CPU bridge runs a prefetch fill
+        // this is the burst's word count, held like cpu_word_access. The
+        // beat stream returns on pf_beat_* -- one pulse per SDRAM word the
+        // burst brings back.
+        input   logic   [4:0]   cpu_pf_len,
+        output  logic           pf_beat_v,
+        output  logic   [7:0]   pf_beat_dat,
         input   logic   [7:0]   cpu_data_bus_hi,
         output  logic   [7:0]   data_bus_hi,
         // The softcore's byte-wide guest-VRAM service channel, into the
@@ -543,6 +550,7 @@ module CHIPSET #(
     wire [19:0] ram_addr_w;
     wire [7:0]  ram_wdata_w;
     wire        ram_word_w;
+    wire [4:0]  ram_pf_len_w;
     wire        ram_rd_w, ram_wr_w;
     wire [7:0]  ram_dout_w;
     wire [7:0]  ram_dout_hi_w;
@@ -578,6 +586,10 @@ module CHIPSET #(
         // wraps to column 0 of the same bank and beat 2 clobbers the
         // block's first word (the fill buffer's byte0).
         .cpu_word(cpu_word_access & ~address_enable_n),
+        // Same stale-flag qualification as cpu_word: the bridge holds the
+        // fill's count through a DMA grant, and a DMA byte must never
+        // inherit it.
+        .cpu_pf_len(cpu_pf_len & {5{~address_enable_n}}),
         .cpu_addr(latch_address), .cpu_wdata(internal_data_bus),
         .cpu_wdata_hi(cpu_data_bus_hi),
         .cpu_rdata(internal_data_bus_ram), .cpu_rdata_hi(seq_rdata_hi_w),
@@ -593,7 +605,7 @@ module CHIPSET #(
         .svc_wdata(st_wdata), .svc_done(st_done), .svc_rdata(st_rdata),
         .dbg(dbg_gvram),
         .mem_addr(ram_addr_w), .mem_wdata(ram_wdata_w),
-        .mem_word(ram_word_w),
+        .mem_word(ram_word_w), .mem_pf_len(ram_pf_len_w),
         .mem_rd(ram_rd_w), .mem_wr(ram_wr_w),
         .mem_rdata(ram_dout_w), .mem_rdata_hi(ram_dout_hi_w),
         .mem_done(ram_complete_w),
@@ -696,6 +708,9 @@ module CHIPSET #(
         .data_bus_out_hi                    (ram_dout_hi_w),
         .memory_read_n                      (~ram_rd_w),
         .memory_write_n                     (~ram_wr_w),
+        .prefetch_len                       (ram_pf_len_w),
+        .pf_beat_v                          (pf_beat_v),
+        .pf_beat_dat                        (pf_beat_dat),
         .no_command_state                   (no_command_state),
         .memory_access_ready                (ram_ready_w),
         .access_complete                    (ram_complete_w),

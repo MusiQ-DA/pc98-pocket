@@ -332,6 +332,9 @@ module tb_ram_dma_fill;
         // through the DMA grant so every byte runs as a 2-word burst --
         // each 512-block's last byte wraps cur_col 511->0 and clobbers
         // the block's first byte.
+        .prefetch_len   (4'd0),
+        .pf_beat_v      (),
+        .pf_beat_dat    (),
         .word_access(word_r),
         .internal_data_bus_hi(8'h00),
         .data_bus_out_hi(ram_dout_hi),
