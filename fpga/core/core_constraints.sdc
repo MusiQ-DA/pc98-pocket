@@ -204,17 +204,10 @@ if {[llength $pit_counts] > 0 && [llength $pit_outs] > 0} {
 # multicycle (5/4) and the -to $v30_core input-surface multicycle. Zet's
 # input surface is deliberately NOT multicycled -- see below.
 
-# The Zet core: zet_clk = clk & run_arm & zph delivers every OTHER chipset
-# edge, so a zet->zet path honestly has two cycles. This is a DESCRIPTION,
-# not a relaxation: the fetch FSM's state->modrm_l/f0f_l cones came back
-# -12.5 ns single-cycle (slow corner, 2026-10 run 37404787115), and on
-# hardware that decode miss is the intermittent tvram "starfield".
-# Boundary paths stay single-cycle: a bridge register's change can still be
-# sampled by the very next delivered edge, and a zet register's change
-# reaches the clk-domain bridge one clk later.
-set zet_core [get_keepers -nocase {core_top:ic|zet:u_cpu*}]
-if {[llength $zet_core] > 0} {
-    set_multicycle_path -setup -end 2 -from $zet_core -to $zet_core
-    set_multicycle_path -hold  -end 1 -from $zet_core -to $zet_core
-    puts "sdc: multicycled [llength $zet_core] (handle) zet core-core paths"
-}
+# The Zet core runs full-rate now: the microcode loop is pipelined
+# (micro_o_r/bword_r registers in zet_core split decode-ROM-fetch from
+# execute), so zet->zet paths are honestly single-cycle and get NO
+# multicycle -- the half-rate zph gate and its setup-2/hold-1 pair are
+# gone. Boundary paths stay single-cycle as before: a bridge register's
+# change can still be sampled by the very next delivered edge, and a zet
+# register's change reaches the clk-domain bridge one clk later.

@@ -70,12 +70,16 @@ module zet_core (
   wire        byte_exec;
 
   // wire decode - microcode
-  wire [`MICRO_ADDR_WIDTH-1:0] seq_addr;
+  wire [`MICRO_ADDR_WIDTH-1:0] seq_addr;   // decode-stage micro address
+  wire [`MICRO_ADDR_WIDTH-1:0] seq_addr_x; // executing op's micro address
+  wire                       div_wait;
   wire [3:0] src;
-  // seq_addr is combinational on the live fetch byte while state==opcod_st,
-  // so a stale byte sitting on data[7:0] during a bus stall decodes to INVOP
-  // transiently without ever being committed.  Only report dispatched faults.
-  assign dbg_fault = exec_st & ((seq_addr == `INVOP) | (seq_addr == `INTD));
+  // seq_addr_x rides the executing op (registered redirects + seq), so a
+  // stale byte sitting on data[7:0] during a bus stall decodes to INVOP
+  // transiently without ever being committed.  Only report dispatched
+  // faults.
+  assign dbg_fault = exec_st & ((seq_addr_x == `INVOP)
+                              | (seq_addr_x == `INTD));
 
   // First fault wins: the byte that decoded to INVOP/INTD is the evidence --
   // comparing it against the image at pc tells fetch corruption from a real
@@ -233,7 +237,9 @@ module zet_core (
     .wr_ss   (wr_ss),
     .iflss   (iflss),
 
-    .seq_addr (seq_addr),
+    .seq_addr   (seq_addr),
+    .seq_addr_x (seq_addr_x),
+    .div_wait   (div_wait),
     .spec     (spec),
     .src      (src),
     .dst      (dst),
@@ -245,9 +251,47 @@ module zet_core (
     .end_seq  (end_seq)
   );
 
+  // ------------------------------------------------------------------
+  // Two-stage micro-op pipe
+  //
+  // The old single-cycle loop ran fetch byte -> opcode_deco -> seq_addr
+  // -> micro ROM -> micro_data -> regfile -> alu -> wb_master in one
+  // clock (~26 levels, needed zph half-rate). Now the ROM read itself is
+  // the DECODE stage: seq_addr (which zet_decode drives one slot ahead
+  // via seq_d) reads micro_o combinationally, and micro_o_r/bword_r
+  // register the word for the EXECUTE stage. Every downstream consumer
+  // (micro_data field assembly, salc/bound overlay, exec, nstate, the
+  // seq/end_seq/div_cnt/dive/tfle/ext_int updates) keys off the EXECUTING
+  // word, so micro-op issue order and all flag/register observations are
+  // identical to the un-pipelined core -- the same op executes on the
+  // same relative cycle, just on a registered word.
+  //
+  // Capture policy: hold while the front-end is stalled (block_or_hlt)
+  // or while the divider pins the executing op (div_wait); every other
+  // clock -- including reset clocks -- grabs the word seq_addr fetched.
+  // Under reset the fetch side resolves to the reset state's op0
+  // (opcode_l=OP_NOP decodes to XCHRRW+0), so micro_o_r converges to
+  // exactly the micro-op the un-pipelined core executed on its first
+  // clock -- no reset literal that could go stale against
+  // micro_rom.dat.
+  reg [`MICRO_DATA_WIDTH-1:0] micro_o_r;
+  reg [57:0]                  bword_r;
+
+  zet_micro_rom micro_rom (
+    .addr (seq_addr),
+    .q    (micro_o)
+  );
+  wire [`MICRO_DATA_WIDTH-1:0] micro_o;
+
+  always @(posedge clk)
+    if (rst || (!block_or_hlt && !div_wait)) begin
+      micro_o_r <= micro_o;
+      bword_r   <= bword;
+    end
+
   zet_micro_data micro_data (
-    // from decode
-    .n_micro (seq_addr),
+    // from decode (pipe register -- the op executing now)
+    .micro_i (micro_o_r),
     .off_i   (off_l),
     .imm_i   (imm_l),
     .src     (src),
@@ -330,20 +374,24 @@ module zet_core (
     bound_rom[ 1] = {1'b1,1'b0,1'b0,2'b00,1'b0,16'd0,7'h14,3'd1,3'd1,2'b00,1'b1,1'b0,1'b0,4'd15,4'd0,4'd0,4'd13,2'd0}; // r15 <- mem[20],end
   end
 
+  // The bound table is indexed on the DECODE address and captured into
+  // bword_r alongside micro_o_r, so the overlay word rides the pipeline
+  // with its micro-op instead of recomputing an index in the execute
+  // stage (and staying out of the seq_addr loop).
   wire [57:0] bword = bound_rom[seq_addr[4:0]];
-  wire [ 3:0] bnd_b = bword[55] ? index : bword[9:6];
-  wire [ 3:0] bnd_a = (bword[54:53] == 2'b01) ? base
-                    : (bword[54:53] == 2'b10) ? dst : bword[5:2];
-  wire [ 1:0] bnd_s = bword[52] ? seg : bword[1:0];
-  wire [`IR_SIZE-1:0] bound_ir = {bword[35:10], bnd_b, bnd_a, bnd_s};
+  wire [ 3:0] bnd_b = bword_r[55] ? index : bword_r[9:6];
+  wire [ 3:0] bnd_a = (bword_r[54:53] == 2'b01) ? base
+                    : (bword_r[54:53] == 2'b10) ? dst : bword_r[5:2];
+  wire [ 1:0] bnd_s = bword_r[52] ? seg : bword_r[1:0];
+  wire [`IR_SIZE-1:0] bound_ir = {bword_r[35:10], bnd_b, bnd_a, bnd_s};
 
   assign ir_ov   = is_salc ? SALC_IR
                  : is_bound ? bound_ir : rom_ir;
   assign div     = (is_salc | is_bound) ? 1'b0 : div_rom;
   // end/off/imm all ride table bits now -- no seq_addr compares left
   assign end_seq = is_salc ? 1'b1
-                 : is_bound ? bword[57] : end_seq_rom;
-  assign off     = is_bound ? (bword[56] ? off_l : 16'h0000) : off_rom;
+                 : is_bound ? bword_r[57] : end_seq_rom;
+  assign off     = is_bound ? (bword_r[56] ? off_l : 16'h0000) : off_rom;
 
   zet_exec exec (
     .clk     (clk),
@@ -384,7 +432,7 @@ module zet_core (
   assign cpu_mem_op = ir[`MEM_OP];
 
   assign ir    = exec_st ? ir_ov : `ADD_IP;
-  assign imm   = exec_st ? (is_bound ? bword[51:36] : imm_d) : imm_f;
+  assign imm   = exec_st ? (is_bound ? bword_r[51:36] : imm_d) : imm_f;
   assign ftype = ir_ov[28:23];
 
   assign hlt_op = ((opcode == `OP_HLT) && exec_st); 

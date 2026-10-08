@@ -53,7 +53,9 @@ module zet_decode (
     output       iflss,
 
     // to microcode
-    output [`MICRO_ADDR_WIDTH-1:0] seq_addr,
+    output [`MICRO_ADDR_WIDTH-1:0] seq_addr,   // DECODE-stage micro address
+    output [`MICRO_ADDR_WIDTH-1:0] seq_addr_x, // executing op's micro address
+    output       div_wait,                     // seq held by the divider
     output [1:0] spec,
     output [3:0] src,
     output [3:0] dst,
@@ -83,9 +85,49 @@ module zet_decode (
                              need_off, need_imm, off_size, imm_size, src, dst,
                              base, index, seg);
 
-  // Assignments
-  assign seq_addr = (tfle ? `INTT : (dive ? `INTD
+  // Two-stage micro-op pipe. seq stays the index of the op that is in
+  // the EXECUTE stage (the registered micro-op word in zet_core), while
+  // seq_addr runs one slot ahead fetching the next word from the micro
+  // ROM. Every sequencing input to this module (end_seq, div, dive,
+  // tfle, ext_int) describes the EXECUTING op, so the register updates
+  // below keep their old meanings -- only the ROM address is ahead.
+  //
+  // seq_d is the offset being fetched this cycle: under reset and
+  // outside execu_st it prefetch-decodes the instruction's first
+  // micro-op (op0 is captured while the operand bytes arrive, so it
+  // executes on the first execute clock); inside execu_st it is seq+1,
+  // or 0 once the executing op's end_seq says the sequence is done.
+  wire [`MICRO_ADDR_WIDTH-1:0] seq_d;
+  assign seq_d = (rst | !exec_st) ? `MICRO_ADDR_WIDTH'd0
+               : end_seq          ? `MICRO_ADDR_WIDTH'd0
+               : seq + `MICRO_ADDR_WIDTH'd1;
+
+  // The sequence base for the fetch must switch the SAME cycle the
+  // redirect decides -- otherwise the first op of the trap/interrupt
+  // routine would be fetched late and a stale word would execute. So
+  // the mux runs on the D-inputs of the redirect registers (the pulse
+  // conditions are identical), not on the registers themselves.
+  // Priority is the old mux order: INTT > INTD > EINT/EINTP > base.
+  wire tfle_n, dive_n, eint_n;
+  assign tfle_n = ((((tflm & !tfle) & iflss) & exec_st & end_seq)
+                | (tfle & !end_seq));
+  assign dive_n = div_exc | (dive & !end_seq);
+  assign eint_n = ((((nmir | (intr & iflm)) & iflss) & exec_st & end_seq)
+                | (ext_int & !end_seq));
+
+  assign seq_addr = (tfle_n ? `INTT : (dive_n ? `INTD
+    : (eint_n ? (rep ? `EINTP : `EINT) : base_addr))) + seq_d;
+
+  // Executing-op micro address: the old seq_addr expression verbatim
+  // (registered redirects + seq). Used for the fault probe -- NOT for
+  // the ROM fetch (the BOUND overlay indexes seq_addr, the fetch side,
+  // so its table word rides the pipe register with the op).
+  assign seq_addr_x = (tfle ? `INTT : (dive ? `INTD
     : (ext_int ? (rep ? `EINTP : `EINT) : base_addr))) + seq;
+
+  // While the divider iterates, the executing op must persist in the
+  // pipe register: zet_core gates the micro-op capture on this.
+  assign div_wait = exec_st & (|div_cnt);
 
   // Overlay markers for zet_core: [0]=salc (0xD6), [1]=bound (0x62).
   // Compared directly on the latched opcode byte -- the src/dst=4'hF

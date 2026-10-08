@@ -20,7 +20,10 @@
 `include "defines.v"
 
 module zet_micro_data (
-    input  [`MICRO_ADDR_WIDTH-1:0] n_micro,
+    // Registered micro-op word (micro_o_r in zet_core): the micro ROM
+    // read itself is the decode stage of the two-stage pipe -- this
+    // module only assembles fields for the op executing NOW.
+    input  [`MICRO_DATA_WIDTH-1:0] micro_i,
     input  [15:0] off_i,
     input  [15:0] imm_i,
     input  [ 3:0] src,
@@ -56,8 +59,8 @@ module zet_micro_data (
   wire       wr_rom;
   wire       wr_d;
 
-  // Module instantiations
-  zet_micro_rom micro_rom (n_micro, micro_o);
+  // The ROM lookup moved out to zet_core (registered output stage).
+  assign micro_o = micro_i;
 
   // Assignments
   assign micro_s = micro_o[1:0];
