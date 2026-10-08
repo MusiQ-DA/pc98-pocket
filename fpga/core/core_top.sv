@@ -1833,6 +1833,11 @@ module core_top (
             8'h1c:   probe_data_c = {3'h0, cpu_ad_out, processor_status,
                                      pause_core, reset_cpu, reset_chipset,
                                      reset, soft_reset_cpu, cpu_ce_posedge};
+            // 0x2b/0x2c: last data-bus byte addresses (BS_MEMW / BS_MEMR).
+            // Instruction fetches are BS_CODE so these isolate the guest's
+            // DS/ES physical segment -- the SuperDepth string-copy loop.
+            8'h2b:   probe_data_c = {12'h000, zet_dbus_wr};
+            8'h2c:   probe_data_c = {12'h000, zet_dbus_rd};
             // 0x20: {last byte-pair fed to the core, dbg_core}. The pins say
             // PASV while the core does not move: zwb_dat_i shows what it
             // last consumed. dbg_core was the nuV30's EU/BIU interlock --
@@ -3399,6 +3404,15 @@ module core_top (
         .dbg_fault (zet_fault),
         .dbg_opc   (zet_opc)
     );
+
+    // Debug: the last guest data-bus read / write byte addresses. Instruction
+    // fetches are BS_CODE and I/O is BS_IOR/BS_IOW on processor_status, so a
+    // MEMR/MEMW sample isolates the guest's data segment (DS/ES physical).
+    reg [19:0] zet_dbus_rd, zet_dbus_wr;
+    always @(posedge clk_chipset) begin
+        if (processor_status == 3'b101) zet_dbus_rd <= cpu_ad_out;
+        if (processor_status == 3'b110) zet_dbus_wr <= cpu_ad_out;
+    end
 
     // The probe slots that used to expose nuV30 guts read the Zet view where
     // one exists (0x18/0x1c/0x20 = zet_pc / processor_status / the Wishbone
