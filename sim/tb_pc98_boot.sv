@@ -130,6 +130,9 @@ module tb_pc98_boot;
     wire        zet_fault;
     wire [7:0]  zet_opc;
     wire [15:0] zbridge_dbg;
+    wire [4:0]  cpu_pf_len;
+    wire        pf_beat_v;
+    wire [7:0]  pf_beat_dat;
 
     zet_cpu_bridge u_bridge (
         .clk               (clk_chipset),
@@ -155,6 +158,8 @@ module tb_pc98_boot;
         .lock_n            (lock_n),
         .analog_mode       (1'b0),
         .word_access       (cpu_word_access),
+        // pf_* live outside the REALMEM block: the bridge always has the
+        // ports; only the real RAM.sv path drives the beat stream.
         .pf_req_len        (cpu_pf_len),
         .pf_beat_v         (pf_beat_v),
         .pf_beat_dat       (pf_beat_dat),
@@ -216,7 +221,8 @@ module tb_pc98_boot;
         in_gv = (a[19:15] == 5'b10101) | (a[19:16] == 4'hB)
               | (pc98_analog_q & (a[19:15] == 5'b11100));
         in_e2e_check = ((a < 20'hC0000) | (a >= 20'hE8000))
-                     & ~(in_gv & (grcg_active | access_page_q));
+                     & ~(in_gv & (grcg_active | access_page_q))
+                     & (is_rom(a) | is_xrom(a) | ram_seen[a]);
 `else
         in_e2e_check = (a < 20'hC0000) | (a >= 20'hE8000);
 `endif
@@ -384,6 +390,11 @@ module tb_pc98_boot;
     // power-on, the top of BIOS.ROM after the guest selects it. Both images are
     // kept whole so the switch is a source change, not a copy.
     logic [7:0] ram  [0:1048575];
+    // Cells the guest provably wrote -- the e2e readback only checks these:
+    // the sdram model answers never-written cells with 16'hDEAD while this
+    // mirror holds 00h, so an unwritten-cell read is a model artefact, not
+    // a mismatch (DMA fills the store without touching this mirror too).
+    logic       ram_seen [0:1048575];
     logic [7:0] itf  [0:32767];      // 0x8000, mapped at F8000
     logic [7:0] bios [0:98303];      // 0x18000, mapped at E8000
 
@@ -512,9 +523,6 @@ module tb_pc98_boot;
     wire        seq_mem_word, seq_mem_rd, seq_mem_wr, seq_mem_page1;
     wire [4:0]  seq_mem_pf_len;
     wire [7:0]  dbg_gvram;
-    wire [4:0]  cpu_pf_len;
-    wire        pf_beat_v;
-    wire [7:0]  pf_beat_dat;
     pc98_gvram_seq #(.EGC(1'b1)) u_gvram_seq (
         .clk(clk_chipset), .reset(reset),
         .cpu_gvram(~ram_address_select_n),
@@ -929,6 +937,10 @@ module tb_pc98_boot;
                                   ? xrom_byte(cpu_address | 20'h1)
                                 : ram[cpu_address | 20'h1];
     wire [7:0] din_hi = ~mem_rd_n ? mem_read_byte_hi : 8'hFF;
+    // No RAM.sv here: no beat stream exists. The prefetch windows stay
+    // empty, which is what the flat path wants anyway.
+    assign pf_beat_v   = 1'b0;
+    assign pf_beat_dat = 8'h00;
 `endif
 
     // True when the read above fell through to the FF default -- i.e. nothing
@@ -1178,7 +1190,11 @@ module tb_pc98_boot;
         // Memory write, on the trailing edge, and never into ROM.
         if (mem_wr_n & ~mem_wr_d & ~is_rom(cpu_address)) begin
             ram[cpu_address] <= mem_wr_data_q;
-            if (mem_wr_word_q) ram[cpu_address | 20'h1] <= mem_wr_hi_q;
+            ram_seen[cpu_address] <= 1'b1;
+            if (mem_wr_word_q) begin
+                ram[cpu_address | 20'h1] <= mem_wr_hi_q;
+                ram_seen[cpu_address | 20'h1] <= 1'b1;
+            end
             // The ITF's reset-resume state (0000:03F0-0410): every write here
             // is part of the OUT-0F0h dance, and a save that goes missing is
             // the difference between a resume and a derail.
@@ -2066,7 +2082,10 @@ module tb_pc98_boot;
     int i, j;
     int chunks = 1200;              // +chunks=N cuts the run short
     initial begin
-        for (i = 0; i < 1048576; i = i + 1) ram[i] = 8'h00;
+        for (i = 0; i < 1048576; i = i + 1) begin
+            ram[i] = 8'h00;
+            ram_seen[i] = 1'b0;
+        end
         $readmemh("itf.hex",  itf);
         $readmemh("bios.hex", bios);
         // WORKAROUND (see docs/NUV30_66_VERIFICATION.md
