@@ -80,16 +80,23 @@ module tb_pc98_osdwin;
     logic [9:0] hmin = 10'h3FF, hmax = 10'd0, vmin = 10'h3FF, vmax = 10'd0;
     int de_on = 0, de_off = 0, hb_hi = 0, vb_hi = 0;
     int mark_hits = 0, win_hits = 0;
+    int hb_mis = 0, vb_mis = 0;
 
     always @(posedge clk_pix) begin
         if (!run) begin
             hb_hi = 0; vb_hi = 0; de_on = 0; de_off = 0;
             mark_hits = 0; win_hits = 0; guard_cyc = 0;
+            hb_mis = 0; vb_mis = 0;
             hmin = 10'h3FF; hmax = 10'd0; vmin = 10'h3FF; vmax = 10'd0;
         end
         if (guard) guard_cyc++;
         if (hb) hb_hi++;
         if (vb) vb_hi++;
+        // Phase, not just totals: the rebuilt blanking must sit exactly on
+        // the real raster. A stale SYNC anchor or a wrong count point shifts
+        // the DE window and clips picture edges without touching the counts.
+        if (u_pv.pc98_hb != hb) hb_mis++;
+        if (u_pv.pc98_vb != vb) vb_mis++;
         if (video_de) de_on++; else de_off++;
         if (video_de) begin
             if (osd_hcnt < hmin) hmin = osd_hcnt;
@@ -120,11 +127,15 @@ module tb_pc98_osdwin;
                  mark_hits, 16*16*3);
         $display("panel window hit %0d times (want 640*200*3 = %0d)",
                  win_hits, 640*200*3);
+        $display("rebuilt blanking off-raster: h %0d, v %0d cycles",
+                 hb_mis, vb_mis);
         // Strict, because every one of these has been wrong on hardware at
         // least once: the guard must stay out, DE must cover the whole active
         // area, and the counters must span it.
         if (guard_cyc != 0)
             $display("FAIL: the sync guard engaged (%0d cycles)", guard_cyc);
+        else if (hb_mis != 0 || vb_mis != 0)
+            $display("FAIL: rebuilt blanking off the real raster");
         else if (de_on != 640*400*3)
             $display("FAIL: DE covered %0d of %0d active dots", de_on, 640*400*3);
         else if (vmax != 10'd399)
