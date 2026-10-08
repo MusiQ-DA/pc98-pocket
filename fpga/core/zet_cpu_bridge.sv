@@ -650,14 +650,16 @@ module zet_cpu_bridge (
     wire [20:0] fwd_a0 = srv_beg;
     wire [20:0] fwd_a1 = srv_beg + 21'd1;
     wire [WQ_N-1:0] fwd_cov0, fwd_cov1;
+    generate
     for (g = 0; g < WQ_N; g = g + 1) begin : g_fwd
-        assign fwd_cov0[g] = (wrq_cnt > g[2:0])
+        assign fwd_cov0[g] = (wrq_cnt > g)
                          && (fwd_a0 >= {1'b0, wrq_addr[g]})
                          && (fwd_a0 <  wrq_end[g]);
-        assign fwd_cov1[g] = (wrq_cnt > g[2:0])
+        assign fwd_cov1[g] = (wrq_cnt > g)
                          && (fwd_a1 >= {1'b0, wrq_addr[g]})
                          && (fwd_a1 <  wrq_end[g]);
     end
+    endgenerate
     wire       fwd_cov = (|fwd_cov0) && (srv_ube || (|fwd_cov1));
     wire [7:0] fwd_b0  = fwd_cov0[1]
                        ? (fwd_a0[0] ? wrq_data[1][15:8] : wrq_data[1][7:0])
