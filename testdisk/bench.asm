@@ -309,6 +309,16 @@ measure:
         jmp .report
 
 .abs:
+        ; The FDC calls can cross a 26.7ms counter0 wrap, so they need the
+        ; wraps counter live -- which means IRQ0 must actually fire.  A
+        ; BENCH_NOIRQ build leaves the PIC masked and IF clear so the
+        ; chunked tests run without tick jitter; open the gate just for
+        ; the duration of this measurement (int8_isr is installed
+        ; unconditionally).
+        in  al, PIC_IMR
+        and al, 0xFE
+        out PIC_IMR, al
+        sti
         call snap
         mov [vtmp], ax              ; pos0 lo
         mov [vtmp+2], dx            ; pos0 hi
