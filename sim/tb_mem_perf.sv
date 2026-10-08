@@ -624,8 +624,10 @@ module tb_mem_perf;
                 c_gstall <= c_gstall + 1;
             if (u_ram.state == u_ram.COMPLETE_RAM_RW) c_done <= c_done + 1;
             if (u_bridge.hit_serve) c_phit  <= c_phit + 1;
-            if (u_bridge.arm_fill)  c_pfill <= c_pfill + 1;
-            if (u_bridge.pf_beat_v && u_bridge.cur_pf && u_bridge.fill_ok
+            if (u_bridge.arm_fill || u_bridge.fillm_go)
+                                    c_pfill <= c_pfill + 1;
+            if (u_bridge.pf_beat_v && (u_bridge.cur_pf || u_bridge.cur_fillm)
+                && u_bridge.fill_ok
                 && (u_bridge.bstate == u_bridge.B_CMD))
                 c_pbeats <= c_pbeats + 1;
             if ((!u_bridge.bus_ours
@@ -796,19 +798,61 @@ module tb_mem_perf;
                      zet_pc, cpu_address, u_bridge.bstate, u_ram.state,
                      u_seq.st, u_ram.wc_pend + u_ram.wc_pend2 +
                      u_ram.wc_pend3 + u_ram.cap_valid, cur_phase);
-            $display("      pf0=%05x/%0d pf1=%05x/%0d live=%0b cur_pf=%0d/%0d m1=%0d req_ad=%05x",
-                     u_bridge.pf_base0, u_bridge.pf_cnt0,
-                     u_bridge.pf_base1, u_bridge.pf_cnt1,
-                     u_bridge.pf_live, u_bridge.cur_pf,
+            $display("      pf0=%05x/%0d..%0d pf1=%05x/%0d..%0d live=%0b dead=%0d ok=%0d cur_pf=%0d/%0d m1=%0d req_ad=%05x",
+                     u_bridge.pf_base0, u_bridge.pf_lo0, u_bridge.pf_cnt0,
+                     u_bridge.pf_base1, u_bridge.pf_lo1, u_bridge.pf_cnt1,
+                     u_bridge.pf_live, u_bridge.pf_dead, u_bridge.fill_ok,
+                     u_bridge.cur_pf,
                      u_bridge.cur_pf_w, u_bridge.pf_miss1,
                      u_bridge.srv_addr);
             $fflush;
         end
     end
 
+    // Fills and fill-on-miss arms are rare enough to print unthrottled.
+    reg [1:0] dead_d = 2'd0;
+    always_ff @(posedge clk) begin
+        dead_d <= u_bridge.pf_dead;
+        if (u_bridge.pf_dead != dead_d)
+            $display("DEAD->%0d t=%0t cur_pf=%0d flm=%0d len=%0d beats=%0d ok=%0d ad=%05x w=%0d bst=%0d",
+                     u_bridge.pf_dead, $time, u_bridge.cur_pf,
+                     u_bridge.cur_fillm, u_bridge.cur_pf_len,
+                     u_bridge.fill_beats, u_bridge.fill_ok,
+                     u_bridge.cur_addr, u_bridge.cur_pf_w,
+                     u_bridge.bstate);
+        if (u_bridge.pf_beat_v && (u_bridge.cur_pf || u_bridge.cur_fillm))
+            $display("BEAT t=%0t flm=%0d dat=%02x cnt=%0d/%0d bst=%0d ours=%0d ok=%0d",
+                     $time, u_bridge.cur_fillm, u_bridge.pf_beat_dat,
+                     u_bridge.pf_cnt0, u_bridge.pf_cnt1,
+                     u_bridge.bstate, u_bridge.bus_ours, u_bridge.fill_ok);
+        if (u_bridge.pf_fill_done)
+            $display("FDONE t=%0t flm=%0d beats=%0d ok=%0d ad=%05x",
+                     $time, u_bridge.cur_fillm, u_bridge.fill_beats,
+                     u_bridge.fill_ok, u_bridge.cur_addr);
+        if (u_bridge.arm_fill)
+            $display("PFFILL t=%0t next=%05x len=%0d",
+                     $time, u_bridge.pf_next[19:0], u_bridge.pf_fill_len);
+        if (u_bridge.arm_req && u_bridge.fillm_go)
+            $display("FLM t=%0t ad=%05x w=%0d len=%0d new=%0d ph=%0d",
+                     $time, u_bridge.srv_addr, u_bridge.fillm_w,
+                     u_bridge.fillm_len, u_bridge.fillm_new, cur_phase);
+        // Cycle-accurate view while a fill/fillm pair owns the engine.
+        if (u_bridge.cur_pf || u_bridge.cur_fillm)
+            $display("CYC t=%0t bst=%0d pslen=%0d rdcmd=%0d rflag=%0d rfsm=%0d icr=%0d rnw=%0d qn=%0d prnw=%0d prdy=%0d t=%0d sawlow=%0d ours=%0d beat=%0d ad=%05x",
+                     $time, u_bridge.bstate, u_bridge.pf_req_len,
+                     u_ram.read_command, u_ram.read_flag, u_ram.state,
+                     u_ready.io_channel_ready, u_ready.ready_n_or_wait,
+                     u_ready.ready_n_or_wait_Qn, u_ready.prev_ready_n_or_wait,
+                     u_bridge.processor_ready,
+                     u_bridge.t_cnt, u_bridge.saw_low, u_bridge.bus_ours,
+                     u_bridge.pf_beat_v, u_bridge.cur_addr);
+    end
+
     // first events of the prefetch engine's life, for bring-up
     int pfdbg = 0;
-    always_ff @(posedge clk) if (pfdbg < 300) begin
+    int pfdbg_max = 300;
+    initial if ($value$plusargs("pfdbg=%d", pfdbg_max)) ;
+    always_ff @(posedge clk) if (pfdbg < pfdbg_max) begin
         if (u_bridge.hit_serve) begin
             // flat store is byte-indexed: one guest byte per word's low half
             automatic logic [15:0] w0  = sdr.u_part.peek(u_bridge.srv_addr);
@@ -820,11 +864,6 @@ module tb_mem_perf;
             $display("PFHIT t=%0t ad=%05x w=%0d got=%04x exp=%04x %s",
                      $time, u_bridge.srv_addr, u_bridge.pf_hw, got, exp,
                      (got == exp) ? "OK" : "*** PF-DATA-MISMATCH ***");
-            pfdbg++;
-        end
-        if (u_bridge.arm_fill) begin
-            $display("PFFILL t=%0t next=%05x len=%0d",
-                     $time, u_bridge.pf_next[19:0], u_bridge.pf_fill_len);
             pfdbg++;
         end
         if (u_bridge.arm_rd_ok) begin

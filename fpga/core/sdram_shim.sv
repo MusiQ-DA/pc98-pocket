@@ -181,7 +181,7 @@ module sdram_shim #(
     logic        req, we_r, busy;
     logic [ADDR_BITS-1:0] addr_r;
     logic [LEN_BITS-1:0]  len_r;      // words - 1, latched with the request
-    logic                 rbeat;      // which word of a two-word read is next
+    logic [LEN_BITS-1:0]  rbeat;      // which word of the burst is next
     logic [sdram_data_width-1:0] wdata_r, wdata_hi_r;
     logic        p_ack, p_done, p_rvalid, stat_idle, stat_refresh;
     logic [sdram_data_width-1:0] p_rdata;
@@ -222,12 +222,16 @@ module sdram_shim #(
                 wdata_r    <= data_in;
                 wdata_hi_r <= data_in_hi;
             end
-            // Read beats arrive in address order, so the first belongs to the
-            // addressed byte and the second to the odd half.
+            // Read beats arrive in address order: the first belongs to the
+            // addressed byte and the second to the odd half. rbeat saturates
+            // at the burst's last index instead of toggling, so on a longer
+            // burst (a bridge fill-on-miss read) data_out/data_out_hi stay
+            // pinned on beats 0/1 -- the guest's own bytes -- while the
+            // a_beat stream carries every word for the window append.
             if (p_rvalid) begin
-                if (rbeat == 1'b0) data_out    <= p_rdata;
-                else               data_out_hi <= p_rdata;
-                rbeat <= ~rbeat;
+                if (rbeat == LEN_BITS'(0))      data_out    <= p_rdata;
+                else if (rbeat == LEN_BITS'(1)) data_out_hi <= p_rdata;
+                if (rbeat != len_r)             rbeat       <= rbeat + 1'b1;
             end
             // One-beat-delayed view for prefetch captures: at a_rvalid's
             // cycle, a_beat and data_out/data_out_hi are all settled.

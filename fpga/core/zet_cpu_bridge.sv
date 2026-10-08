@@ -421,7 +421,8 @@ module zet_cpu_bridge (
     // Drains and fills take the fast profile regardless of the pace
     // dial: the guest never sees these pairs, so the faithful T-state
     // count would only delay data movement.
-    wire fast_pair = (fast_pace || cur_dq || cur_pf) && !cur_inta;
+    wire fast_pair = (fast_pace || cur_dq || cur_pf || cur_fillm)
+                  && !cur_inta;
     wire pair_finish = (bstate == B_GAP)
                      && (fast_pair ? cpu_ce_negedge : (gap_cnt == 2'd1));
     wire pair_done   = pair_finish && last_byte;
@@ -437,6 +438,10 @@ module zet_cpu_bridge (
     // (~3 clk/byte instead of a whole bus cycle per byte). A guest read
     // landing inside the fetched span completes from it without any bus
     // cycle at all -- the same contract the metal's BIU gives the EU.
+    //
+    // A window covers offsets [pf_lo, pf_cnt) of its sector: fills append
+    // at pf_cnt, and a fill-on-miss pair (see below) anchors both at the
+    // miss offset -- bytes before the first miss are simply never there.
     //
     // Hits do NOT consume: the window is a sector, not a FIFO. A tight
     // code loop, or a status poll hammering one address, keeps hitting
@@ -472,7 +477,10 @@ module zet_cpu_bridge (
     // (pf_cnt) while a hit only ever reads BEHIND it (off+span <= cnt),
     // so a read never collides with the same-byte write.
     (* ramstyle = "MLAB, no_rw_check" *) reg  [7:0]  pf_buf [0:2*PF_N-1];
-    reg  [5:0]  pf_cnt0, pf_cnt1;   // valid bytes per window, 0..32
+    reg  [5:0]  pf_cnt0, pf_cnt1;   // one-past-last valid offset, 0..32
+    reg  [4:0]  pf_lo0, pf_lo1;     // first valid offset -- a window is
+                                    // [base, base+cnt) sector bytes that were
+                                    // actually fetched: [lo, cnt)
     reg  [19:0] pf_base0, pf_base1;
     reg  [1:0]  pf_live;
     reg         pf_victim;          // which window a foreign miss claims
@@ -480,10 +488,27 @@ module zet_cpu_bridge (
     reg         cur_pf;             // the pair in flight is a prefetch fill
     reg         cur_pf_w;           // which window it fills
     reg  [4:0]  cur_pf_len;         // its burst length
+    reg         cur_fillm;          // the pair is a guest read whose burst
+                                    // doubles as a fill (beat 0/1 serve the
+                                    // guest, every beat also appends)
     reg         fill_ok;            // this fill's beats may still append
     reg  [4:0]  fill_beats;         // beats this fill appended
+    reg  [6:0]  fill_wait;          // clks the pair has waited for its burst
     reg  [1:0]  pf_dead;            // zero-beat fills: dead man's switch
     reg         pf_miss1;           // a foreign miss since last hit/rebase
+
+    // A fill or fill-on-miss pair must not take a ready that preceded its
+    // own burst: READY.sv's one-shot still holds the PREVIOUS pair's pulse
+    // when this pair enters B_CMD, and it survives ~2 ce edges past the new
+    // strobe -- long enough for the fast accept to fire mid-burst and end
+    // the pair with zero beats (measured: fill armed right behind a fillm
+    // pair completed on the stale high ~6 clks in; pf_dead then killed the
+    // whole engine). Beat 0 is also the fillm pair's guest byte, so waiting
+    // for it is what returns correct data. The timeout is the never-ran
+    // fallback: a request that somehow produced no beats ends the pair
+    // anyway and the dead man's switch scores it.
+    wire fill_early = (cur_pf || cur_fillm) && fill_ok
+                   && (fill_beats == 5'd0) && (fill_wait != 7'd127);
 
     // ------------------------------------------------------------------
     // Posted write queue: a plain-SDRAM guest write is captured at
@@ -538,10 +563,10 @@ module zet_cpu_bridge (
     // miss bookkeeping below, not for the hit itself.
     wire        inwin0 = pf_live[0] && (srv_beg[19:5] == pf_base0[19:5]);
     wire        inwin1 = pf_live[1] && (srv_beg[19:5] == pf_base1[19:5]);
-    wire pf_hit0 = inwin0
+    wire pf_hit0 = inwin0 && (srv_beg[4:0] >= pf_lo0)
                  && (({16'b0, srv_beg[4:0]} + {16'b0, srv_span})
                      <= {15'b0, pf_cnt0});
-    wire pf_hit1 = inwin1
+    wire pf_hit1 = inwin1 && (srv_beg[4:0] >= pf_lo1)
                  && (({16'b0, srv_beg[4:0]} + {16'b0, srv_span})
                      <= {15'b0, pf_cnt1});
     wire pf_hit  = srv_req && (srv_bs == BS_MEMR) && (pf_hit0 | pf_hit1);
@@ -747,12 +772,14 @@ module zet_cpu_bridge (
     // beat must still kill that window, or the stale beat lands after
     // the write it should have been behind.
     wire [20:0] pf_reach0 = pf_end0
-                + ((cur_pf && !cur_pf_w) ? {16'b0, cur_pf_len} : 21'd0);
+                + (((cur_pf || cur_fillm) && !cur_pf_w) ? {16'b0, cur_pf_len}
+                                                       : 21'd0);
     wire [20:0] pf_reach1 = pf_end1
-                + ((cur_pf &&  cur_pf_w) ? {16'b0, cur_pf_len} : 21'd0);
+                + (((cur_pf || cur_fillm) &&  cur_pf_w) ? {16'b0, cur_pf_len}
+                                                       : 21'd0);
     wire wr_ovl0 = (srv_beg < pf_reach0) && (srv_end_a > {1'b0, pf_base0});
     wire wr_ovl1 = (srv_beg < pf_reach1) && (srv_end_a > {1'b0, pf_base1});
-    wire pf_fill_done = pair_done && cur_pf;
+    wire pf_fill_done = pair_done && (cur_pf || cur_fillm);
 
     // What a miss may disturb. Inside either anchored sector it is the
     // guest merely outrunning that window's fill frontier: it rides the
@@ -777,7 +804,68 @@ module zet_cpu_bridge (
     wire cont0  = near0 || back0;
     wire cont1  = near1 || back1;
 
-    assign pf_req_len = (cur_pf && (bstate == B_CMD)) ? cur_pf_len : 5'd0;
+    // ------------------------------------------------------------------
+    // Fill-on-miss: an eligible guest read that misses but touches a
+    // window decision carries pf_req_len itself -- the burst starts AT the
+    // miss address, so beat 0/1 are the guest's own bytes (the shim pins
+    // data_out/_hi on them) and every beat also appends to the window.
+    // Pure fills need an idle engine slot to run in; at the fast pace
+    // settings srv_any is up on nearly every B_IDLE, so that slot never
+    // comes and the windows starve -- measured: speed3 fills=0/hits=0 in
+    // tb_mem_perf, every sequential fetch paying full latency. With the
+    // miss itself doing the fill the stream self-feeds at every speed.
+    //
+    // Eligibility mirrors the miss policy: any branch that claims,
+    // rebases or extends a window turns the arming read into a fill;
+    // a first foreign miss (pf_miss1==0) still rides the bus alone --
+    // the two-strike rule keeps single random reads from paying for a
+    // burst nobody consumes. Poisoned sectors (write-mixed) never fill.
+    // A queued write overlapping the BURST range vetoes it: the window
+    // would capture pre-drain bytes and serve them stale after the drain.
+    // ------------------------------------------------------------------
+    wire [4:0]  fillm_len  = pf_len_f(5'd16, 6'd32 - {1'b0, srv_beg[4:0]},
+                                      10'd512 - {1'b0, srv_beg[8:0]});
+    wire [20:0] fillm_end  = srv_beg + {16'b0, fillm_len};
+    wire [WQ_N-1:0] wrq_hitm;
+    generate
+    for (g = 0; g < WQ_N; g = g + 1) begin : g_wrq_ovlm
+        assign wrq_hitm[g] = (wrq_cnt > g)
+                         && (srv_beg   <  wrq_end[g])
+                         && (fillm_end > {1'b0, wrq_addr[g]});
+    end
+    endgenerate
+    wire        fillm_ovl = |wrq_hitm;
+
+    // Which window the miss touches, mirroring the policy chain below:
+    // seed -> w0, in-sector -> its window, retn -> the OTHER one, cont ->
+    // its own, claim -> the victim. insec_ext marks the case that keeps
+    // the window's fetched prefix: the miss sits within [lo, cnt] -- the
+    // rest re-anchor the window at the miss so no unfetched byte ever
+    // lands inside [lo, cnt).
+    wire        insec   = insec0 || insec1;
+    wire        insec_w = insec1 && !insec0;
+    wire [4:0]  insec_lo  = insec_w ? pf_lo1  : pf_lo0;
+    wire [5:0]  insec_cnt = insec_w ? pf_cnt1 : pf_cnt0;
+    wire        insec_ext = insec
+                         && ({1'b0, srv_beg[4:0]} >= {1'b0, insec_lo})
+                         && ({1'b0, srv_beg[4:0]} <= insec_cnt);
+    wire        fillm_go = arm_rd_ok && !pf_poisoned && (pf_dead != 2'd3)
+                        && !pause_core && !fillm_ovl
+                        && (~|pf_live || insec || retn0 || retn1
+                            || cont0 || cont1 || pf_miss1);
+    wire        fillm_w  = (~|pf_live) ? 1'b0
+                         : insec       ? insec_w
+                         : retn0       ? 1'b1
+                         : retn1       ? 1'b0
+                         : cont0       ? 1'b0
+                         : cont1       ? 1'b1
+                         : (!pf_live[1] || (pf_live[0] && pf_victim));
+    // For a re-anchor the append pointer starts at the miss offset; an
+    // insec_ext keeps lo and just regrows cnt from the miss on.
+    wire        fillm_new = ~|pf_live || !insec || !insec_ext;
+
+    assign pf_req_len = ((cur_pf || cur_fillm) && (bstate == B_CMD))
+                      ? cur_pf_len : 5'd0;
 
     // Anti-thrash poison: a window killed by an overlapping guest write
     // was almost certainly covering a data stream, not a code one --
@@ -812,6 +900,8 @@ module zet_cpu_bridge (
         if (reset) begin
             pf_cnt0    <= 6'd0;
             pf_cnt1    <= 6'd0;
+            pf_lo0     <= 5'd0;
+            pf_lo1     <= 5'd0;
             pf_base0   <= 20'h0;
             pf_base1   <= 20'h0;
             pf_live    <= 2'b00;
@@ -830,15 +920,23 @@ module zet_cpu_bridge (
             // A prefetch fill under way: beats append in address order
             // into ITS window, only while the fill still owns the
             // command phase and no invalidation has landed on it
-            // (fill_ok covers the mid-fill case).
-            if (pf_beat_v && cur_pf && fill_ok && bus_ours
+            // (fill_ok covers the mid-fill case). A fill-on-miss pair
+            // appends the same way -- its burst IS a fill.
+            if (pf_beat_v && (cur_pf || cur_fillm) && fill_ok && bus_ours
                 && (bstate == B_CMD)) begin
+                // cnt saturates at the sector end -- a late beat from a
+                // pair that already ended would otherwise wrap the index
+                // back to 0 and overwrite fetched bytes.
                 if (cur_pf_w) begin
-                    pf_buf[{1'b1, pf_cnt1[4:0]}] <= pf_beat_dat;
-                    pf_cnt1 <= pf_cnt1 + 6'd1;
+                    if (!pf_cnt1[5]) begin
+                        pf_buf[{1'b1, pf_cnt1[4:0]}] <= pf_beat_dat;
+                        pf_cnt1 <= pf_cnt1 + 6'd1;
+                    end
                 end else begin
-                    pf_buf[{1'b0, pf_cnt0[4:0]}] <= pf_beat_dat;
-                    pf_cnt0 <= pf_cnt0 + 6'd1;
+                    if (!pf_cnt0[5]) begin
+                        pf_buf[{1'b0, pf_cnt0[4:0]}] <= pf_beat_dat;
+                        pf_cnt0 <= pf_cnt0 + 6'd1;
+                    end
                 end
                 fill_beats <= fill_beats + 5'd1;
             end
@@ -858,14 +956,31 @@ module zet_cpu_bridge (
                     pf_miss1  <= 1'b0;
                 else if (~|pf_live) begin
                     pf_base0   <= {srv_beg[19:5], 5'b0};
-                    pf_cnt0    <= 6'd0;
+                    pf_cnt0    <= fillm_go ? {1'b0, srv_beg[4:0]} : 6'd0;
+                    pf_lo0     <= fillm_go ? srv_beg[4:0] : 5'd0;
                     pf_live[0] <= 1'b1;
                     pf_victim  <= 1'b1;
                     pf_want    <= 1'b0;
                     pf_miss1   <= 1'b0;
                     pf_ghost_v <= 2'b00;
-                end else if (insec0 || insec1)
+                end else if (insec0 || insec1) begin
                     pf_miss1  <= 1'b0;
+                    // Fill-on-miss: the arming read's own burst appends
+                    // from the miss offset. In-sector at or behind the
+                    // fetched frontier it just regrows cnt (the loop head
+                    // behind keeps its bytes); ahead of it or below lo
+                    // the window re-anchors so no hole enters [lo, cnt).
+                    if (fillm_go) begin
+                        pf_want <= fillm_w;
+                        if (fillm_w) begin
+                            pf_cnt1 <= {1'b0, srv_beg[4:0]};
+                            if (fillm_new) pf_lo1 <= srv_beg[4:0];
+                        end else begin
+                            pf_cnt0 <= {1'b0, srv_beg[4:0]};
+                            if (fillm_new) pf_lo0 <= srv_beg[4:0];
+                        end
+                    end
+                end
                 else if (retn0) begin
                     // Miss back inside window0's abandoned sector: the
                     // stream returned -- give it window1 outright instead
@@ -873,7 +988,8 @@ module zet_cpu_bridge (
                     pf_ghost1  <= pf_base1[19:5];
                     pf_ghost_v[1] <= pf_live[1];
                     pf_base1   <= {srv_beg[19:5], 5'b0};
-                    pf_cnt1    <= 6'd0;
+                    pf_cnt1    <= fillm_go ? {1'b0, srv_beg[4:0]} : 6'd0;
+                    pf_lo1     <= fillm_go ? srv_beg[4:0] : 5'd0;
                     pf_live[1] <= 1'b1;
                     pf_victim  <= 1'b0;
                     pf_want    <= 1'b1;
@@ -882,7 +998,8 @@ module zet_cpu_bridge (
                     pf_ghost0  <= pf_base0[19:5];
                     pf_ghost_v[0] <= pf_live[0];
                     pf_base0   <= {srv_beg[19:5], 5'b0};
-                    pf_cnt0    <= 6'd0;
+                    pf_cnt0    <= fillm_go ? {1'b0, srv_beg[4:0]} : 6'd0;
+                    pf_lo0     <= fillm_go ? srv_beg[4:0] : 5'd0;
                     pf_live[0] <= 1'b1;
                     pf_victim  <= 1'b1;
                     pf_want    <= 1'b0;
@@ -891,7 +1008,8 @@ module zet_cpu_bridge (
                     pf_ghost0  <= pf_base0[19:5];
                     pf_ghost_v[0] <= 1'b1;
                     pf_base0   <= {srv_beg[19:5], 5'b0};
-                    pf_cnt0    <= 6'd0;
+                    pf_cnt0    <= fillm_go ? {1'b0, srv_beg[4:0]} : 6'd0;
+                    pf_lo0     <= fillm_go ? srv_beg[4:0] : 5'd0;
                     pf_live[0] <= 1'b1;
                     pf_victim  <= 1'b1;
                     pf_want    <= 1'b0;
@@ -900,7 +1018,8 @@ module zet_cpu_bridge (
                     pf_ghost1  <= pf_base1[19:5];
                     pf_ghost_v[1] <= 1'b1;
                     pf_base1   <= {srv_beg[19:5], 5'b0};
-                    pf_cnt1    <= 6'd0;
+                    pf_cnt1    <= fillm_go ? {1'b0, srv_beg[4:0]} : 6'd0;
+                    pf_lo1     <= fillm_go ? srv_beg[4:0] : 5'd0;
                     pf_live[1] <= 1'b1;
                     pf_victim  <= 1'b0;
                     pf_want    <= 1'b1;
@@ -913,14 +1032,16 @@ module zet_cpu_bridge (
                         pf_ghost1  <= pf_base1[19:5];
                         pf_ghost_v[1] <= pf_live[1];
                         pf_base1   <= {srv_beg[19:5], 5'b0};
-                        pf_cnt1    <= 6'd0;
+                        pf_cnt1    <= fillm_go ? {1'b0, srv_beg[4:0]} : 6'd0;
+                        pf_lo1     <= fillm_go ? srv_beg[4:0] : 5'd0;
                         pf_live[1] <= 1'b1;
                         pf_want    <= 1'b1;
                     end else begin
                         pf_ghost0  <= pf_base0[19:5];
                         pf_ghost_v[0] <= pf_live[0];
                         pf_base0   <= {srv_beg[19:5], 5'b0};
-                        pf_cnt0    <= 6'd0;
+                        pf_cnt0    <= fillm_go ? {1'b0, srv_beg[4:0]} : 6'd0;
+                        pf_lo0     <= fillm_go ? srv_beg[4:0] : 5'd0;
                         pf_live[0] <= 1'b1;
                         pf_want    <= 1'b0;
                     end
@@ -946,6 +1067,8 @@ module zet_cpu_bridge (
             if (!bus_ours || arm_iow) begin
                 pf_cnt0 <= 6'd0;
                 pf_cnt1 <= 6'd0;
+                pf_lo0  <= 5'd0;
+                pf_lo1  <= 5'd0;
                 pf_live <= 2'b00;
                 fill_ok <= 1'b0;
                 pf_pcnt <= 8'd0;            // map changes lift the ban
@@ -968,11 +1091,13 @@ module zet_cpu_bridge (
                 pf_pcnt <= 8'd255;
                 if (wr_ovl0) begin
                     pf_cnt0    <= 6'd0;
+                    pf_lo0     <= 5'd0;
                     pf_live[0] <= 1'b0;
                     pf_ghost_v[0] <= 1'b0;
                 end
                 if (wr_ovl1) begin
                     pf_cnt1    <= 6'd0;
+                    pf_lo1     <= 5'd0;
                     pf_live[1] <= 1'b0;
                     pf_ghost_v[1] <= 1'b0;
                 end
@@ -980,7 +1105,7 @@ module zet_cpu_bridge (
                     fill_ok <= 1'b0;
             end
 
-            if (arm_fill) begin
+            if (arm_fill || fillm_go) begin
                 fill_ok    <= 1'b1;
                 fill_beats <= 5'd0;
             end
@@ -1044,7 +1169,8 @@ module zet_cpu_bridge (
             $display("  %8t  WBREQ %s a=%05x sel=%b d=%04x", $time, wb_we_o ? "WR" : "RD", {wb_adr_o, wb_sel_o == 2'b10}, wb_sel_o, wb_dat_o);
         if (bstate == B_IDLE && (arm_req || arm_drain || arm_fill || hit_serve))
             $display("  %8t  ARM %s a=%05x dq=%b pf=%b", $time,
-                     arm_drain ? "DRN" : arm_fill ? "FIL" : hit_serve ? "HIT" : "REQ",
+                     arm_drain ? "DRN" : arm_fill ? "FIL" : hit_serve ? "HIT"
+                               : fillm_go ? "FLM" : "REQ",
                      arm_drain ? wrq_addr[0] : srv_addr, cur_dq, cur_pf);
         if (bstate == B_CMD && cpu_ce_posedge && processor_ready && bus_ours
             && (t_cnt >= 3'd3 || (fast_pair && t_cnt >= 3'd2 && (saw_low || cur_dq))))
@@ -1076,6 +1202,7 @@ module zet_cpu_bridge (
             byte_idx         <= 2'd0;
             t_cnt            <= 3'd0;
             saw_low          <= 1'b0;
+            fill_wait        <= 7'd0;
             ready_d1         <= 1'b0;
             gap_cnt          <= 2'd0;
             rd_lo            <= 8'h00;
@@ -1088,6 +1215,7 @@ module zet_cpu_bridge (
             cur_term         <= TERM_NONE;
             cur_inta         <= 1'b0;
             cur_pf           <= 1'b0;
+            cur_fillm        <= 1'b0;
             cur_pf_len       <= 5'd0;
             cur_pf_w         <= 1'b0;
             cur_dq           <= 1'b0;
@@ -1123,6 +1251,9 @@ module zet_cpu_bridge (
                     cur_term         <= srv_term;
                     cur_inta         <= srv_inta;
                     cur_pf           <= 1'b0;
+                    cur_fillm        <= fillm_go;
+                    cur_pf_w         <= fillm_w;
+                    cur_pf_len       <= fillm_len;
                     cur_dq           <= 1'b0;
                     ps_r             <= (srv_term == TERM_WORD)
                                       ? BS_PASV : srv_bs;
@@ -1133,6 +1264,7 @@ module zet_cpu_bridge (
                     cpu_data_bus_hi  <= srv_data[15:8];
                     t_cnt            <= 3'd0;
                     saw_low          <= 1'b0;
+                    fill_wait        <= 7'd0;
                     bstate           <= B_CMD;
                 end else if (arm_drain) begin
                     // Queued write head, replayed as an ordinary write
@@ -1145,6 +1277,7 @@ module zet_cpu_bridge (
                     cur_term         <= TERM_NONE;
                     cur_inta         <= 1'b0;
                     cur_pf           <= 1'b0;
+                    cur_fillm        <= 1'b0;
                     cur_dq           <= 1'b1;
                     ps_r             <= BS_MEMW;
                     ad_out           <= wrq_addr[0];
@@ -1155,6 +1288,7 @@ module zet_cpu_bridge (
                     cpu_data_bus_hi  <= wrq_data[0][15:8];
                     t_cnt            <= 3'd0;
                     saw_low          <= 1'b0;
+                    fill_wait        <= 7'd0;
                     bstate           <= B_CMD;
                 end else if (arm_fill) begin
                     // Prefetch fill: a byte-style pair (ube_n=1, so the
@@ -1171,6 +1305,7 @@ module zet_cpu_bridge (
                     cur_term         <= TERM_NONE;
                     cur_inta         <= 1'b0;
                     cur_pf           <= 1'b1;
+                    cur_fillm        <= 1'b0;
                     cur_dq           <= 1'b0;
                     cur_pf_w         <= fill_w;
                     cur_pf_len       <= pf_fill_len;
@@ -1181,6 +1316,7 @@ module zet_cpu_bridge (
                     cpu_data_bus_hi  <= 8'h00;
                     t_cnt            <= 3'd0;
                     saw_low          <= 1'b0;
+                    fill_wait        <= 7'd0;
                     bstate           <= B_CMD;
                 end
               end
@@ -1201,6 +1337,8 @@ module zet_cpu_bridge (
                     saw_low <= 1'b1;
                 if (cpu_ce_posedge)
                     t_cnt <= (t_cnt != 3'd7) ? (t_cnt + 3'd1) : 3'd7;
+                if (fill_wait != 7'd127)
+                    fill_wait <= fill_wait + 7'd1;
 
                 // Fast accept (t_cnt>=2) only on a FRESH ready: the level can
                 // still be the previous byte's residue, which would capture
@@ -1212,7 +1350,8 @@ module zet_cpu_bridge (
                 // (instant I/O) on the faithful count.
                 if ((t_cnt >= 3'd3
                      || (fast_pair && (t_cnt >= 3'd2) && (saw_low || cur_dq)))
-                    && cpu_ce_posedge && processor_ready && bus_ours) begin
+                    && cpu_ce_posedge && processor_ready && bus_ours
+                    && !fill_early) begin
                     if (cur_read && (byte_idx == 2'd0)) rd_lo <= data_bus;
                     if (cur_read && (byte_idx == 2'd1)) rd_hi <= data_bus;
                     if (cur_read && cur_1cyc)           rd_hi <= data_bus_hi;
@@ -1251,6 +1390,7 @@ module zet_cpu_bridge (
                             biu_done_r <= 1'b1;
                         end
                         cur_pf      <= 1'b0;
+                        cur_fillm   <= 1'b0;
                         cur_dq      <= 1'b0;
                         byte_idx    <= 2'd0;
                         word_access <= 1'b0;
