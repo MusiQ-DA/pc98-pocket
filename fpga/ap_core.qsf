@@ -956,7 +956,11 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # a deterministic VPR20KMAIN tdc_util fitter internal error there.
 # 19 hit the same deterministic tdc_util crash on the dbg2-witness netlist
 # (CI runs 37180392100 / 37183164481 / 37185049118, all Line 2138); 20 next.
-set_global_assignment -name SEED 20
+# a37a0fa landed the EA-writeback cone (decode->ir->regfile read->othop
+# (seg<<4)+x+y+off->m0->r[] asdata) at -0.482 ns worst on seed 20; the
+# identical netlist at seed 19-era had the same cone at +0.32, so this is
+# placement noise on a boundary path, not a logic regression. 21 next.
+set_global_assignment -name SEED 21
 # clk_pico is u_softcpu's fabric-generated clk_sys/6 pulse train (~7 MHz) and
 # it drives the whole PicoRV32 + OSD domain (~1.5k loads). Left on LAB
 # routing it accumulates enough skew for intra-domain hold violations -- the
