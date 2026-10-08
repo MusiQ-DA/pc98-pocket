@@ -792,6 +792,21 @@ module zet_cpu_bridge (
     reg  [7:0]  pf_pcnt;        // armed reads left while it stays hot
     wire pf_poisoned = (pf_pcnt != 8'd0) && (srv_beg[19:5] == pf_pois);
 
+    // Ghost tags: when a live window is redirected (rebase or claim-over)
+    // its abandoned base is remembered. A miss back inside that sector is
+    // the stream RETURNING, not continuing -- two code streams on adjacent
+    // sectors otherwise make ONE window chase them forever: B is `near` of
+    // A's window (rebase A->B), the next A read is `back` of the rebased
+    // window (rebase B->A), and the second window never sees a foreign
+    // miss to claim. bench_ni NEARCALL straddles exactly that boundary
+    // (call@x2FD, loop@x300) and burned ~4 fills/iter on real hw and in
+    // sim phase 8. A returning miss claims the OTHER window instead --
+    // then both sectors settle, one window each.
+    reg  [14:0] pf_ghost0, pf_ghost1;
+    reg  [1:0]  pf_ghost_v;
+    wire retn0 = pf_ghost_v[0] && (srv_beg[19:5] == pf_ghost0);
+    wire retn1 = pf_ghost_v[1] && (srv_beg[19:5] == pf_ghost1);
+
     // Prefetch state -- one writer for every pf register.
     always @(posedge clk) begin
         if (reset) begin
@@ -808,6 +823,9 @@ module zet_cpu_bridge (
             pf_miss1   <= 1'b0;
             pf_pois    <= 15'h0;
             pf_pcnt    <= 8'd0;
+            pf_ghost0  <= 15'h0;
+            pf_ghost1  <= 15'h0;
+            pf_ghost_v <= 2'b00;
         end else begin
             // A prefetch fill under way: beats append in address order
             // into ITS window, only while the fill still owns the
@@ -839,42 +857,72 @@ module zet_cpu_bridge (
                     // here is write-mixed and a window would just die.
                     pf_miss1  <= 1'b0;
                 else if (~|pf_live) begin
-                    pf_base0  <= {srv_beg[19:5], 5'b0};
-                    pf_cnt0   <= 6'd0;
-                    pf_live[0]<= 1'b1;
-                    pf_victim <= 1'b1;
-                    pf_want   <= 1'b0;
-                    pf_miss1  <= 1'b0;
+                    pf_base0   <= {srv_beg[19:5], 5'b0};
+                    pf_cnt0    <= 6'd0;
+                    pf_live[0] <= 1'b1;
+                    pf_victim  <= 1'b1;
+                    pf_want    <= 1'b0;
+                    pf_miss1   <= 1'b0;
+                    pf_ghost_v <= 2'b00;
                 end else if (insec0 || insec1)
                     pf_miss1  <= 1'b0;
-                else if (cont0) begin
-                    pf_base0  <= {srv_beg[19:5], 5'b0};
-                    pf_cnt0   <= 6'd0;
-                    pf_live[0]<= 1'b1;
-                    pf_victim <= 1'b1;
-                    pf_want   <= 1'b0;
-                    pf_miss1  <= 1'b0;
+                else if (retn0) begin
+                    // Miss back inside window0's abandoned sector: the
+                    // stream returned -- give it window1 outright instead
+                    // of letting `back` rebase window0 into a chase.
+                    pf_ghost1  <= pf_base1[19:5];
+                    pf_ghost_v[1] <= pf_live[1];
+                    pf_base1   <= {srv_beg[19:5], 5'b0};
+                    pf_cnt1    <= 6'd0;
+                    pf_live[1] <= 1'b1;
+                    pf_victim  <= 1'b0;
+                    pf_want    <= 1'b1;
+                    pf_miss1   <= 1'b0;
+                end else if (retn1) begin
+                    pf_ghost0  <= pf_base0[19:5];
+                    pf_ghost_v[0] <= pf_live[0];
+                    pf_base0   <= {srv_beg[19:5], 5'b0};
+                    pf_cnt0    <= 6'd0;
+                    pf_live[0] <= 1'b1;
+                    pf_victim  <= 1'b1;
+                    pf_want    <= 1'b0;
+                    pf_miss1   <= 1'b0;
+                end else if (cont0) begin
+                    pf_ghost0  <= pf_base0[19:5];
+                    pf_ghost_v[0] <= 1'b1;
+                    pf_base0   <= {srv_beg[19:5], 5'b0};
+                    pf_cnt0    <= 6'd0;
+                    pf_live[0] <= 1'b1;
+                    pf_victim  <= 1'b1;
+                    pf_want    <= 1'b0;
+                    pf_miss1   <= 1'b0;
                 end else if (cont1) begin
-                    pf_base1  <= {srv_beg[19:5], 5'b0};
-                    pf_cnt1   <= 6'd0;
-                    pf_live[1]<= 1'b1;
-                    pf_victim <= 1'b0;
-                    pf_want   <= 1'b1;
-                    pf_miss1  <= 1'b0;
+                    pf_ghost1  <= pf_base1[19:5];
+                    pf_ghost_v[1] <= 1'b1;
+                    pf_base1   <= {srv_beg[19:5], 5'b0};
+                    pf_cnt1    <= 6'd0;
+                    pf_live[1] <= 1'b1;
+                    pf_victim  <= 1'b0;
+                    pf_want    <= 1'b1;
+                    pf_miss1   <= 1'b0;
                 end else if (pf_miss1) begin
                     // Second consecutive foreign miss: the victim takes
                     // the new stream's sector -- a dead window first,
                     // else the one not hitting lately.
                     if (!pf_live[1] || (pf_live[0] && pf_victim)) begin
-                        pf_base1  <= {srv_beg[19:5], 5'b0};
-                        pf_cnt1   <= 6'd0;
-                        pf_live[1]<= 1'b1;
-                        pf_want   <= 1'b1;
+                        pf_ghost1  <= pf_base1[19:5];
+                        pf_ghost_v[1] <= pf_live[1];
+                        pf_base1   <= {srv_beg[19:5], 5'b0};
+                        pf_cnt1    <= 6'd0;
+                        pf_live[1] <= 1'b1;
+                        pf_want    <= 1'b1;
                     end else begin
-                        pf_base0  <= {srv_beg[19:5], 5'b0};
-                        pf_cnt0   <= 6'd0;
-                        pf_live[0]<= 1'b1;
-                        pf_want   <= 1'b0;
+                        pf_ghost0  <= pf_base0[19:5];
+                        pf_ghost_v[0] <= pf_live[0];
+                        pf_base0   <= {srv_beg[19:5], 5'b0};
+                        pf_cnt0    <= 6'd0;
+                        pf_live[0] <= 1'b1;
+                        pf_want    <= 1'b0;
                     end
                     pf_victim <= ~pf_victim;
                     pf_miss1  <= 1'b0;
@@ -901,18 +949,32 @@ module zet_cpu_bridge (
                 pf_live <= 2'b00;
                 fill_ok <= 1'b0;
                 pf_pcnt <= 8'd0;            // map changes lift the ban
+                pf_ghost_v <= 2'b00;
             end else if (arm_wr || wrq_push) begin
+                // ANY guest memory write poisons ITS OWN sector, not just
+                // writes that overlap a live window: write-mixed sectors
+                // (the CALL/RET stack, mailboxes, working data) are the
+                // worst possible prefetch targets -- a window claimed on
+                // the pop would be killed by the next push before a read
+                // could ever use it. The earlier kill-only poison only
+                // armed when a live window overlapped, and in the ghost-
+                // claim rotation a code claim could evict the stack
+                // window before the push ever landed, so the poison
+                // never armed and the stack kept claiming (sim phase 8
+                // fills rose to 2494). Tagging on the write closes that
+                // race: the read that follows a write can never start a
+                // doomed fill.
+                pf_pois <= srv_addr[19:5];
+                pf_pcnt <= 8'd255;
                 if (wr_ovl0) begin
                     pf_cnt0    <= 6'd0;
                     pf_live[0] <= 1'b0;
-                    pf_pois    <= pf_base0[19:5];
-                    pf_pcnt    <= 8'd255;
+                    pf_ghost_v[0] <= 1'b0;
                 end
                 if (wr_ovl1) begin
                     pf_cnt1    <= 6'd0;
                     pf_live[1] <= 1'b0;
-                    pf_pois    <= pf_base1[19:5];
-                    pf_pcnt    <= 8'd255;
+                    pf_ghost_v[1] <= 1'b0;
                 end
                 if (cur_pf_w ? wr_ovl1 : wr_ovl0)
                     fill_ok <= 1'b0;
@@ -929,7 +991,10 @@ module zet_cpu_bridge (
             // real bus cycles.
             if (pf_fill_done && fill_ok && (fill_beats == 5'd0)) begin
                 if (pf_dead != 2'd3) pf_dead <= pf_dead + 2'd1;
-                if (pf_dead == 2'd2) pf_live <= 2'b00;
+                if (pf_dead == 2'd2) begin
+                    pf_live    <= 2'b00;
+                    pf_ghost_v <= 2'b00;
+                end
             end
         end
     end
@@ -991,6 +1056,17 @@ module zet_cpu_bridge (
         if (hit_serve) $display("  %8t  PFHIT    a=%05x w=%04x", $time, srv_addr, pf_hit_word);
         if (fwd_serve) $display("  %8t  FWDSRV   a=%05x w=%04x", $time, srv_addr, fwd_word);
         if (arm_fill)  $display("  %8t  PFFILL   a=%05x len=%0d w=%0d", $time, pf_next[19:0], pf_fill_len, fill_w);
+        if (arm_rd_ok && bus_ours) begin
+            if (pf_poisoned)      $display("  %8t  PFMISS a=%05x POIS", $time, srv_beg);
+            else if (~|pf_live)   $display("  %8t  PFMISS a=%05x SEED", $time, srv_beg);
+            else if (insec0||insec1) $display("  %8t  PFMISS a=%05x RIDE live=%b", $time, srv_beg, pf_live);
+            else if (retn0)       $display("  %8t  PFMISS a=%05x RETN0->w1 g=%05x", $time, srv_beg, pf_ghost0);
+            else if (retn1)       $display("  %8t  PFMISS a=%05x RETN1->w0 g=%05x", $time, srv_beg, pf_ghost1);
+            else if (cont0)       $display("  %8t  PFMISS a=%05x CONT0", $time, srv_beg);
+            else if (cont1)       $display("  %8t  PFMISS a=%05x CONT1", $time, srv_beg);
+            else if (pf_miss1)    $display("  %8t  PFMISS a=%05x CLAIM", $time, srv_beg);
+            else                  $display("  %8t  PFMISS a=%05x m1", $time, srv_beg);
+        end
     end
 `endif
 

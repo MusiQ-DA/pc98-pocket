@@ -52,7 +52,7 @@ MBX_RECS    equ 2                   ; first record word index, 5 words each
 
 MEMB_DISK_BOOT equ 0x0584           ; BIOS BDA: boot drive byte (0x90+drv 2HD)
 
-NTESTS      equ 12                  ; number of test records emitted
+NTESTS      equ 14                  ; number of test records emitted
 
 ; ============================================================================
 section .ipl vstart=0x0000
@@ -539,6 +539,26 @@ t_far:
 far_sub:
         retf
 
+; 13: near call x500, sector-aligned -- same as t_near but the whole loop
+;     sits inside one 32B prefetch sector (isolates boundary-thrash).
+        align 32
+t_near2:
+        mov cx, 500
+.l:     call near2_sub
+        loop .l
+        ret
+near2_sub:
+        ret
+
+; 14: push/pop x500, sector-aligned -- stack traffic only, minimal code.
+        align 32
+t_ppop:
+        mov cx, 500
+.l:     push ax
+        pop  bx
+        loop .l
+        ret
+
 ; 12: FDC -- two INT 1Bh calls, whole cylinders 0 and 1 (32 x 1024B).
 ;     fdc_st collects the AH status bytes into the units_hi record field.
 t_fdc:
@@ -588,6 +608,8 @@ test_table:
         dw 9,  t_in,    16,  8192, 0, s_in
         dw 10, t_near,  20, 10000, 0, s_near
         dw 11, t_far,   20, 10000, 0, s_far
+        dw 13, t_near2, 20, 10000, 0, s_near2
+        dw 14, t_ppop,  20, 10000, 0, s_ppop
         dw 12, t_fdc,    1,    32, 0, s_fdc
         dw 0
 
@@ -602,6 +624,8 @@ s_gvram: db "08 GVRAM16K ", 0
 s_in:    db "09 IN71     ", 0
 s_near:  db "10 NEARCALL ", 0
 s_far:   db "11 FARCALL  ", 0
+s_near2: db "13 NEAR2ALGN", 0
+s_ppop:  db "14 PUSHPOP  ", 0
 s_fdc:   db "12 FDC32SEC ", 0
 
 ; ----------------------------------------------------------------------------

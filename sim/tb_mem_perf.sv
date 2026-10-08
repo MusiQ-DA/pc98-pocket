@@ -506,12 +506,20 @@ module tb_mem_perf;
         // write queue was introduced: the CALL's push is queued, the RET's
         // pop reads the same address and stalls on wrq_ovl until the drain
         // retires. This phase reproduces that shape in sim.
+        //
+        // v2: pad so the CALL's bytes sit at sector offset 0x1D..0x1F and
+        // LOOP+sub land in the next sector -- the exact bench_ni layout
+        // (call@x2FD, loop@x300, sub@x303). With the stack sector that's
+        // three live regions against two pf windows, the real-hardware
+        // thrash case; the earlier single-sector version was the aligned
+        // control (NEAR2ALGN) and did NOT reproduce the 407-clk/iter cost.
         marker(8'h08);
-        emit(8'hB9); emitw(16'h01F4);       // MOV CX,500          @+0
-        emit(8'hE8); emitw(16'h0004);       // CALL +4 -> near_sub  @+3
-        emit(8'hE2); emit(8'hFB);           // LOOP -5 -> CALL      @+6
-        emit(8'hEB); emit(8'h01);           // JMP +1 -> done       @+8
-        emit(8'hC3);                        // near_sub: RET        @+10
+        while ((prog_len & 31) != 5'h1A) emit(8'h90);  // pad: MOV CX -> 0x1A
+        emit(8'hB9); emitw(16'h01F4);       // MOV CX,500          @+0x1A
+        emit(8'hE8); emitw(16'h0004);       // CALL +4 -> near_sub  @+0x1D..0x1F
+        emit(8'hE2); emit(8'hFB);           // LOOP -5 -> CALL      @+0x20
+        emit(8'hEB); emit(8'h01);           // JMP +1 -> done       @+0x22
+        emit(8'hC3);                        // near_sub: RET        @+0x24
         marker(8'h88);
 
         // done: spin
