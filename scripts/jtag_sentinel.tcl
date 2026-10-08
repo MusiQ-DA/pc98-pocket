@@ -33,7 +33,7 @@ proc wr {addr data} {
 proc rb {off} {
     wr 0x88 [expr {($off & 0x1FFFFF) | 0x200000}]
     for {set j 0} {$j < 2000} {incr j} {
-        set v [rd 0x37]
+        set v [rd 0x9c]
         if {($v >> 31) == 0} { return [expr {$v & 0xff}] }
         after 1
     }

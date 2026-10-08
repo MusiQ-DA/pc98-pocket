@@ -29,7 +29,7 @@ proc wr {addr data} {
 proc grb {a} {
     wr 0x88 [expr {0x200000 | ($a & 0x1FFFFF)}]
     for {set i 0} {$i < 4000} {incr i} {
-        set v [rd 0x37]
+        set v [rd 0x9c]
         if {($v >> 31) == 0} { return [expr {$v & 0xff}] }
         after 1
     }
