@@ -74,6 +74,13 @@ module pc98_gvram_display #(
     input  wire  [15:0] part_sad [0:3],   // partition start, word address
     input  wire  [9:0]  part_len [0:3],   // partition length, rasterlines
     input  wire  [3:0]  part_pbyte,       // per-partition LEN[14] pitch unit
+    // Rasterlines this plane sits BELOW the top of the frame -- np21w
+    // dispsync's grph_vbp: the slave's SYNC VBP minus the master's,
+    // floored at zero (vram/dispsync.c). Lines above the offset carry no
+    // graphics at all, and the plane's bottom is clipped by the same
+    // amount. Every BIOS table gives both GDCs VBP 25, so 0 is the
+    // everyday value.
+    input  wire  [5:0]  vshift,
 
     // sdram_mp port side -- the controller's port D, a read-only master of
     // its own so the twenty bursts a line never queue behind the font's five.
@@ -253,7 +260,13 @@ module pc98_gvram_display #(
     wire  [4:0]  mul_lr   = (lrep != 5'd0) ? (lrep + 5'd1)
                                          : (dbl ? 5'd2 : 5'd1);
     logic [4:0]  mul_q    = 5'd1;         // rasterlines to the next vad step
-    wire         w_wrap   = (line_now == 9'(LINES - 1 - LOOKAHEAD));
+    // With vshift the plane's walk still has to put run_base = SAD[0] on the
+    // fill whose target is the first shifted line: the reset edge moves from
+    // LINES-1-LOOKAHEAD by the same amount the picture does, mod LINES.
+    // (vshift < 4 wraps the point back to the frame's tail.)
+    wire  [8:0]  wrap_pt  = (vshift >= 6'd4) ? {3'd0, vshift} - 9'd4
+                                           : {3'd0, vshift} + 9'd396;
+    wire         w_wrap   = (line_now == wrap_pt);
     // Advance when this rasterline was the partition's last -- a zero LEN
     // never advances (the absorbing case above), and the pointer wraps
     // mod 4 so partition three's end reopens partition zero.
@@ -323,8 +336,12 @@ module pc98_gvram_display #(
                 // Launch only while the display runs: STOP means no
                 // display-refresh traffic on a real GDC, so no fills here
                 // either. A fill already in flight finishes -- its bank is
-                // simply stale.
-                if (disp_on_c && line_edge && (line_now < 9'(LINES))) begin
+                // simply stale. Targets above the vshift offset carry no
+                // graphics at all (the plane starts lower), so no fill
+                // launches for them -- the stale bank never shows because
+                // the display side blanks those lines.
+                if (disp_on_c && line_edge && (line_now < 9'(LINES))
+                    && (fill_tgt >= {3'd0, vshift})) begin
                     // A new line just began: fill the one LOOKAHEAD lines
                     // out into its own bank. The walk is already positioned
                     // at that target, so run_base is its byte offset --
@@ -376,7 +393,11 @@ module pc98_gvram_display #(
     // handshake at all: line N's bytes sit in bank N[1:0], written LOOKAHEAD
     // lines earlier. The only failure left is a fill still running at its
     // target's boundary, which shows last cycle-of-four's line.
-    wire visible    = (hcount < 10'd640) && (vcount < 10'd400);
+    // vshift lines at the top carry no graphics: np21w zero-fills the
+    // surface there (dispsync_renewalvertical), the analogue of the slave
+    // plane simply not having started yet.
+    wire visible    = (hcount < 10'd640) && (vcount < 10'd400)
+                   && (vcount >= {4'd0, vshift});
     wire [6:0] n_byi = hcount[9:3];              // 0..79
     wire [2:0] n_bit = ~hcount[2:0];             // MSB is the leftmost dot
 

@@ -80,7 +80,7 @@ module tb_pc98_gdc;
         .cursor_addr(cursor_addr), .cursor_dot(cursor_dot),
         .cursor_en(cursor_en), .cursor_blink_en(cursor_blink_en),
         .cursor_top(cursor_top), .cursor_bottom(cursor_bottom),
-        .cursor_rate(cursor_rate), .zoom_disp(zoom_disp), .vlines(vlines),
+        .cursor_rate(cursor_rate), .zoom_disp(zoom_disp), .vlines(vlines), .vbp(),
         .line_rep(line_rep),
         .draw_req(draw_req), .draw_op(draw_op), .draw_busy(draw_busy),
         .srv_done_stb(srv_done), .draw_snap(draw_snap)

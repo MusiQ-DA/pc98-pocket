@@ -126,6 +126,12 @@ module pc98_gdc #(
     // 0x3ff) + 1`), the top six the VBP. 200 is what the 15.98 kHz table
     // writes, 400 the 24.83 kHz one.
     output wire [9:0]  vlines,
+    // The same word's top six bits -- np21w dispsync reads this GDC's VBP
+    // to place its plane vertically: the plane whose SYNC carries the
+    // LARGER VBP starts that many rasterlines further down
+    // (vram/dispsync.c dispsync_renewalvertical). 25 in every BIOS table,
+    // which is why the two planes usually coincide.
+    output wire [5:0]  vbp,
 
     // ---- the drawing server (the softcore's GDC engine) ---------------------
     // EXECUTE-class commands (VECTE 0x6C, TEXTE 0x68) and completed WDAT
@@ -700,6 +706,7 @@ module pc98_gdc #(
 
     wire [15:0] sync_vw = {para[P_SYNC + 7], para[P_SYNC + 6]};
     assign vlines = sync_vw[9:0];
+    assign vbp    = sync_vw[15:10];
 
     // The light pen's three bytes are read back, never driven from here.
     wire _unused = &{1'b0, para[P_LPEN], para[P_MASK], para[P_SYNC], 1'b0};

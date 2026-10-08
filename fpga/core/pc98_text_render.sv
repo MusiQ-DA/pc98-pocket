@@ -35,6 +35,11 @@ module pc98_text_render #(
     input  wire        pix_ce,          // one pixel per assertion
     input  wire [9:0]  hcount,          // pixel within the line
     input  wire [9:0]  vcount,          // line within the frame
+    // Rasterlines this plane sits below the frame top -- np21w dispsync's
+    // text_vbp: the master GDC's SYNC VBP minus the slave's, floored at
+    // zero (vram/dispsync.c). A nonzero shift blanks the top of the frame
+    // and clips the plane's bottom off the raster. 0 for every BIOS table.
+    input  wire [5:0]  vshift,
     input  wire        blink_on,        // blink phase, ~2 Hz
 
     // The master GDC's display registers. Tie gdc_on low and this module
@@ -107,7 +112,16 @@ module pc98_text_render #(
     output wire [5:0]  txt_next_row
 );
 
-    wire visible = (hcount < 10'd640) && (vcount < 10'd400);
+    // The plane's own line coordinate: display line N carries text line
+    // N-vshift (mod the 440-line frame), with the wrap-around top -- the
+    // lines the shift pushed off the bottom -- blanked by tblank. np21w
+    // zero-fills that band on its surface; here the cells simply never
+    // mark visible.
+    wire [9:0] vline  = (vcount >= {4'd0, vshift})
+                      ? vcount - {4'd0, vshift}
+                      : 10'd440 + vcount - {4'd0, vshift};
+    wire       tblank = (vcount < {4'd0, vshift});
+    wire visible = (hcount < 10'd640) && (vline < 10'd400) && !tblank;
 
     // `col` counts COLUMNS, not cells: a wide column is sixteen dots (two
     // cells' worth), a narrow one eight.
@@ -129,19 +143,19 @@ module pc98_text_render #(
     reg  [9:0] trk_v;
     reg  [4:0] trk_raster;
     reg  [5:0] trk_row;
-    wire       new_line = (vcount != trk_v);
+    wire       new_line = (vline != trk_v);
     wire       trk_full = ({5'd0, trk_raster} >= pitch_p1 - 10'd1);
 
-    wire [4:0] raster_q = (vcount == 10'd0) ? 5'd0
+    wire [4:0] raster_q = (vline == 10'd0) ? 5'd0
                         : new_line ? (trk_full ? 5'd0 : trk_raster + 5'd1)
                         :            trk_raster;
-    wire [5:0] row_q    = (vcount == 10'd0) ? 6'd0
+    wire [5:0] row_q    = (vline == 10'd0) ? 6'd0
                         : new_line ? (trk_full ? trk_row + 6'd1 : trk_row)
                         :            trk_row;
 
     always_ff @(posedge clk) begin
         if (new_line) begin
-            trk_v      <= vcount;
+            trk_v      <= vline;
             trk_raster <= raster_q;
             trk_row    <= row_q;
         end
@@ -176,7 +190,7 @@ module pc98_text_render #(
     // one tracked step further than raster_q/row_q; on the frame's last
     // line the next scanline is (0, 0).
     wire       pf_full   = ({5'd0, raster_q} >= pitch_p1 - 10'd1);
-    wire       frame_end = last_char & (vcount == 10'(V_TOTAL - 1));
+    wire       frame_end = last_char & (vline == 10'(V_TOTAL - 1));
     wire [4:0] pf_raster = !last_char ? raster_q
                          : frame_end  ? 5'd0
                          : pf_full    ? 5'd0
@@ -333,10 +347,10 @@ module pc98_text_render #(
     // row, and the row that starts one pitch hence (row 0 once the next row
     // would begin past the visible frame).
     assign txt_row_tick = pix_ce & (hcount == 10'd0) & (raster_q == 5'd0)
-                        & (vcount < 10'd400);
+                        & (vline < 10'd400) & !tblank;
     // vcount+pitch is always the same raster of the next row, so its row is
     // row_q+1; past the visible frame the next fill is row 0.
-    wire [9:0] next_row_v = vcount + pitch_p1;
+    wire [9:0] next_row_v = vline + pitch_p1;
     assign txt_next_row = (next_row_v >= 10'd400) ? 6'd0 : row_q + 6'd1;
 
     always_comb begin

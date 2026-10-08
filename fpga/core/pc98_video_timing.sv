@@ -13,11 +13,23 @@
 // hclock / y -- 440 lines gives 56.4 Hz, which is the mode PC-98 software
 // expects.
 //
-// The blanking split inside the 208 non-displayed dots and the 40 non-displayed
-// lines is not fixed by that table -- a real GDC is programmed with it, and the
-// BIOS does the programming. These defaults are a sane centred raster to bring
-// the path up; when the GDC's sync parameters are implemented they replace
-// them, which is why they are parameters rather than literals.
+// The blanking split inside the 208 non-displayed dots and the 40
+// non-displayed lines is the uPD7220 SYNC decode of the BIOS's 24 kHz
+// table, defsyncm24 {0x10,0x4e,0x07,0x25,0x07,0x07,0x90,0x65} (np21w
+// io/gdc.c; same decode shape as every 7220 emulator):
+//
+//     HFP = (sync[3]>>2)+1 = 10 ch    VFP =  sync[5]&0x3f        = 7
+//     HS  = (sync[2]&0x1f)+1 =  8 ch  VS  =  sync[2]>>5
+//     HBP = (sync[4]&0x3f)+1 =  8 ch        + ((sync[3]&3)<<3)   = 8
+//     CR  =  sync[1]+2       = 80 ch  VBP =  sync[7]>>2          = 25
+//                                   AL  = (sync[7:6] word)
+//                                        & 0x3ff, norm. to 1-1024 = 400
+//
+// Check: 10+8+8+80 = 106 characters and 7+8+25+400 = 440 lines -- the
+// totals above. np21w itself never drives a raster off these (dispsync
+// uses VBP only to offset the two planes against each other), so the
+// pulse positions matter only for the VID_* outputs and where the
+// frame-edge sampling lands inside the blank.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -26,13 +38,13 @@
 
 module pc98_video_timing #(
     parameter int H_ACTIVE = 640,
-    parameter int H_FRONT  = 40,
-    parameter int H_SYNC   = 64,
-    parameter int H_TOTAL  = 848,     // 106 characters
+    parameter int H_FRONT  = 80,      // HFP 10 chars
+    parameter int H_SYNC   = 64,      // HS   8 chars
+    parameter int H_TOTAL  = 848,     // HBP  8 chars (implied by total)
     parameter int V_ACTIVE = 400,
-    parameter int V_FRONT  = 12,
+    parameter int V_FRONT  = 7,
     parameter int V_SYNC   = 8,
-    parameter int V_TOTAL  = 440      // 24826 / 440 = 56.4 Hz
+    parameter int V_TOTAL  = 440      // VBP 25 implied; 24826/440 = 56.4 Hz
 ) (
     input  wire        clk,
     input  wire        ce,            // one dot per assertion

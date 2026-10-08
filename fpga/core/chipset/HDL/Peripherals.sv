@@ -891,6 +891,10 @@ module PERIPHERALS #(
     wire [4:0]  gdc_s_lrep;                  // slave CSRFORM LR (GRPH_LR)
     wire [9:0]  gdc_s_al;                    // slave SYNC AL field, raw
     wire [3:0]  gdc_s_pbyte;                 // per-partition LEN[14] pitch unit
+    // SYNC VBP fields, one per GDC -- np21w's dispsync_renewalvertical puts
+    // the larger-VBP plane that many rasterlines further down, so the two
+    // deltas are the plane vertical offsets (both zero for the BIOS tables).
+    wire [5:0]  gdc_m_vbp,   gdc_s_vbp;
     // The drawing-server plumbing: the two channels' handshakes and the
     // done-level synchronisers (the softcore writes the level; the rising
     // edge here retires the EXECUTE in the GDC).
@@ -935,7 +939,7 @@ module PERIPHERALS #(
         .cursor_en(gdc_m_cur_en), .cursor_blink_en(gdc_m_cur_bl),
         .cursor_top(gdc_m_cur_top), .cursor_bottom(gdc_m_cur_bot),
         .cursor_rate(gdc_m_cur_rate), .zoom_disp(gdc_m_zoom),
-        .line_rep(gdc_m_lrep), .vlines(),
+        .line_rep(gdc_m_lrep), .vlines(), .vbp(gdc_m_vbp),
         .draw_req(gdc_m_draw_req), .draw_op(gdc_m_draw_op),
         .draw_busy(gdc_m_draw_busy), .draw_timeout(gdc_m_draw_to),
         .srv_done_stb(gdc_m_done_stb),
@@ -956,7 +960,7 @@ module PERIPHERALS #(
         .cursor_en(gdc_s_cur_en), .cursor_blink_en(gdc_s_cur_bl),
         .cursor_top(gdc_s_cur_top), .cursor_bottom(gdc_s_cur_bot),
         .cursor_rate(gdc_s_cur_rate), .zoom_disp(gdc_s_zoom),
-        .line_rep(gdc_s_lrep), .vlines(gdc_s_al),
+        .line_rep(gdc_s_lrep), .vlines(gdc_s_al), .vbp(gdc_s_vbp),
         .draw_req(gdc_s_draw_req), .draw_op(gdc_s_draw_op),
         .draw_busy(gdc_s_draw_busy), .draw_timeout(gdc_s_draw_to),
         .srv_done_stb(gdc_s_done_stb),
@@ -1327,6 +1331,7 @@ module PERIPHERALS #(
     logic [7:0]  gdc_pitch_px;
     logic [15:0] gdc_sad_px [0:3];
     logic [5:0]  gdc_bend_px [0:2];
+    logic [5:0]  gdc_vbp_m_px, gdc_vbp_s_px;
     logic [15:0] gdc_cur_addr_px;
     logic [4:0]  gdc_cur_top_px, gdc_cur_bot_px;
     logic        gdc_wide_px;
@@ -1352,6 +1357,10 @@ module PERIPHERALS #(
             // renderer as {SAD,bend} quartets, not one start address).
             gdc_sad_px   <= gdc_m_sad;
             gdc_bend_px  <= gdc_m_bend;
+            // The SYNC VBP pair rides in with the rest: a mid-frame SYNC
+            // rewrite moves the planes from the next frame, not mid-line.
+            gdc_vbp_m_px <= gdc_m_vbp;
+            gdc_vbp_s_px <= gdc_s_vbp;
             gdc_cur_addr_px <= gdc_m_cur_addr;
             gdc_cur_top_px  <= gdc_m_cur_top;
             gdc_cur_bot_px  <= gdc_m_cur_bot;
@@ -1368,8 +1377,17 @@ module PERIPHERALS #(
         end
     end
 
+    // np21w dispsync_renewalvertical: the plane whose SYNC carries the
+    // larger VBP starts (own - other) rasterlines further down; the other
+    // plane's offset is zero. Both zero for every BIOS table, so the
+    // everyday picture is unchanged.
+    wire [5:0] gdc_tshift_px = (gdc_vbp_m_px > gdc_vbp_s_px)
+                            ? gdc_vbp_m_px - gdc_vbp_s_px : 6'd0;
+    wire [5:0] gdc_gshift_px = (gdc_vbp_s_px > gdc_vbp_m_px)
+                            ? gdc_vbp_s_px - gdc_vbp_m_px : 6'd0;
+
     pc98_text_render u_pc98_text (
-        .clk(clk_pc98_dot), .pix_ce(1'b1),
+        .clk(clk_pc98_dot), .pix_ce(1'b1), .vshift(gdc_tshift_px),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px),
         .gdc_sad(gdc_sad_px), .gdc_bend(gdc_bend_px),
         .wide(gdc_wide_px), .crtc_pl(crtc_pl_px),
@@ -1402,7 +1420,7 @@ module PERIPHERALS #(
         .mhz5(&gdc_clk),
         .dbl(gdc_s_dbl), .lrep(gdc_s_lrep),
         .part_sad(gdc_s_sad), .part_len(gdc_s_len),
-        .part_pbyte(gdc_s_pbyte),
+        .part_pbyte(gdc_s_pbyte), .vshift(gdc_gshift_px),
         .p_req(gv_rd_req), .p_addr(gv_rd_addr), .p_len(gv_rd_len),
         .p_ack(gv_rd_ack), .p_rvalid(gv_rd_valid), .p_rdata(gv_rd_data),
         .p_done(gv_rd_done),

@@ -48,7 +48,7 @@ module tb_cursor_cdc;
         .hblank(hblank), .vblank(vsync_in),
         .disp_on(disp_on), .pitch(pitch),
         .part_sad(part_sad), .part_len(part_len),
-        .part_pbyte(), .part_bend(part_bend), .line_rep(), .vlines(),
+        .part_pbyte(), .part_bend(part_bend), .line_rep(), .vlines(), .vbp(),
         .cursor_addr(cursor_addr), .cursor_dot(cursor_dot),
         .cursor_en(cursor_en), .cursor_blink_en(cursor_blink_en),
         .cursor_top(cursor_top), .cursor_bottom(cursor_bottom),
@@ -108,7 +108,7 @@ module tb_cursor_cdc;
 
     pc98_text_render #(.H_TOTAL(848), .V_TOTAL(440)) rnd (
         .clk(clk_dot), .pix_ce(1'b1),
-        .hcount(hcount), .vcount(vcount), .blink_on(blink_on),
+        .hcount(hcount), .vcount(vcount), .vshift(6'd0), .blink_on(blink_on),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px),
         .gdc_sad(gdc_sad_px), .gdc_bend(gdc_bend_px),
         .wide(1'b0),

@@ -128,7 +128,7 @@ module tb_pc98_textscroll;
 
     pc98_text_render #(.H_TOTAL(848), .V_TOTAL(440)) u_render (
         .clk(clk_dot), .pix_ce(1'b1),
-        .hcount(hcnt), .vcount(vcnt), .blink_on(1'b1),
+        .hcount(hcnt), .vcount(vcnt), .vshift(6'd0), .blink_on(1'b1),
         .gdc_on(gdc_on), .gdc_pitch(gdc_pitch),
         .gdc_sad(gdc_sad), .gdc_bend(gdc_bend),
         .wide(1'b0),

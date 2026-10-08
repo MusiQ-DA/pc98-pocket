@@ -21,6 +21,7 @@ module tb_pc98_gvram_display;
     logic [15:0] part_sad [0:3] = '{16'd0, 16'd0, 16'd0, 16'd0};
     logic [9:0]  part_len [0:3] = '{10'd400, 10'd0, 10'd0, 10'd0};
     logic [3:0]  part_pbyte = 4'h0;
+    logic [5:0]  vshift = 6'd0;
 
     logic        p_req, p_ack = 0, p_rvalid = 0, p_done = 0;
     logic [23:0] p_addr;
@@ -34,7 +35,7 @@ module tb_pc98_gvram_display;
         .disp_page(disp_page), .analog_mode(analog_m),
         .pitch(pitch), .mhz5(mhz5), .dbl(dbl), .lrep(lrep),
         .part_sad(part_sad), .part_len(part_len),
-        .part_pbyte(part_pbyte),
+        .part_pbyte(part_pbyte), .vshift(vshift),
         .p_req(p_req), .p_addr(p_addr), .p_len(p_len),
         .p_ack(p_ack), .p_rvalid(p_rvalid), .p_rdata(p_rdata), .p_done(p_done),
         .gfx_dot(gfx_dot), .dbg()
@@ -115,10 +116,13 @@ module tb_pc98_gvram_display;
     endfunction
 
     // expected dot for displayed line L, dot d: byte i=d/8, bit 7-(d%8).
+    // With vshift the raster carries VRAM line L-vshift, and the top vshift
+    // lines carry nothing at all (np21w zero-fills that surface band).
     function automatic logic [3:0] exp_dot(input int L, input int d, input int pg);
         int i, base;
         i = d / 8;
-        base = line_base(L);
+        if (L < int'(vshift)) return 4'd0;
+        base = line_base(L - int'(vshift));
         begin
             logic [3:0] dd;
             for (int pl = 0; pl < 4; pl++) begin
@@ -267,6 +271,13 @@ module tb_pc98_gvram_display;
         part_len[0] = 10'd400;
         settle(3);
         $display("N: lrep3   checked=%0d errors=%0d", checked, errors);
+
+        quiet = 1'b1;              // O: VBP delta -- slave VBP 20 lines over
+        lrep = 5'd0; dbl = 1'b0;   //    the master's (np21w grph_vbp): the
+        vshift = 6'd20;            //    plane drops 20 lines, blank above,
+        part_sad[0] = 16'h0000; part_len[0] = 10'd400;
+        settle(3);                 //    bottom 20 clipped
+        $display("O: vshift  checked=%0d errors=%0d", checked, errors);
 
         if (errors == 0 && checked > 200000)
             $display("PASS tb_pc98_gvram_display (%0d dots)", checked);

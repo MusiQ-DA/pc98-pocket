@@ -36,6 +36,7 @@ module tb_pc98_text;
     logic        cur_en = 1'b0, cur_blink = 1'b0;
     logic [4:0]  cur_top = 5'd0, cur_bot = 5'd0;
     logic        wide = 1'b0;          // mode1 bit 2: 40 columns
+    logic [5:0]  vshift = 6'd0;        // master-minus-slave VBP (np21w text_vbp)
 
     wire [11:0] tv_cell;
     logic [7:0] tv_attr;
@@ -46,7 +47,7 @@ module tb_pc98_text;
     wire        pixel;
 
     pc98_text_render dut (
-        .clk(clk), .pix_ce(pix_ce), .hcount(hcount), .vcount(vcount),
+        .clk(clk), .pix_ce(pix_ce), .hcount(hcount), .vcount(vcount), .vshift(vshift),
         .blink_on(blink_on),
         .gdc_on(gdc_on), .gdc_pitch(gdc_pitch),
         .gdc_sad(gdc_sad), .gdc_bend(gdc_bend),
@@ -273,6 +274,18 @@ module tb_pc98_text;
         wide = 1'b0;
         expect_pixel(8*10 + 0, 0, 1'b1, "narrow again: bit 7");
         expect_pixel(8*10 + 1, 0, 1'b0, "narrow again: bit 6");
+
+        // ---- VBP delta: the master VBP over the slave's shifts the text
+        // plane down (np21w dispsync's text_vbp). With vshift = 16, display
+        // line 16 carries text line 0 and the top sixteen lines are blank.
+        vshift = 6'd16;
+        expect_pixel(8*10 + 0, 15, 1'b0, "vshift: line 15 blank");
+        expect_pixel(8*10 + 0, 16, 1'b1, "vshift: line 16 is text line 0");
+        expect_pixel(8*10 + 2, 16, 1'b1, "vshift: bit 5 lands too");
+        // Row 1's first raster is text line 16, shown at display line 32.
+        expect_pixel(8*10 + 0, 32, 1'b1, "vshift: row 1 at display 32");
+        vshift = 6'd0;
+        expect_pixel(8*10 + 0, 0, 1'b1, "vshift back to 0");
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");
