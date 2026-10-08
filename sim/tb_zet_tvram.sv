@@ -145,6 +145,7 @@ module tb_zet_tvram;
         .address_enable_n  (chipset_aen),
         .pause_core        (1'b0),
         .biu_done          (biu_done),
+        .pf_disable        (1'b0),
         .dbg               ()
     );
 
@@ -223,6 +224,7 @@ module tb_zet_tvram;
         .dma_acknowledge_n            (dma_acknowledge_n),
         .address_enable_n             (chipset_aen),
         .terminal_count_n             (terminal_count_n),
+        .pf_disable        (1'b0),
         .dbg                          (arb_dbg),
         .dbg_dma                      (dbg_dma),
         .watch_addr                   (20'hFFFFF),

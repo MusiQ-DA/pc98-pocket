@@ -114,6 +114,7 @@ module tb_mem_perf;
         .address_enable_n  (1'b0),
         .pause_core        (1'b0),
         .biu_done          (biu_done),
+        .pf_disable        (1'b0),
         .dbg               ()
     );
 
@@ -285,6 +286,7 @@ module tb_mem_perf;
         .access_complete(access_complete_w),
         .access_own(access_own_w),
         .ram_address_select_n(ram_sel_n),
+        .pf_disable        (1'b0),
         .dbg(), .dbg2(), .dbg3(), .dbg4(), .dbg5(), .dbg6(), .dbg7(),
         .dbg_watch_addr(20'hFFFFF),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),

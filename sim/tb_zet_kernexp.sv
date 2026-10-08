@@ -252,6 +252,7 @@ module tb_zet_kernexp;
         .address_enable_n  (aen_r),
         .pause_core        (1'b0),
         .biu_done          (),
+        .pf_disable        (1'b0),
         .dbg               ()
     );
 

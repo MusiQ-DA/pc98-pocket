@@ -291,12 +291,14 @@ module core_top (
     // otherwise the OSD setting owns clk_select_next exactly as before.
     logic        jtag_spd_ovr = 1'b0;
     logic  [1:0] jtag_spd_sel = 2'b00;
+    logic        jtag_pf_dis  = 1'b0;
     logic [19:0] jtag_watch_addr = 20'hFFFFF;
     wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
                                               : cpu_speed_cfg;
 `else
     // The CPU speed is the OSD's alone.
     wire   [1:0] clk_select_next = cpu_speed_cfg;
+    wire         jtag_pf_dis  = 1'b0;
     wire  [19:0] jtag_watch_addr = 20'hFFFFF;
 `endif
 
@@ -2210,6 +2212,7 @@ module core_top (
         if (probe_wr_pulse && probe_waddr_c == 7'h09) begin
             jtag_spd_ovr  <= probe_wdata_c[2];
             jtag_spd_sel  <= probe_wdata_c[1:0];
+            jtag_pf_dis   <= probe_wdata_c[3];
         end
         // Slot 0x0a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
         // every memory write landing on it is logged (CPU or DMA alike).
@@ -3381,6 +3384,7 @@ module core_top (
         .address_enable_n  (chipset_aen),
         .pause_core        (pause_core),
         .biu_done          (biu_done),
+        .pf_disable        (jtag_pf_dis),
         .dbg               (bridge_dbg)
     );
 

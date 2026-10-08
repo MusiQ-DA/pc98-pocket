@@ -170,6 +170,7 @@ module tb_pc98_boot;
         .address_enable_n  (test_aen),
         .pause_core        (1'b0),
         .biu_done          (biu_done),
+        .pf_disable        (1'b0),
         .dbg               (zbridge_dbg)
     );
 
@@ -541,6 +542,7 @@ module tb_pc98_boot;
         .svc_req(1'b0), .svc_we(1'b0), .svc_raw(1'b0),
         .svc_addr(20'h0), .svc_wdata(8'h0),
         .svc_done(), .svc_rdata(),
+        .pf_disable        (1'b0),
         .dbg(dbg_gvram),
         .mem_addr(seq_mem_addr), .mem_wdata(seq_mem_wdata),
         .mem_word(seq_mem_word), .mem_pf_len(seq_mem_pf_len),

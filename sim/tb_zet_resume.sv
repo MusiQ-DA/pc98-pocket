@@ -141,6 +141,7 @@ module tb_zet_resume;
         .address_enable_n  (1'b0),
         .pause_core        (1'b0),
         .biu_done          (),
+        .pf_disable        (1'b0),
         .dbg               ()
     );
 

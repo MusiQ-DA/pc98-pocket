@@ -105,6 +105,10 @@ module zet_cpu_bridge (
     input  wire         processor_ready,
     input  wire         address_enable_n,
     input  wire         pause_core,
+    // Debug/kill switch: when high, no prefetch window is armed or filled --
+    // every guest read pays the bus directly. Lets JTAG A/B the prefetch
+    // engine against a suspect crash without a rebuild.
+    input  wire         pf_disable,
 
     output wire         biu_done,
     output wire  [15:0] dbg
@@ -636,7 +640,7 @@ module zet_cpu_bridge (
     wire [4:0]  pf_fill_len = fill_w ? pf_len1 : pf_len0;
 
     wire srv_pf  = (pf_need0 | pf_need1) && (pf_dead != 2'd3)
-                && !pause_core;
+                && !pause_core && !pf_disable;
 
     // Write-queue capture: the request is postable when it targets plain
     // SDRAM and a slot is free. The push itself is in the tracker block
@@ -850,7 +854,7 @@ module zet_cpu_bridge (
                          && ({1'b0, srv_beg[4:0]} >= {1'b0, insec_lo})
                          && ({1'b0, srv_beg[4:0]} <= insec_cnt);
     wire        fillm_go = arm_rd_ok && !pf_poisoned && (pf_dead != 2'd3)
-                        && !pause_core && !fillm_ovl
+                        && !pause_core && !pf_disable && !fillm_ovl
                         && (~|pf_live || insec || retn0 || retn1
                             || cont0 || cont1 || pf_miss1);
     wire        fillm_w  = (~|pf_live) ? 1'b0
@@ -1121,6 +1125,11 @@ module zet_cpu_bridge (
                     pf_ghost_v <= 2'b00;
                 end
             end
+
+            // Hard kill: last assignment wins, so any windows armed or
+            // rebased above stay dead while the switch is held -- a clean
+            // A/B of "prefetch on" vs "prefetch off" on one bitstream.
+            if (pf_disable) pf_live <= 2'b00;
         end
     end
 
