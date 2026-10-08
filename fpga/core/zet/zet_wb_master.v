@@ -92,10 +92,15 @@ module zet_wb_master (
   // fetch-stream read hitting the buffered window; word accesses only hit
   // when even-aligned
   wire fetch_rd = cpu_fetch & cpu_memop & ~cpu_m_io & ~cpu_we_o;
-  wire hit_cur  = fetch_rd & cur_v & (cpu_adr_o[19:1] == cur_addr)
-                & (cpu_byte_o | ~a0);
-  wire hit_nxt  = fetch_rd & nxt_v & (cpu_adr_o[19:1] == nxt_addr)
-                & (cpu_byte_o | ~a0);
+  // fetch_rd implies the core is not executing, so the fetch address on
+  // the bus is pc -- compare the fetch cursor register directly. Timing
+  // cpu_adr_o here dragged the whole exec-side EA chain (opcode decode ->
+  // ir -> regfile -> othop adders) into the compare, a leg no fetch read
+  // can ever drive (cpu_fetch == ~exec_st selects pc on cpu_adr_o).
+  wire hit_cur  = fetch_rd & cur_v & (pc[19:1] == cur_addr)
+                & (cpu_byte_o | ~pc[0]);
+  wire hit_nxt  = fetch_rd & nxt_v & (pc[19:1] == nxt_addr)
+                & (cpu_byte_o | ~pc[0]);
   wire hit      = (cs == IDLE) & op & (hit_cur | hit_nxt);
   wire [15:0] hitw = hit_cur ? cur_dat : nxt_dat;
 
