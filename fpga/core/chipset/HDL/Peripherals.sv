@@ -1863,7 +1863,7 @@ module PERIPHERALS #(
         .mem_rd(cgwin_mem_select & ~memory_read_n),
         .wr_addr(address[11:0]), .wr_data(internal_data_bus),
         .rd_addr(address[11:0]), .rd_data(cgwin_q),
-        .a9_data(cg_a9_data),
+        .a9_data(cg_a9_data), .ank8(pc98_ank8),
         .g_we(pc98_gaiji_a_we), .g_addr(pc98_gaiji_a_addr),
         .g_wdata(pc98_gaiji_a_wdata), .g_rdata(pc98_gaiji_a_rdata),
         .f_req(cg_f_req), .f_addr(cg_f_addr), .f_busy(cg_f_busy),

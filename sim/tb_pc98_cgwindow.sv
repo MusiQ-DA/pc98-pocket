@@ -37,12 +37,13 @@ module tb_pc98_cgwindow;
     wire  [19:0] f_addr;
     logic        f_busy = 0, f_valid = 0;
     logic  [7:0] f_data = 0;
+    logic        ank8 = 0;
 
     pc98_cgwindow dut (
         .clk(clk), .rst(rst),
         .io_wr(io_wr), .io_port(io_port), .io_data(io_data),
         .mem_wr(mem_wr), .mem_rd(mem_rd), .wr_addr(wr_addr), .wr_data(wr_data),
-        .rd_addr(rd_addr), .rd_data(rd_data), .a9_data(a9_data),
+        .rd_addr(rd_addr), .rd_data(rd_data), .a9_data(a9_data), .ank8(ank8),
         .g_we(g_we), .g_addr(g_addr), .g_wdata(g_wdata), .g_rdata(g_rdata),
         .f_req(f_req), .f_addr(f_addr), .f_busy(f_busy),
         .f_valid(f_valid), .f_data(f_data), .busy(busy)
@@ -168,11 +169,10 @@ module tb_pc98_cgwindow;
         $display("  ANK 'A' left %05h (want 00C10)", last_a);
         if (last_a !== 20'h00C10) begin $display("  FAIL ANK addr"); errors++; end
 
-        // The ITF's CG test, exactly as the ROM does it: set a code, write a
-        // pattern through the window at the ODD offsets (the right half), then
-        // read the same offsets back. The code write kicks off a refill, and
-        // the CPU reaches its first store before the burst lands, so this also
-        // proves the refill does not stamp over the guest's bytes.
+        // The window is NOT RAM for a ROM-glyph code: np21w memtram_wr8 lets
+        // a store land only on an odd offset of a gaiji code (the `writable`
+        // arm). Writes to this hiragana cell are discarded, so the reads must
+        // still answer the font's right half (0x3C50 fetched above).
         port(16'h00A1, 8'h22);
         port(16'h00A3, 8'h04);
         port(16'h00A5, 8'h00);
@@ -185,12 +185,12 @@ module tb_pc98_cgwindow;
         repeat (80) @(posedge clk);   // let any in-flight refill finish
         for (int k = 0; k < 16; k++) begin
             rd(2 * k + 1, got);
-            if (got !== (8'hA5 ^ 8'(k))) begin
-                $display("  FAIL guest write line %0d: %02h want %02h",
-                         k, got, 8'hA5 ^ 8'(k)); errors++;
+            if (got !== 8'h50 + 8'(k)) begin
+                $display("  FAIL ROM-code store line %0d: %02h want %02h",
+                         k, got, 8'h50 + 8'(k)); errors++;
             end
         end
-        $display("  guest writes survive their own refill");
+        $display("  writes to a ROM-glyph code are discarded, per np21w");
 
         // A code change after that hands the window back to the font store.
         port(16'h00A1, 8'h22);
@@ -204,6 +204,97 @@ module tb_pc98_cgwindow;
             errors++;
         end
         $display("  a code change refills the window again");
+
+        // ---- cgwindowset's folded ranges ----------------------------------
+        //
+        // np21w folds the a5 half-select into `high` for ku 0x0C-0x0F and
+        // 0x58-0x5F, and gates it behind the dummy region for 0x09-0x0B. The
+        // even offsets are the dummy region -- 0x00 -- for every code that
+        // is not a normal kanji cell. Model bytes are the fetch address's
+        // low eight plus the line, so left half reads read base+l and the
+        // right base+0x10+l.
+        //
+        // ku 0x09, ten 0x22 -> file 0x1800+8*0xC00+0x40 = 0x7840/0x7850.
+        port(16'h00A1, 8'h22);
+        port(16'h00A3, 8'h09);
+        repeat (4) @(posedge clk);
+        wait (busy == 1'b0);
+        repeat (40) @(posedge clk);
+        port(16'h00A5, 8'h20);           // bit5 set = left half selected
+        rd(0, got);
+        if (got !== 8'h00) begin
+            $display("  FAIL 09-0B even offset: %02h want 00", got); errors++;
+        end
+        rd(2 * 3 + 1, got);
+        if (got !== 8'h43) begin         // left half, line 3
+            $display("  FAIL 09-0B odd, left selected: %02h want 43", got);
+            errors++;
+        end
+        port(16'h00A5, 8'h00);           // bit5 clear = right half selected
+        rd(2 * 3 + 1, got);
+        if (got !== 8'h00) begin         // lr -> dummy
+            $display("  FAIL 09-0B odd, right selected: %02h want 00", got);
+            errors++;
+        end
+        $display("  ku 09-0B: even is dummy, odd is left or dummy");
+
+        // ku 0x0C, ten 0x22 -> file 0x1800+0xB*0xC00+0x40 = 0x9C40/0x9C50.
+        port(16'h00A1, 8'h22);
+        port(16'h00A3, 8'h0C);
+        repeat (4) @(posedge clk);
+        wait (busy == 1'b0);
+        repeat (40) @(posedge clk);
+        rd(0, got);
+        if (got !== 8'h00) begin
+            $display("  FAIL fold-range even offset: %02h want 00", got);
+            errors++;
+        end
+        port(16'h00A5, 8'h20);           // left selected
+        rd(2 * 5 + 1, got);
+        if (got !== 8'h45) begin         // left half, line 5
+            $display("  FAIL fold-range odd, left: %02h want 45", got);
+            errors++;
+        end
+        port(16'h00A5, 8'h00);           // right selected
+        rd(2 * 5 + 1, got);
+        if (got !== 8'h55) begin         // right half, line 5
+            $display("  FAIL fold-range odd, right: %02h want 55", got);
+            errors++;
+        end
+        $display("  ku 0C-0F: odd follows the a5 half-select");
+
+        // ku 0x58, ten 0x22 -> file 0x1800+0x57*0xC00+0x40 = 0x45C40/0x45C50.
+        port(16'h00A1, 8'h22);
+        port(16'h00A3, 8'h58);
+        repeat (4) @(posedge clk);
+        wait (busy == 1'b0);
+        repeat (40) @(posedge clk);
+        port(16'h00A5, 8'h00);           // right selected
+        rd(2 * 1 + 1, got);
+        if (got !== 8'h51) begin         // right half, line 1
+            $display("  FAIL ku58 odd, right: %02h want 51", got); errors++;
+        end
+        rd(2, got);
+        if (got !== 8'h00) begin
+            $display("  FAIL ku58 even: %02h want 00", got); errors++;
+        end
+        $display("  ku 58-5F folds the same way");
+
+        // ---- ANK in the window: even is dummy, odd is the glyph -----------
+        port(16'h00A1, 8'h00);
+        port(16'h00A3, 8'h41);
+        repeat (4) @(posedge clk);
+        wait (busy == 1'b0);
+        repeat (40) @(posedge clk);
+        rd(0, got);
+        if (got !== 8'h00) begin
+            $display("  FAIL ANK even: %02h want 00", got); errors++;
+        end
+        rd(2 * 4 + 1, got);
+        if (got !== 8'h14) begin         // 0x0C10 + 4
+            $display("  FAIL ANK odd: %02h want 14", got); errors++;
+        end
+        $display("  ANK in the window: even dummy, odd glyph");
 
         // ---- the ITF's KANJI CG RAM test, instruction for instruction ------
         //
