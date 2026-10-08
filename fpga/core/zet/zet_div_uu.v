@@ -124,11 +124,25 @@ module zet_div_uu(clk, ena, z, d, q, s, div0, ovf);
 	//
 	// variables
 	//
-	reg [d_width-1:0] q_pipe  [d_width-1:0];
-	reg [z_width:0] s_pipe  [d_width:0];
-	reg [z_width:0] d_pipe  [d_width:0];
+	// Iterative re-implementation of the original d_width-stage pipelined
+	// array: the pipe accepted new operands every clock but the microcode
+	// only ever launches one divide and waits a fixed div_cnt==18 window,
+	// so ~1.5k pipeline registers bought throughput that is never used.
+	// One gen_s/gen_q stage is reused per clock instead; a launch happens
+	// on any operand change (exactly what the comb stage-0 of the pipe
+	// observed), and the result registers land on the same cycle the pipe
+	// tail would have produced them, holding their value afterwards.
+	//
+	reg  [z_width:0]   s_r;    // running remainder   (s_pipe[n])
+	reg  [z_width:0]   d_r;    // shifted divisor     (d_pipe[n], constant)
+	reg  [d_width-1:0] q_r;    // quotient in flight  (q_pipe[n])
+	reg  [z_width-1:0] z_cap;  // operands this run was launched with
+	reg  [d_width-1:0] d_cap;
+	reg  [4:0]         cnt;    // completed stages, 1..d_width
+	reg                ovf_r, div0_r;
 
-	reg [d_width:0] div0_pipe, ovf_pipe;
+	wire [z_width:0] s_nxt = gen_s(s_r, d_r);
+
 	//
 	// perform parameter checks
 	//
@@ -140,67 +154,40 @@ module zet_div_uu(clk, ena, z, d, q, s, div0, ovf);
 	end
 	// synopsys translate_on
 
-	integer n0, n1, n2, n3;
-
-	// generate divisor (d) pipe
-	always @(d)
-	  d_pipe[0] <= {1'b0, d, {(z_width-d_width){1'b0}} };
-
 	always @(posedge clk)
 	  if(ena)
-	    for(n0=1; n0 <= d_width; n0=n0+1)
-	       d_pipe[n0] <= d_pipe[n0-1];
-
-	// generate internal remainder pipe
-	always @(z)
-	  s_pipe[0] <= z;
-
-	always @(posedge clk)
-	  if(ena)
-	    for(n1=1; n1 <= d_width; n1=n1+1)
-	       s_pipe[n1] <= gen_s(s_pipe[n1-1], d_pipe[n1-1]);
-
-	// generate quotient pipe
-	always @(posedge clk)
-	  q_pipe[0] <= 0;
-
-	always @(posedge clk)
-	  if(ena)
-	    for(n2=1; n2 < d_width; n2=n2+1)
-	       q_pipe[n2] <= gen_q(q_pipe[n2-1], s_pipe[n2]);
-
-
-	// flags (divide_by_zero, overflow)
-	always @(z or d)
-	begin
-	  ovf_pipe[0]  <= !(z[z_width-1:d_width] < d);
-	  div0_pipe[0] <= ~|d;
-	end
-
-	always @(posedge clk)
-	  if(ena)
-	    for(n3=1; n3 <= d_width; n3=n3+1)
 	    begin
-	        ovf_pipe[n3] <= ovf_pipe[n3-1];
-	        div0_pipe[n3] <= div0_pipe[n3-1];
+	      // operand change -> launch (the pipe's comb stage-0 equivalent)
+	      if(z !== z_cap || d !== d_cap)
+	        begin
+	          s_r   <= gen_s({1'b0, z}, {1'b0, d, {(z_width-d_width){1'b0}}});
+	          d_r   <= {1'b0, d, {(z_width-d_width){1'b0}}};
+	          q_r   <= {d_width{1'b0}};
+	          z_cap <= z;
+	          d_cap <= d;
+	          cnt   <= 5'd1;
+	          ovf_r <= !(z[z_width-1:d_width] < d);
+	          div0_r <= ~|d;
+	        end
+	      else if(cnt >= 5'd1 && cnt < d_width[4:0])
+	        begin
+	          // q_pipe[n] <= gen_q(q_pipe[n-1], s_pipe[n]): the quotient
+	          // bit comes from the CURRENT stage, not the next one.
+	          q_r <= gen_q(q_r, s_r);
+	          s_r <= s_nxt;
+	          cnt <= cnt + 5'd1;
+	        end
+	      else if(cnt == d_width[4:0])
+	        begin
+	          // tail taps: q <= gen_q(q_pipe[d-1], s_pipe[d]),
+	          //            s <= assign_s(s_pipe[d], d_pipe[d])
+	          q    <= gen_q(q_r, s_r);
+	          s    <= assign_s(s_r, d_r);
+	          ovf  <= ovf_r;
+	          div0 <= div0_r;
+	          cnt  <= 5'd0;
+	        end
 	    end
-
-	// assign outputs
-	always @(posedge clk)
-	  if(ena)
-	    ovf <= ovf_pipe[d_width];
-
-	always @(posedge clk)
-	  if(ena)
-	    div0 <= div0_pipe[d_width];
-
-	always @(posedge clk)
-	  if(ena)
-	    q <= gen_q(q_pipe[d_width-1], s_pipe[d_width]);
-
-	always @(posedge clk)
-	  if(ena)
-	    s <= assign_s(s_pipe[d_width], d_pipe[d_width]);
 endmodule
 
 

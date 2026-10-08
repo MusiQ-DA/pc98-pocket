@@ -787,8 +787,16 @@ module tb_mem_perf;
     int pfdbg = 0;
     always_ff @(posedge clk) if (pfdbg < 300) begin
         if (u_bridge.hit_serve) begin
-            $display("PFHIT t=%0t ad=%05x w=%0d",
-                     $time, u_bridge.srv_addr, u_bridge.pf_hw);
+            // flat store is byte-indexed: one guest byte per word's low half
+            automatic logic [15:0] w0  = sdr.u_part.peek(u_bridge.srv_addr);
+            automatic logic [15:0] w1  = sdr.u_part.peek(u_bridge.srv_addr + 20'd1);
+            automatic logic [7:0]  eb  = w0[7:0];
+            automatic logic [7:0]  eb2 = w1[7:0];
+            automatic logic [15:0] got = u_bridge.pf_hit_word;
+            automatic logic [15:0] exp = u_bridge.srv_ube ? {eb, eb} : {eb2, eb};
+            $display("PFHIT t=%0t ad=%05x w=%0d got=%04x exp=%04x %s",
+                     $time, u_bridge.srv_addr, u_bridge.pf_hw, got, exp,
+                     (got == exp) ? "OK" : "*** PF-DATA-MISMATCH ***");
             pfdbg++;
         end
         if (u_bridge.arm_fill) begin

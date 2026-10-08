@@ -468,7 +468,13 @@ module zet_cpu_bridge (
     // status polls) keep their own prefetchers instead of evicting each
     // other on every alternation. A byte lives at pf_buf[{win,addr[4:0]}]
     // outright because each base is 32-byte aligned.
-    reg  [7:0]  pf_buf [0:2*PF_N-1];
+    // MLAB storage: 512 FFs plus the two 64:1 hit muxes was ~50 LABs of
+    // dead weight; a distributed MLAB serves the same async reads in one
+    // LAB per replicated read port and keeps hit timing identical.
+    // no_rw_check is safe: a fill only ever writes the frontier slot
+    // (pf_cnt) while a hit only ever reads BEHIND it (off+span <= cnt),
+    // so a read never collides with the same-byte write.
+    (* ramstyle = "MLAB, no_rw_check" *) reg  [7:0]  pf_buf [0:2*PF_N-1];
     reg  [5:0]  pf_cnt0, pf_cnt1;   // valid bytes per window, 0..32
     reg  [19:0] pf_base0, pf_base1;
     reg  [1:0]  pf_live;
@@ -511,7 +517,7 @@ module zet_cpu_bridge (
     // master splits odd word writes into two sel'd byte requests, so no
     // drain ever needs a second byte phase.
     // ------------------------------------------------------------------
-    localparam int WQ_N = 4;
+    localparam int WQ_N = 2;
     reg  [19:0] wrq_addr [0:WQ_N-1];
     reg  [15:0] wrq_data [0:WQ_N-1];
     reg         wrq_ube  [0:WQ_N-1];
@@ -529,10 +535,18 @@ module zet_cpu_bridge (
     wire [20:0] pf_off1 = srv_beg - {1'b0, pf_base1};
 
     // A read is served when its whole span is fetched, in either window.
-    wire pf_hit0 = pf_live[0] && !pf_off0[20]
-                 && ((pf_off0 + {16'b0, srv_span}) <= {15'b0, pf_cnt0});
-    wire pf_hit1 = pf_live[1] && !pf_off1[20]
-                 && ((pf_off1 + {16'b0, srv_span}) <= {15'b0, pf_cnt1});
+    // The base's low five bits are always zero (32B-aligned sectors), so
+    // "inside the window" is a sector compare plus an in-sector span
+    // check -- the full 21-bit subtract is only needed for the near/back
+    // miss bookkeeping below, not for the hit itself.
+    wire        inwin0 = pf_live[0] && (srv_beg[19:5] == pf_base0[19:5]);
+    wire        inwin1 = pf_live[1] && (srv_beg[19:5] == pf_base1[19:5]);
+    wire pf_hit0 = inwin0
+                 && (({16'b0, srv_beg[4:0]} + {16'b0, srv_span})
+                     <= {15'b0, pf_cnt0});
+    wire pf_hit1 = inwin1
+                 && (({16'b0, srv_beg[4:0]} + {16'b0, srv_span})
+                     <= {15'b0, pf_cnt1});
     wire pf_hit  = srv_req && (srv_bs == BS_MEMR) && (pf_hit0 | pf_hit1);
     wire pf_hw   = pf_hit1;         // which window the hit is in
     // Hits need no bus cycle, so they may also complete while a request
@@ -541,7 +555,7 @@ module zet_cpu_bridge (
     // span, where the window's bytes predate the pending store.
     wire hit_serve = pf_hit && bus_ours && (bstate == B_IDLE) && !wrq_ovl;
 
-    wire [4:0]  pf_idx0 = pf_hw ? pf_off1[4:0] : pf_off0[4:0];
+    wire [4:0]  pf_idx0 = srv_beg[4:0];
     wire [7:0]  pf_b0   = pf_buf[{pf_hw, pf_idx0}];
     wire [7:0]  pf_b1   = pf_buf[{pf_hw, pf_idx0 + 5'd1}];
     wire [15:0] pf_hit_word = srv_ube ? {pf_b0, pf_b0} : {pf_b1, pf_b0};
@@ -557,18 +571,15 @@ module zet_cpu_bridge (
              && (a[19:15] == blk);
     endfunction
 
-    // Consecutive legal bytes a fill could append starting at `n`
-    // (n's own 32K block bounds the run).
+    // Fill legality is uniform across a whole 32-byte sector: every term
+    // in pc98_sdram_hits / pc98_gvram_hits (and the 32K-block fence) looks
+    // at a[19:15] or coarser, and a 32B-aligned sector can never straddle
+    // a boundary that wide. The old 16-deep consecutive-legal-bytes walk
+    // therefore collapses to one check at the fill frontier -- the run is
+    // either all sixteen candidate bytes or none. The length caps below
+    // (room, column) keep the actual burst inside the window anyway.
     function automatic logic [4:0] pf_run_f(input logic [20:0] n);
-        logic [4:0]  r;
-        logic [19:0] a;
-        r = 5'd0;
-        for (int k = 0; k < 16; k++) begin
-            a = n[19:0] + k[19:0];
-            if ((r == k[4:0]) && pf_ok(a, n[19:15]))
-                r = r + 5'd1;
-        end
-        return r;
+        return pf_ok(n[19:0], n[19:15]) ? 5'd16 : 5'd0;
     endfunction
 
     wire [20:0] pf_next0 = pf_end0;         // each window's fill frontier
@@ -611,22 +622,23 @@ module zet_cpu_bridge (
     wire srv_memw_plain = (srv_bs == BS_MEMW)
                        && pc98_sdram_hits(srv_addr, analog_mode)
                        && !pc98_gvram_hits(srv_addr, analog_mode);
-    wire wrq_push = srv_req && srv_memw_plain && (wrq_cnt < 3'd4);
+    wire wrq_push = srv_req && srv_memw_plain && (wrq_cnt < WQ_N[2:0]);
 
     // Pending-write overlap vs the pending read's span. Entry span is
     // one byte for ube, two for a word; only live entries count.
-    wire [20:0] wrq_end0 = {1'b0, wrq_addr[0]} + (wrq_ube[0] ? 21'd1 : 21'd2);
-    wire [20:0] wrq_end1 = {1'b0, wrq_addr[1]} + (wrq_ube[1] ? 21'd1 : 21'd2);
-    wire [20:0] wrq_end2 = {1'b0, wrq_addr[2]} + (wrq_ube[2] ? 21'd1 : 21'd2);
-    wire [20:0] wrq_end3 = {1'b0, wrq_addr[3]} + (wrq_ube[3] ? 21'd1 : 21'd2);
-    wire wrq_ovl = ((wrq_cnt > 3'd0) && (srv_beg < wrq_end0)
-                                  && (srv_end_a > {1'b0, wrq_addr[0]}))
-                || ((wrq_cnt > 3'd1) && (srv_beg < wrq_end1)
-                                  && (srv_end_a > {1'b0, wrq_addr[1]}))
-                || ((wrq_cnt > 3'd2) && (srv_beg < wrq_end2)
-                                  && (srv_end_a > {1'b0, wrq_addr[2]}))
-                || ((wrq_cnt > 3'd3) && (srv_beg < wrq_end3)
-                                  && (srv_end_a > {1'b0, wrq_addr[3]}));
+    wire [20:0] wrq_end [0:WQ_N-1];
+    wire [WQ_N-1:0] wrq_hit;
+    genvar g;
+    generate
+    for (g = 0; g < WQ_N; g = g + 1) begin : g_wr_ovl
+        assign wrq_end[g] = {1'b0, wrq_addr[g]}
+                          + (wrq_ube[g] ? 21'd1 : 21'd2);
+        assign wrq_hit[g] = (wrq_cnt > g)
+                         && (srv_beg   <  wrq_end[g])
+                         && (srv_end_a > {1'b0, wrq_addr[g]});
+    end
+    endgenerate
+    wire wrq_ovl = |wrq_hit;
 
     // What a pending request may NOT do while the queue holds data:
     // reads that overlap pending bytes wait for them to reach RAM;
@@ -673,7 +685,7 @@ module zet_cpu_bridge (
 
     // Engine arms, for the prefetch block's bookkeeping.
     wire arm_req   = (bstate == B_IDLE) && srv_any && bus_ours && !hit_serve
-                  && !srv_blk && (wrq_cnt != 3'd4) && sh_mcp;
+                  && !srv_blk && (wrq_cnt != WQ_N[2:0]) && sh_mcp;
     // The drain wins only when the engine is otherwise idle -- or when a
     // full queue is the thing standing between the guest and its arm.
     wire arm_drain = (bstate == B_IDLE) && bus_ours && (wrq_cnt != 3'd0)
