@@ -501,6 +501,19 @@ module tb_mem_perf;
         emit(8'hF3); emit(8'hAA);           // REP STOSB
         marker(8'h87);
 
+        // ---- phase 8: CALL/RET loop x500 -- push->pop store-load pattern ----
+        // Real-hardware bench_ni NEARCALL regressed +36% when the posted
+        // write queue was introduced: the CALL's push is queued, the RET's
+        // pop reads the same address and stalls on wrq_ovl until the drain
+        // retires. This phase reproduces that shape in sim.
+        marker(8'h08);
+        emit(8'hB9); emitw(16'h01F4);       // MOV CX,500          @+0
+        emit(8'hE8); emitw(16'h0004);       // CALL +4 -> near_sub  @+3
+        emit(8'hE2); emit(8'hFB);           // LOOP -5 -> CALL      @+6
+        emit(8'hEB); emit(8'h01);           // JMP +1 -> done       @+8
+        emit(8'hC3);                        // near_sub: RET        @+10
+        marker(8'h88);
+
         // done: spin
         marker(8'hFF);
         emit(8'hEB); emit(8'hFE);           // JMP $
@@ -650,6 +663,7 @@ module tb_mem_perf;
         phase_name[8'h05] = "REP STOSB 2048B GRCG RMW";
         phase_name[8'h06] = "REP STOSB  512B EGC";
         phase_name[8'h07] = "REP STOSB 2048B window plain";
+        phase_name[8'h08] = "CALL/RET x500 stack";
         phase_name[8'hFF] = "done";
     end
     int phase_bytes [0:255];
@@ -661,6 +675,7 @@ module tb_mem_perf;
         phase_bytes[8'h05] = 2048;
         phase_bytes[8'h06] = 512;
         phase_bytes[8'h07] = 2048;
+        phase_bytes[8'h08] = 500;
     end
 
     // snapshot record

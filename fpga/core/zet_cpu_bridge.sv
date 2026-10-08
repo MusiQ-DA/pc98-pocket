@@ -269,6 +269,12 @@ module zet_cpu_bridge (
                 req_busy     <= 1'b0;
                 wb_ack_i     <= 1'b1;
             end
+            // A forwarded read completes the same way; rd_word takes the
+            // queue's bytes in the engine block.
+            if (fwd_serve) begin
+                req_busy     <= 1'b0;
+                wb_ack_i     <= 1'b1;
+            end
             // A posted write completes at capture: the operands queue
             // and the bus pair drains them behind the guest's back.
             if (wrq_push) begin
@@ -640,6 +646,38 @@ module zet_cpu_bridge (
     endgenerate
     wire wrq_ovl = |wrq_hit;
 
+    // Store->load forwarding: a queued byte is still "newer than RAM"
+    // until its drain lands, but the bridge is already holding the data.
+    // A read whose whole span sits inside live entries takes the newest
+    // covering byte straight from the queue -- no bus cycle, no drain
+    // wait. This is the CALL/RET stack pattern: the RET's pop reads the
+    // address the CALL just pushed, and without forwarding it stalls on
+    // wrq_ovl for the whole drain (real-hw bench_ni NEARCALL +36%). The
+    // FIFO is age-ordered (index 0 oldest), so the higher index wins.
+    // Partial coverage still falls through to the drain wait -- the
+    // uncovered byte has to come from RAM behind the queued writes.
+    wire [20:0] fwd_a0 = srv_beg;
+    wire [20:0] fwd_a1 = srv_beg + 21'd1;
+    wire [WQ_N-1:0] fwd_cov0, fwd_cov1;
+    for (g = 0; g < WQ_N; g = g + 1) begin : g_fwd
+        assign fwd_cov0[g] = (wrq_cnt > g[2:0])
+                         && (fwd_a0 >= {1'b0, wrq_addr[g]})
+                         && (fwd_a0 <  wrq_end[g]);
+        assign fwd_cov1[g] = (wrq_cnt > g[2:0])
+                         && (fwd_a1 >= {1'b0, wrq_addr[g]})
+                         && (fwd_a1 <  wrq_end[g]);
+    end
+    wire       fwd_cov = (|fwd_cov0) && (srv_ube || (|fwd_cov1));
+    wire [7:0] fwd_b0  = fwd_cov0[1]
+                       ? (fwd_a0[0] ? wrq_data[1][15:8] : wrq_data[1][7:0])
+                       : (fwd_a0[0] ? wrq_data[0][15:8] : wrq_data[0][7:0]);
+    wire [7:0] fwd_b1  = fwd_cov1[1]
+                       ? (fwd_a1[0] ? wrq_data[1][15:8] : wrq_data[1][7:0])
+                       : (fwd_a1[0] ? wrq_data[0][15:8] : wrq_data[0][7:0]);
+    wire [15:0] fwd_word = srv_ube ? {fwd_b0, fwd_b0} : {fwd_b1, fwd_b0};
+    wire fwd_serve = srv_req && (srv_bs == BS_MEMR) && wrq_ovl && fwd_cov
+                  && bus_ours && (bstate == B_IDLE);
+
     // What a pending request may NOT do while the queue holds data:
     // reads that overlap pending bytes wait for them to reach RAM;
     // plain-SDRAM writes never arm at all -- they push, or wait for a
@@ -748,6 +786,19 @@ module zet_cpu_bridge (
 
     assign pf_req_len = (cur_pf && (bstate == B_CMD)) ? cur_pf_len : 5'd0;
 
+    // Anti-thrash poison: a window killed by an overlapping guest write
+    // was almost certainly covering a data stream, not a code one --
+    // the classic case is the CALL/RET stack loop, where the push kills
+    // the stack window on every iteration and the pop refills it, so a
+    // 16-beat fill burns bus time per iteration and is never consumed.
+    // Remember the killed sector for a while; a miss inside it rides
+    // the bus without claiming or rebasing, until enough armed reads
+    // have passed to call the stream quiet again. (Real-hw bench_ni
+    // NEARCALL regressed +36% on exactly this pattern.)
+    reg  [14:0] pf_pois;        // poisoned sector tag, a[19:5]
+    reg  [7:0]  pf_pcnt;        // armed reads left while it stays hot
+    wire pf_poisoned = (pf_pcnt != 8'd0) && (srv_beg[19:5] == pf_pois);
+
     // Prefetch state -- one writer for every pf register.
     always @(posedge clk) begin
         if (reset) begin
@@ -762,6 +813,8 @@ module zet_cpu_bridge (
             fill_beats <= 5'd0;
             pf_dead    <= 2'd0;
             pf_miss1   <= 1'b0;
+            pf_pois    <= 15'h0;
+            pf_pcnt    <= 8'd0;
         end else begin
             // A prefetch fill under way: beats append in address order
             // into ITS window, only while the fill still owns the
@@ -783,8 +836,16 @@ module zet_cpu_bridge (
             // ride the bus; near misses rebase their own window's
             // stream; a second foreign miss claims the victim window.
             // Both windows dead simply seeds window 0.
+            if (arm_rd_ok && (pf_pcnt != 8'd0))
+                pf_pcnt <= pf_pcnt - 8'd1;
+
             if (arm_rd_ok) begin
-                if (~|pf_live) begin
+                if (pf_poisoned)
+                    // Poisoned sector: serve the miss off the bus and
+                    // break the claim streak -- whatever stream lives
+                    // here is write-mixed and a window would just die.
+                    pf_miss1  <= 1'b0;
+                else if (~|pf_live) begin
                     pf_base0  <= {srv_beg[19:5], 5'b0};
                     pf_cnt0   <= 6'd0;
                     pf_live[0]<= 1'b1;
@@ -846,14 +907,19 @@ module zet_cpu_bridge (
                 pf_cnt1 <= 6'd0;
                 pf_live <= 2'b00;
                 fill_ok <= 1'b0;
+                pf_pcnt <= 8'd0;            // map changes lift the ban
             end else if (arm_wr || wrq_push) begin
                 if (wr_ovl0) begin
                     pf_cnt0    <= 6'd0;
                     pf_live[0] <= 1'b0;
+                    pf_pois    <= pf_base0[19:5];
+                    pf_pcnt    <= 8'd255;
                 end
                 if (wr_ovl1) begin
                     pf_cnt1    <= 6'd0;
                     pf_live[1] <= 1'b0;
+                    pf_pois    <= pf_base1[19:5];
+                    pf_pcnt    <= 8'd255;
                 end
                 if (cur_pf_w ? wr_ovl1 : wr_ovl0)
                     fill_ok <= 1'b0;
@@ -930,6 +996,7 @@ module zet_cpu_bridge (
         if (pair_done && req_busy && !cur_pf && !cur_dq && (cur_bs == BS_MEMR || cur_bs == BS_CODE))
             $display("  %8t  RDRET   a=%05x lo=%02x hi=%02x idx=%0d db=%02x rdy_dip=%b saw=%b", $time, cur_addr, rd_lo, rd_hi, byte_idx, db_seen, rdy_seen, saw_low);
         if (hit_serve) $display("  %8t  PFHIT    a=%05x w=%04x", $time, srv_addr, pf_hit_word);
+        if (fwd_serve) $display("  %8t  FWDSRV   a=%05x w=%04x", $time, srv_addr, fwd_word);
         if (arm_fill)  $display("  %8t  PFFILL   a=%05x len=%0d w=%0d", $time, pf_next[19:0], pf_fill_len, fill_w);
     end
 `endif
@@ -971,6 +1038,10 @@ module zet_cpu_bridge (
             // ack on the same edge.
             if (hit_serve) begin
                 rd_word    <= pf_hit_word;
+                biu_done_r <= 1'b1;
+            end
+            if (fwd_serve) begin
+                rd_word    <= fwd_word;
                 biu_done_r <= 1'b1;
             end
             case (bstate)
