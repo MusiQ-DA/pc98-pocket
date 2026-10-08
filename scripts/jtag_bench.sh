@@ -30,7 +30,7 @@ echo "== waiting for '$MARK' (timeout ${LIMIT}s) =="
 t0=$SECONDS
 while (( SECONDS - t0 < LIMIT )); do
     scr=$(openocd -f scripts/jtag_probe.cfg -f scripts/jtag_screen.tcl 2>/dev/null \
-          | sed -n '/---- screen ----/,/---- attributes/p')
+          | sed -n '/---- text plane ----/,/---- attributes/p')
     if grep -qF "$MARK" <<<"$scr"; then
         echo "== marker after $((SECONDS - t0))s =="
         grep -v "^$" <<<"$scr" | sed 's/ *|$//'
