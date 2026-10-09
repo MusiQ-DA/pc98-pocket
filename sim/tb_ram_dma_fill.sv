@@ -470,6 +470,32 @@ module tb_ram_dma_fill;
         end
     end
 
+    // ---- stray-write watch ---------------------------------------------------
+    // Every write strobe while the fill runs should be a DMA byte aimed at the
+    // fill buffer. A strobe active while the bus is NOT DMA-owned (aen has
+    // dropped but the 71071's memwr is still asserted) lands on bench_addr --
+    // a stray write to wherever the CPU last pointed. Log any write strobe
+    // whose bus_addr is outside the fill buffer, and any DMAC strobe that
+    // outlives dma_active.
+    int stray_writes = 0;
+    int dmac_late = 0;
+    always_ff @(posedge clk) begin
+        if (!reset && want_drq && ~ab_mem_wr_n
+            && (bus_addr < FILL_BASE || bus_addr >= FILL_BASE + FILL_LEN)) begin
+            stray_writes <= stray_writes + 1;
+            if (stray_writes < 20)
+                $display("  STRAYWR ba=%06x d=%02x dma_act=%b aen=%b dwait=%b dmw=%b dack=%b t=%0t",
+                         bus_addr, internal_data_bus, dma_active, aen_n,
+                         dma_wait, dmac_memwr_n, dack_n, $time);
+        end
+        if (!reset && ~dmac_memwr_n && !dma_active) begin
+            dmac_late <= dmac_late + 1;
+            if (dmac_late < 20)
+                $display("  DMAC-LATE mw low, not dma_active: ba=%06x aen=%b dwait=%b dack=%b",
+                         bus_addr, aen_n, dma_wait, dack_n);
+        end
+    end
+
     int errors = 0;
     task automatic check(input bit cond, input string name);
         if (!cond) begin
@@ -579,7 +605,10 @@ module tb_ram_dma_fill;
         $display("  coverage: al=%0d nw1=%0d nw2=%0d inf=%0d p1=%0d p2=%0d | parks1=%0d parks2=%0d accepts=%0d",
                  cov_al, cov_nw1, cov_nw2, cov_inf, cov_p1, cov_p2,
                  parks1, parks2, wr_accept);
+        $display("  stray_writes=%0d dmac_late_strobe=%0d (writes outside fill buffer)",
+                 stray_writes, dmac_late);
         check(miss == 0, "every filled byte landed in SDRAM");
+        check(stray_writes == 0, "no write landed outside the fill buffer");
 
         if (errors == 0)
             $display("=== PASS tb_ram_dma_fill ===");
