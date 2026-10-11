@@ -47,6 +47,13 @@ echo ">> generating SVF from $SOF"
   quartus_cpf -c -q 6MHz -g 3.3 -n v "$0" "$1"
 ' "$SOF" "$SVF"
 
+# The SVF carries a "FREQUENCY 6MHz" command openocd's usb-blaster driver
+# cannot translate ("Translation from khz to adapter speed not
+# implemented") -- nonfatal, the run continues at the probe's speed, but
+# the bare "Error:" reads like a failed program. Strip it; the cfg already
+# asks for 6 MHz.
+grep -v '^FREQUENCY' "$SVF" > "$SVF.nofreq" && mv "$SVF.nofreq" "$SVF"
+
 echo ">> programming over JTAG (core must be running)"
 openocd -f scripts/jtag_probe.cfg -c "
   init
