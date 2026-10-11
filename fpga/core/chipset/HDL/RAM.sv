@@ -357,6 +357,8 @@ module RAM (
     logic           idle;
     logic           refresh_mode;
     logic   [15:0]  pf_beat_w;
+    logic           shim_rvalid;
+    logic           pf_tag;
     assign  pf_beat_dat = pf_beat_w[7:0];
 
     // sdram_shim wraps sdram_mp, the multi-port controller: port A is this
@@ -372,7 +374,7 @@ module RAM (
         .data_out           (access_data_out),
         .data_in_hi         (access_data_in_hi),
         .data_out_hi        (access_data_out_hi),
-        .a_rvalid           (pf_beat_v),
+        .a_rvalid           (shim_rvalid),
         .a_beat             (pf_beat_w),
         .write_request      (write_request),
         .read_request       (read_request),
@@ -422,6 +424,30 @@ module RAM (
         .e_rdata            (ramimg_rdata),
         .e_done             (ramimg_done)
     );
+
+    // pf_beat_v may only mark words of a burst issued as a prefetch fill:
+    // every port-A read return looks alike on a_rvalid, and foreign bytes
+    // that reach the window land at pf_cnt -- served to the next hit as
+    // guest code or data. Two gates on the wire keep the window honest:
+    //   pf_tag -- the request's own prefetch qualifier, latched on the
+    //     clock the shim takes it (read_flag|write_flag is the shim's
+    //     busy). A sequencer or service leg's return fails this gate.
+    //   state == RAM_READ_2 -- the beat's transaction must still be the
+    //     one this FSM is streaming. A fill pair that ends early -- a
+    //     grant dropping the strobe mid-burst, a foreign ready ending
+    //     the command phase -- abandons its burst here (READ_2 exits to
+    //     WAIT on ~read_command) while the shim keeps draining it; the
+    //     next fill's command phase would append those leftover beats,
+    //     shifted, into ITS window. Port A is serial: a dead burst's
+    //     leftovers can only land before the next request is taken, so
+    //     they never see a READ_2 that isn't their own.
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset)
+            pf_tag <= 1'b0;
+        else if (read_request & ~read_flag & ~write_flag)
+            pf_tag <= (prefetch_len != 5'd0);
+    end
+    assign pf_beat_v = shim_rvalid & pf_tag & (state == RAM_READ_2);
 
 
     //

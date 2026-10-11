@@ -114,7 +114,7 @@ module tb_pc98_egc_golden;
         .mem_done(mem_done), .mem_own(1'b1), .mem_ready(mem_ready),
         // This model treats a presented write as held -- no park queue --
         // so the drain witness is "the strobe is on the pins".
-        .mem_wr_taken(mem_wr), .cpu_wr_taken()
+        .mem_wr_taken(mem_wr), .cpu_wr_taken(), .cpu_rd_own()
     );
 
     task automatic egc_set(input [3:0] rg, input [7:0] v);

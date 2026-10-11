@@ -112,6 +112,18 @@ module zet_cpu_bridge (
     // read, a DMA write), so the drain waits on it alone -- with
     // word_access and both data lanes still on the pins until then.
     input  wire         sdram_wr_taken,
+    // Read-side completion witness, the mirror of sdram_wr_taken: the
+    // sequencer's cpu_ready -- a level that can only rise for the guest's
+    // OWN access (a plain read completes strobe-matched inside RAM; an
+    // expanded walk answers at S_DONE; svc legs are masked off it).
+    // processor_ready is a 2-FF pipeline that still carries residue --
+    // a completing leg, a DMA drain at AEN release -- and the faithful
+    // t_cnt>=3 accept then captures whatever byte data_bus last held
+    // (a stack pop coming back 16'hADAD is how the +GRANT+svc wedge
+    // escaped to fadad). rd_own_seen latches the witness inside the
+    // byte's command phase so the ready pipeline only paces, never
+    // invents.
+    input  wire         sdram_rd_ready,
     input  wire         pause_core,
     // Debug/kill switch: when high, no prefetch window is armed or filled --
     // every guest read pays the bus directly. Lets JTAG A/B the prefetch
@@ -317,6 +329,7 @@ module zet_cpu_bridge (
     reg  [2:0] t_cnt;         // posedge-CE edges since this byte went up
     reg        saw_low;       // processor_ready fell on OUR bus during this byte
     reg        ready_d1;      // processor_ready, one clk back: edge detect
+    reg        rd_own_seen;   // this byte's own completion reached the seq
     reg  [1:0] gap_cnt;
     reg  [7:0] rd_lo;
     reg  [7:0] rd_hi;
@@ -464,11 +477,21 @@ module zet_cpu_bridge (
     // exists on the ready rise, and the saw_low-qualified fast path plus
     // the faithful-count fallback is their pacing contract.
     wire cur_memw = (cur_bs == BS_MEMW) & ~cur_inta;
+    wire cur_memrd = ((cur_bs == BS_MEMR) || (cur_bs == BS_CODE))
+                   & ~cur_inta;
+    // Memory and code reads also need rd_own_seen -- this byte's own
+    // completion reached the sequencer (sdram_rd_ready latched inside
+    // B_CMD, cleared in B_IDLE). Without it the faithful t_cnt>=3 arm
+    // plus a stale processor_ready high -- leg residue, a DMA drain at
+    // AEN release -- accepts a read that never ran and captures whatever
+    // byte data_bus last held. I/O reads and INTA keep the bare
+    // ready/timing contract: they have no SDRAM witness to wait on.
     wire pair_accept = cur_memw
                      ? sdram_wr_taken
-                     : ((t_cnt >= 3'd3
-                         || (fast_pair && (t_cnt >= 3'd2) && saw_low))
-                        && processor_ready);
+                     : (cur_memrd ? rd_own_seen : 1'b1)
+                       & processor_ready
+                       & ((t_cnt >= 3'd3)
+                          | (fast_pair & (t_cnt >= 3'd2) & saw_low));
 
     assign biu_done = biu_done_r;
 
@@ -1249,6 +1272,7 @@ module zet_cpu_bridge (
             byte_idx         <= 2'd0;
             t_cnt            <= 3'd0;
             saw_low          <= 1'b0;
+            rd_own_seen      <= 1'b0;
             fill_wait        <= 7'd0;
             ready_d1         <= 1'b0;
             gap_cnt          <= 2'd0;
@@ -1276,6 +1300,15 @@ module zet_cpu_bridge (
         end else begin
             biu_done_r <= 1'b0;
             ready_d1   <= processor_ready;
+            // The read-answer witness, cleared while the byte engine is
+            // between pairs so an old completion can't carry in: only a
+            // level inside THIS byte's command phase counts, and only
+            // while we own the bus (a DMA write's cpu_ready during aen
+            // is not our answer either).
+            if (bstate == B_IDLE)
+                rd_own_seen <= 1'b0;
+            else if (sdram_rd_ready && bus_ours)
+                rd_own_seen <= 1'b1;
             // A prefetch-window hit retires a request with no bus cycle:
             // the queue's bytes go onto rd_word exactly where the normal
             // path leaves its assembled word, and the req block pulses

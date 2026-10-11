@@ -248,6 +248,15 @@ module CHIPSET #(
         // accesses that are not the drain's, which is exactly the
         // ambiguity that used to release a queued write before capture.
         output  logic           sdram_wr_taken,
+        // Read-side completion witness, the mirror of sdram_wr_taken:
+        // the sequencer's cpu_ready -- a level that can only rise for
+        // the guest's OWN access (a plain read completes strobe-matched
+        // inside u_RAM; an expanded walk answers at S_DONE; svc legs
+        // are masked off it). zet_cpu_bridge latches it inside each
+        // read byte's command phase so the processor_ready pipeline --
+        // which still carries residue from legs and DMA drains -- can
+        // pace the accept but never invent one.
+        output  logic           sdram_rd_ready,
         // fdd_ramimg's SDRAM carve-out port, straight through to u_RAM's port E.
         input   logic           ramimg_req,
         input   logic           ramimg_we,
@@ -623,7 +632,8 @@ module CHIPSET #(
         .mem_own(ram_own_w),
         .mem_ready(ram_ready_w),
         .mem_wr_taken(ram_wt_w),
-        .cpu_wr_taken(sdram_wr_taken)
+        .cpu_wr_taken(sdram_wr_taken),
+        .cpu_rd_own(sdram_rd_ready)
     );
 
     // What the firmware asks about the charger state before its writes:

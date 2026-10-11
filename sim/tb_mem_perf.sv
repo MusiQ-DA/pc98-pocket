@@ -113,6 +113,7 @@ module tb_mem_perf;
         .processor_ready   (proc_ready),
         .address_enable_n  (aen),
         .sdram_wr_taken    (seq_wr_taken_w),
+        .sdram_rd_ready    (seq_rd_own_w),
         .pause_core        (1'b0),
         .biu_done          (biu_done),
         .pf_disable        (1'b0),
@@ -252,10 +253,12 @@ module tb_mem_perf;
     int          grants_midcmd = 0;
     int          diverged      = 0;
     int          stray         = 0;
+    logic        beatlog       = 1'b0;
 
     initial begin
         void'($value$plusargs("dmaperiod=%d", dma_period));
         grant_en = $test$plusargs("GRANT");
+        beatlog  = $test$plusargs("beatlog");
         if (grant_en)
             $display("GRANT injection on, dma_period=%0d", dma_period);
     end
@@ -369,6 +372,7 @@ module tb_mem_perf;
     wire        ram_ready_w, access_complete_w, access_own_w;
     wire        ram_wt_w;           // u_ram's write_taken
     wire        seq_wr_taken_w;     // -> u_bridge.sdram_wr_taken
+    wire        seq_rd_own_w;       // -> u_bridge.sdram_rd_ready
     wire [4:0]  seq_mem_pf_len;
     wire        pf_beat_v_w;
     wire [7:0]  pf_beat_dat_w;
@@ -392,9 +396,9 @@ module tb_mem_perf;
         .access_page(page_a6), .mem_page1(seq_mem_page1),
         .egc_active(egc_active_w), .egc_wr(egc_wr_w),
         .egc_rg(egc_rg_w), .egc_d(io_wr_data),
-        .svc_req(1'b0), .svc_we(1'b0), .svc_raw(1'b0),
-        .svc_addr(20'h0), .svc_wdata(8'h0),
-        .svc_done(), .svc_rdata(), .dbg(),
+        .svc_req(svc_req_r), .svc_we(svc_we_r), .svc_raw(svc_raw_r),
+        .svc_addr(svc_addr_r), .svc_wdata(svc_wdata_r),
+        .svc_done(svc_done_w), .svc_rdata(svc_rdata_w), .dbg(),
         .mem_addr(seq_mem_addr), .mem_wdata(seq_mem_wdata),
         .mem_word(seq_mem_word), .mem_pf_len(seq_mem_pf_len),
         .mem_rd(seq_mem_rd), .mem_wr(seq_mem_wr),
@@ -402,7 +406,8 @@ module tb_mem_perf;
         .mem_done(access_complete_w), .mem_own(access_own_w),
         .mem_ready(ram_ready_w),
         .mem_wr_taken(ram_wt_w),
-        .cpu_wr_taken(seq_wr_taken_w)
+        .cpu_wr_taken(seq_wr_taken_w),
+        .cpu_rd_own(seq_rd_own_w)
     );
 
     // ---- RAM + SDRAM -------------------------------------------------------
@@ -725,6 +730,51 @@ module tb_mem_perf;
     longint unsigned c_pfill  = 0;     // fill pairs armed
     longint unsigned c_pbeats = 0;     // beats appended to the window
     longint unsigned c_pkill  = 0;     // invalidations (write/io/DMA)
+    longint unsigned c_pbad   = 0;     // appended beats != SDRAM@base+cnt
+    longint unsigned c_pforeign = 0;   // untagged returns inside a fill's cmd
+    longint unsigned c_porphan = 0;    // tagged returns outside the fill's READ_2
+    longint unsigned c_uncov  = 0;     // uncovered write falls outside expand
+    logic swr_cov_seen = 0;            // write strobe saw coverage while held
+    logic            tag_sim = 1'b0;   // bench mirror of RAM's prefetch tag
+
+    // ---- service channel stimulus (+svc=N, default on) ---------------------
+    // The firmware GDC service channel, driven the way the softcore uses
+    // it: a level request held until svc_done. Each op is a raw read one
+    // plane into the graphics window -- a port-A read return sharing the
+    // shim with whatever guest fill is mid-flight. An untagged beat of
+    // that kind landing inside a fill's B_CMD is the stray byte the
+    // window must never append.
+    int          svc_period = 157;
+    logic        svc_req_r   = 1'b0;
+    logic        svc_we_r    = 1'b0;
+    logic        svc_raw_r   = 1'b1;
+    logic [19:0] svc_addr_r  = 20'hA8000;
+    logic [7:0]  svc_wdata_r = 8'h00;
+    wire         svc_done_w;
+    wire [7:0]   svc_rdata_w;
+    int          svc_timer   = 0;
+    longint      svc_ops     = 0;
+
+    initial void'($value$plusargs("svc=%d", svc_period));
+
+    always_ff @(posedge clk) begin
+        if (reset || (svc_period == 0)) begin
+            svc_req_r <= 1'b0;
+            svc_timer <= 0;
+        end else if (sdram_up) begin
+            if (!svc_req_r) begin
+                svc_timer <= svc_timer + 1;
+                if (svc_timer >= svc_period) begin
+                    svc_timer  <= 0;
+                    svc_req_r  <= 1'b1;
+                    svc_addr_r <= 20'hA8000 + 20'(svc_ops[12:0] * 20'h25);
+                    svc_ops    <= svc_ops + 1;
+                end
+            end else if (svc_done_w) begin
+                svc_req_r <= 1'b0;
+            end
+        end
+    end
 
     localparam int MP_S_IDLE = 4, MP_S_RW = 6;
     wire mp_busy    = (u_ram.u_sdram.u_mp.state > MP_S_IDLE)
@@ -769,14 +819,109 @@ module tb_mem_perf;
             if (zwb_stb & ~zwb_ack)   c_wbpend <= c_wbpend + 1;
             if ((~mem_rd_n | ~mem_wr_n) & ~guest_ready)
                 c_gstall <= c_gstall + 1;
+            if (u_ram.write_strobe_fell & ~(u_ram.wr_covered & u_ram.cov_same))
+                $display("  UNCOV t=%0t ad=%05x d=%02x st=%0d seqst=%0d svch=%b exp=%b memwr=%b rdq=%0d dq=%b bs=%0d",
+                         $time, u_ram.latch_address[19:0],
+                         u_ram.internal_data_bus, u_ram.state, u_seq.st,
+                         u_seq.svc_hold, u_seq.expand, u_seq.mem_wr,
+                         u_bridge.wrq_cnt, u_bridge.cur_dq, u_bridge.cur_bs);
+            // dbg_uncov counts every uncovered fall, but two release shapes
+            // are benign: an expand takeover clips a strobe the seq already
+            // captured and released (svc_eval only arms while the guest bus
+            // is quiet), and a covered write's release lets the pins move on
+            // to the next access BEFORE the fall clk -- cov_same then
+            // compares the new operands against the parked slot and misses.
+            // Either way the byte landed while the strobe was held, which is
+            // exactly what swr_cov_seen tracks: coverage observed on any clk
+            // the strobe was up. Only a fall whose held window never saw
+            // coverage is a true drop.
+            if (u_ram.write_strobe_fell)
+                swr_cov_seen <= 1'b0;
+            else if (u_ram.write_command
+                     && ((u_ram.wr_covered & u_ram.cov_same)
+                         | u_ram.dup_covered))
+                swr_cov_seen <= 1'b1;
+            if (u_ram.write_strobe_fell & ~(u_ram.wr_covered & u_ram.cov_same)
+                & ~u_seq.expand & ~swr_cov_seen & ~u_ram.dup_covered)
+                c_uncov <= c_uncov + 1;
             if (u_ram.state == u_ram.COMPLETE_RAM_RW) c_done <= c_done + 1;
             if (u_bridge.hit_serve) c_phit  <= c_phit + 1;
             if (u_bridge.arm_fill || u_bridge.fillm_go)
                                     c_pfill <= c_pfill + 1;
             if (u_bridge.pf_beat_v && (u_bridge.cur_pf || u_bridge.cur_fillm)
-                && u_bridge.fill_ok
-                && (u_bridge.bstate == u_bridge.B_CMD))
+                && u_bridge.fill_ok && u_bridge.bus_ours
+                && (u_bridge.bstate == u_bridge.B_CMD)) begin
                 c_pbeats <= c_pbeats + 1;
+                // Corruption witness: the appended byte must equal the
+                // SDRAM word at base+offset. Anything else is a foreign
+                // port-A return -- a sequencer or svc leg -- landing in
+                // the fill's slot; a later hit would serve it as guest
+                // code or data. Skip the clk a write lands: it kills the
+                // window anyway, so the byte can never be served. Cells
+                // never written read back as the model's DEAD poison --
+                // anything is a correct answer there.
+                if (!(u_bridge.arm_wr || u_bridge.wrq_push)
+                    && !(u_bridge.cur_pf_w ? u_bridge.pf_cnt1[5]
+                                           : u_bridge.pf_cnt0[5])) begin
+                    automatic logic [19:0] app_addr =
+                        (u_bridge.cur_pf_w ? u_bridge.pf_base1
+                                           : u_bridge.pf_base0)
+                        + 20'(u_bridge.cur_pf_w ? u_bridge.pf_cnt1[4:0]
+                                                : u_bridge.pf_cnt0[4:0]);
+                    if (sdr.u_part.store.exists(app_addr)
+                        && (pf_beat_dat_w !== sdr.u_part.store[app_addr][7:0])) begin
+                        if (c_pbad < 8)
+                            $display("  PFBAD t=%0t w=%0d app=%05x beat=%02x exp=%02x len=%0d shim_a=%06x ramst=%0d seqst=%0d svch=%b aen=%b",
+                                     $time, u_bridge.cur_pf_w, app_addr,
+                                     pf_beat_dat_w,
+                                     sdr.u_part.store[app_addr][7:0],
+                                     u_bridge.cur_pf_len,
+                                     u_ram.u_sdram.addr_r,
+                                     u_ram.state, u_seq.st,
+                                     u_seq.svc_hold, aen);
+                        c_pbad <= c_pbad + 1;
+                    end
+                end
+            end
+            // Foreign-beat collision counter, computed the way RAM's tag
+            // computes it: the last port-A read request's prefetch
+            // qualifier. A return beat landing inside a fill's command
+            // phase without that qualifier is foreign -- on an untagged
+            // build it lands in the window (c_pbad flags it); on a tagged
+            // build it proves the collision actually exercised.
+            if (u_ram.read_request && !u_ram.read_flag && !u_ram.write_flag) begin
+                tag_sim <= (u_ram.prefetch_len != 5'd0);
+                if (beatlog)
+                    $display("RQ t=%0t a=%06x len=%0d", $time,
+                             u_ram.latch_address, u_ram.prefetch_len);
+            end
+            if (beatlog && u_ram.u_sdram.a_rvalid)
+                $display("BEAT t=%0t rq=%06x rb=%0d d=%02x fill=%b/%b cnt=%0d",
+                         $time, u_ram.u_sdram.addr_r, u_ram.u_sdram.rbeat,
+                         u_ram.u_sdram.a_beat[7:0],
+                         u_bridge.cur_pf, u_bridge.cur_fillm,
+                         u_bridge.cur_pf_w ? u_bridge.pf_cnt1
+                                           : u_bridge.pf_cnt0);
+            if (u_ram.u_sdram.a_rvalid
+                && (u_bridge.cur_pf || u_bridge.cur_fillm)
+                && u_bridge.fill_ok && u_bridge.bus_ours
+                && (u_bridge.bstate == u_bridge.B_CMD)
+                && !tag_sim)
+                c_pforeign <= c_pforeign + 1;
+            // Orphan counter: a tagged return that lands inside a fill's
+            // command phase while the RAM FSM is NOT streaming it (the
+            // fill that owned the burst ended early -- grant dropped the
+            // strobe, or a foreign ready ended the command phase). The
+            // tag-only build let these through and shifted the window;
+            // the READ_2 gate blocks them, so a nonzero count is the
+            // collision being exercised, not a failure.
+            if (u_ram.u_sdram.a_rvalid
+                && (u_bridge.cur_pf || u_bridge.cur_fillm)
+                && u_bridge.fill_ok && u_bridge.bus_ours
+                && (u_bridge.bstate == u_bridge.B_CMD)
+                && tag_sim
+                && (u_ram.state != u_ram.RAM_READ_2))
+                c_porphan <= c_porphan + 1;
             if ((!u_bridge.bus_ours
                  || (u_bridge.arm_wr && (u_bridge.wr_ovl0 || u_bridge.wr_ovl1))
                  || u_bridge.arm_iow)
@@ -934,6 +1079,53 @@ module tb_mem_perf;
             dq_seen_cmd[u_bridge.wrq_addr[0][12:0]] <= 1'b0;
         if (u_bridge.bstate == u_bridge.B_IDLE)
             dq_seen_cmd <= '{default:0};
+    end
+
+    // read-answer witness: did the RAM complete THIS strobe's access at
+    // any point during the pair's command phase? A read pair accepting
+    // without it grabbed a foreign ready pulse (a svc leg, a DMA drain,
+    // an AEN-release residue) and captured whatever data_bus happened to
+    // hold -- the RET-reads-ADAD signature. Expanded walks (EGC/GRCG/svc)
+    // answer through the sequencer's S_DONE instead, so exclude them.
+    logic rd_seen_own;
+    longint unsigned c_rd_foreign = 0;
+    longint unsigned c_wit_foreign = 0;
+    always_ff @(posedge clk) begin
+        if (u_bridge.bstate == u_bridge.B_IDLE)
+            rd_seen_own <= 1'b0;
+        else if (u_ram.access_own || (u_seq.st == u_seq.S_DONE))
+            rd_seen_own <= 1'b1;
+        // The bridge's actual witness input rising without the own-access
+        // model: whatever pulses here is what rd_own_seen latches. A legit
+        // completion fires access_own/S_DONE on the same clk -- exclude it;
+        // anything left is a genuinely foreign ready reaching the flag.
+        if (u_bridge.bstate != u_bridge.B_IDLE
+            && seq_rd_own_w && u_bridge.bus_ours
+            && u_bridge.cur_read && !rd_seen_own
+            && !u_ram.access_own && !(u_seq.st == u_seq.S_DONE)
+            && !u_ram.ram_address_select_n) begin
+            if (c_wit_foreign < 24)
+                $display("  WITFOR t=%0t ad=%05x bst=%0d t_cnt=%0d aen=%b st=%0d seqst=%0d svch=%b svg=%b exp=%b mrn=%b mwn=%b sel=%b wopen=%b alr=%b rsm=%b",
+                         $time, u_bridge.cur_addr, u_bridge.bstate,
+                         u_bridge.t_cnt, aen, u_ram.state, u_seq.st,
+                         u_seq.svc_hold, u_seq.svc_gap, u_seq.expand,
+                         mem_rd_n, mem_wr_n, u_ram.ram_address_select_n,
+                         u_ram.wr_strobe_open, u_ram.accept_live_rd,
+                         u_ram.read_strobe_match);
+            c_wit_foreign <= c_wit_foreign + 1;
+        end
+        if (u_bridge.bstate == u_bridge.B_CMD && u_bridge.pair_accept
+            && u_bridge.cur_read && !u_bridge.cur_fillm && !u_bridge.cur_pf
+            && !rd_seen_own && u_bridge.bus_ours
+            && !u_ram.ram_address_select_n) begin
+            if (c_rd_foreign < 8)
+                $display("  RDFOREIGN t=%0t ad=%05x t_cnt=%0d saw_low=%b aen=%b st=%0d seqst=%0d svch=%b bus=%02x icr=%b mrdy=%b",
+                         $time, u_bridge.cur_addr, u_bridge.t_cnt,
+                         u_bridge.saw_low, aen, u_ram.state, u_seq.st,
+                         u_seq.svc_hold, u_bridge.data_bus,
+                         guest_ready, ram_ready_w);
+            c_rd_foreign <= c_rd_foreign + 1;
+        end
     end
 
     // ========================================================================
@@ -1099,8 +1291,9 @@ module tb_mem_perf;
                 w = sdr.u_part.peek(a);
                 if (w[7:0] == (8'hA5 ^ a[7:0])) dma_seen++;
             end
-            $display("VERIFY: bad=%0d diverged=%0d stray=%0d grants=%0d midcmd=%0d dma_bytes=%0d",
-                     bad, diverged, stray, grants, grants_midcmd, dma_seen);
+            $display("VERIFY: bad=%0d diverged=%0d stray=%0d grants=%0d midcmd=%0d dma_bytes=%0d pfbad=%0d pforeign=%0d porphan=%0d rdfor=%0d svc_ops=%0d",
+                     bad, diverged, stray, grants, grants_midcmd, dma_seen,
+                     c_pbad, c_pforeign, c_porphan, c_rd_foreign, svc_ops);
             $display("  RAM drop-witness: uncov=%0d parks=%0d first=%05x/%02x st=%0d last=%05x/%02x",
                      u_ram.dbg_uncov, u_ram.dbg_parks,
                      u_ram.dbg_uncov_addr, u_ram.dbg_uncov_data, u_ram.dbg_uncov_st,
@@ -1115,11 +1308,13 @@ module tb_mem_perf;
                      dq_present[0], dq_present[1], dq_present[2], dq_present[3],
                      dq_present[4], dq_present[5], dq_present[6], dq_present[7],
                      dq_max_pres);
-            // bad/diverged/stray are direct loss checks; dbg_uncov is
-            // RAM's own "a write strobe fell with its operands never
-            // durably held" witness -- a true-loss counter, not a
-            // heuristic; and under +GRANT the fill window must be whole.
-            if (bad || diverged || stray || (u_ram.dbg_uncov != 16'd0)
+            // bad/diverged/stray are direct loss checks; c_uncov counts
+            // uncovered write-strobe falls with expand down -- the only
+            // falls that can be true losses (an expand takeover only clips
+            // an already-captured, already-released strobe); and under
+            // +GRANT the fill window must be whole.
+            if (bad || diverged || stray || (c_uncov != 0)
+                || (c_pbad != 0)
                 || (grant_en && (dma_seen != 256 || grants == 0)))
                 $display("=== FAIL tb_mem_perf ===");
             else
@@ -1156,6 +1351,33 @@ module tb_mem_perf;
         end
     end
 
+    // fetch-PC ring: the last 32 presented fetch addresses, dumped on the
+    // first diverge so the escape entry is visible (the jump target or the
+    // pop that delivered it)
+    logic [19:0] pc_ring [0:31];
+    int          pc_ptr = 0;
+    int          dvg_dumped = 0;
+    always_ff @(posedge clk) begin
+        pc_ring[pc_ptr] <= zet_pc;
+        pc_ptr <= (pc_ptr + 1) & 31;
+    end
+
+    // guest bus-op ring: the last 16 sequencer-level memory accesses
+    // (addr, write?, data) -- the stack push that should hold the return
+    // address and the pop that read it are both here when RET escapes
+    logic [19:0] op_addr  [0:15];
+    logic        op_wr    [0:15];
+    logic [7:0]  op_data  [0:15];
+    int          op_ptr = 0;
+    always_ff @(posedge clk) begin
+        if (seq_mem_rd || seq_mem_wr) begin
+            op_addr[op_ptr] <= seq_mem_addr;
+            op_wr[op_ptr]   <= seq_mem_wr;
+            op_data[op_ptr] <= seq_mem_wdata;
+            op_ptr <= (op_ptr + 1) & 15;
+        end
+    end
+
     // ---- divergence + stray-write traps (the wild-jump witnesses) ----------
     // The program runs at F0000..+len and fetches the FFFF0 reset vector at
     // boot; it writes 0x2000/0x4000/0x8000 (data), the ~0x0400 stack and the
@@ -1171,6 +1393,37 @@ module tb_mem_perf;
                     $display("*** DIVERGE pc=%05x aen=%b dma_act=%b bst=%0d ad=%05x t=%0t",
                              zet_pc, aen, dma_active, u_bridge.bstate,
                              cpu_address, $time);
+                if (diverged == 0 && !dvg_dumped) begin
+                    dvg_dumped <= 1;
+                    for (int k = 31; k >= 1; k--)
+                        $display("   pc-%02d %05x", k,
+                                 pc_ring[(pc_ptr - k) & 31]);
+                    $display("   w0 base=%05x cnt=%0d live=%b ok=%b",
+                             u_bridge.pf_base0, u_bridge.pf_cnt0,
+                             u_bridge.pf_live, u_bridge.fill_ok);
+                    $display("   w1 base=%05x cnt=%0d",
+                             u_bridge.pf_base1, u_bridge.pf_cnt1);
+                    for (int k = 0; k < 32; k++)
+                        $display("   buf0[%02x]=%02x/%02x buf1[%02x]=%02x/%02x",
+                                 k, u_bridge.pf_buf[k],
+                                 sdr.u_part.store.exists(u_bridge.pf_base0+k)
+                                    ? sdr.u_part.store[u_bridge.pf_base0+k][7:0] : 8'hxx,
+                                 k, u_bridge.pf_buf[32+k],
+                                 sdr.u_part.store.exists(u_bridge.pf_base1+k)
+                                    ? sdr.u_part.store[u_bridge.pf_base1+k][7:0] : 8'hxx);
+                    // stack neighbourhood + last guest ops: the pop that
+                    // delivered the escape read from here
+                    $display("   stack@0x3f0:");
+                    for (int k = 0; k < 32; k++)
+                        $display("   stk[%03x]=%02x", 20'h003F0 + k,
+                                 sdr.u_part.store.exists(20'h003F0 + k)
+                                    ? sdr.u_part.store[20'h003F0 + k][7:0] : 8'hxx);
+                    for (int k = 15; k >= 1; k--)
+                        $display("   op-%02d %s %05x %02x", k,
+                                 op_wr[(op_ptr - k) & 15] ? "WR" : "RD",
+                                 op_addr[(op_ptr - k) & 15],
+                                 op_data[(op_ptr - k) & 15]);
+                end
                 diverged <= diverged + 1;
             end
             // no write may touch the code image or the reset vector

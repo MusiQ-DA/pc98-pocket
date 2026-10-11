@@ -144,6 +144,7 @@ module tb_zet_tvram;
         .processor_ready   (processor_ready),
         .address_enable_n  (chipset_aen),
         .sdram_wr_taken    (~memory_write_n),
+        .sdram_rd_ready    (1'b1),
         .pause_core        (1'b0),
         .biu_done          (biu_done),
         .pf_disable        (1'b0),

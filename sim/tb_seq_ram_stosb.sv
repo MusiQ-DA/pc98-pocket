@@ -98,7 +98,7 @@ module tb_seq_ram_stosb;
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
         .mem_done(mem_done), .mem_ready(mem_ready),
-        .mem_wr_taken(ram_wt_w), .cpu_wr_taken()
+        .mem_wr_taken(ram_wt_w), .cpu_wr_taken(), .cpu_rd_own()
     );
 
     RAM dut (

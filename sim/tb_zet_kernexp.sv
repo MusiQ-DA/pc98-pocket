@@ -251,6 +251,7 @@ module tb_zet_kernexp;
         .processor_ready   (cpu_ready),
         .address_enable_n  (aen_r),
         .sdram_wr_taken    (~mem_wr_n),
+        .sdram_rd_ready    (1'b1),
         .pause_core        (1'b0),
         .biu_done          (),
         .pf_disable        (1'b0),

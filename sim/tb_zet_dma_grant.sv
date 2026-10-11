@@ -156,6 +156,7 @@ module tb_zet_dma_grant;
         .processor_ready   (proc_ready),
         .address_enable_n  (aen),
         .sdram_wr_taken    (wr_taken_w),
+        .sdram_rd_ready    (1'b1),
         .pause_core        (1'b0),
         .pf_disable        (1'b1),      // isolate the byte-engine accept path
         .biu_done          (),

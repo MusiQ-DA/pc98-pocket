@@ -65,7 +65,7 @@ module tb_gvram_ram_leg;
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
         .mem_done(mem_done), .mem_own(mem_own), .mem_ready(mem_ready),
-        .mem_wr_taken(ram_wt_w), .cpu_wr_taken()
+        .mem_wr_taken(ram_wt_w), .cpu_wr_taken(), .cpu_rd_own()
     );
 
     // ---- the real memory -------------------------------------------------

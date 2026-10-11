@@ -169,6 +169,7 @@ module tb_pc98_boot;
         .processor_ready   (bench_ready),
         .address_enable_n  (test_aen),
         .sdram_wr_taken    (sdram_wt_w),
+        .sdram_rd_ready    (sdram_rd_own_w),
         .pause_core        (1'b0),
         .biu_done          (biu_done),
         .pf_disable        (1'b0),
@@ -482,6 +483,7 @@ module tb_pc98_boot;
     wire        access_own_w;
     wire        ram_wt_w;           // u_ram write_taken -> seq -> drain
     wire        sdram_wt_w;         // u_bridge.sdram_wr_taken
+    wire        sdram_rd_own_w;     // u_bridge.sdram_rd_ready
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
@@ -555,7 +557,8 @@ module tb_pc98_boot;
         .mem_own(access_own_w),
         .mem_ready(ram_ready_w),
         .mem_wr_taken(ram_wt_w),
-        .cpu_wr_taken(sdram_wt_w)
+        .cpu_wr_taken(sdram_wt_w),
+        .cpu_rd_own(sdram_rd_own_w)
     );
 
     RAM u_ram (

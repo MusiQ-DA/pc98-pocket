@@ -3235,6 +3235,7 @@ module core_top (
         .pause_core                         (pause_core_chipset),
         .ram_rw_complete                    (ram_rw_complete)
         ,.sdram_wr_taken                   (sdram_wr_taken)
+        ,.sdram_rd_ready                   (sdram_rd_ready)
         ,.pc98_key_stb                      (pc98_key_stb)
         ,.pc98_key_byte                     (pc98_key_code)
         ,.mouse_dx                          (mouse_dx)
@@ -3296,6 +3297,7 @@ module core_top (
     // CHIPSET's posted-write capture witness; the bridge's drain engine
     // holds each queued write strobe until this says it is durably held.
     wire        sdram_wr_taken;
+    wire        sdram_rd_ready;
 
     // ---- SDRAM boundary: chipset controller -> Pocket dram_* pins ----
     // CHIPSET drives these; pass straight through.
@@ -3387,6 +3389,7 @@ module core_top (
         .processor_ready   (processor_ready),
         .address_enable_n  (chipset_aen),
         .sdram_wr_taken    (sdram_wr_taken),
+        .sdram_rd_ready    (sdram_rd_ready),
         .pause_core        (pause_core),
         .biu_done          (biu_done),
         .pf_disable        (jtag_pf_dis),

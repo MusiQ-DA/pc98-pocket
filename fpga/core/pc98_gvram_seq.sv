@@ -93,6 +93,19 @@ module pc98_gvram_seq #(
     // the only strobe on the port is the guest's, so write_taken then
     // genuinely names the presented write.
     output wire        cpu_wr_taken,
+    // The guest's own READ completion witness -- cpu_ready qualified to
+    // the window where the presented strobe can actually be answered.
+    // cpu_ready alone cannot serve: mem_rd trails cpu_rd by a clock (the
+    // pass-through is registered), and while the port strobe is still
+    // absent RAM's memory_access_ready sits on its "nothing in flight"
+    // idle level -- one full clk where cpu_ready says a read that has
+    // not reached RAM yet is done. A stale processor_ready accept armed
+    // on exactly that level is how the +GRANT+svc wedge kept capturing
+    // leg residue (the RET-reads-ADAD signature). For a plain read the
+    // qualifier waits for mem_rd; for an expanded walk the guest strobe
+    // is held while the answer is assembled, so cpu_rd itself is the
+    // reach -- its ready is S_DONE, never a port completion.
+    output wire        cpu_rd_own,
 
     // ---- the GRCG's registers -------------------------------------------
     input  wire        grcg_active,
@@ -529,6 +542,9 @@ module pc98_gvram_seq #(
     assign cpu_wr_taken = ~expand ? mem_wr_taken
                                 : ((st == S_DONE) & (~is_word | half)
                                    & ~svc_hold);
+
+    // cpu_ready qualified to the guest's own reach -- see the port comment.
+    assign cpu_rd_own = cpu_ready & cpu_rd & (mem_rd | expand);
 
     // COMBINATIONAL, and it has to be. Assigning it inside the S_DONE arm did
     // not work: by the time S_DONE is the current state the guest has seen
