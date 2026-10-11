@@ -168,6 +168,7 @@ module tb_pc98_boot;
         .data_bus          (din),
         .processor_ready   (bench_ready),
         .address_enable_n  (test_aen),
+        .sdram_wr_taken    (sdram_wt_w),
         .pause_core        (1'b0),
         .biu_done          (biu_done),
         .pf_disable        (1'b0),
@@ -479,6 +480,8 @@ module tb_pc98_boot;
     wire        ram_ready_w;
     wire        initilized_sdram_w, access_complete_w;
     wire        access_own_w;
+    wire        ram_wt_w;           // u_ram write_taken -> seq -> drain
+    wire        sdram_wt_w;         // u_bridge.sdram_wr_taken
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
@@ -550,7 +553,9 @@ module tb_pc98_boot;
         .mem_rdata(ram_dout), .mem_rdata_hi(ram_dout_hi),
         .mem_done(access_complete_w),
         .mem_own(access_own_w),
-        .mem_ready(ram_ready_w)
+        .mem_ready(ram_ready_w),
+        .mem_wr_taken(ram_wt_w),
+        .cpu_wr_taken(sdram_wt_w)
     );
 
     RAM u_ram (
@@ -571,6 +576,7 @@ module tb_pc98_boot;
         .access_complete(access_complete_w),
         .access_own(access_own_w),
         .ram_address_select_n(ram_address_select_n),
+        .write_taken(ram_wt_w),
         .dbg_watch_addr(20'hFFFFF),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
@@ -943,6 +949,10 @@ module tb_pc98_boot;
     // empty, which is what the flat path wants anyway.
     assign pf_beat_v   = 1'b0;
     assign pf_beat_dat = 8'h00;
+    // The flat array commits a presented write on the strobe's fall, so a
+    // strobe on the pins is as good as captured -- the drain's witness is
+    // simply "the write command reached the bus".
+    wire sdram_wt_w = ~mem_wr_n;
 `endif
 
     // True when the read above fell through to the FF default -- i.e. nothing

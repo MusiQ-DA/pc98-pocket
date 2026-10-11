@@ -82,7 +82,8 @@ module tb_zet_retf;
         .pf_req_len(), .pf_beat_v(1'b0), .pf_beat_dat(8'h00),
         .word_access(word_access), .cpu_data_bus_hi(cpu_data_bus_hi),
         .data_bus_hi(din_hi), .data_bus(din), .processor_ready(1'b1),
-        .address_enable_n(1'b0), .pause_core(1'b0), .biu_done(), .pf_disable(1'b0), .dbg()
+        .address_enable_n(1'b0), .sdram_wr_taken(~mem_wr_n),
+        .pause_core(1'b0), .biu_done(), .pf_disable(1'b0), .dbg()
     );
 
     zet u_cpu (

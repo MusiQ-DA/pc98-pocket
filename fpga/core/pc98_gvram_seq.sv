@@ -84,6 +84,15 @@ module pc98_gvram_seq #(
     output wire [7:0]  cpu_rdata,
     output wire [7:0]  cpu_rdata_hi,     // the odd byte of a word read
     output wire        cpu_ready,
+    // The guest's own write strobe is durably held in RAM -- the witness
+    // the posted-write drain waits on before unwinding its bus cycle.
+    // RAM's write_taken cannot serve alone: while a svc op or an expanded
+    // write owns the walk, ITS mem_wr legs pulse the same line, and a
+    // guest strobe parked behind them would read a foreign capture as its
+    // own release. expand=0 means mem_wr is the cpu_wr pass-through --
+    // the only strobe on the port is the guest's, so write_taken then
+    // genuinely names the presented write.
+    output wire        cpu_wr_taken,
 
     // ---- the GRCG's registers -------------------------------------------
     input  wire        grcg_active,
@@ -115,6 +124,9 @@ module pc98_gvram_seq #(
     // guest's READY has always had. Pass-through must hand that through
     // unchanged or every non-graphics access in the machine changes shape.
     input  wire        mem_ready,
+    // RAM.sv's write_taken: the write strobe on the memory pins is durably
+    // captured (or can never become a command). See cpu_wr_taken below.
+    input  wire        mem_wr_taken,
 
     // ---- the access page (port 0xA6 bit 0) -------------------------------
     // Rebanks every plane window between the two 640x400 pages, np21w's
@@ -497,6 +509,26 @@ module pc98_gvram_seq #(
     assign cpu_ready = expand ? (st == S_DONE) & (~is_word | half)
                               & ~svc_hold
                               : mem_ready & ~svc_gap;
+
+    // ~expand also proves ownership: mem_wr is then the registered
+    // pass-through of cpu_wr and nothing else -- a sequencer leg only
+    // exists while expand holds, so write_taken can only be answering a
+    // foreign strobe when expand is set. A held guest write arriving
+    // while a svc op runs sees expand=1 and mem_wr_taken=1 legs go by
+    // untouched; its own strobe reaches the port only once the walk
+    // hands the FSM back.
+    //
+    // The expand half is the walk's own done: a guest write the
+    // sequencer claims never reaches RAM as itself, so its "taken" is
+    // the walk completing -- S_DONE is a held level (the FSM parks
+    // there until the guest drops its strobe), and ~svc_hold keeps a
+    // service op's done from ever satisfying a guest write, the same
+    // ownership term cpu_ready carries. ~is_word|half mirrors
+    // cpu_ready: a word access's first S_DONE only starts the odd
+    // half -- the walk is not done until the second pass lands.
+    assign cpu_wr_taken = ~expand ? mem_wr_taken
+                                : ((st == S_DONE) & (~is_word | half)
+                                   & ~svc_hold);
 
     // COMBINATIONAL, and it has to be. Assigning it inside the S_DONE arm did
     // not work: by the time S_DONE is the current state the guest has seen

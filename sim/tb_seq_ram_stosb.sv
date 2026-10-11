@@ -34,6 +34,7 @@ module tb_seq_ram_stosb;
     wire         mem_rd, mem_wr;
     wire [7:0]   mem_rdata, mem_rdata_hi;
     wire         mem_done, mem_ready;
+    wire         ram_wt_w;   // dut's write_taken -> seq mem_wr_taken
 
     // ---- RAM <-> SDRAM ---------------------------------------------
     wire [12:0] s_a; wire [1:0] s_ba;
@@ -96,7 +97,8 @@ module tb_seq_ram_stosb;
         .mem_word(mem_word),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
-        .mem_done(mem_done), .mem_ready(mem_ready)
+        .mem_done(mem_done), .mem_ready(mem_ready),
+        .mem_wr_taken(ram_wt_w), .cpu_wr_taken()
     );
 
     RAM dut (
@@ -115,6 +117,7 @@ module tb_seq_ram_stosb;
         .memory_access_ready(mem_ready),
         .access_complete(mem_done),
         .ram_address_select_n(ram_address_select_n),
+        .write_taken(ram_wt_w),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),

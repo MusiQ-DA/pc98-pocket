@@ -57,6 +57,22 @@ module RAM (
     // exactly the traffic that parks writes).
     output  logic           access_own,
     output  logic           ram_address_select_n,
+    // Posted-write release witness (Pocket): the write strobe on the pins
+    // may be DROPPED -- its operands are durably held somewhere. True when
+    // the presented write is covered (the same term memory_access_ready's
+    // write half releases on: accepted live, parked, promotion-edge
+    // captured, or twin-matched), or when it can never become a command
+    // at all and there is nothing to capture -- an unselected or
+    // write-protected address. Ready-level tests cannot prove either
+    // case: this module's own ready rises on the completing access, and
+    // the guest-facing ready pipeline dips for foreign reasons. The
+    // bridge's posted-write drain holds its strobe until this rises --
+    // with every operand still on the pins, so a word access captures
+    // whole, never as a truncated byte.
+    // NOT the same as "this guest's write was taken": the strobe on the
+    // pins can belong to a sequencer leg or the DMA. The consumer
+    // (pc98_gvram_seq's cpu_wr_taken) qualifies ownership upstream.
+    output  logic           write_taken,
     // JTAG probe (PC98_JTAG): the FSM's own view of a stalled access --
     // {parked write, refresh busy, read in flight, completing-is-read,
     //  completing-is-write, state[2:0]}. Unconsumed it synthesises away.
@@ -1022,6 +1038,15 @@ module RAM (
                                                & write_strobe_match)
                              | (read_command & accept_live_rd
                                                & read_strobe_match));
+
+    // write_taken -- see the port comment. A presented write the select
+    // or the protect will never turn into a command has nothing to wait
+    // for: releasing it is a no-op, and NOT releasing it wedges the
+    // posted-write drain forever on a byte that goes nowhere.
+    assign  write_taken = ~memory_write_n
+                        & (ram_address_select_n
+                           | write_protect
+                           | (write_command & wr_covered & cov_same));
 
     assign  dbg = {wc_pend, refresh_mode, read_flag,
                    accept_live_rd, accept_live_wr, state[2:0]};

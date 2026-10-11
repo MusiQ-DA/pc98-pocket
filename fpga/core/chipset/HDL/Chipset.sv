@@ -241,6 +241,13 @@ module CHIPSET #(
         // ROM-load (Pocket): expose the RAM access-complete pulse so core_top's
         // BIOS loader can pace on the real SDRAM write instead of a fixed delay.
         output  logic           ram_rw_complete,
+        // Posted-write drain witness (Pocket): the guest's own write
+        // strobe is durably held in u_RAM (captured, or impossible to
+        // command). zet_cpu_bridge's drain waits on this rather than on
+        // any ready level -- the ready chain can dip and rise for
+        // accesses that are not the drain's, which is exactly the
+        // ambiguity that used to release a queued write before capture.
+        output  logic           sdram_wr_taken,
         // fdd_ramimg's SDRAM carve-out port, straight through to u_RAM's port E.
         input   logic           ramimg_req,
         input   logic           ramimg_we,
@@ -560,6 +567,10 @@ module CHIPSET #(
     // parked-write drains pulse access_complete too, and a leg that waits
     // on the bare pulse can eat one of those and read pre-write data.
     wire        ram_own_w;
+    // u_RAM's write_taken: the write on the memory pins is durably held.
+    // The sequencer's cpu_wr_taken qualifies it as the guest's own
+    // strobe before it reaches the bridge's drain engine.
+    wire        ram_wt_w;
     wire        gvram_sel = ~ram_address_select_n;
 
     // EGC=0: the raster engine is dropped -- this machine is a GRCG-only
@@ -610,7 +621,9 @@ module CHIPSET #(
         .mem_rdata(ram_dout_w), .mem_rdata_hi(ram_dout_hi_w),
         .mem_done(ram_complete_w),
         .mem_own(ram_own_w),
-        .mem_ready(ram_ready_w)
+        .mem_ready(ram_ready_w),
+        .mem_wr_taken(ram_wt_w),
+        .cpu_wr_taken(sdram_wr_taken)
     );
 
     // What the firmware asks about the charger state before its writes:
@@ -716,6 +729,7 @@ module CHIPSET #(
         .access_complete                    (ram_complete_w),
         .access_own                         (ram_own_w),
         .ram_address_select_n               (ram_address_select_n),
+        .write_taken                        (ram_wt_w),
         .sdram_address                      (sdram_address),
         .sdram_cke                          (sdram_cke),
         .sdram_cs                           (sdram_cs),

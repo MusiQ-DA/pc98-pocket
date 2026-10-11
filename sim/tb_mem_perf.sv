@@ -111,7 +111,8 @@ module tb_mem_perf;
         .data_bus_hi       (din_hi),
         .data_bus          (din),
         .processor_ready   (proc_ready),
-        .address_enable_n  (1'b0),
+        .address_enable_n  (aen),
+        .sdram_wr_taken    (seq_wr_taken_w),
         .pause_core        (1'b0),
         .biu_done          (biu_done),
         .pf_disable        (1'b0),
@@ -147,8 +148,8 @@ module tb_mem_perf;
         .cpu_ce_posedge                  (ce_pos),
         .cpu_ce_negedge                  (ce_neg),
         .reset                           (reset),
-        .address_enable_n                (1'b0),
-        .command_enable                  (1'b1),
+        .address_enable_n                (aen),
+        .command_enable                  (~aen),
         .io_bus_mode                     (1'b0),
         .processor_status                (processor_status),
         .enable_io_command               (),
@@ -222,12 +223,152 @@ module tb_mem_perf;
     wire egc_wr_w = io_wr_n & ~io_wr_d & egc_cs;
     wire [3:0] egc_rg_w = cpu_address[3:0];
 
+    // ---- DMA grant injection (+GRANT): Bus_Arbiter's hold chain, flattened --
+    // Reproduces the real grant timing: hold_request_ff_1 samples a passive
+    // processor status on cpu_ce posedge, ff_2 propagates on the negedge,
+    // hold_acknowledge -> address_enable_n -> dma_wait, one cpu_ce apart each.
+    // address_enable_n high gates the i8288 (command_enable=~aen) and tells the
+    // bridge to defer; while the bus is DMA-owned a synthetic DMAC writes an
+    // FDC-style burst through the SAME seq/RAM path the CPU uses.
+    logic        grant_en = 1'b0;
+    logic        hreq     = 1'b0;
+    logic        hrff1 = 1'b0, hrff2 = 1'b0;
+    logic        aen = 1'b0, dma_wait = 1'b0;
+
+    localparam int DMA_BASE  = 20'h30000;
+    localparam int DMA_MASK  = 20'h00FFF;   // bounded 4 KB fill buffer
+    localparam int DMA_BURST = 8;
+    int          dma_period = 397;          // odd period -> hits all phases
+    logic [19:0] dma_addr  = DMA_BASE;   // next byte the DMAC will write
+    logic [19:0] bus_addr  = DMA_BASE;   // operand on the pins: follows
+                                        // dma_addr only while bytes
+                                        // remain, so a strobe fall always
+                                        // shows the byte just taken
+    logic        dma_wr    = 1'b0;
+    logic        dma_rd    = 1'b0;
+    int          burst_left    = 0;
+    int          dma_per_cnt   = 0;
+    int          grants        = 0;
+    int          grants_midcmd = 0;
+    int          diverged      = 0;
+    int          stray         = 0;
+
+    initial begin
+        void'($value$plusargs("dmaperiod=%d", dma_period));
+        grant_en = $test$plusargs("GRANT");
+        if (grant_en)
+            $display("GRANT injection on, dma_period=%0d", dma_period);
+    end
+
+    // hold_request_ff_1: passive status + hreq, on cpu_ce posedge
+    always_ff @(posedge clk) begin
+        if (reset) hrff1 <= 1'b0;
+        else if (ce_pos)
+            hrff1 <= processor_status[0] & processor_status[1] & hreq;
+    end
+    // hold_request_ff_2: propagates on cpu_ce negedge while hreq held
+    always_ff @(posedge clk) begin
+        if (reset) hrff2 <= 1'b0;
+        else if (ce_neg)
+            hrff2 <= ~hreq ? 1'b0 : (hrff2 | hrff1);
+    end
+    // address_enable_n follows hold_acknowledge; dma_wait one ce behind
+    wire hlda_w = hreq ? hrff2 : 1'b0;
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            aen <= 1'b0; dma_wait <= 1'b0;
+        end else if (ce_pos) begin
+            aen      <= hlda_w & grant_en;
+            dma_wait <= aen;
+        end
+    end
+    wire dma_enable_n = ~(dma_wait & aen);
+    wire dma_active   = ~dma_enable_n;
+
+    // synthetic DMAC: request a burst every dma_period clks, then stream
+    // bytes into the fill buffer while the bus is DMA-owned. Each byte's
+    // strobe is HELD until RAM's write_taken says the operands were
+    // durably captured -- the wait a real 8237's MEMW takes through the
+    // ready chain. A free-running 1-byte/clk stream simply outruns RAM's
+    // park depth: those "lost" bytes are a bench artifact, not RTL bugs.
+    always_ff @(posedge clk) begin
+        if (reset || !grant_en) begin
+            hreq <= 1'b0; burst_left <= 0; dma_addr <= DMA_BASE;
+            bus_addr <= DMA_BASE;
+            dma_wr <= 1'b0; dma_per_cnt <= 0;
+        end else begin
+            if (!hreq) begin
+                dma_per_cnt <= dma_per_cnt + 1;
+                if (dma_per_cnt == dma_period) begin
+                    dma_per_cnt <= 0;
+                    hreq        <= 1'b1;
+                    burst_left  <= DMA_BURST;
+                    bus_addr    <= dma_addr;   // first byte's operand
+                end
+            end
+            if (dma_active && burst_left > 0) begin
+                dma_wr     <= 1'b1;
+                // cpu_wr_taken, not mem_wr_taken: while the sequencer is
+                // expanding a guest graphics op, mem_wr_taken fires for
+                // ITS legs -- our byte was never even presented. And
+                // write_taken answers for the operand the RAM sees NOW
+                // (seq_mem_addr, a clock behind bus_addr): the previous
+                // byte's coverage keeps it high while the new operand is
+                // still in flight, so an unqualified sample advances the
+                // stream one byte ahead of coverage -- the last byte then
+                // falls presented-but-uncovered (the +GRANT uncov). The
+                // seq_mem_addr==bus_addr qualifier is exactly "the 8237's
+                // IOCHRDY wait released for THIS byte".
+                if (dma_wr && seq_wr_taken_w && seq_mem_addr == bus_addr) begin
+                    dma_addr   <= (dma_addr >= DMA_BASE + DMA_MASK)
+                                  ? DMA_BASE : dma_addr + 20'd1;
+                    burst_left <= burst_left - 1;
+                    if (burst_left == 1)
+                        dma_wr <= 1'b0;      // burst done: strobe ends on
+                    else                     // the taken byte's operands
+                        bus_addr <= (dma_addr >= DMA_BASE + DMA_MASK)
+                                    ? DMA_BASE : dma_addr + 20'd1;
+                end
+            end else begin
+                dma_wr <= 1'b0;
+            end
+            if (hreq && burst_left == 0)
+                hreq <= 1'b0;
+        end
+    end
+    // count grants that land while the bridge has a byte armed in B_CMD --
+    // the exact mid-access preemption suspected of corrupting the CPU.
+    // grant_start is a LEVEL that holds for a whole ce window, so count
+    // its rising edge -- a level count just measures the grant's width.
+    logic grant_start_d = 1'b0;
+    wire  grant_start   = grant_en & aen & !dma_wait;
+    always_ff @(posedge clk) begin
+        grant_start_d <= grant_start;
+        if (grant_start && !grant_start_d) begin
+            grants <= grants + 1;
+            if (u_bridge.bstate == u_bridge.B_CMD)
+                grants_midcmd <= grants_midcmd + 1;
+        end
+    end
+
+    // merged bus view for the seq + RAM: DMA owns it during dma_active,
+    // otherwise the i8288's (grant-gated) CPU commands.
+    wire        seq_rd    = dma_active ? dma_rd    : ~mem_rd_n;
+    wire        seq_wr    = dma_active ? dma_wr    : ~mem_wr_n;
+    wire [19:0] seq_addr  = dma_active ? bus_addr : cpu_address;
+    wire [7:0]  seq_wdata = dma_active ? (8'hA5 ^ bus_addr[7:0])
+                                       : cpu_data_bus;
+    wire        bus_mrd_n = dma_active ? ~dma_rd   : mem_rd_n;
+    wire        bus_mwr_n = dma_active ? ~dma_wr   : mem_wr_n;
+
     // ---- the graphics sequencer, ahead of RAM ----------------------------
     wire        ram_sel_n;
     wire [19:0] seq_mem_addr;
     wire [7:0]  seq_mem_wdata, seq_cpu_rdata, seq_cpu_rdata_hi;
     wire        seq_mem_word, seq_mem_rd, seq_mem_wr, seq_mem_page1;
     wire        ram_ready_w, access_complete_w, access_own_w;
+    wire        ram_wt_w;           // u_ram's write_taken
+    wire        seq_wr_taken_w;     // -> u_bridge.sdram_wr_taken
     wire [4:0]  seq_mem_pf_len;
     wire        pf_beat_v_w;
     wire [7:0]  pf_beat_dat_w;
@@ -236,10 +377,12 @@ module tb_mem_perf;
     pc98_gvram_seq #(.EGC(1'b1)) u_seq (
         .clk(clk), .reset(reset),
         .cpu_gvram(~ram_sel_n),
-        .cpu_rd(~mem_rd_n), .cpu_wr(~mem_wr_n),
-        .cpu_pf_len(cpu_pf_len_w),
-        .cpu_word(cpu_word_access),
-        .cpu_addr(cpu_address), .cpu_wdata(cpu_data_bus),
+        .cpu_rd(seq_rd), .cpu_wr(seq_wr),
+        // The aen qualifications mirror Chipset.sv: a stale word/prefetch
+        // flag must never turn a DMA-owned byte write into a burst.
+        .cpu_pf_len(cpu_pf_len_w & {5{~aen}}),
+        .cpu_word(cpu_word_access & ~aen),
+        .cpu_addr(seq_addr), .cpu_wdata(seq_wdata),
         .cpu_wdata_hi(cpu_data_bus_hi),
         .cpu_rdata(seq_cpu_rdata), .cpu_rdata_hi(seq_cpu_rdata_hi),
         .cpu_ready(guest_ready),
@@ -257,7 +400,9 @@ module tb_mem_perf;
         .mem_rd(seq_mem_rd), .mem_wr(seq_mem_wr),
         .mem_rdata(ram_dout), .mem_rdata_hi(ram_dout_hi),
         .mem_done(access_complete_w), .mem_own(access_own_w),
-        .mem_ready(ram_ready_w)
+        .mem_ready(ram_ready_w),
+        .mem_wr_taken(ram_wt_w),
+        .cpu_wr_taken(seq_wr_taken_w)
     );
 
     // ---- RAM + SDRAM -------------------------------------------------------
@@ -281,12 +426,12 @@ module tb_mem_perf;
         .internal_data_bus_hi(cpu_data_bus_hi),
         .data_bus_out_hi(ram_dout_hi),
         .memory_read_n(~seq_mem_rd), .memory_write_n(~seq_mem_wr),
-        .no_command_state(mem_rd_n & mem_wr_n & io_rd_n & io_wr_n),
+        .no_command_state(bus_mrd_n & bus_mwr_n & io_rd_n & io_wr_n),
         .memory_access_ready(ram_ready_w),
         .access_complete(access_complete_w),
         .access_own(access_own_w),
         .ram_address_select_n(ram_sel_n),
-        .pf_disable        (1'b0),
+        .write_taken(ram_wt_w),
         .dbg(), .dbg2(), .dbg3(), .dbg4(), .dbg5(), .dbg6(), .dbg7(),
         .dbg_watch_addr(20'hFFFFF),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
@@ -368,13 +513,13 @@ module tb_mem_perf;
         .reset               (reset),
         .processor_ready     (proc_ready),
         .dma_ready           (),
-        .dma_wait_n          (1'b1),
+        .dma_wait_n          (~dma_wait),
         .io_channel_ready    (guest_ready),
         .io_read_n           (io_rd_n),
         .io_write_n          (io_wr_n),
-        .memory_read_n       (mem_rd_n),
+        .memory_read_n       (bus_mrd_n),
         .dma0_acknowledge_n  (1'b1),
-        .address_enable_n    (1'b0)
+        .address_enable_n    (aen)
     );
 
     // ---- the data bus back to the CPU --------------------------------------
@@ -663,6 +808,134 @@ module tb_mem_perf;
         end
     end
 
+    // ---- write-beat hit map -------------------------------------------------
+    // Each SDRAM write beat the mp issues for port A lands at cur_addr+p_wcnt
+    // (the burst is column-contiguous). Mark which guest bytes actually got a
+    // beat; a captured-but-never-beaten write shows as a hole here.
+    logic        wr_hit [0:2047];
+    initial for (int i = 0; i < 2048; i++) wr_hit[i] = 1'b0;
+    always_ff @(posedge clk) begin
+        if (u_ram.u_sdram.u_mp.state == 4'd6    // S_RW
+            && u_ram.u_sdram.u_mp.cur_we && mp_grant == 3'd0) begin
+            automatic longint g = u_ram.u_sdram.u_mp.cur_addr
+                                + u_ram.u_sdram.u_mp.p_wcnt;
+            if (g >= 20'h4000 && g < 20'h4800)
+                wr_hit[g - 20'h4000] <= 1'b1;
+        end
+    end
+
+    // log RAM write-accepts + the shim burst they launch, in a narrow window
+    // (+accaddr=N sets the base, default near a previously-seen hole).
+    logic [19:0] acc_lo = 20'h4500, acc_hi = 20'h4560;
+    initial begin
+        int v;
+        if ($value$plusargs("accaddr=%h", v)) begin
+            acc_lo = v; acc_hi = v + 20'h0300;
+        end
+    end
+    // Per-cycle traces are the bulk of the output; gate them so correctness
+    // runs (and CI) stay readable. +vtrace restores them all.
+    logic trace = 1'b0;
+    initial trace = $test$plusargs("vtrace");
+
+    // The whole capture/strobe trace is phase-1-window diagnostics -- gated
+    // on +vtrace so correctness runs (and CI) stay readable. The dq_*
+    // histogram below stays live: it feeds the verify summary.
+    always_ff @(posedge clk) if (trace) begin
+        if (u_ram.state == u_ram.IDLE
+            && u_ram.next_state == u_ram.RAM_WRITE_1
+            && u_ram.accept_live_wr
+            && u_ram.accept_address[19:0] >= acc_lo
+            && u_ram.accept_address[19:0] < acc_hi)
+            $display("  ACCW t=%0t ad=%05x w=%0d d=%02x/%02x",
+                     $time, u_ram.accept_address[19:0], u_ram.accept_word,
+                     u_ram.accept_data, u_ram.accept_data_hi);
+        // shim captures the burst on the !busy && write_request edge; the
+        // operands live on access_* that same cycle.
+        if (!u_ram.u_sdram.busy && u_ram.u_sdram.write_request
+            && u_ram.access_address[19:0] >= acc_lo
+            && u_ram.access_address[19:0] < acc_hi)
+            $display("  SHIM t=%0t ad=%05x num=%0d din=%02x/%02x",
+                     $time, u_ram.access_address[19:0], u_ram.access_num,
+                     u_ram.access_data_in[7:0], u_ram.access_data_in_hi[7:0]);
+        // what the bus actually presents: every write strobe rise + its live
+        // operands. Distinguishes a word access mis-captured from the bridge
+        // splitting a word write into byte accesses.
+        if (u_ram.write_strobe_rose
+            && u_ram.latch_address[19:0] >= acc_lo
+            && u_ram.latch_address[19:0] < acc_hi)
+            $display("  WSTB t=%0t ad=%05x wn=%0d d=%02x/%02x",
+                     $time, u_ram.latch_address[19:0], u_ram.word_now,
+                     u_ram.internal_data_bus, u_ram.internal_data_bus_hi);
+        // every durable capture (park slot / cap / live accept) -- the word
+        // flag that actually latches vs the live word_now, and the bridge's
+        // word_access line. A word write captured while word_access is low
+        // drains as a single byte -> the odd half is lost.
+        if (u_ram.write_command
+            && (u_ram.new_write_strobe | u_ram.new_write_strobe2
+                | u_ram.new_write_strobe3 | u_ram.idle_park | u_ram.new_cap
+                | u_ram.wr_accept_live)
+            && u_ram.latch_address[19:0] >= acc_lo
+            && u_ram.latch_address[19:0] < acc_hi)
+            $display("  CAP t=%0t ad=%05x wn=%0d cwa=%0d smw=%0d dq=%0d pend=%0d%0d%0d cap=%0d",
+                     $time, u_ram.latch_address[19:0], u_ram.word_now,
+                     cpu_word_access, seq_mem_word, u_bridge.cur_dq,
+                     u_ram.wc_pend, u_ram.wc_pend2, u_ram.wc_pend3,
+                     u_ram.cap_valid);
+        // bridge-side: what the write queue accepted and what each drain
+        // presents, for the same window.
+        if (u_bridge.wrq_push
+            && u_bridge.srv_addr >= acc_lo && u_bridge.srv_addr < acc_hi)
+            $display("  WQP t=%0t a=%05x d=%04x ube=%b cnt=%0d",
+                     $time, u_bridge.srv_addr, u_bridge.srv_data,
+                     u_bridge.srv_ube, u_bridge.wrq_cnt);
+        if (u_bridge.arm_drain
+            && u_bridge.wrq_addr[0] >= acc_lo && u_bridge.wrq_addr[0] < acc_hi)
+            $display("  WQD t=%0t a=%05x d=%04x ube=%b",
+                     $time, u_bridge.wrq_addr[0], u_bridge.wrq_data[0],
+                     u_bridge.wrq_ube[0]);
+        // per-cycle view of any write strobe the bridge presents for the
+        // window: the pair engine's presented address/word flag vs what the
+        // RAM sees. Reveals a drain re-arm, a byte-pair split, or a stale
+        // residual strobe.
+        if (u_ram.write_command
+            && (u_bridge.ad_out >= acc_lo && u_bridge.ad_out < acc_hi))
+            $display("  STB t=%0t ad=%05x lad=%05x wa=%0d bs=%0d ps=%0d bi=%0d dq=%0d tc=%0d sw=%0d pr=%0d",
+                     $time, u_bridge.ad_out, u_ram.latch_address[19:0],
+                     u_bridge.word_access, u_bridge.bstate, u_bridge.ps_r,
+                     u_bridge.byte_idx, u_bridge.cur_dq, u_bridge.t_cnt,
+                     u_bridge.saw_low, u_bridge.processor_ready);
+        // catch saw_low arming: log the dip, whether OUR write strobe is on
+        // the bus yet, and whether the RAM even decodes a command right now.
+        if (u_bridge.bstate == u_bridge.B_CMD && u_bridge.cur_dq
+            && !u_bridge.saw_low && u_bridge.ready_d1
+            && !u_bridge.processor_ready
+            && u_bridge.ad_out >= acc_lo && u_bridge.ad_out < acc_hi)
+            $display("  SWARM t=%0t ad=%05x wcmd=%0d rsn=%0d sel=%0d bo=%0d smw=%0d mrdy=%0d icr=%0d",
+                     $time, u_bridge.ad_out, u_ram.write_command,
+                     u_ram.memory_write_n, u_ram.ram_address_select_n,
+                     u_bridge.bus_ours, seq_mem_wr, ram_ready_w, guest_ready);
+    end
+
+    // histogram of t_cnt when a drain's write command first reaches seq_mem_wr.
+    // Unconditional: it feeds the verify summary. Keyed on cur_addr (stable
+    // for the whole B_CMD), armed on arm_drain.
+    bit dq_seen_cmd [0:8191];
+    int dq_present  [0:7];
+    int dq_max_pres = 0;
+    always_ff @(posedge clk) begin
+        if (u_bridge.cur_dq && u_bridge.bstate == u_bridge.B_CMD
+            && seq_mem_wr && !dq_seen_cmd[u_bridge.cur_addr[12:0]]) begin
+            dq_seen_cmd[u_bridge.cur_addr[12:0]] <= 1'b1;
+            dq_present[u_bridge.t_cnt] <= dq_present[u_bridge.t_cnt] + 1;
+            if (u_bridge.t_cnt > dq_max_pres) dq_max_pres <= u_bridge.t_cnt;
+        end
+        if (u_bridge.arm_drain)
+            dq_seen_cmd[u_bridge.wrq_addr[0][12:0]] <= 1'b0;
+        if (u_bridge.bstate == u_bridge.B_IDLE)
+            dq_seen_cmd <= '{default:0};
+    end
+
     // ========================================================================
     // phase brackets: OUT 88FEh,n marks start (n) and end (n|80h)
     // ========================================================================
@@ -769,24 +1042,144 @@ module tb_mem_perf;
         $fflush;
     endtask
 
+    // ---- end-of-run verification -------------------------------------------
+    // After the program finishes: the data regions must hold their REP-op
+    // patterns, the code image must be intact, and under +GRANT the run must
+    // have survived every grant without a wild transfer or a stray write.
+    task automatic verify_run;
+        int bad = 0;
+        int dma_seen = 0;
+        logic [15:0] w;
+        begin
+            for (int a = 20'h2000; a < 20'h2800; a++) begin
+                w = sdr.u_part.peek(a);
+                if (w[7:0] !== 8'h5A) begin
+                    if (bad < 12) $display("  BAD stosb %05x=%02x", a, w[7:0]);
+                    bad++;
+                end
+            end
+            for (int a = 20'h4000; a < 20'h4800; a++) begin
+                w = sdr.u_part.peek(a);
+                if (w[7:0] !== 8'h5A) begin
+                    if (bad < 12) $display("  BAD stosw %05x=%04x", a, w);
+                    bad++;
+                end
+            end
+            // bytes the mp never issued a write beat to (captured-but-dropped)
+            begin
+                int nh = 0;
+                for (int a = 0; a < 2048; a++)
+                    if (!wr_hit[a]) begin
+                        if (nh < 12) $display("  NOBEAT %05x", 20'h4000 + a);
+                        nh++;
+                    end
+                $display("  wr_hit holes=%0d", nh);
+            end
+            for (int a = 20'h8000; a < 20'h8800; a++) begin
+                w = sdr.u_part.peek(a);
+                if (w[7:0] !== 8'h5A) begin
+                    if (bad < 12) $display("  BAD movsw %05x=%02x", a, w[7:0]);
+                    bad++;
+                end
+            end
+            for (int i = 0; i < 16; i++) begin
+                w = sdr.u_part.peek(20'hF0000 + i);
+                if (w[7:0] !== prog[i]) begin
+                    $display("  BAD code %05x=%02x want %02x",
+                             20'hF0000 + i, w[7:0], prog[i]);
+                    bad++;
+                end
+            end
+            // Under +GRANT the synthetic DMAC streams A5^addr over the
+            // whole 4 KB fill buffer, so every byte of the probed
+            // 256-byte window must hold the pattern -- anything less is
+            // a DMA write that never landed. Without +GRANT the region
+            // is whatever the phases left; dma_seen is noise then.
+            for (int a = 20'h30000; a < 20'h30100; a++) begin
+                w = sdr.u_part.peek(a);
+                if (w[7:0] == (8'hA5 ^ a[7:0])) dma_seen++;
+            end
+            $display("VERIFY: bad=%0d diverged=%0d stray=%0d grants=%0d midcmd=%0d dma_bytes=%0d",
+                     bad, diverged, stray, grants, grants_midcmd, dma_seen);
+            $display("  RAM drop-witness: uncov=%0d parks=%0d first=%05x/%02x st=%0d last=%05x/%02x",
+                     u_ram.dbg_uncov, u_ram.dbg_parks,
+                     u_ram.dbg_uncov_addr, u_ram.dbg_uncov_data, u_ram.dbg_uncov_st,
+                     u_ram.dbg_uncov_addr2, u_ram.dbg_uncov_data2);
+            // queue occupancy at verify: if a bad write is still parked it is
+            // wedged, not dropped. acc_ring = last 3 writes the FSM accepted.
+            $display("  RAM queue @verify: st=%0d pend=%b%b%b cap=%b inflight(wr=%b rd=%b) acc_ring=%08x %08x %08x",
+                     u_ram.state, u_ram.wc_pend, u_ram.wc_pend2, u_ram.wc_pend3,
+                     u_ram.cap_valid, u_ram.accept_live_wr, u_ram.accept_live_rd,
+                     u_ram.acc_ring[2], u_ram.acc_ring[1], u_ram.acc_ring[0]);
+            $display("  drain cmd-present @t_cnt: [%0d %0d %0d %0d %0d %0d %0d %0d] max=%0d",
+                     dq_present[0], dq_present[1], dq_present[2], dq_present[3],
+                     dq_present[4], dq_present[5], dq_present[6], dq_present[7],
+                     dq_max_pres);
+            // bad/diverged/stray are direct loss checks; dbg_uncov is
+            // RAM's own "a write strobe fell with its operands never
+            // durably held" witness -- a true-loss counter, not a
+            // heuristic; and under +GRANT the fill window must be whole.
+            if (bad || diverged || stray || (u_ram.dbg_uncov != 16'd0)
+                || (grant_en && (dma_seen != 256 || grants == 0)))
+                $display("=== FAIL tb_mem_perf ===");
+            else
+                $display("=== PASS tb_mem_perf ===");
+        end
+    endtask
+
     // marker decode on the IO-write strobe
     logic io_marker_d = 1'b1;
+    int   settle_ctr  = -1;
     wire  io_marker   = ~io_wr_n & (cpu_address == 16'h88FE);
     always_ff @(posedge clk) begin
         io_marker_d <= io_wr_n;
-        if (io_marker & io_marker_d) begin     // first cycle of this strobe
-            if (cpu_data_bus[7]) begin
-                if (cur_phase >= 0) phase_end(cpu_data_bus[6:0]);
-                cur_phase = -1;
-            end else if (cpu_data_bus == 8'hFF) begin
-                $display("=== all phases done ===");
+        if (settle_ctr >= 0) begin             // post-FF settle: let the
+            if (settle_ctr == 0) begin         // posted-write queue drain
+                verify_run;                    // before peeking the store
                 cur_phase = 256;
                 $fflush;
                 $finish;
+            end
+            settle_ctr <= settle_ctr - 1;
+        end else if (io_marker & io_marker_d) begin   // first strobe edge
+            if (cpu_data_bus == 8'hFF) begin     // done marker: bit7 set too,
+                $display("=== all phases done ===");   // so test it first
+                settle_ctr <= 20000;             // long drain, then verify
+            end else if (cpu_data_bus[7]) begin
+                if (cur_phase >= 0) phase_end(cpu_data_bus[6:0]);
+                cur_phase = -1;
             end else begin
                 phase_start({25'd0, cpu_data_bus[6:0]});
                 c_qmax    <= 0;           // per-phase maxima
                 c_rel_max <= 0;
+            end
+        end
+    end
+
+    // ---- divergence + stray-write traps (the wild-jump witnesses) ----------
+    // The program runs at F0000..+len and fetches the FFFF0 reset vector at
+    // boot; it writes 0x2000/0x4000/0x8000 (data), the ~0x0400 stack and the
+    // A8000 window, and the DMAC writes 0x30000-0x30FFF. A far-transfer that
+    // sends CS:IP out of the code image is the SuperDepth symptom; a write to
+    // the code/reset-vector region is a stray that could cause it.
+    always_ff @(posedge clk) begin
+        if (sdram_up && !reset) begin
+            // CS:IP must stay in the code image (or the reset-vector fetch)
+            if (!((zet_pc >= 20'hF0000 && zet_pc < 20'hF2000) ||
+                  (zet_pc >= 20'hFFF00))) begin
+                if (diverged < 16)
+                    $display("*** DIVERGE pc=%05x aen=%b dma_act=%b bst=%0d ad=%05x t=%0t",
+                             zet_pc, aen, dma_active, u_bridge.bstate,
+                             cpu_address, $time);
+                diverged <= diverged + 1;
+            end
+            // no write may touch the code image or the reset vector
+            if (seq_mem_wr && seq_mem_addr >= 20'hF0000) begin
+                if (stray < 16)
+                    $display("*** STRAYWR->CODE addr=%05x d=%02x aen=%b dma_act=%b bst=%0d t=%0t",
+                             seq_mem_addr, seq_mem_wdata, aen, dma_active,
+                             u_bridge.bstate, $time);
+                stray <= stray + 1;
             end
         end
     end
@@ -813,7 +1206,7 @@ module tb_mem_perf;
 
     // Fills and fill-on-miss arms are rare enough to print unthrottled.
     reg [1:0] dead_d = 2'd0;
-    always_ff @(posedge clk) begin
+    always_ff @(posedge clk) if (trace) begin
         dead_d <= u_bridge.pf_dead;
         if (u_bridge.pf_dead != dead_d)
             $display("DEAD->%0d t=%0t cur_pf=%0d flm=%0d len=%0d beats=%0d ok=%0d ad=%05x w=%0d bst=%0d",
@@ -854,7 +1247,7 @@ module tb_mem_perf;
     int pfdbg = 0;
     int pfdbg_max = 300;
     initial if ($value$plusargs("pfdbg=%d", pfdbg_max)) ;
-    always_ff @(posedge clk) if (pfdbg < pfdbg_max) begin
+    always_ff @(posedge clk) if (trace && pfdbg < pfdbg_max) begin
         if (u_bridge.hit_serve) begin
             // flat store is byte-indexed: one guest byte per word's low half
             automatic logic [15:0] w0  = sdr.u_part.peek(u_bridge.srv_addr);
@@ -879,6 +1272,129 @@ module tb_mem_perf;
         end
     end
 
+    // ---- dropped-write witness ----------------------------------------------
+    // Per-signal shift registers (bit 0 = newest) so there is no packed-field
+    // alignment to get wrong. On an uncovered strobe fall in the stosw range
+    // dump the preceding 24 cycles to see exactly what released the write
+    // before its operands were captured.
+    localparam int RB = 32;
+    int          losstr = 0;
+    int          untr   = 0;
+    logic [RB-1:0] h_ce, h_prdy, h_icr, h_mrdy, h_rnw, h_rqn, h_prnw;
+    logic [RB-1:0] h_swr, h_wcmd, h_wcd, h_mwn, h_rsn;
+    logic [RB-1:0] h_wcov, h_cs, h_wso, h_cap, h_wn, h_cw;
+    logic [RB-1:0] h_nws1, h_nws2, h_nws3, h_idpk, h_ncap, h_wal;
+    logic [RB-1:0] h_wr_fell, h_dupcov;
+    logic [RB-1:0] h_aen, h_exp, h_iwn;
+    logic [2:0]    h_sst [0:RB-1];
+    logic [2:0]    h_mc  [0:RB-1];
+    logic [2:0]    h_psr [0:RB-1];
+    logic [2:0]    h_st  [0:RB-1];
+    logic [2:0]    h_pend[0:RB-1];
+    logic [19:0]   h_ad  [0:RB-1];
+    int            hwptr = 0;
+    always_ff @(posedge clk) begin
+        h_ce    <= {h_ce[RB-2:0],    ce_pos};
+        h_prdy  <= {h_prdy[RB-2:0],  proc_ready};
+        h_icr   <= {h_icr[RB-2:0],   guest_ready};
+        h_mrdy  <= {h_mrdy[RB-2:0],  ram_ready_w};
+        h_rnw   <= {h_rnw[RB-2:0],   u_ready.ready_n_or_wait};
+        h_rqn   <= {h_rqn[RB-2:0],   u_ready.ready_n_or_wait_Qn};
+        h_prnw  <= {h_prnw[RB-2:0],  u_ready.prev_ready_n_or_wait};
+        h_swr   <= {h_swr[RB-2:0],   seq_mem_wr};
+        h_wcmd  <= {h_wcmd[RB-2:0],  u_ram.write_command};
+        h_wcd   <= {h_wcd[RB-2:0],   u_ram.write_command_d};
+        h_mwn   <= {h_mwn[RB-2:0],   u_ram.memory_write_n};
+        h_rsn   <= {h_rsn[RB-2:0],   u_ram.ram_address_select_n};
+        h_wcov  <= {h_wcov[RB-2:0],  u_ram.wr_covered};
+        h_cs    <= {h_cs[RB-2:0],    u_ram.cov_same};
+        h_wso   <= {h_wso[RB-2:0],   u_ram.wr_strobe_open};
+        h_cap   <= {h_cap[RB-2:0],   u_ram.cap_valid};
+        h_wn    <= {h_wn[RB-2:0],    u_ram.word_now};
+        h_cw    <= {h_cw[RB-2:0],    cpu_word_access};
+        h_nws1  <= {h_nws1[RB-2:0],  u_ram.new_write_strobe};
+        h_nws2  <= {h_nws2[RB-2:0],  u_ram.new_write_strobe2};
+        h_nws3  <= {h_nws3[RB-2:0],  u_ram.new_write_strobe3};
+        h_idpk  <= {h_idpk[RB-2:0],  u_ram.idle_park};
+        h_ncap  <= {h_ncap[RB-2:0],  u_ram.new_cap};
+        h_wal   <= {h_wal[RB-2:0],   u_ram.wr_accept_live};
+        h_wr_fell <= {h_wr_fell[RB-2:0], u_ram.write_strobe_fell};
+        h_dupcov  <= {h_dupcov[RB-2:0], u_ram.dup_covered};
+        h_aen     <= {h_aen[RB-2:0],     aen};
+        h_sst[hwptr] <= u_seq.st;
+        h_exp     <= {h_exp[RB-2:0],     u_seq.expand};
+        h_iwn     <= {h_iwn[RB-2:0],     mem_wr_n};
+        h_mc[hwptr] <= u_8288.machine_cycle;
+        h_psr[hwptr] <= processor_status;
+        h_st[hwptr]  <= u_ram.state;
+        h_pend[hwptr] <= {u_ram.wc_pend, u_ram.wc_pend2, u_ram.wc_pend3};
+        h_ad[hwptr]  <= u_ram.latch_address[19:0];
+        hwptr <= (hwptr + 1) & (RB - 1);
+        // any uncovered fall: log the DMA/grant context around it -- the
+        // +GRANT run's 1-per-grant residue lives here
+        if (u_ram.write_strobe_fell & ~(u_ram.wr_covered & u_ram.cov_same)) begin
+            if (untr < 6) begin
+                $display("UNCOV t=%0t ad=%05x d=%02x wn=%0d st=%0d pend=%03b cap=%0d | aen=%0d dw=%0d act=%0d dwr=%0d bl=%0d hr=%0d hlda=%0d daddr=%05x smw=%0d mwn=%0d | sst=%0d exp=%0d gp=%0d cwr=%0d",
+                         $time, u_ram.latch_address, u_ram.internal_data_bus,
+                         u_ram.word_now, u_ram.state,
+                         {u_ram.wc_pend, u_ram.wc_pend2, u_ram.wc_pend3},
+                         u_ram.cap_valid, aen, dma_wait, dma_active, dma_wr,
+                         burst_left, hreq, hlda_w, dma_addr, seq_mem_wr,
+                         u_ram.memory_write_n, u_seq.st, u_seq.expand,
+                         u_seq.gp, seq_wr);
+                $display("   i8288: mc=%03b swms=%0d psr=%0d bs=%0d dq=%0d ps=%0d mcp=%0d | hlda_d=%0d dma_wait=%0d",
+                         u_8288.machine_cycle,
+                         u_8288.strobed_write_memory_status,
+                         processor_status, u_bridge.bstate, u_bridge.cur_dq,
+                         u_bridge.ps_r, u_8288.machine_cycle_period,
+                         hlda_w, dma_wait);
+                for (int k = 16; k >= 1; k--)
+                    $display("  t-%02d st=%0d wcmd=%0d swr=%0d wcov=%0d cs=%0d nws=%0d%0d%0d idpk=%0d ncap=%0d wal=%0d dup=%0d ad=%05x wn=%0d aen=%0d sst=%0d exp=%0d iwn=%0d mc=%0d psr=%0d",
+                             k, h_st[(hwptr - k) & (RB - 1)],
+                             h_wcmd[k-1], h_swr[k-1], h_wcov[k-1], h_cs[k-1],
+                             h_nws1[k-1], h_nws2[k-1], h_nws3[k-1],
+                             h_idpk[k-1], h_ncap[k-1], h_wal[k-1],
+                             h_dupcov[k-1], h_ad[(hwptr - k) & (RB - 1)],
+                             h_wn[k-1], h_aen[k-1],
+                             h_sst[(hwptr - k) & (RB - 1)], h_exp[k-1],
+                             h_iwn[k-1], h_mc[(hwptr - k) & (RB - 1)],
+                             h_psr[(hwptr - k) & (RB - 1)]);
+            end
+            untr <= untr + 1;
+        end
+        // strict loss: write strobe fell and was NEVER covered
+        if (u_ram.write_strobe_fell & ~u_ram.wr_covered & losstr < 4) begin
+            losstr <= losstr + 1;
+            $display("\n=== TRUE-LOSS #%0d t=%0t addr=%05x data=%02x word=%b ph=%0d ===",
+                     losstr, $time, u_ram.latch_address,
+                     u_ram.internal_data_bus, u_ram.word_now, cur_phase);
+            // cycles T-24 .. T-1: 1-bit history lives in h_X[k-1], the
+            // ring arrays in index (hwptr-k)&mask. Live signals are T itself.
+            for (int k = 24; k >= 1; k--) begin
+                automatic int r = (hwptr - k) & (RB - 1);
+                $display("  t-%02d st=%0d pend=%03b cap=%0d wcmd=%0d wcd=%0d swr=%0d mwn=%0d rsn=%0d wcov=%0d cs=%0d wso=%0d nws=%0d%0d%0d idpk=%0d ncap=%0d wal=%0d dup=%0d mrdy=%0d icr=%0d prdy=%0d rnw=%0d ce=%0d ad=%05x wn=%0d",
+                         k, h_st[r], h_pend[r], h_cap[k-1],
+                         h_wcmd[k-1], h_wcd[k-1], h_swr[k-1], h_mwn[k-1],
+                         h_rsn[k-1], h_wcov[k-1], h_cs[k-1], h_wso[k-1],
+                         h_nws1[k-1], h_nws2[k-1], h_nws3[k-1],
+                         h_idpk[k-1], h_ncap[k-1], h_wal[k-1], h_dupcov[k-1],
+                         h_mrdy[k-1], h_icr[k-1], h_prdy[k-1], h_rnw[k-1],
+                         h_ce[k-1], h_ad[r], h_wn[k-1]);
+            end
+            $display("  >>T  st=%0d pend=%03b cap=%0d wcmd=%0d wcd=%0d swr=%0d mwn=%0d rsn=%0d wcov=%0d cs=%0d wso=%0d nws=%0d%0d%0d idpk=%0d ncap=%0d wal=%0d dup=%0d mrdy=%0d icr=%0d prdy=%0d rnw=%0d ce=%0d ad=%05x wn=%0d",
+                     u_ram.state, {u_ram.wc_pend, u_ram.wc_pend2, u_ram.wc_pend3},
+                     u_ram.cap_valid, u_ram.write_command, u_ram.write_command_d,
+                     seq_mem_wr, u_ram.memory_write_n, u_ram.ram_address_select_n,
+                     u_ram.wr_covered, u_ram.cov_same, u_ram.wr_strobe_open,
+                     u_ram.new_write_strobe, u_ram.new_write_strobe2,
+                     u_ram.new_write_strobe3, u_ram.idle_park, u_ram.new_cap,
+                     u_ram.wr_accept_live, u_ram.dup_covered,
+                     ram_ready_w, guest_ready, proc_ready,
+                     u_ready.ready_n_or_wait, ce_pos,
+                     u_ram.latch_address[19:0], u_ram.word_now);
+        end
+    end
+
     initial begin
         repeat (20) @(posedge clk);
         reset = 0;
@@ -893,7 +1409,8 @@ module tb_mem_perf;
 
     initial begin
         #400_000_000;                       // 400 ms of sim time ceiling
-        $display("GLOBAL TIMEOUT");
+        $display("GLOBAL TIMEOUT  diverged=%0d stray=%0d grants=%0d midcmd=%0d ph=%0d pc=%05x",
+                 diverged, stray, grants, grants_midcmd, cur_phase, zet_pc);
         $fflush;
         $finish;
     end

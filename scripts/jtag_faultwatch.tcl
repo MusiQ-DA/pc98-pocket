@@ -1,6 +1,7 @@
-# jtag_faultwatch.tcl -- reboot the guest at a chosen speed, poll slot 0x38
-# (zet fault witness: {3'b0, seen, opc, pc}) until a fault lands or TRYSECS
-# elapse; then dump every diagnostic slot and the pc-history ring.
+# jtag_faultwatch.tcl -- reboot the guest at a chosen speed, poll the fault
+# slot ($fslot, 0x9d on current builds: {3'b0, seen, opc, pc}) until a fault
+# lands or TRYSECS elapse; then dump every diagnostic slot and the
+# pc-history ring.
 #
 #   SPD=0 TRIES=6 TRYSECS=240 CAPLOG=/tmp/faultwatch.log \
 #       openocd -f scripts/jtag_probe.cfg -f scripts/jtag_faultwatch.tcl
@@ -57,8 +58,13 @@ set fh [open $logpath w]
 puts $fh "# faultwatch start [clock format [clock seconds]]  SPD=$spd"
 flush $fh
 
+# Fault witness slot: this build maps {3'b000,fault_seen,zet_opc,fault_pc}
+# at 0x9d (seen=bit28, opc=bits27:20, pc=bits19:0). Older builds used 0x38;
+# override with env FSLOT if the on-Pocket bitstream differs.
+set fslot [expr {[info exists ::env(FSLOT)] ? $::env(FSLOT) : 0x9d}]
+
 set allslots {0x18 0x19 0x1a 0x1b 0x1c 0x20 0x21 0x22 0x23 0x24 0x25 \
-              0x26 0x27 0x28 0x29 0x30 0x31 0x32 0x33 0x34 0x35 0x38}
+              0x26 0x27 0x28 0x29 0x30 0x31 0x32 0x33 0x34 0x35 0x9d}
 
 proc snapshot {tag fh} {
     global allslots
@@ -67,6 +73,9 @@ proc snapshot {tag fh} {
         set v [rd $s]
         puts $fh [format "  slot %s = %s" $s $v]
     }
+    # Ring: in this build 0x40/0x41 are shadowed by dbg_gvdisp (display
+    # telemetry), so only 0x42-0x5f carry pc_snap[2..31]. Read them anyway;
+    # a 0x40/0x41 value that is NOT {1,w,data} is the display word.
     for {set i 0x40} {$i <= 0x5f} {incr i} {
         set v [rd $i]
         puts $fh [format "  ring %02x = %s" $i $v]
@@ -88,9 +97,9 @@ for {set t 1} {$t <= $tries} {incr t} {
         set now [clock milliseconds]
         set el [expr {($now - $t0)/1000.0}]
         if {$el > $trysecs} break
-        set s38 [rd 0x38]
-        scan $s38 %x v
-        # slot 0x38 = {3'b0, fault_seen, opc[7:0], pc[19:0]}: the flag is
+        set sflt [rd $fslot]
+        scan $sflt %x v
+        # fslot = {3'b0, fault_seen, opc[7:0], pc[19:0]}: the flag is
         # bit 28, not bit 20 (0x100000 was opc[0] and false-triggered on
         # any odd opcode byte).
         if {$v & 0x10000000} {
@@ -103,7 +112,7 @@ for {set t 1} {$t <= $tries} {incr t} {
         }
         # The verify-fail landing is `jmp $` at F99E5: the fetch address
         # parks on F99E5/F99E6 forever.  Two samples parked there mean the
-        # POST detected a real error (not a zet fault -- slot 0x38 stays 0).
+        # POST detected a real error (not a zet fault -- $fslot stays 0).
         set a1 [rd 0x18]
         after 150
         set a2 [rd 0x18]
@@ -118,7 +127,7 @@ for {set t 1} {$t <= $tries} {incr t} {
         }
         if {[expr {int($el) % 30}] == 0} {
             set pc [rd 0x18]
-            puts $fh [format "  t=%6.1fs  pc=%s (38=%s)" $el $pc $s38]
+            puts $fh [format "  t=%6.1fs  pc=%s (flt=%s)" $el $pc $sflt]
             flush $fh
             after 1000
         }

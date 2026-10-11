@@ -103,6 +103,7 @@ module tb_zet_286chk;
         .data_bus          (din),
         .processor_ready   (1'b1),
         .address_enable_n  (1'b0),
+        .sdram_wr_taken    (~mem_wr_n),
         .pause_core        (1'b0),
         .biu_done          (),
         .pf_disable        (1'b0),

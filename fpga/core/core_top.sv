@@ -3234,6 +3234,7 @@ module core_top (
         .vram_wait_en                       (vram_wait_en),
         .pause_core                         (pause_core_chipset),
         .ram_rw_complete                    (ram_rw_complete)
+        ,.sdram_wr_taken                   (sdram_wr_taken)
         ,.pc98_key_stb                      (pc98_key_stb)
         ,.pc98_key_byte                     (pc98_key_code)
         ,.mouse_dx                          (mouse_dx)
@@ -3292,6 +3293,9 @@ module core_top (
 
     // CHIPSET per-access "done" pulse (COMPLETE_RAM_RW); drives the ROM-load FSM.
     wire        ram_rw_complete;
+    // CHIPSET's posted-write capture witness; the bridge's drain engine
+    // holds each queued write strobe until this says it is durably held.
+    wire        sdram_wr_taken;
 
     // ---- SDRAM boundary: chipset controller -> Pocket dram_* pins ----
     // CHIPSET drives these; pass straight through.
@@ -3382,6 +3386,7 @@ module core_top (
         .data_bus          (data_bus),
         .processor_ready   (processor_ready),
         .address_enable_n  (chipset_aen),
+        .sdram_wr_taken    (sdram_wr_taken),
         .pause_core        (pause_core),
         .biu_done          (biu_done),
         .pf_disable        (jtag_pf_dis),

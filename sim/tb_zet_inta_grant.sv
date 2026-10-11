@@ -159,6 +159,7 @@ module tb_zet_inta_grant;
         .data_bus          (data_bus),
         .processor_ready   (proc_ready),
         .address_enable_n  (aen),
+        .sdram_wr_taken    (wr_taken_w),
         .pause_core        (1'b0),
         .pf_disable        (1'b1),
         .biu_done          (),
@@ -260,6 +261,7 @@ module tb_zet_inta_grant;
 
     // ---- RAM + SDRAM ---------------------------------------------------------
     wire        initilized_sdram_w, access_complete_w, access_own_w, ram_sel_n;
+    wire        wr_taken_w;   // u_ram write_taken -> u_bridge drain release
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
@@ -283,6 +285,7 @@ module tb_zet_inta_grant;
         .access_complete(access_complete_w),
         .access_own(access_own_w),
         .ram_address_select_n(ram_sel_n),
+        .write_taken(wr_taken_w),
         .dbg(), .dbg2(), .dbg3(), .dbg4(), .dbg5(), .dbg6(), .dbg7(),
         .dbg_watch_addr(20'hFFFFF),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),

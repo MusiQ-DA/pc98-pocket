@@ -42,6 +42,7 @@ module tb_gvram_ram_leg;
     wire        mem_rd, mem_wr;
     wire [7:0]  mem_rdata, mem_rdata_hi;
     wire        mem_done, mem_own, mem_ready;
+    wire        ram_wt_w;           // u_ram write_taken -> seq mem_wr_taken
 
     pc98_gvram_seq #(.EGC(1'b1)) dut (
         .clk(clk), .reset(reset),
@@ -63,7 +64,8 @@ module tb_gvram_ram_leg;
         .mem_word(mem_word),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
-        .mem_done(mem_done), .mem_own(mem_own), .mem_ready(mem_ready)
+        .mem_done(mem_done), .mem_own(mem_own), .mem_ready(mem_ready),
+        .mem_wr_taken(ram_wt_w), .cpu_wr_taken()
     );
 
     // ---- the real memory -------------------------------------------------
@@ -90,6 +92,7 @@ module tb_gvram_ram_leg;
         .memory_access_ready(mem_ready),
         .access_complete(mem_done), .access_own(mem_own),
         .ram_address_select_n(ram_sel_n),
+        .write_taken(ram_wt_w),
         .dbg(ram_dbg), .dbg2(), .dbg3(), .dbg4(), .dbg5(), .dbg6(), .dbg7(),
         .dbg_watch_addr(20'hFFFFF),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),

@@ -154,18 +154,23 @@ if {[info exists ::env(HDNOBOOT)]} { shutdown; exit 0 }
 
 # CPU-speed override (probe write slot 0x89): HDSPEED=0..3 forces
 # 5/10/20/max regardless of the OSD setting for scripted runs;
-# HDSPEED=clear hands it back.
+# HDSPEED=clear hands it back. HDPFDIS=1 sets wdata[3] in the same
+# write -> jtag_pf_dis, the prefetch kill-switch, for crash A/B.
 #
 #   env HDIMG=img.hdm HDSPEED=1
-if {[info exists ::env(HDSPEED)]} {
+#   env HDIMG=img.hdm HDSPEED=1 HDPFDIS=1
+if {[info exists ::env(HDSPEED)] || [info exists ::env(HDPFDIS)]} {
     select_node 1
-    if {$env(HDSPEED) eq "clear"} {
-        wr 0x89 0
-        puts "speed override cleared (OSD setting restored)"
-    } else {
-        wr 0x89 [expr {4 | ($env(HDSPEED) & 3)}]
-        puts [format "speed override: clk_select=%d" $env(HDSPEED)]
+    set w 0
+    if {[info exists ::env(HDSPEED)] && $env(HDSPEED) ne "clear"} {
+        set w [expr {4 | ($env(HDSPEED) & 3)}]
     }
+    if {[info exists ::env(HDPFDIS)] && $env(HDPFDIS)} {
+        set w [expr {$w | 8}]
+    }
+    wr 0x89 $w
+    puts [format "slot89=0x%X spd_ovr=%d sel=%d pf_dis=%d" \
+          $w [expr {($w >> 2) & 1}] [expr {$w & 3}] [expr {($w >> 3) & 1}]]
 }
 
 # --- mount + (optionally) reset into a boot ---------------------------------

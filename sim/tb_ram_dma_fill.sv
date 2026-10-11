@@ -343,6 +343,7 @@ module tb_ram_dma_fill;
         .memory_access_ready(ram_ready_w),
         .access_complete(access_complete_w),
         .ram_address_select_n(ram_address_select_n),
+        .write_taken(),
         .dbg(), .dbg2(ram_dbg2), .dbg3(ram_dbg3),
         .dbg4(), .dbg5(), .dbg6(), .dbg7(),
         .dbg_watch_addr(20'hFFFFF),

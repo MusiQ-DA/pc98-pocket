@@ -334,6 +334,7 @@ module tb_ram_dma_fill_late;
         .memory_access_ready(ram_ready_w),
         .access_complete(access_complete_w),
         .ram_address_select_n(ram_address_select_n),
+        .write_taken(),
         .dbg_watch_addr(20'hFFFFF),
         .dbg(), .dbg2(ram_dbg2), .dbg3(ram_dbg3),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),

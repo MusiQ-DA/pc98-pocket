@@ -104,6 +104,14 @@ module zet_cpu_bridge (
     input  wire  [7:0]  data_bus,
     input  wire         processor_ready,
     input  wire         address_enable_n,
+    // Posted-write drain witness: the queued write strobe currently on
+    // the memory pins is durably held inside the chipset's RAM -- its
+    // operands captured, or the address uncommandable. This is a
+    // WRITE-SPECIFIC release: unlike processor_ready it cannot dip or
+    // rise for an unrelated access (the ready pipeline, a completing
+    // read, a DMA write), so the drain waits on it alone -- with
+    // word_access and both data lanes still on the pins until then.
+    input  wire         sdram_wr_taken,
     input  wire         pause_core,
     // Debug/kill switch: when high, no prefetch window is armed or filled --
     // every guest read pays the bus directly. Lets JTAG A/B the prefetch
@@ -431,6 +439,36 @@ module zet_cpu_bridge (
                      && (fast_pair ? cpu_ce_negedge : (gap_cnt == 2'd1));
     wire pair_done   = pair_finish && last_byte;
     wire inta_done   = pair_done && cur_inta;
+
+    // The pair's command-phase release. Every memory-write pair takes
+    // ONLY the capture witness: processor_ready is a 2-FF pipeline, so
+    // its HIGH is still the previous access's residue for ~2 ce after
+    // this byte's suppression begins, and its edges can belong to
+    // nothing here (the ready pipeline draining, a completing read, a
+    // DMA write, a sequencer leg). A bare level or edge accept drops
+    // the write's strobe before its operands are captured -- the posted
+    // byte falls as a truncated byte, a word losing its odd half, a
+    // direct write dropping out whole.
+    //
+    // sdram_wr_taken answers all three shapes a guest write can take:
+    //   plain  -- the strobe's operands durably held in RAM, or never
+    //     commandable (unselected/protected); queued drains land here.
+    //   expanded -- a GRCG/EGC/page1 write never reaches RAM as itself;
+    //     its "taken" is the sequencer's walk reaching S_DONE, a held
+    //     level that cannot pulse for a foreign access (svc ops are
+    //     ownership-masked inside the witness).
+    //   deferred -- while a svc walk owns the sequencer the witness is
+    //     flat 0, so the pair simply waits for the port to come back.
+    //
+    // Reads and I/O keep the ready-level accept: their answer only
+    // exists on the ready rise, and the saw_low-qualified fast path plus
+    // the faithful-count fallback is their pacing contract.
+    wire cur_memw = (cur_bs == BS_MEMW) & ~cur_inta;
+    wire pair_accept = cur_memw
+                     ? sdram_wr_taken
+                     : ((t_cnt >= 3'd3
+                         || (fast_pair && (t_cnt >= 3'd2) && saw_low))
+                        && processor_ready);
 
     assign biu_done = biu_done_r;
 
@@ -1171,8 +1209,8 @@ module zet_cpu_bridge (
     always @(posedge clk) begin
         if (bstate == B_IDLE) rdy_seen <= 1'b0;
         else if (!processor_ready) rdy_seen <= 1'b1;
-        if (bstate == B_CMD && cpu_ce_posedge && processor_ready && bus_ours
-            && (t_cnt >= 3'd3 || (fast_pair && t_cnt >= 3'd2 && (saw_low || cur_dq))))
+        if (bstate == B_CMD && pair_accept && cpu_ce_posedge && bus_ours
+            && !fill_early)
             db_seen <= data_bus;
         if (wb_req && !req_busy && !wb_ack_i && !inta_active && !wb_tgc_o)
             $display("  %8t  WBREQ %s a=%05x sel=%b d=%04x", $time, wb_we_o ? "WR" : "RD", {wb_adr_o, wb_sel_o == 2'b10}, wb_sel_o, wb_dat_o);
@@ -1181,8 +1219,8 @@ module zet_cpu_bridge (
                      arm_drain ? "DRN" : arm_fill ? "FIL" : hit_serve ? "HIT"
                                : fillm_go ? "FLM" : "REQ",
                      arm_drain ? wrq_addr[0] : srv_addr, cur_dq, cur_pf);
-        if (bstate == B_CMD && cpu_ce_posedge && processor_ready && bus_ours
-            && (t_cnt >= 3'd3 || (fast_pair && t_cnt >= 3'd2 && (saw_low || cur_dq))))
+        if (bstate == B_CMD && pair_accept && cpu_ce_posedge && bus_ours
+            && !fill_early)
             $display("  %8t  ACC bs=%0d a=%05x db=%02x tc=%0d saw=%b dq=%b", $time, cur_bs, cur_addr, data_bus, t_cnt, saw_low, cur_dq);
         if (wrq_push)  $display("  %8t  WQ PUSH  a=%05x d=%04x ube=%b cnt=%0d", $time, srv_addr, srv_data, srv_ube, wrq_cnt);
         if (arm_drain) $display("  %8t  WQ DRAIN a=%05x d=%04x ube=%b cnt=%0d", $time, wrq_addr[0], wrq_data[0], wrq_ube[0], wrq_cnt);
@@ -1252,6 +1290,24 @@ module zet_cpu_bridge (
             end
             case (bstate)
               B_IDLE: begin
+                // word_access outlives pair_finish on purpose: the
+                // i8288's MWTC tail runs ~1 ce past the pair's release,
+                // and RAM snapshots the presented operands once more at
+                // the strobe's fall (its tail-capture slot). Held at the
+                // write's value through that tail, the fall still shows
+                // the captured operands (cov_same holds -- a covered
+                // twin, nothing new to park). Cleared early it drops
+                // the word flag while the strobe is still up, so the
+                // fall re-parks a phantom byte write that burns a whole
+                // extra drain -- and on different data would be a stray
+                // write. sdram_wr_taken is exactly "the guest write
+                // strobe is still up and covered": while it holds the
+                // tail is live so the flag stays; it falls with the
+                // strobe, then the flag clears here. A grant clears it
+                // regardless -- a stale word flag must never ride the
+                // DMA-owned bus (byte writes would burst to two words).
+                if (!bus_ours || !sdram_wr_taken)
+                    word_access <= 1'b0;
                 if (arm_req) begin
                     cur_bs           <= srv_bs;
                     cur_addr         <= srv_addr;
@@ -1351,15 +1407,24 @@ module zet_cpu_bridge (
 
                 // Fast accept (t_cnt>=2) only on a FRESH ready: the level can
                 // still be the previous byte's residue, which would capture
-                // stale bus data. A drain write is exempt from saw_low -- for
-                // a write strobe, RAM's wr_strobe_open holds ready low until
-                // the byte is durably captured, so a high ready already means
-                // "taken" and cannot be the previous byte's residue.
-                // The t_cnt>=3 fallback keeps never-dropping accesses
+                // stale bus data. saw_low -- a ready FALLING edge -- is the
+                // proof that this byte's suppression actually propagated.
+                // The t_cnt>=3 fallback keeps never-dipping accesses
                 // (instant I/O) on the faithful count.
-                if ((t_cnt >= 3'd3
-                     || (fast_pair && (t_cnt >= 3'd2) && (saw_low || cur_dq)))
-                    && cpu_ce_posedge && processor_ready && bus_ours
+                //
+                // A queued drain takes NEITHER test -- see pair_accept.
+                // Ready-based release is ambiguous twice over: processor_
+                // ready is a 2-FF pipeline, so it holds a stale HIGH for
+                // ~1 ce after this write's suppression begins (early
+                // release before capture -- the posted byte falls as a
+                // truncated byte, a word losing its odd half), and it
+                // dips for reasons unrelated to this access, so saw_low
+                // can arm before the drain's strobe ever reaches the bus
+                // (a ready FALL belonging to nothing here -- release on
+                // the next high, strobe never presented at all). The
+                // capture witness answers both: it rises only after THIS
+                // strobe's operands are held in RAM.
+                if (pair_accept && cpu_ce_posedge && bus_ours
                     && !fill_early) begin
                     if (cur_read && (byte_idx == 2'd0)) rd_lo <= data_bus;
                     if (cur_read && (byte_idx == 2'd1)) rd_hi <= data_bus;
@@ -1402,7 +1467,6 @@ module zet_cpu_bridge (
                         cur_fillm   <= 1'b0;
                         cur_dq      <= 1'b0;
                         byte_idx    <= 2'd0;
-                        word_access <= 1'b0;
                         bstate      <= B_IDLE;
                     end else begin
                         byte_idx <= 2'd1;

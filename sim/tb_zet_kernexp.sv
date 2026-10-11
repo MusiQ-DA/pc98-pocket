@@ -250,6 +250,7 @@ module tb_zet_kernexp;
         .data_bus          (din),
         .processor_ready   (cpu_ready),
         .address_enable_n  (aen_r),
+        .sdram_wr_taken    (~mem_wr_n),
         .pause_core        (1'b0),
         .biu_done          (),
         .pf_disable        (1'b0),
