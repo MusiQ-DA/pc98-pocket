@@ -289,9 +289,12 @@ module pc98_gvram_seq #(
     // landing, for a byte write-push on the first plane's read beat (the
     // queue needs the produced byte before any plane's write goes out).
     // A WORD access is one event, not two: np21w's shiftinput_incw/decw
-    // push the whole word then run egcsftw_* once, so a write's event fires
-    // on the even leg (both bus bytes are live then) and a read's on the
-    // odd leg's last plane (both legs' pushes are in the queue by then).
+    // push the whole word then run egcsftw_* once, so a write's head event
+    // fires on the FIRST leg's first read beat (both bus bytes are live
+    // then -- for dn that leg walks the odd byte, see legpar) and a read's
+    // on the odd leg's last plane (both legs' pushes are in the queue by
+    // then; a dn read still walks even-then-odd, only its queue layout
+    // flips).
     wire egc_dn      = egc_sft[12];
     wire word_dnwr   = is_word & ~is_read & egc_here & egc_dn;
     assign legpar    = half ^ word_dnwr;
@@ -304,7 +307,8 @@ module pc98_gvram_seq #(
     // A word access is TWO events one walk apart, sharing the engine's
     // single lane datapath: the head event does the word's input
     // accounting and lane 1, the tail event runs lane 2. A write's tail
-    // fires on the odd leg's first read beat, a read's in S_EVT2 -- the
+    // fires on the SECOND leg's first read beat (the odd leg going up,
+    // the even leg under legpar going down), a read's in S_EVT2 -- the
     // dead cycle the FSM now takes between the last push and the answer.
     wire egc_sf_evt  = egc_here
                      & (is_read
@@ -466,8 +470,21 @@ module pc98_gvram_seq #(
     // a word read that is the SECOND walk's S_DONE -- the even byte went
     // into lo_ans at the half boundary, the odd byte is live here.
     wire fin_read = expand & is_read & (st == S_DONE) & (~is_word | half);
-    assign cpu_rdata    = fin_read ? (is_word ? lo_ans : ans_byte)
-                                   : rdata_pass;
+    // The one case lo_ans CANNOT hold: an EGC word read's produced-byte
+    // path (ope 0x2000 and 0x400 both clear). Its shift event only exists
+    // after the odd leg's last push, so the low lane the head event made
+    // is egc_src[plane][7:0] right now -- muxed combinationally because a
+    // registered relatch would still show leg 0's pre-event ans_byte on
+    // the first ready clk, which is exactly when the guest samples.
+    // lo_ans stays correct for the raw (0x2000 -> egc_own_q) and rd_q
+    // (0x400) answers: those never get a post-boundary update.
+    wire wrd_prod = is_word & egc_here & ~svc_raw_rd
+                  & ~egc_ope[13] & ~egc_ope[10];
+    assign cpu_rdata    = fin_read
+                        ? (is_word
+                           ? (wrd_prod ? egc_src[egc_rd_plane][7:0] : lo_ans)
+                           : ans_byte)
+                        : rdata_pass;
     assign cpu_rdata_hi = fin_read ? ans_byte : mem_rdata_hi;
 
     always_ff @(posedge clk) begin
@@ -674,15 +691,6 @@ module pc98_gvram_seq #(
                     gp     <= plain_pg1 ? own : 2'd0;
                     tcr    <= 8'h00;
                     st     <= (is_read | grcg_rmw | egc_here) ? S_RD : S_WR;
-                end else if (is_word & half & is_read & egc_here
-                           & ~svc_raw_rd & ~egc_ope[13] & ~egc_ope[10]) begin
-                    // An EGC word READ runs its shift event on the odd
-                    // leg's last plane (both pushed bytes must be queued
-                    // before egcsftw_* sees them), so the even leg's answer
-                    // -- latched above before the event existed -- is the
-                    // produced low lane NOW.
-                    lo_ans <= egc_src[egc_rd_plane][7:0];
-                    if (!(cpu_rd | cpu_wr)) st <= S_IDLE;
                 end else if (!(cpu_rd | cpu_wr)) st <= S_IDLE;
               end
 

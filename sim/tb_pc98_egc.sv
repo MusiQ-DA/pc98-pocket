@@ -159,6 +159,18 @@ module tb_pc98_egc;
         end
     endtask
 
+    task automatic g_wrd(input [19:0] a, output [15:0] v);
+        begin
+            @(negedge clk);
+            cpu_gvram = 1'b1; cpu_addr = a; cpu_word = 1'b1; cpu_rd = 1'b1;
+            @(posedge cpu_ready);
+            v = {cpu_rdata_hi, cpu_rdata};
+            @(negedge clk);
+            cpu_rd = 1'b0; cpu_gvram = 1'b0; cpu_word = 1'b0;
+            repeat (2) @(negedge clk);
+        end
+    endtask
+
     // Plane p of window address a, page zero, in the bench's own keying.
     function automatic int p0(input [19:0] a, input [1:0] p);
         // Plane p at A8000 + p*0x8000, plane E at E0000 (pc98_sdram_map).
@@ -176,6 +188,7 @@ module tb_pc98_egc;
     endtask
 
     logic [7:0] rdb;
+    logic [15:0] rdw;
 
     // ---- the shift-pipeline vectors, from np21w's memegc.c --------------
     // srcA: eight bytes per plane of distinct data. expX[i][p] is what
@@ -482,6 +495,94 @@ module tb_pc98_egc;
             want($sformatf("W4 odd plane %0d = hi", p),
                  store[p0(20'hA8961, 2'(p))], 8'hD2);
         end
+        egc_set(4'h5, 8'h08);                         // back to 0x08F0
+
+        // ---- WR. word READS: egcsftw_* on the input side -----------------
+        // The W cases proved the write half; the read half has its own new
+        // machinery -- per-leg queue offsets (sf_push_off), the head event
+        // on the odd leg's last plane, the tail event's dead cycle in
+        // S_EVT2, and the low lane's answer path. Expected words are from
+        // np21w's memegc.c (the golden harness's memegc_rd16) run on this
+        // exact register/VRAM setup; every seed byte is distinct per plane
+        // so a lane or plane swap shows in the low byte alone.
+        egc_set(4'h3, 8'h00); egc_set(4'h2, 8'hFF);   // fgbg: plane B answers
+        egc_set(4'h5, 8'h08); egc_set(4'h4, 8'hF0);   // ope 0x08F0
+        for (int p = 0; p < 4; p++) begin
+            store[p0(20'hA8A00, 2'(p))] = 8'h11 + 8'(p) * 8'h07;
+            store[p0(20'hA8A01, 2'(p))] = 8'h21 + 8'(p) * 8'h07;
+            store[p0(20'hA8A02, 2'(p))] = 8'h31 + 8'(p) * 8'h07;
+            store[p0(20'hA8A03, 2'(p))] = 8'h41 + 8'(p) * 8'h07;
+            store[p0(20'hA8A04, 2'(p))] = 8'h15 + 8'(p) * 8'h07;
+            store[p0(20'hA8A05, 2'(p))] = 8'h25 + 8'(p) * 8'h07;
+            store[p0(20'hA8A06, 2'(p))] = 8'h16 + 8'(p) * 8'h07;
+            store[p0(20'hA8A07, 2'(p))] = 8'h26 + 8'(p) * 8'h07;
+            store[p0(20'hA8A08, 2'(p))] = 8'h9C + 8'(p) * 8'h11;
+            store[p0(20'hA8A09, 2'(p))] = 8'h12 + 8'(p) * 8'h11;
+            store[p0(20'hA8A0A, 2'(p))] = 8'h35 + 8'(p) * 8'h11;
+            store[p0(20'hA8A0B, 2'(p))] = 8'h48 + 8'(p) * 8'h11;
+            store[p0(20'hA8A0C, 2'(p))] = 8'h77 + 8'(p) * 8'h09;
+            store[p0(20'hA8A0D, 2'(p))] = 8'h33 + 8'(p) * 8'h09;
+        end
+
+        // WR1. up, aligned, leng 16: the head event produces the low lane
+        //      from the even leg's pushes, the tail event the high lane
+        //      from the odd leg's -- an aligned run hands the guest's own
+        //      word back, which still pins leg order, queue offsets, and
+        //      the produced-byte answer path end to end.
+        egc_set(4'hC, 8'h00); egc_set(4'hD, 8'h00);   // sft up, aligned
+        egc_set(4'hE, 8'h0F); egc_set(4'hF, 8'h00);   // leng 16
+        g_wrd(20'hA8A00, rdw);
+        want("WR1 up leng16: produced pair", rdw, 16'h2111);
+
+        // WR2. up, aligned, leng 8: lane 1 spends the whole run, so the
+        //      tail event produces nothing -- the high lane answers with
+        //      the LAST produced byte (WR1's 0x21), and remain==0 re-arms
+        //      the pipeline underneath the same access.
+        egc_set(4'hE, 8'h07); egc_set(4'hF, 8'h00);   // leng 8
+        g_wrd(20'hA8A02, rdw);
+        want("WR2 up leng8: hi = prior lane", rdw, 16'h2131);
+
+        // WR3. dn, aligned, leng 16: decw queues the pair high-then-low and
+        //      lane 1 is the HIGH byte -- the returned word is the guest's
+        //      own again, but through the mirrored lane order.
+        egc_set(4'hC, 8'h00); egc_set(4'hD, 8'h10);   // sft dn, aligned
+        egc_set(4'hE, 8'h0F); egc_set(4'hF, 8'h00);   // leng 16
+        g_wrd(20'hA8A04, rdw);
+        want("WR3 dn leng16: produced pair", rdw, 16'h2515);
+
+        // WR4. dn, aligned, leng 8: lane 1 (HIGH) spends the run and the
+        //      low lane is the suppressed one -- it keeps WR3's produced
+        //      low byte. The mirror of WR2.
+        egc_set(4'hE, 8'h07); egc_set(4'hF, 8'h00);   // leng 8
+        g_wrd(20'hA8A06, rdw);
+        want("WR4 dn leng8: lo = prior lane", rdw, 16'h2615);
+
+        // WR5. up, dstbit 3, leng 16: the funnel forms (upr) produce real
+        //      composites -- 9C>>3 for lane 1, (9C<<5)|(12>>3) for lane 2.
+        egc_set(4'hC, 8'h30); egc_set(4'hD, 8'h00);   // sft 0x0030
+        egc_set(4'hE, 8'h0F); egc_set(4'hF, 8'h00);   // leng 16
+        g_wrd(20'hA8A08, rdw);
+        want("WR5 up sft0030: shifted pair", rdw, 16'h8213);
+
+        // WR6. dn, dstbit 3, leng 16: dnr -- 48<<3 for the high lane,
+        //      (48>>5)|(35<<3) for the low.
+        egc_set(4'hC, 8'h30); egc_set(4'hD, 8'h10);   // sft 0x1030
+        egc_set(4'hE, 8'h0F); egc_set(4'hF, 8'h00);   // leng 16
+        g_wrd(20'hA8A0A, rdw);
+        want("WR6 dn sft1030: shifted pair", rdw, 16'h40AA);
+
+        // WR7. ope 0x2000: the raw answer -- a word read still walks both
+        //      legs' planes but returns the window's own bytes untouched.
+        egc_set(4'hC, 8'h00); egc_set(4'hD, 8'h00);   // sft up, aligned
+        egc_set(4'h5, 8'h28);                         // ope 0x28F0
+        g_wrd(20'hA8A0C, rdw);
+        want("WR7 ope2000: raw word", rdw, 16'h3377);
+
+        // WR8. ope 0x0400: the rd_plane raw word, no queue feed -- the same
+        //      two bytes through egc_rd_q's latch per leg.
+        egc_set(4'h5, 8'h0C);                         // ope 0x0CF0
+        g_wrd(20'hA8A0C, rdw);
+        want("WR8 ope0400: rd_plane word", rdw, 16'h3377);
         egc_set(4'h5, 8'h08);                         // back to 0x08F0
 
         // ---- 9. the access page ---------------------------------------

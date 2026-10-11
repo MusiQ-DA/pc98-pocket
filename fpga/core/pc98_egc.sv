@@ -14,8 +14,9 @@
 // DOES: io/egc.c is the register file (the ports), mem/memegc.c is the
 // engine (what a write does). Everything below cites one or the other.
 //
-// THE PORTS (io/egc.c, egc_o4a0 -- byte model; the V30 bus this core runs is
-// byte cycles, which is that model exactly):
+// THE PORTS (io/egc.c, egc_o4a0 -- byte model; register writes arrive one
+// byte at a time from Peripherals, which is that model exactly -- the
+// guest's MEMORY accesses below are the ones that can be whole words):
 //
 //     0x4A0  access   reset 0xFFF0. bits 3:0 gate a plane's WRITE: a SET bit
 //                     means the plane is NOT written (egc_writebyte's
@@ -183,6 +184,14 @@ module pc98_egc (
     logic [7:0]  sf_q [0:3][0:6];           // seven: word push + pop window
     logic        sf_wpend;                  // a word's second lane still owed
 
+    // Queue slot indices, one bit wider than the array needs so an overflow
+    // is detectable instead of wrapping into slot 0: accounting says sf_qd
+    // peaks at 5 (inptr/outptr never sit further than four apart and a word
+    // push lands two at once), and these guards keep a depth that ever
+    // reached 6 from scribbling past sf_q[0:6]/pv[0:6].
+    wire  [3:0]  sf_push_idx = {1'b0, sf_qd} + {3'b000, sf_push_off};
+    wire         sf_room2    = (sf_qd <= 3'd5);
+
     // A byte written to sft or leng re-arms everything (io/egc.c calls
     // egcshift on all four ports); the register byte itself is still on the
     // write data bus, so the merge is done on the incoming value.
@@ -270,8 +279,8 @@ module pc98_egc (
             // second byte of a word push one slot further (and a dn word's
             // even byte behind its odd one -- the decw layout in np21w
             // places the pair L-behind-H since the buffer fills downward).
-            if (sf_push)
-                sf_q[sf_push_plane][sf_qd + {2'b00, sf_push_off}] <= sf_push_d;
+            if (sf_push && (sf_push_idx <= 4'd6))
+                sf_q[sf_push_plane][sf_push_idx[2:0]] <= sf_push_d;
 
             // One access event. The combinational block below did the
             // arithmetic; here it all commits at once. A word event can
@@ -311,7 +320,7 @@ module pc98_egc (
                     sf_remain  <= nx_remain;
                     sf_srcbit  <= nx_srcbit;
                     sf_dstbit  <= nx_dstbit;
-                    sf_qd      <= nx_qd;
+                    sf_qd      <= nx_qd[2:0];
                 end
             end
 
@@ -351,7 +360,10 @@ module pc98_egc (
     logic [12:0] nx_remain;
     logic [3:0]  nx_srcbit, nx_dstbit;
     logic [15:0] nx_srcmask;
-    logic [2:0]  nx_qd;
+    // 4 bits, not 3: the sum can legitimately reach 7 (sf_qd 6 + a push)
+    // and a pop on an empty window wraps negative -- both must stay
+    // visible to the clamp below rather than wrapping inside the width.
+    logic [3:0]  nx_qd;
     // block temps, module scope: Quartus rejects automatic declarations
     // inside always blocks (the rtc notes the same)
     logic        v_acc, v_prepop, v_first;
@@ -368,20 +380,23 @@ module pc98_egc (
             for (int i = 0; i < 7; i++)
                 pv[p][i] = sf_q[p][i];
             if (sf_evt & sf_evt_wr & sf_evt_word & ~sf_evt_tail) begin
-                // word write push: up queues {L,H}, dn queues {H,L}
-                pv[p][sf_qd]        = w_dn ? sf_evt_d2 : sf_evt_d;
-                pv[p][sf_qd + 3'd1] = w_dn ? sf_evt_d  : sf_evt_d2;
+                // word write push: up queues {L,H}, dn queues {H,L}; the
+                // second slot exists only while the tail is in bounds.
+                pv[p][sf_qd] = w_dn ? sf_evt_d2 : sf_evt_d;
+                if (sf_room2)
+                    pv[p][sf_qd + 3'd1] = w_dn ? sf_evt_d : sf_evt_d2;
             end else if (sf_evt & sf_evt_wr & ~sf_evt_word) begin
                 pv[p][sf_qd] = sf_evt_d;
             end else if (sf_push & (sf_push_plane == 2'(p))) begin
-                pv[p][sf_qd + {2'b00, sf_push_off}] = sf_push_d;
+                if (sf_push_idx <= 4'd6)
+                    pv[p][sf_push_idx[2:0]] = sf_push_d;
             end
         end
 
         v_acc = 1'b0; v_prepop = 1'b0; v_first = 1'b0; v_mask = 8'hFF;
         nx_stack   = sf_stack;  nx_remain  = sf_remain;
         nx_srcbit  = sf_srcbit; nx_dstbit  = sf_dstbit;
-        nx_srcmask = sf_srcmask; nx_qd     = sf_qd;
+        nx_srcmask = sf_srcmask; nx_qd     = {1'b0, sf_qd};
         ev_prod = 1'b0; ev_insub = 1'b0; ev_last = 1'b0; ev_wpend = 1'b0;
         ev_pops = 2'd0; ev_ext = sf_ext;
         sub_en = 1'b0; sub_ext = 1'b0; sub_pop = 1'b0;
@@ -529,7 +544,7 @@ module pc98_egc (
         // ---- closes: pops, queue depth, the mid-word suppress, rearm ----
         if (sf_evt & ~sf_evt_word) begin
             ev_pops = {1'b0, sub_pop};
-            nx_qd   = sf_qd + {2'b00, v_acc} - {1'b0, ev_pops};
+            nx_qd   = {1'b0, sf_qd} + {3'b000, v_acc} - {2'b00, ev_pops};
             ev_last = ev_insub & (nx_remain == 13'd0);
         end else if (sf_evt & ~sf_evt_tail) begin
             ev_pops  = {1'b0, v_prepop} + {1'b0, sub_pop};
@@ -538,17 +553,20 @@ module pc98_egc (
                 if (~w_dn) nx_srcmask[15:8] = 8'h00;
                 else       nx_srcmask[7:0]  = 8'h00;
             end
-            nx_qd   = sf_qd + {v_acc, 1'b0} - {1'b0, ev_pops};
+            nx_qd   = {1'b0, sf_qd} + {2'b00, v_acc, 1'b0} - {2'b00, ev_pops};
             ev_last = ev_insub & ~ev_wpend;
         end else if (sf_evt) begin
             ev_pops = {1'b0, sub_pop};
-            nx_qd   = sf_qd - {1'b0, ev_pops};
+            nx_qd   = {1'b0, sf_qd} - {2'b00, ev_pops};
             ev_last = ev_insub & (nx_remain == 13'd0);
         end
-        if (sf_evt) begin
-            if (nx_qd == 3'd7)      nx_qd = 3'd0;
-            else if (nx_qd > 3'd6)  nx_qd = 3'd6;
-        end
+        // Depth bounds are structural, not arithmetic: a count that would
+        // pass six means the accounting slipped (a push with no matching
+        // pop window); reset the window rather than let a wrap masquerade
+        // as slot 0 -- the >= covers both the 7..15 overflow and the
+        // negative-pop wrap.
+        if (sf_evt && (nx_qd >= 4'd7))
+            nx_qd = 4'd0;
     end
 
     // ------------------------------------------------------------------
