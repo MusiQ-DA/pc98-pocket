@@ -185,6 +185,11 @@ always @(posedge clk) begin
     cen_reg <= cen;
 end
 
+// pc98-pocket local: when use_adpcm and use_pcm are both 1 the ADPCM
+// voices are summed by their own accumulator and mixed into snd_* below;
+// zero in every other configuration.
+wire signed [15:0] adpcm_snd_l, adpcm_snd_r;
+
 generate
 if( use_adpcm==1 ) begin: gen_adpcm
     wire rst_n;
@@ -263,33 +268,68 @@ if( use_adpcm==1 ) begin: gen_adpcm
         assign adpcmb_roe_n = 1'b1;
     end
 
-    assign snd_sample   = zero;
-    jt10_acc #(.FULLFM(FULLFM)) u_acc(
-        .clk        ( clk           ),
-        .clk_en     ( clk_en        ),
-        .op_result  ( op_result_hd  ),
-        .rl         ( rl            ),
-        .zero       ( zero          ),
-        .s1_enters  ( s2_enters     ),
-        .s2_enters  ( s1_enters     ),
-        .s3_enters  ( s4_enters     ),
-        .s4_enters  ( s3_enters     ),
-        .cur_ch     ( cur_ch        ),
-        .cur_op     ( cur_op        ),
-        .alg        ( alg_I         ),
-        .adpcmA_l   ( adpcmA_l      ),
-        .adpcmA_r   ( adpcmA_r      ),
-        .adpcmB_l   ( adpcmB_l      ),
-        .adpcmB_r   ( adpcmB_r      ),
-        // combined output
-        .left       ( fm_snd_left   ),
-        .right      ( fm_snd_right  )
-    );
+    if( use_pcm==0 ) begin : gen_full_acc
+        assign snd_sample   = zero;
+        assign adpcm_snd_l  = 16'sd0;
+        assign adpcm_snd_r  = 16'sd0;
+        jt10_acc #(.FULLFM(FULLFM)) u_acc(
+            .clk        ( clk           ),
+            .clk_en     ( clk_en        ),
+            .op_result  ( op_result_hd  ),
+            .rl         ( rl            ),
+            .zero       ( zero          ),
+            .s1_enters  ( s2_enters     ),
+            .s2_enters  ( s1_enters     ),
+            .s3_enters  ( s4_enters     ),
+            .s4_enters  ( s3_enters     ),
+            .cur_ch     ( cur_ch        ),
+            .cur_op     ( cur_op        ),
+            .alg        ( alg_I         ),
+            .adpcmA_l   ( adpcmA_l      ),
+            .adpcmA_r   ( adpcmA_r      ),
+            .adpcmB_l   ( adpcmB_l      ),
+            .adpcmB_r   ( adpcmB_r      ),
+            // combined output
+            .left       ( fm_snd_left   ),
+            .right      ( fm_snd_right  )
+        );
+    end else begin : gen_adpcm_only_acc
+        // pc98-pocket local: with use_pcm==1 the YM2612 accumulator below
+        // owns fm_snd -- it alone carries the ch6 PCM-DAC path a YM2608
+        // needs. This accumulator runs rl=00 so its FM slots never
+        // accumulate (acc_en gates on rl); the ADPCM-A slot forces acc_en
+        // anyway, so it produces the scaled rhythm sum alone. That sum is
+        // added at the snd_* mix stage, keeping the FM/PCM path identical
+        // to a use_adpcm=0 build. snd_sample is owned by gen_pcm_acc here.
+        jt10_acc #(.FULLFM(FULLFM)) u_acc_adpcm(
+            .clk        ( clk           ),
+            .clk_en     ( clk_en        ),
+            .op_result  ( op_result_hd  ),
+            .rl         ( 2'b00         ),
+            .zero       ( zero          ),
+            .s1_enters  ( s2_enters     ),
+            .s2_enters  ( s1_enters     ),
+            .s3_enters  ( s4_enters     ),
+            .s4_enters  ( s3_enters     ),
+            .cur_ch     ( cur_ch        ),
+            .cur_op     ( cur_op        ),
+            .alg        ( alg_I         ),
+            .adpcmA_l   ( adpcmA_l      ),
+            .adpcmA_r   ( adpcmA_r      ),
+            .adpcmB_l   ( adpcmB_l      ),
+            .adpcmB_r   ( adpcmB_r      ),
+            // combined output
+            .left       ( adpcm_snd_l   ),
+            .right      ( adpcm_snd_r   )
+        );
+    end
 end else begin : gen_adpcm_no
     assign adpcmA_l     = 'd0;
     assign adpcmA_r     = 'd0;
     assign adpcmB_l     = 'd0;
     assign adpcmB_r     = 'd0;
+    assign adpcm_snd_l  = 16'sd0;
+    assign adpcm_snd_r  = 16'sd0;
     assign adpcma_addr  = 'd0;
     assign adpcma_bank  = 'd0;
     assign adpcma_roe_n = 'b1;
@@ -493,12 +533,12 @@ generate
             // Unused:
             .sample     (           )
         );
-        assign snd_left  = fm_snd_left  + { 1'b0, psg_snd[9:0],5'd0};
-        assign snd_right = fm_snd_right + { 1'b0, psg_snd[9:0],5'd0};
+        assign snd_left  = fm_snd_left  + { 1'b0, psg_snd[9:0],5'd0} + adpcm_snd_l;
+        assign snd_right = fm_snd_right + { 1'b0, psg_snd[9:0],5'd0} + adpcm_snd_r;
     end else begin : gen_nossg
         assign psg_snd  = 10'd0;
-        assign snd_left = fm_snd_left;
-        assign snd_right= fm_snd_right;
+        assign snd_left = fm_snd_left  + adpcm_snd_l;
+        assign snd_right= fm_snd_right + adpcm_snd_r;
         assign psg_dout = 8'd0;
         assign psg_A    = 8'd0;
         assign psg_B    = 8'd0;
@@ -511,8 +551,8 @@ generate
 endgenerate
 `else
     assign psg_snd  = 10'd0;
-    assign snd_left = fm_snd_left;
-    assign snd_right= fm_snd_right;
+    assign snd_left = fm_snd_left  + adpcm_snd_l;
+    assign snd_right= fm_snd_right + adpcm_snd_r;
     assign psg_dout = 8'd0;
 `endif
 

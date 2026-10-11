@@ -59,6 +59,8 @@ module tb_scsi_rom;
         .cpu_address(cpu_address), .cpu_data_bus(8'h00),
         .cpu_word_access(cpu_word_access), .cpu_data_bus_hi(8'h00),
         .data_bus_hi(data_bus_hi), .pc98_analog(),
+        .st_req(1'b0), .st_we(1'b0), .st_addr(20'h0), .st_wdata(8'h00),
+        .st_done(), .st_rdata(), .accel_status(), .dbg_gvram(),
         .processor_status(3'b111), .processor_lock_n(1'b1),
         .processor_transmit_or_receive_n(), .processor_ready(),
         .interrupt_to_cpu(), .clk_pc98_dot(clock),
@@ -104,7 +106,11 @@ module tb_scsi_rom;
         .pause_core(),
         .pc98_key_stb(1'b0), .pc98_key_byte(8'h00),
         .mouse_dx(16'sd0), .mouse_dy(16'sd0), .mouse_ev(1'b0),
-        .mouse_btn(2'b00), .opna_joy(8'hFF), .ram_rw_complete()
+        .mouse_btn(2'b00), .opna_joy(8'hFF), .ram_rw_complete(),
+        .sdram_wr_taken(),
+        .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
+        .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
+        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
     );
 
     int errors = 0;

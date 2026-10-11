@@ -29,8 +29,12 @@ for {set i 0} {$i < 8} {incr i} {
     set hub [expr {$hub | ($nib << (4*$i))}]
 }
 if {($hub >> 19) & 0xff} { } else { puts "no SLD nodes"; shutdown; exit 1 }
+set nnodes [expr {($hub >> 19) & 0xff}]
+set mw 1
+while {(1 << $mw) < $nnodes + 1} { incr mw }
+set virw [expr {$mw + 4}]
 irscan fpga.tap 0x0e
-drscan fpga.tap 5 0x18 -endstate idle
+drscan fpga.tap $virw 0x18 -endstate idle
 
 proc rd {addr} {
     irscan fpga.tap 0x0c

@@ -1,5 +1,6 @@
 //
-// tb_cpu_timing -- does the V30 get its data in time, at the real CE rates?
+// tb_cpu_timing -- does the guest CPU get its data in time, at the real CE
+// rates?
 //
 // The in-core self-test passes the whole base 64 KB through sdram_mp (hardware,
 // testB14: PILOT A5/A5, PILOT2 5A/5A, PASS 64K), while the BIOS running on the
@@ -13,7 +14,7 @@
 // two faster cycle-paced steps -- none of them anywhere near the 8088's 4.77
 // MHz this bench used to model.
 //
-// The contract the bridge actually runs (v30_cpu_bridge.sv):
+// The contract the bridge actually runs (zet_cpu_bridge.sv):
 //   * the 8288 strobes processor_status on cpu_ce_negedge -- commands assert
 //     on a negedge
 //   * READY is sampled at every cpu_ce_posedge from the third T state on;
@@ -87,10 +88,14 @@ module tb_cpu_timing;
         .address(address), .internal_data_bus(internal_data_bus),
         .data_bus_out(data_bus_out),
         .memory_read_n(memory_read_n), .memory_write_n(memory_write_n),
+        .prefetch_len   (5'd0),
+        .pf_beat_v      (),
+        .pf_beat_dat    (),
         .no_command_state(no_command_state),
         .memory_access_ready(memory_access_ready),
         .access_complete(access_complete),
         .ram_address_select_n(ram_address_select_n),
+        .write_taken(),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
@@ -99,7 +104,10 @@ module tb_cpu_timing;
         .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(ce_neg),
         .ram_read_wait_cycle(rd_wait), .ram_write_wait_cycle(wr_wait),
-        .vram_rd_wait_cycle(vram_rd), .vram_wr_wait_cycle(vram_wr)
+        .vram_rd_wait_cycle(vram_rd), .vram_wr_wait_cycle(vram_wr),
+        .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
+        .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
+        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
@@ -216,7 +224,7 @@ module tb_cpu_timing;
     endtask
 
     initial begin
-        $display("=== V30 read timing through sdram_mp (CE-paced) ===");
+        $display("=== guest CPU read timing through sdram_mp (CE-paced) ===");
         repeat (8) @(posedge clock);
         reset = 0;
         wait (initilized_sdram);

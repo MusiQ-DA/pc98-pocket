@@ -45,7 +45,10 @@ module tb_ram_dma_wr;
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram),
         .address(address), .internal_data_bus(internal_data_bus),
         .data_bus_out(data_bus_out),
-        .analog_mode(1'b0), .word_access(1'b0),
+        .analog_mode(1'b0), .prefetch_len   (4'd0),
+        .pf_beat_v      (),
+        .pf_beat_dat    (),
+        .word_access(1'b0),
         .internal_data_bus_hi(8'h00), .data_bus_out_hi(),
         .gvram_page1_flag(1'b0),
         .memory_read_n(memory_read_n), .memory_write_n(memory_write_n),
@@ -53,6 +56,7 @@ module tb_ram_dma_wr;
         .memory_access_ready(memory_access_ready),
         .access_complete(access_complete),
         .ram_address_select_n(ram_address_select_n),
+        .write_taken(),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
@@ -67,7 +71,10 @@ module tb_ram_dma_wr;
         .gv_rd_req(1'b0), .gv_rd_addr(24'd0), .gv_rd_len(4'd0),
         .gv_rd_ack(), .gv_rd_valid(), .gv_rd_data(), .gv_rd_done(),
         .wait_count_clk_en(1'b1),
-        .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0)
+        .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0),
+        .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
+        .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
+        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
     );
 
     sdram_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
@@ -89,6 +96,11 @@ module tb_ram_dma_wr;
             parks_full++;
         if (!reset && dut.state == 0 && dut.next_state == 1)
             served++;
+        if (!reset && dut.write_strobe_fell && !dut.wr_covered)
+            $display("  UNCOV fall @%05h st=%0d data=%02h pend=%b/%b acc_a=%05h acc_d=%02h t=%0t",
+                     dut.latch_address, dut.state, dut.internal_data_bus,
+                     dut.wc_pend, dut.wc_pend2, dut.accept_address,
+                     dut.accept_data, $time);
     end
 
     // 71071-style write: the strobe is asserted and released when the READY

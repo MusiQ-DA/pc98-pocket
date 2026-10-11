@@ -78,6 +78,12 @@ module PERIPHERALS #(
         // The guest's graphics is in a doubled 200-line mode (gdc_s_dbl
         // below); the compositor's "Skip" 200-line presentation reads it.
         output  logic           dbl200,
+        // mode1 bit 4 (port 0x68): the 200-line mabiki flag -- on hardware
+        // the odd rasterlines of the graphics layer are never drawn while
+        // this is set. np21w makegrph.c checks `!(liney & 1) || !(mode1 &
+        // 0x10)`. It is NOT the doubling itself (that is the slave's
+        // CSRFORM LR); it only darkens the odd rasterlines.
+        output  logic           mabiki,
         // Registered in lockstep with VID_R/G/B: the composited dot is a text
         // cell's, not the graphics planes'. The text plane runs the master's
         // own 400-line timing even under a doubled graphics mode, so the
@@ -92,6 +98,15 @@ module PERIPHERALS #(
         // The SCSI option ROM's odd byte, for the data_bus_hi mux in Chipset
         // -- the low lane alone cannot deliver the AA55 signature word.
         output  wire    [7:0]   scsi_rom_hi,
+        // The TVRAM window's odd byte, for the same mux -- word reads and
+        // odd-address byte reads in A0000-A3FFF take their high half here.
+        output  wire    [7:0]   tvram_q_hi,
+        // The CPU's own bus-cycle flags, needed by the byte-wide TVRAM:
+        // the odd write half and the 16-bit marker that says it is valid.
+        // cpu_word is cpu_word_access already qualified with
+        // ~address_enable_n, same term the GVRAM sequencer consumes.
+        input   logic   [7:0]   cpu_data_bus_hi,
+        input   logic           cpu_word,
         input   logic   [7:0]   interrupt_request,
         input   logic           io_read_n,
         input   logic           io_write_n,
@@ -125,6 +140,25 @@ module PERIPHERALS #(
     output  logic  [15:0]   gdc_draw_ops,
     output  logic [383:0]   gdc_draw_snaps,
     input   logic   [1:0]   gdc_srv_done_levels,
+    // Watchdog pulses {slave, master}: a draw the server never answered.
+    // Probe-only plumbing -- the pulses are latched in core_top's JTAG
+    // block, where a set bit reads "the same undispatched-draw stall".
+    output  logic   [1:0]   gdc_draw_to,
+    // Sticky: a guest byte write set 0000:054D bit 6 -- the ITF/BIOS
+    // GRCG-works flag the ITF test ORs in after its A800/B000 readback
+    // passes. One flop; the probe reads it as "detection succeeded".
+    output  logic           dbg_egc_flag,
+    // pc98_sysport_c as the guest sees it -- the shutdown/resume flag in
+    // bit 7 is the ITF's cold-boot-vs-OUT-0F0h test at F8005B, and the
+    // probe reads it to check the 0x37 BSR write really cleared it.
+    output  logic   [7:0]   dbg_sysport,
+    // JTAG screen probe + TVRAM dump: cell index in, two read-back views
+    // out -- dbg_word is {attr|memsw,char_hi,char_lo} (the memsw registers
+    // through the attr-region addressing), dbg_q is {cell echo, attr,
+    // char_hi, char_lo} riding the guest read pipeline's idle cycles.
+    input   logic   [11:0]  tvram_dbg_cell,
+    output  logic   [23:0]  tvram_dbg_word,
+    output  logic   [31:0]  tvram_dbg_q,
         // PC-9801-86 OPNA, stereo. Zero on a non-PC-98 build.
     output  logic signed [15:0] opna_snd_l,
     output  logic signed [15:0] opna_snd_r,
@@ -164,6 +198,14 @@ module PERIPHERALS #(
         // register {op,unit,C,H,R,N,EOT,GPL}.
         output  wire    [63:0]  dbg_fdc,
         output  wire    [63:0]  dbg_fdc_cmd,
+        // JTAG probe readout of the slave GDC's display state -- the wires
+        // pc98_gvram_display actually consumes, so a mis-shaped picture can
+        // be read back against what the guest programmed: {sad0,len0} in
+        // the high word, flags/LR/AL/PITCH in the low.
+        output  wire    [63:0]  dbg_gdc_s,
+        // Graphics display-fetch underrun telemetry -- skip/late/max_fill in
+        // the low word, live fill-FSM and line state in the high word.
+        output  wire    [63:0]  dbg_gvdisp,
         input   logic           fdd_dma_ack,
         input   logic           terminal_count,
         // Others
@@ -414,7 +456,11 @@ module PERIPHERALS #(
     // master IRQ6.
     wire    pc98_master_irq6 = 1'b0;
 
-    i8259 u_i8259
+    // np21w io/pic.c + io/pit.c: the timer interrupt is a discrete event
+    // (pic_setirq at terminal count), not a level.  Forcing IRQ0 to edge
+    // capture keeps a guest's ICW1.LTIM=1 write from turning the PIT's
+    // parked-high OUT pin into an interrupt storm under SFNM.
+    i8259 #(.edge_requests (8'h01)) u_i8259
     (
         // Bus
         .clock                      (clock),
@@ -438,8 +484,12 @@ module PERIPHERALS #(
         // np21w (io/pit.c): writing the interval timer -- a count byte for
         // channel 0, or a control word aimed at it -- clears the master's IRR
         // bit 0, so an interrupt latched before the reprogram cannot fire
-        // after it.  The strobe is decoded below, next to the PIT.
-        .external_irr_clear         ({7'b0, pit0_write_clears_irr0}),
+        // after it.  The strobe is decoded below, next to the PIT. Bit 2 is
+        // the same shape for the CRT interrupt: np21w pccore.c screendisp
+        // clears a CRTV request the CPU never took (pi->irr &= ~PIC_CRTV)
+        // and re-arms the GDC flag -- see crt_cancel above.
+        .external_irr_clear         ({5'b0, crt_cancel, 1'b0,
+                                        pit0_write_clears_irr0}),
         // IRQ7 is the slave's cascade line; the machine's own IRQ7 has to
         // stand down for it. IRQ2 is the CRT interrupt -- see crt_vsync_irq
         // above; without it the BIOS parks at FED44 for good. The drive's
@@ -721,35 +771,67 @@ module PERIPHERALS #(
 
     // ------------------------------------------------------ GDC status
     //
-    // The CRT interrupt. The text GDC raises IRQ2 once per frame in vertical
-    // retrace while ARMED (np21w io/gdc.c): any write to 0x64 sets vsyncint
-    // (gdc_o64), the vsync consumes it for one shot (pccore.c screenvsync),
-    // and the PIC taking IRQ2 into service re-arms it (io/pic.c) -- so a
-    // serviced IRQ2 fires every frame and a masked one costs exactly one
-    // shot. The BIOS's FED23 sequence installs a handler on INT 0x0A,
-    // unmasks IRQ2 (IMR bit 2), and spins at FED44 until the handler clears
-    // 0x53C bit 6 -- which is where the machine sits without this.
+    // The CRT interrupt, np21w's vsyncint lifecycle (io/gdc.c gdc_o64,
+    // pccore.c screenvsync/screendisp, io/pic.c pic_setirq):
     //
-    // The edge is detected in the chipset clock domain -- the arm flag and
+    //   * any write to 0x64 ARMS (gdc_o64: gdc.vsyncint = 1);
+    //   * screenvsync -- the start of vblank, the END of the last display
+    //     line -- consumes the arm and delivers IRQ2 (pic_setirq(2));
+    //   * if the request is STILL PENDING at screendisp (masked, or the CPU
+    //     never took it) the request is cancelled and the arm is restored --
+    //     the shot retries next frame;
+    //   * pic_setirq landing while CRTV is still in service drops the new
+    //     request and re-arms, same net effect;
+    //   * a request the CPU acknowledges is CONSUMED -- np21w re-arms only
+    //     on another 0x64 write or the two collision paths, NOT on service.
+    //
+    // The BIOS's FED23 sequence installs a handler on INT 0x0A, unmasks IRQ2
+    // (IMR bit 2), and spins at FED44 until the handler clears 0x53C bit 6 --
+    // which is where the machine sits without this.
+    //
+    // The edges are detected in the chipset clock domain -- the arm flag and
     // the 8259 both live here, and the pulse the edge-triggered PIC latches
     // is then a full chipset clock wide. The service edge is the master PIC
     // driving IRQ2's vector (ICW2 base 0x08 + IR2 = INT 0x0A) during INTA.
+    // crt_pend shadows the PIC's IRR bit 2: np21w inspects pi->irr at
+    // screendisp, and the only way to cancel a latched request here is the
+    // external_irr_clear port the timer's IRR0 quirk already uses.
+    //
+    // The edge source is VBLANK, not the sync pulse: np21w pccore.c's
+    // screenvsync -- where gdc.vsync sets and the armed request is delivered
+    // -- runs at the END of the last display line, and screendisp clears it
+    // at the top of the frame. Both the status bit and the IRQ therefore
+    // ride the whole non-display interval.
     logic vs_irq_s1 = 1'b0, vs_irq_s2 = 1'b0, vs_irq_s3 = 1'b0;
     always_ff @(posedge clock) begin
-        vs_irq_s1 <= pc98_vs;
+        vs_irq_s1 <= pc98_vb;
         vs_irq_s2 <= vs_irq_s1;
         vs_irq_s3 <= vs_irq_s2;
     end
-    wire crt_vsync_edge = vs_irq_s2 & ~vs_irq_s3;
+    wire crt_vsync_edge = vs_irq_s2 & ~vs_irq_s3;   // vblank IN: screenvsync
+    wire crt_dispe_edge = ~vs_irq_s2 & vs_irq_s3;   // vblank OUT: screendisp
 
     wire gdc_arm_w = pc98_io_exact & ~io_write_n & (address[7:0] == 8'h64);
     wire crt_isr   = ~interrupt_acknowledge_n
                    & (interrupt_data_bus_out == 8'h0A);
     logic crt_armed = 1'b0;
+    logic crt_pend  = 1'b0;
+    // Unserviced by the time the picture comes back: drop the latched IRR
+    // bit and KEEP the arm -- np21w's screendisp path, the retry that keeps
+    // a masked IRQ2 from being lost forever.
+    wire crt_cancel = crt_dispe_edge & crt_pend;
     always_ff @(posedge clock, posedge reset) begin
-        if (reset)                    crt_armed <= 1'b0;
-        else if (gdc_arm_w | crt_isr) crt_armed <= 1'b1;
-        else if (crt_vsync_edge)      crt_armed <= 1'b0;
+        if (reset) begin
+            crt_armed <= 1'b0;
+            crt_pend  <= 1'b0;
+        end else begin
+            if (gdc_arm_w)       crt_armed <= 1'b1;
+            else if (crt_isr)    crt_armed <= 1'b0;   // service consumes
+            if (crt_vsync_edge & crt_armed)
+                                 crt_pend <= 1'b1;
+            else if (crt_isr | crt_cancel)
+                                 crt_pend <= 1'b0;
+        end
     end
     wire crt_vsync_irq = crt_vsync_edge & crt_armed;
 
@@ -760,22 +842,22 @@ module PERIPHERALS #(
     // offset 0383 because (F8000 + off) & FFFF is 8000 + off.
     //
     // uPD7220 status: [7] light pen, [6] HBLANK, [5] VSYNC, [4] DMA execute,
-    // [3] drawing, [2] FIFO empty, [1] FIFO full, [0] data ready. Nothing here
-    // has a command FIFO yet, so it reports permanently empty and ready, and
-    // the two timing bits come from the raster the renderer is already running.
+    // [3] drawing, [2] FIFO empty, [1] FIFO full, [0] data ready. Bit 5 is
+    // np21w's gdc.vsync flag -- the WHOLE non-display interval, so the input
+    // is vblank (pc98_vb), not the sync pulse.
     //
     // Crossing into the chipset clock: two flops, because a status bit read one
     // cycle stale is a status bit, and a metastable one is a coin toss.
-    logic gdc_vs_s1, gdc_vs_q, gdc_hb_s1, gdc_hb_q;
+    logic gdc_vs_s1, gdc_vb_q, gdc_hb_s1, gdc_hb_q;
     always_ff @(posedge clock) begin
-        gdc_vs_s1 <= pc98_vs;  gdc_vs_q <= gdc_vs_s1;
+        gdc_vs_s1 <= pc98_vb;  gdc_vb_q <= gdc_vs_s1;
         gdc_hb_s1 <= pc98_hb;  gdc_hb_q <= gdc_hb_s1;
     end
     // THE MOCK IS GONE. pc98_gdc is the real command and parameter interface --
     // see docs/PC98_GDC_DESIGN.md for what it does and does not implement, and
     // the module header for the two things np21w's enum would have got wrong.
-    // One note carried over: the mock's bit 7 was CLEAR, and np21w's gdc_i60
-    // sets it unconditionally. The real module sets it.
+    // Bit 7 (light-pen detect) stays CLEAR in there: no pen is fitted, and a
+    // set bit walks the BIOS into the LPRD/DRDY poll at F307C forever.
     //
     // Text GDC at 0x60/0x62, graphics GDC at 0xA0/0xA2. The even port is
     // status (read) and parameter (write); the odd-numbered one two up is the
@@ -786,14 +868,17 @@ module PERIPHERALS #(
 
     wire [7:0] gdc_m_dout, gdc_s_dout;
 
-    // The display registers are not consumed yet: pc98_text_render still
-    // derives its cell index from the raster. Wiring them in is the next step
-    // and its regression test is that one partition at SAD 0 reduces to the
-    // expression the renderer uses today.
+    // The display registers are consumed below: the master's SAD/pitch/bend
+    // drive pc98_text_render and pc98_text_rowbase, the slave's drive
+    // pc98_gvram_display. One partition at SAD 0 is the regression shape --
+    // it reduces to the fixed cell index the renderer had before.
     wire        gdc_m_disp_on, gdc_s_disp_on;
     wire [7:0]  gdc_m_pitch,   gdc_s_pitch;
     wire [15:0] gdc_m_sad [0:3], gdc_s_sad [0:3];
     wire [9:0]  gdc_m_len [0:3], gdc_s_len [0:3];
+    // Row-unit partition boundaries for the text consumers -- np21w counts
+    // the master's LEN in rasterlines, pc98_gdc divides by the row height.
+    wire [5:0]  gdc_m_bend [0:2];
     wire [15:0] gdc_m_cur_addr,  gdc_s_cur_addr;
     wire [3:0]  gdc_m_cur_dot,   gdc_s_cur_dot;
     wire        gdc_m_cur_en,    gdc_s_cur_en;
@@ -805,11 +890,17 @@ module PERIPHERALS #(
     wire [1:0]  gdc_m_zoom,      gdc_s_zoom;
     wire [4:0]  gdc_s_lrep;                  // slave CSRFORM LR (GRPH_LR)
     wire [9:0]  gdc_s_al;                    // slave SYNC AL field, raw
+    wire [3:0]  gdc_s_pbyte;                 // per-partition LEN[14] pitch unit
+    // SYNC VBP fields, one per GDC -- np21w's dispsync_renewalvertical puts
+    // the larger-VBP plane that many rasterlines further down, so the two
+    // deltas are the plane vertical offsets (both zero for the BIOS tables).
+    wire [5:0]  gdc_m_vbp,   gdc_s_vbp;
     // The drawing-server plumbing: the two channels' handshakes and the
     // done-level synchronisers (the softcore writes the level; the rising
     // edge here retires the EXECUTE in the GDC).
     wire        gdc_m_draw_req, gdc_m_draw_busy, gdc_m_done_stb;
     wire        gdc_s_draw_req, gdc_s_draw_busy, gdc_s_done_stb;
+    wire        gdc_m_draw_to,  gdc_s_draw_to;
     wire [7:0]  gdc_m_draw_op,  gdc_s_draw_op;
     wire [31:0] gdc_m_draw_snap [0:5];
     wire [31:0] gdc_s_draw_snap [0:5];
@@ -839,16 +930,19 @@ module PERIPHERALS #(
         .cs(gdc_m_cs), .a1(address[1]),
         .io_read_n(io_read_n), .io_write_n(io_write_n),
         .data_in(internal_data_bus), .data_out(gdc_m_dout),
-        .hblank(gdc_hb_q), .vsync(gdc_vs_q),
+        .hblank(gdc_hb_q), .vblank(gdc_vb_q),
         .disp_on(gdc_m_disp_on), .pitch(gdc_m_pitch),
         .part_sad(gdc_m_sad), .part_len(gdc_m_len),
+        .part_pbyte(),
+        .part_bend(gdc_m_bend),
         .cursor_addr(gdc_m_cur_addr), .cursor_dot(gdc_m_cur_dot),
         .cursor_en(gdc_m_cur_en), .cursor_blink_en(gdc_m_cur_bl),
         .cursor_top(gdc_m_cur_top), .cursor_bottom(gdc_m_cur_bot),
         .cursor_rate(gdc_m_cur_rate), .zoom_disp(gdc_m_zoom),
-        .line_rep(gdc_m_lrep), .vlines(),
+        .line_rep(gdc_m_lrep), .vlines(), .vbp(gdc_m_vbp),
         .draw_req(gdc_m_draw_req), .draw_op(gdc_m_draw_op),
-        .draw_busy(gdc_m_draw_busy), .srv_done_stb(gdc_m_done_stb),
+        .draw_busy(gdc_m_draw_busy), .draw_timeout(gdc_m_draw_to),
+        .srv_done_stb(gdc_m_done_stb),
         .draw_snap(gdc_m_draw_snap)
     );
 
@@ -857,21 +951,46 @@ module PERIPHERALS #(
         .cs(gdc_s_cs), .a1(address[1]),
         .io_read_n(io_read_n), .io_write_n(io_write_n),
         .data_in(internal_data_bus), .data_out(gdc_s_dout),
-        .hblank(gdc_hb_q), .vsync(gdc_vs_q),
+        .hblank(gdc_hb_q), .vblank(gdc_vb_q),
         .disp_on(gdc_s_disp_on), .pitch(gdc_s_pitch),
         .part_sad(gdc_s_sad), .part_len(gdc_s_len),
+        .part_pbyte(gdc_s_pbyte),
+        .part_bend(),
         .cursor_addr(gdc_s_cur_addr), .cursor_dot(gdc_s_cur_dot),
         .cursor_en(gdc_s_cur_en), .cursor_blink_en(gdc_s_cur_bl),
         .cursor_top(gdc_s_cur_top), .cursor_bottom(gdc_s_cur_bot),
         .cursor_rate(gdc_s_cur_rate), .zoom_disp(gdc_s_zoom),
-        .line_rep(gdc_s_lrep), .vlines(gdc_s_al),
+        .line_rep(gdc_s_lrep), .vlines(gdc_s_al), .vbp(gdc_s_vbp),
         .draw_req(gdc_s_draw_req), .draw_op(gdc_s_draw_op),
-        .draw_busy(gdc_s_draw_busy), .srv_done_stb(gdc_s_done_stb),
+        .draw_busy(gdc_s_draw_busy), .draw_timeout(gdc_s_draw_to),
+        .srv_done_stb(gdc_s_done_stb),
         .draw_snap(gdc_s_draw_snap)
     );
 
     wire       gdc_stat_read = (gdc_m_cs | gdc_s_cs) & ~io_read_n;
     wire [7:0] gdc_status    = gdc_m_cs ? gdc_m_dout : gdc_s_dout;
+
+    assign gdc_draw_to = {gdc_s_draw_to, gdc_m_draw_to};
+
+    // The guest-visible "GRCG/EGC present" bit: the ITF probe ORs 40h into
+    // 0000:054D only after its tile-fill readback matches (trace F81F12).
+    // Software like egcview keys off that flag, so latch the write that
+    // sets it -- probe slot 0x32 reports detection without a display.
+    // The probe is the only reader, so the detector itself is JTAG-build
+    // only and ties off otherwise.
+`ifdef PC98_JTAG
+    logic egc_flag_seen;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) egc_flag_seen <= 1'b0;
+        else if (~memory_write_n & ~address_enable_n
+                 & (address == 20'h0054D) & internal_data_bus[6])
+            egc_flag_seen <= 1'b1;
+    end
+    assign dbg_egc_flag = egc_flag_seen;
+`else
+    assign dbg_egc_flag = 1'b0;
+`endif
+    assign dbg_sysport = pc98_sysport_c;
     // np21w gdc_i68/gdc_i6a: the mode flip-flops read back -- save/restore
     // code (TSRs, mode switches) depends on seeing what it wrote.
     wire       gdc_mode_read = (mode68_select | mode6a_select) & ~io_read_n;
@@ -989,6 +1108,70 @@ module PERIPHERALS #(
     wire sysport_read      = (sysport_31_select | sysport_33_select
                             | sysport_35_select | sysport_42_select) & ~io_read_n;
 
+    // ---- gate A20 -- the CPU control pair at 0xF0/0xF2 (np21w io/cpuio.c).
+    //
+    // cpuio_bind attaches an eight-entry table at 0x00F0 with mask 0x0CF1,
+    // so only the even addresses decode. Of the eight, the 286 build fills
+    // exactly these:
+    //
+    //   OUT 0F0h  gate A20 OFF and reset the CPU   (cpuio_of0)
+    //   OUT 0F2h  gate A20 ON                      (cpuio_of2)
+    //   IN  0F0h  sound detect                     (cpuio_if0)
+    //   IN  0F2h  A20 status                       (cpuio_if2)
+    //
+    // The reset half of OUT 0F0h is core_top's f0_port_write ->
+    // soft_reset_cpu; this block owns the A20 half. np21w drops the gate in
+    // the same write handler that asks for the reset -- so the flag cannot
+    // live on reset_chipset, which OUT 0F0h deliberately does NOT pulse --
+    // and it must clear on this write even though the CPU is the only thing
+    // that restarts. Power-on state is MASKED (np21w i286c/i286c.c:178,
+    // I286_ADRSMASK = 0xfffff).
+    //
+    // IN 0F2h is cpuio_if2's `0xFF - ((CPU_ADRSMASK >> 20) & 1)`: FEh with
+    // the gate open, FFh masked -- bit 0 low means A20 enabled, and drivers
+    // that enable the gate poll exactly that bit to confirm it took.
+    //
+    // IN 0F0h answers cpuio_if0's non-AMD-98 branch, 0x00 (an AMD-98 would
+    // read 0x18; this machine is OPNA). Claiming it matters: left open the
+    // port reads 0xFF, whose bits 3 and 4 are the AMD-98 signature software
+    // probes for.
+    //
+    // The mask itself needs no address path. np21w applies CPU_ADRSMASK
+    // inside cpumem on every CPU access, but here the Zet's cpu_adr_o is 20
+    // bits and every downstream port -- ad_out, the Chipset address, RAM's
+    // -- is [19:0]: the bus can never carry bit 20 at all, so "masked" is
+    // the only behaviour the memory path can express in EITHER state, and
+    // the flag is what software actually observes. (HMA software would
+    // additionally need RAM at 0x100000, which this machine does not fit:
+    // pc98_sdram_map.svh tops the guest space at 0xFFFFF.)
+    //
+    // 0xF6, the data-driven gate, is IA32-only in np21w's cpuio table --
+    // this is a 286-class machine, so the port is left unclaimed.
+    logic       a20_en;
+    wire a20_f0_sel = ~address_enable_n & (address[15:8] == 8'h00)
+                    & (address[7:0] == 8'hF0);
+    wire a20_f2_sel = ~address_enable_n & (address[15:8] == 8'h00)
+                    & (address[7:0] == 8'hF2);
+
+    always_ff @(posedge clock or posedge reset) begin
+        if (reset)
+            a20_en <= 1'b0;
+        // Apply at the end of the write strobe, when the latched address
+        // names the port actually written -- the address sweep through F0
+        // while ALE is still open cannot reach here (the strobe has not
+        // fallen yet), which is the same qualification core_top gives the
+        // write before it pulses soft_reset_cpu.
+        else if (io_write_n & ~prev_io_write_n) begin
+            if (a20_f0_sel)      a20_en <= 1'b0;
+            else if (a20_f2_sel) a20_en <= 1'b1;
+        end
+    end
+
+    wire a20_f0_read = pc98_io_exact & (address[7:0] == 8'hF0) & ~io_read_n;
+    wire a20_f2_read = pc98_io_exact & (address[7:0] == 8'hF2) & ~io_read_n;
+    wire cpuif_read  = a20_f0_read | a20_f2_read;
+    wire [7:0] cpuif_data = a20_f2_read ? {7'b1111111, ~a20_en} : 8'h00;
+
     // ---- ARTIC -- the relative counter at 0x5C-0x5F (np21w io/artic.c).
     //
     // A free-running 24-bit counter the guest reads for elapsed time:
@@ -1021,21 +1204,21 @@ module PERIPHERALS #(
     wire [7:0] artic_data = address[1]
                           ? (address[0] ? artic_cnt[23:16] : artic_cnt[15:8])
                           : (address[0] ? artic_cnt[15:8]  : artic_cnt[7:0]);
-    // 0x42 bit 1: this machine has no protected mode.
+    // 0x42 bit 1: 1 = "V30-class CPU", 0 = "286-class" (np21w printif.c
+    // prt_i42: base 0x84, +0x20 at 8 MHz, +dip bits, +0x02 when V30).
     //
-    // The UX ITF tests it at F8B95 and, with the bit CLEAR, walks into
-    //
-    //     F8BBC  lidt [es:bp+0]
-    //     F8BC4  lgdt [es:bp+0]
-    //
-    // to size memory above 1 MB. Those are 286 instructions, and on an 8086
-    // 0F is POP CS -- so the machine popped a word off the stack into CS and
-    // left the ROM. That is the CS f800 -> 0000 jump that ended every run
-    // right after MEMORY 640KB OK was printed.
-    //
-    // With the bit SET the ITF branches to F8FA2 and skips the whole
-    // protected-mode block, which is the truth about this CPU rather than a
-    // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
+    // The port answers 8'h02 -- bit1 set, V30 class. The 286 presentation
+    // experiment (8'h84 -- bit1 clear -- plus an 0F 01 NOP-stub) was tried
+    // and walked back: bit1=0 makes the ITF run its 286-detection probe at
+    // F8B95, which does rep stosw fills of [0:8000], sidt/sgdt stores to
+    // [0:9000] and a repe scasw compare over four passes. That needs real
+    // descriptor registers, MSW and #GP -- a CPU-core project, not a stub:
+    // with the stub the first pass mismatches and the fail path is
+    // out 0x37,0x0B -> out 0xF0 = a soft RESET (proved in sim + hardware:
+    // "640KB OK" then a boot loop). The 0F 01 NOP-consume microcode stays
+    // (dead on the V30 path, harmless); a genuine 286 instruction still
+    // traps through INVOP/INTD and the pc_hist freeze names it.
+    // The BIOS never looks at bit 1 -- it tests bits
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
     // 0x31 = 0xE3. The detour through 0x12 is worth recording.
     //
@@ -1147,7 +1330,8 @@ module PERIPHERALS #(
     logic pc98_vs_s1, pc98_vs_px, pc98_vs_px_d;
     logic [7:0]  gdc_pitch_px;
     logic [15:0] gdc_sad_px [0:3];
-    logic [9:0]  gdc_len_px [0:3];
+    logic [5:0]  gdc_bend_px [0:2];
+    logic [5:0]  gdc_vbp_m_px, gdc_vbp_s_px;
     logic [15:0] gdc_cur_addr_px;
     logic [4:0]  gdc_cur_top_px, gdc_cur_bot_px;
     logic        gdc_wide_px;
@@ -1170,9 +1354,13 @@ module PERIPHERALS #(
             // All four PRAM partitions, sampled like the rest so a mid-frame
             // SCROLL rewrite tears at most the frame it lands in
             // (pc98_text_part.svh walks them -- split screens reach the
-            // renderer as {SAD,LEN} quartets, not one start address).
+            // renderer as {SAD,bend} quartets, not one start address).
             gdc_sad_px   <= gdc_m_sad;
-            gdc_len_px   <= gdc_m_len;
+            gdc_bend_px  <= gdc_m_bend;
+            // The SYNC VBP pair rides in with the rest: a mid-frame SYNC
+            // rewrite moves the planes from the next frame, not mid-line.
+            gdc_vbp_m_px <= gdc_m_vbp;
+            gdc_vbp_s_px <= gdc_s_vbp;
             gdc_cur_addr_px <= gdc_m_cur_addr;
             gdc_cur_top_px  <= gdc_m_cur_top;
             gdc_cur_bot_px  <= gdc_m_cur_bot;
@@ -1189,10 +1377,19 @@ module PERIPHERALS #(
         end
     end
 
+    // np21w dispsync_renewalvertical: the plane whose SYNC carries the
+    // larger VBP starts (own - other) rasterlines further down; the other
+    // plane's offset is zero. Both zero for every BIOS table, so the
+    // everyday picture is unchanged.
+    wire [5:0] gdc_tshift_px = (gdc_vbp_m_px > gdc_vbp_s_px)
+                            ? gdc_vbp_m_px - gdc_vbp_s_px : 6'd0;
+    wire [5:0] gdc_gshift_px = (gdc_vbp_s_px > gdc_vbp_m_px)
+                            ? gdc_vbp_s_px - gdc_vbp_m_px : 6'd0;
+
     pc98_text_render u_pc98_text (
-        .clk(clk_pc98_dot), .pix_ce(1'b1),
+        .clk(clk_pc98_dot), .pix_ce(1'b1), .vshift(gdc_tshift_px),
         .gdc_on(gdc_on_px), .gdc_pitch(gdc_pitch_px),
-        .gdc_sad(gdc_sad_px), .gdc_len(gdc_len_px),
+        .gdc_sad(gdc_sad_px), .gdc_bend(gdc_bend_px),
         .wide(gdc_wide_px), .crtc_pl(crtc_pl_px),
         .crtc_bl(crtc_bl_px), .crtc_cl(crtc_cl_px), .line_rep(gdc_lrep_px),
         .cur_addr(gdc_cur_addr_px), .cur_en(gdc_cur_en_px),
@@ -1221,12 +1418,14 @@ module PERIPHERALS #(
         .analog_mode(pc98_analog),
         .pitch(gdc_s_pitch),
         .mhz5(&gdc_clk),
-        .dbl(gdc_s_dbl),
+        .dbl(gdc_s_dbl), .lrep(gdc_s_lrep),
         .part_sad(gdc_s_sad), .part_len(gdc_s_len),
+        .part_pbyte(gdc_s_pbyte), .vshift(gdc_gshift_px),
         .p_req(gv_rd_req), .p_addr(gv_rd_addr), .p_len(gv_rd_len),
         .p_ack(gv_rd_ack), .p_rvalid(gv_rd_valid), .p_rdata(gv_rd_data),
         .p_done(gv_rd_done),
-        .gfx_dot(gfx_dot_w)
+        .gfx_dot(gfx_dot_w),
+        .dbg(dbg_gvdisp)
     );
 
     // The layer also stays dark until the machine has written a graphics
@@ -1273,7 +1472,7 @@ module PERIPHERALS #(
     // The row FETCHED is the NEXT one, because the buffer is double-buffered
     // and the renderer is reading the row being displayed.
     wire       txt_row_tick;
-    wire [4:0] txt_next_row;
+    wire [5:0] txt_next_row;
     wire       pc98_row_tick = txt_row_tick;
     logic pc98_row_tick_q;
     always_ff @(posedge clk_pc98_dot) pc98_row_tick_q <= pc98_row_tick;
@@ -1287,11 +1486,11 @@ module PERIPHERALS #(
 
     // LOW12(SAD + row*PITCH) for the row after the one on screen; falls
     // back to row*80 while the master GDC is unprogrammed.
-    wire [4:0]  pc98_next_row  = txt_next_row;
+    wire [5:0]  pc98_next_row  = txt_next_row;
     wire [11:0] pc98_row_base;
     pc98_text_rowbase u_pc98_text_rowbase (
         .gdc_on(gdc_m_disp_on), .gdc_pitch(gdc_m_pitch),
-        .gdc_sad(gdc_m_sad), .gdc_len(gdc_m_len),
+        .gdc_sad(gdc_m_sad), .gdc_bend(gdc_m_bend),
         .row(pc98_next_row), .base(pc98_row_base)
     );
 
@@ -1447,21 +1646,44 @@ module PERIPHERALS #(
     // time to the sequencer that owns the engine. np21w hangs no read
     // handlers on these (iocore_attachout only), so neither does this.
     // The 0x04 page sits outside pc98_io_exact's 0x00-page window (same
-    // reason fdd_144_select bypasses it), so decode raw iorq here.
-    wire egc_cs = iorq & ~address_enable_n & (address[15:4] == 12'h04A);
-    assign egc_rg = address[3:0];
+    // reason fdd_144_select bypasses it), so it decodes the raw address.
+    // No iorq term -- egc_wr is a RELEASE-edge strobe, and iorq falls with
+    // io_write_n's own rise, so an iorq-qualified chip select makes egc_wr
+    // unreachable: on hardware every guest write to the register file was
+    // dropped (the engine armed through 0x6A but stayed all zeroes).
+    // mode6a_addr/mode68_addr already decode this way for the same reason;
+    // the address still names the port while the strobe completes.
+    wire egc_cs = ~address_enable_n & (address[15:4] == 12'h04A);
+
+    // ...and latch the decode, the register number and the byte while the
+    // strobe is low. The release edge runs one cycle after io_write_n
+    // rises, where the bus bridge is already free to move address onto the
+    // next prefetch -- the live decode held on hardware because the bridge
+    // idles the pins, but the write should be bound to the port the STROBE
+    // named, the way the FDC's own release-edge handlers capture theirs.
+    logic       egc_cs_q;
+    logic [3:0] egc_rg_q;
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
             egc_prev_wr_n <= 1'b1;
+            egc_cs_q      <= 1'b0;
+            egc_rg_q      <= 4'h0;
             egc_d         <= 8'h00;
         end else begin
             egc_prev_wr_n <= io_write_n;
-            if (egc_cs & ~io_write_n) egc_d <= internal_data_bus;
+            if (~io_write_n) begin
+                egc_cs_q <= egc_cs;
+                if (egc_cs) begin
+                    egc_rg_q <= address[3:0];
+                    egc_d    <= internal_data_bus;
+                end
+            end
         end
     end
 
-    assign egc_wr = io_write_n & ~egc_prev_wr_n & egc_cs;
+    assign egc_rg = egc_rg_q;
+    assign egc_wr = io_write_n & ~egc_prev_wr_n & egc_cs_q;
 
     // ---- CRTC text-cell geometry ---------------------------------------
     //
@@ -1532,26 +1754,40 @@ module PERIPHERALS #(
     // The fill's column stride is the same story for mode1[2].
     logic pc98_ank8 = 1'b0;
     logic pc98_wide = 1'b0;
-    logic gdc_vs_q3 = 1'b0;
+    logic gdc_vb_q3 = 1'b0;
     // A "200 line" graphics mode means each VRAM line serves two rasterlines
     // on this fixed 400-line raster (np21w's GRPH_LR=1 walk, maketgrp).
-    // Three sources flag it, in the order software touches them: mode1 bit 4
-    // (the port 0x68 flip-flop the BIOS sets beside it), the slave GDC's
-    // CSRFORM LR field itself, and a true-15.98 kHz SYNC whose AL field is
-    // ~200 (np21w's 15kHz table writes 200 here, the 24kHz one 400).
-    // Latched at the frame edge like the text-mode bits so a mode flip
-    // tears at most one frame.
+    // Two sources flag it: the slave GDC's CSRFORM LR field (np21w
+    // makegrph's `mg.lr = (para[GDC_CSRFORM] & 0x1f) + 1`) and a ~200-line
+    // SYNC AL (a guest programming 200 active lines means a shorter frame
+    // on hardware; doubling is how the fixed 400-line raster presents it).
+    // mode1 bit 4 is deliberately NOT here: in np21w it only keeps the odd
+    // rasterlines dark (mabiki) and does not stretch the picture -- folding
+    // it into the repeat doubled every 400-line display, which is how the
+    // BIOS leaves the machine. Latched at the frame edge like the text-mode
+    // bits so a mode flip tears at most one frame.
     logic gdc_s_dbl = 1'b0;
+    logic gdc_s_mab = 1'b0;
     always_ff @(posedge clock) begin
-        gdc_vs_q3 <= gdc_vs_q;
-        if (gdc_vs_q & ~gdc_vs_q3) begin
+        gdc_vb_q3 <= gdc_vb_q;
+        if (gdc_vb_q & ~gdc_vb_q3) begin
             pc98_ank8 <= ~pc98_mode1[3];
             pc98_wide <=  pc98_mode1[2];
-            gdc_s_dbl <= pc98_mode1[4]
-                      || (gdc_s_lrep != 5'd0)
+            gdc_s_mab <=  pc98_mode1[4];
+            gdc_s_dbl <= (gdc_s_lrep != 5'd0)
                       || ((gdc_s_al != 10'd0) && (gdc_s_al < 10'd256));
         end
     end
+
+    // Probe snapshot of the slave's display registers, exactly as the
+    // graphics fetch consumes them: {sad0,len0} high, then the flags that
+    // shape the raster -- disp_on, the 0xA4 page bit, analogue mode, the
+    // 5MHz clock field, the doubled-200-line flag, CSRFORM's LR, SYNC's AL
+    // and PITCH.
+    assign dbg_gdc_s = { 6'd0, gdc_s_sad[0], gdc_s_len[0],
+                         4'd0, gdc_s_disp_on, gvram_disp_page,
+                         pc98_analog, &gdc_clk, gdc_s_dbl,
+                         gdc_s_lrep, gdc_s_al, gdc_s_pitch };
 
     pc98_glyph_rowbuf u_pc98_rowbuf (
         .clk(clock), .rst(reset),
@@ -1645,7 +1881,7 @@ module PERIPHERALS #(
         .mem_rd(cgwin_mem_select & ~memory_read_n),
         .wr_addr(address[11:0]), .wr_data(internal_data_bus),
         .rd_addr(address[11:0]), .rd_data(cgwin_q),
-        .a9_data(cg_a9_data),
+        .a9_data(cg_a9_data), .ank8(pc98_ank8),
         .g_we(pc98_gaiji_a_we), .g_addr(pc98_gaiji_a_addr),
         .g_wdata(pc98_gaiji_a_wdata), .g_rdata(pc98_gaiji_a_rdata),
         .f_req(cg_f_req), .f_addr(cg_f_addr), .f_busy(cg_f_busy),
@@ -1722,6 +1958,7 @@ module PERIPHERALS #(
     assign VID_VBlank = pc98_vb;
     assign de_o      = pc98_de;
     assign dbl200    = gdc_s_dbl;
+    assign mabiki    = gdc_s_mab;
     assign VID_TXT   = t_pix_q;
 
     wire [7:0]  tvram_cpu_q;
@@ -1735,8 +1972,17 @@ module PERIPHERALS #(
         .rst         (reset),
         .cpu_addr    (address[13:0]),
         .cpu_wren    (tvram_mem_select & ~memory_write_n),
+        .cpu_rden    (tvram_mem_select & ~memory_read_n),
         .cpu_wdata   (internal_data_bus),
         .cpu_q       (tvram_cpu_q),
+        .cpu_word    (cpu_word),
+        .cpu_wdata_hi(cpu_data_bus_hi),
+        .cpu_q_hi    (tvram_q_hi),
+        // JTAG debug read port -- shares the guest read stage's idle
+        // cycles; see the module header for the two output views.
+        .dbg_cell    (tvram_dbg_cell),
+        .dbg_q       (tvram_dbg_q),
+        .dbg_word    (tvram_dbg_word),
         // Character codes to the row buffer, on the chipset clock.
         .fil_clk     (clock),
         .fil_cell    (tvram_fil_cell),
@@ -1915,6 +2161,11 @@ module PERIPHERALS #(
                        scsi_mg_rd_count, scsi_cmd_post_count,
                        scsi_rom_rd_count};
 
+    // The mgmt chip-select decodes even when the board is parked: the
+    // window has to answer ABSENT, not alias onto the floppy readback.
+    logic        mgmt_opna_cs;
+    assign       mgmt_opna_cs = (mgmt_address[15:8] == 8'hF5);
+
 `ifdef ENABLE_OPNA
     //
     // OPNA -- the PC-9801-86 sound board's YM2608 at 0x0188-0x018F
@@ -1948,8 +2199,6 @@ module PERIPHERALS #(
         else if (opna_a460_wr) opna_extend <= internal_data_bus[0];
     end
 
-    logic        mgmt_opna_cs;
-    assign       mgmt_opna_cs = (mgmt_address[15:8] == 8'hF5);
     wire         mgmt_opna_wr = mgmt_write & mgmt_opna_cs;
     wire  [3:0]  mgmt_opna_reg = mgmt_address[3:0];
     wire [15:0]  mgmt_opna_readdata;
@@ -1959,21 +2208,18 @@ module PERIPHERALS #(
     wire [23:0]  opna_adpcmb_addr;
     wire         opna_adpcmb_roe_n;
 
-    // USE_ADPCM=0 ships the slim OPNA: FM6 + SSG keep working but the
-    // ADPCM-A block is absent -- the EGC raster engine came back and the
-    // 1848-LAB device cannot carry both, and the ADPCM engines are the
-    // cheaper half to park. The guest's rhythm writes still route, they
-    // just reach a chip with no ADPCM blocks, so rhythm -- and the drive
-    // mechanism kit, which borrows the rhythm voices -- stay silent.
-    // OMGMT_CAPS (mg_reg 8) bit0 reads 0, which is what tells rhythm.c and
-    // drive_sound.c to skip their loads, so the firmware path is dormant
-    // rather than broken: USE_ADPCM=1 restores everything verbatim once
-    // floor space exists. USE_PCM stays 1 in the slim build: with ADPCM
-    // off it is the only stereo FM path jt12 has (use_pcm=0 falls back to
+    // USE_ADPCM=1 restores the ADPCM-A block (rhythm voices, the drive-
+    // sound kit): the EGC raster engine was dropped, so the LABs it paid
+    // for are free again -- the 1848-ALM device cannot carry both. The
+    // guest's rhythm writes now reach a chip with ADPCM blocks; the
+    // firmware fills the 32 KB rhythm store at boot when rhythm.bin is
+    // present. OMGMT_CAPS (mg_reg 8) bit0 reads 1, which is what tells
+    // rhythm.c and drive_sound.c to run their loads. USE_PCM stays 1:
+    // it is the only stereo FM path jt12 has (use_pcm=0 falls back to
     // the YM2203 mono accumulator), and the OPNA is a stereo chip.
     // DELTA-T stays dark either way (pc98_opna wires use_adpcmb=0 -- its
     // 256 KB SDRAM window is a known gap).
-    pc98_opna #(.USE_ADPCM(0), .USE_PCM(1)) u_pc98_opna (
+    pc98_opna #(.USE_ADPCM(1), .USE_PCM(1)) u_pc98_opna (
         .clk          (clock),
         .rst          (reset),
         .cs           (opna_cs),
@@ -2333,7 +2579,12 @@ module PERIPHERALS #(
                          : mgmt_opna_cs ? mgmt_opna_readdata
                          : sndev_cs ? sndev_readdata : mgmt_fdd_readdata;
 `else
+    // OPNA parked: its mgmt window must answer ABSENT, not alias onto the
+    // floppy readback -- a stray 1 in OMGMT_CAPS's bit0 convinces the
+    // firmware a board is fitted and every injection then burns a full
+    // DISK_SPIN_LIMIT wait on a busy flag that never clears.
     assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
+                         : mgmt_opna_cs ? 16'h0000
                          : sndev_cs ? sndev_readdata : mgmt_fdd_readdata;
 `endif
 
@@ -2341,6 +2592,17 @@ module PERIPHERALS #(
     //
     // data_bus_out
     //
+    // The mux below registers every source one clock deep. For the FDC's
+    // DMA-read byte that makes the bus three stages late overall (floppy
+    // fifo head -> fdd_readdata -> data_bus_out), so the first clocks of
+    // each io_read_n window still carry the previous byte. A 71071 memory
+    // write strobe sampled inside that window lands the stale byte, which
+    // is how byte 0 of every sector fill arrives as 0x00. fdd_dma_readdata
+    // is the fifo head and is already registered inside the floppy, so it
+    // is forwarded combinationally while a DMA read is in flight; every
+    // other source keeps the registered path.
+    logic   [7:0]   data_bus_out_q;
+    logic           data_bus_out_from_chipset_q;
 
     always_ff @(posedge clock)
     begin
@@ -2349,24 +2611,24 @@ module PERIPHERALS #(
             // During the acknowledge the master either drives its own vector
             // or puts the slave's ID on the cascade lines and stands down --
             // data_bus_io is how the slave says it recognized itself.
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= (~interrupt2_data_bus_io) ? interrupt2_data_bus_out
-                                                      : interrupt_data_bus_out;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= (~interrupt2_data_bus_io) ? interrupt2_data_bus_out
+                                                        : interrupt_data_bus_out;
         end
         else if ((~interrupt2_chip_select_n) && (~io_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= interrupt2_data_bus_out;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= interrupt2_data_bus_out;
         end
         else if ((~interrupt_chip_select_n) && (~io_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= interrupt_data_bus_out;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= interrupt_data_bus_out;
         end
         else if ((~timer_chip_select_n) && (~io_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= timer_data_bus_out;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= timer_data_bus_out;
         end
         // BEFORE the 8255, and this order is the whole point.
         //
@@ -2382,14 +2644,21 @@ module PERIPHERALS #(
         // is supposed to catch rather than create.
         else if (sysport_read)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= sysport_data;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= sysport_data;
+        end
+        // The CPU control pair: IN 0F0h the sound detect, IN 0F2h the gate
+        // A20 status (np21w io/cpuio.c, cpuio_if0/cpuio_if2).
+        else if (cpuif_read)
+        begin
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= cpuif_data;
         end
         // ARTIC: 0x5C-0x5F, the free-running counter games pace loops off.
         else if (artic_sel & ~io_read_n)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= artic_data;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= artic_data;
         end
         // The keyboard 8251 at 0x41/0x43, claiming exactly those two ports.
         // The decode is exact so nothing above can collide with it; this
@@ -2397,71 +2666,71 @@ module PERIPHERALS #(
         // mux's history.
         else if (kbd8251_read_select)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= kbd8251_read_data;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= kbd8251_read_data;
         end
         // Bus mouse 0x7FD9/B/D -- 7FDF reads stay unclaimed, like np21w.
         else if (busmouse_read_select)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= busmouse_read_data;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= busmouse_read_data;
         end
         else if (scsi_rom_select && (~memory_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= scsi_rom_q;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= scsi_rom_q;
         end
         else if (scsi_read_select)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= scsi_data_out;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= scsi_data_out;
         end
 `ifdef ENABLE_OPNA
         else if (opna_read_select)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= opna_data_out;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= opna_data_out;
         end
 `endif
         else if (grcg_mode_cs & ~io_read_n)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= grcg_mode_rd;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= grcg_mode_rd;
         end
         else if (pg_a4_cs & ~io_read_n)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= {7'b0, gvram_disp_page};   // np21w gdc_ia4
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= {7'b0, gvram_disp_page};   // np21w gdc_ia4
         end
         else if (pg_a6_cs & ~io_read_n)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= {7'b0, gvram_access_page}; // np21w gdc_ia6
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= {7'b0, gvram_access_page}; // np21w gdc_ia6
         end
         else if (gdc_stat_read)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= gdc_status;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= gdc_status;
         end
         else if (gdc_mode_read)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= (address[7:0] == 8'h68) ? pc98_mode1 : mode2_q;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= (address[7:0] == 8'h68) ? pc98_mode1 : mode2_q;
         end
         else if (fdd_stub_read)
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= fdd_stub_data;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= fdd_stub_data;
         end
         else if (tvram_mem_select && (~memory_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= tvram_cpu_q;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= tvram_cpu_q;
         end
         else if (cgwin_mem_select && (~memory_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= cgwin_q;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= cgwin_q;
         end
         // CG data port (np21w cgrom_ia9): the glyph byte at the code/line/half
         // the guest last set on 0xA1/A3/A5. The gaiji RAM's read registers on
@@ -2469,18 +2738,39 @@ module PERIPHERALS #(
         // and is captured here on the cycles that follow.
         else if ((address[15:0] == 16'h00A9) && (~io_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= cg_a9_data;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= cg_a9_data;
         end
         else if ((~floppy0_chip_select_n || fdd_dma_read) && (~io_read_n))
         begin
-            data_bus_out_from_chipset <= 1'b1;
-            data_bus_out <= fdd_readdata;
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= fdd_readdata;
         end
         else
         begin
-            data_bus_out_from_chipset <= 1'b0;
-            data_bus_out <= 8'b00000000;
+            data_bus_out_from_chipset_q <= 1'b0;
+            data_bus_out_q <= 8'b00000000;
+        end
+    end
+
+    always_comb
+    begin
+        // The fifo head is already registered inside the floppy, so it can
+        // reach the bus combinationally for the whole acknowledged slot --
+        // not only while io_read_n is low -- which removes every setup gap
+        // a memory-write strobe could otherwise sample stale data through.
+        // io_write_n stays high for a read byte; on a write byte it falls
+        // inside the slot and hands the bus back to the registered path
+        // before the memory data arrives.
+        if (fdd_dma_ack && io_write_n)
+        begin
+            data_bus_out_from_chipset = 1'b1;
+            data_bus_out = fdd_dma_readdata;
+        end
+        else
+        begin
+            data_bus_out_from_chipset = data_bus_out_from_chipset_q;
+            data_bus_out = data_bus_out_q;
         end
     end
 

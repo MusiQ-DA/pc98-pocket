@@ -33,9 +33,9 @@ import sys
 CORE_TOP = "fpga/core/core_top.sv"
 MODULES = {
     "softcpu_subsystem": "fpga/core/softcpu_subsystem.sv",
-    # The CPU-side swap of 2026-09: the bridge carries every pin the V30
-    # sees, so a dangling input there reads as a dead machine, not a zero.
-    "v30_cpu_bridge": "fpga/core/v30_cpu_bridge.sv",
+    # The bridge carries every pin the CPU sees, so a dangling input there
+    # reads as a dead machine, not a zero.
+    "zet_cpu_bridge": "fpga/core/zet_cpu_bridge.sv",
 }
 
 
@@ -91,7 +91,6 @@ DANGLE_OK = {
     "gdc_s_unk_count", "gdc_s_zoom",
     "opna_adpcmb_addr", "opna_adpcmb_roe_n",
     "pc98_fill_busy", "pc98_kanji_seen",
-    "v30_ss_err_unused", "v30_ss_quiet_unused", "v30_ss_rdata_unused",
     # Orphaned by the XT hardware's removal (2026-09-22), kept deliberately:
     # the mouse stream is generated and paced with no PC-98 consumer until
     # the board's serial mouse port is written, and the display page bit
@@ -99,8 +98,10 @@ DANGLE_OK = {
     # pc98_gvram_display.sv is committed but not yet instantiated.
     "mouse_rd", "mouse_rts_n", "gvram_disp_page_w",
     # Orphaned by the postmon strip (2026-09-28): CHIPSET's bus-strobe view
-    # and the V30 bridge's debug taps only fed post_monitor and the retired
+    # and the CPU bridge's debug taps only fed post_monitor and the retired
     # probe slots; the drivers stay because the pins are still useful taps.
+    # The v30_dbg_* taps no longer have a driver at all -- Zet exposes no
+    # dbg_regs -- so their probe slots read 0.
     "chipset_memory_read_n", "chipset_memory_write_n",
     "v30_dbg_regs", "v30_first_pop",
 }

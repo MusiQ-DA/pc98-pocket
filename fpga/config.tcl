@@ -1,8 +1,8 @@
 # PC-98 configuration
-# SYNTHESIS: the vendored nuV30 guards its simulation-only blocks (plusargs,
-# $display traces) behind `ifndef SYNTHESIS`, and Quartus does not define the
-# macro by itself for .sv inputs -- without this the PC-98 build dies
-# elaborating $test$plusargs (Error 10174).
+# SYNTHESIS: the cores guard their simulation-only blocks (plusargs,
+# $display traces, the sim-only readmemh path) behind `ifdef SYNTHESIS`, and
+# Quartus does not define the macro by itself for .sv inputs -- without this
+# the PC-98 build dies elaborating $test$plusargs (Error 10174).
 set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
 
 set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
@@ -25,7 +25,10 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 # *_jtag_* benches still work -- enable this macro again when a debug
 # session needs the probe, and expect to park something big (USE_ADPCM=0
 # is already taken; the EGC is the ~870-ALM lever now).
-#set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
+#
+# ON for the Zet build: the swap freed the headroom the V30 build could not
+# afford (slot 0x33 = last guest I/O write + count).
+set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
 
 # Boot the ITF, not the BIOS.
 #
@@ -40,6 +43,10 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 # MAME chip dumps and 8086 throughout. The UX BIOS is not usable here: its
 # POST uses PUSHA at FDA35 and SMSW/LGDT/LIDT after it.
 set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
+
+# The CPU is Zet (80186-class) -- the only CPU the tree carries now; the
+# PC98_ZET macro that selected it over the removed nuV30 is gone with it.
+
 # The real floppy controller, not the constant-returning stub.
 #
 # This was off because floppy0_chip_select_n decoded the AT's 0x3F0-0x3F7,

@@ -179,10 +179,9 @@ set_output_delay -clock $dram_chip_clk -reference_pin [get_ports {dram_clk}] \
 #    Count" and "Output" blocks are both count_edge-gated). count ->
 #    counter_out therefore has eight cycles, not one.
 #
-#  * The nuV30's registers advance on v30_ce = cpu_ce_posedge && !parked.
-#    At the default "5 MHz" front-panel setting the accumulator ratio is
-#    46/201: 4.37 chipset clocks per CPU step, so consecutive CEs land 4 or
-#    5 cycles apart and every intra-core path has five.
+#  * The nuV30's registers advanced on v30_ce = cpu_ce_posedge && !parked
+#    (46/201 ratio, five cycles per intra-core path) -- the core was swapped
+#    for Zet in 2026-10 and the Zet's own constraint is the block below.
 #
 # NOT covered, deliberately: the "Turbo (max)" menu step (2'b11) runs the
 # core CE every chipset cycle -- at 21.5 MHz this design is overclocked and
@@ -197,24 +196,18 @@ if {[llength $pit_counts] > 0 && [llength $pit_outs] > 0} {
     set_multicycle_path -hold  -end 7 -from $pit_counts -to $pit_outs
 }
 
-set v30_core [get_keepers -nocase {core_top:ic|v30_core:u_cpu*}]
 # NOTE: a Quartus collection stringifies to a HANDLE, so [llength] of one is
 # 1 no matter how many keepers it holds -- the original "> 1" guard here was
 # always false and skipped both multicycles in silence. "> 0" it is.
-if {[llength $v30_core] > 0} {
-    set_multicycle_path -setup -end 5 -from $v30_core -to $v30_core
-    set_multicycle_path -hold  -end 4 -from $v30_core -to $v30_core
-    puts "sdc: multicycled [llength $v30_core] (handle) core-core paths"
-}
 
-# The core's INPUT surface too (2026-09-20, same hunt): every v30_core
-# register -- including the ones that sample INT, the data bus, READY --
-# advances only on v30_ce, so a path FROM anywhere INTO the core has the
-# same CE interval. The run that first carried the constraints above moved
-# placement enough to surface this: PERIPHERALS' interrupt_to_cpu into the
-# EU's interrupt evaluation cone came back -8.6 ns single-cycle. The 8259's
-# INT is a level the core samples at CE; one cycle was never the real
-# requirement. (Core -> bridge paths stay single-cycle: the bridge clocks
-# for real and the parked core must present stable outputs to it.)
-set_multicycle_path -setup -end 5 -to $v30_core
-set_multicycle_path -hold  -end 4 -to $v30_core
+# The nuV30-era constraints went with the core: the CE-paced core-core
+# multicycle (5/4) and the -to $v30_core input-surface multicycle. Zet's
+# input surface is deliberately NOT multicycled -- see below.
+
+# The Zet core runs full-rate now: the microcode loop is pipelined
+# (micro_o_r/bword_r registers in zet_core split decode-ROM-fetch from
+# execute), so zet->zet paths are honestly single-cycle and get NO
+# multicycle -- the half-rate zph gate and its setup-2/hold-1 pair are
+# gone. Boundary paths stay single-cycle as before: a bridge register's
+# change can still be sampled by the very next delivered edge, and a zet
+# register's change reaches the clk-domain bridge one clk later.

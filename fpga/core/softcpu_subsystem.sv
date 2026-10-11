@@ -103,6 +103,19 @@ module softcpu_subsystem (
     input  [15:0]  gdc_draw_ops,
     input [383:0]  gdc_draw_snaps,
     output  [1:0]  gdc_srv_done_levels,
+
+    // The guest-VRAM service channel: the firmware's vr_read8/vr_write8
+    // (firmware/gdc_service.c) drive 0x5000_0000-0x5000_000C and the GVRAM
+    // sequencer in CHIPSET runs the byte op -- through the GRCG/EGC charger
+    // when one is armed, which is what the drawing engine wants.
+    output           st_req,
+    output           st_we,
+    output           st_raw,
+    output    [19:0] st_addr,
+    output     [7:0] st_wdata,
+    input            st_done,
+    input      [7:0] st_rdata,
+    input      [7:0] accel_status,
     output        osd_active,
     output        osd_disk_led,
     output  [1:0] osd_extmem,
@@ -134,7 +147,12 @@ module softcpu_subsystem (
 
     // Per-control key config {ext, Set-2 code}, one 9-bit entry per D-pad direction and button,
     // driven out to pocket_keyboard via core_top. Slot ids are documented at KEYCFG_REG.
-    output [16*9-1:0] key_cfg_flat
+    output [16*9-1:0] key_cfg_flat,
+
+    // JTAG-probe window into this domain (core_top slot 0x2A): fetch/poll
+    // counters plus the OSD-request and trap flags -- the only way to tell a
+    // dead softcore from a dead OSD path from outside.
+    output [31:0] dbg_pico
 );
 
     //
@@ -238,6 +256,81 @@ module softcpu_subsystem (
             gdc_srv_done_levels_r[1] <= cpu_mem_wdata[0];
     end
     assign gdc_srv_done_levels = gdc_srv_done_levels_r;
+
+    // The guest-VRAM self-test/service window -- the register half of the
+    // channel removed with sdram_selftest_master in dabf4e1 and now back as
+    // the GVRAM sequencer's svc port. Exact-word decode, not a region: the
+    // drawing server's registers live at 0x5000_0140+ in this same nibble,
+    // and the removed version's whole-region claim would shadow them.
+    //
+    //   0x5000_0000  W  guest byte address (20 bits)
+    //   0x5000_0004  W  write data (8 bits)
+    //   0x5000_0008  W  trigger: low two bits nonzero launches; bit0 = write
+    //   0x5000_000C  R  {23'b0, req-in-flight, rdata[7:0]} -- the sequencer's
+    //                    svc_done clears the pending bit; reads poll it.
+    //   0x5000_0010  R  charger state: {4'b0, access_page, egc, rmw, grcg}
+    //
+    // The request holds until the sequencer acks, and a trigger write while
+    // one is in flight is ignored -- same shape as the removed master's.
+    reg        st_req_r   = 1'b0;
+    reg        st_we_r    = 1'b0;
+    reg        st_raw_r   = 1'b0;
+    reg [19:0] st_addr_r  = 20'd0;
+    reg [7:0] st_wdata_r = 8'd0;
+    // Witness regs: capture the TRIGGER STORE's own fingerprint at the
+    // accepted launch -- {wstrb, wdata[15:0]} plus wdata[7:0] -- because the
+    // firmware only ever stores 1/2 there, so whatever the bus carried is
+    // the decisive split for a parked raw arm. They are parked onto
+    // st_addr/st_wdata when the op's st_done retires it (the seq latched
+    // the operands at accept, and no module-boundary nets are free: a new
+    // output port here trips the VPR tdc_util crash again). A parked 0x3f
+    // then reads {trig wstrb, trig wdata[15:0], trig wdata[7:0], req,we,
+    // raw}: a clean sw-1 parks 0xF0001/0x01, a raw sw-5 parks 0xF0005/0x05,
+    // an sb-5 parks 0x10505/0x05, an s5=0x2FF leak parks 0xF02FF/0xFF.
+    reg [19:0] st_taddr_r = 20'd0;
+    reg  [7:0] st_tbyte_r = 8'd0;
+    wire       st_trig    = cpu_mem_valid && cpu_mem_wstrb[0] &&
+                            (cpu_mem_addr == 32'h5000_0008);
+    always @(posedge clk_pico) begin
+        if (reset) begin
+            st_req_r   <= 1'b0;
+            st_we_r    <= 1'b0;
+            st_raw_r   <= 1'b0;
+            st_addr_r  <= 20'd0;
+            st_wdata_r <= 8'd0;
+            st_taddr_r <= 20'd0;
+            st_tbyte_r <= 8'd0;
+        end else begin
+            // Park first so a same-cycle new operand store wins.
+            if (st_req_r && st_done) begin
+                st_addr_r  <= st_taddr_r;
+                st_wdata_r <= st_tbyte_r;
+            end
+            if (cpu_mem_valid && cpu_mem_wstrb[0]) begin
+                if (cpu_mem_addr == 32'h5000_0000)
+                    st_addr_r  <= cpu_mem_wdata[19:0];
+                if (cpu_mem_addr == 32'h5000_0004)
+                    st_wdata_r <= cpu_mem_wdata[7:0];
+            end
+            if (st_trig && !st_req_r && (cpu_mem_wdata[1:0] != 2'b00)) begin
+                st_we_r  <= cpu_mem_wdata[0];
+                // bit2 = bypass the charger: the GDC engine's WDAT is a raw
+                // write into video memory in np21w (io/gdc_sub.c
+                // gdcsub_write), not an access through the EGC/GRCG path.
+                st_raw_r   <= cpu_mem_wdata[2];
+                st_taddr_r <= {cpu_mem_wstrb, cpu_mem_wdata[15:0]};
+                st_tbyte_r <= cpu_mem_wdata[7:0];
+                st_req_r   <= 1'b1;
+            end else if (st_req_r && st_done) begin
+                st_req_r <= 1'b0;
+            end
+        end
+    end
+    assign st_req   = st_req_r;
+    assign st_we    = st_we_r;
+    assign st_raw   = st_raw_r;
+    assign st_addr  = st_addr_r;
+    assign st_wdata = st_wdata_r;
 
     // OSD control at 0x20000004: bit0 = overlay shown.
     reg osd_active_r = 1'b0;
@@ -379,6 +472,29 @@ module softcpu_subsystem (
     assign osd_extmem    = osd_settings[SET_IDX_EXTMEM][1:0];
     assign osd_dbl_skip  = osd_settings[SET_IDX_MODE200][0];
     assign osd_fdd_turbo = ~osd_settings[SET_IDX_FDD_TURBO][0];
+
+    // Probe-visible liveness (clk_pico domain, read raw from clk_sys -- pico
+    // regs hold for the whole pico period so the sample is clean). A frozen
+    // fetch count is a dead softcore; a frozen poll count with a moving
+    // fetch count is a wedged main loop; the sticky bits keep one-cycle
+    // events. Free-running from power-up: guest resets must not wipe the
+    // evidence of what the softcore was doing.
+    reg [15:0] pico_fetch_cnt = 16'd0;
+    reg  [7:0] pico_poll_cnt  = 8'd0;
+    reg        pico_osd_seen  = 1'b0;
+    reg        pico_trap_seen = 1'b0;
+    always @(posedge clk_pico) begin
+        if (cpu_mem_valid && cpu_mem_ready && cpu_mem_instr)
+            pico_fetch_cnt <= pico_fetch_cnt + 16'd1;
+        if (sel_status && cpu_mem_ready && (cpu_mem_addr == 32'h2000_0000)
+            && (cpu_mem_wstrb == 4'b0000))
+            pico_poll_cnt <= pico_poll_cnt + 8'd1;
+        pico_osd_seen  <= pico_osd_seen  | osd_open_req;
+        pico_trap_seen <= pico_trap_seen | cpu_trap;
+    end
+    assign dbg_pico = {pico_fetch_cnt, pico_poll_cnt,
+                       2'b00, osd_cpu_speed,
+                       pico_osd_seen, pico_trap_seen, cpu_trap, osd_open_req};
 
     // Machine configuration bytes. Bits the Settings rows do not own are
     // pinned to the 0xE3 / 0x04 / 0x00 / 0x01 defaults the machine has always
@@ -1018,6 +1134,10 @@ module softcpu_subsystem (
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
             32'h4???_????: cpu_mem_rdata = gpu_status;
             32'h7???_????: cpu_mem_rdata = font_cpu_q;
+            // ---- the guest-VRAM service window ----------------------------
+            // Pending bit + the byte the sequencer's svc port last returned.
+            32'h5000_000C: cpu_mem_rdata = {23'd0, st_req, st_rdata};
+            32'h5000_0010: cpu_mem_rdata = {24'd0, accel_status};
             // ---- the drawing server --------------------------------------
             // 0x140/0x180: {busy, req, opcode} for master/slave; +4..+0x14:
             // the five snapshot words. 0x15C/0x19C (writes): the done LEVEL

@@ -71,6 +71,16 @@ start:
         mov cx, 12               ; partitions 1-3 unused
 .zp:    out SGDC_P, al
         loop .zp
+        ; The BIOS leaves the slave in its 200-line mode (np21w bios18.c:
+        ; CSRFORM=1 pairs with mode1 bit4's mabiki). This card wants a true
+        ; 400-line raster, so clear LR -- without this each source line
+        ; repeats onto two rasterlines and only bands 0-7 are visible.
+        mov al, 0x4B             ; CSRFORM
+        out SGDC_C, al
+        xor al, al
+        out SGDC_P, al           ; P1: LR = 0 -> one raster per source line
+        out SGDC_P, al           ; P2
+        out SGDC_P, al           ; P3
         mov al, 0x6B             ; START -> graphics disp_on
         out SGDC_C, al
 

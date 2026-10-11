@@ -46,7 +46,10 @@ module sdram_shim #(
     // it, and CL changes when the data comes out, not how it is caught.
     parameter int CAS_LATENCY      = 2,
     parameter int INIT_NOP         = 10000,  // 233 us: the SDRAM's own init wait
-    parameter int REFRESH_INT      = 320     // <= 7.8 us at 42.95 MHz
+    parameter int REFRESH_INT      = 288     // <= 7.8 us at 42.95 MHz, with
+                                             // headroom for a 16-beat burst
+                                             // in flight when the timer dues
+                                             // (wait ~36 -> 324 < 335 spec)
 ) (
     input  wire                               sdram_clock,
     input  wire                               sdram_reset,
@@ -70,6 +73,11 @@ module sdram_shim #(
     // word_access is up -- a guest word at an address the SDRAM serves.
     input  wire  [sdram_data_width-1:0]       data_in_hi,
     output logic [sdram_data_width-1:0]       data_out_hi,
+    // Per-beat read taps for the prefetch engine: a_rvalid pulses the cycle
+    // AFTER each p_rvalid, so a_beat already holds that beat's word. Only
+    // port A produces them; a burst's beats arrive in address order.
+    output logic                              a_rvalid,
+    output logic [sdram_data_width-1:0]       a_beat,
     input  wire                               write_request,
     input  wire                               read_request,
     input  wire                               enable_refresh,
@@ -134,7 +142,24 @@ module sdram_shim #(
     output logic                              d_ack,
     output logic                              d_rvalid,
     output logic [sdram_data_width-1:0]       d_rdata,
-    output logic                              d_done
+    output logic                              d_done,
+
+    // ---------------------------------------------------------------- port E
+    //
+    // fdd_ramimg's carve-out access: single-word writes while a JTAG upload
+    // fills the image, sixteen-word read bursts while it serves sectors.
+    // Unlike B/C/D this port writes, so it carries wdata -- held stable for
+    // the whole transaction, because sdram_mp samples p_wdata at each WRITE
+    // beat rather than at grant time.
+    input  wire                               e_req,      /* tie low if unused */
+    input  wire                               e_we,
+    input  wire  [ADDR_BITS_PUB-1:0]          e_addr,
+    input  wire  [LEN_BITS_PUB-1:0]           e_len,
+    input  wire  [sdram_data_width-1:0]       e_wdata,
+    output logic                              e_ack,
+    output logic                              e_rvalid,
+    output logic [sdram_data_width-1:0]       e_rdata,
+    output logic                              e_done
 );
 
     localparam int ADDR_BITS = sdram_col_width + sdram_row_width + sdram_bank_width;
@@ -146,7 +171,7 @@ module sdram_shim #(
     // word, so that is one transaction instead of sixteen.
     localparam int BURST_MAX = 16;
     localparam int LEN_BITS  = (BURST_MAX > 1) ? $clog2(BURST_MAX) : 1;
-    localparam int PORTS     = 4;
+    localparam int PORTS     = 5;
 
     // sdram_mp schedules its own refresh and has no cs pin: the SDRAM's chip
     // select is permanently asserted.
@@ -156,7 +181,7 @@ module sdram_shim #(
     logic        req, we_r, busy;
     logic [ADDR_BITS-1:0] addr_r;
     logic [LEN_BITS-1:0]  len_r;      // words - 1, latched with the request
-    logic                 rbeat;      // which word of a two-word read is next
+    logic [LEN_BITS-1:0]  rbeat;      // which word of the burst is next
     logic [sdram_data_width-1:0] wdata_r, wdata_hi_r;
     logic        p_ack, p_done, p_rvalid, stat_idle, stat_refresh;
     logic [sdram_data_width-1:0] p_rdata;
@@ -190,27 +215,42 @@ module sdram_shim #(
             wdata_hi_r  <= '0;
             data_out    <= '0;
             data_out_hi <= '0;
+            a_rvalid    <= 1'b0;
+            a_beat      <= '0;
         end else begin
             if (busy && we_r) begin
                 wdata_r    <= data_in;
                 wdata_hi_r <= data_in_hi;
             end
-            // Read beats arrive in address order, so the first belongs to the
-            // addressed byte and the second to the odd half.
+            // Read beats arrive in address order: the first belongs to the
+            // addressed byte and the second to the odd half. rbeat saturates
+            // at the burst's last index instead of toggling, so on a longer
+            // burst (a bridge fill-on-miss read) data_out/data_out_hi stay
+            // pinned on beats 0/1 -- the guest's own bytes -- while the
+            // a_beat stream carries every word for the window append.
             if (p_rvalid) begin
-                if (rbeat == 1'b0) data_out    <= p_rdata;
-                else               data_out_hi <= p_rdata;
-                rbeat <= ~rbeat;
+                if (rbeat == LEN_BITS'(0))      data_out    <= p_rdata;
+                else if (rbeat == LEN_BITS'(1)) data_out_hi <= p_rdata;
+                if (rbeat != len_r)             rbeat       <= rbeat + 1'b1;
             end
+            // One-beat-delayed view for prefetch captures: at a_rvalid's
+            // cycle, a_beat and data_out/data_out_hi are all settled.
+            a_rvalid <= p_rvalid;
+            if (p_rvalid) a_beat <= p_rdata;
 
             if (!busy) begin
                 if (write_request || read_request) begin
                     req        <= 1'b1;
                     we_r       <= write_request;
                     addr_r     <= address[ADDR_BITS-1:0];
-                    // Exactly two shapes, tested rather than truncated: a
-                    // wider access_num cannot silently become a long burst.
-                    len_r  <= (access_num >= 'd2) ? LEN_BITS'(1) : LEN_BITS'(0);
+                    // One to BURST_MAX words now: prefetch reads ask for the
+                    // whole run and clamp at the port's ceiling. The burst
+                    // must still fit inside one column -- the caller keeps it
+                    // below the 512-word boundary by construction.
+                    len_r  <= (access_num > sdram_col_width'(BURST_MAX))
+                            ? LEN_BITS'(BURST_MAX - 1)
+                            : (access_num == '0) ? '0
+                            : LEN_BITS'(access_num - 1'b1);
                     rbeat  <= 1'b0;
                     busy   <= 1'b1;
                 end
@@ -270,28 +310,33 @@ module sdram_shim #(
     // exactly one consumer in RAM.sv and this is what it is for.
     assign refresh_mode = stat_refresh | busy;
 
-    // Far end: sdram_mp, the four-port controller.
+    // Far end: sdram_mp, the five-port controller.
     // ---------------------------------------------------------------------
     logic init_done;
     logic [MASK_BITS-1:0] dqm_unused;
 
     // Port A is the guest (the request/flag handshake, one word at a time),
-    // port B the font fetch. Packed so the widths follow the controller's parameters.
-    wire [PORTS-1:0] mp_req  = {d_req, c_req, b_req, req};
-    wire [PORTS-1:0] mp_we   = {1'b0,  1'b0,  1'b0, we_r};
-    wire [PORTS-1:0][ADDR_BITS-1:0] mp_addr  = {d_addr, c_addr, b_addr, addr_r};
-    wire [PORTS-1:0][LEN_BITS-1:0]  mp_len   = {d_len,  c_len,  b_len,  len_r};
+    // port B the font fetch, C the CG window, D the display fetch, and E the
+    // RAM-image floppy server. Packed so the widths follow the controller's
+    // parameters.
+    wire [PORTS-1:0] mp_req  = {e_req,  d_req, c_req, b_req, req};
+    wire [PORTS-1:0] mp_we   = {e_we,   1'b0,  1'b0,  1'b0, we_r};
+    wire [PORTS-1:0][ADDR_BITS-1:0] mp_addr  = {e_addr, d_addr, c_addr, b_addr,
+                                                addr_r};
+    wire [PORTS-1:0][LEN_BITS-1:0]  mp_len   = {e_len,  d_len,  c_len,  b_len,
+                                                len_r};
     // sdram_mp publishes the index of the word it wants in p_wcnt and consumes
     // p_wdata combinationally, so a two-word write is just this select. Ports
-    // B, C and D are read-only.
+    // B, C and D are read-only; port E's write data is held by fdd_ramimg for
+    // the whole transaction, which is what the combinational consume needs.
     wire [LEN_BITS-1:0] mp_wcnt;
     wire [PORTS-1:0][sdram_data_width-1:0] mp_wdata =
-        {{sdram_data_width{1'b0}}, {sdram_data_width{1'b0}},
+        {e_wdata, {sdram_data_width{1'b0}}, {sdram_data_width{1'b0}},
          {sdram_data_width{1'b0}},
          (mp_wcnt == LEN_BITS'(0)) ? wdata_r : wdata_hi_r};
     wire [PORTS-1:0][MASK_BITS-1:0] mp_wmask =
         {{MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}},
-         {MASK_BITS{1'b1}}};
+         {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}};
     wire [PORTS-1:0] mp_ack, mp_done;
     wire [$clog2(PORTS)-1:0] mp_grant;
 
@@ -303,15 +348,19 @@ module sdram_shim #(
     assign c_done   = mp_done[2];
     assign d_ack    = mp_ack[3];
     assign d_done   = mp_done[3];
+    assign e_ack    = mp_ack[4];
+    assign e_done   = mp_done[4];
     // Read data is tagged with the owning port, so each master sees only its own.
-    assign p_rvalid = mp_rvalid & (mp_grant == 2'd0);
-    assign b_rvalid = mp_rvalid & (mp_grant == 2'd1);
-    assign c_rvalid = mp_rvalid & (mp_grant == 2'd2);
-    assign d_rvalid = mp_rvalid & (mp_grant == 2'd3);
+    assign p_rvalid = mp_rvalid & (mp_grant == 3'd0);
+    assign b_rvalid = mp_rvalid & (mp_grant == 3'd1);
+    assign c_rvalid = mp_rvalid & (mp_grant == 3'd2);
+    assign d_rvalid = mp_rvalid & (mp_grant == 3'd3);
+    assign e_rvalid = mp_rvalid & (mp_grant == 3'd4);
     assign p_rdata  = mp_rdata;
     assign b_rdata  = mp_rdata;
     assign c_rdata  = mp_rdata;
     assign d_rdata  = mp_rdata;
+    assign e_rdata  = mp_rdata;
 
     sdram_mp #(
         .PORTS       (PORTS),

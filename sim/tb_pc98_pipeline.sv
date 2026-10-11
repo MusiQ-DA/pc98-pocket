@@ -95,8 +95,10 @@ module tb_pc98_pipeline;
         .clk(clk), .rst(rst),
         .cpu_addr (address[13:0]),
         .cpu_wren (tvram_mem_select & ~memory_write_n),
+        .cpu_rden (1'b0),   // this bench only writes; debug port reads
         .cpu_wdata(internal_data_bus),
         .cpu_q    (tvram_cpu_q),
+        .dbg_cell (12'h000),  .dbg_q(),            .dbg_word(),
         .fil_clk  (clk),      .fil_cell(fil_cell),
         .fil_char_lo(fil_char_lo), .fil_char_hi(fil_char_hi),
         .vid_clk  (clk_dot),  .vid_cell(vid_cell), .vid_attr(vid_attr),
@@ -203,9 +205,9 @@ module tb_pc98_pipeline;
 
     pc98_text_render u_render (
         .clk(clk_dot), .pix_ce(1'b1),
-        .hcount(pc98_h), .vcount(pc98_v), .blink_on(1'b1),
+        .hcount(pc98_h), .vcount(pc98_v), .vshift(6'd0), .blink_on(1'b1),
         .gdc_on(1'b0), .gdc_pitch(8'd0),
-        .gdc_sad('{default:16'd0}), .gdc_len('{default:10'd0}), .wide(1'b0),
+        .gdc_sad('{default:16'd0}), .gdc_bend('{default:6'd63}), .wide(1'b0),
         .cur_addr(16'hFFFF), .cur_en(1'b0), .cur_blink(1'b0),
         .cur_top(5'd0), .cur_bot(5'd0),
         .tv_cell(vid_cell), .tv_attr(vid_attr),

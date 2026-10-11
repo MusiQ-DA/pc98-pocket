@@ -126,6 +126,10 @@ module pc98_egc (
     input  wire         sf_evt,
     input  wire         sf_evt_wr,
     input  wire  [7:0]  sf_evt_d,
+    input  wire  [7:0]  sf_evt_d2,   // a word write's odd byte (cpu_wdata_hi)
+    input  wire         sf_evt_word, // this event is a whole 16-bit access
+    input  wire         sf_evt_tail, // second lane of the word pair
+    input  wire         sf_push_off, // read byte lands one slot past the tail
     input  wire         sf_ext,
 
     // ---- the write datapath, one plane and one byte at a time -----------
@@ -136,8 +140,12 @@ module pc98_egc (
     // dst is what the sequencer just read from this plane; val is the CPU's
     // byte. op_mask is mask2's byte for op_ext -- the mask register's half,
     // and-ed with srcmask where the op's mode calls for the shift mask.
+    // op_word marks a 16-bit access: egc_opew ANDs srcmask into mask2 on
+    // EVERY bank (EGCOPE_SHIFTW/SHIFTW2's shared tail), where egc_opeb does
+    // so only through the pipeline-consulting banks -- sf_in_op's case.
     input  wire  [1:0]  op_plane,
     input  wire         op_ext,
+    input  wire         op_word,
     input  wire  [7:0]  op_dst,
     input  wire  [7:0]  op_val,
     output wire  [7:0]  op_data,
@@ -176,7 +184,8 @@ module pc98_egc (
     logic [12:0] sf_remain;
     logic [15:0] sf_srcmask;
     logic [2:0]  sf_qd;
-    logic [7:0]  sf_q [0:3][0:4];
+    logic [7:0]  sf_q [0:3][0:6];           // seven: word push + pop window
+    logic        sf_wpend;                  // a word's second lane still owed
 
     // A byte written to sft or leng re-arms everything (io/egc.c calls
     // egcshift on all four ports); the register byte itself is still on the
@@ -222,9 +231,10 @@ module pc98_egc (
             sf_shr     <= 4'd0;
             sf_stack   <= 6'd0;
             sf_qd      <= 3'd0;
+            sf_wpend   <= 1'b0;
             sf_remain  <= 13'd16;          // leng resets to 0x000F
             for (int k = 0; k < 4; k++)
-                for (int i = 0; i < 5; i++)
+                for (int i = 0; i < 7; i++)
                     sf_q[k][i] <= 8'h00;
         end else begin
             // The register write, byte model: the low byte of a register at
@@ -259,35 +269,35 @@ module pc98_egc (
             end
 
             // ---- the shift pipeline ------------------------------------
-            // One plane byte landed for the queue: it goes to the shared
-            // tail slot of that plane's half of buf.
-            if (sf_push)
-                sf_q[sf_push_plane][sf_qd] <= sf_push_d;
+            // The queue commits from pv every cycle: the comb block already
+            // merged any pushed byte and its cross-plane alias into pv, and
+            // an access event additionally slides the whole window left by
+            // its pop count (np21w moves outptr instead -- same thing, since
+            // the window is indexed from the consume head). sf_push_off puts
+            // the second byte of a word push one slot further (and a dn
+            // word's even byte behind its odd one -- the decw layout in
+            // np21w places the pair L-behind-H since the buffer fills
+            // downward).
+            for (int p = 0; p < 4; p++)
+                for (int i = 0; i < 7; i++)
+                    sf_q[p][i] <= (i + ev_pops > 3'd6) ? pv[p][i]
+                                  : pv[p][i + {1'b0, ev_pops}];
 
-            // One byte-position event. The combinational block below did
-            // the arithmetic; here it all commits at once.
+            // One access event. The combinational block below did the
+            // arithmetic; here it all commits at once. A word event can
+            // produce BOTH source-latch lanes and pop up to three queue
+            // bytes (the srcbit>=8 pre-pop plus one per lane sub).
             if (sf_evt) begin
                 if (ev_prod) begin
                     for (int p = 0; p < 4; p++)
-                        if (sf_ext) src_q[p][15:8] <= ev_out[p];
+                        if (ev_ext) src_q[p][15:8] <= ev_out[p];
                         else        src_q[p][7:0]  <= ev_out[p];
-                end
-                if (ev_pop) begin
-                    // outptr moved: slot i takes slot i+1's byte, and the
-                    // tail slot keeps what was pushed (pv already merged it).
-                    for (int p = 0; p < 4; p++) begin
-                        for (int i = 0; i < 4; i++)
-                            sf_q[p][i] <= pv[p][i+1];
-                        sf_q[p][4] <= pv[p][4];
-                    end
-                end else begin
-                    for (int p = 0; p < 4; p++)
-                        sf_q[p][sf_qd] <= pv[p][sf_qd];
                 end
                 // the mask byte updates on EVERY event, including the run's
                 // last -- egcshift() does not touch srcmask, so the final
                 // partial-byte mask still reaches the write that consumes it
                 sf_srcmask <= nx_srcmask;
+                sf_wpend   <= sf_evt_word & ~sf_evt_tail & ev_wpend;
                 if (ev_last) begin
                     // remain hit zero: egcshift() re-arms the whole run from
                     // the registers.
@@ -313,6 +323,7 @@ module pc98_egc (
             // then sets srcmask to all-ones.
             if (sf_arm) begin
                 sf_srcmask <= 16'hFFFF;
+                sf_wpend   <= 1'b0;
                 sf_func    <= arm_func;
                 sf_srcbit  <= sft_n[3:0];
                 sf_dstbit  <= sft_n[7:4];
@@ -326,17 +337,19 @@ module pc98_egc (
     end
 
     // ------------------------------------------------------------------
-    // the shift event, combinationally (memegc.c's shiftinput_byte then
-    // egcsftb_*0 -> egcsftb_*_sub, with the x86 asm's word-wide srcmask
-    // clear on the suppressed paths and its dstbit -= 8 for dstbit fields
-    // over eight)
+    // the shift event, combinationally (memegc.c's shiftinput_byte /
+    // shiftinput_incw/decw feeding egcsftb_*_sub, with the x86 asm's
+    // word-wide srcmask clear on the suppressed paths)
     // ------------------------------------------------------------------
-    // pv[p][i] is plane p's queue AFTER this event's push: slot sf_qd is
-    // the tail, so a write event injects the CPU byte there, and a read
-    // event's last-plane byte is still in flight on sf_push_d.
-    logic [7:0]  pv [0:3][0:4];
+    // pv[p][i] is plane p's queue AFTER this event's pushes. A word access
+    // is TWO events sharing the one lane datapath: the head event does the
+    // word's input accounting (both push credits, the srcbit>=8 pre-pop,
+    // the 16-dstbit stack check) and runs lane 1; the tail event runs
+    // lane 2 a clock later on the post-commit queue head.
+    logic [7:0]  pv [0:3][0:6];
     logic [7:0]  ev_out [0:3];
-    logic        ev_prod, ev_pop, ev_insub, ev_last;
+    logic        ev_prod, ev_insub, ev_last, ev_ext, ev_wpend;
+    logic [1:0]  ev_pops;
     logic [5:0]  nx_stack;
     logic [12:0] nx_remain;
     logic [3:0]  nx_srcbit, nx_dstbit;
@@ -344,26 +357,88 @@ module pc98_egc (
     logic [2:0]  nx_qd;
     // block temps, module scope: Quartus rejects automatic declarations
     // inside always blocks (the rtc notes the same)
-    logic        v_acc, v_first;
+    logic        v_acc, v_prepop, v_first;
     logic [7:0]  v_mask;
+    logic        w_dn;
+    int          pv_ial;
+    // the shared _sub's call site: the event front-end fills these, the
+    // lane body below reads them once.
+    logic        sub_en, sub_ext, sub_pop;
+    logic [7:0]  sub_t0 [0:3], sub_t1 [0:3];
 
     always_comb begin
+        w_dn = sf_func[0];
         for (int p = 0; p < 4; p++) begin
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 7; i++)
                 pv[p][i] = sf_q[p][i];
-            pv[p][sf_qd] = sf_evt_wr ? sf_evt_d
-                : ((sf_push & (sf_push_plane == 2'(p))) ? sf_push_d
-                                                        : sf_q[p][sf_qd]);
+            if (sf_evt & sf_evt_wr & sf_evt_word & ~sf_evt_tail) begin
+                // word write push: up queues {L,H}, dn queues {H,L}
+                pv[p][sf_qd]        = w_dn ? sf_evt_d2 : sf_evt_d;
+                pv[p][sf_qd + 3'd1] = w_dn ? sf_evt_d  : sf_evt_d2;
+            end else if (sf_evt & sf_evt_wr & ~sf_evt_word) begin
+                pv[p][sf_qd] = sf_evt_d;
+            end else if (sf_push & (sf_push_plane == 2'(p))) begin
+                pv[p][sf_qd + {2'b00, sf_push_off}] = sf_push_d;
+            end
         end
 
-        v_acc = 1'b0; v_first = 1'b0; v_mask = 8'hFF;
+        // Cross-plane bleed: np21w's queue is ONE flat byte stream -- egc.buf
+        // holds plane p's index k at buf[out +/- k + 4p] -- so a push far
+        // enough into the queue lands inside a neighbouring plane's live
+        // window. In consume order the pushed byte on plane p slot k also
+        // occupies plane (p+1)'s slot k-4 going up, plane (p-1)'s going down
+        // (memegc.c: inptr[4p] is a byte write at one shared position). Bytes
+        // that reach indices <0 or >6 fall out of the window exactly like
+        // they fall out of reach of np21w's taps.
+        // One event lands at most one byte per (q, j) slot -- the sources are
+        // strides of +-4, so the alias is applied per slot instead of as a
+        // dynamic-index write (Quartus rejects pv[q][pv_ial] in always_comb).
+        for (int q = 0; q < 4; q++) begin
+            for (int j = 0; j < 7; j++) begin
+                pv_ial = j - {4'b0, sf_qd};
+                // slot j of plane q shows plane p's push at k when
+                // j-k == 4*(p-q) going up, 4*(q-p) going down; within the
+                // 0..6 window only offsets {0, +4, -4} can land, and the
+                // +/-4 sources exist only when p = q+/-1 stays in 0..3.
+                if (sf_evt & sf_evt_wr & sf_evt_word & ~sf_evt_tail) begin
+                    if ((pv_ial == 0)
+                      | ((pv_ial ==  4) & (w_dn ? (q >= 1) : (q <= 2)))
+                      | ((pv_ial == -4) & (w_dn ? (q <= 2) : (q >= 1))))
+                        pv[q][j] = w_dn ? sf_evt_d2 : sf_evt_d;
+                    if (((pv_ial - 1) == 0)
+                      | ((pv_ial - 1 ==  4) & (w_dn ? (q >= 1) : (q <= 2)))
+                      | ((pv_ial - 1 == -4) & (w_dn ? (q <= 2) : (q >= 1))))
+                        pv[q][j] = w_dn ? sf_evt_d : sf_evt_d2;
+                end else if (sf_evt & sf_evt_wr & ~sf_evt_word) begin
+                    if ((pv_ial == 0)
+                      | ((pv_ial ==  4) & (w_dn ? (q >= 1) : (q <= 2)))
+                      | ((pv_ial == -4) & (w_dn ? (q <= 2) : (q >= 1))))
+                        pv[q][j] = sf_evt_d;
+                end else if (sf_push) begin
+                    if (pv_ial - {4'b0, sf_push_off}
+                            == (w_dn ? 4*(q - sf_push_plane)
+                                     : 4*(sf_push_plane - q)))
+                        pv[q][j] = sf_push_d;
+                end
+            end
+        end
+
+        v_acc = 1'b0; v_prepop = 1'b0; v_first = 1'b0; v_mask = 8'hFF;
         nx_stack   = sf_stack;  nx_remain  = sf_remain;
         nx_srcbit  = sf_srcbit; nx_dstbit  = sf_dstbit;
         nx_srcmask = sf_srcmask; nx_qd     = sf_qd;
-        ev_prod = 1'b0; ev_pop = 1'b0; ev_insub = 1'b0; ev_last = 1'b0;
-        for (int p = 0; p < 4; p++) ev_out[p] = 8'h00;
+        ev_prod = 1'b0; ev_insub = 1'b0; ev_last = 1'b0; ev_wpend = 1'b0;
+        ev_pops = 2'd0; ev_ext = sf_ext;
+        sub_en = 1'b0; sub_ext = 1'b0; sub_pop = 1'b0;
+        for (int p = 0; p < 4; p++) begin
+            ev_out[p] = 8'h00;
+            sub_t0[p] = pv[p][0];
+            sub_t1[p] = pv[p][1];
+        end
 
-        if (sf_evt) begin
+        // ---- front-ends: input accounting, the stack guard, the mask
+        // preset, and the shared sub's tap/ext select -------------------
+        if (sf_evt & ~sf_evt_word) begin
             // shiftinput_byte: the new byte sits at the tail (pv); it earns
             // stack credit only while stack <= 16. A srcbit >= 8 spends one
             // push as a whole byte with no credit.
@@ -376,100 +451,150 @@ module pc98_egc (
                 end
             end
 
-            // egcsft_byte: the fresh mask byte first, then the guards, in
-            // the asm's order.
+            // egcsft_byte: the fresh mask byte first, then the stack guard
+            // in egcsftb_*0's order. dstbit 9..15 makes (8 - dstbit) wrap
+            // to a huge count in np21w's unsigned compare -- the lane is
+            // suppressed while dstbit itself stays put (dstbit == 8 slips
+            // under the guard, spends nothing, and the *_sub's >=8 test
+            // decrements it to zero). Suppression clears only THIS lane's
+            // srcmask byte -- the register persists into the next access.
             if (sf_ext) nx_srcmask[15:8] = 8'hFF;
             else        nx_srcmask[7:0]  = 8'hFF;
-            if (nx_dstbit > 4'd8) begin
-                // dstbit 9..15 skips one whole destination byte per event.
-                nx_dstbit  = nx_dstbit - 4'd8;
-                nx_srcmask = 16'h0000;
-            end else if (nx_stack < (6'd8 - {2'b00, nx_dstbit})) begin
-                // the input for this position has not arrived yet
-                nx_srcmask = 16'h0000;
+            if ((nx_dstbit > 4'd8)
+              | (nx_stack < (6'd8 - {2'b00, nx_dstbit}))) begin
+                if (sf_ext) nx_srcmask[15:8] = 8'h00;
+                else        nx_srcmask[7:0]  = 8'h00;
             end else begin
                 nx_stack = nx_stack - (6'd8 - {2'b00, nx_dstbit});
                 ev_insub = 1'b1;
-                if (nx_dstbit == 4'd8) begin
-                    // _sub's own dstbit >= 8 path: the position is whole,
-                    // this byte writes nothing.
-                    nx_dstbit = 4'd0;
-                    if (sf_ext) nx_srcmask[15:8] = 8'h00;
-                    else        nx_srcmask[7:0]  = 8'h00;
-                end else begin
-                    // the bytemask_*0/_*1 tables, expressed as shifts:
-                    // up writes bits from the MSB edge, down from the LSB.
-                    if (nx_dstbit != 0) begin
-                        v_first = 1'b1;
-                        if (({9'd0, nx_dstbit} + nx_remain) >= 13'd8) begin
-                            v_mask    = sf_func[0]
-                                      ? (8'hFF << nx_dstbit[2:0])
-                                      : (8'hFF >> nx_dstbit[2:0]);
-                            nx_remain = nx_remain
-                                      - (13'd8 - {9'd0, nx_dstbit});
-                        end else begin
-                            v_mask    = sf_func[0]
-                                      ? ((8'hFF << nx_dstbit[2:0]) &
-                                         (8'hFF >> (4'd8 - nx_dstbit
-                                                  - {1'b0, nx_remain[2:0]})))
-                                      : ((8'hFF >> nx_dstbit[2:0]) &
-                                         (8'hFF << (4'd8 - nx_dstbit
-                                                  - {1'b0, nx_remain[2:0]})));
-                            nx_remain = 13'd0;
-                        end
-                        nx_dstbit = 4'd0;
-                    end else if (nx_remain >= 13'd8) begin
-                        nx_remain = nx_remain - 13'd8;
+                sub_en   = 1'b1;
+                sub_ext  = sf_ext;
+            end
+        end else if (sf_evt & ~sf_evt_tail) begin
+            // ---- shiftinput_incw/decw, head: the whole word's input side
+            // plus lane 1. np21w's incw grants a two-byte credit, spends a
+            // fully-consumed head byte on srcbit>=8 (the pre-pop), then the
+            // egcsftw_* wrapper checks 16-dstbit once for the pair.
+            ev_ext = w_dn;   // up: lane 1 is the low byte; dn: the high
+            if (sf_stack <= 6'd16) begin
+                v_acc    = 1'b1;
+                v_prepop = (sf_srcbit >= 4'd8);
+                nx_stack = sf_stack + (6'd16 - {2'b00, sf_srcbit});
+                nx_srcbit = 4'd0;
+            end
+            // the sub reads through the pre-pop: its two taps slide down
+            // one slot when a head byte was spent.
+            for (int p = 0; p < 4; p++) begin
+                sub_t0[p] = pv[p][{2'b00, v_prepop}];
+                sub_t1[p] = pv[p][{2'b00, v_prepop} + 3'd1];
+            end
+            nx_srcmask = 16'hFFFF;
+            if (nx_stack < (6'd16 - {2'b00, nx_dstbit})) begin
+                nx_srcmask = 16'h0000;
+            end else begin
+                nx_stack = nx_stack - (6'd16 - {2'b00, nx_dstbit});
+                ev_insub = 1'b1;
+                sub_en   = 1'b1;
+                sub_ext  = w_dn;
+            end
+        end else if (sf_evt) begin
+            // ---- the tail event: lane 2, on the queue the head commit
+            // left behind. Only runs while the run still has bits.
+            ev_ext   = ~w_dn;
+            sub_en   = sf_wpend;
+            sub_ext  = ~w_dn;
+            ev_insub = sf_wpend;
+        end
+
+        // ---- the shared lane sub (egcsftb_*_sub) -----------------------
+        // dstbit >= 8 skips this byte position without producing; the
+        // dstbit!=0 forms split the mask between this byte and the next;
+        // the aligned case either spends a whole byte or closes the run.
+        if (sub_en) begin
+            if (nx_dstbit >= 4'd8) begin
+                nx_dstbit = nx_dstbit - 4'd8;
+                if (sub_ext) nx_srcmask[15:8] = 8'h00;
+                else         nx_srcmask[7:0]  = 8'h00;
+            end else begin
+                if (nx_dstbit != 0) begin
+                    v_first = 1'b1;
+                    if (({9'd0, nx_dstbit} + nx_remain) >= 13'd8) begin
+                        v_mask    = w_dn ? (8'hFF << nx_dstbit[2:0])
+                                         : (8'hFF >> nx_dstbit[2:0]);
+                        nx_remain = nx_remain - (13'd8 - {9'd0, nx_dstbit});
                     end else begin
-                        v_mask    = sf_func[0]
-                                  ? (8'hFF >> (4'd8 - {1'b0, nx_remain[2:0]}))
-                                  : (8'hFF << (4'd8 - {1'b0, nx_remain[2:0]}));
+                        v_mask    = w_dn
+                                  ? ((8'hFF << nx_dstbit[2:0]) &
+                                     (8'hFF >> (4'd8 - nx_dstbit
+                                              - {1'b0, nx_remain[2:0]})))
+                                  : ((8'hFF >> nx_dstbit[2:0]) &
+                                     (8'hFF << (4'd8 - nx_dstbit
+                                              - {1'b0, nx_remain[2:0]})));
                         nx_remain = 13'd0;
                     end
-                    if (sf_ext) nx_srcmask[15:8] = v_mask;
-                    else        nx_srcmask[7:0]  = v_mask;
-                    // one produced byte per plane: the two funnel taps are
-                    // the head byte and the one after it.
-                    for (int p = 0; p < 4; p++) begin
-                        case (sf_func)
-                            3'd0, 3'd1:
-                                ev_out[p] = pv[p][0];
-                            3'd2:
-                                ev_out[p] = v_first ? (pv[p][0] >> sf_shr)
-                                            : ((pv[p][0] << sf_shl)
-                                             | (pv[p][1] >> sf_shr));
-                            3'd3:
-                                ev_out[p] = v_first ? (pv[p][0] << sf_shr)
-                                            : ((pv[p][0] >> sf_shl)
-                                             | (pv[p][1] << sf_shr));
-                            3'd4:
-                                ev_out[p] = (pv[p][0] << sf_shl)
-                                          | (pv[p][1] >> sf_shr);
-                            default:
-                                ev_out[p] = (pv[p][0] >> sf_shl)
-                                          | (pv[p][1] << sf_shr);
-                        endcase
-                    end
-                    ev_prod = 1'b1;
-                    // the aligned and left forms consume the head always;
-                    // the right forms' first byte is a look, not a pop.
-                    ev_pop  = ~v_first | ((sf_func != 3'd2)
-                                        & (sf_func != 3'd3));
+                    nx_dstbit = 4'd0;
+                end else if (nx_remain >= 13'd8) begin
+                    nx_remain = nx_remain - 13'd8;
+                end else begin
+                    v_mask    = w_dn
+                              ? (8'hFF >> (4'd8 - {1'b0, nx_remain[2:0]}))
+                              : (8'hFF << (4'd8 - {1'b0, nx_remain[2:0]}));
+                    nx_remain = 13'd0;
                 end
+                if (sub_ext) nx_srcmask[15:8] = v_mask;
+                else         nx_srcmask[7:0]  = v_mask;
+                // one produced byte per plane: the funnel taps are the
+                // head byte and the one after it.
+                for (int p = 0; p < 4; p++) begin
+                    case (sf_func)
+                        3'd0, 3'd1:
+                            ev_out[p] = sub_t0[p];
+                        3'd2:
+                            ev_out[p] = v_first ? (sub_t0[p] >> sf_shr)
+                                      : ((sub_t0[p] << sf_shl)
+                                       | (sub_t1[p] >> sf_shr));
+                        3'd3:
+                            ev_out[p] = v_first ? (sub_t0[p] << sf_shr)
+                                      : ((sub_t0[p] >> sf_shl)
+                                       | (sub_t1[p] << sf_shr));
+                        3'd4:
+                            ev_out[p] = (sub_t0[p] << sf_shl)
+                                      | (sub_t1[p] >> sf_shr);
+                        default:
+                            ev_out[p] = (sub_t0[p] >> sf_shl)
+                                      | (sub_t1[p] << sf_shr);
+                    endcase
+                end
+                ev_prod = 1'b1;
+                // the aligned and left forms consume the head always; the
+                // right forms' first byte is a look, not a pop.
+                sub_pop = ~v_first | ((sf_func != 3'd2)
+                                    & (sf_func != 3'd3));
             end
+        end
 
-            // queue depth: one byte arrived if it earned credit, one left
-            // if outptr moved. Saturation and the underflow fix-up are both
-            // unreachable -- stack <= 24 bits of pending input bounds it --
-            // but the wrap has to land somewhere sane.
-            nx_qd = sf_qd + {2'b00, v_acc} - {2'b00, ev_pop};
-            if (nx_qd == 3'd7)      nx_qd = 3'd0;
-            else if (nx_qd > 3'd4)  nx_qd = 3'd4;
-
-            // remain hitting zero inside _sub re-arms the run (egcshift on
-            // the current registers) -- this is what makes leng the bit
-            // count and not just a write enable.
+        // ---- closes: pops, queue depth, the mid-word suppress, rearm ----
+        if (sf_evt & ~sf_evt_word) begin
+            ev_pops = {1'b0, sub_pop};
+            nx_qd   = sf_qd + {2'b00, v_acc} - {1'b0, ev_pops};
             ev_last = ev_insub & (nx_remain == 13'd0);
+        end else if (sf_evt & ~sf_evt_tail) begin
+            ev_pops  = {1'b0, v_prepop} + {1'b0, sub_pop};
+            ev_wpend = ev_insub & (nx_remain != 13'd0);
+            if (ev_insub & ~ev_wpend) begin
+                if (~w_dn) nx_srcmask[15:8] = 8'h00;
+                else       nx_srcmask[7:0]  = 8'h00;
+            end
+            nx_qd   = sf_qd + {v_acc, 1'b0} - {1'b0, ev_pops};
+            ev_last = ev_insub & ~ev_wpend;
+        end else if (sf_evt) begin
+            ev_pops = {1'b0, sub_pop};
+            nx_qd   = sf_qd - {1'b0, ev_pops};
+            ev_last = ev_insub & (nx_remain == 13'd0);
+        end
+        if (sf_evt) begin
+            if (nx_qd == 3'd7)      nx_qd = 3'd0;
+            else if (nx_qd > 3'd6)  nx_qd = 3'd6;
         end
     end
 
@@ -520,7 +645,7 @@ wire [7:0] src_b = op_ext ? src_q[op_plane][15:8] : src_q[op_plane][7:0];
     wire [7:0] patreg_b = op_ext ? patreg[op_plane][15:8]
                                  : patreg[op_plane][7:0];
     wire [7:0] pat_b = (fgbg_r[14:13] == 2'b00)
-                     ? (ope_r[8] ? src_b : patreg_b)
+                     ? ((ope_r[9:8] == 2'b01) ? src_b : patreg_b)
                      : (op_ext ? fgbg_col[15:8] : fgbg_col[7:0]);
 
     // The general three-input form, ope_xx: eight minterms, MSB first --
@@ -559,24 +684,28 @@ wire [7:0] src_b = op_ext ? src_q[op_plane][15:8] : src_q[op_plane][7:0];
                              : (kind == K_NP) ? np_terms
                              :                 minterms;
 
-    // egc_opeb's source select, by ope 11:10. This follows the BYTE model
-    // (egc_opeb), because the sequencer below this is a byte engine: 2'b00
-    // and 2'b11 fall to the written byte itself; 2'b01 is the raster-op
-    // table; 2'b10 is the pattern -- the fg/bg colours by bank, and the
-    // SOURCE latch for bank zero, which is where the byte and word models
-    // disagree (egc_opew returns patreg there). They read the same for any
-    // aligned run, which is every run until the shift pipeline exists.
+    // egc_opeb's source select, by ope 11:10 -- 2'b00 and 2'b11 fall to the
+    // written byte itself; 2'b01 is the raster-op table; 2'b10 is the
+    // pattern bank, whose non-colour corner (fgbg 14:13 not 01/10)
+    // DIFFERS between np21w's byte and word models: egc_opeb returns the
+    // source latch (egc_src) while egc_opew returns the pattern registers
+    // (egc.patreg). Since the sequencer evaluates op_data per byte lane of
+    // a word access too, op_word picks between the two.
     assign op_data = (ope_r[12:11] == 2'b01) ? opefn_result
                    : (ope_r[12:11] == 2'b10)
-                       ? ((fgbg_r[14:13] == 2'b00) ? src_b
-                                 : (op_ext ? fgbg_col[15:8] : fgbg_col[7:0]))
+                       ? ((fgbg_r[14:13] == 2'b01 || fgbg_r[14:13] == 2'b10)
+                                 ? (op_ext ? fgbg_col[15:8] : fgbg_col[7:0])
+                                 : (op_word ? patreg_b : src_b))
                    :                                 op_val;
 
     // mask2's byte for this access's parity. egc_opeb ANDs srcmask in only
     // where the shift pipeline was consulted: the raster-op mode (0x0800)
     // and the non-colour 0x1000 pattern source; the colours and the
-    // replicate modes mask with the mask register alone.
-    wire       sf_in_op = (ope_r[12:11] == 2'b01)
+    // replicate modes mask with the mask register alone. For a WORD write
+    // egc_opew narrows mask2 by srcmask on every bank -- the unconditional
+    // EGCOPE_SHIFTW2 tail -- so op_word turns the term on outright.
+    wire       sf_in_op = op_word
+                        | (ope_r[12:11] == 2'b01)
                         | ((ope_r[12:11] == 2'b10)
                          & ~(fgbg_r[14] ^ fgbg_r[13]));
     wire [7:0] sm_b = op_ext ? sf_srcmask[15:8] : sf_srcmask[7:0];

@@ -32,7 +32,9 @@ module tb_sdram_shim;
         .sdram_clock(clk), .sdram_reset(rst),
         .address(address), .access_num(access_num),
         .data_in(data_in), .data_out(data_out),
-        .data_in_hi(16'h0), .data_out_hi(),
+        .data_in_hi(16'h0), .a_rvalid         (),
+        .a_beat            (),
+        .data_out_hi(),
         .write_request(write_request), .read_request(read_request),
         .enable_refresh(1'b1),
         .write_flag(write_flag), .read_flag(read_flag),
@@ -45,7 +47,10 @@ module tb_sdram_shim;
         .c_req(1'b0), .c_addr(24'd0), .c_len(4'd0),
         .c_ack(), .c_rvalid(), .c_rdata(), .c_done(),
         .d_req(1'b0), .d_addr(24'd0), .d_len(4'd0),
-        .d_ack(), .d_rvalid(), .d_rdata(), .d_done());
+        .d_ack(), .d_rvalid(), .d_rdata(), .d_done(),
+        .e_req(1'b0), .e_we(1'b0), .e_addr(24'd0), .e_len(4'd0),
+        .e_wdata(16'h0000),
+        .e_ack(), .e_rvalid(), .e_rdata(), .e_done());
 
     sdram_model #(.T_RCD(2), .T_RP(2), .T_WR(2), .T_RFC(4),
                   .PHYSICAL_DQ(1'b1)) sdr (

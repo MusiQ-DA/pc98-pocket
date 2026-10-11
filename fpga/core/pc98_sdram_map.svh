@@ -3,8 +3,8 @@
 //
 // TWO modules have to agree on this and they decide at different moments.
 // RAM.sv turns it into ram_address_select_n from the LATCHED address, after
-// ALE. v30_cpu_bridge has to know it EARLIER -- at the moment it arms a byte
-// cycle -- because the answer decides whether a V30 word access runs as one
+// ALE. zet_cpu_bridge has to know it EARLIER -- at the moment it arms a byte
+// cycle -- because the answer decides whether a word access runs as one
 // cycle (the SDRAM can burst two words) or as two (everything else on this
 // bus is eight bits wide and cannot).
 //
@@ -23,7 +23,7 @@
 //
 // NO INCLUDE GUARD, deliberately. The body is a function that each module
 // needs its own copy of, and a guard makes the SECOND include a no-op: with
-// v30_cpu_bridge.sv ahead of RAM.sv in the file list, RAM.sv was left with
+// zet_cpu_bridge.sv ahead of RAM.sv in the file list, RAM.sv was left with
 // "Can't find definition of task/function: pc98_sdram_hits".
 
 // A function, not a macro: a macro that bit-selects its argument cannot

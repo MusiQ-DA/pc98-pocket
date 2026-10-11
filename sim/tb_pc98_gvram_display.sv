@@ -17,8 +17,11 @@ module tb_pc98_gvram_display;
 
     logic [7:0]  pitch = 8'd40;
     logic        mhz5  = 1'b0;
+    logic [4:0]  lrep  = 5'd0;
     logic [15:0] part_sad [0:3] = '{16'd0, 16'd0, 16'd0, 16'd0};
     logic [9:0]  part_len [0:3] = '{10'd400, 10'd0, 10'd0, 10'd0};
+    logic [3:0]  part_pbyte = 4'h0;
+    logic [5:0]  vshift = 6'd0;
 
     logic        p_req, p_ack = 0, p_rvalid = 0, p_done = 0;
     logic [23:0] p_addr;
@@ -30,11 +33,12 @@ module tb_pc98_gvram_display;
         .clk(clk), .rst(rst), .rd_clk(rd_clk),
         .hcount(h), .vcount(v), .disp_on(disp_on),
         .disp_page(disp_page), .analog_mode(analog_m),
-        .pitch(pitch), .mhz5(mhz5), .dbl(dbl),
+        .pitch(pitch), .mhz5(mhz5), .dbl(dbl), .lrep(lrep),
         .part_sad(part_sad), .part_len(part_len),
+        .part_pbyte(part_pbyte), .vshift(vshift),
         .p_req(p_req), .p_addr(p_addr), .p_len(p_len),
         .p_ack(p_ack), .p_rvalid(p_rvalid), .p_rdata(p_rdata), .p_done(p_done),
-        .gfx_dot(gfx_dot)
+        .gfx_dot(gfx_dot), .dbg()
     );
 
     // raster: 848 dots x 440 lines on rd_clk
@@ -69,31 +73,56 @@ module tb_pc98_gvram_display;
         end
     end
 
-    // The same partition walk the DUT applies: line -> (sad + rel*pitch)*2,
-    // where the PITCH register counts words at 2.5MHz and bytes at 5MHz
-    // (np21w maketgrp's `s_pitch <<= 1` while the flag is clear) -- so the
-    // word count here halves in 5MHz mode, and an odd byte pitch is floored
-    // by the same `& 0xfe` np21w applies.
+    // The same partition walk the DUT applies, written the way np21w
+    // makegrph.c's grphput_indirty0 does it: per emitted RASTERLINE the
+    // partition's `remain` decrements, and a `mul` counter strides the
+    // address by pitch every lr rasterlines. Three np21w rules:
+    //   * a ZERO LEN is absorbing -- `remain--; if (!remain)` wraps the UINT
+    //     to 0xFFFFFFFF instead of firing, so the walk parks in that
+    //     partition forever rather than skipping it;
+    //   * the pointer is CYCLIC -- `s_scrp = (s_scrp + 4) & 0x0c` runs
+    //     partition three back to partition zero, so a screen taller than
+    //     the summed LENs repeats the whole quartet (each partition from
+    //     its own SAD);
+    //   * PITCH counts bytes when the partition's LEN bit14 is set
+    //     (makegrph) or the 5MHz clock flag is (maketgrp), else words
+    //     doubled into bytes -- either way floored even (`&= 0xfe`).
+    function automatic int pitch_bytes(input int p);
+        return (((part_pbyte[p] | mhz5) ? pitch : (pitch << 1)) & 8'hFE);
+    endfunction
+    function automatic int mul_reload();
+        return (lrep != 0) ? lrep + 1 : (dbl ? 2 : 1);
+    endfunction
     function automatic int line_base(input int L);
-        int total, rel, wa, wp;
-        wp    = mhz5 ? (pitch >> 1) : pitch;
-        total = part_len[0] + part_len[1] + part_len[2] + part_len[3];
-        rel   = (total != 0) ? L % total : L;
-        if      (rel < part_len[0]) wa = part_sad[0] + rel * wp;
-        else if (rel < part_len[0] + part_len[1])
-            wa = part_sad[1] + (rel - part_len[0]) * wp;
-        else if (rel < part_len[0] + part_len[1] + part_len[2])
-            wa = part_sad[2] + (rel - part_len[0] - part_len[1]) * wp;
-        else
-            wa = part_sad[3] + (rel - part_len[0] - part_len[1] - part_len[2]) * wp;
-        return (wa * 2) & 32'h7FFF;
+        int p, rel, mul, vad;
+        p = 0; rel = 0; mul = mul_reload();
+        vad = (part_sad[p] * 2) & 32'h7FFF;
+        for (int i = 0; i < L; i++) begin
+            // the bookkeeping np21w runs after emitting rasterline i
+            rel = rel + 1;                                   // remain--
+            if (part_len[p] != 0 && rel >= int'(part_len[p])) begin
+                p = (p + 1) & 3; rel = 0;
+                vad = (part_sad[p] * 2) & 32'h7FFF;
+                mul = mul_reload();
+            end else begin
+                mul = mul - 1;
+                if (mul == 0) begin
+                    mul = mul_reload();
+                    vad = (vad + pitch_bytes(p)) & 32'h7FFF;
+                end
+            end
+        end
+        return vad;
     endfunction
 
     // expected dot for displayed line L, dot d: byte i=d/8, bit 7-(d%8).
+    // With vshift the raster carries VRAM line L-vshift, and the top vshift
+    // lines carry nothing at all (np21w zero-fills that surface band).
     function automatic logic [3:0] exp_dot(input int L, input int d, input int pg);
         int i, base;
         i = d / 8;
-        base = line_base(L);
+        if (L < int'(vshift)) return 4'd0;
+        base = line_base(L - int'(vshift));
         begin
             logic [3:0] dd;
             for (int pl = 0; pl < 4; pl++) begin
@@ -134,8 +163,7 @@ module tb_pc98_gvram_display;
         if (!rst && frames >= 2 && !quiet && v >= 10 && v < 390
          && h > 10 && h < 400) begin
             logic [3:0] exp;
-            exp = exp_dot(dbl ? int'(v) >> 1 : int'(v),
-                          int'(h) - 1, disp_page ? 1 : 0);
+            exp = exp_dot(int'(v), int'(h) - 1, disp_page ? 1 : 0);
             checked++;
             if (gfx_dot !== exp) begin
                 errors++;
@@ -194,12 +222,62 @@ module tb_pc98_gvram_display;
         settle(3);
         $display("H: mhz5/80 checked=%0d errors=%0d", checked, errors);
 
-        quiet = 1'b1;              // I: 200-line doubling -- a 200-line
-        dbl = 1'b1;                //    partition fills all 400 rasterlines,
-        mhz5 = 1'b0; pitch = 8'd40;//    each guest line twice
-        part_len[0] = 10'd200;
+        quiet = 1'b1;              // I: 200-line doubling -- LEN counts
+        dbl = 1'b1;                //    rasterlines now, so 400 of them
+        mhz5 = 1'b0; pitch = 8'd40;//    show 200 guest lines, each twice
+        part_len[0] = 10'd400;
         settle(3);
         $display("I: doubled checked=%0d errors=%0d", checked, errors);
+
+        quiet = 1'b1;              // J: a ZERO middle LEN absorbs -- np21w's
+        dbl = 1'b0;                //    UINT countdown wraps instead of
+        part_sad[0] = 16'h0000; part_len[0] = 10'd100;   // firing, so lines
+        part_sad[1] = 16'h0800; part_len[1] = 10'd0;     // 100+ are all
+        part_sad[2] = 16'h2000; part_len[2] = 10'd80;    // partition one's,
+        part_sad[3] = 16'h0000; part_len[3] = 10'd0;     // never two's
+        settle(3);
+        $display("J: zeroLEN checked=%0d errors=%0d", checked, errors);
+
+        quiet = 1'b1;              // K: cyclic -- the four LENs sum to 180,
+        part_sad[0] = 16'h0000; part_len[0] = 10'd50;    // so the walk wraps
+        part_sad[1] = 16'h0800; part_len[1] = 10'd60;    // partition three
+        part_sad[2] = 16'h2000; part_len[2] = 10'd40;    // back to partition
+        part_sad[3] = 16'h3000; part_len[3] = 10'd30;    // zero at line 180
+        settle(3);
+        $display("K: cyclic  checked=%0d errors=%0d", checked, errors);
+
+        quiet = 1'b1;              // L: doubled split -- LENs count
+        dbl = 1'b1;                //    RASTERLINES (makegrph), so a 200-
+        part_sad[0] = 16'h0000; part_len[0] = 10'd200;   // LEN partition ends
+        part_sad[1] = 16'h0800; part_len[1] = 10'd200;   // at rasterline 200,
+        part_sad[2] = 16'h0000; part_len[2] = 10'd0;     // not guest line 200
+        part_sad[3] = 16'h0000; part_len[3] = 10'd0;
+        settle(3);
+        $display("L: dblsplit checked=%0d errors=%0d", checked, errors);
+
+        quiet = 1'b1;              // M: LEN bit14 set -- PITCH is bytes
+        dbl = 1'b0;                //    (makegrph): 21 floors to 20, where
+        part_pbyte = 4'h1;         //    the word reading would give 42
+        pitch = 8'd21;
+        part_sad[0] = 16'h0000; part_len[0] = 10'd400;
+        part_sad[1] = 16'h0000; part_len[1] = 10'd0;
+        settle(3);
+        $display("M: pbyte   checked=%0d errors=%0d", checked, errors);
+
+        quiet = 1'b1;              // N: CSRFORM LR=3 -- each VRAM line is
+        part_pbyte = 4'h0;         //    held for four rasterlines (mul
+        pitch = 8'd40;             //    stride), a 100-guest-line frame
+        lrep = 5'd3; dbl = 1'b1;
+        part_len[0] = 10'd400;
+        settle(3);
+        $display("N: lrep3   checked=%0d errors=%0d", checked, errors);
+
+        quiet = 1'b1;              // O: VBP delta -- slave VBP 20 lines over
+        lrep = 5'd0; dbl = 1'b0;   //    the master's (np21w grph_vbp): the
+        vshift = 6'd20;            //    plane drops 20 lines, blank above,
+        part_sad[0] = 16'h0000; part_len[0] = 10'd400;
+        settle(3);                 //    bottom 20 clipped
+        $display("O: vshift  checked=%0d errors=%0d", checked, errors);
 
         if (errors == 0 && checked > 200000)
             $display("PASS tb_pc98_gvram_display (%0d dots)", checked);

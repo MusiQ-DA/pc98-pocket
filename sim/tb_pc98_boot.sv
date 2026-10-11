@@ -2,7 +2,7 @@
 // tb_pc98_boot -- run the real ITF on the real CPU core, and watch where it
 // goes.
 //
-// The CPU is the nuV30 through v30_cpu_bridge. The same flat memory and the
+// The CPU is the Zet through zet_cpu_bridge. The same flat memory and the
 // same I/O models see the bridge's bus cycles, so this is the end-to-end
 // dress rehearsal of the hardware CPU path (i8288 + 8-bit bus + real ROMs +
 // 8251) before the bitstream.
@@ -38,7 +38,7 @@ module tb_pc98_boot;
     // DERIVED, not a rounded literal. 11.641 drifts 0.0016 ns per cycle against
     // sdram_board_model's CLK_MHZ-derived device clock -- a whole period by
     // cycle 14800 -- and under REALMEM that manufactures read failures that are
-    // not in the RTL. It did exactly that once; see tb_v30_mem's comment.
+    // not in the RTL. It did exactly that once, on the old V30 mem bench.
     localparam real CLK_MHZ = 42.954545;
     localparam real HALF_NS = 500.0 / CLK_MHZ;
     always #(HALF_NS) clk_chipset = ~clk_chipset;
@@ -68,6 +68,12 @@ module tb_pc98_boot;
     wire [1:0] ram_rd_wait, ram_wr_wait;
     wire       biu_done;
 
+    // +speed=N overrides the firmware-default CE rate (2'b10). Speed 0 is
+    // the ~4.9 MHz setting the real hardware wedges on in cold POST.
+    logic [1:0] clk_select_r = 2'b10;
+    initial if ($value$plusargs("speed=%d", clk_select_r))
+        $display("clk_select override: %d", clk_select_r);
+
     ce_generator u_ce (
         .clock                              (clk_chipset),
         .reset                              (reset),
@@ -78,7 +84,7 @@ module tb_pc98_boot;
         // wall minutes to reach the reset at 18.5 s of guest time should take
         // twenty. Timer-fed delays still take their full guest time, which is
         // the honest trade: the machine itself is faster, not the clocks.
-        .clk_select                         (2'b10),      // the firmware default (PC-98: 19.66 MHz)
+        .clk_select                         (clk_select_r), // the firmware default (PC-98: 19.66 MHz)
         .cpu_clk_pin                        (),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
@@ -110,73 +116,160 @@ module tb_pc98_boot;
     logic [39:0] clk_since_rst = 40'd0;
     logic [39:0] frz_start_clk = 40'd0, frz_end_clk = 40'd0;
 
-    // The nuV30 + the bridge, wired the way core_top wires them.
-    // V30_BACKDOOR gives the bench dbg_regs for the trace below.
-    wire [2:0]  v30_bs;
-    wire [19:0] v30_addr;
-    wire [15:0] v30_data_o, v30_data_i;
-    wire        v30_ube_n, v30_ce, v30_ready;
+    // The CPU + bridge, wired the way core_top wires them.
     wire [223:0] dbg_regs;
     wire        dbg_first_pop, dbg_pend;
-    wire [15:0] v30_ss_rdata_unused;
-    wire        v30_ss_err_unused, v30_ss_quiet_unused;
 
-    v30_cpu_bridge u_bridge (
+    wire        zet_clk;
+    wire [15:0] zwb_dat_i, zwb_dat_o;
+    wire [19:1] zwb_adr;
+    wire        zwb_we, zwb_tga, zwb_stb, zwb_cyc, zwb_ack;
+    wire [ 1:0] zwb_sel;
+    wire        zwb_inta, zwb_nmia;
+    wire [19:0] zet_pc;
+    wire        zet_fault;
+    wire [7:0]  zet_opc;
+    wire [15:0] zbridge_dbg;
+    wire [4:0]  cpu_pf_len;
+    wire        pf_beat_v;
+    wire [7:0]  pf_beat_dat;
+
+    zet_cpu_bridge u_bridge (
         .clk               (clk_chipset),
         .cpu_ce_posedge    (cpu_ce_posedge),
         .cpu_ce_negedge    (cpu_ce_negedge),
+        .fast_pace         (clk_select_r[1]),
         .reset             (cpu_reset_w),
-        .v30_bs            (v30_bs),
-        .v30_addr          (v30_addr),
-        .v30_ube_n         (v30_ube_n),
-        .v30_data_o        (v30_data_o),
-        .v30_data_i        (v30_data_i),
-        .v30_ready         (v30_ready),
-        .v30_ce            (v30_ce),
+        .zet_clk           (zet_clk),
+        .wb_dat_o          (zwb_dat_o),
+        .wb_dat_i          (zwb_dat_i),
+        .wb_adr_o          (zwb_adr),
+        .wb_we_o           (zwb_we),
+        .wb_tga_o          (zwb_tga),
+        .wb_sel_o          (zwb_sel),
+        .wb_stb_o          (zwb_stb),
+        .wb_cyc_o          (zwb_cyc),
+        .wb_ack_i          (zwb_ack),
+        .wb_tgc_o          (zwb_inta),
+        .nmia              (zwb_nmia),
         .processor_status  (processor_status),
         .ad_out            (cpu_ad_out),
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
         .analog_mode       (1'b0),
         .word_access       (cpu_word_access),
+        // pf_* live outside the REALMEM block: the bridge always has the
+        // ports; only the real RAM.sv path drives the beat stream.
+        .pf_req_len        (cpu_pf_len),
+        .pf_beat_v         (pf_beat_v),
+        .pf_beat_dat       (pf_beat_dat),
         .cpu_data_bus_hi   (cpu_data_bus_hi),
         .data_bus_hi       (din_hi),
         .data_bus          (din),
         .processor_ready   (bench_ready),
         .address_enable_n  (test_aen),
+        .sdram_wr_taken    (sdram_wt_w),
         .pause_core        (1'b0),
-        .biu_done          (biu_done)
+        .biu_done          (biu_done),
+        .pf_disable        (1'b0),
+        .dbg               (zbridge_dbg)
     );
 
-    v30_core u_cpu (
-        .CLK       (clk_chipset),
-        .CE        (v30_ce),
-        .RESET     (cpu_reset_w),
-        .READY     (v30_ready),
-        .INT       (pic1_to_cpu),
-        .NMI       (1'b0),
-        .POLL_N    (1'b1),
-        .DATA_I    (v30_data_i),
-        .ADDR_O    (v30_addr),
-        .DATA_O    (v30_data_o),
-        .STATUS_O  (),
-        .QS        (),
-        .BS        (v30_bs),
-        .RD_N      (),
-        .UBE_N     (v30_ube_n),
-        .BUSLOCK_N (),
-        .SS_ADDR   ('0),
-        .SS_WDATA  ('0),
-        .SS_WE     (1'b0),
-        .SS_RDATA  (v30_ss_rdata_unused),
-        .SS_ERR    (v30_ss_err_unused),
-        .SS_BUS_QUIET (v30_ss_quiet_unused),
-        .bkd_load  (1'b0), .bkd_regs ('0), .bkd_queue ('0),
-        .bkd_qlen  (3'd0), .bkd_fetch_ip (16'h0000),
-        .scr_en    (1'b0), .scr_qop (2'b00),
-        .dbg_regs  (dbg_regs), .dbg_first_pop (dbg_first_pop),
-        .dbg_pend  (dbg_pend)
+    zet u_cpu (
+        .wb_clk_i  (zet_clk),
+        .wb_rst_i  (cpu_reset_w),
+        .wb_dat_i  (zwb_dat_i),
+        .wb_dat_o  (zwb_dat_o),
+        .wb_adr_o  (zwb_adr),
+        .wb_we_o   (zwb_we),
+        .wb_tga_o  (zwb_tga),
+        .wb_sel_o  (zwb_sel),
+        .wb_stb_o  (zwb_stb),
+        .wb_cyc_o  (zwb_cyc),
+        .wb_ack_i  (zwb_ack),
+        .wb_tgc_i  (pic1_to_cpu),
+        .wb_tgc_o  (zwb_inta),
+        .nmi       (1'b0),
+        .nmia      (zwb_nmia),
+        .pc        (zet_pc),
+        .dbg_fault (zet_fault),
+        .dbg_opc   (zet_opc)
     );
+
+    // End-to-end readback: every acked Wishbone memory read must equal the
+    // architectural byte the guest was meant to see (mirror/ROM model). A
+    // stale-byte or dropped-command completion in the bridge path shows up
+    // here even when the cycle looked protocol-clean from outside. C0000-
+    // E7FFF is open bus on the machine, so it is outside the check.
+`ifdef REALMEM
+    // Graphics-path state, declared ahead of in_e2e_check (declared later at
+    // the datapath it drives).
+    logic       pc98_analog_q = 1'b0;
+    logic       access_page_q = 1'b0;
+    wire        grcg_active;
+`endif
+    int          ack_rd_mismatches = 0;
+    logic [19:0] ack_bad_addr = 20'h0;
+    function automatic logic [7:0] expected_byte(input logic [19:0] a);
+        if (is_rom(a))       expected_byte = rom_byte(a);
+        else if (is_xrom(a)) expected_byte = xrom_byte(a);
+        else                 expected_byte = ram[a];
+    endfunction
+    function automatic logic in_e2e_check(input logic [19:0] a);
+`ifdef REALMEM
+        // A graphics-window read the sequencer expanded answers with a
+        // transform (TCR/EGC), not the stored byte -- uncheckable flat.
+        logic in_gv;
+        in_gv = (a[19:15] == 5'b10101) | (a[19:16] == 4'hB)
+              | (pc98_analog_q & (a[19:15] == 5'b11100));
+        in_e2e_check = ((a < 20'hC0000) | (a >= 20'hE8000))
+                     & ~(in_gv & (grcg_active | access_page_q))
+                     & (is_rom(a) | is_xrom(a) | ram_seen[a]);
+`else
+        in_e2e_check = (a < 20'hC0000) | (a >= 20'hE8000);
+`endif
+    endfunction
+    always_ff @(posedge clk_chipset) begin
+        if (zwb_ack && !zwb_we && !zwb_tga) begin
+            if (zwb_sel[0] && in_e2e_check({zwb_adr, 1'b0})
+                && zwb_dat_i[7:0] !== expected_byte({zwb_adr, 1'b0})) begin
+                ack_rd_mismatches++;
+                ack_bad_addr <= {zwb_adr, 1'b0};
+                if (ack_rd_mismatches <= 20)
+                    $display("  %8t  E2E lo [%05X] gave %02X, want %02X  (zet_pc %05X)",
+                             $time, {zwb_adr, 1'b0}, zwb_dat_i[7:0],
+                             expected_byte({zwb_adr, 1'b0}), zet_pc);
+            end
+            if (zwb_sel[1] && in_e2e_check({zwb_adr, 1'b1})
+                && zwb_dat_i[15:8] !== expected_byte({zwb_adr, 1'b1})) begin
+                ack_rd_mismatches++;
+                ack_bad_addr <= {zwb_adr, 1'b1};
+                if (ack_rd_mismatches <= 20)
+                    $display("  %8t  E2E hi [%05X] gave %02X, want %02X  (zet_pc %05X)",
+                             $time, {zwb_adr, 1'b1}, zwb_dat_i[15:8],
+                             expected_byte({zwb_adr, 1'b1}), zet_pc);
+            end
+        end
+    end
+
+    // The decode-side witness core_top ships to probe slot 0x38: log the
+    // first INVOP/INTD with the PC it faulted on and the byte it decoded,
+    // so a sim corruption event is directly comparable to the JTAG read.
+    int zet_fault_count = 0;
+    always_ff @(posedge clk_chipset)
+        if (zet_fault) begin
+            zet_fault_count++;
+            if (zet_fault_count <= 10)
+                $display("  %8t  ZET FAULT #%0d  pc=%05X opc=%02X (rom %02X)",
+                         $time, zet_fault_count, zet_pc, zet_opc,
+                         expected_byte(zet_pc));
+        end
+
+    // Zet has no dbg_regs: the trace fields read 0, eu_pc below reads the
+    // core's real linear-PC debug pin instead.
+    assign dbg_regs = '0;
+    assign dbg_first_pop = 1'b0;
+    assign dbg_pend = 1'b0;
 
     // ---- the register view: one local name per quantity --------------------
     // (the core's dbg_regs view, retired-instruction granularity)
@@ -199,13 +292,29 @@ module tb_pc98_boot;
     // the hold lands at exactly the cycle boundary hardware would grant it,
     // never mid-beat. Meaningful under REALMEM only: the flat memory has no
     // READY to stall.
+    logic [39:0] frz_period_clk = 40'd0;
     initial begin
         int v;
         if ($value$plusargs("freeze_start_us=%d", v))
             frz_start_clk = 40'(v * 43);            // ~CLK_MHZ, close enough
         if ($value$plusargs("freeze_len_us=%d", v))
             frz_end_clk = frz_start_clk + 40'(v * 43);
+        if ($value$plusargs("freeze_period_us=%d", v))
+            frz_period_clk = 40'(v * 43);
     end
+
+    // +freeze_period_us turns the one-shot window into a sawtooth: the same
+    // length, re-armed every period, sweeping the hold across every byte
+    // phase a long boot can present. With no period the window is one-shot.
+    wire [39:0] frz_len_clk = frz_end_clk - frz_start_clk;
+    wire [39:0] frz_phase   = (frz_period_clk != 40'd0)
+                          ? ((clk_since_rst - frz_start_clk) % frz_period_clk)
+                          : (clk_since_rst - frz_start_clk);
+    wire        frz_in_win  = (clk_since_rst != 40'd0)
+                           && (clk_since_rst >= frz_start_clk)
+                           && ((frz_period_clk != 40'd0)
+                               ? (frz_phase < frz_len_clk)
+                               : (clk_since_rst < frz_end_clk));
 
     wire frz_hlda = freeze_req ? frz_ff2 : 1'b0;   // hold_acknowledge
     always_ff @(posedge clk_chipset) begin
@@ -215,9 +324,7 @@ module tb_pc98_boot;
             $display("  %8t  FREEZE: cpu_reset_w fell at %0t", $time, $time);
         end else if (clk_since_rst != 40'd0)
             clk_since_rst <= clk_since_rst + 40'd1;
-        freeze_req <= (clk_since_rst != 40'd0)
-                   && (clk_since_rst >= frz_start_clk)
-                   && (clk_since_rst <  frz_end_clk);
+        freeze_req <= frz_in_win;
         if (cpu_ce_posedge) begin
             frz_ff1    <= processor_status[0] & processor_status[1] & lock_n & freeze_req;
             test_aen   <= frz_hlda;
@@ -285,6 +392,11 @@ module tb_pc98_boot;
     // power-on, the top of BIOS.ROM after the guest selects it. Both images are
     // kept whole so the switch is a source change, not a copy.
     logic [7:0] ram  [0:1048575];
+    // Cells the guest provably wrote -- the e2e readback only checks these:
+    // the sdram model answers never-written cells with 16'hDEAD while this
+    // mirror holds 00h, so an unwritten-cell read is a model artefact, not
+    // a mismatch (DMA fills the store without touching this mirror too).
+    logic       ram_seen [0:1048575];
     logic [7:0] itf  [0:32767];      // 0x8000, mapped at F8000
     logic [7:0] bios [0:98303];      // 0x18000, mapped at E8000
 
@@ -353,8 +465,7 @@ module tb_pc98_boot;
     //
     // The flat array above is a model of memory; this is the memory. RAM.sv on
     // sdram_shim on sdram_mp on the part, with the board's half-period clock
-    // skew -- what core_top instantiates. tb_v30_mem proved the bridge against
-    // that path with a program of its own; this runs the REAL ITF through it,
+    // skew -- what core_top instantiates. This runs the REAL ITF through it,
     // which is the only way to ask whether the machine's memory test fails for
     // a reason that lives in the memory path.
     //
@@ -366,26 +477,107 @@ module tb_pc98_boot;
 `ifdef REALMEM
     wire [7:0]  ram_dout, ram_dout_hi;
     wire        memory_access_ready, ram_address_select_n;
+    wire        ram_ready_w;
     wire        initilized_sdram_w, access_complete_w;
+    wire        access_own_w;
+    wire        ram_wt_w;           // u_ram write_taken -> seq -> drain
+    wire        sdram_wt_w;         // u_bridge.sdram_wr_taken
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
     logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
 
+    // ---- the graphics path, as core_top wires it --------------------------
+    //
+    // pc98_gvram_seq sits between the guest strobes and RAM.sv exactly the
+    // way Chipset.sv has it: pass-through when no charger is armed, one
+    // SDRAM op per live plane when the GRCG/EGC is on. The ITF's f87d5 test
+    // (analog on, RMW fill both pages, TCR verify) exercises the real
+    // expand path here -- without this the bench's flat A8000 window passes
+    // the verify vacuously, by storing and returning the same bytes.
+    //
+    // The charger registers the POST programs: 0x7C mode (and tile-count
+    // reset), 0x7E tile bytes, 0xA6 access page, 0x6A bit0 the E0000 plane.
+    wire        io_w_active = ~io_wr_n & ~test_aen & (cpu_address[15:8] == 8'h00);
+    always_ff @(posedge clk_chipset) begin
+        if (io_w_active) begin
+            if (cpu_address[7:0] == 8'h6A) pc98_analog_q <= cpu_data_bus[0];
+            if (cpu_address[7:0] == 8'hA6) access_page_q <= cpu_data_bus[0];
+        end
+    end
+
+    wire        grcg_rmw;
+    wire [3:0]  grcg_mask;
+    wire [7:0]  grcg_tile [0:3];
+    pc98_grcg u_grcg (
+        .clk(clk_chipset), .reset(reset),
+        .cs_mode(io_w_active & (cpu_address[7:0] == 8'h7C)),
+        .cs_tile(io_w_active & (cpu_address[7:0] == 8'h7E)),
+        .io_read_n(io_rd_n), .io_write_n(io_wr_n),
+        .io_data_in(cpu_data_bus), .io_data_out(),
+        .active(grcg_active), .rmw(grcg_rmw), .plane_mask(grcg_mask),
+        .tile_o(grcg_tile),
+        .cpu_wdata(8'h00),
+        .plane_rdata('{8'h00, 8'h00, 8'h00, 8'h00}),
+        .plane_wdata(), .plane_we(), .cpu_rdata()
+    );
+
+    wire [19:0] seq_mem_addr;
+    wire [7:0]  seq_mem_wdata, seq_cpu_rdata, seq_cpu_rdata_hi;
+    wire        seq_mem_word, seq_mem_rd, seq_mem_wr, seq_mem_page1;
+    wire [4:0]  seq_mem_pf_len;
+    wire [7:0]  dbg_gvram;
+    pc98_gvram_seq #(.EGC(1'b1)) u_gvram_seq (
+        .clk(clk_chipset), .reset(reset),
+        .cpu_gvram(~ram_address_select_n),
+        .cpu_rd(~mem_rd_n), .cpu_wr(~mem_wr_n),
+        .cpu_pf_len(cpu_pf_len),
+        .cpu_word(cpu_word_access),
+        .cpu_addr(cpu_address), .cpu_wdata(cpu_data_bus),
+        .cpu_wdata_hi(cpu_data_bus_hi),
+        .cpu_rdata(seq_cpu_rdata), .cpu_rdata_hi(seq_cpu_rdata_hi),
+        .cpu_ready(memory_access_ready),
+        .grcg_active(grcg_active), .grcg_rmw(grcg_rmw),
+        .grcg_mask(grcg_mask), .grcg_tile(grcg_tile),
+        .analog_mode(pc98_analog_q),
+        .access_page(access_page_q), .mem_page1(seq_mem_page1),
+        .egc_active(1'b0), .egc_wr(1'b0), .egc_rg(4'h0), .egc_d(8'h0),
+        .svc_req(1'b0), .svc_we(1'b0), .svc_raw(1'b0),
+        .svc_addr(20'h0), .svc_wdata(8'h0),
+        .svc_done(), .svc_rdata(),
+        .pf_disable        (1'b0),
+        .dbg(dbg_gvram),
+        .mem_addr(seq_mem_addr), .mem_wdata(seq_mem_wdata),
+        .mem_word(seq_mem_word), .mem_pf_len(seq_mem_pf_len),
+        .mem_rd(seq_mem_rd), .mem_wr(seq_mem_wr),
+        .mem_rdata(ram_dout), .mem_rdata_hi(ram_dout_hi),
+        .mem_done(access_complete_w),
+        .mem_own(access_own_w),
+        .mem_ready(ram_ready_w),
+        .mem_wr_taken(ram_wt_w),
+        .cpu_wr_taken(sdram_wt_w)
+    );
+
     RAM u_ram (
         .clock(clk_chipset), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram_w),
-        .address(cpu_address), .internal_data_bus(cpu_data_bus),
+        .gvram_page1_flag(seq_mem_page1),
+        .address(seq_mem_addr), .internal_data_bus(seq_mem_wdata),
         .data_bus_out(ram_dout),
-        .analog_mode(1'b0),
-        .word_access(cpu_word_access),
+        .analog_mode(pc98_analog_q),
+        .word_access(seq_mem_word),
+        .prefetch_len(seq_mem_pf_len),
+        .pf_beat_v(pf_beat_v), .pf_beat_dat(pf_beat_dat),
         .internal_data_bus_hi(cpu_data_bus_hi),
         .data_bus_out_hi(ram_dout_hi),
-        .memory_read_n(mem_rd_n), .memory_write_n(mem_wr_n),
+        .memory_read_n(~seq_mem_rd), .memory_write_n(~seq_mem_wr),
         .no_command_state(mem_rd_n & mem_wr_n & io_rd_n & io_wr_n),
-        .memory_access_ready(memory_access_ready),
+        .memory_access_ready(ram_ready_w),
         .access_complete(access_complete_w),
+        .access_own(access_own_w),
         .ram_address_select_n(ram_address_select_n),
+        .write_taken(ram_wt_w),
+        .dbg_watch_addr(20'hFFFFF),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
@@ -397,12 +589,22 @@ module tb_pc98_boot;
         // the switch is an address bit, not a copy.
         .bios_protect_flag(2'b10), .bios_shadow_flag(itf_bank),
         .font_bank_flag(1'b0),
-        .font_rd_req(1'b0), .font_rd_addr(24'h0), .font_rd_len(4'h0),
-        .font_rd_ack(), .font_rd_valid(), .font_rd_data(), .font_rd_done(),
+        .font_rd_req(fontb_req), .font_rd_addr(fontb_addr),
+        .font_rd_len(fontb_len),
+        .font_rd_ack(fontb_ack), .font_rd_valid(fontb_rvalid),
+        .font_rd_data(fontb_rdata), .font_rd_done(fontb_done),
         .cg_rd_req(1'b0), .cg_rd_addr(24'h0), .cg_rd_len(4'h0),
         .cg_rd_ack(), .cg_rd_valid(), .cg_rd_data(), .cg_rd_done(),
+        .gv_rd_req(gv_req), .gv_rd_addr(gv_addr), .gv_rd_len(gv_len),
+        .gv_rd_ack(gv_ack), .gv_rd_valid(gv_rvalid),
+        .gv_rd_data(gv_rdata), .gv_rd_done(gv_done),
         .wait_count_clk_en(cpu_ce_negedge),
-        .ram_read_wait_cycle(ram_rd_wait), .ram_write_wait_cycle(ram_wr_wait), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0)
+        .ram_read_wait_cycle(ram_rd_wait), .ram_write_wait_cycle(ram_wr_wait), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0),
+        .ramimg_req(ramimg_req_t), .ramimg_we(1'b0),
+        .ramimg_addr(ramimg_addr_t),
+        .ramimg_len(ramimg_len_t), .ramimg_wdata(16'h0000),
+        .ramimg_ack(ramimg_ack_t), .ramimg_rvalid(ramimg_rvalid_t),
+        .ramimg_rdata(), .ramimg_done(ramimg_done_t)
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
@@ -411,6 +613,268 @@ module tb_pc98_boot;
         .ras_n(s_ras), .cas_n(s_cas), .we_n(s_we), .dqm({s_udqm, s_ldqm}),
         .dq_out(s_dq_out), .dq_io(s_dq_io), .dq_in(s_dq_in)
     );
+
+    // ---- the video-side ports: the REAL display fetch on D ---------------
+    //
+    // This is the client the multiport controller exists for, and the bench
+    // historically left it tied off -- which made every port-A latency this
+    // bench measured a best case, not the machine's case. Peripherals wires
+    // pc98_gvram_display to port D; here it is instantiated with the real
+    // pc98_video_timing on a halved chipset clock for the dot domain
+    // (21.48 MHz against the part's 21.05 -- 2% fast, i.e. conservative by
+    // the same amount on line rate).
+    //
+    // The slave-GDC registers are constants shaped like the 640x400 default:
+    // one partition of LEN 400 at SAD 0, PITCH 40 words (mhz5 clear, so the
+    // display module doubles it to the 80-byte line). disp_on is a plusarg
+    // -- +disp=0 leaves port D silent so the same binary measures baseline
+    // vs loaded. +analog4=1 adds the fourth plane (E0000), which is what
+    // sixteen-colour games pay.
+    logic        disp_on_r = 1'b1;
+    logic        analog4_r = 1'b0;
+    logic        disp_page_r = 1'b0;
+    logic        dbl_r = 1'b0;
+    logic [15:0] disp_sad [0:3] = '{16'd0, 16'd0, 16'd0, 16'd0};
+    logic [9:0]  disp_len [0:3] = '{10'd400, 10'd0, 10'd0, 10'd0};
+    initial begin
+        int v;
+        if ($value$plusargs("disp=%d", v))    disp_on_r  = (v != 0);
+        if ($value$plusargs("analog4=%d", v)) analog4_r  = (v != 0);
+        if ($value$plusargs("disppage=%d", v)) disp_page_r = (v != 0);
+        if ($value$plusargs("dbl=%d", v))     dbl_r      = (v != 0);
+    end
+
+    logic        dot_clk = 1'b0;
+    always_ff @(posedge clk_chipset) dot_clk <= ~dot_clk;
+    wire  [9:0] vid_h, vid_v;
+    wire        vid_hs, vid_vs, vid_hb, vid_vb, vid_de, vid_fs;
+    pc98_video_timing u_vtiming (
+        .clk(dot_clk), .ce(1'b1), .rst(1'b0),
+        .hcount(vid_h), .vcount(vid_v), .hsync(vid_hs), .vsync(vid_vs),
+        .hblank(vid_hb), .vblank(vid_vb), .de(vid_de), .frame_start(vid_fs)
+    );
+
+    wire        gv_req, gv_ack, gv_rvalid, gv_done;
+    wire [23:0] gv_addr;
+    wire  [3:0] gv_len;
+    wire [15:0] gv_rdata;
+    wire  [3:0] gv_dot_unused;
+    pc98_gvram_display u_gvram_disp (
+        .clk(clk_chipset), .rst(reset),
+        .rd_clk(dot_clk), .hcount(vid_h), .vcount(vid_v),
+        .disp_on(disp_on_r), .disp_page(disp_page_r),
+        .analog_mode(analog4_r), .dbl(dbl_r),
+        .pitch(8'd40), .mhz5(1'b0), .lrep(5'd0),
+        .part_sad(disp_sad), .part_len(disp_len),
+        .part_pbyte(4'h0), .vshift(6'd0),
+        .p_req(gv_req), .p_addr(gv_addr), .p_len(gv_len),
+        .p_ack(gv_ack), .p_rvalid(gv_rvalid), .p_rdata(gv_rdata),
+        .p_done(gv_done), .gfx_dot(gv_dot_unused), .dbg()
+    );
+
+    // ---- optional synthetic pressure on ports B and E ----------------------
+    //
+    // Port B is the kanji font fetcher -- quiet while the screen is ASCII
+    // (ANK glyphs live in BRAM). +fontb=N issues one 16-word burst every N
+    // chipset clocks: the glyph rowbuf's worst case is 80 cells per text row
+    // (16 lines), i.e. 5 per scanline -- fontb=340 approximates a fully
+    // kanji screen.
+    // Port E is fdd_ramimg's carve-out: 16-word sector-read bursts while it
+    // serves a RAM-image floppy. +porte=N does the same there. Both default
+    // off: the honest answer comes from the ports that actually run.
+    logic        fontb_req = 1'b0;
+    logic [23:0] fontb_addr = 24'h400000;
+    logic  [3:0] fontb_len = 4'd15;
+    wire         fontb_ack, fontb_rvalid, fontb_done;
+    wire [15:0]  fontb_rdata;
+    int          fontb_per = 0, fontb_cnt = 0;
+
+    logic        ramimg_req_t = 1'b0;
+    logic [23:0] ramimg_addr_t = 24'h620000;
+    logic  [3:0] ramimg_len_t = 4'd15;
+    wire         ramimg_ack_t, ramimg_rvalid_t, ramimg_done_t;
+    int          porte_per = 0, porte_cnt = 0;
+    initial begin
+        int v;
+        if ($value$plusargs("fontb=%d", v)) fontb_per = v;
+        if ($value$plusargs("porte=%d", v)) porte_per = v;
+    end
+    always_ff @(posedge clk_chipset) begin
+        if (reset) begin
+            fontb_req <= 1'b0; fontb_cnt <= 0;
+            ramimg_req_t <= 1'b0; porte_cnt <= 0;
+        end else begin
+            if (fontb_req) begin
+                if (fontb_ack) begin
+                    fontb_req  <= 1'b0;
+                    fontb_addr <= fontb_addr + 24'd16;
+                end
+            end else if (fontb_per > 0) begin
+                fontb_cnt <= fontb_cnt + 1;
+                if (fontb_cnt >= fontb_per) begin
+                    fontb_cnt <= 0; fontb_req <= 1'b1;
+                end
+            end
+            if (ramimg_req_t) begin
+                if (ramimg_ack_t) begin
+                    ramimg_req_t  <= 1'b0;
+                    ramimg_addr_t <= ramimg_addr_t + 24'd16;
+                end
+            end else if (porte_per > 0) begin
+                porte_cnt <= porte_cnt + 1;
+                if (porte_cnt >= porte_per) begin
+                    porte_cnt <= 0; ramimg_req_t <= 1'b1;
+                end
+            end
+        end
+    end
+
+    // ---- SDRAM occupancy monitor (sim only, hierarchical taps) ------------
+    //
+    // Everything the arbiter knows, counted per port, printed per chunk by
+    // the run loop (the OCC line) and summed at the end. "own" cycles are
+    // the number of clocks the port's transaction occupies the controller
+    // (grant held while the FSM is anywhere but IDLE/refresh); "wait" cycles
+    // are req-up-not-yet-acked -- the arbitration queue depth, per port.
+    //
+    // sdram_mp state encoding (must match sdram_mp.sv's state_t order):
+    //   0..3 init, 4 IDLE, 5 ACT, 6 RW, 7 RD_GAP, 8 TAIL, 9 REF_PRE,
+    //   10 REF, 11 PRE_MISS.
+    localparam int MP_S_IDLE = 4;
+    localparam int MP_S_RW   = 6;
+    // grant-owned states: the port's transaction is on the device.
+    wire        mp_busy   = (u_ram.u_sdram.u_mp.state > MP_S_IDLE)
+                        & (u_ram.u_sdram.u_mp.state != 4'd9)
+                        & (u_ram.u_sdram.u_mp.state != 4'd10);
+    wire [2:0]  mp_grant  = u_ram.u_sdram.u_mp.grant;
+    wire [4:0]  mp_reqs   = u_ram.u_sdram.u_mp.p_req;
+    wire [4:0]  mp_acks   = u_ram.u_sdram.u_mp.p_ack;
+    wire [4:0]  mp_dones  = u_ram.u_sdram.u_mp.p_done;
+    wire        mp_rvalid = u_ram.u_sdram.u_mp.p_rvalid;
+    wire        mp_wrbeat = mp_busy & u_ram.u_sdram.u_mp.cur_we
+                        & (u_ram.u_sdram.u_mp.state == MP_S_RW);
+    wire        mp_refresh= u_ram.u_sdram.u_mp.stat_refresh;
+    wire        mp_initd  = u_ram.u_sdram.u_mp.init_done;
+    wire        mp_act    = (u_ram.u_sdram.u_mp.state == 4'd5)
+                        | (u_ram.u_sdram.u_mp.state == 4'd11);
+
+    longint unsigned occ_cyc      = 0;   // cycles since init_done
+    longint unsigned occ_refresh  = 0;
+    longint unsigned occ_own  [0:4] = '{0,0,0,0,0};
+    longint unsigned occ_wait [0:4] = '{0,0,0,0,0};
+    longint unsigned occ_trans[0:4] = '{0,0,0,0,0};
+    longint unsigned occ_rd   [0:4] = '{0,0,0,0,0};
+    longint unsigned occ_wr   [0:4] = '{0,0,0,0,0};
+    longint unsigned occ_act        = 0;  // cycles paying ACT/PRE-miss
+    longint unsigned occ_actp [0:4] = '{0,0,0,0,0}; // same, per port
+    // port A latency, per transaction: a_w = req-up cycles before ack,
+    // a_d = grant-to-done cycles, hist over the sum.
+    int unsigned     a_w = 0, a_d = 0;
+    logic            a_flight = 1'b0, a_acked = 1'b0;
+    longint unsigned a_wait_sum = 0, a_wait_max = 0, a_wait_n = 0;
+    longint unsigned a_lat_sum  = 0, a_lat_max  = 0;
+    // port A latency buckets: 0-9,10-19,20-39,40-79,80+
+    longint unsigned a_lat_hist [0:4] = '{0,0,0,0,0};
+    // display fetch vs raster phase: D grant cycles inside vs outside hblank
+    longint unsigned d_in_hb = 0, d_in_vis = 0, d_in_vb = 0;
+    // CPU-visible stall: zet wishbone pending cycles + RAM FSM busy cycles
+    longint unsigned cpu_wb_pend = 0, cpu_wb_ack = 0;
+    longint unsigned ramfsm_busy = 0, ramfsm_done = 0;
+    longint unsigned guest_stall = 0;  // cmd up, ready down
+    // gvram sequencer occupancy: cycles an expansion owns the port-A path
+    longint unsigned seq_busy = 0, seq_legs = 0;
+    int            seq_leg_d = 0;
+
+    always_ff @(posedge clk_chipset) begin
+        if (mp_initd) begin
+            occ_cyc <= occ_cyc + 1;
+            if (mp_refresh) occ_refresh <= occ_refresh + 1;
+            if (mp_act)     occ_act     <= occ_act + 1;
+            for (int p = 0; p < 5; p++) begin
+                if (mp_busy & (mp_grant == 3'(p)))   occ_own[p]  <= occ_own[p] + 1;
+                if (mp_reqs[p] & ~mp_acks[p])        occ_wait[p] <= occ_wait[p] + 1;
+                if (mp_acks[p])                      occ_trans[p]<= occ_trans[p] + 1;
+                if (mp_rvalid & (mp_grant == 3'(p))) occ_rd[p]   <= occ_rd[p] + 1;
+                if (mp_wrbeat & (mp_grant == 3'(p))) occ_wr[p]   <= occ_wr[p] + 1;
+                if (mp_act & mp_busy & (mp_grant == 3'(p)))
+                    occ_actp[p] <= occ_actp[p] + 1;
+            end
+            // port A transaction latency: req edge to done pulse. The shim
+            // drops its req at ack, so the wait half and the granted half are
+            // tracked separately and summed at done.
+            if (!a_flight && mp_reqs[0]) begin
+                a_flight <= 1'b1; a_acked <= 1'b0; a_w <= 0; a_d <= 0;
+            end else if (a_flight) begin
+                if (mp_acks[0]) begin
+                    a_acked    <= 1'b1;
+                    a_wait_n   <= a_wait_n + 1;
+                    a_wait_sum <= a_wait_sum + a_w;
+                    if (a_w > a_wait_max) a_wait_max <= a_w;
+                end else if (!a_acked) a_w <= a_w + 1;
+                else                   a_d <= a_d + 1;
+                if (mp_dones[0]) begin
+                    a_flight  <= 1'b0;
+                    a_lat_sum <= a_lat_sum + a_w + a_d + 1;
+                    if ((a_w + a_d + 1) > a_lat_max)
+                        a_lat_max <= a_w + a_d + 1;
+                    a_lat_hist[(a_w + a_d + 1) < 10 ? 0
+                        : (a_w + a_d + 1) < 20 ? 1
+                        : (a_w + a_d + 1) < 40 ? 2
+                        : (a_w + a_d + 1) < 80 ? 3 : 4]
+                      <= a_lat_hist[(a_w + a_d + 1) < 10 ? 0
+                        : (a_w + a_d + 1) < 20 ? 1
+                        : (a_w + a_d + 1) < 40 ? 2
+                        : (a_w + a_d + 1) < 80 ? 3 : 4] + 1;
+                end
+            end
+            // D's grant cycles against the raster phase.
+            if (mp_busy & (mp_grant == 3'd3)) begin
+                if (vid_vb)      d_in_vb  <= d_in_vb + 1;
+                else if (vid_hb) d_in_hb  <= d_in_hb + 1;
+                else             d_in_vis <= d_in_vis + 1;
+            end
+            if (zwb_stb & ~zwb_ack) cpu_wb_pend <= cpu_wb_pend + 1;
+            if (zwb_stb & zwb_ack)  cpu_wb_ack  <= cpu_wb_ack + 1;
+            if (u_ram.state != u_ram.IDLE) ramfsm_busy <= ramfsm_busy + 1;
+            if (u_ram.state == u_ram.COMPLETE_RAM_RW)
+                ramfsm_done <= ramfsm_done + 1;
+            if ((~mem_rd_n | ~mem_wr_n) & ~ram_ready_w)
+                guest_stall <= guest_stall + 1;
+            if (u_gvram_seq.st != 3'd0) begin
+                seq_busy <= seq_busy + 1;
+                seq_leg_d <= seq_leg_d + 1;
+            end else if (seq_leg_d != 0) begin
+                seq_legs  <= seq_legs + seq_leg_d;
+                seq_leg_d <= 0;
+            end
+        end
+    end
+
+    task automatic occ_report;
+        real busy_tot;
+        $display("  OCC cyc=%0d ref=%0d(%0d%%) | act/pre=%0d",
+                 occ_cyc, occ_refresh,
+                 occ_cyc ? int'(occ_refresh * 100 / occ_cyc) : 0, occ_act);
+        for (int p = 0; p < 5; p++)
+            $display("    port %0d: trans=%0d rd=%0d wr=%0d own=%0d(%0d%%) wait=%0d act=%0d",
+                     p, occ_trans[p], occ_rd[p], occ_wr[p], occ_own[p],
+                     occ_cyc ? int'(occ_own[p] * 100 / occ_cyc) : 0,
+                     occ_wait[p], occ_actp[p]);
+        $display("    portA req->ack avg %0d max %0d n=%0d | req->done avg %0d max %0d",
+                 a_wait_n ? int'(a_wait_sum / a_wait_n) : 0, a_wait_max,
+                 a_wait_n,
+                 occ_trans[0] ? int'(a_lat_sum / occ_trans[0]) : 0, a_lat_max);
+        $display("    portA lat hist <10:%0d 10-19:%0d 20-39:%0d 40-79:%0d 80+:%0d",
+                 a_lat_hist[0], a_lat_hist[1], a_lat_hist[2],
+                 a_lat_hist[3], a_lat_hist[4]);
+        $display("    D grant phase: vis=%0d hb=%0d vb=%0d",
+                 d_in_vis, d_in_hb, d_in_vb);
+        $display("    ramfsm busy=%0d done=%0d | guest stall cyc=%0d | seq busy=%0d legs=%0d",
+                 ramfsm_busy, ramfsm_done, guest_stall, seq_busy, seq_legs);
+        $display("    zwb pending=%0d ack=%0d avg_lat=%0d",
+                 cpu_wb_pend, cpu_wb_ack,
+                 cpu_wb_ack ? int'(cpu_wb_pend / cpu_wb_ack) : 0);
+    endtask
 
     // Chipset.sv: io_channel_ready & memory_access_ready.
     wire bench_ready;
@@ -431,25 +895,31 @@ module tb_pc98_boot;
     );
 
     // RAM.sv answers where it is selected; the mirror answers the rest
-    // (A0000-A7FFF and C0000-E7FFF are not in its select).
-    wire [7:0] mem_read_byte = ~ram_address_select_n ? ram_dout
+    // (A0000-A7FFF and C0000-E7FFF are not in its select). The sequencer's
+    // cpu_rdata/cpu_rdata_hi are what the guest lanes see, pass-through or
+    // transformed -- same mux Chipset.sv drives onto internal_data_bus_ram.
+    wire [7:0] mem_read_byte = ~ram_address_select_n ? seq_cpu_rdata
                             : is_xrom(cpu_address)   ? xrom_byte(cpu_address)
                                                      : ram[cpu_address];
     // The odd lane of a one-cycle word read; the SDRAM serves those, the
     // option ROM serves its own.
-    wire [7:0] din_hi = (~mem_rd_n & ~ram_address_select_n) ? ram_dout_hi
+    wire [7:0] din_hi = (~mem_rd_n & ~ram_address_select_n) ? seq_cpu_rdata_hi
                       : (~mem_rd_n & is_xrom(cpu_address))  ? xrom_byte(cpu_address | 20'h1)
                                                             : 8'hFF;
 
     // The mirror check. On the trailing edge of a read RAM.sv answered, what
-    // it gave against what the guest put there.
+    // it gave against what the guest put there. A read the sequencer expanded
+    // (charger armed, or the page bit banking the window) returns a
+    // transform -- the TCR match mask or the EGC pipeline byte -- not the
+    // raw mirror byte, so those are skipped.
     logic       mrd_d = 1'b1;
     logic [7:0] mrd_live;
     int         mem_mismatches = 0;
     always_ff @(posedge clk_chipset) begin
         mrd_d <= mem_rd_n;
         if (~mem_rd_n) mrd_live <= mem_read_byte;
-        if (mem_rd_n & ~mrd_d & ~ram_address_select_n) begin
+        if (mem_rd_n & ~mrd_d & ~ram_address_select_n
+          & ~(grcg_active | access_page_q)) begin
             logic [7:0] want_b;
             want_b = is_rom(cpu_address) ? rom_byte(cpu_address)
                                          : ram[cpu_address];
@@ -475,6 +945,14 @@ module tb_pc98_boot;
                                   ? xrom_byte(cpu_address | 20'h1)
                                 : ram[cpu_address | 20'h1];
     wire [7:0] din_hi = ~mem_rd_n ? mem_read_byte_hi : 8'hFF;
+    // No RAM.sv here: no beat stream exists. The prefetch windows stay
+    // empty, which is what the flat path wants anyway.
+    assign pf_beat_v   = 1'b0;
+    assign pf_beat_dat = 8'h00;
+    // The flat array commits a presented write on the strobe's fall, so a
+    // strobe on the pins is as good as captured -- the drain's witness is
+    // simply "the write command reached the bus".
+    wire sdram_wt_w = ~mem_wr_n;
 `endif
 
     // True when the read above fell through to the FF default -- i.e. nothing
@@ -644,6 +1122,8 @@ module tb_pc98_boot;
     wire  gdc_stat_port  = (cpu_address[15:0] == 16'h0060)
                          | (cpu_address[15:0] == 16'h00A0);
     logic gdc_poll_seen  = 1'b0;
+    logic [7:0] io60_live = 8'h00;
+    int         gdc60_n   = 0;
 
     // The last sixteen DISTINCT execution addresses.
     //
@@ -722,7 +1202,11 @@ module tb_pc98_boot;
         // Memory write, on the trailing edge, and never into ROM.
         if (mem_wr_n & ~mem_wr_d & ~is_rom(cpu_address)) begin
             ram[cpu_address] <= mem_wr_data_q;
-            if (mem_wr_word_q) ram[cpu_address | 20'h1] <= mem_wr_hi_q;
+            ram_seen[cpu_address] <= 1'b1;
+            if (mem_wr_word_q) begin
+                ram[cpu_address | 20'h1] <= mem_wr_hi_q;
+                ram_seen[cpu_address | 20'h1] <= 1'b1;
+            end
             // The ITF's reset-resume state (0000:03F0-0410): every write here
             // is part of the OUT-0F0h dance, and a save that goes missing is
             // the difference between a resume and a derail.
@@ -803,12 +1287,18 @@ module tb_pc98_boot;
                      $time, cpu_address[15:0], eu_pc);
         end
 
+        if (~io_rd_n & gdc_stat_port) io60_live <= din;
         if (io_rd_n & ~io_rd_d) begin
             if (gdc_stat_port) begin
                 if (~gdc_poll_seen) begin
                     $display("  %8t  IN  from %04X  (poll begins, eu_pc %05X)",
                              $time, cpu_address[15:0], eu_pc);
                     gdc_poll_seen <= 1'b1;
+                end
+                if (gdc60_n < 48) begin
+                    $display("  %8t  IN60 -> %02X  (vsync %b, pc %05X)", $time,
+                             io60_live, crt_vsync_mock, eu_pc);
+                    gdc60_n <= gdc60_n + 1;
                 end
             end else begin
                 gdc_poll_seen <= 1'b0;
@@ -1051,6 +1541,7 @@ module tb_pc98_boot;
     logic [19:0] crt_period_cnt = 20'd0;
     logic [15:0] crt_pulse_cnt  = 16'd0;
     logic        crt_vsync_mock = 1'b0;
+    logic        vsync_mock_d   = 1'b0;
     always_ff @(posedge clk_chipset) begin
         if (crt_pulse_cnt == 16'd0) begin
             crt_period_cnt <= crt_period_cnt + 20'd1;
@@ -1064,8 +1555,12 @@ module tb_pc98_boot;
             if (crt_pulse_cnt >= 16'd20_000) begin   // ~460 us, like a retrace
                 crt_vsync_mock <= 1'b0;
                 crt_pulse_cnt  <= 16'd0;
+                $display("  %8t  VSYNC low", $time);
             end
         end
+        if (crt_vsync_mock & ~vsync_mock_d)
+            $display("  %8t  VSYNC high", $time);
+        vsync_mock_d <= crt_vsync_mock;
     end
 
     wire [7:0] pic1_dout, pic2_dout;
@@ -1151,10 +1646,14 @@ module tb_pc98_boot;
     // Segment transfers: when CS changes, where the EU went matters more
     // than where it was. A stray vector lands the CPU in RAM.
     logic [15:0] eu_cs_d = 16'hFFFF;
+    int cs_tr_n = 0;
     always_ff @(posedge clk_chipset) begin
         eu_cs_d <= eu_cs;
-        if (eu_cs != eu_cs_d)
-            $display("  %8t  CS %04X -> %04X  (pc %05X)", $time, eu_cs_d, eu_cs, eu_pc);
+        if (eu_cs != eu_cs_d && cs_tr_n < 2000) begin
+            cs_tr_n <= cs_tr_n + 1;
+            if (cs_tr_n < 400)
+                $display("  %8t  CS %04X -> %04X  (pc %05X)", $time, eu_cs_d, eu_cs, eu_pc);
+        end
     end
 
     // ---- keyboard: the real 8251 model, the shipped RTL -----------------------
@@ -1321,7 +1820,7 @@ module tb_pc98_boot;
     // Read side follows the glue combinationally and the held byte is the
     // FDC's combinational answer captured at the strobe -- the byte has to
     // be on the bus before the CPU's read-data latch, not three clocks
-    // after the strobe (see tb_pc98_v30, where the nuV30's T2->T3 sample
+    // after the strobe (on the old nuV30 bench the core's T2->T3 sample
     // raced the staged path and every other read came back one byte
     // stale).  The write path keeps its staging: write strobes arrive at
     // cycle end and need the registered address.
@@ -1440,10 +1939,71 @@ module tb_pc98_boot;
     // The queue's read pointer is the EU's instruction pointer, so CS:PFQ_ADDR
     // is the real program counter. The dbg_regs view
     // ({psw,ip,ds,ss,cs,es,di,si,bp,sp,bx,dx,cx,ax}, retired-instruction
-    // granularity) is the same one tb_pc98_v30 traced.
-    wire [15:0] eu_ip = dbg_regs[207:192];
-    wire [15:0] eu_cs = dbg_regs[159:144];
-    wire [19:0] eu_pc = {eu_cs, 4'd0} + {4'd0, eu_ip};
+    // granularity) is the same one the old V30 bench traced. Zet exposes no
+    // dbg_regs, so eu_pc reads the core's linear-PC pin directly.
+    wire [15:0] eu_cs = zet_pc[19:4];   // for the CS-change trace only
+    wire [19:0] eu_pc = zet_pc;
+
+    // First-cycles bus trace: what the Zet actually asked for and got.
+    int zet_tr_n = 0;
+    always_ff @(posedge clk_chipset) begin
+        if (zet_tr_n < 200) begin
+            if (mem_rd_d & ~mem_rd_n) begin
+                $display("  %8t  ZRD %05X -> %02X (wb adr %05x sel %b ack %b)",
+                         $time, cpu_address, din, {zwb_adr,1'b0}, zwb_sel, zwb_ack);
+                zet_tr_n <= zet_tr_n + 1;
+            end
+            if (mem_wr_n & ~mem_wr_d) begin
+                $display("  %8t  ZWR %05X <- %02X", $time, cpu_address, mem_wr_data_q);
+                zet_tr_n <= zet_tr_n + 1;
+            end
+            if (io_rd_d & ~io_rd_n) begin
+                $display("  %8t  ZIRD %04X -> %02X", $time, cpu_address[15:0], din);
+                zet_tr_n <= zet_tr_n + 1;
+            end
+            if (io_wr_n & ~io_wr_d) begin
+                $display("  %8t  ZIWR %04X <- %02X", $time, cpu_address[15:0], io_wr_data_q);
+                zet_tr_n <= zet_tr_n + 1;
+            end
+        end
+    end
+    always_ff @(posedge clk_chipset)
+        if (zwb_inta && zet_tr_n < 300) begin
+            $display("  %8t  ZINTA asserted (vec on wb_dat_i %04X)", $time, zwb_dat_i);
+            zet_tr_n <= zet_tr_n + 1;
+        end
+
+    // Wishbone settle trace: while stb is up, watch the master's tracked
+    // outputs converge to the exec stage's combinational operands.
+    int zwb_tr_n = 0;
+    always_ff @(posedge zet_clk) begin
+        if (!cpu_reset_w && zwb_stb && zwb_tr_n < 600) begin
+            $display("  %8t  ZWB %s adr %05x sel %b dat_o %04x c_dat %04x c_adr %05x age %0d",
+                     $time, zwb_we ? "WR" : "RD", {zwb_adr,1'b0}, zwb_sel,
+                     zwb_dat_o, u_cpu.cpu_dat_o, u_cpu.cpu_adr_o,
+                     u_bridge.req_age);
+            zwb_tr_n <= zwb_tr_n + 1;
+        end
+        if (!cpu_reset_w && zwb_stb && zwb_ack && !zwb_we && zwb_tr_n < 1200) begin
+            $display("  %8t  ZAK RD adr %05x sel %b dat_i %04x c_dat_i %04x rdw %04x imm_l %04x",
+                     $time, {zwb_adr,1'b0}, zwb_sel, zwb_dat_i,
+                     u_cpu.cpu_dat_i, u_bridge.rd_word, u_cpu.core.fetch.imm_l);
+            zwb_tr_n <= zwb_tr_n + 1;
+        end
+    end
+
+    // Arm trace: what the byte engine actually latched for each byte.
+    int zarm_tr_n = 0;
+    always_ff @(posedge clk_chipset) begin
+        if (!cpu_reset_w && u_bridge.bstate == 0 && u_bridge.srv_any
+            && zarm_tr_n < 600) begin
+            $display("  %8t  ARM bs %0d adr %05x dat %04x idx %0d -> bus %02x ad_out %05x",
+                     $time, u_bridge.srv_bs, u_bridge.srv_addr,
+                     u_bridge.srv_data, u_bridge.byte_idx,
+                     u_bridge.srv_byte_data, u_bridge.srv_byte_addr);
+            zarm_tr_n <= zarm_tr_n + 1;
+        end
+    end
 
 
     logic [19:0] eu_pc_d = 20'hFFFFF;
@@ -1534,10 +2094,13 @@ module tb_pc98_boot;
     int i, j;
     int chunks = 1200;              // +chunks=N cuts the run short
     initial begin
-        for (i = 0; i < 1048576; i = i + 1) ram[i] = 8'h00;
+        for (i = 0; i < 1048576; i = i + 1) begin
+            ram[i] = 8'h00;
+            ram_seen[i] = 1'b0;
+        end
         $readmemh("itf.hex",  itf);
         $readmemh("bios.hex", bios);
-        // WORKAROUND (same as tb_pc98_v30's, see docs/NUV30_66_VERIFICATION.md
+        // WORKAROUND (see docs/NUV30_66_VERIFICATION.md
         // and docs/FRANKEN_ROM_LESSON.md): the 0x66 at BIOS.ROM+1 is
         // mid-instruction data in a mixed-generation image. nuV30 executes
         // it silicon-accurately as a 2-byte ModR/M-consuming NOP, which
@@ -1567,7 +2130,15 @@ module tb_pc98_boot;
 
         $display("--- trace (first 400 distinct fetch addresses) ---");
 
-        repeat (40) @(posedge clk_chipset);
+        // +roff=N: hold reset N extra chipset clocks. The CE accumulator is
+        // not touched by the CPU reset, so this shifts which edge the first
+        // bus cycle lands on -- a cold-boot phase sweep for the speed-0
+        // wedge that hardware hits only some of the time.
+        begin
+            int roff;
+            if ($value$plusargs("roff=%d", roff)) repeat (40 + roff) @(posedge clk_chipset);
+            else                                 repeat (40) @(posedge clk_chipset);
+        end
         reset = 1'b0;
 
         // One chunk is 5M chipset clocks, which is 116 ms of guest time --
@@ -1614,10 +2185,18 @@ module tb_pc98_boot;
                      ram[20'h4B4], ram[20'h4B5], ram[20'h4B6], ram[20'h4B7],
                      ram[20'h4B8], ram[20'h4B9], ram[20'h4BA], ram[20'h4BB],
                      ram[20'h4BC], ram[20'h4BD], ram[20'h4BE], ram[20'h4BF]);
+`ifdef REALMEM
+            occ_report();
+`endif
             wr_clear_tog = ~wr_clear_tog;
         end
 
         $display("--- done ---");
+        $display("E2E ack reads %0d mismatches (last bad %05X)", ack_rd_mismatches, ack_bad_addr);
+        $display("ZET faults    %0d", zet_fault_count);
+`ifdef REALMEM
+        occ_report();
+`endif
         $display("PIT gate2     %0d  (counters now %04X %04X %04X)", gate2,
                  u_pit.u_i8253_Counter_0.count[15:0],
                  u_pit.u_i8253_Counter_1.count[15:0],

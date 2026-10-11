@@ -54,8 +54,16 @@ module pc98_gvram_display #(
     input  wire        analog_mode,       // port 0x6A bit 0: plane E exists
     // The "200 line" modes on this fixed 400-line raster: each guest line
     // serves two rasterlines. Set by Peripherals from the slave's CSRFORM
-    // LR field / mode1 bit 4 / a ~200-line SYNC AL -- see the w_step note.
+    // LR field / a ~200-line SYNC AL. (mode1 bit 4 is NOT a source: np21w
+    // uses it only to keep the odd rasterlines dark -- the mabiki
+    // presentation, handled on the output side.)
     input  wire        dbl,
+    // The slave's CSRFORM LR field, raw (np21w's `mg.lr = (para[CSRFORM] &
+    // 0x1f) + 1`): rasterlines each VRAM line is held for. When software
+    // signals 200 lines through SYNC AL instead (`dbl` with LR=0), the walk
+    // still has to double for the fixed raster, so the effective stride is
+    // two rasterlines.
+    input  wire  [4:0]  lrep,
 
     // The slave GDC's display registers, live from pc98_gdc on this same
     // clock. They are latched at each line edge, so a mid-frame rewrite
@@ -64,7 +72,15 @@ module pc98_gvram_display #(
     input  wire  [7:0]  pitch,            // PITCH register value
     input  wire         mhz5,             // port 0x6A clock field == 3
     input  wire  [15:0] part_sad [0:3],   // partition start, word address
-    input  wire  [9:0]  part_len [0:3],   // partition length, lines
+    input  wire  [9:0]  part_len [0:3],   // partition length, rasterlines
+    input  wire  [3:0]  part_pbyte,       // per-partition LEN[14] pitch unit
+    // Rasterlines this plane sits BELOW the top of the frame -- np21w
+    // dispsync's grph_vbp: the slave's SYNC VBP minus the master's,
+    // floored at zero (vram/dispsync.c). Lines above the offset carry no
+    // graphics at all, and the plane's bottom is clipped by the same
+    // amount. Every BIOS table gives both GDCs VBP 25, so 0 is the
+    // everyday value.
+    input  wire  [5:0]  vshift,
 
     // sdram_mp port side -- the controller's port D, a read-only master of
     // its own so the twenty bursts a line never queue behind the font's five.
@@ -78,7 +94,11 @@ module pc98_gvram_display #(
 
     // One dot of graphics, aligned with hcount delayed one rd_clk (the
     // buffer read is registered); zero when the plane is off.
-    output logic [3:0] gfx_dot            // {E, R, G, B}
+    output logic [3:0] gfx_dot,           // {E, R, G, B}
+
+    // Underrun telemetry for the JTAG probe -- the counters described at
+    // the bottom of the file, plus the live FSM/line state.
+    output wire [63:0] dbg
 );
 
     // ---- the scanline, gray-coded across the domains ----------------------
@@ -104,6 +124,18 @@ module pc98_gvram_display #(
         gray_s2 <= gray_s1;
     end
     wire [8:0] line_now = gray2bin(gray_s2);
+
+    // disp_on arrives on rd_clk; the fetch FSM is on clk. The real slave
+    // GDC scans display RAM only while STARTed (np21w gdc.c -- display
+    // refresh is a START-state behaviour), so a stopped display must not
+    // fetch: it would burn a fifth of the SDRAM frame on planes nobody is
+    // showing. Two-flop into this domain; the walk keeps tracking while
+    // off so a mid-frame START resumes on the right line.
+    logic disp_s1 = 1'b0, disp_on_c = 1'b0;
+    always_ff @(posedge clk) begin
+        disp_s1   <= disp_on;
+        disp_on_c <= disp_s1;
+    end
 
     // The only legal moves are +1 and the 439->0 wrap. Gray codes promise
     // single-bit transitions between CONSECUTIVE values only, and the wrap
@@ -153,8 +185,14 @@ module pc98_gvram_display #(
     // the guest-linear windows are their own indices). Page one has no guest
     // address -- RAM.sv banks it at 0x600000 + plane*0x8000, where
     // pc98_gvram_seq's access-page writes land it.
+    //
+    // fill_page is disp_page LATCHED AT LAUNCH: np21w reads gdcs.disp once
+    // per line in makegrph, so a page flip mid-fill must not change the
+    // base for the bursts still to run -- unlatched, one port-0xA4 write
+    // would leave a line half from each page for a whole frame.
+    logic        fill_page = 1'b0;
     function automatic [23:0] plane_base(input [1:0] p);
-        if (disp_page)
+        if (fill_page)
             plane_base = 24'h600000 + {7'd0, p, 15'd0};
         else case (p)
             2'd0:    plane_base = 24'hA8000;   // B
@@ -169,17 +207,15 @@ module pc98_gvram_display #(
     localparam int CHUNKS = 80 / BURST;   // 5
 
     // The byte a line starts from: the uPD7220 never multiplies -- inside a
-    // partition it just adds PITCH words a line to the running address, and
-    // running off the partition's LEN restarts from the next entry's SAD.
-    // Track it the same way: a 2-bit partition pointer, a line counter
-    // inside it, and a base that steps by {pitch, 1'b0} bytes. A rasterline
-    // past all four LENs keeps extending partition three -- the address
-    // counter has nowhere else to go -- and the PRAM entries are meant to
-    // cover the raster anyway. Replaces a multiply, four compares and three
-    // subtracts with one adder and two small muxes. One corner is cheaper
-    // than the absolute model: a zero-length partition is crossed one line
-    // late instead of instantly (the walk advances once a line) -- an
-    // underspecified-PRAM case the BIOS never writes.
+    // partition it just adds PITCH to the running address every LR
+    // rasterlines, and running off the partition's LEN restarts from the
+    // next entry's SAD. Track it the way np21w makegrph.c does: a 2-bit
+    // partition pointer that wraps MOD 4 (`s_scrp = (s_scrp + 4) & 0x0c` --
+    // running off partition three goes back to partition zero, not into a
+    // fifth area), a rasterline counter inside it, and a `mul` stride for
+    // the pitch steps. A zero LEN never ends: np21w's `remain--; if
+    // (!remain)` wraps the UINT instead of firing, so the walk parks in
+    // that partition forever -- an absorbing state, not a skipped one.
     //
     // The walk leads the raster by LOOKAHEAD lines: when the edge for
     // line_now fires, run_base holds the byte offset of display line
@@ -190,7 +226,7 @@ module pc98_gvram_display #(
     // overrun), and a fill that still misses just leaves a bank stale rather
     // than corrupting the walk.
     logic [1:0]  cur_part  = 2'd0;
-    logic [9:0]  part_rel  = 10'd0;     // line index inside the partition
+    logic [9:0]  part_rel  = 10'd0;     // rasterlines spent in the partition
     logic [14:0] run_base  = 15'd0;     // byte offset of the walked line
 
     // The line the next fill must bring in, wrapped into the display range.
@@ -201,37 +237,57 @@ module pc98_gvram_display #(
     wire [8:0] fill_tgt = (tgt_sum >= 10'(LINES)) ? 9'(tgt_sum - 10'(LINES))
                                                 : 9'(tgt_sum);
 
-    // The clock field changes what PITCH counts (np21w maketgrp: s_pitch is
-    // doubled while the 5MHz flag is clear): at 2.5MHz the register is words
-    // per line, at 5MHz it is bytes per line -- and forced even, np21w's
-    // `s_pitch &= 0xfe`. SAD stays a word address in both modes.
-    wire  [8:0]  pitch_b  = mhz5 ? {1'b0, pitch[7:1], 1'b0}
-                                 : {pitch, 1'b0};
+    // np21w vram/makegrph.c grphput_indirty0: per OUTPUT rasterline the
+    // partition's remaining LEN decrements (`remain--; if (!remain)`), and
+    // independently a `mul` counter steps the VRAM address by PITCH every
+    // `mg.lr` rasterlines (`mul--; if (!mul) { mul = mg.lr; vad += pitch; }`).
+    // The pitch unit has two selectors in np21w -- makegrph.c tests the
+    // partition's LEN bit 14, maketgrp.c (the text+graphics composite)
+    // tests the 5MHz clock flag, and either marks the register as counting
+    // bytes; otherwise it counts words and is doubled into bytes. Both
+    // `&= 0xfe` floor it even.
+    wire  [8:0]  pitch_b  = (part_pbyte[cur_part] | mhz5)
+                                              ? {1'b0, pitch[7:1], 1'b0}
+                                              : {1'b0, pitch[6:0], 1'b0};
     wire  [9:0]  cur_len  = part_len[cur_part];
-    wire  [15:0] sad_next = part_sad[cur_part + 2'd1];   // wraps to 0 at 3, unused there
-    // In the doubled modes each guest line covers a PAIR of rasterlines, so
-    // the walk steps only when the next fill target opens a new guest line
-    // -- the target's low bit, since fill_tgt counts rasterlines. The LENs
-    // keep counting guest lines, so the partition logic below is unchanged.
-    wire         w_step   = ~dbl | fill_tgt[0];
-    wire         w_wrap   = (line_now == 9'(LINES - 1 - LOOKAHEAD));
-    wire         w_adv    = w_step & !w_wrap && (cur_part != 2'd3)
+    // The next partition CYCLICALLY -- np21w's s_scrp mask wraps partition
+    // three back to partition zero, so the bare `+1` index must wrap too
+    // (an unmasked cur_part=3 read lands one slot past the array).
+    wire  [15:0] sad_next = part_sad[(cur_part + 2'd1) & 2'd3];
+    // mg.lr: programmed LR+1 when CSRFORM carries it, else the doubled-mode
+    // default of two rasterlines per line so the AL<256 heuristic keeps
+    // fetching each line twice.
+    wire  [4:0]  mul_lr   = (lrep != 5'd0) ? (lrep + 5'd1)
+                                         : (dbl ? 5'd2 : 5'd1);
+    logic [4:0]  mul_q    = 5'd1;         // rasterlines to the next vad step
+    // With vshift the plane's walk still has to put run_base = SAD[0] on the
+    // fill whose target is the first shifted line: the reset edge moves from
+    // LINES-1-LOOKAHEAD by the same amount the picture does, mod LINES.
+    // (vshift < 4 wraps the point back to the frame's tail.)
+    wire  [8:0]  wrap_pt  = (vshift >= 6'd4) ? {3'd0, vshift} - 9'd4
+                                           : {3'd0, vshift} + 9'd396;
+    wire         w_wrap   = (line_now == wrap_pt);
+    // Advance when this rasterline was the partition's last -- a zero LEN
+    // never advances (the absorbing case above), and the pointer wraps
+    // mod 4 so partition three's end reopens partition zero.
+    wire         w_adv    = !w_wrap && (cur_len != 10'd0)
                        && (({1'b0, part_rel} + 11'd1) >= {1'b0, cur_len});
-    wire  [14:0] base_next = w_wrap ? 15'(part_sad[0] << 1)
-                          : w_adv  ? 15'(sad_next << 1)
-                          : w_step ? run_base + 15'(pitch_b)
-                          :          run_base;
+    wire         w_pstep  = (mul_q <= 5'd1);
+    wire  [14:0] base_next = w_wrap  ? 15'(part_sad[0] << 1)
+                          : w_adv   ? 15'(sad_next << 1)
+                          : w_pstep ? run_base + 15'(pitch_b)
+                          :           run_base;
 
     always_ff @(posedge clk) begin
         if (rst) begin
             cur_part <= 2'd0;
             part_rel <= 10'd0;
+            mul_q    <= 5'd1;
             run_base <= 15'd0;
         end else if (line_edge && (line_now < 9'(LINES))) begin
             cur_part <= w_wrap ? 2'd0 : w_adv ? cur_part + 2'd1 : cur_part;
-            part_rel <= (w_wrap || w_adv) ? 10'd0
-                      : w_step            ? part_rel + 10'd1
-                      :                     part_rel;
+            part_rel <= (w_wrap || w_adv) ? 10'd0 : part_rel + 10'd1;
+            mul_q    <= (w_wrap || w_adv || w_pstep) ? mul_lr : mul_q - 5'd1;
             run_base <= base_next;
         end
     end
@@ -272,18 +328,30 @@ module pc98_gvram_display #(
             f_word   <= 4'd0;
             req_q    <= 1'b0;
             fill_bank <= 2'd0;
+            fill_page <= 1'b0;
             act_tgt  <= 9'd0;
         end else begin
             if (p_ack) req_q <= 1'b0;
             if (!f_active) begin
-                if (line_edge && (line_now < 9'(LINES))) begin
+                // Launch only while the display runs: STOP means no
+                // display-refresh traffic on a real GDC, so no fills here
+                // either. A fill already in flight finishes -- its bank is
+                // simply stale. Targets above the vshift offset carry no
+                // graphics at all (the plane starts lower), so no fill
+                // launches for them -- the stale bank never shows because
+                // the display side blanks those lines.
+                if (disp_on_c && line_edge && (line_now < 9'(LINES))
+                    && (fill_tgt >= {3'd0, vshift})) begin
                     // A new line just began: fill the one LOOKAHEAD lines
                     // out into its own bank. The walk is already positioned
                     // at that target, so run_base is its byte offset --
                     // latching both freezes them for the whole fill against
-                    // a mid-line SAD/PITCH rewrite.
+                    // a mid-line SAD/PITCH rewrite. The page bit latches
+                    // with them: per-line atomic, the way np21w's makegrph
+                    // samples gdcs.disp.
                     fill_base <= run_base;
                     fill_bank <= fill_tgt[1:0];
+                    fill_page <= disp_page;
                     act_tgt   <= fill_tgt;
                     f_plane   <= 3'd0;
                     f_chunk   <= 4'd0;
@@ -325,7 +393,11 @@ module pc98_gvram_display #(
     // handshake at all: line N's bytes sit in bank N[1:0], written LOOKAHEAD
     // lines earlier. The only failure left is a fill still running at its
     // target's boundary, which shows last cycle-of-four's line.
-    wire visible    = (hcount < 10'd640) && (vcount < 10'd400);
+    // vshift lines at the top carry no graphics: np21w zero-fills the
+    // surface there (dispsync_renewalvertical), the analogue of the slave
+    // plane simply not having started yet.
+    wire visible    = (hcount < 10'd640) && (vcount < 10'd400)
+                   && (vcount >= {4'd0, vshift});
     wire [6:0] n_byi = hcount[9:3];              // 0..79
     wire [2:0] n_bit = ~hcount[2:0];             // MSB is the leftmost dot
 
@@ -351,6 +423,39 @@ module pc98_gvram_display #(
     // rasterline: the wandering band edge. max_fill is the worst launch->done
     // length in clk cycles; a line is ~1730 of them, so a number near 5200
     // says the deadline itself is the problem.
+    logic [15:0] fill_tmr  = 16'd0;
+    logic [15:0] max_fill  = 16'd0;
+    logic [7:0]  skip_cnt  = 8'd0;
+    logic [7:0]  late_cnt  = 8'd0;
+    logic        f_active_q = 1'b0;
+    wire         fill_done = f_active_q && !f_active;
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            f_active_q <= 1'b0;
+            fill_tmr   <= 16'd0;
+            max_fill   <= 16'd0;
+            skip_cnt   <= 8'd0;
+            late_cnt   <= 8'd0;
+        end else begin
+            f_active_q <= f_active;
+            if (f_active && (fill_tmr != 16'hffff))
+                fill_tmr <= fill_tmr + 16'd1;
+            if (fill_done) begin
+                fill_tmr <= 16'd0;
+                if (fill_tmr > max_fill) max_fill <= fill_tmr;
+            end
+            if (disp_on_c && line_edge && (line_now < 9'(LINES)) && f_active
+                && (skip_cnt != 8'hff))
+                skip_cnt <= skip_cnt + 8'd1;
+            if (line_edge && f_active && (act_tgt == line_now)
+                && (late_cnt != 8'hff))
+                late_cnt <= late_cnt + 8'd1;
+        end
+    end
+    assign dbg = { line_now, act_tgt, f_chunk, f_plane, cur_part,
+                   dbl, disp_page, disp_on_c, fill_page, f_active,
+                   skip_cnt, late_cnt, max_fill };
+
     wire pb = rd_b[bit_q];
     wire pr = rd_r[bit_q];
     wire pg = rd_g[bit_q];

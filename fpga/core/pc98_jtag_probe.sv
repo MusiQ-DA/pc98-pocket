@@ -33,11 +33,16 @@ module pc98_jtag_probe (
     output logic [6:0]  wr_addr = 7'h00,
     output logic [31:0] wr_data = 32'h0,
 
-    // Read-advance: toggles each time a scan that was READING slot 0x1B
-    // completes (the pre-update address decides, so the toggle fires on the
-    // scan whose capture carried that slot's data). core_top uses it to step
-    // the TVRAM debug cell, giving the host a one-scan-per-cell screen dump.
-    output logic        rd_adv  = 1'b0
+    // Read-advance: toggles each time a scan that was READING a screen
+    // slot completes (the pre-update address decides, so the toggle fires
+    // on the scan whose capture carried that slot's data). 0x36 is the
+    // live screen slot; 0x1B kept its old behaviour for scripts that
+    // still use it. core_top steps the TVRAM debug cell on the toggle,
+    // giving the host a one-scan-per-cell screen dump. rd_adv_gv does the
+    // same for slot 0x38 -- a completed graphics-plane read launches the
+    // next address's service request.
+    output logic        rd_adv  = 1'b0,
+    output logic        rd_adv_gv = 1'b0
 );
 
     wire        vj_tck, vj_tdi;
@@ -101,8 +106,10 @@ module pc98_jtag_probe (
             shreg <= {vj_tdi, shreg[39:1]};
         if (vj_udr) begin
             addr_q <= shreg[39:32];
-            if (addr_q == 8'h1B)
+            if (addr_q == 8'h1B || addr_q == 8'h36)
                 rd_adv <= ~rd_adv;
+            if (addr_q == 8'h38)
+                rd_adv_gv <= ~rd_adv_gv;
             if (shreg[39] && shreg[38:32] != 7'h7F) begin
                 // 0x80-0xFE write; 0xFF stays a pure read (the magic register
                 // shares the top bit, so it gets a permanent exemption).

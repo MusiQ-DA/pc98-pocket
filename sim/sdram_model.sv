@@ -74,7 +74,12 @@ module sdram_model #(
     logic               rd_vld  [PIPE];
 
     function automatic int flat(input int bank, input int row, input int col);
-        flat = (row << (BANK_BITS + COL_BITS)) | (bank << COL_BITS) | col;
+        // sdram_mp maps the physical bank as a[10:9] ^ a[16:15]; a[16:15]
+        // sit inside the row field (row = a[23:11]), so un-XOR to rebuild
+        // the flat guest-linear word address that poke() indexes by.
+        flat = (row << (BANK_BITS + COL_BITS))
+             | (((bank ^ (row >> 4)) & ((1 << BANK_BITS) - 1)) << COL_BITS)
+             | col;
     endfunction
 
     task automatic complain(input string what);

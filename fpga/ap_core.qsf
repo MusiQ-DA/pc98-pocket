@@ -831,18 +831,43 @@ set_global_assignment -name SEARCH_PATH core/common
 #   Error (10054): can't open Verilog Design File "pc98_sdram_map.svh"
 set_global_assignment -name SEARCH_PATH core
 set_global_assignment -name QIP_FILE core/common/common.qip
-# The nuV30 (the PC-98's CPU) and its 8-bit-bus bridge. v30u_ucrom
-# $readmemh's its two tables from HEXDIR "rtl/ucore/" (its SYNTHESIS
-# default, relative to this project directory) -- rtl/ucore/ holds
-# symlinks to the vendored hex so there is one copy of each table.
-# SEARCH_PATH lets Quartus find the .svh files v30u_eu.sv includes.
-set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_ss_pkg.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30_core.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_biu.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_eu.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/v30/v30u_ucrom.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/v30_cpu_bridge.sv
-set_global_assignment -name SEARCH_PATH core/v30
+# The Zet 80186-class core (the PC-98's CPU here): vendored GPLv3 core on a
+# Wishbone master, bridged to the 8288 byte world by zet_cpu_bridge.
+# micro_rom.dat / rom_def.v / defines.v resolve
+# through the SEARCH_PATH; zet_micro_rom.v picks DATDIR per tool.
+set_global_assignment -name VERILOG_FILE core/zet/zet.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_core.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_fetch.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_decode.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_exec.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_memory_regs.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_micro_data.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_micro_rom.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_regfile.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_wb_master.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_addsub.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_alu.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_arlog.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_bitlog.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_conv.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_div_su.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_div_uu.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_fulladd16.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_jmp_cond.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_muldiv.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_mux8_1.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_mux8_16.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_next_or_not.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_nstate.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_opcode_deco.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_othop.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_rxr8.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_rxr16.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_shrot.v
+set_global_assignment -name VERILOG_FILE core/zet/zet_signmul17.v
+set_global_assignment -name SYSTEMVERILOG_FILE core/zet_cpu_bridge.sv
+set_global_assignment -name SEARCH_PATH core/zet
+
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_mp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_tvram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_kbd8251.sv
@@ -855,6 +880,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_gdc_mode1.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_glyph_rowbuf.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_font_fetch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_jtag_probe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/fdd_ramimg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/mgmt_arb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pulse_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_cgwindow.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_gaiji_ram.sv
@@ -924,5 +951,21 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # the 16-bit word path (then PC98_WORD_MEM) put HEAD 11 LABs over at SEED 3
 # (1859 vs 1848). A seeds
 # 5-20 sweep with the JTAG probe off found 18 at 18,326/18,480 ALMs --
-# ~150 ALMs of margin under the LAB ceiling.
-set_global_assignment -name SEED 23
+# ~150 ALMs of margin under the LAB ceiling. Bumped to 19 on the zet-cpu
+# branch: at ~79% utilization the tuned seed no longer matters, and 18 hit
+# a deterministic VPR20KMAIN tdc_util fitter internal error there.
+# 19 hit the same deterministic tdc_util crash on the dbg2-witness netlist
+# (CI runs 37180392100 / 37183164481 / 37185049118, all Line 2138); 20 next.
+# a37a0fa landed the EA-writeback cone (decode->ir->regfile read->othop
+# (seg<<4)+x+y+off->m0->r[] asdata) at -0.482 ns worst on seed 20; the
+# identical netlist at seed 19-era had the same cone at +0.32, so this is
+# placement noise on a boundary path, not a logic regression. 21 next.
+set_global_assignment -name SEED 21
+# clk_pico is u_softcpu's fabric-generated clk_sys/6 pulse train (~7 MHz) and
+# it drives the whole PicoRV32 + OSD domain (~1.5k loads). Left on LAB
+# routing it accumulates enough skew for intra-domain hold violations -- the
+# 695b84c fit reported -0.962 ns worst, and the firmware-side OSD went
+# missing on hardware that build. The clock itself is cheap and legal (every
+# edge coincides with a clk_sys edge); it just has to ride a global buffer
+# so the skew budget closes.
+set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "core_top:ic|softcpu_subsystem:u_softcpu|clk_pico"

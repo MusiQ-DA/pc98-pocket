@@ -89,13 +89,17 @@ module pocket_video (
     //
     // So rebuild the presented blanking here, from the two signals the hardware
     // has confirmed alive: the HSync and VSync edges. The PC-98 raster is fixed
-    // -- 848 x 440 with sync at 680 and 412 -- so counting from those edges
+    // -- 848 x 440 with sync at 720 and 407 -- so counting from those edges
     // reproduces the guest's own blanking exactly, and in phase with it, which
     // is what keeps the picture aligned.
     localparam [9:0] PC98_H_TOTAL  = 10'd848, PC98_H_ACTIVE = 10'd640;
     localparam [9:0] PC98_V_TOTAL  = 10'd440, PC98_V_ACTIVE = 10'd400;
-    localparam [9:0] PC98_H_SYNC   = 10'd680;   // H_ACTIVE + H_FRONT
-    localparam [9:0] PC98_V_SYNC   = 10'd412;   // V_ACTIVE + V_FRONT
+    // Must match pc98_video_timing's SYNC_BEG points (ACTIVE + FRONT) -- the
+    // uPD7220 SYNC decode of the BIOS 24 kHz table, not a free choice: with
+    // stale values the counters run ahead of the real raster by the delta and
+    // the DE window clips the left edge / bottom lines off the picture.
+    localparam [9:0] PC98_H_SYNC   = 10'd720;   // H_ACTIVE + H_FRONT (80)
+    localparam [9:0] PC98_V_SYNC   = 10'd407;   // V_ACTIVE + V_FRONT (7)
 
     reg  [9:0] rb_h = 10'd0, rb_v = 10'd0;
     reg        rb_hs_d = 1'b0, rb_vs_d = 1'b0;
@@ -104,12 +108,20 @@ module pocket_video (
     always @(posedge clk_pix) begin
         rb_hs_d <= HSync;
         rb_vs_d <= VSync;
-        if (rb_hs_edge)                     rb_h <= PC98_H_SYNC;
+        // The edge registers a cycle after the sync begins, so the count the
+        // real raster reaches next cycle is SYNC+1: loading SYNC itself runs
+        // rb_h one dot behind hcount forever and clips the leftmost column.
+        if (rb_hs_edge)                     rb_h <= PC98_H_SYNC + 10'd1;
         else if (rb_h == PC98_H_TOTAL - 1)  rb_h <= 10'd0;
         else                                rb_h <= rb_h + 10'd1;
 
+        // Advance the line count where the real vcount advances -- the line
+        // wrap, not the mid-line hsync edge: counting there leaves rb_v = v+1
+        // over the back porch tail, which blanks the last active line's right
+        // side early. The vsync edge lands on a wrap, so the load is just the
+        // phase anchor and PC98_V_SYNC itself is the in-phase value.
         if (rb_vs_edge)                     rb_v <= PC98_V_SYNC;
-        else if (rb_hs_edge) begin
+        else if (rb_h == PC98_H_TOTAL - 1) begin
             if (rb_v == PC98_V_TOTAL - 1)   rb_v <= 10'd0;
             else                            rb_v <= rb_v + 10'd1;
         end

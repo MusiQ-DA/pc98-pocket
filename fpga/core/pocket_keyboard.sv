@@ -78,6 +78,16 @@ module pocket_keyboard #(
     reg  [7:0]  dpad_com;
     reg  [1:0]  hat_phase;
     reg  [24:0] hat_timer;
+    // Raw buttons whose release invalidates the committed direction: a cardinal
+    // needs its own bit, a diagonal needs both axes still down.
+    wire [3:0]  com_mask = {4{dpad_com[7]}} & 4'b1010   // SE = D+R
+                         | {4{dpad_com[6]}} & 4'b0110   // SW = D+L
+                         | {4{dpad_com[5]}} & 4'b1001   // NE = U+R
+                         | {4{dpad_com[4]}} & 4'b0101   // NW = U+L
+                         | {4{dpad_com[3]}} & 4'b1000   // E  = R
+                         | {4{dpad_com[2]}} & 4'b0100   // W  = L
+                         | {4{dpad_com[1]}} & 4'b0010   // S  = D
+                         | {4{dpad_com[0]}} & 4'b0001;  // N  = U
     always @(posedge clk) begin
         if (reset) begin
             hat_phase <= HAT_IDLE; hat_acc <= 4'd0; dpad_com <= 8'd0; hat_timer <= 25'd0;
@@ -97,6 +107,14 @@ module pocket_keyboard #(
                     dpad_com  <= 8'd0;
                     hat_acc   <= 4'd0;
                     hat_phase <= HAT_IDLE;
+                end else if (held && (dpad_raw & com_mask) != com_mask) begin
+                    // A raw button of the committed direction went up while
+                    // another is still held (roll away or partial release) --
+                    // re-resolve instead of leaving the old direction stuck.
+                    dpad_com  <= 8'd0;
+                    hat_acc   <= dpad_raw;
+                    hat_timer <= 25'd0;
+                    hat_phase <= HAT_ACCUM;
                 end else if (hat_timer < DPAD_MINDN) begin
                     hat_timer <= hat_timer + 25'd1;
                 end

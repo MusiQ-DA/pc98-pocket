@@ -37,7 +37,10 @@ module tb_pc98_egc;
     logic        cpu_gvram = 1'b0, cpu_rd = 1'b0, cpu_wr = 1'b0;
     logic [19:0] cpu_addr = 20'h0;
     logic [7:0]  cpu_wdata = 8'h00;
+    logic        cpu_word = 1'b0;
+    logic [7:0]  cpu_wdata_hi = 8'h00;
     wire  [7:0]  cpu_rdata;
+    wire  [7:0]  cpu_rdata_hi;
     wire         cpu_ready;
 
     logic        grcg_active = 1'b0, grcg_rmw = 1'b0;
@@ -64,7 +67,12 @@ module tb_pc98_egc;
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_addr(cpu_addr), .cpu_wdata(cpu_wdata),
+        .cpu_pf_len(5'd0),
+        .cpu_word(cpu_word), .cpu_wdata_hi(cpu_wdata_hi),
+        .cpu_rdata_hi(cpu_rdata_hi),
         .cpu_rdata(cpu_rdata), .cpu_ready(cpu_ready),
+        .svc_req(1'b0), .svc_we(1'b0), .svc_raw(1'b0), .svc_addr(20'h0),
+        .svc_wdata(8'h00), .svc_done(), .svc_rdata(), .dbg(),
         .grcg_active(grcg_active), .grcg_rmw(grcg_rmw),
         .grcg_mask(grcg_mask), .grcg_tile(grcg_tile),
         .analog_mode(analog_mode),
@@ -72,8 +80,13 @@ module tb_pc98_egc;
         .egc_active(egc_active), .egc_wr(egc_wr),
         .egc_rg(egc_rg), .egc_d(egc_d),
         .mem_addr(mem_addr), .mem_wdata(mem_wdata),
+        .mem_pf_len(),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
-        .mem_rdata(mem_rdata), .mem_done(mem_done), .mem_ready(mem_ready)
+        .mem_rdata(mem_rdata), .mem_done(mem_done),
+        // This model only ever completes the seq's own access -- no posted
+        // writes, no foreign drain -- so every done is the own edge.
+        .mem_own(1'b1), .mem_ready(mem_ready),
+        .mem_wr_taken(mem_wr), .cpu_wr_taken()
     );
 
     task automatic egc_set(input [3:0] rg, input [7:0] v);
@@ -124,6 +137,18 @@ module tb_pc98_egc;
             @(posedge cpu_ready);
             @(negedge clk);
             cpu_wr = 1'b0; cpu_gvram = 1'b0;
+            repeat (2) @(negedge clk);
+        end
+    endtask
+
+    task automatic g_wwr(input [19:0] a, input [15:0] v);
+        begin
+            @(negedge clk);
+            cpu_gvram = 1'b1; cpu_addr = a; cpu_word = 1'b1;
+            cpu_wdata = v[7:0]; cpu_wdata_hi = v[15:8]; cpu_wr = 1'b1;
+            @(posedge cpu_ready);
+            @(negedge clk);
+            cpu_wr = 1'b0; cpu_gvram = 1'b0; cpu_word = 1'b0;
             repeat (2) @(negedge clk);
         end
     endtask
@@ -191,11 +216,17 @@ module tb_pc98_egc;
         '{8'h55, 8'h55, 8'h55, 8'h55}, '{8'h40, 8'h40, 8'h40, 8'h40},
         '{8'h31, 8'h31, 8'h31, 8'h31}, '{8'h20, 8'h20, 8'h20, 8'h20}};
     logic [7:0] wdE [0:5] = '{8'h9c, 8'h12, 8'haa, 8'h01, 8'h89, 8'h70};
+    // expF: np21w rev106 suppresses a byte event at dstbit 9..15 FOREVER --
+    // the front-end guard `(UINT)(8 - dstbit)` wraps to a huge count, so the
+    // stack check fails every time and the *_sub's `dstbit >= 8` decrement
+    // is unreachable (it fires only for dstbit == 8, where 8-8 slips under
+    // the guard). The old x86 asm strided dstbit -= 8 instead; this table
+    // pins np21w's actual behaviour: nothing lands, ever.
     logic [7:0] expF [0:7][0:3] = '{
-        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h13, 8'h06, 8'h0c, 8'h14},
-        '{8'h82, 8'ha9, 8'hd0, 8'hfe}, '{8'h55, 8'h0a, 8'h06, 8'h19},
-        '{8'h40, 8'ha0, 8'h60, 8'h80}, '{8'h00, 8'h00, 8'h00, 8'h00},
-        '{8'h0e, 8'h01, 8'h1a, 8'h0b}, '{8'h1f, 8'hc0, 8'h50, 8'h4f}};
+        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h00, 8'h00, 8'h00, 8'h00},
+        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h00, 8'h00, 8'h00, 8'h00},
+        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h00, 8'h00, 8'h00, 8'h00},
+        '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h00, 8'h00, 8'h00, 8'h00}};
     logic [7:0] expG [0:7][0:3] = '{
         '{8'h00, 8'h00, 8'h00, 8'h00}, '{8'h13, 8'h06, 8'h0c, 8'h14},
         '{8'h82, 8'ha9, 8'hd0, 8'hfe}, '{8'h55, 8'h0a, 8'h06, 8'h19},
@@ -210,6 +241,10 @@ module tb_pc98_egc;
         reset = 1'b0;
         repeat (2) @(negedge clk);
 
+        // np21w i286c/cpumem.c vacctbl: the EGC intercepts the graphics
+        // windows only while the GRCG arm (modereg[7]) is also set -- the
+        // engine-enable bit alone leaves rows 0x02/0x03 as plain VRAM.
+        grcg_active = 1'b1;
         egc_active = 1'b1;
 
         // ---- 1. reset state: mask FFFF, access FFF0, ope 0000 ----------
@@ -401,6 +436,70 @@ module tb_pc98_egc;
                 want($sformatf("G dst[%0d] plane %0d", i, p),
                      store[p0(20'hA8700 + 20'(i), 2'(p))], expG[i][p]);
 
+        // ---- W. word accesses: the two-lane shiftinput_incw/decw ------
+        // A word is ONE input accounting and ONE stack check for both
+        // lanes (egcsftw_*), not two byte events. These cases pin the
+        // differences the byte model gets wrong.
+        egc_set(4'h5, 8'h0C);                         // ope 0x0CF0
+        for (int p = 0; p < 4; p++) begin
+            store[p0(20'hA8900, 2'(p))] = 8'h5A;
+            store[p0(20'hA8901, 2'(p))] = 8'h5A;
+            store[p0(20'hA8920, 2'(p))] = 8'h5A;
+            store[p0(20'hA8921, 2'(p))] = 8'h5A;
+            store[p0(20'hA8940, 2'(p))] = 8'h5A;
+            store[p0(20'hA8941, 2'(p))] = 8'h5A;
+            store[p0(20'hA8960, 2'(p))] = 8'h5A;
+            store[p0(20'hA8961, 2'(p))] = 8'h5A;
+        end
+
+        // W1. up, leng 8: lane 1 (the low byte) spends the whole run, so
+        //     remain==0 mid-word suppresses lane 2 -- the odd address is
+        //     NOT written. The byte model wrote both halves.
+        egc_set(4'hC, 8'h00); egc_set(4'hD, 8'h00);   // sft up, aligned
+        egc_set(4'hE, 8'h07); egc_set(4'hF, 8'h00);   // leng 8
+        g_wwr(20'hA8900, 16'hD2E1);
+        for (int p = 0; p < 4; p++) begin
+            want($sformatf("W1 even plane %0d = guest lo", p),
+                 store[p0(20'hA8900, 2'(p))], 8'hE1);
+            want($sformatf("W1 odd plane %0d suppressed", p),
+                 store[p0(20'hA8901, 2'(p))], 8'h5A);
+        end
+
+        // W2. up, leng 16: both lanes land -- L on the even byte, H on the
+        //     odd one. Catches a lane-order swap.
+        egc_set(4'hE, 8'h0F); egc_set(4'hF, 8'h00);   // leng 16
+        g_wwr(20'hA8920, 16'hD2E1);
+        for (int p = 0; p < 4; p++) begin
+            want($sformatf("W2 even plane %0d = lo", p),
+                 store[p0(20'hA8920, 2'(p))], 8'hE1);
+            want($sformatf("W2 odd plane %0d = hi", p),
+                 store[p0(20'hA8921, 2'(p))], 8'hD2);
+        end
+
+        // W3. dn, leng 16: decw queues the pair high-then-low and lane 1
+        //     is the HIGH byte; the odd leg walks first. The guest's bytes
+        //     still land in guest order.
+        egc_set(4'hC, 8'h00); egc_set(4'hD, 8'h10);   // sft dn, aligned
+        g_wwr(20'hA8940, 16'hD2E1);
+        for (int p = 0; p < 4; p++) begin
+            want($sformatf("W3 even plane %0d = lo", p),
+                 store[p0(20'hA8940, 2'(p))], 8'hE1);
+            want($sformatf("W3 odd plane %0d = hi", p),
+                 store[p0(20'hA8941, 2'(p))], 8'hD2);
+        end
+
+        // W4. dn, leng 8: the HIGH lane spends the run; the low lane is
+        //     suppressed, so the EVEN address is the one left untouched.
+        egc_set(4'hE, 8'h07); egc_set(4'hF, 8'h00);   // leng 8
+        g_wwr(20'hA8960, 16'hD2E1);
+        for (int p = 0; p < 4; p++) begin
+            want($sformatf("W4 even plane %0d suppressed", p),
+                 store[p0(20'hA8960, 2'(p))], 8'h5A);
+            want($sformatf("W4 odd plane %0d = hi", p),
+                 store[p0(20'hA8961, 2'(p))], 8'hD2);
+        end
+        egc_set(4'h5, 8'h08);                         // back to 0x08F0
+
         // ---- 9. the access page ---------------------------------------
         egc_set(4'h5, 8'h00); egc_set(4'h4, 8'h00);   // ope 0x0000
         access_page = 1'b1;
@@ -413,7 +512,10 @@ module tb_pc98_egc;
         access_page = 1'b0;
 
         // A plain access with the page bit set touches ONE plane: its own.
+        // GRCG comes off with the EGC so the window is genuinely plain --
+        // with modereg[7] still set this would be a TDW write instead.
         egc_active = 1'b0;
+        grcg_active = 1'b0;
         access_page = 1'b1;
         g_wr(20'hB0060, 8'h66);          // the R window
         want("plain page 1: own plane only",

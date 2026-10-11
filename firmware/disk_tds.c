@@ -17,10 +17,12 @@ int tds_transfer_to(uint32_t slot, uint32_t offset, uint32_t dir, uint32_t bytes
     *FDD_TDS_LENGTH = bytes;
     *FDD_TDS_CLR = 1;
     *FDD_TDS_TRIG = dir;
+    HB_MARK(0x79);
     uint32_t to = DISK_SPIN_LIMIT;
     uint32_t st;
     while (!((st = *FDD_TDS_STATUS) & FDD_TDS_DONE) && --to) {
     }
+    HB_MARK(0x7B);
     return to != 0 && !(st & FDD_TDS_ERR);
 }
 

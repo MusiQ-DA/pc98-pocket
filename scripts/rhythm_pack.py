@@ -36,7 +36,10 @@ LUT_FILE = os.path.join(REPO, 'fpga/core/sound/jt12/hdl/adpcm/jt10_adpcma_lut.v'
 VOICES = ['bd', 'sd', 'top', 'hh', 'tom', 'rim']
 ADPCM_RATE = 8e6 / 432          # ~18.52 kHz, the fixed ADPCM-A voice rate
 ADPCM_NUM, ADPCM_DIV = 8000000, 432   # integer form; the C encoder uses these
-RHY_BYTES = 8192                # pc98_opna's store depth
+RHY_BYTES = 16384               # pc98_opna's store is 32KB, but firmware's
+                                # RHY_STORE_BYTES gives the rhythm voices the
+                                # lower 16KB only -- the upper half belongs to
+                                # drive_sound.c's mechanism samples.
 MAGIC = b'RYA1'
 HDR_BYTES = 32
 

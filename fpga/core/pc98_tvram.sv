@@ -48,7 +48,7 @@
 // bytes live in dedicated registers, reset-loaded with the np21w defaults, and
 // guest writes anywhere in the 0xFF0-0xFFF cell range are silently dropped:
 // the pre-seeded switch survives every clear exactly as the battery-backed
-// original survives a power cycle. Confirmed in sim/tb_pc98_v30.sv, where
+// original survives a power cycle. Confirmed in sim/tb_pc98_boot.sv, where
 // the pre-seed plus the write gate is what carries the boot to int 1E with
 // a 640 KB machine underneath it.
 //
@@ -64,8 +64,35 @@ module pc98_tvram (
     // Guest side, byte addressed within A0000-A3FFF.
     input  wire [13:0] cpu_addr,       // offset from A0000
     input  wire        cpu_wren,
+    // High while the guest is actually reading (tvram_mem_select &
+    // ~memory_read_n). The shared read pipeline parks on dbg_cell whenever
+    // the guest is not using it, so the JTAG probe can dump any cell without
+    // ever stealing a guest access.
+    input  wire        cpu_rden,
     input  wire  [7:0] cpu_wdata,
     output logic [7:0] cpu_q,
+    // The word halves of the access. cpu_word marks a 16-bit bus cycle
+    // (qualified with ~address_enable_n upstream, exactly as the GVRAM
+    // sequencer sees it); cpu_wdata_hi carries the odd byte. A word access
+    // is always even-aligned -- the CPU splits odd word accesses into two
+    // byte bus cycles -- so the high byte's home is always the same cell's
+    // char_hi/attr-odd slot.
+    input  wire        cpu_word,
+    input  wire  [7:0] cpu_wdata_hi,
+    // The odd-byte lane for reads. The read pipeline already realises the
+    // whole cell, so this is just a second tap: for an even-aligned word
+    // read it is the next byte (char_hi), for a byte read at an odd
+    // address (BHE) it is that byte itself (char_hi) -- one wire covers
+    // both. np21w memtram_rd8 returns mem[odd] for the attribute region,
+    // which is never written, so the attr-region odd byte is the same
+    // unwritten 0 the byte path gives.
+    output wire  [7:0] cpu_q_hi,
+
+    // Debug read-back: q-cell echo in the top byte, then all three banks at
+    // that cell -- {q_cell[7:0], attr, char_hi, char_lo}. The echo lets the
+    // reader detect a guest access that briefly owned the pipeline.
+    input  wire [11:0] dbg_cell,
+    output wire [31:0] dbg_q,
 
     // Fill side: character codes, on the clock the row buffer runs on.
     input  wire        fil_clk,
@@ -77,6 +104,16 @@ module pc98_tvram (
     input  wire        vid_clk,
     input  wire [11:0] vid_cell,
     output logic [7:0] vid_attr,
+
+    // Debug side: a fourth read on the chipset clock that borrows the
+    // guest read stage whenever the guest is not reading (cpu_rden low --
+    // writes and idle both leave it free). JTAG reads the whole text
+    // screen through it, one cell per probe scan (scripts/jtag_screen.tcl).
+    // The stage already realises all three banks in parallel, so the word
+    // below is the full cell at once, one clk behind the index. The index
+    // drives attribute-space addressing, so the memory-switch cells return
+    // their registers -- what the guest sees when it reads them.
+    output wire [23:0] dbg_word,
 
     // Live overrides for the memory-switch bytes the Settings UI owns:
     // A3FEA (RAM size, DEL=BS), A3FEE (option-ROM mask), A3FF2 (boot
@@ -131,11 +168,13 @@ module pc98_tvram (
     wire memsw_wr_block = memsw_cells & cpu_cell[0];            // the eight bytes
 
     // All three banks answer every read and the mux sits after them, so a
-    // guest access is never disturbed.
+    // guest access is never disturbed. When the guest is not selecting the
+    // window the read stage answers the debug cell instead; the mux after
+    // it is what the debug word below samples.
     // Attr-region addressing also makes the memory-switch cells read back
     // the battery-backed registers instead of the always-zero bank
     // underneath (the switch mux rides the same registered stage).
-    wire [13:0] rd_addr   = cpu_addr;
+    wire [13:0] rd_addr   = cpu_rden ? cpu_addr : {1'b1, dbg_cell, 1'b0};
     wire        rd_attr   = rd_addr[13];
     wire [11:0] rd_cell   = rd_addr[12:1];
     wire        rd_hi     = rd_addr[0];
@@ -201,10 +240,11 @@ module pc98_tvram (
     // if it wraps again.
     logic [11:0] clr_cell;
 
-    logic [7:0] q_char_lo, q_char_hi, q_attr;
-    logic       q_is_attr, q_hi;
-    logic       q_memsw;
-    logic [2:0] q_memsw_idx;
+    logic [7:0]  q_char_lo, q_char_hi, q_attr;
+    logic        q_is_attr, q_hi;
+    logic        q_memsw;
+    logic [2:0]  q_memsw_idx;
+    logic [11:0] q_cell;
     always_ff @(posedge clk) begin
         if (rst) begin
             clr_cell          <= clr_cell + 12'd1;
@@ -225,7 +265,17 @@ module pc98_tvram (
                 if (~cpu_hi)  attr[cpu_cell]    <= cpu_wdata;
             end
             else if (cpu_hi)  char_hi[cpu_cell] <= cpu_wdata;
-            else              char_lo[cpu_cell] <= cpu_wdata;
+            else begin
+                char_lo[cpu_cell] <= cpu_wdata;
+                // Word write (memtram_wr16's STOREINTELWORD): the odd byte
+                // lands too. np21w drops it only in the attribute region,
+                // handled by the is_attr branch above; here it is real RAM.
+                // Without this the even half writes and the odd half keeps
+                // its reset byte -- the POST's VRAM test reads the pair
+                // back, sees the stale odd byte, and halts on
+                // "TEXT VIDEO RAM ERROR".
+                if (cpu_word) char_hi[cpu_cell] <= cpu_wdata_hi;
+            end
         end
 
         // Read-back for the guest, one cycle late, selected after the fact so
@@ -239,6 +289,7 @@ module pc98_tvram (
         q_hi       <= rd_hi;
         q_memsw    <= rd_memsw;
         q_memsw_idx <= rd_cell[3:1];
+        q_cell     <= rd_cell;
     end
 
     always_ff @(posedge fil_clk) begin
@@ -264,6 +315,11 @@ module pc98_tvram (
                         : (q_memsw_idx == 3'd4) ? cfg_a3ff2
                         :                          memsw[q_memsw_idx];
 
+    // The debug read lands on the same registered stage the guest's does;
+    // its forced attr-region address means q_memsw is what picks the
+    // switch registers for cells 0xFF1..0xFFF.
+    assign dbg_word = {(q_memsw ? memsw_rd : q_attr), q_char_hi, q_char_lo};
+
     always_comb begin
         if (q_is_attr)      cpu_q = q_hi ? 8'h00
                                          : (q_memsw ? memsw_rd
@@ -271,6 +327,14 @@ module pc98_tvram (
         else if (q_hi)      cpu_q = q_char_hi;
         else                cpu_q = q_char_lo;
     end
+
+    // The odd-byte lane of the same registered access: the cell's high byte
+    // in the character region, the never-written odd byte in the attribute
+    // region. A word read's high half and an odd-address byte read's BHE
+    // half both want exactly this.
+    assign cpu_q_hi = q_is_attr ? 8'h00 : q_char_hi;
+
+    assign dbg_q = {q_cell[7:0], q_attr, q_char_hi, q_char_lo};
 
 endmodule
 
