@@ -148,7 +148,10 @@ module zet_cpu_bridge (
     input  wire         bios_shadow_flag,
 
     output wire         biu_done,
-    output wire  [15:0] dbg
+    output wire  [15:0] dbg,
+    // INTA witness for the probe: {bad_n, last_bad, cut_n, last_vec} --
+    // see the counters by `assign dbg =`.
+    output wire  [31:0] dbg_inta
 );
 
     localparam [2:0] BS_INTA = 3'b000;
@@ -1579,6 +1582,30 @@ module zet_cpu_bridge (
             endcase
         end
     end
+
+    // INTA witness. bad_n counts acknowledge pairs whose ACK2 byte is not
+    // a PC-98 vector (master 08-0F, slave 10-17) and last_bad keeps the
+    // byte; cut_n counts address_enable_n rising while an INTA byte is in
+    // its command or gap phase -- a DMA grant splitting the acknowledge,
+    // which the 8086's LOCK forbids. last_vec is the most recent vector.
+    reg        aen_q     = 1'b1;
+    reg [7:0]  inta_bad_n = 8'd0, inta_last_bad = 8'd0;
+    reg [7:0]  inta_cut_n = 8'd0, inta_last_vec = 8'd0;
+    wire       inta_vec_ok = (rd_hi >= 8'h08) && (rd_hi <= 8'h17);
+    always @(posedge clk) begin
+        aen_q <= address_enable_n;
+        if (inta_done) begin
+            inta_last_vec <= rd_hi;
+            if (!inta_vec_ok) begin
+                inta_bad_n    <= inta_bad_n + 8'd1;
+                inta_last_bad <= rd_hi;
+            end
+        end
+        if (address_enable_n && !aen_q && cur_inta
+            && ((bstate == B_CMD) || (bstate == B_GAP)))
+            inta_cut_n <= inta_cut_n + 8'd1;
+    end
+    assign dbg_inta = {inta_bad_n, inta_last_bad, inta_cut_n, inta_last_vec};
 
     assign dbg = {zet_halt, inta_active, req_busy, wb_ack_i,
                   bstate, byte_idx, t_cnt, gap_cnt, cur_bs};

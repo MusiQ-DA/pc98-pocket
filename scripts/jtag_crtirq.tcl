@@ -11,7 +11,9 @@
 # arm was consumed and the handler that re-arms (OUT 64h) never ran;
 # fire_n ahead of isr_n with ISR bit 2 set = in-service never EOI'd;
 # lost_n = a pulse that fell on the PIC's acknowledge freeze; spur_n =
-# INTAs answered with IRQ7's spurious vector.
+# INTAs answered with IRQ7's spurious vector. Slot 0x2F (the bridge's
+# INTA witness): bad = ACK2 bytes outside 08-17, cut = DMA grants
+# (AEN rising) splitting an acknowledge pair.
 init
 irscan fpga.tap 0x0e
 drscan fpga.tap 64 0 -endstate idle
@@ -47,6 +49,10 @@ for {set k 0} {$k < $n} {incr k} {
         [expr {($hi >> 24) & 0xff}] [expr {($hi >> 16) & 0xff}] [expr {($hi >> 8) & 0xff}] \
         [expr {($hi >> 4) & 0xf}] [expr {$hi & 0xf}] [expr {($lo >> 4) & 0xf}] \
         [expr {[rd 0x18] & 0xFFFFF}]]
+    set iw [rd 0x2f]
+    puts [format "  INTA: bad=%d last_bad=%02X cut=%d last_vec=%02X" \
+        [expr {($iw >> 24) & 0xff}] [expr {($iw >> 16) & 0xff}] \
+        [expr {($iw >> 8) & 0xff}] [expr {$iw & 0xff}]]
     if {$k + 1 < $n} { after $ms }
 }
 shutdown
