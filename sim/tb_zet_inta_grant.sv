@@ -163,6 +163,10 @@ module tb_zet_inta_grant;
         .sdram_rd_ready    (1'b1),
         .pause_core        (1'b0),
         .pf_disable        (1'b1),
+        .pf_nofill         (1'b0),
+        .pf_nofillm        (1'b0),
+        .pf_nohit          (1'b0),
+        .bios_shadow_flag  (1'b0),
         .biu_done          (),
         .dbg               ()
     );

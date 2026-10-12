@@ -121,6 +121,10 @@ module tb_zet_ios;
         .pause_core        (1'b0),
         .biu_done          (),
         .pf_disable        (1'b0),
+        .pf_nofill         (1'b0),
+        .pf_nofillm        (1'b0),
+        .pf_nohit          (1'b0),
+        .bios_shadow_flag  (1'b0),
         .dbg               ()
     );
 

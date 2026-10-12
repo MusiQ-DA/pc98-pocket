@@ -80,6 +80,22 @@ module tb_mem_perf;
     wire        proc_ready;
     wire        pc98_analog_w;
 
+    // Prefetch A/B knobs (mirrors of the JTAG slot-0x09 bits) and the
+    // F-bank remap flag -- driven by plusargs / phases below.
+    reg         pf_dis_r    = 1'b0;
+    reg         pf_nofill_r = 1'b0;
+    reg         pf_nofillm_r = 1'b0;
+    reg         pf_nohit_r  = 1'b0;
+    reg         shadow_flag_r = 1'b0;
+    reg         irq_req     = 1'b0;
+    reg         flipped10   = 1'b0;
+    initial begin
+        pf_dis_r    = $test$plusargs("pfdis");
+        pf_nofill_r = $test$plusargs("pfnofill");
+        pf_nofillm_r = $test$plusargs("pfnofillm");
+        pf_nohit_r  = $test$plusargs("pfnohit");
+    end
+
     zet_cpu_bridge u_bridge (
         .clk               (clk),
         .cpu_ce_posedge    (ce_pos),
@@ -116,7 +132,11 @@ module tb_mem_perf;
         .sdram_rd_ready    (seq_rd_own_w),
         .pause_core        (1'b0),
         .biu_done          (biu_done),
-        .pf_disable        (1'b0),
+        .pf_disable        (pf_dis_r),
+        .pf_nofill         (pf_nofill_r),
+        .pf_nofillm        (pf_nofillm_r),
+        .pf_nohit          (pf_nohit_r),
+        .bios_shadow_flag  (shadow_flag_r),
         .dbg               ()
     );
 
@@ -132,7 +152,7 @@ module tb_mem_perf;
         .wb_stb_o  (zwb_stb),
         .wb_cyc_o  (zwb_cyc),
         .wb_ack_i  (zwb_ack),
-        .wb_tgc_i  (1'b0),
+        .wb_tgc_i  (irq_req),
         .wb_tgc_o  (zwb_inta),
         .nmi       (1'b0),
         .nmia      (zwb_nmia),
@@ -444,7 +464,7 @@ module tb_mem_perf;
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
         .ems98_map(ems98_unused),
-        .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
+        .bios_protect_flag(2'b00), .bios_shadow_flag(shadow_flag_r),
         .font_bank_flag(1'b0),
         .font_rd_req(1'b0), .font_rd_addr(24'd0), .font_rd_len(4'd0),
         .font_rd_ack(), .font_rd_valid(), .font_rd_data(), .font_rd_done(),
@@ -674,10 +694,261 @@ module tb_mem_perf;
         emit(8'hC3);                        // near_sub: RET        @+0x24
         marker(8'h88);
 
+        // ---- phase 9: SMC trampoline loop -- the BIOS fd818 pattern --------
+        // (bad_land is module-scope so the SDRAM poke can aim T at it)
+        // Real-hardware POST dies executing a far-jump trampoline it had
+        // JUST stored: mov word [T],imm x3; jmp far T -- the operand fetch
+        // consumes stale/wrong bytes (prefetch-window suspect: pf_disable
+        // boots clean 4/4 vs 4/4 wild with it on). Each iteration writes
+        // "EE EA <ip> <cs=F000>" at 0x0600 through the posted-write queue
+        // -- alternating cont_a/cont_b -- then jumps in. The flag byte at
+        // 0x0700 records which target was written; a stale fetch lands on
+        // the OTHER cont (flag mismatch) or on bad_land, both visible.
+        // The cells are ALSO read back as data before the jump (the v15
+        // -4-shift signature), and T+6.. is primed HLT so garbage bytes
+        // hang instead of wandering. Sector 0x600 was write-killed+poisoned
+        // every iteration, so any surviving stale hit is a true miss.
+        begin
+            int loop_head, cont_a, cont_b, tail, phase_done;
+            int i_ca, i_cb, r_jzodd, r_jzok, r_jmpd, r_ja, r_jb;
+            int r_badb, r_lp, r_jdone;
+            marker(8'h09);
+            // flag cell = 0 ; CX = 128 iterations
+            emit(8'hC6); emit(8'h06); emitw(16'h0700); emit(8'h00);
+            emit(8'hB9); emitw(16'h0080);                   // MOV CX,128
+            loop_head = prog_len;
+            // AX = (CL&1) ? cont_b : cont_a
+            emit(8'hB8); i_ca = prog_len; emitw(16'h0000);  // MOV AX,cont_a
+            emit(8'hF6); emit(8'hC1); emit(8'h01);          // TEST CL,1
+            emit(8'h74); r_jzodd = prog_len; emit(8'h00);   // JZ +3 (keep A)
+            emit(8'hB8); i_cb = prog_len; emitw(16'h0000);  // MOV AX,cont_b
+            // write trampoline at 0600: EE EA <ax> <F000>
+            emit(8'hC7); emit(8'h06); emitw(16'h0600);
+            emit(8'hEE); emit(8'hEA);                       // MOV W[0600],EAEE
+            emit(8'hA3); emitw(16'h0602);                   // MOV [0602],AX
+            emit(8'hC7); emit(8'h06); emitw(16'h0604);
+            emitw(16'hF000);                                // MOV W[0604],F000
+            // data verify: BX=[0602]; CMP BX,AX; JE ok
+            emit(8'h8B); emit(8'h1E); emitw(16'h0602);      // MOV BX,[0602]
+            emit(8'h39); emit(8'hC3);                       // CMP BX,AX
+            emit(8'h74); r_jzok = prog_len; emit(8'h00);    // JE +3 (skip JMP)
+            emit(8'hE9); r_jmpd = prog_len; emitw(16'h0000);// JMP bad_land
+            // ok: flag = CL&1 ; dx=043D ; al=0 ; jmp far 0000:0600
+            emit(8'h88); emit(8'h0E); emitw(16'h0700);      // MOV [0700],CL
+            emit(8'h80); emit(8'h26); emitw(16'h0700);
+            emit(8'h01);                                    // AND B[0700],1
+            emit(8'hBA); emitw(16'h043D);                   // MOV DX,043D
+            emit(8'hB0); emit(8'h00);                       // MOV AL,0
+            emit(8'hEA); emitw(16'h0600); emitw(16'h0000);  // JMPF 0000:0600
+            cont_a = prog_len;
+            emit(8'h80); emit(8'h3E); emitw(16'h0700);
+            emit(8'h00);                                    // CMP B[0700],0
+            emit(8'h75); r_ja = prog_len; emit(8'h00);      // JNZ bad
+            emit(8'hEB); r_jb = prog_len; emit(8'h00);      // JMP tail
+            cont_b = prog_len;
+            emit(8'h80); emit(8'h3E); emitw(16'h0700);
+            emit(8'h01);                                    // CMP B[0700],1
+            emit(8'h75); r_badb = prog_len; emit(8'h00);    // JNZ bad
+            tail = prog_len;
+            emit(8'hE2); r_lp = prog_len; emit(8'h00);      // LOOP loop_head
+            emit(8'hEB); r_jdone = prog_len; emit(8'h00);   // JMP phase_done
+            bad_land = prog_len;
+            emit(8'hB0); emit(8'hEE);                       // MOV AL,EE
+            emit(8'hBA); emitw(16'h88FE); emit(8'hEE);      // OUT 88FE,AL
+            emit(8'hEB); emit(8'hFE);                       // JMP $
+            phase_done = prog_len;
+            marker(8'h89);
+            // fixups (rel8 targets are relative to the byte AFTER the imm)
+            prog[i_ca  ] = cont_a[7:0];  prog[i_ca+1] = cont_a[15:8];
+            prog[i_cb  ] = cont_b[7:0];  prog[i_cb+1] = cont_b[15:8];
+            prog[r_jzodd] = 8'h03;                            // skip MOV AX,B
+            prog[r_jzok ] = 8'h03;                            // skip JMP bad
+            prog[r_jmpd  ] = 8'(bad_land - (r_jmpd + 2));
+            prog[r_jmpd+1] = 8'((bad_land - (r_jmpd + 2)) >> 8);
+            prog[r_ja   ] = 8'(bad_land - (r_ja + 1));
+            prog[r_jb   ] = 8'(tail - (r_jb + 1));
+            prog[r_badb ] = 8'(bad_land - (r_badb + 1));
+            prog[r_lp   ] = 8'(loop_head - (r_lp + 1));
+            prog[r_jdone] = 8'(phase_done - (r_jdone + 1));
+            // T-sector prime: a trampoline aimed at bad_land for iter-0
+            // staleness, then HLT filler so garbage bytes hang.
+            sdr.u_part.poke(24'h000600, 16'h00EE);
+            sdr.u_part.poke(24'h000601, 16'h00EA);
+            sdr.u_part.poke(24'h000602, {8'h00, bad_land[7:0]});
+            sdr.u_part.poke(24'h000603, {8'h00, bad_land[15:8]});
+            sdr.u_part.poke(24'h000604, 16'h0000);
+            sdr.u_part.poke(24'h000605, 16'h00F0);
+            for (int i = 20'h00606; i < 20'h00620; i++)
+                sdr.u_part.poke(24'(i), 16'h00F4);
+        end
+
+        // ---- phase 0A: F-bank remap kill ------------------------------
+        // Guest F8000 is banked between phys 0F8000 ("bank A") and
+        // 1F8000 ("bank B") by bios_shadow_flag. The bridge's windows
+        // tag the guest address only, so a remap while a window is live
+        // must drop it (bank_chg). The guest cannot flip the flag
+        // without an OUT -- which would kill windows on the way through
+        // anyway -- so the bench flips it loader-style when it sees the
+        // 0x0702 signal write. Each pass through `resume` retries the
+        // banked jump up to 3 times: bank A incs [0704]; bank B writes
+        // BB. [0706] keeps the final mark for verify:
+        //   flipped + kill works -> BB;  flipped + stale serve -> 3;
+        //   never flipped          -> 3  (the control outcome)
+        begin
+            int resume10, r_ge10, wl10, giveup10, bdone10, done10, r_d10;
+            marker(8'h0A);
+            emit(8'hC6); emit(8'h06); emitw(16'h0704); emit(8'h00); // b[0704]=0
+            emit(8'hEA); emitw(16'h0000); emitw(16'hF800);   // jmpf F800:0000
+            resume10 = prog_len;
+            emit(8'hFE); emit(8'h06); emitw(16'h0705);       // inc b[0705]
+            emit(8'hC6); emit(8'h06); emitw(16'h0702); emit(8'h55);
+                                                           // b[0702]=55 sig
+            emit(8'h80); emit(8'h3E); emitw(16'h0705); emit(8'h03);
+                                                           // cmp b[0705],3
+            emit(8'h73); r_ge10 = prog_len; emit(8'h00);     // jae giveup
+            emit(8'hB9); emitw(16'h0800);                    // mov cx,2048
+            wl10 = prog_len;
+            emit(8'hE2); emit(8'hFE);                        // loop $  (wait)
+            emit(8'hEA); emitw(16'h0000); emitw(16'hF800);   // jmpf F800:0
+            giveup10 = prog_len;
+            emit(8'hA0); emitw(16'h0704);                    // mov al,[0704]
+            emit(8'hA2); emitw(16'h0706);                    // mov [0706],al
+            emit(8'hEB); r_d10 = prog_len; emit(8'h00);      // jmp done10
+            bdone10 = prog_len;
+            emit(8'hA0); emitw(16'h0704);                    // mov al,[0704]
+            emit(8'hA2); emitw(16'h0706);                    // mov [0706],al
+            done10 = prog_len;
+            marker(8'h8A);
+            prog[r_ge10] = 8'(giveup10 - (r_ge10 + 1));
+            prog[r_d10]  = 8'(done10   - (r_d10 + 1));
+            // bank A @ phys 0F8000: inc [0704]; mov cx,40; loop$; jmpf
+            sdr.u_part.poke(24'h0F8000, 16'h00FE);
+            sdr.u_part.poke(24'h0F8001, 16'h0006);
+            sdr.u_part.poke(24'h0F8002, 16'h0004);
+            sdr.u_part.poke(24'h0F8003, 16'h0007);
+            sdr.u_part.poke(24'h0F8004, 16'h00B9);
+            sdr.u_part.poke(24'h0F8005, 16'h0040);
+            sdr.u_part.poke(24'h0F8006, 16'h0000);
+            sdr.u_part.poke(24'h0F8007, 16'h00E2);
+            sdr.u_part.poke(24'h0F8008, 16'h00FE);
+            sdr.u_part.poke(24'h0F8009, 16'h00EA);
+            sdr.u_part.poke(24'h0F800A, {8'h00, resume10[7:0]});
+            sdr.u_part.poke(24'h0F800B, {8'h00, resume10[15:8]});
+            sdr.u_part.poke(24'h0F800C, 16'h0000);
+            sdr.u_part.poke(24'h0F800D, 16'h00F0);
+            // bank B @ phys 1F8000: mov b[0704],BB ; jmpf bdone10
+            sdr.u_part.poke(24'h1F8000, 16'h00C6);
+            sdr.u_part.poke(24'h1F8001, 16'h0006);
+            sdr.u_part.poke(24'h1F8002, 16'h0004);
+            sdr.u_part.poke(24'h1F8003, 16'h0007);
+            sdr.u_part.poke(24'h1F8004, 16'h00BB);
+            sdr.u_part.poke(24'h1F8005, 16'h00EA);
+            sdr.u_part.poke(24'h1F8006, {8'h00, bdone10[7:0]});
+            sdr.u_part.poke(24'h1F8007, {8'h00, bdone10[15:8]});
+            sdr.u_part.poke(24'h1F8008, 16'h0000);
+            sdr.u_part.poke(24'h1F8009, 16'h00F0);
+            // HLT filler past both entries
+            for (int i = 20'h0F800E; i < 20'h0F8020; i++)
+                sdr.u_part.poke(24'(i), 16'h00F4);
+            for (int i = 24'h1F800A; i < 24'h1F8020; i++)
+                sdr.u_part.poke(24'(i), 16'h00F4);
+        end
+
+        // ---- phase 0B: IRQ storm --------------------------------------
+        // wb_tgc_i is the Zet's INTR line -- tied 0 in every other
+        // phase. The bench fires it every ~2500 clks through this one;
+        // the INTA pair reads vector FFh off the open bus and dispatch
+        // lands on IVT[FFh] @ 0x3FC -> the stub below, which incs
+        // [070A] and irets. SP moves to 0x500 first so the pushed
+        // frames (3 words) clear the IVT -- the ITF's IRQ0 test walks
+        // this same INTA/push/iret path through the pair engine.
+        begin
+            int isr11, loop11h, r_lp11;
+            marker(8'h0B);
+            emit(8'hC7); emit(8'h06); emitw(16'h03FC);
+            isr11 = prog_len; emitw(16'h0000);               // IVT[FF].ip
+            emit(8'hC7); emit(8'h06); emitw(16'h03FE);
+            emitw(16'hF000);                                 // IVT[FF].cs
+            emit(8'hBC); emitw(16'h0500);                    // mov sp,0500
+            emit(8'hFB);                                     // sti
+            emit(8'hB9); emitw(16'h1000);                    // mov cx,4096
+            loop11h = prog_len;
+            emit(8'hFE); emit(8'h06); emitw(16'h0708);       // inc b[0708]
+            emit(8'hE2); r_lp11 = prog_len; emit(8'h00);    // loop loop11h
+            emit(8'hFA);                                     // cli
+            marker(8'h8B);
+            emit(8'hEB); emit(8'h05);                        // jmp over isr (5B)
+            isr11_addr = prog_len;
+            emit(8'hFE); emit(8'h06); emitw(16'h070A);       // isr: inc [070A]
+            emit(8'hCF);                                     // iret
+            prog[isr11  ] = isr11_addr[7:0];
+            prog[isr11+1] = isr11_addr[15:8];
+            prog[r_lp11 ] = 8'(loop11h - (r_lp11 + 1));
+        end
+
+        // ---- phase 0C: frame-iret storm -----------------------------------
+        // pushf; push cs; push ip; iret -- the BIOS mov ss/sp; retf shape:
+        // the pops read cells the pushes wrote moments earlier through the
+        // posted-write queue. Alternating cont targets make a shifted-pop
+        // serve land on the OTHER cont (flag mismatch -> bad) or in dead
+        // space (-> diverge). SP is still 0x500 from phase 0B, so the
+        // frames land in the same 0x4FA-0x4FE cells the IRQ storm used.
+        begin
+            int lp12, cont12a, cont12b, tail12, bad12;
+            int i_ca12, i_cb12, r_jz12, r_ja12, r_jb12, r_bb12, r_lp12, r_jd12;
+            marker(8'h0C);
+            emit(8'hC6); emit(8'h06); emitw(16'h070C); emit(8'h00); // flag=0
+            emit(8'hB9); emitw(16'h0100);                  // mov cx,256
+            lp12 = prog_len;
+            // AX = (CL&1) ? cont_b : cont_a
+            emit(8'hB8); i_ca12 = prog_len; emitw(16'h0000); // mov ax,cont_a
+            emit(8'hF6); emit(8'hC1); emit(8'h01);         // test cl,1
+            emit(8'h74); r_jz12 = prog_len; emit(8'h00);   // jz +3 (keep A)
+            emit(8'hB8); i_cb12 = prog_len; emitw(16'h0000); // mov ax,cont_b
+            // flag = CL&1 ; frame: pushf, push cs, push ax(ip) ; iret
+            emit(8'h88); emit(8'h0E); emitw(16'h070C);     // mov [070C],cl
+            emit(8'h80); emit(8'h26); emitw(16'h070C);
+            emit(8'h01);                                   // and b[070C],1
+            emit(8'h9C);                                   // pushf
+            emit(8'h0E);                                   // push cs
+            emit(8'h50);                                   // push ax (ip)
+            emit(8'hCF);                                   // iret
+            cont12a = prog_len;
+            emit(8'h80); emit(8'h3E); emitw(16'h070C);
+            emit(8'h00);                                   // cmp b[070C],0
+            emit(8'h75); r_ja12 = prog_len; emit(8'h00);   // jnz bad
+            emit(8'hEB); r_jb12 = prog_len; emit(8'h00);   // jmp tail
+            cont12b = prog_len;
+            emit(8'h80); emit(8'h3E); emitw(16'h070C);
+            emit(8'h01);                                   // cmp b[070C],1
+            emit(8'h75); r_bb12 = prog_len; emit(8'h00);   // jnz bad
+            tail12 = prog_len;
+            emit(8'hE2); r_lp12 = prog_len; emit(8'h00);   // loop lp12
+            emit(8'hEB); r_jd12 = prog_len; emit(8'h00);   // jmp done12
+            bad12 = prog_len;
+            emit(8'hB0); emit(8'hEE);                      // mov al,EE
+            emit(8'hBA); emitw(16'h88FE); emit(8'hEE);     // out 88FE,al
+            emit(8'hEB); emit(8'hFE);                      // jmp $
+            // done12:
+            prog[i_ca12 ] = cont12a[7:0]; prog[i_ca12+1] = cont12a[15:8];
+            prog[i_cb12 ] = cont12b[7:0]; prog[i_cb12+1] = cont12b[15:8];
+            prog[r_jz12 ] = 8'h03;
+            prog[r_ja12 ] = 8'(bad12  - (r_ja12 + 1));
+            prog[r_jb12 ] = 8'(tail12 - (r_jb12 + 1));
+            prog[r_bb12 ] = 8'(bad12  - (r_bb12 + 1));
+            prog[r_lp12 ] = 8'(lp12   - (r_lp12 + 1));
+            prog[r_jd12 ] = 8'(prog_len - (r_jd12 + 1));   // -> marker(8'h8C)
+            marker(8'h8C);
+        end
+
         // done: spin
         marker(8'hFF);
         emit(8'hEB); emit(8'hFE);           // JMP $
     end
+
+    // module-scope so the T-sector prime can aim at it
+    int bad_land = 0;
+    int isr11_addr = 0;
 
     // poke the program + reset vector into the SDRAM image (1 guest byte per
     // word, flat-addressed the way poke() indexes).
@@ -690,6 +961,11 @@ module tb_mem_perf;
         sdr.u_part.poke(24'h0FFFF2, 16'h0000);
         sdr.u_part.poke(24'h0FFFF3, 16'h0000);
         sdr.u_part.poke(24'h0FFFF4, 16'h00F0);
+        // phase-0A/0B mark cells: unwritten cells read X in the model
+        for (int i = 20'h00700; i < 20'h00710; i++)
+            sdr.u_part.poke(24'(i), 16'h0000);
+        // Phase-9 prime is emitted by the program initial (bad_land is
+        // only known there); see the poke inside the emit block.
     end
 
     // ========================================================================
@@ -736,6 +1012,13 @@ module tb_mem_perf;
     longint unsigned c_uncov  = 0;     // uncovered write falls outside expand
     logic swr_cov_seen = 0;            // write strobe saw coverage while held
     logic            tag_sim = 1'b0;   // bench mirror of RAM's prefetch tag
+
+    // Physical address a guest access lands on: RAM.sv banks guest
+    // F8000-FFFFF onto +0x100000 while bios_shadow_flag is up.
+    function automatic logic [23:0] phys_of(input logic [19:0] g);
+        return (shadow_flag_r && (g >= 20'hF8000)) ? {4'h1, g}
+                                                 : {4'h0, g};
+    endfunction
 
     // ---- service channel stimulus (+svc=N, default on) ---------------------
     // The firmware GDC service channel, driven the way the softcore uses
@@ -868,13 +1151,14 @@ module tb_mem_perf;
                                            : u_bridge.pf_base0)
                         + 20'(u_bridge.cur_pf_w ? u_bridge.pf_cnt1[4:0]
                                                 : u_bridge.pf_cnt0[4:0]);
-                    if (sdr.u_part.store.exists(app_addr)
-                        && (pf_beat_dat_w !== sdr.u_part.store[app_addr][7:0])) begin
+                    automatic logic [23:0] app_phys = phys_of(app_addr);
+                    if (sdr.u_part.store.exists(app_phys)
+                        && (pf_beat_dat_w !== sdr.u_part.store[app_phys][7:0])) begin
                         if (c_pbad < 8)
                             $display("  PFBAD t=%0t w=%0d app=%05x beat=%02x exp=%02x len=%0d shim_a=%06x ramst=%0d seqst=%0d svch=%b aen=%b",
                                      $time, u_bridge.cur_pf_w, app_addr,
                                      pf_beat_dat_w,
-                                     sdr.u_part.store[app_addr][7:0],
+                                     sdr.u_part.store[app_phys][7:0],
                                      u_bridge.cur_pf_len,
                                      u_ram.u_sdram.addr_r,
                                      u_ram.state, u_seq.st,
@@ -1116,6 +1400,7 @@ module tb_mem_perf;
         end
         if (u_bridge.bstate == u_bridge.B_CMD && u_bridge.pair_accept
             && u_bridge.cur_read && !u_bridge.cur_fillm && !u_bridge.cur_pf
+            && !u_bridge.cur_inta
             && !rd_seen_own && u_bridge.bus_ours
             && !u_ram.ram_address_select_n) begin
             if (c_rd_foreign < 8)
@@ -1141,6 +1426,10 @@ module tb_mem_perf;
         phase_name[8'h06] = "REP STOSB  512B EGC";
         phase_name[8'h07] = "REP STOSB 2048B window plain";
         phase_name[8'h08] = "CALL/RET x500 stack";
+        phase_name[8'h09] = "SMC trampoline x128";
+        phase_name[8'h0A] = "F-bank remap kill";
+        phase_name[8'h0B] = "IRQ storm x4096";
+        phase_name[8'h0C] = "frame-iret x256";
         phase_name[8'hFF] = "done";
     end
     int phase_bytes [0:255];
@@ -1153,6 +1442,10 @@ module tb_mem_perf;
         phase_bytes[8'h06] = 512;
         phase_bytes[8'h07] = 2048;
         phase_bytes[8'h08] = 500;
+        phase_bytes[8'h09] = 128;
+        phase_bytes[8'h0A] = 48;
+        phase_bytes[8'h0B] = 4096;
+        phase_bytes[8'h0C] = 256;
     end
 
     // snapshot record
@@ -1183,6 +1476,44 @@ module tb_mem_perf;
     endtask
 
     int cur_phase = -1;
+
+    // ---- phase-0A remap poke ------------------------------------------------
+    // The guest can't flip the F-bank flag without an OUT (which would
+    // kill windows on the way through anyway), so the bench does it
+    // loader-style: the signal write to 0x0702 flips shadow_flag_r while
+    // the bank-A window is still live, before the guest's second jmpf.
+    always @(posedge clk) begin
+        if (reset) begin
+            flipped10     <= 1'b0;
+            shadow_flag_r <= 1'b0;
+        end else if (cur_phase == 8'h0A && !flipped10
+                     && zwb_stb && zwb_we && !zwb_tga
+                     && ({zwb_adr, 1'b0} == 20'h00702)
+                     && (zwb_dat_o[7:0] == 8'h55)) begin
+            flipped10     <= 1'b1;
+            shadow_flag_r <= 1'b1;
+        end
+    end
+
+    // ---- phase-0B IRQ storm driver ------------------------------------------
+    // INTR is a level input: hold it until the Zet's own INTA output
+    // (zwb_inta = wb_tgc_o) pulses, then re-arm after a gap. Fires only
+    // while phase 0B is current -- the guest's STI/CLI bracket it.
+    reg [15:0] irq_gap = 16'd0;
+    always @(posedge clk) begin
+        if (reset || cur_phase != 8'h0B) begin
+            irq_req <= 1'b0;
+            irq_gap <= 16'd0;
+        end else if (zwb_inta) begin
+            irq_req <= 1'b0;
+            irq_gap <= 16'd0;
+        end else if (irq_gap == 16'd2500) begin
+            irq_req <= 1'b1;
+            irq_gap <= 16'd0;
+        end else
+            irq_gap <= irq_gap + 16'd1;
+    end
+
     task phase_start(input int n);
         cur_phase = n;
         snap;
@@ -1282,6 +1613,11 @@ module tb_mem_perf;
                     bad++;
                 end
             end
+            // phase-9 trampoline: did the written bytes actually land?
+            for (int a = 20'h00600; a < 20'h00610; a++) begin
+                w = sdr.u_part.peek(a);
+                $display("  T[%05x]=%02x", a, w[7:0]);
+            end
             // Under +GRANT the synthetic DMAC streams A5^addr over the
             // whole 4 KB fill buffer, so every byte of the probed
             // 256-byte window must hold the pattern -- anything less is
@@ -1290,6 +1626,24 @@ module tb_mem_perf;
             for (int a = 20'h30000; a < 20'h30100; a++) begin
                 w = sdr.u_part.peek(a);
                 if (w[7:0] == (8'hA5 ^ a[7:0])) dma_seen++;
+            end
+            // phase-0A bank remap: flipped + kill works -> BB;
+            // flipped + a stale window served bank A again -> 03 (the
+            // same value the unflipped control produces).
+            begin
+                logic [7:0] exp10;
+                exp10 = flipped10 ? 8'hBB : 8'h03;
+                w = sdr.u_part.peek(20'h0706);
+                $display("  bankmark 0706=%02x want %02x (flipped=%0d)",
+                         w[7:0], exp10, flipped10);
+                if (w[7:0] !== exp10) bad++;
+            end
+            // phase-0B irq storm: at least one INTA->ISR->iret round
+            // trip must have landed
+            begin
+                w = sdr.u_part.peek(20'h070A);
+                $display("  irqcount 070A=%02x", w[7:0]);
+                if (w[7:0] == 8'h00) bad++;
             end
             $display("VERIFY: bad=%0d diverged=%0d stray=%0d grants=%0d midcmd=%0d dma_bytes=%0d pfbad=%0d pforeign=%0d porphan=%0d rdfor=%0d svc_ops=%0d",
                      bad, diverged, stray, grants, grants_midcmd, dma_seen,
@@ -1384,11 +1738,19 @@ module tb_mem_perf;
     // A8000 window, and the DMAC writes 0x30000-0x30FFF. A far-transfer that
     // sends CS:IP out of the code image is the SuperDepth symptom; a write to
     // the code/reset-vector region is a stray that could cause it.
+    // zet_pc is combinational (cs<<4)+ip -- during a far transfer it
+    // flashes the ip-before-cs transient (0x00xx) for a clk or two even
+    // though no fetch is ever issued there. Sample the real fetch address
+    // on the Wishbone instead: an instruction cycle (tga) presenting stb.
+    wire [19:0] fetch_a = {zwb_adr, 1'b0} | {19'b0, zwb_sel == 2'b10};
     always_ff @(posedge clk) begin
         if (sdram_up && !reset) begin
-            // CS:IP must stay in the code image (or the reset-vector fetch)
-            if (!((zet_pc >= 20'hF0000 && zet_pc < 20'hF2000) ||
-                  (zet_pc >= 20'hFFF00))) begin
+            // every issued instruction-fetch byte must be in legal space
+            if (zwb_stb && zwb_cyc && !zwb_we && zwb_tga
+                && !((fetch_a >= 20'hF0000 && fetch_a < 20'hF2000) ||
+                     (fetch_a >= 20'hF8000 && fetch_a < 20'hF8020) ||
+                     (fetch_a >= 20'h00600 && fetch_a < 20'h00620) ||
+                     (fetch_a >= 20'hFFF00))) begin
                 if (diverged < 16)
                     $display("*** DIVERGE pc=%05x aen=%b dma_act=%b bst=%0d ad=%05x t=%0t",
                              zet_pc, aen, dma_active, u_bridge.bstate,
@@ -1406,11 +1768,11 @@ module tb_mem_perf;
                     for (int k = 0; k < 32; k++)
                         $display("   buf0[%02x]=%02x/%02x buf1[%02x]=%02x/%02x",
                                  k, u_bridge.pf_buf[k],
-                                 sdr.u_part.store.exists(u_bridge.pf_base0+k)
-                                    ? sdr.u_part.store[u_bridge.pf_base0+k][7:0] : 8'hxx,
+                                 sdr.u_part.store.exists(phys_of(u_bridge.pf_base0+k))
+                                    ? sdr.u_part.store[phys_of(u_bridge.pf_base0+k)][7:0] : 8'hxx,
                                  k, u_bridge.pf_buf[32+k],
-                                 sdr.u_part.store.exists(u_bridge.pf_base1+k)
-                                    ? sdr.u_part.store[u_bridge.pf_base1+k][7:0] : 8'hxx);
+                                 sdr.u_part.store.exists(phys_of(u_bridge.pf_base1+k))
+                                    ? sdr.u_part.store[phys_of(u_bridge.pf_base1+k)][7:0] : 8'hxx);
                     // stack neighbourhood + last guest ops: the pop that
                     // delivered the escape read from here
                     $display("   stack@0x3f0:");
@@ -1435,6 +1797,62 @@ module tb_mem_perf;
                 stray <= stray + 1;
             end
         end
+    end
+
+    // ---- phase-9 trampoline watch: every bus access + queue event in T ----
+    // The trampoline at 0x600 is the SMC target; log guest strobes, queue
+    // pushes/drains, fills and hits touching 0x600-0x61F so a stale serve
+    // or a lost byte shows its provenance.
+    logic t_trace = 1'b0;
+    initial t_trace = $test$plusargs("ttrace");
+    always_ff @(posedge clk) if (t_trace && sdram_up) begin
+        if (u_bridge.wrq_push
+            && u_bridge.srv_addr >= 20'h00600
+            && u_bridge.srv_addr < 20'h00620)
+            $display("T WQP t=%0t a=%05x d=%04x ube=%b cnt=%0d",
+                     $time, u_bridge.srv_addr, u_bridge.srv_data,
+                     u_bridge.srv_ube, u_bridge.wrq_cnt);
+        if (u_bridge.arm_drain
+            && u_bridge.wrq_addr[0] >= 20'h00600
+            && u_bridge.wrq_addr[0] < 20'h00620)
+            $display("T WQD t=%0t a=%05x d=%04x ube=%b",
+                     $time, u_bridge.wrq_addr[0], u_bridge.wrq_data[0],
+                     u_bridge.wrq_ube[0]);
+        if (u_bridge.hit_serve
+            && u_bridge.srv_addr >= 20'h00600
+            && u_bridge.srv_addr < 20'h00620)
+            $display("T HIT t=%0t a=%05x w=%04x pfhw=%0d b0=%05x/%0d b1=%05x/%0d",
+                     $time, u_bridge.srv_addr, u_bridge.pf_hit_word,
+                     u_bridge.pf_hw, u_bridge.pf_base0, u_bridge.pf_cnt0,
+                     u_bridge.pf_base1, u_bridge.pf_cnt1);
+        if (u_bridge.fwd_serve
+            && u_bridge.srv_addr >= 20'h00600
+            && u_bridge.srv_addr < 20'h00620)
+            $display("T FWD t=%0t a=%05x w=%04x",
+                     $time, u_bridge.srv_addr, u_bridge.fwd_word);
+        if (u_bridge.arm_rd_ok
+            && u_bridge.srv_addr >= 20'h00600
+            && u_bridge.srv_addr < 20'h00620)
+            $display("T MISS t=%0t a=%05x len=%0d fillm=%b pois=%b fmovl=%b w0=%05x/%0d..%0d w1=%05x/%0d..%0d",
+                     $time, u_bridge.srv_addr, u_bridge.fillm_len,
+                     u_bridge.fillm_go, u_bridge.pf_poisoned,
+                     u_bridge.fillm_ovl,
+                     u_bridge.pf_base0, u_bridge.pf_lo0, u_bridge.pf_cnt0,
+                     u_bridge.pf_base1, u_bridge.pf_lo1, u_bridge.pf_cnt1);
+        if (u_bridge.arm_fill
+            && u_bridge.pf_next >= 20'h00600
+            && u_bridge.pf_next < 20'h00620)
+            $display("T FILL t=%0t a=%05x len=%0d w=%0d",
+                     $time, u_bridge.pf_next, u_bridge.pf_fill_len,
+                     u_bridge.fill_w);
+        // RAM-side: what the T-region bursts actually issued/returned
+        if (u_ram.u_sdram.a_rvalid
+            && u_ram.u_sdram.addr_r + u_ram.u_sdram.rbeat >= 20'h00600
+            && u_ram.u_sdram.addr_r + u_ram.u_sdram.rbeat < 20'h00620)
+            $display("T BEAT t=%0t a=%05x d=%02x tag=%b st=%0d",
+                     $time, u_ram.u_sdram.addr_r + u_ram.u_sdram.rbeat,
+                     u_ram.u_sdram.a_beat[7:0], u_ram.pf_tag,
+                     u_ram.state);
     end
 
     // heartbeat so a piped stdout still shows the bench is alive
@@ -1494,6 +1912,33 @@ module tb_mem_perf;
                      u_bridge.processor_ready,
                      u_bridge.t_cnt, u_bridge.saw_low, u_bridge.bus_ours,
                      u_bridge.pf_beat_v, u_bridge.cur_addr);
+        // Window-bookkeeping forensic: every write-visible event while a
+        // fill pair is in flight -- who can move pf_cnt/pf_base/fill_ok.
+        if (u_bridge.cur_pf || u_bridge.cur_fillm)
+            $display("PFW t=%0t c0=%0d c1=%0d lo0=%0d lo1=%0d b0=%05x b1=%05x lv=%b ok=%0d fb=%0d w=%0d iow=%0d awr=%0d wqp=%0d bchg=%0d ours=%0d arok=%0d afl=%0d flm=%0d wov=%b/%b bst=%0d",
+                     $time, u_bridge.pf_cnt0, u_bridge.pf_cnt1,
+                     u_bridge.pf_lo0, u_bridge.pf_lo1,
+                     u_bridge.pf_base0, u_bridge.pf_base1,
+                     u_bridge.pf_live, u_bridge.fill_ok, u_bridge.fill_beats,
+                     u_bridge.cur_pf_w, u_bridge.arm_iow, u_bridge.arm_wr,
+                     u_bridge.wrq_push, u_bridge.bank_chg, u_bridge.bus_ours,
+                     u_bridge.arm_rd_ok, u_bridge.arm_fill, u_bridge.fillm_go,
+                     u_bridge.wr_ovl0, u_bridge.wr_ovl1, u_bridge.bstate);
+    end
+
+    // Catch the exact edge where a full window-kill fires: pf_live is still
+    // nonzero (pre-edge) and one of the full-kill inputs is asserted.
+    always @(posedge clk) if (trace) begin
+        if (|u_bridge.pf_live &&
+            (u_bridge.arm_iow || u_bridge.bank_chg || !u_bridge.bus_ours ||
+             u_bridge.wrq_push || u_bridge.arm_wr || u_bridge.arm_fill || u_bridge.fillm_go))
+            $display("PFKILL t=%0t live=%b c0=%0d c1=%0d iow=%0d bchg=%0d ours=%0d wqp=%0d awr=%0d afl=%0d flm=%0d arok=%0d shf=%0d sq=%0d wov=%b/%b bst=%0d",
+                     $time, u_bridge.pf_live, u_bridge.pf_cnt0, u_bridge.pf_cnt1,
+                     u_bridge.arm_iow, u_bridge.bank_chg, u_bridge.bus_ours,
+                     u_bridge.wrq_push, u_bridge.arm_wr, u_bridge.arm_fill,
+                     u_bridge.fillm_go, u_bridge.arm_rd_ok,
+                     u_bridge.bios_shadow_flag, u_bridge.shadow_q,
+                     u_bridge.wr_ovl0, u_bridge.wr_ovl1, u_bridge.bstate);
     end
 
     // first events of the prefetch engine's life, for bring-up
@@ -1503,8 +1948,8 @@ module tb_mem_perf;
     always_ff @(posedge clk) if (trace && pfdbg < pfdbg_max) begin
         if (u_bridge.hit_serve) begin
             // flat store is byte-indexed: one guest byte per word's low half
-            automatic logic [15:0] w0  = sdr.u_part.peek(u_bridge.srv_addr);
-            automatic logic [15:0] w1  = sdr.u_part.peek(u_bridge.srv_addr + 20'd1);
+            automatic logic [15:0] w0  = sdr.u_part.peek(phys_of(u_bridge.srv_addr));
+            automatic logic [15:0] w1  = sdr.u_part.peek(phys_of(u_bridge.srv_addr + 20'd1));
             automatic logic [7:0]  eb  = w0[7:0];
             automatic logic [7:0]  eb2 = w1[7:0];
             automatic logic [15:0] got = u_bridge.pf_hit_word;
@@ -1662,8 +2107,17 @@ module tb_mem_perf;
 
     initial begin
         #400_000_000;                       // 400 ms of sim time ceiling
-        $display("GLOBAL TIMEOUT  diverged=%0d stray=%0d grants=%0d midcmd=%0d ph=%0d pc=%05x",
-                 diverged, stray, grants, grants_midcmd, cur_phase, zet_pc);
+        $display("GLOBAL TIMEOUT  diverged=%0d stray=%0d grants=%0d midcmd=%0d ph=%0d pc=%05x uncov=%0d pfbad=%0d rdfor=%0d witfor=%0d irq=%02x",
+                 diverged, stray, grants, grants_midcmd, cur_phase, zet_pc,
+                 c_uncov, c_pbad, c_rd_foreign, c_wit_foreign,
+                 sdr.u_part.peek(20'h070A));
+        for (int k = 31; k >= 1; k--)
+            $display("   pc-%02d %05x", k, pc_ring[(pc_ptr - k) & 31]);
+        for (int k = 15; k >= 1; k--)
+            $display("   op-%02d %s %05x %02x", k,
+                     op_wr[(op_ptr - k) & 15] ? "WR" : "RD",
+                     op_addr[(op_ptr - k) & 15],
+                     op_data[(op_ptr - k) & 15]);
         $fflush;
         $finish;
     end

@@ -292,6 +292,16 @@ module core_top (
     logic        jtag_spd_ovr = 1'b0;
     logic  [1:0] jtag_spd_sel = 2'b00;
     logic        jtag_pf_dis  = 1'b0;
+    // Per-mechanism prefetch kills, for bisecting which half of the
+    // engine a failure lives in without a rebuild:
+    //   [4] pf_nofill  -- pure (idle-gap) fills never run
+    //   [5] pf_nofillm -- fill-on-miss never runs (guest reads always pay)
+    //   [6] pf_nohit   -- windows fill but hits never serve: if the fault
+    //                     persists, the corruption lives in the fill
+    //                     bursts' effect on the port, not the served data
+    logic        jtag_pf_nofill  = 1'b0;
+    logic        jtag_pf_nofillm = 1'b0;
+    logic        jtag_pf_nohit   = 1'b0;
     logic [19:0] jtag_watch_addr = 20'hFFFFF;
     wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
                                               : cpu_speed_cfg;
@@ -299,6 +309,9 @@ module core_top (
     // The CPU speed is the OSD's alone.
     wire   [1:0] clk_select_next = cpu_speed_cfg;
     wire         jtag_pf_dis  = 1'b0;
+    wire         jtag_pf_nofill  = 1'b0;
+    wire         jtag_pf_nofillm = 1'b0;
+    wire         jtag_pf_nohit   = 1'b0;
     wire  [19:0] jtag_watch_addr = 20'hFFFFF;
 `endif
 
@@ -2209,10 +2222,15 @@ module core_top (
         // Slot 0x09: CPU-speed override for scripted runs -- wdata[2] forces
         // clk_select_next to wdata[1:0] instead of the OSD setting. Same
         // handoff the menu uses (ce_generator reloads on the next biu_done).
+        // wdata[3] kills the prefetch engine outright; wdata[6:4] kill the
+        // pure fills / fill-on-miss / hit serving individually for A/B.
         if (probe_wr_pulse && probe_waddr_c == 7'h09) begin
             jtag_spd_ovr  <= probe_wdata_c[2];
             jtag_spd_sel  <= probe_wdata_c[1:0];
             jtag_pf_dis   <= probe_wdata_c[3];
+            jtag_pf_nofill  <= probe_wdata_c[4];
+            jtag_pf_nofillm <= probe_wdata_c[5];
+            jtag_pf_nohit   <= probe_wdata_c[6];
         end
         // Slot 0x0a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
         // every memory write landing on it is logged (CPU or DMA alike).
@@ -3393,6 +3411,10 @@ module core_top (
         .pause_core        (pause_core),
         .biu_done          (biu_done),
         .pf_disable        (jtag_pf_dis),
+        .pf_nofill         (jtag_pf_nofill),
+        .pf_nofillm        (jtag_pf_nofillm),
+        .pf_nohit          (jtag_pf_nohit),
+        .bios_shadow_flag  (bios_shadow_flag),
         .dbg               (bridge_dbg)
     );
 

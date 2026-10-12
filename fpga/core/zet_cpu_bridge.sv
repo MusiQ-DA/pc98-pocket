@@ -127,8 +127,25 @@ module zet_cpu_bridge (
     input  wire         pause_core,
     // Debug/kill switch: when high, no prefetch window is armed or filled --
     // every guest read pays the bus directly. Lets JTAG A/B the prefetch
-    // engine against a suspect crash without a rebuild.
+    // engine against a suspect crash without a rebuild. The three finer
+    // bits isolate WHICH half of the engine a failure lives in:
+    //   pf_nofill  -- pure fills never run (windows fill only on misses)
+    //   pf_nofillm -- fill-on-miss never runs (windows fill only in idle
+    //                 gaps); guest reads always pay their own bus cycle
+    //   pf_nohit   -- windows fill normally but hits never serve; if the
+    //                 machine still fails with this set, the corruption is
+    //                 in the fill BURSTS disturbing the port, not in the
+    //                 served window bytes
     input  wire         pf_disable,
+    input  wire         pf_nofill,
+    input  wire         pf_nofillm,
+    input  wire         pf_nohit,
+    // F-bank remap select: guest F8000-FFFFF is banked between the system
+    // BIOS and the ITF shadow (RAM.sv latch_address). The windows tag the
+    // guest address only, so a bank flip must drop them -- bytes fetched
+    // under one bank can never answer for the other. Level-sensitive:
+    // any delta from the last cycle's flag kills everything in flight.
+    input  wire         bios_shadow_flag,
 
     output wire         biu_done,
     output wire  [15:0] dbg
@@ -547,6 +564,15 @@ module zet_cpu_bridge (
                                     // [base, base+cnt) sector bytes that were
                                     // actually fetched: [lo, cnt)
     reg  [19:0] pf_base0, pf_base1;
+    // F-bank remap watcher: guest F8000-FFFFF is physically banked by
+    // bios_shadow_flag, and the windows carry no bank tag, so a flag
+    // change invalidates every window outright -- a hit served across the
+    // flip would hand back bytes fetched from the other bank. The flag is
+    // already in clk_chipset (itf_bank / bios_shadow_write), so a one-deep
+    // shadow gives a clean single-cycle change pulse.
+    reg         shadow_q;
+    wire        bank_chg = (bios_shadow_flag != shadow_q);
+
     reg  [1:0]  pf_live;
     reg         pf_victim;          // which window a foreign miss claims
     reg         pf_want;            // preferred fill target (last rebase)
@@ -640,7 +666,8 @@ module zet_cpu_bridge (
     // is not yet armed -- but not while DMA owns the bus, when the
     // windows are being dropped anyway, and not over a queued write's
     // span, where the window's bytes predate the pending store.
-    wire hit_serve = pf_hit && bus_ours && (bstate == B_IDLE) && !wrq_ovl;
+    wire hit_serve = pf_hit && bus_ours && (bstate == B_IDLE) && !wrq_ovl
+                  && !bank_chg && !pf_nohit;
 
     wire [4:0]  pf_idx0 = srv_beg[4:0];
     wire [7:0]  pf_b0   = pf_buf[{pf_hw, pf_idx0}];
@@ -700,8 +727,12 @@ module zet_cpu_bridge (
     wire [20:0] pf_next     = fill_w ? pf_next1 : pf_next0;
     wire [4:0]  pf_fill_len = fill_w ? pf_len1 : pf_len0;
 
+    // bank_chg must also stall a fill arm: the kill clears live/cnt/lo at
+    // the edge while arm_fill's later fill_ok<=1 would re-arm the append
+    // path, leaving the burst to land at pf_cnt=0 (foreign bytes). A fill
+    // deferred one clock re-seeds on clean windows.
     wire srv_pf  = (pf_need0 | pf_need1) && (pf_dead != 2'd3)
-                && !pause_core && !pf_disable;
+                && !pause_core && !pf_disable && !pf_nofill && !bank_chg;
 
     // Write-queue capture: the request is postable when it targets plain
     // SDRAM and a slot is free. The push itself is in the tracker block
@@ -915,7 +946,8 @@ module zet_cpu_bridge (
                          && ({1'b0, srv_beg[4:0]} >= {1'b0, insec_lo})
                          && ({1'b0, srv_beg[4:0]} <= insec_cnt);
     wire        fillm_go = arm_rd_ok && !pf_poisoned && (pf_dead != 2'd3)
-                        && !pause_core && !pf_disable && !fillm_ovl
+                        && !pause_core && !pf_disable && !pf_nofillm
+                        && !bank_chg && !fillm_ovl
                         && (~|pf_live || insec || retn0 || retn1
                             || cont0 || cont1 || pf_miss1);
     wire        fillm_w  = (~|pf_live) ? 1'b0
@@ -981,7 +1013,9 @@ module zet_cpu_bridge (
             pf_ghost0  <= 15'h0;
             pf_ghost1  <= 15'h0;
             pf_ghost_v <= 2'b00;
+            shadow_q   <= bios_shadow_flag;
         end else begin
+            shadow_q <= bios_shadow_flag;
             // A prefetch fill under way: beats append in address order
             // into ITS window, only while the fill still owns the
             // command phase and no invalidation has landed on it
@@ -1126,10 +1160,13 @@ module zet_cpu_bridge (
             // Invalidations: an overlapping guest write drops the
             // touched window before the write reaches memory; any I/O
             // write may move the map; a DMA grant means writes we
-            // cannot see, so both windows die. Dropping pf_live too
-            // keeps a dead window from refilling a sector nobody reads
-            // -- the next miss re-seeds it where the stream actually is.
-            if (!bus_ours || arm_iow) begin
+            // cannot see, so both windows die; and an F-bank remap
+            // (bios_shadow_flag edge) retags every F-sector window's
+            // bytes to the other bank, so nothing fetched before the
+            // flip may serve. Dropping pf_live too keeps a dead window
+            // from refilling a sector nobody reads -- the next miss
+            // re-seeds it where the stream actually is.
+            if (!bus_ours || arm_iow || bank_chg) begin
                 pf_cnt0 <= 6'd0;
                 pf_cnt1 <= 6'd0;
                 pf_lo0  <= 5'd0;
