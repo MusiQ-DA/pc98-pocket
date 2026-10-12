@@ -445,7 +445,30 @@ module zet_cpu_bridge (
     // window reads ahead of the instruction boundary -- so the engine
     // finishes that pair first and rd_pend defers its ack past the
     // vector window.)
-    wire        srv_inta = inta_active && !int_served;
+    //
+    // inta_ready: the 8086 holds LOCK from the first INTA through the
+    // second, so a HOLD can never split the acknowledge pair. Here lock_n
+    // asserts with inta_active (below), and the pair only arms once two
+    // cpu_ce_posedges have passed under it -- a grant the arbiter sampled
+    // just before the lock (PASV && lock_n) has reached address_enable_n
+    // by then, so arm_req's bus_ours waits the grant out and the pair runs
+    // whole afterwards. Without it a grant landing in the ACK1->ACK2 gap
+    // (status PASV in B_GAP) or across ACK1's strobe forced inta_n high
+    // mid-sequence: the i8259 took the cut as ACK2's end, the re-run strobe
+    // as a fresh ACK1, and ACK2 never drove the vector -- int_vector took
+    // whatever data_bus last held (SuperDepth: 06, the disp byte of the
+    // idiv [bp+6] just fetched -> FreeDOS "Invalid Opcode"), while the PIC
+    // had already put the real IRQ in service: ISR stuck, the CRT arm
+    // consumed, IRQ2 dead for good.
+    reg  [1:0]  inta_settle;
+    always @(posedge clk) begin
+        if (reset || !inta_active)
+            inta_settle <= 2'd0;
+        else if (cpu_ce_posedge && (inta_settle != 2'd2))
+            inta_settle <= inta_settle + 2'd1;
+    end
+    wire        inta_ready = (inta_settle == 2'd2);
+    wire        srv_inta = inta_active && !int_served && inta_ready;
     // wb_dat_i is committed to a vector for the whole vector window
     // (wb_tgc_o/nmia): no memory read may serve its ack in there or it
     // would deliver the vector instead of rd_word. The core is halted
@@ -894,7 +917,9 @@ module zet_cpu_bridge (
     // there turns every in-flight read pair into a phantom write on the
     // read's own address.)
     assign processor_status = ps_r;
-    assign lock_n = ~((wrq_cnt != 3'd0) || wrq_push || cur_dq);
+    // inta_active: LOCK across the acknowledge pair -- see inta_ready.
+    assign lock_n = ~((wrq_cnt != 3'd0) || wrq_push || cur_dq
+                      || inta_active);
 
     // Write overlap reaches into each window's PROMISED range, not just
     // its fetched one: a write landing where a fill is about to drop a

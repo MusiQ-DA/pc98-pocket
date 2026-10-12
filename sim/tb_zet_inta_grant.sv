@@ -80,7 +80,9 @@ module tb_zet_inta_grant;
         if (reset)
             hold_ff1 <= 1'b0;
         else if (cpu_ce_posedge)
-            hold_ff1 <= (processor_status[0] & processor_status[1]) & hreq;
+            // Bus_Arbiter.sv's sample: PASV && lock_n && request.
+            hold_ff1 <= (processor_status[0] & processor_status[1]) & lock_n
+                        & hreq;
     end
     always_ff @(posedge clk) begin
         if (reset)
