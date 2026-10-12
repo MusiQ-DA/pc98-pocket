@@ -206,6 +206,10 @@ module PERIPHERALS #(
         // Graphics display-fetch underrun telemetry -- skip/late/max_fill in
         // the low word, live fill-FSM and line state in the high word.
         output  wire    [63:0]  dbg_gvdisp,
+        // JTAG probe readout of the CRT (IRQ2) interrupt path: the master
+        // PIC's {IMR,ISR,IRR}, the 0x64 arm and pending flags, and event
+        // counters -- see the dbg_crt assign by crt_armed.
+        output  wire    [63:0]  dbg_crt,
         input   logic           fdd_dma_ack,
         input   logic           terminal_count,
         // Others
@@ -422,6 +426,7 @@ module PERIPHERALS #(
     logic           fdd_busy;
     logic   [7:0]   interrupt_data_bus_out;
     logic           interrupt_to_cpu_buf;
+    wire    [23:0]  pic_m_dbg;      // master {IMR,ISR,IRR} for dbg_crt
 
     logic   [7:0]   interrupt2_data_bus_out;
     logic           interrupt2_data_bus_io;
@@ -490,6 +495,7 @@ module PERIPHERALS #(
         // and re-arms the GDC flag -- see crt_cancel above.
         .external_irr_clear         ({5'b0, crt_cancel, 1'b0,
                                         pit0_write_clears_irr0}),
+        .dbg_regs                   (pic_m_dbg),
         // IRQ7 is the slave's cascade line; the machine's own IRQ7 has to
         // stand down for it. IRQ2 is the CRT interrupt -- see crt_vsync_irq
         // above; without it the BIOS parks at FED44 for good. The drive's
@@ -556,6 +562,7 @@ module PERIPHERALS #(
         .interrupt_acknowledge_n    (interrupt_acknowledge_n),
         .interrupt_to_cpu           (interrupt2_to_cpu),
         .external_irr_clear         (8'h00),
+        .dbg_regs                   (),
         // IRQ3 is the FDC's own interrupt (RECALIBRATE finding no drive);
         // IRQ2 is the XTMASK pulse the 100 ms 0xCC timer fires. IRQ4 is the
         // PC-9801-86's: np21w sound/opntimer.c (s_irqtable) has the board's four jumper
@@ -834,6 +841,36 @@ module PERIPHERALS #(
         end
     end
     wire crt_vsync_irq = crt_vsync_edge & crt_armed;
+
+    // Probe telemetry for the CRT interrupt (dbg_crt). A guest that waits on
+    // a VSYNC-counted frame stalls for good if IRQ2 stops: these say whether
+    // the arm was consumed without a handler run (isr_n vs arm_n), the pulse
+    // fell on the PIC's acknowledge freeze (lost_n: fired, IRR bit 2 still
+    // clear a cycle later), or the PIC answered an INTA with IRQ7's spurious
+    // vector (spur_n). Counters wrap.
+    logic       crt_isr_d = 1'b0, gdc_arm_d = 1'b0, spur_d = 1'b0;
+    logic       crt_fire_d = 1'b0;
+    logic [7:0] crt_fire_n = 8'd0, crt_isr_n = 8'd0, crt_arm_n = 8'd0;
+    logic [3:0] crt_lost_n = 4'd0, crt_cancel_n = 4'd0, crt_spur_n = 4'd0;
+    wire        pic_spur = ~interrupt_acknowledge_n
+                         & (interrupt_data_bus_out == 8'h0F);
+    always_ff @(posedge clock) begin
+        crt_isr_d  <= crt_isr;
+        gdc_arm_d  <= gdc_arm_w;
+        spur_d     <= pic_spur;
+        crt_fire_d <= crt_vsync_irq;
+        if (crt_vsync_irq)              crt_fire_n   <= crt_fire_n + 8'd1;
+        if (crt_isr & ~crt_isr_d)       crt_isr_n    <= crt_isr_n + 8'd1;
+        if (gdc_arm_w & ~gdc_arm_d)     crt_arm_n    <= crt_arm_n + 8'd1;
+        if (crt_fire_d & ~pic_m_dbg[2]) crt_lost_n   <= crt_lost_n + 4'd1;
+        if (crt_cancel)                 crt_cancel_n <= crt_cancel_n + 4'd1;
+        if (pic_spur & ~spur_d)         crt_spur_n   <= crt_spur_n + 4'd1;
+    end
+    assign dbg_crt = { crt_fire_n, crt_isr_n, crt_arm_n,
+                       crt_lost_n, crt_cancel_n,
+                       pic_m_dbg,
+                       crt_spur_n, 1'b0, crt_pend, crt_armed,
+                       interrupt_to_cpu_buf };
 
     // The ITF's first hard gate. At F80388 it does IN AL,60h / TEST AL,20h and
     // waits for bit 5 to go low, high, low -- twice -- before it will go on.

@@ -38,7 +38,12 @@ module i8259 #(
     // np21w's timer quirk as an explicit port: a strobe here clears the
     // corresponding IRR bits (see i8259_Interrupt_Request).  Only the master
     // PIC's bit 0 is ever driven on a PC-98 -- the interval timer's writes.
-    input   logic   [7:0]   external_irr_clear
+    input   logic   [7:0]   external_irr_clear,
+
+    // Probe readout: {IMR, ISR, IRR}, the registers a guest reads through
+    // OCW3/port A1 -- so a JTAG probe can see a stuck in-service bit or a
+    // mask the guest never lifted without running guest code.
+    output  logic   [23:0]  dbg_regs
 );
 
     //
@@ -207,6 +212,9 @@ module i8259 #(
         .in_service_register                (in_service_register),
         .highest_level_in_service           (highest_level_in_service)
     );
+
+    assign dbg_regs = {interrupt_mask, in_service_register,
+                       interrupt_request_register};
 
     //
     // Data Bus Buffer & Read/Write Control Logic (2)
