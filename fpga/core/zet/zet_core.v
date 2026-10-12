@@ -72,6 +72,27 @@ module zet_core (
   // wire decode - microcode
   wire [`MICRO_ADDR_WIDTH-1:0] seq_addr;   // decode-stage micro address
   wire [`MICRO_ADDR_WIDTH-1:0] seq_addr_x; // executing op's micro address
+
+  // The interrupt vector, held for EINT/EINTP's op 1 (tmp <- memout, the
+  // only op that reads it). The bridge parks the vector on wb_dat_i only
+  // while wb_tgc_o (inta) / nmia is up, and inta is a one-op pulse: it
+  // drops on the next delivered edge whether or not that edge retired
+  // anything. With block_or_hlt up across that edge -- a fetch the
+  // bridge deferred past the vector window (rd_pend) is exactly that --
+  // op 1 retired later off cpu_dat_i, the last read's data, and the core
+  // vectored through whatever byte it was (SuperDepth: INT 06 off the
+  // idiv [bp+6] divisor, INT 31 into a data table -- FreeDOS "Invalid
+  // Opcode"; when the PIC had acknowledged IRQ2 the CRT handler never ran
+  // and VSYNC died for good). Every delivered edge with inta/nmia up
+  // latches the vector; op 1 takes the latch once the pulse is gone.
+  reg  [15:0] iid_q;
+  always @(posedge clk)
+    if (inta | nmia) iid_q <= iid_dat_i;
+  wire iid_late = !(inta | nmia)
+                & ((seq_addr_x == (`EINT  + `MICRO_ADDR_WIDTH'd1))
+                 | (seq_addr_x == (`EINTP + `MICRO_ADDR_WIDTH'd1)));
+  wire [15:0] memout_x = iid_late ? iid_q : iid_dat_i;
+
   wire                       div_wait;
   wire [3:0] src;
   // seq_addr_x rides the executing op (registered redirects + seq), so a
@@ -416,7 +437,7 @@ module zet_core (
     .wr_ss   (wr_ss),
 
     // from wb
-    .memout  (iid_dat_i),
+    .memout  (memout_x),
     .wr_data (cpu_dat_o),
     .addr    (addr_exec),
     .we      (cpu_we_o),
