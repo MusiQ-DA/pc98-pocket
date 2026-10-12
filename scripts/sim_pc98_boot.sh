@@ -84,6 +84,7 @@ SIM_THREADS="${SIM_THREADS:-4}"
 
 CPU_DEF=""
 [ "$REALMEM" = 1 ] && CPU_DEF="+define+REALMEM"
+[ -n "$EXTRA_DEF" ] && CPU_DEF="$CPU_DEF $EXTRA_DEF"
 
 if [ "$REALMEM" = 1 ]; then
     MEMFILES="$K/RAM.sv $K/Ready.sv $S/sdram_shim.sv $S/sdram_mp.sv \

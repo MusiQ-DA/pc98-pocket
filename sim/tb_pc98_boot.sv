@@ -235,25 +235,45 @@ module tb_pc98_boot;
         in_e2e_check = (a < 20'hC0000) | (a >= 20'hE8000);
 `endif
     endfunction
+    // The address the bridge actually serviced. wb_adr_o follows
+    // cpu_adr_o and runs ahead of a pending ack when an interrupt
+    // redirects the fetch, so it is NOT a reliable check address --
+    // latch the request the bridge committed to (serve/arm time).
+    reg [19:0] svc_adr;
+    always_ff @(posedge clk_chipset) begin
+        if (u_bridge.hit_serve | u_bridge.fwd_serve)
+            svc_adr <= u_bridge.srv_addr;
+        else if (u_bridge.arm_req
+                 && (u_bridge.srv_bs == 3'b101 || u_bridge.srv_bs == 3'b100))
+            svc_adr <= u_bridge.srv_addr;
+    end
     always_ff @(posedge clk_chipset) begin
         if (zwb_ack && !zwb_we && !zwb_tga) begin
-            if (zwb_sel[0] && in_e2e_check({zwb_adr, 1'b0})
-                && zwb_dat_i[7:0] !== expected_byte({zwb_adr, 1'b0})) begin
+            if (zwb_sel[0] && in_e2e_check({svc_adr[19:1], 1'b0})
+                && zwb_dat_i[7:0] !== expected_byte({svc_adr[19:1], 1'b0})) begin
                 ack_rd_mismatches++;
-                ack_bad_addr <= {zwb_adr, 1'b0};
+                ack_bad_addr <= {svc_adr[19:1], 1'b0};
                 if (ack_rd_mismatches <= 20)
-                    $display("  %8t  E2E lo [%05X] gave %02X, want %02X  (zet_pc %05X)",
-                             $time, {zwb_adr, 1'b0}, zwb_dat_i[7:0],
-                             expected_byte({zwb_adr, 1'b0}), zet_pc);
+                    $display("  %8t  E2E lo [%05X] gave %02X, want %02X  (zet_pc %05X hit=%b fwd=%b rp=%b bs=%0d inta=%b pf=%b dq=%b rw=%04X)",
+                             $time, {svc_adr[19:1], 1'b0}, zwb_dat_i[7:0],
+                             expected_byte({svc_adr[19:1], 1'b0}), zet_pc,
+                             u_bridge.hit_serve, u_bridge.fwd_serve,
+                             u_bridge.rd_pend, u_bridge.cur_bs,
+                             u_bridge.cur_inta, u_bridge.cur_pf,
+                             u_bridge.cur_dq, u_bridge.rd_word);
             end
-            if (zwb_sel[1] && in_e2e_check({zwb_adr, 1'b1})
-                && zwb_dat_i[15:8] !== expected_byte({zwb_adr, 1'b1})) begin
+            if (zwb_sel[1] && in_e2e_check({svc_adr[19:1], 1'b1})
+                && zwb_dat_i[15:8] !== expected_byte({svc_adr[19:1], 1'b1})) begin
                 ack_rd_mismatches++;
-                ack_bad_addr <= {zwb_adr, 1'b1};
+                ack_bad_addr <= {svc_adr[19:1], 1'b1};
                 if (ack_rd_mismatches <= 20)
-                    $display("  %8t  E2E hi [%05X] gave %02X, want %02X  (zet_pc %05X)",
-                             $time, {zwb_adr, 1'b1}, zwb_dat_i[15:8],
-                             expected_byte({zwb_adr, 1'b1}), zet_pc);
+                    $display("  %8t  E2E hi [%05X] gave %02X, want %02X  (zet_pc %05X hit=%b fwd=%b rp=%b bs=%0d inta=%b pf=%b dq=%b rw=%04X)",
+                             $time, {svc_adr[19:1], 1'b1}, zwb_dat_i[15:8],
+                             expected_byte({svc_adr[19:1], 1'b1}), zet_pc,
+                             u_bridge.hit_serve, u_bridge.fwd_serve,
+                             u_bridge.rd_pend, u_bridge.cur_bs,
+                             u_bridge.cur_inta, u_bridge.cur_pf,
+                             u_bridge.cur_dq, u_bridge.rd_word);
             end
         end
     end
