@@ -240,6 +240,7 @@ module zet_cpu_bridge (
     reg        inta_active;     // serving a vector fetch for wb_tgc_o
     reg        int_served;      // the INTA pair ran -- keeps zet_halt open
     reg        tgc_q;           // wb_tgc_o last cycle, for rise detect
+    reg        rd_pend;         // a read retired in the vector window; ack deferred
     reg [ 7:0] int_vector;
 
     always @(posedge clk) begin
@@ -250,6 +251,7 @@ module zet_cpu_bridge (
             inta_active   <= 1'b0;
             int_served    <= 1'b0;
             tgc_q         <= 1'b0;
+            rd_pend       <= 1'b0;
         end else begin
             // INTA pulse (a Zet-edge event): the rise starts service -- the
             // clock is already stopped by zet_halt. int_served is cleared
@@ -290,9 +292,28 @@ module zet_cpu_bridge (
             // !cur_pf/!cur_dq: a prefetch fill's or a write-drain's
             // completion must never ack -- a request captured mid-pair
             // is served by the normal path once that pair retires.
-            if (pair_done && req_busy && !cur_pf && !cur_dq) begin
-                req_busy     <= 1'b0;
-                wb_ack_i     <= 1'b1;
+            // !cur_inta: the INTA pair's pair_done must not ack a memory
+            // read still parked on req_busy by the defer below.
+            if (pair_done && req_busy && !cur_pf && !cur_dq && !cur_inta) begin
+                // A read that retires inside the vector-park window can't
+                // ack yet: wb_dat_i is committed to the vector while
+                // wb_tgc_o/nmia is up, so the ack would hand the master
+                // the vector, not rd_word (realmem+IRQ: the fetch at
+                // 1fc70 read back 0038 -- the parked INTA vector). Defer
+                // it on rd_pend; the core is halted through the window so
+                // the stall is free, and rd_word keeps the bytes until
+                // wb_dat_i is back on the read path.
+                if (vec_window) rd_pend <= 1'b1;
+                else begin
+                    req_busy <= 1'b0;
+                    wb_ack_i <= 1'b1;
+                end
+            end
+            // The vector window closed: deliver the deferred read's word.
+            if (rd_pend && !vec_window) begin
+                rd_pend  <= 1'b0;
+                req_busy <= 1'b0;
+                wb_ack_i <= 1'b1;
             end
             // A prefetch hit completes the same way but no bus cycle ever
             // ran for it; rd_word takes the window's bytes in the engine
@@ -417,11 +438,20 @@ module zet_cpu_bridge (
     wire bus_ours = (address_enable_n == 1'b0);
 
     // What the engine serves: an INTA service beats a pending WB request.
-    // (Unreachable in practice -- inta can only pulse at an instruction
-    // boundary, and the WB master blocks mid-op so no cycle is in flight --
-    // but the mux order keeps it correct even so.)
+    // (A fetch CAN be in flight when inta pulses -- the master's prefetch
+    // window reads ahead of the instruction boundary -- so the engine
+    // finishes that pair first and rd_pend defers its ack past the
+    // vector window.)
     wire        srv_inta = inta_active && !int_served;
-    wire        srv_req  = req_busy && (req_age == 2'd2) && !srv_inta;
+    // wb_dat_i is committed to a vector for the whole vector window
+    // (wb_tgc_o/nmia): no memory read may serve its ack in there or it
+    // would deliver the vector instead of rd_word. The core is halted
+    // through the window, so holding a pending read off is free.
+    // !rd_pend: a read deferred past the window stays on req_busy until
+    // it can ack -- it must not re-arm as a fresh bus cycle.
+    wire        vec_window = wb_tgc_o || nmia;
+    wire        srv_req  = req_busy && (req_age == 2'd2) && !srv_inta
+                         && !rd_pend && !vec_window;
     // Live Wishbone parameters, sampled at arm time (req_age==2 means the
     // tracking registers have settled).
     wire [2:0]  srv_bs   = srv_inta ? BS_INTA : wb_bs;

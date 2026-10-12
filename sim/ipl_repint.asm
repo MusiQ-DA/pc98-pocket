@@ -44,6 +44,28 @@ start:
     loop .ivt
     mov ax, cs
     mov ds, ax
+
+    ; --- master PIC: ICW + unmask IRQ0, so the timer actually interrupts ---
+    ; ports: ICW1->0x00, ICW2/3/4 + OCW1->0x02. vector base 0x08 (IRQ0=INT 08),
+    ; slave on IRQ7 (PC-98 cascade), 8086 mode.
+    mov al, 0x11
+    out 0x00, al
+    mov al, 0x08
+    out 0x02, al
+    mov al, 0x80
+    out 0x02, al
+    mov al, 0x01
+    out 0x02, al
+    mov al, 0xFE          ; unmask IRQ0 only (vsync IRQ2 stays masked)
+    out 0x02, al
+    ; --- PIT counter0: mode 3 square wave, reload 0x4000 (~1.6 kHz tick) ---
+    mov al, 0x36
+    out 0x77, al
+    mov al, 0x00
+    out 0x71, al
+    mov al, 0x40
+    out 0x71, al
+
     sti
 
     xor bp, bp            ; iteration counter (rep ops clobber di)
@@ -126,6 +148,8 @@ mainloop:
     hlt
 
 irq_handler:
+    mov al, 0x20          ; OCW2: non-specific EOI to the master PIC (port 0x00)
+    out 0x00, al
     iret
 
 srcpat:   times SRCLEN db 0

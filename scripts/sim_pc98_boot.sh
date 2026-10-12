@@ -74,6 +74,10 @@ Z=$S/zet
 mkdir -p "$OUT/fpga/core/zet"
 cp $Z/micro_rom.dat "$OUT/fpga/core/zet/"
 
+# +repint pokes this IPL straight into guest RAM and jumps the reset vector
+# at it; the bench $readmemh's it from $OUT like the ROM hexes.
+cp sim/ipl_repint.hex "$OUT/ipl_repint.hex"
+
 R="$PWD"
 SIM_OPT="${SIM_OPT:--O2}"
 SIM_THREADS="${SIM_THREADS:-4}"

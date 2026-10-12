@@ -552,7 +552,6 @@ module tb_pc98_boot;
         .svc_req(1'b0), .svc_we(1'b0), .svc_raw(1'b0),
         .svc_addr(20'h0), .svc_wdata(8'h0),
         .svc_done(), .svc_rdata(),
-        .pf_disable        (1'b0),
         .dbg(dbg_gvram),
         .mem_addr(seq_mem_addr), .mem_wdata(seq_mem_wdata),
         .mem_word(seq_mem_word), .mem_pf_len(seq_mem_pf_len),
@@ -1127,6 +1126,20 @@ module tb_pc98_boot;
     logic [7:0] tvram_attr [0:511];   // A2000-A21FF
     int          tvram_wr_count = 0;
 
+    // ---- ipl_repint mailbox monitor (realmem) ------------------------------
+    // repint parks its verdict at phys 0x50000: [2]=iters(word) [4]=status
+    // (0xAC pass / 0xEE fail) [8]=opfail(byte) [0x0A]=badcs(word). Watching
+    // the status write lets the run $finish the moment repint reports instead
+    // of running the full chunk count. Enabled by +repint so the shared boot
+    // bench is unaffected when the image isn't repint.
+    logic        repint_en    = 1'b0;
+    logic        rep_saw_ac   = 1'b0;
+    logic        rep_saw_ee   = 1'b0;
+    logic        rep_done     = 1'b0;
+    logic        rep_reported = 1'b0;
+    int          rep_report_dly = 0;
+    logic [7:0]  repimg [0:511];
+
     // The two GDC status ports, named here because the trace below has to
     // recognise them long before the mock that answers them is declared.
     wire  gdc_stat_port  = (cpu_address[15:0] == 16'h0060)
@@ -1216,6 +1229,18 @@ module tb_pc98_boot;
             if (mem_wr_word_q) begin
                 ram[cpu_address | 20'h1] <= mem_wr_hi_q;
                 ram_seen[cpu_address | 20'h1] <= 1'b1;
+            end
+            // ipl_repint mailbox: status byte at 0x50004 is the verdict write,
+            // the last store repint makes before hlt, so it is also the
+            // completion trigger. iters/opfail/badcs are already in ram[].
+            if (repint_en && cpu_address == 20'h50004 && ~rep_done) begin
+                rep_done   <= 1'b1;
+                rep_saw_ac <= (mem_wr_data_q == 8'hAC);
+                rep_saw_ee <= (mem_wr_data_q == 8'hEE);
+                $display("  %8t  REPINT status <- %02X  iters=%0d opfail=%02x badcs=%04x  (eu_pc %05X)",
+                         $time, mem_wr_data_q,
+                         {ram[20'h50003], ram[20'h50002]}, ram[20'h50008],
+                         {ram[20'h5000B], ram[20'h5000A]}, eu_pc);
             end
             // The ITF's reset-resume state (0000:03F0-0410): every write here
             // is part of the OUT-0F0h dance, and a save that goes missing is
@@ -1395,6 +1420,31 @@ module tb_pc98_boot;
                        : (cpu_address[15:0] == 16'h00A0) ? "s.par"
                        : "s.CMD",
                          io_wr_data_q, eu_pc);
+        end
+    end
+
+    // repint verdict: the status write set rep_done; give ram[] a couple of
+    // clocks to settle, then print the guest's own integrity verdict and
+    // finish -- the CPU is in hlt at that point, so nothing follows.
+    initial if ($test$plusargs("repint")) repint_en = 1'b1;
+    always_ff @(posedge clk_chipset) begin
+        if (rep_done && !rep_reported) begin
+            if (rep_report_dly < 8) rep_report_dly <= rep_report_dly + 1;
+            else begin
+                rep_reported <= 1'b1;
+                $display("=== REPINT verdict: status=%s iters=%0d opfail=%02x badcs=%04x ===",
+                         rep_saw_ac ? "AC(pass)" : rep_saw_ee ? "EE(fail)" : "??",
+                         {ram[20'h50003], ram[20'h50002]}, ram[20'h50008],
+                         {ram[20'h5000B], ram[20'h5000A]});
+                if (rep_saw_ac) $display("REPINT PASS (copy+stack+CS intact)");
+                else if (rep_saw_ee)
+                    $display("REPINT FAIL (opfail %02x: 1=copy 2=stack 3=SS!=CS, badcs %04x)",
+                             ram[20'h50008], {ram[20'h5000B], ram[20'h5000A]});
+                else            $display("REPINT verdict byte not AC/EE");
+                $display("E2E ack reads %0d mismatches (last bad %05X)",
+                         ack_rd_mismatches, ack_bad_addr);
+                $finish;
+            end
         end
     end
 
@@ -2130,6 +2180,26 @@ module tb_pc98_boot;
         // the BIOS at E8000-FFFFF, the ITF in the shadow at 1F8000 that
         // bios_shadow_flag selects. One guest byte per 16-bit word, which is how
         // RAM.sv stores everything (access_data_in is {8'h00, byte}).
+        // +repint fast path: skip POST entirely. Patch the BIOS reset vector
+        // to a far jump at repint BEFORE the BIOS image goes into the part
+        // below, so rom_byte agrees with the served byte -- and poke repint
+        // into flat guest RAM at 1FC00, seeding the E2E mirror so its own
+        // fetches read as expected. Combine with +freeze_* to hammer the read
+        // path under bus holds.
+        if ($test$plusargs("repint")) begin
+            $readmemh("ipl_repint.hex", repimg);
+            bios[18'h17FF0] = 8'hEA;   // jmp far 1FC0:0000  (phys 1FC00)
+            bios[18'h17FF1] = 8'h00;
+            bios[18'h17FF2] = 8'h00;
+            bios[18'h17FF3] = 8'hC0;
+            bios[18'h17FF4] = 8'h1F;
+            for (i = 0; i < 512; i = i + 1) begin
+                sdr.u_part.poke(24'h01FC00 + i, {8'h00, repimg[i]});
+                ram[20'h1FC00 + i]      = repimg[i];
+                ram_seen[20'h1FC00 + i] = 1'b1;
+            end
+            $display("REALMEM+repint: IPL poked at 1FC00, reset vector -> 1FC0:0000");
+        end
         for (i = 0; i < 98304;  i = i + 1)
             sdr.u_part.poke(20'hE8000 + i, {8'h00, bios[i]});
         for (i = 0; i < 32768;  i = i + 1)
