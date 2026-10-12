@@ -38,6 +38,7 @@ module zet (
     output        wb_tgc_o,  // inta
     input         nmi,
     output        nmia,
+    input         fwdis,     // kill the instruction-fetch window
 
     output [19:0] pc,  // for debugging purposes
     output        dbg_fault,
@@ -94,6 +95,7 @@ module zet (
     .cpu_dat_i  (cpu_dat_i),
     .cpu_dat_o  (cpu_dat_o),
     .cpu_we_o   (cpu_we_o),
+    .fwdis      (fwdis),
 
     .wb_clk_i  (wb_clk_i),
     .wb_rst_i  (wb_rst_i),

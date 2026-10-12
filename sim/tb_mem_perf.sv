@@ -86,6 +86,7 @@ module tb_mem_perf;
     reg         pf_nofill_r = 1'b0;
     reg         pf_nofillm_r = 1'b0;
     reg         pf_nohit_r  = 1'b0;
+    reg         fwdis_r     = 1'b0;
     reg         shadow_flag_r = 1'b0;
     reg         irq_req     = 1'b0;
     reg         flipped10   = 1'b0;
@@ -94,6 +95,7 @@ module tb_mem_perf;
         pf_nofill_r = $test$plusargs("pfnofill");
         pf_nofillm_r = $test$plusargs("pfnofillm");
         pf_nohit_r  = $test$plusargs("pfnohit");
+        fwdis_r     = $test$plusargs("fwdis");
     end
 
     zet_cpu_bridge u_bridge (
@@ -156,6 +158,7 @@ module tb_mem_perf;
         .wb_tgc_o  (zwb_inta),
         .nmi       (1'b0),
         .nmia      (zwb_nmia),
+        .fwdis     (fwdis_r),
         .pc        (zet_pc),
         .dbg_fault (),
         .dbg_opc   ()

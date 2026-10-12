@@ -95,7 +95,7 @@ module tb_zet_retf;
         .wb_we_o(zwb_we), .wb_tga_o(zwb_tga), .wb_sel_o(zwb_sel),
         .wb_stb_o(zwb_stb), .wb_cyc_o(zwb_cyc), .wb_ack_i(zwb_ack),
         .wb_tgc_i(intr), .wb_tgc_o(zwb_inta), .nmi(nmi_r), .nmia(zwb_nmia),
-        .pc(zet_pc)
+        .fwdis(1'b0), .pc(zet_pc)
     );
 
     // ---- random INTR stimulus: assert intr for a few zet edges, then release

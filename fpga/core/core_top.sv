@@ -302,6 +302,11 @@ module core_top (
     logic        jtag_pf_nofill  = 1'b0;
     logic        jtag_pf_nofillm = 1'b0;
     logic        jtag_pf_nohit   = 1'b0;
+    //   [7] fwdis    -- kill the zet_wb_master 2-word instruction-fetch
+    //                   window (a separate cache the bridge's pf_* bits do
+    //                   not reach): hits and idle prefetches are disabled,
+    //                   so every fetch pays its own bus cycle
+    logic        jtag_fwdis      = 1'b0;
     logic [19:0] jtag_watch_addr = 20'hFFFFF;
     wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
                                               : cpu_speed_cfg;
@@ -312,6 +317,7 @@ module core_top (
     wire         jtag_pf_nofill  = 1'b0;
     wire         jtag_pf_nofillm = 1'b0;
     wire         jtag_pf_nohit   = 1'b0;
+    wire         jtag_fwdis      = 1'b0;
     wire  [19:0] jtag_watch_addr = 20'hFFFFF;
 `endif
 
@@ -2223,7 +2229,8 @@ module core_top (
         // clk_select_next to wdata[1:0] instead of the OSD setting. Same
         // handoff the menu uses (ce_generator reloads on the next biu_done).
         // wdata[3] kills the prefetch engine outright; wdata[6:4] kill the
-        // pure fills / fill-on-miss / hit serving individually for A/B.
+        // pure fills / fill-on-miss / hit serving individually for A/B;
+        // wdata[7] kills the wb_master instruction-fetch window outright.
         if (probe_wr_pulse && probe_waddr_c == 7'h09) begin
             jtag_spd_ovr  <= probe_wdata_c[2];
             jtag_spd_sel  <= probe_wdata_c[1:0];
@@ -2231,6 +2238,7 @@ module core_top (
             jtag_pf_nofill  <= probe_wdata_c[4];
             jtag_pf_nofillm <= probe_wdata_c[5];
             jtag_pf_nohit   <= probe_wdata_c[6];
+            jtag_fwdis    <= probe_wdata_c[7];
         end
         // Slot 0x0a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
         // every memory write landing on it is logged (CPU or DMA alike).
@@ -3434,6 +3442,7 @@ module core_top (
         .wb_tgc_o  (zwb_inta),
         .nmi       (1'b0),
         .nmia      (zwb_nmia),
+        .fwdis     (jtag_fwdis),
         .pc        (zet_pc),
         .dbg_fault (zet_fault),
         .dbg_opc   (zet_opc)

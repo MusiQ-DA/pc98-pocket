@@ -28,6 +28,7 @@ module zet_wb_master (
     output reg [15:0] cpu_dat_i,
     input      [15:0] cpu_dat_o,
     input             cpu_we_o,
+    input             fwdis,
 
     input             wb_clk_i,
     input             wb_rst_i,
@@ -101,7 +102,10 @@ module zet_wb_master (
                 & (cpu_byte_o | ~pc[0]);
   wire hit_nxt  = fetch_rd & nxt_v & (pc[19:1] == nxt_addr)
                 & (cpu_byte_o | ~pc[0]);
-  wire hit      = (cs == IDLE) & op & (hit_cur | hit_nxt);
+  // fwdis kills the window outright: no hit may serve and no idle
+  // prefetch may fill, so every instruction-stream read pays its own
+  // Wishbone cycle -- the bisect control for the stale-byte faults.
+  wire hit      = (cs == IDLE) & op & (hit_cur | hit_nxt) & ~fwdis;
   wire [15:0] hitw = hit_cur ? cur_dat : nxt_dat;
 
   // a fetch read at an even address that misses pulls the whole aligned
@@ -114,7 +118,8 @@ module zet_wb_master (
   // slot is free: nxt holds cur+1 while the window lives; once it is empty
   // (branch landed, write flushed it) cur is re-seeded from pc's word so the
   // next fetch stream resumes ahead of itself
-  wire pf_go = (cs == IDLE) & ~op & (~cur_v | ~nxt_v) & (idle_cnt >= 3'd1);
+  wire pf_go = (cs == IDLE) & ~op & (~cur_v | ~nxt_v) & (idle_cnt >= 3'd1)
+             & ~fwdis;
   wire [19:1] pf_targ = cur_v ? (cur_addr + 19'd1) : pc[19:1];
 
   // Behaviour
@@ -159,7 +164,7 @@ module zet_wb_master (
 
   // fetch window bookkeeping
   always @(posedge wb_clk_i)
-    if (wb_rst_i) begin
+    if (wb_rst_i | fwdis) begin
       cur_v <= 1'b0;
       nxt_v <= 1'b0;
     end else if ((cs == IDLE) & op & cpu_we_o) begin

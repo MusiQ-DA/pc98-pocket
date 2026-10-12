@@ -196,6 +196,7 @@ module tb_pc98_boot;
         .wb_tgc_o  (zwb_inta),
         .nmi       (1'b0),
         .nmia      (zwb_nmia),
+        .fwdis     (fwdis_r),
         .pc        (zet_pc),
         .dbg_fault (zet_fault),
         .dbg_opc   (zet_opc)
@@ -641,6 +642,7 @@ module tb_pc98_boot;
     logic        analog4_r = 1'b0;
     logic        disp_page_r = 1'b0;
     logic        dbl_r = 1'b0;
+    logic        fwdis_r = 1'b0;
     logic [15:0] disp_sad [0:3] = '{16'd0, 16'd0, 16'd0, 16'd0};
     logic [9:0]  disp_len [0:3] = '{10'd400, 10'd0, 10'd0, 10'd0};
     initial begin
@@ -649,6 +651,7 @@ module tb_pc98_boot;
         if ($value$plusargs("analog4=%d", v)) analog4_r  = (v != 0);
         if ($value$plusargs("disppage=%d", v)) disp_page_r = (v != 0);
         if ($value$plusargs("dbl=%d", v))     dbl_r      = (v != 0);
+        if ($value$plusargs("fwdis=%d", v))   fwdis_r    = (v != 0);
     end
 
     logic        dot_clk = 1'b0;
