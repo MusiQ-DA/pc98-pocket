@@ -23,6 +23,7 @@ module zet_wb_master (
     input             cpu_m_io,
     input             cpu_fetch,   // request is part of the instruction stream
     input      [19:0] cpu_adr_o,
+    input             cpu_adr_end, // offset FFFFh: the odd half wraps in-segment
     input      [19:0] pc,          // next fetch address during execute
     output reg        cpu_block,
     output reg [15:0] cpu_dat_i,
@@ -138,8 +139,15 @@ module zet_wb_master (
                    : cpu_dat_i));
 
   // adr1
+  // The odd word's second byte is at OFFSET+1 within the segment, not at
+  // linear+1: at offset FFFFh it wraps to the segment's offset 0000h, which
+  // is linear - FFFFh. Without the wrap a word store at DS:FFFF put its high
+  // byte on DS+1000h:0000 -- SuperDepth's dgroup ends exactly there, and the
+  // byte it wrote was the next MCB's 'M', which FreeDOS then halted on
+  // ("MCB chain corrupted").
+  wire [19:0] adr_wrap = cpu_adr_o - 20'h0FFFF;
   always @(posedge wb_clk_i)
-    adr1 <= cpu_adr_o[19:1] + 1'b1;
+    adr1 <= cpu_adr_end ? adr_wrap[19:1] : cpu_adr_o[19:1] + 1'b1;
 
   // wb_adr_o
   always @(posedge wb_clk_i)

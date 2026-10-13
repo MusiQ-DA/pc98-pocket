@@ -37,6 +37,7 @@ module zet_exec (
 
     output [15:0] wr_data,
     output [19:0] addr,
+    output        addr_end,    // addr is offset FFFFh of its segment
     output        we,
     output        m_io,
     output        byteop,
@@ -76,7 +77,7 @@ module zet_exec (
 
   // Module instances
   zet_alu alu( {c, a }, bus_b, aluout, t, func, alu_iflags, oflags,
-               alu_word, s, off, clk, dive);
+               alu_word, s, off, clk, dive, addr_end);
   zet_regfile regfile (
         a, b, c, cs, ip, {aluout[31:16], omemalu}, s, flags, wr_reg, wrfl,
                 wr_high, clk, rst, addr_a, addr_b, addr_c, addr_d, addr_s, iflags,

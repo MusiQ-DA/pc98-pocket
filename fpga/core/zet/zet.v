@@ -49,6 +49,7 @@ module zet (
   wire [15:0] cpu_dat_o;
   wire        cpu_block;
   wire [19:0] cpu_adr_o;
+  wire        cpu_adr_end;
 
   wire        cpu_byte_o;
   wire        cpu_mem_op;
@@ -69,6 +70,7 @@ module zet (
     .nmia (nmia),
 
     .cpu_adr_o  (cpu_adr_o),
+    .cpu_adr_end(cpu_adr_end),
     .iid_dat_i  (iid_dat_i),
     .cpu_dat_i  (cpu_dat_i),
     .cpu_dat_o  (cpu_dat_o),
@@ -90,6 +92,7 @@ module zet (
     .cpu_m_io   (cpu_m_io),
     .cpu_fetch  (~exec_st),
     .cpu_adr_o  (cpu_adr_o),
+    .cpu_adr_end(cpu_adr_end),
     .pc         (pc),
     .cpu_block  (cpu_block),
     .cpu_dat_i  (cpu_dat_i),

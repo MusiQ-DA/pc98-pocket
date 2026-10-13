@@ -17,13 +17,17 @@
  *  <http://www.gnu.org/licenses/>.
  */
 
-module zet_othop (x, y, seg, off, iflags, func, word_op, out, oflags);
+module zet_othop (x, y, seg, off, iflags, func, word_op, out, oflags, ea_end);
   // IO ports
   input [15:0] x, y, off, seg, iflags;
   input [2:0] func;
   input word_op;
   output [19:0] out;
   output [8:0] oflags;
+  // The effective address sits at offset FFFFh: an odd word there wraps
+  // its second byte to offset 0000h of the SAME segment on an 8086/V30
+  // (the BIU adds 1 to the offset, not to the linear address).
+  output ea_end;
 
   // Net declarations
   wire [15:0] deff, deff2, outf, clcm, setf, intf, strf;
@@ -36,6 +40,7 @@ module zet_othop (x, y, seg, off, iflags, func, word_op, out, oflags);
   assign out[19:16] = func ? dcmp2[19:16] : dcmp[19:16];
 
   // Assignments
+  assign ea_end = ((func ? deff2 : deff) == 16'hFFFF);
   assign dcmp  = (seg << 4) + deff;
   assign dcmp2 = (seg << 4) + deff2;
   assign deff  = x + y + off;
