@@ -472,10 +472,20 @@ module sdram_mp #(
                 // new word wins early, both beats present the same data and
                 // the guest sees every byte of a word fetch doubled (measured:
                 // queue filled FA FA 47 47 54 54, the CPU then wedged on an
-                // illegal LES). One NOP between the guest port's read beats
-                // moves every capture to the middle of its own window. Cost:
-                // one clock per extra word; ports B-D keep full-rate bursts.
-                end else if (!cur_we && (grant == GRANT_BITS'(0))) begin
+                // illegal LES). One NOP between read beats moves every
+                // capture to the middle of its own window. Cost: one clock
+                // per extra word.
+                //
+                // EVERY port's reads, not just the guest's. The display fetch
+                // ran full-rate and lost the same race on every beat: the
+                // line buffer took byte k+1 into slot k (the burst's last
+                // slot repeating byte 15), which is graphics drawn one byte
+                // -- eight dots -- left of the text plane. SuperDepth shows
+                // it as the sprite wrap-around it parks under its right text
+                // mask leaking into the last playfield column (dot capture,
+                // jtag_dotcap.tcl: dots 600-607 carried byte 76; the seabed
+                // pattern read np21w's x+8 everywhere except x=120-127).
+                end else if (!cur_we) begin
                     state <= S_RD_GAP;
                 end
             end
