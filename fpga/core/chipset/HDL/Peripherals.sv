@@ -674,7 +674,66 @@ module PERIPHERALS #(
     );
 
     assign  timer_interrupt = timer_counter_out[0];
-    assign  speaker_out     = spktone & spkdata;
+    // np21w sound/beepc.c beep_hzset: in the tone modes (control bits 3:2
+    // nonzero) a counter-1 reload below 0x80 -- above ~15.6 kHz on the
+    // 1.9968 MHz clock, and zero, which np21w does not read as 65536 --
+    // sets g_beep.hz = 0 and the beeper is silent. A real piezo cannot
+    // follow that either. Driven straight out of the PIT here, the square
+    // wave folds back off the 48 kHz mixer into an audible whine: what
+    // SuperDepth's note driver (D9xx-DBxx, divisors from a table divided
+    // per octave) produced on hardware. Counter 1's reload is snooped off
+    // the bus the way pit_setcount assembles it -- the RW field of the
+    // last control word picks LSB, MSB or LSB-then-MSB, and the control
+    // word restarts the pair.
+    logic        pit1_wr_n_q;
+    logic  [7:0] pit1_wdata;
+    logic  [1:0] pit1_wreg;         // the register the strobe addressed
+    logic  [1:0] pit1_rw;           // control word RW field for counter 1
+    logic  [1:0] pit1_mode32;       // control word bits 3:2
+    logic        pit1_msb_next;     // LSB/MSB pair: the MSB is next
+    logic [15:0] pit1_count;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            pit1_wr_n_q   <= 1'b1;
+            pit1_wdata    <= 8'h00;
+            pit1_wreg     <= 2'd0;
+            pit1_rw       <= 2'b11;
+            pit1_mode32   <= 2'b01;
+            pit1_msb_next <= 1'b0;
+            pit1_count    <= 16'h0000;
+        end else begin
+            pit1_wr_n_q <= io_write_n | timer_chip_select_n;
+            if (~timer_chip_select_n & ~io_write_n) begin
+                pit1_wdata <= internal_data_bus;
+                pit1_wreg  <= pit_reg_addr;
+            end
+            // The write lands at the trailing edge of the strobe.
+            if (~pit1_wr_n_q & (io_write_n | timer_chip_select_n)) begin
+                if (pit1_wreg == 2'd3) begin
+                    // SC = 01 selects counter 1; RW = 00 is a latch command
+                    // and leaves the mode alone.
+                    if (pit1_wdata[7:6] == 2'b01 && pit1_wdata[5:4] != 2'b00) begin
+                        pit1_rw       <= pit1_wdata[5:4];
+                        pit1_mode32   <= pit1_wdata[3:2];
+                        pit1_msb_next <= 1'b0;
+                    end
+                end else if (pit1_wreg == 2'd1) begin
+                    case (pit1_rw)
+                        2'b01:   pit1_count <= {8'h00, pit1_wdata};
+                        2'b10:   pit1_count <= {pit1_wdata, 8'h00};
+                        default: begin
+                            if (pit1_msb_next) pit1_count[15:8] <= pit1_wdata;
+                            else               pit1_count[7:0]  <= pit1_wdata;
+                            pit1_msb_next <= ~pit1_msb_next;
+                        end
+                    endcase
+                end
+            end
+        end
+    end
+    wire    pit1_audible = (pit1_mode32 == 2'b00) | (pit1_count[15:7] != 9'd0);
+
+    assign  speaker_out     = spktone & spkdata & pit1_audible;
 
 
     //
