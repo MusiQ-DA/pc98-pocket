@@ -9,13 +9,17 @@
 //     (spot values are np21w's sdl/kbtrans.c tables; A make 0x1C -> 0x1D and
 //     break -> 0x9D are the pair the task was stated in)
 //   - break handling: bit 7 set, through the plain F0 and the E0 F0 forms
-//   - the multi-byte sentinels: Pause (E1 ...) must yield ONE STOP make and
-//     leave the parser resynchronised; Print Screen (E0 12 E0 7C ...) must
+//   - the multi-byte sentinels: Pause (E1 ...) must yield ONE STOP press
+//     (make then its own break) and leave the parser resynchronised; Print Screen (E0 12 E0 7C ...) must
 //     yield ONE COPY make/break with the fake shifts swallowed
 //   - unmappable keys (F11/F12, Num/Scroll Lock) are silent and do not jam
 //     the parser, including as the code of an F0 break
 //   - back-to-back makes on consecutive cycles still deliver both events
 //     (the toggle strobe is what makes that survivable)
+//   - the PC-98 keyboard's repeat protocol: a repeated make of a held key
+//     goes out as break+make, shift-class keys (0x70+) do not repeat, and a
+//     break for a key not held is dropped -- the BIOS XORs every byte into
+//     its key matrix, so anything unbalanced leaves a key stuck down
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -155,11 +159,14 @@ module tb_pc98_kbd_ps2;
         end
     endtask
 
+    // A full keystroke: make then break, both expected.
     task automatic check(input logic [7:0] set2, input logic [7:0] pc98,
                          input string what);
         begin
             send(set2);
             expect_ev(1'b1, pc98, what);
+            send(8'hF0); send(set2);
+            expect_ev(1'b0, pc98 | 8'h80, {what, " up"});
         end
     endtask
 
@@ -207,9 +214,7 @@ module tb_pc98_kbd_ps2;
 
         // ---- modifiers as keys: shifts, ctrl, alt, caps --------------------
         check(8'h12, 8'h70, "left shift");
-        send(8'hF0); send(8'h12);   expect_ev(1'b0, 8'hF0, "left shift break");
         check(8'h59, 8'h7D, "right shift");
-        send(8'hF0); send(8'h59);   expect_ev(1'b0, 8'hFD, "right shift break");
         check(8'h14, 8'h74, "left ctrl -> CTRL");
         check(8'h11, 8'h51, "left alt -> NFER");
         check(8'h58, 8'h71, "caps lock");
@@ -237,6 +242,19 @@ module tb_pc98_kbd_ps2;
         send_ext(0, 8'h11);        expect_ev(1'b1, 8'h35, "right alt -> XFER");
         send_ext(0, 8'h4A);        expect_ev(1'b1, 8'h41, "keypad /");
         send_ext(0, 8'h5A);        expect_ev(1'b1, 8'h1C, "keypad enter -> RETURN");
+        // release everything still held, in the order pressed
+        send_ext(1, 8'h74);        expect_ev(1'b0, 8'hBC, "right up");
+        send_ext(1, 8'h6B);        expect_ev(1'b0, 8'hBB, "left up");
+        send_ext(1, 8'h72);        expect_ev(1'b0, 8'hBD, "down up");
+        send_ext(1, 8'h70);        expect_ev(1'b0, 8'hB8, "INS up");
+        send_ext(1, 8'h71);        expect_ev(1'b0, 8'hB9, "DEL up");
+        send_ext(1, 8'h6C);        expect_ev(1'b0, 8'hBE, "HOME/CLR up");
+        send_ext(1, 8'h69);        expect_ev(1'b0, 8'hBF, "HELP up");
+        send_ext(1, 8'h7D);        expect_ev(1'b0, 8'hB6, "ROLLUP up");
+        send_ext(1, 8'h7A);        expect_ev(1'b0, 8'hB7, "ROLLDOWN up");
+        send_ext(1, 8'h11);        expect_ev(1'b0, 8'hB5, "XFER up");
+        send_ext(1, 8'h4A);        expect_ev(1'b0, 8'hC1, "keypad / up");
+        send_ext(1, 8'h5A);        expect_ev(1'b0, 8'h9C, "keypad enter up");
 
         // ---- the numeric keypad (non-extended codes) ------------------------
         check(8'h6C, 8'h42, "kp 7");   check(8'h75, 8'h43, "kp 8");   check(8'h7D, 8'h44, "kp 9");
@@ -244,7 +262,6 @@ module tb_pc98_kbd_ps2;
         check(8'h69, 8'h4A, "kp 1");   check(8'h72, 8'h4B, "kp 2");   check(8'h7A, 8'h4C, "kp 3");
         check(8'h70, 8'h4E, "kp 0");   check(8'h71, 8'h50, "kp .");
         check(8'h7B, 8'h40, "kp -");   check(8'h7C, 8'h45, "kp *");   check(8'h79, 8'h49, "kp +");
-        send(8'hF0); send(8'h73);  expect_ev(1'b0, 8'hC7, "kp 5 break");
 
         // ---- function keys --------------------------------------------------
         check(8'h05, 8'h62, "F1");     check(8'h06, 8'h63, "F2");
@@ -259,17 +276,18 @@ module tb_pc98_kbd_ps2;
         send(8'h77);   // Num Lock
         send(8'h7E);   // Scroll Lock
         expect_quiet(10, "F11/F12/NumLock/ScrollLock silent");
-        send(8'h1C);   expect_ev(1'b1, 8'h1D, "parser alive after ignores");
+        check(8'h1C, 8'h1D, "parser alive after ignores");
         send(8'hF0); send(8'h78);   // F11 break: nothing, but must return to IDLE
-        send(8'h1C);   expect_ev(1'b1, 8'h1D, "parser alive after F0-ignore");
+        check(8'h1C, 8'h1D, "parser alive after F0-ignore");
 
         // ---- Pause: one STOP make out of the 8-byte sequence ----------------
         seq_buf[0]=8'hE1; seq_buf[1]=8'h14; seq_buf[2]=8'h77; seq_buf[3]=8'hE1;
         seq_buf[4]=8'hF0; seq_buf[5]=8'h14; seq_buf[6]=8'hF0; seq_buf[7]=8'h77;
         burst(8);
         expect_ev(1'b1, 8'h60, "Pause -> STOP make");
+        expect_ev(1'b0, 8'hE0, "Pause -> STOP break");
         expect_quiet(10, "Pause tail swallowed");
-        send(8'h1C);   expect_ev(1'b1, 8'h1D, "parser resynced after Pause");
+        check(8'h1C, 8'h1D, "parser resynced after Pause");
 
         // ---- Print Screen: COPY, fake shifts swallowed ----------------------
         seq_buf[0]=8'hE0; seq_buf[1]=8'h12; seq_buf[2]=8'hE0; seq_buf[3]=8'h7C;
@@ -287,6 +305,24 @@ module tb_pc98_kbd_ps2;
         burst(2);
         expect_ev(1'b1, 8'h1D, "burst: A");
         expect_ev(1'b1, 8'h2D, "burst: B");
+        send(8'hF0); send(8'h1C);  expect_ev(1'b0, 8'h9D, "burst: A up");
+        send(8'hF0); send(8'h32);  expect_ev(1'b0, 8'hAD, "burst: B up");
+
+        // ---- the PC-98 repeat protocol ----------------------------------------
+        send(8'h1C);               expect_ev(1'b1, 8'h1D, "repeat: A down");
+        send(8'h1C);               expect_ev(1'b0, 8'h9D, "repeat: A repeat = break");
+                                   expect_ev(1'b1, 8'h1D, "repeat: ... then make");
+        send(8'h1C);               expect_ev(1'b0, 8'h9D, "repeat: 2nd repeat break");
+                                   expect_ev(1'b1, 8'h1D, "repeat: 2nd repeat make");
+        send(8'hF0); send(8'h1C);  expect_ev(1'b0, 8'h9D, "repeat: A up");
+        send(8'hF0); send(8'h1C);  expect_quiet(40, "unbalanced break dropped");
+        send_ext(0, 8'h72);        expect_ev(1'b1, 8'h3D, "repeat: down");
+        send_ext(0, 8'h72);        expect_ev(1'b0, 8'hBD, "repeat: down repeat break");
+                                   expect_ev(1'b1, 8'h3D, "repeat: down repeat make");
+        send_ext(1, 8'h72);        expect_ev(1'b0, 8'hBD, "repeat: down up");
+        send(8'h12);               expect_ev(1'b1, 8'h70, "repeat: shift down");
+        send(8'h12);               expect_quiet(40, "shift does not repeat");
+        send(8'hF0); send(8'h12);  expect_ev(1'b0, 8'hF0, "repeat: shift up");
 
         // ---- typing what the +keys bench types: 3 then RETURN ----------------
         send(8'h26);               expect_ev(1'b1, 8'h03, "typed '3'");
@@ -306,7 +342,6 @@ module tb_pc98_kbd_ps2;
         check(8'h20, 8'h38, "VKB INS");
         check(8'h28, 8'h39, "VKB DEL");
         check(8'h2F, 8'h33, "VKB RO");
-        send(8'hF0); send(8'h08); expect_ev(1'b0, 8'hE0, "VKB STOP break");
 
         $display("\n  errors: %0d", errors);
         if (errors == 0) $display("  RESULT: PASS"); else $display("  RESULT: FAIL");
