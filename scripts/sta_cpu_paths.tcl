@@ -15,7 +15,12 @@ if {[catch {create_timing_netlist -model slow -speed 8 \
     puts "note: explicit corner rejected ($err); retrying with defaults"
     create_timing_netlist
 }
-read_sdc ap_core.sdc
+# The project's constraints: apf_constraints.sdc derives the PLL clocks and
+# pulls in core/core_constraints.sdc (clk_pico, the multicycles). Reading a
+# nonexistent ap_core.sdc left every report below unconstrained and made the
+# clk_pico reports fail outright.
+read_sdc apf/apf_constraints.sdc
+update_timing_netlist
 
 set cpuclk {ic|pll|altera_pll_i|general\[0\].gpll~PLL_OUTPUT_COUNTER|divclk}
 
@@ -45,5 +50,21 @@ report_timing -nworst 20 -setup -from_clock $cpuclk -to_clock {clk_pico} \
   -file sta_cpu_to_pico.txt
 report_timing -nworst 20 -setup -from_clock {clk_pico} -to_clock $cpuclk \
   -file sta_pico_to_cpu.txt
+
+# Hold on the softcore crossings: every recent build carries clk_pico hold
+# violations, and the softcore serves the SCSI disk the guest reads from.
+report_timing -nworst 30 -hold -to_clock {clk_pico} \
+  -detail full_path -file sta_pico_hold_in.txt
+report_timing -nworst 30 -hold -from_clock {clk_pico} \
+  -detail full_path -file sta_pico_hold_out.txt
+foreach f {sta_pico_hold_in.txt sta_pico_hold_out.txt} {
+    if {[file exists $f]} {
+        set fh [open $f]; set n 0
+        while {[gets $fh line] >= 0 && $n < 200} {
+            if {[regexp {^; (Slack|From Node|To Node|Launch Clock|Latch Clock) } $line]} { puts "$f: $line"; incr n }
+        }
+        close $fh
+    }
+}
 
 puts "STA_CPU_PATHS_DONE"
