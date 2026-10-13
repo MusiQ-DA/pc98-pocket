@@ -1195,6 +1195,14 @@ module core_top (
     // scripts/jtag_probe.cfg + jtag_probe_read.tcl drive USER1/USER0.
     // The magic word proves the protocol end-to-end before any value is trusted.
     logic [31:0] probe_data, probe_data_c;
+    // Dot capture (write slot 0x8C, reads 0x42-0x44): 32 presented dots of
+    // one raster line, sampled where pocket_video takes them. Declared here
+    // because the read mux below precedes the video wires.
+    logic [9:0]  dcap_h_c = 10'd0, dcap_v_c = 10'd0;
+    logic        dcap_tog_c = 1'b0;
+    logic [31:0] dcap_txt = 32'd0, dcap_nz = 32'd0;
+    logic [17:0] dcap_rgb = 18'd0;
+    logic        dcap_done = 1'b0;
     wire   [7:0] probe_addr;
     // The nuV30's architectural state, live -- was. These taps were the old
     // core's dbg pins; Zet has no equivalent so every one is tied to 0 now
@@ -1710,6 +1718,12 @@ module core_top (
             // disp_page, disp_on_c, fill_page, f_active}.
             8'h40:   probe_data_c = dbg_gvdisp[31:0];
             8'h41:   probe_data_c = dbg_gvdisp[63:32];
+            // 0x42-0x44: the dot capture armed by write slot 0x8C --
+            // per-dot text-pixel bits, per-dot non-black bits (bit i is
+            // dot h+i), and {done, rgb666 of dot h}.
+            8'h42:   probe_data_c = dcap_txt;
+            8'h43:   probe_data_c = dcap_nz;
+            8'h44:   probe_data_c = {dcap_done, 13'd0, dcap_rgb};
             // 0x35: BIOS-side milestones + the 0x43D write tally
             // {bios_branch[7:0], in42_count, last_42_rdata,
             //  w43d_10_count[3:0], w43d_12_count[3:0]}
@@ -2258,6 +2272,12 @@ module core_top (
         // every completed 0x36 read).
         if (probe_wr_pulse && probe_waddr_c == 7'h0b)
             dbg_tvram_cell <= probe_wdata_c[11:0];
+        // Slot 0x0c: arm the dot capture at {v[25:16], h[9:0]}.
+        if (probe_wr_pulse && probe_waddr_c == 7'h0c) begin
+            dcap_h_c   <= probe_wdata_c[9:0];
+            dcap_v_c   <= probe_wdata_c[25:16];
+            dcap_tog_c <= ~dcap_tog_c;
+        end
     end
 
     // JTAG-injected keystrokes ride the same event line the 8251 drains; a
@@ -3575,6 +3595,49 @@ module core_top (
     wire        VBlank;
     wire        VSync;
     wire [5:0]  r, g, b;
+
+    // ------------------------------------------------------ dot capture
+    //
+    // What actually leaves CHIPSET, dot by dot: whether the composite took
+    // the text pixel (vid_txt) and whether the colour is non-black. The
+    // raster position is rebuilt from the sync edges exactly as
+    // pocket_video's rb_h/rb_v are, so (h, v) are the coordinates the
+    // presented picture uses. The target crosses from clk_chipset as a
+    // toggle; h/v are quasi-static by then (the script waits between the
+    // arm and the read).
+    logic [2:0] dcap_sync = 3'd0;
+    logic [9:0] dcap_rh = 10'd0, dcap_rv = 10'd0;
+    logic       dcap_hs_d = 1'b0, dcap_vs_d = 1'b0;
+    logic       dcap_arm = 1'b0;
+    logic [5:0] dcap_i = 6'd0;
+    always_ff @(posedge clk_pix) begin
+        dcap_sync <= {dcap_sync[1:0], dcap_tog_c};
+        dcap_hs_d <= HSync;
+        dcap_vs_d <= VSync;
+        if (HSync & ~dcap_hs_d)          dcap_rh <= 10'd721;
+        else if (dcap_rh == 10'd847)     dcap_rh <= 10'd0;
+        else                             dcap_rh <= dcap_rh + 10'd1;
+        if (VSync & ~dcap_vs_d)          dcap_rv <= 10'd407;
+        else if (dcap_rh == 10'd847)
+            dcap_rv <= (dcap_rv == 10'd439) ? 10'd0 : dcap_rv + 10'd1;
+
+        if (dcap_sync[2] != dcap_sync[1]) begin
+            dcap_arm  <= 1'b1;
+            dcap_done <= 1'b0;
+            dcap_i    <= 6'd0;
+        end else if (dcap_arm && dcap_rv == dcap_v_c
+                     && (dcap_rh == dcap_h_c || dcap_i != 6'd0)) begin
+            dcap_txt[dcap_i[4:0]] <= vid_txt;
+            dcap_nz[dcap_i[4:0]]  <= |{r, g, b};
+            if (dcap_i == 6'd0) dcap_rgb <= {r, g, b};
+            if (dcap_i == 6'd31) begin
+                dcap_arm  <= 1'b0;
+                dcap_done <= 1'b1;
+                dcap_i    <= 6'd0;
+            end else
+                dcap_i <= dcap_i + 6'd1;
+        end
+    end
 
     // ------------------------------------------------------ hardware bands
     //
