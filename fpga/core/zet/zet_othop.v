@@ -41,10 +41,17 @@ module zet_othop (x, y, seg, off, iflags, func, word_op, out, oflags, ea_end);
 
   // Assignments
   assign ea_end = ((func ? deff2 : deff) == 16'hFFFF);
+  // Timing: this is the zet's critical path (opcode -> decode -> regfile
+  // read -> these adders -> m0 -> regfile write, ~1 ns over the 43 MHz
+  // period). deff2 used to be deff + 2, a fourth adder in series ahead of
+  // the segment add. off arrives with the instruction, long before x and y
+  // leave the register file, so off+2 is formed off the critical path and
+  // deff2 becomes the same three-input add as deff.
+  wire [15:0] off2 = off + 16'd2;
   assign dcmp  = (seg << 4) + deff;
   assign dcmp2 = (seg << 4) + deff2;
   assign deff  = x + y + off;
-  assign deff2 = x + y + off + 16'd2;
+  assign deff2 = x + y + off2;
   assign outf  = y;
   assign clcm  = y[2] ? (y[1] ? /* -1: clc */ {iflags[15:1], 1'b0} 
                          : /* 4: cld */ {iflags[15:11], 1'b0, iflags[9:0]})
