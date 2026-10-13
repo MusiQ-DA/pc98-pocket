@@ -32,7 +32,8 @@ module zet_alu (
     input  [15:0] off,
     input         clk,
     output        div_exc,
-    output        ea_end
+    output        ea_end,
+    output [15:0] ea_seg
   );
 
   // Net declarations
@@ -108,6 +109,7 @@ module zet_alu (
   // Only the two address forms (func 0: seg:off, 1: seg:off+2) put an
   // effective address on the bus.
   assign ea_end = (t == 3'd7) && (func[2:1] == 2'b00) && oth_end;
+  assign ea_seg = seg;
 
   zet_mux8_16 m0(t, {8'd0, y[7:0]}, add, cnv[15:0],
                  mul[15:0], log, arl, rot, oth[15:0], out[15:0]);

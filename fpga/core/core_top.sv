@@ -307,6 +307,9 @@ module core_top (
     //                   not reach): hits and idle prefetches are disabled,
     //                   so every fetch pays its own bus cycle
     logic        jtag_fwdis      = 1'b0;
+    //   [8] nowrap   -- A/B for the zet in-segment odd-word wrap: 1 puts an
+    //                   odd word at offset FFFFh back on linear+1
+    logic        jtag_nowrap     = 1'b0;
     logic [19:0] jtag_watch_addr = 20'hFFFFF;
     wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
                                               : cpu_speed_cfg;
@@ -318,6 +321,7 @@ module core_top (
     wire         jtag_pf_nofillm = 1'b0;
     wire         jtag_pf_nohit   = 1'b0;
     wire         jtag_fwdis      = 1'b0;
+    wire         jtag_nowrap     = 1'b0;
     wire  [19:0] jtag_watch_addr = 20'hFFFFF;
 `endif
 
@@ -2262,6 +2266,7 @@ module core_top (
             jtag_pf_nofillm <= probe_wdata_c[5];
             jtag_pf_nohit   <= probe_wdata_c[6];
             jtag_fwdis    <= probe_wdata_c[7];
+            jtag_nowrap   <= probe_wdata_c[8];
         end
         // Slot 0x0a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
         // every memory write landing on it is logged (CPU or DMA alike).
@@ -3477,6 +3482,7 @@ module core_top (
         .nmi       (1'b0),
         .nmia      (zwb_nmia),
         .fwdis     (jtag_fwdis),
+        .nowrap    (jtag_nowrap),
         .pc        (zet_pc),
         .dbg_fault (zet_fault),
         .dbg_opc   (zet_opc)

@@ -135,7 +135,7 @@ module tb_zet_286chk;
         .wb_tgc_o  (zwb_inta),
         .nmi       (nmi_r),
         .nmia      (zwb_nmia),
-        .fwdis     (1'b0),
+        .fwdis     (1'b0), .nowrap(1'b0),
         .pc        (zet_pc)
     );
 

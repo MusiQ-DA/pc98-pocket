@@ -158,7 +158,7 @@ module tb_mem_perf;
         .wb_tgc_o  (zwb_inta),
         .nmi       (1'b0),
         .nmia      (zwb_nmia),
-        .fwdis     (fwdis_r),
+        .fwdis     (fwdis_r), .nowrap(1'b0),
         .pc        (zet_pc),
         .dbg_fault (),
         .dbg_opc   ()

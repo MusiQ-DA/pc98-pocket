@@ -32,6 +32,7 @@ module zet_core (
     // interface to wishbone
     output [19:0] cpu_adr_o,
     output        cpu_adr_end,   // cpu_adr_o is offset FFFFh (odd word wraps)
+    output [15:0] cpu_adr_seg,   // the segment of cpu_adr_o (valid with cpu_adr_end)
     input  [15:0] iid_dat_i,
     input  [15:0] cpu_dat_i,
     output [15:0] cpu_dat_o,
@@ -68,6 +69,7 @@ module zet_core (
 
   wire [19:0] addr_exec;
   wire        addr_end_exec;
+  wire [15:0] addr_seg_exec;
   wire        byte_fetch;
   wire        byte_exec;
 
@@ -443,6 +445,7 @@ module zet_core (
     .wr_data (cpu_dat_o),
     .addr    (addr_exec),
     .addr_end(addr_end_exec),
+    .addr_seg(addr_seg_exec),
     .we      (cpu_we_o),
     .m_io    (cpu_m_io),
     .byteop  (byte_exec),
@@ -453,6 +456,7 @@ module zet_core (
   assign exec_st_o  = exec_st;
   assign cpu_adr_o  = exec_st ? addr_exec : pc;
   assign cpu_adr_end = exec_st & addr_end_exec;
+  assign cpu_adr_seg = addr_seg_exec;
   assign cpu_byte_o = exec_st ? byte_exec : byte_fetch;
   assign cpu_mem_op = ir[`MEM_OP];
 

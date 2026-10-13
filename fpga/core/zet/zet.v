@@ -39,6 +39,7 @@ module zet (
     input         nmi,
     output        nmia,
     input         fwdis,     // kill the instruction-fetch window
+    input         nowrap,    // A/B: odd word at offset FFFFh spills to linear+1 (old behaviour)
 
     output [19:0] pc,  // for debugging purposes
     output        dbg_fault,
@@ -50,6 +51,7 @@ module zet (
   wire        cpu_block;
   wire [19:0] cpu_adr_o;
   wire        cpu_adr_end;
+  wire [15:0] cpu_adr_seg;
 
   wire        cpu_byte_o;
   wire        cpu_mem_op;
@@ -71,6 +73,7 @@ module zet (
 
     .cpu_adr_o  (cpu_adr_o),
     .cpu_adr_end(cpu_adr_end),
+    .cpu_adr_seg(cpu_adr_seg),
     .iid_dat_i  (iid_dat_i),
     .cpu_dat_i  (cpu_dat_i),
     .cpu_dat_o  (cpu_dat_o),
@@ -92,7 +95,8 @@ module zet (
     .cpu_m_io   (cpu_m_io),
     .cpu_fetch  (~exec_st),
     .cpu_adr_o  (cpu_adr_o),
-    .cpu_adr_end(cpu_adr_end),
+    .cpu_adr_end(cpu_adr_end & ~nowrap),
+    .cpu_adr_seg(cpu_adr_seg),
     .pc         (pc),
     .cpu_block  (cpu_block),
     .cpu_dat_i  (cpu_dat_i),

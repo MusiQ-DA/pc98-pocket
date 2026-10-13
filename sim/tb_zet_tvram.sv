@@ -171,7 +171,7 @@ module tb_zet_tvram;
         .wb_tgc_o  (zwb_inta),
         .nmi       (1'b0),
         .nmia      (zwb_nmia),
-        .fwdis     (1'b0),
+        .fwdis     (1'b0), .nowrap(1'b0),
         .pc        (zet_pc),
         .dbg_fault (zet_fault),
         .dbg_opc   (zet_opc)
