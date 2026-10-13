@@ -17,7 +17,17 @@
  *  <http://www.gnu.org/licenses/>.
  */
 
-module zet_wb_master (
+module zet_wb_master #(
+    // The 2-word instruction-fetch window below is OFF by default. On
+    // hardware it served wrong instruction bytes: SuperDepth's GAME START
+    // drew sprites from garbage coordinates (hang) or divided by a zero it
+    // never computes (R6003) in ~8% of starts, 0/60 with the window killed
+    // (JTAG fwdis), while every bench -- SMC, string ops, IDIV under an
+    // interrupt storm -- passes with it on. Its gain is in the noise
+    // (tb_mem_perf: MOVSW is faster without it), so it stays compiled out
+    // until the hardware-only failure is understood.
+    parameter FETCH_WINDOW = 0
+  ) (
     input             cpu_byte_o,
     input             cpu_memop,
     input             cpu_m_io,
@@ -107,7 +117,8 @@ module zet_wb_master (
   // fwdis kills the window outright: no hit may serve and no idle
   // prefetch may fill, so every instruction-stream read pays its own
   // Wishbone cycle -- the bisect control for the stale-byte faults.
-  wire hit      = (cs == IDLE) & op & (hit_cur | hit_nxt) & ~fwdis;
+  wire fw_off   = fwdis | (FETCH_WINDOW == 0);
+  wire hit      = (cs == IDLE) & op & (hit_cur | hit_nxt) & ~fw_off;
   wire [15:0] hitw = hit_cur ? cur_dat : nxt_dat;
 
   // a fetch read at an even address that misses pulls the whole aligned
@@ -121,7 +132,7 @@ module zet_wb_master (
   // (branch landed, write flushed it) cur is re-seeded from pc's word so the
   // next fetch stream resumes ahead of itself
   wire pf_go = (cs == IDLE) & ~op & (~cur_v | ~nxt_v) & (idle_cnt >= 3'd1)
-             & ~fwdis;
+             & ~fw_off;
   wire [19:1] pf_targ = cur_v ? (cur_addr + 19'd1) : pc[19:1];
 
   // Behaviour
@@ -174,7 +185,7 @@ module zet_wb_master (
 
   // fetch window bookkeeping
   always @(posedge wb_clk_i)
-    if (wb_rst_i | fwdis) begin
+    if (wb_rst_i | fw_off) begin
       cur_v <= 1'b0;
       nxt_v <= 1'b0;
     end else if ((cs == IDLE) & op & cpu_we_o) begin
