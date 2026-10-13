@@ -30,28 +30,30 @@ module zet_othop (x, y, seg, off, iflags, func, word_op, out, oflags, ea_end);
   output ea_end;
 
   // Net declarations
-  wire [15:0] deff, deff2, outf, clcm, setf, intf, strf;
-  wire [19:0] dcmp, dcmp2; 
+  wire [15:0] deff, outf, clcm, setf, intf, strf;
+  wire [19:0] dcmp;
   wire dfi;
 
   // Module instantiations
-  zet_mux8_16 mux8_16 (func, dcmp[15:0], dcmp2[15:0], deff, outf, clcm, setf, 
+  zet_mux8_16 mux8_16 (func, dcmp[15:0], dcmp[15:0], deff, outf, clcm, setf,
                        intf, strf, out[15:0]);
-  assign out[19:16] = func ? dcmp2[19:16] : dcmp[19:16];
+  assign out[19:16] = dcmp[19:16];
 
   // Assignments
-  assign ea_end = ((func ? deff2 : deff) == 16'hFFFF);
+  assign ea_end = (deff == 16'hFFFF);
   // Timing: this is the zet's critical path (opcode -> decode -> regfile
   // read -> these adders -> m0 -> regfile write, ~1 ns over the 43 MHz
-  // period). deff2 used to be deff + 2, a fourth adder in series ahead of
-  // the segment add. off arrives with the instruction, long before x and y
-  // leave the register file, so off+2 is formed off the critical path and
-  // deff2 becomes the same three-input add as deff.
+  // period). It used to build two full chains -- deff = x+y+off and
+  // deff2 = deff+2, each with its own segment add -- and pick one in the
+  // output mux: a fourth adder in series and twice the area. off arrives
+  // with the instruction and func with the decode, both well before x and
+  // y leave the register file, so the +2 and the choice between off and
+  // off+2 happen off the critical path and ONE three-input add plus ONE
+  // segment add serve func 0 (seg:off), 1 (seg:off+2) and 2 (off, LEA).
   wire [15:0] off2 = off + 16'd2;
+  wire [15:0] offs = func[0] ? off2 : off;
+  assign deff  = x + y + offs;
   assign dcmp  = (seg << 4) + deff;
-  assign dcmp2 = (seg << 4) + deff2;
-  assign deff  = x + y + off;
-  assign deff2 = x + y + off2;
   assign outf  = y;
   assign clcm  = y[2] ? (y[1] ? /* -1: clc */ {iflags[15:1], 1'b0} 
                          : /* 4: cld */ {iflags[15:11], 1'b0, iflags[9:0]})
