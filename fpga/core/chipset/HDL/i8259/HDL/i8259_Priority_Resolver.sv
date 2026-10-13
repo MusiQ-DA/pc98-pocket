@@ -10,7 +10,7 @@ module i8259_Priority_Resolver (
     input   logic   [2:0]   priority_rotate,
     input   logic   [7:0]   interrupt_mask,
     input   logic   [7:0]   interrupt_special_mask,
-    input   logic           special_fully_nest_config,
+    input   logic   [7:0]   special_fully_nest_levels,
     input   logic   [7:0]   highest_level_in_service,
 
     // Inputs
@@ -50,7 +50,12 @@ module i8259_Priority_Resolver (
     always_comb begin
         rotated_in_service = rotate_right(masked_in_service, priority_rotate);
 
-        if (special_fully_nest_config == 1'b1)
+        // SFNM: a slave-carrying input in service does not lock out its own
+        // level, so the slave can raise a higher-priority request through
+        // it.  Every other level in service still blocks itself -- the
+        // master's IRQ0 handler that STIs before its EOI (SuperDepth's
+        // music driver) must not be re-entered by the next timer tick.
+        if ((highest_level_in_service & special_fully_nest_levels) != 8'h00)
             rotated_in_service = (rotated_in_service & ~rotated_highest_level_in_service)
                                 | {rotated_highest_level_in_service[6:0], 1'b0};
     end

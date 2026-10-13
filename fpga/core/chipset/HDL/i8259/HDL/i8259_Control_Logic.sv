@@ -35,6 +35,11 @@ module i8259_Control_Logic (
     // Registers to interrupt detecting logics
     output  logic           level_or_edge_toriggered_config,
     output  logic           special_fully_nest_config,
+    // The IR levels SFNM actually opens: a master's slave-carrying inputs
+    // (ICW3).  A slave, or a master's plain inputs, never re-enter at the
+    // level in service -- np21w io/pic.c pic_irq lets the master skip its
+    // ISR check only for the cascade bit (pi[0].icw[2]).
+    output  logic   [7:0]   special_fully_nest_levels,
 
     // Registers to Read logics
     output  logic           enable_read_register,
@@ -494,6 +499,10 @@ module i8259_Control_Logic (
 
     // Cascade port I/O
     assign cascade_io = cascade_slave;
+
+    assign special_fully_nest_levels =
+        (special_fully_nest_config & ~single_or_cascade_config & ~cascade_slave)
+            ? cascade_device_config : 8'h00;
 
     //
     // Cascade signals (slave)

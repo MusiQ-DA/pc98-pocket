@@ -84,6 +84,7 @@ module i8259 #(
     logic   [7:0]   control_logic_data;
     logic           level_or_edge_toriggered_config;
     logic           special_fully_nest_config;
+    logic   [7:0]   special_fully_nest_levels;
     logic           enable_read_register;
     logic           read_register_isr_or_irr;
     logic   [7:0]   interrupt;
@@ -127,6 +128,7 @@ module i8259 #(
         // Registers to interrupt detecting logics
         .level_or_edge_toriggered_config    (level_or_edge_toriggered_config),
         .special_fully_nest_config          (special_fully_nest_config),
+        .special_fully_nest_levels          (special_fully_nest_levels),
 
         // Registers to Read logics
         .enable_read_register               (enable_read_register),
@@ -180,7 +182,7 @@ module i8259 #(
         .priority_rotate                    (priority_rotate),
         .interrupt_mask                     (interrupt_mask),
         .interrupt_special_mask             (interrupt_special_mask),
-        .special_fully_nest_config          (special_fully_nest_config),
+        .special_fully_nest_levels          (special_fully_nest_levels),
         .highest_level_in_service           (highest_level_in_service),
 
         // Inputs
