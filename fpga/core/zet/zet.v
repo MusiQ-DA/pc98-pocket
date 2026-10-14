@@ -44,7 +44,8 @@ module zet (
     output [19:0] pc,  // for debugging purposes
     output        dbg_fault,
     output [7:0]  dbg_opc,
-    output [15:0] dbg_ds
+    output [15:0] dbg_ds,
+    output        dbg_exec   // 1: the bus op is an execute-phase access, not a fetch
   );
 
   // Net declarations
@@ -61,6 +62,7 @@ module zet (
   wire        cpu_we_o;
   wire [15:0] iid_dat_i;
   wire        exec_st;
+  assign dbg_exec = exec_st;
 
   // Module instantiations
   zet_core core (

@@ -944,6 +944,75 @@ module tb_mem_perf;
             marker(8'h8C);
         end
 
+        // ---- phase 0D: big-frame CALL/RET under an IRQ storm ---------------
+        // SuperDepth's main loop shape: a function with a 0x350-byte local
+        // frame RMW-walks two DS arrays off a [bp-0x34a] counter (an ODD
+        // stack cell), calls a leaf, and returns to its caller. On hardware
+        // that return came back as a foreign word (IP and DS = 0x2620) with
+        // the prefetch windows on and never with them off. Runs twice, at
+        // an even and an odd SP, with phase-0B's IRQ stub live. A wrong
+        // return diverges; a wrong AX lands on the EE trap.
+        begin
+            int lp13, f13, i13, g13, bad13;
+            int r_call13, r_jnz13, r_lp13, r_jl13, r_cg13, r_jd13, r_jb13;
+            marker(8'h0D);
+            for (int pass = 0; pass < 2; pass++) begin
+                emit(8'hBC); emitw(pass ? 16'h0EFF : 16'h0F00); // mov sp,..
+                emit(8'hFB);                                     // sti
+                emit(8'hB9); emitw(16'h0180);                    // mov cx,384
+                lp13 = prog_len;
+                emit(8'h51);                                     // push cx
+                emit(8'hE8); r_call13 = prog_len; emitw(16'h0000); // call f
+                emit(8'h59);                                     // pop cx
+                emit(8'h3D); emitw(16'h1234);                    // cmp ax,1234
+                emit(8'h75); r_jnz13 = prog_len; emit(8'h00);   // jnz bad
+                emit(8'hE2); r_lp13 = prog_len; emit(8'h00);    // loop lp
+                emit(8'hFA);                                     // cli
+                emit(8'hEB); r_jd13 = prog_len; emit(8'h00);    // jmp over
+                bad13 = prog_len;
+                emit(8'hB0); emit(8'hEE);                        // mov al,EE
+                emit(8'hBA); emitw(16'h88FE); emit(8'hEE);       // out 88FE,al
+                emit(8'hEB); emit(8'hFE);                        // jmp $
+                f13 = prog_len;                                  // f:
+                emit(8'h55); emit(8'h8B); emit(8'hEC);           // push bp; mov bp,sp
+                emit(8'h81); emit(8'hEC); emitw(16'h0350);       // sub sp,350
+                emit(8'h56); emit(8'h57);                        // push si; push di
+                emit(8'hC7); emit(8'h86); emitw(16'hFCB6); emitw(16'h0001); // mov [bp-34a],1
+                i13 = prog_len;
+                emit(8'h8B); emit(8'h9E); emitw(16'hFCB6);       // mov bx,[bp-34a]
+                emit(8'hD1); emit(8'hE3);                        // shl bx,1
+                emit(8'hA1); emitw(16'h3000);                    // mov ax,[3000]
+                emit(8'h01); emit(8'h87); emitw(16'h3010);       // add [bx+3010],ax
+                emit(8'hA1); emitw(16'h3002);                    // mov ax,[3002]
+                emit(8'h01); emit(8'h87); emitw(16'h3050);       // add [bx+3050],ax
+                emit(8'hFF); emit(8'h86); emitw(16'hFCB6);       // inc [bp-34a]
+                emit(8'h83); emit(8'hBE); emitw(16'hFCB6); emit(8'h07); // cmp [bp-34a],7
+                emit(8'h7C); r_jl13 = prog_len; emit(8'h00);    // jl i
+                emit(8'hE8); r_cg13 = prog_len; emitw(16'h0000); // call g
+                emit(8'h5F); emit(8'h5E);                        // pop di; pop si
+                emit(8'h8B); emit(8'hE5); emit(8'h5D);           // mov sp,bp; pop bp
+                emit(8'hB8); emitw(16'h1234);                    // mov ax,1234
+                emit(8'hC3);                                     // ret
+                g13 = prog_len;                                  // g:
+                emit(8'h55); emit(8'h8B); emit(8'hEC);           // push bp; mov bp,sp
+                emit(8'h56); emit(8'h57);                        // push si; push di
+                emit(8'h8B); emit(8'h46); emit(8'h02);           // mov ax,[bp+2]
+                emit(8'hA3); emitw(16'h3100);                    // mov [3100],ax
+                emit(8'h5F); emit(8'h5E); emit(8'h5D);           // pop di; pop si; pop bp
+                emit(8'hC3);                                     // ret
+                r_jb13 = prog_len;                               // (after the subs)
+                prog[r_call13] = 8'(f13 - (r_call13 + 2));
+                prog[r_call13+1] = 8'((f13 - (r_call13 + 2)) >> 8);
+                prog[r_cg13] = 8'(g13 - (r_cg13 + 2));
+                prog[r_cg13+1] = 8'((g13 - (r_cg13 + 2)) >> 8);
+                prog[r_jnz13] = 8'(bad13 - (r_jnz13 + 1));
+                prog[r_lp13]  = 8'(lp13  - (r_lp13 + 1));
+                prog[r_jl13]  = 8'(i13   - (r_jl13 + 1));
+                prog[r_jd13]  = 8'(r_jb13 - (r_jd13 + 1));
+            end
+            marker(8'h8D);
+        end
+
         // done: spin
         marker(8'hFF);
         emit(8'hEB); emit(8'hFE);           // JMP $
@@ -966,6 +1035,11 @@ module tb_mem_perf;
         sdr.u_part.poke(24'h0FFFF4, 16'h00F0);
         // phase-0A/0B mark cells: unwritten cells read X in the model
         for (int i = 20'h00700; i < 20'h00710; i++)
+            sdr.u_part.poke(24'(i), 16'h0000);
+        // phase-0D frame stack and arrays
+        for (int i = 20'h00A00; i < 20'h00F10; i++)
+            sdr.u_part.poke(24'(i), 16'h0000);
+        for (int i = 20'h03000; i < 20'h03110; i++)
             sdr.u_part.poke(24'(i), 16'h0000);
         // Phase-9 prime is emitted by the program initial (bad_land is
         // only known there); see the poke inside the emit block.
@@ -1433,6 +1507,7 @@ module tb_mem_perf;
         phase_name[8'h0A] = "F-bank remap kill";
         phase_name[8'h0B] = "IRQ storm x4096";
         phase_name[8'h0C] = "frame-iret x256";
+        phase_name[8'h0D] = "big-frame CALL/RET + IRQ";
         phase_name[8'hFF] = "done";
     end
     int phase_bytes [0:255];
@@ -1504,7 +1579,7 @@ module tb_mem_perf;
     // while phase 0B is current -- the guest's STI/CLI bracket it.
     reg [15:0] irq_gap = 16'd0;
     always @(posedge clk) begin
-        if (reset || cur_phase != 8'h0B) begin
+        if (reset || (cur_phase != 8'h0B && cur_phase != 8'h0D)) begin
             irq_req <= 1'b0;
             irq_gap <= 16'd0;
         end else if (zwb_inta) begin

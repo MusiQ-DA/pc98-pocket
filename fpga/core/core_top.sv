@@ -1384,6 +1384,22 @@ module core_top (
         ws_hit  <= (chipset_dbg7[31:0] != ws_last) && chipset_dbg7[31]
                 && chipset_dbg7[62];
     end
+    // Data ring: the last 15 execute-phase Wishbone transfers the Zet
+    // completed -- {we, sel, adr} and the word it took (or gave) -- frozen
+    // with pc_hist. Fetches are left out so a stack pop or a DS load is
+    // not pushed off by the code stream. Slots 0x01-0x0F {we,sel,adr},
+    // 0x81-0x8F {w, data}.
+    reg [36:0] drg [0:14];
+    reg  [3:0] drg_w = 4'd0;
+    reg        drg_ack_q = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        drg_ack_q <= zwb_ack;
+        if (zwb_ack && !drg_ack_q && zwb_cyc && zet_exec && !pc_hist_frozen) begin
+            drg[drg_w] <= {zwb_we, zwb_sel, zwb_adr,
+                           zwb_we ? zwb_dat_o : zwb_dat_i};
+            drg_w      <= (drg_w == 4'd14) ? 4'd0 : drg_w + 4'd1;
+        end
+    end
     always_ff @(posedge clk_chipset) begin
         if (reset || soft_reset_cpu || pc_rearm) begin
             pc_hist_frozen <= 1'b0;
@@ -1617,6 +1633,13 @@ module core_top (
             8'h16:   probe_data_c = v30_dbg_regs[31:0];     // gpr1:gpr0
             8'h17:   probe_data_c = {8'h00, retired_cnt};   // liveness
             8'h18:   probe_data_c = {12'h000, zet_pc};      // current bus cycle
+            8'h01,8'h02,8'h03,8'h04,8'h05,8'h06,8'h07,8'h08,
+            8'h09,8'h0a,8'h0b,8'h0c,8'h0d,8'h0e,8'h0f:
+                     probe_data_c = {10'h0, drg[probe_addr[3:0] - 4'd1][36:16]};
+            8'h81,8'h82,8'h83,8'h84,8'h85,8'h86,8'h87,8'h88,
+            8'h89,8'h8a,8'h8b,8'h8c,8'h8d,8'h8e,8'h8f:
+                     probe_data_c = {12'h0, drg_w,
+                                     drg[probe_addr[3:0] - 4'd1][15:0]};
             // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
             // never completes; 0x1a: the ready chain the CPU waits on.
             8'h19:   probe_data_c = {16'h0, chipset_dbg};
@@ -3374,6 +3397,7 @@ module core_top (
     wire        zwb_inta, zwb_nmia;
     wire [19:0] zet_pc;
     wire [15:0] zet_ds;
+    wire        zet_exec;
     wire        zet_fault;
     wire [7:0]  zet_opc;
 
@@ -3443,7 +3467,8 @@ module core_top (
         .pc        (zet_pc),
         .dbg_fault (zet_fault),
         .dbg_opc   (zet_opc),
-        .dbg_ds    (zet_ds)
+        .dbg_ds    (zet_ds),
+        .dbg_exec  (zet_exec)
     );
 
     // Debug: the last guest data-bus read / write byte addresses. Instruction
