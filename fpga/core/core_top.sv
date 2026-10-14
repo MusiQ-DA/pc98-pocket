@@ -1714,6 +1714,14 @@ module core_top (
             // 0x2F: zet_cpu_bridge's INTA witness -- {bad_n, last_bad,
             // cut_n (AEN rising mid-acknowledge), last_vec}.
             8'h2f:   probe_data_c = bridge_dbg_inta;
+            // 0xF1-0xF4: zet_cpu_bridge's stale-window witness (armed by
+            // the pf_nohit bit of write slot 0x09) -- F1 {bad_n, first
+            // addr}, F2 {would-serve, bus word}, F3 {checked_n, ube, win,
+            // lo, cnt}, F4 {age, last store addr} at the first mismatch.
+            8'hf1:   probe_data_c = bridge_dbg_pfwit[31:0];
+            8'hf2:   probe_data_c = bridge_dbg_pfwit[63:32];
+            8'hf3:   probe_data_c = bridge_dbg_pfwit[95:64];
+            8'hf4:   probe_data_c = bridge_dbg_pfwit[127:96];
             8'h2d:   probe_data_c = dbg_crt[31:0];
             8'h2e:   probe_data_c = dbg_crt[63:32];
             // 0x40/0x41: graphics display-fetch underrun telemetry.
@@ -3409,6 +3417,7 @@ module core_top (
     // is where they are consumed.
     wire [15:0] bridge_dbg;
     wire [31:0] bridge_dbg_inta;  // INTA witness, probe slot 0x2F
+    wire [127:0] bridge_dbg_pfwit; // stale-window witness, slots 0xF1-0xF4
 
     wire        zet_clk;
     wire [15:0] zwb_dat_i, zwb_dat_o;
@@ -3462,7 +3471,8 @@ module core_top (
         .pf_nohit          (jtag_pf_nohit),
         .bios_shadow_flag  (bios_shadow_flag),
         .dbg               (bridge_dbg),
-        .dbg_inta          (bridge_dbg_inta)
+        .dbg_inta          (bridge_dbg_inta),
+        .dbg_pfwit         (bridge_dbg_pfwit)
     );
 
     zet u_cpu (
