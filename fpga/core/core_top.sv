@@ -1092,6 +1092,11 @@ module core_top (
     // key_last keeps the last {make, code}; the probe's key slot reads them.
     logic [7:0] key_count = 8'h00;
     logic [7:0] key_last  = 8'h00;
+    // CPU writes into the BIOS key area 0x520-0x53F (key buffer pointers
+    // and the 0x52A key-state map), newest first: {12'h0, pc} high,
+    // {sel, 0, byte offset, 8'h0, wb data} low. Probe 0x01-0x08, count 0x09.
+    logic [63:0] kmap_log [0:3];
+    logic [7:0]  kmap_n = 8'd0;
 `endif
 
     wire [31:0] dbg_pico_w;    // pico-domain liveness for probe slot 0x2A
@@ -1714,6 +1719,21 @@ module core_top (
             // 0x2F: zet_cpu_bridge's INTA witness -- {bad_n, last_bad,
             // cut_n (AEN rising mid-acknowledge), last_vec}.
             8'h2f:   probe_data_c = bridge_dbg_inta;
+            // 0xF5/0xF6/0xF8: the keyboard 8251's read log -- the last
+            // eight bytes the guest took from 0x41 (newest in F5[7:0]),
+            // then F8 {rd_n, cap_n, drop_n, 0}.
+            8'hf5:   probe_data_c = dbg_kbd[31:0];
+            8'hf6:   probe_data_c = dbg_kbd[63:32];
+            8'hf8:   probe_data_c = dbg_kbd[95:64];
+            8'h01:   probe_data_c = kmap_log[0][31:0];
+            8'h02:   probe_data_c = kmap_log[0][63:32];
+            8'h03:   probe_data_c = kmap_log[1][31:0];
+            8'h04:   probe_data_c = kmap_log[1][63:32];
+            8'h05:   probe_data_c = kmap_log[2][31:0];
+            8'h06:   probe_data_c = kmap_log[2][63:32];
+            8'h07:   probe_data_c = kmap_log[3][31:0];
+            8'h08:   probe_data_c = kmap_log[3][63:32];
+            8'h09:   probe_data_c = {24'h0, kmap_n};
             // 0xF1-0xF4: zet_cpu_bridge's stale-window witness (armed by
             // the pf_nohit bit of write slot 0x09) -- F1 {bad_n, first
             // addr}, F2 {would-serve, bus word}, F3 {checked_n, ube, win,
@@ -2998,6 +3018,7 @@ module core_top (
                              // {disp_on,page,analog,5MHz,dbl,LR,AL,PITCH} lo
     wire [63:0]  dbg_gvdisp;   // graphics display fetch: {line,fill FSM} hi,
                              // {skip,late,max_fill} lo
+    wire [95:0]  dbg_kbd;      // kbd 8251 read log, probe 0xF5/0xF6/0xF8
     wire [63:0]  dbg_crt;      // CRT IRQ2: {fire,isr,arm,lost,cancel} hi,
                              // {IMR,ISR,IRR,spur,pend,armed,int} lo
 
@@ -3299,6 +3320,7 @@ module core_top (
         .dbg_gdc_s                          (dbg_gdc_s),
         .dbg_gvdisp                         (dbg_gvdisp),
         .dbg_crt                            (dbg_crt),
+        .dbg_kbd                            (dbg_kbd),
         .wait_count_clk_en                  (cpu_ce_negedge),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),
@@ -3425,6 +3447,23 @@ module core_top (
     wire        zwb_we, zwb_tga, zwb_stb, zwb_cyc, zwb_ack;
     wire [ 1:0] zwb_sel;
     wire        zwb_inta, zwb_nmia;
+`ifdef PC98_JTAG
+    // Key-area write log (see kmap_log): one entry per acked CPU write.
+    logic zwb_ack_q = 1'b0;
+    always @(posedge clk_chipset) begin
+        zwb_ack_q <= zwb_ack;
+        if (zwb_ack && !zwb_ack_q && zwb_stb && zwb_we && !zwb_tga
+            && (zwb_adr[19:5] == 15'h0029)) begin
+            kmap_log[3] <= kmap_log[2];
+            kmap_log[2] <= kmap_log[1];
+            kmap_log[1] <= kmap_log[0];
+            kmap_log[0] <= {12'h0, pc_now,
+                            zwb_sel, 1'b0, zwb_adr[4:1], 1'b0, 8'h00,
+                            zwb_dat_o};
+            if (kmap_n != 8'hFF) kmap_n <= kmap_n + 8'd1;
+        end
+    end
+`endif
     wire [19:0] zet_pc;
     wire        zet_fault;
     wire [7:0]  zet_opc;

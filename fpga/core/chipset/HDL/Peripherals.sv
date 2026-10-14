@@ -210,6 +210,8 @@ module PERIPHERALS #(
         // PIC's {IMR,ISR,IRR}, the 0x64 arm and pending flags, and event
         // counters -- see the dbg_crt assign by crt_armed.
         output  wire    [63:0]  dbg_crt,
+        // JTAG probe: the keyboard 8251's read log (pc98_kbd8251 dbg).
+        output  wire    [95:0]  dbg_kbd,
         input   logic           fdd_dma_ack,
         input   logic           terminal_count,
         // Others
@@ -1366,7 +1368,8 @@ module PERIPHERALS #(
         .key_byte           (pc98_key_byte),
         .read_select        (kbd8251_read_select),
         .read_data          (kbd8251_read_data),
-        .irq                (kbd8251_irq)
+        .irq                (kbd8251_irq),
+        .dbg                (dbg_kbd)
     );
 
     // ------------------------------------------------- bus mouse
