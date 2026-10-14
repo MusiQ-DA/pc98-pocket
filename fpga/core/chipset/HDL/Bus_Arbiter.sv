@@ -336,10 +336,11 @@ module BUS_ARBITER (
     // starts without it, or sees the address move under it, writes the
     // fill byte somewhere else -- the floppy fill's lost byte at turbo.
     //   mis_start -- strobes that began with dma_own low
-    //   mis_mid   -- strobes whose address or ownership changed mid-pulse
+    //   mis_mid   -- strobes that began under an already-low merged strobe
     // rec_* keep {dma_own, dma_enable_n, address_enable_n, dma_wait,
     // 4'h0, ~dma_acknowledge_n, address} of the latest of each.
     logic           prev_dmw;
+    logic           prev_ab_mw_ovl;
     logic           mid_hit;
     logic   [19:0]  dmw_addr;
     logic   [15:0]  mis_start, mis_mid;
@@ -356,6 +357,7 @@ module BUS_ARBITER (
             mis_mid   <= 16'd0;
         end else begin
             prev_dmw <= dmw;
+            prev_ab_mw_ovl <= ab_memory_write_n;
             if (dmw & ~prev_dmw) begin
                 dmw_addr <= address;
                 mid_hit  <= 1'b0;
@@ -363,11 +365,16 @@ module BUS_ARBITER (
                     mis_start <= mis_start + 16'd1;
                     rec_start <= mis_now;
                 end
-            end else if (dmw & prev_dmw & ~mid_hit
-                         & (~dma_own | (address != dmw_addr))) begin
-                mid_hit <= 1'b1;
+            end
+            // Overlap: the merged strobe is already low when the DMAC's
+            // starts -- no falling edge for RAM.sv or the watch to see, the
+            // fill byte rides an older write's command. rec_mid keeps the
+            // 8288 side's live state and the CPU address.
+            if (dmw & ~prev_dmw & ~prev_ab_mw_ovl) begin
                 mis_mid <= mis_mid + 16'd1;
-                rec_mid <= mis_now;
+                rec_mid <= {~bc_memory_write_n, bc_memory_enable,
+                            ~address_enable_n, dma_own, 8'h0,
+                            cpu_address};
             end
         end
     end
