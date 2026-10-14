@@ -151,9 +151,7 @@ module zet_cpu_bridge (
     output wire  [15:0] dbg,
     // INTA witness for the probe: {bad_n, last_bad, cut_n, last_vec} --
     // see the counters by `assign dbg =`.
-    output wire  [31:0] dbg_inta,
-    // Stale-window witness for the probe (0xF1-0xF4) -- see `wit_` below.
-    output wire [127:0] dbg_pfwit
+    output wire  [31:0] dbg_inta
 );
 
     localparam [2:0] BS_INTA = 3'b000;
@@ -1634,7 +1632,6 @@ module zet_cpu_bridge (
     end
     assign dbg_inta = {inta_bad_n, inta_last_bad, inta_cut_n, inta_last_vec};
 
-    assign dbg_pfwit = 128'd0;   // stale-window witness retired: 0 mismatches
 
     assign dbg = {zet_halt, inta_active, req_busy, wb_ack_i,
                   bstate, byte_idx, t_cnt, gap_cnt, cur_bs};

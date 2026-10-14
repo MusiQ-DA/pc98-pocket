@@ -1730,10 +1730,6 @@ module core_top (
             8'h03:   probe_data_c = kmap_log[1][31:0];
             8'h04:   probe_data_c = kmap_log[1][63:32];
             8'h09:   probe_data_c = {24'h0, kmap_n};
-            // 0xF1-0xF4: zet_cpu_bridge's stale-window witness (armed by
-            // the pf_nohit bit of write slot 0x09) -- F1 {bad_n, first
-            // addr}, F2 {would-serve, bus word}, F3 {checked_n, ube, win,
-            // lo, cnt}, F4 {age, last store addr} at the first mismatch.
             8'h2d:   probe_data_c = dbg_crt[31:0];
             8'h2e:   probe_data_c = dbg_crt[63:32];
             // 0x40/0x41: graphics display-fetch underrun telemetry.
@@ -3431,7 +3427,6 @@ module core_top (
     // is where they are consumed.
     wire [15:0] bridge_dbg;
     wire [31:0] bridge_dbg_inta;  // INTA witness, probe slot 0x2F
-    wire [127:0] bridge_dbg_pfwit; // stale-window witness, slots 0xF1-0xF4
 
     wire        zet_clk;
     wire [15:0] zwb_dat_i, zwb_dat_o;
@@ -3500,8 +3495,7 @@ module core_top (
         .pf_nohit          (jtag_pf_nohit),
         .bios_shadow_flag  (bios_shadow_flag),
         .dbg               (bridge_dbg),
-        .dbg_inta          (bridge_dbg_inta),
-        .dbg_pfwit         (bridge_dbg_pfwit)
+        .dbg_inta          (bridge_dbg_inta)
     );
 
     zet u_cpu (
