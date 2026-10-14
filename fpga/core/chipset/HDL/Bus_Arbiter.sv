@@ -331,7 +331,47 @@ module BUS_ARBITER (
     assign dbg_dma = {break_cnt, grant_cnt, ack_wr_cnt, 96'd0};
     assign dbg_dma3 = {watch_cnt, 24'h0, watch_log[2],
                        watch_log[1], watch_log[0]};
-    assign dbg_dma4 = 128'd0;
+    // Misdirect witness: a uPD71071 memory-write strobe only lands on its
+    // own address while the DMA side owns the mux (dma_own). One that
+    // starts without it, or sees the address move under it, writes the
+    // fill byte somewhere else -- the floppy fill's lost byte at turbo.
+    //   mis_start -- strobes that began with dma_own low
+    //   mis_mid   -- strobes whose address or ownership changed mid-pulse
+    // rec_* keep {dma_own, dma_enable_n, address_enable_n, dma_wait,
+    // 4'h0, ~dma_acknowledge_n, address} of the latest of each.
+    logic           prev_dmw;
+    logic           mid_hit;
+    logic   [19:0]  dmw_addr;
+    logic   [15:0]  mis_start, mis_mid;
+    logic   [31:0]  rec_start, rec_mid;
+    wire            dmw = ~dma_memory_write_n;
+    wire    [31:0]  mis_now = {dma_own, dma_enable_n, address_enable_n,
+                               dma_wait, 4'h0, ~dma_acknowledge_n,
+                               address};
+    always_ff @(posedge clock) begin
+        if (reset) begin
+            prev_dmw  <= 1'b0;
+            mid_hit   <= 1'b0;
+            mis_start <= 16'd0;
+            mis_mid   <= 16'd0;
+        end else begin
+            prev_dmw <= dmw;
+            if (dmw & ~prev_dmw) begin
+                dmw_addr <= address;
+                mid_hit  <= 1'b0;
+                if (~dma_own) begin
+                    mis_start <= mis_start + 16'd1;
+                    rec_start <= mis_now;
+                end
+            end else if (dmw & prev_dmw & ~mid_hit
+                         & (~dma_own | (address != dmw_addr))) begin
+                mid_hit <= 1'b1;
+                mis_mid <= mis_mid + 16'd1;
+                rec_mid <= mis_now;
+            end
+        end
+    end
+    assign dbg_dma4 = {12'h0, dmw_addr, rec_mid, rec_start, mis_mid, mis_start};
 
 
     //
