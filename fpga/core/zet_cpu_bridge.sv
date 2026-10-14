@@ -1634,72 +1634,7 @@ module zet_cpu_bridge (
     end
     assign dbg_inta = {inta_bad_n, inta_last_bad, inta_cut_n, inta_last_vec};
 
-    // Stale-window witness. With pf_nohit up, a read the windows WOULD
-    // have answered rides the bus instead; this latches the bytes the hit
-    // would have served and compares them with what the bus brought back.
-    // A mismatch is a window holding bytes memory no longer has -- the
-    // engine's invalidation missed a store -- caught without the guest
-    // ever consuming it. The first mismatch freezes its operands; the
-    // last store pushed before it (and its age) says which write slipped.
-    wire        wit_would = pf_hit && bus_ours && (bstate == B_IDLE)
-                         && !wrq_ovl && !bank_chg;
-    reg         wit_pend = 1'b0;
-    reg  [19:0] wit_addr = 20'h0;
-    reg         wit_ube  = 1'b0;
-    reg  [15:0] wit_word = 16'h0;
-    reg         wit_w    = 1'b0;
-    reg  [4:0]  wit_lo   = 5'd0;
-    reg  [5:0]  wit_cnt  = 6'd0;
-    reg  [15:0] wit_n    = 16'd0;
-    reg  [7:0]  wit_bad_n = 8'd0;
-    reg  [19:0] wit_f_addr = 20'h0;
-    reg  [15:0] wit_f_srv  = 16'h0, wit_f_real = 16'h0;
-    reg         wit_f_ube  = 1'b0, wit_f_w = 1'b0;
-    reg  [4:0]  wit_f_lo   = 5'd0;
-    reg  [5:0]  wit_f_cnt  = 6'd0;
-    reg  [19:0] wit_lw_addr = 20'h0, wit_f_lw = 20'h0;
-    reg  [11:0] wit_lw_age  = 12'hFFF, wit_f_age = 12'h0;
-    always @(posedge clk) begin
-        if (wrq_push || arm_wr) begin
-            wit_lw_addr <= srv_addr;
-            wit_lw_age  <= 12'd0;
-        end else if (wit_lw_age != 12'hFFF)
-            wit_lw_age  <= wit_lw_age + 12'd1;
-        if (reset) begin
-            wit_pend <= 1'b0;
-        end else if (pf_nohit && arm_rd_ok && wit_would) begin
-            wit_pend <= 1'b1;
-            wit_addr <= srv_addr;
-            wit_ube  <= srv_ube;
-            wit_word <= pf_hit_word;
-            wit_w    <= pf_hw;
-            wit_lo   <= pf_hw ? pf_lo1  : pf_lo0;
-            wit_cnt  <= pf_hw ? pf_cnt1 : pf_cnt0;
-        end else if (wit_pend && biu_done_r) begin
-            wit_pend <= 1'b0;
-            wit_n    <= wit_n + 16'd1;
-            if (wit_ube ? (rd_word[7:0] != wit_word[7:0])
-                        : (rd_word != wit_word)) begin
-                if (wit_bad_n != 8'hFF) wit_bad_n <= wit_bad_n + 8'd1;
-                if (wit_bad_n == 8'd0) begin
-                    wit_f_addr <= wit_addr;
-                    wit_f_srv  <= wit_word;
-                    wit_f_real <= rd_word;
-                    wit_f_ube  <= wit_ube;
-                    wit_f_w    <= wit_w;
-                    wit_f_lo   <= wit_lo;
-                    wit_f_cnt  <= wit_cnt;
-                    wit_f_lw   <= wit_lw_addr;
-                    wit_f_age  <= wit_lw_age;
-                end
-            end
-        end
-    end
-    assign dbg_pfwit = {wit_f_age, wit_f_lw,                              // F4
-                        wit_n, wit_f_ube, wit_f_w, wit_f_lo, wit_f_cnt,
-                        3'b000,                                           // F3
-                        wit_f_srv, wit_f_real,                            // F2
-                        wit_bad_n, 4'h0, wit_f_addr};                     // F1
+    assign dbg_pfwit = 128'd0;   // stale-window witness retired: 0 mismatches
 
     assign dbg = {zet_halt, inta_active, req_busy, wb_ack_i,
                   bstate, byte_idx, t_cnt, gap_cnt, cur_bs};

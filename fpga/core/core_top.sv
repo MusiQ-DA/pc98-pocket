@@ -1094,8 +1094,8 @@ module core_top (
     logic [7:0] key_last  = 8'h00;
     // CPU writes into the BIOS key area 0x520-0x53F (key buffer pointers
     // and the 0x52A key-state map), newest first: {12'h0, pc} high,
-    // {sel, 0, byte offset, 8'h0, wb data} low. Probe 0x01-0x08, count 0x09.
-    logic [63:0] kmap_log [0:3];
+    // {sel, 0, byte offset, 8'h0, wb data} low. Probe 0x01-0x04, count 0x09.
+    logic [63:0] kmap_log [0:1];
     logic [7:0]  kmap_n = 8'd0;
 `endif
 
@@ -1729,19 +1729,11 @@ module core_top (
             8'h02:   probe_data_c = kmap_log[0][63:32];
             8'h03:   probe_data_c = kmap_log[1][31:0];
             8'h04:   probe_data_c = kmap_log[1][63:32];
-            8'h05:   probe_data_c = kmap_log[2][31:0];
-            8'h06:   probe_data_c = kmap_log[2][63:32];
-            8'h07:   probe_data_c = kmap_log[3][31:0];
-            8'h08:   probe_data_c = kmap_log[3][63:32];
             8'h09:   probe_data_c = {24'h0, kmap_n};
             // 0xF1-0xF4: zet_cpu_bridge's stale-window witness (armed by
             // the pf_nohit bit of write slot 0x09) -- F1 {bad_n, first
             // addr}, F2 {would-serve, bus word}, F3 {checked_n, ube, win,
             // lo, cnt}, F4 {age, last store addr} at the first mismatch.
-            8'hf1:   probe_data_c = bridge_dbg_pfwit[31:0];
-            8'hf2:   probe_data_c = bridge_dbg_pfwit[63:32];
-            8'hf3:   probe_data_c = bridge_dbg_pfwit[95:64];
-            8'hf4:   probe_data_c = bridge_dbg_pfwit[127:96];
             8'h2d:   probe_data_c = dbg_crt[31:0];
             8'h2e:   probe_data_c = dbg_crt[63:32];
             // 0x40/0x41: graphics display-fetch underrun telemetry.
@@ -3454,8 +3446,6 @@ module core_top (
         zwb_ack_q <= zwb_ack;
         if (zwb_ack && !zwb_ack_q && zwb_stb && zwb_we && !zwb_tga
             && (zwb_adr[19:5] == 15'h0029)) begin
-            kmap_log[3] <= kmap_log[2];
-            kmap_log[2] <= kmap_log[1];
             kmap_log[1] <= kmap_log[0];
             kmap_log[0] <= {12'h0, pc_now,
                             zwb_sel, 1'b0, zwb_adr[4:1], 1'b0, 8'h00,
