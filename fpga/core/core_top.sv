@@ -1370,22 +1370,19 @@ module core_top (
     wire       pc_rearm_c = probe_wr_pulse && (probe_waddr_c == 7'h05);
     reg        pc_rearm = 1'b0;
     always_ff @(posedge clk_chipset) pc_rearm <= pc_rearm_c;
-    // Stray-store freeze: once a DMA transfer has written the probe watch
-    // address (slot 0x0a), the next guest-CPU store to it freezes this
-    // ring -- its 32 fetches name the code that overwrote freshly loaded
-    // bytes. SuperDepth's turbo START failure lands the same block of bytes
-    // on the same spot of its own code every time.
-    reg        ws_armed = 1'b0;
-    reg        ws_wr_q  = 1'b0;
-    wire       ws_wr    = ~chipset_memory_write_n;
-    wire       ws_at    = (chipset_address == jtag_watch_addr);
-    wire       ws_hit   = ws_wr && !ws_wr_q && ws_at && !chipset_aen && ws_armed;
+    // Stray-store freeze, keyed on the arbiter's write-watch log (probe
+    // slot 0x0a, read back at 0xE1-0xE4): when its newest entry turns into
+    // a CPU store landing on top of a DMA write, the ring freezes -- its 32
+    // fetches name the code that overwrote freshly loaded bytes. The log
+    // sees the arbiter's own bus, which a DMA cycle drives and
+    // chipset_address does not. SuperDepth's turbo START failure lands a
+    // CPU store of garbage on the same spot of its own code every time.
+    reg [31:0] ws_last = 32'd0;
+    reg        ws_hit  = 1'b0;
     always_ff @(posedge clk_chipset) begin
-        ws_wr_q <= ws_wr;
-        if (pc_rearm)
-            ws_armed <= 1'b0;
-        else if (ws_wr && !ws_wr_q && ws_at && chipset_aen)
-            ws_armed <= 1'b1;
+        ws_last <= chipset_dbg7[31:0];
+        ws_hit  <= (chipset_dbg7[31:0] != ws_last) && chipset_dbg7[31]
+                && chipset_dbg7[62];
     end
     always_ff @(posedge clk_chipset) begin
         if (reset || soft_reset_cpu || pc_rearm) begin
