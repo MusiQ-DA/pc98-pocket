@@ -1370,6 +1370,23 @@ module core_top (
     wire       pc_rearm_c = probe_wr_pulse && (probe_waddr_c == 7'h05);
     reg        pc_rearm = 1'b0;
     always_ff @(posedge clk_chipset) pc_rearm <= pc_rearm_c;
+    // Stray-store freeze: once a DMA transfer has written the probe watch
+    // address (slot 0x0a), the next guest-CPU store to it freezes this
+    // ring -- its 32 fetches name the code that overwrote freshly loaded
+    // bytes. SuperDepth's turbo START failure lands the same block of bytes
+    // on the same spot of its own code every time.
+    reg        ws_armed = 1'b0;
+    reg        ws_wr_q  = 1'b0;
+    wire       ws_wr    = ~chipset_memory_write_n;
+    wire       ws_at    = (chipset_address == jtag_watch_addr);
+    wire       ws_hit   = ws_wr && !ws_wr_q && ws_at && !chipset_aen && ws_armed;
+    always_ff @(posedge clk_chipset) begin
+        ws_wr_q <= ws_wr;
+        if (pc_rearm)
+            ws_armed <= 1'b0;
+        else if (ws_wr && !ws_wr_q && ws_at && chipset_aen)
+            ws_armed <= 1'b1;
+    end
     always_ff @(posedge clk_chipset) begin
         if (reset || soft_reset_cpu || pc_rearm) begin
             pc_hist_frozen <= 1'b0;
@@ -1387,6 +1404,7 @@ module core_top (
                 end
             end
             if (f0_port_write || pc_in_errhalt || zet_fault || w43d_10 ||
+                ws_hit ||
                 (trig_hit && trig_freeze && !trig_delay))
                 pc_hist_frozen <= 1'b1;
             if (trig_hit && trig_freeze && trig_delay)
