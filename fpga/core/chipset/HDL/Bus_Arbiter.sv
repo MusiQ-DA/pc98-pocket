@@ -189,10 +189,40 @@ module BUS_ARBITER (
     logic           dma_memory_read_n;
     logic           dma_memory_write_n;
 
+    // The DMAC's own clock. On the PC-98 the 71071 does not speed up with
+    // the CPU, and here it cannot: past the 10 MHz step its transfer
+    // cycles outrun the memory path -- a floppy fill at 19.7/21.5 MHz with
+    // the display fetch running skipped single bytes outright (no write
+    // ever reached the bus; the address and the FDC moved on), which is
+    // SuperDepth's lost directory entries. 92/201 of the chipset clock is
+    // the 9.83 MHz step's edge rate, held whatever the CPU runs at.
+    logic   [8:0]   dce_acc;
+    logic           dce_pin;
+    logic           dma_ce_posedge, dma_ce_negedge;
+    wire    [9:0]   dce_sum = {1'b0, dce_acc} + 10'd92;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            dce_acc        <= 9'd0;
+            dce_pin        <= 1'b0;
+            dma_ce_posedge <= 1'b0;
+            dma_ce_negedge <= 1'b0;
+        end else begin
+            dma_ce_posedge <= 1'b0;
+            dma_ce_negedge <= 1'b0;
+            if (dce_sum >= 10'd201) begin
+                dce_acc <= dce_sum[8:0] - 9'd201;
+                dce_pin <= ~dce_pin;
+                if (dce_pin) dma_ce_negedge <= 1'b1;
+                else         dma_ce_posedge <= 1'b1;
+            end else
+                dce_acc <= dce_sum[8:0];
+        end
+    end
+
     upd71071 u_upd71071 (
         .clock                              (clock),
-        .cpu_ce_posedge                     (cpu_ce_posedge),
-        .cpu_ce_negedge                     (cpu_ce_negedge),
+        .cpu_ce_posedge                     (dma_ce_posedge),
+        .cpu_ce_negedge                     (dma_ce_negedge),
         .reset                              (reset),
         .chip_select_n                      (dma_chip_select_n),
         .ready                              (dma_ready),
