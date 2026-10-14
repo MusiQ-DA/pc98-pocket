@@ -1437,49 +1437,6 @@ module core_top (
     wire       trig_hit  = trig_en && (pc_now == trig_addr);
     wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
 
-    // Stray-store log over a 2 KB window at the probe watch address (slot
-    // 0x0a): once a DMA transfer has written into the window, every later
-    // guest-CPU write into it is recorded -- fetch cursor, address, data --
-    // newest four kept. A freshly DMA-filled DOS buffer has no business
-    // being stored to by the CPU before it is consumed; SuperDepth at turbo
-    // finds directory entries zeroed in exactly such a buffer.
-    reg  [1:0] wl_wr_q   = 2'b00;
-    reg        wl_armed  = 1'b0;
-    reg  [7:0] wl_cnt    = 8'h00;
-    reg  [7:0] wl_dma_cnt = 8'h00;
-    reg [19:0] wl_pc  [0:3];
-    reg [19:0] wl_ad  [0:3];
-    reg [15:0] wl_d   [0:3];
-    reg  [3:0] wl_w      = 4'h0;
-    wire       wl_mwr = ~chipset_memory_write_n;
-    wire [19:0] wl_off = chipset_address - jtag_watch_addr;
-    wire       wl_in  = (wl_off < 20'h00800);
-    always_ff @(posedge clk_chipset) begin
-        wl_wr_q <= {wl_wr_q[0], wl_mwr};
-        // Bus-side count of DMA write strobes AT the watch address itself,
-        // wrapping -- the first stage of RAM.sv's wseen/wacc/wsrv chain.
-        if (wl_wr_q[0] && !wl_wr_q[1] && wl_mwr && chipset_aen
-            && (chipset_address == jtag_watch_addr))
-            wl_dma_cnt <= wl_dma_cnt + 8'd1;
-        if (pc_rearm)
-            wl_armed <= 1'b0;
-        // Sampled one clock into the strobe: address and data settled,
-        // one record per strobe.
-        else if (wl_wr_q[0] && !wl_wr_q[1] && wl_mwr && wl_in) begin
-            if (chipset_aen)
-                wl_armed <= 1'b1;
-            else if (wl_armed) begin
-                wl_cnt   <= wl_cnt + 8'd1;
-                wl_pc[3] <= wl_pc[2]; wl_ad[3] <= wl_ad[2]; wl_d[3] <= wl_d[2];
-                wl_pc[2] <= wl_pc[1]; wl_ad[2] <= wl_ad[1]; wl_d[2] <= wl_d[1];
-                wl_pc[1] <= wl_pc[0]; wl_ad[1] <= wl_ad[0]; wl_d[1] <= wl_d[0];
-                wl_pc[0] <= zet_pc;
-                wl_ad[0] <= chipset_address;
-                wl_d[0]  <= {cpu_data_bus_hi, cpu_data_bus};
-                wl_w     <= {wl_w[2:0], cpu_word_access};
-            end
-        end
-    end
     // The BIOS->ITF hand-back always ends in an OUT 0x43D,0x10 -- the
     // cold path's bank restore -- so freezing the ring on that write
     // keeps the ~32 fetches that led into the bounce, whichever code
@@ -1730,18 +1687,6 @@ module core_top (
             8'h90:   probe_data_c = {2'b00, itf_bank, f0_seen,
                                      entry_branch, in35_count,
                                      last_35_rdata, last_37_wdata};
-            // Stray-store log on the watch window: newest first.
-            8'h91:   probe_data_c = {wl_cnt, wl_armed, 3'b000, wl_w, wl_dma_cnt, 8'h0};
-            8'h92:   probe_data_c = {wl_d[0], wl_d[1]};
-            8'h93:   probe_data_c = {wl_d[2], wl_d[3]};
-            8'h94:   probe_data_c = {12'h0, wl_pc[0]};
-            8'h95:   probe_data_c = {12'h0, wl_pc[1]};
-            8'h96:   probe_data_c = {12'h0, wl_pc[2]};
-            8'h97:   probe_data_c = {12'h0, wl_pc[3]};
-            8'ha0:   probe_data_c = {12'h0, wl_ad[0]};
-            8'ha1:   probe_data_c = {12'h0, wl_ad[1]};
-            8'ha2:   probe_data_c = {12'h0, wl_ad[2]};
-            8'ha3:   probe_data_c = {12'h0, wl_ad[3]};
             // bench-next186 probe block, remapped off 0x35-0x3A (owned by
             // the sysport/TVRAM/GVRAM/GDC slots above) and 0x64-0x74 (inside
             // this branch's rst_snap ring, 0x61-0x80):
