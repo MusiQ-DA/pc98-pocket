@@ -291,8 +291,13 @@ module CHIPSET #(
     logic           internal_data_bus_direction;
     logic           no_command_state;
 
-    logic           prev_timer_count_1;
-    logic           DRQ0;
+    // DMA channel 0 has no requester on this machine: on a PC-98 it is the
+    // SASI/SCSI board's channel (np21w io/dmac.c: DREQ only from an attached
+    // DMADEV), and our SCSI board is PIO. The PC/XT core this grew from
+    // pulsed it off PIT counter 1 for DRAM refresh -- here counter 1 is the
+    // beeper, so every speaker edge ran a stray ch0 cycle at whatever
+    // address the BIOS left in the channel, landing on guest memory.
+    wire            DRQ0 = 1'b0;
 
     // The EMS board (pc98_ems98): ports 08E1h-08E9h bank four 16 KB
     // windows at C0000-CFFFF into the SDRAM pool at 0x800000-0xFFFFFF.
@@ -302,26 +307,6 @@ module CHIPSET #(
     logic   [7:0]   ems98_status;
     logic           fdd_dma_req;
 
-
-    always_ff @(posedge clock)
-    begin
-        if (reset)
-            prev_timer_count_1 <= 1'b1;
-        else
-            prev_timer_count_1 <= timer_counter_out[1];
-    end
-
-    always_ff @(posedge clock, posedge reset)
-    begin
-        if (reset)
-            DRQ0 <= 1'b0;
-        else if (~dma_acknowledge_n[0])
-            DRQ0 <= 1'b0;
-        else if (~prev_timer_count_1 & timer_counter_out[1])
-            DRQ0 <= 1'b1;
-        else
-            DRQ0 <= DRQ0;
-    end
 
     // tandy_snd_rdy was ANDed in here and, on a PC-98 build, was 1'b1 by
     // io_channel_ready used to AND in a third term whose producer is gone;
