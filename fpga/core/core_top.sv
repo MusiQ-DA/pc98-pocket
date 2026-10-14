@@ -1437,60 +1437,30 @@ module core_top (
     wire       trig_hit  = trig_en && (pc_now == trig_addr);
     wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
 
-    // Resume-frame watch: the save at f9488 pushes {IP=1497,CS=F800} to
-    // SS:00FA (linear 0x3FA) and the retf at f8069 pops them back. Last
-    // write vs last read split "store was corrupted" from "read returns
-    // stale data" -- landing f8097 = IP high byte 0x14 reading as 0x00
-    // would show up here as rd_3fa == 0x0097.
-    reg [15:0] rd_3fa = 16'h0, rd_3fc = 16'h0;
-    reg [15:0] wr_3fa = 16'h0, wr_3fc = 16'h0;
-    reg [15:0] rd_404 = 16'h0, rd_406 = 16'h0;
-    reg [15:0] wr_404 = 16'h0, wr_406 = 16'h0;
-    // byte-level detail for the frame word: the odd byte 0x3FB carries the
-    // pushed IP high byte (0x14) -- watched separately to split a
-    // byte-write drop from a wrong-data word write. w*_w record the last
-    // write's cpu_word_access so a byte push is distinguishable.
-    reg [15:0] rd_3fb = 16'h0, wr_3fb = 16'h0;
-    reg  [3:0] w_word = 4'h0;
-    // fetch address live at each watched write -- which instruction put
-    // the value on the bus (the push, or a third-party clobber).
-    reg [19:0] w3fa_pc = 20'h0, w3fb_pc = 20'h0, w3fc_pc = 20'h0;
+    // CPU-write log on the probe watch address (slot 0x0a): the last three
+    // guest-CPU memory writes that touch it -- a byte at the address or a
+    // word at address-1 -- with the fetch cursor live at the strobe, so a
+    // stray store can be traced to its instruction. DMA writes (AEN up)
+    // stay in the arbiter's own watch log (0xe1-0xe4).
+    reg  [1:0] wl_wr_q  = 2'b00;
+    reg  [7:0] wl_cnt   = 8'h00;
+    reg [19:0] wl_pc0 = 20'h0, wl_pc1 = 20'h0, wl_pc2 = 20'h0;
+    reg [15:0] wl_d0  = 16'h0, wl_d1  = 16'h0, wl_d2  = 16'h0;
+    reg  [2:0] wl_w   = 3'b000;
+    wire       wl_wr  = ~chipset_memory_write_n && ~chipset_aen;
+    wire       wl_hit = (chipset_address == jtag_watch_addr)
+                     || (cpu_word_access
+                         && (chipset_address == jtag_watch_addr - 20'd1));
     always_ff @(posedge clk_chipset) begin
-        if (~chipset_memory_read_n && ~chipset_aen) begin
-            if (chipset_address == 20'h003FA)
-                rd_3fa <= {data_bus_hi, data_bus};
-            if (chipset_address == 20'h003FB)
-                rd_3fb <= {data_bus_hi, data_bus};
-            if (chipset_address == 20'h003FC)
-                rd_3fc <= {data_bus_hi, data_bus};
-            if (chipset_address == 20'h00404)
-                rd_404 <= {data_bus_hi, data_bus};
-            if (chipset_address == 20'h00406)
-                rd_406 <= {data_bus_hi, data_bus};
-        end
-        if (~chipset_memory_write_n && ~chipset_aen) begin
-            if (chipset_address == 20'h003FA) begin
-                wr_3fa <= {cpu_data_bus_hi, cpu_data_bus};
-                w_word[0] <= cpu_word_access;
-                w3fa_pc  <= zet_pc;
-            end
-            if (chipset_address == 20'h003FB) begin
-                wr_3fb  <= {cpu_data_bus_hi, cpu_data_bus};
-                w3fb_pc <= zet_pc;
-            end
-            if (chipset_address == 20'h003FC) begin
-                wr_3fc <= {cpu_data_bus_hi, cpu_data_bus};
-                w_word[1] <= cpu_word_access;
-                w3fc_pc <= zet_pc;
-            end
-            if (chipset_address == 20'h00404) begin
-                wr_404 <= {cpu_data_bus_hi, cpu_data_bus};
-                w_word[2] <= cpu_word_access;
-            end
-            if (chipset_address == 20'h00406) begin
-                wr_406 <= {cpu_data_bus_hi, cpu_data_bus};
-                w_word[3] <= cpu_word_access;
-            end
+        wl_wr_q <= {wl_wr_q[0], wl_wr};
+        // Sampled one clock into the strobe: the address and data are
+        // settled, and one record per strobe.
+        if (wl_wr_q[0] && !wl_wr_q[1] && wl_wr && wl_hit) begin
+            wl_cnt <= wl_cnt + 8'd1;
+            wl_pc2 <= wl_pc1;  wl_d2 <= wl_d1;
+            wl_pc1 <= wl_pc0;  wl_d1 <= wl_d0;
+            wl_pc0 <= zet_pc;  wl_d0 <= {cpu_data_bus_hi, cpu_data_bus};
+            wl_w   <= {wl_w[1:0], cpu_word_access};
         end
     end
     // The BIOS->ITF hand-back always ends in an OUT 0x43D,0x10 -- the
@@ -1743,15 +1713,12 @@ module core_top (
             8'h90:   probe_data_c = {2'b00, itf_bank, f0_seen,
                                      entry_branch, in35_count,
                                      last_35_rdata, last_37_wdata};
-            8'h91:   probe_data_c = {rd_3fa, rd_3fc};
-            8'h92:   probe_data_c = {wr_3fa, wr_3fc};
-            8'h93:   probe_data_c = {rd_404, rd_406};
-            8'h94:   probe_data_c = {wr_404, wr_406};
-            8'h95:   probe_data_c = {rd_3fb, wr_3fb};
-            8'h96:   probe_data_c = {28'h0, w_word};
-            8'h97:   probe_data_c = {12'h0, w3fa_pc};
-            8'h98:   probe_data_c = {12'h0, w3fb_pc};
-            8'h99:   probe_data_c = {12'h0, w3fc_pc};
+            // CPU-write log on the watch address: newest first.
+            8'h91:   probe_data_c = {wl_cnt, 1'b0, wl_w, wl_pc0};
+            8'h92:   probe_data_c = {12'h0, wl_pc1};
+            8'h93:   probe_data_c = {12'h0, wl_pc2};
+            8'h94:   probe_data_c = {wl_d0, wl_d1};
+            8'h95:   probe_data_c = {16'h0, wl_d2};
             // bench-next186 probe block, remapped off 0x35-0x3A (owned by
             // the sysport/TVRAM/GVRAM/GDC slots above) and 0x64-0x74 (inside
             // this branch's rst_snap ring, 0x61-0x80):
