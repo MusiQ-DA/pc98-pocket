@@ -1124,71 +1124,6 @@ module RAM (
         end
     end
 
-    // Universal coverage: a write strobe is covered when the FSM accepts
-    // it live (IDLE with nothing parked), it lands in a park slot, or its
-    // operands match the access in flight / already parked (a held twin).
-    // A strobe falling while uncovered is a TRUE loss -- and unlike
-    // lost_ev it does not need both park slots full: a strobe arriving on
-    // the exact IDLE&&wc_pend cycle (park wins the accept, live cannot
-    // park because state==IDLE) then falling early escapes that counter
-    // completely. byte0-of-fill writes are prime suspects: they arrive
-    // right as the previous grant's tail retires.
-    logic [15:0] dbg_uncov;
-    logic [23:0] dbg_uncov_addr;    // first loss, full mapped address
-    logic  [7:0] dbg_uncov_data;
-    logic  [2:0] dbg_uncov_st;
-    logic [23:0] dbg_uncov_addr2;   // most recent loss
-    logic  [7:0] dbg_uncov_data2;
-
-    always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
-            dbg_uncov        <= 16'd0;
-            dbg_uncov_addr   <= 24'd0;
-            dbg_uncov_data   <= 8'd0;
-            dbg_uncov_st     <= 3'd0;
-            dbg_uncov_addr2  <= 24'd0;
-            dbg_uncov_data2  <= 8'd0;
-        end else begin
-            if (write_strobe_fell & ~(wr_covered & cov_same)) begin
-                if (dbg_uncov != 16'hFFFF)
-                    dbg_uncov <= dbg_uncov + 16'd1;
-                if (dbg_uncov == 16'd0) begin
-                    dbg_uncov_addr <= latch_address;
-                    dbg_uncov_data <= internal_data_bus;
-                    dbg_uncov_st   <= state;
-                end
-                dbg_uncov_addr2 <= latch_address;
-                dbg_uncov_data2 <= internal_data_bus;
-            end
-        end
-    end
-
-    // Sink-side record: the operands of the last three writes the FSM
-    // actually accepted -- the arbiter logs the bus side, this logs what
-    // RAM committed to serve. A fill's byte-0 that goes missing shows up
-    // here with a stale/mapped-away operand, or not at all.
-    logic  [7:0]  acc_cnt;
-    logic  [31:0] acc_ring [0:2];
-    always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
-            acc_cnt <= 8'd0;
-            acc_ring[0] <= 32'd0;
-            acc_ring[1] <= 32'd0;
-            acc_ring[2] <= 32'd0;
-        end else if (state == IDLE && next_state == RAM_WRITE_1) begin
-            acc_ring[2] <= acc_ring[1];
-            acc_ring[1] <= acc_ring[0];
-            // {2'b0, was-parked, word, addr[19:0], data}
-            acc_ring[0] <= {2'b00, wc_pend,
-                            (wc_pend ? pend_word    : word_now),
-                            (wc_pend ? pend_address[19:0]
-                                     : latch_address[19:0]),
-                            (wc_pend ? pend_data    : internal_data_bus)};
-            if (acc_cnt != 8'hFF)
-                acc_cnt <= acc_cnt + 8'd1;
-        end
-    end
-
     // Watch-accept witnesses, keyed on the arbiter's watchpoint address:
     //   wseen  -- write_command cycles whose (mapped) address is the watch
     //             point. If the arbiter's watch count exceeds this, writes
@@ -1232,10 +1167,9 @@ module RAM (
 
     assign  dbg2 = 32'd0;                   // drop witness removed -- uncov covers it
     assign  dbg3 = {24'd0, dbg_parks};       // parked count only
-    assign  dbg4 = {dbg_uncov[7:0], dbg_uncov_addr}; // {cnt, first addr24}
-    assign  dbg5 = {dbg_uncov_data2, dbg_uncov_addr2[15:0],
-                    dbg_uncov_data};          // {last d, last addr, first d}
-    assign  dbg6 = {acc_cnt, acc_ring[2], acc_ring[1], acc_ring[0]};
+    assign  dbg4 = 32'd0;                   // loss/accept witnesses retired for fit
+    assign  dbg5 = 32'd0;
+    assign  dbg6 = 104'd0;
     assign  dbg7 = {wsrv_cnt, wseen_cnt, wacc_cnt, wacc_rec};
 
 endmodule

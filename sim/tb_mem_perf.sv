@@ -1651,16 +1651,11 @@ module tb_mem_perf;
             $display("VERIFY: bad=%0d diverged=%0d stray=%0d grants=%0d midcmd=%0d dma_bytes=%0d pfbad=%0d pforeign=%0d porphan=%0d rdfor=%0d svc_ops=%0d",
                      bad, diverged, stray, grants, grants_midcmd, dma_seen,
                      c_pbad, c_pforeign, c_porphan, c_rd_foreign, svc_ops);
-            $display("  RAM drop-witness: uncov=%0d parks=%0d first=%05x/%02x st=%0d last=%05x/%02x",
-                     u_ram.dbg_uncov, u_ram.dbg_parks,
-                     u_ram.dbg_uncov_addr, u_ram.dbg_uncov_data, u_ram.dbg_uncov_st,
-                     u_ram.dbg_uncov_addr2, u_ram.dbg_uncov_data2);
             // queue occupancy at verify: if a bad write is still parked it is
-            // wedged, not dropped. acc_ring = last 3 writes the FSM accepted.
-            $display("  RAM queue @verify: st=%0d pend=%b%b%b cap=%b inflight(wr=%b rd=%b) acc_ring=%08x %08x %08x",
+            // wedged, not dropped.
+            $display("  RAM queue @verify: st=%0d pend=%b%b%b cap=%b inflight(wr=%b rd=%b)",
                      u_ram.state, u_ram.wc_pend, u_ram.wc_pend2, u_ram.wc_pend3,
-                     u_ram.cap_valid, u_ram.accept_live_wr, u_ram.accept_live_rd,
-                     u_ram.acc_ring[2], u_ram.acc_ring[1], u_ram.acc_ring[0]);
+                     u_ram.cap_valid, u_ram.accept_live_wr, u_ram.accept_live_rd);
             $display("  drain cmd-present @t_cnt: [%0d %0d %0d %0d %0d %0d %0d %0d] max=%0d",
                      dq_present[0], dq_present[1], dq_present[2], dq_present[3],
                      dq_present[4], dq_present[5], dq_present[6], dq_present[7],
