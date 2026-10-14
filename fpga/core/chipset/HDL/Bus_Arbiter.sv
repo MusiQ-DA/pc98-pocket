@@ -331,41 +331,22 @@ module BUS_ARBITER (
     assign dbg_dma = {break_cnt, grant_cnt, ack_wr_cnt, 96'd0};
     assign dbg_dma3 = {watch_cnt, 24'h0, watch_log[2],
                        watch_log[1], watch_log[0]};
-    // Misdirect witness: a uPD71071 memory-write strobe only lands on its
-    // own address while the DMA side owns the mux (dma_own). One that
-    // starts without it, or sees the address move under it, writes the
-    // fill byte somewhere else -- the floppy fill's lost byte at turbo.
-    //   mis_start -- strobes that began with dma_own low
-    //   mis_mid   -- strobes that began under an already-low merged strobe
-    // rec_* keep {dma_own, dma_enable_n, address_enable_n, dma_wait,
-    // 4'h0, ~dma_acknowledge_n, address} of the latest of each.
+    // Overlap witness: the floppy fill's lost byte at turbo never shows on
+    // the bus as a write at its address, and no DMAC strobe starts outside
+    // dma_own (checked, zero). Count DMAC write strobes that start under an
+    // already-low merged strobe (probe 0xe7 bits 31:16, record at 0xe8).
     logic           prev_dmw;
     logic           prev_ab_mw_ovl;
-    logic           mid_hit;
-    logic   [19:0]  dmw_addr;
-    logic   [15:0]  mis_start, mis_mid;
-    logic   [31:0]  rec_start, rec_mid;
+    logic   [15:0]  mis_mid;
+    logic   [31:0]  rec_mid;
     wire            dmw = ~dma_memory_write_n;
-    wire    [31:0]  mis_now = {dma_own, dma_enable_n, address_enable_n,
-                               dma_wait, 4'h0, ~dma_acknowledge_n,
-                               address};
     always_ff @(posedge clock) begin
         if (reset) begin
             prev_dmw  <= 1'b0;
-            mid_hit   <= 1'b0;
-            mis_start <= 16'd0;
             mis_mid   <= 16'd0;
         end else begin
             prev_dmw <= dmw;
             prev_ab_mw_ovl <= ab_memory_write_n;
-            if (dmw & ~prev_dmw) begin
-                dmw_addr <= address;
-                mid_hit  <= 1'b0;
-                if (~dma_own) begin
-                    mis_start <= mis_start + 16'd1;
-                    rec_start <= mis_now;
-                end
-            end
             // Overlap: the merged strobe is already low when the DMAC's
             // starts -- no falling edge for RAM.sv or the watch to see, the
             // fill byte rides an older write's command. rec_mid keeps the
@@ -378,7 +359,7 @@ module BUS_ARBITER (
             end
         end
     end
-    assign dbg_dma4 = {12'h0, dmw_addr, rec_mid, rec_start, mis_mid, mis_start};
+    assign dbg_dma4 = {64'h0, rec_mid, mis_mid, 16'h0};
 
 
     //

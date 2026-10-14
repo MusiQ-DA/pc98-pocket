@@ -1124,52 +1124,11 @@ module RAM (
         end
     end
 
-    // Watch-accept witnesses, keyed on the arbiter's watchpoint address:
-    //   wseen  -- write_command cycles whose (mapped) address is the watch
-    //             point. If the arbiter's watch count exceeds this, writes
-    //             reached the bus but never became a write_command here --
-    //             swallowed upstream (sequencer expansion) or sel-missed.
-    //   wacc   -- accepts whose mapped operand equals the watch point, and
-    //             the sticky {pend,word,addr,data} of the last one. A mapped
-    //             redirect shows here as addr != watch point (and no count).
-    logic  [7:0]  wseen_cnt;
-    logic  [7:0]  wacc_cnt;
-    logic  [7:0]  wsrv_cnt;   // writes at the watch point served to SDRAM
-    logic  [31:0] wacc_rec;
-    always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
-            wseen_cnt <= 8'd0;
-            wacc_cnt  <= 8'd0;
-            wsrv_cnt  <= 8'd0;
-            wacc_rec  <= 32'd0;
-        end else begin
-            // Count strobe RISES at the watch address so this compares
-            // one-for-one with the arbiter's watch count (strobe falls).
-            // Counts wrap: deltas mod 256 still line up stage against stage
-            // after any number of transfers.
-            if (write_strobe_rose && (latch_address[19:0] == dbg_watch_addr))
-                wseen_cnt <= wseen_cnt + 8'd1;
-            if ((state == RAM_WRITE_2) && ~write_flag
-                && (accept_address[19:0] == dbg_watch_addr))
-                wsrv_cnt <= wsrv_cnt + 8'd1;
-            if (state == IDLE && next_state == RAM_WRITE_1
-                && ((wc_pend ? pend_address[19:0] : latch_address[19:0])
-                    == dbg_watch_addr)) begin
-                wacc_rec <= {2'b01, wc_pend,
-                             (wc_pend ? pend_word    : word_now),
-                             (wc_pend ? pend_address[19:0]
-                                      : latch_address[19:0]),
-                             (wc_pend ? pend_data    : internal_data_bus)};
-                wacc_cnt <= wacc_cnt + 8'd1;
-            end
-        end
-    end
-
     assign  dbg2 = 32'd0;                   // drop witness removed -- uncov covers it
     assign  dbg3 = {24'd0, dbg_parks};       // parked count only
     assign  dbg4 = 32'd0;                   // loss/accept witnesses retired for fit
     assign  dbg5 = 32'd0;
     assign  dbg6 = 104'd0;
-    assign  dbg7 = {wsrv_cnt, wseen_cnt, wacc_cnt, wacc_rec};
+    assign  dbg7 = 56'd0;                    // watch-accept witnesses retired for fit
 
 endmodule
