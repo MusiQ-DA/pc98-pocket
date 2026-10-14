@@ -546,11 +546,17 @@ module RAM (
     // write the master may drive anything up there (the next pipelined
     // word, a turnaround byte), and comparing it could un-match the twin
     // -- held forever with its copy already landed, a real wedge.
+    // The access in flight is only a twin while nothing is queued behind
+    // it: a held strobe's copy is the youngest write, so with a slot full
+    // the same operands are a NEW write that has to queue after the slot
+    // (A, B, A to one byte otherwise took the in-flight A's ready and left
+    // B in memory).
     wire write_strobe_match = (latch_address      == accept_address)
                             & (internal_data_bus    == accept_data)
                             & (word_now             == accept_word)
                             & (~accept_word
-                               | (internal_data_bus_hi == accept_data_hi));
+                               | (internal_data_bus_hi == accept_data_hi))
+                            & ~wc_pend & ~cap_valid;
     wire read_strobe_match  = (latch_address == accept_address)
                             & (word_now      == accept_word);
     // Parked-operand matches: a held strobe whose copy already sits in a
@@ -587,8 +593,17 @@ module RAM (
     wire cov_pend2    = parked2_match & wc_pend2;
     wire cov_pend3    = parked3_match & wc_pend3;
     wire cov_cap      = cap_match     & cap_valid;
-    wire dup_covered  = cov_inflight | cov_pend1 | cov_pend2 | cov_pend3
-                      | cov_cap;
+    // A held strobe's twin can only be the YOUNGEST write the FSM holds:
+    // one master drives the pins at a time and keeps one strobe up, so
+    // anything queued behind its copy came after it. Matching an older
+    // entry dropped real writes -- A, B, A to one byte lost the second A
+    // behind B and left B in memory (tb_ram_mix_stress; on the metal, single
+    // bytes of a floppy DMA fill left stale in a DOS buffer).
+    wire dup_covered  = cap_valid ? cov_cap
+                      : wc_pend3  ? cov_pend3
+                      : wc_pend2  ? cov_pend2
+                      : wc_pend   ? cov_pend1
+                      :             cov_inflight;
 
     // The live strobe takes the accept directly at IDLE only when the
     // queue is empty; anything else must park or capture.
@@ -989,8 +1004,7 @@ module RAM (
     // guards every capture path.
     wire wr_cov_now   = wr_accept_live | new_write_strobe | new_write_strobe2
                       | new_write_strobe3 | idle_park | new_cap
-                      | cov_inflight | cov_pend1 | cov_pend2 | cov_pend3
-                      | cov_cap;
+                      | dup_covered;
 
     // The release must be REGISTERED, not combinational: wr_cov_now means
     // "the capture commits at this edge" -- accept takes the strobe or a

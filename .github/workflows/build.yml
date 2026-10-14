@@ -107,6 +107,19 @@ jobs:
           ./obj_dma/r | tee dma.log
           grep -q "=== PASS ===" dma.log
 
+      - name: RAM.sv write order under a random DMA/CPU mix
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_ram_mix_stress \
+            -Isim -I$S -I$S/chipset/HDL \
+            sim/tb_ram_mix_stress.sv sim/sdram_model.sv \
+            $S/chipset/HDL/RAM.sv $S/sdram_shim.sv $S/sdram_mp.sv \
+            -o r --Mdir obj_mix
+          for s in 1 2 8 13; do
+            ./obj_mix/r +seed=$s +n=300000 | tee mix$s.log
+            grep -q "=== PASS tb_ram_mix_stress ===" mix$s.log
+          done
+
       - name: Posted-write durability — no guest byte lost, normal and fast pace
         run: |
           S=fpga/core; K=$S/chipset/HDL; Z=$S/zet
