@@ -108,10 +108,7 @@ module pc98_kbd8251 #(
 
     output wire logic read_select,           // this module drives the bus
     output wire logic [7:0] read_data,
-    output wire logic irq,                   // RxRDY, level, to PIC IR1
-    // Probe: {rd_n, cap_n, drop_n, 8'h0, the last eight bytes the guest read
-    // from 0x41 (newest low)} -- what the BIOS's IRQ1 handler actually saw.
-    output wire logic [95:0] dbg
+    output wire logic irq                    // RxRDY, level, to PIC IR1
 );
 
     // np21w's keybrd.cmd: the last command byte written to 0x43.
@@ -131,12 +128,6 @@ module pc98_kbd8251 #(
     logic       key_pending;
 
     logic [23:0] ack_timer;
-
-    logic [63:0] dbg_ring   = 64'h0;
-    logic [7:0]  dbg_rd_n   = 8'd0;
-    logic [7:0]  dbg_cap_n  = 8'd0;
-    logic [7:0]  dbg_drop_n = 8'd0;
-    assign dbg = {dbg_rd_n, dbg_cap_n, dbg_drop_n, 8'h00, dbg_ring};
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
@@ -188,19 +179,14 @@ module pc98_kbd8251 #(
             // Reading 0x41 takes the byte and drops RxRDY/IRQ1 (np21w's
             // keyboard_i41) -- after the cycle has ended, so the CPU has
             // latched what it was handed.
-            if (data_rd_level_q && ~data_read_strobe) begin
+            if (data_rd_level_q && ~data_read_strobe)
                 rx_full <= 1'b0;
-                dbg_ring <= {dbg_ring[55:0], rx_q};
-                dbg_rd_n <= dbg_rd_n + 8'd1;
-            end
 
             // Key injection. Written last so an event landing on the same
             // tick as the ACK expiry or a read completing takes the register:
             // a real key press outranks both bookkeeping paths.
             key_stb_q <= key_stb;
             if (key_stb != key_stb_q) begin
-                dbg_cap_n <= dbg_cap_n + 8'd1;
-                if (rx_full && key_pending) dbg_drop_n <= dbg_drop_n + 8'd1;
                 if (!rx_full) begin
                     rx_q    <= key_byte;
                     rx_full <= 1'b1;

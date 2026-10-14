@@ -164,6 +164,38 @@ module tb_pc98_scsi;
         io_rd(2'b00, got); want("auxstatus", got, 8'h85);
         io_rd(2'b00, got); want("auxstatus cleared by the read", got, 8'h00);
 
+        // ---- a completion posted INSIDE a 0xCC0 read must survive it ---------
+        // The ROM's scsi_go polls 0xCC0 back to back. The firmware's 0x80 can
+        // land after the bus has taken this read's byte (00) but before the
+        // read's trailing edge -- the clear must not eat a bit the guest never
+        // saw, or the completion is lost and the ROM times out the command.
+        // Two placements: mid-strobe after the sample, and on the very clk the
+        // strobe ends.
+        for (int late = 0; late < 2; late++) begin
+            a1a2 = 2'b00; cs = 1'b1; io_read_n = 1'b0;
+            repeat (3) @(posedge clk);
+            got = data_out;
+            want("poll before the completion", got, 8'h00);
+            if (late == 0) begin
+                mg_auxstatus = 8'h80; mg_auxstatus_we = 1'b1;
+                @(posedge clk); mg_auxstatus_we = 1'b0;
+                @(posedge clk);
+                io_read_n = 1'b1;
+            end else begin
+                @(posedge clk);
+                io_read_n = 1'b1;
+                mg_auxstatus = 8'h80; mg_auxstatus_we = 1'b1;
+                @(posedge clk); mg_auxstatus_we = 1'b0;
+            end
+            @(posedge clk);
+            cs = 1'b0; a1a2 = 2'b00;
+            repeat (2) @(posedge clk);
+            io_rd(2'b00, got);
+            want((late != 0) ? "completion on the read's last clk kept"
+                      : "completion inside the read kept", got, 8'h80);
+            io_rd(2'b00, got); want("then cleared by its own read", got, 8'h00);
+        end
+
         // ---- index 0x17 answers scsistatus --------------------------------
         mg_scsistatus = 8'h16; mg_scsistatus_we = 1'b1;
         @(posedge clk); mg_scsistatus_we = 1'b0; repeat (2) @(posedge clk);

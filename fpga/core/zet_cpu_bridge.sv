@@ -1632,7 +1632,6 @@ module zet_cpu_bridge (
     end
     assign dbg_inta = {inta_bad_n, inta_last_bad, inta_cut_n, inta_last_vec};
 
-
     assign dbg = {zet_halt, inta_active, req_busy, wb_ack_i,
                   bstate, byte_idx, t_cnt, gap_cnt, cur_bs};
 

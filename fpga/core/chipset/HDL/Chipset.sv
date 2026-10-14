@@ -220,8 +220,6 @@ module CHIPSET #(
         output  wire    [63:0]  dbg_gvdisp,
         // JTAG probe: the CRT interrupt (IRQ2) path -- PIC regs, arm, counters.
         output  wire    [63:0]  dbg_crt,
-        // JTAG probe: the keyboard 8251's read log.
-        output  wire    [95:0]  dbg_kbd,
         // RAM wait mode
         input   logic           wait_count_clk_en,
         input   logic   [1:0]   ram_read_wait_cycle,
@@ -529,7 +527,6 @@ module CHIPSET #(
         .dbg_gdc_s                          (dbg_gdc_s),
         .dbg_gvdisp                         (dbg_gvdisp),
         .dbg_crt                            (dbg_crt),
-        .dbg_kbd                            (dbg_kbd),
         // The BIOS runs 2HD (0x90 window) transfers on channel 2 and 2DD
         // (0xC8 window) on channel 3 -- the arbiter pairs ack[2] with page
         // register 1 (port 0x23) and ack[3] with page register 2 (0x25),

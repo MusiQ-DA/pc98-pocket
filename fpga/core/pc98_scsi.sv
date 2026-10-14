@@ -93,6 +93,15 @@ module pc98_scsi #(
     logic [7:0] datmap;    // 0x3F, written as bit set/reset
 
     logic [7:0] auxstatus; // 0xCC0 read, and reading CLEARS it
+    // The 0xCC0 byte as this read first presented it, held for the rest of
+    // the strobe. The trailing-edge clear takes exactly these bits: the
+    // firmware's completion (0x80) can land after the bus has already taken
+    // the byte, and clearing the live register would throw away a bit the
+    // guest never saw -- the ROM's scsi_go then polls out its whole bound
+    // and fails a good command (SuperDepth: "depth.fnt が読み込めません" at
+    // turbo, a garbage depth.scr at 10 MHz). Holding the presented byte
+    // also keeps a mid-strobe write from changing the answer under the bus.
+    logic [7:0] aux_seen;
     logic [7:0] scsistatus;// 0xCC2 read at index 0x17
 
     localparam [7:0] IDX_STATUS  = 8'h17;
@@ -151,6 +160,7 @@ module pc98_scsi #(
             resent     <= 8'h00;
             datmap     <= 8'h00;
             auxstatus  <= 8'h00;
+            aux_seen   <= 8'h00;
             scsistatus <= 8'h00;
             wrptr      <= '0;
             rdptr      <= '0;
@@ -170,6 +180,8 @@ module pc98_scsi #(
             end
             if (cs & rd)
                 rd_port_q <= a1a2;
+            if (cs & rd & ~rd_q)
+                aux_seen <= auxstatus;
 
             // The firmware's writes. Taken before the guest's so a status
             // landing on the same cycle as a read does not lose the update.
@@ -220,7 +232,11 @@ module pc98_scsi #(
             // below, off the pre-increment index.
             if (rd_q && ~rd) begin
                 case (rd_port_q)
-                    2'b00: auxstatus <= 8'h00;          // 0xCC0 read clears it
+                    // 0xCC0 read clears what it returned -- and only that.
+                    // A firmware write on this same clk is the newer value.
+                    2'b00: auxstatus <= (mg_auxstatus_we ? mg_auxstatus
+                                                         : auxstatus)
+                                        & ~aux_seen;
                     2'b01: if (idx <= 8'h19 || idx == IDX_STATUS)
                                idx <= idx + 8'd1;
                     2'b11: rdptr <= rdptr + 1'b1;       // 0xCC6: buffer
@@ -234,7 +250,7 @@ module pc98_scsi #(
 
     always_comb begin
         case (a1a2)
-            2'b00: data_out = auxstatus;
+            2'b00: data_out = rd_q ? aux_seen : auxstatus;
             2'b01: begin
                 case (idx)
                     IDX_STATUS:  data_out = scsistatus;
