@@ -1446,6 +1446,7 @@ module core_top (
     reg  [1:0] wl_wr_q   = 2'b00;
     reg        wl_armed  = 1'b0;
     reg  [7:0] wl_cnt    = 8'h00;
+    reg  [7:0] wl_dma_cnt = 8'h00;
     reg [19:0] wl_pc  [0:3];
     reg [19:0] wl_ad  [0:3];
     reg [15:0] wl_d   [0:3];
@@ -1455,6 +1456,11 @@ module core_top (
     wire       wl_in  = (wl_off < 20'h00800);
     always_ff @(posedge clk_chipset) begin
         wl_wr_q <= {wl_wr_q[0], wl_mwr};
+        // Bus-side count of DMA write strobes AT the watch address itself,
+        // wrapping -- the first stage of RAM.sv's wseen/wacc/wsrv chain.
+        if (wl_wr_q[0] && !wl_wr_q[1] && wl_mwr && chipset_aen
+            && (chipset_address == jtag_watch_addr))
+            wl_dma_cnt <= wl_dma_cnt + 8'd1;
         if (pc_rearm)
             wl_armed <= 1'b0;
         // Sampled one clock into the strobe: address and data settled,
@@ -1725,7 +1731,7 @@ module core_top (
                                      entry_branch, in35_count,
                                      last_35_rdata, last_37_wdata};
             // Stray-store log on the watch window: newest first.
-            8'h91:   probe_data_c = {wl_cnt, wl_armed, 3'b000, wl_w, 16'h0};
+            8'h91:   probe_data_c = {wl_cnt, wl_armed, 3'b000, wl_w, wl_dma_cnt, 8'h0};
             8'h92:   probe_data_c = {wl_d[0], wl_d[1]};
             8'h93:   probe_data_c = {wl_d[2], wl_d[3]};
             8'h94:   probe_data_c = {12'h0, wl_pc[0]};

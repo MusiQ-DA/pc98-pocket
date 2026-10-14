@@ -27,6 +27,8 @@ module tb_ram_mix_stress;
     logic [7:0]  data_hi = 8'h00;
     logic [7:0]  data_bus_out_hi;
     logic        gv_req = 1'b0;
+    logic  [3:0] gv_len = 4'd8;
+    int          gv_rate = 64;
     wire         gv_ack, gv_done;
 
     logic [19:0] address = '0;
@@ -71,7 +73,7 @@ module tb_ram_mix_stress;
         .font_rd_ack(), .font_rd_valid(), .font_rd_data(), .font_rd_done(),
         .cg_rd_req(1'b0), .cg_rd_addr(24'd0), .cg_rd_len(4'd0),
         .cg_rd_ack(), .cg_rd_valid(), .cg_rd_data(), .cg_rd_done(),
-        .gv_rd_req(gv_req), .gv_rd_addr(24'h300000), .gv_rd_len(4'd8),
+        .gv_rd_req(gv_req), .gv_rd_addr(24'h300000), .gv_rd_len(gv_len),
         .gv_rd_ack(gv_ack), .gv_rd_valid(), .gv_rd_data(), .gv_rd_done(gv_done),
         .wait_count_clk_en(1'b1),
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0),
@@ -103,7 +105,7 @@ module tb_ram_mix_stress;
     always @(posedge clock) begin
         if (reset) gv_req <= 1'b0;
         else if (gv_ack) gv_req <= 1'b0;
-        else if (!gv_req && ($urandom % 64 == 0)) gv_req <= 1'b1;
+        else if (!gv_req && ($urandom % gv_rate == 0)) gv_req <= 1'b1;
     end
 
     localparam int BASE = 32'h07300;
@@ -194,6 +196,8 @@ module tb_ram_mix_stress;
         if (!$value$plusargs("tr_off=%d", tr_off)) tr_off = -1;
         if (!$value$plusargs("tr_from=%d", tr_from)) tr_from = 0;
         if (!$value$plusargs("cl_from=%d", cl_from)) cl_from = -1;
+        if (!$value$plusargs("gvrate=%d", gv_rate)) gv_rate = 64;
+        begin int l; if ($value$plusargs("gvlen=%d", l)) gv_len = 4'(l); end
         if (!$value$plusargs("cl_to=%d", cl_to)) cl_to = -1;
         void'($urandom(seed));
         repeat (8) @(posedge clock);

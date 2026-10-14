@@ -1199,18 +1199,24 @@ module RAM (
     //             redirect shows here as addr != watch point (and no count).
     logic  [7:0]  wseen_cnt;
     logic  [7:0]  wacc_cnt;
+    logic  [7:0]  wsrv_cnt;   // writes at the watch point served to SDRAM
     logic  [31:0] wacc_rec;
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
             wseen_cnt <= 8'd0;
             wacc_cnt  <= 8'd0;
+            wsrv_cnt  <= 8'd0;
             wacc_rec  <= 32'd0;
         end else begin
             // Count strobe RISES at the watch address so this compares
             // one-for-one with the arbiter's watch count (strobe falls).
-            if (write_strobe_rose && (latch_address[19:0] == dbg_watch_addr)
-                && (wseen_cnt != 8'hFF))
+            // Counts wrap: deltas mod 256 still line up stage against stage
+            // after any number of transfers.
+            if (write_strobe_rose && (latch_address[19:0] == dbg_watch_addr))
                 wseen_cnt <= wseen_cnt + 8'd1;
+            if ((state == RAM_WRITE_2) && ~write_flag
+                && (accept_address[19:0] == dbg_watch_addr))
+                wsrv_cnt <= wsrv_cnt + 8'd1;
             if (state == IDLE && next_state == RAM_WRITE_1
                 && ((wc_pend ? pend_address[19:0] : latch_address[19:0])
                     == dbg_watch_addr)) begin
@@ -1219,8 +1225,7 @@ module RAM (
                              (wc_pend ? pend_address[19:0]
                                       : latch_address[19:0]),
                              (wc_pend ? pend_data    : internal_data_bus)};
-                if (wacc_cnt != 8'hFF)
-                    wacc_cnt <= wacc_cnt + 8'd1;
+                wacc_cnt <= wacc_cnt + 8'd1;
             end
         end
     end
@@ -1231,6 +1236,6 @@ module RAM (
     assign  dbg5 = {dbg_uncov_data2, dbg_uncov_addr2[15:0],
                     dbg_uncov_data};          // {last d, last addr, first d}
     assign  dbg6 = {acc_cnt, acc_ring[2], acc_ring[1], acc_ring[0]};
-    assign  dbg7 = {8'h00, wseen_cnt, wacc_cnt, wacc_rec};
+    assign  dbg7 = {wsrv_cnt, wseen_cnt, wacc_cnt, wacc_rec};
 
 endmodule
