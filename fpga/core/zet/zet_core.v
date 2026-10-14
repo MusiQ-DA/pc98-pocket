@@ -44,7 +44,8 @@ module zet_core (
 
     output [19:0] pc,  // for debugging purposes
     output        dbg_fault, // seq_addr enters INVOP or INTD (1-zet_clk pulse)
-    output [7:0]  dbg_opc,   // opcode being decoded when dbg_fault fired
+    output [7:0]  dbg_opc,
+    output [15:0] dbg_ds,    // the live DS register   // opcode being decoded when dbg_fault fired
     output        exec_st_o  // 1 while executing (0 => bus op is instr fetch)
   );
 
@@ -439,6 +440,7 @@ module zet_core (
     .div_exc (div_exc),
 
     .wr_ss   (wr_ss),
+    .ds      (dbg_ds),
 
     // from wb
     .memout  (memout_x),

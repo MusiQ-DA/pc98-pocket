@@ -47,7 +47,8 @@ module zet_regfile (
     input         b_byte,
     input         c_byte,
     output        cx_zero,
-    input         wr_ip0
+    input         wr_ip0,
+    output [15:0] ds
   );
 
   // Net declarations
@@ -74,6 +75,7 @@ module zet_regfile (
   assign s = r[{2'b10,addr_s}];
 
   assign cs = r[9];
+  assign ds = r[11];
   // The only CX writes observable through cx_zero are the REP/LOOP count
   // decrements (CX:=CX-1): next_in_opco/next_in_exec are both masked by
   // pref_l[1] && a string opcode, and every micro-op with micro_d==CX in

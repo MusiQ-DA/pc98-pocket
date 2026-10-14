@@ -1449,7 +1449,12 @@ module core_top (
     // drowning in framebuffer sweeps and keeps the 32 cycles of guest
     // writes leading into the F0 -- the whole save sequence's addresses.
     reg        trig_wronly = 1'b0;
-    wire       trig_hit  = trig_en && (pc_now == trig_addr);
+    // bit26 of write slot 0x04: the trigger compares the live DS register
+    // against trig_addr[15:0] instead of the fetch PC -- freezing the ring
+    // on the moment a stray segment value lands in DS.
+    reg        trig_ds     = 1'b0;
+    wire       trig_hit  = trig_en && (trig_ds ? (zet_ds == trig_addr[15:0])
+                                           : (pc_now == trig_addr));
     wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
 
     // The BIOS->ITF hand-back always ends in an OUT 0x43D,0x10 -- the
@@ -2201,6 +2206,7 @@ module core_top (
             trig_delay  <= probe_wdata_c[29];
             trig_bus    <= probe_wdata_c[28];
             trig_wronly <= probe_wdata_c[27];
+            trig_ds     <= probe_wdata_c[26];
         end
         // Slot 0x09: CPU-speed override for scripted runs -- wdata[2] forces
         // clk_select_next to wdata[1:0] instead of the OSD setting. Same
@@ -3367,6 +3373,7 @@ module core_top (
     wire [ 1:0] zwb_sel;
     wire        zwb_inta, zwb_nmia;
     wire [19:0] zet_pc;
+    wire [15:0] zet_ds;
     wire        zet_fault;
     wire [7:0]  zet_opc;
 
@@ -3435,7 +3442,8 @@ module core_top (
         .nowrap    (jtag_nowrap),
         .pc        (zet_pc),
         .dbg_fault (zet_fault),
-        .dbg_opc   (zet_opc)
+        .dbg_opc   (zet_opc),
+        .dbg_ds    (zet_ds)
     );
 
     // Debug: the last guest data-bus read / write byte addresses. Instruction

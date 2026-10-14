@@ -43,7 +43,8 @@ module zet (
 
     output [19:0] pc,  // for debugging purposes
     output        dbg_fault,
-    output [7:0]  dbg_opc
+    output [7:0]  dbg_opc,
+    output [15:0] dbg_ds
   );
 
   // Net declarations
@@ -86,6 +87,7 @@ module zet (
     .pc (pc),
     .dbg_fault (dbg_fault),
     .dbg_opc   (dbg_opc),
+    .dbg_ds    (dbg_ds),
     .exec_st_o (exec_st)
   );
 

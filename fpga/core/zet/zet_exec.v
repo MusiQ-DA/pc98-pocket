@@ -48,7 +48,8 @@ module zet_exec (
 
     output        ifl,
     output        tfl,
-    output        wr_ss
+    output        wr_ss,
+    output [15:0] ds          // debug: the live DS
   );
 
   // Net declarations
@@ -82,7 +83,7 @@ module zet_exec (
   zet_regfile regfile (
         a, b, c, cs, ip, {aluout[31:16], omemalu}, s, flags, wr_reg, wrfl,
                 wr_high, clk, rst, addr_a, addr_b, addr_c, addr_d, addr_s, iflags,
-                ~byteop, a_byte, b_byte, c_byte, cx_zero, wrip0);
+                ~byteop, a_byte, b_byte, c_byte, cx_zero, wrip0, ds);
   zet_jmp_cond jmp_cond (logic_flags, addr_b, addr_c[0], c, jmp);
 
   // Assignments
