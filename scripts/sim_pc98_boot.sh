@@ -5,6 +5,7 @@
 #   scripts/sim_pc98_boot.sh [+plusarg ...]
 #   scripts/sim_pc98_boot.sh --synth    # hand-written ITF, no ROMs needed
 #   scripts/sim_pc98_boot.sh --realmem  # ... on the REAL memory path
+#   scripts/sim_pc98_boot.sh --z86      # z86 (fpga/core/z86) instead of Zet
 #
 # Not part of CI: it needs bios.rom and itf.rom, which are not in the tree,
 # unless --synth.
@@ -13,10 +14,12 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SYNTH=0
 REALMEM=0
+Z86=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --synth) SYNTH=1; shift ;;
         --realmem) REALMEM=1; shift ;;
+        --z86) Z86=1; shift ;;
         *) break ;;
     esac
 done
@@ -84,7 +87,15 @@ SIM_THREADS="${SIM_THREADS:-4}"
 
 CPU_DEF=""
 [ "$REALMEM" = 1 ] && CPU_DEF="+define+REALMEM"
-[ -n "$EXTRA_DEF" ] && CPU_DEF="$CPU_DEF $EXTRA_DEF"
+[ -n "${EXTRA_DEF:-}" ] && CPU_DEF="$CPU_DEF $EXTRA_DEF"
+Z86FILES=""
+if [ "$Z86" = 1 ]; then
+    CPU_DEF="$CPU_DEF +define+Z86"
+    ZS=$S/z86
+    Z86FILES="$R/$ZS/z86_package.sv $R/$ZS/fetch.sv $R/$ZS/decode.sv \
+        $R/$ZS/execute.sv $R/$ZS/write_back.sv $R/$ZS/regfile.sv \
+        $R/$ZS/divider.sv $R/$ZS/z86_wbif.sv $R/$ZS/z86.sv -I$R/$ZS"
+fi
 
 if [ "$REALMEM" = 1 ]; then
     MEMFILES="$K/RAM.sv $K/Ready.sv $S/sdram_shim.sv $S/sdram_mp.sv \
@@ -108,6 +119,7 @@ verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot $CPU_DEF \
     $SYSROOT \
     -I"$R/sim" -I"$R/$S" -I"$R/$S/common" -I"$R/$Z" -I"$R/$K" \
     -I"$R/$K/i8288/HDL" -I"$R/$K/i8253/HDL" -I"$R/$K/i8259/HDL" \
+    $Z86FILES \
     "$R/sim/tb_pc98_boot.sv" \
     $MEMFILES \
     $R/$Z/zet.v $R/$Z/zet_core.v $R/$Z/zet_fetch.v $R/$Z/zet_decode.v \

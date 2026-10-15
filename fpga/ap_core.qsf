@@ -866,6 +866,18 @@ set_global_assignment -name VERILOG_FILE core/zet/zet_rxr16.v
 set_global_assignment -name VERILOG_FILE core/zet/zet_shrot.v
 set_global_assignment -name VERILOG_FILE core/zet/zet_signmul17.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/zet_cpu_bridge.sv
+# z86 (Apache-2.0, nand2mario/z86 fdc7c39 ported for Quartus Lite): selected
+# by PC98_Z86 in config.tcl; the Zet files above stay for the other setting.
+set_global_assignment -name SYSTEMVERILOG_FILE core/z86/z86_package.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/z86/fetch.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/z86/decode.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/z86/execute.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/z86/write_back.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/z86/regfile.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/z86/divider.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/z86/z86_wbif.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/z86/z86.sv
+set_global_assignment -name SEARCH_PATH core/z86
 set_global_assignment -name SEARCH_PATH core/zet
 
 set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_mp.sv

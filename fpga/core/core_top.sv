@@ -3294,6 +3294,32 @@ module core_top (
         .dbg_inta          (bridge_dbg_inta)
     );
 
+`ifdef PC98_Z86
+    // z86 (fpga/core/z86): a pipelined 286-class core behind the same
+    // Wishbone/INTA contract Zet speaks, so the bridge is unchanged.
+    z86 u_cpu (
+        .clk       (zet_clk),
+        .reset     (reset_cpu),
+        .wb_adr_o  (zwb_adr),
+        .wb_sel_o  (zwb_sel),
+        .wb_we_o   (zwb_we),
+        .wb_tga_o  (zwb_tga),
+        .wb_dat_o  (zwb_dat_o),
+        .wb_stb_o  (zwb_stb),
+        .wb_cyc_o  (zwb_cyc),
+        .wb_ack_i  (zwb_ack),
+        .wb_dat_i  (zwb_dat_i),
+        .wb_tgc_i  (interrupt_to_cpu),
+        .wb_tgc_o  (zwb_inta),
+        .pc        (zet_pc),
+        .dbg_ds    (zet_ds),
+        .dbg_halted()
+    );
+    assign zwb_nmia  = 1'b0;
+    assign zet_fault = 1'b0;
+    assign zet_opc   = 8'h00;
+    assign zet_exec  = 1'b0;
+`else
     zet u_cpu (
         .wb_clk_i  (zet_clk),
         .wb_rst_i  (reset_cpu),
@@ -3318,6 +3344,7 @@ module core_top (
         .dbg_ds    (zet_ds),
         .dbg_exec  (zet_exec)
     );
+`endif
 
     // Debug: the last guest data-bus read / write byte addresses. Instruction
     // fetches are BS_CODE and I/O is BS_IOR/BS_IOW on processor_status, so a

@@ -35,6 +35,10 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # afford (slot 0x33 = last guest I/O write + count).
 set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
 
+# CPU: z86 (pipelined 286-class, fpga/core/z86) instead of Zet. Comment out
+# to fall back to Zet; the bridge and everything below it are shared.
+set_global_assignment -name VERILOG_MACRO "PC98_Z86=1"
+
 # Boot the ITF, not the BIOS.
 #
 # The core has powered on into the BIOS since the retrobios ITF was found to

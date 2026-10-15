@@ -180,6 +180,30 @@ module tb_pc98_boot;
         .dbg               (zbridge_dbg)
     );
 
+    logic        fwdis_r = 1'b0;     // +fwdis: Zet's fetch-window A/B
+`ifdef Z86
+    z86 u_cpu (
+        .clk       (zet_clk),
+        .reset     (cpu_reset_w),
+        .wb_adr_o  (zwb_adr),
+        .wb_sel_o  (zwb_sel),
+        .wb_we_o   (zwb_we),
+        .wb_tga_o  (zwb_tga),
+        .wb_dat_o  (zwb_dat_o),
+        .wb_stb_o  (zwb_stb),
+        .wb_cyc_o  (zwb_cyc),
+        .wb_ack_i  (zwb_ack),
+        .wb_dat_i  (zwb_dat_i),
+        .wb_tgc_i  (pic1_to_cpu),
+        .wb_tgc_o  (zwb_inta),
+        .pc        (zet_pc),
+        .dbg_ds    (),
+        .dbg_halted()
+    );
+    assign zwb_nmia  = 1'b0;
+    assign zet_fault = 1'b0;
+    assign zet_opc   = 8'h00;
+`else
     zet u_cpu (
         .wb_clk_i  (zet_clk),
         .wb_rst_i  (cpu_reset_w),
@@ -201,6 +225,7 @@ module tb_pc98_boot;
         .dbg_fault (zet_fault),
         .dbg_opc   (zet_opc)
     );
+`endif
 
     // End-to-end readback: every acked Wishbone memory read must equal the
     // architectural byte the guest was meant to see (mirror/ROM model). A
@@ -661,7 +686,6 @@ module tb_pc98_boot;
     logic        analog4_r = 1'b0;
     logic        disp_page_r = 1'b0;
     logic        dbl_r = 1'b0;
-    logic        fwdis_r = 1'b0;
     logic [15:0] disp_sad [0:3] = '{16'd0, 16'd0, 16'd0, 16'd0};
     logic [9:0]  disp_len [0:3] = '{10'd400, 10'd0, 10'd0, 10'd0};
     initial begin
@@ -982,6 +1006,9 @@ module tb_pc98_boot;
     // strobe on the pins is as good as captured -- the drain's witness is
     // simply "the write command reached the bus".
     wire sdram_wt_w = ~mem_wr_n;
+    // Read witness: the flat array answers within the strobe, so the
+    // read is "ours and answered" for as long as its strobe is up.
+    wire sdram_rd_own_w = ~mem_rd_n;
 `endif
 
     // True when the read above fell through to the FF default -- i.e. nothing
@@ -2060,14 +2087,22 @@ module tb_pc98_boot;
         if (!cpu_reset_w && zwb_stb && zwb_tr_n < 600) begin
             $display("  %8t  ZWB %s adr %05x sel %b dat_o %04x c_dat %04x c_adr %05x age %0d",
                      $time, zwb_we ? "WR" : "RD", {zwb_adr,1'b0}, zwb_sel,
+`ifdef Z86
+                     zwb_dat_o, 16'h0, 20'h0,
+`else
                      zwb_dat_o, u_cpu.cpu_dat_o, u_cpu.cpu_adr_o,
+`endif
                      u_bridge.req_age);
             zwb_tr_n <= zwb_tr_n + 1;
         end
         if (!cpu_reset_w && zwb_stb && zwb_ack && !zwb_we && zwb_tr_n < 1200) begin
             $display("  %8t  ZAK RD adr %05x sel %b dat_i %04x c_dat_i %04x rdw %04x imm_l %04x",
                      $time, {zwb_adr,1'b0}, zwb_sel, zwb_dat_i,
+`ifdef Z86
+                     16'h0, u_bridge.rd_word, 16'h0);
+`else
                      u_cpu.cpu_dat_i, u_bridge.rd_word, u_cpu.core.fetch.imm_l);
+`endif
             zwb_tr_n <= zwb_tr_n + 1;
         end
     end
