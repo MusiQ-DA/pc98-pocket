@@ -286,6 +286,10 @@ module core_top (
     logic        cycle_accrate;
     logic        vram_wait_en;
     logic  [1:0] clk_select;
+`ifndef PC98_JTAG
+    wire [7:0]  dbg_sysport_w;
+    wire [31:0] tvram_dbg_q;
+`endif
 `ifdef PC98_JTAG
     // JTAG slot 0x89 can pin the speed for scripted benchmark runs;
     // otherwise the OSD setting owns clk_select_next exactly as before.
@@ -3637,6 +3641,7 @@ module core_top (
     wire        VSync;
     wire [5:0]  r, g, b;
 
+`ifdef PC98_JTAG
     // ------------------------------------------------------ dot capture
     //
     // What actually leaves CHIPSET, dot by dot: whether the composite took
@@ -3679,6 +3684,7 @@ module core_top (
                 dcap_i <= dcap_i + 6'd1;
         end
     end
+`endif
 
     // ------------------------------------------------------ hardware bands
     //
