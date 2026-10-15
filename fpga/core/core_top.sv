@@ -1687,8 +1687,8 @@ module core_top (
             8'h81:   probe_data_c = bridge_dbg_pfv[415:384];
             // 0x91-0x99: bridge re-read verifier (slot 9 bit 12) -- 0x91
             // {frozen, ube, fillm, addr}, 0x92 {first answer, re-read},
-            // 0x93 {mismatches, checks} live, 0x94/0x95 read/re-read t,
-            // 0x96-0x99 the four arms up to the read, newest first:
+            // 0x93 {mismatches, checks} live, 0x99/0x94 read/re-read t,
+            // 0x95-0x98 the four arms up to the read, newest first:
             // {kind (0 req, 1 fill, 2 fillm, 3 drain), bs (7 = re-read),
             // t[6:0], addr}.
             8'h91:   probe_data_c = bridge_dbg_rrv[31:0];
