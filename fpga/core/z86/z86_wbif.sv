@@ -17,8 +17,10 @@
 //   * cyc == stb, raised with stable operands and held until wb_ack_i,
 //     which the bridge presents for exactly one edge of this (gated) clock.
 //
-//  z86's cache gives line loads priority, then writes, then reads; the
-//  same order is kept here. A line load is eight word reads (16 bytes,
+//  Writes go first, then line loads, then reads. (z86's own cache put the
+//  line load ahead of a pending write; on this bus that let a far jump into
+//  just-patched code -- the ITF's 0000:04F8 hand-over stub -- fetch the
+//  bytes from before the patch.) A line load is eight word reads (16 bytes,
 //  16-byte aligned by the fetch unit) and always runs to completion: the
 //  fetch unit drops a stale line itself (loading_drop).
 //
@@ -111,16 +113,7 @@ module z86_wbif (
 
             case (st)
               S_IDLE: begin
-                if (ld_req ^ ld_ack) begin
-                    ld_base  <= {ld_addr[19:4], 4'b0};
-                    ld_i     <= 3'd0;
-                    wb_adr_o <= {ld_addr[19:4], 3'd0};
-                    wb_sel_o <= 2'b11;
-                    wb_we_o  <= 1'b0;
-                    wb_tga_o <= 1'b0;
-                    wb_stb_o <= 1'b1;
-                    st       <= S_LD;
-                end else if (wr_valid && !wr_ready) begin
+                if (wr_valid && !wr_ready) begin
                     // Word at an odd address: the odd byte first, its data
                     // (the low byte of the word) in lane [15:8].
                     wb_adr_o <= wr_addr[19:1];
@@ -131,6 +124,15 @@ module z86_wbif (
                     wb_tga_o <= wr_io;
                     wb_stb_o <= 1'b1;
                     st       <= S_WR1;
+                end else if (ld_req ^ ld_ack) begin
+                    ld_base  <= {ld_addr[19:4], 4'b0};
+                    ld_i     <= 3'd0;
+                    wb_adr_o <= {ld_addr[19:4], 3'd0};
+                    wb_sel_o <= 2'b11;
+                    wb_we_o  <= 1'b0;
+                    wb_tga_o <= 1'b0;
+                    wb_stb_o <= 1'b1;
+                    st       <= S_LD;
                 end else if (rd_pend || rd) begin
                     // rd may be this very cycle's pulse: take its operands
                     // live, the capture above lands at the same edge.

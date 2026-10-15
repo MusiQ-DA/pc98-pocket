@@ -34,7 +34,7 @@ for TB in tb_xrom tb_scsi_rom; do
     # shellcheck disable=SC2086
     verilator --binary --timing -Wno-fatal --top-module "$TB" \
       +define+$DEFINES \
-      -Isim -I$S -I$S/chipset/HDL -I$S/zet \
+      -Isim -I$S -I$S/chipset/HDL -I$S/zet -I$S/z86 \
       -I$S/chipset/HDL/i8288/HDL -I$S/chipset/HDL/i8253/HDL -I$S/chipset/HDL/i8259/HDL \
       -I$S/chipset/HDL/upd71071/HDL \
       -I$S/common -I$S/audio \

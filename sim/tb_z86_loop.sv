@@ -24,6 +24,9 @@ module tb_z86_loop;
     logic [7:0] mem [0:1048575];
     int lat = 4, n = 1000;
     logic [19:0] org = 20'h00400;
+    string prog;
+    logic [7:0] pbuf [0:4095];
+    initial for (int i = 0; i < 4096; i++) pbuf[i] = 8'hF4;
     int rd_n = 0, wr_n = 0, cnt = 0;
     initial begin
         void'($value$plusargs("lat=%d", lat));
@@ -36,10 +39,21 @@ module tb_z86_loop;
             mem[20'hFFFF0] = 8'hEA; mem[20'hFFFF1] = org[7:0]; mem[20'hFFFF2] = org[15:8];
             mem[20'hFFFF3] = 8'h00; mem[20'hFFFF4] = {org[19:16], 4'h0};
         end
-        // org: mov cx,n ; loop $ ; hlt
-        mem[org+0] = 8'hB9; mem[org+1] = n[7:0]; mem[org+2] = n[15:8];
-        mem[org+3] = 8'hE2; mem[org+4] = 8'hFE;
-        mem[org+5] = 8'hF4;
+        // org: mov cx,n ; loop $ ; hlt -- or +prog=<hex> (one byte per line)
+        if ($value$plusargs("prog=%s", prog)) begin
+            $readmemh(prog, pbuf);
+            for (int i = 0; i < 4096; i++) mem[org+i] = pbuf[i];
+            // data the program may walk: word i at 0800+2i = i*0x0123+0x4567
+            for (int i = 0; i < 256; i++) begin
+                logic [15:0] w;
+                w = i * 16'h0123 + 16'h4567;
+                mem[20'h00800 + 2*i] = w[7:0]; mem[20'h00801 + 2*i] = w[15:8];
+            end
+        end else begin
+            mem[org+0] = 8'hB9; mem[org+1] = n[7:0]; mem[org+2] = n[15:8];
+            mem[org+3] = 8'hE2; mem[org+4] = 8'hFE;
+            mem[org+5] = 8'hF4;
+        end
         repeat (5) @(posedge clk);
         reset = 0;
     end
@@ -69,6 +83,12 @@ module tb_z86_loop;
         if (halted) begin
             $display("n=%0d lat=%0d: %0d clocks, %0d reads, %0d writes -> %0.1f clk/iter",
                      n, lat, cyc_n, rd_n, wr_n, real'(cyc_n) / n);
+            $write("mem 0700:");
+            for (int i = 0; i < 32; i++) $write(" %02x%02x", mem[20'h701 + 2*i], mem[20'h700 + 2*i]);
+            $display("");
+            $display("mem 0600: %02x %02x %02x %02x %02x %02x %02x %02x",
+                     mem[20'h600], mem[20'h601], mem[20'h602], mem[20'h603],
+                     mem[20'h604], mem[20'h605], mem[20'h606], mem[20'h607]);
             $finish;
         end
         if (cyc_n > 10_000_000) begin

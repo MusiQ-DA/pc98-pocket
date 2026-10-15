@@ -1444,6 +1444,13 @@ module tb_pc98_boot;
                 $write("\n");
                 $display("  %8t  OUT 043D, %02X   -> itf_bank %0d",
                          $time, cpu_data_bus, (cpu_data_bus == 8'h12) ? 0 : 1);
+`ifdef Z86
+                $display("             z86: ax %04X cx %04X dx %04X bx %04X sp %04X si %04X flags %04X cs %04X ds %04X",
+                         u_cpu.u_regfile.regs[0], u_cpu.u_regfile.regs[1],
+                         u_cpu.u_regfile.regs[2], u_cpu.u_regfile.regs[3],
+                         u_cpu.u_regfile.regs[4], u_cpu.u_regfile.regs[6],
+                         u_cpu.u_execute.reg_f, u_cpu.seg_CS, u_cpu.seg_DS);
+`endif
             end
             // FDC window: the byte stream the firmware panel shows on
             // hardware, so the sim's sequence can be diffed against it.
@@ -2079,6 +2086,23 @@ module tb_pc98_boot;
             $display("  %8t  ZINTA asserted (vec on wb_dat_i %04X)", $time, zwb_dat_i);
             zet_tr_n <= zet_tr_n + 1;
         end
+
+    // Hand-over trace (+trace43d): the first 160 acked Wishbone cycles after
+    // the first OUT 043D,12 -- what the CPU fetched and where it went.
+    bit  tr43_en = 0;
+    int  tr43_n  = -1;
+    initial tr43_en = $test$plusargs("trace43d");
+    always_ff @(posedge zet_clk) begin
+        if (tr43_en && tr43_n < 0 && saw_043d && last_043d == 8'h12)
+            tr43_n <= 0;
+        else if (tr43_n >= 0 && tr43_n < 160 && zwb_stb && zwb_ack) begin
+            $display("  %8t  T43 %s %s adr %05x sel %b dat %04x  pc %05x",
+                     $time, zwb_tga ? "IO " : "MEM", zwb_we ? "WR" : "RD",
+                     {zwb_adr, 1'b0}, zwb_sel, zwb_we ? zwb_dat_o : zwb_dat_i,
+                     zet_pc);
+            tr43_n <= tr43_n + 1;
+        end
+    end
 
     // Wishbone settle trace: while stb is up, watch the master's tracked
     // outputs converge to the exec stage's combinational operands.
