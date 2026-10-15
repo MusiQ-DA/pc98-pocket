@@ -316,6 +316,9 @@ module core_top (
     //                    master) kills both windows
     logic        jtag_pf_wkill   = 1'b0;
     logic        jtag_pf_bkill   = 1'b0;
+    //  [11]  pf_verify -- would-be window hits go to the bus and are
+    //                    compared with the window (reads 0x04-0x0E)
+    logic        jtag_pf_verify  = 1'b0;
     logic [19:0] jtag_watch_addr = 20'hFFFFF;
     wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
                                               : cpu_speed_cfg;
@@ -338,6 +341,7 @@ module core_top (
     wire         jtag_fwdis      = 1'b0;
     wire         jtag_nowrap     = 1'b0;
     wire         jtag_pf_wkill   = 1'b0;
+    wire         jtag_pf_verify  = 1'b0;
     wire         jtag_pf_bkill   = 1'b0;
     wire  [19:0] jtag_watch_addr = 20'hFFFFF;
 `endif
@@ -1208,6 +1212,7 @@ module core_top (
         .dbg_pico                   (dbg_pico_w)
     );
 
+    wire [351:0] bridge_dbg_pfv;   // zet_cpu_bridge hit verifier
 `ifdef PC98_JTAG
     //
     // JTAG probe -- the panel's readout without a camera.
@@ -1654,6 +1659,22 @@ module core_top (
             8'h17:   probe_data_c = {8'h00, retired_cnt};   // liveness
             8'h18:   probe_data_c = {12'h000, zet_pc};      // current bus cycle
             8'h01:   probe_data_c = brg_q[31:0];
+            // 0x04-0x0E: bridge hit verifier (slot 9 bit 11) -- 0x04
+            // {frozen, ube, win, addr}, 0x05 {window word, bus word}, 0x06
+            // {mismatches, checks} live, 0x07 last fill {fillm, len, addr},
+            // 0x08 fill t, 0x09 check t, 0x0A {base, lo, cnt}, 0x0B/0x0C
+            // last write into the sector {addr}/{t}, 0x0D/0x0E last drain.
+            8'h04:   probe_data_c = bridge_dbg_pfv[31:0];
+            8'h05:   probe_data_c = bridge_dbg_pfv[63:32];
+            8'h06:   probe_data_c = bridge_dbg_pfv[95:64];
+            8'h07:   probe_data_c = bridge_dbg_pfv[127:96];
+            8'h08:   probe_data_c = bridge_dbg_pfv[159:128];
+            8'h09:   probe_data_c = bridge_dbg_pfv[191:160];
+            8'h0a:   probe_data_c = bridge_dbg_pfv[223:192];
+            8'h0b:   probe_data_c = bridge_dbg_pfv[255:224];
+            8'h0c:   probe_data_c = bridge_dbg_pfv[287:256];
+            8'h0d:   probe_data_c = bridge_dbg_pfv[319:288];
+            8'h0e:   probe_data_c = bridge_dbg_pfv[351:320];
             8'h02:   probe_data_c = {9'h0, brg_q[54:32]};
             8'h03:   probe_data_c = {24'h0, brg_w};
             // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
@@ -2264,6 +2285,7 @@ module core_top (
             jtag_nowrap   <= probe_wdata_c[8];
             jtag_pf_wkill <= probe_wdata_c[9];
             jtag_pf_bkill <= probe_wdata_c[10];
+            jtag_pf_verify  <= probe_wdata_c[11];
         end
         // Slot 0x0a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
         // every memory write landing on it is logged (CPU or DMA alike).
@@ -3463,6 +3485,8 @@ module core_top (
         .pf_nohit          (jtag_pf_nohit),
         .pf_wkill          (jtag_pf_wkill),
         .pf_bkill          (jtag_pf_bkill),
+        .pf_verify         (jtag_pf_verify),
+        .dbg_pfv           (bridge_dbg_pfv),
         .bus_mem_write_n   (chipset_memory_write_n),
         .bios_shadow_flag  (bios_shadow_flag),
         .dbg               (bridge_dbg),

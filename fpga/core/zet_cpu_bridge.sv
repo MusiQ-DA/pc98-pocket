@@ -146,6 +146,14 @@ module zet_cpu_bridge (
     input  wire         pf_wkill,
     input  wire         pf_bkill,
     input  wire         bus_mem_write_n,
+    // Hit verifier (probe): with pf_verify up, a read the windows WOULD
+    // serve is sent to the bus instead, and the window's bytes are
+    // compared against what the bus returns. The first mismatch freezes
+    // dbg_pfv with the window's last fill and the last writes/drains into
+    // its sector -- enough to tell a missed invalidation (write after the
+    // fill) from a fill that read RAM ahead of a write (write before it).
+    input  wire         pf_verify,
+    output wire [351:0] dbg_pfv,
     // F-bank remap select: guest F8000-FFFFF is banked between the system
     // BIOS and the ITF shadow (RAM.sv latch_address). The windows tag the
     // guest address only, so a bank flip must drop them -- bytes fetched
@@ -729,7 +737,7 @@ module zet_cpu_bridge (
     // windows are being dropped anyway, and not over a queued write's
     // span, where the window's bytes predate the pending store.
     wire hit_serve = pf_hit && bus_ours && (bstate == B_IDLE) && !wrq_ovl
-                  && !bank_chg && !pf_nohit;
+                  && !bank_chg && !pf_nohit && !pf_verify;
 
     wire [4:0]  pf_idx0 = srv_beg[4:0];
     wire [7:0]  pf_b0   = pf_buf[{pf_hw, pf_idx0}];
@@ -1328,6 +1336,122 @@ module zet_cpu_bridge (
             endcase
         end
     end
+
+    // ------------------------------------------------------------------
+    // Hit verifier -- see the pf_verify port.
+    // ------------------------------------------------------------------
+    reg  [23:0] pv_tick = 24'd0;
+    // per window: last fill {fillm, len, addr, t}; last guest write and
+    // last drain whose sector matched the window's base {addr, t}
+    reg         pv_ft  [0:1];
+    reg  [4:0]  pv_fl  [0:1];
+    reg  [19:0] pv_fa  [0:1];
+    reg  [23:0] pv_fti [0:1];
+    reg  [19:0] pv_wa  [0:1];
+    reg  [23:0] pv_wt  [0:1];
+    reg  [19:0] pv_da  [0:1];
+    reg  [23:0] pv_dt  [0:1];
+    // the check in flight
+    reg         pv_pend = 1'b0;
+    reg  [19:0] pv_addr = 20'h0;
+    reg         pv_ube = 1'b0, pv_hw = 1'b0;
+    reg  [15:0] pv_win = 16'h0;
+    reg  [23:0] pv_t = 24'd0;
+    reg  [14:0] pv_base = 15'h0;
+    reg  [4:0]  pv_lo = 5'h0;
+    reg  [5:0]  pv_cnt = 6'h0;
+    reg         pv_rft = 1'b0;
+    reg  [4:0]  pv_rfl = 5'h0;
+    reg  [19:0] pv_rfa = 20'h0, pv_rwa = 20'h0, pv_rda = 20'h0;
+    reg  [23:0] pv_rfti = 24'd0, pv_rwt = 24'd0, pv_rdt = 24'd0;
+    // frozen record
+    reg         pv_frz = 1'b0;
+    reg  [15:0] pv_bus = 16'h0;
+    reg  [15:0] pv_n = 16'h0, pv_bad = 16'h0;
+    reg  [351:0] pv_rec = 352'h0;
+    wire [15:0] pv_bus_now = cur_word ? {rd_hi, rd_lo} : {rd_lo, rd_lo};
+    wire        pv_done = (bstate == B_GAP) && pair_finish && last_byte
+                       && !cur_inta && !cur_pf && !cur_dq;
+    wire        pv_wr   = wrq_push || arm_wr;
+    always @(posedge clk) begin
+        pv_tick <= pv_tick + 24'd1;
+        if (arm_fill) begin
+            pv_ft[fill_w]  <= 1'b0;
+            pv_fl[fill_w]  <= pf_fill_len;
+            pv_fa[fill_w]  <= pf_next[19:0];
+            pv_fti[fill_w] <= pv_tick;
+        end
+        if (fillm_go) begin
+            pv_ft[fillm_w]  <= 1'b1;
+            pv_fl[fillm_w]  <= fillm_len;
+            pv_fa[fillm_w]  <= srv_addr;
+            pv_fti[fillm_w] <= pv_tick;
+        end
+        if (pv_wr && (srv_addr[19:5] == pf_base0[19:5])) begin
+            pv_wa[0] <= srv_addr; pv_wt[0] <= pv_tick;
+        end
+        if (pv_wr && (srv_addr[19:5] == pf_base1[19:5])) begin
+            pv_wa[1] <= srv_addr; pv_wt[1] <= pv_tick;
+        end
+        if (arm_drain && (wrq_addr[0][19:5] == pf_base0[19:5])) begin
+            pv_da[0] <= wrq_addr[0]; pv_dt[0] <= pv_tick;
+        end
+        if (arm_drain && (wrq_addr[0][19:5] == pf_base1[19:5])) begin
+            pv_da[1] <= wrq_addr[0]; pv_dt[1] <= pv_tick;
+        end
+
+        if (!pf_verify) begin
+            pv_pend <= 1'b0;
+            pv_frz  <= 1'b0;
+            pv_n    <= 16'h0;
+            pv_bad  <= 16'h0;
+        end else begin
+            if (arm_rd_ok && pf_hit && (srv_term == TERM_NONE)) begin
+                pv_pend <= 1'b1;
+                pv_addr <= srv_addr;
+                pv_ube  <= srv_ube;
+                pv_hw   <= pf_hw;
+                pv_win  <= pf_hit_word;
+                pv_t    <= pv_tick;
+                pv_base <= pf_hw ? pf_base1[19:5] : pf_base0[19:5];
+                pv_lo   <= pf_hw ? pf_lo1  : pf_lo0;
+                pv_cnt  <= pf_hw ? pf_cnt1 : pf_cnt0;
+                pv_rft  <= pv_ft[pf_hw];
+                pv_rfl  <= pv_fl[pf_hw];
+                pv_rfa  <= pv_fa[pf_hw];
+                pv_rfti <= pv_fti[pf_hw];
+                pv_rwa  <= pv_wa[pf_hw];
+                pv_rwt  <= pv_wt[pf_hw];
+                pv_rda  <= pv_da[pf_hw];
+                pv_rdt  <= pv_dt[pf_hw];
+            end
+            if (pv_done && pv_pend) begin
+                pv_pend <= 1'b0;
+                pv_n    <= pv_n + 16'd1;
+                if (pv_bus_now != pv_win) begin
+                    pv_bad <= pv_bad + 16'd1;
+                    if (!pv_frz) begin
+                        pv_frz <= 1'b1;
+                        pv_bus <= pv_bus_now;
+                        pv_rec <= {
+                            {8'h0, pv_rdt},                       // 10
+                            {12'h0, pv_rda},                      // 9
+                            {8'h0, pv_rwt},                       // 8
+                            {12'h0, pv_rwa},                      // 7
+                            {pv_base, pv_lo, pv_cnt, 6'h0},       // 6
+                            {8'h0, pv_t},                         // 5
+                            {8'h0, pv_rfti},                      // 4
+                            {pv_rft, pv_rfl, 6'h0, pv_rfa},       // 3
+                            32'h0,                                // 2 (live)
+                            {pv_win, pv_bus_now},                 // 1
+                            {1'b1, pv_ube, pv_hw, 9'h0, pv_addr}  // 0
+                        };
+                    end
+                end
+            end
+        end
+    end
+    assign dbg_pfv = {pv_rec[351:96], pv_bad, pv_n, pv_rec[63:0]};
 
 `ifdef ZET_DBG_WQ
     reg rdy_seen;  // processor_ready dipped this pair

@@ -86,6 +86,7 @@ module tb_mem_perf;
     reg         pf_nofill_r = 1'b0;
     reg         pf_nofillm_r = 1'b0;
     reg         pf_nohit_r  = 1'b0;
+    reg         pf_vfy_r    = 1'b0;
     reg         fwdis_r     = 1'b0;
     reg         shadow_flag_r = 1'b0;
     reg         irq_req     = 1'b0;
@@ -95,6 +96,7 @@ module tb_mem_perf;
         pf_nofill_r = $test$plusargs("pfnofill");
         pf_nofillm_r = $test$plusargs("pfnofillm");
         pf_nohit_r  = $test$plusargs("pfnohit");
+        pf_vfy_r    = $test$plusargs("pfvfy");
         fwdis_r     = $test$plusargs("fwdis");
     end
 
@@ -138,6 +140,8 @@ module tb_mem_perf;
         .pf_nofill         (pf_nofill_r),
         .pf_nofillm        (pf_nofillm_r),
         .pf_nohit          (pf_nohit_r),
+        .pf_verify         (pf_vfy_r),
+        .dbg_pfv           (),
         .bios_shadow_flag  (shadow_flag_r),
         .dbg               ()
     );
@@ -1846,6 +1850,10 @@ module tb_mem_perf;
                 $display("  irqcount 070A=%02x", w[7:0]);
                 if (w[7:0] == 8'h00) bad++;
             end
+            if (pf_vfy_r)
+                $display("PFVFY: checks=%0d mismatches=%0d first a=%05x win=%04x bus=%04x",
+                         u_bridge.pv_n, u_bridge.pv_bad, u_bridge.pv_rec[19:0],
+                         u_bridge.pv_rec[63:48], u_bridge.pv_rec[47:32]);
             $display("VERIFY: bad=%0d diverged=%0d stray=%0d grants=%0d midcmd=%0d dma_bytes=%0d pfbad=%0d pforeign=%0d porphan=%0d rdfor=%0d svc_ops=%0d stale=%0d",
                      bad, diverged, stray, grants, grants_midcmd, dma_seen,
                      c_pbad, c_pforeign, c_porphan, c_rd_foreign, svc_ops, c_stale);
