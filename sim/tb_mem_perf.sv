@@ -87,6 +87,7 @@ module tb_mem_perf;
     reg         pf_nofillm_r = 1'b0;
     reg         pf_nohit_r  = 1'b0;
     reg         pf_vfy_r    = 1'b0;
+    reg         rr_vfy_r    = 1'b0;
     reg         fwdis_r     = 1'b0;
     reg         shadow_flag_r = 1'b0;
     reg         irq_req     = 1'b0;
@@ -97,6 +98,7 @@ module tb_mem_perf;
         pf_nofillm_r = $test$plusargs("pfnofillm");
         pf_nohit_r  = $test$plusargs("pfnohit");
         pf_vfy_r    = $test$plusargs("pfvfy");
+        rr_vfy_r    = $test$plusargs("rrvfy");
         fwdis_r     = $test$plusargs("fwdis");
     end
 
@@ -142,6 +144,8 @@ module tb_mem_perf;
         .pf_nohit          (pf_nohit_r),
         .pf_verify         (pf_vfy_r),
         .dbg_pfv           (),
+        .rr_verify         (rr_vfy_r),
+        .dbg_rrv           (),
         .bios_shadow_flag  (shadow_flag_r),
         .dbg               ()
     );
@@ -1850,6 +1854,10 @@ module tb_mem_perf;
                 $display("  irqcount 070A=%02x", w[7:0]);
                 if (w[7:0] == 8'h00) bad++;
             end
+            if (rr_vfy_r)
+                $display("RRVFY: checks=%0d mismatches=%0d first a=%05x orig=%04x reread=%04x",
+                         u_bridge.rr_n, u_bridge.rr_bad, u_bridge.rr_rec[19:0],
+                         u_bridge.rr_rec[63:48], u_bridge.rr_rec[47:32]);
             if (pf_vfy_r)
                 $display("PFVFY: checks=%0d mismatches=%0d first a=%05x win=%04x bus=%04x",
                          u_bridge.pv_n, u_bridge.pv_bad, u_bridge.pv_rec[19:0],
@@ -2317,6 +2325,10 @@ module tb_mem_perf;
                  diverged, stray, grants, grants_midcmd, cur_phase, zet_pc,
                  c_uncov, c_pbad, c_rd_foreign, c_wit_foreign,
                  sdr.u_part.peek(20'h070A));
+        if (rr_vfy_r)
+            $display("RRVFY: checks=%0d mismatches=%0d first a=%05x orig=%04x reread=%04x",
+                     u_bridge.rr_n, u_bridge.rr_bad, u_bridge.rr_rec[19:0],
+                     u_bridge.rr_rec[63:48], u_bridge.rr_rec[47:32]);
         if (pf_vfy_r)
             $display("PFVFY: checks=%0d mismatches=%0d first a=%05x win=%04x bus=%04x",
                      u_bridge.pv_n, u_bridge.pv_bad, u_bridge.pv_rec[19:0],

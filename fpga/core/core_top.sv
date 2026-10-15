@@ -319,6 +319,9 @@ module core_top (
     //  [11]  pf_verify -- would-be window hits go to the bus and are
     //                    compared with the window (reads 0x04-0x0E)
     logic        jtag_pf_verify  = 1'b0;
+    //  [12]  rr_verify -- every plain guest SDRAM read is re-read by the
+    //                    bridge and compared (reads 0x91-0x99)
+    logic        jtag_rr_verify  = 1'b0;
     logic [19:0] jtag_watch_addr = 20'hFFFFF;
     wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
                                               : cpu_speed_cfg;
@@ -342,6 +345,7 @@ module core_top (
     wire         jtag_nowrap     = 1'b0;
     wire         jtag_pf_wkill   = 1'b0;
     wire         jtag_pf_verify  = 1'b0;
+    wire         jtag_rr_verify  = 1'b0;
     wire         jtag_pf_bkill   = 1'b0;
     wire  [19:0] jtag_watch_addr = 20'hFFFFF;
 `endif
@@ -1213,6 +1217,7 @@ module core_top (
     );
 
     wire [415:0] bridge_dbg_pfv;   // zet_cpu_bridge hit verifier
+    wire [287:0] bridge_dbg_rrv;   // zet_cpu_bridge re-read verifier
 `ifdef PC98_JTAG
     //
     // JTAG probe -- the panel's readout without a camera.
@@ -1680,6 +1685,21 @@ module core_top (
             // without its own pair reaching the compare.
             8'h0f:   probe_data_c = bridge_dbg_pfv[383:352];
             8'h81:   probe_data_c = bridge_dbg_pfv[415:384];
+            // 0x91-0x99: bridge re-read verifier (slot 9 bit 12) -- 0x91
+            // {frozen, ube, fillm, addr}, 0x92 {first answer, re-read},
+            // 0x93 {mismatches, checks} live, 0x94/0x95 read/re-read t,
+            // 0x96-0x99 the four arms up to the read, newest first:
+            // {kind (0 req, 1 fill, 2 fillm, 3 drain), bs (7 = re-read),
+            // t[6:0], addr}.
+            8'h91:   probe_data_c = bridge_dbg_rrv[31:0];
+            8'h92:   probe_data_c = bridge_dbg_rrv[63:32];
+            8'h93:   probe_data_c = bridge_dbg_rrv[95:64];
+            8'h94:   probe_data_c = bridge_dbg_rrv[159:128];
+            8'h95:   probe_data_c = bridge_dbg_rrv[191:160];
+            8'h96:   probe_data_c = bridge_dbg_rrv[223:192];
+            8'h97:   probe_data_c = bridge_dbg_rrv[255:224];
+            8'h98:   probe_data_c = bridge_dbg_rrv[287:256];
+            8'h99:   probe_data_c = bridge_dbg_rrv[127:96];
             8'h02:   probe_data_c = {9'h0, brg_q[54:32]};
             8'h03:   probe_data_c = {24'h0, brg_w};
             // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
@@ -2291,6 +2311,7 @@ module core_top (
             jtag_pf_wkill <= probe_wdata_c[9];
             jtag_pf_bkill <= probe_wdata_c[10];
             jtag_pf_verify  <= probe_wdata_c[11];
+            jtag_rr_verify  <= probe_wdata_c[12];
         end
         // Slot 0x0a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
         // every memory write landing on it is logged (CPU or DMA alike).
@@ -3492,6 +3513,8 @@ module core_top (
         .pf_bkill          (jtag_pf_bkill),
         .pf_verify         (jtag_pf_verify),
         .dbg_pfv           (bridge_dbg_pfv),
+        .rr_verify         (jtag_rr_verify),
+        .dbg_rrv           (bridge_dbg_rrv),
         .bus_mem_write_n   (chipset_memory_write_n),
         .bios_shadow_flag  (bios_shadow_flag),
         .dbg               (bridge_dbg),
