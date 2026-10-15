@@ -146,16 +146,6 @@ module zet_cpu_bridge (
     input  wire         pf_wkill,
     input  wire         pf_bkill,
     input  wire         bus_mem_write_n,
-    // pf_verify: would-be window hits go to the bus instead (the retired
-    // hit verifier's switch, kept as an A/B knob).
-    input  wire         pf_verify,
-    // Re-read verifier (probe): every plain one-pair SDRAM guest read is
-    // read again by the engine as soon as it can, and the two answers are
-    // compared (skipped if a write, DMA grant, I/O write or bank flip could
-    // have changed the bytes in between). The first mismatch freezes the
-    // read and the four pairs that armed before it.
-    input  wire         rr_verify,
-    output wire [287:0] dbg_rrv,
     // F-bank remap select: guest F8000-FFFFF is banked between the system
     // BIOS and the ITF shadow (RAM.sv latch_address). The windows tag the
     // guest address only, so a bank flip must drop them -- bytes fetched
@@ -308,14 +298,12 @@ module zet_cpu_bridge (
             // after the Zet edge that consumed it -- one edge wide, so a
             // clk-rate master cannot double-sample. If the core is halted
             // the pulse simply holds until an edge is delivered.
-            // !cur_pf/!cur_dq/!cur_vr: a prefetch fill's, write-drain's or
-            // verifier re-read's
+            // !cur_pf/!cur_dq: a prefetch fill's or a write-drain's
             // completion must never ack -- a request captured mid-pair
             // is served by the normal path once that pair retires.
             // !cur_inta: the INTA pair's pair_done must not ack a memory
             // read still parked on req_busy by the defer below.
-            if (pair_done && req_busy && !cur_pf && !cur_dq && !cur_vr
-                && !cur_inta) begin
+            if (pair_done && req_busy && !cur_pf && !cur_dq && !cur_inta) begin
                 // A read that retires inside the vector-park window can't
                 // ack yet: wb_dat_i is committed to the vector while
                 // wb_tgc_o/nmia is up, so the ack would hand the master
@@ -741,7 +729,7 @@ module zet_cpu_bridge (
     // windows are being dropped anyway, and not over a queued write's
     // span, where the window's bytes predate the pending store.
     wire hit_serve = pf_hit && bus_ours && (bstate == B_IDLE) && !wrq_ovl
-                  && !bank_chg && !pf_nohit && !pf_verify;
+                  && !bank_chg && !pf_nohit;
 
     wire [4:0]  pf_idx0 = srv_beg[4:0];
     wire [7:0]  pf_b0   = pf_buf[{pf_hw, pf_idx0}];
@@ -909,26 +897,15 @@ module zet_cpu_bridge (
         end
     end
 
-    // Re-read verifier state (see the rr_verify port); rr_go preempts the
-    // guest so the re-read cannot starve behind a busy core.
-    reg         rr_pend = 1'b0;
-    reg  [19:0] rr_addr = 20'h0;
-    reg         rr_ube  = 1'b0;
-    reg         cur_vr  = 1'b0;     // the pair in flight is a re-read
-    wire        rr_go   = (bstate == B_IDLE) && rr_pend && bus_ours
-                       && (wrq_cnt == 3'd0) && !wrq_push && sh_mcp;
-    wire        arm_vr  = rr_go;
-
     // Engine arms, for the prefetch block's bookkeeping.
     wire arm_req   = (bstate == B_IDLE) && srv_any && bus_ours && !hit_serve
-                  && !srv_blk && (wrq_cnt != WQ_N[2:0]) && sh_mcp && !rr_go;
+                  && !srv_blk && (wrq_cnt != WQ_N[2:0]) && sh_mcp;
     // The drain wins only when the engine is otherwise idle -- or when a
     // full queue is the thing standing between the guest and its arm.
     wire arm_drain = (bstate == B_IDLE) && bus_ours && (wrq_cnt != 3'd0)
                   && !arm_req && sh_mcp;
     wire arm_fill  = (bstate == B_IDLE) && srv_pf && bus_ours && !hit_serve
-                  && !srv_any && (wrq_cnt == 3'd0) && !wrq_push && sh_mcp
-                  && !rr_go;
+                  && !srv_any && (wrq_cnt == 3'd0) && !wrq_push && sh_mcp;
     wire arm_rd_ok = arm_req && (srv_bs == BS_MEMR)
                   && pc98_sdram_hits(srv_addr, analog_mode)
                   && !pc98_gvram_hits(srv_addr, analog_mode);
@@ -1352,95 +1329,6 @@ module zet_cpu_bridge (
         end
     end
 
-    // ------------------------------------------------------------------
-    // Hit verifier: retired. ~700k hardware checks over 20 SuperDepth
-    // boots found every window byte equal to the bus's answer, so the
-    // window logic itself is sound; pf_verify still diverts would-be hits
-    // to the bus (an A/B knob) but nothing is compared any more.
-    // ------------------------------------------------------------------
-    reg  [23:0] pv_tick = 24'd0;
-    wire [15:0] pv_bus_now = cur_word ? {rd_hi, rd_lo} : {rd_lo, rd_lo};
-    always @(posedge clk) pv_tick <= pv_tick + 24'd1;
-
-    // ------------------------------------------------------------------
-    // Re-read verifier -- see the rr_verify port.
-    // ------------------------------------------------------------------
-    reg  [31:0] rr_hist [0:3];      // {kind, bs, t[6:0], addr}, [0] newest
-    reg  [31:0] rr_hs   [0:3];      // hist as of the pending read
-    reg  [15:0] rr_data = 16'h0;
-    reg         rr_fm   = 1'b0;
-    reg  [23:0] rr_t    = 24'd0;
-    reg         rr_frz  = 1'b0;
-    reg  [15:0] rr_n = 16'h0, rr_bad = 16'h0;
-    reg  [287:0] rr_rec = 288'h0;
-    reg         rr_taint = 1'b0;    // a kill landed while the re-read ran
-    wire        rr_end_pair = (bstate == B_GAP) && pair_finish && last_byte
-                           && !cur_inta && !cur_pf && !cur_dq;
-    wire        rr_orig = rr_end_pair && !cur_vr && (cur_bs == BS_MEMR)
-                       && (cur_term == TERM_NONE) && (cur_1cyc || !cur_word)
-                       && pc98_sdram_hits(cur_addr, analog_mode)
-                       && !pc98_gvram_hits(cur_addr, analog_mode);
-    wire [20:0] rr_beg  = {1'b0, rr_addr};
-    wire [20:0] rr_endx = rr_beg + (rr_ube ? 21'd1 : 21'd2);
-    wire        rr_hitw = (wrq_push || arm_wr)
-                       && (srv_beg < rr_endx) && (srv_end_a > rr_beg);
-    wire        rr_kill = rr_hitw || !bus_ours || arm_iow || bank_chg;
-    wire [1:0]  rr_kind = arm_drain ? 2'd3 : arm_fill ? 2'd1
-                        : (arm_req && fillm_go) ? 2'd2 : 2'd0;
-    wire [2:0]  rr_kbs  = arm_vr ? 3'b111 : arm_drain ? BS_MEMW
-                        : arm_fill ? BS_MEMR : srv_bs;
-    wire [19:0] rr_kad  = arm_vr ? rr_addr : arm_drain ? wrq_addr[0]
-                        : arm_fill ? pf_next[19:0] : srv_addr;
-    always @(posedge clk) begin
-        if (arm_req || arm_drain || arm_fill || arm_vr) begin
-            rr_hist[0] <= {rr_kind, rr_kbs, pv_tick[6:0], rr_kad};
-            rr_hist[1] <= rr_hist[0];
-            rr_hist[2] <= rr_hist[1];
-            rr_hist[3] <= rr_hist[2];
-        end
-        if (!rr_verify || reset) begin
-            rr_pend <= 1'b0;
-            rr_taint <= 1'b0;
-            rr_frz  <= 1'b0;
-            rr_n    <= 16'h0;
-            rr_bad  <= 16'h0;
-        end else begin
-            if (rr_pend && rr_kill && cur_vr)
-                rr_taint <= 1'b1;
-            if (rr_pend && rr_kill && !cur_vr)
-                rr_pend <= 1'b0;
-            else if (!rr_pend && rr_orig && !rr_frz) begin
-                rr_pend <= 1'b1;
-                rr_addr <= cur_addr;
-                rr_ube  <= cur_ube_n;
-                rr_data <= pv_bus_now;
-                rr_fm   <= cur_fillm;
-                rr_t    <= pv_tick;
-                rr_hs[0] <= rr_hist[0];
-                rr_hs[1] <= rr_hist[1];
-                rr_hs[2] <= rr_hist[2];
-                rr_hs[3] <= rr_hist[3];
-            end
-            if (rr_end_pair && cur_vr) begin
-                rr_pend  <= 1'b0;
-                rr_taint <= 1'b0;
-                rr_n     <= rr_n + 16'd1;
-                if ((pv_bus_now != rr_data) && !rr_taint && !rr_kill) begin
-                    rr_bad <= rr_bad + 16'd1;
-                    if (!rr_frz) begin
-                        rr_frz <= 1'b1;
-                        rr_rec <= {rr_hs[3], rr_hs[2], rr_hs[1], rr_hs[0],
-                                   {8'h0, pv_tick}, {8'h0, rr_t},
-                                   32'h0,
-                                   {rr_data, pv_bus_now},
-                                   {1'b1, rr_ube, rr_fm, 9'h0, rr_addr}};
-                    end
-                end
-            end
-        end
-    end
-    assign dbg_rrv = {rr_rec[287:96], rr_bad, rr_n, rr_rec[63:0]};
-
 `ifdef ZET_DBG_WQ
     reg rdy_seen;  // processor_ready dipped this pair
     reg [7:0] db_seen; // data_bus at accept
@@ -1505,7 +1393,6 @@ module zet_cpu_bridge (
             cur_pf_len       <= 5'd0;
             cur_pf_w         <= 1'b0;
             cur_dq           <= 1'b0;
-            cur_vr           <= 1'b0;
             ps_r             <= BS_PASV;
             ad_out           <= 20'h0;
             cpu_data_bus     <= 8'h00;
@@ -1604,28 +1491,6 @@ module zet_cpu_bridge (
                     saw_low          <= 1'b0;
                     fill_wait        <= 7'd0;
                     bstate           <= B_CMD;
-                end else if (arm_vr) begin
-                    // Re-read: a plain guest-shaped read whose answer goes
-                    // to the verifier only (no biu_done, no append).
-                    cur_bs           <= BS_MEMR;
-                    cur_addr         <= rr_addr;
-                    cur_ube_n        <= rr_ube;
-                    cur_data         <= 16'h0000;
-                    cur_term         <= TERM_NONE;
-                    cur_inta         <= 1'b0;
-                    cur_pf           <= 1'b0;
-                    cur_fillm        <= 1'b0;
-                    cur_dq           <= 1'b0;
-                    cur_vr           <= 1'b1;
-                    ps_r             <= BS_MEMR;
-                    ad_out           <= rr_addr;
-                    cpu_data_bus     <= 8'h00;
-                    word_access      <= word_1cyc(BS_MEMR, rr_addr, rr_ube);
-                    cpu_data_bus_hi  <= 8'h00;
-                    t_cnt            <= 3'd0;
-                    saw_low          <= 1'b0;
-                    fill_wait        <= 7'd0;
-                    bstate           <= B_CMD;
                 end else if (arm_fill) begin
                     // Prefetch fill: a byte-style pair (ube_n=1, so the
                     // pair is one byte) whose read strobe carries
@@ -1715,7 +1580,7 @@ module zet_cpu_bridge (
                         if (cur_inta) begin
                             int_vector  <= rd_hi;   // ACK2's byte
                             biu_done_r  <= 1'b1;
-                        end else if (!cur_pf && !cur_dq && !cur_vr) begin
+                        end else if (!cur_pf && !cur_dq) begin
                             if (cur_term == TERM_WORD)
                                 rd_word <= 16'h2588;
                             else if (cur_term == TERM_ACTIVE)
@@ -1737,7 +1602,6 @@ module zet_cpu_bridge (
                         cur_pf      <= 1'b0;
                         cur_fillm   <= 1'b0;
                         cur_dq      <= 1'b0;
-                        cur_vr      <= 1'b0;
                         byte_idx    <= 2'd0;
                         bstate      <= B_IDLE;
                     end else begin

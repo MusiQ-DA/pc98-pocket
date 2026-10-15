@@ -316,12 +316,6 @@ module core_top (
     //                    master) kills both windows
     logic        jtag_pf_wkill   = 1'b0;
     logic        jtag_pf_bkill   = 1'b0;
-    //  [11]  pf_verify -- would-be window hits go to the bus and are
-    //                    compared with the window (reads 0x04-0x0E)
-    logic        jtag_pf_verify  = 1'b0;
-    //  [12]  rr_verify -- every plain guest SDRAM read is re-read by the
-    //                    bridge and compared (reads 0x91-0x99)
-    logic        jtag_rr_verify  = 1'b0;
     logic [19:0] jtag_watch_addr = 20'hFFFFF;
     wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
                                               : cpu_speed_cfg;
@@ -344,8 +338,6 @@ module core_top (
     wire         jtag_fwdis      = 1'b0;
     wire         jtag_nowrap     = 1'b0;
     wire         jtag_pf_wkill   = 1'b0;
-    wire         jtag_pf_verify  = 1'b0;
-    wire         jtag_rr_verify  = 1'b0;
     wire         jtag_pf_bkill   = 1'b0;
     wire  [19:0] jtag_watch_addr = 20'hFFFFF;
 `endif
@@ -1216,7 +1208,6 @@ module core_top (
         .dbg_pico                   (dbg_pico_w)
     );
 
-    wire [287:0] bridge_dbg_rrv;   // zet_cpu_bridge re-read verifier
 `ifdef PC98_JTAG
     //
     // JTAG probe -- the panel's readout without a camera.
@@ -1228,11 +1219,6 @@ module core_top (
     // Dot capture (write slot 0x8C, reads 0x42-0x44): 32 presented dots of
     // one raster line, sampled where pocket_video takes them. Declared here
     // because the read mux below precedes the video wires.
-    logic [9:0]  dcap_h_c = 10'd0, dcap_v_c = 10'd0;
-    logic        dcap_tog_c = 1'b0;
-    logic [31:0] dcap_txt = 32'd0, dcap_nz = 32'd0;
-    logic [17:0] dcap_rgb = 18'd0;
-    logic        dcap_done = 1'b0;
     wire   [7:0] probe_addr;
     // The nuV30's architectural state, live -- was. These taps were the old
     // core's dbg pins; Zet has no equivalent so every one is tied to 0 now
@@ -1454,24 +1440,6 @@ module core_top (
         end
     end
 
-    // Reset-boundary trail: the first reset_wire OR soft_reset_cpu rise
-    // after release banks pc_hist wholesale -- the array survives a guest
-    // reset (only its pointer is cleared), so the snapshot keeps the last
-    // 32 bus addresses of the dying pass plus the write pointer to order
-    // them -- and the reset terms, so a POST reset-loop names both the
-    // code that ran into the reset and the line that fired it. The F0
-    // hand-over soft reset does not touch reset_wire, so it is its own
-    // trigger and its own cause bit.
-    // rst_snap_valid clears on RESET only: the guest reset the trigger
-    // starts must not drop the evidence, and the loop's second pass must
-    // not overwrite the first. The edge detectors seed high so the
-    // power-on assertion is not mistaken for a boundary.
-    reg [19:0] rst_snap [0:31];
-    reg  [4:0] rst_snap_w     = 5'd0;
-    reg  [6:0] rst_snap_cause = 7'd0;
-    reg        rst_snap_valid = 1'b0;
-    reg        reset_wire_d   = 1'b1;
-    reg        soft_rst_d     = 1'b0;
     // Address-triggered capture, probe-writable via write slot 0x04
     // ({en,addr[19:0]}, handled with the other probe writes below).
     // Defaults to the reset vector: every reset path -- hard, soft,
@@ -1510,111 +1478,6 @@ module core_top (
                            (chipset_address[15:0] == 16'h043D) &&
                            (cpu_data_bus == 8'h10);
     wire       pc_hist_new = (hist_src != pc_hist_prev);
-    always_ff @(posedge clk_chipset) begin
-        reset_wire_d <= reset_wire;
-        soft_rst_d   <= soft_reset_cpu;
-        if (RESET)
-            rst_snap_valid <= 1'b0;
-        else if (!rst_snap_valid &&
-                 ((reset_wire && !reset_wire_d) ||
-                  (soft_reset_cpu && !soft_rst_d) || trig_hit)) begin
-            rst_snap_valid <= 1'b1;
-            for (int i = 0; i < 32; i++)
-                rst_snap[i] <= pc_hist[i];
-            if (pc_hist_new)
-                rst_snap[pc_hist_w] <= pc_now;
-            rst_snap_w     <= pc_hist_w + {4'd0, pc_hist_new};
-            rst_snap_cause <= {RESET, load_active, ~bios_ever_loaded,
-                               interact_reset, guest_hold_sync2,
-                               soft_guest_hold, soft_reset_cpu | trig_hit};
-        end
-    end
-
-    // And the other half of the boundary: the first 32 bus cycles AFTER
-    // a guest reset releases -- the F0 hand-over's resume path, which
-    // decides within microseconds whether POST re-runs or the boot
-    // continues. Re-arms on every guest reset so the bank always holds
-    // the MOST RECENT resume trail -- in a reset loop that is the
-    // failing transition itself, still warm.
-    reg [19:0] post_snap [0:31];
-    reg  [4:0] post_snap_w = 5'd0;
-    reg        post_armed  = 1'b0;
-    reg        post_valid  = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        if (RESET) begin
-            post_valid <= 1'b0;
-            post_armed <= 1'b0;
-        end else if (reset || soft_reset_cpu) begin
-            post_armed <= 1'b1;
-        end else if (post_armed && !pc_hist_frozen &&
-                     pc_hist_new && pc_hist_w == 5'd31) begin
-            post_armed <= 1'b0;
-            post_valid <= 1'b1;
-            for (int i = 0; i < 32; i++)
-                post_snap[i] <= pc_hist[i];
-            post_snap[31] <= pc_now;
-            post_snap_w   <= pc_hist_w;
-        end
-    end
-
-    // f0_snap: an independent always-recording bus ring whose write
-    // pointer is banked at every F0 port write -- unlike pc_hist it is
-    // never frozen and never cleared by guest resets, so slots
-    // 0xC1-0xE0 always hold the 32 cycles leading INTO the most recent
-    // F0 (the loop's exit path), whatever froze the main ring earlier.
-    reg [19:0] f0_snap [0:31];
-    reg  [4:0] f0_hist_w   = 5'd0;
-    reg [19:0] f0_hist_prev = 20'h0;
-    // In writes-only mode the recorded address is always the bus address
-    // (the write's target); otherwise it follows the pc_hist source.
-    wire [19:0] f0_src = trig_wronly ? chipset_address : hist_src;
-    reg  [4:0] f0_snap_w     = 5'd0;
-    reg        f0_snap_valid = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        if (RESET)
-            f0_snap_valid <= 1'b0;
-        if (f0_src != f0_hist_prev
-            && (!trig_wronly
-                || ~chipset_memory_write_n || ~chipset_io_write_n)) begin
-            f0_hist_prev      <= f0_src;
-            f0_snap[f0_hist_w] <= f0_src;
-            f0_hist_w         <= f0_hist_w + 5'd1;
-        end
-        if (f0_port_write) begin
-            f0_snap_valid <= 1'b1;
-            f0_snap_w     <= f0_hist_w;
-        end
-    end
-
-    // The freeze has to outlive the soft reset the 0xF0 write triggers,
-    // but dropping soft_reset_cpu from the block above deterministically
-    // crashes Quartus 18.1's fitter (VPR20KMAIN tdc_util) -- so keep the
-    // proven structure and snapshot the ring+pointer into a second bank
-    // on the trigger instead. The snapshot clears only on hard reset, so
-    // a repeated boot loop keeps the FIRST failure's trail. The fetch
-    // landing this same cycle (the jmp$ right after `out`) misses the
-    // bulk copy, so it is written into snap[w] explicitly.
-    // A legit OUT 0F0h still freezes the live ring (pc_hist_frozen above)
-    // but must not burn the snapshot: the POST ends every healthy boot
-    // with one, and it would mask the trail of a later real fault. Slot
-    // 0x40+ then reads back the live ring, which resets with soft_reset_cpu
-    // and refreezes at the first post-reset trigger -- the trail we want.
-    reg [19:0] pc_snap [0:31];
-    reg  [4:0] pc_snap_w     = 5'd0;
-    reg        pc_snap_valid = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        if (reset || pc_rearm)
-            pc_snap_valid <= 1'b0;
-        else if (!pc_snap_valid && (pc_in_errhalt || zet_fault)) begin
-            pc_snap_valid <= 1'b1;
-            for (int i = 0; i < 32; i++)
-                pc_snap[i] <= pc_hist[i];
-            if (pc_hist_new)
-                pc_snap[pc_hist_w] <= pc_now;
-            pc_snap_w <= pc_hist_w + {4'd0, pc_hist_new};
-        end
-    end
-
     // The first zet fault's decode-side evidence: which PC's instruction
     // decoded to INVOP/INTD. Pairs with dbg_opc (the byte it saw, latched
     // inside the core); expected-vs-seen at that PC is the corruption
@@ -1663,21 +1526,6 @@ module core_top (
             8'h17:   probe_data_c = {8'h00, retired_cnt};   // liveness
             8'h18:   probe_data_c = {12'h000, zet_pc};      // current bus cycle
             8'h01:   probe_data_c = brg_q[31:0];
-            // 0x91-0x99: bridge re-read verifier (slot 9 bit 12) -- 0x91
-            // {frozen, ube, fillm, addr}, 0x92 {first answer, re-read},
-            // 0x93 {mismatches, checks} live, 0x99/0x94 read/re-read t,
-            // 0x95-0x98 the four arms up to the read, newest first:
-            // {kind (0 req, 1 fill, 2 fillm, 3 drain), bs (7 = re-read),
-            // t[6:0], addr}.
-            8'h91:   probe_data_c = bridge_dbg_rrv[31:0];
-            8'h92:   probe_data_c = bridge_dbg_rrv[63:32];
-            8'h93:   probe_data_c = bridge_dbg_rrv[95:64];
-            8'h94:   probe_data_c = bridge_dbg_rrv[159:128];
-            8'h95:   probe_data_c = bridge_dbg_rrv[191:160];
-            8'h96:   probe_data_c = bridge_dbg_rrv[223:192];
-            8'h97:   probe_data_c = bridge_dbg_rrv[255:224];
-            8'h98:   probe_data_c = bridge_dbg_rrv[287:256];
-            8'h99:   probe_data_c = bridge_dbg_rrv[127:96];
             8'h02:   probe_data_c = {9'h0, brg_q[54:32]};
             8'h03:   probe_data_c = {24'h0, brg_w};
             // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
@@ -1743,18 +1591,12 @@ module core_top (
             8'h2f:   probe_data_c = bridge_dbg_inta;
             8'h2d:   probe_data_c = dbg_crt[31:0];
             8'h2e:   probe_data_c = dbg_crt[63:32];
-            // 0x40/0x41: graphics display-fetch underrun telemetry.
+            // 0x82/0x83: graphics display-fetch underrun telemetry.
             // Low word {skip_cnt, late_cnt, max_fill}; high word the live
             // {line_now, act_tgt, f_chunk, f_plane, cur_part, dbl,
             // disp_page, disp_on_c, fill_page, f_active}.
-            8'h40:   probe_data_c = dbg_gvdisp[31:0];
-            8'h41:   probe_data_c = dbg_gvdisp[63:32];
-            // 0x42-0x44: the dot capture armed by write slot 0x8C --
-            // per-dot text-pixel bits, per-dot non-black bits (bit i is
-            // dot h+i), and {done, rgb666 of dot h}.
-            8'h42:   probe_data_c = dcap_txt;
-            8'h43:   probe_data_c = dcap_nz;
-            8'h44:   probe_data_c = {dcap_done, 13'd0, dcap_rgb};
+            8'h82:   probe_data_c = dbg_gvdisp[31:0];
+            8'h83:   probe_data_c = dbg_gvdisp[63:32];
             // 0x35: BIOS-side milestones + the 0x43D write tally
             // {bios_branch[7:0], in42_count, last_42_rdata,
             //  w43d_10_count[3:0], w43d_12_count[3:0]}
@@ -1852,43 +1694,8 @@ module core_top (
             8'h48,8'h49,8'h4a,8'h4b,8'h4c,8'h4d,8'h4e,8'h4f,
             8'h50,8'h51,8'h52,8'h53,8'h54,8'h55,8'h56,8'h57,
             8'h58,8'h59,8'h5a,8'h5b,8'h5c,8'h5d,8'h5e,8'h5f:
-                       probe_data_c = pc_snap_valid
-                                    ? {7'h00, 1'b1, pc_snap_w,
-                                       pc_snap[probe_addr[4:0]]}
-                                    : {7'h00, pc_hist_frozen, pc_hist_w,
+                       probe_data_c = {7'h00, pc_hist_frozen, pc_hist_w,
                                        pc_hist[probe_addr[4:0]]};
-            // 0x60: rst_snap header -- {valid, cause[6:0], w[4:0],
-            // post_valid, post_w[4:0]}. cause bit order: RESET,
-            // load_active, ~bios_ever_loaded, interact_reset,
-            // guest_hold_sync2, soft_guest_hold, soft_reset_cpu|trig_hit
-            // (bit27..bit21). 0x61-0x80: pre-reset trail (write order).
-            // 0xA0-0xBF: post-reset trail (entry order == fetch order).
-            8'h60:   probe_data_c = {3'h0, rst_snap_valid, rst_snap_cause,
-                                       rst_snap_w, post_valid,
-                                       post_snap_w, 10'h000};
-            8'h61,8'h62,8'h63,8'h64,8'h65,8'h66,8'h67,
-            8'h68,8'h69,8'h6a,8'h6b,8'h6c,8'h6d,8'h6e,8'h6f,
-            8'h70,8'h71,8'h72,8'h73,8'h74,8'h75,8'h76,8'h77,
-            8'h78,8'h79,8'h7a,8'h7b,8'h7c,8'h7d,8'h7e,8'h7f,
-            8'h80:
-                       probe_data_c = {12'h000,
-                                       rst_snap[probe_addr[4:0] - 5'd1]};
-            8'ha0,8'ha1,8'ha2,8'ha3,8'ha4,8'ha5,8'ha6,8'ha7,
-            8'ha8,8'ha9,8'haa,8'hab,8'hac,8'had,8'hae,8'haf,
-            8'hb0,8'hb1,8'hb2,8'hb3,8'hb4,8'hb5,8'hb6,8'hb7,
-            8'hb8,8'hb9,8'hba,8'hbb,8'hbc,8'hbd,8'hbe,8'hbf:
-                       probe_data_c = {12'h000,
-                                       post_snap[probe_addr[4:0]]};
-            // 0xC0: f0_snap header {valid,w}; 0xC1-0xE0: trail into the
-            // most recent F0 write (write-pointer order, oldest first).
-            8'hc0:   probe_data_c = {26'h0, f0_snap_valid, f0_snap_w};
-            8'hc1,8'hc2,8'hc3,8'hc4,8'hc5,8'hc6,8'hc7,
-            8'hc8,8'hc9,8'hca,8'hcb,8'hcc,8'hcd,8'hce,8'hcf,
-            8'hd0,8'hd1,8'hd2,8'hd3,8'hd4,8'hd5,8'hd6,8'hd7,
-            8'hd8,8'hd9,8'hda,8'hdb,8'hdc,8'hdd,8'hde,8'hdf,
-            8'he0:
-                       probe_data_c = {12'h000,
-                                       f0_snap[probe_addr[4:0] - 5'd1]};
             // 0x1b: {bridge park/engine FSM, ce edge counter}. parked=1 with a
             // frozen ce_count is the dead-CE signature; a live count with
             // parked=1 points at the engine's release conditions instead.
@@ -2288,8 +2095,6 @@ module core_top (
             jtag_nowrap   <= probe_wdata_c[8];
             jtag_pf_wkill <= probe_wdata_c[9];
             jtag_pf_bkill <= probe_wdata_c[10];
-            jtag_pf_verify  <= probe_wdata_c[11];
-            jtag_rr_verify  <= probe_wdata_c[12];
         end
         // Slot 0x0a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
         // every memory write landing on it is logged (CPU or DMA alike).
@@ -2302,12 +2107,6 @@ module core_top (
         // every completed 0x36 read).
         if (probe_wr_pulse && probe_waddr_c == 7'h0b)
             dbg_tvram_cell <= probe_wdata_c[11:0];
-        // Slot 0x0c: arm the dot capture at {v[25:16], h[9:0]}.
-        if (probe_wr_pulse && probe_waddr_c == 7'h0c) begin
-            dcap_h_c   <= probe_wdata_c[9:0];
-            dcap_v_c   <= probe_wdata_c[25:16];
-            dcap_tog_c <= ~dcap_tog_c;
-        end
     end
 
     // JTAG-injected keystrokes ride the same event line the 8251 drains; a
@@ -3489,9 +3288,6 @@ module core_top (
         .pf_nohit          (jtag_pf_nohit),
         .pf_wkill          (jtag_pf_wkill),
         .pf_bkill          (jtag_pf_bkill),
-        .pf_verify         (jtag_pf_verify),
-        .rr_verify         (jtag_rr_verify),
-        .dbg_rrv           (bridge_dbg_rrv),
         .bus_mem_write_n   (chipset_memory_write_n),
         .bios_shadow_flag  (bios_shadow_flag),
         .dbg               (bridge_dbg),
@@ -3636,49 +3432,6 @@ module core_top (
     wire        VBlank;
     wire        VSync;
     wire [5:0]  r, g, b;
-
-    // ------------------------------------------------------ dot capture
-    //
-    // What actually leaves CHIPSET, dot by dot: whether the composite took
-    // the text pixel (vid_txt) and whether the colour is non-black. The
-    // raster position is rebuilt from the sync edges exactly as
-    // pocket_video's rb_h/rb_v are, so (h, v) are the coordinates the
-    // presented picture uses. The target crosses from clk_chipset as a
-    // toggle; h/v are quasi-static by then (the script waits between the
-    // arm and the read).
-    logic [2:0] dcap_sync = 3'd0;
-    logic [9:0] dcap_rh = 10'd0, dcap_rv = 10'd0;
-    logic       dcap_hs_d = 1'b0, dcap_vs_d = 1'b0;
-    logic       dcap_arm = 1'b0;
-    logic [5:0] dcap_i = 6'd0;
-    always_ff @(posedge clk_pix) begin
-        dcap_sync <= {dcap_sync[1:0], dcap_tog_c};
-        dcap_hs_d <= HSync;
-        dcap_vs_d <= VSync;
-        if (HSync & ~dcap_hs_d)          dcap_rh <= 10'd721;
-        else if (dcap_rh == 10'd847)     dcap_rh <= 10'd0;
-        else                             dcap_rh <= dcap_rh + 10'd1;
-        if (VSync & ~dcap_vs_d)          dcap_rv <= 10'd407;
-        else if (dcap_rh == 10'd847)
-            dcap_rv <= (dcap_rv == 10'd439) ? 10'd0 : dcap_rv + 10'd1;
-
-        if (dcap_sync[2] != dcap_sync[1]) begin
-            dcap_arm  <= 1'b1;
-            dcap_done <= 1'b0;
-            dcap_i    <= 6'd0;
-        end else if (dcap_arm && dcap_rv == dcap_v_c
-                     && (dcap_rh == dcap_h_c || dcap_i != 6'd0)) begin
-            dcap_txt[dcap_i[4:0]] <= vid_txt;
-            dcap_nz[dcap_i[4:0]]  <= |{r, g, b};
-            if (dcap_i == 6'd0) dcap_rgb <= {r, g, b};
-            if (dcap_i == 6'd31) begin
-                dcap_arm  <= 1'b0;
-                dcap_done <= 1'b1;
-                dcap_i    <= 6'd0;
-            end else
-                dcap_i <= dcap_i + 6'd1;
-        end
-    end
 
     // ------------------------------------------------------ hardware bands
     //

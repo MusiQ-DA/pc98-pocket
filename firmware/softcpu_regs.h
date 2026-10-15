@@ -225,7 +225,12 @@ extern uint16_t rhythm_start[6], rhythm_end[6];
 // drive_sound_present reads OMGMT_CAPS bit0 -- 0 on a slim (USE_ADPCM=0)
 // OPNA build, where the voices and the store do not exist.
 int  rhythm_load(void);
+#ifdef ENABLE_OPNA
 int  drive_sound_present(void);
+#else
+// No OPNA in the bitstream (debug profile): no voices, no drive kit.
+static inline int drive_sound_present(void) { return 0; }
+#endif
 int  drive_sound_load(void);
 void drive_sound_poll(void);
 

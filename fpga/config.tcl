@@ -16,7 +16,12 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # rhythm voices and the drive-mechanism kit that borrowed them stay silent
 # -- OMGMT_CAPS bit0 reads 0, which is what the firmware loaders key on.
 # USE_ADPCM=1 brings the whole path back unchanged once floor space exists.
-set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
+# DEBUG PROFILE (PC98_JTAG=1 below): the OPNA is OFF so the probe, its rings
+# and the z86 bring-up fit -- jt12 alone is ~1.5k ALMs. A release build flips
+# both switches: ENABLE_OPNA on, PC98_JTAG off (the non-JTAG build frees
+# ~4.6k ALMs, measured on measure-nojtag). The firmware follows this line
+# (firmware/Makefile reads it), so rebuild firmware.vh after flipping it.
+# set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 
 # JTAG debug build. OFF for the current fit: the SLD hub, the probe mux,
 # the write-pipe and key injection together cost enough ALMs to put the
