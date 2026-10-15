@@ -2131,6 +2131,57 @@ module tb_pc98_boot;
         end
     end
 
+    // Window trace (+trace_ms=<ms>): from that sim time on, log branch
+    // targets, every INTA vector and every write below 0x400 (the IVT),
+    // 3000 entries.
+    longint trw_start = -1;
+    int     trw_n = 0;
+    logic [19:0] trw_pc = 20'h0;
+    initial begin
+        int ms;
+        if ($value$plusargs("trace_ms=%d", ms)) trw_start = longint'(ms) * 1_000_000;   // $time is in ns here
+    end
+    always_ff @(posedge zet_clk) begin
+        if (trw_start >= 0 && $time >= trw_start && trw_n < 3000) begin
+            if (zet_pc != trw_pc) begin
+                trw_pc <= zet_pc;
+`ifdef Z86
+                $display("  %0t  TRW br %05x  es %04x ds %04x ss %04x sp %04x", $time, zet_pc,
+                         u_cpu.seg_ES, u_cpu.seg_DS, u_cpu.seg_SS, u_cpu.u_regfile.regs[4]);
+`else
+                $display("  %0t  TRW br %05x", $time, zet_pc);
+`endif
+                trw_n <= trw_n + 1;
+            end
+            if (zwb_inta && zwb_dat_i[15:8] == 8'h00 && u_bridge.int_served) begin
+                $display("  %0t  TRW inta vec %02x", $time, zwb_dat_i[7:0]);
+                trw_n <= trw_n + 1;
+            end
+            if (zwb_stb && zwb_ack && zwb_we && !zwb_tga && {zwb_adr, 1'b0} < 20'h400) begin
+                $display("  %0t  TRW ivt-wr %05x sel %b dat %04x", $time,
+                         {zwb_adr, 1'b0}, zwb_sel, zwb_dat_o);
+                trw_n <= trw_n + 1;
+            end
+        end
+    end
+
+    // ES-change trace (with +trace_ms): every change of ES after the window
+    // opens, with the PC (Zet: live fetch PC; z86: last branch target).
+`ifdef Z86
+    wire [15:0] tr_es = u_cpu.seg_ES;
+`else
+    wire [15:0] tr_es = u_cpu.core.exec.regfile.r[8];
+`endif
+    logic [15:0] tr_es_q = 16'h0;
+    int          tres_n  = 0;
+    always_ff @(posedge zet_clk) begin
+        tr_es_q <= tr_es;
+        if (trw_start >= 0 && $time >= trw_start && tres_n < 400 && tr_es != tr_es_q) begin
+            $display("  %0t  TES es %04x -> %04x  pc %05x", $time, tr_es_q, tr_es, zet_pc);
+            tres_n <= tres_n + 1;
+        end
+    end
+
     // Wishbone settle trace: while stb is up, watch the master's tracked
     // outputs converge to the exec stage's combinational operands.
     int zwb_tr_n = 0;

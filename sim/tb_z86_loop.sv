@@ -83,6 +83,9 @@ module tb_z86_loop;
         if (halted) begin
             $display("n=%0d lat=%0d: %0d clocks, %0d reads, %0d writes -> %0.1f clk/iter",
                      n, lat, cyc_n, rd_n, wr_n, real'(cyc_n) / n);
+            for (int a = 0; a < 20'h20000; a += 2)
+                if ({mem[a+1], mem[a]} == 16'hA000)
+                    $display("A000 found at %05x", a);
             $write("mem 0700:");
             for (int i = 0; i < 32; i++) $write(" %02x%02x", mem[20'h701 + 2*i], mem[20'h700 + 2*i]);
             $display("");

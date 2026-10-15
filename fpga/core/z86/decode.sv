@@ -690,6 +690,14 @@ always @(posedge clk) begin
         if (~nmi && ~intr) begin
             intra <= 1'b0;
         end
+        // PC-98 port: an 8259 keeps INTR up while another request is
+        // pending, so waiting for INTR to fall left intra stuck and no
+        // interrupt was ever taken again (the BIOS hung in its VSYNC wait at
+        // FE299 with IRQ2 pending and unmasked). The INT sequence clearing
+        // IF is the end of this acknowledge; IRET/STI re-open the latch.
+        if (intra && !IF && !start_int_service) begin
+            intra <= 1'b0;
+        end
     end
 end
 
@@ -751,7 +759,7 @@ function automatic reg_mask_t build_rd_mask();
 
     m.seg = 0;
     if (ii.g_is_seg & ~ii.g_write_only) m.seg[id_modrm[4:3]] = 1'b1;
-    if (ii.e_is_seg & ~ii.e_write_only) m.seg[id_opcode[5:4]] = 1'b1;
+    if (ii.e_is_seg & ~ii.e_write_only) m.seg[id_opcode[4:3]] = 1'b1;   // PC-98 port: PUSH/POP sreg name it in [4:3] (1F = POP DS)
     if (ii.is_mem_no_stack) m.seg[seg_sel] = 1'b1;
     if (id_opcode >= 8'hA4 && id_opcode <= 8'hA7) begin       // MOVS/CMPS, DS:SI and ES:DI
         m.seg = 4'b1001; 
@@ -817,7 +825,7 @@ function automatic reg_mask_t build_wr_mask();
 
     m.seg = 0;
     if (ii.g_is_seg & ~ii.g_read_only) m.seg[id_modrm[4:3]] = 1'b1;
-    if (ii.e_is_seg & ~ii.e_read_only) m.seg[id_opcode[5:4]] = 1'b1;
+    if (ii.e_is_seg & ~ii.e_read_only) m.seg[id_opcode[4:3]] = 1'b1;    // was [5:4]: POP DS marked CS, so the next DS user saw the old DS
 
     if (id_opcode >= 8'hA4 && id_opcode <= 8'hA7) begin       // MOVS/CMPS, DS:SI and ES:DI
         m.gpr[R_SI] = 1'b1; m.gpr[R_DI] = 1'b1;
