@@ -140,6 +140,12 @@ module zet_cpu_bridge (
     input  wire         pf_nofill,
     input  wire         pf_nofillm,
     input  wire         pf_nohit,
+    // A/B switches: pf_wkill -- a guest memory write kills both windows;
+    // pf_bkill -- a memory write strobe on the chipset bus (any master,
+    // bus_mem_write_n) kills both windows.
+    input  wire         pf_wkill,
+    input  wire         pf_bkill,
+    input  wire         bus_mem_write_n,
     // F-bank remap select: guest F8000-FFFFF is banked between the system
     // BIOS and the ITF shadow (RAM.sv latch_address). The windows tag the
     // guest address only, so a bank flip must drop them -- bytes fetched
@@ -1224,7 +1230,9 @@ module zet_cpu_bridge (
             // flip may serve. Dropping pf_live too keeps a dead window
             // from refilling a sector nobody reads -- the next miss
             // re-seeds it where the stream actually is.
-            if (!bus_ours || arm_iow || bank_chg) begin
+            if (!bus_ours || arm_iow || bank_chg
+                || (pf_wkill && (arm_wr || wrq_push))
+                || (pf_bkill && !bus_mem_write_n)) begin
                 pf_cnt0 <= 6'd0;
                 pf_cnt1 <= 6'd0;
                 pf_lo0  <= 5'd0;

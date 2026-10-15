@@ -999,6 +999,15 @@ module tb_mem_perf;
                 emit(8'h8B); emit(8'h46); emit(8'h02);           // mov ax,[bp+2]
                 emit(8'hA3); emitw(16'h3100);                    // mov [3100],ax
                 emit(8'h5F); emit(8'h5E); emit(8'h5D);           // pop di; pop si; pop bp
+                // the game's 0xD468 tail: port reads/writes right before
+                // the RETs -- every I/O write flushes both windows, so the
+                // pops that follow all miss and re-seed them
+                emit(8'hE8); emitw(16'h0001);                    // call +1 (h)
+                emit(8'hC3);                                     // ret
+                emit(8'hE4); emit(8'h42);                        // h: in al,42
+                emit(8'hBA); emitw(16'h3FDB);                    // mov dx,3fdb
+                emit(8'hEE); emit(8'hEE);                        // out dx,al x2
+                emit(8'hB0); emit(8'h07); emit(8'hE6); emit(8'h37); // mov al,7; out 37,al
                 emit(8'hC3);                                     // ret
                 r_jb13 = prog_len;                               // (after the subs)
                 prog[r_call13] = 8'(f13 - (r_call13 + 2));
@@ -1573,6 +1582,61 @@ module tb_mem_perf;
         end
     end
 
+    // ---- coherence oracle: every guest memory read vs its own writes -------
+    // A shadow of every byte the guest wrote (Wishbone write acks, by byte
+    // lane). Every guest memory read ack below A0000 is checked against it
+    // where the shadow knows the byte; a DMA-grant write to RAM drops the
+    // byte from the shadow, since the guest did not write it. Any mismatch
+    // is a stale or foreign byte handed to the CPU -- the prefetch-window
+    // class of failure, caught the moment it is served.
+    logic [7:0] shadow [int];
+    logic       orc_ack_q = 1'b0;
+    longint unsigned c_stale = 0;
+    always @(posedge clk) begin
+        orc_ack_q <= zwb_ack;
+        if (!reset && aen && seq_mem_wr && !seq_mem_addr[19]
+            && shadow.exists(int'(seq_mem_addr)))
+            shadow.delete(int'(seq_mem_addr));
+        if (!reset && zwb_ack && !orc_ack_q && zwb_cyc && !zwb_tga) begin
+            automatic int a = int'({zwb_adr, 1'b0});
+            if (zwb_we) begin
+                if (zwb_sel[0]) shadow[a]   = zwb_dat_o[7:0];
+                if (zwb_sel[1]) shadow[a+1] = zwb_dat_o[15:8];
+            end else if (a < 32'hA0000) begin
+                if (zwb_sel[0] && shadow.exists(a) && shadow[a] !== zwb_dat_i[7:0]) begin
+                    if (c_stale < 16)
+                        $display("  STALE t=%0t a=%05x got=%02x want=%02x ph=%0d pc=%05x w0=%05x/%0d-%0d w1=%05x/%0d-%0d live=%b",
+                                 $time, a, zwb_dat_i[7:0], shadow[a], cur_phase, zet_pc,
+                                 u_bridge.pf_base0, u_bridge.pf_lo0, u_bridge.pf_cnt0,
+                                 u_bridge.pf_base1, u_bridge.pf_lo1, u_bridge.pf_cnt1, u_bridge.pf_live);
+                    c_stale <= c_stale + 1;
+                end
+                if (zwb_sel[1] && shadow.exists(a+1) && shadow[a+1] !== zwb_dat_i[15:8]) begin
+                    if (c_stale < 16)
+                        $display("  STALE t=%0t a=%05x got=%02x want=%02x ph=%0d pc=%05x",
+                                 $time, a+1, zwb_dat_i[15:8], shadow[a+1], cur_phase, zet_pc);
+                    c_stale <= c_stale + 1;
+                end
+            end
+        end
+    end
+
+    // ---- phase-0D window-0 trace: every base/lo/cnt/live change -----------
+    logic [19:0] w0b_q; logic [4:0] w0l_q; logic [5:0] w0c_q; logic [1:0] wl_q;
+    always @(posedge clk) begin
+        w0b_q <= u_bridge.pf_base0; w0l_q <= u_bridge.pf_lo0;
+        w0c_q <= u_bridge.pf_cnt0;  wl_q  <= u_bridge.pf_live;
+        if (cur_phase == 8'h0D && diverged == 0
+            && (u_bridge.pf_base0 != w0b_q || u_bridge.pf_lo0 != w0l_q
+                || u_bridge.pf_live != wl_q
+                || (u_bridge.pf_cnt0 != w0c_q && u_bridge.pf_cnt0 != w0c_q + 6'd1)))
+            $display("  W0 t=%0t base=%05x lo=%02x cnt=%0d live=%b bst=%0d cur_pf=%b fillm=%b pfw=%b ok=%b srv=%05x bs=%0d",
+                     $time, u_bridge.pf_base0, u_bridge.pf_lo0, u_bridge.pf_cnt0,
+                     u_bridge.pf_live, u_bridge.bstate, u_bridge.cur_pf,
+                     u_bridge.cur_fillm, u_bridge.cur_pf_w, u_bridge.fill_ok,
+                     u_bridge.srv_addr, u_bridge.srv_bs);
+    end
+
     // ---- phase-0B IRQ storm driver ------------------------------------------
     // INTR is a level input: hold it until the Zet's own INTA output
     // (zwb_inta = wb_tgc_o) pulses, then re-arm after a gap. Fires only
@@ -1723,9 +1787,9 @@ module tb_mem_perf;
                 $display("  irqcount 070A=%02x", w[7:0]);
                 if (w[7:0] == 8'h00) bad++;
             end
-            $display("VERIFY: bad=%0d diverged=%0d stray=%0d grants=%0d midcmd=%0d dma_bytes=%0d pfbad=%0d pforeign=%0d porphan=%0d rdfor=%0d svc_ops=%0d",
+            $display("VERIFY: bad=%0d diverged=%0d stray=%0d grants=%0d midcmd=%0d dma_bytes=%0d pfbad=%0d pforeign=%0d porphan=%0d rdfor=%0d svc_ops=%0d stale=%0d",
                      bad, diverged, stray, grants, grants_midcmd, dma_seen,
-                     c_pbad, c_pforeign, c_porphan, c_rd_foreign, svc_ops);
+                     c_pbad, c_pforeign, c_porphan, c_rd_foreign, svc_ops, c_stale);
             // queue occupancy at verify: if a bad write is still parked it is
             // wedged, not dropped.
             $display("  RAM queue @verify: st=%0d pend=%b%b%b cap=%b inflight(wr=%b rd=%b)",
@@ -1741,7 +1805,7 @@ module tb_mem_perf;
             // an already-captured, already-released strobe); and under
             // +GRANT the fill window must be whole.
             if (bad || diverged || stray || (c_uncov != 0)
-                || (c_pbad != 0)
+                || (c_pbad != 0) || (c_stale != 0)
                 || (grant_en && (dma_seen != 256 || grants == 0)))
                 $display("=== FAIL tb_mem_perf ===");
             else
@@ -1819,13 +1883,15 @@ module tb_mem_perf;
     always_ff @(posedge clk) begin
         if (sdram_up && !reset) begin
             // every issued instruction-fetch byte must be in legal space
-            if (zwb_stb && zwb_cyc && !zwb_we && zwb_tga
+            // wb_tga_o is the Zet's io/mem tag, not a fetch flag: an
+            // instruction fetch is a memory read outside the execute state.
+            if (zwb_stb && zwb_cyc && !zwb_we && !zwb_tga && !u_cpu.exec_st
                 && !((fetch_a >= 20'hF0000 && fetch_a < 20'hF2000) ||
                      (fetch_a >= 20'hF8000 && fetch_a < 20'hF8020) ||
                      (fetch_a >= 20'h00600 && fetch_a < 20'h00620) ||
                      (fetch_a >= 20'hFFF00))) begin
                 if (diverged < 16)
-                    $display("*** DIVERGE pc=%05x aen=%b dma_act=%b bst=%0d ad=%05x t=%0t",
+                    $display("*** DIVERGE fa=%05x pc=%05x aen=%b dma_act=%b bst=%0d ad=%05x t=%0t", fetch_a,
                              zet_pc, aen, dma_active, u_bridge.bstate,
                              cpu_address, $time);
                 if (diverged == 0 && !dvg_dumped) begin

@@ -310,6 +310,12 @@ module core_top (
     //   [8] nowrap   -- A/B for the zet in-segment odd-word wrap: 1 puts an
     //                   odd word at offset FFFFh back on linear+1
     logic        jtag_nowrap     = 1'b0;
+    //   [9]  pf_wkill -- any guest memory write kills BOTH prefetch
+    //                    windows, not just the ones it overlaps
+    //  [10]  pf_bkill -- any memory write strobe on the chipset bus (any
+    //                    master) kills both windows
+    logic        jtag_pf_wkill   = 1'b0;
+    logic        jtag_pf_bkill   = 1'b0;
     logic [19:0] jtag_watch_addr = 20'hFFFFF;
     wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
                                               : cpu_speed_cfg;
@@ -322,6 +328,8 @@ module core_top (
     wire         jtag_pf_nohit   = 1'b0;
     wire         jtag_fwdis      = 1'b0;
     wire         jtag_nowrap     = 1'b0;
+    wire         jtag_pf_wkill   = 1'b0;
+    wire         jtag_pf_bkill   = 1'b0;
     wire  [19:0] jtag_watch_addr = 20'hFFFFF;
 `endif
 
@@ -2245,6 +2253,8 @@ module core_top (
             jtag_pf_nohit   <= probe_wdata_c[6];
             jtag_fwdis    <= probe_wdata_c[7];
             jtag_nowrap   <= probe_wdata_c[8];
+            jtag_pf_wkill <= probe_wdata_c[9];
+            jtag_pf_bkill <= probe_wdata_c[10];
         end
         // Slot 0x0a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
         // every memory write landing on it is logged (CPU or DMA alike).
@@ -3442,6 +3452,9 @@ module core_top (
         .pf_nofill         (jtag_pf_nofill),
         .pf_nofillm        (jtag_pf_nofillm),
         .pf_nohit          (jtag_pf_nohit),
+        .pf_wkill          (jtag_pf_wkill),
+        .pf_bkill          (jtag_pf_bkill),
+        .bus_mem_write_n   (chipset_memory_write_n),
         .bios_shadow_flag  (bios_shadow_flag),
         .dbg               (bridge_dbg),
         .dbg_inta          (bridge_dbg_inta)
