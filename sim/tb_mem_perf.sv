@@ -143,7 +143,6 @@ module tb_mem_perf;
         .pf_nofillm        (pf_nofillm_r),
         .pf_nohit          (pf_nohit_r),
         .pf_verify         (pf_vfy_r),
-        .dbg_pfv           (),
         .rr_verify         (rr_vfy_r),
         .dbg_rrv           (),
         .bios_shadow_flag  (shadow_flag_r),
@@ -1858,10 +1857,6 @@ module tb_mem_perf;
                 $display("RRVFY: checks=%0d mismatches=%0d first a=%05x orig=%04x reread=%04x",
                          u_bridge.rr_n, u_bridge.rr_bad, u_bridge.rr_rec[19:0],
                          u_bridge.rr_rec[63:48], u_bridge.rr_rec[47:32]);
-            if (pf_vfy_r)
-                $display("PFVFY: checks=%0d mismatches=%0d first a=%05x win=%04x bus=%04x",
-                         u_bridge.pv_n, u_bridge.pv_bad, u_bridge.pv_rec[19:0],
-                         u_bridge.pv_rec[63:48], u_bridge.pv_rec[47:32]);
             $display("VERIFY: bad=%0d diverged=%0d stray=%0d grants=%0d midcmd=%0d dma_bytes=%0d pfbad=%0d pforeign=%0d porphan=%0d rdfor=%0d svc_ops=%0d stale=%0d",
                      bad, diverged, stray, grants, grants_midcmd, dma_seen,
                      c_pbad, c_pforeign, c_porphan, c_rd_foreign, svc_ops, c_stale);
@@ -2329,10 +2324,6 @@ module tb_mem_perf;
             $display("RRVFY: checks=%0d mismatches=%0d first a=%05x orig=%04x reread=%04x",
                      u_bridge.rr_n, u_bridge.rr_bad, u_bridge.rr_rec[19:0],
                      u_bridge.rr_rec[63:48], u_bridge.rr_rec[47:32]);
-        if (pf_vfy_r)
-            $display("PFVFY: checks=%0d mismatches=%0d first a=%05x win=%04x bus=%04x",
-                     u_bridge.pv_n, u_bridge.pv_bad, u_bridge.pv_rec[19:0],
-                     u_bridge.pv_rec[63:48], u_bridge.pv_rec[47:32]);
         for (int k = 31; k >= 1; k--)
             $display("   pc-%02d %05x", k, pc_ring[(pc_ptr - k) & 31]);
         for (int k = 15; k >= 1; k--)

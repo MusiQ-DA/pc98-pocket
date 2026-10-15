@@ -146,14 +146,9 @@ module zet_cpu_bridge (
     input  wire         pf_wkill,
     input  wire         pf_bkill,
     input  wire         bus_mem_write_n,
-    // Hit verifier (probe): with pf_verify up, a read the windows WOULD
-    // serve is sent to the bus instead, and the window's bytes are
-    // compared against what the bus returns. The first mismatch freezes
-    // dbg_pfv with the window's last fill and the last writes/drains into
-    // its sector -- enough to tell a missed invalidation (write after the
-    // fill) from a fill that read RAM ahead of a write (write before it).
+    // pf_verify: would-be window hits go to the bus instead (the retired
+    // hit verifier's switch, kept as an A/B knob).
     input  wire         pf_verify,
-    output wire [415:0] dbg_pfv,
     // Re-read verifier (probe): every plain one-pair SDRAM guest read is
     // read again by the engine as soon as it can, and the two answers are
     // compared (skipped if a write, DMA grant, I/O write or bank flip could
@@ -1358,137 +1353,14 @@ module zet_cpu_bridge (
     end
 
     // ------------------------------------------------------------------
-    // Hit verifier -- see the pf_verify port.
+    // Hit verifier: retired. ~700k hardware checks over 20 SuperDepth
+    // boots found every window byte equal to the bus's answer, so the
+    // window logic itself is sound; pf_verify still diverts would-be hits
+    // to the bus (an A/B knob) but nothing is compared any more.
     // ------------------------------------------------------------------
     reg  [23:0] pv_tick = 24'd0;
-    // per window: last fill {fillm, len, addr, t}; last guest write and
-    // last drain whose sector matched the window's base {addr, t}
-    reg         pv_ft  [0:1];
-    reg  [4:0]  pv_fl  [0:1];
-    reg  [19:0] pv_fa  [0:1];
-    reg  [23:0] pv_fti [0:1];
-    reg  [19:0] pv_wa  [0:1];
-    reg  [23:0] pv_wt  [0:1];
-    reg  [19:0] pv_da  [0:1];
-    reg  [23:0] pv_dt  [0:1];
-    // the check in flight
-    reg         pv_pend = 1'b0;
-    reg  [19:0] pv_addr = 20'h0;
-    reg         pv_ube = 1'b0, pv_hw = 1'b0;
-    reg  [15:0] pv_win = 16'h0;
-    reg  [23:0] pv_t = 24'd0;
-    reg  [14:0] pv_base = 15'h0;
-    reg  [4:0]  pv_lo = 5'h0;
-    reg  [5:0]  pv_cnt = 6'h0;
-    reg         pv_rft = 1'b0;
-    reg  [4:0]  pv_rfl = 5'h0;
-    reg  [19:0] pv_rfa = 20'h0, pv_rwa = 20'h0, pv_rda = 20'h0;
-    reg  [23:0] pv_rfti = 24'd0, pv_rwt = 24'd0, pv_rdt = 24'd0;
-    // frozen record
-    reg         pv_frz = 1'b0;
-    reg  [15:0] pv_bus = 16'h0;
-    reg  [15:0] pv_n = 16'h0, pv_bad = 16'h0;
-    reg  [351:0] pv_rec = 352'h0;
-    // The word the normal path is about to hand the core (same rules as
-    // the rd_word assignment in B_GAP), and the completing pair's own
-    // identity -- only the captured read itself may be judged.
     wire [15:0] pv_bus_now = cur_word ? {rd_hi, rd_lo} : {rd_lo, rd_lo};
-    wire        pv_done = (bstate == B_GAP) && pair_finish && last_byte
-                       && !cur_inta && !cur_pf && !cur_dq && !cur_vr;
-    wire        pv_same = (cur_bs == BS_MEMR) && (cur_term == TERM_NONE)
-                       && (cur_addr == pv_addr) && (cur_ube_n == pv_ube);
-    reg  [15:0] pv_orph = 16'h0;
-    reg  [31:0] pv_olast = 32'h0;   // {fillm, bs, term, 5'b0, addr} of the
-                                    // last orphan completion
-    wire        pv_wr   = wrq_push || arm_wr;
-    always @(posedge clk) begin
-        pv_tick <= pv_tick + 24'd1;
-        if (arm_fill) begin
-            pv_ft[fill_w]  <= 1'b0;
-            pv_fl[fill_w]  <= pf_fill_len;
-            pv_fa[fill_w]  <= pf_next[19:0];
-            pv_fti[fill_w] <= pv_tick;
-        end
-        if (fillm_go) begin
-            pv_ft[fillm_w]  <= 1'b1;
-            pv_fl[fillm_w]  <= fillm_len;
-            pv_fa[fillm_w]  <= srv_addr;
-            pv_fti[fillm_w] <= pv_tick;
-        end
-        if (pv_wr && (srv_addr[19:5] == pf_base0[19:5])) begin
-            pv_wa[0] <= srv_addr; pv_wt[0] <= pv_tick;
-        end
-        if (pv_wr && (srv_addr[19:5] == pf_base1[19:5])) begin
-            pv_wa[1] <= srv_addr; pv_wt[1] <= pv_tick;
-        end
-        if (arm_drain && (wrq_addr[0][19:5] == pf_base0[19:5])) begin
-            pv_da[0] <= wrq_addr[0]; pv_dt[0] <= pv_tick;
-        end
-        if (arm_drain && (wrq_addr[0][19:5] == pf_base1[19:5])) begin
-            pv_da[1] <= wrq_addr[0]; pv_dt[1] <= pv_tick;
-        end
-
-        if (!pf_verify) begin
-            pv_pend <= 1'b0;
-            pv_frz  <= 1'b0;
-            pv_n    <= 16'h0;
-            pv_bad  <= 16'h0;
-            pv_orph <= 16'h0;
-        end else begin
-            if (arm_rd_ok && pf_hit && (srv_term == TERM_NONE)) begin
-                pv_pend <= 1'b1;
-                pv_addr <= srv_addr;
-                pv_ube  <= srv_ube;
-                pv_hw   <= pf_hw;
-                pv_win  <= pf_hit_word;
-                pv_t    <= pv_tick;
-                pv_base <= pf_hw ? pf_base1[19:5] : pf_base0[19:5];
-                pv_lo   <= pf_hw ? pf_lo1  : pf_lo0;
-                pv_cnt  <= pf_hw ? pf_cnt1 : pf_cnt0;
-                pv_rft  <= pv_ft[pf_hw];
-                pv_rfl  <= pv_fl[pf_hw];
-                pv_rfa  <= pv_fa[pf_hw];
-                pv_rfti <= pv_fti[pf_hw];
-                pv_rwa  <= pv_wa[pf_hw];
-                pv_rwt  <= pv_wt[pf_hw];
-                pv_rda  <= pv_da[pf_hw];
-                pv_rdt  <= pv_dt[pf_hw];
-            end
-            if (pv_done && pv_pend && !pv_same) begin
-                pv_pend  <= 1'b0;
-                pv_orph  <= pv_orph + 16'd1;
-                pv_olast <= {cur_fillm, cur_bs, cur_term, 5'h0, cur_addr};
-            end
-            if (pv_done && pv_pend && pv_same) begin
-                pv_pend <= 1'b0;
-                pv_n    <= pv_n + 16'd1;
-                if (pv_bus_now != pv_win) begin
-                    pv_bad <= pv_bad + 16'd1;
-                    if (!pv_frz) begin
-                        pv_frz <= 1'b1;
-                        pv_bus <= pv_bus_now;
-                        pv_rec <= {
-                            {8'h0, pv_rdt},                       // 10
-                            {12'h0, pv_rda},                      // 9
-                            {8'h0, pv_rwt},                       // 8
-                            {12'h0, pv_rwa},                      // 7
-                            {pv_base, pv_lo, pv_cnt, 6'h0},       // 6
-                            {8'h0, pv_t},                         // 5
-                            {8'h0, pv_rfti},                      // 4
-                            {pv_rft, pv_rfl, 6'h0, pv_rfa},       // 3
-                            32'h0,                                // 2 (live)
-                            {pv_win, pv_bus_now},                 // 1
-                            {1'b1, pv_ube, pv_hw, cur_fillm,
-                             8'h0, pv_addr}                       // 0
-                        };
-                    end
-                end
-            end
-        end
-    end
-    assign dbg_pfv = {pv_olast, pv_orph, 16'h0, pv_rec[351:96], pv_bad,
-                      pv_n, pv_rec[63:0]};
-
+    always @(posedge clk) pv_tick <= pv_tick + 24'd1;
 
     // ------------------------------------------------------------------
     // Re-read verifier -- see the rr_verify port.

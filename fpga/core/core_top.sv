@@ -1216,7 +1216,6 @@ module core_top (
         .dbg_pico                   (dbg_pico_w)
     );
 
-    wire [415:0] bridge_dbg_pfv;   // zet_cpu_bridge hit verifier
     wire [287:0] bridge_dbg_rrv;   // zet_cpu_bridge re-read verifier
 `ifdef PC98_JTAG
     //
@@ -1664,27 +1663,6 @@ module core_top (
             8'h17:   probe_data_c = {8'h00, retired_cnt};   // liveness
             8'h18:   probe_data_c = {12'h000, zet_pc};      // current bus cycle
             8'h01:   probe_data_c = brg_q[31:0];
-            // 0x04-0x0E: bridge hit verifier (slot 9 bit 11) -- 0x04
-            // {frozen, ube, win, fillm, addr}, 0x05 {window word, bus word}, 0x06
-            // {mismatches, checks} live, 0x07 last fill {fillm, len, addr},
-            // 0x08 fill t, 0x09 check t, 0x0A {base, lo, cnt}, 0x0B/0x0C
-            // last write into the sector {addr}/{t}, 0x0D/0x0E last drain.
-            8'h04:   probe_data_c = bridge_dbg_pfv[31:0];
-            8'h05:   probe_data_c = bridge_dbg_pfv[63:32];
-            8'h06:   probe_data_c = bridge_dbg_pfv[95:64];
-            8'h07:   probe_data_c = bridge_dbg_pfv[127:96];
-            8'h08:   probe_data_c = bridge_dbg_pfv[159:128];
-            8'h09:   probe_data_c = bridge_dbg_pfv[191:160];
-            8'h0a:   probe_data_c = bridge_dbg_pfv[223:192];
-            8'h0b:   probe_data_c = bridge_dbg_pfv[255:224];
-            8'h0c:   probe_data_c = bridge_dbg_pfv[287:256];
-            8'h0d:   probe_data_c = bridge_dbg_pfv[319:288];
-            8'h0e:   probe_data_c = bridge_dbg_pfv[351:320];
-            // 0x0F {orphan completions, 0}; 0x81 the last orphan
-            // {fillm, bs, term, addr} -- a captured read that retired
-            // without its own pair reaching the compare.
-            8'h0f:   probe_data_c = bridge_dbg_pfv[383:352];
-            8'h81:   probe_data_c = bridge_dbg_pfv[415:384];
             // 0x91-0x99: bridge re-read verifier (slot 9 bit 12) -- 0x91
             // {frozen, ube, fillm, addr}, 0x92 {first answer, re-read},
             // 0x93 {mismatches, checks} live, 0x99/0x94 read/re-read t,
@@ -3512,7 +3490,6 @@ module core_top (
         .pf_wkill          (jtag_pf_wkill),
         .pf_bkill          (jtag_pf_bkill),
         .pf_verify         (jtag_pf_verify),
-        .dbg_pfv           (bridge_dbg_pfv),
         .rr_verify         (jtag_rr_verify),
         .dbg_rrv           (bridge_dbg_rrv),
         .bus_mem_write_n   (chipset_memory_write_n),
