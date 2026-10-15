@@ -1022,6 +1022,64 @@ module tb_mem_perf;
             marker(8'h8D);
         end
 
+        // ---- phase 0E: title-screen shape -- string into a stack buffer,
+        // read back, idle (register-only) gaps for pure fills, then a CALL
+        // whose pushes land on the old buffer bytes and a RET off them.
+        begin
+            int lp14, f14, r_call14, r_lp14, r_jnz14, bad14, r_jd14, r_end14;
+            marker(8'h0E);
+            emit(8'hBC); emitw(16'h0E00);                    // mov sp,0E00
+            emit(8'hFB);                                     // sti
+            emit(8'hB9); emitw(16'h0200);                    // mov cx,512
+            lp14 = prog_len;
+            emit(8'h51);                                     // push cx
+            emit(8'h83); emit(8'hEC); emit(8'h40);           // sub sp,40
+            emit(8'h8B); emit(8'hFC);                        // mov di,sp
+            emit(8'hBE); emitw(16'h3000);                    // mov si,3000
+            emit(8'hB9); emitw(16'h0020);                    // mov cx,32
+            emit(8'hF3); emit(8'hA4);                        // rep movsb (ds:si->es:di)
+            emit(8'h8B); emit(8'hF4);                        // mov si,sp
+            emit(8'hB9); emitw(16'h0020);                    // mov cx,32
+            emit(8'hAC);                                     // lodsb  (read buffer)
+            emit(8'hE2); emit(8'hFD);                        // loop lodsb
+            emit(8'h83); emit(8'hC4); emit(8'h40);           // add sp,40
+            emit(8'hB8); emitw(16'h1234);                    // mov ax,1234
+            emit(8'hBB); emitw(16'h5678);                    // mov bx,5678
+            for (int k = 0; k < 6; k++) begin
+                emit(8'hF7); emit(8'hE3);                    // mul bx  (idle gap)
+            end
+            emit(8'hE8); r_call14 = prog_len; emitw(16'h0000); // call f
+            emit(8'h3D); emitw(16'hBEEF);                    // cmp ax,BEEF
+            emit(8'h75); r_jnz14 = prog_len; emit(8'h00);   // jnz bad
+            emit(8'h59);                                     // pop cx
+            emit(8'hE2); r_lp14 = prog_len; emit(8'h00);    // loop lp
+            emit(8'hFA);                                     // cli
+            emit(8'hEB); r_jd14 = prog_len; emit(8'h00);    // jmp end
+            bad14 = prog_len;
+            emit(8'hB0); emit(8'hEE);
+            emit(8'hBA); emitw(16'h88FE); emit(8'hEE);
+            emit(8'hEB); emit(8'hFE);
+            f14 = prog_len;
+            emit(8'h55); emit(8'h8B); emit(8'hEC);           // push bp; mov bp,sp
+            emit(8'h56); emit(8'h57);                        // push si; push di
+            emit(8'hB8); emitw(16'h1111);                    // mov ax,1111
+            for (int k = 0; k < 6; k++) begin
+                emit(8'hF7); emit(8'hE3);                    // mul bx (idle gap)
+            end
+            emit(8'hE4); emit(8'h42);                        // in al,42
+            emit(8'hB0); emit(8'h07); emit(8'hE6); emit(8'h37); // out 37,al (flush)
+            emit(8'h5F); emit(8'h5E); emit(8'h5D);           // pop di; pop si; pop bp
+            emit(8'hB8); emitw(16'hBEEF);                    // mov ax,BEEF
+            emit(8'hC3);                                     // ret
+            r_end14 = prog_len;
+            prog[r_call14]   = 8'(f14 - (r_call14 + 2));
+            prog[r_call14+1] = 8'((f14 - (r_call14 + 2)) >> 8);
+            prog[r_jnz14] = 8'(bad14 - (r_jnz14 + 1));
+            prog[r_lp14]  = 8'(lp14  - (r_lp14 + 1));
+            prog[r_jd14]  = 8'(r_end14 - (r_jd14 + 1));
+            marker(8'h8E);
+        end
+
         // done: spin
         marker(8'hFF);
         emit(8'hEB); emit(8'hFE);           // JMP $
@@ -1046,7 +1104,7 @@ module tb_mem_perf;
         for (int i = 20'h00700; i < 20'h00710; i++)
             sdr.u_part.poke(24'(i), 16'h0000);
         // phase-0D frame stack and arrays
-        for (int i = 20'h00A00; i < 20'h00F10; i++)
+        for (int i = 20'h00900; i < 20'h00F10; i++)
             sdr.u_part.poke(24'(i), 16'h0000);
         for (int i = 20'h03000; i < 20'h03110; i++)
             sdr.u_part.poke(24'(i), 16'h0000);
@@ -1517,6 +1575,7 @@ module tb_mem_perf;
         phase_name[8'h0B] = "IRQ storm x4096";
         phase_name[8'h0C] = "frame-iret x256";
         phase_name[8'h0D] = "big-frame CALL/RET + IRQ";
+        phase_name[8'h0E] = "title shape: stack string + CALL";
         phase_name[8'hFF] = "done";
     end
     int phase_bytes [0:255];
@@ -1643,7 +1702,7 @@ module tb_mem_perf;
     // while phase 0B is current -- the guest's STI/CLI bracket it.
     reg [15:0] irq_gap = 16'd0;
     always @(posedge clk) begin
-        if (reset || (cur_phase != 8'h0B && cur_phase != 8'h0D)) begin
+        if (reset || (cur_phase != 8'h0B && cur_phase != 8'h0D && cur_phase != 8'h0E)) begin
             irq_req <= 1'b0;
             irq_gap <= 16'd0;
         end else if (zwb_inta) begin
@@ -2245,7 +2304,7 @@ module tb_mem_perf;
     end
 
     initial begin
-        #400_000_000;                       // 400 ms of sim time ceiling
+        #800_000_000;                       // 800 ms of sim time ceiling
         $display("GLOBAL TIMEOUT  diverged=%0d stray=%0d grants=%0d midcmd=%0d ph=%0d pc=%05x uncov=%0d pfbad=%0d rdfor=%0d witfor=%0d irq=%02x",
                  diverged, stray, grants, grants_midcmd, cur_phase, zet_pc,
                  c_uncov, c_pbad, c_rd_foreign, c_wit_foreign,
