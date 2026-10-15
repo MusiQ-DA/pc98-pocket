@@ -291,26 +291,15 @@ module core_top (
     // otherwise the OSD setting owns clk_select_next exactly as before.
     logic        jtag_spd_ovr = 1'b0;
     logic  [1:0] jtag_spd_sel = 2'b00;
-    logic        jtag_pf_dis  = 1'b0;
+    logic        jtag_pf_dis  = 1'b1;   // engine off by default, see below
     // Per-mechanism prefetch kills, for bisecting which half of the
     // engine a failure lives in without a rebuild:
-    //   [4] pf_fill    -- ENABLE pure (idle-gap) fills. They are off by
-    //                     default: with them on, SuperDepth's title loop
-    //                     intermittently (~5%) popped stale pre-push stack
-    //                     bytes on a RET (CPU got "acox &" from the credits
-    //                     string instead of 315E/021E at 384A0), ran on with
-    //                     DS=2620 and wrote into its own code (ABE0 at
-    //                     2818C, "not enough memory" at START). 0/125 with
-    //                     any of pf_dis/nofill/nohit/wkill/bkill vs 4/75
-    //                     with fills on; the hole itself was never found in
-    //                     review or sim. At the fast speeds fill-on-miss
-    //                     carries the streams anyway (srv_any is up on
-    //                     nearly every idle slot), so the cost is small.
+    //   [4] pf_nofill  -- pure (idle-gap) fills never run
     //   [5] pf_nofillm -- fill-on-miss never runs (guest reads always pay)
     //   [6] pf_nohit   -- windows fill but hits never serve: if the fault
     //                     persists, the corruption lives in the fill
     //                     bursts' effect on the port, not the served data
-    logic        jtag_pf_nofill  = 1'b1;
+    logic        jtag_pf_nofill  = 1'b0;
     logic        jtag_pf_nofillm = 1'b0;
     logic        jtag_pf_nohit   = 1'b0;
     //   [7] fwdis    -- kill the zet_wb_master 2-word instruction-fetch
@@ -333,8 +322,17 @@ module core_top (
 `else
     // The CPU speed is the OSD's alone.
     wire   [1:0] clk_select_next = cpu_speed_cfg;
-    wire         jtag_pf_dis  = 1'b0;
-    wire         jtag_pf_nofill  = 1'b1;   // see the [4] note above
+    // The bridge prefetch engine is OFF. With it on, SuperDepth's title
+    // loop intermittently (~5%) popped stale pre-push stack bytes on a RET
+    // (the CPU got "acox &" from the credits string instead of 315E/021E at
+    // 384A0 while memory held the right words), ran on with DS=2620 and
+    // wrote into its own code (ABE0 at 2818C) or quit with "not enough
+    // memory" at START. Hardware A/B, fails/trials: engine on 3/50,
+    // no pure fills 2/57, no hits 1/85, kill-on-any-write 1/85, engine
+    // off 0/85 -- the hole is in the fill bursts, not the overlap
+    // invalidation, and was never reproduced in tb_mem_perf.
+    wire         jtag_pf_dis  = 1'b1;
+    wire         jtag_pf_nofill  = 1'b0;
     wire         jtag_pf_nofillm = 1'b0;
     wire         jtag_pf_nohit   = 1'b0;
     wire         jtag_fwdis      = 1'b0;
@@ -2252,15 +2250,14 @@ module core_top (
         // Slot 0x09: CPU-speed override for scripted runs -- wdata[2] forces
         // clk_select_next to wdata[1:0] instead of the OSD setting. Same
         // handoff the menu uses (ce_generator reloads on the next biu_done).
-        // wdata[3] kills the prefetch engine outright; wdata[4] ENABLES the
-        // (default-off) pure fills; wdata[6:5] kill
-        // fill-on-miss / hit serving individually for A/B;
+        // wdata[3] ENABLES the (default-off) prefetch engine; wdata[6:4] kill
+        // pure fills / fill-on-miss / hit serving individually for A/B;
         // wdata[7] kills the wb_master instruction-fetch window outright.
         if (probe_wr_pulse && probe_waddr_c == 7'h09) begin
             jtag_spd_ovr  <= probe_wdata_c[2];
             jtag_spd_sel  <= probe_wdata_c[1:0];
-            jtag_pf_dis   <= probe_wdata_c[3];
-            jtag_pf_nofill  <= ~probe_wdata_c[4];
+            jtag_pf_dis   <= ~probe_wdata_c[3];
+            jtag_pf_nofill  <= probe_wdata_c[4];
             jtag_pf_nofillm <= probe_wdata_c[5];
             jtag_pf_nohit   <= probe_wdata_c[6];
             jtag_fwdis    <= probe_wdata_c[7];
