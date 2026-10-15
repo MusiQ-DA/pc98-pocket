@@ -2275,10 +2275,11 @@ always @(posedge clk) begin
         end
     end
 
-    // reset flags
-    // if (reset) begin
-        // reg_f <= FLAGS_INIT;
-    // end
+    // reset flags -- PC-98 port: the ITF's OUT 0F0h resets the CPU alone,
+    // and IF must come back clear before the resume path rebuilds the IVT.
+    if (reset) begin
+        reg_f <= FLAGS_INIT;
+    end
 end
 
 reg wr_valid_r;

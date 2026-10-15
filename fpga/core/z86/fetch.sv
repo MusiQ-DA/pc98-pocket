@@ -72,6 +72,13 @@ reg [4:0]  ptr;               // buffer[ptr] is start of next instruction
 reg        loading;           // there's an ongoing cache request
 reg        loading_half;      // which half of the buffer is being loaded
 reg        loading_drop;      // drop the cache request (the buffer is flushed)
+// PC-98 port: the half a sequential crossing just retired is kept intact
+// (behind_ok) for a few clocks, so a branch straight back into it -- a
+// loop whose LOOP/Jcc ends on a 16-byte boundary -- restores it instead of
+// reloading the whole 32 bytes over the 8-bit bus. The second-half
+// prefetch, which would overwrite it, holds off while behind_hold counts.
+reg        behind_ok;
+reg  [2:0] behind_hold;
 
 reg [3:0]  len;               // instruction length not including prefixes
 reg [6:0]  prefix;
@@ -151,6 +158,7 @@ reg ld_ack_r;
 always @(posedge clk) begin
     logic [7:0] opcode;
     logic [4:0] ptr_next;
+    logic [19:0] br_rel;
 
     opcode = 'x;
     ptr_next = 'x;
@@ -158,6 +166,8 @@ always @(posedge clk) begin
 
     if (reset) begin
         buf_valid <= 0;
+        behind_ok <= 0;
+        behind_hold <= 0;
         buf_addr <= {reset_addr[19:4], 4'b0};
         ptr <= reset_addr[3:0];
         ip <= reset_ip;
@@ -169,6 +179,7 @@ always @(posedge clk) begin
         id_inst <= 0;
         loading_drop <= 0;
     end else begin
+        if (behind_hold != 3'd0) behind_hold <= behind_hold - 3'd1;
         ld_ack_r <= ld_ack;
         if (ld_ack ^ ld_ack_r) begin  // receive data from cache
             if (!loading_drop) begin
@@ -183,27 +194,41 @@ always @(posedge clk) begin
 
         // set address
         if (br_taken) begin
-            if (buf_addr[19:4] != br_target[19:4] && buf_addr[19:4] + 1 != br_target[19:4]) begin
+            // Where the target sits relative to the buffer, in 20-bit
+            // arithmetic so the 1 MB wrap (FFFF0 + 16 = 00000) holds.
+            br_rel = br_target - buf_addr;
+            if (br_rel[19:5] == 15'd0) begin
+                // target inside the two halves: move the pointer; a target
+                // in the second half retires the first, as a crossing does
+                ptr_next = {buf_start ^ br_rel[4], br_rel[3:0]};
+                if (br_rel[4]) begin
+                    buf_valid[buf_start] <= 0;
+                    buf_start <= ~buf_start;
+                    buf_addr <= buf_addr + 16;
+                    behind_ok <= buf_valid[buf_start];
+                    behind_hold <= 3'd7;
+                end
+                ptr <= ptr_next;
+                ip <= br_new_ip;
+            end else if (behind_ok && br_rel[19:4] == 16'hFFFF) begin
+                // target in the half just retired, still intact: restore it
+                buf_valid[~buf_start] <= 1;
+                buf_start <= ~buf_start;
+                buf_addr <= buf_addr - 16;
+                behind_ok <= 0;
+                ptr <= {~buf_start, br_target[3:0]};
+                ip <= br_new_ip;
+            end else begin
                 // target address is not in our cache line, flush the cache
                 buf_valid <= 0;
+                behind_ok <= 0;
                 buf_start <= 0;
                 buf_addr <= {br_target[19:4], 4'b0};
-                ip <= br_new_ip;                            
+                ip <= br_new_ip;
                 ptr <= br_target[3:0];
                 prefix_len <= 0;
                 if (ld_req != ld_ack)                   // drop any ongoing cache request
                     loading_drop <= 1;
-            end else begin
-                // target address is in our cache line, just move the pointer
-                ptr_next = br_target[4:0] - buf_addr[4:0] + (buf_start ? 16 : 0);
-                if (ptr_next[4] != ptr[4]) begin
-                    // we need to invalidate the current buffer
-                    buf_valid[ptr[4]] <= 0;
-                    buf_start <= ~buf_start;
-                    buf_addr <= buf_addr + 16;
-                end
-                ptr <= ptr_next;
-                ip <= br_new_ip;
             end
             // id_valid <= 0;                              // pipeline flush
         end else begin
@@ -214,7 +239,9 @@ always @(posedge clk) begin
                     ld_addr <= buf_addr;
                     loading_half <= buf_start;
                     loading <= 1;
-                end else if (!buf_valid[~buf_start]) begin   // load the second half
+                end else if (!buf_valid[~buf_start]
+                             && !(behind_ok && behind_hold != 3'd0)) begin   // load the second half
+                    behind_ok <= 0;
                     ld_req <= ~ld_req;
                     ld_addr <= buf_addr + 16;
                     loading_half <= ~buf_start;
@@ -233,6 +260,8 @@ always @(posedge clk) begin
                     buf_valid[ptr[4]] <= 0;
                     buf_start <= ~buf_start;
                     buf_addr <= buf_addr + 16;
+                    behind_ok <= 1;
+                    behind_hold <= 3'd7;
                 end
             end else if ((~id_valid || id_ready) && buf_valid[ptr_end[4]]) begin  // actually output the instruction
                 // ip is at opcode
@@ -316,6 +345,8 @@ always @(posedge clk) begin
                     buf_valid[ptr[4]] <= 0;
                     buf_start <= ~buf_start;
                     buf_addr <= buf_addr + 16;
+                    behind_ok <= 1;
+                    behind_hold <= 3'd7;
                 end
                 ptr <= ptr_end;
             end

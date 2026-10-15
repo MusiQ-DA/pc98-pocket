@@ -154,6 +154,18 @@ always_ff @(posedge clk) begin
         reg_ip   <= br_new_ip;
     end
 
+    // PC-98 port: the 8086's reset state, F000:FFF0 (linear FFFF0, where
+    // fetch starts) with DS=ES=SS=0 -- the ITF's OUT 0F0h CPU-only reset
+    // relies on it, and near branches before the first far jump need a
+    // CS that matches the fetch address.
+    if (reset) begin
+        seg_CS_reg <= 16'hF000;
+        reg_ip     <= 16'hFFF0;
+        seg_DS_reg <= 16'h0000;
+        seg_ES_reg <= 16'h0000;
+        seg_SS_reg <= 16'h0000;
+    end
+
     // debug interface
     if (reg_wr) begin
         casez (reg_addr)
