@@ -2317,6 +2317,10 @@ module tb_mem_perf;
                  diverged, stray, grants, grants_midcmd, cur_phase, zet_pc,
                  c_uncov, c_pbad, c_rd_foreign, c_wit_foreign,
                  sdr.u_part.peek(20'h070A));
+        if (pf_vfy_r)
+            $display("PFVFY: checks=%0d mismatches=%0d first a=%05x win=%04x bus=%04x",
+                     u_bridge.pv_n, u_bridge.pv_bad, u_bridge.pv_rec[19:0],
+                     u_bridge.pv_rec[63:48], u_bridge.pv_rec[47:32]);
         for (int k = 31; k >= 1; k--)
             $display("   pc-%02d %05x", k, pc_ring[(pc_ptr - k) & 31]);
         for (int k = 15; k >= 1; k--)

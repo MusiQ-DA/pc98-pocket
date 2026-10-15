@@ -153,7 +153,7 @@ module zet_cpu_bridge (
     // its sector -- enough to tell a missed invalidation (write after the
     // fill) from a fill that read RAM ahead of a write (write before it).
     input  wire         pf_verify,
-    output wire [351:0] dbg_pfv,
+    output wire [415:0] dbg_pfv,
     // F-bank remap select: guest F8000-FFFFF is banked between the system
     // BIOS and the ITF shadow (RAM.sv latch_address). The windows tag the
     // guest address only, so a bank flip must drop them -- bytes fetched
@@ -1369,9 +1369,17 @@ module zet_cpu_bridge (
     reg  [15:0] pv_bus = 16'h0;
     reg  [15:0] pv_n = 16'h0, pv_bad = 16'h0;
     reg  [351:0] pv_rec = 352'h0;
+    // The word the normal path is about to hand the core (same rules as
+    // the rd_word assignment in B_GAP), and the completing pair's own
+    // identity -- only the captured read itself may be judged.
     wire [15:0] pv_bus_now = cur_word ? {rd_hi, rd_lo} : {rd_lo, rd_lo};
     wire        pv_done = (bstate == B_GAP) && pair_finish && last_byte
                        && !cur_inta && !cur_pf && !cur_dq;
+    wire        pv_same = (cur_bs == BS_MEMR) && (cur_term == TERM_NONE)
+                       && (cur_addr == pv_addr) && (cur_ube_n == pv_ube);
+    reg  [15:0] pv_orph = 16'h0;
+    reg  [31:0] pv_olast = 32'h0;   // {fillm, bs, term, 5'b0, addr} of the
+                                    // last orphan completion
     wire        pv_wr   = wrq_push || arm_wr;
     always @(posedge clk) begin
         pv_tick <= pv_tick + 24'd1;
@@ -1405,6 +1413,7 @@ module zet_cpu_bridge (
             pv_frz  <= 1'b0;
             pv_n    <= 16'h0;
             pv_bad  <= 16'h0;
+            pv_orph <= 16'h0;
         end else begin
             if (arm_rd_ok && pf_hit && (srv_term == TERM_NONE)) begin
                 pv_pend <= 1'b1;
@@ -1425,7 +1434,12 @@ module zet_cpu_bridge (
                 pv_rda  <= pv_da[pf_hw];
                 pv_rdt  <= pv_dt[pf_hw];
             end
-            if (pv_done && pv_pend) begin
+            if (pv_done && pv_pend && !pv_same) begin
+                pv_pend  <= 1'b0;
+                pv_orph  <= pv_orph + 16'd1;
+                pv_olast <= {cur_fillm, cur_bs, cur_term, 5'h0, cur_addr};
+            end
+            if (pv_done && pv_pend && pv_same) begin
                 pv_pend <= 1'b0;
                 pv_n    <= pv_n + 16'd1;
                 if (pv_bus_now != pv_win) begin
@@ -1444,14 +1458,17 @@ module zet_cpu_bridge (
                             {pv_rft, pv_rfl, 6'h0, pv_rfa},       // 3
                             32'h0,                                // 2 (live)
                             {pv_win, pv_bus_now},                 // 1
-                            {1'b1, pv_ube, pv_hw, 9'h0, pv_addr}  // 0
+                            {1'b1, pv_ube, pv_hw, cur_fillm,
+                             8'h0, pv_addr}                       // 0
                         };
                     end
                 end
             end
         end
     end
-    assign dbg_pfv = {pv_rec[351:96], pv_bad, pv_n, pv_rec[63:0]};
+    assign dbg_pfv = {pv_olast, pv_orph, 16'h0, pv_rec[351:96], pv_bad,
+                      pv_n, pv_rec[63:0]};
+
 
 `ifdef ZET_DBG_WQ
     reg rdy_seen;  // processor_ready dipped this pair

@@ -1212,7 +1212,7 @@ module core_top (
         .dbg_pico                   (dbg_pico_w)
     );
 
-    wire [351:0] bridge_dbg_pfv;   // zet_cpu_bridge hit verifier
+    wire [415:0] bridge_dbg_pfv;   // zet_cpu_bridge hit verifier
 `ifdef PC98_JTAG
     //
     // JTAG probe -- the panel's readout without a camera.
@@ -1660,7 +1660,7 @@ module core_top (
             8'h18:   probe_data_c = {12'h000, zet_pc};      // current bus cycle
             8'h01:   probe_data_c = brg_q[31:0];
             // 0x04-0x0E: bridge hit verifier (slot 9 bit 11) -- 0x04
-            // {frozen, ube, win, addr}, 0x05 {window word, bus word}, 0x06
+            // {frozen, ube, win, fillm, addr}, 0x05 {window word, bus word}, 0x06
             // {mismatches, checks} live, 0x07 last fill {fillm, len, addr},
             // 0x08 fill t, 0x09 check t, 0x0A {base, lo, cnt}, 0x0B/0x0C
             // last write into the sector {addr}/{t}, 0x0D/0x0E last drain.
@@ -1675,6 +1675,11 @@ module core_top (
             8'h0c:   probe_data_c = bridge_dbg_pfv[287:256];
             8'h0d:   probe_data_c = bridge_dbg_pfv[319:288];
             8'h0e:   probe_data_c = bridge_dbg_pfv[351:320];
+            // 0x0F {orphan completions, 0}; 0x81 the last orphan
+            // {fillm, bs, term, addr} -- a captured read that retired
+            // without its own pair reaching the compare.
+            8'h0f:   probe_data_c = bridge_dbg_pfv[383:352];
+            8'h81:   probe_data_c = bridge_dbg_pfv[415:384];
             8'h02:   probe_data_c = {9'h0, brg_q[54:32]};
             8'h03:   probe_data_c = {24'h0, brg_w};
             // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
