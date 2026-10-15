@@ -29,7 +29,15 @@
 
 `default_nettype none
 
-module z86_wbif (
+module z86_wbif #(
+    // I/O recovery: the minimum gap, in clk, from the end of one I/O cycle
+    // to the start of the next. PC-98 software times its port sequences in
+    // V30 instructions -- the ITF's PIT check loads counter 0, waits two
+    // JMP $+2, latches and expects the count to have moved -- and z86 runs
+    // a JMP $+2 out of its fetch buffer in a few clocks. 64 clk_chipset is
+    // ~1.5 us, about an 8 MHz 8086's OUT plus JMP $+2.
+    parameter int IO_GAP = 64
+) (
     input  wire         clk,
     input  wire         reset,
 
@@ -81,6 +89,11 @@ module z86_wbif (
     reg         rd_isio, rd_isw;
 
     reg  [2:0]  ld_i;                   // word index inside the line
+
+    // I/O recovery counter: loaded when an I/O cycle completes, an I/O
+    // cycle may only start once it has run out.
+    reg  [7:0]  io_rec;
+    wire        io_ok = (io_rec == 8'd0);
     reg  [19:0] ld_base;
 
     // Byte/word shapes for one access at `a`.
@@ -91,6 +104,7 @@ module z86_wbif (
     always @(posedge clk) begin
         if (reset) begin
             st       <= S_IDLE;
+            io_rec   <= 8'd0;
             ld_ack   <= ld_req;
             rd_ready <= 1'b1;
             rd_pend  <= 1'b0;
@@ -103,6 +117,8 @@ module z86_wbif (
             wb_dat_o <= 16'h0;
         end else begin
             wr_ready <= 1'b0;
+            if (io_rec != 8'd0) io_rec <= io_rec - 8'd1;
+            if (wb_stb_o && wb_ack_i && wb_tga_o) io_rec <= IO_GAP[7:0];
             if (rd) begin
                 rd_pend  <= 1'b1;
                 rd_a     <= rd_addr;
@@ -113,7 +129,10 @@ module z86_wbif (
 
             case (st)
               S_IDLE: begin
-                if (wr_valid && !wr_ready) begin
+                if (wr_valid && !wr_ready && wr_io && !io_ok) begin
+                    // An OUT waiting out its recovery gap holds everything
+                    // behind it: nothing may pass a pending write.
+                end else if (wr_valid && !wr_ready) begin
                     // Word at an odd address: the odd byte first, its data
                     // (the low byte of the word) in lane [15:8].
                     wb_adr_o <= wr_addr[19:1];
@@ -133,7 +152,7 @@ module z86_wbif (
                     wb_tga_o <= 1'b0;
                     wb_stb_o <= 1'b1;
                     st       <= S_LD;
-                end else if (rd_pend || rd) begin
+                end else if ((rd_pend || rd) && (io_ok || !(rd ? rd_io : rd_isio))) begin
                     // rd may be this very cycle's pulse: take its operands
                     // live, the capture above lands at the same edge.
                     wb_adr_o <= (rd ? rd_addr : rd_a) >> 1;

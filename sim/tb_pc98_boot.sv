@@ -2104,6 +2104,33 @@ module tb_pc98_boot;
         end
     end
 
+    // Return trace (+traceret): after the first OUT 043D,10 that follows a
+    // 12, log every new branch target (z86's pc output moves on branches)
+    // and every I/O cycle, 400 entries -- the ITF path from the checksum
+    // stub's return to wherever it goes next.
+    bit  trr_en = 0;
+    bit  trr_saw12 = 0;
+    int  trr_n = -1;
+    logic [19:0] trr_pc = 20'h0;
+    initial trr_en = $test$plusargs("traceret");
+    always_ff @(posedge zet_clk) begin
+        if (saw_043d && last_043d == 8'h12) trr_saw12 <= 1'b1;
+        if (trr_en && trr_n < 0 && trr_saw12 && saw_043d && last_043d == 8'h10)
+            trr_n <= 0;
+        else if (trr_n >= 0 && trr_n < 400) begin
+            if (zet_pc != trr_pc) begin
+                trr_pc <= zet_pc;
+                $display("  %8t  TRR br %05x", $time, zet_pc);
+                trr_n <= trr_n + 1;
+            end else if (zwb_stb && zwb_ack && zwb_tga) begin
+                $display("  %8t  TRR IO %s %04x dat %04x sel %b", $time,
+                         zwb_we ? "WR" : "RD", {zwb_adr, 1'b0},
+                         zwb_we ? zwb_dat_o : zwb_dat_i, zwb_sel);
+                trr_n <= trr_n + 1;
+            end
+        end
+    end
+
     // Wishbone settle trace: while stb is up, watch the master's tracked
     // outputs converge to the exec stage's combinational operands.
     int zwb_tr_n = 0;
