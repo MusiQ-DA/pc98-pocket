@@ -28,7 +28,8 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 #
 # ON for the Zet build: the swap freed the headroom the V30 build could not
 # afford (slot 0x33 = last guest I/O write + count).
-set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
+# measure-nojtag: debug build off to size the debug logic
+# set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
 
 # Boot the ITF, not the BIOS.
 #
