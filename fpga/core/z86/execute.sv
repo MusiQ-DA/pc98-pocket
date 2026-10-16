@@ -539,9 +539,20 @@ logic [15:0] this_sp;
 // Main µ-op execution
 always @* begin
     logic [15:0] val;
+    logic [2:0]  r;          // MC_LOAD's SI/DI pick
+    logic [15:0] delta;      // MC_LOAD's SI/DI step
 
     val = 'x;
     mc_wait = 0;
+    // PC-98 port: every variable gets a value on every path. Quartus built
+    // latches for this_sp, pop_next and MC_LOAD's r (pop_next's flagged
+    // "unsafe": D and ENA both fed by ex_valid); the netlist that made
+    // quartus_fit segfault had them. pop_next holding pop_reg is what the
+    // latch held anyway, since pop_reg <= pop_next every clock.
+    this_sp = sp_fw_valid ? sp_fw : reg2_rdata;
+    pop_next = pop_reg;
+    r = R_SI;
+    delta = 16'd1;
 
     // defaults
     mc_data = 16'h0000;
@@ -697,8 +708,6 @@ always @* begin
         //             arg[3]       1: 16-bit, 0: 8-bit
         //==================================================================
         MC_LOAD: begin
-            logic [2:0] r;
-            logic [15:0] delta;
             r = mc_cur.arg[0] ? R_DI : R_SI;
             delta = mc_cur.arg[3] ? 16'd2 : 16'd1;
             if (DF) delta = -delta;             // honour Direction-Flag
