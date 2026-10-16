@@ -89,9 +89,9 @@ module tb_z86_loop;
             $write("mem 0700:");
             for (int i = 0; i < 32; i++) $write(" %02x%02x", mem[20'h701 + 2*i], mem[20'h700 + 2*i]);
             $display("");
-            $display("mem 0600: %02x %02x %02x %02x %02x %02x %02x %02x",
-                     mem[20'h600], mem[20'h601], mem[20'h602], mem[20'h603],
-                     mem[20'h604], mem[20'h605], mem[20'h606], mem[20'h607]);
+            $write("mem 0600:");
+            for (int i = 0; i < 32; i++) $write(" %02x", mem[20'h600 + i]);
+            $display("");
             $finish;
         end
         if (cyc_n > 10_000_000) begin

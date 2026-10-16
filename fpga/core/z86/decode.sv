@@ -765,6 +765,18 @@ function automatic reg_mask_t build_rd_mask();
         m.gpr[R_BX] = 1'b1; m.gpr[R_AX] = 1'b1; m.mem = 1'b1;
     end
     if (id_opcode == 8'hA0 || id_opcode == 8'hA1) m.mem = 1'b1;
+    // ENTER/LEAVE read BP and SP in microcode; INT/INTO/INT3 read the vector
+    // straight after a store that may have just set it (MOV [80h],x / INT 20h).
+    if (id_opcode == 8'hC8 || id_opcode == 8'hC9) begin
+        m.gpr[R_BP] = 1'b1; m.gpr[R_SP] = 1'b1;
+    end
+    if (id_opcode == 8'hCC || id_opcode == 8'hCD || id_opcode == 8'hCE) m.mem = 1'b1;
+    // Stack pops (POP, RET, IRET), string reads and every microcoded form
+    // read memory too: a RET straight after a store to its return slot
+    // popped the old address.
+    if (ii.is_stack_op || id_ucode_valid ||
+        (id_opcode >= 8'hA4 && id_opcode <= 8'hA7) ||
+        (id_opcode >= 8'hAC && id_opcode <= 8'hAF)) m.mem = 1'b1;
 
     m.seg = 0;
     if (ii.g_is_seg & ~ii.g_write_only) m.seg[id_modrm[4:3]] = 1'b1;
@@ -859,6 +871,21 @@ function automatic reg_mask_t build_wr_mask();
         m.gpr[R_SI] = 1'b1;
         if (id_prefix[PREFIX_REP_REPZ_REPE]) m.gpr[R_CX] = 1'b1;
     end
+
+    // PC-98 port: registers the microcoded / implicit forms write, which
+    // regctrl does not name. Without them the next instruction read the old
+    // value: CWD/MUL/DIV leave DX, POPA all GPRs, ENTER/LEAVE BP and SP,
+    // LES/LDS the segment.
+    if (id_opcode == 8'h99) m.gpr[R_DX] = 1'b1;
+    if ((id_opcode == 8'hF6 || id_opcode == 8'hF7) && id_modrm[5]) begin
+        m.gpr[R_AX] = 1'b1; m.gpr[R_DX] = 1'b1;
+    end
+    if (id_opcode == 8'h61) m.gpr = 8'hFF;
+    if (id_opcode == 8'hC8 || id_opcode == 8'hC9) begin
+        m.gpr[R_BP] = 1'b1; m.gpr[R_SP] = 1'b1;
+    end
+    if (id_opcode == 8'hC4) m.seg[0] = 1'b1;
+    if (id_opcode == 8'hC5) m.seg[3] = 1'b1;
 
     // Stack operations sets stackop bit at write time
     m.stackop = ii.is_stack_op;

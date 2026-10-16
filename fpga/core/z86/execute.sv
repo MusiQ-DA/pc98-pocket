@@ -1240,6 +1240,11 @@ always_ff @(posedge clk) begin
         if (mc_active && ~br_taken && mc_reg2_valid && mc_reg2==R_SP) begin  // capture shadow SP written by µ-code
             sp_fw <= mc_data2;     
             sp_fw_valid <= 1'b1;
+        end else if (mc_active && ~br_taken && mc_reg_valid && mc_reg==R_SP && mc_width) begin
+            // PC-98 port: WR_REG SP (LEAVE's SP <- BP) writes through port 1;
+            // without this the POP BP after it used the SP from before LEAVE.
+            sp_fw <= mc_data;
+            sp_fw_valid <= 1'b1;
         end else if (ex_ucode_valid) begin
             if (reg2_raddr==R_SP & ~sp_fw_valid) begin          // enter microcode → capture current architectural SP
                 sp_fw       <= reg2_rdata;
