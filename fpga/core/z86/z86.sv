@@ -263,6 +263,9 @@ fetch u_fetch_decode1 (
     .ld_req             (ld_req), 
     .ld_ack             (ld_ack), 
     .ld_data            (ld_data),
+    .snoop_wr           (wr_valid & wr_ready & ~wr_io),
+    .snoop_addr         (wr_addr),
+    .snoop_word         (wr_word),
 
     .br_taken           (br_taken), 
     .br_target          (br_target), 

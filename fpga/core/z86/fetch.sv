@@ -52,7 +52,11 @@ module fetch (
     output reg        ld_req,        
     input             ld_ack,
     output reg [19:0] ld_addr,
-    input     [127:0] ld_data
+    input     [127:0] ld_data,
+    // PC-98 port: CPU stores, so code written and then run is fetched anew
+    input             snoop_wr,
+    input     [19:0]  snoop_addr,
+    input             snoop_word
 );
 
 reg instr_acked = 1;
@@ -90,6 +94,24 @@ reg [31:0] disp_t;
 reg [15:0] imm_t;
 reg [4:0]  ptr_end;
 reg [15:0] ip;                // start of this instruction
+
+// Store snoop. The 32-byte buffer runs far further ahead than a 286's
+// 6-byte queue and was never invalidated by a store, so code patched more
+// than a few bytes ahead (or written and then branched to within the
+// window) ran the old bytes. A store into either buffered half or the
+// half being loaded drops the buffer and restarts fetch at the first
+// instruction not yet handed to decode; one into the retired half
+// forgets that half.
+wire [19:0] snoop_end = snoop_addr + {19'd0, snoop_word};
+wire [19:0] buf_addr2 = buf_addr + 20'd16;
+wire [19:0] buf_addr0 = buf_addr - 20'd16;
+wire snoop_hit = snoop_wr & (
+        (buf_valid[buf_start]  & ((snoop_addr[19:4] == buf_addr[19:4])  | (snoop_end[19:4] == buf_addr[19:4])))  |
+        (buf_valid[~buf_start] & ((snoop_addr[19:4] == buf_addr2[19:4]) | (snoop_end[19:4] == buf_addr2[19:4]))) |
+        (loading & ((snoop_addr[19:4] == ld_addr[19:4]) | (snoop_end[19:4] == ld_addr[19:4]))));
+wire snoop_behind = snoop_wr & ((snoop_addr[19:4] == buf_addr0[19:4]) | (snoop_end[19:4] == buf_addr0[19:4]));
+wire [4:0]  insn_ofs = (ptr - {buf_start, 4'b0000}) - {3'b000, prefix_len};
+wire [19:0] insn_lin = buf_addr + {15'd0, insn_ofs};
 
 wire       is_0f_escape = (buffer[ptr] == 8'h0F);
 wire [7:0] opcode_byte = is_0f_escape ? buffer[(ptr+1)%32] : buffer[ptr];
@@ -199,8 +221,20 @@ always @(posedge clk) begin
             loading_drop <= 0;
         end
 
+        if (snoop_behind) behind_ok <= 0;
         // set address
-        if (br_taken) begin
+        if (!br_taken && snoop_hit) begin
+            buf_valid  <= 0;
+            behind_ok  <= 0;
+            buf_start  <= 0;
+            buf_addr   <= {insn_lin[19:4], 4'b0};
+            ptr        <= {1'b0, insn_lin[3:0]};
+            ip         <= ip - {14'd0, prefix_len};
+            prefix     <= 0;
+            prefix_len <= 0;
+            if (ld_req != ld_ack)
+                loading_drop <= 1;
+        end else if (br_taken) begin
             // PC-98 port: prefixes consumed down the wrong path must not
             // reach the target. Only the out-of-buffer case cleared them, so
             // an in-buffer branch onto a prefixed instruction (JCXZ over
@@ -264,7 +298,7 @@ always @(posedge clk) begin
             end
         end
 
-        if (!br_taken && buf_valid[ptr[4]]) begin            // consume bytes 
+        if (!br_taken && !snoop_hit && buf_valid[ptr[4]]) begin            // consume bytes 
             if (is_prefix(buffer[ptr])) begin                // an extra cycle for prefix
                 prefix[prefix_bit(buffer[ptr])] <= 1;
                 ptr <= ptr + 1;

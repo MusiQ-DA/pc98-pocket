@@ -145,7 +145,14 @@ def gen_block(rng, lab):
     elif k < 38:
         out += [f'les {rng.choice(["ax", "dx"])},[bx+0x10]', 'push word 0x200', 'pop es']
     elif k < 39:
-        out.append(f'lea {rng.choice(R16)},[bx+si+0x{rng.randrange(0, 0x100):x}]')
+        if rng.random() < 0.5:
+            out.append(f'lea {rng.choice(R16)},[bx+si+0x{rng.randrange(0, 0x100):x}]')
+        else:
+            # self-modifying code: patch an immediate beyond a 286's 6-byte
+            # prefetch queue, then run it (the fetch buffer must see the
+            # store). Closer than that is undefined on the real CPU too.
+            out += [f'mov byte [cs:{lab}p+1],0x{rng.randrange(256):x}'] + ['nop'] * rng.randrange(6, 14) + \
+                   [f'{lab}p:', f'mov al,0x{rng.randrange(256):x}', f'add {rng.choice(["dl", "cl"])},al']
     elif k == 40:
         out += [f'call 0:{lab}s', f'jmp {lab}e', f'{lab}s:', f'mov {rng.choice(R16)},0x{imm(rng, True):x}',
                 'retf', f'{lab}e:']
