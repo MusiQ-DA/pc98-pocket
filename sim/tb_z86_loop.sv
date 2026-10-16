@@ -129,7 +129,7 @@ module tb_z86_loop;
             $finish;
         end
         if (cyc_n > 10_000_000) begin
-            $display("TIMEOUT pc=%05x reads=%0d", pc, rd_n);
+            $display("TIMEOUT pc=%05x reads=%0d interrupts=%0d", pc, rd_n, irq_n);
             $finish;
         end
     end

@@ -123,7 +123,14 @@ wire emit = id_ready & id_valid & ~id_void;
 // inject nmi-based interrupt into the pipeline
 reg nmi_latched, intr_latched;
 reg start_int_service;
-wire int_pipeline_inject = (nmi_latched | (intr_latched & pic_vec_valid)) & emit;  // inject at an valid instruction boundary
+// The injected INT pushes FLAGS/CS/IP from SP and SS, but the hazard check
+// that let `emit` through was the displaced instruction's: after POP DS /
+// LOOP the INT read SP before the POP's write landed and its IRET came back
+// 2 bytes off. Hold the injection until no stack/SP/SS/memory writer is in
+// flight (either scoreboard slot); the instruction emits normally meanwhile.
+wire int_hazard = (sb0_valid & (sb0_mask.stackop | sb0_mask.gpr[R_SP] | sb0_mask.seg[2] | sb0_mask.mem)) |
+                  (sb1_valid & (sb1_mask.stackop | sb1_mask.gpr[R_SP] | sb1_mask.seg[2] | sb1_mask.mem));
+wire int_pipeline_inject = (nmi_latched | (intr_latched & pic_vec_valid)) & emit & ~int_hazard;  // inject at an valid instruction boundary
 // IF as it will stand at the next boundary: an instruction in EX that writes
 // IF (CLI, STI, POPF, IRET, INT -- the injected one included) has not
 // updated reg_f yet. An INTR seen through a stale IF=1 during an INT's
