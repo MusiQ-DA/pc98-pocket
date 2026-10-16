@@ -756,6 +756,15 @@ function automatic reg_mask_t build_rd_mask();
     end
 
     if (ii.e_is_m & ~ii.e_write_only) m.mem = 1'b1;
+    // PC-98 port: XLAT reads [BX+AL] at decode, so it waits on BX as well as
+    // AX, and on a store still in flight. The BIOS INT 1Bh entry does
+    // MOV BX,04B0h / XLAT back to back; with only AX checked the table read
+    // used the old BX=0 and jumped to 0800:0018. MOV AL/AX,moffs also reads
+    // at decode without going through e_is_m.
+    if (ii.is_xlat) begin
+        m.gpr[R_BX] = 1'b1; m.gpr[R_AX] = 1'b1; m.mem = 1'b1;
+    end
+    if (id_opcode == 8'hA0 || id_opcode == 8'hA1) m.mem = 1'b1;
 
     m.seg = 0;
     if (ii.g_is_seg & ~ii.g_write_only) m.seg[id_modrm[4:3]] = 1'b1;
@@ -820,8 +829,19 @@ function automatic reg_mask_t build_wr_mask();
         if (ii.e_is_op20)            m.gpr[ii.w ? id_opcode[2:0] : {1'b0,id_opcode[1:0]}] = 1'b1;
     end
 
-    // TODO: consider stack operations
     if (ii.e_is_m & ~ii.e_read_only) m.mem = 1'b1;
+    // PC-98 port: every other store must also hold back the next decode-time
+    // read -- MOV moffs,AL/AX, STOS/MOVS, and pushes (PUSH, CALL, INT): a
+    // PUSH followed by MOV r,[BP-2] read the word before it was written.
+    // is_stack_op is PUSH/POP only; the microcoded pushers are listed.
+    if (id_opcode == 8'hA2 || id_opcode == 8'hA3 ||
+        id_opcode == 8'hA4 || id_opcode == 8'hA5 ||
+        id_opcode == 8'hAA || id_opcode == 8'hAB ||
+        id_opcode == 8'h60 || id_opcode == 8'h68 || id_opcode == 8'h6A ||
+        id_opcode == 8'h9A || id_opcode == 8'h9C || id_opcode == 8'hC8 ||
+        id_opcode == 8'hCC || id_opcode == 8'hCD || id_opcode == 8'hCE ||
+        id_opcode == 8'hE8 || id_opcode == 8'hFF ||
+        ii.is_stack_op) m.mem = 1'b1;
 
     m.seg = 0;
     if (ii.g_is_seg & ~ii.g_read_only) m.seg[id_modrm[4:3]] = 1'b1;
