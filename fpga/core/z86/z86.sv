@@ -40,6 +40,8 @@ module z86 (
     // ---- debug ---------------------------------------------------------
     output      [19:0]  pc,             // CS:IP of the fetch stream
     output      [15:0]  dbg_ds,
+    // {FLAGS, IP, DS, SS, CS, ES, DI..AX} for the JTAG probe (PC-98 port)
+    output     [223:0]  dbg_regs,
     output              dbg_halted
 );
 
@@ -222,8 +224,10 @@ z86_wbif u_cache (
 );
 
 // register file
+wire [127:0] dbg_gpr;
 regfile u_regfile (
     .clk                (clk),
+    .dbg_gpr            (dbg_gpr),
     .id_raddr1          (reg1_raddr), 
     .id_rdata1          (reg1_rdata),
     .id_raddr2          (reg2_raddr), 
@@ -477,5 +481,6 @@ write_back u_write_back (
 
 assign pc     = {seg_CS, 4'h0} + reg_ip;
 assign dbg_ds = seg_DS;
+assign dbg_regs = {reg_f, reg_ip, seg_DS, seg_SS, seg_CS, seg_ES, dbg_gpr};
 
 endmodule

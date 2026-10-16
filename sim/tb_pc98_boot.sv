@@ -198,6 +198,7 @@ module tb_pc98_boot;
         .wb_tgc_o  (zwb_inta),
         .pc        (zet_pc),
         .dbg_ds    (),
+        .dbg_regs  (dbg_regs),
         .dbg_halted()
     );
     assign zwb_nmia  = 1'b0;
@@ -317,8 +318,10 @@ module tb_pc98_boot;
         end
 
     // Zet has no dbg_regs: the trace fields read 0, eu_pc below reads the
-    // core's real linear-PC debug pin instead.
+    // core's real linear-PC debug pin instead. z86 drives them.
+`ifndef Z86
     assign dbg_regs = '0;
+`endif
     assign dbg_first_pop = 1'b0;
     assign dbg_pend = 1'b0;
 

@@ -1223,7 +1223,16 @@ module core_top (
     // The nuV30's architectural state, live -- was. These taps were the old
     // core's dbg pins; Zet has no equivalent so every one is tied to 0 now
     // and the slots below keep their addresses only for map compatibility.
+`ifdef PC98_Z86
+    // z86's registers in the old V30 layout {psw, ip, DS, SS, CS, ES, DI..AX}:
+    // live until the probe trigger (slot 0x06) hits, then frozen at that
+    // moment until the trigger is rewritten.
+    wire [223:0] z86_dbg_regs;
+    reg  [223:0] v30_dbg_regs = '0;
+    reg          z86_snap_held = 1'b0;
+`else
     wire [223:0] v30_dbg_regs  = '0;       // {psw, pc, sreg3..0, gpr7..0}
+`endif
     wire  [15:0] v30_dbg_core  = '0;       // EU/BIU interlock: halt/queue/eu_bs
     wire  [31:0] v30_dbg_core2 = '0;       // posted access: eu_addr/seg + slots
     wire  [31:0] v30_dbg_core3 = '0;       // BIU launch-law registers
@@ -1469,6 +1478,16 @@ module core_top (
     wire       trig_hit  = trig_en && (trig_ds ? (zet_ds == trig_addr[15:0])
                                            : (pc_now == trig_addr));
     wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
+`ifdef PC98_Z86
+    always_ff @(posedge clk_chipset) begin
+        if (probe_wr_pulse && probe_waddr_c == 7'h06)
+            z86_snap_held <= 1'b0;
+        else if (trig_hit && !z86_snap_held)
+            z86_snap_held <= 1'b1;
+        if (!z86_snap_held)
+            v30_dbg_regs <= z86_dbg_regs;
+    end
+`endif
 
     // The BIOS->ITF hand-back always ends in an OUT 0x43D,0x10 -- the
     // cold path's bank restore -- so freezing the ring on that write
@@ -3313,6 +3332,7 @@ module core_top (
         .wb_tgc_o  (zwb_inta),
         .pc        (zet_pc),
         .dbg_ds    (zet_ds),
+        .dbg_regs  (z86_dbg_regs),
         .dbg_halted()
     );
     assign zwb_nmia  = 1'b0;

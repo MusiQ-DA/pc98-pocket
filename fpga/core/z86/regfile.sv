@@ -20,13 +20,16 @@ module regfile (
     input      [15:0]  wdata1,
     input      [1:0]   we2,        // byte enabled write
     input      [2:0]   waddr2,
-    input     [15:0]   wdata2
+    input     [15:0]   wdata2,
+    // PC-98 port: the architectural GPRs for the JTAG probe, {DI..AX}
+    output    [127:0]  dbg_gpr
 );
 
 import z86_package::*;
 
 reg [15:0] regs [0:7] /* verilator public */;
 reg [15:0] regs2 [0:7];            // replicated regs for EX stage
+assign dbg_gpr = {regs[7], regs[6], regs[5], regs[4], regs[3], regs[2], regs[1], regs[0]};
 
 wire [15:0] AX /* verilator public */ = regs[R_AX];
 wire [15:0] CX /* verilator public */ = regs[R_CX];
