@@ -245,6 +245,14 @@ always @(posedge clk) begin
             // Where the target sits relative to the buffer, in 20-bit
             // arithmetic so the 1 MB wrap (FFFF0 + 16 = 00000) holds.
             br_rel = br_target - buf_addr;
+            // A line load still out was aimed at a half by buf_start /
+            // buf_addr as they stood; the branch cases below re-point both,
+            // and the load then landed under the wrong address (a load of
+            // 11160 written into the half the branch had just made 11180:
+            // FreeDOS's path parser ran stale bytes and \autoexec.bat was
+            // "not found"). Drop it; the request logic reloads what's missing.
+            if (ld_req != ld_ack)
+                loading_drop <= 1;
             if (br_rel[19:5] == 15'd0) begin
                 // target inside the two halves: move the pointer; a target
                 // in the second half retires the first, as a crossing does

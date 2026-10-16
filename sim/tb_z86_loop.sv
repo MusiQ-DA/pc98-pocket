@@ -24,7 +24,9 @@ module tb_z86_loop;
     logic [7:0] mem [0:1048575];
     int lat = 4, n = 1000;
     logic [19:0] org = 20'h00400;
-    string prog, dumpf;
+    string prog, dumpf, memf;
+    logic [19:0] stop_pc = 20'hFFFFF;
+    initial void'($value$plusargs("stop_pc=%h", stop_pc));
     logic [7:0] pbuf [0:4095];
     initial for (int i = 0; i < 4096; i++) pbuf[i] = 8'hF4;
     int rd_n = 0, wr_n = 0, cnt = 0;
@@ -39,6 +41,9 @@ module tb_z86_loop;
         void'($value$plusargs("n=%d", n));
         for (int i = 0; i < 1048576; i++) mem[i] = 8'h90;
         void'($value$plusargs("org=%h", org));
+        // +mem=<hex file>: a whole 1 MB image (one byte per line) under the
+        // program -- a RAM dump from hardware plus ROMs, for replaying a call.
+        if ($value$plusargs("mem=%s", memf)) $readmemh(memf, mem);
         // FFFF0: jmp {org[19:16],000}:{org[15:0]} -- or, with +org=ffff0,
         // the program sits at the reset vector itself.
         if (org != 20'hFFFF0) begin
@@ -50,7 +55,7 @@ module tb_z86_loop;
             $readmemh(prog, pbuf);
             for (int i = 0; i < 4096; i++) mem[org+i] = pbuf[i];
             // data the program may walk: word i at 0800+2i = i*0x0123+0x4567
-            for (int i = 0; i < 256; i++) begin
+            if (memf.len() == 0) for (int i = 0; i < 256; i++) begin
                 logic [15:0] w;
                 w = i * 16'h0123 + 16'h4567;
                 mem[20'h00800 + 2*i] = w[7:0]; mem[20'h00801 + 2*i] = w[15:8];
@@ -110,7 +115,8 @@ module tb_z86_loop;
     longint cyc_n = 0;
     always @(posedge clk) begin
         if (!reset) cyc_n++;
-        if (halted) begin
+        if (halted || (stop_pc != 20'hFFFFF && pc == stop_pc)) begin
+            if (!halted) $display("STOP at %05x", pc);
             if (irq_period != 0) $display("interrupts taken: %0d", irq_n);
             $display("n=%0d lat=%0d: %0d clocks, %0d reads, %0d writes -> %0.1f clk/iter",
                      n, lat, cyc_n, rd_n, wr_n, real'(cyc_n) / n);
@@ -125,7 +131,12 @@ module tb_z86_loop;
             $display("");
             // +dump=<file>: 0000-3FFF as hex, for diffing against a reference
             // emulator (scripts/z86_fuzz.py).
-            if ($value$plusargs("dump=%s", dumpf)) $writememh(dumpf, mem, 0, 20'h3FFF);
+            if ($value$plusargs("dump=%s", dumpf))
+                $writememh(dumpf, mem, 0, memf.len() ? 20'h9FFFF : 20'h3FFF);
+            $display("REGS AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X BP=%04X SP=%04X DS=%04X ES=%04X SS=%04X CS=%04X FL=%04X",
+                     u.u_regfile.regs[0], u.u_regfile.regs[3], u.u_regfile.regs[1], u.u_regfile.regs[2],
+                     u.u_regfile.regs[6], u.u_regfile.regs[7], u.u_regfile.regs[5], u.u_regfile.regs[4],
+                     u.seg_DS, u.seg_ES, u.seg_SS, u.seg_CS, u.u_execute.reg_f);
             $finish;
         end
         if (cyc_n > 10_000_000) begin
