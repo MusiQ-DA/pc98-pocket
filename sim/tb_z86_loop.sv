@@ -24,11 +24,17 @@ module tb_z86_loop;
     logic [7:0] mem [0:1048575];
     int lat = 4, n = 1000;
     logic [19:0] org = 20'h00400;
-    string prog;
+    string prog, dumpf;
     logic [7:0] pbuf [0:4095];
     initial for (int i = 0; i < 4096; i++) pbuf[i] = 8'hF4;
     int rd_n = 0, wr_n = 0, cnt = 0;
+    // +wlog=<file>: every byte the CPU writes, in bus order (z86_fuzz.py
+    // diffs it against the reference's write stream to find the first
+    // wrong store).
+    int wlog = 0;
+    string wlogf;
     initial begin
+        if ($value$plusargs("wlog=%s", wlogf)) wlog = $fopen(wlogf, "w");
         void'($value$plusargs("lat=%d", lat));
         void'($value$plusargs("n=%d", n));
         for (int i = 0; i < 1048576; i++) mem[i] = 8'h90;
@@ -67,6 +73,10 @@ module tb_z86_loop;
                 ack <= 1'b1;
                 if (we) begin
                     wr_n++;
+                    if (wlog != 0) begin
+                        if (sel[0]) $fdisplay(wlog, "%05x %02x", {adr,1'b0}, dat_o[7:0]);
+                        if (sel[1]) $fdisplay(wlog, "%05x %02x", {adr,1'b1}, dat_o[15:8]);
+                    end
                     if (sel[0]) mem[{adr,1'b0}] <= dat_o[7:0];
                     if (sel[1]) mem[{adr,1'b1}] <= dat_o[15:8];
                 end else begin
@@ -92,6 +102,9 @@ module tb_z86_loop;
             $write("mem 0600:");
             for (int i = 0; i < 32; i++) $write(" %02x", mem[20'h600 + i]);
             $display("");
+            // +dump=<file>: 0000-3FFF as hex, for diffing against a reference
+            // emulator (scripts/z86_fuzz.py).
+            if ($value$plusargs("dump=%s", dumpf)) $writememh(dumpf, mem, 0, 20'h3FFF);
             $finish;
         end
         if (cyc_n > 10_000_000) begin

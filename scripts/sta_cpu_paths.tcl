@@ -67,4 +67,24 @@ foreach f {sta_pico_hold_in.txt sta_pico_hold_out.txt} {
     }
 }
 
+# Hold inside the CPU domain at the fast corner -- where the summary's
+# worst hold slack is. The z86 sits on the gated zet_clk, so a hold red
+# here is a clk -> zet_clk skew path; print its endpoints into the log.
+delete_timing_netlist
+if {[catch {create_timing_netlist -model fast -temperature 0 -voltage 1100} err]} {
+    puts "note: fast corner rejected ($err)"
+    create_timing_netlist -model fast
+}
+read_sdc apf/apf_constraints.sdc
+update_timing_netlist
+report_timing -nworst 20 -hold -to_clock $cpuclk \
+  -detail full_path -file sta_cpu_hold_fast.txt
+if {[file exists sta_cpu_hold_fast.txt]} {
+    set fh [open sta_cpu_hold_fast.txt]; set n 0
+    while {[gets $fh line] >= 0 && $n < 120} {
+        if {[regexp {^; (Slack|From Node|To Node|Launch Clock|Latch Clock|Clock Skew|Data Arrival Time) } $line]} { puts "cpu_hold: $line"; incr n }
+    }
+    close $fh
+}
+
 puts "STA_CPU_PATHS_DONE"
