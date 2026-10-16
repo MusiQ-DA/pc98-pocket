@@ -2451,6 +2451,16 @@ module tb_pc98_boot;
         $display("IVT 08 : %04X:%04X   IVT 18: %04X:%04X",
                  {ram[8'h23],ram[8'h22]}, {ram[8'h21],ram[8'h20]},
                  {ram[8'h63],ram[8'h62]}, {ram[8'h61],ram[8'h60]});
+        // The screen as text: rows 0-1, 80 cells each (ANK codes only).
+        for (int row = 0; row < 2; row++) begin
+            $write("SCREEN row %0d: |", row);
+            for (int col = 0; col < 80; col++) begin
+                logic [7:0] ch;
+                ch = tvram_code[(row*80 + col)*2];
+                $write("%s", (ch >= 8'h20 && ch < 8'h7f) ? ch : 8'h2e);
+            end
+            $display("|");
+        end
         $display("TVRAM writes %0d; first row, code words:", tvram_wr_count);
         for (i = 0; i < 16; i = i + 1)
             $display("  cell %02d: code %04X  attr %04X", i,
