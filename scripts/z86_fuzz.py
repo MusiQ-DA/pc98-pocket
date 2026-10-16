@@ -155,7 +155,9 @@ def gen_block(rng, lab):
                 f'{rng.choice(["loopz", "loopnz"])} {lab}l',
                 'test al,0']    # Unicorn rewrites the flags on a LOOPcc exit
     elif k == 48:
-        out += [rng.choice(['daa', 'das', 'aaa', 'aas', 'aam', 'aad']), 'test al,0']
+        # AAA/AAS left out: z86 adjusts AH like the 8086/V30 (AH+1), Unicorn
+        # like the 386 (AX+106h). DAA/DAS read AF, so define it first.
+        out += [f'add al,{rng.randrange(256)}', rng.choice(['daa', 'das', 'aam', 'aad']), 'test al,0']
     elif k == 49:
         out += [f'mov word [0x14],0x{rng.randrange(0x100):x}', 'mov word [0x16],0x200',
                 f'lds {rng.choice(["ax", "dx"])},[0x14]', f'mov {r},{mem_operand(rng, w)}']
@@ -285,7 +287,8 @@ def diff(a, b):
             out.append(f'{name} ref={x:04x} z86={y:04x}')
     for lo, hi in ((0x700, 0x800), (0x2000, 0x2800), (0x3000, 0x4000)):
         for i in range(lo, hi):
-            if a[i] != b[i]:
+            m = 0xEF if i == 0x3EFE else 0xFF   # the epilogue's PUSHF: AF undefined
+            if (a[i] ^ b[i]) & m:
                 out.append(f'mem {i:05x} ref={a[i]:02x} z86={b[i]:02x}')
                 break
     return out
