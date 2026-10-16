@@ -1484,6 +1484,32 @@ module core_top (
                                            : (pc_now == trig_addr));
     wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
 `ifdef PC98_Z86
+    // Trigger log: every time the fetch PC lands on the slot-6 trigger
+    // address, {DS, ES, DI, SI, DX, CX, BX, AX} goes into a 64-entry ring --
+    // armed on an INT 21h entry it records every DOS call with its
+    // arguments, which a JTAG poll loop is far too slow to catch. Write slot
+    // 0x0e picks the entry, reads 0x60-0x63 return it (low word first),
+    // 0x64 the entry count.
+    (* ramstyle = "M10K" *) reg [127:0] tlog [0:63];
+    reg  [5:0]   tlog_ri = 6'd0;
+    reg  [15:0]  tlog_n  = 16'd0;
+    reg  [127:0] tlog_q  = '0;
+    reg          trig_hit_d = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        trig_hit_d <= trig_hit;
+        if (probe_wr_pulse && probe_waddr_c == 7'h06)
+            tlog_n <= 16'd0;
+        else if (trig_hit && !trig_hit_d) begin
+            tlog[tlog_n[5:0]] <= {z86_dbg_regs[191:176], z86_dbg_regs[143:128],   // DS, ES
+                                  z86_dbg_regs[127:112], z86_dbg_regs[111:96],    // DI, SI
+                                  z86_dbg_regs[47:32],   z86_dbg_regs[31:16],     // DX, CX
+                                  z86_dbg_regs[63:48],   z86_dbg_regs[15:0]};     // BX, AX
+            tlog_n <= tlog_n + 16'd1;
+        end
+        if (probe_wr_pulse && probe_waddr_c == 7'h0e)
+            tlog_ri <= probe_wdata_c[5:0];
+        tlog_q <= tlog[tlog_ri];
+    end
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h06)
             z86_snap_held <= 1'b0;
@@ -1549,6 +1575,13 @@ module core_top (
             8'h16:   probe_data_c = v30_dbg_regs[31:0];     // gpr1:gpr0
             8'h17:   probe_data_c = {8'h00, retired_cnt};   // liveness
             8'h18:   probe_data_c = {12'h000, zet_pc};      // current bus cycle
+`ifdef PC98_Z86
+            8'h60:   probe_data_c = tlog_q[31:0];           // trigger log, see tlog
+            8'h61:   probe_data_c = tlog_q[63:32];
+            8'h62:   probe_data_c = tlog_q[95:64];
+            8'h63:   probe_data_c = tlog_q[127:96];
+            8'h64:   probe_data_c = {16'h0, tlog_n};
+`endif
             8'h01:   probe_data_c = brg_q[31:0];
             8'h02:   probe_data_c = {9'h0, brg_q[54:32]};
             8'h03:   probe_data_c = {24'h0, brg_w};
