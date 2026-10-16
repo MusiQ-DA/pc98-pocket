@@ -17,8 +17,8 @@ module tb_z86_loop;
 
     z86 u (.clk(clk), .reset(reset), .wb_adr_o(adr), .wb_sel_o(sel),
            .wb_we_o(we), .wb_tga_o(tga), .wb_dat_o(dat_o), .wb_stb_o(stb),
-           .wb_cyc_o(cyc), .wb_ack_i(ack), .wb_dat_i(dat_i),
-           .wb_tgc_i(1'b0), .wb_tgc_o(tgc_o), .pc(pc), .dbg_ds(), .dbg_regs(),
+           .wb_cyc_o(cyc), .wb_ack_i(ack), .wb_dat_i(tgc_o ? {8'h00, irq_vec} : dat_i),
+           .wb_tgc_i(intr), .wb_tgc_o(tgc_o), .pc(pc), .dbg_ds(), .dbg_regs(),
            .dbg_halted(halted));
 
     logic [7:0] mem [0:1048575];
@@ -87,10 +87,31 @@ module tb_z86_loop;
         end else if (!stb) cnt <= 0;
     end
 
+    // +irq=<clocks>: raise INTR every that many clocks (held until the
+    // acknowledge, like an 8259 output), vector +vec=<hex> (default 20h).
+    // The vector rides wb_dat_i during the wb_tgc_o pulse. Lets the fuzzer
+    // check that interrupts landing anywhere -- mid-REP, between prefixes,
+    // inside microcode -- leave the program's results unchanged.
+    int irq_period = 0, irq_cnt = 0, irq_n = 0;
+    logic [7:0] irq_vec = 8'h20;
+    logic intr = 1'b0;
+    initial begin
+        void'($value$plusargs("irq=%d", irq_period));
+        void'($value$plusargs("vec=%h", irq_vec));
+    end
+    always @(posedge clk) begin
+        if (tgc_o) begin intr <= 1'b0; irq_n++; end
+        else if (!reset && irq_period != 0) begin
+            irq_cnt <= irq_cnt + 1;
+            if (irq_cnt + 1 >= irq_period) begin irq_cnt <= 0; intr <= 1'b1; end
+        end
+    end
+
     longint cyc_n = 0;
     always @(posedge clk) begin
         if (!reset) cyc_n++;
         if (halted) begin
+            if (irq_period != 0) $display("interrupts taken: %0d", irq_n);
             $display("n=%0d lat=%0d: %0d clocks, %0d reads, %0d writes -> %0.1f clk/iter",
                      n, lat, cyc_n, rd_n, wr_n, real'(cyc_n) / n);
             for (int a = 0; a < 20'h20000; a += 2)

@@ -354,6 +354,7 @@ decode u_decode2 (
     .nmi                (1'b0),
     .pic_vec            (pic_vec_r),
     .pic_vec_valid      (pic_vec_valid),
+    .inta_pending       (wb_tgc_o | pic_vec_valid),
     .inta_req           (inta_req),
     .intra              (intra),
 

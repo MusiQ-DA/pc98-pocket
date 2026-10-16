@@ -22,6 +22,11 @@ from unicorn.x86_const import (UC_X86_REG_CS, UC_X86_REG_IP, UC_X86_REG_SS,
                                UC_X86_REG_SP, UC_X86_REG_EFLAGS)
 
 LOOP = sys.argv[1] if len(sys.argv) > 1 else '/tmp/z86loop/loop'
+# IRQ=<clocks>: tb_z86_loop raises INTR that often (vector 20h); the handler
+# only counts. Results must not change. Memory below SP is fair game for an
+# interrupt frame, so this mode leaves out BP-relative random accesses and
+# the stack window from the comparison.
+IRQ = int(os.environ.get('IRQ', '0'))
 
 R16 = ['ax', 'cx', 'dx']
 R8 = ['al', 'ah', 'cl', 'ch', 'dl', 'dh']
@@ -32,7 +37,10 @@ FL_LOGIC = 0x8C5   # AF undefined
 
 def mem_operand(rng, word):
     size = 'word' if word else 'byte'
-    form = rng.choice(['bx', 'si', 'di', 'bx+si', 'bx+di', 'bp', 'bp+si', 'bp+di', 'abs'])
+    forms = ['bx', 'si', 'di', 'bx+si', 'bx+di', 'abs']
+    if not IRQ:
+        forms += ['bp', 'bp+si', 'bp+di']
+    form = rng.choice(forms)
     if form == 'abs':
         return f'{size} [0x{rng.randrange(0, 0x7F0):x}]'
     d = rng.choice(['', f'+{rng.randrange(0, 0x7f)}', f'+0x{rng.randrange(0x80, 0x200):x}'])
@@ -178,8 +186,15 @@ org 0x1000
     mov ss,ax
     mov sp,0xF00
     mov bp,0xE00
-    push word 0x0002
+    mov word [cs:0x80],irq_h
+    mov word [cs:0x82],0
+    push word 0x0202
     popf
+    jmp irq_e
+irq_h:
+    inc word [cs:0x6F0]
+    iret
+irq_e:
 '''
 EPI = '''    mov [cs:0x600],ax
     pushf
@@ -268,7 +283,8 @@ def ref(code, wlog=None):
 
 def dut(code, path, lat):
     open(path + '.hex', 'w').write(''.join(f'{b:02x}\n' for b in code))
-    r = subprocess.run([LOOP, '+org=1000', f'+prog={path}.hex', f'+lat={lat}', f'+dump={path}.dump'],
+    r = subprocess.run([LOOP, '+org=1000', f'+prog={path}.hex', f'+lat={lat}', f'+dump={path}.dump']
+                       + ([f'+irq={IRQ}'] if IRQ else []),
                        capture_output=True, text=True)
     if 'TIMEOUT' in r.stdout:
         return None
@@ -285,7 +301,7 @@ def diff(a, b):
             x &= FL_LOGIC; y &= FL_LOGIC
         if x != y:
             out.append(f'{name} ref={x:04x} z86={y:04x}')
-    for lo, hi in ((0x700, 0x800), (0x2000, 0x2800), (0x3000, 0x4000)):
+    for lo, hi in ((0x700, 0x800), (0x2000, 0x2800)) + (() if IRQ else ((0x3000, 0x4000),)):
         for i in range(lo, hi):
             m = 0xEF if i == 0x3EFE else 0xFF   # the epilogue's PUSHF: AF undefined
             if (a[i] ^ b[i]) & m:

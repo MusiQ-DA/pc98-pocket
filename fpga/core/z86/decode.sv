@@ -85,6 +85,7 @@ module decode (
     // pic_vec_valid. The request is raised only once IF has admitted the
     // interrupt, which is the 8086's order: acknowledge after acceptance.
     input             pic_vec_valid,
+    input             inta_pending,     // wb_tgc_o out or the vector held: the 8259 is acknowledged
     output            inta_req,
 
     // debug interface (only for verilator)
@@ -123,7 +124,17 @@ wire emit = id_ready & id_valid & ~id_void;
 reg nmi_latched, intr_latched;
 reg start_int_service;
 wire int_pipeline_inject = (nmi_latched | (intr_latched & pic_vec_valid)) & emit;  // inject at an valid instruction boundary
-assign inta_req = intr_latched & ~nmi_latched;
+// IF as it will stand at the next boundary: an instruction in EX that writes
+// IF (CLI, STI, POPF, IRET, INT -- the injected one included) has not
+// updated reg_f yet. An INTR seen through a stale IF=1 during an INT's
+// microcode used to stay latched, get acknowledged, and nest inside the
+// handler with IF=0 (pushing the handler's own IRET as the return address).
+wire ex_writes_if = ex_valid & ((ex_opcode == 8'hFA) | (ex_opcode == 8'hFB) |
+                                (ex_opcode == 8'h9D) | (ex_opcode == 8'hCF) |
+                                (ex_opcode == 8'hCC) | (ex_opcode == 8'hCD) |
+                                (ex_opcode == 8'hCE));
+wire if_ok = reg_f[9] & ~ex_writes_if & ~start_int_service;   // reg_f[9] = IF
+assign inta_req = intr_latched & ~nmi_latched & if_ok;
 
 // recognize simple POP (no ModR/M)
 wire id_pop_r16 = (id_opcode >= 8'h58) && (id_opcode <= 8'h5F);
@@ -164,148 +175,151 @@ assign wr_mask = build_wr_mask();
 
 logic [8:0] id_ucode_entry;
 logic id_ucode_valid;
+// The opcode's own microcode entry, before an interrupt injection overrides
+// it. The hazard masks read this one: the injected form depends on emit,
+// which depends on the hazard -- a combinational loop.
+logic [8:0] id_ucode_entry_op;
+logic id_ucode_valid_op;
+assign id_ucode_entry = int_pipeline_inject ? UENTRY_INT_IMM : id_ucode_entry_op;
+assign id_ucode_valid = int_pipeline_inject | id_ucode_valid_op;
 
 assign ex_ucode_entry_next = id_ucode_entry;
 
 // Entry points for microcoded instructions
 always @* begin
-    id_ucode_valid = 1'b1;
-    id_ucode_entry = UENTRY_NOP;
+    id_ucode_valid_op = 1'b1;
+    id_ucode_entry_op = UENTRY_NOP;
     casez ({id_two_byte, id_opcode})
-        8'h27: id_ucode_entry = UENTRY_DAA;
-        8'h2F: id_ucode_entry = UENTRY_DAS;
-        8'h37: id_ucode_entry = UENTRY_AAA;
-        8'h3F: id_ucode_entry = UENTRY_AAS;
-        8'hD4: id_ucode_entry = UENTRY_AAM;
-        8'hD5: id_ucode_entry = UENTRY_AAD;
+        8'h27: id_ucode_entry_op = UENTRY_DAA;
+        8'h2F: id_ucode_entry_op = UENTRY_DAS;
+        8'h37: id_ucode_entry_op = UENTRY_AAA;
+        8'h3F: id_ucode_entry_op = UENTRY_AAS;
+        8'hD4: id_ucode_entry_op = UENTRY_AAM;
+        8'hD5: id_ucode_entry_op = UENTRY_AAD;
 
-        // 8'h8F: id_ucode_entry = id_modrm[7:6] == 2'b11 ? UENTRY_POP_R16 : UENTRY_POP_M16;
+        // 8'h8F: id_ucode_entry_op = id_modrm[7:6] == 2'b11 ? UENTRY_POP_R16 : UENTRY_POP_M16;
 
-        8'h9A: id_ucode_entry = UENTRY_CALL_FAR;
-        8'h9C: id_ucode_entry = UENTRY_PUSHF;
-        8'h9D: id_ucode_entry = UENTRY_POPF;
+        8'h9A: id_ucode_entry_op = UENTRY_CALL_FAR;
+        8'h9C: id_ucode_entry_op = UENTRY_PUSHF;
+        8'h9D: id_ucode_entry_op = UENTRY_POPF;
 
-        8'hA4: id_ucode_entry = UENTRY_MOVSB;               // String instructions
-        8'hA5: id_ucode_entry = UENTRY_MOVSW;
-        8'hA6: id_ucode_entry = UENTRY_CMPSB;
-        8'hA7: id_ucode_entry = UENTRY_CMPSW;
-        8'hAA: id_ucode_entry = UENTRY_STOSB;
-        8'hAB: id_ucode_entry = UENTRY_STOSW;
-        8'hAC: id_ucode_entry = UENTRY_LODSB;
-        8'hAD: id_ucode_entry = UENTRY_LODSW;
-        8'hAE: id_ucode_entry = UENTRY_SCASB;
-        8'hAF: id_ucode_entry = UENTRY_SCASW;
+        8'hA4: id_ucode_entry_op = UENTRY_MOVSB;               // String instructions
+        8'hA5: id_ucode_entry_op = UENTRY_MOVSW;
+        8'hA6: id_ucode_entry_op = UENTRY_CMPSB;
+        8'hA7: id_ucode_entry_op = UENTRY_CMPSW;
+        8'hAA: id_ucode_entry_op = UENTRY_STOSB;
+        8'hAB: id_ucode_entry_op = UENTRY_STOSW;
+        8'hAC: id_ucode_entry_op = UENTRY_LODSB;
+        8'hAD: id_ucode_entry_op = UENTRY_LODSW;
+        8'hAE: id_ucode_entry_op = UENTRY_SCASB;
+        8'hAF: id_ucode_entry_op = UENTRY_SCASW;
 
-        8'hC2: id_ucode_entry = UENTRY_RET_NEAR_IMM;        // RETN Iw
-        8'hC3: id_ucode_entry = UENTRY_RET_NEAR;            // RETN
-        8'hC4: id_ucode_entry = UENTRY_LES;
-        8'hC5: id_ucode_entry = UENTRY_LDS;
+        8'hC2: id_ucode_entry_op = UENTRY_RET_NEAR_IMM;        // RETN Iw
+        8'hC3: id_ucode_entry_op = UENTRY_RET_NEAR;            // RETN
+        8'hC4: id_ucode_entry_op = UENTRY_LES;
+        8'hC5: id_ucode_entry_op = UENTRY_LDS;
 
-        8'hCB: id_ucode_entry = UENTRY_RET_FAR;             // RETF
-        8'hCA: id_ucode_entry = UENTRY_RET_FAR_IMM;         // RETF Iw
-        8'hCC: id_ucode_entry = UENTRY_INT3;                 
-        8'hCD: id_ucode_entry = UENTRY_INT_IMM;             // INT Ib
-        8'hCE: id_ucode_entry = UENTRY_INTO;                 
-        8'hCF: id_ucode_entry = UENTRY_IRET;                 
+        8'hCB: id_ucode_entry_op = UENTRY_RET_FAR;             // RETF
+        8'hCA: id_ucode_entry_op = UENTRY_RET_FAR_IMM;         // RETF Iw
+        8'hCC: id_ucode_entry_op = UENTRY_INT3;                 
+        8'hCD: id_ucode_entry_op = UENTRY_INT_IMM;             // INT Ib
+        8'hCE: id_ucode_entry_op = UENTRY_INTO;                 
+        8'hCF: id_ucode_entry_op = UENTRY_IRET;                 
 
-        8'hE8: id_ucode_entry = UENTRY_CALL_NEAR;
+        8'hE8: id_ucode_entry_op = UENTRY_CALL_NEAR;
 
-        8'hF1: id_ucode_entry = UENTRY_INT1;                 
-        8'hF4: id_ucode_entry = UENTRY_HLT;
+        8'hF1: id_ucode_entry_op = UENTRY_INT1;                 
+        8'hF4: id_ucode_entry_op = UENTRY_HLT;
         8'hF6: case (id_modrm[5:3])                          // Group 3a
-                3'b100: id_ucode_entry = UENTRY_MUL8;
-                3'b101: id_ucode_entry = UENTRY_IMUL8;
-                3'b110: id_ucode_entry = UENTRY_DIV8;
-                3'b111: id_ucode_entry = UENTRY_IDIV8;
-                default: id_ucode_valid = 1'b0;              // F6.0/1/2/3 (TEST, NOT, NEG) are hardwired
+                3'b100: id_ucode_entry_op = UENTRY_MUL8;
+                3'b101: id_ucode_entry_op = UENTRY_IMUL8;
+                3'b110: id_ucode_entry_op = UENTRY_DIV8;
+                3'b111: id_ucode_entry_op = UENTRY_IDIV8;
+                default: id_ucode_valid_op = 1'b0;              // F6.0/1/2/3 (TEST, NOT, NEG) are hardwired
             endcase
         8'hF7: case (id_modrm[5:3])                          // Group 3b
-                3'b100: id_ucode_entry = UENTRY_MUL16;
-                3'b101: id_ucode_entry = UENTRY_IMUL16;
-                3'b110: id_ucode_entry = UENTRY_DIV16;
-                3'b111: id_ucode_entry = UENTRY_IDIV16;
-                default: id_ucode_valid = 1'b0;              // F7.0/1/2/3 (TEST, NOT, NEG) are hardwired
+                3'b100: id_ucode_entry_op = UENTRY_MUL16;
+                3'b101: id_ucode_entry_op = UENTRY_IMUL16;
+                3'b110: id_ucode_entry_op = UENTRY_DIV16;
+                3'b111: id_ucode_entry_op = UENTRY_IDIV16;
+                default: id_ucode_valid_op = 1'b0;              // F7.0/1/2/3 (TEST, NOT, NEG) are hardwired
             endcase
 
         8'hFF: case (id_modrm[5:3])                          // Group 5
-            3'b010: id_ucode_entry = UENTRY_CALL_RM;         // CALL Ev
-            3'b011: id_ucode_entry = UENTRY_CALL_EP;         
-            3'b100: id_ucode_entry = UENTRY_JMP_RM;          // JMP Ev
-            3'b101: id_ucode_entry = UENTRY_JMP_EP;
-            3'b110,3'b111: id_ucode_entry = id_modrm[7:6] == 2'b11 ? UENTRY_PUSH_R16 : UENTRY_PUSH_M16;
-            default: id_ucode_valid = 1'b0;                  // FF.0/1 (INC/DEC) are hardwired
+            3'b010: id_ucode_entry_op = UENTRY_CALL_RM;         // CALL Ev
+            3'b011: id_ucode_entry_op = UENTRY_CALL_EP;         
+            3'b100: id_ucode_entry_op = UENTRY_JMP_RM;          // JMP Ev
+            3'b101: id_ucode_entry_op = UENTRY_JMP_EP;
+            3'b110,3'b111: id_ucode_entry_op = id_modrm[7:6] == 2'b11 ? UENTRY_PUSH_R16 : UENTRY_PUSH_M16;
+            default: id_ucode_valid_op = 1'b0;                  // FF.0/1 (INC/DEC) are hardwired
         endcase
 
         // 80286 instructions
-        8'h60: id_ucode_entry = UENTRY_PUSHA;                // PUSHA
-        8'h61: id_ucode_entry = UENTRY_POPA;                 // POPA
-        8'h62: id_ucode_entry = UENTRY_BOUND;                // BOUND Ev,Gv
-        8'h63: id_ucode_entry = UENTRY_ARPL;                 // ARPL Wr,Ev
-        8'h69: id_ucode_entry = UENTRY_IMUL_IW;              // IMUL Ev,Gv,Iw
-        8'h6B: id_ucode_entry = UENTRY_IMUL_IB;              // IMUL Ev,Gv,Ib
-        8'h6C: id_ucode_entry = UENTRY_INSB;                 // INSB
-        8'h6D: id_ucode_entry = UENTRY_INSW;                 // INSW
-        8'h6E: id_ucode_entry = UENTRY_OUTSB;                // OUTSB
-        8'h6F: id_ucode_entry = UENTRY_OUTSW;                // OUTSW
-        8'hC8: id_ucode_entry = UENTRY_ENTER;                // ENTER Iw,Ib
-        8'hC9: id_ucode_entry = UENTRY_LEAVE;   
+        8'h60: id_ucode_entry_op = UENTRY_PUSHA;                // PUSHA
+        8'h61: id_ucode_entry_op = UENTRY_POPA;                 // POPA
+        8'h62: id_ucode_entry_op = UENTRY_BOUND;                // BOUND Ev,Gv
+        8'h63: id_ucode_entry_op = UENTRY_ARPL;                 // ARPL Wr,Ev
+        8'h69: id_ucode_entry_op = UENTRY_IMUL_IW;              // IMUL Ev,Gv,Iw
+        8'h6B: id_ucode_entry_op = UENTRY_IMUL_IB;              // IMUL Ev,Gv,Ib
+        8'h6C: id_ucode_entry_op = UENTRY_INSB;                 // INSB
+        8'h6D: id_ucode_entry_op = UENTRY_INSW;                 // INSW
+        8'h6E: id_ucode_entry_op = UENTRY_OUTSB;                // OUTSB
+        8'h6F: id_ucode_entry_op = UENTRY_OUTSW;                // OUTSW
+        8'hC8: id_ucode_entry_op = UENTRY_ENTER;                // ENTER Iw,Ib
+        8'hC9: id_ucode_entry_op = UENTRY_LEAVE;   
 
 /*
         9'h100: case (id_modrm[5:3])                        
-            3'd0: id_ucode_entry = UENTRY_SLDT;              // Store Local Descriptor Table
-            3'd1: id_ucode_entry = UENTRY_STR;               // Store Task Register
-            3'd2: id_ucode_entry = UENTRY_LLDT;              // Load Local Descriptor Table
-            3'd3: id_ucode_entry = UENTRY_LTR;               // Load Task Register
-            3'd4: id_ucode_entry = UENTRY_VERR;              // Verify Read
-            3'd5: id_ucode_entry = UENTRY_VERW;              // Verify Write
-            default: id_ucode_valid = 1'b0;
+            3'd0: id_ucode_entry_op = UENTRY_SLDT;              // Store Local Descriptor Table
+            3'd1: id_ucode_entry_op = UENTRY_STR;               // Store Task Register
+            3'd2: id_ucode_entry_op = UENTRY_LLDT;              // Load Local Descriptor Table
+            3'd3: id_ucode_entry_op = UENTRY_LTR;               // Load Task Register
+            3'd4: id_ucode_entry_op = UENTRY_VERR;              // Verify Read
+            3'd5: id_ucode_entry_op = UENTRY_VERW;              // Verify Write
+            default: id_ucode_valid_op = 1'b0;
         endcase
 
         9'h101: case (id_modrm[5:3])
-            3'd0: id_ucode_entry = UENTRY_SGDT;              // Store Global Descriptor Table
-            3'd1: id_ucode_entry = UENTRY_SIDT;              // Store Interrupt Descriptor Table
-            3'd2: id_ucode_entry = UENTRY_LGDT;              // Load Global Descriptor Table
-            3'd3: id_ucode_entry = UENTRY_LIDT;              // Load Interrupt Descriptor Table
-            3'd4: id_ucode_entry = UENTRY_SMSW;              // Store Machine Status Word
-            3'd6: id_ucode_entry = UENTRY_LMSW;              // Load Machine Status Word
-            default: id_ucode_valid = 1'b0;
+            3'd0: id_ucode_entry_op = UENTRY_SGDT;              // Store Global Descriptor Table
+            3'd1: id_ucode_entry_op = UENTRY_SIDT;              // Store Interrupt Descriptor Table
+            3'd2: id_ucode_entry_op = UENTRY_LGDT;              // Load Global Descriptor Table
+            3'd3: id_ucode_entry_op = UENTRY_LIDT;              // Load Interrupt Descriptor Table
+            3'd4: id_ucode_entry_op = UENTRY_SMSW;              // Store Machine Status Word
+            3'd6: id_ucode_entry_op = UENTRY_LMSW;              // Load Machine Status Word
+            default: id_ucode_valid_op = 1'b0;
         endcase
 
-        9'h102: id_ucode_entry = UENTRY_LAR;                 // Load Access Rights
-        9'h103: id_ucode_entry = UENTRY_LSL;                 // Load Segment Limit
+        9'h102: id_ucode_entry_op = UENTRY_LAR;                 // Load Access Rights
+        9'h103: id_ucode_entry_op = UENTRY_LSL;                 // Load Segment Limit
 
-        9'h106: id_ucode_entry = UENTRY_CTS;                 // Clear Task-Switched flag
+        9'h106: id_ucode_entry_op = UENTRY_CTS;                 // Clear Task-Switched flag
 */
         default: begin
-            id_ucode_entry = UENTRY_NOP;
-            id_ucode_valid = 1'b0;                           // Other instructions hardwired in EXECUTE2
+            id_ucode_entry_op = UENTRY_NOP;
+            id_ucode_valid_op = 1'b0;                           // Other instructions hardwired in EXECUTE2
         end
     endcase
 
     if (id_prefix[PREFIX_REP_REPZ_REPE] | id_prefix[PREFIX_REPNE_REPNZ]) begin  // REP/REPE/REPZ/REPNE/REPNZ entries
         unique case (id_opcode)
-            8'hA4: id_ucode_entry = UENTRY_REP_MOVSB;
-            8'hA5: id_ucode_entry = UENTRY_REP_MOVSW;
-            8'hAA: id_ucode_entry = UENTRY_REP_STOSB;
-            8'hAB: id_ucode_entry = UENTRY_REP_STOSW;
-            8'hAC: id_ucode_entry = UENTRY_REP_LODSB;
-            8'hAD: id_ucode_entry = UENTRY_REP_LODSW;
-            8'hA6: id_ucode_entry = id_prefix[PREFIX_REPNE_REPNZ] ? UENTRY_REPNE_CMPSB
+            8'hA4: id_ucode_entry_op = UENTRY_REP_MOVSB;
+            8'hA5: id_ucode_entry_op = UENTRY_REP_MOVSW;
+            8'hAA: id_ucode_entry_op = UENTRY_REP_STOSB;
+            8'hAB: id_ucode_entry_op = UENTRY_REP_STOSW;
+            8'hAC: id_ucode_entry_op = UENTRY_REP_LODSB;
+            8'hAD: id_ucode_entry_op = UENTRY_REP_LODSW;
+            8'hA6: id_ucode_entry_op = id_prefix[PREFIX_REPNE_REPNZ] ? UENTRY_REPNE_CMPSB
                                                         : UENTRY_REPE_CMPSB;
-            8'hA7: id_ucode_entry = id_prefix[PREFIX_REPNE_REPNZ] ? UENTRY_REPNE_CMPSW
+            8'hA7: id_ucode_entry_op = id_prefix[PREFIX_REPNE_REPNZ] ? UENTRY_REPNE_CMPSW
                                                         : UENTRY_REPE_CMPSW;
-            8'hAE: id_ucode_entry = id_prefix[PREFIX_REPNE_REPNZ] ? UENTRY_REPNE_SCASB
+            8'hAE: id_ucode_entry_op = id_prefix[PREFIX_REPNE_REPNZ] ? UENTRY_REPNE_SCASB
                                                         : UENTRY_REPE_SCASB;
-            8'hAF: id_ucode_entry = id_prefix[PREFIX_REPNE_REPNZ] ? UENTRY_REPNE_SCASW
+            8'hAF: id_ucode_entry_op = id_prefix[PREFIX_REPNE_REPNZ] ? UENTRY_REPNE_SCASW
                                                         : UENTRY_REPE_SCASW;
             default:;
         endcase
     end
 
-    if (int_pipeline_inject) begin
-        id_ucode_entry = UENTRY_INT_IMM;
-        id_ucode_valid = 1'b1;
-    end
 
 end
 
@@ -675,7 +689,10 @@ always @(posedge clk) begin
     else begin
         // latch rising edge
         nmi_latched  <= nmi_latched  | nmi;
-        intr_latched <= intr_latched | (intr & IF & ~intra);
+        // Admit INTR only with IF open at a boundary, and drop an admitted
+        // request again if IF closes before the 8259 has been acknowledged.
+        intr_latched <= (intr_latched | (intr & if_ok & ~intra))
+                      & (if_ok | inta_pending);
 
         // cleared when we *start* servicing
         if (start_int_service && ~br_taken && int_is_nmi) begin
@@ -774,7 +791,7 @@ function automatic reg_mask_t build_rd_mask();
     // Stack pops (POP, RET, IRET), string reads and every microcoded form
     // read memory too: a RET straight after a store to its return slot
     // popped the old address.
-    if (ii.is_stack_op || id_ucode_valid ||
+    if (ii.is_stack_op || id_ucode_valid_op ||
         (id_opcode >= 8'hA4 && id_opcode <= 8'hA7) ||
         (id_opcode >= 8'hAC && id_opcode <= 8'hAF)) m.mem = 1'b1;
 
