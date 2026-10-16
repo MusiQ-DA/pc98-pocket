@@ -1233,6 +1233,15 @@ module core_top (
     // live until the probe trigger (slot 0x06) hits, then frozen at that
     // moment until the trigger is rewritten.
     wire [223:0] z86_dbg_regs;
+    // JTAG debug stop: write slot 0x0f = {arm, 15'b0, AX}. The next trigger
+    // hit (slot 6) with that AX stops z86 at an instruction boundary; read
+    // 0x65 = {stopped, 15'b0, next IP} (CS in 0x12). Writing 0x0f again
+    // releases it. For replaying a DOS call off a RAM dump.
+    reg          jtag_dbg_arm  = 1'b0;
+    reg  [15:0]  jtag_dbg_ax   = 16'h0;
+    reg          jtag_dbg_stop = 1'b0;
+    wire         z86_dbg_stopped;
+    wire [15:0]  z86_dbg_next_ip;
     reg  [223:0] v30_dbg_regs = '0;
     reg          z86_snap_held = 1'b0;
 `else
@@ -1508,6 +1517,15 @@ module core_top (
         end
         if (probe_wr_pulse && probe_waddr_c == 7'h0e)
             tlog_ri <= probe_wdata_c[5:0];
+        if (probe_wr_pulse && probe_waddr_c == 7'h0f) begin
+            jtag_dbg_arm  <= probe_wdata_c[31];
+            jtag_dbg_ax   <= probe_wdata_c[15:0];
+            jtag_dbg_stop <= 1'b0;
+        end else if (jtag_dbg_arm && trig_hit && !trig_hit_d &&
+                     z86_dbg_regs[15:0] == jtag_dbg_ax) begin
+            jtag_dbg_stop <= 1'b1;
+            jtag_dbg_arm  <= 1'b0;
+        end
         tlog_q <= tlog[tlog_ri];
     end
     always_ff @(posedge clk_chipset) begin
@@ -1515,7 +1533,7 @@ module core_top (
             z86_snap_held <= 1'b0;
         else if (trig_hit && !z86_snap_held)
             z86_snap_held <= 1'b1;
-        if (!z86_snap_held)
+        if (!z86_snap_held || jtag_dbg_stop)
             v30_dbg_regs <= z86_dbg_regs;
     end
 `endif
@@ -1581,6 +1599,7 @@ module core_top (
             8'h62:   probe_data_c = tlog_q[95:64];
             8'h63:   probe_data_c = tlog_q[127:96];
             8'h64:   probe_data_c = {16'h0, tlog_n};
+            8'h65:   probe_data_c = {z86_dbg_stopped, 15'h0, z86_dbg_next_ip};
 `endif
             8'h01:   probe_data_c = brg_q[31:0];
             8'h02:   probe_data_c = {9'h0, brg_q[54:32]};
@@ -3374,6 +3393,9 @@ module core_top (
         .pc        (zet_pc),
         .dbg_ds    (zet_ds),
         .dbg_regs  (z86_dbg_regs),
+        .dbg_stop  (jtag_dbg_stop),
+        .dbg_stopped (z86_dbg_stopped),
+        .dbg_next_ip (z86_dbg_next_ip),
         .dbg_halted()
     );
     assign zwb_nmia  = 1'b0;

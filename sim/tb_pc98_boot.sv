@@ -199,6 +199,9 @@ module tb_pc98_boot;
         .pc        (zet_pc),
         .dbg_ds    (),
         .dbg_regs  (dbg_regs),
+        .dbg_stop  (1'b0),
+        .dbg_stopped (),
+        .dbg_next_ip (),
         .dbg_halted()
     );
     assign zwb_nmia  = 1'b0;

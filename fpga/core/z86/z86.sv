@@ -42,7 +42,10 @@ module z86 (
     output      [15:0]  dbg_ds,
     // {FLAGS, IP, DS, SS, CS, ES, DI..AX} for the JTAG probe (PC-98 port)
     output     [223:0]  dbg_regs,
-    output              dbg_halted
+    output              dbg_halted,
+    input               dbg_stop,       // JTAG: stop at an instruction boundary
+    output              dbg_stopped,
+    output      [15:0]  dbg_next_ip
 );
 
 import z86_package::*;
@@ -361,6 +364,9 @@ decode u_decode2 (
     .pic_vec            (pic_vec_r),
     .pic_vec_valid      (pic_vec_valid),
     .inta_pending       (wb_tgc_o | pic_vec_valid),
+    .dbg_stop           (dbg_stop),
+    .dbg_stopped        (dbg_stopped),
+    .dbg_next_ip        (dbg_next_ip),
     .inta_req           (inta_req),
     .intra              (intra),
 

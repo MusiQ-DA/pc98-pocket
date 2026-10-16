@@ -18,7 +18,7 @@ module tb_z86_loop;
     z86 u (.clk(clk), .reset(reset), .wb_adr_o(adr), .wb_sel_o(sel),
            .wb_we_o(we), .wb_tga_o(tga), .wb_dat_o(dat_o), .wb_stb_o(stb),
            .wb_cyc_o(cyc), .wb_ack_i(ack), .wb_dat_i(tgc_o ? {8'h00, irq_vec} : dat_i),
-           .wb_tgc_i(intr), .wb_tgc_o(tgc_o), .pc(pc), .dbg_ds(), .dbg_regs(),
+           .wb_tgc_i(intr), .wb_tgc_o(tgc_o), .pc(pc), .dbg_ds(), .dbg_regs(), .dbg_stop(1'b0), .dbg_stopped(), .dbg_next_ip(),
            .dbg_halted(halted));
 
     logic [7:0] mem [0:1048575];

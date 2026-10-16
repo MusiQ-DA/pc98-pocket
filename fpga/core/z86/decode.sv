@@ -85,6 +85,12 @@ module decode (
     // pic_vec_valid. The request is raised only once IF has admitted the
     // interrupt, which is the 8086's order: acknowledge after acceptance.
     input             pic_vec_valid,
+    // PC-98 port: JTAG debug stop. While dbg_stop is up decode emits nothing;
+    // dbg_stopped says the pipeline has drained, so registers and memory are
+    // architectural and dbg_next_ip names the next instruction to run.
+    input             dbg_stop,
+    output            dbg_stopped,
+    output     [15:0] dbg_next_ip,
     input             inta_pending,     // wb_tgc_o out or the vector held: the 8259 is acknowledged
     output            inta_req,
 
@@ -121,7 +127,10 @@ reg int_shadow;
 wire int_pending = (nmi_latched | (intr_latched & pic_vec_valid)) & ~int_shadow;
 wire pipe_drained = ~ex_valid & ~sb0_valid & ~sb1_valid;
 assign id_ready = (~ex_valid | ex_ready) & (~id_valid |~ii.is_two_cycles | cycle_2nd) & ~hazard & (~id_mem_rd | rd_ready)
-                & (~int_pending | pipe_drained);   // drain before an interrupt, see below
+                & (~int_pending | pipe_drained)    // drain before an interrupt, see below
+                & ~dbg_stop;
+assign dbg_stopped = dbg_stop & pipe_drained & id_valid;
+assign dbg_next_ip = ii.ip_this;
 
 logic id_void_r;
 wire id_void = (br_taken /*| int_pipeline_inject*/) | id_void_r;
