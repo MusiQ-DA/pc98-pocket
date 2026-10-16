@@ -73,7 +73,10 @@ always @(posedge clk) begin
             // The bridge held this clock until the vector was parked.
             pic_vec_r     <= wb_dat_i[7:0];
             pic_vec_valid <= 1'b1;
-        end else if (inta_req && !pic_vec_valid)
+        end else if (inta_req && !pic_vec_valid && !wb_cyc_o && !wb_stb_o)
+            // Only between bus cycles: the vector rides wb_dat_i, so an
+            // acknowledge overlapping a read handed that read the vector
+            // (POP AX after PUSHF came back 0020 under tb_z86_loop +irq).
             wb_tgc_o <= 1'b1;
         if (intra)
             pic_vec_valid <= 1'b0;

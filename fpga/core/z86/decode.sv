@@ -111,7 +111,11 @@ assign rd_mask = build_rd_mask();
 wire hazard = (sb0_valid & |(sb0_mask & rd_mask)) |
               (~CONFIG_FORWARDING_REGFILE & sb1_valid & |(sb1_mask & rd_mask));
 
-assign id_ready = (~ex_valid | ex_ready) & (~id_valid |~ii.is_two_cycles | cycle_2nd) & ~hazard & (~id_mem_rd | rd_ready);
+reg nmi_latched, intr_latched;
+wire int_pending = nmi_latched | (intr_latched & pic_vec_valid);
+wire pipe_drained = ~ex_valid & ~sb0_valid & ~sb1_valid;
+assign id_ready = (~ex_valid | ex_ready) & (~id_valid |~ii.is_two_cycles | cycle_2nd) & ~hazard & (~id_mem_rd | rd_ready)
+                & (~int_pending | pipe_drained);   // drain before an interrupt, see below
 
 logic id_void_r;
 wire id_void = (br_taken /*| int_pipeline_inject*/) | id_void_r;
@@ -121,16 +125,15 @@ wire id_void = (br_taken /*| int_pipeline_inject*/) | id_void_r;
 wire emit = id_ready & id_valid & ~id_void;
 
 // inject nmi-based interrupt into the pipeline
-reg nmi_latched, intr_latched;
 reg start_int_service;
-// The injected INT pushes FLAGS/CS/IP from SP and SS, but the hazard check
-// that let `emit` through was the displaced instruction's: after POP DS /
-// LOOP the INT read SP before the POP's write landed and its IRET came back
-// 2 bytes off. Hold the injection until no stack/SP/SS/memory writer is in
-// flight (either scoreboard slot); the instruction emits normally meanwhile.
-wire int_hazard = (sb0_valid & (sb0_mask.stackop | sb0_mask.gpr[R_SP] | sb0_mask.seg[2] | sb0_mask.mem)) |
-                  (sb1_valid & (sb1_mask.stackop | sb1_mask.gpr[R_SP] | sb1_mask.seg[2] | sb1_mask.mem));
-wire int_pipeline_inject = (nmi_latched | (intr_latched & pic_vec_valid)) & emit & ~int_hazard;  // inject at an valid instruction boundary
+// An accepted interrupt is injected only once the pipeline has drained: EX
+// empty and both scoreboard slots clear. Until then decode holds its
+// instruction back (emit stays low). The injected INT pushes FLAGS, CS, IP
+// and SP; injecting behind an instruction still in flight lost its SP
+// write (IRET came back 2 bytes off), its flag update, or its branch
+// (JCXZ taken, yet the INC after it ran) -- each case a different hole in
+// the displaced instruction's own hazard check.
+wire int_pipeline_inject = int_pending & emit;  // id_ready implies pipe_drained while one is pending
 // IF as it will stand at the next boundary: an instruction in EX that writes
 // IF (CLI, STI, POPF, IRET, INT -- the injected one included) has not
 // updated reg_f yet. An INTR seen through a stale IF=1 during an INT's
@@ -570,7 +573,10 @@ always @* begin
     //     $display("DECODE: rd=1,rd_addr=%x", rd_addr);
 end
 
-assign rd = id_mem_rd & id_ready & id_valid & ~id_void & rd_ready;
+// No decode-time read for an instruction an interrupt is about to displace:
+// its data came back into the INT's microcode (or, after the IRET, the
+// re-decoded POP took the stale word) -- POP AX after PUSHF read 0020.
+assign rd = id_mem_rd & id_ready & id_valid & ~id_void & rd_ready & ~int_pending;
 
 // Send signals to EXECUTE
 always @(posedge clk) begin

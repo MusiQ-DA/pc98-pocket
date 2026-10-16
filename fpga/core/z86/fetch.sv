@@ -201,6 +201,13 @@ always @(posedge clk) begin
 
         // set address
         if (br_taken) begin
+            // PC-98 port: prefixes consumed down the wrong path must not
+            // reach the target. Only the out-of-buffer case cleared them, so
+            // an in-buffer branch onto a prefixed instruction (JCXZ over
+            // INC DX onto CS: MOV) counted the CS: twice -- ip_this one
+            // short, and an interrupt there returned onto the skipped INC.
+            prefix <= 0;
+            prefix_len <= 0;
             // Where the target sits relative to the buffer, in 20-bit
             // arithmetic so the 1 MB wrap (FFFF0 + 16 = 00000) holds.
             br_rel = br_target - buf_addr;
