@@ -112,7 +112,13 @@ wire hazard = (sb0_valid & |(sb0_mask & rd_mask)) |
               (~CONFIG_FORWARDING_REGFILE & sb1_valid & |(sb1_mask & rd_mask));
 
 reg nmi_latched, intr_latched;
-wire int_pending = nmi_latched | (intr_latched & pic_vec_valid);
+// Interrupt shadow: no interrupt between MOV SS / POP SS and the next
+// instruction (the SP load that completes the stack switch), nor right
+// after STI. Without it an interrupt between `mov ss,ax` and `mov sp,bx`
+// pushed its frame at the new SS with the old SP -- over whatever lives
+// there (tb_z86_loop +irq: frames at 3BFA = 0300:0C00-6).
+reg int_shadow;
+wire int_pending = (nmi_latched | (intr_latched & pic_vec_valid)) & ~int_shadow;
 wire pipe_drained = ~ex_valid & ~sb0_valid & ~sb1_valid;
 assign id_ready = (~ex_valid | ex_ready) & (~id_valid |~ii.is_two_cycles | cycle_2nd) & ~hazard & (~id_mem_rd | rd_ready)
                 & (~int_pending | pipe_drained);   // drain before an interrupt, see below
@@ -732,6 +738,16 @@ always @(posedge clk) begin
 end
 
 // ─── Hazard scoreboard maintenance ──────────────────────────────────────────────
+
+always_ff @(posedge clk) begin
+    if (reset)
+        int_shadow <= 1'b0;
+    else if (emit)
+        int_shadow <= ~int_pipeline_inject &
+                      ((id_opcode == 8'h17) |                                   // POP SS
+                       (id_opcode == 8'h8E && id_modrm[5:3] == 3'b010) |        // MOV SS,r/m
+                       (id_opcode == 8'hFB));                                   // STI
+end
 
 always_ff @(posedge clk or posedge reset) begin
     if (reset) begin

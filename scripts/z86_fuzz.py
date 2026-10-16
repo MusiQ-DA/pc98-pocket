@@ -121,7 +121,14 @@ def gen_block(rng, lab):
                 f'mov cx,{rng.randrange(0, 9)}', rng.choice(['cld', 'std'])]
         op = rng.choice(['movsb', 'movsw', 'stosb', 'stosw', 'lodsb', 'lodsw', 'cmpsb', 'cmpsw', 'scasb', 'scasw'])
         rep = rng.choice(['', 'rep ']) if op[:4] in ('movs', 'stos', 'lods') else rng.choice(['', 'repe ', 'repne '])
-        out += [f'{rep}{op}', 'cld', 'mov cx,0x%x' % imm(rng, True)]
+        # a source segment override (both prefix orders) on the forms that
+        # read DS:SI -- an interrupt must resume the REP with it intact
+        seg = rng.choice(['', '', 'es ', 'ss ', 'cs ']) if op[:4] in ('movs', 'lods', 'cmps') else ''
+        if seg and rep and rng.random() < 0.5:
+            out.append(f'{seg}{rep}{op}')
+        else:
+            out.append(f'{rep}{seg}{op}')
+        out += ['cld', 'mov cx,0x%x' % imm(rng, True)]
     elif k < 32:
         out += ['mov bp,sp', f'enter {rng.randrange(0, 16) * 2},0', f'mov word [bp-2],0x{imm(rng, True):x}',
                 f'mov {rng.choice(R16)},[bp-2]', 'leave']
