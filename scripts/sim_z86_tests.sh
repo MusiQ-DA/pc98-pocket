@@ -8,6 +8,12 @@ set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${SIM_OUT:-${TMPDIR:-/tmp}/z86tests}"
 SIM_OUT="$OUT" bash scripts/sim_z86_loop.sh +n=1 > /dev/null
+# A combinational loop in z86 builds and even fits, then wedges on hardware;
+# Verilator names it at build time (d2a9707: id_ucode_valid -> hazard -> emit).
+if grep -q 'UNOPTFLAT' "$OUT.build.log"; then
+  grep -A3 'UNOPTFLAT' "$OUT.build.log" | head -8
+  echo "FAIL combinational loop in z86"; exit 1
+fi
 # bash 3 (macOS) has no associative arrays: name|expected bytes
 TESTS="raw_xlat|5a 77 33 44 55 66 77
 raw_microcode|ff ff 12 00 03 00 4f 5e 22 22 34 12 fe 07 fa 07 ff ff ff ff 7b 7a 15 00 04 03 02 01 02 01
