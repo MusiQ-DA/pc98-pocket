@@ -45,6 +45,9 @@ proc rdabs {off} {
 }
 proc w16 {a} { return [expr {[rdabs $a] | ([rdabs [expr {$a+1}]]<<8)}] }
 set N $::env(N); set W $::env(W); set P [expr {[info exists ::env(P)] ? $::env(P) : 0}]
+# After a JTAG reflash APF does not re-stream the slots; declare them
+# present (core_top slot 0x0c) so the guest leaves reset.
+wr 0x0c 1
 set fails 0
 for {set it 0} {$it < $N} {incr it} {
   wr 9 $P; after 20; wr 7 0x05

@@ -687,6 +687,11 @@ module core_top (
     wire [31:0] dataslot_update_size;
     wire        dataslot_allcomplete;
     wire        dataslots_ready;   // sticky: APF finished the initial slot load (latched below)
+    // JTAG reflash: APF does not re-stream the slots into a bitstream loaded
+    // over JTAG, but SDRAM still holds them. Probe write slot 0x0c bit0
+    // declares them present (BIOS loaded, slots ready) so the guest leaves
+    // reset without relaunching the core on the Pocket.
+    reg         jtag_slots_ok = 1'b0;
     wire        osnotify_inmenu;
 
     // The Pocket's real clock, packed for the uPD4990. The bridge hands over
@@ -1167,7 +1172,7 @@ module core_top (
         .osd_open_req               (osd_open_req),
         .raster_w                   (osd_raster_w),
         .raster_h                   (osd_raster_h),
-        .dataslots_ready            (dataslots_ready),
+        .dataslots_ready            (dataslots_ready | jtag_slots_ok),
         .soft_guest_hold            (soft_guest_hold),
         .soft_vid_blank             (soft_vid_blank),
         .scsi_media                 (scsi_media),
@@ -2045,6 +2050,8 @@ module core_top (
             probe_waddr_c <= probe_wr_addr;
             probe_wdata_c <= probe_wr_data;
         end
+        if (probe_wr_pulse && probe_waddr_c == 7'h0c)
+            jtag_slots_ok <= probe_wdata_c[0];
         // Slot 0x83: {cont2, cont1} held-button masks, OR-ed onto the settled
         // pad words in clk_74a. A set bit stays down until the mask clears.
         if (probe_wr_pulse && probe_waddr_c == 7'h03) begin
@@ -2228,7 +2235,8 @@ module core_top (
     reg load_active_d = 1'b0;
     always @(posedge clk_chipset) begin
         load_active_d <= load_active;
-        if (load_active_d & ~load_active)   // APF done AND the FIFO fully drained
+        if ((load_active_d & ~load_active)  // APF done AND the FIFO fully drained
+            || jtag_slots_ok)
             bios_ever_loaded <= 1'b1;
     end
 
