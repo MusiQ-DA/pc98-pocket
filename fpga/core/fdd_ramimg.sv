@@ -47,8 +47,8 @@
 //
 // The mount is fdd_mount()'s order against the register file: eject (the
 // change line registers it), a gap, cylinders, sectors/track, total sectors,
-// heads, the 1024-byte-sector flag, write-protect SET -- the image is
-// read-only in v1 -- and present last. Drive B is emptied first so the
+// heads, the 1024-byte-sector flag, write-protect CLEAR -- sector writes
+// land in the carve-out -- and present last. Drive B is emptied first so the
 // machine's floppy state is deterministic for as long as this server owns
 // the bus: A is the uploaded image, B is out.
 //
@@ -64,9 +64,10 @@
 // followed by a repeat of byte 15. Single-word reads have no in-burst
 // neighbour and are the same path the byte-exact readback probe takes, so
 // the serve uses them; ~8-10 clocks a byte still outruns the FIFO drain.
-// Write and format requests are drained and dropped --
-// media_writeprotected already makes the controller
-// refuse them at command start, so the drain is a safety net only.
+// A write (or format) request is the mirror: {drive, lba} from register 0,
+// then the controller's FIFO popped a byte at a time into the carve-out with
+// single-word port-E writes, so a guest that saves (SuperDepth's high-score
+// file) sees a writable disk, as it would from the SD card.
 //
 // The FIFO discipline is exactly the firmware's: a read push is always a
 // whole 1024-byte sector (fifo_full trips at sector_len and moves the
@@ -254,8 +255,8 @@ module fdd_ramimg #(
 
     // ------------------------------------------------------------------
     // fdd_mount()'s row order (firmware/fdd_service.c): eject first so the
-    // change line registers the insert, geometry next, write-protect (the
-    // image is read-only in v1), present last. Drive B is emptied so the
+    // change line registers the insert, geometry next, write-protect clear
+    // (sector writes land in the carve-out), present last. Drive B is emptied so the
     // machine's state is deterministic while this server owns the bus.
     // ------------------------------------------------------------------
     function automatic logic [31:0] mnt_row(input logic [3:0] i);
@@ -268,7 +269,7 @@ module fdd_ramimg #(
             4'd4:    mnt_row = {16'hF204, 16'd1232};  // total sectors
             4'd5:    mnt_row = {16'hF205, 16'd2};     // heads
             4'd6:    mnt_row = {16'hF206, 16'd1};     // N=3: 1024 B sectors
-            4'd7:    mnt_row = {16'hF201, 16'd1};     // write-protected
+            4'd7:    mnt_row = {16'hF201, 16'd0};     // writable: sector writes land in the carve-out
             default: mnt_row = {16'hF200, 16'd1};     // A: present = 1
         endcase
     endfunction
@@ -293,7 +294,12 @@ module fdd_ramimg #(
         S_UP_WREQ  = 5'd10,  // one SDRAM write per byte of the popped word
         S_UP_WDONE = 5'd11,
         S_RB_REQ   = 5'd12,
-        S_RB_CAP   = 5'd13
+        S_RB_CAP   = 5'd13,
+        S_WR_LBA   = 5'd14,  // management read of request register 0
+        S_WR_POP   = 5'd15,  // pop one FIFO byte (taken this cycle)
+        S_WR_SET   = 5'd16,  // let the FIFO's registered head move on
+        S_WR_REQ   = 5'd17,  // one carve-out write per byte
+        S_WR_DONE  = 5'd18
     } state_t;
 
     state_t      st;
@@ -304,6 +310,7 @@ module fdd_ramimg #(
     logic  [7:0] gap_cnt;
     logic [14:0] req_lba;
     logic [10:0] beat_cnt;   // bytes received this sector, 0..1024
+    logic  [7:0] wr_byte;    // the FIFO byte a sector write is committing
     logic [20:0] up_off;     // image byte offset the next word lands at
     logic [31:0] up_word;
     logic  [1:0] up_bi;
@@ -421,7 +428,7 @@ module fdd_ramimg #(
                     end else if (mounted && fdd_request[0]) begin
                         st <= S_RD_LBA;
                     end else if (mounted && fdd_request[1]) begin
-                        st <= S_WR_DR;
+                        st <= S_WR_LBA;
                     end else if (rb_pend) begin
                         st <= S_RB_REQ;
                     end else if (up_wpend && !flush_lvl) begin
@@ -503,7 +510,49 @@ module fdd_ramimg #(
                     if (!fdd_request[0] || &wd) st <= S_IDLE;
                 end
 
-                // ---- a write or format: drain the FIFO, drop it --------
+                // ---- a sector write: FIFO bytes into the carve-out -------
+                // The controller's FIFO is show-ahead behind a REGISTERED
+                // read port (floppy.v fifo_readdata), so a pop takes the head
+                // on its own cycle and the next head is only there two
+                // clocks later -- fdd_service.c's pull_fifo gets that gap
+                // for free from the bridge; here S_WR_SET pays it.
+                S_WR_LBA: begin
+                    req_lba  <= mgmt_din[14:0];
+                    last_lba <= mgmt_din[14:0];
+                    beat_cnt <= 11'd0;
+                    wd       <= 16'd0;
+                    st       <= S_WR_POP;
+                end
+                S_WR_POP: begin
+                    wr_byte <= mgmt_din[7:0];
+                    st      <= S_WR_SET;
+                end
+                S_WR_SET: begin
+                    wd <= 16'd0;
+                    st <= S_WR_REQ;
+                end
+                S_WR_REQ: begin
+                    wd <= wd + 16'd1;
+                    if (sd_ack) begin
+                        wd <= 16'd0;
+                        st <= S_WR_DONE;
+                    end else if (&wd || !fdd_request[1]) begin
+                        st <= S_IDLE;
+                    end
+                end
+                S_WR_DONE: begin
+                    wd <= wd + 16'd1;
+                    if (sd_done) begin
+                        wd       <= 16'd0;
+                        beat_cnt <= beat_cnt + 11'd1;
+                        if (beat_cnt == 11'd1023) st <= S_IDLE;
+                        else                      st <= S_WR_POP;
+                    end else if (&wd) begin
+                        st <= S_IDLE;
+                    end
+                end
+
+                // ---- (unused) drain the FIFO, drop it ------------------
                 S_WR_DR: begin
                     wd <= wd + 16'd1;
                     // mgmt_rd held high pops a byte a clock until the
@@ -629,6 +678,21 @@ module fdd_ramimg #(
             S_WR_DR: begin
                 mgmt_addr = 16'hF20F;   // held: pops one byte per clock
                 mgmt_rd   = 1'b1;
+            end
+            S_WR_LBA: begin
+                mgmt_addr = 16'hF200;   // register 0: {drive, lba}
+                mgmt_rd   = 1'b1;
+            end
+            S_WR_POP: begin
+                mgmt_addr = 16'hF20F;   // one pop; the head is on mgmt_din now
+                mgmt_rd   = 1'b1;
+            end
+            S_WR_REQ, S_WR_DONE: begin
+                // data held for the whole transaction (see S_UP_WDONE)
+                sd_req   = (st == S_WR_REQ);
+                sd_we    = 1'b1;
+                sd_addr  = sec_word;
+                sd_wdata = {8'h00, wr_byte};
             end
             S_UP_POP: begin
                 up_rdreq = 1'b1;
