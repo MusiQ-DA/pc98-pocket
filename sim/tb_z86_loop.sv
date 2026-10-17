@@ -22,7 +22,8 @@ module tb_z86_loop;
            .dbg_halted(halted));
 
     logic [7:0] mem [0:1048575];
-    int lat = 4, n = 1000;
+    int lat = 4, n = 1000, cur_lat = 4, latrand = 0;
+    initial if ($test$plusargs("latrand")) latrand = 1;
     logic [19:0] org = 20'h00400;
     string prog, dumpf, memf;
     logic [19:0] stop_pc = 20'hFFFFF;
@@ -73,7 +74,7 @@ module tb_z86_loop;
         ack <= 1'b0;
         if (!reset && stb && !ack) begin
             cnt <= cnt + 1;
-            if (cnt + 1 >= lat) begin
+            if (cnt + 1 >= cur_lat) begin
                 cnt <= 0;
                 ack <= 1'b1;
                 if (we) begin
@@ -89,7 +90,13 @@ module tb_z86_loop;
                     dat_i <= {mem[{adr,1'b1}], mem[{adr,1'b0}]};
                 end
             end
-        end else if (!stb) cnt <= 0;
+        end else if (!stb) begin
+            cnt <= 0;
+            // +latrand: each access waits 1..lat clocks, so loads, stores
+            // and branches meet in every order (the in-flight-load-vs-branch
+            // fetch bug only shows with uneven latency)
+            cur_lat <= latrand ? 1 + ($urandom % lat) : lat;
+        end
     end
 
     // +irq=<clocks>: raise INTR every that many clocks (held until the

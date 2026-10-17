@@ -1455,6 +1455,9 @@ module core_top (
                 end
             end
             if (f0_port_write || pc_in_errhalt || zet_fault || w43d_10 ||
+`ifdef PC98_Z86
+                (tlog_trap && pc_wild) ||
+`endif
                 ws_hit ||
                 (trig_hit && trig_freeze && !trig_delay))
                 pc_hist_frozen <= 1'b1;
@@ -1493,36 +1496,56 @@ module core_top (
                                            : (pc_now == trig_addr));
     wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
 `ifdef PC98_Z86
-    // Trigger log: every time the fetch PC lands on the slot-6 trigger
-    // address, {DS, ES, DI, SI, DX, CX, BX, AX} goes into a 64-entry ring --
-    // armed on an INT 21h entry it records every DOS call with its
-    // arguments, which a JTAG poll loop is far too slow to catch. Write slot
-    // 0x0e picks the entry, reads 0x60-0x63 return it (low word first),
-    // 0x64 the entry count.
-    (* ramstyle = "M10K" *) reg [127:0] tlog [0:63];
+    // Trigger log: a 64-entry ring of {PC, SS, SP, CS, DS, ES, DI, SI, DX,
+    // CX, BX, AX}. Default mode logs each time the fetch PC lands on the
+    // slot-6 trigger address (armed on the INT 21h entry: every DOS call).
+    // Write slot 0x0e = {.., trap, all, 2'b0, index[5:0]}: 'all' logs every
+    // change of the fetch PC instead (the last 64 branches with registers);
+    // 'trap' freezes the log and pc_hist and stops z86 the moment the PC
+    // enters a region no code lives in (IVT 000-3FF, A0000-E7FFF), so a
+    // crash leaves the path into it. Reads 0x60-0x65 return the entry (low
+    // word first), 0x67 the count.
+    (* ramstyle = "M10K" *) reg [191:0] tlog [0:63];
     reg  [5:0]   tlog_ri = 6'd0;
     reg  [15:0]  tlog_n  = 16'd0;
-    reg  [127:0] tlog_q  = '0;
+    reg  [191:0] tlog_q  = '0;
     reg          trig_hit_d = 1'b0;
+    reg  [19:0]  tlog_pc_d = 20'd0;
+    reg          tlog_all = 1'b0, tlog_trap = 1'b0, tlog_frozen = 1'b0;
+    wire         pc_wild = (pc_now < 20'h00400) ||
+                           (pc_now >= 20'hA0000 && pc_now < 20'hE8000);
+    wire         tlog_ev = tlog_all ? (pc_now != tlog_pc_d) : (trig_hit && !trig_hit_d);
     always_ff @(posedge clk_chipset) begin
         trig_hit_d <= trig_hit;
-        if (probe_wr_pulse && probe_waddr_c == 7'h06)
+        tlog_pc_d  <= pc_now;
+        if (probe_wr_pulse && probe_waddr_c == 7'h06) begin
             tlog_n <= 16'd0;
-        else if (trig_hit && !trig_hit_d) begin
-            tlog[tlog_n[5:0]] <= {z86_dbg_regs[191:176], z86_dbg_regs[143:128],   // DS, ES
+            tlog_frozen <= 1'b0;
+        end else if (tlog_ev && !tlog_frozen) begin
+            tlog[tlog_n[5:0]] <= {12'h0, pc_now,
+                                  z86_dbg_regs[175:160], z86_dbg_regs[79:64],     // SS, SP
+                                  z86_dbg_regs[159:144],                          // CS
+                                  z86_dbg_regs[191:176], z86_dbg_regs[143:128],   // DS, ES
                                   z86_dbg_regs[127:112], z86_dbg_regs[111:96],    // DI, SI
                                   z86_dbg_regs[47:32],   z86_dbg_regs[31:16],     // DX, CX
                                   z86_dbg_regs[63:48],   z86_dbg_regs[15:0]};     // BX, AX
             tlog_n <= tlog_n + 16'd1;
         end
-        if (probe_wr_pulse && probe_waddr_c == 7'h0e)
-            tlog_ri <= probe_wdata_c[5:0];
+        if (tlog_trap && pc_wild && !tlog_frozen)
+            tlog_frozen <= 1'b1;
+        if (probe_wr_pulse && probe_waddr_c == 7'h0e) begin
+            tlog_ri   <= probe_wdata_c[5:0];
+            tlog_all  <= probe_wdata_c[8];
+            tlog_trap <= probe_wdata_c[9];
+        end
+        tlog_q <= tlog[tlog_ri];
         if (probe_wr_pulse && probe_waddr_c == 7'h0f) begin
             jtag_dbg_arm  <= probe_wdata_c[31];
             jtag_dbg_ax   <= probe_wdata_c[15:0];
             jtag_dbg_stop <= 1'b0;
-        end else if (jtag_dbg_arm && trig_hit && !trig_hit_d &&
-                     z86_dbg_regs[15:0] == jtag_dbg_ax) begin
+        end else if ((jtag_dbg_arm && trig_hit && !trig_hit_d &&
+                      z86_dbg_regs[15:0] == jtag_dbg_ax) ||
+                     (tlog_trap && pc_wild && !tlog_frozen)) begin
             jtag_dbg_stop <= 1'b1;
             jtag_dbg_arm  <= 1'b0;
         end
@@ -1598,8 +1621,10 @@ module core_top (
             8'h61:   probe_data_c = tlog_q[63:32];
             8'h62:   probe_data_c = tlog_q[95:64];
             8'h63:   probe_data_c = tlog_q[127:96];
-            8'h64:   probe_data_c = {16'h0, tlog_n};
-            8'h65:   probe_data_c = {z86_dbg_stopped, 15'h0, z86_dbg_next_ip};
+            8'h64:   probe_data_c = tlog_q[159:128];
+            8'h65:   probe_data_c = tlog_q[191:160];
+            8'h66:   probe_data_c = {z86_dbg_stopped, 15'h0, z86_dbg_next_ip};
+            8'h67:   probe_data_c = {tlog_frozen, 15'h0, tlog_n};
 `endif
             8'h01:   probe_data_c = brg_q[31:0];
             8'h02:   probe_data_c = {9'h0, brg_q[54:32]};

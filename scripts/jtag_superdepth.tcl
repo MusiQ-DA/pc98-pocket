@@ -56,8 +56,18 @@ for {set it 0} {$it < $N} {incr it} {
   wr 1 0x1C; after 300; wr 1 0x9C
   after 12000
   set own [w16 0x25501]; set c193 [w16 [expr {0x25610+0xC193}]]
-  set pc [expr {[rd 0x18] & 0xFFFFF}]
-  set bad [expr {$own != 0x2551 || ($c193 != 0x20 && $c193 != 0x10 && $c193 != 0x1122)}]
+  # the game must still be running: of five PC samples not all the same,
+  # none at the reset vector, all in the game's code or the BIOS it calls
+  # (the MCB/blitter words survive a crash, and a wedged or reset CPU
+  # passed on them alone)
+  set pcs {}
+  for {set q 0} {$q < 5} {incr q} { lappend pcs [expr {[rd 0x18] & 0xFFFFF}]; after 37 }
+  set pc [lindex $pcs 0]
+  set alive [expr {[llength [lsort -unique $pcs]] > 1}]
+  foreach p $pcs {
+    if {$p == 0xFFFF0 || !(($p >= 0x25500 && $p < 0x40000) || ($p >= 0xE8000 && $p < 0xFFFF0))} { set alive 0 }
+  }
+  set bad [expr {!$alive || $own != 0x2551 || ($c193 != 0x20 && $c193 != 0x10 && $c193 != 0x1122)}]
   if {$bad} {incr fails}
   puts [format "it=%2d pre=%04X own=%04X c193=%04X pc=%05X %s" $it $pre $own $c193 $pc [expr {$bad ? "FAIL" : "ok"}]]
   flush stdout
