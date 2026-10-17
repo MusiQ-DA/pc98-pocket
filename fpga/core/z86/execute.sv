@@ -1313,6 +1313,12 @@ always_ff @(posedge clk) begin
                       mc_cur.op == MC_DIV || mc_cur.op == MC_ADJ || mc_cur.op == MC_IN_RANGE)) begin
         mc_cond_r <= mc_cond;
     end
+    // PC-98 port: a CPU reset (OUT 0F0h) can land between a micro-op's
+    // read request and its data; the pending-read flags then caught the
+    // first read after reset as theirs (LEAVE after a reset popped junk).
+    if (reset) begin
+        read_lo <= 0; read_hi <= 0; read_flags <= 0; pop_reg <= 0;
+    end
 end
 
 // EXECUTE2 is now merged with EXECUTE1

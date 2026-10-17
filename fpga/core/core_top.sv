@@ -1507,10 +1507,10 @@ module core_top (
     // E0000-E7FFF -- D0000-DFFFF holds the SCSI option ROM), so a
     // crash leaves the path into it. Reads 0x60-0x65 return the entry (low
     // word first), 0x67 the count.
-    (* ramstyle = "M10K" *) reg [191:0] tlog [0:63];
+    (* ramstyle = "M10K" *) reg [207:0] tlog [0:63];
     reg  [5:0]   tlog_ri = 6'd0;
     reg  [15:0]  tlog_n  = 16'd0;
-    reg  [191:0] tlog_q  = '0;
+    reg  [207:0] tlog_q  = '0;
     reg          trig_hit_d = 1'b0;
     reg  [19:0]  tlog_pc_d = 20'd0;
     reg          tlog_all = 1'b0, tlog_trap = 1'b0, tlog_frozen = 1'b0;
@@ -1529,7 +1529,7 @@ module core_top (
             tlog_n <= 16'd0;
             tlog_frozen <= 1'b0;
         end else if (tlog_ev && !tlog_frozen) begin
-            tlog[tlog_n[5:0]] <= {12'h0, pc_now,
+            tlog[tlog_n[5:0]] <= {12'h0, pc_now,               // 207:176
                                   z86_dbg_regs[175:160], z86_dbg_regs[79:64],     // SS, SP
                                   z86_dbg_regs[159:144],                          // CS
                                   z86_dbg_regs[191:176], z86_dbg_regs[143:128],   // DS, ES
@@ -1630,6 +1630,7 @@ module core_top (
             8'h63:   probe_data_c = tlog_q[127:96];
             8'h64:   probe_data_c = tlog_q[159:128];
             8'h65:   probe_data_c = tlog_q[191:160];
+            8'h68:   probe_data_c = {16'h0, tlog_q[207:192]};
             8'h66:   probe_data_c = {z86_dbg_stopped, 15'h0, z86_dbg_next_ip};
             8'h67:   probe_data_c = {tlog_frozen, 15'h0, tlog_n};
 `endif

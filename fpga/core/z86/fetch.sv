@@ -201,8 +201,13 @@ always @(posedge clk) begin
         ptr <= reset_addr[3:0];
         ip <= reset_ip;
         buf_start <= 0;
-        ld_req <= ld_ack;
-        ld_ack_r <= ld_ack;
+        // PC-98 port: both toggles to 0, here and in z86_wbif. Each side
+        // used to copy the other's ('ld_req <= ld_ack' / 'ld_ack <= ld_req'),
+        // which with a load outstanding at reset just swapped the two -- still
+        // unequal -- so after a CPU reset (OUT 0F0h lands mid-prefetch) fetch
+        // and the line loader each waited on the other and z86 sat at FFFF0.
+        ld_req <= 1'b0;
+        ld_ack_r <= 1'b0;
         loading <= 0;
         id_valid <= 0;
         id_inst <= 0;

@@ -105,7 +105,7 @@ module z86_wbif #(
         if (reset) begin
             st       <= S_IDLE;
             io_rec   <= 8'd0;
-            ld_ack   <= ld_req;
+            ld_ack   <= 1'b0;          // see fetch.sv's reset: both toggles to 0
             rd_ready <= 1'b1;
             rd_pend  <= 1'b0;
             wr_ready <= 1'b0;

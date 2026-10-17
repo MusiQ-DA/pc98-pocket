@@ -119,7 +119,17 @@ module tb_z86_loop;
         end
     end
 
+    // +rst_at=<clock>: one CPU reset (5 clocks) mid-run, as OUT 0F0h does on
+    // the PC-98 -- the program must restart and still finish.
+    longint rst_at = 0;
+    initial void'($value$plusargs("rst_at=%d", rst_at));
     longint cyc_n = 0;
+    always @(posedge clk)
+        if (rst_at != 0 && cyc_n == rst_at) begin
+            reset <= 1'b1;
+            repeat (5) @(posedge clk);
+            reset <= 1'b0;
+        end
     always @(posedge clk) begin
         if (!reset) cyc_n++;
         if (halted || (stop_pc != 20'hFFFFF && pc == stop_pc)) begin

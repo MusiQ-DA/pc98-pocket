@@ -29,4 +29,13 @@ while IFS='|' read -r t want; do
     else echo "FAIL $t lat=$lat"; echo "  want $want"; echo "  got  $got"; fail=1; fi
   done
 done <<< "$TESTS"
+# A CPU reset mid-run (OUT 0F0h on the PC-98) at every phase of a load or
+# micro-op: the restarted program must still finish with the same results.
+want="34 12 f2 07 11 5c 6d f4 ef be 22 33 cd ab 57 13 01 55 55 44 d6 04 01"
+rbad=0
+for r in $(seq 100 37 2000); do
+  got=$("$OUT/loop" +org=400 +prog=sim/z86_tests/raw_pairs.hex +lat=3 +rst_at=$r | sed -n 's/^mem 0600: //p')
+  [ "${got:0:${#want}}" = "$want" ] || { echo "FAIL reset at clock $r: $got"; rbad=1; }
+done
+[ $rbad = 0 ] && echo "ok   mid-run resets" || fail=1
 exit $fail
