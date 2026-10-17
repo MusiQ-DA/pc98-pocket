@@ -57,4 +57,10 @@ for a in "" +irqclr; do for irq in 337 523 1009; do for lat in 1 4; do
     echo "FAIL irq_withdraw $a irq=$irq lat=$lat: inta=$ta spurious=$sp mem=$w"; ibad=1; fi
 done; done; done
 [ $ibad = 0 ] && echo "ok   interrupt acknowledge (irq_withdraw)" || fail=1
+# HLT ends on an interrupt IF admits and resumes after it; CLI; HLT stays.
+for lat in 1 4; do
+  o=$("$OUT/loop" +org=400 +prog=sim/z86_tests/irq_hlt.hex +lat=$lat +irq=2000)
+  w=$(echo "$o" | sed -n 's/^mem 0600: \(.. .. .. ..\).*/\1/p')
+  [ "$w" = "05 00 05 00" ] && echo "ok   hlt wakes on intr lat=$lat" || { echo "FAIL hlt wake lat=$lat: $w"; fail=1; }
+done
 exit $fail

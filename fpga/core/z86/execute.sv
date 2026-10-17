@@ -14,6 +14,7 @@ module execute (
     input             clk,
     input             reset,
     output reg        halted /* verilator public */,
+    input             hlt_wake,         // INTR: HLT ends when IF lets it in
 
     // EXECUTE interface
     output reg        ex_ready,         // EXECUTE consumes an instruction
@@ -1208,8 +1209,14 @@ always @* begin
         end
 
         MC_HALT: begin
-            halted_next = 1'b1;
-            mc_wait = 1'b1;          // stop mc_pc from advancing
+            // HLT waits for an interrupt IF admits (the PC-98 port: the
+            // standalone core never left HLT). It then retires, and the
+            // interrupt is taken at the boundary after it, with the
+            // return address past the HLT, as on the 8086.
+            if (!(hlt_wake && reg_f[9])) begin
+                halted_next = 1'b1;
+                mc_wait = 1'b1;      // stop mc_pc from advancing
+            end
         end
 
         default: ;
