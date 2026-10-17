@@ -122,6 +122,8 @@ module tb_z86_loop;
     // +rst_at=<clock>: one CPU reset (5 clocks) mid-run, as OUT 0F0h does on
     // the PC-98 -- the program must restart and still finish.
     longint rst_at = 0;
+    logic   rst_on_halt = 1'b0, rst_done = 1'b0;
+    initial rst_on_halt = $test$plusargs("rst_on_halt");
     initial void'($value$plusargs("rst_at=%d", rst_at));
     longint cyc_n = 0;
     always @(posedge clk)
@@ -132,7 +134,14 @@ module tb_z86_loop;
         end
     always @(posedge clk) begin
         if (!reset) cyc_n++;
-        if (halted || (stop_pc != 20'hFFFFF && pc == stop_pc)) begin
+        if (rst_on_halt && halted && !rst_done) begin
+            // +rst_on_halt: the first HLT gets a CPU reset, as the ITF's
+            // OUT 0F0h / HLT does; the program must come back from FFFF0.
+            rst_done <= 1'b1;
+            reset <= 1'b1;
+            repeat (40) @(posedge clk);
+            reset <= 1'b0;
+        end else if (halted || (stop_pc != 20'hFFFFF && pc == stop_pc)) begin
             if (!halted) $display("STOP at %05x", pc);
             if (irq_period != 0) $display("interrupts taken: %0d", irq_n);
             $display("n=%0d lat=%0d: %0d clocks, %0d reads, %0d writes -> %0.1f clk/iter",

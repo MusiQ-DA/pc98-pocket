@@ -1631,6 +1631,9 @@ module core_top (
             8'h64:   probe_data_c = tlog_q[159:128];
             8'h65:   probe_data_c = tlog_q[191:160];
             8'h68:   probe_data_c = {16'h0, tlog_q[207:192]};
+            8'h69:   probe_data_c = f0w_a;
+            8'h6a:   probe_data_c = f0w_b;
+            8'h6b:   probe_data_c = f0w_c;
             8'h66:   probe_data_c = {z86_dbg_stopped, 15'h0, z86_dbg_next_ip};
             8'h67:   probe_data_c = {tlog_frozen, 15'h0, tlog_n};
 `endif
@@ -3006,6 +3009,22 @@ module core_top (
     // resetting the CPU on a glitch would be worse than a bad readout.
     wire f0_port_write = ~chipset_io_write_n & ~chipset_aen
                        & (chipset_address[15:0] == 16'h00F0);
+
+    // F0 witness: the bus as it stood when the OUT 0F0h detector first saw
+    // its port -- chipset address, 8288 status, the bridge's own address
+    // and the z86 Wishbone cycle -- so a CPU reset that loops at 10 MHz can
+    // be tied to the access that raised it. Reads 0x69 / 0x6A / 0x6B.
+    reg  f0_seen_d = 1'b0;
+    reg  [31:0] f0w_a = 32'h0, f0w_b = 32'h0, f0w_c = 32'h0;
+    always @(posedge clk_chipset) begin
+        f0_seen_d <= f0_port_write;
+        if (f0_port_write && !f0_seen_d) begin
+            f0w_a <= {4'h0, processor_status, 1'b0, chipset_io_write_n, chipset_aen,
+                      2'b00, chipset_address};
+            f0w_b <= {zwb_cyc, zwb_stb, zwb_we, zwb_tga, zwb_sel, 6'h0, cpu_ad_out};
+            f0w_c <= {12'h0, zet_pc};
+        end
+    end
 
     always @(posedge clk_chipset or posedge reset_sdram) begin
         if (reset_sdram) begin
