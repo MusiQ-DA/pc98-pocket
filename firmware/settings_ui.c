@@ -164,13 +164,13 @@ typedef struct {
 // through the version tables below -- and the next save writes the
 // current version.
 static setting_t settings[SET_COUNT] = {
-    // Index 1 is the faithful clock: a PC-9801VM/VX's V30 at 2.4576 MHz x4.
-    // The SDRAM answers a guest word in one bus cycle, so
-    // index 1's throughput IS a real 10 MHz machine's -- index 2 is a roughly
-    // 2x step up, no longer a compensation for a split that went away. At
-    // index 0 the ITF's 640 KB memory test is a long wait with nothing on
-    // screen but its own test pattern.
-    SETTING_D(opt_cpu, 1),    // SET_CPU_SPEED
+    // Index 1 is the faithful bus clock: a PC-9801VM/VX's V30 at 2.4576 MHz
+    // x4. The default is Turbo: z86 runs from its cache at the full chipset
+    // clock whatever the setting, so the paced settings only slow the bus
+    // cycles it still makes (I/O, VRAM) and there is nothing to gain from
+    // them unless a title needs them. At index 0 the ITF's 640 KB memory
+    // test is a long wait with nothing on screen but its own test pattern.
+    SETTING_D(opt_cpu, 3),    // SET_CPU_SPEED
     SETTING(opt_bios_wr),     // SET_BIOS_WR
     SETTING(opt_boost),       // SET_BOOST
     SETTING(opt_level4),      // SET_SPK_VOL

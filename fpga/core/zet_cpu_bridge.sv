@@ -59,7 +59,13 @@
 
 `default_nettype none
 
-module zet_cpu_bridge (
+module zet_cpu_bridge #(
+    // Zet edges a request must age before it arms (see req_age below). Zet's
+    // wb_master re-tracks its operands one edge late, so it needs 2; z86's
+    // memory port registers adr/sel/dat/we/tga on the edge it raises stb,
+    // so 0 is exact for it.
+    parameter int REQ_SETTLE = 2
+) (
 
     // chipset domain
     input  wire         clk,                // clk_chipset
@@ -154,6 +160,10 @@ module zet_cpu_bridge (
     input  wire         bios_shadow_flag,
 
     output wire         biu_done,
+    // The CPU clock-enable: high on exactly the clk posedges that also
+    // reach zet_clk (run_arm | reset). Exported so logic clocked on clk can
+    // step in lockstep with the gated CPU (z86's cache).
+    output wire         zet_edge_o,
     output wire  [15:0] dbg,
     // INTA witness for the probe: {bad_n, last_bad, cut_n, last_vec} --
     // see the counters by `assign dbg =`.
@@ -205,6 +215,7 @@ module zet_cpu_bridge (
 
     // A zet edge lands at this posedge when the gate is open.
     wire zet_edge = run_arm | reset;
+    assign zet_edge_o = zet_edge;
 
     // lock_n drives processor_lock_n on the bus arbiter -- see the posted
     // write queue section for its assignment.
@@ -482,7 +493,7 @@ module zet_cpu_bridge (
     // !rd_pend: a read deferred past the window stays on req_busy until
     // it can ack -- it must not re-arm as a fresh bus cycle.
     wire        vec_window = wb_tgc_o || nmia;
-    wire        srv_req  = req_busy && (req_age == 2'd2) && !srv_inta
+    wire        srv_req  = req_busy && (req_age >= 2'(REQ_SETTLE)) && !srv_inta
                          && !rd_pend && !vec_window;
     // Live Wishbone parameters, sampled at arm time (req_age==2 means the
     // tracking registers have settled).
