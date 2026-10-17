@@ -72,7 +72,13 @@ module tb_z86_loop;
 
     always @(posedge clk) begin
         ack <= 1'b0;
-        if (!reset && stb && !ack) begin
+        if (f0reset && !reset && stb && we && tga && {adr,1'b0} == 20'h000F0) begin
+            // +f0reset: OUT 0F0h resets the CPU before its cycle is acked,
+            // the order the PC-98 bus gives at 10 MHz
+            reset <= 1'b1;
+            repeat (40) @(posedge clk);
+            reset <= 1'b0;
+        end else if (!reset && stb && !ack) begin
             cnt <= cnt + 1;
             if (cnt + 1 >= cur_lat) begin
                 cnt <= 0;
@@ -122,7 +128,8 @@ module tb_z86_loop;
     // +rst_at=<clock>: one CPU reset (5 clocks) mid-run, as OUT 0F0h does on
     // the PC-98 -- the program must restart and still finish.
     longint rst_at = 0;
-    logic   rst_on_halt = 1'b0, rst_done = 1'b0;
+    logic   rst_on_halt = 1'b0, rst_done = 1'b0, f0reset = 1'b0;
+    initial f0reset = $test$plusargs("f0reset");
     initial rst_on_halt = $test$plusargs("rst_on_halt");
     initial void'($value$plusargs("rst_at=%d", rst_at));
     longint cyc_n = 0;

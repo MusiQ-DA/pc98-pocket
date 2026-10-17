@@ -38,4 +38,10 @@ for r in $(seq 100 37 2000); do
   [ "${got:0:${#want}}" = "$want" ] || { echo "FAIL reset at clock $r: $got"; rbad=1; }
 done
 [ $rbad = 0 ] && echo "ok   mid-run resets" || fail=1
+# OUT 0F0h resetting the CPU before its cycle is acked (the PC-98 bus at
+# 10 MHz): the write must not be replayed after the reset.
+for lat in 1 4; do
+  got=$("$OUT/loop" +org=400 +prog=sim/z86_tests/irq_f0reset.hex +lat=$lat +f0reset | sed -n 's/^mem 0600: //p')
+  [ "${got:0:2}" = "77" ] && echo "ok   f0 reset before ack lat=$lat" || { echo "FAIL f0 reset before ack lat=$lat: $got"; fail=1; }
+done
 exit $fail

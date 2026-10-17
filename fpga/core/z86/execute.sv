@@ -2299,6 +2299,18 @@ always @(posedge clk) begin
     // and IF must come back clear before the resume path rebuilds the IVT.
     if (reset) begin
         reg_f <= FLAGS_INIT;
+        // PC-98 port: a CPU reset must drop the store/OUT still waiting
+        // for its acknowledge. At 10 MHz the OUT 0F0h that resets the CPU is
+        // seen on the bus before the bridge acks it; wr_valid survived the
+        // reset, z86_wbif issued the same OUT 0F0h again from FFFF0, and the
+        // ITF looped on CPU resets until the FPGA was reconfigured.
+        wr_valid       <= 1'b0;
+        wr_io          <= 1'b0;
+        br_taken       <= 1'b0;
+        load_cs_ip     <= 1'b0;
+        wb_reg_valid   <= 1'b0;
+        wb_reg2_valid  <= 1'b0;
+        wb_seg_valid   <= 1'b0;
     end
 end
 
