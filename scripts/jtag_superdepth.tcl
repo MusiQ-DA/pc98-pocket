@@ -112,7 +112,10 @@ for {set it 0} {$it < $N} {incr it} {
   }
   set bad [expr {!$alive || $own != 0x2551 || ($c193 != 0x20 && $c193 != 0x10 && $c193 != 0x1122) || $tmo != 0}]
   if {$bad} {incr fails}
-  puts [format "it=%2d pre=%04X own=%04X c193=%04X pc=%05X tmo=%d %s" $it $pre $own $c193 $pc $tmo [expr {$bad ? "FAIL" : "ok"}]]
+  # floppy.v's command-byte counters: a byte the chip dropped (it arrived
+  # busy) turns the rest of that command into garbage
+  set fd [rd 0x26]
+  puts [format "it=%2d pre=%04X own=%04X c193=%04X pc=%05X tmo=%d fdc_acc=%d drop=%d %s" $it $pre $own $c193 $pc $tmo [expr {($fd >> 15) & 0xFF}] [expr {($fd >> 23) & 0xFF}] [expr {$bad ? "FAIL" : "ok"}]]
   if {$bad} { set l ""; foreach p $pcs { append l [format " %05X" $p] }; puts "   pcs:$l" }
   if {$bad && [info exists pcs2]} { set l ""; foreach p [lrange [lsort -unique $pcs2] 0 30] { append l [format " %05X" $p] }; puts "   post:$l" }
   if {[info exists pcs2]} { unset pcs2 }
