@@ -292,6 +292,7 @@ module core_top (
     logic        jtag_spd_ovr = 1'b0;
     logic  [1:0] jtag_spd_sel = 2'b00;
     logic        jtag_pf_dis  = 1'b1;   // engine off by default, see below
+    logic        jtag_cache_dis = 1'b0; // [11] z86_cache off: every access on the bus
     // Per-mechanism prefetch kills, for bisecting which half of the
     // engine a failure lives in without a rebuild:
     //   [4] pf_nofill  -- pure (idle-gap) fills never run
@@ -332,6 +333,7 @@ module core_top (
     // off 0/85 -- the hole is in the fill bursts, not the overlap
     // invalidation, and was never reproduced in tb_mem_perf.
     wire         jtag_pf_dis  = 1'b1;
+    wire         jtag_cache_dis = 1'b0;
     wire         jtag_pf_nofill  = 1'b0;
     wire         jtag_pf_nofillm = 1'b0;
     wire         jtag_pf_nohit   = 1'b0;
@@ -981,6 +983,29 @@ module core_top (
     wire [23:0] ramimg_addr;
     wire  [3:0] ramimg_len;
     wire [15:0] ramimg_wdata, ramimg_rdata;
+    // The CPU cache's SDRAM port (u_RAM's sdram_shim port F) and the port-A
+    // write-commit snoop it invalidates against. Word addresses, one guest
+    // byte per SDRAM word, as on port A; all on clk_chipset.
+    wire        cachef_req, cachef_we, cachef_ack, cachef_rvalid, cachef_done;
+    wire [23:0] cachef_addr;
+    wire  [3:0] cachef_len;
+    wire [15:0] cachef_wdata0, cachef_wdata1, cachef_rdata;
+    wire        ram_wr_snoop_v;
+    wire [23:0] ram_wr_snoop_addr;
+    wire  [3:0] ram_wr_snoop_len;
+    // Driven by z86's cache (z86_cache, in u_cpu). Zet has no cache: there
+    // the port stays idle and the round robin never grants it.
+`ifndef PC98_Z86
+    assign cachef_req    = 1'b0;
+    assign cachef_we     = 1'b0;
+    assign cachef_addr   = 24'd0;
+    assign cachef_len    = 4'd0;
+    assign cachef_wdata0 = 16'd0;
+    assign cachef_wdata1 = 16'd0;
+    wire _unused_cachef = &{1'b0, cachef_ack, cachef_rvalid, cachef_rdata,
+                            cachef_done, ram_wr_snoop_v, ram_wr_snoop_addr,
+                            ram_wr_snoop_len};
+`endif
     wire  [1:0] fdd_req_fw;
 `ifdef PC98_JTAG
     wire [15:0] ri_mgmt_addr, ri_mgmt_dout;
@@ -2209,6 +2234,7 @@ module core_top (
             jtag_nowrap   <= probe_wdata_c[8];
             jtag_pf_wkill <= probe_wdata_c[9];
             jtag_pf_bkill <= probe_wdata_c[10];
+            jtag_cache_dis <= probe_wdata_c[11];
         end
         // Slot 0x0a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
         // every memory write landing on it is logged (CPU or DMA alike).
@@ -3270,6 +3296,19 @@ module core_top (
         ,.ramimg_rvalid                     (ramimg_rvalid)
         ,.ramimg_rdata                      (ramimg_rdata)
         ,.ramimg_done                       (ramimg_done)
+        ,.cachef_req                        (cachef_req)
+        ,.cachef_we                         (cachef_we)
+        ,.cachef_addr                       (cachef_addr)
+        ,.cachef_len                        (cachef_len)
+        ,.cachef_wdata0                     (cachef_wdata0)
+        ,.cachef_wdata1                     (cachef_wdata1)
+        ,.cachef_ack                        (cachef_ack)
+        ,.cachef_rvalid                     (cachef_rvalid)
+        ,.cachef_rdata                      (cachef_rdata)
+        ,.cachef_done                       (cachef_done)
+        ,.ram_wr_snoop_v                    (ram_wr_snoop_v)
+        ,.ram_wr_snoop_addr                 (ram_wr_snoop_addr)
+        ,.ram_wr_snoop_len                  (ram_wr_snoop_len)
     );
 
 `ifdef PC98_JTAG
@@ -3366,6 +3405,9 @@ module core_top (
     wire [31:0] bridge_dbg_inta;  // INTA witness, probe slot 0x2F
 
     wire        zet_clk;
+    // The bridge's zet_edge: high on the clk_chipset posedges that also
+    // reach zet_clk -- the clock enable for logic stepping with z86.
+    wire        z86_ce;
     wire [15:0] zwb_dat_i, zwb_dat_o;
     wire [19:1] zwb_adr;
     wire        zwb_we, zwb_tga, zwb_stb, zwb_cyc, zwb_ack;
@@ -3377,7 +3419,11 @@ module core_top (
     wire        zet_fault;
     wire [7:0]  zet_opc;
 
+`ifdef PC98_Z86
+    zet_cpu_bridge #(.REQ_SETTLE(0)) u_zet_bridge (
+`else
     zet_cpu_bridge u_zet_bridge (
+`endif
         .clk               (clk_chipset),
         .cpu_ce_posedge    (cpu_ce_posedge),
         .cpu_ce_negedge    (cpu_ce_negedge),
@@ -3413,6 +3459,7 @@ module core_top (
         .sdram_rd_ready    (sdram_rd_ready),
         .pause_core        (pause_core),
         .biu_done          (biu_done),
+        .zet_edge_o        (z86_ce),
         .pf_disable        (jtag_pf_dis),
         .pf_nofill         (jtag_pf_nofill),
         .pf_nofillm        (jtag_pf_nofillm),
@@ -3424,13 +3471,38 @@ module core_top (
         .dbg               (bridge_dbg),
         .dbg_inta          (bridge_dbg_inta)
     );
+`ifndef PC98_Z86
+    wire _unused_z86_ce = z86_ce;
+`endif
 
 `ifdef PC98_Z86
     // z86 (fpga/core/z86): a pipelined 286-class core behind the same
     // Wishbone/INTA contract Zet speaks, so the bridge is unchanged.
+    // The cache runs on the free clk_chipset with the bridge's zet_edge as
+    // its enable. It stays off while the ITF is mapped: the ITF's IRQ0 test
+    // expects the timer interrupt within 32 turns of a TEST/JNZ/LOOP, a
+    // window a cached loop runs through long before the PIT gets there.
     z86 u_cpu (
         .clk       (zet_clk),
         .reset     (reset_cpu),
+        .clk_free  (clk_chipset),
+        .ce        (z86_ce),
+        .cache_en  (~jtag_cache_dis & ~itf_bank),
+        .bios_shadow  (bios_shadow_flag),
+        .bios_protect (bios_protect_flag[1]),
+        .f_req     (cachef_req),
+        .f_we      (cachef_we),
+        .f_addr    (cachef_addr),
+        .f_len     (cachef_len),
+        .f_wdata0  (cachef_wdata0),
+        .f_wdata1  (cachef_wdata1),
+        .f_ack     (cachef_ack),
+        .f_rvalid  (cachef_rvalid),
+        .f_rdata   (cachef_rdata),
+        .f_done    (cachef_done),
+        .sn_v      (ram_wr_snoop_v),
+        .sn_addr   (ram_wr_snoop_addr),
+        .sn_len    (ram_wr_snoop_len),
         .wb_adr_o  (zwb_adr),
         .wb_sel_o  (zwb_sel),
         .wb_we_o   (zwb_we),

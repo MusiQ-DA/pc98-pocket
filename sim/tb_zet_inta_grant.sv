@@ -313,7 +313,11 @@ module tb_zet_inta_grant;
         .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0),
         .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
         .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
-        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
+        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done(),
+        .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
+        .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
+        .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
+        .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len()
     );
 
     sdram_model #(.T_RCD(2), .T_RP(2), .T_WR(2), .T_RFC(7),

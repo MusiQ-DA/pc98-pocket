@@ -15,7 +15,60 @@ module tb_z86_loop;
     wire [15:0] dat_o; logic [15:0] dat_i; logic ack = 0;
     wire [19:0] pc; wire halted;
 
-    z86 u (.clk(clk), .reset(reset), .wb_adr_o(adr), .wb_sel_o(sel),
+    // +gate: stop the core's clock at random, the way zet_cpu_bridge gates
+    // it, so z86_cache's ce qualification is exercised. run_arm changes on
+    // the falling edge only, like the bridge's.
+    int gate = 0;
+    initial if ($test$plusargs("gate")) gate = 1;
+    logic run_arm = 1'b1;
+    always @(negedge clk) run_arm <= gate ? ($urandom % 4 != 0) : 1'b1;
+    wire zclk = clk & (run_arm | reset);
+    wire zce  = run_arm | reset;
+    // +nocache: z86_cache's enable low -- every access takes the Wishbone.
+    int nocache = 0;
+    initial if ($test$plusargs("nocache")) nocache = 1;
+
+    // sdram_mp port F: req held until ack, then the burst's beats, then done.
+    wire f_req, f_we; wire [23:0] f_addr; wire [3:0] f_len;
+    wire [15:0] f_wd0, f_wd1;
+    logic f_ack = 0, f_rvalid = 0, f_done = 0; logic [15:0] f_rdata;
+    logic sn_v = 0; logic [23:0] sn_addr = 0; logic [3:0] sn_len = 0;
+    int f_rd_n = 0, f_wr_n = 0;
+    always @(posedge clk) begin : port_f
+        f_ack <= 0; f_rvalid <= 0; f_done <= 0;
+        if (f_req && !f_ack) begin
+            // arbitration + ACTIVATE: 3..(3+lat) clocks
+            repeat (3 + (latrand ? ($urandom % (lat + 1)) : lat)) @(posedge clk);
+            f_ack <= 1;
+            @(posedge clk); f_ack <= 0;
+            repeat (2) @(posedge clk);
+            if (f_we) begin
+                f_wr_n++;
+                mem[f_addr[19:0]] <= f_wd0[7:0];
+                if (wlog != 0) $fdisplay(wlog, "%05x %02x", f_addr[19:0], f_wd0[7:0]);
+                if (f_len == 4'd1) begin
+                    mem[f_addr[19:0] + 20'd1] <= f_wd1[7:0];
+                    if (wlog != 0) $fdisplay(wlog, "%05x %02x", f_addr[19:0] + 20'd1, f_wd1[7:0]);
+                end
+                @(posedge clk);
+            end else begin
+                f_rd_n++;
+                for (int i = 0; i <= f_len; i++) begin
+                    f_rvalid <= 1; f_rdata <= {8'h00, mem[f_addr[19:0] + 20'(i)]};
+                    @(posedge clk);
+                end
+                f_rvalid <= 0;
+            end
+            f_done <= 1;
+        end
+    end
+
+    z86 u (.clk(zclk), .reset(reset), .clk_free(clk), .ce(zce), .cache_en(nocache == 0),
+           .bios_shadow(1'b0), .bios_protect(1'b0),
+           .f_req(f_req), .f_we(f_we), .f_addr(f_addr), .f_len(f_len),
+           .f_wdata0(f_wd0), .f_wdata1(f_wd1), .f_ack(f_ack), .f_rvalid(f_rvalid),
+           .f_rdata(f_rdata), .f_done(f_done), .sn_v(sn_v), .sn_addr(sn_addr), .sn_len(sn_len),
+           .wb_adr_o(adr), .wb_sel_o(sel),
            .wb_we_o(we), .wb_tga_o(tga), .wb_dat_o(dat_o), .wb_stb_o(stb),
            .wb_cyc_o(cyc), .wb_ack_i(ack), .wb_dat_i(tgc_o ? {8'h00, irq_vec} : dat_i),
            .wb_tgc_i(intr), .wb_tgc_o(tgc_o), .pc(pc), .dbg_ds(), .dbg_regs(), .dbg_stop(1'b0), .dbg_stopped(), .dbg_next_ip(),
@@ -71,7 +124,10 @@ module tb_z86_loop;
     end
 
     always @(posedge clk) begin
-        ack <= 1'b0;
+        // ack stays up until a gated-clock edge has seen it (zet_cpu_bridge
+        // presents it for exactly one edge of the core's clock)
+        ack <= ack & ~zce;
+        sn_v <= 1'b0;
         if (f0reset && !reset && stb && we && tga && {adr,1'b0} == 20'h000F0) begin
             // +f0reset: OUT 0F0h resets the CPU before its cycle is acked,
             // the order the PC-98 bus gives at 10 MHz
@@ -91,6 +147,13 @@ module tb_z86_loop;
                     end
                     if (sel[0]) mem[{adr,1'b0}] <= dat_o[7:0];
                     if (sel[1]) mem[{adr,1'b1}] <= dat_o[15:8];
+                    // a memory write through the bus commits on port A:
+                    // the cache's snoop sees it
+                    if (!tga) begin
+                        sn_v    <= 1'b1;
+                        sn_addr <= {4'h0, adr, ~sel[0]};
+                        sn_len  <= (sel == 2'b11) ? 4'd1 : 4'd0;
+                    end
                 end else begin
                     rd_n++;
                     dat_i <= {mem[{adr,1'b1}], mem[{adr,1'b0}]};
@@ -150,6 +213,23 @@ module tb_z86_loop;
             repeat (5) @(posedge clk);
             reset <= 1'b0;
         end
+    // +ctrace: every request z86_cache answers, as the core sees it.
+    int ctrace = 0;
+    initial if ($test$plusargs("ctrace")) ctrace = 1;
+    always @(posedge clk) if (ctrace && !reset) begin
+        if (u.u_cache.wr_ready && zce)
+            $display("%0d WR %05x %04x w%0d io%0d", cyc_n, u.u_cache.wr_addr, u.u_cache.wr_data, u.u_cache.wr_word, u.u_cache.wr_io);
+        if (u.u_cache.rd && zce)
+            $display("%0d RDREQ %05x w%0d io%0d", cyc_n, u.u_cache.rd_addr, u.u_cache.rd_word, u.u_cache.rd_io);
+        if (u.u_cache.rd_ready && !$past(u.u_cache.rd_ready))
+            $display("%0d RDDATA %04x", cyc_n, u.u_cache.rd_data);
+        if (u.u_cache.ld_ack != $past(u.u_cache.ld_ack))
+            $display("%0d LD %05x", cyc_n, u.u_cache.ld_addr);
+    end
+    // With +irq a HLT is only the end once it has outlasted two interrupt
+    // periods: an interrupt IF admits wakes it.
+    int halt_n = 0;
+    always @(posedge clk) halt_n <= halted ? halt_n + 1 : 0;
     always @(posedge clk) begin
         if (!reset) cyc_n++;
         if (rst_on_halt && halted && !rst_done) begin
@@ -159,11 +239,14 @@ module tb_z86_loop;
             reset <= 1'b1;
             repeat (40) @(posedge clk);
             reset <= 1'b0;
-        end else if (halted || (stop_pc != 20'hFFFFF && pc == stop_pc)) begin
+        end else if (((halted && (irq_period == 0 || halt_n > 2 * irq_period))
+                      || (stop_pc != 20'hFFFFF && pc == stop_pc)) && !u.cache_busy) begin
+            // (the cache's write buffer drained first: memory is final)
             if (!halted) $display("STOP at %05x", pc);
             if (irq_period != 0) $display("interrupts taken: %0d spurious: %0d", irq_n, spurious_n);
             $display("n=%0d lat=%0d: %0d clocks, %0d reads, %0d writes -> %0.1f clk/iter",
                      n, lat, cyc_n, rd_n, wr_n, real'(cyc_n) / n);
+            $display("port F: %0d fills, %0d writes", f_rd_n, f_wr_n);
             for (int a = 0; a < 20'h20000; a += 2)
                 if ({mem[a+1], mem[a]} == 16'hA000)
                     $display("A000 found at %05x", a);

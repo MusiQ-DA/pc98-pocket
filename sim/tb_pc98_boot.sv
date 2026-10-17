@@ -121,6 +121,24 @@ module tb_pc98_boot;
     wire        dbg_first_pop, dbg_pend;
 
     wire        zet_clk;
+    wire        z86_ce;
+    // +nocache: z86_cache off (A/B against the bus-only path)
+    logic       nocache = 1'b0;
+    initial nocache = $test$plusargs("nocache");
+    // z86_cache's port F and the port A snoop: only the REALMEM path has
+    // an SDRAM to give them; the flat-memory bench runs the cache off.
+    wire        cf_req, cf_we, cf_ack, cf_rvalid, cf_done;
+    wire [23:0] cf_addr;
+    wire  [3:0] cf_len;
+    wire [15:0] cf_wd0, cf_wd1, cf_rdata;
+    wire        sn_v;
+    wire [23:0] sn_addr;
+    wire  [3:0] sn_len;
+`ifndef REALMEM
+    assign cf_ack = 1'b0; assign cf_rvalid = 1'b0; assign cf_done = 1'b0;
+    assign cf_rdata = 16'h0; assign sn_v = 1'b0; assign sn_addr = 24'h0;
+    assign sn_len = 4'h0;
+`endif
     wire [15:0] zwb_dat_i, zwb_dat_o;
     wire [19:1] zwb_adr;
     wire        zwb_we, zwb_tga, zwb_stb, zwb_cyc, zwb_ack;
@@ -134,7 +152,11 @@ module tb_pc98_boot;
     wire        pf_beat_v;
     wire [7:0]  pf_beat_dat;
 
+`ifdef Z86
+    zet_cpu_bridge #(.REQ_SETTLE(0)) u_bridge (
+`else
     zet_cpu_bridge u_bridge (
+`endif
         .clk               (clk_chipset),
         .cpu_ce_posedge    (cpu_ce_posedge),
         .cpu_ce_negedge    (cpu_ce_negedge),
@@ -177,6 +199,7 @@ module tb_pc98_boot;
         .pf_nofillm        (1'b0),
         .pf_nohit          (1'b0),
         .bios_shadow_flag  (itf_bank),
+        .zet_edge_o        (z86_ce),
         .dbg               (zbridge_dbg)
     );
 
@@ -185,6 +208,19 @@ module tb_pc98_boot;
     z86 u_cpu (
         .clk       (zet_clk),
         .reset     (cpu_reset_w),
+        .clk_free  (clk_chipset),
+        .ce        (z86_ce),
+`ifdef REALMEM
+        .cache_en  (~itf_bank & ~nocache),
+`else
+        .cache_en  (1'b0),
+`endif
+        .bios_shadow  (itf_bank),
+        .bios_protect (1'b1),
+        .f_req (cf_req), .f_we (cf_we), .f_addr (cf_addr), .f_len (cf_len),
+        .f_wdata0 (cf_wd0), .f_wdata1 (cf_wd1), .f_ack (cf_ack),
+        .f_rvalid (cf_rvalid), .f_rdata (cf_rdata), .f_done (cf_done),
+        .sn_v (sn_v), .sn_addr (sn_addr), .sn_len (sn_len),
         .wb_adr_o  (zwb_adr),
         .wb_sel_o  (zwb_sel),
         .wb_we_o   (zwb_we),
@@ -662,7 +698,19 @@ module tb_pc98_boot;
         .ramimg_addr(ramimg_addr_t),
         .ramimg_len(ramimg_len_t), .ramimg_wdata(16'h0000),
         .ramimg_ack(ramimg_ack_t), .ramimg_rvalid(ramimg_rvalid_t),
-        .ramimg_rdata(), .ramimg_done(ramimg_done_t)
+        .ramimg_rdata(), .ramimg_done(ramimg_done_t),
+`ifdef Z86
+        .cachef_req(cf_req), .cachef_we(cf_we), .cachef_addr(cf_addr),
+        .cachef_len(cf_len), .cachef_wdata0(cf_wd0), .cachef_wdata1(cf_wd1),
+        .cachef_ack(cf_ack), .cachef_rvalid(cf_rvalid), .cachef_rdata(cf_rdata),
+        .cachef_done(cf_done),
+        .ram_wr_snoop_v(sn_v), .ram_wr_snoop_addr(sn_addr), .ram_wr_snoop_len(sn_len)
+`else
+        .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
+        .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
+        .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
+        .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len()
+`endif
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
@@ -806,9 +854,9 @@ module tb_pc98_boot;
                         & (u_ram.u_sdram.u_mp.state != 4'd9)
                         & (u_ram.u_sdram.u_mp.state != 4'd10);
     wire [2:0]  mp_grant  = u_ram.u_sdram.u_mp.grant;
-    wire [4:0]  mp_reqs   = u_ram.u_sdram.u_mp.p_req;
-    wire [4:0]  mp_acks   = u_ram.u_sdram.u_mp.p_ack;
-    wire [4:0]  mp_dones  = u_ram.u_sdram.u_mp.p_done;
+    wire [5:0]  mp_reqs   = u_ram.u_sdram.u_mp.p_req;
+    wire [5:0]  mp_acks   = u_ram.u_sdram.u_mp.p_ack;
+    wire [5:0]  mp_dones  = u_ram.u_sdram.u_mp.p_done;
     wire        mp_rvalid = u_ram.u_sdram.u_mp.p_rvalid;
     wire        mp_wrbeat = mp_busy & u_ram.u_sdram.u_mp.cur_we
                         & (u_ram.u_sdram.u_mp.state == MP_S_RW);
@@ -819,13 +867,13 @@ module tb_pc98_boot;
 
     longint unsigned occ_cyc      = 0;   // cycles since init_done
     longint unsigned occ_refresh  = 0;
-    longint unsigned occ_own  [0:4] = '{0,0,0,0,0};
-    longint unsigned occ_wait [0:4] = '{0,0,0,0,0};
-    longint unsigned occ_trans[0:4] = '{0,0,0,0,0};
-    longint unsigned occ_rd   [0:4] = '{0,0,0,0,0};
-    longint unsigned occ_wr   [0:4] = '{0,0,0,0,0};
+    longint unsigned occ_own  [0:5] = '{0,0,0,0,0,0};
+    longint unsigned occ_wait [0:5] = '{0,0,0,0,0,0};
+    longint unsigned occ_trans[0:5] = '{0,0,0,0,0,0};
+    longint unsigned occ_rd   [0:5] = '{0,0,0,0,0,0};
+    longint unsigned occ_wr   [0:5] = '{0,0,0,0,0,0};
     longint unsigned occ_act        = 0;  // cycles paying ACT/PRE-miss
-    longint unsigned occ_actp [0:4] = '{0,0,0,0,0}; // same, per port
+    longint unsigned occ_actp [0:5] = '{0,0,0,0,0,0}; // same, per port
     // port A latency, per transaction: a_w = req-up cycles before ack,
     // a_d = grant-to-done cycles, hist over the sum.
     int unsigned     a_w = 0, a_d = 0;
@@ -849,7 +897,7 @@ module tb_pc98_boot;
             occ_cyc <= occ_cyc + 1;
             if (mp_refresh) occ_refresh <= occ_refresh + 1;
             if (mp_act)     occ_act     <= occ_act + 1;
-            for (int p = 0; p < 5; p++) begin
+            for (int p = 0; p < 6; p++) begin
                 if (mp_busy & (mp_grant == 3'(p)))   occ_own[p]  <= occ_own[p] + 1;
                 if (mp_reqs[p] & ~mp_acks[p])        occ_wait[p] <= occ_wait[p] + 1;
                 if (mp_acks[p])                      occ_trans[p]<= occ_trans[p] + 1;
@@ -914,7 +962,7 @@ module tb_pc98_boot;
         $display("  OCC cyc=%0d ref=%0d(%0d%%) | act/pre=%0d",
                  occ_cyc, occ_refresh,
                  occ_cyc ? int'(occ_refresh * 100 / occ_cyc) : 0, occ_act);
-        for (int p = 0; p < 5; p++)
+        for (int p = 0; p < 6; p++)
             $display("    port %0d: trans=%0d rd=%0d wr=%0d own=%0d(%0d%%) wait=%0d act=%0d",
                      p, occ_trans[p], occ_rd[p], occ_wr[p], occ_own[p],
                      occ_cyc ? int'(occ_own[p] * 100 / occ_cyc) : 0,

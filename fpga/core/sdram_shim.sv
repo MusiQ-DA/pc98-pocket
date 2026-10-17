@@ -159,7 +159,36 @@ module sdram_shim #(
     output logic                              e_ack,
     output logic                              e_rvalid,
     output logic [sdram_data_width-1:0]       e_rdata,
-    output logic                              e_done
+    output logic                              e_done,
+
+    // ---------------------------------------------------------------- port F
+    //
+    // The CPU's line cache (z86_cache): line fills as bursts of up to sixteen
+    // words, and write-through stores of one or two words. Like E it writes,
+    // and its payload is held for the whole transaction; f_wdata1 is the
+    // second word of a two-word store -- nothing longer is ever written, so
+    // the p_wcnt select below needs only the two. The caller keeps a burst
+    // inside one 512-word column.
+    input  wire                               f_req,      /* tie low if unused */
+    input  wire                               f_we,
+    input  wire  [ADDR_BITS_PUB-1:0]          f_addr,
+    input  wire  [LEN_BITS_PUB-1:0]           f_len,
+    input  wire  [sdram_data_width-1:0]       f_wdata0,
+    input  wire  [sdram_data_width-1:0]       f_wdata1,
+    output logic                              f_ack,
+    output logic                              f_rvalid,
+    output logic [sdram_data_width-1:0]       f_rdata,
+    output logic                              f_done,
+
+    // Port A write-commit snoop, for the cache to invalidate against: a_wr_v
+    // pulses for the one cycle in which a guest/DMA/loader write on port A
+    // has completed in the SDRAM, with that write's word address and length
+    // (words - 1: 0 or 1, port A writes a byte or a V30 word). addr_r/len_r
+    // are frozen while busy, so the pair is valid alongside the pulse. Port
+    // E (the floppy carve-out, never cached) is not snooped.
+    output logic                              a_wr_v,
+    output logic [ADDR_BITS_PUB-1:0]          a_wr_addr,
+    output logic [LEN_BITS_PUB-1:0]           a_wr_len
 );
 
     localparam int ADDR_BITS = sdram_col_width + sdram_row_width + sdram_bank_width;
@@ -171,7 +200,7 @@ module sdram_shim #(
     // word, so that is one transaction instead of sixteen.
     localparam int BURST_MAX = 16;
     localparam int LEN_BITS  = (BURST_MAX > 1) ? $clog2(BURST_MAX) : 1;
-    localparam int PORTS     = 5;
+    localparam int PORTS     = 6;
 
     // sdram_mp schedules its own refresh and has no cs pin: the SDRAM's chip
     // select is permanently asserted.
@@ -310,33 +339,35 @@ module sdram_shim #(
     // exactly one consumer in RAM.sv and this is what it is for.
     assign refresh_mode = stat_refresh | busy;
 
-    // Far end: sdram_mp, the five-port controller.
+    // Far end: sdram_mp, the six-port controller.
     // ---------------------------------------------------------------------
     logic init_done;
     logic [MASK_BITS-1:0] dqm_unused;
 
     // Port A is the guest (the request/flag handshake, one word at a time),
-    // port B the font fetch, C the CG window, D the display fetch, and E the
-    // RAM-image floppy server. Packed so the widths follow the controller's
-    // parameters.
-    wire [PORTS-1:0] mp_req  = {e_req,  d_req, c_req, b_req, req};
-    wire [PORTS-1:0] mp_we   = {e_we,   1'b0,  1'b0,  1'b0, we_r};
-    wire [PORTS-1:0][ADDR_BITS-1:0] mp_addr  = {e_addr, d_addr, c_addr, b_addr,
-                                                addr_r};
-    wire [PORTS-1:0][LEN_BITS-1:0]  mp_len   = {e_len,  d_len,  c_len,  b_len,
-                                                len_r};
+    // port B the font fetch, C the CG window, D the display fetch, E the
+    // RAM-image floppy server, and F the CPU cache. Packed so the widths
+    // follow the controller's parameters.
+    wire [PORTS-1:0] mp_req  = {f_req,  e_req,  d_req, c_req, b_req, req};
+    wire [PORTS-1:0] mp_we   = {f_we,   e_we,   1'b0,  1'b0,  1'b0, we_r};
+    wire [PORTS-1:0][ADDR_BITS-1:0] mp_addr  = {f_addr, e_addr, d_addr, c_addr,
+                                                b_addr, addr_r};
+    wire [PORTS-1:0][LEN_BITS-1:0]  mp_len   = {f_len,  e_len,  d_len,  c_len,
+                                                b_len,  len_r};
     // sdram_mp publishes the index of the word it wants in p_wcnt and consumes
     // p_wdata combinationally, so a two-word write is just this select. Ports
     // B, C and D are read-only; port E's write data is held by fdd_ramimg for
-    // the whole transaction, which is what the combinational consume needs.
+    // the whole transaction, which is what the combinational consume needs,
+    // and port F's two words are held by the cache the same way.
     wire [LEN_BITS-1:0] mp_wcnt;
     wire [PORTS-1:0][sdram_data_width-1:0] mp_wdata =
-        {e_wdata, {sdram_data_width{1'b0}}, {sdram_data_width{1'b0}},
+        {(mp_wcnt == LEN_BITS'(0)) ? f_wdata0 : f_wdata1,
+         e_wdata, {sdram_data_width{1'b0}}, {sdram_data_width{1'b0}},
          {sdram_data_width{1'b0}},
          (mp_wcnt == LEN_BITS'(0)) ? wdata_r : wdata_hi_r};
     wire [PORTS-1:0][MASK_BITS-1:0] mp_wmask =
         {{MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}},
-         {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}};
+         {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}};
     wire [PORTS-1:0] mp_ack, mp_done;
     wire [$clog2(PORTS)-1:0] mp_grant;
 
@@ -350,17 +381,28 @@ module sdram_shim #(
     assign d_done   = mp_done[3];
     assign e_ack    = mp_ack[4];
     assign e_done   = mp_done[4];
+    assign f_ack    = mp_ack[5];
+    assign f_done   = mp_done[5];
     // Read data is tagged with the owning port, so each master sees only its own.
     assign p_rvalid = mp_rvalid & (mp_grant == 3'd0);
     assign b_rvalid = mp_rvalid & (mp_grant == 3'd1);
     assign c_rvalid = mp_rvalid & (mp_grant == 3'd2);
     assign d_rvalid = mp_rvalid & (mp_grant == 3'd3);
     assign e_rvalid = mp_rvalid & (mp_grant == 3'd4);
+    assign f_rvalid = mp_rvalid & (mp_grant == 3'd5);
     assign p_rdata  = mp_rdata;
     assign b_rdata  = mp_rdata;
     assign c_rdata  = mp_rdata;
     assign d_rdata  = mp_rdata;
     assign e_rdata  = mp_rdata;
+    assign f_rdata  = mp_rdata;
+
+    // p_done[0] is a registered one-cycle pulse; we_r/addr_r/len_r only move
+    // when !busy, and busy drops on the same edge p_done is seen, so all three
+    // still describe the finished write in the pulse's cycle.
+    assign a_wr_v    = mp_done[0] & we_r;
+    assign a_wr_addr = ADDR_BITS_PUB'(addr_r);
+    assign a_wr_len  = LEN_BITS_PUB'(len_r);
 
     sdram_mp #(
         .PORTS       (PORTS),

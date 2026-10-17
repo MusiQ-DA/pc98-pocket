@@ -146,6 +146,24 @@ module RAM (
      output logic           ramimg_rvalid,
      output logic   [15:0]  ramimg_rdata,
      output logic           ramimg_done,
+    // The CPU cache's own port (controller port F): line-fill bursts and
+    // one/two-word write-through stores. Same word addressing as port A --
+    // one guest byte per SDRAM word.
+     input  logic           cachef_req,
+     input  logic           cachef_we,
+     input  logic   [23:0]  cachef_addr,
+     input  logic    [3:0]  cachef_len,
+     input  logic   [15:0]  cachef_wdata0,
+     input  logic   [15:0]  cachef_wdata1,
+     output logic           cachef_ack,
+     output logic           cachef_rvalid,
+     output logic   [15:0]  cachef_rdata,
+     output logic           cachef_done,
+    // Port A write commits (guest, DMA, loader), for the cache to snoop:
+    // one-cycle pulse, SDRAM word address, words - 1.
+     output logic           ram_wr_snoop_v,
+     output logic   [23:0]  ram_wr_snoop_addr,
+     output logic    [3:0]  ram_wr_snoop_len,
      input  logic           bios_shadow_flag,
     // Wait mode
     input   logic           wait_count_clk_en,
@@ -422,7 +440,20 @@ module RAM (
         .e_ack              (ramimg_ack),
         .e_rvalid           (ramimg_rvalid),
         .e_rdata            (ramimg_rdata),
-        .e_done             (ramimg_done)
+        .e_done             (ramimg_done),
+        .f_req              (cachef_req),
+        .f_we               (cachef_we),
+        .f_addr             (cachef_addr),
+        .f_len              (cachef_len),
+        .f_wdata0           (cachef_wdata0),
+        .f_wdata1           (cachef_wdata1),
+        .f_ack              (cachef_ack),
+        .f_rvalid           (cachef_rvalid),
+        .f_rdata            (cachef_rdata),
+        .f_done             (cachef_done),
+        .a_wr_v             (ram_wr_snoop_v),
+        .a_wr_addr          (ram_wr_snoop_addr),
+        .a_wr_len           (ram_wr_snoop_len)
     );
 
     // pf_beat_v may only mark words of a burst issued as a prefetch fill:

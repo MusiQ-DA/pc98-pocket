@@ -17,6 +17,26 @@
 module z86 (
     input               clk,            // the bridge's gated CPU clock
     input               reset,
+    input               clk_free,       // clk_chipset, ungated (z86_cache)
+    input               ce,             // clk ticks at this clk_free edge
+    input               cache_en,
+    input               bios_shadow,    // RAM.sv bios_shadow_flag
+    input               bios_protect,   // RAM.sv bios_protect_flag[1]
+
+    // ---- sdram_mp port F (see z86_cache) --------------------------------
+    output              f_req,
+    output              f_we,
+    output      [23:0]  f_addr,
+    output      [ 3:0]  f_len,
+    output      [15:0]  f_wdata0,
+    output      [15:0]  f_wdata1,
+    input               f_ack,
+    input               f_rvalid,
+    input       [15:0]  f_rdata,
+    input               f_done,
+    input               sn_v,           // port A write commits
+    input       [23:0]  sn_addr,
+    input       [ 3:0]  sn_len,
 
     // ---- Zet-shaped Wishbone master (see z86_wbif) ----------------------
     output      [19:1]  wb_adr_o,
@@ -196,9 +216,28 @@ reg [15:0] dbg_set_ip_val;
 reg dbg_set_addr;
 
 // cache and memory interface serves FETCH (instruction loads), EXECUTE (memory read) and WRITE-BACK (memory write)
-z86_wbif u_cache (
-    .clk                (clk),
+wire cache_busy;
+z86_cache u_cache (
+    .clk                (clk_free),
+    .ce                 (ce),
     .reset              (reset),
+    .cache_en           (cache_en),
+    .bios_shadow        (bios_shadow),
+    .bios_protect       (bios_protect),
+    .f_req              (f_req),
+    .f_we               (f_we),
+    .f_addr             (f_addr),
+    .f_len              (f_len),
+    .f_wdata0           (f_wdata0),
+    .f_wdata1           (f_wdata1),
+    .f_ack              (f_ack),
+    .f_rvalid           (f_rvalid),
+    .f_rdata            (f_rdata),
+    .f_done             (f_done),
+    .sn_v               (sn_v),
+    .sn_addr            (sn_addr),
+    .sn_len             (sn_len),
+    .busy               (cache_busy),
     .ld_addr            (ld_addr),
     .ld_req             (ld_req),
     .ld_ack             (ld_ack),
@@ -368,7 +407,7 @@ decode u_decode2 (
     .dbg_stopped        (dbg_stopped),
     .dbg_next_ip        (dbg_next_ip),
     .inta_req           (inta_req),
-    .bus_quiet          (~wr_valid & ~wb_cyc_o & ~wb_stb_o),
+    .bus_quiet          (~wr_valid & ~wb_cyc_o & ~wb_stb_o & ~cache_busy),
     .intra              (intra),
 
     .reg_rd             (dbg_reg_rd), 
@@ -378,6 +417,7 @@ decode u_decode2 (
 
 // EXECUTE: execute the instruction, with hardwired logic as fast path and microcode for complex instructions
 execute u_execute (
+    .hlt_wake           (wb_tgc_i),
     .clk                (clk),          
     .halted             (dbg_halted),
     .reset              (cpu_reset),

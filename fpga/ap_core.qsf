@@ -875,7 +875,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/z86/execute.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/z86/write_back.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/z86/regfile.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/z86/divider.sv
-set_global_assignment -name SYSTEMVERILOG_FILE core/z86/z86_wbif.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/z86/z86_cache.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/z86/z86.sv
 set_global_assignment -name SEARCH_PATH core/z86
 set_global_assignment -name SEARCH_PATH core/zet

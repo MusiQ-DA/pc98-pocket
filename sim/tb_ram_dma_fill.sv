@@ -371,7 +371,11 @@ module tb_ram_dma_fill;
         .ramimg_req(ri_req), .ramimg_we(1'b0), .ramimg_addr(ri_addr),
         .ramimg_len(4'd0), .ramimg_wdata(16'h0000),
         .ramimg_ack(ri_ack), .ramimg_rvalid(ri_rvalid),
-        .ramimg_rdata(ri_rdata), .ramimg_done(ri_done)
+        .ramimg_rdata(ri_rdata), .ramimg_done(ri_done),
+        .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
+        .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
+        .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
+        .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len()
     );
     assign memory_access_ready = ram_ready_w;
 

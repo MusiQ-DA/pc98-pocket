@@ -298,7 +298,8 @@ def ref(code, wlog=None):
 def dut(code, path, lat):
     open(path + '.hex', 'w').write(''.join(f'{b:02x}\n' for b in code))
     r = subprocess.run([LOOP, '+org=1000', f'+prog={path}.hex', f'+lat={lat}', f'+dump={path}.dump']
-                       + ([f'+irq={IRQ}'] if IRQ else []) + (['+latrand'] if os.environ.get('LATRAND') else []),
+                       + ([f'+irq={IRQ}'] if IRQ else []) + (['+latrand'] if os.environ.get('LATRAND') else [])
+                       + os.environ.get('EXTRA', '').split(),
                        capture_output=True, text=True)
     if 'TIMEOUT' in r.stdout:
         return None

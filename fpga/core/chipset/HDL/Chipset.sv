@@ -268,7 +268,21 @@ module CHIPSET #(
         output  logic           ramimg_ack,
         output  logic           ramimg_rvalid,
         output  logic   [15:0]  ramimg_rdata,
-        output  logic           ramimg_done
+        output  logic           ramimg_done,
+        // CPU cache port (sdram port F) and the port-A write-commit snoop.
+        input   logic           cachef_req,
+        input   logic           cachef_we,
+        input   logic   [23:0]  cachef_addr,
+        input   logic   [3:0]   cachef_len,
+        input   logic   [15:0]  cachef_wdata0,
+        input   logic   [15:0]  cachef_wdata1,
+        output  logic           cachef_ack,
+        output  logic           cachef_rvalid,
+        output  logic   [15:0]  cachef_rdata,
+        output  logic           cachef_done,
+        output  logic           ram_wr_snoop_v,
+        output  logic   [23:0]  ram_wr_snoop_addr,
+        output  logic   [3:0]   ram_wr_snoop_len
 
     );
 
@@ -706,6 +720,19 @@ module CHIPSET #(
         .ramimg_rvalid                      (ramimg_rvalid),
         .ramimg_rdata                       (ramimg_rdata),
         .ramimg_done                        (ramimg_done),
+        .cachef_req                         (cachef_req),
+        .cachef_we                          (cachef_we),
+        .cachef_addr                        (cachef_addr),
+        .cachef_len                         (cachef_len),
+        .cachef_wdata0                      (cachef_wdata0),
+        .cachef_wdata1                      (cachef_wdata1),
+        .cachef_ack                         (cachef_ack),
+        .cachef_rvalid                      (cachef_rvalid),
+        .cachef_rdata                       (cachef_rdata),
+        .cachef_done                        (cachef_done),
+        .ram_wr_snoop_v                     (ram_wr_snoop_v),
+        .ram_wr_snoop_addr                  (ram_wr_snoop_addr),
+        .ram_wr_snoop_len                   (ram_wr_snoop_len),
         .clock                              (sdram_clock),
         .reset                              (sdram_reset),
         .enable_sdram                       (enable_sdram),
