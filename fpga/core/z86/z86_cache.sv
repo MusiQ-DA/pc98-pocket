@@ -158,8 +158,8 @@ module z86_cache #(
     // Tag and data RAM (M10K): one read port each for the lookup, one write
     // port each. Tags are {valid, tag}.
     // ------------------------------------------------------------------
-    reg  [TAG_BITS:0]    t_q;
-    reg  [127:0]         d_q;
+    wire [TAG_BITS:0]    t_q;
+    wire [127:0]         d_q;
 
     reg                  t_we;
     reg  [IDX_BITS-1:0]  t_wa;
@@ -639,10 +639,11 @@ module z86_cache #(
 
 endmodule
 
-// Simple dual-port M10K: one write port with byte enables, one registered
-// read port. Written the way Quartus's RAM template has it, as a module of
-// its own, so inference sees nothing but the memory. Starts all-zero (the
-// tags' valid bits).
+// Simple dual-port M10K: one write port with byte enables, one read port
+// whose address is registered (data the cycle after). Quartus gets the
+// megafunction itself -- written behaviourally, the 16 KB array was not
+// inferred and the fit ran out of logic -- and simulation the same thing
+// as a plain array. Both start all-zero (the tags' valid bits).
 module z86_cache_ram #(
     parameter int AW = 10,
     parameter int BYTES = 16,
@@ -654,18 +655,54 @@ module z86_cache_ram #(
     input  wire [BYTES-1:0]      be,
     input  wire [BYTES*BW-1:0]   wdata,
     input  wire [AW-1:0]         raddr,
-    output reg  [BYTES*BW-1:0]   q
+    output wire [BYTES*BW-1:0]   q
 );
-    (* ramstyle = "M10K, no_rw_check" *)
+`ifdef VERILATOR
     reg [BYTES-1:0][BW-1:0] ram [0:(1<<AW)-1];
+    reg [BYTES*BW-1:0] q_r;
     integer i;
     initial for (i = 0; i < (1 << AW); i = i + 1) ram[i] = '0;
     always @(posedge clk) begin
         if (we)
             for (int b = 0; b < BYTES; b++)
                 if (be[b]) ram[waddr][b] <= wdata[b*BW +: BW];
-        q <= ram[raddr];
+        q_r <= ram[raddr];
     end
+    assign q = q_r;
+`else
+    altsyncram #(
+        .operation_mode                     ("DUAL_PORT"),
+        .intended_device_family             ("Cyclone V"),
+        .ram_block_type                     ("M10K"),
+        .width_a                            (BYTES * BW),
+        .widthad_a                          (AW),
+        .numwords_a                         (1 << AW),
+        .width_byteena_a                    (BYTES),
+        .byte_size                          (BW),
+        .width_b                            (BYTES * BW),
+        .widthad_b                          (AW),
+        .numwords_b                         (1 << AW),
+        .address_reg_b                      ("CLOCK0"),
+        .outdata_reg_b                      ("UNREGISTERED"),
+        .outdata_aclr_b                     ("NONE"),
+        .read_during_write_mode_mixed_ports ("DONT_CARE"),
+        .power_up_uninitialized             ("FALSE"),
+        .lpm_type                           ("altsyncram")
+    ) u_ram (
+        .clock0     (clk),
+        .wren_a     (we),
+        .address_a  (waddr),
+        .data_a     (wdata),
+        .byteena_a  (be),
+        .address_b  (raddr),
+        .q_b        (q),
+        .aclr0 (1'b0), .aclr1 (1'b0), .addressstall_a (1'b0),
+        .addressstall_b (1'b0), .byteena_b (1'b1), .clock1 (1'b1),
+        .clocken0 (1'b1), .clocken1 (1'b1), .clocken2 (1'b1),
+        .clocken3 (1'b1), .data_b ({(BYTES*BW){1'b1}}), .eccstatus (),
+        .q_a (), .rden_a (1'b1), .rden_b (1'b1), .wren_b (1'b0)
+    );
+`endif
 endmodule
 
 `default_nettype wire
