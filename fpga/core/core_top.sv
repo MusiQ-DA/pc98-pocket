@@ -1241,6 +1241,7 @@ module core_top (
     reg  [15:0]  jtag_dbg_ax   = 16'h0;
     reg          jtag_dbg_stop = 1'b0;
     wire         z86_dbg_stopped;
+    wire         z86_halted;
     wire [15:0]  z86_dbg_next_ip;
     reg  [223:0] v30_dbg_regs = '0;
     reg          z86_snap_held = 1'b0;
@@ -1513,9 +1514,13 @@ module core_top (
     reg          trig_hit_d = 1'b0;
     reg  [19:0]  tlog_pc_d = 20'd0;
     reg          tlog_all = 1'b0, tlog_trap = 1'b0, tlog_frozen = 1'b0;
+    // Also a trap: HLT with IF clear (nothing can wake it -- a crash that
+    // ran into an F4 in data) and OUT 0F0h (the CPU reset a crash ends in).
     wire         pc_wild = (pc_now < 20'h00400) ||
                            (pc_now >= 20'hA0000 && pc_now < 20'hD0000) ||   // VRAM, nothing
-                           (pc_now >= 20'hE0000 && pc_now < 20'hE8000);     // (D0000: SCSI ROM)
+                           (pc_now >= 20'hE0000 && pc_now < 20'hE8000) ||   // (D0000: SCSI ROM)
+                           (z86_halted && !z86_dbg_regs[217]) ||           // HLT, IF=0
+                           f0_port_write;
     wire         tlog_ev = tlog_all ? (pc_now != tlog_pc_d) : (trig_hit && !trig_hit_d);
     always_ff @(posedge clk_chipset) begin
         trig_hit_d <= trig_hit;
@@ -3423,7 +3428,7 @@ module core_top (
         .dbg_stop  (jtag_dbg_stop),
         .dbg_stopped (z86_dbg_stopped),
         .dbg_next_ip (z86_dbg_next_ip),
-        .dbg_halted()
+        .dbg_halted(z86_halted)
     );
     assign zwb_nmia  = 1'b0;
     assign zet_fault = 1'b0;
