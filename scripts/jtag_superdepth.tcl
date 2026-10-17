@@ -81,7 +81,9 @@ for {set it 0} {$it < $N} {incr it} {
   set pc [lindex $pcs 0]
   if {[llength [lsort -unique $ingame]] < 2} { set alive 0 }
   set quick_bad [expr {!$alive || $own != 0x2551}]
-  # PLAY=<s>: keep playing with random arrow / space / return presses and
+  # PLAY=<s>: keep playing with random left/right / Z / X / space / return
+  # presses (never up/down: after a game over the title menu takes them, and
+  # up/down + Z picks its EXIT entry -- a legitimate return to DOS) and
   # count the disk BIOS giving up on an interrupt (FFA57, the timeout exit
   # of its FF97C wait -- the game polls the empty 2HD drive, and a lost FDC
   # interrupt costs ~40 s of frozen screen per call). Any timeout fails.
@@ -89,7 +91,7 @@ for {set it 0} {$it < $N} {incr it} {
   if {$PLAY > 0 && !$quick_bad} {
     wr 6 [expr {0x80000000 | 0xFFA57}]
     set t0 [clock milliseconds]
-    set keys {0x3A 0x3B 0x3C 0x3D 0x34 0x1C 0x29 0x2A}
+    set keys {0x3B 0x3C 0x34 0x1C 0x29 0x2A}
     while {[clock milliseconds] - $t0 < $PLAY*1000} {
       set k [lindex $keys [expr {int(rand()*[llength $keys])}]]
       wr 1 $k; after [expr {60 + int(rand()*400)}]; wr 1 [expr {$k | 0x80}]
@@ -98,8 +100,10 @@ for {set it 0} {$it < $N} {incr it} {
     set tmo [expr {[rd 0x67] & 0xFFFF}]
     wr 6 0x0FFFF0
     set ingame {}
+    set pcs2 {}
     for {set q 0} {$q < 60 && [llength [lsort -unique $ingame]] < 2} {incr q} {
       set p [expr {[rd 0x18] & 0xFFFFF}]
+      lappend pcs2 $p
       if {$p == 0xFFFF0} { set alive 0 }
       if {$p >= 0x25500 && $p < 0x40000} { lappend ingame $p }
       after 47
@@ -110,6 +114,10 @@ for {set it 0} {$it < $N} {incr it} {
   if {$bad} {incr fails}
   puts [format "it=%2d pre=%04X own=%04X c193=%04X pc=%05X tmo=%d %s" $it $pre $own $c193 $pc $tmo [expr {$bad ? "FAIL" : "ok"}]]
   if {$bad} { set l ""; foreach p $pcs { append l [format " %05X" $p] }; puts "   pcs:$l" }
+  if {$bad && [info exists pcs2]} { set l ""; foreach p [lrange [lsort -unique $pcs2] 0 30] { append l [format " %05X" $p] }; puts "   post:$l" }
+  if {[info exists pcs2]} { unset pcs2 }
+  # STOPFAIL=1: leave a failed trial on screen for inspection
+  if {$bad && [info exists ::env(STOPFAIL)]} break
   flush stdout
 }
 puts "fails=$fails/$N"
