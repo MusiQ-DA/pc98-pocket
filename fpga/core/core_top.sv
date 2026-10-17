@@ -1502,7 +1502,8 @@ module core_top (
     // Write slot 0x0e = {.., trap, all, 2'b0, index[5:0]}: 'all' logs every
     // change of the fetch PC instead (the last 64 branches with registers);
     // 'trap' freezes the log and pc_hist and stops z86 the moment the PC
-    // enters a region no code lives in (IVT 000-3FF, A0000-E7FFF), so a
+    // enters a region no code lives in (IVT 000-3FF, A0000-CFFFF,
+    // E0000-E7FFF -- D0000-DFFFF holds the SCSI option ROM), so a
     // crash leaves the path into it. Reads 0x60-0x65 return the entry (low
     // word first), 0x67 the count.
     (* ramstyle = "M10K" *) reg [191:0] tlog [0:63];
@@ -1513,7 +1514,8 @@ module core_top (
     reg  [19:0]  tlog_pc_d = 20'd0;
     reg          tlog_all = 1'b0, tlog_trap = 1'b0, tlog_frozen = 1'b0;
     wire         pc_wild = (pc_now < 20'h00400) ||
-                           (pc_now >= 20'hA0000 && pc_now < 20'hE8000);
+                           (pc_now >= 20'hA0000 && pc_now < 20'hD0000) ||   // VRAM, nothing
+                           (pc_now >= 20'hE0000 && pc_now < 20'hE8000);     // (D0000: SCSI ROM)
     wire         tlog_ev = tlog_all ? (pc_now != tlog_pc_d) : (trig_hit && !trig_hit_d);
     always_ff @(posedge clk_chipset) begin
         trig_hit_d <= trig_hit;
