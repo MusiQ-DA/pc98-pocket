@@ -117,8 +117,19 @@ module tb_z86_loop;
         void'($value$plusargs("irq=%d", irq_period));
         void'($value$plusargs("vec=%h", irq_vec));
     end
+    // +irqclr: an OUT to port 70h/71h withdraws a pending INTR, the way a
+    // PIT channel-0 write clears the PC-98 master's IRR0 (and a mask write
+    // drops INT). An acknowledge with INTR already low is what an 8259
+    // answers with IRQ7's vector -- counted as spurious; the CPU must sample
+    // INTR at an instruction boundary, after that OUT, and never ask.
+    int spurious_n = 0;
+    logic irqclr = 1'b0;
+    initial irqclr = $test$plusargs("irqclr");
     always @(posedge clk) begin
-        if (tgc_o) begin intr <= 1'b0; irq_n++; end
+        if (tgc_o) begin
+            if (!intr) spurious_n++;
+            intr <= 1'b0; irq_n++;
+        end else if (irqclr && stb && ack && we && tga && adr == 19'h38) intr <= 1'b0;
         else if (!reset && irq_period != 0) begin
             irq_cnt <= irq_cnt + 1;
             if (irq_cnt + 1 >= irq_period) begin irq_cnt <= 0; intr <= 1'b1; end
@@ -150,7 +161,7 @@ module tb_z86_loop;
             reset <= 1'b0;
         end else if (halted || (stop_pc != 20'hFFFFF && pc == stop_pc)) begin
             if (!halted) $display("STOP at %05x", pc);
-            if (irq_period != 0) $display("interrupts taken: %0d", irq_n);
+            if (irq_period != 0) $display("interrupts taken: %0d spurious: %0d", irq_n, spurious_n);
             $display("n=%0d lat=%0d: %0d clocks, %0d reads, %0d writes -> %0.1f clk/iter",
                      n, lat, cyc_n, rd_n, wr_n, real'(cyc_n) / n);
             for (int a = 0; a < 20'h20000; a += 2)
@@ -173,7 +184,7 @@ module tb_z86_loop;
             $finish;
         end
         if (cyc_n > 10_000_000) begin
-            $display("TIMEOUT pc=%05x reads=%0d interrupts=%0d", pc, rd_n, irq_n);
+            $display("TIMEOUT pc=%05x reads=%0d interrupts=%0d spurious: %0d", pc, rd_n, irq_n, spurious_n);
             $finish;
         end
     end

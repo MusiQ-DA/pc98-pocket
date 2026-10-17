@@ -44,4 +44,17 @@ for lat in 1 4; do
   got=$("$OUT/loop" +org=400 +prog=sim/z86_tests/irq_f0reset.hex +lat=$lat +f0reset | sed -n 's/^mem 0600: //p')
   [ "${got:0:2}" = "77" ] && echo "ok   f0 reset before ack lat=$lat" || { echo "FAIL f0 reset before ack lat=$lat: $got"; fail=1; }
 done
+# Interrupt acknowledge: one INTA per handler run, none after an OUT has
+# withdrawn the request (+irqclr). The vector used to outlive its injection,
+# so the next INTR ran the previous handler again with no INTA at all.
+ibad=0
+for a in "" +irqclr; do for irq in 337 523 1009; do for lat in 1 4; do
+  o=$("$OUT/loop" +org=400 +prog=sim/z86_tests/irq_withdraw.hex +lat=$lat +irq=$irq $a)
+  ta=$(echo "$o" | sed -n 's/interrupts taken: \([0-9]*\) spurious.*/\1/p')
+  sp=$(echo "$o" | sed -n 's/.*spurious: \([0-9]*\)$/\1/p' | head -1)
+  w=$(echo "$o" | sed -n 's/^mem 0600: \(..\) \(..\) \(..\) \(..\).*/\2\1 \4\3/p')
+  if [ -z "$ta" ] || [ "$sp" != 0 ] || [ "$((16#${w%% *}))" != "$ta" ] || [ "${w##* }" != 00ac ]; then
+    echo "FAIL irq_withdraw $a irq=$irq lat=$lat: inta=$ta spurious=$sp mem=$w"; ibad=1; fi
+done; done; done
+[ $ibad = 0 ] && echo "ok   interrupt acknowledge (irq_withdraw)" || fail=1
 exit $fail

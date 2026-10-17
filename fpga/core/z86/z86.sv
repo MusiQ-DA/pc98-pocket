@@ -368,6 +368,7 @@ decode u_decode2 (
     .dbg_stopped        (dbg_stopped),
     .dbg_next_ip        (dbg_next_ip),
     .inta_req           (inta_req),
+    .bus_quiet          (~wr_valid & ~wb_cyc_o & ~wb_stb_o),
     .intra              (intra),
 
     .reg_rd             (dbg_reg_rd), 

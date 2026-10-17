@@ -93,6 +93,7 @@ module decode (
     output     [15:0] dbg_next_ip,
     input             inta_pending,     // wb_tgc_o out or the vector held: the 8259 is acknowledged
     output            inta_req,
+    input             bus_quiet,        // no store waiting in EX's output or on the bus
 
     // debug interface (only for verilator)
     input             reg_rd,
@@ -126,8 +127,12 @@ reg nmi_latched, intr_latched;
 reg int_shadow;
 wire int_pending = (nmi_latched | (intr_latched & pic_vec_valid)) & ~int_shadow;
 wire pipe_drained = ~ex_valid & ~sb0_valid & ~sb1_valid;
+// An admitted INTR holds decode until the boundary has been sampled and the
+// 8259 acknowledged (see int_sample below).
+wire intr_wait = intr_latched & ~nmi_latched & ~pic_vec_valid & ~int_shadow;
 assign id_ready = (~ex_valid | ex_ready) & (~id_valid |~ii.is_two_cycles | cycle_2nd) & ~hazard & (~id_mem_rd | rd_ready)
                 & (~int_pending | pipe_drained)    // drain before an interrupt, see below
+                & ~intr_wait
                 & ~dbg_stop;
 assign dbg_stopped = dbg_stop & pipe_drained & id_valid;
 assign dbg_next_ip = ii.ip_this;
@@ -159,7 +164,22 @@ wire ex_writes_if = ex_valid & ((ex_opcode == 8'hFA) | (ex_opcode == 8'hFB) |
                                 (ex_opcode == 8'hCC) | (ex_opcode == 8'hCD) |
                                 (ex_opcode == 8'hCE));
 wire if_ok = reg_f[9] & ~ex_writes_if & ~start_int_service;   // reg_f[9] = IF
-assign inta_req = intr_latched & ~nmi_latched & if_ok;
+// The 8086 samples INTR at an instruction boundary and acknowledges at once,
+// so an OUT that withdraws the request (a PIT channel-0 write clearing the
+// PC-98 master's IRR0, a mask write) is never followed by INTA. Here an
+// admitted INTR first stops decode; the acknowledge waits for the pipeline
+// to drain and the last store to leave the bus, then a few clocks for the
+// 8259's INT to follow that store, and goes out only if INTR and IF still
+// stand. Acknowledging a request already withdrawn made the 8259 answer with
+// IRQ7's vector: the BIOS's INT 0Fh spurious path then EOIs whatever else is
+// in service.
+wire int_boundary = pipe_drained & bus_quiet & ~int_shadow & ~start_int_service;
+reg  [1:0] int_settle;
+always @(posedge clk)
+    if (reset || ~intr_wait || ~int_boundary) int_settle <= 2'd0;
+    else if (int_settle != 2'd3)              int_settle <= int_settle + 2'd1;
+wire int_sample = intr_wait & int_boundary & (int_settle == 2'd3) & ~inta_pending;
+assign inta_req = int_sample & intr & reg_f[9];
 
 // recognize simple POP (no ModR/M)
 wire id_pop_r16 = (id_opcode >= 8'h58) && (id_opcode <= 8'h5F);
@@ -713,36 +733,31 @@ always @(posedge clk) begin
     if (reset) begin
         nmi_latched  <= 1'b0;
         intr_latched <= 1'b0;
+        intra        <= 1'b0;
     end
     else begin
         // latch rising edge
         nmi_latched  <= nmi_latched  | nmi;
-        // Admit INTR only with IF open at a boundary, and drop an admitted
-        // request again if IF closes before the 8259 has been acknowledged.
-        intr_latched <= (intr_latched | (intr & if_ok & ~intra))
-                      & (if_ok | inta_pending);
+        // Admit INTR only with IF open, drop it again if IF closes before
+        // the 8259 has been acknowledged, or if the boundary sample finds
+        // the request withdrawn.
+        intr_latched <= (intr_latched | (intr & if_ok))
+                      & (if_ok | inta_pending)
+                      & ~(int_sample & ~(intr & reg_f[9]));
 
         // cleared when we *start* servicing
-        if (start_int_service && ~br_taken && int_is_nmi) begin
+        if (start_int_service && ~br_taken && int_is_nmi)
             nmi_latched <= 1'b0;
-            intra <= 1'b1;
-        end
-        if (start_int_service && ~br_taken && !int_is_nmi) begin
+        if (start_int_service && ~br_taken && !int_is_nmi)
             intr_latched <= 1'b0;
-            intra <= 1'b1;
-        end
-
-        if (~nmi && ~intr) begin
-            intra <= 1'b0;
-        end
-        // PC-98 port: an 8259 keeps INTR up while another request is
-        // pending, so waiting for INTR to fall left intra stuck and no
-        // interrupt was ever taken again (the BIOS hung in its VSYNC wait at
-        // FE299 with IRQ2 pending and unmasked). The INT sequence clearing
-        // IF is the end of this acknowledge; IRET/STI re-open the latch.
-        if (intra && !IF && !start_int_service) begin
-            intra <= 1'b0;
-        end
+        // intra: one clock per injected INTR, retiring the vector z86.sv
+        // holds. It used to be set here and then cleared by a later
+        // `if (~nmi && ~intr)` in the same block -- and the 8259 has dropped
+        // INT by the time an acknowledged interrupt is injected, so intra
+        // never rose, the vector stayed valid, and the next INTR was injected
+        // straight away with the previous interrupt's vector and no INTA at
+        // all (tb_z86_loop +irq: every handler ran twice per acknowledge).
+        intra <= start_int_service & ~br_taken & ~int_is_nmi;
     end
 end
 

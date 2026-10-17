@@ -7,7 +7,10 @@
 # the title screen, then a START keypress (keyboard scan 1C = Enter) and
 # 12 s of play. Pass = the game's MCB at 2550:0001 owns itself (2551) and
 # its blitter word at DEPTH+C193 holds one of its live values -- a failed
-# START leaves garbage there. P=0x07 is turbo, P=0 10 MHz.
+# START leaves garbage there. P=0x07 is turbo, P=0x05 10 MHz (P=0 keeps the
+# OSD speed, which a JTAG-loaded image never set).
+# PLAY=<s> then plays on with random keys and fails any disk-BIOS interrupt
+# timeout (see below).
 init
 irscan fpga.tap 0x0e
 drscan fpga.tap 64 0 -endstate idle
@@ -45,6 +48,7 @@ proc rdabs {off} {
 }
 proc w16 {a} { return [expr {[rdabs $a] | ([rdabs [expr {$a+1}]]<<8)}] }
 set N $::env(N); set W $::env(W); set P [expr {[info exists ::env(P)] ? $::env(P) : 0}]
+set PLAY [expr {[info exists ::env(PLAY)] ? $::env(PLAY) : 0}]
 # After a JTAG reflash APF does not re-stream the slots; declare them
 # present (core_top slot 0x0c) so the guest leaves reset.
 wr 0x0c 1
@@ -76,9 +80,35 @@ for {set it 0} {$it < $N} {incr it} {
   }
   set pc [lindex $pcs 0]
   if {[llength [lsort -unique $ingame]] < 2} { set alive 0 }
-  set bad [expr {!$alive || $own != 0x2551 || ($c193 != 0x20 && $c193 != 0x10 && $c193 != 0x1122)}]
+  set quick_bad [expr {!$alive || $own != 0x2551}]
+  # PLAY=<s>: keep playing with random arrow / space / return presses and
+  # count the disk BIOS giving up on an interrupt (FFA57, the timeout exit
+  # of its FF97C wait -- the game polls the empty 2HD drive, and a lost FDC
+  # interrupt costs ~40 s of frozen screen per call). Any timeout fails.
+  set tmo 0
+  if {$PLAY > 0 && !$quick_bad} {
+    wr 6 [expr {0x80000000 | 0xFFA57}]
+    set t0 [clock milliseconds]
+    set keys {0x3A 0x3B 0x3C 0x3D 0x34 0x1C 0x29 0x2A}
+    while {[clock milliseconds] - $t0 < $PLAY*1000} {
+      set k [lindex $keys [expr {int(rand()*[llength $keys])}]]
+      wr 1 $k; after [expr {60 + int(rand()*400)}]; wr 1 [expr {$k | 0x80}]
+      after [expr {20 + int(rand()*200)}]
+    }
+    set tmo [expr {[rd 0x67] & 0xFFFF}]
+    wr 6 0x0FFFF0
+    set ingame {}
+    for {set q 0} {$q < 60 && [llength [lsort -unique $ingame]] < 2} {incr q} {
+      set p [expr {[rd 0x18] & 0xFFFFF}]
+      if {$p == 0xFFFF0} { set alive 0 }
+      if {$p >= 0x25500 && $p < 0x40000} { lappend ingame $p }
+      after 47
+    }
+    if {[llength [lsort -unique $ingame]] < 2} { set alive 0 }
+  }
+  set bad [expr {!$alive || $own != 0x2551 || ($c193 != 0x20 && $c193 != 0x10 && $c193 != 0x1122) || $tmo != 0}]
   if {$bad} {incr fails}
-  puts [format "it=%2d pre=%04X own=%04X c193=%04X pc=%05X %s" $it $pre $own $c193 $pc [expr {$bad ? "FAIL" : "ok"}]]
+  puts [format "it=%2d pre=%04X own=%04X c193=%04X pc=%05X tmo=%d %s" $it $pre $own $c193 $pc $tmo [expr {$bad ? "FAIL" : "ok"}]]
   if {$bad} { set l ""; foreach p $pcs { append l [format " %05X" $p] }; puts "   pcs:$l" }
   flush stdout
 }
