@@ -532,11 +532,18 @@ module fdd_ramimg #(
                     st <= S_WR_REQ;
                 end
                 S_WR_REQ: begin
+                    // No request-drop abort here: the byte is already popped
+                    // and must land. The controller leaves its write wait the
+                    // moment the FIFO is empty -- i.e. two clocks after the
+                    // LAST pop, while that byte's write is still waiting for
+                    // ack -- so an abort here dropped byte 1023 every sector,
+                    // and worse, sdram_mp had already latched the request and
+                    // committed it with sd_wdata gone to 0.
                     wd <= wd + 16'd1;
                     if (sd_ack) begin
                         wd <= 16'd0;
                         st <= S_WR_DONE;
-                    end else if (&wd || !fdd_request[1]) begin
+                    end else if (&wd) begin
                         st <= S_IDLE;
                     end
                 end
@@ -545,8 +552,14 @@ module fdd_ramimg #(
                     if (sd_done) begin
                         wd       <= 16'd0;
                         beat_cnt <= beat_cnt + 11'd1;
-                        if (beat_cnt == 11'd1023) st <= S_IDLE;
-                        else                      st <= S_WR_POP;
+                        // The request-drop check lives here instead: between
+                        // bytes, so a command that ends early (a format's
+                        // 512-pop fill, a controller reset) stops the drain
+                        // without popping a FIFO that is no longer ours.
+                        if (beat_cnt == 11'd1023 || !fdd_request[1])
+                            st <= S_IDLE;
+                        else
+                            st <= S_WR_POP;
                     end else if (&wd) begin
                         st <= S_IDLE;
                     end
