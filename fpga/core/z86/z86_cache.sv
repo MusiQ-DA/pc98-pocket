@@ -158,8 +158,6 @@ module z86_cache #(
     // Tag and data RAM (M10K): one read port each for the lookup, one write
     // port each. Tags are {valid, tag}.
     // ------------------------------------------------------------------
-    reg  [TAG_BITS:0]    tmem [0:LINES-1];
-    reg  [15:0][7:0]     dmem [0:LINES-1];
     reg  [TAG_BITS:0]    t_q;
     reg  [127:0]         d_q;
 
@@ -172,19 +170,12 @@ module z86_cache #(
     reg  [127:0]         d_wd;
     reg  [IDX_BITS-1:0]  look_idx;      // combinational: what to read this edge
 
-    integer ii;
-    initial for (ii = 0; ii < LINES; ii = ii + 1) tmem[ii] = '0;
-
-    always @(posedge clk) begin
-        if (t_we) tmem[t_wa] <= t_wd;
-        t_q <= tmem[look_idx];
-    end
-    always @(posedge clk) begin
-        if (d_we)
-            for (int b = 0; b < 16; b++)
-                if (d_be[b]) dmem[d_wa][b] <= d_wd[8*b +: 8];
-        d_q <= dmem[look_idx];
-    end
+    z86_cache_ram #(.AW(IDX_BITS), .BYTES(1), .BW(TAG_BITS + 1)) u_tags (
+        .clk(clk), .we(t_we), .waddr(t_wa), .be(1'b1), .wdata(t_wd),
+        .raddr(look_idx), .q(t_q));
+    z86_cache_ram #(.AW(IDX_BITS), .BYTES(16), .BW(8)) u_data (
+        .clk(clk), .we(d_we), .waddr(d_wa), .be(d_be), .wdata(d_wd),
+        .raddr(look_idx), .q(d_q));
 
     // ------------------------------------------------------------------
     // State
@@ -646,6 +637,35 @@ module z86_cache #(
 
     wire _unused = &{1'b0, ld_a1, rd_a1};
 
+endmodule
+
+// Simple dual-port M10K: one write port with byte enables, one registered
+// read port. Written the way Quartus's RAM template has it, as a module of
+// its own, so inference sees nothing but the memory. Starts all-zero (the
+// tags' valid bits).
+module z86_cache_ram #(
+    parameter int AW = 10,
+    parameter int BYTES = 16,
+    parameter int BW = 8
+) (
+    input  wire                  clk,
+    input  wire                  we,
+    input  wire [AW-1:0]         waddr,
+    input  wire [BYTES-1:0]      be,
+    input  wire [BYTES*BW-1:0]   wdata,
+    input  wire [AW-1:0]         raddr,
+    output reg  [BYTES*BW-1:0]   q
+);
+    (* ramstyle = "M10K, no_rw_check" *)
+    reg [BYTES-1:0][BW-1:0] ram [0:(1<<AW)-1];
+    integer i;
+    initial for (i = 0; i < (1 << AW); i = i + 1) ram[i] = '0;
+    always @(posedge clk) begin
+        if (we)
+            for (int b = 0; b < BYTES; b++)
+                if (be[b]) ram[waddr][b] <= wdata[b*BW +: BW];
+        q <= ram[raddr];
+    end
 endmodule
 
 `default_nettype wire
