@@ -98,7 +98,8 @@ enum {
     SET_DEL_BS,
     SET_EXTROM,
     // System -- appended above SET_COUNT (version 10), so older blobs keep
-    // the compiled default (On). The menu row is in items_system.
+    // the compiled default (On, index 0; the FPGA inverts the bit). The menu
+    // row is in items_system.
     SET_CPU_CACHE,
     SET_COUNT // new settings append above: the save blob stores values by index
 };
@@ -148,6 +149,9 @@ static const char *const opt_boot_dev[] = { "Standard", "640KB FDD", "1MB FDD", 
 static const char *const opt_ram_sz[] = { "640 KB", "128 KB", "256 KB", "384 KB", "512 KB" };
 static const char *const opt_off_on[] = { "Off", "On" };
 static const char *const opt_extrom[] = { "Absent", "Present" };
+// On first: an unwritten osd_settings byte is 0, and firmware older than this
+// row never writes index 20 -- 0 has to mean the cache stays on.
+static const char *const opt_cache[] = { "On", "Off" };
 
 static const char *const opt_dpad[] = { "Numpad", "Numpad w/ Diag.", "Arrows", "WASD", "HJKL",
     "HJKL w/ YUBN" };
@@ -191,7 +195,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_ram_sz),         // SET_RAM_SZ -- index 0, like an unwritten slot, means 640 KB
     SETTING(opt_off_on),         // SET_DEL_BS
     SETTING_D(opt_extrom, 1),    // SET_EXTROM
-    SETTING_D(opt_off_on, 1),    // SET_CPU_CACHE -- z86's 16 KB cache, default On
+    SETTING(opt_cache),          // SET_CPU_CACHE -- z86's 16 KB cache; index 0 is On
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
