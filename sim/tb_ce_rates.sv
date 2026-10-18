@@ -51,7 +51,9 @@ module tb_ce_rates;
 
     // What each index is meant to be. A posedge of the CPU pin clock per
     // measured posedge CE, so this is the CPU's clock rate.
-    real want [4] = '{4.9152, 9.8304, 19.6608, 21.4773};
+    // Index 0 ("286 8MHz") paces its bus at the 10 MHz step like index 1;
+    // core_top's throttle, not the CE train, sets the two apart.
+    real want [4] = '{9.8304, 9.8304, 19.6608, 21.4773};
     localparam string WHICH = "PC-98 (2.4576 MHz family)";
 
     // 0.1 per cent: a phase accumulator cannot land exactly and does not need
