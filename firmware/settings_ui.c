@@ -100,12 +100,11 @@ enum {
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
-// The four speeds, as the PC-98 machines they stand for (CPUBENCH 0.980 ratio,
-// docs/ref/pc98-performance-baselines.md): a V30 10 MHz (VM11/UV11, 3.11) for
-// titles too fast-sensitive for a 286 -- the V30 switch real 286/386 boxes
-// had -- a 286 10 MHz (VX21/UX21, 5.69), a 386 (RA21/DA, ~13.5), and the
-// unthrottled maximum. core_top's throttle sets the first three.
-static const char *const opt_cpu[] = { "V30 10MHz", "286 10MHz", "386 class", "Turbo (max)" };
+// The four speeds, as the 286 PC-98s they stand for (CPUBENCH 0.980 ratio,
+// docs/ref/pc98-performance-baselines.md): VX2 286 8 MHz (4.57), VX21/UX21
+// 286 10 MHz (5.69), RX21/EX/DX 286 12 MHz (7.07), and the unthrottled
+// maximum. core_top's throttle sets the first three.
+static const char *const opt_cpu[] = { "286 8MHz", "286 10MHz", "286 12MHz", "Turbo (max)" };
 static const char *const opt_bios_wr[] = { "None", "EC00", "Main", "All" };
 static const char *const opt_boost[] = { "None", "2x", "4x" };
 static const char *const opt_level4[] = { "1", "2", "3", "4" };
