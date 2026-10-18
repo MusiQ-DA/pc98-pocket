@@ -166,7 +166,7 @@ if {[info exists ::env(HDNOBOOT)]} { shutdown; exit 0 }
 #   env HDIMG=img.hdm HDSPEED=1 HDNOFILLM=1
 if {[info exists ::env(HDSPEED)] || [info exists ::env(HDPFDIS)]
         || [info exists ::env(HDNOFILL)] || [info exists ::env(HDNOFILLM)]
-        || [info exists ::env(HDNOHIT)]} {
+        || [info exists ::env(HDNOHIT)] || [info exists ::env(HDTHR)]} {
     select_node 1
     set w 0
     if {[info exists ::env(HDSPEED)] && $env(HDSPEED) ne "clear"} {
@@ -178,6 +178,8 @@ if {[info exists ::env(HDSPEED)] || [info exists ::env(HDPFDIS)]
     if {[info exists ::env(HDNOFILL)] && $env(HDNOFILL)}   { set w [expr {$w | 0x10}] }
     if {[info exists ::env(HDNOFILLM)] && $env(HDNOFILLM)} { set w [expr {$w | 0x20}] }
     if {[info exists ::env(HDNOHIT)] && $env(HDNOHIT)}     { set w [expr {$w | 0x40}] }
+    # HDTHR=n (1..255): z86 throttle duty override, n/256 of the core edges
+    if {[info exists ::env(HDTHR)]} { set w [expr {$w | (($env(HDTHR) & 0xFF) << 12)}] }
     wr 0x89 $w
     puts [format "slot89=0x%X spd_ovr=%d sel=%d pf_dis=%d nofill=%d nofillm=%d nohit=%d" \
           $w [expr {($w >> 2) & 1}] [expr {$w & 3}] [expr {($w >> 3) & 1}] \
