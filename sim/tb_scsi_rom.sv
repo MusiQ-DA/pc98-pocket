@@ -147,29 +147,29 @@ module tb_scsi_rom;
         check(20'hD200A, 8'hAA, 8'h90);   // even byte: lo=AA, hi=pad byte
         // The four POST phase entries are at 0x0C/0x0F/0x12/0x15 and the
         // INT 1Bh dispatch entry at 0x18.
-        check(20'hD200C, 8'hE9, 8'hA0);   // word@0x0C = A0 E9 -> jmp post_init
+        check(20'hD200C, 8'hE9, 8'hA1);   // word@0x0C = A1 E9 -> jmp post_init
         check(20'hD200F, 8'hE9, 8'hE9);   // odd byte: hi lane = the byte itself
         check(20'hD2012, 8'hCB, 8'h90);   // pass 3 (before the FDDs): retf
         check(20'hD2015, 8'hE9, 8'hE9);   // pass 4, the boot sweep: jmp post_boot
         check(20'hD2018, 8'h56, 8'h57);   // handler: push si / push di
         check(20'hD201E, 8'h50, 8'h50);   // the locals pushes
         // Bytes the dispatch table registration must contain: post_common
-        // at 0x5A1 claims the flag (np21w's C2) and writes the segment byte
+        // at 0x5A2 claims the flag (np21w's C2) and writes the segment byte
         // to 0x4B2/0x4BA (the 0x2x and 0xAx devtype slots).
-        check(20'hD25A1, 8'hC6, 8'hC6);   // mov byte [bx],0C2h (odd: hi=lo)
-        check(20'hD25A2, 8'h07, 8'hC2);   //   ... modrm, C2
-        check(20'hD25A8, 8'hA2, 8'hB2);   // mov [0x04B2],al
-        check(20'hD25AC, 8'hBA, 8'h04);   // mov [0x04BA],al
+        check(20'hD25A2, 8'hC6, 8'h07);   // mov byte [bx],0C2h
+        check(20'hD25A4, 8'hC2, 8'h8C);   //   ... C2, then mov ax,cs
+        check(20'hD25A9, 8'hA2, 8'hA2);   // mov [0x04B2],al (odd: hi=lo)
+        check(20'hD25AC, 8'hA2, 8'hBA);   // mov [0x04BA],al
         // The transfer loop rebuilds CX after issue_xfer -- the mailbox
         // poll consumes it, and pull_in/pull_skip take their count from it.
         check(20'hD2222, 8'h8B, 8'h4E);   // mov cx,[bp-14]; shl cx,9
         check(20'hD2225, 8'hC1, 8'hC1);   //   (odd: hi=lo)
         // The disk-init and boot paths exist inside the image.
-        check(20'hD2468, 8'hA0, 8'h05);   // disk_init: mov di,0x05A0
-        check(20'hD2631, 8'h9A, 8'h9A);   // post_boot: call 1FC0:0000 (odd)
-        check(20'hD263F, 8'hCB, 8'hCB);   // post_boot's retf, the last code
+        check(20'hD2468, 8'hBF, 8'hA0);   // disk_init: mov di,0x05A0
+        check(20'hD2632, 8'h9A, 8'h00);   // post_boot: call 1FC0:0000
+        check(20'hD2640, 8'hCB, 8'hFF);   // post_boot's retf, then open pad
         // Image padding and the window boundary.
-        check(20'hD2640, 8'hFF, 8'hFF);   // first byte past the code
+        check(20'hD2641, 8'hFF, 8'hFF);   // odd byte past the code
         check(20'hD2FFF, 8'hFF, 8'hFF);   // last byte of the window
         check(20'hD3000, 8'hFF, 8'h00);   // next 4KB slot: the empty window
         check(20'hD1FFF, 8'hFF, 8'h00);   // the slot below

@@ -84,6 +84,15 @@ module tb_z86_loop;
     logic [7:0] pbuf [0:4095];
     initial for (int i = 0; i < 4096; i++) pbuf[i] = 8'hF4;
     int rd_n = 0, wr_n = 0, cnt = 0;
+    bit scsiport = 0;
+    logic [7:0] sstream [0:255];
+    int sstream_k = 0;
+    string sstreamf;
+    initial begin
+        scsiport = $test$plusargs("scsiport");
+        for (int i = 0; i < 256; i++) sstream[i] = 8'h00;
+        if ($value$plusargs("scsistream=%s", sstreamf)) $readmemh(sstreamf, sstream);
+    end
     // +wlog=<file>: every byte the CPU writes, in bus order (z86_fuzz.py
     // diffs it against the reference's write stream to find the first
     // wrong store).
@@ -157,6 +166,18 @@ module tb_z86_loop;
                 end else begin
                     rd_n++;
                     dat_i <= {mem[{adr,1'b1}], mem[{adr,1'b0}]};
+                    // +scsiport: the -55 window as scsi_rom.asm polls it --
+                    // 0xCC0 says "command done", 0xCC2 a GOOD status, and
+                    // 0xCC6 hands out successive bytes of +scsistream so a
+                    // reply (a MODE SENSE page, say) can be replayed.
+                    if (scsiport && tga) begin
+                        if ({adr,1'b0} == 20'h00CC0) dat_i <= 16'h0080;
+                        if ({adr,1'b0} == 20'h00CC2) dat_i <= 16'h0000;
+                        if ({adr,1'b0} == 20'h00CC6) begin
+                            dat_i <= {8'h00, sstream[sstream_k]};
+                            sstream_k <= sstream_k + 1;
+                        end
+                    end
                 end
             end
         end else if (!stb) begin

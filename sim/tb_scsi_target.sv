@@ -240,6 +240,8 @@ module tb_scsi_target #(
                     end
                     default: fail(8'h05, 8'h20);
                 endcase
+                $display("  %0t  SCSI cmd %02X %02X %02X %02X %02X %02X -> status %02X",
+                         $time, cdb[0], cdb[1], cdb[2], cdb[3], cdb[4], cdb[5], status);
             end
         end
     end

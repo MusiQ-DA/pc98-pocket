@@ -130,7 +130,9 @@ wire pipe_drained = ~ex_valid & ~sb0_valid & ~sb1_valid;
 // An admitted INTR holds decode until the boundary has been sampled and the
 // 8259 acknowledged (see int_sample below).
 wire intr_wait = intr_latched & ~nmi_latched & ~pic_vec_valid & ~int_shadow;
+wire in_behind_ex;   // see is_io_in below
 assign id_ready = (~ex_valid | ex_ready) & (~id_valid |~ii.is_two_cycles | cycle_2nd) & ~hazard & (~id_mem_rd | rd_ready)
+                & ~in_behind_ex                    // IN issues only past a resolved EX, see below
                 & (~int_pending | pipe_drained)    // drain before an interrupt, see below
                 & ~intr_wait
                 & ~dbg_stop;
@@ -204,6 +206,17 @@ wire ea_uses_bp = id_modrm_valid &&
 
 reg id_mem_rd;
 wire is_io_in = (id_opcode == 8'hE4 || id_opcode == 8'hE5 || id_opcode == 8'hEC || id_opcode == 8'hED);
+// PC-98 port: an IN is a decode-time read, and on a FIFO port the read IS
+// the side effect -- the SCSI board's 0xCC6 buffer, the FDC data register,
+// the 8251's receive byte all advance on it. Behind a taken LOOP or JCXZ
+// still in EX, the fall-through IN went out on the bus before the branch
+// voided it: its result was dropped, its byte was gone (scsi_rom.asm's
+// mode_page lost the page code after `jcxz .pg` and read the length in its
+// place; sim/z86_tests/raw_spec_in.asm). Jcc/JMP/RET did not leak, but
+// rather than rely on each branch's timing, an IN waits until EX is empty
+// -- anything ahead of it has resolved, and br_taken/id_void cover the
+// clock it lands on. Stores were never at risk: they commit from EX.
+assign in_behind_ex = is_io_in & id_valid & ex_valid;
 
 // ─── 2-deep scoreboard ──────────────────────────────────────────────────────
 reg             sb0_valid, sb1_valid;         // 1 ⇢ entry is occupied

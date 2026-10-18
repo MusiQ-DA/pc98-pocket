@@ -404,7 +404,11 @@ emit_cap:
         mov  al, 0x25
         out  dx, al
         xor  al, al
-        mov  cl, 9
+        mov  cx, 9                      ; CX, not CL: the CH scsi_go left
+                                        ; behind (its poll count) made this
+                                        ; ~65K OUTs, walking the index
+                                        ; through 0x18 and firing a second
+                                        ; command toggle mid-CDB
 .z:     out  dx, al
         loop .z
         ret

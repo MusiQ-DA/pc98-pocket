@@ -555,6 +555,18 @@ module tb_pc98_boot;
         is_scsirom = scsi_en && (a[19:12] == 8'hD2);
     endfunction
 
+    // Memory switch A3FF2, the boot-device byte. On the core it is a Settings
+    // register (pc98_tvram cfg_a3ff2 = {boot nibble, 1}) the POST cannot
+    // write; this bench's flat RAM would hand the BIOS whatever the clear
+    // left there, and a high nibble other than 0 or C makes the boot sweep
+    // skip SCSI device 0C. With +hddimg it reads the core's default 01
+    // (standard order), or +a3ff2=N (C1 = SCSI HD only).
+    logic [7:0] a3ff2_val = 8'h01;
+    initial void'($value$plusargs("a3ff2=%h", a3ff2_val));
+    function automatic logic is_a3ff2(input logic [19:0] a);
+        is_a3ff2 = scsi_en && (a == 20'hA3FF2);
+    endfunction
+
     // The data bus is combinational, as the chipset's is. Registering it here
     // put a chipset clock between the strobe and the byte, and the core sampled
     // stale data: the first run stalled for seventeen milliseconds in the middle
@@ -1068,6 +1080,7 @@ module tb_pc98_boot;
     wire [7:0] mem_read_byte = is_rom(cpu_address)  ? rom_byte(cpu_address)
                              : is_xrom(cpu_address) ? xrom_byte(cpu_address)
                              : is_scsirom(cpu_address) ? scsirom[cpu_address[11:0]]
+                             : is_a3ff2(cpu_address)   ? a3ff2_val
                                                     : ram[cpu_address];
     wire bench_ready = 1'b1;          // flat memory answers immediately
     // The flat array is byte-wide but still answers a word's odd lane at
@@ -1268,14 +1281,45 @@ module tb_pc98_boot;
     // device booted. scsi_ipl_seen lets the chunk loop stop early.
     logic [19:0] scsi_pc_d = 20'h0;
     logic        scsi_ipl_seen = 1'b0;
+    // The bytes the guest takes off 0xCC2/0xCC6 (the buffer and status
+    // reads), as sampled at the end of each strobe: +scsi_rdlog.
+    logic        scsi_rdlog = 1'b0;
+    initial scsi_rdlog = $test$plusargs("scsi_rdlog");
+    logic        scsi_rd_d = 1'b0;
+    logic  [7:0] scsi_rd_v = 8'h00;
+    logic  [1:0] scsi_rd_p = 2'd0;
+    always_ff @(posedge clk_chipset) begin
+        scsi_rd_d <= scsi_rd_sel;
+        if (scsi_rd_sel) begin
+            scsi_rd_v <= scsi_dout;
+            scsi_rd_p <= cpu_address[2:1];
+        end
+        if (scsi_rdlog && scsi_rd_d && !scsi_rd_sel && scsi_rd_p != 2'd0)
+            $display("  %8t  SCSI rd CC%0d -> %02X  (eu_pc %05X)", $time,
+                     {scsi_rd_p, 1'b0}, scsi_rd_v, eu_pc);
+    end
+    // +scsi_pctrace: every retired PC inside the D2000 window (the first
+    // 4000), with AX/CX/SP and CF -- what the ROM actually executed.
+    logic scsi_pctrace = 1'b0;
+    int   scsi_pctrace_n = 0;
+    initial scsi_pctrace = $test$plusargs("scsi_pctrace");
+    always_ff @(posedge clk_chipset) begin
+        if (scsi_pctrace && eu_pc != scsi_pc_d && scsi_pctrace_n < 4000
+            && (eu_pc[19:12] == 8'hD2 || scsi_pc_d[19:12] == 8'hD2)) begin
+            scsi_pctrace_n <= scsi_pctrace_n + 1;
+            $display("  %8t  PC %05X ax %04X cx %04X sp %04X cf %b", $time,
+                     eu_pc, eu_ax, eu_cx, eu_sp, eu_cf);
+        end
+    end
     always_ff @(posedge clk_chipset) begin
         scsi_pc_d <= eu_pc;
         if (scsi_en && eu_pc != scsi_pc_d) begin
             if (eu_pc == 20'hD200C || eu_pc == 20'hD200F
              || eu_pc == 20'hD2012 || eu_pc == 20'hD2015)
-                $display("  %8t  SCSI ROM entry %02X  ax %04X  [4D2]=%02X [482]=%02X  cmds %0d",
+                $display("  %8t  SCSI ROM entry %02X  ax %04X  [4D2]=%02X [482]=%02X  geo %02X %02X %02X%02X tot %02X%02X  cmds %0d",
                          $time, eu_pc[7:0], eu_ax, ram[20'h4D2], ram[20'h482],
-                         scsi_ncmds);
+                         ram[20'h5A0], ram[20'h5A1], ram[20'h5A3], ram[20'h5A2],
+                         ram[20'h5A7], ram[20'h5A6], scsi_ncmds);
             if ((eu_pc == 20'h1FC00 || eu_pc == 20'h1FE00) && !scsi_ipl_seen) begin
                 scsi_ipl_seen <= 1'b1;
                 $display("  %8t  IPL ENTRY %05X  ax %04X bx %04X cx %04X dx %04X  [584]=%02X [482]=%02X  geo %02X %02X %02X%02X  cmds %0d",
