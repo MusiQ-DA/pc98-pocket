@@ -193,6 +193,7 @@ module tb_pc98_boot;
         .sdram_wr_taken    (sdram_wt_w),
         .sdram_rd_ready    (sdram_rd_own_w),
         .pause_core        (1'b0),
+        .throttle          (1'b0),
         .biu_done          (biu_done),
         .pf_disable        (1'b0),
         .pf_nofill         (1'b0),

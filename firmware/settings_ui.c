@@ -165,11 +165,12 @@ typedef struct {
 // current version.
 static setting_t settings[SET_COUNT] = {
     // Index 1 is the faithful bus clock: a PC-9801VM/VX's V30 at 2.4576 MHz
-    // x4. The default is Turbo: z86 runs from its cache at the full chipset
-    // clock whatever the setting, so the paced settings only slow the bus
-    // cycles it still makes (I/O, VRAM) and there is nothing to gain from
-    // them unless a title needs them. At index 0 the ITF's 640 KB memory
-    // test is a long wait with nothing on screen but its own test pattern.
+    // x4. The paced settings also throttle the core itself (core_top's
+    // thr_num) to the CPUBENCH ratio of the machine each stands for, since
+    // z86 runs from its cache and the bus pacing alone would barely slow it.
+    // The default is Turbo, the full chipset clock. At index 0 the ITF's
+    // 640 KB memory test is a long wait with nothing on screen but its own
+    // test pattern.
     SETTING_D(opt_cpu, 3),    // SET_CPU_SPEED
     SETTING(opt_bios_wr),     // SET_BIOS_WR
     SETTING(opt_boost),       // SET_BOOST

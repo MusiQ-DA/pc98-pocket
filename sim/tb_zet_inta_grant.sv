@@ -164,6 +164,7 @@ module tb_zet_inta_grant;
         .sdram_wr_taken    (wr_taken_w),
         .sdram_rd_ready    (1'b1),
         .pause_core        (1'b0),
+        .throttle          (1'b0),
         .pf_disable        (1'b1),
         .pf_nofill         (1'b0),
         .pf_nofillm        (1'b0),

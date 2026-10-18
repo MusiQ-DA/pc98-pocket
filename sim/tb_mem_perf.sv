@@ -137,6 +137,7 @@ module tb_mem_perf;
         .sdram_wr_taken    (seq_wr_taken_w),
         .sdram_rd_ready    (seq_rd_own_w),
         .pause_core        (1'b0),
+        .throttle          (1'b0),
         .biu_done          (biu_done),
         .pf_disable        (pf_dis_r),
         .pf_nofill         (pf_nofill_r),

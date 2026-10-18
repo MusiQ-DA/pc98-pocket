@@ -142,6 +142,7 @@ module tb_zet_resume;
         .sdram_wr_taken    (~mem_wr_n),
         .sdram_rd_ready    (1'b1),
         .pause_core        (1'b0),
+        .throttle          (1'b0),
         .biu_done          (),
         .pf_disable        (1'b0),
         .pf_nofill         (1'b0),

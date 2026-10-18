@@ -293,6 +293,7 @@ module core_top (
     logic  [1:0] jtag_spd_sel = 2'b00;
     logic        jtag_pf_dis  = 1'b1;   // engine off by default, see below
     logic        jtag_cache_dis = 1'b0; // [11] z86_cache off: every access on the bus
+    logic  [7:0] jtag_thr_num = 8'd0;   // [19:12] nonzero: throttle duty override (n/256)
     // Per-mechanism prefetch kills, for bisecting which half of the
     // engine a failure lives in without a rebuild:
     //   [4] pf_nofill  -- pure (idle-gap) fills never run
@@ -334,6 +335,7 @@ module core_top (
     // invalidation, and was never reproduced in tb_mem_perf.
     wire         jtag_pf_dis  = 1'b1;
     wire         jtag_cache_dis = 1'b0;
+    wire   [7:0] jtag_thr_num = 8'd0;
     wire         jtag_pf_nofill  = 1'b0;
     wire         jtag_pf_nofillm = 1'b0;
     wire         jtag_pf_nohit   = 1'b0;
@@ -350,6 +352,33 @@ module core_top (
             clk_select <= 2'b00;
         else if (biu_done)
             clk_select <= clk_select_next;
+    end
+
+    // Speed throttle. The CE train above only paces bus cycles, and z86
+    // issues at the chipset clock and runs from its cache, so in the paced
+    // modes nearly nothing would slow it. A fractional gate passes
+    // thr_num/256 of the core's clock edges instead; Turbo passes all.
+    // The duties are calibrated on hardware with CPUBENCH 0.980 to the
+    // machines each mode stands for (docs/ref/pc98-performance-baselines.md):
+    // "5 MHz" ~ V30 5 MHz (1.55), "10 MHz" ~ PC-9801VM11 (3.11), "20 MHz" ~
+    // 286 12 MHz (7.07).
+`ifdef PC98_Z86
+    localparam [7:0] THR_5MHZ  = 8'd16;
+    localparam [7:0] THR_10MHZ = 8'd32;
+    localparam [7:0] THR_20MHZ = 8'd72;
+    wire  [7:0] thr_num_mode = (clk_select == 2'b00) ? THR_5MHZ
+                             : (clk_select == 2'b01) ? THR_10MHZ
+                             : (clk_select == 2'b10) ? THR_20MHZ : 8'd0;
+    wire  [7:0] thr_num = (jtag_thr_num != 8'd0) ? jtag_thr_num : thr_num_mode;
+`else
+    wire  [7:0] thr_num = 8'd0;
+`endif
+    logic [7:0] thr_acc  = 8'd0;
+    logic       thr_hold = 1'b0;
+    wire  [8:0] thr_sum  = {1'b0, thr_acc} + {1'b0, thr_num};
+    always @(posedge clk_chipset) begin
+        thr_acc  <= thr_sum[7:0];
+        thr_hold <= (thr_num != 8'd0) && !thr_sum[8];
     end
 
     ce_generator u_ce_generator
@@ -2235,6 +2264,7 @@ module core_top (
             jtag_pf_wkill <= probe_wdata_c[9];
             jtag_pf_bkill <= probe_wdata_c[10];
             jtag_cache_dis <= probe_wdata_c[11];
+            jtag_thr_num  <= probe_wdata_c[19:12];
         end
         // Slot 0x0a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
         // every memory write landing on it is logged (CPU or DMA alike).
@@ -3458,6 +3488,7 @@ module core_top (
         .sdram_wr_taken    (sdram_wr_taken),
         .sdram_rd_ready    (sdram_rd_ready),
         .pause_core        (pause_core),
+        .throttle          (thr_hold),
         .biu_done          (biu_done),
         .zet_edge_o        (z86_ce),
         .pf_disable        (jtag_pf_dis),

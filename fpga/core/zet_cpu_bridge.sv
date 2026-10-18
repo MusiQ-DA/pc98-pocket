@@ -131,6 +131,10 @@ module zet_cpu_bridge #(
     // invents.
     input  wire         sdram_rd_ready,
     input  wire         pause_core,
+    // Speed throttle: high on clk edges the core must skip. Unlike
+    // pause_core it never holds the gate inside an INTA service (the
+    // release edge must flow) and touches nothing else.
+    input  wire         throttle,
     // Debug/kill switch: when high, no prefetch window is armed or filled --
     // every guest read pays the bus directly. Lets JTAG A/B the prefetch
     // engine against a suspect crash without a rebuild. The three finer
@@ -199,7 +203,8 @@ module zet_cpu_bridge #(
     // must flow regardless (Zet's reset is synchronous -- no edges, no
     // reset), and pause_core is the OSD's freeze.
     wire zet_halt = ((wb_tgc_o || inta_active) && !int_served)
-                 || (pause_core && !reset);
+                 || (pause_core && !reset)
+                 || (throttle && !reset && !wb_tgc_o && !inta_active);
     reg  run_arm;
     always @(negedge clk) run_arm <= !zet_halt;
     // `| reset`: Zet's reset is SYNCHRONOUS -- no edges, no reset -- so the
