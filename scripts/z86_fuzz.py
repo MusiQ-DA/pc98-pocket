@@ -224,6 +224,7 @@ EPI = '''    mov [cs:0x600],ax
     mov [cs:0x610],ss
     mov [cs:0x612],es
     mov [cs:0x614],ds
+    cli
     times 8 nop
     hlt
 '''
