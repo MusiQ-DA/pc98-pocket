@@ -59,7 +59,10 @@ def port_list(path, module):
 
 
 def connected(core_src, module):
-    m = re.search(r"\b" + module + r"\s+\w+\s*\((.*?)\n\s*\);", core_src, re.S)
+    # The #(...) parameter block between module and instance name (the bridge
+    # overrides REQ_SETTLE) is optional so the pattern sees the port list.
+    m = re.search(r"\b" + module + r"\s+(?:#\([^)]*\)*\s*)?\w+\s*\((.*?)\n\s*\);",
+                  core_src, re.S)
     if not m:
         sys.exit(f"{module}: not instantiated in core_top")
     return set(re.findall(r"\.(\w+)\s*\(", m.group(1)))
