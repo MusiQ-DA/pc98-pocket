@@ -1141,6 +1141,9 @@ module core_top (
     wire [1:0] osd_extmem;
     wire       osd_dbl_skip;
     wire       osd_fdd_turbo;
+    wire       osd_cpu_cache;
+    wire [31:0] osd_set_word;
+    wire  [2:0] osd_set_sel;   // probe slot 0xA0+g selects group g (see the read mux)
     wire [7:0] osd_dipsw2;
     wire [7:0] osd_a3fea;
     wire [7:0] osd_a3fee;
@@ -1245,6 +1248,9 @@ module core_top (
         .osd_extmem                 (osd_extmem),
         .osd_dbl_skip               (osd_dbl_skip),
         .osd_fdd_turbo              (osd_fdd_turbo),
+        .osd_cpu_cache              (osd_cpu_cache),
+        .osd_set_sel                (osd_set_sel),
+        .osd_set_word               (osd_set_word),
         .osd_dipsw2                 (osd_dipsw2),
         .osd_a3fea                  (osd_a3fea),
         .osd_a3fee                  (osd_a3fee),
@@ -1280,6 +1286,7 @@ module core_top (
     // one raster line, sampled where pocket_video takes them. Declared here
     // because the read mux below precedes the video wires.
     wire   [7:0] probe_addr;
+    assign osd_set_sel = probe_addr[2:0];
     // The nuV30's architectural state, live -- was. These taps were the old
     // core's dbg pins; Zet has no equivalent so every one is tied to 0 now
     // and the slots below keep their addresses only for map compatibility.
@@ -1914,6 +1921,10 @@ module core_top (
             // osd_open_req live}. A frozen fetch word is a dead pico; a
             // frozen poll byte beside a moving fetch word is a wedged loop.
             8'h2a:   probe_data_c = dbg_pico_w;
+            // 0xA0-0xA7: every OSD setting, four per slot (settings_ui.c's
+            // SET_* index order): slot 0xA0+g = {set[4g+3] .. set[4g]}.
+            8'ha0,8'ha1,8'ha2,8'ha3,8'ha4,8'ha5,8'ha6,8'ha7:
+                     probe_data_c = osd_set_word;
             8'h27:   probe_data_c = fdc_dbg[63:32];
             8'h28:   probe_data_c = fdc_dbg_cmd[31:0];
             8'h29:   probe_data_c = fdc_dbg_cmd[63:32];
@@ -3519,7 +3530,7 @@ module core_top (
         .reset     (reset_cpu),
         .clk_free  (clk_chipset),
         .ce        (z86_ce),
-        .cache_en  (~jtag_cache_dis & ~itf_bank),
+        .cache_en  (osd_cpu_cache & ~jtag_cache_dis & ~itf_bank),
         .bios_shadow  (bios_shadow_flag),
         .bios_protect (bios_protect_flag[1]),
         .f_req     (cachef_req),

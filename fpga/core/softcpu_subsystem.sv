@@ -121,6 +121,12 @@ module softcpu_subsystem (
     output  [1:0] osd_extmem,
     output        osd_dbl_skip,
     output        osd_fdd_turbo,
+    output        osd_cpu_cache,        // z86's cache enable (Settings > CPU Cache)
+    // JTAG readout of the whole settings array, four bytes per group:
+    // osd_set_word = {set[4g+3], set[4g+2], set[4g+1], set[4g]} for g = sel.
+    // clk_pico-domain values, quasi-static: the probe samples them raw.
+    input   [2:0] osd_set_sel,
+    output [31:0] osd_set_word,
     // Machine configuration, composed from the Settings rows into the bytes
     // the guest actually reads: DIP switch 2 on port 0x31 and the three
     // memory-switch cells pc98_tvram exposes.
@@ -450,7 +456,8 @@ module softcpu_subsystem (
     localparam SET_IDX_BOOT_DEV  = 5'd16;  // A3FF2 high nibble: 0 std / 2 = 640K FD / 4 = 1M FD / 8 = BASIC / A = HD1 / B = HD2 / C = SCSI
     localparam SET_IDX_RAM_SZ    = 5'd17;  // 1-5 = 128-640 KB in 128 KB units (0 = unset -> 640)
     localparam SET_IDX_DEL_BS    = 5'd18;  // A3FEA bit 7: DEL key emits BS
-    localparam SET_IDX_EXTROM    = 5'd19;  // A3FEE bit 4: option ROM present in the D0000 window
+    localparam SET_IDX_EXTROM    = 5'd19;
+    localparam SET_IDX_CPU_CACHE = 5'd20;  // 1 = z86 cache on (default)  // A3FEE bit 4: option ROM present in the D0000 window
     // index 8 is the D-pad preset, delivered through key_cfg rather than an osd_settings slot.
     localparam SET_IDX_GAMEPAD   = 5'd9;   // Controls
     reg [7:0] osd_settings [0:31];
@@ -472,6 +479,9 @@ module softcpu_subsystem (
     assign osd_extmem    = osd_settings[SET_IDX_EXTMEM][1:0];
     assign osd_dbl_skip  = osd_settings[SET_IDX_MODE200][0];
     assign osd_fdd_turbo = ~osd_settings[SET_IDX_FDD_TURBO][0];
+    assign osd_cpu_cache = osd_settings[SET_IDX_CPU_CACHE][0];
+    assign osd_set_word  = {osd_settings[{osd_set_sel, 2'd3}], osd_settings[{osd_set_sel, 2'd2}],
+                            osd_settings[{osd_set_sel, 2'd1}], osd_settings[{osd_set_sel, 2'd0}]};
 
     // Probe-visible liveness (clk_pico domain, read raw from clk_sys -- pico
     // regs hold for the whole pico period so the sample is clean). A frozen
