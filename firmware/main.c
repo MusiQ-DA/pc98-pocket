@@ -130,10 +130,12 @@ int main(void)
 
         if (!mounted_hdd) {
             HB_MARK(0x7C);
-            uint32_t sectors = slot_bytes(HDD0_SLOT_ID) / SECTOR_BYTES;
-            if (sectors != 0) {
+            // The whole file: scsi_mount reads an NHD/HDI/VHD header off its
+            // front and checks the header's arithmetic against the size.
+            uint32_t bytes = slot_bytes(HDD0_SLOT_ID);
+            if (bytes >= SECTOR_BYTES) {
                 HB_MARK(0x49);
-                scsi_mount(sectors);
+                scsi_mount(bytes);
                 mounted_hdd = 1;
             }
         }

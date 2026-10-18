@@ -51,6 +51,10 @@
 #define CDB_MAX  12
 
 static uint32_t scsi_sectors;      // image size, 512-byte blocks; 0 = no disk
+static uint32_t scsi_base;         // file byte offset of LBA 0 (past any header)
+static uint32_t scsi_cyls;         // the geometry MODE SENSE pages 3/4 report:
+static uint32_t scsi_heads;        //   the header's for an NHD/HDI/VHD image,
+static uint32_t scsi_spt;          //   8 x 25 x (size / 200) for a flat one
 static uint8_t  scsi_sense_key;
 static uint8_t  scsi_asc;          // additional sense code
 static int      scsi_ack;          // our copy of the request toggle
@@ -122,7 +126,8 @@ static void scsi_ok(void)
 // end first, so the image's byte order survives.
 static int scsi_push_sector(uint32_t lba)
 {
-    if (!tds_transfer(HDD0_SLOT_ID, lba * SECTOR_BYTES, FDD_TDS_READ, SECTOR_BYTES))
+    if (!tds_transfer(HDD0_SLOT_ID, scsi_base + lba * SECTOR_BYTES, FDD_TDS_READ,
+                      SECTOR_BYTES))
         return 0;
     *FDD_BRAM_ADDR = 0;
     for (int i = 0; i < SECTOR_WORDS; i++) {
@@ -146,7 +151,8 @@ static int scsi_drain_sector(uint32_t lba)
         uint32_t b3 = scsi_get();
         *FDD_BRAM_WDATA = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
     }
-    return tds_transfer(HDD0_SLOT_ID, lba * SECTOR_BYTES, FDD_TDS_WRITE, SECTOR_BYTES);
+    return tds_transfer(HDD0_SLOT_ID, scsi_base + lba * SECTOR_BYTES, FDD_TDS_WRITE,
+                        SECTOR_BYTES);
 }
 
 // The buffer is 8 KB, so a transfer is capped at sixteen blocks per command.
@@ -256,20 +262,80 @@ static void scsi_do_request_sense(uint32_t alloc)
     scsi_complete(SCSI_GOOD);
 }
 
-static void scsi_do_mode_sense(uint32_t alloc)
+// MODE SENSE(6): the header, an 8-byte block descriptor unless the CDB sets
+// DBD, then page 3 (format device: sectors per track) and/or page 4 (rigid
+// disk geometry: cylinders, heads) -- both for 0x3F. That pair is how a SCSI
+// target states its CHS; np21w's np2stor answers the same pages (cbus/
+// scsiio.c, NP2_SCSIOP_MODE_SENSE). The option ROM reads them at POST so
+// INT 1Bh's CHS calls (DA 0xA0 -- what a DOS IPL and IO.SYS issue) land
+// where the image's own partition table expects. Streamed straight into the
+// buffer, truncated at the allocation length: no array on a 2 KB stack.
+static uint32_t ms_n, ms_alloc;
+
+static void ms_put(uint32_t v)
 {
-    // A four-byte header with no block descriptor and no pages: enough for the
-    // BIOS to see a writable, present device without inventing geometry the
-    // image does not have.
-    uint8_t d[4];
-    d[0] = 3;       // length after this byte
-    d[1] = 0;       // medium type
-    d[2] = 0;       // not write protected
-    d[3] = 0;       // block descriptor length
-    if (alloc == 0 || alloc > 4) alloc = 4;
+    if (ms_n < ms_alloc) scsi_put((uint8_t) v);
+    ms_n++;
+}
+
+static void ms_zero(uint32_t count)
+{
+    while (count--) ms_put(0);
+}
+
+static void scsi_do_mode_sense(const uint8_t *cdb)
+{
+    uint32_t page = cdb[2] & 0x3F;
+    int p3 = (page == 0x03 || page == 0x3F);
+    int p4 = (page == 0x04 || page == 0x3F);
+    if (!p3 && !p4 && page != 0x00) {
+        scsi_fail(SENSE_ILLEGAL_REQ, 0x24);   // invalid field in CDB
+        return;
+    }
+    uint32_t bdl = (cdb[1] & 0x08) ? 0 : 8;
+    uint32_t blocks = scsi_sectors > 0xFFFFFF ? 0xFFFFFF : scsi_sectors;
+    ms_n = 0;
+    ms_alloc = cdb[4];
+
     scsi_rewind_write();
     scsi_buf_seek(0);
-    for (uint32_t i = 0; i < alloc; i++) scsi_put(d[i]);
+    ms_put(3 + bdl + (p3 ? 24 : 0) + (p4 ? 24 : 0));  // length after byte 0
+    ms_put(0);                  // medium type
+    ms_put(0);                  // not write protected
+    ms_put(bdl);
+    if (bdl) {
+        ms_put(0);              // density code
+        ms_put(blocks >> 16);
+        ms_put(blocks >> 8);
+        ms_put(blocks);
+        ms_put(0);
+        ms_put(0);              // block length 0x000200
+        ms_put(2);
+        ms_put(0);
+    }
+    if (p3) {                   // format device page
+        ms_put(0x03);
+        ms_put(0x16);
+        ms_zero(8);             // zone and alternate counts
+        ms_put(scsi_spt >> 8);
+        ms_put(scsi_spt);
+        ms_put(SECTOR_BYTES >> 8);
+        ms_put(SECTOR_BYTES & 0xFF);
+        ms_put(0);              // interleave 1
+        ms_put(1);
+        ms_zero(4);             // track / cylinder skew
+        ms_put(0x40);           // HSEC: hard-sectored
+        ms_zero(3);
+    }
+    if (p4) {                   // rigid disk geometry page
+        ms_put(0x04);
+        ms_put(0x16);
+        ms_put(scsi_cyls >> 16);
+        ms_put(scsi_cyls >> 8);
+        ms_put(scsi_cyls);
+        ms_put(scsi_heads);
+        ms_zero(18);
+    }
     scsi_rewind_read();
     scsi_ok();
 }
@@ -305,7 +371,7 @@ static void scsi_execute(const uint8_t *cdb)
         break;
 
     case SCSI_MODE_SENSE6:
-        scsi_do_mode_sense(cdb[4]);
+        scsi_do_mode_sense(cdb);
         break;
 
     case SCSI_READ_CAPACITY:
@@ -347,13 +413,114 @@ static void scsi_execute(const uint8_t *cdb)
     }
 }
 
-void scsi_mount(uint32_t sectors)
+// n / d by shift-and-subtract: the softcore has no divider, and a bare `/`
+// fails the link (see the Makefile). Only the mount divides.
+static uint32_t scsi_udiv(uint32_t n, uint32_t d)
 {
-    scsi_sectors = sectors;
+    uint32_t q = 0, r = 0;
+    for (int i = 31; i >= 0; i--) {
+        r = (r << 1) | ((n >> i) & 1);
+        if (r >= d) { r -= d; q |= 1u << i; }
+    }
+    return q;
+}
+
+// Header bytes straight out of the bridge RAM the probe read landed in:
+// word-addressed, little-endian, so byte b is lane b&3 of word b>>2.
+static uint32_t hdr8(uint32_t b)
+{
+    *FDD_BRAM_ADDR = b >> 2;
+    return (*FDD_BRAM_RDATA >> ((b & 3) * 8)) & 0xFF;
+}
+static uint32_t hdr16(uint32_t b) { return hdr8(b) | (hdr8(b + 1) << 8); }
+static uint32_t hdr32(uint32_t b) { return hdr16(b) | (hdr16(b + 2) << 16); }
+
+static int hdr_sig(const char *sig)
+{
+    for (uint32_t i = 0; sig[i]; i++)
+        if (hdr8(i) != (uint8_t) sig[i]) return 0;
+    return 1;
+}
+
+// The image formats np21w opens on its SCSI interface (fdd/sxsihdd.c,
+// sxsihdd_open), told apart by content -- the firmware never sees the name:
+//   NHD  "T98HDDIMAGE.R0"; header size and C/H/S/sector size in the header
+//   VHD  Virtual98 "VHD1."; the data follows np21w's 220-byte VHDHDR
+//   HDI  Anex86, no signature: dwords {0, type, headersize, hddsize,
+//        sectorsize, sectors, surfaces, cylinders}; believed only when that
+//        arithmetic fits inside this very file
+//   flat anything else: LBA 0 at byte 0 and np21w's .hdn geometry for the -55
+//        (RaSCSI's flat image): 8 surfaces x 25 sectors, size / 200 cylinders
+// Until this mount the service read every image as flat, so an NHD served its
+// header as the IPL and an HDI its 4 KB header -- nothing but a flat file
+// could ever boot, though data.json offers all four extensions.
+// The board moves 512-byte sectors only: a header declaring any other size
+// (256-byte SASI-made HDIs, mostly) is refused, so the BIOS sees NOT READY
+// rather than reads at the wrong stride.
+static void scsi_probe(uint32_t bytes)
+{
+    uint32_t hsize = 0, ssize = 0, c = 0, hd = 0, s = 0, total = 0;
+
+    scsi_base = 0;
+    scsi_spt = 25;
+    scsi_heads = 8;
+    if (tds_transfer(HDD0_SLOT_ID, 0, FDD_TDS_READ, SECTOR_BYTES)) {
+        if (hdr_sig("T98HDDIMAGE.R0")) {
+            hsize = hdr32(0x110);
+            c     = hdr32(0x114);
+            hd    = hdr16(0x118);
+            s     = hdr16(0x11A);
+            ssize = hdr16(0x11C);
+        } else if (hdr_sig("VHD1.")) {
+            hsize = 220;
+            ssize = hdr16(0x8E);
+            s     = hdr8(0x90);
+            hd    = hdr8(0x91);
+            c     = hdr16(0x92);
+            total = hdr32(0x94);
+        } else if (hdr32(0) == 0) {
+            hsize = hdr32(0x08);
+            ssize = hdr32(0x10);
+            s     = hdr32(0x14);
+            hd    = hdr32(0x18);
+            c     = hdr32(0x1C);
+            // 64-bit: 255 x 255 x 65535 sectors of 1 KB overflows 32.
+            uint32_t sh = (ssize == 256) ? 8 : (ssize == 512) ? 9 : 10;
+            if (hsize < 0x20 || hsize > 0x100000 || s == 0 || s > 255
+                || hd == 0 || hd > 255 || c == 0 || c > 0xFFFF
+                || (ssize != 256 && ssize != 512 && ssize != 1024)
+                || ((uint64_t) (s * hd) * c << sh) + hsize > bytes)
+                ssize = 0;                     // not an HDI: a flat image
+        }
+    }
+    if (ssize) {
+        if (ssize != SECTOR_BYTES || (hsize & 3) || hsize >= bytes
+            || s == 0 || s > 255 || hd == 0 || hd > 255
+            || c == 0 || c > 0xFFFF) {
+            scsi_sectors = 0;                  // a format this board cannot serve
+            return;
+        }
+        uint32_t fits = (bytes - hsize) >> 9;
+        if (!total) total = c * hd * s;
+        scsi_base = hsize;
+        scsi_spt = s;
+        scsi_heads = hd;
+        scsi_cyls = c;
+        scsi_sectors = total < fits ? total : fits;
+        return;
+    }
+    scsi_sectors = bytes >> 9;
+    scsi_cyls = scsi_udiv(scsi_sectors, 200);
+    if (scsi_cyls > 0xFFFF) scsi_cyls = 0xFFFF;
+}
+
+void scsi_mount(uint32_t bytes)
+{
+    scsi_probe(bytes);
     // Publish the mount state to RTL for the disk lamp: the probes this poll
     // answers on an empty machine still toggle the request line, so the lamp
     // needs a media flag to tell a real transfer from a probe on nothing.
-    *SOFT_SCSI_MEDIA = (sectors != 0);
+    *SOFT_SCSI_MEDIA = (scsi_sectors != 0);
     scsi_sense_key = SENSE_NO_SENSE;
     scsi_asc = 0x00;
 }

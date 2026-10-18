@@ -27,19 +27,36 @@
 ; AH >= 0x20 is an error (CF set). SCSI sense keys map to NEC codes:
 ; NOT READY -> 0x60, ILLEGAL REQUEST -> 0xD0, anything else -> 0x20.
 ;
-; Geometry: the mounted image is a flat 512-byte-sector file, so the ROM
-; exposes np21w's flat-image geometry of 8 surfaces x 25 sectors, cylinders
-; = sectors / 200 (clamped to 0xFFFF = 640 MB), stored in the NEC scsiinf
-; 4-byte form {spt, heads|cylhi, cyl_lo, inf_hi} -- the layout np21w keeps
-; at 0x460 (taken here, that area is busy on this BIOS) -- at 0x05A0, in a
-; measured-free work-area gap ahead of MEMB_F144_SUP at 0x5AE.
+; Geometry: the target states it in MODE SENSE pages 4 (cylinders, heads)
+; and 3 (sectors per track) -- the header's C/H/S for an NHD/HDI/VHD image,
+; np21w's .hdn flat-image 8 surfaces x 25 sectors x (sectors / 200) for a
+; raw one (firmware/scsi_service.c, scsi_probe). A target that answers
+; neither page gets that same flat geometry computed here. The ROM must use
+; the image's own geometry: DOS's IPL and IO.SYS address the disk in CHS
+; (DA 0xA0), and the partition table stores cylinder numbers. Stored in
+; the NEC scsiinf 4-byte form {spt, heads|cylhi, cyl_lo, inf_hi} -- the
+; layout np21w keeps at 0x460 (taken here, that area is busy on this BIOS)
+; -- at 0x05A0, with the capacity for LBA-mode bounds at 0x05A6, in a
+; measured-free work-area gap ahead of MEMB_F144_SUP at 0x5AE. Unit 0's
+; presence goes in DISK_EQUIPS (0x482) bit 0, as np21w scsibios_init does:
+; that byte is how DOS learns a SCSI disk is fitted at all.
 ;
-; Boot: the system BIOS has no built-in HDD boot at all (its per-class
-; iterator only serves the FDD classes), so this ROM does what a real -55
-; does -- at POST entry 0x12, after both FDD attempts, it reads the IPL
-; (two sectors at LBA 0, 1024 bytes) to 1FC0:0000 and far-calls it with the
-; register set the NEC boot code hands down, a proper stack and a RETF
-; frame back to our own return path for a polite bail to BASIC.
+; Boot: the system BIOS has no built-in HDD boot (FCC9, its per-device
+; booter, only serves the FDD classes). Its boot sweep at FF91 walks device
+; numbers AL = 1..15 (or only A3FF2's high nibble when that is set), and
+; for each one far-calls every claimed ROM's entry 0x15 with AL, then tries
+; its own FDDs for that number. SCSI unit 0 is device 0x0C -- np21w's
+; scsibios.res boots there and nowhere else -- so the standard order is
+; floppy first, hard disk after, and the Boot Device setting's "SCSI HD"
+; (A3FF2 = 0xC1) picks the disk alone. The IPL (two sectors at LBA 0, 1024
+; bytes) goes to 1FC0:0000 and is far-called on the POST stack with
+; np21w's register set: AX = 00A0 (status 0, DA/UA), BX = 0400, CX = DX =
+; BP = 0, ES = 1FC0, DISK_BOOT [0x584] = A0. An IPL that RETFs falls back
+; into the sweep and on to BASIC.
+;
+; Entry 0x12 used to boot here. That pass runs at FF04 -- BEFORE the sweep
+; and so before any floppy boot -- so a mounted disk shadowed every
+; floppy, and the Boot Device setting could not choose.
 ;
 ; After editing: nasm -f bin -o scsi_rom.bin scsi_rom.asm, then fold the
 ; bytes into fpga/core/scsi_rom.hex (one byte per line, 4096 entries) for
@@ -57,9 +74,9 @@ post0:  jmp post_init           ; pass 1: claim, register, probe
         times 0x0F - ($ - $$) db 0x90
 post1:  jmp post_init           ; pass 2: same, idempotent
         times 0x12 - ($ - $$) db 0x90
-post2:  jmp post_boot           ; pass 3: boot attempt, after both FDD tries
+post2:  retf                    ; pass 3: nothing -- it runs before the FDDs
         times 0x15 - ($ - $$) db 0x90
-post3:  retf                    ; pass 4: nothing to add to the class sweep
+post3:  jmp post_boot           ; pass 4: the boot sweep, AL = device number
         times 0x18 - ($ - $$) db 0x90
 
 ; ==================== disk-BIOS extension entry (0x18) ====================
@@ -74,8 +91,9 @@ post3:  retf                    ; pass 4: nothing to add to the class sweep
 
 %define GEO      0x05A0        ; 4-byte scsiinf record: spt, heads|cylhi, inf
 %define GEOEQUIP 0x05A4        ; bit0: unit 0 present
-%define BOOTSS   0x05A6        ; saved SS/SP around the IPL far call
-%define BOOTSP   0x05A8
+%define TOTALS   0x05A6        ; dword: capacity in sectors, the LBA bound
+%define EQUIPS   0x0482        ; DISK_EQUIPS: bit n = SCSI unit n fitted
+%define BOOTDEV  0x0C          ; the boot sweep's number for SCSI unit 0
 
 %define WAIT_SHORT 4           ; mailbox poll outer loops (x ~64K inner)
 %define WAIT_LONG  48          ; formats and first commands may dawdle
@@ -386,7 +404,11 @@ emit_cap:
         mov  al, 0x25
         out  dx, al
         xor  al, al
-        mov  cl, 9
+        mov  cx, 9                      ; CX, not CL: the CH scsi_go left
+                                        ; behind (its poll count) made this
+                                        ; ~65K OUTs, walking the index
+                                        ; through 0x18 and firing a second
+                                        ; command toggle mid-CDB
 .z:     out  dx, al
         loop .z
         ret
@@ -576,14 +598,9 @@ get_lba:
         mov  bl, [bp+6]                 ; DL
         xor  bh, bh
         mov  si, [bp+4]                 ; CX
-        push si                         ; totals = cylinders * (8*25)
-        push bx
-        mov  ax, di
-        mov  cx, 200
-        mul  cx                         ; DX:AX = total sectors
-        pop  bx
-        pop  si
-        cmp  bx, dx
+        mov  ax, [TOTALS]               ; the capacity READ CAPACITY gave --
+        mov  dx, [TOTALS+2]             ; not cylinders x 200, which is only
+        cmp  bx, dx                     ; right for the flat 8 x 25 geometry
         ja   .err
         jb   .okl
         cmp  si, ax
@@ -652,9 +669,9 @@ disk_init:
         cld
         mov  di, GEO
         xor  ax, ax
-        mov  cx, 3
-        rep  stosw                      ; clear the record + equip byte
-        mov  byte [GEOEQUIP], 0
+        mov  cx, 5
+        rep  stosw                      ; clear the record, equip, totals
+        and  byte [EQUIPS], 0xFE        ; unit 0 absent until proven
         ; TEST UNIT READY -- is an image there at all?
         xor  cl, cl
         mov  al, 0x00
@@ -686,9 +703,51 @@ disk_init:
         in   al, dx                     ; drain the block-size word
         add  cx, 1
         adc  bx, 0                      ; BX:CX = total sectors
-        ; cylinders = totals / 200 (8 heads x 25 spt), capped at 0xFFFF
-        mov  dx, bx
-        mov  ax, cx
+        mov  [TOTALS], cx
+        mov  [TOTALS+2], bx
+        ; The target's own geometry: page 4 -> cylinders, heads ...
+        mov  al, 0x04
+        call mode_page
+        jc   .flat
+        in   al, dx                     ; cylinders 16-23
+        mov  ah, al
+        in   al, dx
+        mov  ch, al                     ; cylinders 8-15
+        in   al, dx
+        mov  cl, al                     ; cylinders 0-7
+        in   al, dx
+        mov  bl, al                     ; heads
+        or   ah, ah
+        jz   .c16
+        mov  cx, 0xFFFF                 ; scsiinf holds 16 bits of cylinder
+.c16:   jcxz .flat
+        or   bl, bl
+        jz   .flat
+        ; ... and page 3 -> sectors per track (page bytes 10-11)
+        push cx
+        push bx
+        mov  al, 0x03
+        call mode_page
+        pop  bx
+        pop  cx
+        jc   .flat
+        mov  ah, 8
+.s3:    in   al, dx                     ; page bytes 2-9: zone/alternates
+        dec  ah
+        jnz  .s3
+        in   al, dx
+        mov  ah, al                     ; spt hi -- must be 0
+        in   al, dx
+        mov  bh, al                     ; spt lo
+        or   ah, ah
+        jnz  .flat
+        or   bh, bh
+        jnz  .have
+.flat:  ; No usable pages: np21w's .hdn flat geometry, 8 heads x 25 spt,
+        ; cylinders = totals / 200, capped at 0xFFFF.
+        mov  ax, [TOTALS]
+        mov  dx, [TOTALS+2]
+        mov  bx, 0x1908                 ; BH = 25 spt, BL = 8 heads
         cmp  dx, 200
         jae  .cap
         mov  cx, 200
@@ -698,10 +757,11 @@ disk_init:
         mov  cx, ax
         jmp  .have
 .cap:   mov  cx, 0xFFFF
-.have:  mov  byte [GEO+0], 25           ; spt
+        ; CX = cylinders, BL = heads, BH = spt -> np21w scsibios_set's form
+.have:  mov  [GEO+0], bh                ; spt
         mov  al, ch
         and  al, 0xF0                   ; cyl bits 12-15 -> surfaces hi nibble
-        or   al, 0x08                   ; 8 surfaces
+        or   al, bl                     ; surfaces
         mov  [GEO+1], al
         mov  ax, cx
         and  ax, 0x0FFF
@@ -711,13 +771,71 @@ disk_init:
         or   ax, 0x4000                 ; extended cylinders
 .ne:    mov  [GEO+2], ax
         or   byte [GEOEQUIP], 0x01
+        or   byte [EQUIPS], 0x01        ; DISK_EQUIPS: SCSI unit 0 fitted
 .out:   ret
+
+; mode_page -- MODE SENSE(6) with DBD for page AL. On success CF=0, DX =
+; 0xCC6 and the buffer's read pointer sits on the page's byte 2 (any block
+; descriptors the target sent anyway are skipped). CF=1 on any failure.
+; Clobbers AX BX CX DX SI.
+mode_page:
+        mov  ah, al
+        mov  si, ax                     ; SI high byte: the page we asked for
+        mov  dx, 0xCC0
+        mov  al, 0x03
+        out  dx, al
+        mov  dx, 0xCC2
+        mov  al, 0x1A
+        out  dx, al                     ; cdb[0] MODE SENSE(6)
+        mov  al, 0x08
+        out  dx, al                     ; cdb[1] DBD
+        mov  al, ah
+        out  dx, al                     ; cdb[2] page, current values
+        xor  al, al
+        out  dx, al                     ; cdb[3]
+        mov  al, 36
+        out  dx, al                     ; cdb[4] header + descriptor + page
+        xor  al, al
+        out  dx, al                     ; cdb[5]
+        mov  bx, WAIT_SHORT
+        call scsi_go
+        jc   .no
+        test al, al
+        jnz  .no
+        ; A target that answers GOOD without the page (the firmware before
+        ; scsi_probe sent a bare 4-byte header) must not hand us stale
+        ; buffer bytes as geometry: the length has to cover a 24-byte page
+        ; and the page code has to be the one asked for.
+        mov  dx, 0xCC6
+        in   al, dx                     ; mode data length
+        cmp  al, 3 + 24
+        jb   .no
+        in   al, dx                     ; medium type
+        in   al, dx                     ; device-specific
+        in   al, dx                     ; block descriptor length
+        xor  ah, ah
+        mov  cx, ax
+        jcxz .pg
+.sk:    in   al, dx                     ; skip descriptors sent anyway
+        loop .sk
+.pg:    in   al, dx                     ; page code
+        and  al, 0x3F
+        mov  cx, si
+        cmp  al, ch
+        jne  .no
+        in   al, dx                     ; page length
+        cmp  al, 0x16
+        jb   .no
+        clc
+        ret
+.no:    stc
+        ret
 
 ; post_common -- the scan's contract: claim our flag slot, register the
 ; SCSI devtypes in the XROM table. BX = our window's flag-table byte.
 post_common:
-        mov  byte [bx], 0xFF            ; window claimed; later passes find
-                                        ; bit 6 set and keep calling us
+        mov  byte [bx], 0xC2            ; np21w scsibios.res's claim: bit 6
+                                        ; keeps the later passes calling us
         mov  ax, cs
         mov  al, ah                     ; our segment's high byte (0xD2)
         mov  [0x04B2], al               ; devtype 0x2x -- SCSI, LBA calls
@@ -750,8 +868,11 @@ post_init:                              ; entries 0x0C and 0x0F
         pop  ax
         retf
 
-post_boot:                              ; entry 0x12: after both FDD tries
-        push ax
+post_boot:                              ; entry 0x15, AL = sweep device
+        cmp  al, BOOTDEV
+        je   .ours
+        retf                            ; another device's turn
+.ours:  push ax
         push bx
         push cx
         push dx
@@ -787,47 +908,23 @@ post_boot:                              ; entry 0x12: after both FDD tries
         mov  es:[di], al
         inc  di
         loop .pb
-        ; registers down to the NEC convention, a real stack, and a RETF
-        ; back to .post_ret in case the IPL wants out.
-        mov  byte [0x0584], 0xA0        ; DISK_BOOT: a SCSI unit booted
-        mov  [BOOTSS], ss
-        mov  [BOOTSP], sp
-        mov  ax, 0x0020
-        mov  ss, ax
-        mov  sp, 0x01DC
-        push cs
-        mov  ax, post_ret
-        push ax                         ; the IPL's RETF target
-        mov  ax, 0x00A0                 ; DA/UA of the booted device
-        mov  bx, 0x0400                 ; bytes read
-        mov  cx, 0x0200                 ; cyl 0 | 512-byte class (sense form)
-        mov  dx, 0x0000                 ; head 0, sector 0: HD is zero-based
+        ; np21w scsibios.res's hand-off, which is the INT 1Bh read's own
+        ; result: AH = 0 status, AL = DA/UA, BX = bytes, CX = DX = BP = 0,
+        ; ES = the buffer; DISK_BOOT names the unit. A far CALL on the POST
+        ; stack, like the BIOS's own FDD boot at FDA6: an IPL that RETFs
+        ; lands back here and the sweep runs on. (The old hand-off set AX
+        ; and then zeroed it pushing the RETF offset: every IPL saw AL = 0.)
+        mov  byte [0x0584], 0xA0        ; DISK_BOOT: SCSI unit 0
+        mov  ax, 0x1FC0
+        mov  es, ax
+        mov  ax, 0x00A0
+        mov  bx, 0x0400
+        xor  cx, cx
+        xor  dx, dx
         xor  bp, bp
-        mov  si, 0x1FC0
-        mov  di, 0x055C                 ; DISK_EQUIP pointer
-        mov  es, si
-        push si
-        xor  ax, ax
-        push ax
-        retf                            ; -> 1FC0:0000
+        call 0x1FC0:0x0000
 
 .out:   pop  ds
-        pop  es
-        pop  bp
-        pop  di
-        pop  si
-        pop  dx
-        pop  cx
-        pop  bx
-        pop  ax
-        retf
-
-post_ret:                               ; the IPL asked out: restore the
-        xor  ax, ax                     ; POST frame and let the scan run on
-        mov  ds, ax
-        mov  ss, [BOOTSS]
-        mov  sp, [BOOTSP]
-        pop  ds
         pop  es
         pop  bp
         pop  di
