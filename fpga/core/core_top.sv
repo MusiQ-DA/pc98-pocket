@@ -359,16 +359,16 @@ module core_top (
     // modes nearly nothing would slow it. A fractional gate passes
     // thr_num/256 of the core's clock edges instead; Turbo passes all.
     // The duties are calibrated on hardware with CPUBENCH 0.980 to the
-    // machines each mode stands for (docs/ref/pc98-performance-baselines.md):
-    // "5 MHz" ~ V30 5 MHz (1.55), "10 MHz" ~ PC-9801VM11 (3.11), "20 MHz" ~
-    // 286 12 MHz (7.07).
+    // machines each setting stands for (docs/ref/pc98-performance-baselines.md):
+    // 0 "V30 10MHz" ~ PC-9801VM11 (3.11), 1 "286 10MHz" ~ VX21/UX21 (5.69),
+    // 2 "386 class" ~ RA21/DA (13.5).
 `ifdef PC98_Z86
-    localparam [7:0] THR_5MHZ  = 8'd16;
-    localparam [7:0] THR_10MHZ = 8'd32;
-    localparam [7:0] THR_20MHZ = 8'd72;
-    wire  [7:0] thr_num_mode = (clk_select == 2'b00) ? THR_5MHZ
-                             : (clk_select == 2'b01) ? THR_10MHZ
-                             : (clk_select == 2'b10) ? THR_20MHZ : 8'd0;
+    localparam [7:0] THR_V30 = 8'd20;   // 3.07 measured-linear (2.45 @16, 4.91 @32, 9.81 @64)
+    localparam [7:0] THR_286 = 8'd37;   // 5.67
+    localparam [7:0] THR_386 = 8'd88;   // 13.5 (18.47 @128)
+    wire  [7:0] thr_num_mode = (clk_select == 2'b00) ? THR_V30
+                             : (clk_select == 2'b01) ? THR_286
+                             : (clk_select == 2'b10) ? THR_386 : 8'd0;
     wire  [7:0] thr_num = (jtag_thr_num != 8'd0) ? jtag_thr_num : thr_num_mode;
 `else
     wire  [7:0] thr_num = 8'd0;

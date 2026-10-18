@@ -100,12 +100,12 @@ enum {
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
-// The four speeds the CE generator really makes from the 42.95 MHz chipset clock.
-// The PC-98 ladder is the 2.4576 MHz family this machine presents (x2 and x4 are the
-// "5 MHz" and "10 MHz" of a PC-9801VM/VX; the third is twice the fast one, still
-// cycle-paced) and a fourth that is the chipset clock itself -- not a speed, the
-// cycle-inaccurate maximum.
-static const char *const opt_cpu[] = { "5 MHz", "10 MHz", "20 MHz", "Turbo (max)" };
+// The four speeds, as the PC-98 machines they stand for (CPUBENCH 0.980 ratio,
+// docs/ref/pc98-performance-baselines.md): a V30 10 MHz (VM11/UV11, 3.11) for
+// titles too fast-sensitive for a 286 -- the V30 switch real 286/386 boxes
+// had -- a 286 10 MHz (VX21/UX21, 5.69), a 386 (RA21/DA, ~13.5), and the
+// unthrottled maximum. core_top's throttle sets the first three.
+static const char *const opt_cpu[] = { "V30 10MHz", "286 10MHz", "386 class", "Turbo (max)" };
 static const char *const opt_bios_wr[] = { "None", "EC00", "Main", "All" };
 static const char *const opt_boost[] = { "None", "2x", "4x" };
 static const char *const opt_level4[] = { "1", "2", "3", "4" };
@@ -164,13 +164,8 @@ typedef struct {
 // through the version tables below -- and the next save writes the
 // current version.
 static setting_t settings[SET_COUNT] = {
-    // Index 1 is the faithful bus clock: a PC-9801VM/VX's V30 at 2.4576 MHz
-    // x4. The paced settings also throttle the core itself (core_top's
-    // thr_num) to the CPUBENCH ratio of the machine each stands for, since
-    // z86 runs from its cache and the bus pacing alone would barely slow it.
-    // The default is Turbo, the full chipset clock. At index 0 the ITF's
-    // 640 KB memory test is a long wait with nothing on screen but its own
-    // test pattern.
+    // The default is Turbo, the full chipset clock. Settings saved under the
+    // old 5/10/20 MHz labels keep their index.
     SETTING_D(opt_cpu, 3),    // SET_CPU_SPEED
     SETTING(opt_bios_wr),     // SET_BIOS_WR
     SETTING(opt_boost),       // SET_BOOST

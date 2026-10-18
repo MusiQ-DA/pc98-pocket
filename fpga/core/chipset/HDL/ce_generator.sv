@@ -71,8 +71,10 @@ module ce_generator (
         // only the edge ratio and the RAM waits are consumed.
         case (active_clk_select)
             2'b00:
-            begin                                   // 4.915197 MHz ("5 MHz")
-                cpu_edge_num = 9'd46;
+            begin                                   // 9.830393 MHz: the "V30 10 MHz"
+                cpu_edge_num = 9'd92;               // setting paces its bus like
+                                                    // "286 10 MHz" (core_top's
+                                                    // throttle sets them apart)
                 cpu_edge_den = 9'd201;
                 vram_wait_en = 1'b1;
             end
