@@ -825,7 +825,8 @@ wire cmd_format_writeprotected_at_start = ~cmd_format_hang_on_start && cmd_forma
 wire cmd_format_hang_on_start =
 	~motor_enable[selected_drive[0]] ||                          //motor off
 	~media_present[selected_drive[0]] ||                         //no media
-	command[23:16] != 8'h02 ||                                   //invalid sector size
+	// The N must be the MEDIA's: 2 on 512-byte media, 3 on a PC-98 2HD.
+	command[23:16] != (media_is_1024[selected_drive[0]] ? 8'h03 : 8'h02) || //invalid sector size
 	command[15:8] != media_sectors_per_track[selected_drive[0]]; //invalid secotr count
 
 wire cmd_format_ok_at_start = cmd_format_track_start && ~cmd_format_writeprotected_at_start && ~cmd_format_hang_on_start;
@@ -854,7 +855,7 @@ reg [7:0] format_sector_count;
 always @(posedge clk) begin
 	if(~rst_n)                                                                  format_sector_count <= 8'd0;
 	else if(cmd_format_ok_at_start)                                             format_sector_count <= command[15:8];
-	else if(state == S_SD_FORMAT_WAIT_FOR_FILL && &format_counter && fifo_read) format_sector_count <= format_sector_count - 8'd1;
+	else if(state == S_SD_FORMAT_WAIT_FOR_FILL && format_sector_last && fifo_read) format_sector_count <= format_sector_count - 8'd1;
 end
 
 // Terminal count can land on the last sector's final byte; excluding that just-completed
@@ -942,10 +943,10 @@ always @(posedge clk) begin
 	// bit, which the BIOS decoder at FF98F tests before NW -- a write to a
 	// protected disk came back to DOS as a CRC data error.
 	else if(cmd_write_normal_start && cmd_write_and_writeprotected_at_start)  reply <= { 24'd0, 8'd2, command[31:24],            7'b0,command[32],             command[47:40],              8'h00, 8'h02, (8'h40 | { 5'd0, command[32],              selected_drive }) };
-	else if(cmd_format_track_start && cmd_format_writeprotected_at_start)     reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,command[26],             cylinder[selected_drive[0]], 8'h00, 8'h02, (8'h40 | { 5'd0, command[26],              selected_drive }) };
+	else if(cmd_format_track_start && cmd_format_writeprotected_at_start)     reply <= { 24'd0, command[23:16], sector[selected_drive[0]], 7'b0,command[26],             cylinder[selected_drive[0]], 8'h00, 8'h02, (8'h40 | { 5'd0, command[26],              selected_drive }) };
 	else if(state == S_CHECK_TC && cmd_read_write_finish)                     reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
-	else if(state == S_CHECK_TC && cmd_format_finish)                         reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
-	else if(state == S_WAIT_FOR_FORMAT_INPUT && cmd_format_in_input_finish)   reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h40 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
+	else if(state == S_CHECK_TC && cmd_format_finish)                         reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
+	else if(state == S_WAIT_FOR_FORMAT_INPUT && cmd_format_in_input_finish)   reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h40 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	else if(cmd_read_id_finished)                                             reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	// A unit with no media (or no drive at all, US>1) must answer with the FAULT
 	// bit set -- ST3 = 0x80|HD|US, the np21w "drive not equipped" reply. Returning
@@ -1029,7 +1030,7 @@ always @(posedge clk) begin
 	else if(state == S_COUNT_LOGICAL && !mult_b && cmd_format_in_progress)        state <= S_PREPARE;
 	//sd
 	else if(state == S_SD_CONTROL && cmd_format_in_progress)                      state <= S_SD_FORMAT_WAIT_FOR_FILL;
-	else if(state == S_SD_FORMAT_WAIT_FOR_FILL && &format_counter && fifo_read)   state <= S_WAIT;
+	else if(state == S_SD_FORMAT_WAIT_FOR_FILL && format_sector_last && fifo_read)   state <= S_WAIT;
 
 	//read id
 	else if(state == S_IDLE && cmd_read_id_ok_at_start)                           state <= S_WAIT;
@@ -1126,11 +1127,15 @@ end
 
 //------------------------------------------------------------------------------ sd
 
-reg [8:0] format_counter;
+// FORMAT fills each sector with D for the full sector length, as the media
+// does (uPD765 writes 128<<N bytes; this image's N is fixed per media), so a
+// 2HD sector is 1024 filler bytes, not 512 with a stale tail.
+reg [10:0] format_counter;
 always @(posedge clk) begin
-	if(state == S_IDLE) format_counter <= 9'd0;
-	else if(fifo_read)  format_counter <= format_counter + 9'd1;
+	if(state != S_SD_FORMAT_WAIT_FOR_FILL) format_counter <= 11'd0;
+	else if(fifo_read)                     format_counter <= format_counter + 11'd1;
 end
+wire format_sector_last = format_counter == sector_len - 11'd1;
 
 reg [15:0] sd_sector;
 always @(posedge clk) begin
