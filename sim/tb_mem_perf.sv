@@ -644,6 +644,7 @@ module tb_mem_perf;
     task ram_seed(input int addr, input logic [15:0] w);
         sdr.u_part.poke(24'(addr), w);
         shadow[int'(addr)] = w[7:0];
+        written[int'(addr)] = 1'b1;
     endtask
 
     initial begin
@@ -1154,14 +1155,16 @@ module tb_mem_perf;
     // poke the program + reset vector into the SDRAM image (1 guest byte per
     // word, flat-addressed the way poke() indexes).
     initial begin
+        // ram_seed (not plain poke) so the read-serve oracle below has
+        // ground truth for the program + reset vector too.
         for (int i = 0; i < prog_len; i++)
-            sdr.u_part.poke(24'h0F0000 + i, {8'h00, prog[i]});
+            ram_seed(32'(24'h0F0000 + i), {8'h00, prog[i]});
         // FFFF0: EA 00 00 00 F0 = JMP FAR F000:0000 (ip, then seg, LE each)
-        sdr.u_part.poke(24'h0FFFF0, 16'h00EA);
-        sdr.u_part.poke(24'h0FFFF1, 16'h0000);
-        sdr.u_part.poke(24'h0FFFF2, 16'h0000);
-        sdr.u_part.poke(24'h0FFFF3, 16'h0000);
-        sdr.u_part.poke(24'h0FFFF4, 16'h00F0);
+        ram_seed(32'h0FFFF0, 16'h00EA);
+        ram_seed(32'h0FFFF1, 16'h0000);
+        ram_seed(32'h0FFFF2, 16'h0000);
+        ram_seed(32'h0FFFF3, 16'h0000);
+        ram_seed(32'h0FFFF4, 16'h00F0);
         // phase-0A/0B mark cells: unwritten cells read X in the model
         for (int i = 20'h00700; i < 20'h00710; i++)
             ram_seed(32'(i), 16'h0000);
@@ -1173,6 +1176,52 @@ module tb_mem_perf;
         // Phase-9 prime is emitted by the program initial (bad_land is
         // only known there); see the poke inside the emit block.
     end
+
+    // ========================================================================
+    // Written-set: keys the guest genuinely wrote (write handler only).
+    // The simulator's assoc arrays auto-insert a 00 entry when an rvalue read
+    // touches a missing key (the commit-2 phantom quirk), so shadow.exists
+    // alone cannot tell "guest wrote it" from "quirk materialised it".
+    // The oracles gate on this set instead; want values still come from
+    // shadow (meaningful exactly where written says so).
+    bit written [int];
+
+    // Read-serve oracle: every guest read ack (any serve path --
+    // engine pair, hit, fillm release, forward) must return the fresh
+    // shadow bytes for its address. c_stale is blind to hit/release
+    // serves (they never touch the seq/RAM path), which is exactly where
+    // fast-serve broke. Snapshot at the ack edge, compare one clk later.
+    // ========================================================================
+    int ro_bad = 0; int ro_pend = 0;
+    logic [15:0] ro_w; logic [19:0] ro_a; logic ro_ube;
+    logic [7:0] ro_want0, ro_want1, ro_got0, ro_got1;
+    always_ff @(posedge clk) if (sdram_up && !reset) begin
+        if (ro_pend) begin
+            ro_pend <= 1'b0;
+            ro_want0 = written.exists(int'(ro_a))    ? shadow[int'(ro_a)]    : 8'h00;
+            ro_want1 = written.exists(int'(ro_a)+1)  ? shadow[int'(ro_a)+1]  : 8'h00;
+            ro_got0  = ro_a[0] ? ro_w[15:8] : ro_w[7:0];
+            ro_got1  = ro_a[0] ? ro_w[7:0]  : ro_w[15:8];
+            if (written.exists(int'(ro_a))
+                && (ro_got0 !== ro_want0
+                    || (!ro_ube && written.exists(int'(ro_a)+1)
+                        && ro_got1 !== ro_want1))) begin
+                if (ro_bad < 30)
+                    $display("RO-BAD t=%0t a=%05x w=%04x got=%02x,%02x want=%02x,%02x ube=%b",
+                             $time, ro_a, ro_w, ro_got0, ro_got1,
+                             ro_want0, ro_want1, ro_ube);
+                ro_bad <= ro_bad + 1;
+            end
+        end
+        if (zwb_ack && zwb_cyc && !zwb_we && !zwb_tga) begin
+            ro_w    <= u_bridge.rd_word;
+            ro_a    <= u_bridge.srv_addr;
+            ro_ube  <= u_bridge.srv_ube;
+            ro_pend <= 1'b1;
+        end
+    end
+
+
 
     // ========================================================================
     // cycle attribution
@@ -1715,16 +1764,19 @@ module tb_mem_perf;
     longint unsigned c_stale = 0;
     always @(posedge clk) begin
         orc_ack_q <= zwb_ack;
-        if (!reset && aen && seq_mem_wr && !seq_mem_addr[19]
-            && shadow.exists(int'(seq_mem_addr)))
-            shadow.delete(int'(seq_mem_addr));
+        if (!reset && aen && seq_mem_wr && !seq_mem_addr[19]) begin
+            if (shadow.exists(int'(seq_mem_addr)))
+                shadow.delete(int'(seq_mem_addr));
+            if (written.exists(int'(seq_mem_addr)))
+                written.delete(int'(seq_mem_addr));
+        end
         if (!reset && zwb_ack && !orc_ack_q && zwb_cyc && !zwb_tga) begin
             automatic int a = int'({zwb_adr, 1'b0});
             if (zwb_we) begin
-                if (zwb_sel[0]) shadow[a]   = zwb_dat_o[7:0];
-                if (zwb_sel[1]) shadow[a+1] = zwb_dat_o[15:8];
+                if (zwb_sel[0]) begin shadow[a]   = zwb_dat_o[7:0];  written[a]   = 1'b1; end
+                if (zwb_sel[1]) begin shadow[a+1] = zwb_dat_o[15:8]; written[a+1] = 1'b1; end
             end else if (a < 32'hA0000) begin
-                if (zwb_sel[0] && shadow.exists(a) && shadow[a] !== zwb_dat_i[7:0]) begin
+                if (zwb_sel[0] && written.exists(a) && shadow[a] !== zwb_dat_i[7:0]) begin
                     if (c_stale < 16)
                         $display("  STALE t=%0t a=%05x got=%02x want=%02x ph=%0d pc=%05x w0=%05x/%0d-%0d w1=%05x/%0d-%0d live=%b",
                                  $time, a, zwb_dat_i[7:0], shadow[a], cur_phase, zet_pc,
@@ -1732,7 +1784,7 @@ module tb_mem_perf;
                                  u_bridge.pf_base1, u_bridge.pf_lo1, u_bridge.pf_cnt1, u_bridge.pf_live);
                     c_stale <= c_stale + 1;
                 end
-                if (zwb_sel[1] && shadow.exists(a+1) && shadow[a+1] !== zwb_dat_i[15:8]) begin
+                if (zwb_sel[1] && written.exists(a+1) && shadow[a+1] !== zwb_dat_i[15:8]) begin
                     if (c_stale < 16)
                         $display("  STALE t=%0t a=%05x got=%02x want=%02x ph=%0d pc=%05x",
                                  $time, a+1, zwb_dat_i[15:8], shadow[a+1], cur_phase, zet_pc);
@@ -1923,10 +1975,13 @@ module tb_mem_perf;
             // bad/diverged/stray are direct loss checks; c_uncov counts
             // uncovered write-strobe falls with expand down -- the only
             // falls that can be true losses (an expand takeover only clips
-            // an already-captured, already-released strobe); and under
-            // +GRANT the fill window must be whole.
+            // an already-captured, already-released strobe); under
+            // +GRANT the fill window must be whole; and the read-serve
+            // oracle (ro_bad) catches a stale/wrong word on ANY serve
+            // path, including the fast-serve hit/release paths that
+            // never touch the seq/RAM machine.
             if (bad || diverged || stray || (c_uncov != 0)
-                || (c_pbad != 0) || (c_stale != 0)
+                || (c_pbad != 0) || (c_stale != 0) || (ro_bad != 0)
                 || (grant_en && (dma_seen != 256 || grants == 0)))
                 $display("=== FAIL tb_mem_perf ===");
             else
@@ -2368,6 +2423,9 @@ module tb_mem_perf;
         $display("sdram up, CPU released");
         $fflush;
     end
+
+
+
 
     initial begin
         #800_000_000;                       // 800 ms of sim time ceiling

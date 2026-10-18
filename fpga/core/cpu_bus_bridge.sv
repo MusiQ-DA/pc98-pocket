@@ -333,7 +333,13 @@ module cpu_bus_bridge #(
             // is served by the normal path once that pair retires.
             // !cur_inta: the INTA pair's pair_done must not ack a memory
             // read still parked on req_busy by the defer below.
-            if (pair_done && req_busy && !cur_pf && !cur_dq && !cur_inta) begin
+            // !(cur_fillm && fillm_released): a released fillm's tail is a
+            // pure no-op too -- the fast-serve release already acked the
+            // miss, and a request captured during the tail must wait for
+            // its own pair; acking it here would hand the guest the
+            // previous word (the loader wedge at f8a10 / phase-7 loop).
+            if (pair_done && req_busy && !cur_pf && !cur_dq && !cur_inta
+                && !(cur_fillm && fillm_released)) begin
                 // A read that retires inside the vector-park window can't
                 // ack yet: wb_dat_i is committed to the vector while
                 // wb_tgc_o/nmia is up, so the ack would hand the master
@@ -358,6 +364,13 @@ module cpu_bus_bridge #(
             // ran for it; rd_word takes the window's bytes in the engine
             // block.
             if (hit_serve) begin
+                req_busy     <= 1'b0;
+                wb_ack_i     <= 1'b1;
+            end
+            // A fill-on-miss release: the guest's word came off the
+            // burst's first beats and is served from the window while
+            // the pair stays out to price the bus. Same ack shape.
+            if (fillm_release) begin
                 req_busy     <= 1'b0;
                 wb_ack_i     <= 1'b1;
             end
@@ -687,6 +700,14 @@ module cpu_bus_bridge #(
                                     // guest, every beat also appends)
     reg         fill_ok;            // this fill's beats may still append
     reg  [4:0]  fill_beats;         // beats this fill appended
+    reg         fillm_released;     // the fill-on-miss pair already served
+                                    // its guest off the early beats
+    reg  [5:0]  ce_cnt;             // CE posedges priced into this fill
+                                    // pair's bus occupancy
+    reg  [1:0]  hit_q;              // fetch credits: words the BIU queue
+                                    // can still hand the EU (cap 3 = the
+                                    // metal's 6-byte queue)
+    reg         hit_div;            // CE posedge divider: 1 credit / 2 CE
     reg  [6:0]  fill_wait;          // clks the pair has waited for its burst
     reg  [1:0]  pf_dead;            // zero-beat fills: dead man's switch
     reg         pf_miss1;           // a foreign miss since last hit/rebase
@@ -703,6 +724,49 @@ module cpu_bus_bridge #(
     // anyway and the dead man's switch scores it.
     wire fill_early = (cur_pf || cur_fillm) && fill_ok
                    && (fill_beats == 5'd0) && (fill_wait != 7'd127);
+
+    // ------------------------------------------------------------------
+    // Fast-serve: the 286 BIU queue model, layered on the windows.
+    //
+    // A real 80286's EU never waits on the bus for a fetch that the
+    // queue already holds -- it drains the queue while the BIU refills
+    // it at the pipelined rate (one word per 2 clocks). Three pieces
+    // reproduce that here:
+    //
+    //   * a fill-on-miss pair releases its guest the moment the
+    //     burst's first beats (the guest's own bytes) land in the
+    //     window -- the pair stays out only to finish and PRICE the
+    //     fill's bus occupancy;
+    //   * a fill pair may not end before ce_cnt (its CE posedges in
+    //     B_CMD) covers cur_pf_len -- one CE per byte, the pipelined
+    //     BIU's byte rate, which is what separates 8/10/12 MHz paced
+    //     supply linearly (the SDRAM burst itself is mode-blind);
+    //   * a window hit serves at most hit_q words, refilled at one
+    //     word per 2 CE -- the queue-empty stall. Without this a
+    //     loop that fits the windows would run at the core's own
+    //     ceiling at every speed: metal has no loop cache, the BIU
+    //     re-fetches the same bytes over the bus every iteration,
+    //     and the credits charge exactly that re-fetch.
+    // ------------------------------------------------------------------
+    wire [4:0] fillm_span = cur_1cyc ? 5'd2 : 5'd1;
+    // !fillm_released: release fires ONCE per armed pair. After the
+    // release the tracker is free to capture the next request while
+    // this pair's tail still runs; without the latch the conditions
+    // stay true and every request captured mid-tail is instantly
+    // "released" with this pair's STALE cur_addr bytes -- the guest
+    // receives the previous word for every read (observed as the
+    // 00-ea-forever loader crawl).
+    wire fillm_release = (bstate == B_CMD) && cur_fillm && req_busy
+                      && !fillm_released
+                      && fill_ok && bus_ours
+                      && (fill_beats >= fillm_span) && (t_cnt >= 3'd2);
+    // The guest's bytes sit at the fill's anchor offset (the burst
+    // starts AT the miss); read them the same way the hit muxes do.
+    wire [7:0] fmb0 = pf_buf[{cur_pf_w, cur_addr[4:0]}];
+    wire [7:0] fmb1 = pf_buf[{cur_pf_w, cur_addr[4:0] + 5'd1}];
+    // Bus-occupancy price: fills hold the bus one CE per byte.
+    wire fill_priced = !(cur_pf || cur_fillm)
+                     || (ce_cnt >= {1'b0, cur_pf_len});
 
     // ------------------------------------------------------------------
     // Posted write queue: a plain-SDRAM guest write is captured at
@@ -769,8 +833,21 @@ module cpu_bus_bridge #(
     // is not yet armed -- but not while DMA owns the bus, when the
     // windows are being dropped anyway, and not over a queued write's
     // span, where the window's bytes predate the pending store.
-    wire hit_serve = pf_hit && bus_ours && (bstate == B_IDLE) && !wrq_ovl
-                  && !bank_chg && !pf_nohit;
+    // A hit also serves WHILE a fill pair streams its tail: the queue
+    // feeds the EU as the BIU keeps filling -- that overlap is the
+    // whole point of a queue -- and each serve spends a credit, so the
+    // sustained rate stays at the bus's fill rate.
+    // req_busy && req_age==2: only a captured, operand-converged request
+    // may be hit-served. Without it, hit_serve could co-fire with the
+    // tracker's capture edge and answer a request whose wb_adr_o/wb_sel_o
+    // still show the previous micro-op (the master re-tracks per Zet
+    // edge) -- serving the previous word as the answer, one-request-off,
+    // which the loader retry loop and the wild-jump wedges showed.
+    wire hit_serve = pf_hit && (hit_q != 2'd0) && req_busy && (req_age == 2'd2)
+                   && bus_ours
+                  && ((bstate == B_IDLE)
+                      || ((bstate == B_CMD) && (cur_pf || cur_fillm)))
+                  && !wrq_ovl && !bank_chg && !pf_nohit;
 
     wire [4:0]  pf_idx0 = srv_beg[4:0];
     wire [7:0]  pf_b0   = pf_buf[{pf_hw, pf_idx0}];
@@ -1133,6 +1210,10 @@ module cpu_bus_bridge #(
             pf_ghost1  <= 15'h0;
             pf_ghost_v <= 2'b00;
             shadow_q   <= bios_shadow_flag;
+            fillm_released <= 1'b0;
+            ce_cnt     <= 6'd0;
+            hit_q      <= 2'd3;
+            hit_div    <= 1'b0;
         end else begin
             shadow_q <= bios_shadow_flag;
             // A prefetch fill under way: beats append in address order
@@ -1358,6 +1439,27 @@ module cpu_bus_bridge #(
                 fill_beats <= 5'd0;
             end
 
+            // Fast-serve bookkeeping. A fresh pair clears the release
+            // latch and its price counter; B_CMD then prices every CE
+            // posedge a fill pair sits on the bus, and the fetch-credit
+            // divider accrues one word per 2 CE posedges (consumption
+            // is in the tracker block, with the serve itself).
+            if (arm_req || arm_drain || arm_fill) begin
+                ce_cnt         <= 6'd0;
+                fillm_released <= 1'b0;
+            end
+            if (fillm_release)
+                fillm_released <= 1'b1;
+            if ((bstate == B_CMD) && (cur_pf || cur_fillm)
+                && cpu_ce_posedge && (ce_cnt != 6'd63))
+                ce_cnt <= ce_cnt + 6'd1;
+            if (cpu_ce_posedge)
+                hit_div <= ~hit_div;
+            if (hit_serve)
+                hit_q <= hit_q - 2'd1;
+            else if (cpu_ce_posedge && hit_div && (hit_q != 2'd3))
+                hit_q <= hit_q + 2'd1;
+
             // Dead man's switch: a fill that completed with no
             // invalidation and appended zero beats means pf_beat_* is
             // not wired (legacy benches, a broken tap) -- stop spending
@@ -1498,6 +1600,10 @@ module cpu_bus_bridge #(
             // ack on the same edge.
             if (hit_serve) begin
                 rd_word    <= pf_hit_word;
+                biu_done_r <= 1'b1;
+            end
+            if (fillm_release) begin
+                rd_word    <= cur_1cyc ? {fmb1, fmb0} : {fmb0, fmb0};
                 biu_done_r <= 1'b1;
             end
             if (fwd_serve) begin
@@ -1641,7 +1747,7 @@ module cpu_bus_bridge #(
                 // capture witness answers both: it rises only after THIS
                 // strobe's operands are held in RAM.
                 if (pair_accept && cpu_ce_posedge && bus_ours
-                    && !fill_early) begin
+                    && !fill_early && fill_priced) begin
                     if (cur_read && (byte_idx == 2'd0)) rd_lo <= data_bus;
                     if (cur_read && (byte_idx == 2'd1)) rd_hi <= data_bus;
                     if (cur_read && cur_1cyc)           rd_hi <= data_bus_hi;
@@ -1660,7 +1766,8 @@ module cpu_bus_bridge #(
                         if (cur_inta) begin
                             int_vector  <= rd_hi;   // ACK2's byte
                             biu_done_r  <= 1'b1;
-                        end else if (!cur_pf && !cur_dq) begin
+                        end else if (!cur_pf && !cur_dq
+                                      && !(cur_fillm && fillm_released)) begin
                             if (cur_term == TERM_WORD)
                                 rd_word <= 16'h2588;
                             else if (cur_term == TERM_ACTIVE)
