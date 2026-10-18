@@ -1,16 +1,15 @@
 //============================================================================
 //
-//  zet_cpu_bridge -- put the Zet (16-bit Wishbone master) on the i8288
-//  world (8-bit), the downstream contract the removed nuV30 bridge drove.
+//  cpu_bus_bridge -- put the CPU (16-bit Wishbone master; z86 today) on
+//  the i8288 world (8-bit), the downstream contract the removed nuV30
+//  bridge drove.
 //
-//  Zet is a plain 80186-class microcoded core: it knows
-//  PUSHI/ENTER/LEAVE/PUSHA/IMUL-imm/INS/OUTS, so the ITF's
-//  F9476 `push imm16` that killed the i8088 does not derail it. It is NOT
-//  a V30: no NEC extensions (BRKEM/INS/EXT bitfield, the flag quirks), and
-//  it makes no attempt at cycle accuracy. It is the shipping CPU -- nuV30
-//  was removed when the swap landed.
+//  The bridge was first built against Zet (80186-class, microcoded); z86
+//  (pipelined 286-class) now sits behind the same contract, so the master
+//  is whoever speaks it. Zet itself was removed from the tree 2026-10-18
+//  when z86 became the only CPU.
 //
-//  THE UPSTREAM CONTRACT (zet_wb_master, measured, not assumed):
+//  THE MASTER'S CONTRACT (measured on Zet's zet_wb_master, kept by z86):
 //   * wb_cyc_o == wb_stb_o, asserted in the master's stb states and held
 //     until wb_ack_i; wb_adr_o[19:1] is the WORD address, wb_sel_o the
 //     lanes: 01 = even byte, 10 = odd byte, 11 = word (always even --
@@ -26,7 +25,7 @@
 //
 //  THE BRIDGE'S ANSWER:
 //
-//   * Zet runs on a GATED clock (zet_clk = clk & (run_arm | reset)): the
+//   * The CPU runs on a GATED clock (zet_clk = clk & (run_arm | reset)): the
 //     gate is open unless an INTA service or pause_core has closed it, so
 //     the core free-runs at clk_chipset and only the 8288 byte engine
 //     below stays on the cpu_ce train. Bus cycles keep their PC-98
@@ -41,25 +40,24 @@
 //     Program order holds because Wishbone serializes for us: the next
 //     cycle cannot announce until this one is acked, so the v30 bridge's
 //     write queue is unnecessary here.
-//   * INTA: when wb_tgc_o rises, the bridge FREEZES Zet's clock -- the
+//   * INTA: when wb_tgc_o rises, the bridge FREEZES the CPU's clock -- the
 //     pulse is a register that cannot clear without an edge, so wb_tgc_o
 //     stays high and iid_dat_i keeps selecting wb_dat_i. Two BS_INTA byte
 //     cycles then run down the 8288 (the i8259 needs ACK1 to set ISR and
 //     ACK2 to present the vector, same as the metal's double-INTA), the
 //     second byte is captured, {8'h00, vector} is parked on wb_dat_i, and
-//     the clock is released: the first edge Zet sees clears inta with the
+//     the clock is released: the first edge the CPU sees clears inta with the
 //     vector already valid, which is when the microcode samples it.
 //     NMI's acknowledge (nmia) gets the fixed vector 2 the same way --
 //     kotku.v wires 16'h0002 for it, no bus cycle needed.
 //
-//  SPDX-License-Identifier: GPL-3.0-or-later  (Zet is GPLv3+; see
-//  core/zet/LICENSE.Zet)
+//  SPDX-License-Identifier: GPL-3.0-or-later
 //
 //============================================================================
 
 `default_nettype none
 
-module zet_cpu_bridge #(
+module cpu_bus_bridge #(
     // Zet edges a request must age before it arms (see req_age below). Zet's
     // wb_master re-tracks its operands one edge late, so it needs 2; z86's
     // memory port registers adr/sel/dat/we/tga on the edge it raises stb,

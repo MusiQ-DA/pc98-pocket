@@ -35,9 +35,8 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # afford (slot 0x33 = last guest I/O write + count).
 set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
 
-# CPU: z86 (pipelined 286-class, fpga/core/z86) instead of Zet. Comment out
-# to fall back to Zet; the bridge and everything below it are shared.
-set_global_assignment -name VERILOG_MACRO "PC98_Z86=1"
+# CPU: z86 (pipelined 286-class, fpga/core/z86) -- the only CPU in the
+# tree since Zet was removed; the PC98_Z86 select macro is gone with it.
 
 # Boot the ITF, not the BIOS.
 #
@@ -52,9 +51,6 @@ set_global_assignment -name VERILOG_MACRO "PC98_Z86=1"
 # MAME chip dumps and 8086 throughout. The UX BIOS is not usable here: its
 # POST uses PUSHA at FDA35 and SMSW/LGDT/LIDT after it.
 set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
-
-# The CPU is Zet (80186-class) -- the only CPU the tree carries now; the
-# PC98_ZET macro that selected it over the removed nuV30 is gone with it.
 
 # The real floppy controller, not the constant-returning stub.
 #

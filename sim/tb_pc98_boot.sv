@@ -2,7 +2,7 @@
 // tb_pc98_boot -- run the real ITF on the real CPU core, and watch where it
 // goes.
 //
-// The CPU is the Zet through zet_cpu_bridge. The same flat memory and the
+// The CPU is z86 through cpu_bus_bridge. The same flat memory and the
 // same I/O models see the bridge's bus cycles, so this is the end-to-end
 // dress rehearsal of the hardware CPU path (i8288 + 8-bit bus + real ROMs +
 // 8251) before the bitstream.
@@ -152,11 +152,7 @@ module tb_pc98_boot;
     wire        pf_beat_v;
     wire [7:0]  pf_beat_dat;
 
-`ifdef Z86
-    zet_cpu_bridge #(.REQ_SETTLE(0)) u_bridge (
-`else
-    zet_cpu_bridge u_bridge (
-`endif
+    cpu_bus_bridge #(.REQ_SETTLE(0)) u_bridge (
         .clk               (clk_chipset),
         .cpu_ce_posedge    (cpu_ce_posedge),
         .cpu_ce_negedge    (cpu_ce_negedge),
@@ -204,8 +200,6 @@ module tb_pc98_boot;
         .dbg               (zbridge_dbg)
     );
 
-    logic        fwdis_r = 1'b0;     // +fwdis: Zet's fetch-window A/B
-`ifdef Z86
     z86 u_cpu (
         .clk       (zet_clk),
         .reset     (cpu_reset_w),
@@ -244,29 +238,6 @@ module tb_pc98_boot;
     assign zwb_nmia  = 1'b0;
     assign zet_fault = 1'b0;
     assign zet_opc   = 8'h00;
-`else
-    zet u_cpu (
-        .wb_clk_i  (zet_clk),
-        .wb_rst_i  (cpu_reset_w),
-        .wb_dat_i  (zwb_dat_i),
-        .wb_dat_o  (zwb_dat_o),
-        .wb_adr_o  (zwb_adr),
-        .wb_we_o   (zwb_we),
-        .wb_tga_o  (zwb_tga),
-        .wb_sel_o  (zwb_sel),
-        .wb_stb_o  (zwb_stb),
-        .wb_cyc_o  (zwb_cyc),
-        .wb_ack_i  (zwb_ack),
-        .wb_tgc_i  (pic1_to_cpu),
-        .wb_tgc_o  (zwb_inta),
-        .nmi       (1'b0),
-        .nmia      (zwb_nmia),
-        .fwdis     (fwdis_r), .nowrap(1'b0),
-        .pc        (zet_pc),
-        .dbg_fault (zet_fault),
-        .dbg_opc   (zet_opc)
-    );
-`endif
 
     // End-to-end readback: every acked Wishbone memory read must equal the
     // architectural byte the guest was meant to see (mirror/ROM model). A
@@ -357,11 +328,6 @@ module tb_pc98_boot;
                          expected_byte(zet_pc));
         end
 
-    // Zet has no dbg_regs: the trace fields read 0, eu_pc below reads the
-    // core's real linear-PC debug pin instead. z86 drives them.
-`ifndef Z86
-    assign dbg_regs = '0;
-`endif
     assign dbg_first_pop = 1'b0;
     assign dbg_pend = 1'b0;
 
@@ -700,18 +666,11 @@ module tb_pc98_boot;
         .ramimg_len(ramimg_len_t), .ramimg_wdata(16'h0000),
         .ramimg_ack(ramimg_ack_t), .ramimg_rvalid(ramimg_rvalid_t),
         .ramimg_rdata(), .ramimg_done(ramimg_done_t),
-`ifdef Z86
         .cachef_req(cf_req), .cachef_we(cf_we), .cachef_addr(cf_addr),
         .cachef_len(cf_len), .cachef_wdata0(cf_wd0), .cachef_wdata1(cf_wd1),
         .cachef_ack(cf_ack), .cachef_rvalid(cf_rvalid), .cachef_rdata(cf_rdata),
         .cachef_done(cf_done),
         .ram_wr_snoop_v(sn_v), .ram_wr_snoop_addr(sn_addr), .ram_wr_snoop_len(sn_len)
-`else
-        .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
-        .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
-        .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
-        .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len()
-`endif
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
@@ -749,7 +708,6 @@ module tb_pc98_boot;
         if ($value$plusargs("analog4=%d", v)) analog4_r  = (v != 0);
         if ($value$plusargs("disppage=%d", v)) disp_page_r = (v != 0);
         if ($value$plusargs("dbl=%d", v))     dbl_r      = (v != 0);
-        if ($value$plusargs("fwdis=%d", v))   fwdis_r    = (v != 0);
     end
 
     logic        dot_clk = 1'b0;
@@ -885,7 +843,7 @@ module tb_pc98_boot;
     longint unsigned a_lat_hist [0:4] = '{0,0,0,0,0};
     // display fetch vs raster phase: D grant cycles inside vs outside hblank
     longint unsigned d_in_hb = 0, d_in_vis = 0, d_in_vb = 0;
-    // CPU-visible stall: zet wishbone pending cycles + RAM FSM busy cycles
+    // CPU-visible stall: CPU wishbone pending cycles + RAM FSM busy cycles
     longint unsigned cpu_wb_pend = 0, cpu_wb_ack = 0;
     longint unsigned ramfsm_busy = 0, ramfsm_done = 0;
     longint unsigned guest_stall = 0;  // cmd up, ready down
@@ -1499,13 +1457,11 @@ module tb_pc98_boot;
                 $write("\n");
                 $display("  %8t  OUT 043D, %02X   -> itf_bank %0d",
                          $time, cpu_data_bus, (cpu_data_bus == 8'h12) ? 0 : 1);
-`ifdef Z86
                 $display("             z86: ax %04X cx %04X dx %04X bx %04X sp %04X si %04X flags %04X cs %04X ds %04X",
                          u_cpu.u_regfile.regs[0], u_cpu.u_regfile.regs[1],
                          u_cpu.u_regfile.regs[2], u_cpu.u_regfile.regs[3],
                          u_cpu.u_regfile.regs[4], u_cpu.u_regfile.regs[6],
                          u_cpu.u_execute.reg_f, u_cpu.seg_CS, u_cpu.seg_DS);
-`endif
             end
             // FDC window: the byte stream the firmware panel shows on
             // hardware, so the sim's sequence can be diffed against it.
@@ -2108,12 +2064,12 @@ module tb_pc98_boot;
     // The queue's read pointer is the EU's instruction pointer, so CS:PFQ_ADDR
     // is the real program counter. The dbg_regs view
     // ({psw,ip,ds,ss,cs,es,di,si,bp,sp,bx,dx,cx,ax}, retired-instruction
-    // granularity) is the same one the old V30 bench traced. Zet exposes no
-    // dbg_regs, so eu_pc reads the core's linear-PC pin directly.
+    // granularity) is the same one the old V30 bench traced. zet_pc is the
+    // core's fetch-stream PC pin (it moves on branches).
     wire [15:0] eu_cs = zet_pc[19:4];   // for the CS-change trace only
     wire [19:0] eu_pc = zet_pc;
 
-    // First-cycles bus trace: what the Zet actually asked for and got.
+    // First-cycles bus trace: what the CPU actually asked for and got.
     int zet_tr_n = 0;
     always_ff @(posedge clk_chipset) begin
         if (zet_tr_n < 200) begin
@@ -2200,12 +2156,8 @@ module tb_pc98_boot;
         if (trw_start >= 0 && $time >= trw_start && trw_n < 3000) begin
             if (zet_pc != trw_pc) begin
                 trw_pc <= zet_pc;
-`ifdef Z86
                 $display("  %0t  TRW br %05x  es %04x ds %04x ss %04x sp %04x", $time, zet_pc,
                          u_cpu.seg_ES, u_cpu.seg_DS, u_cpu.seg_SS, u_cpu.u_regfile.regs[4]);
-`else
-                $display("  %0t  TRW br %05x", $time, zet_pc);
-`endif
                 trw_n <= trw_n + 1;
             end
             if (zwb_inta && zwb_dat_i[15:8] == 8'h00 && u_bridge.int_served) begin
@@ -2221,12 +2173,8 @@ module tb_pc98_boot;
     end
 
     // ES-change trace (with +trace_ms): every change of ES after the window
-    // opens, with the PC (Zet: live fetch PC; z86: last branch target).
-`ifdef Z86
+    // opens, with the PC (z86: last branch target).
     wire [15:0] tr_es = u_cpu.seg_ES;
-`else
-    wire [15:0] tr_es = u_cpu.core.exec.regfile.r[8];
-`endif
     logic [15:0] tr_es_q = 16'h0;
     int          tres_n  = 0;
     always_ff @(posedge zet_clk) begin
@@ -2244,22 +2192,14 @@ module tb_pc98_boot;
         if (!cpu_reset_w && zwb_stb && zwb_tr_n < 600) begin
             $display("  %8t  ZWB %s adr %05x sel %b dat_o %04x c_dat %04x c_adr %05x age %0d",
                      $time, zwb_we ? "WR" : "RD", {zwb_adr,1'b0}, zwb_sel,
-`ifdef Z86
                      zwb_dat_o, 16'h0, 20'h0,
-`else
-                     zwb_dat_o, u_cpu.cpu_dat_o, u_cpu.cpu_adr_o,
-`endif
                      u_bridge.req_age);
             zwb_tr_n <= zwb_tr_n + 1;
         end
         if (!cpu_reset_w && zwb_stb && zwb_ack && !zwb_we && zwb_tr_n < 1200) begin
             $display("  %8t  ZAK RD adr %05x sel %b dat_i %04x c_dat_i %04x rdw %04x imm_l %04x",
                      $time, {zwb_adr,1'b0}, zwb_sel, zwb_dat_i,
-`ifdef Z86
                      16'h0, u_bridge.rd_word, 16'h0);
-`else
-                     u_cpu.cpu_dat_i, u_bridge.rd_word, u_cpu.core.fetch.imm_l);
-`endif
             zwb_tr_n <= zwb_tr_n + 1;
         end
     end

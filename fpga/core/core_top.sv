@@ -304,14 +304,7 @@ module core_top (
     logic        jtag_pf_nofill  = 1'b0;
     logic        jtag_pf_nofillm = 1'b0;
     logic        jtag_pf_nohit   = 1'b0;
-    //   [7] fwdis    -- kill the zet_wb_master 2-word instruction-fetch
-    //                   window (a separate cache the bridge's pf_* bits do
-    //                   not reach): hits and idle prefetches are disabled,
-    //                   so every fetch pays its own bus cycle
-    logic        jtag_fwdis      = 1'b0;
-    //   [8] nowrap   -- A/B for the zet in-segment odd-word wrap: 1 puts an
-    //                   odd word at offset FFFFh back on linear+1
-    logic        jtag_nowrap     = 1'b0;
+    //   [7]/[8] reserved -- were Zet's fetch-window / odd-wrap kill bits
     //   [9]  pf_wkill -- any guest memory write kills BOTH prefetch
     //                    windows, not just the ones it overlaps
     //  [10]  pf_bkill -- any memory write strobe on the chipset bus (any
@@ -339,8 +332,6 @@ module core_top (
     wire         jtag_pf_nofill  = 1'b0;
     wire         jtag_pf_nofillm = 1'b0;
     wire         jtag_pf_nohit   = 1'b0;
-    wire         jtag_fwdis      = 1'b0;
-    wire         jtag_nowrap     = 1'b0;
     wire         jtag_pf_wkill   = 1'b0;
     wire         jtag_pf_bkill   = 1'b0;
     wire  [19:0] jtag_watch_addr = 20'hFFFFF;
@@ -363,7 +354,6 @@ module core_top (
     // 0 "286 8MHz" ~ VX2 (4.57), 1 "286 10MHz" ~ VX21/UX21 (5.69), 2 "286
     // 12MHz" ~ RX21/EX/DX (7.07). The ratio is linear in the duty: 2.45 @16,
     // 4.91 @32, 9.81 @64, 18.47 @128, 23.91 @192 (of 256).
-`ifdef PC98_Z86
     localparam [7:0] THR_8MHZ  = 8'd30;   // 4.60
     localparam [7:0] THR_10MHZ = 8'd37;   // 5.67
     localparam [7:0] THR_12MHZ = 8'd46;   // 7.05
@@ -371,9 +361,6 @@ module core_top (
                              : (clk_select == 2'b01) ? THR_10MHZ
                              : (clk_select == 2'b10) ? THR_12MHZ : 8'd0;
     wire  [7:0] thr_num = (jtag_thr_num != 8'd0) ? jtag_thr_num : thr_num_mode;
-`else
-    wire  [7:0] thr_num = 8'd0;
-`endif
     logic [7:0] thr_acc  = 8'd0;
     logic       thr_hold = 1'b0;
     wire  [8:0] thr_sum  = {1'b0, thr_acc} + {1'b0, thr_num};
@@ -1023,19 +1010,7 @@ module core_top (
     wire        ram_wr_snoop_v;
     wire [23:0] ram_wr_snoop_addr;
     wire  [3:0] ram_wr_snoop_len;
-    // Driven by z86's cache (z86_cache, in u_cpu). Zet has no cache: there
-    // the port stays idle and the round robin never grants it.
-`ifndef PC98_Z86
-    assign cachef_req    = 1'b0;
-    assign cachef_we     = 1'b0;
-    assign cachef_addr   = 24'd0;
-    assign cachef_len    = 4'd0;
-    assign cachef_wdata0 = 16'd0;
-    assign cachef_wdata1 = 16'd0;
-    wire _unused_cachef = &{1'b0, cachef_ack, cachef_rvalid, cachef_rdata,
-                            cachef_done, ram_wr_snoop_v, ram_wr_snoop_addr,
-                            ram_wr_snoop_len};
-`endif
+    // Driven by z86's cache (z86_cache, in u_cpu).
     wire  [1:0] fdd_req_fw;
 `ifdef PC98_JTAG
     wire [15:0] ri_mgmt_addr, ri_mgmt_dout;
@@ -1288,9 +1263,9 @@ module core_top (
     wire   [7:0] probe_addr;
     assign osd_set_sel = probe_addr[2:0];
     // The nuV30's architectural state, live -- was. These taps were the old
-    // core's dbg pins; Zet has no equivalent so every one is tied to 0 now
-    // and the slots below keep their addresses only for map compatibility.
-`ifdef PC98_Z86
+    // core's dbg pins; no CPU since has an equivalent, so every one is tied
+    // to 0 now and the slots below keep their addresses only for map
+    // compatibility.
     // z86's registers in the old V30 layout {psw, ip, DS, SS, CS, ES, DI..AX}:
     // live until the probe trigger (slot 0x06) hits, then frozen at that
     // moment until the trigger is rewritten.
@@ -1307,9 +1282,6 @@ module core_top (
     wire [15:0]  z86_dbg_next_ip;
     reg  [223:0] v30_dbg_regs = '0;
     reg          z86_snap_held = 1'b0;
-`else
-    wire [223:0] v30_dbg_regs  = '0;       // {psw, pc, sreg3..0, gpr7..0}
-`endif
     wire  [15:0] v30_dbg_core  = '0;       // EU/BIU interlock: halt/queue/eu_bs
     wire  [31:0] v30_dbg_core2 = '0;       // posted access: eu_addr/seg + slots
     wire  [31:0] v30_dbg_core3 = '0;       // BIU launch-law registers
@@ -1482,7 +1454,7 @@ module core_top (
         ws_hit  <= (chipset_dbg7[31:0] != ws_last) && chipset_dbg7[31]
                 && chipset_dbg7[62];
     end
-    // Bus ring: the last 256 Wishbone transfers the Zet completed --
+    // Bus ring: the last 256 Wishbone transfers the CPU completed --
     // fetches included -- with the live DS beside each: {ds, exec, we,
     // sel, adr, data}. Block RAM, frozen with pc_hist; probe write slot
     // 0x0D picks the entry, reads 0x01 (low word) / 0x02 (high word) /
@@ -1518,9 +1490,7 @@ module core_top (
                 end
             end
             if (f0_port_write || pc_in_errhalt || zet_fault || w43d_10 ||
-`ifdef PC98_Z86
                 (tlog_trap && pc_wild) ||
-`endif
                 ws_hit ||
                 (trig_hit && trig_freeze && !trig_delay))
                 pc_hist_frozen <= 1'b1;
@@ -1558,7 +1528,6 @@ module core_top (
     wire       trig_hit  = trig_en && (trig_ds ? (zet_ds == trig_addr[15:0])
                                            : (pc_now == trig_addr));
     wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
-`ifdef PC98_Z86
     // Trigger log: a 64-entry ring of {PC, SS, SP, CS, DS, ES, DI, SI, DX,
     // CX, BX, AX}. Default mode logs each time the fetch PC lands on the
     // slot-6 trigger address (armed on the INT 21h entry: every DOS call).
@@ -1628,7 +1597,6 @@ module core_top (
         if (!z86_snap_held || jtag_dbg_stop)
             v30_dbg_regs <= z86_dbg_regs;
     end
-`endif
 
     // The BIOS->ITF hand-back always ends in an OUT 0x43D,0x10 -- the
     // cold path's bank restore -- so freezing the ring on that write
@@ -1673,9 +1641,9 @@ module core_top (
             // The bisect-era taps (PIC/timer/keyboard counts, the wedge-PC
             // taps, the JTAG guest-memory master, the JTAG FDD/mgmt
             // channels) went out with PC98_PROBE_EXTRA -- the dbg_regs dump
-            // below is what replaced them for "where is the CPU". With the
-            // nuV30 gone the dbg_regs slots read 0; slot 0x18 (zet_pc) is
-            // the live PC now.
+            // below is what replaced them for "where is the CPU". The slots
+            // carry z86's register view, latched; slot 0x18 (zet_pc) is the
+            // live PC.
             8'h10:   probe_data_c = v30_dbg_regs[223:192];  // psw:pc
             8'h11:   probe_data_c = v30_dbg_regs[191:160];  // sreg3:sreg2
             8'h12:   probe_data_c = v30_dbg_regs[159:128];  // sreg1:sreg0
@@ -1685,7 +1653,6 @@ module core_top (
             8'h16:   probe_data_c = v30_dbg_regs[31:0];     // gpr1:gpr0
             8'h17:   probe_data_c = {8'h00, retired_cnt};   // liveness
             8'h18:   probe_data_c = {12'h000, zet_pc};      // current bus cycle
-`ifdef PC98_Z86
             8'h60:   probe_data_c = tlog_q[31:0];           // trigger log, see tlog
             8'h61:   probe_data_c = tlog_q[63:32];
             8'h62:   probe_data_c = tlog_q[95:64];
@@ -1698,7 +1665,6 @@ module core_top (
             8'h6b:   probe_data_c = f0w_c;
             8'h66:   probe_data_c = {z86_dbg_stopped, 15'h0, z86_dbg_next_ip};
             8'h67:   probe_data_c = {tlog_frozen, 15'h0, tlog_n};
-`endif
             8'h01:   probe_data_c = brg_q[31:0];
             8'h02:   probe_data_c = {9'h0, brg_q[54:32]};
             8'h03:   probe_data_c = {24'h0, brg_w};
@@ -1760,7 +1726,7 @@ module core_top (
             // lo {IMR,ISR,IRR (master), spur_n[3:0], 0, pend, armed,
             // int_to_cpu}, hi {fire_n, isr_n, arm_n, lost_n[3:0],
             // cancel_n[3:0]}. scripts/jtag_crtirq.tcl decodes it.
-            // 0x2F: zet_cpu_bridge's INTA witness -- {bad_n, last_bad,
+            // 0x2F: the bus bridge's INTA witness -- {bad_n, last_bad,
             // cut_n (AEN rising mid-acknowledge), last_vec}.
             8'h2f:   probe_data_c = bridge_dbg_inta;
             8'h2d:   probe_data_c = dbg_crt[31:0];
@@ -1888,12 +1854,12 @@ module core_top (
             // 0x20: {last byte-pair fed to the core, dbg_core}. The pins say
             // PASV while the core does not move: zwb_dat_i shows what it
             // last consumed. dbg_core was the nuV30's EU/BIU interlock --
-            // Zet has no equivalent tap and the half reads 0.
+            // z86 has no equivalent tap and the half reads 0.
             8'h20:   probe_data_c = {zwb_dat_i, v30_dbg_core};
             // 0x21: the posted access itself -- where the EU's MEMW wants to
             // land and which handshake bits are holding the slot.
             8'h21:   probe_data_c = v30_dbg_core2;
-            // 0x22-0x25: nuV30 internals, all 0 on the Zet build.
+            // 0x22-0x25: nuV30 internals, all 0 on this build.
             // 0x22: the BIU's launch-law registers -- {q_head,q_cnt, e_pend,
             // halted, halt_pending, run,cur_fetch/halt/wr,evald, cmt_*, rq_n,
             // slot_busys, opr_held, absorb_ttl, ts}. The posted MEMW has to
@@ -2262,8 +2228,7 @@ module core_top (
         // clk_select_next to wdata[1:0] instead of the OSD setting. Same
         // handoff the menu uses (ce_generator reloads on the next biu_done).
         // wdata[3] ENABLES the (default-off) prefetch engine; wdata[6:4] kill
-        // pure fills / fill-on-miss / hit serving individually for A/B;
-        // wdata[7] kills the wb_master instruction-fetch window outright.
+        // pure fills / fill-on-miss / hit serving individually for A/B.
         if (probe_wr_pulse && probe_waddr_c == 7'h09) begin
             jtag_spd_ovr  <= probe_wdata_c[2];
             jtag_spd_sel  <= probe_wdata_c[1:0];
@@ -2271,8 +2236,6 @@ module core_top (
             jtag_pf_nofill  <= probe_wdata_c[4];
             jtag_pf_nofillm <= probe_wdata_c[5];
             jtag_pf_nohit   <= probe_wdata_c[6];
-            jtag_fwdis    <= probe_wdata_c[7];
-            jtag_nowrap   <= probe_wdata_c[8];
             jtag_pf_wkill <= probe_wdata_c[9];
             jtag_pf_bkill <= probe_wdata_c[10];
             jtag_cache_dis <= probe_wdata_c[11];
@@ -2936,7 +2899,7 @@ module core_top (
     wire [19:0] cpu_ad_out;
     reg  [19:0] cpu_address;
     wire [7:0] cpu_data_bus;
-    // The 16-bit memory path's extra lane, between zet_cpu_bridge and the
+    // The 16-bit memory path's extra lane, between cpu_bus_bridge and the
     // chipset's RAM/option-ROM muxes.
     wire [7:0] cpu_data_bus_hi;
     wire [7:0] data_bus_hi;
@@ -3433,13 +3396,13 @@ module core_top (
 
     // ---------------------------------------------------------------- the CPU
     //
-    // Zet, the 80186-class core, on a Wishbone master, bridged to the 8288
-    // byte world -- zet_cpu_bridge runs each 16-bit cycle as one two-lane
+    // z86, the 80286-class core, on a Wishbone master, bridged to the 8288
+    // byte world -- cpu_bus_bridge runs each 16-bit cycle as one two-lane
     // cycle where the SDRAM answers and two byte cycles everywhere else on
-    // the eight-bit bus. See zet_cpu_bridge.sv's header for the contract.
-    // Zet has the full 186 instruction set -- the ITF's `push imm16` that
-    // derailed the old i8088 is legal for it -- but it is not
-    // cycle-accurate and carries none of the V30's NEC extensions.
+    // the eight-bit bus. See cpu_bus_bridge.sv's header for the contract.
+    // z86 covers the full 286 real-mode instruction set -- the ITF's
+    // `push imm16` that derailed the old i8088 is legal for it -- but it is
+    // not cycle-accurate; the bridge's bus pacing is what models the metal.
     //
     // The CE generator's outputs still pace the CHIPSET's RAM waits, which
     // is where they are consumed.
@@ -3461,11 +3424,7 @@ module core_top (
     wire        zet_fault;
     wire [7:0]  zet_opc;
 
-`ifdef PC98_Z86
-    zet_cpu_bridge #(.REQ_SETTLE(0)) u_zet_bridge (
-`else
-    zet_cpu_bridge u_zet_bridge (
-`endif
+    cpu_bus_bridge #(.REQ_SETTLE(0)) u_cpu_bridge (
         .clk               (clk_chipset),
         .cpu_ce_posedge    (cpu_ce_posedge),
         .cpu_ce_negedge    (cpu_ce_negedge),
@@ -3514,13 +3473,9 @@ module core_top (
         .dbg               (bridge_dbg),
         .dbg_inta          (bridge_dbg_inta)
     );
-`ifndef PC98_Z86
-    wire _unused_z86_ce = z86_ce;
-`endif
 
-`ifdef PC98_Z86
-    // z86 (fpga/core/z86): a pipelined 286-class core behind the same
-    // Wishbone/INTA contract Zet speaks, so the bridge is unchanged.
+    // z86 (fpga/core/z86): a pipelined 286-class core on the bridge's
+    // Wishbone/INTA contract -- the only CPU the tree carries.
     // The cache runs on the free clk_chipset with the bridge's zet_edge as
     // its enable. It stays off while the ITF is mapped: the ITF's IRQ0 test
     // expects the timer interrupt within 32 turns of a TEST/JNZ/LOOP, a
@@ -3569,32 +3524,6 @@ module core_top (
     assign zet_fault = 1'b0;
     assign zet_opc   = 8'h00;
     assign zet_exec  = 1'b0;
-`else
-    zet u_cpu (
-        .wb_clk_i  (zet_clk),
-        .wb_rst_i  (reset_cpu),
-        .wb_dat_i  (zwb_dat_i),
-        .wb_dat_o  (zwb_dat_o),
-        .wb_adr_o  (zwb_adr),
-        .wb_we_o   (zwb_we),
-        .wb_tga_o  (zwb_tga),
-        .wb_sel_o  (zwb_sel),
-        .wb_stb_o  (zwb_stb),
-        .wb_cyc_o  (zwb_cyc),
-        .wb_ack_i  (zwb_ack),
-        .wb_tgc_i  (interrupt_to_cpu),
-        .wb_tgc_o  (zwb_inta),
-        .nmi       (1'b0),
-        .nmia      (zwb_nmia),
-        .fwdis     (jtag_fwdis),
-        .nowrap    (jtag_nowrap),
-        .pc        (zet_pc),
-        .dbg_fault (zet_fault),
-        .dbg_opc   (zet_opc),
-        .dbg_ds    (zet_ds),
-        .dbg_exec  (zet_exec)
-    );
-`endif
 
     // Debug: the last guest data-bus read / write byte addresses. Instruction
     // fetches are BS_CODE and I/O is BS_IOR/BS_IOW on processor_status, so a
@@ -3605,9 +3534,9 @@ module core_top (
         if (processor_status == 3'b110) zet_dbus_wr <= cpu_ad_out;
     end
 
-    // The probe slots that used to expose nuV30 guts read the Zet view where
+    // The probe slots that used to expose nuV30 guts read the CPU view where
     // one exists (0x18/0x1c/0x20 = zet_pc / processor_status / the Wishbone
-    // data-in); the dbg_regs/dbg_core taps Zet has no answer for read 0.
+    // data-in); the dbg_core taps z86 has no answer for read 0.
 
     //
     // AUDIO

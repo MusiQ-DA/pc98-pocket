@@ -160,8 +160,8 @@ VSYNC 同期型のゲームでは、1 フレームの処理がこの予算に収
 
 **z86 は CPU 本体がフルレートで回り、バスだけが遅く刻まれる**
 
-- z86 本体は `zet_clk`（clk_chipset 42.95 MHz のゲート版、`zet_cpu_bridge.sv:204`）でフルレートで回る。
-- バスアクセスだけが `zet_cpu_bridge` の 8288 バイトエンジンを通り、CE 歩調で刻まれる。
+- z86 本体は `zet_clk`（clk_chipset 42.95 MHz のゲート版、`cpu_bus_bridge.sv:204`）でフルレートで回る。
+- バスアクセスだけが `cpu_bus_bridge` の 8288 バイトエンジンを通り、CE 歩調で刻まれる。
 - `fast_pace = clk_select[1]` のときは T ステートモデルを短縮する。
 - **結論: 「10 MHz」はバスの歩調が 10 MHz なだけで、命令実行は V30 10 MHz と等価ではない。**
   - 命令フェッチは 16 バイトのラインロードで、計算が主体のループはフェッチバッファから回る。
@@ -360,7 +360,7 @@ VSYNC 同期型のゲームでは、1 フレームの処理がこの予算に収
 - `testdisk/bench.asm`、`testdisk/build_bench.sh`、`testdisk/build_cpubench.sh`、`scripts/jtag_bench.sh`、`scripts/jtag_hdload.tcl`、`tools/np2run/np2run.c`、`docs/NP2KAI_HARNESS.md`、`docs/PORT_OCCUPANCY.md`
 - `testdisk/superdepth.hdm`（DEPTH.DOC、DEPTH.EXE）
 - np21w rev106: `pccore.c`（wait[] の既定値、screenvsync）、`io/iocore.c`（busclock）、`io/artic.c`（5Fh）、`mem/memvram.c`、`mem/memtram.c`
-- 当コア: `fpga/core/chipset/HDL/ce_generator.sv`、`fpga/core/zet_cpu_bridge.sv`、`fpga/core/z86/z86_wbif.sv`、`fpga/core/core_top.sv`、`fpga/core/pc98_video_timing.sv`、`firmware/settings_ui.c`
+- 当コア: `fpga/core/chipset/HDL/ce_generator.sv`、`fpga/core/cpu_bus_bridge.sv`、`fpga/core/core_top.sv`、`fpga/core/pc98_video_timing.sv`、`firmware/settings_ui.c`
 - ja.wikipedia「PC-9801シリーズ」— <https://ja.wikipedia.org/wiki/PC-9801%E3%82%B7%E3%83%AA%E3%83%BC%E3%82%BA>
 - 第三研究所 PC-9801RX21 / FA — <http://www.amy.hi-ho.ne.jp/nakajima-jr/com/pc-9801/rx.htm>、<http://www.amy.hi-ho.ne.jp/nakajima-jr/com/pc-9801/fa.htm>
 - レビュー・PC-9801 — <http://sunfang.la.coocan.jp/pc9801.htm>

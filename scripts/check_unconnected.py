@@ -35,7 +35,7 @@ MODULES = {
     "softcpu_subsystem": "fpga/core/softcpu_subsystem.sv",
     # The bridge carries every pin the CPU sees, so a dangling input there
     # reads as a dead machine, not a zero.
-    "zet_cpu_bridge": "fpga/core/zet_cpu_bridge.sv",
+    "cpu_bus_bridge": "fpga/core/cpu_bus_bridge.sv",
 }
 
 

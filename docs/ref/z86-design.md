@@ -299,13 +299,13 @@ I/O: `io_read_do`/`io_write_do` は IO_IDLE の 1 クロックだけ出るパル
 
 | 測定 | 値 | 出典 |
 |---|---|---|
-| CPU クロック | `zet_clk` = `clk_chipset` 42.95 MHz にゲートをかけたもの(INTA サービス中と pause 中は止まる) | core_top.sv:248, 3431-3432; zet_cpu_bridge.sv:28-36 |
+| CPU クロック | `zet_clk` = `clk_chipset` 42.95 MHz にゲートをかけたもの(INTA サービス中と pause 中は止まる) | core_top.sv:248, 3431-3432; cpu_bus_bridge.sv:28-36 |
 | 16 B 境界をまたぐ LOOP | 修正前 130 clk/iter → 4.2 clk/iter(`tb_z86_loop`) | commit `072340f` |
 | ITF から BIOS への引き渡し(シミュレーション) | z86 2.07 s、Zet 2.32 s | commit `b79e86f` |
 | 実機 SuperDepth | 10 MHz 設定で 40/40 回起動 | commit `17d11f0` |
 
 PC-98 側のバスは i8288 系の 8 ビットバイトエンジンで、CE に合わせて進む
-(zet_cpu_bridge.sv:3-4, 28-36)。CPU 内部のクロックが速くても、ライン読み込み
+(cpu_bus_bridge.sv:3-4, 28-36)。CPU 内部のクロックが速くても、ライン読み込み
 1 回のたびに 16 バイト分のバスサイクルを払うことになる。これがキャッシュを
 戻したい理由。
 
@@ -323,11 +323,11 @@ regfile 7。divider / z86_package / ucode.asm / tools は**無変更**。`cache.
 | 変更 | 内容 / 理由 |
 |---|---|
 | Quartus Lite 対応 | `inside` の除去、型付き配列 localparam、宣言初期化子の分離、`always_comb` → `always @*` |
-| top のポート | PLL、Avalon、`io_*`、`dma_*`、`a20_enable`、debug reg/mem ポートを削除。**Zet と同じ形の Wishbone マスタ**(`wb_adr_o[19:1]`、`wb_sel_o`、`wb_tga_o`=I/O、`wb_cyc_o==wb_stb_o`)と `wb_tgc_i/o`(INTR/INTA)に置き換えた(port:z86.sv:17-48)。既存の `zet_cpu_bridge` を**変更せずに**使うため |
+| top のポート | PLL、Avalon、`io_*`、`dma_*`、`a20_enable`、debug reg/mem ポートを削除。**Zet と同じ形の Wishbone マスタ**(`wb_adr_o[19:1]`、`wb_sel_o`、`wb_tga_o`=I/O、`wb_cyc_o==wb_stb_o`)と `wb_tgc_i/o`(INTR/INTA)に置き換えた(port:z86.sv:17-48)。既存の `cpu_bus_bridge` を**変更せずに**使うため |
 | `cache` → `z86_wbif` | CPU 側のポートは同じで、出口を Wishbone にした(第 4.3 節)。`ld_hit` と `dbg_mem` は削除 |
 | 割り込み | ベクタは 8259 の INTA サイクルの後にしか存在しない。decode が `inta_req` を出し、top が `wb_tgc_o` を 1 パルス出す。ブリッジがクロックを止めて二重 INTA を回し、ベクタを `wb_dat_i` に載せる。z86 はそれを `pic_vec_r` に取り込み、`pic_vec_valid` が立つまで注入を待つ(port:z86.sv:57-86、port:decode.sv:83-96) |
 | NMI | `1'b0` に固定(port:z86.sv:363) |
-| 選択方法 | `config.tcl` の `PC98_Z86` で選ぶ。core_top.sv:3428-3455 で Zet と差し替える |
+| 選択方法 | Zet は 2026-10-18 に削除された。z86 が唯一の CPU(`config.tcl` の `PC98_Z86` マクロも削除済み) |
 
 ### 4.2 不具合修正と機能追加(コミット順)
 
@@ -405,7 +405,7 @@ PC-98 で追加で必要になる仕組みをまとめたもの。
 1. **キャッシュ可能領域の限定**(ホワイトリスト方式)
    - キャッシュしてよいのは、ブリッジのプリフェッチャと同じく「SDRAM の普通の
      バイト」だけ: `pc98_sdram_hits(a) && !pc98_gvram_hits(a)`
-     (fpga/core/pc98_sdram_map.svh:46-52、zet_cpu_bridge.sv:603-607)。
+     (fpga/core/pc98_sdram_map.svh:46-52、cpu_bus_bridge.sv:603-607)。
    - **キャッシュしてはいけない**領域:
      - A0000-A3FFF のテキスト VRAM と A4000 の CG ウィンドウ(BRAM 側が応答。
        CG ウィンドウは I/O で選んだフォントを返す。`pc98_cgwindow.sv`)。
@@ -422,11 +422,11 @@ PC-98 で追加で必要になる仕組みをまとめたもの。
 2. **I/O 書き込みでのフラッシュ / 無効化**
    - F8000-FFFFF は ITF ROM と BIOS ROM のバンク切り替え(ポート 043Dh、
      `bios_shadow_flag`)。**同じアドレスで中身が変わる**。ブリッジのプリフェッチャは
-     このフラグの変化で全窓を捨てている(zet_cpu_bridge.sv:629-636, 1080)。
+     このフラグの変化で全窓を捨てている(cpu_bus_bridge.sv:629-636, 1080)。
      z86 の L1 も同じにするか、F8000-FFFFF をキャッシュしない。
    - EMS のバンクレジスタ、6Ah(アナログモード)、そのほかマップを動かす OUT。
      ブリッジは「**あらゆる I/O 書き込みでフラッシュ**」としている
-     (zet_cpu_bridge.sv:597-598)。最初はこれに倣うのが安全。
+     (cpu_bus_bridge.sv:597-598)。最初はこれに倣うのが安全。
    - z86 のフェッチバッファ(32 B)のスヌープは `~wr_io` のストアだけを見ている
      (port:z86.sv:269)。バンク切り替えの OUT の後のコードフェッチでも
      バッファを捨てる必要があるかどうかは**未確認**。現状は Wishbone の直列性と、
@@ -435,7 +435,7 @@ PC-98 で追加で必要になる仕組みをまとめたもの。
 3. **DMA の書き込みによる無効化**
    - PC-98 の DMAC は CPU のバス経路を通らずに SDRAM に書く。ブリッジは DMA
      グラント中(`!bus_ours`)にプリフェッチ窓を全部捨てている
-     (zet_cpu_bridge.sv:598-599)。
+     (cpu_bus_bridge.sv:598-599)。
    - L1 では、(a) DMA グラントで全無効化(簡単。FDC の 1 セクタごとに L1 が
      空になる)か、(b) DMA の書き込みアドレスでライン単位に無効化(z486 の
      `invalidate_addr/invalidate_valid` 方式。z486/l1_icache.sv:32-39)のどちらか。

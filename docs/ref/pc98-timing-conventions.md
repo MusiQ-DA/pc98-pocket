@@ -6,7 +6,7 @@
 | 現状の一律ウェイト | 場所 | 中身 |
 |---|---|---|
 | `IO_GAP = 64` clk | `fpga/core/z86/z86_wbif.sv` | すべての I/O サイクルの終わりから次の I/O まで最低 64 clk_chipset(42.954545 MHz で **約 1.49 µs**)。ITF の PIT チェックを通すために入れたもの(同ファイルのコメント) |
-| V30 風バス T ステートペーシング | `fpga/core/zet_cpu_bridge.sv` | バイトエンジンが cpu_ce 列で T ステート・AEN ストレッチ・SDRAM ウェイトを数える。`fast_pace`(clk_select[1])のときだけ短縮される |
+| V30 風バス T ステートペーシング | `fpga/core/cpu_bus_bridge.sv` | バイトエンジンが cpu_ce 列で T ステート・AEN ストレッチ・SDRAM ウェイトを数える。`fast_pace`(clk_select[1])のときだけ短縮される |
 
 この文書では、実在の PC-98 ソフトウェアが**実際に頼っている**タイミング契約を洗い出し、
 最後(§5)で「どのウェイトをデバイス単位・ポート単位の回復時間として実装すべきか」を µs 値つきでまとめる。
@@ -138,7 +138,7 @@ ARTIC を読むソフトは CPU 速度の影響を受けない。FreeDOS(98) の
 
 - Intel 8259A(Dec 1988)の AC 特性: `TRHRL`(RD→次の RD)160/100 ns、`TWHWL`(WR→次の WR)190/100 ns、`TCHCL`(別種コマンド間)500/150 ns(8259A/8259A-2)。注記には「実システムでは TCHCL は普通 500 ns より十分長い(8086 で 1 µs、8086-2 で 625 ns)」とある。つまり CPU が遅いことで満たされる前提の仕様。https://pdos.csail.mit.edu/6.828/2017/readings/hardware/8259A.pdf
 - ITF の IMR リードバックテストは `OUT 02h` → `JMP $+2` → `IN 02h`(`docs/PC98_ITF_TRACE.md` F80D03)。
-- FPGA の i8259 は 42.95 MHz の同期回路なので、回復時間は要らない。INTA の 2 サイクル列はブリッジ側で忠実に回している(`zet_cpu_bridge.sv` の「INTA pairs keep the faithful count」)。これは**維持すべき契約**。
+- FPGA の i8259 は 42.95 MHz の同期回路なので、回復時間は要らない。INTA の 2 サイクル列はブリッジ側で忠実に回している(`cpu_bus_bridge.sv` の「INTA pairs keep the faithful count」)。これは**維持すべき契約**。
 
 ### 2.2 8253(PIT)
 
@@ -352,7 +352,7 @@ L: TEST AH,0FFh ; JNZ ok ; LOOP L     ; 32 回のうちに IRQ0 ハンドラが 
 ローカル(np21w 0.86 rev106、`~/repo/np21w/np21w-src-rev106/`):
 `np21w io/artic.c`、`np21w io/iocore.c`、`np21w io/pit.c`、`np21w io/gdc.c`、`np21w io/gdc.h`、`np21w io/fdc.c`、`np21w io/serial.c`、`np21w io/printif.c`、`np21w io/mouseif.c`、`np21w io/upd4990.c`、`np21w io/cgrom.c`、`np21w io/pic.c`、`np21w sound/opna.c`、`np21w cbus/boardws.c`、`np21w pccore.c`、`np21w pccore.h`、`np21w bios/bios.c`、`np21w bios/bios19.c`、`np21w i286c/v30patch.c`
 
-ローカル(このリポジトリ): `docs/PC98_ITF_TRACE.md`、`docs/PC98_MACHINE_SPEC.md`、`docs/PC9801UX_DIFF.md`、`docs/PC98_IO_MAP.md`、`fpga/core/z86/z86_wbif.sv`、`fpga/core/zet_cpu_bridge.sv`、`fpga/core/chipset/HDL/Peripherals.sv`、`fpga/core/pc98_opna.sv`、`fpga/core/sound/jt12/hdl/jt12_mmr.v`、`fpga/core/pc98_gdc.sv`、`fpga/core/pc98_kbd8251.sv`、`fpga/core/pc98_upd4990.sv`、`fpga/core/pc98_fdc_glue.sv`、手元 ROM(`~/.pc98roms/bios.rom`、`itf.rom`、`bios_retrobios386.rom`)のバイト列検索と逆アセンブル
+ローカル(このリポジトリ): `docs/PC98_ITF_TRACE.md`、`docs/PC98_MACHINE_SPEC.md`、`docs/PC9801UX_DIFF.md`、`docs/PC98_IO_MAP.md`、`fpga/core/cpu_bus_bridge.sv`、`fpga/core/chipset/HDL/Peripherals.sv`、`fpga/core/pc98_opna.sv`、`fpga/core/sound/jt12/hdl/jt12_mmr.v`、`fpga/core/pc98_gdc.sv`、`fpga/core/pc98_kbd8251.sv`、`fpga/core/pc98_upd4990.sv`、`fpga/core/pc98_fdc_glue.sv`、手元 ROM(`~/.pc98roms/bios.rom`、`itf.rom`、`bios_retrobios386.rom`)のバイト列検索と逆アセンブル
 
 Web:
 - take52 "PC9821 Software Technical Data"(5Fh、8253、Time Stamper): http://www2t.biglobe.ne.jp/~take52/tech/soft.htm

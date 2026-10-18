@@ -263,7 +263,7 @@ module RAM (
     // SDRAM (the loader writes it there, the guest fetches it from there),
     // and taking it out of the select -- which one revision did -- starved
     // the loader into DROP 38190 and left BAD 0F2 on the compare.
-    // The predicate itself lives in pc98_sdram_map.svh, because zet_cpu_bridge
+    // The predicate itself lives in pc98_sdram_map.svh, because cpu_bus_bridge
     // needs the same answer one step earlier -- see that file.
 `include "pc98_sdram_map.svh"
 
@@ -1002,7 +1002,7 @@ module RAM (
     //   st=4 ...                               dout=8b <- the real byte
     //
     // The CPU never fell in: it samples READY once, deep in T3, a whole CPU
-    // clock (nine chipset cycles at 4.77 MHz) after the command. zet_cpu_bridge
+    // clock (nine chipset cycles at 4.77 MHz) after the command. cpu_bus_bridge
     // samples at EVERY posedge CE from its third T state on, and the 8288
     // raises the command around that same edge -- so the byte engine could
     // complete in the stale window and latch the previous byte. It did: the

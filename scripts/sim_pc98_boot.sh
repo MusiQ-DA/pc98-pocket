@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # sim_pc98_boot.sh -- run the real ITF on the real CPU core, in simulation:
-# the Zet + zet_cpu_bridge pair core_top ships, on tb_pc98_boot's machine.
+# the z86 + cpu_bus_bridge pair core_top ships, on tb_pc98_boot's machine.
 #
 #   scripts/sim_pc98_boot.sh [+plusarg ...]
 #   scripts/sim_pc98_boot.sh --synth    # hand-written ITF, no ROMs needed
 #   scripts/sim_pc98_boot.sh --realmem  # ... on the REAL memory path
-#   scripts/sim_pc98_boot.sh --z86      # z86 (fpga/core/z86) instead of Zet
 #
 # Not part of CI: it needs bios.rom and itf.rom, which are not in the tree,
 # unless --synth.
@@ -14,12 +13,10 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SYNTH=0
 REALMEM=0
-Z86=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --synth) SYNTH=1; shift ;;
         --realmem) REALMEM=1; shift ;;
-        --z86) Z86=1; shift ;;
         *) break ;;
     esac
 done
@@ -70,12 +67,7 @@ PY
 
 S=fpga/core
 K=$S/chipset/HDL
-Z=$S/zet
-
-# zet_micro_rom's simulation default is DATDIR="fpga/core/zet/" relative to
-# the bench's cwd ($OUT) -- mirror the part's data file next to the hexes.
-mkdir -p "$OUT/fpga/core/zet"
-cp $Z/micro_rom.dat "$OUT/fpga/core/zet/"
+Z8=$S/z86
 
 # +repint pokes this IPL straight into guest RAM and jumps the reset vector
 # at it; the bench $readmemh's it from $OUT like the ROM hexes.
@@ -88,14 +80,9 @@ SIM_THREADS="${SIM_THREADS:-4}"
 CPU_DEF=""
 [ "$REALMEM" = 1 ] && CPU_DEF="+define+REALMEM"
 [ -n "${EXTRA_DEF:-}" ] && CPU_DEF="$CPU_DEF $EXTRA_DEF"
-Z86FILES=""
-if [ "$Z86" = 1 ]; then
-    CPU_DEF="$CPU_DEF +define+Z86"
-    ZS=$S/z86
-    Z86FILES="$R/$ZS/z86_package.sv $R/$ZS/fetch.sv $R/$ZS/decode.sv \
-        $R/$ZS/execute.sv $R/$ZS/write_back.sv $R/$ZS/regfile.sv \
-        $R/$ZS/divider.sv $R/$ZS/z86_wbif.sv $R/$ZS/z86.sv -I$R/$ZS"
-fi
+Z86FILES="$R/$Z8/z86_package.sv $R/$Z8/fetch.sv $R/$Z8/decode.sv \
+    $R/$Z8/execute.sv $R/$Z8/write_back.sv $R/$Z8/regfile.sv \
+    $R/$Z8/divider.sv $R/$Z8/z86_cache.sv $R/$Z8/z86.sv -I$R/$Z8"
 
 if [ "$REALMEM" = 1 ]; then
     MEMFILES="$K/RAM.sv $K/Ready.sv $S/sdram_shim.sv $S/sdram_mp.sv \
@@ -117,22 +104,12 @@ verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot $CPU_DEF \
     --threads $SIM_THREADS -MAKEFLAGS OPT_FAST=$SIM_OPT \
     $CXXFLAGS_MK \
     $SYSROOT \
-    -I"$R/sim" -I"$R/$S" -I"$R/$S/common" -I"$R/$Z" -I"$R/$K" \
+    -I"$R/sim" -I"$R/$S" -I"$R/$S/common" -I"$R/$K" \
     -I"$R/$K/i8288/HDL" -I"$R/$K/i8253/HDL" -I"$R/$K/i8259/HDL" \
     $Z86FILES \
     "$R/sim/tb_pc98_boot.sv" \
     $MEMFILES \
-    $R/$Z/zet.v $R/$Z/zet_core.v $R/$Z/zet_fetch.v $R/$Z/zet_decode.v \
-    $R/$Z/zet_exec.v $R/$Z/zet_memory_regs.v $R/$Z/zet_micro_data.v \
-    $R/$Z/zet_micro_rom.v $R/$Z/zet_regfile.v $R/$Z/zet_wb_master.v \
-    $R/$Z/zet_addsub.v $R/$Z/zet_alu.v $R/$Z/zet_arlog.v \
-    $R/$Z/zet_bitlog.v $R/$Z/zet_conv.v $R/$Z/zet_div_su.v \
-    $R/$Z/zet_div_uu.v $R/$Z/zet_fulladd16.v $R/$Z/zet_jmp_cond.v \
-    $R/$Z/zet_muldiv.v $R/$Z/zet_mux8_1.v $R/$Z/zet_mux8_16.v \
-    $R/$Z/zet_next_or_not.v $R/$Z/zet_nstate.v $R/$Z/zet_opcode_deco.v \
-    $R/$Z/zet_othop.v $R/$Z/zet_rxr8.v $R/$Z/zet_rxr16.v \
-    $R/$Z/zet_shrot.v $R/$Z/zet_signmul17.v \
-    $R/$S/zet_cpu_bridge.sv \
+    $R/$S/cpu_bus_bridge.sv \
     $R/$S/pc98_fdc_glue.sv $R/$S/common/floppy.v $R/$S/common/simple_fifo.v \
     $R/sim/tb_fdd_dma_model.sv $R/$S/pc98_kbd8251.sv \
     $R/$K/ce_generator.sv $R/$K/i8288/HDL/i8288.sv \

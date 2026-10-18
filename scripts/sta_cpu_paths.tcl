@@ -3,11 +3,9 @@
 # of -29,331. Two cuts:
 #
 #   1. RAW: the forty worst intra-domain paths as the tool sees them.
-#   2. HONEST: the same report AFTER multicycling the paced cores.
-#      The zet core delivers on every other clk edge, so its intra-core
-#      single-cycle reds are pacing artifacts. Whatever is STILL red in the
-#      second report -- outside the core, or genuinely longer than the
-#      pacing -- has names worth knowing.
+#   2. HONEST: the same report on the current core -- z86 runs full-rate
+#      on the gated clock, so no multicycle is owed; whatever is red
+#      outside the core has names worth knowing.
 set project ap_core
 project_open [lindex $quartus(args) 0]
 if {[catch {create_timing_netlist -model slow -speed 8 \
@@ -29,17 +27,14 @@ report_timing -nworst 40 -setup \
   -from_clock $cpuclk -to_clock $cpuclk \
   -file sta_cpu_intra.txt
 
-# --- 2. HONEST: multicycle the paced core, then report deep enough to see
-# past the pacing artifacts.
-# (read_sdc ap_core.sdc above 404s -- the file isn't generated -- so this
-# report must reproduce the project constraints itself: zet at 2/1, matching
-# core_constraints.sdc.)
-set zcore [get_keepers core_top:ic|zet:u_cpu*]
-if {[llength $zcore] > 0} {
-    set_multicycle_path -setup 2 -end -from $zcore -to $zcore
-    set_multicycle_path -hold 1 -end -from $zcore -to $zcore
-} else {
-    puts "warning: no keepers matched the zet core pattern"
+# --- 2. HONEST: the core runs full-rate (z86 on the gated zet_clk), and
+# core_constraints.sdc applies NO intra-core multicycle any more -- the
+# old half-rate zet needed 2/1 here, zet->z86 removed it. So this report
+# is the same cut as RAW, just deeper (200 paths) to look past the
+# pacing artifacts the summary panel shows.
+set zcore [get_keepers core_top:ic|z86:u_cpu*]
+if {[llength $zcore] == 0} {
+    puts "warning: no keepers matched the z86 core pattern"
 }
 report_timing -nworst 200 -setup \
   -from_clock $cpuclk -to_clock $cpuclk \

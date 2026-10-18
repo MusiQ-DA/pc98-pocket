@@ -16,7 +16,7 @@ module CHIPSET #(
         // CPU
         input   logic   [19:0]  cpu_address,
         input   logic   [7:0]   cpu_data_bus,
-        // The 16-bit memory path: zet_cpu_bridge asks for a
+        // The 16-bit memory path: cpu_bus_bridge asks for a
         // word, RAM.sv turns it into one two-word SDRAM burst instead of two
         // bus cycles, and the odd lane travels on its own pair of wires rather
         // than widening the chipset's eight-bit bus. Only the addresses
@@ -44,7 +44,7 @@ module CHIPSET #(
         output  logic           st_done,
         output  logic   [7:0]   st_rdata,
         output  logic   [7:0]   accel_status,
-        // Sixteen-colour mode, out to core_top for zet_cpu_bridge: it and
+        // Sixteen-colour mode, out to core_top for cpu_bus_bridge: it and
         // RAM.sv must agree on whether E0000-E7FFF is memory.
         output  logic           pc98_analog,
         input   logic   [2:0]   processor_status,
@@ -245,7 +245,7 @@ module CHIPSET #(
         output  logic           ram_rw_complete,
         // Posted-write drain witness (Pocket): the guest's own write
         // strobe is durably held in u_RAM (captured, or impossible to
-        // command). zet_cpu_bridge's drain waits on this rather than on
+        // command). cpu_bus_bridge's drain waits on this rather than on
         // any ready level -- the ready chain can dip and rise for
         // accesses that are not the drain's, which is exactly the
         // ambiguity that used to release a queued write before capture.
@@ -254,7 +254,7 @@ module CHIPSET #(
         // the sequencer's cpu_ready -- a level that can only rise for
         // the guest's OWN access (a plain read completes strobe-matched
         // inside u_RAM; an expanded walk answers at S_DONE; svc legs
-        // are masked off it). zet_cpu_bridge latches it inside each
+        // are masked off it). cpu_bus_bridge latches it inside each
         // read byte's command phase so the processor_ready pipeline --
         // which still carries residue from legs and DMA drains -- can
         // pace the accept but never invent one.

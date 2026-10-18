@@ -33,7 +33,7 @@ DEFINES=$(sed -n 's/^[[:space:]]*set_global_assignment.*VERILOG_MACRO "\(.*\)"/\
 # shellcheck disable=SC2086
 verilator --binary --timing -Wno-fatal --top-module tb_pc98_egc_iow \
   +define+$DEFINES \
-  -Isim -I$S -I$S/chipset/HDL -I$S/zet -I$S/z86 \
+  -Isim -I$S -I$S/chipset/HDL -I$S/z86 \
   -I$S/chipset/HDL/i8288/HDL -I$S/chipset/HDL/i8253/HDL -I$S/chipset/HDL/i8259/HDL \
   -I$S/chipset/HDL/upd71071/HDL \
   -I$S/chipset/HDL/ps2_keyboard/HDL -I$S/common -I$S/audio \

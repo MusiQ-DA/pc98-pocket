@@ -178,7 +178,7 @@ GRCG のタイルは 7Eh に書き、7Ch への書き込みでタイルカウン
 3. GDC(ソフトコア)という別の書き手がいる。
 4. A6h, 7Ch, 6Ah の書き込みだけで、同じアドレスの意味が変わる。
 
-既存のプリフェッチ窓も、この範囲をフェッチ対象から外している(`core zet_cpu_bridge.sv:603-607`、`:742-747`)。
+既存のプリフェッチ窓も、この範囲をフェッチ対象から外している(`core cpu_bus_bridge.sv:603-607`、`:742-747`)。
 
 ### 2.5 C0000-DFFFF 拡張 ROM / RAM / EMS
 
@@ -295,7 +295,7 @@ GRCG のタイルは 7Eh に書き、7Ch への書き込みでタイルカウン
 |---|---|---|
 | np21w | port→mem 転送は `MEMP_WRITE8(ch->adrs.d, …)` で、**CPU と同じメモリマップを通る** | `np21w mem/dmav30.c:28-37` |
 | 本コア: アドレス | HOLD 中は `Bus_Arbiter` が `{dma_page_register, dma_address_out}` をバスに出す | `core chipset/HDL/Bus_Arbiter.sv:396-410` |
-| 本コア: 書き込み先 | RAM.sv のポート A(CPU と共用)から SDRAM へ書く。**CPU ブリッジを経由しない** | `core sdram_shim.sv:318-322`、`core zet_cpu_bridge.sv:595-600` |
+| 本コア: 書き込み先 | RAM.sv のポート A(CPU と共用)から SDRAM へ書く。**CPU ブリッジを経由しない** | `core sdram_shim.sv:318-322`、`core cpu_bus_bridge.sv:595-600` |
 | 本コア: TVRAM | AEN で修飾しているので、DMA は届かない | `core chipset/HDL/Peripherals.sv:366-369` |
 | 転送方向 | FDC の READ DATA は I/O→メモリ(**キャッシュを無効化する必要がある**)。WRITE DATA はメモリ→I/O(**write-back キャッシュならフラッシュが必要**) | 一般論。モード bit3-2 の意味は `np21w mem/dmav30.c:25-36` |
 
@@ -330,8 +330,8 @@ GRCG のタイルは 7Eh に書き、7Ch への書き込みでタイルカウン
 
 ## 6. 既存のプリフェッチ窓の無効化規則(本コアの先例)
 
-`zet_cpu_bridge` には 32 バイト × 2 窓の読み出しプリフェッチがあり、これがキャッシュの縮小版として既に動いている。
-採用している規則は次のとおり(`core zet_cpu_bridge.sv:578-640`、`:1222-1245`)。
+`cpu_bus_bridge` には 32 バイト × 2 窓の読み出しプリフェッチがあり、これがキャッシュの縮小版として既に動いている。
+採用している規則は次のとおり(`core cpu_bus_bridge.sv:578-640`、`:1222-1245`)。
 
 | 規則 | 内容 | 行 |
 |---|---|---|
@@ -369,7 +369,7 @@ z86 本体には元々 `cache` モジュールがあったが、本コアでは 
 
 | 範囲 | I | D | 書き込み方針 | 根拠 |
 |---|---|---|---|---|
-| **00000-9FFFF** | ○ | ○ | **write-through + no-write-allocate を推奨**(WB にするなら DMA 読み出しのスヌープとフラッシュが必要) | 副作用がない(§2.1)。他の書き手は DMA だけで(§4)、DMA はブリッジを迂回する(`core zet_cpu_bridge.sv:598`)。WT なら FDC の WRITE DATA(メモリ→FDC)は SDRAM の値をそのまま読めるので、スヌープは DMA の**書き込み**だけでよい |
+| **00000-9FFFF** | ○ | ○ | **write-through + no-write-allocate を推奨**(WB にするなら DMA 読み出しのスヌープとフラッシュが必要) | 副作用がない(§2.1)。他の書き手は DMA だけで(§4)、DMA はブリッジを迂回する(`core cpu_bus_bridge.sv:598`)。WT なら FDC の WRITE DATA(メモリ→FDC)は SDRAM の値をそのまま読めるので、スヌープは DMA の**書き込み**だけでよい |
 | **E8000-F7FFF** | ○ | ○ | 読み専用。書き込みでキャッシュを更新しない(RAM.sv が書き込みを捨てるので、更新すると食い違う) | ROM で書き込み保護されている(`core chipset/HDL/RAM.sv:277`)。386 機の 053Dh シャドウはこのコアにない |
 | **F8000-FFFFF** | ○ | ○ | 読み専用。**043Dh 書き込み(`bios_shadow_flag` の変化)で範囲を無効化する**。または bank ビットをタグに含める | ITF/BIOS のバンク(§2.6)。実機の 486 機も 043Dh で FLUSH# する([UNDOC-MEM]) |
 | C0000-CFFFF(EMS) | △ | △ | WT。**08E1h-08E9h 書き込みで C0000-CFFFF を無効化する**。または窓ごとのマップ値をタグに含める | 同じアドレスの中身がページ書き込みで変わる(`np21w io/emsio.c:9-30`)。未マップ時は空き(FFh)なので、マップされていない窓は対象外にする |
@@ -382,7 +382,7 @@ z86 本体には元々 `cache` モジュールがあったが、本コアでは 
 | **A8000-BFFFF** | × | × | — | TCR/EGC の読み出し副作用、TDW/RMW/EGC の書き込み変換、GDC という別の書き手、A6h/7Ch/6Ah による意味の切り替え(§2.4) |
 | **E0000-E7FFF** | × | × | — | 16 色時はプレーン E(上と同じ理由)、8 色時は穴。6Ah で有無が変わる |
 
-実装上の判定は `pc98_sdram_hits(a, analog) && !pc98_gvram_hits(a, analog)` から A0000-A7FFF を除いたものになり、プリフェッチ窓の `pf_ok`(`core zet_cpu_bridge.sv:742-747`)と同じ式になる。
+実装上の判定は `pc98_sdram_hits(a, analog) && !pc98_gvram_hits(a, analog)` から A0000-A7FFF を除いたものになり、プリフェッチ窓の `pf_ok`(`core cpu_bus_bridge.sv:742-747`)と同じ式になる。
 C0000-CFFFF を入れる場合は、`ems98_win`(`core chipset/HDL/RAM.sv:254`)の項を足す。
 
 **判定はアドレスだけで決まるべきである。** 6Ah(16 色モード)で E0000 の可否が変わるが、E0000 は常にキャッシュ不可にしておけば、`analog_mode` を判定に含める必要がなくなる。
@@ -391,8 +391,8 @@ C0000-CFFFF を入れる場合は、`ems98_win`(`core chipset/HDL/RAM.sv:254`)�
 
 | # | トリガ | 動作 | 根拠 |
 |---|---|---|---|
-| T1 | **DMA の書き込み**(HOLD 中に `~memory_write_n` で、アドレスはバス上の `{page, dma_address}`) | 該当ラインを無効化する(アドレススヌープ)。単純にするなら HOLD 許可で全フラッシュでもよいが、FD 転送中はバイトごとに HOLD が立つのでキャッシュが実質止まる | `core chipset/HDL/Bus_Arbiter.sv:396-410`、`np21w mem/dmav30.c:32`。プリフェッチ窓は全フラッシュを採用(`core zet_cpu_bridge.sv:1233`) |
-| T2 | **043Dh 書き込み**、または `bios_shadow_flag` の変化 | F8000-FFFFF を無効化する(全フラッシュでも可。頻度はブート時の数回) | `core core_top.sv:3069-3087`、`core zet_cpu_bridge.sv:629-636`、[UNDOC-MEM] 043Dh |
+| T1 | **DMA の書き込み**(HOLD 中に `~memory_write_n` で、アドレスはバス上の `{page, dma_address}`) | 該当ラインを無効化する(アドレススヌープ)。単純にするなら HOLD 許可で全フラッシュでもよいが、FD 転送中はバイトごとに HOLD が立つのでキャッシュが実質止まる | `core chipset/HDL/Bus_Arbiter.sv:396-410`、`np21w mem/dmav30.c:32`。プリフェッチ窓は全フラッシュを採用(`core cpu_bus_bridge.sv:1233`) |
+| T2 | **043Dh 書き込み**、または `bios_shadow_flag` の変化 | F8000-FFFFF を無効化する(全フラッシュでも可。頻度はブート時の数回) | `core core_top.sv:3069-3087`、`core cpu_bus_bridge.sv:629-636`、[UNDOC-MEM] 043Dh |
 | T3 | **08E1h/08E3h/08E5h/08E7h/08E9h 書き込み** | C0000-CFFFF をキャッシュしている場合はその範囲を無効化する。EMS ドライバは頻繁に書くので、窓単位(16KB)の無効化が望ましい | `core pc98_ems98.sv:70`、`np21w io/emsio.c:9-30` |
 | T4 | **CPU 自身の書き込み** | D キャッシュは WT で更新する。**I キャッシュの同一ラインは無効化する**(自己書き換えコード対策)。ROM 範囲(E8000-FFFFF)への書き込みではキャッシュを更新しない | `core z86/z86_wbif.sv:20-24`(ITF スタブ 0000:04F8) |
 | T5 | **ROM ローダの HOLD**(`ext_access_request`) / リセット / OUT F0h | 全フラッシュする | `core core_top.sv:2540-2580`、`core chipset/HDL/Bus_Arbiter.sv:74` |
@@ -400,13 +400,13 @@ C0000-CFFFF を入れる場合は、`ems98_win`(`core chipset/HDL/RAM.sv:254`)�
 | T7 | (VRAM と CG 窓をキャッシュしないなら)A4h/A6h/6Ah/7Ch/7Eh/4A0h/A1h-A5h/68h | **トリガ不要** | §8.1 でキャッシュ対象から外しているため |
 
 **「すべての I/O 書き込みでフラッシュ」は採らない。**
-プリフェッチ窓はこの規則で正しさを担保している(`core zet_cpu_bridge.sv:1233`)。しかしキャッシュでこれをやると、GDC/PIC EOI/PIT/OPNA など毎秒数千回の OUT でキャッシュが空になり、効果がなくなる。
+プリフェッチ窓はこの規則で正しさを担保している(`core cpu_bus_bridge.sv:1233`)。しかしキャッシュでこれをやると、GDC/PIC EOI/PIT/OPNA など毎秒数千回の OUT でキャッシュが空になり、効果がなくなる。
 上の T2/T3/T6 のポートだけをホワイトリストでデコードする。
 ポートを足したときの漏れを防ぐため、§3 の表を正とし、新しいバンク I/O を実装する変更ではこの表を必ず更新すること。
 
 ### 8.3 方針の根拠のまとめ
 
 1. **副作用のある窓(VRAM、CG、メモリスイッチ)をアドレスで除外すれば、残りは「メモリらしいメモリ」になる。** その書き手は CPU と DMA とローダだけである。
-2. **write-through を推奨する理由。** DMA の読み出し方向(メモリ→FDC)にスヌープが要らなくなる。さらに `zet_cpu_bridge` の posted write queue と 8288 のペーシングを含めた既存の書き込み順序の保証(`core zet_cpu_bridge.sv:665-680`)を変えずに済む。
+2. **write-through を推奨する理由。** DMA の読み出し方向(メモリ→FDC)にスヌープが要らなくなる。さらに `cpu_bus_bridge` の posted write queue と 8288 のペーシングを含めた既存の書き込み順序の保証(`core cpu_bus_bridge.sv:665-680`)を変えずに済む。
 3. **バンクは「切り替え I/O で範囲を無効化」で十分である。** 本コアのバンク切り替えは 043Dh(ブート時の数回)と EMS(ドライバ次第で頻繁)の 2 つしかない。EMS をキャッシュ対象から外せば、残るのは 043Dh だけになる。
 4. **実機も同じ考え方をしている。** 486 機の PC-98 は、ITF 選択中はキャッシュせず、043Dh/043Fh/0461h/0463h の書き込みで FLUSH# する([UNDOC-MEM])。

@@ -2,7 +2,7 @@
 // tb_mem_perf -- where do the cycles in a guest write burst actually go?
 //
 // The whole memory-write path, wired the way core_top wires it:
-// Zet -> zet_cpu_bridge -> i8288 -> READY -> pc98_gvram_seq(+GRCG,+EGC)
+// z86 -> cpu_bus_bridge -> i8288 -> READY -> pc98_gvram_seq(+GRCG,+EGC)
 // -> RAM.sv -> sdram_shim -> sdram_mp -> sdram_board_model, with the real
 // ce_generator pacing the bus and the real display fetch contending on
 // port D.
@@ -88,7 +88,6 @@ module tb_mem_perf;
     reg         pf_nohit_r  = 1'b0;
     reg         pf_vfy_r    = 1'b0;
     reg         rr_vfy_r    = 1'b0;
-    reg         fwdis_r     = 1'b0;
     reg         shadow_flag_r = 1'b0;
     reg         irq_req     = 1'b0;
     reg         flipped10   = 1'b0;
@@ -99,10 +98,9 @@ module tb_mem_perf;
         pf_nohit_r  = $test$plusargs("pfnohit");
         pf_vfy_r    = $test$plusargs("pfvfy");
         rr_vfy_r    = $test$plusargs("rrvfy");
-        fwdis_r     = $test$plusargs("fwdis");
     end
 
-    zet_cpu_bridge u_bridge (
+    cpu_bus_bridge u_bridge (
         .clk               (clk),
         .cpu_ce_posedge    (ce_pos),
         .cpu_ce_negedge    (ce_neg),
@@ -139,6 +137,7 @@ module tb_mem_perf;
         .pause_core        (1'b0),
         .throttle          (1'b0),
         .biu_done          (biu_done),
+        .zet_edge_o        (z86_ce),
         .pf_disable        (pf_dis_r),
         .pf_nofill         (pf_nofill_r),
         .pf_nofillm        (pf_nofillm_r),
@@ -147,26 +146,51 @@ module tb_mem_perf;
         .dbg               ()
     );
 
-    zet u_cpu (
-        .wb_clk_i  (zet_clk),
-        .wb_rst_i  (cpu_reset_w),
-        .wb_dat_i  (zwb_dat_i),
-        .wb_dat_o  (zwb_dat_o),
+    // z86 (the only CPU) behind the bridge. This bench models no sdram_mp
+    // port F, so the 16 KB cache stays off (cache_en 0) and its port idles;
+    // every access takes the Wishbone to the bridge, like core_top's
+    // uncached path.
+    wire        z86_ce;
+    wire        zf_req, zf_we;
+    wire [23:0] zf_addr;
+    wire [ 3:0] zf_len;
+    wire [15:0] zf_wd0, zf_wd1;
+    wire _unused_zf = &{1'b0, zf_req, zf_we, zf_addr, zf_len, zf_wd0, zf_wd1};
+    assign zwb_nmia = 1'b0;
+
+    z86 u_cpu (
+        .clk       (zet_clk),
+        .reset     (cpu_reset_w),
+        .clk_free  (clk),
+        .ce        (z86_ce),
+        .cache_en  (1'b0),
+        .bios_shadow  (1'b0),
+        .bios_protect (1'b0),
+        .f_req     (zf_req),
+        .f_we      (zf_we),
+        .f_addr    (zf_addr),
+        .f_len     (zf_len),
+        .f_wdata0  (zf_wd0),
+        .f_wdata1  (zf_wd1),
+        .f_ack     (1'b0),
+        .f_rvalid  (1'b0),
+        .f_rdata   (16'd0),
+        .f_done    (1'b0),
+        .sn_v      (1'b0),
+        .sn_addr   (24'd0),
+        .sn_len    (4'd0),
         .wb_adr_o  (zwb_adr),
+        .wb_sel_o  (zwb_sel),
         .wb_we_o   (zwb_we),
         .wb_tga_o  (zwb_tga),
-        .wb_sel_o  (zwb_sel),
+        .wb_dat_o  (zwb_dat_o),
         .wb_stb_o  (zwb_stb),
         .wb_cyc_o  (zwb_cyc),
         .wb_ack_i  (zwb_ack),
+        .wb_dat_i  (zwb_dat_i),
         .wb_tgc_i  (irq_req),
         .wb_tgc_o  (zwb_inta),
-        .nmi       (1'b0),
-        .nmia      (zwb_nmia),
-        .fwdis     (fwdis_r), .nowrap(1'b0),
-        .pc        (zet_pc),
-        .dbg_fault (),
-        .dbg_opc   ()
+        .pc        (zet_pc)
     );
 
     // ---- 8288 + address latch --------------------------------------------
@@ -867,7 +891,7 @@ module tb_mem_perf;
         end
 
         // ---- phase 0B: IRQ storm --------------------------------------
-        // wb_tgc_i is the Zet's INTR line -- tied 0 in every other
+        // wb_tgc_i is the CPU's INTR line -- tied 0 in every other
         // phase. The bench fires it every ~2500 clks through this one;
         // the INTA pair reads vector FFh off the open bus and dispatch
         // lands on IVT[FFh] @ 0x3FC -> the stub below, which incs
@@ -1706,7 +1730,7 @@ module tb_mem_perf;
     end
 
     // ---- phase-0B IRQ storm driver ------------------------------------------
-    // INTR is a level input: hold it until the Zet's own INTA output
+    // INTR is a level input: hold it until the CPU's own INTA output
     // (zwb_inta = wb_tgc_o) pulses, then re-arm after a gap. Fires only
     // while phase 0B is current -- the guest's STI/CLI bracket it.
     reg [15:0] irq_gap = 16'd0;
@@ -1943,17 +1967,21 @@ module tb_mem_perf;
     // A8000 window, and the DMAC writes 0x30000-0x30FFF. A far-transfer that
     // sends CS:IP out of the code image is the SuperDepth symptom; a write to
     // the code/reset-vector region is a stray that could cause it.
-    // zet_pc is combinational (cs<<4)+ip -- during a far transfer it
-    // flashes the ip-before-cs transient (0x00xx) for a clk or two even
-    // though no fetch is ever issued there. Sample the real fetch address
-    // on the Wishbone instead: an instruction cycle (tga) presenting stb.
+    // The CPU's pc output is the fetch-stream PC (it moves on branches, not
+    // per byte consumed), so it is not a per-fetch witness either. Sample the
+    // real fetch address on the Wishbone instead: an instruction fetch is the
+    // cache's uncached line load (S_WLD) presenting stb.
+    localparam logic [3:0] ZC_S_WLD = 4'd3;   // mirrors z86_cache.S_WLD
     wire [19:0] fetch_a = {zwb_adr, 1'b0} | {19'b0, zwb_sel == 2'b10};
     always_ff @(posedge clk) begin
         if (sdram_up && !reset) begin
             // every issued instruction-fetch byte must be in legal space
-            // wb_tga_o is the Zet's io/mem tag, not a fetch flag: an
-            // instruction fetch is a memory read outside the execute state.
-            if (zwb_stb && zwb_cyc && !zwb_we && !zwb_tga && !u_cpu.exec_st
+            // wb_tga_o is the I/O-vs-mem tag, not a fetch flag: with the
+            // cache off (as this bench runs it), an instruction fetch is
+            // exactly the cache FSM's S_WLD line load; data reads are
+            // S_WRD1/2, writes S_WWR1/2.
+            if (zwb_stb && zwb_cyc && !zwb_we && !zwb_tga
+                && (u_cpu.u_cache.st == ZC_S_WLD)
                 && !((fetch_a >= 20'hF0000 && fetch_a < 20'hF2000) ||
                      (fetch_a >= 20'hF8000 && fetch_a < 20'hF8020) ||
                      (fetch_a >= 20'h00600 && fetch_a < 20'h00620) ||
