@@ -534,6 +534,27 @@ module tb_pc98_boot;
         xrom_byte = xrom[a[7:0]];
     endfunction
 
+    // ---- the PC-9801-55 SCSI board (+hddimg=FILE) -------------------------
+    // Its option ROM at D2000-D2FFF is fpga/core/scsi_rom.hex (the assembled
+    // fpga/scsi_rom.asm; scripts/sim_scsi_boot.sh copies it next to the
+    // other hexes), the register window at 0xCC0-0xCC7 is the real
+    // pc98_scsi, and tb_scsi_target stands in for the firmware service. Off
+    // unless an image is named: an always-present ROM with no target behind
+    // it would have every other run of this bench sit out the ROM's probe
+    // timeouts.
+    logic       scsi_en = 1'b0;
+    logic [7:0] scsirom [0:4095];
+    initial begin
+        string p;
+        scsi_en = $value$plusargs("hddimg=%s", p);
+        for (int i = 0; i < 4096; i = i + 1) scsirom[i] = 8'hFF;
+        if (scsi_en) $readmemh("scsi_rom.hex", scsirom);
+    end
+
+    function automatic logic is_scsirom(input logic [19:0] a);
+        is_scsirom = scsi_en && (a[19:12] == 8'hD2);
+    endfunction
+
     // The data bus is combinational, as the chipset's is. Registering it here
     // put a chipset clock between the strobe and the byte, and the core sampled
     // stale data: the first run stalled for seventeen milliseconds in the middle
@@ -553,6 +574,7 @@ module tb_pc98_boot;
                   : fdc_ctrl_sel    ? fdc_ctrl_rb
                   : fdc_mode_sel    ? fdc_mode_rb
                   : sysport_sel     ? sysport_data
+                  : scsi_rd_sel     ? scsi_dout
                            : 8'hFF;
 
     // ---- the real memory path (+define+REALMEM) ----------------------------
@@ -1008,11 +1030,14 @@ module tb_pc98_boot;
     // transformed -- same mux Chipset.sv drives onto internal_data_bus_ram.
     wire [7:0] mem_read_byte = ~ram_address_select_n ? seq_cpu_rdata
                             : is_xrom(cpu_address)   ? xrom_byte(cpu_address)
+                            : is_scsirom(cpu_address) ? scsirom[cpu_address[11:0]]
                                                      : ram[cpu_address];
     // The odd lane of a one-cycle word read; the SDRAM serves those, the
     // option ROM serves its own.
     wire [7:0] din_hi = (~mem_rd_n & ~ram_address_select_n) ? seq_cpu_rdata_hi
                       : (~mem_rd_n & is_xrom(cpu_address))  ? xrom_byte(cpu_address | 20'h1)
+                      : (~mem_rd_n & is_scsirom(cpu_address))
+                                              ? scsirom[cpu_address[11:0] | 12'h1]
                                                             : 8'hFF;
 
     // The mirror check. On the trailing edge of a read RAM.sv answered, what
@@ -1042,6 +1067,7 @@ module tb_pc98_boot;
 `else
     wire [7:0] mem_read_byte = is_rom(cpu_address)  ? rom_byte(cpu_address)
                              : is_xrom(cpu_address) ? xrom_byte(cpu_address)
+                             : is_scsirom(cpu_address) ? scsirom[cpu_address[11:0]]
                                                     : ram[cpu_address];
     wire bench_ready = 1'b1;          // flat memory answers immediately
     // The flat array is byte-wide but still answers a word's odd lane at
@@ -1051,6 +1077,8 @@ module tb_pc98_boot;
                                   ? rom_byte(cpu_address | 20'h1)
                                 : is_xrom(cpu_address | 20'h1)
                                   ? xrom_byte(cpu_address | 20'h1)
+                                : is_scsirom(cpu_address)
+                                  ? scsirom[cpu_address[11:0] | 12'h1]
                                 : ram[cpu_address | 20'h1];
     wire [7:0] din_hi = ~mem_rd_n ? mem_read_byte_hi : 8'hFF;
     // No RAM.sv here: no beat stream exists. The prefetch windows stay
@@ -1072,7 +1100,7 @@ module tb_pc98_boot;
                           | pic1_iocycle | pic2_iocycle | kbd_data_iocycle
                           | kbd_stat_iocycle | gdc_stat_iocycle | cc_ioread
                           | fdc_msr_sel | fdc_fifo_sel | fdc_ctrl_sel
-                          | fdc_mode_sel | sysport_sel);
+                          | fdc_mode_sel | sysport_sel | scsi_rd_sel);
 
     // ---- I/O ---------------------------------------------------------------
     //
@@ -1188,6 +1216,76 @@ module tb_pc98_boot;
         end
     end
     logic xrom_rd_seen = 1'b0, xrom_reg_seen = 1'b0;
+
+    // ---- SCSI board: the real register window + the firmware stand-in ----
+    wire        scsi_cs     = scsi_en & (~io_rd_n | ~io_wr_n)
+                            & (cpu_address[15:3] == 13'h198);
+    wire        scsi_rd_sel;
+    wire  [7:0] scsi_dout;
+    wire        scsi_cmd_req;
+    wire  [7:0] scsi_cmd_byte;
+    wire  [4:0] scsi_mg_reg_addr;
+    wire        scsi_mg_reg_we;
+    wire  [7:0] scsi_mg_reg_wdata, scsi_mg_reg_rdata;
+    wire [12:0] scsi_mg_buf_addr;
+    wire        scsi_mg_buf_we;
+    wire  [7:0] scsi_mg_buf_wdata, scsi_mg_buf_rdata;
+    wire  [7:0] scsi_mg_aux, scsi_mg_st;
+    wire        scsi_mg_aux_we, scsi_mg_st_we, scsi_mg_rdclr, scsi_mg_wrclr;
+    int         scsi_ncmds;
+
+    pc98_scsi u_scsi (
+        .clk(clk_chipset), .rst(reset),
+        .cs(scsi_cs), .a1a2(cpu_address[2:1]),
+        .io_read_n(io_rd_n), .io_write_n(io_wr_n),
+        .data_in(cpu_data_bus), .data_out(scsi_dout), .read_select(scsi_rd_sel),
+        .cmd_req(scsi_cmd_req), .cmd_byte(scsi_cmd_byte),
+        .mg_reg_addr(scsi_mg_reg_addr), .mg_reg_we(scsi_mg_reg_we),
+        .mg_reg_wdata(scsi_mg_reg_wdata), .mg_reg_rdata(scsi_mg_reg_rdata),
+        .mg_buf_addr(scsi_mg_buf_addr), .mg_buf_we(scsi_mg_buf_we),
+        .mg_buf_wdata(scsi_mg_buf_wdata), .mg_buf_rdata(scsi_mg_buf_rdata),
+        .mg_auxstatus(scsi_mg_aux), .mg_auxstatus_we(scsi_mg_aux_we),
+        .mg_scsistatus(scsi_mg_st), .mg_scsistatus_we(scsi_mg_st_we),
+        .mg_rdptr_clr(scsi_mg_rdclr), .mg_wrptr_clr(scsi_mg_wrclr)
+    );
+
+    tb_scsi_target u_scsi_tgt (
+        .clk(clk_chipset), .cmd_req(scsi_cmd_req),
+        .reg_addr(scsi_mg_reg_addr), .reg_we(scsi_mg_reg_we),
+        .reg_wdata(scsi_mg_reg_wdata), .reg_rdata(scsi_mg_reg_rdata),
+        .buf_addr(scsi_mg_buf_addr), .buf_we(scsi_mg_buf_we),
+        .buf_wdata(scsi_mg_buf_wdata), .buf_rdata(scsi_mg_buf_rdata),
+        .aux(scsi_mg_aux), .aux_we(scsi_mg_aux_we),
+        .status(scsi_mg_st), .status_we(scsi_mg_st_we),
+        .rdptr_clr(scsi_mg_rdclr), .wrptr_clr(scsi_mg_wrclr),
+        .n_cmds(scsi_ncmds)
+    );
+
+    // Witnesses: each POST pass's entry into the ROM (with the AL the boot
+    // sweep hands entry 0x15), and the first instruction of any IPL --
+    // 1FC00 for the HDD's (and a 1 KB FDD read), 1FE00 for a 512-byte FDD
+    // one -- with the hand-off registers and the BIOS bytes that say which
+    // device booted. scsi_ipl_seen lets the chunk loop stop early.
+    logic [19:0] scsi_pc_d = 20'h0;
+    logic        scsi_ipl_seen = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        scsi_pc_d <= eu_pc;
+        if (scsi_en && eu_pc != scsi_pc_d) begin
+            if (eu_pc == 20'hD200C || eu_pc == 20'hD200F
+             || eu_pc == 20'hD2012 || eu_pc == 20'hD2015)
+                $display("  %8t  SCSI ROM entry %02X  ax %04X  [4D2]=%02X [482]=%02X  cmds %0d",
+                         $time, eu_pc[7:0], eu_ax, ram[20'h4D2], ram[20'h482],
+                         scsi_ncmds);
+            if ((eu_pc == 20'h1FC00 || eu_pc == 20'h1FE00) && !scsi_ipl_seen) begin
+                scsi_ipl_seen <= 1'b1;
+                $display("  %8t  IPL ENTRY %05X  ax %04X bx %04X cx %04X dx %04X  [584]=%02X [482]=%02X  geo %02X %02X %02X%02X  cmds %0d",
+                         $time, eu_pc, eu_ax, eu_bx, eu_cx, eu_dx,
+                         ram[20'h584], ram[20'h482],
+                         ram[20'h5A0], ram[20'h5A1], ram[20'h5A3], ram[20'h5A2],
+                         scsi_ncmds);
+            end
+        end
+    end
 
     wire [7:0] sysport_data = sysport_35_sel ? sysport_c
                             : sysport_31_sel ? 8'h10
@@ -2365,6 +2463,10 @@ module tb_pc98_boot;
     // ---- run ---------------------------------------------------------------
     int i, j;
     int chunks = 1200;              // +chunks=N cuts the run short
+    // With +hddimg: chunks to keep running after an IPL is entered without
+    // hdd_test's result block appearing (an FDD IPL, a hung disk one).
+    int ipl_after = 0, ipl_grace = 3;
+    initial void'($value$plusargs("ipl_grace=%d", ipl_grace));
     initial begin
         for (i = 0; i < 1048576; i = i + 1) begin
             ram[i] = 8'h00;
@@ -2481,6 +2583,26 @@ module tb_pc98_boot;
             occ_report();
 `endif
             wr_clear_tog = ~wr_clear_tog;
+            // testdisk/hdd_test.asm's result block at 0x40000: +2F = A5 once
+            // it has run every check, +2E = 'P'/'F'.
+            if (scsi_en && ram[20'h4002F] == 8'hA5) begin
+                $write("SCSI RESULT:");
+                for (j = 0; j < 48; j = j + 1) begin
+                    if (j % 16 == 0) $write("\n  %05X:", 20'h40000 + j);
+                    $write(" %02X", ram[20'h40000 + j]);
+                end
+                $display("");
+                $display("SCSI IPL VERDICT: %s", ram[20'h4002E] == "P" ? "PASS" : "FAIL");
+                break;
+            end
+            if (scsi_ipl_seen) begin
+                ipl_after = ipl_after + 1;
+                if (ipl_after > ipl_grace) begin
+                    $display("SCSI bench: IPL entered %0d chunks ago, no result block -- stopping",
+                             ipl_grace);
+                    break;
+                end
+            end
         end
 
         $display("--- done ---");
