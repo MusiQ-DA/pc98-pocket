@@ -100,9 +100,10 @@ module pc98_kbd8251 #(
     // event; code is the PC-98 matrix byte, bit 7 already set on a release,
     // so it goes on the receive wire as-is. An event that arrives while the
     // holding register still holds a byte the guest has not read waits in a
-    // one-deep side queue; pocket_keyboard's typematic rate spaces real key
-    // events far wider than a BIOS poll cycle, so one slot of slack is the
-    // measured need (make, break, and a repeat share the slot in turn).
+    // 16-deep queue, as np21w's keyboard_send buffers (io/serial.c, KB_BUF).
+    // The old one-deep queue dropped the third of a burst -- a pad press and
+    // release landing while a game sat with IRQ1 unserviced lost the break
+    // and left the key held down.
     input  wire logic key_stb,
     input  wire logic [7:0] key_byte,
 
@@ -124,8 +125,10 @@ module pc98_kbd8251 #(
     logic       data_rd_level_q;
     // The injection side's delayed strobe copy and its one-deep queue.
     logic       key_stb_q;
-    logic [7:0] key_hold;
-    logic       key_pending;
+    logic [7:0] kq [16];
+    logic [3:0] kq_rd, kq_wr;
+    logic [4:0] kq_n;
+    wire        key_pending = kq_n != 5'd0;
 
     logic [23:0] ack_timer;
 
@@ -139,8 +142,9 @@ module pc98_kbd8251 #(
             rx_full         <= 1'b0;
             ack_timer       <= 24'd0;
             key_stb_q       <= 1'b0;
-            key_hold        <= 8'h00;
-            key_pending     <= 1'b0;
+            kq_rd           <= 4'd0;
+            kq_wr           <= 4'd0;
+            kq_n            <= 5'd0;
         end else begin
             ctrl_wr_level_q <= ctrl_write_strobe;
             data_rd_level_q <= data_read_strobe;
@@ -171,7 +175,8 @@ module pc98_kbd8251 #(
                     // np21w's keyboard_resetsignal clears the pending buffers
                     // too: a key that was still queued when the keyboard was
                     // reset belongs to the cycle that just died.
-                    key_pending <= 1'b0;
+                    kq_rd <= kq_wr;
+                    kq_n  <= 5'd0;
                 end
                 cmd_q <= wr_data_q;
             end
@@ -185,19 +190,23 @@ module pc98_kbd8251 #(
             // Key injection. Written last so an event landing on the same
             // tick as the ACK expiry or a read completing takes the register:
             // a real key press outranks both bookkeeping paths.
+            // Bytes leave in order: a new event goes straight to the
+            // receiver only when nothing is queued ahead of it.
             key_stb_q <= key_stb;
             if (key_stb != key_stb_q) begin
-                if (!rx_full) begin
+                if (!rx_full && !key_pending) begin
                     rx_q    <= key_byte;
                     rx_full <= 1'b1;
-                end else if (!key_pending) begin
-                    key_hold    <= key_byte;
-                    key_pending <= 1'b1;
+                end else if (kq_n != 5'd16) begin
+                    kq[kq_wr] <= key_byte;
+                    kq_wr     <= kq_wr + 4'd1;
+                    kq_n      <= kq_n + 5'd1;
                 end
             end else if (key_pending && !rx_full) begin
-                rx_q        <= key_hold;
-                rx_full     <= 1'b1;
-                key_pending <= 1'b0;
+                rx_q    <= kq[kq_rd];
+                rx_full <= 1'b1;
+                kq_rd   <= kq_rd + 4'd1;
+                kq_n    <= kq_n - 5'd1;
             end
         end
     end

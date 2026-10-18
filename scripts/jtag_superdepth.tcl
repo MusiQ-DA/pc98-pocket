@@ -124,4 +124,7 @@ for {set it 0} {$it < $N} {incr it} {
   flush stdout
 }
 puts "fails=$fails/$N"
+# Hand the speed back to the OSD: a P override left in slot 9 outlives the
+# run and pins whoever plays next to the tested speed.
+wr 9 0
 shutdown

@@ -296,6 +296,17 @@ module tb_pc98_kbd8251;
         rd41(b); expect_eq(b, 8'h1C, "key beat the ACK slot");
         rd43(b); expect_eq(b, 8'h85, "no second byte behind it");
 
+        // ---- 10: a burst is queued, not dropped ---------------------------
+        // Pad presses landing while IRQ1 sits unserviced: the old one-deep
+        // hold lost the third event (a break), leaving the key held down.
+        inject(8'h3A); inject(8'hBA); inject(8'h3C); inject(8'hBC); inject(8'h1C);
+        rd41(b); expect_eq(b, 8'h3A, "burst 1");
+        rd41(b); expect_eq(b, 8'hBA, "burst 2 (break kept)");
+        rd41(b); expect_eq(b, 8'h3C, "burst 3");
+        rd41(b); expect_eq(b, 8'hBC, "burst 4");
+        rd41(b); expect_eq(b, 8'h1C, "burst 5");
+        rd43(b); expect_eq(b, 8'h85, "burst drained");
+
         if (errors == 0)
             $display("RESULT: PASS");
         else
