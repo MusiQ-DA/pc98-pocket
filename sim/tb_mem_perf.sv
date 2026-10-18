@@ -142,6 +142,12 @@ module tb_mem_perf;
         .pf_nofill         (pf_nofill_r),
         .pf_nofillm        (pf_nofillm_r),
         .pf_nohit          (pf_nohit_r),
+        // foreign-commit snoop: the real RAM.sv feed, so the synthetic
+        // DMAC's writes (and the bridge's own posted drains) kill only
+        // the pf windows they overlap -- exactly what core_top wires.
+        .sn_v              (ram_sn_v),
+        .sn_addr           (ram_sn_addr),
+        .sn_len            (ram_sn_len),
         .bios_shadow_flag  (shadow_flag_r),
         .dbg               ()
     );
@@ -424,6 +430,10 @@ module tb_mem_perf;
     wire        ram_ready_w, access_complete_w, access_own_w;
     wire        ram_wt_w;           // u_ram's write_taken
     wire        seq_wr_taken_w;     // -> u_bridge.sdram_wr_taken
+    // port-A write-commit snoop from the RAM model (-> u_bridge.sn_*)
+    wire        ram_sn_v;
+    wire [23:0] ram_sn_addr;
+    wire  [3:0] ram_sn_len;
     wire        seq_rd_own_w;       // -> u_bridge.sdram_rd_ready
     wire [4:0]  seq_mem_pf_len;
     wire        pf_beat_v_w;
@@ -514,7 +524,8 @@ module tb_mem_perf;
         .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
         .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
         .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
-        .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len()
+        .ram_wr_snoop_v(ram_sn_v), .ram_wr_snoop_addr(ram_sn_addr),
+        .ram_wr_snoop_len(ram_sn_len)
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),

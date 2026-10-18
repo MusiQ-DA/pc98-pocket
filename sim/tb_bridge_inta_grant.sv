@@ -169,6 +169,9 @@ module tb_bridge_inta_grant;
         .pf_nofill         (1'b0),
         .pf_nofillm        (1'b0),
         .pf_nohit          (1'b0),
+        .sn_v              (1'b0),      // no memory model in this bench
+        .sn_addr           (24'd0),
+        .sn_len            (4'd0),
         .bios_shadow_flag  (1'b0),
         .biu_done          (),
         .dbg               ()

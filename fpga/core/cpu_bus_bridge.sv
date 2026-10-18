@@ -157,6 +157,19 @@ module cpu_bus_bridge #(
     input  wire         pf_wkill,
     input  wire         pf_bkill,
     input  wire         bus_mem_write_n,
+    // Port-A write-commit snoop: RAM.sv's ram_wr_snoop_* -- the same feed
+    // z86_cache invalidates against. Word address, words-1, and it covers
+    // EVERY master that commits through the sequencer (guest, DMA,
+    // loader). A window whose sector overlaps a committed span dies so it
+    // can never serve pre-write bytes; unrelated windows live on. The DMA
+    // grant itself no longer flushes: the real BIU's prefetch queue
+    // survives HOLD/HLDA (it cannot snoop at all on metal), and the old
+    // flush-on-grant policy starved code streams under steal storms --
+    // tb_mem_perf +GRANT rebuilt both windows every steal and phase 0E
+    // ran ~30x under budget on fully uncached fetches.
+    input  wire         sn_v,
+    input  wire  [23:0] sn_addr,
+    input  wire  [3:0]  sn_len,
     // F-bank remap select: guest F8000-FFFFF is banked between the system
     // BIOS and the ITF shadow (RAM.sv latch_address). The windows tag the
     // guest address only, so a bank flip must drop them -- bytes fetched
@@ -622,10 +635,11 @@ module cpu_bus_bridge #(
     // Correctness hinges on invalidation, and all of it is local: every
     // guest write passes this engine, so an overlapping write's ARM drops
     // the window before the write ever reaches memory; any I/O write
-    // flushes (bank/shadow/wait registers move the map); and !bus_ours --
-    // the DMA grant -- flushes because the DMAC's writes bypass us. A fill
-    // already in flight marks fill_ok; an invalidation clears it and the
-    // rest of that fill's beats are dropped at append time.
+    // flushes (bank/shadow/wait registers move the map); foreign commits
+    // (DMA, loader) arrive on the sn_v feed and kill only the windows
+    // they overlap. A fill already in flight marks fill_ok; an
+    // invalidation clears it and the rest of that fill's beats are
+    // dropped at append time.
     //
     // Only PLAIN sdram bytes are fetched: pc98_sdram_hits minus
     // pc98_gvram_hits -- never a graphics window (the sequencer's plane
@@ -968,6 +982,20 @@ module cpu_bus_bridge #(
     wire wr_ovl1 = (srv_beg < pf_reach1) && (srv_end_a > {1'b0, pf_base1});
     wire pf_fill_done = pair_done && (cur_pf || cur_fillm);
 
+    // Snoop span in guest byte space: word address -> bytes, words-1 ->
+    // one-past-last. Spans are small (<= 64 B), so a plain sector-tag
+    // range compare over [first, last] covers the straddle cases without
+    // wraparound arithmetic.
+    wire [24:0] sn_beg  = {sn_addr, 1'b0};
+    wire [24:0] sn_end  = sn_beg + {19'b0, sn_len, 1'b0} + 25'd2;
+    wire [24:0] sn_last = sn_end - 25'd1;
+    wire [14:0] sn_sec0 = sn_beg[19:5];
+    wire [14:0] sn_sec1 = sn_last[19:5];
+    wire sn_hit0 = pf_live[0]
+                && (pf_base0[19:5] >= sn_sec0) && (pf_base0[19:5] <= sn_sec1);
+    wire sn_hit1 = pf_live[1]
+                && (pf_base1[19:5] >= sn_sec0) && (pf_base1[19:5] <= sn_sec1);
+
     // What a miss may disturb. Inside either anchored sector it is the
     // guest merely outrunning that window's fill frontier: it rides the
     // bus while the fill pours the bytes behind it, and the window
@@ -1250,14 +1278,15 @@ module cpu_bus_bridge #(
 
             // Invalidations: an overlapping guest write drops the
             // touched window before the write reaches memory; any I/O
-            // write may move the map; a DMA grant means writes we
-            // cannot see, so both windows die; and an F-bank remap
+            // write may move the map; and an F-bank remap
             // (bios_shadow_flag edge) retags every F-sector window's
             // bytes to the other bank, so nothing fetched before the
             // flip may serve. Dropping pf_live too keeps a dead window
             // from refilling a sector nobody reads -- the next miss
-            // re-seeds it where the stream actually is.
-            if (!bus_ours || arm_iow || bank_chg
+            // re-seeds it where the stream actually is. A DMA grant is
+            // NOT here anymore: foreign commits arrive on the snoop
+            // feed below and kill only the windows they overlap.
+            if (arm_iow || bank_chg
                 || (pf_wkill && (arm_wr || wrq_push))
                 || (pf_bkill && !bus_mem_write_n)) begin
                 pf_cnt0 <= 6'd0;
@@ -1297,6 +1326,30 @@ module cpu_bus_bridge #(
                     pf_ghost_v[1] <= 1'b0;
                 end
                 if (cur_pf_w ? wr_ovl1 : wr_ovl0)
+                    fill_ok <= 1'b0;
+            end
+
+            // Foreign commits (DMA, loader -- and the bridge's own posted
+            // drains, which already killed their window at push time, so
+            // those are no-ops here): kill only the windows the committed
+            // span overlaps. sn_addr is a word address and sn_len counts
+            // words-1; the span may straddle up to three 32-byte sectors,
+            // so compare sector tags across the whole span.
+            if (sn_v) begin
+                if (sn_hit0) begin
+                    pf_cnt0    <= 6'd0;
+                    pf_lo0     <= 5'd0;
+                    pf_live[0] <= 1'b0;
+                    pf_ghost_v[0] <= 1'b0;
+                end
+                if (sn_hit1) begin
+                    pf_cnt1    <= 6'd0;
+                    pf_lo1     <= 5'd0;
+                    pf_live[1] <= 1'b0;
+                    pf_ghost_v[1] <= 1'b0;
+                end
+                if ((cur_pf || cur_fillm)
+                    && (cur_pf_w ? sn_hit1 : sn_hit0))
                     fill_ok <= 1'b0;
             end
 

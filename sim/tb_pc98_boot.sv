@@ -195,6 +195,10 @@ module tb_pc98_boot;
         .pf_nofill         (1'b0),
         .pf_nofillm        (1'b0),
         .pf_nohit          (1'b0),
+        // real port-A snoop feed (same wires the z86 cache snoops)
+        .sn_v              (sn_v),
+        .sn_addr           (sn_addr),
+        .sn_len            (sn_len),
         .bios_shadow_flag  (itf_bank),
         .zet_edge_o        (z86_ce),
         .dbg               (zbridge_dbg)

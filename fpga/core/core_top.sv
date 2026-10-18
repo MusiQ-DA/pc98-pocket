@@ -3475,6 +3475,11 @@ module core_top (
         .pf_wkill          (jtag_pf_wkill),
         .pf_bkill          (jtag_pf_bkill),
         .bus_mem_write_n   (chipset_memory_write_n),
+        // foreign-commit snoop: same port-A feed the z86 cache snoops --
+        // kills only pf windows a committed span overlaps (DMA, loader)
+        .sn_v              (ram_wr_snoop_v),
+        .sn_addr           (ram_wr_snoop_addr),
+        .sn_len            (ram_wr_snoop_len),
         .bios_shadow_flag  (bios_shadow_flag),
         .dbg               (bridge_dbg),
         .dbg_inta          (bridge_dbg_inta)

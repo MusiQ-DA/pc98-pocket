@@ -29,8 +29,11 @@ HDIMG="$IMG" HDSTREAM="$HDSTREAM" HDSPEED="$SPD" openocd \
 echo "== waiting for '$MARK' (timeout ${LIMIT}s) =="
 t0=$SECONDS
 while (( SECONDS - t0 < LIMIT )); do
+    # NB: the header line is "---- text plane (80x25, linear TVRAM order) ----",
+    # so anchor the range on the prefixes only -- matching the full header
+    # never fires and every poll silently reads an empty screen.
     scr=$(openocd -f scripts/jtag_probe.cfg -f scripts/jtag_screen.tcl 2>&1 \
-          | sed -n '/---- text plane ----/,/---- attributes/p')
+          | sed -n '/---- text plane/,/---- attributes/p')
     if grep -qF "$MARK" <<<"$scr"; then
         echo "== marker after $((SECONDS - t0))s =="
         grep -v "^$" <<<"$scr" | sed 's/ *|$//'
