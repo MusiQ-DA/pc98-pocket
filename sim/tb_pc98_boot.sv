@@ -156,7 +156,7 @@ module tb_pc98_boot;
         .clk               (clk_chipset),
         .cpu_ce_posedge    (cpu_ce_posedge),
         .cpu_ce_negedge    (cpu_ce_negedge),
-        .fast_pace         (clk_select_r[1]),
+        .pace_286          (1'b1),   // every setting is 286-class now
         .reset             (cpu_reset_w),
         .zet_clk           (zet_clk),
         .wb_dat_o          (zwb_dat_o),

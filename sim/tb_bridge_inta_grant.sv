@@ -133,7 +133,7 @@ module tb_bridge_inta_grant;
         .clk               (clk),
         .cpu_ce_posedge    (cpu_ce_posedge),
         .cpu_ce_negedge    (cpu_ce_negedge),
-        .fast_pace         (clk_select_r[1]),
+        .pace_286          (1'b1),
         .reset             (reset),
         .zet_clk           (zet_clk),
         .wb_dat_o          (wb_dat_o_m),

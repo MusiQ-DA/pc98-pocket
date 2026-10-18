@@ -70,7 +70,10 @@ module cpu_bus_bridge #(
     input  wire         cpu_ce_posedge,     // the CE train the 8288 runs on
     input  wire         cpu_ce_negedge,     // its falling half: the fast-pair
                                             // gap ends on a PASV negedge
-    input  wire         fast_pace,          // clk_select[1]: the fast settings
+    input  wire         pace_286,           // run the bus pairs on the 286
+                                            // Ts/Tc profile (2 clocks per
+                                            // bus cycle) -- every speed
+                                            // setting is a 286-class machine
                                             // trade T-state fidelity for speed
     input  wire         reset,              // reset_cpu
 
@@ -514,32 +517,42 @@ module cpu_bus_bridge #(
                               ? (srv_addr[0] ? srv_data[15:8] : srv_data[7:0])
                               : srv_data[15:8];
 
-    // fast_pace = clk_select[1], the beyond-real-hardware settings, where
-    // the T-state model gives up fidelity it no longer needs. The shrink
-    // is one posedge out of the command phase -- and only on a FRESH
-    // ready: processor_ready can still be high from the previous byte's
-    // completion when this byte's accept would fire (realmem E2E showed
-    // byte data arriving one access stale, e.g. the reset vector reading
-    // ea/00/00/80/fd as 00/ea/00/00), so the early count is qualified on
-    // saw_low, a ready FALLING EDGE that marks THIS byte's access having
-    // actually started. Level-testing "ready low while we own the bus" is
-    // not enough: at the AEN release, bus_ours returns while the ready
-    // chain is still draining dma_wait, and the falsely-armed byte then
-    // accepts as the drain completes -- before the re-asserted strobe's
-    // access could ever finish (realmem+freeze: f801d read as fe, the
-    // same signature hardware showed at f95b3). Bytes whose access never
-    // drops ready fall back to the faithful count. The gap ends at the
-    // first
-    // passive negedge -- pair_finish is the pair's ONLY terminator:
-    // rd_word assembly, biu_done, the byte transition and the Wishbone
-    // ack must all move on the same edge, or the ack lands before the
-    // data (the stale-word signature returns).
+    // pace_286: the 286 Ts/Tc bus profile. A real 80286 pipelines its
+    // bus -- back-to-back cycles are Ts+Tc, 2 clocks, and only a cycle
+    // issuing from an idle bus pays a third (Ts+Tc+one dead clock). The
+    // engine below reproduces exactly that: a pair accepts at its 2nd CE
+    // when saw_low says the access truly started (the shrunk command
+    // phase), and finishes on the CE NEGEDGE -- the next pair's Ts
+    // overlapping this pair's Tc, which is what pipelining is. Pairs
+    // whose access never drops processor_ready fall back to the
+    // faithful count (t_cnt >= 3): the 2-clock guarantee only holds for
+    // back-to-back traffic, and a from-idle cycle on the metal pays the
+    // extra clock too.
+    //
+    // saw_low is not decorative -- it is the stale-ready guard, and it
+    // stays load-bearing: processor_ready can still be high from the
+    // previous byte's completion when this byte's accept would fire
+    // (realmem E2E showed byte data arriving one access stale, e.g. the
+    // reset vector reading ea/00/00/80/fd as 00/ea/00/00), so the early
+    // count is qualified on saw_low, a ready FALLING EDGE that marks
+    // THIS byte's access having actually started. Level-testing "ready
+    // low while we own the bus" is not enough: at the AEN release,
+    // bus_ours returns while the ready chain is still draining dma_wait,
+    // and the falsely-armed byte then accepts as the drain completes --
+    // before the re-asserted strobe's access could ever finish
+    // (realmem+freeze: f801d read as fe, the same signature hardware
+    // showed at f95b3).
+    //
+    // pair_finish is the pair's ONLY terminator: rd_word assembly,
+    // biu_done, the byte transition and the Wishbone ack must all move
+    // on the same edge, or the ack lands before the data (the stale-word
+    // signature returns).
     // INTA pairs keep the faithful count: for the 8259's two-acknowledge
     // sequence the pacing IS the contract.
     // Drains and fills take the fast profile regardless of the pace
-    // dial: the guest never sees these pairs, so the faithful T-state
+    // dial: the guest never sees these pairs, so a longer T-state
     // count would only delay data movement.
-    wire fast_pair = (fast_pace || cur_dq || cur_pf || cur_fillm)
+    wire fast_pair = (pace_286 || cur_dq || cur_pf || cur_fillm)
                   && !cur_inta;
     wire pair_finish = (bstate == B_GAP)
                      && (fast_pair ? cpu_ce_negedge : (gap_cnt == 2'd1));

@@ -104,7 +104,7 @@ module tb_mem_perf;
         .clk               (clk),
         .cpu_ce_posedge    (ce_pos),
         .cpu_ce_negedge    (ce_neg),
-        .fast_pace         (clk_select_r[1]),
+        .pace_286          (1'b1),   // every setting is 286-class now
         .reset             (cpu_reset_w),
         .zet_clk           (zet_clk),
         .wb_dat_o          (zwb_dat_o),
@@ -624,6 +624,17 @@ module tb_mem_perf;
         emit(8'hB0); emit(v); emit(8'hBA); emitw(p); emit(8'hEE);
     endtask
 
+    // Poke a tb-authored byte below A0000 into the SDRAM image AND the
+    // coherence oracle's shadow: z86's 16 B fetch line loads and the
+    // bridge's 32 B pf fills read bytes the guest never wrote, so every
+    // tb-seeded byte the oracle can observe must carry its true value
+    // (a plain poke leaves the byte unchecked -- or worse, phantom).
+    // Pokes at F0000+ stay plain: the oracle only checks below A0000.
+    task ram_seed(input int addr, input logic [15:0] w);
+        sdr.u_part.poke(24'(addr), w);
+        shadow[int'(addr)] = w[7:0];
+    endtask
+
     initial begin
         prog_len = 0;
         // prologue
@@ -808,14 +819,21 @@ module tb_mem_perf;
             prog[r_jdone] = 8'(phase_done - (r_jdone + 1));
             // T-sector prime: a trampoline aimed at bad_land for iter-0
             // staleness, then HLT filler so garbage bytes hang.
-            sdr.u_part.poke(24'h000600, 16'h00EE);
-            sdr.u_part.poke(24'h000601, 16'h00EA);
-            sdr.u_part.poke(24'h000602, {8'h00, bad_land[7:0]});
-            sdr.u_part.poke(24'h000603, {8'h00, bad_land[15:8]});
-            sdr.u_part.poke(24'h000604, 16'h0000);
-            sdr.u_part.poke(24'h000605, 16'h00F0);
+            // ram_seed: the oracle must know every tb-authored byte --
+            // z86 fetches whole 16 B lines and pf fills 32 B sectors, so
+            // reads cover bytes the guest never wrote (Zet only fetched
+            // the 5 bytes it consumed, so plain pokes used to be fine).
+            // The guest rewrites 0600..0605 each iteration, which
+            // re-seeds them through the ack path -- the real SMC check
+            // is untouched.
+            ram_seed(32'h000600, 16'h00EE);
+            ram_seed(32'h000601, 16'h00EA);
+            ram_seed(32'h000602, {8'h00, bad_land[7:0]});
+            ram_seed(32'h000603, {8'h00, bad_land[15:8]});
+            ram_seed(32'h000604, 16'h0000);
+            ram_seed(32'h000605, 16'h00F0);
             for (int i = 20'h00606; i < 20'h00620; i++)
-                sdr.u_part.poke(24'(i), 16'h00F4);
+                ram_seed(32'(i), 16'h00F4);
         end
 
         // ---- phase 0A: F-bank remap kill ------------------------------
@@ -1135,12 +1153,12 @@ module tb_mem_perf;
         sdr.u_part.poke(24'h0FFFF4, 16'h00F0);
         // phase-0A/0B mark cells: unwritten cells read X in the model
         for (int i = 20'h00700; i < 20'h00710; i++)
-            sdr.u_part.poke(24'(i), 16'h0000);
+            ram_seed(32'(i), 16'h0000);
         // phase-0D frame stack and arrays
         for (int i = 20'h00900; i < 20'h00F10; i++)
-            sdr.u_part.poke(24'(i), 16'h0000);
+            ram_seed(32'(i), 16'h0000);
         for (int i = 20'h03000; i < 20'h03110; i++)
-            sdr.u_part.poke(24'(i), 16'h0000);
+            ram_seed(32'(i), 16'h0000);
         // Phase-9 prime is emitted by the program initial (bad_land is
         // only known there); see the poke inside the emit block.
     end

@@ -2,7 +2,9 @@
 // ce_generator
 //
 // Generate the virtual CPU CLK pin plus synchronous clock-enable pulses for
-// the chipset domain from the single 50 MHz chipset clock.
+// the chipset domain from the single 42.954545 MHz chipset clock. One
+// posedge CE is one guest CPU clock: the ratios below run the named machine
+// at 1x, not at a multiple of its rate.
 //
 module ce_generator (
     input   logic           clock,
@@ -55,47 +57,53 @@ module ce_generator (
         cpu_edge_num = 9'd2;
         cpu_edge_den = 9'd9;
 
-        // PC-98 speeds. The machine is a 2.4576 MHz-family box -- the class the
-        // ITF selects when [0x0501] bit 7 is clear, which is what this build
-        // presents and what the PIT is already clocked for (docs/HANDOVER.md
-        // 3.6) -- so the V30's two real speeds are 2.4576 MHz x2 and x4, the
-        // "5 MHz" and "10 MHz" of a PC-9801VM/VX front panel. The third step is
-        // twice the fast one: not a speed any real machine had, but still
-        // cycle-paced, unlike the fourth. 201 is the denominator that lands all
-        // three within 0.0001% of the exact frequency, and 184/201 still fits
-        // the 9-bit accumulator.
+        // PC-98 speeds, priced at 1x: one CE pulse is one CPU clock of the
+        // 286-class machine the menu entry names. The bus engine
+        // (cpu_bus_bridge) paces every bus cycle at the 286 Ts/Tc profile --
+        // two CPU clocks a cycle -- so the CPU clock itself is what this
+        // generator has to make; the old 2x ratios (built for the V30's 4T
+        // bus, with core_top's duty gate throttling the average back down)
+        // are retired.
+        //
+        // 92/201 is the 2.4576 MHz-family value -- the class the ITF selects
+        // when [0x0501] bit 7 is clear, which is what this build presents
+        // and what the PIT is already clocked for (docs/HANDOVER.md 3.6) --
+        // 9.830393 MHz, within 0.0001% of the VX21's 9.8304. The 8 and 12 MHz
+        // classes have no exact ratio against this clock, so they take the
+        // nearest rationals: 75/201 = 8.013908 MHz (+0.17% off the VX2's
+        // nominal 8) and 112/201 = 11.967435 MHz (-0.27% off the RX class's
+        // nominal 12); 201 stays the shared denominator and still fits the
+        // 9-bit accumulator.
         //
         // The clock_cycle_counter_* and shift_read_timing outputs below belong
-        // to the CPU this generator was built against, which is not the part
-        // instantiated here (core_top puts the Zet + zet_cpu_bridge there);
-        // only the edge ratio and the RAM waits are consumed.
+        // to the CPU this generator was originally built against, which is not
+        // the part instantiated here (core_top puts z86 + cpu_bus_bridge
+        // there); only the edge ratio and the RAM waits are consumed.
         case (active_clk_select)
             2'b00:
-            begin                                   // 9.830393 MHz: "286 8MHz"
-                cpu_edge_num = 9'd92;               // paces its bus like "286
-                                                    // 10MHz" (core_top's
-                                                    // throttle sets them apart)
-                cpu_edge_den = 9'd201;
+            begin                                   // 8.013908 MHz: "286
+                cpu_edge_num = 9'd75;               // 8MHz" (VX2 class,
+                cpu_edge_den = 9'd201;              // nearest fit +0.17%)
                 vram_wait_en = 1'b1;
             end
 
             2'b01:
-            begin                                   // 9.830393 MHz ("10 MHz")
-                cpu_edge_num = 9'd92;
-                cpu_edge_den = 9'd201;
+            begin                                   // 9.830393 MHz: "286
+                cpu_edge_num = 9'd92;               // 10MHz" (VX21 class,
+                cpu_edge_den = 9'd201;              // family exact)
                 vram_wait_en = 1'b1;
             end
 
             2'b10:
-            begin                                   // 19.660787 MHz (2 x fast)
-                cpu_edge_num = 9'd184;
-                cpu_edge_den = 9'd201;
+            begin                                   // 11.967435 MHz: "286
+                cpu_edge_num = 9'd112;              // 12MHz" (RX class,
+                cpu_edge_den = 9'd201;              // nearest fit -0.27%)
                 ram_read_wait_cycle = 2'd1;         // as the 1/1 step needs
             end
 
-            2'b11:
-            begin                                   // 21.477 MHz, the chipset
-                cpu_edge_num = 9'd1;                // clock itself
+            2'b11:                                  // 21.477 MHz, the chipset
+            begin                                   // clock itself
+                cpu_edge_num = 9'd1;
                 cpu_edge_den = 9'd1;
                 cycle_accrate = 1'b0;
                 ram_read_wait_cycle = 2'd1;

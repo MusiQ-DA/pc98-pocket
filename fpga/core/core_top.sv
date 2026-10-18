@@ -345,18 +345,19 @@ module core_top (
             clk_select <= clk_select_next;
     end
 
-    // Speed throttle. The CE train above only paces bus cycles, and z86
-    // issues at the chipset clock and runs from its cache, so in the paced
-    // modes nearly nothing would slow it. A fractional gate passes
-    // thr_num/256 of the core's clock edges instead; Turbo passes all.
-    // The duties are calibrated on hardware with CPUBENCH 0.980 to the 286
-    // PC-98s each setting names (docs/ref/pc98-performance-baselines.md):
-    // 0 "286 8MHz" ~ VX2 (4.57), 1 "286 10MHz" ~ VX21/UX21 (5.69), 2 "286
-    // 12MHz" ~ RX21/EX/DX (7.07). The ratio is linear in the duty: 2.45 @16,
-    // 4.91 @32, 9.81 @64, 18.47 @128, 23.91 @192 (of 256).
-    localparam [7:0] THR_8MHZ  = 8'd30;   // 4.60
-    localparam [7:0] THR_10MHZ = 8'd37;   // 5.67
-    localparam [7:0] THR_12MHZ = 8'd46;   // 7.05
+    // Speed throttle -- retired to zero in the bus-faithful design. The
+    // paced modes now price the bus at real 286 rates two layers down:
+    // ce_generator runs the CE train at 1x the named clock, and the
+    // bridge runs its pairs on the 286 Ts/Tc profile, so a duty gate on
+    // top would only stack a second slowdown on an already-correct one.
+    // (The old design blended three time bases: 2x CE, the V30-shaped
+    // 4T byte engine, and this Bresenham duty fitted to CPUBENCH
+    // averages -- per-instruction timing diverged up to 2x even when
+    // the Dhrystone number matched.) The mechanism stays alive for the
+    // JTAG slot-9 [19:12] trim override only.
+    localparam [7:0] THR_8MHZ  = 8'd0;
+    localparam [7:0] THR_10MHZ = 8'd0;
+    localparam [7:0] THR_12MHZ = 8'd0;
     wire  [7:0] thr_num_mode = (clk_select == 2'b00) ? THR_8MHZ
                              : (clk_select == 2'b01) ? THR_10MHZ
                              : (clk_select == 2'b10) ? THR_12MHZ : 8'd0;
@@ -3424,11 +3425,16 @@ module core_top (
     wire        zet_fault;
     wire [7:0]  zet_opc;
 
+    // Every speed setting is a 286-class machine, so the bus pairs run
+    // the 286 Ts/Tc profile unconditionally. A future V30-accurate mode
+    // would drive this from its own settings instead.
+    wire pace_286 = 1'b1;
+
     cpu_bus_bridge #(.REQ_SETTLE(0)) u_cpu_bridge (
         .clk               (clk_chipset),
         .cpu_ce_posedge    (cpu_ce_posedge),
         .cpu_ce_negedge    (cpu_ce_negedge),
-        .fast_pace         (clk_select[1]),
+        .pace_286          (pace_286),
         .reset             (reset_cpu),
         .zet_clk           (zet_clk),
         .wb_dat_o          (zwb_dat_o),
@@ -3480,12 +3486,19 @@ module core_top (
     // its enable. It stays off while the ITF is mapped: the ITF's IRQ0 test
     // expects the timer interrupt within 32 turns of a TEST/JNZ/LOOP, a
     // window a cached loop runs through long before the PIT gets there.
+    // It also stays off in the paced modes: those are bus-faithful now --
+    // 1x CE + the 286 Ts/Tc pair profile -- and a VX2/VX21/RX had no
+    // cache; the cache is the Turbo setting's headroom. Toggling at
+    // runtime is safe: the cache is write-through no-allocate, uncached
+    // writes ride the port-A commits whose snoop clears lines, and
+    // clk_select latches on biu_done.
     z86 u_cpu (
         .clk       (zet_clk),
         .reset     (reset_cpu),
         .clk_free  (clk_chipset),
         .ce        (z86_ce),
-        .cache_en  (osd_cpu_cache & ~jtag_cache_dis & ~itf_bank),
+        .cache_en  (osd_cpu_cache & (clk_select == 2'b11)
+                    & ~jtag_cache_dis & ~itf_bank),
         .bios_shadow  (bios_shadow_flag),
         .bios_protect (bios_protect_flag[1]),
         .f_req     (cachef_req),

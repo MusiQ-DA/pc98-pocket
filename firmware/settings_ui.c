@@ -195,7 +195,9 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_ram_sz),         // SET_RAM_SZ -- index 0, like an unwritten slot, means 640 KB
     SETTING(opt_off_on),         // SET_DEL_BS
     SETTING_D(opt_extrom, 1),    // SET_EXTROM
-    SETTING(opt_cache),          // SET_CPU_CACHE -- z86's 16 KB cache; index 0 is On
+    SETTING(opt_cache),          // SET_CPU_CACHE -- z86's 16 KB cache, Turbo
+                                 // only: the paced modes run bus-faithful and
+                                 // never cache; index 0 is On
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
