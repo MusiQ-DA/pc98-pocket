@@ -1842,6 +1842,22 @@ module tb_pc98_boot;
     wire       pic1_data_bus_io, pic2_data_bus_io;
     wire [2:0] pic1_cascade_out;
 
+    logic kbd8251_en = 1'b0;
+    initial begin
+        int v;
+        if ($value$plusargs("kbd8251=%d", v)) kbd8251_en = (v != 0);
+    end
+
+    // IR1 is the keyboard 8251's RxRDY, through the same two-flop
+    // synchroniser Peripherals.sv uses (keybord_interrupt). Only with
+    // +kbd8251=1; the no-keyboard bench keeps IR1 low.
+    wire  kbd8251_irq;
+    logic kbd_irq1_ff = 1'b0, kbd_irq1 = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        kbd_irq1_ff <= kbd8251_en & kbd8251_irq;
+        kbd_irq1    <= kbd_irq1_ff;
+    end
+
     i8259 u_pic1 (
         .clock            (clk_chipset),
         .reset            (reset),
@@ -1859,7 +1875,7 @@ module tb_pc98_boot;
         .interrupt_acknowledge_n (inta_n),
         .interrupt_to_cpu (pic1_to_cpu_buf),
         .external_irr_clear (8'h00),
-        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, 1'b0, timer_out0})
+        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, kbd_irq1, timer_out0})
     );
 
     i8259 u_pic2 (
@@ -1936,11 +1952,6 @@ module tb_pc98_boot;
     // puts the actual RTL against the actual ROM sequence. Default OFF keeps
     // the no-keyboard machine this bench has always been; +kbd8251=1 wires
     // it in (and +key_ms=N types into it).
-    logic kbd8251_en = 1'b0;
-    initial begin
-        int v;
-        if ($value$plusargs("kbd8251=%d", v)) kbd8251_en = (v != 0);
-    end
 
     // +key_ms=N: N ms after the first '?' lands in the text plane (the end
     // of N88-BASIC's "How many files(0-15)?"), type '3' then RETURN through
@@ -1977,7 +1988,6 @@ module tb_pc98_boot;
 
     logic       kbd8251_read_select;
     logic [7:0] kbd8251_read_data;
-    wire        kbd8251_irq;
 
     pc98_kbd8251 u_kbd8251 (
         .clock              (clk_chipset),
