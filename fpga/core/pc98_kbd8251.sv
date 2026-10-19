@@ -8,11 +8,10 @@
 //   * the ITF (F85FA-F8649) writes 3A/32/16 to 0x43, polls 0x43 bit 1
 //     (RxRDY) for 0x3000 LOOP iterations -- measured 82 ms on the boot
 //     bench (6.7 us per iteration: IN+TEST+JNZ+LOOP at this core's clocks)
-//     -- and reads up to five bytes from 0x41, checking each against 0x60.
-//     A 0x60 means the keyboard answered its reset: the ITF then sets bit 7
-//     of [0x0500] and takes the keyboard-present path (F86AA). No byte
-//     inside the window means no keyboard: the ITF takes its own
-//     no-keyboard path (F864B), which is also a real machine.
+//     -- and reads up to five bytes from 0x41, checking each against 0x60,
+//     0x70 and 0x74 (STOP, SHIFT, CTRL held at power-on; see below). A 0x60
+//     sets bit 7 of [0x0500] and takes the F86AA path. No byte inside the
+//     window -- the normal case, nothing held -- takes F864B.
 //   * the BIOS never polls 0x43 at all. Its IRQ1 handler (FE65D) checks the
 //     error bits, writes 0x16, and reads whatever is pending; its keyboard
 //     reset (INT 18h AH=3, FE7C3) is the same 3A/32/16 break sequence the
@@ -22,41 +21,31 @@
 // writes a command with SBRK set (0x3A) and then one without (0x32), and the
 // break's falling edge is what resets the keyboard (np21w io/serial.c,
 // keyboard_o43: `if ((!(dat & 8)) && (cmd & 8)) keyboard_resetsignal()`).
-// That edge is the ONLY thing that may arm an ACK here. The first hardware
-// version of this model armed on every write to 0x43 AND on writes to 0x73
-// -- which is the BEEP data port (np21w io/pit.c pit_o73), which the ITF's
-// no-keyboard path programs twice (F8671/F8679). Those phantom ACKs left a
-// 0x60 pending forever, the ITF's 1.4 s re-cycle then "found" it, took the
-// keyboard-present path mid-cycle, and the machine sat black with the guest
-// cycling in F84xx-F86xx: exactly what the Pocket showed.
+// The keyboard answers that reset with NOTHING of its own. np21w's
+// keyboard_resetsignal clears the 8251 state and calls keystat_resendstat
+// (np21w keystat.c), which re-sends the make code of every key that is
+// physically held at that moment -- and no other byte. That is what the ITF
+// probe above reads: 0x60 is the STOP key's matrix code, 0x70 SHIFT, 0x74
+// CTRL, so the probe asks "which of STOP/SHIFT/CTRL is the user holding at
+// power-on" (STOP -> [0x0500] bit 7 and the F86AA path that skips the
+// memory-test display; all three -> F9B22). With nothing held the window
+// times out and the ITF runs its normal path (F864B) -- the boot this core
+// walks.
 //
-// After the break the keyboard MCU re-runs itself and answers 0x60. Neither
-// np21w (whose keyboard only re-sends held keys there, io/keystat.c
-// keystat_resendstat) nor the ROMs leave much doubt about the speed: a real
-// keyboard answers in ~10 ms, far inside the ITF's 82 ms poll window (the
-// V30 bench agreed: the old tb_pc98_v30 with +kbdpass1 caught even an 80 ms
-// ACK).
-// The window exists precisely to catch the answer: the ITF sets the
-// [0x0500] flag the BIOS branches on (FD897) only if it reads the 0x60
-// itself.
+// An earlier version of this model read the 0x60 as a "reset ACK" and
+// synthesised one ~350 ms after every break edge (outside the ITF window, so
+// the ITF still took F864B). The BIOS keyboard reset (INT 18h AH=3, FE7C3)
+// the POST issues at FD8E7 then got that 0x60 through IRQ1 -- and the IRQ1
+// handler (FE6C2-FE6DC) treats make code 0x60 as the STOP key and raises
+// INT 06h. N88-BASIC's STOP handler at "How many files(0-15)?" re-prints the
+// prompt: the first boot after launching the core showed it twice, as if a
+// key had been pressed. So: no byte on a reset. The break edge only clears
+// the receiver and the queue, as keyboard_resetsignal does.
 //
-// The shipped delay is nevertheless OUTSIDE that window, on purpose. The
-// keyboard-present ITF path (F86AA) skips the memory-test display entirely
-// and, measured on the V30 bench (+kbdpass1), lands the machine in BASIC's
-// strap with an empty work area: parked in RAM at 0000:03F4 with one TVRAM
-// write to its name -- the black screen the Pocket showed with the first
-// version of this model. The boot this core completes today is the OTHER
-// one: the ITF times out, runs its memory test and display, and the BIOS
-// enters its no-keyboard two-pass flow (whose pass-2 "keyboard arrived"
-// step still needs machine work outside this module -- the dirty pass-1
-// BASIC cannot reach its own reset yet, which the old V30 boot bench worked
-// around by forcing it). So the model answers late enough that the ITF takes
-// the path this machine can walk, while the 8251 itself stays fully alive for
-// the BIOS's INT 18h AH=3 reset (whose 0x60 then arrives through IRQ1) and
-// for the key stream, once something injects it. When the direct
-// keyboard-present boot works end to end, set ACK_DELAY_TICKS back to
-// ~429 545 (10 ms): that value is proven to carry the ITF through F86AA
-// and the F945D reset dance on the V30 core.
+// Held keys are not re-sent on the edge: this model sees key events, not the
+// key matrix, and the translator in front of it re-sends nothing either. A
+// key held across a keyboard reset therefore stays "down" in the BIOS's own
+// map until its release arrives, which is the next event anyway.
 //
 // Status follows np21w's keyboard_i43: `return(status | 0x85)` -- TxRDY, TxE
 // and DSR permanently set (the transmitter is always idle here and the
@@ -78,12 +67,7 @@
 
 `default_nettype none
 
-module pc98_kbd8251 #(
-    // ~350 ms at the 42.954545 MHz chipset clock. Outside the ITF's poll
-    // window by 4x (see the block comment above for why that is the shipped
-    // side of the line, and for the in-window value to return to).
-    parameter int unsigned ACK_DELAY_TICKS = 15_034_091
-) (
+module pc98_kbd8251 (
     input  wire logic clock,
     input  wire logic reset,
 
@@ -130,8 +114,6 @@ module pc98_kbd8251 #(
     logic [4:0] kq_n;
     wire        key_pending = kq_n != 5'd0;
 
-    logic [23:0] ack_timer;
-
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
             cmd_q           <= 8'h00;
@@ -140,7 +122,6 @@ module pc98_kbd8251 #(
             data_rd_level_q <= 1'b0;
             rx_q            <= 8'hFF;            // np21w's reset value
             rx_full         <= 1'b0;
-            ack_timer       <= 24'd0;
             key_stb_q       <= 1'b0;
             kq_rd           <= 4'd0;
             kq_wr           <= 4'd0;
@@ -151,26 +132,12 @@ module pc98_kbd8251 #(
             if (ctrl_write_strobe)
                 wr_data_q <= data_in;
 
-            // The expiry load first, the countdown and the write-end after:
-            // if a 0x43 write happens to end on the ACK's very last tick,
-            // the edge's re-arm and receiver clear are the assignments that
-            // must win, and in a single always block the later statement
-            // does.
-            if (ack_timer == 24'd1 && !rx_full) begin
-                rx_q    <= 8'h60;                // the reset ACK
-                rx_full <= 1'b1;
-            end
-            if (ack_timer != 24'd0)
-                ack_timer <= ack_timer - 24'd1;
-
             // End of a 0x43 write: np21w's keyboard_o43. A break's falling
-            // edge (SBRK was set, now clear) resets the keyboard: the
-            // pending answer timer restarts and anything still in the
-            // receiver is dropped (keyboard_resetsignal clears status and
-            // buffers).
+            // edge (SBRK was set, now clear) resets the keyboard: anything
+            // still in the receiver is dropped (keyboard_resetsignal clears
+            // status and buffers), and nothing is sent back -- see the header.
             if (ctrl_wr_level_q && ~ctrl_write_strobe) begin
                 if (!wr_data_q[3] && cmd_q[3]) begin
-                    ack_timer <= ACK_DELAY_TICKS[23:0];
                     rx_full   <= 1'b0;
                     // np21w's keyboard_resetsignal clears the pending buffers
                     // too: a key that was still queued when the keyboard was
@@ -188,8 +155,7 @@ module pc98_kbd8251 #(
                 rx_full <= 1'b0;
 
             // Key injection. Written last so an event landing on the same
-            // tick as the ACK expiry or a read completing takes the register:
-            // a real key press outranks both bookkeeping paths.
+            // tick as a read completing takes the register.
             // Bytes leave in order: a new event goes straight to the
             // receiver only when nothing is queued ahead of it.
             key_stb_q <= key_stb;

@@ -1328,9 +1328,10 @@ module tb_pc98_boot;
     logic [7:0] mem_wr_hi_q   = 8'h00;
     logic       mem_wr_word_q = 1'b0;
     logic [7:0] io_wr_data_q  = 8'h00;
-    logic [7:0] tvram_code [0:511];   // A0000-A01FF, first row of cells
+    logic [7:0] tvram_code [0:8191];  // A0000-A1FFF, the whole code plane
     logic [7:0] tvram_attr [0:511];   // A2000-A21FF
     int          tvram_wr_count = 0;
+    logic        tvram_qmark_seen = 1'b0;   // +key_ms trigger
 
     // ---- ipl_repint mailbox monitor (realmem) ------------------------------
     // repint parks its verdict at phys 0x50000: [2]=iters(word) [4]=status
@@ -1485,11 +1486,13 @@ module tb_pc98_boot;
             // The text plane: the memory-count display lands here. Keep the
             // first row of cells (code + attribute) for the final dump.
             if (cpu_address >= 20'hA0000 && cpu_address < 20'hA4000) begin
-                if (cpu_address < 20'hA0200)
-                    tvram_code[cpu_address[8:0]]  <= mem_wr_data_q;
+                if (cpu_address < 20'hA2000)
+                    tvram_code[cpu_address[12:0]] <= mem_wr_data_q;
                 else if (cpu_address >= 20'hA2000 && cpu_address < 20'hA2200)
                     tvram_attr[cpu_address[8:0]]  <= mem_wr_data_q;
                 tvram_wr_count <= tvram_wr_count + 1;
+                if (cpu_address < 20'hA2000 && mem_wr_data_q == 8'h3F)
+                    tvram_qmark_seen <= 1'b1;
                 // The first forty writes (the clear, and what shape it has),
                 // and after that every PRINTABLE byte into the code plane --
                 // which is the memory count, if the BIOS ever writes one. The
@@ -1932,12 +1935,45 @@ module tb_pc98_boot;
     // pc98_kbd8251.sv is the model PERIPHERALS instantiates; running it here
     // puts the actual RTL against the actual ROM sequence. Default OFF keeps
     // the no-keyboard machine this bench has always been; +kbd8251=1 wires
-    // it in with its shipped ~10 ms ACK delay.
+    // it in (and +key_ms=N types into it).
     logic kbd8251_en = 1'b0;
     initial begin
         int v;
         if ($value$plusargs("kbd8251=%d", v)) kbd8251_en = (v != 0);
     end
+
+    // +key_ms=N: N ms after the first '?' lands in the text plane (the end
+    // of N88-BASIC's "How many files(0-15)?"), type '3' then RETURN through
+    // the injection port (the translator's toggle-strobe shape), 40 ms
+    // apart. The echo in the TVRAM log proves the key stream still reaches
+    // the BIOS after boot.
+    logic       kbd_key_stb  = 1'b0;
+    logic [7:0] kbd_key_byte = 8'h00;
+    initial begin
+        int ms;
+        if ($value$plusargs("key_ms=%d", ms)) begin
+            byte unsigned seq [4] = '{8'h03, 8'h83, 8'h1C, 8'h9C};
+            wait (tvram_qmark_seen);
+            $display("  %8t  KBD first '?' in TVRAM; typing in %0d ms", $time, ms);
+            repeat (ms * 42_955) @(posedge clk_chipset);
+            foreach (seq[k]) begin
+                kbd_key_byte = seq[k];
+                kbd_key_stb  = ~kbd_key_stb;
+                $display("  %8t  KBD INJECT %02X", $time, seq[k]);
+                repeat (40 * 42_955) @(posedge clk_chipset);
+            end
+        end
+    end
+    logic [19:0] eu_pc_kq = 20'h0;
+    always_ff @(posedge clk_chipset) eu_pc_kq <= eu_pc;
+    // The BIOS IRQ1 handler's STOP (0x60 -> INT 06h, FE6DC) and COPY
+    // (0x61 -> INT 05h, FE6D8) exits: a phantom STOP is what this bench
+    // watches for.
+    always_ff @(posedge clk_chipset)
+        if (kbd8251_en && (eu_pc == 20'hFE6DC || eu_pc == 20'hFE6D8)
+                       && eu_pc != eu_pc_kq)
+            $display("  %8t  KBD BIOS IRQ1 -> INT %s  (eu_pc %05X)", $time,
+                     eu_pc == 20'hFE6DC ? "06h (STOP)" : "05h (COPY)", eu_pc);
 
     logic       kbd8251_read_select;
     logic [7:0] kbd8251_read_data;
@@ -1950,6 +1986,8 @@ module tb_pc98_boot;
         .data_read_strobe   (kbd8251_en & ~io_rd_n & (cpu_address[15:0] == 16'h0041)),
         .stat_read_strobe   (kbd8251_en & ~io_rd_n & (cpu_address[15:0] == 16'h0043)),
         .data_in            (cpu_data_bus),
+        .key_stb            (kbd_key_stb),
+        .key_byte           (kbd_key_byte),
         .read_select        (kbd8251_read_select),
         .read_data          (kbd8251_read_data),
         .irq                (kbd8251_irq)
@@ -1958,21 +1996,20 @@ module tb_pc98_boot;
     wire kbd_stat_iocycle = kbd8251_read_select & (cpu_address[15:0] == 16'h0043);
     wire kbd_data_iocycle = kbd8251_read_select & (cpu_address[15:0] == 16'h0041);
 
-    // Watch the model's innards: whether the edge armed, when the ACK lands.
+    // Watch the model's innards: every byte that reaches the receiver.
     logic kbd_rx_full_d = 1'b0;
     always_ff @(posedge clk_chipset) begin
         kbd_rx_full_d <= u_kbd8251.rx_full;
         if (u_kbd8251.rx_full & ~kbd_rx_full_d)
-            $display("  %8t  KBD ACK landed (rx_full -> 1)", $time);
+            $display("  %8t  KBD RxRDY (rx_full -> 1, rx %02X)", $time,
+                     u_kbd8251.rx_q);
     end
-    // And its state at every chunk line: cmd_q/ack_timer tell whether the
-    // break edge was even seen.
+    // And its state at every chunk line.
     task automatic kbd_state_dump;
         begin
             if (kbd8251_en)
-                $display("        kbd8251: cmd %02X  timer %0d  rx_full %b  rx %02X",
-                         u_kbd8251.cmd_q, u_kbd8251.ack_timer,
-                         u_kbd8251.rx_full, u_kbd8251.rx_q);
+                $display("        kbd8251: cmd %02X  rx_full %b  rx %02X",
+                         u_kbd8251.cmd_q, u_kbd8251.rx_full, u_kbd8251.rx_q);
         end
     endtask
 
@@ -2455,6 +2492,8 @@ module tb_pc98_boot;
     // hdd_test's result block appearing (an FDD IPL, a hung disk one).
     int ipl_after = 0, ipl_grace = 3;
     initial void'($value$plusargs("ipl_grace=%d", ipl_grace));
+    int qmark_chunks = 0, qmark_after = 0;
+    initial void'($value$plusargs("qmark_chunks=%d", qmark_chunks));
     initial begin
         for (i = 0; i < 1048576; i = i + 1) begin
             ram[i] = 8'h00;
@@ -2583,6 +2622,16 @@ module tb_pc98_boot;
                 $display("SCSI IPL VERDICT: %s", ram[20'h4002E] == "P" ? "PASS" : "FAIL");
                 break;
             end
+            // +qmark_chunks=N: stop N chunks after the first '?' reached
+            // the text plane (the BASIC prompt, and whatever +key_ms typed).
+            if (qmark_chunks != 0 && tvram_qmark_seen) begin
+                qmark_after = qmark_after + 1;
+                if (qmark_after > qmark_chunks) begin
+                    $display("prompt bench: %0d chunks after the first '?' -- stopping",
+                             qmark_chunks);
+                    break;
+                end
+            end
             if (scsi_ipl_seen) begin
                 ipl_after = ipl_after + 1;
                 if (ipl_after > ipl_grace) begin
@@ -2616,8 +2665,8 @@ module tb_pc98_boot;
         $display("IVT 08 : %04X:%04X   IVT 18: %04X:%04X",
                  {ram[8'h23],ram[8'h22]}, {ram[8'h21],ram[8'h20]},
                  {ram[8'h63],ram[8'h62]}, {ram[8'h61],ram[8'h60]});
-        // The screen as text: rows 0-1, 80 cells each (ANK codes only).
-        for (int row = 0; row < 2; row++) begin
+        // The screen as text: all 25 rows, 80 cells each (ANK codes only).
+        for (int row = 0; row < 25; row++) begin
             $write("SCREEN row %0d: |", row);
             for (int col = 0; col < 80; col++) begin
                 logic [7:0] ch;
