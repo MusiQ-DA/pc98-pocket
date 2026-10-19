@@ -53,9 +53,10 @@ proc rd {addr} {
 
 # Slots 0x01-0x24 were the POST panel's census and snoop words; they left
 # with postmon and read DEAD <addr> now. Current map (PC98_JTAG builds):
-#   0x10-0x16  were the nuV30's dbg_regs (psw:pc, sregs, gprs) -- Zet has no
-#              equivalent tap, so they read 0 now
-#   0x17       nuV30 retired-instruction counter -- reads 0 on the Zet build
+#   0x10-0x16  the CPU register view, latched from z86's dbg_regs
+#              ({psw,ip,ds,ss,cs,es,di,si,bp,sp,bx,dx,cx,ax} field order,
+#              same as the old nuV30 layout)
+#   0x17       nuV30 retired-instruction counter -- reads 0 on this build
 #   0x18       zet_pc, the core's current linear PC
 #   0x19       {arbiter: hlda,aen_n,dma_hold,ext_req,drq3..0,  RAM FSM:
 #               wc_pend,refresh,read_flag,acc_rd,acc_wr,state[2:0]}

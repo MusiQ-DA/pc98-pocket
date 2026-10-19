@@ -1,5 +1,5 @@
 //
-// tb_zet_dma_grant -- does a DMA/HOLD grant that lands while a CPU read byte
+// tb_bridge_dma_grant -- does a DMA/HOLD grant that lands while a CPU read byte
 // is armed in B_CMD corrupt the byte the bridge returns?
 //
 // The suspected metal race: the arbiter samples a passive processor_status on
@@ -11,7 +11,7 @@
 // on a processor_ready that rose for bus-availability, not data-validity.
 //
 // Faithful path under test:
-//   zet_cpu_bridge -> i8288 (command_enable=~aen) -> bus merge -> RAM ->
+//   cpu_bus_bridge -> i8288 (command_enable=~aen) -> bus merge -> RAM ->
 //   sdram_shim -> sdram_mp -> sdram_model, with READY feeding processor_ready.
 //   The HOLD grant is driven through the arbiter's own hold chain (passive
 //   status sample -> hold_acknowledge -> aen -> dma_wait), exactly the metal's.
@@ -28,7 +28,7 @@
 `default_nettype none
 `timescale 1ns/1ps
 
-module tb_zet_dma_grant;
+module tb_bridge_dma_grant;
 
     // clk_chipset is 42.954545 MHz.
     logic clk = 1'b0;
@@ -123,11 +123,11 @@ module tb_zet_dma_grant;
     wire         word_access, lock_n;
     wire [7:0]   ram_dout, ram_dout_hi;
 
-    zet_cpu_bridge u_bridge (
+    cpu_bus_bridge u_bridge (
         .clk               (clk),
         .cpu_ce_posedge    (cpu_ce_posedge),
         .cpu_ce_negedge    (cpu_ce_negedge),
-        .fast_pace         (clk_select_r[1]),
+        .pace_286          (1'b1),
         .reset             (reset),
         .zet_clk           (zet_clk),
         .wb_dat_o          (wb_dat_o_m),
@@ -163,6 +163,9 @@ module tb_zet_dma_grant;
         .pf_nofill         (1'b0),
         .pf_nofillm        (1'b0),
         .pf_nohit          (1'b0),
+        .sn_v              (1'b0),      // no memory model in this bench
+        .sn_addr           (24'd0),
+        .sn_len            (4'd0),
         .bios_shadow_flag  (1'b0),
         .biu_done          (),
         .dbg               ()

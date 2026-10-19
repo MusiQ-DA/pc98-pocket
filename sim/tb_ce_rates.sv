@@ -2,12 +2,13 @@
 // tb_ce_rates -- what frequencies does ce_generator actually make?
 //
 // The speed table is four rational ratios against a 42.954545 MHz chipset
-// clock, and "is index 1 really 9.8304 MHz?" is a measurement, not a reading.
-// The PC-98 build's ratios exist because this machine is a 2.4576 MHz-family
-// box (docs/HANDOVER.md 3.6: the ITF picks that class when [0x0501] bit 7 is
-// clear, and the PIT is clocked for it), so its CPU speeds are 2.4576 x2 and
-// x4 -- the "5 MHz" and "10 MHz" of a PC-9801VM/VX front panel -- and NOT the
-// ISA box's NTSC-derived 4.77/7.16/9.54.
+// clock, and "is index 1 really 9.8304 MHz?" is a measurement, not a
+// reading. The build prices one CE as one CPU clock of a 286-class machine
+// -- the bus engine (cpu_bus_bridge) runs the 286 Ts/Tc profile, so the CE
+// train is the CPU clock itself, not a multiple of it. 92/201 is the
+// 2.4576 MHz-family value the "286 10MHz" step targets; the 8 and 12 MHz
+// steps have no exact ratio against this clock and take the nearest fits
+// (75/201, 112/201), which is why their wants carry four decimals too.
 //
 // Counting edges over a window costs milliseconds. The first attempt at
 // checking this change booted the whole ITF for two hours to watch a memory
@@ -51,14 +52,13 @@ module tb_ce_rates;
 
     // What each index is meant to be. A posedge of the CPU pin clock per
     // measured posedge CE, so this is the CPU's clock rate.
-    // Index 0 ("286 8MHz") paces its bus at the 10 MHz step like index 1;
-    // core_top's throttle, not the CE train, sets the two apart.
-    real want [4] = '{9.8304, 9.8304, 19.6608, 21.4773};
-    localparam string WHICH = "PC-98 (2.4576 MHz family)";
+    real want [4] = '{8.0139, 9.8304, 11.9674, 21.4773};
+    localparam string WHICH = "PC-98 286-class, 1x CPU clocks";
 
     // 0.1 per cent: a phase accumulator cannot land exactly and does not need
-    // to -- the PC-98 ratios are within 0.0001 per cent, and the tolerance is
-    // here to catch a wrong table entry, not rounding.
+    // to -- each want is the rate its ratio is built to land on (how far that
+    // sits from the menu's nominal 8/10/12 MHz is a design choice, not an
+    // error), and the tolerance is here to catch a wrong table entry.
     localparam real TOL = 0.001;
 
     int    errors = 0;

@@ -2,7 +2,7 @@
 // tb_mem_perf -- where do the cycles in a guest write burst actually go?
 //
 // The whole memory-write path, wired the way core_top wires it:
-// Zet -> zet_cpu_bridge -> i8288 -> READY -> pc98_gvram_seq(+GRCG,+EGC)
+// z86 -> cpu_bus_bridge -> i8288 -> READY -> pc98_gvram_seq(+GRCG,+EGC)
 // -> RAM.sv -> sdram_shim -> sdram_mp -> sdram_board_model, with the real
 // ce_generator pacing the bus and the real display fetch contending on
 // port D.
@@ -88,7 +88,6 @@ module tb_mem_perf;
     reg         pf_nohit_r  = 1'b0;
     reg         pf_vfy_r    = 1'b0;
     reg         rr_vfy_r    = 1'b0;
-    reg         fwdis_r     = 1'b0;
     reg         shadow_flag_r = 1'b0;
     reg         irq_req     = 1'b0;
     reg         flipped10   = 1'b0;
@@ -99,14 +98,13 @@ module tb_mem_perf;
         pf_nohit_r  = $test$plusargs("pfnohit");
         pf_vfy_r    = $test$plusargs("pfvfy");
         rr_vfy_r    = $test$plusargs("rrvfy");
-        fwdis_r     = $test$plusargs("fwdis");
     end
 
-    zet_cpu_bridge u_bridge (
+    cpu_bus_bridge u_bridge (
         .clk               (clk),
         .cpu_ce_posedge    (ce_pos),
         .cpu_ce_negedge    (ce_neg),
-        .fast_pace         (clk_select_r[1]),
+        .pace_286          (1'b1),   // every setting is 286-class now
         .reset             (cpu_reset_w),
         .zet_clk           (zet_clk),
         .wb_dat_o          (zwb_dat_o),
@@ -139,34 +137,66 @@ module tb_mem_perf;
         .pause_core        (1'b0),
         .throttle          (1'b0),
         .biu_done          (biu_done),
+        .zet_edge_o        (z86_ce),
         .pf_disable        (pf_dis_r),
         .pf_nofill         (pf_nofill_r),
         .pf_nofillm        (pf_nofillm_r),
         .pf_nohit          (pf_nohit_r),
+        // foreign-commit snoop: the real RAM.sv feed, so the synthetic
+        // DMAC's writes (and the bridge's own posted drains) kill only
+        // the pf windows they overlap -- exactly what core_top wires.
+        .sn_v              (ram_sn_v),
+        .sn_addr           (ram_sn_addr),
+        .sn_len            (ram_sn_len),
         .bios_shadow_flag  (shadow_flag_r),
         .dbg               ()
     );
 
-    zet u_cpu (
-        .wb_clk_i  (zet_clk),
-        .wb_rst_i  (cpu_reset_w),
-        .wb_dat_i  (zwb_dat_i),
-        .wb_dat_o  (zwb_dat_o),
+    // z86 (the only CPU) behind the bridge. This bench models no sdram_mp
+    // port F, so the 16 KB cache stays off (cache_en 0) and its port idles;
+    // every access takes the Wishbone to the bridge, like core_top's
+    // uncached path.
+    wire        z86_ce;
+    wire        zf_req, zf_we;
+    wire [23:0] zf_addr;
+    wire [ 3:0] zf_len;
+    wire [15:0] zf_wd0, zf_wd1;
+    wire _unused_zf = &{1'b0, zf_req, zf_we, zf_addr, zf_len, zf_wd0, zf_wd1};
+    assign zwb_nmia = 1'b0;
+
+    z86 u_cpu (
+        .clk       (zet_clk),
+        .reset     (cpu_reset_w),
+        .clk_free  (clk),
+        .ce        (z86_ce),
+        .cache_en  (1'b0),
+        .bios_shadow  (1'b0),
+        .bios_protect (1'b0),
+        .f_req     (zf_req),
+        .f_we      (zf_we),
+        .f_addr    (zf_addr),
+        .f_len     (zf_len),
+        .f_wdata0  (zf_wd0),
+        .f_wdata1  (zf_wd1),
+        .f_ack     (1'b0),
+        .f_rvalid  (1'b0),
+        .f_rdata   (16'd0),
+        .f_done    (1'b0),
+        .sn_v      (1'b0),
+        .sn_addr   (24'd0),
+        .sn_len    (4'd0),
         .wb_adr_o  (zwb_adr),
+        .wb_sel_o  (zwb_sel),
         .wb_we_o   (zwb_we),
         .wb_tga_o  (zwb_tga),
-        .wb_sel_o  (zwb_sel),
+        .wb_dat_o  (zwb_dat_o),
         .wb_stb_o  (zwb_stb),
         .wb_cyc_o  (zwb_cyc),
         .wb_ack_i  (zwb_ack),
+        .wb_dat_i  (zwb_dat_i),
         .wb_tgc_i  (irq_req),
         .wb_tgc_o  (zwb_inta),
-        .nmi       (1'b0),
-        .nmia      (zwb_nmia),
-        .fwdis     (fwdis_r), .nowrap(1'b0),
-        .pc        (zet_pc),
-        .dbg_fault (),
-        .dbg_opc   ()
+        .pc        (zet_pc)
     );
 
     // ---- 8288 + address latch --------------------------------------------
@@ -400,6 +430,10 @@ module tb_mem_perf;
     wire        ram_ready_w, access_complete_w, access_own_w;
     wire        ram_wt_w;           // u_ram's write_taken
     wire        seq_wr_taken_w;     // -> u_bridge.sdram_wr_taken
+    // port-A write-commit snoop from the RAM model (-> u_bridge.sn_*)
+    wire        ram_sn_v;
+    wire [23:0] ram_sn_addr;
+    wire  [3:0] ram_sn_len;
     wire        seq_rd_own_w;       // -> u_bridge.sdram_rd_ready
     wire [4:0]  seq_mem_pf_len;
     wire        pf_beat_v_w;
@@ -490,7 +524,8 @@ module tb_mem_perf;
         .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
         .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
         .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
-        .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len()
+        .ram_wr_snoop_v(ram_sn_v), .ram_wr_snoop_addr(ram_sn_addr),
+        .ram_wr_snoop_len(ram_sn_len)
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
@@ -598,6 +633,18 @@ module tb_mem_perf;
     // MOV DX,imm16 ; OUT DX,AL -- port writes used for charger registers
     task outport(input logic [15:0] p, input logic [7:0] v);
         emit(8'hB0); emit(v); emit(8'hBA); emitw(p); emit(8'hEE);
+    endtask
+
+    // Poke a tb-authored byte below A0000 into the SDRAM image AND the
+    // coherence oracle's shadow: z86's 16 B fetch line loads and the
+    // bridge's 32 B pf fills read bytes the guest never wrote, so every
+    // tb-seeded byte the oracle can observe must carry its true value
+    // (a plain poke leaves the byte unchecked -- or worse, phantom).
+    // Pokes at F0000+ stay plain: the oracle only checks below A0000.
+    task ram_seed(input int addr, input logic [15:0] w);
+        sdr.u_part.poke(24'(addr), w);
+        shadow[int'(addr)] = w[7:0];
+        written[int'(addr)] = 1'b1;
     endtask
 
     initial begin
@@ -784,14 +831,21 @@ module tb_mem_perf;
             prog[r_jdone] = 8'(phase_done - (r_jdone + 1));
             // T-sector prime: a trampoline aimed at bad_land for iter-0
             // staleness, then HLT filler so garbage bytes hang.
-            sdr.u_part.poke(24'h000600, 16'h00EE);
-            sdr.u_part.poke(24'h000601, 16'h00EA);
-            sdr.u_part.poke(24'h000602, {8'h00, bad_land[7:0]});
-            sdr.u_part.poke(24'h000603, {8'h00, bad_land[15:8]});
-            sdr.u_part.poke(24'h000604, 16'h0000);
-            sdr.u_part.poke(24'h000605, 16'h00F0);
+            // ram_seed: the oracle must know every tb-authored byte --
+            // z86 fetches whole 16 B lines and pf fills 32 B sectors, so
+            // reads cover bytes the guest never wrote (Zet only fetched
+            // the 5 bytes it consumed, so plain pokes used to be fine).
+            // The guest rewrites 0600..0605 each iteration, which
+            // re-seeds them through the ack path -- the real SMC check
+            // is untouched.
+            ram_seed(32'h000600, 16'h00EE);
+            ram_seed(32'h000601, 16'h00EA);
+            ram_seed(32'h000602, {8'h00, bad_land[7:0]});
+            ram_seed(32'h000603, {8'h00, bad_land[15:8]});
+            ram_seed(32'h000604, 16'h0000);
+            ram_seed(32'h000605, 16'h00F0);
             for (int i = 20'h00606; i < 20'h00620; i++)
-                sdr.u_part.poke(24'(i), 16'h00F4);
+                ram_seed(32'(i), 16'h00F4);
         end
 
         // ---- phase 0A: F-bank remap kill ------------------------------
@@ -867,7 +921,7 @@ module tb_mem_perf;
         end
 
         // ---- phase 0B: IRQ storm --------------------------------------
-        // wb_tgc_i is the Zet's INTR line -- tied 0 in every other
+        // wb_tgc_i is the CPU's INTR line -- tied 0 in every other
         // phase. The bench fires it every ~2500 clks through this one;
         // the INTA pair reads vector FFh off the open bus and dispatch
         // lands on IVT[FFh] @ 0x3FC -> the stub below, which incs
@@ -1101,25 +1155,73 @@ module tb_mem_perf;
     // poke the program + reset vector into the SDRAM image (1 guest byte per
     // word, flat-addressed the way poke() indexes).
     initial begin
+        // ram_seed (not plain poke) so the read-serve oracle below has
+        // ground truth for the program + reset vector too.
         for (int i = 0; i < prog_len; i++)
-            sdr.u_part.poke(24'h0F0000 + i, {8'h00, prog[i]});
+            ram_seed(32'(24'h0F0000 + i), {8'h00, prog[i]});
         // FFFF0: EA 00 00 00 F0 = JMP FAR F000:0000 (ip, then seg, LE each)
-        sdr.u_part.poke(24'h0FFFF0, 16'h00EA);
-        sdr.u_part.poke(24'h0FFFF1, 16'h0000);
-        sdr.u_part.poke(24'h0FFFF2, 16'h0000);
-        sdr.u_part.poke(24'h0FFFF3, 16'h0000);
-        sdr.u_part.poke(24'h0FFFF4, 16'h00F0);
+        ram_seed(32'h0FFFF0, 16'h00EA);
+        ram_seed(32'h0FFFF1, 16'h0000);
+        ram_seed(32'h0FFFF2, 16'h0000);
+        ram_seed(32'h0FFFF3, 16'h0000);
+        ram_seed(32'h0FFFF4, 16'h00F0);
         // phase-0A/0B mark cells: unwritten cells read X in the model
         for (int i = 20'h00700; i < 20'h00710; i++)
-            sdr.u_part.poke(24'(i), 16'h0000);
+            ram_seed(32'(i), 16'h0000);
         // phase-0D frame stack and arrays
         for (int i = 20'h00900; i < 20'h00F10; i++)
-            sdr.u_part.poke(24'(i), 16'h0000);
+            ram_seed(32'(i), 16'h0000);
         for (int i = 20'h03000; i < 20'h03110; i++)
-            sdr.u_part.poke(24'(i), 16'h0000);
+            ram_seed(32'(i), 16'h0000);
         // Phase-9 prime is emitted by the program initial (bad_land is
         // only known there); see the poke inside the emit block.
     end
+
+    // ========================================================================
+    // Written-set: keys the guest genuinely wrote (write handler only).
+    // The simulator's assoc arrays auto-insert a 00 entry when an rvalue read
+    // touches a missing key (the commit-2 phantom quirk), so shadow.exists
+    // alone cannot tell "guest wrote it" from "quirk materialised it".
+    // The oracles gate on this set instead; want values still come from
+    // shadow (meaningful exactly where written says so).
+    bit written [int];
+
+    // Read-serve oracle: every guest read ack (any serve path --
+    // engine pair, hit, fillm release, forward) must return the fresh
+    // shadow bytes for its address. c_stale is blind to hit/release
+    // serves (they never touch the seq/RAM path), which is exactly where
+    // fast-serve broke. Snapshot at the ack edge, compare one clk later.
+    // ========================================================================
+    int ro_bad = 0; int ro_pend = 0;
+    logic [15:0] ro_w; logic [19:0] ro_a; logic ro_ube;
+    logic [7:0] ro_want0, ro_want1, ro_got0, ro_got1;
+    always_ff @(posedge clk) if (sdram_up && !reset) begin
+        if (ro_pend) begin
+            ro_pend <= 1'b0;
+            ro_want0 = written.exists(int'(ro_a))    ? shadow[int'(ro_a)]    : 8'h00;
+            ro_want1 = written.exists(int'(ro_a)+1)  ? shadow[int'(ro_a)+1]  : 8'h00;
+            ro_got0  = ro_a[0] ? ro_w[15:8] : ro_w[7:0];
+            ro_got1  = ro_a[0] ? ro_w[7:0]  : ro_w[15:8];
+            if (written.exists(int'(ro_a))
+                && (ro_got0 !== ro_want0
+                    || (!ro_ube && written.exists(int'(ro_a)+1)
+                        && ro_got1 !== ro_want1))) begin
+                if (ro_bad < 30)
+                    $display("RO-BAD t=%0t a=%05x w=%04x got=%02x,%02x want=%02x,%02x ube=%b",
+                             $time, ro_a, ro_w, ro_got0, ro_got1,
+                             ro_want0, ro_want1, ro_ube);
+                ro_bad <= ro_bad + 1;
+            end
+        end
+        if (zwb_ack && zwb_cyc && !zwb_we && !zwb_tga) begin
+            ro_w    <= u_bridge.rd_word;
+            ro_a    <= u_bridge.srv_addr;
+            ro_ube  <= u_bridge.srv_ube;
+            ro_pend <= 1'b1;
+        end
+    end
+
+
 
     // ========================================================================
     // cycle attribution
@@ -1662,16 +1764,19 @@ module tb_mem_perf;
     longint unsigned c_stale = 0;
     always @(posedge clk) begin
         orc_ack_q <= zwb_ack;
-        if (!reset && aen && seq_mem_wr && !seq_mem_addr[19]
-            && shadow.exists(int'(seq_mem_addr)))
-            shadow.delete(int'(seq_mem_addr));
+        if (!reset && aen && seq_mem_wr && !seq_mem_addr[19]) begin
+            if (shadow.exists(int'(seq_mem_addr)))
+                shadow.delete(int'(seq_mem_addr));
+            if (written.exists(int'(seq_mem_addr)))
+                written.delete(int'(seq_mem_addr));
+        end
         if (!reset && zwb_ack && !orc_ack_q && zwb_cyc && !zwb_tga) begin
             automatic int a = int'({zwb_adr, 1'b0});
             if (zwb_we) begin
-                if (zwb_sel[0]) shadow[a]   = zwb_dat_o[7:0];
-                if (zwb_sel[1]) shadow[a+1] = zwb_dat_o[15:8];
+                if (zwb_sel[0]) begin shadow[a]   = zwb_dat_o[7:0];  written[a]   = 1'b1; end
+                if (zwb_sel[1]) begin shadow[a+1] = zwb_dat_o[15:8]; written[a+1] = 1'b1; end
             end else if (a < 32'hA0000) begin
-                if (zwb_sel[0] && shadow.exists(a) && shadow[a] !== zwb_dat_i[7:0]) begin
+                if (zwb_sel[0] && written.exists(a) && shadow[a] !== zwb_dat_i[7:0]) begin
                     if (c_stale < 16)
                         $display("  STALE t=%0t a=%05x got=%02x want=%02x ph=%0d pc=%05x w0=%05x/%0d-%0d w1=%05x/%0d-%0d live=%b",
                                  $time, a, zwb_dat_i[7:0], shadow[a], cur_phase, zet_pc,
@@ -1679,7 +1784,7 @@ module tb_mem_perf;
                                  u_bridge.pf_base1, u_bridge.pf_lo1, u_bridge.pf_cnt1, u_bridge.pf_live);
                     c_stale <= c_stale + 1;
                 end
-                if (zwb_sel[1] && shadow.exists(a+1) && shadow[a+1] !== zwb_dat_i[15:8]) begin
+                if (zwb_sel[1] && written.exists(a+1) && shadow[a+1] !== zwb_dat_i[15:8]) begin
                     if (c_stale < 16)
                         $display("  STALE t=%0t a=%05x got=%02x want=%02x ph=%0d pc=%05x",
                                  $time, a+1, zwb_dat_i[15:8], shadow[a+1], cur_phase, zet_pc);
@@ -1706,7 +1811,7 @@ module tb_mem_perf;
     end
 
     // ---- phase-0B IRQ storm driver ------------------------------------------
-    // INTR is a level input: hold it until the Zet's own INTA output
+    // INTR is a level input: hold it until the CPU's own INTA output
     // (zwb_inta = wb_tgc_o) pulses, then re-arm after a gap. Fires only
     // while phase 0B is current -- the guest's STI/CLI bracket it.
     reg [15:0] irq_gap = 16'd0;
@@ -1870,10 +1975,13 @@ module tb_mem_perf;
             // bad/diverged/stray are direct loss checks; c_uncov counts
             // uncovered write-strobe falls with expand down -- the only
             // falls that can be true losses (an expand takeover only clips
-            // an already-captured, already-released strobe); and under
-            // +GRANT the fill window must be whole.
+            // an already-captured, already-released strobe); under
+            // +GRANT the fill window must be whole; and the read-serve
+            // oracle (ro_bad) catches a stale/wrong word on ANY serve
+            // path, including the fast-serve hit/release paths that
+            // never touch the seq/RAM machine.
             if (bad || diverged || stray || (c_uncov != 0)
-                || (c_pbad != 0) || (c_stale != 0)
+                || (c_pbad != 0) || (c_stale != 0) || (ro_bad != 0)
                 || (grant_en && (dma_seen != 256 || grants == 0)))
                 $display("=== FAIL tb_mem_perf ===");
             else
@@ -1943,17 +2051,21 @@ module tb_mem_perf;
     // A8000 window, and the DMAC writes 0x30000-0x30FFF. A far-transfer that
     // sends CS:IP out of the code image is the SuperDepth symptom; a write to
     // the code/reset-vector region is a stray that could cause it.
-    // zet_pc is combinational (cs<<4)+ip -- during a far transfer it
-    // flashes the ip-before-cs transient (0x00xx) for a clk or two even
-    // though no fetch is ever issued there. Sample the real fetch address
-    // on the Wishbone instead: an instruction cycle (tga) presenting stb.
+    // The CPU's pc output is the fetch-stream PC (it moves on branches, not
+    // per byte consumed), so it is not a per-fetch witness either. Sample the
+    // real fetch address on the Wishbone instead: an instruction fetch is the
+    // cache's uncached line load (S_WLD) presenting stb.
+    localparam logic [3:0] ZC_S_WLD = 4'd3;   // mirrors z86_cache.S_WLD
     wire [19:0] fetch_a = {zwb_adr, 1'b0} | {19'b0, zwb_sel == 2'b10};
     always_ff @(posedge clk) begin
         if (sdram_up && !reset) begin
             // every issued instruction-fetch byte must be in legal space
-            // wb_tga_o is the Zet's io/mem tag, not a fetch flag: an
-            // instruction fetch is a memory read outside the execute state.
-            if (zwb_stb && zwb_cyc && !zwb_we && !zwb_tga && !u_cpu.exec_st
+            // wb_tga_o is the I/O-vs-mem tag, not a fetch flag: with the
+            // cache off (as this bench runs it), an instruction fetch is
+            // exactly the cache FSM's S_WLD line load; data reads are
+            // S_WRD1/2, writes S_WWR1/2.
+            if (zwb_stb && zwb_cyc && !zwb_we && !zwb_tga
+                && (u_cpu.u_cache.st == ZC_S_WLD)
                 && !((fetch_a >= 20'hF0000 && fetch_a < 20'hF2000) ||
                      (fetch_a >= 20'hF8000 && fetch_a < 20'hF8020) ||
                      (fetch_a >= 20'h00600 && fetch_a < 20'h00620) ||
@@ -2311,6 +2423,9 @@ module tb_mem_perf;
         $display("sdram up, CPU released");
         $fflush;
     end
+
+
+
 
     initial begin
         #800_000_000;                       // 800 ms of sim time ceiling

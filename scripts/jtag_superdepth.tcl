@@ -7,8 +7,8 @@
 # the title screen, then a START keypress (keyboard scan 1C = Enter) and
 # 12 s of play. Pass = the game's MCB at 2550:0001 owns itself (2551) and
 # its blitter word at DEPTH+C193 holds one of its live values -- a failed
-# START leaves garbage there. P=0x07 is turbo, P=0x05 10 MHz (P=0 keeps the
-# OSD speed, which a JTAG-loaded image never set).
+# START leaves garbage there. P=0x07 is turbo, P=0x05 286 10 MHz (P=0 keeps
+# the OSD speed, which a JTAG-loaded image never set).
 # PLAY=<s> then plays on with random keys and fails any disk-BIOS interrupt
 # timeout (see below).
 init

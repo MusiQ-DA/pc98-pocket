@@ -3,7 +3,7 @@
 //
 // Program at +org=<hex> (default 00400, reached by a far jump from the
 // reset vector): mov cx,N ; loop $ ; hlt. Every Wishbone cycle is acked
-// LAT clocks after it is raised (one edge wide, as zet_cpu_bridge does).
+// LAT clocks after it is raised (one edge wide, as cpu_bus_bridge does).
 //
 // Build: see scripts/sim_z86_loop.sh.
 `timescale 1ns/1ps
@@ -15,7 +15,7 @@ module tb_z86_loop;
     wire [15:0] dat_o; logic [15:0] dat_i; logic ack = 0;
     wire [19:0] pc; wire halted;
 
-    // +gate: stop the core's clock at random, the way zet_cpu_bridge gates
+    // +gate: stop the core's clock at random, the way cpu_bus_bridge gates
     // it, so z86_cache's ce qualification is exercised. run_arm changes on
     // the falling edge only, like the bridge's.
     int gate = 0;
@@ -133,7 +133,7 @@ module tb_z86_loop;
     end
 
     always @(posedge clk) begin
-        // ack stays up until a gated-clock edge has seen it (zet_cpu_bridge
+        // ack stays up until a gated-clock edge has seen it (cpu_bus_bridge
         // presents it for exactly one edge of the core's clock)
         ack <= ack & ~zce;
         sn_v <= 1'b0;

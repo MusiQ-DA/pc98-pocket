@@ -38,7 +38,7 @@ module z86 (
     input       [23:0]  sn_addr,
     input       [ 3:0]  sn_len,
 
-    // ---- Zet-shaped Wishbone master (see z86_wbif) ----------------------
+    // ---- Wishbone master (the bridge's contract) ------------------------
     output      [19:1]  wb_adr_o,
     output      [ 1:0]  wb_sel_o,
     output              wb_we_o,
@@ -49,7 +49,7 @@ module z86 (
     input               wb_ack_i,
     input       [15:0]  wb_dat_i,
 
-    // ---- interrupts, zet's protocol ------------------------------------
+    // ---- interrupts (the bridge's INTA protocol) ------------------------
     // wb_tgc_i is the 8259's INTR. wb_tgc_o is the acknowledge pulse: the
     // bridge stops this clock on its rise, runs the two INTA bus cycles and
     // parks {8'h00, vector} on wb_dat_i before the next edge, which is when

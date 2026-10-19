@@ -14,8 +14,8 @@
 //     one-entry write buffer, acknowledged to the core as soon as it is
 //     buffered.
 //   * UNCACHED: I/O, VRAM, the CG window, option ROMs, EMS -- everything
-//     else -- runs as Zet-shaped Wishbone cycles through zet_cpu_bridge,
-//     exactly the way z86_wbif did. The write buffer is drained before any
+//     else -- runs as Wishbone cycles through cpu_bus_bridge. The write
+//     buffer is drained before any
 //     of them starts, so an OUT that starts a DMA never passes the store
 //     that set up its buffer.
 //
@@ -86,7 +86,7 @@ module z86_cache #(
     input  wire         wr_word,
     input  wire         wr_io,
 
-    // ---- Wishbone master (zet_wb_master's shape) -----------------------
+    // ---- Wishbone master (the bridge's contract) ------------------------
     output reg  [19:1]  wb_adr_o,
     output reg  [ 1:0]  wb_sel_o,
     output reg          wb_we_o,

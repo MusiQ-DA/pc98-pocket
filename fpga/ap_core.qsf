@@ -831,43 +831,11 @@ set_global_assignment -name SEARCH_PATH core/common
 #   Error (10054): can't open Verilog Design File "pc98_sdram_map.svh"
 set_global_assignment -name SEARCH_PATH core
 set_global_assignment -name QIP_FILE core/common/common.qip
-# The Zet 80186-class core (the PC-98's CPU here): vendored GPLv3 core on a
-# Wishbone master, bridged to the 8288 byte world by zet_cpu_bridge.
-# micro_rom.dat / rom_def.v / defines.v resolve
-# through the SEARCH_PATH; zet_micro_rom.v picks DATDIR per tool.
-set_global_assignment -name VERILOG_FILE core/zet/zet.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_core.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_fetch.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_decode.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_exec.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_memory_regs.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_micro_data.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_micro_rom.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_regfile.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_wb_master.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_addsub.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_alu.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_arlog.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_bitlog.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_conv.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_div_su.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_div_uu.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_fulladd16.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_jmp_cond.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_muldiv.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_mux8_1.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_mux8_16.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_next_or_not.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_nstate.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_opcode_deco.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_othop.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_rxr8.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_rxr16.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_shrot.v
-set_global_assignment -name VERILOG_FILE core/zet/zet_signmul17.v
-set_global_assignment -name SYSTEMVERILOG_FILE core/zet_cpu_bridge.sv
-# z86 (Apache-2.0, nand2mario/z86 fdc7c39 ported for Quartus Lite): selected
-# by PC98_Z86 in config.tcl; the Zet files above stay for the other setting.
+# The CPU-side bus bridge: any 16-bit Wishbone/INTA master onto the 8288
+# byte world (first built for Zet; z86 speaks the same contract).
+set_global_assignment -name SYSTEMVERILOG_FILE core/cpu_bus_bridge.sv
+# z86 (Apache-2.0, nand2mario/z86 fdc7c39 ported for Quartus Lite): the
+# CPU, behind the bridge above -- the only CPU the tree carries.
 set_global_assignment -name SYSTEMVERILOG_FILE core/z86/z86_package.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/z86/fetch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/z86/decode.sv

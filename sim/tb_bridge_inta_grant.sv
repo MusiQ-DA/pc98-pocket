@@ -1,5 +1,5 @@
 //
-// tb_zet_inta_grant -- does a DMA/HOLD grant landing mid-INTA desync the
+// tb_bridge_inta_grant -- does a DMA/HOLD grant landing mid-INTA desync the
 // i8259's acknowledge state machine so the bridge captures the WRONG vector?
 //
 // The suspected metal race (the leading explanation for the intermittent
@@ -14,11 +14,11 @@
 // the vector -- a random IVT index, memory untouched.
 //
 // Faithful path under test:
-//   zet_cpu_bridge (wb_tgc_o -> INTA pair) -> i8288 (inta_n, gated by
+//   cpu_bus_bridge (wb_tgc_o -> INTA pair) -> i8288 (inta_n, gated by
 //   command_enable=~aen) -> i8259 (master, edge-triggered IRQ0) -> the
 //   vector back onto the shared data bus during ~inta_n.
 //   The HOLD grant is driven through the arbiter's own hold chain, exactly
-//   as tb_zet_dma_grant does.
+//   as tb_bridge_dma_grant does.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -26,7 +26,7 @@
 `default_nettype none
 `timescale 1ns/1ps
 
-module tb_zet_inta_grant;
+module tb_bridge_inta_grant;
 
     // clk_chipset is 42.954545 MHz.
     logic clk = 1'b0;
@@ -129,11 +129,11 @@ module tb_zet_inta_grant;
     // During INTA the shared bus carries the PIC's byte; otherwise RAM's.
     wire [7:0]   data_bus = ~inta_n ? pic_dout : ram_dout;
 
-    zet_cpu_bridge u_bridge (
+    cpu_bus_bridge u_bridge (
         .clk               (clk),
         .cpu_ce_posedge    (cpu_ce_posedge),
         .cpu_ce_negedge    (cpu_ce_negedge),
-        .fast_pace         (clk_select_r[1]),
+        .pace_286          (1'b1),
         .reset             (reset),
         .zet_clk           (zet_clk),
         .wb_dat_o          (wb_dat_o_m),
@@ -169,6 +169,9 @@ module tb_zet_inta_grant;
         .pf_nofill         (1'b0),
         .pf_nofillm        (1'b0),
         .pf_nohit          (1'b0),
+        .sn_v              (1'b0),      // no memory model in this bench
+        .sn_addr           (24'd0),
+        .sn_len            (4'd0),
         .bios_shadow_flag  (1'b0),
         .biu_done          (),
         .dbg               ()

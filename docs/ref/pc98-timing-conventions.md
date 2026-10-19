@@ -6,7 +6,7 @@
 | 現状の一律ウェイト | 場所 | 中身 |
 |---|---|---|
 | `IO_GAP = 64` clk | `fpga/core/z86/z86_wbif.sv` | すべての I/O サイクルの終わりから次の I/O まで最低 64 clk_chipset(42.954545 MHz で **約 1.49 µs**)。ITF の PIT チェックを通すために入れたもの(同ファイルのコメント) |
-| V30 風バス T ステートペーシング | `fpga/core/zet_cpu_bridge.sv` | バイトエンジンが cpu_ce 列で T ステート・AEN ストレッチ・SDRAM ウェイトを数える。`fast_pace`(clk_select[1])のときだけ短縮される |
+| 286 Ts/Tc バスペーシング | `fpga/core/cpu_bus_bridge.sv` | バイトエンジンが cpu_ce 列で T ステート・AEN ストレッチ・SDRAM ウェイトを数える。`pace_286`(全速度設定で 1)のとき Ts+Tc の 2 クロック相当に短縮、INTA は faithful のまま |
 
 この文書では、実在の PC-98 ソフトウェアが**実際に頼っている**タイミング契約を洗い出し、
 最後(§5)で「どのウェイトをデバイス単位・ポート単位の回復時間として実装すべきか」を µs 値つきでまとめる。
@@ -138,7 +138,7 @@ ARTIC を読むソフトは CPU 速度の影響を受けない。FreeDOS(98) の
 
 - Intel 8259A(Dec 1988)の AC 特性: `TRHRL`(RD→次の RD)160/100 ns、`TWHWL`(WR→次の WR)190/100 ns、`TCHCL`(別種コマンド間)500/150 ns(8259A/8259A-2)。注記には「実システムでは TCHCL は普通 500 ns より十分長い(8086 で 1 µs、8086-2 で 625 ns)」とある。つまり CPU が遅いことで満たされる前提の仕様。https://pdos.csail.mit.edu/6.828/2017/readings/hardware/8259A.pdf
 - ITF の IMR リードバックテストは `OUT 02h` → `JMP $+2` → `IN 02h`(`docs/PC98_ITF_TRACE.md` F80D03)。
-- FPGA の i8259 は 42.95 MHz の同期回路なので、回復時間は要らない。INTA の 2 サイクル列はブリッジ側で忠実に回している(`zet_cpu_bridge.sv` の「INTA pairs keep the faithful count」)。これは**維持すべき契約**。
+- FPGA の i8259 は 42.95 MHz の同期回路なので、回復時間は要らない。INTA の 2 サイクル列はブリッジ側で忠実に回している(`cpu_bus_bridge.sv` の「INTA pairs keep the faithful count」)。これは**維持すべき契約**。
 
 ### 2.2 8253(PIT)
 
@@ -321,7 +321,7 @@ L: TEST AH,0FFh ; JNZ ok ; LOOP L     ; 32 回のうちに IRQ0 ハンドラが 
   - (a) **ITF スコープの互換速度**: ポート 43Dh で ITF ROM がマップされている間(`docs/PC98_ITF_TRACE.md` §1.13 の `043Dh := 10h/12h`)だけ、z86 を V30/386 相当まで落とす。ITF は起動時に一度しか走らないので、全体の性能には影響しない。**推奨**。
   - (b) z86 の `TEST/JNZ/LOOP` の実クロック数を測り、32 回で十分な時間がかかることを確かめる(余裕が小さいので非推奨)。
   - (c) ITF に手を入れる(ROM を書き換えることになるので不可)。
-- 一般ソフトの速度依存(§3)は、実機と同じく**ユーザーが選ぶ互換速度モード**(例: V30-8 MHz 相当、286-10 MHz 相当)で対応する。既存の clk_select / `fast_pace` をこの役割に作り直す。デバイス契約(§5.2)はどの速度モードでも常に有効にする。
+- 一般ソフトの速度依存(§3)は、実機と同じく**ユーザーが選ぶ互換速度モード**(例: 286-8/10/12 MHz 相当)で対応する。clk_select / `pace_286` は 2026-10 の bus-faithful 改造でこの役割に作り直済み(CE 1× + Ts/Tc + キャッシュなし)。デバイス契約(§5.2)はどの速度モードでも常に有効にする。
 
 ### 5.5 移行時の確認項目
 
@@ -352,7 +352,7 @@ L: TEST AH,0FFh ; JNZ ok ; LOOP L     ; 32 回のうちに IRQ0 ハンドラが 
 ローカル(np21w 0.86 rev106、`~/repo/np21w/np21w-src-rev106/`):
 `np21w io/artic.c`、`np21w io/iocore.c`、`np21w io/pit.c`、`np21w io/gdc.c`、`np21w io/gdc.h`、`np21w io/fdc.c`、`np21w io/serial.c`、`np21w io/printif.c`、`np21w io/mouseif.c`、`np21w io/upd4990.c`、`np21w io/cgrom.c`、`np21w io/pic.c`、`np21w sound/opna.c`、`np21w cbus/boardws.c`、`np21w pccore.c`、`np21w pccore.h`、`np21w bios/bios.c`、`np21w bios/bios19.c`、`np21w i286c/v30patch.c`
 
-ローカル(このリポジトリ): `docs/PC98_ITF_TRACE.md`、`docs/PC98_MACHINE_SPEC.md`、`docs/PC9801UX_DIFF.md`、`docs/PC98_IO_MAP.md`、`fpga/core/z86/z86_wbif.sv`、`fpga/core/zet_cpu_bridge.sv`、`fpga/core/chipset/HDL/Peripherals.sv`、`fpga/core/pc98_opna.sv`、`fpga/core/sound/jt12/hdl/jt12_mmr.v`、`fpga/core/pc98_gdc.sv`、`fpga/core/pc98_kbd8251.sv`、`fpga/core/pc98_upd4990.sv`、`fpga/core/pc98_fdc_glue.sv`、手元 ROM(`~/.pc98roms/bios.rom`、`itf.rom`、`bios_retrobios386.rom`)のバイト列検索と逆アセンブル
+ローカル(このリポジトリ): `docs/PC98_ITF_TRACE.md`、`docs/PC98_MACHINE_SPEC.md`、`docs/PC9801UX_DIFF.md`、`docs/PC98_IO_MAP.md`、`fpga/core/cpu_bus_bridge.sv`、`fpga/core/chipset/HDL/Peripherals.sv`、`fpga/core/pc98_opna.sv`、`fpga/core/sound/jt12/hdl/jt12_mmr.v`、`fpga/core/pc98_gdc.sv`、`fpga/core/pc98_kbd8251.sv`、`fpga/core/pc98_upd4990.sv`、`fpga/core/pc98_fdc_glue.sv`、手元 ROM(`~/.pc98roms/bios.rom`、`itf.rom`、`bios_retrobios386.rom`)のバイト列検索と逆アセンブル
 
 Web:
 - take52 "PC9821 Software Technical Data"(5Fh、8253、Time Stamper): http://www2t.biglobe.ne.jp/~take52/tech/soft.htm

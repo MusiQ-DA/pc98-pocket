@@ -127,10 +127,10 @@ jobs:
 
       - name: Posted-write durability — no guest byte lost, normal and fast pace
         run: |
-          S=fpga/core; K=$S/chipset/HDL; Z=$S/zet
+          S=fpga/core; K=$S/chipset/HDL; Z8=$S/z86
           verilator --binary --timing -Wno-fatal --top-module tb_mem_perf \
             --threads 4 -MAKEFLAGS OPT_FAST=-O2 \
-            -Isim -I$S -I$S/common -I$Z -I$K -I$K/i8288/HDL \
+            -Isim -I$S -I$S/common -I$Z8 -I$K -I$K/i8288/HDL \
             sim/tb_mem_perf.sv \
             $K/RAM.sv $K/Ready.sv $K/ce_generator.sv $K/i8288/HDL/i8288.sv \
             $S/sdram_shim.sv $S/sdram_mp.sv \
@@ -138,17 +138,10 @@ jobs:
             $S/pc98_gdc_mode2.sv \
             $S/pc98_gvram_display.sv $S/pc98_video_timing.sv \
             sim/sdram_board_model.sv sim/sdram_model.sv \
-            $Z/zet.v $Z/zet_core.v $Z/zet_fetch.v $Z/zet_decode.v \
-            $Z/zet_exec.v $Z/zet_memory_regs.v $Z/zet_micro_data.v \
-            $Z/zet_micro_rom.v $Z/zet_regfile.v $Z/zet_wb_master.v \
-            $Z/zet_addsub.v $Z/zet_alu.v $Z/zet_arlog.v \
-            $Z/zet_bitlog.v $Z/zet_conv.v $Z/zet_div_su.v \
-            $Z/zet_div_uu.v $Z/zet_fulladd16.v $Z/zet_jmp_cond.v \
-            $Z/zet_muldiv.v $Z/zet_mux8_1.v $Z/zet_mux8_16.v \
-            $Z/zet_next_or_not.v $Z/zet_nstate.v $Z/zet_opcode_deco.v \
-            $Z/zet_othop.v $Z/zet_rxr8.v $Z/zet_rxr16.v \
-            $Z/zet_shrot.v $Z/zet_signmul17.v \
-            $S/zet_cpu_bridge.sv \
+            $Z8/z86_package.sv $Z8/fetch.sv $Z8/decode.sv \
+            $Z8/execute.sv $Z8/write_back.sv $Z8/regfile.sv \
+            $Z8/divider.sv $Z8/z86_cache.sv $Z8/z86.sv \
+            $S/cpu_bus_bridge.sv \
             -o perf
           ./obj_dir/perf | tee perf0.log
           grep -q "=== PASS tb_mem_perf ===" perf0.log

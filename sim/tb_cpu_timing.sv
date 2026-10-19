@@ -14,7 +14,7 @@
 // two faster cycle-paced steps -- none of them anywhere near the 8088's 4.77
 // MHz this bench used to model.
 //
-// The contract the bridge actually runs (zet_cpu_bridge.sv):
+// The contract the bridge actually runs (cpu_bus_bridge.sv):
 //   * the 8288 strobes processor_status on cpu_ce_negedge -- commands assert
 //     on a negedge
 //   * READY is sampled at every cpu_ce_posedge from the third T state on;

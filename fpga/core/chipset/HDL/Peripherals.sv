@@ -1233,7 +1233,7 @@ module PERIPHERALS #(
     // probes for.
     //
     // The mask itself needs no address path. np21w applies CPU_ADRSMASK
-    // inside cpumem on every CPU access, but here the Zet's cpu_adr_o is 20
+    // inside cpumem on every CPU access, but here the CPU's cpu_adr_o is 20
     // bits and every downstream port -- ad_out, the Chipset address, RAM's
     // -- is [19:0]: the bus can never carry bit 20 at all, so "masked" is
     // the only behaviour the memory path can express in EITHER state, and
