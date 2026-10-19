@@ -3468,7 +3468,11 @@ module core_top (
         .throttle          (thr_hold),
         .biu_done          (biu_done),
         .zet_edge_o        (z86_ce),
-        .pf_disable        (jtag_pf_dis),
+        // Prefetch windows default ON in the paced bus-faithful modes (they
+        // are the 286 BIU-queue model; SuperDepth-era default-off is
+        // superseded). Turbo keeps them off: the cache serves it. A JTAG
+        // probe slot-9 bit3 write still forces pf ON for any mode.
+        .pf_disable        (jtag_pf_dis && (clk_select == 2'b11)),
         .pf_nofill         (jtag_pf_nofill),
         .pf_nofillm        (jtag_pf_nofillm),
         .pf_nohit          (jtag_pf_nohit),
