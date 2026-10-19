@@ -1967,6 +1967,15 @@ module tb_pc98_boot;
             wait (tvram_qmark_seen);
             $display("  %8t  KBD first '?' in TVRAM; typing in %0d ms", $time, ms);
             repeat (ms * 42_955) @(posedge clk_chipset);
+            // +key_stop: a lone STOP make (0x60, no break) first -- what the
+            // old model's synthetic "reset ACK" looked like to the BIOS --
+            // then 500 ms for BASIC to react before the answer is typed.
+            if ($test$plusargs("key_stop")) begin
+                kbd_key_byte = 8'h60;
+                kbd_key_stb  = ~kbd_key_stb;
+                $display("  %8t  KBD INJECT 60 (lone STOP make)", $time);
+                repeat (500 * 42_955) @(posedge clk_chipset);
+            end
             foreach (seq[k]) begin
                 kbd_key_byte = seq[k];
                 kbd_key_stb  = ~kbd_key_stb;
@@ -2606,6 +2615,10 @@ module tb_pc98_boot;
                      ram[20'h584], ram[20'h4B7], ram[20'h4B9], ram[20'h501],
                      ram[20'h5AE], ram[20'h5FB], ram[20'h5FA],
                      ram[20'h5F9], ram[20'h5F8]);
+            $display("        ivt06=%04X:%04X 05=%04X:%04X  keymap 536=%02X",
+                     {ram[20'h1B],ram[20'h1A]}, {ram[20'h19],ram[20'h18]},
+                     {ram[20'h17],ram[20'h16]}, {ram[20'h15],ram[20'h14]},
+                     ram[20'h536]);
             $display("        ivt: 1b=%04X:%04X 12=%04X:%04X 13=%04X:%04X 1e=%04X:%04X 1f=%04X:%04X 4b0=%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
                      {ram[20'h6F],ram[20'h6E]}, {ram[20'h6D],ram[20'h6C]},
                      {ram[20'h4B],ram[20'h4A]}, {ram[20'h49],ram[20'h48]},
