@@ -176,7 +176,7 @@ if {[info exists ::env(HDSPEED)] || [info exists ::env(HDPFDIS)]
         set w [expr {$w & ~8}]
     }
     if {[info exists ::env(HDSPEED)] && $env(HDSPEED) ne "clear"} {
-        set w [expr {4 | ($env(HDSPEED) & 3)}]
+        set w [expr {$w | 4 | ($env(HDSPEED) & 3)}]
     }
     if {[info exists ::env(HDPFDIS)] && $env(HDPFDIS)} {
         set w [expr {$w | 8}]
