@@ -758,19 +758,6 @@ module pc98_gvram_seq #(
                         st <= S_EVT2;
                     else if (last_gp) st <= S_DONE;
                     else begin gp <= gp + 2'd1; st <= S_RD; end
-                end else if (grcg_rmw && !egc_here) begin
-                    // RMW fast path: the plane's byte is landing this very
-                    // cycle -- fold the modify over it combinationally and
-                    // issue the write leg now, skipping the S_WR detour
-                    // (one saved cycle per plane). rd_hold still latches
-                    // for the record; EGC keeps the old road so its shift
-                    // queue and pattern loads see their usual sequencing.
-                    mem_addr  <= plane_addr(op_addr, gp);
-                    mem_page1 <= access_page;
-                    mem_wdata <= (mem_rdata & ~cur_wdata)
-                               | (cur_wdata & cur_tile);
-                    mem_wr    <= 1'b1;
-                    st        <= S_WRW;
                 end else
                     st <= S_WR;
               end
@@ -811,17 +798,7 @@ module pc98_gvram_seq #(
               S_WRW: if (leg_done | mem_ready) begin
                 mem_wr <= 1'b0;
                 if (last_gp) st <= S_DONE;
-                else if ((grcg_rmw | egc_here) && rd_live_f(gp + 2'd1)) begin
-                    // Fast path: this write leg is covered, so the next
-                    // plane's read issues in the same cycle -- straight to
-                    // S_RDW, saving the S_RD detour per plane. A dead or
-                    // masked next plane falls back to S_RD, which skips it.
-                    gp        <= gp + 2'd1;
-                    mem_addr  <= plane_addr(op_addr, gp + 2'd1);
-                    mem_page1 <= access_page;
-                    mem_rd    <= 1'b1;
-                    st        <= S_RDW;
-                end else begin
+                else begin
                     gp <= gp + 2'd1;
                     st <= grcg_rmw | egc_here ? S_RD : S_WR;
                 end
