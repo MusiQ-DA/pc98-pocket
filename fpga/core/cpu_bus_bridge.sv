@@ -760,10 +760,16 @@ module cpu_bus_bridge #(
                       && !fillm_released
                       && fill_ok && bus_ours
                       && (fill_beats >= fillm_span) && (t_cnt >= 3'd2);
-    // The guest's bytes sit at the fill's anchor offset (the burst
-    // starts AT the miss); read them the same way the hit muxes do.
-    wire [7:0] fmb0 = pf_buf[{cur_pf_w, cur_addr[4:0]}];
-    wire [7:0] fmb1 = pf_buf[{cur_pf_w, cur_addr[4:0] + 5'd1}];
+    // The released word is served by the existing hit muxes
+    // (pf_hit_word): at the release edge srv_addr still equals this
+    // pair's cur_addr (the tracker cannot capture while req_busy),
+    // and the anchored window's cnt has grown past srv_beg+span
+    // (fill_beats >= fillm_span), so pf_hit on cur_pf_w's window is
+    // guaranteed true and pf_hit_word returns exactly the released
+    // word -- same replication semantics as a normal hit. Reusing the
+    // hit mux avoids two extra async read ports on pf_buf (the MLAB
+    // duplication of a private fmb0/fmb1 pair helped push the last
+    // build over the device's LAB count).
     // Bus-occupancy price: fills hold the bus one CE per byte.
     wire fill_priced = !(cur_pf || cur_fillm)
                      || (ce_cnt >= {1'b0, cur_pf_len});
@@ -1603,7 +1609,8 @@ module cpu_bus_bridge #(
                 biu_done_r <= 1'b1;
             end
             if (fillm_release) begin
-                rd_word    <= cur_1cyc ? {fmb1, fmb0} : {fmb0, fmb0};
+                rd_word    <= pf_hit_word; // == the anchored word (see
+                              // the fast-serve note above the wires)
                 biu_done_r <= 1'b1;
             end
             if (fwd_serve) begin
