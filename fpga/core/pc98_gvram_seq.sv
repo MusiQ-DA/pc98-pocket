@@ -117,7 +117,9 @@ module pc98_gvram_seq #(
     // ---- RAM.sv's one-byte interface ------------------------------------
     output reg  [19:0] mem_addr,
     output reg  [7:0]  mem_wdata,
-    output wire        mem_word,         // word burst: pass-through only
+    output reg  [7:0]  mem_wdata_hi,
+    output wire        mem_word,         // word burst: pass-through, and the
+                                      // GRCG word batch below
     output wire [4:0]  mem_pf_len,       // prefetch burst: pass-through only
     output reg         mem_rd,
     output reg         mem_wr,
@@ -223,6 +225,11 @@ module pc98_gvram_seq #(
     reg       half;           // a word access's odd-byte walk
     reg [7:0] tcr;            // the match mask being accumulated
     reg [7:0] rd_hold;        // what the last plane read gave
+    reg [7:0] rd_hold_hi;     // ... and its word-burst second byte
+    // Set at arm time: this guest word write is a GRCG (non-EGC) op, so
+    // the walk runs once per plane with word-wide memory legs instead of
+    // twice (even byte, then odd byte).
+    reg       grcg_wbatch;
     reg [7:0] lo_ans;         // a word read's even-byte answer
     reg [7:0] rdata_pass;     // the pass-through answer
 
@@ -327,8 +334,10 @@ module pc98_gvram_seq #(
     wire [1:0] own = own_plane(cur_addr);
 
     // Pass-through keeps the CPU's word flag for RAM's two-word burst; an
-    // expanded access must always reach memory as byte-wide SDRAM words.
-    assign mem_word = cpu_word & ~expand;
+    // expanded access must always reach memory as byte-wide SDRAM words --
+    // except the GRCG word batch, which walks each plane once per WORD
+    // (mem_wdata/mem_wdata_hi carry both computed bytes).
+    assign mem_word = cpu_word & (~expand | grcg_wbatch);
     // Same rule as mem_word: the prefetch length belongs to the guest's own
     // pass-through strobe. A sequencer leg (svc or expanded) must never run
     // as a multi-word burst -- its reads expect one byte at a time.
@@ -513,13 +522,23 @@ module pc98_gvram_seq #(
                 : cur_tile)
         : cur_wdata;
 
+    // The odd byte's transform -- same GRCG formulas with the hi operands.
+    // Only the GRCG word batch issues it (EGC keeps byte legs, plain mirrors
+    // cpu_wdata_hi through the pass-through latch).
+    wire [7:0] wr_byte_hi = grcg_here
+        ? (grcg_rmw
+            ? ((rd_hold_hi & ~cpu_wdata_hi) | (cpu_wdata_hi & grcg_tile[gp]))
+            : grcg_tile[gp])
+        : cpu_wdata_hi;
+
     // Ready lands on the FINAL byte's walk: a word access's first S_DONE
     // only starts the odd half. svc_hold forces expand high, which parks
     // ready low -- a guest access arriving mid-svc-op waits politely.
     // The ~svc_hold matters at S_DONE: without it a guest whose strobe is
     // up when a svc op completes would see this cycle's ready and take
     // rdata_pass -- a stale byte -- for an access that never ran.
-    assign cpu_ready = expand ? (st == S_DONE) & (~is_word | half)
+    assign cpu_ready = expand ? (st == S_DONE) & (~is_word | half
+                                                   | grcg_wbatch)
                               & ~svc_hold
                               : mem_ready & ~svc_gap;
 
@@ -540,7 +559,8 @@ module pc98_gvram_seq #(
     // cpu_ready: a word access's first S_DONE only starts the odd
     // half -- the walk is not done until the second pass lands.
     assign cpu_wr_taken = ~expand ? mem_wr_taken
-                                : ((st == S_DONE) & (~is_word | half)
+                                : ((st == S_DONE)
+                                   & (~is_word | half | grcg_wbatch)
                                    & ~svc_hold);
 
     // cpu_ready qualified to the guest's own reach -- see the port comment.
@@ -590,11 +610,14 @@ module pc98_gvram_seq #(
             lo_ans    <= 8'h00;
             tcr       <= 8'h00;
             rd_hold   <= 8'h00;
+            rd_hold_hi<= 8'h00;
+            grcg_wbatch <= 1'b0;
             rdata_pass<= 8'h00;
             egc_rd_q  <= 8'h00;
             egc_own_q <= 8'h00;
             mem_addr  <= 20'h0;
             mem_wdata <= 8'h00;
+            mem_wdata_hi <= 8'h00;
             mem_rd    <= 1'b0;
             mem_wr    <= 1'b0;
             mem_page1 <= 1'b0;
@@ -624,6 +647,7 @@ module pc98_gvram_seq #(
                 // Pass-through: the guest's own access, unchanged.
                 mem_addr  <= cpu_addr;
                 mem_wdata <= cpu_wdata;
+                mem_wdata_hi <= cpu_wdata_hi;
                 mem_rd    <= cpu_rd;
                 mem_wr    <= cpu_wr;
                 mem_page1 <= 1'b0;
@@ -658,11 +682,18 @@ module pc98_gvram_seq #(
                     // (the TDW shape, wr_byte self-collapses to it), and
                     // with a 0x00 operand every plane keeps its byte, so
                     // there is nothing to touch in memory at all.
+                    // GRCG word batch: both bytes walk the planes in
+                    // one word-wide pass. EGC words keep byte legs (the
+                    // shift queue needs them); reads never batch.
+                    grcg_wbatch <= cpu_word & grcg_here & ~egc_here
+                                   & ~cpu_rd;
                     if (cpu_rd | egc_here)
                         st <= S_RD;
-                    else if (grcg_rmw && cur_wdata == 8'hFF)
+                    else if (grcg_rmw && cur_wdata == 8'hFF
+                             && (!cpu_word || cpu_wdata_hi == 8'hFF))
                         st <= S_WR;
-                    else if (grcg_rmw && cur_wdata == 8'h00)
+                    else if (grcg_rmw && cur_wdata == 8'h00
+                             && (!cpu_word || cpu_wdata_hi == 8'h00))
                         st <= S_DONE;
                     else
                         st <= grcg_rmw ? S_RD : S_WR;
@@ -673,6 +704,7 @@ module pc98_gvram_seq #(
                     // raster op does. This is what makes firmware-served
                     // WDAT/drawing land on real VRAM the way hardware does.
                     svc_hold   <= 1'b1;
+                    grcg_wbatch <= 1'b0;   // svc ops are byte-wide
                     svc_we_r   <= svc_we;
                     svc_raw_r  <= svc_raw;
                     svc_addr_r <= svc_addr;
@@ -738,6 +770,7 @@ module pc98_gvram_seq #(
               S_RDW: if (leg_done) begin
                 mem_rd  <= 1'b0;
                 rd_hold <= mem_rdata;
+                    rd_hold_hi <= mem_rdata_hi;
                 if (egc_here && !svc_raw_rd) begin
                     // Each plane byte that lands goes into the shift
                     // pipeline's queue (egc_sf_push is combinational over
@@ -780,6 +813,7 @@ module pc98_gvram_seq #(
                     mem_addr  <= plane_addr(op_addr, gp);
                     mem_page1 <= access_page;
                     mem_wdata <= wr_byte;
+                    mem_wdata_hi <= wr_byte_hi;
                     mem_wr    <= 1'b1;
                     st        <= S_WRW;
                 end
@@ -817,7 +851,7 @@ module pc98_gvram_seq #(
                     svc_done  <= 1'b1;
                     svc_hold  <= 1'b0;
                     st        <= S_IDLE;
-                end else if (is_word & ~half) begin
+                end else if (is_word & ~half & ~grcg_wbatch) begin
                     // A word access: the even byte's walk is done -- run it
                     // all again for the odd byte. Ready stays low until the
                     // second walk reaches S_DONE (cpu_ready above).

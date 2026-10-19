@@ -593,7 +593,11 @@ module CHIPSET #(
     //
     // The guest's WORD cycles go through the sequencer too: an expanded
     // access runs the plane walk twice, once per byte lane, and RAM sees
-    // mem_word low for every leg. cpu_data_bus_hi stays wired to RAM
+    // mem_word rises for the GRCG word batch (one word-wide walk per
+    // plane); hi bytes ride mem_wdata_hi, plain pass-through mirrors
+    // cpu_wdata_hi, so the RAM port's hi lane can be driven by the
+    // sequencer alone.
+    wire [7:0] ram_wdata_hi_w;
     // directly -- the burst's odd byte only matters when the sequencer
     // passes the word flag through, which is exactly when mem_word is set.
     pc98_gvram_seq #(.EGC(1'b0)) u_gvram_seq (
@@ -614,6 +618,7 @@ module CHIPSET #(
         .cpu_pf_len(cpu_pf_len & {5{~address_enable_n}}),
         .cpu_addr(latch_address), .cpu_wdata(internal_data_bus),
         .cpu_wdata_hi(cpu_data_bus_hi),
+        .mem_wdata_hi(ram_wdata_hi_w),
         .cpu_rdata(internal_data_bus_ram), .cpu_rdata_hi(seq_rdata_hi_w),
         .cpu_ready(memory_access_ready),
         .grcg_active(grcg_active), .grcg_rmw(grcg_rmw),
@@ -742,7 +747,7 @@ module CHIPSET #(
         .data_bus_out                       (ram_dout_w),
         .analog_mode                        (pc98_analog),
         .word_access                        (ram_word_w),
-        .internal_data_bus_hi               (cpu_data_bus_hi),
+        .internal_data_bus_hi               (ram_wdata_hi_w),
         .data_bus_out_hi                    (ram_dout_hi_w),
         .memory_read_n                      (~ram_rd_w),
         .memory_write_n                     (~ram_wr_w),

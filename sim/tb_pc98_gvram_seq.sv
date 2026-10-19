@@ -57,7 +57,7 @@ module tb_pc98_gvram_seq;
     wire        mem_own   = ~foreign_done;
     // Chipset feeds the RAM's high byte straight from the CPU bus: during
     // expansion mem_word stays low and RAM ignores it.
-    wire [7:0]  mem_wdata_hi = cpu_wdata_hi;
+    wire [7:0]  mem_wdata_hi;
     // RAM.sv's memory_access_ready, modelled as RAM.sv actually behaves: it
     // goes HIGH AT COMPLETE_RAM_RW WHILE THE COMMAND IS STILL UP -- that is
     // how it tells the CPU the data has arrived -- and reads 1 whenever no
@@ -86,6 +86,7 @@ module tb_pc98_gvram_seq;
         .svc_wdata(svc_wdata), .svc_done(svc_done), .svc_rdata(svc_rdata), .dbg(),
         .mem_addr(mem_addr), .mem_wdata(mem_wdata), .mem_pf_len(),
         .mem_word(mem_word),
+    .mem_wdata_hi(mem_wdata_hi),
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
         .mem_done(mem_done), .mem_own(mem_own), .mem_ready(mem_ready),
@@ -314,10 +315,10 @@ module tb_pc98_gvram_seq;
         want("  at the guest's own address", log_a[0].a, 20'hA8123);
         want("  with the guest's own byte",  log_a[0].d, 8'h5A);
 
-        // ---- TDW WORD write: both halves expand, neither bursts ----------
-        // The old RTL passed the two-SDRAM-word burst through whole: the
-        // even byte got the tile and the odd byte kept the guest's raw data
-        // -- the regular-interval byte-lane corruption on ruled lines.
+        // ---- TDW WORD write: both halves expand as one word burst ------
+        // The batch is safe now: mem_wdata_hi carries the COMPUTED odd
+        // byte (the tile or the RMW result), never the guest's raw data
+        // that corrupted ruled lines when the old RTL passed it whole.
         grcg_active = 1'b1; grcg_rmw = 1'b0; grcg_mask = 4'h0;
         analog_mode = 1'b0;
         grcg_tile[0] = 8'h11; grcg_tile[1] = 8'h22;
@@ -326,12 +327,10 @@ module tb_pc98_gvram_seq;
         store[20'hB0200] = 8'h00; store[20'hB0201] = 8'h00;
         store[20'hB8200] = 8'h00; store[20'hB8201] = 8'h00;
         guestx(1'b0, 20'hA8200, 8'hCD, 8'hAB, 1'b1);
-        want("TDW word: accesses",           log_n, 6);
-        want("  half0 plane B addr",         log_a[0].a, 20'hA8200);
-        want("  half1 plane B addr",         log_a[3].a, 20'hA8201);
-        want("  half1 plane G addr",         log_a[5].a, 20'hB8201);
-        want("  no burst on half0",          log_a[0].wd, 0);
-        want("  no burst on half1",          log_a[3].wd, 0);
+        want("TDW word: accesses",           log_n, 3);
+        want("  plane B word addr",          log_a[0].a, 20'hA8200);
+        want("  plane G word addr",          log_a[2].a, 20'hB8200);
+        want("  burst on every plane",       int'(log_a[0].wd)+int'(log_a[1].wd)+int'(log_a[2].wd), 3);
         want("  B lo = tile0",               store[20'hA8200], 8'h11);
         want("  B hi = tile0, not raw",      store[20'hA8201], 8'h11);
         want("  R hi = tile1, not raw",      store[20'hB0201], 8'h22);
@@ -345,7 +344,7 @@ module tb_pc98_gvram_seq;
         grcg_tile[2] = 8'h00; grcg_tile[3] = 8'h00;
         grcg_mask = 4'b0000;
         guestx(1'b0, 20'hA8000, 8'hFF, 8'hFF, 1'b1);
-        want("ITF tiles: accesses",          log_n, 6);
+        want("ITF tiles: accesses",          log_n, 3);
         want("  A8000 = 33",                 store[20'hA8000], 8'h33);
         want("  A8001 = 33",                 store[20'hA8001], 8'h33);
         want("  B0000 = 55",                 store[20'hB0000], 8'h55);
@@ -359,13 +358,12 @@ module tb_pc98_gvram_seq;
         store[20'hB0200] = 8'h55; store[20'hB0201] = 8'hAA;
         store[20'hB8200] = 8'h55; store[20'hB8201] = 8'hAA;
         guestx(1'b0, 20'hA8200, 8'h3C, 8'hC3, 1'b1);
-        want("RMW word: accesses",           log_n, 12);
-        want("  half1 rd is B+1",            log_a[6].a, 20'hA8201);
-        want("  half1 rd is a READ",         log_a[6].wr, 0);
-        want("  B lo = (55&~3C)|(3C&33)",
+        want("RMW word: accesses",           log_n, 6);
+        want("  plane B rd is a word READ",  int'({log_a[0].wr, log_a[0].wd}), 1);
+        want("  B wr = (55&~3C)|(3C&33)",
              log_a[1].d, (8'h55 & ~8'h3C) | (8'h3C & 8'h33));
         want("  B hi = (AA&~C3)|(C3&33)",
-             log_a[7].d, (8'hAA & ~8'hC3) | (8'hC3 & 8'h33));
+             store[20'hA8201], (8'hAA & ~8'hC3) | (8'hC3 & 8'h33));
 
         // ---- TCR WORD read: two match masks, one access ------------------
         grcg_rmw = 1'b0; grcg_active = 1'b1;
