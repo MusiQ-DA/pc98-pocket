@@ -652,7 +652,20 @@ module pc98_gvram_seq #(
                     // always reads first -- the raster op needs dst, and the
                     // pattern registers may be loading.
                     tcr     <= 8'h00;
-                    st      <= (cpu_rd | grcg_rmw | egc_here) ? S_RD : S_WR;
+                    // RMW short-circuits, so a walk only pays the read
+                    // phase when the operand actually mixes bits: with a
+                    // 0xFF operand every plane's byte lands as its tile
+                    // (the TDW shape, wr_byte self-collapses to it), and
+                    // with a 0x00 operand every plane keeps its byte, so
+                    // there is nothing to touch in memory at all.
+                    if (cpu_rd | egc_here)
+                        st <= S_RD;
+                    else if (grcg_rmw && cur_wdata == 8'hFF)
+                        st <= S_WR;
+                    else if (grcg_rmw && cur_wdata == 8'h00)
+                        st <= S_DONE;
+                    else
+                        st <= grcg_rmw ? S_RD : S_WR;
                 end else if (svc_req_s && !svc_done) begin
                     // The softcore's byte op: same walk, through the same
                     // charger. A svc write under TDW lays the tiles; under
@@ -683,8 +696,20 @@ module pc98_gvram_seq #(
                         // gdcsub_write computes the result in firmware and
                         // scribbles it back verbatim.
                         gp <= (svc_we & (egc_here | grcg_here)) ? 2'd0 : own;
-                        st <= (~svc_we | ((grcg_rmw & ~svc_raw_wr) | egc_here))
-                            ? S_RD : S_WR;
+                        // The same RMW short-circuits as the guest arm:
+                        // 0xFF collapses to the TDW shape, 0x00 retires
+                        // through S_DONE with no memory op (svc acks there).
+                        if (~svc_we | egc_here)
+                            st <= S_RD;
+                        else if (grcg_rmw && ~svc_raw_wr
+                                 && svc_wdata == 8'hFF)
+                            st <= S_WR;
+                        else if (grcg_rmw && ~svc_raw_wr
+                                 && svc_wdata == 8'h00)
+                            st <= S_DONE;
+                        else
+                            st <= (grcg_rmw & ~svc_raw_wr)
+                                ? S_RD : S_WR;
                     end else begin
                         // Outside the windows there is nothing to walk and
                         // nothing to transform: ack without a RAM access.
@@ -733,6 +758,19 @@ module pc98_gvram_seq #(
                         st <= S_EVT2;
                     else if (last_gp) st <= S_DONE;
                     else begin gp <= gp + 2'd1; st <= S_RD; end
+                end else if (grcg_rmw && !egc_here) begin
+                    // RMW fast path: the plane's byte is landing this very
+                    // cycle -- fold the modify over it combinationally and
+                    // issue the write leg now, skipping the S_WR detour
+                    // (one saved cycle per plane). rd_hold still latches
+                    // for the record; EGC keeps the old road so its shift
+                    // queue and pattern loads see their usual sequencing.
+                    mem_addr  <= plane_addr(op_addr, gp);
+                    mem_page1 <= access_page;
+                    mem_wdata <= (mem_rdata & ~cur_wdata)
+                               | (cur_wdata & cur_tile);
+                    mem_wr    <= 1'b1;
+                    st        <= S_WRW;
                 end else
                     st <= S_WR;
               end
@@ -773,7 +811,17 @@ module pc98_gvram_seq #(
               S_WRW: if (leg_done | mem_ready) begin
                 mem_wr <= 1'b0;
                 if (last_gp) st <= S_DONE;
-                else begin
+                else if ((grcg_rmw | egc_here) && rd_live_f(gp + 2'd1)) begin
+                    // Fast path: this write leg is covered, so the next
+                    // plane's read issues in the same cycle -- straight to
+                    // S_RDW, saving the S_RD detour per plane. A dead or
+                    // masked next plane falls back to S_RD, which skips it.
+                    gp        <= gp + 2'd1;
+                    mem_addr  <= plane_addr(op_addr, gp + 2'd1);
+                    mem_page1 <= access_page;
+                    mem_rd    <= 1'b1;
+                    st        <= S_RDW;
+                end else begin
                     gp <= gp + 2'd1;
                     st <= grcg_rmw | egc_here ? S_RD : S_WR;
                 end
@@ -800,7 +848,16 @@ module pc98_gvram_seq #(
                     half   <= 1'b1;
                     gp     <= plain_pg1 ? own : 2'd0;
                     tcr    <= 8'h00;
-                    st     <= (is_read | grcg_rmw | egc_here) ? S_RD : S_WR;
+                    // The odd byte's arm re-runs the RMW short-circuits,
+                    // lane by lane (see the S_IDLE arm).
+                    if (is_read | egc_here)
+                        st <= S_RD;
+                    else if (grcg_rmw && cur_wdata == 8'hFF)
+                        st <= S_WR;
+                    else if (grcg_rmw && cur_wdata == 8'h00)
+                        st <= S_DONE;
+                    else
+                        st <= grcg_rmw ? S_RD : S_WR;
                 end else if (is_word & half & is_read & egc_here
                            & ~svc_raw_rd & ~egc_ope[13] & ~egc_ope[10]) begin
                     // An EGC word READ runs its shift event on the odd
