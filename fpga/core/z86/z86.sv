@@ -65,7 +65,13 @@ module z86 (
     output              dbg_halted,
     input               dbg_stop,       // JTAG: stop at an instruction boundary
     output              dbg_stopped,
-    output      [15:0]  dbg_next_ip
+    output      [15:0]  dbg_next_ip,
+    // JTAG write watchpoint: the cached store the port-F write buffer just
+    // took -- the writes that never run a chipset bus cycle (Turbo+cache).
+    // Pulse on clk_free, guest byte address, word flag.
+    output              dbg_wr_v,
+    output      [19:0]  dbg_wr_a0,
+    output              dbg_wr_two
 );
 
 import z86_package::*;
@@ -265,7 +271,10 @@ z86_cache u_cache (
     .wb_stb_o           (wb_stb_o),
     .wb_cyc_o           (wb_cyc_o),
     .wb_ack_i           (wb_ack_i),
-    .wb_dat_i           (wb_dat_i)
+    .wb_dat_i           (wb_dat_i),
+    .dbg_wr_v           (dbg_wr_v),
+    .dbg_wr_a0          (dbg_wr_a0),
+    .dbg_wr_two         (dbg_wr_two)
 );
 
 // register file

@@ -1504,7 +1504,7 @@ module core_top (
         end
     end
 
-    // Address-triggered capture, probe-writable via write slot 0x04
+    // Address-triggered capture, probe-writable via write slot 0x06
     // ({en,addr[19:0]}, handled with the other probe writes below).
     // Defaults to the reset vector: every reset path -- hard, soft,
     // watchdog -- ends with a FFFF0 fetch, so a reset the cause bits
@@ -1512,44 +1512,64 @@ module core_top (
     reg [19:0] trig_addr = 20'hFFFF0;
     reg        trig_en   = 1'b1;
     reg        trig_freeze = 1'b0;
-    // bit29 of write slot 0x04: delay the trig freeze ~24 fetches so the
+    // bit29 of write slot 0x06: delay the trig freeze ~24 fetches so the
     // ring keeps the code AFTER the hit (e.g. the landing of the resume
     // retf at f8069 when armed on f8061).
     reg        trig_delay  = 1'b0;
     reg  [4:0] delay_cnt   = 5'd0;
-    // bit28 of write slot 0x04: record raw bus addresses (fetches AND
+    // bit28 of write slot 0x06: record raw bus addresses (fetches AND
     // data accesses) instead of just the fetch stream, so a restore's
     // [0x404]/[0x406] reads and the retf's stack pops are visible.
     reg        trig_bus    = 1'b0;
-    // bit27 of write slot 0x04: f0_snap records only WRITE commands
+    // bit27 of write slot 0x06: f0_snap records only WRITE commands
     // (memory or I/O). Display DMA is read-only, so the ring stops
     // drowning in framebuffer sweeps and keeps the 32 cycles of guest
     // writes leading into the F0 -- the whole save sequence's addresses.
     reg        trig_wronly = 1'b0;
-    // bit26 of write slot 0x04: the trigger compares the live DS register
+    // bit26 of write slot 0x06: the trigger compares the live DS register
     // against trig_addr[15:0] instead of the fetch PC -- freezing the ring
     // on the moment a stray segment value lands in DS.
     reg        trig_ds     = 1'b0;
     // bits 27+28 together arm a WRITE watchpoint: the trigger matches the
-    // raw bus address of a memory-write cycle (CPU or DMA) instead of the
-    // fetch PC, so a stray write -- the 0xA1 that lands on the high-score
-    // date byte at 0x373A3 during SuperDepth's boot -- freezes the rings on
-    // the culprit cycle itself.
-    // The chipset's write strobe and the bus address do not assert in the
-    // same phase for every master, so a single-cycle compare missed real
-    // writes (it never fired on [0x185e], which the sound IRQ writes every
-    // tick). Latch the strobe/address pair and match over a two-cycle
-    // window: catches the write whether the address leads or trails.
-    wire        bus_mem_wr = ~chipset_memory_write_n;
-    reg         wr_stb_q   = 1'b0;
-    reg  [19:0] wr_addr_q  = 20'h0;
-    always_ff @(posedge clk_chipset) begin
-        wr_stb_q  <= bus_mem_wr;
-        wr_addr_q <= chipset_address[19:0];
-    end
-    wire        trig_w_hit = trig_bus && trig_wronly &&
-                              ((bus_mem_wr  && chipset_address[19:0] == trig_addr) ||
-                               (wr_stb_q    && wr_addr_q            == trig_addr));
+    // address of a guest-RAM write cycle instead of the fetch PC, so a
+    // stray write -- the 0xA1 that lands on the high-score date byte at
+    // 0x373A3 during SuperDepth's boot -- freezes the rings on the culprit
+    // cycle itself.  Two taps together cover every master that can write
+    // guest RAM:
+    //
+    //  * the chipset bus (chipset_memory_write_n + chipset_address): the
+    //    i8288's AMWC for CPU stores, the uPD71071's strobe for DMA fills,
+    //    and the ext path for the ROM loader.  The strobe is a LEVEL held
+    //    through the command phase and the arbiter's address (ALE-latched
+    //    cpu_address / DMA page+address / address_ext) is stable across
+    //    its whole length, so a same-cycle compare is exact.  (The
+    //    watchpoint originally "never fired" because the arming script
+    //    wrote slot 0x04 -- the GVRAM dump launcher -- instead of this
+    //    trigger's slot 0x06; it was never armed, not phase-skewed.)
+    //  * z86_cache's port-F buffer take (z86_pf_wr_*): in Turbo+cache a
+    //    store to 00000-9FFFF/E8000-FFFFF runs no bus cycle at all --
+    //    write-through goes straight to the SDRAM's port F -- so only the
+    //    cache's own commit witness can see it.
+    //
+    // Word coverage: a CPU word write addresses the EVEN base and moves
+    // both lanes in one cycle, so an armed ODD byte must match base+1.
+    // cpu_word_access is the bridge's flag for the CPU's own cycle and
+    // goes stale through a DMA grant, hence the ~AEN qualification (the
+    // same term the GVRAM sequencer uses).  DMA and loader writes are
+    // byte cycles on the bus; the cache tap carries its own word flag.
+    wire        bus_mem_wr  = ~chipset_memory_write_n;
+    wire        bus_wr_word = bus_mem_wr && cpu_word_access && ~chipset_aen;
+    wire        z86_pf_wr_v, z86_pf_wr_two;
+    wire [19:0] z86_pf_wr_a0;
+    wire        trig_w_bus = bus_mem_wr &&
+                             ((chipset_address[19:0] == trig_addr) ||
+                              (bus_wr_word &&
+                               (chipset_address[19:0] + 20'd1) == trig_addr));
+    wire        trig_w_pf  = z86_pf_wr_v &&
+                             ((z86_pf_wr_a0 == trig_addr) ||
+                              (z86_pf_wr_two &&
+                               (z86_pf_wr_a0 + 20'd1) == trig_addr));
+    wire       trig_w_hit  = trig_bus && trig_wronly && (trig_w_bus || trig_w_pf);
     wire       trig_hit  = trig_en && (trig_bus && trig_wronly ? trig_w_hit
                                            : trig_ds ? (zet_ds == trig_addr[15:0])
                                            : (pc_now == trig_addr));
@@ -3578,7 +3598,11 @@ module core_top (
         .dbg_stop  (jtag_dbg_stop),
         .dbg_stopped (z86_dbg_stopped),
         .dbg_next_ip (z86_dbg_next_ip),
-        .dbg_halted(z86_halted)
+        .dbg_halted(z86_halted),
+        // write watchpoint: cached stores that bypass the chipset bus
+        .dbg_wr_v  (z86_pf_wr_v),
+        .dbg_wr_a0 (z86_pf_wr_a0),
+        .dbg_wr_two(z86_pf_wr_two)
     );
     assign zwb_nmia  = 1'b0;
     assign zet_fault = 1'b0;

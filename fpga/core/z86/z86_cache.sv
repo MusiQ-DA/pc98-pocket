@@ -114,7 +114,19 @@ module z86_cache #(
     input  wire [23:0]  sn_addr,
     input  wire [ 3:0]  sn_len,
 
-    output wire         busy            // something is buffered or in flight
+    output wire         busy,           // something is buffered or in flight
+
+    // ---- JTAG write watchpoint ----------------------------------------
+    // The store the port-F write buffer just took. Cached stores bypass
+    // the chipset bus entirely (no bus cycle ever runs), so core_top's
+    // bus-side write watchpoint cannot see them; this pulse is the only
+    // witness that side has. Fires when the buffer accepts the store --
+    // the F engine below drains the buffer unconditionally, so buffer-take
+    // equals an SDRAM write. clk (free clk_chipset) domain, guest byte
+    // address, word flag (a0 and a0+1 both land).
+    output reg          dbg_wr_v,
+    output reg   [19:0] dbg_wr_a0,
+    output reg          dbg_wr_two
 );
 
     assign wb_cyc_o = wb_stb_o;
@@ -294,6 +306,7 @@ module z86_cache #(
     always @(posedge clk) begin
         t_we <= 1'b0;
         d_we <= 1'b0;
+        dbg_wr_v <= 1'b0;
         if (ce) wr_ready <= 1'b0;
         if (io_rec != 8'hFF) io_rec <= io_rec + 8'd1;
 
@@ -423,6 +436,11 @@ module z86_cache #(
                         wb_two   <= wr_word;
                         f_wpart  <= 1'b0;
                         wr_ready <= 1'b1;
+                        // Watchpoint witness: this store now owns the
+                        // port-F buffer and will reach the SDRAM.
+                        dbg_wr_v   <= 1'b1;
+                        dbg_wr_a0  <= wr_addr;
+                        dbg_wr_two <= wr_word;
                         // ...and update the line if it is cached.
                         k      <= K_WR;
                         c_a    <= wr_addr;
