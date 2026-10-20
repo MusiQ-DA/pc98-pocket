@@ -1143,6 +1143,59 @@ module tb_mem_perf;
             marker(8'h8E);
         end
 
+        // ---- phase 0F: ITF IRQ0 poll-loop timing, F-bank NOT mapped ------
+        // The control: pf windows are live over the loop, so the 32 turns
+        // are served from a warm 32-byte sector. This is the shape that
+        // breaks the POST if the windows are live while the ITF runs.
+        begin
+            int lp15, r_jnz15, ln15, ok15;
+            lf_enter = prog_len;
+            marker(8'h0F);
+            emit(8'hB4); emit(8'h00);            // mov ah,0
+            emit(8'hB9); emitw(16'h0020);        // mov cx,20h
+            emit(8'hA3); emitw(16'h0708);        // mov [0708],ax  (probe)
+            emit(8'h89); emit(8'h0E); emitw(16'h070A); // mov [070A],cx (probe)
+            lp15 = prog_len;
+            emit(8'hF6); emit(8'hC4); emit(8'hFF);          // test ah,0FFh
+            emit(8'h75); r_jnz15 = prog_len; emit(8'h00);   // jnz ok
+            emit(8'hE2); ln15 = prog_len; emit(8'h00);      // loop lp
+            ok15 = prog_len;
+            emit(8'h89); emit(8'h0E); emitw(16'h070C);      // mov [070C],cx (probe)
+            emit(8'h90);
+            marker(8'h8F);
+            prog[r_jnz15] = 8'(ok15 - (r_jnz15 + 1));
+            prog[ln15]    = 8'(lp15  - (ln15 + 1));
+            lf_head15 = lp15;
+        end
+
+        // ---- phase 10: same loop with the ITF F-bank mapped ---------------
+        // bios_shadow_flag up == the ITF ROM owns F8000-FFFFF, which is the
+        // state the ITF POST runs in. The bridge must hold the pf engine
+        // off for the whole phase: every turn then misses to the bus, which
+        // measures ~1000 chipset clks -- clear of the 27-PIT-clock deadline
+        // -- while a warm window would answer the loop in ~420.
+        begin
+            int lp16, r_jnz16, ln16, ok16;
+            lf_enter16 = prog_len;
+            marker(8'h10);
+            emit(8'hB4); emit(8'h00);            // mov ah,0
+            emit(8'hB9); emitw(16'h0020);        // mov cx,20h
+            emit(8'hA3); emitw(16'h0708);        // mov [0708],ax  (probe)
+            emit(8'h89); emit(8'h0E); emitw(16'h070A); // mov [070A],cx (probe)
+            lp16 = prog_len;
+            emit(8'hF6); emit(8'hC4); emit(8'hFF);          // test ah,0FFh
+            emit(8'h75); r_jnz16 = prog_len; emit(8'h00);   // jnz ok
+            emit(8'hE2); ln16 = prog_len; emit(8'h00);      // loop lp
+            ok16 = prog_len;
+            emit(8'h89); emit(8'h0E); emitw(16'h070C);      // mov [070C],cx (probe)
+            emit(8'h90);
+            marker(8'h90);
+            prog[r_jnz16] = 8'(ok16 - (r_jnz16 + 1));
+            prog[ln16]    = 8'(lp16  - (ln16 + 1));
+            lf_head16 = lp16;
+            lf_end16  = prog_len;
+        end
+
         // done: spin
         marker(8'hFF);
         emit(8'hEB); emit(8'hFE);           // JMP $
@@ -1151,6 +1204,52 @@ module tb_mem_perf;
     // module-scope so the T-sector prime can aim at it
     int bad_land = 0;
     int isr11_addr = 0;
+    // ---- ITF IRQ0 poll-loop probes (phases 0F/10) ---------------------
+    // lf_head / lf_enter are offsets in the emitted program, filled in by
+    // the builder below. lf_n counts re-requests of the word holding the
+    // loop head; it is a plumbing diagnostic, NOT the turn count -- the
+    // core's fetch unit refills whole lines, so a 32-turn loop touches the
+    // head word only a handful of times. The turn count is the guest's CX
+    // at the phase boundary: the loop entered with 0x20 and only exits at
+    // 0x0000. The guest also stores CX to 0x070A/0x070C, but those cells
+    // are posted writes -- at Turbo the queue can still hold them when the
+    // marker OUT retires, so phase_end reads CX from the register file
+    // (the cells stay as a lag-tolerant diagnostic).
+    int         lf_head  = 0;
+    int         lf_head15 = 0;
+    int         lf_head16 = 0;
+    int         lf_enter = 0;
+    int         lf_enter16 = 0;
+    int         lf_end16 = 0;
+    int         lf_n     = 0;
+    logic       lf_req_d = 1'b0;
+    wire [19:0] lf_word  = 20'(20'hF0000 + lf_head) & 20'hFFFFE;
+    wire        lf_req   = u_bridge.srv_req && (u_bridge.srv_bs == 3'b101)
+                         && ((u_bridge.srv_addr & 20'hFFFFE) == lf_word);
+    always_ff @(posedge clk) begin
+        lf_req_d <= lf_req;
+        if (lf_req && !lf_req_d) begin
+            if (lf_n < 4)
+                $display("  LFHEAD n=%0d t=%0t pc=%05x", lf_n, $time, zet_pc);
+            lf_n <= lf_n + 1;
+        end
+    end
+    // The budget: 27 PIT clocks at 2.4576 MHz in chipset clocks.
+    localparam int LF_DEADLINE = (27 * 42954545) / 2457600;   // 471
+    int          lf_fail = 0;
+
+    // +pcp: per-clock CPU trace while the ITF loop phases run (diagnostic)
+    logic pcp_en = 1'b0;
+    int   pcp_n  = 0;
+    initial pcp_en = $test$plusargs("pcp");
+    always_ff @(posedge clk) begin
+        if (pcp_en && (cur_phase == 8'h0F || cur_phase == 8'h10) && pcp_n < 400) begin
+            $display("  PCP t=%0t pc=%05x ip=%04x ce=%b zstb=%b zack=%b iowr=%b ad=%04x dat=%02x",
+                     $time, zet_pc, u_cpu.reg_ip, z86_ce, zwb_stb, zwb_ack,
+                     io_wr_n, cpu_address, cpu_data_bus);
+            pcp_n <= pcp_n + 1;
+        end
+    end
 
     // poke the program + reset vector into the SDRAM image (1 guest byte per
     // word, flat-addressed the way poke() indexes).
@@ -1160,11 +1259,18 @@ module tb_mem_perf;
         for (int i = 0; i < prog_len; i++)
             ram_seed(32'(24'h0F0000 + i), {8'h00, prog[i]});
         // FFFF0: EA 00 00 00 F0 = JMP FAR F000:0000 (ip, then seg, LE each)
-        ram_seed(32'h0FFFF0, 16'h00EA);
-        ram_seed(32'h0FFFF1, 16'h0000);
-        ram_seed(32'h0FFFF2, 16'h0000);
-        ram_seed(32'h0FFFF3, 16'h0000);
-        ram_seed(32'h0FFFF4, 16'h00F0);
+        // +itfonly starts the machine at the phase-0F loop instead, so the
+        // ITF timing probe can be run in seconds rather than through the
+        // whole 14-minute phase set.
+        begin
+            automatic int  jip = $test$plusargs("itfonly") ? lf_enter : 0;
+            automatic logic [7:0] jlo = jip[7:0], jhi = jip[15:8];
+            ram_seed(32'h0FFFF0, 16'h00EA);
+            ram_seed(32'h0FFFF1, 16'h0000 | {8'h00, jlo});
+            ram_seed(32'h0FFFF2, 16'h0000 | {8'h00, jhi});
+            ram_seed(32'h0FFFF3, 16'h0000);
+            ram_seed(32'h0FFFF4, 16'h00F0);
+        end
         // phase-0A/0B mark cells: unwritten cells read X in the model
         for (int i = 20'h00700; i < 20'h00710; i++)
             ram_seed(32'(i), 16'h0000);
@@ -1687,6 +1793,8 @@ module tb_mem_perf;
         phase_name[8'h0C] = "frame-iret x256";
         phase_name[8'h0D] = "big-frame CALL/RET + IRQ";
         phase_name[8'h0E] = "title shape: stack string + CALL";
+        phase_name[8'h0F] = "ITF IRQ0 poll loop x32";
+        phase_name[8'h10] = "ITF IRQ0 poll loop x32, F-bank mapped";
         phase_name[8'hFF] = "done";
     end
     int phase_bytes [0:255];
@@ -1749,6 +1857,22 @@ module tb_mem_perf;
                      && (zwb_dat_o[7:0] == 8'h55)) begin
             flipped10     <= 1'b1;
             shadow_flag_r <= 1'b1;
+        end else if (cur_phase == 8'h0A) begin
+            // The flip must survive the rest of phase 0A (the second jmpf
+            // runs against it); leave it alone here.
+        end else if (cur_phase == 8'h0F) begin
+            // ITF poll-loop control: the F-bank is NOT mapped here, so the
+            // windows are free to cover the loop (the hazard shape).
+            shadow_flag_r <= 1'b0;
+        end else if (cur_phase == 8'h10) begin
+            // ... and mapped here, the state the ITF POST runs in.
+            shadow_flag_r <= 1'b1;
+        end else begin
+            // Every other phase is run-time guest code: the ITF bank is not
+            // mapped, so the pf gate must not hold. (Leaving the 0A flip up
+            // through 0B-0E would silently run those phases with pf off --
+            // and 0D wedges without it.)
+            shadow_flag_r <= 1'b0;
         end
     end
 
@@ -1831,6 +1955,10 @@ module tb_mem_perf;
 
     task phase_start(input int n);
         cur_phase = n;
+        if (n == 8'h0F || n == 8'h10) begin
+            lf_n    = 0;
+            lf_head = (n == 8'h10) ? lf_head16 : lf_head15;
+        end
         snap;
     endtask
 
@@ -1877,6 +2005,49 @@ module tb_mem_perf;
                  c_rel_max,
                  c_drn_n-s0.drn_n,
                  (c_drn_n-s0.drn_n) ? int'((c_drn_sum-s0.drn_sum)/(c_drn_n-s0.drn_n)) : 0);
+        if (n == 8'h0F || n == 8'h10) begin
+            automatic int ent = (n == 8'h10) ? lf_enter16 : lf_enter;
+            automatic int len = (n == 8'h10) ? (lf_end16 - lf_enter16) : (lf_enter16 - lf_enter);
+            // The turn count is the guest's ARCHITECTURAL CX at the phase
+            // boundary, not the [0708..070C] cells: those are posted
+            // writes, and at Turbo the write queue can still hold them when
+            // the marker OUT retires -- the peek then reports the previous
+            // phase's leftovers (seen: phase 0x0B's counters, 0x00E2/1).
+            // CX cannot lag: the LOOP only exits with CX == 0.
+            automatic logic [15:0] axnow = u_cpu.u_regfile.AX;
+            automatic logic [15:0] cxnow = u_cpu.u_regfile.CX;
+            automatic logic [15:0] axst  = sdr.u_part.peek(20'h0708);
+            automatic logic [15:0] cxst  = sdr.u_part.peek(20'h070A);
+            automatic logic [15:0] cxend = sdr.u_part.peek(20'h070C);
+            $write("   ITF code @%05x:", 20'hF0000 + ent);
+            for (int a = ent; a < ent + len; a++)
+                $write(" %02x", prog[a]);
+            $display("");
+            $display("   ITF regs at phase end: ax=%04x cx=%04x (architectural)",
+                     axnow, cxnow);
+            $display("   ITF probe cells (posted, may lag): [0708]=%04x [070A]=%04x [070C]=%04x",
+                     axst, cxst, cxend);
+            $display("   ITF poll loop: turns=%04x->%04x, shadow_flag=%b, pf hits=%0d",
+                     16'h0020, cxnow, shadow_flag_r, c_phit-s0.phit);
+            if (axnow[15:8] != 8'h00 || cxnow != 16'h0000) begin
+                $display("   ITF POLL LOOP: FAIL -- loop did not run 32 turns (ax=%04x cx=%04x)",
+                         axnow, cxnow);
+                for (int k = 0; k < 32; k++)
+                    $display("     ring[%02d]=%05x", k, pc_ring[(pc_ptr + k) & 31]);
+                lf_fail = 1;
+            end else if (n == 8'h10 && dt < longint'(LF_DEADLINE)) begin
+                $display("   ITF POLL LOOP: FAIL -- %0d clks < %0d deadline (IRQ0 wins the race)",
+                         dt, LF_DEADLINE);
+                lf_fail = 1;
+            end else if (n == 8'h10 && (c_phit - s0.phit) != 0) begin
+                $display("   ITF POLL LOOP: FAIL -- %0d pf hits while the F-bank was mapped",
+                         c_phit - s0.phit);
+                lf_fail = 1;
+            end else if (n == 8'h10) begin
+                $display("   ITF POLL LOOP: PASS -- %0d clks >= %0d deadline, no window served",
+                         dt, LF_DEADLINE);
+            end
+        end
         $fflush;
     endtask
 
@@ -1889,6 +2060,13 @@ module tb_mem_perf;
         int dma_seen = 0;
         logic [15:0] w;
         begin
+            // +itfonly starts the guest inside phase 0F, so every earlier
+            // phase's data region is untouched: the phase-verify peeks have
+            // nothing to say in that mode. The probe prints its own verdict.
+            if ($test$plusargs("itfonly")) begin
+                $display("(itfonly: phase verification skipped)");
+                return;
+            end
             for (int a = 20'h2000; a < 20'h2800; a++) begin
                 w = sdr.u_part.peek(a);
                 if (w[7:0] !== 8'h5A) begin
@@ -1982,6 +2160,7 @@ module tb_mem_perf;
             // never touch the seq/RAM machine.
             if (bad || diverged || stray || (c_uncov != 0)
                 || (c_pbad != 0) || (c_stale != 0) || (ro_bad != 0)
+                || (lf_fail != 0)
                 || (grant_en && (dma_seen != 256 || grants == 0)))
                 $display("=== FAIL tb_mem_perf ===");
             else

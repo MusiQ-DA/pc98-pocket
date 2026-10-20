@@ -689,6 +689,41 @@ module cpu_bus_bridge #(
     reg         shadow_q;
     wire        bank_chg = (bios_shadow_flag != shadow_q);
 
+    // ------------------------------------------------------------------
+    // ITF-bank hold: no window is armed, filled or served while the F-bank
+    // is mapped (bios_shadow_flag up, i.e. the ITF ROM is what F8000-FFFFF
+    // shows -- it powers up mapped with PC98_BOOT_ITF).
+    //
+    // The ITF's POST measures elapsed time by running a loop, and one of
+    // its checks is a hard gate: counter 0 := 001Ah, master IMR := FEh,
+    // then "IRQ0 must arrive within 32 polls" of
+    //     TEST AH,0FFh / JNZ ok / LOOP back
+    // -- F80A4F-0A55 in the shipped 286 ITF (file 0xA4F); the 386 ITF
+    // traced in docs/PC98_ITF_TRACE.md has the same block at F80D6C.
+    // Mode 0 raises OUT 27 PIT clocks after the count load, i.e. 11.0 us
+    // at 2.4576 MHz (docs/ref/pc98-timing-conventions.md 4.3), so the whole
+    // 32-turn loop has to LAST at least that long (471 chipset clks at
+    // 42.95 MHz). A 32-byte window is a loop cache in all but name -- hits
+    // do not consume, so one warm sector answers every turn -- and with a
+    // warm window the loop finishes in 422 clks at Turbo, under the
+    // deadline, where the held path takes 1014 (tb_mem_perf phases 0x0F
+    // and 0x10). The POST then prints TIMER INTERRUPT ERROR and HLTs.
+    //
+    // The z86 cache is already held off while the ITF is mapped for exactly
+    // this reason (core_top's cache_en & ~itf_bank); this is the same
+    // accelerator on the same code and takes the same gate. Nothing is
+    // lost: the held window is POST code and the ITF's own menu. The
+    // windows come back the moment the guest hands over to the BIOS
+    // (OUT 043Dh, 12h), and everything after -- BIOS POST, DOS, games --
+    // runs with them as before.
+    //
+    // Held here rather than at core_top's .pf_disable feed on purpose:
+    // that net is high-fanout and 7f85bf0 measured a -0.039ns setup miss
+    // when a term was AND-ed into it (443247f). bios_shadow_flag is
+    // already an input of this block -- bank_chg watches it -- so the gate
+    // costs one LUT input on nets that already carry pf_disable.
+    wire        pf_itf_hold = bios_shadow_flag;
+
     reg  [1:0]  pf_live;
     reg         pf_victim;          // which window a foreign miss claims
     reg         pf_want;            // preferred fill target (last rebase)
@@ -853,7 +888,7 @@ module cpu_bus_bridge #(
                    && bus_ours
                   && ((bstate == B_IDLE)
                       || ((bstate == B_CMD) && (cur_pf || cur_fillm)))
-                  && !wrq_ovl && !bank_chg && !pf_nohit;
+                  && !wrq_ovl && !bank_chg && !pf_nohit && !pf_itf_hold;
 
     wire [4:0]  pf_idx0 = srv_beg[4:0];
     wire [7:0]  pf_b0   = pf_buf[{pf_hw, pf_idx0}];
@@ -918,7 +953,8 @@ module cpu_bus_bridge #(
     // path, leaving the burst to land at pf_cnt=0 (foreign bytes). A fill
     // deferred one clock re-seeds on clean windows.
     wire srv_pf  = (pf_need0 | pf_need1) && (pf_dead != 2'd3)
-                && !pause_core && !pf_disable && !pf_nofill && !bank_chg;
+                && !pause_core && !pf_disable && !pf_nofill && !bank_chg
+                && !pf_itf_hold;
 
     // Write-queue capture: the request is postable when it targets plain
     // SDRAM and a slot is free. The push itself is in the tracker block
@@ -1149,7 +1185,7 @@ module cpu_bus_bridge #(
                          && ({1'b0, srv_beg[4:0]} <= insec_cnt);
     wire        fillm_go = arm_rd_ok && !pf_poisoned && (pf_dead != 2'd3)
                         && !pause_core && !pf_disable && !pf_nofillm
-                        && !bank_chg && !fillm_ovl
+                        && !bank_chg && !fillm_ovl && !pf_itf_hold
                         && (~|pf_live || insec || retn0 || retn1
                             || cont0 || cont1 || pf_miss1);
     wire        fillm_w  = (~|pf_live) ? 1'b0
@@ -1481,7 +1517,12 @@ module cpu_bus_bridge #(
             // Hard kill: last assignment wins, so any windows armed or
             // rebased above stay dead while the switch is held -- a clean
             // A/B of "prefetch on" vs "prefetch off" on one bitstream.
-            if (pf_disable) pf_live <= 2'b00;
+            // pf_itf_hold rides the same kill: the ITF bank mapping can
+            // rise mid-stream (a call into F8000+), so the transitions
+            // have to blank a window that is already warm, not just stop
+            // new ones. A store that lands during the hold cannot stale
+            // it either: there is nothing left to stale.
+            if (pf_disable || pf_itf_hold) pf_live <= 2'b00;
         end
     end
 
