@@ -202,20 +202,6 @@ module pc98_gvram_display #(
         if (line_edge && (line_now == 9'd0))
             disp_page_f <= disp_page;
     end
-    // The display start address and the pitch get the same frame-boundary
-    // treatment: the Clear! transition rewrites SAD while the raster is
-    // running (four lines per frame), and a per-line latch tore the frame
-    // at each write -- the tens-of-lines band that np2kai does not show.
-    logic [15:0] part_sad_f [0:3];
-    logic [7:0]  pitch_f = 8'd0;
-    always_ff @(posedge clk) begin
-        if (line_edge && (line_now == 9'd0)) begin
-            for (int i = 0; i < 4; i++)
-                part_sad_f[i] <= part_sad[i];
-            pitch_f <= pitch;
-        end
-    end
-
     function automatic [23:0] plane_base(input [1:0] p);
         if (fill_page)
             plane_base = 24'h600000 + {7'd0, p, 15'd0};
@@ -272,13 +258,13 @@ module pc98_gvram_display #(
     // bytes; otherwise it counts words and is doubled into bytes. Both
     // `&= 0xfe` floor it even.
     wire  [8:0]  pitch_b  = (part_pbyte[cur_part] | mhz5)
-                                              ? {1'b0, pitch_f[7:1], 1'b0}
-                                              : {1'b0, pitch_f[6:0], 1'b0};
+                                              ? {1'b0, pitch[7:1], 1'b0}
+                                              : {1'b0, pitch[6:0], 1'b0};
     wire  [9:0]  cur_len  = part_len[cur_part];
     // The next partition CYCLICALLY -- np21w's s_scrp mask wraps partition
     // three back to partition zero, so the bare `+1` index must wrap too
     // (an unmasked cur_part=3 read lands one slot past the array).
-    wire  [15:0] sad_next = part_sad_f[(cur_part + 2'd1) & 2'd3];
+    wire  [15:0] sad_next = part_sad[(cur_part + 2'd1) & 2'd3];
     // mg.lr: programmed LR+1 when CSRFORM carries it, else the doubled-mode
     // default of two rasterlines per line so the AL<256 heuristic keeps
     // fetching each line twice.
@@ -298,7 +284,7 @@ module pc98_gvram_display #(
     wire         w_adv    = !w_wrap && (cur_len != 10'd0)
                        && (({1'b0, part_rel} + 11'd1) >= {1'b0, cur_len});
     wire         w_pstep  = (mul_q <= 5'd1);
-    wire  [14:0] base_next = w_wrap  ? 15'(part_sad_f[0] << 1)
+    wire  [14:0] base_next = w_wrap  ? 15'(part_sad[0] << 1)
                           : w_adv   ? 15'(sad_next << 1)
                           : w_pstep ? run_base + 15'(pitch_b)
                           :           run_base;
