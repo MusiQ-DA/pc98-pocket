@@ -1530,7 +1530,16 @@ module core_top (
     // against trig_addr[15:0] instead of the fetch PC -- freezing the ring
     // on the moment a stray segment value lands in DS.
     reg        trig_ds     = 1'b0;
-    wire       trig_hit  = trig_en && (trig_ds ? (zet_ds == trig_addr[15:0])
+    // bits 27+28 together arm a WRITE watchpoint: the trigger matches the
+    // raw bus address of a memory-write cycle (CPU or DMA) instead of the
+    // fetch PC, so a stray write -- the 0xA1 that lands on the high-score
+    // date byte at 0x373A3 during SuperDepth's boot -- freezes the rings on
+    // the culprit cycle itself.
+    wire        bus_mem_wr = ~chipset_memory_write_n;
+    wire        trig_w_hit = trig_bus && trig_wronly && bus_mem_wr
+                             && (chipset_address == trig_addr);
+    wire       trig_hit  = trig_en && (trig_bus && trig_wronly ? trig_w_hit
+                                           : trig_ds ? (zet_ds == trig_addr[15:0])
                                            : (pc_now == trig_addr));
     wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
     // Trigger log: a 64-entry ring of {PC, SS, SP, CS, DS, ES, DI, SI, DX,
@@ -1574,7 +1583,8 @@ module core_top (
                                   z86_dbg_regs[63:48],   z86_dbg_regs[15:0]};     // BX, AX
             tlog_n <= tlog_n + 16'd1;
         end
-        if (tlog_trap && pc_wild && !tlog_frozen)
+        if (((tlog_trap && pc_wild) ||
+             (trig_hit && trig_freeze && !trig_delay)) && !tlog_frozen)
             tlog_frozen <= 1'b1;
         if (probe_wr_pulse && probe_waddr_c == 7'h0e) begin
             tlog_ri   <= probe_wdata_c[5:0];
