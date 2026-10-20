@@ -1535,9 +1535,21 @@ module core_top (
     // fetch PC, so a stray write -- the 0xA1 that lands on the high-score
     // date byte at 0x373A3 during SuperDepth's boot -- freezes the rings on
     // the culprit cycle itself.
+    // The chipset's write strobe and the bus address do not assert in the
+    // same phase for every master, so a single-cycle compare missed real
+    // writes (it never fired on [0x185e], which the sound IRQ writes every
+    // tick). Latch the strobe/address pair and match over a two-cycle
+    // window: catches the write whether the address leads or trails.
     wire        bus_mem_wr = ~chipset_memory_write_n;
-    wire        trig_w_hit = trig_bus && trig_wronly && bus_mem_wr
-                             && (chipset_address == trig_addr);
+    reg         wr_stb_q   = 1'b0;
+    reg  [19:0] wr_addr_q  = 20'h0;
+    always_ff @(posedge clk_chipset) begin
+        wr_stb_q  <= bus_mem_wr;
+        wr_addr_q <= chipset_address[19:0];
+    end
+    wire        trig_w_hit = trig_bus && trig_wronly &&
+                              ((bus_mem_wr  && chipset_address[19:0] == trig_addr) ||
+                               (wr_stb_q    && wr_addr_q            == trig_addr));
     wire       trig_hit  = trig_en && (trig_bus && trig_wronly ? trig_w_hit
                                            : trig_ds ? (zet_ds == trig_addr[15:0])
                                            : (pc_now == trig_addr));
