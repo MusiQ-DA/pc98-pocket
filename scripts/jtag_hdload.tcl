@@ -154,32 +154,30 @@ if {[info exists ::env(HDNOBOOT)]} { shutdown; exit 0 }
 
 # CPU-speed override (probe write slot 0x89): HDSPEED=0..3 forces
 # 5/10/20/max regardless of the OSD setting for scripted runs;
-# HDSPEED=clear hands it back. wdata[3]=1 is written by DEFAULT now
-# (pf windows ship ON -- the 286 BIU-queue model); HDPFOFF=1 clears
-# bit3 -> jtag_pf_dis=1, prefetch OFF, for crash/speed A/B.
-# (The legacy HDPFDIS=1 env also sets bit3 and is a no-op now.)
+# HDSPEED=clear hands it back. wdata[3]=1 turns the pf windows ON
+# (the 286 BIU-queue model); the RTL default is OFF because pf ON
+# wedges ITF POST (TIMER INTERRUPT ERROR, ~1/12 boots). HDPFON=1
+# sets bit3 for speed A/B. (HDPFOFF/HDPFDIS are gone: both flipped
+# bit3 -- pf ON -- and now fight the OFF default.)
 # wdata[6:4] kill prefetch per-mechanism for bisection:
 #   HDNOFILL=1  -- pure (idle-gap) fills never run
 #   HDNOFILLM=1 -- fill-on-miss never runs
 #   HDNOHIT=1   -- windows fill but hits never serve
 #
 #   env HDIMG=img.hdm HDSPEED=1
-#   env HDIMG=img.hdm HDSPEED=1 HDPFOFF=1
+#   env HDIMG=img.hdm HDSPEED=1 HDPFON=1
 #   env HDIMG=img.hdm HDSPEED=1 HDNOFILLM=1
-if {[info exists ::env(HDSPEED)] || [info exists ::env(HDPFDIS)]
+if {[info exists ::env(HDSPEED)] || [info exists ::env(HDPFON)]
         || [info exists ::env(HDPFOFF)]
         || [info exists ::env(HDNOFILL)] || [info exists ::env(HDNOFILLM)]
         || [info exists ::env(HDNOHIT)] || [info exists ::env(HDTHR)]} {
     select_node 1
-    set w 8
-    if {[info exists ::env(HDPFOFF)] && $env(HDPFOFF)} {
-        set w [expr {$w & ~8}]
+    set w 0
+    if {[info exists ::env(HDPFON)] && $env(HDPFON)} {
+        set w [expr {$w | 8}]
     }
     if {[info exists ::env(HDSPEED)] && $env(HDSPEED) ne "clear"} {
         set w [expr {$w | 4 | ($env(HDSPEED) & 3)}]
-    }
-    if {[info exists ::env(HDPFDIS)] && $env(HDPFDIS)} {
-        set w [expr {$w | 8}]
     }
     if {[info exists ::env(HDNOFILL)] && $env(HDNOFILL)}   { set w [expr {$w | 0x10}] }
     if {[info exists ::env(HDNOFILLM)] && $env(HDNOFILLM)} { set w [expr {$w | 0x20}] }

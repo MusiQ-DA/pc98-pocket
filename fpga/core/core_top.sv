@@ -291,10 +291,11 @@ module core_top (
     // otherwise the OSD setting owns clk_select_next exactly as before.
     logic        jtag_spd_ovr = 1'b0;
     logic  [1:0] jtag_spd_sel = 2'b00;
-    // pf ON by default: the windows are the 286 BIU-queue model and ship
-    // enabled (Turbo coexists measured-clean). A slot-9 write can still
-    // clear it (bit3 polarity: wdata[3]=0 -> jtag_pf_dis=1 -> OFF).
-    logic        jtag_pf_dis  = 1'b0;
+    // pf OFF by default: pf ON wedges ITF POST (TIMER INTERRUPT ERROR,
+    // ~1/12 boots) on the SD build. The 286 BIU-queue model stays
+    // available for A/B via slot 0x89 (bit3 polarity: wdata[3]=1 ->
+    // jtag_pf_dis=0 -> ON).
+    logic        jtag_pf_dis  = 1'b1;
     logic        jtag_cache_dis = 1'b0; // [11] z86_cache off: every access on the bus
     logic  [7:0] jtag_thr_num = 8'd0;   // [19:12] nonzero: throttle duty override (n/256)
     // Per-mechanism prefetch kills, for bisecting which half of the
@@ -329,7 +330,7 @@ module core_top (
     // no pure fills 2/57, no hits 1/85, kill-on-any-write 1/85, engine
     // off 0/85 -- the hole is in the fill bursts, not the overlap
     // invalidation, and was never reproduced in tb_mem_perf.
-    wire         jtag_pf_dis  = 1'b0;  // pf on: the BIU-queue model ships enabled
+    wire         jtag_pf_dis  = 1'b1;  // pf off: pf ON wedges ITF POST at boot
     wire         jtag_cache_dis = 1'b0;
     wire   [7:0] jtag_thr_num = 8'd0;
     wire         jtag_pf_nofill  = 1'b0;
@@ -3471,8 +3472,9 @@ module core_top (
         .throttle          (thr_hold),
         .biu_done          (biu_done),
         .zet_edge_o        (z86_ce),
-        // Prefetch windows default ON everywhere (the 286 BIU-queue model
-        // ships enabled; Turbo coexistence is measured-clean at 28.55).
+        // Prefetch windows default OFF (jtag_pf_dis=1 above): pf ON wedges
+        // ITF POST (TIMER INTERRUPT ERROR, ~1/12 boots) on the SD build;
+        // the 286 BIU-queue model is A/B-only now (slot 0x89 bit3).
         // NOTE: keep this feed a plain wire. 7f85bf0 AND-ed a clk_select
         // term in here; the extra gate at this high-fanout node perturbed
         // placement into a -0.039ns setup miss on the main core clock and
