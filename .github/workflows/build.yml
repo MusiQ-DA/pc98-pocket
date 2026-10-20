@@ -364,6 +364,15 @@ jobs:
           ./obj_jk/jk | tee jk.log
           grep -q "RESULT: PASS" jk.log
 
+      - name: JTAG arming needs addr bit 7 (0x86 arms slot 6, bare 0x06 reads)
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_jtag_trig \
+            -Isim -Ifpga/core \
+            sim/tb_pc98_jtag_trig.sv fpga/core/pc98_jtag_probe.sv \
+            -o jt --Mdir obj_jt
+          ./obj_jt/jt | tee jt.log
+          grep -q "RESULT: PASS" jt.log
+
       - name: the virtual keyboard's tables are sane
         run: python3 scripts/check_vkb_layout.py
 

@@ -1543,9 +1543,12 @@ module core_top (
     //    through the command phase and the arbiter's address (ALE-latched
     //    cpu_address / DMA page+address / address_ext) is stable across
     //    its whole length, so a same-cycle compare is exact.  (The
-    //    watchpoint originally "never fired" because the arming script
-    //    wrote slot 0x04 -- the GVRAM dump launcher -- instead of this
-    //    trigger's slot 0x06; it was never armed, not phase-skewed.)
+    //    watchpoint "never fired" on hardware twice, both times unarmed:
+    //    the script first wrote slot 0x04 -- the GVRAM dump launcher --
+    //    then sent the BARE slot number, which pc98_jtag_probe.sv treats
+    //    as a READ: a write scan needs addr bit 7 set (0x86 for this
+    //    slot, 0x8e for the tlog mode).  Read slot 0x06 below now echoes
+    //    the armed word, so a silent no-arm cannot hide again.)
     //  * z86_cache's port-F buffer take (z86_pf_wr_*): in Turbo+cache a
     //    store to 00000-9FFFF/E8000-FFFFF runs no bus cycle at all --
     //    write-through goes straight to the SDRAM's port F -- so only the
@@ -1715,6 +1718,19 @@ module core_top (
             8'h01:   probe_data_c = brg_q[31:0];
             8'h02:   probe_data_c = {9'h0, brg_q[54:32]};
             8'h03:   probe_data_c = {24'h0, brg_w};
+            // 0x06/0x0e: echo the live trigger and tlog-mode words, in the
+            // exact layout of their write slots.  A write scan needs addr
+            // bit 7 set (0x86/0x8e, see pc98_jtag_probe.sv); the bare slot
+            // number is a pure READ -- the freeze script sent bare numbers,
+            // so its "arm" never landed and the watchpoint sat disarmed
+            // while the positive control wrote away.  Reading the word
+            // back is the one-scan proof an arm actually took (0xDEAD00xx
+            // = a bitstream without these readback slots).
+            8'h06:   probe_data_c = {trig_en, trig_freeze, trig_delay,
+                                     trig_bus, trig_wronly, trig_ds,
+                                     6'b0, trig_addr};
+            8'h0e:   probe_data_c = {22'b0, tlog_trap, tlog_all,
+                                     2'b0, tlog_ri};
             // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
             // never completes; 0x1a: the ready chain the CPU waits on.
             8'h19:   probe_data_c = {16'h0, chipset_dbg};
