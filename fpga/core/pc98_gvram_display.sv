@@ -191,6 +191,17 @@ module pc98_gvram_display #(
     // base for the bursts still to run -- unlatched, one port-0xA4 write
     // would leave a line half from each page for a whole frame.
     logic        fill_page = 1'b0;
+    // The 0xA4 page bit is applied at the FRAME boundary, not per line. The
+    // uPD7220 display page changes on the vertical retrace; DEPTH.EXE flips
+    // 0xA4 in the middle of its frame loop, so per-line sampling tore the
+    // frame into the old page above the flip point and the freshly cleared
+    // page below it -- the tens-of-lines black band that rode the transition.
+    // np21w can sample gdcs.disp per line because it renders whole frames.
+    logic        disp_page_f = 1'b0;
+    always_ff @(posedge clk) begin
+        if (line_edge && (line_now == 9'd0))
+            disp_page_f <= disp_page;
+    end
     function automatic [23:0] plane_base(input [1:0] p);
         if (fill_page)
             plane_base = 24'h600000 + {7'd0, p, 15'd0};
@@ -351,7 +362,7 @@ module pc98_gvram_display #(
                     // samples gdcs.disp.
                     fill_base <= run_base;
                     fill_bank <= fill_tgt[1:0];
-                    fill_page <= disp_page;
+                    fill_page <= disp_page_f;
                     act_tgt   <= fill_tgt;
                     f_plane   <= 3'd0;
                     f_chunk   <= 4'd0;
