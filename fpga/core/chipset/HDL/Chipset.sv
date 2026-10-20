@@ -216,6 +216,9 @@ module CHIPSET #(
         output  wire    [63:0]  dbg_fdc_cmd,
         // JTAG probe: the slave GDC's display registers.
         output  wire    [63:0]  dbg_gdc_s,
+        // JTAG probe: slave GDC partitions one to three.
+        output  wire    [63:0]  dbg_gdc_s2,
+        output  wire    [63:0]  dbg_gdc_s3,
         // JTAG probe: the graphics display fetch's underrun telemetry.
         output  wire    [63:0]  dbg_gvdisp,
         // JTAG probe: the CRT interrupt (IRQ2) path -- PIC regs, arm, counters.
@@ -524,6 +527,8 @@ module CHIPSET #(
         .dbg_fdc                            (dbg_fdc),
         .dbg_fdc_cmd                        (dbg_fdc_cmd),
         .dbg_gdc_s                          (dbg_gdc_s),
+        .dbg_gdc_s2                         (dbg_gdc_s2),
+        .dbg_gdc_s3                         (dbg_gdc_s3),
         .dbg_gvdisp                         (dbg_gvdisp),
         .dbg_crt                            (dbg_crt),
         // The BIOS runs 2HD (0x90 window) transfers on channel 2 and 2DD

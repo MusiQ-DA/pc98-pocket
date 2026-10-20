@@ -1727,6 +1727,11 @@ module core_top (
             // what the guest programmed.
             8'h39:   probe_data_c = dbg_gdc_s[31:0];
             8'h3a:   probe_data_c = dbg_gdc_s[63:32];
+            // 0x3b/0x3c: slave GDC partitions one to three -- the stage
+            // wipe in DEPTH walks SAD1..3 while SAD0 stays zero.
+            8'h3b:   probe_data_c = dbg_gdc_s2[31:0];  // {SAD1,SAD2} lo/hi
+            8'h3c:   probe_data_c = { 2'd0, dbg_gdc_s2[63:48],  // SAD3
+                                      dbg_gdc_s3[29:0] };       // {LEN3,LEN2,LEN1}
             // 0x2D/0x2E: the CRT interrupt path (Peripherals dbg_crt) --
             // lo {IMR,ISR,IRR (master), spur_n[3:0], 0, pend, armed,
             // int_to_cpu}, hi {fire_n, isr_n, arm_n, lost_n[3:0],
@@ -2962,6 +2967,8 @@ module core_top (
     wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
     wire [63:0]  fdc_dbg_cmd;  // live command {op,unit,C,H,R,N,EOT,GPL}
     wire [63:0]  dbg_gdc_s;    // slave GDC display regs: {SAD0,LEN0} hi,
+    wire [63:0]  dbg_gdc_s2;   // slave GDC SADs 1..3
+    wire [63:0]  dbg_gdc_s3;   // slave GDC LENs 1..3
                              // {disp_on,page,analog,5MHz,dbl,LR,AL,PITCH} lo
     wire [63:0]  dbg_gvdisp;   // graphics display fetch: {line,fill FSM} hi,
                              // {skip,late,max_fill} lo
@@ -3280,6 +3287,8 @@ module core_top (
         .dbg_fdc                            (fdc_dbg),
         .dbg_fdc_cmd                        (fdc_dbg_cmd),
         .dbg_gdc_s                          (dbg_gdc_s),
+        .dbg_gdc_s2                         (dbg_gdc_s2),
+        .dbg_gdc_s3                         (dbg_gdc_s3),
         .dbg_gvdisp                         (dbg_gvdisp),
         .dbg_crt                            (dbg_crt),
         .wait_count_clk_en                  (cpu_ce_negedge),

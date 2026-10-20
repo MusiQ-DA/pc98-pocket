@@ -203,6 +203,10 @@ module PERIPHERALS #(
         // be read back against what the guest programmed: {sad0,len0} in
         // the high word, flags/LR/AL/PITCH in the low.
         output  wire    [63:0]  dbg_gdc_s,
+        // JTAG probe: slave GDC partitions one to three -- DEPTH's stage
+        // wipe walks them while SAD0 stays pinned at zero.
+        output  wire    [63:0]  dbg_gdc_s2,
+        output  wire    [63:0]  dbg_gdc_s3,
         // Graphics display-fetch underrun telemetry -- skip/late/max_fill in
         // the low word, live fill-FSM and line state in the high word.
         output  wire    [63:0]  dbg_gvdisp,
@@ -1884,6 +1888,9 @@ module PERIPHERALS #(
                          4'd0, gdc_s_disp_on, gvram_disp_page,
                          pc98_analog, &gdc_clk, gdc_s_dbl,
                          gdc_s_lrep, gdc_s_al, gdc_s_pitch };
+
+    assign dbg_gdc_s2 = { 16'd0, gdc_s_sad[3], gdc_s_sad[2], gdc_s_sad[1] };
+    assign dbg_gdc_s3 = { 34'd0, gdc_s_len[3], gdc_s_len[2], gdc_s_len[1] };
 
     pc98_glyph_rowbuf u_pc98_rowbuf (
         .clk(clock), .rst(reset),
