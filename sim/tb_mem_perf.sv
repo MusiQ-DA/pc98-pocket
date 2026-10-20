@@ -1956,7 +1956,7 @@ module tb_mem_perf;
     task phase_start(input int n);
         cur_phase = n;
         if (n == 8'h0F || n == 8'h10) begin
-            lf_n    = 0;
+            lf_n    <= 0;
             lf_head = (n == 8'h10) ? lf_head16 : lf_head15;
         end
         snap;
