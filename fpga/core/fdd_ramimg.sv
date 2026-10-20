@@ -54,8 +54,15 @@
 //
 // A read request is served the way fdd_poll serves it: management register 0
 // reports the in-flight command's {drive, lba}; the sector's 1024 bytes come
-// out of the carve-out as 1024 single-word reads on sdram_shim's port E,
-// each rvalid beat pushed straight into the controller's FIFO at 0xF2_0F.
+// out of the carve-out as 1024 single-word reads on sdram_shim's port E, each
+// rvalid beat latched into a register and pushed into the controller's FIFO
+// at 0xF2_0F on the NEXT clock. The register is the point: sd_rdata is
+// sdram_mp's SHARED read-data register, captured on the negedge inside the
+// rvalid cycle, and presenting it combinationally left the FIFO's capture
+// half a clock off the launch -- a beat that lost that race on hardware
+// stored the word mp_rdata still held from an earlier transaction (another
+// port's display/cache byte), a foreign value inside an otherwise perfect
+// sector. One register buys the crossing a full cycle.
 // Sixteen-word bursts were the original form, but on hardware every beat of
 // a full-rate port-E burst samples the NEXT word -- the boundary hazard
 // sdram_mp's S_RD_GAP comment describes ("the new word wins early, both
@@ -69,10 +76,14 @@
 // single-word port-E writes, so a guest that saves (SuperDepth's high-score
 // file) sees a writable disk, as it would from the SD card.
 //
-// The FIFO discipline is exactly the firmware's: a read push is always a
-// whole 1024-byte sector (fifo_full trips at sector_len and moves the
-// controller to the drain wait), and a write drain pops until the request
-// drops, bounded so a wedged command cannot wedge this FSM.
+// The FIFO discipline is exactly the firmware's, fenced on both sides: a
+// read push happens only while the controller's request bit is STILL high
+// (checked combinationally on the push cycle -- every path that drops the
+// request either filled or cleared the FIFO, so a straggler byte is never
+// inserted into a drain), a read push is always a whole 1024-byte sector
+// (fifo_full trips at sector_len and moves the controller to the drain
+// wait), and a write drain pops until the request drops, bounded so a
+// wedged command cannot wedge this FSM.
 //
 // Register 0's drive bit is ignored on serve: while this module is mounted,
 // drive B is empty and any request in flight can only belong to drive A --
@@ -287,7 +298,8 @@ module fdd_ramimg #(
         S_UMNT     = 5'd3,   // the disable-time eject
         S_RD_LBA   = 5'd4,   // management read of request register 0
         S_RD_REQ   = 5'd5,   // issue a one-word carve-out read
-        S_RD_BEAT  = 5'd6,   // an rvalid beat pushes one FIFO byte
+        S_RD_BEAT  = 5'd6,   // an rvalid beat latches one FIFO byte
+        S_RD_PUSH  = 5'd19,  // ...and this cycle puts it on the bus
         S_WR_DR    = 5'd7,   // drain a write/format FIFO, drop the bytes
         S_UP_POP   = 5'd8,
         S_UP_CAP   = 5'd9,
@@ -310,6 +322,7 @@ module fdd_ramimg #(
     logic  [7:0] gap_cnt;
     logic [14:0] req_lba;
     logic [10:0] beat_cnt;   // bytes received this sector, 0..1024
+    logic  [7:0] beat_data;  // the rvalid beat's byte, registered before its push
     logic  [7:0] wr_byte;    // the FIFO byte a sector write is committing
     logic [20:0] up_off;     // image byte offset the next word lands at
     logic [31:0] up_word;
@@ -378,6 +391,7 @@ module fdd_ramimg #(
             gap_cnt         <= 8'd0;
             req_lba         <= 15'd0;
             beat_cnt        <= 11'd0;
+            beat_data       <= 8'd0;
             wd              <= 16'd0;
         end else if (reset) begin
             // Abort in-flight work; the configuration -- en, mounted, the
@@ -387,6 +401,7 @@ module fdd_ramimg #(
             gap_cnt     <= 8'd0;
             req_lba     <= 15'd0;
             beat_cnt    <= 11'd0;
+            beat_data   <= 8'd0;
             wd          <= 16'd0;
             up_bi       <= 2'd0;
             greset_req  <= 1'b0;
@@ -472,15 +487,26 @@ module fdd_ramimg #(
 
                 // ---- a sector read -------------------------------------
                 S_RD_LBA: begin
-                    // mgmt_readdata is a combinational decode of the held
-                    // address (floppy.v's assign), so the {drive, lba} pair
-                    // is valid on THIS cycle while the strobe keeps
-                    // mgmt_addr at F200 -- it is gone a state later.
-                    req_lba    <= mgmt_din[14:0];
-                    last_lba   <= mgmt_din[14:0];
-                    beat_cnt   <= 11'd0;
-                    wd         <= 16'd0;
-                    st         <= S_RD_REQ;
+                    // The request bit is combinationally the controller's
+                    // fill state, and it lags the fill's completion by one
+                    // clock (fifo_full is registered behind the last push):
+                    // S_IDLE can arm a serve on the very cycle the request
+                    // is about to drop. Checking it HERE -- before any SDRAM
+                    // traffic -- parks that spurious re-serve immediately
+                    // instead of relying on S_RD_REQ to notice.
+                    if (!fdd_request[0]) begin
+                        st <= S_IDLE;
+                    end else begin
+                        // mgmt_readdata is a combinational decode of the held
+                        // address (floppy.v's assign), so the {drive, lba}
+                        // pair is valid on THIS cycle while the strobe keeps
+                        // mgmt_addr at F200 -- it is gone a state later.
+                        req_lba    <= mgmt_din[14:0];
+                        last_lba   <= mgmt_din[14:0];
+                        beat_cnt   <= 11'd0;
+                        wd         <= 16'd0;
+                        st         <= S_RD_REQ;
+                    end
                 end
                 S_RD_REQ: begin
                     wd <= wd + 16'd1;
@@ -495,19 +521,39 @@ module fdd_ramimg #(
                     wd <= wd + 16'd1;
                     if (sd_rvalid) begin
                         // One word per request: this beat IS the whole
-                        // transaction -- push it, then either stop at 1024
-                        // or ask for the next word.
-                        wd       <= 16'd0;
-                        beat_cnt <= beat_cnt + 11'd1;
-                        if (beat_cnt == 11'd1023) begin
-                            if (serve_cnt != 8'hFF)
-                                serve_cnt <= serve_cnt + 8'd1;
-                            st <= S_IDLE;
-                        end else begin
-                            st <= S_RD_REQ;
-                        end
+                        // transaction. sd_rdata is sdram_mp's shared read
+                        // register, updated on the NEGEDGE inside this cycle
+                        // -- latching the byte now and pushing it from the
+                        // register next clock gives the mgmt crossing a full
+                        // cycle. Presenting sd_rdata combinationally (the old
+                        // form) left the FIFO's capture half a cycle from the
+                        // negedge launch, and on hardware a beat that lost
+                        // that race stored whatever mp_rdata still held --
+                        // the previous transaction's word, another port's
+                        // display/cache byte -- a foreign value in the middle
+                        // of an otherwise perfect sector.
+                        beat_data <= sd_rdata[7:0];
+                        wd        <= 16'd0;
+                        st        <= S_RD_PUSH;
+                    end else if (!fdd_request[0] || &wd) begin
+                        st <= S_IDLE;
                     end
-                    if (!fdd_request[0] || &wd) st <= S_IDLE;
+                end
+                S_RD_PUSH: begin
+                    // The byte is in hand; one registered cycle on the bus.
+                    // The request gate is live: every path that drops it
+                    // (fill complete -- the FIFO is full; command aborted or
+                    // reset -- the FIFO is cleared) makes the byte unwanted,
+                    // so a beat that arrives across a dropping request is
+                    // dropped with it rather than inserted into a drain.
+                    beat_cnt <= beat_cnt + 11'd1;
+                    if (beat_cnt == 11'd1023) begin
+                        if (serve_cnt != 8'hFF)
+                            serve_cnt <= serve_cnt + 8'd1;
+                        st <= S_IDLE;
+                    end else begin
+                        st <= S_RD_REQ;
+                    end
                 end
 
                 // ---- a sector write: FIFO bytes into the carve-out -------
@@ -647,8 +693,9 @@ module fdd_ramimg #(
 
     // ------------------------------------------------------------------
     // Combinational drives: the management strobes, the SDRAM request, the
-    // FIFO pop. The FIFO push in S_RD_BEAT must fire ON the rvalid cycle --
-    // the next beat's word lands on the data bus one clock later.
+    // FIFO pop. The FIFO push fires from S_RD_PUSH -- the beat's byte sat a
+    // clock in beat_data, so the shared SDRAM read register's negedge launch
+    // has a full cycle to cross the bus (see the header and S_RD_BEAT).
     // ------------------------------------------------------------------
     always_comb begin
         mgmt_addr = 16'h0000;
@@ -682,9 +729,15 @@ module fdd_ramimg #(
                 sd_len  = 4'd0;         // one word -- see the header on why
             end
             S_RD_BEAT: begin
-                if (sd_rvalid) begin
+                // No mgmt traffic: the beat is being latched, and sd_rdata
+                // is still settling through its negedge capture. Pushing
+                // from HERE was the half-cycle crossing; S_RD_PUSH pays the
+                // register instead.
+            end
+            S_RD_PUSH: begin
+                if (fdd_request[0]) begin
                     mgmt_addr = 16'hF20F;
-                    mgmt_dout = {8'h00, sd_rdata[7:0]};
+                    mgmt_dout = {8'h00, beat_data};
                     mgmt_wr   = 1'b1;
                 end
             end

@@ -1189,6 +1189,19 @@ wire fifo_to_pc   = (state == S_WAIT_FOR_EMPTY_READ_FIFO);
 wire fifo_pc_wr   = ((ndma_write || (~execute_ndma && dma_ack) || (~execute_ndma && dma_has_terminated)) && ~fifo_full);
 wire fifo_pc_rd   = (ndma_read || (~execute_ndma && dma_ack));
 
+// The serve side (an mgmt write to 0xF, from the RAM-image server or the
+// firmware bridge) is taken ONLY while a fill is actually waiting for it
+// and only while the sector still has room. The server pushes exactly
+// sector_len bytes per request and re-checks the request bit on its own
+// push cycle, so neither term engages in a healthy transfer -- they are the
+// backstop that keeps a straggler byte (a beat that raced its command's
+// abort, a re-serve of an already-filled sector) from being INSERTED into
+// a draining FIFO or piled onto a full one: every path that leaves
+// S_SD_READ_WAIT_FOR_DATA either has sector_len bytes buffered (drain) or
+// clears the FIFO (S_IDLE), so a push in any other state is by definition
+// unwanted and is dropped rather than mixed into the byte stream.
+wire fifo_srv_wr = fifo_write && (state == S_SD_READ_WAIT_FOR_DATA) && ~fifo_full;
+
 simple_fifo #(
 	.width      (8),
 	.widthu     (11)
@@ -1200,7 +1213,7 @@ fifo_to_floppy_inst (
 	.sclr       (state == S_IDLE),
 
 	.data       (fifo_from_pc ? (execute_ndma ? io_writedata : dma_has_terminated ? 8'h00 : dma_readdata) : mgmt_writedata[7:0]),
-	.wrreq      (fifo_from_pc ? fifo_pc_wr : fifo_write),
+	.wrreq      (fifo_from_pc ? fifo_pc_wr : fifo_srv_wr),
 
 	.rdreq      (fifo_to_pc ? fifo_pc_rd : fifo_read),
 	.q          (fifo_q),

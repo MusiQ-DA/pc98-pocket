@@ -428,16 +428,21 @@ jobs:
       - name: RAM-image serve keeps sector bytes in order under firmware mgmt traffic
         run: |
           S=fpga/core
-          # The whole serve chain with the real arbiter: fdd_ramimg pushes
-          # FIFO bytes through the management bus while a firmware-traffic
-          # generator lands non-F2 reads on the push cycles. Without the
-          # mgmt_arb strobe fence those reads arrive as nibble-F FIFO pops
-          # and the guest receives the sector rotated -- the regression this
-          # step locks out.
+          # The whole serve chain against the REAL six-port SDRAM
+          # controller and model, with a display-fetch-shaped contender on
+          # port D and firmware-traffic collisions on the mgmt bus:
+          # fdd_ramimg pushes FIFO bytes through mgmt_arb while floppy.v
+          # drains them through the DMA model, multi-sector reads included
+          # (the fill/drain alternation a sequential file load takes).
+          # Without the mgmt_arb strobe fence the firmware reads arrive as
+          # nibble-F FIFO pops and the sector lands rotated; a push that
+          # presents the shared SDRAM read register combinationally loses
+          # the half-cycle race and lands the previous transaction's word.
           verilator --binary --timing -Wno-fatal --top-module tb_ramimg_fdc \
             -Isim \
             $S/common/floppy.v $S/common/simple_fifo.v \
             $S/mgmt_arb.sv $S/fdd_ramimg.sv \
+            $S/sdram_shim.sv $S/sdram_mp.sv sim/sdram_model.sv \
             sim/stub_dcfifo.sv sim/tb_fdd_dma_model.sv \
             sim/tb_ramimg_fdc.sv -o rf --Mdir obj_ramimgfdc
           ./obj_ramimgfdc/rf | tee ramimgfdc.log
