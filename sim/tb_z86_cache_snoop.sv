@@ -347,8 +347,12 @@ module tb_z86_cache_snoop;
 
         // ---- T7: back-to-back commits one cycle apart --------------------
         // Two commits on consecutive edges, second one split across lines.
+        // The word's SECOND line is primed first so a dropped kill shows:
+        // the straddle arms a second-line kill that loses the tag-write
+        // slot to the next edge's commit -- it must retry, not vanish.
         ext_byte(20'h34000, 8'h01);
         ext_byte(20'h34010, 8'h02);
+        check(20'h34020, 8'hA1, "T7 prime second line");
         // now a pair with no gap between the pulses
         mem[20'h3401F] = 8'h03; mem[20'h34020] = 8'h04;
         @(posedge clk);
@@ -403,6 +407,69 @@ module tb_z86_cache_snoop;
                          dbg_sn_kills, c0 + 2);
             end
             check(20'h3F010, 8'h58, "T8 span wrote the watched line");
+        end
+
+        // ---- T9: a kill landing on ANOTHER line's install edge ------------
+        // The install's tag write and the snoop's kill share t_we/t_wa/t_wd,
+        // and the FSM's assignment is the later one in the always block, so
+        // a commit arriving on the fill's install edge for any line BUT the
+        // filled one had its kill silently overwritten: the commit's line
+        // kept its VALID tag over pre-commit data while the snoop feed (and
+        // the witness counter) showed the kill as fired. That is the
+        // dropped-kill window behind the metal failure -- kills counted on
+        // the watched line, yet 0x373A3 still served its stale 0xA1. Sweep
+        // a byte commit to a CACHED line across the fill's completion
+        // edges; every offset must leave the committed line fresh.
+        for (int k = 0; k <= 8; k++) begin
+            automatic logic [19:0] fl = 20'h35000 + 20'(20'h100 * k);
+            automatic logic [19:0] cm = 20'h36000 + 20'(20'h10 * k);
+            automatic logic [7:0]  v  = 8'hC0 + 8'(k);
+            automatic int beats = 0;
+            check(cm, 8'hA1, "T9 prime committed line");
+            @(posedge clk);                     // a read of fl: miss -> fill
+            rd_addr = fl; rd = 1;
+            @(posedge clk);
+            rd = 0;
+            while (beats < 16) begin
+                @(posedge clk);
+                if (f_rvalid) beats++;
+            end
+            // B was the last beat's edge; k edges later the commit fires
+            // (k=3 is the install edge itself)
+            repeat (k) @(posedge clk);
+            mem[cm] = v;                        // port-A byte commits
+            sn_v <= 1; sn_addr <= cm; sn_len <= 4'd0;
+            @(posedge clk);
+            sn_v <= 0;
+            while (!rd_ready) @(posedge clk);   // the fill's read finishes
+            check(cm, v, "T9 kill beside an install must land");
+        end
+
+        // ---- T9b: the second line of a straddling word, same window ------
+        // A word commit whose SECOND line is the cached one arms its kill
+        // one edge after the pulse -- landing exactly on the install edge
+        // when the pulse is on f_done's edge (k=2). The pending second-line
+        // kill must not be overwritten by the install either.
+        begin
+            automatic logic [19:0] cm = 20'h37000;
+            automatic int beats = 0;
+            check(cm, 8'hA1, "T9b prime committed line");
+            @(posedge clk);                     // a read of 0x37100: fill
+            rd_addr = 20'h37100; rd = 1;
+            @(posedge clk);
+            rd = 0;
+            while (beats < 16) begin
+                @(posedge clk);
+                if (f_rvalid) beats++;
+            end
+            repeat (2) @(posedge clk);          // f_done's edge: pulse here
+            mem[cm - 20'd1] = 8'hD1; mem[cm] = 8'hD2;
+            sn_v <= 1; sn_addr <= cm - 20'd1; sn_len <= 4'd1;
+            @(posedge clk);
+            sn_v <= 0;
+            while (!rd_ready) @(posedge clk);
+            check(cm, 8'hD2, "T9b second-line kill beside an install");
+            check(cm - 20'd1, 8'hD1, "T9b first-line kill landed");
         end
 
         drain();

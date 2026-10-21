@@ -38,6 +38,15 @@
 //  suppresses the install's valid bit the same way (sn_ours in S_FILL,
 //  plus the in-flight guard for one accepted on f_done's own edge).
 //
+//  The tag-write SLOT is guarded as well: the install and a kill share
+//  t_we/t_wa/t_wd, and the FSM's assignment is the later one in the block,
+//  so a kill racing the install of ANOTHER line was silently overwritten
+//  -- the kill "fired" (the snoop feed, and the witness counter, saw it)
+//  but never reached the tag RAM, and the commit's line went on serving
+//  its pre-commit data (T9). Installs now defer their valid bit to any
+//  kill on their edge; a second-line kill that loses the slot to a new
+//  commit stays armed and retries (T7).
+//
 //  Clocking. This runs on the FREE clk_chipset, not the bridge's gated CPU
 //  clock, because port F and the snoop are pulses on the free clock. `ce`
 //  is the bridge's zet_edge: high on the clk posedges where the gated clock
@@ -384,14 +393,21 @@ module z86_cache #(
         kill <= (t_we    && (t_wa  == look_idx))
               | (sn_ours && (sn_i0 == look_idx))
               | (sn2_v   && (sn2_i == look_idx));
-        if (sn2_v) begin
+        // A second-line kill that loses the single tag-write slot to a new
+        // sn_ours stays armed and retries the next edge instead of being
+        // dropped (back-to-back pulses, T7): sn_ours keeps the slot, sn2_v
+        // keeps its address. Two straddles arriving within one edge would
+        // still be more than the one pending slot holds; the serialized
+        // shim spaces port-A commits at least two edges apart, so that
+        // never arises.
+        if (sn2_v && !sn_ours) begin
             t_we <= 1'b1; t_wa <= sn2_i; t_wd <= '0;
             sn2_v <= 1'b0;
         end
         if (sn_ours) begin
             t_we <= 1'b1; t_wa <= sn_i0; t_wd <= '0;
-            sn2_v <= (sn_i1 != sn_i0);
-            sn2_i <= sn_i1;
+            sn2_v <= sn2_v | (sn_i1 != sn_i0);
+            if (!sn2_v) sn2_i <= sn_i1;
         end
 
         // ---------------- port F engine (not reset by the CPU) ----------
@@ -625,16 +641,22 @@ module z86_cache #(
           S_FILL: if (fill_done) begin
             fill_done <= 1'b0;
             fill_live <= 1'b0;
-            // Install the line unless a snoop got to it this very edge, or
-            // its invalidating tag write is still one edge in flight (the
-            // commit was accepted on f_done's own edge; sdram_mp cannot
-            // finish a port-A write and a fill together today, but the
-            // guard is cheap insurance against future scheduling). The
-            // data still lands -- only the valid bit stays down, so the
-            // lookup re-fills from the committed SDRAM.
+            // Install the line's DATA always, but its valid bit only when
+            // the snoop is issuing NO kill this edge -- any index, not just
+            // this line's. t_we/t_wa/t_wd hold one write, and this FSM's
+            // assignment sits LATER in the block than the snoop's, so an
+            // install that raced a kill for another line used to overwrite
+            // it: the commit's line kept its VALID tag over pre-commit data
+            // while the snoop feed -- and the witness counter, which counts
+            // the feed -- showed the kill as fired. That dropped-kill
+            // window is the metal 0xA1-vs-0x38 (tb_z86_cache_snoop T9):
+            // the tag was believed invalidated, yet stale data served.
+            // Deferring this line's valid bit costs one refill, nothing
+            // else. The in-flight term keeps covering a kill loaded on
+            // f_done's own edge (sdram_mp cannot land a port-A write and a
+            // fill together today; insurance against future scheduling).
             d_we <= 1'b1; d_wa <= idx_of(fill_p); d_be <= 16'hFFFF; d_wd <= lb;
-            if (!(sn_ours && (sn_i0 == idx_of(fill_p) || sn_i1 == idx_of(fill_p)))
-                && !(sn2_v && sn2_i == idx_of(fill_p))
+            if (!sn_ours && !sn2_v
                 && !(t_we && !t_wd[TAG_BITS] && t_wa == idx_of(fill_p))) begin
                 t_we <= 1'b1; t_wa <= idx_of(fill_p); t_wd <= {1'b1, tag_of(fill_p)};
             end
