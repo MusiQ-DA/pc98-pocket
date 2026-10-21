@@ -27,6 +27,17 @@
 //  no window in between. The CPU's own stores update the line in place, and
 //  the fetch unit already snoops them for its buffer.
 //
+//  The lookup itself races the snoop on two edges, and both must lose to
+//  the snoop: the invalidating tag write is registered, so a commit
+//  accepted on the lookup's read edge only reaches the tag RAM the edge
+//  after (the kill register), and one accepted on the compare edge is in
+//  the SDRAM already (the sn_hit term on hit). Either window left the
+//  stale line serving -- the SuperDepth 0xA1-vs-0x38 failure, where the
+//  FDC's DMA byte landed in a line the ITF memory test had cached
+//  (tb_z86_cache_snoop T6). A commit accepted while a fill is installing
+//  suppresses the install's valid bit the same way (sn_ours in S_FILL,
+//  plus the in-flight guard for one accepted on f_done's own edge).
+//
 //  Clocking. This runs on the FREE clk_chipset, not the bridge's gated CPU
 //  clock, because port F and the snoop are pulses on the free clock. `ce`
 //  is the bridge's zet_edge: high on the clk posedges where the gated clock
@@ -225,7 +236,14 @@ module z86_cache #(
     reg  [4:0]  w5f;
 
     // Lookups the snoop raced: a tag write at the edge the lookup read, or
-    // during the compare, of the same index makes it a miss.
+    // during the compare, of the same index makes it a miss. Two edges
+    // matter because the tag write is registered: sn_ours's edge only
+    // LOADS t_we/t_wa (the RAM write lands the edge after), so a lookup
+    // that read the tags on sn_ours's own edge sampled the pre-invalidate
+    // contents and would otherwise hit stale -- the FDC-DMA window
+    // (tb_z86_cache_snoop T6). The t_we term covers the next edge, where
+    // the write lands in the same edge the lookup read (old data on a
+    // read-during-write); sn2_v re-queues its write the same way.
     reg         kill;
 
     // ---- write buffer and port F --------------------------------------
@@ -252,9 +270,6 @@ module z86_cache #(
     wire [3:0]  c_off = c_ab[3:0];
     // A word whose second byte is in the next line.
     wire        c_straddle = c_word && (c_a[3:0] == 4'hF);
-
-    wire        hit = t_q[TAG_BITS] && (t_q[TAG_BITS-1:0] == tag_of(c_p)) && !kill;
-    wire [127:0] line = (st == S_SERVE) ? lb : d_q;
 
     // ---- what the next edge's RAM read should address ------------------
     // IDLE picks the request (same priority as below), CMP a straddle's
@@ -292,6 +307,17 @@ module z86_cache #(
     wire [IDX_BITS-1:0] sn_i0 = idx_of(sn_addr[20:0]);
     wire [IDX_BITS-1:0] sn_i1 = idx_of(sn_end);
 
+    // The snoop also guards the compare combinationally: a commit arriving
+    // on the very edge the hit is judged is already in the SDRAM (sn_v is
+    // sdram_shim's a_wr_* completion pulse), but the registered kill only
+    // lands the edge after -- without this term that edge hit stale
+    // (tb_z86_cache_snoop T6 off=0). look_idx equals idx_of(c_p) in CMP.
+    wire        sn_hit = (sn_ours && (sn_i0 == look_idx))
+                      || (sn2_v  && (sn2_i == look_idx));
+    wire        hit = t_q[TAG_BITS] && (t_q[TAG_BITS-1:0] == tag_of(c_p))
+                   && !kill && !sn_hit;
+    wire [127:0] line = (st == S_SERVE) ? lb : d_q;
+
     // Byte enables and data for a write hit at c_off (one or two bytes).
     wire        wr_both = c_word && !c_straddle && !part;
     wire [15:0] w_be   = wr_both ? (16'b11 << c_off) : (16'b1 << c_off);
@@ -315,7 +341,9 @@ module z86_cache #(
         // and a read of the same index on this edge still sees the old
         // contents. A tag write racing the lookup makes it a miss; a data
         // write is never raced -- IDLE waits it out (below).
-        kill <= t_we && (t_wa == look_idx);
+        kill <= (t_we    && (t_wa  == look_idx))
+              | (sn_ours && (sn_i0 == look_idx))
+              | (sn2_v   && (sn2_i == look_idx));
         if (sn2_v) begin
             t_we <= 1'b1; t_wa <= sn2_i; t_wd <= '0;
             sn2_v <= 1'b0;
@@ -557,10 +585,17 @@ module z86_cache #(
           S_FILL: if (fill_done) begin
             fill_done <= 1'b0;
             fill_live <= 1'b0;
-            // Install the line unless a snoop got to it this very edge.
+            // Install the line unless a snoop got to it this very edge, or
+            // its invalidating tag write is still one edge in flight (the
+            // commit was accepted on f_done's own edge; sdram_mp cannot
+            // finish a port-A write and a fill together today, but the
+            // guard is cheap insurance against future scheduling). The
+            // data still lands -- only the valid bit stays down, so the
+            // lookup re-fills from the committed SDRAM.
             d_we <= 1'b1; d_wa <= idx_of(fill_p); d_be <= 16'hFFFF; d_wd <= lb;
             if (!(sn_ours && (sn_i0 == idx_of(fill_p) || sn_i1 == idx_of(fill_p)))
-                && !(sn2_v && sn2_i == idx_of(fill_p))) begin
+                && !(sn2_v && sn2_i == idx_of(fill_p))
+                && !(t_we && !t_wd[TAG_BITS] && t_wa == idx_of(fill_p))) begin
                 t_we <= 1'b1; t_wa <= idx_of(fill_p); t_wd <= {1'b1, tag_of(fill_p)};
             end
             st <= S_SERVE;

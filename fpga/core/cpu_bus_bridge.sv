@@ -1101,12 +1101,14 @@ module cpu_bus_bridge #(
     wire wr_ovl1 = (srv_beg < pf_reach1) && (srv_end_a > {1'b0, pf_base1});
     wire pf_fill_done = pair_done && (cur_pf || cur_fillm);
 
-    // Snoop span in guest byte space: word address -> bytes, words-1 ->
-    // one-past-last. Spans are small (<= 64 B), so a plain sector-tag
-    // range compare over [first, last] covers the straddle cases without
-    // wraparound arithmetic.
-    wire [24:0] sn_beg  = {sn_addr, 1'b0};
-    wire [24:0] sn_end  = sn_beg + {19'b0, sn_len, 1'b0} + 25'd2;
+    // Snoop span in guest byte space. a_wr_* carries the guest byte
+    // address itself -- RAM.sv keeps one guest byte per SDRAM word, so the
+    // word address IS the byte address -- with words-1 in sn_len. Spans
+    // are small (<= 2 B), so a plain sector-tag range compare over
+    // [first, last] covers the straddle cases without wraparound
+    // arithmetic.
+    wire [24:0] sn_beg  = {5'b0, sn_addr[19:0]};
+    wire [24:0] sn_end  = sn_beg + {20'd0, sn_len} + 25'd1;
     wire [24:0] sn_last = sn_end - 25'd1;
     wire [14:0] sn_sec0 = sn_beg[19:5];
     wire [14:0] sn_sec1 = sn_last[19:5];
@@ -1455,9 +1457,10 @@ module cpu_bus_bridge #(
             // Foreign commits (DMA, loader -- and the bridge's own posted
             // drains, which already killed their window at push time, so
             // those are no-ops here): kill only the windows the committed
-            // span overlaps. sn_addr is a word address and sn_len counts
-            // words-1; the span may straddle up to three 32-byte sectors,
-            // so compare sector tags across the whole span.
+            // span overlaps. sn_addr is the guest byte address (one guest
+            // byte per SDRAM word) and sn_len counts bytes-1; the span may
+            // straddle two 32-byte sectors, so compare sector tags across
+            // the whole span.
             if (sn_v) begin
                 if (sn_hit0) begin
                     pf_cnt0    <= 6'd0;
