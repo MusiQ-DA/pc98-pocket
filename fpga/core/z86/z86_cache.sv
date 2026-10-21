@@ -47,6 +47,18 @@
 //  kill on their edge; a second-line kill that loses the slot to a new
 //  commit stays armed and retries (T7).
 //
+//  And the eviction itself clears the tag at the MISS edge, before the
+//  fill ever runs: a DEFERRED install leaves the tag untouched, which
+//  used to mean the index's previous occupant kept its VALID tag over
+//  the new line's just-installed data -- the evicted address "hit" and
+//  served the filler's bytes, and no commit ever killed it, because
+//  nothing writes a 16 KB alias the filler displaced (T10). With the
+//  victim cleared at the miss, a deferred install just leaves the index
+//  invalid -- one refill, never a lie. The eviction write shares t_we
+//  with the snoop, so on a busy edge it parks (park_v) and retries, one
+//  step behind the snoop's own pending kill: a commit's kill always
+//  outranks it.
+//
 //  Clocking. This runs on the FREE clk_chipset, not the bridge's gated CPU
 //  clock, because port F and the snoop are pulses on the free clock. `ce`
 //  is the bridge's zet_edge: high on the clk posedges where the gated clock
@@ -267,6 +279,22 @@ module z86_cache #(
     // read-during-write); sn2_v re-queues its write the same way.
     reg         kill;
 
+    // A parked EVICTION. The fill path now clears the victim's tag at the
+    // MISS edge, not at the install: 2aff963's install defers its valid
+    // bit whenever a kill shares its edge, and the deferred install left
+    // the index's OLD tag -- still valid -- over the NEW line's installed
+    // data. The evicted line's address then "hit" and served the filler's
+    // bytes, and no commit ever killed it (nothing writes the victim):
+    // tb_z86_cache_snoop T10, and on metal every deferred install under a
+    // streaming DMA corrupts whatever 16 KB alias lives at the index.
+    // Clearing at the miss edge means the tag never lies: it is invalid
+    // from the eviction decision until the fresh install lands (or defers,
+    // which now just leaves it invalid). The write has to share t_we with
+    // the snoop, so a busy edge parks it here and retries -- like sn2_v,
+    // ahead of the snoop's assignments so a kill never loses its slot.
+    reg         park_v;
+    reg  [IDX_BITS-1:0] park_i;
+
     // ---- write buffer and port F --------------------------------------
     reg         wb_full;                // a store waits for port F
     reg  [20:0] wb_p0, wb_p1;           // physical address of each byte
@@ -399,7 +427,16 @@ module z86_cache #(
         // keeps its address. Two straddles arriving within one edge would
         // still be more than the one pending slot holds; the serialized
         // shim spaces port-A commits at least two edges apart, so that
-        // never arises.
+        // never arises. The parked eviction retries the same way, one step
+        // further back: the snoop's kills outrank it, so it can never
+        // steal the slot -- it only waits for a kill-free edge, and a fill
+        // gives it thirty-odd.
+        if (park_v && !sn2_v && !sn_ours) begin
+            t_we   <= 1'b1;
+            t_wa   <= park_i;
+            t_wd   <= '0;
+            park_v <= 1'b0;
+        end
         if (sn2_v && !sn_ours) begin
             t_we <= 1'b1; t_wa <= sn2_i; t_wd <= '0;
             sn2_v <= 1'b0;
@@ -490,6 +527,7 @@ module z86_cache #(
             fill_live <= 1'b0;
             fill_done <= 1'b0;
             io_rec    <= 8'hFF;
+            park_v    <= 1'b0;          // S_FLUSH clears every tag anyway
         end else case (st)
           S_FLUSH: begin
             // Clear every tag. The snoop keeps the cache coherent on its
@@ -597,6 +635,23 @@ module z86_cache #(
                     fill_live <= 1'b1;
                     fill_done <= 1'b0;
                     st        <= S_FILL;
+                    // Evict the index's occupant NOW, not at the install.
+                    // The install defers its tag write whenever a kill
+                    // shares its edge (T9), and a deferred install used to
+                    // leave the OLD tag valid over the NEW data -- the
+                    // evicted line served the filler's bytes and nothing
+                    // ever killed it (T10). Clearing here means a deferred
+                    // install just leaves the tag invalid: one refill, no
+                    // lie. The t_we slot belongs to the snoop first, so a
+                    // busy edge parks the clear and the retry above lands
+                    // it long before any fill completes. Writing '0 can
+                    // never undo a kill (both invalidate), so unlike the
+                    // install there is no in-flight term to owe.
+                    if (!sn_ours && !sn2_v) begin
+                        t_we <= 1'b1; t_wa <= idx_of(c_p); t_wd <= '0;
+                    end else begin
+                        park_v <= 1'b1; park_i <= idx_of(c_p);
+                    end
                 end
             end else begin
                 // A hit, or the line just filled (line = lb).
@@ -750,6 +805,7 @@ module z86_cache #(
         sn2_v = 1'b0; st = S_FLUSH; flush_i = '0; wr_ready = 1'b0;
         dbg_sn_kills = 16'd0;
         snq_v = 1'b0; snq_i = '0; snq_wi = '0;
+        park_v = 1'b0; park_i = '0;
     end
 
     wire _unused = &{1'b0, ld_a1, rd_a1};

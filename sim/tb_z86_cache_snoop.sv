@@ -445,6 +445,111 @@ module tb_z86_cache_snoop;
             check(cm, v, "T9 kill beside an install must land");
         end
 
+        // ---- T10: the PREVIOUS OCCUPANT of a filled index -----------------
+        // 2aff963 made the install defer its valid bit whenever any kill
+        // shares its edge -- but the DATA still installs, and the index's
+        // OLD tag is left VALID over the NEW line's bytes. The old line's
+        // address then "hits" and serves foreign data, and no commit ever
+        // kills it (nothing writes the victim). T9 checked only the
+        // committed line, never the evicted occupant -- on metal the index
+        // almost always holds a live line (16 KB direct-mapped under a
+        // >16 KB footprint), so every deferred install corrupts whatever
+        // 16 KB alias lives there. Prime a victim line, evict it with a
+        // fill whose install edge carries a commit, then read the victim:
+        // it must serve its OWN bytes (a refill), not the filler's.
+        for (int k = 0; k <= 8; k++) begin
+            automatic logic [19:0] vic = 20'h38000 + 20'(20'h10 * k);   // victim
+            automatic logic [19:0] fl  = vic + 20'h4000;   // same index, 16 KB alias
+            automatic logic [19:0] cm  = 20'h39000 + 20'(20'h10 * k);   // committed line
+            automatic logic [7:0]  cv  = 8'hE0 + 8'(k);
+            automatic int beats = 0;
+            // distinct bytes everywhere: victim F0-ish, filler A1-pattern
+            mem[vic] = 8'hF0 + 8'(k); mem[fl] = 8'hBA;
+            check(vic, 8'hF0 + 8'(k), "T10 prime victim");
+            @(posedge clk);                     // a read of fl: miss -> fill
+            rd_addr = fl; rd = 1;
+            @(posedge clk);
+            rd = 0;
+            while (beats < 16) begin
+                @(posedge clk);
+                if (f_rvalid) beats++;
+            end
+            // B was the last beat's edge; k edges later the commit fires
+            // (k=3 is the install edge itself)
+            repeat (k) @(posedge clk);
+            mem[cm] = cv;                       // port-A byte commits
+            sn_v <= 1; sn_addr <= cm; sn_len <= 4'd0;
+            @(posedge clk);
+            sn_v <= 0;
+            while (!rd_ready) @(posedge clk);   // the filler's read lands
+            // the victim must NOT serve the filler's 0xBA
+            check(vic, 8'hF0 + 8'(k), "T10 evicted occupant must not lie");
+            // and the filler must serve its own byte
+            check(fl, 8'hBA, "T10 filler fresh");
+        end
+
+        // ---- T10b: the eviction PARKED behind a kill on the miss edge -----
+        // A commit landing exactly on the miss edge takes the tag-write
+        // slot, so the eviction parks and must retry -- the victim may not
+        // serve the filler's bytes even then, and the commit's own line
+        // must still die.
+        begin
+            automatic logic [19:0] vic = 20'h3A000;
+            automatic logic [19:0] fl  = 20'h3E000;   // same index
+            automatic logic [19:0] cm  = 20'h3B000;
+            automatic int beats = 0;
+            mem[vic] = 8'h9C; mem[fl] = 8'h5D; mem[cm] = 8'h6E;
+            check(vic, 8'h9C, "T10b prime victim");
+            check(cm,  8'h6E, "T10b prime committed line");
+            // a read of fl: miss; the commit fires on the same edge
+            @(posedge clk);
+            rd_addr = fl; rd = 1;
+            sn_v <= 1; sn_addr <= cm; sn_len <= 4'd0;
+            @(posedge clk);
+            rd = 0; sn_v <= 0;
+            while (!rd_ready) @(posedge clk);
+            check(vic, 8'h9C, "T10b parked eviction still lands");
+            check(cm,  8'h6E, "T10b the kill that took the slot landed");
+            check(fl,  8'h5D, "T10b filler fresh");
+        end
+
+        // ---- T11: the FETCH path through the same eviction window --------
+        // The metal-shaped case: the filler is the fetch unit's line load
+        // (code), the victim a data line -- or the reverse; both go through
+        // the same S_CMP miss. The evicted occupant must never serve the
+        // filler's bytes.
+        begin
+            automatic logic [19:0] vic = 20'h1C000;   // data line
+            automatic logic [19:0] fl  = 20'h20000;   // code line, same index
+            automatic logic [19:0] cm  = 20'h1D000;
+            automatic int beats = 0;
+            mem[vic] = 8'h11; mem[fl] = 8'h22; mem[cm] = 8'h33;
+            check(vic, 8'h11, "T11 prime victim");
+            check(cm,  8'h33, "T11 prime committed line");
+            // a code load of fl misses; the commit rides the install edge
+            @(posedge clk);
+            ld_addr = fl; ld_req <= ~ld_req;
+            @(posedge clk);
+            while (beats < 16) begin
+                @(posedge clk);
+                if (f_rvalid) beats++;
+            end
+            repeat (3) @(posedge clk);          // the install edge
+            mem[cm] = 8'h44;
+            sn_v <= 1; sn_addr <= cm; sn_len <= 4'd0;
+            @(posedge clk);
+            sn_v <= 0;
+            while (ld_ack !== ld_req) @(posedge clk);
+            for (int i = 0; i < 16; i++) ld_snap[i] = ld_data[8*i +: 8];
+            if (ld_snap[0] !== 8'h22) begin
+                errors++;
+                $display("FAIL: T11: ld line byte 0 got %02x expected 22",
+                         ld_snap[0]);
+            end
+            check(vic, 8'h11, "T11 evicted data line must not lie");
+            check(cm,  8'h44, "T11 committed line died");
+        end
+
         // ---- T9b: the second line of a straddling word, same window ------
         // A word commit whose SECOND line is the cached one arms its kill
         // one edge after the pulse -- landing exactly on the install edge
