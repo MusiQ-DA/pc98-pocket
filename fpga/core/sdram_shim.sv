@@ -188,7 +188,24 @@ module sdram_shim #(
     // E (the floppy carve-out, never cached) is not snooped.
     output logic                              a_wr_v,
     output logic [ADDR_BITS_PUB-1:0]          a_wr_addr,
-    output logic [LEN_BITS_PUB-1:0]           a_wr_len
+    output logic [LEN_BITS_PUB-1:0]           a_wr_len,
+    // JTAG probe (PC98_JTAG): the wedge tap's port-A / controller view.
+    //   [39:32] a_req_age  -- clk cycles req has waited for a grant
+    //                         (saturates 0xFF; the round-robin grants port A
+    //                         within ~a refresh + one 16-beat burst, so a
+    //                         pegged counter means starvation or a lost req)
+    //   [31:24] a_busy_age -- clk cycles the taken transaction has run
+    //                         without p_done (saturates; a normal word is
+    //                         ~10-40 clk incl. refresh)
+    //   [23:18] mp_req     -- the six live p_req lines, {F,E,D,C,B,A}
+    //   [17:4]  mp dbg     -- sdram_mp's {state[3:0], rr_ptr[2:0],
+    //                         refresh_due, pre_guard!=0, stat_idle, have_req,
+    //                         grant[2:0]}
+    //   [3] busy [2] req [1] we_r -- the port-A handshake registers
+    //   [0] 0
+    // Registered at the core_top boundary into the frozen wedge snapshot
+    // (probe slots 0xA2/0xA3).
+    output logic [39:0]                       dbg_w
 );
 
     localparam int ADDR_BITS = sdram_col_width + sdram_row_width + sdram_bank_width;
@@ -400,9 +417,36 @@ module sdram_shim #(
     // p_done[0] is a registered one-cycle pulse; we_r/addr_r/len_r only move
     // when !busy, and busy drops on the same edge p_done is seen, so all three
     // still describe the finished write in the pulse's cycle.
+    // Port A write commits (guest, DMA, loader), for the cache to snoop:
+    // one-cycle pulse, SDRAM word address, words - 1.
     assign a_wr_v    = mp_done[0] & we_r;
     assign a_wr_addr = ADDR_BITS_PUB'(addr_r);
     assign a_wr_len  = LEN_BITS_PUB'(len_r);
+
+    // Port-A stall ages for the wedge tap: a_req_age counts an un-granted
+    // request's wait, a_busy_age an in-flight transaction without p_done.
+    // Both saturate rather than wrap, so a wedged read shows 0xFF forever
+    // while a healthy machine never leaves single digits.
+    logic [7:0] a_req_age, a_busy_age;
+    always_ff @(posedge sdram_clock or posedge sdram_reset) begin
+        if (sdram_reset) begin
+            a_req_age  <= 8'd0;
+            a_busy_age <= 8'd0;
+        end else begin
+            if (!req | p_ack)
+                a_req_age <= 8'd0;
+            else if (a_req_age != 8'hFF)
+                a_req_age <= a_req_age + 8'd1;
+            if (!busy | p_done)
+                a_busy_age <= 8'd0;
+            else if (a_busy_age != 8'hFF)
+                a_busy_age <= a_busy_age + 8'd1;
+        end
+    end
+
+    logic [13:0] mp_dbg;
+    assign dbg_w = {a_req_age, a_busy_age, mp_req, mp_dbg,
+                    busy, req, we_r, 1'b0};
 
     sdram_mp #(
         .PORTS       (PORTS),
@@ -436,6 +480,7 @@ module sdram_shim #(
         .init_done    (init_done),
         .stat_idle    (stat_idle),
         .stat_refresh (stat_refresh),
+        .dbg          (mp_dbg),
         .sdram_a      (sdram_address),
         .sdram_ba     (sdram_ba),
         .sdram_cke    (sdram_cke),

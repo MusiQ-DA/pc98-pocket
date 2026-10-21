@@ -70,7 +70,13 @@ module upd71071_Timing_And_Control (
     output  logic           io_write_n_io,
     input   logic           ready,
     input   logic           end_of_process_n_in,
-    output  logic           end_of_process_n_out
+    output  logic           end_of_process_n_out,
+    // JTAG probe (PC98_JTAG): the wedge tap's DMA-state view --
+    // {state[2:0] (SI=0,S0,S1,S2,S3,SW,S4=6), dma_select[1:0],
+    //  hold_request, terminal_count, end_of_process_internal}. A bus
+    // wedged while the DMA owns it shows the channel parked mid-transfer;
+    // registered at the core_top boundary (slot 0xA0 low byte).
+    output  logic   [7:0]   dbg
 );
     import upd71071_Common_Package::bit2num;
 
@@ -586,6 +592,11 @@ module upd71071_Timing_And_Control (
     end
 
     assign  end_of_process_n_out = ~terminal_count;
+
+    // The wedge tap's view of the transfer engine -- see the dbg port
+    // comment above the port list.
+    assign  dbg = {3'(state), dma_select, hold_request, terminal_count,
+                   end_of_process_internal};
 
     always_comb
         for (int i = 0; i < 4; i++)

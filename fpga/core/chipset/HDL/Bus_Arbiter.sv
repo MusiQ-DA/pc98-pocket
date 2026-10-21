@@ -60,7 +60,16 @@ module BUS_ARBITER (
     // up 0x00 afterwards can be attributed to its overwriter.
     input   logic   [19:0]  watch_addr,
     output  logic   [127:0] dbg_dma3,
-    output  logic   [127:0] dbg_dma4
+    output  logic   [127:0] dbg_dma4,
+    // JTAG probe (PC98_JTAG): the wedge tap's arbiter/DMA view --
+    //   [15]   dce_pin -- the uPD71071's CE half-phase (its clock; a DMA
+    //          wedged with this frozen means the divider itself stopped)
+    //   [14]   hold_request_ff_1 [13] hold_request_ff_2 -- the grant chain
+    //   [12:8] 0
+    //   [7:0]  the uPD71071 timing engine's dbg (state, channel, HRQ, TC)
+    // Registered at the core_top boundary into the frozen wedge snapshot
+    // (probe slot 0xA0 high half).
+    output  logic   [15:0]  dbg_w
 );
 
     //
@@ -249,10 +258,19 @@ module BUS_ARBITER (
         //.address_enable                     (),
         //.address_strobe                     (),
         .memory_read_n                      (dma_memory_read_n),
-        .memory_write_n                     (dma_memory_write_n)
+        .memory_write_n                     (dma_memory_write_n),
+        .dbg                                (dma_dbg)
     );
 
     assign  terminal_count_n = ~terminal_count;
+
+    // The wedge tap's view: the DMA's own state plus this arbiter's grant
+    // chain. dce_pin is the divider's phase -- if it ever freezes the 71071
+    // stops mid-transfer with the bus granted, which is a wedge nothing
+    // downstream can clear.
+    logic [7:0] dma_dbg;
+    assign  dbg_w = {dce_pin, hold_request_ff_1, hold_request_ff_2,
+                     5'b00000, dma_dbg};
 
     assign  dbg = {hold_acknowledge, address_enable_n, dma_hold_request,
                    ext_access_request,

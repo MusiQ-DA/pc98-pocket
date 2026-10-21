@@ -185,7 +185,20 @@ module cpu_bus_bridge #(
     output wire  [15:0] dbg,
     // INTA witness for the probe: {bad_n, last_bad, cut_n, last_vec} --
     // see the counters by `assign dbg =`.
-    output wire  [31:0] dbg_inta
+    output wire  [31:0] dbg_inta,
+    // JTAG probe (PC98_JTAG): the wedge tap's engine view --
+    //   [23] cur_pf  [22] cur_fillm  [21] cur_dq  [20] cur_inta
+    //   [19] fill_ok [18] fillm_released
+    //   [17] rd_own_seen -- this byte's own SDRAM read witness latched
+    //   [16] saw_low
+    //   [15:13] wrq_cnt (posted entries)  [12:11] hit_q  [10:9] pf_dead
+    //   [8] 0
+    //   [7:0]  cmd_age -- clk cycles in B_CMD, saturating. A paced pair is
+    //          tens of clocks (a fill's price can reach ~2^7 at the slowest
+    //          CE); 0xFF at speed is a byte that never completed.
+    // Registered at the core_top boundary into the frozen wedge snapshot
+    // (probe slot 0xA4).
+    output wire  [23:0] dbg_w
 );
 
     localparam [2:0] BS_INTA = 3'b000;
@@ -1880,6 +1893,22 @@ module cpu_bus_bridge #(
 
     assign dbg = {zet_halt, inta_active, req_busy, wb_ack_i,
                   bstate, byte_idx, t_cnt, gap_cnt, cur_bs};
+
+    // The wedge tap's age: how long the current pair has sat in its
+    // command phase. Saturates; see the dbg_w port comment.
+    reg [7:0] cmd_age;
+    always @(posedge clk) begin
+        if (reset)
+            cmd_age <= 8'd0;
+        else if (bstate != B_CMD)
+            cmd_age <= 8'd0;
+        else if (cmd_age != 8'hFF)
+            cmd_age <= cmd_age + 8'd1;
+    end
+
+    assign dbg_w = {cur_pf, cur_fillm, cur_dq, cur_inta, fill_ok,
+                    fillm_released, rd_own_seen, saw_low,
+                    wrq_cnt, hit_q, pf_dead, 1'b0, cmd_age};
 
 endmodule
 

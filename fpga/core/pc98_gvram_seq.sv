@@ -191,7 +191,18 @@ module pc98_gvram_seq #(
     // there names which term denied the charger -- window, the mode bit,
     // a raw request, or the EGC stealing it -- and every-else-set-but-here
     // means egc_on fired on egc_active (slot 0x32's accel view).
-    output wire [7:0]  dbg
+    output wire [7:0]  dbg,
+    // JTAG probe (PC98_JTAG): the wedge tap's sequencer view --
+    //   [15] expand -- the access on the pins is being walked (or a svc op
+    //         owns the FSM), so a guest pass-through strobe is parked
+    //   [14] mem_rd [13] mem_wr -- the leg strobes into RAM.sv
+    //   [12] svc_gap -- the one-cycle guest-ready cover after a svc op
+    //   [11] is_read [10] is_word [9] half [8] grcg_wbatch
+    //   [7:0] nonidle_age -- clk cycles outside S_IDLE, saturating. Walks
+    //         top out around a hundred clocks; 0xFF is a wedged walk.
+    // Registered at the core_top boundary into the frozen wedge snapshot
+    // (probe slot 0xA5).
+    output wire [15:0] dbg2
 );
 
 `include "pc98_sdram_map.svh"
@@ -895,6 +906,21 @@ module pc98_gvram_seq #(
     reg [4:0] dbg_arm;
     assign dbg = {svc_req, svc_done, svc_hold,
                   (st == S_IDLE) ? dbg_arm : {st, gp}};
+
+    // The wedge tap's age: how long the walk (or a parked svc op) has held
+    // the FSM. Saturates like RAM.sv's nonidle_age.
+    reg [7:0] nonidle_age;
+    always_ff @(posedge clk) begin
+        if (reset)
+            nonidle_age <= 8'd0;
+        else if (st == S_IDLE)
+            nonidle_age <= 8'd0;
+        else if (nonidle_age != 8'hFF)
+            nonidle_age <= nonidle_age + 8'd1;
+    end
+
+    assign dbg2 = {expand, mem_rd, mem_wr, svc_gap, is_read, is_word,
+                   half, grcg_wbatch, nonidle_age};
 
     // cpu_gvram was the window qualifier until `window` moved onto the
     // address alone (see above); it stays on the port list because Chipset

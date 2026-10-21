@@ -32,7 +32,10 @@ module upd71071 (
     output  logic           address_enable,
     output  logic           address_strobe,
     output  logic           memory_read_n,
-    output  logic           memory_write_n
+    output  logic           memory_write_n,
+    // JTAG probe (PC98_JTAG): the timing engine's wedge view, passed
+    // through to Bus_Arbiter's dbg_w -- see upd71071_Timing_And_Control.
+    output  logic   [7:0]   dbg
 );
 
 
@@ -237,7 +240,8 @@ module upd71071 (
         .io_write_n_io                      (io_write_n_io),
         .ready                              (ready),
         .end_of_process_n_in                (end_of_process_n_in),
-        .end_of_process_n_out               (end_of_process_n_out)
+        .end_of_process_n_out               (end_of_process_n_out),
+        .dbg                                (dbg)
     );
 
 

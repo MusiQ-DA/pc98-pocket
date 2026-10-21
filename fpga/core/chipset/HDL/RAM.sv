@@ -174,7 +174,28 @@ module RAM (
     // refresh owns that memory. Zero on a main-RAM address and at the
     // speeds that do not model the contention.
     input   logic   [3:0]   vram_rd_wait_cycle,
-    input   logic   [3:0]   vram_wr_wait_cycle
+    input   logic   [3:0]   vram_wr_wait_cycle,
+    // JTAG probe (PC98_JTAG): drop the parked-write queue and force the
+    // FSM to IDLE. A diagnostic escape hatch for a wedged memory path --
+    // this FSM lives in the sdram_reset domain, so a guest reset (greset)
+    // cannot clear a stall it holds; the probe pulses this instead. The
+    // SDRAM transaction in flight (if any) is left alone: the shim and the
+    // controller always finish what they took, and only the bookkeeping
+    // above them is dropped.
+    input   logic           unstick,
+    // JTAG probe (PC98_JTAG): the wedge tap's RAM-side view (MSB first) --
+    //   [23] wc_pend  [22] wc_pend2  [21] wc_pend3  [20] cap_valid
+    //   [19] rd_conflicts  [18] accept_live_wr  [17] accept_live_rd
+    //   [16:14] state (IDLE=0, W1=1, W2=2, R1=3, R2=4, COMPLETE=5, WAIT=6)
+    //   [13:12] read_wait_count  [11:10] write_wait_count
+    //   [9] vram_rd_wait_count != 0  [8] vram_wr_wait_count != 0
+    //   [7:0] nonidle_age -- clk cycles outside IDLE, saturating. A
+    //          healthy access is single digits; 0xFF is a wedged FSM.
+    output  logic   [23:0]  dbg_w_ram,
+    // JTAG probe (PC98_JTAG): sdram_shim's wedge word straight through
+    // (port-A ages, per-port requests, controller state) -- see
+    // sdram_shim.sv's dbg_w port comment.
+    output  logic   [39:0]  dbg_w_sdram
 );
 
     typedef enum {IDLE, RAM_WRITE_1, RAM_WRITE_2, RAM_READ_1, RAM_READ_2, COMPLETE_RAM_RW, WAIT} state_t;
@@ -453,7 +474,8 @@ module RAM (
         .f_done             (cachef_done),
         .a_wr_v             (ram_wr_snoop_v),
         .a_wr_addr          (ram_wr_snoop_addr),
-        .a_wr_len           (ram_wr_snoop_len)
+        .a_wr_len           (ram_wr_snoop_len),
+        .dbg_w              (dbg_w_sdram)
     );
 
     // pf_beat_v may only mark words of a burst issued as a prefetch fill:
@@ -698,6 +720,19 @@ module RAM (
             accept_data       <= 8'd0;
             accept_data_hi    <= 8'd0;
             accept_word       <= 1'b0;
+        end
+        else if (unstick) begin
+            // The wedge escape hatch (see the port comment): everything the
+            // FSM owes the bus is bookkeeping -- parked bytes this pulse
+            // abandons -- and the bus masters above restart their strobes
+            // the moment memory_access_ready's idle level returns.
+            state          <= IDLE;
+            wc_pend        <= 1'b0;
+            wc_pend2       <= 1'b0;
+            wc_pend3       <= 1'b0;
+            cap_valid      <= 1'b0;
+            accept_live_wr <= 1'b0;
+            accept_live_rd <= 1'b0;
         end
         else begin
             state <= next_state;
@@ -1121,6 +1156,26 @@ module RAM (
 
     assign  dbg = {wc_pend, refresh_mode, read_flag,
                    accept_live_rd, accept_live_wr, state[2:0]};
+
+    // Non-IDLE age for the wedge tap: a healthy access passes through in a
+    // handful of clocks (a burst fill tens), so a saturated counter is the
+    // FSM itself being wedged rather than merely busy.
+    logic [7:0] nonidle_age;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset)
+            nonidle_age <= 8'd0;
+        else if (state == IDLE)
+            nonidle_age <= 8'd0;
+        else if (nonidle_age != 8'hFF)
+            nonidle_age <= nonidle_age + 8'd1;
+    end
+
+    assign  dbg_w_ram = {wc_pend, wc_pend2, wc_pend3, cap_valid,
+                         rd_conflicts, accept_live_wr, accept_live_rd,
+                         state[2:0], read_wait_count, write_wait_count,
+                         (vram_rd_wait_count != 4'd0),
+                         (vram_wr_wait_count != 4'd0),
+                         nonidle_age};
 
     // Drop witness (PC98_JTAG). Two kinds of event matter here:
     //

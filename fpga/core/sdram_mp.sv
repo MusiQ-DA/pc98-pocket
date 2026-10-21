@@ -99,6 +99,12 @@ module sdram_mp #(
     // would miss.
     output logic                             stat_idle,
     output logic                             stat_refresh,
+    // JTAG probe (PC98_JTAG): the wedge tap's controller view --
+    // {state[3:0], rr_ptr[2:0], refresh_due, pre_guard!=0, stat_idle,
+    //  have_req, grant[2:0]}. Registered at the core_top boundary into the
+    // frozen wedge snapshot (probe slots 0xA2/0xA3) so a wedged machine's
+    // arbitration position survives the reset loop it walks into after.
+    output logic [13:0]                      dbg,
 
     // SDRAM device
     output logic [ROW_BITS-1:0]              sdram_a,
@@ -141,6 +147,8 @@ module sdram_mp #(
     always_comb begin
         stat_idle    = init_done & (state == S_IDLE) & (timer == 0) & ~refresh_due;
         stat_refresh = (state == S_REF) | (state == S_REF_PRE);
+        dbg          = {4'(state), rr_ptr, refresh_due, (pre_guard != 16'd0),
+                        stat_idle, have_req, grant};
     end
 
     // ---------------------------------------------------------------- arbiter

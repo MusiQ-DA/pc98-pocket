@@ -1737,6 +1737,92 @@ module core_top (
         end
     end
 
+    // ------------------------------------------------------------------
+    // THE WEDGE TAP (PC98_JTAG): a frozen post-mortem of the memory path.
+    //
+    // The wedge this hunts: the machine stops retiring instructions (slot
+    // 0x17 static, fetch cursor slot 0x18 static) and greset does not cure
+    // it -- the stuck state lives in the sdram_reset domain (RAM.sv,
+    // pc98_gvram_seq, sdram_shim/sdram_mp), which a guest reset never
+    // touches. Worse, the machine often walks into a reset loop afterwards
+    // that wipes the greset-able witnesses (Bus_Arbiter, DMA, READY, the
+    // bridge) and dirties memory. So: the moment retirement has been
+    // static for ~390 ms (2^24 clk_chipset) -- with the CPU running, not
+    // paused, not held in reset, not probe-stopped -- every tap below is
+    // FROZEN. The reset loop can then do its worst; slots 0xA0-0xA7 read
+    // the machine as it died.
+    //
+    // The taps, registered here at the core_top boundary (the probe mux's
+    // dbg cone is a known Quartus S2T internal-error hotspot -- one
+    // register stage hides it, same as v30_dbg_regs / z86_sn_kills):
+    //   snap_arb    Bus_Arbiter {dce_pin, hrq_ff1, hrq_ff2, 5'0} +
+    //               upd71071 {state, channel, HRQ, TC, EOP}   (slot A0 hi)
+    //   snap_rdy    READY {wait, CE-sampled wait, Qn, bus-state edges} (A0)
+    //   snap_arbhold the arbiter's live hold byte (slot 0x19's, frozen) (A0 lo)
+    //   snap_ram    RAM.sv {park FIFO, rd_conflicts, FSM, wait counts,
+    //               nonidle age}                                    (slot A1)
+    //   snap_sdram  shim/mp {port-A req/busy ages, per-port reqs,
+    //               controller state/grant}                  (slots A2/A3)
+    //   snap_bridge cpu_bus_bridge {pair kind flags, witnesses, posted
+    //               depth, B_CMD age}                                 (A4)
+    //   snap_seq    pc98_gvram_seq {expand, leg strobes, walk flags,
+    //               nonidle age} + READY-facing chipset_dbg2          (A5)
+    //   snap_chip2  {processor_ready, memory_access_ready, dma_ready,
+    //               DACKn, no-command} -- frozen                      (A5)
+    //   snap_retired/snap_pc  the liveness pair the runbook polls      (A6/A7)
+    // Write slot 0x08: [0] clear the latch and re-arm, [1] pulse
+    // CHIPSET's ram_unstick (drop RAM.sv's parked queue, force IDLE) --
+    // an A/B for "is the stuck state RAM.sv's bookkeeping".
+    // ------------------------------------------------------------------
+    reg         wedge_latch = 1'b0;
+    reg  [23:0] wedge_static = 24'd0;
+    reg  [23:0] wedge_ret_prev = 24'd0;
+    reg  [15:0] snap_arb      = 16'd0;
+    reg  [7:0]  snap_rdy      = 8'd0;
+    reg  [7:0]  snap_arbhold  = 8'd0;
+    reg  [23:0] snap_ram      = 24'd0;
+    reg  [39:0] snap_sdram    = 40'd0;
+    reg  [23:0] snap_bridge   = 24'd0;
+    reg  [15:0] snap_seq      = 16'd0;
+    reg  [7:0]  snap_chip2    = 8'd0;
+    reg  [23:0] snap_retired  = 24'd0;
+    reg  [19:0] snap_pc       = 20'd0;
+    reg         ram_unstick_r = 1'b0;
+    // Retirement stops legitimately while the core is paused, probe-stopped
+    // or in reset -- those windows must not arm the latch.
+    wire wedge_run = ~reset_cpu & ~pause_core & ~z86_dbg_stopped
+                   & ~jtag_dbg_stop;
+    always_ff @(posedge clk_chipset) begin
+        if (probe_wr_pulse && probe_waddr_c == 7'h08
+            && probe_wdata_c[0]) begin
+            wedge_latch   <= 1'b0;
+            wedge_static  <= 24'd0;
+        end else if (!wedge_latch && wedge_run) begin
+            wedge_ret_prev <= retired_cnt;
+            if (retired_cnt == wedge_ret_prev) begin
+                wedge_static <= wedge_static + 24'd1;
+                if (wedge_static == 24'hFF_FFFF)
+                    wedge_latch <= 1'b1;
+            end else
+                wedge_static <= 24'd0;
+        end
+        if (!wedge_latch) begin
+            snap_arb     <= cs_w_arb;
+            snap_rdy     <= cs_w_rdy;
+            snap_arbhold <= chipset_dbg[7:0];
+            snap_ram     <= cs_w_ram;
+            snap_sdram   <= cs_w_sdram;
+            snap_bridge  <= bridge_dbg_w;
+            snap_seq     <= cs_w_seq;
+            snap_chip2   <= chipset_dbg2;
+            snap_retired <= retired_cnt;
+            snap_pc      <= zet_pc;
+        end
+        ram_unstick_r <= (probe_wr_pulse && probe_waddr_c == 7'h08
+                          && probe_wdata_c[1]);
+    end
+    assign ram_unstick_w = ram_unstick_r;
+
     always_comb begin
         case (probe_addr)
             // The bisect-era taps (PIC/timer/keyboard counts, the wedge-PC
@@ -2039,6 +2125,16 @@ module core_top (
             // 0x74: text-VRAM dump -- armed by write slot 0x8b; returns
             // {cell[7:0] echo, attr, char_hi, char_lo} for that cell.
             8'h74:   probe_data_c = tvram_dbg_q;
+            // ---- the wedge tap's frozen snapshot (see the WEDGE TAP
+            // block above; write slot 0x08 clears/re-arms it) ---------
+            8'ha0:   probe_data_c = {snap_arb, snap_rdy, snap_arbhold};
+            8'ha1:   probe_data_c = snap_ram;
+            8'ha2:   probe_data_c = snap_sdram[31:0];
+            8'ha3:   probe_data_c = {24'h0, snap_sdram[39:32]};
+            8'ha4:   probe_data_c = snap_bridge;
+            8'ha5:   probe_data_c = {snap_seq, snap_chip2, 8'h0};
+            8'ha6:   probe_data_c = {wedge_latch, 7'h0, snap_retired};
+            8'ha7:   probe_data_c = {12'h0, snap_pc};
             8'hFF:   probe_data_c = 32'h98C0_DE98;
             default: probe_data_c = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -3071,6 +3167,18 @@ module core_top (
     wire [127:0] chipset_dbg10;
     wire [103:0] chipset_dbg11;
     wire  [55:0] chipset_dbg12;
+    // The wedge tap's live views (PC98_JTAG only; frozen copies live in the
+    // tap block under the macro). Declared here so the CHIPSET instance
+    // below connects unconditionally.
+    wire [15:0]  cs_w_arb;
+    wire  [7:0]  cs_w_rdy;
+    wire [15:0]  cs_w_seq;
+    wire [23:0]  cs_w_ram;
+    wire [39:0]  cs_w_sdram;
+    wire         ram_unstick_w;
+`ifndef PC98_JTAG
+    assign ram_unstick_w = 1'b0;
+`endif
     wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
     wire [23:0]  tvram_dbg_word; // screen probe: {attr,char_hi,char_lo}
     logic [11:0] dbg_tvram_cell; // screen probe: the cell being sampled
@@ -3359,6 +3467,13 @@ module core_top (
         .dbg_chipset10                      (chipset_dbg10),
         .dbg_chipset11                      (chipset_dbg11),
         .dbg_chipset12                      (chipset_dbg12),
+        // The wedge tap: live views out, the escape-hatch pulse in.
+        .dbg_w_arb                          (cs_w_arb),
+        .dbg_w_rdy                          (cs_w_rdy),
+        .dbg_w_seq                          (cs_w_seq),
+        .dbg_w_ram                          (cs_w_ram),
+        .dbg_w_sdram                        (cs_w_sdram),
+        .ram_unstick                        (ram_unstick_w),
         .dbg_gvram                          (gvram_dbg),
         .dbg_scsi                           (dbg_scsi),
     //  .terminal_count_n                   (terminal_count_n)
@@ -3547,6 +3662,7 @@ module core_top (
     // is where they are consumed.
     wire [15:0] bridge_dbg;
     wire [31:0] bridge_dbg_inta;  // INTA witness, probe slot 0x2F
+    wire [23:0] bridge_dbg_w;     // wedge tap's engine view, slot 0xA4
 
     wire        zet_clk;
     // The bridge's zet_edge: high on the clk_chipset posedges that also
@@ -3627,7 +3743,8 @@ module core_top (
         .sn_len            (ram_wr_snoop_len),
         .bios_shadow_flag  (bios_shadow_flag),
         .dbg               (bridge_dbg),
-        .dbg_inta          (bridge_dbg_inta)
+        .dbg_inta          (bridge_dbg_inta),
+        .dbg_w             (bridge_dbg_w)
     );
 
     // z86 (fpga/core/z86): a pipelined 286-class core on the bridge's

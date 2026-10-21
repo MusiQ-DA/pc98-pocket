@@ -18,7 +18,13 @@ module READY (
     input   logic           io_write_n,
     input   logic           memory_read_n,
     input   logic           dma0_acknowledge_n,
-    input   logic           address_enable_n
+    input   logic           address_enable_n,
+    // JTAG probe (PC98_JTAG): the wedge tap's ready-chain view --
+    // {ready_n_or_wait, prev_ready_n_or_wait (the CE-posedge sample),
+    //  ready_n_or_wait_Qn, prev_bus_state, bus_state, 3'b0}. A wedged
+    // machine shows which edge the chain is parked on; registered at the
+    // core_top boundary into the frozen wedge snapshot (slot 0xA0).
+    output  logic   [7:0]   dbg
 );
 
 
@@ -107,6 +113,9 @@ module READY (
     end
 
     assign  processor_ready = processor_ready_ff_2;
+
+    assign  dbg = {ready_n_or_wait, prev_ready_n_or_wait,
+                   ready_n_or_wait_Qn, prev_bus_state, bus_state, 3'b000};
 
 endmodule
 

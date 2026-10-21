@@ -223,6 +223,27 @@ module CHIPSET #(
         output  wire    [63:0]  dbg_gvdisp,
         // JTAG probe: the CRT interrupt (IRQ2) path -- PIC regs, arm, counters.
         output  wire    [63:0]  dbg_crt,
+        // JTAG probe (PC98_JTAG): the WEDGE TAP -- a frozen snapshot of
+        // every state the memory path can park in, latched at core_top the
+        // moment the machine stops retiring instructions. These are the
+        // plain live views; core_top registers and freezes them.
+        //   dbg_w_arb [15:0]  -- Bus_Arbiter: dce phase, hold chain, DMA state
+        //   dbg_w_rdy  [7:0]  -- READY: the ready chain's registers
+        //   dbg_w_seq [15:0]  -- pc98_gvram_seq: walk flags + nonidle age
+        //   dbg_w_ram [23:0]  -- RAM.sv: park FIFO, FSM state, wait counts,
+        //                        nonidle age
+        //   dbg_w_sdram[39:0] -- sdram_shim/mp: port-A ages, per-port reqs,
+        //                        controller state, grant
+        output  wire    [15:0]  dbg_w_arb,
+        output  wire    [7:0]   dbg_w_rdy,
+        output  wire    [15:0]  dbg_w_seq,
+        output  wire    [23:0]  dbg_w_ram,
+        output  wire    [39:0]  dbg_w_sdram,
+        // JTAG probe (PC98_JTAG): the wedge escape hatch -- one clk pulse
+        // drops RAM.sv's parked-write queue and forces its FSM to IDLE (see
+        // RAM.sv's unstick port). The greset probe slot cannot do this:
+        // RAM.sv lives in the sdram_reset domain.
+        input   logic           ram_unstick,
         // RAM wait mode
         input   logic           wait_count_clk_en,
         input   logic   [1:0]   ram_read_wait_cycle,
@@ -344,7 +365,8 @@ module CHIPSET #(
         .io_write_n                         (io_write_n),
         .memory_read_n                      (memory_read_n),
         .dma0_acknowledge_n                 (dma_acknowledge_n[0]),
-        .address_enable_n                   (address_enable_n)
+        .address_enable_n                   (address_enable_n),
+        .dbg                                (dbg_w_rdy)
     );
 
     BUS_ARBITER u_BUS_ARBITER 
@@ -397,7 +419,8 @@ module CHIPSET #(
         .dma_request                        (~{fdd_dma_req | dma_request[3], fdd_dma_req, dma_request[1], DRQ0}),
         .dma_acknowledge_n                  (dma_acknowledge_n),
         .address_enable_n                   (address_enable_n),
-        .terminal_count_n                   (terminal_count_n)
+        .terminal_count_n                   (terminal_count_n),
+        .dbg_w                              (dbg_w_arb)
     );
 
 
@@ -636,6 +659,7 @@ module CHIPSET #(
         .svc_addr(st_addr),
         .svc_wdata(st_wdata), .svc_done(st_done), .svc_rdata(st_rdata),
         .dbg(dbg_gvram),
+        .dbg2(dbg_w_seq),
         .mem_addr(ram_addr_w), .mem_wdata(ram_wdata_w),
         .mem_word(ram_word_w), .mem_pf_len(ram_pf_len_w),
         .mem_rd(ram_rd_w), .mem_wr(ram_wr_w),
@@ -784,6 +808,9 @@ module CHIPSET #(
         .ram_write_wait_cycle               (ram_write_wait_cycle),
         .vram_rd_wait_cycle                 (vram_rd_wait),
         .vram_wr_wait_cycle                 (vram_wr_wait),
+        .unstick                            (ram_unstick),
+        .dbg_w_ram                          (dbg_w_ram),
+        .dbg_w_sdram                        (dbg_w_sdram),
         .dbg                                (ram_dbg),
         .dbg2                               (dbg_chipset3),
         .dbg3                               (dbg_chipset4),
