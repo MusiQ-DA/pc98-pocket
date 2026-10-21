@@ -8,20 +8,25 @@
 #        GAP=2000        ms between polls (default 2000)
 #
 # Slots (see core_top's probe case; 0x6c-0x70 landed with the snoop taps):
-#   0x6c sn_v_cnt      every port-A write commit, any master, saturating
-#   0x6d sn_dma_cnt    commits while AEN (DMA/loader owns the bus)
+#   0x6c sn_v_cnt      every port-A write commit, any master -- 16-bit
+#                      FREE-RUNNING: read as deltas mod 65536 (a saturating
+#                      count would pin during the ITF memory test alone)
+#   0x6d sn_dma_cnt    commits while AEN (DMA/loader owns the bus), same
 #   0x6e {len,4'b0,addr[23:0]}   newest commit, any master
 #   0x6f {len,4'b0,addr[23:0]}   newest AEN-window commit
-#   0x70 {16'h0, z86 kills of the watched line}   (armed via slot 0x86)
+#   0x70 {16'h0, z86 kills of the watched line}   (armed via slot 0x86;
+#                      free-running too, one clk behind the kill)
 #   0x3e {breaks[7:0],grants[7:0],ack_wr_cnt[15:0]}  bus-side FDC strobes
 #
 # Reading it: start this BEFORE the game's disk load (or while it runs).
-#   sn_v_cnt frozen         the whole snoop feed is dead -- nothing on the
+# Delta columns (+N) are the verdict -- absolute values wrap.
+#   sn_v deltas always 0
+#                           the whole snoop feed is dead -- nothing on the
 #                           metal ever pulses a_wr_v (or the wire is lost).
-#   sn_v_cnt climbing but
-#   sn_dma_cnt frozen       port A commits, but none inside the DMA window --
+#   sn_v moving but sn_dma deltas 0
+#                           port A commits, but none inside the DMA window --
 #                           the FDC's bytes are not the commits being counted.
-#   both climbing, 0x6f's addr walking the fill buffer and 0x3e's ackwr
+#   both moving, 0x6f's addr walking the fill buffer and 0x3e's ackwr
 #   climbing in step        sn_v DOES fire for FDC DMA commits -- the feed
 #                           is fine and the stale read is a cache-side
 #                           window, not a missing invalidation.
@@ -83,7 +88,7 @@ for {set i 0} {$i < $loops} {incr i} {
     set da [rd 0x6f]
     set k  [rd 0x70]
     set sw [rd 0x3e]
-    puts [format "sn_v=%-10u (+%-6u) sn_dma=%-10u (+%-6u) last=%06x/%d dma_last=%06x/%d kills=%u (+%u) ackwr=%u grants=%u" \
+    puts [format "sn_v=%-6u (+%-6u) sn_dma=%-6u (+%-6u) last=%06x/%d dma_last=%06x/%d kills=%u (+%u) ackwr=%u grants=%u" \
         $v [expr {$v - $pv}] $d [expr {$d - $pd}] \
         [expr {$la & 0xffffff}] [expr {($la >> 28) & 0xf}] \
         [expr {$da & 0xffffff}] [expr {($da >> 28) & 0xf}] \

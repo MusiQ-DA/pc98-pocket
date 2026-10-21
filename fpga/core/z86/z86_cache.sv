@@ -127,12 +127,13 @@ module z86_cache #(
 
     // ---- probe: the watched line's snoop-kill witness -------------------
     // dbg_watch_a is a guest byte address (core_top's slot-0x06 trig_addr).
-    // Every snoop whose span covers that address's LINE counts in
-    // dbg_sn_kills (saturating) -- the same tag writes the kill path below
-    // issues, so a moving count while an FDC fill streams the watched
-    // buffer proves the port-A commits are reaching the cache's
-    // invalidator at all. A frozen count beside a moving slot-0x6c total
-    // says the feed lives but never lands on the watched line.
+    // Every tag write the kill path issues for that address's LINE counts
+    // in dbg_sn_kills (16-bit free-running, read as deltas) -- so a moving
+    // count while an FDC fill streams the watched buffer proves the port-A
+    // commits are reaching the cache's invalidator at all. A frozen count
+    // beside a moving slot-0x6c total says the feed lives but never lands
+    // on the watched line. The witness is staged into its own always block
+    // below -- it observes the kill, never loads it.
     input  wire [19:0]  dbg_watch_a,
     output reg  [15:0]  dbg_sn_kills,
 
@@ -317,8 +318,34 @@ module z86_cache #(
     wire [20:0] sn_end   = sn_addr[20:0] + {17'd0, sn_len};
     wire [IDX_BITS-1:0] sn_i0 = idx_of(sn_addr[20:0]);
     wire [IDX_BITS-1:0] sn_i1 = idx_of(sn_end);
-    // The watched line, in the same physical terms the kill uses.
+    // The watched line, in the same physical terms the kill uses. phys_of
+    // only ever touches bit 20 and idx_of reads [13:4], so this is a pure
+    // bit-slice of dbg_watch_a -- but kept as the functions so the two
+    // cannot drift apart.
     wire [IDX_BITS-1:0] sn_wp_i = idx_of(phys_of(dbg_watch_a, bios_shadow));
+
+    // Probe witness, STAGED and fully isolated from the coherence cone:
+    // stage 1 registers the facts of each tag write the kill path issues
+    // (valid + index -- sn_ours wins a collision, exactly the priority the
+    // assignments in the main block give the write port); stage 2 is a
+    // plain register-to-register compare against the REGISTERED watched
+    // index and a free-running 16-bit count. Nothing here loads sn_ours/
+    // sn2_v/t_we or shares a comparator with the lookup -- the shape CI's
+    // Quartus died on (S2T internal error, runs 39543865833/39546532071)
+    // had the compare live in the main block; this is deliberately dull.
+    // The count is one clk behind the kill it counts -- meaningless for a
+    // counter. Deltas mod 65536, like core_top's sn_v_cnt.
+    reg                  snq_v;
+    reg  [IDX_BITS-1:0]  snq_i;
+    reg  [IDX_BITS-1:0]  snq_wi;
+    always @(posedge clk) begin
+        snq_v <= sn_ours | sn2_v;
+        if (sn_ours)      snq_i <= sn_i0;
+        else if (sn2_v)   snq_i <= sn2_i;
+        snq_wi <= sn_wp_i;
+        if (snq_v && snq_i == snq_wi)
+            dbg_sn_kills <= dbg_sn_kills + 16'd1;
+    end
 
     // The snoop also guards the compare combinationally: a commit arriving
     // on the very edge the hit is judged is already in the SDRAM (sn_v is
@@ -366,17 +393,6 @@ module z86_cache #(
             sn2_v <= (sn_i1 != sn_i0);
             sn2_i <= sn_i1;
         end
-
-        // Probe witness (not part of coherence): count the tag writes the
-        // two blocks above issue for the watched line -- exactly one per
-        // effective kill (a span's second line lands via sn2_v's own edge;
-        // port A's commits are >= 2 clk apart, so the two blocks cannot
-        // collide on the write port). Not reset by the CPU's reset -- the
-        // count is a power-on accumulator, saturation caps it.
-        if (((sn_ours && (sn_i0 == sn_wp_i))
-             || (sn2_v && (sn2_i == sn_wp_i)))
-            && dbg_sn_kills != 16'hFFFF)
-            dbg_sn_kills <= dbg_sn_kills + 16'd1;
 
         // ---------------- port F engine (not reset by the CPU) ----------
         // A transaction already granted has to run to its done pulse, so
@@ -711,6 +727,7 @@ module z86_cache #(
         fs = F_IDLE; f_req = 1'b0; f_we = 1'b0; wb_full = 1'b0; f_wpart = 1'b0;
         sn2_v = 1'b0; st = S_FLUSH; flush_i = '0; wr_ready = 1'b0;
         dbg_sn_kills = 16'd0;
+        snq_v = 1'b0; snq_i = '0; snq_wi = '0;
     end
 
     wire _unused = &{1'b0, ld_a1, rd_a1};

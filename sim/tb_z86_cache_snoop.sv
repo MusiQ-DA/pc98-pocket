@@ -367,34 +367,36 @@ module tb_z86_cache_snoop;
         // +1 for a commit into the line, +1 more when a word span's second
         // line is the watched one, +0 for a neighbour line. This is the
         // counter the metal measurement reads while the FDC streams the
-        // armed buffer, so prove its arithmetic here.
+        // armed buffer, so prove its arithmetic here. The witness is
+        // STAGED (its facts register one edge, the count the next), so
+        // settle two edges after each commit before reading.
         begin
             automatic int c0;
             dbg_watch_a = 20'h3F010;
             c0 = dbg_sn_kills;
             ext_byte(20'h3F010, 8'h55);            // the watched line
+            repeat (2) @(posedge clk);
             if (dbg_sn_kills != c0 + 1) begin
                 errors++;
                 $display("FAIL: T8: watched-line byte: kills %0d -> %0d (want +1)",
                          c0, dbg_sn_kills);
             end
             ext_byte(20'h3F000, 8'h56);            // the previous line
+            repeat (2) @(posedge clk);
             if (dbg_sn_kills != c0 + 1) begin
                 errors++;
                 $display("FAIL: T8: neighbour line counted: kills %0d (want %0d)",
                          dbg_sn_kills, c0 + 1);
             end
             ext_word(20'h3F00F, 8'h57, 8'h58);     // span, second line watched
-            // the span's second tag write lands on sn2_v's edge -- the edge
-            // the task returns on -- so settle one more cycle before reading
-            @(posedge clk);
+            repeat (2) @(posedge clk);
             if (dbg_sn_kills != c0 + 2) begin
                 errors++;
                 $display("FAIL: T8: span second line: kills %0d (want %0d)",
                          dbg_sn_kills, c0 + 2);
             end
             ext_word(20'h3F020, 8'h59, 8'h5A);     // span, watched line untouched
-            @(posedge clk);
+            repeat (2) @(posedge clk);
             if (dbg_sn_kills != c0 + 2) begin
                 errors++;
                 $display("FAIL: T8: foreign span counted: kills %0d (want %0d)",

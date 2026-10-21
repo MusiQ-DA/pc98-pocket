@@ -1566,8 +1566,14 @@ module core_top (
     wire [19:0] z86_pf_wr_a0;
     // z86_cache's watched-line snoop-kill count (slot 0x70): trig_addr is
     // the watched guest address, shared with the bus-side write watchpoint
-    // above, so one arm serves both taps.
-    wire [15:0] z86_sn_kills;
+    // above, so one arm serves both taps. Registered at the boundary --
+    // the probe mux's dbg cone is a known Quartus-internal-error hotspot
+    // (see probe_data's pipeline comment) and v30_dbg_regs is latched the
+    // same way.
+    wire [15:0] z86_sn_kills_w;
+    reg  [15:0] z86_sn_kills = 16'd0;
+    always_ff @(posedge clk_chipset)
+        z86_sn_kills <= z86_sn_kills_w;
     wire        trig_w_bus = bus_mem_wr &&
                              ((chipset_address[19:0] == trig_addr) ||
                               (bus_wr_word &&
@@ -1703,30 +1709,31 @@ module core_top (
     //                 only in sn_v_cnt (the tail sn_dma_cnt misses).
     //   sn_last_*     the newest commit's word address and words-1
     //   sn_dma_last_* the newest AEN-window commit's pair
-    // Power-on accumulators, saturation capped. During an FDC sector read
-    // sn_v_cnt/sn_dma_cnt should climb together and sn_dma_last_addr walk
-    // the fill buffer (0x3e's ack_wr_cnt is the bus-side strobe count to
-    // compare against); a frozen sn_v_cnt says the feed itself is dead,
-    // and a moving sn_v_cnt with a frozen slot-0x70 z86_sn_kills (armed on
-    // the watched line) says the kills never land on that line.
-    reg  [31:0] sn_v_cnt          = 32'd0;
-    reg  [31:0] sn_dma_cnt        = 32'd0;
+    //
+    // Both counters are 16-bit FREE-RUNNING (no saturation compare -- the
+    // ITF's memory test alone passes 64K port-A writes, so a saturating
+    // count would pin before the game ever boots): read them as deltas,
+    // mod 65536. The enable terms are kept flat on purpose; the earlier
+    // nested-if 32-bit saturating shape is what CI's Quartus died on
+    // (S2T internal error, runs 39543865833/39546532071).
+    reg  [15:0] sn_v_cnt          = 16'd0;
+    reg  [15:0] sn_dma_cnt        = 16'd0;
     reg  [23:0] sn_last_addr      = 24'd0;
     reg  [ 3:0] sn_last_len       = 4'd0;
     reg  [23:0] sn_dma_last_addr  = 24'd0;
     reg  [ 3:0] sn_dma_last_len   = 4'd0;
+    wire sn_ev  = ram_wr_snoop_v;
+    wire sn_dev = ram_wr_snoop_v & chipset_aen;
     always_ff @(posedge clk_chipset) begin
-        if (ram_wr_snoop_v) begin
-            if (sn_v_cnt != 32'hFFFF_FFFF)
-                sn_v_cnt <= sn_v_cnt + 32'd1;
-            sn_last_addr <= ram_wr_snoop_addr;
-            sn_last_len  <= ram_wr_snoop_len;
-            if (chipset_aen) begin
-                if (sn_dma_cnt != 32'hFFFF_FFFF)
-                    sn_dma_cnt <= sn_dma_cnt + 32'd1;
-                sn_dma_last_addr <= ram_wr_snoop_addr;
-                sn_dma_last_len  <= ram_wr_snoop_len;
-            end
+        if (sn_ev)     sn_v_cnt   <= sn_v_cnt + 16'd1;
+        if (sn_dev)    sn_dma_cnt <= sn_dma_cnt + 16'd1;
+        if (sn_ev) begin
+            sn_last_addr      <= ram_wr_snoop_addr;
+            sn_last_len       <= ram_wr_snoop_len;
+        end
+        if (sn_dev) begin
+            sn_dma_last_addr  <= ram_wr_snoop_addr;
+            sn_dma_last_len   <= ram_wr_snoop_len;
         end
     end
 
@@ -1759,11 +1766,13 @@ module core_top (
             8'h6b:   probe_data_c = f0w_c;
             // 0x6c-0x70: the port-A write-commit snoop witnesses -- see the
             // counter block by ce_count. 0x6c sn_v_cnt, 0x6d sn_dma_cnt
-            // (AEN-window commits), 0x6e/0x6f the newest commit's
-            // {len[31:28], addr[23:0]} (any / AEN-window), 0x70 the cache's
-            // watched-line kill count (line of slot-0x06's trig_addr).
-            8'h6c:   probe_data_c = sn_v_cnt;
-            8'h6d:   probe_data_c = sn_dma_cnt;
+            // (AEN-window commits) -- both 16-bit free-running, read as
+            // deltas mod 65536; 0x6e/0x6f the newest commit's
+            // {len[31:28], addr[23:0]} (any / AEN-window); 0x70 the cache's
+            // watched-line kill count (line of slot-0x06's trig_addr,
+            // registered at this boundary).
+            8'h6c:   probe_data_c = {16'h0, sn_v_cnt};
+            8'h6d:   probe_data_c = {16'h0, sn_dma_cnt};
             8'h6e:   probe_data_c = {sn_last_len, 4'h0, sn_last_addr};
             8'h6f:   probe_data_c = {sn_dma_last_len, 4'h0, sn_dma_last_addr};
             8'h70:   probe_data_c = {16'h0, z86_sn_kills};
@@ -3658,7 +3667,7 @@ module core_top (
         // watched-line snoop-kill witness: the slot-0x06 trigger address is
         // the watched line, shared with the bus-side write watchpoint.
         .dbg_watch_a (trig_addr),
-        .dbg_sn_kills (z86_sn_kills),
+        .dbg_sn_kills (z86_sn_kills_w),
         .wb_adr_o  (zwb_adr),
         .wb_sel_o  (zwb_sel),
         .wb_we_o   (zwb_we),
