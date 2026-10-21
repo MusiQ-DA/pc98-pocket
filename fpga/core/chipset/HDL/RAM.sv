@@ -4,7 +4,14 @@
 //
 // Based on chipset written by @kitune-san
 //
-module RAM (
+module RAM #(
+    // Self-healing horizons (see the wedge-watchdog block below the state
+    // machine). Defaults are the shipping configuration; testbenches may
+    // narrow them to keep a watchdog recovery inside a reasonable sim
+    // length. 2^13 clk ~= 190 us, 2^20 clk ~= 24 ms at 42.95 MHz.
+    parameter int WEDGE_CMPLT_BITS = 13,
+    parameter int WEDGE_WDOG_BITS  = 20
+) (
     input   logic           clock,
     input   logic           reset,
     input   logic           enable_sdram,
@@ -182,6 +189,9 @@ module RAM (
     // SDRAM transaction in flight (if any) is left alone: the shim and the
     // controller always finish what they took, and only the bookkeeping
     // above them is dropped.
+    // The FSM also fires this clear ITSELF when its no-work watchdog times
+    // out (see the self-healing block below the state machine) -- the probe
+    // pulse remains the manual override for everything else.
     input   logic           unstick,
     // JTAG probe (PC98_JTAG): the wedge tap's RAM-side view (MSB first) --
     //   [23] wc_pend  [22] wc_pend2  [21] wc_pend3  [20] cap_valid
@@ -721,11 +731,14 @@ module RAM (
             accept_data_hi    <= 8'd0;
             accept_word       <= 1'b0;
         end
-        else if (unstick) begin
+        else if (unstick || auto_unstick) begin
             // The wedge escape hatch (see the port comment): everything the
             // FSM owes the bus is bookkeeping -- parked bytes this pulse
             // abandons -- and the bus masters above restart their strobes
-            // the moment memory_access_ready's idle level returns.
+            // the moment memory_access_ready's idle level returns. The
+            // auto_unstick term is the same clear fired by the watchdog
+            // above: it only triggers with the park FIFO empty and no
+            // strobes up, so nothing is ever abandoned by the auto path.
             state          <= IDLE;
             wc_pend        <= 1'b0;
             wc_pend2       <= 1'b0;
@@ -975,6 +988,99 @@ module RAM (
                                             : access_data_out_hi[7:0];
 
 
+    // ------------------------------------------------------------------
+    // Self-healing: the wedge watchdog (two layers).
+    //
+    // WHY THIS EXISTS. This FSM lives in the sdram_reset domain -- a guest
+    // reset (greset) never reaches it. The on-hardware wedge (6-36 s into
+    // a game, fetch dead, PC frozen, DRQ pending, every module above idle,
+    // park FIFO empty) showed the FSM holding a FINISHED read transaction
+    // forever, and the ONLY thing that revived the machine was the JTAG
+    // unstick pulse -- force IDLE, which dipped memory_access_ready for
+    // the re-serve and then asserted it again. Two properties of the park
+    // make it unbounded, and each layer bounds one:
+    //
+    // LAYER 1 -- the served park in COMPLETE_RAM_RW. The FSM reaches
+    // COMPLETE only after the SDRAM transaction has genuinely finished
+    // (read_flag/write_flag fell); it then stays there for exactly one
+    // reason: the master's strobe is still up, waiting for THIS module's
+    // ready. But every ready consumer above is an EDGE machine: READY.sv
+    // pairs the ready rise with its CE-sampled level (prev_ready_n_or_
+    // wait) and parks if the pairing is missed, cpu_bus_bridge latches
+    // its rd_own witness inside the byte's command phase, the uPD71071
+    // steps on the dma_ready PULSE. A rise that lands in one of those
+    // sampling gaps is consumed by NOBODY: the level then sits high
+    // forever, the master never accepts, the strobe never drops, and this
+    // FSM holds the finished transaction for the rest of the machine's
+    // life. The fix re-creates the edge IN PLACE: after WEDGE_CMPLT_BITS
+    // cycles parked, mask the ready output for 2^6 cycles and assert it
+    // again -- the exact dip-and-re-assert dynamics the unstick pulse was
+    // observed to recover the machine with. A merely slow master loses
+    // nothing (it was waiting anyway); a master that missed the rise gets
+    // a fresh one every ~190 us. No access is re-run, so a parked fill's
+    // beats cannot double-append and a parked write's operands are never
+    // re-latched -- strictly safer than forcing IDLE.
+    //
+    // LAYER 2 -- the no-work watchdog. If the FSM sits non-IDLE for
+    // WEDGE_WDOG_BITS cycles with NOTHING pending (park FIFO empty, no
+    // live write strobe, no read request), the only thing keeping it out
+    // of IDLE is a handshake level that can no longer belong to a live
+    // access: read_flag/write_flag stuck (a shim condition the static
+    // audit could not reach, and one the machine's own greset can never
+    // clear because of this module's reset domain), or the WAIT state's
+    // `idle` input stuck low. Fire the same clear the JTAG unstick pulse
+    // performs -- the parked queue drops and the FSM forces IDLE -- and
+    // let the bus start over. 2^20 clk ~= 24 ms: five orders above any
+    // legal access (a 16-word fill behind a refresh is ~100 clk), so it
+    // can only ever fire on a machine that is already dead.
+    // ------------------------------------------------------------------
+    localparam int CMPLT_DIP_BITS = 6;   // dip width: > 2 CE periods at the
+                                         // slowest pace setting, so both
+                                         // halves of a consumer's CE-pulse
+                                         // pipeline see the low
+    logic [WEDGE_CMPLT_BITS-1:0] cmplt_park_cnt;
+    logic [CMPLT_DIP_BITS-1:0]   cmplt_dip_cnt;
+    logic                        rdy_dip;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            cmplt_park_cnt <= '0;
+            cmplt_dip_cnt  <= '0;
+        end else if (state != COMPLETE_RAM_RW) begin
+            cmplt_park_cnt <= '0;
+            cmplt_dip_cnt  <= '0;
+        end else if (cmplt_dip_cnt != '0) begin
+            cmplt_dip_cnt  <= cmplt_dip_cnt - 1'b1;
+            cmplt_park_cnt <= '0;
+        end else if (&cmplt_park_cnt) begin
+            // The park horizon: start the dip, then re-assert. Repeat
+            // forever while the master refuses to move -- each re-assert
+            // is another chance for an edge consumer to catch the rise.
+            cmplt_park_cnt <= '0;
+            cmplt_dip_cnt  <= '1;
+        end else begin
+            cmplt_park_cnt <= cmplt_park_cnt + 1'b1;
+        end
+    end
+    assign rdy_dip = (cmplt_dip_cnt != '0);
+
+    logic [WEDGE_WDOG_BITS-1:0] wdog_cnt;
+    logic                       wdog_no_work;
+    logic                       auto_unstick;
+
+    assign wdog_no_work = (state != IDLE) & ~wc_pend & ~wc_pend2
+                        & ~wc_pend3 & ~cap_valid
+                        & ~write_command & ~read_command;
+    assign auto_unstick = wdog_no_work & (wdog_cnt == '1);
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset || (state == IDLE) || auto_unstick)
+            wdog_cnt <= '0;
+        else if (wdog_cnt != '1)
+            wdog_cnt <= wdog_cnt + 1'b1;
+    end
+
+
     //
     // Ready/Wait Signal
     //
@@ -1129,11 +1235,21 @@ module RAM (
                         & ~((state == COMPLETE_RAM_RW)
                             & accept_live_wr & write_strobe_match);
 
+    // rdy_dip (the wedge watchdog's layer 1 above) masks the whole
+    // active-branch result: the completing term AND the posted-write early
+    // release both answer the strobe currently on the pins, and either
+    // one's rise can be the edge a parked master missed. Masked for <= 2^6
+    // cycles after 2^WEDGE_CMPLT_BITS cycles parked in COMPLETE_RAM_RW,
+    // then re-asserted -- the dip-and-re-assert the JTAG unstick pulse was
+    // observed to revive the wedged machine with, recreated in place (no
+    // access is re-run). The idle level (no command on the pins) never
+    // dips.
     assign  memory_access_ready = ((~ram_address_select_n) && ((~memory_read_n) || (~memory_write_n)))
-                                        ? (~wr_strobe_open & (((state == COMPLETE_RAM_RW) & (
+                                        ? ((~wr_strobe_open & (((state == COMPLETE_RAM_RW) & (
                                               (write_command & accept_live_wr & write_strobe_match & (write_wait_count == 0) & (vram_wr_wait_count == 0))
                                             | (read_command  & accept_live_rd & read_strobe_match  & (read_wait_count  == 0) & (vram_rd_wait_count == 0))))
-                                           | (write_command & wr_covered & cov_same))) : 1'b1;
+                                           | (write_command & wr_covered & cov_same))
+                                          & ~rdy_dip)) : 1'b1;
 
     // ROM-load (Pocket): a clean per-access "done" pulse for core_top's BIOS
     // loader. COMPLETE_RAM_RW is reached only after the SDRAM write truly

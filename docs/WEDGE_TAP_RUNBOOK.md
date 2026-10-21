@@ -187,3 +187,54 @@ sdram_mp + sdram_model) に 3 マスタ (fetch=ホールド読み / FDC DMA=
    判読表で犯人モジュールを確定。
 2. `UNSTICK=1` で RAM.sv 記帳説の A/B。
 3. 犯人確定後、対応するモジュールの修正 + 本ベンチへの再現ケース追加。
+
+## 8. 修正 (RAM.sv ウェッジ watchdog) — 2026-10-22
+
+実機判読 (0xA0-0xA7) と unstick 復活実験で犯人は RAM.sv の FSM 停留に確定
+したため、RAM.sv に自己回復 2 層を実装した:
+
+- **レイヤ 1 (served-park の上限)**: COMPLETE_RAM_RW は SDRAM トランザク
+  ション完了後にのみ到達し、滞留の唯一の理由は「マスタの strobe が
+  ready を待って上がったまま」。上流の ready 消費者 (READY.sv の CE-同期
+  エッジ、bridge の rd_own witness、uPD71071 の dma_ready パルス) は
+  すべてエッジ機械で、立上りがサンプル窓に落ちないと誰も消費しない
+  = level が high のまま張り付き、マスタは永遠に accept しない。
+  2^13 clk (≈190µs) 駐留したら ready を 2^6 clk マスクして再assert する
+  (unstick パルスが実機で回復させたのと同じ dip-and-re-assert を in-place
+  に再現。アクセスを再実行しないので fill の beat 二重 append や書き
+  オペランドの再ラッチは起えない)。
+- **レイヤ 2 (no-work watchdog)**: 非 IDLE かつ保留仕事ゼロ (park 空・
+  write strobe 無し・read 要求無し) が 2^20 clk (≈24ms) 続いたら
+  unstick と同じクリア (park 廃棄 + IDLE 強制) を自動発動。read_flag/
+  write_flag 停留や WAIT の idle 停滞など、静的監査で到達不能とした
+  ハンドシェイク停留の保険。
+
+どちらも健全時の最大滞留 (16語 fill + リフレッシュ待ち ≈100 clk、
+最遅ペースの wait カウント消化 ≈数百 clk) より桁違いに長いので、
+生きているマシンでは一度も発火しない (tb_mem_perf 全フェーズ・
+tb_wedge_hunt 8 シードで dip 発火ゼロを確認済み)。
+
+### 実機での期待挙動
+
+- 従来 6〜36 秒で死んだウェッジは、発症しても **~190µs 以内に自動復帰**
+  する (レイヤ 1)。BGM/描画は継続し、`retired_cnt` (0x17) が止まっても
+  数 ms 以内に動き出すはず。
+- したがって **wedge_latch (0xA6 bit31) は基本発火しなくなる**
+  (静止検出の ~390ms より速く回復するため)。もしまだ発火する場合は
+  レイヤ 1/2 の前提外 (bridge/arbiter 上流や shim/mp 本体の停留) なので
+  タップ判読を続行すること。
+- `wr 0x88 0x02` (手動 unstick) はそのまま残る (保守用の手動オーバーラ
+  イド)。probe スロットマップ (0xA0-0xA7) と probe mux の fanout は
+  不変。
+
+### sim
+
+`sim/tb_wedge_hunt.sv` に 2つの directed case を追加:
+
+- (a) served-park: held read が完了してもマスタが ready 立上りを見逃す
+  形。FSM は COMPLETE に駐留 (タップの凍結形状) → レイヤ 1 が
+  dip+再assert → マスタが 2 番目の立上りで accept → 経路復帰。
+- (b) no-work watchdog: R2 のバースト中に shim の busy を jam してから
+  全 strobe を落とす (保留仕事ゼロの非 IDLE 停留) → レイヤ 2 が
+  2^16 clk (ベンチは縮小値) で auto-unstick → IDLE 復帰。
+

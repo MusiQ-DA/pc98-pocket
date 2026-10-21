@@ -37,6 +37,22 @@
 //   +SVCRATE=n average clk between svc attempts (default 200)
 //   +TRACE=1   per-op line
 //
+// Directed wedge cases (run before/after the random hunt):
+//   (a) served-park -- a held read completes, the master misses the ready
+//       rise (the observed upstream sampling gap: READY.sv's CE-paired
+//       edge, the bridge's command-phase witness, the 71071's dma_ready
+//       pulse) and never drops its strobe. The FSM parks in
+//       COMPLETE_RAM_RW with the transaction FINISHED and zero pending
+//       work -- the exact frozen-tap shape. Layer 1 of the wedge
+//       watchdog must dip memory_access_ready and re-assert it; the
+//       master takes the second rise and the path continues.
+//   (b) no-work watchdog -- the FSM is pushed into a non-IDLE park with
+//       the port-A handshake jammed (the shim's busy forced high, as a
+//       stuck read_flag would) and every strobe gone: parked with ZERO
+//       pending work that no guest reset can ever clear. Layer 2 must
+//       fire the auto-unstick (same clear as the probe's wr 0x88 0x02)
+//       and hand the FSM back to IDLE.
+//
 // Build (CI shape):
 //   build: verilator --binary --timing -Wno-fatal --top-module tb_wedge_hunt
 //     -Ifpga/core fpga/core/chipset/HDL/RAM.sv fpga/core/sdram_shim.sv
@@ -120,7 +136,11 @@ module tb_wedge_hunt;
     logic        gv_req = 1'b0;
     wire         gv_ack, gv_done;
 
-    RAM u_ram (
+    // Narrowed watchdog horizon for the bench: 2^16 clk ~= 1.5 ms -- the
+    // directed case (b) completes inside the sim budget while staying
+    // three orders above any legal non-IDLE streak (~100 clk). Layer 1's
+    // park horizon keeps the shipping 2^13.
+    RAM #(.WEDGE_WDOG_BITS(16)) u_ram (
         .clock(clk), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram),
         .address(mem_addr), .internal_data_bus(mem_wdata),
@@ -175,6 +195,7 @@ module tb_wedge_hunt;
 
     always @(posedge clk) begin
         if (reset)              gv_req <= 1'b0;
+        else if (directed_b)    gv_req <= 1'b0;
         else if (gv_ack)        gv_req <= 1'b0;
         else if (!gv_req && (($urandom() % 64) == 0))
                                 gv_req <= 1'b1;
@@ -311,12 +332,181 @@ module tb_wedge_hunt;
         repeat (20) @(posedge clk);
         forever begin
             @(posedge clk);
-            if (!wedge && (($urandom() % svc_rate) == 0) && !svc_req
-                && !(cpu_rd | cpu_wr))
+            if (!wedge && !directed_b && (($urandom() % svc_rate) == 0)
+                && !svc_req && !(cpu_rd | cpu_wr))
                 svc_op(20'hA8000 + 20'($urandom() % 20'h1000),
                        8'($urandom()));
         end
     end
+
+    // ---- directed wedge cases --------------------------------------------
+    //
+    // RAM.sv state codes for the hierarchical peeks below (the enum from
+    // the DUT): IDLE=0 W1=1 W2=2 R1=3 R2=4 COMPLETE=5 WAIT=6.
+    localparam int ST_IDLE     = 0;
+    localparam int ST_R2       = 4;
+    localparam int ST_COMPLETE = 5;
+    localparam int ST_WAIT     = 6;
+
+    bit directed_b = 0;     // quiesce the background masters for case (b)
+    bit hunt_on    = 0;     // the random-hunt window (layer-1 dip monitor)
+    int hunt_dip_seen = 0;
+
+    always @(posedge clk) begin
+        if (hunt_on && u_ram.rdy_dip) hunt_dip_seen = 1;
+    end
+
+    // Case (a) -- the served park (layer 1). A held read completes; the
+    // master then misses the ready rise and never drops its strobe. The
+    // FSM parks in COMPLETE_RAM_RW with the transaction finished and zero
+    // pending work -- the frozen-tap shape. Layer 1 must dip
+    // memory_access_ready (cpu_ready here, pass-through) and re-assert
+    // it, WITHOUT leaving COMPLETE and without re-running anything; the
+    // master takes the second rise and the path keeps working.
+    localparam int PARK_HORIZON = (1 << 13) + 3000;
+
+    task automatic park_miss_case(output logic ok);
+        int w, rises, park_len;
+        logic rdy_q, ok_r;
+        begin
+            ok = 1; rises = 0; rdy_q = 1'b1; park_len = 0;
+            @(negedge clk);
+            cpu_addr = 20'h6658; cpu_rd = 1'b1;
+            // Wait for the access to be SERVED -- the FSM parked in
+            // COMPLETE with the strobe still up. cpu_ready alone cannot
+            // gate this: memory_access_ready idles HIGH with no command
+            // on the pins, so it reads 1 before the access even starts.
+            w = 0;
+            @(posedge clk);
+            while ((int'(u_ram.state) != ST_COMPLETE || !cpu_ready)
+                   && w < FETCH_WDT) begin
+                @(posedge clk); w++;
+            end
+            if (int'(u_ram.state) != ST_COMPLETE) begin
+                ok = 0;
+                dump_state("park case: access never served");
+            end
+            else begin
+                // The miss: hold the strobe, consume nothing. Count
+                // ready RE-assertions while the park holds.
+                w = 0;
+                while (rises < 1 && w < PARK_HORIZON && ok) begin
+                    rdy_q = cpu_ready;
+                    @(posedge clk);
+                    if (!rdy_q && cpu_ready) rises++;
+                    if (int'(u_ram.state) != ST_COMPLETE) begin
+                        $display("FAIL: park case: FSM left COMPLETE (%0d) with the strobe still held",
+                                 int'(u_ram.state));
+                        ok = 0;
+                    end
+                    w++;
+                end
+                if (rises < 1 && ok) begin
+                    ok = 0;
+                    dump_state("park case: layer-1 re-assert never came");
+                end
+                else
+                    park_len = w;
+                if (ok) begin
+                    // The recovered master: accept at the second rise.
+                    @(negedge clk);
+                    cpu_rd = 1'b0;
+                    // The strobe's fall propagates (mem_rd lags a clock,
+                    // then COMPLETE's exit evaluates) -- wait it out.
+                    w = 0;
+                    while (int'(u_ram.state) != ST_IDLE && w < 50) begin
+                        @(posedge clk); w++;
+                    end
+                    fetch_op(20'h6658, 2, ok_r);
+                    ok = ok_r;
+                    w = 0;
+                    while (int'(u_ram.state) != ST_IDLE && w < 50) begin
+                        @(posedge clk); w++;
+                    end
+                    if (ok && int'(u_ram.state) != ST_IDLE) begin
+                        $display("FAIL: park case: FSM did not return to IDLE (state=%0d)",
+                                 int'(u_ram.state));
+                        ok = 0;
+                    end
+                end
+            end
+            if (ok)
+                $display("directed (a) served-park: dipped and re-asserted after %0d parked clk, path recovered",
+                         park_len);
+            @(negedge clk);
+        end
+    endtask
+
+    // Case (b) -- the no-work watchdog (layer 2). Push the FSM into a
+    // read's burst phase (R2), jam the shim's port-A busy flag -- the
+    // stuck-read_flag class, a handshake level no guest reset can clear
+    // -- then drop every strobe. The FSM abandons the request (R2->WAIT
+    // on ~read_command) and parks with ZERO pending work: park FIFO
+    // empty, no write strobe, no read request. Layer 2 must fire the
+    // auto-unstick (the same clear the probe's wr 0x88 0x02 pulses) and
+    // hand the FSM back to IDLE within the horizon.
+    localparam int WDOG_HORIZON = (1 << 16) + 4000;
+
+    task automatic wdog_case(output logic ok);
+        int w;
+        begin
+            ok = 1;
+            directed_b = 1;
+            repeat (8) @(posedge clk);
+            // Any park the killed hunt stream left behind drains on its
+            // own from IDLE (one posted write per visit) -- wait it out so
+            // the case below parks with the FIFO genuinely empty.
+            w = 0;
+            while ((u_ram.wc_pend | u_ram.wc_pend2 | u_ram.wc_pend3
+                    | u_ram.cap_valid) && w < FETCH_WDT) begin
+                @(posedge clk); w++;
+            end
+            if (u_ram.wc_pend | u_ram.wc_pend2 | u_ram.wc_pend3
+                | u_ram.cap_valid) begin
+                ok = 0;
+                dump_state("wdog case: park never drained");
+            end
+            else begin
+            @(negedge clk);
+            cpu_addr = 20'h6650; cpu_rd = 1'b1;
+            @(posedge clk);
+            w = 0;
+            while (int'(u_ram.state) != ST_R2 && w < FETCH_WDT) begin
+                @(posedge clk); w++;
+            end
+            if (int'(u_ram.state) != ST_R2) begin
+                ok = 0;
+                dump_state("wdog case: never reached R2");
+            end
+            else begin
+                // Jam the port-A handshake while the transaction is
+                // genuinely in flight: read_flag can never fall again.
+                force u_ram.u_sdram.busy = 1'b1;
+                // Every master gives up; the FSM parks with no work.
+                @(negedge clk);
+                cpu_rd = 1'b0;
+                repeat (4) @(posedge clk);
+                if (int'(u_ram.state) != ST_WAIT)
+                    $display("  wdog case: parked in state %0d (expected WAIT)",
+                             int'(u_ram.state));
+                // Layer 2: the auto-unstick must fire.
+                w = 0;
+                while (int'(u_ram.state) != ST_IDLE && w < WDOG_HORIZON) begin
+                    @(posedge clk); w++;
+                end
+                release u_ram.u_sdram.busy;
+                if (int'(u_ram.state) != ST_IDLE) begin
+                    ok = 0;
+                    dump_state("wdog case: auto-unstick never fired");
+                end
+                else
+                    $display("directed (b) no-work watchdog: auto-unstick fired after %0d parked clk, FSM back at IDLE",
+                             w);
+            end
+            end
+            directed_b = 0;
+        end
+    endtask
 
     // The fetch/DMA scheduler: what the merged bus carries, in order.
     logic [19:0] fetch_tab [0:5] = '{20'h6658, 20'h6650, 20'h62C7,
@@ -344,6 +534,11 @@ module tb_wedge_hunt;
         grcg_tile[0] = 8'h3C; grcg_tile[1] = 8'hC3;
         grcg_tile[2] = 8'h5A; grcg_tile[3] = 8'hA5;
 
+        // ---- directed case (a) first: the served park (layer 1) --------
+        park_miss_case(ok);
+        if (!ok) errors++;
+
+        hunt_on = 1'b1;
         fork : run_all
             begin : timer
                 timer_clks = ms_run * 42955;
@@ -376,11 +571,27 @@ module tb_wedge_hunt;
                 end
             end
         join_any
+        // join_any leaves the losing branch RUNNING -- a mid-op task would
+        // keep driving the bus into whatever runs next. Kill the fork and
+        // quiesce the pins by hand (the killed task never reaches its own
+        // trailing negedge drops).
+        disable fork;
+        hunt_on = 1'b0;
+        @(negedge clk);
+        cpu_rd = 1'b0; cpu_wr = 1'b0; svc_req = 1'b0; svc_we = 1'b0;
         // (join_any fell through: the timer expired or a master wedged --
         //  either way the bus stream below is done or parked)
-        if (!wedge)
+        if (!wedge) begin
             $display("PASS: %0d fetch, %0d DMA bytes, %0d svc ops, no wedge",
                      n_fetch, n_dma, n_svc);
+            if (hunt_dip_seen) begin
+                $display("FAIL: layer-1 dip fired during the healthy hunt -- a legal park reached the horizon");
+                errors++;
+            end
+            // ---- directed case (b): the no-work watchdog (layer 2) ----
+            wdog_case(ok);
+            if (!ok) errors++;
+        end
         else begin
             // The escape-hatch experiment: does the probe's unstick pulse
             // (RAM.sv's parked queue dropped, FSM to IDLE) free the fetch?
@@ -399,12 +610,17 @@ module tb_wedge_hunt;
             end
             errors++;
         end
+        if (errors == 0)
+            $display("=== PASS tb_wedge_hunt ===");
+        else
+            $display("=== FAIL tb_wedge_hunt ===");
         $finish;
     end
 
-    // A hard global backstop: nothing above may run away silently.
+    // A hard global backstop: nothing above may run away silently. The
+    // directed cases add ~2 ms of sim over the hunt's own budget.
     initial begin
-        #(40_000_000);   // 40 ms wall-of-sim
+        #(60_000_000);   // 60 ms wall-of-sim
         $display("FAIL: global backstop");
         $finish;
     end
