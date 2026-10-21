@@ -66,6 +66,10 @@ module tb_z86_cache_snoop;
     logic [23:0] sn_addr = 0;
     logic [3:0] sn_len = 0;
 
+    // watched-line kill witness (probe slots 0x70/0x06 on metal)
+    logic [19:0] dbg_watch_a = 20'h30010;
+    wire  [15:0] dbg_sn_kills;
+
     wire busy;
 
     z86_cache dut (
@@ -75,6 +79,7 @@ module tb_z86_cache_snoop;
         .f_wdata0(f_wd0), .f_wdata1(f_wd1),
         .f_ack(f_ack), .f_rvalid(f_rvalid), .f_rdata(f_rdata), .f_done(f_done),
         .sn_v(sn_v), .sn_addr(sn_addr), .sn_len(sn_len),
+        .dbg_watch_a(dbg_watch_a), .dbg_sn_kills(dbg_sn_kills),
         .busy(busy),
         .ld_addr(ld_addr), .ld_req(ld_req), .ld_ack(ld_ack), .ld_data(ld_data),
         .rd_addr(rd_addr), .rd(rd), .rd_ready(rd_ready), .rd_data(rd_data),
@@ -356,6 +361,47 @@ module tb_z86_cache_snoop;
         check(20'h3401F, 8'h03, "T7 word lo");
         check(20'h34020, 8'h04, "T7 word hi");
         check(20'h34030, 8'hA1, "T7 second commit line");
+
+        // ---- T8: the watched-line kill witness (slots 0x70/0x06) ---------
+        // dbg_sn_kills counts the tag writes aimed at dbg_watch_a's line:
+        // +1 for a commit into the line, +1 more when a word span's second
+        // line is the watched one, +0 for a neighbour line. This is the
+        // counter the metal measurement reads while the FDC streams the
+        // armed buffer, so prove its arithmetic here.
+        begin
+            automatic int c0;
+            dbg_watch_a = 20'h3F010;
+            c0 = dbg_sn_kills;
+            ext_byte(20'h3F010, 8'h55);            // the watched line
+            if (dbg_sn_kills != c0 + 1) begin
+                errors++;
+                $display("FAIL: T8: watched-line byte: kills %0d -> %0d (want +1)",
+                         c0, dbg_sn_kills);
+            end
+            ext_byte(20'h3F000, 8'h56);            // the previous line
+            if (dbg_sn_kills != c0 + 1) begin
+                errors++;
+                $display("FAIL: T8: neighbour line counted: kills %0d (want %0d)",
+                         dbg_sn_kills, c0 + 1);
+            end
+            ext_word(20'h3F00F, 8'h57, 8'h58);     // span, second line watched
+            // the span's second tag write lands on sn2_v's edge -- the edge
+            // the task returns on -- so settle one more cycle before reading
+            @(posedge clk);
+            if (dbg_sn_kills != c0 + 2) begin
+                errors++;
+                $display("FAIL: T8: span second line: kills %0d (want %0d)",
+                         dbg_sn_kills, c0 + 2);
+            end
+            ext_word(20'h3F020, 8'h59, 8'h5A);     // span, watched line untouched
+            @(posedge clk);
+            if (dbg_sn_kills != c0 + 2) begin
+                errors++;
+                $display("FAIL: T8: foreign span counted: kills %0d (want %0d)",
+                         dbg_sn_kills, c0 + 2);
+            end
+            check(20'h3F010, 8'h58, "T8 span wrote the watched line");
+        end
 
         drain();
 

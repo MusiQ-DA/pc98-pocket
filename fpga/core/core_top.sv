@@ -1564,6 +1564,10 @@ module core_top (
     wire        bus_wr_word = bus_mem_wr && cpu_word_access && ~chipset_aen;
     wire        z86_pf_wr_v, z86_pf_wr_two;
     wire [19:0] z86_pf_wr_a0;
+    // z86_cache's watched-line snoop-kill count (slot 0x70): trig_addr is
+    // the watched guest address, shared with the bus-side write watchpoint
+    // above, so one arm serves both taps.
+    wire [15:0] z86_sn_kills;
     wire        trig_w_bus = bus_mem_wr &&
                              ((chipset_address[19:0] == trig_addr) ||
                               (bus_wr_word &&
@@ -1686,6 +1690,46 @@ module core_top (
     always_ff @(posedge clk_chipset)
         if (cpu_ce_posedge) ce_count <= ce_count + 16'd1;
 
+    // Port-A write-commit snoop witnesses (slots 0x6c-0x70). The feed is
+    // sdram_shim's a_wr_* -- the same wire z86_cache and the bridge's pf
+    // windows invalidate against -- tapped here at the source, in the
+    // clk_chipset domain the pulse lives in:
+    //   sn_v_cnt      every port-A write commit (any master: guest, DMA,
+    //                 loader; any address the port can name)
+    //   sn_dma_cnt    commits while chipset_aen (AEN) is high -- the CPU
+    //                 has the bus parked, so during an FDC fill these are
+    //                 the 71071's bytes draining. A posted write can
+    //                 commit a few clocks past the window's end; those land
+    //                 only in sn_v_cnt (the tail sn_dma_cnt misses).
+    //   sn_last_*     the newest commit's word address and words-1
+    //   sn_dma_last_* the newest AEN-window commit's pair
+    // Power-on accumulators, saturation capped. During an FDC sector read
+    // sn_v_cnt/sn_dma_cnt should climb together and sn_dma_last_addr walk
+    // the fill buffer (0x3e's ack_wr_cnt is the bus-side strobe count to
+    // compare against); a frozen sn_v_cnt says the feed itself is dead,
+    // and a moving sn_v_cnt with a frozen slot-0x70 z86_sn_kills (armed on
+    // the watched line) says the kills never land on that line.
+    reg  [31:0] sn_v_cnt          = 32'd0;
+    reg  [31:0] sn_dma_cnt        = 32'd0;
+    reg  [23:0] sn_last_addr      = 24'd0;
+    reg  [ 3:0] sn_last_len       = 4'd0;
+    reg  [23:0] sn_dma_last_addr  = 24'd0;
+    reg  [ 3:0] sn_dma_last_len   = 4'd0;
+    always_ff @(posedge clk_chipset) begin
+        if (ram_wr_snoop_v) begin
+            if (sn_v_cnt != 32'hFFFF_FFFF)
+                sn_v_cnt <= sn_v_cnt + 32'd1;
+            sn_last_addr <= ram_wr_snoop_addr;
+            sn_last_len  <= ram_wr_snoop_len;
+            if (chipset_aen) begin
+                if (sn_dma_cnt != 32'hFFFF_FFFF)
+                    sn_dma_cnt <= sn_dma_cnt + 32'd1;
+                sn_dma_last_addr <= ram_wr_snoop_addr;
+                sn_dma_last_len  <= ram_wr_snoop_len;
+            end
+        end
+    end
+
     always_comb begin
         case (probe_addr)
             // The bisect-era taps (PIC/timer/keyboard counts, the wedge-PC
@@ -1713,6 +1757,16 @@ module core_top (
             8'h69:   probe_data_c = f0w_a;
             8'h6a:   probe_data_c = f0w_b;
             8'h6b:   probe_data_c = f0w_c;
+            // 0x6c-0x70: the port-A write-commit snoop witnesses -- see the
+            // counter block by ce_count. 0x6c sn_v_cnt, 0x6d sn_dma_cnt
+            // (AEN-window commits), 0x6e/0x6f the newest commit's
+            // {len[31:28], addr[23:0]} (any / AEN-window), 0x70 the cache's
+            // watched-line kill count (line of slot-0x06's trig_addr).
+            8'h6c:   probe_data_c = sn_v_cnt;
+            8'h6d:   probe_data_c = sn_dma_cnt;
+            8'h6e:   probe_data_c = {sn_last_len, 4'h0, sn_last_addr};
+            8'h6f:   probe_data_c = {sn_dma_last_len, 4'h0, sn_dma_last_addr};
+            8'h70:   probe_data_c = {16'h0, z86_sn_kills};
             8'h66:   probe_data_c = {z86_dbg_stopped, 15'h0, z86_dbg_next_ip};
             8'h67:   probe_data_c = {tlog_frozen, 15'h0, tlog_n};
             8'h01:   probe_data_c = brg_q[31:0];
@@ -1842,10 +1896,14 @@ module core_top (
             // count is a byte the guest asked to store and nobody wrote.
             8'h9e:   probe_data_c = chipset_dbg3;
             8'h9f:   probe_data_c = chipset_dbg4;
-            // 0x3b-0x3e: Bus_Arbiter's channel-2 burst witness -- the first
-            // four memory writes of the latest burst. Each slot is
-            // {4 spare bits, addr[19:0], data[7:0]}; 0x3b's spare nibble
-            // carries the burst counter instead.
+            // 0x3b-0x3e: Bus_Arbiter's DMA-stream counters (dbg_dma): 0x3e
+            // packs {break_cnt[7:0], grant_cnt[7:0], ack_wr_cnt[15:0]} --
+            // grant = FDC DACK windows seen, ack_wr = memory-write strobes
+            // that started under one (saturating; the low 16 bits are the
+            // useful half). 0x3b-0x3d read zero: the old burst rings were
+            // dropped for LAB headroom once the byte0 wrap-clobber was
+            // found. ack_wr is the BUS-side count to set against the
+            // commit-side sn_dma_cnt at 0x6d.
             8'h3b:   probe_data_c = chipset_dbg5[31:0];
             8'h3c:   probe_data_c = chipset_dbg5[63:32];
             8'h3d:   probe_data_c = chipset_dbg5[95:64];
@@ -3597,6 +3655,10 @@ module core_top (
         .sn_v      (ram_wr_snoop_v),
         .sn_addr   (ram_wr_snoop_addr),
         .sn_len    (ram_wr_snoop_len),
+        // watched-line snoop-kill witness: the slot-0x06 trigger address is
+        // the watched line, shared with the bus-side write watchpoint.
+        .dbg_watch_a (trig_addr),
+        .dbg_sn_kills (z86_sn_kills),
         .wb_adr_o  (zwb_adr),
         .wb_sel_o  (zwb_sel),
         .wb_we_o   (zwb_we),

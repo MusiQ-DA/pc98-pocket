@@ -185,6 +185,7 @@ module tb_mem_perf;
         .sn_v      (1'b0),
         .sn_addr   (24'd0),
         .sn_len    (4'd0),
+        .dbg_watch_a (20'd0), .dbg_sn_kills (),
         .wb_adr_o  (zwb_adr),
         .wb_sel_o  (zwb_sel),
         .wb_we_o   (zwb_we),

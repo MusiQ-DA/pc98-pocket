@@ -68,6 +68,7 @@ module tb_z86_loop;
            .f_req(f_req), .f_we(f_we), .f_addr(f_addr), .f_len(f_len),
            .f_wdata0(f_wd0), .f_wdata1(f_wd1), .f_ack(f_ack), .f_rvalid(f_rvalid),
            .f_rdata(f_rdata), .f_done(f_done), .sn_v(sn_v), .sn_addr(sn_addr), .sn_len(sn_len),
+           .dbg_watch_a(20'h0), .dbg_sn_kills(),
            .wb_adr_o(adr), .wb_sel_o(sel),
            .wb_we_o(we), .wb_tga_o(tga), .wb_dat_o(dat_o), .wb_stb_o(stb),
            .wb_cyc_o(cyc), .wb_ack_i(ack), .wb_dat_i(tgc_o ? {8'h00, irq_vec} : dat_i),

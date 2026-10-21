@@ -53,6 +53,7 @@ module tb_z86_wrtap;
         .f_wdata0(f_wd0), .f_wdata1(f_wd1),
         .f_ack(f_ack), .f_rvalid(f_rvalid), .f_rdata(16'h0), .f_done(f_done),
         .sn_v(1'b0), .sn_addr(24'h0), .sn_len(4'h0),
+        .dbg_watch_a(20'h0), .dbg_sn_kills(),
         .busy(busy),
         .ld_addr(20'h0), .ld_req(1'b0), .ld_ack(), .ld_data(),
         .rd_addr(20'h0), .rd(1'b0), .rd_ready(), .rd_data(),

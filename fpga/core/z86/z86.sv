@@ -38,6 +38,10 @@ module z86 (
     input       [23:0]  sn_addr,
     input       [ 3:0]  sn_len,
 
+    // ---- probe: the watched line's snoop-kill witness (see z86_cache) --
+    input       [19:0]  dbg_watch_a,
+    output      [15:0]  dbg_sn_kills,
+
     // ---- Wishbone master (the bridge's contract) ------------------------
     output      [19:1]  wb_adr_o,
     output      [ 1:0]  wb_sel_o,
@@ -243,6 +247,8 @@ z86_cache u_cache (
     .sn_v               (sn_v),
     .sn_addr            (sn_addr),
     .sn_len             (sn_len),
+    .dbg_watch_a        (dbg_watch_a),
+    .dbg_sn_kills       (dbg_sn_kills),
     .busy               (cache_busy),
     .ld_addr            (ld_addr),
     .ld_req             (ld_req),

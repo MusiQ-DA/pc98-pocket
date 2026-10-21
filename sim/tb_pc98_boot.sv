@@ -220,6 +220,7 @@ module tb_pc98_boot;
         .f_wdata0 (cf_wd0), .f_wdata1 (cf_wd1), .f_ack (cf_ack),
         .f_rvalid (cf_rvalid), .f_rdata (cf_rdata), .f_done (cf_done),
         .sn_v (sn_v), .sn_addr (sn_addr), .sn_len (sn_len),
+        .dbg_watch_a (20'h0), .dbg_sn_kills (),
         .wb_adr_o  (zwb_adr),
         .wb_sel_o  (zwb_sel),
         .wb_we_o   (zwb_we),
