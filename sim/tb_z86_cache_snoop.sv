@@ -19,7 +19,12 @@
 //   * the fetch unit's line load (ld_req/ld_ack) path,
 //   * sn_v racing the CPU's own lookup edge (the kill path),
 //   * back-to-back sn_v pulses a cycle apart (DMA burst cadence is slower
-//     than this on metal -- if THIS passes, everything slower passes).
+//     than this on metal -- if THIS passes, everything slower passes),
+//   * T12: the READ datapath's byte-lane selection after a fill -- every
+//     offset 0..15 as a 1-byte read AND as a word read (the real core
+//     issues rd_word=1 for every memory operand), the offset-0xF straddle,
+//     consecutive odd-address reads, lanes around a write-through patch,
+//     and odd re-reads after a DMA commit.
 //
 // Build/run: scripts/sim_z86_cache_snoop.sh
 `timescale 1ns/1ps
@@ -137,6 +142,24 @@ module tb_z86_cache_snoop;
         end
     endtask
 
+    // A strict WORD read -- the shape the real core issues for every memory
+    // operand (decode.sv drives rd_word=1 unconditionally for memory): the
+    // contract is rd_data[7:0] = byte at a and rd_data[15:8] = byte at a+1,
+    // for even AND odd a, with the odd-offset-15 case straddling two lines.
+    task cpu_read_word(input logic [19:0] a, output logic [7:0] lo,
+                       output logic [7:0] hi);
+        begin
+            @(posedge clk);
+            rd_addr = a; rd_word = 1; rd = 1;
+            @(posedge clk);
+            rd = 0; rd_word = 0;
+            @(posedge clk);          // the DUT drops rd_ready by now
+            while (!rd_ready) @(posedge clk);
+            lo = rd_data[7:0];
+            hi = rd_data[15:8];
+        end
+    endtask
+
     // External master commits a byte (port-A write commit + sn_v pulse)
     task ext_byte(input logic [19:0] a, input logic [7:0] v);
         begin
@@ -180,6 +203,19 @@ module tb_z86_cache_snoop;
                 errors++;
                 $display("FAIL: %s: read %05x got %02x expected %02x",
                          what, a, got, exp);
+            end
+        end
+    endtask
+
+    logic [7:0] wlo, whi;
+    task check_word(input logic [19:0] a, input logic [7:0] explo,
+                    input logic [7:0] exphi, input string what);
+        begin
+            cpu_read_word(a, wlo, whi);
+            if (wlo !== explo || whi !== exphi) begin
+                errors++;
+                $display("FAIL: %s: word read %05x got %02x/%02x expected %02x/%02x",
+                         what, a, wlo, whi, explo, exphi);
             end
         end
     endtask
@@ -575,6 +611,88 @@ module tb_z86_cache_snoop;
             while (!rd_ready) @(posedge clk);
             check(cm, 8'hD2, "T9b second-line kill beside an install");
             check(cm - 20'd1, 8'hD1, "T9b first-line kill landed");
+        end
+
+        // ---- T12: byte-lane selection after a fill -----------------------
+        // The READ datapath's offset mux: every existing case reads with
+        // rd_word=0, but the real core issues WORD reads for every memory
+        // operand (decode.sv hardwires rd_word=1), so the lo/hi lane pair
+        // and the offset-0xF straddle have never been exercised. Seed two
+        // lines with offset-encoded bytes, fill them, then:
+        //   (a) every offset 0..15 as a 1-byte read,
+        //   (b) every offset 0..14 as a word read, plus the 0xF straddle
+        //       whose hi byte belongs to the NEXT line,
+        //   (c) consecutive odd-address byte reads, forward and back,
+        //   (d) a write-through store patched into the line, then byte and
+        //       word reads around the patched offset,
+        //   (e) a DMA commit at an odd offset, then odd re-reads and word
+        //       reads spanning it, plus a commit to the straddle's second
+        //       line re-read as a straddling word.
+        begin
+            // virgin addresses: T10's fl sweep cached 0x3C000+0x10k, and a
+            // bare mem[] write (below) carries no sn_v, so a line any earlier
+            // case left in the cache would serve its stale byte here.
+            automatic logic [19:0] ln  = 20'h2C000;   // the filled line
+            automatic logic [19:0] ln2 = 20'h2C010;   // its neighbour
+            for (int i = 0; i < 16; i++) begin
+                mem[ln  + 20'(i)] = 8'h40 + 8'(i);
+                mem[ln2 + 20'(i)] = 8'h60 + 8'(i);
+            end
+            // prime both lines (fill), then the offset sweep
+            check(ln, 8'h40, "T12 prime line");
+            check(ln2, 8'h60, "T12 prime neighbour");
+            for (int i = 0; i < 16; i++)
+                check(ln + 20'(i), 8'h40 + 8'(i), "T12a byte at each offset");
+            for (int i = 0; i < 15; i++)
+                check_word(ln + 20'(i), 8'h40 + 8'(i), 8'h40 + 8'(i + 1),
+                           "T12b word at each offset");
+            check_word(ln + 20'hF, 8'h4F, 8'h60, "T12b straddling word");
+            // (c) odd addresses, forward then back
+            for (int i = 1; i < 16; i += 2)
+                check(ln + 20'(i), 8'h40 + 8'(i), "T12c odd forward");
+            for (int i = 15; i > 0; i -= 2)
+                check(ln + 20'(i), 8'h40 + 8'(i), "T12c odd backward");
+            // (d) a write-through store into the line, then lanes around it
+            @(posedge clk);
+            wr_addr = ln + 20'd5; wr_data = 16'h00AA; wr_word = 0;
+            wr_valid = 1;
+            @(posedge clk);
+            while (!wr_ready) @(posedge clk);
+            wr_valid = 0;
+            check (ln + 20'd5, 8'hAA, "T12d patched byte");
+            check_word(ln + 20'd4, 8'h44, 8'hAA, "T12d word before patch");
+            check_word(ln + 20'd5, 8'hAA, 8'h46, "T12d word at patch");
+            // (e) DMA commit at an odd offset, then odd re-reads + spans
+            ext_byte(ln + 20'd7, 8'h77);
+            check (ln + 20'd7, 8'h77, "T12e committed odd byte");
+            check (ln + 20'd5, 8'hAA, "T12e patch survived the kill");
+            check_word(ln + 20'd6, 8'h46, 8'h77, "T12e word before commit");
+            check_word(ln + 20'd7, 8'h77, 8'h48, "T12e word at commit");
+            for (int i = 15; i > 0; i -= 2)
+                if (i == 7)      check(ln + 20'(i), 8'h77, "T12e odd backward");
+                else if (i == 5) check(ln + 20'(i), 8'hAA, "T12e odd backward");
+                else             check(ln + 20'(i), 8'h40 + 8'(i), "T12e odd backward");
+            // and the straddle's second line committed: the straddling word
+            // must refill and serve the fresh neighbour byte up top
+            ext_byte(ln2, 8'h99);
+            check_word(ln + 20'hF, 8'h4F, 8'h99, "T12e straddle after commit");
+        end
+
+        // ---- T12f: word reads on a COLD line ------------------------------
+        // The first touch of a line as a word read (the fill path's own
+        // serve), at an even offset, an odd offset, and the 0xF straddle
+        // whose BOTH halves miss (two fills).
+        begin
+            automatic logic [19:0] ln  = 20'h2C100;
+            automatic logic [19:0] ln2 = 20'h2C110;
+            for (int i = 0; i < 16; i++) begin
+                mem[ln  + 20'(i)] = 8'h80 + 8'(i);
+                mem[ln2 + 20'(i)] = 8'hA0 + 8'(i);
+            end
+            check_word(ln + 20'd2, 8'h82, 8'h83, "T12f cold even word");
+            check_word(ln + 20'd9, 8'h89, 8'h8A, "T12f cold odd word");
+            check_word(ln + 20'hF, 8'h8F, 8'hA0, "T12f cold straddle word");
+            check_word(ln2 + 20'd1, 8'hA1, 8'hA2, "T12f second line odd word");
         end
 
         drain();
