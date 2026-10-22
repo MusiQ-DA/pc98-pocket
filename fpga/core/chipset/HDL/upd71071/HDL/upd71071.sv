@@ -40,14 +40,16 @@ module upd71071 (
     // pending DREQ is being eaten by a mask bit, the edge-sense lock, the
     // software request register or the command register's disable/sense
     // bits, plus the FDC channels' mode/autoinit. Frozen with the wedge
-    // tap (probe slot 0xA8):
-    //   [31] controller_disable  [30] dreq_sense_active_low
-    //   [29] rotating_priority
-    //   [28:27] transfer_mode[3]  [26:25] transfer_mode[2]
-    //   [24] autoinit[3]  [23] autoinit[2]
-    //   [22:19] mask_register  [18:15] request_register
-    //   [14:11] dma_request_ff (raw pins after sense)  [10:7] dma_request_lock
-    //   [6:0] 0
+    // tap (probe slot 0xA8). The concat is exactly 19+6+7 = 32 bits --
+    // the previous 36-bit concat silently truncated, and the fields the
+    // old comments named never reached the metal.
+    //   [31] controller_disable  [30] rotating_priority
+    //   [29] dreq_sense_active_low
+    //   [28:25] mask_register  [24:21] request_register
+    //   [20:17] dma_request_ff (raw pins after sense)
+    //   [16:13] dma_request_lock
+    //   [12:11] transfer_mode[3]  [10:9] transfer_mode[2]
+    //   [8] autoinit[3]  [7] autoinit[2]  [6:0] 0
     output  logic   [31:0]  dbg_mask
 );
 
@@ -72,7 +74,7 @@ module upd71071 (
     logic           read_status_register;
     logic   [3:0]   read_current_address;
     logic   [3:0]   read_current_word_count;
-    logic   [22:0]  dbg_encoder;
+    logic   [18:0]  dbg_encoder;
 
     upd71071_Bus_Control_Logic u_Bus_Control_Logic (
         // Bus
@@ -263,10 +265,10 @@ module upd71071 (
 
     // The request-side snapshot: see the dbg_mask port comment above.
     // edge_request is left out -- it derives from the same mode bits the
-    // [28:25] nibble already carries (single|block), so a bit each way.
-    assign  dbg_mask = {dbg_encoder[22:20],        // cmd disable/sense/rot
-                        dbg_mode[9:4],             // FDC ch2/ch3 mode+autoinit
-                        dbg_encoder[19:0],         // mask/req/pins/lock
+    // [12:9] nibble already carries (single|block), so a bit each way.
+    // 19 + 6 + 7 = 32 bits exactly: no extension, no truncation.
+    assign  dbg_mask = {dbg_encoder[18:0],        // cmd/mask/req/pins/lock
+                        dbg_mode[9:4],            // FDC ch2/ch3 mode+autoinit
                         7'b0000000};
 
 

@@ -288,8 +288,14 @@ always @(posedge clk) begin
 end
 
 reg execute_ndma;
+// sw_reset must clear this too: the DOR reset aborts the command (np21w
+// fdc.c fdcstatusreset -- status back to RQM, event NEUTRAL), so a
+// non-DMA execution in flight when the BIOS (or run#977's wild code)
+// pulsed it must not leave execute_ndma parked at 1 with the engine
+// idle -- the run#977 freeze read exactly that residue (0xA9:
+// execute_ndma=1, state=IDLE, fifo=0) and it masked the real picture.
 always @(posedge clk) begin
-	if(~rst_n)                                  execute_ndma <= 1'b0;
+	if(~rst_n | sw_reset)                       execute_ndma <= 1'b0;
 	else if(cmd_read_write_ok_at_start && ndma) execute_ndma <= 1'b1;
 	else if(cmd_format_ok_at_start && ndma)     execute_ndma <= 1'b1;
 	else if(enter_result_phase)                 execute_ndma <= 1'b0;

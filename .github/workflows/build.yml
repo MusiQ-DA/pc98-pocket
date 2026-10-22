@@ -449,6 +449,42 @@ jobs:
           bash scripts/sim_fdc_si_stall.sh | tee fdc_si_stall.log
           test "$(grep -c ': PASS$' fdc_si_stall.log)" = 16
 
+      - name: the 71071 request-side snapshot packs the layout the hunt decodes
+        run: |
+          S=fpga/core
+          # The run#977 freeze was decoded against a dbg_mask layout that
+          # never reached the metal: a 19-bit concat into a [22:0] port
+          # (zero-extension) stacked with a 36-bit concat into a [31:0]
+          # port (truncation) shipped shifted fields -- bit23 read as
+          # autoinit[3] was actually dreq_sense_active_low. The bench
+          # drives the real register-write path and pins every field at
+          # its documented position in probe slot 0xA8.
+          H=$S/chipset/HDL
+          U=$H/upd71071/HDL
+          verilator --binary --timing -Wno-fatal --top-module tb_71071_dbgmask \
+            -I$H -I$U \
+            sim/tb_71071_dbgmask.sv \
+            $U/upd71071.sv $U/upd71071_Bus_Control_Logic.sv \
+            $U/upd71071_Priority_Encoder.sv \
+            $U/upd71071_Address_And_Count_Registers.sv \
+            $U/upd71071_Timing_And_Control.sv \
+            -o dm --Mdir obj_dbgmask
+          ./obj_dbgmask/dm | tee dbgmask.log
+          grep -q "PASS tb_71071_dbgmask" dbgmask.log
+
+      - name: the wedge triggers catch poll, DRQ-stall and wild fetches
+        run: |
+          # Unit-level copy of core_top's detector block (horizon
+          # narrowed): liveness on the fetch cursor, the poll-trap window
+          # (slot 0x87), the FDC DRQ-stall level, and the run#977 wild-
+          # fetch trigger -- a cursor bouncing inside the IVT moves the
+          # whole time, so only the zone check can catch it, and the f0
+          # term must stay stripped (a port-0xF0 write is legitimate).
+          verilator --binary --timing -Wno-fatal --top-module tb_wedge_trig \
+            sim/tb_wedge_trig.sv -o wt --Mdir obj_wtrig
+          ./obj_wtrig/wt | tee wedge_trig.log
+          grep -q "PASS tb_wedge_trig" wedge_trig.log
+
       - name: RAM-image serve keeps sector bytes in order under firmware mgmt traffic
         run: |
           S=fpga/core

@@ -1786,6 +1786,7 @@ module core_top (
     reg  [19:0] snap_pc       = 20'd0;
     reg  [31:0] snap_dma      = 32'd0;
     reg  [31:0] snap_fdc2     = 32'd0;
+    reg  [31:0] snap_z86      = 32'd0;
     reg         ram_unstick_r = 1'b0;
     // Retirement stops legitimately while the core is paused, probe-stopped
     // or in reset -- those windows must not arm the latch.
@@ -1825,9 +1826,32 @@ module core_top (
     reg  [23:0] fdq_static  = 24'd0;
     reg         fdq_latch   = 1'b0;
     wire        fdq_up      = cs_fdc2[7];
-    // The transition-catch latches: either one freezes the wedge tap
+    //
+    // Wild-fetch trigger (write slot 0x87 bit30, armed with the poll
+    // window): the run#977 shape -- the cursor bouncing 0:0000-0:000F
+    // inside the IVT while the machine's devices sat freshly initialized
+    // -- moves the cursor the whole time, so neither the wedge detector
+    // (stillness) nor the poll window (a chosen 32-byte hole) can catch
+    // it, and by the time something parks the wild code's own port
+    // writes have re-initialized the 71071/FDC and destroyed the
+    // evidence. pc_wild (the tlog trap's zone list, f0 term stripped --
+    // port 0xF0 is a legitimate write) says no legal execution ever
+    // lives there: below the IVT+low-RAM fence, in VRAM, in the SCSI ROM
+    // hole, or HLT with IF clear. Latching wild freezes the whole wedge
+    // tap + pc_hist + tlog at the FIRST wild instant, before the guest
+    // state is overwritten -- unlike the tlog_trap (slot 0x0e bit9) this
+    // does NOT stop the CPU, so the run can also watch what the wild
+    // code does next (an F0 write, a 71071/FDC reset port). Debounced
+    // 2^10 clk: a real wild execution stays put for thousands of cycles,
+    // a decode transient does not.
+    reg         wild_en     = 1'b0;
+    reg  [9:0]  wild_static = 10'd0;
+    reg         wild_latch  = 1'b0;
+    wire        wild_zone   = wild_en & wedge_run
+                           & (pc_wild & ~f0_port_write);
+    // The transition-catch latches: any one freezes the wedge tap
     // (through wedge_latch below) plus pc_hist and tlog.
-    wire        tap_latch   = poll_latch | fdq_latch;
+    wire        tap_latch   = poll_latch | fdq_latch | wild_latch;
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h08
             && probe_wdata_c[0]) begin
@@ -1837,6 +1861,8 @@ module core_top (
             poll_latch    <= 1'b0;
             fdq_static    <= 24'd0;
             fdq_latch     <= 1'b0;
+            wild_static   <= 10'd0;
+            wild_latch    <= 1'b0;
         end else begin
             if (!wedge_latch && wedge_run) begin
                 wedge_ret_prev <= retired_cnt;
@@ -1864,7 +1890,15 @@ module core_top (
                 end else
                     fdq_static <= 24'd0;
             end
-            // Either catch latches the wedge snapshot too.
+            if (!wild_latch && wedge_run) begin
+                if (wild_zone) begin
+                    wild_static <= wild_static + 10'd1;
+                    if (&wild_static)
+                        wild_latch <= 1'b1;
+                end else
+                    wild_static <= 10'd0;
+            end
+            // Any catch latches the wedge snapshot too.
             if (tap_latch && !wedge_latch)
                 wedge_latch <= 1'b1;
         end
@@ -1881,6 +1915,13 @@ module core_top (
             snap_pc      <= zet_pc;
             snap_dma     <= cs_w_dma;
             snap_fdc2    <= cs_fdc2;
+            // The CPU's own answer at the freeze instant: HLT vs a dead
+            // pipeline, IF's state (an unwakeable HLT), the full IP. The
+            // live slots (0x10-0x16) keep churning; this copy is frozen
+            // with everything else. [31] z86_halted, [27:16] FLAGS[11:0]
+            // (bit25 = IF, bit24 = TF), [15:0] IP.
+            snap_z86     <= {z86_halted, 3'b000,
+                             z86_dbg_regs[219:208], z86_dbg_regs[207:192]};
         end
         ram_unstick_r <= (probe_wr_pulse && probe_waddr_c == 7'h08
                           && probe_wdata_c[1]);
@@ -2030,9 +2071,11 @@ module core_top (
             //        last_35_rdata, last_37_wdata} -- the 0x35 readback
             // bit 7 decides cold vs resume; entry_branch says which way
             // the entry actually went (b0 resume b1 cold b2 landed b3 F0).
-            8'h90:   probe_data_c = {2'b00, itf_bank, f0_seen,
-                                     entry_branch, in35_count,
+            8'h90:   probe_data_c = {entry_branch, in35_count,
                                      last_35_rdata, last_37_wdata};
+            // (itf_bank/f0_seen used to ride here in a 36-bit concat that
+            // silently truncated -- bits 31:24 always read entry_branch,
+            // never the named flags; they now live in 0xAA's pad nibble.)
             // bench-next186 probe block, remapped off 0x35-0x3A (owned by
             // the sysport/TVRAM/GVRAM/GDC slots above) and 0x64-0x74 (inside
             // this branch's rst_snap ring, 0x61-0x80):
@@ -2196,13 +2239,16 @@ module core_top (
             8'ha7:   probe_data_c = {12'h0, snap_pc};
             // The run#976 triage slots (frozen with the wedge tap; live
             // until it latches): 0xA8 -- the uPD71071's request-side
-            // registers (upd71071's dbg_mask): [31] controller_disable,
-            // [30] dreq_sense_active_low, [29] rotating_priority,
-            // [28:27] transfer_mode[3], [26:25] transfer_mode[2],
-            // [24] autoinit[3], [23] autoinit[2], [22:19] mask_register,
-            // [18:15] request_register, [14:11] dma_request_ff (the raw
-            // DREQ pins after the sense bit), [10:7] dma_request_lock,
-            // [6:0] 0.
+            // registers (upd71071's dbg_mask; layout fixed in run#977 --
+            // the original 36-bit concat truncated and the commented
+            // layout never reached the metal):
+            // [31] controller_disable  [30] rotating_priority
+            // [29] dreq_sense_active_low
+            // [28:25] mask_register  [24:21] request_register
+            // [20:17] dma_request_ff (raw pins after sense)
+            // [16:13] dma_request_lock
+            // [12:11] transfer_mode[3]  [10:9] transfer_mode[2]
+            // [8] autoinit[3]  [7] autoinit[2]  [6:0] 0
             8'ha8:   probe_data_c = snap_dma;
             // 0xA9 -- the floppy engine's execution-phase view
             // (Peripherals' dbg_fdc2 = {0, floppy.v's dbg2, TC latch}):
@@ -2218,9 +2264,20 @@ module core_top (
             // 0xAA -- the trigger statuses: which latch fired and how far
             // the poll window dwell had counted (poll_static is full
             // 24'hFFFFFF only at the latch -- read mid-run to watch it
-            // climb).
+            // climb). Bit29 wild_latch: the cursor entered a zone no
+            // legal execution lives in (slot 0x87 bit30 arms it).
+            // [27:26] carry itf_bank/f0_seen -- their old home (slot
+            // 0x90) truncated them off the metal in an over-wide concat.
             8'haa:   probe_data_c = {wedge_latch, poll_latch, fdq_latch,
-                                     5'h0, poll_static};
+                                     wild_latch, itf_bank, f0_seen, 2'b00,
+                                     poll_static};
+            // 0xAB -- the frozen z86 view: [31] halted, [27:16]
+            // FLAGS[11:0] ([25]=IF, [24]=TF), [15:0] IP. Separates
+            // "parked in HLT waiting for an interrupt that never comes"
+            // from "pipeline dead" and names where the reboot/wild run
+            // stopped, which the live cursor (slot 0x18) can no longer
+            // prove after the fact.
+            8'hab:   probe_data_c = snap_z86;
             8'hFF:   probe_data_c = 32'h98C0_DE98;
             default: probe_data_c = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -2541,13 +2598,18 @@ module core_top (
             trig_wronly <= probe_wdata_c[27];
             trig_ds     <= probe_wdata_c[26];
         end
-        // Slot 0x07 (wr 0x87): arm the poll-trap trigger -- {en[31],
-        // pc[19:0]}. The 32-byte window is pc[19:5] of the armed address;
-        // the trigger latches (freezing the wedge tap + pc_hist + tlog)
-        // when the fetch cursor stays inside it for ~390 ms. Clearing
-        // en[31] disarms.
+        // Slot 0x07 (wr 0x87): arm the poll-trap and wild-fetch triggers
+        // -- {poll_en[31], wild_en[30], pc[19:0]}. The 32-byte poll
+        // window is pc[19:5] of the armed address; the trigger latches
+        // (freezing the wedge tap + pc_hist + tlog) when the fetch cursor
+        // stays inside it for ~390 ms. bit30 arms the wild-fetch trigger
+        // (a cursor entering the no-legal-code zones freezes the same
+        // tap within ~1024 clk). Arm both when the game starts playing;
+        // clearing en[31] disarms the poll window, clearing bit30 the
+        // wild watch.
         if (probe_wr_pulse && probe_waddr_c == 7'h07) begin
             poll_en <= probe_wdata_c[31];
+            wild_en <= probe_wdata_c[30];
             poll_pc <= probe_wdata_c[19:0];
         end
         // Slot 0x09: CPU-speed override for scripted runs -- wdata[2] forces

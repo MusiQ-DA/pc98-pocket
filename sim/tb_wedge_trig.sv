@@ -57,13 +57,27 @@ module tb_wedge_trig;
     logic        poll_latch = 1'b0;
     cnt_t        fdq_static  = '0;
     logic        fdq_latch   = 1'b0;
+    logic        wild_en     = 1'b0;
+    logic [3:0]  wild_static = '0;
+    logic        wild_latch  = 1'b0;
+    logic        z86_halted  = 1'b0;
+    logic        z86_if      = 1'b1;
+    logic        f0_port_write = 1'b0;
 
     wire wedge_run = ~reset_cpu & ~pause_core & ~z86_dbg_stopped
                    & ~jtag_dbg_stop;
     wire wedge_moving = (retired_cnt != wedge_ret_prev)
                       | (pc_now != wedge_pc_prev);
     wire poll_in_win = poll_en & (pc_now[19:5] == poll_pc[19:5]);
-    wire tap_latch   = poll_latch | fdq_latch;
+    // core_top's zone list (pc_wild), f0 term stripped: the port write is
+    // legitimate even from a wild cursor, so it must not arm the trigger.
+    wire wild_zone = wild_en & wedge_run
+                   & (((pc_now < 20'h00400)
+                       || (pc_now >= 20'hA0000 && pc_now < 20'hD0000)
+                       || (pc_now >= 20'hE0000 && pc_now < 20'hE8000)
+                       || (z86_halted && !z86_if))
+                      & ~f0_port_write);
+    wire tap_latch   = poll_latch | fdq_latch | wild_latch;
 
     always_ff @(posedge clk) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h08
@@ -74,6 +88,8 @@ module tb_wedge_trig;
             poll_latch    <= 1'b0;
             fdq_static    <= '0;
             fdq_latch     <= 1'b0;
+            wild_static   <= '0;
+            wild_latch    <= 1'b0;
         end else begin
             if (!wedge_latch && wedge_run) begin
                 wedge_ret_prev <= retired_cnt;
@@ -101,6 +117,17 @@ module tb_wedge_trig;
                 end else
                     fdq_static <= '0;
             end
+            // wild debounce: core_top uses a full 10-bit counter; the
+            // shape (count while present, reset on leaving) is what
+            // matters here, so 4 bits keep the bench short.
+            if (!wild_latch && wedge_run) begin
+                if (wild_zone) begin
+                    wild_static <= wild_static + 1'd1;
+                    if (&wild_static)
+                        wild_latch <= 1'b1;
+                end else
+                    wild_static <= '0;
+            end
             if (tap_latch && !wedge_latch)
                 wedge_latch <= 1'b1;
         end
@@ -111,10 +138,12 @@ module tb_wedge_trig;
     end
 
     // core_top's slot-0x07 decode, same shape:
-    //   {en[31], pc[19:0]} arms the poll-trap window.
+    //   {poll_en[31], wild_en[30], pc[19:0]} arms the poll window and the
+    //   wild-fetch watch.
     always_ff @(posedge clk) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h07) begin
             poll_en <= probe_wdata_c[31];
+            wild_en <= probe_wdata_c[30];
             poll_pc <= probe_wdata_c[19:0];
         end
     end
@@ -229,6 +258,92 @@ module tb_wedge_trig;
             $display("FAIL (6): pc-static silence did not latch wedge");
         end else
             $display("pass (6): pc-static silence latched wedge");
+
+        wr08(32'h1);
+
+        // (7) the run#977 shape: the cursor BOUNCES inside the IVT
+        // (0:0000 <-> 0:000F) -- moving the whole time, so the wedge
+        // detector can never fire -- while armed wild (slot 0x87 bit30)
+        // watches. The wild trigger must latch despite the movement.
+        wr07({1'b1, 1'b1, 10'd0, 20'h317A8});    // poll + wild armed
+        pc_now = 20'h00000;
+        repeat (24) begin
+            @(posedge clk);
+            pc_now <= pc_now ^ 20'h0000F;        // 0 <-> F, always moving
+        end
+        if (!wild_latch || !wedge_latch) begin
+            errors++;
+            $display("FAIL (7): wild bounce did not latch (w=%b wld=%b)",
+                     wedge_latch, wild_latch);
+        end else
+            $display("pass (7): IVT bounce latched wild (and wedge freeze)");
+
+        // (8) same bounce with wild DISARMED (bit30=0): nothing latches.
+        wr08(32'h1);
+        wr07({1'b1, 1'b0, 10'd0, 20'h317A8});    // poll only
+        pc_now = 20'h00000;
+        repeat (24) begin
+            @(posedge clk);
+            pc_now <= pc_now ^ 20'h0000F;
+        end
+        if (wild_latch) begin
+            errors++;
+            $display("FAIL (8): wild latched while disarmed");
+        end else
+            $display("pass (8): wild disarmed, bounce ignored");
+
+        // (9) the f0 term is stripped: a port-0xF0 write from a wild
+        // cursor is a reset request, not a wild-fetch catch.
+        pc_now = 20'h00000;
+        f0_port_write = 1'b1;
+        wr07({1'b1, 1'b1, 10'd0, 20'h317A8});    // wild armed again
+        repeat (24) @(posedge clk);
+        f0_port_write = 1'b0;
+        if (wild_latch) begin
+            errors++;
+            $display("FAIL (9): wild latched on the f0 window");
+        end else
+            $display("pass (9): f0 write stripped from the wild zone");
+
+        // (10) legal addresses (low RAM game code) never latch; a brief
+        // one-cycle transient through the IVT window must also not latch
+        // (the debounce).
+        pc_now = 20'h10000;
+        repeat (8) begin
+            @(posedge clk);
+            pc_now <= pc_now + 20'd11;
+        end
+        if (wild_latch) begin
+            errors++;
+            $display("FAIL (10a): wild latched on legal low RAM");
+        end else
+            $display("pass (10a): legal low RAM, no wild latch");
+        pc_now = 20'h00005;                      // a 1-cycle transient
+        @(posedge clk); pc_now <= 20'h10000;
+        repeat (4) @(posedge clk);
+        if (wild_latch) begin
+            errors++;
+            $display("FAIL (10b): wild latched on a transient");
+        end else
+            $display("pass (10b): transient through the wild zone ignored");
+
+        // (11) HLT with IF clear is wild (nothing can wake it); HLT with
+        // IF set is a legal VBLANK wait and must not latch.
+        z86_halted = 1'b1; z86_if = 1'b0;
+        repeat (24) @(posedge clk);
+        if (!wild_latch) begin
+            errors++;
+            $display("FAIL (11a): HLT/IF=0 did not latch wild");
+        end else
+            $display("pass (11a): unwakeable HLT latched wild");
+        wr08(32'h1);
+        z86_halted = 1'b1; z86_if = 1'b1;
+        repeat (24) @(posedge clk);
+        if (wild_latch) begin
+            errors++;
+            $display("FAIL (11b): HLT/IF=1 (legal VBLANK wait) latched");
+        end else
+            $display("pass (11b): wakeable HLT ignored");
 
         if (errors == 0)
             $display("=== PASS tb_wedge_trig ===");

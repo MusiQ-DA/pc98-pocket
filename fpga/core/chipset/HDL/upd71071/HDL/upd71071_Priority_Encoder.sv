@@ -41,14 +41,19 @@ module upd71071_Priority_Encoder (
     // "the mask bit ate it" (a) or "the request never latched" (b) is
     // exactly this snapshot. Registered at the core_top boundary into
     // probe slot 0xA8 (frozen with the wedge tap).
-    //   [22]    controller_disable (command reg bit 2)
-    //   [21]    rotating_priority  (command reg bit 4)
-    //   [20]    dreq_sense_active_low (command reg bit 6)
-    //   [19:16] mask_register -- 1 = channel masked off (reset/EOP sets it)
-    //   [15:12] request_register (software requests)
-    //   [11:8]  dma_request_ff (the raw DREQ pins, after the sense bit)
-    //   [7:4]   dma_request_lock (edge-sense lock: single/block channels)
-    output  logic   [22:0]  dbg
+    // The port is [18:0] -- EXACTLY the concat below. It used to be
+    // [22:0] with a 19-bit assign (silent zero-extension) which, stacked
+    // with upd71071.sv's over-wide dbg_mask concat (silent truncation),
+    // shipped a field layout none of the comments described -- the
+    // run#977 "mask=1111" reading was actually dreq_sense_active_low|mask.
+    //   [18]    controller_disable (command reg bit 2)
+    //   [17]    rotating_priority  (command reg bit 4)
+    //   [16]    dreq_sense_active_low (command reg bit 6)
+    //   [15:12] mask_register -- 1 = channel masked off (reset/EOP sets it)
+    //   [11:8]  request_register (software requests)
+    //   [7:4]   dma_request_ff (the raw DREQ pins, after the sense bit)
+    //   [3:0]   dma_request_lock (edge-sense lock: single/block channels)
+    output  logic   [18:0]  dbg
 );
     import upd71071_Common_Package::rotate_right;
     import upd71071_Common_Package::rotate_left;
