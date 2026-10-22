@@ -1074,7 +1074,9 @@ module RAM #(
     assign auto_unstick = wdog_no_work & (wdog_cnt == '1);
 
     always_ff @(posedge clock, posedge reset) begin
-        if (reset || (state == IDLE) || auto_unstick)
+        if (reset)
+            wdog_cnt <= '0;
+        else if ((state == IDLE) || auto_unstick)
             wdog_cnt <= '0;
         else if (wdog_cnt != '1)
             wdog_cnt <= wdog_cnt + 1'b1;
