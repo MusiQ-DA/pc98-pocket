@@ -2028,11 +2028,9 @@ module core_top (
             // 0xE6: {last data, last addr, first data}.
             8'he5:   probe_data_c = chipset_dbg8;
             8'he6:   probe_data_c = chipset_dbg9;
-            // 0xE7-0xEA: watchpoint's first four hits, sticky.
-            8'he7:   probe_data_c = chipset_dbg10[31:0];
-            8'he8:   probe_data_c = chipset_dbg10[63:32];
-            8'he9:   probe_data_c = chipset_dbg10[95:64];
-            8'hea:   probe_data_c = chipset_dbg10[127:96];
+            // 0xE7-0xEA: retired with the arbiter's overlap witness (its
+            // hunt answered zero; nothing ever read the slots). Reads
+            // return the dead-slot default above.
             // 0xEB-0xED: RAM accept-side write ring (newest last at 0xEB);
             // 0xEE: accepted-write count.
             8'heb:   probe_data_c = chipset_dbg11[31:0];
@@ -3164,7 +3162,6 @@ module core_top (
     wire [127:0] chipset_dbg7;
     wire  [31:0] chipset_dbg8;
     wire  [31:0] chipset_dbg9;
-    wire [127:0] chipset_dbg10;
     wire [103:0] chipset_dbg11;
     wire  [55:0] chipset_dbg12;
     // The wedge tap's live views (PC98_JTAG only; frozen copies live in the
@@ -3464,7 +3461,6 @@ module core_top (
         .dbg_chipset7                       (chipset_dbg7),
         .dbg_chipset8                       (chipset_dbg8),
         .dbg_chipset9                       (chipset_dbg9),
-        .dbg_chipset10                      (chipset_dbg10),
         .dbg_chipset11                      (chipset_dbg11),
         .dbg_chipset12                      (chipset_dbg12),
         // The wedge tap: live views out, the escape-hatch pulse in.

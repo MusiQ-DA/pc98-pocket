@@ -60,7 +60,6 @@ module BUS_ARBITER (
     // up 0x00 afterwards can be attributed to its overwriter.
     input   logic   [19:0]  watch_addr,
     output  logic   [127:0] dbg_dma3,
-    output  logic   [127:0] dbg_dma4,
     // JTAG probe (PC98_JTAG): the wedge tap's arbiter/DMA view --
     //   [15]   dce_pin -- the uPD71071's CE half-phase (its clock; a DMA
     //          wedged with this frozen means the divider itself stopped)
@@ -379,35 +378,12 @@ module BUS_ARBITER (
     assign dbg_dma = {break_cnt, grant_cnt, ack_wr_cnt, 96'd0};
     assign dbg_dma3 = {watch_cnt, 24'h0, watch_log[2],
                        watch_log[1], watch_log[0]};
-    // Overlap witness: the floppy fill's lost byte at turbo never shows on
-    // the bus as a write at its address, and no DMAC strobe starts outside
-    // dma_own (checked, zero). Count DMAC write strobes that start under an
-    // already-low merged strobe (probe 0xe7 bits 31:16, record at 0xe8).
-    logic           prev_dmw;
-    logic           prev_ab_mw_ovl;
-    logic   [15:0]  mis_mid;
-    logic   [31:0]  rec_mid;
-    wire            dmw = ~dma_memory_write_n;
-    always_ff @(posedge clock) begin
-        if (reset) begin
-            prev_dmw  <= 1'b0;
-            mis_mid   <= 16'd0;
-        end else begin
-            prev_dmw <= dmw;
-            prev_ab_mw_ovl <= ab_memory_write_n;
-            // Overlap: the merged strobe is already low when the DMAC's
-            // starts -- no falling edge for RAM.sv or the watch to see, the
-            // fill byte rides an older write's command. rec_mid keeps the
-            // 8288 side's live state and the CPU address.
-            if (dmw & ~prev_dmw & ~prev_ab_mw_ovl) begin
-                mis_mid <= mis_mid + 16'd1;
-                rec_mid <= {~bc_memory_write_n, bc_memory_enable,
-                            ~address_enable_n, dma_own, 8'h0,
-                            cpu_address};
-            end
-        end
-    end
-    assign dbg_dma4 = {64'h0, rec_mid, mis_mid, 16'h0};
+    // The overlap witness that lived here (mis_mid/rec_mid, slots
+    // 0xE7-0xEA) is gone: its hunt -- DMAC write strobes starting under an
+    // already-low merged strobe at turbo -- answered zero and no script
+    // ever read the slots. Dropped to buy back LABs at a device that now
+    // fits at 1848/1848; the 0xA0-0xA7 wedge map and the 0xE1-0xE4 watch
+    // ring are untouched.
 
 
     //

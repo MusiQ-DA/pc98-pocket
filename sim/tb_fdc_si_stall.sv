@@ -119,7 +119,7 @@ module tb_fdc_si_stall;
     wire         processor_transmit_or_receive_n;
     wire         dma_wait_n;
     wire  [7:0]  dbg_hold;
-    wire [127:0] dbg_dma_w, dbg_dma3_w, dbg_dma4_w;
+    wire [127:0] dbg_dma_w, dbg_dma3_w;
     wire [15:0]  dbg_w_w;
     wire         dma_ready;
 
@@ -195,7 +195,6 @@ module tb_fdc_si_stall;
         .dbg_dma                            (dbg_dma_w),
         .watch_addr                         (20'h0),
         .dbg_dma3                           (dbg_dma3_w),
-        .dbg_dma4                           (dbg_dma4_w),
         .dbg_w                              (dbg_w_w)
     );
 

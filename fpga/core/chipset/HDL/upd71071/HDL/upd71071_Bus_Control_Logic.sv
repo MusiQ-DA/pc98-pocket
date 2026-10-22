@@ -69,10 +69,14 @@ module upd71071_Bus_Control_Logic (
     // and the uPD71071 parked in SI with the request pending forever --
     // SuperDepth's 6-36 s in-game freeze. Two changes, same shape as
     // the FDC path:
-    //   * address+data are captured every clock the cycle is OURS
-    //     (CS low, IOW low) and HOLD once CS leaves -- the decode at
-    //     the IOW rise uses the last owned address even if the pins
-    //     are preempted inside the tail;
+    //   * address+data are captured every clock the cycle is OURS -- chip
+    //     select low, which on this decode MEANS the address is inside
+    //     the DMAC's window (the select is the address decode) -- and
+    //     HOLD once CS leaves, so the decode at the IOW rise uses the
+    //     last owned address even if the pins are preempted inside the
+    //     tail. The strobe itself is not part of the enable: IOW-high
+    //     clks inside the window only ever load dead data, which no
+    //     write pulse consumes.
     //   * a pulse that has started can only be retired by the strobe's
     //     rise (or a DMA transfer's bus lock), never by CS dropping.
     //
@@ -81,7 +85,7 @@ module upd71071_Bus_Control_Logic (
             write_address     <= 4'b0000;
             internal_data_bus <= 8'b00000000;
         end
-        else if (~io_write_n_in & ~chip_select_n) begin
+        else if (~chip_select_n) begin
             write_address     <= address_in;
             internal_data_bus <= data_bus_in;
         end
