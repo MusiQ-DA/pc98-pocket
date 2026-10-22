@@ -126,8 +126,8 @@ module CHIPSET #(
         output  logic   [127:0] dbg_chipset5,
         // Write watchpoint armed from the probe (slot 0x8a): the last
         // three memory writes to that guest address.
-        input   logic   [19:0]  dbg_watch_addr,
-        output  logic   [127:0] dbg_chipset7,
+        // (RETIRED: the ring itself is gone from Bus_Arbiter -- the port
+        // went with it.)
         // RAM.sv's universal uncovered-write witness: a strobe that fell
         // while neither accepted, parked nor twin-matched is a true loss
         // the slot-full counters cannot see.
@@ -212,6 +212,10 @@ module CHIPSET #(
         // JTAG probe: the floppy engine's transfer state and live command.
         output  wire    [63:0]  dbg_fdc,
         output  wire    [63:0]  dbg_fdc_cmd,
+        // JTAG probe: the floppy engine's execution-phase view (floppy.v's
+        // dbg2 + the TC latch) -- frozen with the wedge tap at core_top
+        // (probe slot 0xA9).
+        output  wire    [31:0]  dbg_fdc2,
         // JTAG probe: the slave GDC's display registers.
         output  wire    [63:0]  dbg_gdc_s,
         // JTAG probe: slave GDC partitions one to three.
@@ -237,6 +241,12 @@ module CHIPSET #(
         output  wire    [15:0]  dbg_w_seq,
         output  wire    [23:0]  dbg_w_ram,
         output  wire    [39:0]  dbg_w_sdram,
+        // JTAG probe (PC98_JTAG): the uPD71071's request-side registers
+        // (mask/request/pins/lock + FDC ch2/3 mode/autoinit) -- see
+        // upd71071's dbg_mask. Frozen with the wedge tap (slot 0xA8);
+        // decides between "the mask ate the DRQ" and "the request never
+        // latched" in the run#976 freeze shape.
+        output  wire    [31:0]  dbg_w_dma,
         // JTAG probe (PC98_JTAG): the wedge escape hatch -- one clk pulse
         // drops RAM.sv's parked-write queue and forces its FSM to IDLE (see
         // RAM.sv's unstick port). The greset probe slot cannot do this:
@@ -406,8 +416,8 @@ module CHIPSET #(
         .ext_access_request                 (ext_access_request),
         .dbg                                (arb_dbg),
         .dbg_dma                            (dbg_chipset5),
-        .watch_addr                         (dbg_watch_addr),
-        .dbg_dma3                           (dbg_chipset7),
+        .watch_addr                         (20'hFFFFF),
+        .dbg_dma3                           (),
         // DRQ is active-low on the PC-98 bus (the data book names the pins
         // DRQ3O..DRQ0O) and the BIOS programs the 71071's DREQ sense bit
         // (0x11 bit6) to match. The sources here are active-high "request
@@ -417,7 +427,8 @@ module CHIPSET #(
         .dma_acknowledge_n                  (dma_acknowledge_n),
         .address_enable_n                   (address_enable_n),
         .terminal_count_n                   (terminal_count_n),
-        .dbg_w                              (dbg_w_arb)
+        .dbg_w                              (dbg_w_arb),
+        .dbg_w2                             (dbg_w_dma)
     );
 
 
@@ -546,6 +557,7 @@ module CHIPSET #(
         .fdd_dma_req                        (fdd_dma_req),
         .dbg_fdc                            (dbg_fdc),
         .dbg_fdc_cmd                        (dbg_fdc_cmd),
+        .dbg_fdc2                           (dbg_fdc2),
         .dbg_gdc_s                          (dbg_gdc_s),
         .dbg_gdc_s2                         (dbg_gdc_s2),
         .dbg_gdc_s3                         (dbg_gdc_s3),
@@ -819,8 +831,7 @@ module CHIPSET #(
         .dbg4                               (dbg_chipset8),
         .dbg5                               (dbg_chipset9),
         .dbg6                               (dbg_chipset11),
-        .dbg7                               (dbg_chipset12),
-        .dbg_watch_addr                     (dbg_watch_addr)
+        .dbg7                               (dbg_chipset12)
     );
 
     // JTAG probe bundle: {arbiter hold/DRQ, RAM FSM state} plus the wait

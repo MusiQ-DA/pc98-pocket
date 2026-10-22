@@ -92,7 +92,8 @@ module RAM #(
     output  logic   [31:0]  dbg5,
     output  logic   [103:0] dbg6,
     output  logic   [55:0]  dbg7,
-    input   logic   [19:0]  dbg_watch_addr,
+    // (The write-watchpoint address input is retired with the ring; dbg7
+    // reads zero regardless.)
     // SDRAM
     output  logic   [12:0]  sdram_address,
     output  logic           sdram_cke,

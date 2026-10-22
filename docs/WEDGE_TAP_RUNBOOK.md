@@ -27,10 +27,22 @@ cpu_bus_bridge・z86・Peripherals**)。
 
 ## 2. 追加したインフラ
 
-- **ウェッジ検出器** (core_top): retired_cnt が ~390ms (2^24 clk) 変化なし
-  (CPU 動作中・非 pause・非 reset・非 probe停止 のときのみカウント) で
-  `wedge_latch=1` を立て、下記スナップショット全レジスタを**凍結**。
+- **ウェッジ検出器** (core_top): liveness 信号 (retired_cnt **または zet_pc** —
+  z86 には retire タップが無く retired_cnt は常に 0 なので、実効的には
+  fetch cursor の静止) が ~390ms (2^24 clk) 変化なし (CPU 動作中・非 pause・
+  非 reset・非 probe停止 のときのみカウント) で `wedge_latch=1` を立て、
+  下記スナップショット全レジスタを**凍結**。
   以後リセットループが起きても値は動かない。
+- **遷移捕獲トリガ 2種** (run#976 凍結署名対策 — poll ループ滞留では
+  retired/pc が「動いたまま止まらない」ため旧検出器が発火しない):
+  - **poll-trap** (書き込みスロット 0x07, wr 0x87 形式 `{en[31], pc[19:0]}`):
+    fetch cursor が arm したアドレスの 32 バイト窓 (pc[19:5] 一致) に
+    ~390ms 留まり続けたら発火。0x317A8 の BGM sequencer poll 用。
+  - **FDC DRQ-stall** (常時武装・書き込み不要): floppy の dma_req レベル
+    (= Peripherals の fdd_dma_req_wire) が ~390ms 立ち続けたら発火。
+    正常転送は DACK 毎に数クロックで折れるので遠く届かない。
+  - どちらも発火で wedge snapshot + pc_hist + tlog を凍結
+    (書き込みスロット 0x08 bit0 で全解除=再アーム)。
 - **読み出しスロット 0xA0-0xA7** (すべて凍結値、core_top 境界でレジスタ化
   済み — S2T クラッシュ対策の既存パターンと同じ):
   - `0xA0` = {Bus_Arbiter dbg_w[15:0], READY dbg[7:0], arbiter hold byte}
@@ -41,14 +53,37 @@ cpu_bus_bridge・z86・Peripherals**)。
   - `0xA5` = {pc98_gvram_seq dbg2[15:0], chipset_dbg2[7:0], 8'h0}
   - `0xA6` = {wedge_latch, 7'h0, snap_retired[23:0]}
   - `0xA7` = {12'h0, snap_pc[19:0]} (latch 時点の fetch cursor)
+- **読み出しスロット 0xA8-0xAA** (run#976 第4切り分け用、同様に凍結値):
+  - `0xA8` = uPD71071 リクエスト側レジスタ (upd71071 dbg_mask):
+    `[31]` controller_disable, `[30]` dreq_sense_active_low,
+    `[29]` rotating_priority, `[28:27]` transfer_mode[3],
+    `[26:25]` transfer_mode[2], `[24]` autoinit[3], `[23]` autoinit[2],
+    `[22:19]` mask_register, `[18:15]` request_register (SW),
+    `[14:11]` dma_request_ff (DREQ 生ピン、sense 反転後),
+    `[10:7]` dma_request_lock, `[6:0]` 0
+  - `0xA9` = floppy 実行相ビュー (Peripherals dbg_fdc2 = {0, floppy dbg2, TC}):
+    `[31]` 0, `[30:27]` main state, `[26:16]` fifo_count,
+    `[15]` execute_ndma, `[14]` ndma_irq, `[13]` ndma タイムアウト検出,
+    `[12]` dma_irq_enable (0x94 DMAE), `[11]` dma_has_terminated (TC 受領),
+    `[10]` cmd_read 進行中, `[9]` cmd_write 進行中, `[8]` cmd_format 進行中,
+    `[7]` dma_req, `[6]` irq (INT 線), `[5]` busy, `[4]` in_seek_mode,
+    `[3]` datareg_ready, `[2]` transfer_to_cpu, `[1]` dma_ack パルス,
+    `[0]` TC ラッチ
+  - `0xAA` = {wedge_latch, poll_latch, fdq_latch, 5'h0, poll_static[23:0]}
+    (どのトリガが発火したか。poll_static は窓滞留カウンタの途中値も読める)
 - **書き込みスロット 0x08** (wr 0x88 形式):
-  - bit0: ラッチ解除+再アーム
+  - bit0: ラッチ解除+再アーム (poll/fdq トリガのカウンタも全解除)
   - bit1: **RAM.sv unstick パルス** (parked-write FIFO 全廃棄・FSM を
     IDLE 強制)。shim/mp の進行中トランザクションには触らない
     (単一トランザクションは必ず自力完結するため)。
 - **各 dbg ポートの新設**: sdram_mp→shim→RAM.sv, pc98_gvram_seq,
-  READY, upd71071(Timing_And_Control)→Bus_Arbiter, cpu_bus_bridge,
-  Chipset 経由で core_top へ (すべて core_top 境界で 1 段レジスタ)。
+  READY, upd71071(Timing_And_Control + Priority_Encoder)→Bus_Arbiter,
+  cpu_bus_bridge, floppy.v→Peripherals, Chipset 経由で core_top へ
+  (すべて core_top 境界で 1 段レジスタ)。
+- **撤去** (LAB 相殺): Bus_Arbiter の書き込みウォッチポイントリング
+  (0xE1-0xE4 は死亡スロット化、書き込み 0x0A も無効)、RAM.sv の
+  dbg_watch_addr 入力、core_top の ws_hit 凍結条件。
+  0x3E の {break, grant, ack_wr} カウンタは現役残置。
 
 ## 3. 実機手順
 
@@ -70,6 +105,24 @@ UNSTICK=1 openocd -f scripts/jtag_probe.cfg -f scripts/jtag_wedgehunt.tcl
 
 ```tcl
 set x [rd 0xa6]   ;# bit31 = wedge_latch。以降 0xa0..0xa7 が凍結値
+```
+
+### 3.1 run#976 型 (poll ループ滞留 + DRQ pending) の狩り方
+
+0x317A8 型の凍結は CPU が poll ループを回り続ける/留まり続ける形なので、
+旧検出器 (完全静止) ではなく遷移トリガで捕まえる:
+
+```tcl
+# openocd のプロンプトまたは自作スクリプト内で:
+wr 0x87 [expr {(1<<31) | 0x317A8}]   ;# poll-trap: 0x317A8 の32バイト窓, en
+# 0x317A4 窓にするなら pc[19:5]=0x18BD — 0x317A8 をそのまま渡せばよい
+# (窓は pc[19:5] 一致なので 0x317A0-0x317BF 全体が対象)
+# FDC DRQ-stall は常時武装 — 何もしなくてよい
+
+# 狩り: 0xAA を見ながら待つ (どちらかの latch が立ったら発火)
+#   poll_latch = bit30, fdq_latch = bit29, wedge_latch = bit31
+# 発火後: 0xA0-0xA9 を読んで切り分け (下の 4.6 節)
+wr 0x88 0x01                          ;# 全ラッチ解除=再アーム
 ```
 
 ## 4. 判読表
@@ -128,7 +181,22 @@ set x [rd 0xa6]   ;# bit31 = wedge_latch。以降 0xa0..0xa7 が凍結値
 | `st != S_IDLE` + `busy_age=0xFF` | コマンド系列 (ACT/RW/TAIL/REF) から抜けない |
 | `p_req` のビット模様 | どのポートが要求を出し続けているか {F,E,D,C,B,A}。A=1 のまま=RAM.sv からの要求、D=1=表示フェッチ |
 
-### 4.7 unstick 実験の判読
+### 4.7 uPD71071 リクエスト側 (0xA8) — run#976 第4切り分け
+
+凍結署名 `dma state=SI + drq=0011` (ch2/ch3 DRQ pending のまま grant なし)
+を 3 仮説で割る:
+
+| 0xA8 の読み | 結論 |
+|---|---|
+| `[22:19] mask` の ch2/ch3 ビットが **1** | 仮説 (a): **書き込みがまだどこかで消えている** — unmask (0x15) が 71071 に届いていない。第3修正 (CS窓内連続サンプリング) の窓をすり抜けた別経路を探す (i8288/ブリッジの再発、FDC 側ポートの干渉) |
+| mask=0 でも `[10:7] dma_request_lock` の ch ビットが 1 | エッジセンス lock が外れていない (single モードの ack 辺検出が死んでいる) |
+| mask=0, lock=0, `[14:11] dma_request_ff` に DRQ が反映されているのに state=SI | 仮説 (b): 優先エンコーダ以降 (encoded_dma→HRQ) か dce/CE 側。`[31] controller_disable` と 0xA0 の dce_pin も見る |
+| `[30] dreq_sense_active_low=0` | コマンドレジスタ bit6 が書き換わっている (stray write) — DRQ 極性反転で req が見えない |
+| `[28:25] transfer_mode` が single(01) でない | モードレジスタ破壊 — edge_request が立たず lock が組めない |
+| 0xA8 すべて正常 + 0xA9 `[7] dma_req=1` のまま | 仮説 (b'): **FDC が DRQ を出したまま IRQ まで到達しない** — 0xA9 の state/fifo/ndma ビットで FDC 側停止位置を特定 |
+| 0xA9 `[30:27] state` が S_WAIT_FOR_EMPTY_READ_FIFO 以外 / `[11] TC 受領=1` / `[14] ndma_irq=1` | 仮説 (c): FDC 側の状態遷移バグ (execute_ndma の `[15]` と組み合わせて NDMA/DMA モード混乱の判別) |
+
+### 4.8 unstick 実験の判読
 
 `UNSTICK=1` で wr 0x88 0x02 を打ったあと retired_cnt が再び動けば、
 **詰まりは RAM.sv の parked-write/FSM 記帳** に確定 (修正対象は RAM.sv 側)。

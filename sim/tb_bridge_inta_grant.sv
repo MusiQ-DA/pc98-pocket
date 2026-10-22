@@ -299,7 +299,6 @@ module tb_bridge_inta_grant;
         .ram_address_select_n(ram_sel_n),
         .write_taken(wr_taken_w),
         .dbg(), .dbg2(), .dbg3(), .dbg4(), .dbg5(), .dbg6(), .dbg7(),
-        .dbg_watch_addr(20'hFFFFF),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),

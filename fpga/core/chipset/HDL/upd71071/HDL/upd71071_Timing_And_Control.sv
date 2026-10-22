@@ -76,7 +76,16 @@ module upd71071_Timing_And_Control (
     //  hold_request, terminal_count, end_of_process_internal}. A bus
     // wedged while the DMA owns it shows the channel parked mid-transfer;
     // registered at the core_top boundary (slot 0xA0 low byte).
-    output  logic   [7:0]   dbg
+    output  logic   [7:0]   dbg,
+    // JTAG probe (PC98_JTAG): the FDC channels' mode registers -- the
+    // other way a pending DRQ never grants: mode no longer single/block
+    // (edge_request low latches nothing) or autoinit re-masking the
+    // channel at every EOP. Packs with the priority encoder's view into
+    // probe slot 0xA8:
+    //   [9:8]   transfer_mode[3]   [7:6] transfer_mode[2]
+    //   [5]     autoinit[3]        [4]   autoinit[2]
+    //   [3:0]   edge_request (single|block per channel)
+    output  logic   [9:0]   dbg_m
 );
     import upd71071_Common_Package::bit2num;
 
@@ -597,6 +606,10 @@ module upd71071_Timing_And_Control (
     // comment above the port list.
     assign  dbg = {3'(state), dma_select, hold_request, terminal_count,
                    end_of_process_internal};
+
+    assign  dbg_m = {transfer_mode[3], transfer_mode[2],
+                     autoinitialization_enable[3], autoinitialization_enable[2],
+                     edge_request};
 
     always_comb
         for (int i = 0; i < 4; i++)

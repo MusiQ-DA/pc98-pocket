@@ -315,7 +315,7 @@ module core_top (
     //                    master) kills both windows
     logic        jtag_pf_wkill   = 1'b0;
     logic        jtag_pf_bkill   = 1'b0;
-    logic [19:0] jtag_watch_addr = 20'hFFFFF;
+    // (The write-watchpoint address is retired with the ring.)
     wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
                                               : cpu_speed_cfg;
 `else
@@ -338,7 +338,6 @@ module core_top (
     wire         jtag_pf_nohit   = 1'b0;
     wire         jtag_pf_wkill   = 1'b0;
     wire         jtag_pf_bkill   = 1'b0;
-    wire  [19:0] jtag_watch_addr = 20'hFFFFF;
 `endif
 
     always @(posedge clk_chipset, posedge reset)
@@ -1452,13 +1451,9 @@ module core_top (
     // sees the arbiter's own bus, which a DMA cycle drives and
     // chipset_address does not. SuperDepth's turbo START failure lands a
     // CPU store of garbage on the same spot of its own code every time.
-    reg [31:0] ws_last = 32'd0;
-    reg        ws_hit  = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        ws_last <= chipset_dbg7[31:0];
-        ws_hit  <= (chipset_dbg7[31:0] != ws_last) && chipset_dbg7[31]
-                && chipset_dbg7[62];
-    end
+    // RETIRED with the watch ring itself (Bus_Arbiter's dbg_dma3 is 0 now,
+    // slots 0xE1-0xE4 read dead) -- its registers bought back the LABs the
+    // run#976 triage taps (0xA8/0xA9) and the poll/DRQ triggers need.
     // Bus ring: the last 256 Wishbone transfers the CPU completed --
     // fetches included -- with the live DS beside each: {ds, exec, we,
     // sel, adr, data}. Block RAM, frozen with pc_hist; probe write slot
@@ -1496,7 +1491,7 @@ module core_top (
             end
             if (f0_port_write || pc_in_errhalt || zet_fault || w43d_10 ||
                 (tlog_trap && pc_wild) ||
-                ws_hit ||
+                tap_latch ||
                 (trig_hit && trig_freeze && !trig_delay))
                 pc_hist_frozen <= 1'b1;
             if (trig_hit && trig_freeze && trig_delay)
@@ -1629,7 +1624,8 @@ module core_top (
             tlog_n <= tlog_n + 16'd1;
         end
         if (((tlog_trap && pc_wild) ||
-             (trig_hit && trig_freeze && !trig_delay)) && !tlog_frozen)
+             (trig_hit && trig_freeze && !trig_delay) ||
+             tap_latch) && !tlog_frozen)
             tlog_frozen <= 1'b1;
         if (probe_wr_pulse && probe_waddr_c == 7'h0e) begin
             tlog_ri   <= probe_wdata_c[5:0];
@@ -1777,6 +1773,7 @@ module core_top (
     reg         wedge_latch = 1'b0;
     reg  [23:0] wedge_static = 24'd0;
     reg  [23:0] wedge_ret_prev = 24'd0;
+    reg  [19:0] wedge_pc_prev  = 20'd0;
     reg  [15:0] snap_arb      = 16'd0;
     reg  [7:0]  snap_rdy      = 8'd0;
     reg  [7:0]  snap_arbhold  = 8'd0;
@@ -1787,24 +1784,89 @@ module core_top (
     reg  [7:0]  snap_chip2    = 8'd0;
     reg  [23:0] snap_retired  = 24'd0;
     reg  [19:0] snap_pc       = 20'd0;
+    reg  [31:0] snap_dma      = 32'd0;
+    reg  [31:0] snap_fdc2     = 32'd0;
     reg         ram_unstick_r = 1'b0;
     // Retirement stops legitimately while the core is paused, probe-stopped
     // or in reset -- those windows must not arm the latch.
     wire wedge_run = ~reset_cpu & ~pause_core & ~z86_dbg_stopped
                    & ~jtag_dbg_stop;
+    // Liveness is the fetch cursor, not retired_cnt: z86 has no retire
+    // tap (v30_first_pop is tied 0, so slot 0x17 reads 0 forever), and
+    // the freeze signature -- pc parked in a poll loop -- stops zet_pc
+    // while a healthy machine keeps it moving. The OR keeps any future
+    // retire feed useful without changing the criterion.
+    wire wedge_moving = (retired_cnt != wedge_ret_prev)
+                      | (pc_now != wedge_pc_prev);
+    //
+    // Poll-trap trigger (write slot 0x87, {en[31], pc[19:0]}): the CPU
+    // walking a tight poll loop never stops retiring, so the wedge
+    // detector above never arms -- the run#976 shape sat at 0x317A8 for
+    // seconds with the latch at 0. This trigger latches when the fetch
+    // cursor stays inside the armed 32-byte window (pc[19:5] match -- a
+    // poll loop is a handful of instructions that never leaves its
+    // window) for the same ~390 ms the wedge detector uses. On latch the
+    // wedge snapshot freezes with pc_hist and tlog, catching the
+    // transition INTO the stuck poll.
+    reg         poll_en   = 1'b0;
+    reg  [19:0] poll_pc   = 20'd0;
+    reg  [23:0] poll_static = 24'd0;
+    reg         poll_latch = 1'b0;
+    wire        poll_in_win = poll_en & (pc_now[19:5] == poll_pc[19:5]);
+    //
+    // FDC DRQ-stall trigger: the FDC's dma_req is a LEVEL that only the
+    // 71071's DACK (or TC) folds -- a healthy byte train re-dips it every
+    // few hundred clocks. dma_req held up for ~390 ms means the 71071
+    // never came: exactly the run#976 freeze shape (state=SI, drq=0011),
+    // latched the moment it stalls instead of whenever the CPU happens
+    // to stop polling. Bit 7 of the live cs_fdc2 view is the wire
+    // (floppy.v's dma_req == Peripherals' fdd_dma_req_wire; the dbg2
+    // field sits one up because [0] is the TC latch).
+    reg  [23:0] fdq_static  = 24'd0;
+    reg         fdq_latch   = 1'b0;
+    wire        fdq_up      = cs_fdc2[7];
+    // The transition-catch latches: either one freezes the wedge tap
+    // (through wedge_latch below) plus pc_hist and tlog.
+    wire        tap_latch   = poll_latch | fdq_latch;
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h08
             && probe_wdata_c[0]) begin
             wedge_latch   <= 1'b0;
             wedge_static  <= 24'd0;
-        end else if (!wedge_latch && wedge_run) begin
-            wedge_ret_prev <= retired_cnt;
-            if (retired_cnt == wedge_ret_prev) begin
-                wedge_static <= wedge_static + 24'd1;
-                if (wedge_static == 24'hFF_FFFF)
-                    wedge_latch <= 1'b1;
-            end else
-                wedge_static <= 24'd0;
+            poll_static   <= 24'd0;
+            poll_latch    <= 1'b0;
+            fdq_static    <= 24'd0;
+            fdq_latch     <= 1'b0;
+        end else begin
+            if (!wedge_latch && wedge_run) begin
+                wedge_ret_prev <= retired_cnt;
+                wedge_pc_prev  <= pc_now;
+                if (!wedge_moving) begin
+                    wedge_static <= wedge_static + 24'd1;
+                    if (wedge_static == 24'hFF_FFFF)
+                        wedge_latch <= 1'b1;
+                end else
+                    wedge_static <= 24'd0;
+            end
+            if (!poll_latch && wedge_run) begin
+                if (poll_in_win) begin
+                    poll_static <= poll_static + 24'd1;
+                    if (poll_static == 24'hFF_FFFF)
+                        poll_latch <= 1'b1;
+                end else
+                    poll_static <= 24'd0;
+            end
+            if (!fdq_latch && wedge_run) begin
+                if (fdq_up) begin
+                    fdq_static <= fdq_static + 24'd1;
+                    if (fdq_static == 24'hFF_FFFF)
+                        fdq_latch <= 1'b1;
+                end else
+                    fdq_static <= 24'd0;
+            end
+            // Either catch latches the wedge snapshot too.
+            if (tap_latch && !wedge_latch)
+                wedge_latch <= 1'b1;
         end
         if (!wedge_latch) begin
             snap_arb     <= cs_w_arb;
@@ -1817,6 +1879,8 @@ module core_top (
             snap_chip2   <= chipset_dbg2;
             snap_retired <= retired_cnt;
             snap_pc      <= zet_pc;
+            snap_dma     <= cs_w_dma;
+            snap_fdc2    <= cs_fdc2;
         end
         ram_unstick_r <= (probe_wr_pulse && probe_waddr_c == 7'h08
                           && probe_wdata_c[1]);
@@ -2018,12 +2082,9 @@ module core_top (
             // parks 0x10505/0x05, an s5=0x2FF leak parks 0xF02FF/0xFF.
             8'h3f:   probe_data_c = {1'b0, st_addr_w, st_wdata_w,
                                      st_req_w, st_we_w, st_raw_w};
-            // 0xE1-0xE4: last three writes to the watch address (write slot
-            // 0x0A); 0xE4's top word is {watch count, 24'h0}.
-            8'he1:   probe_data_c = chipset_dbg7[31:0];
-            8'he2:   probe_data_c = chipset_dbg7[63:32];
-            8'he3:   probe_data_c = chipset_dbg7[95:64];
-            8'he4:   probe_data_c = chipset_dbg7[127:96];
+            // 0xE1-0xE4: the write watchpoint ring -- RETIRED (its hunt
+            // answered; the registers bought back the LABs the run#976
+            // triage taps need). Reads return the dead-slot default.
             // 0xE5: RAM's uncovered-write witness {cnt, st, first addr};
             // 0xE6: {last data, last addr, first data}.
             8'he5:   probe_data_c = chipset_dbg8;
@@ -2133,6 +2194,33 @@ module core_top (
             8'ha5:   probe_data_c = {snap_seq, snap_chip2, 8'h0};
             8'ha6:   probe_data_c = {wedge_latch, 7'h0, snap_retired};
             8'ha7:   probe_data_c = {12'h0, snap_pc};
+            // The run#976 triage slots (frozen with the wedge tap; live
+            // until it latches): 0xA8 -- the uPD71071's request-side
+            // registers (upd71071's dbg_mask): [31] controller_disable,
+            // [30] dreq_sense_active_low, [29] rotating_priority,
+            // [28:27] transfer_mode[3], [26:25] transfer_mode[2],
+            // [24] autoinit[3], [23] autoinit[2], [22:19] mask_register,
+            // [18:15] request_register, [14:11] dma_request_ff (the raw
+            // DREQ pins after the sense bit), [10:7] dma_request_lock,
+            // [6:0] 0.
+            8'ha8:   probe_data_c = snap_dma;
+            // 0xA9 -- the floppy engine's execution-phase view
+            // (Peripherals' dbg_fdc2 = {0, floppy.v's dbg2, TC latch}):
+            // [31] 0, [30:27] main state, [26:16] fifo_count,
+            // [15] execute_ndma, [14] ndma_irq, [13] ndma timeout seen,
+            // [12] dma_irq_enable (0x94 DMAE), [11] dma_has_terminated
+            // (TC seen), [10] cmd_read_in_progress,
+            // [9] cmd_write_in_progress, [8] cmd_format_in_progress,
+            // [7] dma_req, [6] irq, [5] busy, [4] in_seek_mode,
+            // [3] datareg_ready, [2] transfer_to_cpu, [1] dma_ack pulse
+            // (rw_ack), [0] TC latch.
+            8'ha9:   probe_data_c = snap_fdc2;
+            // 0xAA -- the trigger statuses: which latch fired and how far
+            // the poll window dwell had counted (poll_static is full
+            // 24'hFFFFFF only at the latch -- read mid-run to watch it
+            // climb).
+            8'haa:   probe_data_c = {wedge_latch, poll_latch, fdq_latch,
+                                     5'h0, poll_static};
             8'hFF:   probe_data_c = 32'h98C0_DE98;
             default: probe_data_c = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -2453,13 +2541,21 @@ module core_top (
             trig_wronly <= probe_wdata_c[27];
             trig_ds     <= probe_wdata_c[26];
         end
+        // Slot 0x07 (wr 0x87): arm the poll-trap trigger -- {en[31],
+        // pc[19:0]}. The 32-byte window is pc[19:5] of the armed address;
+        // the trigger latches (freezing the wedge tap + pc_hist + tlog)
+        // when the fetch cursor stays inside it for ~390 ms. Clearing
+        // en[31] disarms.
+        if (probe_wr_pulse && probe_waddr_c == 7'h07) begin
+            poll_en <= probe_wdata_c[31];
+            poll_pc <= probe_wdata_c[19:0];
+        end
         // Slot 0x09: CPU-speed override for scripted runs -- wdata[2] forces
         // clk_select_next to wdata[1:0] instead of the OSD setting. Same
         // handoff the menu uses (ce_generator reloads on the next biu_done).
         // wdata[3] ENABLES the (default-off) prefetch engine; wdata[6:4] kill
         // pure fills / fill-on-miss / hit serving individually for A/B.
-        if (probe_wr_pulse && probe_waddr_c == 7'h09) begin
-            jtag_spd_ovr  <= probe_wdata_c[2];
+        if (probe_wr_pulse && probe_waddr_c == 7'h09) begin            jtag_spd_ovr  <= probe_wdata_c[2];
             jtag_spd_sel  <= probe_wdata_c[1:0];
             jtag_pf_dis   <= ~probe_wdata_c[3];
             jtag_pf_nofill  <= probe_wdata_c[4];
@@ -2470,10 +2566,9 @@ module core_top (
             jtag_cache_dis <= probe_wdata_c[11];
             jtag_thr_num  <= probe_wdata_c[19:12];
         end
-        // Slot 0x0a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
-        // every memory write landing on it is logged (CPU or DMA alike).
-        if (probe_wr_pulse && probe_waddr_c == 7'h0a)
-            jtag_watch_addr <= probe_wdata_c[19:0];
+        // Slot 0x0a: guest-address watchpoint -- RETIRED with the write
+        // ring it armed (Bus_Arbiter's dbg_dma3 reads 0; see the 0xE1-0xE4
+        // note at the mux). A write here is accepted and ignored.
         if (probe_wr_pulse && probe_waddr_c == 7'h0d)
             brg_ri <= probe_wdata_c[7:0];
         // Slot 0x0b: arm the text-VRAM dump cell (readback on slot 0xF7;
@@ -3159,14 +3254,18 @@ module core_top (
     wire [31:0]  chipset_dbg3;
     wire [31:0]  chipset_dbg4;
     wire [127:0] chipset_dbg5;
-    wire [127:0] chipset_dbg7;
     wire  [31:0] chipset_dbg8;
     wire  [31:0] chipset_dbg9;
     wire [103:0] chipset_dbg11;
     wire  [55:0] chipset_dbg12;
     // The wedge tap's live views (PC98_JTAG only; frozen copies live in the
-    // tap block under the macro). Declared here so the CHIPSET instance
-    // below connects unconditionally.
+    // snap_* registers): the 71071's request-side registers and the floppy
+    // engine's execution-phase view, both registered at this boundary.
+    wire [31:0]  cs_w_dma;
+    wire [31:0]  cs_fdc2;
+    // ...and the rest of the wedge tap's live feeds (PC98_JTAG only;
+    // frozen copies live in the snap_* registers under the macro).
+    // Declared here so the CHIPSET instance below connects unconditionally.
     wire [15:0]  cs_w_arb;
     wire  [7:0]  cs_w_rdy;
     wire [15:0]  cs_w_seq;
@@ -3457,8 +3556,6 @@ module core_top (
         .dbg_chipset3                       (chipset_dbg3),
         .dbg_chipset4                       (chipset_dbg4),
         .dbg_chipset5                       (chipset_dbg5),
-        .dbg_watch_addr                     (jtag_watch_addr),
-        .dbg_chipset7                       (chipset_dbg7),
         .dbg_chipset8                       (chipset_dbg8),
         .dbg_chipset9                       (chipset_dbg9),
         .dbg_chipset11                      (chipset_dbg11),
@@ -3469,6 +3566,7 @@ module core_top (
         .dbg_w_seq                          (cs_w_seq),
         .dbg_w_ram                          (cs_w_ram),
         .dbg_w_sdram                        (cs_w_sdram),
+        .dbg_w_dma                          (cs_w_dma),
         .ram_unstick                        (ram_unstick_w),
         .dbg_gvram                          (gvram_dbg),
         .dbg_scsi                           (dbg_scsi),
@@ -3522,6 +3620,7 @@ module core_top (
         .scsi_request                       (mgmt_req[0]),
         .dbg_fdc                            (fdc_dbg),
         .dbg_fdc_cmd                        (fdc_dbg_cmd),
+        .dbg_fdc2                           (cs_fdc2),
         .dbg_gdc_s                          (dbg_gdc_s),
         .dbg_gdc_s2                         (dbg_gdc_s2),
         .dbg_gdc_s3                         (dbg_gdc_s3),

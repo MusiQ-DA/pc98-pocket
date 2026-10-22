@@ -33,7 +33,22 @@ module upd71071_Priority_Encoder (
     input   logic   [3:0]   dma_acknowledge_internal,
 
     // External signals
-    input   logic   [3:0]   dma_request
+    input   logic   [3:0]   dma_request,
+
+    // JTAG probe (PC98_JTAG): the request-side registers that decide
+    // whether a pending DREQ pin ever becomes a grant -- the run#976
+    // freeze showed state=SI with DRQ2/DRQ3 pending, and whether that is
+    // "the mask bit ate it" (a) or "the request never latched" (b) is
+    // exactly this snapshot. Registered at the core_top boundary into
+    // probe slot 0xA8 (frozen with the wedge tap).
+    //   [22]    controller_disable (command reg bit 2)
+    //   [21]    rotating_priority  (command reg bit 4)
+    //   [20]    dreq_sense_active_low (command reg bit 6)
+    //   [19:16] mask_register -- 1 = channel masked off (reset/EOP sets it)
+    //   [15:12] request_register (software requests)
+    //   [11:8]  dma_request_ff (the raw DREQ pins, after the sense bit)
+    //   [7:4]   dma_request_lock (edge-sense lock: single/block channels)
+    output  logic   [22:0]  dbg
 );
     import upd71071_Common_Package::rotate_right;
     import upd71071_Common_Package::rotate_left;
@@ -185,6 +200,10 @@ module upd71071_Priority_Encoder (
         encoded_dma         = rotating_priority ? rotate_left(encoded_dma, dma_rotate) : encoded_dma;
         encoded_dma         = controller_disable ? 4'b000 : encoded_dma;
     end
+
+    assign  dbg = {controller_disable, rotating_priority,
+                   dreq_sense_active_low, mask_register, request_register,
+                   dma_request_ff, dma_request_lock};
 
 endmodule
 

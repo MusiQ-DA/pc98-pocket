@@ -35,7 +35,20 @@ module upd71071 (
     output  logic           memory_write_n,
     // JTAG probe (PC98_JTAG): the timing engine's wedge view, passed
     // through to Bus_Arbiter's dbg_w -- see upd71071_Timing_And_Control.
-    output  logic   [7:0]   dbg
+    output  logic   [7:0]   dbg,
+    // JTAG probe (PC98_JTAG): the request/mask registers -- whether a
+    // pending DREQ is being eaten by a mask bit, the edge-sense lock, the
+    // software request register or the command register's disable/sense
+    // bits, plus the FDC channels' mode/autoinit. Frozen with the wedge
+    // tap (probe slot 0xA8):
+    //   [31] controller_disable  [30] dreq_sense_active_low
+    //   [29] rotating_priority
+    //   [28:27] transfer_mode[3]  [26:25] transfer_mode[2]
+    //   [24] autoinit[3]  [23] autoinit[2]
+    //   [22:19] mask_register  [18:15] request_register
+    //   [14:11] dma_request_ff (raw pins after sense)  [10:7] dma_request_lock
+    //   [6:0] 0
+    output  logic   [31:0]  dbg_mask
 );
 
 
@@ -59,6 +72,7 @@ module upd71071 (
     logic           read_status_register;
     logic   [3:0]   read_current_address;
     logic   [3:0]   read_current_word_count;
+    logic   [22:0]  dbg_encoder;
 
     upd71071_Bus_Control_Logic u_Bus_Control_Logic (
         // Bus
@@ -132,6 +146,7 @@ module upd71071 (
         .end_of_process_internal            (end_of_process_internal),
         .autoinit_enable                    (autoinit_enable),
         .dma_acknowledge_internal           (dma_acknowledge_internal),
+        .dbg                                (dbg_encoder),
 
         // External signals
         .dma_request                        (dma_request)
@@ -188,6 +203,7 @@ module upd71071 (
     logic           output_temporary_data;
     logic   [7:0]   temporary_register;
     logic   [3:0]   terminal_count_state;
+    logic   [9:0]   dbg_mode;
 
     upd71071_Timing_And_Control u_Timing_And_Control (
         .clock                              (clock),
@@ -241,8 +257,17 @@ module upd71071 (
         .ready                              (ready),
         .end_of_process_n_in                (end_of_process_n_in),
         .end_of_process_n_out               (end_of_process_n_out),
-        .dbg                                (dbg)
+        .dbg                                (dbg),
+        .dbg_m                              (dbg_mode)
     );
+
+    // The request-side snapshot: see the dbg_mask port comment above.
+    // edge_request is left out -- it derives from the same mode bits the
+    // [28:25] nibble already carries (single|block), so a bit each way.
+    assign  dbg_mask = {dbg_encoder[22:20],        // cmd disable/sense/rot
+                        dbg_mode[9:4],             // FDC ch2/ch3 mode+autoinit
+                        dbg_encoder[19:0],         // mask/req/pins/lock
+                        7'b0000000};
 
 
     //

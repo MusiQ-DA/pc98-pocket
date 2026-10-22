@@ -58,6 +58,8 @@ module BUS_ARBITER (
     // every memory write landing on it is logged, CPU or DMA alike --
     // this is how a byte-0 that the fill wrote correctly still ends
     // up 0x00 afterwards can be attributed to its overwriter.
+    // (The ring behind this port is retired -- see dbg_dma3 below --
+    // the input stays so CHIPSET's port list does not churn.)
     input   logic   [19:0]  watch_addr,
     output  logic   [127:0] dbg_dma3,
     // JTAG probe (PC98_JTAG): the wedge tap's arbiter/DMA view --
@@ -68,7 +70,13 @@ module BUS_ARBITER (
     //   [7:0]  the uPD71071 timing engine's dbg (state, channel, HRQ, TC)
     // Registered at the core_top boundary into the frozen wedge snapshot
     // (probe slot 0xA0 high half).
-    output  logic   [15:0]  dbg_w
+    output  logic   [15:0]  dbg_w,
+    // JTAG probe (PC98_JTAG): the uPD71071's request-side registers
+    // (mask/request/pins/lock + the FDC channels' mode/autoinit) -- see
+    // upd71071's dbg_mask. Same registration into probe slot 0xA8; the
+    // run#976 freeze (state=SI, DRQ2/3 pending) is decided by exactly
+    // these bits.
+    output  logic   [31:0]  dbg_w2
 );
 
     //
@@ -258,7 +266,8 @@ module BUS_ARBITER (
         //.address_strobe                     (),
         .memory_read_n                      (dma_memory_read_n),
         .memory_write_n                     (dma_memory_write_n),
-        .dbg                                (dma_dbg)
+        .dbg                                (dma_dbg),
+        .dbg_mask                           (dbg_w2)
     );
 
     assign  terminal_count_n = ~terminal_count;
@@ -324,21 +333,18 @@ module BUS_ARBITER (
     // new FDC fill is an address break inside the ack window: fills are
     // contiguous ascending, so the first write of each buffer (and any
     // stray write that escapes the stream) is where address != prev+1.
-    // The ring holds the last three such writes as
-    // {cpu_owned, dma_owned, drq_pin, 1'b0, addr[19:0], data[7:0]} -- a
-    // head write landing on the previous buffer's base or carrying stale
-    // data stays visible afterwards.
+    // The per-write watchpoint ring that also lived here is retired (see
+    // the dbg_dma3 note below); the counters survive -- 0x3e's
+    // {break, grant, ack_wr} is the BUS-side count to set against RAM's
+    // commit-side sn_dma_cnt at 0x6d.
     //
     logic           prev_ab_mw;
     logic           prev_fdc_ack;
     logic   [7:0]   break_cnt;
     logic   [7:0]   grant_cnt;
     logic   [15:0]  ack_wr_cnt;
-    logic   [7:0]   watch_cnt;
-    logic   [31:0]  watch_log [0:2];
 
     wire    fdc_ack  = ~dma_acknowledge_n[2] | ~dma_acknowledge_n[3];
-    wire    dma_own  = ~dma_enable_n && ~(&dma_acknowledge_n);
 
     always_ff @(posedge clock) begin
         if (reset) begin
@@ -347,7 +353,6 @@ module BUS_ARBITER (
             break_cnt     <= 8'd0;
             grant_cnt     <= 8'd0;
             ack_wr_cnt    <= 16'd0;
-            watch_cnt     <= 8'd0;
         end
         else begin
             prev_ab_mw   <= ab_memory_write_n;
@@ -359,16 +364,6 @@ module BUS_ARBITER (
             if (prev_ab_mw & ~ab_memory_write_n) begin
                 if (fdc_ack && ack_wr_cnt != 16'hffff)
                     ack_wr_cnt <= ack_wr_cnt + 16'd1;
-                if (address == watch_addr) begin
-                    watch_log[2] <= watch_log[1];
-                    watch_log[1] <= watch_log[0];
-                    watch_log[0] <= {~address_enable_n && ~dma_own, dma_own,
-                                     internal_data_bus != data_bus_ext,
-                                     ~io_write_n, address,
-                                     internal_data_bus};
-                    if (watch_cnt != 8'hff)
-                        watch_cnt <= watch_cnt + 8'd1;
-                end
                 if (fdc_ack && break_cnt != 8'hff)
                     break_cnt <= break_cnt + 8'd1;
             end
@@ -376,14 +371,13 @@ module BUS_ARBITER (
     end
 
     assign dbg_dma = {break_cnt, grant_cnt, ack_wr_cnt, 96'd0};
-    assign dbg_dma3 = {watch_cnt, 24'h0, watch_log[2],
-                       watch_log[1], watch_log[0]};
-    // The overlap witness that lived here (mis_mid/rec_mid, slots
-    // 0xE7-0xEA) is gone: its hunt -- DMAC write strobes starting under an
-    // already-low merged strobe at turbo -- answered zero and no script
-    // ever read the slots. Dropped to buy back LABs at a device that now
-    // fits at 1848/1848; the 0xA0-0xA7 wedge map and the 0xE1-0xE4 watch
-    // ring are untouched.
+    // The write watchpoint ring (slots 0xE1-0xE4) is gone: its hunt -- the
+    // SuperDepth turbo START stray store -- answered, and the run#976
+    // freeze triage needs its registers (watch_log 3x32, watch_cnt) more
+    // than the history. Dropped to buy back LABs at a device that fits at
+    // 1848/1848; the 0xA0-0xA9 wedge map keeps the live counters
+    // (0x3e) and the request-side snapshot (0xA8).
+    assign dbg_dma3 = 128'd0;
 
 
     //

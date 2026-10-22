@@ -118,6 +118,18 @@ module floppy
 	// {drive[1:0], sd_sector[14:0]}: the LBA the in-flight (or last) SD
 	// request named, and which unit's image it went to.
 	output     [16:0] dbg_sector_info,
+	// The execution-phase view the freeze hunt needs: the run#976 shape
+	// (DRQ2/3 pending, 71071 in SI) is decided between this engine's
+	// handshake and the 71071's mask -- packed here, frozen with the
+	// wedge tap at core_top (probe slot 0xA9):
+	//   [29:26] state[3:0]      [25:15] fifo_count[10:0]
+	//   [14] execute_ndma       [13] ndma_irq     [12] &ndma_irq_to (TO seen)
+	//   [11] dma_irq_enable (0x94 DMAE)  [10] dma_has_terminated (TC seen)
+	//   [9] cmd_read_in_progress  [8] cmd_write_in_progress
+	//   [7] cmd_format_in_progress
+	//   [6] dma_req   [5] irq   [4] busy  [3] in_seek_mode
+	//   [2] datareg_ready  [1] transfer_to_cpu  [0] dma_ack (pin)
+	output     [29:0] dbg2,
 
 	// Drive-noise event taps (clk domain): one pulse per head step, the
 	// head-load proxy, the data phase of any transfer (reads, writes and
@@ -1176,6 +1188,11 @@ wire [7:0]  fifo_q;
 assign dbg_xfer        = {state, fifo_count};
 assign dbg_command     = command[71:8];
 assign dbg_sector_info = {selected_drive, sd_sector[14:0]};
+assign dbg2            = {state, fifo_count, execute_ndma, ndma_irq, &ndma_irq_to,
+                          dma_irq_enable, dma_has_terminated,
+                          cmd_read_normal_in_progress, cmd_write_normal_in_progress,
+                          cmd_format_in_progress, dma_req, irq, busy, in_seek_mode,
+                          datareg_ready, transfer_to_cpu, dma_ack};
 
 reg  [7:0] fifo_readdata;
 always @(posedge clk) begin

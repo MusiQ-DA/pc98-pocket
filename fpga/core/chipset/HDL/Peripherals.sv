@@ -198,6 +198,11 @@ module PERIPHERALS #(
         // register {op,unit,C,H,R,N,EOT,GPL}.
         output  wire    [63:0]  dbg_fdc,
         output  wire    [63:0]  dbg_fdc_cmd,
+        // JTAG probe (PC98_JTAG): the execution-phase view the freeze hunt
+        // needs -- floppy.v's dbg2 (state/fifo/execute_ndma/ndma_irq/DMAE/
+        // TC-seen/cmd kinds/handshake pins) plus the TC latch, frozen with
+        // the wedge tap at core_top (probe slot 0xA9). See floppy.v's dbg2.
+        output  wire    [31:0]  dbg_fdc2,
         // JTAG probe readout of the slave GDC's display state -- the wires
         // pc98_gvram_display actually consumes, so a mis-shaped picture can
         // be read back against what the guest programmed: {sad0,len0} in
@@ -2595,6 +2600,7 @@ module PERIPHERALS #(
         .dbg_xfer                   (fdc_dbg_xfer),
         .dbg_command                (fdc_dbg_command),
         .dbg_sector_info            (fdc_dbg_sector_info),
+        .dbg2                       (fdc_dbg2),
 
         .snd_step                   (fdd_snd_step),
         .snd_head                   (fdd_snd_head),
@@ -2608,7 +2614,7 @@ module PERIPHERALS #(
     logic   [14:0]  fdc_dbg_xfer;
     logic   [63:0]  fdc_dbg_command;
     logic   [16:0]  fdc_dbg_sector_info;
-
+    logic   [29:0]  fdc_dbg2;
     // Where a failed floppy boot is parked: the engine state and how much
     // of the sector is still buffered, command-level counters, the SD-side
     // request bits, the LBA the request named, and the DMA handshake. A
@@ -2623,6 +2629,12 @@ module PERIPHERALS #(
                        fdc_dbg_drops, fdc_dbg_accepts,
                        fdc_dbg_xfer };
     assign dbg_fdc_cmd = fdc_dbg_command;
+    // floppy.v's execution view, one bit of glue appended: [0] is the TC
+    // latch the 71071's terminal-count pulses set (floppy's own dma_tc
+    // input is the same latch gated by the ack pulse); [30:1] carry
+    // floppy.v's dbg2 unchanged, [31] pads -- see floppy.v's dbg2 comment
+    // for the field map.
+    assign dbg_fdc2 = {1'b0, fdc_dbg2, fdd_dma_tc};
 
     // The lamp's view of the sector request. floppy.v's request bits name the
     // command kind, not the drive -- the drive a pending request targets is
