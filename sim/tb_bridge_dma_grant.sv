@@ -251,6 +251,7 @@ module tb_bridge_dma_grant;
     logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
 
     RAM u_ram (
+        .dma_hold(1'b0),
         .clock(clk), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram_w),
         .gvram_page1_flag(1'b0),

@@ -317,6 +317,7 @@ module tb_ram_dma_fill_late;
                           & ab_mem_wr_n & all_mem_rd_n;
 
     RAM u_ram (
+        .dma_hold(1'b0),
         .clock(clk), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram_w),
         .gvram_page1_flag(1'b0),

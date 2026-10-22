@@ -809,6 +809,11 @@ module CHIPSET #(
         .vram_rd_wait_cycle                 (vram_rd_wait),
         .vram_wr_wait_cycle                 (vram_wr_wait),
         .unstick                            (ram_unstick),
+        // AEN straight from Bus_Arbiter: high while the uPD71071 owns the
+        // bus. RAM.sv's layer-1 ready dip must never fire under a DMA-held
+        // strobe (the dma_ready pulse is one-shot) -- see RAM.sv's dma_hold
+        // port comment.
+        .dma_hold                           (address_enable_n),
         .dbg_w_ram                          (dbg_w_ram),
         .dbg_w_sdram                        (dbg_w_sdram),
         .dbg                                (ram_dbg),

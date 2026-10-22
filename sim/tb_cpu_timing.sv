@@ -83,6 +83,7 @@ module tb_cpu_timing;
     // RAM is wired as Chipset.sv wires it: the wait counter ticks on
     // cpu_ce_negedge and reloads from the generator's own wait-cycle outputs.
     RAM dut (
+        .dma_hold(1'b0),
         .clock(clock), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram),
         .address(address), .internal_data_bus(internal_data_bus),

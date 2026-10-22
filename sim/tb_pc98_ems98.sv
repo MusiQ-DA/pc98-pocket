@@ -44,6 +44,7 @@ module tb_pc98_ems98;
     logic [7:0]  ems98_status;
 
     RAM dut (
+        .dma_hold(1'b0),
         .clock(clock), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram),
         .address(address), .internal_data_bus(internal_data_bus),

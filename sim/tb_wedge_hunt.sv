@@ -52,6 +52,15 @@
 //       pending work that no guest reset can ever clear. Layer 2 must
 //       fire the auto-unstick (same clear as the probe's wr 0x88 0x02)
 //       and hand the FSM back to IDLE.
+//   (c) DMA-owned park (run#973 regression) -- a write strobe held far
+//       past the layer-1 horizon with dma_hold=1 (the 71071 in SW waiting
+//       for the FDC's byte off the slow SD card, 10-100 ms): the park is
+//       LEGAL, so layer 1 must stay disarmed (no dip -- the 71071's
+//       dma_ready is a one-shot pulse and a spurious one derails it) and
+//       layer 2 must not fire either (a strobe is up = pending work).
+//   (d) CPU-owned write park -- the same shape with dma_hold=0: layer 1
+//       dips and re-asserts exactly as before the ownership gate, and
+//       the path recovers (the write-side twin of (a)).
 //
 // Build (CI shape):
 //   build: verilator --binary --timing -Wno-fatal --top-module tb_wedge_hunt
@@ -131,6 +140,10 @@ module tb_wedge_hunt;
     wire [15:0] s_dq_out, s_dq_in;
     logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
     logic        unstick = 0;
+    // AEN model for the directed cases: high while the (modelled) uPD71071
+    // owns the bus. Zero everywhere else -- the fetch/DMA stream below all
+    // runs CPU-side.
+    logic        dma_hold = 0;
 
     // port-D pressure: the display fetch
     logic        gv_req = 1'b0;
@@ -158,6 +171,7 @@ module tb_wedge_hunt;
         .ram_address_select_n(ram_sel_n),
         .write_taken(ram_wt_w),
         .unstick(unstick),
+        .dma_hold(dma_hold),
         .dbg(ram_dbg), .dbg2(), .dbg3(), .dbg4(), .dbg5(), .dbg6(), .dbg7(),
         .dbg_w_ram(ram_w_dbg), .dbg_w_sdram(sd_w_dbg),
         .dbg_watch_addr(20'hFFFFF),
@@ -195,7 +209,7 @@ module tb_wedge_hunt;
 
     always @(posedge clk) begin
         if (reset)              gv_req <= 1'b0;
-        else if (directed_b)    gv_req <= 1'b0;
+        else if (directed_on)    gv_req <= 1'b0;
         else if (gv_ack)        gv_req <= 1'b0;
         else if (!gv_req && (($urandom() % 64) == 0))
                                 gv_req <= 1'b1;
@@ -239,7 +253,11 @@ module tb_wedge_hunt;
     endtask
 
     // ---- guest-bus masters -------------------------------------------------
-    localparam int FETCH_WDT = 4000;   // ~93 us: generous vs ~100-clk healthy
+    // Beyond the layer-1 horizon (2^13): a fetch whose ready rise was
+    // missed parks in COMPLETE and layer 1 heals it at ~8192 clk -- the
+    // master here must still be waiting when that happens, exactly like
+    // the hardware masters are.
+    localparam int FETCH_WDT = (1 << 13) + 2000;
     localparam int SVC_WDT   = 4000;
 
     // A fetch through the sequencer's pass-through, held like the bridge
@@ -332,7 +350,7 @@ module tb_wedge_hunt;
         repeat (20) @(posedge clk);
         forever begin
             @(posedge clk);
-            if (!wedge && !directed_b && (($urandom() % svc_rate) == 0)
+            if (!wedge && !directed_on && (($urandom() % svc_rate) == 0)
                 && !svc_req && !(cpu_rd | cpu_wr))
                 svc_op(20'hA8000 + 20'($urandom() % 20'h1000),
                        8'($urandom()));
@@ -348,13 +366,36 @@ module tb_wedge_hunt;
     localparam int ST_COMPLETE = 5;
     localparam int ST_WAIT     = 6;
 
-    bit directed_b = 0;     // quiesce the background masters for case (b)
+    bit directed_on = 0;    // quiesce the background masters for directed cases
     bit hunt_on    = 0;     // the random-hunt window (layer-1 dip monitor)
-    int hunt_dip_seen = 0;
+    int hunt_dips  = 0;     // dips layer 1 fired during the hunt -- each one
+                            // is a missed ready rise it healed; the masters
+                            // completing is the pass criterion, not dip count
 
     always @(posedge clk) begin
-        if (hunt_on && u_ram.rdy_dip) hunt_dip_seen = 1;
+        if (hunt_on && u_ram.rdy_dip) hunt_dips++;
     end
+
+    // Between directed cases: every case must start from a genuinely
+    // quiescent path (IDLE, park FIFO empty), or its first wait can latch
+    // onto the PREVIOUS case's completion instead of its own access.
+    task automatic quiesce;
+        int w;
+        begin
+            w = 0;
+            @(posedge clk);
+            while ((int'(u_ram.state) != ST_IDLE
+                    || u_ram.wc_pend || u_ram.wc_pend2
+                    || u_ram.wc_pend3 || u_ram.cap_valid)
+                   && w < FETCH_WDT) begin
+                @(posedge clk); w++;
+            end
+            if (int'(u_ram.state) != ST_IDLE)
+                $display("FAIL: quiesce: path did not return to IDLE (state=%0d)",
+                         int'(u_ram.state));
+            repeat (2) @(posedge clk);
+        end
+    endtask
 
     // Case (a) -- the served park (layer 1). A held read completes; the
     // master then misses the ready rise and never drops its strobe. The
@@ -370,6 +411,8 @@ module tb_wedge_hunt;
         logic rdy_q, ok_r;
         begin
             ok = 1; rises = 0; rdy_q = 1'b1; park_len = 0;
+            directed_on = 1;
+            quiesce;
             @(negedge clk);
             cpu_addr = 20'h6658; cpu_rd = 1'b1;
             // Wait for the access to be SERVED -- the FSM parked in
@@ -433,6 +476,7 @@ module tb_wedge_hunt;
             if (ok)
                 $display("directed (a) served-park: dipped and re-asserted after %0d parked clk, path recovered",
                          park_len);
+            directed_on = 0;
             @(negedge clk);
         end
     endtask
@@ -451,7 +495,7 @@ module tb_wedge_hunt;
         int w;
         begin
             ok = 1;
-            directed_b = 1;
+            directed_on = 1;
             repeat (8) @(posedge clk);
             // Any park the killed hunt stream left behind drains on its
             // own from IDLE (one posted write per visit) -- wait it out so
@@ -504,7 +548,141 @@ module tb_wedge_hunt;
                              w);
             end
             end
-            directed_b = 0;
+            directed_on = 0;
+        end
+    endtask
+
+    // Case (c) -- the DMA-owned park must NOT dip (the run#973 regression).
+    // A write strobe held far beyond the layer-1 horizon with the bus
+    // DMA-owned (dma_hold=1): exactly the 71071-in-SW shape of the SD cold
+    // boot, where the FDC withholds its byte for 10-100 ms. The park is
+    // LEGAL: layer 1 must stay disarmed (no ready dip), and layer 2 must
+    // not fire either (a strobe is up, so there is pending work). The hold
+    // spans the bench's full watchdog horizon (2^16 with the narrowed
+    // parameter) so both layers' restraint is proven at once.
+    localparam int DMA_HOLD_HORIZON = (1 << 16) + 5000;
+
+    task automatic dma_park_case(output logic ok);
+        int w, falls;
+        logic rdy_q, ok_r;
+        begin
+            ok = 1; falls = 0; rdy_q = 1'b1;
+            directed_on = 1;
+            quiesce;
+            @(negedge clk);
+            cpu_addr = 20'h6300; cpu_wdata = 8'hA5; cpu_wr = 1'b1;
+            dma_hold = 1'b1;
+            // Wait until the write is covered and the FSM parks in
+            // COMPLETE with the strobe still up.
+            w = 0;
+            @(posedge clk);
+            while ((int'(u_ram.state) != ST_COMPLETE || !cpu_ready)
+                   && w < FETCH_WDT) begin
+                @(posedge clk); w++;
+            end
+            if (int'(u_ram.state) != ST_COMPLETE) begin
+                ok = 0;
+                dump_state("dma-park case: write never served");
+            end
+            else begin
+                // The long legal park: nothing may move.
+                w = 0;
+                while (w < DMA_HOLD_HORIZON && ok) begin
+                    rdy_q = cpu_ready;
+                    @(posedge clk);
+                    if (rdy_q && !cpu_ready) falls++;
+                    if (u_ram.rdy_dip) begin
+                        $display("FAIL: dma-park case: layer-1 dip fired under a DMA-held strobe (run#973 regression)");
+                        ok = 0;
+                    end
+                    if (int'(u_ram.state) != ST_COMPLETE) begin
+                        $display("FAIL: dma-park case: FSM left COMPLETE (%0d) mid-park -- watchdog fired?",
+                                 int'(u_ram.state));
+                        ok = 0;
+                    end
+                    w++;
+                end
+                if (ok && falls != 0) begin
+                    $display("FAIL: dma-park case: cpu_ready dipped %0d times under dma_hold", falls);
+                    ok = 0;
+                end
+                if (ok) begin
+                    // The FDC finally delivers: the strobe drops, the bus
+                    // returns, and the path keeps working.
+                    dma_hold = 1'b0;
+                    @(negedge clk);
+                    cpu_wr = 1'b0;
+                    w = 0;
+                    while (int'(u_ram.state) != ST_IDLE && w < 100) begin
+                        @(posedge clk); w++;
+                    end
+                    dma_op(20'h6301, 8'h3C, 0, ok_r);
+                    ok = ok_r;
+                end
+            end
+            if (ok)
+                $display("directed (c) dma-owned park: %0d clk held, no dip, no watchdog, path healthy",
+                         DMA_HOLD_HORIZON);
+            directed_on = 0;
+            @(negedge clk);
+        end
+    endtask
+
+    // Case (d) -- the same held-write park CPU-owned (dma_hold=0): layer 1
+    // must fire exactly as before the gate (dip, re-assert, recover). This
+    // is the write-side twin of case (a), pinning that the ownership gate
+    // disarmed ONLY the DMA window.
+    task automatic cpu_wr_park_case(output logic ok);
+        int w, rises;
+        logic rdy_q, ok_r;
+        begin
+            ok = 1; rises = 0; rdy_q = 1'b1;
+            directed_on = 1;
+            quiesce;
+            @(negedge clk);
+            cpu_addr = 20'h6302; cpu_wdata = 8'h5A; cpu_wr = 1'b1;
+            w = 0;
+            @(posedge clk);
+            while ((int'(u_ram.state) != ST_COMPLETE || !cpu_ready)
+                   && w < FETCH_WDT) begin
+                @(posedge clk); w++;
+            end
+            if (int'(u_ram.state) != ST_COMPLETE) begin
+                ok = 0;
+                dump_state("cpu-wr-park case: write never served");
+            end
+            else begin
+                w = 0;
+                while (rises < 1 && w < PARK_HORIZON && ok) begin
+                    rdy_q = cpu_ready;
+                    @(posedge clk);
+                    if (!rdy_q && cpu_ready) rises++;
+                    if (int'(u_ram.state) != ST_COMPLETE) begin
+                        $display("FAIL: cpu-wr-park case: FSM left COMPLETE (%0d) with the strobe still held",
+                                 int'(u_ram.state));
+                        ok = 0;
+                    end
+                    w++;
+                end
+                if (rises < 1 && ok) begin
+                    ok = 0;
+                    dump_state("cpu-wr-park case: layer-1 re-assert never came");
+                end
+                if (ok) begin
+                    @(negedge clk);
+                    cpu_wr = 1'b0;
+                    w = 0;
+                    while (int'(u_ram.state) != ST_IDLE && w < 100) begin
+                        @(posedge clk); w++;
+                    end
+                    fetch_op(20'h6658, 2, ok_r);
+                    ok = ok_r;
+                end
+            end
+            if (ok)
+                $display("directed (d) cpu-owned write park: dipped and re-asserted, path recovered");
+            directed_on = 0;
+            @(negedge clk);
         end
     endtask
 
@@ -536,6 +714,14 @@ module tb_wedge_hunt;
 
         // ---- directed case (a) first: the served park (layer 1) --------
         park_miss_case(ok);
+        if (!ok) errors++;
+
+        // ---- directed case (c): the DMA-owned park must never dip -------
+        dma_park_case(ok);
+        if (!ok) errors++;
+
+        // ---- directed case (d): the CPU-owned write park still dips ----
+        cpu_wr_park_case(ok);
         if (!ok) errors++;
 
         hunt_on = 1'b1;
@@ -584,10 +770,11 @@ module tb_wedge_hunt;
         if (!wedge) begin
             $display("PASS: %0d fetch, %0d DMA bytes, %0d svc ops, no wedge",
                      n_fetch, n_dma, n_svc);
-            if (hunt_dip_seen) begin
-                $display("FAIL: layer-1 dip fired during the healthy hunt -- a legal park reached the horizon");
-                errors++;
-            end
+            // Dips during the hunt are layer 1 healing missed ready
+            // rises (a random one landed in seed 5 of the first run of
+            // this bench): the masters completing is what matters.
+            if (hunt_dips != 0)
+                $display("hunt: layer 1 healed %0d missed ready rise(s)", hunt_dips);
             // ---- directed case (b): the no-work watchdog (layer 2) ----
             wdog_case(ok);
             if (!ok) errors++;

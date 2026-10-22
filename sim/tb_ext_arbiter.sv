@@ -116,6 +116,7 @@ module tb_ext_arbiter;
     logic       initilized_sdram;
 
     RAM u_ram (
+        .dma_hold(1'b0),
         .clock(clock), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram),
         .address(address), .internal_data_bus(internal_data_bus),

@@ -193,6 +193,20 @@ module RAM #(
     // out (see the self-healing block below the state machine) -- the probe
     // pulse remains the manual override for everything else.
     input   logic           unstick,
+    // The DMA owns the bus right now (AEN window, ~address_enable_n from
+    // Bus_Arbiter). Layer 1 of the self-healing watchdog must NEVER dip
+    // the ready output while this is high: the uPD71071 consumes dma_ready
+    // as a ONE-SHOT PULSE (READY.sv), so a dip-and-re-assert mid-transfer
+    // injects a pulse the DMA's S-sequence did not ask for and derails it
+    // -- the run#973 SD-cold-boot regression, where a legal 10-100 ms
+    // write-strobe park (the 71071 in SW, waiting for the FDC's byte from
+    // the slow SD card) tripped the 190 us horizon and the machine died at
+    // "MEMORY 640KB OK" with DRQ never served again. A legal DMA park may
+    // last as long as the storage takes; there is no safe horizon, so the
+    // gate is ownership, not time. CPU-side masters consume ready as a
+    // LEVEL through pipelines (a spurious dip there costs <= 2^6 clk), and
+    // the wedge layer 1 exists to fix was CPU-owned (AEN low) anyway.
+    input   logic           dma_hold,
     // JTAG probe (PC98_JTAG): the wedge tap's RAM-side view (MSB first) --
     //   [23] wc_pend  [22] wc_pend2  [21] wc_pend3  [20] cap_valid
     //   [19] rd_conflicts  [18] accept_live_wr  [17] accept_live_rd
@@ -1021,6 +1035,17 @@ module RAM #(
     // beats cannot double-append and a parked write's operands are never
     // re-latched -- strictly safer than forcing IDLE.
     //
+    // DMA-OWNED PARKS ARE EXEMPT (dma_hold): the 71071's dma_ready is a
+    // one-shot pulse, so a dip under a legal DMA strobe is not a retry but
+    // a corruption -- run#973's SD cold boot died exactly there (see the
+    // dma_hold port comment). A legal DMA park lasts as long as the
+    // storage byte does, so no time horizon can separate legal from
+    // wedged there; ownership can. The park counter therefore only runs
+    // while the CPU side owns the bus. What is given up: a DMA-side
+    // ready-miss park (never observed -- the original wedge froze with
+    // HLDA=0/AEN=0) stays unhealed, exactly as it was before the
+    // watchdog; the frozen tap still names it (park+age under AEN).
+    //
     // LAYER 2 -- the no-work watchdog. If the FSM sits non-IDLE for
     // WEDGE_WDOG_BITS cycles with NOTHING pending (park FIFO empty, no
     // live write strobe, no read request), the only thing keeping it out
@@ -1047,6 +1072,14 @@ module RAM #(
             cmplt_park_cnt <= '0;
             cmplt_dip_cnt  <= '0;
         end else if (state != COMPLETE_RAM_RW) begin
+            cmplt_park_cnt <= '0;
+            cmplt_dip_cnt  <= '0;
+        end else if (dma_hold) begin
+            // DMA-owned park: disarmed outright (see the dma_hold port
+            // comment). The counter restarts from zero when the bus comes
+            // back, so a dip always requires WEDGE_CMPLT_BITS consecutive
+            // CPU-owned parked cycles -- never a leftover count from a DMA
+            // window.
             cmplt_park_cnt <= '0;
             cmplt_dip_cnt  <= '0;
         end else if (cmplt_dip_cnt != '0) begin

@@ -102,6 +102,7 @@ module tb_seq_ram_stosb;
     );
 
     RAM dut (
+        .dma_hold(1'b0),
         .clock(clock), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram),
         .address(mem_addr), .internal_data_bus(mem_wdata),

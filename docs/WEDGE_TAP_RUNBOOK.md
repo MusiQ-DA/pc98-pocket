@@ -203,11 +203,29 @@ sdram_mp + sdram_model) に 3 マスタ (fetch=ホールド読み / FDC DMA=
   (unstick パルスが実機で回復させたのと同じ dip-and-re-assert を in-place
   に再現。アクセスを再実行しないので fill の beat 二重 append や書き
   オペランドの再ラッチは起えない)。
+  **DMA 保持窓では発動しない (dma_hold = AEN)**: run#973 の SD コールド
+  ブート回帰で判明 — FDC が SD カードからセクタを待つ間の uPD71071 の
+  書き strobe 保持は 10-100ms 超の**正規の長期駐留**で、190µs の dip が
+  1パルス消費の dma_ready に偽パルスを注入して DMA を脱線させた
+  (「MEMORY 640KB OK」停止、DRQ 未回収、unstick 無効)。正規 DMA 駐留は
+  ストレージレイテンシ次第で無制限に長くなるため時間では区別できず、
+  **バス所有権 (AEN) で区別する**: AEN 高の間カウンタは 0 に保持され、
+  dip には 2^13 clk の**連続 CPU 所有**駐留が必要。CPU 側マスタの ready
+  消費はレベル/パイプライン (偽 dip は高々 2^6 clk の遅延) なので
+  CPU 所有窓の dip は安全。断念するもの: DMA 側 ready 取りこぼし駐留
+  (未観測 — 元ウェッジは HLDA=0/AEN=0 で凍結) は修正前同様無回復の
+  まま。タップはそれを park+age+AEN高 で特定できる。
 - **レイヤ 2 (no-work watchdog)**: 非 IDLE かつ保留仕事ゼロ (park 空・
   write strobe 無し・read 要求無し) が 2^20 clk (≈24ms) 続いたら
   unstick と同じクリア (park 廃棄 + IDLE 強制) を自動発動。read_flag/
   write_flag 停留や WAIT の idle 停滞など、静的監査で到達不能とした
   ハンドシェイク停留の保険。
+  **SD 起動の長い DMA 待ちでは発火しない**: ストローブ保持中の駐留は
+  write/read 要求あり (=保留仕事あり) で条件不成立、バイト間は FSM が
+  IDLE を通るたびにカウンタがリセットされるため、実トラフィック下で
+  2^20 clk **連続**の no-work 非 IDLE は到達不能 (directed case (c) で
+  2^16+ 駐留中の不発火を検証済み — 出荷値 2^20 ではさらに 500 倍の
+  余裕)。
 
 どちらも健全時の最大滞留 (16語 fill + リフレッシュ待ち ≈100 clk、
 最遅ペースの wait カウント消化 ≈数百 clk) より桁違いに長いので、
@@ -229,7 +247,7 @@ tb_wedge_hunt 8 シードで dip 発火ゼロを確認済み)。
 
 ### sim
 
-`sim/tb_wedge_hunt.sv` に 2つの directed case を追加:
+`sim/tb_wedge_hunt.sv` に 4つの directed case を収録:
 
 - (a) served-park: held read が完了してもマスタが ready 立上りを見逃す
   形。FSM は COMPLETE に駐留 (タップの凍結形状) → レイヤ 1 が
@@ -237,4 +255,8 @@ tb_wedge_hunt 8 シードで dip 発火ゼロを確認済み)。
 - (b) no-work watchdog: R2 のバースト中に shim の busy を jam してから
   全 strobe を落とす (保留仕事ゼロの非 IDLE 停留) → レイヤ 2 が
   2^16 clk (ベンチは縮小値) で auto-unstick → IDLE 復帰。
+- (c) DMA 保持駐留 (run#973 回帰): dma_hold=1 (AEN 高) の書き strobe を
+  ホライズン超で保持 → **dip 不発火・watchdog 不発火**・経路健全。
+- (d) CPU 所有の書き駐留: 同形状を dma_hold=0 で → 従来どおり dip+
+  再assert で回復 (ゲートが DMA 窓のみを無効化したことの証明)。
 

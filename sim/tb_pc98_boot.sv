@@ -625,6 +625,7 @@ module tb_pc98_boot;
     );
 
     RAM u_ram (
+        .dma_hold(1'b0),
         .clock(clk_chipset), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram_w),
         .gvram_page1_flag(seq_mem_page1),
