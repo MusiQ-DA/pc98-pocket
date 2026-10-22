@@ -260,3 +260,62 @@ tb_wedge_hunt 8 シードで dip 発火ゼロを確認済み)。
 - (d) CPU 所有の書き駐留: 同形状を dma_hold=0 で → 従来どおり dip+
   再assert で回復 (ゲートが DMA 窓のみを無効化したことの証明)。
 
+
+## 9. 第3のデッドロック (uPD71071 SI 停留 + DRQ pending) — 2026-10-22
+
+### 実機症状 (0xA0-0xA7 凍結スナップショット)
+
+RAM ウェッジ修正後もゲーム中 (SuperDepth タイトル BGM, 6-36秒) に同一署名で
+フリーズ: 71071 state=**SI**・hrq=0、FDC の DRQ は **pending のまま**
+(drq タップの 0011 = ch2/ch3 ピン low = fdd_dma_req=1、ch0/1 の見えはタイオ
+フピンの定常 — ビット順の誤読に注意)、RAM/seq/shim/mp は全て idle、
+retired_cnt は動き続ける (CPU はゲームのポールループで生存、wedge_latch
+不発火)。RAM unstick 無効。
+
+### 犯人: 71071 のレジスタ書き込みがストローブテールで消失
+
+`upd71071_Bus_Control_Logic` の書き込みパルス検出は
+`prev_write_enable_n` を **CS が上がった瞬間に再武装** していた。
+このコアのバスでは cpu_bus_bridge が現ペアの解放クロックに次のアクセスを
+アームし、i8288 のコマンドストローブは ~1 CE 遅れて退役する — つまり
+**IOW がまだ low のうちにアドレス/データが次サイクルのものに差し替わり、
+CS とともにウィンドウから外れる** (Peripherals.sv の io_wr_addr_q コメント
+に記録されたのと同一病理; FDC 側は連続サンプリング+立上り消費で既に修正済
+み)。テールで CS が外れると `prev_write_enable_n` が再武装され、IOW 立上り
+で `write_flag` が**立たない = レジスタ書き込みが黙って捨てられる**。
+
+数千回に一度 (位相依存) の割合で BIOS の `out 0x15, 0x02` (ch2 アンマスク)
+が消失 → 次の FDC コマンドの DRQ が**マスクされたチャネルに**立ち、71071 は
+SI から永遠に出ない → FDC は実行フェーズのまま FIFO を抱え、IRQ が出ず、
+ゲームはポール待ちで永久停止。タップの全フィールドを説明する。
+
+### 修正 (upd71071_Bus_Control_Logic.sv)
+
+FDC ポート経路と同じ形に揃えた:
+
+- アドレス+データは **CS low ∧ IOW low の間**毎クロック取り込み、CS が
+  外れたら保持 — IOW 立上りのデコードは「最後に自分のものだったアドレス」
+  を使う (`stable_address` の全遅延 1clk 版 → `write_address`)。
+- 一度始まった書き込みパルスは **IOW の立上り (または DMA 転送の bus lock)
+  でのみ**退役。CS のテール脱落では再武装しない。
+
+### sim (`sim/tb_fdc_si_stall.sv`, `scripts/sim_fdc_si_stall.sh`)
+
+実 BUS_ARBITER (実 71071 を 92/201 の dce クロックで、実 grant チェーンご
+と) + 実 READY.sv + Peripherals の DRQ シェーパ (fdd_dma_req の DACK 保持
+クリア/0x94 ゲート/TC 配線) とタイオフ付き dma_request、ITF と同じ
+command 0x40、BIOS と同じアーム/ディスアーム列、fill 待ち中の MSR ポール
+と INTA ストーム。`+TAIL=1` でブリッジ型テール (ストローブ終端で次サイク
+ルのアドレス/データを差し込む) を再現:
+
+- 修正前: TAIL=1 で 4速度×2モード全てが **SI 停留・mask=1111・fifo 満杯**
+  (実機タップと同一署名) を即座に再現。
+- 修正後: TAIL=0/1 × SPEED=0-3 × MODE=46/06 の **16 構成全て PASS**
+  (4 セクタ×1024B、スコアボード全一致)。CI でも全構成を実行。
+
+### 実機での再発待ち目安
+
+BGM ストリーミングは数 ms に 1 回 FDC コマンドを発行し、そのたびに 0x15
+アンマスクを書く。修正が効いていれば 6-36 秒だったフリーズは出なくなり、
+タイトル BGM を **10 分以上** 放置しても retired_cnt (0x17) が動き続け
+wedge_latch (0xA6 bit31) が立たない、で確認できる。

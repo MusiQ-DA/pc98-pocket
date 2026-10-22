@@ -434,6 +434,21 @@ jobs:
           ./obj_fdcglue/fg | tee fdcglue.log
           grep -q "PASS tb_pc98_fdc_glue" fdcglue.log
 
+      - name: the 71071 must not lose a register write to the strobe tail
+        run: |
+          # The third deadlock: cpu_bus_bridge arms the next access inside
+          # the i8288's write-strobe tail, so the address/data on the pins
+          # (and the DMAC's chip select) can switch to the next cycle's
+          # before IOW rises. The 71071's write pulse used to be cancelled
+          # by the CS blip -- a lost 0x15 unmask left the FDC's DRQ pending
+          # against a masked channel and the DMAC parked in SI forever
+          # (SuperDepth's 6-36 s in-game freeze). The bench runs the real
+          # BUS_ARBITER (real 71071 on its own 92/201 clock, real grant
+          # chain) with Peripherals' DRQ shaper verbatim, under both tail
+          # shapes, both FDC transfer modes and all four CPU speeds.
+          bash scripts/sim_fdc_si_stall.sh | tee fdc_si_stall.log
+          test "$(grep -c ': PASS$' fdc_si_stall.log)" = 16
+
       - name: RAM-image serve keeps sector bytes in order under firmware mgmt traffic
         run: |
           S=fpga/core
