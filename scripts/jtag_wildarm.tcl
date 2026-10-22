@@ -25,9 +25,9 @@
 #
 # After a fire, read:
 #   0xAA   which latch (bit31 wedge / bit30 poll / bit29 fdq / bit28 wild),
-#          [27]=itf_bank, [26]=f0_seen (a port-0xF0 write happened)
-#   0xAB   frozen z86 view: [31] halted, [27:16] FLAGS[11:0] ([25]=IF),
-#          [15:0] IP
+#          [27]=itf_bank, [26]=f0_seen (a port-0xF0 write happened),
+#          [25]=z86 halted, [24]=IF (25=1&24=0: unwakeable HLT)
+#   0xA7   the frozen fetch cursor (snap_pc) -- where it parked
 #   0xA8   71071 request side AT THE FREEZE (layout: [31]ctrl_dis [30]rot
 #          [29]sense [28:25]mask [24:21]req [20:17]ff [16:13]lock
 #          [12:11]tm3 [10:9]tm2 [8]ai3 [7]ai2)

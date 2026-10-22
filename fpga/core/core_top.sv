@@ -1692,46 +1692,19 @@ module core_top (
     always_ff @(posedge clk_chipset)
         if (cpu_ce_posedge) ce_count <= ce_count + 16'd1;
 
-    // Port-A write-commit snoop witnesses (slots 0x6c-0x70). The feed is
-    // sdram_shim's a_wr_* -- the same wire z86_cache and the bridge's pf
-    // windows invalidate against -- tapped here at the source, in the
-    // clk_chipset domain the pulse lives in:
-    //   sn_v_cnt      every port-A write commit (any master: guest, DMA,
-    //                 loader; any address the port can name)
-    //   sn_dma_cnt    commits while chipset_aen (AEN) is high -- the CPU
-    //                 has the bus parked, so during an FDC fill these are
-    //                 the 71071's bytes draining. A posted write can
-    //                 commit a few clocks past the window's end; those land
-    //                 only in sn_v_cnt (the tail sn_dma_cnt misses).
-    //   sn_last_*     the newest commit's word address and words-1
-    //   sn_dma_last_* the newest AEN-window commit's pair
-    //
-    // Both counters are 16-bit FREE-RUNNING (no saturation compare -- the
-    // ITF's memory test alone passes 64K port-A writes, so a saturating
-    // count would pin before the game ever boots): read them as deltas,
-    // mod 65536. The enable terms are kept flat on purpose; the earlier
-    // nested-if 32-bit saturating shape is what CI's Quartus died on
-    // (S2T internal error, runs 39543865833/39546532071).
-    reg  [15:0] sn_v_cnt          = 16'd0;
-    reg  [15:0] sn_dma_cnt        = 16'd0;
-    reg  [23:0] sn_last_addr      = 24'd0;
-    reg  [ 3:0] sn_last_len       = 4'd0;
-    reg  [23:0] sn_dma_last_addr  = 24'd0;
-    reg  [ 3:0] sn_dma_last_len   = 4'd0;
-    wire sn_ev  = ram_wr_snoop_v;
-    wire sn_dev = ram_wr_snoop_v & chipset_aen;
-    always_ff @(posedge clk_chipset) begin
-        if (sn_ev)     sn_v_cnt   <= sn_v_cnt + 16'd1;
-        if (sn_dev)    sn_dma_cnt <= sn_dma_cnt + 16'd1;
-        if (sn_ev) begin
-            sn_last_addr      <= ram_wr_snoop_addr;
-            sn_last_len       <= ram_wr_snoop_len;
-        end
-        if (sn_dev) begin
-            sn_dma_last_addr  <= ram_wr_snoop_addr;
-            sn_dma_last_len   <= ram_wr_snoop_len;
-        end
-    end
+    // Port-A write-commit snoop witnesses (slots 0x6c-0x6f) -- RETIRED
+    // to buy back the LAB wall of run 39849097140 (fitter 18,630 vs
+    // 18,480 ALMs; 0f87752's last green fit had 375 to spare): six
+    // counters/latches (88 FFs), two incrementers and four mux arms for
+    // a cache-debugging era the wild-fetch hunt does not use.
+    // jtag_snwatch.tcl reads 0x6c-0x6f as 0xDEADxx now -- restore from
+    // git if the snoop debugging resumes. The SHAPE note stays: they
+    // were 16-bit FREE-RUNNING counters with FLAT enables because the
+    // earlier nested-if saturating shape is what CI's Quartus S2T-died
+    // on (runs 39543865833/39546532071) -- keep that lesson if this
+    // ever comes back. The snoop FEED (ram_wr_snoop_v/addr/len) is
+    // functional and stays: z86_cache and the bridge's pf windows
+    // invalidate against it.
 
     // ------------------------------------------------------------------
     // THE WEDGE TAP (PC98_JTAG): a frozen post-mortem of the memory path.
@@ -1786,13 +1759,6 @@ module core_top (
     reg  [19:0] snap_pc       = 20'd0;
     reg  [31:0] snap_dma      = 32'd0;
     reg  [31:0] snap_fdc2     = 32'd0;
-    reg  [31:0] snap_z86      = 32'd0;
-    // Free-running staging for snap_z86 (an S2T fence, the same one
-    // z86_fl gives the freeze block below): the z86 boundary signals
-    // drive exactly one flop each here, unconditionally -- never an
-    // enable inside the freeze block, never the probe mux directly.
-    //   [31] z86_halted, [27:16] FLAGS[11:0] (bit25 = IF), [15:0] IP
-    reg  [31:0] z86_fl        = 32'd0;
     reg         ram_unstick_r = 1'b0;
     // Retirement stops legitimately while the core is paused, probe-stopped
     // or in reset -- those windows must not arm the latch.
@@ -1868,17 +1834,16 @@ module core_top (
     // The transition-catch latches: any one freezes the wedge tap
     // (through wedge_latch below) plus pc_hist and tlog.
     wire        tap_latch   = poll_latch | fdq_latch | wild_latch;
-    // Boundary staging for slot 0xAA's two flag bits: itf_bank is a
+    // Boundary staging for slot 0xAA's four status bits: itf_bank is a
     // high-fanout net (z86's cache_en, a dozen branch enables), and
     // pulling it straight into the probe mux cone is the 84a0f18 sn_v
-    // mistake again -- the mux reads these flops, never the live nets.
-    reg  [1:0]  tap_flags_q = 2'b00;
+    // mistake again. halted/IF answer "unwakeable HLT vs dead pipeline"
+    // at the freeze -- the pair a dedicated 0xAB slot carried for one
+    // commit before the LAB wall (18,630 needed vs 18,480) retired it;
+    // IP is already frozen at 0xA7 (snap_pc) and FLAGS rides tlog.
+    reg  [3:0]  tap_flags_q = 4'b0;
     always_ff @(posedge clk_chipset)
-        tap_flags_q <= {itf_bank, f0_seen};
-    // The free-running z86 staging flop (see z86_fl's declaration).
-    always_ff @(posedge clk_chipset)
-        z86_fl <= {z86_halted, 3'b000,
-                   z86_dbg_regs[219:208], z86_dbg_regs[207:192]};
+        tap_flags_q <= {itf_bank, f0_seen, z86_halted, z86_dbg_regs[217]};
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h08
             && probe_wdata_c[0]) begin
@@ -1942,13 +1907,6 @@ module core_top (
             snap_pc      <= zet_pc;
             snap_dma     <= cs_w_dma;
             snap_fdc2    <= cs_fdc2;
-            // The CPU's own answer at the freeze instant: HLT vs a dead
-            // pipeline, IF's state (an unwakeable HLT), the full IP. The
-            // live slots (0x10-0x16) keep churning; this copy is frozen
-            // with everything else -- sourced from the staging flop, so
-            // the freeze enable never gates a load across the z86
-            // boundary.
-            snap_z86     <= z86_fl;
         end
         ram_unstick_r <= (probe_wr_pulse && probe_waddr_c == 7'h08
                           && probe_wdata_c[1]);
@@ -1982,17 +1940,11 @@ module core_top (
             8'h69:   probe_data_c = f0w_a;
             8'h6a:   probe_data_c = f0w_b;
             8'h6b:   probe_data_c = f0w_c;
-            // 0x6c-0x70: the port-A write-commit snoop witnesses -- see the
-            // counter block by ce_count. 0x6c sn_v_cnt, 0x6d sn_dma_cnt
-            // (AEN-window commits) -- both 16-bit free-running, read as
-            // deltas mod 65536; 0x6e/0x6f the newest commit's
-            // {len[31:28], addr[23:0]} (any / AEN-window); 0x70 the cache's
+            // 0x6c-0x6f: the port-A write-commit snoop witnesses -- RETIRED
+            // with the counter block by ce_count (the LAB wall); these
+            // slots now read the default 0xDEADxx. 0x70 keeps the cache's
             // watched-line kill count (line of slot-0x06's trig_addr,
             // registered at this boundary).
-            8'h6c:   probe_data_c = {16'h0, sn_v_cnt};
-            8'h6d:   probe_data_c = {16'h0, sn_dma_cnt};
-            8'h6e:   probe_data_c = {sn_last_len, 4'h0, sn_last_addr};
-            8'h6f:   probe_data_c = {sn_dma_last_len, 4'h0, sn_dma_last_addr};
             8'h70:   probe_data_c = {16'h0, z86_sn_kills};
             8'h66:   probe_data_c = {z86_dbg_stopped, 15'h0, z86_dbg_next_ip};
             8'h67:   probe_data_c = {tlog_frozen, 15'h0, tlog_n};
@@ -2131,8 +2083,9 @@ module core_top (
             // that started under one (saturating; the low 16 bits are the
             // useful half). 0x3b-0x3d read zero: the old burst rings were
             // dropped for LAB headroom once the byte0 wrap-clobber was
-            // found. ack_wr is the BUS-side count to set against the
-            // commit-side sn_dma_cnt at 0x6d.
+            // found. ack_wr is the BUS-side count; the commit-side
+            // counterpart (sn_dma_cnt, 0x6d) retired with the snoop
+            // block -- compare against a tlog/jtag_mem dump instead.
             8'h3b:   probe_data_c = chipset_dbg5[31:0];
             8'h3c:   probe_data_c = chipset_dbg5[63:32];
             8'h3d:   probe_data_c = chipset_dbg5[95:64];
@@ -2293,21 +2246,16 @@ module core_top (
             // 24'hFFFFFF only at the latch -- read mid-run to watch it
             // climb). Bit29 wild_latch: the cursor entered a zone no
             // legal execution lives in (slot 0x87 bit30 arms it).
-            // [27:26] carry itf_bank/f0_seen -- their old home (slot
-            // 0x90) truncated them off the metal in an over-wide concat,
-            // and both reach this mux through the tap_flags_q boundary
-            // register (S2T: itf_bank is high-fanout; the mux never sees
-            // the live net).
+            // [27:24] carry itf_bank/f0_seen/halted/IF -- the flags' old
+            // home (slot 0x90) truncated them off the metal in an
+            // over-wide concat, and all four reach this mux through the
+            // tap_flags_q boundary register (S2T: itf_bank is
+            // high-fanout; the mux never sees the live nets). 0xAB (the
+            // frozen z86 view this slot once accompanied) went out with
+            // the LAB wall -- IP is frozen at 0xA7, FLAGS rides tlog.
             8'haa:   probe_data_c = {wedge_latch, poll_latch, fdq_latch,
-                                     wild_latch, tap_flags_q, 2'b00,
+                                     wild_latch, tap_flags_q,
                                      poll_static};
-            // 0xAB -- the frozen z86 view: [31] halted, [27:16]
-            // FLAGS[11:0] ([25]=IF, [24]=TF), [15:0] IP. Separates
-            // "parked in HLT waiting for an interrupt that never comes"
-            // from "pipeline dead" and names where the reboot/wild run
-            // stopped, which the live cursor (slot 0x18) can no longer
-            // prove after the fact.
-            8'hab:   probe_data_c = snap_z86;
             8'hFF:   probe_data_c = 32'h98C0_DE98;
             default: probe_data_c = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
