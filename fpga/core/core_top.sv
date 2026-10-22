@@ -1787,6 +1787,12 @@ module core_top (
     reg  [31:0] snap_dma      = 32'd0;
     reg  [31:0] snap_fdc2     = 32'd0;
     reg  [31:0] snap_z86      = 32'd0;
+    // Free-running staging for snap_z86 (an S2T fence, the same one
+    // z86_fl gives the freeze block below): the z86 boundary signals
+    // drive exactly one flop each here, unconditionally -- never an
+    // enable inside the freeze block, never the probe mux directly.
+    //   [31] z86_halted, [27:16] FLAGS[11:0] (bit25 = IF), [15:0] IP
+    reg  [31:0] z86_fl        = 32'd0;
     reg         ram_unstick_r = 1'b0;
     // Retirement stops legitimately while the core is paused, probe-stopped
     // or in reset -- those windows must not arm the latch.
@@ -1847,11 +1853,32 @@ module core_top (
     reg         wild_en     = 1'b0;
     reg  [9:0]  wild_static = 10'd0;
     reg         wild_latch  = 1'b0;
-    wire        wild_zone   = wild_en & wedge_run
-                           & (pc_wild & ~f0_port_write);
+    // Stage 1 of the wild watch -- and an S2T fence. The zone decision
+    // crosses module boundaries (z86's cursor/halted/IF through pc_wild,
+    // the chipset bus through f0_port_write); letting that cone key a
+    // saturating counter + compare inside the tap's always block is the
+    // third S2T killer shape (the 84a0f18 sn_v tap crashed exactly so).
+    // The condition is registered ONCE here, free-running, so everything
+    // past this flop is local to the tap: the counter below sees a single
+    // FF, and the debounce horizon shifts by the one stage (~24 us ->
+    // ~24 us + 1 clk, immaterial next to the 390 ms detectors).
+    reg         wild_cond_q = 1'b0;
+    always_ff @(posedge clk_chipset)
+        wild_cond_q <= wild_en & wedge_run & (pc_wild & ~f0_port_write);
     // The transition-catch latches: any one freezes the wedge tap
     // (through wedge_latch below) plus pc_hist and tlog.
     wire        tap_latch   = poll_latch | fdq_latch | wild_latch;
+    // Boundary staging for slot 0xAA's two flag bits: itf_bank is a
+    // high-fanout net (z86's cache_en, a dozen branch enables), and
+    // pulling it straight into the probe mux cone is the 84a0f18 sn_v
+    // mistake again -- the mux reads these flops, never the live nets.
+    reg  [1:0]  tap_flags_q = 2'b00;
+    always_ff @(posedge clk_chipset)
+        tap_flags_q <= {itf_bank, f0_seen};
+    // The free-running z86 staging flop (see z86_fl's declaration).
+    always_ff @(posedge clk_chipset)
+        z86_fl <= {z86_halted, 3'b000,
+                   z86_dbg_regs[219:208], z86_dbg_regs[207:192]};
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h08
             && probe_wdata_c[0]) begin
@@ -1891,7 +1918,7 @@ module core_top (
                     fdq_static <= 24'd0;
             end
             if (!wild_latch && wedge_run) begin
-                if (wild_zone) begin
+                if (wild_cond_q) begin
                     wild_static <= wild_static + 10'd1;
                     if (&wild_static)
                         wild_latch <= 1'b1;
@@ -1918,10 +1945,10 @@ module core_top (
             // The CPU's own answer at the freeze instant: HLT vs a dead
             // pipeline, IF's state (an unwakeable HLT), the full IP. The
             // live slots (0x10-0x16) keep churning; this copy is frozen
-            // with everything else. [31] z86_halted, [27:16] FLAGS[11:0]
-            // (bit25 = IF, bit24 = TF), [15:0] IP.
-            snap_z86     <= {z86_halted, 3'b000,
-                             z86_dbg_regs[219:208], z86_dbg_regs[207:192]};
+            // with everything else -- sourced from the staging flop, so
+            // the freeze enable never gates a load across the z86
+            // boundary.
+            snap_z86     <= z86_fl;
         end
         ram_unstick_r <= (probe_wr_pulse && probe_waddr_c == 7'h08
                           && probe_wdata_c[1]);
@@ -2267,9 +2294,12 @@ module core_top (
             // climb). Bit29 wild_latch: the cursor entered a zone no
             // legal execution lives in (slot 0x87 bit30 arms it).
             // [27:26] carry itf_bank/f0_seen -- their old home (slot
-            // 0x90) truncated them off the metal in an over-wide concat.
+            // 0x90) truncated them off the metal in an over-wide concat,
+            // and both reach this mux through the tap_flags_q boundary
+            // register (S2T: itf_bank is high-fanout; the mux never sees
+            // the live net).
             8'haa:   probe_data_c = {wedge_latch, poll_latch, fdq_latch,
-                                     wild_latch, itf_bank, f0_seen, 2'b00,
+                                     wild_latch, tap_flags_q, 2'b00,
                                      poll_static};
             // 0xAB -- the frozen z86 view: [31] halted, [27:16]
             // FLAGS[11:0] ([25]=IF, [24]=TF), [15:0] IP. Separates
