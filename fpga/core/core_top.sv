@@ -1799,56 +1799,21 @@ module core_top (
     reg         fdq_latch   = 1'b0;
     wire        fdq_up      = cs_fdc2[7];
     //
-    // Wild-fetch trigger (write slot 0x87 bit30, armed with the poll
-    // window): the run#977 shape -- the cursor bouncing 0:0000-0:000F
-    // inside the IVT while the machine's devices sat freshly initialized
-    // -- moves the cursor the whole time, so neither the wedge detector
-    // (stillness) nor the poll window (a chosen 32-byte hole) can catch
-    // it, and by the time something parks the wild code's own port
-    // writes have re-initialized the 71071/FDC and destroyed the
-    // evidence. pc_wild (the tlog trap's zone list, f0 term stripped --
-    // port 0xF0 is a legitimate write) says no legal execution ever
-    // lives there: below the IVT+low-RAM fence, in VRAM, in the SCSI ROM
-    // hole, or HLT with IF clear. Latching wild freezes the whole wedge
-    // tap + pc_hist + tlog at the wild instant, before the guest state
-    // is overwritten -- unlike the tlog_trap (slot 0x0e bit9) this does
-    // NOT stop the CPU, so the run can also watch what the wild code
-    // does next (an F0 write, a 71071/FDC reset port). Same ~390 ms
-    // horizon and counter shape as the poll/fdq triggers beside it.
-    reg         wild_en     = 1'b0;
-    // 24-bit ==-compare counter, byte-identical in shape to the poll/fdq
-    // triggers that shipped green -- the 10-bit &reduction variant this
-    // slot carried for two commits is the one structural novelty left in
-    // the tap block when CI's S2T kept dying, so it goes. The horizon is
-    // the same ~390 ms as the other detectors (was ~24 us: the wild
-    // catch now waits as long as a poll park, still far inside the F0
-    // write's aftermath and 2^24 >> any decode transient).
-    reg  [23:0] wild_static = 24'd0;
-    reg         wild_latch  = 1'b0;
-    // Stage 1 of the wild watch -- and an S2T fence. The zone decision
-    // crosses module boundaries (z86's cursor/halted/IF through pc_wild,
-    // the chipset bus through f0_port_write); letting that cone key a
-    // counter + compare inside the tap's always block is the third S2T
-    // killer shape (the 84a0f18 sn_v tap crashed exactly so). The
-    // condition is registered ONCE here, free-running, so everything
-    // past this flop is local to the tap: the counter below sees a
-    // single FF. The stage costs one clk of the detector's ~390 ms.
-    reg         wild_cond_q = 1'b0;
-    always_ff @(posedge clk_chipset)
-        wild_cond_q <= wild_en & wedge_run & (pc_wild & ~f0_port_write);
-    // The transition-catch latches: any one freezes the wedge tap
+    // Wild-fetch trigger -- RETIRED. Two commits of fences (a registered
+    // zone condition, then a shipped-shape 24-bit counter) could not stop
+    // CI's Quartus from internal-erroring on it -- S2T first, then the
+    // fitter's timing-driven clustering (VPR20KMAIN tdc_util) once S2T
+    // was cleared; every failing build since 4aeec08 carried this block
+    // and 0f87752 carried none of it. The hunt does not lose its catch:
+    // tlog_trap (write slot 0x0e bit9, shipped in 0f87752) stops the CPU
+    // and freezes tlog + pc_hist on the SAME pc_wild condition, and with
+    // the CPU parked the live slots 0xA8/0xA9 ARE the frozen snapshot.
+    // scripts/jtag_wildarm.tcl arms exactly that. Write slot 0x87 bit30
+    // is accepted and ignored; 0xAA bit28 reads 0.
+    //
+    // The transition-catch latches: either one freezes the wedge tap
     // (through wedge_latch below) plus pc_hist and tlog.
-    wire        tap_latch   = poll_latch | fdq_latch | wild_latch;
-    // Boundary staging for slot 0xAA's four status bits: itf_bank is a
-    // high-fanout net (z86's cache_en, a dozen branch enables), and
-    // pulling it straight into the probe mux cone is the 84a0f18 sn_v
-    // mistake again. halted/IF answer "unwakeable HLT vs dead pipeline"
-    // at the freeze -- the pair a dedicated 0xAB slot carried for one
-    // commit before the LAB wall (18,630 needed vs 18,480) retired it;
-    // IP is already frozen at 0xA7 (snap_pc) and FLAGS rides tlog.
-    reg  [3:0]  tap_flags_q = 4'b0;
-    always_ff @(posedge clk_chipset)
-        tap_flags_q <= {itf_bank, f0_seen, z86_halted, z86_dbg_regs[217]};
+    wire        tap_latch   = poll_latch | fdq_latch;
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h08
             && probe_wdata_c[0]) begin
@@ -1858,8 +1823,6 @@ module core_top (
             poll_latch    <= 1'b0;
             fdq_static    <= 24'd0;
             fdq_latch     <= 1'b0;
-            wild_static   <= 24'd0;
-            wild_latch    <= 1'b0;
         end else begin
             if (!wedge_latch && wedge_run) begin
                 wedge_ret_prev <= retired_cnt;
@@ -1887,15 +1850,7 @@ module core_top (
                 end else
                     fdq_static <= 24'd0;
             end
-            if (!wild_latch && wedge_run) begin
-                if (wild_cond_q) begin
-                    wild_static <= wild_static + 24'd1;
-                    if (wild_static == 24'hFF_FFFF)
-                        wild_latch <= 1'b1;
-                end else
-                    wild_static <= 24'd0;
-            end
-            // Any catch latches the wedge snapshot too.
+            // Either catch latches the wedge snapshot too.
             if (tap_latch && !wedge_latch)
                 wedge_latch <= 1'b1;
         end
@@ -2249,18 +2204,14 @@ module core_top (
             // 0xAA -- the trigger statuses: which latch fired and how far
             // the poll window dwell had counted (poll_static is full
             // 24'hFFFFFF only at the latch -- read mid-run to watch it
-            // climb). Bit29 wild_latch: the cursor entered a zone no
-            // legal execution lives in (slot 0x87 bit30 arms it).
-            // [27:24] carry itf_bank/f0_seen/halted/IF -- the flags' old
-            // home (slot 0x90) truncated them off the metal in an
-            // over-wide concat, and all four reach this mux through the
-            // tap_flags_q boundary register (S2T: itf_bank is
-            // high-fanout; the mux never sees the live nets). 0xAB (the
-            // frozen z86 view this slot once accompanied) went out with
-            // the LAB wall -- IP is frozen at 0xA7, FLAGS rides tlog.
+            // climb). Bit28 reads 0 (the wild-fetch trigger it once
+            // carried is retired -- see the tap block; tlog_trap is the
+            // wild catch now), and the itf_bank/f0_seen/halted/IF flags
+            // that briefly lived here went with it: nothing may fan into
+            // this mux cone but these tap flops (the probe_data register
+            // stage below is the load-bearing S2T/VPR fence).
             8'haa:   probe_data_c = {wedge_latch, poll_latch, fdq_latch,
-                                     wild_latch, tap_flags_q,
-                                     poll_static};
+                                     5'h0, poll_static};
             8'hFF:   probe_data_c = 32'h98C0_DE98;
             default: probe_data_c = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -2581,18 +2532,15 @@ module core_top (
             trig_wronly <= probe_wdata_c[27];
             trig_ds     <= probe_wdata_c[26];
         end
-        // Slot 0x07 (wr 0x87): arm the poll-trap and wild-fetch triggers
-        // -- {poll_en[31], wild_en[30], pc[19:0]}. The 32-byte poll
-        // window is pc[19:5] of the armed address; the trigger latches
-        // (freezing the wedge tap + pc_hist + tlog) when the fetch cursor
-        // stays inside it for ~390 ms. bit30 arms the wild-fetch trigger
-        // (a cursor entering the no-legal-code zones freezes the same
-        // tap on the same ~390 ms horizon). Arm both when the game
-        // starts playing; clearing en[31] disarms the poll window,
-        // clearing bit30 the wild watch.
+        // Slot 0x07 (wr 0x87): arm the poll-trap trigger -- {en[31],
+        // pc[19:0]}. The 32-byte window is pc[19:5] of the armed address;
+        // the trigger latches (freezing the wedge tap + pc_hist + tlog)
+        // when the fetch cursor stays inside it for ~390 ms. Bit30 is
+        // accepted and ignored (the wild-fetch trigger it once armed is
+        // retired; scripts/jtag_wildarm.tcl arms tlog_trap for the wild
+        // catch). Clearing en[31] disarms.
         if (probe_wr_pulse && probe_waddr_c == 7'h07) begin
             poll_en <= probe_wdata_c[31];
-            wild_en <= probe_wdata_c[30];
             poll_pc <= probe_wdata_c[19:0];
         end
         // Slot 0x09: CPU-speed override for scripted runs -- wdata[2] forces

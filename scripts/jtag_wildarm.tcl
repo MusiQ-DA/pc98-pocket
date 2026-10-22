@@ -1,41 +1,48 @@
-# jtag_wildarm.tcl -- arm the run#977 freeze hunt: poll-trap + wild-fetch
-# trigger + the tlog register trail.
+# jtag_wildarm.tcl -- arm the run#977 freeze hunt: poll-trap + the tlog
+# wild catch (stop-on-wild).
 #
 #   openocd -f scripts/jtag_probe.cfg -f scripts/jtag_wildarm.tcl
 #
 # Env:
 #   POLL=0x317A8   the BGM poll window (default the run#976 address)
-#   NOTLOG=1       skip the tlog arming (freeze-through without the
-#                  stop-on-wild -- the wild trigger alone freezes the
-#                  wedge tap + ring while the machine keeps running, so
-#                  the run can also watch the F0 write / device resets
-#                  the wild code performs)
+#   NOTRAP=1       skip the tlog arming (poll window only)
 #
 # What gets armed:
-#   wr 0x87 0xC00317A8  slot 0x07 bit31 (poll) + bit30 (wild-fetch) -- the
-#                       wild trigger latches ~390ms after the fetch cursor
-#                       enters a zone no legal execution lives in (below
-#                       0x400, VRAM, the SCSI ROM hole, HLT with IF=0),
-#                       freezing slots 0xA0-0xAA + pc_hist + tlog at the
-#                       wild instant, BEFORE the guest state is destroyed.
-#   wr 0x8E 0x300       slot 0x0e bit9 (tlog_trap: stop the CPU + freeze
-#                       the log on the same wild condition) + bit8
-#                       (tlog_all: record every fetch-cursor change with
-#                       the full register set -- the trail INTO 0:0000).
+#   wr 0x87 0x80317A8  slot 0x07 bit31 -- the poll-trap window (shipped
+#                      0f87752 logic): the fetch cursor dwelling inside
+#                      the 32-byte window for ~390 ms freezes the wedge
+#                      tap (slots 0xA0-0xA9) + pc_hist + tlog.
+#   wr 0x8E 0x300      slot 0x0e bit9 (tlog_trap: the FIRST fetch cursor
+#                      value in a wild zone -- below 0x400, VRAM, the
+#                      SCSI ROM hole, HLT with IF=0 -- stops the CPU via
+#                      jtag_dbg_stop and freezes tlog + the pc_hist ring
+#                      on the spot) + bit8 (tlog_all: record every
+#                      fetch-cursor change with the full register set --
+#                      the trail INTO 0:0000). This is the wild catch:
+#                      with the CPU parked, the live slots ARE the
+#                      snapshot. (A hardware wild_latch freeze-without-
+#                      stop existed for two commits and retired -- CI's
+#                      Quartus kept internal-erroring on it; tlog_trap
+#                      provides the same catch with shipped logic.)
 #
 # After a fire, read:
-#   0xAA   which latch (bit31 wedge / bit30 poll / bit29 fdq / bit28 wild),
-#          [27]=itf_bank, [26]=f0_seen (a port-0xF0 write happened),
-#          [25]=z86 halted, [24]=IF (25=1&24=0: unwakeable HLT)
-#   0xA7   the frozen fetch cursor (snap_pc) -- where it parked
-#   0xA8   71071 request side AT THE FREEZE (layout: [31]ctrl_dis [30]rot
-#          [29]sense [28:25]mask [24:21]req [20:17]ff [16:13]lock
-#          [12:11]tm3 [10:9]tm2 [8]ai3 [7]ai2)
-#   0xA9   FDC execution phase at the freeze
+#   0x18   live fetch cursor (0 if the trap stopped it mid-wild)
+#   0x67   tlog count + frozen flag; entries via wr 0x8F index,
+#          read 0x60-0x65/0x68: {pc, SS, SP, CS, DS, ES, DI..AX} --
+#          the entries just before CS:IP collapses to 0000:00xx name the
+#          path (game code -> wild = vector/IVT corruption; bad INTA ->
+#          check 0x2F; SP wandering -> stack/IRET bug)
+#   0x40-0x5F  pc_hist ring (bit25 frozen, [24:20] w, [19:0] pc)
 #   0x2F   bridge INTA witness {bad_n, last_bad, cut_n, last_vec}
-#   0x69-0x6B  the port-0xF0 write witness (if the wild code reset the box)
-#   0x40-0x5F  pc_hist ring (25=bit frozen, [24:20] w, [19:0] pc)
-#   0x67/0x60-0x68  tlog count + entries (pc, SS, SP, CS, DS, ES, DI..AX)
+#   0x69-0x6B  the port-0xF0 write witness (0x0000x = the wild code
+#          wrote the reset port; 0xF8xxx = the boot's own F0 write)
+#   0x90   entry_branch milestones ([31:24]; itf_bank/f0_seen used to
+#          mis-live here -- truncated off the metal by an over-wide
+#          concat; f0_seen is readable as f0w activity instead)
+#   0xA8   71071 request side (layout: [31]ctrl_dis [30]rot [29]sense
+#          [28:25]mask [24:21]req [20:17]ff [16:13]lock [12:11]tm3
+#          [10:9]tm2 [8]ai3 [7]ai2)
+#   0xA9   FDC execution phase at the freeze
 
 if {![info exists ::env(POLL)]} { set poll 0x317A8 } else { set poll $::env(POLL) }
 
@@ -60,9 +67,9 @@ proc wr {addr data} {
     drscan fpga.tap 40 [expr {(($addr << 32) | $data) & 0xFFFFFFFFFF}] -endstate idle
 }
 
-if {![info exists ::env(NOTLOG)] || $::env(NOTLOG) != 1} { wr 0x8e 0x300 }
-wr 0x87 [expr {0xC0000000 | ($poll & 0xFFFFF)}]
-puts [format "armed: poll window 0x%05x + wild-fetch trigger%s" $poll \
-          [expr {[info exists ::env(NOTLOG)] && $::env(NOTLOG) == 1
-                 ? " (no tlog)" : " + tlog(stop-on-wild, all-pc)"}]]
+wr 0x87 [expr {0x80000000 | ($poll & 0xFFFFF)}]
+if {![info exists ::env(NOTRAP)] || $::env(NOTRAP) != 1} { wr 0x8e 0x300 }
+puts [format "armed: poll window 0x%05x%s" $poll \
+          [expr {[info exists ::env(NOTRAP)] && $::env(NOTRAP) == 1
+                 ? "" : " + tlog(stop-on-wild, all-pc)"}]]
 shutdown
