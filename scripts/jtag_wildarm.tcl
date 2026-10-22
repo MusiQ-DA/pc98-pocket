@@ -13,10 +13,10 @@
 #
 # What gets armed:
 #   wr 0x87 0xC00317A8  slot 0x07 bit31 (poll) + bit30 (wild-fetch) -- the
-#                       wild trigger latches ~24us after the fetch cursor
+#                       wild trigger latches ~390ms after the fetch cursor
 #                       enters a zone no legal execution lives in (below
 #                       0x400, VRAM, the SCSI ROM hole, HLT with IF=0),
-#                       freezing slots 0xA0-0xAB + pc_hist + tlog at the
+#                       freezing slots 0xA0-0xAA + pc_hist + tlog at the
 #                       wild instant, BEFORE the guest state is destroyed.
 #   wr 0x8E 0x300       slot 0x0e bit9 (tlog_trap: stop the CPU + freeze
 #                       the log on the same wild condition) + bit8

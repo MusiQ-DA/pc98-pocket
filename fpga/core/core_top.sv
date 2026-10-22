@@ -1810,24 +1810,29 @@ module core_top (
     // port 0xF0 is a legitimate write) says no legal execution ever
     // lives there: below the IVT+low-RAM fence, in VRAM, in the SCSI ROM
     // hole, or HLT with IF clear. Latching wild freezes the whole wedge
-    // tap + pc_hist + tlog at the FIRST wild instant, before the guest
-    // state is overwritten -- unlike the tlog_trap (slot 0x0e bit9) this
-    // does NOT stop the CPU, so the run can also watch what the wild
-    // code does next (an F0 write, a 71071/FDC reset port). Debounced
-    // 2^10 clk: a real wild execution stays put for thousands of cycles,
-    // a decode transient does not.
+    // tap + pc_hist + tlog at the wild instant, before the guest state
+    // is overwritten -- unlike the tlog_trap (slot 0x0e bit9) this does
+    // NOT stop the CPU, so the run can also watch what the wild code
+    // does next (an F0 write, a 71071/FDC reset port). Same ~390 ms
+    // horizon and counter shape as the poll/fdq triggers beside it.
     reg         wild_en     = 1'b0;
-    reg  [9:0]  wild_static = 10'd0;
+    // 24-bit ==-compare counter, byte-identical in shape to the poll/fdq
+    // triggers that shipped green -- the 10-bit &reduction variant this
+    // slot carried for two commits is the one structural novelty left in
+    // the tap block when CI's S2T kept dying, so it goes. The horizon is
+    // the same ~390 ms as the other detectors (was ~24 us: the wild
+    // catch now waits as long as a poll park, still far inside the F0
+    // write's aftermath and 2^24 >> any decode transient).
+    reg  [23:0] wild_static = 24'd0;
     reg         wild_latch  = 1'b0;
     // Stage 1 of the wild watch -- and an S2T fence. The zone decision
     // crosses module boundaries (z86's cursor/halted/IF through pc_wild,
     // the chipset bus through f0_port_write); letting that cone key a
-    // saturating counter + compare inside the tap's always block is the
-    // third S2T killer shape (the 84a0f18 sn_v tap crashed exactly so).
-    // The condition is registered ONCE here, free-running, so everything
-    // past this flop is local to the tap: the counter below sees a single
-    // FF, and the debounce horizon shifts by the one stage (~24 us ->
-    // ~24 us + 1 clk, immaterial next to the 390 ms detectors).
+    // counter + compare inside the tap's always block is the third S2T
+    // killer shape (the 84a0f18 sn_v tap crashed exactly so). The
+    // condition is registered ONCE here, free-running, so everything
+    // past this flop is local to the tap: the counter below sees a
+    // single FF. The stage costs one clk of the detector's ~390 ms.
     reg         wild_cond_q = 1'b0;
     always_ff @(posedge clk_chipset)
         wild_cond_q <= wild_en & wedge_run & (pc_wild & ~f0_port_write);
@@ -1853,7 +1858,7 @@ module core_top (
             poll_latch    <= 1'b0;
             fdq_static    <= 24'd0;
             fdq_latch     <= 1'b0;
-            wild_static   <= 10'd0;
+            wild_static   <= 24'd0;
             wild_latch    <= 1'b0;
         end else begin
             if (!wedge_latch && wedge_run) begin
@@ -1884,11 +1889,11 @@ module core_top (
             end
             if (!wild_latch && wedge_run) begin
                 if (wild_cond_q) begin
-                    wild_static <= wild_static + 10'd1;
-                    if (&wild_static)
+                    wild_static <= wild_static + 24'd1;
+                    if (wild_static == 24'hFF_FFFF)
                         wild_latch <= 1'b1;
                 end else
-                    wild_static <= 10'd0;
+                    wild_static <= 24'd0;
             end
             // Any catch latches the wedge snapshot too.
             if (tap_latch && !wedge_latch)
@@ -2582,9 +2587,9 @@ module core_top (
         // (freezing the wedge tap + pc_hist + tlog) when the fetch cursor
         // stays inside it for ~390 ms. bit30 arms the wild-fetch trigger
         // (a cursor entering the no-legal-code zones freezes the same
-        // tap within ~1024 clk). Arm both when the game starts playing;
-        // clearing en[31] disarms the poll window, clearing bit30 the
-        // wild watch.
+        // tap on the same ~390 ms horizon). Arm both when the game
+        // starts playing; clearing en[31] disarms the poll window,
+        // clearing bit30 the wild watch.
         if (probe_wr_pulse && probe_waddr_c == 7'h07) begin
             poll_en <= probe_wdata_c[31];
             wild_en <= probe_wdata_c[30];
