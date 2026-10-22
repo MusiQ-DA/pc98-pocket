@@ -2179,16 +2179,22 @@ module core_top (
             8'ha7:   probe_data_c = {12'h0, snap_pc};
             // The run#976 triage slots (frozen with the wedge tap; live
             // until it latches): 0xA8 -- the uPD71071's request-side
-            // registers (upd71071's dbg_mask; layout fixed in run#977 --
-            // the original 36-bit concat truncated and the commented
-            // layout never reached the metal):
-            // [31] controller_disable  [30] rotating_priority
-            // [29] dreq_sense_active_low
-            // [28:25] mask_register  [24:21] request_register
-            // [20:17] dma_request_ff (raw pins after sense)
-            // [16:13] dma_request_lock
-            // [12:11] transfer_mode[3]  [10:9] transfer_mode[2]
-            // [8] autoinit[3]  [7] autoinit[2]  [6:0] 0
+            // registers (upd71071's dbg_mask). AS-BUILT layout -- the
+            // encoder's dbg port is [22:0] holding a 19-bit concat
+            // (zero-extended: fields at [18:0]) and upd71071.sv's
+            // dbg_mask concat is 36 bits into this 32-bit port, so the
+            // top four bits truncate away. A repack that shipped the
+            // documented layout S2T-crashed CI's Quartus and pushed the
+            // fitter 8 LABs over (run 39863568833; the 0f87752 shape is
+            // proven green twice since) -- the ugly layout stays and the
+            // DECODE follows it:
+            //   [25] controller_disable  [24] rotating_priority
+            //   [23] dreq_sense_active_low  [22:19] mask_register
+            //   [18:15] request_register  [14:11] dma_request_ff
+            //   [10:7] dma_request_lock  [26] and [6:0] read 0
+            //   [31] transfer_mode[3][0]  [30:29] transfer_mode[2]
+            //   [28] autoinit[3]  [27] autoinit[2]
+            // (tm3[1] is the one bit the truncation eats.)
             8'ha8:   probe_data_c = snap_dma;
             // 0xA9 -- the floppy engine's execution-phase view
             // (Peripherals' dbg_fdc2 = {0, floppy.v's dbg2, TC latch}):

@@ -39,9 +39,11 @@
 #   0x90   entry_branch milestones ([31:24]; itf_bank/f0_seen used to
 #          mis-live here -- truncated off the metal by an over-wide
 #          concat; f0_seen is readable as f0w activity instead)
-#   0xA8   71071 request side (layout: [31]ctrl_dis [30]rot [29]sense
-#          [28:25]mask [24:21]req [20:17]ff [16:13]lock [12:11]tm3
-#          [10:9]tm2 [8]ai3 [7]ai2)
+#   0xA8   71071 request side (AS-BUILT layout -- the documented repack
+#          S2T-crashed CI and reverted; tb_71071_dbgmask pins this):
+#          [25]ctrl_dis [24]rot [23]sense [22:19]mask [18:15]req
+#          [20:17→no] ff=[14:11] lock=[10:7] [31]tm3[0] [30:29]tm2
+#          [28]ai3 [27]ai2 ([26]/[6:0] read 0; tm3[1] eaten by truncation)
 #   0xA9   FDC execution phase at the freeze
 
 if {![info exists ::env(POLL)]} { set poll 0x317A8 } else { set poll $::env(POLL) }

@@ -1,26 +1,25 @@
 //
-// tb_71071_dbgmask -- pin the uPD71071 request-side snapshot's bit layout
-// (probe slot 0xA8), unit-level on the real upd71071.
+// tb_71071_dbgmask -- pin the uPD71071 request-side snapshot's ACTUAL
+// bit layout (probe slot 0xA8), unit-level on the real upd71071.
 //
-// The run#977 freeze decoded as "mask=1111, autoinit[3]=1" was decoded
-// against a layout that never reached the metal: upd71071_Priority_
-// Encoder's dbg port was [22:0] but assigned a 19-bit concat (silent
-// zero-extension, fields at [18:0]) and upd71071.sv's dbg_mask concat
-// was 36 bits into a 32-bit port (silent truncation, top four bits
-// dropped) -- so bit23, read as autoinit[3], was actually
-// dreq_sense_active_low, and the "mask" nibble sat at [22:19]. This
-// bench drives the real register-write path (chip select + IOW rise,
-// the shape the third-deadlock fix built) and asserts every field at
-// its DOCUMENTED position, so a width change anywhere in the chain
-// fails a check instead of shipping another lying tap.
-//
-// Layout under test (upd71071.sv dbg_mask):
-//   [31] controller_disable  [30] rotating_priority
-//   [29] dreq_sense_active_low
-//   [28:25] mask_register  [24:21] request_register
-//   [20:17] dma_request_ff  [16:13] dma_request_lock
-//   [12:11] transfer_mode[3]  [10:9] transfer_mode[2]
-//   [8] autoinit[3]  [7] autoinit[2]  [6:0] 0
+// The run#977 freeze was decoded against a layout that never reached
+// the metal: the priority encoder's dbg port is [22:0] assigned a
+// 19-bit concat (zero-extension -- fields at [18:0]) and upd71071.sv's
+// dbg_mask concat is 36 bits into the 32-bit port (truncation -- the
+// top four bits fall off). A repack that shipped the documented layout
+// crashed CI's Quartus deterministically (S2T internal error at
+// s2t_sgate_tdb_map.cpp:395, then 8 LABs over at the fitter, runs
+// 39835977543..39863568833; the 0f87752 shape re-proved green twice),
+// so the ugly layout IS the interface and this bench pins the decode
+// it actually delivers -- so the hunt scripts never lie again:
+//   [25] controller_disable  [24] rotating_priority
+//   [23] dreq_sense_active_low  [22:19] mask_register
+//   [18:15] request_register  [14:11] dma_request_ff
+//   [10:7] dma_request_lock   [26] and [6:0] read 0
+//   [31] transfer_mode[3][0]  [30:29] transfer_mode[2]
+//   [28] autoinit[3]  [27] autoinit[2]
+// (transfer_mode[3][1] is the one bit the truncation eats: ch3 block
+// mode reads the same as demand at [31].)
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -124,58 +123,82 @@ module tb_71071_dbgmask;
         repeat (2) @(negedge clk);
 
         // (1) post-reset: all channels masked, modes cleared, command
-        // bits clear, no requests; pins idle with sense=0 means ff=1111.
-        chk("reset mask",        mask_q, 28, 25, 5'hF);
-        chk("reset request",     mask_q, 24, 21, 4'h0);
-        chk("reset sense",       mask_q, 31, 29, 3'b000);
-        chk("reset ch3 mode",    mask_q, 12, 11, 2'b00);
-        chk("reset ch2 mode",    mask_q, 10,  9, 2'b00);
-        chk("reset ch3 autoinit",mask_q,  8,  8, 1'b0);
-        chk("reset ch2 autoinit",mask_q,  7,  7, 1'b0);
+        // bits clear. Pins idle (1111) with sense=0 read back as ff=1111
+        // -- the raw pin level, not a request.
+        chk("reset mask",        mask_q, 22, 19, 4'hF);
+        chk("reset request",     mask_q, 18, 15, 4'h0);
+        chk("reset sense",       mask_q, 25, 23, 3'b000);
+        chk("reset ch3 mode",    mask_q, 31, 31, 1'b0);
+        chk("reset ch2 mode",    mask_q, 30, 29, 2'b00);
+        chk("reset ch3 autoinit",mask_q, 28, 28, 1'b0);
+        chk("reset ch2 autoinit",mask_q, 27, 27, 1'b0);
+        chk("reset ff=pins",     mask_q, 14, 11, 4'b1111);
 
         // (2) command 0x54: DREQ-sense active low (bit6), rotating
-        // priority (bit4), controller disable (bit2).
+        // priority (bit4), controller disable (bit2). Sense folds the
+        // idle pins: ff reads 0000.
         wr(4'h8, 8'h54);
-        chk("cmd disable",   mask_q, 31, 31, 1'b1);
-        chk("cmd rotating",  mask_q, 30, 30, 1'b1);
-        chk("cmd sense low", mask_q, 29, 29, 1'b1);
-        // pins idle (1111) through active-low sense: ff must read 0000
-        chk("sense folds ff",mask_q, 20, 17, 4'h0);
+        chk("cmd disable",   mask_q, 25, 25, 1'b1);
+        chk("cmd rotating",  mask_q, 24, 24, 1'b1);
+        chk("cmd sense low", mask_q, 23, 23, 1'b1);
+        chk("sense folds ff",mask_q, 14, 11, 4'h0);
 
-        // (3) mode ch3 = 0x9B: block mode + autoinit + ch3.
+        // (3) mode ch3 = 0x9B: block mode + autoinit + ch3. Block reads
+        // at [31]=tm3[0]=0 (tm3[1] is truncated away) -- this is the
+        // documented blind spot, pinned so nobody trusts [31] for ch3.
         wr(4'hB, 8'h9B);
-        chk("ch3 block",     mask_q, 12, 11, 2'b10);
-        chk("ch3 autoinit",  mask_q,  8,  8, 1'b1);
+        chk("ch3 block->0",  mask_q, 31, 31, 1'b0);
+        chk("ch3 autoinit",  mask_q, 28, 28, 1'b1);
 
         // (4) mode ch2 = 0x56: single mode + autoinit + ch2; ch3 keeps
         // its own bits (a per-channel field bleed is the failure this
         // catches).
         wr(4'hB, 8'h56);
-        chk("ch2 single",    mask_q, 10,  9, 2'b01);
-        chk("ch2 autoinit",  mask_q,  7,  7, 1'b1);
-        chk("ch3 kept mode", mask_q, 12, 11, 2'b10);
-        chk("ch3 kept ai",   mask_q,  8,  8, 1'b1);
+        chk("ch2 single",    mask_q, 30, 29, 2'b01);
+        chk("ch2 autoinit",  mask_q, 27, 27, 1'b1);
+        chk("ch3 kept ai",   mask_q, 28, 28, 1'b1);
 
         // (5) write-all-mask 0x05: only ch0 and ch2 masked.
         wr(4'hF, 8'h05);
-        chk("wr mask 0101",  mask_q, 28, 25, 4'd5);
+        chk("wr mask 0101",  mask_q, 22, 19, 4'd5);
 
         // (6) software request ch3 (0x07 = set, ch 3).
         wr(4'h9, 8'h07);
-        chk("sw request ch3",mask_q, 24, 21, 4'b1000);
+        chk("sw request ch3",mask_q, 18, 15, 4'b1000);
 
         // (7) master clear (0x0D): mask back to 1111, modes cleared,
-        // autoinits cleared, request dropped, command bits cleared --
-        // the exact post-init shape the run#977 snapshot mistook for a
-        // smoking gun.
+        // autoinits cleared, request dropped, command bits cleared, and
+        // sense=0 again so ff re-reads the raw pins -- exactly the post-
+        // init shape run#977's 0x00F80000 decoded as (sense|mask).
         wr(4'hD, 8'h00);
-        chk("mclr mask",     mask_q, 28, 25, 5'hF);
-        chk("mclr request",  mask_q, 24, 21, 4'h0);
-        chk("mclr command",  mask_q, 31, 29, 3'b000);
-        chk("mclr ch3 mode", mask_q, 12, 11, 2'b00);
-        chk("mclr ch2 mode", mask_q, 10,  9, 2'b00);
-        chk("mclr ch3 ai",   mask_q,  8,  8, 1'b0);
-        chk("mclr ch2 ai",   mask_q,  7,  7, 1'b0);
+        chk("mclr mask",     mask_q, 22, 19, 4'hF);
+        chk("mclr request",  mask_q, 18, 15, 4'h0);
+        chk("mclr command",  mask_q, 25, 23, 3'b000);
+        chk("mclr ch3 mode", mask_q, 31, 31, 1'b0);
+        chk("mclr ch2 mode", mask_q, 30, 29, 2'b00);
+        chk("mclr ch3 ai",   mask_q, 28, 28, 1'b0);
+        chk("mclr ch2 ai",   mask_q, 27, 27, 1'b0);
+        chk("mclr ff=pins",  mask_q, 14, 11, 4'b1111);
+        if (mask_q[31:0] !== 32'h00787800) begin
+            errors++;
+            $display("FAIL: mclr word got %08x, expected 00787800", mask_q);
+        end else
+            $display("pass: mclr word = 00787800");
+
+        // (8) the run#977 snapshot, reconstructed: after the master
+        // clear the BIOS reprograms the command register's sense bit
+        // (0x40) -- the word becomes exactly 0x00F80000, which the hunt
+        // first misread as "autoinit[3]=1, mask=1111" against the
+        // phantom layout: bit23 is sense, the mask sits at [22:19].
+        wr(4'h8, 8'h40);
+        chk("977 sense",     mask_q, 23, 23, 1'b1);
+        chk("977 mask",      mask_q, 22, 19, 4'hF);
+        chk("977 ff folded", mask_q, 14, 11, 4'h0);
+        if (mask_q[31:0] !== 32'h00F80000) begin
+            errors++;
+            $display("FAIL: run977 word got %08x, expected 00F80000", mask_q);
+        end else
+            $display("pass: run977 word = 00F80000");
 
         if (errors == 0)
             $display("=== PASS tb_71071_dbgmask ===");
