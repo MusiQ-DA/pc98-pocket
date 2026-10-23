@@ -492,6 +492,21 @@ jobs:
           ./obj_wtrig/wt | tee wedge_trig.log
           grep -q "PASS tb_wedge_trig" wedge_trig.log
 
+      - name: the reboot catch freezes the trail and the witness names the source
+        run: |
+          # Unit-level copy of the spontaneous-reboot catch: the reset-
+          # source witness (sticky rise map over reset_wire's eight terms,
+          # cleared by wr 0x8A 0x01), the FFF0 reboot freeze (the seam
+          # entry lands as the last tlog record and the POST that follows
+          # records nothing), pc_hist trail survival through the reset and
+          # the POST's own OUT 0F0h (the old wipe-race), the walk case
+          # (rings freeze, witness stays dark) and the slot-0x06 re-arm
+          # guard under a parked reset vector.
+          verilator --binary --timing -Wno-fatal --top-module tb_rst_witness \
+            sim/tb_rst_witness.sv -o rw --Mdir obj_rwit
+          ./obj_rwit/rw | tee rst_witness.log
+          grep -q "PASS tb_rst_witness" rst_witness.log
+
       - name: RAM-image serve keeps sector bytes in order under firmware mgmt traffic
         run: |
           S=fpga/core

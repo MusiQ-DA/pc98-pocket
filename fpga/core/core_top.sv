@@ -1479,8 +1479,16 @@ module core_top (
         end
         brg_q <= brg[brg_ri];
     end
+    // The ring is NOT cleared by reset/soft_reset_cpu anymore -- only the
+    // probe re-arm (slot 0x05) rolls it.  The old clear raced the very
+    // freeze it sat next to: an OUT 0F0h froze the ring on the write
+    // cycle, then soft_reset_cpu pulsed two cycles later, took the clear
+    // branch, and WIPED it -- which is why every hardware catch read a
+    // fresh POST tail instead of the crash trail.  A reset mid-hunt must
+    // leave the trail alone now (pc_reset_vec below freezes the ring the
+    // moment the cursor snaps to the reset vector), so the wipe has to go.
     always_ff @(posedge clk_chipset) begin
-        if (reset || soft_reset_cpu || pc_rearm) begin
+        if (pc_rearm) begin
             pc_hist_frozen <= 1'b0;
             pc_hist_w      <= 5'd0;
             delay_cnt      <= 5'd0;
@@ -1496,6 +1504,7 @@ module core_top (
                 end
             end
             if (f0_port_write || pc_in_errhalt || zet_fault || w43d_10 ||
+                pc_reset_vec ||
                 (tlog_trap && pc_wild) ||
                 tap_latch ||
                 (trig_hit && trig_freeze && !trig_delay))
@@ -1588,6 +1597,38 @@ module core_top (
                                            : trig_ds ? (zet_ds == trig_addr[15:0])
                                            : (pc_now == trig_addr));
     wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
+
+    // The reboot catch.  Every reset path -- a full guest reset, the
+    // F0-only CPU reset, or wild code jumping onto the vector -- ends
+    // with the fetch cursor at FFF0, and z86's reset state HOLDS
+    // CS:IP = F000:FFF0 for the whole reset stretch (write_back.sv), so
+    // this level is the earliest possible "the machine is rebooting
+    // NOW": it reads true the cycle reset asserts, before the ITF POST
+    // runs a single instruction.  Freezing tlog/pc_hist here (instead
+    // of at the POST's own OUT 0F0h from F9A2A) is what keeps the last
+    // 64 branches the TRAIL INTO THE REBOOT: until now the POST's own
+    // execution refilled the ring and the trigger's footsteps were
+    // overwritten every time.  The FFF0 entry itself lands as the last
+    // record (writes gate on the pre-freeze flag), marking the seam.
+    wire pc_reset_vec = (pc_now == 20'hFFFF0);
+    // rst_boot_latch rides tap_latch, so the wedge snapshot freezes with
+    // the rings -- the memory path AS THE REBOOT HIT IT, not whatever
+    // the reset loop leaves behind.  rst_boot_itf records whether the
+    // ITF bank was mapped at that instant: a reboot INTO the ITF POST
+    // with this bit clear means the POST the screen showed was reached
+    // by a guest 043D bank switch, not the reset.  Slot 0x08 bit0 (the
+    // wedge re-arm) clears both, one write re-arms the whole catch.
+    reg  rst_boot_latch = 1'b0;
+    reg  rst_boot_itf   = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        if (probe_wr_pulse && probe_waddr_c == 7'h08 && probe_wdata_c[0]) begin
+            rst_boot_latch <= 1'b0;
+            rst_boot_itf   <= 1'b0;
+        end else if (pc_reset_vec && !rst_boot_latch) begin
+            rst_boot_latch <= 1'b1;
+            rst_boot_itf   <= itf_bank;
+        end
+    end
     // Trigger log: a 64-entry ring of {PC, SS, SP, CS, DS, ES, DI, SI, DX,
     // CX, BX, AX}. Default mode logs each time the fetch PC lands on the
     // slot-6 trigger address (armed on the INT 21h entry: every DOS call).
@@ -1658,9 +1699,15 @@ module core_top (
                                   z86_dbg_regs[63:48],   z86_dbg_regs[15:0]};     // BX, AX
             tlog_n <= tlog_n + 16'd1;
         end
-        if (((tlog_trap && pc_wild) ||
-             (trig_hit && trig_freeze && !trig_delay) ||
-             tap_latch) && !tlog_frozen)
+        // The re-arm guard: a slot-0x06 write on the same cycle as a
+        // freeze term (the cursor can legitimately sit at FFF0 while the
+        // machine is held in reset) must leave the log armed, not
+        // re-freeze it the cycle it was cleared.
+        if (!(probe_wr_pulse && probe_waddr_c == 7'h06) &&
+            (((tlog_trap && pc_wild) ||
+              pc_reset_vec ||
+              (trig_hit && trig_freeze && !trig_delay) ||
+              tap_latch) && !tlog_frozen))
             tlog_frozen <= 1'b1;
         // the ITF hand-over's stub window (see pc_wild): the FF lives here,
         // in the tlog register row, not in its own block -- see the fit note.
@@ -1851,8 +1898,11 @@ module core_top (
     // is accepted and ignored; 0xAA bit28 reads 0.
     //
     // The transition-catch latches: either one freezes the wedge tap
-    // (through wedge_latch below) plus pc_hist and tlog.
-    wire        tap_latch   = poll_latch | fdq_latch;
+    // (through wedge_latch below) plus pc_hist and tlog.  rst_boot_latch
+    // (the reboot catch, defined with the tlog above) rides the same
+    // wire, so the frozen snapshot set survives a machine that resets
+    // itself before its wedges ever fire.
+    wire        tap_latch   = poll_latch | fdq_latch | rst_boot_latch;
     always_ff @(posedge clk_chipset) begin
         if (probe_wr_pulse && probe_waddr_c == 7'h08
             && probe_wdata_c[0]) begin
@@ -1911,6 +1961,77 @@ module core_top (
                           && probe_wdata_c[1]);
     end
     assign ram_unstick_w = ram_unstick_r;
+
+    // ------------------------------------------------------------------
+    // THE RESET-SOURCE WITNESS (PC98_JTAG): which term put the machine
+    // into reset -- "the machine rebooted itself, name the source".
+    //
+    // reset_wire is RESET | load_active | ~bios_ever_loaded |
+    // interact_reset | guest_hold_sync2 | soft_guest_hold | ri_greset,
+    // and soft_reset_cpu (OUT 0F0h) is the CPU-only reset beside it.
+    // Every path that can restart the guest is one of those eight
+    // levels, so eight sticky bits plus the identity and free-run tick
+    // of the most recent RISE is the whole answer.  The bits latch on
+    // rising edges only: at power-on they all fire together (RESET
+    // wins the priority), so the operator clears the witness once the
+    // machine is up (write slot 0x0a bit0) and from then on the first
+    // bit that lights IS the spontaneous reboot's trigger.  A reboot
+    // with every bit still dark is not a reset at all -- the cursor
+    // walked to FFF0 (wild jump / guest reset-vector call), and the
+    // tlog trail frozen by pc_reset_vec names the code instead.
+    //
+    // Bit order (rst_src_now, mirrored by rst_seen in slot 0xAB):
+    //   [7] soft_reset_cpu   OUT 0F0h -- guest code or the ITF's own
+    //                         POST shutdown (F9A2A/F9A30)
+    //   [6] ri_greset        fdd_ramimg's probe pulse (slot 0x07 bit2);
+    //                         NOTE slot 0x07 is shared with the poll-trap
+    //                         arm word, whose pc[2] lands on this bit --
+    //                         arming on an address with bit2 set reboots
+    //                         the machine by construction
+    //   [5] soft_guest_hold  the softcore's boot-master hold; the
+    //                         firmware raises it only on the settings
+    //                         apply path
+    //   [4] guest_hold_sync2 the boot hold (one-shot, power-on only)
+    //   [3] interact_reset   the OSD "Reset & Apply" (bridge 0x50)
+    //   [2] ~bios_ever_loaded  the first-BIOS gate (one-shot)
+    //   [1] load_active      APF is (re-)streaming a slot
+    //   [0] RESET            a PLL lost lock -- also re-inits the SDRAM
+    //                         and re-maps the ITF bank, the one source
+    //                         that explains a cold ITF POST on its own
+    // rst_tick free-runs on clk_chipset (wraps ~100 s); rst_last_tick
+    // is its value at the winning rise, so a read after the reboot
+    // says how long before the reboot the source asserted.
+    // ------------------------------------------------------------------
+    wire [7:0] rst_src_now = {soft_reset_cpu,   ri_greset,
+                              soft_guest_hold,  guest_hold_sync2,
+                              interact_reset,  ~bios_ever_loaded,
+                              load_active,      RESET};
+    reg  [31:0] rst_tick      = 32'd0;
+    reg  [7:0]  rst_src_q     = 8'h00;
+    reg  [7:0]  rst_seen      = 8'h00;
+    reg  [3:0]  rst_last      = 4'h0;   // {valid, idx[2:0]} of latest rise
+    reg  [31:0] rst_last_tick = 32'd0;
+    wire [7:0]  rst_rise = rst_src_now & ~rst_src_q;
+    wire [2:0]  rst_rise_idx = rst_rise[0] ? 3'd0
+                            : rst_rise[1] ? 3'd1
+                            : rst_rise[2] ? 3'd2
+                            : rst_rise[3] ? 3'd3
+                            : rst_rise[4] ? 3'd4
+                            : rst_rise[5] ? 3'd5
+                            : rst_rise[6] ? 3'd6 : 3'd7;
+    always_ff @(posedge clk_chipset) begin
+        rst_tick  <= rst_tick + 32'd1;
+        rst_src_q <= rst_src_now;
+        if (probe_wr_pulse && probe_waddr_c == 7'h0a && probe_wdata_c[0]) begin
+            rst_seen      <= 8'h00;
+            rst_last      <= 4'h0;
+            rst_last_tick <= 32'd0;
+        end else if (|rst_rise) begin
+            rst_seen      <= rst_seen | rst_rise;
+            rst_last      <= {1'b1, rst_rise_idx};
+            rst_last_tick <= rst_tick;
+        end
+    end
 
     always_comb begin
         case (probe_addr)
@@ -2257,6 +2378,21 @@ module core_top (
             // stage below is the load-bearing S2T/VPR fence).
             8'haa:   probe_data_c = {wedge_latch, poll_latch, fdq_latch,
                                      5'h0, poll_static};
+            // 0xAB/0xAC -- the reset-source witness (see its block above
+            // for the bit map). 0xAB:
+            //   [31:24] rst_seen      sticky rise map since wr 0x8A 0x01
+            //   [23:20] rst_last      {valid, idx} of the most recent rise
+            //   [19]    rst_boot_latch  the reboot catch fired (cursor
+            //                         read FFF0; tlog/pc_hist froze there)
+            //   [18]    rst_boot_itf  the ITF bank was mapped at that
+            //                         moment (0 = the "reboot" was a walk)
+            //   [17:0]  0
+            // 0xAC: rst_last_tick, the free-run clk_chipset tick of the
+            //           rise named by rst_last (age = read it twice: the
+            //           tick only wraps every ~100 s).
+            8'hab:   probe_data_c = {rst_seen, rst_last, rst_boot_latch,
+                                     rst_boot_itf, 18'h0};
+            8'hac:   probe_data_c = rst_last_tick;
             8'hFF:   probe_data_c = 32'h98C0_DE98;
             default: probe_data_c = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
@@ -2604,9 +2740,10 @@ module core_top (
             jtag_cache_dis <= probe_wdata_c[11];
             jtag_thr_num  <= probe_wdata_c[19:12];
         end
-        // Slot 0x0a: guest-address watchpoint -- RETIRED with the write
-        // ring it armed (Bus_Arbiter's dbg_dma3 reads 0; see the 0xE1-0xE4
-        // note at the mux). A write here is accepted and ignored.
+        // Slot 0x0a: the reset-source witness clear -- wdata[0] wipes the
+        // sticky rise map, the last-source index and its tick (the write
+        // watchpoint this slot once armed is retired with its ring; a
+        // write with bit0 clear is accepted and ignored).
         if (probe_wr_pulse && probe_waddr_c == 7'h0d)
             brg_ri <= probe_wdata_c[7:0];
         // Slot 0x0b: arm the text-VRAM dump cell (readback on slot 0xF7;
