@@ -1602,14 +1602,17 @@ module core_top (
     //    stub page drops out of it); else the floor is 0 -- the same
     //    (pc < 0x400) compare the shipped trap had, one floor mux and no new
     //    gate on the pc_wild output cone (the fitter's timing-driven
-    //    clustering dies on those -- 4x VPR20KMAIN tdc_util crashes, runs
-    //    39907501737/39910065958).  The stub never crosses 0x100, so a wild
-    //    walk into the IVT is wild the very cycle it does.  The bank may
-    //    DROP mid-stub (the stub's own OUT 043Dh,12h is what clears it),
-    //    which is why the window is a latch and not a live gate on itf_bank.
-    //  - the F0 term is masked while the bank is up: the boot's own resets
-    //    (0xF8xxx in the 0x69-0x6B witness) do not trip; a game-state write
-    //    (bank down) still does.
+    //    clustering dies on those -- VPR20KMAIN tdc_util, runs
+    //    39907501737/39910065958/39913420777).  The stub never crosses
+    //    0x100, so a wild walk into the IVT is wild the very cycle it does.
+    //    The bank may DROP mid-stub (the stub's own OUT 043Dh,12h is what
+    //    clears it), which is why the window is a latch and not a live gate
+    //    on itf_bank.
+    //  (The F0 term stays unmasked: an ITF-bank OUT 0F0h is the boot's own
+    //    POST shutdown (F9A2A/F9A30, "0xF8xxx" in the 0x69-0x6B witness) --
+    //    it freezes the rings on a reboot, and the operator classifies and
+    //    re-arms.  Gating it on itf_bank was tried and the fitter objected
+    //    to the extra itf_bank load; the mask is procedural instead.)
     wire        pc_stub   = (pc_now < 20'h00100);
     wire        stub_arm  = pc_stub && itf_bank;
     reg         stub_win  = 1'b0;
@@ -1618,7 +1621,7 @@ module core_top (
                            (pc_now >= 20'hA0000 && pc_now < 20'hD0000) ||   // VRAM, nothing
                            (pc_now >= 20'hE0000 && pc_now < 20'hE8000) ||   // (D0000: SCSI ROM)
                            (z86_halted && !z86_dbg_regs[217]) ||           // HLT, IF=0
-                           (f0_port_write && !itf_bank);
+                           f0_port_write;
     wire         tlog_ev = tlog_all ? (pc_now != tlog_pc_d) : (trig_hit && !trig_hit_d);
     always_ff @(posedge clk_chipset) begin
         trig_hit_d <= trig_hit;

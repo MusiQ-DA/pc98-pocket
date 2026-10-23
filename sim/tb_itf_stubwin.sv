@@ -80,7 +80,7 @@ module tb_itf_stubwin;
                    (pc_now >= 20'hA0000 && pc_now < 20'hD0000) ||
                    (pc_now >= 20'hE0000 && pc_now < 20'hE8000) ||
                    (halted && !dbg_regs[217]) ||
-                   (f0_port_write && !itf_bank);
+                   f0_port_write;
 
     // The trap's stop, as core_top gates it: tlog_trap armed, not yet frozen.
     bit  tlog_trap = 1'b1, tlog_frozen = 0, stop = 0;
@@ -203,15 +203,14 @@ module tb_itf_stubwin;
         @(posedge clk); check(1, "HLT with IF=0");
         halted = 1'b0; dbg_regs[217] = 1'b1;
 
-        // -- 5. the F0 term: the boot's own write vs a game-state write -------
+        // -- 5. the F0 term keeps the shipped shape: always a trip --------
+        // (An ITF-bank mask was tried -- the boot's own OUT F0 from
+        // F9A2A/F9A30 would not trip -- but the fitter objected to the
+        // extra itf_bank load; the classification is procedural: read
+        // 0x69-0x6B, see 0xF8xxx, re-arm with wr 0x8F/0x86.)
         rearm;
-        out43d(8'h10);                  // the ITF's POST state
-        outf0;                          // F9A2A/F9A30-class write, bank up
-        check_stop(0, "the boot's own OUT F0 tripped the trap");
-        rearm;
-        out43d(8'h12);                  // game state
         outf0;
-        check_stop(1, "a game-state OUT F0 did not trip");
+        check_stop(1, "an OUT F0 did not trip (shipped shape)");
 
         // -- 6. the window does not leak between boots ------------------------
         rearm;

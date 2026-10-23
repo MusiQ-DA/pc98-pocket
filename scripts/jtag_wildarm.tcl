@@ -26,22 +26,28 @@
 #                      tlog_trap provides the same catch with shipped
 #                      logic.)
 #
-#                      Boot-path exemptions (the run that caught CS:IP=
+#                      Boot-path exemption (the run that caught CS:IP=
 #                      0000:0000 with SP intact was the ITF's OWN hand-over,
 #                      jmp 0:0 into the bank-switch stub it copies to
 #                      0000:0000 -- the trap killed a reboot, not a crash):
 #                      a fetch below 0x100 entered while the ITF bank is
 #                      mapped is that stub (stub_win holds until the cursor
-#                      leaves the page), and OUT 0F0h with the bank up is
-#                      the boot's own POST shutdown (F9A2A/F9A30). Neither
-#                      trips; a wild fetch into the IVT with the BIOS bank
-#                      mapped -- game state -- still does, as does a walk
-#                      that crosses 0x100 inside the vector table. So an
-#                      armed hunt now SURVIVES the machine rebooting and
-#                      keeps recording: tlog keeps filling through POST and
-#                      the hand-over, and the reboot's own trail (up to 64
-#                      branches back) is in the ring when the real freeze
-#                      comes.
+#                      leaves the page, and the wild zone's floor rises to
+#                      0x100 through it).  A wild fetch into the IVT with
+#                      the BIOS bank mapped -- game state -- still trips,
+#                      as does a walk that crosses 0x100 inside the vector
+#                      table.  So an armed hunt now SURVIVES the machine
+#                      rebooting through the hand-over and keeps recording:
+#                      tlog keeps filling through the stub, and the
+#                      reboot's own trail (up to 64 branches back) is in
+#                      the ring when the real freeze comes.
+#
+#                      OUT 0F0h still trips in any bank state (shipped
+#                      shape): the ITF's own POST shutdown writes it from
+#                      F9A2A/F9A30, so a reboot that takes the COLD POST
+#                      path freezes here -- read 0x69-0x6B (0xF8xxx = the
+#                      boot's own write), then re-arm with wr 0x8F bit31
+#                      and wr 0x86, and the hunt continues.
 #
 # After a fire, read:
 #   0x18   live fetch cursor (0 if the trap stopped it mid-wild)
