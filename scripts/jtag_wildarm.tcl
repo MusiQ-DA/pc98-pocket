@@ -13,17 +13,35 @@
 #                      the 32-byte window for ~390 ms freezes the wedge
 #                      tap (slots 0xA0-0xA9) + pc_hist + tlog.
 #   wr 0x8E 0x300      slot 0x0e bit9 (tlog_trap: the FIRST fetch cursor
-#                      value in a wild zone -- below 0x400, VRAM, the
-#                      SCSI ROM hole, HLT with IF=0 -- stops the CPU via
-#                      jtag_dbg_stop and freezes tlog + the pc_hist ring
-#                      on the spot) + bit8 (tlog_all: record every
-#                      fetch-cursor change with the full register set --
-#                      the trail INTO 0:0000). This is the wild catch:
-#                      with the CPU parked, the live slots ARE the
-#                      snapshot. (A hardware wild_latch freeze-without-
-#                      stop existed for two commits and retired -- CI's
-#                      Quartus kept internal-erroring on it; tlog_trap
-#                      provides the same catch with shipped logic.)
+#                      value in a wild zone -- below 0x400 outside the ITF
+#                      hand-over stub page, VRAM, the SCSI ROM hole, HLT
+#                      with IF=0 -- stops the CPU via jtag_dbg_stop and
+#                      freezes tlog + the pc_hist ring on the spot) + bit8
+#                      (tlog_all: record every fetch-cursor change with the
+#                      full register set -- the trail INTO 0:0000). This is
+#                      the wild catch: with the CPU parked, the live slots
+#                      ARE the snapshot. (A hardware wild_latch
+#                      freeze-without-stop existed for two commits and
+#                      retired -- CI's Quartus kept internal-erroring on it;
+#                      tlog_trap provides the same catch with shipped
+#                      logic.)
+#
+#                      Boot-path exemptions (the run that caught CS:IP=
+#                      0000:0000 with SP intact was the ITF's OWN hand-over,
+#                      jmp 0:0 into the bank-switch stub it copies to
+#                      0000:0000 -- the trap killed a reboot, not a crash):
+#                      a fetch below 0x100 entered while the ITF bank is
+#                      mapped is that stub (stub_win holds until the cursor
+#                      leaves the page), and OUT 0F0h with the bank up is
+#                      the boot's own POST shutdown (F9A2A/F9A30). Neither
+#                      trips; a wild fetch into the IVT with the BIOS bank
+#                      mapped -- game state -- still does, as does a walk
+#                      that crosses 0x100 inside the vector table. So an
+#                      armed hunt now SURVIVES the machine rebooting and
+#                      keeps recording: tlog keeps filling through POST and
+#                      the hand-over, and the reboot's own trail (up to 64
+#                      branches back) is in the ring when the real freeze
+#                      comes.
 #
 # After a fire, read:
 #   0x18   live fetch cursor (0 if the trap stopped it mid-wild)

@@ -1601,11 +1601,36 @@ module core_top (
     reg          tlog_all = 1'b0, tlog_trap = 1'b0, tlog_frozen = 1'b0;
     // Also a trap: HLT with IF clear (nothing can wake it -- a crash that
     // ran into an F4 in data) and OUT 0F0h (the CPU reset a crash ends in).
-    wire         pc_wild = (pc_now < 20'h00400) ||
+    // The two low terms must NOT fire on the machine's own boot, or an armed
+    // trap kills every reboot and reads back as a "freeze" -- the tlog_trap
+    // catch that ended at CS:IP=0000:0000 with SP intact was exactly that:
+    // the ITF hand-over, not a wild fetch.  The ITF parks its bank-switch
+    // stub at 0000:0000 (F88BD copies 0x80 bytes to 0:0 and jumps there;
+    // every register in the catch's last entry sat at that copy's end state
+    // -- DS=F800, SI=0x956, DI=0x80, CX=0 -- a mid-BOOT signature), and the
+    // ITF's own POST shutdowns write port 0F0h from F9A2A/F9A30.  Both enter
+    // with the ITF bank still mapped (the stub's first instruction and the
+    // POST's whole run are inside it), so:
+    //  - stub_win holds from the first fetch below 0x100 while the bank is
+    //    up until the cursor leaves the stub page, masking the IVT term
+    //    through it.  The stub never crosses 0x100; a wild walk into the
+    //    IVT is caught the cycle it does.  The bank may DROP mid-stub (the
+    //    stub's own OUT 043Dh,12h is what clears it), which is why the
+    //    window is a latch and not a live gate on itf_bank.
+    //  - the F0 term is masked while the bank is up: the boot's own resets
+    //    (0xF8xxx in the 0x69-0x6B witness) do not trip; a game-state write
+    //    (bank down) still does.
+    reg          stub_win = 1'b0;
+    wire         stub_arm = (pc_now < 20'h00100) && itf_bank;
+    always_ff @(posedge clk_chipset) begin
+        if (stub_arm)                 stub_win <= 1'b1;
+        else if (pc_now >= 20'h00100) stub_win <= 1'b0;
+    end
+    wire         pc_wild = ((pc_now < 20'h00400) && ~(stub_win | stub_arm)) ||
                            (pc_now >= 20'hA0000 && pc_now < 20'hD0000) ||   // VRAM, nothing
                            (pc_now >= 20'hE0000 && pc_now < 20'hE8000) ||   // (D0000: SCSI ROM)
                            (z86_halted && !z86_dbg_regs[217]) ||           // HLT, IF=0
-                           f0_port_write;
+                           (f0_port_write && !itf_bank);
     wire         tlog_ev = tlog_all ? (pc_now != tlog_pc_d) : (trig_hit && !trig_hit_d);
     always_ff @(posedge clk_chipset) begin
         trig_hit_d <= trig_hit;

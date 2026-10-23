@@ -345,6 +345,13 @@ jobs:
           ./obj_itf/t | tee itf.log
           grep -q "RESULT: PASS" itf.log
 
+      - name: crash trap survives the ITF hand-over (stub at 0000:0000)
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_itf_stubwin \
+            -Isim sim/tb_itf_stubwin.sv -o t --Mdir obj_stub
+          ./obj_stub/t | tee stub.log
+          grep -q "RESULT: PASS" stub.log
+
       - name: keyboard 8251 answers the way the ROMs ask
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_kbd8251 \
