@@ -68,11 +68,12 @@ module tb_itf_stubwin;
     end
     logic [7:0] cpu_data_bus = 8'h00;
 
+    wire pc_stub  = (pc_now < 20'h00100);
+    wire stub_arm = pc_stub && itf_bank;
     reg  stub_win = 1'b0;
-    wire stub_arm = (pc_now < 20'h00100) && itf_bank;
     always_ff @(posedge clk) begin
-        if (stub_arm)                 stub_win <= 1'b1;
-        else if (pc_now >= 20'h00100) stub_win <= 1'b0;
+        if (stub_arm)      stub_win <= 1'b1;
+        else if (!pc_stub) stub_win <= 1'b0;
     end
     wire pc_wild = ((pc_now < 20'h00400) && ~(stub_win | stub_arm)) ||
                    (pc_now >= 20'hA0000 && pc_now < 20'hD0000) ||

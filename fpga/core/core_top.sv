@@ -1616,16 +1616,16 @@ module core_top (
     //    through it.  The stub never crosses 0x100; a wild walk into the
     //    IVT is caught the cycle it does.  The bank may DROP mid-stub (the
     //    stub's own OUT 043Dh,12h is what clears it), which is why the
-    //    window is a latch and not a live gate on itf_bank.
+    //    window is a latch and not a live gate on itf_bank.  (One shared
+    //    comparator, and the FF lives inside the tlog block below: at 99%
+    //    fit an extra clocked block here repacks 6 LABs over the wall --
+    //    run 39902323045.)
     //  - the F0 term is masked while the bank is up: the boot's own resets
     //    (0xF8xxx in the 0x69-0x6B witness) do not trip; a game-state write
     //    (bank down) still does.
-    reg          stub_win = 1'b0;
-    wire         stub_arm = (pc_now < 20'h00100) && itf_bank;
-    always_ff @(posedge clk_chipset) begin
-        if (stub_arm)                 stub_win <= 1'b1;
-        else if (pc_now >= 20'h00100) stub_win <= 1'b0;
-    end
+    wire        pc_stub   = (pc_now < 20'h00100);
+    wire        stub_arm  = pc_stub && itf_bank;
+    reg         stub_win  = 1'b0;
     wire         pc_wild = ((pc_now < 20'h00400) && ~(stub_win | stub_arm)) ||
                            (pc_now >= 20'hA0000 && pc_now < 20'hD0000) ||   // VRAM, nothing
                            (pc_now >= 20'hE0000 && pc_now < 20'hE8000) ||   // (D0000: SCSI ROM)
@@ -1652,6 +1652,10 @@ module core_top (
              (trig_hit && trig_freeze && !trig_delay) ||
              tap_latch) && !tlog_frozen)
             tlog_frozen <= 1'b1;
+        // the ITF hand-over's stub window (see pc_wild): the FF lives here,
+        // in the tlog register row, not in its own block -- see the fit note.
+        if (stub_arm)      stub_win <= 1'b1;
+        else if (!pc_stub) stub_win <= 1'b0;
         if (probe_wr_pulse && probe_waddr_c == 7'h0e) begin
             tlog_ri   <= probe_wdata_c[5:0];
             tlog_all  <= probe_wdata_c[8];
