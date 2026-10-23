@@ -1454,12 +1454,31 @@ module core_top (
     // RETIRED with the watch ring itself (Bus_Arbiter's dbg_dma3 is 0 now,
     // slots 0xE1-0xE4 read dead) -- its registers bought back the LABs the
     // run#976 triage taps (0xA8/0xA9) and the poll/DRQ triggers need.
-    // Bus ring -- RETIRED with the 256-deep M10K and its ~72 FFs of
-    // readout (brg_w/brg_ri/brg_q, mux arms at 0x01-0x03): nothing read
-    // the slots since the tlog/jtag_mem dumps took over the post-mortem
-    // role, and its registers bought back the 6 LABs the crash trap's
-    // hand-over fix (stub_win) needed at the 99% wall -- runs
-    // 39902323045/39904821380 both fitter 1854 vs 1848 LABs before this.
+    // Bus ring: the last 256 Wishbone transfers the CPU completed --
+    // fetches included -- with the live DS beside each: {ds, exec, we,
+    // sel, adr, data}. Block RAM, frozen with pc_hist; probe write slot
+    // 0x0D picks the entry, reads 0x01 (low word) / 0x02 (high word) /
+    // 0x03 (write pointer) return it.
+    // (Retiring this block bought back 6 LABs at the wall but poisoned
+    // the fitter -- six CI runs, twelve attempts, every one the VPR
+    // tdc_util clustering crash, with the trap edit bisected innocent.
+    // The write-side loads it puts on the bus network are part of the
+    // shape this fitter tolerates; the ring stays, and the stub window's
+    // LABs come from the SEED dial instead.)
+    (* ramstyle = "M10K" *) reg [54:0] brg [0:255];
+    reg  [7:0] brg_w = 8'd0;
+    reg  [7:0] brg_ri = 8'd0;
+    reg [54:0] brg_q = 55'd0;
+    reg        brg_ack_q = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        brg_ack_q <= zwb_ack;
+        if (zwb_ack && !brg_ack_q && zwb_cyc && !pc_hist_frozen) begin
+            brg[brg_w] <= {zet_ds, zet_exec, zwb_we, zwb_sel, zwb_adr,
+                           zwb_we ? zwb_dat_o : zwb_dat_i};
+            brg_w      <= brg_w + 8'd1;
+        end
+        brg_q <= brg[brg_ri];
+    end
     always_ff @(posedge clk_chipset) begin
         if (reset || soft_reset_cpu || pc_rearm) begin
             pc_hist_frozen <= 1'b0;
@@ -1928,8 +1947,9 @@ module core_top (
             8'h70:   probe_data_c = {16'h0, z86_sn_kills};
             8'h66:   probe_data_c = {z86_dbg_stopped, 15'h0, z86_dbg_next_ip};
             8'h67:   probe_data_c = {tlog_frozen, 15'h0, tlog_n};
-            // 0x01-0x03: the bus ring's readout -- RETIRED with it (the
-            // block above); reads return the dead-slot default.
+            8'h01:   probe_data_c = brg_q[31:0];
+            8'h02:   probe_data_c = {9'h0, brg_q[54:32]};
+            8'h03:   probe_data_c = {24'h0, brg_w};
             // 0x06/0x0e: echo the live trigger and tlog-mode words, in the
             // exact layout of their write slots.  A write scan needs addr
             // bit 7 set (0x86/0x8e, see pc98_jtag_probe.sv); the bare slot
@@ -2587,8 +2607,8 @@ module core_top (
         // Slot 0x0a: guest-address watchpoint -- RETIRED with the write
         // ring it armed (Bus_Arbiter's dbg_dma3 reads 0; see the 0xE1-0xE4
         // note at the mux). A write here is accepted and ignored.
-        // Slot 0x0d: the bus ring's index -- RETIRED with it too; accepted
-        // and ignored the same way.
+        if (probe_wr_pulse && probe_waddr_c == 7'h0d)
+            brg_ri <= probe_wdata_c[7:0];
         // Slot 0x0b: arm the text-VRAM dump cell (readback on slot 0xF7;
         // shared with the screen probe's cell, which also auto-advances on
         // every completed 0x36 read).
