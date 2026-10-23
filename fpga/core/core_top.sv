@@ -1598,22 +1598,23 @@ module core_top (
     // ITF's own POST shutdowns write port 0F0h from F9A2A/F9A30.  Both enter
     // with the ITF bank still mapped (the stub's first instruction and the
     // POST's whole run are inside it), so:
-    //  - stub_win holds from the first fetch below 0x100 while the bank is
-    //    up until the cursor leaves the stub page, masking the IVT term
-    //    through it.  The stub never crosses 0x100; a wild walk into the
-    //    IVT is caught the cycle it does.  The bank may DROP mid-stub (the
-    //    stub's own OUT 043Dh,12h is what clears it), which is why the
-    //    window is a latch and not a live gate on itf_bank.  (One shared
-    //    comparator, and the FF lives inside the tlog block below: at 99%
-    //    fit an extra clocked block here repacks 6 LABs over the wall --
-    //    run 39902323045.)
+    //  - while the window stands the wild zone's FLOOR rises to 0x100 (the
+    //    stub page drops out of it); else the floor is 0 -- the same
+    //    (pc < 0x400) compare the shipped trap had, one floor mux and no new
+    //    gate on the pc_wild output cone (the fitter's timing-driven
+    //    clustering dies on those -- 4x VPR20KMAIN tdc_util crashes, runs
+    //    39907501737/39910065958).  The stub never crosses 0x100, so a wild
+    //    walk into the IVT is wild the very cycle it does.  The bank may
+    //    DROP mid-stub (the stub's own OUT 043Dh,12h is what clears it),
+    //    which is why the window is a latch and not a live gate on itf_bank.
     //  - the F0 term is masked while the bank is up: the boot's own resets
     //    (0xF8xxx in the 0x69-0x6B witness) do not trip; a game-state write
     //    (bank down) still does.
     wire        pc_stub   = (pc_now < 20'h00100);
     wire        stub_arm  = pc_stub && itf_bank;
     reg         stub_win  = 1'b0;
-    wire         pc_wild = ((pc_now < 20'h00400) && ~(stub_win | stub_arm)) ||
+    wire [19:0] wild_floor = (stub_win | stub_arm) ? 20'h00100 : 20'h00000;
+    wire         pc_wild = ((pc_now >= wild_floor) && (pc_now < 20'h00400)) ||
                            (pc_now >= 20'hA0000 && pc_now < 20'hD0000) ||   // VRAM, nothing
                            (pc_now >= 20'hE0000 && pc_now < 20'hE8000) ||   // (D0000: SCSI ROM)
                            (z86_halted && !z86_dbg_regs[217]) ||           // HLT, IF=0

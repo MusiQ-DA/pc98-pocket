@@ -75,7 +75,8 @@ module tb_itf_stubwin;
         if (stub_arm)      stub_win <= 1'b1;
         else if (!pc_stub) stub_win <= 1'b0;
     end
-    wire pc_wild = ((pc_now < 20'h00400) && ~(stub_win | stub_arm)) ||
+    wire [19:0] wild_floor = (stub_win | stub_arm) ? 20'h00100 : 20'h00000;
+    wire pc_wild = ((pc_now >= wild_floor) && (pc_now < 20'h00400)) ||
                    (pc_now >= 20'hA0000 && pc_now < 20'hD0000) ||
                    (pc_now >= 20'hE0000 && pc_now < 20'hE8000) ||
                    (halted && !dbg_regs[217]) ||
