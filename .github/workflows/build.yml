@@ -507,6 +507,21 @@ jobs:
           ./obj_rwit/rw | tee rst_witness.log
           grep -q "PASS tb_rst_witness" rst_witness.log
 
+      - name: a sub-period PLL unlock blip cannot reboot the guest
+        run: |
+          # Unit-level copy of the spontaneous-reboot FIX: RESET is the raw
+          # analog 'locked' output of two PLLs, and the guest's stretch
+          # flops used to take it on an async set -- so a nanosecond blip
+          # between clk_chipset posedges cold-booted the machine while the
+          # posedge-sampled witness stayed dark (the SuperDepth reboot,
+          # seen=0x00).  The terms now run through synch_3: the blip is
+          # still caught by the 0x9D raw-reset witness (raw++ real+0) but
+          # the guest never resets; a sustained unlock still does.
+          verilator --binary --timing -Wno-fatal --top-module tb_rst_glitch \
+            sim/tb_rst_glitch.sv -o rg --Mdir obj_rgli
+          ./obj_rgli/rg | tee rst_glitch.log
+          grep -q "PASS tb_rst_glitch" rst_glitch.log
+
       - name: RAM-image serve keeps sector bytes in order under firmware mgmt traffic
         run: |
           S=fpga/core

@@ -418,21 +418,43 @@ module core_top (
     // Global power-on reset until all PLLs lock.
     wire RESET = ~pll_locked | ~pll_pc98_locked;
 
+    // PC-98 port: RESET is the raw analog 'locked' output of two PLLs --
+    // asynchronous to clk_chipset, and known to dip for nanoseconds.  The
+    // guest's stretch flops (reset / reset_cpu / reset_chipset /
+    // reset_sdram / reset_soft) all take their term on an ASYNC SET
+    // (posedge reset_wire / RESET / reset_sdram_wire), so a blip shorter
+    // than one clk_chipset period cold-booted the whole machine -- CPU
+    // reset, chipset reset (8255/DIP latches wiped), SDRAM re-init, ITF
+    // re-map -- while the posedge-sampled reset-source witness never saw a
+    // level to latch: "the machine rebooted itself, seen=0x00", landing in
+    // ROM BASIC.  That was the SuperDepth spontaneous reboot.  Every guest
+    // reset term now reads the synchronized copy: only an unlock that
+    // survives three clk_chipset edges can restart the machine, and the
+    // blips the filter eats are counted on the slot-0x9D witness below.
+    // (The 74a status path already ran RESET through synch_3 -- s_pll_lock
+    // -- only the guest side was raw.  soft_guest_hold is a softcore-domain
+    // register and gets the same treatment.)
+    wire RESET_sync;
+    wire rst_sync_rise;                    // s_reset_pll's rise pulse (0x9D)
+    synch_3 s_reset_pll (RESET, RESET_sync, clk_chipset, rst_sync_rise);
+
     // The disk/OSD softcore is the boot master; it drives this hold (declared here so the guest
     // reset can use it, sourced from u_softcpu below). soft_vid_blank is the
     // same register's bit1, declared here for the pocket_video instance.
     wire soft_guest_hold;
     wire soft_vid_blank;
+    wire soft_guest_hold_sync;
+    synch_3 s_soft_hold_rst (soft_guest_hold, soft_guest_hold_sync, clk_chipset);
 
-    // Guest reset terms: PLL lock (RESET), ROM load and the first-BIOS gate, the interact
-    // Reset PC, the boot hold, and the softcore's boot-master hold (soft_guest_hold), which
+    // Guest reset terms: PLL lock (RESET_sync), ROM load and the first-BIOS gate, the interact
+    // Reset PC, the boot hold, and the softcore's boot-master hold (soft_guest_hold_sync), which
     // keeps the guest in reset until the softcore has staged settings. sdram holds on lock only.
     // ri_greset is fdd_ramimg's boot-from-RAM-image term (PC98_JTAG): a probe
     // write pulses it after a mount so the BIOS walks into drive A on its own.
     wire ri_greset;
-    wire reset_wire = RESET | load_active | ~bios_ever_loaded | interact_reset
-                    | guest_hold_sync2 | soft_guest_hold | ri_greset;
-    wire reset_sdram_wire = RESET;
+    wire reset_wire = RESET_sync | load_active | ~bios_ever_loaded | interact_reset
+                    | guest_hold_sync2 | soft_guest_hold_sync | ri_greset;
+    wire reset_sdram_wire = RESET_sync;
 
     logic reset = 1'b1;
     logic [15:0] reset_count = 16'h0000;
@@ -511,9 +533,9 @@ module core_top (
 
     logic reset_soft = 1'b1;
     logic [15:0] reset_soft_count = 16'h0000;
-    always @(posedge clk_chipset, posedge RESET)
+    always @(posedge clk_chipset, posedge RESET_sync)
     begin
-        if (RESET)
+        if (RESET_sync)
         begin
             reset_soft <= 1'b1;
             reset_soft_count <= 16'h0000;
@@ -1503,7 +1525,7 @@ module core_top (
                         pc_hist_frozen <= 1'b1;
                 end
             end
-            if (f0_port_write || pc_in_errhalt || zet_fault || w43d_10 ||
+            if (f0_port_write || pc_in_errhalt || w43d_10 ||
                 pc_reset_vec ||
                 (tlog_trap && pc_wild) ||
                 tap_latch ||
@@ -1748,20 +1770,6 @@ module core_top (
                            (chipset_address[15:0] == 16'h043D) &&
                            (cpu_data_bus == 8'h10);
     wire       pc_hist_new = (hist_src != pc_hist_prev);
-    // The first zet fault's decode-side evidence: which PC's instruction
-    // decoded to INVOP/INTD. Pairs with dbg_opc (the byte it saw, latched
-    // inside the core); expected-vs-seen at that PC is the corruption
-    // signature. Re-arms with each CPU reset like the opc latch does.
-    reg [19:0] fault_pc   = 20'h00000;
-    reg        fault_seen = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        if (reset || soft_reset_cpu)
-            fault_seen <= 1'b0;
-        else if (zet_fault && !fault_seen) begin
-            fault_seen <= 1'b1;
-            fault_pc   <= zet_pc;
-        end
-    end
 
     // Register the readout: the dbg cones through this mux into the SLD
     // capture were one giant combinational path that crashes Quartus 18.1's
@@ -1966,12 +1974,12 @@ module core_top (
     // THE RESET-SOURCE WITNESS (PC98_JTAG): which term put the machine
     // into reset -- "the machine rebooted itself, name the source".
     //
-    // reset_wire is RESET | load_active | ~bios_ever_loaded |
-    // interact_reset | guest_hold_sync2 | soft_guest_hold | ri_greset,
-    // and soft_reset_cpu (OUT 0F0h) is the CPU-only reset beside it.
-    // Every path that can restart the guest is one of those eight
-    // levels, so eight sticky bits plus the identity and free-run tick
-    // of the most recent RISE is the whole answer.  The bits latch on
+    // reset_wire is RESET_sync | load_active | ~bios_ever_loaded |
+    // interact_reset | guest_hold_sync2 | soft_guest_hold_sync |
+    // ri_greset, and soft_reset_cpu (OUT 0F0h) is the CPU-only reset
+    // beside it.  Every path that can restart the guest is one of those
+    // eight levels, so eight sticky bits plus the identity and free-run
+    // tick of the most recent RISE is the whole answer.  The bits latch on
     // rising edges only: at power-on they all fire together (RESET
     // wins the priority), so the operator clears the witness once the
     // machine is up (write slot 0x0a bit0) and from then on the first
@@ -1979,6 +1987,11 @@ module core_top (
     // with every bit still dark is not a reset at all -- the cursor
     // walked to FFF0 (wild jump / guest reset-vector call), and the
     // tlog trail frozen by pc_reset_vec names the code instead.
+    //
+    // Bit 0 samples RESET_sync, so it lights only for an unlock that
+    // actually reached the guest.  A sub-period PLL 'locked' blip can
+    // no longer restart the machine at all (see s_reset_pll); the blips
+    // the filter ate are the slot-0x9D witness below.
     //
     // Bit order (rst_src_now, mirrored by rst_seen in slot 0xAB):
     //   [7] soft_reset_cpu   OUT 0F0h -- guest code or the ITF's own
@@ -1988,24 +2001,25 @@ module core_top (
     //                         arm word, whose pc[2] lands on this bit --
     //                         arming on an address with bit2 set reboots
     //                         the machine by construction
-    //   [5] soft_guest_hold  the softcore's boot-master hold; the
-    //                         firmware raises it only on the settings
-    //                         apply path
+    //   [5] soft_guest_hold  the softcore's boot-master hold (its
+    //                         synchronized copy); the firmware raises it
+    //                         only on the settings apply path
     //   [4] guest_hold_sync2 the boot hold (one-shot, power-on only)
     //   [3] interact_reset   the OSD "Reset & Apply" (bridge 0x50)
     //   [2] ~bios_ever_loaded  the first-BIOS gate (one-shot)
     //   [1] load_active      APF is (re-)streaming a slot
-    //   [0] RESET            a PLL lost lock -- also re-inits the SDRAM
-    //                         and re-maps the ITF bank, the one source
-    //                         that explains a cold ITF POST on its own
+    //   [0] RESET_sync       a PLL lost lock long enough to reach the
+    //                         guest -- also re-inits the SDRAM and
+    //                         re-maps the ITF bank, the one source that
+    //                         explains a cold ITF POST on its own
     // rst_tick free-runs on clk_chipset (wraps ~100 s); rst_last_tick
     // is its value at the winning rise, so a read after the reboot
     // says how long before the reboot the source asserted.
     // ------------------------------------------------------------------
     wire [7:0] rst_src_now = {soft_reset_cpu,   ri_greset,
-                              soft_guest_hold,  guest_hold_sync2,
+                              soft_guest_hold_sync,  guest_hold_sync2,
                               interact_reset,  ~bios_ever_loaded,
-                              load_active,      RESET};
+                              load_active,      RESET_sync};
     reg  [31:0] rst_tick      = 32'd0;
     reg  [7:0]  rst_src_q     = 8'h00;
     reg  [7:0]  rst_seen      = 8'h00;
@@ -2031,6 +2045,59 @@ module core_top (
             rst_last      <= {1'b1, rst_rise_idx};
             rst_last_tick <= rst_tick;
         end
+    end
+
+    // ------------------------------------------------------------------
+    // THE RAW-RESET BLIP WITNESS (slot 0x9D): what the filter ate.
+    //
+    // RESET_sync only lets an unlock through if it survives three
+    // clk_chipset edges, so the async-set stretch flops can no longer see
+    // a nanosecond PLL 'locked' dip -- and the spontaneous reboot WAS that
+    // shape (reset-source witness dark, cold POST, ROM BASIC).  To keep
+    // the evidence, this catcher latches the RAW reset level on its own
+    // edge -- the very pulse a stretch flop would have taken -- and counts
+    // completed episodes; the synchronized path counts the real ones:
+    //
+    //   0x9D = { rst_raw_cnt[31:16], rst_real_cnt[15:0] }
+    //          raw  = raw-RESET episodes of ANY length (async-catched)
+    //          real = episodes that reached RESET_sync (>= ~3 cycles)
+    //          blips = raw - real: the filtered sub-period pulses
+    //
+    // A climbing blip count between reads says PLL-unlock noise is real
+    // (and the guest no longer cares); a reboot with raw == real says the
+    // trigger was NOT a reset glitch -- the trail witnesses take over.
+    // The latch clears only once neither the raw level nor its filtered
+    // copy is active, so a sustained unlock's trailing edge can never be
+    // miscounted as a blip.
+    // ------------------------------------------------------------------
+    reg        rst_raw_l = 1'b0;         // async-set by the raw level
+    reg [1:0]  rst_raw_q = 2'b00;        // its clk_chipset-synchronized view
+    reg        rst_raw_clear_q = 1'b0;
+    reg [15:0] rst_raw_cnt  = 16'd0;
+    reg [15:0] rst_real_cnt = 16'd0;
+    wire       rst_raw_seen = rst_raw_q[1];
+    // an episode completes when the caught level has drained and neither
+    // the raw nor the filtered reset is still active.  The edge pulse
+    // counts it once (the synchronized view's 2-cycle tail cannot double-
+    // count), and a fresh pulse arriving inside the tail simply merges
+    // into the next episode -- undercounting at worst, never a wedge.
+    wire       rst_raw_clear = rst_raw_seen & ~RESET & ~RESET_sync;
+    wire       rst_raw_pulse = rst_raw_clear & ~rst_raw_clear_q;
+
+    always @(posedge clk_chipset or posedge RESET) begin
+        if (RESET)
+            rst_raw_l <= 1'b1;
+        else if (rst_raw_clear)
+            rst_raw_l <= 1'b0;
+    end
+
+    always_ff @(posedge clk_chipset) begin
+        rst_raw_q       <= {rst_raw_q[0], rst_raw_l};
+        rst_raw_clear_q <= rst_raw_clear;
+        if (rst_raw_pulse)
+            rst_raw_cnt <= rst_raw_cnt + 16'd1;
+        if (rst_sync_rise)
+            rst_real_cnt <= rst_real_cnt + 16'd1;
     end
 
     always_comb begin
@@ -2187,10 +2254,13 @@ module core_top (
             8'h9a:   probe_data_c = ri_dbg0;
             8'h9b:   probe_data_c = ri_dbg1;
             8'h9c:   probe_data_c = ri_dbg2;
-            // 0x9D: first zet fault's {seen, opcode-seen, pc}. opc=00 with
-            // seen=0 just means no fault yet; seen=1 pins the instruction
-            // whose decode faulted, and opc is the byte it decoded.
-            8'h9d:   probe_data_c = {3'b000, fault_seen, zet_opc, fault_pc};
+            // 0x9D: the raw-reset blip witness -- {rst_raw_cnt,
+            // rst_real_cnt} (see the witness block for the reading).
+            // raw - real = sub-period PLL-unlock pulses the synchronized
+            // reset filtered out: the shape of the spontaneous reboot.
+            // (The old zet-fault {seen, opc, pc} fields lived here; the
+            // z86 has no fault machinery -- zet_fault was a dead tie.)
+            8'h9d:   probe_data_c = {rst_raw_cnt, rst_real_cnt};
             // 0x9E/0x9F: RAM.sv's DMA-fill loss witness -- 0x9E =
             // {first-drop FSM state, in-flight-was-write, dropped addr,
             //  drop count}, 0x9F = parked-write count. A nonzero drop
@@ -3946,8 +4016,6 @@ module core_top (
     wire [19:0] zet_pc;
     wire [15:0] zet_ds;
     wire        zet_exec;
-    wire        zet_fault;
-    wire [7:0]  zet_opc;
 
     // Every speed setting is a 286-class machine, so the bus pairs run
     // the 286 Ts/Tc profile unconditionally. A future V30-accurate mode
@@ -4079,8 +4147,6 @@ module core_top (
         .dbg_wr_two(z86_pf_wr_two)
     );
     assign zwb_nmia  = 1'b0;
-    assign zet_fault = 1'b0;
-    assign zet_opc   = 8'h00;
     assign zet_exec  = 1'b0;
 
     // Debug: the last guest data-bus read / write byte addresses. Instruction

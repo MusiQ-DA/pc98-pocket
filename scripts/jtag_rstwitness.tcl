@@ -18,14 +18,17 @@
 #                          is shared with the poll-trap arm word -- a
 #                          POLL address with bit2 set reboots the machine
 #                          by construction, see core_top's witness block)
-#       [5] soft_guest_hold (the softcore's settings-apply path)
+#       [5] soft_guest_hold (the softcore's settings-apply hold, sampled
+#                          through its synchronized copy)
 #       [4] guest_hold_sync2 (boot hold, power-on only)
 #       [3] interact_reset  (OSD "Reset & Apply")
 #       [2] ~bios_ever_loaded (first-BIOS gate, power-on only)
 #       [1] load_active  (APF re-streaming a slot)
-#       [0] RESET        (a PLL lost lock -- the one source that also
-#                         re-inits the SDRAM and re-maps the ITF bank,
-#                         i.e. explains a cold ITF POST on its own)
+#       [0] RESET_sync   (a PLL lost lock long enough to reach the guest,
+#                         >= ~3 clk_chipset cycles -- the one source that
+#                         also re-inits the SDRAM and re-maps the ITF
+#                         bank, i.e. explains a cold ITF POST on its own;
+#                         sub-period blips are filtered, landing on 0x9D)
 #   * the reboot freeze -- z86 holds CS:IP=F000:FFF0 through a reset, so
 #     the moment any reset path fires, tlog and pc_hist freeze with the
 #     pre-reboot trail intact and the FFF0 fetch as the LAST entry (the
@@ -37,6 +40,17 @@
 #     the code instead.  rst_boot_itf (0xAB bit18) says which bank the
 #     "reboot" landed in: ITF POST with the bit clear = a guest 043D
 #     bank switch, not a cold reset.
+#   * the raw-reset blip witness (slot 0x9D): RESET is the raw analog
+#     'locked' output of the PLLs; the guest reset now runs it through
+#     synch_3, so a nanosecond unlock blip between clk_chipset posedges
+#     can no longer cold-boot the machine with the witness dark (the
+#     shape of the spontaneous SuperDepth reboot).  0x9D =
+#     {rst_raw_cnt[31:16], rst_real_cnt[15:0]}: raw counts raw-level
+#     episodes of ANY length (async-catched), real counts the ones that
+#     survived the filter; blips = raw - real.  Read it before and after
+#     a session: a climbing blip count = PLL unlock noise, harmlessly
+#     filtered; a reboot with raw == real and the witness dark = not a
+#     reset glitch, the trail witnesses take over.
 #
 # Arming writes (after the machine is up and the game loaded):
 #   wr 0x88 0x01   wedge taps + the reboot latch re-arm
@@ -91,7 +105,7 @@ proc wr {addr data} {
     drscan fpga.tap 40 [expr {(($addr << 32) | $data) & 0xFFFFFFFFFF}] -endstate idle
 }
 
-set srcname(0) "PLL-unlock (RESET)"
+set srcname(0) "PLL-unlock >=3clk (RESET_sync)"
 set srcname(1) "load_active (APF slot stream)"
 set srcname(2) "~bios_ever_loaded (power-on only)"
 set srcname(3) "interact_reset (OSD Reset & Apply)"
@@ -158,6 +172,10 @@ proc dump {} {
     puts [format "F0 witness 0x69=%08X (%s)" $f0a \
               [expr {($f0a & 0xF0000) == 0xF8000 ? "the boot's own OUT 0F0h"
                                                   : "a non-ITF F0 writer"}]]
+    set g9d [rd 0x9d]
+    puts [format "blip witness 0x9D=%08X raw=%d real=%d blips=%d" $g9d \
+              [expr {($g9d >> 16) & 0xFFFF}] [expr {$g9d & 0xFFFF}] \
+              [expr {(($g9d >> 16) & 0xFFFF) - ($g9d & 0xFFFF)}]]
     set aa [rd 0xaa]
     puts [format "taps 0xAA=%08X wedge=%d poll=%d fdq=%d poll_static=0x%X" $aa \
               [expr {($aa >> 31) & 1}] [expr {($aa >> 30) & 1}] \
