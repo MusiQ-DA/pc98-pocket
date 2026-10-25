@@ -133,6 +133,15 @@ module sdram_mp #(
     localparam logic [2:0] CMD_REF   = 3'b001;
     localparam logic [2:0] CMD_MRS   = 3'b000;
 
+    // Fused issue (first access command on the grant edge for row hits) is
+    // disabled after two hardware cold-boot freezes (2026-10-25/26): the
+    // latched read in sdram_shim never saw its p_done and RAM.sv parked in
+    // R2 forever, with the controller idle -- a completion race the Verilator
+    // sdram_model never reproduces. The measured win was one clock per
+    // row-hit transaction (about 1% of the bench phases), so the safe
+    // pre-fused S_RW walk keeps the posted-write queue's gain.
+    localparam bit FUSED_ISSUE = 1'b0;
+
     // Mode register: A[2:0] burst length 1, A[3] sequential, A[6:4] CAS latency,
     // A[8:7] standard operation, A[9] burst read / burst write.
     localparam logic [ROW_BITS-1:0] MODE_REG = {
@@ -404,7 +413,7 @@ module sdram_mp #(
                     p_wcnt        <= '0;
                     rr_ptr        <= (winner == GRANT_BITS'(PORTS-1)) ? '0
                                                                      : winner + 1'b1;
-                    if (row_hit) begin
+                    if (row_hit && FUSED_ISSUE) begin
                         // FUSED ISSUE: the row is already open, so the first
                         // access command goes out on the grant edge itself
                         // instead of one clock later from S_RW. The port-A
@@ -464,6 +473,13 @@ module sdram_mp #(
                                 state   <= S_RD_GAP;
                             end
                         end
+                    end else if (row_hit) begin
+                        // !FUSED_ISSUE: the row is open but the first access
+                        // command waits for S_RW's own edge, exactly the
+                        // pre-fused walk. left was set to len+1 above, so a
+                        // single-word transaction retires from S_RW with the
+                        // same ack->done spacing as every other transaction.
+                        state <= S_RW;
                     end else if (row_miss && pre_guard == 0) begin
                         // Wrong row in this bank -- close it, then activate.
                         cmd      <= CMD_PRE;

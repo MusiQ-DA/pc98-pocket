@@ -375,7 +375,19 @@ module sdram_shim #(
     // What the engine takes when it frees: the read if one waits and the
     // queue holds nothing it conflicts with (or nothing at all); else the
     // head write. nx_* below is the write head after this edge's pop.
-    wire       eng_rd_next = rd_busy & ~(nx_wr_v & rd_conflict_q);
+    //
+    // MITIGATION 2026-10-26 (hardware freeze, CI 1000 build): two cold
+    // boots froze in BIOS POST with RAM.sv parked in R2 and the latched
+    // read never completing -- different addresses each boot, i.e. a race,
+    // not a stuck bit. The read-side reorder and the controller's fused
+    // grant-issue are the only two read-path timing changes in a2f0d62, so
+    // both are switched off here pending a root cause; strict arrival
+    // order (read only when the queue is empty) is the pre-a2f0d62
+    // contract. The posted-write queue itself -- where the measured win
+    // lives -- stays on.
+    localparam bit READ_REORDER = 1'b0;
+    wire       eng_rd_next = rd_busy
+                          & ~(nx_wr_v & (READ_REORDER ? rd_conflict_q : 1'b1));
 
     always_ff @(posedge sdram_clock or posedge sdram_reset) begin
         if (sdram_reset) begin
