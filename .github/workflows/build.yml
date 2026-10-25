@@ -27,7 +27,11 @@ permissions:
 jobs:
 
   sim:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to Verilator 5.032, whose --timing
+    # scheduling breaks tb_sdram_mp's write/read-back (all-zero data) on
+    # RTL that passes 5.020 (this image) and 5.052 alike.  The benches are
+    # calibrated against 5.020; bump deliberately, not by runner drift.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

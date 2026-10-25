@@ -63,8 +63,11 @@ touches `fpga/db`, and is the only sanctioned local Quartus invocation.
 
 ### Local sim toolchain caveat
 
-CI's sim job runs Verilator 5.020 (Debian apt). Homebrew's newer Verilator
-(5.052 observed) mis-schedules `while(cond) @(posedge clk)` wait loops under
+CI's sim job is pinned to `ubuntu-24.04` so its Verilator stays 5.020
+(ubuntu-latest drifted to 5.032, which mis-schedules `--timing` benches —
+`tb_sdram_mp` fails its write/read-back with all-zero data on RTL that
+passes 5.020 and 5.052 alike). Homebrew's newer Verilator (5.052 observed)
+also mis-schedules `while(cond) @(posedge clk)` wait loops under
 `--timing` — `tb_pc98_font_stress` reports false "wedged" fills locally while
 the identical files pass in CI. For an authoritative local run of a
 `--timing` bench, use the `pc98-sim` docker image (`docker build -t pc98-sim
