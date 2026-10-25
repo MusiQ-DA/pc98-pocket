@@ -67,7 +67,8 @@ proc decode {} {
     set hrq1  [expr {($a0 >> 30) & 1}]
     set hrq2  [expr {($a0 >> 29) & 1}]
     set dmad  [expr {($a0 >> 16) & 0xFF}]
-    set dst   [expr {($dmad >> 5) & 0x7}]    set dsel  [expr {($dmad >> 3) & 0x3}]
+    set dst   [expr {($dmad >> 5) & 0x7}]
+    set dsel  [expr {($dmad >> 3) & 0x3}]
     puts [format "arbiter: dce_pin=%d hrq_ff1=%d hrq_ff2=%d | dma: state=%s ch=%d HRQ=%d TC=%d EOP=%d" \
         $dce $hrq1 $hrq2 [lindex $dma_st $dst] $dsel \
         [expr {($dmad >> 2) & 1}] [expr {($dmad >> 1) & 1}] [expr {$dmad & 1}]]
@@ -105,7 +106,7 @@ proc decode {} {
         [expr {($a2 >> 11) & 0x7}] [expr {($a2 >> 10) & 1}] \
         [expr {($a2 >> 9) & 1}] [expr {($a2 >> 8) & 1}] \
         [expr {($a2 >> 7) & 1}] [expr {($a2 >> 4) & 0x7}] \
-        [expr {($a2 >> 3) & 1}] [expr {($a2 >> 2) & 1}] [expr {($a2 >> 1) & 1}]
+        [expr {($a2 >> 3) & 1}] [expr {($a2 >> 2) & 1}] [expr {($a2 >> 1) & 1}]]
 
     # -- 0xA4: bridge engine
     puts [format "bridge : cur={pf=%d fillm=%d dq=%d inta=%d} fill_ok=%d released=%d rd_own=%d saw_low=%d wrq=%d hit_q=%d pf_dead=%d cmd_age=%d" \

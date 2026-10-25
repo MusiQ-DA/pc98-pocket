@@ -28,7 +28,7 @@ irscan fpga.tap 0x0e
 drscan fpga.tap 64 0 -endstate idle
 irscan fpga.tap 0x0c
 set hub 0
-for {set i 0} {$i < 8} {$i} {
+for {set i 0} {$i < 8} {incr i} {
     scan [drscan fpga.tap 4 0 -endstate idle] %x nib
     set hub [expr {$hub | ($nib << (4*$i))}]
 }
