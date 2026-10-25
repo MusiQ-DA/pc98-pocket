@@ -63,8 +63,17 @@ module tb_pc98_gvram_seq;
     // how it tells the CPU the data has arrived -- and reads 1 whenever no
     // selected access is in flight. "No access in flight" alone deadlocks: the
     // command stays up waiting for a ready that cannot come until it drops.
+    // The completion only answers while the pins still carry the operands it
+    // completed FOR (RAM.sv's cov_same): a chained leg moves the operands in
+    // the very next clock, and an unqualified registered completion made
+    // S_WRW retire twice off one leg -- the second retire skipped a plane.
     logic       completed = 1'b0;
-    wire        mem_ready = (mem_rd | mem_wr) ? completed : 1'b1;
+    logic [19:0] cov_addr_m;
+    logic [7:0]  cov_wd_m, cov_wdh_m;
+    logic        cov_word_m;
+    wire cov_same_m = (mem_addr == cov_addr_m) & (mem_wdata == cov_wd_m)
+                    & (mem_wdata_hi == cov_wdh_m) & (mem_word == cov_word_m);
+    wire        mem_ready = (mem_rd | mem_wr) ? (completed & cov_same_m) : 1'b1;
 
     pc98_gvram_seq dut (
         .clk(clk), .reset(reset),
@@ -133,12 +142,36 @@ module tb_pc98_gvram_seq;
     // then returns to IDLE. A model that re-triggers on the overlap counts an
     // access that the real memory would not perform -- which is what made
     // every count in this bench one too high.
+    //
+    // EXCEPT the leg chain's shapes, which RAM.sv treats as NEW transfers
+    // by operand inspection (new_write_strobe parks a held write whose
+    // operands changed; a direction switch under a held command
+    // re-accepts from IDLE): re-arm on a command gap, a direction
+    // switch, or an operand change under a held write, so the chained
+    // walk still produces one model access per plane leg.
     logic armed = 1'b1;
+    logic       prev_rd, prev_wr, prev_word;
+    logic [19:0] prev_addr;
+    logic [7:0]  prev_wd, prev_wdh;
+    always_ff @(posedge clk) begin
+        prev_rd    <= mem_rd;
+        prev_wr    <= mem_wr;
+        prev_word  <= mem_word;
+        prev_addr  <= mem_addr;
+        prev_wd    <= mem_wdata;
+        prev_wdh   <= mem_wdata_hi;
+    end
+    wire ops_changed   = (mem_addr != prev_addr) | (mem_wdata != prev_wd)
+                       | (mem_wdata_hi != prev_wdh) | (mem_word != prev_word);
+    wire cmds_changed  = (mem_rd != prev_rd) | (mem_wr != prev_wr);
+    wire rearmed       = !(mem_rd | mem_wr)
+                       | (cmds_changed & (mem_rd | mem_wr))
+                       | (mem_wr & ops_changed);
 
     always_ff @(posedge clk) begin
         model_done <= 1'b0;
         if (reset) begin busy <= 1'b0; lat_n <= 0; armed <= 1'b1; end
-        else if (!(mem_rd | mem_wr)) begin armed <= 1'b1; completed <= 1'b0; end
+        else if (rearmed) begin armed <= 1'b1; completed <= 1'b0; end
         else if (!busy && armed && (mem_rd | mem_wr)) begin
             busy  <= 1'b1;
             lat_n <= LAT;
@@ -148,6 +181,10 @@ module tb_pc98_gvram_seq;
                 busy <= 1'b0;
                 armed <= 1'b0;          // not again until the command drops
                 completed <= 1'b1;
+                cov_addr_m  <= mem_addr;
+                cov_wd_m    <= mem_wdata;
+                cov_wdh_m   <= mem_wdata_hi;
+                cov_word_m  <= mem_word;
                 model_done <= 1'b1;
                 if (mem_wr) begin
                     store[int'(mem_addr)] = mem_wdata;
@@ -450,6 +487,77 @@ module tb_pc98_gvram_seq;
         want("  guest read second",          log_a[1].a, 20'hA8701);
         want("  guest read is a READ",       log_a[1].wr, 0);
         want("  guest got the real byte",    last_rdata, 8'h42);
+
+        // ---- chained word fills -- the rep stosw shape --------------------
+        // Back-to-back guest word writes the way rep stosw runs them: one
+        // bus cycle per word, strobe down, next word immediately. The
+        // cycle counts are REPORTED, not asserted -- the model memory
+        // waits out every leg's full latency (no posted queue), so the
+        // absolute numbers are pessimistic; tb_mem_perf's phases 0x11/0x12
+        // carry the real ones. What this bench pins is correctness under
+        // the leg chain: every plane of every word lands, in order.
+        begin
+            int nfill = 32;
+            real t0;
+            // TDW: tile on every plane, operand discarded.
+            grcg_active = 1'b1; grcg_rmw = 1'b0; grcg_mask = 4'h0;
+            analog_mode = 1'b0;
+            grcg_tile[0] = 8'h11; grcg_tile[1] = 8'h22;
+            grcg_tile[2] = 8'h44; grcg_tile[3] = 8'h88;
+            log_n = 0;
+            t0 = $realtime;
+            for (int i = 0; i < nfill; i++) begin
+                @(posedge clk);
+                cpu_gvram = 1'b1; cpu_word = 1'b1;
+                cpu_addr = 20'hA8000 + i*2;
+                cpu_wdata = 8'hFF; cpu_wdata_hi = 8'hFF;
+                cpu_wr = 1'b1;
+                @(posedge clk);
+                while (!cpu_ready) @(posedge clk);
+                cpu_wr = 1'b0; cpu_word = 1'b0; cpu_gvram = 1'b0;
+            end
+            $display("     TDW word fill: %0d words, %.1f clks = %.2f clk/word (model mem)",
+                     nfill, ($realtime-t0)/23.279,
+                     ($realtime-t0)/23.279/nfill);
+            want("TDW fill: legs",  log_n, nfill*3);
+            want("  plane B of word 0 = 11",  store[20'hA8000], 8'h11);
+            want("  plane R of word 5 = 22",  store[20'hB0000+10], 8'h22);
+            want("  plane G of word 31 = 44", store[20'hB8000+62], 8'h44);
+
+            // RMW: fill_box_masked's shape -- 0xF0/0x0F lane operands over
+            // a known background, tile 0x33 on every plane.
+            grcg_rmw = 1'b1;
+            grcg_tile[0] = 8'h33; grcg_tile[1] = 8'h33;
+            grcg_tile[2] = 8'h33; grcg_tile[3] = 8'h33;
+            for (int i = 0; i < nfill; i++) begin
+                store[20'hA9000 + i*2]     = 8'h55; store[20'hA9000 + i*2 + 1] = 8'h0F;
+                store[20'hB1000 + i*2]     = 8'h55; store[20'hB1000 + i*2 + 1] = 8'h0F;
+                store[20'hB9000 + i*2]     = 8'h55; store[20'hB9000 + i*2 + 1] = 8'h0F;
+            end
+            log_n = 0;
+            t0 = $realtime;
+            for (int i = 0; i < nfill; i++) begin
+                @(posedge clk);
+                cpu_gvram = 1'b1; cpu_word = 1'b1;
+                cpu_addr = 20'hA9000 + i*2;
+                cpu_wdata = 8'hF0; cpu_wdata_hi = 8'hF0;
+                cpu_wr = 1'b1;
+                @(posedge clk);
+                while (!cpu_ready) @(posedge clk);
+                cpu_wr = 1'b0; cpu_word = 1'b0; cpu_gvram = 1'b0;
+            end
+            $display("     RMW word fill: %0d words, %.1f clks = %.2f clk/word (model mem)",
+                     nfill, ($realtime-t0)/23.279,
+                     ($realtime-t0)/23.279/nfill);
+            want("RMW fill: legs",  log_n, nfill*6);
+            // plane = (55 & ~F0)|(F0 & 33) = 05|30 = 35 on the even lane
+            want("  plane B of word 7 lo",    store[20'hA9000+14], 8'h35);
+            want("  plane G of word 7 hi",    store[20'hB9000+15],
+                 (8'h0F & ~8'hF0) | (8'hF0 & 8'h33));
+            // a chained RMW walk must still READ before it writes
+            want("  read before write (leg 0)", log_a[0].wr, 0);
+            want("  read before write (leg 2)", log_a[2].wr, 0);
+        end
 
         if (errors == 0) $display("PASS tb_pc98_gvram_seq");
         else             $display("FAILED tb_pc98_gvram_seq: %0d", errors);

@@ -509,7 +509,11 @@ module pc98_gvram_seq #(
     // every byte); the write phase is where the access register and the mask
     // bite.
     wire       cur_live = (st == S_WR) ? wr_live_f(gp) : rd_live_f(gp);
-    wire       last_gp  = (gp == 2'd3);
+    // Plane E only exists in analog mode, so in digital mode plane G is the
+    // last one any walk can touch -- ending the walk there skips the S_WR
+    // dead-cycle the plane-E skip used to cost (the leg chains below end on
+    // this term). Same shape as egc_rd_last above, for the generic walk.
+    wire       last_gp  = (gp == 2'd3) | ((gp == 2'd2) & ~analog_mode);
     wire [7:0] cur_tile = grcg_tile[gp];
 
     // Where this plane's byte lives, page banked when 0xA6 says so.
@@ -542,16 +546,53 @@ module pc98_gvram_seq #(
             : grcg_tile[gp])
         : cpu_wdata_hi;
 
+    // ------------------------------------------------------------------
+    // LEG CHAINING -- issue the next plane's leg on the retire edge.
+    //
+    // RAM.sv treats a held write strobe whose OPERANDS changed as a new
+    // transfer: while its FSM is busy the strobe parks in the pending
+    // queue (new_write_strobe/2/3, idle_park, cap), the capture snapshots
+    // the bus at that edge, and the executing access keeps running on its
+    // accept_* snapshot -- so this module may drop S_WR's one-clock setup
+    // between planes and simply move the address/data under a held
+    // mem_wr. Each park registers wr_covered one clock later, which is
+    // exactly the S_WRW wait the next plane needed anyway: the steady
+    // state is one plane leg per clock.
+    //
+    // Only writes chain out of S_WRW. A read leg cannot chain: its
+    // completion IS RAM.sv's COMPLETE_RAM_RW, and the next read has to
+    // wait out the strobe-match drop and the IDLE re-accept anyway --
+    // chaining there just moves the same latency around. The RMW chain
+    // switches to the next plane's READ on the write's covered edge,
+    // which is one clock ahead of the S_RD setup path.
+    //
+    // EGC walks never chain: the shift queue's push/event strobes are
+    // timed against the S_RD/S_RDW ladder, and byte-lane order is the
+    // pipeline's contract there. Plain page-1 walks are single-plane and
+    // have nothing to chain.
+    // ------------------------------------------------------------------
+    wire chain_ok = grcg_here & ~svc_raw_rd;
+    // The next plane's leg address, valid on a retire edge (gp+1).
+    wire [1:0]  gp_nx   = gp + 2'd1;
+    wire [19:0] nx_addr = plane_addr(op_addr, gp_nx);
+
     // Ready lands on the FINAL byte's walk: a word access's first S_DONE
     // only starts the odd half. svc_hold forces expand high, which parks
     // ready low -- a guest access arriving mid-svc-op waits politely.
     // The ~svc_hold matters at S_DONE: without it a guest whose strobe is
     // up when a svc op completes would see this cycle's ready and take
     // rdata_pass -- a stale byte -- for an access that never ran.
+    // NOTE: the ready is deliberately NOT pulled earlier onto the final
+    // S_WRW's retire edge, even though that edge is the walk's true
+    // completion. S_DONE is a HELD level until the strobe drops, and a
+    // back-to-back master (rep stosw) raises its next strobe one clock
+    // after the release -- exactly when the FSM still sits in S_DONE.
+    // The held ready would then answer the NEW strobe without running it
+    // (tb chained-fill: every other word skipped). The one clock stays.
     assign cpu_ready = expand ? (st == S_DONE) & (~is_word | half
                                                    | grcg_wbatch)
-                              & ~svc_hold
-                              : mem_ready & ~svc_gap;
+                               & ~svc_hold
+                               : mem_ready & ~svc_gap;
 
     // ~expand also proves ownership: mem_wr is then the registered
     // pass-through of cpu_wr and nothing else -- a sequencer leg only
@@ -840,10 +881,39 @@ module pc98_gvram_seq #(
               // the background while the next leg walks in. Reads still wait
               // for leg_done: their data is not back until COMPLETE_RAM_RW,
               // and a parked drain's pulse is not theirs (mem_own).
+              //
+              // The CHAIN arms below ride that release straight into the
+              // next plane's leg (see the chaining block above the FSM):
+              // the TDW chain keeps mem_wr up and moves the operands (RAM
+              // parks the new strobe while the old access drains), the RMW
+              // chain drops the write and puts the next plane's read on the
+              // bus one clock before the S_RD setup path would.
               S_WRW: if (leg_done | mem_ready) begin
-                mem_wr <= 1'b0;
-                if (last_gp) st <= S_DONE;
-                else begin
+                if (last_gp) begin
+                    mem_wr <= 1'b0;
+                    st <= S_DONE;
+                end
+                // RMW chain: the next live plane's READ, now.
+                else if (chain_ok & grcg_rmw & rd_live_f(gp_nx)) begin
+                    mem_wr    <= 1'b0;
+                    mem_rd    <= 1'b1;
+                    gp        <= gp_nx;
+                    mem_addr  <= nx_addr;
+                    mem_page1 <= access_page;
+                    st        <= S_RDW;
+                end
+                // TDW chain: mem_wr stays UP, operands move.
+                else if (chain_ok & ~grcg_rmw & ~egc_here
+                         & wr_live_f(gp_nx)) begin
+                    mem_wr       <= 1'b1;
+                    gp           <= gp_nx;
+                    mem_addr     <= nx_addr;
+                    mem_page1    <= access_page;
+                    mem_wdata    <= grcg_tile[gp_nx];
+                    mem_wdata_hi <= grcg_tile[gp_nx];
+                    st           <= S_WRW;
+                end else begin
+                    mem_wr <= 1'b0;
                     gp <= gp + 2'd1;
                     st <= grcg_rmw | egc_here ? S_RD : S_WR;
                 end

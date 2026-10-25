@@ -707,6 +707,37 @@ module tb_mem_perf;
         marker(8'h85);
         // GRCG stays armed: egc_on = egc_arm & grcg_active in the seq.
 
+        // ---- phase 0x11: GRCG TDW rep STOSW at A800:8000 -------------
+        // SuperDepth's stage-fill shape: word stores, the wbatch path
+        // (one word-wide walk per plane) with the leg chain. 1024 words.
+        marker(8'h11);
+        outport(16'h007C, 8'h80);           // GRCG on, TDW, no mask
+        outport(16'h007E, 8'hAA);           // tile 0
+        outport(16'h007E, 8'hBB);           // tile 1
+        outport(16'h007E, 8'hCC);           // tile 2
+        outport(16'h007E, 8'hDD);           // tile 3
+        emit(8'hBF); emitw(16'h8000);       // MOV DI,8000 (still ES=A800)
+        emit(8'hB9); emitw(16'h0400);       // MOV CX,0400 (1024 words)
+        emit(8'hB8); emitw(16'hFFFF);       // MOV AX,FFFF (fill value)
+        emit(8'hF3); emit(8'hAB);           // REP STOSW
+        marker(8'h91);
+
+        // ---- phase 0x12: GRCG RMW rep STOSW at A800:A000 -------------
+        // fill_box_masked's shape: RMW word stores with lane operands
+        // (0xF0/0x0F) that cannot take the 0xFF/0x00 short-circuits.
+        marker(8'h12);
+        outport(16'h007C, 8'hC0);           // GRCG on, RMW
+        outport(16'h007E, 8'hAA);
+        outport(16'h007E, 8'hBB);
+        outport(16'h007E, 8'hCC);
+        outport(16'h007E, 8'hDD);
+        emit(8'hBF); emitw(16'hA000);       // MOV DI,A000
+        emit(8'hB9); emitw(16'h0400);       // MOV CX,0400
+        emit(8'hB8); emitw(16'h0F0F);       // MOV AX,0F0F
+        emit(8'hF3); emit(8'hAB);           // REP STOSW
+        outport(16'h007C, 8'h00);           // GRCG off
+        marker(8'h92);
+
         // ---- phase 6: EGC write rep stosb at A800:4000 ----
         marker(8'h06);
         outport(16'h007C, 8'h80);           // GRCG mode keeps the engine on
@@ -1464,7 +1495,14 @@ module tb_mem_perf;
             if (zwb_stb & ~zwb_ack)   c_wbpend <= c_wbpend + 1;
             if ((~mem_rd_n | ~mem_wr_n) & ~guest_ready)
                 c_gstall <= c_gstall + 1;
-            if (u_ram.write_strobe_fell & ~(u_ram.wr_covered & u_ram.cov_same))
+            // Same exemptions as the c_uncov count below: a covered
+            // write's release may move the pins to the next leg's
+            // operands BEFORE the fall clk (the leg chains do this by
+            // design -- cov_same then compares the NEW operands against
+            // the parked slot and misses), so only a fall whose held
+            // window never saw coverage is worth printing.
+            if (u_ram.write_strobe_fell & ~(u_ram.wr_covered & u_ram.cov_same)
+                & ~swr_cov_seen & ~u_ram.dup_covered)
                 $display("  UNCOV t=%0t ad=%05x d=%02x st=%0d seqst=%0d svch=%b exp=%b memwr=%b rdq=%0d dq=%b bs=%0d",
                          $time, u_ram.latch_address[19:0],
                          u_ram.internal_data_bus, u_ram.state, u_seq.st,
@@ -1796,6 +1834,8 @@ module tb_mem_perf;
         phase_name[8'h0E] = "title shape: stack string + CALL";
         phase_name[8'h0F] = "ITF IRQ0 poll loop x32";
         phase_name[8'h10] = "ITF IRQ0 poll loop x32, F-bank mapped";
+        phase_name[8'h11] = "REP STOSW 1024W GRCG TDW";
+        phase_name[8'h12] = "REP STOSW 1024W GRCG RMW";
         phase_name[8'hFF] = "done";
     end
     int phase_bytes [0:255];
@@ -1812,6 +1852,8 @@ module tb_mem_perf;
         phase_bytes[8'h0A] = 48;
         phase_bytes[8'h0B] = 4096;
         phase_bytes[8'h0C] = 256;
+        phase_bytes[8'h11] = 2048;
+        phase_bytes[8'h12] = 2048;
     end
 
     // snapshot record
