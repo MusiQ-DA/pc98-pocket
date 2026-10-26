@@ -1,4 +1,4 @@
-# jtag_settings.tcl -- dump every OSD setting (probe slots 0xA0-0xA7, four
+# jtag_settings.tcl -- dump every OSD setting (probe slots 0xB0-0xB7, four
 # bytes each in settings_ui.c's SET_* order). Values are option indices.
 #   openocd -f scripts/jtag_probe.cfg -f scripts/jtag_settings.tcl
 init
@@ -40,7 +40,7 @@ proc w16 {a} { return [expr {[rdabs $a] | ([rdabs [expr {$a+1}]]<<8)}] }
 
 set names {{CPU Speed} {BIOS Write} {Audio Boost} {Speaker Vol} {Stereo Mix} {Display} {FDD Turbo} {200-Line Mode} {D-Pad} {Gamepad} {Disk LED} {EMS} {Drive Sound} {Text Rows} {Text Cols} {Boot Order} {Boot Device} {RAM Size} {DEL=BS} {Ext ROM} {CPU Cache}}
 for {set g 0} {$g < 6} {incr g} {
-  set w [rd [expr {0xA0 + $g}]]
+  set w [rd [expr {0xB0 + $g}]]
   for {set b 0} {$b < 4} {incr b} {
     set i [expr {$g*4 + $b}]
     if {$i >= [llength $names]} break
