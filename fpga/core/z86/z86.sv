@@ -93,6 +93,7 @@ wire [15:0] dbg_reg_dout;
 // INTR; one wb_tgc_o pulse fetches the vector through the bridge.
 wire        inta_req;
 wire        intra;
+wire        rep_int;     // decode -> execute: an interrupt breaks a running REP
 reg  [7:0]  pic_vec_r;
 reg         pic_vec_valid;
 always @(posedge clk) begin
@@ -422,6 +423,7 @@ decode u_decode2 (
     .dbg_stopped        (dbg_stopped),
     .dbg_next_ip        (dbg_next_ip),
     .inta_req           (inta_req),
+    .rep_int            (rep_int),
     .bus_quiet          (~wr_valid & ~wb_cyc_o & ~wb_stb_o & ~cache_busy),
     .intra              (intra),
 
@@ -433,6 +435,7 @@ decode u_decode2 (
 // EXECUTE: execute the instruction, with hardwired logic as fast path and microcode for complex instructions
 execute u_execute (
     .hlt_wake           (wb_tgc_i),
+    .rep_int            (rep_int),
     .clk                (clk),          
     .halted             (dbg_halted),
     .reset              (cpu_reset),

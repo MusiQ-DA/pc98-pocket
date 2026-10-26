@@ -117,6 +117,14 @@
     .end
 
 ;;; ----------------  String instructions  -----------------------------
+;
+; REP loops start with TESTZX REP: CX == 0 sets the condition (the JT after
+; it leaves), and once at least one iteration has run, a pending interrupt
+; (NMI, or an INTR IF admitted) ends the instruction there with a branch to
+; its first prefix -- CX/SI/DI stand as the finished iterations left them,
+; decode then takes the interrupt with that address as the return IP, and
+; the IRET resumes the REP, as the 80286 does. The check sits on the
+; loop-top µ-op the loop ran anyway, so an iteration costs no extra cycle.
 
 ;----------------  MOVSB / REP_MOVSB -----------------------------
 
@@ -126,7 +134,7 @@
     .end 
  
 @REP_MOVSB
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        4
     LOAD      0b0110       ; byte, SI++, DS:SI  → tmp_lo
     STORE     0b0110       ; byte, DI++, tmp_lo → ES:DI
@@ -142,7 +150,7 @@
     .end 
 
 @REP_MOVSW
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        4
     LOAD      0b1110       ; word, SI++, DS:SI  → tmp_lo
     STORE     0b1110       ; word, DI++, tmp_lo → ES:DI
@@ -159,7 +167,7 @@
     .end 
 
 @REPNE_CMPSB
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        6            ; CX == 0, go to .end
     LOAD      0b0110       ; byte, SI++, DS:SI → tmp_lo
     LOAD      0b0111       ; byte, DI++, ES:DI → tmp_hi
@@ -170,7 +178,7 @@
     .end 
  
 @REPE_CMPSB
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        6            ; CX == 0, go to .end
     LOAD      0b0110       ; byte, SI++, DS:SI → tmp_lo
     LOAD      0b0111       ; byte, DI++, ES:DI → tmp_hi
@@ -189,7 +197,7 @@
     .end 
  
 @REPNE_CMPSW                     ; A7
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        6            ; CX == 0, go to .end
     LOAD      0b1110       ; word, SI++, DS:SI → tmp_lo
     LOAD      0b1111       ; word, SI++, DS:SI → tmp_lo
@@ -200,7 +208,7 @@
     .end 
 
 @REPE_CMPSW
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        6            ; CX == 0, go to .end
     LOAD      0b1110       ; word, SI++, DS:SI → tmp_lo
     LOAD      0b1111       ; word, SI++, DS:SI → tmp_lo
@@ -211,7 +219,7 @@
     .end 
 
 @REP_CMPSW
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        5            ; CX == 0, goto .end
     LOAD      0b1110       ; word, SI++, DS:SI → tmp_lo
     LOAD      0b1111       ; word, SI++, DS:SI → tmp_lo
@@ -227,7 +235,7 @@
     .end 
  
 @REP_STOSB
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        3            ; CX == 0, goto .end
     DEC       CX
     STORE     0b0111       ; byte, DI++, AL → [ES:DI]
@@ -241,7 +249,7 @@
     .end 
  
 @REP_STOSW
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        3            ; CX == 0, goto .end
     DEC       CX
     STORE     0b1111       ; word, DI++, AX → [ES:DI]
@@ -256,7 +264,7 @@
     .end 
 
 @REP_LODSB
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        4            ; CX == 0, goto .end
     LOAD      0b0110       ; byte, SI++, DS:SI → tmp_lo
     DEC       CX
@@ -272,7 +280,7 @@
     .end 
  
 @REP_LODSW
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        4            ; CX == 0, goto .end
     LOAD      0b1110       ; word, SI++, DS:SI → tmp_lo
     DEC       CX
@@ -288,7 +296,7 @@
     .end 
 
 @REPNE_SCASB
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        5            ; CX == 0, go to .end
     LOAD      0b0111       ; byte, DI++, ES:DI → tmp_hi
     DEC       CX
@@ -298,7 +306,7 @@
     .end 
 
 @REPE_SCASB
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        5            ; CX == 0, go to .end
     LOAD      0b0111       ; byte, DI++, ES:DI → tmp_hi
     DEC       CX
@@ -315,7 +323,7 @@
     .end
 
 @REPNE_SCASW
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        5            ; CX == 0, go to .end
     LOAD      0b1111       ; word, SI++, DS:SI → tmp_lo
     DEC       CX
@@ -325,7 +333,7 @@
     .end 
 
 @REPE_SCASW
-    TESTZX
+    TESTZX    REP          ; CX == 0 -> end; else a pending interrupt breaks out here
     JT        5            ; CX == 0, go to .end
     LOAD      0b1111       ; word, SI++, DS:SI → tmp_lo
     DEC       CX
@@ -582,6 +590,44 @@
 @OUTSW                  ; 6F
     LOAD    0b1110           ; word, SI++, DS:SI → tmp_lo
     OUT     WORD
+    .end
+
+; PC-98 port: REP INS/OUTS. Without these the prefix was ignored and a
+; `rep insw` moved one word and left CX alone.
+@REP_INSB
+    TESTZX    REP
+    JT        4
+    IN        BYTE           ; DX → tmp_lo
+    STORE     0b0110         ; byte, DI++, tmp_lo → ES:DI
+    DEC       CX
+    J         -6
+    .end
+
+@REP_INSW
+    TESTZX    REP
+    JT        4
+    IN        WORD
+    STORE     0b1110         ; word, DI++, tmp_lo → ES:DI
+    DEC       CX
+    J         -6
+    .end
+
+@REP_OUTSB
+    TESTZX    REP
+    JT        4
+    LOAD      0b0110         ; byte, SI++, DS:SI → tmp_lo
+    OUT       BYTE           ; tmp_lo → DX
+    DEC       CX
+    J         -6
+    .end
+
+@REP_OUTSW
+    TESTZX    REP
+    JT        4
+    LOAD      0b1110         ; word, SI++, DS:SI → tmp_lo
+    OUT       WORD
+    DEC       CX
+    J         -6
     .end
 
 
