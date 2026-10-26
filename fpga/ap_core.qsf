@@ -947,7 +947,7 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # (bisect z86-fit-bisect: retirement alone crashes at 22 too, and the
 # trap-only netlist RAN at 21 -- 1854 LABs, 6 over).  Ring restored; 22
 # now dials the ~6 LABs the stub window itself needs.
-set_global_assignment -name SEED 22
+set_global_assignment -name SEED 27
 # clk_pico is u_softcpu's fabric-generated clk_sys/6 pulse train (~7 MHz) and
 # it drives the whole PicoRV32 + OSD domain (~1.5k loads). Left on LAB
 # routing it accumulates enough skew for intra-domain hold violations -- the
