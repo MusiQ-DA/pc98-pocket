@@ -1877,9 +1877,15 @@ module core_top (
     // transition INTO the stuck poll.
     reg         poll_en   = 1'b0;
     reg  [19:0] poll_pc   = 20'd0;
-    reg  [23:0] poll_static = 24'd0;
-    reg         poll_latch = 1'b0;
-    wire        poll_in_win = poll_en & (pc_now[19:5] == poll_pc[19:5]);
+    // RETIRED (LABs): the poll-window and FDC DRQ-stall catches below
+    // were run#976 triage; the design sat at 1846/1848 LABs and the SCSI
+    // ROM/firmware fix pushed every seed tried 7-11 over. Their write
+    // slot (0x87) is still accepted; 0xAA reads the two latches as 0.
+    // tlog all-PC mode + live z86 regs (slots 0x10-0x16) caught the boot
+    // freeze without them.
+    wire [23:0] poll_static = 24'd0;
+    wire        poll_latch  = 1'b0;
+    wire        _unused_poll = &{1'b0, poll_en, poll_pc};
     //
     // FDC DRQ-stall trigger: the FDC's dma_req is a LEVEL that only the
     // 71071's DACK (or TC) folds -- a healthy byte train re-dips it every
@@ -1889,9 +1895,7 @@ module core_top (
     // to stop polling. Bit 7 of the live cs_fdc2 view is the wire
     // (floppy.v's dma_req == Peripherals' fdd_dma_req_wire; the dbg2
     // field sits one up because [0] is the TC latch).
-    reg  [23:0] fdq_static  = 24'd0;
-    reg         fdq_latch   = 1'b0;
-    wire        fdq_up      = cs_fdc2[7];
+    wire        fdq_latch   = 1'b0;
     //
     // Wild-fetch trigger -- RETIRED. Two commits of fences (a registered
     // zone condition, then a shipped-shape 24-bit counter) could not stop
@@ -1916,10 +1920,6 @@ module core_top (
             && probe_wdata_c[0]) begin
             wedge_latch   <= 1'b0;
             wedge_static  <= 24'd0;
-            poll_static   <= 24'd0;
-            poll_latch    <= 1'b0;
-            fdq_static    <= 24'd0;
-            fdq_latch     <= 1'b0;
         end else begin
             if (!wedge_latch && wedge_run) begin
                 wedge_ret_prev <= retired_cnt;
@@ -1930,22 +1930,6 @@ module core_top (
                         wedge_latch <= 1'b1;
                 end else
                     wedge_static <= 24'd0;
-            end
-            if (!poll_latch && wedge_run) begin
-                if (poll_in_win) begin
-                    poll_static <= poll_static + 24'd1;
-                    if (poll_static == 24'hFF_FFFF)
-                        poll_latch <= 1'b1;
-                end else
-                    poll_static <= 24'd0;
-            end
-            if (!fdq_latch && wedge_run) begin
-                if (fdq_up) begin
-                    fdq_static <= fdq_static + 24'd1;
-                    if (fdq_static == 24'hFF_FFFF)
-                        fdq_latch <= 1'b1;
-                end else
-                    fdq_static <= 24'd0;
             end
             // Either catch latches the wedge snapshot too.
             if (tap_latch && !wedge_latch)
