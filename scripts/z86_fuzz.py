@@ -118,7 +118,12 @@ def gen_block(rng, lab):
         else: out.append(rng.choice(['clc', 'stc', 'cmc', 'lahf', 'sahf']))
     elif k < 31:
         out += [f'mov si,0x{rng.randrange(0x200, 0x600):x}', f'mov di,0x{rng.randrange(0x200, 0x600):x}',
-                f'mov cx,{rng.randrange(0, 9)}', rng.choice(['cld', 'std'])]
+                # a long count now and then, so IRQ runs break REPs mid-way
+                # (an interrupt is taken between iterations, as on the 286);
+                # short of 0x78 so a CS: source from SI<0x600 stops below the
+                # handler's count at 0000:06F0
+                f'mov cx,{rng.randrange(0, 9) if rng.random() < 0.75 else rng.randrange(9, 0x78)}',
+                rng.choice(['cld', 'std'])]
         op = rng.choice(['movsb', 'movsw', 'stosb', 'stosw', 'lodsb', 'lodsw', 'cmpsb', 'cmpsw', 'scasb', 'scasw'])
         rep = rng.choice(['', 'rep ']) if op[:4] in ('movs', 'stos', 'lods') else rng.choice(['', 'repe ', 'repne '])
         # a source segment override (both prefix orders) on the forms that
