@@ -3,6 +3,14 @@
 > ユーザーの最後の報告: 「またフリーズだよ、これ改善してないね。引き継ぎmd書いて」
 > これを受けて作成。前回版 (9e74305) から全面改訂。
 
+> **2026-10-26 追記（M2 結果）**: `db6f679`（a2f0d62 + 3745704 を revert、38da6ab は残置）の
+> CI 1002 を SD デプロイ → **コールドブート 3/3 起動**。フリーズの原因は a2f0d62
+> （posted-write queue 系）で確定、38da6ab は無罪。ウォーム実機ベンチ（pf ON, Turbo）:
+> GVRAMTDW 13,884 / GVRAMRMW 119,942 / DEPTHDRAW 139,067 / FARCALL 63,136 / GVRAM16K 15,904。
+> ステージ2解析は `sd-stage2-profile` ブランチ（docs/SUPERDEPTH_STAGE2_PROFILE.md）:
+> BGM 遅れは z86 の REP が割り込み不可（16k ワード rep stosw で IRQ0 が 44〜58 ms 止まる）ため。
+> 対策を `z86-rep-intr` ブランチで作業中。
+
 ---
 
 ## §1 現在位置（これだけ読めば再開できる）
