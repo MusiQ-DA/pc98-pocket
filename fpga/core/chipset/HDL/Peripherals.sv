@@ -215,6 +215,8 @@ module PERIPHERALS #(
         // Graphics display-fetch underrun telemetry -- skip/late/max_fill in
         // the low word, live fill-FSM and line state in the high word.
         output  wire    [63:0]  dbg_gvdisp,
+        // JTAG probe: the graphics display's black-band / PRAM-timing witness.
+        output  wire    [95:0]  dbg_gvband,
         // JTAG probe readout of the CRT (IRQ2) interrupt path: the master
         // PIC's {IMR,ISR,IRR}, the 0x64 arm and pending flags, and event
         // counters -- see the dbg_crt assign by crt_armed.
@@ -1530,7 +1532,8 @@ module PERIPHERALS #(
         .p_ack(gv_rd_ack), .p_rvalid(gv_rd_valid), .p_rdata(gv_rd_data),
         .p_done(gv_rd_done),
         .gfx_dot(gfx_dot_w),
-        .dbg(dbg_gvdisp)
+        .dbg(dbg_gvdisp),
+        .dbg_band(dbg_gvband)
     );
 
     // The layer also stays dark until the machine has written a graphics

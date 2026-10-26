@@ -659,6 +659,16 @@ jobs:
           ./obj_gdisp/gd | tee gdisp.log
           grep -q "PASS tb_pc98_gvram_display" gdisp.log
 
+      - name: SuperDepth's Clear! wipe shows np21w's whole-frame PRAM, no seam
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal -DNEW_RTL \
+            --top-module tb_gvram_depth_wipe \
+            -Isim -I$S sim/tb_gvram_depth_wipe.sv $S/pc98_gvram_display.sv \
+            -o dw --Mdir obj_dwipe
+          ./obj_dwipe/dw | tee dwipe.log
+          grep -q "PASS tb_gvram_depth_wipe" dwipe.log
+
       - name: the EGC's colour, raster ops and access page match np21w
         run: |
           S=fpga/core
