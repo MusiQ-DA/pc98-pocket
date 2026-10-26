@@ -435,6 +435,37 @@ static uint32_t hdr8(uint32_t b)
 static uint32_t hdr16(uint32_t b) { return hdr8(b) | (hdr8(b + 1) << 8); }
 static uint32_t hdr32(uint32_t b) { return hdr16(b) | (hdr16(b + 2) << 16); }
 
+// Land LBA 0's raw bytes (the header, if any) in the bridge RAM, and only
+// believe them when the transfer provably wrote that RAM and says the same
+// thing twice. The staging words are poisoned first: a transfer that
+// reports done without delivering (or delivers late) leaves the poison --
+// or an earlier user's leftovers -- for hdr_sig to misread, and the mount
+// used to classify such a read as "no header" and serve the file flat.
+#define HDR_POISON 0xA55AC33Cu
+static int hdr_read(void)
+{
+    uint32_t sum[2];
+    for (int k = 0; k < 2; k++) {
+        *FDD_BRAM_ADDR = 0;
+        for (uint32_t i = 0; i < SECTOR_WORDS; i++)
+            *FDD_BRAM_WDATA = HDR_POISON ^ i;
+        if (!tds_transfer(HDD0_SLOT_ID, 0, FDD_TDS_READ, SECTOR_BYTES))
+            return 0;
+        uint32_t s = 0, poisoned = 0;
+        *FDD_BRAM_ADDR = 0;
+        for (uint32_t i = 0; i < SECTOR_WORDS; i++) {
+            uint32_t w = *FDD_BRAM_RDATA;
+            if (w == (HDR_POISON ^ i))
+                poisoned++;
+            s = ((s << 5) | (s >> 27)) ^ w;
+        }
+        if (poisoned > SECTOR_WORDS / 2)
+            return 0;
+        sum[k] = s;
+    }
+    return sum[0] == sum[1];
+}
+
 static int hdr_sig(const char *sig)
 {
     for (uint32_t i = 0; sig[i]; i++)
@@ -471,7 +502,7 @@ static int scsi_probe(uint32_t bytes)
     scsi_spt = 25;
     scsi_heads = 8;
     scsi_sectors = 0;
-    if (!tds_transfer(HDD0_SLOT_ID, 0, FDD_TDS_READ, SECTOR_BYTES))
+    if (!hdr_read())
         return 0;
     {
         if (hdr_sig("T98HDDIMAGE.R0")) {
