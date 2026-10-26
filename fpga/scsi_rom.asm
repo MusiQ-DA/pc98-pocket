@@ -95,8 +95,19 @@ post3:  jmp post_boot           ; pass 4: the boot sweep, AL = device number
 %define EQUIPS   0x0482        ; DISK_EQUIPS: bit n = SCSI unit n fitted
 %define BOOTDEV  0x0C          ; the boot sweep's number for SCSI unit 0
 
-%define WAIT_SHORT 4           ; mailbox poll outer loops (x ~64K inner)
-%define WAIT_LONG  48          ; formats and first commands may dawdle
+; Mailbox poll bounds, in outer loops of ~64K polls. These are NOT a
+; latency budget, they are a dead-firmware fuse: a command the ROM abandons
+; is still run by the firmware, and its late completion (auxstatus 0x80 +
+; status GOOD) then answers the NEXT command before the firmware has even
+; read it. That desync is how the boot hung: at power-on the softcore is
+; busy mounting images and loading rhythm/drive-sound data over the SD
+; card, the old 4-loop bound (~60 ms at Turbo) expired, and the IPL read
+; "completed" on a stale completion -- the 1024 bytes copied to 1FC0:0000
+; were the READ CAPACITY reply (00 00 6A 40 00 00 02 00 ...), which the
+; boot sweep then far-called. A healthy firmware answers every command, so
+; only a wedged one ever reaches these bounds (several seconds each).
+%define WAIT_SHORT 64          ; mailbox poll outer loops (x ~64K inner)
+%define WAIT_LONG  512         ; formats and first commands may dawdle
 
 scsi_disk:
         push si                         ; [bp-2]
@@ -446,7 +457,12 @@ emit_rw10:
 ; scsi_go -- commit the command and wait for the firmware's completion.
 ; In: BX = outer poll bound. Out: CF=1 timeout; else AL = SCSI status byte.
 scsi_go:
+        ; Drop a completion left over from a command this ROM gave up on
+        ; (or one in flight across a guest reset) -- reading 0xCC0 clears
+        ; the bits it returns -- so only the command issued below can end
+        ; the poll.
         mov  dx, 0xCC0
+        in   al, dx
         mov  al, 0x18
         out  dx, al
         mov  dx, 0xCC2

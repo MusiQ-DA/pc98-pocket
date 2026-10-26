@@ -457,14 +457,23 @@ static int hdr_sig(const char *sig)
 // The board moves 512-byte sectors only: a header declaring any other size
 // (256-byte SASI-made HDIs, mostly) is refused, so the BIOS sees NOT READY
 // rather than reads at the wrong stride.
-static void scsi_probe(uint32_t bytes)
+//
+// Returns 0 when the header read itself failed. That is NOT "no header":
+// falling through to flat then served an NHD's 512-byte header as LBA 0 --
+// seen on the metal (READ10 LBA 0 answered "T98HDDIMAGE.R0..", READ
+// CAPACITY one sector too many) -- and the boot sweep far-calls whatever
+// LBA 0 holds. The caller retries the mount instead.
+static int scsi_probe(uint32_t bytes)
 {
     uint32_t hsize = 0, ssize = 0, c = 0, hd = 0, s = 0, total = 0;
 
     scsi_base = 0;
     scsi_spt = 25;
     scsi_heads = 8;
-    if (tds_transfer(HDD0_SLOT_ID, 0, FDD_TDS_READ, SECTOR_BYTES)) {
+    scsi_sectors = 0;
+    if (!tds_transfer(HDD0_SLOT_ID, 0, FDD_TDS_READ, SECTOR_BYTES))
+        return 0;
+    {
         if (hdr_sig("T98HDDIMAGE.R0")) {
             hsize = hdr32(0x110);
             c     = hdr32(0x114);
@@ -498,7 +507,7 @@ static void scsi_probe(uint32_t bytes)
             || s == 0 || s > 255 || hd == 0 || hd > 255
             || c == 0 || c > 0xFFFF) {
             scsi_sectors = 0;                  // a format this board cannot serve
-            return;
+            return 1;
         }
         uint32_t fits = (bytes - hsize) >> 9;
         if (!total) total = c * hd * s;
@@ -507,22 +516,31 @@ static void scsi_probe(uint32_t bytes)
         scsi_heads = hd;
         scsi_cyls = c;
         scsi_sectors = total < fits ? total : fits;
-        return;
+        return 1;
     }
     scsi_sectors = bytes >> 9;
     scsi_cyls = scsi_udiv(scsi_sectors, 200);
     if (scsi_cyls > 0xFFFF) scsi_cyls = 0xFFFF;
+    return 1;
 }
 
-void scsi_mount(uint32_t bytes)
+// Non-zero once the image is classified (mounted, or refused as a format
+// this board cannot serve); 0 when its header could not be read yet, and
+// nothing is published -- the caller tries again on a later pass.
+int scsi_mount(uint32_t bytes)
 {
-    scsi_probe(bytes);
+    if (!scsi_probe(bytes)) {
+        scsi_sectors = 0;
+        *SOFT_SCSI_MEDIA = 0;
+        return 0;
+    }
     // Publish the mount state to RTL for the disk lamp: the probes this poll
     // answers on an empty machine still toggle the request line, so the lamp
     // needs a media flag to tell a real transfer from a probe on nothing.
     *SOFT_SCSI_MEDIA = (scsi_sectors != 0);
     scsi_sense_key = SENSE_NO_SENSE;
     scsi_asc = 0x00;
+    return 1;
 }
 
 void scsi_init(void)
