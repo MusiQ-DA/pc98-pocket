@@ -58,6 +58,8 @@ static uint32_t scsi_spt;          //   8 x 25 x (size / 200) for a flat one
 static uint8_t  scsi_sense_key;
 static uint8_t  scsi_asc;          // additional sense code
 static int      scsi_ack;          // our copy of the request toggle
+static uint32_t scsi_bytes;        // the mounted file's size, for the re-probe
+static int      scsi_reprobe;      // mount-time classification is provisional
 
 static void scsi_mgmt_write(uint32_t reg, uint32_t data)
 {
@@ -340,9 +342,23 @@ static void scsi_do_mode_sense(const uint8_t *cdb)
     scsi_ok();
 }
 
+static int scsi_probe(uint32_t bytes);
+
 static void scsi_execute(const uint8_t *cdb)
 {
     uint32_t lba, blocks;
+
+    // The mount runs on the main loop's first pass, while APF is still
+    // busy with the boot-time slots, and on the metal that header read
+    // came back wrong on every boot: the NHD was classified flat and its
+    // header served as LBA 0 -- which the boot sweep then far-called.
+    // So the mount's answer is provisional: classify the image again on
+    // the first command the guest sends (the POST's probe, seconds later),
+    // and keep retrying on later commands until a header read lands.
+    if (scsi_reprobe && scsi_bytes && scsi_probe(scsi_bytes)) {
+        scsi_reprobe = 0;
+        *SOFT_SCSI_MEDIA = (scsi_sectors != 0);
+    }
 
     switch (cdb[0]) {
     case SCSI_TEST_UNIT_READY:
@@ -498,12 +514,14 @@ static int scsi_probe(uint32_t bytes)
 {
     uint32_t hsize = 0, ssize = 0, c = 0, hd = 0, s = 0, total = 0;
 
+    // A failed read leaves the previous classification standing (the
+    // re-probe below must never unmount a disk that was serving).
+    if (!hdr_read())
+        return 0;
     scsi_base = 0;
     scsi_spt = 25;
     scsi_heads = 8;
     scsi_sectors = 0;
-    if (!hdr_read())
-        return 0;
     {
         if (hdr_sig("T98HDDIMAGE.R0")) {
             hsize = hdr32(0x110);
@@ -560,6 +578,8 @@ static int scsi_probe(uint32_t bytes)
 // nothing is published -- the caller tries again on a later pass.
 int scsi_mount(uint32_t bytes)
 {
+    scsi_bytes = bytes;
+    scsi_reprobe = 1;
     if (!scsi_probe(bytes)) {
         scsi_sectors = 0;
         *SOFT_SCSI_MEDIA = 0;
