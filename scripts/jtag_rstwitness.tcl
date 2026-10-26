@@ -152,7 +152,7 @@ proc dump {} {
         set first [expr {$n > $N ? $n - $N : 0}]
         puts "  --- tlog trail, oldest first; the LAST line is the seam ---"
         for {set i $first} {$i < $n} {incr i} {
-            wr 0x8e [expr {0x400 | ($i & 0x3F)}]
+            wr 0x8e [expr {$i & 0x3F}]
             set pc60 [rd 0x60]; set pc61 [rd 0x61]; set pc62 [rd 0x62]
             set pc63 [rd 0x63]; set pc64 [rd 0x64]; set pc65 [rd 0x65]
             set pc68 [rd 0x68]
@@ -192,7 +192,7 @@ wr 0x88 0x01
 wr 0x8a 0x01
 wr 0x85 0x01
 wr 0x86 0x800FFFF0
-wr 0x8e 0x700
+wr 0x8e 0x300
 puts "armed: witness clear, taps re-armed, tlog all+trap, pc_hist rolling"
 puts "watching for a reboot (0xAB bit19 / 0x67 bit31 / 0xAA latches)..."
 

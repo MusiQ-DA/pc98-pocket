@@ -1458,16 +1458,6 @@ module core_top (
     reg        pc_hist_frozen = 1'b0;
     wire [19:0] pc_now = zet_pc;
     wire       pc_in_errhalt = (pc_now == 20'hF99E5);
-    // Boot-time freeze arm (write slot 0x0e bit10, default OFF). Every
-    // normal boot walks through the reset vector, the ITF POST's own
-    // OUT 0F0h, the 043Dh,10h hand-back and so on -- each of which froze
-    // tlog / pc_hist / the bus ring (and, through rst_boot_latch, the
-    // wedge snapshot) before the POST ran. A machine that then froze IN
-    // the POST -- the SD cold-boot freeze -- kept nothing but the boot's
-    // first fetch. With the arm off (power-on default) those catches are
-    // masked and the rings run until the wedge latch or an explicit
-    // probe trigger stops them; the reboot-hunt scripts set bit10.
-    reg        rv_arm = 1'b0;
     // Probe write 0x85 re-arms the history: the boot-time F0 write fires
     // the freeze long before any guest crash, so without this the snapshot
     // can never see a guest fault's trail. Registered, like the readout
@@ -1535,7 +1525,7 @@ module core_top (
                         pc_hist_frozen <= 1'b1;
                 end
             end
-            if (((f0_port_write || pc_in_errhalt || w43d_10) && rv_arm) ||
+            if (f0_port_write || pc_in_errhalt || w43d_10 ||
                 pc_reset_vec ||
                 (tlog_trap && pc_wild) ||
                 tap_latch ||
@@ -1642,7 +1632,7 @@ module core_top (
     // execution refilled the ring and the trigger's footsteps were
     // overwritten every time.  The FFF0 entry itself lands as the last
     // record (writes gate on the pre-freeze flag), marking the seam.
-    wire pc_reset_vec = (pc_now == 20'hFFFF0) && rv_arm;
+    wire pc_reset_vec = (pc_now == 20'hFFFF0);
     // rst_boot_latch rides tap_latch, so the wedge snapshot freezes with
     // the rings -- the memory path AS THE REBOOT HIT IT, not whatever
     // the reset loop leaves behind.  rst_boot_itf records whether the
@@ -1677,7 +1667,7 @@ module core_top (
     reg  [207:0] tlog_q  = '0;
     reg          trig_hit_d = 1'b0;
     reg  [19:0]  tlog_pc_d = 20'd0;
-    reg          tlog_all = 1'b1, tlog_trap = 1'b0, tlog_frozen = 1'b0;
+    reg          tlog_all = 1'b0, tlog_trap = 1'b0, tlog_frozen = 1'b0;
     // Also a trap: HLT with IF clear (nothing can wake it -- a crash that
     // ran into an F4 in data) and OUT 0F0h (the CPU reset a crash ends in).
     // The two low terms must NOT fire on the machine's own boot, or an armed
@@ -1749,7 +1739,6 @@ module core_top (
             tlog_ri   <= probe_wdata_c[5:0];
             tlog_all  <= probe_wdata_c[8];
             tlog_trap <= probe_wdata_c[9];
-            rv_arm    <= probe_wdata_c[10];
         end
         tlog_q <= tlog[tlog_ri];
         if (probe_wr_pulse && probe_waddr_c == 7'h0f) begin
@@ -2160,7 +2149,7 @@ module core_top (
             8'h06:   probe_data_c = {trig_en, trig_freeze, trig_delay,
                                      trig_bus, trig_wronly, trig_ds,
                                      6'b0, trig_addr};
-            8'h0e:   probe_data_c = {21'b0, rv_arm, tlog_trap, tlog_all,
+            8'h0e:   probe_data_c = {22'b0, tlog_trap, tlog_all,
                                      2'b0, tlog_ri};
             // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
             // never completes; 0x1a: the ready chain the CPU waits on.
@@ -2391,13 +2380,9 @@ module core_top (
             // osd_open_req live}. A frozen fetch word is a dead pico; a
             // frozen poll byte beside a moving fetch word is a wedged loop.
             8'h2a:   probe_data_c = dbg_pico_w;
-            // 0xB0-0xB7: every OSD setting, four per slot (settings_ui.c's
-            // SET_* index order): slot 0xB0+g = {set[4g+3] .. set[4g]}.
-            // (Was 0xA0-0xA7 -- which the wedge tap's frozen snapshot also
-            // decodes further down this case. The first arm wins, so from
-            // dd18389 until the move the snapshot was never readable: every
-            // "wedge snapshot" decoded since then was these OSD words.)
-            8'hb0,8'hb1,8'hb2,8'hb3,8'hb4,8'hb5,8'hb6,8'hb7:
+            // 0xA0-0xA7: every OSD setting, four per slot (settings_ui.c's
+            // SET_* index order): slot 0xA0+g = {set[4g+3] .. set[4g]}.
+            8'ha0,8'ha1,8'ha2,8'ha3,8'ha4,8'ha5,8'ha6,8'ha7:
                      probe_data_c = osd_set_word;
             8'h27:   probe_data_c = fdc_dbg[63:32];
             8'h28:   probe_data_c = fdc_dbg_cmd[31:0];

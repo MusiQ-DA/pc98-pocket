@@ -94,7 +94,7 @@ proc wr {addr data} {
 }
 
 wr 0x87 [expr {0x80000000 | ($poll & 0xFFFFF)}]
-if {![info exists ::env(NOTRAP)] || $::env(NOTRAP) != 1} { wr 0x8e 0x700 }
+if {![info exists ::env(NOTRAP)] || $::env(NOTRAP) != 1} { wr 0x8e 0x300 }
 puts [format "armed: poll window 0x%05x%s" $poll \
           [expr {[info exists ::env(NOTRAP)] && $::env(NOTRAP) == 1
                  ? "" : " + tlog(stop-on-wild, all-pc)"}]]
