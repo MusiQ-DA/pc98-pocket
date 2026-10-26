@@ -63,4 +63,14 @@ for lat in 1 4; do
   w=$(echo "$o" | sed -n 's/^mem 0600: \(.. .. .. ..\).*/\1/p')
   [ "$w" = "05 00 05 00" ] && echo "ok   hlt wakes on intr lat=$lat" || { echo "FAIL hlt wake lat=$lat: $w"; fail=1; }
 done
+# An IN behind a taken branch must not reach the bus: +scsiport makes 0xCC6
+# a FIFO, so a leaked fall-through read shows as a skipped byte (taken LOOP
+# and JCXZ leaked one; scsi_rom.asm's mode_page lost its page code to it).
+for lat in 1 2 4 16; do
+  got=$("$OUT/loop" +org=400 +prog=sim/z86_tests/raw_spec_in.hex +scsiport \
+        +scsistream=sim/z86_tests/raw_spec_in.stream.hex +lat=$lat | sed -n 's/^mem 0600: //p')
+  want="01 02 03 04 05 06 07"
+  [ "${got:0:${#want}}" = "$want" ] && echo "ok   raw_spec_in lat=$lat" \
+    || { echo "FAIL raw_spec_in lat=$lat"; echo "  want $want"; echo "  got  $got"; fail=1; }
+done
 exit $fail

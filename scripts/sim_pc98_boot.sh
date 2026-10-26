@@ -72,6 +72,9 @@ Z8=$S/z86
 # +repint pokes this IPL straight into guest RAM and jumps the reset vector
 # at it; the bench $readmemh's it from $OUT like the ROM hexes.
 cp sim/ipl_repint.hex "$OUT/ipl_repint.hex"
+# +hddimg turns the SCSI board on (scripts/sim_scsi_boot.sh); its option
+# ROM image rides along always.
+cp fpga/core/scsi_rom.hex "$OUT/scsi_rom.hex"
 
 R="$PWD"
 SIM_OPT="${SIM_OPT:--O2}"
@@ -112,6 +115,7 @@ verilator --binary --timing -Wno-fatal --top-module tb_pc98_boot $CPU_DEF \
     $R/$S/cpu_bus_bridge.sv \
     $R/$S/pc98_fdc_glue.sv $R/$S/common/floppy.v $R/$S/common/simple_fifo.v \
     $R/sim/tb_fdd_dma_model.sv $R/$S/pc98_kbd8251.sv \
+    $R/$S/pc98_scsi.sv $R/sim/tb_scsi_target.sv \
     $R/$K/ce_generator.sv $R/$K/i8288/HDL/i8288.sv \
     $R/$K/i8253/HDL/i8253.sv $R/$K/i8253/HDL/i8253_Counter.sv \
     $R/$K/i8253/HDL/i8253_Control_Logic.sv \

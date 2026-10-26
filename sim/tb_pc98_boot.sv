@@ -505,6 +505,39 @@ module tb_pc98_boot;
         xrom_byte = xrom[a[7:0]];
     endfunction
 
+    // ---- the PC-9801-55 SCSI board (+hddimg=FILE) -------------------------
+    // Its option ROM at D2000-D2FFF is fpga/core/scsi_rom.hex (the assembled
+    // fpga/scsi_rom.asm; scripts/sim_scsi_boot.sh copies it next to the
+    // other hexes), the register window at 0xCC0-0xCC7 is the real
+    // pc98_scsi, and tb_scsi_target stands in for the firmware service. Off
+    // unless an image is named: an always-present ROM with no target behind
+    // it would have every other run of this bench sit out the ROM's probe
+    // timeouts.
+    logic       scsi_en = 1'b0;
+    logic [7:0] scsirom [0:4095];
+    initial begin
+        string p;
+        scsi_en = $value$plusargs("hddimg=%s", p);
+        for (int i = 0; i < 4096; i = i + 1) scsirom[i] = 8'hFF;
+        if (scsi_en) $readmemh("scsi_rom.hex", scsirom);
+    end
+
+    function automatic logic is_scsirom(input logic [19:0] a);
+        is_scsirom = scsi_en && (a[19:12] == 8'hD2);
+    endfunction
+
+    // Memory switch A3FF2, the boot-device byte. On the core it is a Settings
+    // register (pc98_tvram cfg_a3ff2 = {boot nibble, 1}) the POST cannot
+    // write; this bench's flat RAM would hand the BIOS whatever the clear
+    // left there, and a high nibble other than 0 or C makes the boot sweep
+    // skip SCSI device 0C. With +hddimg it reads the core's default 01
+    // (standard order), or +a3ff2=N (C1 = SCSI HD only).
+    logic [7:0] a3ff2_val = 8'h01;
+    initial void'($value$plusargs("a3ff2=%h", a3ff2_val));
+    function automatic logic is_a3ff2(input logic [19:0] a);
+        is_a3ff2 = scsi_en && (a == 20'hA3FF2);
+    endfunction
+
     // The data bus is combinational, as the chipset's is. Registering it here
     // put a chipset clock between the strobe and the byte, and the core sampled
     // stale data: the first run stalled for seventeen milliseconds in the middle
@@ -524,6 +557,7 @@ module tb_pc98_boot;
                   : fdc_ctrl_sel    ? fdc_ctrl_rb
                   : fdc_mode_sel    ? fdc_mode_rb
                   : sysport_sel     ? sysport_data
+                  : scsi_rd_sel     ? scsi_dout
                            : 8'hFF;
 
     // ---- the real memory path (+define+REALMEM) ----------------------------
@@ -971,11 +1005,14 @@ module tb_pc98_boot;
     // transformed -- same mux Chipset.sv drives onto internal_data_bus_ram.
     wire [7:0] mem_read_byte = ~ram_address_select_n ? seq_cpu_rdata
                             : is_xrom(cpu_address)   ? xrom_byte(cpu_address)
+                            : is_scsirom(cpu_address) ? scsirom[cpu_address[11:0]]
                                                      : ram[cpu_address];
     // The odd lane of a one-cycle word read; the SDRAM serves those, the
     // option ROM serves its own.
     wire [7:0] din_hi = (~mem_rd_n & ~ram_address_select_n) ? seq_cpu_rdata_hi
                       : (~mem_rd_n & is_xrom(cpu_address))  ? xrom_byte(cpu_address | 20'h1)
+                      : (~mem_rd_n & is_scsirom(cpu_address))
+                                              ? scsirom[cpu_address[11:0] | 12'h1]
                                                             : 8'hFF;
 
     // The mirror check. On the trailing edge of a read RAM.sv answered, what
@@ -1005,6 +1042,8 @@ module tb_pc98_boot;
 `else
     wire [7:0] mem_read_byte = is_rom(cpu_address)  ? rom_byte(cpu_address)
                              : is_xrom(cpu_address) ? xrom_byte(cpu_address)
+                             : is_scsirom(cpu_address) ? scsirom[cpu_address[11:0]]
+                             : is_a3ff2(cpu_address)   ? a3ff2_val
                                                     : ram[cpu_address];
     wire bench_ready = 1'b1;          // flat memory answers immediately
     // The flat array is byte-wide but still answers a word's odd lane at
@@ -1014,6 +1053,8 @@ module tb_pc98_boot;
                                   ? rom_byte(cpu_address | 20'h1)
                                 : is_xrom(cpu_address | 20'h1)
                                   ? xrom_byte(cpu_address | 20'h1)
+                                : is_scsirom(cpu_address)
+                                  ? scsirom[cpu_address[11:0] | 12'h1]
                                 : ram[cpu_address | 20'h1];
     wire [7:0] din_hi = ~mem_rd_n ? mem_read_byte_hi : 8'hFF;
     // No RAM.sv here: no beat stream exists. The prefetch windows stay
@@ -1035,7 +1076,7 @@ module tb_pc98_boot;
                           | pic1_iocycle | pic2_iocycle | kbd_data_iocycle
                           | kbd_stat_iocycle | gdc_stat_iocycle | cc_ioread
                           | fdc_msr_sel | fdc_fifo_sel | fdc_ctrl_sel
-                          | fdc_mode_sel | sysport_sel);
+                          | fdc_mode_sel | sysport_sel | scsi_rd_sel);
 
     // ---- I/O ---------------------------------------------------------------
     //
@@ -1152,6 +1193,107 @@ module tb_pc98_boot;
     end
     logic xrom_rd_seen = 1'b0, xrom_reg_seen = 1'b0;
 
+    // ---- SCSI board: the real register window + the firmware stand-in ----
+    wire        scsi_cs     = scsi_en & (~io_rd_n | ~io_wr_n)
+                            & (cpu_address[15:3] == 13'h198);
+    wire        scsi_rd_sel;
+    wire  [7:0] scsi_dout;
+    wire        scsi_cmd_req;
+    wire  [7:0] scsi_cmd_byte;
+    wire  [4:0] scsi_mg_reg_addr;
+    wire        scsi_mg_reg_we;
+    wire  [7:0] scsi_mg_reg_wdata, scsi_mg_reg_rdata;
+    wire [12:0] scsi_mg_buf_addr;
+    wire        scsi_mg_buf_we;
+    wire  [7:0] scsi_mg_buf_wdata, scsi_mg_buf_rdata;
+    wire  [7:0] scsi_mg_aux, scsi_mg_st;
+    wire        scsi_mg_aux_we, scsi_mg_st_we, scsi_mg_rdclr, scsi_mg_wrclr;
+    int         scsi_ncmds;
+
+    pc98_scsi u_scsi (
+        .clk(clk_chipset), .rst(reset),
+        .cs(scsi_cs), .a1a2(cpu_address[2:1]),
+        .io_read_n(io_rd_n), .io_write_n(io_wr_n),
+        .data_in(cpu_data_bus), .data_out(scsi_dout), .read_select(scsi_rd_sel),
+        .cmd_req(scsi_cmd_req), .cmd_byte(scsi_cmd_byte),
+        .mg_reg_addr(scsi_mg_reg_addr), .mg_reg_we(scsi_mg_reg_we),
+        .mg_reg_wdata(scsi_mg_reg_wdata), .mg_reg_rdata(scsi_mg_reg_rdata),
+        .mg_buf_addr(scsi_mg_buf_addr), .mg_buf_we(scsi_mg_buf_we),
+        .mg_buf_wdata(scsi_mg_buf_wdata), .mg_buf_rdata(scsi_mg_buf_rdata),
+        .mg_auxstatus(scsi_mg_aux), .mg_auxstatus_we(scsi_mg_aux_we),
+        .mg_scsistatus(scsi_mg_st), .mg_scsistatus_we(scsi_mg_st_we),
+        .mg_rdptr_clr(scsi_mg_rdclr), .mg_wrptr_clr(scsi_mg_wrclr)
+    );
+
+    tb_scsi_target u_scsi_tgt (
+        .clk(clk_chipset), .cmd_req(scsi_cmd_req),
+        .reg_addr(scsi_mg_reg_addr), .reg_we(scsi_mg_reg_we),
+        .reg_wdata(scsi_mg_reg_wdata), .reg_rdata(scsi_mg_reg_rdata),
+        .buf_addr(scsi_mg_buf_addr), .buf_we(scsi_mg_buf_we),
+        .buf_wdata(scsi_mg_buf_wdata), .buf_rdata(scsi_mg_buf_rdata),
+        .aux(scsi_mg_aux), .aux_we(scsi_mg_aux_we),
+        .status(scsi_mg_st), .status_we(scsi_mg_st_we),
+        .rdptr_clr(scsi_mg_rdclr), .wrptr_clr(scsi_mg_wrclr),
+        .n_cmds(scsi_ncmds)
+    );
+
+    // Witnesses: each POST pass's entry into the ROM (with the AL the boot
+    // sweep hands entry 0x15), and the first instruction of any IPL --
+    // 1FC00 for the HDD's (and a 1 KB FDD read), 1FE00 for a 512-byte FDD
+    // one -- with the hand-off registers and the BIOS bytes that say which
+    // device booted. scsi_ipl_seen lets the chunk loop stop early.
+    logic [19:0] scsi_pc_d = 20'h0;
+    logic        scsi_ipl_seen = 1'b0;
+    // The bytes the guest takes off 0xCC2/0xCC6 (the buffer and status
+    // reads), as sampled at the end of each strobe: +scsi_rdlog.
+    logic        scsi_rdlog = 1'b0;
+    initial scsi_rdlog = $test$plusargs("scsi_rdlog");
+    logic        scsi_rd_d = 1'b0;
+    logic  [7:0] scsi_rd_v = 8'h00;
+    logic  [1:0] scsi_rd_p = 2'd0;
+    always_ff @(posedge clk_chipset) begin
+        scsi_rd_d <= scsi_rd_sel;
+        if (scsi_rd_sel) begin
+            scsi_rd_v <= scsi_dout;
+            scsi_rd_p <= cpu_address[2:1];
+        end
+        if (scsi_rdlog && scsi_rd_d && !scsi_rd_sel && scsi_rd_p != 2'd0)
+            $display("  %8t  SCSI rd CC%0d -> %02X  (eu_pc %05X)", $time,
+                     {scsi_rd_p, 1'b0}, scsi_rd_v, eu_pc);
+    end
+    // +scsi_pctrace: every retired PC inside the D2000 window (the first
+    // 4000), with AX/CX/SP and CF -- what the ROM actually executed.
+    logic scsi_pctrace = 1'b0;
+    int   scsi_pctrace_n = 0;
+    initial scsi_pctrace = $test$plusargs("scsi_pctrace");
+    always_ff @(posedge clk_chipset) begin
+        if (scsi_pctrace && eu_pc != scsi_pc_d && scsi_pctrace_n < 4000
+            && (eu_pc[19:12] == 8'hD2 || scsi_pc_d[19:12] == 8'hD2)) begin
+            scsi_pctrace_n <= scsi_pctrace_n + 1;
+            $display("  %8t  PC %05X ax %04X cx %04X sp %04X cf %b", $time,
+                     eu_pc, eu_ax, eu_cx, eu_sp, eu_cf);
+        end
+    end
+    always_ff @(posedge clk_chipset) begin
+        scsi_pc_d <= eu_pc;
+        if (scsi_en && eu_pc != scsi_pc_d) begin
+            if (eu_pc == 20'hD200C || eu_pc == 20'hD200F
+             || eu_pc == 20'hD2012 || eu_pc == 20'hD2015)
+                $display("  %8t  SCSI ROM entry %02X  ax %04X  [4D2]=%02X [482]=%02X  geo %02X %02X %02X%02X tot %02X%02X  cmds %0d",
+                         $time, eu_pc[7:0], eu_ax, ram[20'h4D2], ram[20'h482],
+                         ram[20'h5A0], ram[20'h5A1], ram[20'h5A3], ram[20'h5A2],
+                         ram[20'h5A7], ram[20'h5A6], scsi_ncmds);
+            if ((eu_pc == 20'h1FC00 || eu_pc == 20'h1FE00) && !scsi_ipl_seen) begin
+                scsi_ipl_seen <= 1'b1;
+                $display("  %8t  IPL ENTRY %05X  ax %04X bx %04X cx %04X dx %04X  [584]=%02X [482]=%02X  geo %02X %02X %02X%02X  cmds %0d",
+                         $time, eu_pc, eu_ax, eu_bx, eu_cx, eu_dx,
+                         ram[20'h584], ram[20'h482],
+                         ram[20'h5A0], ram[20'h5A1], ram[20'h5A3], ram[20'h5A2],
+                         scsi_ncmds);
+            end
+        end
+    end
+
     wire [7:0] sysport_data = sysport_35_sel ? sysport_c
                             : sysport_31_sel ? 8'h10
     // 0x42 bit 1: this machine has no protected mode.
@@ -1187,9 +1329,10 @@ module tb_pc98_boot;
     logic [7:0] mem_wr_hi_q   = 8'h00;
     logic       mem_wr_word_q = 1'b0;
     logic [7:0] io_wr_data_q  = 8'h00;
-    logic [7:0] tvram_code [0:511];   // A0000-A01FF, first row of cells
+    logic [7:0] tvram_code [0:8191];  // A0000-A1FFF, the whole code plane
     logic [7:0] tvram_attr [0:511];   // A2000-A21FF
     int          tvram_wr_count = 0;
+    logic        tvram_qmark_seen = 1'b0;   // +key_ms trigger
 
     // ---- ipl_repint mailbox monitor (realmem) ------------------------------
     // repint parks its verdict at phys 0x50000: [2]=iters(word) [4]=status
@@ -1344,11 +1487,13 @@ module tb_pc98_boot;
             // The text plane: the memory-count display lands here. Keep the
             // first row of cells (code + attribute) for the final dump.
             if (cpu_address >= 20'hA0000 && cpu_address < 20'hA4000) begin
-                if (cpu_address < 20'hA0200)
-                    tvram_code[cpu_address[8:0]]  <= mem_wr_data_q;
+                if (cpu_address < 20'hA2000)
+                    tvram_code[cpu_address[12:0]] <= mem_wr_data_q;
                 else if (cpu_address >= 20'hA2000 && cpu_address < 20'hA2200)
                     tvram_attr[cpu_address[8:0]]  <= mem_wr_data_q;
                 tvram_wr_count <= tvram_wr_count + 1;
+                if (cpu_address < 20'hA2000 && mem_wr_data_q == 8'h3F)
+                    tvram_qmark_seen <= 1'b1;
                 // The first forty writes (the clear, and what shape it has),
                 // and after that every PRINTABLE byte into the code plane --
                 // which is the memory count, if the BIOS ever writes one. The
@@ -1698,6 +1843,22 @@ module tb_pc98_boot;
     wire       pic1_data_bus_io, pic2_data_bus_io;
     wire [2:0] pic1_cascade_out;
 
+    logic kbd8251_en = 1'b0;
+    initial begin
+        int v;
+        if ($value$plusargs("kbd8251=%d", v)) kbd8251_en = (v != 0);
+    end
+
+    // IR1 is the keyboard 8251's RxRDY, through the same two-flop
+    // synchroniser Peripherals.sv uses (keybord_interrupt). Only with
+    // +kbd8251=1; the no-keyboard bench keeps IR1 low.
+    wire  kbd8251_irq;
+    logic kbd_irq1_ff = 1'b0, kbd_irq1 = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        kbd_irq1_ff <= kbd8251_en & kbd8251_irq;
+        kbd_irq1    <= kbd_irq1_ff;
+    end
+
     i8259 u_pic1 (
         .clock            (clk_chipset),
         .reset            (reset),
@@ -1715,7 +1876,7 @@ module tb_pc98_boot;
         .interrupt_acknowledge_n (inta_n),
         .interrupt_to_cpu (pic1_to_cpu_buf),
         .external_irr_clear (8'h00),
-        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, 1'b0, timer_out0})
+        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, kbd_irq1, timer_out0})
     );
 
     i8259 u_pic2 (
@@ -1791,16 +1952,52 @@ module tb_pc98_boot;
     // pc98_kbd8251.sv is the model PERIPHERALS instantiates; running it here
     // puts the actual RTL against the actual ROM sequence. Default OFF keeps
     // the no-keyboard machine this bench has always been; +kbd8251=1 wires
-    // it in with its shipped ~10 ms ACK delay.
-    logic kbd8251_en = 1'b0;
+    // it in (and +key_ms=N types into it).
+
+    // +key_ms=N: N ms after the first '?' lands in the text plane (the end
+    // of N88-BASIC's "How many files(0-15)?"), type '3' then RETURN through
+    // the injection port (the translator's toggle-strobe shape), 40 ms
+    // apart. The echo in the TVRAM log proves the key stream still reaches
+    // the BIOS after boot.
+    logic       kbd_key_stb  = 1'b0;
+    logic [7:0] kbd_key_byte = 8'h00;
     initial begin
-        int v;
-        if ($value$plusargs("kbd8251=%d", v)) kbd8251_en = (v != 0);
+        int ms;
+        if ($value$plusargs("key_ms=%d", ms)) begin
+            byte unsigned seq [4] = '{8'h03, 8'h83, 8'h1C, 8'h9C};
+            wait (tvram_qmark_seen);
+            $display("  %8t  KBD first '?' in TVRAM; typing in %0d ms", $time, ms);
+            repeat (ms * 42_955) @(posedge clk_chipset);
+            // +key_stop: a lone STOP make (0x60, no break) first -- what the
+            // old model's synthetic "reset ACK" looked like to the BIOS --
+            // then 500 ms for BASIC to react before the answer is typed.
+            if ($test$plusargs("key_stop")) begin
+                kbd_key_byte = 8'h60;
+                kbd_key_stb  = ~kbd_key_stb;
+                $display("  %8t  KBD INJECT 60 (lone STOP make)", $time);
+                repeat (500 * 42_955) @(posedge clk_chipset);
+            end
+            foreach (seq[k]) begin
+                kbd_key_byte = seq[k];
+                kbd_key_stb  = ~kbd_key_stb;
+                $display("  %8t  KBD INJECT %02X", $time, seq[k]);
+                repeat (40 * 42_955) @(posedge clk_chipset);
+            end
+        end
     end
+    logic [19:0] eu_pc_kq = 20'h0;
+    always_ff @(posedge clk_chipset) eu_pc_kq <= eu_pc;
+    // The BIOS IRQ1 handler's STOP (0x60 -> INT 06h, FE6DC) and COPY
+    // (0x61 -> INT 05h, FE6D8) exits: a phantom STOP is what this bench
+    // watches for.
+    always_ff @(posedge clk_chipset)
+        if (kbd8251_en && (eu_pc == 20'hFE6DC || eu_pc == 20'hFE6D8)
+                       && eu_pc != eu_pc_kq)
+            $display("  %8t  KBD BIOS IRQ1 -> INT %s  (eu_pc %05X)", $time,
+                     eu_pc == 20'hFE6DC ? "06h (STOP)" : "05h (COPY)", eu_pc);
 
     logic       kbd8251_read_select;
     logic [7:0] kbd8251_read_data;
-    wire        kbd8251_irq;
 
     pc98_kbd8251 u_kbd8251 (
         .clock              (clk_chipset),
@@ -1809,6 +2006,8 @@ module tb_pc98_boot;
         .data_read_strobe   (kbd8251_en & ~io_rd_n & (cpu_address[15:0] == 16'h0041)),
         .stat_read_strobe   (kbd8251_en & ~io_rd_n & (cpu_address[15:0] == 16'h0043)),
         .data_in            (cpu_data_bus),
+        .key_stb            (kbd_key_stb),
+        .key_byte           (kbd_key_byte),
         .read_select        (kbd8251_read_select),
         .read_data          (kbd8251_read_data),
         .irq                (kbd8251_irq)
@@ -1817,21 +2016,20 @@ module tb_pc98_boot;
     wire kbd_stat_iocycle = kbd8251_read_select & (cpu_address[15:0] == 16'h0043);
     wire kbd_data_iocycle = kbd8251_read_select & (cpu_address[15:0] == 16'h0041);
 
-    // Watch the model's innards: whether the edge armed, when the ACK lands.
+    // Watch the model's innards: every byte that reaches the receiver.
     logic kbd_rx_full_d = 1'b0;
     always_ff @(posedge clk_chipset) begin
         kbd_rx_full_d <= u_kbd8251.rx_full;
         if (u_kbd8251.rx_full & ~kbd_rx_full_d)
-            $display("  %8t  KBD ACK landed (rx_full -> 1)", $time);
+            $display("  %8t  KBD RxRDY (rx_full -> 1, rx %02X)", $time,
+                     u_kbd8251.rx_q);
     end
-    // And its state at every chunk line: cmd_q/ack_timer tell whether the
-    // break edge was even seen.
+    // And its state at every chunk line.
     task automatic kbd_state_dump;
         begin
             if (kbd8251_en)
-                $display("        kbd8251: cmd %02X  timer %0d  rx_full %b  rx %02X",
-                         u_kbd8251.cmd_q, u_kbd8251.ack_timer,
-                         u_kbd8251.rx_full, u_kbd8251.rx_q);
+                $display("        kbd8251: cmd %02X  rx_full %b  rx %02X",
+                         u_kbd8251.cmd_q, u_kbd8251.rx_full, u_kbd8251.rx_q);
         end
     endtask
 
@@ -2310,6 +2508,12 @@ module tb_pc98_boot;
     // ---- run ---------------------------------------------------------------
     int i, j;
     int chunks = 1200;              // +chunks=N cuts the run short
+    // With +hddimg: chunks to keep running after an IPL is entered without
+    // hdd_test's result block appearing (an FDD IPL, a hung disk one).
+    int ipl_after = 0, ipl_grace = 3;
+    initial void'($value$plusargs("ipl_grace=%d", ipl_grace));
+    int qmark_chunks = 0, qmark_after = 0;
+    initial void'($value$plusargs("qmark_chunks=%d", qmark_chunks));
     initial begin
         for (i = 0; i < 1048576; i = i + 1) begin
             ram[i] = 8'h00;
@@ -2412,6 +2616,10 @@ module tb_pc98_boot;
                      ram[20'h584], ram[20'h4B7], ram[20'h4B9], ram[20'h501],
                      ram[20'h5AE], ram[20'h5FB], ram[20'h5FA],
                      ram[20'h5F9], ram[20'h5F8]);
+            $display("        ivt06=%04X:%04X 05=%04X:%04X  keymap 536=%02X",
+                     {ram[20'h1B],ram[20'h1A]}, {ram[20'h19],ram[20'h18]},
+                     {ram[20'h17],ram[20'h16]}, {ram[20'h15],ram[20'h14]},
+                     ram[20'h536]);
             $display("        ivt: 1b=%04X:%04X 12=%04X:%04X 13=%04X:%04X 1e=%04X:%04X 1f=%04X:%04X 4b0=%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
                      {ram[20'h6F],ram[20'h6E]}, {ram[20'h6D],ram[20'h6C]},
                      {ram[20'h4B],ram[20'h4A]}, {ram[20'h49],ram[20'h48]},
@@ -2426,6 +2634,36 @@ module tb_pc98_boot;
             occ_report();
 `endif
             wr_clear_tog = ~wr_clear_tog;
+            // testdisk/hdd_test.asm's result block at 0x40000: +2F = A5 once
+            // it has run every check, +2E = 'P'/'F'.
+            if (scsi_en && ram[20'h4002F] == 8'hA5) begin
+                $write("SCSI RESULT:");
+                for (j = 0; j < 48; j = j + 1) begin
+                    if (j % 16 == 0) $write("\n  %05X:", 20'h40000 + j);
+                    $write(" %02X", ram[20'h40000 + j]);
+                end
+                $display("");
+                $display("SCSI IPL VERDICT: %s", ram[20'h4002E] == "P" ? "PASS" : "FAIL");
+                break;
+            end
+            // +qmark_chunks=N: stop N chunks after the first '?' reached
+            // the text plane (the BASIC prompt, and whatever +key_ms typed).
+            if (qmark_chunks != 0 && tvram_qmark_seen) begin
+                qmark_after = qmark_after + 1;
+                if (qmark_after > qmark_chunks) begin
+                    $display("prompt bench: %0d chunks after the first '?' -- stopping",
+                             qmark_chunks);
+                    break;
+                end
+            end
+            if (scsi_ipl_seen) begin
+                ipl_after = ipl_after + 1;
+                if (ipl_after > ipl_grace) begin
+                    $display("SCSI bench: IPL entered %0d chunks ago, no result block -- stopping",
+                             ipl_grace);
+                    break;
+                end
+            end
         end
 
         $display("--- done ---");
@@ -2451,8 +2689,8 @@ module tb_pc98_boot;
         $display("IVT 08 : %04X:%04X   IVT 18: %04X:%04X",
                  {ram[8'h23],ram[8'h22]}, {ram[8'h21],ram[8'h20]},
                  {ram[8'h63],ram[8'h62]}, {ram[8'h61],ram[8'h60]});
-        // The screen as text: rows 0-1, 80 cells each (ANK codes only).
-        for (int row = 0; row < 2; row++) begin
+        // The screen as text: all 25 rows, 80 cells each (ANK codes only).
+        for (int row = 0; row < 25; row++) begin
             $write("SCREEN row %0d: |", row);
             for (int col = 0; col < 80; col++) begin
                 logic [7:0] ch;

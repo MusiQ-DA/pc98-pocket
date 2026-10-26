@@ -59,6 +59,11 @@ jobs:
           sudo apt-get update && sudo apt-get install -y nasm
           ./scripts/check_scsi_rom.sh
 
+      - name: the SCSI service mounts flat/NHD/HDI/VHD images and states their geometry
+        # firmware/scsi_service.c itself, built for the host against a model
+        # of the pc98_scsi mailbox and the dataslot engine.
+        run: ./scripts/sim_scsi_fw.sh
+
       - name: SDRAM controller — integrity and single-port bandwidth
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_sdram_mp \
