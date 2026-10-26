@@ -4,16 +4,10 @@
 // RAM.sv uses a level-request / pulse-flag protocol for one word at a time,
 // which is a subset of what sdram_mp does. The mapping is:
 //
-//   write_request                ->  latched into a small posted-write FIFO
-//                                    (see the port-A block below); the flag
-//                                    is a one-cycle accept pulse
-//   read_request                 ->  p_req + p_we, issued once the FIFO has
-//                                    drained so reads never pass writes
-//   write_flag / read_flag      ->  held while the access is owned: the
-//                                    write's accept pulse; the read's whole
-//                                    latch-to-done span
+//   write_request/read_request  ->  p_req + p_we, one word (p_len = 0)
+//   write_flag / read_flag      ->  held while the transaction is in flight
 //   idle                        ->  "a command can be accepted now", low
-//                                   during refresh and while the FIFO drains
+//                                   during refresh
 //   data_out                    ->  latched from p_rdata on p_rvalid
 //
 // `enable_refresh` is ignored: sdram_mp refreshes on its own interval counter
@@ -225,206 +219,55 @@ module sdram_shim #(
     localparam int LEN_BITS  = (BURST_MAX > 1) ? $clog2(BURST_MAX) : 1;
     localparam int PORTS     = 6;
 
-    // Port-A posted-write FIFO depth (the block comment below). Three
-    // entries behind the engine's one in flight matches RAM.sv's own
-    // four-deep park queue: the drain never starves the device while the
-    // master above still has somewhere to park.
-    localparam int AQ_DEPTH = 3;
-
     // sdram_mp schedules its own refresh and has no cs pin: the SDRAM's chip
     // select is permanently asserted.
     wire _unused_refresh = enable_refresh;
     assign sdram_cs = 1'b0;
 
-    // ------------------------------------------------------------------
-    // Port A -- a posted-write queue in front of a serial engine.
-    //
-    // RAM.sv used to drain its parked writes one transaction per FSM lap:
-    // IDLE accepts, WRITE_1 presents, the shim latched, sdram_mp granted,
-    // the beats ran, p_done, WRITE_2, COMPLETE, IDLE -- around nine clocks
-    // of which only two were SDRAM beats. A GRCG walk parks four plane
-    // legs per guest word, so the park FIFO filled faster than that and
-    // the CPU stalled on queue-full instead of on the SDRAM itself
-    // (tb_mem_perf ph11 measured ~38% of cycles with all four park slots
-    // taken). The turnaround, not the device, was the wall.
-    //
-    // Writes therefore decouple here. The flag handshake answers "durably
-    // taken" the cycle the request latches into a three-deep FIFO, and one
-    // engine drains that FIFO to sdram_mp port A with back-to-back
-    // transactions. Ordering is the whole safety argument, and it is the
-    // old serial contract moved one level down:
-    //
-    //   * the engine works strictly in arrival order. FIFO entries go
-    //     first, and a read is only latched once RAM.sv's own serial FSM
-    //     can no longer have a write ahead of it; a push while a read is
-    //     pending is refused (defensively impossible from RAM.sv, whose
-    //     outputs drive exactly one request at a time, but refused all
-    //     the same);
-    //   * a latched read is issued only after the FIFO drains, so a read
-    //     behind posted writes still sees them (tb_gvram_ram_leg's racy
-    //     TCR read behind a posted-write train);
-    //   * a full FIFO withholds the flag rise, which parks RAM.sv in
-    //     WRITE_1 -- exactly the backpressure a busy shim always applied.
-    //
-    // The one behavioural change above the port: write_flag is now a
-    // one-cycle ACCEPT pulse instead of the transaction's full length.
-    // RAM.sv edges on the rise (WRITE_1 -> WRITE_2) and on the fall
-    // (WRITE_2 -> COMPLETE), so a pulse drives it one lap per write with
-    // the handshake it always saw. COMPLETE arrives earlier -- that is
-    // the point: the write is durably held here, drains in order behind
-    // whatever the device is doing, and nothing above reads write_flag as
-    // a level. Reads keep the old semantics: read_flag spans latch to
-    // p_done, because a read's data is not back until the device returns
-    // it.
-    //
-    // The engine also chains: at a write's p_done it loads the next FIFO
-    // head in the same edge, so consecutive port-A transactions reach the
-    // controller with one grant gap instead of a whole shim+RAM lap.
-    // ------------------------------------------------------------------
-
-    // FIFO slots, head first (the RAM.sv park-queue idiom: shift on pop).
-    // Full SDRAM words: RAM.sv only ever drives {8'h00, byte} into them,
-    // but the shim's own contract (tb_sdram_shim) is the whole word.
-    logic                  aq0_v, aq1_v, aq2_v;
-    logic [ADDR_BITS-1:0]  aq0_addr, aq1_addr, aq2_addr;
-    logic                  aq0_word, aq1_word, aq2_word;  // 1 = two-word write
-    logic [sdram_data_width-1:0] aq0_d0, aq1_d0, aq2_d0;
-    logic [sdram_data_width-1:0] aq0_d1, aq1_d1, aq2_d1;
-    // The entry pushed by the request still on the pins. data_in can be
-    // RAM.sv's registered follower one clock behind the bus on a live
-    // accept, so the pushed entry keeps resampling while write_request
-    // holds (the old `busy && we_r` resample, narrowed to the window
-    // where the operand is still the caller's). The bit travels with the
-    // entry because older heads can pop and shift it mid-window.
-    logic                  aq0_open, aq1_open, aq2_open;
-
-    // The latched read: one slot, no queueing -- a second read cannot
-    // arrive until read_flag falls, which is this read's p_done.
-    logic                  rd_busy;
-    logic [ADDR_BITS-1:0]  rd_addr;
-    logic [LEN_BITS-1:0]   rd_len;
-
-    // The engine: one port-A transaction at a time, exactly the req/we/
-    // addr/len presentation the controller always saw.
-    logic        req, we_r, eng_busy;
+    logic        req, we_r, busy;
     logic [ADDR_BITS-1:0] addr_r;
-    logic [LEN_BITS-1:0]  len_r;
+    logic [LEN_BITS-1:0]  len_r;      // words - 1, latched with the request
     logic [LEN_BITS-1:0]  rbeat;      // which word of the burst is next
-    logic        wflag_q;             // the accept pulse
+    logic [sdram_data_width-1:0] wdata_r, wdata_hi_r;
     logic        p_ack, p_done, p_rvalid, stat_idle, stat_refresh;
     logic [sdram_data_width-1:0] p_rdata;
     logic        mp_rvalid;
     logic [sdram_data_width-1:0] mp_rdata;
 
-    wire [sdram_data_width-1:0] din_lo = data_in;
-    wire [sdram_data_width-1:0] din_hi = data_in_hi;
-    // An open entry presents the live operand, not its stale snapshot --
-    // the engine may already be consuming it as the head (this is the old
-    // resample-through-the-transaction behaviour, kept for the window).
-    wire [sdram_data_width-1:0] aq0_d0e = aq0_open ? din_lo : aq0_d0;
-    wire [sdram_data_width-1:0] aq0_d1e = aq0_open ? din_hi : aq0_d1;
-    wire [sdram_data_width-1:0] aq1_d0e = aq1_open ? din_lo : aq1_d0;
-    wire [sdram_data_width-1:0] aq1_d1e = aq1_open ? din_hi : aq1_d1;
-    wire [sdram_data_width-1:0] aq2_d0e = aq2_open ? din_lo : aq2_d0;
-    wire [sdram_data_width-1:0] aq2_d1e = aq2_open ? din_hi : aq2_d1;
-
-    wire [1:0] q_count = 2'(aq0_v + aq1_v + aq2_v);
-    wire       pop_now = eng_busy & we_r & p_done;
-    wire [1:0] push_idx = q_count - pop_now;
-    // One push per request window: RAM.sv holds write_request for the
-    // whole handshake, and a held strobe whose OPERANDS changed is a new
-    // transfer that RAM.sv itself parks separately -- re-pushing the same
-    // request every cycle would duplicate every write. The window's push
-    // may still come late (a full FIFO holds it until a slot frees),
-    // which is exactly the old "!busy" gate one level down.
-    logic      wreq_done;
-    wire       push_now = write_request & ~rd_busy & ~wreq_done
-                        & ((q_count - pop_now) < 2'(AQ_DEPTH));
-    // The next head AFTER this edge's pop -- what a chaining engine loads.
-    wire       nx_wr_v    = pop_now ? aq1_v    : aq0_v;
-    wire [ADDR_BITS-1:0] nx_wr_addr  = pop_now ? aq1_addr  : aq0_addr;
-    wire       nx_wr_word = pop_now ? aq1_word : aq0_word;
-
-    // ------------------------------------------------------------------
-    // Read reordering: a latched read may be issued AHEAD of queued writes
-    // it provably cannot overlap -- RAM.sv's own rd_conflicts rule,
-    // extended across this queue (RAM.sv can only check writes still in
-    // ITS park FIFO; once dequeued here they are invisible to it, and
-    // strict FIFO here was making every RMW/EGC read leg wait out the
-    // whole write backlog of its own walk -- writes that target OTHER
-    // planes and can never collide). The disjointness test is 1K-word
-    // block granularity (a 14-bit address prefix compare, not a 24-bit
-    // range adder): same block => assume conflict; a read whose range
-    // CROSSES a block boundary (rd_cross) is always conflicting, so
-    // "different block" really does mean disjoint. Plane legs are 0x8000
-    // words apart, so the granularity loses nothing on the walk that
-    // motivated this.
-    //
-    // Ordering stays sound: the read only passes writes it provably cannot
-    // read behind; and a write can never push while a read waits on a
-    // conflict, because RAM.sv cannot present a write_request until the
-    // read's flag falls (its FSM is serial) -- so "younger write passes an
-    // older waiting read" has no producer.
-    // ------------------------------------------------------------------
-    wire       rd_cross = ({1'b0, rd_addr[9:0]} + {7'd0, rd_len}) >= 11'd1024;
-    wire [13:0] rd_blk  = rd_addr[23:10];
-    wire rd_conflict_q = rd_cross
-                       | (aq0_v & (aq0_addr[23:10] == rd_blk))
-                       | (aq1_v & (aq1_addr[23:10] == rd_blk))
-                       | (aq2_v & (aq2_addr[23:10] == rd_blk));
-    // What the engine takes when it frees: the read if one waits and the
-    // queue holds nothing it conflicts with (or nothing at all); else the
-    // head write. nx_* below is the write head after this edge's pop.
-    //
-    // MITIGATION 2026-10-26 (hardware freeze, CI 1000 build): two cold
-    // boots froze in BIOS POST with RAM.sv parked in R2 and the latched
-    // read never completing -- different addresses each boot, i.e. a race,
-    // not a stuck bit. The read-side reorder and the controller's fused
-    // grant-issue are the only two read-path timing changes in a2f0d62, so
-    // both are switched off here pending a root cause; strict arrival
-    // order (read only when the queue is empty) is the pre-a2f0d62
-    // contract. The posted-write queue itself -- where the measured win
-    // lives -- stays on.
-    localparam bit READ_REORDER = 1'b0;
-    wire       eng_rd_next = rd_busy
-                          & ~(nx_wr_v & (READ_REORDER ? rd_conflict_q : 1'b1));
-
+    // Request latch, shared by both far ends. Two different clocks apply here:
+    // the request fields are captured the first cycle the requester is seen --
+    // not when the far end can accept a command -- because req stays up until
+    // p_ack and early capture costs nothing downstream. The write payload is
+    // the opposite: data_in is RAM.sv's latch_data, a registered follower of
+    // internal_data_bus, so on the request's first cycle it is still the
+    // PREVIOUS byte. It is therefore resampled for the whole transaction and
+    // frozen at p_done. The byte is guaranteed on the bus for the duration:
+    // CPU and loader writes hold it until ready, and ready only rises from
+    // COMPLETE_RAM_RW -- after p_done; a µPD71071 DMA write drops its strobe
+    // at S4 but the FDC's byte stays driven on data_bus_out until the next
+    // beat, dozens of clocks past any plausible commit. Sampled live at the
+    // WRITE command instead -- which is what a single-port controller got away
+    // with by never queueing behind other ports -- a delayed grant committed whatever
+    // the bus had moved on to, and the sector image landed shifted.
     always_ff @(posedge sdram_clock or posedge sdram_reset) begin
         if (sdram_reset) begin
             req         <= 1'b0;
             we_r        <= 1'b0;
-            eng_busy    <= 1'b0;
-            wflag_q     <= 1'b0;
+            busy        <= 1'b0;
             addr_r      <= '0;
             len_r       <= '0;
             rbeat       <= 1'b0;
-            aq0_v       <= 1'b0;
-            aq1_v       <= 1'b0;
-            aq2_v       <= 1'b0;
-            aq0_addr    <= '0;
-            aq1_addr    <= '0;
-            aq2_addr    <= '0;
-            aq0_word    <= 1'b0;
-            aq1_word    <= 1'b0;
-            aq2_word    <= 1'b0;
-            aq0_d0      <= '0;
-            aq1_d0      <= '0;
-            aq2_d0      <= '0;
-            aq0_d1      <= '0;
-            aq1_d1      <= '0;
-            aq2_d1      <= '0;
-            aq0_open    <= 1'b0;
-            aq1_open    <= 1'b0;
-            aq2_open    <= 1'b0;
-            wreq_done   <= 1'b0;
-            rd_busy     <= 1'b0;
-            rd_addr     <= '0;
-            rd_len      <= '0;
+            wdata_r     <= '0;
+            wdata_hi_r  <= '0;
             data_out    <= '0;
             data_out_hi <= '0;
             a_rvalid    <= 1'b0;
             a_beat      <= '0;
         end else begin
+            if (busy && we_r) begin
+                wdata_r    <= data_in;
+                wdata_hi_r <= data_in_hi;
+            end
             // Read beats arrive in address order: the first belongs to the
             // addressed byte and the second to the odd half. rbeat saturates
             // at the burst's last index instead of toggling, so on a longer
@@ -441,135 +284,33 @@ module sdram_shim #(
             a_rvalid <= p_rvalid;
             if (p_rvalid) a_beat <= p_rdata;
 
-            // ---- the open entry's resample (see aq*_open) ---------------
-            if (aq0_open) begin aq0_d0 <= din_lo; aq0_d1 <= din_hi; end
-            if (aq1_open) begin aq1_d0 <= din_lo; aq1_d1 <= din_hi; end
-            if (aq2_open) begin aq2_d0 <= din_lo; aq2_d1 <= din_hi; end
-
-            // ---- pop: the engine committed the head write ---------------
-            // Shift uses the eff values so an open entry carries its latest
-            // sample down with it; the open bits close when the request
-            // window ends, whenever they travel.
-            if (pop_now) begin
-                aq0_v    <= aq1_v;
-                aq0_addr <= aq1_addr;
-                aq0_word <= aq1_word;
-                aq0_d0   <= aq1_d0e;
-                aq0_d1   <= aq1_d1e;
-                aq0_open <= aq1_open & write_request;
-                aq1_v    <= aq2_v;
-                aq1_addr <= aq2_addr;
-                aq1_word <= aq2_word;
-                aq1_d0   <= aq2_d0e;
-                aq1_d1   <= aq2_d1e;
-                aq1_open <= aq2_open & write_request;
-                aq2_v    <= 1'b0;
-                aq2_open <= 1'b0;
-            end else if (!write_request) begin
-                aq0_open <= 1'b0;
-                aq1_open <= 1'b0;
-                aq2_open <= 1'b0;
-            end
-
-            // ---- push: the flag pulse, and the entry --------------------
-            if (!write_request)
-                wreq_done <= 1'b0;
-            if (push_now) begin
-                wflag_q  <= 1'b1;
-                wreq_done<= 1'b1;
-                case (push_idx)
-                    2'd0: begin
-                        aq0_v <= 1'b1; aq0_addr <= address[ADDR_BITS-1:0];
-                        aq0_word <= access_num[1];
-                        aq0_d0 <= din_lo; aq0_d1 <= din_hi; aq0_open <= 1'b1;
-                    end
-                    2'd1: begin
-                        aq1_v <= 1'b1; aq1_addr <= address[ADDR_BITS-1:0];
-                        aq1_word <= access_num[1];
-                        aq1_d0 <= din_lo; aq1_d1 <= din_hi; aq1_open <= 1'b1;
-                    end
-                    default: begin
-                        aq2_v <= 1'b1; aq2_addr <= address[ADDR_BITS-1:0];
-                        aq2_word <= access_num[1];
-                        aq2_d0 <= din_lo; aq2_d1 <= din_hi; aq2_open <= 1'b1;
-                    end
-                endcase
-            end else begin
-                wflag_q <= 1'b0;
-            end
-
-            // ---- the read latch -----------------------------------------
-            // One to BURST_MAX words: prefetch reads ask for the whole run
-            // and clamp at the port's ceiling. The burst must still fit
-            // inside one column -- the caller keeps it below the 512-word
-            // boundary by construction.
-            if (~rd_busy & read_request) begin
-                rd_busy <= 1'b1;
-                rd_addr <= address[ADDR_BITS-1:0];
-                rd_len  <= (access_num > sdram_col_width'(BURST_MAX))
-                         ? LEN_BITS'(BURST_MAX - 1)
-                         : (access_num == '0) ? '0
-                         : LEN_BITS'(access_num - 1'b1);
-                rbeat   <= 1'b0;
-            end
-
-            // ---- the engine ----------------------------------------------
-            // Loads the FIFO head, or a latched read that cannot overlap
-            // any queued write (eng_rd_next -- see the reordering block
-            // above), and at a write's p_done chains straight into
-            // whatever comes next -- the same edge that pops it.
-            if (eng_busy) begin
-                if (p_ack) req <= 1'b0;
-                if (p_done) begin
-                    if (we_r) begin
-                        if (eng_rd_next) begin
-                            // the read jumps the remaining writes
-                            req <= 1'b1; we_r <= 1'b0;
-                            addr_r <= rd_addr; len_r <= rd_len;
-                        end else if (nx_wr_v) begin
-                            req <= 1'b1; we_r <= 1'b1;
-                            addr_r <= nx_wr_addr;
-                            len_r  <= nx_wr_word ? LEN_BITS'(1) : LEN_BITS'(0);
-                        end else begin
-                            req <= 1'b0; eng_busy <= 1'b0;
-                        end
-                    end else begin
-                        // The read has landed; its flag may fall. Writes it
-                        // jumped are waiting: chain straight into the head.
-                        rd_busy <= 1'b0;
-                        if (nx_wr_v) begin
-                            req <= 1'b1; we_r <= 1'b1;
-                            addr_r <= nx_wr_addr;
-                            len_r  <= nx_wr_word ? LEN_BITS'(1) : LEN_BITS'(0);
-                        end else begin
-                            req <= 1'b0; eng_busy <= 1'b0;
-                        end
-                    end
+            if (!busy) begin
+                if (write_request || read_request) begin
+                    req        <= 1'b1;
+                    we_r       <= write_request;
+                    addr_r     <= address[ADDR_BITS-1:0];
+                    // One to BURST_MAX words now: prefetch reads ask for the
+                    // whole run and clamp at the port's ceiling. The burst
+                    // must still fit inside one column -- the caller keeps it
+                    // below the 512-word boundary by construction.
+                    len_r  <= (access_num > sdram_col_width'(BURST_MAX))
+                            ? LEN_BITS'(BURST_MAX - 1)
+                            : (access_num == '0) ? '0
+                            : LEN_BITS'(access_num - 1'b1);
+                    rbeat  <= 1'b0;
+                    busy   <= 1'b1;
                 end
-            end else if (eng_rd_next) begin
-                req <= 1'b1; we_r <= 1'b0; eng_busy <= 1'b1;
-                addr_r <= rd_addr; len_r <= rd_len;
-            end else if (aq0_v) begin
-                req <= 1'b1; we_r <= 1'b1; eng_busy <= 1'b1;
-                addr_r <= aq0_addr;
-                len_r  <= aq0_word ? LEN_BITS'(1) : LEN_BITS'(0);
+            end else begin
+                if (p_ack)  req  <= 1'b0;
+                if (p_done) busy <= 1'b0;
             end
         end
     end
 
-    // Port A is occupied from the first latched write until the last
-    // transaction retires: idle and refresh_mode must stay low across the
-    // whole drain, or RAM.sv would tell a caller "ready" while the access
-    // it owes is still queued here (the open-loop read race the idle line
-    // exists to close). A wire so a diagnostic force stays legal.
-    wire busy = eng_busy | aq0_v | aq1_v | aq2_v | rd_busy;
-
     // The flag rises for the duration of the access and drops when the word
-    // has landed; RAM.sv's state machine edges on both transitions. For a
-    // write the "duration" is now the accept pulse (see the queue block
-    // above); a read still spans its whole transaction.
-    assign write_flag   = wflag_q;
-    assign read_flag    = rd_busy;
+    // has landed; RAM.sv's state machine edges on both transitions.
+    assign write_flag   = busy &  we_r;
+    assign read_flag    = busy & ~we_r;
     // idle means "the controller can take a command now" and is low during
     // refresh. RAM.sv latches access_ready from it.
     //
@@ -634,17 +375,13 @@ module sdram_shim #(
     // p_wdata combinationally, so a two-word write is just this select. Ports
     // B, C and D are read-only; port E's write data is held by fdd_ramimg for
     // the whole transaction, which is what the combinational consume needs,
-    // and port F's two words are held by the cache the same way. Port A's
-    // words come from the FIFO head -- held for the whole transaction, and
-    // live-resampled only while that entry's request is still on the pins
-    // (aq0_open above), which is the window the old whole-transaction
-    // resample existed for.
+    // and port F's two words are held by the cache the same way.
     wire [LEN_BITS-1:0] mp_wcnt;
     wire [PORTS-1:0][sdram_data_width-1:0] mp_wdata =
         {(mp_wcnt == LEN_BITS'(0)) ? f_wdata0 : f_wdata1,
          e_wdata, {sdram_data_width{1'b0}}, {sdram_data_width{1'b0}},
          {sdram_data_width{1'b0}},
-         (mp_wcnt == LEN_BITS'(0)) ? aq0_d0e : aq0_d1e};
+         (mp_wcnt == LEN_BITS'(0)) ? wdata_r : wdata_hi_r};
     wire [PORTS-1:0][MASK_BITS-1:0] mp_wmask =
         {{MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}},
          {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}};
@@ -677,30 +414,14 @@ module sdram_shim #(
     assign e_rdata  = mp_rdata;
     assign f_rdata  = mp_rdata;
 
+    // p_done[0] is a registered one-cycle pulse; we_r/addr_r/len_r only move
+    // when !busy, and busy drops on the same edge p_done is seen, so all three
+    // still describe the finished write in the pulse's cycle.
     // Port A write commits (guest, DMA, loader), for the cache to snoop:
-    // one-cycle pulse, SDRAM word address, words - 1. The engine can chain
-    // into the next FIFO head on the very edge its p_done is set, so the
-    // identity of the completing write is snapshotted there -- addr_r by
-    // the pulse's cycle already names the NEXT transaction.
-    logic                  a_wr_q;
-    logic [ADDR_BITS-1:0]  a_wr_addr_q;
-    logic [LEN_BITS-1:0]   a_wr_len_q;
-    always_ff @(posedge sdram_clock or posedge sdram_reset) begin
-        if (sdram_reset) begin
-            a_wr_q      <= 1'b0;
-            a_wr_addr_q <= '0;
-            a_wr_len_q  <= '0;
-        end else begin
-            a_wr_q <= eng_busy & we_r & p_done;
-            if (eng_busy & we_r & p_done) begin
-                a_wr_addr_q <= addr_r;
-                a_wr_len_q  <= len_r;
-            end
-        end
-    end
-    assign a_wr_v    = a_wr_q;
-    assign a_wr_addr = ADDR_BITS_PUB'(a_wr_addr_q);
-    assign a_wr_len  = LEN_BITS_PUB'(a_wr_len_q);
+    // one-cycle pulse, SDRAM word address, words - 1.
+    assign a_wr_v    = mp_done[0] & we_r;
+    assign a_wr_addr = ADDR_BITS_PUB'(addr_r);
+    assign a_wr_len  = LEN_BITS_PUB'(len_r);
 
     // Port-A stall ages for the wedge tap: a_req_age counts an un-granted
     // request's wait, a_busy_age an in-flight transaction without p_done.

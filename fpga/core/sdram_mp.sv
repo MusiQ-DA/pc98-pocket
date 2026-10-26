@@ -8,11 +8,6 @@
 //
 //   * it moves up to BURST_MAX words per granted transaction, so the ~8 cycles
 //     of ACTIVATE/CAS/PRECHARGE overhead amortise across the burst
-//   * a row-HIT transaction issues its first command on the grant edge
-//     itself (see S_IDLE's fused-issue block) -- short transactions were
-//     measured at one grant clock and one re-request clock per two data
-//     beats, and both ends of the machine queue work now, so the grant
-//     clock was a quarter of a port-A write's whole cost
 //
 // Clocking: the controller is clock-agnostic; it runs at whatever `clk` it is
 // given. sdram_shim supplies clk_chipset (42.95 MHz) in the current PC-98
@@ -132,15 +127,6 @@ module sdram_mp #(
     localparam logic [2:0] CMD_PRE   = 3'b010;
     localparam logic [2:0] CMD_REF   = 3'b001;
     localparam logic [2:0] CMD_MRS   = 3'b000;
-
-    // Fused issue (first access command on the grant edge for row hits) is
-    // disabled after two hardware cold-boot freezes (2026-10-25/26): the
-    // latched read in sdram_shim never saw its p_done and RAM.sv parked in
-    // R2 forever, with the controller idle -- a completion race the Verilator
-    // sdram_model never reproduces. The measured win was one clock per
-    // row-hit transaction (about 1% of the bench phases), so the safe
-    // pre-fused S_RW walk keeps the posted-write queue's gain.
-    localparam bit FUSED_ISSUE = 1'b0;
 
     // Mode register: A[2:0] burst length 1, A[3] sequential, A[6:4] CAS latency,
     // A[8:7] standard operation, A[9] burst read / burst write.
@@ -413,72 +399,9 @@ module sdram_mp #(
                     p_wcnt        <= '0;
                     rr_ptr        <= (winner == GRANT_BITS'(PORTS-1)) ? '0
                                                                      : winner + 1'b1;
-                    if (row_hit && FUSED_ISSUE) begin
-                        // FUSED ISSUE: the row is already open, so the first
-                        // access command goes out on the grant edge itself
-                        // instead of one clock later from S_RW. The port-A
-                        // write stream (the shim's queue chain) was measured
-                        // at four clocks per two-word transaction -- two
-                        // beats, a grant clock and a re-request clock -- and
-                        // this takes the grant clock off every row-hit
-                        // transaction, every port. The CALLER's handshake is
-                        // unchanged: p_ack still pulses the cycle after this
-                        // edge, p_done still lands where it would have (a
-                        // single-word transaction walks one shadow cycle in
-                        // S_RW -- left == 0 -- so ack and done never collide),
-                        // and only the device-side command moved.
-                        //
-                        // Two disciplines make the fused WRITE safe:
-                        //   * p_wdata[winner] is consumed combinationally at
-                        //     THIS edge, and every caller's word mux keys on
-                        //     p_wcnt -- so every write completion clears
-                        //     p_wcnt to keep the mux on word 0 during a grant
-                        //     cycle (see S_RW's done arms).
-                        //   * a fused READ that has more beats behind it goes
-                        //     to S_RD_GAP, not S_RW: back-to-back READ
-                        //     commands are the doubled-beat capture race the
-                        //     gap exists to prevent. WRITEs stream
-                        //     back-to-back already (S_RW never gaps them).
-                        if (p_we[winner]) begin
-                            cmd          <= CMD_WRITE;
-                            sdram_ba     <= act_bank;
-                            sdram_a      <= ROW_BITS'(act_col);
-                            sdram_dq_out <= p_wdata[winner];
-                            sdram_dq_io  <= 1'b0;
-                            sdram_dqm    <= ~p_wmask[winner];
-                            if (p_len[winner] == '0) begin
-                                // One word: the command above was the whole
-                                // transaction. Shadow cycle in S_RW retires
-                                // it (left stays 0), keeping done one clock
-                                // after ack like every other write.
-                                left  <= '0;
-                                state <= S_RW;
-                            end else begin
-                                p_wcnt  <= LEN_BITS'(1);
-                                cur_col <= act_col + 1'b1;
-                                left    <= {1'b0, p_len[winner]};
-                                state   <= S_RW;
-                            end
-                        end else begin
-                            cmd        <= CMD_READ;
-                            sdram_ba   <= act_bank;
-                            sdram_a    <= ROW_BITS'(act_col);
-                            rd_pipe[0] <= 1'b1;
-                            if (p_len[winner] == '0) begin
-                                left  <= '0;
-                                state <= S_RW;   // shadow cycle -> TAIL
-                            end else begin
-                                cur_col <= act_col + 1'b1;
-                                left    <= {1'b0, p_len[winner]};
-                                state   <= S_RD_GAP;
-                            end
-                        end
-                    end else if (row_hit) begin
-                        // !FUSED_ISSUE: the row is open but the first access
-                        // command waits for S_RW's own edge, exactly the
-                        // pre-fused walk. left was set to len+1 above, so a
-                        // single-word transaction retires from S_RW with the
-                        // same ack->done spacing as every other transaction.
+                    if (row_hit) begin
+                        // Already there: straight to the access, no command
+                        // and no T_RCD.
                         state <= S_RW;
                     end else if (row_miss && pre_guard == 0) begin
                         // Wrong row in this bank -- close it, then activate.
@@ -523,22 +446,6 @@ module sdram_mp #(
             S_ACT: if (timer == 0) state <= S_RW;
 
             S_RW: begin
-                if (left == 1'd0) begin
-                    // A fused single-word transaction's shadow: its command
-                    // issued on the grant edge, so this cycle drives nothing.
-                    // Retire exactly where the unfused path would have, one
-                    // clock after p_ack -- the caller handshake is
-                    // indistinguishable from the slow path's.
-                    if (cur_we) begin
-                        p_done[grant] <= 1'b1;
-                        pre_guard     <= 16'(T_WR);
-                        p_wcnt        <= '0;   // keep the grant-cycle mux on word 0
-                        state         <= S_IDLE;
-                    end else begin
-                        timer <= 16'(RD_DELAY);
-                        state <= S_TAIL;
-                    end
-                end else begin
                 sdram_ba <= cur_bank;
                 sdram_a  <= ROW_BITS'(cur_col);   // A10 low: no auto precharge
                 if (cur_we) begin
@@ -561,7 +468,6 @@ module sdram_mp #(
                         // pre_guard carry the obligation.
                         p_done[grant] <= 1'b1;
                         pre_guard     <= 16'(T_WR);
-                        p_wcnt        <= '0;   // next grant's fused mux word 0
                         state         <= S_IDLE;
                     end else begin
                         timer <= 16'(RD_DELAY);
@@ -589,7 +495,6 @@ module sdram_mp #(
                 // pattern read np21w's x+8 everywhere except x=120-127).
                 end else if (!cur_we) begin
                     state <= S_RD_GAP;
-                end
                 end
             end
 

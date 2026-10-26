@@ -559,19 +559,7 @@ module RAM #(
             end
             RAM_WRITE_2: begin
                 if (~write_flag)
-                    // COMPLETE only serves the access's own live strobe:
-                    // its ready release (which the posted-write coverage
-                    // path has usually fired already) and its wait counts.
-                    // A parked drain -- the sequencer's leg chains, the
-                    // bridge's posted queue -- has no strobe waiting, and a
-                    // strobe with different operands is not this access's
-                    // twin; either way COMPLETE would exit on its first
-                    // cycle. Skip it: the parked-write lap is the rate at
-                    // which a GRCG walk can park legs, and every clock of
-                    // it shows up in the fill phases.
-                    next_state = (~write_command | ~accept_live_wr
-                                  | ~write_strobe_match)
-                               ? IDLE : COMPLETE_RAM_RW;
+                    next_state = COMPLETE_RAM_RW;
             end
             RAM_READ_1: begin
                 if (~read_command)
