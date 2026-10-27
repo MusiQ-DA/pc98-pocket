@@ -121,6 +121,7 @@ end
 wire [19:0] ld_addr;
 wire [127:0] ld_data;
 wire ld_req, ld_ack;
+wire ld_drop;          // fetch no longer wants the line load in flight
 
 wire rd_ready;
 wire [15:0] rd_data;
@@ -255,6 +256,7 @@ z86_cache u_cache (
     .ld_req             (ld_req),
     .ld_ack             (ld_ack),
     .ld_data            (ld_data),
+    .ld_drop            (ld_drop),
 
     .rd                 (ex_rd | id_rd),
     .rd_addr            (id_rd ? id_rd_addr : ex_rd_addr),
@@ -321,6 +323,7 @@ fetch u_fetch_decode1 (
     .ld_req             (ld_req), 
     .ld_ack             (ld_ack), 
     .ld_data            (ld_data),
+    .ld_drop            (ld_drop),
     .snoop_wr           (wr_valid & wr_ready & ~wr_io),
     .snoop_addr         (wr_addr),
     .snoop_word         (wr_word),

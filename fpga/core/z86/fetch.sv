@@ -53,6 +53,7 @@ module fetch (
     input             ld_ack,
     output reg [19:0] ld_addr,
     input     [127:0] ld_data,
+    output            ld_drop,       // the load in flight is abandoned
     // PC-98 port: CPU stores, so code written and then run is fetched anew
     input             snoop_wr,
     input     [19:0]  snoop_addr,
@@ -76,6 +77,13 @@ reg [4:0]  ptr;               // buffer[ptr] is start of next instruction
 reg        loading;           // there's an ongoing cache request
 reg        loading_half;      // which half of the buffer is being loaded
 reg        loading_drop;      // drop the cache request (the buffer is flushed)
+assign ld_drop = loading_drop;
+// PC-98 port: first valid byte of each physical half. A line load starts
+// at the word the fetch needs (the branch target), as a 286's BIU does --
+// the bytes below it are never fetched, so a later branch that lands
+// under buf_lo reloads instead of running them. Sequential loads start at
+// the line head (0).
+reg [3:0]  buf_lo [0:1];
 // PC-98 port: the half a sequential crossing just retired is kept intact
 // (behind_ok) for a few clocks, so a branch straight back into it -- a
 // loop whose LOOP/Jcc ends on a 16-byte boundary -- restores it instead of
@@ -110,6 +118,10 @@ wire snoop_hit = snoop_wr & (
         (buf_valid[~buf_start] & ((snoop_addr[19:4] == buf_addr2[19:4]) | (snoop_end[19:4] == buf_addr2[19:4]))) |
         (loading & ((snoop_addr[19:4] == ld_addr[19:4]) | (snoop_end[19:4] == ld_addr[19:4]))));
 wire snoop_behind = snoop_wr & ((snoop_addr[19:4] == buf_addr0[19:4]) | (snoop_end[19:4] == buf_addr0[19:4]));
+// A branch into a valid half below its first fetched byte (see buf_lo).
+wire [19:0] br_rel_w = br_target - buf_addr;
+wire        br_half  = buf_start ^ br_rel_w[4];
+wire        br_below = buf_valid[br_half] && (br_rel_w[3:0] < buf_lo[br_half]);
 wire [4:0]  insn_ofs = (ptr - {buf_start, 4'b0000}) - {3'b000, prefix_len};
 wire [19:0] insn_lin = buf_addr + {15'd0, insn_ofs};
 
@@ -221,6 +233,7 @@ always @(posedge clk) begin
                     buffer[loading_half*16 + i] <= ld_data[i*8 +: 8];
                 end
                 buf_valid[loading_half] <= 1;
+                buf_lo[loading_half] <= {ld_addr[3:1], 1'b0};
             end
             loading <= 0;
             loading_drop <= 0;
@@ -258,7 +271,7 @@ always @(posedge clk) begin
             // "not found"). Drop it; the request logic reloads what's missing.
             if (ld_req != ld_ack)
                 loading_drop <= 1;
-            if (br_rel[19:5] == 15'd0) begin
+            if (br_rel[19:5] == 15'd0 && !br_below) begin
                 // target inside the two halves: move the pointer; a target
                 // in the second half retires the first, as a crossing does
                 ptr_next = {buf_start ^ br_rel[4], br_rel[3:0]};
@@ -271,7 +284,8 @@ always @(posedge clk) begin
                 end
                 ptr <= ptr_next;
                 ip <= br_new_ip;
-            end else if (behind_ok && br_rel[19:4] == 16'hFFFF) begin
+            end else if (behind_ok && br_rel[19:4] == 16'hFFFF
+                         && br_target[3:0] >= buf_lo[~buf_start]) begin
                 // target in the half just retired, still intact: restore it
                 buf_valid[~buf_start] <= 1;
                 buf_start <= ~buf_start;
@@ -297,7 +311,9 @@ always @(posedge clk) begin
             if (!loading) begin
                 if (!buf_valid[buf_start]) begin             // load the first half
                     ld_req <= ~ld_req;
-                    ld_addr <= buf_addr;
+                    // from the instruction on (see buf_lo)
+                    ld_addr <= {buf_addr[19:4],
+                                (ptr[4] == buf_start) ? {ptr[3:1], 1'b0} : 4'd0};
                     loading_half <= buf_start;
                     loading <= 1;
                 end else if (!buf_valid[~buf_start]
