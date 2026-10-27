@@ -587,7 +587,11 @@ module z86_cache #(
                     wb_stb_o <= 1'b1;
                     st       <= S_WWR1;
                 end
-            end else if (ld_pend) begin
+            // Data reads before line loads: a 286's EU cycles take the
+            // bus ahead of the BIU's prefetch, so a pop or operand read
+            // never queues behind a code line. With uncached fetch at the
+            // paced settings that wait was a whole line load per access.
+            end else if (ld_pend && !rd_any) begin
                 if (ld_cached) begin
                     k    <= K_LD;
                     c_a  <= {ld_addr[19:4], 4'h0};
