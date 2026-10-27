@@ -65,7 +65,7 @@ module tb_gvram_depth_wipe;
     wire  [95:0] dbg_band;
 `endif
 
-    pc98_gvram_display dut (
+    pc98_gvram_display #(.BAND_PROBE(1'b1)) dut (
         .clk(clk), .rst(rst), .rd_clk(rd_clk),
         .hcount(h), .vcount(v), .disp_on(disp_on),
         .disp_page(disp_page), .analog_mode(analog_m),
