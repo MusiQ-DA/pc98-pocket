@@ -93,6 +93,7 @@ module decode (
     output     [15:0] dbg_next_ip,
     input             inta_pending,     // wb_tgc_o out or the vector held: the 8259 is acknowledged
     output            inta_req,
+    output            rep_int,          // an interrupt waits: EXECUTE breaks a REP (execute.sv MC_TESTZX)
     input             bus_quiet,        // no store waiting in EX's output or on the bus
 
     // debug interface (only for verilator)
@@ -182,6 +183,11 @@ always @(posedge clk)
     else if (int_settle != 2'd3)              int_settle <= int_settle + 2'd1;
 wire int_sample = intr_wait & int_boundary & (int_settle == 2'd3) & ~inta_pending;
 assign inta_req = int_sample & intr & reg_f[9];
+// Interruptible REP: an admitted INTR (or an NMI) ends a running REP string
+// op between iterations. It is the same latch that holds decode for the
+// boundary sample, so the acknowledge still goes out only once the REP has
+// left the pipeline and the bus is quiet.
+assign rep_int = (nmi_latched | intr_latched) & ~int_shadow;
 
 // recognize simple POP (no ModR/M)
 wire id_pop_r16 = (id_opcode >= 8'h58) && (id_opcode <= 8'h5F);
@@ -374,6 +380,10 @@ always @* begin
                                                         : UENTRY_REPE_SCASB;
             8'hAF: id_ucode_entry_op = id_prefix[PREFIX_REPNE_REPNZ] ? UENTRY_REPNE_SCASW
                                                         : UENTRY_REPE_SCASW;
+            8'h6C: id_ucode_entry_op = UENTRY_REP_INSB;
+            8'h6D: id_ucode_entry_op = UENTRY_REP_INSW;
+            8'h6E: id_ucode_entry_op = UENTRY_REP_OUTSB;
+            8'h6F: id_ucode_entry_op = UENTRY_REP_OUTSW;
             default:;
         endcase
     end
@@ -878,7 +888,15 @@ function automatic reg_mask_t build_rd_mask();
     if ((id_opcode==8'hAC || id_opcode==8'hAD)) begin                // LODS, DS:SI
         m.seg = 4'b1000; 
         m.gpr[R_SI] = 1'b1;
-        if (id_prefix[PREFIX_REP_REPZ_REPE]) m.gpr[R_CX] = 1'b1;
+        if (id_prefix[PREFIX_REP_REPZ_REPE] | id_prefix[PREFIX_REPNE_REPNZ]) m.gpr[R_CX] = 1'b1;
+    end
+    // PC-98 port: INS/OUTS read DX and DI (ES) / SI (DS or override), and
+    // CX under REP; OUTS reads memory.
+    if (id_opcode >= 8'h6C && id_opcode <= 8'h6F) begin
+        m.gpr[R_DX] = 1'b1;
+        if (id_opcode[1]) begin m.gpr[R_SI] = 1'b1; m.seg = 4'b1000; m.mem = 1'b1; end
+        else begin              m.gpr[R_DI] = 1'b1; m.seg = 4'b0001; end
+        if (id_prefix[PREFIX_REP_REPZ_REPE] | id_prefix[PREFIX_REPNE_REPNZ]) m.gpr[R_CX] = 1'b1;
     end
 
     if (m.gpr[R_SP])     m.stackop = 1'b1;         // SP readers check stackop
@@ -952,7 +970,13 @@ function automatic reg_mask_t build_wr_mask();
     end
     if ((id_opcode==8'hAC || id_opcode==8'hAD)) begin                // LODS, DS:SI
         m.gpr[R_SI] = 1'b1;
-        if (id_prefix[PREFIX_REP_REPZ_REPE]) m.gpr[R_CX] = 1'b1;
+        if (id_prefix[PREFIX_REP_REPZ_REPE] | id_prefix[PREFIX_REPNE_REPNZ]) m.gpr[R_CX] = 1'b1;
+    end
+    // PC-98 port: INS writes DI and memory, OUTS SI; both CX under REP.
+    if (id_opcode >= 8'h6C && id_opcode <= 8'h6F) begin
+        if (id_opcode[1]) m.gpr[R_SI] = 1'b1;
+        else begin        m.gpr[R_DI] = 1'b1; m.mem = 1'b1; end
+        if (id_prefix[PREFIX_REP_REPZ_REPE] | id_prefix[PREFIX_REPNE_REPNZ]) m.gpr[R_CX] = 1'b1;
     end
 
     // PC-98 port: registers the microcoded / implicit forms write, which

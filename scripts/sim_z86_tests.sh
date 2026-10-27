@@ -73,4 +73,26 @@ for lat in 1 2 4 16; do
   [ "${got:0:${#want}}" = "$want" ] && echo "ok   raw_spec_in lat=$lat" \
     || { echo "FAIL raw_spec_in lat=$lat"; echo "  want $want"; echo "  got  $got"; fail=1; }
 done
+# Interruptible REP (irq_rep.asm): long REP string ops -- every form, with
+# segment overrides in both prefix orders, REP INS/OUTS -- must end exactly
+# as they do uninterrupted, the interrupt must land between iterations
+# (most handler runs return to a REP's first prefix), never inside a REP's
+# bytes, and INTR must not wait for a whole REP (max latency, tb clocks).
+# 0604: returns inside a REP (0), 0606: failed checks (0), 0608: AC,
+# 061E: the last byte REP OUTSB wrote.
+for a in "+lat=1" "+lat=4 +irq=500" "+lat=5 +latrand +irq=331" "+lat=3 +gate +irq=997"; do
+  o=$("$OUT/loop" +org=1000 +prog=sim/z86_tests/irq_rep.hex $a)
+  m=$(echo "$o" | sed -n 's/^mem 0600: //p')
+  [ -n "$m" ] || { echo "FAIL irq_rep $a: $(echo "$o" | tail -1)"; fail=1; continue; }
+  set -- $m
+  runs=$((16#$2$1)); hits=$((16#$4$3)); chk="$5 $6 $7 $8 $9 ${31}"
+  lat=$(echo "$o" | sed -n 's/^irq latency max: \([0-9]*\) clocks/\1/p')
+  bad=0
+  [ "$chk" = "00 00 00 00 ac 5d" ] || bad=1
+  case "$a" in *irq*)
+    [ "$runs" -gt 1000 ] && [ $((hits * 4)) -gt "$runs" ] && [ -n "$lat" ] && [ "$lat" -lt 400 ] || bad=1 ;;
+  esac
+  if [ $bad = 0 ]; then echo "ok   irq_rep $a (runs=$runs mid-rep=$hits maxlat=${lat:--})"
+  else echo "FAIL irq_rep $a: runs=$runs mid-rep=$hits maxlat=$lat mem=$m"; fail=1; fi
+done
 exit $fail

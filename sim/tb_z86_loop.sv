@@ -221,6 +221,17 @@ module tb_z86_loop;
         end
     end
 
+    // Interrupt latency: clocks INTR has stood with IF open before the
+    // acknowledge, the worst case over the run. A REP string op used to hold
+    // it off for its whole length (sim/z86_tests/irq_rep.asm).
+    int irq_lat = 0, irq_lat_max = 0;
+    always @(posedge clk) begin
+        if (tgc_o || reset) begin
+            if (irq_lat > irq_lat_max) irq_lat_max = irq_lat;
+            irq_lat = 0;
+        end else if (intr && u.u_execute.reg_f[9]) irq_lat++;
+    end
+
     // +rst_at=<clock>: one CPU reset (5 clocks) mid-run, as OUT 0F0h does on
     // the PC-98 -- the program must restart and still finish.
     longint rst_at = 0;
@@ -266,6 +277,7 @@ module tb_z86_loop;
             // (the cache's write buffer drained first: memory is final)
             if (!halted) $display("STOP at %05x", pc);
             if (irq_period != 0) $display("interrupts taken: %0d spurious: %0d", irq_n, spurious_n);
+            if (irq_period != 0) $display("irq latency max: %0d clocks", irq_lat_max);
             $display("n=%0d lat=%0d: %0d clocks, %0d reads, %0d writes -> %0.1f clk/iter",
                      n, lat, cyc_n, rd_n, wr_n, real'(cyc_n) / n);
             $display("port F: %0d fills, %0d writes", f_rd_n, f_wr_n);

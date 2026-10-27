@@ -51,7 +51,7 @@ ARGS = {
                'AX':8,'CX':9,'DX':10,'BX':11,'SP':12,'BP':13,'SI':14,'DI':15},    # for POPA
     'READ':   {'SP':4,'BP':5,'ENTER_IB':8},
     'WR_REG': {'AX':0,'AL':8,'REG':10,'SP':4,'BP':5},
-    'TESTZX': {'CX':0,'TMP_HI':1},
+    'TESTZX': {'CX':0,'TMP_HI':1,'REP':2},   # REP: CX==0, and an interrupt break (execute.sv)
     'TESTF':  {'CF':0,'PF':1,'AF':2,'ZF':3,'SF':4,'OF':5},
     'DEC':    {'CX':1,'TMP_HI':8},
     'IN':     {'BYTE':0,'WORD':1},

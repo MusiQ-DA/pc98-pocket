@@ -15,6 +15,7 @@ module execute (
     input             reset,
     output reg        halted /* verilator public */,
     input             hlt_wake,         // INTR: HLT ends when IF lets it in
+    input             rep_int,          // decode: an interrupt waits to be taken (breaks a REP)
 
     // EXECUTE interface
     output reg        ex_ready,         // EXECUTE consumes an instruction
@@ -197,6 +198,7 @@ reg [8:0]   mc_branch_rel;
 reg [4:0]   mc_div_cnt;
 
 reg [8:0]   mc_pc;
+reg         rep_started;              // this REP has passed its loop top once
 
 // Microcode sequencer
 always_ff @(posedge clk) begin
@@ -797,7 +799,9 @@ always @* begin
             rd = 1;
             rd_addr = reg1_rdata;
             rd_io = 1;
-            // rd_width = mc_cur.arg[0];
+            // PC-98 port: INSB reads the one byte port. rd_word stayed 1 and
+            // an even port was read as a word, port+1 with it.
+            rd_word = mc_cur.arg[0];
             // result captured to tmp_lo down below
         end
 
@@ -957,13 +961,34 @@ always @* begin
         // TESTZX  –   arg[1:0]
         //             CX       (0) : mc_cond = (CX == 0)
         //             TMP_HI   (1) : mc_cond = (tmp_hi == 0)    (Ib==0 for ENTER)
+        //             REP      (2) : mc_cond = (CX == 0), and with CX
+        //                            left, an iteration done and an
+        //                            interrupt waiting: branch to this
+        //                            instruction's first prefix instead
         // ===============================================================
+        // PC-98 port: interruptible REP. Decode samples interrupts only
+        // between instructions, so a `rep stosw` of 16000 words held IRQ0 off
+        // for ~50 ms (SuperDepth's BGM, clocked by the PIT, fell behind).
+        // The 80286 recognises an interrupt between iterations, with CX/SI/DI
+        // updated and the return address on the REP's first prefix. Here the
+        // REP ends with a branch there: the flush drains the pipeline, decode
+        // acknowledges the 8259 through its usual boundary path and injects
+        // the INT with ip_this of the re-fetched REP as the return address.
+        // An INTR withdrawn before the acknowledge just restarts the REP.
+        // rep_started keeps one iteration per (re)start, so a stream of
+        // interrupts cannot stop the string op from advancing.
         MC_TESTZX:  begin
             // reg1_raddr = R_CX;
             if (mc_cur.arg[1:0] == 2'd1) begin
                 mc_cond = (tmp_hi == 8'd0);
             end else begin
                 mc_cond = (reg1_rdata == 16'd0);
+            end
+            if (mc_cur.arg[1] && rep_int && rep_started && reg1_rdata != 16'd0) begin
+                mc_valid      = 1'b1;
+                mc_load_cs_ip = 1'b1;
+                mc_new_cs     = seg_CS;
+                mc_new_ip     = ii.ip_this;
             end
             // $display("MC_TESTZX: cond=%x, cx=%x", mc_cond, reg1_rdata);
         end
@@ -1245,6 +1270,13 @@ always @(posedge clk) begin
     end else begin
         halted <= halted_next;
     end
+end
+
+always @(posedge clk) begin
+    if (reset | ex_ready)
+        rep_started <= 1'b0;
+    else if (mc_active && ex_ucode_valid && mc_cur.op == MC_TESTZX && mc_cur.arg[1])
+        rep_started <= 1'b1;
 end
 
 
