@@ -42,7 +42,7 @@
 module pc98_gvram_display #(
     parameter int DOT_BITS = 10,          // hcount/vcount width
     parameter int LINES    = 400,
-    parameter bit BAND_PROBE = 1'b1      // the black-band JTAG witness
+    parameter bit BAND_PROBE = 1'b0      // the black-band JTAG witness
 ) (
     input  wire        clk,               // fetch side (chipset)
     input  wire        rst,
