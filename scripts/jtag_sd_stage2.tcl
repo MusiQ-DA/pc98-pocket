@@ -131,7 +131,7 @@ proc frames_window {tag T dg base} {
     set t0 [ms]
     set seen 0
     set vs {}
-    set nv 0; set nh 0; set no 0
+    set nv 0; set nh 0; set no 0; set nlow 0
     set lost 0
     array unset pcs
     while {1} {
@@ -141,7 +141,7 @@ proc frames_window {tag T dg base} {
         if {$n - $seen > 56} { incr lost [expr {$n - $seen - 56}]; set seen [expr {$n - 56}] }
         for {} {$seen < $n} {incr seen} {
             lassign [tlog_ent $seen] ax pc
-            if {[inloop $pc $base]} { lappend vs $ax; incr nh } elseif {$pc == $hpc} { incr nv } else {
+            if {[inloop $pc $base]} { lappend vs $ax; if {$ax >= 5} { incr nh } else { incr nlow } } elseif {$pc == $hpc} { incr nv } else {
                 incr no
                 if {[info exists pcs($pc)]} { incr pcs($pc) } else { set pcs($pc) 1 }
             }
@@ -155,13 +155,16 @@ proc frames_window {tag T dg base} {
     # frames = writes from the main loop (scaled up if the harvest fell
     # behind); steady = frames that left the wait with a plausible count
     # (death / Ready presentations reset [0DD0h] elsewhere or after 30+
-    # VSYNCs)
-    set nh_all [expr {$nh + $nv + $no}]
+    # VSYNCs).  The loop only leaves its wait with [0DD0h] >= [1820h] = 5,
+    # so a loop-site write logging AX < 5 is not a waited frame: with the
+    # prefetch windows on at the paced speeds such writes show up in bursts
+    # (AX 0/1) and used to swamp the mean -- they are counted apart (nlow).
+    set nh_all [expr {$nh + $nlow + $nv + $no}]
     set nfr [expr {$nh_all ? round(double($nh) * $n / $nh_all) : 0}]
     set sn 0; set ss 0
     array unset hist
     foreach v $vs {
-        if {$v >= 1 && $v <= 30} { incr sn; incr ss $v }
+        if {$v >= 5 && $v <= 30} { incr sn; incr ss $v }
         if {[info exists hist($v)]} { incr hist($v) } else { set hist($v) 1 }
     }
     set mean [expr {$sn ? double($ss) / $sn : 0}]
@@ -170,7 +173,7 @@ proc frames_window {tag T dg base} {
     set p ""; foreach k [lsort [array names pcs]] { append p [format " %04X:%d" $k $pcs($k)] }
     puts [format "%s frames: %d in %.2f s (%.2f fps raw), VSYNC IRQs serviced %.2f Hz, steady %d x %.3f VSYNC -> %.2f fps, lost=%d frozen=%d" \
           $tag $nfr $dt [expr {$nfr / $dt}] $vsync $sn $mean $sfps $lost $fr]
-    puts "$tag VSYNC/frame histogram:$h  (VSYNC-handler writes $nv, other writes $no:$p)"
+    puts "$tag VSYNC/frame histogram:$h  (loop writes AX<5: $nlow, VSYNC-handler writes $nv, other writes $no:$p)"
     R ${tag}_fps [format %.2f [expr {$nfr / $dt}]]
     R ${tag}_vsync_hz [format %.2f $vsync]
     R ${tag}_vpf [format %.3f $mean]

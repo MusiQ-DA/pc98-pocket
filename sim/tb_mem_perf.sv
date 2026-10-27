@@ -1228,6 +1228,34 @@ module tb_mem_perf;
             lf_end16  = prog_len;
         end
 
+        // ---- phase 13: ALU5 loop x500 -- bench.asm 01 ALU5OP's shape ----
+        // A 12-byte register-only loop that sits inside one 16-byte fetch
+        // line: the paced settings must run it from the fetch buffer, so
+        // its cost is the EU's, never a line load per turn.
+        begin
+            int lp19, ln19, aluofs;
+            aluofs = 1;                          // bench.bin: head at 0x231
+            void'($value$plusargs("aluofs=%d", aluofs));
+            alu_enter = prog_len;
+            marker(8'h13);
+            emit(8'hB9); emitw(16'd500);         // mov cx,500
+            emit(8'hB8); emitw(16'h1234);        // mov ax,1234
+            emit(8'hBB); emitw(16'h9ABC);        // mov bx,9ABC
+            emit(8'hBA); emitw(16'h5555);        // mov dx,5555
+            emit(8'hBE); emitw(16'h0F0F);        // mov si,0F0F
+            emit(8'hBD); emitw(16'h0033);        // mov bp,0033
+            while ((prog_len & 15) != (aluofs & 15)) emit(8'h90);
+            lp19 = prog_len;
+            emit(8'h01); emit(8'hD8);            // add ax,bx
+            emit(8'h11); emit(8'hD0);            // adc ax,dx
+            emit(8'h31); emit(8'hF0);            // xor ax,si
+            emit(8'h29); emit(8'hE8);            // sub ax,bp
+            emit(8'h01); emit(8'hC3);            // add bx,ax
+            emit(8'hE2); ln19 = prog_len; emit(8'h00); // loop lp
+            prog[ln19] = 8'(lp19 - (ln19 + 1));
+            marker(8'h93);
+        end
+
         // done: spin
         marker(8'hFF);
         emit(8'hEB); emit(8'hFE);           // JMP $
@@ -1252,6 +1280,7 @@ module tb_mem_perf;
     int         lf_head16 = 0;
     int         lf_enter = 0;
     int         lf_enter16 = 0;
+    int         alu_enter = 0;      // phase 13 entry (+aluonly)
     int         lf_end16 = 0;
     int         lf_n     = 0;
     logic       lf_req_d = 1'b0;
@@ -1295,7 +1324,8 @@ module tb_mem_perf;
         // ITF timing probe can be run in seconds rather than through the
         // whole 14-minute phase set.
         begin
-            automatic int  jip = $test$plusargs("itfonly") ? lf_enter : 0;
+            automatic int  jip = $test$plusargs("itfonly") ? lf_enter
+                               : $test$plusargs("aluonly") ? alu_enter : 0;
             automatic logic [7:0] jlo = jip[7:0], jhi = jip[15:8];
             ram_seed(32'h0FFFF0, 16'h00EA);
             ram_seed(32'h0FFFF1, 16'h0000 | {8'h00, jlo});
@@ -1836,6 +1866,7 @@ module tb_mem_perf;
         phase_name[8'h10] = "ITF IRQ0 poll loop x32, F-bank mapped";
         phase_name[8'h11] = "REP STOSW 1024W GRCG TDW";
         phase_name[8'h12] = "REP STOSW 1024W GRCG RMW";
+        phase_name[8'h13] = "ALU5 loop x500 (bench 01)";
         phase_name[8'hFF] = "done";
     end
     int phase_bytes [0:255];
@@ -2106,7 +2137,7 @@ module tb_mem_perf;
             // +itfonly starts the guest inside phase 0F, so every earlier
             // phase's data region is untouched: the phase-verify peeks have
             // nothing to say in that mode. The probe prints its own verdict.
-            if ($test$plusargs("itfonly")) begin
+            if ($test$plusargs("itfonly") || $test$plusargs("aluonly")) begin
                 $display("(itfonly: phase verification skipped)");
                 return;
             end

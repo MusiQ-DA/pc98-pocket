@@ -103,6 +103,10 @@ module z86_cache #(
     input  wire         ld_req,         // toggle
     output reg          ld_ack,         // toggle, follows ld_req when done
     output reg [127:0]  ld_data,
+    // The fetch buffer has dropped the line load in flight (a branch or a
+    // store snoop retargeted it): an uncached load stops at the word on
+    // the bus instead of fetching the rest of a line nobody will use.
+    input  wire         ld_drop,
 
     input  wire [19:0]  rd_addr,
     input  wire         rd,             // pulse
@@ -340,8 +344,9 @@ module z86_cache #(
         look_idx = idx_of(c_p);
         if (st == S_IDLE) begin
             if (wr_pend)       look_idx = idx_of(phys_of(wr_addr, bios_shadow));
-            else if (ld_pend)  look_idx = idx_of(phys_of(ld_addr, bios_shadow));
+            // same order as S_IDLE below: a pending read ahead of a load
             else if (rd_any)   look_idx = idx_of(phys_of(rd_cur_a, bios_shadow));
+            else if (ld_pend)  look_idx = idx_of(phys_of(ld_addr, bios_shadow));
         end else if ((st == S_CMP || st == S_SERVE) && c_straddle && !part)
             look_idx = idx_of(phys_of(c_a + 20'd1, bios_shadow));
     end
@@ -583,16 +588,27 @@ module z86_cache #(
                     wb_stb_o <= 1'b1;
                     st       <= S_WWR1;
                 end
-            end else if (ld_pend) begin
+            // Data reads before line loads: a 286's EU cycles take the
+            // bus ahead of the BIU's prefetch, so a pop or operand read
+            // never queues behind a code line. With uncached fetch at the
+            // paced settings that wait was a whole line load per access.
+            end else if (ld_pend && !rd_any) begin
                 if (ld_cached) begin
                     k    <= K_LD;
                     c_a  <= {ld_addr[19:4], 4'h0};
                     c_word <= 1'b0;
                     st   <= S_CMP;
                 end else if (ce && !busy) begin
+                    // Uncached: start at the word the fetch asked for. A
+                    // 286's BIU fetches from the branch target on, never
+                    // the bytes below it; z86's fetch buffer records the
+                    // half's first valid byte (buf_lo) and reloads a
+                    // branch that lands under it. Paced settings price
+                    // every word as a full bus pair, so the line head
+                    // was pure overcharge on every redirect.
                     ld_base  <= {ld_addr[19:4], 4'b0};
-                    ld_i     <= 3'd0;
-                    wb_adr_o <= {ld_addr[19:4], 3'd0};
+                    ld_i     <= ld_addr[3:1];
+                    wb_adr_o <= ld_addr[19:1];
                     wb_sel_o <= 2'b11;
                     wb_we_o  <= 1'b0;
                     wb_tga_o <= 1'b0;
@@ -721,7 +737,7 @@ module z86_cache #(
           // ---------------- uncached: Wishbone, ce edges only ------------
           S_WLD: if (ce && wb_ack_i) begin
             ld_data[16*ld_i +: 16] <= wb_dat_i;
-            if (ld_i == 3'd7) begin
+            if (ld_i == 3'd7 || ld_drop) begin
                 wb_stb_o <= 1'b0;
                 ld_ack   <= ~ld_ack;
                 st       <= S_IDLE;
