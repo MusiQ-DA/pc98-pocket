@@ -19,8 +19,9 @@
 // LEN (lines past the last partition wrap back to the first), and the byte
 // address is that partition's SAD plus the line-in-partition times PITCH --
 // all word counts, shifted left one and wrapped inside the 32 KB plane.
-// Latched at each line edge, so scroll-by-SAD and split screens behave the
-// way software expects them to.
+// The registers are copied once per frame (np21w renders a frame from one
+// PRAM state), so a SCROLL rewrite mid-frame applies to the next frame
+// whole -- see "the frame snapshot".
 //
 // DOMAINS. The fetch FSM runs on the chipset clock with the port-D
 // handshake; the display shift runs on the dot clock the text renderer uses.
@@ -40,7 +41,8 @@
 
 module pc98_gvram_display #(
     parameter int DOT_BITS = 10,          // hcount/vcount width
-    parameter int LINES    = 400
+    parameter int LINES    = 400,
+    parameter bit BAND_PROBE = 1'b1      // the black-band JTAG witness
 ) (
     input  wire        clk,               // fetch side (chipset)
     input  wire        rst,
@@ -66,9 +68,10 @@ module pc98_gvram_display #(
     input  wire  [4:0]  lrep,
 
     // The slave GDC's display registers, live from pc98_gdc on this same
-    // clock. They are latched at each line edge, so a mid-frame rewrite
-    // takes effect from the next rasterline -- which is how the hardware's
-    // scroll (SAD) and split-screen (partitions) actually behave.
+    // clock. They are SNAPSHOT ONCE PER FRAME (see "the frame snapshot"
+    // below) and the whole frame's partition walk runs on that copy -- the
+    // way np21w renders a frame from one PRAM state, so a SCROLL rewrite
+    // that lands mid-frame takes effect from the next frame, never mid-walk.
     input  wire  [7:0]  pitch,            // PITCH register value
     input  wire         mhz5,             // port 0x6A clock field == 3
     input  wire  [15:0] part_sad [0:3],   // partition start, word address
@@ -98,7 +101,10 @@ module pc98_gvram_display #(
 
     // Underrun telemetry for the JTAG probe -- the counters described at
     // the bottom of the file, plus the live FSM/line state.
-    output wire [63:0] dbg
+    output wire [63:0] dbg,
+    // Black-band / PRAM-timing witness for the JTAG probe (slots 0x84-0x86,
+    // scripts/jtag_blackband.tcl) -- see "black-band witness" at the bottom.
+    output wire [95:0] dbg_band
 );
 
     // ---- the scanline, gray-coded across the domains ----------------------
@@ -191,16 +197,70 @@ module pc98_gvram_display #(
     // base for the bursts still to run -- unlatched, one port-0xA4 write
     // would leave a line half from each page for a whole frame.
     logic        fill_page = 1'b0;
-    // The 0xA4 page bit is applied at the FRAME boundary, not per line. The
-    // uPD7220 display page changes on the vertical retrace; DEPTH.EXE flips
-    // 0xA4 in the middle of its frame loop, so per-line sampling tore the
-    // frame into the old page above the flip point and the freshly cleared
-    // page below it -- the tens-of-lines black band that rode the transition.
-    // np21w can sample gdcs.disp per line because it renders whole frames.
-    logic        disp_page_f = 1'b0;
+
+    // ---- the frame snapshot ------------------------------------------------
+    //
+    // np21w draws a frame in one go -- pccore.c screendisp() (the end of the
+    // vsync flag interval, i.e. the start of display line 0) calls
+    // drawscreen() -> makegrph(gdcs.disp, ...), and makegrph walks the
+    // partitions straight out of gdc.s.para[GDC_SCROLL..] / [GDC_PITCH] /
+    // [GDC_CSRFORM] with the page from gdcs.disp. Every displayed line of
+    // that frame therefore comes from ONE PRAM state; a SCROLL write that
+    // lands while the raster runs is simply seen by the next frame.
+    //
+    // This walk runs incrementally and LOOKAHEAD lines ahead of the raster,
+    // so it copies that state once: at line SNAP_PT, a couple of lines
+    // before the first fill of the frame launches (targets 0..2 launch at
+    // the line edges 437..439, inside the blank). Everything the walk
+    // reads -- all four SAD/LEN/pitch-unit triples, PITCH, the LR stride
+    // and the 0xA4 page -- comes from the copy for the whole frame.
+    //
+    // Why every field and not just SAD: DEPTH.EXE's "Clear!" wipe (loop
+    // 0x2E7A5, SCROLL writer 0x30B20) rewrites SAD0/LEN0/SAD1/LEN1 once a
+    // frame after its GRCG drawing, i.e. at an arbitrary raster line. With
+    // live LEN under an already-started walk, partition 0 ran on the old
+    // SAD0 for the NEW (four-longer) LEN0 -- four lines past the VRAM's
+    // 400th, then partition 1 four lines short: a seam that slid down the
+    // screen with the wipe. Latching only SAD (918bd95, reverted) still
+    // paired the frame-old SAD with the live LEN.
+    //
+    // SNAP_PT is four lines (~160 us) ahead of np21w's instant; a write that
+    // lands in that window shows one frame later than np21w, never torn.
+    localparam int SNAP_PT = V_LINES - LOOKAHEAD - 2;   // 435
+    wire         snap_now = line_edge && (line_now == 9'(SNAP_PT));
+    // SAD bits 15:14 never reach the address (np21w `LOW15(vad << 1)`), so
+    // only the fourteen that do are copied.
+    logic [13:0] sn_sad [0:3];
+    logic [9:0]  sn_len [0:3];
+    logic [3:0]  sn_pb   = 4'h0;          // per partition: pitch counts bytes
+    logic [7:0]  sn_pitch = 8'd0;
+    logic [4:0]  sn_lr   = 5'd1;          // mg.lr, rasterlines per vad step
+    logic        sn_page = 1'b0;          // 0xA4 display page (gdcs.disp)
+    // mg.lr: programmed LR+1 when CSRFORM carries it, else the doubled-mode
+    // default of two rasterlines per line so the AL<256 heuristic keeps
+    // fetching each line twice.
+    wire  [4:0]  live_lr = (lrep != 5'd0) ? (lrep + 5'd1)
+                                          : (dbl ? 5'd2 : 5'd1);
+    // The pitch unit has two selectors in np21w -- makegrph.c tests the
+    // partition's LEN bit 14, maketgrp.c (the text+graphics composite)
+    // tests the 5MHz clock flag; either marks PITCH as counting bytes.
+    wire  [3:0]  live_pb = part_pbyte | {4{mhz5}};
     always_ff @(posedge clk) begin
-        if (line_edge && (line_now == 9'd0))
-            disp_page_f <= disp_page;
+        if (snap_now) begin
+            for (int i = 0; i < 4; i++) begin
+                sn_sad[i] <= part_sad[i][13:0];
+                sn_len[i] <= part_len[i];
+            end
+            sn_pb    <= live_pb;
+            sn_pitch <= pitch;
+            sn_lr    <= live_lr;
+            // The 0xA4 page bit rides in the same copy: the uPD7220's page
+            // follows the frame, and DEPTH.EXE flips 0xA4 mid-loop -- per-
+            // line sampling tore the frame into two pages (e97d1a6). It is
+            // taken HERE rather than at line 0 so the frame's first three
+            // lines (fetched in the blank) use the same page as the rest.
+            sn_page  <= disp_page;
+        end
     end
     function automatic [23:0] plane_base(input [1:0] p);
         if (fill_page)
@@ -230,7 +290,7 @@ module pc98_gvram_display #(
     //
     // The walk leads the raster by LOOKAHEAD lines: when the edge for
     // line_now fires, run_base holds the byte offset of display line
-    // (line_now + LOOKAHEAD) mod LINES -- the line the fill launched here
+    // (line_now + LOOKAHEAD) mod V_LINES -- the line the fill launched here
     // must bring in -- and the step moves it one line further. That gives a
     // fill roughly three line times to land (~5200 chipset clocks against a
     // ~1730-clock budget that the four-port round robin can occasionally
@@ -240,52 +300,45 @@ module pc98_gvram_display #(
     logic [9:0]  part_rel  = 10'd0;     // rasterlines spent in the partition
     logic [14:0] run_base  = 15'd0;     // byte offset of the walked line
 
-    // The line the next fill must bring in, wrapped into the display range.
-    // line_now runs 0..439 but a fill only launches while line_now < LINES,
-    // so the sum tops out at 402 and one subtract covers the wrap: at edges
-    // 397..399 the targets are next frame's lines 0..2.
+    // The line the next fill must bring in, modulo the whole V_LINES raster:
+    // the frame's first three lines are fetched at the edges 437..439,
+    // inside the blank and AFTER the snapshot -- not at 397..399 off the
+    // previous frame's state. Only targets the plane actually shows (below
+    // the vshift offset, above line LINES) launch a fill or step the walk.
     wire [9:0] tgt_sum  = {1'b0, line_now} + 10'(LOOKAHEAD);
-    wire [8:0] fill_tgt = (tgt_sum >= 10'(LINES)) ? 9'(tgt_sum - 10'(LINES))
-                                                : 9'(tgt_sum);
+    wire [8:0] fill_tgt = (tgt_sum >= 10'(V_LINES)) ? 9'(tgt_sum - 10'(V_LINES))
+                                                  : 9'(tgt_sum);
+    wire       tgt_vis  = (fill_tgt < 9'(LINES)) && (fill_tgt >= {3'd0, vshift});
 
     // np21w vram/makegrph.c grphput_indirty0: per OUTPUT rasterline the
     // partition's remaining LEN decrements (`remain--; if (!remain)`), and
     // independently a `mul` counter steps the VRAM address by PITCH every
     // `mg.lr` rasterlines (`mul--; if (!mul) { mul = mg.lr; vad += pitch; }`).
-    // The pitch unit has two selectors in np21w -- makegrph.c tests the
-    // partition's LEN bit 14, maketgrp.c (the text+graphics composite)
-    // tests the 5MHz clock flag, and either marks the register as counting
-    // bytes; otherwise it counts words and is doubled into bytes. Both
-    // `&= 0xfe` floor it even.
-    wire  [8:0]  pitch_b  = (part_pbyte[cur_part] | mhz5)
-                                              ? {1'b0, pitch[7:1], 1'b0}
-                                              : {1'b0, pitch[6:0], 1'b0};
-    wire  [9:0]  cur_len  = part_len[cur_part];
+    // PITCH counts bytes when the snapshot's pitch-unit bit is set, else
+    // words doubled into bytes; both `&= 0xfe` floor it even.
+    wire  [8:0]  pitch_b  = sn_pb[cur_part] ? {1'b0, sn_pitch[7:1], 1'b0}
+                                            : {1'b0, sn_pitch[6:0], 1'b0};
+    wire  [9:0]  cur_len  = sn_len[cur_part];
     // The next partition CYCLICALLY -- np21w's s_scrp mask wraps partition
     // three back to partition zero, so the bare `+1` index must wrap too
     // (an unmasked cur_part=3 read lands one slot past the array).
-    wire  [15:0] sad_next = part_sad[(cur_part + 2'd1) & 2'd3];
-    // mg.lr: programmed LR+1 when CSRFORM carries it, else the doubled-mode
-    // default of two rasterlines per line so the AL<256 heuristic keeps
-    // fetching each line twice.
-    wire  [4:0]  mul_lr   = (lrep != 5'd0) ? (lrep + 5'd1)
-                                         : (dbl ? 5'd2 : 5'd1);
+    wire  [13:0] sad_next = sn_sad[(cur_part + 2'd1) & 2'd3];
     logic [4:0]  mul_q    = 5'd1;         // rasterlines to the next vad step
-    // With vshift the plane's walk still has to put run_base = SAD[0] on the
-    // fill whose target is the first shifted line: the reset edge moves from
-    // LINES-1-LOOKAHEAD by the same amount the picture does, mod LINES.
-    // (vshift < 4 wraps the point back to the frame's tail.)
+    // The walk restarts at SAD0 on the edge whose target is the line just
+    // above the plane's first (vshift - 1, mod V_LINES): the next edge's
+    // fill then reads SAD0 for line vshift. That is line 436 + vshift, mod
+    // V_LINES -- always after SNAP_PT, so the restart reads the frame's own
+    // snapshot.
     wire  [8:0]  wrap_pt  = (vshift >= 6'd4) ? {3'd0, vshift} - 9'd4
-                                           : {3'd0, vshift} + 9'd396;
+                                           : {3'd0, vshift} + 9'(V_LINES - 4);
     wire         w_wrap   = (line_now == wrap_pt);
     // Advance when this rasterline was the partition's last -- a zero LEN
     // never advances (the absorbing case above), and the pointer wraps
     // mod 4 so partition three's end reopens partition zero.
-    wire         w_adv    = !w_wrap && (cur_len != 10'd0)
+    wire         w_adv    = (cur_len != 10'd0)
                        && (({1'b0, part_rel} + 11'd1) >= {1'b0, cur_len});
     wire         w_pstep  = (mul_q <= 5'd1);
-    wire  [14:0] base_next = w_wrap  ? 15'(part_sad[0] << 1)
-                          : w_adv   ? 15'(sad_next << 1)
+    wire  [14:0] base_next = w_adv   ? {sad_next, 1'b0}
                           : w_pstep ? run_base + 15'(pitch_b)
                           :           run_base;
 
@@ -295,10 +348,15 @@ module pc98_gvram_display #(
             part_rel <= 10'd0;
             mul_q    <= 5'd1;
             run_base <= 15'd0;
-        end else if (line_edge && (line_now < 9'(LINES))) begin
-            cur_part <= w_wrap ? 2'd0 : w_adv ? cur_part + 2'd1 : cur_part;
-            part_rel <= (w_wrap || w_adv) ? 10'd0 : part_rel + 10'd1;
-            mul_q    <= (w_wrap || w_adv || w_pstep) ? mul_lr : mul_q - 5'd1;
+        end else if (line_edge && w_wrap) begin
+            cur_part <= 2'd0;
+            part_rel <= 10'd0;
+            mul_q    <= sn_lr;
+            run_base <= {sn_sad[0], 1'b0};
+        end else if (line_edge && tgt_vis) begin
+            cur_part <= w_adv ? cur_part + 2'd1 : cur_part;
+            part_rel <= w_adv ? 10'd0 : part_rel + 10'd1;
+            mul_q    <= (w_adv || w_pstep) ? sn_lr : mul_q - 5'd1;
             run_base <= base_next;
         end
     end
@@ -351,18 +409,15 @@ module pc98_gvram_display #(
                 // graphics at all (the plane starts lower), so no fill
                 // launches for them -- the stale bank never shows because
                 // the display side blanks those lines.
-                if (disp_on_c && line_edge && (line_now < 9'(LINES))
-                    && (fill_tgt >= {3'd0, vshift})) begin
+                if (disp_on_c && line_edge && tgt_vis) begin
                     // A new line just began: fill the one LOOKAHEAD lines
                     // out into its own bank. The walk is already positioned
-                    // at that target, so run_base is its byte offset --
-                    // latching both freezes them for the whole fill against
-                    // a mid-line SAD/PITCH rewrite. The page bit latches
-                    // with them: per-line atomic, the way np21w's makegrph
-                    // samples gdcs.disp.
+                    // at that target, so run_base is its byte offset; the
+                    // page is the frame snapshot's (sn_page is stable for
+                    // the whole frame, fill_page just pins it per fill).
                     fill_base <= run_base;
                     fill_bank <= fill_tgt[1:0];
-                    fill_page <= disp_page_f;
+                    fill_page <= sn_page;
                     act_tgt   <= fill_tgt;
                     f_plane   <= 3'd0;
                     f_chunk   <= 4'd0;
@@ -455,7 +510,7 @@ module pc98_gvram_display #(
                 fill_tmr <= 16'd0;
                 if (fill_tmr > max_fill) max_fill <= fill_tmr;
             end
-            if (disp_on_c && line_edge && (line_now < 9'(LINES)) && f_active
+            if (disp_on_c && line_edge && tgt_vis && f_active
                 && (skip_cnt != 8'hff))
                 skip_cnt <= skip_cnt + 8'd1;
             if (line_edge && f_active && (act_tgt == line_now)
@@ -476,6 +531,98 @@ module pc98_gvram_display #(
     // (ITF trace F8042F) gives index 1 blue, 2 red, 4 green -- so the bit
     // the B0000 window produced is index bit 1, the B8000 window bit 2.
     assign gfx_dot = (disp_on & vis_q) ? {pe, pg, pr, pb} : 4'd0;
+
+    // ---- black-band witness (JTAG slots 0x84-0x86) -------------------------
+    //
+    // Two questions the "Clear!" wipe raises on hardware, answered without a
+    // frame grab:
+    //  * how tall is the worst run of consecutive graphics lines whose 640
+    //    dots are ALL palette index 0, and where does it start -- for the
+    //    last finished frame (lmax/lstart) and the worst frame since power-
+    //    up (wmax/wstart), plus how many frames carried a run >= BAND_MIN
+    //    (band_cnt). Lines above a nonzero vshift are blank by design and
+    //    count as black. Frames with the slave display stopped are skipped.
+    //  * how many frames ran on a PRAM snapshot that the guest rewrote
+    //    while the frame was being shown (pram_cnt): the live SAD/LEN/
+    //    pitch-unit/PITCH differed from the frame's copy at some point
+    //    during lines 0..399. Each such write is deferred to the next frame
+    //    by design; a pre-snapshot model would have torn that frame there.
+    // The band fields live in rd_clk and are read raw by the probe -- they
+    // only move once per frame, so a torn read is a one-off, not a trend.
+    // BAND_PROBE=0 drops the witness (dbg_band reads zero) if the LABs are
+    // ever needed back.
+    generate if (BAND_PROBE) begin : g_band
+        localparam int BAND_MIN = 8;
+        logic        bw_lit    = 1'b0;      // a nonzero dot on this line so far
+        logic [8:0]  bw_run    = 9'd0;      // current run of black lines
+        logic [8:0]  bw_fmax   = 9'd0, bw_fstart = 9'd0;
+        logic [8:0]  bw_lmax   = 9'd0, bw_lstart = 9'd0;
+        logic [8:0]  bw_wmax   = 9'd0, bw_wstart = 9'd0;
+        logic [15:0] band_cnt  = 16'd0;
+        // gfx_dot trails hcount by one rd_clk, so dots 0..639 land at hcount
+        // 1..640; the line verdict is taken well after that, at hcount 700.
+        wire         bw_eval   = (hcount == 10'd700);
+        wire  [8:0]  bw_run1   = bw_run + 9'd1;
+        always_ff @(posedge rd_clk) begin
+            if (hcount == 10'd0)
+                bw_lit <= 1'b0;
+            else if (gfx_dot != 4'd0)
+                bw_lit <= 1'b1;
+            if (bw_eval && (vcount < 10'(LINES))) begin
+                if (bw_lit)
+                    bw_run <= 9'd0;
+                else begin
+                    bw_run <= bw_run1;
+                    if (bw_run1 > bw_fmax) begin
+                        bw_fmax   <= bw_run1;
+                        bw_fstart <= vcount[8:0] - bw_run;
+                    end
+                end
+            end
+            if (bw_eval && (vcount == 10'(LINES))) begin
+                bw_lmax   <= bw_fmax;
+                bw_lstart <= bw_fstart;
+                if (disp_on) begin
+                    if ((bw_fmax >= 9'(BAND_MIN)) && (band_cnt != 16'hffff))
+                        band_cnt <= band_cnt + 16'd1;
+                    if (bw_fmax > bw_wmax) begin
+                        bw_wmax   <= bw_fmax;
+                        bw_wstart <= bw_fstart;
+                    end
+                end
+                bw_fmax <= 9'd0;
+                bw_run  <= 9'd0;
+            end
+        end
+
+        logic        pc_seen  = 1'b0;
+        logic [15:0] pram_cnt = 16'd0;
+        wire         pram_diff =
+               (live_pb != sn_pb) || (pitch != sn_pitch)
+            || (part_sad[0][13:0] != sn_sad[0]) || (part_len[0] != sn_len[0])
+            || (part_sad[1][13:0] != sn_sad[1]) || (part_len[1] != sn_len[1])
+            || (part_sad[2][13:0] != sn_sad[2]) || (part_len[2] != sn_len[2])
+            || (part_sad[3][13:0] != sn_sad[3]) || (part_len[3] != sn_len[3]);
+        always_ff @(posedge clk) begin
+            if (rst) begin
+                pc_seen  <= 1'b0;
+                pram_cnt <= 16'd0;
+            end else begin
+                if (disp_on_c && (line_q < 9'(LINES)) && pram_diff)
+                    pc_seen <= 1'b1;
+                if (line_edge && (line_now == 9'(LINES))) begin
+                    if (pc_seen && (pram_cnt != 16'hffff))
+                        pram_cnt <= pram_cnt + 16'd1;
+                    pc_seen <= 1'b0;
+                end
+            end
+        end
+        assign dbg_band = { band_cnt, pram_cnt,
+                            7'd0, bw_lstart, 7'd0, bw_lmax,
+                            7'd0, bw_wstart, 7'd0, bw_wmax };
+    end else begin : g_noband
+        assign dbg_band = 96'd0;
+    end endgenerate
 
 endmodule
 

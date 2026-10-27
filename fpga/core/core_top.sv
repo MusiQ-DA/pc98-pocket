@@ -2209,6 +2209,18 @@ module core_top (
             // disp_page, disp_on_c, fill_page, f_active}.
             8'h82:   probe_data_c = dbg_gvdisp[31:0];
             8'h83:   probe_data_c = dbg_gvdisp[63:32];
+            // 0x84-0x86: the graphics display's black-band / PRAM-timing
+            // witness (pc98_gvram_display; scripts/jtag_blackband.tcl).
+            // 0x84 {band_cnt[15:0], pram_cnt[15:0]} -- frames with a run
+            //      of >=8 all-black graphics lines / frames whose PRAM was
+            //      rewritten while shown (deferred to the next frame).
+            // 0x85 {7'0, last_start[8:0], 7'0, last_max[8:0]} -- the
+            //      longest black run of the last finished frame.
+            // 0x86 {7'0, worst_start[8:0], 7'0, worst_max[8:0]} -- the
+            //      longest black run of any frame since power-up.
+            8'h84:   probe_data_c = dbg_gvband[95:64];
+            8'h85:   probe_data_c = dbg_gvband[63:32];
+            8'h86:   probe_data_c = dbg_gvband[31:0];
             // 0x35: BIOS-side milestones + the 0x43D write tally
             // {bios_branch[7:0], in42_count, last_42_rdata,
             //  w43d_10_count[3:0], w43d_12_count[3:0]}
@@ -3530,6 +3542,7 @@ module core_top (
                              // {disp_on,page,analog,5MHz,dbl,LR,AL,PITCH} lo
     wire [63:0]  dbg_gvdisp;   // graphics display fetch: {line,fill FSM} hi,
                              // {skip,late,max_fill} lo
+    wire [95:0]  dbg_gvband;   // graphics black-band / PRAM-timing witness (0x84-0x86)
     wire [63:0]  dbg_crt;      // CRT IRQ2: {fire,isr,arm,lost,cancel} hi,
                              // {IMR,ISR,IRR,spur,pend,armed,int} lo
 
@@ -3854,6 +3867,7 @@ module core_top (
         .dbg_gdc_s2                         (dbg_gdc_s2),
         .dbg_gdc_s3                         (dbg_gdc_s3),
         .dbg_gvdisp                         (dbg_gvdisp),
+        .dbg_gvband                         (dbg_gvband),
         .dbg_crt                            (dbg_crt),
         .wait_count_clk_en                  (cpu_ce_negedge),
         .ram_read_wait_cycle                (ram_read_wait_cycle),

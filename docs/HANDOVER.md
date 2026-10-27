@@ -185,7 +185,13 @@ word batch 分は残る。bench の marker は `jtag_bench.sh` 既定の "Execut
   **4ライン/フレーム × 68回** スクロール（0x2E78C で port 0x60 bit5 ウェイト）。
   同時に 0xA4/0xA6 でページ切替。
 - **np2kai では黒帯ゼロ**（733フレーム全文面検査）→ Pocket 固有 → 918bd95 で SAD/pitch を
-  フレーム境界ラッチして対策。**実機での効果確認はまだ**。
+  フレーム境界ラッチして対策（69f745c で revert 済み）。
+- **gdc-frame-snapshot ブランチ**: pc98_gvram_display が PRAM 全体（SAD/LEN/pitch単位×4、PITCH、
+  LR、0xA4 ページ）を 1 フレーム 1 回（line 435）スナップショットし、フレーム全体をそれで walk
+  （np21w screendisp→makegrph と同じ「1フレーム=1 PRAM 状態」）。旧 RTL は LEN だけ live で
+  継ぎ目に VRAM 400 行目以降（黒）が 4〜8 行出ていた。`sim/tb_gvram_depth_wipe.sv` が 68 ステップを
+  np21w モデルと行単位で照合。実機確認は `scripts/jtag_blackband.tcl`（スロット 0x84-0x86）で
+  ワイプ前後の band_cnt / pram_cnt を差分。
 - 道具: `/tmp/opencode/np2run3`（np2run.c 拡張: NP2KEYS/NP2POKE/NP2SHOTDIR/NP2WATCH/
   NP2WATCHPOST/NP2DUMPAT）、`/tmp/opencode/sd_work/`（depth_tr.exe, dump.py, flocate.py,
   ffind.py, rwalk.py）、`/tmp/opencode/depth_disasm.txt`（live アドレス逆アセンブル）。
@@ -229,6 +235,8 @@ word batch 分は残る。bench の marker は `jtag_bench.sh` 既定の "Execut
 | 0x18 | pc_cursor（バスアドレス） |
 | 0x35 | BIOS POST マイルストーン (FD80x) + PIT in42 回数 + w43d_10/12 回数 |
 | 0x89 | pf/speed 制御（bit3=pf, sel=speed）— 電源投入でリセット |
+| 0x84 | 黒帯 witness `{band_cnt, pram_cnt}`（≥8 行の全黒ラン有フレーム数 / 表示中に PRAM 書換えのあったフレーム数）— `scripts/jtag_blackband.tcl` |
+| 0x85/0x86 | 直近フレーム / 起動以来最悪の最長全黒ラン `{start, len}`（各 9bit） |
 | 0x90 | エントリ経路 witness (cold/warm/F0) |
 | 0x9D | rst_raw/rst_real（PLL-unlock ブリップ検出） |
 | 0x9E/0x9F | ドロップ数 / parked-write カウント（0xFFFF 飽和=FWコピー走った） |
