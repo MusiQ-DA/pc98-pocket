@@ -344,8 +344,9 @@ module z86_cache #(
         look_idx = idx_of(c_p);
         if (st == S_IDLE) begin
             if (wr_pend)       look_idx = idx_of(phys_of(wr_addr, bios_shadow));
-            else if (ld_pend)  look_idx = idx_of(phys_of(ld_addr, bios_shadow));
+            // same order as S_IDLE below: a pending read ahead of a load
             else if (rd_any)   look_idx = idx_of(phys_of(rd_cur_a, bios_shadow));
+            else if (ld_pend)  look_idx = idx_of(phys_of(ld_addr, bios_shadow));
         end else if ((st == S_CMP || st == S_SERVE) && c_straddle && !part)
             look_idx = idx_of(phys_of(c_a + 20'd1, bios_shadow));
     end
