@@ -68,7 +68,22 @@ proc rdabs {off} {
     }
     return -1
 }
-proc w16 {a} { return [expr {[rdabs $a] | ([rdabs [expr {$a+1}]]<<8)}] }
+proc w16raw {a} {
+    set lo [rdabs $a]; set hi [rdabs [expr {$a+1}]]
+    if {$lo < 0 || $hi < 0} { return -1 }
+    return [expr {$lo | ($hi << 8)}]
+}
+# a live counter can carry between the two byte reads, and a read can time
+# out while the guest holds the bus: take two agreeing reads
+proc w16 {a} {
+    set prev [w16raw $a]
+    for {set i 0} {$i < 8} {incr i} {
+        set v [w16raw $a]
+        if {$v >= 0 && $prev >= 0 && (($v - $prev) & 0xFFFF) <= 2} { return $v }
+        set prev $v
+    }
+    return $v
+}
 proc ms {} { return [clock milliseconds] }
 proc R {k v} { puts "R $k=$v"; flush stdout }
 proc envd {k d} { return [expr {[info exists ::env($k)] ? $::env($k) : $d}] }
@@ -97,10 +112,18 @@ proc tlog_ent {i} {
 }
 
 # Game frames over T seconds.  Every write to [0DD0h] is logged: the VSYNC
-# handler's `inc` (fetch PC = handler entry, module 0xBB42) and the main
-# loop's per-frame `mov [0DD0h],0`, whose logged AX is the VSYNC count the
+# handler's `inc` and the main loop's per-frame `mov [0DD0h],0`, whose logged AX is the VSYNC count the
 # frame waited for (the loop just did `mov ax,[0DD0h] / cmp ax,[1820h]`).
 # Harvested from the 64-entry ring every ~0.3 s.
+# The logged PC is the fetch stream's last redirect: the main loop's
+# reset logs the return address of its `call 0BB38h` (module 0x1F7B stage
+# 1, 0x37EF stage 2) or a nearby restart, the VSYNC handler's inc its entry
+# (at slow speeds the write can land after the handler's own redirects, so
+# only the loop sites are trusted as frames).
+proc inloop {pc base} {
+    set m [expr {($pc - $base) & 0xFFFF}]
+    return [expr {($m >= 0x1F70 && $m < 0x1F90) || ($m >= 0x37E0 && $m < 0x3805)}]
+}
 proc frames_window {tag T dg base} {
     set hpc [expr {($base + 0xBB42) & 0xFFFF}]
     set dd0 [w16 [expr {$dg + 0xDD2}]]
@@ -108,7 +131,7 @@ proc frames_window {tag T dg base} {
     set t0 [ms]
     set seen 0
     set vs {}
-    set nv 0
+    set nv 0; set nh 0; set no 0
     set lost 0
     array unset pcs
     while {1} {
@@ -118,8 +141,8 @@ proc frames_window {tag T dg base} {
         if {$n - $seen > 56} { incr lost [expr {$n - $seen - 56}]; set seen [expr {$n - 56}] }
         for {} {$seen < $n} {incr seen} {
             lassign [tlog_ent $seen] ax pc
-            if {$pc == $hpc} { incr nv } else {
-                lappend vs $ax
+            if {[inloop $pc $base]} { lappend vs $ax; incr nh } elseif {$pc == $hpc} { incr nv } else {
+                incr no
                 if {[info exists pcs($pc)]} { incr pcs($pc) } else { set pcs($pc) 1 }
             }
         }
@@ -129,15 +152,16 @@ proc frames_window {tag T dg base} {
     set fr [tlog_frozen]
     set dt [expr {($t1 - $t0) / 1000.0}]
     set vsync [expr {(($dd1 - $dd0) & 0xFFFF) / $dt}]
-    # frames = all logged writes minus the VSYNC increments (exact even if
-    # the harvest fell behind); steady = frames that left the wait with a
-    # plausible count (death / Ready presentations reset [0DD0h] elsewhere
-    # or after 30+ VSYNCs)
-    set nfr [expr {$n - (($dd1 - $dd0) & 0xFFFF)}]
+    # frames = writes from the main loop (scaled up if the harvest fell
+    # behind); steady = frames that left the wait with a plausible count
+    # (death / Ready presentations reset [0DD0h] elsewhere or after 30+
+    # VSYNCs)
+    set nh_all [expr {$nh + $nv + $no}]
+    set nfr [expr {$nh_all ? round(double($nh) * $n / $nh_all) : 0}]
     set sn 0; set ss 0
     array unset hist
     foreach v $vs {
-        if {$v >= 1 && $v <= 15} { incr sn; incr ss $v }
+        if {$v >= 1 && $v <= 30} { incr sn; incr ss $v }
         if {[info exists hist($v)]} { incr hist($v) } else { set hist($v) 1 }
     }
     set mean [expr {$sn ? double($ss) / $sn : 0}]
@@ -146,7 +170,7 @@ proc frames_window {tag T dg base} {
     set p ""; foreach k [lsort [array names pcs]] { append p [format " %04X:%d" $k $pcs($k)] }
     puts [format "%s frames: %d in %.2f s (%.2f fps raw), VSYNC IRQs serviced %.2f Hz, steady %d x %.3f VSYNC -> %.2f fps, lost=%d frozen=%d" \
           $tag $nfr $dt [expr {$nfr / $dt}] $vsync $sn $mean $sfps $lost $fr]
-    puts "$tag VSYNC/frame histogram:$h  (reset sites:$p)"
+    puts "$tag VSYNC/frame histogram:$h  (VSYNC-handler writes $nv, other writes $no:$p)"
     R ${tag}_fps [format %.2f [expr {$nfr / $dt}]]
     R ${tag}_vsync_hz [format %.2f $vsync]
     R ${tag}_vpf [format %.3f $mean]
@@ -199,8 +223,12 @@ puts [format "DEPTH base=%05X DGROUP=%05X ISR=%05X" $base $dg [expr {$base + 0xD
 R base [format %05X $base]
 
 proc stage {} { return [w16 [expr {$::dg + 0x1818}]] }
-set t0 [ms]
-while {[stage] != 1 && [ms] - $t0 < 30000} { after 250 }
+# a slow speed may still be loading the title at W: press START again
+for {set try 0} {$try < 4 && [stage] != 1} {incr try} {
+    if {$try > 0} { puts "no stage 1 yet -- START again"; wr 1 0x1C; after 300; wr 1 0x9C }
+    set t0 [ms]
+    while {[stage] != 1 && [ms] - $t0 < 15000} { after 250 }
+}
 if {[stage] != 1} { puts "stage 1 never started (START not taken?)"; R verdict NOSTART; wr 9 0; shutdown; exit 1 }
 set ts1 [ms]
 puts "stage 1 running"

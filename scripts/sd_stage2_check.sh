@@ -55,7 +55,8 @@ if [ -z "${NOLOAD:-}" ]; then
 fi
 
 echo "== run (slot9=$P) =="
-P=$P W=${W:-45} T1=${T1:-10} T2=${T2:-15} openocd \
+[ "$SPD" = turbo ] && WDEF=45 || WDEF=70
+P=$P W=${W:-$WDEF} T1=${T1:-10} T2=${T2:-15} openocd \
     -f scripts/jtag_probe.cfg -f scripts/jtag_sd_stage2.tcl 2>&1 \
     | grep -v "^Info\|^Warn\|clock speed\|TapName\|^Open On\|^Licensed\|openocd.org\|DEPRECATED\|^shutdown" \
     | tee "$LOG"
