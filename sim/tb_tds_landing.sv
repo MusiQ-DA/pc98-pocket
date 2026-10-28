@@ -110,7 +110,7 @@ module tb_tds_landing;
 
     // disk_tds.c's tds_transfer_to, minus the wait.
     task automatic fw_issue(input [31:0] baddr, input [31:0] len, input [1:0] dir);
-        while (apf_busy) @(posedge clk_74a);
+        while (apf_busy || cmd_edges != cmd_handled) @(posedge clk_74a);
         fw_wr(8'h20, 32'd3);
         fw_wr(8'h24, 32'h0004A800);
         fw_wr(8'h28, baddr);
@@ -157,17 +157,26 @@ module tb_tds_landing;
 
     // The APF: on a command edge go busy (ack), then complete per apf_mode.
     // done stays high until the next command, as core_bridge_cmd holds it.
+    // Command edges are caught by a plain always block and handed to the
+    // host process as a sticky flag (Verilator 5.020's --timing scheduler
+    // mis-orders an NBA edge detector inside an initial/forever loop).
     reg rd_d = 0, wr_d = 0;
+    integer cmd_edges = 0, cmd_handled = 0;
+    always @(posedge clk_74a) begin
+        rd_d <= tds_rd;
+        wr_d <= tds_wr;
+        if ((tds_rd && !rd_d) || (tds_wr && !wr_d)) cmd_edges <= cmd_edges + 1;
+    end
     reg apf_busy = 0;
     integer apf_cmds = 0;
     initial begin
         forever begin
             @(posedge clk_74a);
-            rd_d <= tds_rd; wr_d <= tds_wr;
-            if ((tds_rd && !rd_d) || (tds_wr && !wr_d)) begin : cmd
+            if (cmd_edges != cmd_handled) begin : cmd
                 integer nw;
                 reg is_rd;
                 is_rd = tds_rd;
+                cmd_handled = cmd_handled + 1;
                 apf_busy = 1;
                 apf_cmds = apf_cmds + 1;
                 nw = (apf_words >= 0) ? apf_words : (tds_len + 3) / 4;
