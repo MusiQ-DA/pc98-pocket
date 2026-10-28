@@ -158,7 +158,10 @@ module softcpu_subsystem (
     // JTAG-probe window into this domain (core_top slot 0x2A): fetch/poll
     // counters plus the OSD-request and trap flags -- the only way to tell a
     // dead softcore from a dead OSD path from outside.
-    output [31:0] dbg_pico
+    output [31:0] dbg_pico,
+    // Dataslot landing-gate witness (softcpu_fdd_bridge tds_dbg, clk_74a
+    // counters sampled raw): {early APF completions, read commands}.
+    output [31:0] dbg_tds
 );
 
     //
@@ -1130,7 +1133,8 @@ module softcpu_subsystem (
         .target_dataslot_done       (target_dataslot_done),
         .target_dataslot_err        (target_dataslot_err),
 
-        .bridge_rd_data_out (bridge_rd_data_out)
+        .bridge_rd_data_out (bridge_rd_data_out),
+        .tds_dbg    (dbg_tds)
     );
 
     //

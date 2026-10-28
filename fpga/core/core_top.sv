@@ -1176,6 +1176,7 @@ module core_top (
 `endif
 
     wire [31:0] dbg_pico_w;    // pico-domain liveness for probe slot 0x2A
+    wire [31:0] dbg_tds_w;     // dataslot landing-gate witness, probe slot 0x6C
 
     softcpu_subsystem u_softcpu (
         .fw_wr_clk                  (clk_chipset),
@@ -1272,7 +1273,8 @@ module core_top (
         .st_done                    (st_done_w),
         .st_rdata                   (st_rdata_w),
         .accel_status               (accel_status_w),
-        .dbg_pico                   (dbg_pico_w)
+        .dbg_pico                   (dbg_pico_w),
+        .dbg_tds                    (dbg_tds_w)
     );
 
 `ifdef PC98_JTAG
@@ -2376,6 +2378,11 @@ module core_top (
             // osd_open_req live}. A frozen fetch word is a dead pico; a
             // frozen poll byte beside a moving fetch word is a wedged loop.
             8'h2a:   probe_data_c = dbg_pico_w;
+            // 0x6C: the disk bridge's landing gate -- {APF read completions
+            // that arrived before their data[15:0], read commands[15:0]}
+            // (softcpu_fdd_bridge). A moving high half is the gate holding
+            // back a done the firmware would otherwise have trusted.
+            8'h6c:   probe_data_c = dbg_tds_w;
             // 0xA0-0xA7: every OSD setting, four per slot (settings_ui.c's
             // SET_* index order): slot 0xA0+g = {set[4g+3] .. set[4g]}.
             8'ha0,8'ha1,8'ha2,8'ha3,8'ha4,8'ha5,8'ha6,8'ha7:
