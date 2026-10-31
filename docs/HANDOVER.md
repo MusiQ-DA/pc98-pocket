@@ -405,6 +405,34 @@ ph  class body                            286     8MHz  ratio    10MHz  ratio   
      表示ポート D が 33% 占有）を 3 回直列に待つ。書きは ≈ 2。TDW は ≈ 1.15 µs/ワード（目標 1.0）。0xFF/0x00 の読み省略は
      既に入っている。これ以上はプレーン読みの並行化かプレーン配置の変更（SDRAM・表示側）が要る。
      z86 回帰（free / +pace +pacew=1）全 green。`sim/cycle_table_baseline.txt` は (1)+(2) で取り直した。
+   - **step 4: 「各処理が実機並み」へ（`cycle-bench`、2026-10-31、CI #1040 で fit 18,306 / 18,480 ALM・LAB 1,845 / 1,848、実機未確認）**:
+     上の step 3 に続けて入れたもの:
+     (5) シフトの回数: execute が SHL/ROL by CL/imm8 の n を sh_extra で返し、発行ゲートに足す（286 は 5+n）。
+     (6) behind_hold を paced では 286 クロックで 15 数える（7 チップセットクロックではループ 1 周より短く、16 バイト境界を
+     またぐループが毎周両半分を読み直していた。空ループ 1.77→1.01）。
+     (7) **先読み窓（pf）を定数で無効化**（core_top `.pf_disable(1'b1)`）。実機では ON が逆効果で既定 OFF、値付けキャッシュが
+     役目を引き継いだ。Quartus が窓ごと落とし ALM 18,293→17,529、clk_pico hold -3.56→-0.25 ns。slot 0x89 bit3 は無効。
+     (8) **書き込みの結合（z86_cache WCOMB）**: 同じ行の連続した範囲に伸びるストアを 1 行バッファにまとめ、1 回の port F
+     バーストで出す（データは sdram_mp の p_wcnt に組み合わせで返す: sdram_shim.f_wcnt → RAM.cachef_wcnt → Chipset →
+     z86.f_wcnt）。マージできないストア・32 クロック無操作・フィル・非キャッシュアクセスの前に書き出す。書き出し開始と同じ
+     クロックのマージを拒否する（拡がった範囲が失われていた。irq_rep +pace で発見）。
+     (9) **グラフィック VRAM のウェイト**: Chipset が np21w の MEMWAIT（{1,1,6,1,8,1}）を vram_wait_now として出し、z86_cache が
+     非キャッシュの VRAM アクセスに「バスサイクル＋ウェイト」を課す（読みは完了を保留、書きは次のアクセスを待たせる）。
+     RAM.sv の COMPLETE 後に足すウェイトは廃止（ペアの ~7 クロックに上乗せし、しかもシーケンサのレグごとに課していた）。
+     GRCG/EGC はシーケンサだけで np21w の値を超えるので課さない（課すと TDW 1.12→1.32）。
+     (10) **GRCG RMW のプレーン行バッファ**（pc98_gvram_seq RMWBUF、Chipset で ON）: RMW の読みミスはプレーン 16 バイト行を
+     RAM.sv の prefetch バースト 1 回で取り、以後その行の読みはレグなし。偶奇 2 面の 32x8 M10K。RMW 書きは結果を書き戻し、
+     ほかの経路（TDW・EGC・svc・素通し書き）が来たら全破棄。DMA/ローダーが RMW の合間に同じ行へ書くケースは扱わない。
+     tb_mem_perf phase 38 が全バイトを np21w の式で検査（sim_cycle_table.sh が "RMW CHECK: 0 bad" を要求）。この検査で
+     tb_mem_perf の RAM.sv 上位バイト配線の誤り（生の CPU 上位バイト、Chipset は seq の mem_wdata_hi）も見つけて直した。
+     10MHz の比率（基準: データシート、VRAM 行は np21w のウェイトのフレーム平均込み）: EU・メモリ読み書き・push/pop・
+     add [m] 1.00〜1.08、int/iret 1.04、call/ret 1.24、REP STOSW 1.25、MOVSW 1.51、OUT 1.37、GRCG TDW 1.12、RMW 1.75、
+     素の VRAM 0.90。8MHz の VRAM 行は短い計測が帰線に重なるとぶれる。12MHz は設定の 1 ウェイト分高く出る（基準はノーウェイト）。
+     **残り**: RMW（バースト 1 回 ≈ 49 クロック、うち表示との取り合い ≈ 15）、MOVSW（転送元の行が書き込み非割り当てでミス）、
+     OUT（ブリッジの I/O ペア）。どれもロジックが要り、fit の空きは ALM ≈ 170。
+     **実機で要確認**: `sd_stage2_check.sh 10 / 12 / turbo`、SuperDepth 40 回、ITF POST、SCSI ブート、CPUBENCH（10MHz が
+     286-10 並みか）、SD でハイスコア保存後の FAT（WCOMB が port F を変えた）。
+     **既知**: tb_z86_cache_snoop T4 は本線（0dc7aab）から失敗している（CI 外）。
 2. **RMW の高速化**（S2 でも 1 フレームあたり約 3k ワード）: GRCG RMW の各プレーンの読み書きをまとめる。フリーズの教訓から、ポステッド書き込みは使わず、完了を待つ同期方式でまとめる。
 3. **TDW の書き込み結合**（必要なら）: 連続アドレスをプレーンごとにバースト化する。slot ビットで既定 OFF にして導入し、コールドブートで確かめてから ON にする。
 4. **プレーンのバンク分散 / 表示フェッチのバースト長 32**: 効果は 1〜2 割、リスクは中。上の 3 つで足りなければやる。
