@@ -277,6 +277,17 @@ module z86_cache #(
     reg  [5:0]  pdebt;
     reg         wr_owed;                // paced store buffered, wr_ready owed
     reg  [1:0]  pk;                     // what S_PACE completes (K_LD/K_RD)
+    // Line loads deliver critical word first: the fetch gets the line once
+    // its FIRST word's cycle is paid, and the rest of the line's words are
+    // owed afterwards as a prefetch tail (ld_tail) -- the bus stays busy
+    // for them, so the next sequential line still waits, exactly as a
+    // 286's BIU streams one word per cycle. The tail yields, as the BIU's
+    // prefetch does, to an EU access or a branch's out-of-line load: it
+    // is cut to the word in flight. (Without this a taken branch waited
+    // for the whole line tail before its first instruction could issue.)
+    reg  [5:0]  ptail;
+    reg         ld_tail;
+    reg  [15:0] ld_next;                // the line a sequential load asks for
     wire [2:0]  p_rcyc = 3'd2 + {1'b0, pace_rd_wait};
     wire [2:0]  p_wcyc = 3'd2 + {1'b0, pace_wr_wait};
     wire        p_busy = pace && (pdebt != 6'd0);
@@ -447,6 +458,7 @@ module z86_cache #(
         if (io_rec != 8'hFF) io_rec <= io_rec + 8'd1;
         if (pace_ce && pdebt != 6'd0) pdebt <= pdebt - 6'd1;
         if (!pace) pdebt <= 6'd0;
+        if (!p_busy) ld_tail <= 1'b0;
         // A paced store's ready comes due with its debt.
         if (wr_owed && !p_busy) begin
             wr_ready <= 1'b1;
@@ -570,6 +582,7 @@ module z86_cache #(
             park_v    <= 1'b0;          // S_FLUSH clears every tag anyway
             pdebt     <= 6'd0;
             wr_owed   <= 1'b0;
+            ld_tail   <= 1'b0;
         end else case (st)
           S_FLUSH: begin
             // Clear every tag. The snoop keeps the cache coherent on its
@@ -586,7 +599,12 @@ module z86_cache #(
             part <= 1'b0;
             if (d_we || p_busy) begin
                 // a line patch lands this edge, or the last paced access
-                // still owes bus time
+                // still owes bus time -- a prefetch tail yields to an EU
+                // access or an out-of-line (branch) load after its word
+                if (ld_tail && pdebt > {3'd0, p_rcyc}
+                    && (wr_pend || rd_any
+                        || (ld_pend && ld_addr[19:4] != ld_next)))
+                    pdebt <= {3'd0, p_rcyc};
                 // a line patch lands this edge: look it up on the next
             end else if (wr_pend) begin
                 if (wr_cached) begin
@@ -648,8 +666,10 @@ module z86_cache #(
                     c_a  <= {ld_addr[19:4], 4'h0};
                     c_word <= 1'b0;
                     st   <= S_CMP;
-                    // words ld_addr..line end, one cycle each
-                    pdebt <= pace ? (6'd8 - {3'd0, ld_addr[3:1]}) * {3'd0, p_rcyc}
+                    // the requested word now, the rest of the line as a
+                    // tail after the hand-off (see ld_tail)
+                    pdebt <= pace ? {3'd0, p_rcyc} : 6'd0;
+                    ptail <= pace ? (6'd7 - {3'd0, ld_addr[3:1]}) * {3'd0, p_rcyc}
                                   : 6'd0;
                 end else if (ce && !busy) begin
                     // Uncached: start at the word the fetch asked for. A
@@ -735,6 +755,9 @@ module z86_cache #(
                         st <= S_PACE;
                     end else begin
                         ld_ack  <= ~ld_ack;
+                        pdebt   <= ptail;
+                        ld_tail <= (ptail != 6'd0);
+                        ld_next <= c_a[19:4] + 16'd1;
                         st      <= S_IDLE;
                     end
                   end
@@ -812,8 +835,12 @@ module z86_cache #(
             if (pk == K_LD && ld_drop && pdebt > {3'd0, p_rcyc})
                 pdebt <= {3'd0, p_rcyc};
             if (!p_busy) begin
-                if (pk == K_LD) ld_ack <= ~ld_ack;
-                else begin
+                if (pk == K_LD) begin
+                    ld_ack  <= ~ld_ack;
+                    pdebt   <= ptail;
+                    ld_tail <= (ptail != 6'd0);
+                    ld_next <= c_a[19:4] + 16'd1;
+                end else begin
                     rd_pend  <= 1'b0;
                     rd_ready <= 1'b1;
                 end

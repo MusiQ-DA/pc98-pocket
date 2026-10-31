@@ -337,6 +337,8 @@ fetch u_fetch_decode1 (
     .snoop_word         (wr_word),
 
     .br_taken           (br_taken), 
+    .pace               (pace),
+    .pace_ce            (pace_ce),
     .br_target          (br_target), 
     .br_new_ip          (br_new_ip), 
     .br_new_cs          (br_new_cs),

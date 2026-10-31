@@ -7,10 +7,15 @@
 # settings) + cpu_bus_bridge + 8288 + READY + RAM.sv + SDRAM + the GRCG
 # sequencer -- at the paced speeds, and prints one row per probe:
 #
-#   measured CPU clocks per iteration (probe minus the empty-loop baseline)
-#   the 80286 data-sheet count for the same body (real mode, no wait states,
-#   queue full; m = 1 for a branch target)
+#   measured CPU clocks per loop iteration (body + the loop's own
+#   DEC BP / JZ / JMP NEAR)
+#   the 80286 data-sheet count for the same iteration (real mode, no wait
+#   states, queue full; m = 1 for a branch target; the loop part is 13)
 #   ratio = measured / data sheet   (<1: faster than a 286, >1: slower)
+#
+# The loop is counted in, not subtracted: an empty-loop baseline carries
+# fetch refills that a longer body hides behind its own execution, so
+# subtracting it under-counts exactly the rows that overlap best.
 #
 # The data-sheet column is the floor a real VX2/VX21/RX can never beat; its
 # DRAM waits and I/O recovery only add to it. Rows marked VRAM / I/O depend on
@@ -51,6 +56,7 @@ if [ ! -x "$OUT/obj/perf" ] || [ -n "${REBUILD:-}" ]; then
 fi
 
 for sp in $SPEEDS; do
+  [ -n "${NORUN:-}" ] && continue
   # +pfdis: the bridge prefetch window off, as the paced settings ship;
   # +cache: z86_cache on (priced at speeds 0-2), as core_top runs it.
   "$OUT/obj/perf" +speed="$sp" +pfdis +cache +cyconly > "$OUT/s$sp.log" 2>&1
@@ -87,6 +93,9 @@ SHEET = {
  0x36: ("VRAM", "rep stosw 256 GRCG RMW",    2+2+4+3*256),
  0x37: ("VRAM", "rep stosw 256 plain VRAM",  2+2+4+3*256),
 }
+LOOP = 2 + 3 + (7 + 1)   # dec bp / jz not taken / jmp near taken
+SHEET = {k: (c, b, r + LOOP) for k, (c, b, r) in SHEET.items()}
+SHEET[0x20] = ("loop", "empty loop (dec/jz/jmp near)", LOOP)
 NAMES = {"0": "8MHz", "1": "10MHz", "2": "12MHz", "3": "Turbo"}
 res = {}
 for sp in speeds:
@@ -94,11 +103,9 @@ for sp in speeds:
     for l in open(os.path.join(out, f"s{sp}.log"), errors="ignore"):
         m = re.match(r"CYC (\w\w) iters=(\d+) cpu=(\d+)", l)
         if m: cyc[int(m.group(1), 16)] = (int(m.group(2)), int(m.group(3)))
-    it0, c0 = cyc[0x20]
-    base = c0 / it0
     for ph, (it, c) in cyc.items():
         if ph in SHEET:
-            res[(sp, ph)] = c / it - base
+            res[(sp, ph)] = c / it
 hdr = f"{'ph':3} {'class':5} {'body':28} {'286':>6}" + "".join(
       f" {NAMES.get(s, s):>8} {'ratio':>6}" for s in speeds)
 print(hdr); print("-" * len(hdr))
