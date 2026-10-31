@@ -170,6 +170,8 @@ module tb_mem_perf;
     initial cache_r = $test$plusargs("cache");
     reg         nopace_r = 1'b0;
     initial nopace_r = $test$plusargs("nopace");
+    reg         nvw_r = 1'b0;   // +novwait: no np21w VRAM wait (A/B)
+    initial nvw_r = $test$plusargs("novwait");
     assign zwb_nmia = 1'b0;
 
     z86 #(.WCOMB(1'b1)) u_cpu (
@@ -183,8 +185,8 @@ module tb_mem_perf;
         .pace_rd_wait (ram_rd_wait),
         .pace_wr_wait (ram_wr_wait),
         // np21w's VRAM wait, as Chipset.sv computes it for core_top
-        .pace_vwait   ({1'b0, vid_vb ? 4'd1
-                                     : (grcg_active | egc_active_w) ? 4'd8 : 4'd6}),
+        .pace_vwait   ({1'b0, (nvw_r | grcg_active | egc_active_w) ? 4'd0
+                                     : vid_vb ? 4'd1 : 4'd6}),
         .bios_shadow  (shadow_flag_r),
         .bios_protect (1'b0),
         .f_req     (zf_req),
@@ -479,6 +481,7 @@ module tb_mem_perf;
         .svc_addr(svc_addr_r), .svc_wdata(svc_wdata_r),
         .svc_done(svc_done_w), .svc_rdata(svc_rdata_w), .dbg(),
         .mem_addr(seq_mem_addr), .mem_wdata(seq_mem_wdata),
+        .mem_wdata_hi(seq_mem_wdata_hi),
         .mem_word(seq_mem_word), .mem_pf_len(seq_mem_pf_len),
         .mem_rd(seq_mem_rd), .mem_wr(seq_mem_wr),
         .mem_rdata(ram_dout), .mem_rdata_hi(ram_dout_hi),
@@ -492,6 +495,7 @@ module tb_mem_perf;
 
     // ---- RAM + SDRAM -------------------------------------------------------
     wire [7:0]  ram_dout, ram_dout_hi;
+    wire [7:0]  seq_mem_wdata_hi;
     wire        initilized_sdram_w;
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
@@ -509,7 +513,10 @@ module tb_mem_perf;
         .word_access(seq_mem_word),
         .prefetch_len(seq_mem_pf_len),
         .pf_beat_v(pf_beat_v_w), .pf_beat_dat(pf_beat_dat_w),
-        .internal_data_bus_hi(cpu_data_bus_hi),
+        // the sequencer's hi byte, as Chipset.sv wires it: a GRCG word
+        // batch writes its computed odd byte here (tying the raw bus hi
+        // wrote the guest's operand byte unmodified -- tb only)
+        .internal_data_bus_hi(seq_mem_wdata_hi),
         .data_bus_out_hi(ram_dout_hi),
         .memory_read_n(~seq_mem_rd), .memory_write_n(~seq_mem_wr),
         .no_command_state(bus_mrd_n & bus_mwr_n & io_rd_n & io_wr_n),
@@ -1415,6 +1422,30 @@ module tb_mem_perf;
             emit(8'hB9); emitw(16'h0100);
             emit(8'hF3); emit(8'hAB);
             cyc_end(8'h37);
+            // ---- phase 38: GRCG RMW correctness (the plane-line buffer) ----
+            // Plain fills give each plane its own byte at 7000-71FF, then
+            // an RMW REP STOSW of a mixed operand runs across them; the
+            // end-of-run check (rmw_check) holds every byte of every plane
+            // to np21w's (plane & ~data) | (data & tile).
+            marker(8'h38);
+            emit(8'hB8); emitw(16'hA800); emit(8'h8E); emit(8'hC0); // es=A800
+            emit(8'hBF); emitw(16'h7000); emit(8'hB9); emitw(16'h0100);
+            emit(8'hB8); emitw(16'h0F0F); emit(8'hF3); emit(8'hAB);   // plane B
+            emit(8'hB8); emitw(16'hB000); emit(8'h8E); emit(8'hC0);
+            emit(8'hBF); emitw(16'h7000); emit(8'hB9); emitw(16'h0100);
+            emit(8'hB8); emitw(16'h3333); emit(8'hF3); emit(8'hAB);   // plane R
+            emit(8'hB8); emitw(16'hB800); emit(8'h8E); emit(8'hC0);
+            emit(8'hBF); emitw(16'h7000); emit(8'hB9); emitw(16'h0100);
+            emit(8'hB8); emitw(16'h5555); emit(8'hF3); emit(8'hAB);   // plane G
+            emit(8'hB8); emitw(16'hA800); emit(8'h8E); emit(8'hC0);
+            outport(16'h007C, 8'hC0);                       // GRCG RMW
+            outport(16'h007E, 8'hAA); outport(16'h007E, 8'hBB);
+            outport(16'h007E, 8'hCC); outport(16'h007E, 8'hDD);
+            emit(8'hBF); emitw(16'h7000); emit(8'hB9); emitw(16'h0100);
+            emit(8'hB8); emitw(16'h5AC3); emit(8'hF3); emit(8'hAB);
+            outport(16'h007C, 8'h00);                       // GRCG off
+            marker(8'hB8);
+
             emit(8'h31); emit(8'hC0);                       // xor ax,ax
             emit(8'h8E); emit(8'hC0);                       // es=0
 
@@ -2316,8 +2347,27 @@ module tb_mem_perf;
             // +itfonly starts the guest inside phase 0F, so every earlier
             // phase's data region is untouched: the phase-verify peeks have
             // nothing to say in that mode. The probe prints its own verdict.
-            if ($test$plusargs("itfonly") || $test$plusargs("aluonly")
-                || $test$plusargs("cyconly")) begin
+            if ($test$plusargs("cyconly")) begin
+                // phase 38: every plane byte the RMW REP STOSW touched
+                automatic logic [7:0] pf [0:2] = '{8'h0F, 8'h33, 8'h55};
+                automatic logic [7:0] tl [0:2] = '{8'hAA, 8'hBB, 8'hCC};
+                for (int p = 0; p < 3; p++)
+                    for (int i = 0; i < 512; i++) begin
+                        automatic int a = 20'hA8000 + p * 20'h8000 + 20'h7000 + i;
+                        automatic logic [7:0] d = i[0] ? 8'h5A : 8'hC3;
+                        automatic logic [7:0] want = (pf[p] & ~d) | (d & tl[p]);
+                        w = sdr.u_part.peek(a);
+                        if (w[7:0] !== want) begin
+                            if (bad < 12) $display("  BAD rmw plane %0d %05x=%02x want %02x",
+                                                   p, a, w[7:0], want);
+                            bad++;
+                        end
+                    end
+                $display("RMW CHECK: %0d bad", bad);
+                if (bad) $display("=== FAIL tb_mem_perf ===");
+                return;
+            end
+            if ($test$plusargs("itfonly") || $test$plusargs("aluonly")) begin
                 $display("(itfonly: phase verification skipped)");
                 return;
             end

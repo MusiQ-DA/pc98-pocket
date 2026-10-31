@@ -62,6 +62,10 @@ for sp in $SPEEDS; do
   "$OUT/obj/perf" +speed="$sp" +pfdis +cache +cyconly > "$OUT/s$sp.log" 2>&1
   grep -q "=== all phases done ===" "$OUT/s$sp.log" \
     || { echo "FAIL speed $sp: probes did not finish"; tail -5 "$OUT/s$sp.log"; exit 1; }
+  # phase 38 holds every GRCG RMW byte to np21w's formula (the plane-line
+  # buffer's correctness, not its speed)
+  grep -q "RMW CHECK: 0 bad" "$OUT/s$sp.log" \
+    || { echo "FAIL speed $sp: GRCG RMW result"; grep -E "BAD rmw|RMW CHECK" "$OUT/s$sp.log" | head; exit 1; }
 done
 
 python3 - "$MODE" "$OUT" $SPEEDS <<'PY'

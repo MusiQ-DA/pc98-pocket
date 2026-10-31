@@ -724,8 +724,14 @@ module CHIPSET #(
     // sequencer leg -- plain VRAM came out ~1.45x np21w and a GRCG TDW word
     // ~1.85x. An RMW-class write is one guest access and pays one wait, as
     // np21w's memvram.c charges it. RAM.sv's VRAM wait inputs now see zero.
+    // A GRCG/EGC access gets no CPU-side debt: the sequencer's plane walk
+    // already runs longer than np21w's MEMWAIT_GRCG price (TDW word 1.12x,
+    // RMW 1.75x the reference in scripts/sim_cycle_table.sh), and a debt
+    // on top only stacks: with 8 charged the TDW word measured 1.32x. Plain
+    // graphics-VRAM accesses are faster than the walk and take np21w's 6
+    // (1 in vblank).
     assign vram_wait_now = {pc98_analog,
-                            VID_VBlank ? 4'd1 : accel_hit ? 4'd8 : 4'd6};
+                            accel_hit ? 4'd0 : VID_VBlank ? 4'd1 : 4'd6};
 
     RAM u_RAM 
     (
