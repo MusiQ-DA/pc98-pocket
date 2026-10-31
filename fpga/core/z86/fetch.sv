@@ -93,7 +93,13 @@ reg [3:0]  buf_lo [0:1];
 // reloading the whole 32 bytes over the 8-bit bus. The second-half
 // prefetch, which would overwrite it, holds off while behind_hold counts.
 reg        behind_ok;
-reg  [2:0] behind_hold;
+reg  [3:0] behind_hold;
+// At the paced settings the hold counts 286 clocks, not chipset clocks: a
+// loop iteration there takes tens of chipset clocks, so the 7-clk window
+// expired before the branch back and every turn of a loop straddling a
+// 16-byte boundary reloaded both halves (an empty DEC/JZ/JMP loop ran at
+// 1.8x its data-sheet time).
+wire [3:0] BEHIND_HOLD = pace ? 4'd15 : 4'd7;
 
 // ---- paced issue gate (PC-98 port) -----------------------------------------
 // At the 286 settings the EU must not run faster than an 80286: z86 retires a
@@ -277,7 +283,7 @@ always @(posedge clk) begin
         eu_debt <= 7'd0;
         eu_pend <= 1'b0;
     end else begin
-        if (behind_hold != 3'd0) behind_hold <= behind_hold - 3'd1;
+        if (behind_hold != 4'd0 && (!pace || pace_ce)) behind_hold <= behind_hold - 4'd1;
         ld_ack_r <= ld_ack;
         if (ld_ack ^ ld_ack_r) begin  // receive data from cache
             if (!loading_drop) begin
@@ -332,7 +338,7 @@ always @(posedge clk) begin
                     buf_start <= ~buf_start;
                     buf_addr <= buf_addr + 16;
                     behind_ok <= buf_valid[buf_start];
-                    behind_hold <= 3'd7;
+                    behind_hold <= BEHIND_HOLD;
                 end
                 ptr <= ptr_next;
                 ip <= br_new_ip;
@@ -369,7 +375,7 @@ always @(posedge clk) begin
                     loading_half <= buf_start;
                     loading <= 1;
                 end else if (!buf_valid[~buf_start]
-                             && !(behind_ok && behind_hold != 3'd0)) begin   // load the second half
+                             && !(behind_ok && behind_hold != 4'd0)) begin   // load the second half
                     behind_ok <= 0;
                     ld_req <= ~ld_req;
                     ld_addr <= buf_addr + 16;
@@ -390,7 +396,7 @@ always @(posedge clk) begin
                     buf_start <= ~buf_start;
                     buf_addr <= buf_addr + 16;
                     behind_ok <= 1;
-                    behind_hold <= 3'd7;
+                    behind_hold <= BEHIND_HOLD;
                 end
             end else if ((~id_valid || id_ready) && buf_valid[ptr_end[4]] && !eu_hold) begin  // actually output the instruction
                 eu_pend <= pace;
@@ -476,7 +482,7 @@ always @(posedge clk) begin
                     buf_start <= ~buf_start;
                     buf_addr <= buf_addr + 16;
                     behind_ok <= 1;
-                    behind_hold <= 3'd7;
+                    behind_hold <= BEHIND_HOLD;
                 end
                 ptr <= ptr_end;
             end
