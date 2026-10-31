@@ -20,6 +20,7 @@ module fetch (
     input             br_taken,      // set new address to fetch from
     input             pace,          // 286 settings: issue at 80286 clock counts
     input             pace_ce,       // one pulse per 286 CPU clock
+    input       [4:0] eu_extra,      // execute's late clocks (shift count n)
     input     [19:0]  br_target,     // byte address
     input     [15:0]  br_new_ip,     // IP after branch
     input     [15:0]  br_new_cs,     // CS after branch
@@ -106,7 +107,7 @@ reg  [2:0] behind_hold;
 // Jcc/LOOP's not-taken price. The ROM read is registered (M10K, no LABs): it
 // is addressed with the instruction at ptr and its word lands the clk after
 // the hand-off, eu_pend holding the gate shut for that one clk.
-localparam [5:0] EU_TAKEN = 6'd5;     // keep in step with gen_eu_cost.py TAKEN
+localparam [6:0] EU_TAKEN = 7'd5;     // keep in step with gen_eu_cost.py TAKEN
 (* ramstyle = "M10K" *) reg [4:0] eu_rom [0:4095];
 `ifdef SYNTHESIS
 initial $readmemh("core/z86/eu_cost.hex", eu_rom);
@@ -114,9 +115,9 @@ initial $readmemh("core/z86/eu_cost.hex", eu_rom);
 initial $readmemh("fpga/core/z86/eu_cost.hex", eu_rom);
 `endif
 reg  [4:0]  eu_q;
-reg  [5:0]  eu_debt;
+reg  [6:0]  eu_debt;
 reg         eu_pend;
-wire        eu_hold = pace && (eu_pend || eu_debt != 6'd0);
+wire        eu_hold = pace && (eu_pend || eu_debt != 7'd0);
 
 reg [3:0]  len;               // instruction length not including prefixes
 reg [6:0]  prefix;
@@ -244,12 +245,13 @@ always @(posedge clk) begin
     // paced issue gate: count down, load the last hand-off's price, add the
     // taken-transfer part. A later hand-off below sets eu_pend again.
     begin
-        logic [5:0] d;
+        logic [6:0] d;
         d = eu_debt;
-        if (pace_ce && d != 6'd0) d = d - 6'd1;
-        if (eu_pend) d = {1'b0, eu_q};
+        if (pace_ce && d != 7'd0) d = d - 7'd1;
+        if (eu_pend) d = {2'b0, eu_q};
         if (br_taken) d = d + EU_TAKEN;
-        eu_debt <= pace ? d : 6'd0;
+        d = d + {2'b0, eu_extra};
+        eu_debt <= pace ? d : 7'd0;
         eu_pend <= 1'b0;
     end
 
@@ -272,7 +274,7 @@ always @(posedge clk) begin
         id_valid <= 0;
         id_inst <= 0;
         loading_drop <= 0;
-        eu_debt <= 6'd0;
+        eu_debt <= 7'd0;
         eu_pend <= 1'b0;
     end else begin
         if (behind_hold != 3'd0) behind_hold <= behind_hold - 3'd1;

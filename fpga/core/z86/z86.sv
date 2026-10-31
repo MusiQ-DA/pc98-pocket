@@ -203,6 +203,7 @@ wire wb_seg_valid;
 wire [1:0] wb_seg;
 wire [15:0] wb_seg_data;
 wire br_taken;
+wire [4:0] sh_extra;          // shift count n for the paced issue gate
 wire [19:0] br_target;
 wire [15:0] br_new_cs;
 wire [15:0] br_new_ip;
@@ -339,6 +340,7 @@ fetch u_fetch_decode1 (
     .br_taken           (br_taken), 
     .pace               (pace),
     .pace_ce            (pace_ce),
+    .eu_extra           (sh_extra),
     .br_target          (br_target), 
     .br_new_ip          (br_new_ip), 
     .br_new_cs          (br_new_cs),
@@ -449,6 +451,7 @@ decode u_decode2 (
 execute u_execute (
     .hlt_wake           (wb_tgc_i),
     .rep_int            (rep_int),
+    .sh_extra           (sh_extra),
     .clk                (clk),          
     .halted             (dbg_halted),
     .reset              (cpu_reset),
