@@ -314,6 +314,7 @@ module CHIPSET #(
         output  logic           cachef_rvalid,
         output  logic   [15:0]  cachef_rdata,
         output  logic           cachef_done,
+        output  logic    [4:0]  cachef_wcnt,
         output  logic           ram_wr_snoop_v,
         output  logic   [23:0]  ram_wr_snoop_addr,
         output  logic   [3:0]   ram_wr_snoop_len
@@ -776,6 +777,7 @@ module CHIPSET #(
         .cachef_rvalid                      (cachef_rvalid),
         .cachef_rdata                       (cachef_rdata),
         .cachef_done                        (cachef_done),
+        .cachef_wcnt                        (cachef_wcnt),
         .ram_wr_snoop_v                     (ram_wr_snoop_v),
         .ram_wr_snoop_addr                  (ram_wr_snoop_addr),
         .ram_wr_snoop_len                   (ram_wr_snoop_len),

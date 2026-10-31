@@ -14,7 +14,9 @@
 //
 // - nand2mario, 7/2025
 
-module z86 (
+module z86 #(
+    parameter bit WCOMB = 0             // z86_cache store combining
+) (
     input               clk,            // the bridge's gated CPU clock
     input               reset,
     input               clk_free,       // clk_chipset, ungated (z86_cache)
@@ -38,6 +40,7 @@ module z86 (
     input               f_rvalid,
     input       [15:0]  f_rdata,
     input               f_done,
+    input       [4:0]   f_wcnt,         // sdram_mp p_wcnt (WCOMB bursts)
     input               sn_v,           // port A write commits
     input       [23:0]  sn_addr,
     input       [ 3:0]  sn_len,
@@ -234,7 +237,7 @@ reg dbg_set_addr;
 
 // cache and memory interface serves FETCH (instruction loads), EXECUTE (memory read) and WRITE-BACK (memory write)
 wire cache_busy;
-z86_cache u_cache (
+z86_cache #(.WCOMB(WCOMB)) u_cache (
     .clk                (clk_free),
     .ce                 (ce),
     .reset              (reset),
@@ -255,6 +258,7 @@ z86_cache u_cache (
     .f_rvalid           (f_rvalid),
     .f_rdata            (f_rdata),
     .f_done             (f_done),
+    .f_wcnt             (f_wcnt),
     .sn_v               (sn_v),
     .sn_addr            (sn_addr),
     .sn_len             (sn_len),

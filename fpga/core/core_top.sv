@@ -1030,6 +1030,7 @@ module core_top (
     // write-commit snoop it invalidates against. Word addresses, one guest
     // byte per SDRAM word, as on port A; all on clk_chipset.
     wire        cachef_req, cachef_we, cachef_ack, cachef_rvalid, cachef_done;
+    wire  [4:0] cachef_wcnt;
     wire [23:0] cachef_addr;
     wire  [3:0] cachef_len;
     wire [15:0] cachef_wdata0, cachef_wdata1, cachef_rdata;
@@ -3903,6 +3904,7 @@ module core_top (
         ,.cachef_rvalid                     (cachef_rvalid)
         ,.cachef_rdata                      (cachef_rdata)
         ,.cachef_done                       (cachef_done)
+        ,.cachef_wcnt                       (cachef_wcnt)
         ,.ram_wr_snoop_v                    (ram_wr_snoop_v)
         ,.ram_wr_snoop_addr                 (ram_wr_snoop_addr)
         ,.ram_wr_snoop_len                  (ram_wr_snoop_len)
@@ -4106,7 +4108,7 @@ module core_top (
     // cache is write-through no-allocate, uncached writes ride the
     // port-A commits whose snoop clears lines, and clk_select latches
     // on biu_done.
-    z86 u_cpu (
+    z86 #(.WCOMB(1'b1)) u_cpu (
         .clk       (zet_clk),
         .reset     (reset_cpu),
         .clk_free  (clk_chipset),
@@ -4128,6 +4130,7 @@ module core_top (
         .f_rvalid  (cachef_rvalid),
         .f_rdata   (cachef_rdata),
         .f_done    (cachef_done),
+        .f_wcnt    (cachef_wcnt),
         .sn_v      (ram_wr_snoop_v),
         .sn_addr   (ram_wr_snoop_addr),
         .sn_len    (ram_wr_snoop_len),

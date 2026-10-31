@@ -179,6 +179,7 @@ module sdram_shim #(
     output logic                              f_rvalid,
     output logic [sdram_data_width-1:0]       f_rdata,
     output logic                              f_done,
+    output logic [4:0]                        f_wcnt,     // p_wcnt: the word a port-F burst wants
 
     // Port A write-commit snoop, for the cache to invalidate against: a_wr_v
     // pulses for the one cycle in which a guest/DMA/loader write on port A
@@ -400,6 +401,7 @@ module sdram_shim #(
     assign e_done   = mp_done[4];
     assign f_ack    = mp_ack[5];
     assign f_done   = mp_done[5];
+    assign f_wcnt   = 5'(mp_wcnt);
     // Read data is tagged with the owning port, so each master sees only its own.
     assign p_rvalid = mp_rvalid & (mp_grant == 3'd0);
     assign b_rvalid = mp_rvalid & (mp_grant == 3'd1);

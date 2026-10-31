@@ -162,6 +162,7 @@ module tb_mem_perf;
     wire [ 3:0] zf_len;
     wire [15:0] zf_wd0, zf_wd1;
     wire        zf_ack, zf_rvalid, zf_done;
+    wire  [4:0] zf_wcnt;
     wire [15:0] zf_rdata;
     // +cache: the 16 KB cache on, its port F wired to RAM.sv's cachef
     // port and the port-A commit snoop fed back -- the core_top wiring.
@@ -171,7 +172,7 @@ module tb_mem_perf;
     initial nopace_r = $test$plusargs("nopace");
     assign zwb_nmia = 1'b0;
 
-    z86 u_cpu (
+    z86 #(.WCOMB(1'b1)) u_cpu (
         .clk       (zet_clk),
         .reset     (cpu_reset_w),
         .clk_free  (clk),
@@ -193,6 +194,7 @@ module tb_mem_perf;
         .f_rvalid  (zf_rvalid),
         .f_rdata   (zf_rdata),
         .f_done    (zf_done),
+        .f_wcnt    (zf_wcnt),
         .sn_v      (ram_sn_v),
         .sn_addr   (ram_sn_addr),
         .sn_len    (ram_sn_len),
@@ -536,7 +538,7 @@ module tb_mem_perf;
         .cachef_req(zf_req), .cachef_we(zf_we), .cachef_addr(zf_addr),
         .cachef_len(zf_len), .cachef_wdata0(zf_wd0), .cachef_wdata1(zf_wd1),
         .cachef_ack(zf_ack), .cachef_rvalid(zf_rvalid), .cachef_rdata(zf_rdata),
-        .cachef_done(zf_done),
+        .cachef_done(zf_done), .cachef_wcnt(zf_wcnt),
         .ram_wr_snoop_v(ram_sn_v), .ram_wr_snoop_addr(ram_sn_addr),
         .ram_wr_snoop_len(ram_sn_len)
     );
