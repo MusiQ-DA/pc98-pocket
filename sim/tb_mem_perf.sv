@@ -161,7 +161,14 @@ module tb_mem_perf;
     wire [23:0] zf_addr;
     wire [ 3:0] zf_len;
     wire [15:0] zf_wd0, zf_wd1;
-    wire _unused_zf = &{1'b0, zf_req, zf_we, zf_addr, zf_len, zf_wd0, zf_wd1};
+    wire        zf_ack, zf_rvalid, zf_done;
+    wire [15:0] zf_rdata;
+    // +cache: the 16 KB cache on, its port F wired to RAM.sv's cachef
+    // port and the port-A commit snoop fed back -- the core_top wiring.
+    reg         cache_r = 1'b0;
+    initial cache_r = $test$plusargs("cache");
+    reg         nopace_r = 1'b0;
+    initial nopace_r = $test$plusargs("nopace");
     assign zwb_nmia = 1'b0;
 
     z86 u_cpu (
@@ -169,8 +176,12 @@ module tb_mem_perf;
         .reset     (cpu_reset_w),
         .clk_free  (clk),
         .ce        (z86_ce),
-        .cache_en  (1'b0),
-        .bios_shadow  (1'b0),
+        .cache_en  (cache_r),
+        .pace      (cache_r && clk_select_r != 2'b11 && !nopace_r),
+        .pace_ce   (ce_pos),
+        .pace_rd_wait (ram_rd_wait),
+        .pace_wr_wait (ram_wr_wait),
+        .bios_shadow  (shadow_flag_r),
         .bios_protect (1'b0),
         .f_req     (zf_req),
         .f_we      (zf_we),
@@ -178,13 +189,13 @@ module tb_mem_perf;
         .f_len     (zf_len),
         .f_wdata0  (zf_wd0),
         .f_wdata1  (zf_wd1),
-        .f_ack     (1'b0),
-        .f_rvalid  (1'b0),
-        .f_rdata   (16'd0),
-        .f_done    (1'b0),
-        .sn_v      (1'b0),
-        .sn_addr   (24'd0),
-        .sn_len    (4'd0),
+        .f_ack     (zf_ack),
+        .f_rvalid  (zf_rvalid),
+        .f_rdata   (zf_rdata),
+        .f_done    (zf_done),
+        .sn_v      (ram_sn_v),
+        .sn_addr   (ram_sn_addr),
+        .sn_len    (ram_sn_len),
         .dbg_watch_a (20'd0), .dbg_sn_kills (),
         .wb_adr_o  (zwb_adr),
         .wb_sel_o  (zwb_sel),
@@ -522,9 +533,10 @@ module tb_mem_perf;
         .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
         .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
         .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done(),
-        .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
-        .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
-        .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
+        .cachef_req(zf_req), .cachef_we(zf_we), .cachef_addr(zf_addr),
+        .cachef_len(zf_len), .cachef_wdata0(zf_wd0), .cachef_wdata1(zf_wd1),
+        .cachef_ack(zf_ack), .cachef_rvalid(zf_rvalid), .cachef_rdata(zf_rdata),
+        .cachef_done(zf_done),
         .ram_wr_snoop_v(ram_sn_v), .ram_wr_snoop_addr(ram_sn_addr),
         .ram_wr_snoop_len(ram_sn_len)
     );

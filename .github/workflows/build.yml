@@ -152,6 +152,14 @@ jobs:
           ./obj_dir/perf +speed=3 +GRANT | tee perf3.log
           grep -q "=== PASS tb_mem_perf ===" perf3.log
 
+      - name: z86 instruction pairs and interrupts, free and with priced cache hits
+        run: |
+          # The paced settings run z86_cache priced (2 clocks + waits per
+          # 286 bus cycle): every regression must hold with the hits held
+          # back as well as with them free.
+          bash scripts/sim_z86_tests.sh
+          Z86_EXTRA="+pace +pacew=1" bash scripts/sim_z86_tests.sh
+
       - name: NEC-style EMS board — 08E1-08E9 windows bank into SDRAM
         run: |
           S=fpga/core

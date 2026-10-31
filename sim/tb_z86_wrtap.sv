@@ -47,7 +47,7 @@ module tb_z86_wrtap;
     wire dbg_v; wire [19:0] dbg_a0; wire dbg_two;
 
     z86_cache dut (
-        .clk(clk), .ce(1'b1), .reset(reset), .cache_en(cache_en),
+        .clk(clk), .ce(1'b1), .reset(reset), .cache_en(cache_en), .pace(1'b0), .pace_ce(1'b0), .pace_rd_wait(2'd0), .pace_wr_wait(2'd0),
         .bios_shadow(1'b0), .bios_protect(1'b0),
         .f_req(f_req), .f_we(f_we), .f_addr(f_addr), .f_len(f_len),
         .f_wdata0(f_wd0), .f_wdata1(f_wd1),
