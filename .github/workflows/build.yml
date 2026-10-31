@@ -873,6 +873,26 @@ jobs:
             fpga/output_files/ap_core.fit.rpt 2>/dev/null || true
           ls -la fpga/output_files/ 2>/dev/null || true
 
+      - name: Annotate fit, timing and errors (readable through the API)
+        if: always()
+        run: |
+          # Job logs live on blob storage some sessions cannot reach; check-run
+          # annotations come back through api.github.com. One notice carries
+          # the fit and the worst slacks, one error the first compile errors.
+          enc() { sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}'; }
+          R=fpga/output_files
+          {
+            grep -E "Logic utilization|Total LABs|Total registers|Total block memory bits|M10K|Fitter Status" $R/ap_core.fit.rpt 2>/dev/null | head -8
+            for f in $R/ap_core.sta.summary; do
+              [ -f "$f" ] && awk '/^Type/{t=$0} /^Slack/{print t " -> " $0}' "$f" | sort -t: -k3 -g | head -6
+            done
+          } | enc > /tmp/fit.txt || true
+          [ -s /tmp/fit.txt ] && echo "::notice title=fit and timing::$(cat /tmp/fit.txt)"
+          grep -hE "^(Error|Critical Warning)|Internal Error|Fatal Error|Cannot fit|Can.t fit" fpga/compile_*.log 2>/dev/null \
+            | grep -vE "^\s*Info" | head -12 | enc > /tmp/err.txt || true
+          [ -s /tmp/err.txt ] && echo "::error title=quartus errors::$(cat /tmp/err.txt)"
+          true
+
       - name: Upload bitstream and reports
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
