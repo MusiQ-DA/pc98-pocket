@@ -86,11 +86,7 @@ module softcpu_fdd_bridge #(
     input  wire        target_dataslot_done,
     input  wire  [2:0] target_dataslot_err,
 
-    output wire [31:0] bridge_rd_data_out,
-
-    // Landing-gate witness, clk_74a counters read raw by the JTAG probe:
-    // {early completions[15:0], read commands issued[15:0]} -- see below.
-    output wire [31:0] tds_dbg
+    output wire [31:0] bridge_rd_data_out
 );
 
     //
@@ -227,70 +223,8 @@ module softcpu_fdd_bridge #(
     wire target_dataslot_ack_s;
     wire target_dataslot_done_rise;
     synch_3 tds_ack_sync (.i(target_dataslot_ack), .o(target_dataslot_ack_s), .clk(clk_sys));
-    synch_3 tds_done_sync (.i(tds_done_landed), .o(), .clk(clk_sys),
+    synch_3 tds_done_sync (.i(target_dataslot_done), .o(), .clk(clk_sys),
                            .rise(target_dataslot_done_rise));
-
-    //
-    // Landing gate (clk_74a). The APF's done for a target-dataslot READ is
-    // not proof that the bytes are in the bridge RAM: on the metal it can
-    // answer "ok" while the data writes are still to come. The firmware then
-    // streams whatever the RAM already held -- the SD-backed SuperDepth boot
-    // received the prefetch half's previous sector (DEPTH.EXE file sector 62,
-    // LBA 297) for LBAs 298-304, so the EXE's data segment was sector 62
-    // seven times over and the game hung polling an OPN it believed present;
-    // the SCSI mount saw the same thing as a header read that left its
-    // poison in place.
-    //
-    // So a read completes only once every word of its window has been
-    // written: the gate counts bridge writes landing in [bridgeaddr,
-    // bridgeaddr + length) since the command's own rising edge (the same
-    // edge core_bridge_cmd queues it on) and holds the done the firmware
-    // sees low until all ceil(length/4) words are in. An error completion
-    // passes straight through (no data is coming), and so does every write
-    // command (the host reads the RAM; nothing lands here). A read whose
-    // data never arrives leaves done low and the firmware's bounded wait
-    // fails it -- a failed transfer is retried or reported, never streamed.
-    //
-    reg        tds_rd_74_d   = 1'b0;
-    reg        tds_wr_74_d   = 1'b0;
-    reg        land_armed    = 1'b0;
-    reg [11:0] land_cnt      = 12'd0;
-    reg        land_hit_r    = 1'b0;
-    reg        apf_done_d    = 1'b0;
-    reg [15:0] land_early    = 16'd0;
-    reg [15:0] land_cmds     = 16'd0;
-
-    wire [31:0] land_off  = bridge_addr - target_dataslot_bridgeaddr;
-    wire [11:0] land_need = target_dataslot_length[13:2]
-                          + {11'd0, |target_dataslot_length[1:0]};
-    wire        landed    = ~land_armed || (land_cnt >= land_need);
-    wire        tds_done_landed = target_dataslot_done
-                                  && (landed || target_dataslot_err != 3'd0);
-
-    always @(posedge clk_74a) begin
-        tds_rd_74_d <= target_dataslot_read;
-        tds_wr_74_d <= target_dataslot_write;
-        apf_done_d  <= target_dataslot_done;
-        // One register stage on the address compare keeps the 32-bit
-        // subtract off the bridge's own write path.
-        land_hit_r  <= bridge_wr
-                    && bridge_addr[31:28] == BRIDGE_ADDR[31:28]
-                    && land_off < target_dataslot_length;
-        if (target_dataslot_read & ~tds_rd_74_d) begin
-            land_armed <= 1'b1;
-            land_cnt   <= 12'd0;
-            land_cmds  <= land_cmds + 16'd1;
-        end else if (target_dataslot_write & ~tds_wr_74_d) begin
-            land_armed <= 1'b0;
-        end else if (land_hit_r && land_cnt != 12'hFFF) begin
-            land_cnt   <= land_cnt + 12'd1;
-        end
-        // Witness: the APF said done (no error) before its data was in.
-        if (target_dataslot_done && !apf_done_d && land_armed && !landed
-            && target_dataslot_err == 3'd0)
-            land_early <= land_early + 16'd1;
-    end
-    assign tds_dbg = {land_early, land_cmds};
 
     reg        tds_done;
     reg  [2:0] tds_err;

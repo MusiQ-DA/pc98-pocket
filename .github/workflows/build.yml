@@ -650,22 +650,6 @@ jobs:
           cd fpga && ../obj_fw/fw | tee ../fwtrig.log
           grep -q "RESULT: PASS" ../fwtrig.log
 
-      - name: a dataslot read completes only once its bytes have landed
-        # The SD-backed SuperDepth boot got DEPTH.EXE's LBA 298-304 as LBA
-        # 297: the APF answered the prefetch reads done before their data
-        # reached the bridge RAM. softcpu_fdd_bridge now holds a read's done
-        # until every word of its window is in; this bench plays an APF
-        # that answers early, lands partially, errors, and writes.
-        run: |
-          S=fpga/core
-          verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style \
-            --top-module tb_tds_landing \
-            -Isim -I$S -Ifpga/apf \
-            sim/tb_tds_landing.sv sim/stub_altsyncram.sv fpga/apf/common.v \
-            $S/softcpu_fdd_bridge.sv -o tl --Mdir obj_tdsland
-          ./obj_tdsland/tl | tee tdsland.log
-          grep -q "PASS tb_tds_landing" tdsland.log
-
       - name: the graphics fetch shows what the slave GDC's partitions say
         run: |
           S=fpga/core

@@ -42,32 +42,20 @@ module tb_softcpu_fw;
 
     // Boot-time dataslot model: the firmware polls TDS_STATUS for
     // done/ack around every transfer (font load, mounts). Answer every
-    // request with ack, write the window's words over the bridge (the
-    // disk bridge's landing gate holds a read's done until they are in),
-    // then raise done and hold it until the next command, as the APF does.
+    // request with ack then a one-cycle done so boot reaches the poll
+    // loop.
     wire tds_rd, tds_wr;
-    wire [31:0] tds_baddr, tds_len;
     reg  tds_ack = 0, tds_done = 0;
-    reg  [11:0] tds_cnt = 0;
-    reg  [11:0] tds_words = 0;
-    reg         br_wr = 0;
-    reg  [31:0] br_addr = 0;
+    reg  [7:0] tds_cnt = 0;
     always @(posedge clk_sys) begin
         tds_ack <= tds_rd | tds_wr;
-        br_wr   <= 1'b0;
         if (tds_cnt != 0) begin
-            tds_cnt <= tds_cnt - 1;
-            if (tds_words != 0) begin
-                br_wr     <= 1'b1;
-                br_addr   <= tds_baddr + {18'd0, tds_len[13:2] + {11'd0, |tds_len[1:0]} - tds_words, 2'b00};
-                tds_words <= tds_words - 1;
-            end
-            if (tds_cnt == 12'd1)
-                tds_done <= 1'b1;
-        end else if (tds_ack && (tds_rd | tds_wr)) begin
-            tds_done  <= 1'b0;
-            tds_words <= tds_rd ? tds_len[13:2] + {11'd0, |tds_len[1:0]} : 12'd0;
-            tds_cnt   <= 12'd20 + (tds_rd ? tds_len[13:2] + 12'd1 : 12'd0);
+            tds_cnt  <= tds_cnt - 1;
+            tds_done <= (tds_cnt == 8'd2);
+        end else begin
+            tds_done <= 1'b0;
+            if (tds_ack && (tds_rd | tds_wr))
+                tds_cnt <= 8'd20;
         end
     end
 
@@ -97,15 +85,15 @@ module tb_softcpu_fw;
         .fdd1_rebind (1'b0),
         .mgmt_addr (), .mgmt_dout (), .mgmt_wr (), .mgmt_rd (),
         .mgmt_din  (16'd0),
-        .bridge_wr      (br_wr),
-        .bridge_addr    (br_addr),
+        .bridge_wr      (1'b0),
+        .bridge_addr    (32'd0),
         .bridge_wr_data (32'd0),
         .target_dataslot_read  (tds_rd),
         .target_dataslot_write (tds_wr),
         .target_dataslot_id    (),
         .target_dataslot_slotoffset (),
-        .target_dataslot_bridgeaddr (tds_baddr),
-        .target_dataslot_length (tds_len),
+        .target_dataslot_bridgeaddr (),
+        .target_dataslot_length (),
         .target_dataslot_ack  (tds_ack),
         .target_dataslot_done (tds_done),
         .target_dataslot_err  (3'd0),
