@@ -4065,7 +4065,13 @@ module core_top (
         // term in here; the extra gate at this high-fanout node perturbed
         // placement into a -0.039ns setup miss on the main core clock and
         // a grey build (paced supply collapsed to ~3.4). Reverted.
-        .pf_disable        (jtag_pf_dis),
+        // Tied off for good (cycle-bench): with z86_cache priced at the
+        // paced settings the windows have no job left, pf ON was the worse
+        // setting on hardware at every speed, and the constant lets Quartus
+        // drop the two 32-byte windows, their fill and hit logic -- floor
+        // the paced write path needs. jtag_pf_dis (slot 0x89 bit3) is now
+        // inert. tb_mem_perf still drives the bridge's windows directly.
+        .pf_disable        (1'b1),
         .pf_nofill         (jtag_pf_nofill),
         .pf_nofillm        (jtag_pf_nofillm),
         .pf_nohit          (jtag_pf_nohit),
