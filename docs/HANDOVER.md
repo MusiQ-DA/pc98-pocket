@@ -312,6 +312,36 @@ bash scripts/lint_core.sh && python3 scripts/check_unconnected.py
      1 語ずつ再開し、STOSB 3 倍・frame-iret 悪化）。やるなら「打ち切った位置から再開」できる半分ごとの
      hi 境界（buf_hi）が必要。もう一つの軸はバスペア自体のコスト（sim で読み 1 回 ≈ 33 clk = 7.7 CE、
      実機 286 は 2 CE）。pf ON はこの Pocket では逆効果のまま（上記）。
+   - **step 2: paced キャッシュの「値付け」（`paced-speed-2`、CI #1033 = run 41196214624、sim/firmware/quartus 全 green、実機未確認）**:
+     原因: 8/10/12MHz ではキャッシュを切っており、全アクセスが Wishbone で bridge → RAM.sv → SDRAM を往復していた。
+     1 ペア ≈ 7.7 CPU クロック（tb_mem_perf CALL/RET: RAM.sv R2 ≈ 15 clk + ポート A 待ち ≈ 6.7 clk、表示ポート D が 1/3 を占有）で、
+     実機 286 の Ts+Tc = 2 クロックの約 4 倍。加えて uncached の行ロードは行末まで読み終えるまで fetch に渡らない。
+     対策: paced でも z86_cache を有効にし（ITF バンク中・OSD/JTAG の cache off は従来どおり）、ヒットを**値付け**する。
+     受け付けた時点で pdebt = その 286 バスサイクル分（1 サイクル 2 クロック + 設定のウェイト、奇数ワードは 2 サイクル、
+     行ロードは要求語から行末まで 1 語 1 サイクル）を積み、cpu_ce_posedge ごとに減らし、0 になるまで ld_ack / rd_ready /
+     wr_ready を保留（S_PACE, wr_owed）。借りがある間は次を受け付けない。ミスは max(フィル時間, 286 時間)。Turbo（pace=0）は不変。
+     書き込みは Turbo と同じ port F の 1 段ライトスルー（ack は 286 時間経過後）。bridge 側のポステッド書き込みキュー（a2f0d62）は使っていない。
+     tb_mem_perf +pfdis、CPU クロック（ce_pos）前 → 後:
+
+     | phase | 8MHz | 10MHz | 12MHz |
+     |---|---|---|---|
+     | 01 STOSB | 11538→8445 | 12872→8861 | 13975→10947 |
+     | 03 MOVSW | 15492→7558 | 18084→8318 | 20657→10556 |
+     | 04/05/11/12 GRCG | ±1〜6%（VRAM は uncached） | 同 | 同 |
+     | 08 CALL/RET | 53584→14882 | 61126→16257 | 72789→23025 |
+     | 09 SMC | 74168→21060 | 85712→22167 | 103474→32017 |
+     | 0b IRQ storm | 767719→136790 | 834446→130461 | 952659→170419 |
+     | 0c frame-iret | 68551→21371 | 76730→22245 | 101121→32334 |
+     | 0d big-frame+IRQ | 時間切れ→748882 | 時間切れ→740917 | 7923920→1104282 |
+
+     +cache は 3 速度とも `=== PASS tb_mem_perf ===`（VERIFY bad=0 diverged=0、ITF poll loop 786〜1024 clk ≥ 471）。
+     0a（F-bank remap）は 2599→4244 と悪化するが 48 バイトの合成相。EGC 相の増減は表示フェッチとの重なり方の差。
+     z86 回帰（sim_z86_tests.sh）は free と `Z86_EXTRA="+pace +pacew=1"` の両方 green、CI に追加。paced では IRQ 周期を広げてある
+     （500 clk 周期の IRQ は 286 速度では自分のハンドラに追い越される）。
+     **既知の別問題**: z86 の EU は値付けされていない（ALU5 x500 = 2002 CPU クロック、286 なら ≈ 9000）。レジスタ演算だけの
+     コードは paced でも実機より速い。今回は触っていない。
+     **実機で要確認**: `scripts/sd_stage2_check.sh 10` / `turbo`、SuperDepth 40 回、ITF POST、SCSI ブート、CPUBENCH の 10MHz 値
+     （速くなりすぎていないか）。OSD 設定コメント（firmware/settings_ui.c「paced modes ... never cache」）は未更新。
 2. **RMW の高速化**（S2 でも 1 フレームあたり約 3k ワード）: GRCG RMW の各プレーンの読み書きをまとめる。フリーズの教訓から、ポステッド書き込みは使わず、完了を待つ同期方式でまとめる。
 3. **TDW の書き込み結合**（必要なら）: 連続アドレスをプレーンごとにバースト化する。slot ビットで既定 OFF にして導入し、コールドブートで確かめてから ON にする。
 4. **プレーンのバンク分散 / 表示フェッチのバースト長 32**: 効果は 1〜2 割、リスクは中。上の 3 つで足りなければやる。
