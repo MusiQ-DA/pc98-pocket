@@ -176,7 +176,7 @@ module tb_mem_perf;
         .reset     (cpu_reset_w),
         .clk_free  (clk),
         .ce        (z86_ce),
-        .cache_en  (cache_r),
+        .cache_en  (cache_r & ~shadow_flag_r),   // core_top: off while the ITF bank is mapped
         .pace      (cache_r && clk_select_r != 2'b11 && !nopace_r),
         .pace_ce   (ce_pos),
         .pace_rd_wait (ram_rd_wait),
