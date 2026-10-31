@@ -86,6 +86,9 @@ module tb_z86_loop;
     initial for (int i = 0; i < 4096; i++) pbuf[i] = 8'hF4;
     int rd_n = 0, wr_n = 0, cnt = 0;
     bit scsiport = 0;
+    // +ioff: nothing answers an I/O read -- it reads 0xFF, np21w's definp8
+    bit ioff = 0;
+    initial ioff = $test$plusargs("ioff");
     logic [7:0] sstream [0:255];
     int sstream_k = 0;
     string sstreamf;
@@ -171,6 +174,7 @@ module tb_z86_loop;
                     // 0xCC0 says "command done", 0xCC2 a GOOD status, and
                     // 0xCC6 hands out successive bytes of +scsistream so a
                     // reply (a MODE SENSE page, say) can be replayed.
+                    if (ioff && tga) dat_i <= 16'hFFFF;
                     if (scsiport && tga) begin
                         if ({adr,1'b0} == 20'h00CC0) dat_i <= 16'h0080;
                         if ({adr,1'b0} == 20'h00CC2) dat_i <= 16'h0000;
