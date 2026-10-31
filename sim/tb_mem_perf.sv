@@ -648,6 +648,31 @@ module tb_mem_perf;
         emit(8'hB0); emit(v); emit(8'hBA); emitw(p); emit(8'hEE);
     endtask
 
+    // ---- instruction-cost probes (phases 20-3F, +cyconly) -------------
+    // Each probe is a BP-counted loop around K copies of one instruction
+    // (or one REP op). Its loop is DEC BP / JZ out / JMP NEAR head -- the
+    // same in every probe and in the empty baseline (phase 20), so
+    // scripts/sim_cycle_table.sh subtracts the baseline and divides by
+    // iters*K to get the CPU clocks one instruction really costs on this
+    // path (bridge, RAM.sv, SDRAM, z86_cache), and sets it against the
+    // 80286 data-sheet count. CX and CL stay free for the bodies.
+    int cyc_head = 0;
+    int cyc_iters [0:255];
+    task cyc_begin(input logic [7:0] ph, input int n);
+        marker(ph);
+        emit(8'hBD); emitw(16'(n));                   // mov bp,n
+        cyc_iters[ph] = n;
+        cyc_head = prog_len;
+    endtask
+    task cyc_end(input logic [7:0] ph);
+        int rel;
+        emit(8'h4D);                                  // dec bp
+        emit(8'h74); emit(8'h03);                     // jz +3 (out)
+        rel = cyc_head - (prog_len + 3);
+        emit(8'hE9); emitw(16'(rel));                 // jmp near head
+        marker(ph | 8'h80);
+    endtask
+
     // Poke a tb-authored byte below A0000 into the SDRAM image AND the
     // coherence oracle's shadow: z86's 16 B fetch line loads and the
     // bridge's 32 B pf fills read bytes the guest never wrote, so every
@@ -1268,6 +1293,137 @@ module tb_mem_perf;
             marker(8'h93);
         end
 
+        // ---- phases 20-3F: instruction-cost probes (see cyc_begin) -----
+        begin
+            int iret_stub, r_skip, call_fix [0:7], ret_stub, r_over;
+            cyc_enter = prog_len;
+            emit(8'hFA);                                   // cli
+            emit(8'h31); emit(8'hC0);                      // xor ax,ax
+            emit(8'h8E); emit(8'hD8);                      // mov ds,ax
+            emit(8'h8E); emit(8'hC0);                      // mov es,ax
+            emit(8'h8E); emit(8'hD0);                      // mov ss,ax
+            emit(8'hBC); emitw(16'h0600);                  // mov sp,0600
+            emit(8'hFC);                                   // cld
+            emit(8'hF8);                                   // clc
+            // IVT[80h] -> an IRET stub placed after the probes' jmp-over
+            emit(8'hC7); emit(8'h06); emitw(16'h0200);
+            iret_stub = prog_len; emitw(16'h0000);         // patched below
+            emit(8'hC7); emit(8'h06); emitw(16'h0202); emitw(16'hF000);
+            emit(8'hBB); emitw(16'h0007);                  // bx,7 (mul/div)
+            emit(8'hB8); emitw(16'h1234);                  // ax
+            emit(8'hB1); emit(8'h04);                      // cl,4
+
+            cyc_begin(8'h20, 200); cyc_end(8'h20);          // empty baseline
+            cyc_begin(8'h21, 200);                          // add ax,bx x8
+            repeat (8) begin emit(8'h01); emit(8'hD8); end
+            cyc_end(8'h21);
+            cyc_begin(8'h22, 200);                          // mov dx,ax x8
+            repeat (8) begin emit(8'h89); emit(8'hC2); end
+            cyc_end(8'h22);
+            cyc_begin(8'h23, 200);                          // inc si x8
+            repeat (8) emit(8'h46);
+            cyc_end(8'h23);
+            cyc_begin(8'h24, 200);                          // shl dx,1 x8
+            repeat (8) begin emit(8'hD1); emit(8'hE2); end
+            cyc_end(8'h24);
+            cyc_begin(8'h25, 200);                          // shl dx,cl x8 (cl=4)
+            repeat (8) begin emit(8'hD3); emit(8'hE2); end
+            cyc_end(8'h25);
+            cyc_begin(8'h26, 100);                          // mul bx x4
+            repeat (4) begin emit(8'hF7); emit(8'hE3); end
+            cyc_end(8'h26);
+            cyc_begin(8'h27, 100);                          // div bx x4 (dx<bx)
+            emit(8'h31); emit(8'hD2);                       // xor dx,dx -- once,
+            cyc_head = prog_len;                            // before the head
+            repeat (4) begin emit(8'hF7); emit(8'hF3); end
+            cyc_end(8'h27);
+            emit(8'hF8);                                    // clc (add/shl/mul set CF)
+            cyc_begin(8'h28, 200);                          // jc +0 not taken x8
+            repeat (8) begin emit(8'h72); emit(8'h00); end
+            cyc_end(8'h28);
+            cyc_begin(8'h29, 200);                          // jmp short +0 x8
+            repeat (8) begin emit(8'hEB); emit(8'h00); end
+            cyc_end(8'h29);
+            cyc_begin(8'h2A, 200);                          // mov ax,[0700] x8
+            repeat (8) begin emit(8'hA1); emitw(16'h0700); end
+            cyc_end(8'h2A);
+            cyc_begin(8'h2B, 200);                          // mov [0702],ax x8
+            repeat (8) begin emit(8'hA3); emitw(16'h0702); end
+            cyc_end(8'h2B);
+            cyc_begin(8'h2C, 200);                          // add [0704],ax x8
+            repeat (8) begin emit(8'h01); emit(8'h06); emitw(16'h0704); end
+            cyc_end(8'h2C);
+            cyc_begin(8'h2D, 200);                          // push ax;pop dx x4
+            repeat (4) begin emit(8'h50); emit(8'h5A); end
+            cyc_end(8'h2D);
+            cyc_begin(8'h2E, 200);                          // call/ret x4
+            for (int k = 0; k < 4; k++) begin
+                emit(8'hE8); call_fix[k] = prog_len; emitw(16'h0000);
+            end
+            cyc_end(8'h2E);
+            cyc_begin(8'h2F, 100);                          // int 80h/iret x4
+            repeat (4) begin emit(8'hCD); emit(8'h80); end
+            cyc_end(8'h2F);
+            cyc_begin(8'h30, 200);                          // in al,dx (88FC) x4
+            emit(8'hBA); emitw(16'h88FC);                   // (mov dx in body:
+            repeat (4) emit(8'hEC);                         //  counted below)
+            cyc_end(8'h30);
+            cyc_begin(8'h31, 200);                          // out dx,al (88FC) x4
+            emit(8'hBA); emitw(16'h88FC);
+            repeat (4) emit(8'hEE);
+            cyc_end(8'h31);
+            cyc_begin(8'h32, 8);                            // rep stosw 256 -> 3000
+            emit(8'hBF); emitw(16'h3000);
+            emit(8'hB9); emitw(16'h0100);
+            emit(8'hF3); emit(8'hAB);
+            cyc_end(8'h32);
+            cyc_begin(8'h33, 8);                            // rep movsw 256 3000->3400
+            emit(8'hBE); emitw(16'h3000);
+            emit(8'hBF); emitw(16'h3400);
+            emit(8'hB9); emitw(16'h0100);
+            emit(8'hF3); emit(8'hA5);
+            cyc_end(8'h33);
+            // VRAM: ES=A800, GRCG TDW on
+            emit(8'hB8); emitw(16'hA800);
+            emit(8'h8E); emit(8'hC0);                       // mov es,ax
+            outport(16'h007C, 8'h80);
+            outport(16'h007E, 8'hAA); outport(16'h007E, 8'hBB);
+            outport(16'h007E, 8'hCC); outport(16'h007E, 8'hDD);
+            cyc_begin(8'h34, 8);                            // rep stosw 256 GRCG TDW
+            emit(8'hBF); emitw(16'h6000);
+            emit(8'hB9); emitw(16'h0100);
+            emit(8'hF3); emit(8'hAB);
+            cyc_end(8'h34);
+            cyc_begin(8'h35, 100);                          // mov es:[6000],ax TDW x8
+            repeat (8) begin emit(8'h26); emit(8'hA3); emitw(16'h6000); end
+            cyc_end(8'h35);
+            outport(16'h007C, 8'hC0);                       // GRCG RMW
+            cyc_begin(8'h36, 8);                            // rep stosw 256 GRCG RMW
+            emit(8'hBF); emitw(16'h6200);
+            emit(8'hB9); emitw(16'h0100);
+            emit(8'hF3); emit(8'hAB);
+            cyc_end(8'h36);
+            outport(16'h007C, 8'h00);                       // GRCG off
+            cyc_begin(8'h37, 8);                            // rep stosw 256 plain VRAM
+            emit(8'hBF); emitw(16'h6400);
+            emit(8'hB9); emitw(16'h0100);
+            emit(8'hF3); emit(8'hAB);
+            cyc_end(8'h37);
+            emit(8'h31); emit(8'hC0);                       // xor ax,ax
+            emit(8'h8E); emit(8'hC0);                       // es=0
+
+            // jump over the stubs, then the RET / IRET targets
+            emit(8'hEB); r_over = prog_len; emit(8'h00);
+            ret_stub = prog_len;  emit(8'hC3);
+            prog[iret_stub] = 8'(prog_len); prog[iret_stub+1] = 8'(prog_len >> 8);
+            emit(8'hCF);
+            prog[r_over] = 8'(prog_len - (r_over + 1));
+            for (int k = 0; k < 4; k++) begin
+                automatic int rel = ret_stub - (call_fix[k] + 2);
+                prog[call_fix[k]] = 8'(rel); prog[call_fix[k]+1] = 8'(rel >> 8);
+            end
+        end
+
         // done: spin
         marker(8'hFF);
         emit(8'hEB); emit(8'hFE);           // JMP $
@@ -1293,6 +1449,7 @@ module tb_mem_perf;
     int         lf_enter = 0;
     int         lf_enter16 = 0;
     int         alu_enter = 0;      // phase 13 entry (+aluonly)
+    int         cyc_enter = 0;      // phase 20 block entry (+cyconly)
     int         lf_end16 = 0;
     int         lf_n     = 0;
     logic       lf_req_d = 1'b0;
@@ -1337,7 +1494,8 @@ module tb_mem_perf;
         // whole 14-minute phase set.
         begin
             automatic int  jip = $test$plusargs("itfonly") ? lf_enter
-                               : $test$plusargs("aluonly") ? alu_enter : 0;
+                               : $test$plusargs("aluonly") ? alu_enter
+                               : $test$plusargs("cyconly") ? cyc_enter : 0;
             automatic logic [7:0] jlo = jip[7:0], jhi = jip[15:8];
             ram_seed(32'h0FFFF0, 16'h00EA);
             ram_seed(32'h0FFFF1, 16'h0000 | {8'h00, jlo});
@@ -2055,6 +2213,9 @@ module tb_mem_perf;
         byt = (n < 256) ? phase_bytes[n] : 0;
         $display("");
         $display("== phase %02X  %s ==", n, phase_name[n]);
+        if (n >= 8'h20 && n < 8'h40)
+            $display("CYC %02x iters=%0d cpu=%0d clks=%0d", n, cyc_iters[n],
+                     c_ce - s0.ce, dt);
         $display("   clks=%0d  bytes=%0d  -> %0d.%02d clk/B = %.0f ns/B",
                  dt, byt, byt ? dt/byt : 0,
                  byt ? int'(((dt*100)/byt) % 100) : 0,
@@ -2149,7 +2310,8 @@ module tb_mem_perf;
             // +itfonly starts the guest inside phase 0F, so every earlier
             // phase's data region is untouched: the phase-verify peeks have
             // nothing to say in that mode. The probe prints its own verdict.
-            if ($test$plusargs("itfonly") || $test$plusargs("aluonly")) begin
+            if ($test$plusargs("itfonly") || $test$plusargs("aluonly")
+                || $test$plusargs("cyconly")) begin
                 $display("(itfonly: phase verification skipped)");
                 return;
             end

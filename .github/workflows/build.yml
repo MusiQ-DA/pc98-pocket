@@ -160,6 +160,13 @@ jobs:
           bash scripts/sim_z86_tests.sh
           Z86_EXTRA="+pace +pacew=1" bash scripts/sim_z86_tests.sh
 
+      - name: instruction costs against the 80286 data sheet (10 MHz), held to the baseline
+        run: |
+          # Prints measured CPU clocks per probe next to the data-sheet count;
+          # fails if any row's ratio moves more than 25% from
+          # sim/cycle_table_baseline.txt (update it with --update on purpose).
+          bash scripts/sim_cycle_table.sh --check 1
+
       - name: NEC-style EMS board — 08E1-08E9 windows bank into SDRAM
         run: |
           S=fpga/core
