@@ -4089,19 +4089,27 @@ module core_top (
     // its enable. It stays off while the ITF is mapped: the ITF's IRQ0 test
     // expects the timer interrupt within 32 turns of a TEST/JNZ/LOOP, a
     // window a cached loop runs through long before the PIT gets there.
-    // It also stays off in the paced modes: those are bus-faithful now --
-    // 1x CE + the 286 Ts/Tc pair profile -- and a VX2/VX21/RX had no
-    // cache; the cache is the Turbo setting's headroom. Toggling at
-    // runtime is safe: the cache is write-through no-allocate, uncached
-    // writes ride the port-A commits whose snoop clears lines, and
-    // clk_select latches on biu_done.
+    // In the paced modes it runs PRICED (pace): a VX2/VX21/RX had no
+    // cache, but its memory answered inside the 2-clock 286 bus cycle,
+    // which the SDRAM behind the bridge cannot (~7.7 CPU clocks per
+    // Wishbone pair, docs/HANDOVER.md 11). A hit there completes only
+    // after the 286 bus cycles it stands for (2 clocks + the setting's
+    // waits per cycle; a line load is one cycle per word fetched), so
+    // the cache hides the SDRAM's latency without running faster than
+    // the metal; Turbo hits stay free. Toggling at runtime is safe: the
+    // cache is write-through no-allocate, uncached writes ride the
+    // port-A commits whose snoop clears lines, and clk_select latches
+    // on biu_done.
     z86 u_cpu (
         .clk       (zet_clk),
         .reset     (reset_cpu),
         .clk_free  (clk_chipset),
         .ce        (z86_ce),
-        .cache_en  (osd_cpu_cache & (clk_select == 2'b11)
-                    & ~jtag_cache_dis & ~itf_bank),
+        .cache_en  (osd_cpu_cache & ~jtag_cache_dis & ~itf_bank),
+        .pace      (clk_select != 2'b11),
+        .pace_ce   (cpu_ce_posedge),
+        .pace_rd_wait (ram_read_wait_cycle),
+        .pace_wr_wait (ram_write_wait_cycle),
         .bios_shadow  (bios_shadow_flag),
         .bios_protect (bios_protect_flag[1]),
         .f_req     (cachef_req),

@@ -93,6 +93,12 @@ module z86_cache #(
     input  wire         ce,             // the gated CPU clock ticks this edge
     input  wire         reset,          // CPU reset (synchronous)
     input  wire         cache_en,       // 0: everything takes the bus
+    // Paced settings (286 8/10/12 MHz): a cached access completes no
+    // sooner than the 286 bus cycles it stands for -- see "Paced hits".
+    input  wire         pace,
+    input  wire         pace_ce,        // one pulse per 286 CPU clock
+    input  wire [1:0]   pace_rd_wait,   // wait states per read cycle
+    input  wire [1:0]   pace_wr_wait,   // ... per write cycle
 
     // ---- PC-98 map state ------------------------------------------------
     input  wire         bios_shadow,    // RAM.sv bios_shadow_flag
@@ -250,8 +256,30 @@ module z86_cache #(
                      S_WRD2  = 4'd7,
                      S_WWR1  = 4'd8,
                      S_WWR2  = 4'd9,
-                     S_W5F   = 4'd10;   // OUT 5Fh delay
+                     S_W5F   = 4'd10,   // OUT 5Fh delay
+                     S_PACE  = 4'd11;   // paced hit: result held, bus time owed
     reg  [3:0]  st;
+
+    // ---- Paced hits -----------------------------------------------------
+    // At the 286 settings the cache is a latency hider, not a speedup: a
+    // VX21's memory answers within its 2-clock bus cycle (Ts+Tc, plus the
+    // configured waits), and the SDRAM behind the bridge cannot -- a
+    // Wishbone pair measured ~7.7 CPU clocks of port arbitration and
+    // CAS round trip. A hit answers in a clk, so the access is priced
+    // instead: pdebt is loaded with the bus time the access stands for
+    // when it is accepted, counts down one per 286 clock, and the
+    // handshake (ld_ack, rd_ready, wr_ready) is held in S_PACE until it
+    // runs out. A miss's fill usually outlasts the debt and costs its
+    // own time -- max(real, 286), never less than the metal. Nothing new
+    // is accepted while debt is owed: the 286 BIU runs one cycle at a
+    // time, and a line load is the words from the requested one to the
+    // line's end (what the uncached S_WLD fetches), each a full cycle.
+    reg  [5:0]  pdebt;
+    reg         wr_owed;                // paced store buffered, wr_ready owed
+    reg  [1:0]  pk;                     // what S_PACE completes (K_LD/K_RD)
+    wire [2:0]  p_rcyc = 3'd2 + {1'b0, pace_rd_wait};
+    wire [2:0]  p_wcyc = 3'd2 + {1'b0, pace_wr_wait};
+    wire        p_busy = pace && (pdebt != 6'd0);
 
     localparam [1:0] K_LD = 2'd0, K_RD = 2'd1, K_WR = 2'd2;
     reg  [1:0]  k;                      // what the lookup is for
@@ -329,7 +357,7 @@ module z86_cache #(
     // second half. Anything else reads the current line again; harmless.
     // wr_ready is held until the ce edge the core takes it on; by the edge
     // after, wr_valid is already the core's next store (or low).
-    wire wr_pend   = wr_valid && !wr_ready;
+    wire wr_pend   = wr_valid && !wr_ready && !wr_owed;
     wire ld_pend   = (ld_req ^ ld_ack);
     wire rd_now    = rd && ce;
     wire rd_any    = rd_pend || rd_now;
@@ -417,6 +445,13 @@ module z86_cache #(
         dbg_wr_v <= 1'b0;
         if (ce) wr_ready <= 1'b0;
         if (io_rec != 8'hFF) io_rec <= io_rec + 8'd1;
+        if (pace_ce && pdebt != 6'd0) pdebt <= pdebt - 6'd1;
+        if (!pace) pdebt <= 6'd0;
+        // A paced store's ready comes due with its debt.
+        if (wr_owed && !p_busy) begin
+            wr_ready <= 1'b1;
+            wr_owed  <= 1'b0;
+        end
 
         // ---------------- snoop (every edge, highest priority) ----------
         // t_we/d_we are registered: the write they carry lands on THIS edge,
@@ -533,6 +568,8 @@ module z86_cache #(
             fill_done <= 1'b0;
             io_rec    <= 8'hFF;
             park_v    <= 1'b0;          // S_FLUSH clears every tag anyway
+            pdebt     <= 6'd0;
+            wr_owed   <= 1'b0;
         end else case (st)
           S_FLUSH: begin
             // Clear every tag. The snoop keeps the cache coherent on its
@@ -547,13 +584,20 @@ module z86_cache #(
 
           S_IDLE: begin
             part <= 1'b0;
-            if (d_we) begin
+            if (d_we || p_busy) begin
+                // a line patch lands this edge, or the last paced access
+                // still owes bus time
                 // a line patch lands this edge: look it up on the next
             end else if (wr_pend) begin
                 if (wr_cached) begin
                     if (bios_protect && rom_a(wr_addr)) begin
-                        // A protected ROM write goes nowhere.
-                        wr_ready <= 1'b1;
+                        // A protected ROM write goes nowhere -- but its
+                        // bus cycle still runs.
+                        if (pace) begin
+                            wr_owed <= 1'b1;
+                            pdebt   <= {3'd0, p_wcyc};
+                        end else
+                            wr_ready <= 1'b1;
                     end else if (!wb_full) begin
                         wb_full  <= 1'b1;
                         wb_p0    <= phys_of(wr_addr, bios_shadow);
@@ -562,7 +606,13 @@ module z86_cache #(
                         wb_b1    <= wr_data[15:8];
                         wb_two   <= wr_word;
                         f_wpart  <= 1'b0;
-                        wr_ready <= 1'b1;
+                        if (pace) begin
+                            wr_owed <= 1'b1;
+                            pdebt   <= (wr_word && wr_addr[0])
+                                     ? {2'd0, p_wcyc, 1'b0}
+                                     : {3'd0, p_wcyc};
+                        end else
+                            wr_ready <= 1'b1;
                         // Watchpoint witness: this store now owns the
                         // port-F buffer and will reach the SDRAM.
                         dbg_wr_v   <= 1'b1;
@@ -598,6 +648,9 @@ module z86_cache #(
                     c_a  <= {ld_addr[19:4], 4'h0};
                     c_word <= 1'b0;
                     st   <= S_CMP;
+                    // words ld_addr..line end, one cycle each
+                    pdebt <= pace ? (6'd8 - {3'd0, ld_addr[3:1]}) * {3'd0, p_rcyc}
+                                  : 6'd0;
                 end else if (ce && !busy) begin
                     // Uncached: start at the word the fetch asked for. A
                     // 286's BIU fetches from the branch target on, never
@@ -618,6 +671,9 @@ module z86_cache #(
             end else if (rd_any) begin
                 if (rd_cached) begin
                     k      <= K_RD;
+                    pdebt  <= !pace ? 6'd0
+                            : (rd_cur_w && rd_cur_a[0]) ? {2'd0, p_rcyc, 1'b0}
+                            : {3'd0, p_rcyc};
                     c_a    <= rd_cur_a;
                     c_word <= rd_cur_w;
                     rd_a   <= rd_cur_a;
@@ -674,8 +730,13 @@ module z86_cache #(
                 case (k)
                   K_LD: begin
                     ld_data <= line;
-                    ld_ack  <= ~ld_ack;
-                    st      <= S_IDLE;
+                    if (p_busy) begin
+                        pk <= K_LD;
+                        st <= S_PACE;
+                    end else begin
+                        ld_ack  <= ~ld_ack;
+                        st      <= S_IDLE;
+                    end
                   end
                   K_RD: begin
                     if (!part) begin
@@ -686,15 +747,25 @@ module z86_cache #(
                         end else begin
                             rd_data  <= c_word ? {line[8*(c_off+4'd1) +: 8], line[8*c_off +: 8]}
                                                : {8'h00, line[8*c_off +: 8]};
+                            if (p_busy) begin
+                                pk <= K_RD;
+                                st <= S_PACE;
+                            end else begin
+                                rd_pend  <= 1'b0;
+                                rd_ready <= 1'b1;
+                                st       <= S_IDLE;
+                            end
+                        end
+                    end else begin
+                        rd_data  <= {line[8*c_off +: 8], lo_byte};
+                        if (p_busy) begin
+                            pk <= K_RD;
+                            st <= S_PACE;
+                        end else begin
                             rd_pend  <= 1'b0;
                             rd_ready <= 1'b1;
                             st       <= S_IDLE;
                         end
-                    end else begin
-                        rd_data  <= {line[8*c_off +: 8], lo_byte};
-                        rd_pend  <= 1'b0;
-                        rd_ready <= 1'b1;
-                        st       <= S_IDLE;
                     end
                   end
                   default: begin    // K_WR hit: patch the line
@@ -732,6 +803,22 @@ module z86_cache #(
                 t_we <= 1'b1; t_wa <= idx_of(fill_p); t_wd <= {1'b1, tag_of(fill_p)};
             end
             st <= S_SERVE;
+          end
+
+          // ---------------- paced: the result waits out its bus time -----
+          // A line load the fetch abandoned (a branch) stops at the cycle
+          // in flight, as S_WLD's ld_drop does.
+          S_PACE: begin
+            if (pk == K_LD && ld_drop && pdebt > {3'd0, p_rcyc})
+                pdebt <= {3'd0, p_rcyc};
+            if (!p_busy) begin
+                if (pk == K_LD) ld_ack <= ~ld_ack;
+                else begin
+                    rd_pend  <= 1'b0;
+                    rd_ready <= 1'b1;
+                end
+                st <= S_IDLE;
+            end
           end
 
           // ---------------- uncached: Wishbone, ce edges only ------------
