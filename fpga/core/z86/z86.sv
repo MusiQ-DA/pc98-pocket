@@ -26,6 +26,7 @@ module z86 #(
     input               pace_ce,        // one pulse per 286 CPU clock
     input       [1:0]   pace_rd_wait,
     input       [1:0]   pace_wr_wait,
+    input       [4:0]   pace_vwait,     // np21w VRAM wait now (Chipset.sv)
     input               bios_shadow,    // RAM.sv bios_shadow_flag
     input               bios_protect,   // RAM.sv bios_protect_flag[1]
 
@@ -246,6 +247,7 @@ z86_cache #(.WCOMB(WCOMB)) u_cache (
     .pace_ce            (pace_ce),
     .pace_rd_wait       (pace_rd_wait),
     .pace_wr_wait       (pace_wr_wait),
+    .pace_vwait         (pace_vwait),
     .bios_shadow        (bios_shadow),
     .bios_protect       (bios_protect),
     .f_req              (f_req),

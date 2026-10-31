@@ -1031,6 +1031,7 @@ module core_top (
     // byte per SDRAM word, as on port A; all on clk_chipset.
     wire        cachef_req, cachef_we, cachef_ack, cachef_rvalid, cachef_done;
     wire  [4:0] cachef_wcnt;
+    wire  [4:0] vram_wait_now;          // np21w VRAM wait for the CPU to price
     wire [23:0] cachef_addr;
     wire  [3:0] cachef_len;
     wire [15:0] cachef_wdata0, cachef_wdata1, cachef_rdata;
@@ -3905,6 +3906,7 @@ module core_top (
         ,.cachef_rdata                      (cachef_rdata)
         ,.cachef_done                       (cachef_done)
         ,.cachef_wcnt                       (cachef_wcnt)
+        ,.vram_wait_now                     (vram_wait_now)
         ,.ram_wr_snoop_v                    (ram_wr_snoop_v)
         ,.ram_wr_snoop_addr                 (ram_wr_snoop_addr)
         ,.ram_wr_snoop_len                  (ram_wr_snoop_len)
@@ -4118,6 +4120,7 @@ module core_top (
         .pace_ce   (cpu_ce_posedge),
         .pace_rd_wait (ram_read_wait_cycle),
         .pace_wr_wait (ram_write_wait_cycle),
+        .pace_vwait   (vram_wait_now),
         .bios_shadow  (bios_shadow_flag),
         .bios_protect (bios_protect_flag[1]),
         .f_req     (cachef_req),

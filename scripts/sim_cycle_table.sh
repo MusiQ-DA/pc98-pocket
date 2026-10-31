@@ -19,8 +19,8 @@
 #
 # The data-sheet column is the floor a real VX2/VX21/RX can never beat; its
 # DRAM waits and I/O recovery only add to it. Rows marked VRAM / I/O depend on
-# PC-98 wait states the data sheet does not know about, so read those ratios
-# as "how far above a zero-wait 286".
+# PC-98 wait states: those carry np21w's per-access VRAM/GRCG waits
+# (pccore.c np2cfg.wait), averaged over the frame.
 #
 # Regression guard: with --check, every row's ratio must stay within 25% of
 # sim/cycle_table_baseline.txt (speed, phase, ratio). A deliberate timing
@@ -67,6 +67,13 @@ done
 python3 - "$MODE" "$OUT" $SPEEDS <<'PY'
 import re, sys, os
 mode, out, speeds = sys.argv[1], sys.argv[2], sys.argv[3:]
+# Graphics VRAM waits, np21w/np2kai's model (pccore.c np2cfg.wait =
+# {1,1, 6,1, 8,1}: TRAM, VRAM, GRCG -- active display, vblank), charged per
+# guest access on top of the data sheet (mem/memvram.c MEMWAIT_*). Averaged
+# over a 24.8 kHz frame, 400 of 440 lines active.
+ACT = 400 / 440
+VRAMW = round(6 * ACT + 1 * (1 - ACT))      # 6
+GRCG  = round(8 * ACT + 1 * (1 - ACT))      # 7
 # phase: (class, body, 80286 data-sheet clocks per iteration)
 SHEET = {
  0x21: ("EU",   "add r16,r16 x8",            8*2),
@@ -88,10 +95,10 @@ SHEET = {
  0x31: ("I/O",  "mov dx + out dx,al x4",     2+4*3),
  0x32: ("MEM",  "rep stosw 256",             2+2+4+3*256),
  0x33: ("MEM",  "rep movsw 256",             2+2+2+5+4*256),
- 0x34: ("VRAM", "rep stosw 256 GRCG TDW",    2+2+4+3*256),
- 0x35: ("VRAM", "mov es:[m16],ax TDW x8",    8*3),
- 0x36: ("VRAM", "rep stosw 256 GRCG RMW",    2+2+4+3*256),
- 0x37: ("VRAM", "rep stosw 256 plain VRAM",  2+2+4+3*256),
+ 0x34: ("VRAM", "rep stosw 256 GRCG TDW",    2+2+4+(3+GRCG)*256),
+ 0x35: ("VRAM", "mov es:[m16],ax TDW x8",    8*(3+GRCG)),
+ 0x36: ("VRAM", "rep stosw 256 GRCG RMW",    2+2+4+(3+GRCG)*256),
+ 0x37: ("VRAM", "rep stosw 256 plain VRAM",  2+2+4+(3+VRAMW)*256),
 }
 LOOP = 2 + 3 + (7 + 1)   # dec bp / jz not taken / jmp near taken
 SHEET = {k: (c, b, r + LOOP) for k, (c, b, r) in SHEET.items()}
@@ -115,8 +122,8 @@ for ph, (cls, body, ref) in sorted(SHEET.items()):
         v = res.get((sp, ph))
         row += f" {v:8.1f} {v/ref:6.2f}" if v is not None else f" {'-':>8} {'-':>6}"
     print(row)
-print("\nratio <1: faster than a zero-wait 286 (the metal can never be); "
-      ">1: slower. VRAM/I/O rows exclude PC-98 wait states.")
+print("\nratio <1: faster than the reference, >1: slower. Reference: 80286 data "
+      "sheet, plus np21w's VRAM/GRCG waits on the VRAM rows (I/O rows: none).")
 
 bl = "sim/cycle_table_baseline.txt"
 if mode == "update":

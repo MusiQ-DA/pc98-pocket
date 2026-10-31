@@ -182,6 +182,9 @@ module tb_mem_perf;
         .pace_ce   (ce_pos),
         .pace_rd_wait (ram_rd_wait),
         .pace_wr_wait (ram_wr_wait),
+        // np21w's VRAM wait, as Chipset.sv computes it for core_top
+        .pace_vwait   ({1'b0, vid_vb ? 4'd1
+                                     : (grcg_active | egc_active_w) ? 4'd8 : 4'd6}),
         .bios_shadow  (shadow_flag_r),
         .bios_protect (1'b0),
         .f_req     (zf_req),
@@ -454,7 +457,7 @@ module tb_mem_perf;
     wire [7:0]  pf_beat_dat_w;
     wire [4:0]  cpu_pf_len_w;
 
-    pc98_gvram_seq #(.EGC(1'b1)) u_seq (
+    pc98_gvram_seq #(.EGC(1'b1), .RMWBUF(1'b1)) u_seq (
         .clk(clk), .reset(reset),
         .cpu_gvram(~ram_sel_n),
         .cpu_rd(seq_rd), .cpu_wr(seq_wr),
@@ -482,6 +485,7 @@ module tb_mem_perf;
         .mem_done(access_complete_w), .mem_own(access_own_w),
         .mem_ready(ram_ready_w),
         .mem_wr_taken(ram_wt_w),
+        .pf_beat_v(pf_beat_v_w), .pf_beat_dat(pf_beat_dat_w),
         .cpu_wr_taken(seq_wr_taken_w),
         .cpu_rd_own(seq_rd_own_w)
     );

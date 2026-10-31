@@ -65,7 +65,11 @@ module pc98_gvram_seq #(
     // consumes them, ports 0x4A0-0x4AF decode nowhere, and every graphics
     // access is GRCG or plain. The engine stays in the tree (tb_pc98_egc and
     // this module's own bench still build with EGC=1).
-    parameter bit EGC = 1
+    parameter bit EGC = 1,
+    // The RMW plane-line buffer (below). Needs a memory that answers a
+    // prefetch_len read with pf_beat_* beats -- RAM.sv does; the benches'
+    // behavioural memories do not, and leave it off.
+    parameter bit RMWBUF = 0
 ) (
     input  wire        clk,
     input  wire        reset,
@@ -142,6 +146,10 @@ module pc98_gvram_seq #(
     // RAM.sv's write_taken: the write strobe on the memory pins is durably
     // captured (or can never become a command). See cpu_wr_taken below.
     input  wire        mem_wr_taken,
+    // RAM.sv's burst-read beat stream (prefetch_len reads): the RMW line
+    // buffer below fills from it.
+    input  wire        pf_beat_v,
+    input  wire [7:0]  pf_beat_dat,
 
     // ---- the access page (port 0xA6 bit 0) -------------------------------
     // Rebanks every plane window between the two 640x400 pages, np21w's
@@ -352,7 +360,7 @@ module pc98_gvram_seq #(
     // Same rule as mem_word: the prefetch length belongs to the guest's own
     // pass-through strobe. A sequencer leg (svc or expanded) must never run
     // as a multi-word burst -- its reads expect one byte at a time.
-    assign mem_pf_len = cpu_pf_len & {5{~expand}};
+    // (mem_pf_len is assigned below the RMW line buffer, which also uses it)
 
     // The EGC engine's registers and datapath live one module down; the load
     // strobes and the plane walk are this FSM's business.
@@ -576,6 +584,44 @@ module pc98_gvram_seq #(
     wire [1:0]  gp_nx   = gp + 2'd1;
     wire [19:0] nx_addr = plane_addr(op_addr, gp_nx);
 
+    // ------------------------------------------------------------------
+    // RMW PLANE-LINE BUFFER. A GRCG RMW write must read every live plane
+    // before writing it, and each read leg was a full RAM.sv round trip
+    // (~29 chipset clocks, half of it waiting out the display port) --
+    // three of them serially per word, ~2.8x np21w's MEMWAIT_GRCG price.
+    // Runs of RMW writes walk along a line (REP STOSW, a sprite row), so a
+    // read miss now fetches the plane's whole 16-byte line as ONE burst
+    // (RAM.sv's prefetch_len read, beats on pf_beat_*), and the next words'
+    // reads of that plane come out of the buffer with no leg at all.
+    //
+    // Coherence is kept by keeping the buffer's life short: it is only
+    // ever filled and consulted by guest GRCG RMW writes, every one of
+    // which also writes its result back into the buffered byte, and any
+    // OTHER write that can reach graphics memory through this module -- a
+    // TDW or EGC walk, a service-channel op, a plain or page-one write, a
+    // pass-through write into a window -- drops all of it. Reads change
+    // nothing and leave it. The tag carries the access page. Not covered:
+    // a DMA or loader write into graphics VRAM between two RMW writes to
+    // the same line (no PC-98 software path does that).
+    // ------------------------------------------------------------------
+    reg  [7:0]  rb_d [0:3][0:15];
+    reg  [3:0]  rb_v;
+    reg  [16:0] rb_tag;
+    reg         rb_leg;                  // the read leg in flight is a burst
+    reg  [3:0]  rb_bi;
+    wire        rmw_guest = RMWBUF & grcg_here & grcg_rmw & ~egc_here & ~in_svc
+                          & ~is_read;
+    wire [16:0] rb_line   = {access_page, op_addr[19:4]};
+    wire [3:0]  rb_off    = op_addr[3:0];
+    wire [3:0]  rb_off1   = op_addr[3:0] + 4'd1;
+    wire        rb_fits   = ~grcg_wbatch | (op_addr[3:0] != 4'hF);
+    wire        rb_hit_c  = rmw_guest & rb_fits & rb_v[gp]    & (rb_tag == rb_line);
+    wire        rb_hit_n  = rmw_guest & rb_fits & rb_v[gp_nx] & (rb_tag == rb_line);
+    wire [19:0] rb_base_c = plane_addr({op_addr[19:4], 4'h0}, gp);
+    wire [19:0] rb_base_n = plane_addr({op_addr[19:4], 4'h0}, gp_nx);
+    // A buffer burst leg asks RAM.sv for the plane's 16-byte line.
+    assign mem_pf_len = rb_leg ? 5'd16 : (cpu_pf_len & {5{~expand}});
+
     // Ready lands on the FINAL byte's walk: a word access's first S_DONE
     // only starts the odd half. svc_hold forces expand high, which parks
     // ready low -- a guest access arriving mid-svc-op waits politely.
@@ -682,7 +728,14 @@ module pc98_gvram_seq #(
             svc_gap   <= 1'b0;
             svc_req_s <= 1'b0;
             dbg_arm   <= 5'h00;
+            rb_v      <= 4'h0;
+            rb_leg    <= 1'b0;
         end else begin
+            // the line buffer's burst beats, in order from the line head
+            if (rb_leg && pf_beat_v) begin
+                rb_d[gp][rb_bi] <= pf_beat_dat;
+                rb_bi <= rb_bi + 4'd1;
+            end
             // The EGC's pattern-load strobe is combinational now (see the
             // egc_pat_ld wire): it must fire while mem_rdata still carries
             // the landing byte, because RAM.sv's data output goes to 0x00
@@ -709,6 +762,7 @@ module pc98_gvram_seq #(
                 // guest has taken it, and the guest takes it while its own read
                 // command is still up.
                 if (cpu_rd) rdata_pass <= mem_rdata;
+                if (cpu_wr & window) rb_v <= 4'h0;
                 st        <= S_IDLE;
                 gp        <= 2'd0;
             end else begin
@@ -739,6 +793,8 @@ module pc98_gvram_seq #(
                     // shift queue needs them); reads never batch.
                     grcg_wbatch <= cpu_word & grcg_here & ~egc_here
                                    & ~cpu_rd;
+                    if (cpu_wr & ~(grcg_here & grcg_rmw & ~egc_here))
+                        rb_v <= 4'h0;
                     if (cpu_rd | egc_here)
                         st <= S_RD;
                     else if (grcg_rmw && cur_wdata == 8'hFF
@@ -757,6 +813,7 @@ module pc98_gvram_seq #(
                     // WDAT/drawing land on real VRAM the way hardware does.
                     svc_hold   <= 1'b1;
                     grcg_wbatch <= 1'b0;   // svc ops are byte-wide
+                    if (svc_we) rb_v <= 4'h0;
                     svc_we_r   <= svc_we;
                     svc_raw_r  <= svc_raw;
                     svc_addr_r <= svc_addr;
@@ -811,8 +868,19 @@ module pc98_gvram_seq #(
                     // nothing to contribute to the match.
                     if (last_gp) st <= S_DONE;
                     else begin gp <= gp + 2'd1; st <= S_RD; end
+                end else if (rb_hit_c) begin
+                    // the line buffer has this plane's bytes: no leg
+                    rd_hold    <= rb_d[gp][rb_off];
+                    rd_hold_hi <= rb_d[gp][rb_off1];
+                    st         <= S_WR;
                 end else begin
-                    mem_addr  <= plane_addr(op_addr, gp);
+                    if (rmw_guest & rb_fits) begin
+                        // miss: fetch the plane's whole line in one burst
+                        mem_addr <= rb_base_c;
+                        rb_leg   <= 1'b1;
+                        rb_bi    <= 4'd0;
+                    end else
+                        mem_addr <= plane_addr(op_addr, gp);
                     mem_page1 <= access_page;
                     mem_rd    <= 1'b1;
                     st        <= S_RDW;
@@ -823,6 +891,16 @@ module pc98_gvram_seq #(
                 mem_rd  <= 1'b0;
                 rd_hold <= mem_rdata;
                     rd_hold_hi <= mem_rdata_hi;
+                if (rb_leg) begin
+                    // the burst landed: the plane's line is buffered, and
+                    // this leg's operand bytes come out of it
+                    rb_leg     <= 1'b0;
+                    rb_v       <= ((rb_tag == rb_line) ? rb_v : 4'h0)
+                                | (4'b0001 << gp);
+                    rb_tag     <= rb_line;
+                    rd_hold    <= rb_d[gp][rb_off];
+                    rd_hold_hi <= rb_d[gp][rb_off1];
+                end
                 if (egc_here && !svc_raw_rd) begin
                     // Each plane byte that lands goes into the shift
                     // pipeline's queue (egc_sf_push is combinational over
@@ -868,6 +946,11 @@ module pc98_gvram_seq #(
                     mem_wdata_hi <= wr_byte_hi;
                     mem_wr    <= 1'b1;
                     st        <= S_WRW;
+                    // keep a buffered line equal to memory
+                    if (rmw_guest & rb_fits & rb_v[gp] & (rb_tag == rb_line)) begin
+                        rb_d[gp][rb_off] <= wr_byte;
+                        if (grcg_wbatch) rb_d[gp][rb_off1] <= wr_byte_hi;
+                    end
                 end
               end
 
@@ -894,11 +977,24 @@ module pc98_gvram_seq #(
                     st <= S_DONE;
                 end
                 // RMW chain: the next live plane's READ, now.
+                else if (chain_ok & grcg_rmw & rd_live_f(gp_nx) & rb_hit_n) begin
+                    // next plane's bytes are buffered: straight to its write
+                    mem_wr     <= 1'b0;
+                    gp         <= gp_nx;
+                    rd_hold    <= rb_d[gp_nx][rb_off];
+                    rd_hold_hi <= rb_d[gp_nx][rb_off1];
+                    st         <= S_WR;
+                end
                 else if (chain_ok & grcg_rmw & rd_live_f(gp_nx)) begin
                     mem_wr    <= 1'b0;
                     mem_rd    <= 1'b1;
                     gp        <= gp_nx;
-                    mem_addr  <= nx_addr;
+                    if (rmw_guest & rb_fits) begin
+                        mem_addr <= rb_base_n;
+                        rb_leg   <= 1'b1;
+                        rb_bi    <= 4'd0;
+                    end else
+                        mem_addr <= nx_addr;
                     mem_page1 <= access_page;
                     st        <= S_RDW;
                 end

@@ -104,6 +104,10 @@ module z86_cache #(
     input  wire         pace_ce,        // one pulse per 286 CPU clock
     input  wire [1:0]   pace_rd_wait,   // wait states per read cycle
     input  wire [1:0]   pace_wr_wait,   // ... per write cycle
+    // np21w's graphics-VRAM wait for an access starting now ({analog,
+    // clocks}: 6 with the beam out, 8 with the GRCG/EGC armed, 1 in
+    // vblank -- Chipset.sv). Added once per uncached VRAM access.
+    input  wire [4:0]   pace_vwait,
 
     // ---- PC-98 map state ------------------------------------------------
     input  wire         bios_shadow,    // RAM.sv bios_shadow_flag
@@ -297,6 +301,11 @@ module z86_cache #(
     wire [2:0]  p_rcyc = 3'd2 + {1'b0, pace_rd_wait};
     wire [2:0]  p_wcyc = 3'd2 + {1'b0, pace_wr_wait};
     wire        p_busy = pace && (pdebt != 6'd0);
+    function automatic logic vram_a(input logic [19:0] a);
+        vram_a = (a[19:15] == 5'b10101) || (a[19:16] == 4'hB)
+              || (pace_vwait[4] && a[19:15] == 5'b11100);
+    endfunction
+    wire [5:0]  p_vw = {2'd0, pace_vwait[3:0]};
 
     localparam [1:0] K_LD = 2'd0, K_RD = 2'd1, K_WR = 2'd2;
     reg  [1:0]  k;                      // what the lookup is for
@@ -737,6 +746,16 @@ module z86_cache #(
                     wb_tga_o <= wr_io;
                     wb_stb_o <= 1'b1;
                     st       <= S_WWR1;
+                    // A graphics-VRAM store occupies the bus for its cycles
+                    // plus the np21w wait: the store itself completes when
+                    // the pair does, and the NEXT access waits out the rest
+                    // (S_IDLE's p_busy) -- the CPU-side gap between stores
+                    // overlaps the wait, as the 286's next-cycle setup does.
+                    // (Holding the store's own ready instead added that gap
+                    // on top: a GRCG TDW word went from 1.12x to 1.42x.)
+                    if (pace && !wr_io && vram_a(wr_addr))
+                        pdebt <= ((wr_word && wr_addr[0]) ? {2'd0, p_wcyc, 1'b0}
+                                                          : {3'd0, p_wcyc}) + p_vw;
                 end
             // Data reads before line loads: a 286's EU cycles take the
             // bus ahead of the BIU's prefetch, so a pop or operand read
@@ -792,6 +811,9 @@ module z86_cache #(
                     wb_tga_o <= rd_cur_io;
                     wb_stb_o <= 1'b1;
                     st       <= S_WRD1;
+                    if (pace && !rd_cur_io && vram_a(rd_cur_a))
+                        pdebt <= ((rd_cur_w && rd_cur_a[0]) ? {2'd0, p_rcyc, 1'b0}
+                                                            : {3'd0, p_rcyc}) + p_vw;
                 end
             end
           end
@@ -955,14 +977,14 @@ module z86_cache #(
                 end else begin
                     rd_data[15:8] <= 8'h00;
                     wb_stb_o <= 1'b0;
-                    rd_ready <= 1'b1;
-                    st       <= S_IDLE;
+                    if (p_busy) begin pk <= K_RD; st <= S_PACE; end
+                    else begin rd_ready <= 1'b1; st <= S_IDLE; end
                 end
             end else begin
                 rd_data  <= rd_isw ? wb_dat_i : {8'h00, wb_dat_i[7:0]};
                 wb_stb_o <= 1'b0;
-                rd_ready <= 1'b1;
-                st       <= S_IDLE;
+                if (p_busy) begin pk <= K_RD; st <= S_PACE; end
+                else begin rd_ready <= 1'b1; st <= S_IDLE; end
             end
           end
 
@@ -970,8 +992,8 @@ module z86_cache #(
             if (wb_tga_o) io_rec <= 8'd0;
             rd_data[15:8] <= wb_dat_i[7:0];
             wb_stb_o <= 1'b0;
-            rd_ready <= 1'b1;
-            st       <= S_IDLE;
+            if (p_busy) begin pk <= K_RD; st <= S_PACE; end
+            else begin rd_ready <= 1'b1; st <= S_IDLE; end
           end
 
           S_WWR1: if (ce && wb_ack_i) begin
