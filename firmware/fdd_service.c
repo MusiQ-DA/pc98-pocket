@@ -60,13 +60,24 @@ static uint8_t fdd_d88[2];
 static uint8_t fdd_d88_wp[2];
 
 // Sequential-read prefetch: after a read is served, LBA+1 is staged into the
-// bridge RAM's second half (words 256-511) while the guest drains. A hit
+// bridge RAM's words 512-767 while the guest drains. A hit
 // skips the whole dataslot round trip; a miss just fetches normally. The tag
 // must be dropped on mount and on any write -- the guest may have rewritten
 // the very sector the buffer holds.
-#define PREF_WORD 256u
+#define PREF_WORD 512u
 #define PREF_BYTE (PREF_WORD * 4u)
 static uint32_t pref_lba[2] = { ~0u, ~0u };
+
+// Where a sector is staged in the bridge RAM. A 512-byte sector fits words
+// 0-127, under the Settings window (words 128-255, the slot's 0x60000200);
+// a 1024-byte 2HD sector there would run through that window, so it is
+// staged at words 256-511 instead -- otherwise a read clobbers the settings
+// APF later saves, and a write persists whatever settings_service last put
+// in the window as the sector's second half.
+static uint32_t stage_word(uint32_t drive)
+{
+    return fdd_sector_words[drive] > SECTOR_WORDS ? 256u : 0u;
+}
 
 // FDI (the T98/np21w family's format): a 0x20-byte header in front of the raw
 // image -- {dummy, fddtype, headersize, fddsize, sectorsize, sectors,
@@ -312,7 +323,7 @@ static void push_sector(uint32_t drive, uint32_t woff)
 // Length is the media's sector width, as above.
 static void pull_fifo(uint32_t drive)
 {
-    *FDD_BRAM_ADDR = 0;
+    *FDD_BRAM_ADDR = stage_word(drive);
     *FDD_MGMT_ADDR = (drive << 4) | FMGMT_FIFO;
     for (int i = 0; i < (int) fdd_sector_words[drive]; i++) {
         uint32_t w = 0;
@@ -556,10 +567,11 @@ void fdd_poll(void)
             push_sector(drv, PREF_WORD);
             fdd_dbg_pushed++;
             fdd_dbg_aft = *FDD_REQUEST;
-        } else if (found && tds_transfer(slot, off, FDD_TDS_READ, bytes)) {
+        } else if (found && tds_transfer_to(slot, off, FDD_TDS_READ, bytes,
+                                            FDD_BRIDGE_BASE + stage_word(drv) * 4u)) {
             // Push only on a good read; a failed transfer (or a D88 walk that
             // found no such sector) must not stream stale bytes.
-            push_sector(drv, 0);
+            push_sector(drv, stage_word(drv));
             fdd_dbg_pushed++;
             fdd_dbg_aft = *FDD_REQUEST;
         } else {
@@ -592,7 +604,8 @@ void fdd_poll(void)
         // legal file offset on the raw path -- only the D88 walk uses it as a miss.
         pull_fifo(drv);
         if (!fdd_d88[drv] || off) {
-            tds_transfer(slot, off, FDD_TDS_WRITE, bytes);
+            tds_transfer_to(slot, off, FDD_TDS_WRITE, bytes,
+                            FDD_BRIDGE_BASE + stage_word(drv) * 4u);
         }
         pref_lba[drv] = ~0u;
     }

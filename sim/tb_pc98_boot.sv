@@ -210,9 +210,9 @@ module tb_pc98_boot;
         .clk_free  (clk_chipset),
         .ce        (z86_ce),
 `ifdef REALMEM
-        .cache_en  (~itf_bank & ~nocache),
+        .cache_en  (~itf_bank & ~nocache), .pace(1'b0), .pace_ce(1'b0), .pace_rd_wait(2'd0), .pace_wr_wait(2'd0),
 `else
-        .cache_en  (1'b0),
+        .cache_en  (1'b0), .pace(1'b0), .pace_ce(1'b0), .pace_rd_wait(2'd0), .pace_wr_wait(2'd0),
 `endif
         .bios_shadow  (itf_bank),
         .bios_protect (1'b1),

@@ -152,6 +152,14 @@ jobs:
           ./obj_dir/perf +speed=3 +GRANT | tee perf3.log
           grep -q "=== PASS tb_mem_perf ===" perf3.log
 
+      - name: z86 instruction pairs and interrupts, free and with priced cache hits
+        run: |
+          # The paced settings run z86_cache priced (2 clocks + waits per
+          # 286 bus cycle): every regression must hold with the hits held
+          # back as well as with them free.
+          bash scripts/sim_z86_tests.sh
+          Z86_EXTRA="+pace +pacew=1" bash scripts/sim_z86_tests.sh
+
       - name: NEC-style EMS board — 08E1-08E9 windows bank into SDRAM
         run: |
           S=fpga/core
@@ -464,6 +472,20 @@ jobs:
           # shapes, both FDC transfer modes and all four CPU speeds.
           bash scripts/sim_fdc_si_stall.sh | tee fdc_si_stall.log
           test "$(grep -c ': PASS$' fdc_si_stall.log)" = 16
+
+      - name: a guest OUT parked across a DMA grant cannot land inside DACK
+        run: |
+          # The floppy-write 0x20 byte (SuperDepth's FAT corruption): the
+          # bridge arms OUT 00h,20h (the IRQ0 EOI) in the half-CE before
+          # AEN rises, the 8288 parks the command through the grant, and
+          # the old AEN fell with the 71071's HRQ -- half a DMA clock
+          # before its DACK -- so the parked IOW fired inside the DACK
+          # window, re-latched write_to_fdd, and floppy.v took 0x20 as
+          # the DMA byte. Real bridge + real BUS_ARBITER/8288/71071/READY,
+          # Peripherals' write_to_fdd and ack equations verbatim; all
+          # four CPU speeds, two seeds each.
+          bash scripts/sim_fdc_dma_iow_stray.sh | tee fdc_iow_stray.log
+          test "$(grep -c ': PASS$' fdc_iow_stray.log)" = 8
 
       - name: the 71071 request-side snapshot packs the layout the hunt decodes
         run: |

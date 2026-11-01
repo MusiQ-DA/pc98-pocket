@@ -121,11 +121,23 @@ module BUS_ARBITER (
     //
     // Address/Command Enable Signal
     //
+    // The bus stays the DMAC's until its DACK is gone, not just its HRQ.
+    // The 71071 drops HRQ (and IOW/MEMR) at the S4 posedge but DACK only
+    // at the following S4->SI negedge, half a DMA clock later. The CPU's
+    // next cycle can already be parked in the 8288 -- cpu_bus_bridge arms
+    // it in the half-CE between the passive-status sample and this AEN
+    // rise, and the 8288's machine cycle runs on under the grant with
+    // only command_enable holding it off -- so the moment AEN fell the
+    // parked command fired, inside the DACK window. A parked OUT (the
+    // IRQ0 handler's EOI, `out 00h,20h`) then re-latched Peripherals'
+    // write_to_fdd, which floppy.v takes as the DMA byte on the DACK
+    // fall: one 0x20 in a sector written to disk (the SuperDepth FAT
+    // corruption). sim/tb_fdc_dma_iow_stray.
     always_ff @(posedge clock, posedge reset) begin
         if (reset)
             address_enable_n <= 1'b1;
         else if (cpu_ce_posedge)
-            address_enable_n <= hold_acknowledge;
+            address_enable_n <= hold_acknowledge | ~(&dma_acknowledge_n);
         else
             address_enable_n <= address_enable_n;
     end
