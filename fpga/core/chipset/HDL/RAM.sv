@@ -167,6 +167,7 @@ module RAM #(
      output logic           cachef_rvalid,
      output logic   [15:0]  cachef_rdata,
      output logic           cachef_done,
+     output logic    [4:0]  cachef_wcnt,
     // Port A write commits (guest, DMA, loader), for the cache to snoop:
     // one-cycle pulse, SDRAM word address, words - 1.
      output logic           ram_wr_snoop_v,
@@ -497,6 +498,7 @@ module RAM #(
         .f_rvalid           (cachef_rvalid),
         .f_rdata            (cachef_rdata),
         .f_done             (cachef_done),
+        .f_wcnt             (cachef_wcnt),
         .a_wr_v             (ram_wr_snoop_v),
         .a_wr_addr          (ram_wr_snoop_addr),
         .a_wr_len           (ram_wr_snoop_len),

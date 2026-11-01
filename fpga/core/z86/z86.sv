@@ -14,12 +14,19 @@
 //
 // - nand2mario, 7/2025
 
-module z86 (
+module z86 #(
+    parameter bit WCOMB = 0             // z86_cache store combining
+) (
     input               clk,            // the bridge's gated CPU clock
     input               reset,
     input               clk_free,       // clk_chipset, ungated (z86_cache)
     input               ce,             // clk ticks at this clk_free edge
     input               cache_en,
+    input               pace,           // 286 settings: price cached hits (z86_cache)
+    input               pace_ce,        // one pulse per 286 CPU clock
+    input       [1:0]   pace_rd_wait,
+    input       [1:0]   pace_wr_wait,
+    input       [4:0]   pace_vwait,     // np21w VRAM wait now (Chipset.sv)
     input               bios_shadow,    // RAM.sv bios_shadow_flag
     input               bios_protect,   // RAM.sv bios_protect_flag[1]
 
@@ -34,6 +41,7 @@ module z86 (
     input               f_rvalid,
     input       [15:0]  f_rdata,
     input               f_done,
+    input       [4:0]   f_wcnt,         // sdram_mp p_wcnt (WCOMB bursts)
     input               sn_v,           // port A write commits
     input       [23:0]  sn_addr,
     input       [ 3:0]  sn_len,
@@ -199,6 +207,7 @@ wire wb_seg_valid;
 wire [1:0] wb_seg;
 wire [15:0] wb_seg_data;
 wire br_taken;
+wire [4:0] sh_extra;          // shift count n for the paced issue gate
 wire [19:0] br_target;
 wire [15:0] br_new_cs;
 wire [15:0] br_new_ip;
@@ -229,11 +238,16 @@ reg dbg_set_addr;
 
 // cache and memory interface serves FETCH (instruction loads), EXECUTE (memory read) and WRITE-BACK (memory write)
 wire cache_busy;
-z86_cache u_cache (
+z86_cache #(.WCOMB(WCOMB)) u_cache (
     .clk                (clk_free),
     .ce                 (ce),
     .reset              (reset),
     .cache_en           (cache_en),
+    .pace               (pace),
+    .pace_ce            (pace_ce),
+    .pace_rd_wait       (pace_rd_wait),
+    .pace_wr_wait       (pace_wr_wait),
+    .pace_vwait         (pace_vwait),
     .bios_shadow        (bios_shadow),
     .bios_protect       (bios_protect),
     .f_req              (f_req),
@@ -246,6 +260,7 @@ z86_cache u_cache (
     .f_rvalid           (f_rvalid),
     .f_rdata            (f_rdata),
     .f_done             (f_done),
+    .f_wcnt             (f_wcnt),
     .sn_v               (sn_v),
     .sn_addr            (sn_addr),
     .sn_len             (sn_len),
@@ -329,6 +344,9 @@ fetch u_fetch_decode1 (
     .snoop_word         (wr_word),
 
     .br_taken           (br_taken), 
+    .pace               (pace),
+    .pace_ce            (pace_ce),
+    .eu_extra           (sh_extra),
     .br_target          (br_target), 
     .br_new_ip          (br_new_ip), 
     .br_new_cs          (br_new_cs),
@@ -439,6 +457,7 @@ decode u_decode2 (
 execute u_execute (
     .hlt_wake           (wb_tgc_i),
     .rep_int            (rep_int),
+    .sh_extra           (sh_extra),
     .clk                (clk),          
     .halted             (dbg_halted),
     .reset              (cpu_reset),

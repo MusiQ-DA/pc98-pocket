@@ -32,6 +32,9 @@ module tb_z86_loop;
     wire f_req, f_we; wire [23:0] f_addr; wire [3:0] f_len;
     wire [15:0] f_wd0, f_wd1;
     logic f_ack = 0, f_rvalid = 0, f_done = 0; logic [15:0] f_rdata;
+    // sdram_mp's p_wcnt: the beat a write burst wants; the data is taken
+    // combinationally (word 0 on f_wd0, every later word on f_wd1).
+    logic [4:0] f_wcnt = 0;
     logic sn_v = 0; logic [23:0] sn_addr = 0; logic [3:0] sn_len = 0;
     int f_rd_n = 0, f_wr_n = 0;
     always @(posedge clk) begin : port_f
@@ -44,13 +47,15 @@ module tb_z86_loop;
             repeat (2) @(posedge clk);
             if (f_we) begin
                 f_wr_n++;
-                mem[f_addr[19:0]] <= f_wd0[7:0];
-                if (wlog != 0) $fdisplay(wlog, "%05x %02x", f_addr[19:0], f_wd0[7:0]);
-                if (f_len == 4'd1) begin
-                    mem[f_addr[19:0] + 20'd1] <= f_wd1[7:0];
-                    if (wlog != 0) $fdisplay(wlog, "%05x %02x", f_addr[19:0] + 20'd1, f_wd1[7:0]);
+                for (int i = 0; i <= f_len; i++) begin
+                    f_wcnt = 5'(i);
+                    #1;
+                    mem[f_addr[19:0] + 20'(i)] = (i == 0) ? f_wd0[7:0] : f_wd1[7:0];
+                    if (wlog != 0) $fdisplay(wlog, "%05x %02x", f_addr[19:0] + 20'(i),
+                                             (i == 0) ? f_wd0[7:0] : f_wd1[7:0]);
+                    @(posedge clk);
                 end
-                @(posedge clk);
+                f_wcnt = 0;
             end else begin
                 f_rd_n++;
                 for (int i = 0; i <= f_len; i++) begin
@@ -63,11 +68,26 @@ module tb_z86_loop;
         end
     end
 
-    z86 u (.clk(zclk), .reset(reset), .clk_free(clk), .ce(zce), .cache_en(nocache == 0),
+    // +pace[=W]: the paced settings' priced cache hits -- one 286 clock
+    // every 4 tb clocks, W wait states per cycle (default 0).
+    logic       pace_r = 1'b0, pace_ce_r = 1'b0;
+    logic [1:0] pace_w = 2'd0;
+    logic [1:0] pace_div = 2'd0;
+    initial begin
+        int pw;
+        pace_r = $test$plusargs("pace");
+        if ($value$plusargs("pacew=%d", pw)) pace_w = 2'(pw);
+    end
+    always @(posedge clk) begin
+        pace_div  <= pace_div + 2'd1;
+        pace_ce_r <= (pace_div == 2'd3);
+    end
+
+    z86 #(.WCOMB(1'b1)) u (.clk(zclk), .reset(reset), .clk_free(clk), .ce(zce), .cache_en(nocache == 0), .pace(pace_r), .pace_ce(pace_ce_r), .pace_rd_wait(pace_w), .pace_wr_wait(pace_w), .pace_vwait(5'd0),
            .bios_shadow(1'b0), .bios_protect(1'b0),
            .f_req(f_req), .f_we(f_we), .f_addr(f_addr), .f_len(f_len),
            .f_wdata0(f_wd0), .f_wdata1(f_wd1), .f_ack(f_ack), .f_rvalid(f_rvalid),
-           .f_rdata(f_rdata), .f_done(f_done), .sn_v(sn_v), .sn_addr(sn_addr), .sn_len(sn_len),
+           .f_rdata(f_rdata), .f_done(f_done), .f_wcnt(f_wcnt), .sn_v(sn_v), .sn_addr(sn_addr), .sn_len(sn_len),
            .dbg_watch_a(20'h0), .dbg_sn_kills(),
            .wb_adr_o(adr), .wb_sel_o(sel),
            .wb_we_o(we), .wb_tga_o(tga), .wb_dat_o(dat_o), .wb_stb_o(stb),
@@ -77,6 +97,9 @@ module tb_z86_loop;
 
     logic [7:0] mem [0:1048575];
     int lat = 4, n = 1000, cur_lat = 4, latrand = 0;
+    // +maxcyc=N: the runaway bound (paced runs take ~4x the clocks)
+    longint maxcyc = 10_000_000;
+    initial void'($value$plusargs("maxcyc=%d", maxcyc));
     initial if ($test$plusargs("latrand")) latrand = 1;
     logic [19:0] org = 20'h00400;
     string prog, dumpf, memf;
@@ -300,7 +323,7 @@ module tb_z86_loop;
                      u.seg_DS, u.seg_ES, u.seg_SS, u.seg_CS, u.u_execute.reg_f);
             $finish;
         end
-        if (cyc_n > 10_000_000) begin
+        if (cyc_n > maxcyc) begin
             $display("TIMEOUT pc=%05x reads=%0d interrupts=%0d spurious: %0d", pc, rd_n, irq_n, spurious_n);
             $finish;
         end

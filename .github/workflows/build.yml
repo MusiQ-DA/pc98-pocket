@@ -12,11 +12,21 @@ on:
       - 'NOTICE.md'
       - 'tools/**'
   workflow_dispatch:
+    inputs:
+      profile:
+        description: >-
+          debug = the JTAG measurement build (fpga/config.tcl as committed:
+          PC98_JTAG on, every scripts/jtag_* flow works); release = the SD
+          build, PC98_JTAG off -- the probe, hub and taps go and their
+          floor is free
+        type: choice
+        options: [debug, release]
+        default: debug
 
 # A newer push on the same ref supersedes a running build -- the old
 # bitstream would never be fetched anyway.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.profile || 'debug' }}
   cancel-in-progress: true
 
 # permissions stay minimal: every job only reads.
@@ -151,6 +161,21 @@ jobs:
           grep -q "=== PASS tb_mem_perf ===" perf0.log
           ./obj_dir/perf +speed=3 +GRANT | tee perf3.log
           grep -q "=== PASS tb_mem_perf ===" perf3.log
+
+      - name: z86 instruction pairs and interrupts, free and with priced cache hits
+        run: |
+          # The paced settings run z86_cache priced (2 clocks + waits per
+          # 286 bus cycle): every regression must hold with the hits held
+          # back as well as with them free.
+          bash scripts/sim_z86_tests.sh
+          Z86_EXTRA="+pace +pacew=1" bash scripts/sim_z86_tests.sh
+
+      - name: instruction costs against the 80286 data sheet (10 MHz), held to the baseline
+        run: |
+          # Prints measured CPU clocks per probe next to the data-sheet count;
+          # fails if any row's ratio moves more than 25% from
+          # sim/cycle_table_baseline.txt (update it with --update on purpose).
+          bash scripts/sim_cycle_table.sh --check 1
 
       - name: NEC-style EMS board — 08E1-08E9 windows bank into SDRAM
         run: |
@@ -465,6 +490,20 @@ jobs:
           bash scripts/sim_fdc_si_stall.sh | tee fdc_si_stall.log
           test "$(grep -c ': PASS$' fdc_si_stall.log)" = 16
 
+      - name: a guest OUT parked across a DMA grant cannot land inside DACK
+        run: |
+          # The floppy-write 0x20 byte (SuperDepth's FAT corruption): the
+          # bridge arms OUT 00h,20h (the IRQ0 EOI) in the half-CE before
+          # AEN rises, the 8288 parks the command through the grant, and
+          # the old AEN fell with the 71071's HRQ -- half a DMA clock
+          # before its DACK -- so the parked IOW fired inside the DACK
+          # window, re-latched write_to_fdd, and floppy.v took 0x20 as
+          # the DMA byte. Real bridge + real BUS_ARBITER/8288/71071/READY,
+          # Peripherals' write_to_fdd and ack equations verbatim; all
+          # four CPU speeds, two seeds each.
+          bash scripts/sim_fdc_dma_iow_stray.sh | tee fdc_iow_stray.log
+          test "$(grep -c ': PASS$' fdc_iow_stray.log)" = 8
+
       - name: the 71071 request-side snapshot packs the layout the hunt decodes
         run: |
           S=fpga/core
@@ -760,6 +799,16 @@ jobs:
       - name: Pull Quartus image
         run: docker pull raetro/quartus:pocket
 
+      - name: Build profile
+        run: |
+          P="${{ inputs.profile || 'debug' }}"
+          echo "profile: $P"
+          if [ "$P" = release ]; then
+            # the SD build: no JTAG probe (firmware does not depend on it)
+            sed -i 's/^set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"/# (release profile) &/' fpga/config.tcl
+          fi
+          grep -n "VERILOG_MACRO" fpga/config.tcl
+
       - name: Compile (quartus_sh --flow compile)
         id: compile
         run: |
@@ -844,10 +893,48 @@ jobs:
             fpga/output_files/ap_core.fit.rpt 2>/dev/null || true
           ls -la fpga/output_files/ 2>/dev/null || true
 
+      - name: Annotate fit, timing and errors (readable through the API)
+        if: always()
+        run: |
+          # Job logs live on blob storage some sessions cannot reach; check-run
+          # annotations come back through api.github.com. One notice carries
+          # the fit and the worst slacks, one error the first compile errors.
+          enc() { sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}'; }
+          R=fpga/output_files
+          {
+            grep -E "Logic utilization|Total LABs|Total registers|Total block memory bits|M10K|Fitter Status" $R/ap_core.fit.rpt 2>/dev/null | head -8
+            for f in $R/ap_core.sta.summary; do
+              [ -f "$f" ] && awk '/^Type/{t=$0} /^Slack/{print t " -> " $0}' "$f" | sort -t: -k3 -g | head -6
+            done
+          } | enc > /tmp/fit.txt || true
+          [ -s /tmp/fit.txt ] && echo "::notice title=fit and timing::$(cat /tmp/fit.txt)"
+          # The biggest entities (ALMs needed), for deciding what to park.
+          python3 - "$R/ap_core.fit.rpt" > /tmp/ent.txt <<'PY' || true
+          import re, sys
+          rows, on = [], False
+          for l in open(sys.argv[1], errors="ignore"):
+              if "Fitter Resource Utilization by Entity" in l: on = True; continue
+              if on and rows and l.strip() == "": break
+              if on and l.startswith(";") and "|" in l:
+                  c = [x.strip() for x in l.strip().strip(";").split(";")]
+                  try: alm = float(c[1].split("(")[0].replace(",", ""))
+                  except Exception: continue
+                  rows.append((alm, c[0].replace("|", "").strip()[:60]))
+          top = sorted(rows, reverse=True)
+          shown = top[:80] + [r for r in top[80:] if "sld" in r[1].lower() or "jtag" in r[1].lower()]
+          for alm, name in shown:
+              print(f"{alm:8.1f} {name}")
+          PY
+          [ -s /tmp/ent.txt ] && echo "::notice title=entities by ALM::$(enc < /tmp/ent.txt)"
+          grep -hE "^(Error|Critical Warning)|Internal Error|Fatal Error|Cannot fit|Can.t fit" fpga/compile_*.log 2>/dev/null \
+            | grep -vE "^\s*Info" | head -12 | enc > /tmp/err.txt || true
+          [ -s /tmp/err.txt ] && echo "::error title=quartus errors::$(cat /tmp/err.txt)"
+          true
+
       - name: Upload bitstream and reports
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bitstream
+          name: ${{ (inputs.profile || 'debug') == 'release' && 'bitstream-release' || 'bitstream' }}
           if-no-files-found: error
           path: |
             fpga/output_files/*.sof
