@@ -398,6 +398,16 @@ module z86_cache #(
     reg  [5:0]  cb_age [0:1];
     reg         cb_act;                 // the merging buffer
     reg         cb_fli;                 // the buffer port F is writing out
+    // A WHOLE line leaving a bank is installed in the cache when its burst
+    // is done -- every byte is known and now equals memory -- so reading
+    // freshly written data (REP MOVSW out of a buffer REP STOSW just
+    // filled) hits instead of missing through a fill: stores are otherwise
+    // no-allocate. cb_kill: a port-A commit touched the line's index while
+    // the bank held it, so memory may be newer -- no install. The install
+    // only takes an edge where nothing else uses the tag/data write ports.
+    reg  [1:0]  cb_kill;
+    wire [IDX_BITS-1:0] cb_fidx = idx_of({cb_ln[cb_fli], 4'h0});
+    wire [TAG_BITS-1:0] cb_ftag = tag_of({cb_ln[cb_fli], 4'h0});
     reg  [15:0] f_wdata0_r, f_wdata1_r;
     wire [3:0]  cb_ix   = cb_lo[cb_fli] + f_wcnt[3:0];
     wire [127:0] cb_fd  = cb_d[cb_fli];
@@ -543,9 +553,13 @@ module z86_cache #(
     wire        acc_wb = !cb_shape && !wb_full && !(WCOMB && cb_v != 2'b00);
 
     always @(posedge clk) begin
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < 2; i++) begin
             if (WCOMB && cb_v[i] && !cb_fl[i] && cb_age[i] != 6'h3F)
                 cb_age[i] <= cb_age[i] + 6'd1;
+            if (WCOMB && cb_v[i] && sn_ours
+                && (sn_i0 == idx_of({cb_ln[i], 4'h0}) || sn_i1 == idx_of({cb_ln[i], 4'h0})))
+                cb_kill[i] <= 1'b1;
+        end
         t_we <= 1'b0;
         d_we <= 1'b0;
         dbg_wr_v <= 1'b0;
@@ -650,6 +664,12 @@ module z86_cache #(
                     cb_fl[cb_fli]   <= 1'b0;
                     cb_v[cb_fli]    <= 1'b0;
                     cb_want[cb_fli] <= 1'b0;
+                    if (cb_lo[cb_fli] == 4'h0 && cb_hi[cb_fli] == 4'hF
+                        && !cb_kill[cb_fli] && cache_en
+                        && st == S_IDLE && !sn_ours && !sn2_v && !park_v) begin
+                        d_we <= 1'b1; d_wa <= cb_fidx; d_be <= 16'hFFFF; d_wd <= cb_fd;
+                        t_we <= 1'b1; t_wa <= cb_fidx; t_wd <= {1'b1, cb_ftag};
+                    end
                 end else if (wb_two && !f_wpart && f_len == 4'd0) begin
                     f_wpart <= 1'b1;            // second byte next
                 end else begin
@@ -732,6 +752,7 @@ module z86_cache #(
                             automatic logic t = cb_swap ? cb_b : cb_a;
                             cb_v[t]   <= 1'b1;
                             cb_ln[t]  <= wp0[20:4];
+                            if (!cb_merge) cb_kill[t] <= 1'b0;
                             cb_lo[t]  <= cb_merge ? ((w_lo[3:0] < cb_lo[t]) ? w_lo[3:0] : cb_lo[t])
                                                   : w_lo[3:0];
                             cb_hi[t]  <= cb_merge ? ((w_hi[3:0] > cb_hi[t]) ? w_hi[3:0] : cb_hi[t])
@@ -1079,6 +1100,7 @@ module z86_cache #(
     initial begin
         fs = F_IDLE; f_req = 1'b0; f_we = 1'b0; wb_full = 1'b0; f_wpart = 1'b0;
         cb_v = 2'b00; cb_fl = 2'b00; cb_want = 2'b00; cb_act = 1'b0; cb_fli = 1'b0;
+        cb_kill = 2'b00;
         cb_age[0] = 6'd0; cb_age[1] = 6'd0;
         sn2_v = 1'b0; st = S_FLUSH; flush_i = '0; wr_ready = 1'b0;
         dbg_sn_kills = 16'd0;
