@@ -317,6 +317,12 @@ module CHIPSET #(
         // np21w's graphics-VRAM wait for an access starting now, for the
         // CPU to price (z86_cache, paced settings): {analog, wait}.
         output  logic    [4:0]  vram_wait_now,
+        // Hardware bisect (core_top JTAG slot 0x09 [27], [28]; 0 in
+        // release): the GRCG RMW line buffer off; RAM.sv's per-leg VRAM
+        // waits back as integ-1034 charged them (with the CPU-side pricing
+        // off too, slot bit 24, that is the old VRAM timing).
+        input   logic           dx_rmwbuf_off,
+        input   logic           dx_vramwait,
         output  logic    [4:0]  cachef_wcnt,
         output  logic           ram_wr_snoop_v,
         output  logic   [23:0]  ram_wr_snoop_addr,
@@ -645,6 +651,7 @@ module CHIPSET #(
     // directly -- the burst's odd byte only matters when the sequencer
     // passes the word flag through, which is exactly when mem_word is set.
     pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1)) u_gvram_seq (
+        .rmwbuf_off(dx_rmwbuf_off),
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
         .cpu_rd(~memory_read_n), .cpu_wr(~memory_write_n),
@@ -732,6 +739,15 @@ module CHIPSET #(
     // (1 in vblank).
     assign vram_wait_now = {pc98_analog,
                             accel_hit ? 4'd0 : VID_VBlank ? 4'd1 : 4'd6};
+    wire vram_hit = (address[19:16] == 4'hA && address[15])   // A8000-AFFFF
+                  | (address[19:16] == 4'hB)                  // B0000-BFFFF
+                  | (pc98_analog & (address[19:15] == 5'b11100)); // E0000-E7FFF
+    wire rmw_guest_wr = accel_hit & ~memory_write_n & (grcg_rmw | egc_active_w);
+    wire [3:0] vram_old_wait = !dx_vramwait || !vram_wait_en || !vram_hit ? 4'd0
+                             : VID_VBlank                   ? 4'd1
+                             : rmw_guest_wr                 ? 4'd4
+                             : accel_hit                    ? 4'd8
+                             :                                4'd6;
 
     RAM u_RAM 
     (
@@ -821,8 +837,8 @@ module CHIPSET #(
         .wait_count_clk_en                  (wait_count_clk_en),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),
-        .vram_rd_wait_cycle                 (4'd0),
-        .vram_wr_wait_cycle                 (4'd0),
+        .vram_rd_wait_cycle                 (vram_old_wait),
+        .vram_wr_wait_cycle                 (vram_old_wait),
         .unstick                            (ram_unstick),
         // AEN straight from Bus_Arbiter: high while the uPD71071 owns the
         // bus. RAM.sv's layer-1 ready dip must never fire under a DMA-held

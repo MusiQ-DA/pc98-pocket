@@ -64,6 +64,7 @@ module tb_pc98_egc;
     wire        mem_page1;
 
     pc98_gvram_seq dut (
+        .rmwbuf_off(1'b0),
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_addr(cpu_addr), .cpu_wdata(cpu_wdata),

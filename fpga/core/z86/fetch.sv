@@ -21,6 +21,11 @@ module fetch (
     input             pace,          // 286 settings: issue at 80286 clock counts
     input             pace_ce,       // one pulse per 286 CPU clock
     input       [4:0] eu_extra,      // execute's late clocks (shift count n)
+    // Hardware bisect (core_top JTAG slot 0x09 [20], [25]; 0 in release):
+    // dx_eu_off drops the paced issue gate, dx_bh7 counts behind_hold in
+    // chipset clocks as at Turbo.
+    input             dx_eu_off,
+    input             dx_bh7,
     input     [19:0]  br_target,     // byte address
     input     [15:0]  br_new_ip,     // IP after branch
     input     [15:0]  br_new_cs,     // CS after branch
@@ -99,7 +104,8 @@ reg  [3:0] behind_hold;
 // expired before the branch back and every turn of a loop straddling a
 // 16-byte boundary reloaded both halves (an empty DEC/JZ/JMP loop ran at
 // 1.8x its data-sheet time).
-wire [3:0] BEHIND_HOLD = pace ? 4'd15 : 4'd7;
+wire       bh_paced    = pace & ~dx_bh7;
+wire [3:0] BEHIND_HOLD = bh_paced ? 4'd15 : 4'd7;
 
 // ---- paced issue gate (PC-98 port) -----------------------------------------
 // At the 286 settings the EU must not run faster than an 80286: z86 retires a
@@ -123,7 +129,8 @@ initial $readmemh("fpga/core/z86/eu_cost.hex", eu_rom);
 reg  [4:0]  eu_q;
 reg  [6:0]  eu_debt;
 reg         eu_pend;
-wire        eu_hold = pace && (eu_pend || eu_debt != 7'd0);
+wire        pace_eu = pace & ~dx_eu_off;
+wire        eu_hold = pace_eu && (eu_pend || eu_debt != 7'd0);
 
 reg [3:0]  len;               // instruction length not including prefixes
 reg [6:0]  prefix;
@@ -264,7 +271,7 @@ always @(posedge clk) begin
         if (eu_pend) d = {2'b0, eu_q};
         if (br_taken) d = d + (br_inbuf ? EU_TAKEN : EU_TAKEN - 7'd2);
         d = d + {2'b0, eu_extra};
-        eu_debt <= pace ? d : 7'd0;
+        eu_debt <= pace_eu ? d : 7'd0;
         eu_pend <= 1'b0;
     end
 
@@ -290,7 +297,7 @@ always @(posedge clk) begin
         eu_debt <= 7'd0;
         eu_pend <= 1'b0;
     end else begin
-        if (behind_hold != 4'd0 && (!pace || pace_ce)) behind_hold <= behind_hold - 4'd1;
+        if (behind_hold != 4'd0 && (!bh_paced || pace_ce)) behind_hold <= behind_hold - 4'd1;
         ld_ack_r <= ld_ack;
         if (ld_ack ^ ld_ack_r) begin  // receive data from cache
             if (!loading_drop) begin
@@ -406,7 +413,7 @@ always @(posedge clk) begin
                     behind_hold <= BEHIND_HOLD;
                 end
             end else if ((~id_valid || id_ready) && buf_valid[ptr_end[4]] && !eu_hold) begin  // actually output the instruction
-                eu_pend <= pace;
+                eu_pend <= pace_eu;
                 // ip is at opcode
                 if (buffer[ptr] != 8'h90) begin
                     if (DEBUG) $display("FETCH addr=%h, opcode=%h, len=%d, ip_after=%h", ip-prefix_len, buffer[ptr], len + prefix_len, ip+len);

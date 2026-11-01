@@ -108,6 +108,11 @@ module z86_cache #(
     // clocks}: 6 with the beam out, 8 with the GRCG/EGC armed, 1 in
     // vblank -- Chipset.sv). Added once per uncached VRAM access.
     input  wire [4:0]   pace_vwait,
+    // Hardware bisect (core_top JTAG slot 0x09 [21]-[24]; 0 in release):
+    // [0] line loads priced whole before the hand-off (no critical word
+    // first), [1] no store combining, [2] no whole-line install from a
+    // combine bank, [3] no graphics-VRAM pricing.
+    input  wire [3:0]   dx,
 
     // ---- PC-98 map state ------------------------------------------------
     input  wire         bios_shadow,    // RAM.sv bios_shadow_flag
@@ -302,8 +307,8 @@ module z86_cache #(
     wire [2:0]  p_wcyc = 3'd2 + {1'b0, pace_wr_wait};
     wire        p_busy = pace && (pdebt != 6'd0);
     function automatic logic vram_a(input logic [19:0] a);
-        vram_a = (a[19:15] == 5'b10101) || (a[19:16] == 4'hB)
-              || (pace_vwait[4] && a[19:15] == 5'b11100);
+        vram_a = !dx[3] && ((a[19:15] == 5'b10101) || (a[19:16] == 4'hB)
+                            || (pace_vwait[4] && a[19:15] == 5'b11100));
     endfunction
     wire [5:0]  p_vw = {2'd0, pace_vwait[3:0]};
 
@@ -519,7 +524,7 @@ module z86_cache #(
 
     wire [20:0] wp0 = phys_of(wr_addr, bios_shadow);
     wire [20:0] wp1 = phys_of(wr_a1, bios_shadow);
-    wire        cb_shape = WCOMB && (!wr_word || (wp1 == wp0 + 21'd1 && wp0[3:0] != 4'hF));
+    wire        cb_shape = WCOMB && !dx[1] && (!wr_word || (wp1 == wp0 + 21'd1 && wp0[3:0] != 4'hF));
     wire [4:0]  w_lo = {1'b0, wp0[3:0]};
     wire [4:0]  w_hi = w_lo + (wr_word ? 5'd1 : 5'd0);
     // An uncached access waiting in S_IDLE: busy holds it until the
@@ -665,7 +670,7 @@ module z86_cache #(
                     cb_v[cb_fli]    <= 1'b0;
                     cb_want[cb_fli] <= 1'b0;
                     if (cb_lo[cb_fli] == 4'h0 && cb_hi[cb_fli] == 4'hF
-                        && !cb_kill[cb_fli] && cache_en
+                        && !cb_kill[cb_fli] && cache_en && !dx[2]
                         && st == S_IDLE && !sn_ours && !sn2_v && !park_v) begin
                         d_we <= 1'b1; d_wa <= cb_fidx; d_be <= 16'hFFFF; d_wd <= cb_fd;
                         t_we <= 1'b1; t_wa <= cb_fidx; t_wd <= {1'b1, cb_ftag};
@@ -832,9 +837,11 @@ module z86_cache #(
                     st   <= S_CMP;
                     // the requested word now, the rest of the line as a
                     // tail after the hand-off (see ld_tail)
-                    pdebt <= pace ? {3'd0, p_rcyc} : 6'd0;
-                    ptail <= pace ? (6'd7 - {3'd0, ld_addr[3:1]}) * {3'd0, p_rcyc}
-                                  : 6'd0;
+                    pdebt <= !pace ? 6'd0
+                           : dx[0] ? (6'd8 - {3'd0, ld_addr[3:1]}) * {3'd0, p_rcyc}
+                           : {3'd0, p_rcyc};
+                    ptail <= (pace && !dx[0]) ? (6'd7 - {3'd0, ld_addr[3:1]}) * {3'd0, p_rcyc}
+                                              : 6'd0;
                 end else if (ce && !busy) begin
                     // Uncached: start at the word the fetch asked for. A
                     // 286's BIU fetches from the branch target on, never

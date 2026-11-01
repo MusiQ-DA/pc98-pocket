@@ -76,6 +76,7 @@ module tb_pc98_gvram_seq;
     wire        mem_ready = (mem_rd | mem_wr) ? (completed & cov_same_m) : 1'b1;
 
     pc98_gvram_seq dut (
+        .rmwbuf_off(1'b0),
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_pf_len(5'd0),

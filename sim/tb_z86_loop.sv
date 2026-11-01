@@ -73,6 +73,10 @@ module tb_z86_loop;
     logic       pace_r = 1'b0, pace_ce_r = 1'b0;
     logic [1:0] pace_w = 2'd0;
     logic [1:0] pace_div = 2'd0;
+    // +dx=<hex>: z86's hardware-bisect reverts (z86.sv dx), to prove each
+    // revert path runs correct code before it is used on the metal.
+    logic [6:0] dx_r = 7'd0;
+    initial begin int v; if ($value$plusargs("dx=%h", v)) dx_r = 7'(v); end
     initial begin
         int pw;
         pace_r = $test$plusargs("pace");
@@ -83,7 +87,7 @@ module tb_z86_loop;
         pace_ce_r <= (pace_div == 2'd3);
     end
 
-    z86 #(.WCOMB(1'b1)) u (.clk(zclk), .reset(reset), .clk_free(clk), .ce(zce), .cache_en(nocache == 0), .pace(pace_r), .pace_ce(pace_ce_r), .pace_rd_wait(pace_w), .pace_wr_wait(pace_w), .pace_vwait(5'd0),
+    z86 #(.WCOMB(1'b1)) u (.clk(zclk), .reset(reset), .clk_free(clk), .ce(zce), .cache_en(nocache == 0), .pace(pace_r), .pace_ce(pace_ce_r), .pace_rd_wait(pace_w), .pace_wr_wait(pace_w), .pace_vwait(5'd0), .dx(dx_r),
            .bios_shadow(1'b0), .bios_protect(1'b0),
            .f_req(f_req), .f_we(f_we), .f_addr(f_addr), .f_len(f_len),
            .f_wdata0(f_wd0), .f_wdata1(f_wd1), .f_ack(f_ack), .f_rvalid(f_rvalid),

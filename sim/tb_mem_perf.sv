@@ -168,6 +168,10 @@ module tb_mem_perf;
     // port and the port-A commit snoop fed back -- the core_top wiring.
     reg         cache_r = 1'b0;
     initial cache_r = $test$plusargs("cache");
+    // +dx=<hex>: the hardware-bisect reverts (core_top slot 0x09 [27:20]
+    // shifted down: [6:0] z86.sv dx, [7] the sequencer's RMW buffer off).
+    logic [7:0] dx_r = 8'd0;
+    initial begin int v; if ($value$plusargs("dx=%h", v)) dx_r = 8'(v); end
     reg         nopace_r = 1'b0;
     initial nopace_r = $test$plusargs("nopace");
     reg         nvw_r = 1'b0;   // +novwait: no np21w VRAM wait (A/B)
@@ -187,6 +191,7 @@ module tb_mem_perf;
         // np21w's VRAM wait, as Chipset.sv computes it for core_top
         .pace_vwait   ({1'b0, (nvw_r | grcg_active | egc_active_w) ? 4'd0
                                      : vid_vb ? 4'd1 : 4'd6}),
+        .dx           (dx_r[6:0]),
         .bios_shadow  (shadow_flag_r),
         .bios_protect (1'b0),
         .f_req     (zf_req),
@@ -460,6 +465,7 @@ module tb_mem_perf;
     wire [4:0]  cpu_pf_len_w;
 
     pc98_gvram_seq #(.EGC(1'b1), .RMWBUF(1'b1)) u_seq (
+        .rmwbuf_off(dx_r[7]),
         .clk(clk), .reset(reset),
         .cpu_gvram(~ram_sel_n),
         .cpu_rd(seq_rd), .cpu_wr(seq_wr),
@@ -2221,6 +2227,12 @@ module tb_mem_perf;
     // while phase 0B is current -- the guest's STI/CLI bracket it.
     reg [15:0] irq_gap = 16'd0;
     always @(posedge clk) begin
+        if (img_en && !reset) begin
+            // +img: a periodic timer IRQ (vector FFh off the open bus)
+            if (zwb_inta) begin irq_req <= 1'b0; irq_gap <= 16'd0; end
+            else if (img_irq != 0 && irq_gap >= 16'(img_irq)) begin irq_req <= 1'b1; irq_gap <= 16'd0; end
+            else irq_gap <= irq_gap + 16'd1;
+        end else
         if (reset || (cur_phase != 8'h0B && cur_phase != 8'h0D && cur_phase != 8'h0E)) begin
             irq_req <= 1'b0;
             irq_gap <= 16'd0;
@@ -2909,6 +2921,66 @@ module tb_mem_perf;
 
 
 
+
+    // ---- +img: replay a whole guest memory image -------------------------
+    // +img=<hex> seeds 00000-9FFFF (one byte per line, as tb_z86_loop's
+    // +mem), the reset vector jumps to 9000:0000 (the image's register
+    // stub), +imgirq=N raises the timer IRQ every N clocks, and when the PC
+    // reaches +imgstop=<hex> the bytes +imgref=<hex> (a reference
+    // emulator's image) holds in [+imglo, +imghi) are compared with SDRAM.
+    // Used to replay a real program's kernel (CPUBENCH's Dhrystone) on the
+    // whole paced memory path rather than on tb_z86_loop's ideal port.
+    bit         img_en = 1'b0;
+    int         img_irq = 0;
+    logic [19:0] img_stop = 20'hFFFFF, img_lo = 20'h0, img_hi = 20'h0;
+    logic [7:0] img_b [0:20'h9FFFF];
+    logic [7:0] img_r [0:20'h9FFFF];
+    string      img_f, img_rf;
+    initial begin
+        img_en = $value$plusargs("img=%s", img_f);
+        void'($value$plusargs("imgirq=%d", img_irq));
+        void'($value$plusargs("imgstop=%h", img_stop));
+        void'($value$plusargs("imglo=%h", img_lo));
+        void'($value$plusargs("imghi=%h", img_hi));
+        if (img_en) begin
+            #1;
+            $readmemh(img_f, img_b);
+            for (int i = 0; i < 20'hA0000; i++) ram_seed(i, {8'h00, img_b[i]});
+            ram_seed(32'h0FFFF0, 16'h00EA);
+            ram_seed(32'h0FFFF1, 16'h0000);
+            ram_seed(32'h0FFFF2, 16'h0000);
+            ram_seed(32'h0FFFF3, 16'h0000);
+            ram_seed(32'h0FFFF4, 16'h0090);
+            $display("img: %s seeded, irq every %0d, stop at %05x", img_f, img_irq, img_stop);
+        end
+    end
+    int img_irqs = 0;
+    logic img_inta_q = 1'b0;
+    always @(posedge clk) begin
+        img_inta_q <= zwb_inta;
+        if (zwb_inta && !img_inta_q) img_irqs++;
+    end
+    always @(posedge clk) if (img_en && !reset && zet_pc == img_stop) begin
+        automatic int bad = 0;
+        repeat (400) @(posedge clk);            // let the write paths drain
+        if ($value$plusargs("imgref=%s", img_rf)) begin
+            $readmemh(img_rf, img_r);
+            for (int a = int'(img_lo); a < int'(img_hi); a++) begin
+                logic [7:0] got;
+                got = sdr.u_part.peek(a) & 8'hFF;
+                if (got !== img_r[a]) begin
+                    if (bad < 8) $display("IMG BAD %05x ref=%02x got=%02x", a, img_r[a], got);
+                    bad++;
+                end
+            end
+        end
+        $display("IMG DONE t=%0t pc=%05x bad=%0d irqs=%0d", $time, zet_pc, bad, img_irqs);
+        if (bad == 0 && (img_irq == 0 || img_irqs != 0))
+            $display("=== PASS tb_mem_perf img ===");
+        else
+            $display("=== FAIL tb_mem_perf img ===");
+        $finish;
+    end
 
     initial begin
         #800_000_000;                       // 800 ms of sim time ceiling

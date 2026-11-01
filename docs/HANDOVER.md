@@ -447,6 +447,24 @@ ph  class body                            286     8MHz  ratio    10MHz  ratio   
      **既存の注意**: tb_mem_perf では変更前からリフレッシュ間隔が最大 341 サイクル（規格 335）。SDRAM は 8 回分まで後回しできるので
      実害は無いと見ているが、REFRESH_INT=288 の「16 語バースト後ろの待ち ≈36」は最悪では足りない。
      10MHz の比率（最新）: EU・メモリ 0.94〜1.05、REP STOSW 1.01、MOVSW 1.25、CALL+RET 1.19、OUT 1.37、GRCG TDW 1.12、RMW 1.74、素の VRAM 0.90。
+   - **step 6: CI #1047 の 10MHz 失敗（`integ-1047-fix`、2026-11-01）**: 実機（debug #1047、P=0x05、キャッシュ ON）で
+     SuperDepth START 10/40 失敗（C193 の語が 0x1122、PC が 09Exx〜09Fxx）、stage 2 が始まらない、CPUBENCH が終わらず画面が '6'。
+     turbo は全部通る。**sim では再現しなかった**: 新規の直接テスト（まとめ書き＋行取り込み、SMC の距離、メモリフラグを
+     割り込み待ちするループ）、Unicorn 差分ファズ（+pace / +pacew=1、IRQ・ランダム遅延、VRAM 値付けを 2000-2FFF に
+     付け替えた版）、tb_mem_perf 全フェーズ（10MHz・turbo、+GRANT）、**CPUBENCH の Dhrystone 本体そのもの**を tb_z86_loop と
+     tb_mem_perf の全経路（+img、8/10/12MHz、タイマー IRQ、DMA グラント）で、どれも Unicorn と一致。CPU の hold 違反も
+     debug では無い（divclk −0.069 は guest_hold の同期化段）。release の −0.33〜−0.41 は cache rd_data → execute の
+     z86 ゲートクロック経路で、別問題として要対処。
+     → 1 回の書き込みで切り分けられるよう、**slot 0x09 の [28:20] に #1047 の各変更を実行時に戻すビットを追加**（debug のみ、
+     release は 0 固定）: [20] EU 発行ゲート OFF、[21] クリティカルワード先行 OFF（1034 の行単位課金）、[22] まとめ書き OFF、
+     [23] 行取り込み OFF、[24] CPU 側 VRAM 値付け OFF、[25] behind_hold をチップセットクロックで、[26] シフト回数課金 OFF、
+     [27] GRCG RMW 行バッファ OFF、[28] RAM.sv の VRAM ウェイトを 1034 の式で復活（[24] と組で 1034 の VRAM タイミング）。
+     例: `P=0x1F00005`（全部戻した 10MHz）で通れば #1047 の差分内、通らなければ差分外。通ったら 1 ビットずつ。
+     戻す経路自体の正しさ: z86 の 7 ビットは tb_z86_loop `+dx=`（1 ビットずつと全部）で Dhrystone 本体が Unicorn と一致、
+     tb_mem_perf `+dx=ff`（z86 全部＋RMW バッファ OFF）で全 phase 完走・RMW 検査 0 bad。[28] は Chipset 内なので sim 外
+     （1034 の式を戻しただけ）。
+     CI に `scripts/sim_dhry.sh`（Dhrystone 本体の差分テスト: tb_z86_loop free / +pace / +pace +pacew=1、tb_mem_perf +img
+     10MHz・turbo、いずれもタイマー IRQ 込み）と、まとめ書きの直接テスト `raw_wcomb` を追加。
 2. **RMW の高速化**（S2 でも 1 フレームあたり約 3k ワード）: GRCG RMW の各プレーンの読み書きをまとめる。フリーズの教訓から、ポステッド書き込みは使わず、完了を待つ同期方式でまとめる。
 3. **TDW の書き込み結合**（必要なら）: 連続アドレスをプレーンごとにバースト化する。slot ビットで既定 OFF にして導入し、コールドブートで確かめてから ON にする。
 4. **プレーンのバンク分散 / 表示フェッチのバースト長 32**: 効果は 1〜2 割、リスクは中。上の 3 つで足りなければやる。

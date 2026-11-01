@@ -150,6 +150,9 @@ module pc98_gvram_seq #(
     // buffer below fills from it.
     input  wire        pf_beat_v,
     input  wire [7:0]  pf_beat_dat,
+    // Hardware bisect (core_top JTAG slot 0x09 [27]; 0 in release): the
+    // RMW line buffer off at run time, its lines dropped while off.
+    input  wire        rmwbuf_off,
 
     // ---- the access page (port 0xA6 bit 0) -------------------------------
     // Rebanks every plane window between the two 640x400 pages, np21w's
@@ -618,7 +621,7 @@ module pc98_gvram_seq #(
     reg  [16:0] rb_tag;
     reg         rb_leg;                  // the read leg in flight is a burst
     reg  [3:0]  rb_bi;
-    wire        rmw_guest = RMWBUF & grcg_here & grcg_rmw & ~egc_here & ~in_svc
+    wire        rmw_guest = RMWBUF & ~rmwbuf_off & grcg_here & grcg_rmw & ~egc_here & ~in_svc
                           & ~is_read;
     wire [16:0] rb_line   = {access_page, op_addr[19:4]};
     wire [3:0]  rb_off    = op_addr[3:0];
@@ -760,6 +763,7 @@ module pc98_gvram_seq #(
             rb_v      <= 4'h0;
             rb_leg    <= 1'b0;
         end else begin
+            if (rmwbuf_off && !rb_leg) rb_v <= 4'h0;
             // the line buffer's burst beats, in order from the line head
             if (rb_leg && pf_beat_v) begin
                 // the operand bytes, off the stream as they pass

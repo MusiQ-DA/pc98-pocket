@@ -45,6 +45,7 @@ module tb_gvram_ram_leg;
     wire        ram_wt_w;           // u_ram write_taken -> seq mem_wr_taken
 
     pc98_gvram_seq #(.EGC(1'b1)) dut (
+        .rmwbuf_off(1'b0),
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_pf_len(5'd0),

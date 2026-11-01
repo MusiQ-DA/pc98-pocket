@@ -177,6 +177,14 @@ jobs:
           # sim/cycle_table_baseline.txt (update it with --update on purpose).
           bash scripts/sim_cycle_table.sh --check 1
 
+      - name: CPUBENCH's Dhrystone kernel — free, paced, and the whole 10 MHz / Turbo path under a timer IRQ
+        run: |
+          # A real program's kernel (testdisk/cpubench.lzh) against Unicorn:
+          # tb_z86_loop free / +pace / +pace +pacew=1 with interrupts, then
+          # tb_mem_perf +img (the bench binary built above) at 10 MHz and
+          # Turbo through bridge + 8288 + RAM.sv + SDRAM with the cache on.
+          PERF=./obj_dir/perf bash scripts/sim_dhry.sh
+
       - name: NEC-style EMS board — 08E1-08E9 windows bank into SDRAM
         run: |
           S=fpga/core

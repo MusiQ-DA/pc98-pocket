@@ -27,6 +27,12 @@ module z86 #(
     input       [1:0]   pace_rd_wait,
     input       [1:0]   pace_wr_wait,
     input       [4:0]   pace_vwait,     // np21w VRAM wait now (Chipset.sv)
+    // Hardware bisect of the paced-speed work (core_top JTAG slot 0x09
+    // [26:20]; all 0 in release and in the benches): [0] no EU issue gate,
+    // [1] no critical-word-first line loads, [2] no store combining, [3] no
+    // combine-bank line install, [4] no graphics-VRAM pricing, [5]
+    // behind_hold in chipset clocks, [6] no shift-count charge.
+    input       [6:0]   dx,
     input               bios_shadow,    // RAM.sv bios_shadow_flag
     input               bios_protect,   // RAM.sv bios_protect_flag[1]
 
@@ -248,6 +254,7 @@ z86_cache #(.WCOMB(WCOMB)) u_cache (
     .pace_rd_wait       (pace_rd_wait),
     .pace_wr_wait       (pace_wr_wait),
     .pace_vwait         (pace_vwait),
+    .dx                 (dx[4:1]),
     .bios_shadow        (bios_shadow),
     .bios_protect       (bios_protect),
     .f_req              (f_req),
@@ -346,7 +353,9 @@ fetch u_fetch_decode1 (
     .br_taken           (br_taken), 
     .pace               (pace),
     .pace_ce            (pace_ce),
-    .eu_extra           (sh_extra),
+    .eu_extra           (sh_extra & ~{5{dx[6]}}),
+    .dx_eu_off          (dx[0]),
+    .dx_bh7             (dx[5]),
     .br_target          (br_target), 
     .br_new_ip          (br_new_ip), 
     .br_new_cs          (br_new_cs),

@@ -298,6 +298,15 @@ module core_top (
     logic        jtag_pf_dis  = 1'b1;
     logic        jtag_cache_dis = 1'b0; // [11] z86_cache off: every access on the bus
     logic  [7:0] jtag_thr_num = 8'd0;   // [19:12] nonzero: throttle duty override (n/256)
+    // [28:20] hardware bisect of integ-1047's paced-speed work, each bit
+    // reverting one change at run time (z86.sv dx, Chipset.sv dx_*):
+    //   [20] EU issue gate off          [21] no critical-word-first loads
+    //   [22] no store combining         [23] no combine-bank line install
+    //   [24] no CPU-side VRAM pricing   [25] behind_hold in chipset clocks
+    //   [26] no shift-count charge      [27] GRCG RMW line buffer off
+    //   [28] RAM.sv VRAM waits back (integ-1034's; pair with [24])
+    // e.g. P=0x1F00005: 10 MHz with all of them reverted.
+    logic  [8:0] jtag_dx = 9'd0;
     // Per-mechanism prefetch kills, for bisecting which half of the
     // engine a failure lives in without a rebuild:
     //   [4] pf_nofill  -- pure (idle-gap) fills never run
@@ -333,6 +342,7 @@ module core_top (
     wire         jtag_pf_dis  = 1'b1;  // pf off: pf ON wedges ITF POST at boot
     wire         jtag_cache_dis = 1'b0;
     wire   [7:0] jtag_thr_num = 8'd0;
+    wire   [8:0] jtag_dx = 9'd0;
     wire         jtag_pf_nofill  = 1'b0;
     wire         jtag_pf_nofillm = 1'b0;
     wire         jtag_pf_nohit   = 1'b0;
@@ -2754,6 +2764,7 @@ module core_top (
             jtag_pf_bkill <= probe_wdata_c[10];
             jtag_cache_dis <= probe_wdata_c[11];
             jtag_thr_num  <= probe_wdata_c[19:12];
+            jtag_dx       <= probe_wdata_c[28:20];
         end
         // Slot 0x0a: the reset-source witness clear -- wdata[0] wipes the
         // sticky rise map, the last-source index and its tick (the write
@@ -3845,6 +3856,8 @@ module core_top (
         ,.cachef_done                       (cachef_done)
         ,.cachef_wcnt                       (cachef_wcnt)
         ,.vram_wait_now                     (vram_wait_now)
+        ,.dx_rmwbuf_off                     (jtag_dx[7])
+        ,.dx_vramwait                       (jtag_dx[8])
         ,.ram_wr_snoop_v                    (ram_wr_snoop_v)
         ,.ram_wr_snoop_addr                 (ram_wr_snoop_addr)
         ,.ram_wr_snoop_len                  (ram_wr_snoop_len)
@@ -4057,6 +4070,7 @@ module core_top (
         .pace_rd_wait (ram_read_wait_cycle),
         .pace_wr_wait (ram_write_wait_cycle),
         .pace_vwait   (vram_wait_now),
+        .dx           (jtag_dx[6:0]),
         .bios_shadow  (bios_shadow_flag),
         .bios_protect (bios_protect_flag[1]),
         .f_req     (cachef_req),

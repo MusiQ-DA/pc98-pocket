@@ -215,7 +215,7 @@ module tb_pc98_boot;
         .cache_en  (1'b0), .pace(1'b0), .pace_ce(1'b0), .pace_rd_wait(2'd0), .pace_wr_wait(2'd0), .pace_vwait(5'd0),
 `endif
         .bios_shadow  (itf_bank),
-        .bios_protect (1'b1),
+        .bios_protect (1'b1), .dx (7'd0),
         .f_req (cf_req), .f_we (cf_we), .f_addr (cf_addr), .f_len (cf_len),
         .f_wdata0 (cf_wd0), .f_wdata1 (cf_wd1), .f_ack (cf_ack),
         .f_rvalid (cf_rvalid), .f_rdata (cf_rdata), .f_done (cf_done),
@@ -628,6 +628,7 @@ module tb_pc98_boot;
     wire [4:0]  seq_mem_pf_len;
     wire [7:0]  dbg_gvram;
     pc98_gvram_seq #(.EGC(1'b1)) u_gvram_seq (
+        .rmwbuf_off(1'b0),
         .clk(clk_chipset), .reset(reset),
         .cpu_gvram(~ram_address_select_n),
         .cpu_rd(~mem_rd_n), .cpu_wr(~mem_wr_n),
