@@ -900,7 +900,9 @@ jobs:
                   try: alm = float(c[1].split("(")[0].replace(",", ""))
                   except Exception: continue
                   rows.append((alm, c[0].replace("|", "").strip()[:60]))
-          for alm, name in sorted(rows, reverse=True)[:40]:
+          top = sorted(rows, reverse=True)
+          shown = top[:80] + [r for r in top[80:] if "sld" in r[1].lower() or "jtag" in r[1].lower()]
+          for alm, name in shown:
               print(f"{alm:8.1f} {name}")
           PY
           [ -s /tmp/ent.txt ] && echo "::notice title=entities by ALM::$(enc < /tmp/ent.txt)"
