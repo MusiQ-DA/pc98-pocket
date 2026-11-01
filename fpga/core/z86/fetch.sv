@@ -155,6 +155,13 @@ wire snoop_behind = snoop_wr & ((snoop_addr[19:4] == buf_addr0[19:4]) | (snoop_e
 wire [19:0] br_rel_w = br_target - buf_addr;
 wire        br_half  = buf_start ^ br_rel_w[4];
 wire        br_below = buf_valid[br_half] && (br_rel_w[3:0] < buf_lo[br_half]);
+// The branch target is already buffered (the in-buffer or retired-half
+// cases of the br_taken arm below). Otherwise fetch reloads the line, and
+// the cache prices that load's first word -- part of the 286's "7+m",
+// so the issue gate then adds only the rest of the taken charge.
+wire        br_inbuf = (br_rel_w[19:5] == 15'd0 && !br_below)
+                    || (behind_ok && br_rel_w[19:4] == 16'hFFFF
+                        && br_target[3:0] >= buf_lo[~buf_start]);
 wire [4:0]  insn_ofs = (ptr - {buf_start, 4'b0000}) - {3'b000, prefix_len};
 wire [19:0] insn_lin = buf_addr + {15'd0, insn_ofs};
 
@@ -255,7 +262,7 @@ always @(posedge clk) begin
         d = eu_debt;
         if (pace_ce && d != 7'd0) d = d - 7'd1;
         if (eu_pend) d = {2'b0, eu_q};
-        if (br_taken) d = d + EU_TAKEN;
+        if (br_taken) d = d + (br_inbuf ? EU_TAKEN : EU_TAKEN - 7'd2);
         d = d + {2'b0, eu_extra};
         eu_debt <= pace ? d : 7'd0;
         eu_pend <= 1'b0;
