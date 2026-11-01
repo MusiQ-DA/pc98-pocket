@@ -484,8 +484,13 @@ module z86_cache #(
     wire        wr_both = c_word && !c_straddle && !part;
     wire [15:0] w_be   = wr_both ? (16'b11 << c_off) : (16'b1 << c_off);
     wire [7:0]  w_byte = part ? c_wd[15:8] : c_wd[7:0];
-    wire [127:0] w_wd  = wr_both ? ({112'd0, c_wd} << (8 * c_off))
-                                 : ({120'd0, w_byte} << (8 * c_off));
+    // The byte enables pick the lanes, so the data only has to be right in
+    // them: replicate instead of shifting (a 128-bit barrel shifter was
+    // a good part of this module's ALMs). A word's low byte sits at c_off,
+    // so the pair is laid lo-in-even or lo-in-odd lanes by c_off[0].
+    wire [127:0] w_wd  = !wr_both ? {16{w_byte}}
+                       : c_off[0] ? {8{c_wd[7:0], c_wd[15:8]}}
+                                  : {8{c_wd[15:8], c_wd[7:0]}};
 
     function automatic [1:0] sel_of(input logic a0, input logic word);
         sel_of = word ? 2'b11 : (a0 ? 2'b10 : 2'b01);
