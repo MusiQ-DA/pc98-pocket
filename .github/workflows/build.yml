@@ -12,11 +12,21 @@ on:
       - 'NOTICE.md'
       - 'tools/**'
   workflow_dispatch:
+    inputs:
+      profile:
+        description: >-
+          debug = the JTAG measurement build (fpga/config.tcl as committed:
+          PC98_JTAG on, every scripts/jtag_* flow works); release = the SD
+          build, PC98_JTAG off -- the probe, hub and taps go and their
+          floor is free
+        type: choice
+        options: [debug, release]
+        default: debug
 
 # A newer push on the same ref supersedes a running build -- the old
 # bitstream would never be fetched anyway.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.profile || 'debug' }}
   cancel-in-progress: true
 
 # permissions stay minimal: every job only reads.
@@ -789,6 +799,16 @@ jobs:
       - name: Pull Quartus image
         run: docker pull raetro/quartus:pocket
 
+      - name: Build profile
+        run: |
+          P="${{ inputs.profile || 'debug' }}"
+          echo "profile: $P"
+          if [ "$P" = release ]; then
+            # the SD build: no JTAG probe (firmware does not depend on it)
+            sed -i 's/^set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"/# (release profile) &/' fpga/config.tcl
+          fi
+          grep -n "VERILOG_MACRO" fpga/config.tcl
+
       - name: Compile (quartus_sh --flow compile)
         id: compile
         run: |
@@ -914,7 +934,7 @@ jobs:
       - name: Upload bitstream and reports
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bitstream
+          name: ${{ (inputs.profile || 'debug') == 'release' && 'bitstream-release' || 'bitstream' }}
           if-no-files-found: error
           path: |
             fpga/output_files/*.sof

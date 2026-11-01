@@ -2414,6 +2414,19 @@ module core_top (
         .rd_adv         (probe_rd_adv),
         .rd_adv_gv      (probe_rd_adv_gv)
     );
+`else
+    // Release build (no probe): the debug ports the JTAG block reads stay
+    // connected to these unread nets, and its controls sit at rest.
+    wire [223:0] z86_dbg_regs;
+    wire         z86_dbg_stopped;
+    wire [15:0]  z86_dbg_next_ip;
+    wire         z86_halted;
+    wire         z86_pf_wr_v, z86_pf_wr_two;
+    wire [19:0]  z86_pf_wr_a0;
+    wire [15:0]  z86_sn_kills_w;
+    wire [31:0]  tvram_dbg_q;
+    wire [19:0]  trig_addr     = 20'h0;
+    wire         jtag_dbg_stop = 1'b0;
 `endif
 
     //
