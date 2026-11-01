@@ -382,20 +382,31 @@ module z86_cache #(
     // and ahead of any uncached access (busy covers it -- an OUT that
     // starts a DMA never passes a store). Reads stay coherent the way they
     // always were: a store patches its cached line on the way in.
-    reg         cb_v;                   // the buffer holds a range
-    reg         cb_fl;                  // ... and is being written out
-    reg         cb_want;                // a store waits for it to leave
-    reg  [16:0] cb_ln;                  // physical line, phys[20:4]
-    reg  [127:0] cb_d;
-    reg  [3:0]  cb_lo, cb_hi;
-    reg  [5:0]  cb_age;
+    // TWO such buffers, so a run of stores never waits out a burst: while
+    // one is going out on port F, the other takes the next line (REP STOSW
+    // and MOVSW paid ~22 chipset clocks at every line change). cb_act is
+    // the one stores merge into; the other is draining or empty. A store
+    // into the other's line waits for it to leave, so no byte is ever held
+    // in both (an older copy can never land after a newer one).
+    reg  [1:0]  cb_v;                   // the buffer holds a range
+    reg  [1:0]  cb_fl;                  // ... and is being written out
+    reg  [1:0]  cb_want;                // it should leave now
+    reg  [16:0] cb_ln  [0:1];           // physical line, phys[20:4]
+    reg  [127:0] cb_d  [0:1];
+    reg  [3:0]  cb_lo  [0:1];
+    reg  [3:0]  cb_hi  [0:1];
+    reg  [5:0]  cb_age [0:1];
+    reg         cb_act;                 // the merging buffer
+    reg         cb_fli;                 // the buffer port F is writing out
     reg  [15:0] f_wdata0_r, f_wdata1_r;
-    wire [3:0]  cb_ix   = cb_lo + f_wcnt[3:0];
-    wire [7:0]  cb_byte = cb_d[{cb_ix, 3'b000} +: 8];
-    assign f_wdata0 = (WCOMB && cb_fl) ? {8'h00, cb_byte} : f_wdata0_r;
-    assign f_wdata1 = (WCOMB && cb_fl) ? {8'h00, cb_byte} : f_wdata1_r;
+    wire [3:0]  cb_ix   = cb_lo[cb_fli] + f_wcnt[3:0];
+    wire [127:0] cb_fd  = cb_d[cb_fli];
+    wire [7:0]  cb_byte = cb_fd[{cb_ix, 3'b000} +: 8];
+    wire        cb_flng = WCOMB && (cb_fl != 2'b00);
+    assign f_wdata0 = cb_flng ? {8'h00, cb_byte} : f_wdata0_r;
+    assign f_wdata1 = cb_flng ? {8'h00, cb_byte} : f_wdata1_r;
 
-    assign busy = wb_full || (WCOMB && cb_v) || (fs != F_IDLE) || wb_stb_o;
+    assign busy = wb_full || (WCOMB && cb_v != 2'b00) || (fs != F_IDLE) || wb_stb_o;
 
     // Current lookup's address (the byte this part touches) and line.
     wire [19:0] c_ab  = part ? c_a + 20'd1 : c_a;
@@ -510,16 +521,31 @@ module z86_cache #(
     // edge would widen the range after f_addr/f_len latched the old one,
     // and the done that follows clears the buffer: the merged bytes were
     // lost (irq_rep under +pace: REP MOVS copies with holes).
-    wire        cb_go = WCOMB && cb_v && !cb_fl && (fs == F_IDLE)
-                     && (cb_want || cb_age >= 6'(CB_AGE) || fill_req || unc_want);
-    wire        cb_merge = cb_v && !cb_fl && !cb_go && (cb_ln == wp0[20:4])
-                        && (w_lo <= {1'b0, cb_hi} + 5'd1)
-                        && (w_hi + 5'd1 >= {1'b0, cb_lo});
-    wire        acc_cb = cb_shape && !wb_full && (!cb_v || cb_merge);
-    wire        acc_wb = !cb_shape && !wb_full && !(WCOMB && cb_v);
+    wire        cb_a = cb_act, cb_b = ~cb_act;
+    // flush launch per buffer; the idle one (b) first, then the active one
+    wire        cb_due_b = WCOMB && cb_v[cb_b] && !cb_fl[cb_b] && (fs == F_IDLE)
+                        && (cb_want[cb_b] || cb_age[cb_b] >= 6'(CB_AGE) || fill_req || unc_want);
+    wire        cb_due_a = WCOMB && cb_v[cb_a] && !cb_fl[cb_a] && (fs == F_IDLE)
+                        && (cb_want[cb_a] || cb_age[cb_a] >= 6'(CB_AGE) || fill_req || unc_want);
+    wire        cb_go    = cb_due_b || cb_due_a;
+    wire        cb_gi    = cb_due_b ? cb_b : cb_a;
+    // the other buffer still holds this store's line: wait for it to leave
+    wire        cb_clash = cb_v[cb_b] && (cb_ln[cb_b] == wp0[20:4]);
+    // a merge on the active buffer's flush-launch edge would widen the
+    // range after f_len latched (the merged bytes were lost)
+    wire        cb_merge = cb_v[cb_a] && !cb_fl[cb_a] && !(cb_go && cb_gi == cb_a)
+                        && !cb_clash && (cb_ln[cb_a] == wp0[20:4])
+                        && (w_lo <= {1'b0, cb_hi[cb_a]} + 5'd1)
+                        && (w_hi + 5'd1 >= {1'b0, cb_lo[cb_a]});
+    wire        cb_new_a = !cb_v[cb_a] && !cb_clash;
+    wire        cb_swap  = cb_v[cb_a] && !cb_merge && !cb_v[cb_b];
+    wire        acc_cb = cb_shape && !wb_full && (cb_new_a || cb_merge || cb_swap);
+    wire        acc_wb = !cb_shape && !wb_full && !(WCOMB && cb_v != 2'b00);
 
     always @(posedge clk) begin
-        if (WCOMB && cb_v && !cb_fl && cb_age != 6'h3F) cb_age <= cb_age + 6'd1;
+        for (int i = 0; i < 2; i++)
+            if (WCOMB && cb_v[i] && !cb_fl[i] && cb_age[i] != 6'h3F)
+                cb_age[i] <= cb_age[i] + 6'd1;
         t_we <= 1'b0;
         d_we <= 1'b0;
         dbg_wr_v <= 1'b0;
@@ -577,9 +603,10 @@ module z86_cache #(
                 f_req    <= 1'b1;
                 f_we     <= 1'b1;
                 f_isfill <= 1'b0;
-                f_addr   <= {3'b000, cb_ln, cb_lo};
-                f_len    <= cb_hi - cb_lo;
-                cb_fl    <= 1'b1;
+                f_addr   <= {3'b000, cb_ln[cb_gi], cb_lo[cb_gi]};
+                f_len    <= cb_hi[cb_gi] - cb_lo[cb_gi];
+                cb_fl[cb_gi] <= 1'b1;
+                cb_fli   <= cb_gi;
                 fs <= F_REQ;
             end else if (wb_full) begin
                 f_req    <= 1'b1;
@@ -619,10 +646,10 @@ module z86_cache #(
                 fs <= F_IDLE;
                 if (f_isfill) begin
                     if (fill_live) fill_done <= 1'b1;
-                end else if (WCOMB && cb_fl) begin
-                    cb_fl   <= 1'b0;
-                    cb_v    <= 1'b0;
-                    cb_want <= 1'b0;
+                end else if (cb_flng) begin
+                    cb_fl[cb_fli]   <= 1'b0;
+                    cb_v[cb_fli]    <= 1'b0;
+                    cb_want[cb_fli] <= 1'b0;
                 end else if (wb_two && !f_wpart && f_len == 4'd0) begin
                     f_wpart <= 1'b1;            // second byte next
                 end else begin
@@ -699,16 +726,24 @@ module z86_cache #(
                             wr_ready <= 1'b1;
                     end else if (acc_cb || acc_wb) begin
                         if (acc_cb) begin
-                            cb_v   <= 1'b1;
-                            cb_ln  <= wp0[20:4];
-                            cb_lo  <= cb_v ? ((w_lo[3:0] < cb_lo) ? w_lo[3:0] : cb_lo)
-                                           : w_lo[3:0];
-                            cb_hi  <= cb_v ? ((w_hi[3:0] > cb_hi) ? w_hi[3:0] : cb_hi)
-                                           : w_hi[3:0];
-                            cb_d[{wp0[3:0], 3'b000} +: 8] <= wr_data[7:0];
+                            // the buffer this store lands in: the active one,
+                            // or the idle one on a swap (the active one then
+                            // leaves at once)
+                            automatic logic t = cb_swap ? cb_b : cb_a;
+                            cb_v[t]   <= 1'b1;
+                            cb_ln[t]  <= wp0[20:4];
+                            cb_lo[t]  <= cb_merge ? ((w_lo[3:0] < cb_lo[t]) ? w_lo[3:0] : cb_lo[t])
+                                                  : w_lo[3:0];
+                            cb_hi[t]  <= cb_merge ? ((w_hi[3:0] > cb_hi[t]) ? w_hi[3:0] : cb_hi[t])
+                                                  : w_hi[3:0];
+                            cb_d[t][{wp0[3:0], 3'b000} +: 8] <= wr_data[7:0];
                             if (wr_word)
-                                cb_d[{wp0[3:0] + 4'd1, 3'b000} +: 8] <= wr_data[15:8];
-                            cb_age <= 6'd0;
+                                cb_d[t][{wp0[3:0] + 4'd1, 3'b000} +: 8] <= wr_data[15:8];
+                            cb_age[t] <= 6'd0;
+                            if (cb_swap) begin
+                                cb_act <= cb_b;
+                                if (!cb_fl[cb_a]) cb_want[cb_a] <= 1'b1;
+                            end
                         end else begin
                             wb_full  <= 1'b1;
                             wb_p0    <= wp0;
@@ -736,8 +771,10 @@ module z86_cache #(
                         c_word <= wr_word;
                         c_wd   <= wr_data;
                         st     <= S_CMP;
-                    end else if (WCOMB && cb_v && !cb_fl) begin
-                        cb_want <= 1'b1;        // a store that will not merge
+                    end else if (WCOMB) begin
+                        // a store that cannot land yet: move things along
+                        if (cb_v[cb_a] && !cb_fl[cb_a]) cb_want[cb_a] <= 1'b1;
+                        if (cb_v[cb_b] && !cb_fl[cb_b]) cb_want[cb_b] <= 1'b1;
                     end
                 end else if (ce && !busy
                              && !(wr_io && pit_port(wr_addr[15:0]) && io_rec < PIT_GAP[7:0])) begin
@@ -1041,7 +1078,8 @@ module z86_cache #(
     // Power-up state for what the CPU reset does not touch.
     initial begin
         fs = F_IDLE; f_req = 1'b0; f_we = 1'b0; wb_full = 1'b0; f_wpart = 1'b0;
-        cb_v = 1'b0; cb_fl = 1'b0; cb_want = 1'b0; cb_age = 6'd0;
+        cb_v = 2'b00; cb_fl = 2'b00; cb_want = 2'b00; cb_act = 1'b0; cb_fli = 1'b0;
+        cb_age[0] = 6'd0; cb_age[1] = 6'd0;
         sn2_v = 1'b0; st = S_FLUSH; flush_i = '0; wr_ready = 1'b0;
         dbg_sn_kills = 16'd0;
         snq_v = 1'b0; snq_i = '0; snq_wi = '0;
