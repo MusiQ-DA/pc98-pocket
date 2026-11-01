@@ -888,6 +888,22 @@ jobs:
             done
           } | enc > /tmp/fit.txt || true
           [ -s /tmp/fit.txt ] && echo "::notice title=fit and timing::$(cat /tmp/fit.txt)"
+          # The biggest entities (ALMs needed), for deciding what to park.
+          python3 - "$R/ap_core.fit.rpt" > /tmp/ent.txt <<'PY' || true
+          import re, sys
+          rows, on = [], False
+          for l in open(sys.argv[1], errors="ignore"):
+              if "Fitter Resource Utilization by Entity" in l: on = True; continue
+              if on and rows and l.strip() == "": break
+              if on and l.startswith(";") and "|" in l:
+                  c = [x.strip() for x in l.strip().strip(";").split(";")]
+                  try: alm = float(c[1].split("(")[0].replace(",", ""))
+                  except Exception: continue
+                  rows.append((alm, c[0].replace("|", "").strip()[:60]))
+          for alm, name in sorted(rows, reverse=True)[:40]:
+              print(f"{alm:8.1f} {name}")
+          PY
+          [ -s /tmp/ent.txt ] && echo "::notice title=entities by ALM::$(enc < /tmp/ent.txt)"
           grep -hE "^(Error|Critical Warning)|Internal Error|Fatal Error|Cannot fit|Can.t fit" fpga/compile_*.log 2>/dev/null \
             | grep -vE "^\s*Info" | head -12 | enc > /tmp/err.txt || true
           [ -s /tmp/err.txt ] && echo "::error title=quartus errors::$(cat /tmp/err.txt)"
