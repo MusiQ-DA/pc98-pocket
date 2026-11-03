@@ -782,6 +782,15 @@ module z86_cache #(
                             cb_age[t] <= 6'd0;
                             if (cb_swap) begin
                                 cb_act <= cb_b;
+                                // A store into the line the leaving bank
+                                // holds (it is flushing, or launches on
+                                // this edge, so it cannot merge): the store
+                                // patches the cached line below, and the
+                                // leaving bank's install would put its
+                                // older bytes back over it under a valid
+                                // tag. Memory ends right (this bank goes
+                                // out after it); the cache must not.
+                                if (cb_ln[cb_a] == wp0[20:4]) cb_kill[cb_a] <= 1'b1;
                                 if (!cb_fl[cb_a]) cb_want[cb_a] <= 1'b1;
                             end
                         end else begin

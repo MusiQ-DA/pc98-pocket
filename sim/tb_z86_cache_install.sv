@@ -148,6 +148,33 @@ module tb_z86_cache_install;
                 $display("FAIL d=%0d: X+3 read %02x expected ee", d, got);
             end
         end
+        // Round 2: a store into the SAME line as a whole bank that is
+        // already on its way out (age, a fill, the launch edge). It cannot
+        // merge, so it swaps into the other bank and patches the cached
+        // line -- and the leaving bank's install must not then put the
+        // older bytes back over it.
+        for (int d = 0; d <= DMAX; d++) begin
+            automatic logic [19:0] y = 20'h40000 + 20'(d) * 20'h10;
+            for (int i = 0; i < 16; i++) mem[y + 20'(i)] = 8'h5A;
+            cpu_read(y, got);                       // Y cached
+            for (int i = 0; i < 16; i += 2)
+                cpu_write(y + 20'(i), {8'hB1 + 8'(i), 8'hB0 + 8'(i)}, 1'b1);
+            repeat (d) @(posedge clk);
+            cpu_write(y + 20'd3, 16'h00EE, 1'b0);
+            drain();
+            for (int i = 0; i < 16; i++) begin
+                automatic logic [7:0] ey = (i == 3) ? 8'hEE : 8'hB0 + 8'(i);
+                cpu_read(y + 20'(i), got);
+                if (got !== ey) begin
+                    errors++;
+                    $display("FAIL r2 d=%0d: Y+%0d read %02x expected %02x", d, i, got, ey);
+                end
+                if (mem[y + 20'(i)] !== ey) begin
+                    errors++;
+                    $display("FAIL r2 d=%0d: Y+%0d in memory %02x expected %02x", d, i, mem[y + 20'(i)], ey);
+                end
+            end
+        end
         if (errors == 0) $display("PASS: line install vs aliasing store, d=0..%0d", DMAX);
         else $display("TOTAL FAILURES: %0d", errors);
         $finish(errors != 0);
