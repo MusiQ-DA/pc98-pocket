@@ -563,6 +563,10 @@ module z86_cache #(
     // index) then patched its bytes into the freshly installed line, under
     // the installed line's valid tag. So S_IDLE starts nothing on an
     // install edge; the lookup on the next edge is caught by kill.
+    // S_IDLE's guard is the superset "a combine burst ends this edge" --
+    // one clock per burst, and a small cone (the full cb_inst term in the
+    // S_IDLE decision is the shape Quartus' S2T died on).
+    wire        cb_endf = cb_flng && f_done && (fs == F_RUN);
     wire        cb_inst = WCOMB && (fs == F_RUN) && f_done && !f_isfill && cb_flng
                        && cb_lo[cb_fli] == 4'h0 && cb_hi[cb_fli] == 4'hF
                        && !cb_kill[cb_fli] && cache_en && !dx[2]
@@ -740,7 +744,7 @@ module z86_cache #(
 
           S_IDLE: begin
             part <= 1'b0;
-            if (d_we || p_busy || cb_inst) begin
+            if (d_we || p_busy || cb_endf) begin
                 // a line patch lands this edge, or the last paced access
                 // still owes bus time -- a prefetch tail yields to an EU
                 // access or an out-of-line (branch) load after its word
