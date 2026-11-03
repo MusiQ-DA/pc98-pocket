@@ -170,6 +170,13 @@ jobs:
           bash scripts/sim_z86_tests.sh
           Z86_EXTRA="+pace +pacew=1" bash scripts/sim_z86_tests.sh
 
+      - name: z86_cache snoop and whole-line install races
+        run: |
+          # The FDC-DMA snoop contract, and a combine bank's line install
+          # against a store to another line at the same index (#1047 10 MHz).
+          bash scripts/sim_z86_cache_snoop.sh
+          bash scripts/sim_z86_cache_install.sh
+
       - name: instruction costs against the 80286 data sheet (10 MHz), held to the baseline
         run: |
           # Prints measured CPU clocks per probe next to the data-sheet count;

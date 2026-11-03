@@ -555,6 +555,18 @@ module z86_cache #(
     wire        cb_new_a = !cb_v[cb_a] && !cb_clash;
     wire        cb_swap  = cb_v[cb_a] && !cb_merge && !cb_v[cb_b];
     wire        acc_cb = cb_shape && !wb_full && (cb_new_a || cb_merge || cb_swap);
+    // The whole-line install of a bank whose burst ends this edge (F_RUN
+    // below). Its tag/data writes land on the NEXT edge, after any lookup
+    // S_IDLE starts on this one has already read the old occupant -- and
+    // the kill term only covers lookups whose read shares the landing
+    // edge. A store that hit the old occupant (another line at the same
+    // index) then patched its bytes into the freshly installed line, under
+    // the installed line's valid tag. So S_IDLE starts nothing on an
+    // install edge; the lookup on the next edge is caught by kill.
+    wire        cb_inst = WCOMB && (fs == F_RUN) && f_done && !f_isfill && cb_flng
+                       && cb_lo[cb_fli] == 4'h0 && cb_hi[cb_fli] == 4'hF
+                       && !cb_kill[cb_fli] && cache_en && !dx[2]
+                       && st == S_IDLE && !sn_ours && !sn2_v && !park_v;
     wire        acc_wb = !cb_shape && !wb_full && !(WCOMB && cb_v != 2'b00);
 
     always @(posedge clk) begin
@@ -669,9 +681,7 @@ module z86_cache #(
                     cb_fl[cb_fli]   <= 1'b0;
                     cb_v[cb_fli]    <= 1'b0;
                     cb_want[cb_fli] <= 1'b0;
-                    if (cb_lo[cb_fli] == 4'h0 && cb_hi[cb_fli] == 4'hF
-                        && !cb_kill[cb_fli] && cache_en && !dx[2]
-                        && st == S_IDLE && !sn_ours && !sn2_v && !park_v) begin
+                    if (cb_inst) begin
                         d_we <= 1'b1; d_wa <= cb_fidx; d_be <= 16'hFFFF; d_wd <= cb_fd;
                         t_we <= 1'b1; t_wa <= cb_fidx; t_wd <= {1'b1, cb_ftag};
                     end
@@ -730,7 +740,7 @@ module z86_cache #(
 
           S_IDLE: begin
             part <= 1'b0;
-            if (d_we || p_busy) begin
+            if (d_we || p_busy || cb_inst) begin
                 // a line patch lands this edge, or the last paced access
                 // still owes bus time -- a prefetch tail yields to an EU
                 // access or an out-of-line (branch) load after its word
