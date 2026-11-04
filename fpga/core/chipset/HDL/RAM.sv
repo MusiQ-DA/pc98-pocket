@@ -168,6 +168,20 @@ module RAM #(
      output logic   [15:0]  cachef_rdata,
      output logic           cachef_done,
      output logic    [4:0]  cachef_wcnt,
+    // The GRCG RMW line buffer's write-back (pc98_gvram_seq): controller
+    // port G, one 16-word write burst per plane line, data by word on
+    // cachef_wcnt (the controller's one p_wcnt). Tie gvwb_req low if unused.
+     input  logic           gvwb_req,
+     input  logic           gvwb_we,         // 0: the line fill (a read)
+     output logic           gvwb_rvalid,
+     output logic    [7:0]  gvwb_rdata,
+    // Nothing of port A's is pending or in flight (no parked write, no
+    // capture, the FSM idle): a port-G fill cannot pass an older write.
+     output logic           gv_a_quiet,
+     input  logic   [23:0]  gvwb_addr,
+     input  logic    [7:0]  gvwb_wdata,
+     output logic           gvwb_ack,
+     output logic           gvwb_done,
     // Port A write commits (guest, DMA, loader), for the cache to snoop:
     // one-cycle pulse, SDRAM word address, words - 1.
      output logic           ram_wr_snoop_v,
@@ -430,6 +444,11 @@ module RAM #(
     // guest path, B the font fetch, C the CG window, D the graphics display,
     // E fdd_ramimg's image carve-out.
     // See docs/P0_SDRAM_DESIGN.md.
+    logic [15:0] gvwb_rdata_w;
+    assign gvwb_rdata = gvwb_rdata_w[7:0];
+    assign gv_a_quiet = (state == IDLE) & ~wc_pend & ~wc_pend2 & ~wc_pend3
+                      & ~cap_valid & ~write_request & ~read_request;
+
     sdram_shim u_sdram (
         .sdram_clock        (clock),
         .sdram_reset        (reset),
@@ -499,6 +518,15 @@ module RAM #(
         .f_rdata            (cachef_rdata),
         .f_done             (cachef_done),
         .f_wcnt             (cachef_wcnt),
+        .g_req              (gvwb_req),
+        .g_we               (gvwb_we),
+        .g_rvalid           (gvwb_rvalid),
+        .g_rdata            (gvwb_rdata_w),
+        .g_addr             (gvwb_addr),
+        .g_len              (4'd15),
+        .g_wdata            ({8'h00, gvwb_wdata}),
+        .g_ack              (gvwb_ack),
+        .g_done             (gvwb_done),
         .a_wr_v             (ram_wr_snoop_v),
         .a_wr_addr          (ram_wr_snoop_addr),
         .a_wr_len           (ram_wr_snoop_len),

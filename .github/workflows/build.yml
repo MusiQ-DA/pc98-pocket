@@ -667,6 +667,12 @@ jobs:
             $S/pc98_egc.sv -o gs --Mdir obj_gseq
           ./obj_gseq/gs | tee gseq.log
           grep -q "PASS tb_pc98_gvram_seq" gseq.log
+          # and with the posted GRCG RMW write core_top ships (PWPOST)
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_gvram_seq \
+            -GPW=1 -Isim -I$S sim/tb_pc98_gvram_seq.sv $S/pc98_gvram_seq.sv \
+            $S/pc98_egc.sv -o gs --Mdir obj_gseq_pw
+          ./obj_gseq_pw/gs | tee gseq_pw.log
+          grep -q "PASS tb_pc98_gvram_seq" gseq_pw.log
 
       - name: the service-channel launch captures the trigger's own byte
         # Boots the REAL softcpu_subsystem (picorv32 + sprom + launch block)
