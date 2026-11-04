@@ -180,6 +180,23 @@ module sdram_shim #(
     output logic [sdram_data_width-1:0]       f_rdata,
     output logic                              f_done,
     output logic [4:0]                        f_wcnt,     // p_wcnt: the word a port-F burst wants
+                                                          // (and a port-G one: one counter, one grant)
+
+    // ---------------------------------------------------------------- port G
+    //
+    // The GRCG RMW line buffer (pc98_gvram_seq): one plane's 16-byte line
+    // as one sixteen-word burst -- the fill (read) and the write-back
+    // (write, data served by word on f_wcnt like port F's). Graphics VRAM
+    // is never cached, so nothing snoops it.
+    input  wire                               g_req,      /* tie low if unused */
+    input  wire                               g_we,
+    output logic                              g_rvalid,
+    output logic [sdram_data_width-1:0]       g_rdata,
+    input  wire  [ADDR_BITS_PUB-1:0]          g_addr,
+    input  wire  [LEN_BITS_PUB-1:0]           g_len,
+    input  wire  [sdram_data_width-1:0]       g_wdata,
+    output logic                              g_ack,
+    output logic                              g_done,
 
     // Port A write-commit snoop, for the cache to invalidate against: a_wr_v
     // pulses for the one cycle in which a guest/DMA/loader write on port A
@@ -218,7 +235,7 @@ module sdram_shim #(
     // word, so that is one transaction instead of sixteen.
     localparam int BURST_MAX = 16;
     localparam int LEN_BITS  = (BURST_MAX > 1) ? $clog2(BURST_MAX) : 1;
-    localparam int PORTS     = 6;
+    localparam int PORTS     = 7;
 
     // sdram_mp schedules its own refresh and has no cs pin: the SDRAM's chip
     // select is permanently asserted.
@@ -366,11 +383,11 @@ module sdram_shim #(
     // port B the font fetch, C the CG window, D the display fetch, E the
     // RAM-image floppy server, and F the CPU cache. Packed so the widths
     // follow the controller's parameters.
-    wire [PORTS-1:0] mp_req  = {f_req,  e_req,  d_req, c_req, b_req, req};
-    wire [PORTS-1:0] mp_we   = {f_we,   e_we,   1'b0,  1'b0,  1'b0, we_r};
-    wire [PORTS-1:0][ADDR_BITS-1:0] mp_addr  = {f_addr, e_addr, d_addr, c_addr,
+    wire [PORTS-1:0] mp_req  = {g_req, f_req,  e_req,  d_req, c_req, b_req, req};
+    wire [PORTS-1:0] mp_we   = {g_we,  f_we,   e_we,   1'b0,  1'b0,  1'b0, we_r};
+    wire [PORTS-1:0][ADDR_BITS-1:0] mp_addr  = {g_addr, f_addr, e_addr, d_addr, c_addr,
                                                 b_addr, addr_r};
-    wire [PORTS-1:0][LEN_BITS-1:0]  mp_len   = {f_len,  e_len,  d_len,  c_len,
+    wire [PORTS-1:0][LEN_BITS-1:0]  mp_len   = {g_len,  f_len,  e_len,  d_len,  c_len,
                                                 b_len,  len_r};
     // sdram_mp publishes the index of the word it wants in p_wcnt and consumes
     // p_wdata combinationally, so a two-word write is just this select. Ports
@@ -379,12 +396,13 @@ module sdram_shim #(
     // and port F's two words are held by the cache the same way.
     wire [LEN_BITS-1:0] mp_wcnt;
     wire [PORTS-1:0][sdram_data_width-1:0] mp_wdata =
-        {(mp_wcnt == LEN_BITS'(0)) ? f_wdata0 : f_wdata1,
+        {g_wdata,
+         (mp_wcnt == LEN_BITS'(0)) ? f_wdata0 : f_wdata1,
          e_wdata, {sdram_data_width{1'b0}}, {sdram_data_width{1'b0}},
          {sdram_data_width{1'b0}},
          (mp_wcnt == LEN_BITS'(0)) ? wdata_r : wdata_hi_r};
     wire [PORTS-1:0][MASK_BITS-1:0] mp_wmask =
-        {{MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}},
+        {{MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}},
          {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}};
     wire [PORTS-1:0] mp_ack, mp_done;
     wire [$clog2(PORTS)-1:0] mp_grant;
@@ -402,6 +420,8 @@ module sdram_shim #(
     assign f_ack    = mp_ack[5];
     assign f_done   = mp_done[5];
     assign f_wcnt   = 5'(mp_wcnt);
+    assign g_ack    = mp_ack[6];
+    assign g_done   = mp_done[6];
     // Read data is tagged with the owning port, so each master sees only its own.
     assign p_rvalid = mp_rvalid & (mp_grant == 3'd0);
     assign b_rvalid = mp_rvalid & (mp_grant == 3'd1);
@@ -409,12 +429,14 @@ module sdram_shim #(
     assign d_rvalid = mp_rvalid & (mp_grant == 3'd3);
     assign e_rvalid = mp_rvalid & (mp_grant == 3'd4);
     assign f_rvalid = mp_rvalid & (mp_grant == 3'd5);
+    assign g_rvalid = mp_rvalid & (mp_grant == 3'd6);
     assign p_rdata  = mp_rdata;
     assign b_rdata  = mp_rdata;
     assign c_rdata  = mp_rdata;
     assign d_rdata  = mp_rdata;
     assign e_rdata  = mp_rdata;
     assign f_rdata  = mp_rdata;
+    assign g_rdata  = mp_rdata;
 
     // p_done[0] is a registered one-cycle pulse; we_r/addr_r/len_r only move
     // when !busy, and busy drops on the same edge p_done is seen, so all three
@@ -447,7 +469,7 @@ module sdram_shim #(
     end
 
     logic [13:0] mp_dbg;
-    assign dbg_w = {a_req_age, a_busy_age, mp_req, mp_dbg,
+    assign dbg_w = {a_req_age, a_busy_age, mp_req[5:0], mp_dbg,
                     busy, req, we_r, 1'b0};
 
     sdram_mp #(

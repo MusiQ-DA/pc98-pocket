@@ -653,8 +653,13 @@ module CHIPSET #(
     // RAM.sv's burst beats; the sequencer's own line-buffer bursts are
     // kept off the bridge's prefetch window (pf_beat_seq).
     logic ram_pf_beat_v, seq_pf_beat;
+    // the sequencer's write-back port (RAM.sv port G)
+    logic gvwb_req, gvwb_ack, gvwb_done, gvwb_we, gvwb_rvalid, gv_a_quiet;
+    logic [7:0]  gvwb_rdata;
+    logic [23:0] gvwb_addr;
+    logic [7:0]  gvwb_wdata;
     assign pf_beat_v = ram_pf_beat_v & ~seq_pf_beat;
-    pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1)) u_gvram_seq (
+    pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1)) u_gvram_seq (
         .rmwbuf_off(dx_rmwbuf_off),
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
@@ -697,6 +702,10 @@ module CHIPSET #(
         .mem_wr_taken(ram_wt_w),
         .pf_beat_v(ram_pf_beat_v), .pf_beat_dat(pf_beat_dat),
         .pf_beat_seq(seq_pf_beat),
+        .gvwb_req(gvwb_req), .gvwb_addr(gvwb_addr), .gvwb_wdata(gvwb_wdata),
+        .gvwb_ack(gvwb_ack), .gvwb_done(gvwb_done), .gvwb_wcnt(cachef_wcnt),
+        .gvwb_we(gvwb_we), .gvwb_rvalid(gvwb_rvalid), .gvwb_rdata(gvwb_rdata),
+        .gv_a_quiet(gv_a_quiet),
         .cpu_wr_taken(sdram_wr_taken),
         .cpu_rd_own(sdram_rd_ready)
     );
@@ -800,6 +809,15 @@ module CHIPSET #(
         .cachef_rdata                       (cachef_rdata),
         .cachef_done                        (cachef_done),
         .cachef_wcnt                        (cachef_wcnt),
+        .gvwb_req                           (gvwb_req),
+        .gvwb_addr                          (gvwb_addr),
+        .gvwb_wdata                         (gvwb_wdata),
+        .gvwb_ack                           (gvwb_ack),
+        .gvwb_done                          (gvwb_done),
+        .gvwb_we                            (gvwb_we),
+        .gvwb_rvalid                        (gvwb_rvalid),
+        .gvwb_rdata                         (gvwb_rdata),
+        .gv_a_quiet                         (gv_a_quiet),
         .ram_wr_snoop_v                     (ram_wr_snoop_v),
         .ram_wr_snoop_addr                  (ram_wr_snoop_addr),
         .ram_wr_snoop_len                   (ram_wr_snoop_len),
