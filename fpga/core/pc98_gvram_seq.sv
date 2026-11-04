@@ -69,7 +69,10 @@ module pc98_gvram_seq #(
     // The RMW plane-line buffer (below). Needs a memory that answers a
     // prefetch_len read with pf_beat_* beats -- RAM.sv does; the benches'
     // behavioural memories do not, and leave it off.
-    parameter bit RMWBUF = 0
+    parameter bit RMWBUF = 0,
+    // Posted GRCG RMW writes (see "POSTED GRCG RMW WRITE"); needs RMWBUF's
+    // core_top shape, and rmwbuf_off (slot 0x09 [27]) turns it off too.
+    parameter bit PWPOST = 0
 ) (
     input  wire        clk,
     input  wire        reset,
@@ -150,6 +153,11 @@ module pc98_gvram_seq #(
     // buffer below fills from it.
     input  wire        pf_beat_v,
     input  wire [7:0]  pf_beat_dat,
+    // The beat stream is this module's own line-buffer burst: whoever else
+    // listens to pf_beat_* (the bridge's prefetch window) must not take
+    // these beats as its fill. Under a posted RMW walk the guest runs on
+    // and its prefetch fill can be armed while the burst streams.
+    output wire        pf_beat_seq,
     // Hardware bisect (core_top JTAG slot 0x09 [27]; 0 in release): the
     // RMW line buffer off at run time, its lines dropped while off.
     input  wire        rmwbuf_off,
@@ -284,6 +292,37 @@ module pc98_gvram_seq #(
     // in a bus cycle.
     reg        svc_gap;
 
+    // ------------------------------------------------------------------
+    // POSTED GRCG RMW WRITE. A guest RMW write is answered as soon as its
+    // operands are latched, and its plane walk runs on behind the guest --
+    // the svc channel's own shape (latched operand, held FSM, the guest's
+    // next strobe waits for ready). The walk is ~50 chipset clocks and the
+    // guest's turnaround to its next store ~27; run serially (REP STOSW
+    // under RMW) they cost 1.75x np21w's GRCG price at 286 10 MHz.
+    // pw_hold: the walk is a posted one -- every operand below comes from
+    // the pw_* latch, never the bus. pw_ack: the guest strobe that posted
+    // it is still up; it has its ready and must not be walked again.
+    // The GRCG registers, the access page and the EGC arm are latched too:
+    // an OUT 7Eh straight after the store must not retile it mid-walk.
+    // ------------------------------------------------------------------
+    reg        pw_hold, pw_ack;
+    reg [19:0] pw_addr;
+    reg [7:0]  pw_wd, pw_wdhi;
+    reg        pw_rmw, pw_active, pw_page;
+    reg [3:0]  pw_mask;
+    reg [7:0]  pw_tile [0:3];
+    wire       g_rmw    = pw_hold ? pw_rmw    : grcg_rmw;
+    wire       g_active = pw_hold ? pw_active : grcg_active;
+    wire       g_page   = pw_hold ? pw_page   : access_page;
+    wire [3:0] g_mask   = pw_hold ? pw_mask   : grcg_mask;
+    wire [7:0] g_tile [0:3];
+    assign g_tile[0] = pw_hold ? pw_tile[0] : grcg_tile[0];
+    assign g_tile[1] = pw_hold ? pw_tile[1] : grcg_tile[1];
+    assign g_tile[2] = pw_hold ? pw_tile[2] : grcg_tile[2];
+    assign g_tile[3] = pw_hold ? pw_tile[3] : grcg_tile[3];
+    wire [7:0] g_wd     = pw_hold ? pw_wd   : cpu_wdata;
+    wire [7:0] g_wdhi   = pw_hold ? pw_wdhi : cpu_wdata_hi;
+
     // svc_req crosses in from clk_pico: give it one sdram-clock sync stage
     // before the grant so a metastable edge cannot reach the S_IDLE arm and
     // launch a memory access that nobody asked for. The request is a level
@@ -293,6 +332,7 @@ module pc98_gvram_seq #(
                            svc_req_s & !svc_done & !svc_hold;
     wire        in_svc   = svc_hold | svc_eval;
     wire [19:0] cur_addr = svc_hold ? svc_addr_r
+                         : pw_hold  ? pw_addr
                          : svc_eval ? svc_addr : cpu_addr;
     // legpar is the leg's address parity. A dn-direction EGC word WRITE
     // walks the odd byte first: the pipeline's lane 1 product is the high
@@ -302,7 +342,7 @@ module pc98_gvram_seq #(
     wire [19:0] op_addr  = cur_addr | {19'd0, legpar};
     wire        op_ext   = op_addr[0];
     wire [7:0]  cur_wdata = svc_hold ? svc_wdata_r
-                         : legpar ? cpu_wdata_hi : cpu_wdata;
+                         : legpar ? g_wdhi : g_wd;
 
     // A svc READ is the GDC's own bus view: raw memory, the plane its window
     // names, never the TCR mask or the EGC read transform. On hardware the
@@ -333,14 +373,14 @@ module pc98_gvram_seq #(
     // run its first leg unexpanded -- the stale-select hazard -- and a
     // parked write in RAM.sv could reorder behind it.
     wire window    = pc98_gvram_hits(cur_addr, analog_mode);
-    wire egc_arm   = EGC & egc_active;
+    wire egc_arm   = EGC & egc_active & ~pw_hold;
     // np21w i286c/cpumem.c vacctbl: the EGC rows (0x0a/0x0b/0x0e/0x0f) need
     // the GRCG arm -- operate bit3, modereg[7]. The EGC-enable bit alone
     // (rows 0x02/0x03, and 0x06/0x07 under a stale RMW flag) still answers
     // with plain VRAM; the engine is genuinely blind until the charger is
     // switched in. The service channel is exempt -- io/gdc_pset.c consults
     // VOPBIT_EGC alone, so an svc op runs the EGC whenever it is armed.
-    wire egc_on    = egc_arm & (in_svc | grcg_active);
+    wire egc_on    = egc_arm & (in_svc | g_active);
     wire egc_here  = egc_on & window & ~svc_raw_wr;
     // np21w i286c/cpumem.c vacctbl[0x0c/0x0d]: with the GRCG's RMW bit set a
     // guest READ is plain VRAM -- the modify half applies to writes only,
@@ -348,19 +388,19 @@ module pc98_gvram_seq #(
     // still expands for page-1 banking through plain_pg1 below. ~in_svc
     // keeps a guest strobe that is merely WAITING from de-expanding the
     // service channel's own op.
-    wire grcg_rd_raw = ~in_svc & cpu_rd & ~cpu_wr & grcg_rmw;
-    wire grcg_here = ~egc_on & grcg_active & window & ~svc_raw_wr
+    wire grcg_rd_raw = ~in_svc & ~pw_hold & cpu_rd & ~cpu_wr & grcg_rmw;
+    wire grcg_here = ~egc_on & g_active & window & ~svc_raw_wr
                    & ~grcg_rd_raw;
-    wire plain_pg1 = ~egc_on & window & access_page
-                   & (~grcg_active | grcg_rd_raw);
-    wire expand    = in_svc | egc_here | grcg_here | plain_pg1;
+    wire plain_pg1 = ~egc_on & window & g_page
+                   & (~g_active | grcg_rd_raw);
+    wire expand    = in_svc | pw_hold | egc_here | grcg_here | plain_pg1;
     wire [1:0] own = own_plane(cur_addr);
 
     // Pass-through keeps the CPU's word flag for RAM's two-word burst; an
     // expanded access must always reach memory as byte-wide SDRAM words --
     // except the GRCG word batch, which walks each plane once per WORD
     // (mem_wdata/mem_wdata_hi carry both computed bytes).
-    assign mem_word = cpu_word & (~expand | grcg_wbatch);
+    assign mem_word = (expand ? is_word : cpu_word) & (~expand | grcg_wbatch);
     // Same rule as mem_word: the prefetch length belongs to the guest's own
     // pass-through strobe. A sequencer leg (svc or expanded) must never run
     // as a multi-word burst -- its reads expect one byte at a time.
@@ -497,7 +537,7 @@ module pc98_gvram_seq #(
         else if (egc_here)
             rd_live_f = ((p != 2'd3) | analog_mode);
         else if (grcg_here)
-            rd_live_f = ~grcg_mask[p] & ((p != 2'd3) | analog_mode);
+            rd_live_f = ~g_mask[p] & ((p != 2'd3) | analog_mode);
         else
             rd_live_f = (p == own);
     endfunction
@@ -511,7 +551,7 @@ module pc98_gvram_seq #(
             wr_live_f = ((p != 2'd3) | analog_mode)
                        & ~egc_wr_gate[p] & (egc_op_mask != 8'h00);
         else if (grcg_here)
-            wr_live_f = ~grcg_mask[p] & ((p != 2'd3) | analog_mode);
+            wr_live_f = ~g_mask[p] & ((p != 2'd3) | analog_mode);
         else
             wr_live_f = (p == own);
     endfunction
@@ -526,12 +566,12 @@ module pc98_gvram_seq #(
     // dead-cycle the plane-E skip used to cost (the leg chains below end on
     // this term). Same shape as egc_rd_last above, for the generic walk.
     wire       last_gp  = (gp == 2'd3) | ((gp == 2'd2) & ~analog_mode);
-    wire [7:0] cur_tile = grcg_tile[gp];
+    wire [7:0] cur_tile = g_tile[gp];
 
     // Where this plane's byte lives, page banked when 0xA6 says so.
     function automatic logic [19:0] plane_addr(input logic [19:0] a,
                                                input logic [1:0] p);
-        plane_addr = access_page ? {3'b000, pc98_gvram_plane1(a, p)}
+        plane_addr = g_page ? {3'b000, pc98_gvram_plane1(a, p)}
                                  : pc98_gvram_plane(a, p);
     endfunction
 
@@ -544,7 +584,7 @@ module pc98_gvram_seq #(
     wire [7:0] wr_byte = egc_here
         ? ((rd_hold & ~egc_op_mask) | (egc_op_data & egc_op_mask))
         : grcg_here
-            ? (grcg_rmw
+            ? (g_rmw
                 ? ((rd_hold & ~cur_wdata) | (cur_wdata & cur_tile))
                 : cur_tile)
         : cur_wdata;
@@ -553,10 +593,10 @@ module pc98_gvram_seq #(
     // Only the GRCG word batch issues it (EGC keeps byte legs, plain mirrors
     // cpu_wdata_hi through the pass-through latch).
     wire [7:0] wr_byte_hi = grcg_here
-        ? (grcg_rmw
-            ? ((rd_hold_hi & ~cpu_wdata_hi) | (cpu_wdata_hi & grcg_tile[gp]))
-            : grcg_tile[gp])
-        : cpu_wdata_hi;
+        ? (g_rmw
+            ? ((rd_hold_hi & ~g_wdhi) | (g_wdhi & g_tile[gp]))
+            : g_tile[gp])
+        : g_wdhi;
 
     // ------------------------------------------------------------------
     // LEG CHAINING -- issue the next plane's leg on the retire edge.
@@ -621,9 +661,9 @@ module pc98_gvram_seq #(
     reg  [16:0] rb_tag;
     reg         rb_leg;                  // the read leg in flight is a burst
     reg  [3:0]  rb_bi;
-    wire        rmw_guest = RMWBUF & ~rmwbuf_off & grcg_here & grcg_rmw & ~egc_here & ~in_svc
+    wire        rmw_guest = RMWBUF & ~rmwbuf_off & grcg_here & g_rmw & ~egc_here & ~in_svc
                           & ~is_read;
-    wire [16:0] rb_line   = {access_page, op_addr[19:4]};
+    wire [16:0] rb_line   = {g_page, op_addr[19:4]};
     wire [3:0]  rb_off    = op_addr[3:0];
     // a batch word must be even: its two bytes are then one word of each bank
     wire        rb_fits   = ~grcg_wbatch | ~op_addr[0];
@@ -653,6 +693,7 @@ module pc98_gvram_seq #(
 
     // A buffer burst leg asks RAM.sv for the plane's 16-byte line.
     assign mem_pf_len = rb_leg ? 5'd16 : (cpu_pf_len & {5{~expand}});
+    assign pf_beat_seq = rb_leg;
 
     // Ready lands on the FINAL byte's walk: a word access's first S_DONE
     // only starts the odd half. svc_hold forces expand high, which parks
@@ -667,9 +708,10 @@ module pc98_gvram_seq #(
     // after the release -- exactly when the FSM still sits in S_DONE.
     // The held ready would then answer the NEW strobe without running it
     // (tb chained-fill: every other word skipped). The one clock stays.
-    assign cpu_ready = expand ? (st == S_DONE) & (~is_word | half
+    assign cpu_ready = pw_ack ? 1'b1
+                     : expand ? (st == S_DONE) & (~is_word | half
                                                    | grcg_wbatch)
-                               & ~svc_hold
+                               & ~svc_hold & ~pw_hold
                                : mem_ready & ~svc_gap;
 
     // ~expand also proves ownership: mem_wr is then the registered
@@ -688,10 +730,11 @@ module pc98_gvram_seq #(
     // ownership term cpu_ready carries. ~is_word|half mirrors
     // cpu_ready: a word access's first S_DONE only starts the odd
     // half -- the walk is not done until the second pass lands.
-    assign cpu_wr_taken = ~expand ? mem_wr_taken
+    assign cpu_wr_taken = pw_ack ? 1'b1
+                        : ~expand ? mem_wr_taken
                                 : ((st == S_DONE)
                                    & (~is_word | half | grcg_wbatch)
-                                   & ~svc_hold);
+                                   & ~svc_hold & ~pw_hold);
 
     // cpu_ready qualified to the guest's own reach -- see the port comment.
     assign cpu_rd_own = cpu_ready & cpu_rd & (mem_rd | expand);
@@ -762,7 +805,18 @@ module pc98_gvram_seq #(
             dbg_arm   <= 5'h00;
             rb_v      <= 4'h0;
             rb_leg    <= 1'b0;
+            pw_hold   <= 1'b0;
+            pw_ack    <= 1'b0;
         end else begin
+            // The posting strobe has its ready; it is gone once it drops --
+            // or once the pins carry another cycle's operands: a master
+            // that runs write after write without a strobe gap (the bridge
+            // with the cache off) would otherwise have its NEXT write
+            // answered by this ack and never performed. An identical
+            // re-write is idempotent, for RMW and plain alike.
+            if (!cpu_wr || cpu_addr != pw_addr || cpu_wdata != pw_wd
+                || (cpu_word && cpu_wdata_hi != pw_wdhi) || cpu_word != is_word)
+                pw_ack <= 1'b0;
             if (rmwbuf_off && !rb_leg) rb_v <= 4'h0;
             // the line buffer's burst beats, in order from the line head
             if (rb_leg && pf_beat_v) begin
@@ -781,7 +835,7 @@ module pc98_gvram_seq #(
             if (!svc_req_s) svc_done <= 1'b0;
             // One cycle of guest-ready cover after a svc op hands the FSM
             // back -- see the declaration.
-            svc_gap <= (st == S_DONE) & svc_hold;
+            svc_gap <= (st == S_DONE) & (svc_hold | pw_hold);
 
             if (!expand) begin
                 // Pass-through: the guest's own access, unchanged.
@@ -789,7 +843,7 @@ module pc98_gvram_seq #(
                 mem_wdata <= cpu_wdata;
                 mem_wdata_hi <= cpu_wdata_hi;
                 mem_rd    <= cpu_rd;
-                mem_wr    <= cpu_wr;
+                mem_wr    <= cpu_wr & ~pw_ack;
                 mem_page1 <= 1'b0;
                 // ONLY WHILE A READ IS LIVE. Assigning this unconditionally
                 // clobbered a TCR answer the moment the guest's strobes dropped
@@ -805,8 +859,23 @@ module pc98_gvram_seq #(
               S_IDLE: begin
                 mem_rd <= 1'b0;
                 mem_wr <= 1'b0;
-                if (cpu_rd | cpu_wr) begin
+                if ((cpu_rd | cpu_wr) && !pw_ack) begin
                     is_read <= cpu_rd;
+                    // Post it: a GRCG RMW write (byte, or the word batch)
+                    // is answered now and walked from the latch.
+                    if (PWPOST && cpu_wr && !cpu_rd && grcg_here && grcg_rmw
+                        && !egc_here && !rmwbuf_off) begin
+                        pw_hold   <= 1'b1;
+                        pw_ack    <= 1'b1;
+                        pw_addr   <= cpu_addr;
+                        pw_wd     <= cpu_wdata;
+                        pw_wdhi   <= cpu_wdata_hi;
+                        pw_rmw    <= grcg_rmw;
+                        pw_active <= grcg_active;
+                        pw_page   <= access_page;
+                        pw_mask   <= grcg_mask;
+                        for (int t = 0; t < 4; t++) pw_tile[t] <= grcg_tile[t];
+                    end
                     is_word <= cpu_word;
                     half    <= 1'b0;
                     // A plain page-one access walks exactly one plane: the
@@ -914,7 +983,7 @@ module pc98_gvram_seq #(
                         rb_bi    <= 4'd0;
                     end else
                         mem_addr <= plane_addr(op_addr, gp);
-                    mem_page1 <= access_page;
+                    mem_page1 <= g_page;
                     mem_rd    <= 1'b1;
                     st        <= S_RDW;
                 end
@@ -977,11 +1046,11 @@ module pc98_gvram_seq #(
                     if (last_gp) st <= S_DONE;
                     else begin
                         gp <= gp + 2'd1;
-                        st <= grcg_rmw | egc_here ? S_RD : S_WR;
+                        st <= g_rmw | egc_here ? S_RD : S_WR;
                     end
                 end else begin
                     mem_addr  <= plane_addr(op_addr, gp);
-                    mem_page1 <= access_page;
+                    mem_page1 <= g_page;
                     mem_wdata <= wr_byte;
                     mem_wdata_hi <= wr_byte_hi;
                     mem_wr    <= 1'b1;
@@ -1013,13 +1082,13 @@ module pc98_gvram_seq #(
                     st <= S_DONE;
                 end
                 // RMW chain: the next live plane's READ, now.
-                else if (chain_ok & grcg_rmw & rd_live_f(gp_nx) & rb_hit_n) begin
+                else if (chain_ok & g_rmw & rd_live_f(gp_nx) & rb_hit_n) begin
                     // next plane's bytes are buffered: straight to its write
                     mem_wr     <= 1'b0;
                     gp         <= gp_nx;
                     st         <= S_RBH;
                 end
-                else if (chain_ok & grcg_rmw & rd_live_f(gp_nx)) begin
+                else if (chain_ok & g_rmw & rd_live_f(gp_nx)) begin
                     mem_wr    <= 1'b0;
                     mem_rd    <= 1'b1;
                     gp        <= gp_nx;
@@ -1029,23 +1098,23 @@ module pc98_gvram_seq #(
                         rb_bi    <= 4'd0;
                     end else
                         mem_addr <= nx_addr;
-                    mem_page1 <= access_page;
+                    mem_page1 <= g_page;
                     st        <= S_RDW;
                 end
                 // TDW chain: mem_wr stays UP, operands move.
-                else if (chain_ok & ~grcg_rmw & ~egc_here
+                else if (chain_ok & ~g_rmw & ~egc_here
                          & wr_live_f(gp_nx)) begin
                     mem_wr       <= 1'b1;
                     gp           <= gp_nx;
                     mem_addr     <= nx_addr;
-                    mem_page1    <= access_page;
-                    mem_wdata    <= grcg_tile[gp_nx];
-                    mem_wdata_hi <= grcg_tile[gp_nx];
+                    mem_page1    <= g_page;
+                    mem_wdata    <= g_tile[gp_nx];
+                    mem_wdata_hi <= g_tile[gp_nx];
                     st           <= S_WRW;
                 end else begin
                     mem_wr <= 1'b0;
                     gp <= gp + 2'd1;
-                    st <= grcg_rmw | egc_here ? S_RD : S_WR;
+                    st <= g_rmw | egc_here ? S_RD : S_WR;
                 end
               end
 
@@ -1055,7 +1124,13 @@ module pc98_gvram_seq #(
                 // INVERSE, a bit set where every unmasked plane matched, and
                 // with every plane masked nothing differs and it is 0xFF,
                 // which is np21w's behaviour too.
-                if (svc_hold) begin
+                if (pw_hold) begin
+                    // A posted walk is done: hand the FSM back (the guest
+                    // was answered when it posted; svc_gap covers a strobe
+                    // that has been waiting since).
+                    pw_hold <= 1'b0;
+                    st      <= S_IDLE;
+                end else if (svc_hold) begin
                     // The byte op is complete; ack the requester with the
                     // answer (a write's svc_rdata is don't-care).
                     svc_rdata <= ans_byte;
@@ -1074,12 +1149,12 @@ module pc98_gvram_seq #(
                     // lane by lane (see the S_IDLE arm).
                     if (is_read | egc_here)
                         st <= S_RD;
-                    else if (grcg_rmw && cur_wdata == 8'hFF)
+                    else if (g_rmw && cur_wdata == 8'hFF)
                         st <= S_WR;
-                    else if (grcg_rmw && cur_wdata == 8'h00)
+                    else if (g_rmw && cur_wdata == 8'h00)
                         st <= S_DONE;
                     else
-                        st <= grcg_rmw ? S_RD : S_WR;
+                        st <= g_rmw ? S_RD : S_WR;
                 end else if (is_word & half & is_read & egc_here
                            & ~svc_raw_rd & ~egc_ope[13] & ~egc_ope[10]) begin
                     // An EGC word READ runs its shift event on the odd

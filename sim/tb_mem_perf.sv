@@ -100,6 +100,7 @@ module tb_mem_perf;
         rr_vfy_r    = $test$plusargs("rrvfy");
     end
 
+    wire        seq_pf_beat_w;      // the sequencer's own line-buffer burst
     cpu_bus_bridge u_bridge (
         .clk               (clk),
         .cpu_ce_posedge    (ce_pos),
@@ -125,7 +126,7 @@ module tb_mem_perf;
         .analog_mode       (pc98_analog_w),
         .word_access       (cpu_word_access),
         .pf_req_len        (cpu_pf_len_w),
-        .pf_beat_v         (pf_beat_v_w),
+        .pf_beat_v         (pf_beat_v_w & ~seq_pf_beat_w),
         .pf_beat_dat       (pf_beat_dat_w),
         .cpu_data_bus_hi   (cpu_data_bus_hi),
         .data_bus_hi       (din_hi),
@@ -464,7 +465,7 @@ module tb_mem_perf;
     wire [7:0]  pf_beat_dat_w;
     wire [4:0]  cpu_pf_len_w;
 
-    pc98_gvram_seq #(.EGC(1'b1), .RMWBUF(1'b1)) u_seq (
+    pc98_gvram_seq #(.EGC(1'b1), .RMWBUF(1'b1), .PWPOST(1'b1)) u_seq (
         .rmwbuf_off(dx_r[7]),
         .clk(clk), .reset(reset),
         .cpu_gvram(~ram_sel_n),
@@ -495,6 +496,7 @@ module tb_mem_perf;
         .mem_ready(ram_ready_w),
         .mem_wr_taken(ram_wt_w),
         .pf_beat_v(pf_beat_v_w), .pf_beat_dat(pf_beat_dat_w),
+        .pf_beat_seq(seq_pf_beat_w),
         .cpu_wr_taken(seq_wr_taken_w),
         .cpu_rd_own(seq_rd_own_w)
     );
@@ -2128,6 +2130,40 @@ module tb_mem_perf;
     endtask
 
     int cur_phase = -1;
+`ifdef PWTRACE
+    int pwt = 0; logic pwt_on = 0; logic [3:0] pwt_prev = 0;
+    always @(posedge clk) begin
+        if (u_seq.pw_hold && u_seq.pw_addr == 20'hAF1FE) pwt_on <= 1;
+        if (pwt_on && pwt < 6000) begin
+            pwt++;
+            if ({seq_rd, seq_wr, guest_ready, u_seq.pw_hold} != pwt_prev || (seq_rd|seq_wr) && guest_ready)
+                $display("PWT %0d ph=%0d a=%05x rd=%b wr=%b wd=%02x/%02x rdy=%b own=%b rdat=%02x/%02x pw=%b ack=%b st=%0d exp=%b mrd=%b mwr=%b maddr=%05x",
+                    pwt, cur_phase, seq_addr, seq_rd, seq_wr, seq_wdata, u_seq.cpu_wdata_hi, guest_ready, seq_rd_own_w,
+                    seq_cpu_rdata, seq_cpu_rdata_hi, u_seq.pw_hold, u_seq.pw_ack, u_seq.st, u_seq.expand, u_seq.mem_rd, u_seq.mem_wr, u_seq.mem_addr);
+            pwt_prev <= {seq_rd, seq_wr, guest_ready, u_seq.pw_hold};
+        end
+    end
+`endif
+`ifdef RMWPROF
+    longint rp_st[0:7]; longint rp_nb=0, rp_lat=0, rp_tot=0, rp_beats=0, rp_t0=0, rp_dgr=0; longint rp_mpi=0, rp_mpw=0; longint rp_mpb[0:7]; initial foreach(rp_mpb[i]) rp_mpb[i]=0; bit rp_inb=0, rp_first=1; longint rp_burst = 0, rp_wr = 0, rp_cyc = 0, rp_rbw = 0;
+    initial foreach (rp_st[i]) rp_st[i] = 0;
+    always @(posedge u_seq.clk) if (cur_phase == 8'h36) begin
+        rp_cyc++;
+        rp_st[u_seq.st]++;
+        if (u_seq.rb_leg && u_seq.st == 3'd2) rp_rbw++;
+        if (u_seq.st == 3'd1 && u_seq.cur_live && !u_seq.rb_hit_c) rp_burst++;
+        if (u_seq.st == 3'd3 && u_seq.cur_live) rp_wr++;
+        if (u_ram.u_sdram.u_mp.state == 4'd4 && !u_ram.u_sdram.u_mp.stat_idle) rp_mpw++;
+        if (u_ram.u_sdram.u_mp.state == 4'd4 && u_ram.u_sdram.u_mp.stat_idle) rp_mpi++;
+        if (u_ram.u_sdram.u_mp.state != 4'd4) rp_mpb[u_ram.u_sdram.u_mp.grant]++;
+        if (u_seq.rb_leg && u_seq.st == 3'd2) begin
+            if (!rp_inb) begin rp_inb = 1; rp_t0 = rp_cyc; rp_nb++; end
+            if (u_seq.pf_beat_v) begin if (rp_first) begin rp_lat += rp_cyc - rp_t0; rp_first = 0; end rp_beats++; end
+        end else if (rp_inb) begin rp_inb = 0; rp_first = 1; rp_tot += rp_cyc - rp_t0; end
+    end
+    final $display("RMWPROF cyc=%0d st: IDLE=%0d RD=%0d RDW=%0d(burst %0d) WR=%0d WRW=%0d DONE=%0d RBH=%0d  bursts=%0d wr_legs=%0d\nRMWPROF burst n=%0d avg_first_beat=%0d avg_total=%0d beats=%0d\nRMWPROF mp idle=%0d timer=%0d busy by grant: A=%0d B=%0d C=%0d D=%0d E=%0d F=%0d",
+        rp_cyc, rp_st[0], rp_st[1], rp_st[2], rp_rbw, rp_st[3], rp_st[4], rp_st[5], rp_st[7], rp_burst, rp_wr, rp_nb, rp_lat/(rp_nb?rp_nb:1), rp_tot/(rp_nb?rp_nb:1), rp_beats, rp_mpi, rp_mpw, rp_mpb[0], rp_mpb[1], rp_mpb[2], rp_mpb[3], rp_mpb[4], rp_mpb[5]);
+`endif
 
     // ---- phase-0A remap poke ------------------------------------------------
     // The guest can't flip the F-bank flag without an OUT (which would

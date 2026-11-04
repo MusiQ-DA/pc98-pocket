@@ -16,7 +16,7 @@
 `default_nettype none
 `timescale 1ns/1ps
 
-module tb_pc98_gvram_seq;
+module tb_pc98_gvram_seq #(parameter bit PW = 0);
 
     localparam real HALF_NS = 500.0 / 42.954545;
     logic clk = 1'b0;
@@ -75,7 +75,7 @@ module tb_pc98_gvram_seq;
                     & (mem_wdata_hi == cov_wdh_m) & (mem_word == cov_word_m);
     wire        mem_ready = (mem_rd | mem_wr) ? (completed & cov_same_m) : 1'b1;
 
-    pc98_gvram_seq dut (
+    pc98_gvram_seq #(.PWPOST(PW)) dut (
         .rmwbuf_off(1'b0),
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
@@ -244,6 +244,10 @@ module tb_pc98_gvram_seq;
         last_rdata_hi = cpu_rdata_hi;
         cpu_rd = 1'b0; cpu_wr = 1'b0; cpu_gvram = 1'b0; cpu_word = 1'b0;
         repeat (3) @(posedge clk);
+        // A posted RMW write (PW) was answered before its walk: the
+        // counts and plane bytes are only final once the walk is.
+        while (dut.pw_hold) @(posedge clk);
+        if (PW) repeat (2) @(posedge clk);
     endtask
 
     // The firmware service channel: request a byte op, wait for done, read
@@ -547,6 +551,8 @@ module tb_pc98_gvram_seq;
                 while (!cpu_ready) @(posedge clk);
                 cpu_wr = 1'b0; cpu_word = 1'b0; cpu_gvram = 1'b0;
             end
+            while (dut.pw_hold) @(posedge clk);     // the last posted walk
+            if (PW) repeat (2) @(posedge clk);
             $display("     RMW word fill: %0d words, %.1f clks = %.2f clk/word (model mem)",
                      nfill, ($realtime-t0)/23.279,
                      ($realtime-t0)/23.279/nfill);
@@ -558,6 +564,39 @@ module tb_pc98_gvram_seq;
             // a chained RMW walk must still READ before it writes
             want("  read before write (leg 0)", log_a[0].wr, 0);
             want("  read before write (leg 2)", log_a[2].wr, 0);
+        end
+
+        // ---- posted RMW: the walk keeps the operands it was posted with --
+        // The guest is answered before the walk, then at once retiles the
+        // GRCG (OUT 7Eh), changes the mask and reads the byte back plain:
+        // the walk must lay the OLD tile on every plane, and the read must
+        // wait for it.
+        if (PW) begin
+            grcg_active = 1'b1; grcg_rmw = 1'b1; grcg_mask = 4'h0; analog_mode = 1'b0;
+            grcg_tile[0] = 8'h11; grcg_tile[1] = 8'h22; grcg_tile[2] = 8'h44;
+            store[20'hA8300] = 8'h55; store[20'hB0300] = 8'h55; store[20'hB8300] = 8'h55;
+            @(posedge clk);
+            cpu_gvram = 1'b1; cpu_addr = 20'hA8300; cpu_wdata = 8'h3C; cpu_word = 1'b0;
+            cpu_wr = 1'b1;
+            @(posedge clk);
+            while (!cpu_ready) @(posedge clk);
+            cpu_wr = 1'b0; cpu_gvram = 1'b0;
+            want("posted: answered with the walk still running", dut.pw_hold, 1);
+            grcg_tile[0] = 8'hFF; grcg_tile[1] = 8'hFF; grcg_tile[2] = 8'hFF;
+            grcg_mask = 4'h7;
+            @(posedge clk);
+            cpu_gvram = 1'b1; cpu_addr = 20'hB8300; cpu_rd = 1'b1;
+            @(posedge clk);
+            while (!cpu_ready) @(posedge clk);
+            last_rdata = cpu_rdata;
+            want("  the read waited for the walk", dut.pw_hold, 0);
+            cpu_rd = 1'b0; cpu_gvram = 1'b0;
+            repeat (3) @(posedge clk);
+            want("  plane B with the posted tile 11", store[20'hA8300], 8'h51);
+            want("  plane R with the posted tile 22", store[20'hB0300], 8'h61);
+            want("  plane G with the posted tile 44", store[20'hB8300], 8'h45);
+            want("  the read saw plane G's result",   last_rdata, 8'h45);
+            grcg_mask = 4'h0;
         end
 
         if (errors == 0) $display("PASS tb_pc98_gvram_seq");

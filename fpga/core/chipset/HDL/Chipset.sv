@@ -650,7 +650,11 @@ module CHIPSET #(
     wire [7:0] ram_wdata_hi_w;
     // directly -- the burst's odd byte only matters when the sequencer
     // passes the word flag through, which is exactly when mem_word is set.
-    pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1)) u_gvram_seq (
+    // RAM.sv's burst beats; the sequencer's own line-buffer bursts are
+    // kept off the bridge's prefetch window (pf_beat_seq).
+    logic ram_pf_beat_v, seq_pf_beat;
+    assign pf_beat_v = ram_pf_beat_v & ~seq_pf_beat;
+    pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1)) u_gvram_seq (
         .rmwbuf_off(dx_rmwbuf_off),
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
@@ -691,7 +695,8 @@ module CHIPSET #(
         .mem_own(ram_own_w),
         .mem_ready(ram_ready_w),
         .mem_wr_taken(ram_wt_w),
-        .pf_beat_v(pf_beat_v), .pf_beat_dat(pf_beat_dat),
+        .pf_beat_v(ram_pf_beat_v), .pf_beat_dat(pf_beat_dat),
+        .pf_beat_seq(seq_pf_beat),
         .cpu_wr_taken(sdram_wr_taken),
         .cpu_rd_own(sdram_rd_ready)
     );
@@ -812,7 +817,7 @@ module CHIPSET #(
         .memory_read_n                      (~ram_rd_w),
         .memory_write_n                     (~ram_wr_w),
         .prefetch_len                       (ram_pf_len_w),
-        .pf_beat_v                          (pf_beat_v),
+        .pf_beat_v                          (ram_pf_beat_v),
         .pf_beat_dat                        (pf_beat_dat),
         .no_command_state                   (no_command_state),
         .memory_access_ready                (ram_ready_w),
