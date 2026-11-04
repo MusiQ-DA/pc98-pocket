@@ -751,8 +751,19 @@ module CHIPSET #(
     // on top only stacks: with 8 charged the TDW word measured 1.32x. Plain
     // graphics-VRAM accesses are faster than the walk and take np21w's 6
     // (1 in vblank).
+    // GRCG RMW is the exception now: the walk is posted and its line
+    // buffer writes back in bursts (pc98_gvram_seq PWPOST/WBACK), so at
+    // 8 MHz it came in under np21w's price (0.87x). It takes 4 (1 in
+    // vblank), not np21w's MEMWAIT_GRCG 8: the CPU-side debt partly stacks
+    // on the bridge turnaround, and the cycle table measured (rep stosw
+    // 256 RMW, ratio at 8/10 MHz) 0 -> 0.87/1.06, 4 -> 0.94/1.06,
+    // 5 -> 1.00/1.12, 8 -> 1.23/1.34. 4 is the largest that leaves 10 and
+    // 12 MHz untouched. TDW and the EGC are not posted and stay at 0.
+    wire grcg_rmw_only = grcg_active & grcg_rmw & ~egc_active_w;
     assign vram_wait_now = {pc98_analog,
-                            accel_hit ? 4'd0 : VID_VBlank ? 4'd1 : 4'd6};
+                            grcg_rmw_only ? (VID_VBlank ? 4'd1 : 4'd4)
+                          : accel_hit     ? 4'd0
+                          : VID_VBlank    ? 4'd1 : 4'd6};
     wire vram_hit = (address[19:16] == 4'hA && address[15])   // A8000-AFFFF
                   | (address[19:16] == 4'hB)                  // B0000-BFFFF
                   | (pc98_analog & (address[19:15] == 5'b11100)); // E0000-E7FFF

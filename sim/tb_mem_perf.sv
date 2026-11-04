@@ -194,7 +194,9 @@ module tb_mem_perf;
         .pace_rd_wait (ram_rd_wait),
         .pace_wr_wait (ram_wr_wait),
         // np21w's VRAM wait, as Chipset.sv computes it for core_top
-        .pace_vwait   ({1'b0, (nvw_r | grcg_active | egc_active_w) ? 4'd0
+        .pace_vwait   ({1'b0, nvw_r ? 4'd0
+                                     : (grcg_active & grcg_rmw & ~egc_active_w) ? (vid_vb ? 4'd1 : 4'(tb_gw))
+                                     : (grcg_active | egc_active_w) ? 4'd0
                                      : vid_vb ? 4'd1 : 4'd6}),
         .dx           (dx_r[6:0]),
         .bios_shadow  (shadow_flag_r),
@@ -2142,6 +2144,8 @@ module tb_mem_perf;
     endtask
 
     int cur_phase = -1;
+    int tb_gw = 4;   // Chipset.sv charges 4 (see vram_wait_now)
+    initial void'($value$plusargs("gw=%d", tb_gw));
 `ifdef PWTRACE
     int pwt = 0; logic pwt_on = 0; logic [3:0] pwt_prev = 0;
     always @(posedge clk) begin
