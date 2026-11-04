@@ -87,7 +87,12 @@ module z86_cache #(
     parameter int PIT_GAP  = 64,
     // OUT 5Fh: ~0.6 us at 42.95 MHz.
     parameter int WAIT_5F  = 26,
-    parameter int IDX_BITS = 10         // 1024 lines x 16 B = 16 KB
+    parameter int IDX_BITS = 10,        // 1024 lines x 16 B = 16 KB
+    // Write combining (see "Store combining"): 1 in core_top. Benches whose
+    // port-F model cannot take a burst keep the single-store path.
+    parameter bit WCOMB    = 0,
+    // Clocks an idle combine buffer waits before it writes itself out.
+    parameter int CB_AGE   = 32
 ) (
     input  wire         clk,            // free clk_chipset
     input  wire         ce,             // the gated CPU clock ticks this edge
@@ -99,6 +104,15 @@ module z86_cache #(
     input  wire         pace_ce,        // one pulse per 286 CPU clock
     input  wire [1:0]   pace_rd_wait,   // wait states per read cycle
     input  wire [1:0]   pace_wr_wait,   // ... per write cycle
+    // np21w's graphics-VRAM wait for an access starting now ({analog,
+    // clocks}: 6 with the beam out, 8 with the GRCG/EGC armed, 1 in
+    // vblank -- Chipset.sv). Added once per uncached VRAM access.
+    input  wire [4:0]   pace_vwait,
+    // Hardware bisect (core_top JTAG slot 0x09 [21]-[24]; 0 in release):
+    // [0] line loads priced whole before the hand-off (no critical word
+    // first), [1] no store combining, [2] no whole-line install from a
+    // combine bank, [3] no graphics-VRAM pricing.
+    input  wire [3:0]   dx,
 
     // ---- PC-98 map state ------------------------------------------------
     input  wire         bios_shadow,    // RAM.sv bios_shadow_flag
@@ -144,12 +158,13 @@ module z86_cache #(
     output reg          f_we,
     output reg  [23:0]  f_addr,
     output reg  [ 3:0]  f_len,
-    output reg  [15:0]  f_wdata0,
-    output reg  [15:0]  f_wdata1,
+    output wire [15:0]  f_wdata0,
+    output wire [15:0]  f_wdata1,
     input  wire         f_ack,
     input  wire         f_rvalid,
     input  wire [15:0]  f_rdata,
     input  wire         f_done,
+    input  wire [4:0]   f_wcnt,         // sdram_mp's p_wcnt: the word it wants
 
     // ---- port A write commits (sdram_shim a_wr_*) ----------------------
     input  wire         sn_v,
@@ -277,9 +292,25 @@ module z86_cache #(
     reg  [5:0]  pdebt;
     reg         wr_owed;                // paced store buffered, wr_ready owed
     reg  [1:0]  pk;                     // what S_PACE completes (K_LD/K_RD)
+    // Line loads deliver critical word first: the fetch gets the line once
+    // its FIRST word's cycle is paid, and the rest of the line's words are
+    // owed afterwards as a prefetch tail (ld_tail) -- the bus stays busy
+    // for them, so the next sequential line still waits, exactly as a
+    // 286's BIU streams one word per cycle. The tail yields, as the BIU's
+    // prefetch does, to an EU access or a branch's out-of-line load: it
+    // is cut to the word in flight. (Without this a taken branch waited
+    // for the whole line tail before its first instruction could issue.)
+    reg  [5:0]  ptail;
+    reg         ld_tail;
+    reg  [15:0] ld_next;                // the line a sequential load asks for
     wire [2:0]  p_rcyc = 3'd2 + {1'b0, pace_rd_wait};
     wire [2:0]  p_wcyc = 3'd2 + {1'b0, pace_wr_wait};
     wire        p_busy = pace && (pdebt != 6'd0);
+    function automatic logic vram_a(input logic [19:0] a);
+        vram_a = !dx[3] && ((a[19:15] == 5'b10101) || (a[19:16] == 4'hB)
+                            || (pace_vwait[4] && a[19:15] == 5'b11100));
+    endfunction
+    wire [5:0]  p_vw = {2'd0, pace_vwait[3:0]};
 
     localparam [1:0] K_LD = 2'd0, K_RD = 2'd1, K_WR = 2'd2;
     reg  [1:0]  k;                      // what the lookup is for
@@ -343,7 +374,54 @@ module z86_cache #(
     reg         fill_live;              // its result is still wanted
     reg         fill_done;              // lb holds fill_p's line
 
-    assign busy = wb_full || (fs != F_IDLE) || wb_stb_o;
+    // ---- store combining --------------------------------------------
+    // Every store used to be its own port-F transaction -- ACTIVATE, two
+    // beats, PRECHARGE, ~18 clk -- so a run of stores (REP STOSW, a stack
+    // frame, a struct fill) went at port F's rate, 1.4-1.6x a 286's. With
+    // WCOMB the stores gather in a one-line buffer as long as they extend
+    // one contiguous byte range [cb_lo, cb_hi] of the same line, and the
+    // range leaves as ONE burst: the data is served by byte, combinational
+    // on sdram_mp's p_wcnt (f_wcnt), like every other burst writer here.
+    // The buffer goes out when a store will not merge, after CB_AGE idle
+    // clocks, ahead of any fill (port F's order: the store, then the fill),
+    // and ahead of any uncached access (busy covers it -- an OUT that
+    // starts a DMA never passes a store). Reads stay coherent the way they
+    // always were: a store patches its cached line on the way in.
+    // TWO such buffers, so a run of stores never waits out a burst: while
+    // one is going out on port F, the other takes the next line (REP STOSW
+    // and MOVSW paid ~22 chipset clocks at every line change). cb_act is
+    // the one stores merge into; the other is draining or empty. A store
+    // into the other's line waits for it to leave, so no byte is ever held
+    // in both (an older copy can never land after a newer one).
+    reg  [1:0]  cb_v;                   // the buffer holds a range
+    reg  [1:0]  cb_fl;                  // ... and is being written out
+    reg  [1:0]  cb_want;                // it should leave now
+    reg  [16:0] cb_ln  [0:1];           // physical line, phys[20:4]
+    reg  [127:0] cb_d  [0:1];
+    reg  [3:0]  cb_lo  [0:1];
+    reg  [3:0]  cb_hi  [0:1];
+    reg  [5:0]  cb_age [0:1];
+    reg         cb_act;                 // the merging buffer
+    reg         cb_fli;                 // the buffer port F is writing out
+    // A WHOLE line leaving a bank is installed in the cache when its burst
+    // is done -- every byte is known and now equals memory -- so reading
+    // freshly written data (REP MOVSW out of a buffer REP STOSW just
+    // filled) hits instead of missing through a fill: stores are otherwise
+    // no-allocate. cb_kill: a port-A commit touched the line's index while
+    // the bank held it, so memory may be newer -- no install. The install
+    // only takes an edge where nothing else uses the tag/data write ports.
+    reg  [1:0]  cb_kill;
+    wire [IDX_BITS-1:0] cb_fidx = idx_of({cb_ln[cb_fli], 4'h0});
+    wire [TAG_BITS-1:0] cb_ftag = tag_of({cb_ln[cb_fli], 4'h0});
+    reg  [15:0] f_wdata0_r, f_wdata1_r;
+    wire [3:0]  cb_ix   = cb_lo[cb_fli] + f_wcnt[3:0];
+    wire [127:0] cb_fd  = cb_d[cb_fli];
+    wire [7:0]  cb_byte = cb_fd[{cb_ix, 3'b000} +: 8];
+    wire        cb_flng = WCOMB && (cb_fl != 2'b00);
+    assign f_wdata0 = cb_flng ? {8'h00, cb_byte} : f_wdata0_r;
+    assign f_wdata1 = cb_flng ? {8'h00, cb_byte} : f_wdata1_r;
+
+    assign busy = wb_full || (WCOMB && cb_v != 2'b00) || (fs != F_IDLE) || wb_stb_o;
 
     // Current lookup's address (the byte this part touches) and line.
     wire [19:0] c_ab  = part ? c_a + 20'd1 : c_a;
@@ -432,14 +510,77 @@ module z86_cache #(
     wire        wr_both = c_word && !c_straddle && !part;
     wire [15:0] w_be   = wr_both ? (16'b11 << c_off) : (16'b1 << c_off);
     wire [7:0]  w_byte = part ? c_wd[15:8] : c_wd[7:0];
-    wire [127:0] w_wd  = wr_both ? ({112'd0, c_wd} << (8 * c_off))
-                                 : ({120'd0, w_byte} << (8 * c_off));
+    // The byte enables pick the lanes, so the data only has to be right in
+    // them: replicate instead of shifting (a 128-bit barrel shifter was
+    // a good part of this module's ALMs). A word's low byte sits at c_off,
+    // so the pair is laid lo-in-even or lo-in-odd lanes by c_off[0].
+    wire [127:0] w_wd  = !wr_both ? {16{w_byte}}
+                       : c_off[0] ? {8{c_wd[7:0], c_wd[15:8]}}
+                                  : {8{c_wd[15:8], c_wd[7:0]}};
 
     function automatic [1:0] sel_of(input logic a0, input logic word);
         sel_of = word ? 2'b11 : (a0 ? 2'b10 : 2'b01);
     endfunction
 
+    wire [20:0] wp0 = phys_of(wr_addr, bios_shadow);
+    wire [20:0] wp1 = phys_of(wr_a1, bios_shadow);
+    wire        cb_shape = WCOMB && !dx[1] && (!wr_word || (wp1 == wp0 + 21'd1 && wp0[3:0] != 4'hF));
+    wire [4:0]  w_lo = {1'b0, wp0[3:0]};
+    wire [4:0]  w_hi = w_lo + (wr_word ? 5'd1 : 5'd0);
+    // An uncached access waiting in S_IDLE: busy holds it until the
+    // combine buffer has gone out, and this makes the buffer go now.
+    wire        unc_want = (st == S_IDLE)
+                        && ((wr_pend && !wr_cached) || (rd_any && !rd_cached)
+                            || (ld_pend && !ld_cached));
+    // The flush launch, as F_IDLE below decides it. A merge on the launch
+    // edge would widen the range after f_addr/f_len latched the old one,
+    // and the done that follows clears the buffer: the merged bytes were
+    // lost (irq_rep under +pace: REP MOVS copies with holes).
+    wire        cb_a = cb_act, cb_b = ~cb_act;
+    // flush launch per buffer; the idle one (b) first, then the active one
+    wire        cb_due_b = WCOMB && cb_v[cb_b] && !cb_fl[cb_b] && (fs == F_IDLE)
+                        && (cb_want[cb_b] || cb_age[cb_b] >= 6'(CB_AGE) || fill_req || unc_want);
+    wire        cb_due_a = WCOMB && cb_v[cb_a] && !cb_fl[cb_a] && (fs == F_IDLE)
+                        && (cb_want[cb_a] || cb_age[cb_a] >= 6'(CB_AGE) || fill_req || unc_want);
+    wire        cb_go    = cb_due_b || cb_due_a;
+    wire        cb_gi    = cb_due_b ? cb_b : cb_a;
+    // the other buffer still holds this store's line: wait for it to leave
+    wire        cb_clash = cb_v[cb_b] && (cb_ln[cb_b] == wp0[20:4]);
+    // a merge on the active buffer's flush-launch edge would widen the
+    // range after f_len latched (the merged bytes were lost)
+    wire        cb_merge = cb_v[cb_a] && !cb_fl[cb_a] && !(cb_go && cb_gi == cb_a)
+                        && !cb_clash && (cb_ln[cb_a] == wp0[20:4])
+                        && (w_lo <= {1'b0, cb_hi[cb_a]} + 5'd1)
+                        && (w_hi + 5'd1 >= {1'b0, cb_lo[cb_a]});
+    wire        cb_new_a = !cb_v[cb_a] && !cb_clash;
+    wire        cb_swap  = cb_v[cb_a] && !cb_merge && !cb_v[cb_b];
+    wire        acc_cb = cb_shape && !wb_full && (cb_new_a || cb_merge || cb_swap);
+    // The whole-line install of a bank whose burst ends this edge (F_RUN
+    // below). Its tag/data writes land on the NEXT edge, after any lookup
+    // S_IDLE starts on this one has already read the old occupant -- and
+    // the kill term only covers lookups whose read shares the landing
+    // edge. A store that hit the old occupant (another line at the same
+    // index) then patched its bytes into the freshly installed line, under
+    // the installed line's valid tag. So S_IDLE starts nothing on an
+    // install edge; the lookup on the next edge is caught by kill.
+    // S_IDLE's guard is the superset "a combine burst ends this edge" --
+    // one clock per burst, and a small cone (the full cb_inst term in the
+    // S_IDLE decision is the shape Quartus' S2T died on).
+    wire        cb_endf = cb_flng && f_done && (fs == F_RUN);
+    wire        cb_inst = WCOMB && (fs == F_RUN) && f_done && !f_isfill && cb_flng
+                       && cb_lo[cb_fli] == 4'h0 && cb_hi[cb_fli] == 4'hF
+                       && !cb_kill[cb_fli] && cache_en && !dx[2]
+                       && st == S_IDLE && !sn_ours && !sn2_v && !park_v;
+    wire        acc_wb = !cb_shape && !wb_full && !(WCOMB && cb_v != 2'b00);
+
     always @(posedge clk) begin
+        for (int i = 0; i < 2; i++) begin
+            if (WCOMB && cb_v[i] && !cb_fl[i] && cb_age[i] != 6'h3F)
+                cb_age[i] <= cb_age[i] + 6'd1;
+            if (WCOMB && cb_v[i] && sn_ours
+                && (sn_i0 == idx_of({cb_ln[i], 4'h0}) || sn_i1 == idx_of({cb_ln[i], 4'h0})))
+                cb_kill[i] <= 1'b1;
+        end
         t_we <= 1'b0;
         d_we <= 1'b0;
         dbg_wr_v <= 1'b0;
@@ -447,6 +588,7 @@ module z86_cache #(
         if (io_rec != 8'hFF) io_rec <= io_rec + 8'd1;
         if (pace_ce && pdebt != 6'd0) pdebt <= pdebt - 6'd1;
         if (!pace) pdebt <= 6'd0;
+        if (!p_busy) ld_tail <= 1'b0;
         // A paced store's ready comes due with its debt.
         if (wr_owed && !p_busy) begin
             wr_ready <= 1'b1;
@@ -492,7 +634,16 @@ module z86_cache #(
         // a CPU reset only drops the fill's result (fill_live).
         case (fs)
           F_IDLE:
-            if (wb_full) begin
+            if (cb_go) begin
+                f_req    <= 1'b1;
+                f_we     <= 1'b1;
+                f_isfill <= 1'b0;
+                f_addr   <= {3'b000, cb_ln[cb_gi], cb_lo[cb_gi]};
+                f_len    <= cb_hi[cb_gi] - cb_lo[cb_gi];
+                cb_fl[cb_gi] <= 1'b1;
+                cb_fli   <= cb_gi;
+                fs <= F_REQ;
+            end else if (wb_full) begin
                 f_req    <= 1'b1;
                 f_we     <= 1'b1;
                 f_isfill <= 1'b0;
@@ -500,13 +651,13 @@ module z86_cache #(
                 // not adjacent words in the same SDRAM column.
                 if (!f_wpart) begin
                     f_addr   <= {3'b000, wb_p0};
-                    f_wdata0 <= {8'h00, wb_b0};
-                    f_wdata1 <= {8'h00, wb_b1};
+                    f_wdata0_r <= {8'h00, wb_b0};
+                    f_wdata1_r <= {8'h00, wb_b1};
                     f_len    <= (wb_two && wb_p1 == wb_p0 + 21'd1 && wb_p0[8:0] != 9'h1FF)
                               ? 4'd1 : 4'd0;
                 end else begin
                     f_addr   <= {3'b000, wb_p1};
-                    f_wdata0 <= {8'h00, wb_b1};
+                    f_wdata0_r <= {8'h00, wb_b1};
                     f_len    <= 4'd0;
                 end
                 fs <= F_REQ;
@@ -530,6 +681,14 @@ module z86_cache #(
                 fs <= F_IDLE;
                 if (f_isfill) begin
                     if (fill_live) fill_done <= 1'b1;
+                end else if (cb_flng) begin
+                    cb_fl[cb_fli]   <= 1'b0;
+                    cb_v[cb_fli]    <= 1'b0;
+                    cb_want[cb_fli] <= 1'b0;
+                    if (cb_inst) begin
+                        d_we <= 1'b1; d_wa <= cb_fidx; d_be <= 16'hFFFF; d_wd <= cb_fd;
+                        t_we <= 1'b1; t_wa <= cb_fidx; t_wd <= {1'b1, cb_ftag};
+                    end
                 end else if (wb_two && !f_wpart && f_len == 4'd0) begin
                     f_wpart <= 1'b1;            // second byte next
                 end else begin
@@ -570,6 +729,7 @@ module z86_cache #(
             park_v    <= 1'b0;          // S_FLUSH clears every tag anyway
             pdebt     <= 6'd0;
             wr_owed   <= 1'b0;
+            ld_tail   <= 1'b0;
         end else case (st)
           S_FLUSH: begin
             // Clear every tag. The snoop keeps the cache coherent on its
@@ -584,9 +744,14 @@ module z86_cache #(
 
           S_IDLE: begin
             part <= 1'b0;
-            if (d_we || p_busy) begin
+            if (d_we || p_busy || cb_endf) begin
                 // a line patch lands this edge, or the last paced access
-                // still owes bus time
+                // still owes bus time -- a prefetch tail yields to an EU
+                // access or an out-of-line (branch) load after its word
+                if (ld_tail && pdebt > {3'd0, p_rcyc}
+                    && (wr_pend || rd_any
+                        || (ld_pend && ld_addr[19:4] != ld_next)))
+                    pdebt <= {3'd0, p_rcyc};
                 // a line patch lands this edge: look it up on the next
             end else if (wr_pend) begin
                 if (wr_cached) begin
@@ -598,14 +763,45 @@ module z86_cache #(
                             pdebt   <= {3'd0, p_wcyc};
                         end else
                             wr_ready <= 1'b1;
-                    end else if (!wb_full) begin
-                        wb_full  <= 1'b1;
-                        wb_p0    <= phys_of(wr_addr, bios_shadow);
-                        wb_p1    <= phys_of(wr_a1, bios_shadow);
-                        wb_b0    <= wr_data[7:0];
-                        wb_b1    <= wr_data[15:8];
-                        wb_two   <= wr_word;
-                        f_wpart  <= 1'b0;
+                    end else if (acc_cb || acc_wb) begin
+                        if (acc_cb) begin
+                            // the buffer this store lands in: the active one,
+                            // or the idle one on a swap (the active one then
+                            // leaves at once)
+                            automatic logic t = cb_swap ? cb_b : cb_a;
+                            cb_v[t]   <= 1'b1;
+                            cb_ln[t]  <= wp0[20:4];
+                            if (!cb_merge) cb_kill[t] <= 1'b0;
+                            cb_lo[t]  <= cb_merge ? ((w_lo[3:0] < cb_lo[t]) ? w_lo[3:0] : cb_lo[t])
+                                                  : w_lo[3:0];
+                            cb_hi[t]  <= cb_merge ? ((w_hi[3:0] > cb_hi[t]) ? w_hi[3:0] : cb_hi[t])
+                                                  : w_hi[3:0];
+                            cb_d[t][{wp0[3:0], 3'b000} +: 8] <= wr_data[7:0];
+                            if (wr_word)
+                                cb_d[t][{wp0[3:0] + 4'd1, 3'b000} +: 8] <= wr_data[15:8];
+                            cb_age[t] <= 6'd0;
+                            if (cb_swap) begin
+                                cb_act <= cb_b;
+                                // A store into the line the leaving bank
+                                // holds (it is flushing, or launches on
+                                // this edge, so it cannot merge): the store
+                                // patches the cached line below, and the
+                                // leaving bank's install would put its
+                                // older bytes back over it under a valid
+                                // tag. Memory ends right (this bank goes
+                                // out after it); the cache must not.
+                                if (cb_ln[cb_a] == wp0[20:4]) cb_kill[cb_a] <= 1'b1;
+                                if (!cb_fl[cb_a]) cb_want[cb_a] <= 1'b1;
+                            end
+                        end else begin
+                            wb_full  <= 1'b1;
+                            wb_p0    <= wp0;
+                            wb_p1    <= wp1;
+                            wb_b0    <= wr_data[7:0];
+                            wb_b1    <= wr_data[15:8];
+                            wb_two   <= wr_word;
+                            f_wpart  <= 1'b0;
+                        end
                         if (pace) begin
                             wr_owed <= 1'b1;
                             pdebt   <= (wr_word && wr_addr[0])
@@ -624,6 +820,10 @@ module z86_cache #(
                         c_word <= wr_word;
                         c_wd   <= wr_data;
                         st     <= S_CMP;
+                    end else if (WCOMB) begin
+                        // a store that cannot land yet: move things along
+                        if (cb_v[cb_a] && !cb_fl[cb_a]) cb_want[cb_a] <= 1'b1;
+                        if (cb_v[cb_b] && !cb_fl[cb_b]) cb_want[cb_b] <= 1'b1;
                     end
                 end else if (ce && !busy
                              && !(wr_io && pit_port(wr_addr[15:0]) && io_rec < PIT_GAP[7:0])) begin
@@ -637,6 +837,16 @@ module z86_cache #(
                     wb_tga_o <= wr_io;
                     wb_stb_o <= 1'b1;
                     st       <= S_WWR1;
+                    // A graphics-VRAM store occupies the bus for its cycles
+                    // plus the np21w wait: the store itself completes when
+                    // the pair does, and the NEXT access waits out the rest
+                    // (S_IDLE's p_busy) -- the CPU-side gap between stores
+                    // overlaps the wait, as the 286's next-cycle setup does.
+                    // (Holding the store's own ready instead added that gap
+                    // on top: a GRCG TDW word went from 1.12x to 1.42x.)
+                    if (pace && !wr_io && vram_a(wr_addr))
+                        pdebt <= ((wr_word && wr_addr[0]) ? {2'd0, p_wcyc, 1'b0}
+                                                          : {3'd0, p_wcyc}) + p_vw;
                 end
             // Data reads before line loads: a 286's EU cycles take the
             // bus ahead of the BIU's prefetch, so a pop or operand read
@@ -648,9 +858,13 @@ module z86_cache #(
                     c_a  <= {ld_addr[19:4], 4'h0};
                     c_word <= 1'b0;
                     st   <= S_CMP;
-                    // words ld_addr..line end, one cycle each
-                    pdebt <= pace ? (6'd8 - {3'd0, ld_addr[3:1]}) * {3'd0, p_rcyc}
-                                  : 6'd0;
+                    // the requested word now, the rest of the line as a
+                    // tail after the hand-off (see ld_tail)
+                    pdebt <= !pace ? 6'd0
+                           : dx[0] ? (6'd8 - {3'd0, ld_addr[3:1]}) * {3'd0, p_rcyc}
+                           : {3'd0, p_rcyc};
+                    ptail <= (pace && !dx[0]) ? (6'd7 - {3'd0, ld_addr[3:1]}) * {3'd0, p_rcyc}
+                                              : 6'd0;
                 end else if (ce && !busy) begin
                     // Uncached: start at the word the fetch asked for. A
                     // 286's BIU fetches from the branch target on, never
@@ -690,6 +904,9 @@ module z86_cache #(
                     wb_tga_o <= rd_cur_io;
                     wb_stb_o <= 1'b1;
                     st       <= S_WRD1;
+                    if (pace && !rd_cur_io && vram_a(rd_cur_a))
+                        pdebt <= ((rd_cur_w && rd_cur_a[0]) ? {2'd0, p_rcyc, 1'b0}
+                                                            : {3'd0, p_rcyc}) + p_vw;
                 end
             end
           end
@@ -735,6 +952,9 @@ module z86_cache #(
                         st <= S_PACE;
                     end else begin
                         ld_ack  <= ~ld_ack;
+                        pdebt   <= ptail;
+                        ld_tail <= (ptail != 6'd0);
+                        ld_next <= c_a[19:4] + 16'd1;
                         st      <= S_IDLE;
                     end
                   end
@@ -812,8 +1032,12 @@ module z86_cache #(
             if (pk == K_LD && ld_drop && pdebt > {3'd0, p_rcyc})
                 pdebt <= {3'd0, p_rcyc};
             if (!p_busy) begin
-                if (pk == K_LD) ld_ack <= ~ld_ack;
-                else begin
+                if (pk == K_LD) begin
+                    ld_ack  <= ~ld_ack;
+                    pdebt   <= ptail;
+                    ld_tail <= (ptail != 6'd0);
+                    ld_next <= c_a[19:4] + 16'd1;
+                end else begin
                     rd_pend  <= 1'b0;
                     rd_ready <= 1'b1;
                 end
@@ -846,14 +1070,14 @@ module z86_cache #(
                 end else begin
                     rd_data[15:8] <= 8'h00;
                     wb_stb_o <= 1'b0;
-                    rd_ready <= 1'b1;
-                    st       <= S_IDLE;
+                    if (p_busy) begin pk <= K_RD; st <= S_PACE; end
+                    else begin rd_ready <= 1'b1; st <= S_IDLE; end
                 end
             end else begin
                 rd_data  <= rd_isw ? wb_dat_i : {8'h00, wb_dat_i[7:0]};
                 wb_stb_o <= 1'b0;
-                rd_ready <= 1'b1;
-                st       <= S_IDLE;
+                if (p_busy) begin pk <= K_RD; st <= S_PACE; end
+                else begin rd_ready <= 1'b1; st <= S_IDLE; end
             end
           end
 
@@ -861,8 +1085,8 @@ module z86_cache #(
             if (wb_tga_o) io_rec <= 8'd0;
             rd_data[15:8] <= wb_dat_i[7:0];
             wb_stb_o <= 1'b0;
-            rd_ready <= 1'b1;
-            st       <= S_IDLE;
+            if (p_busy) begin pk <= K_RD; st <= S_PACE; end
+            else begin rd_ready <= 1'b1; st <= S_IDLE; end
           end
 
           S_WWR1: if (ce && wb_ack_i) begin
@@ -905,6 +1129,9 @@ module z86_cache #(
     // Power-up state for what the CPU reset does not touch.
     initial begin
         fs = F_IDLE; f_req = 1'b0; f_we = 1'b0; wb_full = 1'b0; f_wpart = 1'b0;
+        cb_v = 2'b00; cb_fl = 2'b00; cb_want = 2'b00; cb_act = 1'b0; cb_fli = 1'b0;
+        cb_kill = 2'b00;
+        cb_age[0] = 6'd0; cb_age[1] = 6'd0;
         sn2_v = 1'b0; st = S_FLUSH; flush_i = '0; wr_ready = 1'b0;
         dbg_sn_kills = 16'd0;
         snq_v = 1'b0; snq_i = '0; snq_wi = '0;

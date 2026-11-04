@@ -77,6 +77,7 @@ module tb_seq_ram_stosb;
     end
 
     pc98_gvram_seq #(.EGC(1'b0)) seq (
+        .rmwbuf_off(1'b0),
         .clk(clock), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_pf_len(4'd0),
@@ -98,7 +99,7 @@ module tb_seq_ram_stosb;
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
         .mem_done(mem_done), .mem_ready(mem_ready),
-        .mem_wr_taken(ram_wt_w), .cpu_wr_taken(), .cpu_rd_own()
+        .mem_wr_taken(ram_wt_w), .pf_beat_v(1'b0), .pf_beat_dat(8'h00), .cpu_wr_taken(), .cpu_rd_own()
     );
 
     RAM dut (

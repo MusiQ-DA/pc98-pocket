@@ -18,6 +18,14 @@ module fetch (
     input             reset,
 
     input             br_taken,      // set new address to fetch from
+    input             pace,          // 286 settings: issue at 80286 clock counts
+    input             pace_ce,       // one pulse per 286 CPU clock
+    input       [4:0] eu_extra,      // execute's late clocks (shift count n)
+    // Hardware bisect (core_top JTAG slot 0x09 [20], [25]; 0 in release):
+    // dx_eu_off drops the paced issue gate, dx_bh7 counts behind_hold in
+    // chipset clocks as at Turbo.
+    input             dx_eu_off,
+    input             dx_bh7,
     input     [19:0]  br_target,     // byte address
     input     [15:0]  br_new_ip,     // IP after branch
     input     [15:0]  br_new_cs,     // CS after branch
@@ -90,7 +98,39 @@ reg [3:0]  buf_lo [0:1];
 // reloading the whole 32 bytes over the 8-bit bus. The second-half
 // prefetch, which would overwrite it, holds off while behind_hold counts.
 reg        behind_ok;
-reg  [2:0] behind_hold;
+reg  [3:0] behind_hold;
+// At the paced settings the hold counts 286 clocks, not chipset clocks: a
+// loop iteration there takes tens of chipset clocks, so the 7-clk window
+// expired before the branch back and every turn of a loop straddling a
+// 16-byte boundary reloaded both halves (an empty DEC/JZ/JMP loop ran at
+// 1.8x its data-sheet time).
+wire       bh_paced    = pace & ~dx_bh7;
+wire [3:0] BEHIND_HOLD = bh_paced ? 4'd15 : 4'd7;
+
+// ---- paced issue gate (PC-98 port) -----------------------------------------
+// At the 286 settings the EU must not run faster than an 80286: z86 retires a
+// register op in a chipset clock or two, ~10x a 286-10. Each instruction's
+// hand-off to decode loads eu_debt with its data-sheet clock count (real
+// mode, zero waits, queue full -- tools/gen_eu_cost.py writes the ROM) and the
+// next hand-off waits until the debt has counted down on pace_ce. Bus cycles
+// are priced separately by z86_cache, so an access-heavy instruction costs
+// max(sheet, bus), as on the metal where the sheet count already includes
+// them. A taken transfer adds EU_TAKEN -- the "7+m" the ROM leaves out of
+// Jcc/LOOP's not-taken price. The ROM read is registered (M10K, no LABs): it
+// is addressed with the instruction at ptr and its word lands the clk after
+// the hand-off, eu_pend holding the gate shut for that one clk.
+localparam [6:0] EU_TAKEN = 7'd5;     // keep in step with gen_eu_cost.py TAKEN
+(* ramstyle = "M10K" *) reg [4:0] eu_rom [0:4095];
+`ifdef SYNTHESIS
+initial $readmemh("core/z86/eu_cost.hex", eu_rom);
+`else
+initial $readmemh("fpga/core/z86/eu_cost.hex", eu_rom);
+`endif
+reg  [4:0]  eu_q;
+reg  [6:0]  eu_debt;
+reg         eu_pend;
+wire        pace_eu = pace & ~dx_eu_off;
+wire        eu_hold = pace_eu && (eu_pend || eu_debt != 7'd0);
 
 reg [3:0]  len;               // instruction length not including prefixes
 reg [6:0]  prefix;
@@ -122,6 +162,13 @@ wire snoop_behind = snoop_wr & ((snoop_addr[19:4] == buf_addr0[19:4]) | (snoop_e
 wire [19:0] br_rel_w = br_target - buf_addr;
 wire        br_half  = buf_start ^ br_rel_w[4];
 wire        br_below = buf_valid[br_half] && (br_rel_w[3:0] < buf_lo[br_half]);
+// The branch target is already buffered (the in-buffer or retired-half
+// cases of the br_taken arm below). Otherwise fetch reloads the line, and
+// the cache prices that load's first word -- part of the 286's "7+m",
+// so the issue gate then adds only the rest of the taken charge.
+wire        br_inbuf = (br_rel_w[19:5] == 15'd0 && !br_below)
+                    || (behind_ok && br_rel_w[19:4] == 16'hFFFF
+                        && br_target[3:0] >= buf_lo[~buf_start]);
 wire [4:0]  insn_ofs = (ptr - {buf_start, 4'b0000}) - {3'b000, prefix_len};
 wire [19:0] insn_lin = buf_addr + {15'd0, insn_ofs};
 
@@ -131,6 +178,16 @@ wire [8:0] lut_index = {is_0f_escape, opcode_byte};
 
 wire [4:0] param_base = ptr + is_0f_escape;
 wire [7:0] modrm = buffer[(param_base + 1) % 32];
+
+wire [7:0]  eu_op  = is_0f_escape ? 8'h0F : buffer[ptr];
+wire        eu_grp = (eu_op[7:2] == 6'b100000)               // 80-83
+                  || (eu_op[7:1] == 7'b1100000)              // C0 C1
+                  || (eu_op[7:2] == 6'b110100)               // D0-D3
+                  || (eu_op[7:1] == 7'b1111011)              // F6 F7
+                  || (eu_op[7:1] == 7'b1111111);             // FE FF
+wire        eu_mem = is_modrm && (modrm[7:6] != 2'b11);
+wire [11:0] eu_a   = {eu_op, eu_mem, eu_grp ? modrm[5:3] : 3'd0};
+always @(posedge clk) eu_q <= eu_rom[eu_a];
 
 // instruction layout decoding (combinational)
 always @* begin
@@ -205,6 +262,19 @@ always @(posedge clk) begin
     ptr_next = 'x;
     if (id_ready) id_valid <= 0;        // downstream consumed instruction
 
+    // paced issue gate: count down, load the last hand-off's price, add the
+    // taken-transfer part. A later hand-off below sets eu_pend again.
+    begin
+        logic [6:0] d;
+        d = eu_debt;
+        if (pace_ce && d != 7'd0) d = d - 7'd1;
+        if (eu_pend) d = {2'b0, eu_q};
+        if (br_taken) d = d + (br_inbuf ? EU_TAKEN : EU_TAKEN - 7'd2);
+        d = d + {2'b0, eu_extra};
+        eu_debt <= pace_eu ? d : 7'd0;
+        eu_pend <= 1'b0;
+    end
+
     if (reset) begin
         buf_valid <= 0;
         behind_ok <= 0;
@@ -224,8 +294,10 @@ always @(posedge clk) begin
         id_valid <= 0;
         id_inst <= 0;
         loading_drop <= 0;
+        eu_debt <= 7'd0;
+        eu_pend <= 1'b0;
     end else begin
-        if (behind_hold != 3'd0) behind_hold <= behind_hold - 3'd1;
+        if (behind_hold != 4'd0 && (!bh_paced || pace_ce)) behind_hold <= behind_hold - 4'd1;
         ld_ack_r <= ld_ack;
         if (ld_ack ^ ld_ack_r) begin  // receive data from cache
             if (!loading_drop) begin
@@ -280,7 +352,7 @@ always @(posedge clk) begin
                     buf_start <= ~buf_start;
                     buf_addr <= buf_addr + 16;
                     behind_ok <= buf_valid[buf_start];
-                    behind_hold <= 3'd7;
+                    behind_hold <= BEHIND_HOLD;
                 end
                 ptr <= ptr_next;
                 ip <= br_new_ip;
@@ -317,7 +389,7 @@ always @(posedge clk) begin
                     loading_half <= buf_start;
                     loading <= 1;
                 end else if (!buf_valid[~buf_start]
-                             && !(behind_ok && behind_hold != 3'd0)) begin   // load the second half
+                             && !(behind_ok && behind_hold != 4'd0)) begin   // load the second half
                     behind_ok <= 0;
                     ld_req <= ~ld_req;
                     ld_addr <= buf_addr + 16;
@@ -338,9 +410,10 @@ always @(posedge clk) begin
                     buf_start <= ~buf_start;
                     buf_addr <= buf_addr + 16;
                     behind_ok <= 1;
-                    behind_hold <= 3'd7;
+                    behind_hold <= BEHIND_HOLD;
                 end
-            end else if ((~id_valid || id_ready) && buf_valid[ptr_end[4]]) begin  // actually output the instruction
+            end else if ((~id_valid || id_ready) && buf_valid[ptr_end[4]] && !eu_hold) begin  // actually output the instruction
+                eu_pend <= pace_eu;
                 // ip is at opcode
                 if (buffer[ptr] != 8'h90) begin
                     if (DEBUG) $display("FETCH addr=%h, opcode=%h, len=%d, ip_after=%h", ip-prefix_len, buffer[ptr], len + prefix_len, ip+len);
@@ -423,7 +496,7 @@ always @(posedge clk) begin
                     buf_start <= ~buf_start;
                     buf_addr <= buf_addr + 16;
                     behind_ok <= 1;
-                    behind_hold <= 3'd7;
+                    behind_hold <= BEHIND_HOLD;
                 end
                 ptr <= ptr_end;
             end

@@ -76,6 +76,7 @@ module tb_pc98_gvram_seq;
     wire        mem_ready = (mem_rd | mem_wr) ? (completed & cov_same_m) : 1'b1;
 
     pc98_gvram_seq dut (
+        .rmwbuf_off(1'b0),
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_pf_len(5'd0),
@@ -100,7 +101,7 @@ module tb_pc98_gvram_seq;
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
         .mem_done(mem_done), .mem_own(mem_own), .mem_ready(mem_ready),
         // The model memory holds every presented write: taken = presented.
-        .mem_wr_taken(mem_wr), .cpu_wr_taken(), .cpu_rd_own()
+        .mem_wr_taken(mem_wr), .pf_beat_v(1'b0), .pf_beat_dat(8'h00), .cpu_wr_taken(), .cpu_rd_own()
     );
 
     // The EGC's register writes, driven as PERIPHERALS forwards them.

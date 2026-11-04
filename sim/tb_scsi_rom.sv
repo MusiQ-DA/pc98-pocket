@@ -54,6 +54,7 @@ module tb_scsi_rom;
 
     CHIPSET u_chipset (
         .clock(clock), .cpu_ce_posedge(cpu_ce_posedge),
+        .dx_rmwbuf_off(1'b0), .dx_vramwait(1'b0),
         .cpu_ce_negedge(cpu_ce_negedge),
         .clk_select(2'b00), .reset(reset), .sdram_reset(sdram_reset),
         .cpu_address(cpu_address), .cpu_data_bus(8'h00),

@@ -40,6 +40,10 @@ module execute (
 
     // WRITE-BACK interface
     // port 1
+    // PC-98 port: a shift/rotate by CL or imm8 costs 5+n on an 80286; the
+    // paced issue gate (fetch.sv) charges the 5 from its ROM and takes n
+    // from here, pulsed on the cycle the shift executes.
+    output reg  [4:0] sh_extra,
     output reg        wb_reg_valid,         // register write
     output reg  [2:0] wb_reg,
     output reg [15:0] wb_data,
@@ -1465,6 +1469,7 @@ always @(posedge clk) begin
     wb_data           <= 16'h0000;
 
     br_taken          <= 1'b0;
+    sh_extra          <= 5'd0;
     br_target         <= 'X;
     br_new_cs         <= 'X;
     br_new_ip         <= 'X;
@@ -1639,6 +1644,7 @@ always @(posedge clk) begin
         new_af = reg_f[4];
         cnt_raw =   use_cl  ? ex_g_val[4:0] : 
                     use_imm ? ex_imm[4:0]   : 5'd1;
+        sh_extra <= (use_cl | use_imm) ? cnt_raw[4:0] : 5'd0;
 
         // $display("I_SHIFT: cnt_raw: %d, ex_e_val: %h", cnt_raw, ex_e_val);
 
