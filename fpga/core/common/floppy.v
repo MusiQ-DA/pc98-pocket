@@ -118,6 +118,18 @@ module floppy
 	// {drive[1:0], sd_sector[14:0]}: the LBA the in-flight (or last) SD
 	// request named, and which unit's image it went to.
 	output     [16:0] dbg_sector_info,
+	// The execution-phase view the freeze hunt needs: the run#976 shape
+	// (DRQ2/3 pending, 71071 in SI) is decided between this engine's
+	// handshake and the 71071's mask -- packed here, frozen with the
+	// wedge tap at core_top (probe slot 0xA9):
+	//   [29:26] state[3:0]      [25:15] fifo_count[10:0]
+	//   [14] execute_ndma       [13] ndma_irq     [12] &ndma_irq_to (TO seen)
+	//   [11] dma_irq_enable (0x94 DMAE)  [10] dma_has_terminated (TC seen)
+	//   [9] cmd_read_in_progress  [8] cmd_write_in_progress
+	//   [7] cmd_format_in_progress
+	//   [6] dma_req   [5] irq   [4] busy  [3] in_seek_mode
+	//   [2] datareg_ready  [1] transfer_to_cpu  [0] dma_ack (pin)
+	output     [29:0] dbg2,
 
 	// Drive-noise event taps (clk domain): one pulse per head step, the
 	// head-load proxy, the data phase of any transfer (reads, writes and
@@ -276,8 +288,14 @@ always @(posedge clk) begin
 end
 
 reg execute_ndma;
+// sw_reset must clear this too: the DOR reset aborts the command (np21w
+// fdc.c fdcstatusreset -- status back to RQM, event NEUTRAL), so a
+// non-DMA execution in flight when the BIOS (or run#977's wild code)
+// pulsed it must not leave execute_ndma parked at 1 with the engine
+// idle -- the run#977 freeze read exactly that residue (0xA9:
+// execute_ndma=1, state=IDLE, fifo=0) and it masked the real picture.
 always @(posedge clk) begin
-	if(~rst_n)                                  execute_ndma <= 1'b0;
+	if(~rst_n | sw_reset)                       execute_ndma <= 1'b0;
 	else if(cmd_read_write_ok_at_start && ndma) execute_ndma <= 1'b1;
 	else if(cmd_format_ok_at_start && ndma)     execute_ndma <= 1'b1;
 	else if(enter_result_phase)                 execute_ndma <= 1'b0;
@@ -825,7 +843,8 @@ wire cmd_format_writeprotected_at_start = ~cmd_format_hang_on_start && cmd_forma
 wire cmd_format_hang_on_start =
 	~motor_enable[selected_drive[0]] ||                          //motor off
 	~media_present[selected_drive[0]] ||                         //no media
-	command[23:16] != 8'h02 ||                                   //invalid sector size
+	// The N must be the MEDIA's: 2 on 512-byte media, 3 on a PC-98 2HD.
+	command[23:16] != (media_is_1024[selected_drive[0]] ? 8'h03 : 8'h02) || //invalid sector size
 	command[15:8] != media_sectors_per_track[selected_drive[0]]; //invalid secotr count
 
 wire cmd_format_ok_at_start = cmd_format_track_start && ~cmd_format_writeprotected_at_start && ~cmd_format_hang_on_start;
@@ -854,7 +873,7 @@ reg [7:0] format_sector_count;
 always @(posedge clk) begin
 	if(~rst_n)                                                                  format_sector_count <= 8'd0;
 	else if(cmd_format_ok_at_start)                                             format_sector_count <= command[15:8];
-	else if(state == S_SD_FORMAT_WAIT_FOR_FILL && &format_counter && fifo_read) format_sector_count <= format_sector_count - 8'd1;
+	else if(state == S_SD_FORMAT_WAIT_FOR_FILL && format_sector_last && fifo_read) format_sector_count <= format_sector_count - 8'd1;
 end
 
 // Terminal count can land on the last sector's final byte; excluding that just-completed
@@ -937,11 +956,15 @@ always @(posedge clk) begin
 	else if(cmd_read_id_notready_at_start)                                   reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h04, (8'h40 | { 5'd0, io_writedata[2], selected_drive }) };
 	else if(cmd_read_write_start && cmd_read_write_incorrect_head_at_start)   reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h04, (8'h40 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	else if(cmd_read_write_start && cmd_read_write_incorrect_sector_at_start) reply <= { 24'd0, 8'd2, command[31:24],            7'b0,command[32],             command[47:40],              8'h00, 8'h04, (8'h40 | { 5'd0, command[32],              selected_drive }) };
-	else if(cmd_write_normal_start && cmd_write_and_writeprotected_at_start)  reply <= { 24'd0, 8'd2, command[31:24],            7'b0,command[32],             command[47:40],              8'h31, 8'h27, (8'h40 | { 5'd0, command[32],              selected_drive }) };
-	else if(cmd_format_track_start && cmd_format_writeprotected_at_start)     reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,command[26],             cylinder[selected_drive[0]], 8'h31, 8'h27, (8'h40 | { 5'd0, command[26],              selected_drive }) };
+	// Write-protected media: ST1 = NW alone, ST2 = 0 (np21w io/fdc.c:183,
+	// FDCRLT_IC0 | FDCRLT_NW). The 31h/27h this used to send set ST1's DE
+	// bit, which the BIOS decoder at FF98F tests before NW -- a write to a
+	// protected disk came back to DOS as a CRC data error.
+	else if(cmd_write_normal_start && cmd_write_and_writeprotected_at_start)  reply <= { 24'd0, 8'd2, command[31:24],            7'b0,command[32],             command[47:40],              8'h00, 8'h02, (8'h40 | { 5'd0, command[32],              selected_drive }) };
+	else if(cmd_format_track_start && cmd_format_writeprotected_at_start)     reply <= { 24'd0, command[23:16], sector[selected_drive[0]], 7'b0,command[26],             cylinder[selected_drive[0]], 8'h00, 8'h02, (8'h40 | { 5'd0, command[26],              selected_drive }) };
 	else if(state == S_CHECK_TC && cmd_read_write_finish)                     reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
-	else if(state == S_CHECK_TC && cmd_format_finish)                         reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
-	else if(state == S_WAIT_FOR_FORMAT_INPUT && cmd_format_in_input_finish)   reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h40 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
+	else if(state == S_CHECK_TC && cmd_format_finish)                         reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
+	else if(state == S_WAIT_FOR_FORMAT_INPUT && cmd_format_in_input_finish)   reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h40 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	else if(cmd_read_id_finished)                                             reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h00, (8'h00 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	// A unit with no media (or no drive at all, US>1) must answer with the FAULT
 	// bit set -- ST3 = 0x80|HD|US, the np21w "drive not equipped" reply. Returning
@@ -1025,7 +1048,7 @@ always @(posedge clk) begin
 	else if(state == S_COUNT_LOGICAL && !mult_b && cmd_format_in_progress)        state <= S_PREPARE;
 	//sd
 	else if(state == S_SD_CONTROL && cmd_format_in_progress)                      state <= S_SD_FORMAT_WAIT_FOR_FILL;
-	else if(state == S_SD_FORMAT_WAIT_FOR_FILL && &format_counter && fifo_read)   state <= S_WAIT;
+	else if(state == S_SD_FORMAT_WAIT_FOR_FILL && format_sector_last && fifo_read)   state <= S_WAIT;
 
 	//read id
 	else if(state == S_IDLE && cmd_read_id_ok_at_start)                           state <= S_WAIT;
@@ -1122,11 +1145,15 @@ end
 
 //------------------------------------------------------------------------------ sd
 
-reg [8:0] format_counter;
+// FORMAT fills each sector with D for the full sector length, as the media
+// does (uPD765 writes 128<<N bytes; this image's N is fixed per media), so a
+// 2HD sector is 1024 filler bytes, not 512 with a stale tail.
+reg [10:0] format_counter;
 always @(posedge clk) begin
-	if(state == S_IDLE) format_counter <= 9'd0;
-	else if(fifo_read)  format_counter <= format_counter + 9'd1;
+	if(state != S_SD_FORMAT_WAIT_FOR_FILL) format_counter <= 11'd0;
+	else if(fifo_read)                     format_counter <= format_counter + 11'd1;
 end
+wire format_sector_last = format_counter == sector_len - 11'd1;
 
 reg [15:0] sd_sector;
 always @(posedge clk) begin
@@ -1167,6 +1194,11 @@ wire [7:0]  fifo_q;
 assign dbg_xfer        = {state, fifo_count};
 assign dbg_command     = command[71:8];
 assign dbg_sector_info = {selected_drive, sd_sector[14:0]};
+assign dbg2            = {state, fifo_count, execute_ndma, ndma_irq, &ndma_irq_to,
+                          dma_irq_enable, dma_has_terminated,
+                          cmd_read_normal_in_progress, cmd_write_normal_in_progress,
+                          cmd_format_in_progress, dma_req, irq, busy, in_seek_mode,
+                          datareg_ready, transfer_to_cpu, dma_ack};
 
 reg  [7:0] fifo_readdata;
 always @(posedge clk) begin
@@ -1180,6 +1212,19 @@ wire fifo_to_pc   = (state == S_WAIT_FOR_EMPTY_READ_FIFO);
 wire fifo_pc_wr   = ((ndma_write || (~execute_ndma && dma_ack) || (~execute_ndma && dma_has_terminated)) && ~fifo_full);
 wire fifo_pc_rd   = (ndma_read || (~execute_ndma && dma_ack));
 
+// The serve side (an mgmt write to 0xF, from the RAM-image server or the
+// firmware bridge) is taken ONLY while a fill is actually waiting for it
+// and only while the sector still has room. The server pushes exactly
+// sector_len bytes per request and re-checks the request bit on its own
+// push cycle, so neither term engages in a healthy transfer -- they are the
+// backstop that keeps a straggler byte (a beat that raced its command's
+// abort, a re-serve of an already-filled sector) from being INSERTED into
+// a draining FIFO or piled onto a full one: every path that leaves
+// S_SD_READ_WAIT_FOR_DATA either has sector_len bytes buffered (drain) or
+// clears the FIFO (S_IDLE), so a push in any other state is by definition
+// unwanted and is dropped rather than mixed into the byte stream.
+wire fifo_srv_wr = fifo_write && (state == S_SD_READ_WAIT_FOR_DATA) && ~fifo_full;
+
 simple_fifo #(
 	.width      (8),
 	.widthu     (11)
@@ -1191,7 +1236,7 @@ fifo_to_floppy_inst (
 	.sclr       (state == S_IDLE),
 
 	.data       (fifo_from_pc ? (execute_ndma ? io_writedata : dma_has_terminated ? 8'h00 : dma_readdata) : mgmt_writedata[7:0]),
-	.wrreq      (fifo_from_pc ? fifo_pc_wr : fifo_write),
+	.wrreq      (fifo_from_pc ? fifo_pc_wr : fifo_srv_wr),
 
 	.rdreq      (fifo_to_pc ? fifo_pc_rd : fifo_read),
 	.q          (fifo_q),

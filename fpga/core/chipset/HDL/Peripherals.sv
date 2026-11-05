@@ -198,14 +198,29 @@ module PERIPHERALS #(
         // register {op,unit,C,H,R,N,EOT,GPL}.
         output  wire    [63:0]  dbg_fdc,
         output  wire    [63:0]  dbg_fdc_cmd,
+        // JTAG probe (PC98_JTAG): the execution-phase view the freeze hunt
+        // needs -- floppy.v's dbg2 (state/fifo/execute_ndma/ndma_irq/DMAE/
+        // TC-seen/cmd kinds/handshake pins) plus the TC latch, frozen with
+        // the wedge tap at core_top (probe slot 0xA9). See floppy.v's dbg2.
+        output  wire    [31:0]  dbg_fdc2,
         // JTAG probe readout of the slave GDC's display state -- the wires
         // pc98_gvram_display actually consumes, so a mis-shaped picture can
         // be read back against what the guest programmed: {sad0,len0} in
         // the high word, flags/LR/AL/PITCH in the low.
         output  wire    [63:0]  dbg_gdc_s,
+        // JTAG probe: slave GDC partitions one to three -- DEPTH's stage
+        // wipe walks them while SAD0 stays pinned at zero.
+        output  wire    [63:0]  dbg_gdc_s2,
+        output  wire    [63:0]  dbg_gdc_s3,
         // Graphics display-fetch underrun telemetry -- skip/late/max_fill in
         // the low word, live fill-FSM and line state in the high word.
         output  wire    [63:0]  dbg_gvdisp,
+        // JTAG probe: the graphics display's black-band / PRAM-timing witness.
+        output  wire    [95:0]  dbg_gvband,
+        // JTAG probe readout of the CRT (IRQ2) interrupt path: the master
+        // PIC's {IMR,ISR,IRR}, the 0x64 arm and pending flags, and event
+        // counters -- see the dbg_crt assign by crt_armed.
+        output  wire    [63:0]  dbg_crt,
         input   logic           fdd_dma_ack,
         input   logic           terminal_count,
         // Others
@@ -422,6 +437,7 @@ module PERIPHERALS #(
     logic           fdd_busy;
     logic   [7:0]   interrupt_data_bus_out;
     logic           interrupt_to_cpu_buf;
+    wire    [23:0]  pic_m_dbg;      // master {IMR,ISR,IRR} for dbg_crt
 
     logic   [7:0]   interrupt2_data_bus_out;
     logic           interrupt2_data_bus_io;
@@ -490,6 +506,7 @@ module PERIPHERALS #(
         // and re-arms the GDC flag -- see crt_cancel above.
         .external_irr_clear         ({5'b0, crt_cancel, 1'b0,
                                         pit0_write_clears_irr0}),
+        .dbg_regs                   (pic_m_dbg),
         // IRQ7 is the slave's cascade line; the machine's own IRQ7 has to
         // stand down for it. IRQ2 is the CRT interrupt -- see crt_vsync_irq
         // above; without it the BIOS parks at FED44 for good. The drive's
@@ -556,6 +573,7 @@ module PERIPHERALS #(
         .interrupt_acknowledge_n    (interrupt_acknowledge_n),
         .interrupt_to_cpu           (interrupt2_to_cpu),
         .external_irr_clear         (8'h00),
+        .dbg_regs                   (),
         // IRQ3 is the FDC's own interrupt (RECALIBRATE finding no drive);
         // IRQ2 is the XTMASK pulse the 100 ms 0xCC timer fires. IRQ4 is the
         // PC-9801-86's: np21w sound/opntimer.c (s_irqtable) has the board's four jumper
@@ -667,7 +685,66 @@ module PERIPHERALS #(
     );
 
     assign  timer_interrupt = timer_counter_out[0];
-    assign  speaker_out     = spktone & spkdata;
+    // np21w sound/beepc.c beep_hzset: in the tone modes (control bits 3:2
+    // nonzero) a counter-1 reload below 0x80 -- above ~15.6 kHz on the
+    // 1.9968 MHz clock, and zero, which np21w does not read as 65536 --
+    // sets g_beep.hz = 0 and the beeper is silent. A real piezo cannot
+    // follow that either. Driven straight out of the PIT here, the square
+    // wave folds back off the 48 kHz mixer into an audible whine: what
+    // SuperDepth's note driver (D9xx-DBxx, divisors from a table divided
+    // per octave) produced on hardware. Counter 1's reload is snooped off
+    // the bus the way pit_setcount assembles it -- the RW field of the
+    // last control word picks LSB, MSB or LSB-then-MSB, and the control
+    // word restarts the pair.
+    logic        pit1_wr_n_q;
+    logic  [7:0] pit1_wdata;
+    logic  [1:0] pit1_wreg;         // the register the strobe addressed
+    logic  [1:0] pit1_rw;           // control word RW field for counter 1
+    logic  [1:0] pit1_mode32;       // control word bits 3:2
+    logic        pit1_msb_next;     // LSB/MSB pair: the MSB is next
+    logic [15:0] pit1_count;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            pit1_wr_n_q   <= 1'b1;
+            pit1_wdata    <= 8'h00;
+            pit1_wreg     <= 2'd0;
+            pit1_rw       <= 2'b11;
+            pit1_mode32   <= 2'b01;
+            pit1_msb_next <= 1'b0;
+            pit1_count    <= 16'h0000;
+        end else begin
+            pit1_wr_n_q <= io_write_n | timer_chip_select_n;
+            if (~timer_chip_select_n & ~io_write_n) begin
+                pit1_wdata <= internal_data_bus;
+                pit1_wreg  <= pit_reg_addr;
+            end
+            // The write lands at the trailing edge of the strobe.
+            if (~pit1_wr_n_q & (io_write_n | timer_chip_select_n)) begin
+                if (pit1_wreg == 2'd3) begin
+                    // SC = 01 selects counter 1; RW = 00 is a latch command
+                    // and leaves the mode alone.
+                    if (pit1_wdata[7:6] == 2'b01 && pit1_wdata[5:4] != 2'b00) begin
+                        pit1_rw       <= pit1_wdata[5:4];
+                        pit1_mode32   <= pit1_wdata[3:2];
+                        pit1_msb_next <= 1'b0;
+                    end
+                end else if (pit1_wreg == 2'd1) begin
+                    case (pit1_rw)
+                        2'b01:   pit1_count <= {8'h00, pit1_wdata};
+                        2'b10:   pit1_count <= {pit1_wdata, 8'h00};
+                        default: begin
+                            if (pit1_msb_next) pit1_count[15:8] <= pit1_wdata;
+                            else               pit1_count[7:0]  <= pit1_wdata;
+                            pit1_msb_next <= ~pit1_msb_next;
+                        end
+                    endcase
+                end
+            end
+        end
+    end
+    wire    pit1_audible = (pit1_mode32 == 2'b00) | (pit1_count[15:7] != 9'd0);
+
+    assign  speaker_out     = spktone & spkdata & pit1_audible;
 
 
     //
@@ -834,6 +911,36 @@ module PERIPHERALS #(
         end
     end
     wire crt_vsync_irq = crt_vsync_edge & crt_armed;
+
+    // Probe telemetry for the CRT interrupt (dbg_crt). A guest that waits on
+    // a VSYNC-counted frame stalls for good if IRQ2 stops: these say whether
+    // the arm was consumed without a handler run (isr_n vs arm_n), the pulse
+    // fell on the PIC's acknowledge freeze (lost_n: fired, IRR bit 2 still
+    // clear a cycle later), or the PIC answered an INTA with IRQ7's spurious
+    // vector (spur_n). Counters wrap.
+    logic       crt_isr_d = 1'b0, gdc_arm_d = 1'b0, spur_d = 1'b0;
+    logic       crt_fire_d = 1'b0;
+    logic [7:0] crt_fire_n = 8'd0, crt_isr_n = 8'd0, crt_arm_n = 8'd0;
+    logic [3:0] crt_lost_n = 4'd0, crt_cancel_n = 4'd0, crt_spur_n = 4'd0;
+    wire        pic_spur = ~interrupt_acknowledge_n
+                         & (interrupt_data_bus_out == 8'h0F);
+    always_ff @(posedge clock) begin
+        crt_isr_d  <= crt_isr;
+        gdc_arm_d  <= gdc_arm_w;
+        spur_d     <= pic_spur;
+        crt_fire_d <= crt_vsync_irq;
+        if (crt_vsync_irq)              crt_fire_n   <= crt_fire_n + 8'd1;
+        if (crt_isr & ~crt_isr_d)       crt_isr_n    <= crt_isr_n + 8'd1;
+        if (gdc_arm_w & ~gdc_arm_d)     crt_arm_n    <= crt_arm_n + 8'd1;
+        if (crt_fire_d & ~pic_m_dbg[2]) crt_lost_n   <= crt_lost_n + 4'd1;
+        if (crt_cancel)                 crt_cancel_n <= crt_cancel_n + 4'd1;
+        if (pic_spur & ~spur_d)         crt_spur_n   <= crt_spur_n + 4'd1;
+    end
+    assign dbg_crt = { crt_fire_n, crt_isr_n, crt_arm_n,
+                       crt_lost_n, crt_cancel_n,
+                       pic_m_dbg,
+                       crt_spur_n, 1'b0, crt_pend, crt_armed,
+                       interrupt_to_cpu_buf };
 
     // The ITF's first hard gate. At F80388 it does IN AL,60h / TEST AL,20h and
     // waits for bit 5 to go low, high, low -- twice -- before it will go on.
@@ -1137,7 +1244,7 @@ module PERIPHERALS #(
     // probes for.
     //
     // The mask itself needs no address path. np21w applies CPU_ADRSMASK
-    // inside cpumem on every CPU access, but here the Zet's cpu_adr_o is 20
+    // inside cpumem on every CPU access, but here the CPU's cpu_adr_o is 20
     // bits and every downstream port -- ad_out, the Chipset address, RAM's
     // -- is [19:0]: the bus can never carry bit 20 at all, so "masked" is
     // the only behaviour the memory path can express in EITHER state, and
@@ -1425,7 +1532,8 @@ module PERIPHERALS #(
         .p_ack(gv_rd_ack), .p_rvalid(gv_rd_valid), .p_rdata(gv_rd_data),
         .p_done(gv_rd_done),
         .gfx_dot(gfx_dot_w),
-        .dbg(dbg_gvdisp)
+        .dbg(dbg_gvdisp),
+        .dbg_band(dbg_gvband)
     );
 
     // The layer also stays dark until the machine has written a graphics
@@ -1788,6 +1896,9 @@ module PERIPHERALS #(
                          4'd0, gdc_s_disp_on, gvram_disp_page,
                          pc98_analog, &gdc_clk, gdc_s_dbl,
                          gdc_s_lrep, gdc_s_al, gdc_s_pitch };
+
+    assign dbg_gdc_s2 = { 16'd0, gdc_s_sad[3], gdc_s_sad[2], gdc_s_sad[1] };
+    assign dbg_gdc_s3 = { 34'd0, gdc_s_len[3], gdc_s_len[2], gdc_s_len[1] };
 
     pc98_glyph_rowbuf u_pc98_rowbuf (
         .clk(clock), .rst(reset),
@@ -2492,6 +2603,7 @@ module PERIPHERALS #(
         .dbg_xfer                   (fdc_dbg_xfer),
         .dbg_command                (fdc_dbg_command),
         .dbg_sector_info            (fdc_dbg_sector_info),
+        .dbg2                       (fdc_dbg2),
 
         .snd_step                   (fdd_snd_step),
         .snd_head                   (fdd_snd_head),
@@ -2505,7 +2617,7 @@ module PERIPHERALS #(
     logic   [14:0]  fdc_dbg_xfer;
     logic   [63:0]  fdc_dbg_command;
     logic   [16:0]  fdc_dbg_sector_info;
-
+    logic   [29:0]  fdc_dbg2;
     // Where a failed floppy boot is parked: the engine state and how much
     // of the sector is still buffered, command-level counters, the SD-side
     // request bits, the LBA the request named, and the DMA handshake. A
@@ -2520,6 +2632,12 @@ module PERIPHERALS #(
                        fdc_dbg_drops, fdc_dbg_accepts,
                        fdc_dbg_xfer };
     assign dbg_fdc_cmd = fdc_dbg_command;
+    // floppy.v's execution view, one bit of glue appended: [0] is the TC
+    // latch the 71071's terminal-count pulses set (floppy's own dma_tc
+    // input is the same latch gated by the ack pulse); [30:1] carry
+    // floppy.v's dbg2 unchanged, [31] pads -- see floppy.v's dbg2 comment
+    // for the field map.
+    assign dbg_fdc2 = {1'b0, fdc_dbg2, fdd_dma_tc};
 
     // The lamp's view of the sector request. floppy.v's request bits name the
     // command kind, not the drive -- the drive a pending request targets is

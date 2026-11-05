@@ -52,7 +52,7 @@ MBX_RECS    equ 2                   ; first record word index, 5 words each
 
 MEMB_DISK_BOOT equ 0x0584           ; BIOS BDA: boot drive byte (0x90+drv 2HD)
 
-NTESTS      equ 14                  ; number of test records emitted
+NTESTS      equ 17                  ; number of test records emitted
 
 ; ============================================================================
 section .ipl vstart=0x0000
@@ -232,6 +232,48 @@ s2_init_cont:
         mov es, ax
         mov word [es:MBX_COUNT*2], NTESTS
         mov word [es:MBX_SENT*2], 0xBEEF
+
+        ; ---- summary screen: replay every record (id + ticks) one per
+        ; row so a single screen grab carries all results even when the
+        ; per-test rows scrolled off during the run
+        xor  di, di                  ; record cursor (bytes)
+        mov  bx, 160                 ; text row 1, col 0
+.sum:   cmp  di, [m_rec]
+        jae  .sumfin
+        mov  ax, [es:di]             ; id (es = MBX_SEG here)
+        aam
+        add  ax, 0x3030              ; ah tens, al ones
+        mov  cx, ax
+        mov  ax, [es:di+2]           ; ticks lo
+        mov  dx, [es:di+4]           ; ticks hi
+        add  di, 10
+        push di
+        push es
+        mov  di, TVRAM
+        mov  es, di
+        push bx
+        push cx
+        lea  di, [bx+0x2000]         ; attr cells for cols 0..13
+        mov  cx, 14
+.sfat:  mov  byte [es:di], 0xE1
+        add  di, 2
+        loop .sfat
+        pop  cx
+        pop  bx
+        mov  [es:bx], ch             ; id digits, cols 0-1
+        mov  [es:bx+2], cl
+        add  bx, 8                   ; ticks at col 4
+        call putu32
+        sub  bx, 8
+        add  bx, 160                 ; next row
+        pop  es                      ; MBX_SEG
+        pop  di                      ; record cursor
+        jmp  .sum
+.sumfin:
+        mov  ax, TVRAM
+        mov  es, ax
+        mov  si, str_sumdone
+        call putstr                  ; sentinel for the screen-scraper
 
         ; restore the BIOS tick vector (politeness), then halt on the
         ; watched address so the emulator-side hook sees final results
@@ -523,6 +565,101 @@ t_gvram:
         and word [gv_off], 0x3FFF   ; 16KB worth
         ret
 
+; 15: rep stosw into the GVRAM window with GRCG TDW active -- the exact
+; shape of SuperDepth's stage fill (OUT 7Ch 80h + 4 tiles, then word fill)
+t_gvramtdw:
+        mov ax, 0xA800
+        mov es, ax
+        mov di, [gv_off]
+        mov al, 0x80                 ; GRCG on, TDW, all four planes
+        out GR_MODE, al
+        mov dx, 0x7E                 ; tile register
+        mov al, 0xFF
+        out dx, al
+        out dx, al
+        out dx, al
+        out dx, al
+        mov ax, 0xFFFF
+        mov cx, 2048                 ; 4096 bytes per chunk, word stores
+        rep stosw
+        xor al, al
+        out GR_MODE, al              ; GRCG off again
+        add word [gv_off], 4096
+        and word [gv_off], 0x3FFF
+        ret
+
+; 16: same fill with GRCG RMW (mode C0h) -- read/modify/write per plane
+t_gvramrmw:
+        mov ax, 0xA800
+        mov es, ax
+        mov di, [gv_off]
+        mov al, 0xC0                 ; GRCG on, RMW, all planes
+        out GR_MODE, al
+        mov dx, 0x7E
+        mov al, 0xF0
+        out dx, al
+        out dx, al
+        out dx, al
+        out dx, al
+        mov ax, 0x0F0F
+        mov cx, 2048
+        rep stosw
+        xor al, al
+        out GR_MODE, al
+        add word [gv_off], 4096
+        and word [gv_off], 0x3FFF
+        ret
+
+; 17: SuperDepth's wall/texture draw shape (DEPTH.EXE live 0x31D00 + the
+; helper at 0x1D5C): five GRCG RMW passes over the same 16x80 strip --
+; mode C0 with tile 00 first (the erase pass), then CE/CD/CB/C7 with tile
+; FF (one plane masked off per pass) -- byte stores through rep movsb.
+; The source is the bench's own code bytes: only the VRAM traffic matters.
+t_depthdraw:
+        mov ax, 0xA800
+        mov es, ax
+        mov di, 0x1111
+        mov al, 0xC0                 ; pass 1: RMW all planes, tile 00
+        out GR_MODE, al
+        mov dx, 0x7E
+        xor al, al
+        out dx, al
+        out dx, al
+        out dx, al
+        out dx, al
+        call dd_pass
+        mov al, 0xCE                 ; passes 2-5: one plane masked, tile FF
+        call dd_pass_ff
+        mov al, 0xCD
+        call dd_pass_ff
+        mov al, 0xCB
+        call dd_pass_ff
+        mov al, 0xC7
+        call dd_pass_ff
+        xor al, al
+        out GR_MODE, al
+        ret
+
+dd_pass_ff:
+        out GR_MODE, al
+        mov dx, 0x7E
+        mov al, 0xFF
+        out dx, al
+        out dx, al
+        out dx, al
+        out dx, al
+dd_pass:
+        push si
+        push di
+        push cx
+        mov si, 0                    ; texture source: bench code bytes
+        mov cx, 1280                 ; 16 rows x 80 bytes
+        rep movsb
+        pop cx
+        pop di
+        pop si
+        ret
+
 ; 9: in al,0x71 x512 (I/O read latency)
 t_in:
         mov cx, 512
@@ -621,6 +758,9 @@ test_table:
         dw 13, t_near2, 20, 10000, 0, s_near2
         dw 14, t_ppop,  20, 10000, 0, s_ppop
         dw 12, t_fdc,    1,    32, 0, s_fdc
+        dw 15, t_gvramtdw, 4, 16384, 0, s_gvramtdw
+        dw 16, t_gvramrmw, 4, 16384, 0, s_gvramrmw
+        dw 17, t_depthdraw, 4, 25600, 0, s_depthdraw
         dw 0
 
 s_alu:   db "01 ALU5OP   ", 0
@@ -637,6 +777,10 @@ s_far:   db "11 FARCALL  ", 0
 s_near2: db "13 NEAR2ALGN", 0
 s_ppop:  db "14 PUSHPOP  ", 0
 s_fdc:   db "12 FDC32SEC ", 0
+s_gvramtdw: db "15 GVRAMTDW ", 0
+s_gvramrmw: db "16 GVRAMRMW ", 0
+s_depthdraw: db "17 DEPTHDRAW", 0
+str_sumdone: db "BENCH SUMMARY DONE", 0
 
 ; ----------------------------------------------------------------------------
 ; variables (all in CS = 0x2000)

@@ -27,6 +27,8 @@ extern void irq_mask(uint32_t mask);
 // Read a floppy-size register twice and return it only if the samples agree, else 0. The
 // size crosses clock domains per-bit and can tear as it changes from 0 to the image size;
 // two matching reads reject a half-updated value, and the caller retries on the next poll.
+#define HDD_MOUNT_TRIES 16u
+
 static uint32_t stable_size(volatile uint32_t *reg)
 {
     uint32_t a = *reg;
@@ -87,6 +89,7 @@ int main(void)
     uint32_t mounted_a = 0;
     uint32_t mounted_b = 0;
     uint32_t mounted_hdd = 0;
+    uint32_t hdd_tries = 0;
     uint32_t settings_sized = 0;        // Settings size declared in the datatable yet
     uint32_t rebind_seen = *FDD_REBIND; // last-seen rebind toggles
 
@@ -130,11 +133,16 @@ int main(void)
 
         if (!mounted_hdd) {
             HB_MARK(0x7C);
-            uint32_t sectors = slot_bytes(HDD0_SLOT_ID) / SECTOR_BYTES;
-            if (sectors != 0) {
+            // The whole file: scsi_mount reads an NHD/HDI/VHD header off its
+            // front and checks the header's arithmetic against the size.
+            uint32_t bytes = slot_bytes(HDD0_SLOT_ID);
+            if (bytes >= SECTOR_BYTES) {
                 HB_MARK(0x49);
-                scsi_mount(sectors);
-                mounted_hdd = 1;
+                // A failed header read is retried on later passes rather
+                // than mounted as a flat image (see scsi_probe); after
+                // HDD_MOUNT_TRIES the disk stays absent instead.
+                if (scsi_mount(bytes) || ++hdd_tries >= HDD_MOUNT_TRIES)
+                    mounted_hdd = 1;
             }
         }
 

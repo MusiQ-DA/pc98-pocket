@@ -97,15 +97,18 @@ enum {
     SET_RAM_SZ,
     SET_DEL_BS,
     SET_EXTROM,
+    // System -- appended above SET_COUNT (version 10), so older blobs keep
+    // the compiled default (On, index 0; the FPGA inverts the bit). The menu
+    // row is in items_system.
+    SET_CPU_CACHE,
     SET_COUNT // new settings append above: the save blob stores values by index
 };
 
-// The four speeds the CE generator really makes from the 42.95 MHz chipset clock.
-// The PC-98 ladder is the 2.4576 MHz family this machine presents (x2 and x4 are the
-// "5 MHz" and "10 MHz" of a PC-9801VM/VX; the third is twice the fast one, still
-// cycle-paced) and a fourth that is the chipset clock itself -- not a speed, the
-// cycle-inaccurate maximum.
-static const char *const opt_cpu[] = { "5 MHz", "10 MHz", "20 MHz", "Turbo (max)" };
+// The four speeds, as the 286 PC-98s they stand for (CPUBENCH 0.980 ratio,
+// docs/ref/pc98-performance-baselines.md): VX2 286 8 MHz (4.57), VX21/UX21
+// 286 10 MHz (5.69), RX21/EX/DX 286 12 MHz (7.07), and the unthrottled
+// maximum. core_top's throttle sets the first three.
+static const char *const opt_cpu[] = { "286 8MHz", "286 10MHz", "286 12MHz", "Turbo (max)" };
 static const char *const opt_bios_wr[] = { "None", "EC00", "Main", "All" };
 static const char *const opt_boost[] = { "None", "2x", "4x" };
 static const char *const opt_level4[] = { "1", "2", "3", "4" };
@@ -146,6 +149,9 @@ static const char *const opt_boot_dev[] = { "Standard", "640KB FDD", "1MB FDD", 
 static const char *const opt_ram_sz[] = { "640 KB", "128 KB", "256 KB", "384 KB", "512 KB" };
 static const char *const opt_off_on[] = { "Off", "On" };
 static const char *const opt_extrom[] = { "Absent", "Present" };
+// On first: an unwritten osd_settings byte is 0, and firmware older than this
+// row never writes index 20 -- 0 has to mean the cache stays on.
+static const char *const opt_cache[] = { "On", "Off" };
 
 static const char *const opt_dpad[] = { "Numpad", "Numpad w/ Diag.", "Arrows", "WASD", "HJKL",
     "HJKL w/ YUBN" };
@@ -164,13 +170,9 @@ typedef struct {
 // through the version tables below -- and the next save writes the
 // current version.
 static setting_t settings[SET_COUNT] = {
-    // Index 1 is the faithful clock: a PC-9801VM/VX's V30 at 2.4576 MHz x4.
-    // The SDRAM answers a guest word in one bus cycle, so
-    // index 1's throughput IS a real 10 MHz machine's -- index 2 is a roughly
-    // 2x step up, no longer a compensation for a split that went away. At
-    // index 0 the ITF's 640 KB memory test is a long wait with nothing on
-    // screen but its own test pattern.
-    SETTING_D(opt_cpu, 1),    // SET_CPU_SPEED
+    // The default is Turbo, the full chipset clock. Settings saved under the
+    // old 5/10/20 MHz labels keep their index.
+    SETTING_D(opt_cpu, 3),    // SET_CPU_SPEED
     SETTING(opt_bios_wr),     // SET_BIOS_WR
     SETTING(opt_boost),       // SET_BOOST
     SETTING(opt_level4),      // SET_SPK_VOL
@@ -193,6 +195,9 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_ram_sz),         // SET_RAM_SZ -- index 0, like an unwritten slot, means 640 KB
     SETTING(opt_off_on),         // SET_DEL_BS
     SETTING_D(opt_extrom, 1),    // SET_EXTROM
+    SETTING(opt_cache),          // SET_CPU_CACHE -- z86's 16 KB cache, Turbo
+                                 // only: the paced modes run bus-faithful and
+                                 // never cache; index 0 is On
 };
 
 // Compiled defaults, snapshotted at boot before the save is adopted, for Reset to Defaults.
@@ -236,13 +241,15 @@ static const item_t items_main[] = {
 // stability, but there is nothing left to switch.
 static const item_t items_system[] = {
     { "CPU Speed", IT_OPTION, SET_CPU_SPEED },
+    { "CPU Cache", IT_OPTION, SET_CPU_CACHE },
 };
 
 static const item_t items_av[] = {
     { "Audio Boost", IT_OPTION, SET_BOOST },
     { "Speaker Volume", IT_OPTION, SET_SPK_VOL },
     { "Stereo Mix", IT_OPTION, SET_STEREO },
-    { "Display", IT_OPTION, SET_DISPLAY },
+    // "Display" (the monochrome-monitor tints) went with the RTL tint:
+    // the setting keeps its blob slot, nothing reads it.
     { "200-Line Mode", IT_OPTION, SET_MODE200 },
 };
 
@@ -842,8 +849,15 @@ void settings_reset_tick(void)
 // version-8 table is carried across by table_migrate at load -- only the
 // immediately-prior layout is, so a version-7 table drops -- and the blob
 // is rewritten at version 9 so the move runs once.
+//
+// VERSION 10 APPENDS ONE SETTING (index 20, CPU cache), and a twenty-first
+// value crosses the next word boundary: the block grows to eight words, the
+// global blob to ten, and the table shifts up a word -- word 138, ten-word
+// entries, eleven of which fit (138 + 1 + 11*10 = 249). A version-9 block
+// applies its twenty values and index 20 keeps its compiled default; a
+// version-9 table is carried across by table_migrate the same way.
 #define SETTINGS_MAGIC   0x50435853u
-#define SETTINGS_VERSION 9u
+#define SETTINGS_VERSION 10u
 #define SETTINGS_WORD    128
 
 // The block a profile is: the packed values, then the binding block (the
@@ -860,12 +874,12 @@ void settings_reset_tick(void)
 #define ENTRY_WORDS  (BLOCK_WORDS + 2)                 // hash, ~hash, then the block
 #define ENTRY_COUNT  ((255 - TABLE_WORD) / ENTRY_WORDS)
 
-// Version 8's table geometry, kept only to carry its entries across at load:
-// the blob was a word shorter (thirteen values pack into four words), so the
-// table began at word 136 and ran fourteen 8-word entries through word 248.
-#define V8_TABLE_WORD  (SETTINGS_WORD + 8)
-#define V8_ENTRY_WORDS 8
-#define V8_ENTRY_COUNT 14
+// Version 9's table geometry, kept only to carry its entries across at load:
+// the blob was a word shorter (twenty values pack into five words), so the
+// table began at word 137 and ran thirteen 9-word entries through word 254.
+#define V9_TABLE_WORD  (SETTINGS_WORD + 9)
+#define V9_ENTRY_WORDS 9
+#define V9_ENTRY_COUNT 13
 
 // Version 4's enum order: CPU, gfx0, gfx1, video-1st, BIOS-wr, splash, audio, boost, speaker, stereo,
 // C/MS, composite, display, EMS, EMS-frame, A000, joy1, joy2, swap-joy, sync-joy, d-pad, gamepad.
@@ -1028,57 +1042,52 @@ static int table_alloc(void)
     return e;
 }
 
-// Rewrite a version-8 table entry at new-format slot e: the hash pair and
-// the four value words through -- the old block's last value word pads
-// indices 13-15 with zeroes, which is every one of those settings'
-// compiled default -- then the appended indices 16-19 as one word of
-// compiled defaults packed the way block_write packs them, and the two
-// binding words unmoved.
+// Rewrite a version-9 table entry at new-format slot e: the hash pair and
+// the five value words unmoved, then the appended index 20 (and the unused
+// 21-23) as one word of compiled defaults packed the way block_write packs
+// them, and the two binding words unmoved.
 static void entry_write(int e, const uint32_t *b)
 {
     *FDD_BRAM_ADDR = (uint32_t) (TABLE_WORD + 1 + e * ENTRY_WORDS);
-    *FDD_BRAM_WDATA = b[0];
-    *FDD_BRAM_WDATA = b[1];
-    *FDD_BRAM_WDATA = b[2];
-    *FDD_BRAM_WDATA = b[3];
-    *FDD_BRAM_WDATA = b[4];
-    *FDD_BRAM_WDATA = b[5];
+    for (int w = 0; w < 7; w++) {
+        *FDD_BRAM_WDATA = b[w];
+    }
     uint32_t word = 0;
-    for (uint32_t i = SET_BOOT_DEV; i < SET_COUNT; i++) {
+    for (uint32_t i = SET_CPU_CACHE; i < SET_COUNT; i++) {
         word |= (uint32_t) settings_default[i] << ((i & 3) * 8);
     }
     *FDD_BRAM_WDATA = word;
-    *FDD_BRAM_WDATA = b[6];
     *FDD_BRAM_WDATA = b[7];
+    *FDD_BRAM_WDATA = b[8];
 }
 
-// Move a version-8 table to the version-9 layout. The two regions overlap --
+// Move a version-9 table to the version-10 layout. The two regions overlap --
 // new entry k lands k+1 words into old entry k and reaches into old k+1/k+2 --
 // so every source word has to be read before its slot can be rewritten. Old
-// slot 13 has no same-index destination (and new slots 11/12 overlap it), so
-// a valid tail is stashed first; the shared range then copies top-down, each
+// slots 11 and 12 have no same-index destination, so their valid tails are
+// stashed first; the shared range then copies top-down, each
 // old entry read whole before its new-format rewrite, and the stashed tail
 // fills whichever new slot stayed free.
 static void table_migrate(void)
 {
-    *FDD_BRAM_ADDR = V8_TABLE_WORD;
+    *FDD_BRAM_ADDR = V9_TABLE_WORD;
     if (*FDD_BRAM_RDATA != TABLE_MAGIC) {
         return; // a pre-table blob: nothing to carry across
     }
     // Drop the old magic before touching anything: a reset mid-move then finds
     // no table at all, rather than re-running over half-rewritten entries.
-    *FDD_BRAM_ADDR = V8_TABLE_WORD;
+    *FDD_BRAM_ADDR = V9_TABLE_WORD;
     *FDD_BRAM_WDATA = 0;
-    uint32_t stash[V8_ENTRY_COUNT - ENTRY_COUNT][V8_ENTRY_WORDS];
+    uint32_t stash[V9_ENTRY_COUNT - ENTRY_COUNT][V9_ENTRY_WORDS];
     int tails = 0;
-    for (int e = V8_ENTRY_COUNT - 1; e >= ENTRY_COUNT; e--) {
-        *FDD_BRAM_ADDR = (uint32_t) (V8_TABLE_WORD + 1 + e * V8_ENTRY_WORDS);
+    for (int e = V9_ENTRY_COUNT - 1; e >= ENTRY_COUNT; e--) {
+        *FDD_BRAM_ADDR = (uint32_t) (V9_TABLE_WORD + 1 + e * V9_ENTRY_WORDS);
         uint32_t h = *FDD_BRAM_RDATA;
         uint32_t nh = *FDD_BRAM_RDATA;
         if (h != 0 && nh == ~h) {
             stash[tails][0] = h;
             stash[tails][1] = nh;
-            for (int w = 2; w < V8_ENTRY_WORDS; w++) {
+            for (int w = 2; w < V9_ENTRY_WORDS; w++) {
                 stash[tails][w] = *FDD_BRAM_RDATA;
             }
             tails++;
@@ -1086,9 +1095,9 @@ static void table_migrate(void)
     }
     uint16_t filled = 0; // bitmask of new slots holding a migrated profile
     for (int e = ENTRY_COUNT - 1; e >= 0; e--) {
-        uint32_t b[V8_ENTRY_WORDS];
-        *FDD_BRAM_ADDR = (uint32_t) (V8_TABLE_WORD + 1 + e * V8_ENTRY_WORDS);
-        for (int w = 0; w < V8_ENTRY_WORDS; w++) {
+        uint32_t b[V9_ENTRY_WORDS];
+        *FDD_BRAM_ADDR = (uint32_t) (V9_TABLE_WORD + 1 + e * V9_ENTRY_WORDS);
+        for (int w = 0; w < V9_ENTRY_WORDS; w++) {
             b[w] = *FDD_BRAM_RDATA;
         }
         if (b[0] != 0 && b[1] == ~b[0]) {

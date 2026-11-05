@@ -85,7 +85,11 @@ module tb_ramimg_serve;
         // E: the server under test
         .e_req(sd_req), .e_we(sd_we), .e_addr(sd_addr), .e_len(sd_len),
         .e_wdata(sd_wdata), .e_ack(sd_ack), .e_rvalid(sd_rvalid),
-        .e_rdata(sd_rdata), .e_done(sd_done)
+        .e_rdata(sd_rdata), .e_done(sd_done),
+        .f_req(1'b0), .f_we(1'b0), .f_addr(24'd0), .f_len(4'd0),
+        .f_wdata0(16'd0), .f_wdata1(16'd0),
+        .f_ack(), .f_rvalid(), .f_rdata(), .f_done(),
+        .a_wr_v(), .a_wr_addr(), .a_wr_len()
     );
 
     sdram_model #(

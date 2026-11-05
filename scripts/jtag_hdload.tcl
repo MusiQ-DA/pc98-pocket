@@ -154,23 +154,40 @@ if {[info exists ::env(HDNOBOOT)]} { shutdown; exit 0 }
 
 # CPU-speed override (probe write slot 0x89): HDSPEED=0..3 forces
 # 5/10/20/max regardless of the OSD setting for scripted runs;
-# HDSPEED=clear hands it back. HDPFDIS=1 sets wdata[3] in the same
-# write -> jtag_pf_dis, the prefetch kill-switch, for crash A/B.
+# HDSPEED=clear hands it back. wdata[3]=1 turns the pf windows ON
+# (the 286 BIU-queue model); the RTL default is OFF because pf ON
+# wedges ITF POST (TIMER INTERRUPT ERROR, ~1/12 boots). HDPFON=1
+# sets bit3 for speed A/B. (HDPFOFF/HDPFDIS are gone: both flipped
+# bit3 -- pf ON -- and now fight the OFF default.)
+# wdata[6:4] kill prefetch per-mechanism for bisection:
+#   HDNOFILL=1  -- pure (idle-gap) fills never run
+#   HDNOFILLM=1 -- fill-on-miss never runs
+#   HDNOHIT=1   -- windows fill but hits never serve
 #
 #   env HDIMG=img.hdm HDSPEED=1
-#   env HDIMG=img.hdm HDSPEED=1 HDPFDIS=1
-if {[info exists ::env(HDSPEED)] || [info exists ::env(HDPFDIS)]} {
+#   env HDIMG=img.hdm HDSPEED=1 HDPFON=1
+#   env HDIMG=img.hdm HDSPEED=1 HDNOFILLM=1
+if {[info exists ::env(HDSPEED)] || [info exists ::env(HDPFON)]
+        || [info exists ::env(HDPFOFF)]
+        || [info exists ::env(HDNOFILL)] || [info exists ::env(HDNOFILLM)]
+        || [info exists ::env(HDNOHIT)] || [info exists ::env(HDTHR)]} {
     select_node 1
     set w 0
-    if {[info exists ::env(HDSPEED)] && $env(HDSPEED) ne "clear"} {
-        set w [expr {4 | ($env(HDSPEED) & 3)}]
-    }
-    if {[info exists ::env(HDPFDIS)] && $env(HDPFDIS)} {
+    if {[info exists ::env(HDPFON)] && $env(HDPFON)} {
         set w [expr {$w | 8}]
     }
+    if {[info exists ::env(HDSPEED)] && $env(HDSPEED) ne "clear"} {
+        set w [expr {$w | 4 | ($env(HDSPEED) & 3)}]
+    }
+    if {[info exists ::env(HDNOFILL)] && $env(HDNOFILL)}   { set w [expr {$w | 0x10}] }
+    if {[info exists ::env(HDNOFILLM)] && $env(HDNOFILLM)} { set w [expr {$w | 0x20}] }
+    if {[info exists ::env(HDNOHIT)] && $env(HDNOHIT)}     { set w [expr {$w | 0x40}] }
+    # HDTHR=n (1..255): z86 throttle duty override, n/256 of the core edges
+    if {[info exists ::env(HDTHR)]} { set w [expr {$w | (($env(HDTHR) & 0xFF) << 12)}] }
     wr 0x89 $w
-    puts [format "slot89=0x%X spd_ovr=%d sel=%d pf_dis=%d" \
-          $w [expr {($w >> 2) & 1}] [expr {$w & 3}] [expr {($w >> 3) & 1}]]
+    puts [format "slot89=0x%X spd_ovr=%d sel=%d pf_dis=%d nofill=%d nofillm=%d nohit=%d" \
+          $w [expr {($w >> 2) & 1}] [expr {$w & 3}] [expr {($w >> 3) & 1}] \
+          [expr {($w >> 4) & 1}] [expr {($w >> 5) & 1}] [expr {($w >> 6) & 1}]]
 }
 
 # --- mount + (optionally) reset into a boot ---------------------------------

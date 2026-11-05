@@ -291,15 +291,63 @@ module core_top (
     // otherwise the OSD setting owns clk_select_next exactly as before.
     logic        jtag_spd_ovr = 1'b0;
     logic  [1:0] jtag_spd_sel = 2'b00;
-    logic        jtag_pf_dis  = 1'b0;
-    logic [19:0] jtag_watch_addr = 20'hFFFFF;
+    // pf OFF by default: pf ON wedges ITF POST (TIMER INTERRUPT ERROR,
+    // ~1/12 boots) on the SD build. The 286 BIU-queue model stays
+    // available for A/B via slot 0x89 (bit3 polarity: wdata[3]=1 ->
+    // jtag_pf_dis=0 -> ON).
+    logic        jtag_pf_dis  = 1'b1;
+    logic        jtag_cache_dis = 1'b0; // [11] z86_cache off: every access on the bus
+    logic  [7:0] jtag_thr_num = 8'd0;   // [19:12] nonzero: throttle duty override (n/256)
+    // [28:20] hardware bisect of integ-1047's paced-speed work, each bit
+    // reverting one change at run time (z86.sv dx, Chipset.sv dx_*):
+    //   [20] EU issue gate off          [21] no critical-word-first loads
+    //   [22] no store combining         [23] no combine-bank line install
+    //   [24] no CPU-side VRAM pricing   [25] behind_hold in chipset clocks
+    //   [26] no shift-count charge      [27] GRCG RMW line buffer off
+    //   [28] RAM.sv VRAM waits back (integ-1034's; pair with [24])
+    // e.g. P=0x1F00005: 10 MHz with all of them reverted.
+    logic  [8:0] jtag_dx = 9'd0;
+    // Per-mechanism prefetch kills, for bisecting which half of the
+    // engine a failure lives in without a rebuild:
+    //   [4] pf_nofill  -- pure (idle-gap) fills never run
+    //   [5] pf_nofillm -- fill-on-miss never runs (guest reads always pay)
+    //   [6] pf_nohit   -- windows fill but hits never serve: if the fault
+    //                     persists, the corruption lives in the fill
+    //                     bursts' effect on the port, not the served data
+    logic        jtag_pf_nofill  = 1'b0;
+    logic        jtag_pf_nofillm = 1'b0;
+    logic        jtag_pf_nohit   = 1'b0;
+    //   [7]/[8] reserved -- were Zet's fetch-window / odd-wrap kill bits
+    //   [9]  pf_wkill -- any guest memory write kills BOTH prefetch
+    //                    windows, not just the ones it overlaps
+    //  [10]  pf_bkill -- any memory write strobe on the chipset bus (any
+    //                    master) kills both windows
+    logic        jtag_pf_wkill   = 1'b0;
+    logic        jtag_pf_bkill   = 1'b0;
+    // (The write-watchpoint address is retired with the ring.)
     wire   [1:0] clk_select_next = jtag_spd_ovr ? jtag_spd_sel
                                               : cpu_speed_cfg;
 `else
     // The CPU speed is the OSD's alone.
     wire   [1:0] clk_select_next = cpu_speed_cfg;
-    wire         jtag_pf_dis  = 1'b0;
-    wire  [19:0] jtag_watch_addr = 20'hFFFFF;
+    // The bridge prefetch engine is OFF. With it on, SuperDepth's title
+    // loop intermittently (~5%) popped stale pre-push stack bytes on a RET
+    // (the CPU got "acox &" from the credits string instead of 315E/021E at
+    // 384A0 while memory held the right words), ran on with DS=2620 and
+    // wrote into its own code (ABE0 at 2818C) or quit with "not enough
+    // memory" at START. Hardware A/B, fails/trials: engine on 3/50,
+    // no pure fills 2/57, no hits 1/85, kill-on-any-write 1/85, engine
+    // off 0/85 -- the hole is in the fill bursts, not the overlap
+    // invalidation, and was never reproduced in tb_mem_perf.
+    wire         jtag_pf_dis  = 1'b1;  // pf off: pf ON wedges ITF POST at boot
+    wire         jtag_cache_dis = 1'b0;
+    wire   [7:0] jtag_thr_num = 8'd0;
+    wire   [8:0] jtag_dx = 9'd0;
+    wire         jtag_pf_nofill  = 1'b0;
+    wire         jtag_pf_nofillm = 1'b0;
+    wire         jtag_pf_nohit   = 1'b0;
+    wire         jtag_pf_wkill   = 1'b0;
+    wire         jtag_pf_bkill   = 1'b0;
 `endif
 
     always @(posedge clk_chipset, posedge reset)
@@ -308,6 +356,31 @@ module core_top (
             clk_select <= 2'b00;
         else if (biu_done)
             clk_select <= clk_select_next;
+    end
+
+    // Speed throttle -- retired to zero in the bus-faithful design. The
+    // paced modes now price the bus at real 286 rates two layers down:
+    // ce_generator runs the CE train at 1x the named clock, and the
+    // bridge runs its pairs on the 286 Ts/Tc profile, so a duty gate on
+    // top would only stack a second slowdown on an already-correct one.
+    // (The old design blended three time bases: 2x CE, the V30-shaped
+    // 4T byte engine, and this Bresenham duty fitted to CPUBENCH
+    // averages -- per-instruction timing diverged up to 2x even when
+    // the Dhrystone number matched.) The mechanism stays alive for the
+    // JTAG slot-9 [19:12] trim override only.
+    localparam [7:0] THR_8MHZ  = 8'd0;
+    localparam [7:0] THR_10MHZ = 8'd0;
+    localparam [7:0] THR_12MHZ = 8'd0;
+    wire  [7:0] thr_num_mode = (clk_select == 2'b00) ? THR_8MHZ
+                             : (clk_select == 2'b01) ? THR_10MHZ
+                             : (clk_select == 2'b10) ? THR_12MHZ : 8'd0;
+    wire  [7:0] thr_num = (jtag_thr_num != 8'd0) ? jtag_thr_num : thr_num_mode;
+    logic [7:0] thr_acc  = 8'd0;
+    logic       thr_hold = 1'b0;
+    wire  [8:0] thr_sum  = {1'b0, thr_acc} + {1'b0, thr_num};
+    always @(posedge clk_chipset) begin
+        thr_acc  <= thr_sum[7:0];
+        thr_hold <= (thr_num != 8'd0) && !thr_sum[8];
     end
 
     ce_generator u_ce_generator
@@ -355,21 +428,43 @@ module core_top (
     // Global power-on reset until all PLLs lock.
     wire RESET = ~pll_locked | ~pll_pc98_locked;
 
+    // PC-98 port: RESET is the raw analog 'locked' output of two PLLs --
+    // asynchronous to clk_chipset, and known to dip for nanoseconds.  The
+    // guest's stretch flops (reset / reset_cpu / reset_chipset /
+    // reset_sdram / reset_soft) all take their term on an ASYNC SET
+    // (posedge reset_wire / RESET / reset_sdram_wire), so a blip shorter
+    // than one clk_chipset period cold-booted the whole machine -- CPU
+    // reset, chipset reset (8255/DIP latches wiped), SDRAM re-init, ITF
+    // re-map -- while the posedge-sampled reset-source witness never saw a
+    // level to latch: "the machine rebooted itself, seen=0x00", landing in
+    // ROM BASIC.  That was the SuperDepth spontaneous reboot.  Every guest
+    // reset term now reads the synchronized copy: only an unlock that
+    // survives three clk_chipset edges can restart the machine, and the
+    // blips the filter eats are counted on the slot-0x9D witness below.
+    // (The 74a status path already ran RESET through synch_3 -- s_pll_lock
+    // -- only the guest side was raw.  soft_guest_hold is a softcore-domain
+    // register and gets the same treatment.)
+    wire RESET_sync;
+    wire rst_sync_rise;                    // s_reset_pll's rise pulse (0x9D)
+    synch_3 s_reset_pll (RESET, RESET_sync, clk_chipset, rst_sync_rise);
+
     // The disk/OSD softcore is the boot master; it drives this hold (declared here so the guest
     // reset can use it, sourced from u_softcpu below). soft_vid_blank is the
     // same register's bit1, declared here for the pocket_video instance.
     wire soft_guest_hold;
     wire soft_vid_blank;
+    wire soft_guest_hold_sync;
+    synch_3 s_soft_hold_rst (soft_guest_hold, soft_guest_hold_sync, clk_chipset);
 
-    // Guest reset terms: PLL lock (RESET), ROM load and the first-BIOS gate, the interact
-    // Reset PC, the boot hold, and the softcore's boot-master hold (soft_guest_hold), which
+    // Guest reset terms: PLL lock (RESET_sync), ROM load and the first-BIOS gate, the interact
+    // Reset PC, the boot hold, and the softcore's boot-master hold (soft_guest_hold_sync), which
     // keeps the guest in reset until the softcore has staged settings. sdram holds on lock only.
     // ri_greset is fdd_ramimg's boot-from-RAM-image term (PC98_JTAG): a probe
     // write pulses it after a mount so the BIOS walks into drive A on its own.
     wire ri_greset;
-    wire reset_wire = RESET | load_active | ~bios_ever_loaded | interact_reset
-                    | guest_hold_sync2 | soft_guest_hold | ri_greset;
-    wire reset_sdram_wire = RESET;
+    wire reset_wire = RESET_sync | load_active | ~bios_ever_loaded | interact_reset
+                    | guest_hold_sync2 | soft_guest_hold_sync | ri_greset;
+    wire reset_sdram_wire = RESET_sync;
 
     logic reset = 1'b1;
     logic [15:0] reset_count = 16'h0000;
@@ -448,9 +543,9 @@ module core_top (
 
     logic reset_soft = 1'b1;
     logic [15:0] reset_soft_count = 16'h0000;
-    always @(posedge clk_chipset, posedge RESET)
+    always @(posedge clk_chipset, posedge RESET_sync)
     begin
-        if (RESET)
+        if (RESET_sync)
         begin
             reset_soft <= 1'b1;
             reset_soft_count <= 16'h0000;
@@ -647,6 +742,11 @@ module core_top (
     wire [31:0] dataslot_update_size;
     wire        dataslot_allcomplete;
     wire        dataslots_ready;   // sticky: APF finished the initial slot load (latched below)
+    // JTAG reflash: APF does not re-stream the slots into a bitstream loaded
+    // over JTAG, but SDRAM still holds them. Probe write slot 0x0c bit0
+    // declares them present (BIOS loaded, slots ready) so the guest leaves
+    // reset without relaunching the core on the Pocket.
+    reg         jtag_slots_ok = 1'b0;
     wire        osnotify_inmenu;
 
     // The Pocket's real clock, packed for the uPD4990. The bridge hands over
@@ -936,6 +1036,19 @@ module core_top (
     wire [23:0] ramimg_addr;
     wire  [3:0] ramimg_len;
     wire [15:0] ramimg_wdata, ramimg_rdata;
+    // The CPU cache's SDRAM port (u_RAM's sdram_shim port F) and the port-A
+    // write-commit snoop it invalidates against. Word addresses, one guest
+    // byte per SDRAM word, as on port A; all on clk_chipset.
+    wire        cachef_req, cachef_we, cachef_ack, cachef_rvalid, cachef_done;
+    wire  [4:0] cachef_wcnt;
+    wire  [4:0] vram_wait_now;          // np21w VRAM wait for the CPU to price
+    wire [23:0] cachef_addr;
+    wire  [3:0] cachef_len;
+    wire [15:0] cachef_wdata0, cachef_wdata1, cachef_rdata;
+    wire        ram_wr_snoop_v;
+    wire [23:0] ram_wr_snoop_addr;
+    wire  [3:0] ram_wr_snoop_len;
+    // Driven by z86's cache (z86_cache, in u_cpu).
     wire  [1:0] fdd_req_fw;
 `ifdef PC98_JTAG
     wire [15:0] ri_mgmt_addr, ri_mgmt_dout;
@@ -1041,6 +1154,9 @@ module core_top (
     wire [1:0] osd_extmem;
     wire       osd_dbl_skip;
     wire       osd_fdd_turbo;
+    wire       osd_cpu_cache;
+    wire [31:0] osd_set_word;
+    wire  [2:0] osd_set_sel;   // probe slot 0xA0+g selects group g (see the read mux)
     wire [7:0] osd_dipsw2;
     wire [7:0] osd_a3fea;
     wire [7:0] osd_a3fee;
@@ -1055,7 +1171,6 @@ module core_top (
 
     wire  [1:0] gdc_draw_req, gdc_draw_busy, gdc_srv_done_levels;
     wire  [1:0] gdc_draw_to;              // {slave, master} watchdog pulses
-    wire        egc_flag_w;               // 0000:054D bit6 write seen (sticky)
     // The firmware GDC engine's guest-VRAM channel (subsystem <-> CHIPSET's
     // GVRAM sequencer).
     wire        st_req_w, st_we_w, st_raw_w, st_done_w;
@@ -1071,7 +1186,7 @@ module core_top (
     logic [7:0] key_last  = 8'h00;
 `endif
 
-    wire [31:0] dbg_pico_w;    // pico-domain liveness for probe slot 0x2A
+    // (dbg_pico, the pico-domain liveness word, has no probe slot any more)
 
     softcpu_subsystem u_softcpu (
         .fw_wr_clk                  (clk_chipset),
@@ -1127,7 +1242,7 @@ module core_top (
         .osd_open_req               (osd_open_req),
         .raster_w                   (osd_raster_w),
         .raster_h                   (osd_raster_h),
-        .dataslots_ready            (dataslots_ready),
+        .dataslots_ready            (dataslots_ready | jtag_slots_ok),
         .soft_guest_hold            (soft_guest_hold),
         .soft_vid_blank             (soft_vid_blank),
         .scsi_media                 (scsi_media),
@@ -1145,6 +1260,9 @@ module core_top (
         .osd_extmem                 (osd_extmem),
         .osd_dbl_skip               (osd_dbl_skip),
         .osd_fdd_turbo              (osd_fdd_turbo),
+        .osd_cpu_cache              (osd_cpu_cache),
+        .osd_set_sel                (osd_set_sel),
+        .osd_set_word               (osd_set_word),
         .osd_dipsw2                 (osd_dipsw2),
         .osd_a3fea                  (osd_a3fea),
         .osd_a3fee                  (osd_a3fee),
@@ -1165,7 +1283,7 @@ module core_top (
         .st_done                    (st_done_w),
         .st_rdata                   (st_rdata_w),
         .accel_status               (accel_status_w),
-        .dbg_pico                   (dbg_pico_w)
+        .dbg_pico                   ()
     );
 
 `ifdef PC98_JTAG
@@ -1176,11 +1294,31 @@ module core_top (
     // scripts/jtag_probe.cfg + jtag_probe_read.tcl drive USER1/USER0.
     // The magic word proves the protocol end-to-end before any value is trusted.
     logic [31:0] probe_data, probe_data_c;
+    // Dot capture (write slot 0x8C, reads 0x42-0x44): 32 presented dots of
+    // one raster line, sampled where pocket_video takes them. Declared here
+    // because the read mux below precedes the video wires.
     wire   [7:0] probe_addr;
+    assign osd_set_sel = probe_addr[2:0];
     // The nuV30's architectural state, live -- was. These taps were the old
-    // core's dbg pins; Zet has no equivalent so every one is tied to 0 now
-    // and the slots below keep their addresses only for map compatibility.
-    wire [223:0] v30_dbg_regs  = '0;       // {psw, pc, sreg3..0, gpr7..0}
+    // core's dbg pins; no CPU since has an equivalent, so every one is tied
+    // to 0 now and the slots below keep their addresses only for map
+    // compatibility.
+    // z86's registers in the old V30 layout {psw, ip, DS, SS, CS, ES, DI..AX}:
+    // live until the probe trigger (slot 0x06) hits, then frozen at that
+    // moment until the trigger is rewritten.
+    wire [223:0] z86_dbg_regs;
+    // JTAG debug stop: write slot 0x0f = {arm, 15'b0, AX}. The next trigger
+    // hit (slot 6) with that AX stops z86 at an instruction boundary; read
+    // 0x65 = {stopped, 15'b0, next IP} (CS in 0x12). Writing 0x0f again
+    // releases it. For replaying a DOS call off a RAM dump.
+    reg          jtag_dbg_arm  = 1'b0;
+    reg  [15:0]  jtag_dbg_ax   = 16'h0;
+    reg          jtag_dbg_stop = 1'b0;
+    wire         z86_dbg_stopped;
+    wire         z86_halted;
+    wire [15:0]  z86_dbg_next_ip;
+    reg  [223:0] v30_dbg_regs = '0;
+    reg          z86_snap_held = 1'b0;
     wire  [15:0] v30_dbg_core  = '0;       // EU/BIU interlock: halt/queue/eu_bs
     wire  [31:0] v30_dbg_core2 = '0;       // posted access: eu_addr/seg + slots
     wire  [31:0] v30_dbg_core3 = '0;       // BIU launch-law registers
@@ -1244,7 +1382,6 @@ module core_top (
     reg        rd35_q = 1'b0, rd35_qq = 1'b0;
     reg  [7:0] in35_count = 8'h00;
     reg  [7:0] in35_data  = 8'h00;
-    wire [7:0] dbg_sysport_w;
     // 0x35/0x37 forensics: the byte the guest actually reads back from the
     // 8255 port-C latch decides cold vs resume at the ITF entry (F805B).
     // last_35_rdata is what the CPU got; entry_branch records which path
@@ -1339,8 +1476,51 @@ module core_top (
     wire       pc_rearm_c = probe_wr_pulse && (probe_waddr_c == 7'h05);
     reg        pc_rearm = 1'b0;
     always_ff @(posedge clk_chipset) pc_rearm <= pc_rearm_c;
+    // Stray-store freeze, keyed on the arbiter's write-watch log (probe
+    // slot 0x0a, read back at 0xE1-0xE4): when its newest entry turns into
+    // a CPU store landing on top of a DMA write, the ring freezes -- its 32
+    // fetches name the code that overwrote freshly loaded bytes. The log
+    // sees the arbiter's own bus, which a DMA cycle drives and
+    // chipset_address does not. SuperDepth's turbo START failure lands a
+    // CPU store of garbage on the same spot of its own code every time.
+    // RETIRED with the watch ring itself (Bus_Arbiter's dbg_dma3 is 0 now,
+    // slots 0xE1-0xE4 read dead) -- its registers bought back the LABs the
+    // run#976 triage taps (0xA8/0xA9) and the poll/DRQ triggers need.
+    // Bus ring: the last 256 Wishbone transfers the CPU completed --
+    // fetches included -- with the live DS beside each: {ds, exec, we,
+    // sel, adr, data}. Block RAM, frozen with pc_hist; probe write slot
+    // 0x0D picks the entry, reads 0x01 (low word) / 0x02 (high word) /
+    // 0x03 (write pointer) return it.
+    // (Retiring this block bought back 6 LABs at the wall but poisoned
+    // the fitter -- six CI runs, twelve attempts, every one the VPR
+    // tdc_util clustering crash, with the trap edit bisected innocent.
+    // The write-side loads it puts on the bus network are part of the
+    // shape this fitter tolerates; the ring stays, and the stub window's
+    // LABs come from the SEED dial instead.)
+    (* ramstyle = "M10K" *) reg [54:0] brg [0:255];
+    reg  [7:0] brg_w = 8'd0;
+    reg  [7:0] brg_ri = 8'd0;
+    reg [54:0] brg_q = 55'd0;
+    reg        brg_ack_q = 1'b0;
     always_ff @(posedge clk_chipset) begin
-        if (reset || soft_reset_cpu || pc_rearm) begin
+        brg_ack_q <= zwb_ack;
+        if (zwb_ack && !brg_ack_q && zwb_cyc && !pc_hist_frozen) begin
+            brg[brg_w] <= {zet_ds, zet_exec, zwb_we, zwb_sel, zwb_adr,
+                           zwb_we ? zwb_dat_o : zwb_dat_i};
+            brg_w      <= brg_w + 8'd1;
+        end
+        brg_q <= brg[brg_ri];
+    end
+    // The ring is NOT cleared by reset/soft_reset_cpu anymore -- only the
+    // probe re-arm (slot 0x05) rolls it.  The old clear raced the very
+    // freeze it sat next to: an OUT 0F0h froze the ring on the write
+    // cycle, then soft_reset_cpu pulsed two cycles later, took the clear
+    // branch, and WIPED it -- which is why every hardware catch read a
+    // fresh POST tail instead of the crash trail.  A reset mid-hunt must
+    // leave the trail alone now (pc_reset_vec below freezes the ring the
+    // moment the cursor snaps to the reset vector), so the wipe has to go.
+    always_ff @(posedge clk_chipset) begin
+        if (pc_rearm) begin
             pc_hist_frozen <= 1'b0;
             pc_hist_w      <= 5'd0;
             delay_cnt      <= 5'd0;
@@ -1355,7 +1535,10 @@ module core_top (
                         pc_hist_frozen <= 1'b1;
                 end
             end
-            if (f0_port_write || pc_in_errhalt || zet_fault || w43d_10 ||
+            if (f0_port_write || pc_in_errhalt || w43d_10 ||
+                pc_reset_vec ||
+                (tlog_trap && pc_wild) ||
+                tap_latch ||
                 (trig_hit && trig_freeze && !trig_delay))
                 pc_hist_frozen <= 1'b1;
             if (trig_hit && trig_freeze && trig_delay)
@@ -1363,25 +1546,7 @@ module core_top (
         end
     end
 
-    // Reset-boundary trail: the first reset_wire OR soft_reset_cpu rise
-    // after release banks pc_hist wholesale -- the array survives a guest
-    // reset (only its pointer is cleared), so the snapshot keeps the last
-    // 32 bus addresses of the dying pass plus the write pointer to order
-    // them -- and the reset terms, so a POST reset-loop names both the
-    // code that ran into the reset and the line that fired it. The F0
-    // hand-over soft reset does not touch reset_wire, so it is its own
-    // trigger and its own cause bit.
-    // rst_snap_valid clears on RESET only: the guest reset the trigger
-    // starts must not drop the evidence, and the loop's second pass must
-    // not overwrite the first. The edge detectors seed high so the
-    // power-on assertion is not mistaken for a boundary.
-    reg [19:0] rst_snap [0:31];
-    reg  [4:0] rst_snap_w     = 5'd0;
-    reg  [6:0] rst_snap_cause = 7'd0;
-    reg        rst_snap_valid = 1'b0;
-    reg        reset_wire_d   = 1'b1;
-    reg        soft_rst_d     = 1'b0;
-    // Address-triggered capture, probe-writable via write slot 0x04
+    // Address-triggered capture, probe-writable via write slot 0x06
     // ({en,addr[19:0]}, handled with the other probe writes below).
     // Defaults to the reset vector: every reset path -- hard, soft,
     // watchdog -- ends with a FFFF0 fetch, so a reset the cause bits
@@ -1389,79 +1554,224 @@ module core_top (
     reg [19:0] trig_addr = 20'hFFFF0;
     reg        trig_en   = 1'b1;
     reg        trig_freeze = 1'b0;
-    // bit29 of write slot 0x04: delay the trig freeze ~24 fetches so the
+    // bit29 of write slot 0x06: delay the trig freeze ~24 fetches so the
     // ring keeps the code AFTER the hit (e.g. the landing of the resume
     // retf at f8069 when armed on f8061).
     reg        trig_delay  = 1'b0;
     reg  [4:0] delay_cnt   = 5'd0;
-    // bit28 of write slot 0x04: record raw bus addresses (fetches AND
+    // bit28 of write slot 0x06: record raw bus addresses (fetches AND
     // data accesses) instead of just the fetch stream, so a restore's
     // [0x404]/[0x406] reads and the retf's stack pops are visible.
     reg        trig_bus    = 1'b0;
-    // bit27 of write slot 0x04: f0_snap records only WRITE commands
+    // bit27 of write slot 0x06: f0_snap records only WRITE commands
     // (memory or I/O). Display DMA is read-only, so the ring stops
     // drowning in framebuffer sweeps and keeps the 32 cycles of guest
     // writes leading into the F0 -- the whole save sequence's addresses.
     reg        trig_wronly = 1'b0;
-    wire       trig_hit  = trig_en && (pc_now == trig_addr);
+    // bit26 of write slot 0x06: the trigger compares the live DS register
+    // against trig_addr[15:0] instead of the fetch PC -- freezing the ring
+    // on the moment a stray segment value lands in DS.
+    reg        trig_ds     = 1'b0;
+    // bits 27+28 together arm a WRITE watchpoint: the trigger matches the
+    // address of a guest-RAM write cycle instead of the fetch PC, so a
+    // stray write -- the 0xA1 that lands on the high-score date byte at
+    // 0x373A3 during SuperDepth's boot -- freezes the rings on the culprit
+    // cycle itself.  Two taps together cover every master that can write
+    // guest RAM:
+    //
+    //  * the chipset bus (chipset_memory_write_n + chipset_address): the
+    //    i8288's AMWC for CPU stores, the uPD71071's strobe for DMA fills,
+    //    and the ext path for the ROM loader.  The strobe is a LEVEL held
+    //    through the command phase and the arbiter's address (ALE-latched
+    //    cpu_address / DMA page+address / address_ext) is stable across
+    //    its whole length, so a same-cycle compare is exact.  (The
+    //    watchpoint "never fired" on hardware twice, both times unarmed:
+    //    the script first wrote slot 0x04 -- the GVRAM dump launcher --
+    //    then sent the BARE slot number, which pc98_jtag_probe.sv treats
+    //    as a READ: a write scan needs addr bit 7 set (0x86 for this
+    //    slot, 0x8e for the tlog mode).  Read slot 0x06 below now echoes
+    //    the armed word, so a silent no-arm cannot hide again.)
+    //  * z86_cache's port-F buffer take (z86_pf_wr_*): in Turbo+cache a
+    //    store to 00000-9FFFF/E8000-FFFFF runs no bus cycle at all --
+    //    write-through goes straight to the SDRAM's port F -- so only the
+    //    cache's own commit witness can see it.
+    //
+    // Word coverage: a CPU word write addresses the EVEN base and moves
+    // both lanes in one cycle, so an armed ODD byte must match base+1.
+    // cpu_word_access is the bridge's flag for the CPU's own cycle and
+    // goes stale through a DMA grant, hence the ~AEN qualification (the
+    // same term the GVRAM sequencer uses).  DMA and loader writes are
+    // byte cycles on the bus; the cache tap carries its own word flag.
+    wire        bus_mem_wr  = ~chipset_memory_write_n;
+    wire        bus_wr_word = bus_mem_wr && cpu_word_access && ~chipset_aen;
+    wire        z86_pf_wr_v, z86_pf_wr_two;
+    wire [19:0] z86_pf_wr_a0;
+    // z86_cache's watched-line snoop-kill count (slot 0x70): trig_addr is
+    // the watched guest address, shared with the bus-side write watchpoint
+    // above, so one arm serves both taps. Registered at the boundary --
+    // the probe mux's dbg cone is a known Quartus-internal-error hotspot
+    // (see probe_data's pipeline comment) and v30_dbg_regs is latched the
+    // same way.
+    wire [15:0] z86_sn_kills_w;
+    reg  [15:0] z86_sn_kills = 16'd0;
+    always_ff @(posedge clk_chipset)
+        z86_sn_kills <= z86_sn_kills_w;
+    wire        trig_w_bus = bus_mem_wr &&
+                             ((chipset_address[19:0] == trig_addr) ||
+                              (bus_wr_word &&
+                               (chipset_address[19:0] + 20'd1) == trig_addr));
+    wire        trig_w_pf  = z86_pf_wr_v &&
+                             ((z86_pf_wr_a0 == trig_addr) ||
+                              (z86_pf_wr_two &&
+                               (z86_pf_wr_a0 + 20'd1) == trig_addr));
+    wire       trig_w_hit  = trig_bus && trig_wronly && (trig_w_bus || trig_w_pf);
+    wire       trig_hit  = trig_en && (trig_bus && trig_wronly ? trig_w_hit
+                                           : trig_ds ? (zet_ds == trig_addr[15:0])
+                                           : (pc_now == trig_addr));
     wire [19:0] hist_src = trig_bus ? chipset_address : pc_now;
 
-    // Resume-frame watch: the save at f9488 pushes {IP=1497,CS=F800} to
-    // SS:00FA (linear 0x3FA) and the retf at f8069 pops them back. Last
-    // write vs last read split "store was corrupted" from "read returns
-    // stale data" -- landing f8097 = IP high byte 0x14 reading as 0x00
-    // would show up here as rd_3fa == 0x0097.
-    reg [15:0] rd_3fa = 16'h0, rd_3fc = 16'h0;
-    reg [15:0] wr_3fa = 16'h0, wr_3fc = 16'h0;
-    reg [15:0] rd_404 = 16'h0, rd_406 = 16'h0;
-    reg [15:0] wr_404 = 16'h0, wr_406 = 16'h0;
-    // byte-level detail for the frame word: the odd byte 0x3FB carries the
-    // pushed IP high byte (0x14) -- watched separately to split a
-    // byte-write drop from a wrong-data word write. w*_w record the last
-    // write's cpu_word_access so a byte push is distinguishable.
-    reg [15:0] rd_3fb = 16'h0, wr_3fb = 16'h0;
-    reg  [3:0] w_word = 4'h0;
-    // fetch address live at each watched write -- which instruction put
-    // the value on the bus (the push, or a third-party clobber).
-    reg [19:0] w3fa_pc = 20'h0, w3fb_pc = 20'h0, w3fc_pc = 20'h0;
+    // The reboot catch.  Every reset path -- a full guest reset, the
+    // F0-only CPU reset, or wild code jumping onto the vector -- ends
+    // with the fetch cursor at FFF0, and z86's reset state HOLDS
+    // CS:IP = F000:FFF0 for the whole reset stretch (write_back.sv), so
+    // this level is the earliest possible "the machine is rebooting
+    // NOW": it reads true the cycle reset asserts, before the ITF POST
+    // runs a single instruction.  Freezing tlog/pc_hist here (instead
+    // of at the POST's own OUT 0F0h from F9A2A) is what keeps the last
+    // 64 branches the TRAIL INTO THE REBOOT: until now the POST's own
+    // execution refilled the ring and the trigger's footsteps were
+    // overwritten every time.  The FFF0 entry itself lands as the last
+    // record (writes gate on the pre-freeze flag), marking the seam.
+    wire pc_reset_vec = (pc_now == 20'hFFFF0);
+    // rst_boot_latch rides tap_latch, so the wedge snapshot freezes with
+    // the rings -- the memory path AS THE REBOOT HIT IT, not whatever
+    // the reset loop leaves behind.  rst_boot_itf records whether the
+    // ITF bank was mapped at that instant: a reboot INTO the ITF POST
+    // with this bit clear means the POST the screen showed was reached
+    // by a guest 043D bank switch, not the reset.  Slot 0x08 bit0 (the
+    // wedge re-arm) clears both, one write re-arms the whole catch.
+    reg  rst_boot_latch = 1'b0;
+    reg  rst_boot_itf   = 1'b0;
     always_ff @(posedge clk_chipset) begin
-        if (~chipset_memory_read_n && ~chipset_aen) begin
-            if (chipset_address == 20'h003FA)
-                rd_3fa <= {data_bus_hi, data_bus};
-            if (chipset_address == 20'h003FB)
-                rd_3fb <= {data_bus_hi, data_bus};
-            if (chipset_address == 20'h003FC)
-                rd_3fc <= {data_bus_hi, data_bus};
-            if (chipset_address == 20'h00404)
-                rd_404 <= {data_bus_hi, data_bus};
-            if (chipset_address == 20'h00406)
-                rd_406 <= {data_bus_hi, data_bus};
-        end
-        if (~chipset_memory_write_n && ~chipset_aen) begin
-            if (chipset_address == 20'h003FA) begin
-                wr_3fa <= {cpu_data_bus_hi, cpu_data_bus};
-                w_word[0] <= cpu_word_access;
-                w3fa_pc  <= zet_pc;
-            end
-            if (chipset_address == 20'h003FB) begin
-                wr_3fb  <= {cpu_data_bus_hi, cpu_data_bus};
-                w3fb_pc <= zet_pc;
-            end
-            if (chipset_address == 20'h003FC) begin
-                wr_3fc <= {cpu_data_bus_hi, cpu_data_bus};
-                w_word[1] <= cpu_word_access;
-                w3fc_pc <= zet_pc;
-            end
-            if (chipset_address == 20'h00404) begin
-                wr_404 <= {cpu_data_bus_hi, cpu_data_bus};
-                w_word[2] <= cpu_word_access;
-            end
-            if (chipset_address == 20'h00406) begin
-                wr_406 <= {cpu_data_bus_hi, cpu_data_bus};
-                w_word[3] <= cpu_word_access;
-            end
+        if (probe_wr_pulse && probe_waddr_c == 7'h08 && probe_wdata_c[0]) begin
+            rst_boot_latch <= 1'b0;
+            rst_boot_itf   <= 1'b0;
+        end else if (pc_reset_vec && !rst_boot_latch) begin
+            rst_boot_latch <= 1'b1;
+            rst_boot_itf   <= itf_bank;
         end
     end
+    // Trigger log: a 64-entry ring of {PC, SS, SP, CS, DS, ES, DI, SI, DX,
+    // CX, BX, AX}. Default mode logs each time the fetch PC lands on the
+    // slot-6 trigger address (armed on the INT 21h entry: every DOS call).
+    // Write slot 0x0e = {.., trap, all, 2'b0, index[5:0]}: 'all' logs every
+    // change of the fetch PC instead (the last 64 branches with registers);
+    // 'trap' freezes the log and pc_hist and stops z86 the moment the PC
+    // enters a region no code lives in (IVT 000-3FF, A0000-CFFFF,
+    // E0000-E7FFF -- D0000-DFFFF holds the SCSI option ROM), so a
+    // crash leaves the path into it. Reads 0x60-0x65 return the entry (low
+    // word first), 0x67 the count.
+    (* ramstyle = "M10K" *) reg [207:0] tlog [0:63];
+    reg  [5:0]   tlog_ri = 6'd0;
+    reg  [15:0]  tlog_n  = 16'd0;
+    reg  [207:0] tlog_q  = '0;
+    reg          trig_hit_d = 1'b0;
+    reg  [19:0]  tlog_pc_d = 20'd0;
+    reg          tlog_all = 1'b0, tlog_trap = 1'b0, tlog_frozen = 1'b0;
+    // Also a trap: HLT with IF clear (nothing can wake it -- a crash that
+    // ran into an F4 in data) and OUT 0F0h (the CPU reset a crash ends in).
+    // The two low terms must NOT fire on the machine's own boot, or an armed
+    // trap kills every reboot and reads back as a "freeze" -- the tlog_trap
+    // catch that ended at CS:IP=0000:0000 with SP intact was exactly that:
+    // the ITF hand-over, not a wild fetch.  The ITF parks its bank-switch
+    // stub at 0000:0000 (F88BD copies 0x80 bytes to 0:0 and jumps there;
+    // every register in the catch's last entry sat at that copy's end state
+    // -- DS=F800, SI=0x956, DI=0x80, CX=0 -- a mid-BOOT signature), and the
+    // ITF's own POST shutdowns write port 0F0h from F9A2A/F9A30.  Both enter
+    // with the ITF bank still mapped (the stub's first instruction and the
+    // POST's whole run are inside it), so:
+    //  - while the window stands the wild zone's FLOOR rises to 0x100 (the
+    //    stub page drops out of it); else the floor is 0 -- the same
+    //    (pc < 0x400) compare the shipped trap had, one floor mux and no new
+    //    gate on the pc_wild output cone (the fitter's timing-driven
+    //    clustering dies on those -- VPR20KMAIN tdc_util, runs
+    //    39907501737/39910065958/39913420777).  The stub never crosses
+    //    0x100, so a wild walk into the IVT is wild the very cycle it does.
+    //    The bank may DROP mid-stub (the stub's own OUT 043Dh,12h is what
+    //    clears it), which is why the window is a latch and not a live gate
+    //    on itf_bank.
+    //  (The F0 term stays unmasked: an ITF-bank OUT 0F0h is the boot's own
+    //    POST shutdown (F9A2A/F9A30, "0xF8xxx" in the 0x69-0x6B witness) --
+    //    it freezes the rings on a reboot, and the operator classifies and
+    //    re-arms.  Gating it on itf_bank was tried and the fitter objected
+    //    to the extra itf_bank load; the mask is procedural instead.)
+    wire        pc_stub   = (pc_now < 20'h00100);
+    wire        stub_arm  = pc_stub && itf_bank;
+    reg         stub_win  = 1'b0;
+    wire [19:0] wild_floor = (stub_win | stub_arm) ? 20'h00100 : 20'h00000;
+    wire         pc_wild = ((pc_now >= wild_floor) && (pc_now < 20'h00400)) ||
+                           (pc_now >= 20'hA0000 && pc_now < 20'hD0000) ||   // VRAM, nothing
+                           (pc_now >= 20'hE0000 && pc_now < 20'hE8000) ||   // (D0000: SCSI ROM)
+                           (z86_halted && !z86_dbg_regs[217]) ||           // HLT, IF=0
+                           f0_port_write;
+    wire         tlog_ev = tlog_all ? (pc_now != tlog_pc_d) : (trig_hit && !trig_hit_d);
+    always_ff @(posedge clk_chipset) begin
+        trig_hit_d <= trig_hit;
+        tlog_pc_d  <= pc_now;
+        if (probe_wr_pulse && probe_waddr_c == 7'h06) begin
+            tlog_n <= 16'd0;
+            tlog_frozen <= 1'b0;
+        end else if (tlog_ev && !tlog_frozen) begin
+            tlog[tlog_n[5:0]] <= {12'h0, pc_now,               // 207:176
+                                  z86_dbg_regs[175:160], z86_dbg_regs[79:64],     // SS, SP
+                                  z86_dbg_regs[159:144],                          // CS
+                                  z86_dbg_regs[191:176], z86_dbg_regs[143:128],   // DS, ES
+                                  z86_dbg_regs[127:112], z86_dbg_regs[111:96],    // DI, SI
+                                  z86_dbg_regs[47:32],   z86_dbg_regs[31:16],     // DX, CX
+                                  z86_dbg_regs[63:48],   z86_dbg_regs[15:0]};     // BX, AX
+            tlog_n <= tlog_n + 16'd1;
+        end
+        // The re-arm guard: a slot-0x06 write on the same cycle as a
+        // freeze term (the cursor can legitimately sit at FFF0 while the
+        // machine is held in reset) must leave the log armed, not
+        // re-freeze it the cycle it was cleared.
+        if (!(probe_wr_pulse && probe_waddr_c == 7'h06) &&
+            (((tlog_trap && pc_wild) ||
+              pc_reset_vec ||
+              (trig_hit && trig_freeze && !trig_delay) ||
+              tap_latch) && !tlog_frozen))
+            tlog_frozen <= 1'b1;
+        // the ITF hand-over's stub window (see pc_wild): the FF lives here,
+        // in the tlog register row, not in its own block -- see the fit note.
+        if (stub_arm)      stub_win <= 1'b1;
+        else if (!pc_stub) stub_win <= 1'b0;
+        if (probe_wr_pulse && probe_waddr_c == 7'h0e) begin
+            tlog_ri   <= probe_wdata_c[5:0];
+            tlog_all  <= probe_wdata_c[8];
+            tlog_trap <= probe_wdata_c[9];
+        end
+        tlog_q <= tlog[tlog_ri];
+        if (probe_wr_pulse && probe_waddr_c == 7'h0f) begin
+            jtag_dbg_arm  <= probe_wdata_c[31];
+            jtag_dbg_ax   <= probe_wdata_c[15:0];
+            jtag_dbg_stop <= 1'b0;
+        end else if ((jtag_dbg_arm && trig_hit && !trig_hit_d &&
+                      z86_dbg_regs[15:0] == jtag_dbg_ax) ||
+                     (tlog_trap && pc_wild && !tlog_frozen)) begin
+            jtag_dbg_stop <= 1'b1;
+            jtag_dbg_arm  <= 1'b0;
+        end
+        tlog_q <= tlog[tlog_ri];
+    end
+    always_ff @(posedge clk_chipset) begin
+        if (probe_wr_pulse && probe_waddr_c == 7'h06)
+            z86_snap_held <= 1'b0;
+        else if (trig_hit && !z86_snap_held)
+            z86_snap_held <= 1'b1;
+        if (!z86_snap_held || jtag_dbg_stop)
+            v30_dbg_regs <= z86_dbg_regs;
+    end
+
     // The BIOS->ITF hand-back always ends in an OUT 0x43D,0x10 -- the
     // cold path's bank restore -- so freezing the ring on that write
     // keeps the ~32 fetches that led into the bounce, whichever code
@@ -1470,125 +1780,6 @@ module core_top (
                            (chipset_address[15:0] == 16'h043D) &&
                            (cpu_data_bus == 8'h10);
     wire       pc_hist_new = (hist_src != pc_hist_prev);
-    always_ff @(posedge clk_chipset) begin
-        reset_wire_d <= reset_wire;
-        soft_rst_d   <= soft_reset_cpu;
-        if (RESET)
-            rst_snap_valid <= 1'b0;
-        else if (!rst_snap_valid &&
-                 ((reset_wire && !reset_wire_d) ||
-                  (soft_reset_cpu && !soft_rst_d) || trig_hit)) begin
-            rst_snap_valid <= 1'b1;
-            for (int i = 0; i < 32; i++)
-                rst_snap[i] <= pc_hist[i];
-            if (pc_hist_new)
-                rst_snap[pc_hist_w] <= pc_now;
-            rst_snap_w     <= pc_hist_w + {4'd0, pc_hist_new};
-            rst_snap_cause <= {RESET, load_active, ~bios_ever_loaded,
-                               interact_reset, guest_hold_sync2,
-                               soft_guest_hold, soft_reset_cpu | trig_hit};
-        end
-    end
-
-    // And the other half of the boundary: the first 32 bus cycles AFTER
-    // a guest reset releases -- the F0 hand-over's resume path, which
-    // decides within microseconds whether POST re-runs or the boot
-    // continues. Re-arms on every guest reset so the bank always holds
-    // the MOST RECENT resume trail -- in a reset loop that is the
-    // failing transition itself, still warm.
-    reg [19:0] post_snap [0:31];
-    reg  [4:0] post_snap_w = 5'd0;
-    reg        post_armed  = 1'b0;
-    reg        post_valid  = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        if (RESET) begin
-            post_valid <= 1'b0;
-            post_armed <= 1'b0;
-        end else if (reset || soft_reset_cpu) begin
-            post_armed <= 1'b1;
-        end else if (post_armed && !pc_hist_frozen &&
-                     pc_hist_new && pc_hist_w == 5'd31) begin
-            post_armed <= 1'b0;
-            post_valid <= 1'b1;
-            for (int i = 0; i < 32; i++)
-                post_snap[i] <= pc_hist[i];
-            post_snap[31] <= pc_now;
-            post_snap_w   <= pc_hist_w;
-        end
-    end
-
-    // f0_snap: an independent always-recording bus ring whose write
-    // pointer is banked at every F0 port write -- unlike pc_hist it is
-    // never frozen and never cleared by guest resets, so slots
-    // 0xC1-0xE0 always hold the 32 cycles leading INTO the most recent
-    // F0 (the loop's exit path), whatever froze the main ring earlier.
-    reg [19:0] f0_snap [0:31];
-    reg  [4:0] f0_hist_w   = 5'd0;
-    reg [19:0] f0_hist_prev = 20'h0;
-    // In writes-only mode the recorded address is always the bus address
-    // (the write's target); otherwise it follows the pc_hist source.
-    wire [19:0] f0_src = trig_wronly ? chipset_address : hist_src;
-    reg  [4:0] f0_snap_w     = 5'd0;
-    reg        f0_snap_valid = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        if (RESET)
-            f0_snap_valid <= 1'b0;
-        if (f0_src != f0_hist_prev
-            && (!trig_wronly
-                || ~chipset_memory_write_n || ~chipset_io_write_n)) begin
-            f0_hist_prev      <= f0_src;
-            f0_snap[f0_hist_w] <= f0_src;
-            f0_hist_w         <= f0_hist_w + 5'd1;
-        end
-        if (f0_port_write) begin
-            f0_snap_valid <= 1'b1;
-            f0_snap_w     <= f0_hist_w;
-        end
-    end
-
-    // The freeze has to outlive the soft reset the 0xF0 write triggers,
-    // but dropping soft_reset_cpu from the block above deterministically
-    // crashes Quartus 18.1's fitter (VPR20KMAIN tdc_util) -- so keep the
-    // proven structure and snapshot the ring+pointer into a second bank
-    // on the trigger instead. The snapshot clears only on hard reset, so
-    // a repeated boot loop keeps the FIRST failure's trail. The fetch
-    // landing this same cycle (the jmp$ right after `out`) misses the
-    // bulk copy, so it is written into snap[w] explicitly.
-    // A legit OUT 0F0h still freezes the live ring (pc_hist_frozen above)
-    // but must not burn the snapshot: the POST ends every healthy boot
-    // with one, and it would mask the trail of a later real fault. Slot
-    // 0x40+ then reads back the live ring, which resets with soft_reset_cpu
-    // and refreezes at the first post-reset trigger -- the trail we want.
-    reg [19:0] pc_snap [0:31];
-    reg  [4:0] pc_snap_w     = 5'd0;
-    reg        pc_snap_valid = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        if (reset || pc_rearm)
-            pc_snap_valid <= 1'b0;
-        else if (!pc_snap_valid && (pc_in_errhalt || zet_fault)) begin
-            pc_snap_valid <= 1'b1;
-            for (int i = 0; i < 32; i++)
-                pc_snap[i] <= pc_hist[i];
-            if (pc_hist_new)
-                pc_snap[pc_hist_w] <= pc_now;
-            pc_snap_w <= pc_hist_w + {4'd0, pc_hist_new};
-        end
-    end
-
-    // The first zet fault's decode-side evidence: which PC's instruction
-    // decoded to INVOP/INTD. Pairs with dbg_opc (the byte it saw, latched
-    // inside the core); expected-vs-seen at that PC is the corruption
-    // signature. Re-arms with each CPU reset like the opc latch does.
-    reg [19:0] fault_pc   = 20'h00000;
-    reg        fault_seen = 1'b0;
-    always_ff @(posedge clk_chipset) begin
-        if (reset || soft_reset_cpu)
-            fault_seen <= 1'b0;
-        else if (zet_fault && !fault_seen) begin
-            fault_seen <= 1'b1;
-            fault_pc   <= zet_pc;
-        end
-    end
 
     // Register the readout: the dbg cones through this mux into the SLD
     // capture were one giant combinational path that crashes Quartus 18.1's
@@ -1605,27 +1796,341 @@ module core_top (
     always_ff @(posedge clk_chipset)
         if (cpu_ce_posedge) ce_count <= ce_count + 16'd1;
 
+    // Port-A write-commit snoop witnesses (slots 0x6c-0x6f) -- RETIRED
+    // to buy back the LAB wall of run 39849097140 (fitter 18,630 vs
+    // 18,480 ALMs; 0f87752's last green fit had 375 to spare): six
+    // counters/latches (88 FFs), two incrementers and four mux arms for
+    // a cache-debugging era the wild-fetch hunt does not use.
+    // jtag_snwatch.tcl reads 0x6c-0x6f as 0xDEADxx now -- restore from
+    // git if the snoop debugging resumes. The SHAPE note stays: they
+    // were 16-bit FREE-RUNNING counters with FLAT enables because the
+    // earlier nested-if saturating shape is what CI's Quartus S2T-died
+    // on (runs 39543865833/39546532071) -- keep that lesson if this
+    // ever comes back. The snoop FEED (ram_wr_snoop_v/addr/len) is
+    // functional and stays: z86_cache and the bridge's pf windows
+    // invalidate against it.
+
+    // ------------------------------------------------------------------
+    // THE WEDGE TAP (PC98_JTAG): a frozen post-mortem of the memory path.
+    //
+    // The wedge this hunts: the machine stops retiring instructions (slot
+    // 0x17 static, fetch cursor slot 0x18 static) and greset does not cure
+    // it -- the stuck state lives in the sdram_reset domain (RAM.sv,
+    // pc98_gvram_seq, sdram_shim/sdram_mp), which a guest reset never
+    // touches. Worse, the machine often walks into a reset loop afterwards
+    // that wipes the greset-able witnesses (Bus_Arbiter, DMA, READY, the
+    // bridge) and dirties memory. So: the moment retirement has been
+    // static for ~390 ms (2^24 clk_chipset) -- with the CPU running, not
+    // paused, not held in reset, not probe-stopped -- every tap below is
+    // FROZEN. The reset loop can then do its worst; slots 0xA0-0xA7 read
+    // the machine as it died.
+    //
+    // The taps, registered here at the core_top boundary (the probe mux's
+    // dbg cone is a known Quartus S2T internal-error hotspot -- one
+    // register stage hides it, same as v30_dbg_regs / z86_sn_kills):
+    //   snap_arb    Bus_Arbiter {dce_pin, hrq_ff1, hrq_ff2, 5'0} +
+    //               upd71071 {state, channel, HRQ, TC, EOP}   (slot A0 hi)
+    //   snap_rdy    READY {wait, CE-sampled wait, Qn, bus-state edges} (A0)
+    //   snap_arbhold the arbiter's live hold byte (slot 0x19's, frozen) (A0 lo)
+    //   snap_ram    RAM.sv {park FIFO, rd_conflicts, FSM, wait counts,
+    //               nonidle age}                                    (slot A1)
+    //   snap_sdram  shim/mp {port-A req/busy ages, per-port reqs,
+    //               controller state/grant}                  (slots A2/A3)
+    //   snap_bridge cpu_bus_bridge {pair kind flags, witnesses, posted
+    //               depth, B_CMD age}                                 (A4)
+    //   snap_seq    pc98_gvram_seq {expand, leg strobes, walk flags,
+    //               nonidle age} + READY-facing chipset_dbg2          (A5)
+    //   snap_chip2  {processor_ready, memory_access_ready, dma_ready,
+    //               DACKn, no-command} -- frozen                      (A5)
+    //   snap_retired/snap_pc  the liveness pair the runbook polls      (A6/A7)
+    // Write slot 0x08: [0] clear the latch and re-arm, [1] pulse
+    // CHIPSET's ram_unstick (drop RAM.sv's parked queue, force IDLE) --
+    // an A/B for "is the stuck state RAM.sv's bookkeeping".
+    // ------------------------------------------------------------------
+    reg         wedge_latch = 1'b0;
+    reg  [23:0] wedge_static = 24'd0;
+    reg  [23:0] wedge_ret_prev = 24'd0;
+    reg  [19:0] wedge_pc_prev  = 20'd0;
+    reg  [15:0] snap_arb      = 16'd0;
+    reg  [7:0]  snap_rdy      = 8'd0;
+    reg  [7:0]  snap_arbhold  = 8'd0;
+    reg  [23:0] snap_ram      = 24'd0;
+    reg  [39:0] snap_sdram    = 40'd0;
+    reg  [23:0] snap_bridge   = 24'd0;
+    reg  [15:0] snap_seq      = 16'd0;
+    reg  [7:0]  snap_chip2    = 8'd0;
+    reg  [23:0] snap_retired  = 24'd0;
+    reg  [19:0] snap_pc       = 20'd0;
+    reg  [31:0] snap_dma      = 32'd0;
+    reg  [31:0] snap_fdc2     = 32'd0;
+    reg         ram_unstick_r = 1'b0;
+    // Retirement stops legitimately while the core is paused, probe-stopped
+    // or in reset -- those windows must not arm the latch.
+    wire wedge_run = ~reset_cpu & ~pause_core & ~z86_dbg_stopped
+                   & ~jtag_dbg_stop;
+    // Liveness is the fetch cursor, not retired_cnt: z86 has no retire
+    // tap (v30_first_pop is tied 0, so slot 0x17 reads 0 forever), and
+    // the freeze signature -- pc parked in a poll loop -- stops zet_pc
+    // while a healthy machine keeps it moving. The OR keeps any future
+    // retire feed useful without changing the criterion.
+    wire wedge_moving = (retired_cnt != wedge_ret_prev)
+                      | (pc_now != wedge_pc_prev);
+    //
+    // Poll-trap trigger (write slot 0x87, {en[31], pc[19:0]}): the CPU
+    // walking a tight poll loop never stops retiring, so the wedge
+    // detector above never arms -- the run#976 shape sat at 0x317A8 for
+    // seconds with the latch at 0. This trigger latches when the fetch
+    // cursor stays inside the armed 32-byte window (pc[19:5] match -- a
+    // poll loop is a handful of instructions that never leaves its
+    // window) for the same ~390 ms the wedge detector uses. On latch the
+    // wedge snapshot freezes with pc_hist and tlog, catching the
+    // transition INTO the stuck poll.
+    reg         poll_en   = 1'b0;
+    reg  [19:0] poll_pc   = 20'd0;
+    // RETIRED (LABs): the poll-window and FDC DRQ-stall catches below
+    // were run#976 triage; the design sat at 1846/1848 LABs and the SCSI
+    // ROM/firmware fix pushed every seed tried 7-11 over. Their write
+    // slot (0x87) is still accepted; 0xAA reads the two latches as 0.
+    // tlog all-PC mode + live z86 regs (slots 0x10-0x16) caught the boot
+    // freeze without them.
+    wire [23:0] poll_static = 24'd0;
+    wire        poll_latch  = 1'b0;
+    wire        _unused_poll = &{1'b0, poll_en, poll_pc};
+    //
+    // FDC DRQ-stall trigger: the FDC's dma_req is a LEVEL that only the
+    // 71071's DACK (or TC) folds -- a healthy byte train re-dips it every
+    // few hundred clocks. dma_req held up for ~390 ms means the 71071
+    // never came: exactly the run#976 freeze shape (state=SI, drq=0011),
+    // latched the moment it stalls instead of whenever the CPU happens
+    // to stop polling. Bit 7 of the live cs_fdc2 view is the wire
+    // (floppy.v's dma_req == Peripherals' fdd_dma_req_wire; the dbg2
+    // field sits one up because [0] is the TC latch).
+    wire        fdq_latch   = 1'b0;
+    //
+    // Wild-fetch trigger -- RETIRED. Two commits of fences (a registered
+    // zone condition, then a shipped-shape 24-bit counter) could not stop
+    // CI's Quartus from internal-erroring on it -- S2T first, then the
+    // fitter's timing-driven clustering (VPR20KMAIN tdc_util) once S2T
+    // was cleared; every failing build since 4aeec08 carried this block
+    // and 0f87752 carried none of it. The hunt does not lose its catch:
+    // tlog_trap (write slot 0x0e bit9, shipped in 0f87752) stops the CPU
+    // and freezes tlog + pc_hist on the SAME pc_wild condition, and with
+    // the CPU parked the live slots 0xA8/0xA9 ARE the frozen snapshot.
+    // scripts/jtag_wildarm.tcl arms exactly that. Write slot 0x87 bit30
+    // is accepted and ignored; 0xAA bit28 reads 0.
+    //
+    // The transition-catch latches: either one freezes the wedge tap
+    // (through wedge_latch below) plus pc_hist and tlog.  rst_boot_latch
+    // (the reboot catch, defined with the tlog above) rides the same
+    // wire, so the frozen snapshot set survives a machine that resets
+    // itself before its wedges ever fire.
+    wire        tap_latch   = poll_latch | fdq_latch | rst_boot_latch;
+    always_ff @(posedge clk_chipset) begin
+        if (probe_wr_pulse && probe_waddr_c == 7'h08
+            && probe_wdata_c[0]) begin
+            wedge_latch   <= 1'b0;
+            wedge_static  <= 24'd0;
+        end else begin
+            if (!wedge_latch && wedge_run) begin
+                wedge_ret_prev <= retired_cnt;
+                wedge_pc_prev  <= pc_now;
+                if (!wedge_moving) begin
+                    wedge_static <= wedge_static + 24'd1;
+                    if (wedge_static == 24'hFF_FFFF)
+                        wedge_latch <= 1'b1;
+                end else
+                    wedge_static <= 24'd0;
+            end
+            // Either catch latches the wedge snapshot too.
+            if (tap_latch && !wedge_latch)
+                wedge_latch <= 1'b1;
+        end
+        if (!wedge_latch) begin
+            snap_arb     <= cs_w_arb;
+            snap_rdy     <= cs_w_rdy;
+            snap_arbhold <= chipset_dbg[7:0];
+            snap_ram     <= cs_w_ram;
+            snap_sdram   <= cs_w_sdram;
+            snap_bridge  <= bridge_dbg_w;
+            snap_seq     <= cs_w_seq;
+            snap_chip2   <= chipset_dbg2;
+            snap_retired <= retired_cnt;
+            snap_pc      <= zet_pc;
+            snap_dma     <= cs_w_dma;
+            snap_fdc2    <= cs_fdc2;
+        end
+        ram_unstick_r <= (probe_wr_pulse && probe_waddr_c == 7'h08
+                          && probe_wdata_c[1]);
+    end
+    assign ram_unstick_w = ram_unstick_r;
+
+    // ------------------------------------------------------------------
+    // THE RESET-SOURCE WITNESS (PC98_JTAG): which term put the machine
+    // into reset -- "the machine rebooted itself, name the source".
+    //
+    // reset_wire is RESET_sync | load_active | ~bios_ever_loaded |
+    // interact_reset | guest_hold_sync2 | soft_guest_hold_sync |
+    // ri_greset, and soft_reset_cpu (OUT 0F0h) is the CPU-only reset
+    // beside it.  Every path that can restart the guest is one of those
+    // eight levels, so eight sticky bits plus the identity and free-run
+    // tick of the most recent RISE is the whole answer.  The bits latch on
+    // rising edges only: at power-on they all fire together (RESET
+    // wins the priority), so the operator clears the witness once the
+    // machine is up (write slot 0x0a bit0) and from then on the first
+    // bit that lights IS the spontaneous reboot's trigger.  A reboot
+    // with every bit still dark is not a reset at all -- the cursor
+    // walked to FFF0 (wild jump / guest reset-vector call), and the
+    // tlog trail frozen by pc_reset_vec names the code instead.
+    //
+    // Bit 0 samples RESET_sync, so it lights only for an unlock that
+    // actually reached the guest.  A sub-period PLL 'locked' blip can
+    // no longer restart the machine at all (see s_reset_pll); the blips
+    // the filter ate are the slot-0x9D witness below.
+    //
+    // Bit order (rst_src_now, mirrored by rst_seen in slot 0xAB):
+    //   [7] soft_reset_cpu   OUT 0F0h -- guest code or the ITF's own
+    //                         POST shutdown (F9A2A/F9A30)
+    //   [6] ri_greset        fdd_ramimg's probe pulse (slot 0x07 bit2);
+    //                         NOTE slot 0x07 is shared with the poll-trap
+    //                         arm word, whose pc[2] lands on this bit --
+    //                         arming on an address with bit2 set reboots
+    //                         the machine by construction
+    //   [5] soft_guest_hold  the softcore's boot-master hold (its
+    //                         synchronized copy); the firmware raises it
+    //                         only on the settings apply path
+    //   [4] guest_hold_sync2 the boot hold (one-shot, power-on only)
+    //   [3] interact_reset   the OSD "Reset & Apply" (bridge 0x50)
+    //   [2] ~bios_ever_loaded  the first-BIOS gate (one-shot)
+    //   [1] load_active      APF is (re-)streaming a slot
+    //   [0] RESET_sync       a PLL lost lock long enough to reach the
+    //                         guest -- also re-inits the SDRAM and
+    //                         re-maps the ITF bank, the one source that
+    //                         explains a cold ITF POST on its own
+    // rst_tick free-runs on clk_chipset (wraps ~100 s); rst_last_tick
+    // is its value at the winning rise, so a read after the reboot
+    // says how long before the reboot the source asserted.
+    // ------------------------------------------------------------------
+    wire [7:0] rst_src_now = {soft_reset_cpu,   ri_greset,
+                              soft_guest_hold_sync,  guest_hold_sync2,
+                              interact_reset,  ~bios_ever_loaded,
+                              load_active,      RESET_sync};
+    reg  [31:0] rst_tick      = 32'd0;
+    reg  [7:0]  rst_src_q     = 8'h00;
+    reg  [7:0]  rst_seen      = 8'h00;
+    reg  [3:0]  rst_last      = 4'h0;   // {valid, idx[2:0]} of latest rise
+    reg  [31:0] rst_last_tick = 32'd0;
+    wire [7:0]  rst_rise = rst_src_now & ~rst_src_q;
+    wire [2:0]  rst_rise_idx = rst_rise[0] ? 3'd0
+                            : rst_rise[1] ? 3'd1
+                            : rst_rise[2] ? 3'd2
+                            : rst_rise[3] ? 3'd3
+                            : rst_rise[4] ? 3'd4
+                            : rst_rise[5] ? 3'd5
+                            : rst_rise[6] ? 3'd6 : 3'd7;
+    always_ff @(posedge clk_chipset) begin
+        rst_tick  <= rst_tick + 32'd1;
+        rst_src_q <= rst_src_now;
+        if (probe_wr_pulse && probe_waddr_c == 7'h0a && probe_wdata_c[0]) begin
+            rst_seen      <= 8'h00;
+            rst_last      <= 4'h0;
+            rst_last_tick <= 32'd0;
+        end else if (|rst_rise) begin
+            rst_seen      <= rst_seen | rst_rise;
+            rst_last      <= {1'b1, rst_rise_idx};
+            rst_last_tick <= rst_tick;
+        end
+    end
+
+    // ------------------------------------------------------------------
+    // THE RAW-RESET BLIP WITNESS (slot 0x9D): what the filter ate.
+    //
+    // RESET_sync only lets an unlock through if it survives three
+    // clk_chipset edges, so the async-set stretch flops can no longer see
+    // a nanosecond PLL 'locked' dip -- and the spontaneous reboot WAS that
+    // shape (reset-source witness dark, cold POST, ROM BASIC).  To keep
+    // the evidence, this catcher latches the RAW reset level on its own
+    // edge -- the very pulse a stretch flop would have taken -- and counts
+    // completed episodes; the synchronized path counts the real ones:
+    //
+    //   0x9D = { rst_raw_cnt[31:16], rst_real_cnt[15:0] }
+    //          raw  = raw-RESET episodes of ANY length (async-catched)
+    //          real = episodes that reached RESET_sync (>= ~3 cycles)
+    //          blips = raw - real: the filtered sub-period pulses
+    //
+    // A climbing blip count between reads says PLL-unlock noise is real
+    // (and the guest no longer cares); a reboot with raw == real says the
+    // trigger was NOT a reset glitch -- the trail witnesses take over.
+    // The latch clears only once neither the raw level nor its filtered
+    // copy is active, so a sustained unlock's trailing edge can never be
+    // miscounted as a blip.
+    // ------------------------------------------------------------------
+    reg        rst_raw_l = 1'b0;         // async-set by the raw level
+    reg [1:0]  rst_raw_q = 2'b00;        // its clk_chipset-synchronized view
+    reg        rst_raw_clear_q = 1'b0;
+    reg [15:0] rst_raw_cnt  = 16'd0;
+    reg [15:0] rst_real_cnt = 16'd0;
+    wire       rst_raw_seen = rst_raw_q[1];
+    // an episode completes when the caught level has drained and neither
+    // the raw nor the filtered reset is still active.  The edge pulse
+    // counts it once (the synchronized view's 2-cycle tail cannot double-
+    // count), and a fresh pulse arriving inside the tail simply merges
+    // into the next episode -- undercounting at worst, never a wedge.
+    wire       rst_raw_clear = rst_raw_seen & ~RESET & ~RESET_sync;
+    wire       rst_raw_pulse = rst_raw_clear & ~rst_raw_clear_q;
+
+    always @(posedge clk_chipset or posedge RESET) begin
+        if (RESET)
+            rst_raw_l <= 1'b1;
+        else if (rst_raw_clear)
+            rst_raw_l <= 1'b0;
+    end
+
+    always_ff @(posedge clk_chipset) begin
+        rst_raw_q       <= {rst_raw_q[0], rst_raw_l};
+        rst_raw_clear_q <= rst_raw_clear;
+        if (rst_raw_pulse)
+            rst_raw_cnt <= rst_raw_cnt + 16'd1;
+        if (rst_sync_rise)
+            rst_real_cnt <= rst_real_cnt + 16'd1;
+    end
+
     always_comb begin
         case (probe_addr)
             // The bisect-era taps (PIC/timer/keyboard counts, the wedge-PC
             // taps, the JTAG guest-memory master, the JTAG FDD/mgmt
             // channels) went out with PC98_PROBE_EXTRA -- the dbg_regs dump
-            // below is what replaced them for "where is the CPU". With the
-            // nuV30 gone the dbg_regs slots read 0; slot 0x18 (zet_pc) is
-            // the live PC now.
-            8'h10:   probe_data_c = v30_dbg_regs[223:192];  // psw:pc
-            8'h11:   probe_data_c = v30_dbg_regs[191:160];  // sreg3:sreg2
-            8'h12:   probe_data_c = v30_dbg_regs[159:128];  // sreg1:sreg0
-            8'h13:   probe_data_c = v30_dbg_regs[127:96];   // gpr7:gpr6
-            8'h14:   probe_data_c = v30_dbg_regs[95:64];    // gpr5:gpr4
-            8'h15:   probe_data_c = v30_dbg_regs[63:32];    // gpr3:gpr2
-            8'h16:   probe_data_c = v30_dbg_regs[31:0];     // gpr1:gpr0
-            8'h17:   probe_data_c = {8'h00, retired_cnt};   // liveness
+            // below is what replaced them for "where is the CPU". The slots
+            // carry z86's register view, latched; slot 0x18 (zet_pc) is the
+            // live PC.
             8'h18:   probe_data_c = {12'h000, zet_pc};      // current bus cycle
+            8'h60:   probe_data_c = tlog_q[31:0];           // trigger log, see tlog
+            8'h61:   probe_data_c = tlog_q[63:32];
+            8'h62:   probe_data_c = tlog_q[95:64];
+            8'h63:   probe_data_c = tlog_q[127:96];
+            8'h64:   probe_data_c = tlog_q[159:128];
+            8'h65:   probe_data_c = tlog_q[191:160];
+            8'h68:   probe_data_c = {16'h0, tlog_q[207:192]};
+            // 0x6c-0x6f: the port-A write-commit snoop witnesses -- RETIRED
+            // with the counter block by ce_count (the LAB wall); these
+            // slots now read the default 0xDEADxx. 0x70 keeps the cache's
+            // watched-line kill count (line of slot-0x06's trig_addr,
+            // registered at this boundary).
+            8'h67:   probe_data_c = {tlog_frozen, 15'h0, tlog_n};
+            // 0x06/0x0e: echo the live trigger and tlog-mode words, in the
+            // exact layout of their write slots.  A write scan needs addr
+            // bit 7 set (0x86/0x8e, see pc98_jtag_probe.sv); the bare slot
+            // number is a pure READ -- the freeze script sent bare numbers,
+            // so its "arm" never landed and the watchpoint sat disarmed
+            // while the positive control wrote away.  Reading the word
+            // back is the one-scan proof an arm actually took (0xDEAD00xx
+            // = a bitstream without these readback slots).
+            8'h06:   probe_data_c = {trig_en, trig_freeze, trig_delay,
+                                     trig_bus, trig_wronly, trig_ds,
+                                     6'b0, trig_addr};
+            8'h0e:   probe_data_c = {22'b0, tlog_trap, tlog_all,
+                                     2'b0, tlog_ri};
             // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
             // never completes; 0x1a: the ready chain the CPU waits on.
-            8'h19:   probe_data_c = {16'h0, chipset_dbg};
-            8'h1a:   probe_data_c = {24'h0, chipset_dbg2};
             // 0x31: the GVRAM sequencer -- {svc_req, svc_done, svc_hold,
             // fsm[2:0], plane[1:0]}. A GDC-draw stall reads differently by
             // where it parks: S_RDW = RAM never answered, S_DONE+svc_hold
@@ -1635,77 +2140,69 @@ module core_top (
             // svc-write arm's {svc_raw_wr, egc_here, grcg_active, window,
             // grcg_here} -- which term denied the charger, see the seq's
             // dbg port comment.
-            8'h31:   probe_data_c = {24'h0, gvram_dbg};
             // 0x32: the drawing server's health, one read. Ops = the two
             // channels' live opcode bytes {slave, master}; flag = the
             // ITF's EGC-present write to 0000:054D landed; to_seen latches
             // a watchdog retirement (stays set until reset -- a set bit
             // here IS the old stall signature). busy/req are the live
             // handshake; accel_status = {page, EGC, RMW, GRCG armed}.
-            8'h32:   probe_data_c = {gdc_draw_ops, egc_flag_w,
-                                    draw_to_seen, gdc_draw_busy,
-                                    gdc_draw_req, accel_status_w[3:0], 5'b0};
             // 0x33: {writes seen, last port, last byte} -- the ITF's
             // error path talks to 0x35/0x37; a moving count with port
             // 0x37 last is the beep loop, a parked one is the write it
             // died on.
-            8'h33:   probe_data_c = {io_wr_count, last_io_port,
-                                     last_io_data};
             // 0x34: the resume-flag witness -- {sysport_c, in35 count,
             // in35 data}. bit 7 of the first byte is what the ITF's
             // in-al-35h/test-80h decides cold-boot vs resume on; the last
             // byte is what the data bus actually gave that read.
-            8'h34:   probe_data_c = {dbg_sysport_w, 8'h00, in35_count,
-                                   in35_data};
             // 0x36: the screen-readback cell {attr,char_hi,char_lo} at
             // dbg_tvram_cell -- each completed read also steps the cell
             // (rd_adv below), so scripts/jtag_screen.tcl dumps the plane
             // one scan per cell. 0x37 echoes the index being sampled.
-            8'h36:   probe_data_c = {8'h00, tvram_dbg_word};
-            8'h37:   probe_data_c = {20'h0, dbg_tvram_cell};
             // 0x38: a guest-VRAM byte through the sequencer's service
             // channel -- write slot 0x84 launches the address's read, the
             // word below reports {busy, addr, data} and each completed
             // read launches the next address. jtag_gvram.tcl walks ranges.
-            8'h38:   probe_data_c = {gv_dbg_req | gv_dbg_busy, 3'b000,
-                                   gv_srv_addr, gv_dbg_data};
             // 0x39/0x3a: the slave GDC's display registers as the graphics
             // fetch consumes them -- {disp_on, page-0xA4, analogue, 5MHz,
             // doubled-200, CSRFORM LR, SYNC AL, PITCH} low and
             // {SAD0, LEN0} high. A mis-shaped picture reads back against
             // what the guest programmed.
-            8'h39:   probe_data_c = dbg_gdc_s[31:0];
-            8'h3a:   probe_data_c = dbg_gdc_s[63:32];
-            // 0x40/0x41: graphics display-fetch underrun telemetry.
+            // 0x3b/0x3c: slave GDC partitions one to three -- the stage
+            // wipe in DEPTH walks SAD1..3 while SAD0 stays zero.
+            // 0x2D/0x2E: the CRT interrupt path (Peripherals dbg_crt) --
+            // lo {IMR,ISR,IRR (master), spur_n[3:0], 0, pend, armed,
+            // int_to_cpu}, hi {fire_n, isr_n, arm_n, lost_n[3:0],
+            // cancel_n[3:0]}. scripts/jtag_crtirq.tcl decodes it.
+            // 0x2F: the bus bridge's INTA witness -- {bad_n, last_bad,
+            // cut_n (AEN rising mid-acknowledge), last_vec}.
+            // 0x82/0x83: graphics display-fetch underrun telemetry.
             // Low word {skip_cnt, late_cnt, max_fill}; high word the live
             // {line_now, act_tgt, f_chunk, f_plane, cur_part, dbl,
             // disp_page, disp_on_c, fill_page, f_active}.
-            8'h40:   probe_data_c = dbg_gvdisp[31:0];
-            8'h41:   probe_data_c = dbg_gvdisp[63:32];
+            // 0x84-0x86: the graphics display's black-band / PRAM-timing
+            // witness (pc98_gvram_display; scripts/jtag_blackband.tcl).
+            // 0x84 {band_cnt[15:0], pram_cnt[15:0]} -- frames with a run
+            //      of >=8 all-black graphics lines / frames whose PRAM was
+            //      rewritten while shown (deferred to the next frame).
+            // 0x85 {7'0, last_start[8:0], 7'0, last_max[8:0]} -- the
+            //      longest black run of the last finished frame.
+            // 0x86 {7'0, worst_start[8:0], 7'0, worst_max[8:0]} -- the
+            //      longest black run of any frame since power-up.
+            8'h84:   probe_data_c = dbg_gvband[95:64];
+            8'h85:   probe_data_c = dbg_gvband[63:32];
+            8'h86:   probe_data_c = dbg_gvband[31:0];
             // 0x35: BIOS-side milestones + the 0x43D write tally
             // {bios_branch[7:0], in42_count, last_42_rdata,
             //  w43d_10_count[3:0], w43d_12_count[3:0]}
-            8'h35:   probe_data_c = {bios_branch, in42_count,
-                                     last_42_rdata, w43d_10_count[3:0],
-                                     w43d_12_count[3:0]};
             // 0x90-0x99: rstprobe-era ITF forensics (remapped off 0x34/0x36
             // which the screen/GVRAM dump slots own on this branch).
             // 0x90: {itf_bank, f0_seen, entry_branch[3:0], in35_count,
             //        last_35_rdata, last_37_wdata} -- the 0x35 readback
             // bit 7 decides cold vs resume; entry_branch says which way
             // the entry actually went (b0 resume b1 cold b2 landed b3 F0).
-            8'h90:   probe_data_c = {2'b00, itf_bank, f0_seen,
-                                     entry_branch, in35_count,
-                                     last_35_rdata, last_37_wdata};
-            8'h91:   probe_data_c = {rd_3fa, rd_3fc};
-            8'h92:   probe_data_c = {wr_3fa, wr_3fc};
-            8'h93:   probe_data_c = {rd_404, rd_406};
-            8'h94:   probe_data_c = {wr_404, wr_406};
-            8'h95:   probe_data_c = {rd_3fb, wr_3fb};
-            8'h96:   probe_data_c = {28'h0, w_word};
-            8'h97:   probe_data_c = {12'h0, w3fa_pc};
-            8'h98:   probe_data_c = {12'h0, w3fb_pc};
-            8'h99:   probe_data_c = {12'h0, w3fc_pc};
+            // (itf_bank/f0_seen used to ride here in a 36-bit concat that
+            // silently truncated -- bits 31:24 always read entry_branch,
+            // never the named flags; they now live in 0xAA's pad nibble.)
             // bench-next186 probe block, remapped off 0x35-0x3A (owned by
             // the sysport/TVRAM/GVRAM/GDC slots above) and 0x64-0x74 (inside
             // this branch's rst_snap ring, 0x61-0x80):
@@ -1718,24 +2215,25 @@ module core_top (
             8'h9a:   probe_data_c = ri_dbg0;
             8'h9b:   probe_data_c = ri_dbg1;
             8'h9c:   probe_data_c = ri_dbg2;
-            // 0x9D: first zet fault's {seen, opcode-seen, pc}. opc=00 with
-            // seen=0 just means no fault yet; seen=1 pins the instruction
-            // whose decode faulted, and opc is the byte it decoded.
-            8'h9d:   probe_data_c = {3'b000, fault_seen, zet_opc, fault_pc};
+            // 0x9D: the raw-reset blip witness -- {rst_raw_cnt,
+            // rst_real_cnt} (see the witness block for the reading).
+            // raw - real = sub-period PLL-unlock pulses the synchronized
+            // reset filtered out: the shape of the spontaneous reboot.
+            // (The old zet-fault {seen, opc, pc} fields lived here; the
+            // z86 has no fault machinery -- zet_fault was a dead tie.)
             // 0x9E/0x9F: RAM.sv's DMA-fill loss witness -- 0x9E =
             // {first-drop FSM state, in-flight-was-write, dropped addr,
             //  drop count}, 0x9F = parked-write count. A nonzero drop
             // count is a byte the guest asked to store and nobody wrote.
-            8'h9e:   probe_data_c = chipset_dbg3;
-            8'h9f:   probe_data_c = chipset_dbg4;
-            // 0x3b-0x3e: Bus_Arbiter's channel-2 burst witness -- the first
-            // four memory writes of the latest burst. Each slot is
-            // {4 spare bits, addr[19:0], data[7:0]}; 0x3b's spare nibble
-            // carries the burst counter instead.
-            8'h3b:   probe_data_c = chipset_dbg5[31:0];
-            8'h3c:   probe_data_c = chipset_dbg5[63:32];
-            8'h3d:   probe_data_c = chipset_dbg5[95:64];
-            8'h3e:   probe_data_c = chipset_dbg5[127:96];
+            // 0x3b-0x3e: Bus_Arbiter's DMA-stream counters (dbg_dma): 0x3e
+            // packs {break_cnt[7:0], grant_cnt[7:0], ack_wr_cnt[15:0]} --
+            // grant = FDC DACK windows seen, ack_wr = memory-write strobes
+            // that started under one (saturating; the low 16 bits are the
+            // useful half). 0x3b-0x3d read zero: the old burst rings were
+            // dropped for LAB headroom once the byte0 wrap-clobber was
+            // found. ack_wr is the BUS-side count; the commit-side
+            // counterpart (sn_dma_cnt, 0x6d) retired with the snoop
+            // block -- compare against a tlog/jtag_mem dump instead.
             // 0x3f: the service channel's launched operands, read straight
             // off the softcpu-subsystem wires -- {st_addr[19:0],
             // st_wdata[7:0], st_req, st_we, st_raw}. During the op these
@@ -1749,116 +2247,47 @@ module core_top (
             // clean sw-1 parks 0xF0001/0x01 (st_raw corrupted downstream),
             // a sw-5 parks 0xF0005/0x05 (bus really carried a 5), an sb-5
             // parks 0x10505/0x05, an s5=0x2FF leak parks 0xF02FF/0xFF.
-            8'h3f:   probe_data_c = {1'b0, st_addr_w, st_wdata_w,
-                                     st_req_w, st_we_w, st_raw_w};
-            // 0xE1-0xE4: last three writes to the watch address (write slot
-            // 0x0A); 0xE4's top word is {watch count, 24'h0}.
-            8'he1:   probe_data_c = chipset_dbg7[31:0];
-            8'he2:   probe_data_c = chipset_dbg7[63:32];
-            8'he3:   probe_data_c = chipset_dbg7[95:64];
-            8'he4:   probe_data_c = chipset_dbg7[127:96];
+            // 0xE1-0xE4: the write watchpoint ring -- RETIRED (its hunt
+            // answered; the registers bought back the LABs the run#976
+            // triage taps need). Reads return the dead-slot default.
             // 0xE5: RAM's uncovered-write witness {cnt, st, first addr};
             // 0xE6: {last data, last addr, first data}.
-            8'he5:   probe_data_c = chipset_dbg8;
-            8'he6:   probe_data_c = chipset_dbg9;
-            // 0xE7-0xEA: watchpoint's first four hits, sticky.
-            8'he7:   probe_data_c = chipset_dbg10[31:0];
-            8'he8:   probe_data_c = chipset_dbg10[63:32];
-            8'he9:   probe_data_c = chipset_dbg10[95:64];
-            8'hea:   probe_data_c = chipset_dbg10[127:96];
+            // 0xE7-0xEA: retired with the arbiter's overlap witness (its
+            // hunt answered zero; nothing ever read the slots). Reads
+            // return the dead-slot default above.
             // 0xEB-0xED: RAM accept-side write ring (newest last at 0xEB);
             // 0xEE: accepted-write count.
-            8'heb:   probe_data_c = chipset_dbg11[31:0];
-            8'hec:   probe_data_c = chipset_dbg11[63:32];
-            8'hed:   probe_data_c = chipset_dbg11[95:64];
-            8'hee:   probe_data_c = {24'h0, chipset_dbg11[103:96]};
             // 0xEF: last accepted write to the watch address
             // ({1,pend,word,addr[19:0],data}); 0xF0: {wseen,wacc} counts --
             // wseen < arbiter watch_cnt means writes die before write_command
             // (sequencer swallow); wacc < wseen means accepted elsewhere or
             // mapped away (gvram_page1 redirect shows a wrong addr in 0xEF).
-            8'hef:   probe_data_c = chipset_dbg12[31:0];
-            8'hf0:   probe_data_c = {16'h0, chipset_dbg12[55:32]};
             // 0xF7: TVRAM cell readback {cell echo, attr, char_hi, char_lo}
             // armed by write slot 0x0B (bench-next186 used 0x74/0x8B).
-            8'hf7:   probe_data_c = tvram_dbg_q;
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
-            8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
-            8'h48,8'h49,8'h4a,8'h4b,8'h4c,8'h4d,8'h4e,8'h4f,
-            8'h50,8'h51,8'h52,8'h53,8'h54,8'h55,8'h56,8'h57,
-            8'h58,8'h59,8'h5a,8'h5b,8'h5c,8'h5d,8'h5e,8'h5f:
-                       probe_data_c = pc_snap_valid
-                                    ? {7'h00, 1'b1, pc_snap_w,
-                                       pc_snap[probe_addr[4:0]]}
-                                    : {7'h00, pc_hist_frozen, pc_hist_w,
-                                       pc_hist[probe_addr[4:0]]};
-            // 0x60: rst_snap header -- {valid, cause[6:0], w[4:0],
-            // post_valid, post_w[4:0]}. cause bit order: RESET,
-            // load_active, ~bios_ever_loaded, interact_reset,
-            // guest_hold_sync2, soft_guest_hold, soft_reset_cpu|trig_hit
-            // (bit27..bit21). 0x61-0x80: pre-reset trail (write order).
-            // 0xA0-0xBF: post-reset trail (entry order == fetch order).
-            8'h60:   probe_data_c = {3'h0, rst_snap_valid, rst_snap_cause,
-                                       rst_snap_w, post_valid,
-                                       post_snap_w, 10'h000};
-            8'h61,8'h62,8'h63,8'h64,8'h65,8'h66,8'h67,
-            8'h68,8'h69,8'h6a,8'h6b,8'h6c,8'h6d,8'h6e,8'h6f,
-            8'h70,8'h71,8'h72,8'h73,8'h74,8'h75,8'h76,8'h77,
-            8'h78,8'h79,8'h7a,8'h7b,8'h7c,8'h7d,8'h7e,8'h7f,
-            8'h80:
-                       probe_data_c = {12'h000,
-                                       rst_snap[probe_addr[4:0] - 5'd1]};
-            8'ha0,8'ha1,8'ha2,8'ha3,8'ha4,8'ha5,8'ha6,8'ha7,
-            8'ha8,8'ha9,8'haa,8'hab,8'hac,8'had,8'hae,8'haf,
-            8'hb0,8'hb1,8'hb2,8'hb3,8'hb4,8'hb5,8'hb6,8'hb7,
-            8'hb8,8'hb9,8'hba,8'hbb,8'hbc,8'hbd,8'hbe,8'hbf:
-                       probe_data_c = {12'h000,
-                                       post_snap[probe_addr[4:0]]};
-            // 0xC0: f0_snap header {valid,w}; 0xC1-0xE0: trail into the
-            // most recent F0 write (write-pointer order, oldest first).
-            8'hc0:   probe_data_c = {26'h0, f0_snap_valid, f0_snap_w};
-            8'hc1,8'hc2,8'hc3,8'hc4,8'hc5,8'hc6,8'hc7,
-            8'hc8,8'hc9,8'hca,8'hcb,8'hcc,8'hcd,8'hce,8'hcf,
-            8'hd0,8'hd1,8'hd2,8'hd3,8'hd4,8'hd5,8'hd6,8'hd7,
-            8'hd8,8'hd9,8'hda,8'hdb,8'hdc,8'hdd,8'hde,8'hdf,
-            8'he0:
-                       probe_data_c = {12'h000,
-                                       f0_snap[probe_addr[4:0] - 5'd1]};
             // 0x1b: {bridge park/engine FSM, ce edge counter}. parked=1 with a
             // frozen ce_count is the dead-CE signature; a live count with
             // parked=1 points at the engine's release conditions instead.
-            8'h1b:   probe_data_c = {bridge_dbg, ce_count};
             // 0x1c: {ALE'd bus address, processor_status, the reset/pause
             // terms}. cpu_ad_out vs slot 0x18's zet_pc separates "the engine
             // is driving this cycle" from "the core's pins are frozen".
-            8'h1c:   probe_data_c = {3'h0, cpu_ad_out, processor_status,
-                                     pause_core, reset_cpu, reset_chipset,
-                                     reset, soft_reset_cpu, cpu_ce_posedge};
             // 0x2b/0x2c: last data-bus byte addresses (BS_MEMW / BS_MEMR).
             // Instruction fetches are BS_CODE so these isolate the guest's
             // DS/ES physical segment -- the SuperDepth string-copy loop.
-            8'h2b:   probe_data_c = {12'h000, zet_dbus_wr};
-            8'h2c:   probe_data_c = {12'h000, zet_dbus_rd};
             // 0x20: {last byte-pair fed to the core, dbg_core}. The pins say
             // PASV while the core does not move: zwb_dat_i shows what it
             // last consumed. dbg_core was the nuV30's EU/BIU interlock --
-            // Zet has no equivalent tap and the half reads 0.
-            8'h20:   probe_data_c = {zwb_dat_i, v30_dbg_core};
+            // z86 has no equivalent tap and the half reads 0.
             // 0x21: the posted access itself -- where the EU's MEMW wants to
             // land and which handshake bits are holding the slot.
-            8'h21:   probe_data_c = v30_dbg_core2;
-            // 0x22-0x25: nuV30 internals, all 0 on the Zet build.
+            // 0x22-0x25: nuV30 internals, all 0 on this build.
             // 0x22: the BIU's launch-law registers -- {q_head,q_cnt, e_pend,
             // halted, halt_pending, run,cur_fetch/halt/wr,evald, cmt_*, rq_n,
             // slot_busys, opr_held, absorb_ttl, ts}. The posted MEMW has to
             // be sitting on exactly one of these stages.
-            8'h22:   probe_data_c = v30_dbg_core3;
-            8'h23:   probe_data_c = v30_dbg_core4;
             // 0x24/0x25: the prefetch queue raw bytes + fetch pointer -- the
             // wedged stream itself, for a fingerprint match against the ROM.
-            8'h24:   probe_data_c = v30_dbg_core5;
-            8'h25:   probe_data_c = v30_dbg_core6;
             // FDD engine: where a disk boot is parked (state/fifo), how many
             // commands stuck, the request bits, the LBA it named, and the
             // command bytes themselves -- a failed boot keeps the failing
@@ -1868,28 +2297,77 @@ module core_top (
             // so the counters pack under the state flags. Fields, MSB first:
             // scsi_media | cmd_ack | cmd_req | mg_rd[4:0] | post[7:0] |
             // rom_rd[15:0].
-            8'h30:   probe_data_c = {scsi_media, dbg_scsi[33:32],
-                                   dbg_scsi[28:24], dbg_scsi[23:0]};
             // 0x2A: softcore liveness, sampled raw out of the clk_pico domain
             // -- {fetch completions[15:0], 0x2000_0000 polls[7:0], 2'b00,
             // firmware cpu_speed[1:0], osd_req seen, trap seen, trap live,
             // osd_open_req live}. A frozen fetch word is a dead pico; a
             // frozen poll byte beside a moving fetch word is a wedged loop.
-            8'h2a:   probe_data_c = dbg_pico_w;
-            8'h27:   probe_data_c = fdc_dbg[63:32];
-            8'h28:   probe_data_c = fdc_dbg_cmd[31:0];
-            8'h29:   probe_data_c = fdc_dbg_cmd[63:32];
+            // 0xA0-0xA7: every OSD setting, four per slot (settings_ui.c's
+            // SET_* index order): slot 0xA0+g = {set[4g+3] .. set[4g]}.
             // 0x1e/0x1f: the pad words. 1e is what the softcore actually sees
             // (settled | injected, in clk_chipset); 1f is the probe-held mask
             // itself -- a bit stuck there reads as a button held forever, so
             // edge-detection in firmware never fires ("B does nothing").
-            8'h1e:   probe_data_c = {cont2_key_chip, cont1_key_chip};
-            8'h1f:   probe_data_c = {jtag_btn2, jtag_btn1};
-            8'h1d:   probe_data_c = {16'h0, key_count, key_last};
             // 0x74: text-VRAM dump -- armed by write slot 0x8b; returns
             // {cell[7:0] echo, attr, char_hi, char_lo} for that cell.
-            8'h74:   probe_data_c = tvram_dbg_q;
+            // ---- the wedge tap's frozen snapshot (see the WEDGE TAP
+            // block above; write slot 0x08 clears/re-arms it) ---------
+            // The run#976 triage slots (frozen with the wedge tap; live
+            // until it latches): 0xA8 -- the uPD71071's request-side
+            // registers (upd71071's dbg_mask). AS-BUILT layout -- the
+            // encoder's dbg port is [22:0] holding a 19-bit concat
+            // (zero-extended: fields at [18:0]) and upd71071.sv's
+            // dbg_mask concat is 36 bits into this 32-bit port, so the
+            // top four bits truncate away. A repack that shipped the
+            // documented layout S2T-crashed CI's Quartus and pushed the
+            // fitter 8 LABs over (run 39863568833; the 0f87752 shape is
+            // proven green twice since) -- the ugly layout stays and the
+            // DECODE follows it:
+            //   [25] controller_disable  [24] rotating_priority
+            //   [23] dreq_sense_active_low  [22:19] mask_register
+            //   [18:15] request_register  [14:11] dma_request_ff
+            //   [10:7] dma_request_lock  [26] and [6:0] read 0
+            //   [31] transfer_mode[3][0]  [30:29] transfer_mode[2]
+            //   [28] autoinit[3]  [27] autoinit[2]
+            // (tm3[1] is the one bit the truncation eats.)
+            // 0xA9 -- the floppy engine's execution-phase view
+            // (Peripherals' dbg_fdc2 = {0, floppy.v's dbg2, TC latch}):
+            // [31] 0, [30:27] main state, [26:16] fifo_count,
+            // [15] execute_ndma, [14] ndma_irq, [13] ndma timeout seen,
+            // [12] dma_irq_enable (0x94 DMAE), [11] dma_has_terminated
+            // (TC seen), [10] cmd_read_in_progress,
+            // [9] cmd_write_in_progress, [8] cmd_format_in_progress,
+            // [7] dma_req, [6] irq, [5] busy, [4] in_seek_mode,
+            // [3] datareg_ready, [2] transfer_to_cpu, [1] dma_ack pulse
+            // (rw_ack), [0] TC latch.
+            // 0xAA -- the trigger statuses: which latch fired and how far
+            // the poll window dwell had counted (poll_static is full
+            // 24'hFFFFFF only at the latch -- read mid-run to watch it
+            // climb). Bit28 reads 0 (the wild-fetch trigger it once
+            // carried is retired -- see the tap block; tlog_trap is the
+            // wild catch now), and the itf_bank/f0_seen/halted/IF flags
+            // that briefly lived here went with it: nothing may fan into
+            // this mux cone but these tap flops (the probe_data register
+            // stage below is the load-bearing S2T/VPR fence).
+            // 0xAB/0xAC -- the reset-source witness (see its block above
+            // for the bit map). 0xAB:
+            //   [31:24] rst_seen      sticky rise map since wr 0x8A 0x01
+            //   [23:20] rst_last      {valid, idx} of the most recent rise
+            //   [19]    rst_boot_latch  the reboot catch fired (cursor
+            //                         read FFF0; tlog/pc_hist froze there)
+            //   [18]    rst_boot_itf  the ITF bank was mapped at that
+            //                         moment (0 = the "reboot" was a walk)
+            //   [17:0]  0
+            // 0xAC: rst_last_tick, the free-run clk_chipset tick of the
+            //           rise named by rst_last (age = read it twice: the
+            //           tick only wraps every ~100 s).
             8'hFF:   probe_data_c = 32'h98C0_DE98;
+            // (cycle-bench) Forensic read taps of past hunts -- the Chipset
+            // dbg buses, the V30-era core taps, FDC command/CRT/GDC/TVRAM
+            // dumps, the wedge snapshot -- are off the mux, and Quartus prunes
+            // their capture logic with them: floor for the paced speed work.
+            // The slots the current flows read stay (scripts/jtag_sd_stage2,
+            // superdepth, scsiboot, hdload, sd_exeload, bench, settings, keys).
             default: probe_data_c = {8'hDE, 8'hAD, 8'h00, probe_addr};
         endcase
     end
@@ -1908,6 +2386,19 @@ module core_top (
         .rd_adv         (probe_rd_adv),
         .rd_adv_gv      (probe_rd_adv_gv)
     );
+`else
+    // Release build (no probe): the debug ports the JTAG block reads stay
+    // connected to these unread nets, and its controls sit at rest.
+    wire [223:0] z86_dbg_regs;
+    wire         z86_dbg_stopped;
+    wire [15:0]  z86_dbg_next_ip;
+    wire         z86_halted;
+    wire         z86_pf_wr_v, z86_pf_wr_two;
+    wire [19:0]  z86_pf_wr_a0;
+    wire [15:0]  z86_sn_kills_w;
+    wire [31:0]  tvram_dbg_q;
+    wire [19:0]  trig_addr     = 20'h0;
+    wire         jtag_dbg_stop = 1'b0;
 `endif
 
     //
@@ -2155,6 +2646,8 @@ module core_top (
             probe_waddr_c <= probe_wr_addr;
             probe_wdata_c <= probe_wr_data;
         end
+        if (probe_wr_pulse && probe_waddr_c == 7'h0c)
+            jtag_slots_ok <= probe_wdata_c[0];
         // Slot 0x83: {cont2, cont1} held-button masks, OR-ed onto the settled
         // pad words in clk_74a. A set bit stays down until the mask clears.
         if (probe_wr_pulse && probe_waddr_c == 7'h03) begin
@@ -2205,19 +2698,43 @@ module core_top (
             trig_delay  <= probe_wdata_c[29];
             trig_bus    <= probe_wdata_c[28];
             trig_wronly <= probe_wdata_c[27];
+            trig_ds     <= probe_wdata_c[26];
+        end
+        // Slot 0x07 (wr 0x87): arm the poll-trap trigger -- {en[31],
+        // pc[19:0]}. The 32-byte window is pc[19:5] of the armed address;
+        // the trigger latches (freezing the wedge tap + pc_hist + tlog)
+        // when the fetch cursor stays inside it for ~390 ms. Bit30 is
+        // accepted and ignored (the wild-fetch trigger it once armed is
+        // retired; scripts/jtag_wildarm.tcl arms tlog_trap for the wild
+        // catch). Clearing en[31] disarms.
+        if (probe_wr_pulse && probe_waddr_c == 7'h07) begin
+            poll_en <= probe_wdata_c[31];
+            poll_pc <= probe_wdata_c[19:0];
         end
         // Slot 0x09: CPU-speed override for scripted runs -- wdata[2] forces
         // clk_select_next to wdata[1:0] instead of the OSD setting. Same
         // handoff the menu uses (ce_generator reloads on the next biu_done).
-        if (probe_wr_pulse && probe_waddr_c == 7'h09) begin
-            jtag_spd_ovr  <= probe_wdata_c[2];
+        // wdata[3] ENABLES the (default-off) prefetch engine; wdata[6:4] kill
+        // pure fills / fill-on-miss / hit serving individually for A/B.
+        if (probe_wr_pulse && probe_waddr_c == 7'h09) begin            jtag_spd_ovr  <= probe_wdata_c[2];
             jtag_spd_sel  <= probe_wdata_c[1:0];
-            jtag_pf_dis   <= probe_wdata_c[3];
+            jtag_pf_dis   <= ~probe_wdata_c[3];
+            jtag_pf_nofill  <= probe_wdata_c[4];
+            jtag_pf_nofillm <= probe_wdata_c[5];
+            jtag_pf_nohit   <= probe_wdata_c[6];
+            jtag_pf_wkill <= probe_wdata_c[9];
+            jtag_pf_bkill <= probe_wdata_c[10];
+            jtag_cache_dis <= probe_wdata_c[11];
+            jtag_thr_num  <= probe_wdata_c[19:12];
+            // jtag_dx (the #1047 bisect's revert bits) stays 0: the bug
+            // is fixed (fix-1050) and the reverts' muxes cost the fit.
         end
-        // Slot 0x0a: guest-address watchpoint for Bus_Arbiter's dbg_dma3 --
-        // every memory write landing on it is logged (CPU or DMA alike).
-        if (probe_wr_pulse && probe_waddr_c == 7'h0a)
-            jtag_watch_addr <= probe_wdata_c[19:0];
+        // Slot 0x0a: the reset-source witness clear -- wdata[0] wipes the
+        // sticky rise map, the last-source index and its tick (the write
+        // watchpoint this slot once armed is retired with its ring; a
+        // write with bit0 clear is accepted and ignored).
+        if (probe_wr_pulse && probe_waddr_c == 7'h0d)
+            brg_ri <= probe_wdata_c[7:0];
         // Slot 0x0b: arm the text-VRAM dump cell (readback on slot 0xF7;
         // shared with the screen probe's cell, which also auto-advances on
         // every completed 0x36 read).
@@ -2325,7 +2842,8 @@ module core_top (
     reg load_active_d = 1'b0;
     always @(posedge clk_chipset) begin
         load_active_d <= load_active;
-        if (load_active_d & ~load_active)   // APF done AND the FIFO fully drained
+        if ((load_active_d & ~load_active)  // APF done AND the FIFO fully drained
+            || jtag_slots_ok)
             bios_ever_loaded <= 1'b1;
     end
 
@@ -2869,7 +3387,7 @@ module core_top (
     wire [19:0] cpu_ad_out;
     reg  [19:0] cpu_address;
     wire [7:0] cpu_data_bus;
-    // The 16-bit memory path's extra lane, between zet_cpu_bridge and the
+    // The 16-bit memory path's extra lane, between cpu_bus_bridge and the
     // chipset's RAM/option-ROM muxes.
     wire [7:0] cpu_data_bus_hi;
     wire [7:0] data_bus_hi;
@@ -2897,16 +3415,23 @@ module core_top (
     // the macro is off -- the cone prunes.
     wire [15:0]  chipset_dbg;
     wire  [7:0]  chipset_dbg2;
-    wire [31:0]  chipset_dbg3;
-    wire [31:0]  chipset_dbg4;
-    wire [127:0] chipset_dbg5;
-    wire [127:0] chipset_dbg7;
-    wire  [31:0] chipset_dbg8;
-    wire  [31:0] chipset_dbg9;
-    wire [127:0] chipset_dbg10;
-    wire [103:0] chipset_dbg11;
-    wire  [55:0] chipset_dbg12;
-    wire  [7:0]  gvram_dbg;   // the GVRAM sequencer's walk + service channel
+    // The wedge tap's live views (PC98_JTAG only; frozen copies live in the
+    // snap_* registers): the 71071's request-side registers and the floppy
+    // engine's execution-phase view, both registered at this boundary.
+    wire [31:0]  cs_w_dma;
+    wire [31:0]  cs_fdc2;
+    // ...and the rest of the wedge tap's live feeds (PC98_JTAG only;
+    // frozen copies live in the snap_* registers under the macro).
+    // Declared here so the CHIPSET instance below connects unconditionally.
+    wire [15:0]  cs_w_arb;
+    wire  [7:0]  cs_w_rdy;
+    wire [15:0]  cs_w_seq;
+    wire [23:0]  cs_w_ram;
+    wire [39:0]  cs_w_sdram;
+    wire         ram_unstick_w;
+`ifndef PC98_JTAG
+    assign ram_unstick_w = 1'b0;
+`endif
     wire [23:0]  tvram_dbg_word; // screen probe: {attr,char_hi,char_lo}
     logic [11:0] dbg_tvram_cell; // screen probe: the cell being sampled
     // Probe-driven guest-VRAM reads ride the sequencer's service channel
@@ -2925,11 +3450,15 @@ module core_top (
     wire [7:0]  st_wdata_m = gv_dbg_busy ? 8'h00      : st_wdata_w;
     wire [33:0]  dbg_scsi;   // {ack,req,mg_rd_cnt,post_cnt,rom_rd_cnt}
     wire [63:0]  fdc_dbg;      // floppy engine: state, fifo, reqs, LBA
-    wire [63:0]  fdc_dbg_cmd;  // live command {op,unit,C,H,R,N,EOT,GPL}
     wire [63:0]  dbg_gdc_s;    // slave GDC display regs: {SAD0,LEN0} hi,
+    wire [63:0]  dbg_gdc_s2;   // slave GDC SADs 1..3
+    wire [63:0]  dbg_gdc_s3;   // slave GDC LENs 1..3
                              // {disp_on,page,analog,5MHz,dbl,LR,AL,PITCH} lo
     wire [63:0]  dbg_gvdisp;   // graphics display fetch: {line,fill FSM} hi,
                              // {skip,late,max_fill} lo
+    wire [95:0]  dbg_gvband;   // graphics black-band / PRAM-timing witness (0x84-0x86)
+    wire [63:0]  dbg_crt;      // CRT IRQ2: {fire,isr,arm,lost,cancel} hi,
+                             // {IMR,ISR,IRR,spur,pend,armed,int} lo
 
     wire    [1:0]   fdd_present;
     reg     [7:0]   sw;
@@ -3008,6 +3537,22 @@ module core_top (
     // resetting the CPU on a glitch would be worse than a bad readout.
     wire f0_port_write = ~chipset_io_write_n & ~chipset_aen
                        & (chipset_address[15:0] == 16'h00F0);
+
+    // F0 witness: the bus as it stood when the OUT 0F0h detector first saw
+    // its port -- chipset address, 8288 status, the bridge's own address
+    // and the z86 Wishbone cycle -- so a CPU reset that loops at 10 MHz can
+    // be tied to the access that raised it. Reads 0x69 / 0x6A / 0x6B.
+    reg  f0_seen_d = 1'b0;
+    reg  [31:0] f0w_a = 32'h0, f0w_b = 32'h0, f0w_c = 32'h0;
+    always @(posedge clk_chipset) begin
+        f0_seen_d <= f0_port_write;
+        if (f0_port_write && !f0_seen_d) begin
+            f0w_a <= {4'h0, processor_status, 1'b0, chipset_io_write_n, chipset_aen,
+                      2'b00, chipset_address};
+            f0w_b <= {zwb_cyc, zwb_stb, zwb_we, zwb_tga, zwb_sel, 6'h0, cpu_ad_out};
+            f0w_c <= {12'h0, zet_pc};
+        end
+    end
 
     always @(posedge clk_chipset or posedge reset_sdram) begin
         if (reset_sdram) begin
@@ -3111,8 +3656,8 @@ module core_top (
         .gdc_draw_busy                      (gdc_draw_busy),
         .gdc_draw_ops                       (gdc_draw_ops),
         .gdc_draw_to                        (gdc_draw_to),
-        .dbg_egc_flag                       (egc_flag_w),
-        .dbg_sysport                        (dbg_sysport_w),
+        .dbg_egc_flag                       (),
+        .dbg_sysport                        (),
         .tvram_dbg_cell                     (dbg_tvram_cell),
         .tvram_dbg_word                     (tvram_dbg_word),
         .tvram_dbg_q                        (tvram_dbg_q),
@@ -3164,17 +3709,22 @@ module core_top (
         .address_enable_n                   (chipset_aen),
         .dbg_chipset                        (chipset_dbg),
         .dbg_chipset2                       (chipset_dbg2),
-        .dbg_chipset3                       (chipset_dbg3),
-        .dbg_chipset4                       (chipset_dbg4),
-        .dbg_chipset5                       (chipset_dbg5),
-        .dbg_watch_addr                     (jtag_watch_addr),
-        .dbg_chipset7                       (chipset_dbg7),
-        .dbg_chipset8                       (chipset_dbg8),
-        .dbg_chipset9                       (chipset_dbg9),
-        .dbg_chipset10                      (chipset_dbg10),
-        .dbg_chipset11                      (chipset_dbg11),
-        .dbg_chipset12                      (chipset_dbg12),
-        .dbg_gvram                          (gvram_dbg),
+        .dbg_chipset3                       (),
+        .dbg_chipset4                       (),
+        .dbg_chipset5                       (),
+        .dbg_chipset8                       (),
+        .dbg_chipset9                       (),
+        .dbg_chipset11                      (),
+        .dbg_chipset12                      (),
+        // The wedge tap: live views out, the escape-hatch pulse in.
+        .dbg_w_arb                          (cs_w_arb),
+        .dbg_w_rdy                          (cs_w_rdy),
+        .dbg_w_seq                          (cs_w_seq),
+        .dbg_w_ram                          (cs_w_ram),
+        .dbg_w_sdram                        (cs_w_sdram),
+        .dbg_w_dma                          (cs_w_dma),
+        .ram_unstick                        (ram_unstick_w),
+        .dbg_gvram                          (),
         .dbg_scsi                           (dbg_scsi),
     //  .terminal_count_n                   (terminal_count_n)
         .speaker_out                        (speaker_out),
@@ -3225,9 +3775,14 @@ module core_top (
         .fdd_media_req                      (fdd_media_req),
         .scsi_request                       (mgmt_req[0]),
         .dbg_fdc                            (fdc_dbg),
-        .dbg_fdc_cmd                        (fdc_dbg_cmd),
+        .dbg_fdc_cmd                        (),
+        .dbg_fdc2                           (cs_fdc2),
         .dbg_gdc_s                          (dbg_gdc_s),
+        .dbg_gdc_s2                         (dbg_gdc_s2),
+        .dbg_gdc_s3                         (dbg_gdc_s3),
         .dbg_gvdisp                         (dbg_gvdisp),
+        .dbg_gvband                         (dbg_gvband),
+        .dbg_crt                            (dbg_crt),
         .wait_count_clk_en                  (cpu_ce_negedge),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),
@@ -3235,6 +3790,7 @@ module core_top (
         .pause_core                         (pause_core_chipset),
         .ram_rw_complete                    (ram_rw_complete)
         ,.sdram_wr_taken                   (sdram_wr_taken)
+        ,.sdram_rd_ready                   (sdram_rd_ready)
         ,.pc98_key_stb                      (pc98_key_stb)
         ,.pc98_key_byte                     (pc98_key_code)
         ,.mouse_dx                          (mouse_dx)
@@ -3251,6 +3807,23 @@ module core_top (
         ,.ramimg_rvalid                     (ramimg_rvalid)
         ,.ramimg_rdata                      (ramimg_rdata)
         ,.ramimg_done                       (ramimg_done)
+        ,.cachef_req                        (cachef_req)
+        ,.cachef_we                         (cachef_we)
+        ,.cachef_addr                       (cachef_addr)
+        ,.cachef_len                        (cachef_len)
+        ,.cachef_wdata0                     (cachef_wdata0)
+        ,.cachef_wdata1                     (cachef_wdata1)
+        ,.cachef_ack                        (cachef_ack)
+        ,.cachef_rvalid                     (cachef_rvalid)
+        ,.cachef_rdata                      (cachef_rdata)
+        ,.cachef_done                       (cachef_done)
+        ,.cachef_wcnt                       (cachef_wcnt)
+        ,.vram_wait_now                     (vram_wait_now)
+        ,.dx_rmwbuf_off                     (jtag_dx[7])
+        ,.dx_vramwait                       (jtag_dx[8])
+        ,.ram_wr_snoop_v                    (ram_wr_snoop_v)
+        ,.ram_wr_snoop_addr                 (ram_wr_snoop_addr)
+        ,.ram_wr_snoop_len                  (ram_wr_snoop_len)
     );
 
 `ifdef PC98_JTAG
@@ -3296,6 +3869,7 @@ module core_top (
     // CHIPSET's posted-write capture witness; the bridge's drain engine
     // holds each queued write strobe until this says it is durably held.
     wire        sdram_wr_taken;
+    wire        sdram_rd_ready;
 
     // ---- SDRAM boundary: chipset controller -> Pocket dram_* pins ----
     // CHIPSET drives these; pass straight through.
@@ -3332,33 +3906,41 @@ module core_top (
 
     // ---------------------------------------------------------------- the CPU
     //
-    // Zet, the 80186-class core, on a Wishbone master, bridged to the 8288
-    // byte world -- zet_cpu_bridge runs each 16-bit cycle as one two-lane
+    // z86, the 80286-class core, on a Wishbone master, bridged to the 8288
+    // byte world -- cpu_bus_bridge runs each 16-bit cycle as one two-lane
     // cycle where the SDRAM answers and two byte cycles everywhere else on
-    // the eight-bit bus. See zet_cpu_bridge.sv's header for the contract.
-    // Zet has the full 186 instruction set -- the ITF's `push imm16` that
-    // derailed the old i8088 is legal for it -- but it is not
-    // cycle-accurate and carries none of the V30's NEC extensions.
+    // the eight-bit bus. See cpu_bus_bridge.sv's header for the contract.
+    // z86 covers the full 286 real-mode instruction set -- the ITF's
+    // `push imm16` that derailed the old i8088 is legal for it -- but it is
+    // not cycle-accurate; the bridge's bus pacing is what models the metal.
     //
     // The CE generator's outputs still pace the CHIPSET's RAM waits, which
     // is where they are consumed.
-    wire [15:0] bridge_dbg;
+    wire [23:0] bridge_dbg_w;     // wedge tap's engine view, slot 0xA4
 
     wire        zet_clk;
+    // The bridge's zet_edge: high on the clk_chipset posedges that also
+    // reach zet_clk -- the clock enable for logic stepping with z86.
+    wire        z86_ce;
     wire [15:0] zwb_dat_i, zwb_dat_o;
     wire [19:1] zwb_adr;
     wire        zwb_we, zwb_tga, zwb_stb, zwb_cyc, zwb_ack;
     wire [ 1:0] zwb_sel;
     wire        zwb_inta, zwb_nmia;
     wire [19:0] zet_pc;
-    wire        zet_fault;
-    wire [7:0]  zet_opc;
+    wire [15:0] zet_ds;
+    wire        zet_exec;
 
-    zet_cpu_bridge u_zet_bridge (
+    // Every speed setting is a 286-class machine, so the bus pairs run
+    // the 286 Ts/Tc profile unconditionally. A future V30-accurate mode
+    // would drive this from its own settings instead.
+    wire pace_286 = 1'b1;
+
+    cpu_bus_bridge #(.REQ_SETTLE(0)) u_cpu_bridge (
         .clk               (clk_chipset),
         .cpu_ce_posedge    (cpu_ce_posedge),
         .cpu_ce_negedge    (cpu_ce_negedge),
-        .fast_pace         (clk_select[1]),
+        .pace_286          (pace_286),
         .reset             (reset_cpu),
         .zet_clk           (zet_clk),
         .wb_dat_o          (zwb_dat_o),
@@ -3387,32 +3969,116 @@ module core_top (
         .processor_ready   (processor_ready),
         .address_enable_n  (chipset_aen),
         .sdram_wr_taken    (sdram_wr_taken),
+        .sdram_rd_ready    (sdram_rd_ready),
         .pause_core        (pause_core),
+        .throttle          (thr_hold),
         .biu_done          (biu_done),
-        .pf_disable        (jtag_pf_dis),
-        .dbg               (bridge_dbg)
+        .zet_edge_o        (z86_ce),
+        // Prefetch windows default OFF (jtag_pf_dis=1 above): pf ON wedges
+        // ITF POST (TIMER INTERRUPT ERROR, ~1/12 boots) on the SD build;
+        // the 286 BIU-queue model is A/B-only now (slot 0x89 bit3).
+        // NOTE: keep this feed a plain wire. 7f85bf0 AND-ed a clk_select
+        // term in here; the extra gate at this high-fanout node perturbed
+        // placement into a -0.039ns setup miss on the main core clock and
+        // a grey build (paced supply collapsed to ~3.4). Reverted.
+        // Tied off for good (cycle-bench): with z86_cache priced at the
+        // paced settings the windows have no job left, pf ON was the worse
+        // setting on hardware at every speed, and the constant lets Quartus
+        // drop the two 32-byte windows, their fill and hit logic -- floor
+        // the paced write path needs. jtag_pf_dis (slot 0x89 bit3) is now
+        // inert. tb_mem_perf still drives the bridge's windows directly.
+        .pf_disable        (1'b1),
+        .pf_nofill         (jtag_pf_nofill),
+        .pf_nofillm        (jtag_pf_nofillm),
+        .pf_nohit          (jtag_pf_nohit),
+        .pf_wkill          (jtag_pf_wkill),
+        .pf_bkill          (jtag_pf_bkill),
+        .bus_mem_write_n   (chipset_memory_write_n),
+        // foreign-commit snoop: same port-A feed the z86 cache snoops --
+        // kills only pf windows a committed span overlaps (DMA, loader)
+        .sn_v              (ram_wr_snoop_v),
+        .sn_addr           (ram_wr_snoop_addr),
+        .sn_len            (ram_wr_snoop_len),
+        .bios_shadow_flag  (bios_shadow_flag),
+        .dbg               (),
+        .dbg_inta          (),
+        .dbg_w             (bridge_dbg_w)
     );
 
-    zet u_cpu (
-        .wb_clk_i  (zet_clk),
-        .wb_rst_i  (reset_cpu),
-        .wb_dat_i  (zwb_dat_i),
-        .wb_dat_o  (zwb_dat_o),
+    // z86 (fpga/core/z86): a pipelined 286-class core on the bridge's
+    // Wishbone/INTA contract -- the only CPU the tree carries.
+    // The cache runs on the free clk_chipset with the bridge's zet_edge as
+    // its enable. It stays off while the ITF is mapped: the ITF's IRQ0 test
+    // expects the timer interrupt within 32 turns of a TEST/JNZ/LOOP, a
+    // window a cached loop runs through long before the PIT gets there.
+    // In the paced modes it runs PRICED (pace): a VX2/VX21/RX had no
+    // cache, but its memory answered inside the 2-clock 286 bus cycle,
+    // which the SDRAM behind the bridge cannot (~7.7 CPU clocks per
+    // Wishbone pair, docs/HANDOVER.md 11). A hit there completes only
+    // after the 286 bus cycles it stands for (2 clocks + the setting's
+    // waits per cycle; a line load is one cycle per word fetched), so
+    // the cache hides the SDRAM's latency without running faster than
+    // the metal; Turbo hits stay free. Toggling at runtime is safe: the
+    // cache is write-through no-allocate, uncached writes ride the
+    // port-A commits whose snoop clears lines, and clk_select latches
+    // on biu_done.
+    z86 #(.WCOMB(1'b1)) u_cpu (
+        .clk       (zet_clk),
+        .reset     (reset_cpu),
+        .clk_free  (clk_chipset),
+        .ce        (z86_ce),
+        .cache_en  (osd_cpu_cache & ~jtag_cache_dis & ~itf_bank),
+        .pace      (clk_select != 2'b11),
+        .pace_ce   (cpu_ce_posedge),
+        .pace_rd_wait (ram_read_wait_cycle),
+        .pace_wr_wait (ram_write_wait_cycle),
+        .pace_vwait   (vram_wait_now),
+        .dx           (jtag_dx[6:0]),
+        .bios_shadow  (bios_shadow_flag),
+        .bios_protect (bios_protect_flag[1]),
+        .f_req     (cachef_req),
+        .f_we      (cachef_we),
+        .f_addr    (cachef_addr),
+        .f_len     (cachef_len),
+        .f_wdata0  (cachef_wdata0),
+        .f_wdata1  (cachef_wdata1),
+        .f_ack     (cachef_ack),
+        .f_rvalid  (cachef_rvalid),
+        .f_rdata   (cachef_rdata),
+        .f_done    (cachef_done),
+        .f_wcnt    (cachef_wcnt),
+        .sn_v      (ram_wr_snoop_v),
+        .sn_addr   (ram_wr_snoop_addr),
+        .sn_len    (ram_wr_snoop_len),
+        // watched-line snoop-kill witness: the slot-0x06 trigger address is
+        // the watched line, shared with the bus-side write watchpoint.
+        .dbg_watch_a (trig_addr),
+        .dbg_sn_kills (z86_sn_kills_w),
         .wb_adr_o  (zwb_adr),
+        .wb_sel_o  (zwb_sel),
         .wb_we_o   (zwb_we),
         .wb_tga_o  (zwb_tga),
-        .wb_sel_o  (zwb_sel),
+        .wb_dat_o  (zwb_dat_o),
         .wb_stb_o  (zwb_stb),
         .wb_cyc_o  (zwb_cyc),
         .wb_ack_i  (zwb_ack),
+        .wb_dat_i  (zwb_dat_i),
         .wb_tgc_i  (interrupt_to_cpu),
         .wb_tgc_o  (zwb_inta),
-        .nmi       (1'b0),
-        .nmia      (zwb_nmia),
         .pc        (zet_pc),
-        .dbg_fault (zet_fault),
-        .dbg_opc   (zet_opc)
+        .dbg_ds    (zet_ds),
+        .dbg_regs  (z86_dbg_regs),
+        .dbg_stop  (jtag_dbg_stop),
+        .dbg_stopped (z86_dbg_stopped),
+        .dbg_next_ip (z86_dbg_next_ip),
+        .dbg_halted(z86_halted),
+        // write watchpoint: cached stores that bypass the chipset bus
+        .dbg_wr_v  (z86_pf_wr_v),
+        .dbg_wr_a0 (z86_pf_wr_a0),
+        .dbg_wr_two(z86_pf_wr_two)
     );
+    assign zwb_nmia  = 1'b0;
+    assign zet_exec  = 1'b0;
 
     // Debug: the last guest data-bus read / write byte addresses. Instruction
     // fetches are BS_CODE and I/O is BS_IOR/BS_IOW on processor_status, so a
@@ -3423,9 +4089,9 @@ module core_top (
         if (processor_status == 3'b110) zet_dbus_wr <= cpu_ad_out;
     end
 
-    // The probe slots that used to expose nuV30 guts read the Zet view where
+    // The probe slots that used to expose nuV30 guts read the CPU view where
     // one exists (0x18/0x1c/0x20 = zet_pc / processor_status / the Wishbone
-    // data-in); the dbg_regs/dbg_core taps Zet has no answer for read 0.
+    // data-in); the dbg_core taps z86 has no answer for read 0.
 
     //
     // AUDIO

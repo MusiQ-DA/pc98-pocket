@@ -45,6 +45,7 @@ module tb_gvram_ram_leg;
     wire        ram_wt_w;           // u_ram write_taken -> seq mem_wr_taken
 
     pc98_gvram_seq #(.EGC(1'b1)) dut (
+        .rmwbuf_off(1'b0),
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_pf_len(5'd0),
@@ -65,7 +66,7 @@ module tb_gvram_ram_leg;
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
         .mem_done(mem_done), .mem_own(mem_own), .mem_ready(mem_ready),
-        .mem_wr_taken(ram_wt_w), .cpu_wr_taken()
+        .mem_wr_taken(ram_wt_w), .pf_beat_v(1'b0), .pf_beat_dat(8'h00), .cpu_wr_taken(), .cpu_rd_own()
     );
 
     // ---- the real memory -------------------------------------------------
@@ -77,6 +78,7 @@ module tb_gvram_ram_leg;
     logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
 
     RAM u_ram (
+        .dma_hold(1'b0),
         .clock(clk), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram),
         .address(mem_addr), .internal_data_bus(mem_wdata),
@@ -94,7 +96,6 @@ module tb_gvram_ram_leg;
         .ram_address_select_n(ram_sel_n),
         .write_taken(ram_wt_w),
         .dbg(ram_dbg), .dbg2(), .dbg3(), .dbg4(), .dbg5(), .dbg6(), .dbg7(),
-        .dbg_watch_addr(20'hFFFFF),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
@@ -111,6 +112,10 @@ module tb_gvram_ram_leg;
         .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
         .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
         .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done(),
+        .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
+        .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
+        .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
+        .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len(),
         .wait_count_clk_en(1'b1),
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0),
         .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0)

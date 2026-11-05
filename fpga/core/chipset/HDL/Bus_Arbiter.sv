@@ -58,9 +58,25 @@ module BUS_ARBITER (
     // every memory write landing on it is logged, CPU or DMA alike --
     // this is how a byte-0 that the fill wrote correctly still ends
     // up 0x00 afterwards can be attributed to its overwriter.
+    // (The ring behind this port is retired -- see dbg_dma3 below --
+    // the input stays so CHIPSET's port list does not churn.)
     input   logic   [19:0]  watch_addr,
     output  logic   [127:0] dbg_dma3,
-    output  logic   [127:0] dbg_dma4
+    // JTAG probe (PC98_JTAG): the wedge tap's arbiter/DMA view --
+    //   [15]   dce_pin -- the uPD71071's CE half-phase (its clock; a DMA
+    //          wedged with this frozen means the divider itself stopped)
+    //   [14]   hold_request_ff_1 [13] hold_request_ff_2 -- the grant chain
+    //   [12:8] 0
+    //   [7:0]  the uPD71071 timing engine's dbg (state, channel, HRQ, TC)
+    // Registered at the core_top boundary into the frozen wedge snapshot
+    // (probe slot 0xA0 high half).
+    output  logic   [15:0]  dbg_w,
+    // JTAG probe (PC98_JTAG): the uPD71071's request-side registers
+    // (mask/request/pins/lock + the FDC channels' mode/autoinit) -- see
+    // upd71071's dbg_mask. Same registration into probe slot 0xA8; the
+    // run#976 freeze (state=SI, DRQ2/3 pending) is decided by exactly
+    // these bits.
+    output  logic   [31:0]  dbg_w2
 );
 
     //
@@ -105,11 +121,23 @@ module BUS_ARBITER (
     //
     // Address/Command Enable Signal
     //
+    // The bus stays the DMAC's until its DACK is gone, not just its HRQ.
+    // The 71071 drops HRQ (and IOW/MEMR) at the S4 posedge but DACK only
+    // at the following S4->SI negedge, half a DMA clock later. The CPU's
+    // next cycle can already be parked in the 8288 -- cpu_bus_bridge arms
+    // it in the half-CE between the passive-status sample and this AEN
+    // rise, and the 8288's machine cycle runs on under the grant with
+    // only command_enable holding it off -- so the moment AEN fell the
+    // parked command fired, inside the DACK window. A parked OUT (the
+    // IRQ0 handler's EOI, `out 00h,20h`) then re-latched Peripherals'
+    // write_to_fdd, which floppy.v takes as the DMA byte on the DACK
+    // fall: one 0x20 in a sector written to disk (the SuperDepth FAT
+    // corruption). sim/tb_fdc_dma_iow_stray.
     always_ff @(posedge clock, posedge reset) begin
         if (reset)
             address_enable_n <= 1'b1;
         else if (cpu_ce_posedge)
-            address_enable_n <= hold_acknowledge;
+            address_enable_n <= hold_acknowledge | ~(&dma_acknowledge_n);
         else
             address_enable_n <= address_enable_n;
     end
@@ -189,10 +217,40 @@ module BUS_ARBITER (
     logic           dma_memory_read_n;
     logic           dma_memory_write_n;
 
+    // The DMAC's own clock. On the PC-98 the 71071 does not speed up with
+    // the CPU, and here it cannot: past the 10 MHz step its transfer
+    // cycles outrun the memory path -- a floppy fill at 19.7/21.5 MHz with
+    // the display fetch running skipped single bytes outright (no write
+    // ever reached the bus; the address and the FDC moved on), which is
+    // SuperDepth's lost directory entries. 92/201 of the chipset clock is
+    // the 9.83 MHz step's edge rate, held whatever the CPU runs at.
+    logic   [8:0]   dce_acc;
+    logic           dce_pin;
+    logic           dma_ce_posedge, dma_ce_negedge;
+    wire    [9:0]   dce_sum = {1'b0, dce_acc} + 10'd92;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            dce_acc        <= 9'd0;
+            dce_pin        <= 1'b0;
+            dma_ce_posedge <= 1'b0;
+            dma_ce_negedge <= 1'b0;
+        end else begin
+            dma_ce_posedge <= 1'b0;
+            dma_ce_negedge <= 1'b0;
+            if (dce_sum >= 10'd201) begin
+                dce_acc <= dce_sum[8:0] - 9'd201;
+                dce_pin <= ~dce_pin;
+                if (dce_pin) dma_ce_negedge <= 1'b1;
+                else         dma_ce_posedge <= 1'b1;
+            end else
+                dce_acc <= dce_sum[8:0];
+        end
+    end
+
     upd71071 u_upd71071 (
         .clock                              (clock),
-        .cpu_ce_posedge                     (cpu_ce_posedge),
-        .cpu_ce_negedge                     (cpu_ce_negedge),
+        .cpu_ce_posedge                     (dma_ce_posedge),
+        .cpu_ce_negedge                     (dma_ce_negedge),
         .reset                              (reset),
         .chip_select_n                      (dma_chip_select_n),
         .ready                              (dma_ready),
@@ -219,10 +277,20 @@ module BUS_ARBITER (
         //.address_enable                     (),
         //.address_strobe                     (),
         .memory_read_n                      (dma_memory_read_n),
-        .memory_write_n                     (dma_memory_write_n)
+        .memory_write_n                     (dma_memory_write_n),
+        .dbg                                (dma_dbg),
+        .dbg_mask                           (dbg_w2)
     );
 
     assign  terminal_count_n = ~terminal_count;
+
+    // The wedge tap's view: the DMA's own state plus this arbiter's grant
+    // chain. dce_pin is the divider's phase -- if it ever freezes the 71071
+    // stops mid-transfer with the bus granted, which is a wedge nothing
+    // downstream can clear.
+    logic [7:0] dma_dbg;
+    assign  dbg_w = {dce_pin, hold_request_ff_1, hold_request_ff_2,
+                     5'b00000, dma_dbg};
 
     assign  dbg = {hold_acknowledge, address_enable_n, dma_hold_request,
                    ext_access_request,
@@ -277,21 +345,18 @@ module BUS_ARBITER (
     // new FDC fill is an address break inside the ack window: fills are
     // contiguous ascending, so the first write of each buffer (and any
     // stray write that escapes the stream) is where address != prev+1.
-    // The ring holds the last three such writes as
-    // {cpu_owned, dma_owned, drq_pin, 1'b0, addr[19:0], data[7:0]} -- a
-    // head write landing on the previous buffer's base or carrying stale
-    // data stays visible afterwards.
+    // The per-write watchpoint ring that also lived here is retired (see
+    // the dbg_dma3 note below); the counters survive -- 0x3e's
+    // {break, grant, ack_wr} is the BUS-side count to set against RAM's
+    // commit-side sn_dma_cnt at 0x6d.
     //
     logic           prev_ab_mw;
     logic           prev_fdc_ack;
     logic   [7:0]   break_cnt;
     logic   [7:0]   grant_cnt;
     logic   [15:0]  ack_wr_cnt;
-    logic   [7:0]   watch_cnt;
-    logic   [31:0]  watch_log [0:2];
 
     wire    fdc_ack  = ~dma_acknowledge_n[2] | ~dma_acknowledge_n[3];
-    wire    dma_own  = ~dma_enable_n && ~(&dma_acknowledge_n);
 
     always_ff @(posedge clock) begin
         if (reset) begin
@@ -300,7 +365,6 @@ module BUS_ARBITER (
             break_cnt     <= 8'd0;
             grant_cnt     <= 8'd0;
             ack_wr_cnt    <= 16'd0;
-            watch_cnt     <= 8'd0;
         end
         else begin
             prev_ab_mw   <= ab_memory_write_n;
@@ -312,16 +376,6 @@ module BUS_ARBITER (
             if (prev_ab_mw & ~ab_memory_write_n) begin
                 if (fdc_ack && ack_wr_cnt != 16'hffff)
                     ack_wr_cnt <= ack_wr_cnt + 16'd1;
-                if (address == watch_addr) begin
-                    watch_log[2] <= watch_log[1];
-                    watch_log[1] <= watch_log[0];
-                    watch_log[0] <= {~address_enable_n && ~dma_own, dma_own,
-                                     internal_data_bus != data_bus_ext,
-                                     ~io_write_n, address,
-                                     internal_data_bus};
-                    if (watch_cnt != 8'hff)
-                        watch_cnt <= watch_cnt + 8'd1;
-                end
                 if (fdc_ack && break_cnt != 8'hff)
                     break_cnt <= break_cnt + 8'd1;
             end
@@ -329,9 +383,13 @@ module BUS_ARBITER (
     end
 
     assign dbg_dma = {break_cnt, grant_cnt, ack_wr_cnt, 96'd0};
-    assign dbg_dma3 = {watch_cnt, 24'h0, watch_log[2],
-                       watch_log[1], watch_log[0]};
-    assign dbg_dma4 = 128'd0;
+    // The write watchpoint ring (slots 0xE1-0xE4) is gone: its hunt -- the
+    // SuperDepth turbo START stray store -- answered, and the run#976
+    // freeze triage needs its registers (watch_log 3x32, watch_cnt) more
+    // than the history. Dropped to buy back LABs at a device that fits at
+    // 1848/1848; the 0xA0-0xA9 wedge map keeps the live counters
+    // (0x3e) and the request-side snapshot (0xA8).
+    assign dbg_dma3 = 128'd0;
 
 
     //

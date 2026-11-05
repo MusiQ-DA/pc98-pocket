@@ -41,6 +41,12 @@
 //   F. SFNM, which the master's ICW4 0x1D asks for: while the cascade bit
 //      is in service a NEW slave request still raises INT.  (Without special
 //      fully nested mode an in-service IR7 would block itself.)
+//   H. ...but SFNM opens only the cascade.  A plain master line in service
+//      still blocks itself: SuperDepth's music driver STIs inside its IRQ0
+//      handler before the EOI, and a timer tick that re-entered it there
+//      nested the handler until its 256-byte stack ran into the game's
+//      data (np21w io/pic.c pic_irq checks the master ISR for every bit
+//      but the slave's).
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -410,6 +416,32 @@ module tb_pic_cascade;
             m_read (1'b1, rd);
             check(rd == 8'h3D,        $sformatf("master IMR reads back 3D (got %02h)", rd));
         end
+
+        // ================================================================
+        // H. SFNM must not let a non-cascade line nest on itself.
+        $display("H: an in-service IR0 blocks the next timer tick");
+        // Opening IR0 releases the tick parked in IRR since the top of the
+        // run; it is the first timer interrupt.
+        m_write(1'b1, 8'h3C);
+        wait_m_int(400, got);
+        check(got,                    "INT rose for the timer");
+        inta_cycle(vec, slave_drove);
+        check(vec == 8'h08,           $sformatf("vector is 0x08 (got %02h)", vec));
+        check(m_isr[0],               "IR0 in service");
+        // Next tick lands while the handler (now STI'd) has not sent EOI.
+        m_ir0_latched = 1'b0;
+        repeat (8) @(negedge clk);
+        m_ir0_latched = 1'b1;
+        repeat (8) @(negedge clk);
+        check(m_irr[0],               "the second tick is latched in IRR");
+        wait_m_int(400, got);
+        check(!got,                   "INT held low while IR0 is in service");
+        m_write(1'b0, 8'h20);                          // non-specific EOI
+        wait_m_int(400, got);
+        check(got,                    "INT rose for the pending tick after the EOI");
+        inta_cycle(vec, slave_drove);
+        check(vec == 8'h08,           $sformatf("vector is 0x08 again (got %02h)", vec));
+        m_write(1'b0, 8'h20);
 
         if (errors == 0) $display("PASS tb_pic_cascade");
         else             $display("FAIL tb_pic_cascade: %0d", errors);

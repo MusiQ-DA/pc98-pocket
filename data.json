@@ -102,8 +102,8 @@
         "extensions": [
           "hdi",
           "nhd",
-          "thd",
-          "hdd"
+          "hdd",
+          "hdn"
         ],
         "deferload": true
       },

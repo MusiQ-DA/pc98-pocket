@@ -52,6 +52,7 @@ module tb_xrom;
 
     CHIPSET u_chipset (
         .clock(clock), .cpu_ce_posedge(cpu_ce_posedge),
+        .dx_rmwbuf_off(1'b0), .dx_vramwait(1'b0),
         .cpu_ce_negedge(cpu_ce_negedge),
         .clk_select(2'b00), .reset(reset), .sdram_reset(sdram_reset),
         .cpu_address(cpu_address), .cpu_data_bus(8'h00),
@@ -108,7 +109,11 @@ module tb_xrom;
         .sdram_wr_taken(),
         .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
         .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
-        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
+        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done(),
+        .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
+        .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
+        .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
+        .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len()
     );
 
     int errors = 0;

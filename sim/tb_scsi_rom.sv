@@ -54,6 +54,7 @@ module tb_scsi_rom;
 
     CHIPSET u_chipset (
         .clock(clock), .cpu_ce_posedge(cpu_ce_posedge),
+        .dx_rmwbuf_off(1'b0), .dx_vramwait(1'b0),
         .cpu_ce_negedge(cpu_ce_negedge),
         .clk_select(2'b00), .reset(reset), .sdram_reset(sdram_reset),
         .cpu_address(cpu_address), .cpu_data_bus(8'h00),
@@ -110,7 +111,11 @@ module tb_scsi_rom;
         .sdram_wr_taken(),
         .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
         .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
-        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
+        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done(),
+        .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
+        .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
+        .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
+        .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len()
     );
 
     int errors = 0;
@@ -143,27 +148,29 @@ module tb_scsi_rom;
         check(20'hD200A, 8'hAA, 8'h90);   // even byte: lo=AA, hi=pad byte
         // The four POST phase entries are at 0x0C/0x0F/0x12/0x15 and the
         // INT 1Bh dispatch entry at 0x18.
-        check(20'hD200C, 8'hE9, 8'hF8);   // word@0x0C = F8 E9 -> jmp post_init
+        check(20'hD200C, 8'hE9, 8'hA2);   // word@0x0C = A1 E9 -> jmp post_init
         check(20'hD200F, 8'hE9, 8'hE9);   // odd byte: hi lane = the byte itself
-        check(20'hD2012, 8'hE9, 8'h11);   // word@0x12 = 11 E9 -> jmp post_boot
-        check(20'hD2015, 8'hCB, 8'hCB);   // pass-4 entry: retf (odd: hi=lo)
+        check(20'hD2012, 8'hCB, 8'h90);   // pass 3 (before the FDDs): retf
+        check(20'hD2015, 8'hE9, 8'hE9);   // pass 4, the boot sweep: jmp post_boot
         check(20'hD2018, 8'h56, 8'h57);   // handler: push si / push di
         check(20'hD201E, 8'h50, 8'h50);   // the locals pushes
         // Bytes the dispatch table registration must contain: post_common
-        // at 0x4F9 claims the flag and writes the segment byte to
-        // 0x4B2/0x4BA (the 0x2x and 0xAx devtype slots).
-        check(20'hD24F9, 8'hC6, 8'hC6);   // mov byte [bx],0FFh (odd: hi=lo)
-        check(20'hD2500, 8'hA2, 8'hB2);   // mov [0x04B2],al
-        check(20'hD2504, 8'hBA, 8'h04);   // mov [0x04BA],al
+        // at 0x5A2 claims the flag (np21w's C2) and writes the segment byte
+        // to 0x4B2/0x4BA (the 0x2x and 0xAx devtype slots).
+        check(20'hD25A3, 8'hC6, 8'hC6);   // mov byte [bx],0C2h
+        check(20'hD25A5, 8'hC2, 8'hC2);   //   ... C2, then mov ax,cs
+        check(20'hD25AA, 8'hA2, 8'hB2);   // mov [0x04B2],al (even: hi = imm lo)
+        check(20'hD25AD, 8'hA2, 8'hA2);   // mov [0x04BA],al (odd: hi=lo)
         // The transfer loop rebuilds CX after issue_xfer -- the mailbox
         // poll consumes it, and pull_in/pull_skip take their count from it.
         check(20'hD2222, 8'h8B, 8'h4E);   // mov cx,[bp-14]; shl cx,9
         check(20'hD2225, 8'hC1, 8'hC1);   //   (odd: hi=lo)
         // The disk-init and boot paths exist inside the image.
-        check(20'hD246E, 8'hBF, 8'hA0);   // disk_init: mov di,0x05A0
-        check(20'hD25C2, 8'hCB, 8'hFF);   // post_ret's retf, then open pad
+        check(20'hD2469, 8'hBF, 8'hBF);   // disk_init: mov di,0x05A0
+        check(20'hD2633, 8'h9A, 8'h9A);   // post_boot: call 1FC0:0000
+        check(20'hD2641, 8'hCB, 8'hCB);   // post_boot's retf, then open pad
         // Image padding and the window boundary.
-        check(20'hD25C3, 8'hFF, 8'hFF);   // odd byte past the code
+        check(20'hD2642, 8'hFF, 8'hFF);   // odd byte past the code
         check(20'hD2FFF, 8'hFF, 8'hFF);   // last byte of the window
         check(20'hD3000, 8'hFF, 8'h00);   // next 4KB slot: the empty window
         check(20'hD1FFF, 8'hFF, 8'h00);   // the slot below

@@ -16,7 +16,7 @@ module CHIPSET #(
         // CPU
         input   logic   [19:0]  cpu_address,
         input   logic   [7:0]   cpu_data_bus,
-        // The 16-bit memory path: zet_cpu_bridge asks for a
+        // The 16-bit memory path: cpu_bus_bridge asks for a
         // word, RAM.sv turns it into one two-word SDRAM burst instead of two
         // bus cycles, and the odd lane travels on its own pair of wires rather
         // than widening the chipset's eight-bit bus. Only the addresses
@@ -44,7 +44,7 @@ module CHIPSET #(
         output  logic           st_done,
         output  logic   [7:0]   st_rdata,
         output  logic   [7:0]   accel_status,
-        // Sixteen-colour mode, out to core_top for zet_cpu_bridge: it and
+        // Sixteen-colour mode, out to core_top for cpu_bus_bridge: it and
         // RAM.sv must agree on whether E0000-E7FFF is memory.
         output  logic           pc98_analog,
         input   logic   [2:0]   processor_status,
@@ -126,15 +126,13 @@ module CHIPSET #(
         output  logic   [127:0] dbg_chipset5,
         // Write watchpoint armed from the probe (slot 0x8a): the last
         // three memory writes to that guest address.
-        input   logic   [19:0]  dbg_watch_addr,
-        output  logic   [127:0] dbg_chipset7,
+        // (RETIRED: the ring itself is gone from Bus_Arbiter -- the port
+        // went with it.)
         // RAM.sv's universal uncovered-write witness: a strobe that fell
         // while neither accepted, parked nor twin-matched is a true loss
         // the slot-full counters cannot see.
         output  logic   [31:0]  dbg_chipset8,
         output  logic   [31:0]  dbg_chipset9,
-        // The watchpoint's first four hits, latched sticky.
-        output  logic   [127:0] dbg_chipset10,
         // RAM.sv's accept-side record: the last three writes the FSM
         // committed to serve ({parked?, word, addr[19:0], data}).
         output  logic   [103:0] dbg_chipset11,
@@ -214,10 +212,48 @@ module CHIPSET #(
         // JTAG probe: the floppy engine's transfer state and live command.
         output  wire    [63:0]  dbg_fdc,
         output  wire    [63:0]  dbg_fdc_cmd,
+        // JTAG probe: the floppy engine's execution-phase view (floppy.v's
+        // dbg2 + the TC latch) -- frozen with the wedge tap at core_top
+        // (probe slot 0xA9).
+        output  wire    [31:0]  dbg_fdc2,
         // JTAG probe: the slave GDC's display registers.
         output  wire    [63:0]  dbg_gdc_s,
+        // JTAG probe: slave GDC partitions one to three.
+        output  wire    [63:0]  dbg_gdc_s2,
+        output  wire    [63:0]  dbg_gdc_s3,
         // JTAG probe: the graphics display fetch's underrun telemetry.
         output  wire    [63:0]  dbg_gvdisp,
+        // JTAG probe: the graphics display's black-band / PRAM-timing witness.
+        output  wire    [95:0]  dbg_gvband,
+        // JTAG probe: the CRT interrupt (IRQ2) path -- PIC regs, arm, counters.
+        output  wire    [63:0]  dbg_crt,
+        // JTAG probe (PC98_JTAG): the WEDGE TAP -- a frozen snapshot of
+        // every state the memory path can park in, latched at core_top the
+        // moment the machine stops retiring instructions. These are the
+        // plain live views; core_top registers and freezes them.
+        //   dbg_w_arb [15:0]  -- Bus_Arbiter: dce phase, hold chain, DMA state
+        //   dbg_w_rdy  [7:0]  -- READY: the ready chain's registers
+        //   dbg_w_seq [15:0]  -- pc98_gvram_seq: walk flags + nonidle age
+        //   dbg_w_ram [23:0]  -- RAM.sv: park FIFO, FSM state, wait counts,
+        //                        nonidle age
+        //   dbg_w_sdram[39:0] -- sdram_shim/mp: port-A ages, per-port reqs,
+        //                        controller state, grant
+        output  wire    [15:0]  dbg_w_arb,
+        output  wire    [7:0]   dbg_w_rdy,
+        output  wire    [15:0]  dbg_w_seq,
+        output  wire    [23:0]  dbg_w_ram,
+        output  wire    [39:0]  dbg_w_sdram,
+        // JTAG probe (PC98_JTAG): the uPD71071's request-side registers
+        // (mask/request/pins/lock + FDC ch2/3 mode/autoinit) -- see
+        // upd71071's dbg_mask. Frozen with the wedge tap (slot 0xA8);
+        // decides between "the mask ate the DRQ" and "the request never
+        // latched" in the run#976 freeze shape.
+        output  wire    [31:0]  dbg_w_dma,
+        // JTAG probe (PC98_JTAG): the wedge escape hatch -- one clk pulse
+        // drops RAM.sv's parked-write queue and forces its FSM to IDLE (see
+        // RAM.sv's unstick port). The greset probe slot cannot do this:
+        // RAM.sv lives in the sdram_reset domain.
+        input   logic           ram_unstick,
         // RAM wait mode
         input   logic           wait_count_clk_en,
         input   logic   [1:0]   ram_read_wait_cycle,
@@ -243,11 +279,20 @@ module CHIPSET #(
         output  logic           ram_rw_complete,
         // Posted-write drain witness (Pocket): the guest's own write
         // strobe is durably held in u_RAM (captured, or impossible to
-        // command). zet_cpu_bridge's drain waits on this rather than on
+        // command). cpu_bus_bridge's drain waits on this rather than on
         // any ready level -- the ready chain can dip and rise for
         // accesses that are not the drain's, which is exactly the
         // ambiguity that used to release a queued write before capture.
         output  logic           sdram_wr_taken,
+        // Read-side completion witness, the mirror of sdram_wr_taken:
+        // the sequencer's cpu_ready -- a level that can only rise for
+        // the guest's OWN access (a plain read completes strobe-matched
+        // inside u_RAM; an expanded walk answers at S_DONE; svc legs
+        // are masked off it). cpu_bus_bridge latches it inside each
+        // read byte's command phase so the processor_ready pipeline --
+        // which still carries residue from legs and DMA drains -- can
+        // pace the accept but never invent one.
+        output  logic           sdram_rd_ready,
         // fdd_ramimg's SDRAM carve-out port, straight through to u_RAM's port E.
         input   logic           ramimg_req,
         input   logic           ramimg_we,
@@ -257,7 +302,31 @@ module CHIPSET #(
         output  logic           ramimg_ack,
         output  logic           ramimg_rvalid,
         output  logic   [15:0]  ramimg_rdata,
-        output  logic           ramimg_done
+        output  logic           ramimg_done,
+        // CPU cache port (sdram port F) and the port-A write-commit snoop.
+        input   logic           cachef_req,
+        input   logic           cachef_we,
+        input   logic   [23:0]  cachef_addr,
+        input   logic   [3:0]   cachef_len,
+        input   logic   [15:0]  cachef_wdata0,
+        input   logic   [15:0]  cachef_wdata1,
+        output  logic           cachef_ack,
+        output  logic           cachef_rvalid,
+        output  logic   [15:0]  cachef_rdata,
+        output  logic           cachef_done,
+        // np21w's graphics-VRAM wait for an access starting now, for the
+        // CPU to price (z86_cache, paced settings): {analog, wait}.
+        output  logic    [4:0]  vram_wait_now,
+        // Hardware bisect (core_top JTAG slot 0x09 [27], [28]; 0 in
+        // release): the GRCG RMW line buffer off; RAM.sv's per-leg VRAM
+        // waits back as integ-1034 charged them (with the CPU-side pricing
+        // off too, slot bit 24, that is the old VRAM timing).
+        input   logic           dx_rmwbuf_off,
+        input   logic           dx_vramwait,
+        output  logic    [4:0]  cachef_wcnt,
+        output  logic           ram_wr_snoop_v,
+        output  logic   [23:0]  ram_wr_snoop_addr,
+        output  logic   [3:0]   ram_wr_snoop_len
 
     );
 
@@ -280,8 +349,13 @@ module CHIPSET #(
     logic           internal_data_bus_direction;
     logic           no_command_state;
 
-    logic           prev_timer_count_1;
-    logic           DRQ0;
+    // DMA channel 0 has no requester on this machine: on a PC-98 it is the
+    // SASI/SCSI board's channel (np21w io/dmac.c: DREQ only from an attached
+    // DMADEV), and our SCSI board is PIO. The PC/XT core this grew from
+    // pulsed it off PIT counter 1 for DRAM refresh -- here counter 1 is the
+    // beeper, so every speaker edge ran a stray ch0 cycle at whatever
+    // address the BIOS left in the channel, landing on guest memory.
+    wire            DRQ0 = 1'b0;
 
     // The EMS board (pc98_ems98): ports 08E1h-08E9h bank four 16 KB
     // windows at C0000-CFFFF into the SDRAM pool at 0x800000-0xFFFFFF.
@@ -291,26 +365,6 @@ module CHIPSET #(
     logic   [7:0]   ems98_status;
     logic           fdd_dma_req;
 
-
-    always_ff @(posedge clock)
-    begin
-        if (reset)
-            prev_timer_count_1 <= 1'b1;
-        else
-            prev_timer_count_1 <= timer_counter_out[1];
-    end
-
-    always_ff @(posedge clock, posedge reset)
-    begin
-        if (reset)
-            DRQ0 <= 1'b0;
-        else if (~dma_acknowledge_n[0])
-            DRQ0 <= 1'b0;
-        else if (~prev_timer_count_1 & timer_counter_out[1])
-            DRQ0 <= 1'b1;
-        else
-            DRQ0 <= DRQ0;
-    end
 
     // tandy_snd_rdy was ANDed in here and, on a PC-98 build, was 1'b1 by
     // io_channel_ready used to AND in a third term whose producer is gone;
@@ -331,7 +385,8 @@ module CHIPSET #(
         .io_write_n                         (io_write_n),
         .memory_read_n                      (memory_read_n),
         .dma0_acknowledge_n                 (dma_acknowledge_n[0]),
-        .address_enable_n                   (address_enable_n)
+        .address_enable_n                   (address_enable_n),
+        .dbg                                (dbg_w_rdy)
     );
 
     BUS_ARBITER u_BUS_ARBITER 
@@ -373,9 +428,8 @@ module CHIPSET #(
         .ext_access_request                 (ext_access_request),
         .dbg                                (arb_dbg),
         .dbg_dma                            (dbg_chipset5),
-        .watch_addr                         (dbg_watch_addr),
-        .dbg_dma3                           (dbg_chipset7),
-        .dbg_dma4                           (dbg_chipset10),
+        .watch_addr                         (20'hFFFFF),
+        .dbg_dma3                           (),
         // DRQ is active-low on the PC-98 bus (the data book names the pins
         // DRQ3O..DRQ0O) and the BIOS programs the 71071's DREQ sense bit
         // (0x11 bit6) to match. The sources here are active-high "request
@@ -384,7 +438,9 @@ module CHIPSET #(
         .dma_request                        (~{fdd_dma_req | dma_request[3], fdd_dma_req, dma_request[1], DRQ0}),
         .dma_acknowledge_n                  (dma_acknowledge_n),
         .address_enable_n                   (address_enable_n),
-        .terminal_count_n                   (terminal_count_n)
+        .terminal_count_n                   (terminal_count_n),
+        .dbg_w                              (dbg_w_arb),
+        .dbg_w2                             (dbg_w_dma)
     );
 
 
@@ -513,8 +569,13 @@ module CHIPSET #(
         .fdd_dma_req                        (fdd_dma_req),
         .dbg_fdc                            (dbg_fdc),
         .dbg_fdc_cmd                        (dbg_fdc_cmd),
+        .dbg_fdc2                           (dbg_fdc2),
         .dbg_gdc_s                          (dbg_gdc_s),
+        .dbg_gdc_s2                         (dbg_gdc_s2),
+        .dbg_gdc_s3                         (dbg_gdc_s3),
         .dbg_gvdisp                         (dbg_gvdisp),
+        .dbg_gvband                         (dbg_gvband),
+        .dbg_crt                            (dbg_crt),
         // The BIOS runs 2HD (0x90 window) transfers on channel 2 and 2DD
         // (0xC8 window) on channel 3 -- the arbiter pairs ack[2] with page
         // register 1 (port 0x23) and ack[3] with page register 2 (0x25),
@@ -582,10 +643,24 @@ module CHIPSET #(
     //
     // The guest's WORD cycles go through the sequencer too: an expanded
     // access runs the plane walk twice, once per byte lane, and RAM sees
-    // mem_word low for every leg. cpu_data_bus_hi stays wired to RAM
+    // mem_word rises for the GRCG word batch (one word-wide walk per
+    // plane); hi bytes ride mem_wdata_hi, plain pass-through mirrors
+    // cpu_wdata_hi, so the RAM port's hi lane can be driven by the
+    // sequencer alone.
+    wire [7:0] ram_wdata_hi_w;
     // directly -- the burst's odd byte only matters when the sequencer
     // passes the word flag through, which is exactly when mem_word is set.
-    pc98_gvram_seq #(.EGC(1'b0)) u_gvram_seq (
+    // RAM.sv's burst beats; the sequencer's own line-buffer bursts are
+    // kept off the bridge's prefetch window (pf_beat_seq).
+    logic ram_pf_beat_v, seq_pf_beat;
+    // the sequencer's write-back port (RAM.sv port G)
+    logic gvwb_req, gvwb_ack, gvwb_done, gvwb_we, gvwb_rvalid, gv_a_quiet;
+    logic [7:0]  gvwb_rdata;
+    logic [23:0] gvwb_addr;
+    logic [7:0]  gvwb_wdata;
+    assign pf_beat_v = ram_pf_beat_v & ~seq_pf_beat;
+    pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1)) u_gvram_seq (
+        .rmwbuf_off(dx_rmwbuf_off),
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
         .cpu_rd(~memory_read_n), .cpu_wr(~memory_write_n),
@@ -603,6 +678,7 @@ module CHIPSET #(
         .cpu_pf_len(cpu_pf_len & {5{~address_enable_n}}),
         .cpu_addr(latch_address), .cpu_wdata(internal_data_bus),
         .cpu_wdata_hi(cpu_data_bus_hi),
+        .mem_wdata_hi(ram_wdata_hi_w),
         .cpu_rdata(internal_data_bus_ram), .cpu_rdata_hi(seq_rdata_hi_w),
         .cpu_ready(memory_access_ready),
         .grcg_active(grcg_active), .grcg_rmw(grcg_rmw),
@@ -615,6 +691,7 @@ module CHIPSET #(
         .svc_addr(st_addr),
         .svc_wdata(st_wdata), .svc_done(st_done), .svc_rdata(st_rdata),
         .dbg(dbg_gvram),
+        .dbg2(dbg_w_seq),
         .mem_addr(ram_addr_w), .mem_wdata(ram_wdata_w),
         .mem_word(ram_word_w), .mem_pf_len(ram_pf_len_w),
         .mem_rd(ram_rd_w), .mem_wr(ram_wr_w),
@@ -623,7 +700,14 @@ module CHIPSET #(
         .mem_own(ram_own_w),
         .mem_ready(ram_ready_w),
         .mem_wr_taken(ram_wt_w),
-        .cpu_wr_taken(sdram_wr_taken)
+        .pf_beat_v(ram_pf_beat_v), .pf_beat_dat(pf_beat_dat),
+        .pf_beat_seq(seq_pf_beat),
+        .gvwb_req(gvwb_req), .gvwb_addr(gvwb_addr), .gvwb_wdata(gvwb_wdata),
+        .gvwb_ack(gvwb_ack), .gvwb_done(gvwb_done), .gvwb_wcnt(cachef_wcnt),
+        .gvwb_we(gvwb_we), .gvwb_rvalid(gvwb_rvalid), .gvwb_rdata(gvwb_rdata),
+        .gv_a_quiet(gv_a_quiet),
+        .cpu_wr_taken(sdram_wr_taken),
+        .cpu_rd_own(sdram_rd_ready)
     );
 
     // What the firmware asks about the charger state before its writes:
@@ -653,25 +737,47 @@ module CHIPSET #(
     // the guest's address, before the sequencer's plane remap. An RMW-class
     // guest write runs through the sequencer as a read+write pair, so it
     // takes half the charge on each leg and still pays eight in total.
+    wire accel_hit = grcg_active | egc_active_w;
+    // The wait is now charged by the CPU, once per guest access and
+    // overlapped with the access itself (z86_cache's pdebt, which also
+    // decodes the window): counting it in RAM.sv's COMPLETE state ADDED it
+    // to a bus pair that already took ~7 clocks, and charged it once per
+    // sequencer leg -- plain VRAM came out ~1.45x np21w and a GRCG TDW word
+    // ~1.85x. An RMW-class write is one guest access and pays one wait, as
+    // np21w's memvram.c charges it. RAM.sv's VRAM wait inputs now see zero.
+    // A GRCG/EGC access gets no CPU-side debt: the sequencer's plane walk
+    // already runs longer than np21w's MEMWAIT_GRCG price (TDW word 1.12x,
+    // RMW 1.75x the reference in scripts/sim_cycle_table.sh), and a debt
+    // on top only stacks: with 8 charged the TDW word measured 1.32x. Plain
+    // graphics-VRAM accesses are faster than the walk and take np21w's 6
+    // (1 in vblank).
+    // GRCG RMW is the exception now: the walk is posted and its line
+    // buffer writes back in bursts (pc98_gvram_seq PWPOST/WBACK), so at
+    // 8 MHz it came in under np21w's price (0.87x). It takes 3 (1 in
+    // vblank), not np21w's MEMWAIT_GRCG 8: the CPU-side debt partly stacks
+    // on the bridge turnaround. With z86's per-iteration REP STOS charge
+    // (execute rep_x) the cycle table measured (rep stosw 256 RMW, ratio
+    // at 8/10 MHz) 0..2 -> 0.91/1.06, 3 -> 0.95/1.06, 4 -> 1.02/1.13;
+    // 3 is the largest that leaves 10 and 12 MHz untouched. TDW writes
+    // are posted too now and take 4 (rep stosw 256 TDW 8/10 MHz: 0 ->
+    // 0.79/0.88, 4 -> 0.94/0.98, 5 -> 1.04/1.08). The EGC is not posted
+    // and stays at 0.
+    wire grcg_rmw_only = grcg_active & grcg_rmw & ~egc_active_w;
+    wire grcg_tdw_only = grcg_active & ~grcg_rmw & ~egc_active_w;
+    assign vram_wait_now = {pc98_analog,
+                            grcg_rmw_only ? (VID_VBlank ? 4'd1 : 4'd3)
+                          : grcg_tdw_only ? (VID_VBlank ? 4'd1 : 4'd4)
+                          : accel_hit     ? 4'd0
+                          : VID_VBlank    ? 4'd1 : 4'd6};
     wire vram_hit = (address[19:16] == 4'hA && address[15])   // A8000-AFFFF
                   | (address[19:16] == 4'hB)                  // B0000-BFFFF
                   | (pc98_analog & (address[19:15] == 5'b11100)); // E0000-E7FFF
-    wire accel_hit = grcg_active | egc_active_w;
-    // An EGC write is always a read-modify-write pair in the sequencer (the
-    // raster op reads every plane's dst first), so it takes the split
-    // charge too. This used to key on the EGC port-write strobe, which
-    // almost never coincides with a memory cycle.
     wire rmw_guest_wr = accel_hit & ~memory_write_n & (grcg_rmw | egc_active_w);
-    wire [3:0] vram_rd_wait = !vram_wait_en || !vram_hit ? 4'd0
-                            : VID_VBlank                   ? 4'd1
-                            : rmw_guest_wr                 ? 4'd4
-                            : accel_hit                    ? 4'd8
-                            :                                4'd6;
-    wire [3:0] vram_wr_wait = !vram_wait_en || !vram_hit ? 4'd0
-                            : VID_VBlank                   ? 4'd1
-                            : rmw_guest_wr                 ? 4'd4
-                            : accel_hit                    ? 4'd8
-                            :                                4'd6;
+    wire [3:0] vram_old_wait = !dx_vramwait || !vram_wait_en || !vram_hit ? 4'd0
+                             : VID_VBlank                   ? 4'd1
+                             : rmw_guest_wr                 ? 4'd4
+                             : accel_hit                    ? 4'd8
+                             :                                4'd6;
 
     RAM u_RAM 
     (
@@ -708,6 +814,29 @@ module CHIPSET #(
         .ramimg_rvalid                      (ramimg_rvalid),
         .ramimg_rdata                       (ramimg_rdata),
         .ramimg_done                        (ramimg_done),
+        .cachef_req                         (cachef_req),
+        .cachef_we                          (cachef_we),
+        .cachef_addr                        (cachef_addr),
+        .cachef_len                         (cachef_len),
+        .cachef_wdata0                      (cachef_wdata0),
+        .cachef_wdata1                      (cachef_wdata1),
+        .cachef_ack                         (cachef_ack),
+        .cachef_rvalid                      (cachef_rvalid),
+        .cachef_rdata                       (cachef_rdata),
+        .cachef_done                        (cachef_done),
+        .cachef_wcnt                        (cachef_wcnt),
+        .gvwb_req                           (gvwb_req),
+        .gvwb_addr                          (gvwb_addr),
+        .gvwb_wdata                         (gvwb_wdata),
+        .gvwb_ack                           (gvwb_ack),
+        .gvwb_done                          (gvwb_done),
+        .gvwb_we                            (gvwb_we),
+        .gvwb_rvalid                        (gvwb_rvalid),
+        .gvwb_rdata                         (gvwb_rdata),
+        .gv_a_quiet                         (gv_a_quiet),
+        .ram_wr_snoop_v                     (ram_wr_snoop_v),
+        .ram_wr_snoop_addr                  (ram_wr_snoop_addr),
+        .ram_wr_snoop_len                   (ram_wr_snoop_len),
         .clock                              (sdram_clock),
         .reset                              (sdram_reset),
         .enable_sdram                       (enable_sdram),
@@ -717,12 +846,12 @@ module CHIPSET #(
         .data_bus_out                       (ram_dout_w),
         .analog_mode                        (pc98_analog),
         .word_access                        (ram_word_w),
-        .internal_data_bus_hi               (cpu_data_bus_hi),
+        .internal_data_bus_hi               (ram_wdata_hi_w),
         .data_bus_out_hi                    (ram_dout_hi_w),
         .memory_read_n                      (~ram_rd_w),
         .memory_write_n                     (~ram_wr_w),
         .prefetch_len                       (ram_pf_len_w),
-        .pf_beat_v                          (pf_beat_v),
+        .pf_beat_v                          (ram_pf_beat_v),
         .pf_beat_dat                        (pf_beat_dat),
         .no_command_state                   (no_command_state),
         .memory_access_ready                (ram_ready_w),
@@ -747,16 +876,23 @@ module CHIPSET #(
         .wait_count_clk_en                  (wait_count_clk_en),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
         .ram_write_wait_cycle               (ram_write_wait_cycle),
-        .vram_rd_wait_cycle                 (vram_rd_wait),
-        .vram_wr_wait_cycle                 (vram_wr_wait),
+        .vram_rd_wait_cycle                 (vram_old_wait),
+        .vram_wr_wait_cycle                 (vram_old_wait),
+        .unstick                            (ram_unstick),
+        // AEN straight from Bus_Arbiter: high while the uPD71071 owns the
+        // bus. RAM.sv's layer-1 ready dip must never fire under a DMA-held
+        // strobe (the dma_ready pulse is one-shot) -- see RAM.sv's dma_hold
+        // port comment.
+        .dma_hold                           (address_enable_n),
+        .dbg_w_ram                          (dbg_w_ram),
+        .dbg_w_sdram                        (dbg_w_sdram),
         .dbg                                (ram_dbg),
         .dbg2                               (dbg_chipset3),
         .dbg3                               (dbg_chipset4),
         .dbg4                               (dbg_chipset8),
         .dbg5                               (dbg_chipset9),
         .dbg6                               (dbg_chipset11),
-        .dbg7                               (dbg_chipset12),
-        .dbg_watch_addr                     (dbg_watch_addr)
+        .dbg7                               (dbg_chipset12)
     );
 
     // JTAG probe bundle: {arbiter hold/DRQ, RAM FSM state} plus the wait

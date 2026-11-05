@@ -70,7 +70,22 @@ module upd71071_Timing_And_Control (
     output  logic           io_write_n_io,
     input   logic           ready,
     input   logic           end_of_process_n_in,
-    output  logic           end_of_process_n_out
+    output  logic           end_of_process_n_out,
+    // JTAG probe (PC98_JTAG): the wedge tap's DMA-state view --
+    // {state[2:0] (SI=0,S0,S1,S2,S3,SW,S4=6), dma_select[1:0],
+    //  hold_request, terminal_count, end_of_process_internal}. A bus
+    // wedged while the DMA owns it shows the channel parked mid-transfer;
+    // registered at the core_top boundary (slot 0xA0 low byte).
+    output  logic   [7:0]   dbg,
+    // JTAG probe (PC98_JTAG): the FDC channels' mode registers -- the
+    // other way a pending DRQ never grants: mode no longer single/block
+    // (edge_request low latches nothing) or autoinit re-masking the
+    // channel at every EOP. Packs with the priority encoder's view into
+    // probe slot 0xA8:
+    //   [9:8]   transfer_mode[3]   [7:6] transfer_mode[2]
+    //   [5]     autoinit[3]        [4]   autoinit[2]
+    //   [3:0]   edge_request (single|block per channel)
+    output  logic   [9:0]   dbg_m
 );
     import upd71071_Common_Package::bit2num;
 
@@ -586,6 +601,15 @@ module upd71071_Timing_And_Control (
     end
 
     assign  end_of_process_n_out = ~terminal_count;
+
+    // The wedge tap's view of the transfer engine -- see the dbg port
+    // comment above the port list.
+    assign  dbg = {3'(state), dma_select, hold_request, terminal_count,
+                   end_of_process_internal};
+
+    assign  dbg_m = {transfer_mode[3], transfer_mode[2],
+                     autoinitialization_enable[3], autoinitialization_enable[2],
+                     edge_request};
 
     always_comb
         for (int i = 0; i < 4; i++)

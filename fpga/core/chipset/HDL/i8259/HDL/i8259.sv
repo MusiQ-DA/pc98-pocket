@@ -38,7 +38,12 @@ module i8259 #(
     // np21w's timer quirk as an explicit port: a strobe here clears the
     // corresponding IRR bits (see i8259_Interrupt_Request).  Only the master
     // PIC's bit 0 is ever driven on a PC-98 -- the interval timer's writes.
-    input   logic   [7:0]   external_irr_clear
+    input   logic   [7:0]   external_irr_clear,
+
+    // Probe readout: {IMR, ISR, IRR}, the registers a guest reads through
+    // OCW3/port A1 -- so a JTAG probe can see a stuck in-service bit or a
+    // mask the guest never lifted without running guest code.
+    output  logic   [23:0]  dbg_regs
 );
 
     //
@@ -79,6 +84,7 @@ module i8259 #(
     logic   [7:0]   control_logic_data;
     logic           level_or_edge_toriggered_config;
     logic           special_fully_nest_config;
+    logic   [7:0]   special_fully_nest_levels;
     logic           enable_read_register;
     logic           read_register_isr_or_irr;
     logic   [7:0]   interrupt;
@@ -122,6 +128,7 @@ module i8259 #(
         // Registers to interrupt detecting logics
         .level_or_edge_toriggered_config    (level_or_edge_toriggered_config),
         .special_fully_nest_config          (special_fully_nest_config),
+        .special_fully_nest_levels          (special_fully_nest_levels),
 
         // Registers to Read logics
         .enable_read_register               (enable_read_register),
@@ -175,7 +182,7 @@ module i8259 #(
         .priority_rotate                    (priority_rotate),
         .interrupt_mask                     (interrupt_mask),
         .interrupt_special_mask             (interrupt_special_mask),
-        .special_fully_nest_config          (special_fully_nest_config),
+        .special_fully_nest_levels          (special_fully_nest_levels),
         .highest_level_in_service           (highest_level_in_service),
 
         // Inputs
@@ -207,6 +214,9 @@ module i8259 #(
         .in_service_register                (in_service_register),
         .highest_level_in_service           (highest_level_in_service)
     );
+
+    assign dbg_regs = {interrupt_mask, in_service_register,
+                       interrupt_request_register};
 
     //
     // Data Bus Buffer & Read/Write Control Logic (2)

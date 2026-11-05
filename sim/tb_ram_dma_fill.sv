@@ -36,6 +36,8 @@ module tb_ram_dma_fill;
     always #11.641 clk = ~clk;
 
     logic reset = 1'b1;
+    logic [1:0] clk_sel = 2'b00;
+    initial begin int c; if ($value$plusargs("SPEED=%d", c)) clk_sel = 2'(c); end
 
     // ---- the CE train, as core_top makes it -------------------------------
     // The DMA engine steps on cpu_ce_posedge; the metal default during the
@@ -50,7 +52,7 @@ module tb_ram_dma_fill;
         .clock                              (clk),
         .reset                              (reset),
         .clk_select_load                    (biu_done),
-        .clk_select                         (2'b00),      // 4.9 MHz
+        .clk_select                         (clk_sel),
         .cpu_clk_pin                        (clk_cpu),
         .cpu_ce_posedge                     (cpu_ce_posedge),
         .cpu_ce_negedge                     (cpu_ce_negedge),
@@ -241,6 +243,8 @@ module tb_ram_dma_fill;
     wire         gv_ack, gv_rvalid, gv_done;
     wire [15:0]  gv_rdata;
     int          gv_timer = 0;
+    int          gv_period = 400;
+    initial begin int g; if ($value$plusargs("GVP=%d", g)) gv_period = g; end
     always_ff @(posedge clk) begin
         if (reset) begin
             gv_req <= 1'b0; gv_timer <= 0;
@@ -250,7 +254,7 @@ module tb_ram_dma_fill;
             if (gv_ack) gv_req <= 1'b0;
         end else begin
             gv_timer <= gv_timer + 1;
-            if (gv_timer == 400) begin
+            if (gv_timer >= gv_period) begin
                 gv_timer <= 0;
                 gv_req   <= 1'b1;
             end
@@ -322,6 +326,7 @@ module tb_ram_dma_fill;
                           & ab_mem_wr_n & all_mem_rd_n;
 
     RAM u_ram (
+        .dma_hold(1'b0),
         .clock(clk), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram_w),
         .gvram_page1_flag(p1_flag),
@@ -346,7 +351,6 @@ module tb_ram_dma_fill;
         .write_taken(),
         .dbg(), .dbg2(ram_dbg2), .dbg3(ram_dbg3),
         .dbg4(), .dbg5(), .dbg6(), .dbg7(),
-        .dbg_watch_addr(20'hFFFFF),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
@@ -358,7 +362,7 @@ module tb_ram_dma_fill;
         .font_rd_ack(), .font_rd_valid(), .font_rd_data(), .font_rd_done(),
         .cg_rd_req(1'b0), .cg_rd_addr(24'h0), .cg_rd_len(4'h0),
         .cg_rd_ack(), .cg_rd_valid(), .cg_rd_data(), .cg_rd_done(),
-        .gv_rd_req(gv_req), .gv_rd_addr(24'h0A000), .gv_rd_len(4'd8),
+        .gv_rd_req(gv_req), .gv_rd_addr(24'h0A000), .gv_rd_len(4'd15),
         .gv_rd_ack(gv_ack), .gv_rd_valid(gv_rvalid),
         .gv_rd_data(gv_rdata), .gv_rd_done(gv_done),
         .wait_count_clk_en(cpu_ce_negedge),
@@ -367,7 +371,11 @@ module tb_ram_dma_fill;
         .ramimg_req(ri_req), .ramimg_we(1'b0), .ramimg_addr(ri_addr),
         .ramimg_len(4'd0), .ramimg_wdata(16'h0000),
         .ramimg_ack(ri_ack), .ramimg_rvalid(ri_rvalid),
-        .ramimg_rdata(ri_rdata), .ramimg_done(ri_done)
+        .ramimg_rdata(ri_rdata), .ramimg_done(ri_done),
+        .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
+        .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
+        .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
+        .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len()
     );
     assign memory_access_ready = ram_ready_w;
 

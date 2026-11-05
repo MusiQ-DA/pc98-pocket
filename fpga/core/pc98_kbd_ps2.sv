@@ -107,39 +107,49 @@ module pc98_kbd_ps2 (
     // fixed Print Screen and Pause sequences. E0 12 / E0 59 inside Print
     // Screen are fake shifts, not keys -- both are discarded so COPY does
     // not leave a phantom shift held. Pause arrives as the 8-byte E1
-    // sequence and is make-only: it becomes a STOP make and the remaining
-    // 7 bytes are swallowed.
+    // sequence and is make-only: it becomes a STOP press (make and break, see
+    // ev_tap) and the remaining 7 bytes are swallowed. The parser only names
+    // the key; the output stage below decides what goes on the wire.
     //
     localparam [2:0] S_IDLE = 3'd0, S_EXT = 3'd1, S_BRK = 3'd2,
                      S_EXT_BRK = 3'd3, S_SKIP = 3'd4;
     reg [2:0] state;
     reg [2:0] skip_cnt;
+    reg       ev_v;       // one-beat: the parser decoded a key event
+    reg       ev_make;
+    reg       ev_tap;     // a make with no break to follow (Pause -> STOP)
+    reg [6:0] ev_code;
 
     always @(posedge clk) begin
         if (reset) begin
             state    <= S_IDLE;
-            key_stb  <= 1'b0;
-            key_make <= 1'b0;
-            key_code <= 8'd0;
             skip_cnt <= 3'd0;
-        end else if (q_v) begin
+            ev_v     <= 1'b0;
+            ev_make  <= 1'b0;
+            ev_tap   <= 1'b0;
+            ev_code  <= 7'd0;
+        end else begin
+          ev_v   <= 1'b0;
+          ev_tap <= 1'b0;
+          if (q_v) begin
             case (state)
                 S_IDLE: begin
                     case (q_byte)
                         8'hE0: state <= S_EXT;
                         8'hF0: state <= S_BRK;
                         8'hE1: begin                       // Pause: a make-only STOP
-                            key_stb  <= ~key_stb;
-                            key_make <= 1'b1;
-                            key_code <= 8'h60;
+                            ev_v     <= 1'b1;
+                            ev_make  <= 1'b1;
+                            ev_tap   <= 1'b1;
+                            ev_code  <= 7'h60;
                             skip_cnt <= 3'd7;              // 14 77 E1 F0 14 F0 77
                             state    <= S_SKIP;
                         end
                         default: begin
                             if (roma_q != KC_NONE) begin
-                                key_stb  <= ~key_stb;
-                                key_make <= 1'b1;
-                                key_code <= roma_q;
+                                ev_v     <= 1'b1;
+                                ev_make  <= 1'b1;
+                                ev_code  <= roma_q[6:0];
                             end
                         end
                     endcase
@@ -155,9 +165,9 @@ module pc98_kbd_ps2 (
                     else begin
                         state <= S_IDLE;
                         if (romb_q != KC_NONE) begin
-                            key_stb  <= ~key_stb;
-                            key_make <= 1'b1;
-                            key_code <= romb_q;
+                            ev_v     <= 1'b1;
+                            ev_make  <= 1'b1;
+                            ev_code  <= romb_q[6:0];
                         end
                     end
                 end
@@ -165,9 +175,9 @@ module pc98_kbd_ps2 (
                 S_BRK: begin                               // release of a plain key
                     state <= S_IDLE;
                     if (roma_q != KC_NONE) begin
-                        key_stb  <= ~key_stb;
-                        key_make <= 1'b0;
-                        key_code <= roma_q | 8'h80;
+                        ev_v     <= 1'b1;
+                        ev_make  <= 1'b0;
+                        ev_code  <= roma_q[6:0];
                     end
                 end
 
@@ -175,9 +185,9 @@ module pc98_kbd_ps2 (
                     state <= S_IDLE;
                     if (q_byte != 8'h12 && q_byte != 8'h59   // fake shift break
                             && romb_q != KC_NONE) begin
-                        key_stb  <= ~key_stb;
-                        key_make <= 1'b0;
-                        key_code <= romb_q | 8'h80;
+                        ev_v     <= 1'b1;
+                        ev_make  <= 1'b0;
+                        ev_code  <= romb_q[6:0];
                     end
                 end
 
@@ -190,6 +200,88 @@ module pc98_kbd_ps2 (
 
                 default: state <= S_IDLE;
             endcase
+          end
+        end
+    end
+
+    //
+    // Output stage: the keyboard MCU's side of the wire. A PC-98 keyboard
+    // reports a held key's auto-repeat as a BREAK then a MAKE, never as a bare
+    // make, and the shift-class keys (0x70 and up) do not repeat at all
+    // (np21w keystat.c, keystat_down). That matters because the BIOS's IRQ1
+    // handler XORs every byte into its key-state matrix at 0x52A: the PS/2
+    // typematic's bare makes toggled the bit on each repeat, so a key held
+    // long enough to repeat an odd number of times was left reading as held
+    // after its release. SuperDepth polls that matrix and waits for every
+    // direction to read released before it takes the next one, so its title
+    // menu went dead after the first long press.
+    //
+    // held[] tracks what the guest has been told is down: a repeat becomes
+    // break+make, a break for a key not held (or a second make of a shift
+    // key) is dropped so the matrix can never go out of balance, and the
+    // Pause key's lone make is answered with its own break.
+    //
+    // The second byte of a pair waits PAIR_GAP clocks: pc98_key_inject
+    // samples key_stb a cycle late against key_code, so two toggles on
+    // adjacent clocks would hand the 8251 the wrong byte for the first one.
+    // The 8251 queues the pair (holding register + its one-deep side slot);
+    // the next stream byte is ~0.9 ms away, far behind the pair.
+    //
+    localparam [3:0] PAIR_GAP = 4'd15;
+    reg [127:0] held;
+    reg         pend_v;
+    reg         pend_make;
+    reg  [6:0]  pend_code;
+    reg  [3:0]  pend_gap;
+
+    always @(posedge clk) begin
+        if (reset) begin
+            key_stb   <= 1'b0;
+            key_make  <= 1'b0;
+            key_code  <= 8'd0;
+            held      <= 128'd0;
+            pend_v    <= 1'b0;
+            pend_make <= 1'b0;
+            pend_code <= 7'd0;
+            pend_gap  <= 4'd0;
+        end else if (ev_v) begin
+            if (ev_make && held[ev_code]) begin
+                if (ev_code < 7'h70) begin             // auto-repeat: break, then make
+                    key_stb   <= ~key_stb;
+                    key_make  <= 1'b0;
+                    key_code  <= {1'b1, ev_code};
+                    pend_v    <= 1'b1;
+                    pend_make <= 1'b1;
+                    pend_code <= ev_code;
+                    pend_gap  <= PAIR_GAP;
+                end                                    // shift class: no repeat
+            end else if (ev_make) begin                // fresh press
+                key_stb  <= ~key_stb;
+                key_make <= 1'b1;
+                key_code <= {1'b0, ev_code};
+                if (ev_tap) begin                      // Pause: release it too
+                    pend_v    <= 1'b1;
+                    pend_make <= 1'b0;
+                    pend_code <= ev_code;
+                    pend_gap  <= PAIR_GAP;
+                end else begin
+                    held[ev_code] <= 1'b1;
+                end
+            end else if (held[ev_code]) begin          // release of a held key
+                key_stb  <= ~key_stb;
+                key_make <= 1'b0;
+                key_code <= {1'b1, ev_code};
+                held[ev_code] <= 1'b0;
+            end
+        end else if (pend_v) begin
+            if (pend_gap != 4'd0) begin
+                pend_gap <= pend_gap - 4'd1;
+            end else begin
+                key_stb  <= ~key_stb;
+                key_make <= pend_make;
+                key_code <= {~pend_make, pend_code};
+                pend_v   <= 1'b0;
+            end
         end
     end
 

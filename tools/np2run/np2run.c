@@ -141,14 +141,97 @@ static const char *shotfile;              /* -shot FILE: save last frame as PPM 
 static uint8_t    *shot_fb;
 static unsigned    shot_w, shot_h, shot_pitch;
 
+static void write_shot(const char *path);
+static long frame_ctr;
+static const char *shotdir;
+static long shot_every = 60;
+static long shot_from = 0;
+static long shot_to = 1000000000L;
+static long poke_frame[8];
+static unsigned poke_addr[8], poke_val[8];
+static int npoke = 0, poke_done[8] = {0};
+
+/* NP2WATCH="physaddr:value": start saving every frame once that 16-bit cell
+ * equals value.  A small ring keeps the frames just before the trigger, so a
+ * one-frame event is never missed.  NP2WATCHPRE / NP2WATCHPOST tune the
+ * window (defaults 12 / 240).  Uses NP2SHOTDIR. */
+static uint8_t *g_ram;
+static long watch_addr = -1;
+static unsigned watch_val;
+static long watch_post = 240;
+static int watch_pre = 12, watch_armed = 1, watch_hit = 0;
+static long watch_hit_frame;
+static long watch_dump_delta = -1;
+static int watch_dump_done = 0;
+static const char *watch_dump_prefix;
+#define RING_MAX 32
+static uint8_t *ring[RING_MAX];
+static long ring_frame[RING_MAX];
+static int ring_n = 0, ring_pos = 0;
+
+static void ring_dump(void) {
+    if (!shot_fb) return;
+    uint8_t *cur = malloc((size_t)shot_h * shot_pitch);
+    if (!cur) return;
+    memcpy(cur, shot_fb, (size_t)shot_h * shot_pitch);
+    for (int i = 0; i < ring_n; i++) {
+        int idx = (ring_pos - ring_n + i + RING_MAX) % RING_MAX;
+        if (!ring[idx]) continue;
+        memcpy(shot_fb, ring[idx], (size_t)shot_h * shot_pitch);
+        char path[512];
+        snprintf(path, sizeof path, "%s/f%05ld.ppm", shotdir, ring_frame[idx]);
+        write_shot(path);
+    }
+    memcpy(shot_fb, cur, (size_t)shot_h * shot_pitch);
+    free(cur);
+}
+
 static void video_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
+    frame_ctr++;
     if (!shotfile || !data || !w || !h) return;
     if (w != shot_w || h != shot_h || pitch != shot_pitch) {
         free(shot_fb);
         shot_fb = malloc((size_t)h * pitch);
         shot_w = w; shot_h = h; shot_pitch = pitch;
+        for (int i = 0; i < RING_MAX; i++) { free(ring[i]); ring[i] = NULL; }
+        ring_n = ring_pos = 0;
     }
     if (shot_fb) memcpy(shot_fb, data, (size_t)h * pitch);
+    if (watch_addr >= 0 && g_ram && shotdir) {
+        unsigned v = g_ram[watch_addr] | (g_ram[watch_addr + 1] << 8);
+        if (watch_armed && v == watch_val) {
+            watch_armed = 0;
+            watch_hit = 1;
+            watch_hit_frame = frame_ctr;
+            fprintf(stderr, "[np2run] watch hit f=%ld val=%#x\n", frame_ctr, v);
+            ring_dump();
+            if (shot_fb) {
+                char path[512];
+                snprintf(path, sizeof path, "%s/f%05ld.ppm", shotdir, frame_ctr);
+                write_shot(path);
+            }
+        } else if (watch_armed && shot_fb) {
+            int idx = ring_pos;
+            size_t sz = (size_t)shot_h * shot_pitch;
+            if (!ring[idx]) ring[idx] = malloc(sz);
+            if (ring[idx]) memcpy(ring[idx], data, sz);
+            ring_frame[idx] = frame_ctr;
+            ring_pos = (ring_pos + 1) % RING_MAX;
+            if (ring_n < RING_MAX) ring_n++;
+        }
+    }
+    int in_ring_window = watch_hit && frame_ctr > watch_hit_frame &&
+                         frame_ctr <= watch_hit_frame + watch_post;
+    if (shotdir && shot_fb && watch_hit && in_ring_window) {
+        char path[512];
+        snprintf(path, sizeof path, "%s/f%05ld.ppm", shotdir, frame_ctr);
+        write_shot(path);
+    } else if (shotdir && shot_fb && frame_ctr >= shot_from && frame_ctr <= shot_to &&
+        frame_ctr % shot_every == 0) {
+        char path[512];
+        snprintf(path, sizeof path, "%s/f%05ld.ppm", shotdir, frame_ctr);
+        write_shot(path);
+    }
 }
 
 /* Write the latest frame as a binary PPM (P6). The core delivers RGB565 or
@@ -180,8 +263,31 @@ static void write_shot(const char *path) {
 static void audio_cb(int16_t l, int16_t r) { (void)l; (void)r; }
 static size_t audio_batch_cb(const int16_t *d, size_t frames) { (void)d; return frames; }
 static void input_poll_cb(void) {}
+
+/* -keys "frame:retrok,..." holds a keyboard key for 3 frames. RETRO_DEVICE_KEYBOARD
+ * is dev 3; np2kai routes RETROK_* into the PC-98 matrix. */
+#define KEY_MAX 32
+static struct { long frame; int key; } keys[KEY_MAX];
+static int  nkeys;
+static void parse_keys(const char *spec) {
+    const char *p = spec;
+    while (*p && nkeys < KEY_MAX) {
+        keys[nkeys].frame = strtol(p, (char**)&p, 10);
+        if (*p == ':') p++;
+        keys[nkeys].key = (int)strtol(p, (char**)&p, 10);
+        nkeys++;
+        if (*p == ',') p++;
+    }
+    fprintf(stderr, "[np2run] %d key events\n", nkeys);
+}
 static int16_t input_state_cb(unsigned port, unsigned dev, unsigned idx, unsigned id) {
-    (void)port; (void)dev; (void)idx; (void)id;
+    (void)port; (void)idx;
+    if (dev == 3) {                      /* RETRO_DEVICE_KEYBOARD */
+        for (int i = 0; i < nkeys; i++)
+            if ((int)id == keys[i].key &&
+                frame_ctr >= keys[i].frame && frame_ctr < keys[i].frame + 3)
+                return 1;
+    }
     return 0;
 }
 
@@ -241,6 +347,35 @@ int main(int argc, char **argv) {
     SYM(get_memory_data); SYM(get_memory_size);
 #undef SYM
 
+    { const char *ks = getenv("NP2KEYS"); if (ks) parse_keys(ks);
+      const char *sd = getenv("NP2SHOTDIR"); if (sd) { shotdir = sd; const char *se = getenv("NP2SHOTEVERY"); if (se) shot_every = atol(se); if (shot_every < 1) shot_every = 1; }
+      { const char *sf = getenv("NP2SHOTFROM"); if (sf) shot_from = atol(sf);
+        const char *st = getenv("NP2SHOTTO"); if (st) shot_to = atol(st); }
+      { const char *pk = getenv("NP2POKE");
+        if (pk) { const char *p = pk;
+          while (*p && npoke < 8) {
+            long f = strtol(p, (char**)&p, 0); if (*p != ':') break; p++;
+            unsigned a = (unsigned)strtoul(p, (char**)&p, 0); if (*p != ':') break; p++;
+            unsigned v = (unsigned)strtoul(p, (char**)&p, 0);
+            poke_frame[npoke]=f; poke_addr[npoke]=a; poke_val[npoke]=v; npoke++;
+            if (*p == ',') p++;
+          }
+        } }
+      { const char *wt = getenv("NP2WATCH");
+        if (wt) {
+          char *end; watch_addr = strtol(wt, &end, 0);
+          if (*end == ':') watch_val = (unsigned)strtoul(end + 1, NULL, 0);
+          else watch_addr = -1;
+          const char *wp = getenv("NP2WATCHPRE"); if (wp) watch_pre = atoi(wp);
+          const char *wq = getenv("NP2WATCHPOST"); if (wq) watch_post = atol(wq);
+          if (watch_pre < 0) watch_pre = 0; if (watch_pre > RING_MAX) watch_pre = RING_MAX;
+          const char *wd = getenv("NP2WATCHDUMP");
+          if (wd) { watch_dump_delta = atol(wd); watch_dump_prefix = getenv("NP2DUMPPREFIX"); }
+          shot_from = 0; shot_to = -1;   /* periodic shots off; watch drives them */
+          fprintf(stderr, "[np2run] watch %#lx==%#x pre=%d post=%ld\n",
+                  watch_addr, watch_val, watch_pre, watch_post);
+        } }
+      if (shotdir) shotfile = "-"; }
     r_set_environment(env_cb);
     r_set_video_refresh(video_cb);
     r_set_audio_sample(audio_cb);
@@ -269,12 +404,49 @@ int main(int argc, char **argv) {
         fprintf(stderr, "[np2run] mem symbol @%p\n", ramp);
     }
     if (!ramp) fprintf(stderr, "[np2run] no RAM access\n");
+    g_ram = ramp;
 
     char scr[25][81];
+    /* NP2DUMPAT="f1,f2,..." NP2DUMPPREFIX=path: in-run RAM snapshots, so two
+     * states of the same deterministic run can be diffed without run-to-run
+     * RNG noise (the game seeds from the PIT counter). */
+    const char *dumpat = getenv("NP2DUMPAT");
+    const char *dumppfx = getenv("NP2DUMPPREFIX");
     int found = 0;
     for (long f = 0; f <= frames; f++) {
         r_run();
+        for (int pi = 0; pi < npoke; pi++)
+            if (!poke_done[pi] && frame_ctr >= poke_frame[pi] && ramp) {
+                ramp[poke_addr[pi]] = poke_val[pi] & 0xff;
+                ramp[poke_addr[pi]+1] = (poke_val[pi] >> 8) & 0xff;
+                poke_done[pi] = 1;
+                fprintf(stderr, "[np2run] poke f=%ld addr=%#x val=%#x\n",
+                        frame_ctr, poke_addr[pi], poke_val[pi]);
+            }
+        if (watch_hit && !watch_dump_done && watch_dump_delta >= 0 && ramp &&
+            watch_dump_prefix && frame_ctr >= watch_hit_frame + watch_dump_delta) {
+            char path[512];
+            snprintf(path, sizeof path, "%s_w.bin", watch_dump_prefix);
+            FILE *fw = fopen(path, "wb");
+            if (fw) { fwrite(ramp, 1, 0x200000, fw); fclose(fw);
+                      fprintf(stderr, "[np2run] watch dump f=%ld -> %s\n", frame_ctr, path); }
+            watch_dump_done = 1;
+        }
         if (f == 0) continue; /* first run just does pre_main */
+        if (dumpat && ramp && dumppfx) {
+            const char *p = dumpat;
+            while (*p) {
+                long at = strtol(p, (char **)&p, 10);
+                while (*p == ',') p++;
+                if (at == f) {
+                    char path[512];
+                    snprintf(path, sizeof path, "%s_%ld.bin", dumppfx, f);
+                    FILE *fp2 = fopen(path, "wb");
+                    if (fp2) { fwrite(ramp, 1, 0x200000, fp2); fclose(fp2); }
+                    fprintf(stderr, "[np2run] in-run dump %ld -> %s\n", f, path);
+                }
+            }
+        }
         int do_dump = (poll_n && (f % poll_n) == 0) || f == frames || mark;
         if (do_dump) {
             uint8_t *ram = ramp;

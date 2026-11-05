@@ -4,7 +4,14 @@
 //
 // Based on chipset written by @kitune-san
 //
-module RAM (
+module RAM #(
+    // Self-healing horizons (see the wedge-watchdog block below the state
+    // machine). Defaults are the shipping configuration; testbenches may
+    // narrow them to keep a watchdog recovery inside a reasonable sim
+    // length. 2^13 clk ~= 190 us, 2^20 clk ~= 24 ms at 42.95 MHz.
+    parameter int WEDGE_CMPLT_BITS = 13,
+    parameter int WEDGE_WDOG_BITS  = 20
+) (
     input   logic           clock,
     input   logic           reset,
     input   logic           enable_sdram,
@@ -85,7 +92,8 @@ module RAM (
     output  logic   [31:0]  dbg5,
     output  logic   [103:0] dbg6,
     output  logic   [55:0]  dbg7,
-    input   logic   [19:0]  dbg_watch_addr,
+    // (The write-watchpoint address input is retired with the ring; dbg7
+    // reads zero regardless.)
     // SDRAM
     output  logic   [12:0]  sdram_address,
     output  logic           sdram_cke,
@@ -146,6 +154,39 @@ module RAM (
      output logic           ramimg_rvalid,
      output logic   [15:0]  ramimg_rdata,
      output logic           ramimg_done,
+    // The CPU cache's own port (controller port F): line-fill bursts and
+    // one/two-word write-through stores. Same word addressing as port A --
+    // one guest byte per SDRAM word.
+     input  logic           cachef_req,
+     input  logic           cachef_we,
+     input  logic   [23:0]  cachef_addr,
+     input  logic    [3:0]  cachef_len,
+     input  logic   [15:0]  cachef_wdata0,
+     input  logic   [15:0]  cachef_wdata1,
+     output logic           cachef_ack,
+     output logic           cachef_rvalid,
+     output logic   [15:0]  cachef_rdata,
+     output logic           cachef_done,
+     output logic    [4:0]  cachef_wcnt,
+    // The GRCG RMW line buffer's write-back (pc98_gvram_seq): controller
+    // port G, one 16-word write burst per plane line, data by word on
+    // cachef_wcnt (the controller's one p_wcnt). Tie gvwb_req low if unused.
+     input  logic           gvwb_req,
+     input  logic           gvwb_we,         // 0: the line fill (a read)
+     output logic           gvwb_rvalid,
+     output logic    [7:0]  gvwb_rdata,
+    // Nothing of port A's is pending or in flight (no parked write, no
+    // capture, the FSM idle): a port-G fill cannot pass an older write.
+     output logic           gv_a_quiet,
+     input  logic   [23:0]  gvwb_addr,
+     input  logic    [7:0]  gvwb_wdata,
+     output logic           gvwb_ack,
+     output logic           gvwb_done,
+    // Port A write commits (guest, DMA, loader), for the cache to snoop:
+    // one-cycle pulse, SDRAM word address, words - 1.
+     output logic           ram_wr_snoop_v,
+     output logic   [23:0]  ram_wr_snoop_addr,
+     output logic    [3:0]  ram_wr_snoop_len,
      input  logic           bios_shadow_flag,
     // Wait mode
     input   logic           wait_count_clk_en,
@@ -156,7 +197,45 @@ module RAM (
     // refresh owns that memory. Zero on a main-RAM address and at the
     // speeds that do not model the contention.
     input   logic   [3:0]   vram_rd_wait_cycle,
-    input   logic   [3:0]   vram_wr_wait_cycle
+    input   logic   [3:0]   vram_wr_wait_cycle,
+    // JTAG probe (PC98_JTAG): drop the parked-write queue and force the
+    // FSM to IDLE. A diagnostic escape hatch for a wedged memory path --
+    // this FSM lives in the sdram_reset domain, so a guest reset (greset)
+    // cannot clear a stall it holds; the probe pulses this instead. The
+    // SDRAM transaction in flight (if any) is left alone: the shim and the
+    // controller always finish what they took, and only the bookkeeping
+    // above them is dropped.
+    // The FSM also fires this clear ITSELF when its no-work watchdog times
+    // out (see the self-healing block below the state machine) -- the probe
+    // pulse remains the manual override for everything else.
+    input   logic           unstick,
+    // The DMA owns the bus right now (AEN window, ~address_enable_n from
+    // Bus_Arbiter). Layer 1 of the self-healing watchdog must NEVER dip
+    // the ready output while this is high: the uPD71071 consumes dma_ready
+    // as a ONE-SHOT PULSE (READY.sv), so a dip-and-re-assert mid-transfer
+    // injects a pulse the DMA's S-sequence did not ask for and derails it
+    // -- the run#973 SD-cold-boot regression, where a legal 10-100 ms
+    // write-strobe park (the 71071 in SW, waiting for the FDC's byte from
+    // the slow SD card) tripped the 190 us horizon and the machine died at
+    // "MEMORY 640KB OK" with DRQ never served again. A legal DMA park may
+    // last as long as the storage takes; there is no safe horizon, so the
+    // gate is ownership, not time. CPU-side masters consume ready as a
+    // LEVEL through pipelines (a spurious dip there costs <= 2^6 clk), and
+    // the wedge layer 1 exists to fix was CPU-owned (AEN low) anyway.
+    input   logic           dma_hold,
+    // JTAG probe (PC98_JTAG): the wedge tap's RAM-side view (MSB first) --
+    //   [23] wc_pend  [22] wc_pend2  [21] wc_pend3  [20] cap_valid
+    //   [19] rd_conflicts  [18] accept_live_wr  [17] accept_live_rd
+    //   [16:14] state (IDLE=0, W1=1, W2=2, R1=3, R2=4, COMPLETE=5, WAIT=6)
+    //   [13:12] read_wait_count  [11:10] write_wait_count
+    //   [9] vram_rd_wait_count != 0  [8] vram_wr_wait_count != 0
+    //   [7:0] nonidle_age -- clk cycles outside IDLE, saturating. A
+    //          healthy access is single digits; 0xFF is a wedged FSM.
+    output  logic   [23:0]  dbg_w_ram,
+    // JTAG probe (PC98_JTAG): sdram_shim's wedge word straight through
+    // (port-A ages, per-port requests, controller state) -- see
+    // sdram_shim.sv's dbg_w port comment.
+    output  logic   [39:0]  dbg_w_sdram
 );
 
     typedef enum {IDLE, RAM_WRITE_1, RAM_WRITE_2, RAM_READ_1, RAM_READ_2, COMPLETE_RAM_RW, WAIT} state_t;
@@ -245,7 +324,7 @@ module RAM (
     // SDRAM (the loader writes it there, the guest fetches it from there),
     // and taking it out of the select -- which one revision did -- starved
     // the loader into DROP 38190 and left BAD 0F2 on the compare.
-    // The predicate itself lives in pc98_sdram_map.svh, because zet_cpu_bridge
+    // The predicate itself lives in pc98_sdram_map.svh, because cpu_bus_bridge
     // needs the same answer one step earlier -- see that file.
 `include "pc98_sdram_map.svh"
 
@@ -357,12 +436,19 @@ module RAM (
     logic           idle;
     logic           refresh_mode;
     logic   [15:0]  pf_beat_w;
+    logic           shim_rvalid;
+    logic           pf_tag;
     assign  pf_beat_dat = pf_beat_w[7:0];
 
     // sdram_shim wraps sdram_mp, the multi-port controller: port A is this
     // guest path, B the font fetch, C the CG window, D the graphics display,
     // E fdd_ramimg's image carve-out.
     // See docs/P0_SDRAM_DESIGN.md.
+    logic [15:0] gvwb_rdata_w;
+    assign gvwb_rdata = gvwb_rdata_w[7:0];
+    assign gv_a_quiet = (state == IDLE) & ~wc_pend & ~wc_pend2 & ~wc_pend3
+                      & ~cap_valid & ~write_request & ~read_request;
+
     sdram_shim u_sdram (
         .sdram_clock        (clock),
         .sdram_reset        (reset),
@@ -372,7 +458,7 @@ module RAM (
         .data_out           (access_data_out),
         .data_in_hi         (access_data_in_hi),
         .data_out_hi        (access_data_out_hi),
-        .a_rvalid           (pf_beat_v),
+        .a_rvalid           (shim_rvalid),
         .a_beat             (pf_beat_w),
         .write_request      (write_request),
         .read_request       (read_request),
@@ -420,8 +506,56 @@ module RAM (
         .e_ack              (ramimg_ack),
         .e_rvalid           (ramimg_rvalid),
         .e_rdata            (ramimg_rdata),
-        .e_done             (ramimg_done)
+        .e_done             (ramimg_done),
+        .f_req              (cachef_req),
+        .f_we               (cachef_we),
+        .f_addr             (cachef_addr),
+        .f_len              (cachef_len),
+        .f_wdata0           (cachef_wdata0),
+        .f_wdata1           (cachef_wdata1),
+        .f_ack              (cachef_ack),
+        .f_rvalid           (cachef_rvalid),
+        .f_rdata            (cachef_rdata),
+        .f_done             (cachef_done),
+        .f_wcnt             (cachef_wcnt),
+        .g_req              (gvwb_req),
+        .g_we               (gvwb_we),
+        .g_rvalid           (gvwb_rvalid),
+        .g_rdata            (gvwb_rdata_w),
+        .g_addr             (gvwb_addr),
+        .g_len              (4'd15),
+        .g_wdata            ({8'h00, gvwb_wdata}),
+        .g_ack              (gvwb_ack),
+        .g_done             (gvwb_done),
+        .a_wr_v             (ram_wr_snoop_v),
+        .a_wr_addr          (ram_wr_snoop_addr),
+        .a_wr_len           (ram_wr_snoop_len),
+        .dbg_w              (dbg_w_sdram)
     );
+
+    // pf_beat_v may only mark words of a burst issued as a prefetch fill:
+    // every port-A read return looks alike on a_rvalid, and foreign bytes
+    // that reach the window land at pf_cnt -- served to the next hit as
+    // guest code or data. Two gates on the wire keep the window honest:
+    //   pf_tag -- the request's own prefetch qualifier, latched on the
+    //     clock the shim takes it (read_flag|write_flag is the shim's
+    //     busy). A sequencer or service leg's return fails this gate.
+    //   state == RAM_READ_2 -- the beat's transaction must still be the
+    //     one this FSM is streaming. A fill pair that ends early -- a
+    //     grant dropping the strobe mid-burst, a foreign ready ending
+    //     the command phase -- abandons its burst here (READ_2 exits to
+    //     WAIT on ~read_command) while the shim keeps draining it; the
+    //     next fill's command phase would append those leftover beats,
+    //     shifted, into ITS window. Port A is serial: a dead burst's
+    //     leftovers can only land before the next request is taken, so
+    //     they never see a READ_2 that isn't their own.
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset)
+            pf_tag <= 1'b0;
+        else if (read_request & ~read_flag & ~write_flag)
+            pf_tag <= (prefetch_len != 5'd0);
+    end
+    assign pf_beat_v = shim_rvalid & pf_tag & (state == RAM_READ_2);
 
 
     //
@@ -520,11 +654,17 @@ module RAM (
     // write the master may drive anything up there (the next pipelined
     // word, a turnaround byte), and comparing it could un-match the twin
     // -- held forever with its copy already landed, a real wedge.
+    // The access in flight is only a twin while nothing is queued behind
+    // it: a held strobe's copy is the youngest write, so with a slot full
+    // the same operands are a NEW write that has to queue after the slot
+    // (A, B, A to one byte otherwise took the in-flight A's ready and left
+    // B in memory).
     wire write_strobe_match = (latch_address      == accept_address)
                             & (internal_data_bus    == accept_data)
                             & (word_now             == accept_word)
                             & (~accept_word
-                               | (internal_data_bus_hi == accept_data_hi));
+                               | (internal_data_bus_hi == accept_data_hi))
+                            & ~wc_pend & ~cap_valid;
     wire read_strobe_match  = (latch_address == accept_address)
                             & (word_now      == accept_word);
     // Parked-operand matches: a held strobe whose copy already sits in a
@@ -561,8 +701,17 @@ module RAM (
     wire cov_pend2    = parked2_match & wc_pend2;
     wire cov_pend3    = parked3_match & wc_pend3;
     wire cov_cap      = cap_match     & cap_valid;
-    wire dup_covered  = cov_inflight | cov_pend1 | cov_pend2 | cov_pend3
-                      | cov_cap;
+    // A held strobe's twin can only be the YOUNGEST write the FSM holds:
+    // one master drives the pins at a time and keeps one strobe up, so
+    // anything queued behind its copy came after it. Matching an older
+    // entry dropped real writes -- A, B, A to one byte lost the second A
+    // behind B and left B in memory (tb_ram_mix_stress; on the metal, single
+    // bytes of a floppy DMA fill left stale in a DOS buffer).
+    wire dup_covered  = cap_valid ? cov_cap
+                      : wc_pend3  ? cov_pend3
+                      : wc_pend2  ? cov_pend2
+                      : wc_pend   ? cov_pend1
+                      :             cov_inflight;
 
     // The live strobe takes the accept directly at IDLE only when the
     // queue is empty; anything else must park or capture.
@@ -626,6 +775,22 @@ module RAM (
             accept_data       <= 8'd0;
             accept_data_hi    <= 8'd0;
             accept_word       <= 1'b0;
+        end
+        else if (unstick || auto_unstick) begin
+            // The wedge escape hatch (see the port comment): everything the
+            // FSM owes the bus is bookkeeping -- parked bytes this pulse
+            // abandons -- and the bus masters above restart their strobes
+            // the moment memory_access_ready's idle level returns. The
+            // auto_unstick term is the same clear fired by the watchdog
+            // above: it only triggers with the park FIFO empty and no
+            // strobes up, so nothing is ever abandoned by the auto path.
+            state          <= IDLE;
+            wc_pend        <= 1'b0;
+            wc_pend2       <= 1'b0;
+            wc_pend3       <= 1'b0;
+            cap_valid      <= 1'b0;
+            accept_live_wr <= 1'b0;
+            accept_live_rd <= 1'b0;
         end
         else begin
             state <= next_state;
@@ -868,6 +1033,120 @@ module RAM (
                                             : access_data_out_hi[7:0];
 
 
+    // ------------------------------------------------------------------
+    // Self-healing: the wedge watchdog (two layers).
+    //
+    // WHY THIS EXISTS. This FSM lives in the sdram_reset domain -- a guest
+    // reset (greset) never reaches it. The on-hardware wedge (6-36 s into
+    // a game, fetch dead, PC frozen, DRQ pending, every module above idle,
+    // park FIFO empty) showed the FSM holding a FINISHED read transaction
+    // forever, and the ONLY thing that revived the machine was the JTAG
+    // unstick pulse -- force IDLE, which dipped memory_access_ready for
+    // the re-serve and then asserted it again. Two properties of the park
+    // make it unbounded, and each layer bounds one:
+    //
+    // LAYER 1 -- the served park in COMPLETE_RAM_RW. The FSM reaches
+    // COMPLETE only after the SDRAM transaction has genuinely finished
+    // (read_flag/write_flag fell); it then stays there for exactly one
+    // reason: the master's strobe is still up, waiting for THIS module's
+    // ready. But every ready consumer above is an EDGE machine: READY.sv
+    // pairs the ready rise with its CE-sampled level (prev_ready_n_or_
+    // wait) and parks if the pairing is missed, cpu_bus_bridge latches
+    // its rd_own witness inside the byte's command phase, the uPD71071
+    // steps on the dma_ready PULSE. A rise that lands in one of those
+    // sampling gaps is consumed by NOBODY: the level then sits high
+    // forever, the master never accepts, the strobe never drops, and this
+    // FSM holds the finished transaction for the rest of the machine's
+    // life. The fix re-creates the edge IN PLACE: after WEDGE_CMPLT_BITS
+    // cycles parked, mask the ready output for 2^6 cycles and assert it
+    // again -- the exact dip-and-re-assert dynamics the unstick pulse was
+    // observed to recover the machine with. A merely slow master loses
+    // nothing (it was waiting anyway); a master that missed the rise gets
+    // a fresh one every ~190 us. No access is re-run, so a parked fill's
+    // beats cannot double-append and a parked write's operands are never
+    // re-latched -- strictly safer than forcing IDLE.
+    //
+    // DMA-OWNED PARKS ARE EXEMPT (dma_hold): the 71071's dma_ready is a
+    // one-shot pulse, so a dip under a legal DMA strobe is not a retry but
+    // a corruption -- run#973's SD cold boot died exactly there (see the
+    // dma_hold port comment). A legal DMA park lasts as long as the
+    // storage byte does, so no time horizon can separate legal from
+    // wedged there; ownership can. The park counter therefore only runs
+    // while the CPU side owns the bus. What is given up: a DMA-side
+    // ready-miss park (never observed -- the original wedge froze with
+    // HLDA=0/AEN=0) stays unhealed, exactly as it was before the
+    // watchdog; the frozen tap still names it (park+age under AEN).
+    //
+    // LAYER 2 -- the no-work watchdog. If the FSM sits non-IDLE for
+    // WEDGE_WDOG_BITS cycles with NOTHING pending (park FIFO empty, no
+    // live write strobe, no read request), the only thing keeping it out
+    // of IDLE is a handshake level that can no longer belong to a live
+    // access: read_flag/write_flag stuck (a shim condition the static
+    // audit could not reach, and one the machine's own greset can never
+    // clear because of this module's reset domain), or the WAIT state's
+    // `idle` input stuck low. Fire the same clear the JTAG unstick pulse
+    // performs -- the parked queue drops and the FSM forces IDLE -- and
+    // let the bus start over. 2^20 clk ~= 24 ms: five orders above any
+    // legal access (a 16-word fill behind a refresh is ~100 clk), so it
+    // can only ever fire on a machine that is already dead.
+    // ------------------------------------------------------------------
+    localparam int CMPLT_DIP_BITS = 6;   // dip width: > 2 CE periods at the
+                                         // slowest pace setting, so both
+                                         // halves of a consumer's CE-pulse
+                                         // pipeline see the low
+    logic [WEDGE_CMPLT_BITS-1:0] cmplt_park_cnt;
+    logic [CMPLT_DIP_BITS-1:0]   cmplt_dip_cnt;
+    logic                        rdy_dip;
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset) begin
+            cmplt_park_cnt <= '0;
+            cmplt_dip_cnt  <= '0;
+        end else if (state != COMPLETE_RAM_RW) begin
+            cmplt_park_cnt <= '0;
+            cmplt_dip_cnt  <= '0;
+        end else if (dma_hold) begin
+            // DMA-owned park: disarmed outright (see the dma_hold port
+            // comment). The counter restarts from zero when the bus comes
+            // back, so a dip always requires WEDGE_CMPLT_BITS consecutive
+            // CPU-owned parked cycles -- never a leftover count from a DMA
+            // window.
+            cmplt_park_cnt <= '0;
+            cmplt_dip_cnt  <= '0;
+        end else if (cmplt_dip_cnt != '0) begin
+            cmplt_dip_cnt  <= cmplt_dip_cnt - 1'b1;
+            cmplt_park_cnt <= '0;
+        end else if (&cmplt_park_cnt) begin
+            // The park horizon: start the dip, then re-assert. Repeat
+            // forever while the master refuses to move -- each re-assert
+            // is another chance for an edge consumer to catch the rise.
+            cmplt_park_cnt <= '0;
+            cmplt_dip_cnt  <= '1;
+        end else begin
+            cmplt_park_cnt <= cmplt_park_cnt + 1'b1;
+        end
+    end
+    assign rdy_dip = (cmplt_dip_cnt != '0);
+
+    logic [WEDGE_WDOG_BITS-1:0] wdog_cnt;
+    logic                       wdog_no_work;
+    logic                       auto_unstick;
+
+    assign wdog_no_work = (state != IDLE) & ~wc_pend & ~wc_pend2
+                        & ~wc_pend3 & ~cap_valid
+                        & ~write_command & ~read_command;
+    assign auto_unstick = wdog_no_work & (wdog_cnt == '1);
+
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset)
+            wdog_cnt <= '0;
+        else if ((state == IDLE) || auto_unstick)
+            wdog_cnt <= '0;
+        else if (wdog_cnt != '1)
+            wdog_cnt <= wdog_cnt + 1'b1;
+    end
+
+
     //
     // Ready/Wait Signal
     //
@@ -930,7 +1209,7 @@ module RAM (
     //   st=4 ...                               dout=8b <- the real byte
     //
     // The CPU never fell in: it samples READY once, deep in T3, a whole CPU
-    // clock (nine chipset cycles at 4.77 MHz) after the command. zet_cpu_bridge
+    // clock (nine chipset cycles at 4.77 MHz) after the command. cpu_bus_bridge
     // samples at EVERY posedge CE from its third T state on, and the 8288
     // raises the command around that same edge -- so the byte engine could
     // complete in the stale window and latch the previous byte. It did: the
@@ -963,8 +1242,7 @@ module RAM (
     // guards every capture path.
     wire wr_cov_now   = wr_accept_live | new_write_strobe | new_write_strobe2
                       | new_write_strobe3 | idle_park | new_cap
-                      | cov_inflight | cov_pend1 | cov_pend2 | cov_pend3
-                      | cov_cap;
+                      | dup_covered;
 
     // The release must be REGISTERED, not combinational: wr_cov_now means
     // "the capture commits at this edge" -- accept takes the strobe or a
@@ -1023,11 +1301,21 @@ module RAM (
                         & ~((state == COMPLETE_RAM_RW)
                             & accept_live_wr & write_strobe_match);
 
+    // rdy_dip (the wedge watchdog's layer 1 above) masks the whole
+    // active-branch result: the completing term AND the posted-write early
+    // release both answer the strobe currently on the pins, and either
+    // one's rise can be the edge a parked master missed. Masked for <= 2^6
+    // cycles after 2^WEDGE_CMPLT_BITS cycles parked in COMPLETE_RAM_RW,
+    // then re-asserted -- the dip-and-re-assert the JTAG unstick pulse was
+    // observed to revive the wedged machine with, recreated in place (no
+    // access is re-run). The idle level (no command on the pins) never
+    // dips.
     assign  memory_access_ready = ((~ram_address_select_n) && ((~memory_read_n) || (~memory_write_n)))
-                                        ? (~wr_strobe_open & (((state == COMPLETE_RAM_RW) & (
+                                        ? ((~wr_strobe_open & (((state == COMPLETE_RAM_RW) & (
                                               (write_command & accept_live_wr & write_strobe_match & (write_wait_count == 0) & (vram_wr_wait_count == 0))
                                             | (read_command  & accept_live_rd & read_strobe_match  & (read_wait_count  == 0) & (vram_rd_wait_count == 0))))
-                                           | (write_command & wr_covered & cov_same))) : 1'b1;
+                                           | (write_command & wr_covered & cov_same))
+                                          & ~rdy_dip)) : 1'b1;
 
     // ROM-load (Pocket): a clean per-access "done" pulse for core_top's BIOS
     // loader. COMPLETE_RAM_RW is reached only after the SDRAM write truly
@@ -1050,6 +1338,26 @@ module RAM (
 
     assign  dbg = {wc_pend, refresh_mode, read_flag,
                    accept_live_rd, accept_live_wr, state[2:0]};
+
+    // Non-IDLE age for the wedge tap: a healthy access passes through in a
+    // handful of clocks (a burst fill tens), so a saturated counter is the
+    // FSM itself being wedged rather than merely busy.
+    logic [7:0] nonidle_age;
+    always_ff @(posedge clock, posedge reset) begin
+        if (reset)
+            nonidle_age <= 8'd0;
+        else if (state == IDLE)
+            nonidle_age <= 8'd0;
+        else if (nonidle_age != 8'hFF)
+            nonidle_age <= nonidle_age + 8'd1;
+    end
+
+    assign  dbg_w_ram = {wc_pend, wc_pend2, wc_pend3, cap_valid,
+                         rd_conflicts, accept_live_wr, accept_live_rd,
+                         state[2:0], read_wait_count, write_wait_count,
+                         (vram_rd_wait_count != 4'd0),
+                         (vram_wr_wait_count != 4'd0),
+                         nonidle_age};
 
     // Drop witness (PC98_JTAG). Two kinds of event matter here:
     //
@@ -1084,113 +1392,11 @@ module RAM (
         end
     end
 
-    // Universal coverage: a write strobe is covered when the FSM accepts
-    // it live (IDLE with nothing parked), it lands in a park slot, or its
-    // operands match the access in flight / already parked (a held twin).
-    // A strobe falling while uncovered is a TRUE loss -- and unlike
-    // lost_ev it does not need both park slots full: a strobe arriving on
-    // the exact IDLE&&wc_pend cycle (park wins the accept, live cannot
-    // park because state==IDLE) then falling early escapes that counter
-    // completely. byte0-of-fill writes are prime suspects: they arrive
-    // right as the previous grant's tail retires.
-    logic [15:0] dbg_uncov;
-    logic [23:0] dbg_uncov_addr;    // first loss, full mapped address
-    logic  [7:0] dbg_uncov_data;
-    logic  [2:0] dbg_uncov_st;
-    logic [23:0] dbg_uncov_addr2;   // most recent loss
-    logic  [7:0] dbg_uncov_data2;
-
-    always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
-            dbg_uncov        <= 16'd0;
-            dbg_uncov_addr   <= 24'd0;
-            dbg_uncov_data   <= 8'd0;
-            dbg_uncov_st     <= 3'd0;
-            dbg_uncov_addr2  <= 24'd0;
-            dbg_uncov_data2  <= 8'd0;
-        end else begin
-            if (write_strobe_fell & ~(wr_covered & cov_same)) begin
-                if (dbg_uncov != 16'hFFFF)
-                    dbg_uncov <= dbg_uncov + 16'd1;
-                if (dbg_uncov == 16'd0) begin
-                    dbg_uncov_addr <= latch_address;
-                    dbg_uncov_data <= internal_data_bus;
-                    dbg_uncov_st   <= state;
-                end
-                dbg_uncov_addr2 <= latch_address;
-                dbg_uncov_data2 <= internal_data_bus;
-            end
-        end
-    end
-
-    // Sink-side record: the operands of the last three writes the FSM
-    // actually accepted -- the arbiter logs the bus side, this logs what
-    // RAM committed to serve. A fill's byte-0 that goes missing shows up
-    // here with a stale/mapped-away operand, or not at all.
-    logic  [7:0]  acc_cnt;
-    logic  [31:0] acc_ring [0:2];
-    always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
-            acc_cnt <= 8'd0;
-            acc_ring[0] <= 32'd0;
-            acc_ring[1] <= 32'd0;
-            acc_ring[2] <= 32'd0;
-        end else if (state == IDLE && next_state == RAM_WRITE_1) begin
-            acc_ring[2] <= acc_ring[1];
-            acc_ring[1] <= acc_ring[0];
-            // {2'b0, was-parked, word, addr[19:0], data}
-            acc_ring[0] <= {2'b00, wc_pend,
-                            (wc_pend ? pend_word    : word_now),
-                            (wc_pend ? pend_address[19:0]
-                                     : latch_address[19:0]),
-                            (wc_pend ? pend_data    : internal_data_bus)};
-            if (acc_cnt != 8'hFF)
-                acc_cnt <= acc_cnt + 8'd1;
-        end
-    end
-
-    // Watch-accept witnesses, keyed on the arbiter's watchpoint address:
-    //   wseen  -- write_command cycles whose (mapped) address is the watch
-    //             point. If the arbiter's watch count exceeds this, writes
-    //             reached the bus but never became a write_command here --
-    //             swallowed upstream (sequencer expansion) or sel-missed.
-    //   wacc   -- accepts whose mapped operand equals the watch point, and
-    //             the sticky {pend,word,addr,data} of the last one. A mapped
-    //             redirect shows here as addr != watch point (and no count).
-    logic  [7:0]  wseen_cnt;
-    logic  [7:0]  wacc_cnt;
-    logic  [31:0] wacc_rec;
-    always_ff @(posedge clock, posedge reset) begin
-        if (reset) begin
-            wseen_cnt <= 8'd0;
-            wacc_cnt  <= 8'd0;
-            wacc_rec  <= 32'd0;
-        end else begin
-            // Count strobe RISES at the watch address so this compares
-            // one-for-one with the arbiter's watch count (strobe falls).
-            if (write_strobe_rose && (latch_address[19:0] == dbg_watch_addr)
-                && (wseen_cnt != 8'hFF))
-                wseen_cnt <= wseen_cnt + 8'd1;
-            if (state == IDLE && next_state == RAM_WRITE_1
-                && ((wc_pend ? pend_address[19:0] : latch_address[19:0])
-                    == dbg_watch_addr)) begin
-                wacc_rec <= {2'b01, wc_pend,
-                             (wc_pend ? pend_word    : word_now),
-                             (wc_pend ? pend_address[19:0]
-                                      : latch_address[19:0]),
-                             (wc_pend ? pend_data    : internal_data_bus)};
-                if (wacc_cnt != 8'hFF)
-                    wacc_cnt <= wacc_cnt + 8'd1;
-            end
-        end
-    end
-
     assign  dbg2 = 32'd0;                   // drop witness removed -- uncov covers it
     assign  dbg3 = {24'd0, dbg_parks};       // parked count only
-    assign  dbg4 = {dbg_uncov[7:0], dbg_uncov_addr}; // {cnt, first addr24}
-    assign  dbg5 = {dbg_uncov_data2, dbg_uncov_addr2[15:0],
-                    dbg_uncov_data};          // {last d, last addr, first d}
-    assign  dbg6 = {acc_cnt, acc_ring[2], acc_ring[1], acc_ring[0]};
-    assign  dbg7 = {8'h00, wseen_cnt, wacc_cnt, wacc_rec};
+    assign  dbg4 = 32'd0;                   // loss/accept witnesses retired for fit
+    assign  dbg5 = 32'd0;
+    assign  dbg6 = 104'd0;
+    assign  dbg7 = 56'd0;                    // watch-accept witnesses retired for fit
 
 endmodule

@@ -44,6 +44,7 @@ module tb_pc98_ems98;
     logic [7:0]  ems98_status;
 
     RAM dut (
+        .dma_hold(1'b0),
         .clock(clock), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram),
         .address(address), .internal_data_bus(internal_data_bus),
@@ -67,7 +68,11 @@ module tb_pc98_ems98;
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0),
         .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
         .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
-        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
+        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done(),
+        .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
+        .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
+        .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
+        .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len()
     );
 
     pc98_ems98 u_ems98 (

@@ -50,29 +50,15 @@ module pocket_video (
 );
 
     //
-    // Palette tint
-    //
-    // Monochrome-monitor palette (Display setting): palette_cfg 0 = full colour, 1-7
-    // tint by weighted luma. Combinational (no extra clock/latency); r/g/b widened to 8.
-    wire [7:0]  pr = {r, 2'b00};
-    wire [7:0]  pg = {g, 2'b00};
-    wire [7:0]  pb = {b, 2'b00};
-    wire [15:0] luma16 = pr * 16'd54 + pg * 16'd183 + pb * 16'd18;  // Rec.709 weights <<8
-    wire [7:0]  mono   = luma16[15:8];
-    wire [7:0]  hmono  = {1'b0, luma16[15:9]};   // mono >> 1
-    reg  [7:0]  tr, tg, tb;
-    always @(*) begin
-        case (palette_cfg)
-            3'd1: begin tr = 8'h00;                         tg = (mono < 8'h0F) ? 8'h0F : mono; tb = 8'h01; end
-            3'd2: begin tr = (mono < 8'h08) ? 8'h08 : mono; tg = hmono;                         tb = 8'h01; end
-            3'd3: begin tr = mono;                          tg = mono;                          tb = mono;  end
-            3'd4: begin tr = (mono < 8'h08) ? 8'h08 : mono; tg = 8'h00;                         tb = 8'h01; end
-            3'd5: begin tr = 8'h00;                         tg = hmono;                         tb = (mono < 8'h08) ? 8'h08 : mono; end
-            3'd6: begin tr = (mono < 8'h08) ? 8'h08 : mono; tg = 8'h00;                         tb = hmono; end
-            3'd7: begin tr = hmono;                         tg = 8'h00;                         tb = (mono < 8'h08) ? 8'h08 : mono; end
-            default: begin tr = pr; tg = pg; tb = pb; end   // full colour
-        endcase
-    end
+    // Palette tint: gone. The monochrome-monitor tints (Display setting,
+    // palette_cfg 1-7) cost three luma multipliers and a 24-bit 8-way mux
+    // in a device that is out of LABs; the picture is always full colour.
+    // palette_cfg stays on the port list (the OSD setting slot is kept for
+    // the save blob's layout) and is ignored.
+    wire [7:0]  tr = {r, 2'b00};
+    wire [7:0]  tg = {g, 2'b00};
+    wire [7:0]  tb = {b, 2'b00};
+    wire        _unused_palette = &{1'b0, palette_cfg};
 
     //
     // Card blanking

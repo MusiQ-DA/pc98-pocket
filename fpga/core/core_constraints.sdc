@@ -180,8 +180,8 @@ set_output_delay -clock $dram_chip_clk -reference_pin [get_ports {dram_clk}] \
 #    counter_out therefore has eight cycles, not one.
 #
 #  * The nuV30's registers advanced on v30_ce = cpu_ce_posedge && !parked
-#    (46/201 ratio, five cycles per intra-core path) -- the core was swapped
-#    for Zet in 2026-10 and the Zet's own constraint is the block below.
+#    (46/201 ratio, five cycles per intra-core path) -- the core went Zet
+#    in 2026-10, z86 later the same month; no intra-core multicycle since.
 #
 # NOT covered, deliberately: the "Turbo (max)" menu step (2'b11) runs the
 # core CE every chipset cycle -- at 21.5 MHz this design is overclocked and
@@ -201,13 +201,11 @@ if {[llength $pit_counts] > 0 && [llength $pit_outs] > 0} {
 # always false and skipped both multicycles in silence. "> 0" it is.
 
 # The nuV30-era constraints went with the core: the CE-paced core-core
-# multicycle (5/4) and the -to $v30_core input-surface multicycle. Zet's
-# input surface is deliberately NOT multicycled -- see below.
+# multicycle (5/4) and the -to $v30_core input-surface multicycle.
 
-# The Zet core runs full-rate now: the microcode loop is pipelined
-# (micro_o_r/bword_r registers in zet_core split decode-ROM-fetch from
-# execute), so zet->zet paths are honestly single-cycle and get NO
-# multicycle -- the half-rate zph gate and its setup-2/hold-1 pair are
-# gone. Boundary paths stay single-cycle as before: a bridge register's
-# change can still be sampled by the very next delivered edge, and a zet
-# register's change reaches the clk-domain bridge one clk later.
+# The z86 core runs full-rate on the gated zet_clk: its pipeline is
+# registered (fetch/decode/execute/write-back stages), so intra-core paths
+# are honestly single-cycle and get NO multicycle. Boundary paths stay
+# single-cycle as before: a bridge register's change can still be sampled
+# by the very next delivered edge, and a core register's change reaches the
+# clk-domain bridge one clk later.

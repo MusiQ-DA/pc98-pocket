@@ -2,7 +2,7 @@
 // tb_pc98_boot -- run the real ITF on the real CPU core, and watch where it
 // goes.
 //
-// The CPU is the Zet through zet_cpu_bridge. The same flat memory and the
+// The CPU is z86 through cpu_bus_bridge. The same flat memory and the
 // same I/O models see the bridge's bus cycles, so this is the end-to-end
 // dress rehearsal of the hardware CPU path (i8288 + 8-bit bus + real ROMs +
 // 8251) before the bitstream.
@@ -121,6 +121,24 @@ module tb_pc98_boot;
     wire        dbg_first_pop, dbg_pend;
 
     wire        zet_clk;
+    wire        z86_ce;
+    // +nocache: z86_cache off (A/B against the bus-only path)
+    logic       nocache = 1'b0;
+    initial nocache = $test$plusargs("nocache");
+    // z86_cache's port F and the port A snoop: only the REALMEM path has
+    // an SDRAM to give them; the flat-memory bench runs the cache off.
+    wire        cf_req, cf_we, cf_ack, cf_rvalid, cf_done;
+    wire [23:0] cf_addr;
+    wire  [3:0] cf_len;
+    wire [15:0] cf_wd0, cf_wd1, cf_rdata;
+    wire        sn_v;
+    wire [23:0] sn_addr;
+    wire  [3:0] sn_len;
+`ifndef REALMEM
+    assign cf_ack = 1'b0; assign cf_rvalid = 1'b0; assign cf_done = 1'b0;
+    assign cf_rdata = 16'h0; assign sn_v = 1'b0; assign sn_addr = 24'h0;
+    assign sn_len = 4'h0;
+`endif
     wire [15:0] zwb_dat_i, zwb_dat_o;
     wire [19:1] zwb_adr;
     wire        zwb_we, zwb_tga, zwb_stb, zwb_cyc, zwb_ack;
@@ -134,11 +152,11 @@ module tb_pc98_boot;
     wire        pf_beat_v;
     wire [7:0]  pf_beat_dat;
 
-    zet_cpu_bridge u_bridge (
+    cpu_bus_bridge #(.REQ_SETTLE(0)) u_bridge (
         .clk               (clk_chipset),
         .cpu_ce_posedge    (cpu_ce_posedge),
         .cpu_ce_negedge    (cpu_ce_negedge),
-        .fast_pace         (clk_select_r[1]),
+        .pace_286          (1'b1),   // every setting is 286-class now
         .reset             (cpu_reset_w),
         .zet_clk           (zet_clk),
         .wb_dat_o          (zwb_dat_o),
@@ -169,32 +187,62 @@ module tb_pc98_boot;
         .processor_ready   (bench_ready),
         .address_enable_n  (test_aen),
         .sdram_wr_taken    (sdram_wt_w),
+        .sdram_rd_ready    (sdram_rd_own_w),
         .pause_core        (1'b0),
+        .throttle          (1'b0),
         .biu_done          (biu_done),
         .pf_disable        (1'b0),
+        .pf_nofill         (1'b0),
+        .pf_nofillm        (1'b0),
+        .pf_nohit          (1'b0),
+        // real port-A snoop feed (same wires the z86 cache snoops)
+        .sn_v              (sn_v),
+        .sn_addr           (sn_addr),
+        .sn_len            (sn_len),
+        .bios_shadow_flag  (itf_bank),
+        .zet_edge_o        (z86_ce),
         .dbg               (zbridge_dbg)
     );
 
-    zet u_cpu (
-        .wb_clk_i  (zet_clk),
-        .wb_rst_i  (cpu_reset_w),
-        .wb_dat_i  (zwb_dat_i),
-        .wb_dat_o  (zwb_dat_o),
+    z86 u_cpu (
+        .clk       (zet_clk),
+        .reset     (cpu_reset_w),
+        .clk_free  (clk_chipset),
+        .ce        (z86_ce),
+`ifdef REALMEM
+        .cache_en  (~itf_bank & ~nocache), .pace(1'b0), .pace_ce(1'b0), .pace_rd_wait(2'd0), .pace_wr_wait(2'd0), .pace_vwait(5'd0),
+`else
+        .cache_en  (1'b0), .pace(1'b0), .pace_ce(1'b0), .pace_rd_wait(2'd0), .pace_wr_wait(2'd0), .pace_vwait(5'd0),
+`endif
+        .bios_shadow  (itf_bank),
+        .bios_protect (1'b1), .dx (7'd0),
+        .f_req (cf_req), .f_we (cf_we), .f_addr (cf_addr), .f_len (cf_len),
+        .f_wdata0 (cf_wd0), .f_wdata1 (cf_wd1), .f_ack (cf_ack),
+        .f_rvalid (cf_rvalid), .f_rdata (cf_rdata), .f_done (cf_done),
+        .sn_v (sn_v), .sn_addr (sn_addr), .sn_len (sn_len),
+        .dbg_watch_a (20'h0), .dbg_sn_kills (),
         .wb_adr_o  (zwb_adr),
+        .wb_sel_o  (zwb_sel),
         .wb_we_o   (zwb_we),
         .wb_tga_o  (zwb_tga),
-        .wb_sel_o  (zwb_sel),
+        .wb_dat_o  (zwb_dat_o),
         .wb_stb_o  (zwb_stb),
         .wb_cyc_o  (zwb_cyc),
         .wb_ack_i  (zwb_ack),
+        .wb_dat_i  (zwb_dat_i),
         .wb_tgc_i  (pic1_to_cpu),
         .wb_tgc_o  (zwb_inta),
-        .nmi       (1'b0),
-        .nmia      (zwb_nmia),
         .pc        (zet_pc),
-        .dbg_fault (zet_fault),
-        .dbg_opc   (zet_opc)
+        .dbg_ds    (),
+        .dbg_regs  (dbg_regs),
+        .dbg_stop  (1'b0),
+        .dbg_stopped (),
+        .dbg_next_ip (),
+        .dbg_halted()
     );
+    assign zwb_nmia  = 1'b0;
+    assign zet_fault = 1'b0;
+    assign zet_opc   = 8'h00;
 
     // End-to-end readback: every acked Wishbone memory read must equal the
     // architectural byte the guest was meant to see (mirror/ROM model). A
@@ -229,25 +277,45 @@ module tb_pc98_boot;
         in_e2e_check = (a < 20'hC0000) | (a >= 20'hE8000);
 `endif
     endfunction
+    // The address the bridge actually serviced. wb_adr_o follows
+    // cpu_adr_o and runs ahead of a pending ack when an interrupt
+    // redirects the fetch, so it is NOT a reliable check address --
+    // latch the request the bridge committed to (serve/arm time).
+    reg [19:0] svc_adr;
+    always_ff @(posedge clk_chipset) begin
+        if (u_bridge.hit_serve | u_bridge.fwd_serve)
+            svc_adr <= u_bridge.srv_addr;
+        else if (u_bridge.arm_req
+                 && (u_bridge.srv_bs == 3'b101 || u_bridge.srv_bs == 3'b100))
+            svc_adr <= u_bridge.srv_addr;
+    end
     always_ff @(posedge clk_chipset) begin
         if (zwb_ack && !zwb_we && !zwb_tga) begin
-            if (zwb_sel[0] && in_e2e_check({zwb_adr, 1'b0})
-                && zwb_dat_i[7:0] !== expected_byte({zwb_adr, 1'b0})) begin
+            if (zwb_sel[0] && in_e2e_check({svc_adr[19:1], 1'b0})
+                && zwb_dat_i[7:0] !== expected_byte({svc_adr[19:1], 1'b0})) begin
                 ack_rd_mismatches++;
-                ack_bad_addr <= {zwb_adr, 1'b0};
+                ack_bad_addr <= {svc_adr[19:1], 1'b0};
                 if (ack_rd_mismatches <= 20)
-                    $display("  %8t  E2E lo [%05X] gave %02X, want %02X  (zet_pc %05X)",
-                             $time, {zwb_adr, 1'b0}, zwb_dat_i[7:0],
-                             expected_byte({zwb_adr, 1'b0}), zet_pc);
+                    $display("  %8t  E2E lo [%05X] gave %02X, want %02X  (zet_pc %05X hit=%b fwd=%b rp=%b bs=%0d inta=%b pf=%b dq=%b rw=%04X)",
+                             $time, {svc_adr[19:1], 1'b0}, zwb_dat_i[7:0],
+                             expected_byte({svc_adr[19:1], 1'b0}), zet_pc,
+                             u_bridge.hit_serve, u_bridge.fwd_serve,
+                             u_bridge.rd_pend, u_bridge.cur_bs,
+                             u_bridge.cur_inta, u_bridge.cur_pf,
+                             u_bridge.cur_dq, u_bridge.rd_word);
             end
-            if (zwb_sel[1] && in_e2e_check({zwb_adr, 1'b1})
-                && zwb_dat_i[15:8] !== expected_byte({zwb_adr, 1'b1})) begin
+            if (zwb_sel[1] && in_e2e_check({svc_adr[19:1], 1'b1})
+                && zwb_dat_i[15:8] !== expected_byte({svc_adr[19:1], 1'b1})) begin
                 ack_rd_mismatches++;
-                ack_bad_addr <= {zwb_adr, 1'b1};
+                ack_bad_addr <= {svc_adr[19:1], 1'b1};
                 if (ack_rd_mismatches <= 20)
-                    $display("  %8t  E2E hi [%05X] gave %02X, want %02X  (zet_pc %05X)",
-                             $time, {zwb_adr, 1'b1}, zwb_dat_i[15:8],
-                             expected_byte({zwb_adr, 1'b1}), zet_pc);
+                    $display("  %8t  E2E hi [%05X] gave %02X, want %02X  (zet_pc %05X hit=%b fwd=%b rp=%b bs=%0d inta=%b pf=%b dq=%b rw=%04X)",
+                             $time, {svc_adr[19:1], 1'b1}, zwb_dat_i[15:8],
+                             expected_byte({svc_adr[19:1], 1'b1}), zet_pc,
+                             u_bridge.hit_serve, u_bridge.fwd_serve,
+                             u_bridge.rd_pend, u_bridge.cur_bs,
+                             u_bridge.cur_inta, u_bridge.cur_pf,
+                             u_bridge.cur_dq, u_bridge.rd_word);
             end
         end
     end
@@ -265,9 +333,6 @@ module tb_pc98_boot;
                          expected_byte(zet_pc));
         end
 
-    // Zet has no dbg_regs: the trace fields read 0, eu_pc below reads the
-    // core's real linear-PC debug pin instead.
-    assign dbg_regs = '0;
     assign dbg_first_pop = 1'b0;
     assign dbg_pend = 1'b0;
 
@@ -440,6 +505,39 @@ module tb_pc98_boot;
         xrom_byte = xrom[a[7:0]];
     endfunction
 
+    // ---- the PC-9801-55 SCSI board (+hddimg=FILE) -------------------------
+    // Its option ROM at D2000-D2FFF is fpga/core/scsi_rom.hex (the assembled
+    // fpga/scsi_rom.asm; scripts/sim_scsi_boot.sh copies it next to the
+    // other hexes), the register window at 0xCC0-0xCC7 is the real
+    // pc98_scsi, and tb_scsi_target stands in for the firmware service. Off
+    // unless an image is named: an always-present ROM with no target behind
+    // it would have every other run of this bench sit out the ROM's probe
+    // timeouts.
+    logic       scsi_en = 1'b0;
+    logic [7:0] scsirom [0:4095];
+    initial begin
+        string p;
+        scsi_en = $value$plusargs("hddimg=%s", p);
+        for (int i = 0; i < 4096; i = i + 1) scsirom[i] = 8'hFF;
+        if (scsi_en) $readmemh("scsi_rom.hex", scsirom);
+    end
+
+    function automatic logic is_scsirom(input logic [19:0] a);
+        is_scsirom = scsi_en && (a[19:12] == 8'hD2);
+    endfunction
+
+    // Memory switch A3FF2, the boot-device byte. On the core it is a Settings
+    // register (pc98_tvram cfg_a3ff2 = {boot nibble, 1}) the POST cannot
+    // write; this bench's flat RAM would hand the BIOS whatever the clear
+    // left there, and a high nibble other than 0 or C makes the boot sweep
+    // skip SCSI device 0C. With +hddimg it reads the core's default 01
+    // (standard order), or +a3ff2=N (C1 = SCSI HD only).
+    logic [7:0] a3ff2_val = 8'h01;
+    initial void'($value$plusargs("a3ff2=%h", a3ff2_val));
+    function automatic logic is_a3ff2(input logic [19:0] a);
+        is_a3ff2 = scsi_en && (a == 20'hA3FF2);
+    endfunction
+
     // The data bus is combinational, as the chipset's is. Registering it here
     // put a chipset clock between the strobe and the byte, and the core sampled
     // stale data: the first run stalled for seventeen milliseconds in the middle
@@ -459,6 +557,7 @@ module tb_pc98_boot;
                   : fdc_ctrl_sel    ? fdc_ctrl_rb
                   : fdc_mode_sel    ? fdc_mode_rb
                   : sysport_sel     ? sysport_data
+                  : scsi_rd_sel     ? scsi_dout
                            : 8'hFF;
 
     // ---- the real memory path (+define+REALMEM) ----------------------------
@@ -482,6 +581,7 @@ module tb_pc98_boot;
     wire        access_own_w;
     wire        ram_wt_w;           // u_ram write_taken -> seq -> drain
     wire        sdram_wt_w;         // u_bridge.sdram_wr_taken
+    wire        sdram_rd_own_w;     // u_bridge.sdram_rd_ready
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
@@ -528,6 +628,7 @@ module tb_pc98_boot;
     wire [4:0]  seq_mem_pf_len;
     wire [7:0]  dbg_gvram;
     pc98_gvram_seq #(.EGC(1'b1)) u_gvram_seq (
+        .rmwbuf_off(1'b0),
         .clk(clk_chipset), .reset(reset),
         .cpu_gvram(~ram_address_select_n),
         .cpu_rd(~mem_rd_n), .cpu_wr(~mem_wr_n),
@@ -545,7 +646,6 @@ module tb_pc98_boot;
         .svc_req(1'b0), .svc_we(1'b0), .svc_raw(1'b0),
         .svc_addr(20'h0), .svc_wdata(8'h0),
         .svc_done(), .svc_rdata(),
-        .pf_disable        (1'b0),
         .dbg(dbg_gvram),
         .mem_addr(seq_mem_addr), .mem_wdata(seq_mem_wdata),
         .mem_word(seq_mem_word), .mem_pf_len(seq_mem_pf_len),
@@ -554,11 +654,13 @@ module tb_pc98_boot;
         .mem_done(access_complete_w),
         .mem_own(access_own_w),
         .mem_ready(ram_ready_w),
-        .mem_wr_taken(ram_wt_w),
-        .cpu_wr_taken(sdram_wt_w)
+        .mem_wr_taken(ram_wt_w), .pf_beat_v(1'b0), .pf_beat_dat(8'h00),
+        .cpu_wr_taken(sdram_wt_w),
+        .cpu_rd_own(sdram_rd_own_w)
     );
 
     RAM u_ram (
+        .dma_hold(1'b0),
         .clock(clk_chipset), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram_w),
         .gvram_page1_flag(seq_mem_page1),
@@ -577,7 +679,6 @@ module tb_pc98_boot;
         .access_own(access_own_w),
         .ram_address_select_n(ram_address_select_n),
         .write_taken(ram_wt_w),
-        .dbg_watch_addr(20'hFFFFF),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
@@ -604,7 +705,12 @@ module tb_pc98_boot;
         .ramimg_addr(ramimg_addr_t),
         .ramimg_len(ramimg_len_t), .ramimg_wdata(16'h0000),
         .ramimg_ack(ramimg_ack_t), .ramimg_rvalid(ramimg_rvalid_t),
-        .ramimg_rdata(), .ramimg_done(ramimg_done_t)
+        .ramimg_rdata(), .ramimg_done(ramimg_done_t),
+        .cachef_req(cf_req), .cachef_we(cf_we), .cachef_addr(cf_addr),
+        .cachef_len(cf_len), .cachef_wdata0(cf_wd0), .cachef_wdata1(cf_wd1),
+        .cachef_ack(cf_ack), .cachef_rvalid(cf_rvalid), .cachef_rdata(cf_rdata),
+        .cachef_done(cf_done),
+        .ram_wr_snoop_v(sn_v), .ram_wr_snoop_addr(sn_addr), .ram_wr_snoop_len(sn_len)
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
@@ -747,9 +853,9 @@ module tb_pc98_boot;
                         & (u_ram.u_sdram.u_mp.state != 4'd9)
                         & (u_ram.u_sdram.u_mp.state != 4'd10);
     wire [2:0]  mp_grant  = u_ram.u_sdram.u_mp.grant;
-    wire [4:0]  mp_reqs   = u_ram.u_sdram.u_mp.p_req;
-    wire [4:0]  mp_acks   = u_ram.u_sdram.u_mp.p_ack;
-    wire [4:0]  mp_dones  = u_ram.u_sdram.u_mp.p_done;
+    wire [5:0]  mp_reqs   = u_ram.u_sdram.u_mp.p_req;
+    wire [5:0]  mp_acks   = u_ram.u_sdram.u_mp.p_ack;
+    wire [5:0]  mp_dones  = u_ram.u_sdram.u_mp.p_done;
     wire        mp_rvalid = u_ram.u_sdram.u_mp.p_rvalid;
     wire        mp_wrbeat = mp_busy & u_ram.u_sdram.u_mp.cur_we
                         & (u_ram.u_sdram.u_mp.state == MP_S_RW);
@@ -760,13 +866,13 @@ module tb_pc98_boot;
 
     longint unsigned occ_cyc      = 0;   // cycles since init_done
     longint unsigned occ_refresh  = 0;
-    longint unsigned occ_own  [0:4] = '{0,0,0,0,0};
-    longint unsigned occ_wait [0:4] = '{0,0,0,0,0};
-    longint unsigned occ_trans[0:4] = '{0,0,0,0,0};
-    longint unsigned occ_rd   [0:4] = '{0,0,0,0,0};
-    longint unsigned occ_wr   [0:4] = '{0,0,0,0,0};
+    longint unsigned occ_own  [0:5] = '{0,0,0,0,0,0};
+    longint unsigned occ_wait [0:5] = '{0,0,0,0,0,0};
+    longint unsigned occ_trans[0:5] = '{0,0,0,0,0,0};
+    longint unsigned occ_rd   [0:5] = '{0,0,0,0,0,0};
+    longint unsigned occ_wr   [0:5] = '{0,0,0,0,0,0};
     longint unsigned occ_act        = 0;  // cycles paying ACT/PRE-miss
-    longint unsigned occ_actp [0:4] = '{0,0,0,0,0}; // same, per port
+    longint unsigned occ_actp [0:5] = '{0,0,0,0,0,0}; // same, per port
     // port A latency, per transaction: a_w = req-up cycles before ack,
     // a_d = grant-to-done cycles, hist over the sum.
     int unsigned     a_w = 0, a_d = 0;
@@ -777,7 +883,7 @@ module tb_pc98_boot;
     longint unsigned a_lat_hist [0:4] = '{0,0,0,0,0};
     // display fetch vs raster phase: D grant cycles inside vs outside hblank
     longint unsigned d_in_hb = 0, d_in_vis = 0, d_in_vb = 0;
-    // CPU-visible stall: zet wishbone pending cycles + RAM FSM busy cycles
+    // CPU-visible stall: CPU wishbone pending cycles + RAM FSM busy cycles
     longint unsigned cpu_wb_pend = 0, cpu_wb_ack = 0;
     longint unsigned ramfsm_busy = 0, ramfsm_done = 0;
     longint unsigned guest_stall = 0;  // cmd up, ready down
@@ -790,7 +896,7 @@ module tb_pc98_boot;
             occ_cyc <= occ_cyc + 1;
             if (mp_refresh) occ_refresh <= occ_refresh + 1;
             if (mp_act)     occ_act     <= occ_act + 1;
-            for (int p = 0; p < 5; p++) begin
+            for (int p = 0; p < 6; p++) begin
                 if (mp_busy & (mp_grant == 3'(p)))   occ_own[p]  <= occ_own[p] + 1;
                 if (mp_reqs[p] & ~mp_acks[p])        occ_wait[p] <= occ_wait[p] + 1;
                 if (mp_acks[p])                      occ_trans[p]<= occ_trans[p] + 1;
@@ -855,7 +961,7 @@ module tb_pc98_boot;
         $display("  OCC cyc=%0d ref=%0d(%0d%%) | act/pre=%0d",
                  occ_cyc, occ_refresh,
                  occ_cyc ? int'(occ_refresh * 100 / occ_cyc) : 0, occ_act);
-        for (int p = 0; p < 5; p++)
+        for (int p = 0; p < 6; p++)
             $display("    port %0d: trans=%0d rd=%0d wr=%0d own=%0d(%0d%%) wait=%0d act=%0d",
                      p, occ_trans[p], occ_rd[p], occ_wr[p], occ_own[p],
                      occ_cyc ? int'(occ_own[p] * 100 / occ_cyc) : 0,
@@ -900,11 +1006,14 @@ module tb_pc98_boot;
     // transformed -- same mux Chipset.sv drives onto internal_data_bus_ram.
     wire [7:0] mem_read_byte = ~ram_address_select_n ? seq_cpu_rdata
                             : is_xrom(cpu_address)   ? xrom_byte(cpu_address)
+                            : is_scsirom(cpu_address) ? scsirom[cpu_address[11:0]]
                                                      : ram[cpu_address];
     // The odd lane of a one-cycle word read; the SDRAM serves those, the
     // option ROM serves its own.
     wire [7:0] din_hi = (~mem_rd_n & ~ram_address_select_n) ? seq_cpu_rdata_hi
                       : (~mem_rd_n & is_xrom(cpu_address))  ? xrom_byte(cpu_address | 20'h1)
+                      : (~mem_rd_n & is_scsirom(cpu_address))
+                                              ? scsirom[cpu_address[11:0] | 12'h1]
                                                             : 8'hFF;
 
     // The mirror check. On the trailing edge of a read RAM.sv answered, what
@@ -934,6 +1043,8 @@ module tb_pc98_boot;
 `else
     wire [7:0] mem_read_byte = is_rom(cpu_address)  ? rom_byte(cpu_address)
                              : is_xrom(cpu_address) ? xrom_byte(cpu_address)
+                             : is_scsirom(cpu_address) ? scsirom[cpu_address[11:0]]
+                             : is_a3ff2(cpu_address)   ? a3ff2_val
                                                     : ram[cpu_address];
     wire bench_ready = 1'b1;          // flat memory answers immediately
     // The flat array is byte-wide but still answers a word's odd lane at
@@ -943,6 +1054,8 @@ module tb_pc98_boot;
                                   ? rom_byte(cpu_address | 20'h1)
                                 : is_xrom(cpu_address | 20'h1)
                                   ? xrom_byte(cpu_address | 20'h1)
+                                : is_scsirom(cpu_address)
+                                  ? scsirom[cpu_address[11:0] | 12'h1]
                                 : ram[cpu_address | 20'h1];
     wire [7:0] din_hi = ~mem_rd_n ? mem_read_byte_hi : 8'hFF;
     // No RAM.sv here: no beat stream exists. The prefetch windows stay
@@ -953,6 +1066,9 @@ module tb_pc98_boot;
     // strobe on the pins is as good as captured -- the drain's witness is
     // simply "the write command reached the bus".
     wire sdram_wt_w = ~mem_wr_n;
+    // Read witness: the flat array answers within the strobe, so the
+    // read is "ours and answered" for as long as its strobe is up.
+    wire sdram_rd_own_w = ~mem_rd_n;
 `endif
 
     // True when the read above fell through to the FF default -- i.e. nothing
@@ -961,7 +1077,7 @@ module tb_pc98_boot;
                           | pic1_iocycle | pic2_iocycle | kbd_data_iocycle
                           | kbd_stat_iocycle | gdc_stat_iocycle | cc_ioread
                           | fdc_msr_sel | fdc_fifo_sel | fdc_ctrl_sel
-                          | fdc_mode_sel | sysport_sel);
+                          | fdc_mode_sel | sysport_sel | scsi_rd_sel);
 
     // ---- I/O ---------------------------------------------------------------
     //
@@ -1078,6 +1194,107 @@ module tb_pc98_boot;
     end
     logic xrom_rd_seen = 1'b0, xrom_reg_seen = 1'b0;
 
+    // ---- SCSI board: the real register window + the firmware stand-in ----
+    wire        scsi_cs     = scsi_en & (~io_rd_n | ~io_wr_n)
+                            & (cpu_address[15:3] == 13'h198);
+    wire        scsi_rd_sel;
+    wire  [7:0] scsi_dout;
+    wire        scsi_cmd_req;
+    wire  [7:0] scsi_cmd_byte;
+    wire  [4:0] scsi_mg_reg_addr;
+    wire        scsi_mg_reg_we;
+    wire  [7:0] scsi_mg_reg_wdata, scsi_mg_reg_rdata;
+    wire [12:0] scsi_mg_buf_addr;
+    wire        scsi_mg_buf_we;
+    wire  [7:0] scsi_mg_buf_wdata, scsi_mg_buf_rdata;
+    wire  [7:0] scsi_mg_aux, scsi_mg_st;
+    wire        scsi_mg_aux_we, scsi_mg_st_we, scsi_mg_rdclr, scsi_mg_wrclr;
+    int         scsi_ncmds;
+
+    pc98_scsi u_scsi (
+        .clk(clk_chipset), .rst(reset),
+        .cs(scsi_cs), .a1a2(cpu_address[2:1]),
+        .io_read_n(io_rd_n), .io_write_n(io_wr_n),
+        .data_in(cpu_data_bus), .data_out(scsi_dout), .read_select(scsi_rd_sel),
+        .cmd_req(scsi_cmd_req), .cmd_byte(scsi_cmd_byte),
+        .mg_reg_addr(scsi_mg_reg_addr), .mg_reg_we(scsi_mg_reg_we),
+        .mg_reg_wdata(scsi_mg_reg_wdata), .mg_reg_rdata(scsi_mg_reg_rdata),
+        .mg_buf_addr(scsi_mg_buf_addr), .mg_buf_we(scsi_mg_buf_we),
+        .mg_buf_wdata(scsi_mg_buf_wdata), .mg_buf_rdata(scsi_mg_buf_rdata),
+        .mg_auxstatus(scsi_mg_aux), .mg_auxstatus_we(scsi_mg_aux_we),
+        .mg_scsistatus(scsi_mg_st), .mg_scsistatus_we(scsi_mg_st_we),
+        .mg_rdptr_clr(scsi_mg_rdclr), .mg_wrptr_clr(scsi_mg_wrclr)
+    );
+
+    tb_scsi_target u_scsi_tgt (
+        .clk(clk_chipset), .cmd_req(scsi_cmd_req),
+        .reg_addr(scsi_mg_reg_addr), .reg_we(scsi_mg_reg_we),
+        .reg_wdata(scsi_mg_reg_wdata), .reg_rdata(scsi_mg_reg_rdata),
+        .buf_addr(scsi_mg_buf_addr), .buf_we(scsi_mg_buf_we),
+        .buf_wdata(scsi_mg_buf_wdata), .buf_rdata(scsi_mg_buf_rdata),
+        .aux(scsi_mg_aux), .aux_we(scsi_mg_aux_we),
+        .status(scsi_mg_st), .status_we(scsi_mg_st_we),
+        .rdptr_clr(scsi_mg_rdclr), .wrptr_clr(scsi_mg_wrclr),
+        .n_cmds(scsi_ncmds)
+    );
+
+    // Witnesses: each POST pass's entry into the ROM (with the AL the boot
+    // sweep hands entry 0x15), and the first instruction of any IPL --
+    // 1FC00 for the HDD's (and a 1 KB FDD read), 1FE00 for a 512-byte FDD
+    // one -- with the hand-off registers and the BIOS bytes that say which
+    // device booted. scsi_ipl_seen lets the chunk loop stop early.
+    logic [19:0] scsi_pc_d = 20'h0;
+    logic        scsi_ipl_seen = 1'b0;
+    // The bytes the guest takes off 0xCC2/0xCC6 (the buffer and status
+    // reads), as sampled at the end of each strobe: +scsi_rdlog.
+    logic        scsi_rdlog = 1'b0;
+    initial scsi_rdlog = $test$plusargs("scsi_rdlog");
+    logic        scsi_rd_d = 1'b0;
+    logic  [7:0] scsi_rd_v = 8'h00;
+    logic  [1:0] scsi_rd_p = 2'd0;
+    always_ff @(posedge clk_chipset) begin
+        scsi_rd_d <= scsi_rd_sel;
+        if (scsi_rd_sel) begin
+            scsi_rd_v <= scsi_dout;
+            scsi_rd_p <= cpu_address[2:1];
+        end
+        if (scsi_rdlog && scsi_rd_d && !scsi_rd_sel && scsi_rd_p != 2'd0)
+            $display("  %8t  SCSI rd CC%0d -> %02X  (eu_pc %05X)", $time,
+                     {scsi_rd_p, 1'b0}, scsi_rd_v, eu_pc);
+    end
+    // +scsi_pctrace: every retired PC inside the D2000 window (the first
+    // 4000), with AX/CX/SP and CF -- what the ROM actually executed.
+    logic scsi_pctrace = 1'b0;
+    int   scsi_pctrace_n = 0;
+    initial scsi_pctrace = $test$plusargs("scsi_pctrace");
+    always_ff @(posedge clk_chipset) begin
+        if (scsi_pctrace && eu_pc != scsi_pc_d && scsi_pctrace_n < 4000
+            && (eu_pc[19:12] == 8'hD2 || scsi_pc_d[19:12] == 8'hD2)) begin
+            scsi_pctrace_n <= scsi_pctrace_n + 1;
+            $display("  %8t  PC %05X ax %04X cx %04X sp %04X cf %b", $time,
+                     eu_pc, eu_ax, eu_cx, eu_sp, eu_cf);
+        end
+    end
+    always_ff @(posedge clk_chipset) begin
+        scsi_pc_d <= eu_pc;
+        if (scsi_en && eu_pc != scsi_pc_d) begin
+            if (eu_pc == 20'hD200C || eu_pc == 20'hD200F
+             || eu_pc == 20'hD2012 || eu_pc == 20'hD2015)
+                $display("  %8t  SCSI ROM entry %02X  ax %04X  [4D2]=%02X [482]=%02X  geo %02X %02X %02X%02X tot %02X%02X  cmds %0d",
+                         $time, eu_pc[7:0], eu_ax, ram[20'h4D2], ram[20'h482],
+                         ram[20'h5A0], ram[20'h5A1], ram[20'h5A3], ram[20'h5A2],
+                         ram[20'h5A7], ram[20'h5A6], scsi_ncmds);
+            if ((eu_pc == 20'h1FC00 || eu_pc == 20'h1FE00) && !scsi_ipl_seen) begin
+                scsi_ipl_seen <= 1'b1;
+                $display("  %8t  IPL ENTRY %05X  ax %04X bx %04X cx %04X dx %04X  [584]=%02X [482]=%02X  geo %02X %02X %02X%02X  cmds %0d",
+                         $time, eu_pc, eu_ax, eu_bx, eu_cx, eu_dx,
+                         ram[20'h584], ram[20'h482],
+                         ram[20'h5A0], ram[20'h5A1], ram[20'h5A3], ram[20'h5A2],
+                         scsi_ncmds);
+            end
+        end
+    end
+
     wire [7:0] sysport_data = sysport_35_sel ? sysport_c
                             : sysport_31_sel ? 8'h10
     // 0x42 bit 1: this machine has no protected mode.
@@ -1113,9 +1330,24 @@ module tb_pc98_boot;
     logic [7:0] mem_wr_hi_q   = 8'h00;
     logic       mem_wr_word_q = 1'b0;
     logic [7:0] io_wr_data_q  = 8'h00;
-    logic [7:0] tvram_code [0:511];   // A0000-A01FF, first row of cells
+    logic [7:0] tvram_code [0:8191];  // A0000-A1FFF, the whole code plane
     logic [7:0] tvram_attr [0:511];   // A2000-A21FF
     int          tvram_wr_count = 0;
+    logic        tvram_qmark_seen = 1'b0;   // +key_ms trigger
+
+    // ---- ipl_repint mailbox monitor (realmem) ------------------------------
+    // repint parks its verdict at phys 0x50000: [2]=iters(word) [4]=status
+    // (0xAC pass / 0xEE fail) [8]=opfail(byte) [0x0A]=badcs(word). Watching
+    // the status write lets the run $finish the moment repint reports instead
+    // of running the full chunk count. Enabled by +repint so the shared boot
+    // bench is unaffected when the image isn't repint.
+    logic        repint_en    = 1'b0;
+    logic        rep_saw_ac   = 1'b0;
+    logic        rep_saw_ee   = 1'b0;
+    logic        rep_done     = 1'b0;
+    logic        rep_reported = 1'b0;
+    int          rep_report_dly = 0;
+    logic [7:0]  repimg [0:511];
 
     // The two GDC status ports, named here because the trace below has to
     // recognise them long before the mock that answers them is declared.
@@ -1207,6 +1439,18 @@ module tb_pc98_boot;
                 ram[cpu_address | 20'h1] <= mem_wr_hi_q;
                 ram_seen[cpu_address | 20'h1] <= 1'b1;
             end
+            // ipl_repint mailbox: status byte at 0x50004 is the verdict write,
+            // the last store repint makes before hlt, so it is also the
+            // completion trigger. iters/opfail/badcs are already in ram[].
+            if (repint_en && cpu_address == 20'h50004 && ~rep_done) begin
+                rep_done   <= 1'b1;
+                rep_saw_ac <= (mem_wr_data_q == 8'hAC);
+                rep_saw_ee <= (mem_wr_data_q == 8'hEE);
+                $display("  %8t  REPINT status <- %02X  iters=%0d opfail=%02x badcs=%04x  (eu_pc %05X)",
+                         $time, mem_wr_data_q,
+                         {ram[20'h50003], ram[20'h50002]}, ram[20'h50008],
+                         {ram[20'h5000B], ram[20'h5000A]}, eu_pc);
+            end
             // The ITF's reset-resume state (0000:03F0-0410): every write here
             // is part of the OUT-0F0h dance, and a save that goes missing is
             // the difference between a resume and a derail.
@@ -1244,11 +1488,13 @@ module tb_pc98_boot;
             // The text plane: the memory-count display lands here. Keep the
             // first row of cells (code + attribute) for the final dump.
             if (cpu_address >= 20'hA0000 && cpu_address < 20'hA4000) begin
-                if (cpu_address < 20'hA0200)
-                    tvram_code[cpu_address[8:0]]  <= mem_wr_data_q;
+                if (cpu_address < 20'hA2000)
+                    tvram_code[cpu_address[12:0]] <= mem_wr_data_q;
                 else if (cpu_address >= 20'hA2000 && cpu_address < 20'hA2200)
                     tvram_attr[cpu_address[8:0]]  <= mem_wr_data_q;
                 tvram_wr_count <= tvram_wr_count + 1;
+                if (cpu_address < 20'hA2000 && mem_wr_data_q == 8'h3F)
+                    tvram_qmark_seen <= 1'b1;
                 // The first forty writes (the clear, and what shape it has),
                 // and after that every PRINTABLE byte into the code plane --
                 // which is the memory count, if the BIOS ever writes one. The
@@ -1362,6 +1608,11 @@ module tb_pc98_boot;
                 $write("\n");
                 $display("  %8t  OUT 043D, %02X   -> itf_bank %0d",
                          $time, cpu_data_bus, (cpu_data_bus == 8'h12) ? 0 : 1);
+                $display("             z86: ax %04X cx %04X dx %04X bx %04X sp %04X si %04X flags %04X cs %04X ds %04X",
+                         u_cpu.u_regfile.regs[0], u_cpu.u_regfile.regs[1],
+                         u_cpu.u_regfile.regs[2], u_cpu.u_regfile.regs[3],
+                         u_cpu.u_regfile.regs[4], u_cpu.u_regfile.regs[6],
+                         u_cpu.u_execute.reg_f, u_cpu.seg_CS, u_cpu.seg_DS);
             end
             // FDC window: the byte stream the firmware panel shows on
             // hardware, so the sim's sequence can be diffed against it.
@@ -1385,6 +1636,31 @@ module tb_pc98_boot;
                        : (cpu_address[15:0] == 16'h00A0) ? "s.par"
                        : "s.CMD",
                          io_wr_data_q, eu_pc);
+        end
+    end
+
+    // repint verdict: the status write set rep_done; give ram[] a couple of
+    // clocks to settle, then print the guest's own integrity verdict and
+    // finish -- the CPU is in hlt at that point, so nothing follows.
+    initial if ($test$plusargs("repint")) repint_en = 1'b1;
+    always_ff @(posedge clk_chipset) begin
+        if (rep_done && !rep_reported) begin
+            if (rep_report_dly < 8) rep_report_dly <= rep_report_dly + 1;
+            else begin
+                rep_reported <= 1'b1;
+                $display("=== REPINT verdict: status=%s iters=%0d opfail=%02x badcs=%04x ===",
+                         rep_saw_ac ? "AC(pass)" : rep_saw_ee ? "EE(fail)" : "??",
+                         {ram[20'h50003], ram[20'h50002]}, ram[20'h50008],
+                         {ram[20'h5000B], ram[20'h5000A]});
+                if (rep_saw_ac) $display("REPINT PASS (copy+stack+CS intact)");
+                else if (rep_saw_ee)
+                    $display("REPINT FAIL (opfail %02x: 1=copy 2=stack 3=SS!=CS, badcs %04x)",
+                             ram[20'h50008], {ram[20'h5000B], ram[20'h5000A]});
+                else            $display("REPINT verdict byte not AC/EE");
+                $display("E2E ack reads %0d mismatches (last bad %05X)",
+                         ack_rd_mismatches, ack_bad_addr);
+                $finish;
+            end
         end
     end
 
@@ -1568,6 +1844,22 @@ module tb_pc98_boot;
     wire       pic1_data_bus_io, pic2_data_bus_io;
     wire [2:0] pic1_cascade_out;
 
+    logic kbd8251_en = 1'b0;
+    initial begin
+        int v;
+        if ($value$plusargs("kbd8251=%d", v)) kbd8251_en = (v != 0);
+    end
+
+    // IR1 is the keyboard 8251's RxRDY, through the same two-flop
+    // synchroniser Peripherals.sv uses (keybord_interrupt). Only with
+    // +kbd8251=1; the no-keyboard bench keeps IR1 low.
+    wire  kbd8251_irq;
+    logic kbd_irq1_ff = 1'b0, kbd_irq1 = 1'b0;
+    always_ff @(posedge clk_chipset) begin
+        kbd_irq1_ff <= kbd8251_en & kbd8251_irq;
+        kbd_irq1    <= kbd_irq1_ff;
+    end
+
     i8259 u_pic1 (
         .clock            (clk_chipset),
         .reset            (reset),
@@ -1585,7 +1877,7 @@ module tb_pc98_boot;
         .interrupt_acknowledge_n (inta_n),
         .interrupt_to_cpu (pic1_to_cpu_buf),
         .external_irr_clear (8'h00),
-        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, 1'b0, timer_out0})
+        .interrupt_request({pic2_to_cpu, 4'b0, crt_vsync_mock, kbd_irq1, timer_out0})
     );
 
     i8259 u_pic2 (
@@ -1661,16 +1953,52 @@ module tb_pc98_boot;
     // pc98_kbd8251.sv is the model PERIPHERALS instantiates; running it here
     // puts the actual RTL against the actual ROM sequence. Default OFF keeps
     // the no-keyboard machine this bench has always been; +kbd8251=1 wires
-    // it in with its shipped ~10 ms ACK delay.
-    logic kbd8251_en = 1'b0;
+    // it in (and +key_ms=N types into it).
+
+    // +key_ms=N: N ms after the first '?' lands in the text plane (the end
+    // of N88-BASIC's "How many files(0-15)?"), type '3' then RETURN through
+    // the injection port (the translator's toggle-strobe shape), 40 ms
+    // apart. The echo in the TVRAM log proves the key stream still reaches
+    // the BIOS after boot.
+    logic       kbd_key_stb  = 1'b0;
+    logic [7:0] kbd_key_byte = 8'h00;
     initial begin
-        int v;
-        if ($value$plusargs("kbd8251=%d", v)) kbd8251_en = (v != 0);
+        int ms;
+        if ($value$plusargs("key_ms=%d", ms)) begin
+            byte unsigned seq [4] = '{8'h03, 8'h83, 8'h1C, 8'h9C};
+            wait (tvram_qmark_seen);
+            $display("  %8t  KBD first '?' in TVRAM; typing in %0d ms", $time, ms);
+            repeat (ms * 42_955) @(posedge clk_chipset);
+            // +key_stop: a lone STOP make (0x60, no break) first -- what the
+            // old model's synthetic "reset ACK" looked like to the BIOS --
+            // then 500 ms for BASIC to react before the answer is typed.
+            if ($test$plusargs("key_stop")) begin
+                kbd_key_byte = 8'h60;
+                kbd_key_stb  = ~kbd_key_stb;
+                $display("  %8t  KBD INJECT 60 (lone STOP make)", $time);
+                repeat (500 * 42_955) @(posedge clk_chipset);
+            end
+            foreach (seq[k]) begin
+                kbd_key_byte = seq[k];
+                kbd_key_stb  = ~kbd_key_stb;
+                $display("  %8t  KBD INJECT %02X", $time, seq[k]);
+                repeat (40 * 42_955) @(posedge clk_chipset);
+            end
+        end
     end
+    logic [19:0] eu_pc_kq = 20'h0;
+    always_ff @(posedge clk_chipset) eu_pc_kq <= eu_pc;
+    // The BIOS IRQ1 handler's STOP (0x60 -> INT 06h, FE6DC) and COPY
+    // (0x61 -> INT 05h, FE6D8) exits: a phantom STOP is what this bench
+    // watches for.
+    always_ff @(posedge clk_chipset)
+        if (kbd8251_en && (eu_pc == 20'hFE6DC || eu_pc == 20'hFE6D8)
+                       && eu_pc != eu_pc_kq)
+            $display("  %8t  KBD BIOS IRQ1 -> INT %s  (eu_pc %05X)", $time,
+                     eu_pc == 20'hFE6DC ? "06h (STOP)" : "05h (COPY)", eu_pc);
 
     logic       kbd8251_read_select;
     logic [7:0] kbd8251_read_data;
-    wire        kbd8251_irq;
 
     pc98_kbd8251 u_kbd8251 (
         .clock              (clk_chipset),
@@ -1679,6 +2007,8 @@ module tb_pc98_boot;
         .data_read_strobe   (kbd8251_en & ~io_rd_n & (cpu_address[15:0] == 16'h0041)),
         .stat_read_strobe   (kbd8251_en & ~io_rd_n & (cpu_address[15:0] == 16'h0043)),
         .data_in            (cpu_data_bus),
+        .key_stb            (kbd_key_stb),
+        .key_byte           (kbd_key_byte),
         .read_select        (kbd8251_read_select),
         .read_data          (kbd8251_read_data),
         .irq                (kbd8251_irq)
@@ -1687,21 +2017,20 @@ module tb_pc98_boot;
     wire kbd_stat_iocycle = kbd8251_read_select & (cpu_address[15:0] == 16'h0043);
     wire kbd_data_iocycle = kbd8251_read_select & (cpu_address[15:0] == 16'h0041);
 
-    // Watch the model's innards: whether the edge armed, when the ACK lands.
+    // Watch the model's innards: every byte that reaches the receiver.
     logic kbd_rx_full_d = 1'b0;
     always_ff @(posedge clk_chipset) begin
         kbd_rx_full_d <= u_kbd8251.rx_full;
         if (u_kbd8251.rx_full & ~kbd_rx_full_d)
-            $display("  %8t  KBD ACK landed (rx_full -> 1)", $time);
+            $display("  %8t  KBD RxRDY (rx_full -> 1, rx %02X)", $time,
+                     u_kbd8251.rx_q);
     end
-    // And its state at every chunk line: cmd_q/ack_timer tell whether the
-    // break edge was even seen.
+    // And its state at every chunk line.
     task automatic kbd_state_dump;
         begin
             if (kbd8251_en)
-                $display("        kbd8251: cmd %02X  timer %0d  rx_full %b  rx %02X",
-                         u_kbd8251.cmd_q, u_kbd8251.ack_timer,
-                         u_kbd8251.rx_full, u_kbd8251.rx_q);
+                $display("        kbd8251: cmd %02X  rx_full %b  rx %02X",
+                         u_kbd8251.cmd_q, u_kbd8251.rx_full, u_kbd8251.rx_q);
         end
     endtask
 
@@ -1939,12 +2268,12 @@ module tb_pc98_boot;
     // The queue's read pointer is the EU's instruction pointer, so CS:PFQ_ADDR
     // is the real program counter. The dbg_regs view
     // ({psw,ip,ds,ss,cs,es,di,si,bp,sp,bx,dx,cx,ax}, retired-instruction
-    // granularity) is the same one the old V30 bench traced. Zet exposes no
-    // dbg_regs, so eu_pc reads the core's linear-PC pin directly.
+    // granularity) is the same one the old V30 bench traced. zet_pc is the
+    // core's fetch-stream PC pin (it moves on branches).
     wire [15:0] eu_cs = zet_pc[19:4];   // for the CS-change trace only
     wire [19:0] eu_pc = zet_pc;
 
-    // First-cycles bus trace: what the Zet actually asked for and got.
+    // First-cycles bus trace: what the CPU actually asked for and got.
     int zet_tr_n = 0;
     always_ff @(posedge clk_chipset) begin
         if (zet_tr_n < 200) begin
@@ -1973,6 +2302,93 @@ module tb_pc98_boot;
             zet_tr_n <= zet_tr_n + 1;
         end
 
+    // Hand-over trace (+trace43d): the first 160 acked Wishbone cycles after
+    // the first OUT 043D,12 -- what the CPU fetched and where it went.
+    bit  tr43_en = 0;
+    int  tr43_n  = -1;
+    initial tr43_en = $test$plusargs("trace43d");
+    always_ff @(posedge zet_clk) begin
+        if (tr43_en && tr43_n < 0 && saw_043d && last_043d == 8'h12)
+            tr43_n <= 0;
+        else if (tr43_n >= 0 && tr43_n < 160 && zwb_stb && zwb_ack) begin
+            $display("  %8t  T43 %s %s adr %05x sel %b dat %04x  pc %05x",
+                     $time, zwb_tga ? "IO " : "MEM", zwb_we ? "WR" : "RD",
+                     {zwb_adr, 1'b0}, zwb_sel, zwb_we ? zwb_dat_o : zwb_dat_i,
+                     zet_pc);
+            tr43_n <= tr43_n + 1;
+        end
+    end
+
+    // Return trace (+traceret): after the first OUT 043D,10 that follows a
+    // 12, log every new branch target (z86's pc output moves on branches)
+    // and every I/O cycle, 400 entries -- the ITF path from the checksum
+    // stub's return to wherever it goes next.
+    bit  trr_en = 0;
+    bit  trr_saw12 = 0;
+    int  trr_n = -1;
+    logic [19:0] trr_pc = 20'h0;
+    initial trr_en = $test$plusargs("traceret");
+    always_ff @(posedge zet_clk) begin
+        if (saw_043d && last_043d == 8'h12) trr_saw12 <= 1'b1;
+        if (trr_en && trr_n < 0 && trr_saw12 && saw_043d && last_043d == 8'h10)
+            trr_n <= 0;
+        else if (trr_n >= 0 && trr_n < 400) begin
+            if (zet_pc != trr_pc) begin
+                trr_pc <= zet_pc;
+                $display("  %8t  TRR br %05x", $time, zet_pc);
+                trr_n <= trr_n + 1;
+            end else if (zwb_stb && zwb_ack && zwb_tga) begin
+                $display("  %8t  TRR IO %s %04x dat %04x sel %b", $time,
+                         zwb_we ? "WR" : "RD", {zwb_adr, 1'b0},
+                         zwb_we ? zwb_dat_o : zwb_dat_i, zwb_sel);
+                trr_n <= trr_n + 1;
+            end
+        end
+    end
+
+    // Window trace (+trace_ms=<ms>): from that sim time on, log branch
+    // targets, every INTA vector and every write below 0x400 (the IVT),
+    // 3000 entries.
+    longint trw_start = -1;
+    int     trw_n = 0;
+    logic [19:0] trw_pc = 20'h0;
+    initial begin
+        int ms;
+        if ($value$plusargs("trace_ms=%d", ms)) trw_start = longint'(ms) * 1_000_000;   // $time is in ns here
+    end
+    always_ff @(posedge zet_clk) begin
+        if (trw_start >= 0 && $time >= trw_start && trw_n < 3000) begin
+            if (zet_pc != trw_pc) begin
+                trw_pc <= zet_pc;
+                $display("  %0t  TRW br %05x  es %04x ds %04x ss %04x sp %04x", $time, zet_pc,
+                         u_cpu.seg_ES, u_cpu.seg_DS, u_cpu.seg_SS, u_cpu.u_regfile.regs[4]);
+                trw_n <= trw_n + 1;
+            end
+            if (zwb_inta && zwb_dat_i[15:8] == 8'h00 && u_bridge.int_served) begin
+                $display("  %0t  TRW inta vec %02x", $time, zwb_dat_i[7:0]);
+                trw_n <= trw_n + 1;
+            end
+            if (zwb_stb && zwb_ack && zwb_we && !zwb_tga && {zwb_adr, 1'b0} < 20'h400) begin
+                $display("  %0t  TRW ivt-wr %05x sel %b dat %04x", $time,
+                         {zwb_adr, 1'b0}, zwb_sel, zwb_dat_o);
+                trw_n <= trw_n + 1;
+            end
+        end
+    end
+
+    // ES-change trace (with +trace_ms): every change of ES after the window
+    // opens, with the PC (z86: last branch target).
+    wire [15:0] tr_es = u_cpu.seg_ES;
+    logic [15:0] tr_es_q = 16'h0;
+    int          tres_n  = 0;
+    always_ff @(posedge zet_clk) begin
+        tr_es_q <= tr_es;
+        if (trw_start >= 0 && $time >= trw_start && tres_n < 400 && tr_es != tr_es_q) begin
+            $display("  %0t  TES es %04x -> %04x  pc %05x", $time, tr_es_q, tr_es, zet_pc);
+            tres_n <= tres_n + 1;
+        end
+    end
+
     // Wishbone settle trace: while stb is up, watch the master's tracked
     // outputs converge to the exec stage's combinational operands.
     int zwb_tr_n = 0;
@@ -1980,14 +2396,14 @@ module tb_pc98_boot;
         if (!cpu_reset_w && zwb_stb && zwb_tr_n < 600) begin
             $display("  %8t  ZWB %s adr %05x sel %b dat_o %04x c_dat %04x c_adr %05x age %0d",
                      $time, zwb_we ? "WR" : "RD", {zwb_adr,1'b0}, zwb_sel,
-                     zwb_dat_o, u_cpu.cpu_dat_o, u_cpu.cpu_adr_o,
+                     zwb_dat_o, 16'h0, 20'h0,
                      u_bridge.req_age);
             zwb_tr_n <= zwb_tr_n + 1;
         end
         if (!cpu_reset_w && zwb_stb && zwb_ack && !zwb_we && zwb_tr_n < 1200) begin
             $display("  %8t  ZAK RD adr %05x sel %b dat_i %04x c_dat_i %04x rdw %04x imm_l %04x",
                      $time, {zwb_adr,1'b0}, zwb_sel, zwb_dat_i,
-                     u_cpu.cpu_dat_i, u_bridge.rd_word, u_cpu.core.fetch.imm_l);
+                     16'h0, u_bridge.rd_word, 16'h0);
             zwb_tr_n <= zwb_tr_n + 1;
         end
     end
@@ -2093,6 +2509,12 @@ module tb_pc98_boot;
     // ---- run ---------------------------------------------------------------
     int i, j;
     int chunks = 1200;              // +chunks=N cuts the run short
+    // With +hddimg: chunks to keep running after an IPL is entered without
+    // hdd_test's result block appearing (an FDD IPL, a hung disk one).
+    int ipl_after = 0, ipl_grace = 3;
+    initial void'($value$plusargs("ipl_grace=%d", ipl_grace));
+    int qmark_chunks = 0, qmark_after = 0;
+    initial void'($value$plusargs("qmark_chunks=%d", qmark_chunks));
     initial begin
         for (i = 0; i < 1048576; i = i + 1) begin
             ram[i] = 8'h00;
@@ -2120,6 +2542,26 @@ module tb_pc98_boot;
         // the BIOS at E8000-FFFFF, the ITF in the shadow at 1F8000 that
         // bios_shadow_flag selects. One guest byte per 16-bit word, which is how
         // RAM.sv stores everything (access_data_in is {8'h00, byte}).
+        // +repint fast path: skip POST entirely. Patch the BIOS reset vector
+        // to a far jump at repint BEFORE the BIOS image goes into the part
+        // below, so rom_byte agrees with the served byte -- and poke repint
+        // into flat guest RAM at 1FC00, seeding the E2E mirror so its own
+        // fetches read as expected. Combine with +freeze_* to hammer the read
+        // path under bus holds.
+        if ($test$plusargs("repint")) begin
+            $readmemh("ipl_repint.hex", repimg);
+            bios[18'h17FF0] = 8'hEA;   // jmp far 1FC0:0000  (phys 1FC00)
+            bios[18'h17FF1] = 8'h00;
+            bios[18'h17FF2] = 8'h00;
+            bios[18'h17FF3] = 8'hC0;
+            bios[18'h17FF4] = 8'h1F;
+            for (i = 0; i < 512; i = i + 1) begin
+                sdr.u_part.poke(24'h01FC00 + i, {8'h00, repimg[i]});
+                ram[20'h1FC00 + i]      = repimg[i];
+                ram_seen[20'h1FC00 + i] = 1'b1;
+            end
+            $display("REALMEM+repint: IPL poked at 1FC00, reset vector -> 1FC0:0000");
+        end
         for (i = 0; i < 98304;  i = i + 1)
             sdr.u_part.poke(20'hE8000 + i, {8'h00, bios[i]});
         for (i = 0; i < 32768;  i = i + 1)
@@ -2175,6 +2617,10 @@ module tb_pc98_boot;
                      ram[20'h584], ram[20'h4B7], ram[20'h4B9], ram[20'h501],
                      ram[20'h5AE], ram[20'h5FB], ram[20'h5FA],
                      ram[20'h5F9], ram[20'h5F8]);
+            $display("        ivt06=%04X:%04X 05=%04X:%04X  keymap 536=%02X",
+                     {ram[20'h1B],ram[20'h1A]}, {ram[20'h19],ram[20'h18]},
+                     {ram[20'h17],ram[20'h16]}, {ram[20'h15],ram[20'h14]},
+                     ram[20'h536]);
             $display("        ivt: 1b=%04X:%04X 12=%04X:%04X 13=%04X:%04X 1e=%04X:%04X 1f=%04X:%04X 4b0=%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
                      {ram[20'h6F],ram[20'h6E]}, {ram[20'h6D],ram[20'h6C]},
                      {ram[20'h4B],ram[20'h4A]}, {ram[20'h49],ram[20'h48]},
@@ -2189,6 +2635,36 @@ module tb_pc98_boot;
             occ_report();
 `endif
             wr_clear_tog = ~wr_clear_tog;
+            // testdisk/hdd_test.asm's result block at 0x40000: +2F = A5 once
+            // it has run every check, +2E = 'P'/'F'.
+            if (scsi_en && ram[20'h4002F] == 8'hA5) begin
+                $write("SCSI RESULT:");
+                for (j = 0; j < 48; j = j + 1) begin
+                    if (j % 16 == 0) $write("\n  %05X:", 20'h40000 + j);
+                    $write(" %02X", ram[20'h40000 + j]);
+                end
+                $display("");
+                $display("SCSI IPL VERDICT: %s", ram[20'h4002E] == "P" ? "PASS" : "FAIL");
+                break;
+            end
+            // +qmark_chunks=N: stop N chunks after the first '?' reached
+            // the text plane (the BASIC prompt, and whatever +key_ms typed).
+            if (qmark_chunks != 0 && tvram_qmark_seen) begin
+                qmark_after = qmark_after + 1;
+                if (qmark_after > qmark_chunks) begin
+                    $display("prompt bench: %0d chunks after the first '?' -- stopping",
+                             qmark_chunks);
+                    break;
+                end
+            end
+            if (scsi_ipl_seen) begin
+                ipl_after = ipl_after + 1;
+                if (ipl_after > ipl_grace) begin
+                    $display("SCSI bench: IPL entered %0d chunks ago, no result block -- stopping",
+                             ipl_grace);
+                    break;
+                end
+            end
         end
 
         $display("--- done ---");
@@ -2214,6 +2690,16 @@ module tb_pc98_boot;
         $display("IVT 08 : %04X:%04X   IVT 18: %04X:%04X",
                  {ram[8'h23],ram[8'h22]}, {ram[8'h21],ram[8'h20]},
                  {ram[8'h63],ram[8'h62]}, {ram[8'h61],ram[8'h60]});
+        // The screen as text: all 25 rows, 80 cells each (ANK codes only).
+        for (int row = 0; row < 25; row++) begin
+            $write("SCREEN row %0d: |", row);
+            for (int col = 0; col < 80; col++) begin
+                logic [7:0] ch;
+                ch = tvram_code[(row*80 + col)*2];
+                $write("%s", (ch >= 8'h20 && ch < 8'h7f) ? ch : 8'h2e);
+            end
+            $display("|");
+        end
         $display("TVRAM writes %0d; first row, code words:", tvram_wr_count);
         for (i = 0; i < 16; i = i + 1)
             $display("  cell %02d: code %04X  attr %04X", i,

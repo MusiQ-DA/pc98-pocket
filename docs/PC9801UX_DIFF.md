@@ -158,7 +158,7 @@ SCSI board serves the same role through its own BIOS.
 | | Manual | RTL | Status |
 |---|---|---|---|
 | Keyboard USART | PD8251A 0x41/0x43 (man row 9) | `pc98_kbd8251` :1056-1073 — break-edge reset, RxRDY→IRQ1, status `status \| 0x85` (np21w `keyboard_i43`) | **I** |
-| Reset-ACK | 0x60 within poll window | deliberately delayed past the ITF's window so the no-keyboard boot path runs (`pc98_kbd8251.sv:45-55`, `ACK_DELAY_TICKS`=350 ms); BIOS's INT18h reset still receives it via IRQ1 | **P** — workaround for unimplemented "keyboard arrived mid-POST" flow |
+| Keyboard reset reply | none; held keys re-sent (np21w `keyboard_resetsignal` → `keystat_resendstat`). The ITF's 0x60/0x70/0x74 probe reads STOP/SHIFT/CTRL held at power-on | no byte sent on the break edge (`pc98_kbd8251.sv` header). The former synthetic 0x60 "ACK" reached the BIOS IRQ1 handler as STOP (INT 06h) and re-printed BASIC's "How many files?" | **P** — held keys are not re-sent |
 | Keyboard cmd replies | 0x9C/9D/9F → 0xFA… | not synthesised (`pc98_kbd8251.sv:62-67`) | **P** |
 | Key input | matrix | PS/2-Set2 → PC-98 translator `pc98_kbd_ps2.sv`, injection port | **I** |
 | Bus mouse | 8255 0x7FD9-0x7FDF + timing 0xBFDB, IRQ13 (man rows 26/28) | `pc98_busmouse` :1085-1105 — full 8255 model, latch/nibble/IRQ13 at 120-15 Hz | **I** (0x7FDF reads unclaimed, matching np21w :2327) |

@@ -2,7 +2,7 @@
 // tb_mem_perf -- where do the cycles in a guest write burst actually go?
 //
 // The whole memory-write path, wired the way core_top wires it:
-// Zet -> zet_cpu_bridge -> i8288 -> READY -> pc98_gvram_seq(+GRCG,+EGC)
+// z86 -> cpu_bus_bridge -> i8288 -> READY -> pc98_gvram_seq(+GRCG,+EGC)
 // -> RAM.sv -> sdram_shim -> sdram_mp -> sdram_board_model, with the real
 // ce_generator pacing the bus and the real display fetch contending on
 // port D.
@@ -80,11 +80,36 @@ module tb_mem_perf;
     wire        proc_ready;
     wire        pc98_analog_w;
 
-    zet_cpu_bridge u_bridge (
+    // Prefetch A/B knobs (mirrors of the JTAG slot-0x09 bits) and the
+    // F-bank remap flag -- driven by plusargs / phases below.
+    reg         pf_dis_r    = 1'b0;
+    reg         pf_nofill_r = 1'b0;
+    reg         pf_nofillm_r = 1'b0;
+    reg         pf_nohit_r  = 1'b0;
+    reg         pf_vfy_r    = 1'b0;
+    reg         rr_vfy_r    = 1'b0;
+    reg         shadow_flag_r = 1'b0;
+    reg         irq_req     = 1'b0;
+    reg         flipped10   = 1'b0;
+    initial begin
+        pf_dis_r    = $test$plusargs("pfdis");
+        pf_nofill_r = $test$plusargs("pfnofill");
+        pf_nofillm_r = $test$plusargs("pfnofillm");
+        pf_nohit_r  = $test$plusargs("pfnohit");
+        pf_vfy_r    = $test$plusargs("pfvfy");
+        rr_vfy_r    = $test$plusargs("rrvfy");
+    end
+
+    wire        seq_pf_beat_w;      // the sequencer's own line-buffer burst
+    wire        gvwb_req_w, gvwb_ack_w, gvwb_done_w, gvwb_we_w, gvwb_rvalid_w, gv_a_quiet_w;
+    wire [7:0]  gvwb_rdata_w;
+    wire [23:0] gvwb_addr_w;
+    wire [7:0]  gvwb_wdata_w;
+    cpu_bus_bridge u_bridge (
         .clk               (clk),
         .cpu_ce_posedge    (ce_pos),
         .cpu_ce_negedge    (ce_neg),
-        .fast_pace         (clk_select_r[1]),
+        .pace_286          (1'b1),   // every setting is 286-class now
         .reset             (cpu_reset_w),
         .zet_clk           (zet_clk),
         .wb_dat_o          (zwb_dat_o),
@@ -105,7 +130,7 @@ module tb_mem_perf;
         .analog_mode       (pc98_analog_w),
         .word_access       (cpu_word_access),
         .pf_req_len        (cpu_pf_len_w),
-        .pf_beat_v         (pf_beat_v_w),
+        .pf_beat_v         (pf_beat_v_w & ~seq_pf_beat_w),
         .pf_beat_dat       (pf_beat_dat_w),
         .cpu_data_bus_hi   (cpu_data_bus_hi),
         .data_bus_hi       (din_hi),
@@ -113,31 +138,97 @@ module tb_mem_perf;
         .processor_ready   (proc_ready),
         .address_enable_n  (aen),
         .sdram_wr_taken    (seq_wr_taken_w),
+        .sdram_rd_ready    (seq_rd_own_w),
         .pause_core        (1'b0),
+        .throttle          (1'b0),
         .biu_done          (biu_done),
-        .pf_disable        (1'b0),
+        .zet_edge_o        (z86_ce),
+        .pf_disable        (pf_dis_r),
+        .pf_nofill         (pf_nofill_r),
+        .pf_nofillm        (pf_nofillm_r),
+        .pf_nohit          (pf_nohit_r),
+        // foreign-commit snoop: the real RAM.sv feed, so the synthetic
+        // DMAC's writes (and the bridge's own posted drains) kill only
+        // the pf windows they overlap -- exactly what core_top wires.
+        .sn_v              (ram_sn_v),
+        .sn_addr           (ram_sn_addr),
+        .sn_len            (ram_sn_len),
+        .bios_shadow_flag  (shadow_flag_r),
         .dbg               ()
     );
 
-    zet u_cpu (
-        .wb_clk_i  (zet_clk),
-        .wb_rst_i  (cpu_reset_w),
-        .wb_dat_i  (zwb_dat_i),
-        .wb_dat_o  (zwb_dat_o),
+    // z86 (the only CPU) behind the bridge. This bench models no sdram_mp
+    // port F, so the 16 KB cache stays off (cache_en 0) and its port idles;
+    // every access takes the Wishbone to the bridge, like core_top's
+    // uncached path.
+    wire        z86_ce;
+    wire        zf_req, zf_we;
+    wire [23:0] zf_addr;
+    wire [ 3:0] zf_len;
+    wire [15:0] zf_wd0, zf_wd1;
+    wire        zf_ack, zf_rvalid, zf_done;
+    wire  [4:0] zf_wcnt;
+    wire [15:0] zf_rdata;
+    // +cache: the 16 KB cache on, its port F wired to RAM.sv's cachef
+    // port and the port-A commit snoop fed back -- the core_top wiring.
+    reg         cache_r = 1'b0;
+    initial cache_r = $test$plusargs("cache");
+    // +dx=<hex>: the hardware-bisect reverts (core_top slot 0x09 [27:20]
+    // shifted down: [6:0] z86.sv dx, [7] the sequencer's RMW buffer off).
+    logic [7:0] dx_r = 8'd0;
+    initial begin int v; if ($value$plusargs("dx=%h", v)) dx_r = 8'(v); end
+    reg         nopace_r = 1'b0;
+    initial nopace_r = $test$plusargs("nopace");
+    reg         nvw_r = 1'b0;   // +novwait: no np21w VRAM wait (A/B)
+    initial nvw_r = $test$plusargs("novwait");
+    assign zwb_nmia = 1'b0;
+
+    z86 #(.WCOMB(1'b1)) u_cpu (
+        .clk       (zet_clk),
+        .reset     (cpu_reset_w),
+        .clk_free  (clk),
+        .ce        (z86_ce),
+        .cache_en  (cache_r & ~shadow_flag_r),   // core_top: off while the ITF bank is mapped
+        .pace      (cache_r && clk_select_r != 2'b11 && !nopace_r),
+        .pace_ce   (ce_pos),
+        .pace_rd_wait (ram_rd_wait),
+        .pace_wr_wait (ram_wr_wait),
+        // np21w's VRAM wait, as Chipset.sv computes it for core_top
+        .pace_vwait   ({1'b0, nvw_r ? 4'd0
+                                     : (grcg_active & grcg_rmw & ~egc_active_w) ? (vid_vb ? 4'd1 : 4'(tb_gw))
+                                     : (grcg_active & ~grcg_rmw & ~egc_active_w) ? (vid_vb ? 4'd1 : 4'(tb_gwt))
+                                     : (grcg_active | egc_active_w) ? 4'd0
+                                     : vid_vb ? 4'd1 : 4'd6}),
+        .dx           (dx_r[6:0]),
+        .bios_shadow  (shadow_flag_r),
+        .bios_protect (1'b0),
+        .f_req     (zf_req),
+        .f_we      (zf_we),
+        .f_addr    (zf_addr),
+        .f_len     (zf_len),
+        .f_wdata0  (zf_wd0),
+        .f_wdata1  (zf_wd1),
+        .f_ack     (zf_ack),
+        .f_rvalid  (zf_rvalid),
+        .f_rdata   (zf_rdata),
+        .f_done    (zf_done),
+        .f_wcnt    (zf_wcnt),
+        .sn_v      (ram_sn_v),
+        .sn_addr   (ram_sn_addr),
+        .sn_len    (ram_sn_len),
+        .dbg_watch_a (20'd0), .dbg_sn_kills (),
         .wb_adr_o  (zwb_adr),
+        .wb_sel_o  (zwb_sel),
         .wb_we_o   (zwb_we),
         .wb_tga_o  (zwb_tga),
-        .wb_sel_o  (zwb_sel),
+        .wb_dat_o  (zwb_dat_o),
         .wb_stb_o  (zwb_stb),
         .wb_cyc_o  (zwb_cyc),
         .wb_ack_i  (zwb_ack),
-        .wb_tgc_i  (1'b0),
+        .wb_dat_i  (zwb_dat_i),
+        .wb_tgc_i  (irq_req),
         .wb_tgc_o  (zwb_inta),
-        .nmi       (1'b0),
-        .nmia      (zwb_nmia),
-        .pc        (zet_pc),
-        .dbg_fault (),
-        .dbg_opc   ()
+        .pc        (zet_pc)
     );
 
     // ---- 8288 + address latch --------------------------------------------
@@ -252,10 +343,12 @@ module tb_mem_perf;
     int          grants_midcmd = 0;
     int          diverged      = 0;
     int          stray         = 0;
+    logic        beatlog       = 1'b0;
 
     initial begin
         void'($value$plusargs("dmaperiod=%d", dma_period));
         grant_en = $test$plusargs("GRANT");
+        beatlog  = $test$plusargs("beatlog");
         if (grant_en)
             $display("GRANT injection on, dma_period=%0d", dma_period);
     end
@@ -369,12 +462,18 @@ module tb_mem_perf;
     wire        ram_ready_w, access_complete_w, access_own_w;
     wire        ram_wt_w;           // u_ram's write_taken
     wire        seq_wr_taken_w;     // -> u_bridge.sdram_wr_taken
+    // port-A write-commit snoop from the RAM model (-> u_bridge.sn_*)
+    wire        ram_sn_v;
+    wire [23:0] ram_sn_addr;
+    wire  [3:0] ram_sn_len;
+    wire        seq_rd_own_w;       // -> u_bridge.sdram_rd_ready
     wire [4:0]  seq_mem_pf_len;
     wire        pf_beat_v_w;
     wire [7:0]  pf_beat_dat_w;
     wire [4:0]  cpu_pf_len_w;
 
-    pc98_gvram_seq #(.EGC(1'b1)) u_seq (
+    pc98_gvram_seq #(.EGC(1'b1), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1)) u_seq (
+        .rmwbuf_off(dx_r[7]),
         .clk(clk), .reset(reset),
         .cpu_gvram(~ram_sel_n),
         .cpu_rd(seq_rd), .cpu_wr(seq_wr),
@@ -392,21 +491,30 @@ module tb_mem_perf;
         .access_page(page_a6), .mem_page1(seq_mem_page1),
         .egc_active(egc_active_w), .egc_wr(egc_wr_w),
         .egc_rg(egc_rg_w), .egc_d(io_wr_data),
-        .svc_req(1'b0), .svc_we(1'b0), .svc_raw(1'b0),
-        .svc_addr(20'h0), .svc_wdata(8'h0),
-        .svc_done(), .svc_rdata(), .dbg(),
+        .svc_req(svc_req_r), .svc_we(svc_we_r), .svc_raw(svc_raw_r),
+        .svc_addr(svc_addr_r), .svc_wdata(svc_wdata_r),
+        .svc_done(svc_done_w), .svc_rdata(svc_rdata_w), .dbg(),
         .mem_addr(seq_mem_addr), .mem_wdata(seq_mem_wdata),
+        .mem_wdata_hi(seq_mem_wdata_hi),
         .mem_word(seq_mem_word), .mem_pf_len(seq_mem_pf_len),
         .mem_rd(seq_mem_rd), .mem_wr(seq_mem_wr),
         .mem_rdata(ram_dout), .mem_rdata_hi(ram_dout_hi),
         .mem_done(access_complete_w), .mem_own(access_own_w),
         .mem_ready(ram_ready_w),
         .mem_wr_taken(ram_wt_w),
-        .cpu_wr_taken(seq_wr_taken_w)
+        .pf_beat_v(pf_beat_v_w), .pf_beat_dat(pf_beat_dat_w),
+        .pf_beat_seq(seq_pf_beat_w),
+        .gvwb_req(gvwb_req_w), .gvwb_addr(gvwb_addr_w), .gvwb_wdata(gvwb_wdata_w),
+        .gvwb_ack(gvwb_ack_w), .gvwb_done(gvwb_done_w), .gvwb_wcnt(zf_wcnt),
+        .gvwb_we(gvwb_we_w), .gvwb_rvalid(gvwb_rvalid_w), .gvwb_rdata(gvwb_rdata_w),
+        .gv_a_quiet(gv_a_quiet_w),
+        .cpu_wr_taken(seq_wr_taken_w),
+        .cpu_rd_own(seq_rd_own_w)
     );
 
     // ---- RAM + SDRAM -------------------------------------------------------
     wire [7:0]  ram_dout, ram_dout_hi;
+    wire [7:0]  seq_mem_wdata_hi;
     wire        initilized_sdram_w;
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
@@ -414,6 +522,7 @@ module tb_mem_perf;
     logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
 
     RAM u_ram (
+        .dma_hold(1'b0),
         .clock(clk), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram_w),
         .gvram_page1_flag(seq_mem_page1),
@@ -423,7 +532,10 @@ module tb_mem_perf;
         .word_access(seq_mem_word),
         .prefetch_len(seq_mem_pf_len),
         .pf_beat_v(pf_beat_v_w), .pf_beat_dat(pf_beat_dat_w),
-        .internal_data_bus_hi(cpu_data_bus_hi),
+        // the sequencer's hi byte, as Chipset.sv wires it: a GRCG word
+        // batch writes its computed odd byte here (tying the raw bus hi
+        // wrote the guest's operand byte unmodified -- tb only)
+        .internal_data_bus_hi(seq_mem_wdata_hi),
         .data_bus_out_hi(ram_dout_hi),
         .memory_read_n(~seq_mem_rd), .memory_write_n(~seq_mem_wr),
         .no_command_state(bus_mrd_n & bus_mwr_n & io_rd_n & io_wr_n),
@@ -433,13 +545,12 @@ module tb_mem_perf;
         .ram_address_select_n(ram_sel_n),
         .write_taken(ram_wt_w),
         .dbg(), .dbg2(), .dbg3(), .dbg4(), .dbg5(), .dbg6(), .dbg7(),
-        .dbg_watch_addr(20'hFFFFF),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
         .ems98_map(ems98_unused),
-        .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
+        .bios_protect_flag(2'b00), .bios_shadow_flag(shadow_flag_r),
         .font_bank_flag(1'b0),
         .font_rd_req(1'b0), .font_rd_addr(24'd0), .font_rd_len(4'd0),
         .font_rd_ack(), .font_rd_valid(), .font_rd_data(), .font_rd_done(),
@@ -453,7 +564,17 @@ module tb_mem_perf;
         .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0),
         .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
         .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
-        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
+        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done(),
+        .cachef_req(zf_req), .cachef_we(zf_we), .cachef_addr(zf_addr),
+        .cachef_len(zf_len), .cachef_wdata0(zf_wd0), .cachef_wdata1(zf_wd1),
+        .cachef_ack(zf_ack), .cachef_rvalid(zf_rvalid), .cachef_rdata(zf_rdata),
+        .cachef_done(zf_done), .cachef_wcnt(zf_wcnt),
+        .gvwb_req(gvwb_req_w), .gvwb_addr(gvwb_addr_w), .gvwb_wdata(gvwb_wdata_w),
+        .gvwb_ack(gvwb_ack_w), .gvwb_done(gvwb_done_w),
+        .gvwb_we(gvwb_we_w), .gvwb_rvalid(gvwb_rvalid_w), .gvwb_rdata(gvwb_rdata_w),
+        .gv_a_quiet(gv_a_quiet_w),
+        .ram_wr_snoop_v(ram_sn_v), .ram_wr_snoop_addr(ram_sn_addr),
+        .ram_wr_snoop_len(ram_sn_len)
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),
@@ -502,7 +623,7 @@ module tb_mem_perf;
         .part_pbyte(4'h0), .vshift(6'd0),
         .p_req(gv_req), .p_addr(gv_addr), .p_len(gv_len),
         .p_ack(gv_ack), .p_rvalid(gv_rvalid), .p_rdata(gv_rdata),
-        .p_done(gv_done), .gfx_dot(), .dbg()
+        .p_done(gv_done), .gfx_dot(), .dbg(), .dbg_band()
     );
 
     // ---- READY -------------------------------------------------------------
@@ -561,6 +682,43 @@ module tb_mem_perf;
     // MOV DX,imm16 ; OUT DX,AL -- port writes used for charger registers
     task outport(input logic [15:0] p, input logic [7:0] v);
         emit(8'hB0); emit(v); emit(8'hBA); emitw(p); emit(8'hEE);
+    endtask
+
+    // ---- instruction-cost probes (phases 20-3F, +cyconly) -------------
+    // Each probe is a BP-counted loop around K copies of one instruction
+    // (or one REP op). Its loop is DEC BP / JZ out / JMP NEAR head -- the
+    // same in every probe and in the empty baseline (phase 20), so
+    // scripts/sim_cycle_table.sh subtracts the baseline and divides by
+    // iters*K to get the CPU clocks one instruction really costs on this
+    // path (bridge, RAM.sv, SDRAM, z86_cache), and sets it against the
+    // 80286 data-sheet count. CX and CL stay free for the bodies.
+    int cyc_head = 0;
+    int cyc_iters [0:255];
+    task cyc_begin(input logic [7:0] ph, input int n);
+        marker(ph);
+        emit(8'hBD); emitw(16'(n));                   // mov bp,n
+        cyc_iters[ph] = n;
+        cyc_head = prog_len;
+    endtask
+    task cyc_end(input logic [7:0] ph);
+        int rel;
+        emit(8'h4D);                                  // dec bp
+        emit(8'h74); emit(8'h03);                     // jz +3 (out)
+        rel = cyc_head - (prog_len + 3);
+        emit(8'hE9); emitw(16'(rel));                 // jmp near head
+        marker(ph | 8'h80);
+    endtask
+
+    // Poke a tb-authored byte below A0000 into the SDRAM image AND the
+    // coherence oracle's shadow: z86's 16 B fetch line loads and the
+    // bridge's 32 B pf fills read bytes the guest never wrote, so every
+    // tb-seeded byte the oracle can observe must carry its true value
+    // (a plain poke leaves the byte unchecked -- or worse, phantom).
+    // Pokes at F0000+ stay plain: the oracle only checks below A0000.
+    task ram_seed(input int addr, input logic [15:0] w);
+        sdr.u_part.poke(24'(addr), w);
+        shadow[int'(addr)] = w[7:0];
+        written[int'(addr)] = 1'b1;
     endtask
 
     initial begin
@@ -622,6 +780,37 @@ module tb_mem_perf;
         marker(8'h85);
         // GRCG stays armed: egc_on = egc_arm & grcg_active in the seq.
 
+        // ---- phase 0x11: GRCG TDW rep STOSW at A800:8000 -------------
+        // SuperDepth's stage-fill shape: word stores, the wbatch path
+        // (one word-wide walk per plane) with the leg chain. 1024 words.
+        marker(8'h11);
+        outport(16'h007C, 8'h80);           // GRCG on, TDW, no mask
+        outport(16'h007E, 8'hAA);           // tile 0
+        outport(16'h007E, 8'hBB);           // tile 1
+        outport(16'h007E, 8'hCC);           // tile 2
+        outport(16'h007E, 8'hDD);           // tile 3
+        emit(8'hBF); emitw(16'h8000);       // MOV DI,8000 (still ES=A800)
+        emit(8'hB9); emitw(16'h0400);       // MOV CX,0400 (1024 words)
+        emit(8'hB8); emitw(16'hFFFF);       // MOV AX,FFFF (fill value)
+        emit(8'hF3); emit(8'hAB);           // REP STOSW
+        marker(8'h91);
+
+        // ---- phase 0x12: GRCG RMW rep STOSW at A800:A000 -------------
+        // fill_box_masked's shape: RMW word stores with lane operands
+        // (0xF0/0x0F) that cannot take the 0xFF/0x00 short-circuits.
+        marker(8'h12);
+        outport(16'h007C, 8'hC0);           // GRCG on, RMW
+        outport(16'h007E, 8'hAA);
+        outport(16'h007E, 8'hBB);
+        outport(16'h007E, 8'hCC);
+        outport(16'h007E, 8'hDD);
+        emit(8'hBF); emitw(16'hA000);       // MOV DI,A000
+        emit(8'hB9); emitw(16'h0400);       // MOV CX,0400
+        emit(8'hB8); emitw(16'h0F0F);       // MOV AX,0F0F
+        emit(8'hF3); emit(8'hAB);           // REP STOSW
+        outport(16'h007C, 8'h00);           // GRCG off
+        marker(8'h92);
+
         // ---- phase 6: EGC write rep stosb at A800:4000 ----
         marker(8'h06);
         outport(16'h007C, 8'h80);           // GRCG mode keeps the engine on
@@ -669,23 +858,768 @@ module tb_mem_perf;
         emit(8'hC3);                        // near_sub: RET        @+0x24
         marker(8'h88);
 
+        // ---- phase 9: SMC trampoline loop -- the BIOS fd818 pattern --------
+        // (bad_land is module-scope so the SDRAM poke can aim T at it)
+        // Real-hardware POST dies executing a far-jump trampoline it had
+        // JUST stored: mov word [T],imm x3; jmp far T -- the operand fetch
+        // consumes stale/wrong bytes (prefetch-window suspect: pf_disable
+        // boots clean 4/4 vs 4/4 wild with it on). Each iteration writes
+        // "EE EA <ip> <cs=F000>" at 0x0600 through the posted-write queue
+        // -- alternating cont_a/cont_b -- then jumps in. The flag byte at
+        // 0x0700 records which target was written; a stale fetch lands on
+        // the OTHER cont (flag mismatch) or on bad_land, both visible.
+        // The cells are ALSO read back as data before the jump (the v15
+        // -4-shift signature), and T+6.. is primed HLT so garbage bytes
+        // hang instead of wandering. Sector 0x600 was write-killed+poisoned
+        // every iteration, so any surviving stale hit is a true miss.
+        begin
+            int loop_head, cont_a, cont_b, tail, phase_done;
+            int i_ca, i_cb, r_jzodd, r_jzok, r_jmpd, r_ja, r_jb;
+            int r_badb, r_lp, r_jdone;
+            marker(8'h09);
+            // flag cell = 0 ; CX = 128 iterations
+            emit(8'hC6); emit(8'h06); emitw(16'h0700); emit(8'h00);
+            emit(8'hB9); emitw(16'h0080);                   // MOV CX,128
+            loop_head = prog_len;
+            // AX = (CL&1) ? cont_b : cont_a
+            emit(8'hB8); i_ca = prog_len; emitw(16'h0000);  // MOV AX,cont_a
+            emit(8'hF6); emit(8'hC1); emit(8'h01);          // TEST CL,1
+            emit(8'h74); r_jzodd = prog_len; emit(8'h00);   // JZ +3 (keep A)
+            emit(8'hB8); i_cb = prog_len; emitw(16'h0000);  // MOV AX,cont_b
+            // write trampoline at 0600: EE EA <ax> <F000>
+            emit(8'hC7); emit(8'h06); emitw(16'h0600);
+            emit(8'hEE); emit(8'hEA);                       // MOV W[0600],EAEE
+            emit(8'hA3); emitw(16'h0602);                   // MOV [0602],AX
+            emit(8'hC7); emit(8'h06); emitw(16'h0604);
+            emitw(16'hF000);                                // MOV W[0604],F000
+            // data verify: BX=[0602]; CMP BX,AX; JE ok
+            emit(8'h8B); emit(8'h1E); emitw(16'h0602);      // MOV BX,[0602]
+            emit(8'h39); emit(8'hC3);                       // CMP BX,AX
+            emit(8'h74); r_jzok = prog_len; emit(8'h00);    // JE +3 (skip JMP)
+            emit(8'hE9); r_jmpd = prog_len; emitw(16'h0000);// JMP bad_land
+            // ok: flag = CL&1 ; dx=043D ; al=0 ; jmp far 0000:0600
+            emit(8'h88); emit(8'h0E); emitw(16'h0700);      // MOV [0700],CL
+            emit(8'h80); emit(8'h26); emitw(16'h0700);
+            emit(8'h01);                                    // AND B[0700],1
+            emit(8'hBA); emitw(16'h043D);                   // MOV DX,043D
+            emit(8'hB0); emit(8'h00);                       // MOV AL,0
+            emit(8'hEA); emitw(16'h0600); emitw(16'h0000);  // JMPF 0000:0600
+            cont_a = prog_len;
+            emit(8'h80); emit(8'h3E); emitw(16'h0700);
+            emit(8'h00);                                    // CMP B[0700],0
+            emit(8'h75); r_ja = prog_len; emit(8'h00);      // JNZ bad
+            emit(8'hEB); r_jb = prog_len; emit(8'h00);      // JMP tail
+            cont_b = prog_len;
+            emit(8'h80); emit(8'h3E); emitw(16'h0700);
+            emit(8'h01);                                    // CMP B[0700],1
+            emit(8'h75); r_badb = prog_len; emit(8'h00);    // JNZ bad
+            tail = prog_len;
+            emit(8'hE2); r_lp = prog_len; emit(8'h00);      // LOOP loop_head
+            emit(8'hEB); r_jdone = prog_len; emit(8'h00);   // JMP phase_done
+            bad_land = prog_len;
+            emit(8'hB0); emit(8'hEE);                       // MOV AL,EE
+            emit(8'hBA); emitw(16'h88FE); emit(8'hEE);      // OUT 88FE,AL
+            emit(8'hEB); emit(8'hFE);                       // JMP $
+            phase_done = prog_len;
+            marker(8'h89);
+            // fixups (rel8 targets are relative to the byte AFTER the imm)
+            prog[i_ca  ] = cont_a[7:0];  prog[i_ca+1] = cont_a[15:8];
+            prog[i_cb  ] = cont_b[7:0];  prog[i_cb+1] = cont_b[15:8];
+            prog[r_jzodd] = 8'h03;                            // skip MOV AX,B
+            prog[r_jzok ] = 8'h03;                            // skip JMP bad
+            prog[r_jmpd  ] = 8'(bad_land - (r_jmpd + 2));
+            prog[r_jmpd+1] = 8'((bad_land - (r_jmpd + 2)) >> 8);
+            prog[r_ja   ] = 8'(bad_land - (r_ja + 1));
+            prog[r_jb   ] = 8'(tail - (r_jb + 1));
+            prog[r_badb ] = 8'(bad_land - (r_badb + 1));
+            prog[r_lp   ] = 8'(loop_head - (r_lp + 1));
+            prog[r_jdone] = 8'(phase_done - (r_jdone + 1));
+            // T-sector prime: a trampoline aimed at bad_land for iter-0
+            // staleness, then HLT filler so garbage bytes hang.
+            // ram_seed: the oracle must know every tb-authored byte --
+            // z86 fetches whole 16 B lines and pf fills 32 B sectors, so
+            // reads cover bytes the guest never wrote (Zet only fetched
+            // the 5 bytes it consumed, so plain pokes used to be fine).
+            // The guest rewrites 0600..0605 each iteration, which
+            // re-seeds them through the ack path -- the real SMC check
+            // is untouched.
+            ram_seed(32'h000600, 16'h00EE);
+            ram_seed(32'h000601, 16'h00EA);
+            ram_seed(32'h000602, {8'h00, bad_land[7:0]});
+            ram_seed(32'h000603, {8'h00, bad_land[15:8]});
+            ram_seed(32'h000604, 16'h0000);
+            ram_seed(32'h000605, 16'h00F0);
+            for (int i = 20'h00606; i < 20'h00620; i++)
+                ram_seed(32'(i), 16'h00F4);
+        end
+
+        // ---- phase 0A: F-bank remap kill ------------------------------
+        // Guest F8000 is banked between phys 0F8000 ("bank A") and
+        // 1F8000 ("bank B") by bios_shadow_flag. The bridge's windows
+        // tag the guest address only, so a remap while a window is live
+        // must drop it (bank_chg). The guest cannot flip the flag
+        // without an OUT -- which would kill windows on the way through
+        // anyway -- so the bench flips it loader-style when it sees the
+        // 0x0702 signal write. Each pass through `resume` retries the
+        // banked jump up to 3 times: bank A incs [0704]; bank B writes
+        // BB. [0706] keeps the final mark for verify:
+        //   flipped + kill works -> BB;  flipped + stale serve -> 3;
+        //   never flipped          -> 3  (the control outcome)
+        begin
+            int resume10, r_ge10, wl10, giveup10, bdone10, done10, r_d10;
+            marker(8'h0A);
+            emit(8'hC6); emit(8'h06); emitw(16'h0704); emit(8'h00); // b[0704]=0
+            emit(8'hEA); emitw(16'h0000); emitw(16'hF800);   // jmpf F800:0000
+            resume10 = prog_len;
+            emit(8'hFE); emit(8'h06); emitw(16'h0705);       // inc b[0705]
+            emit(8'hC6); emit(8'h06); emitw(16'h0702); emit(8'h55);
+                                                           // b[0702]=55 sig
+            emit(8'h80); emit(8'h3E); emitw(16'h0705); emit(8'h03);
+                                                           // cmp b[0705],3
+            emit(8'h73); r_ge10 = prog_len; emit(8'h00);     // jae giveup
+            emit(8'hB9); emitw(16'h0800);                    // mov cx,2048
+            wl10 = prog_len;
+            emit(8'hE2); emit(8'hFE);                        // loop $  (wait)
+            emit(8'hEA); emitw(16'h0000); emitw(16'hF800);   // jmpf F800:0
+            giveup10 = prog_len;
+            emit(8'hA0); emitw(16'h0704);                    // mov al,[0704]
+            emit(8'hA2); emitw(16'h0706);                    // mov [0706],al
+            emit(8'hEB); r_d10 = prog_len; emit(8'h00);      // jmp done10
+            bdone10 = prog_len;
+            emit(8'hA0); emitw(16'h0704);                    // mov al,[0704]
+            emit(8'hA2); emitw(16'h0706);                    // mov [0706],al
+            done10 = prog_len;
+            marker(8'h8A);
+            prog[r_ge10] = 8'(giveup10 - (r_ge10 + 1));
+            prog[r_d10]  = 8'(done10   - (r_d10 + 1));
+            // bank A @ phys 0F8000: inc [0704]; mov cx,40; loop$; jmpf
+            sdr.u_part.poke(24'h0F8000, 16'h00FE);
+            sdr.u_part.poke(24'h0F8001, 16'h0006);
+            sdr.u_part.poke(24'h0F8002, 16'h0004);
+            sdr.u_part.poke(24'h0F8003, 16'h0007);
+            sdr.u_part.poke(24'h0F8004, 16'h00B9);
+            sdr.u_part.poke(24'h0F8005, 16'h0040);
+            sdr.u_part.poke(24'h0F8006, 16'h0000);
+            sdr.u_part.poke(24'h0F8007, 16'h00E2);
+            sdr.u_part.poke(24'h0F8008, 16'h00FE);
+            sdr.u_part.poke(24'h0F8009, 16'h00EA);
+            sdr.u_part.poke(24'h0F800A, {8'h00, resume10[7:0]});
+            sdr.u_part.poke(24'h0F800B, {8'h00, resume10[15:8]});
+            sdr.u_part.poke(24'h0F800C, 16'h0000);
+            sdr.u_part.poke(24'h0F800D, 16'h00F0);
+            // bank B @ phys 1F8000: mov b[0704],BB ; jmpf bdone10
+            sdr.u_part.poke(24'h1F8000, 16'h00C6);
+            sdr.u_part.poke(24'h1F8001, 16'h0006);
+            sdr.u_part.poke(24'h1F8002, 16'h0004);
+            sdr.u_part.poke(24'h1F8003, 16'h0007);
+            sdr.u_part.poke(24'h1F8004, 16'h00BB);
+            sdr.u_part.poke(24'h1F8005, 16'h00EA);
+            sdr.u_part.poke(24'h1F8006, {8'h00, bdone10[7:0]});
+            sdr.u_part.poke(24'h1F8007, {8'h00, bdone10[15:8]});
+            sdr.u_part.poke(24'h1F8008, 16'h0000);
+            sdr.u_part.poke(24'h1F8009, 16'h00F0);
+            // HLT filler past both entries
+            for (int i = 20'h0F800E; i < 20'h0F8020; i++)
+                sdr.u_part.poke(24'(i), 16'h00F4);
+            for (int i = 24'h1F800A; i < 24'h1F8020; i++)
+                sdr.u_part.poke(24'(i), 16'h00F4);
+        end
+
+        // ---- phase 0B: IRQ storm --------------------------------------
+        // wb_tgc_i is the CPU's INTR line -- tied 0 in every other
+        // phase. The bench fires it every ~2500 clks through this one;
+        // the INTA pair reads vector FFh off the open bus and dispatch
+        // lands on IVT[FFh] @ 0x3FC -> the stub below, which incs
+        // [070A] and irets. SP moves to 0x500 first so the pushed
+        // frames (3 words) clear the IVT -- the ITF's IRQ0 test walks
+        // this same INTA/push/iret path through the pair engine.
+        begin
+            int isr11, loop11h, r_lp11;
+            marker(8'h0B);
+            emit(8'hC7); emit(8'h06); emitw(16'h03FC);
+            isr11 = prog_len; emitw(16'h0000);               // IVT[FF].ip
+            emit(8'hC7); emit(8'h06); emitw(16'h03FE);
+            emitw(16'hF000);                                 // IVT[FF].cs
+            emit(8'hBC); emitw(16'h0500);                    // mov sp,0500
+            emit(8'hFB);                                     // sti
+            emit(8'hB9); emitw(16'h1000);                    // mov cx,4096
+            loop11h = prog_len;
+            emit(8'hFE); emit(8'h06); emitw(16'h0708);       // inc b[0708]
+            emit(8'hE2); r_lp11 = prog_len; emit(8'h00);    // loop loop11h
+            emit(8'hFA);                                     // cli
+            marker(8'h8B);
+            emit(8'hEB); emit(8'h05);                        // jmp over isr (5B)
+            isr11_addr = prog_len;
+            emit(8'hFE); emit(8'h06); emitw(16'h070A);       // isr: inc [070A]
+            emit(8'hCF);                                     // iret
+            prog[isr11  ] = isr11_addr[7:0];
+            prog[isr11+1] = isr11_addr[15:8];
+            prog[r_lp11 ] = 8'(loop11h - (r_lp11 + 1));
+        end
+
+        // ---- phase 0C: frame-iret storm -----------------------------------
+        // pushf; push cs; push ip; iret -- the BIOS mov ss/sp; retf shape:
+        // the pops read cells the pushes wrote moments earlier through the
+        // posted-write queue. Alternating cont targets make a shifted-pop
+        // serve land on the OTHER cont (flag mismatch -> bad) or in dead
+        // space (-> diverge). SP is still 0x500 from phase 0B, so the
+        // frames land in the same 0x4FA-0x4FE cells the IRQ storm used.
+        begin
+            int lp12, cont12a, cont12b, tail12, bad12;
+            int i_ca12, i_cb12, r_jz12, r_ja12, r_jb12, r_bb12, r_lp12, r_jd12;
+            marker(8'h0C);
+            emit(8'hC6); emit(8'h06); emitw(16'h070C); emit(8'h00); // flag=0
+            emit(8'hB9); emitw(16'h0100);                  // mov cx,256
+            lp12 = prog_len;
+            // AX = (CL&1) ? cont_b : cont_a
+            emit(8'hB8); i_ca12 = prog_len; emitw(16'h0000); // mov ax,cont_a
+            emit(8'hF6); emit(8'hC1); emit(8'h01);         // test cl,1
+            emit(8'h74); r_jz12 = prog_len; emit(8'h00);   // jz +3 (keep A)
+            emit(8'hB8); i_cb12 = prog_len; emitw(16'h0000); // mov ax,cont_b
+            // flag = CL&1 ; frame: pushf, push cs, push ax(ip) ; iret
+            emit(8'h88); emit(8'h0E); emitw(16'h070C);     // mov [070C],cl
+            emit(8'h80); emit(8'h26); emitw(16'h070C);
+            emit(8'h01);                                   // and b[070C],1
+            emit(8'h9C);                                   // pushf
+            emit(8'h0E);                                   // push cs
+            emit(8'h50);                                   // push ax (ip)
+            emit(8'hCF);                                   // iret
+            cont12a = prog_len;
+            emit(8'h80); emit(8'h3E); emitw(16'h070C);
+            emit(8'h00);                                   // cmp b[070C],0
+            emit(8'h75); r_ja12 = prog_len; emit(8'h00);   // jnz bad
+            emit(8'hEB); r_jb12 = prog_len; emit(8'h00);   // jmp tail
+            cont12b = prog_len;
+            emit(8'h80); emit(8'h3E); emitw(16'h070C);
+            emit(8'h01);                                   // cmp b[070C],1
+            emit(8'h75); r_bb12 = prog_len; emit(8'h00);   // jnz bad
+            tail12 = prog_len;
+            emit(8'hE2); r_lp12 = prog_len; emit(8'h00);   // loop lp12
+            emit(8'hEB); r_jd12 = prog_len; emit(8'h00);   // jmp done12
+            bad12 = prog_len;
+            emit(8'hB0); emit(8'hEE);                      // mov al,EE
+            emit(8'hBA); emitw(16'h88FE); emit(8'hEE);     // out 88FE,al
+            emit(8'hEB); emit(8'hFE);                      // jmp $
+            // done12:
+            prog[i_ca12 ] = cont12a[7:0]; prog[i_ca12+1] = cont12a[15:8];
+            prog[i_cb12 ] = cont12b[7:0]; prog[i_cb12+1] = cont12b[15:8];
+            prog[r_jz12 ] = 8'h03;
+            prog[r_ja12 ] = 8'(bad12  - (r_ja12 + 1));
+            prog[r_jb12 ] = 8'(tail12 - (r_jb12 + 1));
+            prog[r_bb12 ] = 8'(bad12  - (r_bb12 + 1));
+            prog[r_lp12 ] = 8'(lp12   - (r_lp12 + 1));
+            prog[r_jd12 ] = 8'(prog_len - (r_jd12 + 1));   // -> marker(8'h8C)
+            marker(8'h8C);
+        end
+
+        // ---- phase 0D: big-frame CALL/RET under an IRQ storm ---------------
+        // SuperDepth's main loop shape: a function with a 0x350-byte local
+        // frame RMW-walks two DS arrays off a [bp-0x34a] counter (an ODD
+        // stack cell), calls a leaf, and returns to its caller. On hardware
+        // that return came back as a foreign word (IP and DS = 0x2620) with
+        // the prefetch windows on and never with them off. Runs twice, at
+        // an even and an odd SP, with phase-0B's IRQ stub live. A wrong
+        // return diverges; a wrong AX lands on the EE trap.
+        begin
+            int lp13, f13, i13, g13, bad13;
+            int r_call13, r_jnz13, r_lp13, r_jl13, r_cg13, r_jd13, r_jb13;
+            marker(8'h0D);
+            for (int pass = 0; pass < 2; pass++) begin
+                emit(8'hBC); emitw(pass ? 16'h0EFF : 16'h0F00); // mov sp,..
+                emit(8'hFB);                                     // sti
+                emit(8'hB9); emitw(16'h0180);                    // mov cx,384
+                lp13 = prog_len;
+                emit(8'h51);                                     // push cx
+                emit(8'hE8); r_call13 = prog_len; emitw(16'h0000); // call f
+                emit(8'h59);                                     // pop cx
+                emit(8'h3D); emitw(16'h1234);                    // cmp ax,1234
+                emit(8'h75); r_jnz13 = prog_len; emit(8'h00);   // jnz bad
+                emit(8'hE2); r_lp13 = prog_len; emit(8'h00);    // loop lp
+                emit(8'hFA);                                     // cli
+                emit(8'hEB); r_jd13 = prog_len; emit(8'h00);    // jmp over
+                bad13 = prog_len;
+                emit(8'hB0); emit(8'hEE);                        // mov al,EE
+                emit(8'hBA); emitw(16'h88FE); emit(8'hEE);       // out 88FE,al
+                emit(8'hEB); emit(8'hFE);                        // jmp $
+                f13 = prog_len;                                  // f:
+                emit(8'h55); emit(8'h8B); emit(8'hEC);           // push bp; mov bp,sp
+                emit(8'h81); emit(8'hEC); emitw(16'h0350);       // sub sp,350
+                emit(8'h56); emit(8'h57);                        // push si; push di
+                emit(8'hC7); emit(8'h86); emitw(16'hFCB6); emitw(16'h0001); // mov [bp-34a],1
+                i13 = prog_len;
+                emit(8'h8B); emit(8'h9E); emitw(16'hFCB6);       // mov bx,[bp-34a]
+                emit(8'hD1); emit(8'hE3);                        // shl bx,1
+                emit(8'hA1); emitw(16'h3000);                    // mov ax,[3000]
+                emit(8'h01); emit(8'h87); emitw(16'h3010);       // add [bx+3010],ax
+                emit(8'hA1); emitw(16'h3002);                    // mov ax,[3002]
+                emit(8'h01); emit(8'h87); emitw(16'h3050);       // add [bx+3050],ax
+                emit(8'hFF); emit(8'h86); emitw(16'hFCB6);       // inc [bp-34a]
+                emit(8'h83); emit(8'hBE); emitw(16'hFCB6); emit(8'h07); // cmp [bp-34a],7
+                emit(8'h7C); r_jl13 = prog_len; emit(8'h00);    // jl i
+                emit(8'hE8); r_cg13 = prog_len; emitw(16'h0000); // call g
+                emit(8'h5F); emit(8'h5E);                        // pop di; pop si
+                emit(8'h8B); emit(8'hE5); emit(8'h5D);           // mov sp,bp; pop bp
+                emit(8'hB8); emitw(16'h1234);                    // mov ax,1234
+                emit(8'hC3);                                     // ret
+                g13 = prog_len;                                  // g:
+                emit(8'h55); emit(8'h8B); emit(8'hEC);           // push bp; mov bp,sp
+                emit(8'h56); emit(8'h57);                        // push si; push di
+                emit(8'h8B); emit(8'h46); emit(8'h02);           // mov ax,[bp+2]
+                emit(8'hA3); emitw(16'h3100);                    // mov [3100],ax
+                emit(8'h5F); emit(8'h5E); emit(8'h5D);           // pop di; pop si; pop bp
+                // the game's 0xD468 tail: port reads/writes right before
+                // the RETs -- every I/O write flushes both windows, so the
+                // pops that follow all miss and re-seed them
+                emit(8'hE8); emitw(16'h0001);                    // call +1 (h)
+                emit(8'hC3);                                     // ret
+                emit(8'hE4); emit(8'h42);                        // h: in al,42
+                emit(8'hBA); emitw(16'h3FDB);                    // mov dx,3fdb
+                emit(8'hEE); emit(8'hEE);                        // out dx,al x2
+                emit(8'hB0); emit(8'h07); emit(8'hE6); emit(8'h37); // mov al,7; out 37,al
+                emit(8'hC3);                                     // ret
+                r_jb13 = prog_len;                               // (after the subs)
+                prog[r_call13] = 8'(f13 - (r_call13 + 2));
+                prog[r_call13+1] = 8'((f13 - (r_call13 + 2)) >> 8);
+                prog[r_cg13] = 8'(g13 - (r_cg13 + 2));
+                prog[r_cg13+1] = 8'((g13 - (r_cg13 + 2)) >> 8);
+                prog[r_jnz13] = 8'(bad13 - (r_jnz13 + 1));
+                prog[r_lp13]  = 8'(lp13  - (r_lp13 + 1));
+                prog[r_jl13]  = 8'(i13   - (r_jl13 + 1));
+                prog[r_jd13]  = 8'(r_jb13 - (r_jd13 + 1));
+            end
+            marker(8'h8D);
+        end
+
+        // ---- phase 0E: title-screen shape -- string into a stack buffer,
+        // read back, idle (register-only) gaps for pure fills, then a CALL
+        // whose pushes land on the old buffer bytes and a RET off them.
+        begin
+            int lp14, f14, r_call14, r_lp14, r_jnz14, bad14, r_jd14, r_end14;
+            marker(8'h0E);
+            emit(8'hBC); emitw(16'h0E00);                    // mov sp,0E00
+            emit(8'hFB);                                     // sti
+            emit(8'hB9); emitw(16'h0200);                    // mov cx,512
+            lp14 = prog_len;
+            emit(8'h51);                                     // push cx
+            emit(8'h83); emit(8'hEC); emit(8'h40);           // sub sp,40
+            emit(8'h8B); emit(8'hFC);                        // mov di,sp
+            emit(8'hBE); emitw(16'h3000);                    // mov si,3000
+            emit(8'hB9); emitw(16'h0020);                    // mov cx,32
+            emit(8'hF3); emit(8'hA4);                        // rep movsb (ds:si->es:di)
+            emit(8'h8B); emit(8'hF4);                        // mov si,sp
+            emit(8'hB9); emitw(16'h0020);                    // mov cx,32
+            emit(8'hAC);                                     // lodsb  (read buffer)
+            emit(8'hE2); emit(8'hFD);                        // loop lodsb
+            emit(8'h83); emit(8'hC4); emit(8'h40);           // add sp,40
+            emit(8'hB8); emitw(16'h1234);                    // mov ax,1234
+            emit(8'hBB); emitw(16'h5678);                    // mov bx,5678
+            for (int k = 0; k < 6; k++) begin
+                emit(8'hF7); emit(8'hE3);                    // mul bx  (idle gap)
+            end
+            emit(8'hE8); r_call14 = prog_len; emitw(16'h0000); // call f
+            emit(8'h3D); emitw(16'hBEEF);                    // cmp ax,BEEF
+            emit(8'h75); r_jnz14 = prog_len; emit(8'h00);   // jnz bad
+            emit(8'h59);                                     // pop cx
+            emit(8'hE2); r_lp14 = prog_len; emit(8'h00);    // loop lp
+            emit(8'hFA);                                     // cli
+            emit(8'hEB); r_jd14 = prog_len; emit(8'h00);    // jmp end
+            bad14 = prog_len;
+            emit(8'hB0); emit(8'hEE);
+            emit(8'hBA); emitw(16'h88FE); emit(8'hEE);
+            emit(8'hEB); emit(8'hFE);
+            f14 = prog_len;
+            emit(8'h55); emit(8'h8B); emit(8'hEC);           // push bp; mov bp,sp
+            emit(8'h56); emit(8'h57);                        // push si; push di
+            emit(8'hB8); emitw(16'h1111);                    // mov ax,1111
+            for (int k = 0; k < 6; k++) begin
+                emit(8'hF7); emit(8'hE3);                    // mul bx (idle gap)
+            end
+            emit(8'hE4); emit(8'h42);                        // in al,42
+            emit(8'hB0); emit(8'h07); emit(8'hE6); emit(8'h37); // out 37,al (flush)
+            emit(8'h5F); emit(8'h5E); emit(8'h5D);           // pop di; pop si; pop bp
+            emit(8'hB8); emitw(16'hBEEF);                    // mov ax,BEEF
+            emit(8'hC3);                                     // ret
+            r_end14 = prog_len;
+            prog[r_call14]   = 8'(f14 - (r_call14 + 2));
+            prog[r_call14+1] = 8'((f14 - (r_call14 + 2)) >> 8);
+            prog[r_jnz14] = 8'(bad14 - (r_jnz14 + 1));
+            prog[r_lp14]  = 8'(lp14  - (r_lp14 + 1));
+            prog[r_jd14]  = 8'(r_end14 - (r_jd14 + 1));
+            marker(8'h8E);
+        end
+
+        // ---- phase 0F: ITF IRQ0 poll-loop timing, F-bank NOT mapped ------
+        // The control: pf windows are live over the loop, so the 32 turns
+        // are served from a warm 32-byte sector. This is the shape that
+        // breaks the POST if the windows are live while the ITF runs.
+        begin
+            int lp15, r_jnz15, ln15, ok15;
+            lf_enter = prog_len;
+            marker(8'h0F);
+            emit(8'hB4); emit(8'h00);            // mov ah,0
+            emit(8'hB9); emitw(16'h0020);        // mov cx,20h
+            emit(8'hA3); emitw(16'h0708);        // mov [0708],ax  (probe)
+            emit(8'h89); emit(8'h0E); emitw(16'h070A); // mov [070A],cx (probe)
+            lp15 = prog_len;
+            emit(8'hF6); emit(8'hC4); emit(8'hFF);          // test ah,0FFh
+            emit(8'h75); r_jnz15 = prog_len; emit(8'h00);   // jnz ok
+            emit(8'hE2); ln15 = prog_len; emit(8'h00);      // loop lp
+            ok15 = prog_len;
+            emit(8'h89); emit(8'h0E); emitw(16'h070C);      // mov [070C],cx (probe)
+            emit(8'h90);
+            marker(8'h8F);
+            prog[r_jnz15] = 8'(ok15 - (r_jnz15 + 1));
+            prog[ln15]    = 8'(lp15  - (ln15 + 1));
+            lf_head15 = lp15;
+        end
+
+        // ---- phase 10: same loop with the ITF F-bank mapped ---------------
+        // bios_shadow_flag up == the ITF ROM owns F8000-FFFFF, which is the
+        // state the ITF POST runs in. The bridge must hold the pf engine
+        // off for the whole phase: every turn then misses to the bus, which
+        // measures ~1000 chipset clks -- clear of the 27-PIT-clock deadline
+        // -- while a warm window would answer the loop in ~420.
+        begin
+            int lp16, r_jnz16, ln16, ok16;
+            lf_enter16 = prog_len;
+            marker(8'h10);
+            emit(8'hB4); emit(8'h00);            // mov ah,0
+            emit(8'hB9); emitw(16'h0020);        // mov cx,20h
+            emit(8'hA3); emitw(16'h0708);        // mov [0708],ax  (probe)
+            emit(8'h89); emit(8'h0E); emitw(16'h070A); // mov [070A],cx (probe)
+            lp16 = prog_len;
+            emit(8'hF6); emit(8'hC4); emit(8'hFF);          // test ah,0FFh
+            emit(8'h75); r_jnz16 = prog_len; emit(8'h00);   // jnz ok
+            emit(8'hE2); ln16 = prog_len; emit(8'h00);      // loop lp
+            ok16 = prog_len;
+            emit(8'h89); emit(8'h0E); emitw(16'h070C);      // mov [070C],cx (probe)
+            emit(8'h90);
+            marker(8'h90);
+            prog[r_jnz16] = 8'(ok16 - (r_jnz16 + 1));
+            prog[ln16]    = 8'(lp16  - (ln16 + 1));
+            lf_head16 = lp16;
+            lf_end16  = prog_len;
+        end
+
+        // ---- phase 13: ALU5 loop x500 -- bench.asm 01 ALU5OP's shape ----
+        // A 12-byte register-only loop that sits inside one 16-byte fetch
+        // line: the paced settings must run it from the fetch buffer, so
+        // its cost is the EU's, never a line load per turn.
+        begin
+            int lp19, ln19, aluofs;
+            aluofs = 1;                          // bench.bin: head at 0x231
+            void'($value$plusargs("aluofs=%d", aluofs));
+            alu_enter = prog_len;
+            marker(8'h13);
+            emit(8'hB9); emitw(16'd500);         // mov cx,500
+            emit(8'hB8); emitw(16'h1234);        // mov ax,1234
+            emit(8'hBB); emitw(16'h9ABC);        // mov bx,9ABC
+            emit(8'hBA); emitw(16'h5555);        // mov dx,5555
+            emit(8'hBE); emitw(16'h0F0F);        // mov si,0F0F
+            emit(8'hBD); emitw(16'h0033);        // mov bp,0033
+            while ((prog_len & 15) != (aluofs & 15)) emit(8'h90);
+            lp19 = prog_len;
+            emit(8'h01); emit(8'hD8);            // add ax,bx
+            emit(8'h11); emit(8'hD0);            // adc ax,dx
+            emit(8'h31); emit(8'hF0);            // xor ax,si
+            emit(8'h29); emit(8'hE8);            // sub ax,bp
+            emit(8'h01); emit(8'hC3);            // add bx,ax
+            emit(8'hE2); ln19 = prog_len; emit(8'h00); // loop lp
+            prog[ln19] = 8'(lp19 - (ln19 + 1));
+            marker(8'h93);
+        end
+
+        // ---- phases 20-3F: instruction-cost probes (see cyc_begin) -----
+        begin
+            int iret_stub, r_skip, call_fix [0:7], ret_stub, r_over;
+            cyc_enter = prog_len;
+            emit(8'hFA);                                   // cli
+            emit(8'h31); emit(8'hC0);                      // xor ax,ax
+            emit(8'h8E); emit(8'hD8);                      // mov ds,ax
+            emit(8'h8E); emit(8'hC0);                      // mov es,ax
+            emit(8'h8E); emit(8'hD0);                      // mov ss,ax
+            emit(8'hBC); emitw(16'h0600);                  // mov sp,0600
+            emit(8'hFC);                                   // cld
+            emit(8'hF8);                                   // clc
+            // IVT[80h] -> an IRET stub placed after the probes' jmp-over
+            emit(8'hC7); emit(8'h06); emitw(16'h0200);
+            iret_stub = prog_len; emitw(16'h0000);         // patched below
+            emit(8'hC7); emit(8'h06); emitw(16'h0202); emitw(16'hF000);
+            emit(8'hBB); emitw(16'h0007);                  // bx,7 (mul/div)
+            emit(8'hB8); emitw(16'h1234);                  // ax
+            emit(8'hB1); emit(8'h04);                      // cl,4
+
+            cyc_begin(8'h20, 200); cyc_end(8'h20);          // empty baseline
+            cyc_begin(8'h21, 200);                          // add ax,bx x8
+            repeat (8) begin emit(8'h01); emit(8'hD8); end
+            cyc_end(8'h21);
+            cyc_begin(8'h22, 200);                          // mov dx,ax x8
+            repeat (8) begin emit(8'h89); emit(8'hC2); end
+            cyc_end(8'h22);
+            cyc_begin(8'h23, 200);                          // inc si x8
+            repeat (8) emit(8'h46);
+            cyc_end(8'h23);
+            cyc_begin(8'h24, 200);                          // shl dx,1 x8
+            repeat (8) begin emit(8'hD1); emit(8'hE2); end
+            cyc_end(8'h24);
+            cyc_begin(8'h25, 200);                          // shl dx,cl x8 (cl=4)
+            repeat (8) begin emit(8'hD3); emit(8'hE2); end
+            cyc_end(8'h25);
+            cyc_begin(8'h26, 100);                          // mul bx x4
+            repeat (4) begin emit(8'hF7); emit(8'hE3); end
+            cyc_end(8'h26);
+            cyc_begin(8'h27, 100);                          // div bx x4 (dx<bx)
+            emit(8'h31); emit(8'hD2);                       // xor dx,dx -- once,
+            cyc_head = prog_len;                            // before the head
+            repeat (4) begin emit(8'hF7); emit(8'hF3); end
+            cyc_end(8'h27);
+            emit(8'hF8);                                    // clc (add/shl/mul set CF)
+            cyc_begin(8'h28, 200);                          // jc +0 not taken x8
+            repeat (8) begin emit(8'h72); emit(8'h00); end
+            cyc_end(8'h28);
+            cyc_begin(8'h29, 200);                          // jmp short +0 x8
+            repeat (8) begin emit(8'hEB); emit(8'h00); end
+            cyc_end(8'h29);
+            cyc_begin(8'h2A, 200);                          // mov ax,[0700] x8
+            repeat (8) begin emit(8'hA1); emitw(16'h0700); end
+            cyc_end(8'h2A);
+            cyc_begin(8'h2B, 200);                          // mov [0702],ax x8
+            repeat (8) begin emit(8'hA3); emitw(16'h0702); end
+            cyc_end(8'h2B);
+            cyc_begin(8'h2C, 200);                          // add [0704],ax x8
+            repeat (8) begin emit(8'h01); emit(8'h06); emitw(16'h0704); end
+            cyc_end(8'h2C);
+            cyc_begin(8'h2D, 200);                          // push ax;pop dx x4
+            repeat (4) begin emit(8'h50); emit(8'h5A); end
+            cyc_end(8'h2D);
+            cyc_begin(8'h2E, 200);                          // call/ret x4
+            for (int k = 0; k < 4; k++) begin
+                emit(8'hE8); call_fix[k] = prog_len; emitw(16'h0000);
+            end
+            cyc_end(8'h2E);
+            cyc_begin(8'h2F, 100);                          // int 80h/iret x4
+            repeat (4) begin emit(8'hCD); emit(8'h80); end
+            cyc_end(8'h2F);
+            cyc_begin(8'h30, 200);                          // in al,dx (88FC) x4
+            emit(8'hBA); emitw(16'h88FC);                   // (mov dx in body:
+            repeat (4) emit(8'hEC);                         //  counted below)
+            cyc_end(8'h30);
+            cyc_begin(8'h31, 200);                          // out dx,al (88FC) x4
+            emit(8'hBA); emitw(16'h88FC);
+            repeat (4) emit(8'hEE);
+            cyc_end(8'h31);
+            cyc_begin(8'h32, 8);                            // rep stosw 256 -> 3000
+            emit(8'hBF); emitw(16'h3000);
+            emit(8'hB9); emitw(16'h0100);
+            emit(8'hF3); emit(8'hAB);
+            cyc_end(8'h32);
+            cyc_begin(8'h33, 8);                            // rep movsw 256 3000->3400
+            emit(8'hBE); emitw(16'h3000);
+            emit(8'hBF); emitw(16'h3400);
+            emit(8'hB9); emitw(16'h0100);
+            emit(8'hF3); emit(8'hA5);
+            cyc_end(8'h33);
+            // VRAM: ES=A800, GRCG TDW on
+            emit(8'hB8); emitw(16'hA800);
+            emit(8'h8E); emit(8'hC0);                       // mov es,ax
+            outport(16'h007C, 8'h80);
+            outport(16'h007E, 8'hAA); outport(16'h007E, 8'hBB);
+            outport(16'h007E, 8'hCC); outport(16'h007E, 8'hDD);
+            cyc_begin(8'h34, 8);                            // rep stosw 256 GRCG TDW
+            emit(8'hBF); emitw(16'h6000);
+            emit(8'hB9); emitw(16'h0100);
+            emit(8'hF3); emit(8'hAB);
+            cyc_end(8'h34);
+            cyc_begin(8'h35, 100);                          // mov es:[6000],ax TDW x8
+            repeat (8) begin emit(8'h26); emit(8'hA3); emitw(16'h6000); end
+            cyc_end(8'h35);
+            outport(16'h007C, 8'hC0);                       // GRCG RMW
+            cyc_begin(8'h36, 8);                            // rep stosw 256 GRCG RMW
+            emit(8'hBF); emitw(16'h6200);
+            emit(8'hB9); emitw(16'h0100);
+            emit(8'hF3); emit(8'hAB);
+            cyc_end(8'h36);
+            outport(16'h007C, 8'h00);                       // GRCG off
+            cyc_begin(8'h37, 8);                            // rep stosw 256 plain VRAM
+            emit(8'hBF); emitw(16'h6400);
+            emit(8'hB9); emitw(16'h0100);
+            emit(8'hF3); emit(8'hAB);
+            cyc_end(8'h37);
+            // ---- phase 38: GRCG RMW correctness (the plane-line buffer) ----
+            // Plain fills give each plane its own byte at 7000-71FF, then
+            // an RMW REP STOSW of a mixed operand runs across them; the
+            // end-of-run check (rmw_check) holds every byte of every plane
+            // to np21w's (plane & ~data) | (data & tile).
+            marker(8'h38);
+            emit(8'hB8); emitw(16'hA800); emit(8'h8E); emit(8'hC0); // es=A800
+            emit(8'hBF); emitw(16'h7000); emit(8'hB9); emitw(16'h0100);
+            emit(8'hB8); emitw(16'h0F0F); emit(8'hF3); emit(8'hAB);   // plane B
+            emit(8'hB8); emitw(16'hB000); emit(8'h8E); emit(8'hC0);
+            emit(8'hBF); emitw(16'h7000); emit(8'hB9); emitw(16'h0100);
+            emit(8'hB8); emitw(16'h3333); emit(8'hF3); emit(8'hAB);   // plane R
+            emit(8'hB8); emitw(16'hB800); emit(8'h8E); emit(8'hC0);
+            emit(8'hBF); emitw(16'h7000); emit(8'hB9); emitw(16'h0100);
+            emit(8'hB8); emitw(16'h5555); emit(8'hF3); emit(8'hAB);   // plane G
+            emit(8'hB8); emitw(16'hA800); emit(8'h8E); emit(8'hC0);
+            outport(16'h007C, 8'hC0);                       // GRCG RMW
+            outport(16'h007E, 8'hAA); outport(16'h007E, 8'hBB);
+            outport(16'h007E, 8'hCC); outport(16'h007E, 8'hDD);
+            emit(8'hBF); emitw(16'h7000); emit(8'hB9); emitw(16'h0100);
+            emit(8'hB8); emitw(16'h5AC3); emit(8'hF3); emit(8'hAB);
+            outport(16'h007C, 8'h00);                       // GRCG off
+            marker(8'hB8);
+
+            emit(8'h31); emit(8'hC0);                       // xor ax,ax
+            emit(8'h8E); emit(8'hC0);                       // es=0
+
+            // jump over the stubs, then the RET / IRET targets
+            emit(8'hEB); r_over = prog_len; emit(8'h00);
+            ret_stub = prog_len;  emit(8'hC3);
+            prog[iret_stub] = 8'(prog_len); prog[iret_stub+1] = 8'(prog_len >> 8);
+            emit(8'hCF);
+            prog[r_over] = 8'(prog_len - (r_over + 1));
+            for (int k = 0; k < 4; k++) begin
+                automatic int rel = ret_stub - (call_fix[k] + 2);
+                prog[call_fix[k]] = 8'(rel); prog[call_fix[k]+1] = 8'(rel >> 8);
+            end
+        end
+
         // done: spin
         marker(8'hFF);
         emit(8'hEB); emit(8'hFE);           // JMP $
     end
 
+    // module-scope so the T-sector prime can aim at it
+    int bad_land = 0;
+    int isr11_addr = 0;
+    // ---- ITF IRQ0 poll-loop probes (phases 0F/10) ---------------------
+    // lf_head / lf_enter are offsets in the emitted program, filled in by
+    // the builder below. lf_n counts re-requests of the word holding the
+    // loop head; it is a plumbing diagnostic, NOT the turn count -- the
+    // core's fetch unit refills whole lines, so a 32-turn loop touches the
+    // head word only a handful of times. The turn count is the guest's CX
+    // at the phase boundary: the loop entered with 0x20 and only exits at
+    // 0x0000. The guest also stores CX to 0x070A/0x070C, but those cells
+    // are posted writes -- at Turbo the queue can still hold them when the
+    // marker OUT retires, so phase_end reads CX from the register file
+    // (the cells stay as a lag-tolerant diagnostic).
+    int         lf_head  = 0;
+    int         lf_head15 = 0;
+    int         lf_head16 = 0;
+    int         lf_enter = 0;
+    int         lf_enter16 = 0;
+    int         alu_enter = 0;      // phase 13 entry (+aluonly)
+    int         cyc_enter = 0;      // phase 20 block entry (+cyconly)
+    int         lf_end16 = 0;
+    int         lf_n     = 0;
+    logic       lf_req_d = 1'b0;
+    wire [19:0] lf_word  = 20'(20'hF0000 + lf_head) & 20'hFFFFE;
+    wire        lf_req   = u_bridge.srv_req && (u_bridge.srv_bs == 3'b101)
+                         && ((u_bridge.srv_addr & 20'hFFFFE) == lf_word);
+    always_ff @(posedge clk) begin
+        lf_req_d <= lf_req;
+        if (lf_req && !lf_req_d) begin
+            if (lf_n < 4)
+                $display("  LFHEAD n=%0d t=%0t pc=%05x", lf_n, $time, zet_pc);
+            lf_n <= lf_n + 1;
+        end
+    end
+    // The budget: 27 PIT clocks at 2.4576 MHz in chipset clocks.
+    localparam int LF_DEADLINE = (27 * 42954545) / 2457600;   // 471
+    int          lf_fail = 0;
+
+    // +pcp: per-clock CPU trace while the ITF loop phases run (diagnostic)
+    logic pcp_en = 1'b0;
+    int   pcp_n  = 0;
+    initial pcp_en = $test$plusargs("pcp");
+    always_ff @(posedge clk) begin
+        if (pcp_en && (cur_phase == 8'h0F || cur_phase == 8'h10) && pcp_n < 400) begin
+            $display("  PCP t=%0t pc=%05x ip=%04x ce=%b zstb=%b zack=%b iowr=%b ad=%04x dat=%02x",
+                     $time, zet_pc, u_cpu.reg_ip, z86_ce, zwb_stb, zwb_ack,
+                     io_wr_n, cpu_address, cpu_data_bus);
+            pcp_n <= pcp_n + 1;
+        end
+    end
+
     // poke the program + reset vector into the SDRAM image (1 guest byte per
     // word, flat-addressed the way poke() indexes).
     initial begin
+        // ram_seed (not plain poke) so the read-serve oracle below has
+        // ground truth for the program + reset vector too.
         for (int i = 0; i < prog_len; i++)
-            sdr.u_part.poke(24'h0F0000 + i, {8'h00, prog[i]});
+            ram_seed(32'(24'h0F0000 + i), {8'h00, prog[i]});
         // FFFF0: EA 00 00 00 F0 = JMP FAR F000:0000 (ip, then seg, LE each)
-        sdr.u_part.poke(24'h0FFFF0, 16'h00EA);
-        sdr.u_part.poke(24'h0FFFF1, 16'h0000);
-        sdr.u_part.poke(24'h0FFFF2, 16'h0000);
-        sdr.u_part.poke(24'h0FFFF3, 16'h0000);
-        sdr.u_part.poke(24'h0FFFF4, 16'h00F0);
+        // +itfonly starts the machine at the phase-0F loop instead, so the
+        // ITF timing probe can be run in seconds rather than through the
+        // whole 14-minute phase set.
+        begin
+            automatic int  jip = $test$plusargs("itfonly") ? lf_enter
+                               : $test$plusargs("aluonly") ? alu_enter
+                               : $test$plusargs("cyconly") ? cyc_enter : 0;
+            automatic logic [7:0] jlo = jip[7:0], jhi = jip[15:8];
+            ram_seed(32'h0FFFF0, 16'h00EA);
+            ram_seed(32'h0FFFF1, 16'h0000 | {8'h00, jlo});
+            ram_seed(32'h0FFFF2, 16'h0000 | {8'h00, jhi});
+            ram_seed(32'h0FFFF3, 16'h0000);
+            ram_seed(32'h0FFFF4, 16'h00F0);
+        end
+        // phase-0A/0B mark cells: unwritten cells read X in the model
+        for (int i = 20'h00700; i < 20'h00710; i++)
+            ram_seed(32'(i), 16'h0000);
+        // phase-0D frame stack and arrays
+        for (int i = 20'h00900; i < 20'h00F10; i++)
+            ram_seed(32'(i), 16'h0000);
+        for (int i = 20'h03000; i < 20'h03110; i++)
+            ram_seed(32'(i), 16'h0000);
+        // Phase-9 prime is emitted by the program initial (bad_land is
+        // only known there); see the poke inside the emit block.
     end
+
+    // ========================================================================
+    // Written-set: keys the guest genuinely wrote (write handler only).
+    // The simulator's assoc arrays auto-insert a 00 entry when an rvalue read
+    // touches a missing key (the commit-2 phantom quirk), so shadow.exists
+    // alone cannot tell "guest wrote it" from "quirk materialised it".
+    // The oracles gate on this set instead; want values still come from
+    // shadow (meaningful exactly where written says so).
+    bit written [int];
+
+    // Read-serve oracle: every guest read ack (any serve path --
+    // engine pair, hit, fillm release, forward) must return the fresh
+    // shadow bytes for its address. c_stale is blind to hit/release
+    // serves (they never touch the seq/RAM path), which is exactly where
+    // fast-serve broke. Snapshot at the ack edge, compare one clk later.
+    // ========================================================================
+    int ro_bad = 0; int ro_pend = 0;
+    logic [15:0] ro_w; logic [19:0] ro_a; logic ro_ube;
+    logic [7:0] ro_want0, ro_want1, ro_got0, ro_got1;
+    always_ff @(posedge clk) if (sdram_up && !reset) begin
+        if (ro_pend) begin
+            ro_pend <= 1'b0;
+            ro_want0 = written.exists(int'(ro_a))    ? shadow[int'(ro_a)]    : 8'h00;
+            ro_want1 = written.exists(int'(ro_a)+1)  ? shadow[int'(ro_a)+1]  : 8'h00;
+            ro_got0  = ro_a[0] ? ro_w[15:8] : ro_w[7:0];
+            ro_got1  = ro_a[0] ? ro_w[7:0]  : ro_w[15:8];
+            if (written.exists(int'(ro_a))
+                && (ro_got0 !== ro_want0
+                    || (!ro_ube && written.exists(int'(ro_a)+1)
+                        && ro_got1 !== ro_want1))) begin
+                if (ro_bad < 30)
+                    $display("RO-BAD t=%0t a=%05x w=%04x got=%02x,%02x want=%02x,%02x ube=%b",
+                             $time, ro_a, ro_w, ro_got0, ro_got1,
+                             ro_want0, ro_want1, ro_ube);
+                ro_bad <= ro_bad + 1;
+            end
+        end
+        if (zwb_ack && zwb_cyc && !zwb_we && !zwb_tga) begin
+            ro_w    <= u_bridge.rd_word;
+            ro_a    <= u_bridge.srv_addr;
+            ro_ube  <= u_bridge.srv_ube;
+            ro_pend <= 1'b1;
+        end
+    end
+
+
 
     // ========================================================================
     // cycle attribution
@@ -725,14 +1659,66 @@ module tb_mem_perf;
     longint unsigned c_pfill  = 0;     // fill pairs armed
     longint unsigned c_pbeats = 0;     // beats appended to the window
     longint unsigned c_pkill  = 0;     // invalidations (write/io/DMA)
+    longint unsigned c_pbad   = 0;     // appended beats != SDRAM@base+cnt
+    longint unsigned c_pforeign = 0;   // untagged returns inside a fill's cmd
+    longint unsigned c_porphan = 0;    // tagged returns outside the fill's READ_2
+    longint unsigned c_uncov  = 0;     // uncovered write falls outside expand
+    logic swr_cov_seen = 0;            // write strobe saw coverage while held
+    logic            tag_sim = 1'b0;   // bench mirror of RAM's prefetch tag
+
+    // Physical address a guest access lands on: RAM.sv banks guest
+    // F8000-FFFFF onto +0x100000 while bios_shadow_flag is up.
+    function automatic logic [23:0] phys_of(input logic [19:0] g);
+        return (shadow_flag_r && (g >= 20'hF8000)) ? {4'h1, g}
+                                                 : {4'h0, g};
+    endfunction
+
+    // ---- service channel stimulus (+svc=N, default on) ---------------------
+    // The firmware GDC service channel, driven the way the softcore uses
+    // it: a level request held until svc_done. Each op is a raw read one
+    // plane into the graphics window -- a port-A read return sharing the
+    // shim with whatever guest fill is mid-flight. An untagged beat of
+    // that kind landing inside a fill's B_CMD is the stray byte the
+    // window must never append.
+    int          svc_period = 157;
+    logic        svc_req_r   = 1'b0;
+    logic        svc_we_r    = 1'b0;
+    logic        svc_raw_r   = 1'b1;
+    logic [19:0] svc_addr_r  = 20'hA8000;
+    logic [7:0]  svc_wdata_r = 8'h00;
+    wire         svc_done_w;
+    wire [7:0]   svc_rdata_w;
+    int          svc_timer   = 0;
+    longint      svc_ops     = 0;
+
+    initial void'($value$plusargs("svc=%d", svc_period));
+
+    always_ff @(posedge clk) begin
+        if (reset || (svc_period == 0)) begin
+            svc_req_r <= 1'b0;
+            svc_timer <= 0;
+        end else if (sdram_up) begin
+            if (!svc_req_r) begin
+                svc_timer <= svc_timer + 1;
+                if (svc_timer >= svc_period) begin
+                    svc_timer  <= 0;
+                    svc_req_r  <= 1'b1;
+                    svc_addr_r <= 20'hA8000 + 20'(svc_ops[12:0] * 20'h25);
+                    svc_ops    <= svc_ops + 1;
+                end
+            end else if (svc_done_w) begin
+                svc_req_r <= 1'b0;
+            end
+        end
+    end
 
     localparam int MP_S_IDLE = 4, MP_S_RW = 6;
     wire mp_busy    = (u_ram.u_sdram.u_mp.state > MP_S_IDLE)
                   & (u_ram.u_sdram.u_mp.state != 4'd9)
                   & (u_ram.u_sdram.u_mp.state != 4'd10);
     wire [2:0] mp_grant = u_ram.u_sdram.u_mp.grant;
-    wire [4:0] mp_reqs  = u_ram.u_sdram.u_mp.p_req;
-    wire [4:0] mp_acks  = u_ram.u_sdram.u_mp.p_ack;
+    wire [5:0] mp_reqs  = u_ram.u_sdram.u_mp.p_req;
+    wire [5:0] mp_acks  = u_ram.u_sdram.u_mp.p_ack;
     wire       mp_wr    = mp_busy & u_ram.u_sdram.u_mp.cur_we
                       & (u_ram.u_sdram.u_mp.state == MP_S_RW);
 
@@ -769,14 +1755,117 @@ module tb_mem_perf;
             if (zwb_stb & ~zwb_ack)   c_wbpend <= c_wbpend + 1;
             if ((~mem_rd_n | ~mem_wr_n) & ~guest_ready)
                 c_gstall <= c_gstall + 1;
+            // Same exemptions as the c_uncov count below: a covered
+            // write's release may move the pins to the next leg's
+            // operands BEFORE the fall clk (the leg chains do this by
+            // design -- cov_same then compares the NEW operands against
+            // the parked slot and misses), so only a fall whose held
+            // window never saw coverage is worth printing.
+            if (u_ram.write_strobe_fell & ~(u_ram.wr_covered & u_ram.cov_same)
+                & ~swr_cov_seen & ~u_ram.dup_covered)
+                $display("  UNCOV t=%0t ad=%05x d=%02x st=%0d seqst=%0d svch=%b exp=%b memwr=%b rdq=%0d dq=%b bs=%0d",
+                         $time, u_ram.latch_address[19:0],
+                         u_ram.internal_data_bus, u_ram.state, u_seq.st,
+                         u_seq.svc_hold, u_seq.expand, u_seq.mem_wr,
+                         u_bridge.wrq_cnt, u_bridge.cur_dq, u_bridge.cur_bs);
+            // dbg_uncov counts every uncovered fall, but two release shapes
+            // are benign: an expand takeover clips a strobe the seq already
+            // captured and released (svc_eval only arms while the guest bus
+            // is quiet), and a covered write's release lets the pins move on
+            // to the next access BEFORE the fall clk -- cov_same then
+            // compares the new operands against the parked slot and misses.
+            // Either way the byte landed while the strobe was held, which is
+            // exactly what swr_cov_seen tracks: coverage observed on any clk
+            // the strobe was up. Only a fall whose held window never saw
+            // coverage is a true drop.
+            if (u_ram.write_strobe_fell)
+                swr_cov_seen <= 1'b0;
+            else if (u_ram.write_command
+                     && ((u_ram.wr_covered & u_ram.cov_same)
+                         | u_ram.dup_covered))
+                swr_cov_seen <= 1'b1;
+            if (u_ram.write_strobe_fell & ~(u_ram.wr_covered & u_ram.cov_same)
+                & ~u_seq.expand & ~swr_cov_seen & ~u_ram.dup_covered)
+                c_uncov <= c_uncov + 1;
             if (u_ram.state == u_ram.COMPLETE_RAM_RW) c_done <= c_done + 1;
             if (u_bridge.hit_serve) c_phit  <= c_phit + 1;
             if (u_bridge.arm_fill || u_bridge.fillm_go)
                                     c_pfill <= c_pfill + 1;
             if (u_bridge.pf_beat_v && (u_bridge.cur_pf || u_bridge.cur_fillm)
-                && u_bridge.fill_ok
-                && (u_bridge.bstate == u_bridge.B_CMD))
+                && u_bridge.fill_ok && u_bridge.bus_ours
+                && (u_bridge.bstate == u_bridge.B_CMD)) begin
                 c_pbeats <= c_pbeats + 1;
+                // Corruption witness: the appended byte must equal the
+                // SDRAM word at base+offset. Anything else is a foreign
+                // port-A return -- a sequencer or svc leg -- landing in
+                // the fill's slot; a later hit would serve it as guest
+                // code or data. Skip the clk a write lands: it kills the
+                // window anyway, so the byte can never be served. Cells
+                // never written read back as the model's DEAD poison --
+                // anything is a correct answer there.
+                if (!(u_bridge.arm_wr || u_bridge.wrq_push)
+                    && !(u_bridge.cur_pf_w ? u_bridge.pf_cnt1[5]
+                                           : u_bridge.pf_cnt0[5])) begin
+                    automatic logic [19:0] app_addr =
+                        (u_bridge.cur_pf_w ? u_bridge.pf_base1
+                                           : u_bridge.pf_base0)
+                        + 20'(u_bridge.cur_pf_w ? u_bridge.pf_cnt1[4:0]
+                                                : u_bridge.pf_cnt0[4:0]);
+                    automatic logic [23:0] app_phys = phys_of(app_addr);
+                    if (sdr.u_part.store.exists(app_phys)
+                        && (pf_beat_dat_w !== sdr.u_part.store[app_phys][7:0])) begin
+                        if (c_pbad < 8)
+                            $display("  PFBAD t=%0t w=%0d app=%05x beat=%02x exp=%02x len=%0d shim_a=%06x ramst=%0d seqst=%0d svch=%b aen=%b",
+                                     $time, u_bridge.cur_pf_w, app_addr,
+                                     pf_beat_dat_w,
+                                     sdr.u_part.store[app_phys][7:0],
+                                     u_bridge.cur_pf_len,
+                                     u_ram.u_sdram.addr_r,
+                                     u_ram.state, u_seq.st,
+                                     u_seq.svc_hold, aen);
+                        c_pbad <= c_pbad + 1;
+                    end
+                end
+            end
+            // Foreign-beat collision counter, computed the way RAM's tag
+            // computes it: the last port-A read request's prefetch
+            // qualifier. A return beat landing inside a fill's command
+            // phase without that qualifier is foreign -- on an untagged
+            // build it lands in the window (c_pbad flags it); on a tagged
+            // build it proves the collision actually exercised.
+            if (u_ram.read_request && !u_ram.read_flag && !u_ram.write_flag) begin
+                tag_sim <= (u_ram.prefetch_len != 5'd0);
+                if (beatlog)
+                    $display("RQ t=%0t a=%06x len=%0d", $time,
+                             u_ram.latch_address, u_ram.prefetch_len);
+            end
+            if (beatlog && u_ram.u_sdram.a_rvalid)
+                $display("BEAT t=%0t rq=%06x rb=%0d d=%02x fill=%b/%b cnt=%0d",
+                         $time, u_ram.u_sdram.addr_r, u_ram.u_sdram.rbeat,
+                         u_ram.u_sdram.a_beat[7:0],
+                         u_bridge.cur_pf, u_bridge.cur_fillm,
+                         u_bridge.cur_pf_w ? u_bridge.pf_cnt1
+                                           : u_bridge.pf_cnt0);
+            if (u_ram.u_sdram.a_rvalid
+                && (u_bridge.cur_pf || u_bridge.cur_fillm)
+                && u_bridge.fill_ok && u_bridge.bus_ours
+                && (u_bridge.bstate == u_bridge.B_CMD)
+                && !tag_sim)
+                c_pforeign <= c_pforeign + 1;
+            // Orphan counter: a tagged return that lands inside a fill's
+            // command phase while the RAM FSM is NOT streaming it (the
+            // fill that owned the burst ended early -- grant dropped the
+            // strobe, or a foreign ready ended the command phase). The
+            // tag-only build let these through and shifted the window;
+            // the READ_2 gate blocks them, so a nonzero count is the
+            // collision being exercised, not a failure.
+            if (u_ram.u_sdram.a_rvalid
+                && (u_bridge.cur_pf || u_bridge.cur_fillm)
+                && u_bridge.fill_ok && u_bridge.bus_ours
+                && (u_bridge.bstate == u_bridge.B_CMD)
+                && tag_sim
+                && (u_ram.state != u_ram.RAM_READ_2))
+                c_porphan <= c_porphan + 1;
             if ((!u_bridge.bus_ours
                  || (u_bridge.arm_wr && (u_bridge.wr_ovl0 || u_bridge.wr_ovl1))
                  || u_bridge.arm_iow)
@@ -936,6 +2025,54 @@ module tb_mem_perf;
             dq_seen_cmd <= '{default:0};
     end
 
+    // read-answer witness: did the RAM complete THIS strobe's access at
+    // any point during the pair's command phase? A read pair accepting
+    // without it grabbed a foreign ready pulse (a svc leg, a DMA drain,
+    // an AEN-release residue) and captured whatever data_bus happened to
+    // hold -- the RET-reads-ADAD signature. Expanded walks (EGC/GRCG/svc)
+    // answer through the sequencer's S_DONE instead, so exclude them.
+    logic rd_seen_own;
+    longint unsigned c_rd_foreign = 0;
+    longint unsigned c_wit_foreign = 0;
+    always_ff @(posedge clk) begin
+        if (u_bridge.bstate == u_bridge.B_IDLE)
+            rd_seen_own <= 1'b0;
+        else if (u_ram.access_own || (u_seq.st == u_seq.S_DONE))
+            rd_seen_own <= 1'b1;
+        // The bridge's actual witness input rising without the own-access
+        // model: whatever pulses here is what rd_own_seen latches. A legit
+        // completion fires access_own/S_DONE on the same clk -- exclude it;
+        // anything left is a genuinely foreign ready reaching the flag.
+        if (u_bridge.bstate != u_bridge.B_IDLE
+            && seq_rd_own_w && u_bridge.bus_ours
+            && u_bridge.cur_read && !rd_seen_own
+            && !u_ram.access_own && !(u_seq.st == u_seq.S_DONE)
+            && !u_ram.ram_address_select_n) begin
+            if (c_wit_foreign < 24)
+                $display("  WITFOR t=%0t ad=%05x bst=%0d t_cnt=%0d aen=%b st=%0d seqst=%0d svch=%b svg=%b exp=%b mrn=%b mwn=%b sel=%b wopen=%b alr=%b rsm=%b",
+                         $time, u_bridge.cur_addr, u_bridge.bstate,
+                         u_bridge.t_cnt, aen, u_ram.state, u_seq.st,
+                         u_seq.svc_hold, u_seq.svc_gap, u_seq.expand,
+                         mem_rd_n, mem_wr_n, u_ram.ram_address_select_n,
+                         u_ram.wr_strobe_open, u_ram.accept_live_rd,
+                         u_ram.read_strobe_match);
+            c_wit_foreign <= c_wit_foreign + 1;
+        end
+        if (u_bridge.bstate == u_bridge.B_CMD && u_bridge.pair_accept
+            && u_bridge.cur_read && !u_bridge.cur_fillm && !u_bridge.cur_pf
+            && !u_bridge.cur_inta
+            && !rd_seen_own && u_bridge.bus_ours
+            && !u_ram.ram_address_select_n) begin
+            if (c_rd_foreign < 8)
+                $display("  RDFOREIGN t=%0t ad=%05x t_cnt=%0d saw_low=%b aen=%b st=%0d seqst=%0d svch=%b bus=%02x icr=%b mrdy=%b",
+                         $time, u_bridge.cur_addr, u_bridge.t_cnt,
+                         u_bridge.saw_low, aen, u_ram.state, u_seq.st,
+                         u_seq.svc_hold, u_bridge.data_bus,
+                         guest_ready, ram_ready_w);
+            c_rd_foreign <= c_rd_foreign + 1;
+        end
+    end
+
     // ========================================================================
     // phase brackets: OUT 88FEh,n marks start (n) and end (n|80h)
     // ========================================================================
@@ -949,6 +2086,17 @@ module tb_mem_perf;
         phase_name[8'h06] = "REP STOSB  512B EGC";
         phase_name[8'h07] = "REP STOSB 2048B window plain";
         phase_name[8'h08] = "CALL/RET x500 stack";
+        phase_name[8'h09] = "SMC trampoline x128";
+        phase_name[8'h0A] = "F-bank remap kill";
+        phase_name[8'h0B] = "IRQ storm x4096";
+        phase_name[8'h0C] = "frame-iret x256";
+        phase_name[8'h0D] = "big-frame CALL/RET + IRQ";
+        phase_name[8'h0E] = "title shape: stack string + CALL";
+        phase_name[8'h0F] = "ITF IRQ0 poll loop x32";
+        phase_name[8'h10] = "ITF IRQ0 poll loop x32, F-bank mapped";
+        phase_name[8'h11] = "REP STOSW 1024W GRCG TDW";
+        phase_name[8'h12] = "REP STOSW 1024W GRCG RMW";
+        phase_name[8'h13] = "ALU5 loop x500 (bench 01)";
         phase_name[8'hFF] = "done";
     end
     int phase_bytes [0:255];
@@ -961,6 +2109,12 @@ module tb_mem_perf;
         phase_bytes[8'h06] = 512;
         phase_bytes[8'h07] = 2048;
         phase_bytes[8'h08] = 500;
+        phase_bytes[8'h09] = 128;
+        phase_bytes[8'h0A] = 48;
+        phase_bytes[8'h0B] = 4096;
+        phase_bytes[8'h0C] = 256;
+        phase_bytes[8'h11] = 2048;
+        phase_bytes[8'h12] = 2048;
     end
 
     // snapshot record
@@ -991,8 +2145,203 @@ module tb_mem_perf;
     endtask
 
     int cur_phase = -1;
+`ifdef REPX
+    int rx[0:7]; int rxc = 0;
+    always @(posedge clk) if (cur_phase == 8'h32 || cur_phase == 8'h33) begin
+        if (u_cpu.rep_x != 0) rx[u_cpu.rep_x]++;
+        if (cur_phase == 8'h32 && u_cpu.u_cache.xdebt != 0) rxc++;
+    end
+    final $display("REPX 1:%0d 2:%0d 5:%0d 6:%0d xdebt-nonzero(32)=%0d", rx[1], rx[2], rx[5], rx[6], rxc);
+`endif
+`ifdef MOVPROF
+    longint mv_st[0:15]; longint mv_cyc=0, mv_fill=0, mv_wrw=0, mv_ldw=0, mv_rdw=0, mv_pbusy=0, mv_cbv=0, mv_inst=0, mv_hitm=0;
+    initial foreach (mv_st[i]) mv_st[i]=0;
+    always @(posedge clk) if (cur_phase == 8'h2E) begin
+        mv_cyc++; mv_st[u_cpu.u_cache.st]++;
+        if (u_cpu.u_cache.fill_req && u_cpu.u_cache.fs == 0) mv_fill++;
+        if (u_cpu.u_cache.wr_pend) mv_wrw++;
+        if (u_cpu.u_cache.rd_pend) mv_rdw++;
+        if (u_cpu.u_cache.ld_pend) mv_ldw++;
+        if (u_cpu.u_cache.p_busy) mv_pbusy++;
+        if (u_cpu.u_cache.cb_v != 0) mv_cbv++;
+        if (u_cpu.u_cache.cb_inst) mv_inst++;
+        if (mv_cyc > 3000 && mv_cyc < 3130)
+            $display("MVT %0d eud=%0d eup=%b idv=%b st=%0d rd=%b rdp=%b rdy=%b wrv=%b wrr=%b wa=%05x pdebt=%0d pce=%b ldp=%b cbv=%b fs=%0d",
+                mv_cyc, u_cpu.u_fetch_decode1.eu_debt, u_cpu.u_fetch_decode1.eu_pend, u_cpu.u_fetch_decode1.id_valid, u_cpu.u_cache.st, u_cpu.u_cache.rd, u_cpu.u_cache.rd_pend, u_cpu.u_cache.rd_ready,
+                u_cpu.u_cache.wr_valid, u_cpu.u_cache.wr_ready, u_cpu.u_cache.wr_addr, u_cpu.u_cache.pdebt, u_cpu.u_cache.pace_ce,
+                u_cpu.u_cache.ld_pend, u_cpu.u_cache.cb_v, u_cpu.u_cache.fs);
+        if (mv_cyc > 3000 && mv_cyc < 3130 && u_cpu.u_fetch_decode1.eu_pend)
+            $display("MVI %0d ip=%04x", mv_cyc, u_cpu.u_fetch_decode1.ip);
+    end
+    final $display("MOVPROF cyc=%0d st0-11: %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d fills=%0d wr_pend=%0d rd_pend=%0d ld_pend=%0d p_busy=%0d cb_v=%0d inst=%0d",
+        mv_cyc, mv_st[0],mv_st[1],mv_st[2],mv_st[3],mv_st[4],mv_st[5],mv_st[6],mv_st[7],mv_st[8],mv_st[9],mv_st[10],mv_st[11], mv_fill, mv_wrw, mv_rdw, mv_ldw, mv_pbusy, mv_cbv, mv_inst);
+`endif
+    int tb_gwt = 4;  // TDW: Chipset.sv charges 4 (see vram_wait_now)
+    initial void'($value$plusargs("gwt=%d", tb_gwt));
+    int tb_gw = 3;   // Chipset.sv charges 3 (see vram_wait_now)
+    initial void'($value$plusargs("gw=%d", tb_gw));
+`ifdef PWTRACE
+    int pwt = 0; logic pwt_on = 0; logic [3:0] pwt_prev = 0;
+    always @(posedge clk) begin
+        if (u_seq.pw_hold && u_seq.pw_addr == 20'hAF1FE) pwt_on <= 1;
+        if (pwt_on && pwt < 6000) begin
+            pwt++;
+            if ({seq_rd, seq_wr, guest_ready, u_seq.pw_hold} != pwt_prev || (seq_rd|seq_wr) && guest_ready)
+                $display("PWT %0d ph=%0d a=%05x rd=%b wr=%b wd=%02x/%02x rdy=%b own=%b rdat=%02x/%02x pw=%b ack=%b st=%0d exp=%b mrd=%b mwr=%b maddr=%05x",
+                    pwt, cur_phase, seq_addr, seq_rd, seq_wr, seq_wdata, u_seq.cpu_wdata_hi, guest_ready, seq_rd_own_w,
+                    seq_cpu_rdata, seq_cpu_rdata_hi, u_seq.pw_hold, u_seq.pw_ack, u_seq.st, u_seq.expand, u_seq.mem_rd, u_seq.mem_wr, u_seq.mem_addr);
+            pwt_prev <= {seq_rd, seq_wr, guest_ready, u_seq.pw_hold};
+        end
+    end
+`endif
+`ifdef RMWPROF
+    longint rp_st[0:7]; longint rp_nb=0, rp_lat=0, rp_tot=0, rp_beats=0, rp_t0=0, rp_dgr=0; longint rp_flg=0, rp_fla=0, rp_fls=0, rp_flx=0, rp_flb=0, rp_flr=0, rp_flw=0; longint rp_mpi=0, rp_mpw=0; longint rp_mpb[0:7]; initial foreach(rp_mpb[i]) rp_mpb[i]=0; bit rp_inb=0, rp_first=1; longint rp_burst = 0, rp_wr = 0, rp_cyc = 0, rp_rbw = 0;
+    initial foreach (rp_st[i]) rp_st[i] = 0;
+    always @(posedge u_seq.clk) if (cur_phase == 8'h36) begin
+        rp_cyc++;
+        rp_st[u_seq.st]++;
+        if (u_seq.rb_leg && u_seq.st == 3'd2) rp_rbw++;
+        if (u_seq.st == 3'd1 && u_seq.cur_live && !u_seq.rb_hit_c) rp_burst++;
+        if (u_seq.st == 3'd3 && u_seq.cur_live) rp_wr++;
+        if (u_seq.fl_start) begin rp_flg++; if (u_seq.fl_all) rp_fla++; else if (u_seq.wb_age >= 64) rp_fls++; else rp_flx++; end
+        if (u_seq.fl_busy) rp_flb++;
+        if (u_seq.fl_busy && u_seq.fl_ph == 2'd1) rp_flr++;
+        if (u_seq.fl_busy && u_seq.fl_ph == 2'd2) rp_flw++;
+        if (u_ram.u_sdram.u_mp.state == 4'd4 && !u_ram.u_sdram.u_mp.stat_idle) rp_mpw++;
+        if (u_ram.u_sdram.u_mp.state == 4'd4 && u_ram.u_sdram.u_mp.stat_idle) rp_mpi++;
+        if (u_ram.u_sdram.u_mp.state != 4'd4) rp_mpb[u_ram.u_sdram.u_mp.grant]++;
+        if (u_seq.rb_leg && u_seq.st == 3'd2) begin
+            if (!rp_inb) begin rp_inb = 1; rp_t0 = rp_cyc; rp_nb++; end
+            if (u_seq.pf_beat_v) begin if (rp_first) begin rp_lat += rp_cyc - rp_t0; rp_first = 0; end rp_beats++; end
+        end else if (rp_inb) begin rp_inb = 0; rp_first = 1; rp_tot += rp_cyc - rp_t0; end
+    end
+    final $display("RMWPROF cyc=%0d st: IDLE=%0d RD=%0d RDW=%0d(burst %0d) WR=%0d WRW=%0d DONE=%0d RBH=%0d  bursts=%0d wr_legs=%0d\nRMWPROF burst n=%0d avg_first_beat=%0d avg_total=%0d beats=%0d\nRMWPROF mp idle=%0d timer=%0d busy by grant: A=%0d B=%0d C=%0d D=%0d E=%0d F=%0d\nRMWPROF flush go=%0d (all %0d age %0d older %0d) busy=%0d req=%0d burst=%0d",
+        rp_cyc, rp_st[0], rp_st[1], rp_st[2], rp_rbw, rp_st[3], rp_st[4], rp_st[5], rp_st[7], rp_burst, rp_wr, rp_nb, rp_lat/(rp_nb?rp_nb:1), rp_tot/(rp_nb?rp_nb:1), rp_beats, rp_mpi, rp_mpw, rp_mpb[0], rp_mpb[1], rp_mpb[2], rp_mpb[3], rp_mpb[4], rp_mpb[5], rp_flg, rp_fla, rp_fls, rp_flx, rp_flb, rp_flr, rp_flw);
+`endif
+
+    // ---- phase-0A remap poke ------------------------------------------------
+    // The guest can't flip the F-bank flag without an OUT (which would
+    // kill windows on the way through anyway), so the bench does it
+    // loader-style: the signal write to 0x0702 flips shadow_flag_r while
+    // the bank-A window is still live, before the guest's second jmpf.
+    always @(posedge clk) begin
+        if (reset) begin
+            flipped10     <= 1'b0;
+            shadow_flag_r <= 1'b0;
+        end else if (cur_phase == 8'h0A && !flipped10
+                     && zwb_stb && zwb_we && !zwb_tga
+                     && ({zwb_adr, 1'b0} == 20'h00702)
+                     && (zwb_dat_o[7:0] == 8'h55)) begin
+            flipped10     <= 1'b1;
+            shadow_flag_r <= 1'b1;
+        end else if (cur_phase == 8'h0A) begin
+            // The flip must survive the rest of phase 0A (the second jmpf
+            // runs against it); leave it alone here.
+        end else if (cur_phase == 8'h0F) begin
+            // ITF poll-loop control: the F-bank is NOT mapped here, so the
+            // windows are free to cover the loop (the hazard shape).
+            shadow_flag_r <= 1'b0;
+        end else if (cur_phase == 8'h10) begin
+            // ... and mapped here, the state the ITF POST runs in.
+            shadow_flag_r <= 1'b1;
+        end else begin
+            // Every other phase is run-time guest code: the ITF bank is not
+            // mapped, so the pf gate must not hold. (Leaving the 0A flip up
+            // through 0B-0E would silently run those phases with pf off --
+            // and 0D wedges without it.)
+            shadow_flag_r <= 1'b0;
+        end
+    end
+
+    // ---- coherence oracle: every guest memory read vs its own writes -------
+    // A shadow of every byte the guest wrote (Wishbone write acks, by byte
+    // lane). Every guest memory read ack below A0000 is checked against it
+    // where the shadow knows the byte; a DMA-grant write to RAM drops the
+    // byte from the shadow, since the guest did not write it. Any mismatch
+    // is a stale or foreign byte handed to the CPU -- the prefetch-window
+    // class of failure, caught the moment it is served.
+    logic [7:0] shadow [int];
+    logic       orc_ack_q = 1'b0;
+    longint unsigned c_stale = 0;
+    always @(posedge clk) begin
+        orc_ack_q <= zwb_ack;
+        if (!reset && aen && seq_mem_wr && !seq_mem_addr[19]) begin
+            if (shadow.exists(int'(seq_mem_addr)))
+                shadow.delete(int'(seq_mem_addr));
+            if (written.exists(int'(seq_mem_addr)))
+                written.delete(int'(seq_mem_addr));
+        end
+        if (!reset && zwb_ack && !orc_ack_q && zwb_cyc && !zwb_tga) begin
+            automatic int a = int'({zwb_adr, 1'b0});
+            if (zwb_we) begin
+                if (zwb_sel[0]) begin shadow[a]   = zwb_dat_o[7:0];  written[a]   = 1'b1; end
+                if (zwb_sel[1]) begin shadow[a+1] = zwb_dat_o[15:8]; written[a+1] = 1'b1; end
+            end else if (a < 32'hA0000) begin
+                if (zwb_sel[0] && written.exists(a) && shadow[a] !== zwb_dat_i[7:0]) begin
+                    if (c_stale < 16)
+                        $display("  STALE t=%0t a=%05x got=%02x want=%02x ph=%0d pc=%05x w0=%05x/%0d-%0d w1=%05x/%0d-%0d live=%b",
+                                 $time, a, zwb_dat_i[7:0], shadow[a], cur_phase, zet_pc,
+                                 u_bridge.pf_base0, u_bridge.pf_lo0, u_bridge.pf_cnt0,
+                                 u_bridge.pf_base1, u_bridge.pf_lo1, u_bridge.pf_cnt1, u_bridge.pf_live);
+                    c_stale <= c_stale + 1;
+                end
+                if (zwb_sel[1] && written.exists(a+1) && shadow[a+1] !== zwb_dat_i[15:8]) begin
+                    if (c_stale < 16)
+                        $display("  STALE t=%0t a=%05x got=%02x want=%02x ph=%0d pc=%05x",
+                                 $time, a+1, zwb_dat_i[15:8], shadow[a+1], cur_phase, zet_pc);
+                    c_stale <= c_stale + 1;
+                end
+            end
+        end
+    end
+
+    // ---- phase-0D window-0 trace: every base/lo/cnt/live change -----------
+    logic [19:0] w0b_q; logic [4:0] w0l_q; logic [5:0] w0c_q; logic [1:0] wl_q;
+    always @(posedge clk) begin
+        w0b_q <= u_bridge.pf_base0; w0l_q <= u_bridge.pf_lo0;
+        w0c_q <= u_bridge.pf_cnt0;  wl_q  <= u_bridge.pf_live;
+        if (cur_phase == 8'h0D && diverged == 0
+            && (u_bridge.pf_base0 != w0b_q || u_bridge.pf_lo0 != w0l_q
+                || u_bridge.pf_live != wl_q
+                || (u_bridge.pf_cnt0 != w0c_q && u_bridge.pf_cnt0 != w0c_q + 6'd1)))
+            $display("  W0 t=%0t base=%05x lo=%02x cnt=%0d live=%b bst=%0d cur_pf=%b fillm=%b pfw=%b ok=%b srv=%05x bs=%0d",
+                     $time, u_bridge.pf_base0, u_bridge.pf_lo0, u_bridge.pf_cnt0,
+                     u_bridge.pf_live, u_bridge.bstate, u_bridge.cur_pf,
+                     u_bridge.cur_fillm, u_bridge.cur_pf_w, u_bridge.fill_ok,
+                     u_bridge.srv_addr, u_bridge.srv_bs);
+    end
+
+    // ---- phase-0B IRQ storm driver ------------------------------------------
+    // INTR is a level input: hold it until the CPU's own INTA output
+    // (zwb_inta = wb_tgc_o) pulses, then re-arm after a gap. Fires only
+    // while phase 0B is current -- the guest's STI/CLI bracket it.
+    reg [15:0] irq_gap = 16'd0;
+    always @(posedge clk) begin
+        if (img_en && !reset) begin
+            // +img: a periodic timer IRQ (vector FFh off the open bus)
+            if (zwb_inta) begin irq_req <= 1'b0; irq_gap <= 16'd0; end
+            else if (img_irq != 0 && irq_gap >= 16'(img_irq)) begin irq_req <= 1'b1; irq_gap <= 16'd0; end
+            else irq_gap <= irq_gap + 16'd1;
+        end else
+        if (reset || (cur_phase != 8'h0B && cur_phase != 8'h0D && cur_phase != 8'h0E)) begin
+            irq_req <= 1'b0;
+            irq_gap <= 16'd0;
+        end else if (zwb_inta) begin
+            irq_req <= 1'b0;
+            irq_gap <= 16'd0;
+        end else if (irq_gap == 16'd2500) begin
+            irq_req <= 1'b1;
+            irq_gap <= 16'd0;
+        end else
+            irq_gap <= irq_gap + 16'd1;
+    end
+
     task phase_start(input int n);
         cur_phase = n;
+        if (n == 8'h0F || n == 8'h10) begin
+            lf_n    <= 0;
+            lf_head = (n == 8'h10) ? lf_head16 : lf_head15;
+        end
         snap;
     endtask
 
@@ -1003,6 +2352,9 @@ module tb_mem_perf;
         byt = (n < 256) ? phase_bytes[n] : 0;
         $display("");
         $display("== phase %02X  %s ==", n, phase_name[n]);
+        if (n >= 8'h20 && n < 8'h40)
+            $display("CYC %02x iters=%0d cpu=%0d clks=%0d", n, cyc_iters[n],
+                     c_ce - s0.ce, dt);
         $display("   clks=%0d  bytes=%0d  -> %0d.%02d clk/B = %.0f ns/B",
                  dt, byt, byt ? dt/byt : 0,
                  byt ? int'(((dt*100)/byt) % 100) : 0,
@@ -1039,6 +2391,49 @@ module tb_mem_perf;
                  c_rel_max,
                  c_drn_n-s0.drn_n,
                  (c_drn_n-s0.drn_n) ? int'((c_drn_sum-s0.drn_sum)/(c_drn_n-s0.drn_n)) : 0);
+        if (n == 8'h0F || n == 8'h10) begin
+            automatic int ent = (n == 8'h10) ? lf_enter16 : lf_enter;
+            automatic int len = (n == 8'h10) ? (lf_end16 - lf_enter16) : (lf_enter16 - lf_enter);
+            // The turn count is the guest's ARCHITECTURAL CX at the phase
+            // boundary, not the [0708..070C] cells: those are posted
+            // writes, and at Turbo the write queue can still hold them when
+            // the marker OUT retires -- the peek then reports the previous
+            // phase's leftovers (seen: phase 0x0B's counters, 0x00E2/1).
+            // CX cannot lag: the LOOP only exits with CX == 0.
+            automatic logic [15:0] axnow = u_cpu.u_regfile.AX;
+            automatic logic [15:0] cxnow = u_cpu.u_regfile.CX;
+            automatic logic [15:0] axst  = sdr.u_part.peek(20'h0708);
+            automatic logic [15:0] cxst  = sdr.u_part.peek(20'h070A);
+            automatic logic [15:0] cxend = sdr.u_part.peek(20'h070C);
+            $write("   ITF code @%05x:", 20'hF0000 + ent);
+            for (int a = ent; a < ent + len; a++)
+                $write(" %02x", prog[a]);
+            $display("");
+            $display("   ITF regs at phase end: ax=%04x cx=%04x (architectural)",
+                     axnow, cxnow);
+            $display("   ITF probe cells (posted, may lag): [0708]=%04x [070A]=%04x [070C]=%04x",
+                     axst, cxst, cxend);
+            $display("   ITF poll loop: turns=%04x->%04x, shadow_flag=%b, pf hits=%0d",
+                     16'h0020, cxnow, shadow_flag_r, c_phit-s0.phit);
+            if (axnow[15:8] != 8'h00 || cxnow != 16'h0000) begin
+                $display("   ITF POLL LOOP: FAIL -- loop did not run 32 turns (ax=%04x cx=%04x)",
+                         axnow, cxnow);
+                for (int k = 0; k < 32; k++)
+                    $display("     ring[%02d]=%05x", k, pc_ring[(pc_ptr + k) & 31]);
+                lf_fail = 1;
+            end else if (n == 8'h10 && dt < longint'(LF_DEADLINE)) begin
+                $display("   ITF POLL LOOP: FAIL -- %0d clks < %0d deadline (IRQ0 wins the race)",
+                         dt, LF_DEADLINE);
+                lf_fail = 1;
+            end else if (n == 8'h10 && (c_phit - s0.phit) != 0) begin
+                $display("   ITF POLL LOOP: FAIL -- %0d pf hits while the F-bank was mapped",
+                         c_phit - s0.phit);
+                lf_fail = 1;
+            end else if (n == 8'h10) begin
+                $display("   ITF POLL LOOP: PASS -- %0d clks >= %0d deadline, no window served",
+                         dt, LF_DEADLINE);
+            end
+        end
         $fflush;
     endtask
 
@@ -1051,6 +2446,33 @@ module tb_mem_perf;
         int dma_seen = 0;
         logic [15:0] w;
         begin
+            // +itfonly starts the guest inside phase 0F, so every earlier
+            // phase's data region is untouched: the phase-verify peeks have
+            // nothing to say in that mode. The probe prints its own verdict.
+            if ($test$plusargs("cyconly")) begin
+                // phase 38: every plane byte the RMW REP STOSW touched
+                automatic logic [7:0] pf [0:2] = '{8'h0F, 8'h33, 8'h55};
+                automatic logic [7:0] tl [0:2] = '{8'hAA, 8'hBB, 8'hCC};
+                for (int p = 0; p < 3; p++)
+                    for (int i = 0; i < 512; i++) begin
+                        automatic int a = 20'hA8000 + p * 20'h8000 + 20'h7000 + i;
+                        automatic logic [7:0] d = i[0] ? 8'h5A : 8'hC3;
+                        automatic logic [7:0] want = (pf[p] & ~d) | (d & tl[p]);
+                        w = sdr.u_part.peek(a);
+                        if (w[7:0] !== want) begin
+                            if (bad < 12) $display("  BAD rmw plane %0d %05x=%02x want %02x",
+                                                   p, a, w[7:0], want);
+                            bad++;
+                        end
+                    end
+                $display("RMW CHECK: %0d bad", bad);
+                if (bad) $display("=== FAIL tb_mem_perf ===");
+                return;
+            end
+            if ($test$plusargs("itfonly") || $test$plusargs("aluonly")) begin
+                $display("(itfonly: phase verification skipped)");
+                return;
+            end
             for (int a = 20'h2000; a < 20'h2800; a++) begin
                 w = sdr.u_part.peek(a);
                 if (w[7:0] !== 8'h5A) begin
@@ -1090,6 +2512,11 @@ module tb_mem_perf;
                     bad++;
                 end
             end
+            // phase-9 trampoline: did the written bytes actually land?
+            for (int a = 20'h00600; a < 20'h00610; a++) begin
+                w = sdr.u_part.peek(a);
+                $display("  T[%05x]=%02x", a, w[7:0]);
+            end
             // Under +GRANT the synthetic DMAC streams A5^addr over the
             // whole 4 KB fill buffer, so every byte of the probed
             // 256-byte window must hold the pattern -- anything less is
@@ -1099,27 +2526,47 @@ module tb_mem_perf;
                 w = sdr.u_part.peek(a);
                 if (w[7:0] == (8'hA5 ^ a[7:0])) dma_seen++;
             end
-            $display("VERIFY: bad=%0d diverged=%0d stray=%0d grants=%0d midcmd=%0d dma_bytes=%0d",
-                     bad, diverged, stray, grants, grants_midcmd, dma_seen);
-            $display("  RAM drop-witness: uncov=%0d parks=%0d first=%05x/%02x st=%0d last=%05x/%02x",
-                     u_ram.dbg_uncov, u_ram.dbg_parks,
-                     u_ram.dbg_uncov_addr, u_ram.dbg_uncov_data, u_ram.dbg_uncov_st,
-                     u_ram.dbg_uncov_addr2, u_ram.dbg_uncov_data2);
+            // phase-0A bank remap: flipped + kill works -> BB;
+            // flipped + a stale window served bank A again -> 03 (the
+            // same value the unflipped control produces).
+            begin
+                logic [7:0] exp10;
+                exp10 = flipped10 ? 8'hBB : 8'h03;
+                w = sdr.u_part.peek(20'h0706);
+                $display("  bankmark 0706=%02x want %02x (flipped=%0d)",
+                         w[7:0], exp10, flipped10);
+                if (w[7:0] !== exp10) bad++;
+            end
+            // phase-0B irq storm: at least one INTA->ISR->iret round
+            // trip must have landed
+            begin
+                w = sdr.u_part.peek(20'h070A);
+                $display("  irqcount 070A=%02x", w[7:0]);
+                if (w[7:0] == 8'h00) bad++;
+            end
+            $display("VERIFY: bad=%0d diverged=%0d stray=%0d grants=%0d midcmd=%0d dma_bytes=%0d pfbad=%0d pforeign=%0d porphan=%0d rdfor=%0d svc_ops=%0d stale=%0d",
+                     bad, diverged, stray, grants, grants_midcmd, dma_seen,
+                     c_pbad, c_pforeign, c_porphan, c_rd_foreign, svc_ops, c_stale);
             // queue occupancy at verify: if a bad write is still parked it is
-            // wedged, not dropped. acc_ring = last 3 writes the FSM accepted.
-            $display("  RAM queue @verify: st=%0d pend=%b%b%b cap=%b inflight(wr=%b rd=%b) acc_ring=%08x %08x %08x",
+            // wedged, not dropped.
+            $display("  RAM queue @verify: st=%0d pend=%b%b%b cap=%b inflight(wr=%b rd=%b)",
                      u_ram.state, u_ram.wc_pend, u_ram.wc_pend2, u_ram.wc_pend3,
-                     u_ram.cap_valid, u_ram.accept_live_wr, u_ram.accept_live_rd,
-                     u_ram.acc_ring[2], u_ram.acc_ring[1], u_ram.acc_ring[0]);
+                     u_ram.cap_valid, u_ram.accept_live_wr, u_ram.accept_live_rd);
             $display("  drain cmd-present @t_cnt: [%0d %0d %0d %0d %0d %0d %0d %0d] max=%0d",
                      dq_present[0], dq_present[1], dq_present[2], dq_present[3],
                      dq_present[4], dq_present[5], dq_present[6], dq_present[7],
                      dq_max_pres);
-            // bad/diverged/stray are direct loss checks; dbg_uncov is
-            // RAM's own "a write strobe fell with its operands never
-            // durably held" witness -- a true-loss counter, not a
-            // heuristic; and under +GRANT the fill window must be whole.
-            if (bad || diverged || stray || (u_ram.dbg_uncov != 16'd0)
+            // bad/diverged/stray are direct loss checks; c_uncov counts
+            // uncovered write-strobe falls with expand down -- the only
+            // falls that can be true losses (an expand takeover only clips
+            // an already-captured, already-released strobe); under
+            // +GRANT the fill window must be whole; and the read-serve
+            // oracle (ro_bad) catches a stale/wrong word on ANY serve
+            // path, including the fast-serve hit/release paths that
+            // never touch the seq/RAM machine.
+            if (bad || diverged || stray || (c_uncov != 0)
+                || (c_pbad != 0) || (c_stale != 0) || (ro_bad != 0)
+                || (lf_fail != 0)
                 || (grant_en && (dma_seen != 256 || grants == 0)))
                 $display("=== FAIL tb_mem_perf ===");
             else
@@ -1156,21 +2603,93 @@ module tb_mem_perf;
         end
     end
 
+    // fetch-PC ring: the last 32 presented fetch addresses, dumped on the
+    // first diverge so the escape entry is visible (the jump target or the
+    // pop that delivered it)
+    logic [19:0] pc_ring [0:31];
+    int          pc_ptr = 0;
+    int          dvg_dumped = 0;
+    always_ff @(posedge clk) begin
+        pc_ring[pc_ptr] <= zet_pc;
+        pc_ptr <= (pc_ptr + 1) & 31;
+    end
+
+    // guest bus-op ring: the last 16 sequencer-level memory accesses
+    // (addr, write?, data) -- the stack push that should hold the return
+    // address and the pop that read it are both here when RET escapes
+    logic [19:0] op_addr  [0:15];
+    logic        op_wr    [0:15];
+    logic [7:0]  op_data  [0:15];
+    int          op_ptr = 0;
+    always_ff @(posedge clk) begin
+        if (seq_mem_rd || seq_mem_wr) begin
+            op_addr[op_ptr] <= seq_mem_addr;
+            op_wr[op_ptr]   <= seq_mem_wr;
+            op_data[op_ptr] <= seq_mem_wdata;
+            op_ptr <= (op_ptr + 1) & 15;
+        end
+    end
+
     // ---- divergence + stray-write traps (the wild-jump witnesses) ----------
     // The program runs at F0000..+len and fetches the FFFF0 reset vector at
     // boot; it writes 0x2000/0x4000/0x8000 (data), the ~0x0400 stack and the
     // A8000 window, and the DMAC writes 0x30000-0x30FFF. A far-transfer that
     // sends CS:IP out of the code image is the SuperDepth symptom; a write to
     // the code/reset-vector region is a stray that could cause it.
+    // The CPU's pc output is the fetch-stream PC (it moves on branches, not
+    // per byte consumed), so it is not a per-fetch witness either. Sample the
+    // real fetch address on the Wishbone instead: an instruction fetch is the
+    // cache's uncached line load (S_WLD) presenting stb.
+    localparam logic [3:0] ZC_S_WLD = 4'd3;   // mirrors z86_cache.S_WLD
+    wire [19:0] fetch_a = {zwb_adr, 1'b0} | {19'b0, zwb_sel == 2'b10};
     always_ff @(posedge clk) begin
         if (sdram_up && !reset) begin
-            // CS:IP must stay in the code image (or the reset-vector fetch)
-            if (!((zet_pc >= 20'hF0000 && zet_pc < 20'hF2000) ||
-                  (zet_pc >= 20'hFFF00))) begin
+            // every issued instruction-fetch byte must be in legal space
+            // wb_tga_o is the I/O-vs-mem tag, not a fetch flag: with the
+            // cache off (as this bench runs it), an instruction fetch is
+            // exactly the cache FSM's S_WLD line load; data reads are
+            // S_WRD1/2, writes S_WWR1/2.
+            if (zwb_stb && zwb_cyc && !zwb_we && !zwb_tga
+                && (u_cpu.u_cache.st == ZC_S_WLD)
+                && !((fetch_a >= 20'hF0000 && fetch_a < 20'hF2000) ||
+                     (fetch_a >= 20'hF8000 && fetch_a < 20'hF8020) ||
+                     (fetch_a >= 20'h00600 && fetch_a < 20'h00620) ||
+                     (fetch_a >= 20'hFFF00))) begin
                 if (diverged < 16)
-                    $display("*** DIVERGE pc=%05x aen=%b dma_act=%b bst=%0d ad=%05x t=%0t",
+                    $display("*** DIVERGE fa=%05x pc=%05x aen=%b dma_act=%b bst=%0d ad=%05x t=%0t", fetch_a,
                              zet_pc, aen, dma_active, u_bridge.bstate,
                              cpu_address, $time);
+                if (diverged == 0 && !dvg_dumped) begin
+                    dvg_dumped <= 1;
+                    for (int k = 31; k >= 1; k--)
+                        $display("   pc-%02d %05x", k,
+                                 pc_ring[(pc_ptr - k) & 31]);
+                    $display("   w0 base=%05x cnt=%0d live=%b ok=%b",
+                             u_bridge.pf_base0, u_bridge.pf_cnt0,
+                             u_bridge.pf_live, u_bridge.fill_ok);
+                    $display("   w1 base=%05x cnt=%0d",
+                             u_bridge.pf_base1, u_bridge.pf_cnt1);
+                    for (int k = 0; k < 32; k++)
+                        $display("   buf0[%02x]=%02x/%02x buf1[%02x]=%02x/%02x",
+                                 k, u_bridge.pf_buf[k],
+                                 sdr.u_part.store.exists(phys_of(u_bridge.pf_base0+k))
+                                    ? sdr.u_part.store[phys_of(u_bridge.pf_base0+k)][7:0] : 8'hxx,
+                                 k, u_bridge.pf_buf[32+k],
+                                 sdr.u_part.store.exists(phys_of(u_bridge.pf_base1+k))
+                                    ? sdr.u_part.store[phys_of(u_bridge.pf_base1+k)][7:0] : 8'hxx);
+                    // stack neighbourhood + last guest ops: the pop that
+                    // delivered the escape read from here
+                    $display("   stack@0x3f0:");
+                    for (int k = 0; k < 32; k++)
+                        $display("   stk[%03x]=%02x", 20'h003F0 + k,
+                                 sdr.u_part.store.exists(20'h003F0 + k)
+                                    ? sdr.u_part.store[20'h003F0 + k][7:0] : 8'hxx);
+                    for (int k = 15; k >= 1; k--)
+                        $display("   op-%02d %s %05x %02x", k,
+                                 op_wr[(op_ptr - k) & 15] ? "WR" : "RD",
+                                 op_addr[(op_ptr - k) & 15],
+                                 op_data[(op_ptr - k) & 15]);
+                end
                 diverged <= diverged + 1;
             end
             // no write may touch the code image or the reset vector
@@ -1182,6 +2701,62 @@ module tb_mem_perf;
                 stray <= stray + 1;
             end
         end
+    end
+
+    // ---- phase-9 trampoline watch: every bus access + queue event in T ----
+    // The trampoline at 0x600 is the SMC target; log guest strobes, queue
+    // pushes/drains, fills and hits touching 0x600-0x61F so a stale serve
+    // or a lost byte shows its provenance.
+    logic t_trace = 1'b0;
+    initial t_trace = $test$plusargs("ttrace");
+    always_ff @(posedge clk) if (t_trace && sdram_up) begin
+        if (u_bridge.wrq_push
+            && u_bridge.srv_addr >= 20'h00600
+            && u_bridge.srv_addr < 20'h00620)
+            $display("T WQP t=%0t a=%05x d=%04x ube=%b cnt=%0d",
+                     $time, u_bridge.srv_addr, u_bridge.srv_data,
+                     u_bridge.srv_ube, u_bridge.wrq_cnt);
+        if (u_bridge.arm_drain
+            && u_bridge.wrq_addr[0] >= 20'h00600
+            && u_bridge.wrq_addr[0] < 20'h00620)
+            $display("T WQD t=%0t a=%05x d=%04x ube=%b",
+                     $time, u_bridge.wrq_addr[0], u_bridge.wrq_data[0],
+                     u_bridge.wrq_ube[0]);
+        if (u_bridge.hit_serve
+            && u_bridge.srv_addr >= 20'h00600
+            && u_bridge.srv_addr < 20'h00620)
+            $display("T HIT t=%0t a=%05x w=%04x pfhw=%0d b0=%05x/%0d b1=%05x/%0d",
+                     $time, u_bridge.srv_addr, u_bridge.pf_hit_word,
+                     u_bridge.pf_hw, u_bridge.pf_base0, u_bridge.pf_cnt0,
+                     u_bridge.pf_base1, u_bridge.pf_cnt1);
+        if (u_bridge.fwd_serve
+            && u_bridge.srv_addr >= 20'h00600
+            && u_bridge.srv_addr < 20'h00620)
+            $display("T FWD t=%0t a=%05x w=%04x",
+                     $time, u_bridge.srv_addr, u_bridge.fwd_word);
+        if (u_bridge.arm_rd_ok
+            && u_bridge.srv_addr >= 20'h00600
+            && u_bridge.srv_addr < 20'h00620)
+            $display("T MISS t=%0t a=%05x len=%0d fillm=%b pois=%b fmovl=%b w0=%05x/%0d..%0d w1=%05x/%0d..%0d",
+                     $time, u_bridge.srv_addr, u_bridge.fillm_len,
+                     u_bridge.fillm_go, u_bridge.pf_poisoned,
+                     u_bridge.fillm_ovl,
+                     u_bridge.pf_base0, u_bridge.pf_lo0, u_bridge.pf_cnt0,
+                     u_bridge.pf_base1, u_bridge.pf_lo1, u_bridge.pf_cnt1);
+        if (u_bridge.arm_fill
+            && u_bridge.pf_next >= 20'h00600
+            && u_bridge.pf_next < 20'h00620)
+            $display("T FILL t=%0t a=%05x len=%0d w=%0d",
+                     $time, u_bridge.pf_next, u_bridge.pf_fill_len,
+                     u_bridge.fill_w);
+        // RAM-side: what the T-region bursts actually issued/returned
+        if (u_ram.u_sdram.a_rvalid
+            && u_ram.u_sdram.addr_r + u_ram.u_sdram.rbeat >= 20'h00600
+            && u_ram.u_sdram.addr_r + u_ram.u_sdram.rbeat < 20'h00620)
+            $display("T BEAT t=%0t a=%05x d=%02x tag=%b st=%0d",
+                     $time, u_ram.u_sdram.addr_r + u_ram.u_sdram.rbeat,
+                     u_ram.u_sdram.a_beat[7:0], u_ram.pf_tag,
+                     u_ram.state);
     end
 
     // heartbeat so a piped stdout still shows the bench is alive
@@ -1241,6 +2816,33 @@ module tb_mem_perf;
                      u_bridge.processor_ready,
                      u_bridge.t_cnt, u_bridge.saw_low, u_bridge.bus_ours,
                      u_bridge.pf_beat_v, u_bridge.cur_addr);
+        // Window-bookkeeping forensic: every write-visible event while a
+        // fill pair is in flight -- who can move pf_cnt/pf_base/fill_ok.
+        if (u_bridge.cur_pf || u_bridge.cur_fillm)
+            $display("PFW t=%0t c0=%0d c1=%0d lo0=%0d lo1=%0d b0=%05x b1=%05x lv=%b ok=%0d fb=%0d w=%0d iow=%0d awr=%0d wqp=%0d bchg=%0d ours=%0d arok=%0d afl=%0d flm=%0d wov=%b/%b bst=%0d",
+                     $time, u_bridge.pf_cnt0, u_bridge.pf_cnt1,
+                     u_bridge.pf_lo0, u_bridge.pf_lo1,
+                     u_bridge.pf_base0, u_bridge.pf_base1,
+                     u_bridge.pf_live, u_bridge.fill_ok, u_bridge.fill_beats,
+                     u_bridge.cur_pf_w, u_bridge.arm_iow, u_bridge.arm_wr,
+                     u_bridge.wrq_push, u_bridge.bank_chg, u_bridge.bus_ours,
+                     u_bridge.arm_rd_ok, u_bridge.arm_fill, u_bridge.fillm_go,
+                     u_bridge.wr_ovl0, u_bridge.wr_ovl1, u_bridge.bstate);
+    end
+
+    // Catch the exact edge where a full window-kill fires: pf_live is still
+    // nonzero (pre-edge) and one of the full-kill inputs is asserted.
+    always @(posedge clk) if (trace) begin
+        if (|u_bridge.pf_live &&
+            (u_bridge.arm_iow || u_bridge.bank_chg || !u_bridge.bus_ours ||
+             u_bridge.wrq_push || u_bridge.arm_wr || u_bridge.arm_fill || u_bridge.fillm_go))
+            $display("PFKILL t=%0t live=%b c0=%0d c1=%0d iow=%0d bchg=%0d ours=%0d wqp=%0d awr=%0d afl=%0d flm=%0d arok=%0d shf=%0d sq=%0d wov=%b/%b bst=%0d",
+                     $time, u_bridge.pf_live, u_bridge.pf_cnt0, u_bridge.pf_cnt1,
+                     u_bridge.arm_iow, u_bridge.bank_chg, u_bridge.bus_ours,
+                     u_bridge.wrq_push, u_bridge.arm_wr, u_bridge.arm_fill,
+                     u_bridge.fillm_go, u_bridge.arm_rd_ok,
+                     u_bridge.bios_shadow_flag, u_bridge.shadow_q,
+                     u_bridge.wr_ovl0, u_bridge.wr_ovl1, u_bridge.bstate);
     end
 
     // first events of the prefetch engine's life, for bring-up
@@ -1250,8 +2852,8 @@ module tb_mem_perf;
     always_ff @(posedge clk) if (trace && pfdbg < pfdbg_max) begin
         if (u_bridge.hit_serve) begin
             // flat store is byte-indexed: one guest byte per word's low half
-            automatic logic [15:0] w0  = sdr.u_part.peek(u_bridge.srv_addr);
-            automatic logic [15:0] w1  = sdr.u_part.peek(u_bridge.srv_addr + 20'd1);
+            automatic logic [15:0] w0  = sdr.u_part.peek(phys_of(u_bridge.srv_addr));
+            automatic logic [15:0] w1  = sdr.u_part.peek(phys_of(u_bridge.srv_addr + 20'd1));
             automatic logic [7:0]  eb  = w0[7:0];
             automatic logic [7:0]  eb2 = w1[7:0];
             automatic logic [15:0] got = u_bridge.pf_hit_word;
@@ -1407,10 +3009,82 @@ module tb_mem_perf;
         $fflush;
     end
 
+
+
+
+    // ---- +img: replay a whole guest memory image -------------------------
+    // +img=<hex> seeds 00000-9FFFF (one byte per line, as tb_z86_loop's
+    // +mem), the reset vector jumps to 9000:0000 (the image's register
+    // stub), +imgirq=N raises the timer IRQ every N clocks, and when the PC
+    // reaches +imgstop=<hex> the bytes +imgref=<hex> (a reference
+    // emulator's image) holds in [+imglo, +imghi) are compared with SDRAM.
+    // Used to replay a real program's kernel (CPUBENCH's Dhrystone) on the
+    // whole paced memory path rather than on tb_z86_loop's ideal port.
+    bit         img_en = 1'b0;
+    int         img_irq = 0;
+    logic [19:0] img_stop = 20'hFFFFF, img_lo = 20'h0, img_hi = 20'h0;
+    logic [7:0] img_b [0:20'h9FFFF];
+    logic [7:0] img_r [0:20'h9FFFF];
+    string      img_f, img_rf;
     initial begin
-        #400_000_000;                       // 400 ms of sim time ceiling
-        $display("GLOBAL TIMEOUT  diverged=%0d stray=%0d grants=%0d midcmd=%0d ph=%0d pc=%05x",
-                 diverged, stray, grants, grants_midcmd, cur_phase, zet_pc);
+        img_en = $value$plusargs("img=%s", img_f);
+        void'($value$plusargs("imgirq=%d", img_irq));
+        void'($value$plusargs("imgstop=%h", img_stop));
+        void'($value$plusargs("imglo=%h", img_lo));
+        void'($value$plusargs("imghi=%h", img_hi));
+        if (img_en) begin
+            #1;
+            $readmemh(img_f, img_b);
+            for (int i = 0; i < 20'hA0000; i++) ram_seed(i, {8'h00, img_b[i]});
+            ram_seed(32'h0FFFF0, 16'h00EA);
+            ram_seed(32'h0FFFF1, 16'h0000);
+            ram_seed(32'h0FFFF2, 16'h0000);
+            ram_seed(32'h0FFFF3, 16'h0000);
+            ram_seed(32'h0FFFF4, 16'h0090);
+            $display("img: %s seeded, irq every %0d, stop at %05x", img_f, img_irq, img_stop);
+        end
+    end
+    int img_irqs = 0;
+    logic img_inta_q = 1'b0;
+    always @(posedge clk) begin
+        img_inta_q <= zwb_inta;
+        if (zwb_inta && !img_inta_q) img_irqs++;
+    end
+    always @(posedge clk) if (img_en && !reset && zet_pc == img_stop) begin
+        automatic int bad = 0;
+        repeat (400) @(posedge clk);            // let the write paths drain
+        if ($value$plusargs("imgref=%s", img_rf)) begin
+            $readmemh(img_rf, img_r);
+            for (int a = int'(img_lo); a < int'(img_hi); a++) begin
+                logic [7:0] got;
+                got = sdr.u_part.peek(a) & 8'hFF;
+                if (got !== img_r[a]) begin
+                    if (bad < 8) $display("IMG BAD %05x ref=%02x got=%02x", a, img_r[a], got);
+                    bad++;
+                end
+            end
+        end
+        $display("IMG DONE t=%0t pc=%05x bad=%0d irqs=%0d", $time, zet_pc, bad, img_irqs);
+        if (bad == 0 && (img_irq == 0 || img_irqs != 0))
+            $display("=== PASS tb_mem_perf img ===");
+        else
+            $display("=== FAIL tb_mem_perf img ===");
+        $finish;
+    end
+
+    initial begin
+        #800_000_000;                       // 800 ms of sim time ceiling
+        $display("GLOBAL TIMEOUT  diverged=%0d stray=%0d grants=%0d midcmd=%0d ph=%0d pc=%05x uncov=%0d pfbad=%0d rdfor=%0d witfor=%0d irq=%02x",
+                 diverged, stray, grants, grants_midcmd, cur_phase, zet_pc,
+                 c_uncov, c_pbad, c_rd_foreign, c_wit_foreign,
+                 sdr.u_part.peek(20'h070A));
+        for (int k = 31; k >= 1; k--)
+            $display("   pc-%02d %05x", k, pc_ring[(pc_ptr - k) & 31]);
+        for (int k = 15; k >= 1; k--)
+            $display("   op-%02d %s %05x %02x", k,
+                     op_wr[(op_ptr - k) & 15] ? "WR" : "RD",
+                     op_addr[(op_ptr - k) & 15],
+                     op_data[(op_ptr - k) & 15]);
         $fflush;
         $finish;
     end

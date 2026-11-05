@@ -199,14 +199,15 @@
 #define RHY_WAV_SLOT_BASE 14  // deferload ids 14-19: per-voice *.wav sources
 #define FDDSND_SLOT_ID   20   // deferload, filename-bound: fddsnd.bin mechanism samples (s8/24k)
 // Bytes to declare for the nonvolatile Settings slot so it flushes on first boot.
-// The whole upper half of the 1 KB bridge RAM: the global settings blob plus
+// Words 128-255 of the bridge RAM (bytes 512-1023): the global settings blob plus
 // the per-disk profile table (settings_ui.c).
 #define SETTINGS_SLOT_BYTES 512
 
 // Shared disk-bridge sector transfer (disk_tds.c). The length is the media's
 // sector width, because the image file is laid out in that width.
 // tds_transfer_to lands the bytes at an explicit bridge-RAM byte address --
-// the read path's prefetch buffer lives at FDD_BRIDGE_BASE + 1024.
+// a 1024-byte sector is staged at FDD_BRIDGE_BASE + 1024 and the read path's
+// prefetch buffer lives at FDD_BRIDGE_BASE + 2048.
 int tds_transfer(uint32_t slot, uint32_t offset, uint32_t dir, uint32_t bytes);
 int tds_transfer_to(uint32_t slot, uint32_t offset, uint32_t dir, uint32_t bytes,
                     uint32_t bridge_addr);
@@ -225,7 +226,12 @@ extern uint16_t rhythm_start[6], rhythm_end[6];
 // drive_sound_present reads OMGMT_CAPS bit0 -- 0 on a slim (USE_ADPCM=0)
 // OPNA build, where the voices and the store do not exist.
 int  rhythm_load(void);
+#ifdef ENABLE_OPNA
 int  drive_sound_present(void);
+#else
+// No OPNA in the bitstream (debug profile): no voices, no drive kit.
+static inline int drive_sound_present(void) { return 0; }
+#endif
 int  drive_sound_load(void);
 void drive_sound_poll(void);
 
@@ -242,7 +248,7 @@ uint32_t fdd_mounted_sectors(uint32_t drive);
 // Service entry points (fdd_service.c, scsi_service.c). PC-98 only -- the
 // board is a PC-9801-55.
 void scsi_init(void);
-void scsi_mount(uint32_t sectors);
+int  scsi_mount(uint32_t bytes);    // the Hard Disk slot's file size; 0 = retry
 void scsi_poll(void);
 void fdd_poll(void);
 

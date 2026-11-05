@@ -317,6 +317,7 @@ module tb_ram_dma_fill_late;
                           & ab_mem_wr_n & all_mem_rd_n;
 
     RAM u_ram (
+        .dma_hold(1'b0),
         .clock(clk), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram_w),
         .gvram_page1_flag(1'b0),
@@ -335,7 +336,6 @@ module tb_ram_dma_fill_late;
         .access_complete(access_complete_w),
         .ram_address_select_n(ram_address_select_n),
         .write_taken(),
-        .dbg_watch_addr(20'hFFFFF),
         .dbg(), .dbg2(ram_dbg2), .dbg3(ram_dbg3),
         .sdram_address(s_a), .sdram_cke(s_cke), .sdram_cs(s_cs),
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
@@ -357,7 +357,11 @@ module tb_ram_dma_fill_late;
         .ramimg_req(ri_req), .ramimg_we(1'b0), .ramimg_addr(ri_addr),
         .ramimg_len(4'd0), .ramimg_wdata(16'h0000),
         .ramimg_ack(ri_ack), .ramimg_rvalid(ri_rvalid),
-        .ramimg_rdata(ri_rdata), .ramimg_done(ri_done)
+        .ramimg_rdata(ri_rdata), .ramimg_done(ri_done),
+        .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
+        .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
+        .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
+        .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len()
     );
     assign memory_access_ready = ram_ready_w;
 

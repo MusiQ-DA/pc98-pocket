@@ -32,9 +32,11 @@ A V30-class PC-9801: the VX/UV-era machine, not a 9821. Concretely:
 - **Floppy**: two drives, images mounted from Pocket dataslots, with a
   built-in 3-mode option ROM so 1.44 MB media boot like the real BIOS
   expects.
-- **Hard disk**: a PC-9801-55-class SCSI board at 0CC0h-0CC7h backed by
-  hdi/nhd images. (The disk-BIOS INT 1Bh ROM that makes it bootable is in
-  progress; images already work with software that drives 0CC0h.)
+- **Hard disk**: a PC-9801-55-class SCSI board at 0CC0h-0CC7h with its
+  INT 1Bh disk BIOS at D2000, backed by .hdi / .nhd / .hdd (Virtual98) /
+  .hdn (flat) images with 512-byte sectors, each served with its own
+  geometry. It boots after the floppies, like the real BIOS's standard
+  order, or alone with Boot Device = SCSI HD.
 - **Input**: PC-98 keyboard interface (8251 at 41h/43h) driven from the
   Pocket's buttons -- remappable in Settings -- plus an on-screen
   keyboard, and the PC-98 bus mouse.

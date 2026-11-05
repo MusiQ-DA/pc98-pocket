@@ -223,7 +223,11 @@ module pocket_keyboard #(
 
     always @(posedge clk) begin
         if (reset) begin
-            btn_s0 <= 15'd0; btn_s <= 15'd0; btn_prev <= 15'd0; btn_mask <= 15'd0; btn_idx <= 4'd0;
+            // A button still down through a reset stays masked until released, as
+            // when the OSD closes: "Reset PC" (or a disk pick) confirmed with A
+            // used to come out of reset typing A's Return into the BIOS buffer,
+            // which BASIC then took at "How many files?".
+            btn_s0 <= 15'd0; btn_s <= 15'd0; btn_prev <= 15'd0; btn_mask <= btn_gated; btn_idx <= 4'd0;
             usb_stb_d <= 1'b0; vkb_stb_d <= 1'b0; q_wr <= {QW{1'b0}};
         end else begin
             // OSD open: gate all keys and hold still-down buttons masked until released. The mask is

@@ -12,11 +12,21 @@ on:
       - 'NOTICE.md'
       - 'tools/**'
   workflow_dispatch:
+    inputs:
+      profile:
+        description: >-
+          debug = the JTAG measurement build (fpga/config.tcl as committed:
+          PC98_JTAG on, every scripts/jtag_* flow works); release = the SD
+          build, PC98_JTAG off -- the probe, hub and taps go and their
+          floor is free
+        type: choice
+        options: [debug, release]
+        default: debug
 
 # A newer push on the same ref supersedes a running build -- the old
 # bitstream would never be fetched anyway.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.profile || 'debug' }}
   cancel-in-progress: true
 
 # permissions stay minimal: every job only reads.
@@ -27,8 +37,12 @@ permissions:
 jobs:
 
   sim:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Pinned: ubuntu-latest moved to Verilator 5.032, whose --timing
+    # scheduling breaks tb_sdram_mp's write/read-back (all-zero data) on
+    # RTL that passes 5.020 (this image) and 5.052 alike.  The benches are
+    # calibrated against 5.020; bump deliberately, not by runner drift.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -54,6 +68,11 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y nasm
           ./scripts/check_scsi_rom.sh
+
+      - name: the SCSI service mounts flat/NHD/HDI/VHD images and states their geometry
+        # firmware/scsi_service.c itself, built for the host against a model
+        # of the pc98_scsi mailbox and the dataslot engine.
+        run: ./scripts/sim_scsi_fw.sh
 
       - name: SDRAM controller — integrity and single-port bandwidth
         run: |
@@ -107,12 +126,25 @@ jobs:
           ./obj_dma/r | tee dma.log
           grep -q "=== PASS ===" dma.log
 
+      - name: RAM.sv write order under a random DMA/CPU mix
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_ram_mix_stress \
+            -Isim -I$S -I$S/chipset/HDL \
+            sim/tb_ram_mix_stress.sv sim/sdram_model.sv \
+            $S/chipset/HDL/RAM.sv $S/sdram_shim.sv $S/sdram_mp.sv \
+            -o r --Mdir obj_mix
+          for s in 1 2 8 13; do
+            ./obj_mix/r +seed=$s +n=300000 | tee mix$s.log
+            grep -q "=== PASS tb_ram_mix_stress ===" mix$s.log
+          done
+
       - name: Posted-write durability — no guest byte lost, normal and fast pace
         run: |
-          S=fpga/core; K=$S/chipset/HDL; Z=$S/zet
+          S=fpga/core; K=$S/chipset/HDL; Z8=$S/z86
           verilator --binary --timing -Wno-fatal --top-module tb_mem_perf \
             --threads 4 -MAKEFLAGS OPT_FAST=-O2 \
-            -Isim -I$S -I$S/common -I$Z -I$K -I$K/i8288/HDL \
+            -Isim -I$S -I$S/common -I$Z8 -I$K -I$K/i8288/HDL \
             sim/tb_mem_perf.sv \
             $K/RAM.sv $K/Ready.sv $K/ce_generator.sv $K/i8288/HDL/i8288.sv \
             $S/sdram_shim.sv $S/sdram_mp.sv \
@@ -120,22 +152,45 @@ jobs:
             $S/pc98_gdc_mode2.sv \
             $S/pc98_gvram_display.sv $S/pc98_video_timing.sv \
             sim/sdram_board_model.sv sim/sdram_model.sv \
-            $Z/zet.v $Z/zet_core.v $Z/zet_fetch.v $Z/zet_decode.v \
-            $Z/zet_exec.v $Z/zet_memory_regs.v $Z/zet_micro_data.v \
-            $Z/zet_micro_rom.v $Z/zet_regfile.v $Z/zet_wb_master.v \
-            $Z/zet_addsub.v $Z/zet_alu.v $Z/zet_arlog.v \
-            $Z/zet_bitlog.v $Z/zet_conv.v $Z/zet_div_su.v \
-            $Z/zet_div_uu.v $Z/zet_fulladd16.v $Z/zet_jmp_cond.v \
-            $Z/zet_muldiv.v $Z/zet_mux8_1.v $Z/zet_mux8_16.v \
-            $Z/zet_next_or_not.v $Z/zet_nstate.v $Z/zet_opcode_deco.v \
-            $Z/zet_othop.v $Z/zet_rxr8.v $Z/zet_rxr16.v \
-            $Z/zet_shrot.v $Z/zet_signmul17.v \
-            $S/zet_cpu_bridge.sv \
+            $Z8/z86_package.sv $Z8/fetch.sv $Z8/decode.sv \
+            $Z8/execute.sv $Z8/write_back.sv $Z8/regfile.sv \
+            $Z8/divider.sv $Z8/z86_cache.sv $Z8/z86.sv \
+            $S/cpu_bus_bridge.sv \
             -o perf
           ./obj_dir/perf | tee perf0.log
           grep -q "=== PASS tb_mem_perf ===" perf0.log
           ./obj_dir/perf +speed=3 +GRANT | tee perf3.log
           grep -q "=== PASS tb_mem_perf ===" perf3.log
+
+      - name: z86 instruction pairs and interrupts, free and with priced cache hits
+        run: |
+          # The paced settings run z86_cache priced (2 clocks + waits per
+          # 286 bus cycle): every regression must hold with the hits held
+          # back as well as with them free.
+          bash scripts/sim_z86_tests.sh
+          Z86_EXTRA="+pace +pacew=1" bash scripts/sim_z86_tests.sh
+
+      - name: z86_cache snoop and whole-line install races
+        run: |
+          # The FDC-DMA snoop contract, and a combine bank's line install
+          # against a store to another line at the same index (#1047 10 MHz).
+          bash scripts/sim_z86_cache_snoop.sh
+          bash scripts/sim_z86_cache_install.sh
+
+      - name: instruction costs against the 80286 data sheet (10 MHz), held to the baseline
+        run: |
+          # Prints measured CPU clocks per probe next to the data-sheet count;
+          # fails if any row's ratio moves more than 25% from
+          # sim/cycle_table_baseline.txt (update it with --update on purpose).
+          bash scripts/sim_cycle_table.sh --check 1
+
+      - name: CPUBENCH's Dhrystone kernel — free, paced, and the whole 10 MHz / Turbo path under a timer IRQ
+        run: |
+          # A real program's kernel (testdisk/cpubench.lzh) against Unicorn:
+          # tb_z86_loop free / +pace / +pace +pacew=1 with interrupts, then
+          # tb_mem_perf +img (the bench binary built above) at 10 MHz and
+          # Turbo through bridge + 8288 + RAM.sv + SDRAM with the cache on.
+          PERF=./obj_dir/perf bash scripts/sim_dhry.sh
 
       - name: NEC-style EMS board — 08E1-08E9 windows bank into SDRAM
         run: |
@@ -339,6 +394,13 @@ jobs:
           ./obj_itf/t | tee itf.log
           grep -q "RESULT: PASS" itf.log
 
+      - name: crash trap survives the ITF hand-over (stub at 0000:0000)
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_itf_stubwin \
+            -Isim sim/tb_itf_stubwin.sv -o t --Mdir obj_stub
+          ./obj_stub/t | tee stub.log
+          grep -q "RESULT: PASS" stub.log
+
       - name: keyboard 8251 answers the way the ROMs ask
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_kbd8251 \
@@ -357,6 +419,15 @@ jobs:
             -o jk --Mdir obj_jk
           ./obj_jk/jk | tee jk.log
           grep -q "RESULT: PASS" jk.log
+
+      - name: JTAG arming needs addr bit 7 (0x86 arms slot 6, bare 0x06 reads)
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_jtag_trig \
+            -Isim -Ifpga/core \
+            sim/tb_pc98_jtag_trig.sv fpga/core/pc98_jtag_probe.sv \
+            -o jt --Mdir obj_jt
+          ./obj_jt/jt | tee jt.log
+          grep -q "RESULT: PASS" jt.log
 
       - name: the virtual keyboard's tables are sane
         run: python3 scripts/check_vkb_layout.py
@@ -419,19 +490,119 @@ jobs:
           ./obj_fdcglue/fg | tee fdcglue.log
           grep -q "PASS tb_pc98_fdc_glue" fdcglue.log
 
+      - name: the 71071 must not lose a register write to the strobe tail
+        run: |
+          # The third deadlock: cpu_bus_bridge arms the next access inside
+          # the i8288's write-strobe tail, so the address/data on the pins
+          # (and the DMAC's chip select) can switch to the next cycle's
+          # before IOW rises. The 71071's write pulse used to be cancelled
+          # by the CS blip -- a lost 0x15 unmask left the FDC's DRQ pending
+          # against a masked channel and the DMAC parked in SI forever
+          # (SuperDepth's 6-36 s in-game freeze). The bench runs the real
+          # BUS_ARBITER (real 71071 on its own 92/201 clock, real grant
+          # chain) with Peripherals' DRQ shaper verbatim, under both tail
+          # shapes, both FDC transfer modes and all four CPU speeds.
+          bash scripts/sim_fdc_si_stall.sh | tee fdc_si_stall.log
+          test "$(grep -c ': PASS$' fdc_si_stall.log)" = 16
+
+      - name: a guest OUT parked across a DMA grant cannot land inside DACK
+        run: |
+          # The floppy-write 0x20 byte (SuperDepth's FAT corruption): the
+          # bridge arms OUT 00h,20h (the IRQ0 EOI) in the half-CE before
+          # AEN rises, the 8288 parks the command through the grant, and
+          # the old AEN fell with the 71071's HRQ -- half a DMA clock
+          # before its DACK -- so the parked IOW fired inside the DACK
+          # window, re-latched write_to_fdd, and floppy.v took 0x20 as
+          # the DMA byte. Real bridge + real BUS_ARBITER/8288/71071/READY,
+          # Peripherals' write_to_fdd and ack equations verbatim; all
+          # four CPU speeds, two seeds each.
+          bash scripts/sim_fdc_dma_iow_stray.sh | tee fdc_iow_stray.log
+          test "$(grep -c ': PASS$' fdc_iow_stray.log)" = 8
+
+      - name: the 71071 request-side snapshot packs the layout the hunt decodes
+        run: |
+          S=fpga/core
+          # The run#977 freeze was decoded against a dbg_mask layout that
+          # never reached the metal: a 19-bit concat into a [22:0] port
+          # (zero-extension) stacked with a 36-bit concat into a [31:0]
+          # port (truncation) shipped shifted fields -- bit23 read as
+          # autoinit[3] was actually dreq_sense_active_low. The bench
+          # drives the real register-write path and pins every field at
+          # its documented position in probe slot 0xA8.
+          H=$S/chipset/HDL
+          U=$H/upd71071/HDL
+          verilator --binary --timing -Wno-fatal --top-module tb_71071_dbgmask \
+            -I$H -I$U \
+            sim/tb_71071_dbgmask.sv \
+            $U/upd71071.sv $U/upd71071_Bus_Control_Logic.sv \
+            $U/upd71071_Priority_Encoder.sv \
+            $U/upd71071_Address_And_Count_Registers.sv \
+            $U/upd71071_Timing_And_Control.sv \
+            -o dm --Mdir obj_dbgmask
+          ./obj_dbgmask/dm | tee dbgmask.log
+          grep -q "PASS tb_71071_dbgmask" dbgmask.log
+
+      - name: the wedge triggers catch poll, DRQ-stall and wild fetches
+        run: |
+          # Unit-level copy of core_top's detector block (horizon
+          # narrowed): liveness on the fetch cursor, the poll-trap window
+          # (slot 0x87), the FDC DRQ-stall level, and the run#977 wild-
+          # fetch trigger -- a cursor bouncing inside the IVT moves the
+          # whole time, so only the zone check can catch it, and the f0
+          # term must stay stripped (a port-0xF0 write is legitimate).
+          verilator --binary --timing -Wno-fatal --top-module tb_wedge_trig \
+            sim/tb_wedge_trig.sv -o wt --Mdir obj_wtrig
+          ./obj_wtrig/wt | tee wedge_trig.log
+          grep -q "PASS tb_wedge_trig" wedge_trig.log
+
+      - name: the reboot catch freezes the trail and the witness names the source
+        run: |
+          # Unit-level copy of the spontaneous-reboot catch: the reset-
+          # source witness (sticky rise map over reset_wire's eight terms,
+          # cleared by wr 0x8A 0x01), the FFF0 reboot freeze (the seam
+          # entry lands as the last tlog record and the POST that follows
+          # records nothing), pc_hist trail survival through the reset and
+          # the POST's own OUT 0F0h (the old wipe-race), the walk case
+          # (rings freeze, witness stays dark) and the slot-0x06 re-arm
+          # guard under a parked reset vector.
+          verilator --binary --timing -Wno-fatal --top-module tb_rst_witness \
+            sim/tb_rst_witness.sv -o rw --Mdir obj_rwit
+          ./obj_rwit/rw | tee rst_witness.log
+          grep -q "PASS tb_rst_witness" rst_witness.log
+
+      - name: a sub-period PLL unlock blip cannot reboot the guest
+        run: |
+          # Unit-level copy of the spontaneous-reboot FIX: RESET is the raw
+          # analog 'locked' output of two PLLs, and the guest's stretch
+          # flops used to take it on an async set -- so a nanosecond blip
+          # between clk_chipset posedges cold-booted the machine while the
+          # posedge-sampled witness stayed dark (the SuperDepth reboot,
+          # seen=0x00).  The terms now run through synch_3: the blip is
+          # still caught by the 0x9D raw-reset witness (raw++ real+0) but
+          # the guest never resets; a sustained unlock still does.
+          verilator --binary --timing -Wno-fatal --top-module tb_rst_glitch \
+            sim/tb_rst_glitch.sv -o rg --Mdir obj_rgli
+          ./obj_rgli/rg | tee rst_glitch.log
+          grep -q "PASS tb_rst_glitch" rst_glitch.log
+
       - name: RAM-image serve keeps sector bytes in order under firmware mgmt traffic
         run: |
           S=fpga/core
-          # The whole serve chain with the real arbiter: fdd_ramimg pushes
-          # FIFO bytes through the management bus while a firmware-traffic
-          # generator lands non-F2 reads on the push cycles. Without the
-          # mgmt_arb strobe fence those reads arrive as nibble-F FIFO pops
-          # and the guest receives the sector rotated -- the regression this
-          # step locks out.
+          # The whole serve chain against the REAL six-port SDRAM
+          # controller and model, with a display-fetch-shaped contender on
+          # port D and firmware-traffic collisions on the mgmt bus:
+          # fdd_ramimg pushes FIFO bytes through mgmt_arb while floppy.v
+          # drains them through the DMA model, multi-sector reads included
+          # (the fill/drain alternation a sequential file load takes).
+          # Without the mgmt_arb strobe fence the firmware reads arrive as
+          # nibble-F FIFO pops and the sector lands rotated; a push that
+          # presents the shared SDRAM read register combinationally loses
+          # the half-cycle race and lands the previous transaction's word.
           verilator --binary --timing -Wno-fatal --top-module tb_ramimg_fdc \
             -Isim \
             $S/common/floppy.v $S/common/simple_fifo.v \
             $S/mgmt_arb.sv $S/fdd_ramimg.sv \
+            $S/sdram_shim.sv $S/sdram_mp.sv sim/sdram_model.sv \
             sim/stub_dcfifo.sv sim/tb_fdd_dma_model.sv \
             sim/tb_ramimg_fdc.sv -o rf --Mdir obj_ramimgfdc
           ./obj_ramimgfdc/rf | tee ramimgfdc.log
@@ -496,6 +667,12 @@ jobs:
             $S/pc98_egc.sv -o gs --Mdir obj_gseq
           ./obj_gseq/gs | tee gseq.log
           grep -q "PASS tb_pc98_gvram_seq" gseq.log
+          # and with the posted GRCG RMW write core_top ships (PWPOST)
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_gvram_seq \
+            -GPW=1 -Isim -I$S sim/tb_pc98_gvram_seq.sv $S/pc98_gvram_seq.sv \
+            $S/pc98_egc.sv -o gs --Mdir obj_gseq_pw
+          ./obj_gseq_pw/gs | tee gseq_pw.log
+          grep -q "PASS tb_pc98_gvram_seq" gseq_pw.log
 
       - name: the service-channel launch captures the trigger's own byte
         # Boots the REAL softcpu_subsystem (picorv32 + sprom + launch block)
@@ -541,6 +718,16 @@ jobs:
             -o gd --Mdir obj_gdisp
           ./obj_gdisp/gd | tee gdisp.log
           grep -q "PASS tb_pc98_gvram_display" gdisp.log
+
+      - name: SuperDepth's Clear! wipe shows np21w's whole-frame PRAM, no seam
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal -DNEW_RTL \
+            --top-module tb_gvram_depth_wipe \
+            -Isim -I$S sim/tb_gvram_depth_wipe.sv $S/pc98_gvram_display.sv \
+            -o dw --Mdir obj_dwipe
+          ./obj_dwipe/dw | tee dwipe.log
+          grep -q "PASS tb_gvram_depth_wipe" dwipe.log
 
       - name: the EGC's colour, raster ops and access page match np21w
         run: |
@@ -633,6 +820,16 @@ jobs:
       - name: Pull Quartus image
         run: docker pull raetro/quartus:pocket
 
+      - name: Build profile
+        run: |
+          P="${{ inputs.profile || 'debug' }}"
+          echo "profile: $P"
+          if [ "$P" = release ]; then
+            # the SD build: no JTAG probe (firmware does not depend on it)
+            sed -i 's/^set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"/# (release profile) &/' fpga/config.tcl
+          fi
+          grep -n "VERILOG_MACRO" fpga/config.tcl
+
       - name: Compile (quartus_sh --flow compile)
         id: compile
         run: |
@@ -717,10 +914,48 @@ jobs:
             fpga/output_files/ap_core.fit.rpt 2>/dev/null || true
           ls -la fpga/output_files/ 2>/dev/null || true
 
+      - name: Annotate fit, timing and errors (readable through the API)
+        if: always()
+        run: |
+          # Job logs live on blob storage some sessions cannot reach; check-run
+          # annotations come back through api.github.com. One notice carries
+          # the fit and the worst slacks, one error the first compile errors.
+          enc() { sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}'; }
+          R=fpga/output_files
+          {
+            grep -E "Logic utilization|Total LABs|Total registers|Total block memory bits|M10K|Fitter Status" $R/ap_core.fit.rpt 2>/dev/null | head -8
+            for f in $R/ap_core.sta.summary; do
+              [ -f "$f" ] && awk '/^Type/{t=$0} /^Slack/{print t " -> " $0}' "$f" | sort -t: -k3 -g | head -6
+            done
+          } | enc > /tmp/fit.txt || true
+          [ -s /tmp/fit.txt ] && echo "::notice title=fit and timing::$(cat /tmp/fit.txt)"
+          # The biggest entities (ALMs needed), for deciding what to park.
+          python3 - "$R/ap_core.fit.rpt" > /tmp/ent.txt <<'PY' || true
+          import re, sys
+          rows, on = [], False
+          for l in open(sys.argv[1], errors="ignore"):
+              if "Fitter Resource Utilization by Entity" in l: on = True; continue
+              if on and rows and l.strip() == "": break
+              if on and l.startswith(";") and "|" in l:
+                  c = [x.strip() for x in l.strip().strip(";").split(";")]
+                  try: alm = float(c[1].split("(")[0].replace(",", ""))
+                  except Exception: continue
+                  rows.append((alm, c[0].replace("|", "").strip()[:60]))
+          top = sorted(rows, reverse=True)
+          shown = top[:80] + [r for r in top[80:] if "sld" in r[1].lower() or "jtag" in r[1].lower()]
+          for alm, name in shown:
+              print(f"{alm:8.1f} {name}")
+          PY
+          [ -s /tmp/ent.txt ] && echo "::notice title=entities by ALM::$(enc < /tmp/ent.txt)"
+          grep -hE "^(Error|Critical Warning)|Internal Error|Fatal Error|Cannot fit|Can.t fit" fpga/compile_*.log 2>/dev/null \
+            | grep -vE "^\s*Info" | head -12 | enc > /tmp/err.txt || true
+          [ -s /tmp/err.txt ] && echo "::error title=quartus errors::$(cat /tmp/err.txt)"
+          true
+
       - name: Upload bitstream and reports
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bitstream
+          name: ${{ (inputs.profile || 'debug') == 'release' && 'bitstream-release' || 'bitstream' }}
           if-no-files-found: error
           path: |
             fpga/output_files/*.sof

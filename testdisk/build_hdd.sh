@@ -1,43 +1,78 @@
 #!/usr/bin/env bash
-# build_hdd.sh -- assemble hdd_test.asm and pack it into a raw SCSI HDD
-# test image for the Hard Disk dataslot.
+# build_hdd.sh -- assemble hdd_test.asm and pack it into SCSI HDD test images
+# for the Hard Disk dataslot, one per format the firmware mounts
+# (firmware/scsi_service.c, scsi_probe -- np21w fdd/sxsihdd.c's set):
 #
-#   hdd_test.bin  the IPL (<= 512 bytes; scsi_rom.asm loads two sectors at
-#                 LBA 0 to 1FC0:0000 and executes offset 0)
-#   hdd_test.hdd  raw image: 256 cyl x 8 heads x 25 spt x 512 B = 26,214,400 B
+#   hdd_test.hdn  flat, no header: np21w's -55 geometry 8 heads x 25 spt,
+#                 128 cylinders                        (25600 sectors, 12.5 MB)
+#   hdd_test.nhd  T98-Next: 512-byte header, 200 cyl x 8 heads x 17 spt
+#                                                      (27200 sectors, 13.3 MB)
+#   hdd_test.hdi  Anex86: 4096-byte header, 120 cyl x 8 heads x 32 spt
+#                                                      (30720 sectors, 15 MB)
 #
-# The SCSI service (firmware/scsi_service.c) serves the file as flat
-# 512-byte sectors -- lba*512 straight into target-dataslot reads, with no
-# .hdi/.nhd header parsing. The option ROM reports 8 surfaces x 25 spt and
-# cylinders = sectors/200 (and ignores images under 200 sectors), so the
-# size here is a whole number of cylinders: READ CAPACITY answers 51199.
+# Each image carries the IPL (hdd_test.bin, up to two sectors at LBA 0 --
+# scsi_rom.asm loads 1024 bytes to 1FC0:0000), a "GEO!" + LBA stamp in the
+# LAST sector of its C x H x S, and scratch at LBA 2 the IPL writes and puts
+# back. The three geometries differ on purpose: the IPL's CHS read of
+# C-1/H-1/S-1 only finds the stamp when the ROM uses the image's own
+# geometry, which is the header path the flat-only firmware used to lack.
 #
-# Mount requires only a non-empty slot (main.c: sectors = slot_bytes(5)/512).
-# On the Pocket, copy hdd_test.hdd to Assets/pc98/common/ and pick it via
-# the framework menu -> Hard Disk; the pick reloads the core and the ROM's
-# POST probe then mounts and boots it. Proof on screen: "SCSI HDD IPL OK".
+#   testdisk/build_hdd.sh            the three images above, in testdisk/
+#   testdisk/build_hdd.sh --sim DIR  small ones for scripts/sim_scsi_boot.sh
+#                                    (the bench holds 8 MB of image)
+#
+# On the Pocket: copy one to Assets/pc98/common/ on the SD card, pick it in
+# the core's menu -> Hard Disk, and see scripts/jtag_scsiboot.sh for the
+# check. Proof on screen: row 0 "SCSI HDD IPL OK", row 2 ending "PASS".
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-nasm -f bin -o hdd_test.bin hdd_test.asm
-
-size=$(stat -f%z hdd_test.bin)
-# scsi_rom.asm post_boot lands TWO sectors (0x400 bytes) at 1FC0:0000, but
-# keeping the IPL inside the first 512 bytes means nothing depends on the
-# second sector arriving.
-if [ "$size" -gt 512 ]; then
-    echo "hdd_test.bin is $size bytes -- over the 512-byte IPL budget" >&2
-    exit 1
+OUT=.
+SIM=0
+if [ "${1:-}" = "--sim" ]; then
+    SIM=1
+    OUT="$2"
+    mkdir -p "$OUT"
 fi
 
-python3 - <<'PY'
-SECTOR = 512
-CYL, HEADS, SPT = 256, 8, 25
-TOTAL = CYL * HEADS * SPT * SECTOR          # 26,214,400 bytes = 51,200 sectors
-code = open("hdd_test.bin", "rb").read()
-img  = bytearray(TOTAL)                     # unwritten sectors read as 0
-img[:len(code)] = code
-open("hdd_test.hdd", "wb").write(img)
-print("hdd_test.hdd: %d bytes (%d cyl x %d heads x %d spt, code %d)"
-      % (len(img), CYL, HEADS, SPT, len(code)))
+nasm -f bin -o "$OUT/hdd_test.bin" hdd_test.asm
+
+SIM="$SIM" OUT="$OUT" python3 - <<'PY'
+import os, struct
+out, sim = os.environ["OUT"], os.environ["SIM"] == "1"
+code = open(os.path.join(out, "hdd_test.bin"), "rb").read()
+assert len(code) <= 1024, "IPL over two sectors"
+
+def body(c, h, s):
+    n = c * h * s
+    img = bytearray(n * 512)
+    img[:len(code)] = code
+    img[2*512:2*512+4] = b"SCR!"
+    last = n - 1
+    img[last*512:last*512+8] = b"GEO!" + struct.pack("<I", last)
+    return img
+
+def emit(name, data):
+    p = os.path.join(out, name)
+    open(p, "wb").write(data)
+    print("%-14s %9d bytes" % (name, len(data)))
+
+# Sizes: full images for the card, a few MB each for the bench.
+flat_c, nhd, hdi = (20, (40, 8, 17), (24, 8, 32)) if sim else \
+                   (128, (200, 8, 17), (120, 8, 32))
+
+emit("hdd_test.hdn", body(flat_c, 8, 25))
+
+c, h, s = nhd
+hdr = bytearray(512)
+hdr[0:15] = b"T98HDDIMAGE.R0\0"
+hdr[0x10:0x10+28] = b"PC-98 Pocket SCSI test image"
+struct.pack_into("<IIHHH", hdr, 0x110, 512, c, h, s, 512)
+emit("hdd_test.nhd", bytes(hdr) + body(c, h, s))
+
+c, h, s = hdi
+b = body(c, h, s)
+hdr = bytearray(4096)
+struct.pack_into("<8I", hdr, 0, 0, 0, 4096, len(b), 512, s, h, c)
+emit("hdd_test.hdi", bytes(hdr) + b)
 PY

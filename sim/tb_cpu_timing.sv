@@ -14,7 +14,7 @@
 // two faster cycle-paced steps -- none of them anywhere near the 8088's 4.77
 // MHz this bench used to model.
 //
-// The contract the bridge actually runs (zet_cpu_bridge.sv):
+// The contract the bridge actually runs (cpu_bus_bridge.sv):
 //   * the 8288 strobes processor_status on cpu_ce_negedge -- commands assert
 //     on a negedge
 //   * READY is sampled at every cpu_ce_posedge from the third T state on;
@@ -83,6 +83,7 @@ module tb_cpu_timing;
     // RAM is wired as Chipset.sv wires it: the wait counter ticks on
     // cpu_ce_negedge and reloads from the generator's own wait-cycle outputs.
     RAM dut (
+        .dma_hold(1'b0),
         .clock(clock), .reset(reset),
         .enable_sdram(1'b1), .initilized_sdram(initilized_sdram),
         .address(address), .internal_data_bus(internal_data_bus),
@@ -107,7 +108,11 @@ module tb_cpu_timing;
         .vram_rd_wait_cycle(vram_rd), .vram_wr_wait_cycle(vram_wr),
         .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),
         .ramimg_len(4'h0), .ramimg_wdata(16'h0000),
-        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done()
+        .ramimg_ack(), .ramimg_rvalid(), .ramimg_rdata(), .ramimg_done(),
+        .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
+        .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
+        .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
+        .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len()
     );
 
     sdram_board_model #(.T_RCD(1), .T_RP(2), .T_WR(2), .T_RFC(4),

@@ -10,7 +10,7 @@ measured; two countermeasures are implemented and re-measured.
 
 ## Arbiter map
 
-Path: `Zet CPU -> zet_cpu_bridge (8288 byte engine, CE-paced) ->
+Path: `z86 CPU -> cpu_bus_bridge (8288 byte engine, CE-paced) ->
 RAM.sv -> sdram_shim.sv -> sdram_mp.sv -> board SDRAM`.
 
 `fpga/core/sdram_mp.sv` is the multiport controller (`state_t` at
@@ -89,7 +89,8 @@ the end.
 init.  The guest reaches the ITF's GDC-init + vsync-poll loop
 (PC `F8483`-`F848B`, polling port 0x60/GDC FIFO) — a steady mix of fetches,
 data r/w and I/O; it does not reach DOS or an app in one chunk.  CPU is the
-Zet free-running at clk_chipset; its *bus cycles* are paced by
+Zet free-running at clk_chipset (at measurement time; the tree now carries
+z86 behind the same bridge); its *bus cycles* are paced by
 the 8288 byte engine on the cpu_ce train (default speed = 4.915 MHz mode),
 so `zwb pending` includes deliberate T-state pacing, not just SDRAM time.
 

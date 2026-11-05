@@ -89,6 +89,7 @@ module tb_pc98_egc_golden;
     wire        mem_page1;
 
     pc98_gvram_seq dut (
+        .rmwbuf_off(1'b0),
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_addr(cpu_addr), .cpu_wdata(cpu_wdata),
@@ -114,7 +115,7 @@ module tb_pc98_egc_golden;
         .mem_done(mem_done), .mem_own(1'b1), .mem_ready(mem_ready),
         // This model treats a presented write as held -- no park queue --
         // so the drain witness is "the strobe is on the pins".
-        .mem_wr_taken(mem_wr), .cpu_wr_taken()
+        .mem_wr_taken(mem_wr), .pf_beat_v(1'b0), .pf_beat_dat(8'h00), .cpu_wr_taken(), .cpu_rd_own()
     );
 
     task automatic egc_set(input [3:0] rg, input [7:0] v);

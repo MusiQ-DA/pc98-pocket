@@ -244,9 +244,11 @@ cp dist/pc98/Platforms/* "$VOL/Platforms/" 2>/dev/null || true
 # auto-bind for deferload slots, it just makes same-name picks no-ops.
 mkdir -p "$VOL/Assets/pc98/common"
 [ -f testdisk/draw_test.hdm ] && cp -f testdisk/draw_test.hdm "$VOL/Assets/pc98/common/"
-# Same picker directory for the raw SCSI test disk (testdisk/build_hdd.sh);
-# the Hard Disk slot browses hdi/nhd/thd/hdd.
-[ -f testdisk/hdd_test.hdd ] && cp -f testdisk/hdd_test.hdd "$VOL/Assets/pc98/common/"
+# Same picker directory for the SCSI test disks (testdisk/build_hdd.sh: one
+# per image format); the Hard Disk slot browses hdi/nhd/hdd/hdn.
+for f in testdisk/hdd_test.hdn testdisk/hdd_test.nhd testdisk/hdd_test.hdi; do
+    if [ -f "$f" ]; then cp -f "$f" "$VOL/Assets/pc98/common/"; fi
+done
 # Rhythm voices come two ways: put the six source WAVs here under their
 # canonical names (2608_bd.wav etc. -- the data.json slots pin those exact
 # filenames, no picking) and firmware encodes them at boot -- easiest --

@@ -16,7 +16,12 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # rhythm voices and the drive-mechanism kit that borrowed them stay silent
 # -- OMGMT_CAPS bit0 reads 0, which is what the firmware loaders key on.
 # USE_ADPCM=1 brings the whole path back unchanged once floor space exists.
-set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
+# DEBUG PROFILE (PC98_JTAG=1 below): the OPNA is OFF so the probe, its rings
+# and the z86 bring-up fit -- jt12 alone is ~1.5k ALMs. A release build flips
+# both switches: ENABLE_OPNA on, PC98_JTAG off (the non-JTAG build frees
+# ~4.6k ALMs, measured on measure-nojtag). The firmware follows this line
+# (firmware/Makefile reads it), so rebuild firmware.vh after flipping it.
+# set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 
 # JTAG debug build. OFF for the current fit: the SLD hub, the probe mux,
 # the write-pipe and key injection together cost enough ALMs to put the
@@ -29,6 +34,9 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 # ON for the Zet build: the swap freed the headroom the V30 build could not
 # afford (slot 0x33 = last guest I/O write + count).
 set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
+
+# CPU: z86 (pipelined 286-class, fpga/core/z86) -- the only CPU in the
+# tree since Zet was removed; the PC98_Z86 select macro is gone with it.
 
 # Boot the ITF, not the BIOS.
 #
@@ -43,9 +51,6 @@ set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
 # MAME chip dumps and 8086 throughout. The UX BIOS is not usable here: its
 # POST uses PUSHA at FDA35 and SMSW/LGDT/LIDT after it.
 set_global_assignment -name VERILOG_MACRO "PC98_BOOT_ITF=1"
-
-# The CPU is Zet (80186-class) -- the only CPU the tree carries now; the
-# PC98_ZET macro that selected it over the removed nuV30 is gone with it.
 
 # The real floppy controller, not the constant-returning stub.
 #

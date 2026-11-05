@@ -289,6 +289,7 @@ module tb_crt_irq;
         wantb("A: IRQ2 delivered at vblank", got, 1'b1);
         inta_cycle(vec);
         want ("A: vector is INT 0x0A", vec, 8'h0A);
+        iow(16'h0000, 8'h20);   // the handler's EOI: IR2 leaves service
 
         // =========================================================
         // B. The arm is consumed: the next vblank raises nothing.
@@ -310,6 +311,7 @@ module tb_crt_irq;
         wantb("C: re-arm delivers next frame", got, 1'b1);
         inta_cycle(vec);
         want ("C: vector is INT 0x0A", vec, 8'h0A);
+        iow(16'h0000, 8'h20);   // the handler's EOI: IR2 leaves service
 
         // =========================================================
         // D. Masked at the vblank edge: the request latches, then the
