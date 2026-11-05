@@ -1718,7 +1718,12 @@ module core_top (
                            (pc_now >= 20'hE0000 && pc_now < 20'hE8000) ||   // (D0000: SCSI ROM)
                            (z86_halted && !z86_dbg_regs[217]) ||           // HLT, IF=0
                            f0_port_write;
-    wire         tlog_ev = tlog_all ? (pc_now != tlog_pc_d) : (trig_hit && !trig_hit_d);
+    // The trigger log, the address trigger and the JTAG debug stop are
+    // parked (TLOG_ON=0): the stage-2 speed check and jtag_superdepth's
+    // PLAY mode were their only users, and the device is out of LABs.
+    // Their probe slots (0x06/0x0e/0x60-0x68) read the default now.
+    localparam bit TLOG_ON = 1'b0;
+    wire         tlog_ev = TLOG_ON & (tlog_all ? (pc_now != tlog_pc_d) : (trig_hit && !trig_hit_d));
     always_ff @(posedge clk_chipset) begin
         trig_hit_d <= trig_hit;
         tlog_pc_d  <= pc_now;
@@ -1759,9 +1764,9 @@ module core_top (
             jtag_dbg_arm  <= probe_wdata_c[31];
             jtag_dbg_ax   <= probe_wdata_c[15:0];
             jtag_dbg_stop <= 1'b0;
-        end else if ((jtag_dbg_arm && trig_hit && !trig_hit_d &&
+        end else if (TLOG_ON && ((jtag_dbg_arm && trig_hit && !trig_hit_d &&
                       z86_dbg_regs[15:0] == jtag_dbg_ax) ||
-                     (tlog_trap && pc_wild && !tlog_frozen)) begin
+                     (tlog_trap && pc_wild && !tlog_frozen))) begin
             jtag_dbg_stop <= 1'b1;
             jtag_dbg_arm  <= 1'b0;
         end
@@ -2107,19 +2112,11 @@ module core_top (
             // carry z86's register view, latched; slot 0x18 (zet_pc) is the
             // live PC.
             8'h18:   probe_data_c = {12'h000, zet_pc};      // current bus cycle
-            8'h60:   probe_data_c = tlog_q[31:0];           // trigger log, see tlog
-            8'h61:   probe_data_c = tlog_q[63:32];
-            8'h62:   probe_data_c = tlog_q[95:64];
-            8'h63:   probe_data_c = tlog_q[127:96];
-            8'h64:   probe_data_c = tlog_q[159:128];
-            8'h65:   probe_data_c = tlog_q[191:160];
-            8'h68:   probe_data_c = {16'h0, tlog_q[207:192]};
             // 0x6c-0x6f: the port-A write-commit snoop witnesses -- RETIRED
             // with the counter block by ce_count (the LAB wall); these
             // slots now read the default 0xDEADxx. 0x70 keeps the cache's
             // watched-line kill count (line of slot-0x06's trig_addr,
             // registered at this boundary).
-            8'h67:   probe_data_c = {tlog_frozen, 15'h0, tlog_n};
             // 0x06/0x0e: echo the live trigger and tlog-mode words, in the
             // exact layout of their write slots.  A write scan needs addr
             // bit 7 set (0x86/0x8e, see pc98_jtag_probe.sv); the bare slot
@@ -2128,11 +2125,6 @@ module core_top (
             // while the positive control wrote away.  Reading the word
             // back is the one-scan proof an arm actually took (0xDEAD00xx
             // = a bitstream without these readback slots).
-            8'h06:   probe_data_c = {trig_en, trig_freeze, trig_delay,
-                                     trig_bus, trig_wronly, trig_ds,
-                                     6'b0, trig_addr};
-            8'h0e:   probe_data_c = {22'b0, tlog_trap, tlog_all,
-                                     2'b0, tlog_ri};
             // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
             // never completes; 0x1a: the ready chain the CPU waits on.
             // 0x31: the GVRAM sequencer -- {svc_req, svc_done, svc_hold,
@@ -2192,9 +2184,6 @@ module core_top (
             //      longest black run of the last finished frame.
             // 0x86 {7'0, worst_start[8:0], 7'0, worst_max[8:0]} -- the
             //      longest black run of any frame since power-up.
-            8'h84:   probe_data_c = dbg_gvband[95:64];
-            8'h85:   probe_data_c = dbg_gvband[63:32];
-            8'h86:   probe_data_c = dbg_gvband[31:0];
             // 0x35: BIOS-side milestones + the 0x43D write tally
             // {bios_branch[7:0], in42_count, last_42_rdata,
             //  w43d_10_count[3:0], w43d_12_count[3:0]}
