@@ -204,7 +204,8 @@ module pc98_gdc #(
     genvar sk;
     generate
         for (sk = 0; sk < 6; sk = sk + 1) begin : g_snap
-            assign draw_snap[sk] = {snap[4*sk+3], snap[4*sk+2], snap[4*sk+1], snap[4*sk]};
+            assign draw_snap[sk] = MASTER ? 32'h0
+                                 : {snap[4*sk+3], snap[4*sk+2], snap[4*sk+1], snap[4*sk]};
         end
     endgenerate
 
@@ -439,7 +440,11 @@ module pc98_gdc #(
                 // lands with the latch; further EXECUTEs while pending are
                 // dropped (the FIFO-empty bit is already clear, so software
                 // that polls waits) -- the scope guard, sharpened.
-                if (exec_cmd && !draw_pending && !draw_busy_r) begin
+                // Slave only: np21w gdc_work runs vectdraw/textdraw only
+                // when id != GDCWORK_MASTER, so a master EXECUTE is absorbed
+                // like its WDAT run below -- and the master's snapshot,
+                // watchdog and vector parameters fold away with it.
+                if (exec_cmd && !MASTER && !draw_pending && !draw_busy_r) begin
                     draw_pending <= 1'b1;
                     draw_op_r    <= wr_d;
                     for (i = 0; i <= 22; i = i + 1)

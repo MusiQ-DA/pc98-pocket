@@ -127,8 +127,11 @@ module i8253_Counter #(
     always_ff @(posedge clock, posedge reset) begin
         if (reset)
             select_bcd <= 1'b0;
+        // BCD counting is not modelled: np21w io/pit.c counts every channel
+        // in binary whatever control bit 0 says, and the two cascaded BCD
+        // decrementers per counter were pure area. The bit is still accepted.
         else if (update_counter_config)
-            select_bcd <= internal_data_bus[0];
+            select_bcd <= 1'b0;
         else
             select_bcd <= select_bcd;
     end

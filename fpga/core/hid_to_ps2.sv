@@ -17,6 +17,7 @@ module hid_to_ps2
 	input      [31:0] joy,     // cont3_joy
 	input      [15:0] trig,    // cont3_trig
 	input       [7:0] mods,    // modifier byte
+	input             sample_ok, // joy/trig/mods have settled: a change is taken only then
 	output reg [10:0] ps2_key  // {strobe, pressed, ext, code[7:0]}
 );
 
@@ -24,10 +25,14 @@ reg [47:0] prev_raw;
 reg  [7:0] prev_mods;
 
 wire [47:0] curr_raw = {joy, trig};
-wire data_changed = (curr_raw != prev_raw) || (mods != prev_mods);
+wire data_changed = sample_ok && ((curr_raw != prev_raw) || (mods != prev_mods));
 
-reg [47:0] scan_curr, scan_prev;
-reg  [7:0] scan_mcurr, scan_mprev;
+// The report being scanned IS prev_raw/prev_mods: both latch it in S_IDLE and
+// hold it until the scan returns there, so no separate "current" copy is kept.
+reg [47:0] scan_prev;
+reg  [7:0] scan_mprev;
+wire [47:0] scan_curr  = prev_raw;
+wire  [7:0] scan_mcurr = prev_mods;
 
 function automatic [7:0] slot_code;
 	input [47:0] pdata;
@@ -157,9 +162,7 @@ always @(posedge clk) begin
 
 		S_IDLE: begin
 			if (data_changed && !rollover) begin
-				scan_curr  <= curr_raw;
 				scan_prev  <= prev_raw;
-				scan_mcurr <= mods;
 				scan_mprev <= prev_mods;
 				prev_raw   <= curr_raw;
 				prev_mods  <= mods;

@@ -72,12 +72,20 @@ module pocket_keyboard #(
     // Commit on release or window timeout, whichever first; hold a minimum so a tap registers, then
     // break. A held direction repeats via the framer's typematic. The window must outlast a roll and
     // a tap so both directions gather before it commits. dpad_com is the committed one-hot read below.
-    localparam [24:0] DPAD_WINDOW = clk_rate / 7;    // ~140 ms to gather a roll into one direction
-    localparam [24:0] DPAD_MINDN  = clk_rate / 40;   // ~25 ms minimum key-down for a tap
+    // Both timers below (the D-pad roll window and the typematic repeat)
+    // count a shared ~1.5 ms tick (2^16 clocks at the 42.95 MHz chipset
+    // clock) instead of raw clocks: 9-bit counters behind one 16-bit
+    // prescaler, where two 25-bit clock counters used to run.
+    localparam int    TICK_LOG2   = 16;
+    reg  [TICK_LOG2-1:0] tick_pre = '0;
+    wire              tick        = &tick_pre;
+    always @(posedge clk) tick_pre <= tick_pre + 1'b1;
+    localparam [8:0]  DPAD_WINDOW = 9'((clk_rate / 7)  >> TICK_LOG2);   // ~140 ms to gather a roll into one direction
+    localparam [8:0]  DPAD_MINDN  = 9'((clk_rate / 40) >> TICK_LOG2);   // ~25 ms minimum key-down for a tap
     localparam [1:0]  HAT_IDLE = 2'd0, HAT_ACCUM = 2'd1, HAT_DOWN = 2'd2;
     reg  [7:0]  dpad_com;
     reg  [1:0]  hat_phase;
-    reg  [24:0] hat_timer;
+    reg  [8:0]  hat_timer;
     // Raw buttons whose release invalidates the committed direction: a cardinal
     // needs its own bit, a diagonal needs both axes still down.
     wire [3:0]  com_mask = {4{dpad_com[7]}} & 4'b1010   // SE = D+R
@@ -90,16 +98,16 @@ module pocket_keyboard #(
                          | {4{dpad_com[0]}} & 4'b0001;  // N  = U
     always @(posedge clk) begin
         if (reset) begin
-            hat_phase <= HAT_IDLE; hat_acc <= 4'd0; dpad_com <= 8'd0; hat_timer <= 25'd0;
+            hat_phase <= HAT_IDLE; hat_acc <= 4'd0; dpad_com <= 8'd0; hat_timer <= 9'd0;
         end else case (hat_phase)
             HAT_ACCUM: begin                            // gather directions until release or window
                 hat_acc <= hat_acc | dpad_raw;
                 if (!held || hat_timer >= DPAD_WINDOW) begin
                     dpad_com  <= acc_hot;
-                    hat_timer <= 25'd0;
+                    hat_timer <= 9'd0;
                     hat_phase <= HAT_DOWN;
                 end else begin
-                    hat_timer <= hat_timer + 25'd1;
+                    hat_timer <= hat_timer + {8'd0, tick};
                 end
             end
             HAT_DOWN: begin                             // hold the key, then break once released
@@ -113,16 +121,16 @@ module pocket_keyboard #(
                     // re-resolve instead of leaving the old direction stuck.
                     dpad_com  <= 8'd0;
                     hat_acc   <= dpad_raw;
-                    hat_timer <= 25'd0;
+                    hat_timer <= 9'd0;
                     hat_phase <= HAT_ACCUM;
                 end else if (hat_timer < DPAD_MINDN) begin
-                    hat_timer <= hat_timer + 25'd1;
+                    hat_timer <= hat_timer + {8'd0, tick};
                 end
             end
             default: begin                              // HAT_IDLE: wait for the first press
                 if (held) begin
                     hat_acc   <= dpad_raw;
-                    hat_timer <= 25'd0;
+                    hat_timer <= 9'd0;
                     hat_phase <= HAT_ACCUM;
                 end
             end
@@ -150,34 +158,33 @@ module pocket_keyboard #(
     // old-or-new independently) or straddle the bridge's non-atomic per-bus update; since
     // hid_to_ps2 edge-detects the report, such a transient would post a phantom scancode.
     //
-    reg [31:0] joy_s0, joy_s1, joy_s;
-    reg [15:0] trig_s0, trig_s1, trig_s;
-    reg [15:0] key_s0, key_s1, key_s;
+    // Two sync stages and a 4-cycle steadiness count. No third "settled"
+    // copy: hid_to_ps2 takes the stage-1 value only while it is steady
+    // (sample_ok), and only the modifier byte of cont3_key is carried.
+    reg [31:0] joy_s0, joy_s1;
+    reg [15:0] trig_s0, trig_s1;
+    reg  [7:0] key_s0, key_s1;
     reg  [2:0] rpt_stable;
     wire       rpt_steady = (joy_s0 == joy_s1) && (trig_s0 == trig_s1) && (key_s0 == key_s1);
 
     always @(posedge clk) begin
         joy_s0  <= cont3_joy;  joy_s1  <= joy_s0;
         trig_s0 <= cont3_trig; trig_s1 <= trig_s0;
-        key_s0  <= cont3_key;  key_s1  <= key_s0;
+        key_s0  <= cont3_key[15:8];  key_s1  <= key_s0;
         if (!rpt_steady)
             rpt_stable <= 3'd0;
         else if (rpt_stable != 3'd4)
             rpt_stable <= rpt_stable + 3'd1;
-        else begin
-            joy_s  <= joy_s1;
-            trig_s <= trig_s1;
-            key_s  <= key_s1;
-        end
     end
 
     wire [10:0] usb_key;
     hid_to_ps2 u_hid_to_ps2 (
         .clk     (clk),
         .reset   (reset),
-        .joy     (joy_s),
-        .trig    (trig_s),
-        .mods    (key_s[15:8]),
+        .joy     (joy_s1),
+        .trig    (trig_s1),
+        .mods    (key_s1),
+        .sample_ok (rpt_steady && (rpt_stable == 3'd4)),
         .ps2_key (usb_key)
     );
 
@@ -314,14 +321,14 @@ module pocket_keyboard #(
     // delay/rate timer. Toggle-lock keys are excluded so a held lock cannot flip
     // repeatedly.
     //
-    localparam [24:0] REP_DELAY = clk_rate / 2;    // ~500 ms before the first repeat
-    localparam [24:0] REP_RATE  = clk_rate / 10;   // ~100 ms -> ~10 cps
+    localparam [8:0]  REP_DELAY = 9'((clk_rate / 2)  >> TICK_LOG2);   // ~500 ms before the first repeat
+    localparam [8:0]  REP_RATE  = 9'((clk_rate / 10) >> TICK_LOG2);   // ~100 ms -> ~10 cps
     reg  [7:0]  rep_code;
     reg         rep_ext;
     reg         rep_hold;
     reg         rep_started;
-    reg  [24:0] rep_timer;
-    wire [24:0] rep_thresh = rep_started ? REP_RATE : REP_DELAY;
+    reg  [8:0]  rep_timer;
+    wire [8:0]  rep_thresh = rep_started ? REP_RATE : REP_DELAY;
     wire        rep_due    = rep_hold && (rep_timer >= rep_thresh);
 
     wire [9:0]  q_head     = queue[q_rd];
@@ -348,14 +355,14 @@ module pocket_keyboard #(
         if (reset) begin
             fst <= S_IDLE; q_rd <= {QW{1'b0}}; f_code <= 8'd0;
             f_make <= 1'b0; seq_addr <= 5'd0;
-            rep_code <= 8'd0; rep_ext <= 1'b0; rep_hold <= 1'b0; rep_started <= 1'b0; rep_timer <= 25'd0;
+            rep_code <= 8'd0; rep_ext <= 1'b0; rep_hold <= 1'b0; rep_started <= 1'b0; rep_timer <= 9'd0;
         end else begin
             // Repeat timer counts while a key is held; S_IDLE restarts it on each
             // make or reissue.
             if (!rep_hold)
-                rep_timer <= 25'd0;
+                rep_timer <= 9'd0;
             else if (rep_timer < rep_thresh)
-                rep_timer <= rep_timer + 25'd1;
+                rep_timer <= rep_timer + {8'd0, tick};
 
             case (fst)
                 S_IDLE: begin
@@ -377,7 +384,7 @@ module pocket_keyboard #(
                             rep_code    <= q_head[7:0];
                             rep_ext     <= q_head[9];
                             rep_started <= 1'b0;
-                            rep_timer   <= 25'd0;
+                            rep_timer   <= 9'd0;
                         end else if (q_head[7:0] == rep_code) begin
                             rep_hold    <= 1'b0;                 // break of the held key
                         end
@@ -386,7 +393,7 @@ module pocket_keyboard #(
                         f_make      <= 1'b1;
                         fst         <= rep_ext ? S_E0 : S_CODE;
                         rep_started <= 1'b1;
-                        rep_timer   <= 25'd0;
+                        rep_timer   <= 9'd0;
                     end
                 end
 
