@@ -312,6 +312,11 @@ module z86_cache #(
     wire [2:0]  p_wcyc = 3'd2 + {1'b0, pace_wr_wait};
     reg  [3:0]  xdebt;                  // REP iteration clocks beyond the bus (rep_x)
     wire        p_busy = pace && (pdebt != 6'd0 || xdebt != 4'd0);
+    // p_rcyc - 1, registered (it only moves with the speed setting): the
+    // subtract inside S_IDLE's decision is the cone shape Quartus' S2T died
+    // on (CI 42049924286).
+    reg  [5:0]  p_yld;
+    always @(posedge clk) p_yld <= {3'd0, p_rcyc} - 6'd1;
     function automatic logic vram_a(input logic [19:0] a);
         vram_a = !dx[3] && ((a[19:15] == 5'b10101) || (a[19:16] == 4'hB)
                             || (pace_vwait[4] && a[19:15] == 5'b11100));
@@ -768,10 +773,10 @@ module z86_cache #(
                 // access or an out-of-line (branch) load after its word
                 // (the yield waits out the prefetch cycle in flight, which
                 // is half done on average: p_rcyc - 1)
-                if (ld_tail && pdebt > {3'd0, p_rcyc} - 6'd1
+                if (ld_tail && pdebt > p_yld
                     && (wr_pend || rd_any
                         || (ld_pend && ld_addr[19:4] != ld_next)))
-                    pdebt <= {3'd0, p_rcyc} - 6'd1;
+                    pdebt <= p_yld;
                 // a line patch lands this edge: look it up on the next
             end else if (wr_pend) begin
                 if (wr_cached) begin
