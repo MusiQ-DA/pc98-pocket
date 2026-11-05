@@ -78,6 +78,13 @@ mode, out, speeds = sys.argv[1], sys.argv[2], sys.argv[3:]
 ACT = 400 / 440
 VRAMW = round(6 * ACT + 1 * (1 - ACT))      # 6
 GRCG  = round(8 * ACT + 1 * (1 - ACT))      # 7
+# I/O: np21w io/iocore.c charges every port access iocore.busclock =
+# pccore.multiple CPU clocks on top of the instruction (iocore_out8 /
+# iocore_inp8: CPU_REMCLOCK -= iocore.busclock) -- the CPU clock over the
+# 2.4576 / 1.9968 MHz base: 8 MHz (1.9968 x4) and 10 MHz (2.4576 x4) are
+# 4, 12 MHz (2.4576 x5) is 5. Per speed, so the I/O rows' reference moves.
+IOW = {"0": 4, "1": 4, "2": 5, "3": 4}
+IOROWS = {0x30: 4, 0x31: 4}                 # port accesses per iteration
 # phase: (class, body, 80286 data-sheet clocks per iteration)
 SHEET = {
  0x21: ("EU",   "add r16,r16 x8",            8*2),
@@ -119,22 +126,26 @@ for sp in speeds:
             res[(sp, ph)] = c / it
 hdr = f"{'ph':3} {'class':5} {'body':28} {'286':>6}" + "".join(
       f" {NAMES.get(s, s):>8} {'ratio':>6}" for s in speeds)
+def ref_of(ph, sp):
+    return SHEET[ph][2] + IOROWS.get(ph, 0) * IOW.get(sp, 4)
 print(hdr); print("-" * len(hdr))
 for ph, (cls, body, ref) in sorted(SHEET.items()):
-    row = f"{ph:02X}  {cls:5} {body:28} {ref:6d}"
+    row = f"{ph:02X}  {cls:5} {body:28} {ref_of(ph, speeds[0]) if speeds else ref:6d}"
     for sp in speeds:
         v = res.get((sp, ph))
-        row += f" {v:8.1f} {v/ref:6.2f}" if v is not None else f" {'-':>8} {'-':>6}"
+        r = ref_of(ph, sp)
+        row += f" {v:8.1f} {v/r:6.2f}" if v is not None else f" {'-':>8} {'-':>6}"
     print(row)
 print("\nratio <1: faster than the reference, >1: slower. Reference: 80286 data "
-      "sheet, plus np21w's VRAM/GRCG waits on the VRAM rows (I/O rows: none).")
+      "sheet, plus np21w's VRAM/GRCG waits on the VRAM rows and its per-access "
+      "bus clock (iocore.busclock) on the I/O rows; the 286 column is at the first speed.")
 
 bl = "sim/cycle_table_baseline.txt"
 if mode == "update":
     with open(bl, "w") as f:
         f.write("# speed phase ratio -- scripts/sim_cycle_table.sh --update\n")
         for (sp, ph), v in sorted(res.items()):
-            f.write(f"{sp} {ph:02X} {v/SHEET[ph][2]:.3f}\n")
+            f.write(f"{sp} {ph:02X} {v/ref_of(ph, sp):.3f}\n")
     print(f"wrote {bl}")
 elif mode == "check":
     bad = 0
@@ -145,7 +156,7 @@ elif mode == "check":
         v = res.get((sp, ph))
         if v is None:
             print(f"FAIL {NAMES.get(sp, sp)} {ph:02X}: no result"); bad += 1; continue
-        r = v / SHEET[ph][2]
+        r = v / ref_of(ph, sp)
         if abs(r - r0) > 0.25 * r0:
             print(f"FAIL {NAMES.get(sp, sp)} {ph:02X} {SHEET[ph][1]}: "
                   f"ratio {r:.2f}, baseline {r0:.2f} (beyond +-25%)"); bad += 1
