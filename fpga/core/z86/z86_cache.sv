@@ -766,10 +766,12 @@ module z86_cache #(
                 // a line patch lands this edge, or the last paced access
                 // still owes bus time -- a prefetch tail yields to an EU
                 // access or an out-of-line (branch) load after its word
-                if (ld_tail && pdebt > {3'd0, p_rcyc}
+                // (the yield waits out the prefetch cycle in flight, which
+                // is half done on average: p_rcyc - 1)
+                if (ld_tail && pdebt > {3'd0, p_rcyc} - 6'd1
                     && (wr_pend || rd_any
                         || (ld_pend && ld_addr[19:4] != ld_next)))
-                    pdebt <= {3'd0, p_rcyc};
+                    pdebt <= {3'd0, p_rcyc} - 6'd1;
                 // a line patch lands this edge: look it up on the next
             end else if (wr_pend) begin
                 if (wr_cached) begin
