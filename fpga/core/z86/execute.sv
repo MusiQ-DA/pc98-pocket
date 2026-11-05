@@ -44,6 +44,13 @@ module execute (
     // paced issue gate (fetch.sv) charges the 5 from its ROM and takes n
     // from here, pulsed on the cycle the shift executes.
     output reg  [4:0] sh_extra,
+    // Paced settings: a REP iteration's clocks beyond its bus cycles, per
+    // the 80286 data sheet (one pulse per iteration, at the next TESTZX):
+    // MOVS 4 = 2+2 -> 0, STOS 3 = 2 -> 1, LODS 4 = 2 -> 2, SCAS 8 = 2 -> 6,
+    // CMPS 9 = 2+2 -> 5. z86_cache adds it to the bus time the next access
+    // waits for.
+    output reg  [2:0] rep_x,
+    output wire       rep_on,           // a REP string loop is running
     output reg        wb_reg_valid,         // register write
     output reg  [2:0] wb_reg,
     output reg [15:0] wb_data,
@@ -1273,6 +1280,37 @@ always @(posedge clk) begin
         halted <= 1'b0;
     end else begin
         halted <= halted_next;
+    end
+end
+
+assign rep_on = rep_started;
+
+// The iteration's make-up, counted from one REP TESTZX to the next.
+reg  [1:0] it_ld;
+reg        it_st, it_cmp;
+always @(posedge clk) begin
+    rep_x <= 3'd0;
+    if (reset) begin
+        it_ld <= 2'd0; it_st <= 1'b0; it_cmp <= 1'b0;
+    end else begin
+        if (mc_active && ex_ucode_valid) begin
+            case (mc_cur.op)
+              MC_LOAD:    if (it_ld != 2'd3) it_ld <= it_ld + 2'd1;
+              MC_STORE:   it_st  <= 1'b1;
+              MC_STR_CMP: it_cmp <= 1'b1;
+              MC_TESTZX:  if (mc_cur.arg[1]) begin
+                  if (rep_started)
+                      rep_x <= it_cmp ? ((it_ld == 2'd2) ? 3'd5 : 3'd6)
+                             : it_st  ? ((it_ld == 2'd0) ? 3'd1 : 3'd0)
+                             : (it_ld == 2'd1) ? 3'd2 : 3'd0;
+                  it_ld <= 2'd0; it_st <= 1'b0; it_cmp <= 1'b0;
+              end
+              default: ;
+            endcase
+        end
+        if (ex_ready) begin
+            it_ld <= 2'd0; it_st <= 1'b0; it_cmp <= 1'b0;
+        end
     end
 end
 

@@ -2144,7 +2144,36 @@ module tb_mem_perf;
     endtask
 
     int cur_phase = -1;
-    int tb_gw = 4;   // Chipset.sv charges 4 (see vram_wait_now)
+`ifdef REPX
+    int rx[0:7]; int rxc = 0;
+    always @(posedge clk) if (cur_phase == 8'h32 || cur_phase == 8'h33) begin
+        if (u_cpu.rep_x != 0) rx[u_cpu.rep_x]++;
+        if (cur_phase == 8'h32 && u_cpu.u_cache.xdebt != 0) rxc++;
+    end
+    final $display("REPX 1:%0d 2:%0d 5:%0d 6:%0d xdebt-nonzero(32)=%0d", rx[1], rx[2], rx[5], rx[6], rxc);
+`endif
+`ifdef MOVPROF
+    longint mv_st[0:15]; longint mv_cyc=0, mv_fill=0, mv_wrw=0, mv_ldw=0, mv_rdw=0, mv_pbusy=0, mv_cbv=0, mv_inst=0, mv_hitm=0;
+    initial foreach (mv_st[i]) mv_st[i]=0;
+    always @(posedge clk) if (cur_phase == 8'h2B) begin
+        mv_cyc++; mv_st[u_cpu.u_cache.st]++;
+        if (u_cpu.u_cache.fill_req && u_cpu.u_cache.fs == 0) mv_fill++;
+        if (u_cpu.u_cache.wr_pend) mv_wrw++;
+        if (u_cpu.u_cache.rd_pend) mv_rdw++;
+        if (u_cpu.u_cache.ld_pend) mv_ldw++;
+        if (u_cpu.u_cache.p_busy) mv_pbusy++;
+        if (u_cpu.u_cache.cb_v != 0) mv_cbv++;
+        if (u_cpu.u_cache.cb_inst) mv_inst++;
+        if (mv_cyc > 3000 && mv_cyc < 3090)
+            $display("MVT %0d eud=%0d eup=%b idv=%b st=%0d rd=%b rdp=%b rdy=%b wrv=%b wrr=%b wa=%05x pdebt=%0d pce=%b ldp=%b cbv=%b fs=%0d",
+                mv_cyc, u_cpu.u_fetch_decode1.eu_debt, u_cpu.u_fetch_decode1.eu_pend, u_cpu.u_fetch_decode1.id_valid, u_cpu.u_cache.st, u_cpu.u_cache.rd, u_cpu.u_cache.rd_pend, u_cpu.u_cache.rd_ready,
+                u_cpu.u_cache.wr_valid, u_cpu.u_cache.wr_ready, u_cpu.u_cache.wr_addr, u_cpu.u_cache.pdebt, u_cpu.u_cache.pace_ce,
+                u_cpu.u_cache.ld_pend, u_cpu.u_cache.cb_v, u_cpu.u_cache.fs);
+    end
+    final $display("MOVPROF cyc=%0d st0-11: %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d fills=%0d wr_pend=%0d rd_pend=%0d ld_pend=%0d p_busy=%0d cb_v=%0d inst=%0d",
+        mv_cyc, mv_st[0],mv_st[1],mv_st[2],mv_st[3],mv_st[4],mv_st[5],mv_st[6],mv_st[7],mv_st[8],mv_st[9],mv_st[10],mv_st[11], mv_fill, mv_wrw, mv_rdw, mv_ldw, mv_pbusy, mv_cbv, mv_inst);
+`endif
+    int tb_gw = 3;   // Chipset.sv charges 3 (see vram_wait_now)
     initial void'($value$plusargs("gw=%d", tb_gw));
 `ifdef PWTRACE
     int pwt = 0; logic pwt_on = 0; logic [3:0] pwt_prev = 0;

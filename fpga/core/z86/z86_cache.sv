@@ -92,7 +92,9 @@ module z86_cache #(
     // port-F model cannot take a burst keep the single-store path.
     parameter bit WCOMB    = 0,
     // Clocks an idle combine buffer waits before it writes itself out.
-    parameter int CB_AGE   = 32
+    parameter int CB_AGE   = 32,
+    // Paced stores answered before their bus time is paid (see wr_owed).
+    parameter bit STORE_POST = 1
 ) (
     input  wire         clk,            // free clk_chipset
     input  wire         ce,             // the gated CPU clock ticks this edge
@@ -108,6 +110,9 @@ module z86_cache #(
     // clocks}: 6 with the beam out, 8 with the GRCG/EGC armed, 1 in
     // vblank -- Chipset.sv). Added once per uncached VRAM access.
     input  wire [4:0]   pace_vwait,
+    // execute's per-iteration REP surcharge (rep_x), paced settings only
+    input  wire [2:0]   rep_x,
+    input  wire         rep_on,         // execute: a REP string loop is running
     // Hardware bisect (core_top JTAG slot 0x09 [21]-[24]; 0 in release):
     // [0] line loads priced whole before the hand-off (no critical word
     // first), [1] no store combining, [2] no whole-line install from a
@@ -305,7 +310,8 @@ module z86_cache #(
     reg  [15:0] ld_next;                // the line a sequential load asks for
     wire [2:0]  p_rcyc = 3'd2 + {1'b0, pace_rd_wait};
     wire [2:0]  p_wcyc = 3'd2 + {1'b0, pace_wr_wait};
-    wire        p_busy = pace && (pdebt != 6'd0);
+    reg  [3:0]  xdebt;                  // REP iteration clocks beyond the bus (rep_x)
+    wire        p_busy = pace && (pdebt != 6'd0 || xdebt != 4'd0);
     function automatic logic vram_a(input logic [19:0] a);
         vram_a = !dx[3] && ((a[19:15] == 5'b10101) || (a[19:16] == 4'hB)
                             || (pace_vwait[4] && a[19:15] == 5'b11100));
@@ -587,10 +593,21 @@ module z86_cache #(
         if (ce) wr_ready <= 1'b0;
         if (io_rec != 8'hFF) io_rec <= io_rec + 8'd1;
         if (pace_ce && pdebt != 6'd0) pdebt <= pdebt - 6'd1;
+        if (!pace) xdebt <= 4'd0;
+        // after the bus debt, not beside it: the two add up
+        else xdebt <= xdebt + {1'b0, rep_x} - {3'd0, pace_ce && xdebt != 4'd0 && pdebt == 6'd0};
         if (!pace) pdebt <= 6'd0;
         if (!p_busy) ld_tail <= 1'b0;
-        // A paced store's ready comes due with its debt.
-        if (wr_owed && !p_busy) begin
+        // A paced store inside a REP string loop is answered at once: the
+        // bus cycle runs on while the microcode goes round, and only the
+        // NEXT access waits its debt out (S_IDLE's p_busy). Holding the
+        // ready for the debt put the core's own turnaround after it (REP
+        // MOVSW: read 9 + write 8 + 5 clocks of turnaround per word, 1.26x
+        // the data sheet); each iteration's non-bus clocks come from
+        // execute's rep_x instead. Other stores keep the held ready: posted,
+        // the next instruction's line load got in ahead of the next store
+        // (mov [m16],ax x8 went 1.05 -> 1.17).
+        if (wr_owed && ((STORE_POST && rep_on) || !p_busy)) begin
             wr_ready <= 1'b1;
             wr_owed  <= 1'b0;
         end
@@ -728,6 +745,7 @@ module z86_cache #(
             io_rec    <= 8'hFF;
             park_v    <= 1'b0;          // S_FLUSH clears every tag anyway
             pdebt     <= 6'd0;
+            xdebt     <= 4'd0;
             wr_owed   <= 1'b0;
             ld_tail   <= 1'b0;
         end else case (st)

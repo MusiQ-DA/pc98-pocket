@@ -213,6 +213,8 @@ wire wb_seg_valid;
 wire [1:0] wb_seg;
 wire [15:0] wb_seg_data;
 wire br_taken;
+wire [2:0] rep_x;             // REP iteration surcharge for the paced cache
+wire       rep_on;            // a REP string loop is running
 wire [4:0] sh_extra;          // shift count n for the paced issue gate
 wire [19:0] br_target;
 wire [15:0] br_new_cs;
@@ -254,6 +256,8 @@ z86_cache #(.WCOMB(WCOMB)) u_cache (
     .pace_rd_wait       (pace_rd_wait),
     .pace_wr_wait       (pace_wr_wait),
     .pace_vwait         (pace_vwait),
+    .rep_x              (rep_x),
+    .rep_on             (rep_on),
     .dx                 (dx[4:1]),
     .bios_shadow        (bios_shadow),
     .bios_protect       (bios_protect),
@@ -467,6 +471,8 @@ execute u_execute (
     .hlt_wake           (wb_tgc_i),
     .rep_int            (rep_int),
     .sh_extra           (sh_extra),
+    .rep_x              (rep_x),
+    .rep_on             (rep_on),
     .clk                (clk),          
     .halted             (dbg_halted),
     .reset              (cpu_reset),
