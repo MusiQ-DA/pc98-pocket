@@ -98,7 +98,12 @@ module ce_generator (
             begin                                   // 11.967435 MHz: "286
                 cpu_edge_num = 9'd112;              // 12MHz" (RX class,
                 cpu_edge_den = 9'd201;              // nearest fit -0.27%)
-                ram_read_wait_cycle = 2'd1;         // as the 1/1 step needs
+                // No read wait: the RX/RX2's 80286 side is no-wait (NEC's
+                // spec sheet: 80286 12 MHz memory 0 wait, V30 8 MHz 1).
+                // The 1 here came from the PC/XT generator, where only the
+                // 1/1 (Turbo) step needs it; at 112/201 a CPU edge is ~1.8
+                // chipset clocks apart, like 8/10 MHz's, which run 0.
+                vram_wait_en = 1'b1;
             end
 
             2'b11:                                  // 21.477 MHz, the chipset
