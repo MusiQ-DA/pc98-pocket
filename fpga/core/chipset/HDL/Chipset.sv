@@ -712,7 +712,13 @@ module CHIPSET #(
 
     // What the firmware asks about the charger state before its writes:
     // bit0 GRCG armed, bit1 RMW mode, bit2 EGC armed, bit3 access page.
-    assign accel_status = {4'b0000, gvram_access_page_w, egc_active_w,
+    // The EGC is not fitted (pc98_gvram_seq .EGC(1'b0)): mode2's EGC bits
+    // still latch for read-back, but nothing downstream may act on them --
+    // the firmware's pset path, the VRAM pricing and the RMW split all see
+    // a GRCG-only machine, which is what the sequencer actually runs.
+    wire egc_live = 1'b0;
+    wire _unused_egc = &{1'b0, egc_active_w};
+    assign accel_status = {4'b0000, gvram_access_page_w, egc_live,
                            grcg_rmw, grcg_active};
 
     // The ROM loader's per-access done pulse still comes from RAM.sv itself:
@@ -737,7 +743,7 @@ module CHIPSET #(
     // the guest's address, before the sequencer's plane remap. An RMW-class
     // guest write runs through the sequencer as a read+write pair, so it
     // takes half the charge on each leg and still pays eight in total.
-    wire accel_hit = grcg_active | egc_active_w;
+    wire accel_hit = grcg_active | egc_live;
     // The wait is now charged by the CPU, once per guest access and
     // overlapped with the access itself (z86_cache's pdebt, which also
     // decodes the window): counting it in RAM.sv's COMPLETE state ADDED it
@@ -762,8 +768,8 @@ module CHIPSET #(
     // are posted too now and take 4 (rep stosw 256 TDW 8/10 MHz: 0 ->
     // 0.79/0.88, 4 -> 0.94/0.98, 5 -> 1.04/1.08). The EGC is not posted
     // and stays at 0.
-    wire grcg_rmw_only = grcg_active & grcg_rmw & ~egc_active_w;
-    wire grcg_tdw_only = grcg_active & ~grcg_rmw & ~egc_active_w;
+    wire grcg_rmw_only = grcg_active & grcg_rmw & ~egc_live;
+    wire grcg_tdw_only = grcg_active & ~grcg_rmw & ~egc_live;
     assign vram_wait_now = {pc98_analog,
                             grcg_rmw_only ? (VID_VBlank ? 4'd1 : 4'd3)
                           : grcg_tdw_only ? (VID_VBlank ? 4'd1 : 4'd4)
@@ -772,7 +778,7 @@ module CHIPSET #(
     wire vram_hit = (address[19:16] == 4'hA && address[15])   // A8000-AFFFF
                   | (address[19:16] == 4'hB)                  // B0000-BFFFF
                   | (pc98_analog & (address[19:15] == 5'b11100)); // E0000-E7FFF
-    wire rmw_guest_wr = accel_hit & ~memory_write_n & (grcg_rmw | egc_active_w);
+    wire rmw_guest_wr = accel_hit & ~memory_write_n & (grcg_rmw | egc_live);
     wire [3:0] vram_old_wait = !dx_vramwait || !vram_wait_en || !vram_hit ? 4'd0
                              : VID_VBlank                   ? 4'd1
                              : rmw_guest_wr                 ? 4'd4

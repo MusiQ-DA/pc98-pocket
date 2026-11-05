@@ -152,8 +152,12 @@ module softcpu_subsystem (
     output  [1:0] osd_gamepad,
 
     // Per-control key config {ext, Set-2 code}, one 9-bit entry per D-pad direction and button,
-    // driven out to pocket_keyboard via core_top. Slot ids are documented at KEYCFG_REG.
-    output [16*9-1:0] key_cfg_flat,
+    // read out by pocket_keyboard one entry at a time (key_cfg_idx -> key_cfg_q, one clk_sys of
+    // latency). key_cfg_diag: a diagonal D-pad preset is loaded (ids 11-14 not all unmapped).
+    // Slot ids are documented at KEYCFG_REG.
+    input   [3:0] key_cfg_idx,
+    output  [8:0] key_cfg_q,
+    output        key_cfg_diag,
 
     // JTAG-probe window into this domain (core_top slot 0x2A): fetch/poll
     // counters plus the OSD-request and trap flags -- the only way to tell a
@@ -546,18 +550,23 @@ module softcpu_subsystem (
     // pocket_keyboard reads one 9-bit {ext, code} per D-pad direction (ids 0-3) and button (ids 4-10);
     // the firmware key-binding and D-pad-preset code fill it. Separate from osd_settings so a scancode
     // never shares a byte with an option value.
-    reg [8:0] key_cfg [0:15];
+    // A 16x9 block RAM, not 144 flops and a 16:1 mux: the keyboard scan reads one id per clock.
+    (* ramstyle = "M10K" *) reg [8:0] key_cfg [0:15];
+    reg  [8:0] key_cfg_q_r = 9'd0;
+    reg  [3:0] key_diag_nz = 4'd0;
     wire keycfg_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[5:2] == 4'd8;
+    wire [3:0] keycfg_id = cpu_mem_wdata[12:9];
     always @(posedge clk_pico) begin
-        if (keycfg_wr)
-            key_cfg[cpu_mem_wdata[12:9]] <= cpu_mem_wdata[8:0];
-    end
-    genvar ki;
-    generate
-        for (ki = 0; ki < 16; ki = ki + 1) begin : g_key_cfg
-            assign key_cfg_flat[ki*9 +: 9] = key_cfg[ki];
+        if (keycfg_wr) begin
+            key_cfg[keycfg_id] <= cpu_mem_wdata[8:0];
+            if (keycfg_id >= 4'd11 && keycfg_id <= 4'd14)
+                key_diag_nz[2'(keycfg_id - 4'd11)] <= |cpu_mem_wdata[7:0];
         end
-    endgenerate
+    end
+    always @(posedge clk_sys)
+        key_cfg_q_r <= key_cfg[key_cfg_idx];
+    assign key_cfg_q    = key_cfg_q_r;
+    assign key_cfg_diag = |key_diag_nz;
 
     //
     // Memory ready. The ROM read is registered, so it needs two clk_pico cycles;

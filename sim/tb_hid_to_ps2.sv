@@ -44,6 +44,7 @@ module tb_hid_to_ps2;
         .joy     (joy),
         .trig    (trig),
         .mods    (mods),
+        .sample_ok (1'b1),
         .ps2_key (ps2_key)
     );
 

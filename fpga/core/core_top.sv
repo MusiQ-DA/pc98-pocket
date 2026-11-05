@@ -1162,7 +1162,9 @@ module core_top (
     wire [7:0] osd_a3fee;
     wire [7:0] osd_a3ff2;
     wire [1:0] osd_gamepad;
-    wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
+    wire  [3:0] key_cfg_idx;   // per-control {ext, Set-2 code} file in the softcore: the scan's id,
+    wire  [8:0] key_cfg_q;     //   its entry (one clock later),
+    wire        key_cfg_diag;  //   and whether the D-pad preset is diagonal
 
     // Last docked-keyboard make, tapped for the softcore key picker (pocket_keyboard -> softcpu).
     wire [7:0] dock_key_code;
@@ -1267,7 +1269,9 @@ module core_top (
         .osd_a3fea                  (osd_a3fea),
         .osd_a3fee                  (osd_a3fee),
         .osd_a3ff2                  (osd_a3ff2),
-        .key_cfg_flat               (key_cfg),
+        .key_cfg_idx                (key_cfg_idx),
+        .key_cfg_q                  (key_cfg_q),
+        .key_cfg_diag               (key_cfg_diag),
         .gdc_draw_req               (gdc_draw_req),
         .gdc_draw_busy              (gdc_draw_busy),
         .gdc_draw_ops               (gdc_draw_ops),
@@ -2553,7 +2557,9 @@ module core_top (
         .osd_active   (osd_active),
         .vkb_key      (vkb_key),
         .vkb_stb      (vkb_stb),
-        .key_cfg      (key_cfg),
+        .key_idx      (key_cfg_idx),
+        .key_q        (key_cfg_q),
+        .key_diag     (key_cfg_diag),
         .cont3_joy    (cont3_joy),
         .cont3_trig   (cont3_trig),
         .cont3_key    (cont3_key),
