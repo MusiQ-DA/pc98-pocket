@@ -1186,7 +1186,7 @@ module core_top (
     logic [7:0] key_last  = 8'h00;
 `endif
 
-    wire [31:0] dbg_pico_w;    // pico-domain liveness for probe slot 0x2A
+    // (dbg_pico, the pico-domain liveness word, has no probe slot any more)
 
     softcpu_subsystem u_softcpu (
         .fw_wr_clk                  (clk_chipset),
@@ -1283,7 +1283,7 @@ module core_top (
         .st_done                    (st_done_w),
         .st_rdata                   (st_rdata_w),
         .accel_status               (accel_status_w),
-        .dbg_pico                   (dbg_pico_w)
+        .dbg_pico                   ()
     );
 
 `ifdef PC98_JTAG
@@ -2102,14 +2102,6 @@ module core_top (
             // below is what replaced them for "where is the CPU". The slots
             // carry z86's register view, latched; slot 0x18 (zet_pc) is the
             // live PC.
-            8'h10:   probe_data_c = v30_dbg_regs[223:192];  // psw:pc
-            8'h11:   probe_data_c = v30_dbg_regs[191:160];  // sreg3:sreg2
-            8'h12:   probe_data_c = v30_dbg_regs[159:128];  // sreg1:sreg0
-            8'h13:   probe_data_c = v30_dbg_regs[127:96];   // gpr7:gpr6
-            8'h14:   probe_data_c = v30_dbg_regs[95:64];    // gpr5:gpr4
-            8'h15:   probe_data_c = v30_dbg_regs[63:32];    // gpr3:gpr2
-            8'h16:   probe_data_c = v30_dbg_regs[31:0];     // gpr1:gpr0
-            8'h17:   probe_data_c = {8'h00, retired_cnt};   // liveness
             8'h18:   probe_data_c = {12'h000, zet_pc};      // current bus cycle
             8'h60:   probe_data_c = tlog_q[31:0];           // trigger log, see tlog
             8'h61:   probe_data_c = tlog_q[63:32];
@@ -2123,12 +2115,7 @@ module core_top (
             // slots now read the default 0xDEADxx. 0x70 keeps the cache's
             // watched-line kill count (line of slot-0x06's trig_addr,
             // registered at this boundary).
-            8'h70:   probe_data_c = {16'h0, z86_sn_kills};
-            8'h66:   probe_data_c = {z86_dbg_stopped, 15'h0, z86_dbg_next_ip};
             8'h67:   probe_data_c = {tlog_frozen, 15'h0, tlog_n};
-            8'h01:   probe_data_c = brg_q[31:0];
-            8'h02:   probe_data_c = {9'h0, brg_q[54:32]};
-            8'h03:   probe_data_c = {24'h0, brg_w};
             // 0x06/0x0e: echo the live trigger and tlog-mode words, in the
             // exact layout of their write slots.  A write scan needs addr
             // bit 7 set (0x86/0x8e, see pc98_jtag_probe.sv); the bare slot
@@ -2171,20 +2158,15 @@ module core_top (
             // dbg_tvram_cell -- each completed read also steps the cell
             // (rd_adv below), so scripts/jtag_screen.tcl dumps the plane
             // one scan per cell. 0x37 echoes the index being sampled.
-            8'h37:   probe_data_c = {20'h0, dbg_tvram_cell};
             // 0x38: a guest-VRAM byte through the sequencer's service
             // channel -- write slot 0x84 launches the address's read, the
             // word below reports {busy, addr, data} and each completed
             // read launches the next address. jtag_gvram.tcl walks ranges.
-            8'h38:   probe_data_c = {gv_dbg_req | gv_dbg_busy, 3'b000,
-                                   gv_srv_addr, gv_dbg_data};
             // 0x39/0x3a: the slave GDC's display registers as the graphics
             // fetch consumes them -- {disp_on, page-0xA4, analogue, 5MHz,
             // doubled-200, CSRFORM LR, SYNC AL, PITCH} low and
             // {SAD0, LEN0} high. A mis-shaped picture reads back against
             // what the guest programmed.
-            8'h39:   probe_data_c = dbg_gdc_s[31:0];
-            8'h3a:   probe_data_c = dbg_gdc_s[63:32];
             // 0x3b/0x3c: slave GDC partitions one to three -- the stage
             // wipe in DEPTH walks SAD1..3 while SAD0 stays zero.
             // 0x2D/0x2E: the CRT interrupt path (Peripherals dbg_crt) --
@@ -2197,8 +2179,6 @@ module core_top (
             // Low word {skip_cnt, late_cnt, max_fill}; high word the live
             // {line_now, act_tgt, f_chunk, f_plane, cur_part, dbl,
             // disp_page, disp_on_c, fill_page, f_active}.
-            8'h82:   probe_data_c = dbg_gvdisp[31:0];
-            8'h83:   probe_data_c = dbg_gvdisp[63:32];
             // 0x84-0x86: the graphics display's black-band / PRAM-timing
             // witness (pc98_gvram_display; scripts/jtag_blackband.tcl).
             // 0x84 {band_cnt[15:0], pram_cnt[15:0]} -- frames with a run
@@ -2241,7 +2221,6 @@ module core_top (
             // reset filtered out: the shape of the spontaneous reboot.
             // (The old zet-fault {seen, opc, pc} fields lived here; the
             // z86 has no fault machinery -- zet_fault was a dead tie.)
-            8'h9d:   probe_data_c = {rst_raw_cnt, rst_real_cnt};
             // 0x9E/0x9F: RAM.sv's DMA-fill loss witness -- 0x9E =
             // {first-drop FSM state, in-flight-was-write, dropped addr,
             //  drop count}, 0x9F = parked-write count. A nonzero drop
@@ -2287,9 +2266,6 @@ module core_top (
             // armed by write slot 0x0B (bench-next186 used 0x74/0x8B).
             // 0x40-0x5F: pc_hist ring (see above). Frozen contents stay
             // readable while the post-0xF0 reboot runs.
-            8'h40,8'h41,8'h42,8'h43,8'h44,8'h45,8'h46,8'h47,
-            8'h48,8'h49,8'h4a,8'h4b,8'h4c,8'h4d,8'h4e,8'h4f,
-            8'h50,8'h51,8'h52,8'h53,8'h54,8'h55,8'h56,8'h57,
             // 0x1b: {bridge park/engine FSM, ce edge counter}. parked=1 with a
             // frozen ce_count is the dead-CE signature; a live count with
             // parked=1 points at the engine's release conditions instead.
@@ -2312,7 +2288,6 @@ module core_top (
             // be sitting on exactly one of these stages.
             // 0x24/0x25: the prefetch queue raw bytes + fetch pointer -- the
             // wedged stream itself, for a fingerprint match against the ROM.
-            8'h25:   probe_data_c = v30_dbg_core6;
             // FDD engine: where a disk boot is parked (state/fifo), how many
             // commands stuck, the request bits, the LBA it named, and the
             // command bytes themselves -- a failed boot keeps the failing
@@ -2322,25 +2297,17 @@ module core_top (
             // so the counters pack under the state flags. Fields, MSB first:
             // scsi_media | cmd_ack | cmd_req | mg_rd[4:0] | post[7:0] |
             // rom_rd[15:0].
-            8'h30:   probe_data_c = {scsi_media, dbg_scsi[33:32],
-                                   dbg_scsi[28:24], dbg_scsi[23:0]};
             // 0x2A: softcore liveness, sampled raw out of the clk_pico domain
             // -- {fetch completions[15:0], 0x2000_0000 polls[7:0], 2'b00,
             // firmware cpu_speed[1:0], osd_req seen, trap seen, trap live,
             // osd_open_req live}. A frozen fetch word is a dead pico; a
             // frozen poll byte beside a moving fetch word is a wedged loop.
-            8'h2a:   probe_data_c = dbg_pico_w;
             // 0xA0-0xA7: every OSD setting, four per slot (settings_ui.c's
             // SET_* index order): slot 0xA0+g = {set[4g+3] .. set[4g]}.
-            8'ha0,8'ha1,8'ha2,8'ha3,8'ha4,8'ha5,8'ha6,8'ha7:
-                     probe_data_c = osd_set_word;
             // 0x1e/0x1f: the pad words. 1e is what the softcore actually sees
             // (settled | injected, in clk_chipset); 1f is the probe-held mask
             // itself -- a bit stuck there reads as a button held forever, so
             // edge-detection in firmware never fires ("B does nothing").
-            8'h1e:   probe_data_c = {cont2_key_chip, cont1_key_chip};
-            8'h1f:   probe_data_c = {jtag_btn2, jtag_btn1};
-            8'h1d:   probe_data_c = {16'h0, key_count, key_last};
             // 0x74: text-VRAM dump -- armed by write slot 0x8b; returns
             // {cell[7:0] echo, attr, char_hi, char_lo} for that cell.
             // ---- the wedge tap's frozen snapshot (see the WEDGE TAP
@@ -2382,8 +2349,6 @@ module core_top (
             // that briefly lived here went with it: nothing may fan into
             // this mux cone but these tap flops (the probe_data register
             // stage below is the load-bearing S2T/VPR fence).
-            8'haa:   probe_data_c = {wedge_latch, poll_latch, fdq_latch,
-                                     5'h0, poll_static};
             // 0xAB/0xAC -- the reset-source witness (see its block above
             // for the bit map). 0xAB:
             //   [31:24] rst_seen      sticky rise map since wr 0x8A 0x01
@@ -2396,9 +2361,6 @@ module core_top (
             // 0xAC: rst_last_tick, the free-run clk_chipset tick of the
             //           rise named by rst_last (age = read it twice: the
             //           tick only wraps every ~100 s).
-            8'hab:   probe_data_c = {rst_seen, rst_last, rst_boot_latch,
-                                     rst_boot_itf, 18'h0};
-            8'hac:   probe_data_c = rst_last_tick;
             8'hFF:   probe_data_c = 32'h98C0_DE98;
             // (cycle-bench) Forensic read taps of past hunts -- the Chipset
             // dbg buses, the V30-era core taps, FDC command/CRT/GDC/TVRAM
@@ -2764,7 +2726,8 @@ module core_top (
             jtag_pf_bkill <= probe_wdata_c[10];
             jtag_cache_dis <= probe_wdata_c[11];
             jtag_thr_num  <= probe_wdata_c[19:12];
-            jtag_dx       <= probe_wdata_c[28:20];
+            // jtag_dx (the #1047 bisect's revert bits) stays 0: the bug
+            // is fixed (fix-1050) and the reverts' muxes cost the fit.
         end
         // Slot 0x0a: the reset-source witness clear -- wdata[0] wipes the
         // sticky rise map, the last-source index and its tick (the write
