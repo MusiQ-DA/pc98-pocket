@@ -338,8 +338,6 @@ always @(posedge clk) begin
 	else if(cmd_recalibrate_start)                               busy <= 1'b0;
 	else if(cmd_seek_start)                                      busy <= 1'b0;
 	else if(cmd_specify_start)                                   busy <= 1'b0;
-	else if(cmd_configure_mode_start)                            busy <= 1'b0;
-	else if(cmd_perpendicular_mode_start)                        busy <= 1'b0;
 	else if(enter_result_phase)                                  busy <= 1'b1;
 	else if(io_read && io_address == 3'd5 && reply_left == 4'd1) busy <= 1'b0;
 end
@@ -450,8 +448,6 @@ wire [3:0] command_at_first =
 	(io_writedata[4:0] == 5'h0D) ? 4'd5 : //format track
 	(io_writedata[4:0] == 5'h05) ? 4'd8 : //write normal data
 	(io_writedata[4:0] == 5'h06) ? 4'd8 : //read normal data
-	(io_writedata[4:0] == 5'h12) ? 4'd1 : //perpendicular mode (Enhanced)
-	(io_writedata[4:0] == 5'h13) ? 4'd3 : //configure command (Enhanced)
 	                               4'd0;
 
 reg [3:0] command_size;
@@ -478,10 +474,10 @@ always @(posedge clk) begin
 end
 
 wire cmd_sense_interrupt_status_start = command_first && io_writedata[4:0] == 5'h08; //enters result phase
-wire cmd_dump_registers_start         = command_first && io_writedata[4:0] == 5'h0E; //enters result phase
-wire cmd_version_start                = command_first && io_writedata[4:0] == 5'h10; //enters result phase
-wire cmd_unlock_start                 = command_first && io_writedata      == 8'h14; //enters result phase
-wire cmd_lock_start                   = command_first && io_writedata      == 8'h94; //enters result phase
+// The 82077AA's enhanced commands -- DUMPREG 0Eh, VERSION 10h, PERPENDICULAR
+// 12h, CONFIGURE 13h, LOCK/UNLOCK 94h/14h -- do not exist on the PC-98's
+// uPD765A: np21w io/fdc.c's table sends every one of them to FDC_Invalid, so
+// they take the invalid-command reply here too (ST0 = 80h, one byte).
 
 wire cmd_specify_start      = command_size == 4'd2 && command_next && command_left == 4'd1 && command[12:8]  == 5'h03; //immediate finish
 wire cmd_get_status_start   = command_size == 4'd1 && command_next && command_left == 4'd1 && command[4:0]   == 5'h04; //enters result phase
@@ -492,8 +488,6 @@ wire cmd_format_track_start = command_size == 4'd5 && command_next && command_le
 wire cmd_write_normal_start = command_size == 4'd8 && command_next && command_left == 4'd1 && command[60:56] == 5'h05; //enters result phase
 wire cmd_read_normal_start  = command_size == 4'd8 && command_next && command_left == 4'd1 && command[60:56] == 5'h06; //enters result phase
 
-wire cmd_perpendicular_mode_start = command_size == 4'd1 && command_next && command_left == 4'd1 && command[4:0]   == 5'h12; //immediate finish
-wire cmd_configure_mode_start     = command_size == 4'd3 && command_next && command_left == 4'd1 && command[20:16] == 5'h13; //immediate finish
 
 wire cmd_invalid_start = command_first &&
 	io_writedata[4:0] != 5'h03 &&
@@ -504,12 +498,7 @@ wire cmd_invalid_start = command_first &&
 	io_writedata[4:0] != 5'h08 &&
 	io_writedata[4:0] != 5'h0A &&
 	io_writedata[4:0] != 5'h0D &&
-	io_writedata[4:0] != 5'h0E &&
-	io_writedata[4:0] != 5'h0F &&
-	io_writedata[4:0] != 5'h10 &&
-	io_writedata[4:0] != 5'h12 &&
-	io_writedata[4:0] != 5'h13 &&
-	io_writedata[4:0] != 5'h14;
+	io_writedata[4:0] != 5'h0F;
 
 wire cmd_read_write_start = cmd_read_normal_start || cmd_write_normal_start;
 
@@ -570,7 +559,7 @@ wire cmd_format_notready_at_start     = cmd_format_track_start && not_ready;
 wire cmd_notready_at_start = cmd_read_write_notready_at_start || cmd_read_id_notready_at_start || cmd_format_notready_at_start;
 
 wire enter_result_phase =
-	cmd_invalid_start || cmd_sense_interrupt_status_start || cmd_dump_registers_start || cmd_version_start || cmd_unlock_start || cmd_lock_start ||
+	cmd_invalid_start || cmd_sense_interrupt_status_start ||
 	cmd_notready_at_start ||
 	(cmd_read_write_start && (cmd_read_write_incorrect_head_at_start || cmd_read_write_incorrect_sector_at_start || cmd_write_and_writeprotected_at_start)) ||
 	(state == S_CHECK_TC && (cmd_read_write_finish || cmd_format_finish)) ||
@@ -809,33 +798,6 @@ always @(posedge clk) begin
 	else if(cmd_sense_interrupt_status_start && reset_sensei) status_reg0_temp <= { 4'hC, 2'b00, reset_sensei_drive };
 end
 
-//------------------------------------------------------------------------------ cmd: configure / lock / unlock
-
-reg [7:0] config_config;
-always @(posedge clk) begin
-	if(~rst_n)                        config_config <= 8'h20;
-	else if(cmd_configure_mode_start) config_config <= command[7:0];
-end
-
-reg [7:0] config_pretrk;
-always @(posedge clk) begin
-	if(~rst_n)                        config_pretrk <= 8'd0;
-	else if(cmd_configure_mode_start) config_pretrk <= io_writedata;
-end
-
-reg [7:0] perp_mode;
-always @(posedge clk) begin
-	if(~rst_n)                            perp_mode <= 8'd0;
-	else if(cmd_perpendicular_mode_start) perp_mode <= io_writedata;
-end
-
-reg lock;
-always @(posedge clk) begin
-	if(~rst_n)                lock <= 1'd0;
-	else if(cmd_unlock_start) lock <= 1'd0;
-	else if(cmd_lock_start)   lock <= 1'd1;
-end
-
 //------------------------------------------------------------------------------ cmd: format
 
 wire cmd_format_writeprotected_at_start = ~cmd_format_hang_on_start && cmd_format_track_start && media_writeprotected[selected_drive[0]];
@@ -913,9 +875,6 @@ always @(posedge clk) begin
 	// FW 07 03 08 08 with RB 80 and MS D0, the BIOS having read the 80 and
 	// moved on the way the datasheet says it may.
 	else if(cmd_sense_interrupt_status_start)                                    reply_left <= (|seek_done || reset_sensei || pending_interrupt) ? 4'd2 : 4'd1;
-	else if(cmd_dump_registers_start)                                            reply_left <= 4'd10;
-	else if(cmd_version_start)                                                   reply_left <= 4'd1;
-	else if(cmd_unlock_start || cmd_lock_start)                                  reply_left <= 4'd1;
 	else if(io_read && io_address == 3'h5 && reply_left)                         reply_left <= reply_left - 3'd1;
 end
 
@@ -979,11 +938,6 @@ always @(posedge clk) begin
 	else if(cmd_sense_interrupt_status_start && reset_sensei)                 reply <= { 64'd0, cylinder[selected_drive[0]], 4'hC, 2'b00, reset_sensei_drive };
 	else if(cmd_sense_interrupt_status_start && pending_interrupt)            reply <= { 64'd0, cylinder[selected_drive[0]], status_reg0_temp };
 	else if(cmd_sense_interrupt_status_start && ~pending_interrupt)           reply <= { 64'd0, cylinder[selected_drive[0]], 8'h80 };
-	else if(cmd_dump_registers_start)                                         reply <= { config_pretrk, config_config, lock, perp_mode[6:0], eot[selected_drive[0]],
-	                                                                                     specify_hlt, ndma, specify_srt, specify_hut, 8'h0, 8'h0, 8'h0, cylinder[selected_drive[0]] };
-	else if(cmd_version_start)                                                reply <= { 72'd0, 8'h90 };
-	else if(cmd_unlock_start)                                                 reply <= 80'd0;
-	else if(cmd_lock_start)                                                   reply <= { 72'd0, 8'h10 };
 	else if(io_read && io_address == 3'h5)                                    reply <= { 8'd0, reply[79:8] };
 end
 
