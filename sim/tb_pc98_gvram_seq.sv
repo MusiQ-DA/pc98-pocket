@@ -521,6 +521,8 @@ module tb_pc98_gvram_seq #(parameter bit PW = 0);
                 while (!cpu_ready) @(posedge clk);
                 cpu_wr = 1'b0; cpu_word = 1'b0; cpu_gvram = 1'b0;
             end
+            while (dut.pw_hold) @(posedge clk);     // the last posted walk
+            if (PW) repeat (2) @(posedge clk);
             $display("     TDW word fill: %0d words, %.1f clks = %.2f clk/word (model mem)",
                      nfill, ($realtime-t0)/23.279,
                      ($realtime-t0)/23.279/nfill);

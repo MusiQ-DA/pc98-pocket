@@ -248,7 +248,8 @@ static const item_t items_av[] = {
     { "Audio Boost", IT_OPTION, SET_BOOST },
     { "Speaker Volume", IT_OPTION, SET_SPK_VOL },
     { "Stereo Mix", IT_OPTION, SET_STEREO },
-    { "Display", IT_OPTION, SET_DISPLAY },
+    // "Display" (the monochrome-monitor tints) went with the RTL tint:
+    // the setting keeps its blob slot, nothing reads it.
     { "200-Line Mode", IT_OPTION, SET_MODE200 },
 };
 

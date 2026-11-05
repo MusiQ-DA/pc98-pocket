@@ -758,11 +758,15 @@ module CHIPSET #(
     // on the bridge turnaround. With z86's per-iteration REP STOS charge
     // (execute rep_x) the cycle table measured (rep stosw 256 RMW, ratio
     // at 8/10 MHz) 0..2 -> 0.91/1.06, 3 -> 0.95/1.06, 4 -> 1.02/1.13;
-    // 3 is the largest that leaves 10 and 12 MHz untouched. TDW and the
-    // EGC are not posted and stay at 0.
+    // 3 is the largest that leaves 10 and 12 MHz untouched. TDW writes
+    // are posted too now and take 4 (rep stosw 256 TDW 8/10 MHz: 0 ->
+    // 0.79/0.88, 4 -> 0.94/0.98, 5 -> 1.04/1.08). The EGC is not posted
+    // and stays at 0.
     wire grcg_rmw_only = grcg_active & grcg_rmw & ~egc_active_w;
+    wire grcg_tdw_only = grcg_active & ~grcg_rmw & ~egc_active_w;
     assign vram_wait_now = {pc98_analog,
                             grcg_rmw_only ? (VID_VBlank ? 4'd1 : 4'd3)
+                          : grcg_tdw_only ? (VID_VBlank ? 4'd1 : 4'd4)
                           : accel_hit     ? 4'd0
                           : VID_VBlank    ? 4'd1 : 4'd6};
     wire vram_hit = (address[19:16] == 4'hA && address[15])   // A8000-AFFFF

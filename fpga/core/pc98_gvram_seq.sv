@@ -1057,7 +1057,9 @@ module pc98_gvram_seq #(
                     is_read <= cpu_rd;
                     // Post it: a GRCG RMW write (byte, or the word batch)
                     // is answered now and walked from the latch.
-                    if (PWPOST && cpu_wr && !cpu_rd && grcg_here && grcg_rmw
+                    // TDW writes post too: the tile walk needs nothing of
+                    // the guest's but the address (pw latches the tiles).
+                    if (PWPOST && cpu_wr && !cpu_rd && grcg_here
                         && !egc_here && !rmwbuf_off) begin
                         pw_hold   <= 1'b1;
                         pw_ack    <= 1'b1;

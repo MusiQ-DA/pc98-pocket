@@ -196,6 +196,7 @@ module tb_mem_perf;
         // np21w's VRAM wait, as Chipset.sv computes it for core_top
         .pace_vwait   ({1'b0, nvw_r ? 4'd0
                                      : (grcg_active & grcg_rmw & ~egc_active_w) ? (vid_vb ? 4'd1 : 4'(tb_gw))
+                                     : (grcg_active & ~grcg_rmw & ~egc_active_w) ? (vid_vb ? 4'd1 : 4'(tb_gwt))
                                      : (grcg_active | egc_active_w) ? 4'd0
                                      : vid_vb ? 4'd1 : 4'd6}),
         .dx           (dx_r[6:0]),
@@ -2175,6 +2176,8 @@ module tb_mem_perf;
     final $display("MOVPROF cyc=%0d st0-11: %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d fills=%0d wr_pend=%0d rd_pend=%0d ld_pend=%0d p_busy=%0d cb_v=%0d inst=%0d",
         mv_cyc, mv_st[0],mv_st[1],mv_st[2],mv_st[3],mv_st[4],mv_st[5],mv_st[6],mv_st[7],mv_st[8],mv_st[9],mv_st[10],mv_st[11], mv_fill, mv_wrw, mv_rdw, mv_ldw, mv_pbusy, mv_cbv, mv_inst);
 `endif
+    int tb_gwt = 4;  // TDW: Chipset.sv charges 4 (see vram_wait_now)
+    initial void'($value$plusargs("gwt=%d", tb_gwt));
     int tb_gw = 3;   // Chipset.sv charges 3 (see vram_wait_now)
     initial void'($value$plusargs("gw=%d", tb_gw));
 `ifdef PWTRACE
