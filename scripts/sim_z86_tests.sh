@@ -103,4 +103,19 @@ for a in "+lat=1" "+lat=4 +irq=${RIRQ[0]}" "+lat=5 +latrand +irq=${RIRQ[1]}" "+l
   if [ $bad = 0 ]; then echo "ok   irq_rep $a (runs=$runs mid-rep=$hits maxlat=${lat:--})"
   else echo "FAIL irq_rep $a: runs=$runs mid-rep=$hits maxlat=$lat mem=$m"; fail=1; fi
 done
+# The 80286 protected-mode build (z86 PM286=1, EXT_MB=2): raw_pm.asm runs
+# LGDT/SGDT, LMSW/SMSW, descriptor loads, far CALL/RETF, extended memory and
+# the hole above it, the A20 gate, and OUT 0F0h back to real mode.
+if [ -z "${Z86_DEFS:-}" ]; then
+  SIM_OUT="$OUT.pm" Z86_DEFS=+define+PM286 bash scripts/sim_z86_loop.sh +n=1 > /dev/null
+  PMLOOP="$OUT.pm/loop"
+else
+  PMLOOP="$OUT/loop"
+fi
+want="3f 00 00 20 00 ff f1 ff 34 12 cd ab ff ff 5a a5 34 12 21 43 34 12 cc 77 f0 ff cd ab 77 f6"
+for a in "+lat=1" "+lat=4" "+lat=3 +gate" "+lat=5 +latrand" "+lat=2 +nocache"; do
+  got=$("$PMLOOP" $EXTRA +org=400 +prog=sim/z86_tests/raw_pm.hex +f0reset $a | sed -n 's/^mem 0600: //p')
+  if [ "${got:0:${#want}}" = "$want" ]; then echo "ok   raw_pm $a"
+  else echo "FAIL raw_pm $a"; echo "  want $want"; echo "  got  $got"; fail=1; fi
+done
 exit $fail

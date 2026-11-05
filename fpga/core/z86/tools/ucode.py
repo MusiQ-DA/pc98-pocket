@@ -38,6 +38,11 @@ OPCODES = {           # 6-bit values must match execute.sv
     'IN'        : 28,
     'OUT'       : 29,
     'HALT'      : 30,
+    'DESC'      : 31,   # PM286: GDT descriptor base -> desc_base (execute.sv)
+    'LDDT'      : 32,   # PM286: LGDT/LIDT
+    'STDT'      : 33,   # PM286: SGDT/SIDT
+    'SMSW'      : 34,
+    'LMSW'      : 35,
 }
 
 UINST_FMT = "    `U({op:2d},4'h{arg:1x},{stop}){comma} // {cmt}"
@@ -56,6 +61,9 @@ ARGS = {
     'DEC':    {'CX':1,'TMP_HI':8},
     'IN':     {'BYTE':0,'WORD':1},
     'OUT':    {'BYTE':0,'WORD':1},
+    'DESC':   {'TMP_LO':0,'TMP_HI':1,'DISP':2},
+    'LDDT':   {'GDTR':0,'IDTR':1},
+    'WR_SEG': {'ES':0,'CS':1,'SS':2,'DS':3,'MODRM':4,'OPCODE':8},
 }
 
 def parse(src_text):

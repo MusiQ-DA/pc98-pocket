@@ -5,7 +5,10 @@
 // Based on chipset written by @kitune-san
 //
 module CHIPSET #(
-        parameter clk_rate = 28'd50000000)
+        parameter clk_rate = 28'd50000000,
+        // The CPU core is z86 with its 80286 protected mode (PM286): port
+        // 0x42 bit 1 then reports a 286-class CPU (PERIPHERALS).
+        parameter bit CPU_286 = 0)
         (
         input   logic           clock,
         input   logic           cpu_ce_posedge,
@@ -458,7 +461,7 @@ module CHIPSET #(
     wire  [3:0] gv_rd_len;
     wire [15:0] gv_rd_data;
 
-    PERIPHERALS #(.clk_rate(clk_rate)) u_PERIPHERALS 
+    PERIPHERALS #(.clk_rate(clk_rate), .CPU_286(CPU_286)) u_PERIPHERALS 
     (
         .font_rd_req                        (font_rd_req),
         .font_rd_addr                       (font_rd_addr),

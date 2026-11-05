@@ -24,7 +24,13 @@
 `ifndef CHIPSET_HZ
 `define CHIPSET_HZ 42954545
 `endif
-module core_top (
+module core_top #(
+    // z86's minimal 80286 protected mode, the 286-class port 0x42 and the
+    // ITF self-test skip (see z86.sv PM286); EXT_MB megabytes of extended
+    // memory at 1 MB (z86_cache's map, at most 3). 0 builds the 20-bit core.
+    parameter bit PM286  = 1,
+    parameter int EXT_MB = 3
+) (
 
     //
     // physical connections
@@ -3089,7 +3095,21 @@ module core_top (
     // Only the word at FFFF0 differs, so one address needs intercepting.
     wire        rom_patch_reset = select_bios
                                 & (bios_access_address_wire == 20'hFFFF0);
-    wire [15:0] rom_data_in     = rom_patch_reset ? 16'h00EA : ioctl_data;
+    // PM286: the ITF's 80286 self-test is skipped. With port 0x42 bit 1
+    // clear (a 286) the ITF runs F8B9E -- exceptions through the IDT, call
+    // gates, VERR/VERW, LAR/LSL, LTR, BOUND, ARPL, #GP -- before its
+    // protected-mode memory count at F8FA2. z86's protected mode is np21w
+    // i286c's minimal one (bases from descriptors, nothing checked, no
+    // exceptions), so the self-test cannot pass; the count can. F8B99's
+    // `jz F8B9E` (74 03) becomes `jz $+2` (74 00) and falls into the
+    // `jmp F8FA2` at F8B9B that the V30 path takes. Word F8B9A holds 03 and
+    // the jmp's E9; only that exact pair is touched, so a different ITF
+    // image loads unpatched.
+    wire        rom_patch_itf   = PM286 & select_itf
+                                & (bios_access_address_wire == 20'hF8B9A)
+                                & (ioctl_data == 16'hE903);
+    wire [15:0] rom_data_in     = rom_patch_reset ? 16'h00EA
+                                : rom_patch_itf   ? 16'hE900 : ioctl_data;
 
     wire bios_load_n = ~(ioctl_download & (select_bios | select_itf | select_font));
 
@@ -3622,7 +3642,7 @@ module core_top (
             cpu_address <= cpu_address;
     end
 
-    CHIPSET #(.clk_rate(cur_rate)) u_CHIPSET
+    CHIPSET #(.clk_rate(cur_rate), .CPU_286(PM286)) u_CHIPSET
     (
         .clock                              (clk_chipset),
         .cpu_ce_posedge                     (cpu_ce_posedge),
@@ -4017,7 +4037,7 @@ module core_top (
     // cache is write-through no-allocate, uncached writes ride the
     // port-A commits whose snoop clears lines, and clk_select latches
     // on biu_done.
-    z86 #(.WCOMB(1'b1)) u_cpu (
+    z86 #(.WCOMB(1'b1), .PM286(PM286), .EXT_MB(EXT_MB)) u_cpu (
         .clk       (zet_clk),
         .reset     (reset_cpu),
         .clk_free  (clk_chipset),

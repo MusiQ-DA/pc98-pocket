@@ -10,7 +10,9 @@
 //
 // Register/flags updates and branching are sent to the WRITE-BACK stage.
 import z86_package::*;
-module execute (
+module execute #(
+    parameter bit PM286 = 0             // minimal 80286 protected mode (z86.sv)
+) (
     input             clk,
     input             reset,
     output reg        halted /* verilator public */,
@@ -29,8 +31,8 @@ module execute (
     input [15:0]      ex_imm,
     input             ex_mem_rd,
     input [15:0]      ex_e_addr_val,
-    input [19:0]      ex_e_fulladdr,
-    input [15:0]      ex_e_segment,
+    input [23:0]      ex_e_fulladdr,
+    input [23:0]      ex_e_base,        // the E operand's segment base
     input [15:0]      ex_g_val,
 
     input             ex_ucode_valid,         
@@ -71,18 +73,20 @@ module execute (
     output reg        wb_seg_valid,
     output reg [1:0]  wb_seg,
     output reg [15:0] wb_seg_data,
+    output reg        wb_seg_pm,            // PM286: wb_seg_base is the descriptor's
+    output     [23:0] wb_seg_base,
 
     // memory interface
     output reg        rd,
     input             rd_ready,
-    output reg [19:0] rd_addr,
+    output reg [23:0] rd_addr,
     output reg        rd_word,
     input      [15:0] rd_data,
     output reg        rd_io,
 
     output reg        wr_valid,
     input             wr_ready,
-    output reg [19:0] wr_addr,
+    output reg [23:0] wr_addr,
     output reg [15:0] wr_data,
     output reg        wr_word,
     output reg        wr_io,
@@ -106,9 +110,13 @@ module execute (
     input      [15:0] seg_SS,
     input      [15:0] seg_DS,
     input      [15:0] seg_ES,
+    input      [23:0] base_CS,       // hidden bases (write-back)
+    input      [23:0] base_SS,
+    input      [23:0] base_ES,
+    output            pe,            // PM286: MSW.PE
 
     // FETCH and WRITE-BACK -  branch target
-    output reg [19:0] br_target,
+    output reg [23:0] br_target,
     output reg        br_taken,
     output reg [15:0] br_new_cs,
     output reg [15:0] br_new_ip,
@@ -197,7 +205,7 @@ reg [15:0]  mc_data2;
 reg         mc_width2;
 
 reg         mc_wr;
-reg [19:0]  mc_wr_addr;
+reg [23:0]  mc_wr_addr;
 reg [15:0]  mc_wr_data;
 reg         mc_wr_word;
 reg         mc_wr_io;
@@ -482,6 +490,54 @@ reg [15:0] tmp_lo_reg, tmp_hi_reg, tmp_flags_reg;
 reg read_hi, read_lo, read_flags;    // reading into tmp_lo / tmp_hi
 reg pop_reg, pop_next;               // pop memory read in progress
 
+// ---- PM286 state ----------------------------------------------------------
+// MSW (PE, MP, EM, TS), GDTR, IDTR and the descriptor read's result. A CPU
+// reset (OUT 0F0h) is the only way back to real mode, as on the 80286.
+reg  [3:0]  msw;
+reg  [23:0] gdt_base, idt_base;
+reg  [15:0] gdt_limit, idt_limit;
+reg  [23:0] desc_base;               // DESC: the descriptor's base
+reg  [15:0] dsel_r;                  // DESC: the selector being loaded
+reg  [1:0]  xr_st, xr_next;          // DESC/LDDT read sequence
+wire        pe_r = PM286 & msw[0];
+assign pe = pe_r;
+assign wb_seg_base = desc_base;
+wire [15:0] dsel_now = (mc_cur.arg[1:0] == 2'd0) ? tmp_lo
+                     : (mc_cur.arg[1:0] == 2'd1) ? tmp_hi : ex_disp[31:16];
+
+generate if (PM286) begin : g_pm
+always_ff @(posedge clk) begin
+    xr_st <= xr_next;
+    if (mc_active && ex_ucode_valid && ~br_taken) begin
+        if (mc_cur.op == MC_DESC) begin
+            if (xr_st == 2'd0) dsel_r <= dsel_now;
+            if (xr_st == 2'd1) desc_base[15:0]  <= rd_data;
+            if (xr_st == 2'd2) desc_base[23:16] <= rd_data[7:0];
+        end
+        if (mc_cur.op == MC_LDDT && xr_st == 2'd1) begin
+            if (mc_cur.arg[0]) begin
+                idt_limit <= tmp_lo;
+                idt_base  <= {rd_data[7:0], tmp_hi};
+            end else begin
+                gdt_limit <= tmp_lo;
+                gdt_base  <= {rd_data[7:0], tmp_hi};
+            end
+        end
+        if (mc_cur.op == MC_LMSW)
+            msw <= tmp_lo[3:0] | {3'b000, msw[0]};
+    end
+    if (reset) begin
+        msw   <= 4'h0;
+        xr_st <= 2'd0;
+    end
+end
+end else begin : g_nopm
+always_ff @(posedge clk) begin
+    xr_st <= 2'd0;
+    msw   <= 4'h0;
+end
+end endgenerate
+
 // 3 registers for microcode: tmp_lo / tmp_hi / tmp_flags
 // tmp_lo defaults to E value / effective address, tmp_hi defaults to G value 
 assign tmp_lo = ex_first_cycle ? ex_e_addr_val : 
@@ -493,6 +549,7 @@ assign tmp_hi = ex_first_cycle ? ex_g_val :
 assign tmp_flags = read_flags ? rd_data : tmp_flags_reg;
 
 reg [15:0] mc_new_ip, mc_new_cs, new_sp;
+reg [23:0] mc_new_base;          // base of the CS a µ-code branch lands in
 reg        mc_flags_valid;
 reg [15:0] mc_flags;
 reg [1:0]  mc_flags_update_mask;
@@ -565,6 +622,7 @@ always @* begin
     // latch held anyway, since pop_reg <= pop_next every clock.
     this_sp = sp_fw_valid ? sp_fw : reg2_rdata;
     pop_next = pop_reg;
+    xr_next = xr_st;
     r = R_SI;
     delta = 16'd1;
 
@@ -585,10 +643,11 @@ always @* begin
     mc_load_cs_ip = 0;
     mc_new_ip = 16'h0000;
     mc_new_cs = 16'h0000;
+    mc_new_base = base_CS;
     new_sp = 16'h0000;
 
     mc_wr = 0;
-    mc_wr_addr = 20'h00000;
+    mc_wr_addr = 24'h000000;
     mc_wr_data = 16'h0000;
     mc_wr_word = 1'b1;
     mc_wr_io = 0;
@@ -663,7 +722,7 @@ always @* begin
 
             // port-1 : memory write
             mc_wr = 1'b1;
-            mc_wr_addr = {seg_SS,4'b0} + new_sp;
+            mc_wr_addr = base_SS + {8'h00, new_sp};
             mc_wr_data = val;
 
             // port-2 : SP ← new_sp
@@ -691,7 +750,7 @@ always @* begin
             if ((~wr_valid | wr_ready) &&rd_ready && ~pop_reg & ~br_taken) begin
                 pop_next = 1;
                 rd               = 1;                // launch read
-                rd_addr          = {seg_SS,4'b0} + this_sp;
+                rd_addr          = base_SS + {8'h00, this_sp};
 
                 new_sp           = this_sp + 16'd2;  // post-increment
                 mc_valid         = 1'b1;
@@ -728,10 +787,10 @@ always @* begin
             rd   = 1;
             // reg1_raddr = mc_cur.arg[0] ? R_DI : R_SI;
             case (mc_cur.arg[1:0]) 
-            2'd0: rd_addr = { ex_e_segment, 4'd0 } + ex_e_addr_val;
-            2'd1: rd_addr = { ex_e_segment, 4'd2 } + ex_e_addr_val;
-            2'd2: rd_addr = { ex_e_segment, 4'd0 } + reg1_rdata;
-            2'd3: rd_addr = { seg_ES, 4'd0 } + reg1_rdata;
+            2'd0: rd_addr = ex_e_base + {8'h00, ex_e_addr_val};
+            2'd1: rd_addr = ex_e_base + {8'h00, ex_e_addr_val} + 24'd2;
+            2'd2: rd_addr = ex_e_base + {8'h00, reg1_rdata};
+            2'd3: rd_addr = base_ES + {8'h00, reg1_rdata};
             endcase
 
             // register form
@@ -777,12 +836,12 @@ always @* begin
                 end
                 2'd2: begin                 // tmp_lo → [ES:DI]
                     mc_wr = 1'b1;
-                    mc_wr_addr = {seg_ES,4'b0} + reg1_rdata;
+                    mc_wr_addr = base_ES + {8'h00, reg1_rdata};
                     mc_wr_data = tmp_lo;
                 end
                 2'd3: begin                 // AL/AX → [ES:DI]
                     mc_wr = 1'b1;
-                    mc_wr_addr = {seg_ES,4'b0} + reg1_rdata;
+                    mc_wr_addr = base_ES + {8'h00, reg1_rdata};
                     mc_wr_data = ex_e_addr_val;      // TODO: check if this gives us AX
                 end
                 default: ;   
@@ -808,7 +867,7 @@ always @* begin
         //==================================================================
         MC_IN: begin
             rd = 1;
-            rd_addr = reg1_rdata;
+            rd_addr = {8'h00, reg1_rdata};
             rd_io = 1;
             // PC-98 port: INSB reads the one byte port. rd_word stayed 1 and
             // an even port was read as a word, port+1 with it.
@@ -823,7 +882,7 @@ always @* begin
         //==================================================================
         MC_OUT: begin
             mc_wr = 1;
-            mc_wr_addr = reg1_rdata;
+            mc_wr_addr = {8'h00, reg1_rdata};
             mc_wr_data = tmp_lo;
             mc_wr_word = mc_cur.arg[0];
             mc_wr_io = 1;
@@ -861,6 +920,8 @@ always @* begin
                 mc_new_ip = tmp_lo;
                 mc_new_cs = tmp_hi;
             end    
+            // Protected mode: the base the DESC before it read.
+            mc_new_base = (PM286 && pe_r) ? desc_base : {4'h0, mc_new_cs, 4'h0};
             // $display("MC_BR_FAR: CS=%x IP=%x", mc_new_cs, mc_new_ip);
         end
 
@@ -887,7 +948,7 @@ always @* begin
         //==================================================================
         MC_GETVEC_OFF, MC_GETVEC_SEG: begin
             rd   = 1;                         // toggle
-            rd_addr  = { 12'h000, 
+            rd_addr  = { 16'h0000, 
                          mc_cur.arg == 4'd15 ? ex_imm[7:0] : mc_cur.arg, 
                          mc_cur.op == MC_GETVEC_SEG,
                          1'b0};
@@ -948,7 +1009,10 @@ always @* begin
         MC_WR_SEG: begin
             mc_valid      = 1'b1;
             mc_seg_valid  = 1'b1;
-            mc_seg        = mc_cur.arg[1:0];
+            // arg[3:2]: 0 the segment in arg[1:0], 1 MOV Sw's modrm[4:3],
+            // 2 POP sreg's opcode[4:3] (PM286 routes those here)
+            mc_seg        = mc_cur.arg[2] ? ex_modrm[4:3]
+                          : mc_cur.arg[3] ? ex_opcode[4:3] : mc_cur.arg[1:0];
             mc_seg_data   = tmp_hi;           // drives WB port-1 bus via mc_data
             if (DEBUG) $display("MC_WR_SEG: seg=%x, data=%x", mc_seg, mc_seg_data);
         end
@@ -1244,6 +1308,85 @@ always @* begin
             end
         end
 
+        //==================================================================
+        //  PM286: the minimal 80286 protected mode (np21w i286c's lax
+        //  model -- bases from the descriptor, no limit/type checks, no
+        //  exceptions).
+        //
+        //  DESC  arg 0/1/2: selector in tmp_lo / tmp_hi / ex_disp[31:16].
+        //        Reads the GDT descriptor's base (bytes 2-4) into
+        //        desc_base and leaves the selector in tmp_hi for WR_SEG.
+        //  LDDT  arg 0/1: GDTR / IDTR <- limit tmp_lo, base {[EA+4], tmp_hi}
+        //  STDT  arg[2] GDTR/IDTR, arg[1:0] word: [EA+2w] <- limit, base
+        //        lo, FF:base hi
+        //  SMSW  r/m <- MSW;  LMSW  MSW <- tmp_lo (PE sticks), then a
+        //        branch to the next instruction so decode sees the mode.
+        //==================================================================
+        MC_DESC: if (PM286) begin
+            mc_wait = 1;
+            unique case (xr_st)
+            2'd0: if ((~wr_valid | wr_ready) && rd_ready && ~br_taken) begin
+                rd = 1;
+                rd_addr = gdt_base + {8'h00, dsel_now[15:3], 3'b010};
+                xr_next = 2'd1;
+            end
+            2'd1: if (rd_ready) begin
+                rd = 1;
+                rd_addr = gdt_base + {8'h00, dsel_r[15:3], 3'b100};
+                xr_next = 2'd2;
+            end
+            default: if (rd_ready) begin
+                xr_next = 2'd0;
+                mc_wait = 0;
+            end
+            endcase
+        end
+
+        MC_LDDT: if (PM286) begin
+            mc_wait = 1;
+            if (xr_st == 2'd0) begin
+                if ((~wr_valid | wr_ready) && rd_ready && ~br_taken) begin
+                    rd = 1;
+                    rd_addr = ex_e_fulladdr + 24'd4;
+                    xr_next = 2'd1;
+                end
+            end else if (rd_ready) begin
+                xr_next = 2'd0;
+                mc_wait = 0;
+            end
+        end
+
+        MC_STDT: if (PM286) begin
+            mc_valid   = 1'b1;
+            mc_wr      = 1'b1;
+            mc_wr_addr = ex_e_fulladdr + {21'd0, mc_cur.arg[1:0], 1'b0};
+            unique case (mc_cur.arg[1:0])
+            2'd0:    mc_wr_data = mc_cur.arg[2] ? idt_limit : gdt_limit;
+            2'd1:    mc_wr_data = mc_cur.arg[2] ? idt_base[15:0] : gdt_base[15:0];
+            default: mc_wr_data = {8'hFF, mc_cur.arg[2] ? idt_base[23:16] : gdt_base[23:16]};
+            endcase
+        end
+
+        MC_SMSW: if (PM286) begin
+            mc_valid = 1'b1;
+            if (ex_modrm[7:6] == 2'b11) begin
+                mc_reg_valid = 1'b1;
+                mc_reg       = ex_modrm[2:0];
+                mc_data      = {12'hFFF, msw};
+            end else begin
+                mc_wr      = 1'b1;
+                mc_wr_addr = ex_e_fulladdr;
+                mc_wr_data = {12'hFFF, msw};
+            end
+        end
+
+        MC_LMSW: if (PM286) begin
+            mc_valid      = 1'b1;
+            mc_load_cs_ip = 1'b1;
+            mc_new_cs     = seg_CS;
+            mc_new_ip     = ex_ip_after;
+        end
+
         MC_HALT: begin
             // HLT waits for an interrupt IF admits (the PC-98 port: the
             // standalone core never left HLT). It then retires, and the
@@ -1262,6 +1405,7 @@ always @* begin
         // Gate wtth ex_valid
         if (~ex_valid) begin
             pop_next = 0;
+            xr_next = 2'd0;
         end
 
         // Gate with mc_active and br_taken
@@ -1389,6 +1533,9 @@ always_ff @(posedge clk) begin
     if (mc_active && mc_cur.op == MC_DEC && mc_cur.arg[3:0] == 4'd8) begin
         tmp_hi_reg <= tmp_hi_reg - 16'd1;
     end
+    // PM286 DESC: the selector it loaded, for WR_SEG
+    if (PM286 && mc_active && ex_ucode_valid && mc_cur.op == MC_DESC && xr_st == 2'd2)
+        tmp_hi_reg <= dsel_r;
 
     if (mc_active && (mc_cur.op == MC_TESTF || mc_cur.op == MC_TESTZX || 
                       mc_cur.op == MC_DIV || mc_cur.op == MC_ADJ || mc_cur.op == MC_IN_RANGE)) begin
@@ -1530,6 +1677,7 @@ always @(posedge clk) begin
     wb_width          <= 1'b1;       // default 16-bit
     wb_width2         <= 1'b1;       // default 16-bit
     wb_seg_valid      <= 1'b0;
+    wb_seg_pm         <= 1'b0;
 
     if (ex_valid & (~ex_mem_rd | rd_ready) & (~wr_valid | wr_ready) & ~br_taken)
     unique case (ex_iclass)
@@ -1903,7 +2051,7 @@ always @(posedge clk) begin
             end
         end else begin        // PUSH has memory write
             wr_valid <= 1;
-            wr_addr <= {seg_SS,4'b0} + (is_pop ? sp_before : sp_after);
+            wr_addr <= base_SS + {8'h00, (is_pop ? sp_before : sp_after)};
             wr_data <= push_val;
             wr_word <= 1'b1;              // word access
         end
@@ -2027,7 +2175,7 @@ always @(posedge clk) begin
             wr_valid <= 1'b1;
             wr_addr <= ex_e_fulladdr; // {ex_e_segment, 4'b0} + ex_e_addr_val;   // ModR/M address from earlier
             wr_word <= ex_opcode[0];
-            if (DEBUG) $display("mem dest: wr_addr=%x, wr_data=%x", {ex_e_segment, 4'b0} + ex_e_addr_val, mov_src);
+            if (DEBUG) $display("mem dest: wr_addr=%x, wr_data=%x", ex_e_fulladdr, mov_src);
         end
         default: ;
         endcase
@@ -2062,7 +2210,7 @@ always @(posedge clk) begin
         // signed 8-bit displacement in imm8 is already sign-extended by decoder
         br_new_cs      <= seg_CS;
         br_new_ip      <= ex_ip_after + {{12{ex_imm[7]}}, ex_imm[7:0]};   // TODO: Move to decode
-        br_target      <= {seg_CS, 4'b0} + ex_ip_after + {{12{ex_imm[7]}}, ex_imm[7:0]};
+        br_target      <= base_CS + {8'h00, ex_ip_after + {{8{ex_imm[7]}}, ex_imm[7:0]}};
     end
 
 
@@ -2091,7 +2239,7 @@ always @(posedge clk) begin
                 target_seg = ex_disp[31:16];         // upper word came in disp field
             end
             br_taken   <= 1'b1;
-            br_target  <= {target_seg, 4'b0} + target_off;       // 24-bit addition
+            br_target  <= (is_jmp_far ? {4'h0, target_seg, 4'b0} : base_CS) + {8'h00, target_off};
             br_new_cs  <= target_seg;
             br_new_ip  <= target_off;
         end
@@ -2119,7 +2267,7 @@ always @(posedge clk) begin
             wb_data       <= ex_e_val;                    // AX. TODO: handle w==0
         end else begin         // ----------  OUT ----------
             wr_valid      <= 1'b1;
-            wr_addr       <= {4'h0, port};
+            wr_addr       <= {8'h00, port};
             wr_word       <= w;
             wr_io         <= 1'b1;                           // <── mark I/O
             wr_data       <= w ? ex_e_val                    // AX / AL
@@ -2171,7 +2319,7 @@ always @(posedge clk) begin
         target_off  = ex_ip_after + {{8{ex_imm[7]}}, ex_imm[7:0]}; // sign-extend disp
 
         br_taken    <= cond;
-        br_target   <= {seg_CS, 4'b0} +  target_off ;   // still physical 20-bit because FETCH flattens
+        br_target   <= base_CS + {8'h00, target_off};
         br_new_cs   <= seg_CS;
         br_new_ip   <= target_off;
         /* No flag change, no register/memory write */
@@ -2341,6 +2489,7 @@ always @(posedge clk) begin
         wb_seg_valid   <= mc_seg_valid;
         wb_seg         <= mc_seg;
         wb_seg_data    <= mc_seg_data;
+        wb_seg_pm      <= PM286 && pe_r;
 
         wb_reg2_valid  <= mc_reg2_valid;
         wb_reg2        <= mc_reg2;
@@ -2364,7 +2513,7 @@ always @(posedge clk) begin
         wr_io <= mc_wr_io;
 
         br_taken    <= mc_load_cs_ip;
-        br_target   <= {mc_new_cs, 4'b0} + mc_new_ip;
+        br_target   <= mc_new_base + {8'h00, mc_new_ip};
         br_new_ip   <= mc_new_ip;
         br_new_cs   <= mc_new_cs;
         if (DEBUG) $display("mc_valid: %b, mc_reg_valid: %b, mc_reg: %d, mc_data: %h, mc_wr: %b, mc_wr_addr: %h, mc_wr_data: %h, mc_wr_word: %b, mc_reg2_valid: %b, mc_reg2: %d, mc_data2: %h, mc_flags: %h, mc_flags_update_mask: %b", mc_valid, mc_reg_valid, mc_reg, mc_data, mc_wr, mc_wr_addr, mc_wr_data, mc_wr_word, mc_reg2_valid, mc_reg2, mc_data2, mc_flags, mc_flags_update_mask);

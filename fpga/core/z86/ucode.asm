@@ -672,3 +672,122 @@
     POP      BP
     .end
 
+
+
+;;; ─────────────────────── 80286 protected mode (PM286) ────────────────
+; The minimal subset np21w's i286c gives a PC-9801's ITF and BIOS: GDT
+; descriptors supply segment bases, nothing is checked. Decode picks the
+; _PM entries for the segment loads once MSW.PE is set (execute.sv DESC).
+
+@SGDT                       ; 0F 01 /0
+    STDT     0
+    STDT     1
+    STDT     2
+    .end
+
+@SIDT                       ; 0F 01 /1
+    STDT     4
+    STDT     5
+    STDT     6
+    .end
+
+@LGDT                       ; 0F 01 /2
+    LOAD     0              ; limit   -> tmp_lo
+    LOAD     1              ; base lo -> tmp_hi
+    LDDT     GDTR           ; base hi from EA+4
+    .end
+
+@LIDT                       ; 0F 01 /3
+    LOAD     0
+    LOAD     1
+    LDDT     IDTR
+    .end
+
+@SMSW                       ; 0F 01 /4
+    SMSW
+    .end
+
+@LMSW                       ; 0F 01 /6
+    LOAD     0              ; r/m -> tmp_lo
+    LMSW                    ; and branch to the next instruction
+    .end
+
+@MOV_SREG_PM                ; 8E with PE
+    LOAD     0              ; Ew -> tmp_lo
+    DESC     TMP_LO
+    WR_SEG   MODRM
+    .end
+
+@POP_SREG_PM                ; 07/17/1F with PE
+    POP      1              ; -> tmp_hi
+    DESC     TMP_HI
+    WR_SEG   OPCODE
+    .end
+
+@LES_PM
+    LOAD      0
+    LOAD      1
+    DESC      TMP_HI
+    WR_REG    REG
+    WR_SEG    0
+    .end
+
+@LDS_PM
+    LOAD      0
+    LOAD      1
+    DESC      TMP_HI
+    WR_REG    REG
+    WR_SEG    3
+    .end
+
+@JMP_FAR_PM                 ; EA with PE
+    DESC     DISP
+    BR_FAR   1
+    .end
+
+@CALL_FAR_PM                ; 9A with PE
+    PUSH     CS
+    PUSH     IP_AFTER
+    DESC     DISP
+    BR_FAR   1
+    .end
+
+@CALL_EP_PM                 ; FF.3 with PE
+    PUSH     CS
+    PUSH     IP_AFTER
+    LOAD     0
+    LOAD     1
+    DESC     TMP_HI
+    BR_FAR   0
+    .end
+
+@JMP_EP_PM                  ; FF.5 with PE
+    LOAD     0
+    LOAD     1
+    DESC     TMP_HI
+    BR_FAR   0
+    .end
+
+@RET_FAR_PM
+    POP      0
+    POP      1
+    DESC     TMP_HI
+    BR_FAR   0
+    .end
+
+@RET_FAR_IMM_PM
+    POP      0
+    POP      1
+    ADJSP    0
+    DESC     TMP_HI
+    BR_FAR   0
+    .end
+
+@IRET_PM
+    POP      0
+    POP      1
+    POP      2
+    DESC     TMP_HI
+    WR_FLAGS
+    BR_FAR   0
+    .end

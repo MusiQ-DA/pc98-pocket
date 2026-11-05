@@ -1,7 +1,9 @@
 // The write-back stage
 //
 // This stage handles register writes, flags updates and branching.
-module write_back(
+module write_back #(
+    parameter bit PM286 = 0             // 80286 protected-mode segment bases
+) (
     input             clk,
     input             reset,
 
@@ -26,10 +28,14 @@ module write_back(
     input             wb_seg_valid,
     input [1:0]       wb_seg,
     input [15:0]      wb_seg_data,
+    // PC-98 port (PM286): a protected-mode load carries its descriptor's
+    // base; everything else is a real-mode load, base = selector << 4.
+    input             wb_seg_pm,
+    input [23:0]      wb_seg_base,
 
     // branching
     input             br_taken,
-    input [19:0]      br_target,
+    input [23:0]      br_target,
     input [15:0]      br_new_cs,
     input [15:0]      br_new_ip,
 
@@ -47,6 +53,12 @@ module write_back(
     output reg [15:0] seg_SS /* verilator public */,
     output reg [15:0] seg_DS /* verilator public */,
     output reg [15:0] reg_ip /* verilator public */,
+    // Hidden segment bases (PM286): the linear address every access adds
+    // its offset to. Real mode keeps them at selector << 4.
+    output     [23:0] base_ES,
+    output     [23:0] base_CS,
+    output     [23:0] base_SS,
+    output     [23:0] base_DS,
 
     // debug interface
     input             reg_wr,
@@ -135,6 +147,46 @@ always @* begin
         endcase
     end
 end
+
+// Hidden bases (PM286). A branch's base is what its target is over its new
+// IP -- near branches keep base_CS, a far one carries the new CS's
+// (descriptor, or selector << 4), and execute computes br_target = base + IP
+// either way.
+reg [23:0] base_ES_r, base_CS_r, base_SS_r, base_DS_r;
+assign base_ES = PM286 ? base_ES_r : {4'h0, seg_ES_reg, 4'h0};
+assign base_CS = PM286 ? base_CS_r : {4'h0, seg_CS_reg, 4'h0};
+assign base_SS = PM286 ? base_SS_r : {4'h0, seg_SS_reg, 4'h0};
+assign base_DS = PM286 ? base_DS_r : {4'h0, seg_DS_reg, 4'h0};
+wire [23:0] wb_base = wb_seg_pm ? wb_seg_base : {4'h0, wb_seg_data, 4'h0};
+generate if (PM286) begin : g_base
+always_ff @(posedge clk) begin
+    if (wb_seg_valid) begin
+        unique case (wb_seg[1:0])
+            2'd0: base_ES_r <= wb_base;
+            2'd1: base_CS_r <= wb_base;
+            2'd2: base_SS_r <= wb_base;
+            2'd3: base_DS_r <= wb_base;
+        endcase
+    end
+    if (br_taken)
+        base_CS_r <= br_target - {8'h00, br_new_ip};
+    if (reset) begin
+        base_CS_r <= 24'h0F0000;
+        base_DS_r <= 24'h0;
+        base_ES_r <= 24'h0;
+        base_SS_r <= 24'h0;
+    end
+    if (reg_wr) begin
+        case (reg_addr)
+        4'd8:  base_CS_r <= {4'h0, reg_din, 4'h0};
+        4'd9:  base_SS_r <= {4'h0, reg_din, 4'h0};
+        4'd10: base_DS_r <= {4'h0, reg_din, 4'h0};
+        4'd11: base_ES_r <= {4'h0, reg_din, 4'h0};
+        default: ;
+        endcase
+    end
+end
+end endgenerate
 
 always_ff @(posedge clk) begin
 

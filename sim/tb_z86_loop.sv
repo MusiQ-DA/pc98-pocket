@@ -50,7 +50,10 @@ module tb_z86_loop;
                 for (int i = 0; i <= f_len; i++) begin
                     f_wcnt = 5'(i);
                     #1;
-                    mem[f_addr[19:0] + 20'(i)] = (i == 0) ? f_wd0[7:0] : f_wd1[7:0];
+                    if (f_addr[23:21] != 3'd0)      // PM286 extended memory pages
+                        xmem[f_addr + 24'(i)] = (i == 0) ? f_wd0[7:0] : f_wd1[7:0];
+                    else
+                        mem[f_addr[19:0] + 20'(i)] = (i == 0) ? f_wd0[7:0] : f_wd1[7:0];
                     if (wlog != 0) $fdisplay(wlog, "%05x %02x", f_addr[19:0] + 20'(i),
                                              (i == 0) ? f_wd0[7:0] : f_wd1[7:0]);
                     @(posedge clk);
@@ -59,7 +62,10 @@ module tb_z86_loop;
             end else begin
                 f_rd_n++;
                 for (int i = 0; i <= f_len; i++) begin
-                    f_rvalid <= 1; f_rdata <= {8'h00, mem[f_addr[19:0] + 20'(i)]};
+                    f_rvalid <= 1;
+                    f_rdata <= {8'h00, (f_addr[23:21] != 3'd0)
+                                ? (xmem.exists(f_addr + 24'(i)) ? xmem[f_addr + 24'(i)] : 8'h00)
+                                : mem[f_addr[19:0] + 20'(i)]};
                     @(posedge clk);
                 end
                 f_rvalid <= 0;
@@ -87,7 +93,11 @@ module tb_z86_loop;
         pace_ce_r <= (pace_div == 2'd3);
     end
 
-    z86 #(.WCOMB(1'b1)) u (.clk(zclk), .reset(reset), .clk_free(clk), .ce(zce), .cache_en(nocache == 0), .pace(pace_r), .pace_ce(pace_ce_r), .pace_rd_wait(pace_w), .pace_wr_wait(pace_w), .pace_vwait(5'd0), .dx(dx_r),
+`ifdef PM286
+    z86 #(.WCOMB(1'b1), .PM286(1'b1), .EXT_MB(2)) u (
+`else
+    z86 #(.WCOMB(1'b1)) u (
+`endif.clk(zclk), .reset(reset), .clk_free(clk), .ce(zce), .cache_en(nocache == 0), .pace(pace_r), .pace_ce(pace_ce_r), .pace_rd_wait(pace_w), .pace_wr_wait(pace_w), .pace_vwait(5'd0), .dx(dx_r),
            .bios_shadow(1'b0), .bios_protect(1'b0),
            .f_req(f_req), .f_we(f_we), .f_addr(f_addr), .f_len(f_len),
            .f_wdata0(f_wd0), .f_wdata1(f_wd1), .f_ack(f_ack), .f_rvalid(f_rvalid),
@@ -100,6 +110,7 @@ module tb_z86_loop;
            .dbg_halted(halted));
 
     logic [7:0] mem [0:1048575];
+    logic [7:0] xmem [logic [23:0]];     // port F above the guest megabyte
     int lat = 4, n = 1000, cur_lat = 4, latrand = 0;
     // +maxcyc=N: the runaway bound (paced runs take ~4x the clocks)
     longint maxcyc = 10_000_000;

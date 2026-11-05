@@ -30,6 +30,11 @@ localparam [5:0] MC_IN_RANGE = 27;
 localparam [5:0] MC_IN = 28;
 localparam [5:0] MC_OUT = 29;
 localparam [5:0] MC_HALT = 30;
+localparam [5:0] MC_DESC = 31;
+localparam [5:0] MC_LDDT = 32;
+localparam [5:0] MC_STDT = 33;
+localparam [5:0] MC_SMSW = 34;
+localparam [5:0] MC_LMSW = 35;
 const uinstr_t microcode_rom [512] = '{
     // 00 NOP
     `U( 0,4'h0,1), // 8: .end
@@ -521,85 +526,102 @@ const uinstr_t microcode_rom [512] = '{
     `U(18,4'h4,0), // 671: WR_REG   SP
     `U( 2,4'hd,0), // 672: POP      BP
     `U( 0,4'h0,1), // 673: .end
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
-    `U( 0,4'h0,1), // empty
+    // 19C SGDT
+    `U(33,4'h0,0), // 683: STDT     0
+    `U(33,4'h1,0), // 684: STDT     1
+    `U(33,4'h2,0), // 685: STDT     2
+    `U( 0,4'h0,1), // 686: .end
+    // 1A0 SIDT
+    `U(33,4'h4,0), // 689: STDT     4
+    `U(33,4'h5,0), // 690: STDT     5
+    `U(33,4'h6,0), // 691: STDT     6
+    `U( 0,4'h0,1), // 692: .end
+    // 1A4 LGDT
+    `U( 6,4'h0,0), // 695: LOAD     0
+    `U( 6,4'h1,0), // 696: LOAD     1
+    `U(32,4'h0,0), // 697: LDDT     GDTR
+    `U( 0,4'h0,1), // 698: .end
+    // 1A8 LIDT
+    `U( 6,4'h0,0), // 701: LOAD     0
+    `U( 6,4'h1,0), // 702: LOAD     1
+    `U(32,4'h1,0), // 703: LDDT     IDTR
+    `U( 0,4'h0,1), // 704: .end
+    // 1AC SMSW
+    `U(34,4'h0,0), // 707: SMSW
+    `U( 0,4'h0,1), // 708: .end
+    // 1AE LMSW
+    `U( 6,4'h0,0), // 711: LOAD     0
+    `U(35,4'h0,0), // 712: LMSW
+    `U( 0,4'h0,1), // 713: .end
+    // 1B1 MOV_SREG_PM
+    `U( 6,4'h0,0), // 716: LOAD     0
+    `U(31,4'h0,0), // 717: DESC     TMP_LO
+    `U(19,4'h4,0), // 718: WR_SEG   MODRM
+    `U( 0,4'h0,1), // 719: .end
+    // 1B5 POP_SREG_PM
+    `U( 2,4'h1,0), // 722: POP      1
+    `U(31,4'h1,0), // 723: DESC     TMP_HI
+    `U(19,4'h8,0), // 724: WR_SEG   OPCODE
+    `U( 0,4'h0,1), // 725: .end
+    // 1B9 LES_PM
+    `U( 6,4'h0,0), // 728: LOAD      0
+    `U( 6,4'h1,0), // 729: LOAD      1
+    `U(31,4'h1,0), // 730: DESC      TMP_HI
+    `U(18,4'ha,0), // 731: WR_REG    REG
+    `U(19,4'h0,0), // 732: WR_SEG    0
+    `U( 0,4'h0,1), // 733: .end
+    // 1BF LDS_PM
+    `U( 6,4'h0,0), // 736: LOAD      0
+    `U( 6,4'h1,0), // 737: LOAD      1
+    `U(31,4'h1,0), // 738: DESC      TMP_HI
+    `U(18,4'ha,0), // 739: WR_REG    REG
+    `U(19,4'h3,0), // 740: WR_SEG    3
+    `U( 0,4'h0,1), // 741: .end
+    // 1C5 JMP_FAR_PM
+    `U(31,4'h2,0), // 744: DESC     DISP
+    `U(10,4'h1,0), // 745: BR_FAR   1
+    `U( 0,4'h0,1), // 746: .end
+    // 1C8 CALL_FAR_PM
+    `U( 1,4'h0,0), // 749: PUSH     CS
+    `U( 1,4'h2,0), // 750: PUSH     IP_AFTER
+    `U(31,4'h2,0), // 751: DESC     DISP
+    `U(10,4'h1,0), // 752: BR_FAR   1
+    `U( 0,4'h0,1), // 753: .end
+    // 1CD CALL_EP_PM
+    `U( 1,4'h0,0), // 756: PUSH     CS
+    `U( 1,4'h2,0), // 757: PUSH     IP_AFTER
+    `U( 6,4'h0,0), // 758: LOAD     0
+    `U( 6,4'h1,0), // 759: LOAD     1
+    `U(31,4'h1,0), // 760: DESC     TMP_HI
+    `U(10,4'h0,0), // 761: BR_FAR   0
+    `U( 0,4'h0,1), // 762: .end
+    // 1D4 JMP_EP_PM
+    `U( 6,4'h0,0), // 765: LOAD     0
+    `U( 6,4'h1,0), // 766: LOAD     1
+    `U(31,4'h1,0), // 767: DESC     TMP_HI
+    `U(10,4'h0,0), // 768: BR_FAR   0
+    `U( 0,4'h0,1), // 769: .end
+    // 1D9 RET_FAR_PM
+    `U( 2,4'h0,0), // 772: POP      0
+    `U( 2,4'h1,0), // 773: POP      1
+    `U(31,4'h1,0), // 774: DESC     TMP_HI
+    `U(10,4'h0,0), // 775: BR_FAR   0
+    `U( 0,4'h0,1), // 776: .end
+    // 1DE RET_FAR_IMM_PM
+    `U( 2,4'h0,0), // 779: POP      0
+    `U( 2,4'h1,0), // 780: POP      1
+    `U( 3,4'h0,0), // 781: ADJSP    0
+    `U(31,4'h1,0), // 782: DESC     TMP_HI
+    `U(10,4'h0,0), // 783: BR_FAR   0
+    `U( 0,4'h0,1), // 784: .end
+    // 1E4 IRET_PM
+    `U( 2,4'h0,0), // 787: POP      0
+    `U( 2,4'h1,0), // 788: POP      1
+    `U( 2,4'h2,0), // 789: POP      2
+    `U(31,4'h1,0), // 790: DESC     TMP_HI
+    `U(17,4'h0,0), // 791: WR_FLAGS
+    `U(10,4'h0,0), // 792: BR_FAR   0
+    `U( 0,4'h0,1), // 793: .end
     `U( 0,4'h0,1), // empty
     `U( 0,4'h0,1), // empty
     `U( 0,4'h0,1), // empty

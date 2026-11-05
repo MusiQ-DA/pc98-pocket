@@ -6,7 +6,8 @@
 //
 
 module PERIPHERALS #(
-		parameter clk_rate = 28'd50000000
+		parameter clk_rate = 28'd50000000,
+		parameter bit CPU_286 = 0      // port 0x42 bit 1 clear (see sysport_data)
     ) (
         input   logic           clock,
         // Sixteen-colour mode, out to the memory path: it decides whether
@@ -1325,8 +1326,16 @@ module PERIPHERALS #(
     // "640KB OK" then a boot loop). The 0F 01 NOP-consume microcode stays
     // (dead on the V30 path, harmless); a genuine 286 instruction still
     // traps through INVOP/INTD and the pc_hist freeze names it.
-    // The BIOS never looks at bit 1 -- it tests bits
-    // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
+    //
+    // CPU_286 (core_top, with z86's PM286 protected mode) answers 8'h00:
+    // the 286 class. The ITF's self-test at F8B9E is skipped by core_top's
+    // loader patch (jz F8B9E -> jz +0, into the jmp F8FA2 the V30 path
+    // takes), and F8FA2's protected-mode memory check then counts the
+    // extended memory. The BIOS DOES read bit 1 (the old note here said it
+    // did not): FD8B1 points vector 10h at 0936h for a 286, FDA21/FDC4A let
+    // INT 1Fh AH=90h/91h (the protected-mode block move) run instead of
+    // returning CF=1, and FFEBD scans 04D0h for D7/D9 boards with a delay.
+    // Bits 0, 3, 4, 5, 6 stay 0, as before.
     // 0x31 = 0xE3. The detour through 0x12 is worth recording.
     //
     // When 0xE3 first went in, the Pocket's screen went completely blank and
@@ -1348,7 +1357,7 @@ module PERIPHERALS #(
     wire [7:0] sysport_data = sysport_35_select ? pc98_sysport_c
                             : sysport_31_select ? cfg_dipsw2
                             : sysport_33_select ? (8'h08 | {7'd0, upd4990_cdat})
-                            : sysport_42_select ? 8'h02
+                            : sysport_42_select ? (CPU_286 ? 8'h00 : 8'h02)
                             :                     8'h00;
 
     // ------------------------------------------------- keyboard 8251
