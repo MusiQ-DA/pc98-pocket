@@ -886,9 +886,9 @@ module z86_cache #(
                     // so at most three words, not the rest of our line
                     // (a CALL/RET target paid up to seven words of tail
                     // the 286 never fetches before the next transfer).
+                    // (min(7 - w, 3) is ~w[1:0] for w >= 4, else 3)
                     ptail <= (pace && !dx[0])
-                           ? ((ld_addr[3:1] >= 3'd4) ? (6'd7 - {3'd0, ld_addr[3:1]})
-                                                     : 6'd3) * {3'd0, p_rcyc}
+                           ? {4'd0, ld_addr[3] ? ~ld_addr[2:1] : 2'd3} * {3'd0, p_rcyc}
                            : 6'd0;
                 end else if (ce && !busy) begin
                     // Uncached: start at the word the fetch asked for. A
