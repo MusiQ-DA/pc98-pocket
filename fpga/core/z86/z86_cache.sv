@@ -881,8 +881,15 @@ module z86_cache #(
                     pdebt <= !pace ? 6'd0
                            : dx[0] ? (6'd8 - {3'd0, ld_addr[3:1]}) * {3'd0, p_rcyc}
                            : {3'd0, p_rcyc};
-                    ptail <= (pace && !dx[0]) ? (6'd7 - {3'd0, ld_addr[3:1]}) * {3'd0, p_rcyc}
-                                              : 6'd0;
+                    // The tail is what the 286's BIU would fetch on behind
+                    // the word asked for -- but its queue holds six bytes,
+                    // so at most three words, not the rest of our line
+                    // (a CALL/RET target paid up to seven words of tail
+                    // the 286 never fetches before the next transfer).
+                    ptail <= (pace && !dx[0])
+                           ? ((ld_addr[3:1] >= 3'd4) ? (6'd7 - {3'd0, ld_addr[3:1]})
+                                                     : 6'd3) * {3'd0, p_rcyc}
+                           : 6'd0;
                 end else if (ce && !busy) begin
                     // Uncached: start at the word the fetch asked for. A
                     // 286's BIU fetches from the branch target on, never
