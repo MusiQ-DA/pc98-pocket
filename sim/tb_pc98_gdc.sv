@@ -21,7 +21,7 @@
 `default_nettype none
 `timescale 1ns/1ps
 
-module tb_pc98_gdc;
+module tb_pc98_gdc #(parameter bit M = 1'b1);
 
     localparam real CLK_MHZ = 42.954545;
     localparam real HALF_NS = 500.0 / CLK_MHZ;
@@ -69,7 +69,9 @@ module tb_pc98_gdc;
     wire [1:0]  zoom_disp;
     wire [9:0]  vlines;
 
-    pc98_gdc dut (
+    // M=1: the master (CSRFORM seed, partition, PRAM...); M=0: the slave,
+    // the only one that draws (np21w gdc_work), for the server handshake.
+    pc98_gdc #(.MASTER(M)) dut (
         .clk(clk), .reset(reset),
         .cs(cs), .a1(a1), .io_read_n(io_read_n), .io_write_n(io_write_n),
         .data_in(data_in), .data_out(data_out),
@@ -117,6 +119,7 @@ module tb_pc98_gdc;
         reset = 1'b0;
         repeat (4) @(posedge clk);
 
+        if (M) begin
         // ---- the CSRFORM power-on values -----------------------------------
         // The BIOS's boot sends CSRFORM as ONE byte (the enable with TEXT_LR)
         // and never the full three, so the form the cursor draws with is the
@@ -131,6 +134,7 @@ module tb_pc98_gdc;
         want("reset cursor top 0",        cursor_top,        5'd0);
         want("reset cursor bottom 15",    cursor_bottom,     5'd15);
 
+        end
         // ---- START and STOP ------------------------------------------------
         // np21w gdc_work's switch: START/START_/SYNC_ON set the display
         // enable, STOP/STOP_/SYNC_OFF clear it -- and RESET is not in the
@@ -198,6 +202,7 @@ module tb_pc98_gdc;
         par(8'hFF); par(8'hFF); par(8'hFF); par(8'hFF);
         want("RESET takes no params (vlines)", vlines, 10'd400);
 
+        if (M) begin
         // ---- row-unit partition boundaries -----------------------------------
         // np21w counts LEN in emitted rasterlines; the boundary in ROWS is
         // floor(cumsum / (TEXT_LR+1)). CSRFORM P1 is still its 0x0F seed
@@ -209,6 +214,7 @@ module tb_pc98_gdc;
         want("bend1 = 26 lines / 16",  part_bend[1], 6'd1);
         want("bend2 = 58 lines / 16",  part_bend[2], 6'd3);
 
+        end
         // ---- CSRW / CSRFORM -------------------------------------------------
         // The address is a plain little-endian word (np21w maketext:
         // LOADINTELWORD(para + GDC_CSRW)); the manual's interleaved reading
@@ -233,8 +239,8 @@ module tb_pc98_gdc;
         // CSRFORM P1 = 0xC1 -> TEXT_LR 1 -> two-raster rows; the boundaries
         // redivide: floor({25,26,58}/2) = {12, 13, 29}.
         repeat (400) @(posedge clk);
-        want("bend0 redivides for LR=1", part_bend[0], 6'd12);
-        want("bend2 redivides for LR=1", part_bend[2], 6'd29);
+        if (M) want("bend0 redivides for LR=1", part_bend[0], 6'd12);
+        if (M) want("bend2 redivides for LR=1", part_bend[2], 6'd29);
 
         // ---- the status register --------------------------------------------
         // bit 6 hblank, bit 5 vsync, bit 2 FIFO empty, and bit 7 CLEAR.
@@ -253,6 +259,7 @@ module tb_pc98_gdc;
         want("status, hblank+vsync", data_out, 8'h64);
         io_read_n = 1'b1; cs = 1'b0;
 
+        if (!M) begin
         // ---- the drawing server's handshake ---------------------------------
         // VECTE/TEXTE are EXECUTE-class now: latched with a snapshot of the
         // vector parameters, throttled (the FIFO-empty status bit clears)
@@ -301,6 +308,7 @@ module tb_pc98_gdc;
         cmd(8'hE0);                        // zero-parameter START and CSRR.
         want("no spurious request from strays", draw_req, 0);
 
+        end
         // ---- the read-back path, np21w's snd/ptr model ----------------------
         // CSRR stages five bytes off CSRW (the high address byte masked to
         // two bits, then two zeros); LPEN's three come from the pen latch,

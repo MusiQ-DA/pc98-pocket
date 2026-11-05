@@ -466,6 +466,11 @@ jobs:
             -Isim -I$S sim/tb_pc98_gdc.sv $S/pc98_gdc.sv -o g --Mdir obj_gdc
           ./obj_gdc/g | tee gdc.log
           grep -q "PASS tb_pc98_gdc" gdc.log
+          # and as the slave -- the only GDC that draws (np21w gdc_work)
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_gdc \
+            -GM=0 -Isim -I$S sim/tb_pc98_gdc.sv $S/pc98_gdc.sv -o g --Mdir obj_gdc_s
+          ./obj_gdc_s/g | tee gdc_s.log
+          grep -q "PASS tb_pc98_gdc" gdc_s.log
 
       - name: the CRT interrupt follows np21w's vsyncint lifecycle, end to end
         run: |
