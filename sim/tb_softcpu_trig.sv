@@ -118,7 +118,7 @@ module tb_softcpu_trig;
         .osd_palette  (), .osd_cpu_speed (), .osd_bios_wr (),
         .osd_boost    (), .osd_spk_vol   (), .osd_stereo (),
         .osd_gamepad  (),
-        .key_cfg_flat ()
+        .key_cfg_idx (4'd0), .key_cfg_q (), .key_cfg_diag ()
     );
 
     // Micro-program, word-indexed (fw_wr_addr is a WORD address into the

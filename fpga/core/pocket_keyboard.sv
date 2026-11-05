@@ -23,7 +23,9 @@ module pocket_keyboard #(
     input        osd_active,   // 1 = an overlay (OSD) is up: suppress button typing
     input  [8:0] vkb_key,      // virtual-keyboard event: {make, Set-2 code}
     input        vkb_stb,      // toggles per firmware-emitted event
-    input [16*9-1:0] key_cfg,  // per-control {ext, Set-2 code} file; ids 4-10 are the buttons (code 0 = unmapped/function)
+    output     [3:0] key_idx,  // per-control {ext, Set-2 code} file, read one id at a time: ids 4-10 are the buttons
+    input      [8:0] key_q,    //   (code 0 = unmapped/function); key_q answers key_idx one clock later
+    input            key_diag, // the D-pad preset is a diagonal one (ids 11-14 mapped)
     input [31:0] cont3_joy,    // docked USB: HID usage codes 1-4
     input [15:0] cont3_trig,   // docked USB: HID usage codes 5-6
     input [15:0] cont3_key,    // docked USB: modifier bits (byte [15:8])
@@ -52,8 +54,7 @@ module pocket_keyboard #(
     // D-pad resolver. A preset that defines corner keys (key_cfg[11..14] non-zero) turns the D-pad
     // into an eight-way hat that emits one key at a time; otherwise each direction is its own key and
     // a diagonal press types both cardinals.
-    wire       dpad_diag = (|key_cfg[11*9 +: 8]) | (|key_cfg[12*9 +: 8])
-                         | (|key_cfg[13*9 +: 8]) | (|key_cfg[14*9 +: 8]);
+    wire       dpad_diag = key_diag;
     wire [3:0] dpad_raw  = gamepad ? 4'd0 : buttons[3:0];   // up/down/left/right
     wire       held      = |dpad_raw;
 
@@ -149,7 +150,10 @@ module pocket_keyboard #(
     wire [14:0] btn_gated = { dpad_corner, buttons[9], buttons[15], buttons[14],
                               gamepad ? 4'd0 : buttons[7:4], dpad_card };
 
-    wire [8:0] cur_key = key_cfg[btn_idx*9 +: 9];  // 0-3/11-14 D-pad preset, 4-10 button bindings
+    wire [8:0] cur_key = key_q;
+    reg  [3:0] key_idx_q;          // the id key_q answers for
+    assign     key_idx = btn_idx;
+    always @(posedge clk) key_idx_q <= btn_idx;  // 0-3/11-14 D-pad preset, 4-10 button bindings
 
     //
     // Source B: docked USB keyboard. Synchronise cont3_* from the clk_74a bridge domain,
@@ -260,11 +264,13 @@ module pocket_keyboard #(
                     q_wr        <= q_wr + 1'b1;
                     vkb_stb_d   <= vkb_stb;
                 end else if (btn_change) begin
-                    if (cur_key[7:0] != 8'h00) begin    // code 0 = unmapped: consume, emit nothing
-                        queue[q_wr] <= {cur_key[8], btn_s[btn_idx], cur_key[7:0]};
-                        q_wr        <= q_wr + 1'b1;
+                    if (key_idx_q == btn_idx) begin     // key_q is this id's entry (wait a clock if not)
+                        if (cur_key[7:0] != 8'h00) begin    // code 0 = unmapped: consume, emit nothing
+                            queue[q_wr] <= {cur_key[8], btn_s[btn_idx], cur_key[7:0]};
+                            q_wr        <= q_wr + 1'b1;
+                        end
+                        btn_prev[btn_idx] <= btn_s[btn_idx];
                     end
-                    btn_prev[btn_idx] <= btn_s[btn_idx];
                 end else begin
                     btn_idx <= (btn_idx == 4'd14) ? 4'd0 : btn_idx + 4'd1;  // advance scan 0..14
                 end
