@@ -496,7 +496,13 @@ reg pop_reg, pop_next;               // pop memory read in progress
 reg  [3:0]  msw;
 reg  [23:0] gdt_base, idt_base;
 reg  [15:0] gdt_limit, idt_limit;
-reg  [23:0] desc_base;               // DESC: the descriptor's base
+// DESC: the descriptor's base. Its two reads land in tmp_hi and tmp_flags
+// through the same read_hi/read_flags captures every micro-op read uses
+// (a capture of rd_data of its own missed hold across the gated clock,
+// CI 42212011502); base[15:0] is moved out of tmp_hi before the selector
+// goes back there.
+reg  [15:0] desc_lo;
+wire [23:0] desc_base = {tmp_flags_reg[7:0], desc_lo};
 reg  [15:0] dsel_r;                  // DESC: the selector being loaded
 reg  [1:0]  xr_st, xr_next;          // DESC/LDDT read sequence
 wire        pe_r = PM286 & msw[0];
@@ -511,8 +517,7 @@ always_ff @(posedge clk) begin
     if (mc_active && ex_ucode_valid && ~br_taken) begin
         if (mc_cur.op == MC_DESC) begin
             if (xr_st == 2'd0) dsel_r <= dsel_now;
-            if (xr_st == 2'd1) desc_base[15:0]  <= rd_data;
-            if (xr_st == 2'd2) desc_base[23:16] <= rd_data[7:0];
+            if (xr_st == 2'd2) desc_lo <= tmp_hi_reg;
         end
         if (mc_cur.op == MC_LDDT && xr_st == 2'd1) begin
             if (mc_cur.arg[0]) begin
@@ -1522,6 +1527,11 @@ always_ff @(posedge clk) begin
     end
     if (mc_active && mc_cur.op == MC_POP && mc_cur.arg[3:0] == 4'd2) begin
         read_flags <= 1;
+    end
+    // PM286 DESC: descriptor word 1 -> tmp_hi, word 2 -> tmp_flags
+    if (PM286 && mc_active && ex_ucode_valid && ~br_taken && mc_cur.op == MC_DESC) begin
+        if (xr_st == 2'd0) read_hi    <= 1;
+        if (xr_st == 2'd1) read_flags <= 1;
     end
 
     if (mc_active && mc_cur.op == MC_READ && ~mc_cur.arg[3]) begin

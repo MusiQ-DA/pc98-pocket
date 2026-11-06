@@ -618,8 +618,8 @@ const uinstr_t microcode_rom [512] = '{
     `U( 2,4'h0,0), // 787: POP      0
     `U( 2,4'h1,0), // 788: POP      1
     `U( 2,4'h2,0), // 789: POP      2
-    `U(31,4'h1,0), // 790: DESC     TMP_HI
-    `U(17,4'h0,0), // 791: WR_FLAGS
+    `U(17,4'h0,0), // 790: WR_FLAGS
+    `U(31,4'h1,0), // 791: DESC     TMP_HI
     `U(10,4'h0,0), // 792: BR_FAR   0
     `U( 0,4'h0,1), // 793: .end
     `U( 0,4'h0,1), // empty

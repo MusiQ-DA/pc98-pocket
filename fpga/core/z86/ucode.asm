@@ -787,7 +787,7 @@
     POP      0
     POP      1
     POP      2
+    WR_FLAGS                ; before DESC: its second read passes through tmp_flags
     DESC     TMP_HI
-    WR_FLAGS
     BR_FAR   0
     .end
