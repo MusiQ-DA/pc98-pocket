@@ -264,13 +264,21 @@ module z86_cache #(
 
     // An access is cached when every byte of it is.
     wire [23:0] wr_a1 = wr_addr + 24'd1;
+    // The second byte's MAP class without the 24-bit carry chain: every
+    // map boundary is 32 KB aligned, so a+1 is in a's region unless
+    // a[14:0] = 7FFF, and then in the region starting at a[23:15] + 1.
+    // (The full a+1 sat on the CPU clock's critical path, microcode ->
+    // execute's address add -> this -> the combine-buffer enables.)
+    function automatic logic [23:0] reg1_of(input logic [23:0] a);
+        reg1_of = (a[14:0] == 15'h7FFF) ? {a[23:15] + 9'd1, 15'h0000} : a;
+    endfunction
     wire [23:0] rd_a1 = rd_addr + 24'd1;
     wire [23:0] ld_a1 = ld_addr;
     wire wr_cached = !wr_io && cacheable_a(wr_addr)
-                  && (!wr_word || cacheable_a(wr_a1));
+                  && (!wr_word || cacheable_a(reg1_of(wr_addr)));
     // A store that touches the hole goes nowhere (a word straddling into it
     // is dropped whole: its low byte would land in another page's SDRAM).
-    wire wr_hole   = !wr_io && (hole_a(wr_addr) || (wr_word && hole_a(wr_a1)));
+    wire wr_hole   = !wr_io && (hole_a(wr_addr) || (wr_word && hole_a(reg1_of(wr_addr))));
 
     // ------------------------------------------------------------------
     // Tag and data RAM (M10K): one read port each for the lookup, one write
@@ -493,9 +501,9 @@ module z86_cache #(
     wire        rd_cur_io = rd_now ? rd_io   : rd_isio;
     wire        rd_cur_w  = rd_now ? rd_word : rd_isw;
     wire rd_cached = !rd_cur_io && cacheable_a(rd_cur_a)
-                  && (!rd_cur_w || cacheable_a(rd_cur_a + 24'd1));
+                  && (!rd_cur_w || cacheable_a(reg1_of(rd_cur_a)));
     wire rd_hole   = !rd_cur_io && (hole_a(rd_cur_a)
-                  || (rd_cur_w && hole_a(rd_cur_a + 24'd1)));
+                  || (rd_cur_w && hole_a(reg1_of(rd_cur_a))));
     wire ld_cached = cacheable_a(ld_addr);
     wire ld_hole   = hole_a(ld_addr);
 
