@@ -593,9 +593,15 @@ module z86_cache #(
     wire [4:0]  w_hi = w_lo + (wr_word ? 5'd1 : 5'd0);
     // An uncached access waiting in S_IDLE: busy holds it until the
     // combine buffer has gone out, and this makes the buffer go now.
-    wire        unc_want = (st == S_IDLE)
-                        && ((wr_pend && !wr_cached) || (rd_any && !rd_cached)
-                            || (ld_pend && !ld_cached));
+    // Registered: busy holds the access anyway, so the flush may start a
+    // clock later, and the live form put the gated clock's run_arm -> rd ->
+    // the access's map class -> the combine-buffer enables on the CPU
+    // clock's critical path (CI 42206255920, -0.009 ns).
+    reg         unc_want = 1'b0;
+    always @(posedge clk)
+        unc_want <= (st == S_IDLE)
+                 && ((wr_pend && !wr_cached) || (rd_any && !rd_cached)
+                     || (ld_pend && !ld_cached));
     // The flush launch, as F_IDLE below decides it. A merge on the launch
     // edge would widen the range after f_addr/f_len latched the old one,
     // and the done that follows clears the buffer: the merged bytes were
