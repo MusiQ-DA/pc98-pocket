@@ -256,13 +256,14 @@ wire        pe;
 // and resets the CPU (np21w io/cpuio.c); Peripherals.sv keeps the copy IN
 // 0F2h reports. Closed, every linear address is masked to 20 bits as
 // np21w's CPU_ADRSMASK does, so real mode wraps at 1 MB; open, the HMA
-// and everything protected mode addresses reach z86_cache.
+// and everything protected mode addresses reach z86_cache. The mask is
+// z86_cache's (its a20 input): with the gate closed it decodes a[19:0]
+// only, so no AND sits on the CPU's address-to-cache critical path.
 reg a20 = 1'b0;
 always @(posedge clk)
     if (reset) a20 <= 1'b0;
     else if (PM286 && wr_valid && wr_ready && wr_io && wr_addr[15:0] == 16'h00F2) a20 <= 1'b1;
     else if (wr_valid && wr_ready && wr_io && wr_addr[15:0] == 16'h00F0) a20 <= 1'b0;
-wire [23:0] amask = (PM286 && a20) ? 24'hFFFFFF : 24'h0FFFFF;
 
 reg [19:0] dbg_set_addr_val;
 reg [15:0] dbg_set_ip_val;
@@ -302,21 +303,21 @@ z86_cache #(.WCOMB(WCOMB), .PM286(PM286), .EXT_MB(EXT_MB)) u_cache (
     .dbg_watch_a        (dbg_watch_a),
     .dbg_sn_kills       (dbg_sn_kills),
     .busy               (cache_busy),
-    .ld_addr            (ld_addr & amask),
+    .a20                (PM286 && a20),
+    .ld_addr            (ld_addr),
     .ld_req             (ld_req),
     .ld_ack             (ld_ack),
     .ld_data            (ld_data),
     .ld_drop            (ld_drop),
 
     .rd                 (ex_rd | id_rd),
-    // I/O ports are 16 bits: the mask cannot touch them
-    .rd_addr            ((id_rd ? id_rd_addr : ex_rd_addr) & amask),
+    .rd_addr            (id_rd ? id_rd_addr : ex_rd_addr),
     .rd_io              (id_rd ? id_rd_io : ex_rd_io),
     .rd_ready           (rd_ready),
     .rd_data            (rd_data),
     .rd_word            (id_rd ? id_rd_word : ex_rd_word),
 
-    .wr_addr            (wr_addr & amask),
+    .wr_addr            (wr_addr),
     .wr_valid           (wr_valid),
     .wr_ready           (wr_ready),
     .wr_data            (wr_data),

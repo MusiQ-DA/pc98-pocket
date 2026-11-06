@@ -129,6 +129,9 @@ module z86_cache #(
     input  wire         bios_protect,   // RAM.sv bios_protect_flag[1]
 
     // ---- z86 side: the `cache` module's ports ---------------------------
+    // PM286: the A20 gate. Closed, only a[19:0] is decoded (np21w's
+    // CPU_ADRSMASK = FFFFF): the upper bits are ignored, not added.
+    input  wire         a20,
     input  wire [23:0]  ld_addr,
     input  wire         ld_req,         // toggle
     output reg          ld_ack,         // toggle, follows ld_req when done
@@ -230,7 +233,7 @@ module z86_cache #(
     // vanish, nothing aliases into the low megabyte (the ITF and HIMEM size
     // memory by exactly that miscompare).
     function automatic logic ext_a(input logic [23:0] a);
-        ext_a = PM286 && (a[23:20] != 4'h0);
+        ext_a = PM286 && a20 && (a[23:20] != 4'h0);
     endfunction
     function automatic logic hole_a(input logic [23:0] a);
         hole_a = ext_a(a) && (a[23:20] > 4'(EXT_MB));
