@@ -3108,8 +3108,18 @@ module core_top #(
     wire        rom_patch_itf   = PM286 & select_itf
                                 & (bios_access_address_wire == 20'hF8B9A)
                                 & (ioctl_data == 16'hE903);
+    // The ITF sums its own 32 KB (F8539: lodsw/add dl,al/add dh,ah, then
+    // `or dx,dx; jnz $` at F8543) and hangs at F8545 when the sum is not
+    // zero -- which the self-test patch above makes it (the even-byte sum
+    // drops by 3). On hardware that hang was the first thing PM286 hit
+    // (pc stuck at F8545, 0401 = 0). The `jnz $` (75 FE) becomes `jnz $+2`
+    // (75 00): word F8546 holds the FE and the next instruction's 33.
+    wire        rom_patch_isum  = PM286 & select_itf
+                                & (bios_access_address_wire == 20'hF8546)
+                                & (ioctl_data == 16'h33FE);
     wire [15:0] rom_data_in     = rom_patch_reset ? 16'h00EA
-                                : rom_patch_itf   ? 16'hE900 : ioctl_data;
+                                : rom_patch_itf   ? 16'hE900
+                                : rom_patch_isum  ? 16'h3300 : ioctl_data;
 
     wire bios_load_n = ~(ioctl_download & (select_bios | select_itf | select_font));
 
