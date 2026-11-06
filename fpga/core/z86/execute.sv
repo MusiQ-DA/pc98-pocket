@@ -524,7 +524,8 @@ always_ff @(posedge clk) begin
             end
         end
         if (mc_cur.op == MC_LMSW)
-            msw <= tmp_lo[3:0] | {3'b000, msw[0]};
+            msw <= ((ex_modrm[7:6] == 2'b11) ? reg1_rdata[3:0] : tmp_lo[3:0])
+                 | {3'b000, msw[0]};
     end
     if (reset) begin
         msw   <= 4'h0;
@@ -589,6 +590,9 @@ always @* begin
         end
         MC_READ: begin
             reg1_raddr = mc_cur.arg[2:0];
+        end
+        MC_LMSW: begin
+            reg1_raddr = ex_modrm[2:0];     // LMSW r16 (the fetch LUT names no E for 0F)
         end
         MC_TESTZX, MC_DEC: begin
             reg1_raddr = R_CX;

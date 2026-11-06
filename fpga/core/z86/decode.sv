@@ -969,6 +969,8 @@ function automatic reg_mask_t build_rd_mask();
     if ((id_opcode==8'hE4 || id_opcode==8'hE5 || id_opcode==8'hEC || id_opcode==8'hED || id_opcode==8'h6C || id_opcode==8'h6D)) begin   // IN/INS
         m.io = 1'b1;
     end
+    // PM286: LMSW r16 reads its register (execute's MC_LMSW)
+    if (PM286 && id_two_byte && id_modrm[7:6] == 2'b11) m.gpr[id_modrm[2:0]] = 1'b1;
 
     return m;
 endfunction
@@ -1054,6 +1056,9 @@ function automatic reg_mask_t build_wr_mask();
     end
     if (id_opcode == 8'hC4) m.seg[0] = 1'b1;
     if (id_opcode == 8'hC5) m.seg[3] = 1'b1;
+
+    // PM286: SMSW r16 writes its register
+    if (PM286 && id_two_byte && id_modrm[7:6] == 2'b11) m.gpr[id_modrm[2:0]] = 1'b1;
 
     // Stack operations sets stackop bit at write time
     m.stackop = ii.is_stack_op;

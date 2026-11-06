@@ -92,9 +92,10 @@ def build_regctrl_lut():
     regctrl[15]=[0,             0,             0,             0,             0,             0,             Er|Ga,         Er|Ga|W,       # F?: LOCK REP HLT CMC GRP3
                  0,             0,             0,             0,             0,             0,             Er,            Er|Gsp|W     ] #     STI CLI
 
-    # 0f prefixed instructions. PC-98 port (PM286): 0F 01 -- LMSW reads its
-    # r/m, SMSW writes it, the descriptor-table forms address memory.
-    regctrl[16][1] = Er|W
+    # 0f prefixed instructions: no regctrl. PC-98 port (PM286): 0F 01's
+    # register forms (LMSW/SMSW r16) are handled in decode's hazard masks and
+    # execute's LMSW/SMSW micro-ops -- an entry here put a ninth input on the
+    # length/regctrl LUT and lengthened fetch's critical path.
 
     STACK_OPS = [0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F,
                  0x06, 0x07, 0x0E, 0x16, 0x17, 0x1E, 0x1F, 0x9A, 0x9B, 0x9C, 0x9D, 
