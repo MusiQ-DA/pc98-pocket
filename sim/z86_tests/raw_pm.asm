@@ -23,6 +23,8 @@
 ;   61C after reset, 1234:0005 (= 12345h) in real mode: 77
 ;   61D the run count: F6 (from the bench's F4 fill: once to the reset,
 ;       once after)
+;   61E PUSH SP pushes the SP before the push (80286; the 8086 pushes
+;       SP-2): the difference, 00
 bits 16
 cpu 286
 org 0x400
@@ -36,6 +38,11 @@ org 0x400
     jne first_run
     jmp after_reset
 first_run:
+    mov bp,sp
+    push sp
+    pop ax
+    sub ax,bp
+    mov [0x61E],al
     mov word [0x0000],0xABCD
     ; ---- the GDT at 2000h -------------------------------------------
     mov di,0x2000

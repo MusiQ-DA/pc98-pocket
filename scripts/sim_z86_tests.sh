@@ -112,7 +112,7 @@ if [ -z "${Z86_DEFS:-}" ]; then
 else
   PMLOOP="$OUT/loop"
 fi
-want="3f 00 00 20 00 ff f1 ff 34 12 cd ab ff ff 5a a5 34 12 21 43 34 12 cc 77 f0 ff cd ab 77 f6"
+want="3f 00 00 20 00 ff f1 ff 34 12 cd ab ff ff 5a a5 34 12 21 43 34 12 cc 77 f0 ff cd ab 77 f6 00"
 for a in "+lat=1" "+lat=4" "+lat=3 +gate" "+lat=5 +latrand" "+lat=2 +nocache"; do
   got=$("$PMLOOP" $EXTRA +org=400 +prog=sim/z86_tests/raw_pm.hex +f0reset $a | sed -n 's/^mem 0600: //p')
   if [ "${got:0:${#want}}" = "$want" ]; then echo "ok   raw_pm $a"

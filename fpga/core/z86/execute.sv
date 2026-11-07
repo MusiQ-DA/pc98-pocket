@@ -718,8 +718,12 @@ always @* begin
                 4'd2  : val = ex_ip_after;
                 4'd3  : begin
                     val = reg1_rdata;
+                    // PUSH SP: the 8086 pushes the decremented SP, the
+                    // 80286 the value before the push -- the test 286
+                    // software (FreeDOS FDXMS286: push sp / pop ax /
+                    // cmp ax,sp) uses to tell them apart. PM286 is the 286.
                     if (ex_modrm[2:0] == R_SP)
-                        val = new_sp;
+                        val = PM286 ? this_sp : new_sp;
                 end
                 4'd4  : val = reg_f;
                 4'd5  : val = tmp_lo;
@@ -2031,8 +2035,10 @@ always @(posedge clk) begin
 
         // ---- source value for PUSH;  destination for POP --------------
         push_val = ex_e_val; // regs[rsel];
+        // PUSH SP (54): the 8086 pushes SP-2, the 80286 the SP before the
+        // push (see MC_PUSH's RM form) -- PM286 is the 286.
         if (rsel == R_SP) 
-            push_val = sp_after;
+            push_val = PM286 ? sp_before : sp_after;
         if (ex_opcode[7:4] == 4'h6) begin  // 68: PUSH Iw, 6A: PUSH Ib (sign-extended)
             push_val = ex_opcode[1] ? {{8{ex_imm[7]}}, ex_imm[7:0]} : ex_imm;
         end
