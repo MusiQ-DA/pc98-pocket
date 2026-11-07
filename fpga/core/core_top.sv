@@ -2118,6 +2118,7 @@ module core_top #(
             // carry z86's register view, latched; slot 0x18 (zet_pc) is the
             // live PC.
             8'h18:   probe_data_c = {12'h000, zet_pc};      // current bus cycle
+            8'h36:   probe_data_c = {8'h00, tvram_dbg_word}; // screen readback (jtag_screen.tcl)
             // 0x6c-0x6f: the port-A write-commit snoop witnesses -- RETIRED
             // with the counter block by ce_count (the LAB wall); these
             // slots now read the default 0xDEADxx. 0x70 keeps the cache's
