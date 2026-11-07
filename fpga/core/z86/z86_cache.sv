@@ -945,7 +945,10 @@ module z86_cache #(
                     ld_ack  <= ~ld_ack;
                 end else if (ld_cached) begin
                     k    <= K_LD;
-                    c_a  <= {ld_addr[19:4], 4'h0};
+                    // all 24 bits: a line load from extended memory (HMA
+                    // code under DOS=HIGH) looked up the low megabyte's
+                    // line and ran its bytes (sim/z86_tests/raw_hma.asm)
+                    c_a  <= {ld_addr[23:4], 4'h0};
                     c_word <= 1'b0;
                     st   <= S_CMP;
                     // the requested word now, the rest of the line as a

@@ -118,4 +118,13 @@ for a in "+lat=1" "+lat=4" "+lat=3 +gate" "+lat=5 +latrand" "+lat=2 +nocache"; d
   if [ "${got:0:${#want}}" = "$want" ]; then echo "ok   raw_pm $a"
   else echo "FAIL raw_pm $a"; echo "  want $want"; echo "  got  $got"; fail=1; fi
 done
+# raw_hma.asm: real-mode HMA access with the A20 gate open -- DS:/ES: loads
+# and stores, LES + [es:bx+4] list walks, code run from FFFF:8000 (a line
+# load from extended memory), then the gate closed by OUT 0F0h.
+want="34 12 cd ab 5a 04 0a c3 ef be cd ab"
+for a in "+lat=1" "+lat=4 +nocache" "+lat=3 +gate" "+lat=5 +latrand +nocache"; do
+  got=$("$PMLOOP" $EXTRA +org=400 +prog=sim/z86_tests/raw_hma.hex +f0reset $a | sed -n 's/^mem 0600: //p')
+  if [ "${got:0:${#want}}" = "$want" ]; then echo "ok   raw_hma $a"
+  else echo "FAIL raw_hma $a"; echo "  want $want"; echo "  got  $got"; fail=1; fi
+done
 exit $fail
