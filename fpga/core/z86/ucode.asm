@@ -410,11 +410,13 @@
     JT       1              ;
     .end
 ; trigger INT0 on overflow
+    PUSH  FLAGS              ; BEFORE GETVEC: it clears IF/TF, and the handler's
+                             ; IRET must restore the interrupted IF (as INT does)
     GETVEC_OFF      0        ; vector 0, division trap
     GETVEC_SEG      0        ; then get segment
-    PUSH  FLAGS
     PUSH  CS
-    PUSH  IP_AFTER           ; for both 8086/80186, IP_AFTER is pushed. 80286 pushes IP_THIS
+    PUSH  IP_THIS            ; #DE is a FAULT on the 80286: the pushed IP is the DIV's own
+                             ; (prefixes included), not the next instruction's as on 8086/V30
     BR_FAR     0             ; cs:ip ← tmp_hi:tmp_lo
     .end
 
@@ -424,11 +426,12 @@
     JT       1              ;
     .end
 ; trigger INT0 on overflow
+    PUSH  FLAGS              ; BEFORE GETVEC: it clears IF/TF, and the handler's
+                             ; IRET must restore the interrupted IF (as INT does)
     GETVEC_OFF      0        ; vector 0, division trap
     GETVEC_SEG      0        ; then get segment
-    PUSH  FLAGS
     PUSH  CS
-    PUSH  IP_AFTER           
+    PUSH  IP_THIS            
     BR_FAR     0             ; cs:ip ← tmp_hi:tmp_lo
     .end
 
@@ -438,11 +441,12 @@
     JT       1              ;
     .end
 ; trigger INT0 on overflow
+    PUSH  FLAGS              ; BEFORE GETVEC: it clears IF/TF, and the handler's
+                             ; IRET must restore the interrupted IF (as INT does)
     GETVEC_OFF      0        ; vector 0, division trap
     GETVEC_SEG      0        ; then get segment
-    PUSH  FLAGS
     PUSH  CS
-    PUSH  IP_AFTER           
+    PUSH  IP_THIS            
     BR_FAR     0             ; cs:ip ← tmp_hi:tmp_lo
     .end
 
@@ -452,11 +456,12 @@
     JT       1              ;
     .end
 ; trigger INT0 on overflow
+    PUSH  FLAGS              ; BEFORE GETVEC: it clears IF/TF, and the handler's
+                             ; IRET must restore the interrupted IF (as INT does)
     GETVEC_OFF      0        ; vector 0, division trap
     GETVEC_SEG      0        ; then get segment
-    PUSH  FLAGS
     PUSH  CS
-    PUSH  IP_AFTER
+    PUSH  IP_THIS 
     BR_FAR     0             ; cs:ip ← tmp_hi:tmp_lo
     .end
 
@@ -485,11 +490,12 @@
     ADJ       4 
     JT       1              ; ADJ sets cond if divide-by-0
     .end
+    PUSH  FLAGS              ; BEFORE GETVEC: it clears IF/TF, and the handler's
+                             ; IRET must restore the interrupted IF (as INT does)
     GETVEC_OFF      0        ; vector 0, division trap
     GETVEC_SEG      0        ; then get segment
-    PUSH  FLAGS
     PUSH  CS
-    PUSH  IP_AFTER           
+    PUSH  IP_THIS            
     BR_FAR     0             ; cs:ip ← tmp_hi:tmp_lo
     .end
 
@@ -538,12 +544,16 @@
     LOAD   0                 ; lower bound  → tmp_lo
     LOAD   1                 ; upper bound  → tmp_hi
     IN_RANGE                 ; sets cond = (tmp_lo <= Gv <= tmp_hi)
-    JT     5                 ; in range → .end
+    JT     6                 ; in range → .end
 ; --- fault path ---------------------------------------------------
+; A fault on the 80286: FLAGS, CS and the BOUND's own IP (prefixes
+; included), so the handler's IRET re-executes it. FLAGS goes first,
+; before GETVEC clears IF/TF.
+    PUSH     FLAGS
     GETVEC_OFF 5             ; vector 5  (bound-range exceeded)
     GETVEC_SEG 5
     PUSH     CS
-    PUSH     IP_AFTER
+    PUSH     IP_THIS
     BR_FAR   0
     .end
 
