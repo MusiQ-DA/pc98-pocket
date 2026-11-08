@@ -711,7 +711,13 @@ module pc98_gvram_seq #(
     // trip, and it waits for gv_a_quiet so it cannot pass a parked write.
     reg         rb_g, gf_sent;
     reg  [23:0] gf_addr;
-    wire        rb_bv     = rb_g ? gvwb_rvalid : pf_beat_v;
+    // Only beats of the fill THIS leg sent are its own. While the leg waits
+    // to send (gf_sent low) port G can still be streaming the prefetch's
+    // burst (RB_PF, pf_bw): counting those beats advanced rb_bi, and the
+    // real fill then landed shifted in the bank -- the write-back carried
+    // the shifted line to SDRAM (lodemnc's mouse cursor: plane B of the
+    // page it restored came back with its bytes moved up the line).
+    wire        rb_bv     = rb_g ? (gvwb_rvalid & gf_sent) : pf_beat_v;
     wire [7:0]  rb_bd     = rb_g ? gvwb_rdata  : pf_beat_dat;
     function automatic logic [23:0] g_sdram(input logic pg, input logic [19:0] pa);
         g_sdram = pg ? (24'h600000 + {7'h00, pa[16:0]}) : {4'h0, pa};

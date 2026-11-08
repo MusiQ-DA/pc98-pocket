@@ -666,6 +666,7 @@ module tb_mem_perf;
     //   08  byte-writes loop   @ A000 (TVRAM is not RAM -- open bus, skipped)
     //
     logic [7:0] prog [0:8191];
+    string cur_file = "";
     int prog_len = 0;
     task emit(input logic [7:0] b);
         prog[prog_len] = b; prog_len++;
@@ -1552,6 +1553,26 @@ module tb_mem_perf;
         // +itfonly starts the machine at the phase-0F loop instead, so the
         // ITF timing probe can be run in seconds rather than through the
         // whole 14-minute phase set.
+        // +cursor=<hex>: a captured guest VRAM op stream compiled to code
+        // (tools/ops2prog.py) at 1000:0000; reset jumps straight to it.
+        if ($value$plusargs("cursor=%s", cur_file)) begin
+            int fd, c, n;
+            fd = $fopen(cur_file, "r");
+            n = 0;
+            while (!$feof(fd)) begin
+                if ($fscanf(fd, "%h", c) == 1) begin
+                    ram_seed(32'(20'h10000 + n), {8'h00, 8'(c)});
+                    n++;
+                end
+            end
+            $fclose(fd);
+            $display("cursor program %s: %0d bytes at 1000:0000", cur_file, n);
+            ram_seed(32'h0FFFF0, 16'h00EA);
+            ram_seed(32'h0FFFF1, 16'h0000);
+            ram_seed(32'h0FFFF2, 16'h0000);
+            ram_seed(32'h0FFFF3, 16'h0000);
+            ram_seed(32'h0FFFF4, 16'h0010);
+        end else
         begin
             automatic int  jip = $test$plusargs("itfonly") ? lf_enter
                                : $test$plusargs("aluonly") ? alu_enter
@@ -2473,6 +2494,12 @@ module tb_mem_perf;
                 $display("(itfonly: phase verification skipped)");
                 return;
             end
+            if (cur_file != "") begin
+                $display("CURSOR CHECK: %0d mismatches", cur_bad);
+                if (cur_bad) $display("=== FAIL tb_mem_perf ===");
+                else         $display("=== PASS tb_mem_perf ===");
+                return;
+            end
             for (int a = 20'h2000; a < 20'h2800; a++) begin
                 w = sdr.u_part.peek(a);
                 if (w[7:0] !== 8'h5A) begin
@@ -2573,6 +2600,71 @@ module tb_mem_perf;
                 $display("=== PASS tb_mem_perf ===");
         end
     endtask
+
+    // +cursor mismatch reports: OUT 88FCh x4 = id lo, id hi, got lo, got hi
+    int    cur_bad = 0;
+    logic  [7:0] cur_b [0:3];
+    int    cur_k = 0;
+    logic  io_cur_d = 1'b1;
+    always_ff @(posedge clk) begin
+        io_cur_d <= io_wr_n;
+        if (~io_wr_n & io_cur_d & (cpu_address == 16'h88FC)) begin
+            cur_b[cur_k] = cpu_data_bus;
+            if (cur_k == 3) begin
+                if (cur_bad < 64)
+                    $display("  CURSOR MISMATCH id=%0d got=%02x%02x t=%0t",
+                             {cur_b[1], cur_b[0]}, cur_b[3], cur_b[2], $time);
+                cur_bad++;
+                cur_k = 0;
+            end else cur_k++;
+        end
+    end
+
+    // +lodetr=<hex line tag {page,addr[19:4]}>: trace the GRCG RMW line
+    // buffer's traffic for one line (lodemnc cursor investigation).
+    int    lt_tag = -1;
+    initial begin int v; if ($value$plusargs("lodetr=%h", v)) lt_tag = v; end
+    logic  lt_req_d = 1'b0;
+    logic [23:0] lt_ga;
+    always_ff @(posedge clk) if (lt_tag >= 0) begin
+        lt_req_d <= u_seq.gvwb_req;
+        if (u_seq.gvwb_req & ~lt_req_d) begin
+            lt_ga = u_seq.gvwb_addr;
+            if (lt_ga[23:20] == (lt_tag[16] ? 4'h6 : 4'h0) && lt_ga[14:4] == lt_tag[10:0])
+                $display("LT %0t GVWB we=%b addr=%06x fl_busy=%b fl_s=%b fl_p=%0d pf_busy=%b pf_s=%b pf_p=%0d pf_tag=%05x rb_g=%b ws=%b tag0=%05x tag1=%05x v0=%h v1=%h d0=%h d1=%h mru=%b",
+                    $time, u_seq.gvwb_we, lt_ga, u_seq.fl_busy, u_seq.fl_s, u_seq.fl_p,
+                    u_seq.pf_busy, u_seq.pf_s, u_seq.pf_p, u_seq.pf_tag, u_seq.rb_g, u_seq.ws,
+                    u_seq.rb_tag[0], u_seq.rb_tag[1], u_seq.rb_v[0], u_seq.rb_v[1],
+                    u_seq.rb_d[0], u_seq.rb_d[1], u_seq.mru);
+        end
+        if (u_seq.gvwb_req & ~lt_req_d & u_seq.gvwb_we
+            & (u_seq.gvwb_addr[23:20] == (lt_tag[16] ? 4'h6 : 4'h0)) & (u_seq.gvwb_addr[14:4] == lt_tag[10:0]))
+            $display("LT    stg %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                u_seq.stg[0], u_seq.stg[1], u_seq.stg[2], u_seq.stg[3], u_seq.stg[4], u_seq.stg[5], u_seq.stg[6], u_seq.stg[7],
+                u_seq.stg[8], u_seq.stg[9], u_seq.stg[10], u_seq.stg[11], u_seq.stg[12], u_seq.stg[13], u_seq.stg[14], u_seq.stg[15]);
+        if (u_seq.gvwb_rvalid & ~u_seq.gvwb_we
+            & (lt_ga[23:20] == (lt_tag[16] ? 4'h6 : 4'h0)) & (lt_ga[14:4] == lt_tag[10:0]))
+            $display("LT    beat %02x pf_bw=%b", u_seq.gvwb_rdata, u_seq.pf_bw);
+        if (u_seq.st == 4'd2 && u_seq.leg_done && u_seq.mem_page1 == lt_tag[16]
+            && u_seq.mem_addr[14:4] == lt_tag[10:0])
+            $display("LT %0t RDW mem_addr=%05x pg1=%b rdata=%02x/%02x rb_leg=%b rb_g=%b is_read=%b gp=%0d fl_busy=%b pf_busy=%b grant=%0d",
+                $time, u_seq.mem_addr, u_seq.mem_page1, u_seq.mem_rdata, u_seq.mem_rdata_hi, u_seq.rb_leg, u_seq.rb_g,
+                u_seq.is_read, u_seq.gp, u_seq.fl_busy, u_seq.pf_busy, mp_grant);
+        if (u_seq.cpu_rd && u_seq.cpu_ready && u_seq.window && {u_seq.access_page, u_seq.cpu_addr[19:4]} == 17'(lt_tag))
+            $display("LT %0t RDY a=%05x rdata=%02x st=%0d fin=%b exp=%b", $time, u_seq.cpu_addr, u_seq.cpu_rdata, u_seq.st, u_seq.fin_read, u_seq.expand);
+        if (u_ram.read_request & ~u_ram.read_flag & ~u_ram.write_flag && u_ram.access_address[14:4] == lt_tag[10:0])
+            $display("LT %0t RAMRD acc=%07x pg1flag=%b addr=%05x seq_mem_addr=%05x seq_pg1=%b st=%0d", $time,
+                u_ram.access_address, seq_mem_page1, u_ram.address, u_seq.mem_addr, u_seq.mem_page1, u_ram.state);
+        if (u_ram.write_request & ~u_ram.read_flag & ~u_ram.write_flag && u_ram.access_address[14:4] == lt_tag[10:0])
+            $display("LT %0t RAMWR acc=%07x d=%02x/%02x num=%0d st=%0d", $time,
+                u_ram.access_address, u_ram.access_data_in[7:0], u_ram.access_data_in_hi[7:0], u_ram.access_num, u_ram.state);
+        if (u_seq.rb_upd_w && u_seq.rb_line == 17'(lt_tag))
+            $display("LT %0t UPD gp=%0d off=%h wr=%02x ws=%b g_page=%b", $time, u_seq.gp, u_seq.rb_off,
+                     u_seq.wr_byte, u_seq.ws, u_seq.g_page);
+        if ((u_seq.cpu_rd | u_seq.cpu_wr) && u_seq.window && {u_seq.access_page, u_seq.cpu_addr[19:4]} == 17'(lt_tag) && u_seq.st == 0)
+            $display("LT %0t CPU %s a=%05x wd=%02x st=%0d pw_ack=%b fl_hold=%b", $time, u_seq.cpu_rd ? "RD" : "WR",
+                     u_seq.cpu_addr, u_seq.cpu_wdata, u_seq.st, u_seq.pw_ack, u_seq.fl_hold);
+    end
 
     // marker decode on the IO-write strobe
     logic io_marker_d = 1'b1;

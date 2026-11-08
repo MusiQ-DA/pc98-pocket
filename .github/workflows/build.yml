@@ -161,6 +161,12 @@ jobs:
           grep -q "=== PASS tb_mem_perf ===" perf0.log
           ./obj_dir/perf +speed=3 +GRANT | tee perf3.log
           grep -q "=== PASS tb_mem_perf ===" perf3.log
+          # A captured guest stream (lodemnc's mouse cursor: GRCG RMW over
+          # both pages, plain odd-word saves) compiled to code: the RMW line
+          # buffer's prefetch beats must not shift a pending fill.
+          python3 tools/ops2prog.py sim/golden/streams/lodemnc_cursor.ops cursor.hex
+          ./obj_dir/perf +cursor=cursor.hex +cache +analog4=1 | tee perfc.log
+          grep -q "=== PASS tb_mem_perf ===" perfc.log
 
       - name: z86 instruction pairs and interrupts, free and with priced cache hits
         run: |
