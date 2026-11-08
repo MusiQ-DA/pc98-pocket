@@ -145,19 +145,26 @@ fails = []
 
 
 def report_if_ne(kind):
-    # after a compare: je over the report
-    rep = [0x89, 0xC3,                          # mov bx,ax
-           0xB8] + w(idn[0]) + [                # mov ax,id
-           0xBA] + w(0x88FC) + [                # mov dx,88FC
-           0xEE, 0x88, 0xE0, 0xEE,              # out dx,al ; mov al,ah ; out
-           0x88, 0xD8, 0xEE, 0x88, 0xF8, 0xEE]  # mov al,bl ; out ; mov al,bh ; out
-    emit([0x74, len(rep)] + rep)
+    # after a compare: je over "mov dx,id ; int 60h" (the handler reports)
+    emit([0x74, 5, 0xBA] + w(idn[0]) + [0xCD, 0x60])
     fails.append((idn[0], kind))
     idn[0] += 1
 
 
 # prologue: CLI, SS:SP
 emit([0xFA, 0x31, 0xC0, 0x8E, 0xD0, 0xBC] + w(0x0400))
+# INT 60h = the mismatch report: OUT 88FCh x4 = id lo/hi (DX), got lo/hi (AX)
+emit([0x8E, 0xD8,                                   # mov ds,ax (0)
+      0xC7, 0x06] + w(0x180) + w(0x0000) + [         # IVT[60h].off (patched)
+      0xC7, 0x06] + w(0x182) + w(SEG0))             # IVT[60h].seg
+patch = len(code) - 8                                # the .off immediate
+handler = ([0x50, 0x52, 0x89, 0xC3, 0x89, 0xD0,     # push ax/dx ; mov bx,ax ; mov ax,dx
+            0xBA] + w(0x88FC) + [0xEE, 0x88, 0xE0, 0xEE,  # out id lo, hi
+            0x88, 0xD8, 0xEE,                             # out got lo
+            0x88, 0xF8, 0xEE, 0x5A, 0x58, 0xCF])          # out got hi ; pop ; iret
+emit([0xEB, len(handler)])                           # jmp over the handler
+code[patch:patch + 2] = bytes(w(len(code)))
+emit(handler)
 outb(0x6A, 0x01)    # analog (sixteen-colour) mode: plane E at E0000
 outb(0x7C, 0x00)
 for pg in (0, 1):

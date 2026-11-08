@@ -834,7 +834,15 @@ module pc98_gvram_seq #(
                          & (st == S_IDLE) & grcg_active & grcg_rmw & ~egc_arm & ~rmwbuf_off
                          & (rb_v[mru] != 4'h0) & (pf_cur[10:0] != 11'h7FF)
                          & ((mru ? rd0 : rd1) == 4'h0)
-                         & ((pf_want & ~pf_have) != 4'h0) & ~fl_want_all;
+                         & ((pf_want & ~pf_have) != 4'h0) & ~fl_want_all
+                         // Never on the clock S_IDLE takes a guest (or svc)
+                         // access: lv_wait only sees a prefetch once pf_busy
+                         // is up, so a write accepted on pf_go's own clock
+                         // went to RAM.sv (TDW-shape 0xFF RMW, miss) while
+                         // the burst read the line's OLD bytes -- installed
+                         // valid, then written back over the write (NEON3/4
+                         // line noise; lodemnc).
+                         & ~strobe_new & ~(svc_req_s & ~svc_done);
     wire [3:0]  pf_need  = pf_want & ~pf_have;
     wire [1:0]  pf_first = pf_need[0] ? 2'd0 : pf_need[1] ? 2'd1 : pf_need[2] ? 2'd2 : 2'd3;
     wire [3:0]  pf_rest  = pf_left & ~(4'b0001 << pf_p);
