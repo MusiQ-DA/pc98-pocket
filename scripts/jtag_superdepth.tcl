@@ -53,13 +53,28 @@ set PLAY [expr {[info exists ::env(PLAY)] ? $::env(PLAY) : 0}]
 # present (core_top slot 0x0c) so the guest leaves reset.
 wr 0x0c 1
 set fails 0
+# Where DOS put DEPTH: its MCB is the one named "DEPTH" (MCB+8) just
+# above 25500h. The segment moves with the DOS configuration -- one more
+# drive table when drive 1 answers as present shifts it 8 paragraphs --
+# so find it after the first boot instead of assuming 2550h.
+proc find_depth {} {
+  for {set m 0x25500} {$m < 0x25A00} {incr m 0x10} {
+    if {[rdabs [expr {$m+8}]] == 0x44 && [rdabs [expr {$m+9}]] == 0x45 && [rdabs $m] == 0x4D} {
+      return [expr {$m >> 4}]
+    }
+  }
+  return 0x2550
+}
+set mseg -1
 for {set it 0} {$it < $N} {incr it} {
   wr 9 $P; after 20; wr 7 0x05
   after [expr {$W*1000}]
-  set pre [w16 0x25501]
+  if {$mseg < 0} { set mseg [find_depth]; puts [format "DEPTH MCB at %04X" $mseg] }
+  set mown [expr {$mseg*16 + 1}]
+  set pre [w16 $mown]
   wr 1 0x1C; after 300; wr 1 0x9C
   after 12000
-  set own [w16 0x25501]; set c193 [w16 [expr {0x25610+0xC193}]]
+  set own [w16 $mown]; set c193 [w16 [expr {($mseg+1)*16 + 0x100 + 0xC193}]]
   # the game must still be running: of up to 60 PC samples over 3 s, none
   # at the reset vector and at least two different ones in the game's code
   # (it spends much of its time in a BIOS loop at FF97C; a crashed CPU never
@@ -80,7 +95,7 @@ for {set it 0} {$it < $N} {incr it} {
   }
   set pc [lindex $pcs 0]
   if {[llength [lsort -unique $ingame]] < 2} { set alive 0 }
-  set quick_bad [expr {!$alive || $own != 0x2551}]
+  set quick_bad [expr {!$alive || $own != $mseg + 1}]
   # PLAY=<s>: keep playing with random left/right / Z / X / space / return
   # presses (never up/down: after a game over the title menu takes them, and
   # up/down + Z picks its EXIT entry -- a legitimate return to DOS) and
@@ -110,7 +125,7 @@ for {set it 0} {$it < $N} {incr it} {
     }
     if {[llength [lsort -unique $ingame]] < 2} { set alive 0 }
   }
-  set bad [expr {!$alive || $own != 0x2551 || ($c193 != 0x20 && $c193 != 0x10 && $c193 != 0x1122) || $tmo != 0}]
+  set bad [expr {!$alive || $own != $mseg + 1 || ($c193 != 0x20 && $c193 != 0x10 && $c193 != 0x1122) || $tmo != 0}]
   if {$bad} {incr fails}
   # floppy.v's command-byte counters: a byte the chip dropped (it arrived
   # busy) turns the rest of that command into garbage
