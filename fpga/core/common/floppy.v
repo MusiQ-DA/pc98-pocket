@@ -95,6 +95,14 @@ module floppy
 	// behaviour are untouched. Low is the authentic pace.
 	input             turbo,
 
+	// The PC-98 control port's bit 6 (0x94 / 0xCC, whichever chgreg makes
+	// live -- np21w's fdc.ctrlreg & 0x40): the drive adapter forces READY.
+	// The BIOS sets it (0x48) around its RECALIBRATE equipment sweep; a
+	// RECALIBRATE of an equipped drive with no disk then ends with SE alone
+	// (np21w io/fdc.c FDC_Recalibrate). SENSE DRIVE STATUS does not use it
+	// here (see the ST3 reply).
+	input             force_ready,
+
 	output      [1:0] request,
 
 	// Debug witnesses. A write to the FIFO is only a command byte if the
@@ -393,14 +401,25 @@ wire [1:0] sense_drive = seek_done[0] ? 2'd0 : seek_done[1] ? 2'd1 :
 // controller (two sets of registers, two motors), so they always answer the
 // way a real machine answers a missing drive -- which is how the BIOS
 // learns it has two drives and not four.
-// An existing drive with no media answers SE|IC0|NR (0x68|unit): the BIOS
-// equipment probe tests ST0 & 0xC0, so without NR the empty drive 1 gets
-// marked present and the BIOS then waits forever for it to go ready.
+// Units 0 and 1 are EQUIPPED whether or not a disk is in them -- a PC-98
+// has two internal drives, and np21w's fdc.equip says so. A RECALIBRATE of
+// an equipped empty drive ends normally: SE alone while the control port
+// forces READY (bit 6, the BIOS's 0x48 around its equipment sweep), SE|NR
+// otherwise -- never IC0 (np21w io/fdc.c FDC_Recalibrate). The sweep tests
+// ST0 & 0xC0, so the IC0 this used to send marked drive 1 ABSENT: DISK_EQUIP
+// (0:055C) read 01 instead of 03, and JDOS(98) 3.02 -- which compares the
+// 1-based drive of INT 21h AH=47h against its drive COUNT -- failed getcwd
+// on A: as "invalid drive", so Borland's searchpath() never found CSUM.EXE
+// (The Incredible Machine 2's START.EXE exited silently).
+// A SEEK of an empty drive is still IC0|NR (np21w FDC_Seek).
+reg [1:0] recal_last;   // per drive: the last positioning command was a RECALIBRATE
+wire [7:0] empty_st0 = recal_last[sense_drive[0]]
+                     ? (force_ready ? 8'h00 : 8'h08) : 8'h48;
 wire [7:0] sense_st0 = 8'h20 | {6'd0, sense_drive}
                      | ((sense_drive[1] || ~motor_enable[sense_drive[0]])
                         ? 8'h50
                         : (NOT_READY_ENDS_COMMAND != 0 && ~media_present[sense_drive[0]])
-                          ? 8'h48 : 8'h00);
+                          ? empty_st0 : 8'h00);
 wire [7:0] sense_pcn = sense_drive[1] ? 8'd0 : cylinder[sense_drive[0]];
 
 // The MSR's drive-busy bits: stepping, or arrived and not yet sensed.
@@ -410,6 +429,7 @@ always @(posedge clk) begin
 	if(~rst_n | sw_reset) begin
 		seek_busy <= 4'b0000;
 		seek_done <= 4'b0000;
+		recal_last <= 2'b00;
 	end
 	else begin
 		if(cmd_recalibrate_start)
@@ -418,6 +438,11 @@ always @(posedge clk) begin
 			seek_busy <= seek_busy | (4'b0001 << command[1:0]);
 		else if(delay_last_cycle)
 			seek_busy <= 4'b0000;
+
+		if(cmd_recalibrate_start && ~io_writedata[1])
+			recal_last[io_writedata[0]] <= 1'b1;
+		else if(cmd_seek_start && ~command[1])
+			recal_last[command[0]] <= 1'b0;
 
 		if(cmd_sense_interrupt_status_start && |seek_done)
 			seek_done <= (seek_done | (delay_last_cycle ? seek_busy : 4'd0))
@@ -886,7 +911,8 @@ always @(posedge clk) begin
 	// "not ready" the BIOS falls through on), not the plain seek-end the old
 	// code returned with the motor already on.
 	else if(delay_last_cycle && cmd_recalibrate_in_progress)                  reply <= { reply[79:8], 8'h20 | { 6'd0, selected_drive } |
-		((NOT_READY_ENDS_COMMAND != 0 && (selected_drive[1] || ~media_present[selected_drive[0]])) ? 8'h48 :
+		((NOT_READY_ENDS_COMMAND != 0 && selected_drive[1]) ? 8'h48 :
+		 (NOT_READY_ENDS_COMMAND != 0 && ~media_present[selected_drive[0]]) ? (force_ready ? 8'h00 : 8'h08) :
 		 (~motor_enable[selected_drive[0]]) ? 8'h50 : 8'h00) };
 	else if(delay_last_cycle)                                                 reply <= { reply[79:8], 8'h20 | { 5'd0, head[selected_drive[0]], selected_drive }
 		| ((NOT_READY_ENDS_COMMAND != 0 && (selected_drive[1] || ~media_present[selected_drive[0]])) ? 8'h48 : 8'h00) };

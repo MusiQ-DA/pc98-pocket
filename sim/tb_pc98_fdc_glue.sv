@@ -43,6 +43,7 @@ module tb_pc98_fdc_glue;
     // The first half of this bench drives fd_irq by hand, to check the routing
     // in isolation. The second half hands the wire to the real floppy.v.
     logic loop_mode = 1'b0;      // 1 = floppy.v owns fd_irq
+    logic mgmt_fddn = 1'b0;      // which drive a mgmt write lands on
     logic fd_irq_force = 1'b0;
     wire  fd_irq = loop_mode ? fdd_irq : fd_irq_force;
     wire  fd_busy = loop_mode ? fdd_busy : 1'b0;
@@ -57,6 +58,7 @@ module tb_pc98_fdc_glue;
     wire       irq_2hd;
     wire       irq_2dd;
     wire       dma_enable;
+    wire       force_ready;
 
     pc98_fdc_glue dut (
         .clk(clk), .rst(rst),
@@ -68,7 +70,7 @@ module tb_pc98_fdc_glue;
         .ctrl_readback(ctrl_readback), .mode_readback(mode_readback),
         .reg144_readback(),
         .group_live(group_live), .irq_2hd(irq_2hd), .irq_2dd(irq_2dd),
-        .dma_enable(dma_enable)
+        .dma_enable(dma_enable), .force_ready(force_ready)
     );
 
     // THE REAL CONTROLLER, behind the glue. The interrupt contract is a loop --
@@ -176,7 +178,7 @@ module tb_pc98_fdc_glue;
         .io_writedata   (fd_wdata),
         .fdd0_inserted  (),
         .mgmt_address   (mgmt_addr_m),
-        .mgmt_fddn      (1'b0),
+        .mgmt_fddn      (mgmt_fddn),
         .mgmt_write     (mgmt_wr_m),
         .mgmt_writedata (mgmt_wdata_m),
         .mgmt_read      (feed_rd_m),
@@ -189,6 +191,7 @@ module tb_pc98_fdc_glue;
         // shift shows as a real ratio rather than the two-cycle floor.
         .clock_rate     (clk_rate_r),
         .turbo          (turbo_r),
+        .force_ready    (force_ready),
         .request        (fdd_request),
         .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()
     );
@@ -1668,6 +1671,92 @@ module tb_pc98_fdc_glue;
             want1("and the line still drops on the result read", fd_irq, 1'b0);
             turbo_r = 1'b0;
             clk_rate_r = 28'd2000;
+        end
+
+        // ======== THE EQUIPMENT SWEEP SEES TWO DRIVES, ONE OF THEM EMPTY ====
+        //
+        // BIOS FF1E0 writes 0x94 = C8 then 48 (bit 6: the adapter forces
+        // READY), recalibrates units 0-3 and, at FF61D, marks a unit present
+        // in DISK_EQUIP (0:055C) when its ST0 & 0xC0 is 0. A PC-98 has two
+        // internal drives, so an EMPTY drive 1 must come back with IC clear
+        // (np21w FDC_Recalibrate: equipped + forced ready = SE alone) -- the
+        // 0x69 this used to send left 055C at 01, and JDOS(98) 3.02's INT 21h
+        // AH=47h then failed getcwd on A: (it compares the 1-based drive
+        // against its drive count), so The Incredible Machine 2's START.EXE
+        // could not find CSUM.EXE and exited silently. Units 2/3 do not exist.
+        $display("--- equipment sweep: drive 1 empty but equipped ---");
+        begin
+            logic [7:0] st0, pcn, st3;
+            logic [7:0] st0_of [0:3];
+            int         guard;
+
+            rst = 1'b1;
+            repeat (4) @(posedge clk);
+            rst = 1'b0;
+            repeat (2) @(posedge clk);
+            loop_mode = 1'b1;
+            window(1'b0);
+            // drive 0 has a disk, drive 1 none
+            @(negedge clk);
+            mgmt_fddn = 1'b0;
+            mgmt_address = 4'd0; mgmt_writedata = 16'h0001; mgmt_write = 1'b1;
+            @(negedge clk);
+            mgmt_fddn = 1'b1; mgmt_writedata = 16'h0000;
+            @(negedge clk);
+            mgmt_write = 1'b0; mgmt_fddn = 1'b0;
+            #1;
+            wr(2, 8'hC8);           // FF1E8: reset edge + motor
+            repeat (20) @(negedge clk);
+            wr(2, 8'h48);           // FF1F3: forced READY on
+            repeat (20) @(negedge clk);
+            want1("0x94 bit 6 forces READY", force_ready, 1'b1);
+            // drain whatever the reset queued
+            for (int i = 0; i < 8; i++) begin
+                wr(1, 8'h08); rd(1, st0);
+                if (st0 == 8'h80) break;
+                rd(1, pcn);
+            end
+            wr(1, 8'h03); wr(1, 8'hBF); wr(1, 8'h32);
+            wr(1, 8'h07); wr(1, 8'h00);
+            wr(1, 8'h07); wr(1, 8'h01);
+            wr(1, 8'h07); wr(1, 8'h02);
+            wr(1, 8'h07); wr(1, 8'h03);
+            guard = 0;
+            while (!fd_irq && guard < 4000) begin @(negedge clk); guard++; end
+            for (int u = 0; u < 4; u++) st0_of[u] = 8'hFF;
+            for (int i = 0; i < 8; i++) begin
+                wr(1, 8'h08); rd(1, st0);
+                if (st0 == 8'h80) break;
+                rd(1, pcn);
+                st0_of[st0[1:0]] = st0;
+                $display("    sweep sense: st0 %02X", st0);
+            end
+            want("unit 0 (disk) present", st0_of[0] & 8'hC0, 8'h00);
+            want("unit 1 (empty) present", st0_of[1] & 8'hC0, 8'h00);
+            want("unit 1 under forced READY: SE alone", st0_of[1], 8'h21);
+            want("unit 2 absent", st0_of[2] & 8'hC0, 8'h40);
+            want("unit 3 absent", st0_of[3] & 8'hC0, 8'h40);
+            // SENSE DRIVE STATUS is deliberately left as it was (empty = the
+            // FAULT reply, READY down): the BIOS's ready tests (FE5B, F72D)
+            // read RY only, and 9e41562 traced a boot hang to this reply.
+            wr(1, 8'h04); wr(1, 8'h01);
+            repeat (10) @(negedge clk); #1;
+            rd(1, st3);
+            want("ST3 unit 1 empty: READY down", st3 & 8'h20, 8'h00);
+            // FF638: 0x94 = 18, READY no longer forced
+            wr(2, 8'h18);
+            repeat (5) @(negedge clk);
+            want1("0x94 = 18 drops forced READY", force_ready, 1'b0);
+            wr(1, 8'h07); wr(1, 8'h01);
+            guard = 0;
+            while (!fd_irq && guard < 4000) begin @(negedge clk); guard++; end
+            wr(1, 8'h08); rd(1, st0); rd(1, pcn);
+            want("recal unit 1 empty: SE|NR, IC clear", st0, 8'h29);
+            wr(1, 8'h0F); wr(1, 8'h01); wr(1, 8'h05);
+            guard = 0;
+            while (!fd_irq && guard < 4000) begin @(negedge clk); guard++; end
+            wr(1, 8'h08); rd(1, st0); rd(1, pcn);
+            want("seek unit 1 empty: still IC0|NR", st0, 8'h69);
         end
 
         $display("\n  errors: %0d", errors);

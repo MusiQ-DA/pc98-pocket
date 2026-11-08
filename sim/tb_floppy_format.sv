@@ -165,6 +165,7 @@ module tb_floppy_format;
         .wp(wp_pin),
         .clock_rate(28'd42954545),
         .turbo(1'b1),
+        .force_ready(1'b0),
         .request(fdd_request),
         .dbg_cmd_accepts(), .dbg_cmd_drops(), .dbg_reply_left(),
         .dbg_xfer(), .dbg_command(), .dbg_sector_info(),

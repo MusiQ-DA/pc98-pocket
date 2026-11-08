@@ -1754,6 +1754,7 @@ module tb_pc98_boot;
     // feeder inside it is fdd_poll()/push_sector() in miniature.
     wire       fdc_dreq_w, fdc_ack_p, fdc_tc_p;
     wire       fdc_dmae_w;   // the glue's 0x94 bit-4 (DMAE) DRQ gate
+    wire       fdc_force_ready_w;   // 0x94 bit 6, forced READY
     wire [7:0] fdc_dma_w, fdc_dma_r;
     wire [1:0] fdd_req_w;
     wire [15:0] fdd_mgmt_rdata;
@@ -2166,7 +2167,8 @@ module tb_pc98_boot;
         .group_live    (fdc_group_live),
         .irq_2hd       (fdc_irq3),
         .irq_2dd       (fdc_irq2),
-        .dma_enable    (fdc_dmae_w)
+        .dma_enable    (fdc_dmae_w),
+        .force_ready   (fdc_force_ready_w)
     );
 
     // Read side follows the glue combinationally and the held byte is the
@@ -2246,6 +2248,7 @@ module tb_pc98_boot;
         .wp             (2'b00),
         .clock_rate     (28'd42_954_545),
         .turbo          (1'b0),
+        .force_ready    (fdc_force_ready_w),
         .request        (fdd_req_w),
         .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer ()
     );

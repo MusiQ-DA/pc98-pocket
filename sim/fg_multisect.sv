@@ -185,6 +185,7 @@ module tb_pc98_fdc_glue;
         // the seek delay; nothing about the interrupt depends on its value.
         .clock_rate     (28'd2000),
         .turbo          (1'b0),
+        .force_ready    (1'b0),
         .request        (fdd_request),
         .dbg_xfer       (),
         .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()

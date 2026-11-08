@@ -2388,6 +2388,7 @@ module PERIPHERALS #(
     logic   [7:0]   fdd_readdata;
     logic           fdd_dma_req_wire;
     logic           fdc_dma_enable;   // 0x94 bit 4 (DMAE), the DRQ/DACK gate
+    logic           fdc_force_ready;  // 0x94 bit 6, the adapter's forced READY
     logic           fdd_dma_read;
     logic           prev_fdd_dma_ack;
     logic           fdd_dma_rw_ack;
@@ -2511,7 +2512,8 @@ module PERIPHERALS #(
         .group_live    (fdc_group_live),
         .irq_2hd       (fdc_glue_irq_2hd),
         .irq_2dd       (fdc_glue_irq_2dd),
-        .dma_enable    (fdc_dma_enable)
+        .dma_enable    (fdc_dma_enable),
+        .force_ready   (fdc_force_ready)
     );
 
     always_ff @(posedge clock)
@@ -2604,6 +2606,7 @@ module PERIPHERALS #(
                                      clk_select[0] == 1'b0 ? {1'b0, clk_rate[27:1]} : {2'b00, clk_rate[27:2]}),
 
         .turbo                      (fdd_turbo),
+        .force_ready                (fdc_force_ready),
         .request                    (fdd_request),
 
         .dbg_cmd_accepts            (fdc_dbg_accepts),

@@ -194,6 +194,10 @@ module pc98_fdc_glue #(
     // DRQ/DACK lines. Peripherals ANDs it with floppy.v's dma_req -- a
     // control write with bit 4 clear is how the BIOS closes the channel.
     output logic       dma_enable,
+    // Bit 6 of the live window's control byte: np21w's fdc.ctrlreg & 0x40,
+    // the adapter's forced READY. floppy.v answers an equipped empty drive
+    // as ready while it is set (the BIOS's 0x48 around its equipment sweep).
+    output logic       force_ready,
     output logic [7:0] reg144_readback   // 0x4BE read
 );
 
@@ -388,6 +392,7 @@ module pc98_fdc_glue #(
     //                      mot1  mot0  irq_en   enable      drive
 
     assign dma_enable = ctrl_q[4];
+    assign force_ready = ctrl_q[6];
 
     always_comb begin
         // Order matters: a pending reset outranks the cycle's own access, and
