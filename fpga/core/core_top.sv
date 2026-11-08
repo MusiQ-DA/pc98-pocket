@@ -2728,8 +2728,10 @@ module core_top #(
             jtag_pf_bkill <= probe_wdata_c[10];
             jtag_cache_dis <= probe_wdata_c[11];
             jtag_thr_num  <= probe_wdata_c[19:12];
-            // jtag_dx (the #1047 bisect's revert bits) stays 0: the bug
-            // is fixed (fix-1050) and the reverts' muxes cost the fit.
+            // jtag_dx: only [7] (bit 27, GRCG RMW line buffer + write-back
+            // off) is live again -- the A/B for cursor-save corruption; the
+            // other reverts stay 0 (their muxes cost the fit).
+            jtag_dx[7]    <= probe_wdata_c[27];
         end
         // Slot 0x0a: the reset-source witness clear -- wdata[0] wipes the
         // sticky rise map, the last-source index and its tick (the write
