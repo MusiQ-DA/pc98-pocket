@@ -366,6 +366,19 @@ module z86_cache #(
     // subtract inside S_IDLE's decision is the cone shape Quartus' S2T died
     // on (CI 42049924286).
     reg  [5:0]  p_yld;
+    // Inside a REP string loop the 286's BIU runs its bus cycles back to
+    // back; here the core's own turnaround (the read's data to the store's
+    // request, ~3 chipset clocks) leaves the bus idle between them, and at
+    // 12 MHz that is most of a 286 clock per access (rep movsw 1.21x). A
+    // CPU clock that ticked while the bus sat idle is paid off the next
+    // access's bus time -- the bus is taken to have carried on from where
+    // the last access ended. Outside REP loops the issue gate times the
+    // instructions and nothing changes.
+    reg         idle_pce;
+    wire        rep_cr = rep_on & !p_busy & (idle_pce | pace_ce);
+    always @(posedge clk)
+        if (!pace || p_busy || !rep_on) idle_pce <= 1'b0;
+        else if (pace_ce)               idle_pce <= 1'b1;
     always @(posedge clk) p_yld <= {3'd0, p_rcyc} - 6'd1;
     function automatic logic vram_a(input logic [23:0] a);
         vram_a = !dx[3] && !ext_a(a) && ((a[19:15] == 5'b10101) || (a[19:16] == 4'hB)
@@ -891,9 +904,9 @@ module z86_cache #(
                         end
                         if (pace) begin
                             wr_owed <= 1'b1;
-                            pdebt   <= (wr_word && wr_addr[0])
+                            pdebt   <= ((wr_word && wr_addr[0])
                                      ? {2'd0, p_wcyc, 1'b0}
-                                     : {3'd0, p_wcyc};
+                                     : {3'd0, p_wcyc}) - {5'd0, rep_cr};
                         end else
                             wr_ready <= 1'b1;
                         // Watchpoint witness: this store now owns the
@@ -991,8 +1004,8 @@ module z86_cache #(
                 end else if (rd_cached) begin
                     k      <= K_RD;
                     pdebt  <= !pace ? 6'd0
-                            : (rd_cur_w && rd_cur_a[0]) ? {2'd0, p_rcyc, 1'b0}
-                            : {3'd0, p_rcyc};
+                            : ((rd_cur_w && rd_cur_a[0]) ? {2'd0, p_rcyc, 1'b0}
+                            : {3'd0, p_rcyc}) - {5'd0, rep_cr};
                     c_a    <= rd_cur_a;
                     c_word <= rd_cur_w;
                     rd_a   <= rd_cur_a;

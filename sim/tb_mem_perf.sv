@@ -472,7 +472,7 @@ module tb_mem_perf;
     wire [7:0]  pf_beat_dat_w;
     wire [4:0]  cpu_pf_len_w;
 
-    pc98_gvram_seq #(.EGC(1'b1), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1)) u_seq (
+    pc98_gvram_seq #(.EGC(1'b1), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_seq (
         .rmwbuf_off(dx_r[7]),
         .clk(clk), .reset(reset),
         .cpu_gvram(~ram_sel_n),
@@ -2156,7 +2156,7 @@ module tb_mem_perf;
 `ifdef MOVPROF
     longint mv_st[0:15]; longint mv_cyc=0, mv_fill=0, mv_wrw=0, mv_ldw=0, mv_rdw=0, mv_pbusy=0, mv_cbv=0, mv_inst=0, mv_hitm=0;
     initial foreach (mv_st[i]) mv_st[i]=0;
-    always @(posedge clk) if (cur_phase == 8'h2E) begin
+    always @(posedge clk) if (cur_phase == 8'h33) begin
         mv_cyc++; mv_st[u_cpu.u_cache.st]++;
         if (u_cpu.u_cache.fill_req && u_cpu.u_cache.fs == 0) mv_fill++;
         if (u_cpu.u_cache.wr_pend) mv_wrw++;
@@ -2165,7 +2165,7 @@ module tb_mem_perf;
         if (u_cpu.u_cache.p_busy) mv_pbusy++;
         if (u_cpu.u_cache.cb_v != 0) mv_cbv++;
         if (u_cpu.u_cache.cb_inst) mv_inst++;
-        if (mv_cyc > 3000 && mv_cyc < 3130)
+        if (mv_cyc > 20000 && mv_cyc < 20060)
             $display("MVT %0d eud=%0d eup=%b idv=%b st=%0d rd=%b rdp=%b rdy=%b wrv=%b wrr=%b wa=%05x pdebt=%0d pce=%b ldp=%b cbv=%b fs=%0d",
                 mv_cyc, u_cpu.u_fetch_decode1.eu_debt, u_cpu.u_fetch_decode1.eu_pend, u_cpu.u_fetch_decode1.id_valid, u_cpu.u_cache.st, u_cpu.u_cache.rd, u_cpu.u_cache.rd_pend, u_cpu.u_cache.rd_ready,
                 u_cpu.u_cache.wr_valid, u_cpu.u_cache.wr_ready, u_cpu.u_cache.wr_addr, u_cpu.u_cache.pdebt, u_cpu.u_cache.pace_ce,
@@ -2178,7 +2178,7 @@ module tb_mem_perf;
 `endif
     int tb_gwt = 4;  // TDW: Chipset.sv charges 4 (see vram_wait_now)
     initial void'($value$plusargs("gwt=%d", tb_gwt));
-    int tb_gw = 3;   // Chipset.sv charges 3 (see vram_wait_now)
+    int tb_gw = 5;   // Chipset.sv charges 5 (see vram_wait_now)
     initial void'($value$plusargs("gw=%d", tb_gw));
 `ifdef PWTRACE
     int pwt = 0; logic pwt_on = 0; logic [3:0] pwt_prev = 0;

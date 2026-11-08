@@ -79,7 +79,9 @@ module pc98_gvram_seq #(
     parameter bit WBACK  = 0,
     // Clocks a dirty line may sit with the FSM idle before it is written
     // out anyway (the display reads SDRAM directly).
-    parameter int WB_AGE = 64
+    parameter int WB_AGE = 64,
+    // Next-line prefetch into the clean slot (WBACK): see "PREFETCH".
+    parameter bit RB_PF  = 0
 ) (
     input  wire        clk,
     input  wire        reset,
@@ -717,11 +719,29 @@ module pc98_gvram_seq #(
     wire        rb_beat_w = rb_leg & rb_bv;
     wire        rb_upd_w  = (st == S_WR) & cur_live & rmw_guest & rb_fits
                           & ws_m & ws_v[gp];
-    wire [5:0]  rb_wa     = rb_beat_w ? {ws, gp, rb_bi[3:1]} : {ws, gp, rb_off[3:1]};
-    wire        rb_we_e   = rb_beat_w ? ~rb_bi[0] : (rb_upd_w & ~rb_off[0]);
-    wire        rb_we_o   = rb_beat_w ?  rb_bi[0] : (rb_upd_w & (rb_off[0] | grcg_wbatch));
-    wire [7:0]  rb_wd_e   = rb_beat_w ? rb_bd : wr_byte;
-    wire [7:0]  rb_wd_o   = rb_beat_w ? rb_bd : (rb_off[0] ? wr_byte : wr_byte_hi);
+    // ------------------------------------------------------------------
+    // PREFETCH (RB_PF). The walk otherwise stops at every new line for its
+    // three plane fills (~55 clocks each on port G). Once the older slot is
+    // clean, the next line (tag+1, same page) is fetched into it in the
+    // background, plane by plane, in RMW mode only and for the planes the
+    // mask leaves live. The prefetch owns port G like the write-back does
+    // (one user at a time); its beats take the bank write port first and an
+    // RMW write in S_WR waits that clock out. Coherence is the write-back's:
+    // a walk into the slot being prefetched waits for it (lv_wait), any
+    // other window access waits for it and then drops both slots (fl_all),
+    // and its read waits for gv_a_quiet so it cannot pass a parked write.
+    // ------------------------------------------------------------------
+    reg         pf_busy, pf_s;
+    reg  [1:0]  pf_ph, pf_p;
+    reg  [3:0]  pf_bi, pf_left;
+    reg  [16:0] pf_tag;
+    wire        pf_bw     = pf_busy & (pf_ph == 2'd2) & gvwb_rvalid;
+    wire [5:0]  rb_wa     = pf_bw ? {pf_s, pf_p, pf_bi[3:1]}
+                          : rb_beat_w ? {ws, gp, rb_bi[3:1]} : {ws, gp, rb_off[3:1]};
+    wire        rb_we_e   = pf_bw ? ~pf_bi[0] : rb_beat_w ? ~rb_bi[0] : (rb_upd_w & ~rb_off[0]);
+    wire        rb_we_o   = pf_bw ?  pf_bi[0] : rb_beat_w ?  rb_bi[0] : (rb_upd_w & (rb_off[0] | grcg_wbatch));
+    wire [7:0]  rb_wd_e   = pf_bw ? gvwb_rdata : rb_beat_w ? rb_bd : wr_byte;
+    wire [7:0]  rb_wd_o   = pf_bw ? gvwb_rdata : rb_beat_w ? rb_bd : (rb_off[0] ? wr_byte : wr_byte_hi);
     // ------------------------------------------------------------------
     // WRITE-BACK (WBACK). A buffered RMW write no longer writes its plane
     // byte through RAM.sv at all: the result is already in the bank (the
@@ -776,7 +796,7 @@ module pc98_gvram_seq #(
     wire [3:0]  lslot_d  = lslot ? rd1 : rd0;
     // its slot is being written back, or it is a new line whose victim is
     // still dirty: wait (the engine is on it)
-    wire        lv_wait  = lv_shape & ((fl_busy & (fl_s == lslot))
+    wire        lv_wait  = lv_shape & ((fl_busy & (fl_s == lslot)) | (pf_busy & (pf_s == lslot))
                                      | (~(lm0 | lm1) & (lslot_d != 4'h0)));
     wire        strobe_new = (cpu_rd | cpu_wr) & ~pw_ack;
     // A svc op only has to wait when it touches a buffered line in some
@@ -787,17 +807,34 @@ module pc98_gvram_seq #(
     wire        svc_l1   = (svc_addr[14:4] == rb_tag[1][10:0]) & (access_page == rb_tag[1][16]);
     wire        fl_want_all = (strobe_new & window & ~lv_shape)
                          | (svc_req_s & ~svc_done & ~svc_hold
-                            & ((svc_l0 & (rd0 != 4'h0)) | (svc_l1 & (rd1 != 4'h0))))
+                            & ((svc_l0 & ((rd0 != 4'h0) | (pf_busy & ~pf_s)))
+                             | (svc_l1 & ((rd1 != 4'h0) | (pf_busy &  pf_s)))))
                          | rmwbuf_off;
     // everything out first: no window access while any line is dirty or
     // a burst is still on its way
-    wire        fl_all   = fl_want_all & (rb_dirty | fl_busy);
+    wire        fl_all   = fl_want_all & (rb_dirty | fl_busy | pf_busy);
     wire [3:0]  rdo      = mru ? rd0 : rd1;       // the older slot
     wire [3:0]  rdn      = mru ? rd1 : rd0;       // the newer one
-    wire        fl_start = rb_dirty & ~fl_busy & ~rb_leg
+    wire        fl_start = rb_dirty & ~fl_busy & ~pf_busy & ~rb_leg
                          & ((st == S_IDLE) | (st == S_RDW & rb_g & ~gf_sent))
                          & ((rdo != 4'h0) | fl_all | (wb_age >= 7'(WB_AGE)));
     wire        fl_sel   = (rdo != 4'h0) ? ~mru : mru;
+    // the prefetch: the line after the newer slot's, into the older slot
+    wire [16:0] pf_cur   = rb_tag[mru];
+    wire [16:0] pf_nxt   = {pf_cur[16], pf_cur[15:0] + 16'd1};
+    wire [3:0]  pf_want  = ~grcg_mask & {analog_mode, 3'b111};
+    wire [3:0]  pf_have  = (rb_tag[~mru] == pf_nxt) ? rb_v[~mru] : 4'h0;
+    wire        pf_go    = RB_PF & wb_on & ~pf_busy & ~fl_busy & ~fl_start & ~rb_leg & ~rb_g
+                         & (st == S_IDLE) & grcg_active & grcg_rmw & ~egc_arm & ~rmwbuf_off
+                         & (rb_v[mru] != 4'h0) & (pf_cur[10:0] != 11'h7FF)
+                         & ((mru ? rd0 : rd1) == 4'h0)
+                         & ((pf_want & ~pf_have) != 4'h0) & ~fl_want_all;
+    wire [3:0]  pf_need  = pf_want & ~pf_have;
+    wire [1:0]  pf_first = pf_need[0] ? 2'd0 : pf_need[1] ? 2'd1 : pf_need[2] ? 2'd2 : 2'd3;
+    wire [3:0]  pf_rest  = pf_left & ~(4'b0001 << pf_p);
+    wire [1:0]  pf_nextp = pf_rest[0] ? 2'd0 : pf_rest[1] ? 2'd1 : pf_rest[2] ? 2'd2 : 2'd3;
+    wire [19:0] pf_pa    = pf_tag[16] ? {3'b000, pc98_gvram_plane1({pf_tag[15:0], 4'h0}, pf_p)}
+                                      : pc98_gvram_plane({pf_tag[15:0], 4'h0}, pf_p);
     wire [3:0]  fl_sd    = fl_sel ? rd1 : rd0;
     wire        fl_hold  = fl_all | lv_wait;
     // the pass-through's ready waits one clock longer than its strobes, so
@@ -946,6 +983,7 @@ module pc98_gvram_seq #(
             rb_d[0]   <= 4'h0;
             rb_d[1]   <= 4'h0;
             fl_busy   <= 1'b0;
+            pf_busy   <= 1'b0;
             cp_q      <= 1'b0;
             fl_hold_q <= 1'b0;
             gvwb_req  <= 1'b0;
@@ -993,6 +1031,38 @@ module pc98_gvram_seq #(
                     fl_ph <= 2'd0;
                 end else
                     fl_busy <= 1'b0;
+              end
+            endcase
+            // ---- prefetch (RB_PF) ----------------------------------------
+            if (pf_go) begin
+                pf_busy <= 1'b1;
+                pf_s    <= ~mru;
+                pf_tag  <= pf_nxt;
+                pf_left <= pf_need;
+                pf_p    <= pf_first;
+                pf_ph   <= 2'd0;
+                if (pf_have == 4'h0) rb_v[~mru] <= 4'h0;
+                rb_tag[~mru] <= pf_nxt;
+            end
+            if (pf_busy) case (pf_ph)
+              2'd0: if (gv_a_quiet && !gvwb_req) begin
+                gvwb_req  <= 1'b1;
+                gvwb_we   <= 1'b0;
+                gvwb_addr <= g_sdram(pf_tag[16], pf_pa);
+                pf_ph     <= 2'd1;
+              end
+              2'd1: if (gvwb_ack) begin pf_ph <= 2'd2; pf_bi <= 4'd0; end
+              default: begin
+                if (gvwb_rvalid) pf_bi <= pf_bi + 4'd1;
+                if (gvwb_done) begin
+                    rb_v[pf_s][pf_p] <= 1'b1;
+                    pf_left <= pf_rest;
+                    if (pf_rest != 4'h0) begin
+                        pf_p  <= pf_nextp;
+                        pf_ph <= 2'd0;
+                    end else
+                        pf_busy <= 1'b0;
+                end
               end
             endcase
             // The posting strobe has its ready; it is gone once it drops --
@@ -1193,7 +1263,7 @@ module pc98_gvram_seq #(
               end
 
               S_RDW: begin
-                if (rb_g && !gf_sent && gv_a_quiet && !fl_busy && !fl_start) begin
+                if (rb_g && !gf_sent && gv_a_quiet && !fl_busy && !fl_start && !pf_busy && !pf_go) begin
                     gvwb_req  <= 1'b1;
                     gvwb_we   <= 1'b0;
                     gvwb_addr <= gf_addr;
@@ -1254,7 +1324,7 @@ module pc98_gvram_seq #(
               end
 
               // ---- write this plane -----------------------------------
-              S_WR: begin
+              S_WR: if (!pf_bw) begin
                 if (!cur_live) begin
                     if (last_gp) st <= S_DONE;
                     else begin

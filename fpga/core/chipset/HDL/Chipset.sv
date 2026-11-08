@@ -662,7 +662,7 @@ module CHIPSET #(
     logic [23:0] gvwb_addr;
     logic [7:0]  gvwb_wdata;
     assign pf_beat_v = ram_pf_beat_v & ~seq_pf_beat;
-    pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1)) u_gvram_seq (
+    pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_gvram_seq (
         .rmwbuf_off(dx_rmwbuf_off),
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
@@ -767,14 +767,18 @@ module CHIPSET #(
     // on the bridge turnaround. With z86's per-iteration REP STOS charge
     // (execute rep_x) the cycle table measured (rep stosw 256 RMW, ratio
     // at 8/10 MHz) 0..2 -> 0.91/1.06, 3 -> 0.95/1.06, 4 -> 1.02/1.13;
-    // 3 is the largest that leaves 10 and 12 MHz untouched. TDW writes
+    // 3 is the largest that leaves 10 and 12 MHz untouched. With the
+    // line buffer's next-line prefetch (RB_PF) the walk got ~15% faster
+    // and the wait is 5: 8/10/12 MHz 0.89/0.99/1.12 (3 -> 0.80/0.90/1.18,
+    // 7 -> 1.01/1.09/1.21; 12 MHz is port-G bound, ~40 clocks a word at
+    // every speed, and a little CPU-side debt eases the contention). TDW writes
     // are posted too now and take 4 (rep stosw 256 TDW 8/10 MHz: 0 ->
     // 0.79/0.88, 4 -> 0.94/0.98, 5 -> 1.04/1.08). The EGC is not posted
     // and stays at 0.
     wire grcg_rmw_only = grcg_active & grcg_rmw & ~egc_live;
     wire grcg_tdw_only = grcg_active & ~grcg_rmw & ~egc_live;
     assign vram_wait_now = {pc98_analog,
-                            grcg_rmw_only ? (VID_VBlank ? 4'd1 : 4'd3)
+                            grcg_rmw_only ? (VID_VBlank ? 4'd1 : 4'd5)
                           : grcg_tdw_only ? (VID_VBlank ? 4'd1 : 4'd4)
                           : accel_hit     ? 4'd0
                           : VID_VBlank    ? 4'd1 : 4'd6};
