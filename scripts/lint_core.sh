@@ -73,7 +73,10 @@ fi
 # declaration text rides along inside each PINMISSING block.
 if python3 - "$OUT" <<'PY'
 import re, sys
-blocks = re.split(r'(?=%Warning-PINMISSING)', open(sys.argv[1]).read())
+# Each PINMISSING block ends where the next diagnostic starts: a following
+# warning of another kind (TIMESCALEMOD prints core_top's own `input`
+# declarations) must not be read as this pin's declaration.
+blocks = re.split(r'(?=^%(?:Warning|Error)-)', open(sys.argv[1]).read(), flags=re.M)
 bad = []
 for b in blocks:
     if not b.startswith('%Warning-PINMISSING'):

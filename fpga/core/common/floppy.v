@@ -1222,6 +1222,7 @@ fifo_to_floppy_inst (
 	.q          (fifo_q),
 
 	.empty      (fifo_empty),
+	.full       (),             // fifo_full is sector_len-based (above)
 	.usedw      (fifo_count)
 );
 
