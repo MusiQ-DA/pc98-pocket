@@ -1219,7 +1219,7 @@ module tb_pc98_fdc_glue;
             want("MSR idle after the result", msr, 8'h80);
 
             // ---- a READ ID on the same media reports ITS N as 3 -----------
-            wr(1, 8'h0A); wr(1, 8'h00);   // READ ID, head 0 unit 0
+            wr(1, 8'h4A); wr(1, 8'h00);   // READ ID, head 0 unit 0
             guard = 0;
             while (!fd_irq && guard < 10_000) begin
                 @(negedge clk); guard++;
@@ -1233,6 +1233,42 @@ module tb_pc98_fdc_glue;
             want("READ ID reports N=3 for 2HD", b0, 8'h03);
             rd(0, msr);
             want("MSR idle after READ ID", msr, 8'h80);
+
+            // ---- FM (MF clear) finds no address marks on MFM media ---------
+            // np21w fddfile.c fails !fdc.mf; io/fdc.c answers IC0|ND. The
+            // BIOS boot (FFD6A) tries FM READ ID first: a success there made
+            // it read 512 bytes FM to 1FE0:0000 and run a 1 KB 2HD IPL cut
+            // in half (Lord Monarch).
+            wr(1, 8'h0A); wr(1, 8'h00);   // READ ID, FM
+            guard = 0;
+            while (!fd_irq && guard < 10_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("FM READ ID interrupts", fd_irq, 1'b1);
+            rd(1, st0);
+            want("FM READ ID ST0 = IC abnormal", st0, 8'h40);
+            rd(1, b0);
+            want("FM READ ID ST1 = ND", b0, 8'h04);
+            rd(1, msr); rd(1, msr); rd(1, msr); rd(1, msr); rd(1, msr);
+            rd(0, msr);
+            want("MSR idle after FM READ ID", msr, 8'h80);
+            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);   // READ DATA, FM
+            wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h01); wr(1, 8'h1B);
+            wr(1, 8'hFF);
+            guard = 0;
+            while (!fd_irq && guard < 10_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("FM READ DATA interrupts", fd_irq, 1'b1);
+            rd(1, st0);
+            want("FM READ DATA ST0 = IC abnormal", st0, 8'h40);
+            rd(1, b0);
+            want("FM READ DATA ST1 = ND", b0, 8'h04);
+            rd(1, msr); rd(1, msr); rd(1, msr); rd(1, msr); rd(1, msr);
+            rd(0, msr);
+            want("MSR idle after FM READ DATA", msr, 8'h80);
 
             // ---- and the WRONG N is an answer, not a hang ------------------
             wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
@@ -1334,7 +1370,7 @@ module tb_pc98_fdc_glue;
             dma_wr(8'h0B, 8'hFF); dma_wr(8'h0B, 8'h03);
             dma_wr(8'h15, 8'h02);
 
-            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'hFF);
 
@@ -1366,7 +1402,7 @@ module tb_pc98_fdc_glue;
             dma_wr(8'h0B, 8'hFF); dma_wr(8'h0B, 8'h01);    // 512 bytes
             dma_wr(8'h15, 8'h02);
 
-            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'hFF);
 
@@ -1529,7 +1565,7 @@ module tb_pc98_fdc_glue;
             // floppy.v is in the loop with the 2HD disk still mounted and
             // the 2HD window live. READ ID gives a seven-byte result phase.
             window(1'b0);
-            wr(1, 8'h0A); wr(1, 8'h00);
+            wr(1, 8'h4A); wr(1, 8'h00);
             guard = 0;
             while (!fd_irq && guard < 10_000) begin
                 @(negedge clk); guard++;
@@ -1567,7 +1603,7 @@ module tb_pc98_fdc_glue;
             window(1'b0);
             // Park the chip in the fill-wait: READ DATA on the still-mounted
             // media, and let the request prove the state was reached.
-            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'hFF);
             guard = 0;
@@ -1588,7 +1624,7 @@ module tb_pc98_fdc_glue;
             // in S_SD_READ_WAIT_FOR_DATA with pending_command zeroed: the
             // request stayed low and nothing ever ran again.
             wr(2, 8'h0D);                // bit 7 back down, IRQ re-armed
-            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'hFF);
             guard = 0;

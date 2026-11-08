@@ -583,9 +583,21 @@ wire cmd_format_notready_at_start     = cmd_format_track_start && not_ready;
 
 wire cmd_notready_at_start = cmd_read_write_notready_at_start || cmd_read_id_notready_at_start || cmd_format_notready_at_start;
 
+// Every image this controller serves is MFM (double density), so a command
+// with MF (bit 6 of the opcode) clear -- an FM access -- finds no address
+// marks and fails: np21w diskimage/fddfile.c fdd_readid_common and
+// fdd_seek_common return FAILURE for !fdc.mf, and io/fdc.c answers IC0|ND
+// (FDC_ReadID, readsector). The PC-98 BIOS boot path depends on it: FFD6A
+// tries INT 1Bh AH=2Ah (FM READ ID) first and, if that succeeds, reads
+// only 512 bytes FM to 1FE0:0000 and jumps there; only when it fails does
+// it take AH=6Ah/46h -- 1024 bytes MFM to 1FC0:0000. A 2HD IPL longer than
+// 512 bytes (Falcom's Lord Monarch calls code at IPL+21Fh) was cut in half
+// and the CPU ran into the zeroed memory above it.
+wire cmd_read_id_fm_at_start = cmd_read_id_start && ~not_ready && ~cmd_read_id_hang_at_start && ~command[6];
+
 wire enter_result_phase =
 	cmd_invalid_start || cmd_sense_interrupt_status_start ||
-	cmd_notready_at_start ||
+	cmd_notready_at_start || cmd_read_id_fm_at_start ||
 	(cmd_read_write_start && (cmd_read_write_incorrect_head_at_start || cmd_read_write_incorrect_sector_at_start || cmd_write_and_writeprotected_at_start)) ||
 	(state == S_CHECK_TC && (cmd_read_write_finish || cmd_format_finish)) ||
 	(cmd_format_track_start && cmd_format_writeprotected_at_start) ||
@@ -594,7 +606,7 @@ wire enter_result_phase =
 	cmd_read_id_finished;
 
 wire raise_interrupt = dma_irq_enable && (
-	cmd_notready_at_start ||
+	cmd_notready_at_start || cmd_read_id_fm_at_start ||
 	(cmd_read_write_start && (cmd_read_write_incorrect_head_at_start || cmd_read_write_incorrect_sector_at_start)) ||
 	(cmd_write_normal_start && cmd_write_and_writeprotected_at_start) ||
 	(state == S_CHECK_TC && (cmd_read_write_finish || cmd_format_finish)) ||
@@ -630,7 +642,9 @@ wire cmd_read_write_incorrect_head_at_start   = motor_enable[selected_drive[0]] 
 // normalized end-of-track, not the raw command byte, or R=1 > EOT=0 would
 // reject every real boot read.
 wire [7:0] eot_at_start = (command[15:8] == 8'd0) ? media_sectors_per_track[selected_drive[0]] : command[15:8];
-wire cmd_read_write_incorrect_sector_at_start = ~cmd_read_write_hang_at_start && (command[31:24] > media_sectors_per_track[selected_drive[0]] || command[31:24] > eot_at_start || media_is_1024[selected_drive[0]] != (command[23:16] == 8'h03));
+// MF clear (command[62], the opcode's bit 6) is an FM access to MFM media:
+// no address mark, IC0|ND like a missing sector (see cmd_read_id_fm_at_start).
+wire cmd_read_write_incorrect_sector_at_start = ~cmd_read_write_hang_at_start && (~command[62] || command[31:24] > media_sectors_per_track[selected_drive[0]] || command[31:24] > eot_at_start || media_is_1024[selected_drive[0]] != (command[23:16] == 8'h03));
 
 wire cmd_write_and_writeprotected_at_start    = ~cmd_read_write_hang_at_start && ~cmd_read_write_incorrect_sector_at_start && cmd_write_normal_start && media_writeprotected[selected_drive[0]];
     
@@ -661,7 +675,7 @@ wire cmd_read_id_hang_at_start =
     ~motor_enable[selected_drive[0]] || //motor off
     ~media_present[selected_drive[0]];  //no media
 
-wire cmd_read_id_ok_at_start = cmd_read_id_start && ~cmd_read_id_hang_at_start;
+wire cmd_read_id_ok_at_start = cmd_read_id_start && ~cmd_read_id_hang_at_start && command[6];
 wire cmd_read_id_finished = state == S_WAIT && !command_wait_counter && cmd_read_id_in_progress;
 
 //------------------------------------------------------------------------------ cmd: specify
@@ -882,6 +896,7 @@ always @(posedge clk) begin
 	// cmd_read_write_incorrect_head_at_start can also be true, and NOT READY is
 	// what the drive is actually reporting.
 	else if(cmd_notready_at_start)                                               reply_left <= 4'd7;
+	else if(cmd_read_id_fm_at_start)                                             reply_left <= 4'd7;
 	else if(cmd_read_write_start   && cmd_read_write_incorrect_head_at_start)    reply_left <= 4'd7;
 	else if(cmd_read_write_start   && cmd_read_write_incorrect_sector_at_start)  reply_left <= 4'd7;
 	else if(cmd_write_normal_start && cmd_write_and_writeprotected_at_start)     reply_left <= 4'd7;
@@ -938,7 +953,7 @@ always @(posedge clk) begin
 	//   its unit out of io_writedata[0] rather than out of command. The N is
 	//   the MEDIA's sector size, not a constant: a READ ID is how the host
 	//   asks "what format is this disk", and a 2HD answers N=3.
-	else if(cmd_read_id_notready_at_start)                                   reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h04, (8'h40 | { 5'd0, io_writedata[2], selected_drive }) };
+	else if(cmd_read_id_notready_at_start || cmd_read_id_fm_at_start)        reply <= { 24'd0, media_is_1024[selected_drive[0]] ? 8'd3 : 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h04, (8'h40 | { 5'd0, io_writedata[2], selected_drive }) };
 	else if(cmd_read_write_start && cmd_read_write_incorrect_head_at_start)   reply <= { 24'd0, 8'd2, sector[selected_drive[0]], 7'b0,head[selected_drive[0]], cylinder[selected_drive[0]], 8'h00, 8'h04, (8'h40 | { 5'd0, head[selected_drive[0]],  selected_drive }) };
 	else if(cmd_read_write_start && cmd_read_write_incorrect_sector_at_start) reply <= { 24'd0, 8'd2, command[31:24],            7'b0,command[32],             command[47:40],              8'h00, 8'h04, (8'h40 | { 5'd0, command[32],              selected_drive }) };
 	// Write-protected media: ST1 = NW alone, ST2 = 0 (np21w io/fdc.c:183,
