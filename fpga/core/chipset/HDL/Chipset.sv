@@ -662,7 +662,7 @@ module CHIPSET #(
     logic [23:0] gvwb_addr;
     logic [7:0]  gvwb_wdata;
     assign pf_beat_v = ram_pf_beat_v & ~seq_pf_beat;
-    pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_gvram_seq (
+    pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b0), .RB_PF(1'b0)) u_gvram_seq (
         .rmwbuf_off(dx_rmwbuf_off),
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
