@@ -130,6 +130,21 @@ module tb_gvram_ram_leg;
         .dq_out(s_dq_out), .dq_io(s_dq_io), .dq_in(s_dq_in)
     );
 
+    logic walk_dbg = 1'b0;
+    bit   trace_on = $test$plusargs("trace");   // +trace: leg-by-leg RAM.sv parking trace
+    always @(negedge clk) if (walk_dbg && trace_on)
+        $display("%8t seq.st=%0d gp=%0d wr=%1b addr=%05h | ram.st=%0d wc=%b%b%b cv=%b lat=%06h lane=%1b dbus=%02h | pend=%06h/%1b p2=%06h/%1b p3=%06h/%1b cap=%06h/%1b | acc=%06h/%1b alw=%b rdy=%1b",
+                 $time, dut.st, dut.gp, mem_wr, mem_addr,
+                 u_ram.state, u_ram.wc_pend, u_ram.wc_pend2, u_ram.wc_pend3,
+                 u_ram.cap_valid, u_ram.latch_address, u_ram.gv_il_lane,
+                 u_ram.internal_data_bus,
+                 u_ram.pend_address, u_ram.pend_lane,
+                 u_ram.pend2_address, u_ram.pend2_lane,
+                 u_ram.pend3_address, u_ram.pend3_lane,
+                 u_ram.cap_address, u_ram.cap_lane,
+                 u_ram.accept_address, u_ram.accept_lane, u_ram.accept_live_wr,
+                 mem_ready);
+
     int errors = 0;
     task automatic want(input string what, input int got, input int exp);
         if (got !== exp) begin
@@ -274,6 +289,48 @@ module tb_gvram_ram_leg;
         pr(20'hB8600, rb); want("RMW after race: plane G = 05h", rb, 8'h05);
         $display("  foreign completions seen in S_RDW this phase: %0d",
                  foreign_in_rdw);
+
+        // ---- GV_IL cross-lane dedup: the posted-queue operand match must  --
+        // include the byte lane. B and R of one guest offset translate to
+        // the SAME SDRAM word (even word: {R,B}), differing only in the DQM
+        // lane. Two posted writes with equal data (an erase: 00 to every
+        // plane) used to operand-match across lanes -- the second write was
+        // dup_covered by the first and never landed. On hardware that is
+        // NEON's red ghost: blue (lower lane) erases, red (upper lane)
+        // stays forever.
+        pw(20'hA8900, 8'hAA, 8);           // prime B = AA
+        pw(20'hB0900, 8'hAA, 8);           // prime R = AA
+        pw(20'hA8F00, 8'h11, 0);           // W1 keeps the FSM busy
+        pw(20'hA8900, 8'h00, 0);           // W2 parks: B-lane 00
+        pw(20'hB0900, 8'h00, 0);           // W3 same word+data, upper lane:
+                                          //    must ALSO land (not a dup)
+        pr(20'hA8900, rb); want("cross-lane park: B erased", rb, 8'h00);
+        pr(20'hB0900, rb); want("cross-lane park: R erased", rb, 8'h00);
+
+        // ---- the same erase through the GRCG walk (NEON's actual shape) --
+        // TDW with all-plane tiles 00: four legs write 00 to B,R,G,E of one
+        // offset back-to-back. The legs park behind each other; without the
+        // lane in the match, R (even word) and E (odd word) are eaten by
+        // their lane-twin's parked write. E0000 needs analog to be GVRAM.
+        analog_mode = 1'b1;
+        pw(20'hA8A00, 8'hAA, 8); pw(20'hB0A00, 8'hAA, 8);
+        pw(20'hB8A00, 8'hAA, 8); pw(20'hE0A00, 8'hAA, 8);
+        grcg_active = 1'b1; grcg_rmw = 1'b0; grcg_mask = 4'h0;
+        grcg_tile[0] = 8'h00; grcg_tile[1] = 8'h00;
+        grcg_tile[2] = 8'h00; grcg_tile[3] = 8'h00;
+        pw(20'hA8E00, 8'h11, 0);           // keep the FSM busy so legs park
+        walk_dbg = 1'b1;
+        pw(20'hA8A00, 8'h00, 0);           // expanded TDW: 4-plane erase
+        grcg_active = 1'b0;
+        pr(20'hA8A00, rb); want("walk erase: plane B", rb, 8'h00);
+        pr(20'hB0A00, rb); want("walk erase: plane R", rb, 8'h00);
+        pr(20'hB8A00, rb); want("walk erase: plane G", rb, 8'h00);
+        pr(20'hE0A00, rb); want("walk erase: plane E", rb, 8'h00);
+        walk_dbg = 1'b0;
+        // Where did each lane actually land? {R,B} even word, {E,G} odd.
+        $display("  peek 601200 (even {R,B}) = %04h", sdr.peek(24'h601200));
+        $display("  peek 601401 (odd  {E,G}) = %04h", sdr.peek(24'h601401));
+        analog_mode = 1'b0;
 
         if (errors == 0) $display("PASS tb_gvram_ram_leg");
         else             $display("FAILED tb_gvram_ram_leg: %0d", errors);

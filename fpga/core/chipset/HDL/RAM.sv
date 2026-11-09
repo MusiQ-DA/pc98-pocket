@@ -712,11 +712,17 @@ module RAM #(
     // the same operands are a NEW write that has to queue after the slot
     // (A, B, A to one byte otherwise took the in-flight A's ready and left
     // B in memory).
+    // GV_IL: B and R (and G and E) alias to one SDRAM word; the byte lane
+    // (DQM half) is part of the write's identity.  Without the lane in the
+    // operand match, an erase to the twin plane (same address+data after the
+    // interleave fold, different lane) was dup_covered away and never
+    // reached SDRAM -- on the metal that was NEON's red ghost.
     wire write_strobe_match = (latch_address      == accept_address)
                             & (internal_data_bus    == accept_data)
                             & (word_now             == accept_word)
                             & (~accept_word
                                | (internal_data_bus_hi == accept_data_hi))
+                            & (gv_il_lane           == accept_lane)
                             & ~wc_pend & ~cap_valid;
     wire read_strobe_match  = (latch_address == accept_address)
                             & (word_now      == accept_word);
@@ -727,21 +733,25 @@ module RAM #(
     wire parked_match  = (latch_address        == pend_address)
                        & (internal_data_bus    == pend_data)
                        & (word_now             == pend_word)
+                       & (gv_il_lane           == pend_lane)
                        & (~pend_word
                           | (internal_data_bus_hi == pend_data_hi));
     wire parked2_match = (latch_address        == pend2_address)
                        & (internal_data_bus    == pend2_data)
                        & (word_now             == pend2_word)
+                       & (gv_il_lane           == pend2_lane)
                        & (~pend2_word
                           | (internal_data_bus_hi == pend2_data_hi));
     wire parked3_match = (latch_address        == pend3_address)
                        & (internal_data_bus    == pend3_data)
                        & (word_now             == pend3_word)
+                       & (gv_il_lane           == pend3_lane)
                        & (~pend3_word
                           | (internal_data_bus_hi == pend3_data_hi));
     wire cap_match     = (latch_address        == cap_address)
                        & (internal_data_bus    == cap_data)
                        & (word_now             == cap_word)
+                       & (gv_il_lane           == cap_lane)
                        & (~cap_word
                           | (internal_data_bus_hi == cap_data_hi));
 
@@ -1332,6 +1342,7 @@ module RAM #(
     logic  [7:0] cov_data;
     logic  [7:0] cov_data_hi;
     logic        cov_word;
+    logic        cov_lane;
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset)
@@ -1344,12 +1355,22 @@ module RAM #(
             cov_data    <= internal_data_bus;
             cov_data_hi <= internal_data_bus_hi;
             cov_word    <= word_now;
+            cov_lane    <= gv_il_lane;
         end
     end
 
+    // GV_IL: the lane is part of the covered write's identity too.  The
+    // TDW chain keeps mem_wr up and moves the operands plane to plane, so
+    // the E leg rises on the same held strobe that was just covered for
+    // the G leg -- same folded word address, same tile data, different DQM
+    // lane.  Without the lane here cov_same stayed true, the strobe read
+    // "already durably covered" and retired without ever parking -- with
+    // every slot full there was nowhere to capture and the E erase was
+    // gone for good (tb_gvram_ram_leg walk erase, plane E stuck at AA).
     wire cov_same = (latch_address == cov_addr)
                   & (internal_data_bus == cov_data)
                   & (word_now == cov_word)
+                  & (gv_il_lane == cov_lane)
                   & (~cov_word | (internal_data_bus_hi == cov_data_hi));
 
     // Ready suppression while a write strobe is up but not yet durably
