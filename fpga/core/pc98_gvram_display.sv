@@ -391,7 +391,7 @@ module pc98_gvram_display #(
     // Word = base(page) + offset*2 + beat parity (pc98_sdram_map.svh's
     // pc98_gvram_il layout: parity is plane bit 1, and the fetch wants both
     // parities of every offset).
-    wire [14:0] chunk_off = (fill_base + {f_chunk[3:0], 3'b000}) & 15'h7FFF;
+    wire [14:0] chunk_off = (fill_base + {8'd0, f_chunk[3:0], 3'b000}) & 15'h7FFF;
     wire [14:0] w_off_gv  = (chunk_off + {12'd0, f_word[3:1]}) & 15'h7FFF;
     assign p_addr = {7'h30, fill_page, w_off_gv, f_word[0]};
 
@@ -514,7 +514,7 @@ module pc98_gvram_display #(
                 late_cnt <= late_cnt + 8'd1;
         end
     end
-    assign dbg = { line_now, act_tgt, f_chunk, cur_part,
+    assign dbg = { 3'd0, line_now, act_tgt, f_chunk, cur_part,
                    dbl, disp_page, disp_on_c, fill_page, f_active,
                    skip_cnt, late_cnt, max_fill };
 
