@@ -181,6 +181,11 @@ module pc98_gvram_seq #(
     // Hardware bisect (core_top JTAG slot 0x09 [27]; 0 in release): the
     // RMW line buffer off at run time, its lines dropped while off.
     input  wire        rmwbuf_off,
+    // Run-time A/B (core_top slot 0x09 [30:29], 0 in release):
+    //   [0] no line prefetch (RB_PF)
+    //   [1] write every dirty line back at the first chance (the buffer
+    //       still batches reads, but the display never runs behind)
+    input  wire  [1:0] dx_seq,
 
     // ---- the access page (port 0xA6 bit 0) -------------------------------
     // Rebanks every plane window between the two 640x400 pages, np21w's
@@ -823,14 +828,14 @@ module pc98_gvram_seq #(
     wire [3:0]  rdn      = mru ? rd1 : rd0;       // the newer one
     wire        fl_start = rb_dirty & ~fl_busy & ~pf_busy & ~rb_leg
                          & ((st == S_IDLE) | (st == S_RDW & rb_g & ~gf_sent))
-                         & ((rdo != 4'h0) | fl_all | (wb_age >= 7'(WB_AGE)));
+                         & ((rdo != 4'h0) | fl_all | (wb_age >= 7'(WB_AGE)) | dx_seq[1]);
     wire        fl_sel   = (rdo != 4'h0) ? ~mru : mru;
     // the prefetch: the line after the newer slot's, into the older slot
     wire [16:0] pf_cur   = rb_tag[mru];
     wire [16:0] pf_nxt   = {pf_cur[16], pf_cur[15:0] + 16'd1};
     wire [3:0]  pf_want  = ~grcg_mask & {analog_mode, 3'b111};
     wire [3:0]  pf_have  = (rb_tag[~mru] == pf_nxt) ? rb_v[~mru] : 4'h0;
-    wire        pf_go    = RB_PF & wb_on & ~pf_busy & ~fl_busy & ~fl_start & ~rb_leg & ~rb_g
+    wire        pf_go    = RB_PF & wb_on & ~dx_seq[0] & ~pf_busy & ~fl_busy & ~fl_start & ~rb_leg & ~rb_g
                          & (st == S_IDLE) & grcg_active & grcg_rmw & ~egc_arm & ~rmwbuf_off
                          & (rb_v[mru] != 4'h0) & (pf_cur[10:0] != 11'h7FF)
                          & ((mru ? rd0 : rd1) == 4'h0)

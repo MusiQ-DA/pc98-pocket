@@ -77,6 +77,7 @@ module tb_pc98_gvram_seq #(parameter bit PW = 0);
 
     pc98_gvram_seq #(.PWPOST(PW)) dut (
         .rmwbuf_off(1'b0),
+        .dx_seq(2'b00),
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_pf_len(5'd0),

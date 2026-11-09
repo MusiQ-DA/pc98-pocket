@@ -313,6 +313,9 @@ module core_top #(
     //   [28] RAM.sv VRAM waits back (integ-1034's; pair with [24])
     // e.g. P=0x1F00005: 10 MHz with all of them reverted.
     logic  [8:0] jtag_dx = 9'd0;
+    // [30:29] gvram_seq A/B: [29] no RMW line prefetch, [30] dirty lines
+    // written back at once (lodemnc's map-scroll flashes)
+    logic  [1:0] jtag_seq_dx = 2'd0;
     // Per-mechanism prefetch kills, for bisecting which half of the
     // engine a failure lives in without a rebuild:
     //   [4] pf_nofill  -- pure (idle-gap) fills never run
@@ -349,6 +352,7 @@ module core_top #(
     wire         jtag_cache_dis = 1'b0;
     wire   [7:0] jtag_thr_num = 8'd0;
     wire   [8:0] jtag_dx = 9'd0;
+    wire   [1:0] jtag_seq_dx = 2'd0;
     wire         jtag_pf_nofill  = 1'b0;
     wire         jtag_pf_nofillm = 1'b0;
     wire         jtag_pf_nohit   = 1'b0;
@@ -2732,6 +2736,7 @@ module core_top #(
             // off) is live again -- the A/B for cursor-save corruption; the
             // other reverts stay 0 (their muxes cost the fit).
             jtag_dx[7]    <= probe_wdata_c[27];
+            jtag_seq_dx   <= probe_wdata_c[30:29];
         end
         // Slot 0x0a: the reset-source witness clear -- wdata[0] wipes the
         // sticky rise map, the last-source index and its tick (the write
@@ -3849,6 +3854,7 @@ module core_top #(
         ,.vram_wait_now                     (vram_wait_now)
         ,.dx_rmwbuf_off                     (jtag_dx[7])
         ,.dx_vramwait                       (jtag_dx[8])
+        ,.dx_seq                            (jtag_seq_dx)
         ,.ram_wr_snoop_v                    (ram_wr_snoop_v)
         ,.ram_wr_snoop_addr                 (ram_wr_snoop_addr)
         ,.ram_wr_snoop_len                  (ram_wr_snoop_len)

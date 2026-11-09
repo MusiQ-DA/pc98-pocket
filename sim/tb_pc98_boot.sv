@@ -635,6 +635,7 @@ module tb_pc98_boot;
     wire [7:0]  dbg_gvram;
     pc98_gvram_seq #(.EGC(1'b1)) u_gvram_seq (
         .rmwbuf_off(1'b0),
+        .dx_seq(2'b00),
         .clk(clk_chipset), .reset(reset),
         .cpu_gvram(~ram_address_select_n),
         .cpu_rd(~mem_rd_n), .cpu_wr(~mem_wr_n),

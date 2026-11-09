@@ -472,8 +472,12 @@ module tb_mem_perf;
     wire [7:0]  pf_beat_dat_w;
     wire [4:0]  cpu_pf_len_w;
 
+    // +seqdx=N: the sequencer's run-time A/B bits (core_top slot 0x09 [30:29])
+    logic [1:0] seq_dx = 2'b00;
+    initial begin int v; if ($value$plusargs("seqdx=%d", v)) seq_dx = 2'(v); end
     pc98_gvram_seq #(.EGC(1'b1), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_seq (
         .rmwbuf_off(dx_r[7]),
+        .dx_seq(seq_dx),
         .clk(clk), .reset(reset),
         .cpu_gvram(~ram_sel_n),
         .cpu_rd(seq_rd), .cpu_wr(seq_wr),
@@ -2495,7 +2499,7 @@ module tb_mem_perf;
                 return;
             end
             if (cur_file != "") begin
-                $display("CURSOR CHECK: %0d mismatches", cur_bad);
+                $display("CURSOR CHECK: %0d mismatches (longest dirty line %0d clk)", cur_bad, wbd_max);
                 if (cur_bad) $display("=== FAIL tb_mem_perf ===");
                 else         $display("=== PASS tb_mem_perf ===");
                 return;
@@ -2664,6 +2668,25 @@ module tb_mem_perf;
         if ((u_seq.cpu_rd | u_seq.cpu_wr) && u_seq.window && {u_seq.access_page, u_seq.cpu_addr[19:4]} == 17'(lt_tag) && u_seq.st == 0)
             $display("LT %0t CPU %s a=%05x wd=%02x st=%0d pw_ack=%b fl_hold=%b", $time, u_seq.cpu_rd ? "RD" : "WR",
                      u_seq.cpu_addr, u_seq.cpu_wdata, u_seq.st, u_seq.pw_ack, u_seq.fl_hold);
+    end
+
+    // How long a buffered line stays dirty (the display reads SDRAM, so
+    // this is how far behind the screen can run): per slot, clocks from
+    // its first dirty plane to its last write-back.
+    longint wbd_t0 [0:1];
+    longint wbd_max = 0;
+    logic [1:0] wbd_on = 2'b00;
+    longint c_cyc = 0;
+    always_ff @(posedge clk) begin
+        c_cyc <= c_cyc + 1;
+        for (int k = 0; k < 2; k++) begin
+            if (u_seq.rb_d[k] != 4'h0 && !wbd_on[k]) begin
+                wbd_on[k] <= 1'b1; wbd_t0[k] <= c_cyc;
+            end else if (u_seq.rb_d[k] == 4'h0 && wbd_on[k]) begin
+                wbd_on[k] <= 1'b0;
+                if (c_cyc - wbd_t0[k] > wbd_max) wbd_max <= c_cyc - wbd_t0[k];
+            end
+        end
     end
 
     // marker decode on the IO-write strobe

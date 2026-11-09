@@ -326,6 +326,8 @@ module CHIPSET #(
         // off too, slot bit 24, that is the old VRAM timing).
         input   logic           dx_rmwbuf_off,
         input   logic           dx_vramwait,
+        // slot 0x09 [30:29]: gvram_seq run-time A/B (no prefetch / write-back now)
+        input   logic    [1:0]  dx_seq,
         output  logic    [4:0]  cachef_wcnt,
         output  logic           ram_wr_snoop_v,
         output  logic   [23:0]  ram_wr_snoop_addr,
@@ -664,6 +666,7 @@ module CHIPSET #(
     assign pf_beat_v = ram_pf_beat_v & ~seq_pf_beat;
     pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_gvram_seq (
         .rmwbuf_off(dx_rmwbuf_off),
+        .dx_seq(dx_seq),
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
         .cpu_rd(~memory_read_n), .cpu_wr(~memory_write_n),

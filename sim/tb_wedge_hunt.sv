@@ -107,6 +107,7 @@ module tb_wedge_hunt;
 
     pc98_gvram_seq #(.EGC(1'b0)) dut (
         .rmwbuf_off(1'b0),
+        .dx_seq(2'b00),
         .clk(clk), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_pf_len(cpu_pf_len),
