@@ -79,6 +79,7 @@ module tb_seq_ram_stosb;
     pc98_gvram_seq #(.EGC(1'b0)) seq (
         .rmwbuf_off(1'b0),
         .dx_seq(2'b00),
+        .disp_page(1'b0),
         .clk(clock), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_pf_len(4'd0),

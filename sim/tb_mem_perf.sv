@@ -474,10 +474,16 @@ module tb_mem_perf;
 
     // +seqdx=N: the sequencer's run-time A/B bits (core_top slot 0x09 [30:29])
     logic [1:0] seq_dx = 2'b00;
+    // +seqdisp=1: the sequencer is told page 1 is on screen (the guest
+    // draws page 0, the display model still shows page 0) -- the
+    // hidden-page case of the displayed-page prefetch gate
+    logic seq_disp = 1'b0;
+    initial begin int v; if ($value$plusargs("seqdisp=%d", v)) seq_disp = (v != 0); end
     initial begin int v; if ($value$plusargs("seqdx=%d", v)) seq_dx = 2'(v); end
     pc98_gvram_seq #(.EGC(1'b1), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_seq (
         .rmwbuf_off(dx_r[7]),
         .dx_seq(seq_dx),
+        .disp_page(seq_disp),
         .clk(clk), .reset(reset),
         .cpu_gvram(~ram_sel_n),
         .cpu_rd(seq_rd), .cpu_wr(seq_wr),

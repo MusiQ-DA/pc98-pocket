@@ -667,6 +667,7 @@ module CHIPSET #(
     pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_gvram_seq (
         .rmwbuf_off(dx_rmwbuf_off),
         .dx_seq(dx_seq),
+        .disp_page(gvram_disp_page_w),
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
         .cpu_rd(~memory_read_n), .cpu_wr(~memory_write_n),

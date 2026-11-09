@@ -186,6 +186,12 @@ module pc98_gvram_seq #(
     //   [1] write every dirty line back at the first chance (the buffer
     //       still batches reads, but the display never runs behind)
     input  wire  [1:0] dx_seq,
+    // Port 0xA4's displayed page. No line prefetch into the page on
+    // screen: the prefetch holds write-backs off, and the display reads
+    // SDRAM, so a line drawn there stays visibly stale (lodemnc's map
+    // scroll; hardware: gone with the prefetch off, slot 0x09 [29]).
+    // Drawing on the hidden page keeps it.
+    input  wire        disp_page,
 
     // ---- the access page (port 0xA6 bit 0) -------------------------------
     // Rebanks every plane window between the two 640x400 pages, np21w's
@@ -838,7 +844,7 @@ module pc98_gvram_seq #(
     wire [16:0] pf_nxt   = {pf_cur[16], pf_cur[15:0] + 16'd1};
     wire [3:0]  pf_want  = ~grcg_mask & {analog_mode, 3'b111};
     wire [3:0]  pf_have  = (rb_tag[~mru] == pf_nxt) ? rb_v[~mru] : 4'h0;
-    wire        pf_go    = RB_PF & wb_on & ~dx_seq[0] & ~pf_busy & ~fl_busy & ~fl_start & ~rb_leg & ~rb_g
+    wire        pf_go    = RB_PF & wb_on & ~dx_seq[0] & (pf_cur[16] != disp_page) & ~pf_busy & ~fl_busy & ~fl_start & ~rb_leg & ~rb_g
                          & (st == S_IDLE) & grcg_active & grcg_rmw & ~egc_arm & ~rmwbuf_off
                          & (rb_v[mru] != 4'h0) & (pf_cur[10:0] != 11'h7FF)
                          & ((mru ? rd0 : rd1) == 4'h0)
