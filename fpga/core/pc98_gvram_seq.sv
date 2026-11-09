@@ -830,6 +830,9 @@ module pc98_gvram_seq #(
                          & ((st == S_IDLE) | (st == S_RDW & rb_g & ~gf_sent))
                          & ((rdo != 4'h0) | fl_all | (wb_age >= 7'(WB_AGE)) | dx_seq[1]);
     wire        fl_sel   = (rdo != 4'h0) ? ~mru : mru;
+    // a prefetch between planes gives the port up to a wanted write-back
+    // (see the prefetch FSM below)
+    wire        pf_yield = ~gvwb_req & ((rdo != 4'h0) | fl_all | (wb_age >= 7'(WB_AGE)));
     // the prefetch: the line after the newer slot's, into the older slot
     wire [16:0] pf_cur   = rb_tag[mru];
     wire [16:0] pf_nxt   = {pf_cur[16], pf_cur[15:0] + 16'd1};
@@ -1070,11 +1073,10 @@ module pc98_gvram_seq #(
             // (lodemnc's map scroll flashed short horizontal lines; hardware
             // A/B: gone with the prefetch off). The planes already fetched
             // stay valid under the slot's new tag.
-            if (pf_busy && pf_ph == 2'd0 && !gvwb_req
-                && ((rdo != 4'h0) || fl_all || (wb_age >= 7'(WB_AGE))))
+            if (pf_busy) case (pf_ph)
+              2'd0: if (pf_yield) begin
                 pf_busy <= 1'b0;
-            else if (pf_busy) case (pf_ph)
-              2'd0: if (gv_a_quiet && !gvwb_req) begin
+              end else if (gv_a_quiet && !gvwb_req) begin
                 gvwb_req  <= 1'b1;
                 gvwb_we   <= 1'b0;
                 gvwb_addr <= g_sdram(pf_tag[16], pf_pa);
