@@ -797,6 +797,10 @@ module pc98_gvram_seq #(
     reg  [2:0]  cp_w;                    // the word the landing read was for
     reg  [7:0]  stg [0:15];
     reg  [6:0]  wb_age;
+    // A display-page flip (port 0xA4) puts the hidden page's still-dirty
+    // lines on screen: write everything back now (lodemnc flips every 16
+    // frames; the rest of the scroll flicker).
+    reg         disp_q, flip_pend;
     wire        wb_on    = RMWBUF & WBACK;
     wire [3:0]  rd0      = wb_on ? rb_d[0] : 4'h0;
     wire [3:0]  rd1      = wb_on ? rb_d[1] : 4'h0;
@@ -834,7 +838,7 @@ module pc98_gvram_seq #(
     wire [3:0]  rdn      = mru ? rd1 : rd0;       // the newer one
     wire        fl_start = rb_dirty & ~fl_busy & ~pf_busy & ~rb_leg
                          & ((st == S_IDLE) | (st == S_RDW & rb_g & ~gf_sent))
-                         & ((rdo != 4'h0) | fl_all | (wb_age >= 7'(WB_AGE)) | dx_seq[1]);
+                         & ((rdo != 4'h0) | fl_all | (wb_age >= 7'(WB_AGE)) | flip_pend | dx_seq[1]);
     wire        fl_sel   = (rdo != 4'h0) ? ~mru : mru;
     // a prefetch between planes gives the port up to a wanted write-back
     // (see the prefetch FSM below)
@@ -844,7 +848,7 @@ module pc98_gvram_seq #(
     wire [16:0] pf_nxt   = {pf_cur[16], pf_cur[15:0] + 16'd1};
     wire [3:0]  pf_want  = ~grcg_mask & {analog_mode, 3'b111};
     wire [3:0]  pf_have  = (rb_tag[~mru] == pf_nxt) ? rb_v[~mru] : 4'h0;
-    wire        pf_go    = RB_PF & wb_on & ~dx_seq[0] & (pf_cur[16] != disp_page) & ~pf_busy & ~fl_busy & ~fl_start & ~rb_leg & ~rb_g
+    wire        pf_go    = RB_PF & wb_on & ~dx_seq[0] & (pf_cur[16] != disp_page) & ~flip_pend & ~pf_busy & ~fl_busy & ~fl_start & ~rb_leg & ~rb_g
                          & (st == S_IDLE) & grcg_active & grcg_rmw & ~egc_arm & ~rmwbuf_off
                          & (rb_v[mru] != 4'h0) & (pf_cur[10:0] != 11'h7FF)
                          & ((mru ? rd0 : rd1) == 4'h0)
@@ -1017,12 +1021,17 @@ module pc98_gvram_seq #(
             gvwb_req  <= 1'b0;
             gvwb_we   <= 1'b0;
             wb_age    <= 7'd0;
+            disp_q    <= 1'b0;
+            flip_pend <= 1'b0;
             rb_g      <= 1'b0;
         end else begin
             // ---- write-back engine (WBACK) ------------------------------
             fl_hold_q <= fl_hold;
             if (!rb_dirty || st != S_IDLE || fl_busy) wb_age <= 7'd0;
             else if (wb_age != 7'h7F) wb_age <= wb_age + 7'd1;
+            disp_q <= disp_page;
+            if (disp_q != disp_page)            flip_pend <= 1'b1;
+            else if (!rb_dirty && !fl_busy)     flip_pend <= 1'b0;
             if (gvwb_req && gvwb_ack) gvwb_req <= 1'b0;
             cp_q <= cp_own;
             cp_w <= fl_i[2:0];
