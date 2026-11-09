@@ -1063,7 +1063,17 @@ module pc98_gvram_seq #(
                 if (pf_have == 4'h0) rb_v[~mru] <= 4'h0;
                 rb_tag[~mru] <= pf_nxt;
             end
-            if (pf_busy) case (pf_ph)
+            // Between planes (no request out) a prefetch yields to a
+            // write-back that wants the port: it waits for port A to go quiet
+            // and can sit there for long, holding fl_start off while a line
+            // stays dirty -- and the display, which reads SDRAM, behind
+            // (lodemnc's map scroll flashed short horizontal lines; hardware
+            // A/B: gone with the prefetch off). The planes already fetched
+            // stay valid under the slot's new tag.
+            if (pf_busy && pf_ph == 2'd0 && !gvwb_req
+                && ((rdo != 4'h0) || fl_all || (wb_age >= 7'(WB_AGE))))
+                pf_busy <= 1'b0;
+            else if (pf_busy) case (pf_ph)
               2'd0: if (gv_a_quiet && !gvwb_req) begin
                 gvwb_req  <= 1'b1;
                 gvwb_we   <= 1'b0;

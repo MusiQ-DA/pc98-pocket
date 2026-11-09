@@ -2673,16 +2673,18 @@ module tb_mem_perf;
     // How long a buffered line stays dirty (the display reads SDRAM, so
     // this is how far behind the screen can run): per slot, clocks from
     // its first dirty plane to its last write-back.
-    longint wbd_t0 [0:1];
+    longint wbd_t0 [0:7];
     longint wbd_max = 0;
-    logic [1:0] wbd_on = 2'b00;
+    logic [7:0] wbd_on = 8'h00;
     longint c_cyc = 0;
     always_ff @(posedge clk) begin
         c_cyc <= c_cyc + 1;
-        for (int k = 0; k < 2; k++) begin
-            if (u_seq.rb_d[k] != 4'h0 && !wbd_on[k]) begin
+        // per slot x plane: from the plane going dirty to its write-back
+        // clearing it -- the longest the display can see that plane stale
+        for (int k = 0; k < 8; k++) begin
+            if (u_seq.rb_d[k / 4][k % 4] && !wbd_on[k]) begin
                 wbd_on[k] <= 1'b1; wbd_t0[k] <= c_cyc;
-            end else if (u_seq.rb_d[k] == 4'h0 && wbd_on[k]) begin
+            end else if (!u_seq.rb_d[k / 4][k % 4] && wbd_on[k]) begin
                 wbd_on[k] <= 1'b0;
                 if (c_cyc - wbd_t0[k] > wbd_max) wbd_max <= c_cyc - wbd_t0[k];
             end
