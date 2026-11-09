@@ -81,5 +81,45 @@ function automatic logic [16:0] pc98_gvram_plane1(input logic [19:0] a,
                                                   input logic [1:0] p);
     pc98_gvram_plane1 = {2'b00, p, a[14:0]};
 endfunction
+
+// Which of the four planes a window address selects. Written once here
+// because the interleave needs it in THREE places: RAM.sv (turn a window
+// address into the interleaved word), pc98_gvram_seq (the walk order and
+// its own address math), and anything else that has to classify a guest
+// address without going through the sequencer. Same decode as
+// pc98_gvram_plane: E0000 is plane 3, A8000 plane 0, bit 15 of the window
+// separates G (B8000) from R (B0000).
+function automatic logic [1:0] pc98_gvram_own_plane(input logic [19:0] a);
+    pc98_gvram_own_plane = (a[19:15] == 5'b11100) ? 2'd3   // E0000-E7FFF
+                         : (a[19:15] == 5'b10101) ? 2'd0   // A8000-AFFFF
+                         : a[15]                  ? 2'd2   // B8000-BFFFF: G
+                                                  : 2'd1; // B0000-B7FFF: R
+endfunction
+
+// THE INTERLEAVE (docs/GVRAM_PLANE_INTERLEAVE.md). The four planes stop
+// living in four separate 0x8000 windows and share one dense region, so a
+// GRCG read-modify-write of one pixel dot reads the four planes it needs
+// from CONSECUTIVE SDRAM words instead of four windows 0x8000 apart:
+//
+//   byte offset off (15 bits, within the plane) and plane p (B=0 R=1 G=2 E=3)
+//     word = base + {off, p[1]}   -- offset doubled, plane bit 1 selects the
+//                                    odd word, so:
+//       even word {R[off] hi : B[off] lo}
+//       odd  word {E[off] hi : G[off] lo}
+//     lane = p[0]                 -- B/G take the low byte, R/E the high.
+//
+// One guest byte touches exactly one word on one lane, a GRCG byte access
+// is one two-word read plus one masked two-word write, and a word access
+// (offsets off, off+1) four consecutive words either way. The price is
+// that every byte write must be masked -- the neighbour lane holds the
+// partner plane's byte -- which is why the DQM path is wired up.
+// Page zero lives at 0x600000 and page one at 0x610000, each 64K words
+// (32 K offsets x 2 words), clear of EMS (bit 21) and the font bank
+// (0x400000).
+function automatic logic [23:0] pc98_gvram_il(input logic pg,
+                                              input logic [14:0] off,
+                                              input logic [1:0] p);
+    pc98_gvram_il = {7'h30, pg, off, p[1]};
+endfunction
 /* verilator lint_on UNUSEDSIGNAL */
 

@@ -175,6 +175,10 @@ module pc98_gvram_seq #(
     input  wire        gv_a_quiet,       // RAM.sv: nothing of port A pending
     output reg  [23:0] gvwb_addr,
     output wire [7:0]  gvwb_wdata,
+    // Write lanes for the port-G write-back, driven combinationally per
+    // beat on gvwb_wcnt like gvwb_wdata. The interleave keeps whole-word
+    // (all ones) for the legacy plane-line write-back shape.
+    output wire [1:0]  gvwb_wmask,
     input  wire        gvwb_ack,
     input  wire        gvwb_done,
     input  wire [4:0]  gvwb_wcnt,
@@ -881,6 +885,10 @@ module pc98_gvram_seq #(
     wire [19:0] fl_pa    = fl_tag[16] ? {3'b000, pc98_gvram_plane1({fl_tag[15:0], 4'h0}, fl_p)}
                                       : pc98_gvram_plane({fl_tag[15:0], 4'h0}, fl_p);
     assign gvwb_wdata = stg[gvwb_wcnt[3:0]];
+    // GV_IL stage 1: the legacy plane-line write-back stays whole-word.
+    // The interleaved port-G RMW path (masked two/four-word writes) is the
+    // next stage; until it lands the buffer is forced off anyway.
+    assign gvwb_wmask = 2'b11;
     // the copy owns the read port on clocks the FSM does not read the banks
     wire        cp_own   = fl_busy & (fl_ph == 2'd0) & (fl_i != 4'd8)
                          & ((st == S_IDLE) | (st == S_RDW & rb_g & ~gf_sent));

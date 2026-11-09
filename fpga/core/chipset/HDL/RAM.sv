@@ -180,6 +180,9 @@ module RAM #(
      output logic           gv_a_quiet,
      input  logic   [23:0]  gvwb_addr,
      input  logic    [7:0]  gvwb_wdata,
+     // Port G's write lanes (interleaved-GVRAM byte-lane writes from the
+     // sequencer), consumed per WRITE beat. All ones = whole-word write.
+     input  logic    [1:0]  gvwb_wmask,
      output logic           gvwb_ack,
      output logic           gvwb_done,
     // Port A write commits (guest, DMA, loader), for the cache to snoop:
@@ -293,10 +296,18 @@ module RAM #(
     logic   [7:0]   cap_data;
     logic   [7:0]   cap_data_hi;
     logic           cap_word;
+    // The interleaved-GVRAM lane bit (see gv_il_lane): snapshotted with the
+    // other write operands, so a parked write re-forms its 16-bit word the
+    // same way the live one did. Meaningless off the interleave.
+    logic           pend_lane;
+    logic           pend2_lane;
+    logic           pend3_lane;
+    logic           cap_lane;
     logic   [23:0]  accept_address;
     logic   [7:0]   accept_data;
     logic   [7:0]   accept_data_hi;
     logic           accept_word;
+    logic           accept_lane;
 
     // Two counters per direction: the two-bit base keeps its original
     // floor behaviour (it drains while the transaction runs), and the
@@ -361,12 +372,30 @@ module RAM #(
     // I/O Ports
     //
     // Address
+    //
+    // The interleaved GVRAM (docs/GVRAM_PLANE_INTERLEAVE.md): the four
+    // planes share one dense region instead of four 0x8000 windows, one
+    // guest byte on one lane of one word -- pc98_sdram_map.svh's
+    // pc98_gvram_il() is the layout. Both pages convert here, so every
+    // port-A access (single byte, prefetch leg, sequencer walk) lands in
+    // the interleave without any other change: everything downstream of
+    // latch_address is converted automatically.
+    wire       gv_il_win  = pc98_gvram_hits(address, analog_mode);
+    wire [1:0] gv_il_pl   = pc98_gvram_own_plane(address);
+    // The lane the byte under the current strobe lives on (plane bit 0).
+    // Carried into the park/accept slots with the other operands, because
+    // the converted address alone cannot tell the two lanes apart.
+    wire       gv_il_lane = gvram_page1_flag ? address[15] : gv_il_pl[0];
+
     always_comb begin
         if (gvram_page1_flag)
-            // GVRAM page one: 0x600000 upward. The sequencer hands a
-            // seventeen-bit plane-and-offset; the guest's own map, every EMS
-            // window, and the font bank all stay out of the way.
-            latch_address   = 24'h600000 + {7'h00, address[16:0]};
+            // GVRAM page one: 0x610000 upward, interleaved. The sequencer
+            // hands a seventeen-bit plane-and-offset.
+            latch_address   = pc98_gvram_il(1'b1, address[14:0], address[16:15]);
+        else if (gv_il_win)
+            // Page zero through the guest windows: classify the plane and
+            // interleave against the window offset.
+            latch_address   = pc98_gvram_il(1'b0, address[14:0], gv_il_pl);
         else if (ems98_win)
             // The EMS board's window claims C0000-CFFFF; its map entry is
             // the page's top ten word bits, so the low fourteen come from
@@ -440,6 +469,26 @@ module RAM #(
     logic           pf_tag;
     assign  pf_beat_dat = pf_beat_w[7:0];
 
+    // Interleave bookkeeping for the converted addresses. The GV_IL region
+    // is 0x600000-0x61FFFF: bits [23:17] == 7'h30.
+    wire       acc_il = (accept_address[23:17] == 7'h30);
+    wire       lat_il = (latch_address[23:17] == 7'h30);
+    // The write lane masks handed to the shim. A beat-1 mask never needs
+    // restricting: a word write is main RAM (full words both beats) and
+    // GVRAM word cycles never reach port A -- cpu_bus_bridge splits them
+    // into bytes at the interleave.
+    wire [1:0] a_wmask_acc = acc_il ? (accept_lane ? 2'b10 : 2'b01)
+                                    : 2'b11;
+    wire [1:0] a_wmask_lat = lat_il ? (gv_il_lane ? 2'b10 : 2'b01)
+                                    : 2'b11;
+    wire       wr_in_flight = (state == RAM_WRITE_1) || (state == RAM_WRITE_2);
+    wire [1:0] a_wmask0_w = wr_in_flight ? a_wmask_acc : a_wmask_lat;
+    // The controller's own DQM (derived from the granted port's mask) now
+    // drives the pins: every byte write on the interleave must protect the
+    // neighbour plane's lane, which RAM.sv's state outputs cannot time.
+    logic [1:0] shim_dqm;
+    assign {sdram_udqm, sdram_ldqm} = shim_dqm;
+
     // sdram_shim wraps sdram_mp, the multi-port controller: port A is this
     // guest path, B the font fetch, C the CG window, D the graphics display,
     // E fdd_ramimg's image carve-out.
@@ -458,6 +507,8 @@ module RAM #(
         .data_out           (access_data_out),
         .data_in_hi         (access_data_in_hi),
         .data_out_hi        (access_data_out_hi),
+        .a_wmask0           (a_wmask0_w),
+        .a_wmask1           (2'b11),
         .a_rvalid           (shim_rvalid),
         .a_beat             (pf_beat_w),
         .write_request      (write_request),
@@ -525,8 +576,10 @@ module RAM #(
         .g_addr             (gvwb_addr),
         .g_len              (4'd15),
         .g_wdata            ({8'h00, gvwb_wdata}),
+        .g_wmask            (gvwb_wmask),
         .g_ack              (gvwb_ack),
         .g_done             (gvwb_done),
+        .sdram_dqm          (shim_dqm),
         .a_wr_v             (ram_wr_snoop_v),
         .a_wr_addr          (ram_wr_snoop_addr),
         .a_wr_len           (ram_wr_snoop_len),
@@ -758,23 +811,28 @@ module RAM #(
             pend_data         <= 8'd0;
             pend_data_hi      <= 8'd0;
             pend_word         <= 1'b0;
+            pend_lane         <= 1'b0;
             pend2_address     <= 24'd0;
             pend2_data        <= 8'd0;
             pend2_data_hi     <= 8'd0;
             pend2_word        <= 1'b0;
+            pend2_lane        <= 1'b0;
             pend3_address     <= 24'd0;
             pend3_data        <= 8'd0;
             pend3_data_hi     <= 8'd0;
             pend3_word        <= 1'b0;
+            pend3_lane        <= 1'b0;
             cap_valid         <= 1'b0;
             cap_address       <= 24'd0;
             cap_data          <= 8'd0;
             cap_data_hi       <= 8'd0;
             cap_word          <= 1'b0;
+            cap_lane          <= 1'b0;
             accept_address    <= 24'd0;
             accept_data       <= 8'd0;
             accept_data_hi    <= 8'd0;
             accept_word       <= 1'b0;
+            accept_lane       <= 1'b0;
         end
         else if (unstick || auto_unstick) begin
             // The wedge escape hatch (see the port comment): everything the
@@ -806,6 +864,7 @@ module RAM #(
                     accept_data    <= pend_data;
                     accept_data_hi <= pend_data_hi;
                     accept_word    <= pend_word;
+                    accept_lane    <= pend_lane;
                     // Depth-3 FIFO: the queue shifts down one as the head
                     // is accepted, so parked order is preserved. The tail
                     // slot the shift frees takes the live strobe when one
@@ -816,16 +875,19 @@ module RAM #(
                     pend_data      <= pend2_data;
                     pend_data_hi   <= pend2_data_hi;
                     pend_word      <= pend2_word;
+                    pend_lane      <= pend2_lane;
                     wc_pend        <= wc_pend2;
                     pend2_address  <= pend3_address;
                     pend2_data     <= pend3_data;
                     pend2_data_hi  <= pend3_data_hi;
                     pend2_word     <= pend3_word;
+                    pend2_lane     <= pend3_lane;
                     wc_pend2       <= wc_pend3;
                     pend3_address  <= cap_address;
                     pend3_data     <= cap_data;
                     pend3_data_hi  <= cap_data_hi;
                     pend3_word     <= cap_word;
+                    pend3_lane     <= cap_lane;
                     wc_pend3       <= cap_valid;
                     cap_valid      <= 1'b0;
                     if (idle_park) begin
@@ -837,6 +899,7 @@ module RAM #(
                             cap_data    <= internal_data_bus;
                             cap_data_hi <= internal_data_bus_hi;
                             cap_word    <= word_now;
+                            cap_lane    <= gv_il_lane;
                             cap_valid   <= 1'b1;
                         end
                         else if (wc_pend3) begin
@@ -844,6 +907,7 @@ module RAM #(
                             pend3_data    <= internal_data_bus;
                             pend3_data_hi <= internal_data_bus_hi;
                             pend3_word    <= word_now;
+                            pend3_lane    <= gv_il_lane;
                             wc_pend3      <= 1'b1;
                         end
                         else if (wc_pend2) begin
@@ -851,6 +915,7 @@ module RAM #(
                             pend2_data    <= internal_data_bus;
                             pend2_data_hi <= internal_data_bus_hi;
                             pend2_word    <= word_now;
+                            pend2_lane    <= gv_il_lane;
                             wc_pend2      <= 1'b1;
                         end
                         else begin
@@ -858,6 +923,7 @@ module RAM #(
                             pend_data    <= internal_data_bus;
                             pend_data_hi <= internal_data_bus_hi;
                             pend_word    <= word_now;
+                            pend_lane    <= gv_il_lane;
                             wc_pend      <= 1'b1;
                         end
                     end
@@ -867,6 +933,7 @@ module RAM #(
                     accept_data    <= internal_data_bus;
                     accept_data_hi <= internal_data_bus_hi;
                     accept_word    <= word_now;
+                    accept_lane    <= gv_il_lane;
                     wc_pend <= 1'b0;
                 end
             end
@@ -886,6 +953,7 @@ module RAM #(
                 pend_data    <= internal_data_bus;
                 pend_data_hi <= internal_data_bus_hi;
                 pend_word    <= word_now;
+                pend_lane    <= gv_il_lane;
             end
             else if (new_write_strobe2) begin
                 wc_pend2      <= 1'b1;
@@ -893,6 +961,7 @@ module RAM #(
                 pend2_data    <= internal_data_bus;
                 pend2_data_hi <= internal_data_bus_hi;
                 pend2_word    <= word_now;
+                pend2_lane    <= gv_il_lane;
             end
             else if (new_write_strobe3) begin
                 wc_pend3      <= 1'b1;
@@ -900,6 +969,7 @@ module RAM #(
                 pend3_data    <= internal_data_bus;
                 pend3_data_hi <= internal_data_bus_hi;
                 pend3_word    <= word_now;
+                pend3_lane    <= gv_il_lane;
             end
             else if (new_cap) begin
                 cap_valid     <= 1'b1;
@@ -907,6 +977,7 @@ module RAM #(
                 cap_data      <= internal_data_bus;
                 cap_data_hi   <= internal_data_bus_hi;
                 cap_word      <= word_now;
+                cap_lane      <= gv_il_lane;
             end
         end
     end
@@ -933,32 +1004,29 @@ module RAM #(
                 // request out of IDLE would run one slot ahead of it.
                 access_address  = {1'b0, latch_address};
                 access_num      = read_words;
-                access_data_in  = {8'h00, latch_data};
+                access_data_in  = (lat_il & gv_il_lane)
+                                ? {latch_data, 8'h00} : {8'h00, latch_data};
                 access_data_in_hi = {8'h00, latch_data_hi};
                 write_request   = (write_command & ~wc_pend) ? 1'b1 : 1'b0;
                 read_request    = (read_command & ~wc_pend)  ? 1'b1 : 1'b0;
-                sdram_ldqm      = 1'b0;
-                sdram_udqm      = 1'b0;
             end
             RAM_WRITE_1: begin
                 access_address  = {1'b0, accept_address};
                 access_num      = accept_word ? 10'h002 : 10'h001;
-                access_data_in  = {8'h00, accept_data};
+                access_data_in  = (acc_il & accept_lane)
+                                ? {accept_data, 8'h00} : {8'h00, accept_data};
                 access_data_in_hi = {8'h00, accept_data_hi};
                 write_request   = 1'b1;
                 read_request    = 1'b0;
-                sdram_ldqm      = 1'b0;
-                sdram_udqm      = 1'b0;
             end
             RAM_WRITE_2: begin
                 access_address  = {1'b0, accept_address};
                 access_num      = accept_word ? 10'h002 : 10'h001;
-                access_data_in  = {8'h00, accept_data};
+                access_data_in  = (acc_il & accept_lane)
+                                ? {accept_data, 8'h00} : {8'h00, accept_data};
                 access_data_in_hi = {8'h00, accept_data_hi};
                 write_request   = 1'b0;
                 read_request    = 1'b0;
-                sdram_ldqm      = 1'b0;
-                sdram_udqm      = 1'b0;
             end
             RAM_READ_1: begin
                 access_address  = {1'b0, latch_address};
@@ -967,8 +1035,6 @@ module RAM #(
                 access_data_in_hi = 16'h0000;
                 write_request   = 1'b0;
                 read_request    = 1'b1;
-                sdram_ldqm      = 1'b0;
-                sdram_udqm      = 1'b0;
             end
             RAM_READ_2: begin
                 access_address  = {1'b0, latch_address};
@@ -977,8 +1043,6 @@ module RAM #(
                 access_data_in_hi = 16'h0000;
                 write_request   = 1'b0;
                 read_request    = 1'b0;
-                sdram_ldqm      = 1'b0;
-                sdram_udqm      = 1'b0;
             end
             COMPLETE_RAM_RW: begin
                 access_address  = 25'h0000000;
@@ -987,8 +1051,6 @@ module RAM #(
                 access_data_in_hi = 16'h0000;
                 write_request   = 1'b0;
                 read_request    = 1'b0;
-                sdram_ldqm      = 1'b0;
-                sdram_udqm      = 1'b0;
             end
             WAIT: begin
                 access_address  = 25'h0000000;
@@ -997,8 +1059,6 @@ module RAM #(
                 access_data_in_hi = 16'h0000;
                 write_request   = 1'b0;
                 read_request    = 1'b0;
-                sdram_ldqm      = 1'b1;
-                sdram_udqm      = 1'b1;
             end
         endcase
     end
@@ -1007,8 +1067,14 @@ module RAM #(
     //
     // Databus Out
     //
+    // A read on the interleave returns the partner planes' word: the
+    // guest's byte is the lane the plane owns (plane bit 0), selected off
+    // the same live-strobe decode the write path masks with. Reads are
+    // never parked, so latch_address's terms stay valid while read_flag
+    // holds the bus.
     logic   [7:0]   data_bus_out_reg;
     logic   [7:0]   data_bus_out_hi_reg;
+    wire           rd_lane_hi = lat_il & gv_il_lane;
 
     always_ff @(posedge clock, posedge reset) begin
         if (reset) begin
@@ -1016,7 +1082,8 @@ module RAM #(
             data_bus_out_hi_reg <= 0;
         end
         else if (read_flag) begin
-            data_bus_out_reg    <= access_data_out[7:0];
+            data_bus_out_reg    <= rd_lane_hi ? access_data_out[15:8]
+                                              : access_data_out[7:0];
             data_bus_out_hi_reg <= access_data_out_hi[7:0];
         end
         else begin
@@ -1025,7 +1092,11 @@ module RAM #(
         end
     end
 
-    assign  data_bus_out = ~read_command ? 0 : ~read_flag ? data_bus_out_reg : access_data_out[7:0];
+    assign  data_bus_out = ~read_command ? 0
+                         : ~read_flag
+                             ? data_bus_out_reg
+                             : (rd_lane_hi ? access_data_out[15:8]
+                                           : access_data_out[7:0]);
     // The odd half, on exactly the same terms. Both beats of a two-word read
     // land before read_flag drops, so the same latch-while-flag rule holds.
     assign  data_bus_out_hi = ~read_command ? 0

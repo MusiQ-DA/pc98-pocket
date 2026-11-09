@@ -663,9 +663,17 @@ module CHIPSET #(
     logic [7:0]  gvwb_rdata;
     logic [23:0] gvwb_addr;
     logic [7:0]  gvwb_wdata;
+    // Port G's write lanes (the interleave's byte-lane writes).
+    logic [1:0]  gvwb_wmask;
     assign pf_beat_v = ram_pf_beat_v & ~seq_pf_beat;
     pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_gvram_seq (
-        .rmwbuf_off(dx_rmwbuf_off),
+        // GV_IL stage 1 (docs/GVRAM_PLANE_INTERLEAVE.md): the RMW line
+        // buffer, its port-G write-back and the line prefetch all address
+        // the OLD four-window layout, which no longer exists. Force the
+        // buffer off so every GRCG access runs the plane walk through
+        // RAM.sv's converted port A; the slot 0x09 [27] bit stays wired
+        // for the day the interleaved port-G path replaces the walk.
+        .rmwbuf_off(dx_rmwbuf_off | 1'b1),
         .dx_seq(dx_seq),
         .disp_page(gvram_disp_page_w),
         .clk(sdram_clock), .reset(sdram_reset),
@@ -710,6 +718,7 @@ module CHIPSET #(
         .pf_beat_v(ram_pf_beat_v), .pf_beat_dat(pf_beat_dat),
         .pf_beat_seq(seq_pf_beat),
         .gvwb_req(gvwb_req), .gvwb_addr(gvwb_addr), .gvwb_wdata(gvwb_wdata),
+        .gvwb_wmask(gvwb_wmask),
         .gvwb_ack(gvwb_ack), .gvwb_done(gvwb_done), .gvwb_wcnt(cachef_wcnt),
         .gvwb_we(gvwb_we), .gvwb_rvalid(gvwb_rvalid), .gvwb_rdata(gvwb_rdata),
         .gv_a_quiet(gv_a_quiet),
@@ -845,6 +854,7 @@ module CHIPSET #(
         .gvwb_req                           (gvwb_req),
         .gvwb_addr                          (gvwb_addr),
         .gvwb_wdata                         (gvwb_wdata),
+        .gvwb_wmask                         (gvwb_wmask),
         .gvwb_ack                           (gvwb_ack),
         .gvwb_done                          (gvwb_done),
         .gvwb_we                            (gvwb_we),

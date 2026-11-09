@@ -456,9 +456,15 @@ module cpu_bus_bridge #(
     function automatic logic word_1cyc(input logic [2:0] bs,
                                        input logic [19:0] a,
                                        input logic ube_n);
+        // The interleave packs two guest bytes per SDRAM word, so a GVRAM
+        // word cycle is NOT two consecutive SDRAM words anymore (offsets
+        // n and n+1 sit two words apart, each on its own lane). Split
+        // every GVRAM word into byte cycles here; main RAM keeps the
+        // one-cycle burst.
         word_1cyc = (a[0] == 1'b0) && (ube_n == 1'b0)
                  && ((bs == BS_CODE) || (bs == BS_MEMR) || (bs == BS_MEMW))
-                 && pc98_sdram_hits(a, analog_mode);
+                 && pc98_sdram_hits(a, analog_mode)
+                 && !pc98_gvram_hits(a, analog_mode);
     endfunction
 
     // Word-I/O termination -- same table the removed v30_cpu_bridge ran

@@ -262,20 +262,16 @@ module pc98_gvram_display #(
             sn_page  <= disp_page;
         end
     end
-    function automatic [23:0] plane_base(input [1:0] p);
-        if (fill_page)
-            plane_base = 24'h600000 + {7'd0, p, 15'd0};
-        else case (p)
-            2'd0:    plane_base = 24'hA8000;   // B
-            2'd1:    plane_base = 24'hB0000;   // R
-            2'd2:    plane_base = 24'hB8000;   // G
-            default: plane_base = 24'hE0000;   // E
-        endcase
-    endfunction
-
     // ---- the fetch FSM -----------------------------------------------------
+    // GV_IL (docs/GVRAM_PLANE_INTERLEAVE.md): one scanline's four planes
+    // live in 160 CONSECUTIVE SDRAM words -- offset o at even word
+    // {R[o]:B[o]}, odd word {E[o]:G[o]} -- so the fetch walks ten
+    // sixteen-word bursts down the interleave instead of twenty bursts
+    // scattered over four 0x8000 windows. Each beat lands on its lane in
+    // the plane buffers: even beats carry B (low) and R (high), odd beats
+    // G (low) and E (high).
     localparam int BURST = 16;            // words per transaction
-    localparam int CHUNKS = 80 / BURST;   // 5
+    localparam int CHUNKS = 160 / BURST;  // 10: 80 byte offsets x 2 words
 
     // The byte a line starts from: the uPD7220 never multiplies -- inside a
     // partition it just adds PITCH to the running address every LR
@@ -361,7 +357,6 @@ module pc98_gvram_display #(
         end
     end
 
-    logic [2:0]  f_plane = 3'd0;
     logic [3:0]  f_chunk = 4'd0;
     logic [3:0]  f_word  = 4'd0;          // 0..15 within the burst
     logic        f_active = 1'b0;
@@ -370,13 +365,20 @@ module pc98_gvram_display #(
     logic [8:0]  act_tgt   = 9'd0;        // display line the running fill serves
 
     // The buffer writes live in their own blocks, one per plane memory --
-    // the M10K inference template. Byte index is {target[1:0], chunk, word}.
-    wire  [8:0] w_addr = {fill_bank, f_chunk[2:0], f_word};
+    // the M10K inference template. Byte index is {target[1:0], offset(0..79)}:
+    // the interleave hands us the pairs ready-made, so each beat fills the
+    // two planes it carries (even {R,B}, odd {E,G}) in one go.
+    wire  [6:0] w_off = {f_chunk[3:0], 3'b000} + {4'd0, f_word[3:1]};
+    wire  [8:0] w_addr = {fill_bank, w_off};
     wire        wr     = f_active & p_rvalid;
-    always_ff @(posedge clk) if (wr && f_plane[1:0] == 2'd0) buf_b[w_addr] <= p_rdata[7:0];
-    always_ff @(posedge clk) if (wr && f_plane[1:0] == 2'd1) buf_r[w_addr] <= p_rdata[7:0];
-    always_ff @(posedge clk) if (wr && f_plane[1:0] == 2'd2) buf_g[w_addr] <= p_rdata[7:0];
-    always_ff @(posedge clk) if (wr && f_plane[1:0] == 2'd3) buf_e[w_addr] <= p_rdata[7:0];
+    always_ff @(posedge clk) if (wr && !f_word[0]) begin
+        buf_b[w_addr] <= p_rdata[7:0];
+        buf_r[w_addr] <= p_rdata[15:8];
+    end
+    always_ff @(posedge clk) if (wr && f_word[0]) begin
+        buf_g[w_addr] <= p_rdata[7:0];
+        buf_e[w_addr] <= p_rdata[15:8];
+    end
 
     // One request per burst, deasserted the cycle the arbiter acks -- the
     // font fetcher drives port B the same way, and holding req through the
@@ -386,13 +388,16 @@ module pc98_gvram_display #(
     // The plane byte offset wraps inside the 32 KB plane the way the GDC's
     // own address counter does -- at chunk granularity here, which is exact
     // unless a line straddles the plane end between sixteen-byte marks.
-    assign p_addr = plane_base(f_plane[1:0])
-                 + {9'd0, (fill_base + 15'(f_chunk) * 15'(BURST)) & 15'h7FFF};
+    // Word = base(page) + offset*2 + beat parity (pc98_sdram_map.svh's
+    // pc98_gvram_il layout: parity is plane bit 1, and the fetch wants both
+    // parities of every offset).
+    wire [14:0] chunk_off = (fill_base + {f_chunk[3:0], 3'b000}) & 15'h7FFF;
+    wire [14:0] w_off_gv  = (chunk_off + {12'd0, f_word[3:1]}) & 15'h7FFF;
+    assign p_addr = {7'h30, fill_page, w_off_gv, f_word[0]};
 
     always_ff @(posedge clk) begin
         if (rst) begin
             f_active <= 1'b0;
-            f_plane  <= 3'd0;
             f_chunk  <= 4'd0;
             f_word   <= 4'd0;
             req_q    <= 1'b0;
@@ -419,7 +424,6 @@ module pc98_gvram_display #(
                     fill_bank <= fill_tgt[1:0];
                     fill_page <= sn_page;
                     act_tgt   <= fill_tgt;
-                    f_plane   <= 3'd0;
                     f_chunk   <= 4'd0;
                     f_active  <= 1'b1;
                     req_q     <= 1'b1;
@@ -429,16 +433,8 @@ module pc98_gvram_display #(
                 if (p_done) begin
                     f_word <= 4'd0;
                     if (f_chunk == 4'(CHUNKS - 1)) begin
-                        f_chunk <= 4'd0;
-                        // A digital machine has no plane E: stop at G and
-                        // save the five bursts of bus time per line.
-                        if (f_plane == (analog_mode ? 3'd3 : 3'd2)) begin
-                            f_plane  <= 3'd0;
-                            f_active <= 1'b0;
-                        end else begin
-                            f_plane <= f_plane + 3'd1;
-                            req_q   <= 1'b1;
-                        end
+                        f_chunk  <= 4'd0;
+                        f_active <= 1'b0;
                     end else begin
                         f_chunk <= f_chunk + 4'd1;
                         req_q   <= 1'b1;
@@ -518,7 +514,7 @@ module pc98_gvram_display #(
                 late_cnt <= late_cnt + 8'd1;
         end
     end
-    assign dbg = { line_now, act_tgt, f_chunk, f_plane, cur_part,
+    assign dbg = { line_now, act_tgt, f_chunk, cur_part,
                    dbl, disp_page, disp_on_c, fill_page, f_active,
                    skip_cnt, late_cnt, max_fill };
 

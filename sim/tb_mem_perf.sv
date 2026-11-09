@@ -175,7 +175,12 @@ module tb_mem_perf;
     initial cache_r = $test$plusargs("cache");
     // +dx=<hex>: the hardware-bisect reverts (core_top slot 0x09 [27:20]
     // shifted down: [6:0] z86.sv dx, [7] the sequencer's RMW buffer off).
-    logic [7:0] dx_r = 8'd0;
+    // GV_IL stage 1: the RMW line buffer / WBACK / RB_PF path still talks
+    // the OLD plane layout on port G, and Chipset forces it off
+    // (.rmwbuf_off(dx_rmwbuf_off | 1'b1)); default the bench to the same
+    // OFF so port A (the interleaved walk) is what runs. Stage 2 rewires
+    // port G to the interleave and clears bit 7 here again.
+    logic [7:0] dx_r = 8'h80;
     initial begin int v; if ($value$plusargs("dx=%h", v)) dx_r = 8'(v); end
     reg         nopace_r = 1'b0;
     initial nopace_r = $test$plusargs("nopace");
@@ -2481,18 +2486,25 @@ module tb_mem_perf;
             // phase's data region is untouched: the phase-verify peeks have
             // nothing to say in that mode. The probe prints its own verdict.
             if ($test$plusargs("cyconly")) begin
-                // phase 38: every plane byte the RMW REP STOSW touched
+                // phase 38: every plane byte the RMW REP STOSW touched.
+                // GV_IL (docs/GVRAM_PLANE_INTERLEAVE.md): plane p of guest
+                // offset o lives at SDRAM word 0x600000 + o*2 + p[1], byte
+                // lane p[0] -- the window address A8000+p*0x8000 the old
+                // peek used is plain main RAM now and always reads 00.
                 automatic logic [7:0] pf [0:2] = '{8'h0F, 8'h33, 8'h55};
                 automatic logic [7:0] tl [0:2] = '{8'hAA, 8'hBB, 8'hCC};
                 for (int p = 0; p < 3; p++)
                     for (int i = 0; i < 512; i++) begin
-                        automatic int a = 20'hA8000 + p * 20'h8000 + 20'h7000 + i;
+                        automatic int a = 32'h600000 + ((32'h7000 + i) << 1) + p[1];
                         automatic logic [7:0] d = i[0] ? 8'h5A : 8'hC3;
                         automatic logic [7:0] want = (pf[p] & ~d) | (d & tl[p]);
+                        automatic logic [7:0] got;
                         w = sdr.u_part.peek(a);
-                        if (w[7:0] !== want) begin
+                        got = p[0] ? w[15:8] : w[7:0];
+                        if (got !== want) begin
                             if (bad < 12) $display("  BAD rmw plane %0d %05x=%02x want %02x",
-                                                   p, a, w[7:0], want);
+                                                   p, 20'hA8000 + p * 20'h8000 + 20'h7000 + i,
+                                                   got, want);
                             bad++;
                         end
                     end
