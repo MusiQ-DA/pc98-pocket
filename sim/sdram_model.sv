@@ -56,6 +56,10 @@ module sdram_model #(
     int  open_row  [BANKS];               // -1 when the bank is precharged
     int  dbg_rd = 0;
     initial if (!$value$plusargs("dbgrd=%d", dbg_rd)) dbg_rd = 0;
+    // +watch=<flat word>: trace every WRITE hitting this flat word (targeted
+    // hunt for the neon dx=00 stray byte writes, e.g. 0x6007A5 = B83D2/p2).
+    int  watch_flat = -1;
+    initial if (!$value$plusargs("watch=%d", watch_flat)) watch_flat = -1;
     int  act_at    [BANKS];               // cycle the row was activated
     int  pre_at    [BANKS];               // cycle the bank was precharged
     int  wr_at     [BANKS];               // cycle of the last write datum
@@ -67,6 +71,7 @@ module sdram_model #(
     int  violations;
     int  reads_served;
     int  writes_served;
+    bit  wb_dbg;
 
     // Read return pipeline: depth covers the largest CAS latency we program.
     localparam int PIPE = 6;
@@ -105,6 +110,7 @@ module sdram_model #(
         violations    = 0;
         reads_served  = 0;
         writes_served = 0;
+        wb_dbg        = $test$plusargs("wbtrace");
         for (int i = 0; i < PIPE; i++) rd_vld[i] = 1'b0;
     end
 
@@ -208,6 +214,12 @@ module sdram_model #(
                     automatic int addr = flat(int'(ba), open_row[ba], int'(a[COL_BITS-1:0]));
                     automatic logic [DQ_BITS-1:0] cur =
                         store.exists(addr) ? store[addr] : 16'h0000;
+                    if (wb_dbg)
+                        $display("WBPM %0t ba=%0d row=%0d col=%0x dq=%04x dqm=%b",
+                                 $time, ba, open_row[ba], a[COL_BITS-1:0], dq_out, dqm);
+                    if (watch_flat >= 0 && (addr & ~20'h3F) == (watch_flat & ~20'h3F))
+                        $display("WATCH %0t flat=%05x dq=%04x dqm=%b -> %04x",
+                                 $time, addr, dq_out, dqm, cur);
                     for (int byt = 0; byt < MASK_BITS; byt++)
                         if (!dqm[byt]) cur[byt*8 +: 8] = dq_out[byt*8 +: 8];
                     store[addr] = cur;

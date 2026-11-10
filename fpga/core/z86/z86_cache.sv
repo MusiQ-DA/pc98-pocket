@@ -143,8 +143,9 @@ module z86_cache #(
 
     input  wire [23:0]  rd_addr,
     input  wire         rd,             // pulse
-    output reg          rd_ready,       // idle or data ready
-    output reg [15:0]   rd_data,
+    output reg          rd_ready /*verilator public*/,
+                           // idle or data ready
+    output reg [15:0]   rd_data /*verilator public*/,
     input  wire         rd_io,
     input  wire         rd_word,
 
@@ -328,7 +329,7 @@ module z86_cache #(
                      S_WWR2  = 4'd9,
                      S_W5F   = 4'd10,   // OUT 5Fh delay
                      S_PACE  = 4'd11;   // paced hit: result held, bus time owed
-    reg  [3:0]  st;
+    reg  [3:0]  st /* verilator public */;
 
     // ---- Paced hits -----------------------------------------------------
     // At the 286 settings the cache is a latency hider, not a speedup: a
@@ -346,7 +347,7 @@ module z86_cache #(
     // line's end (what the uncached S_WLD fetches), each a full cycle.
     reg  [5:0]  pdebt;
     reg         wr_owed;                // paced store buffered, wr_ready owed
-    reg  [1:0]  pk;                     // what S_PACE completes (K_LD/K_RD)
+    reg  [1:0]  pk /* verilator public */;              // what S_PACE completes (K_LD/K_RD)
     // Line loads deliver critical word first: the fetch gets the line once
     // its FIRST word's cycle is paid, and the rest of the line's words are
     // owed afterwards as a prefetch tail (ld_tail) -- the bus stays busy
@@ -396,7 +397,7 @@ module z86_cache #(
     reg  [IDX_BITS-1:0] flush_i;
 
     // A read pulse is captured: rd may land while something else runs.
-    reg         rd_pend;
+    reg         rd_pend /* verilator public */;
     reg  [23:0] rd_a;
     reg         rd_isio, rd_isw;
 

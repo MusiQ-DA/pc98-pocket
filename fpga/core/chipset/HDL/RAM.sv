@@ -174,12 +174,12 @@ module RAM #(
      input  logic           gvwb_req,
      input  logic           gvwb_we,         // 0: the line fill (a read)
      output logic           gvwb_rvalid,
-     output logic    [7:0]  gvwb_rdata,
+     output logic   [15:0]  gvwb_rdata,
     // Nothing of port A's is pending or in flight (no parked write, no
     // capture, the FSM idle): a port-G fill cannot pass an older write.
      output logic           gv_a_quiet,
      input  logic   [23:0]  gvwb_addr,
-     input  logic    [7:0]  gvwb_wdata,
+     input  logic   [15:0]  gvwb_wdata,
      // Port G's write lanes (interleaved-GVRAM byte-lane writes from the
      // sequencer), consumed per WRITE beat. All ones = whole-word write.
      input  logic    [1:0]  gvwb_wmask,
@@ -494,7 +494,7 @@ module RAM #(
     // E fdd_ramimg's image carve-out.
     // See docs/P0_SDRAM_DESIGN.md.
     logic [15:0] gvwb_rdata_w;
-    assign gvwb_rdata = gvwb_rdata_w[7:0];
+    assign gvwb_rdata = gvwb_rdata_w;
     assign gv_a_quiet = (state == IDLE) & ~wc_pend & ~wc_pend2 & ~wc_pend3
                       & ~cap_valid & ~write_request & ~read_request;
 
@@ -575,7 +575,7 @@ module RAM #(
         .g_rdata            (gvwb_rdata_w),
         .g_addr             (gvwb_addr),
         .g_len              (4'd15),
-        .g_wdata            ({8'h00, gvwb_wdata}),
+        .g_wdata            (gvwb_wdata),
         .g_wmask            (gvwb_wmask),
         .g_ack              (gvwb_ack),
         .g_done             (gvwb_done),

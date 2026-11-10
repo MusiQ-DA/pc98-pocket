@@ -14,6 +14,11 @@
 // real FSM: a GRCG TCR read issued while the pass-through write is still
 // in flight must wait out the write's foreign completion and answer the
 // data the write landed, not whatever the data pins last held.
+//
+// GV_IL stage 2: the seq runs with the full Chipset parameter set
+// (RMWBUF/PWPOST/RB_PF on, WBACK obsolete), port G wired to u_ram exactly
+// as Chipset wires it, so the line buffer's port-G fills, write-backs and
+// lane-DQM are exercised against the real SDRAM FSM and pin-level model.
 module tb_gvram_ram_leg;
     localparam real CLK_MHZ = 42.954545;
     localparam real HALF_NS = 500.0 / CLK_MHZ;
@@ -43,8 +48,17 @@ module tb_gvram_ram_leg;
     wire [7:0]  mem_rdata, mem_rdata_hi;
     wire        mem_done, mem_own, mem_ready;
     wire        ram_wt_w;           // u_ram write_taken -> seq mem_wr_taken
+    // ---- sequencer <-> RAM port G (the RMW line buffer's fills and -------
+    // ---- write-backs), wired exactly like Chipset does -------------------
+    wire         gvwb_req_w, gvwb_we_w, gvwb_ack_w, gvwb_done_w;
+    wire         gvwb_rvalid_w, gv_a_quiet_w;
+    wire [23:0]  gvwb_addr_w;
+    wire [15:0]  gvwb_wdata_w, gvwb_rdata_w;
+    wire [1:0]   gvwb_wmask_w;
+    wire [4:0]   cachef_wcnt_w;
 
-    pc98_gvram_seq #(.EGC(1'b1)) dut (
+    pc98_gvram_seq #(.EGC(1'b1), .RMWBUF(1'b1), .PWPOST(1'b1),
+                     .WBACK(1'b1), .RB_PF(1'b1)) dut (
         .rmwbuf_off(1'b0),
         .dx_seq(2'b00),
         .disp_page(1'b0),
@@ -68,7 +82,14 @@ module tb_gvram_ram_leg;
         .mem_rd(mem_rd), .mem_wr(mem_wr),
         .mem_rdata(mem_rdata), .mem_rdata_hi(mem_rdata_hi),
         .mem_done(mem_done), .mem_own(mem_own), .mem_ready(mem_ready),
-        .mem_wr_taken(ram_wt_w), .pf_beat_v(1'b0), .pf_beat_dat(8'h00), .cpu_wr_taken(), .cpu_rd_own()
+        .mem_wr_taken(ram_wt_w), .pf_beat_v(1'b0), .pf_beat_dat(8'h00),
+        .cpu_wr_taken(), .cpu_rd_own(),
+        .gvwb_req(gvwb_req_w), .gvwb_we(gvwb_we_w),
+        .gvwb_addr(gvwb_addr_w), .gvwb_wdata(gvwb_wdata_w),
+        .gvwb_wmask(gvwb_wmask_w),
+        .gvwb_ack(gvwb_ack_w), .gvwb_done(gvwb_done_w),
+        .gvwb_rvalid(gvwb_rvalid_w), .gvwb_rdata(gvwb_rdata_w),
+        .gvwb_wcnt(cachef_wcnt_w), .gv_a_quiet(gv_a_quiet_w)
     );
 
     // ---- the real memory -------------------------------------------------
@@ -117,6 +138,12 @@ module tb_gvram_ram_leg;
         .cachef_req(1'b0), .cachef_we(1'b0), .cachef_addr(24'h0),
         .cachef_len(4'd0), .cachef_wdata0(16'h0), .cachef_wdata1(16'h0),
         .cachef_ack(), .cachef_rvalid(), .cachef_rdata(), .cachef_done(),
+        .cachef_wcnt(cachef_wcnt_w),
+        .gvwb_req(gvwb_req_w), .gvwb_we(gvwb_we_w),
+        .gvwb_rvalid(gvwb_rvalid_w), .gvwb_rdata(gvwb_rdata_w),
+        .gv_a_quiet(gv_a_quiet_w), .gvwb_addr(gvwb_addr_w),
+        .gvwb_wdata(gvwb_wdata_w), .gvwb_wmask(gvwb_wmask_w),
+        .gvwb_ack(gvwb_ack_w), .gvwb_done(gvwb_done_w),
         .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len(),
         .wait_count_clk_en(1'b1),
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0),
@@ -131,7 +158,17 @@ module tb_gvram_ram_leg;
     );
 
     logic walk_dbg = 1'b0;
+    logic buf_dbg  = 1'b0;
     bit   trace_on = $test$plusargs("trace");   // +trace: leg-by-leg RAM.sv parking trace
+    always @(negedge clk) if (buf_dbg && trace_on)
+        $display("%8t st=%0d exp=%1b strobe=%1b gp=%0d | leg=%1b sent=%1b h=%1b bi=%0d req=%1b ack=%1b done=%1b rv=%1b wcnt=%0d | fl=%1b/%0d h=%1b i=%0d c=%0d | pf=%1b/%0d h=%1b | rbv=%h tag=%h d=%b age=%0d mru=%1b | rdy=%1b crdy=%1b",
+                 $time, dut.st, dut.expand, dut.strobe_new, dut.gp,
+                 dut.rb_leg, dut.gf_sent, dut.gf_h, dut.rb_bi,
+                 dut.gvwb_req, gvwb_ack_w, gvwb_done_w, gvwb_rvalid_w, cachef_wcnt_w,
+                 dut.fl_busy, dut.fl_ph, dut.fl_h, dut.fl_i, dut.fl_c,
+                 dut.pf_busy, dut.pf_ph, dut.pf_h,
+                 dut.rb_v[0], dut.rb_tag[0], dut.rb_dirty, dut.wb_age, dut.mru,
+                 mem_ready, cpu_ready);
     always @(negedge clk) if (walk_dbg && trace_on)
         $display("%8t seq.st=%0d gp=%0d wr=%1b addr=%05h | ram.st=%0d wc=%b%b%b cv=%b lat=%06h lane=%1b dbus=%02h | pend=%06h/%1b p2=%06h/%1b p3=%06h/%1b cap=%06h/%1b | acc=%06h/%1b alw=%b rdy=%1b",
                  $time, dut.st, dut.gp, mem_wr, mem_addr,
@@ -218,6 +255,20 @@ module tb_gvram_ram_leg;
     endtask
 
     logic [7:0] rb;
+
+    // Drain the RMW line buffer: a plain window write forces the engine to
+    // write every dirty line back (fl_want_all -> fl_all; pt_blk holds the
+    // write's ready until the banks are in SDRAM), and the write itself
+    // drops the buffer. Then wait out any trailing fill/prefetch burst so
+    // peek() sees settled memory.
+    task automatic flush_buf(input logic [19:0] scratch);
+        begin
+            pw(scratch, 8'h11, 8);
+            while (dut.fl_busy || dut.pf_busy || dut.rb_dirty
+                   || dut.rb_leg || dut.gf_sent)
+                @(posedge clk);
+        end
+    endtask
 
     initial begin
         repeat (8) @(posedge clk);
@@ -332,6 +383,60 @@ module tb_gvram_ram_leg;
         $display("  peek 601401 (odd  {E,G}) = %04h", sdr.peek(24'h601401));
         analog_mode = 1'b0;
 
+        // ---- GV_IL stage 2: the RMW line buffer through the real port G --
+        // A run of posted RMW writes into a fresh line: the first arms the
+        // two-burst port-G fill (all four planes of 16 guest bytes at once),
+        // the rest hit the bank with no leg at all, each write merging its
+        // plane byte and marking the line dirty. A later plain window write
+        // forces the write-back -- lane DQM keeps the clean twin lane of
+        // every word intact. The peeked SDRAM words must equal the np21w
+        // RMW model (old & ~d) | (d & tile) applied per plane, in order.
+        analog_mode = 1'b1;
+        buf_dbg = 1'b1;
+        for (int i = 0; i < 16; i++) begin        // prime line 0xC00: AA
+            pw(20'hA8C00 + 16'(i), 8'hAA, 8);
+            pw(20'hB0C00 + 16'(i), 8'hAA, 8);
+            pw(20'hB8C00 + 16'(i), 8'hAA, 8);
+            pw(20'hE0C00 + 16'(i), 8'hAA, 8);
+        end
+        begin
+            logic [7:0] mdl [0:3][0:15];
+            logic [7:0] d;
+            for (int p = 0; p < 4; p++)
+                for (int i = 0; i < 16; i++) mdl[p][i] = 8'hAA;
+            grcg_active = 1'b1; grcg_rmw = 1'b1; grcg_mask = 4'h0;
+            grcg_tile[0] = 8'h3C; grcg_tile[1] = 8'h5A;
+            grcg_tile[2] = 8'hC3; grcg_tile[3] = 8'h96;
+            for (int i = 0; i < 16; i++) begin
+                d = 8'((i * 17 + 3) & 8'hFF);
+                for (int p = 0; p < 4; p++)
+                    mdl[p][i] = (mdl[p][i] & ~d) | (d & grcg_tile[p]);
+                pw(20'hA8C00 + 16'(i), d, 0);     // posted: fill/hit behind
+            end
+            grcg_active = 1'b0; grcg_rmw = 1'b0;
+            flush_buf(20'hA8D00);                 // everything back to SDRAM
+            for (int i = 0; i < 16; i++) begin
+                logic [15:0] weven, wodd;
+                weven = sdr.peek(24'h601800 + 24'(2 * i));
+                wodd  = sdr.peek(24'h601800 + 24'(2 * i + 1));
+                want($sformatf("buf RMW line byte %02d: B lane", i),
+                     weven[7:0],  mdl[0][i]);
+                want($sformatf("buf RMW line byte %02d: R lane", i),
+                     weven[15:8], mdl[1][i]);
+                want($sformatf("buf RMW line byte %02d: G lane", i),
+                     wodd[7:0],  mdl[2][i]);
+                want($sformatf("buf RMW line byte %02d: E lane", i),
+                     wodd[15:8], mdl[3][i]);
+            end
+            // and the same bytes back through port A reads, one per plane
+            pr(20'hA8C00, rb);      want("buf RMW readback: plane B", rb, mdl[0][0]);
+            pr(20'hB0C05, rb);      want("buf RMW readback: plane R", rb, mdl[1][5]);
+            pr(20'hB8C0A, rb);      want("buf RMW readback: plane G", rb, mdl[2][10]);
+            pr(20'hE0C0F, rb);      want("buf RMW readback: plane E", rb, mdl[3][15]);
+        end
+        analog_mode = 1'b0;
+        buf_dbg  = 1'b0;
+
         if (errors == 0) $display("PASS tb_gvram_ram_leg");
         else             $display("FAILED tb_gvram_ram_leg: %0d", errors);
         $finish;
@@ -340,6 +445,20 @@ module tb_gvram_ram_leg;
     initial begin
         #2_000_000;
         $display("FAILED tb_gvram_ram_leg: timeout");
+        $display("  seq: st=%0d expand=%1b strobe=%1b gp=%0d rb_leg=%1b gf_sent=%1b gf_h=%1b rb_bi=%0d",
+                 dut.st, dut.expand, dut.strobe_new, dut.gp, dut.rb_leg,
+                 dut.gf_sent, dut.gf_h, dut.rb_bi);
+        $display("  seq: gvwb req=%1b we=%1b addr=%06h ack=%1b done=%1b rvalid=%1b wcnt=%0d quiet=%1b",
+                 dut.gvwb_req, dut.gvwb_we, dut.gvwb_addr, gvwb_ack_w,
+                 gvwb_done_w, gvwb_rvalid_w, cachef_wcnt_w, gv_a_quiet_w);
+        $display("  seq: fl busy=%1b ph=%0d h=%1b i=%0d c=%0d | pf busy=%1b ph=%0d h=%1b | rbv=%h/%h tag=%h/%h dirty=%b age=%0d mru=%1b",
+                 dut.fl_busy, dut.fl_ph, dut.fl_h, dut.fl_i, dut.fl_c,
+                 dut.pf_busy, dut.pf_ph, dut.pf_h,
+                 dut.rb_v[0], dut.rb_v[1], dut.rb_tag[0], dut.rb_tag[1],
+                 dut.rb_dirty, dut.wb_age, dut.mru);
+        $display("  ram: state=%0d latch=%06h | cpu rd=%1b wr=%1b rdy=%1b crdy=%1b",
+                 u_ram.state, u_ram.latch_address, cpu_rd, cpu_wr,
+                 mem_ready, cpu_ready);
         $finish;
     end
 endmodule

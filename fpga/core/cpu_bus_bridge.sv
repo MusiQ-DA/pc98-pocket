@@ -887,7 +887,17 @@ module cpu_bus_bridge #(
     wire pf_hit1 = inwin1 && (srv_beg[4:0] >= pf_lo1)
                  && (({16'b0, srv_beg[4:0]} + {16'b0, srv_span})
                      <= {15'b0, pf_cnt1});
-    wire pf_hit  = srv_req && (srv_bs == BS_MEMR) && (pf_hit0 | pf_hit1);
+    // GV_IL: a graphics-window read must never be hit-served from the
+    // prefetch/fill buffer. Those bytes are rewritten behind the bridge's
+    // back by the GRCG line buffer (sdram port G, physical GV_IL rows),
+    // so a fill line captured over a GVRAM sector goes stale with no
+    // snoop to kill it -- dx=00 neon served FIN checks words like
+    // 0xB85CB from a stale window (169 mismatches, no zwb cycle at all).
+    // dx=80 writes pass as port-A guest-address stores and are snooped,
+    // which is why walk mode never showed this. Checks/firmware reads
+    // are rare, so forcing them to the bus costs nothing measurable.
+    wire pf_hit  = srv_req && (srv_bs == BS_MEMR) && (pf_hit0 | pf_hit1)
+                && !pc98_gvram_hits(srv_beg, analog_mode);
     wire pf_hw   = pf_hit1;         // which window the hit is in
     // Hits need no bus cycle, so they may also complete while a request
     // is not yet armed -- but not while DMA owns the bus, when the

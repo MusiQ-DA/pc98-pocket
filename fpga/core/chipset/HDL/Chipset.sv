@@ -660,20 +660,19 @@ module CHIPSET #(
     logic ram_pf_beat_v, seq_pf_beat;
     // the sequencer's write-back port (RAM.sv port G)
     logic gvwb_req, gvwb_ack, gvwb_done, gvwb_we, gvwb_rvalid, gv_a_quiet;
-    logic [7:0]  gvwb_rdata;
+    logic [15:0] gvwb_rdata;
     logic [23:0] gvwb_addr;
-    logic [7:0]  gvwb_wdata;
+    logic [15:0] gvwb_wdata;
     // Port G's write lanes (the interleave's byte-lane writes).
     logic [1:0]  gvwb_wmask;
     assign pf_beat_v = ram_pf_beat_v & ~seq_pf_beat;
     pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_gvram_seq (
-        // GV_IL stage 1 (docs/GVRAM_PLANE_INTERLEAVE.md): the RMW line
-        // buffer, its port-G write-back and the line prefetch all address
-        // the OLD four-window layout, which no longer exists. Force the
-        // buffer off so every GRCG access runs the plane walk through
-        // RAM.sv's converted port A; the slot 0x09 [27] bit stays wired
-        // for the day the interleaved port-G path replaces the walk.
-        .rmwbuf_off(dx_rmwbuf_off | 1'b1),
+        // GV_IL stage 2 (docs/GVRAM_PLANE_INTERLEAVE.md): the RMW line
+        // buffer is back, filling and writing back through port G with
+        // the interleaved layout (two 16-word bursts per line, byte-lane
+        // DQM on write-back). The stage-1 force-off is lifted; slot 0x09
+        // [27] once again disables the buffer on request.
+        .rmwbuf_off(dx_rmwbuf_off),
         .dx_seq(dx_seq),
         .disp_page(gvram_disp_page_w),
         .clk(sdram_clock), .reset(sdram_reset),

@@ -157,15 +157,82 @@ CI:
   （CPU/RAM 行 20-33 は不変、phase38 RMW CHECK は GV_IL 直接
   検証に修正して 3 速度とも 0 bad）。baseline は段階1値で更新。
 
-### 段階2（未実装）— 速度を取り戻す
+### 段階2（2つ目のコミット群）— 実装済み: line buffer を GV_IL で復活
 
-- seq の port G を GV_IL 化: GRCG RMW/TDW/TCR を直接 burst
-  （RMW=2or4ワード読み→演算→DQM付き書き、TDW=書きのみ、TCR=読み→比較）。
-  g_sdram() を pc98_gvram_il 化、g_wmask を per-beat 計算。
-  ラインバッファ（先読み・書き戻し）なしで実機並みを狙う。
-- rmwbuf_off の強制を外し、tb_mem_perf 既定 dx_r を 0 に戻す。
-- Chipset vram_wait_now を cycle table 実測で再調整、
-  sim/cycle_table_baseline.txt を更新。
+- seq のラインバッファを GV_IL ジオメトリに再構成:
+  - 16バイトライン = 32連続 SDRAM ワード [2L, 2L+31]。半分（オフセット
+    L+0..7 / L+8..15 の全4プレーン）ごとに port G 16ワードバーストで
+    fill（gf_h で切替、`g_il(pg, line, h)` = `{7'h30,pg,line[10:0],5'h0}
+    + (h?16:0)`）。カラム境界は跨がない（2L は32ワードアライン）。
+  - バンクは rbE/rbO（64×8、プレーン別）→ **rbW0/rbW1（各32×16bit、
+    オフセット偶奇=SDRAM ワードの直接イメージ）**。アドレス
+    ={slot, off[3:1], pair}、pair=off[0] に相当（B:R ワードか G:E か）。
+    1 fill ビート=1エントリ、RMW 更新は対象バンクへのマージ書き込み
+    （レーン=gp[0]）。B→R/G→E チェインの同一エントリ読み書きに備えて
+    読み口 rbq0/rbq1 は write-forward バイパス付き。
+  - WBACK（fl）: プレーン反復を廃止し、dirty はスロット単位 fl_d[3:0]
+    （pair=off[0]、レーン=p と解釈）で DQM マスク
+    `wcnt[0] ? {fl_d[3],fl_d[2]} : {fl_d[1],fl_d[0]}`、
+    データは stg[16]×16bit をそのまま2バーストで書き戻し。
+  - RB_PF（pf）: プレーン反復を廃止、`pf_ready = (rb_tag[~mru]==pf_nxt)
+    & (rb_v[~mru]==4'hF)`（次ラインの4プレーン一括先読み）。
+  - fill は常時 port G（RAM.sv prefetch 経路は GV_IL と非互換のため
+    廃止、rb_g を削除し rb_leg に一本化、mem_pf_len はパススルー）。
+  - WBACK パラメータは obsolete（wb_on = RMWBUF。GV_IL では書き戻し必須）。
+- RAM.sv / Chipset: gvwb_rdata/wdata を 16bit 化（port G はワード幅で
+  受け渡し、shim の g_wmask でレーン制御）。
+- Chipset: `.rmwbuf_off(dx_rmwbuf_off)` の強制 tie を解除、
+  tb_mem_perf 既定 dx_r を 8'h00 に戻す（slot 0x09 bit 27 が再び
+  RMW バッファ無効化ビットとして機能）。
+- 修正途中で見つかった不具合: fill 2バースト目完了時に gf_sent を
+  クリアし忘れると tb のドレイン待ちが永遠に終わらない（DUT 動作には
+  無害だが in-flight の意味が壊れる）→ S_RDW のバースト2完了分岐で
+  gf_sent<=0 を追加。
+- tb_gvram_ram_leg を RMWBUF=1/WBACK=1/RB_PF=1/PWPOST=1 + port G 実結線
+  に変更、GV_IL 上のバッファ RMW 64レーン検証（np21w モデル比較）を
+  追加。walk erase / cross-lane park はバッファ経路で回帰。
+
+### 段階2の速度（cycle table 実測で調整）
+
+- vram_wait_now は段階2でも一旦現状値（RMW=VBlank?1:5 / TDW=VBlank?1:4）。
+  cycle table を取り直し、ratio が 0.95-1.05 に収まるよう調整したうえで
+  baseline を再更新する。
+- TDW の word 一括（grcg_wbatch）は bridge のバイト分割で実質死んで
+  いるため、TDW rep/x8 の段階1比 1.4-1.7 は一部残る見込み。
+  RMW（段階1 3.42-4.82）は line buffer ヒットで大幅改善するはず。
+
+### 段階2で見つかり直した RMW line buffer の 2 バグ（第11+第12修正）
+
+neon3_lines.ops（NEON3286 デモの np2ops キャプチャ、4プレーン RMW
+ライン描画、page flip）が dx=00（バッファON）で 169 mismatches、
+dx=80（rmwbuf_off）でのみ PASS。TRC/FB/SLOTEV の同一 run 計装
+（pc98_gvram_seq.sv 内 `+trace_line=1/2/3`）で 2 つの独立バグを特定した。
+
+1. **fill ビート/完了スロット・デシンク（fws ラッチ修正）** — fill の
+   bank 格納アドレス（`fb_wa={ws,...}`）と完了時の `rb_v[ws]/rb_tag[ws]`
+   が同じライブ wire `ws` を別サイクルに評価する。fill 中/直後に ws が
+   反転するとビートとタグが別スロットに散らばり、片側が v=f+旧データ
+   でヒットする。`fws`（fill slot ラッチ）を S_RD/S_WRW fill 開始時に
+   固定し、fb_wa と完了ブロックが同じスロットを参照するようにした。
+2. **rb_ra pair ラグ（第12修正が本体）** — `rbq` registered read の
+   アドレス `rb_ra` が S_WR マージ発火サイクルも `gp[1]`（現 plane の
+   ペア）のまま。pair 境界を跨ぐ chained RMW（gp=1→2）で chain 先の
+   S_RBH が pair-0 語（word4）を読み、gp=2（pair-1 語 word5 の
+   lane0）だけが常に誤読。RMW 式 `(old&~d)|(d&t)` で wd=0x1f の時は
+   結果が old に依らず 0x1f になるため 161 パス中の特定パターン
+   （wd=0x18/0x10/0x80/0x02）でのみ発覚した（0x3D2 の 0x1f→0x18→0x10
+   逐次劣化）。`rb_ra` の条件を `!rb_upd_w` → `(!rb_upd_w || !pf_bw)`
+   に変更（マージ発火中も gp_nx[1] 先読み。ストール再試行
+   `rb_upd_w&&pf_bw` は従来どおり gp[1] = lodemnc 保護維持）。
+
+dx=80（RMWBUF+PWPOST 両方無効）が PASS だったのは buffer を使わ
+ないため。z86 読み完了交叉説は 1-based インデックスの誤読による
+レッドヘリングだった（id=4440 は 0xB83D2 want 31 で、A 窓エイリアス
+0xA83D2 経由の RMW 書きが B 窓の同じオフセットに展開される正常動作）。
+
+既知の残件: `+seqdx=2`（PF ON+即時 WB の実験モード）に
+id=2076（0xAA413 want 255）が 1 件残る。修正前から存在した独立の
+稀レースで、生産構成（dx=00 デフォルト）には影響しない。後日調査。
 
 ## 8. リスク
 
