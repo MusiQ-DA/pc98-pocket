@@ -783,9 +783,17 @@ module CHIPSET #(
     // line buffer's next-line prefetch (RB_PF) the walk got ~15% faster
     // and the wait is 5: 8/10/12 MHz 0.89/0.99/1.12 (3 -> 0.80/0.90/1.18,
     // 7 -> 1.01/1.09/1.21; 12 MHz is port-G bound, ~40 clocks a word at
-    // every speed, and a little CPU-side debt eases the contention). TDW writes
-    // are posted too now and take 4 (rep stosw 256 TDW 8/10 MHz: 0 ->
-    // 0.79/0.88, 4 -> 0.94/0.98, 5 -> 1.04/1.08). The EGC is not posted
+    // every speed, and a little CPU-side debt eases the contention). TDW
+    // writes are posted too and take 4. After the RMW-line-buffer bug
+    // fixes the posted-write queue and the bridge's backpressure stalls
+    // absorb the CPU-side debt almost entirely: sweeping the waits left
+    // the rep-loop cpu counts bit-identical at 10/12 MHz (RMW 5->0,
+    // plain VRAM 6->0) and unchanged at 8 MHz in the cycle-table script
+    // path (the sweeps that showed 8 MHz TDW moving were run from another
+    // cwd and are a sim artifact), so those ratios are engine-bound --
+    // RMW 1.25/1.41, TDW 1.26/1.41, plain VRAM 1.33/1.43 of the np21w
+    // reference -- and no CPU-side wait can pull them into the 0.95-1.05
+    // band. The nominal np21w-derived values stay. The EGC is not posted
     // and stays at 0.
     wire grcg_rmw_only = grcg_active & grcg_rmw & ~egc_live;
     wire grcg_tdw_only = grcg_active & ~grcg_rmw & ~egc_live;

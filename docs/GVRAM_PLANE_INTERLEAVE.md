@@ -192,14 +192,37 @@ CI:
   に変更、GV_IL 上のバッファ RMW 64レーン検証（np21w モデル比較）を
   追加。walk erase / cross-lane park はバッファ経路で回帰。
 
-### 段階2の速度（cycle table 実測で調整）
+### 段階2の速度（cycle table 実測で調整）— 判定済み: wait 調整では目標未達・名目値維持
 
-- vram_wait_now は段階2でも一旦現状値（RMW=VBlank?1:5 / TDW=VBlank?1:4）。
-  cycle table を取り直し、ratio が 0.95-1.05 に収まるよう調整したうえで
-  baseline を再更新する。
-- TDW の word 一括（grcg_wbatch）は bridge のバイト分割で実質死んで
-  いるため、TDW rep/x8 の段階1比 1.4-1.7 は一部残る見込み。
-  RMW（段階1 3.42-4.82）は line buffer ヒットで大幅改善するはず。
+段階2のコードで vram_wait_now（RMW=VBlank?1:5 / TDW=VBlank?1:4 /
+plain VRAM=VBlank?1:6）を sweep して cycle table（Verilator 5.020・
+script path）で測り直した。結論:
+
+- **wait はほぼ完全に吸収される**。posted write キューと bridge の
+  backpressure ストールが CPU 側の wait と重畳し、10/12MHz では
+  RMW 5→0・plain 6→0 でも rep ループの cpu カウントが
+  bit-identical。つまり VRAM 行の ratio はエンジン規定で、
+  CPU 側 wait の調整では 0.95-1.05 に入らない。
+- 最終 ratio（np21w 参照比・cycle table baseline）:
+
+  | phase | 8MHz | 10MHz | 12MHz |
+  |-------|------|-------|-------|
+  | 34 TDW rep stosw 256 | 1.15 | 1.26 | 1.41 |
+  | 35 TDW x8            | 1.04 | 1.19 | 1.34 |
+  | 36 RMW rep stosw 256 | 1.14 | 1.25 | 1.41 |
+  | 37 plain VRAM rep    | 1.21 | 1.33 | 1.43 |
+
+  （33 rep movsw は全速度 1.00。RMW は段階1の 3.42-4.82 から
+  line buffer ヒットで大幅改善。12MHz は port-G 帯域が律速。）
+- **wait 値は np21w 由来の名目値（RMW=5 / TDW=4 / plain=6）のまま
+  維持**する。実測上どの値でも速度は変わらず、名目値が実機の
+  安全サイドに立つ。EGC（非 posted）は 0 のまま。
+- 計測の注意: tb の pace-wait 測定は実行 cwd や plusarg の有無で
+  8MHz TDW が二峰性（1.15 / 1.02）に出る。権威は CI が再現する
+  `scripts/sim_cycle_table.sh`（repo root 実行）の値。
+  手動 run（別 cwd / plusarg 付き）で 8MHz が改善したように見えた
+  sweep 結果はこの artifact だった（判別実験で plusarg 値は無関係
+  と確認済み）。
 
 ### 段階2で見つかり直した RMW line buffer の 2 バグ（第11+第12修正）
 

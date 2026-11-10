@@ -208,7 +208,7 @@ module tb_mem_perf;
                                      : (grcg_active & grcg_rmw & ~egc_active_w) ? (vid_vb ? 4'd1 : 4'(tb_gw))
                                      : (grcg_active & ~grcg_rmw & ~egc_active_w) ? (vid_vb ? 4'd1 : 4'(tb_gwt))
                                      : (grcg_active | egc_active_w) ? 4'd0
-                                     : vid_vb ? 4'd1 : 4'd6}),
+                                     : vid_vb ? 4'd1 : 4'(tb_vw)}),
         .dx           (dx_r[6:0]),
         .bios_shadow  (shadow_flag_r),
         .bios_protect (1'b0),
@@ -2248,6 +2248,8 @@ module tb_mem_perf;
     initial void'($value$plusargs("gwt=%d", tb_gwt));
     int tb_gw = 5;   // Chipset.sv charges 5 (see vram_wait_now)
     initial void'($value$plusargs("gw=%d", tb_gw));
+    int tb_vw = 6;   // Chipset.sv charges 6 (see vram_wait_now)
+    initial void'($value$plusargs("vw=%d", tb_vw));
 `ifdef PWTRACE
     int pwt = 0; logic pwt_on = 0; logic [3:0] pwt_prev = 0;
     always @(posedge clk) begin
