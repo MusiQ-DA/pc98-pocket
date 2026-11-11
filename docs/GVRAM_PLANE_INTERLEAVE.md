@@ -253,9 +253,21 @@ dx=80（RMWBUF+PWPOST 両方無効）が PASS だったのは buffer を使わ
 レッドヘリングだった（id=4440 は 0xB83D2 want 31 で、A 窓エイリアス
 0xA83D2 経由の RMW 書きが B 窓の同じオフセットに展開される正常動作）。
 
-既知の残件: `+seqdx=2`（PF ON+即時 WB の実験モード）に
-id=2076（0xAA413 want 255）が 1 件残る。修正前から存在した独立の
-稀レースで、生産構成（dx=00 デフォルト）には影響しない。後日調査。
+残件だった `+seqdx=2`（PF ON+即時 WB の実験モード）の id=2076 も
+解決済み（第13修正）。正体は 0xAA4D4 の byte check（want 0x80）で、
+WATCH 計装が word 0x6049A8 への writeback `dq=8180 dqm=01` を捕獲：
+walk は正しいデータを計算したのに B プレーンの dirty bit が
+flush 開始時の fl_d ラッチに含まれず、writeback マスクで 0x80 が
+SDRAM に落下していなかった（直後の full writeback が 0x8100 で
+破壊を確定）。CY 計装（+cyct=1）で flush 実行中に rb_d[1]=1111 なのに
+latch 済み fl_d=1110 の瞬間を確認——根因は flush 完了時の
+`rb_d[fl_s] <= 4'h0` 全クリアが、flush と並走した次の walk の merge
+マークを握りつぶすレース（即時 WB では毎 walk 直後に flush が走るため、
+同一ライン連続 W8 の 2 本目の plane-0 マークが前 flush のクリア窓に
+飲まれる）。修正は dirty bitmap の消費を flush 完了から fl_start の
+ラッチ時点に移動（latch と同サイクルで `rb_d[fl_sel] <= 4'h0`、
+flush 完了側の全クリアを削除）。これで neon 4 モード
+（dx=00/seqdx=1/seqdx=2/dx=80）すべて 0 mismatches。
 
 ## 8. リスク
 

@@ -1093,6 +1093,21 @@ module pc98_gvram_seq #(
                 fl_busy <= 1'b1;
                 fl_s    <= fl_sel;
                 fl_d    <= fl_sel ? rd1 : rd0;
+                // PC-98 port: consume the dirty bitmap AT THE LATCH. The old
+                // code cleared rb_d[fl_s] at flush completion, which also
+                // destroyed marks a concurrent walk had merged into the slot
+                // while the flush ran -- under the immediate-writeback mode
+                // (+seqdx=2) a flush chases every walk, so the second of two
+                // back-to-back W8s on one line (neon id=2076: W8 aa4d3 then
+                // W8 aa4d4) had its plane-0 mark wiped by the previous
+                // flush's clear; the next flush then latched fl_d without
+                // the B lane and masked the merged 0x80 out of the writeback
+                // (WATCH: word 0x6049A8 dq=8180 dqm=01 -> SDRAM kept 0100).
+                // Clearing here instead means any mark that lands after the
+                // latch survives for the next flush to write; the lanes
+                // latched into fl_d are consumed by this one (the bank copy
+                // starts only after this edge, so their data is included).
+                rb_d[fl_sel] <= 4'h0;
                 fl_h    <= 1'b0;
                 fl_i    <= 5'd0;
                 fl_c    <= 5'd0;
@@ -1120,7 +1135,10 @@ module pc98_gvram_seq #(
                     fl_c  <= 5'd0;
                     fl_ph <= 2'd0;
                 end else begin
-                    rb_d[fl_s] <= 4'h0;        // every dirty lane has landed
+                    // rb_d[fl_s] is no longer cleared here: the bitmap was
+                    // consumed at the fl_start latch (see there). Clearing
+                    // here destroyed marks merged by a concurrent walk
+                    // during the flush (neon id=2076, +seqdx=2).
                     fl_busy    <= 1'b0;
                 end
               end
@@ -1666,6 +1684,29 @@ module pc98_gvram_seq #(
     int trc_cnt = 0;
     int trcfl_cnt = 0;
     initial if (!$value$plusargs("trace_line=%d", trace_line)) trace_line = -1;
+    // sim-only: +trace_line=4 dumps every active cycle (merge pending, flush
+    // busy, or a dirty slot present) inside a hardcoded time window covering
+    // the seqdx=2 neon id=2076 incident: walk W8 aa4d3 ff then W8 aa4d4 80,
+    // flush#1 ends ~25.870e9, flush#2 writes 0x6049A6/A8 at 25.8759e9 with
+    // fl_d=1110 (B lane clean = the 0x80 was masked out). Hunt: which cycle
+    // loses/never sets the B dirty mark (candidates: flush-end full clear,
+    // fill-on-the-fly not marking, merge marking rb_d[ws] while the fill
+    // tagged rb_d[fws]).
+    int cyct = 0;
+    initial if (!$value$plusargs("cyct=%d", cyct)) cyct = 0;
+    always @(posedge clk) begin
+        if (cyct != 0
+            && ((rb_upd_w && rb_line[15:0] == 16'hAA4D)
+                || (mem_wr   && rb_line[15:0] == 16'hAA4D)
+                || (fl_busy  && fl_tag[15:0] == 16'hAA4D)
+                || (pf_busy  && pf_tag[15:0] == 16'hAA4D)))
+            $display("CY %0t st=%0d ws=%b fws=%b gp=%0d off=%h upw=%b pbw=%b mw=%b%b mwa=%05x d0=%b d1=%b fb=%b ph=%0d fi=%0d fs=%b fd=%b v0=%b v1=%b t0=%h t1=%h mru=%b rbl=%h ftg=%h",
+                     $time, st, ws, fws, gp, rb_off, rb_upd_w, pf_bw,
+                     mw1, mw0, mw_a, rb_d[0], rb_d[1],
+                     fl_busy, fl_ph, fl_i, fl_s, fl_d,
+                     rb_v[0], rb_v[1], rb_tag[0], rb_tag[1], mru,
+                     rb_line[15:0], fl_tag[15:0]);
+    end
     // sim-only: +trace_line=3 dumps the fill beats for one line (neon 0xA83D
     // -> SDRAM words 0x6007A0-0x7BF). FBREQ prints each port-G read request,
     // FB every accepted beat with the bank word it lands as. A complete fill
