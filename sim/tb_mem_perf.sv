@@ -490,7 +490,10 @@ module tb_mem_perf;
     logic seq_disp = 1'b0;
     initial begin int v; if ($value$plusargs("seqdisp=%d", v)) seq_disp = (v != 0); end
     initial begin int v; if ($value$plusargs("seqdx=%d", v)) seq_dx = 2'(v); end
-    pc98_gvram_seq #(.EGC(1'b1), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_seq (
+    // EGC is not fitted on the board (Chipset.sv wires .EGC(1'b0)); this
+    // bench matches production. EGC has its own benches (tb_pc98_egc,
+    // tb_pc98_egc_golden) that still build with EGC=1.
+    pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_seq (
         .rmwbuf_off(dx_r[7]),
         .dx_seq(seq_dx),
         .disp_page(seq_disp),
@@ -834,19 +837,9 @@ module tb_mem_perf;
         outport(16'h007C, 8'h00);           // GRCG off
         marker(8'h92);
 
-        // ---- phase 6: EGC write rep stosb at A800:4000 ----
-        marker(8'h06);
-        outport(16'h007C, 8'h80);           // GRCG mode keeps the engine on
-        outport(16'h006A, 8'h05);           // mode2 bit2 <- 1
-        outport(16'h006A, 8'h07);           // mode2 bit3 <- 1 (EGC on)
-        outport(16'h006A, 8'h01);           // mode2 bit0 <- 1 (analog)
-        outport(16'h04A8, 8'hFF);           // egc mask lo
-        outport(16'h04A9, 8'hFF);           // egc mask hi
-        emit(8'hBF); emitw(16'h4000);       // MOV DI,4000
-        emit(8'hB9); emitw(16'h0200);       // MOV CX,0200 (512B -- 8 legs each)
-        emit(8'hB0); emit(8'h3C);           // AL
-        emit(8'hF3); emit(8'hAA);           // REP STOSB
-        marker(8'h86);
+        // ---- phase 6: removed -- the EGC is not fitted on the board and
+        // this bench now builds the seq with EGC=0 to match production. The
+        // EGC engines keep their own benches (tb_pc98_egc_golden). ----
 
         // ---- phase 7: plain rep stosb on the window (charger off) ----
         marker(8'h07);
@@ -2151,7 +2144,7 @@ module tb_mem_perf;
         phase_name[8'h03] = "REP MOVSW 1024W main RAM";
         phase_name[8'h04] = "REP STOSB 2048B GRCG TDW";
         phase_name[8'h05] = "REP STOSB 2048B GRCG RMW";
-        phase_name[8'h06] = "REP STOSB  512B EGC";
+        phase_name[8'h06] = "removed (EGC not fitted)";
         phase_name[8'h07] = "REP STOSB 2048B window plain";
         phase_name[8'h08] = "CALL/RET x500 stack";
         phase_name[8'h09] = "SMC trampoline x128";
