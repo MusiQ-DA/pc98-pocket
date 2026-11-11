@@ -55,6 +55,7 @@ module tb_gvram_ram_leg;
     wire [23:0]  gvwb_addr_w;
     wire [15:0]  gvwb_wdata_w, gvwb_rdata_w;
     wire [1:0]   gvwb_wmask_w;
+    wire [3:0]   gvwb_len_w;
     wire [4:0]   cachef_wcnt_w;
 
     pc98_gvram_seq #(.EGC(1'b1), .RMWBUF(1'b1), .PWPOST(1'b1),
@@ -86,7 +87,7 @@ module tb_gvram_ram_leg;
         .cpu_wr_taken(), .cpu_rd_own(),
         .gvwb_req(gvwb_req_w), .gvwb_we(gvwb_we_w),
         .gvwb_addr(gvwb_addr_w), .gvwb_wdata(gvwb_wdata_w),
-        .gvwb_wmask(gvwb_wmask_w),
+        .gvwb_wmask(gvwb_wmask_w), .gvwb_len(gvwb_len_w), .gv_word_ok(),
         .gvwb_ack(gvwb_ack_w), .gvwb_done(gvwb_done_w),
         .gvwb_rvalid(gvwb_rvalid_w), .gvwb_rdata(gvwb_rdata_w),
         .gvwb_wcnt(cachef_wcnt_w), .gv_a_quiet(gv_a_quiet_w)
@@ -142,7 +143,7 @@ module tb_gvram_ram_leg;
         .gvwb_req(gvwb_req_w), .gvwb_we(gvwb_we_w),
         .gvwb_rvalid(gvwb_rvalid_w), .gvwb_rdata(gvwb_rdata_w),
         .gv_a_quiet(gv_a_quiet_w), .gvwb_addr(gvwb_addr_w),
-        .gvwb_wdata(gvwb_wdata_w), .gvwb_wmask(gvwb_wmask_w),
+        .gvwb_wdata(gvwb_wdata_w), .gvwb_wmask(gvwb_wmask_w), .gvwb_len(gvwb_len_w),
         .gvwb_ack(gvwb_ack_w), .gvwb_done(gvwb_done_w),
         .ram_wr_snoop_v(), .ram_wr_snoop_addr(), .ram_wr_snoop_len(),
         .wait_count_clk_en(1'b1),

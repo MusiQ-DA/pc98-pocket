@@ -3824,6 +3824,7 @@ module core_top #(
         .ram_rw_complete                    (ram_rw_complete)
         ,.sdram_wr_taken                   (sdram_wr_taken)
         ,.sdram_rd_ready                   (sdram_rd_ready)
+        ,.gv_word_ok                       (gv_word_ok)
         ,.pc98_key_stb                      (pc98_key_stb)
         ,.pc98_key_byte                     (pc98_key_code)
         ,.mouse_dx                          (mouse_dx)
@@ -3904,6 +3905,7 @@ module core_top #(
     // holds each queued write strobe until this says it is durably held.
     wire        sdram_wr_taken;
     wire        sdram_rd_ready;
+    wire        gv_word_ok;
 
     // ---- SDRAM boundary: chipset controller -> Pocket dram_* pins ----
     // CHIPSET drives these; pass straight through.
@@ -3993,6 +3995,7 @@ module core_top #(
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
         .analog_mode       (pc98_analog),
+        .gv_word_ok        (gv_word_ok),
         .word_access       (cpu_word_access),
         .pf_req_len        (cpu_pf_len),
         .pf_beat_v         (pf_beat_v),

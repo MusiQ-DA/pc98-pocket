@@ -183,6 +183,10 @@ module RAM #(
      // Port G's write lanes (interleaved-GVRAM byte-lane writes from the
      // sequencer), consumed per WRITE beat. All ones = whole-word write.
      input  logic    [1:0]  gvwb_wmask,
+     // Port G's burst length, words - 1: 15 for the line buffer's fills
+     // and write-backs, 1 or 3 for a GRCG TDW tile burst (one or two guest
+     // offsets, all four planes).
+     input  logic    [3:0]  gvwb_len,
      output logic           gvwb_ack,
      output logic           gvwb_done,
     // Port A write commits (guest, DMA, loader), for the cache to snoop:
@@ -473,10 +477,19 @@ module RAM #(
     // is 0x600000-0x61FFFF: bits [23:17] == 7'h30.
     wire       acc_il = (accept_address[23:17] == 7'h30);
     wire       lat_il = (latch_address[23:17] == 7'h30);
-    // The write lane masks handed to the shim. A beat-1 mask never needs
-    // restricting: a word write is main RAM (full words both beats) and
-    // GVRAM word cycles never reach port A -- cpu_bus_bridge splits them
-    // into bytes at the interleave.
+    // A GVRAM WORD write (the bridge drains a plain page-0 word whole when
+    // the sequencer passes it through, gv_word_ok) is offsets n and n+1
+    // of one plane: SDRAM words W and W+2, the same lane. It goes out as
+    // one THREE-beat burst whose middle beat -- word W+1, the other plane
+    // pair of offset n -- the shim masks off entirely (sdram_shim: a
+    // three-word port-A write's beat 1 is DQM-closed), so the burst costs
+    // one arbitration and one ACTIVATE for both bytes. The read shape is
+    // unchanged: GVRAM reads are always byte cycles.
+    wire [9:0] wr_words_lat = !word_now    ? 10'h001 : lat_il ? 10'h003 : 10'h002;
+    wire [9:0] wr_words_acc = !accept_word ? 10'h001 : acc_il ? 10'h003 : 10'h002;
+    // The write lane masks handed to the shim, the same for every beat
+    // that writes: main RAM writes whole words, and an interleaved byte or
+    // word writes its plane's lane (beat 0, and beat 2 of a word).
     wire [1:0] a_wmask_acc = acc_il ? (accept_lane ? 2'b10 : 2'b01)
                                     : 2'b11;
     wire [1:0] a_wmask_lat = lat_il ? (gv_il_lane ? 2'b10 : 2'b01)
@@ -508,7 +521,7 @@ module RAM #(
         .data_in_hi         (access_data_in_hi),
         .data_out_hi        (access_data_out_hi),
         .a_wmask0           (a_wmask0_w),
-        .a_wmask1           (2'b11),
+        .a_wmask1           (a_wmask0_w),
         .a_rvalid           (shim_rvalid),
         .a_beat             (pf_beat_w),
         .write_request      (write_request),
@@ -574,7 +587,7 @@ module RAM #(
         .g_rvalid           (gvwb_rvalid),
         .g_rdata            (gvwb_rdata_w),
         .g_addr             (gvwb_addr),
-        .g_len              (4'd15),
+        .g_len              (gvwb_len),
         .g_wdata            (gvwb_wdata),
         .g_wmask            (gvwb_wmask),
         .g_ack              (gvwb_ack),
@@ -683,13 +696,19 @@ module RAM #(
     wire [24:0] rd_beg = {1'b0, latch_address};
     wire [24:0] rd_end = rd_beg + {15'b0, read_words};
     wire [24:0] p1_beg = {1'b0, pend_address};
-    wire [24:0] p1_end = p1_beg + (pend_word ? 25'd2 : 25'd1);
+    // GV_IL: a graphics word write spans THREE SDRAM words (offset n on
+    // word W, n+1 on W+2; see access_words).
+    function automatic logic [24:0] wr_span(input logic [23:0] a,
+                                            input logic w);
+        wr_span = !w ? 25'd1 : (a[23:17] == 7'h30) ? 25'd3 : 25'd2;
+    endfunction
+    wire [24:0] p1_end = p1_beg + wr_span(pend_address, pend_word);
     wire [24:0] p2_beg = {1'b0, pend2_address};
-    wire [24:0] p2_end = p2_beg + (pend2_word ? 25'd2 : 25'd1);
+    wire [24:0] p2_end = p2_beg + wr_span(pend2_address, pend2_word);
     wire [24:0] p3_beg = {1'b0, pend3_address};
-    wire [24:0] p3_end = p3_beg + (pend3_word ? 25'd2 : 25'd1);
+    wire [24:0] p3_end = p3_beg + wr_span(pend3_address, pend3_word);
     wire [24:0] cp_beg = {1'b0, cap_address};
-    wire [24:0] cp_end = cp_beg + (cap_word ? 25'd2 : 25'd1);
+    wire [24:0] cp_end = cp_beg + wr_span(cap_address, cap_word);
     wire        rd_conflicts = (wc_pend  & (rd_beg < p1_end) & (rd_end > p1_beg))
                              | (wc_pend2 & (rd_beg < p2_end) & (rd_end > p2_beg))
                              | (wc_pend3 & (rd_beg < p3_end) & (rd_end > p3_beg))
@@ -1013,28 +1032,31 @@ module RAM #(
                 // write in RAM_WRITE_1 uses the parked operands, and a live
                 // request out of IDLE would run one slot ahead of it.
                 access_address  = {1'b0, latch_address};
-                access_num      = read_words;
+                access_num      = write_command ? wr_words_lat : read_words;
                 access_data_in  = (lat_il & gv_il_lane)
                                 ? {latch_data, 8'h00} : {8'h00, latch_data};
-                access_data_in_hi = {8'h00, latch_data_hi};
+                access_data_in_hi = (lat_il & gv_il_lane)
+                                ? {latch_data_hi, 8'h00} : {8'h00, latch_data_hi};
                 write_request   = (write_command & ~wc_pend) ? 1'b1 : 1'b0;
                 read_request    = (read_command & ~wc_pend)  ? 1'b1 : 1'b0;
             end
             RAM_WRITE_1: begin
                 access_address  = {1'b0, accept_address};
-                access_num      = accept_word ? 10'h002 : 10'h001;
+                access_num      = wr_words_acc;
                 access_data_in  = (acc_il & accept_lane)
                                 ? {accept_data, 8'h00} : {8'h00, accept_data};
-                access_data_in_hi = {8'h00, accept_data_hi};
+                access_data_in_hi = (acc_il & accept_lane)
+                                ? {accept_data_hi, 8'h00} : {8'h00, accept_data_hi};
                 write_request   = 1'b1;
                 read_request    = 1'b0;
             end
             RAM_WRITE_2: begin
                 access_address  = {1'b0, accept_address};
-                access_num      = accept_word ? 10'h002 : 10'h001;
+                access_num      = wr_words_acc;
                 access_data_in  = (acc_il & accept_lane)
                                 ? {accept_data, 8'h00} : {8'h00, accept_data};
-                access_data_in_hi = {8'h00, accept_data_hi};
+                access_data_in_hi = (acc_il & accept_lane)
+                                ? {accept_data_hi, 8'h00} : {8'h00, accept_data_hi};
                 write_request   = 1'b0;
                 read_request    = 1'b0;
             end

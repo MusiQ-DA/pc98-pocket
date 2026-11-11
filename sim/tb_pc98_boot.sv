@@ -175,6 +175,7 @@ module tb_pc98_boot;
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
         .analog_mode       (1'b0),
+        .gv_word_ok        (1'b0),
         .word_access       (cpu_word_access),
         // pf_* live outside the REALMEM block: the bridge always has the
         // ports; only the real RAM.sv path drives the beat stream.

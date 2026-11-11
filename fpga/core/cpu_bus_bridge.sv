@@ -98,6 +98,12 @@ module cpu_bus_bridge #(
     output wire         lock_n,
 
     input  wire         analog_mode,
+    // The graphics sequencer would pass a GVRAM word write through whole
+    // right now (pc98_gvram_seq gv_word_ok: plain page-0 VRAM, or a GRCG
+    // TDW its port-G tile burst lays down at once). A queued GVRAM word
+    // then drains as ONE word pair instead of two byte pairs; tie 0 to
+    // keep every GVRAM word split.
+    input  wire         gv_word_ok,
     output reg          word_access,
     // Prefetch burst side channel to RAM.sv, through Chipset: while a fill
     // owns the byte engine, pf_req_len is the burst's SDRAM word count;
@@ -445,6 +451,7 @@ module cpu_bus_bridge #(
     reg  [15:0] cur_data;
     reg  [2:0]  cur_term;     // the I/O word's termination class
     reg         cur_inta;     // this pair is an acknowledge byte
+    reg         cur_gvw;      // a queued GVRAM word drained as one pair
 
     wire cur_read = (cur_bs == BS_INTA) || (cur_bs == BS_IOR)
                  || (cur_bs == BS_CODE) || (cur_bs == BS_MEMR);
@@ -498,7 +505,7 @@ module cpu_bus_bridge #(
         else io_term = TERM_NONE;
     endfunction
 
-    wire cur_1cyc  = word_1cyc(cur_bs, cur_addr, cur_ube_n);
+    wire cur_1cyc  = word_1cyc(cur_bs, cur_addr, cur_ube_n) | cur_gvw;
     // INTA always runs its two bytes: byte 0 is ACK1 (sets the ISR), byte 1
     // is ACK2 (presents the vector). A terminated word I/O pair stops after
     // its one byte.
@@ -988,9 +995,22 @@ module cpu_bus_bridge #(
     // Write-queue capture: the request is postable when it targets plain
     // SDRAM and a slot is free. The push itself is in the tracker block
     // (it owns req_busy/wb_ack_i); wrq_tail lands the entry.
+    // GV_IL: graphics-window writes post too. The interleave splits a
+    // GVRAM word into two byte pairs (word_1cyc), and paying both pairs
+    // inside the guest's own Wishbone cycle put plain VRAM / GRCG TDW /
+    // RMW stores at 1.15-1.43x np21w; posted, the CPU only pays its
+    // np21w VRAM/GRCG debt (z86_cache pdebt) and the drain overlaps the
+    // next iteration. A graphics write is an ordinary MEMW strobe for
+    // everything downstream (the sequencer expands it exactly as a
+    // direct pair), and every ordering hazard a GRCG/EGC mode change or
+    // a TCR read could raise is covered: I/O waits for an empty queue
+    // (srv_blk), and a graphics-window read never bypasses or forwards
+    // from the queue (srv_gv_rd below) -- its answer can depend on a
+    // queued write to ANOTHER plane window (GRCG writes all planes).
     wire srv_memw_plain = (srv_bs == BS_MEMW)
-                       && pc98_sdram_hits(srv_addr, analog_mode)
-                       && !pc98_gvram_hits(srv_addr, analog_mode);
+                       && pc98_sdram_hits(srv_addr, analog_mode);
+    wire srv_gv_rd = (srv_bs == BS_MEMR)
+                  && pc98_gvram_hits(srv_addr, analog_mode);
     wire wrq_push = srv_req && srv_memw_plain && (wrq_cnt < WQ_N[2:0]);
 
     // Pending-write overlap vs the pending read's span. Entry span is
@@ -1041,7 +1061,7 @@ module cpu_bus_bridge #(
                        : (fwd_a1[0] ? wrq_data[0][15:8] : wrq_data[0][7:0]);
     wire [15:0] fwd_word = srv_ube ? {fwd_b0, fwd_b0} : {fwd_b1, fwd_b0};
     wire fwd_serve = srv_req && (srv_bs == BS_MEMR) && wrq_ovl && fwd_cov
-                  && bus_ours && (bstate == B_IDLE);
+                  && !srv_gv_rd && bus_ours && (bstate == B_IDLE);
 
     // What a pending request may NOT do while the queue holds data:
     // reads that overlap pending bytes wait for them to reach RAM;
@@ -1054,6 +1074,7 @@ module cpu_bus_bridge #(
     // cannot observe the queued bytes, so the bypass is unobservable.
     wire srv_blk = srv_memw_plain
                 || ((wrq_cnt != 3'd0) && (srv_bs != BS_MEMR))
+                || ((wrq_cnt != 3'd0) && srv_gv_rd)
                 || ((srv_bs == BS_MEMR) && wrq_ovl);
 
     // Shadow of the i8288's machine_cycle/machine_cycle_period
@@ -1563,7 +1584,19 @@ module cpu_bus_bridge #(
     // arms -- the engine has latched the operands by then and serial
     // pair order carries the rest. Push and pop may share a clk; the
     // push then lands at the post-pop tail.
-    wire        wrq_pop  = arm_drain;
+    // A queued GVRAM word drains as two byte pairs (the interleave puts
+    // offsets n and n+1 on two SDRAM words; word_1cyc never takes them):
+    // the even byte's drain leaves the entry in place as the odd byte,
+    // which drains next -- one pair per arm, as the engine requires.
+    // When the sequencer can take the word whole (gv_word_ok, sampled at
+    // the drain's arm: a GRCG/page mode change is an OUT, which waits for
+    // this queue to empty and for the pair before it to retire), the
+    // entry drains as one word pair instead (wrq_gvw).
+    wire        wrq_gvwd  = !wrq_ube[0] && !wrq_addr[0][0]
+                         && pc98_gvram_hits(wrq_addr[0], analog_mode);
+    wire        wrq_gvw   = arm_drain && wrq_gvwd && gv_word_ok;
+    wire        wrq_split = arm_drain && wrq_gvwd && !gv_word_ok;
+    wire        wrq_pop  = arm_drain && !wrq_split;
     wire [2:0]  wrq_tail = wrq_cnt - (wrq_pop ? 3'd1 : 3'd0);
 
     always @(posedge clk) begin
@@ -1576,6 +1609,10 @@ module cpu_bus_bridge #(
                     wrq_data[i] <= wrq_data[i+1];
                     wrq_ube[i]  <= wrq_ube[i+1];
                 end
+            end
+            if (wrq_split) begin
+                wrq_addr[0][0] <= 1'b1;
+                wrq_ube[0]     <= 1'b1;
             end
             if (wrq_push) begin
                 wrq_addr[wrq_tail] <= srv_addr;
@@ -1649,6 +1686,7 @@ module cpu_bus_bridge #(
             cur_data         <= 16'h0;
             cur_term         <= TERM_NONE;
             cur_inta         <= 1'b0;
+            cur_gvw          <= 1'b0;
             cur_pf           <= 1'b0;
             cur_fillm        <= 1'b0;
             cur_pf_len       <= 5'd0;
@@ -1717,6 +1755,7 @@ module cpu_bus_bridge #(
                     cur_data         <= srv_data;
                     cur_term         <= srv_term;
                     cur_inta         <= srv_inta;
+                    cur_gvw          <= 1'b0;
                     cur_pf           <= 1'b0;
                     cur_fillm        <= fillm_go;
                     cur_pf_w         <= fillm_w;
@@ -1739,7 +1778,7 @@ module cpu_bus_bridge #(
                     // pair engine treats it exactly like a guest write.
                     cur_bs           <= BS_MEMW;
                     cur_addr         <= wrq_addr[0];
-                    cur_ube_n        <= wrq_ube[0];
+                    cur_ube_n        <= wrq_ube[0] | wrq_split;
                     cur_data         <= wrq_data[0];
                     cur_term         <= TERM_NONE;
                     cur_inta         <= 1'b0;
@@ -1751,7 +1790,8 @@ module cpu_bus_bridge #(
                     cpu_data_bus     <= wrq_addr[0][0] ? wrq_data[0][15:8]
                                                        : wrq_data[0][7:0];
                     word_access      <= word_1cyc(BS_MEMW, wrq_addr[0],
-                                                  wrq_ube[0]);
+                                                  wrq_ube[0]) | wrq_gvw;
+                    cur_gvw          <= wrq_gvw;
                     cpu_data_bus_hi  <= wrq_data[0][15:8];
                     t_cnt            <= 3'd0;
                     saw_low          <= 1'b0;
@@ -1771,6 +1811,7 @@ module cpu_bus_bridge #(
                     cur_data         <= 16'h0000;
                     cur_term         <= TERM_NONE;
                     cur_inta         <= 1'b0;
+                    cur_gvw          <= 1'b0;
                     cur_pf           <= 1'b1;
                     cur_fillm        <= 1'b0;
                     cur_dq           <= 1'b0;

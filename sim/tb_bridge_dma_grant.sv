@@ -146,6 +146,7 @@ module tb_bridge_dma_grant;
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
         .analog_mode       (1'b0),
+        .gv_word_ok        (1'b0),
         .word_access       (word_access),
         .pf_req_len        (pf_req_len),
         .pf_beat_v         (pf_beat_v),

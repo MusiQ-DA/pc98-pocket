@@ -75,7 +75,12 @@ module sdram_shim #(
     input  wire  [sdram_data_width-1:0]       data_in_hi,
     output logic [sdram_data_width-1:0]       data_out_hi,
     // Port A's write byte lanes, one mask per burst beat (beat 0 = the
-    // addressed word, beat 1 = its word-access twin), active high. The
+    // addressed word, beat 1 = its word-access twin), active high. A
+    // THREE-word port-A write is an interleaved GVRAM word (RAM.sv
+    // wr_words_*: offsets n and n+1 of one plane are words W and W+2):
+    // its middle beat belongs to the other plane pair and is always
+    // written with every lane closed; beat 2 takes a_wmask1 and the
+    // data_in_hi word. The
     // interleaved GVRAM packs TWO guest bytes per SDRAM word (plane pair
     // B:R / G:E), so a byte write must mask the lane it does not own --
     // the neighbour plane's byte lives there. Held for the whole
@@ -425,7 +430,9 @@ module sdram_shim #(
          {g_wmask,
           {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}},
           {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}},
-          (mp_wcnt == LEN_BITS'(0)) ? a_wmask0 : a_wmask1};
+          (mp_wcnt == LEN_BITS'(0)) ? a_wmask0
+        : ((len_r == LEN_BITS'(2)) && (mp_wcnt == LEN_BITS'(1)))
+                                     ? {MASK_BITS{1'b0}} : a_wmask1};
     wire [PORTS-1:0] mp_ack, mp_done;
     wire [$clog2(PORTS)-1:0] mp_grant;
 

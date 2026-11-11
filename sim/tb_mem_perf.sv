@@ -108,6 +108,8 @@ module tb_mem_perf;
     // masks the whole burst) — the cursor golden stream fails with stale
     // SDRAM bytes everywhere the buffer wrote.
     wire [1:0]  gvwb_wmask_w;
+    wire [3:0]  gvwb_len_w;
+    wire        gv_word_ok_w;
     wire [15:0] gvwb_rdata_w;
     wire [23:0] gvwb_addr_w;
     wire [15:0] gvwb_wdata_w;
@@ -134,6 +136,7 @@ module tb_mem_perf;
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (),
         .analog_mode       (pc98_analog_w),
+        .gv_word_ok        (gv_word_ok_w),
         .word_access       (cpu_word_access),
         .pf_req_len        (cpu_pf_len_w),
         .pf_beat_v         (pf_beat_v_w & ~seq_pf_beat_w),
@@ -530,7 +533,8 @@ module tb_mem_perf;
         .gvwb_req(gvwb_req_w), .gvwb_addr(gvwb_addr_w), .gvwb_wdata(gvwb_wdata_w),
         .gvwb_ack(gvwb_ack_w), .gvwb_done(gvwb_done_w), .gvwb_wcnt(zf_wcnt),
         .gvwb_we(gvwb_we_w), .gvwb_rvalid(gvwb_rvalid_w), .gvwb_rdata(gvwb_rdata_w),
-        .gvwb_wmask(gvwb_wmask_w),
+        .gvwb_wmask(gvwb_wmask_w), .gvwb_len(gvwb_len_w),
+        .gv_word_ok(gv_word_ok_w),
         .gv_a_quiet(gv_a_quiet_w),
         .cpu_wr_taken(seq_wr_taken_w),
         .cpu_rd_own(seq_rd_own_w)
@@ -596,7 +600,7 @@ module tb_mem_perf;
         .gvwb_req(gvwb_req_w), .gvwb_addr(gvwb_addr_w), .gvwb_wdata(gvwb_wdata_w),
         .gvwb_ack(gvwb_ack_w), .gvwb_done(gvwb_done_w),
         .gvwb_we(gvwb_we_w), .gvwb_rvalid(gvwb_rvalid_w), .gvwb_rdata(gvwb_rdata_w),
-        .gvwb_wmask(gvwb_wmask_w),
+        .gvwb_wmask(gvwb_wmask_w), .gvwb_len(gvwb_len_w),
         .gv_a_quiet(gv_a_quiet_w),
         .ram_wr_snoop_v(ram_sn_v), .ram_wr_snoop_addr(ram_sn_addr),
         .ram_wr_snoop_len(ram_sn_len)
@@ -2237,7 +2241,7 @@ module tb_mem_perf;
     final $display("MOVPROF cyc=%0d st0-11: %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d fills=%0d wr_pend=%0d rd_pend=%0d ld_pend=%0d p_busy=%0d cb_v=%0d inst=%0d",
         mv_cyc, mv_st[0],mv_st[1],mv_st[2],mv_st[3],mv_st[4],mv_st[5],mv_st[6],mv_st[7],mv_st[8],mv_st[9],mv_st[10],mv_st[11], mv_fill, mv_wrw, mv_rdw, mv_ldw, mv_pbusy, mv_cbv, mv_inst);
 `endif
-    int tb_gwt = 4;  // TDW: Chipset.sv charges 4 (see vram_wait_now)
+    int tb_gwt = 7;  // TDW: Chipset.sv charges 7 (see vram_wait_now)
     initial void'($value$plusargs("gwt=%d", tb_gwt));
     int tb_gw = 5;   // Chipset.sv charges 5 (see vram_wait_now)
     initial void'($value$plusargs("gw=%d", tb_gw));
@@ -3451,7 +3455,6 @@ module tb_mem_perf;
         $fflush;
         $finish;
     end
-
 endmodule
 
 `default_nettype wire

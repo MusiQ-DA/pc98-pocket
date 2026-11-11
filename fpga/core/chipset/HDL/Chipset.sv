@@ -296,6 +296,10 @@ module CHIPSET #(
         // which still carries residue from legs and DMA drains -- can
         // pace the accept but never invent one.
         output  logic           sdram_rd_ready,
+        // The graphics sequencer would take a GVRAM word write whole now
+        // (pc98_gvram_seq gv_word_ok) -- cpu_bus_bridge drains a queued
+        // GVRAM word as one pair while it is high.
+        output  logic           gv_word_ok,
         // fdd_ramimg's SDRAM carve-out port, straight through to u_RAM's port E.
         input   logic           ramimg_req,
         input   logic           ramimg_we,
@@ -665,6 +669,7 @@ module CHIPSET #(
     logic [15:0] gvwb_wdata;
     // Port G's write lanes (the interleave's byte-lane writes).
     logic [1:0]  gvwb_wmask;
+    logic [3:0]  gvwb_len;
     assign pf_beat_v = ram_pf_beat_v & ~seq_pf_beat;
     pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_gvram_seq (
         // GV_IL stage 2 (docs/GVRAM_PLANE_INTERLEAVE.md): the RMW line
@@ -717,7 +722,8 @@ module CHIPSET #(
         .pf_beat_v(ram_pf_beat_v), .pf_beat_dat(pf_beat_dat),
         .pf_beat_seq(seq_pf_beat),
         .gvwb_req(gvwb_req), .gvwb_addr(gvwb_addr), .gvwb_wdata(gvwb_wdata),
-        .gvwb_wmask(gvwb_wmask),
+        .gvwb_wmask(gvwb_wmask), .gvwb_len(gvwb_len),
+        .gv_word_ok(gv_word_ok),
         .gvwb_ack(gvwb_ack), .gvwb_done(gvwb_done), .gvwb_wcnt(cachef_wcnt),
         .gvwb_we(gvwb_we), .gvwb_rvalid(gvwb_rvalid), .gvwb_rdata(gvwb_rdata),
         .gv_a_quiet(gv_a_quiet),
@@ -795,11 +801,21 @@ module CHIPSET #(
     // reference -- and no CPU-side wait can pull them into the 0.95-1.05
     // band. The nominal np21w-derived values stay. The EGC is not posted
     // and stays at 0.
+    // gvram-il-speed: GVRAM writes now post in cpu_bus_bridge, a plain or
+    // TDW word drains as ONE pair (RAM.sv's three-beat interleaved word,
+    // the sequencer's port-G tile burst), so plain VRAM and TDW are CPU-
+    // priced again and the wait is what sets them: plain 6 -> 1.00 at
+    // 8/10/12 MHz; TDW takes 7, np21w's MEMWAIT_GRCG 8/1 averaged over the
+    // frame as the cycle table's reference does (4 measured 0.71, 7 1.00,
+    // 8 1.10 at 8/10 MHz). RMW still drains as byte pairs (the sequencer's
+    // word batch is not trusted on the line buffer) and stays at 5:
+    // 0.99/1.05/1.17 -- 12 MHz is the bridge's byte-pair rate, and a
+    // larger wait only moves 8/10 MHz (8 -> 1.10/1.10/1.17).
     wire grcg_rmw_only = grcg_active & grcg_rmw & ~egc_live;
     wire grcg_tdw_only = grcg_active & ~grcg_rmw & ~egc_live;
     assign vram_wait_now = {pc98_analog,
                             grcg_rmw_only ? (VID_VBlank ? 4'd1 : 4'd5)
-                          : grcg_tdw_only ? (VID_VBlank ? 4'd1 : 4'd4)
+                          : grcg_tdw_only ? (VID_VBlank ? 4'd1 : 4'd7)
                           : accel_hit     ? 4'd0
                           : VID_VBlank    ? 4'd1 : 4'd6};
     wire vram_hit = (address[19:16] == 4'hA && address[15])   // A8000-AFFFF
@@ -862,6 +878,7 @@ module CHIPSET #(
         .gvwb_addr                          (gvwb_addr),
         .gvwb_wdata                         (gvwb_wdata),
         .gvwb_wmask                         (gvwb_wmask),
+        .gvwb_len                           (gvwb_len),
         .gvwb_ack                           (gvwb_ack),
         .gvwb_done                          (gvwb_done),
         .gvwb_we                            (gvwb_we),

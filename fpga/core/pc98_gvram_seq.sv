@@ -175,6 +175,9 @@ module pc98_gvram_seq #(
     input  wire [15:0] gvwb_rdata,
     input  wire        gv_a_quiet,       // RAM.sv: nothing of port A pending
     output reg  [23:0] gvwb_addr,
+    // Port G's burst length, words - 1: 15 for the line fills, prefetches
+    // and write-backs, 1 / 3 for a TDW tile burst (S_TG).
+    output wire [3:0]  gvwb_len,
     output wire [15:0] gvwb_wdata,
     // Write lanes for the port-G write-back, driven combinationally per
     // beat on gvwb_wcnt like gvwb_wdata: a beat writes the lanes of the
@@ -248,6 +251,15 @@ module pc98_gvram_seq #(
     // a raw request, or the EGC stealing it -- and every-else-set-but-here
     // means egc_on fired on egc_active (slot 0x32's accel view).
     output wire [7:0]  dbg,
+    // A GVRAM word write arriving now would be taken whole: plain page-0
+    // VRAM passes through to RAM.sv (its interleaved three-beat word), and
+    // a GRCG TDW goes out as one port-G tile burst (S_TG) that lays both
+    // offsets at once. RMW, the EGC, page-1 plain walks and the buffer-off
+    // A/B (whose TDW walk would take the long-dead word batch) all still
+    // want byte cycles. cpu_bus_bridge drains a queued GVRAM word as one
+    // pair while this is high; it is live register state, and every input
+    // that moves it is an OUT the bridge serialises behind its queue.
+    output wire        gv_word_ok,
     // JTAG probe (PC98_JTAG): the wedge tap's sequencer view --
     //   [15] expand -- the access on the pins is being walked (or a svc op
     //         owns the FSM), so a guest pass-through strobe is parked
@@ -280,7 +292,9 @@ module pc98_gvram_seq #(
                      S_WRW  = 4'd4,   // wait for it
                      S_DONE = 4'd5,
                      S_EVT2 = 4'd6,   // a word read's second lane event
-                     S_RBH  = 4'd7;   // RMW line-buffer hit: its M10K word lands
+                     S_RBH  = 4'd7,   // RMW line-buffer hit: its M10K word lands
+                     S_TG   = 4'd8,   // TDW tile burst: wait for port G
+                     S_TGW  = 4'd9;   // ... and for its completion
 
     reg [3:0] st;
     reg [1:0] gp;             // which plane
@@ -910,13 +924,42 @@ module pc98_gvram_seq #(
     wire        pt_blk   = (fl_hold | fl_hold_q) & window;
     wire        wb_skip  = wb_on & rb_upd_w & ~rmwbuf_off;
     wire [16:0] fl_tag   = rb_tag[fl_s];
-    assign gvwb_wdata = stg[gvwb_wcnt[3:0]];
+    // ------------------------------------------------------------------
+    // TDW TILE BURST (S_TG). Under GV_IL a guest offset's four plane bytes
+    // are two adjacent SDRAM words ({R,B}, {G,E}), so a GRCG TDW write --
+    // every unmasked plane takes its tile, nothing is read -- is ONE
+    // port-G write burst: two beats for a byte, four for a word (offsets
+    // n, n+1), the masked planes' lanes DQM-closed. The plane walk did a
+    // port-A write per plane (three to four arbitrations per byte, ~24
+    // clocks a byte at 12 MHz: TDW 1.26-1.41x np21w). The data and lanes
+    // are registered at the issue (tg_w*/tg_m*) and held for the burst.
+    // Ordering is the line fill's: issue waits for gv_a_quiet (no older
+    // port-A write can land after it) and for port G to be free, and the
+    // FSM holds every later access -- posted (pw_hold) or not -- until
+    // gvwb_done, so nothing behind it can pass it either. The line buffer
+    // was emptied by the TDW strobe itself (fl_want_all, then rb_v cleared
+    // at the arm). Buffer-off (slot 0x09 [27]) keeps the plane walk.
+    // ------------------------------------------------------------------
+    reg         tg_busy;
+    reg         tg_len3;
+    reg  [15:0] tg_w0, tg_w1;
+    reg  [1:0]  tg_m0, tg_m1;
+    wire        tg_arm = RMWBUF & ~rmwbuf_off & cpu_wr & ~cpu_rd & grcg_here
+                       & ~grcg_rmw & ~egc_here & ~(cpu_word & cpu_addr[0]);
+    wire        tg_go  = gv_a_quiet & ~gvwb_req & ~fl_busy & ~pf_busy & ~rb_leg;
+    assign gvwb_len   = tg_busy ? (tg_len3 ? 4'd3 : 4'd1) : 4'd15;
+    assign gv_word_ok = ~(EGC & egc_active)
+                      & (grcg_active ? (~grcg_rmw & RMWBUF & ~rmwbuf_off)
+                                     : ~access_page);
+    assign gvwb_wdata = tg_busy ? (gvwb_wcnt[0] ? tg_w1 : tg_w0)
+                                : stg[gvwb_wcnt[3:0]];
     // Per-beat write lanes for the port-G write-back: even beats carry the
     // {B,R} pair (planes 0,1), odd beats {G,E} (planes 2,3); a lane is
     // written only when its plane was dirty when the engine started (fl_d),
     // so clean planes of a partially-dirty line keep their SDRAM bytes.
-    assign gvwb_wmask = gvwb_we
-        ? (gvwb_wcnt[0] ? {fl_d[3], fl_d[2]} : {fl_d[1], fl_d[0]}) : 2'b11;
+    assign gvwb_wmask = !gvwb_we ? 2'b11
+        : tg_busy ? (gvwb_wcnt[0] ? tg_m1 : tg_m0)
+        : (gvwb_wcnt[0] ? {fl_d[3], fl_d[2]} : {fl_d[1], fl_d[0]});
     // the copy owns the read port on clocks the FSM does not read the banks
     wire        cp_own   = fl_busy & (fl_ph == 2'd0) & (fl_i != 5'd16)
                          & ((st == S_IDLE) | (st == S_RDW & rb_leg & ~gf_sent));
@@ -1075,6 +1118,7 @@ module pc98_gvram_seq #(
             fl_d      <= 4'h0;
             gvwb_req  <= 1'b0;
             gvwb_we   <= 1'b0;
+            tg_busy   <= 1'b0;
             wb_age    <= 7'd0;
             disp_q    <= 1'b0;
             flip_pend <= 1'b0;
@@ -1302,6 +1346,8 @@ module pc98_gvram_seq #(
                     else if (grcg_rmw && cur_wdata == 8'h00
                              && (!cpu_word || cpu_wdata_hi == 8'h00))
                         st <= S_DONE;
+                    else if (tg_arm)
+                        st <= S_TG;
                     else
                         st <= grcg_rmw ? S_RD : S_WR;
                 end else if (svc_req_s && !svc_done && !fl_hold) begin
@@ -1637,6 +1683,24 @@ module pc98_gvram_seq #(
                     lo_ans <= egc_src[egc_rd_plane][7:0];
                     if (!(cpu_rd | cpu_wr)) st <= S_IDLE;
                 end else if (!(cpu_rd | cpu_wr)) st <= S_IDLE;
+              end
+
+              // ---- TDW tile burst (see TDW TILE BURST) ------------------
+              S_TG: if (tg_go) begin
+                gvwb_req  <= 1'b1;
+                gvwb_we   <= 1'b1;
+                gvwb_addr <= {7'h30, g_page, op_addr[14:0], 1'b0};
+                tg_busy   <= 1'b1;
+                tg_len3   <= is_word;
+                tg_w0     <= {g_tile[1], g_tile[0]};
+                tg_w1     <= {g_tile[3], g_tile[2]};
+                tg_m0     <= {~g_mask[1], ~g_mask[0]};
+                tg_m1     <= {~g_mask[3] & analog_mode, ~g_mask[2]};
+                st        <= S_TGW;
+              end
+              S_TGW: if (gvwb_done) begin
+                tg_busy <= 1'b0;
+                st      <= S_DONE;
               end
 
               default: st <= S_IDLE;
