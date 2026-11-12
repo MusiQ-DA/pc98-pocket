@@ -720,8 +720,8 @@ module pc98_gvram_seq #(
     // (~mru). That lets the older line's write-back run on port G while
     // the walk carries on in the newer one. Validity is whole-line
     // (rb_v = 4'hF): a fill or prefetch installs all four planes at once.
-    (* ramstyle = "M10K" *) reg [15:0] rbW0 [0:31];
-    (* ramstyle = "M10K" *) reg [15:0] rbW1 [0:31];
+    (* ramstyle = "M10K, no_rw_check" *) reg [15:0] rbW0 [0:31];
+    (* ramstyle = "M10K, no_rw_check" *) reg [15:0] rbW1 [0:31];
     reg  [15:0] rbq0, rbq1;
     reg  [3:0]  rb_v   [0:1];
     reg  [16:0] rb_tag [0:1];
@@ -976,16 +976,34 @@ module pc98_gvram_seq #(
                          : {ws, rb_off[3:1],
                             ((st == S_WRW) || (wb_on && st == S_WR
                              && (!rb_upd_w || !pf_bw))) ? gp_nx[1] : gp[1]};
+    // write-forward: a merge and the next plane's read name the SAME
+    // bank word when a chain pairs planes (B then R, G then E) --
+    // M10K same-address reads land as OLD data, so feed the written
+    // word straight into the register instead (NEON's red ghost,
+    // buffer edition).
+    //
+    // The forward is kept OUTSIDE the RAM's read register: the read itself
+    // is the plain `q <= mem[ra]` the M10K inference wants, and the
+    // collision select lives in two flops beside it (fwd*/fwd_d*), muxed
+    // after. Same value on every clock as the old
+    // `rbq <= collide ? wd : mem[ra]` -- which Quartus rejected as
+    // "asynchronous read logic" and built as 1024 flip-flops with their
+    // any-address read muxes instead (~500 ALMs).
+    reg  [15:0] rbm0, rbm1, fwd_d0, fwd_d1;
+    reg         fwd0, fwd1;
     always @(posedge clk) begin
         if (b0_we) rbW0[b0_wa] <= b0_wd;
         if (b1_we) rbW1[b1_wa] <= b1_wd;
-        // write-forward: a merge and the next plane's read name the SAME
-        // bank word when a chain pairs planes (B then R, G then E) --
-        // M10K same-address reads land as OLD data, so feed the written
-        // word straight into the register instead (NEON's red ghost,
-        // buffer edition).
-        rbq0 <= (b0_we && b0_wa == rb_ra) ? b0_wd : rbW0[rb_ra];
-        rbq1 <= (b1_we && b1_wa == rb_ra) ? b1_wd : rbW1[rb_ra];
+        rbm0   <= rbW0[rb_ra];
+        rbm1   <= rbW1[rb_ra];
+        fwd0   <= b0_we && (b0_wa == rb_ra);
+        fwd1   <= b1_we && (b1_wa == rb_ra);
+        fwd_d0 <= b0_wd;
+        fwd_d1 <= b1_wd;
+    end
+    always_comb begin
+        rbq0 = fwd0 ? fwd_d0 : rbm0;
+        rbq1 = fwd1 ? fwd_d1 : rbm1;
     end
 
     // A buffer fill is a pair of port-G bursts; pass-through keeps the
