@@ -74,6 +74,11 @@ jobs:
         # of the pc98_scsi mailbox and the dataslot engine.
         run: ./scripts/sim_scsi_fw.sh
 
+      - name: the floppy service mounts a 2HD D88 whole and reads every LBA back
+        # firmware/fdd_service.c itself, built for the host against a model
+        # of floppy.v's mgmt registers and the dataslot engine.
+        run: ./scripts/sim_fdd_fw.sh
+
       - name: SDRAM controller — integrity and single-port bandwidth
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_sdram_mp \
