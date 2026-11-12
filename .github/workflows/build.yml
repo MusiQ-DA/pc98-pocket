@@ -485,6 +485,17 @@ jobs:
           ./obj_gdc_s/g | tee gdc_s.log
           grep -q "PASS tb_pc98_gdc" gdc_s.log
 
+      - name: a stopped master GDC hides the text plane (INT 18h AH=0Dh)
+        run: |
+          # Dynamo's title: np21w gdc_work clears GDCSCRN_ENABLE on STOP,
+          # the core kept drawing the DOS banner. Real master GDC + gate.
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_text_gate \
+            -Isim -I$S sim/tb_pc98_text_gate.sv $S/pc98_gdc.sv \
+            $S/pc98_text_gate.sv -o tg --Mdir obj_tgate
+          ./obj_tgate/tg | tee tgate.log
+          grep -q "RESULT: PASS tb_pc98_text_gate" tgate.log
+
       - name: the CRT interrupt follows np21w's vsyncint lifecycle, end to end
         run: |
           # Whole-PERIPHERALS bench: the real 8259 pair, the real raster, the
