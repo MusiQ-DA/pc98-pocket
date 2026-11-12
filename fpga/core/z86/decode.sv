@@ -1063,6 +1063,17 @@ function automatic reg_mask_t build_wr_mask();
     // Stack operations sets stackop bit at write time
     m.stackop = ii.is_stack_op;
 
+    // PC-98 port: an OUT also holds back the next decode-time MEMORY read
+    // (and OUT imm8,AL -- E6 -- was missing from the IN check below). Bank
+    // registers change what memory reads return: OUT 08E1h (an EMS window)
+    // then MOV AL,[window] read the window on the bus BEFORE the OUT, since
+    // EX's store request trails decode's read by an edge
+    // (sim/z86_tests/ems_np21w.asm, r2).
+    if (id_opcode==8'hE6 || id_opcode==8'hE7 || id_opcode==8'hEE || id_opcode==8'hEF ||
+        id_opcode==8'h6E || id_opcode==8'h6F) begin
+        m.io  = 1'b1;
+        m.mem = 1'b1;
+    end
     if ((id_opcode==8'hE7 || id_opcode==8'hE8 || id_opcode==8'hEE || id_opcode==8'hEF || id_opcode==8'h6E || id_opcode==8'h6F) ||  // OUT/OUTS
         id_opcode[7:4]=='h7 || (id_opcode==8'hE8 || id_opcode==8'hE9 || id_opcode==8'hEA || id_opcode==8'hEB)) begin       // JMP/CALL, TODO: also need RET and 0xFF
         m.io = 1'b1;

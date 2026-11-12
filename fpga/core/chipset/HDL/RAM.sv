@@ -107,6 +107,11 @@ module RAM #(
     output  logic           sdram_dq_io,
     output  logic           sdram_ldqm,
     output  logic           sdram_udqm,
+     // EMS (pc98_ems98): {mapped, SDRAM word[22:14]} per window of
+     // C0000-CFFFF, window 3 in the top ten bits. A mapped window banks
+     // onto the 286's extended memory at word 0x800000 up (bit 23 is
+     // implied); an unmapped one leaves the window to the map's hole.
+     input  logic   [39:0]  ems_map,
      // BIOS
      input  logic    [1:0]  bios_protect_flag,
     // Font bank: while set, guest addresses are redirected above the machine's
@@ -244,8 +249,8 @@ module RAM #(
     state_t         state;
     state_t         next_state;
     // 24 bits of word address: GVRAM's interleave at 0x600000 needs bits
-    // 22:21. (The 286's extended memory at 0x800000-0xFFFFFF never comes
-    // through here: it is z86_cache's, on port F.)
+    // 22:21, the EMS windows (the 286's extended memory, 0x800000-0xFFFFFF,
+    // otherwise z86_cache's on port F) bit 23.
     logic   [23:0]  latch_address;
     logic   [7:0]   latch_data;
     logic   [7:0]   latch_data_hi;
@@ -338,8 +343,13 @@ module RAM #(
     // needs the same answer one step earlier -- see that file.
 `include "pc98_sdram_map.svh"
 
+    // The EMS windows sit in C0000-CFFFF, which the flat map leaves open on
+    // purpose -- so a mapped window has to select the SDRAM by itself.
+    wire [9:0] ems_ent = ems_map[address[15:14]*10 +: 10];
+    wire       ems_win = (address[19:16] == 4'hC) && ems_ent[9];
     assign ram_address_select_n = ~(enable_sdram && (gvram_page1_flag
-                                         || pc98_sdram_hits(address, analog_mode)));
+                                         || pc98_sdram_hits(address, analog_mode)
+                                         || ems_win));
 	 
 
     // The ITF bank. F8000-FFFFF, 32 KB, mapped to the shadow copy at 1F8000
@@ -393,6 +403,10 @@ module RAM #(
         else if (font_bank_flag)
             // 0x400000 upward: clear of the guest megabyte and ITF shadow.
             latch_address   = {1'b0, 1'b1, 2'b00, address};
+        else if (ems_win)
+            // A mapped EMS window: 0x800000 + (t-1) MB + page, the guest's
+            // low fourteen bits on top.
+            latch_address   = {1'b1, ems_ent[8:0], address[13:0]};
         else
             latch_address   = {3'b000, bios_shadow_select, address};
     end

@@ -121,7 +121,7 @@ module tb_z86_loop;
 `else
     z86 #(.WCOMB(1'b1)) u (
 `endif.clk(zclk), .reset(reset), .clk_free(clk), .ce(zce), .cache_en(nocache == 0), .pace(pace_r), .pace_ce(pace_ce_r), .pace_rd_wait(pace_w), .pace_wr_wait(pace_w), .pace_vwait(5'd0), .dx(dx_r),
-           .bios_shadow(1'b0), .bios_protect(1'b0), .ext_en(ext_en_r),
+           .bios_shadow(1'b0), .bios_protect(1'b0), .ext_en(ext_en_r), .a_quiet(1'b1),
            .f_req(f_req), .f_we(f_we), .f_addr(f_addr), .f_len(f_len),
            .f_wdata0(f_wd0), .f_wdata1(f_wd1), .f_ack(f_ack), .f_rvalid(f_rvalid),
            .f_rdata(f_rdata), .f_done(f_done), .f_wcnt(f_wcnt), .sn_v(sn_v), .sn_addr(sn_addr), .sn_len(sn_len),

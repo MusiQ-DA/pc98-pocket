@@ -65,7 +65,7 @@ module tb_ext_access;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
-        .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
+        .ems_map(40'd0), .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(1'b1),
         .ram_read_wait_cycle(2'd0), .ram_write_wait_cycle(2'd0), .vram_rd_wait_cycle(4'h0), .vram_wr_wait_cycle(4'h0),
         .ramimg_req(1'b0), .ramimg_we(1'b0), .ramimg_addr(24'h0),

@@ -183,6 +183,10 @@ module CHIPSET #(
         output  logic           sdram_dq_io,
         output  logic           sdram_ldqm,
         output  logic           sdram_udqm,
+        // EMS bank registers (pc98_ems98, np21w io/emsio.c): emsio.maxmem,
+        // the extended-memory size in MB -- core_top's EXT_MB with the OSD's
+        // Ext Memory on, 0 with it None.
+        input   logic   [3:0]   ems_maxmem,
         // BIOS
         input  logic    [1:0]   bios_protect_flag,
         // FDD
@@ -332,7 +336,10 @@ module CHIPSET #(
         output  logic    [4:0]  cachef_wcnt,
         output  logic           ram_wr_snoop_v,
         output  logic   [23:0]  ram_wr_snoop_addr,
-        output  logic   [3:0]   ram_wr_snoop_len
+        output  logic   [3:0]   ram_wr_snoop_len,
+        // RAM.sv's gv_a_quiet, for z86_cache: an EMS window store has
+        // committed once port A is quiet again.
+        output  logic           ram_a_quiet
 
     );
 
@@ -363,6 +370,11 @@ module CHIPSET #(
     // address the BIOS left in the channel, landing on guest memory.
     wire            DRQ0 = 1'b0;
 
+    // EMS (pc98_ems98): ports 08E1h-08E9h bank four 16 KB windows at
+    // C0000-CFFFF onto the 286's own extended memory (SDRAM 0x800000 up,
+    // the same words z86_cache maps linear 100000h onto).
+    logic   [39:0]  ems_map;
+    logic   [7:0]   ems_status;
     logic           fdd_dma_req;
 
 
@@ -913,6 +925,7 @@ module CHIPSET #(
         .sdram_dq_io                        (sdram_dq_io),
         .sdram_ldqm                         (sdram_ldqm),
         .sdram_udqm                         (sdram_udqm),
+        .ems_map                            (ems_map),
         .bios_protect_flag                  (bios_protect_flag),
         .wait_count_clk_en                  (wait_count_clk_en),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
@@ -943,7 +956,23 @@ module CHIPSET #(
     assign  dbg_chipset2 = {processor_ready, memory_access_ready, dma_ready,
                             dma_acknowledge_n[3:0], no_command_state};
 
+    // The EMS register half. Its port decode sits on the live bus (the
+    // PERIPHERALS convention); the window state is consumed inside RAM.sv's
+    // address latch, same clock.
+    pc98_ems98 u_ems (
+        .clock                              (clock),
+        .reset                              (reset),
+        .address                            (address[15:0]),
+        .internal_data_bus                  (internal_data_bus),
+        .io_write_n                         (io_write_n),
+        .address_enable_n                   (address_enable_n),
+        .maxmem                             (ems_maxmem),
+        .map                                (ems_map),
+        .status                             (ems_status)
+    );
+
     assign  data_bus = internal_data_bus;
+    assign  ram_a_quiet = gv_a_quiet;
 
 
 
@@ -1036,6 +1065,15 @@ module CHIPSET #(
         else if (xrom_read)
         begin
             internal_data_bus_ext = xrom_q;
+            data_bus_direction    = 1'b0;
+        end
+        // IN 08E9h: "is EMS megabyte t there". A mapped window's reads never
+        // reach here -- RAM.sv claims them (the SDRAM branch above), an
+        // unmapped one falls to the hole below.
+        else if ((~io_read_n) && (~address_enable_n)
+                 && (address[15:0] == 16'h08E9))
+        begin
+            internal_data_bus_ext = ems_status;
             data_bus_direction    = 1'b0;
         end
         // The empty option-ROM window. C0000-E7FFF is deliberately not

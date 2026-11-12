@@ -23,6 +23,7 @@
 | 0xB0000-0xB7FFF | 32KB | **G-RAM プレーン R(赤)** | SDRAM |
 | 0xB8000-0xBFFFF | 32KB | **G-RAM プレーン G(緑)** | SDRAM |
 | 0xC0000-0xDFFFF | 128KB | VRAMウィンドウ/EGC窓 | バンク窓 |
+| (うち 0xC0000-0xCFFFF) | 64KB | **EMS 窓**(np21w io/emsio.c 方式、4×16KB、拡張メモリそのものへバンク。未マップ時は空き窓=0xFF) | SDRAM 0x800000-(拡張メモリと同一) |
 | 0xE0000-0xE7FFF | 32KB | **G-RAM プレーン E(輝度) — アナログ(16色)モードのときだけ存在** | 未実装 |
 | 0xE8000-0xFFFFF | 96KB | BIOS+ITF ROM(bios.rom) | BRAM/SDRAM |
 | 0x100000-0x8FFFFF | 8MB | **80286 拡張メモリ**(A20 ゲート OUT F2h/F0h、OSD「Ext Memory」で None/8 MB)。0x900000 以上は穴(読み 0xFF、書き捨て)(下記) | SDRAM 0x800000-0xFFFFFF(z86_cache port F) |
@@ -79,8 +80,13 @@
 > ときの 0x100000 以上は穴(読み 0xFF・書き捨て・低位への折り返しなし)なので、
 > ITF の保護モードメモリカウント(F9327 ループ、128 KB 単位で 0:0401h)は
 > 8 MB = 0x40、None = 0 を数える。HIMEM/FDXMS286 と DOS=HIGH(HMA)はこれを使う。
-> 旧 NEC 型 EMS ボード(0x08E1-0x08E9、C0000-CFFFF 窓)は撤去済み —
-> C0000-CFFFF は空き窓(0xFF)。SDRAM 上の他の領域(ゲスト 1 MB + ITF シャドウ
+> EMS は np21w 方式(`pc98_ems98.sv`、`io/emsio.c`):OUT 08E1/3/5/7h で窓 0-3
+> (C0000/C4000/C8000/CC000)に `addr = (t<<20) + ((page&0xFC)<<12)` —
+> **CPU 自身の拡張メモリ**(別プールなし、t MB = リニア t MB)を割り当てる。
+> OUT 08E9h が t(dat&0x0F)、IN 08E9h は 1≤t≤maxmem で 0x00、他は 0xFF。
+> maxmem は np21w emsio_reset どおり拡張メモリ容量(8 MB → 8、None → 0 で
+> ポート不活性)。リセット時と t=0 のページ書込みは窓をアンマップ(空き窓
+> 0xFF、POST のオプション ROM スキャンを守る)、t>maxmem の書込みは無視。SDRAM 上の他の領域(ゲスト 1 MB + ITF シャドウ
 > 〜0x1FFFFF、フォント 0x400000、GVRAM 0x600000-0x61FFFF、FDD carve-out
 > 0x620000-0x753FFF)とは非衝突。
 
