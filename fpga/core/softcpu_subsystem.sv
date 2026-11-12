@@ -175,6 +175,31 @@ module softcpu_subsystem (
     end
 
     //
+    // The 0x2000_0000 status word (buttons, the docked-key picker tap, the
+    // OSD request, dataslots_ready) comes from clk_sys registers that change
+    // whenever their own logic says -- pocket_keyboard's kbd_code/kbd_ext/
+    // kbd_stb on any USB make. Read raw, a change on the clk_sys edge that
+    // IS the clk_pico edge races the capture: clk_pico leaves a fabric
+    // register, so it reaches the softcore ~6 ns after clk_sys, and that
+    // skew is the -2.2 ns clk_pico hold violation CI #1121 reported
+    // (kbd_code[3] -> picorv32 decoded_imm_j/reg_out); a fit that pads it
+    // still lets one read see a new kbd_stb beside the old kbd_code.
+    //
+    // So the word is re-registered on clk_sys at ONE fixed phase of clk_div,
+    // all 32 bits on the same edge. clk_pico rises on the clk_sys edge that
+    // takes clk_div 0 -> 1; cont1_word updates on the 2 -> 3 edge, two
+    // clk_sys cycles after one clk_pico edge and four before the next. Every
+    // read therefore sees one coherent snapshot (stb and code from the same
+    // instant), and core_constraints.sdc times these registers against
+    // clk_pico with the real 4-cycle setup / 2-cycle hold window.
+    reg [31:0] cont1_word;
+    always @(posedge clk_sys) begin
+        if (clk_div == 3'd2)
+            cont1_word <= {3'd0, dock_key_stb, dock_key_ext, dataslots_ready,
+                           osd_open_req, 1'b0, dock_key_code, cont1_key};
+    end
+
+    //
     // PicoRV32 CPU. RV32IM: the firmware is built for -march=rv32im with no
     // libgcc, so the CPU must provide both the multiplier and the divider. No
     // compressed ISA, no interrupts.
@@ -504,7 +529,7 @@ module softcpu_subsystem (
         if (sel_status && cpu_mem_ready && (cpu_mem_addr == 32'h2000_0000)
             && (cpu_mem_wstrb == 4'b0000))
             pico_poll_cnt <= pico_poll_cnt + 8'd1;
-        pico_osd_seen  <= pico_osd_seen  | osd_open_req;
+        pico_osd_seen  <= pico_osd_seen  | cont1_word[25];   // osd_open_req, staged
         pico_trap_seen <= pico_trap_seen | cpu_trap;
     end
     assign dbg_pico = {pico_fetch_cnt, pico_poll_cnt,
@@ -1148,7 +1173,7 @@ module softcpu_subsystem (
         casez (cpu_mem_addr)
             32'h0???_????: cpu_mem_rdata = rom_rdata;
             32'h1???_????: cpu_mem_rdata = ram_rdata;
-            32'h2000_0000: cpu_mem_rdata = {3'd0, dock_key_stb, dock_key_ext, dataslots_ready, osd_open_req, 1'b0, dock_key_code, cont1_key};
+            32'h2000_0000: cpu_mem_rdata = cont1_word;   // staged above
             32'h2000_0018: cpu_mem_rdata = {6'd0, raster_h, 6'd0, raster_w};
 
             32'h3???_????: cpu_mem_rdata = fdd_rdata;

@@ -62,6 +62,19 @@ foreach f {sta_pico_hold_in.txt sta_pico_hold_out.txt} {
     }
 }
 
+# Hold INTO the chipset clock at this (slow 85C) corner: #1121's summary had
+# general[0] at -0.465 here while the fast-corner report below was clean, so
+# the endpoints only show up in a slow-corner report.
+report_timing -nworst 20 -hold -to_clock $cpuclk \
+  -detail full_path -file sta_cpu_hold_slow.txt
+if {[file exists sta_cpu_hold_slow.txt]} {
+    set fh [open sta_cpu_hold_slow.txt]; set n 0
+    while {[gets $fh line] >= 0 && $n < 120} {
+        if {[regexp {^; (Slack|From Node|To Node|Launch Clock|Latch Clock|Clock Skew|Data Arrival Time) } $line]} { puts "cpu_hold_slow: $line"; incr n }
+    }
+    close $fh
+}
+
 # Hold inside the CPU domain at the fast corner -- where the summary's
 # worst hold slack is. The z86 sits on the gated zet_clk, so a hold red
 # here is a clk -> zet_clk skew path; print its endpoints into the log.
