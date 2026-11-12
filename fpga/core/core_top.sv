@@ -1090,17 +1090,24 @@ module core_top #(
     assign fdd_req_fw   = mgmt_req[7:6];
 `endif
 
-    // Floppy image size arrives in the dataslot-update event (bytes); latch it per drive.
-    // A hot-swapped floppy delivers its new size in the same event, so it is race-free with
-    // the media-change edge below. HDD and Settings sizes instead come from the datatable
-    // by id in firmware (they load only at boot / core restart).
+    // Disk image size arrives in the dataslot-update event (bytes); latch it per drive.
+    // A hot-swapped image delivers its new size in the same event, so it is race-free with
+    // the rebind edge below. The hard disk (slot 5) takes the same path as the floppies:
+    // its datatable entry is NOT a bind -- with data.json bit9 the Pocket persists the
+    // last pick and writes that file's size into the datatable at every core launch, but
+    // sends no update, so a datatable read mounted a disk the user never picked this
+    // session. Only the update event (a real pick in the menu) mounts. Settings still
+    // reads its size from the datatable by id in firmware.
     reg [31:0] fdd0_slot_bytes_74a = 32'd0;
     reg [31:0] fdd1_slot_bytes_74a = 32'd0;
+    reg [31:0] hdd0_slot_bytes_74a = 32'd0;
     always @(posedge clk_74a) begin
         if (dataslot_update && dataslot_update_id == 16'd3)
             fdd0_slot_bytes_74a <= dataslot_update_size;
         if (dataslot_update && dataslot_update_id == 16'd4)
             fdd1_slot_bytes_74a <= dataslot_update_size;
+        if (dataslot_update && dataslot_update_id == 16'd5)
+            hdd0_slot_bytes_74a <= dataslot_update_size;
     end
 
     // A floppy (re)bind arrives as a dataslot update (fires even on a same-size swap).
@@ -1108,12 +1115,14 @@ module core_top #(
     // re-asserts media-change (edge, not level: the pulse spans several cycles).
     reg        fdd0_rebind_74a   = 1'b0;
     reg        fdd1_rebind_74a   = 1'b0;
+    reg        hdd0_rebind_74a   = 1'b0;
     reg        dataslot_update_d = 1'b0;
     always @(posedge clk_74a) begin
         dataslot_update_d <= dataslot_update;
         if (dataslot_update && !dataslot_update_d) begin
             if (dataslot_update_id == 16'd3) fdd0_rebind_74a <= ~fdd0_rebind_74a;
             if (dataslot_update_id == 16'd4) fdd1_rebind_74a <= ~fdd1_rebind_74a;
+            if (dataslot_update_id == 16'd5) hdd0_rebind_74a <= ~hdd0_rebind_74a;
         end
     end
 
@@ -1129,6 +1138,12 @@ module core_top #(
         .o   (fdd1_slot_bytes),
         .clk (clk_chipset)
     );
+    wire [31:0] hdd0_slot_bytes;
+    synch_3 #(.WIDTH(32)) s_hdd0_size (
+        .i   (hdd0_slot_bytes_74a),
+        .o   (hdd0_slot_bytes),
+        .clk (clk_chipset)
+    );
     wire [31:0] fdd0_disk_sectors = fdd0_slot_bytes >> 9;   // bytes / 512
     wire [31:0] fdd1_disk_sectors = fdd1_slot_bytes >> 9;   // bytes / 512
 
@@ -1142,6 +1157,12 @@ module core_top #(
     synch_3 s_fdd1_rebind (
         .i   (fdd1_rebind_74a),
         .o   (fdd1_rebind),
+        .clk (clk_chipset)
+    );
+    wire hdd0_rebind;
+    synch_3 s_hdd0_rebind (
+        .i   (hdd0_rebind_74a),
+        .o   (hdd0_rebind),
         .clk (clk_chipset)
     );
 
@@ -1215,12 +1236,14 @@ module core_top #(
         .fdd_request                (fdd_req_fw),
         .fdd0_disk_size             (fdd0_disk_sectors),
         .fdd1_disk_size             (fdd1_disk_sectors),
+        .hdd0_disk_bytes            (hdd0_slot_bytes),
         .datatable_addr             (datatable_addr),
         .datatable_data             (datatable_data),
         .datatable_wren             (datatable_wren),
         .datatable_q                (datatable_q),
         .fdd0_rebind                (fdd0_rebind),
         .fdd1_rebind                (fdd1_rebind),
+        .hdd0_rebind                (hdd0_rebind),
         .mgmt_addr                  (mgmt_addr),
         .mgmt_dout                  (mgmt_dout),
         .mgmt_wr                    (mgmt_wr),

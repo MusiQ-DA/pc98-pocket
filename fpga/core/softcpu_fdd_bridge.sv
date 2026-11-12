@@ -51,17 +51,20 @@ module softcpu_fdd_bridge #(
     // Mounted floppy image size in sectors, per drive (from the dataslot-update event)
     input  wire [31:0] fdd0_disk_size,
     input  wire [31:0] fdd1_disk_size,
+    // Hard-disk image size in bytes, same event path (slot 5)
+    input  wire [31:0] hdd0_disk_bytes,
 
-    // Datatable port A (clk_pico): the firmware reads the HDD and Settings slot sizes by
+    // Datatable port A (clk_pico): the firmware reads the Settings slot size by
     // matching id, and re-declares the Settings size, through this window.
     output wire  [9:0] datatable_addr,
     output wire [31:0] datatable_data,
     output wire        datatable_wren,
     input  wire [31:0] datatable_q,
 
-    // Per-floppy-drive image-rebind toggle (flips on every dataslot update), clk_sys
+    // Per-drive image-rebind toggle (flips on every dataslot update), clk_sys
     input  wire        fdd0_rebind,
     input  wire        fdd1_rebind,
+    input  wire        hdd0_rebind,
 
     // Management-bus master to floppy.v via CHIPSET, clk_sys
     output wire [15:0] mgmt_addr,
@@ -283,7 +286,8 @@ module softcpu_fdd_bridge #(
                 8'h34:   cpu_rdata = {28'd0, tds_err, tds_done};
                 8'h3C:   cpu_rdata = fdd0_disk_size;
                 8'h40:   cpu_rdata = fdd1_disk_size;
-                8'h50:   cpu_rdata = {30'd0, fdd1_rebind, fdd0_rebind};
+                8'h44:   cpu_rdata = hdd0_disk_bytes;
+                8'h50:   cpu_rdata = {29'd0, hdd0_rebind, fdd1_rebind, fdd0_rebind};
                 8'h58:   cpu_rdata = datatable_q;
                 default: cpu_rdata = 32'd0;
             endcase
