@@ -153,7 +153,7 @@ jobs:
             sim/tb_mem_perf.sv \
             $K/RAM.sv $K/Ready.sv $K/ce_generator.sv $K/i8288/HDL/i8288.sv \
             $S/sdram_shim.sv $S/sdram_mp.sv \
-            $S/pc98_gvram_seq.sv $S/pc98_grcg.sv $S/pc98_egc.sv \
+            $S/pc98_gvram_seq.sv $S/pc98_grcg.sv $S/pc98_egc.sv $S/pc98_ems98.sv \
             $S/pc98_gdc_mode2.sv \
             $S/pc98_gvram_display.sv $S/pc98_video_timing.sv \
             sim/sdram_board_model.sv sim/sdram_model.sv \
@@ -183,6 +183,14 @@ jobs:
           python3 tools/ops2prog.py sim/golden/streams/out_then_read.ops otr.hex
           ./obj_dir/perf +cursor=otr.hex +cache +analog4=1 +pfdis +speed=1 | tee perfo.log
           grep -q "=== PASS tb_mem_perf ===" perfo.log
+
+      - name: EMS windows (np21w io/emsio.c) onto the 286's extended memory
+        run: |
+          # tb_mem_perf with the shipping CPU (PM286, 8 MB): a byte through
+          # the C0000 window at t=1 page 0 reads back at linear 100000h and
+          # vice versa, IN 08E9h = 00 for t=1..8, FF otherwise; Ext None: FF.
+          IN_DOCKER=1 EMS_MDIR=obj_ems bash scripts/sim_ems.sh | tee ems.log
+          grep -q "RESULT: PASS" ems.log
 
       - name: z86 instruction pairs and interrupts, free and with priced cache hits
         run: |

@@ -1060,6 +1060,7 @@ module core_top #(
     wire        ram_wr_snoop_v;
     wire [23:0] ram_wr_snoop_addr;
     wire  [3:0] ram_wr_snoop_len;
+    wire        ram_a_quiet;            // RAM.sv: port A idle (EMS window order)
     // Driven by z86's cache (z86_cache, in u_cpu).
     wire  [1:0] fdd_req_fw;
 `ifdef PC98_JTAG
@@ -3675,6 +3676,10 @@ module core_top #(
     // clk_pico register, so -- like fdd_turbo below -- a plain wire: the
     // pico -> chipset crossing is timed (core_constraints.sdc).
     wire ext_mem_en = (osd_extmem != 2'd0);
+    // The EMS bank registers' emsio.maxmem: np21w io/emsio.c emsio_reset
+    // takes pccore.extmem, the extended-memory size, so it is EXT_MB with
+    // Ext Memory on and 0 (ports inert, 08E9h reads FFh) with it None.
+    wire [3:0] ems_maxmem = (PM286 && ext_mem_en) ? 4'(EXT_MB) : 4'd0;
 
     always @(posedge clk_chipset)
     begin
@@ -3811,6 +3816,7 @@ module core_top #(
         .sdram_dq_io                        (SDRAM_DQ_IO),
         .sdram_ldqm                         (SDRAM_DQML),
         .sdram_udqm                         (SDRAM_DQMH),
+        .ems_maxmem                         (ems_maxmem),
         .bios_protect_flag                  (bios_protect_flag),
         .mgmt_readdata                      (mgmt_din),
         .mgmt_writedata                     (cs_mgmt_dout),
@@ -3882,6 +3888,7 @@ module core_top #(
         ,.ram_wr_snoop_v                    (ram_wr_snoop_v)
         ,.ram_wr_snoop_addr                 (ram_wr_snoop_addr)
         ,.ram_wr_snoop_len                  (ram_wr_snoop_len)
+        ,.ram_a_quiet                       (ram_a_quiet)
     );
 
 `ifdef PC98_JTAG
@@ -4097,6 +4104,7 @@ module core_top #(
         .bios_shadow  (bios_shadow_flag),
         .bios_protect (bios_protect_flag[1]),
         .ext_en       (ext_mem_en),
+        .a_quiet      (ram_a_quiet),
         .f_req     (cachef_req),
         .f_we      (cachef_we),
         .f_addr    (cachef_addr),
