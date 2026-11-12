@@ -21,7 +21,7 @@ set_global_assignment -name VERILOG_MACRO "CHIPSET_HZ=42954545"
 # both switches: ENABLE_OPNA on, PC98_JTAG off (the non-JTAG build frees
 # ~4.6k ALMs, measured on measure-nojtag). The firmware follows this line
 # (firmware/Makefile reads it), so rebuild firmware.vh after flipping it.
-set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
+# set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 
 # JTAG debug build. OFF for the current fit: the SLD hub, the probe mux,
 # the write-pipe and key injection together cost enough ALMs to put the
@@ -33,7 +33,7 @@ set_global_assignment -name VERILOG_MACRO "ENABLE_OPNA=1"
 #
 # ON for the Zet build: the swap freed the headroom the V30 build could not
 # afford (slot 0x33 = last guest I/O write + count).
-# (release-opna) set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
+set_global_assignment -name VERILOG_MACRO "PC98_JTAG=1"
 
 # CPU: z86 (pipelined 286-class, fpga/core/z86) -- the only CPU in the
 # tree since Zet was removed; the PC98_Z86 select macro is gone with it.
