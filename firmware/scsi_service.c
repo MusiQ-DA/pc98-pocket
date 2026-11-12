@@ -594,6 +594,17 @@ int scsi_mount(uint32_t bytes)
     return 1;
 }
 
+// Eject: the slot was re-bound, so the classification of the old file is void
+// until the new one mounts. TEST UNIT READY answers NOT READY meanwhile (and
+// stays there if the re-bind carried no file).
+void scsi_unmount(void)
+{
+    scsi_sectors = 0;
+    scsi_bytes = 0;
+    scsi_reprobe = 0;
+    *SOFT_SCSI_MEDIA = 0;
+}
+
 void scsi_init(void)
 {
     scsi_sectors = 0;
