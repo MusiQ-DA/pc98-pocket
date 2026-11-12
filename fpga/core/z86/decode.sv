@@ -1063,10 +1063,25 @@ function automatic reg_mask_t build_wr_mask();
     // Stack operations sets stackop bit at write time
     m.stackop = ii.is_stack_op;
 
-    if ((id_opcode==8'hE7 || id_opcode==8'hE8 || id_opcode==8'hEE || id_opcode==8'hEF || id_opcode==8'h6E || id_opcode==8'h6F) ||  // OUT/OUTS
+    if ((id_opcode==8'hE6 || id_opcode==8'hE7 || id_opcode==8'hEE || id_opcode==8'hEF || id_opcode==8'h6E || id_opcode==8'h6F) ||  // OUT/OUTS
         id_opcode[7:4]=='h7 || (id_opcode==8'hE8 || id_opcode==8'hE9 || id_opcode==8'hEA || id_opcode==8'hEB)) begin       // JMP/CALL, TODO: also need RET and 0xFF
         m.io = 1'b1;
     end
+    // PC-98 port: an OUT also holds back the next decode-time MEMORY read.
+    // The OUT's bus write only leaves from EX, one clock after decode has
+    // already issued the following instruction's operand read, so without
+    // this the read went out on the bus FIRST -- and on the PC-98 an OUT
+    // routinely changes what a memory read returns: the GRCG mode/tiles
+    // (0x7C/0x7E) decide a TCR read's answer, 0xA6 picks the GVRAM page a
+    // read lands on, 0xA1/0xA3 the CG window's glyph. 3D Golf Simulation's
+    // POLYSYS loads the tiles and then reads TCR masks with LODSW: the first
+    // mask byte came back against the previous tile (sim: tb_mem_perf
+    // +cursor, tiles-then-TCR stream, ~half the reads wrong). E6 (OUT
+    // imm8,AL, the commonest form) was missing from the list above too
+    // (E8 stood in its place, which is CALL and is covered below anyway).
+    if (id_opcode==8'hE6 || id_opcode==8'hE7 || id_opcode==8'hEE || id_opcode==8'hEF ||
+        id_opcode==8'h6E || id_opcode==8'h6F)
+        m.mem = 1'b1;
 
     return m;
 endfunction
