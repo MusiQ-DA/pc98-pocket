@@ -168,8 +168,7 @@ module tb_floppy_format;
         .force_ready(1'b0),
         .request(fdd_request),
         .dbg_cmd_accepts(), .dbg_cmd_drops(), .dbg_reply_left(),
-        .dbg_xfer(), .dbg_command(), .dbg_sector_info(),
-        .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()
+        .dbg_xfer(), .dbg_command(), .dbg_sector_info()
     );
 
     // ------------------------------------------------------------- checks

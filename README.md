@@ -26,7 +26,7 @@ A V30-class PC-9801: the VX/UV-era machine, not a 9821. Concretely:
   a fixed 640x400 panel: 200-line graphics modes are line-doubled to
   fill it.
 - **Sound**: OPNA (YM2608, the PC-9801-86 board): FM + SSG. The ADPCM-A
-  rhythm voices (and the drive mechanism noise that borrowed them) are
+  rhythm voices are
   parked in this build -- `USE_ADPCM(0)` in `Peripherals.sv` brings the
   room the EGC costs back.
 - **Floppy**: two drives, images mounted from Pocket dataslots, with a
@@ -84,8 +84,7 @@ from a NEC dump.
 - The Settings overlay (per-gamepad button) configures CPU speed, BIOS
   write protection, sound/stereo, display colour set, the 200-line
   presentation (Double or hardware-style line Skip), FDD Turbo
-  (authentic seek/sector pacing or ~8x), the drive-mechanism sound
-  (Off, 5.25" or 3.5"), EMS capacity, the disk-access lamp, the machine
+  (authentic seek/sector pacing or ~8x), EMS capacity, the disk-access lamp, the machine
   configuration (text rows/cols, boot order and device, RAM size, DEL
   as BS, ext ROM at D0000) and the controller bindings, and persists
   them per mounted image.

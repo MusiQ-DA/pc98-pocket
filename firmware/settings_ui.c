@@ -82,10 +82,12 @@ enum {
     // OSD
     SET_DISK_LED,
     SET_EXTMEM,
-    // Hardware -- appended above SET_COUNT, so a version-7 blob simply has no
-    // byte for this index and it keeps its compiled default on load. The menu
-    // row itself is in items_hw, right after FDD Turbo.
-    SET_DRV_SOUND,
+    // Reserved: this index was the Drive Sound row's (appended in version 8).
+    // The row and the drive-noise service are gone; the slot stays so the
+    // packed blob and the per-disk table keep their layout, and every later
+    // index (the SET_IDX_* decode softcpu_subsystem composes from) keeps its
+    // position. A stored value outside the one-entry table is dropped on load.
+    SET_RSVD_12,
     // Machine -- appended above SET_COUNT, so a version-8 blob has no bytes
     // for these indices and they keep their compiled defaults on load. The
     // menu rows live in items_machine; the index order is the SET_IDX_*
@@ -129,11 +131,8 @@ static const char *const opt_mode200[] = { "Double", "Skip" };
 // purpose -- blob slot 6's resting value is 1 (see the enum), which has to
 // mean Off -- and the softcore register inverts the index into the bit.
 static const char *const opt_fdd_turbo[] = { "On", "Off" };
-// Drive-mechanism noise: drive_sound.c reads the mode as the raw index -- 0
-// off, 1 the 5.25-inch cabinet, 2 the quieter 3.5-inch -- so the option order
-// maps straight onto the playback level. 5.25 is the default: the louder
-// mechanism the sample pack is built around.
-static const char *const opt_drv_sound[] = { "Off", "5.25\"", "3.5\"" };
+// SET_RSVD_12's placeholder: one entry, never shown.
+static const char *const opt_reserved[] = { "-" };
 
 // The machine-config rows drive the dipsw2 / A3FE* compose bytes in
 // softcpu_subsystem, where the option index IS the decoded value: Boot
@@ -184,7 +183,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
     SETTING_D(opt_dis_en, 1), // SET_DISK_LED (default on)
     SETTING_D(opt_extmem, 3), // SET_EXTMEM (default 8 MB: the full SDRAM pool)
-    SETTING_D(opt_drv_sound, 1), // SET_DRV_SOUND -- the appended index; default 5.25"
+    SETTING(opt_reserved),    // SET_RSVD_12 -- the retired Drive Sound slot
     // The v9-appended indices. Everything defaults to option 0 except Ext
     // ROM: the SCSI option ROM at D2000 is always fitted, so the window
     // ships Present.
@@ -267,7 +266,6 @@ static const item_t items_hw[] = {
     { "Floppy A", IT_FDD, 0 },
     { "Floppy B", IT_FDD, 1 },
     { "FDD Turbo", IT_OPTION, SET_FDD_TURBO },
-    { "Drive Sound", IT_OPTION, SET_DRV_SOUND },
     { "", IT_SPACER, 0 },
     { "EMS", IT_OPTION, SET_EXTMEM },
     { "", IT_SPACER, 0 },
@@ -543,14 +541,7 @@ static void draw_row(int i)
     osd_draw_string16(&panel, COL_LABEL * 8, y, it->label, OSD_LABEL);
     if (it->type == IT_OPTION) {
         const setting_t *s = &settings[it->arg];
-        // Drive Sound has no hardware on a slim-OPNA build (OMGMT_CAPS
-        // bit0): the stored choice keeps its blob slot for the build that
-        // has the voices, but here the row reads N/A and cannot cycle.
-        if (it->arg == SET_DRV_SOUND && !drive_sound_present()) {
-            osd_draw_string16(&panel, COL_VALUE * 8, y, "N/A", OSD_DISABLED);
-        } else {
-            osd_draw_string16(&panel, COL_VALUE * 8, y, s->opts[s->value], OSD_LABEL);
-        }
+        osd_draw_string16(&panel, COL_VALUE * 8, y, s->opts[s->value], OSD_LABEL);
     } else if (it->type == IT_KEYBIND) {
         int on_key = keybind_cycle[keybind_sel[it->arg]].code == BIND_KEY_SLOT;
         const char *val = (on_key && !keybind_is_key(it->arg)) ? "[Set key]" : bind_name(it->arg);
@@ -704,10 +695,7 @@ int settings_input(uint16_t pressed)
         // instructions in this firmware, on a device that is 97 per cent full
         // with the GDC still to come -- and a menu index is always already
         // inside its range, so one compare does what a modulo did.
-        // (No ADPCM-A voices on this build -> Drive Sound is display-only.)
-        if (it->arg == SET_DRV_SOUND && !drive_sound_present()) {
-            changed = 0;
-        } else if (pressed & BTN_RIGHT) {
+        if (pressed & BTN_RIGHT) {
             uint8_t v = (uint8_t) (s->value + 1u);
             s->value = (v >= s->count) ? 0u : v;
         } else if (pressed & BTN_LEFT) {
@@ -830,7 +818,8 @@ void settings_reset_tick(void)
 // the same values+bindings packing the blob uses. While a disk is mounted saves go to its entry
 // and mounting applies it; with no disk mounted, saves and the live set are global.
 //
-// VERSION 8 APPENDS ONE SETTING (index 12, drive sound), and a thirteenth
+// VERSION 8 APPENDS ONE SETTING (index 12, drive sound -- since retired to
+// the reserved SET_RSVD_12, its slot kept), and a thirteenth
 // value crosses a word boundary: the block grows to six words, the global
 // blob to eight, and the table shifts up a word -- word 136, eight-word
 // entries, fourteen of which fit (136 + 1 + 14*8 = 249; version 7's table
@@ -1218,11 +1207,6 @@ void settings_load(void)
     // the per-disk entries mean anything at all.
     *FDD_BRAM_ADDR = TABLE_WORD;
     have_table = (uint8_t) (*FDD_BRAM_RDATA == TABLE_MAGIC);
-}
-
-uint8_t settings_drive_sound(void)
-{
-    return settings[SET_DRV_SOUND].value;
 }
 
 void settings_mark_dirty(void)

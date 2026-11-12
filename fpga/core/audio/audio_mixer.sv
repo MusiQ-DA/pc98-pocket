@@ -70,9 +70,7 @@ module audio_mixer #(
 
   //! ------------------------------------------------------------------------
   //! Pad core_l/core_r with zeros to maintain a consistent size of 16 bits,
-  //! then feed the output path. The drive-noise tap that used to sum in
-  //! here is gone: mechanism samples now play on the OPNA's own ADPCM-A
-  //! voices, so they arrive inside core_l/core_r already mixed.
+  //! then feed the output path.
   //! ------------------------------------------------------------------------
   logic [15:0] core_al, core_ar;
 

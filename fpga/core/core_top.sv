@@ -4200,9 +4200,6 @@ module core_top #(
     wire [15:0] audio_l = pause_core ? 16'd0 : (boost_cfg ? cmp_l : out_l);
     wire [15:0] audio_r = pause_core ? 16'd0 : (boost_cfg ? cmp_r : out_r);
 
-    // Drive noise lives in the OPNA's ADPCM-A voices now: the softcore polls
-    // floppy's taps over mgmt reg 0xE and keys its own samples, so it arrives
-    // inside core_l/core_r already mixed.
     audio_mixer #(.DW(16), .STEREO(1)) audio_mixer (
         .clk_74b    (clk_74b),
         .clk_audio  (clk_chipset),

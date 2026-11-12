@@ -91,9 +91,8 @@ module pc98_opna #(
     // no-ADPCM default is the YM2203 mono path, and OPNA is stereo.
     parameter bit USE_ADPCM = 1,
     parameter bit USE_PCM   = 0,
-    // 32 KB: the low 16 KB is the six-voice rhythm kit and the upper 16 KB is
-    // the drive-mechanism kit the softcore plays for floppy noise. The store
-    // used to be 8 KB; it grew when fdd_sound's own sample SRAM retired.
+    // 32 KB: the six-voice rhythm kit's store (rhythm.c RHY_STORE_BYTES).
+    // It used to be 8 KB; it grew when fdd_sound's own sample SRAM retired.
     parameter int RHY_BYTES = 32768,
     parameter int RHY_AW    = 15,
     // clk / 7.9872 MHz as a 16-bit fraction -- see the header.
@@ -226,10 +225,6 @@ module pc98_opna #(
     // nothing.
     logic [7:0] rhy_kon;         // 0x10, {dump, xx, mask[5:0]}
     logic [5:0] rhy_tl;          // 0x11, total level
-    // Per-voice LR+AL (0x18-0x1D), cached so the firmware's drive-noise
-    // service can restore a channel's level after borrowing it: ADPCM-A
-    // start/end pairs and this byte are what the borrow has to put back.
-    logic [7:0] rhy_lr [0:5];
 
     // np21w sound/fmboard.c (fmboard_getjoy): the joystick read is gated by
     // bit 6 of the value last written to IOB (SSG index 0x0F) -- set means the
@@ -478,25 +473,17 @@ module pc98_opna #(
         end
 
         // The guest-visible rhythm shadows: kon/tl so the firmware can see
-        // rhythm in use (mg_reg 7), and per-voice LR+AL so a borrowed channel
-        // can be put back (mg_reg 9-14). They only exist with the voices.
+        // rhythm in use (mg_reg 7). They only exist with the voices.
         always_ff @(posedge clk) begin
             if (rst) begin
                 rhy_kon <= 8'h00;
                 rhy_tl  <= 6'h00;
-                for (int v = 0; v < 6; v++) rhy_lr[v] <= 8'h00;
             end else if (wr_commit && gw_allowed && gw_is_data && !gw_part) begin
                 if (gw_reg == 8'h10) rhy_kon <= wr_data_q;
                 if (gw_reg == 8'h11) rhy_tl  <= wr_data_q[5:0];
-                if (gw_reg >= 8'h18 && gw_reg <= 8'h1D)
-                    rhy_lr[gw_reg - 8'h18] <= wr_data_q;
             end
         end
     end else begin : g_no_rhy
-        genvar gi;
-        for (gi = 0; gi < 6; gi++) begin : g_tie
-            assign rhy_lr[gi] = 8'h00;
-        end
         assign rhy_q   = 8'h00;
         assign rhy_kon = 8'h00;
         assign rhy_tl  = 6'h00;
@@ -512,10 +499,8 @@ module pc98_opna #(
             // Capability word: bit0 = the rhythm store and ADPCM-A exist, so
             // the firmware knows whether a rhythm.bin load can land.
             4'd8:    mg_rdata = {15'd0, USE_ADPCM};
-            // 9..14: the guest's last-written LR+AL per voice -- the
-            // drive-noise service restores this after a borrowed channel.
-            4'd9, 4'd10, 4'd11, 4'd12, 4'd13, 4'd14:
-                     mg_rdata = {8'd0, rhy_lr[mg_reg - 4'd9]};
+            // 9..14 carried the guest's LR+AL per voice for the retired
+            // drive-noise service; they read 0 now, like every unused reg.
             default: mg_rdata = 16'h0000;
         endcase
     end

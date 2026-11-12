@@ -137,17 +137,7 @@ module floppy
 	//   [7] cmd_format_in_progress
 	//   [6] dma_req   [5] irq   [4] busy  [3] in_seek_mode
 	//   [2] datareg_ready  [1] transfer_to_cpu  [0] dma_ack (pin)
-	output     [29:0] dbg2,
-
-	// Drive-noise event taps (clk domain): one pulse per head step, the
-	// head-load proxy, the data phase of any transfer (reads, writes and
-	// formats -- a head on media makes the same noise either way) and the
-	// motor run level. The softcore polls these through the FDD management
-	// window and plays mechanism samples on the OPNA's ADPCM-A voices.
-	output            snd_step,
-	output            snd_head,
-	output            snd_xfer,
-	output            snd_motor
+	output     [29:0] dbg2
 );
 
 reg [27:0] clk_rate;
@@ -801,34 +791,6 @@ always @(posedge clk) begin
 end
 
 wire delay_last_cycle = !delay_steps && !delay_srt && delay_rate == 16'd1;
-
-// ---------------------------------------------------------------------------
-// Drive-noise event taps. Everything the mechanism-noise service needs
-// already exists in the timing engine; these only name the moments.
-//
-// snd_step: one clk pulse per physical head step. The seek/recalibrate START
-// terms cover the first step of a move -- delay_steps counts steps REMAINING
-// after it (|Δ|-1), so a one-track seek emits no decrement pulse at all. The
-// S_UPDATE_SECTOR term is the track hop inside a sequential transfer, the
-// "ガッ" punctuation in a long read.
-assign snd_step = (cmd_seek_start        && cylinder[selected_drive[0]] != io_writedata) ||
-                  (cmd_recalibrate_start && cylinder[selected_drive[0]] != 8'd0)         ||
-                  (!delay_rate && !delay_srt && |delay_steps)                            ||
-                  (state == S_UPDATE_SECTOR && increment_cylinder);
-
-// snd_head: the head-load proxy. This model has no load solenoid of its own;
-// motor spin-up is the moment the heads meet the media, so the rising edge of
-// "any motor on" is the ガチャン.
-assign snd_head  = motor_enable[0] | motor_enable[1];
-assign snd_motor = motor_enable[0] | motor_enable[1];
-
-// snd_xfer: the data phase of reads, writes and formats. The SD path raises
-// request in its per-sector wait states; the nDMA path's equivalents are the
-// CPU-served FIFO waits.
-assign snd_xfer = (|request) ||
-                  state == S_WAIT_FOR_EMPTY_READ_FIFO  ||
-                  state == S_WAIT_FOR_FULL_WRITE_FIFO  ||
-                  state == S_WAIT_FOR_FORMAT_INPUT;
 
 reg [7:0] status_reg0_temp;
 always @(posedge clk) begin

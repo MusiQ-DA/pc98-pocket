@@ -2328,13 +2328,12 @@ module PERIPHERALS #(
     wire [23:0]  opna_adpcmb_addr;
     wire         opna_adpcmb_roe_n;
 
-    // USE_ADPCM=1 restores the ADPCM-A block (rhythm voices, the drive-
-    // sound kit): the EGC raster engine was dropped, so the LABs it paid
-    // for are free again -- the 1848-ALM device cannot carry both. The
+    // USE_ADPCM=1 restores the ADPCM-A block (the rhythm voices): the EGC
+    // raster engine was dropped, so the LABs it paid for are free again -- the 1848-ALM device cannot carry both. The
     // guest's rhythm writes now reach a chip with ADPCM blocks; the
     // firmware fills the 32 KB rhythm store at boot when rhythm.bin is
     // present. OMGMT_CAPS (mg_reg 8) bit0 reads 1, which is what tells
-    // rhythm.c and drive_sound.c to run their loads. USE_PCM stays 1:
+    // rhythm.c to run its load. USE_PCM stays 1:
     // it is the only stereo FM path jt12 has (use_pcm=0 falls back to
     // the YM2203 mono accumulator), and the OPNA is a stereo chip.
     // DELTA-T stays dark either way (pc98_opna wires use_adpcmb=0 -- its
@@ -2615,12 +2614,7 @@ module PERIPHERALS #(
         .dbg_xfer                   (fdc_dbg_xfer),
         .dbg_command                (fdc_dbg_command),
         .dbg_sector_info            (fdc_dbg_sector_info),
-        .dbg2                       (fdc_dbg2),
-
-        .snd_step                   (fdd_snd_step),
-        .snd_head                   (fdd_snd_head),
-        .snd_xfer                   (fdd_snd_xfer),
-        .snd_motor                  (fdd_snd_motor)
+        .dbg2                       (fdc_dbg2)
     );
 
     logic   [7:0]   fdc_dbg_accepts;
@@ -2688,26 +2682,15 @@ module PERIPHERALS #(
     //
     // mgmt_readdata
     //
-    // Drive-noise taps as a polled event channel. The fdd_sound sample player
-    // is gone; the softcore plays mechanism noise through the OPNA's ADPCM-A
-    // voices, so what it needs is the edge/level picture, not an audio
-    // stream. Reg 0xE: an 8-bit step counter (firmware takes deltas, so it
-    // never misses a burst of steps) plus the live head/xfer/motor levels.
-    logic fdd_snd_step, fdd_snd_head, fdd_snd_xfer, fdd_snd_motor;
-    logic [7:0] snd_step_cnt;
-    always_ff @(posedge clock) begin
-        if (reset)           snd_step_cnt <= 8'd0;
-        else if (fdd_snd_step) snd_step_cnt <= snd_step_cnt + 8'd1;
-    end
-
-    wire [15:0] sndev_readdata = {snd_step_cnt, 5'd0, fdd_snd_head,
-                                  fdd_snd_xfer, fdd_snd_motor};
-    wire        sndev_cs = mgmt_fdd_cs && (mgmt_address[3:0] == 4'hE);
+    // Reg 0xE of the floppy window used to carry the drive-noise event taps;
+    // that feature is gone and the address now reads 0 (floppy.v itself
+    // would answer 1 for it).
+    wire        fdd_rsvd_e_cs = mgmt_fdd_cs && (mgmt_address[3:0] == 4'hE);
 
 `ifdef ENABLE_OPNA
     assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
                          : mgmt_opna_cs ? mgmt_opna_readdata
-                         : sndev_cs ? sndev_readdata : mgmt_fdd_readdata;
+                         : fdd_rsvd_e_cs ? 16'h0000 : mgmt_fdd_readdata;
 `else
     // OPNA parked: its mgmt window must answer ABSENT, not alias onto the
     // floppy readback -- a stray 1 in OMGMT_CAPS's bit0 convinces the
@@ -2715,7 +2698,7 @@ module PERIPHERALS #(
     // DISK_SPIN_LIMIT wait on a busy flag that never clears.
     assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
                          : mgmt_opna_cs ? 16'h0000
-                         : sndev_cs ? sndev_readdata : mgmt_fdd_readdata;
+                         : fdd_rsvd_e_cs ? 16'h0000 : mgmt_fdd_readdata;
 `endif
 
 

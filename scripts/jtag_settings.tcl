@@ -38,7 +38,7 @@ proc rdabs {off} {
 }
 proc w16 {a} { return [expr {[rdabs $a] | ([rdabs [expr {$a+1}]]<<8)}] }
 
-set names {{CPU Speed} {BIOS Write} {Audio Boost} {Speaker Vol} {Stereo Mix} {Display} {FDD Turbo} {200-Line Mode} {D-Pad} {Gamepad} {Disk LED} {EMS} {Drive Sound} {Text Rows} {Text Cols} {Boot Order} {Boot Device} {RAM Size} {DEL=BS} {Ext ROM} {CPU Cache}}
+set names {{CPU Speed} {BIOS Write} {Audio Boost} {Speaker Vol} {Stereo Mix} {Display} {FDD Turbo} {200-Line Mode} {D-Pad} {Gamepad} {Disk LED} {EMS} {(reserved)} {Text Rows} {Text Cols} {Boot Order} {Boot Device} {RAM Size} {DEL=BS} {Ext ROM} {CPU Cache}}
 for {set g 0} {$g < 6} {incr g} {
   set w [rd [expr {0xA0 + $g}]]
   for {set b 0} {$b < 4} {incr b} {

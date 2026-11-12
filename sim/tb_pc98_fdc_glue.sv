@@ -192,8 +192,7 @@ module tb_pc98_fdc_glue;
         .clock_rate     (clk_rate_r),
         .turbo          (turbo_r),
         .force_ready    (force_ready),
-        .request        (fdd_request),
-        .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()
+        .request        (fdd_request)
     );
 
     logic [27:0] clk_rate_r = 28'd2000;

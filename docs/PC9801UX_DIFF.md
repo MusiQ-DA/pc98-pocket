@@ -26,7 +26,7 @@ at all — only the beeper**; the OPNA material below describes what
 | ROM | 96 KB BIOS + ITF | 96 KB at E8000-FFFFF; ships **the PC-9801UX ITF** + PC-9801VM BIOS (`config.tcl:25-37`) — the UX BIOS is not usable on a V30 (PUSHA/SMSW at FDA35+) |
 | Graphics | 2× μPD7220A, GVRAM 256 KB, **EGC present** | 2× `pc98_gdc`, 3+1 planes, second 640×400 page → total 256 KB (`pc98_sdram_map.svh:51-71`, `Chipset.sv`), EGC fitted (`pc98_egc.sv`, `.EGC(1'b1)` on `pc98_gvram_seq` — room came from parking OPNA's ADPCM-A) |
 | Display | 640×400 and 640×200 | 640×400 fixed; 200-line modes via line-doubling |
-| Sound | onboard FM source: FM×3 + SSG×3 (YM2203/OPN class) (man:270, 1349-1373) | OPNA (YM2608, the -86 board), FM+SSG only — ADPCM-A rhythm and the drive noise that borrowed it parked (`USE_ADPCM(0)` in `Peripherals.sv`; `firmware/drive_sound.c` sleeps on `OMGMT_CAPS` bit0) |
+| Sound | onboard FM source: FM×3 + SSG×3 (YM2203/OPN class) (man:270, 1349-1373) | OPNA (YM2608, the -86 board), FM+SSG only — ADPCM-A rhythm parked (`USE_ADPCM(0)` in `Peripherals.sv`; `firmware/rhythm.c` sleeps on `OMGMT_CAPS` bit0) |
 | FDC | μPD765A, 1MB(2HD) and 640KB(2DD) interfaces | μPD765 model + PC-98 glue, both interfaces |
 | HDD | UX41 only: internal HDD via μPD7261 HDC | none; a PC-9801-55-class SCSI board instead |
 | Misc | PIC 2× PD71059C, DMA PD8237A-5, PIT PD8253-5, RTC uPD4990A, kbd/RS-232C PD8251A, printer PD8255A-5 | see below |
