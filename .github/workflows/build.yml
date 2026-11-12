@@ -634,6 +634,14 @@ jobs:
           ./obj_scsi/sc | tee scsi.log
           grep -q "PASS tb_pc98_scsi" scsi.log
 
+      - name: the uPD4990 calendar reads back through the BIOS's INT 1Ch sequence
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_upd4990 \
+            -Isim -I$S sim/tb_pc98_upd4990.sv $S/pc98_upd4990.sv -o rtc --Mdir obj_rtc
+          ./obj_rtc/rtc | tee rtc.log
+          grep -q "PASS tb_pc98_upd4990" rtc.log
+
       - name: the bus mouse's second 8255 matches np21w's mouseif
         run: |
           S=fpga/core
