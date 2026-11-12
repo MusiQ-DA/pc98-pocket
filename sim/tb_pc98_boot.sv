@@ -205,10 +205,13 @@ module tb_pc98_boot;
         .dbg               (zbridge_dbg)
     );
 
+    // +extoff: the OSD's Ext Memory = None (z86_cache ext_en low).
+    logic ext_en_r = 1'b1;
+    initial if ($test$plusargs("extoff")) ext_en_r = 1'b0;
 `ifdef PM286
     // +define+PM286 (needs REALMEM: extended memory lives on port F): the
     // 80286 protected-mode core, as core_top builds it.
-    z86 #(.PM286(1'b1), .EXT_MB(`ifdef EXT_MB `EXT_MB `else 3 `endif)) u_cpu (
+    z86 #(.PM286(1'b1), .EXT_MB(`ifdef EXT_MB `EXT_MB `else 8 `endif)) u_cpu (
 `else
     z86 u_cpu (
 `endif
@@ -222,7 +225,7 @@ module tb_pc98_boot;
         .cache_en  (1'b0), .pace(1'b0), .pace_ce(1'b0), .pace_rd_wait(2'd0), .pace_wr_wait(2'd0), .pace_vwait(5'd0),
 `endif
         .bios_shadow  (itf_bank),
-        .bios_protect (1'b1), .dx (7'd0),
+        .bios_protect (1'b1), .ext_en (ext_en_r), .dx (7'd0),
         .f_req (cf_req), .f_we (cf_we), .f_addr (cf_addr), .f_len (cf_len),
         .f_wdata0 (cf_wd0), .f_wdata1 (cf_wd1), .f_ack (cf_ack),
         .f_rvalid (cf_rvalid), .f_rdata (cf_rdata), .f_done (cf_done),
@@ -592,7 +595,6 @@ module tb_pc98_boot;
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
-    logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
 
     // ---- the graphics path, as core_top wires it --------------------------
     //
@@ -692,7 +694,6 @@ module tb_pc98_boot;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
-        .ems98_map(ems98_unused),
         // The ITF window is the SHADOW, the way RAM.sv does it on hardware:
         // F8000-FFFFF redirected to 1F8000 while the flag is set. itf_bank is
         // this bench's copy of core_top's, so the images are loaded once and

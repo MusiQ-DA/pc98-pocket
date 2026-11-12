@@ -47,7 +47,7 @@ module RAM #(
     output  logic           memory_access_ready,
     // Graphics VRAM page one (Pocket): set only by pc98_gvram_seq, for its
     // own plane walks -- the page has no guest address, so this banks the
-    // byte at 0x600000 where neither the guest nor EMS can follow. Must stay
+    // byte at 0x600000 where the guest's map cannot follow. Must stay
     // first in the latch priority: the sequencer's addresses are plain
     // window addresses and would otherwise be remapped again.
     input   logic           gvram_page1_flag,
@@ -107,12 +107,6 @@ module RAM #(
     output  logic           sdram_dq_io,
     output  logic           sdram_ldqm,
     output  logic           sdram_udqm,
-     // EMS board (pc98_ems98): {mapped, SDRAM word[23:14]} per window of
-     // C0000-CFFFF. The V30's bus stops at 0xFFFFF, so banked windows like
-     // this are the only way the guest ever reaches SDRAM past its megabyte
-     // -- this board's pool is 0x800000-0xFFFFFF, 8 MB of word space. An
-     // empty entry leaves the window to the map's hole.
-     input   logic   [10:0]  ems98_map[0:3],
      // BIOS
      input  logic    [1:0]  bios_protect_flag,
     // Font bank: while set, guest addresses are redirected above the machine's
@@ -249,8 +243,9 @@ module RAM #(
 
     state_t         state;
     state_t         next_state;
-    // 24 bits of word address now: the NEC EMS's pool at 0x800000-0xFFFFFF
-    // needs bit 23, which the old 23-bit latch could not carry.
+    // 24 bits of word address: GVRAM's interleave at 0x600000 needs bits
+    // 22:21. (The 286's extended memory at 0x800000-0xFFFFFF never comes
+    // through here: it is z86_cache's, on port F.)
     logic   [23:0]  latch_address;
     logic   [7:0]   latch_data;
     logic   [7:0]   latch_data_hi;
@@ -343,13 +338,8 @@ module RAM #(
     // needs the same answer one step earlier -- see that file.
 `include "pc98_sdram_map.svh"
 
-    // The EMS windows sit in C0000-DFFFF, which the flat map leaves open on
-    // purpose -- so a claimed window has to select the SDRAM by itself.
-    wire ems98_win = (address[19:16] == 4'hC)
-                  && ems98_map[address[15:14]][10];
     assign ram_address_select_n = ~(enable_sdram && (gvram_page1_flag
-                                         || pc98_sdram_hits(address, analog_mode)
-                                         || ems98_win));
+                                         || pc98_sdram_hits(address, analog_mode)));
 	 
 
     // The ITF bank. F8000-FFFFF, 32 KB, mapped to the shadow copy at 1F8000
@@ -400,13 +390,8 @@ module RAM #(
             // Page zero through the guest windows: classify the plane and
             // interleave against the window offset.
             latch_address   = pc98_gvram_il(1'b0, address[14:0], gv_il_pl);
-        else if (ems98_win)
-            // The EMS board's window claims C0000-CFFFF; its map entry is
-            // the page's top ten word bits, so the low fourteen come from
-            // the guest.
-            latch_address   = {ems98_map[address[15:14]][9:0], address[13:0]};
         else if (font_bank_flag)
-            // 0x400000 upward: past EMS, which owns bit 21.
+            // 0x400000 upward: clear of the guest megabyte and ITF shadow.
             latch_address   = {1'b0, 1'b1, 2'b00, address};
         else
             latch_address   = {3'b000, bios_shadow_select, address};

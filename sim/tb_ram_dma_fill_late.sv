@@ -310,7 +310,6 @@ module tb_ram_dma_fill_late;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
     wire [31:0] ram_dbg2, ram_dbg3;
-    logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
 
     wire        all_mem_rd_n = ab_mem_rd_n & fgn_rd_n;
     wire no_command_state = ab_io_write_n & ab_io_read_n
@@ -341,7 +340,6 @@ module tb_ram_dma_fill_late;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
-        .ems98_map(ems98_unused),
         .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .font_bank_flag(1'b0),
         .font_rd_req(1'b0), .font_rd_addr(24'h0), .font_rd_len(4'h0),

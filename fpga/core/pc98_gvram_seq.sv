@@ -206,7 +206,7 @@ module pc98_gvram_seq #(
     // Rebanks every plane window between the two 640x400 pages, np21w's
     // gdcs.access. When set, this module addresses planes through
     // pc98_gvram_plane1 and asserts mem_page1 so RAM.sv banks the byte at
-    // 0x600000, past the guest's map and EMS alike.
+    // 0x600000, past the guest's map and the 286's extended memory alike.
     input  wire        access_page,
     output reg         mem_page1,
 

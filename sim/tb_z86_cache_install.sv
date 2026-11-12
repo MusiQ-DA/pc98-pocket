@@ -44,7 +44,7 @@ module tb_z86_cache_install;
         .sn_v(1'b0), .sn_addr(24'h0), .sn_len(4'h0),
         .dbg_watch_a(20'h0), .dbg_sn_kills(),
         .busy(busy),
-        .a20(1'b0), .ld_addr({4'h0, ld_addr}), .ld_req(ld_req), .ld_ack(ld_ack), .ld_data(ld_data),
+        .a20(1'b0), .ext_en(1'b1), .ld_addr({4'h0, ld_addr}), .ld_req(ld_req), .ld_ack(ld_ack), .ld_data(ld_data),
         .rd_addr(rd_addr), .rd(rd), .rd_ready(rd_ready), .rd_data(rd_data),
         .rd_io(1'b0), .rd_word(1'b0),
         .wr_addr(wr_addr), .wr_valid(wr_valid), .wr_ready(wr_ready),

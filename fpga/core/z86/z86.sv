@@ -23,7 +23,7 @@ module z86 #(
     // No limit/type checks, no exceptions, no task switch; only a CPU
     // reset (OUT 0F0h) leaves protected mode. 0 builds the 20-bit core.
     parameter bit PM286 = 0,
-    parameter int EXT_MB = 2            // extended memory at 1 MB (PM286)
+    parameter int EXT_MB = 8            // extended memory at 1 MB (PM286, at most 8)
 ) (
     input               clk,            // the bridge's gated CPU clock
     input               reset,
@@ -43,6 +43,7 @@ module z86 #(
     input       [6:0]   dx,
     input               bios_shadow,    // RAM.sv bios_shadow_flag
     input               bios_protect,   // RAM.sv bios_protect_flag[1]
+    input               ext_en,         // PM286: extended memory fitted (z86_cache)
 
     // ---- sdram_mp port F (see z86_cache) --------------------------------
     output              f_req,
@@ -304,6 +305,7 @@ z86_cache #(.WCOMB(WCOMB), .PM286(PM286), .EXT_MB(EXT_MB)) u_cache (
     .dbg_sn_kills       (dbg_sn_kills),
     .busy               (cache_busy),
     .a20                (PM286 && a20),
+    .ext_en             (ext_en),
     .ld_addr            (ld_addr),
     .ld_req             (ld_req),
     .ld_ack             (ld_ack),

@@ -203,18 +203,6 @@ jobs:
           # Turbo through bridge + 8288 + RAM.sv + SDRAM with the cache on.
           PERF=./obj_dir/perf bash scripts/sim_dhry.sh
 
-      - name: NEC-style EMS board — 08E1-08E9 windows bank into SDRAM
-        run: |
-          S=fpga/core
-          verilator --binary --timing -Wno-fatal --top-module tb_pc98_ems98 \
-            -Isim -I$S -I$S/chipset/HDL \
-            sim/tb_pc98_ems98.sv sim/sdram_model.sv \
-            $S/chipset/HDL/RAM.sv $S/pc98_ems98.sv \
-            $S/sdram_shim.sv $S/sdram_mp.sv \
-            -o e --Mdir obj_ems
-          ./obj_ems/e | tee ems.log
-          grep -q "RESULT: PASS" ems.log
-
       - name: RTC rollover equivalence — pipelined vs nested cascade
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_rtc_roll \

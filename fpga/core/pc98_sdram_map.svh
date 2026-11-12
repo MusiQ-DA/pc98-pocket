@@ -75,7 +75,7 @@ endfunction
 // second page). Page zero is the guest-linear window above, unchanged. Page
 // one has no guest address at all -- the real machine rebanks the same
 // window -- so it lives behind RAM.sv's gvram_page1_flag at 0x600000, where
-// the guest cannot see it and EMS cannot reach it. The sequencer returns
+// the guest cannot see it and extended memory cannot reach it. The sequencer returns
 // these seventeen bits (plane number and offset) and asserts the flag.
 function automatic logic [16:0] pc98_gvram_plane1(input logic [19:0] a,
                                                   input logic [1:0] p);
@@ -114,8 +114,8 @@ endfunction
 // that every byte write must be masked -- the neighbour lane holds the
 // partner plane's byte -- which is why the DQM path is wired up.
 // Page zero lives at 0x600000 and page one at 0x610000, each 64K words
-// (32 K offsets x 2 words), clear of EMS (bit 21) and the font bank
-// (0x400000).
+// (32 K offsets x 2 words), clear of the font bank (0x400000) and the
+// 286's extended memory (0x800000-0xFFFFFF, z86_cache's port F).
 function automatic logic [23:0] pc98_gvram_il(input logic pg,
                                               input logic [14:0] off,
                                               input logic [1:0] p);

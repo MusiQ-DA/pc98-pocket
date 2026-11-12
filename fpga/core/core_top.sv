@@ -27,9 +27,11 @@
 module core_top #(
     // z86's minimal 80286 protected mode, the 286-class port 0x42 and the
     // ITF self-test skip (see z86.sv PM286); EXT_MB megabytes of extended
-    // memory at 1 MB (z86_cache's map, at most 3). 0 builds the 20-bit core.
+    // memory at 1 MB (z86_cache's map: linear 100000h up at SDRAM 0x800000,
+    // at most 8), switched off by the OSD's Ext Memory row. 0 builds the
+    // 20-bit core.
     parameter bit PM286  = 1,
-    parameter int EXT_MB = 3
+    parameter int EXT_MB = 8
 ) (
 
     //
@@ -3649,8 +3651,11 @@ module core_top #(
     // Only ever set during a loader write: the guest has no font bank to see.
     wire font_bank_load  = ~bios_write_n & font_bank_write;
 
-    // The EMS board's fitted size from the OSD: None/2/4/8 MB -> 0/2/4/8.
-    wire [3:0] ems98_maxmem = (osd_extmem == 2'd3) ? 4'd8 : {osd_extmem, 1'b0};
+    // The OSD's Ext Memory row: index 0 is None, anything else the full
+    // EXT_MB (an older blob's 2/4/8 MB EMS indices all read as fitted). A
+    // clk_pico register, so -- like fdd_turbo below -- a plain wire: the
+    // pico -> chipset crossing is timed (core_constraints.sdc).
+    wire ext_mem_en = (osd_extmem != 2'd0);
 
     always @(posedge clk_chipset)
     begin
@@ -3787,7 +3792,6 @@ module core_top #(
         .sdram_dq_io                        (SDRAM_DQ_IO),
         .sdram_ldqm                         (SDRAM_DQML),
         .sdram_udqm                         (SDRAM_DQMH),
-        .ems98_maxmem                       (ems98_maxmem),
         .bios_protect_flag                  (bios_protect_flag),
         .mgmt_readdata                      (mgmt_din),
         .mgmt_writedata                     (cs_mgmt_dout),
@@ -3796,7 +3800,7 @@ module core_top #(
         .mgmt_read                          (cs_mgmt_rd),
         .floppy_wp                          (wp_cfg),
         // The FDC's domain IS clk_chipset, so the setting bit arrives on a
-        // plain wire, the way osd_extmem reaches the EMS board below it.
+        // plain wire, the way osd_extmem reaches the CPU's ext_en.
         .fdd_turbo                          (osd_fdd_turbo),
         .cfg_dipsw2                         (osd_dipsw2),
         .cfg_a3fea                          (osd_a3fea),
@@ -4073,6 +4077,7 @@ module core_top #(
         .dx           (jtag_dx[6:0]),
         .bios_shadow  (bios_shadow_flag),
         .bios_protect (bios_protect_flag[1]),
+        .ext_en       (ext_mem_en),
         .f_req     (cachef_req),
         .f_we      (cachef_we),
         .f_addr    (cachef_addr),

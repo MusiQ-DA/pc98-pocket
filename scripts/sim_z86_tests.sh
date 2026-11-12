@@ -104,7 +104,7 @@ for a in "+lat=1" "+lat=4 +irq=${RIRQ[0]}" "+lat=5 +latrand +irq=${RIRQ[1]}" "+l
   if [ $bad = 0 ]; then echo "ok   irq_rep $a (runs=$runs mid-rep=$hits maxlat=${lat:--})"
   else echo "FAIL irq_rep $a: runs=$runs mid-rep=$hits maxlat=$lat mem=$m"; fail=1; fi
 done
-# The 80286 protected-mode build (z86 PM286=1, EXT_MB=2): raw_pm.asm runs
+# The 80286 protected-mode build (z86 PM286=1, EXT_MB=2 -- tb_z86_loop's default): raw_pm.asm runs
 # LGDT/SGDT, LMSW/SMSW, descriptor loads, far CALL/RETF, extended memory and
 # the hole above it, the A20 gate, and OUT 0F0h back to real mode.
 if [ -z "${Z86_DEFS:-}" ]; then
@@ -128,4 +128,33 @@ for a in "+lat=1" "+lat=4 +nocache" "+lat=3 +gate" "+lat=5 +latrand +nocache"; d
   if [ "${got:0:${#want}}" = "$want" ]; then echo "ok   raw_hma $a"
   else echo "FAIL raw_hma $a"; echo "  want $want"; echo "  got  $got"; fail=1; fi
 done
+# raw_ext8.asm: the shipping 8 MB (EXT_MB=8, core_top's map -- linear
+# 100000h-8FFFFFh at SDRAM 0x800000-0xFFFFFF) with A20 open: patterns at
+# 100000h, 4FFFFFh and 8FFFF0h-8FFFFFh read back, the hole at 900000h reads
+# FF, nothing aliases low. +extoff (the OSD's Ext Memory = None) makes all
+# of it the hole. The bench fails any port-F access between the guest's
+# 2 MB and the 0x800000 pool (GVRAM, the font bank, the FDD carve-out).
+if [ -z "${Z86_DEFS:-}" ]; then
+  SIM_OUT="$OUT.pm8" Z86_DEFS="+define+PM286 +define+EXT_MB=8" bash scripts/sim_z86_loop.sh +n=1 > /dev/null
+  PM8LOOP="$OUT.pm8/loop"
+  want_on="ff ff 34 12 88 77 5a 00 a5 c3 ef be 96 69 cd ab 34 12 5a"
+  want_off="ff ff ff ff ff ff ff 00 ff ff ff ff ff ff cd ab ff ff 5a"
+  for a in "+lat=1" "+lat=4" "+lat=3 +gate" "+lat=5 +latrand" "+lat=2 +nocache" \
+           "+lat=1 +extoff" "+lat=4 +latrand +extoff" "+lat=2 +nocache +extoff"; do
+    case "$a" in *extoff*) want="$want_off" ;; *) want="$want_on" ;; esac
+    o=$("$PM8LOOP" $EXTRA +org=400 +prog=sim/z86_tests/raw_ext8.hex $a)
+    got=$(echo "$o" | sed -n 's/^mem 0600: //p')
+    span=$(echo "$o" | sed -n 's/^port F ext writes: //p')
+    bad=0
+    [ "${got:0:${#want}}" = "$want" ] || bad=1
+    echo "$o" | grep -q "^FAIL port F" && bad=1
+    case "$a" in
+      *extoff*) [ -z "$span" ] || bad=1 ;;
+      *)        [ "$span" = "800000-fffffe" ] || [ "$span" = "800000-ffffff" ] || bad=1 ;;
+    esac
+    if [ $bad = 0 ]; then echo "ok   raw_ext8 $a${span:+ (ext writes $span)}"
+    else echo "FAIL raw_ext8 $a"; echo "  want $want"; echo "  got  $got"; echo "  span $span"
+         echo "$o" | grep "^FAIL port F" | head -3; fail=1; fi
+  done
+fi
 exit $fail

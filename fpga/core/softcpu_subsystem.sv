@@ -450,7 +450,7 @@ module softcpu_subsystem (
     localparam SET_IDX_FDD_TURBO = 5'd6;   // Hardware: floppy seek/sector pacing
     localparam SET_IDX_MODE200   = 5'd7;   // 200-line presentation: 0 = double, 1 = skip
     localparam SET_IDX_DISK_LED  = 5'd10;  // on-screen access lamp
-    localparam SET_IDX_EXTMEM    = 5'd11;  // EMS board's fitted size
+    localparam SET_IDX_EXTMEM    = 5'd11;  // Ext Memory: 0 = none, else 8 MB above 1 MB (z86_cache ext_en)
     // Index 12 was the firmware's Drive Sound row, now retired; the slot
     // stays reserved (SET_RSVD_12) so the persisted indices below do not move.
     localparam SET_IDX_TXT_LINES = 5'd13;  // 0 = 25 rows / 1 = 20 rows (dipsw2 bit 3)

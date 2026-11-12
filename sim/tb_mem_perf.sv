@@ -215,6 +215,7 @@ module tb_mem_perf;
         .dx           (dx_r[6:0]),
         .bios_shadow  (shadow_flag_r),
         .bios_protect (1'b0),
+        .ext_en       (1'b1),
         .f_req     (zf_req),
         .f_we      (zf_we),
         .f_addr    (zf_addr),
@@ -547,7 +548,6 @@ module tb_mem_perf;
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
-    logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
 
     RAM u_ram (
         .dma_hold(1'b0),
@@ -577,7 +577,6 @@ module tb_mem_perf;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
-        .ems98_map(ems98_unused),
         .bios_protect_flag(2'b00), .bios_shadow_flag(shadow_flag_r),
         .font_bank_flag(1'b0),
         .font_rd_req(1'b0), .font_rd_addr(24'd0), .font_rd_len(4'd0),

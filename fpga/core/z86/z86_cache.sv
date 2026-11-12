@@ -13,7 +13,7 @@
 //     line is updated on a hit and the store goes out on port F through a
 //     one-entry write buffer, acknowledged to the core as soon as it is
 //     buffered.
-//   * UNCACHED: I/O, VRAM, the CG window, option ROMs, EMS -- everything
+//   * UNCACHED: I/O, VRAM, the CG window, option ROMs -- everything
 //     else -- runs as Wishbone cycles through cpu_bus_bridge. The write
 //     buffer is drained before any
 //     of them starts, so an OUT that starts a DMA never passes the store
@@ -96,10 +96,11 @@ module z86_cache #(
     // Paced stores answered before their bus time is paid (see wr_owed).
     parameter bit STORE_POST = 1,
     // PC-98 port: 24-bit linear addresses from z86's 80286 protected mode,
-    // and EXT_MB megabytes of extended memory at 100000h (see "Extended
-    // memory" below). 0: the 20-bit cache, unchanged.
+    // and up to EXT_MB megabytes of extended memory at 100000h (see
+    // "Extended memory" below; at most 8, ext_en switches it at run time).
+    // 0: the 20-bit cache, unchanged.
     parameter bit PM286    = 0,
-    parameter int EXT_MB   = 3
+    parameter int EXT_MB   = 8
 ) (
     input  wire         clk,            // free clk_chipset
     input  wire         ce,             // the gated CPU clock ticks this edge
@@ -132,6 +133,9 @@ module z86_cache #(
     // PM286: the A20 gate. Closed, only a[19:0] is decoded (np21w's
     // CPU_ADRSMASK = FFFFF): the upper bits are ignored, not added.
     input  wire         a20,
+    // The OSD's "Ext Memory" (clk-synchronous level): 0 makes the whole of
+    // extended memory the hole, so the ITF's count and HIMEM find none.
+    input  wire         ext_en,
     input  wire [23:0]  ld_addr,
     input  wire         ld_req,         // toggle
     output reg          ld_ack,         // toggle, follows ld_req when done
@@ -224,20 +228,26 @@ module z86_cache #(
     // Map
     // ------------------------------------------------------------------
     // Extended memory (PM286). Linear 100000h up is the 80286's memory
-    // above the first megabyte, EXT_MB megabytes of it (at most 3), in
-    // SDRAM words nothing else in the map uses -- 1 MB pages at 0x200000,
-    // 0x300000 and 0x500000 (0x400000 is the font bank, 0x600000 GVRAM page
-    // one and the FDD carve-out, 0x800000 the EMS pool; RAM.sv and
-    // fdd_ramimg.sv draw the same map). It is only ever the CPU's, so it is
-    // always cached -- cache_en, which the ITF bank drops, covers only the
-    // chipset-visible megabyte. Above EXT_MB is a hole: reads FF, writes
-    // vanish, nothing aliases into the low megabyte (the ITF and HIMEM size
-    // memory by exactly that miscompare).
+    // above the first megabyte, EXT_MB megabytes of it (at most 8), in one
+    // linear run of SDRAM words: linear 100000h-8FFFFFh is SDRAM
+    // 0x800000-0xFFFFFF, i.e. word = linear + 0x700000. Nothing else in the
+    // map reaches 0x800000 (the guest megabyte and the ITF shadow end at
+    // 0x1FFFFF, the font bank is 0x400000, GVRAM and the FDD carve-out sit
+    // at 0x600000-0x753FFF; RAM.sv, pc98_sdram_map.svh and fdd_ramimg.sv
+    // draw the same map). It is only ever the CPU's, so it is always cached
+    // -- cache_en, which the ITF bank drops, covers only the chipset-visible
+    // megabyte. Above EXT_MB, and all of it with ext_en low, is a hole:
+    // reads FF, writes vanish, nothing aliases into the low megabyte (the
+    // ITF and HIMEM size memory by exactly that miscompare).
+    //
+    // ext_en is used live, not latched at reset: a store into the hole
+    // touches neither the SDRAM nor a cache line, so the lines a switch
+    // leaves behind still match the SDRAM when it is switched back.
     function automatic logic ext_a(input logic [23:0] a);
         ext_a = PM286 && a20 && (a[23:20] != 4'h0);
     endfunction
     function automatic logic hole_a(input logic [23:0] a);
-        hole_a = ext_a(a) && (a[23:20] > 4'(EXT_MB));
+        hole_a = ext_a(a) && (!ext_en || (a[23:20] > 4'(EXT_MB)));
     endfunction
     function automatic logic cacheable_a(input logic [23:0] a);
         cacheable_a = ext_a(a) ? !hole_a(a)
@@ -247,12 +257,14 @@ module z86_cache #(
         rom_a = !ext_a(a) && ((a[19:16] == 4'hF) || (a[19:15] == 5'b11101));
     endfunction
     // RAM.sv's latch_address for the cached ranges: the shadow bit only
-    // ever applies to F8000-FFFFF. Extended memory's pages per the map above.
+    // ever applies to F8000-FFFFF. Extended memory per the map above: its
+    // megabyte number plus seven (only 1-8 are ever cached or filled; the
+    // hole's addresses never reach here as a port-F access).
     function automatic logic [PW-1:0] phys_of(input logic [23:0] a, input logic sh);
         logic [23:0] p;
         p = {3'b000, sh & (a[19:15] == 5'b11111), a[19:0]};
         if (ext_a(a))
-            p[23:20] = (a[23:20] == 4'h1) ? 4'h2 : (a[23:20] == 4'h2) ? 4'h3 : 4'h5;
+            p[23:20] = a[23:20] + 4'h7;
         phys_of = p[PW-1:0];
     endfunction
     function automatic logic [IDX_BITS-1:0] idx_of(input logic [PW-1:0] p);

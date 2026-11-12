@@ -81,6 +81,9 @@ enum {
     SET_GAMEPAD,
     // OSD
     SET_DISK_LED,
+    // Ext Memory: the 80286's memory above 1 MB (z86_cache, 8 MB at SDRAM
+    // 0x800000). The slot is the retired NEC EMS row's, whose {None, 2, 4,
+    // 8 MB} indices block_apply folds onto {None, 8 MB}.
     SET_EXTMEM,
     // Reserved: this index was the Drive Sound row's (appended in version 8).
     // The row and the drive-noise service are gone; the slot stays so the
@@ -116,9 +119,9 @@ static const char *const opt_boost[] = { "None", "2x", "4x" };
 static const char *const opt_level4[] = { "1", "2", "3", "4" };
 static const char *const opt_stereo[] = { "None", "25%", "50%", "100%" };
 static const char *const opt_dis_en[] = { "Disabled", "Enabled" };
-// NEC-style EMS board (ports 08E1h-08E9h): megabytes reported fitted. The
-// values must match core_top's osd_extmem decode {0, 2, 4, 8}.
-static const char *const opt_extmem[] = { "None", "2 MB", "4 MB", "8 MB" };
+// Extended memory above 1 MB (HIMEM/XMS, HMA). core_top's decode is
+// "index != 0 is fitted", so index 0 must stay None.
+static const char *const opt_extmem[] = { "None", "8 MB" };
 static const char *const opt_display[] = { "Full Color", "Green", "Amber", "B&W", "Red", "Blue",
     "Fuchsia", "Purple" };
 // 200-line presentation on the fixed 400-line raster: Double serves each guest
@@ -182,7 +185,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING_D(opt_dpad, DPAD_ARROWS), // SET_DPAD
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
     SETTING_D(opt_dis_en, 1), // SET_DISK_LED (default on)
-    SETTING_D(opt_extmem, 3), // SET_EXTMEM (default 8 MB: the full SDRAM pool)
+    SETTING_D(opt_extmem, 1), // SET_EXTMEM (default 8 MB)
     SETTING(opt_reserved),    // SET_RSVD_12 -- the retired Drive Sound slot
     // The v9-appended indices. Everything defaults to option 0 except Ext
     // ROM: the SCSI option ROM at D2000 is always fitted, so the window
@@ -267,7 +270,7 @@ static const item_t items_hw[] = {
     { "Floppy B", IT_FDD, 1 },
     { "FDD Turbo", IT_OPTION, SET_FDD_TURBO },
     { "", IT_SPACER, 0 },
-    { "EMS", IT_OPTION, SET_EXTMEM },
+    { "Ext Memory", IT_OPTION, SET_EXTMEM },
     { "", IT_SPACER, 0 },
     { "Disk LED", IT_OPTION, SET_DISK_LED },
 };
@@ -935,6 +938,10 @@ static void block_apply(uint32_t addr, uint32_t count)
             word = *FDD_BRAM_RDATA;
         }
         uint8_t v = (word >> ((i & 3) * 8)) & 0xFF;
+        // The EMS row's 2/4/8 MB (indices 1-3) all mean "fitted" now.
+        if (i == SET_EXTMEM && v != 0) {
+            v = 1;
+        }
         if (i < SET_COUNT && v < settings[i].count) {
             settings[i].value = v;
         }
