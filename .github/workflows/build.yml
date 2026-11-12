@@ -177,6 +177,12 @@ jobs:
           python3 tools/ops2prog.py sim/golden/streams/neon3_lines.ops neon.hex
           ./obj_dir/perf +cursor=neon.hex +cache +analog4=1 | tee perfn.log
           grep -q "=== PASS tb_mem_perf ===" perfn.log
+          # An OUT must reach the bus before the next instruction's operand
+          # read: tiles loaded by OUT 7Eh, then a TCR read at once (3D Golf
+          # POLYSYS's mask loop). z86 decode used to issue the read first.
+          python3 tools/ops2prog.py sim/golden/streams/out_then_read.ops otr.hex
+          ./obj_dir/perf +cursor=otr.hex +cache +analog4=1 +pfdis +speed=1 | tee perfo.log
+          grep -q "=== PASS tb_mem_perf ===" perfo.log
 
       - name: z86 instruction pairs and interrupts, free and with priced cache hits
         run: |
