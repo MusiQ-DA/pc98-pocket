@@ -1335,7 +1335,23 @@ module PERIPHERALS #(
     // did not): FD8B1 points vector 10h at 0936h for a 286, FDA21/FDC4A let
     // INT 1Fh AH=90h/91h (the protected-mode block move) run instead of
     // returning CF=1, and FFEBD scans 04D0h for D7/D9 boards with a delay.
-    // Bits 0, 3, 4, 5, 6 stay 0, as before.
+    //
+    // The other bits are np21w's (io/printif.c prt_i42, lines 118-154):
+    //   0x84 always -- bit 7, and bit 2 = printer not BUSY (it only drops
+    //        for a moment after a strobe);
+    //   0x20 CPUMODE_8MHZ -- clear: this machine is the 2.4576 MHz / 10 MHz
+    //        line (the ARTIC runs at 307.2 kHz);
+    //   0x10 dipsw[0] bit 2 (SW1-3) -- np21w's default DIP SW1 is 3Eh, so
+    //        set; clear makes the ITF switch the display to plasma (F824E:
+    //        OUT 6Ah,41h) and Lord Monarch default to its 8-tone LCD palette;
+    //   0x08 dipsw[0] bit 7 (SW1-8) -- clear (3Eh);
+    //   0x02 V30 only.
+    // So 94h for the 286, which np21w answers too. The BIOS/ITF readers of
+    // bits other than 1: F8170/F82B0 (bit 3), F8569/F864E/F92D7 (bit 5),
+    // F949B (bits 7, 6 -> 0501h bits 5, 4: 0501h = 20h as np21w's own BIOS
+    // writes it), FD8FF (bit 3), FD94D/FF42F (bit 0), FE03C (bit 2, the
+    // printer status). It answered 00h before, so 0501h bit 5, the printer
+    // "ready" bit and the plasma OUT are what changed.
     // 0x31 = 0xE3. The detour through 0x12 is worth recording.
     //
     // When 0xE3 first went in, the Pocket's screen went completely blank and
@@ -1357,7 +1373,7 @@ module PERIPHERALS #(
     wire [7:0] sysport_data = sysport_35_select ? pc98_sysport_c
                             : sysport_31_select ? cfg_dipsw2
                             : sysport_33_select ? (8'h08 | {7'd0, upd4990_cdat})
-                            : sysport_42_select ? (CPU_286 ? 8'h00 : 8'h02)
+                            : sysport_42_select ? (CPU_286 ? 8'h94 : 8'h96)
                             :                     8'h00;
 
     // ------------------------------------------------- keyboard 8251
