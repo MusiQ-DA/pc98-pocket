@@ -2622,6 +2622,22 @@ module tb_pc98_boot;
             ram[20'hA3FE0] = 8'h03;
             $display("PM286 +pmshort: F806A -> jmp F8FA2");
         end
+        // +pmfast: the count's fill/compare legs (F8FFD/F9018, two 64 KB
+        // segments per 128 KB step) touch ONE word per segment instead of
+        // 32 K -- `mov cx,8000h` -> `mov cx,1` at F9005/F9011/F9020/F9030 --
+        // so an 8 MB count finishes in minutes. The loop, its descriptor
+        // walk and the miscompare that ends it (the hole above EXT_MB) are
+        // the ITF's own; only the per-step coverage shrinks.
+        if ($test$plusargs("pmfast")) begin
+            for (int k = 0; k < 4; k++) begin
+                automatic int o = (k == 0) ? 16'h1005 : (k == 1) ? 16'h1011
+                                : (k == 2) ? 16'h1020 : 16'h1030;
+                if (itf[o] == 8'hB9 && itf[o + 2] == 8'h80) begin
+                    itf[o + 1] = 8'h01; itf[o + 2] = 8'h00;
+                end
+            end
+            $display("PM286 +pmfast: count legs cx=1");
+        end
 `endif
 
         $display("ITF  reset vector F8000+7FF0: %02X %02X %02X %02X %02X",
