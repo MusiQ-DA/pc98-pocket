@@ -412,8 +412,17 @@ module pc98_opna #(
     wire [7:0] status1 = sh[2'b10];   // {adpcmb_flag, 1'b0, adpcma_flags}
 
     // The board-level view of IOA: np21w fmboard_getjoy returns the joystick
-    // byte unless a write to IOB (index 0x0F) raised bit 6.
-    wire [7:0] joy_rd = joy_blk ? 8'hFF : joy;
+    // byte unless a write to IOB (index 0x0F) raised bit 6. And it is not the
+    // raw byte: the two trigger buttons (bits 7:6) are folded onto the
+    // button pair software reads, bits 5:4 (`ret &= (ret >> 2) | ~0x30`),
+    // then `ret &= 0x3f; ret |= opna->s.intr` -- bits 7:6 are the board's
+    // INT jumper, which for this board's INT5 (s_irqtable index 3) is 0xC0.
+    // Dynamo reads fire at 0x10/0x20 of the inverted byte, so without the
+    // fold the pad's A/B never fired. (np21w also strobes the rapid pair
+    // on alternate reads -- s_rapids -- which is not modelled: X/Y read as
+    // held buttons.)
+    wire [7:0] joy_fold = {2'b11, joy[5:4] & joy[7:6], joy[3:0]};
+    wire [7:0] joy_rd = joy_blk ? 8'hFF : joy_fold;
 
     // The router adds its own latency on top of jt12's busy, and a driver that
     // polls bit 7 and then writes immediately must not outrun it.
