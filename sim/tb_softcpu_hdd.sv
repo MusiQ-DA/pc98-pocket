@@ -13,11 +13,19 @@
 //   A  no bind:            no slot-5 transfer, scsi_media stays 0
 //   B  bind 1 MiB:         slot-5 header reads, scsi_media rises
 //   C  same-size re-bind:  scsi_media falls, new slot-5 reads, rises again
+//   E  OSD eject:          open the settings OSD, Hardware > Hard Disk, A:
+//                          scsi_media falls, TEST UNIT READY answers CHECK
+//                          CONDITION with sense NOT READY / 3A, and nothing
+//                          re-mounts (no slot-5 reads) while no re-bind comes
+//   F  re-bind after eject: a fresh pick mounts again, TUR answers GOOD
 //   D  re-bind, no file:   scsi_media falls and stays 0, no slot-5 reads
 //
 // Mount evidence is the firmware's own SOFT_SCSI_MEDIA flag (scsi_media),
 // which scsi_mount sets from the classified sector count and scsi_unmount
 // clears; the image served is all-zero, which the probe classifies flat.
+// Guest commands go through a model of Peripherals' 0xF4 mgmt window (the
+// request/ack toggle, the auto-incrementing control index the CDB is read
+// through, the buffer pointer REQUEST SENSE writes through, the status).
 //
 `timescale 1ns/1ps
 
@@ -32,6 +40,8 @@ module tb_softcpu_hdd;
     reg  [15:0]  draw_ops  = 16'h0000;
     reg  [383:0] draw_snap = 384'd0;
 
+    reg  [15:0] pad        = 16'd0;  // cont1 buttons (BTN_* in softcpu_regs.h)
+    reg         osd_open   = 1'b0;   // interact "Extra Options"
     reg  [31:0] hdd_bytes  = 32'd0;
     reg         hdd_rebind = 1'b0;
 
@@ -82,6 +92,49 @@ module tb_softcpu_hdd;
 
     wire scsi_media;
 
+    // Peripherals' pc98_scsi mgmt window (mgmt chip-select 0xF4), modelled
+    // combinationally: the bridge captures mgmt_din on the mgmt_rd cycle.
+    wire [15:0] mgmt_addr, mgmt_dout;
+    wire        mgmt_wr, mgmt_rd;
+    reg         sc_req = 0, sc_ack = 0;
+    reg  [4:0]  sc_idx = 0;
+    reg  [12:0] sc_bptr = 0;
+    reg  [7:0]  sc_op  = 8'h00;      // CDB byte 0 of the posted command
+    reg  [7:0]  sc_status = 8'hFF;
+    integer     sc_done = 0;         // STATUS writes seen
+    reg  [7:0]  sc_sense [0:17];
+    wire        sc_cs  = mgmt_addr[15:8] == 8'hF4;
+    wire [3:0]  sc_reg = mgmt_addr[3:0];
+    reg  [15:0] sc_din;
+    always @* begin
+        sc_din = 16'd0;
+        if (sc_cs) begin
+            case (sc_reg)
+                4'd0: sc_din = {8'h20, 7'd0, sc_req ^ sc_ack};
+                4'd2: sc_din = {8'd0, (sc_idx == 5'd3) ? sc_op : 8'h00};
+                default: ;
+            endcase
+        end
+    end
+    always @(posedge clk_sys) begin
+        if (sc_cs && mgmt_wr) begin
+            case (sc_reg)
+                4'd0: if (mgmt_dout[0]) sc_ack <= sc_req;
+                4'd1: sc_idx  <= mgmt_dout[4:0];
+                4'd2: sc_idx  <= sc_idx + 5'd1;
+                4'd3: sc_bptr <= mgmt_dout[12:0];
+                4'd4: begin
+                    if (sc_bptr < 13'd18) sc_sense[sc_bptr] <= mgmt_dout[7:0];
+                    sc_bptr <= sc_bptr + 13'd1;
+                end
+                4'd6: begin sc_status <= mgmt_dout[7:0]; sc_done <= sc_done + 1; end
+                default: ;
+            endcase
+        end
+        if (sc_cs && mgmt_rd && (sc_reg == 4'd2))
+            sc_idx <= sc_idx + 5'd1;
+    end
+
     softcpu_subsystem dut (
         .clk_sys (clk_sys),
         .clk_74a (clk_sys),
@@ -102,8 +155,9 @@ module tb_softcpu_hdd;
         .fdd0_rebind (1'b0),
         .fdd1_rebind (1'b0),
         .hdd0_rebind (hdd_rebind),
-        .mgmt_addr (), .mgmt_dout (), .mgmt_wr (), .mgmt_rd (),
-        .mgmt_din  (16'd0),
+        .mgmt_addr (mgmt_addr), .mgmt_dout (mgmt_dout),
+        .mgmt_wr (mgmt_wr), .mgmt_rd (mgmt_rd),
+        .mgmt_din  (sc_din),
         .bridge_wr      (br_wr),
         .bridge_addr    (br_addr),
         .bridge_wr_data (32'd0),
@@ -122,11 +176,11 @@ module tb_softcpu_hdd;
         .osd_vcnt  (10'd0),
         .osd_palette_idx (),
         .osd_in_area     (),
-        .cont1_key    (16'd0),
+        .cont1_key    (pad),
         .dock_key_code(8'd0),
         .dock_key_ext (1'b0),
         .dock_key_stb (1'b0),
-        .osd_open_req (1'b0),
+        .osd_open_req (osd_open),
         .raster_w     (10'd640),
         .raster_h     (10'd400),
         .dataslots_ready (1'b1),
@@ -185,6 +239,30 @@ module tb_softcpu_hdd;
             @(posedge clk_sys);
     endtask
 
+    // Post one guest command (CDB byte 0 = op, the rest zero) and wait for
+    // the firmware's STATUS write.
+    task scsi_cmd(input [7:0] op);
+        integer i, d0;
+        d0 = sc_done;
+        sc_op  <= op;
+        @(posedge clk_sys);
+        sc_req <= ~sc_req;
+        for (i = 0; i < 2000000 && sc_done == d0; i = i + 1)
+            @(posedge clk_sys);
+    endtask
+
+    // One button press through vkb_ui_tick: the word must hold BTN_SETTLE
+    // (~10 ms of clk_pico, ~430k clk_sys) before it counts, and the release
+    // the same; the margin covers the IRQ's panel repaint.
+    localparam integer HOLD = 900000;
+    task press(input [15:0] m);
+        pad <= m;
+        repeat (HOLD) @(posedge clk_sys);
+        pad <= 16'd0;
+        repeat (HOLD) @(posedge clk_sys);
+    endtask
+    localparam [15:0] BTN_DOWN = 16'h0002, BTN_A = 16'h0010, BTN_B = 16'h0020;
+
     integer reads0, falls0;
 
     initial begin
@@ -205,6 +283,8 @@ module tb_softcpu_hdd;
         $display("%0t B: slot-5 reads=%0d media=%0d", $time, hdd_reads, scsi_media);
         check(hdd_reads > 0, "B: bind -> header read off slot 5");
         check(scsi_media == 1, "B: bind -> mounted");
+        scsi_cmd(8'h00);
+        check(sc_status == 8'h00, "B: TEST UNIT READY -> GOOD");
 
         // C: a swap at the same size; only the toggle says anything changed.
         repeat (200000) @(posedge clk_sys);
@@ -218,6 +298,45 @@ module tb_softcpu_hdd;
         check(falls == falls0 + 1, "C: re-bind -> old image dropped");
         check(hdd_reads > reads0, "C: re-bind -> new image probed");
         check(scsi_media == 1, "C: re-bind -> remounted");
+
+        // E: eject through the OSD. Extra Options opens Settings at row 0;
+        // Hardware is main row 2, Hard Disk is Hardware row 2.
+        repeat (200000) @(posedge clk_sys);
+        falls0 = falls;
+        osd_open <= 1'b1;
+        repeat (HOLD) @(posedge clk_sys);
+        osd_open <= 1'b0;
+        press(BTN_DOWN);
+        press(BTN_DOWN);
+        press(BTN_A);       // into Hardware
+        press(BTN_DOWN);
+        press(BTN_DOWN);
+        check(scsi_media == 1, "E: navigating the OSD leaves the disk in");
+        press(BTN_A);       // Hard Disk: eject
+        wait_media(1'b0, 2000000);
+        reads0 = hdd_reads;
+        press(BTN_B);       // back to main
+        press(BTN_B);       // close the panel
+        $display("%0t E: falls=%0d media=%0d", $time, falls, scsi_media);
+        check(falls == falls0 + 1 && scsi_media == 0, "E: OSD eject -> unmounted");
+        scsi_cmd(8'h00);
+        check(sc_status == 8'h02, "E: TEST UNIT READY -> CHECK CONDITION");
+        scsi_cmd(8'h03);
+        check(sc_status == 8'h00 && sc_sense[2] == 8'h02 && sc_sense[12] == 8'h3A,
+              "E: REQUEST SENSE -> NOT READY / medium not present");
+        repeat (1000000) @(posedge clk_sys);
+        scsi_cmd(8'h00);
+        check(sc_status == 8'h02 && scsi_media == 0, "E: stays ejected without a re-bind");
+        check(hdd_reads == reads0, "E: ejected -> no slot-5 reads");
+
+        // F: the user picks the image again in the Pocket menu.
+        reads0 = hdd_reads;
+        hdd_rebind <= ~hdd_rebind;
+        wait_media(1'b1, 2000000);
+        $display("%0t F: slot-5 reads=%0d media=%0d", $time, hdd_reads, scsi_media);
+        check(scsi_media == 1 && hdd_reads > reads0, "F: re-bind after eject -> mounted");
+        scsi_cmd(8'h00);
+        check(sc_status == 8'h00, "F: TEST UNIT READY -> GOOD");
 
         // D: a re-bind that carries no file leaves the drive empty.
         repeat (200000) @(posedge clk_sys);
