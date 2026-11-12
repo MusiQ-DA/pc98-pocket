@@ -169,7 +169,7 @@ SCSI board serves the same role through its own BIOS.
 |---|---|---|---|
 | RS-232C USART | PD8251A 0x30/0x32 (man row 6), modem lines on 0x33 bits 7-5, baud = PIT ch2, master IRQ4 (np21w `io/serial.c` `pic_setirq(4)`) | **no UART at all** — 0x30/0x32 unclaimed; 0x33 modem bits read 0 (:1043); PIT ch2 runs but nothing consumes it | **M** |
 | RS-232C extension | 0xB0-0xBF (man row 22) | absent | **M** |
-| Printer I/F | PD8255A-5 0x40-0x47 even (man row 8): 0x40 data, 0x44 control, 0x46 status | only **0x42** answered, constant 0x02 (:933, 1044) | **M** (stub only — no data/control/status ports) |
+| Printer I/F | PD8255A-5 0x40-0x47 even (man row 8): 0x40 data, 0x44 control, 0x46 status | only **0x42** answered: 0x94 (286; np21w `io/printif.c` prt_i42 = 0x84 \| SW1-3 0x10, bit1 = 0 for the 286, 0x96 on the V30 build) | **M** (stub only — no data/control/status ports) |
 | CMT (cassette) | PD8251A 0x91-0x99 odd (man row 17) | absent | **M** |
 
 ## 10. Sound
@@ -268,7 +268,7 @@ Correctly absent (the manual doesn't have them): NMI ports, NDP/A20 ports
 | 0x20 | RTC cmd | :950, 968-974 |
 | 0x31/0x33/0x35/0x37 odd | DIP/sysport | :907-945, 1041-1045 |
 | 0x41/0x43 | kbd 8251 | :1056-1073 |
-| 0x42 | printer stub (0x02) | :933, 1044 |
+| 0x42 | printer stub (0x94, np21w prt_i42) | Peripherals.sv sysport_data |
 | 0x5C-0x5F | ARTIC | :1003-1006, 2313-2316 |
 | 0x60/0x62, 0xA0/0xA2 | GDC×2 | :774-775 |
 | 0x68, 0x6A | GDC mode regs | :1291-1330 |

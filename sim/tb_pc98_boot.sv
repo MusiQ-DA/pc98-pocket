@@ -1336,13 +1336,26 @@ module tb_pc98_boot;
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
                             : sysport_33_sel ? 8'h00
 `ifdef PM286
-                            // the 286 class: bit 1 clear (core_top PM286)
-                            : sysport_42_sel ? 8'h00
+                            // the 286 class: bit 1 clear (core_top PM286),
+                            // the rest np21w's prt_i42 (Peripherals.sv): 94h
+                            : sysport_42_sel ? 8'h94
                             : sysport_7fdd_sel ? 8'h08
 `else
-                            : sysport_42_sel ? 8'h02
+                            : sysport_42_sel ? 8'h96
 `endif
                             :                  8'h00;
+
+    // Every IN 42h the ROMs make, with the answer and the reading PC.
+    logic in42_d = 1'b1;
+    int   in42_n = 0;
+    always @(posedge clk_chipset) begin
+        in42_d <= ~sysport_42_sel;
+        if (sysport_42_sel && in42_d) begin
+            in42_n <= in42_n + 1;
+            if (in42_n < 40)
+                $display("IN 42h -> %02X  pc=%05X  (#%0d)", sysport_data, zet_pc, in42_n + 1);
+        end
+    end
 
     logic saw_high_write = 1'b0;
     logic din_default_q = 1'b0;
