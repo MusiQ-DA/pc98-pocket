@@ -225,7 +225,7 @@ module tb_pc98_boot;
         .cache_en  (1'b0), .pace(1'b0), .pace_ce(1'b0), .pace_rd_wait(2'd0), .pace_wr_wait(2'd0), .pace_vwait(5'd0),
 `endif
         .bios_shadow  (itf_bank),
-        .bios_protect (1'b1), .ext_en (ext_en_r), .dx (7'd0),
+        .bios_protect (1'b1), .ext_en (ext_en_r), .a_quiet (1'b1), .dx (7'd0),
         .f_req (cf_req), .f_we (cf_we), .f_addr (cf_addr), .f_len (cf_len),
         .f_wdata0 (cf_wd0), .f_wdata1 (cf_wd1), .f_ack (cf_ack),
         .f_rvalid (cf_rvalid), .f_rdata (cf_rdata), .f_done (cf_done),
@@ -698,7 +698,7 @@ module tb_pc98_boot;
         // F8000-FFFFF redirected to 1F8000 while the flag is set. itf_bank is
         // this bench's copy of core_top's, so the images are loaded once and
         // the switch is an address bit, not a copy.
-        .bios_protect_flag(2'b10), .bios_shadow_flag(itf_bank),
+        .ems_map(40'd0), .bios_protect_flag(2'b10), .bios_shadow_flag(itf_bank),
         .font_bank_flag(1'b0),
         .font_rd_req(fontb_req), .font_rd_addr(fontb_addr),
         .font_rd_len(fontb_len),

@@ -13,7 +13,8 @@
 //     line is updated on a hit and the store goes out on port F through a
 //     one-entry write buffer, acknowledged to the core as soon as it is
 //     buffered.
-//   * UNCACHED: I/O, VRAM, the CG window, option ROMs -- everything
+//   * UNCACHED: I/O, VRAM, the CG window, option ROMs, the EMS windows
+//     (their alias in extended memory is ordered by win_wr) -- everything
 //     else -- runs as Wishbone cycles through cpu_bus_bridge. The write
 //     buffer is drained before any
 //     of them starts, so an OUT that starts a DMA never passes the store
@@ -136,6 +137,10 @@ module z86_cache #(
     // The OSD's "Ext Memory" (clk-synchronous level): 0 makes the whole of
     // extended memory the hole, so the ITF's count and HIMEM find none.
     input  wire         ext_en,
+    // RAM.sv's gv_a_quiet: nothing of port A pending or in flight. A store
+    // through an EMS window (C0000-CFFFF, pc98_ems98) reaches extended
+    // memory on port A, behind this cache's back (see win_wr).
+    input  wire         a_quiet,
     input  wire [23:0]  ld_addr,
     input  wire         ld_req,         // toggle
     output reg          ld_ack,         // toggle, follows ld_req when done
@@ -547,12 +552,44 @@ module z86_cache #(
             look_idx = idx_of(phys_of(c_a + 24'd1, bios_shadow));
     end
 
+    // ---- EMS window stores ----------------------------------------------
+    // The EMS windows (pc98_ems98, np21w io/emsio.c) bank C0000-CFFFF onto
+    // extended memory, which this cache holds as port-F lines. A window
+    // store is an uncached port-A write: the bridge acks it once RAM.sv has
+    // taken it, but it commits (and its snoop kills the aliased line) only
+    // some clocks later -- a cached read of the alias in between hit the
+    // old byte, and a port-F store to it could commit first and then be
+    // overwritten (sim/z86_tests/ems_np21w.asm, r3). So after one, every
+    // extended-memory access waits until port A has been quiet for two
+    // edges: the write committed (a_wr_v is its completion) and the kill
+    // register has written the tag. An unmapped window never selects the
+    // SDRAM, so port A is quiet at once. The other way round needs nothing:
+    // a port-F store drains (busy) before any uncached access starts.
+    reg        win_wr = 1'b0;
+    reg  [1:0] aq_q   = 2'b00;
+    wire win_st = PM286 && (EXT_MB != 0) && wb_stb_o && wb_we_o && !wb_tga_o
+               && (wb_adr_o[19:16] == 4'hC);
+    always @(posedge clk) begin
+        aq_q <= {aq_q[0], a_quiet};
+        if (reset)            win_wr <= 1'b0;
+        else if (win_st)      win_wr <= 1'b1;
+        else if (!wb_stb_o && a_quiet && (aq_q == 2'b11)) win_wr <= 1'b0;
+    end
+    wire ext_wait = win_wr && ((wr_pend && ext_a(wr_addr))
+                            || (rd_any && !rd_cur_io && ext_a(rd_cur_a))
+                            || (ld_pend && ext_a(ld_addr)));
+
     // ---- snoop: clear the line(s) a port A write lands in ---------------
     // A two-word write can end in the next line; that one is cleared on the
     // following edge.
     reg         sn2_v;
     reg  [IDX_BITS-1:0] sn2_i;
-    wire        sn_ours  = sn_v && (sn_addr[23:21] == 3'b000);
+    // The guest megabyte and the ITF shadow (0x000000-0x1FFFFF), and under
+    // PM286 the extended memory (0x800000 up): the EMS windows at C0000
+    // (RAM.sv, pc98_ems98) write it through port A. The kill is by index,
+    // so it is conservative for any line sharing it.
+    wire        sn_ours  = sn_v && ((sn_addr[23:21] == 3'b000)
+                                    || (PM286 && (EXT_MB != 0) && sn_addr[23]));
     wire [20:0] sn_end   = sn_addr[20:0] + {17'd0, sn_len};
     wire [IDX_BITS-1:0] sn_i0 = idx_of(PW'(sn_addr[20:0]));
     wire [IDX_BITS-1:0] sn_i1 = idx_of(PW'(sn_end));
@@ -863,6 +900,8 @@ module z86_cache #(
                         || (ld_pend && ld_addr[19:4] != ld_next)))
                     pdebt <= p_yld;
                 // a line patch lands this edge: look it up on the next
+            end else if (ext_wait) begin
+                // an EMS window store is still on its way to the SDRAM
             end else if (wr_pend) begin
                 if (wr_hole) begin
                     // above extended memory: the store vanishes
