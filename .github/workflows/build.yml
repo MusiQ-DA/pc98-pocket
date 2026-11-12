@@ -291,6 +291,15 @@ jobs:
           ./obj_rb/b | tee rb.log
           grep -q "RESULT: PASS" rb.log
 
+      - name: the loader puts all 256 ANK glyphs (kana too) in the BRAM
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_font_dlmap \
+            -Isim -Ifpga/core sim/tb_pc98_font_dlmap.sv \
+            fpga/core/pc98_font_dlmap.sv fpga/core/pc98_font_ank.sv \
+            -o f --Mdir obj_fdl
+          ./obj_fdl/f | tee fdl.log
+          grep -q "RESULT: PASS" fdl.log
+
       - name: glyph addresses match a real FONT.ROM
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_pc98_glyph_addr \
