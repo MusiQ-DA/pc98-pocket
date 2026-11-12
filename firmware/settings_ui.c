@@ -215,7 +215,7 @@ static uint32_t reset_ticks;
 // A menu row is a submenu link, an editable option, a controller-button binding, an action, or a
 // blank grouping spacer; `arg` selects the target menu, the setting id, the BIND_* button, or the
 // action respectively (unused for a spacer).
-enum { IT_SUBMENU, IT_OPTION, IT_KEYBIND, IT_ACTION, IT_SPACER, IT_FDD };
+enum { IT_SUBMENU, IT_OPTION, IT_KEYBIND, IT_ACTION, IT_SPACER, IT_FDD, IT_HDD };
 
 typedef struct {
     const char *label;
@@ -263,11 +263,15 @@ static const item_t items_av[] = {
 // The two Floppy rows are NOT stored settings: the drives' media lives in
 // fdd_service, the Pocket menu's data slots are the only way an image gets
 // in, and these rows show the live state and eject/re-insert it (A button).
+// Hard Disk is the same kind of live row for the SCSI image (scsi_service):
+// A ejects it, and it stays out until a new pick in the Pocket menu re-binds
+// slot 5 -- there is no remembered image to put back.
 // SET_EMS's slot was reclaimed for SET_FDD_TURBO and SET_EMS_FRAME's for
 // SET_MODE200 -- the enum comments say why the blob layout is unchanged.
 static const item_t items_hw[] = {
     { "Floppy A", IT_FDD, 0 },
     { "Floppy B", IT_FDD, 1 },
+    { "Hard Disk", IT_HDD, 0 },
     { "FDD Turbo", IT_OPTION, SET_FDD_TURBO },
     { "", IT_SPACER, 0 },
     { "Ext Memory", IT_OPTION, SET_EXTMEM },
@@ -527,6 +531,31 @@ static void keybind_sync(void)
     }
 }
 
+// Value-text builders for the live media rows. No / and no %: clang 23 turns
+// a % /= pair into a divu/mul/sub sequence, and the softcore has no divider,
+// so that pair is an illegal instruction on hardware (the Makefile's
+// nodiv-verify is the gate). Decimal is by repeated subtraction of the place
+// values, clamped to five digits -- a floppy is four at most, an HDD's MB
+// count five.
+static int put_word(char *buf, int n, const char *w)
+{
+    while (*w) buf[n++] = *w++;
+    return n;
+}
+
+static int put_dec(char *buf, int n, uint32_t v)
+{
+    static const uint16_t place[] = { 10000, 1000, 100, 10, 1 };
+    int lead = 1;
+    if (v > 99999) v = 99999;
+    for (unsigned p = 0; p < sizeof(place) / sizeof(place[0]); p++) {
+        int d = 0;
+        while (v >= place[p]) { v -= place[p]; d++; }
+        if (!lead || d || place[p] == 1) { buf[n++] = (char) ('0' + d); lead = 0; }
+    }
+    return n;
+}
+
 // Repaint one menu row: erase its interior (the frame columns stay), then the cursor, label, and
 // either the current value (option/binding) or a submenu marker.
 static void draw_row(int i)
@@ -554,34 +583,35 @@ static void draw_row(int i)
     } else if (it->type == IT_FDD) {
         // Live state, formatted here: "Inserted 1232K" or "Ejected". The size
         // is sectors/2 in KB (512-byte sectors), which is what every PC-98
-        // format's label quotes.
-        //
-        // No / and no %: clang 23 turns the % /= pair this used to carry into
-        // a divu/mul/sub sequence, and the softcore has no divider, so that
-        // pair is an illegal instruction on hardware (the Makefile's
-        // nodiv-verify is the gate). Decimal by repeated subtraction of the
-        // place values -- a floppy is four digits at the very most -- and the
-        // /2 is a shift, sectors being 512 bytes.
+        // format's label quotes (the /2 is a shift; put_dec says why).
         char buf[18];
         int n = 0;
         if (fdd_is_inserted(it->arg)) {
-            static const char word[] = "Inserted ";
-            for (int k = 0; word[k]; k++) buf[n++] = word[k];
-            uint32_t v = fdd_mounted_sectors(it->arg) >> 1;
-            static const uint16_t place[] = { 1000, 100, 10, 1 };
-            char digs[4];
-            int nd = 0, lead = 1;
-            if (v > 9999) v = 9999;
-            for (unsigned p = 0; p < sizeof(place) / sizeof(place[0]); p++) {
-                int d = 0;
-                while (v >= place[p]) { v -= place[p]; d++; }
-                if (!lead || d || place[p] == 1) { digs[nd++] = (char) ('0' + d); lead = 0; }
-            }
-            for (int i = 0; i < nd; i++) buf[n++] = digs[i];
+            n = put_word(buf, n, "Inserted ");
+            n = put_dec(buf, n, fdd_mounted_sectors(it->arg) >> 1);
             buf[n++] = 'K';
         } else {
-            static const char word[] = "Ejected";
-            for (int k = 0; word[k]; k++) buf[n++] = word[k];
+            n = put_word(buf, n, "Ejected");
+        }
+        buf[n] = 0;
+        osd_draw_string16(&panel, COL_VALUE * 8, y, buf, OSD_LABEL);
+    } else if (it->type == IT_HDD) {
+        // "Mounted 40M" (or "Mounted 512K" under a megabyte) or "Ejected".
+        // 512-byte blocks: >>11 is MB, >>1 is KB -- shifts, no divider.
+        char buf[18];
+        int n = 0;
+        uint32_t sectors = scsi_mounted_sectors();
+        if (sectors) {
+            n = put_word(buf, n, "Mounted ");
+            if (sectors >= 2048) {
+                n = put_dec(buf, n, sectors >> 11);
+                buf[n++] = 'M';
+            } else {
+                n = put_dec(buf, n, sectors >> 1);
+                buf[n++] = 'K';
+            }
+        } else {
+            n = put_word(buf, n, "Ejected");
         }
         buf[n] = 0;
         osd_draw_string16(&panel, COL_VALUE * 8, y, buf, OSD_LABEL);
@@ -761,6 +791,14 @@ int settings_input(uint16_t pressed)
             } else {
                 fdd_insert(it->arg);
             }
+            draw_row(cur_row);
+        }
+    } else if (it->type == IT_HDD) {
+        // A (or an arrow) ejects a mounted disk. An ejected one has nothing
+        // to re-insert: the next image comes from a Pocket-menu pick, whose
+        // slot-5 re-bind main.c mounts.
+        if ((pressed & (BTN_A | BTN_LEFT | BTN_RIGHT)) && scsi_mounted_sectors()) {
+            scsi_eject();
             draw_row(cur_row);
         }
     } else if (it->type == IT_ACTION) {

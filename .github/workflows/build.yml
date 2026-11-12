@@ -732,11 +732,12 @@ jobs:
           cd fpga && ../obj_fw/fw | tee ../fwtrig.log
           grep -q "RESULT: PASS" ../fwtrig.log
 
-      - name: the hard disk mounts only on a slot-5 bind, and re-mounts on a re-bind
+      - name: the hard disk mounts only on a slot-5 bind, re-mounts on a re-bind, and ejects from the OSD
         # Boots the REAL firmware.vh with slot 5's persisted pick in the
         # datatable and no update event: nothing may mount. Then a bind
         # mounts, a same-size re-bind drops and re-mounts, and a re-bind
-        # with no file leaves the drive empty -- the floppy model.
+        # with no file leaves the drive empty -- the floppy model. The OSD
+        # Hard Disk row ejects: NOT READY until the next re-bind.
         run: |
           S=fpga/core
           verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style \

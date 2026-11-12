@@ -241,6 +241,8 @@ uint32_t fdd_mounted_sectors(uint32_t drive);
 void scsi_init(void);
 int  scsi_mount(uint32_t bytes);    // the Hard Disk slot's file size; 0 = retry
 void scsi_unmount(void);            // drop the image (a slot-5 re-bind)
+void scsi_eject(void);              // OSD eject: unmount on the next poll
+uint32_t scsi_mounted_sectors(void); // 512-byte blocks, 0 = none / ejecting
 void scsi_poll(void);
 void fdd_poll(void);
 
