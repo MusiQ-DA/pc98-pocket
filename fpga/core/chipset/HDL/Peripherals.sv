@@ -2037,6 +2037,15 @@ module PERIPHERALS #(
         .row(pc98_ank_row)
     );
 
+    // A stopped master GDC shows no text (INT 18h AH=0Dh, np21w gdc_work's
+    // STOP clearing GDCSCRN_ENABLE) -- see pc98_text_gate for the reading.
+    wire txt_pixel;
+    pc98_text_gate u_pc98_text_gate (
+        .clk(clock), .reset(reset), .disp_on(gdc_m_disp_on),
+        .clk_dot(clk_pc98_dot), .pixel_in(pc98_pixel),
+        .pixel_out(txt_pixel), .text_off()
+    );
+
     // The attribute's colour field is G R B, so it maps to the output that way
     // round. Full intensity: PC-98 text has no half-bright. The pixel is
     // delayed one dot clock to line up with the graphics plane's own +1
@@ -2045,7 +2054,7 @@ module PERIPHERALS #(
     logic       t_pix_q;
     logic [2:0] t_grb_q;
     always_ff @(posedge clk_pc98_dot) begin
-        t_pix_q <= pc98_pixel;
+        t_pix_q <= txt_pixel;
         t_grb_q <= pc98_grb;
     end
 
