@@ -2042,7 +2042,8 @@ module PERIPHERALS #(
     wire txt_pixel;
     pc98_text_gate u_pc98_text_gate (
         .clk(clock), .reset(reset), .disp_on(gdc_m_disp_on),
-        .clk_dot(clk_pc98_dot), .pixel_in(pc98_pixel),
+        .clk_dot(clk_pc98_dot), .disp_on_dot(gdc_on_px),
+        .pixel_in(pc98_pixel),
         .pixel_out(txt_pixel), .text_off()
     );
 
