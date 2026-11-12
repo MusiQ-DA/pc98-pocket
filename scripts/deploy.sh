@@ -239,10 +239,12 @@ cp dist/pc98/Platforms/* "$VOL/Platforms/" 2>/dev/null || true
 # auto-bind for deferload slots, it just makes same-name picks no-ops.
 mkdir -p "$VOL/Assets/pc98/common"
 [ -f testdisk/draw_test.hdm ] && cp -f testdisk/draw_test.hdm "$VOL/Assets/pc98/common/"
-# Same picker directory for the SCSI test disks (testdisk/build_hdd.sh: one
-# per image format); the Hard Disk slot browses hdi/nhd/hdd/hdn.
-for f in testdisk/hdd_test.hdn testdisk/hdd_test.nhd testdisk/hdd_test.hdi; do
-    if [ -f "$f" ]; then cp -f "$f" "$VOL/Assets/pc98/common/"; fi
+# The SCSI self-test disks (testdisk/hdd_test.*) are NOT shipped: the Pocket
+# remembers the last Hard Disk pick, so a test image on the card ended up
+# booting by default ("SCSI HDD IPL OK" and a halt). Copies left by older
+# deploys are removed; scripts/jtag_scsiboot.sh documents copying them by hand.
+for f in hdd_test.hdd hdd_test.hdn hdd_test.nhd hdd_test.hdi; do
+    rm -f "$VOL/Assets/pc98/common/$f"
 done
 # Rhythm voices come two ways: put the six source WAVs here under their
 # canonical names (2608_bd.wav etc. -- the data.json slots pin those exact
@@ -293,13 +295,6 @@ if [ -f testdisk/draw_test.hdm ]; then
         say "  ok  Assets/pc98/common/draw_test.hdm"
     else
         say "  BAD Assets/pc98/common/draw_test.hdm"; fail=1
-    fi
-fi
-if [ -f testdisk/hdd_test.hdd ]; then
-    if cmp -s testdisk/hdd_test.hdd "$VOL/Assets/pc98/common/hdd_test.hdd"; then
-        say "  ok  Assets/pc98/common/hdd_test.hdd"
-    else
-        say "  BAD Assets/pc98/common/hdd_test.hdd"; fail=1
     fi
 fi
 [ $fail -eq 0 ] || { say "VERIFY FAILED"; note "deploy VERIFY FAILED"; exit 1; }
