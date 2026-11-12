@@ -710,6 +710,23 @@ jobs:
           cd fpga && ../obj_fw/fw | tee ../fwtrig.log
           grep -q "RESULT: PASS" ../fwtrig.log
 
+      - name: the hard disk mounts only on a slot-5 bind, and re-mounts on a re-bind
+        # Boots the REAL firmware.vh with slot 5's persisted pick in the
+        # datatable and no update event: nothing may mount. Then a bind
+        # mounts, a same-size re-bind drops and re-mounts, and a re-bind
+        # with no file leaves the drive empty -- the floppy model.
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style \
+            --top-module tb_softcpu_hdd \
+            -Isim -I$S -I$S/common -Ifpga/apf \
+            sim/tb_softcpu_hdd.sv sim/stub_altsyncram.sv sim/stub_vhdl.sv \
+            sim/stub_pll.sv fpga/apf/common.v \
+            $S/softcpu_subsystem.sv $S/picorv32.v $S/sprom.v \
+            $S/softcpu_fdd_bridge.sv -o hd --Mdir obj_hdd
+          cd fpga && ../obj_hdd/hd | tee ../hddbind.log
+          grep -q "RESULT: PASS" ../hddbind.log
+
       - name: the graphics fetch shows what the slave GDC's partitions say
         run: |
           S=fpga/core
