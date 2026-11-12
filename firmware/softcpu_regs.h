@@ -22,7 +22,8 @@
 #define FDD_TDS_CLR    ((volatile uint32_t *) 0x30000038) // W: bit0 clear done
 #define FDD0_DISK_SIZE ((volatile uint32_t *) 0x3000003C) // R: floppy-0 image size in sectors
 #define FDD1_DISK_SIZE ((volatile uint32_t *) 0x30000040) // R: floppy-1 image size in sectors
-#define FDD_REBIND     ((volatile uint32_t *) 0x30000050) // R: per-floppy image-rebind toggles
+#define HDD0_DISK_SIZE ((volatile uint32_t *) 0x30000044) // R: hard-disk image size in BYTES
+#define FDD_REBIND     ((volatile uint32_t *) 0x30000050) // R: per-drive image-rebind toggles
 #define DTBL_ADDR      ((volatile uint32_t *) 0x30000054) // W: datatable word index
 #define DTBL_DATA      ((volatile uint32_t *) 0x30000058) // R: datatable word at the index; W: write it
 
@@ -120,9 +121,11 @@
 #define FDD_REQ_READ  (1 << 0)
 #define FDD_REQ_WRITE (1 << 1)
 
-// FDD_REBIND bits: one toggle per floppy drive, flipping on each image (re)bind.
+// FDD_REBIND bits: one toggle per drive, flipping on each image (re)bind (a
+// dataslot-update event for that slot -- a pick in the Pocket menu).
 #define FDD0_REBIND_BIT (1 << 0)
 #define FDD1_REBIND_BIT (1 << 1)
+#define HDD0_REBIND_BIT (1 << 2)
 
 // FDD_MGMT_TRIG bits
 #define FDD_MGMT_WR (1 << 0)
@@ -186,8 +189,10 @@
 // is a few seconds of margin, never a false trip.
 #define DISK_SPIN_LIMIT 4000000u
 
-// Dataslot ids, matching data.json. Floppy sizes arrive via the dataslot event
-// (FDD*_DISK_SIZE); HDD and Settings sizes are read from the datatable by id (slot_bytes).
+// Dataslot ids, matching data.json. Floppy and HDD sizes arrive via the dataslot event
+// (FDD*_DISK_SIZE, HDD0_DISK_SIZE); Settings and rhythm sizes are read from the datatable
+// by id (slot_bytes). A disk slot's datatable entry is not a bind: the Pocket refills it
+// at launch from the persisted pick without any update event.
 #define FDD0_SLOT_ID     3
 #define FDD1_SLOT_ID     4
 #define HDD0_SLOT_ID     5
@@ -235,6 +240,7 @@ uint32_t fdd_mounted_sectors(uint32_t drive);
 // board is a PC-9801-55.
 void scsi_init(void);
 int  scsi_mount(uint32_t bytes);    // the Hard Disk slot's file size; 0 = retry
+void scsi_unmount(void);            // drop the image (a slot-5 re-bind)
 void scsi_poll(void);
 void fdd_poll(void);
 
