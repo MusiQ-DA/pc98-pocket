@@ -19,8 +19,11 @@ A V30-class PC-9801: the VX/UV-era machine, not a 9821. Concretely:
   in SDRAM at 0x800000-0xFFFFFF) behind the A20 gate (OUT F2h/F0h), which
   the ITF counts into 0:0401h and HIMEM/XMS drivers and DOS=HIGH use. The
   Hardware menu's Ext Memory row picks None or 8 MB (default 8 MB); None
-  leaves everything above 1 MB empty (reads FFh, writes dropped). There is
-  no EMS board.
+  leaves everything above 1 MB empty (reads FFh, writes dropped). EMS is
+  np21w's (io/emsio.c): page registers at 08E1h/08E3h/08E5h/08E7h bank four
+  16 KB windows at C0000h-CFFFFh onto that same extended memory (megabyte t
+  = linear t MB), 08E9h selects t and reads 00h for t = 1..8, FFh otherwise
+  (FFh for every t with Ext Memory None).
 - **Video**: the μPD7220 GDC pair -- master for text, slave for graphics --
   with GRCG, the EGC raster-op engine, and 8-/16-colour modes. Output is
   a fixed 640x400 panel: 200-line graphics modes are line-doubled to

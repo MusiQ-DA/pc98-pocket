@@ -776,6 +776,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gvram_seq.sv"
 # The EGC's blitter, instantiated by the sequencer above. Landed with the
 # sequencer but never added here, so every build after it failed to elaborate.
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_egc.sv"
+# The EMS bank registers at 0x08E1-0x08E9 (np21w io/emsio.c): windows at
+# C0000-CFFFF onto the 286's extended memory. RAM.sv holds the remap half.
+set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_ems98.sv"
 # The PC-9801-55 SCSI board's register window at 0x0CC0-0x0CC7.
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_scsi.sv"
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_scsi_rom.sv"

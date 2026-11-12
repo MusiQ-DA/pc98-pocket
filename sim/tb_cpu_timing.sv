@@ -100,7 +100,7 @@ module tb_cpu_timing;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
-        .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
+        .ems_map(40'd0), .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .wait_count_clk_en(ce_neg),
         .ram_read_wait_cycle(rd_wait), .ram_write_wait_cycle(wr_wait),
         .vram_rd_wait_cycle(vram_rd), .vram_wr_wait_cycle(vram_wr),

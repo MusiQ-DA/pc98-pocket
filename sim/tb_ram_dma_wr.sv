@@ -61,7 +61,7 @@ module tb_ram_dma_wr;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
-        .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
+        .ems_map(40'd0), .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .font_bank_flag(1'b0),
         .font_rd_req(1'b0), .font_rd_addr(24'd0), .font_rd_len(4'd0),
         .font_rd_ack(), .font_rd_valid(), .font_rd_data(), .font_rd_done(),

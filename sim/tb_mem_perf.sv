@@ -196,7 +196,17 @@ module tb_mem_perf;
     initial nvw_r = $test$plusargs("novwait");
     assign zwb_nmia = 1'b0;
 
+    // +define+TB_PM286: the shipping CPU -- 80286 protected mode and the
+    // 8 MB of extended memory (core_top PM286=1, EXT_MB=8) -- for the EMS
+    // test (+ems=, scripts/sim_ems.sh). +extoff is the OSD's Ext Memory =
+    // None: z86_cache's ext_en low and the EMS registers' maxmem 0.
+    logic ext_en_r = 1'b1;
+    initial if ($test$plusargs("extoff")) ext_en_r = 1'b0;
+`ifdef TB_PM286
+    z86 #(.WCOMB(1'b1), .PM286(1'b1), .EXT_MB(8)) u_cpu (
+`else
     z86 #(.WCOMB(1'b1)) u_cpu (
+`endif
         .clk       (zet_clk),
         .reset     (cpu_reset_w),
         .clk_free  (clk),
@@ -215,7 +225,8 @@ module tb_mem_perf;
         .dx           (dx_r[6:0]),
         .bios_shadow  (shadow_flag_r),
         .bios_protect (1'b0),
-        .ext_en       (1'b1),
+        .ext_en       (ext_en_r),
+        .a_quiet      (gv_a_quiet_w),
         .f_req     (zf_req),
         .f_we      (zf_we),
         .f_addr    (zf_addr),
@@ -577,6 +588,7 @@ module tb_mem_perf;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
+        .ems_map(ems_map_w),
         .bios_protect_flag(2'b00), .bios_shadow_flag(shadow_flag_r),
         .font_bank_flag(1'b0),
         .font_rd_req(1'b0), .font_rd_addr(24'd0), .font_rd_len(4'd0),
@@ -671,8 +683,24 @@ module tb_mem_perf;
         .address_enable_n    (aen)
     );
 
+    // ---- EMS bank registers (08E1h-08E9h), as Chipset.sv wires them -------
+    wire [39:0] ems_map_w;
+    wire [7:0]  ems_status_w;
+`ifdef TB_PM286
+    wire [3:0]  ems_maxmem_w = ext_en_r ? 4'd8 : 4'd0;
+`else
+    wire [3:0]  ems_maxmem_w = 4'd0;
+`endif
+    pc98_ems98 u_ems (
+        .clock(clk), .reset(reset),
+        .address(cpu_address[15:0]), .internal_data_bus(cpu_data_bus),
+        .io_write_n(io_wr_n), .address_enable_n(aen),
+        .maxmem(ems_maxmem_w), .map(ems_map_w), .status(ems_status_w)
+    );
+
     // ---- the data bus back to the CPU --------------------------------------
     wire [7:0] din    = ~mem_rd_n ? (~ram_sel_n ? seq_cpu_rdata : 8'hFF)
+                      : (~io_rd_n && cpu_address[15:0] == 16'h08E9) ? ems_status_w
                       :             8'hFF;
     wire [7:0] din_hi = ~mem_rd_n ? (~ram_sel_n ? seq_cpu_rdata_hi : 8'hFF)
                       :             8'hFF;
@@ -695,6 +723,7 @@ module tb_mem_perf;
     //
     logic [7:0] prog [0:8191];
     string cur_file = "";
+    string ems_file = "";
     int prog_len = 0;
     task emit(input logic [7:0] b);
         prog[prog_len] = b; prog_len++;
@@ -1573,6 +1602,24 @@ module tb_mem_perf;
         // whole 14-minute phase set.
         // +cursor=<hex>: a captured guest VRAM op stream compiled to code
         // (tools/ops2prog.py) at 1000:0000; reset jumps straight to it.
+        if ($value$plusargs("ems=%s", ems_file)) begin
+            int fd, c, n;
+            fd = $fopen(ems_file, "r");
+            n = 0;
+            while (!$feof(fd)) begin
+                if ($fscanf(fd, "%h", c) == 1) begin
+                    ram_seed(32'(20'h10000 + n), {8'h00, 8'(c)});
+                    n++;
+                end
+            end
+            $fclose(fd);
+            $display("ems program %s: %0d bytes at 1000:0000", ems_file, n);
+            ram_seed(32'h0FFFF0, 16'h00EA);
+            ram_seed(32'h0FFFF1, 16'h0000);
+            ram_seed(32'h0FFFF2, 16'h0000);
+            ram_seed(32'h0FFFF3, 16'h0000);
+            ram_seed(32'h0FFFF4, 16'h0010);
+        end else
         if ($value$plusargs("cursor=%s", cur_file)) begin
             int fd, c, n;
             fd = $fopen(cur_file, "r");
@@ -1632,7 +1679,9 @@ module tb_mem_perf;
     int ro_bad = 0; int ro_pend = 0;
     logic [15:0] ro_w; logic [19:0] ro_a; logic ro_ube;
     logic [7:0] ro_want0, ro_want1, ro_got0, ro_got1;
-    always_ff @(posedge clk) if (sdram_up && !reset) begin
+    // (Off under +ems: a remapped EMS window legitimately changes what a
+    // C0000 address reads.)
+    always_ff @(posedge clk) if (sdram_up && !reset && ems_file == "") begin
         if (ro_pend) begin
             ro_pend <= 1'b0;
             ro_want0 = written.exists(int'(ro_a))    ? shadow[int'(ro_a)]    : 8'h00;
@@ -2342,7 +2391,7 @@ module tb_mem_perf;
             if (zwb_we) begin
                 if (zwb_sel[0]) begin shadow[a]   = zwb_dat_o[7:0];  written[a]   = 1'b1; end
                 if (zwb_sel[1]) begin shadow[a+1] = zwb_dat_o[15:8]; written[a+1] = 1'b1; end
-            end else if (a < 32'hA0000) begin
+            end else if (a < 32'hA0000 && ems_file == "") begin
                 if (zwb_sel[0] && written.exists(a) && shadow[a] !== zwb_dat_i[7:0]) begin
                     if (c_stale < 16)
                         $display("  STALE t=%0t a=%05x got=%02x want=%02x ph=%0d pc=%05x w0=%05x/%0d-%0d w1=%05x/%0d-%0d live=%b",
@@ -2544,6 +2593,16 @@ module tb_mem_perf;
             end
             if ($test$plusargs("itfonly") || $test$plusargs("aluonly")) begin
                 $display("(itfonly: phase verification skipped)");
+                return;
+            end
+            if (ems_file != "") begin
+                // The log stream, then the SDRAM word the t=2 store hit:
+                // linear 200000h = word 0x900000.
+                w = sdr.u_part.peek(32'h900000);
+                $write("EMS:");
+                foreach (ems_log[i]) $write(" %02x", ems_log[i]);
+                $display("");
+                $display("EMS PEEK 900000=%02x", w[7:0]);
                 return;
             end
             if (cur_file != "") begin
@@ -2938,6 +2997,28 @@ module tb_mem_perf;
                 if (c_cyc - wbd_t0[k] > wbd_max) wbd_max <= c_cyc - wbd_t0[k];
             end
         end
+    end
+
+    // +ems: the program's result log, OUT 88FCh,AL (first strobe edge)
+    logic [7:0] ems_log [$];
+    logic       io_log_d = 1'b1;
+    always_ff @(posedge clk) begin
+        io_log_d <= io_wr_n;
+        if (~io_wr_n & io_log_d & (cpu_address == 20'h088FC))
+            ems_log.push_back(cpu_data_bus);
+    end
+
+    // +emstrace: every bus strobe, port-F request and snoop while +ems runs
+    bit ems_tr = $test$plusargs("emstrace");
+    logic mrd_d = 1'b1, mwr_d = 1'b1, iow_d2 = 1'b1, ior_d2 = 1'b1;
+    always_ff @(posedge clk) if (ems_tr && !reset) begin
+        mrd_d <= mem_rd_n; mwr_d <= mem_wr_n; iow_d2 <= io_wr_n; ior_d2 <= io_rd_n;
+        if (mem_rd_n & ~mrd_d) $display("T%0t MRD %05x -> %02x sel_n=%b map=%010x", $time, cpu_address, din, ram_sel_n, ems_map_w);
+        if (mem_wr_n & ~mwr_d) $display("T%0t MWR %05x <- %02x sel_n=%b", $time, cpu_address, cpu_data_bus, ram_sel_n);
+        if (~io_wr_n & iow_d2) $display("T%0t IOW %04x <- %02x", $time, cpu_address[15:0], cpu_data_bus);
+        if (io_rd_n & ~ior_d2) $display("T%0t IOR %04x -> %02x", $time, cpu_address[15:0], din);
+        if (zf_req && zf_ack) $display("T%0t PORTF %s %06x len %0d", $time, zf_we ? "W" : "R", zf_addr, zf_len);
+        if (ram_sn_v) $display("T%0t SNOOP %06x len %0d", $time, ram_sn_addr, ram_sn_len);
     end
 
     // marker decode on the IO-write strobe
