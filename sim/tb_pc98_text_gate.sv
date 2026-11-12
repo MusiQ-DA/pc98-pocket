@@ -66,11 +66,17 @@ module tb_pc98_text_gate;
         .draw_timeout(), .srv_done_stb(1'b0), .draw_snap(draw_snap)
     );
 
+    // Peripherals' own carry of disp_on into the dot clock (gdc_on_px).
+    logic on_s1 = 1'b0, on_px = 1'b0;
+    always_ff @(posedge clk_dot) begin
+        on_s1 <= disp_on;  on_px <= on_s1;
+    end
+
     logic pixel_in = 1'b1;                   // every renderer dot lit
     wire  pixel_out, text_off;
     pc98_text_gate dut (
         .clk(clk), .reset(reset), .disp_on(disp_on),
-        .clk_dot(clk_dot), .pixel_in(pixel_in),
+        .clk_dot(clk_dot), .disp_on_dot(on_px), .pixel_in(pixel_in),
         .pixel_out(pixel_out), .text_off(text_off)
     );
 
