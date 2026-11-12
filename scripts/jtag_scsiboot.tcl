@@ -67,14 +67,16 @@ set b4b2 [rdabs 0x4B2]
 set b4ba [rdabs 0x4BA]
 set geo {}
 for {set i 0} {$i < 4} {incr i} { lappend geo [format %02x [rdabs [expr {0x5A0 + $i}]]] }
+set inf {}
+for {set i 0} {$i < 4} {incr i} { lappend inf [format %02x [rdabs [expr {0x460 + $i}]]] }
 set tot 0
 for {set i 3} {$i >= 0} {incr i -1} { set tot [expr {($tot << 8) | [rdabs [expr {0x5A6 + $i}]]}] }
-puts [format "BIOS 482=%02x 584=%02x 4D2=%02x 4B2=%02x 4BA=%02x geo=%s totals=%08x" \
-      $b482 $b584 $b4d2 $b4b2 $b4ba [join $geo " "] $tot]
+puts [format "BIOS 482=%02x 584=%02x 4D2=%02x 4B2=%02x 4BA=%02x geo=%s scsiinf460=%s totals=%08x" \
+      $b482 $b584 $b4d2 $b4b2 $b4ba [join $geo " "] [join $inf " "] $tot]
 
 # ---- hdd_test.asm's result block
 set res {}
-for {set i 0} {$i < 48} {incr i} { lappend res [rdabs [expr {0x40000 + $i}]] }
+for {set i 0} {$i < 52} {incr i} { lappend res [rdabs [expr {0x40000 + $i}]] }
 set hex {}
 foreach b $res { lappend hex [format %02x $b] }
 puts "RESULT [join $hex { }]"

@@ -33,13 +33,30 @@
 ; raw one (firmware/scsi_service.c, scsi_probe). A target that answers
 ; neither page gets that same flat geometry computed here. The ROM must use
 ; the image's own geometry: DOS's IPL and IO.SYS address the disk in CHS
-; (DA 0xA0), and the partition table stores cylinder numbers. Stored in
-; the NEC scsiinf 4-byte form {spt, heads|cylhi, cyl_lo, inf_hi} -- the
-; layout np21w keeps at 0x460 (taken here, that area is busy on this BIOS)
-; -- at 0x05A0, with the capacity for LBA-mode bounds at 0x05A6, in a
-; measured-free work-area gap ahead of MEMB_F144_SUP at 0x5AE. Unit 0's
-; presence goes in DISK_EQUIPS (0x482) bit 0, as np21w scsibios_init does:
-; that byte is how DOS learns a SCSI disk is fitted at all.
+; (DA 0xA0), and the partition table stores cylinder numbers.
+;
+; Two copies of it, in the NEC scsiinf 4-byte form {spt, heads|cylhi,
+; cyl_lo, inf_hi}:
+;   0x0460 + 4*unit  the PUBLIC table, where the real -55 BIOS and np21w
+;        (bios/sxsibios.c scsibios_init / scsibios_set) keep it. Guests
+;        read it directly: NEC's fixed-disk boot menu (the MS-DOS IPL's
+;        partition menu, version 2.30) walks units A0-A6, counts a SCSI
+;        disk only where [0x460+4u] is non-zero, and maps its device list
+;        back to a DA/UA through that count. With the table empty -- this
+;        ROM once kept it at 0x05A0 only -- the menu lost its auto-boot,
+;        labelled the disk "#1" and, from the device list, read DA 0x00/
+;        0x80 (SASI, not fitted): "disk read failed". Sense 0x24 rewrites
+;        the table and 0x44/0x84 read it back, as np21w's scsibios_sense
+;        does. bios.rom and DOS leave the area alone (np2kai runs the same
+;        bios.rom with the table filled through the whole DOS boot).
+;   0x05A0  this ROM's private copy of the TARGET's geometry, which get_lba
+;        bounds and translates CHS calls with -- np21w's sxsi_pos uses the
+;        device's own C/H/S too, never scsiinf, so a guest's 0x24 cannot move
+;        where a CHS read lands. The capacity for LBA-mode bounds sits at
+;        0x05A6, in a measured-free work-area gap ahead of MEMB_F144_SUP at
+;        0x5AE.
+; Unit 0's presence goes in DISK_EQUIPS (0x482) bit 0, as np21w
+; scsibios_init does: that byte is how DOS learns a SCSI disk is fitted.
 ;
 ; Boot: the system BIOS has no built-in HDD boot (FCC9, its per-device
 ; booter, only serves the FDD classes). Its boot sweep at FF91 walks device
@@ -89,7 +106,8 @@ post3:  jmp post_boot           ; pass 4: the boot sweep, AL = device number
 ; The BIOS tail-jumps here through 0000:04B0[devtype nibble]. We handle
 ; unit 0 only -- a single HDD image is mounted.
 
-%define GEO      0x05A0        ; 4-byte scsiinf record: spt, heads|cylhi, inf
+%define SCSIINF  0x0460        ; NEC per-unit scsiinf table, 8 x 4 bytes
+%define GEO      0x05A0        ; private copy of unit 0's record (get_lba)
 %define GEOEQUIP 0x05A4        ; bit0: unit 0 present
 %define TOTALS   0x05A6        ; dword: capacity in sectors, the LBA bound
 %define EQUIPS   0x0482        ; DISK_EQUIPS: bit n = SCSI unit n fitted
@@ -180,7 +198,7 @@ fn_sense:
 
 sense_set:                              ; AH=0x24: DL=spt DH=heads(+cylhi)
         mov  al, [bp+6]                 ;       CX=cyl  BX=sector size
-        mov  [GEO+0], al
+        mov  [SCSIINF+0], al
         mov  dx, [bp+4]
         mov  al, [bp+7]
         test dh, 0xF0                   ; caller's cyl bits 12-15 ride in
@@ -188,7 +206,7 @@ sense_set:                              ; AH=0x24: DL=spt DH=heads(+cylhi)
         mov  ah, dh
         and  ah, 0xF0
         or   al, ah
-.ns:    mov  [GEO+1], al
+.ns:    mov  [SCSIINF+1], al
         mov  ax, dx
         and  ax, 0x0FFF
         test dh, 0xF0
@@ -201,13 +219,13 @@ sense_set:                              ; AH=0x24: DL=spt DH=heads(+cylhi)
 .a:     cmp  cx, 1024
         jne  .b
         or   ax, 0x2000
-.b:     mov  [GEO+2], ax                ; hwsec bit 0, like np21w's sense path
+.b:     mov  [SCSIINF+2], ax            ; hwsec bit 0, like np21w's sense path
         xor  ah, ah
         jmp  done
 
 sense_q44:                              ; AH=0x44: BX = 2 if hwsec else 1
         mov  cx, 1
-        test byte [GEO+3], 0x80
+        test byte [SCSIINF+3], 0x80
         jz   .w
         mov  cx, 2
 .w:     mov  [bp+2], cx
@@ -215,20 +233,20 @@ sense_q44:                              ; AH=0x44: BX = 2 if hwsec else 1
         jmp  done
 
 sense_read:                             ; AH=0x84: geometry -> CX/DX, BX=size
-        mov  dl, [GEO+0]
-        mov  dh, [GEO+1]
+        mov  dl, [SCSIINF+0]            ; np21w reads scsiinf, so a 0x24
+        mov  dh, [SCSIINF+1]            ; set is what 0x84 reports back
         and  dh, 0x0F
-        mov  cl, [GEO+2]
-        mov  ch, [GEO+3]
+        mov  cl, [SCSIINF+2]
+        mov  ch, [SCSIINF+3]
         and  ch, 0x0F
-        test byte [GEO+3], 0x40         ; extended cylinders?
+        test byte [SCSIINF+3], 0x40     ; extended cylinders?
         jz   .nx
-        mov  al, [GEO+1]
+        mov  al, [SCSIINF+1]
         and  al, 0xF0
         or   ch, al                     ; cyl bits 12-15 back into CH
 .nx:    mov  [bp+6], dx
         mov  [bp+4], cx
-        mov  al, [GEO+3]
+        mov  al, [SCSIINF+3]
         xor  ah, ah
         mov  cl, 4
         shr  ax, cl
@@ -687,6 +705,9 @@ disk_init:
         xor  ax, ax
         mov  cx, 5
         rep  stosw                      ; clear the record, equip, totals
+        mov  di, SCSIINF                ; and the public table, all eight
+        mov  cx, 16                     ; units -- np21w scsibios_init's
+        rep  stosw                      ; ZeroMemory(mem + 0x460, 0x20)
         and  byte [EQUIPS], 0xFE        ; unit 0 absent until proven
         ; TEST UNIT READY -- is an image there at all?
         xor  cl, cl
@@ -786,6 +807,9 @@ disk_init:
         jz   .ne
         or   ax, 0x4000                 ; extended cylinders
 .ne:    mov  [GEO+2], ax
+        mov  [SCSIINF+2], ax            ; publish unit 0's record where the
+        mov  ax, [GEO]                  ; -55 BIOS keeps it (see the header)
+        mov  [SCSIINF], ax
         or   byte [GEOEQUIP], 0x01
         or   byte [EQUIPS], 0x01        ; DISK_EQUIPS: SCSI unit 0 fitted
 .out:   ret
