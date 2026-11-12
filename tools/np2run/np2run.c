@@ -81,7 +81,27 @@ static size_t (*r_get_memory_size)(unsigned);
 static const char *sysdir = ".";
 static int pixfmt = RETRO_PIXEL_FORMAT_XRGB8888;
 
+/* NP2OPTS="key=value;key=value" overrides/extends the core options below,
+ * e.g. NP2OPTS="np2kai_cpu_feature=Intel 80386;np2kai_PEGC=ON". */
+static const char *opt_override(const char *key) {
+    static char buf[256];
+    const char *o = getenv("NP2OPTS");
+    size_t kl = strlen(key);
+    while (o && *o) {
+        const char *end = strchr(o, ';');
+        size_t n = end ? (size_t)(end - o) : strlen(o);
+        if (n > kl && !strncmp(o, key, kl) && o[kl] == '=' && n - kl - 1 < sizeof buf) {
+            memcpy(buf, o + kl + 1, n - kl - 1);
+            buf[n - kl - 1] = 0;
+            return buf;
+        }
+        o = end ? end + 1 : NULL;
+    }
+    return NULL;
+}
+
 static const char *var_lookup(const char *key) {
+    { const char *v = opt_override(key); if (v) return v; }
     if (!strcmp(key, "np2kai_model"))        return "PC-9801VM";
     if (!strcmp(key, "np2kai_clk_base"))     return "2.4576 MHz";
     { const char *m = getenv("NP2_CLK_MULT");

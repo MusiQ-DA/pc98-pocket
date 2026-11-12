@@ -52,3 +52,11 @@ tools/np2run/np2run
 sim/obj_*/
 # verilator --Mdir build trees (CI and local sims)
 obj_*/
+
+# FreeDOS(98) HDD builds (testdisk/build_puyo2_hdd.sh): the release-zip cache
+# and images carrying the user's own game / drive files -- never tracked
+testdisk/.cache/
+testdisk/puyo2*.nhd
+testdisk/puyo2*.hdn
+testdisk/adrive*.nhd
+testdisk/adrive*.hdn
