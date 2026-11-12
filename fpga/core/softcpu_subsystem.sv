@@ -37,9 +37,12 @@ module softcpu_subsystem (
     // Mounted floppy image size in sectors, per drive (from the dataslot-update event).
     input [31:0] fdd0_disk_size,
     input [31:0] fdd1_disk_size,
+    // Hard-disk image size in BYTES (the SCSI mount parses the file's header against it),
+    // from the slot-5 dataslot-update event; 0 until the host binds an image.
+    input [31:0] hdd0_disk_bytes,
 
     // Datatable port A, routed on to the disk bridge (softcpu_fdd_bridge) where the
-    // firmware reads the HDD and Settings slot sizes by id.
+    // firmware reads the Settings (and rhythm) slot sizes by id.
     output  [9:0] datatable_addr,
     output [31:0] datatable_data,
     output        datatable_wren,
@@ -49,6 +52,7 @@ module softcpu_subsystem (
     // firmware re-mounts a swapped image even at an unchanged size.
     input        fdd0_rebind,
     input        fdd1_rebind,
+    input        hdd0_rebind,     // the same toggle for the hard disk (slot 5)
 
     // Management-bus master to floppy.v via CHIPSET
     output [15:0] mgmt_addr,
@@ -1137,12 +1141,14 @@ module softcpu_subsystem (
         .fdd_request(fdd_request),
         .fdd0_disk_size(fdd0_disk_size),
         .fdd1_disk_size(fdd1_disk_size),
+        .hdd0_disk_bytes(hdd0_disk_bytes),
         .datatable_addr(datatable_addr),
         .datatable_data(datatable_data),
         .datatable_wren(datatable_wren),
         .datatable_q(datatable_q),
         .fdd0_rebind(fdd0_rebind),
         .fdd1_rebind(fdd1_rebind),
+        .hdd0_rebind(hdd0_rebind),
         .mgmt_addr  (mgmt_addr),
         .mgmt_dout  (mgmt_dout),
         .mgmt_wr    (mgmt_wr),
