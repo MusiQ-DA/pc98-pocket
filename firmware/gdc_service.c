@@ -22,7 +22,7 @@
 
 #include "softcpu_regs.h"
 
-// sim/host/gdc_line_host.cpp compiles this file for the host with its own
+// sim/host/gdc_draw_host.cpp compiles this file for the host with its own
 // models of these registers (GDC_HOST_REGS).
 #ifndef GDC_HOST_REGS
 // The self-test master: one trigger, then poll the request level down.
@@ -258,7 +258,7 @@ static void pset_at(int x, int y)
 }
 
 // ---- LINE (and the single dot) in hardware ---------------------------------
-// pc98_gdc_line runs np21w's gdcsub_vectl loop on the service channel
+// pc98_gdc_draw runs np21w's gdcsub_vectl loop on the service channel
 // itself, latching DC, D1, the octant, TEXTW, the WRITE mode and the plane
 // out of the slave's snapshot; this side only supplies what needs the
 // divide by 40 and the charger state -- the softcore runs about a
@@ -273,12 +273,14 @@ static void pset_at(int x, int y)
 #define LN_MODE_RMW   1u
 #define LN_MODE_WORD  2u
 #define LN_DOT_ONLY   (1u << 9)
+#define LN_FIG_LINE   (0u << 10)
+#define LN_FIG_RECT   (1u << 10)
 
-// dot_only is np21w's vectp: a lone gdcpset(x, y), which is also the
+// LN_DOT_ONLY is np21w's vectp: a lone gdcpset(x, y), which is also the
 // vectl loop's first dot (step 0) -- the engine runs it with DC forced 0.
 // The write path is pset_prepare's choice: no charger -> the plane byte's
 // read-modify-write, GRCG RMW -> the dot-mask write, TDW/EGC -> the word.
-static void vectl_hw(uint32_t csrw, uint32_t dot_only)
+static void draw_hw(uint32_t csrw, uint32_t go)
 {
     uint32_t ead = csrw & 0x3FFFu;
     uint32_t y = ((ead >> 3) * 52429u) >> 18; // ead / 40, see pset_prepare
@@ -287,7 +289,7 @@ static void vectl_hw(uint32_t csrw, uint32_t dot_only)
     uint32_t mode = !(accel & 5u) ? LN_MODE_PLAIN
                   : ((accel & 6u) == 2u) ? LN_MODE_RMW : LN_MODE_WORD;
     *LN_XY = x | (y << 16);
-    *LN_GO = (mode << 7) | dot_only;
+    *LN_GO = (mode << 7) | go;
     for (uint32_t i = 0; i < (1u << 22); i++) {
         if (!(*LN_GO & 1u)) {
             return;
@@ -331,34 +333,6 @@ static void vectt(const struct gdc_snap *g, uint16_t pat)
         }
         pset.x = (uint16_t) (pset.x + dir[2]);
         pset.y = (uint16_t) (pset.y + dir[3]);
-    }
-}
-
-static void vectr(const struct gdc_snap *g)
-{
-    uint32_t d = ((uint32_t) g->d_lo | ((uint32_t) g->d_hi << 8)) & 0x3FFFu;
-    uint32_t d2 = ((uint32_t) g->d2_lo | ((uint32_t) g->d2_hi << 8)) & 0x3FFFu;
-    int x = pset.x, y = pset.y;
-    const int8_t *dir = vectdir[g->ope & 7];
-    for (uint32_t i = 0; i < d; i++) {
-        pset_at(x, y);
-        x += dir[0];
-        y += dir[1];
-    }
-    for (uint32_t i = 0; i < d2; i++) {
-        pset_at(x, y);
-        x += dir[2];
-        y += dir[3];
-    }
-    for (uint32_t i = 0; i < d; i++) {
-        pset_at(x, y);
-        x -= dir[0];
-        y -= dir[1];
-    }
-    for (uint32_t i = 0; i < d2; i++) {
-        pset_at(x, y);
-        x -= dir[2];
-        y -= dir[3];
     }
 }
 
@@ -580,8 +554,18 @@ static void serve_slave(uint32_t st)
         // needed here -- the byte-by-byte unpack below costs ~250
         // instructions, a quarter of a millisecond at the softcore's pace.
         uint32_t s0 = w0[0];
-        if (!(s0 & 0x70u)) {
-            vectl_hw((w0[2] >> 24) | (w0[3] << 8), (s0 & 0x08u) ? 0u : LN_DOT_ONLY);
+        if (!(s0 & 0x30u)) {
+            // vectp / vectl / vectr in np21w's vectdraw order
+            uint32_t csrw = (w0[2] >> 24) | (w0[3] << 8);
+            if (!(s0 & 0x48u)) {
+                draw_hw(csrw, LN_DOT_ONLY);
+            }
+            if (s0 & 0x08u) {
+                draw_hw(csrw, LN_FIG_LINE);
+            }
+            if (s0 & 0x40u) {
+                draw_hw(csrw, LN_FIG_RECT);
+            }
             return;
         }
     }
@@ -605,10 +589,10 @@ static void serve_slave(uint32_t st)
         // np21w's vectdraw/textdraw: every figure starts from its own
         // gdcpset_prepare (pattern, x and y afresh from CSRW).
         if (!(g.ope & 0x78u)) {
-            vectl_hw(csrw, LN_DOT_ONLY); // vectp: a single dot
+            draw_hw(csrw, LN_DOT_ONLY); // vectp: a single dot
         }
         if (g.ope & 0x08u) {
-            vectl_hw(csrw, 0u);
+            draw_hw(csrw, LN_FIG_LINE);
         }
         if (g.ope & 0x10u) {
             pset_prepare(csrw, textw, g.write_mode);
@@ -619,8 +603,7 @@ static void serve_slave(uint32_t st)
             vectc(&g);
         }
         if (g.ope & 0x40u) {
-            pset_prepare(csrw, textw, g.write_mode);
-            vectr(&g);
+            draw_hw(csrw, LN_FIG_RECT);
         }
         if ((st & 0xFFu) == GDC_OP_TEXTE) {
             pset_prepare(csrw, textw, g.write_mode);

@@ -365,7 +365,7 @@ module softcpu_subsystem (
             end
         end
     end
-    // The LINE engine (pc98_gdc_line): np21w's gdcsub_vectl in hardware.
+    // The LINE engine (pc98_gdc_draw): np21w's gdcsub_vectl in hardware.
     // The firmware still decodes the slave's command, stores np21w's x/y at
     // 0x5000_0020 and the launch word at 0x5000_002C (the engine takes the
     // rest from the slave's snapshot, static until the retire) and polls
@@ -375,7 +375,7 @@ module softcpu_subsystem (
     wire        ln_busy, ln_req, ln_we;
     wire [19:0] ln_addr;
     wire  [7:0] ln_wdata;
-    pc98_gdc_line u_gdc_line (
+    pc98_gdc_draw u_gdc_draw (
         .clk      (clk_pico),
         .reset    (reset),
         .wr       (cpu_mem_valid && cpu_mem_ready && cpu_mem_wstrb[0] &&

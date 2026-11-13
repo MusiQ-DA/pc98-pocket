@@ -1,25 +1,32 @@
-// pc98_gdc_line -- the slave GDC's LINE figure, drawn in hardware.
+// pc98_gdc_draw -- the slave GDC's figures, drawn in hardware.
 //
-// np21w io/gdc_sub.c gdcsub_vectl + io/gdc_pset.c gdcpset, dot for dot:
+// One engine, one shared gdcpset (np21w io/gdc_pset.c: the pattern, the
+// clip, the plane address, the write path) fed by a figure walker that
+// produces np21w io/gdc_sub.c's dot sequence:
 //
-//   for (i = 0; i <= dc; i++) {
-//       step = (((d1 * i) / dc) + 1) >> 1;
-//       gdcpset(major/minor of (x, y) per octant, step)
-//   }
+//   FIG_LINE  gdcsub_vectl (and gdcsub_vectp: DC forced 0, one dot)
+//               for (i = 0; i <= dc; i++) {
+//                   step = (((d1 * i) / dc) + 1) >> 1;
+//                   gdcpset(major/minor of (x, y) per octant, step)
+//               }
+//   FIG_RECT  gdcsub_vectr: D dots along vectdir (x, y), D2 along (x2, y2),
+//             D back, D2 back -- every dot a gdcpset, the pattern running on.
 //
 // The firmware (gdc_service.c) still decodes the command: it splits CSRW
 // into np21w's x/y (a divide by 40) and picks the write path from the
-// charger state; everything else -- DC, D1, the octant, TEXTW, the WRITE
-// mode, the plane -- is latched here straight out of the slave's drawing
-// snapshot when the launch word lands (the snapshot is static until the
-// draw retires). The softcore runs ~1 us an instruction, so every field it
-// does not have to touch is time the guest's DRAWING bit is not waiting.
+// charger state; everything else -- DC, D, D2, D1, the octant, TEXTW, the
+// WRITE mode, the plane -- is latched here straight out of the slave's
+// drawing snapshot when the launch word lands (the snapshot is static
+// until the draw retires). The softcore runs ~1 us an instruction, so
+// every field it does not have to touch is time the guest's DRAWING bit is
+// not waiting.
 //
-// floor(d1*i/dc) is carried, not divided: after each dot the remainder
-// takes d1 and gives back dc as many times as it holds it, one subtraction
-// a clock, each one a quotient step. A real line has d1 <= 2*dc (D1 is
-// twice the minor axis), so that is at most two clocks a dot; nonsense
-// parameters only cost time (d1/dc + 1 clocks a dot), never exactness.
+// LINE's floor(d1*i/dc) is carried, not divided: after each dot the
+// remainder takes d1 and gives back dc as many times as it holds it, one
+// subtraction a clock, each one a quotient step. A real line has d1 <= 2*dc
+// (D1 is twice the minor axis), so that is at most two clocks a dot;
+// nonsense parameters only cost time (about d1 clocks a line), never
+// exactness.
 //
 // Every guest byte goes out on the service channel exactly as the
 // firmware's vr_read8/vr_write8 sent it (the softcpu_subsystem muxes this
@@ -33,20 +40,20 @@
 //   MODE_WORD   GRCG TDW / EGC: a word write as two bytes, the dot mask in
 //               the addressed lane (np21w withtdw/withegc), one per dot.
 //
-// PLAIN and RMW keep the byte the line is on in a one-byte write-back
+// PLAIN and RMW keep the byte the figure is on in a one-byte write-back
 // holder: consecutive dots in one byte modify it in place and it goes out
-// when the line leaves the byte (or ends). Each dot's effect on a byte is a
-// per-bit operation, so folding a run of them into one access leaves the
+// when the figure leaves the byte (or ends). Each dot's effect on a byte is
+// a per-bit operation, so folding a run of them into one access leaves the
 // same VRAM as np21w's dot-by-dot stores. An off dot of COMPLEMENT/CLEAR/
 // SET (np21w _nop) and every off dot through a charger touch nothing.
 //
 // Register window (softcpu_subsystem, word stores, ready-qualified):
 //   +0x0  {y[15:0], x[15:0]}            np21w pset.x/pset.y
-//   +0xC  go: {abort[31], dot_only[9], mode[8:7]}; the rest from the snapshot
-//         (dot_only: np21w's vectp, one gdcpset at (x, y) -- DC forced 0)
+//   +0xC  go: {abort[31], fig[12:10], dot_only[9], mode[8:7]}; the rest
+//         from the snapshot (dot_only: np21w's vectp, one gdcpset at (x, y))
 //   read +0xC: {31'b0, busy}
 
-module pc98_gdc_line (
+module pc98_gdc_draw (
     input  wire        clk,
     input  wire        reset,
     input  wire        wr,        // one-cycle store into the window
@@ -63,6 +70,7 @@ module pc98_gdc_line (
     input  wire [7:0]  st_rdata
 );
     localparam MODE_PLAIN = 2'd0, MODE_RMW = 2'd1, MODE_WORD = 2'd2;
+    localparam FIG_LINE = 3'd0, FIG_RECT = 3'd1;
 
     localparam S_IDLE = 3'd0, S_DOT = 3'd1, S_RD = 3'd2, S_FL = 3'd3,
                S_W2A = 3'd4, S_W2B = 3'd5, S_W2C = 3'd6;
@@ -73,6 +81,8 @@ module pc98_gdc_line (
     reg [16:0] r;                 // d1*i mod dc, plus the d1 not yet given back
     reg [13:0] dc, cnt;
     reg [2:0]  oct;
+    reg [2:0]  fig;
+    reg [1:0]  ph;                // RECT: the side being drawn
     reg [1:0]  op, plane, mode;
     reg        last;              // every dot evaluated; only the flush left
     reg        hold;              // the write-back byte is live
@@ -89,8 +99,32 @@ module pc98_gdc_line (
     wire        s_sub = (oct == 3'd2) | (oct == 3'd4) | (oct == 3'd5) | (oct == 3'd7);
     wire [15:0] mbase = maj_y ? x : y;
     wire [15:0] mstep = s_sub ? (mbase - step) : (mbase + step);
-    wire [15:0] px    = maj_y ? mstep : x;
-    wire [15:0] py    = maj_y ? y : mstep;
+    wire        f_line = (fig == FIG_LINE);
+    wire [15:0] px    = (f_line & maj_y) ? mstep : x;
+    wire [15:0] py    = (f_line & ~maj_y) ? mstep : y;
+
+    // np21w's vectdir[oct]: {x, y} then {x2, y2}, each -1/0/+1 (2-bit
+    // two's complement). RECT walks side ph: dir, dir2, -dir, -dir2.
+    reg  [7:0]  vdir;
+    always @* case (oct)
+        3'd0: vdir = {2'b00, 2'b01, 2'b01, 2'b00};
+        3'd1: vdir = {2'b01, 2'b01, 2'b01, 2'b11};
+        3'd2: vdir = {2'b01, 2'b00, 2'b00, 2'b11};
+        3'd3: vdir = {2'b01, 2'b11, 2'b11, 2'b11};
+        3'd4: vdir = {2'b00, 2'b11, 2'b11, 2'b00};
+        3'd5: vdir = {2'b11, 2'b11, 2'b11, 2'b01};
+        3'd6: vdir = {2'b11, 2'b00, 2'b00, 2'b01};
+        default: vdir = {2'b11, 2'b01, 2'b01, 2'b01};
+    endcase
+    wire [1:0]  rdx0  = ph[0] ? vdir[3:2] : vdir[7:6];
+    wire [1:0]  rdy0  = ph[0] ? vdir[1:0] : vdir[5:4];
+    // negate a -1/0/+1: 11 <-> 01, 00 stays
+    wire [1:0]  rdx   = ph[1] ? {rdx0[0] & ~rdx0[1], rdx0[0]} : rdx0;
+    wire [1:0]  rdy   = ph[1] ? {rdy0[0] & ~rdy0[1], rdy0[0]} : rdy0;
+    // LINE: the major axis steps by one (up for 0/1/2/7, down for 3/4/5/6)
+    wire        l_dn  = oct[2] ^ (oct[1] & oct[0]);
+    wire [1:0]  ddx   = f_line ? (maj_y ? 2'b00 : {l_dn, 1'b1}) : rdx;
+    wire [1:0]  ddy   = f_line ? (maj_y ? {l_dn, 1'b1} : 2'b00) : rdy;
     // y * 80 + x / 8; the plane bases (E0000/A8000/B0000/B8000) have their
     // low fifteen bits clear, so the plane is just the top five.
     wire [15:0] off16 = {1'b0, py[8:0], 6'd0} + {3'd0, py[8:0], 4'd0} + {9'd0, px[9:3]};
@@ -134,7 +168,9 @@ module pc98_gdc_line (
     // np21w's next-dot bookkeeping: pattern rotates every dot, the major
     // axis steps, the carried quotient moves on.
     wire [17:0] rsd   = {1'b0, r} - {4'd0, dc};
-    wire        norm  = ~last & ~rsd[17];   // r >= dc: give one back
+    // A step that is not a dot: LINE's quotient catching up (r >= dc), or
+    // RECT moving on to its next side when this one is spent.
+    wire        norm  = ~last & (f_line ? ~rsd[17] : (cnt == 14'd0));
     wire        done_op = st_req & st_done;
     reg         adv;
     always @* begin
@@ -166,12 +202,21 @@ module pc98_gdc_line (
                         // np21w's vectdraw fields: VECTW ope / DC / D1,
                         // CSRW's plane bits, TEXTW, the WRITE mode
                         oct   <= snap[2:0];
-                        // DC = 0 is one dot, after which last stops the
-                        // quotient; any nonzero divisor keeps r = 0 from
-                        // stepping it before that dot.
-                        dc    <= (wr_data[9] || snap[21:8] == 14'd0) ? 14'h3FFF : snap[21:8];
-                        cnt   <= wr_data[9] ? 14'd0 : snap[21:8];
-                        d1    <= snap[71:56];
+                        fig   <= wr_data[12:10];
+                        ph    <= 2'd0;
+                        if (wr_data[12:10] == FIG_RECT) begin
+                            // D in dc, D2 in d1 (VECTW bytes 3-4, 5-6)
+                            dc  <= snap[37:24];
+                            cnt <= snap[37:24];
+                            d1  <= {2'b00, snap[53:40]};
+                        end else begin
+                            // DC = 0 is one dot, after which last stops the
+                            // quotient; any nonzero divisor keeps r = 0 from
+                            // stepping it before that dot.
+                            dc  <= (wr_data[9] || snap[21:8] == 14'd0) ? 14'h3FFF : snap[21:8];
+                            cnt <= wr_data[9] ? 14'd0 : snap[21:8];
+                            d1  <= snap[71:56];
+                        end
                         plane <= snap[103:102];
                         pat   <= snap[135:120];
                         op    <= snap[145:144];
@@ -194,9 +239,15 @@ module pc98_gdc_line (
                     st_req <= 1'b0;
                 case (s)
                     S_DOT: if (!st_req) begin
-                        if (norm) begin
+                        if (norm && f_line) begin
                             r  <= rsd[16:0];
                             q1 <= q1 + 17'd1;
+                        end else if (norm) begin
+                            // RECT: the next side (D, D2, D, D2), then done
+                            ph  <= ph + 2'd1;
+                            cnt <= ph[0] ? dc : d1[13:0];
+                            if (ph == 2'd3)
+                                last <= 1'b1;
                         end else if (last) begin
                             if (hold) begin
                                 st_req <= 1'b1; st_we <= 1'b1; s <= S_FL;
@@ -235,13 +286,11 @@ module pc98_gdc_line (
                 endcase
                 if (adv) begin
                     pat <= {pat[0], pat[15:1]};
-                    if (maj_y)
-                        y <= (oct == 3'd0 || oct == 3'd7) ? y + 16'd1 : y - 16'd1;
-                    else
-                        x <= (oct == 3'd1 || oct == 3'd2) ? x + 16'd1 : x - 16'd1;
-                    r  <= r + {1'b0, d1};
+                    x   <= x + {{14{ddx[1]}}, ddx};
+                    y   <= y + {{14{ddy[1]}}, ddy};
+                    r   <= r + {1'b0, d1};
                     if (cnt == 14'd0)
-                        last <= 1'b1;
+                        last <= 1'b1;     // LINE: the dc + 1'th dot
                     else
                         cnt <= cnt - 14'd1;
                 end

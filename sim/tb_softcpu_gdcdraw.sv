@@ -1,5 +1,5 @@
-// tb_softcpu_gdcline -- the REAL firmware.vh on the real picorv32 inside the
-// real softcpu_subsystem (and with it pc98_gdc_line), fed random slave-GDC
+// tb_softcpu_gdcdraw -- the REAL firmware.vh on the real picorv32 inside the
+// real softcpu_subsystem (and with it pc98_gdc_draw), fed random slave-GDC
 // LINE commands through the gdc_draw_* handshake. A GVRAM model answers the
 // service channel the way pc98_gvram_seq does (own-plane raw reads; plain,
 // GRCG RMW and GRCG TDW writes) after a clk_sys latency per op kind, and
@@ -14,7 +14,7 @@
 //   +n=<lines> (default 300)  +seed=<n>  +sane (D1 <= 2*DC, for timing)
 `timescale 1ns/1ps
 
-module tb_softcpu_gdcline;
+module tb_softcpu_gdcdraw;
 
     reg clk_sys = 0;
     reg reset   = 1;
@@ -279,7 +279,7 @@ module tb_softcpu_gdcline;
         end
         if (verbose && 0 && dut.cpu_mem_valid && dut.cpu_mem_ready && !dut.cpu_mem_instr && dut.cpu_mem_addr[31:28] == 4'h5)
             $display("  cpu %s %08x at %0d ns", |dut.cpu_mem_wstrb ? "W" : "R", dut.cpu_mem_addr, ($time - t_req) * 50 / 43);
-        if (verbose && dut.u_gdc_line.wr && 0) $display("  wr%0d at %0d ns", dut.u_gdc_line.wr_sel, ($time - t_req) * 50 / 43);
+        if (verbose && dut.u_gdc_draw.wr && 0) $display("  wr%0d at %0d ns", dut.u_gdc_draw.wr_sel, ($time - t_req) * 50 / 43);
         if (!dut.ln_busy && lnb_q) a_eng = a_eng + ($time - t_go);
     end
 `endif

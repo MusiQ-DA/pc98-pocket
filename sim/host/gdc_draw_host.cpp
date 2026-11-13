@@ -1,5 +1,5 @@
-// gdc_line_host -- the SHIPPED firmware/gdc_service.c driving the REAL
-// pc98_gdc_line RTL (Verilated), checked against np21w's own LINE.
+// gdc_draw_host -- the SHIPPED firmware/gdc_service.c driving the REAL
+// pc98_gdc_draw RTL (Verilated), checked against np21w's own LINE.
 //
 // The firmware is compiled for the host the scsi/fdd_fw_host way: its
 // register macros become proxies (GDC_HOST_REGS), so serve_slave() runs
@@ -19,21 +19,22 @@
 // trace must also equal the dot-by-dot (addr & ~1, addr | 1) pairs np21w's
 // withtdw/withegc imply, so every lit dot's position is checked one by one.
 //
-//   gdc_line_host [n_lines] [seed]
+//   gdc_draw_host [n] [seed] [kinds]    kinds: l line, p dot, r rect (default lpr)
+//   gdc_draw_host bench [lat_rd [lat_rmw [lat_tdw]]]
 //
-// Build: scripts/sim_gdc_line.sh (needs Verilator; no --timing).
+// Build: scripts/sim_gdc_draw.sh (needs Verilator; no --timing).
 
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
-#include "Vpc98_gdc_line.h"
+#include "Vpc98_gdc_draw.h"
 #include "verilated.h"
 
 namespace mock {
 
-Vpc98_gdc_line *eng;
+Vpc98_gdc_draw *eng;
 uint64_t cycles;
 
 // ---- RNG (xorshift64*) ------------------------------------------------------
@@ -186,6 +187,11 @@ struct RegPtr {
 #include "../../firmware/gdc_service.c"
 
 // ---- np21w, verbatim -------------------------------------------------------
+// io/gdc_sub.c (vectdraw's figures, gdcsub_write) and io/gdc_pset.c on a
+// second VRAM. The parameter block is the snapshot pc98_gdc hands over:
+// VECTW at 0, CSRW at 11, TEXTW at 15 (two bytes: the firmware and the
+// engine both repeat them through the eight-byte PRAM window), ZOOM 17,
+// the WRITE command 18, MASK 19, CODE 21.
 namespace ref {
 
 typedef uint16_t REG16;
@@ -195,8 +201,15 @@ int mode;           // 0 plain, 1 rmw, 2 tdw, 3 egc
 int plane;          // csrw >> 14 & 3
 int op;
 uint16_t pattern;
+REG16 px0, py0;     // gdcpset_prepare's pset.x / pset.y
 std::vector<mock::Wr> trace;
 static const uint32_t seg[4] = { 0xE0000, 0xA8000, 0xB0000, 0xB8000 };
+struct VD { int x, y, x2, y2; };
+static const VD vectdir[16] = {
+    { 0, 1, 1, 0}, { 1, 1, 1,-1}, { 1, 0, 0,-1}, { 1,-1,-1,-1},
+    { 0,-1,-1, 0}, {-1,-1,-1, 1}, {-1, 0, 0, 1}, {-1, 1, 1, 1},
+    { 0, 1, 1, 1}, { 1, 1, 1, 0}, { 1, 0, 1,-1}, { 1,-1, 0,-1},
+    { 0,-1,-1,-1}, {-1,-1,-1, 0}, {-1, 0,-1, 1}, {-1, 1, 0, 1}};
 
 void func(int dot, unsigned addr, unsigned bit)
 {
@@ -235,16 +248,26 @@ void gdcpset(REG16 x, REG16 y)
     func((int) dot, (y * 80u) + (x >> 3), x & 7);
 }
 
-void vectl(uint32_t csrw, uint16_t DC, uint16_t D1, uint8_t vope, uint16_t pat)
+void prepare(uint32_t csrw, uint16_t pat)
 {
     pattern = pat;
-    REG16 x = (uint16_t) ((((csrw & 0x3fff) % 40) << 4) + ((csrw >> 20) & 0x0f));
-    REG16 y = (uint16_t) ((csrw & 0x3fff) / 40);
-    unsigned dc = DC & 0x3fff, i;
+    px0 = (uint16_t) ((((csrw & 0x3fff) % 40) << 4) + ((csrw >> 20) & 0x0f));
+    py0 = (uint16_t) ((csrw & 0x3fff) / 40);
+}
+
+unsigned w16(const uint8_t *b, int i) { return b[i] | (b[i + 1] << 8); }
+
+void vectp(const uint8_t *b, uint32_t csrw, uint16_t pat) { prepare(csrw, pat); gdcpset(px0, py0); }
+
+void vectl(const uint8_t *b, uint32_t csrw, uint16_t pat)
+{
+    prepare(csrw, pat);
+    REG16 x = px0, y = py0;
+    unsigned dc = w16(b, 1) & 0x3fff, i;
     uint16_t step;
-    unsigned d1 = D1;
+    unsigned d1 = w16(b, 7);
     if (dc == 0) { gdcpset(x, y); return; }
-    switch (vope & 7) {
+    switch (b[0] & 7) {
     case 0: for (i = 0; i <= dc; i++) { step = (uint16_t) ((((d1 * i) / dc) + 1) >> 1); gdcpset((REG16) (x + step), y++); } break;
     case 1: for (i = 0; i <= dc; i++) { step = (uint16_t) ((((d1 * i) / dc) + 1) >> 1); gdcpset(x++, (REG16) (y + step)); } break;
     case 2: for (i = 0; i <= dc; i++) { step = (uint16_t) ((((d1 * i) / dc) + 1) >> 1); gdcpset(x++, (REG16) (y - step)); } break;
@@ -256,16 +279,76 @@ void vectl(uint32_t csrw, uint16_t DC, uint16_t D1, uint8_t vope, uint16_t pat)
     }
 }
 
+void vectr(const uint8_t *b, uint32_t csrw, uint16_t pat)
+{
+    prepare(csrw, pat);
+    unsigned d = w16(b, 3) & 0x3fff, d2 = w16(b, 5) & 0x3fff, i;
+    REG16 x = px0, y = py0;
+    const VD *dir = vectdir + (b[0] & 7);
+    for (i = 0; i < d; i++)  { gdcpset(x, y); x += dir->x;  y += dir->y; }
+    for (i = 0; i < d2; i++) { gdcpset(x, y); x += dir->x2; y += dir->y2; }
+    for (i = 0; i < d; i++)  { gdcpset(x, y); x -= dir->x;  y -= dir->y; }
+    for (i = 0; i < d2; i++) { gdcpset(x, y); x -= dir->x2; y -= dir->y2; }
+}
+
+// gdc.c vectdraw: each figure from its own gdcpset_prepare
+void vectdraw(const uint8_t *b)
+{
+    uint32_t csrw = b[11] | (b[12] << 8) | (b[13] << 16) | ((uint32_t) b[14] << 24);
+    uint16_t textw = (uint16_t) w16(b, 15);
+    uint8_t vope = b[0];
+    if (!(vope & 0x78)) vectp(b, csrw, textw);
+    if (vope & 0x08) vectl(b, csrw, textw);
+    if (vope & 0x40) vectr(b, csrw, textw);
+}
+
 } // namespace ref
 
 using mock::rnd;
+
+// A random draw. kinds: 'l' line, 'p' lone dot, 'r' rectangle
+static uint32_t rnd14()
+{
+    uint32_t r = rnd() % 20;
+    return r < 10 ? rnd() % 64 : r < 17 ? rnd() % 640 : r < 19 ? rnd() % 4096 : rnd() % 16384;
+}
+
+static void make_snap(char kind, uint8_t *b)
+{
+    for (int i = 0; i < 24; i++) b[i] = (uint8_t) rnd();
+    b[23] = 0;
+    uint8_t oct = (uint8_t) (rnd() & 7);
+    uint8_t sl = (uint8_t) ((rnd() & 1) << 7);
+    uint32_t dc = rnd14(), d = rnd14(), d2 = rnd14(), d1;
+    if (rnd() % 20 < 17) d1 = dc ? rnd() % (2 * dc + 1) : rnd() & 0xFFFF;
+    else d1 = rnd() & 0xFFFF;
+    switch (kind) {
+    case 'p': b[0] = (uint8_t) (oct | sl); break;
+    case 'r': b[0] = (uint8_t) (0x40 | oct | sl | ((rnd() % 8 == 0) ? 0x08 : 0)); break; // sometimes + LINE
+    default:  b[0] = (uint8_t) (0x08 | oct | sl); break;
+    }
+    uint32_t junk = (rnd() & 3) << 14;   // VECTW's top bits are junk to np21w
+    b[1] = (uint8_t) dc; b[2] = (uint8_t) ((dc | junk) >> 8);
+    junk = (rnd() & 3) << 14;
+    b[3] = (uint8_t) d;  b[4] = (uint8_t) ((d | junk) >> 8);
+    junk = (rnd() & 3) << 14;
+    b[5] = (uint8_t) d2; b[6] = (uint8_t) ((d2 | junk) >> 8);
+    b[7] = (uint8_t) d1; b[8] = (uint8_t) (d1 >> 8);
+    uint32_t csrw = (rnd() & 0x3FFF) | ((rnd() & 3) << 14) | ((rnd() & 0xF) << 20) | (rnd() & 0xFF000000u);
+    if (rnd() % 4 == 0) csrw = (csrw & ~0x3FFFu) | (16000 + rnd() % 384); // bottom rows
+    for (int i = 0; i < 4; i++) b[11 + i] = (uint8_t) (csrw >> (8 * i));
+    uint16_t pat = (uint16_t) ((rnd() & 3) ? rnd() : ((rnd() & 1) ? 0xFFFF : 0x0000));
+    b[15] = (uint8_t) pat; b[16] = (uint8_t) (pat >> 8);
+    b[18] = (uint8_t) (rnd() & 3);
+}
 
 int main(int argc, char **argv)
 {
     Verilated::commandArgs(argc, argv);
     long n = argc > 1 ? atol(argv[1]) : 100000;
-    if (argc > 2) mock::rs ^= strtoull(argv[2], 0, 0) * 0x9E3779B97F4A7C15ull;
-    mock::eng = new Vpc98_gdc_line;
+    if (argc > 2 && strcmp(argv[1], "bench")) mock::rs ^= strtoull(argv[2], 0, 0) * 0x9E3779B97F4A7C15ull;
+    const char *kinds = argc > 3 ? argv[3] : "lpr";
+    mock::eng = new Vpc98_gdc_draw;
     mock::eng->reset = 1;
     mock::tick(); mock::tick();
     mock::eng->reset = 0;
@@ -273,7 +356,6 @@ int main(int argc, char **argv)
 
     for (auto &pl : mock::vram) for (auto &b : pl) b = (uint8_t) rnd();
     memcpy(ref::vram, mock::vram, sizeof ref::vram);
-
     if (argc > 1 && !strcmp(argv[1], "bench")) {
         // Engine clk_pico per line for fixed svc latencies (pico cycles from
         // the op's launch to its done, excluding those two edges): plain
@@ -314,71 +396,38 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    long fails = 0, dots = 0;
-    uint64_t mode_cyc[4] = {0}, mode_dots[4] = {0}, mode_ops[4] = {0};
+    long fails = 0;
+    uint64_t kdots[128] = {0}, kcyc[128] = {0}, kops[128] = {0}, kn[128] = {0};
+    size_t nk = strlen(kinds);
     for (long t = 0; t < n; t++) {
-        // ---- a random LINE ----
-        uint32_t r = rnd();
-        uint32_t dc;
-        if (r % 20 < 10) dc = rnd() % 64;
-        else if (r % 20 < 17) dc = rnd() % 640;
-        else if (r % 20 < 19) dc = rnd() % 4096;
-        else dc = rnd() % 16384;
-        uint32_t dch = (rnd() & 3) << 14;      // DC[15:14] is junk to np21w
-        uint32_t d1;
-        r = rnd();
-        if (r % 20 < 17) d1 = dc ? rnd() % (2 * dc + 1) : rnd() & 0xFFFF;
-        else d1 = rnd() & 0xFFFF;
-        uint8_t oct = (uint8_t) (rnd() & 7);
-        uint8_t vope = (uint8_t) (0x08 | oct | ((rnd() & 1) << 7)); // SL bit is ignored by LINE
-        bool single = (rnd() % 50) == 0;                            // vectp, a lone dot
-        if (single) vope = (uint8_t) (oct | ((rnd() & 1) << 7));
-        uint16_t pat = (uint16_t) ((rnd() & 3) ? rnd() : ((rnd() & 1) ? 0xFFFF : 0x0000));
-        uint32_t csrw = (rnd() & 0x3FFF) | ((rnd() & 3) << 14) | ((rnd() & 0xF) << 20);
-        if (rnd() % 4 == 0) csrw = (csrw & ~0x3FFFu) | (16000 + rnd() % 384); // bottom rows
-        uint8_t wmode = (uint8_t) (rnd() & 3);
+        char kind = kinds[rnd() % nk];
+        uint8_t b[24];
+        make_snap(kind, b);
         int mode = (int) (rnd() % 10);
         mode = mode < 4 ? 0 : mode < 7 ? 1 : mode < 9 ? 2 : 3;
         static const uint32_t accel_of[4] = { 0x0, 0x3, 0x1, 0x5 };
         mock::accel = accel_of[mode] | ((rnd() & 1) ? 0 : (mode == 3 ? 2 : 0)); // EGC overrides RMW
         for (auto &tl : mock::tile) tl = (uint8_t) rnd();
-
-        // ---- the snapshot, as pc98_gdc packs it ----
-        uint8_t b[24] = {0};
-        b[0] = vope;
-        b[1] = (uint8_t) dc; b[2] = (uint8_t) ((dc | dch) >> 8);
-        uint32_t dd = rnd() & 0xFFFF, d2 = rnd() & 0xFFFF, dm = rnd() & 0xFFFF;
-        b[3] = (uint8_t) dd; b[4] = (uint8_t) (dd >> 8);
-        b[5] = (uint8_t) d2; b[6] = (uint8_t) (d2 >> 8);
-        b[7] = (uint8_t) d1; b[8] = (uint8_t) (d1 >> 8);
-        b[9] = (uint8_t) dm; b[10] = (uint8_t) (dm >> 8);
-        for (int i = 0; i < 4; i++) b[11 + i] = (uint8_t) (csrw >> (8 * i));
-        b[15] = (uint8_t) pat; b[16] = (uint8_t) (pat >> 8);
-        b[17] = (uint8_t) rnd();
-        b[18] = wmode;
         for (int i = 0; i < 6; i++)
             mock::snapw[i] = b[4 * i] | (b[4 * i + 1] << 8) | (b[4 * i + 2] << 16) | ((uint32_t) b[4 * i + 3] << 24);
 
-        // ---- engine (through the firmware) ----
+        // ---- engine, through the firmware ----
         mock::trace.clear();
-        uint64_t c0 = mock::cycles, o0 = mock::n_ops;
+        uint64_t c0 = mock::busy_cycles, o0 = mock::n_ops;
         serve_slave(0x200u | GDC_OP_VECTE);
-        if (mock::eng->busy) { printf("line %ld: engine still busy after the firmware returned\n", t); fails++; }
-        mode_cyc[mode] += mock::cycles - c0;
-        mode_ops[mode] += mock::n_ops - o0;
+        if (mock::eng->busy) { printf("draw %ld: engine still busy after the firmware returned\n", t); fails++; }
 
         // ---- np21w ----
         ref::trace.clear();
         ref::mode = mode;
-        ref::plane = (int) ((csrw >> 14) & 3);
-        ref::op = wmode & 3;
-        {
-            // vectp is gdcpset(pset.x, pset.y): the DC = 0 path of vectl
-            ref::vectl(csrw, single ? 0 : (uint16_t) (dc | dch), (uint16_t) d1, vope, pat);
-        }
-        dots += single ? 1 : dc + 1;
-        mode_dots[mode] += ref::drawn;
+        ref::plane = (int) ((b[12] >> 6) & 3);
+        ref::op = b[18] & 3;
         ref::drawn = 0;
+        ref::vectdraw(b);
+        kn[(int) kind]++;
+        kdots[(int) kind] += ref::drawn;
+        kcyc[(int) kind] += mock::busy_cycles - c0;
+        kops[(int) kind] += mock::n_ops - o0;
 
         bool bad = memcmp(ref::vram, mock::vram, sizeof ref::vram) != 0;
         bool badt = false;
@@ -390,8 +439,9 @@ int main(int argc, char **argv)
         if (bad || badt) {
             fails++;
             if (fails <= 10) {
-                printf("MISMATCH line %ld: csrw=%07x dc=%u d1=%u oct=%u vope=%02x pat=%04x wmode=%u mode=%d %s%s\n",
-                       t, csrw, dc, d1, oct, vope, pat, wmode, mode, bad ? "vram " : "", badt ? "trace" : "");
+                printf("MISMATCH draw %ld kind %c mode %d:", t, kind, mode);
+                for (int i = 0; i < 23; i++) printf(" %02x", b[i]);
+                printf(" %s%s\n", bad ? "vram " : "", badt ? "trace" : "");
                 int shown = 0;
                 for (int q = 0; q < 4 && shown < 8; q++)
                     for (int o = 0; o < 0x8000 && shown < 8; o++)
@@ -405,13 +455,12 @@ int main(int argc, char **argv)
             memcpy(ref::vram, mock::vram, sizeof ref::vram);
         }
     }
-    static const char *mn[4] = { "plain", "grcg-rmw", "grcg-tdw", "egc" };
-    for (int m = 0; m < 4; m++)
-        if (mode_dots[m])
-            printf("%-9s %9llu on-screen dots  %.2f svc ops/dot  %.2f clk_pico/dot (engine + firmware)\n", mn[m],
-                   (unsigned long long) mode_dots[m], (double) mode_ops[m] / mode_dots[m],
-                   (double) mode_cyc[m] / mode_dots[m]);
-    printf("%ld lines, %ld dots, %ld mismatches\n", n, dots, fails);
+    for (int k = 0; k < 128; k++)
+        if (kn[k])
+            printf("kind %c: %8llu draws %10llu on-screen dots  %.2f svc ops/dot  %.2f engine clk/dot\n", k,
+                   (unsigned long long) kn[k], (unsigned long long) kdots[k],
+                   kdots[k] ? (double) kops[k] / kdots[k] : 0.0, kdots[k] ? (double) kcyc[k] / kdots[k] : 0.0);
+    printf("%ld draws, %ld mismatches\n", n, fails);
     printf(fails ? "RESULT: FAIL\n" : "RESULT: PASS\n");
     delete mock::eng;
     return fails ? 1 : 0;
