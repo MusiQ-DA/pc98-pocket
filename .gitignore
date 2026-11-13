@@ -50,3 +50,4 @@ sim/obj_*/
 # verilator --Mdir build trees (CI and local sims)
 obj_*/
 .m_meas/
+.simout/
