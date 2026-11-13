@@ -29,7 +29,8 @@
 //
 // Plusargs: +svclat=N +tdslat=N +tdsword=N +quick (GDC rows only)
 //   +d88 (drive A is a D88), +opnacaps (answer OPNA CAPS=1: a release
-//   firmware built with ENABLE_OPNA then retries rhythm_load every pass),
+//   firmware built with ENABLE_OPNA then retries rhythm_load -- every pass
+//   before fw-latency, every 250 ms since),
 //   +pcprof (PC samples), +dbg.
 //
 `timescale 1ns/1ps
