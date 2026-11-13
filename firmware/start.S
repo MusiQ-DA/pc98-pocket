@@ -23,6 +23,32 @@ irq_vec:
     picorv32_setq_insn(q2, x1)
     picorv32_setq_insn(q3, x2)
 
+    // Fast path (vkb_ui.h vkb_irq_fast): when the last tick left nothing to
+    // do and neither CONT1_KEY nor OSD_RASTER has changed since, the tick
+    // would be a no-op -- re-arm the timer and return on x1/x2 alone.
+    lui x1, %hi(vkb_irq_fast)
+    addi x1, x1, %lo(vkb_irq_fast)
+    lw x2, 0(x1)
+    beqz x2, irq_full
+    lw x2, 4(x1)
+    lui x1, 0x20000
+    lw x1, 0(x1)            // CONT1_KEY
+    bne x1, x2, irq_full
+    lui x1, %hi(vkb_irq_fast)
+    addi x1, x1, %lo(vkb_irq_fast)
+    lw x2, 8(x1)
+    lui x1, 0x20000
+    lw x1, 0x18(x1)         // OSD_RASTER
+    bne x1, x2, irq_full
+    lui x1, %hi(vkb_irq_fast)
+    addi x1, x1, %lo(vkb_irq_fast)
+    lw x1, 12(x1)           // the timer period
+    picorv32_timer_insn(zero, x1)
+    picorv32_getq_insn(x1, q2)
+    picorv32_getq_insn(x2, q3)
+    picorv32_retirq_insn()
+
+irq_full:
     lui x1, %hi(irq_regs)
     addi x1, x1, %lo(irq_regs)
 

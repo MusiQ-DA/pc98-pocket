@@ -244,6 +244,7 @@ void scsi_unmount(void);            // drop the image (a slot-5 re-bind)
 void scsi_eject(void);              // OSD eject: unmount on the next poll
 uint32_t scsi_mounted_sectors(void); // 512-byte blocks, 0 = none / ejecting
 void scsi_poll(void);
+int  scsi_pending(void);           // scsi_poll has a command or an eject to take up
 void fdd_poll(void);
 
 #endif

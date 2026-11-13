@@ -21,6 +21,7 @@
 // matters.
 
 #include "softcpu_regs.h"
+#include "svc.h"
 
 // The self-test master: one trigger, then poll the request level down.
 #define ST_ADDR   ((volatile uint32_t *) 0x50000000)
@@ -196,7 +197,7 @@ static void pset_prepare(uint32_t csrw, uint16_t pat, uint8_t ope)
     pset.x = (uint16_t) ((rem << 4) + ((csrw >> 20) & 0x0Fu));
 }
 
-static void pset_at(int x, int y)
+static inline __attribute__((always_inline)) void pset_dot(int x, int y)
 {
     uint8_t dot = pset.pattern & 1u;
     pset.pattern = (uint16_t) ((pset.pattern >> 1) | ((uint16_t) dot << 15));
@@ -248,6 +249,15 @@ static void pset_at(int x, int y)
         break;
     }
     vr_write8(addr, v);
+}
+
+// Between dots, SCSI and the floppy get a pass about once a millisecond
+// (svc.h). The check sits AFTER the dot so it compiles to a tail call: inside
+// the dot it made pset_at a non-leaf with a frame, ~14 instructions a dot.
+static void pset_at(int x, int y)
+{
+    pset_dot(x, y);
+    svc_maybe_yield(SVC_GDC);
 }
 
 // ---- the primitives, np21w's algorithms verbatim ---------------------------
@@ -510,6 +520,7 @@ static void gdc_wdat(const struct gdc_snap *g)
     uint32_t base = plane_base[(csrw >> 14) & 3u];
     data &= mask;
     do {
+        svc_maybe_yield(SVC_GDC); // between words, as pset_at does per dot
         uint16_t v = (uint16_t) (vr_read8(base + adrs)
                      | ((uint16_t) vr_read8(base + adrs + 1u) << 8));
         switch (g->write_mode & 3u) {
@@ -601,10 +612,25 @@ static void serve_slave(uint32_t st)
 // After a slave draw the guest usually sends the next one within tens of
 // microseconds (3D Golf's ball flight: 480 arcs back to back). Going round
 // the whole main loop first cost ~1 ms a command on the bench; linger on
-// the slave's request line for a while instead. ~2000 polls is a few
-// hundred microseconds of the softcore's time -- far below anything the
-// other services (sector drains, OSD) need to be answered within.
-#define GDC_LINGER 2000u
+// the slave's request line for a while instead. The bound is TIME, ~300 us
+// of rdcycle: it used to be 2000 polls, which at ~6.6 us a poll was 13 ms
+// with SCSI and the floppy unanswered. A floppy request ends it at once.
+#ifndef CHIPSET_HZ
+#define CHIPSET_HZ 42954545u
+#endif
+#define GDC_LINGER_CYCLES (CHIPSET_HZ / 6u / 1000000u * 300u)
+
+#if defined(__riscv)
+#define GDC_LINGER_NOW() svc_rdcycle()
+#else
+static uint32_t gdc_linger_fake; // host builds: every poll "takes" 64 cycles
+#define GDC_LINGER_NOW() (gdc_linger_fake += 64u)
+#endif
+#ifdef FDD_REQUEST
+#define GDC_LINGER_FDD() (*FDD_REQUEST)
+#else
+#define GDC_LINGER_FDD() 0u
+#endif
 
 // Called from the main loop. np21w draws only on the slave; the master's
 // EXECUTEs still retire so its throttle releases.
@@ -623,7 +649,8 @@ void gdc_poll(void)
         serve_slave(st);
         retire(GDC_CH_SLAVE);
         st = 0u;
-        for (uint32_t i = 0; i < GDC_LINGER; i++) {
+        uint32_t t0 = GDC_LINGER_NOW();
+        while (GDC_LINGER_NOW() - t0 < GDC_LINGER_CYCLES && !GDC_LINGER_FDD()) {
             uint32_t s2 = *GDCD_STATUS(GDC_CH_SLAVE);
             if (s2 & (1u << 9)) {
                 st = s2;

@@ -677,13 +677,14 @@ module softcpu_subsystem (
     // has been on hardware since run#371 is the one that ships: four M10K
     // blocks instead of two, and the difference is not worth a dead machine.
     //
-    // The size is the measured one: .data + .bss come to 772 bytes and the
-    // deepest stack the image can reach is about 416 bytes -- the 192-byte
-    // live chain at its deepest point (main -> gdc_poll, 48+144) plus the
-    // 224-byte interrupt chain (irq -> vkb_ui_tick -> settings_input ->
-    // vkb_ui_open_picker -> vkb_draw_keyboard -> draw_legendn). Both come from
-    // -fstack-usage frames walked over the call graph, and 2 KB leaves a 3x
-    // margin over the worst case.
+    // The size is the measured one: .data + .bss come to 1149 bytes and the
+    // deepest stack the image can reach is about 656 bytes -- the 384-byte
+    // live chain at its deepest point (main -> gdc_poll -> (pset_at) ->
+    // svc_yield -> scsi_poll -> scsi_probe, a service nested in another's
+    // yield) plus the 272-byte interrupt chain (irq -> vkb_ui_tick ->
+    // settings_input -> vkb_ui_open_picker -> vkb_draw_keyboard -> ...).
+    // Both come from -fstack-usage frames walked over the call graph; 2 KB
+    // leaves ~240 bytes (~110 with ENABLE_OPNA) over the worst case.
     //
     // The lanes ignore address bits above [10], so a stray access past
     // 0x100007FF aliases here rather than faulting. The linker script's 2K RAM

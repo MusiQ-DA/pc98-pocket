@@ -820,6 +820,11 @@ int settings_input(uint16_t pressed)
     return 0;
 }
 
+int settings_reset_active(void)
+{
+    return reset_phase != 0;
+}
+
 void settings_reset_tick(void)
 {
     if (reset_phase == 1) {

@@ -5,11 +5,14 @@
  * must match the address decode in softcpu_subsystem.
  *
  * The RAM is 2K, sized from the image rather than by habit: .data + .bss are
- * 772 bytes and the deepest stack the image can reach is about 416 bytes
+ * 1149 bytes and the deepest stack the image can reach is about 656 bytes
  * (measured from -fstack-usage frames over the call graph, interrupt chain
- * included), so a stack overflow needs to be three times deeper than anything
- * built today. softcpu_subsystem.sv carries the same numbers; keep them in
- * step if either side moves. */
+ * included: main 384 with a service nested in another's yield, svc.h, plus
+ * the 272-byte interrupt chain), which leaves ~240 bytes spare (~110 in the
+ * ENABLE_OPNA build, .bss 1080) -- a yield
+ * that nests deeper, or another big frame, needs this re-measured.
+ * softcpu_subsystem.sv carries the same numbers; keep them in step if
+ * either side moves. */
 MEMORY {
     ROM (rx)  : ORIGIN = 0x00000000, LENGTH = 48K
     RAM (rwx) : ORIGIN = 0x10000000, LENGTH = 2K
