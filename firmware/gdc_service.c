@@ -22,6 +22,9 @@
 
 #include "softcpu_regs.h"
 
+// sim/host/gdc_line_host.cpp compiles this file for the host with its own
+// models of these registers (GDC_HOST_REGS).
+#ifndef GDC_HOST_REGS
 // The self-test master: one trigger, then poll the request level down.
 #define ST_ADDR   ((volatile uint32_t *) 0x50000000)
 #define ST_WDATA  ((volatile uint32_t *) 0x50000004)
@@ -36,6 +39,7 @@
 #define GDCD_STATUS(ch) ((volatile uint32_t *) (0x50000140u + (ch) * 0x40u))
 #define GDCD_SNAPW(ch)  ((volatile uint32_t *) (0x50000144u + (ch) * 0x40u))
 #define GDCD_DONE(ch)   ((volatile uint32_t *) (0x5000015Cu + (ch) * 0x40u))
+#endif
 
 #define GDC_CH_MASTER 0
 #define GDC_CH_SLAVE  1
@@ -191,9 +195,12 @@ static void pset_prepare(uint32_t csrw, uint16_t pat, uint8_t ope)
     pset.egc   = (uint8_t) ((accel & 4u) != 0u);
     pset.rmw   = (uint8_t) ((accel & 2u) != 0u);
     // np21w hardcodes forty words per drawing line (640 dots); PITCH unused.
-    uint32_t rem;
-    pset.y = (uint16_t) udiv32(csrw & 0x3FFFu, 40u, &rem);
-    pset.x = (uint16_t) ((rem << 4) + ((csrw >> 20) & 0x0Fu));
+    // ead / 40 = (ead / 8) / 5, and x / 5 == (x * 52429) >> 18 for every
+    // 16-bit x: a multiply where the long divide cost ~100 us a command.
+    uint32_t ead = csrw & 0x3FFFu;
+    uint32_t q40 = ((ead >> 3) * 52429u) >> 18;
+    pset.y = (uint16_t) q40;
+    pset.x = (uint16_t) (((ead - q40 * 40u) << 4) + ((csrw >> 20) & 0x0Fu));
 }
 
 static void pset_at(int x, int y)
@@ -250,46 +257,46 @@ static void pset_at(int x, int y)
     vr_write8(addr, v);
 }
 
-// ---- the primitives, np21w's algorithms verbatim ---------------------------
+// ---- LINE (and the single dot) in hardware ---------------------------------
+// pc98_gdc_line runs np21w's gdcsub_vectl loop on the service channel
+// itself, latching DC, D1, the octant, TEXTW, the WRITE mode and the plane
+// out of the slave's snapshot; this side only supplies what needs the
+// divide by 40 and the charger state -- the softcore runs about a
+// microsecond an instruction, and the guest's DRAWING bit waits on every
+// one of them. Window: {y, x} at +0, the launch word {dot_only[9],
+// mode[8:7]} at +0xC (read back: bit 0 busy); a bit-31 store aborts.
+#ifndef GDC_HOST_REGS
+#define LN_XY  ((volatile uint32_t *) 0x50000020)
+#define LN_GO  ((volatile uint32_t *) 0x5000002C)
+#endif
+#define LN_MODE_PLAIN 0u
+#define LN_MODE_RMW   1u
+#define LN_MODE_WORD  2u
+#define LN_DOT_ONLY   (1u << 9)
 
-static void vectl(const struct gdc_snap *g)
+// dot_only is np21w's vectp: a lone gdcpset(x, y), which is also the
+// vectl loop's first dot (step 0) -- the engine runs it with DC forced 0.
+// The write path is pset_prepare's choice: no charger -> the plane byte's
+// read-modify-write, GRCG RMW -> the dot-mask write, TDW/EGC -> the word.
+static void vectl_hw(uint32_t csrw, uint32_t dot_only)
 {
-    uint32_t dc = (g->dc_lo | ((uint32_t) g->dc_hi << 8)) & 0x3FFFu;
-    if (dc == 0) {
-        pset_at(pset.x, pset.y);
-        return;
-    }
-    uint32_t d1 = g->d1_lo | ((uint32_t) g->d1_hi << 8);
-    int x = pset.x, y = pset.y;
-    // np21w's step is ((d1 * i) / dc + 1) >> 1 for every dot. The softcore
-    // has no divider: a 32-step restoring divide per dot made a line cost
-    // ~150 us a dot at the softcore's ~7 MHz (np21w prices 0.7 us). The
-    // quotient is carried instead -- floor(d1*i/dc) = i*Q + floor(i*R/dc)
-    // with d1 = Q*dc + R -- one divide per line, bit-exact per dot.
-    uint32_t rq;
-    uint32_t qd = udiv32(d1, dc, &rq);
-    uint32_t q = 0u, r = 0u;
-    const uint8_t oct = g->ope & 7u;
-    for (uint32_t i = 0; i <= dc; i++) {
-        int step = (int) ((q + 1u) >> 1);
-        switch (oct) {
-        case 0: pset_at(x + step, y++); break;
-        case 1: pset_at(x++, y + step); break;
-        case 2: pset_at(x++, y - step); break;
-        case 3: pset_at(x + step, y--); break;
-        case 4: pset_at(x - step, y--); break;
-        case 5: pset_at(x--, y - step); break;
-        case 6: pset_at(x--, y + step); break;
-        default: pset_at(x - step, y++); break;
-        }
-        q += qd;
-        r += rq;
-        if (r >= dc) {
-            r -= dc;
-            q++;
+    uint32_t ead = csrw & 0x3FFFu;
+    uint32_t y = ((ead >> 3) * 52429u) >> 18; // ead / 40, see pset_prepare
+    uint32_t x = ((ead - y * 40u) << 4) + ((csrw >> 20) & 0x0Fu);
+    uint32_t accel = *ST_ACCEL; // {page, egc, rmw, grcg}
+    uint32_t mode = !(accel & 5u) ? LN_MODE_PLAIN
+                  : ((accel & 6u) == 2u) ? LN_MODE_RMW : LN_MODE_WORD;
+    *LN_XY = x | (y << 16);
+    *LN_GO = (mode << 7) | dot_only;
+    for (uint32_t i = 0; i < (1u << 22); i++) {
+        if (!(*LN_GO & 1u)) {
+            return;
         }
     }
+    *LN_GO = 1u << 31;
 }
+
+// ---- the primitives, np21w's algorithms verbatim ---------------------------
 
 static void vectt(const struct gdc_snap *g, uint16_t pat)
 {
@@ -546,10 +553,18 @@ static void gdc_wdat(const struct gdc_snap *g)
 
 // The done protocol: level 1, then 0. Peripherals edge-detects the rise and
 // retires the EXECUTE, running the 7220's vector reset in the GDC itself.
+// The level stays up until the request is seen to drop (the GDC cleared
+// draw_pending on the synchronised edge), so the linger below can never
+// re-serve the same command off a stale request; the bound keeps a lost
+// edge from wedging the loop. A fixed 20-pass spin used to cost ~100 us a
+// command at the softcore's ~1 MIPS.
 static void retire(int ch)
 {
     *GDCD_DONE(ch) = 1u;
-    for (volatile int i = 0; i < 20; i++) {
+    for (uint32_t i = 0; i < 64u; i++) {
+        if (!(*GDCD_STATUS(ch) & (1u << 9))) {
+            break;
+        }
     }
     *GDCD_DONE(ch) = 0u;
 }
@@ -559,6 +574,17 @@ static void serve_slave(uint32_t st)
 {
     struct gdc_snap g;
     const volatile uint32_t *w0 = GDCD_SNAPW(GDC_CH_SLAVE);
+    if ((st & 0xFFu) == GDC_OP_VECTE) {
+        // The common case, a LINE (or a lone dot) and nothing else: the
+        // engine reads the snapshot itself, so only CSRW (bytes 11-14) is
+        // needed here -- the byte-by-byte unpack below costs ~250
+        // instructions, a quarter of a millisecond at the softcore's pace.
+        uint32_t s0 = w0[0];
+        if (!(s0 & 0x70u)) {
+            vectl_hw((w0[2] >> 24) | (w0[3] << 8), (s0 & 0x08u) ? 0u : LN_DOT_ONLY);
+            return;
+        }
+    }
     uint32_t w[6];
     for (int i = 0; i < 6; i++) {
         w[i] = w0[i];
@@ -576,23 +602,28 @@ static void serve_slave(uint32_t st)
         gdc_wdat(&g);
         HB_MARK(0x5E); // wdat returned
     } else {
-        pset_prepare(csrw, textw, g.write_mode);
+        // np21w's vectdraw/textdraw: every figure starts from its own
+        // gdcpset_prepare (pattern, x and y afresh from CSRW).
         if (!(g.ope & 0x78u)) {
-            pset_at(pset.x, pset.y); // vectp: a single dot
+            vectl_hw(csrw, LN_DOT_ONLY); // vectp: a single dot
         }
         if (g.ope & 0x08u) {
-            vectl(&g);
+            vectl_hw(csrw, 0u);
         }
         if (g.ope & 0x10u) {
+            pset_prepare(csrw, textw, g.write_mode);
             vectt(&g, textw);
         }
         if (g.ope & 0x20u) {
+            pset_prepare(csrw, textw, g.write_mode);
             vectc(&g);
         }
         if (g.ope & 0x40u) {
+            pset_prepare(csrw, textw, g.write_mode);
             vectr(&g);
         }
         if ((st & 0xFFu) == GDC_OP_TEXTE) {
+            pset_prepare(csrw, textw, g.write_mode);
             gdc_text(&g);
         }
     }

@@ -365,11 +365,38 @@ module softcpu_subsystem (
             end
         end
     end
-    assign st_req   = st_req_r;
-    assign st_we    = st_we_r;
-    assign st_raw   = st_raw_r;
-    assign st_addr  = st_addr_r;
-    assign st_wdata = st_wdata_r;
+    // The LINE engine (pc98_gdc_line): np21w's gdcsub_vectl in hardware.
+    // The firmware still decodes the slave's command, stores np21w's x/y at
+    // 0x5000_0020 and the launch word at 0x5000_002C (the engine takes the
+    // rest from the slave's snapshot, static until the retire) and polls
+    // 0x5000_002C until it drops; meanwhile the engine owns the service
+    // channel and issues the same byte ops vr_read8/vr_write8 did.
+    // Ready-qualified so the two-cycle store fires once.
+    wire        ln_busy, ln_req, ln_we;
+    wire [19:0] ln_addr;
+    wire  [7:0] ln_wdata;
+    pc98_gdc_line u_gdc_line (
+        .clk      (clk_pico),
+        .reset    (reset),
+        .wr       (cpu_mem_valid && cpu_mem_ready && cpu_mem_wstrb[0] &&
+                   (cpu_mem_addr[31:4] == 28'h5000_002)),
+        .wr_sel   (cpu_mem_addr[3:2]),
+        .wr_data  (cpu_mem_wdata),
+        .snap     (gdc_draw_snaps[383:192]),
+        .busy     (ln_busy),
+        .st_req   (ln_req),
+        .st_we    (ln_we),
+        .st_addr  (ln_addr),
+        .st_wdata (ln_wdata),
+        .st_done  (st_done),
+        .st_rdata (st_rdata)
+    );
+
+    assign st_req   = st_req_r | ln_req;
+    assign st_we    = ln_busy ? ln_we    : st_we_r;
+    assign st_raw   = ~ln_busy & st_raw_r;
+    assign st_addr  = ln_busy ? ln_addr  : st_addr_r;
+    assign st_wdata = ln_busy ? ln_wdata : st_wdata_r;
 
     // OSD control at 0x20000004: bit0 = overlay shown.
     reg osd_active_r = 1'b0;
@@ -1189,6 +1216,7 @@ module softcpu_subsystem (
             // Pending bit + the byte the sequencer's svc port last returned.
             32'h5000_000C: cpu_mem_rdata = {23'd0, st_req, st_rdata};
             32'h5000_0010: cpu_mem_rdata = {24'd0, accel_status};
+            32'h5000_002C: cpu_mem_rdata = {31'd0, ln_busy};
             // ---- the drawing server --------------------------------------
             // 0x140/0x180: {busy, req, opcode} for master/slave; +4..+0x14:
             // the five snapshot words. 0x15C/0x19C (writes): the done LEVEL

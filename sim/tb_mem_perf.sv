@@ -1803,6 +1803,9 @@ module tb_mem_perf;
     wire [7:0]   svc_rdata_w;
     int          svc_timer   = 0;
     longint      svc_ops     = 0;
+    longint      svc_lat_sum = 0;   // clk from a request's rise to its done
+    int          svc_lat_max = 0;
+    int          svc_lat_cur = 0;
 
     initial void'($value$plusargs("svc=%d", svc_period));
 
@@ -1821,7 +1824,10 @@ module tb_mem_perf;
                 end
             end else if (svc_done_w) begin
                 svc_req_r <= 1'b0;
+                svc_lat_sum <= svc_lat_sum + svc_lat_cur + 1;
+                if (svc_lat_cur + 1 > svc_lat_max) svc_lat_max <= svc_lat_cur + 1;
             end
+            svc_lat_cur <= (svc_req_r && !svc_done_w) ? svc_lat_cur + 1 : 0;
         end
     end
 
@@ -2715,6 +2721,9 @@ module tb_mem_perf;
             $display("VERIFY: bad=%0d diverged=%0d stray=%0d grants=%0d midcmd=%0d dma_bytes=%0d pfbad=%0d pforeign=%0d porphan=%0d rdfor=%0d svc_ops=%0d stale=%0d",
                      bad, diverged, stray, grants, grants_midcmd, dma_seen,
                      c_pbad, c_pforeign, c_porphan, c_rd_foreign, svc_ops, c_stale);
+            if (svc_ops != 0)
+                $display("SVC: %0d raw reads, latency avg %0d.%02d max %0d clk (req rise to done)",
+                         svc_ops, svc_lat_sum / svc_ops, (svc_lat_sum * 100 / svc_ops) % 100, svc_lat_max);
             // queue occupancy at verify: if a bad write is still parked it is
             // wedged, not dropped.
             $display("  RAM queue @verify: st=%0d pend=%b%b%b cap=%b inflight(wr=%b rd=%b)",
