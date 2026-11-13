@@ -837,8 +837,11 @@ always @* begin
             rd   = 1;
             // reg1_raddr = mc_cur.arg[0] ? R_DI : R_SI;
             case (mc_cur.arg[1:0]) 
-            2'd0: rd_addr = ex_e_base + {8'h00, ex_e_addr_val};
-            2'd1: rd_addr = ex_e_base + {8'h00, ex_e_addr_val} + 24'd2;
+            // decode latches ex_e_fulladdr = ex_e_base + {8'h00,
+            // ex_e_addr_val} on the same edge as both operands, so the
+            // sum is already there.
+            2'd0: rd_addr = ex_e_fulladdr;
+            2'd1: rd_addr = ex_e_fulladdr + 24'd2;
             2'd2: rd_addr = ex_e_base + {8'h00, reg1_rdata};
             2'd3: rd_addr = base_ES + {8'h00, reg1_rdata};
             endcase
