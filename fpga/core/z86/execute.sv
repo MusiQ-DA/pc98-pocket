@@ -1839,6 +1839,7 @@ always @(posedge clk) begin
         logic new_cf;
         logic new_of;
         logic new_af;
+        logic [16:0] sh_fo;
         
         bits = ex_w ? 16 : 8;          // operand width in bits
         use_cl = ex_opcode[1];           // /2 variant
@@ -1849,6 +1850,11 @@ always @(posedge clk) begin
         cnt_raw =   use_cl  ? ex_g_val[4:0] : 
                     use_imm ? ex_imm[4:0]   : 5'd1;
         sh_extra <= (use_cl | use_imm) ? cnt_raw[4:0] : 5'd0;
+        // Every result below comes out of one funnel (shrot_funnel) rather
+        // than a barrel shifter per operation.
+        sh_fo = shrot_funnel(ex_modrm[5:3], ex_w, ex_e_val, CF,
+                             shift_cnt(cnt_raw, bits),
+                             rotate_cnt(cnt_raw, bits, ex_modrm[4]));
 
         // $display("I_SHIFT: cnt_raw: %d, ex_e_val: %h", cnt_raw, ex_e_val);
 
@@ -1871,7 +1877,7 @@ always @(posedge clk) begin
                 //--------------------------------------------------------
                 3'b100,        // SHL / SAL   (identical)
                 3'b110: begin
-                    res      = src << cnt;
+                    res      = sh_fo[15:0];               // src << cnt
                     new_cf   = saturated ? 1'b0 : src[bits-cnt];
                     // OF defined only when cnt==1
                     new_of   = (cnt==1) ? (res[bits-1] ^ new_cf) : /*reg_f[11]*/1'b0;
@@ -1879,14 +1885,14 @@ always @(posedge clk) begin
                 end
                 //--------------------------------------------------------
                 3'b101: begin  // SHR (logical right)
-                    res      = src >> cnt;
+                    res      = sh_fo[15:0];               // src >> cnt
                     new_cf   = saturated ? 1'b0 : src[cnt-1];
                     new_of   = (cnt==1) ? src[bits-1] : /*reg_f[11]*/1'b0;
                     new_af   = 1'b0;
                 end
                 //--------------------------------------------------------
                 3'b111: begin  // SAR (arithmetic right)
-                    res      = ex_w ? $signed(src) >>> cnt : $signed(src[7:0]) >>> cnt;   // sign-extend
+                    res      = sh_fo[15:0];               // sign-extending >>> cnt
                     new_cf   = saturated ? (ex_w ? src[15] : src[7]) : src[cnt-1];
                     new_of   = 1'b0;                   // always cleared
                     new_af   = 1'b0;
@@ -1930,25 +1936,25 @@ always @(posedge clk) begin
             res = ex_e_val;
             if (cnt_raw) unique case (ex_modrm[5:3])
             3'b000: begin                       // ---------- ROL
-                res    = rol(ex_e_val, cnt, ex_w);
+                res    = ex_w ? sh_fo[15:0] : {8'h00, sh_fo[7:0]};   // rol
                 new_cf = res[0];
                 new_of = (cnt==1) ? (res[bits-1] ^ new_cf) : reg_f[11];
             end
             3'b001: begin                       // ---------- ROR
-                res    = ror(ex_e_val, cnt, ex_w);
+                res    = ex_w ? sh_fo[15:0] : {8'h00, sh_fo[7:0]};   // ror
                 new_cf = res[bits-1];
                 new_of = (cnt==1) ? (res[bits-1] ^ res[bits-2]) : reg_f[11];
             end
             3'b010: begin                       // ---------- RCL
                 logic [16:0] rot;
-                rot = rcl_thru_cf(ex_e_val, CF, cnt, ex_w);
+                rot = ex_w ? sh_fo : {8'h00, sh_fo[8:0]};          // rcl_thru_cf
                 res    = ex_w ? rot[15:0] : rot[7:0];
                 new_cf = rot[bits];
                 new_of = (cnt==1) ? (res[bits-1] ^ new_cf) : reg_f[11];
             end
             3'b011: begin                       // ---------- RCR
                 logic [16:0] rot;
-                rot = rcr_thru_cf(ex_e_val, CF, cnt, ex_w);
+                rot = ex_w ? sh_fo : {8'h00, sh_fo[8:0]};          // rcr_thru_cf
                 res    = ex_w ? rot[15:0] : rot[7:0];
                 new_cf = rot[bits];
                 new_of = (cnt==1) ? (res[bits-1] ^ res[bits-2]) : reg_f[11];
@@ -2681,6 +2687,47 @@ function automatic [15:0] logic_src();
                 ex_modrm[5:3]==3'b001 ? ex_g_val :
                 ex_modrm[5:3]==3'b010 ? ex_imm :
                 16'hXXXX;
+endfunction
+
+// One right funnel for every SHIFT/ROTATE result (see I_SHIFT): the
+// operand laid out as the op needs it, then a single 34 -> 17 bit shift.
+// sc = shift_cnt (shifts, 1..bits when used), rc = rotate_cnt (rotates).
+function automatic [16:0] shrot_funnel
+(
+    input [2:0]  op,      // ex_modrm[5:3]
+    input        w,
+    input [15:0] d,       // ex_e_val
+    input        cf,
+    input [4:0]  sc,
+    input [4:0]  rc
+);
+    logic [33:0] fv;
+    logic [4:0]  fa;
+    logic [15:0] src;
+    src = w ? d : {8'h0, d[7:0]};
+    unique case (op)
+    3'b000, 3'b001: begin                       // ROL / ROR
+        fv = w ? {2'b00, d, d} : {18'd0, d[7:0], d[7:0]};
+        fa = op[0] ? rc : (w ? 5'd16 : 5'd8) - rc;
+    end
+    3'b010, 3'b011: begin                       // RCL / RCR
+        fv = w ? {cf, d, cf, d} : {16'd0, cf, d[7:0], cf, d[7:0]};
+        fa = op[0] ? rc : (w ? 5'd17 : 5'd9) - rc;
+    end
+    3'b101: begin                               // SHR
+        fv = {18'd0, src};
+        fa = sc;
+    end
+    3'b111: begin                               // SAR
+        fv = w ? {{18{d[15]}}, d} : {{26{d[7]}}, d[7:0]};
+        fa = sc;
+    end
+    default: begin                              // SHL / SAL (100, 110)
+        fv = {2'b00, src, 16'd0};
+        fa = 5'd16 - sc;
+    end
+    endcase
+    shrot_funnel = fv[fa +: 17];
 endfunction
 
 // width  = 8 or 16
