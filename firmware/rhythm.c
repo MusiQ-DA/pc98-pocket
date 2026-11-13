@@ -323,13 +323,45 @@ static int wav_step(void)
     return 0;
 }
 
+// A retry that found nothing to load (no slot bound yet, a slim build, a
+// rhythm.bin that would not read) waits this long before the next look: the
+// look is seven datatable walks -- ~2.1 ms of the main loop, which used to
+// pay it on every pass for as long as rhythm.bin was missing. A deferload
+// bind that lands late is still picked up within a quarter second. A WAV
+// load in progress is not spaced: each call is one chunk of real work.
+#ifndef CHIPSET_HZ
+#define CHIPSET_HZ 42954545u
+#endif
+#define RHYTHM_RETRY_CYCLES (CHIPSET_HZ / 6u / 4u)
+
+static inline uint32_t rhythm_rdcycle(void)
+{
+    uint32_t c;
+    __asm__ volatile("rdcycle %0" : "=r"(c));
+    return c;
+}
+
+static uint32_t rhythm_retry_at;
+static uint8_t  rhythm_backoff;
+
+static int rhythm_later(void)
+{
+    rhythm_retry_at = rhythm_rdcycle() + RHYTHM_RETRY_CYCLES;
+    rhythm_backoff = 1;
+    return 0;
+}
+
 // Returns 1 once every bound source is resolved; 0 while work remains --
 // the caller retries cheaply.
 int rhythm_load(void)
 {
+    if (rhythm_backoff && (int32_t) (rhythm_rdcycle() - rhythm_retry_at) < 0)
+        return 0;
+    rhythm_backoff = 0;
+
     // Slim builds have no store and no drvA; OMGMT_CAPS bit0 tells us.
     if (!(opna_mgmt_read(OMGMT_CAPS) & 1))
-        return 0;
+        return rhythm_later();
 
     // WAV mode wins when any per-voice slot is bound.
     static uint32_t mode;
@@ -340,7 +372,9 @@ int rhythm_load(void)
         if (!mode)
             mode = slot_bytes(RHYTHM_SLOT_ID) ? 1 : 0;
         if (!mode)
-            return 0;
+            return rhythm_later();
     }
-    return mode == 1 ? bin_load() : wav_step();
+    if (mode == 1)
+        return bin_load() ? 1 : rhythm_later();
+    return wav_step();
 }

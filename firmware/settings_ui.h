@@ -19,6 +19,7 @@ int settings_input(uint16_t pressed);
 // timer tick. Call every tick from vkb_ui_tick -- the sequence spans seconds, so it cannot run
 // inside the IRQ-context input handler that starts it.
 void settings_reset_tick(void);
+int settings_reset_active(void); // the reset walk still needs ticks
 
 // Load the persisted settings from the nonvolatile save (if present) and apply them; call once at
 // startup, before the OSD can run. settings_service() writes any later change back into the save
