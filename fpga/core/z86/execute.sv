@@ -1739,19 +1739,19 @@ always @(posedge clk) begin
         is_cmp = ex_arith_op[7];
         hw_flags_update_mask = 2'b11;   // default: update OF/CF
         unique case (ex_arith_op)
-        8'h01: // add
-            {alu_result,flags} = execute_add(ex_e_val, ex_g_val, 1'b0, ex_w);
+        // One adder for ADD/ADC and one subtractor for SUB/SBB/CMP: the
+        // carry-in is ex_arith_carry only for ADC/SBB.
+        8'h01, // add
+        8'h04: // adc
+            {alu_result,flags} = execute_add(ex_e_val, ex_g_val, ex_arith_op[2] & ex_arith_carry, ex_w);
         8'h02: // or
             alu_result = ex_e_val | ex_g_val;
-        8'h04: // adc
-            {alu_result,flags} = execute_add(ex_e_val, ex_g_val, ex_arith_carry, ex_w);
-        8'h08: // sbb
-            {alu_result,flags} = execute_sub(ex_e_val, ex_g_val, ex_arith_carry, ex_w, ex_arith_e_is_opt1);
-        8'h10: // and
-            alu_result = ex_e_val & ex_g_val;
+        8'h08, // sbb
         8'h20, // sub
         8'h80: // cmp
-            {alu_result,flags} = execute_sub(ex_e_val, ex_g_val, 1'b0, ex_w, ex_arith_e_is_opt1);
+            {alu_result,flags} = execute_sub(ex_e_val, ex_g_val, ex_arith_op[3] & ex_arith_carry, ex_w, ex_arith_e_is_opt1);
+        8'h10: // and
+            alu_result = ex_e_val & ex_g_val;
         8'h40: // xor
             alu_result = ex_e_val ^ ex_g_val;
         default: begin
@@ -2624,8 +2624,11 @@ function automatic [31:0] execute_add(
     reg aux_flag, overflow_flag;
     
     flags = reg_f;
-    sum = width ? {1'b0, e_val} + {1'b0, g_val} + {16'b0, carry}: 
-            {9'b0, e_val[7:0]} + {9'b0, g_val[7:0]} + {16'b0, carry};
+    // One 16-bit add for both widths: a byte add's carry out of bit 7 is
+    // the carry INTO bit 8 of the word add, e[8] ^ g[8] ^ sum[8].
+    sum = {1'b0, e_val} + {1'b0, g_val} + {16'b0, carry};
+    if (!width)
+        sum = {8'b0, e_val[8] ^ g_val[8] ^ sum[8], sum[7:0]};
     aux_flag = e_val[4] ^ g_val[4] ^ sum[4];
     overflow_flag = width ? (e_val[15] == g_val[15] && e_val[15] != sum[15]) :
                             (e_val[7] == g_val[7] && e_val[7] != sum[7]);
@@ -2652,21 +2655,23 @@ function automatic [31:0] execute_sub(
     reg aux_flag;
     reg overflow_flag;
 
+    logic [15:0] op1, op2;
+
     flags = reg_f;
-    if (e_is_op1) begin // E - G
-        diff = width ? {1'b0, e_val} - {1'b0, g_val} - {16'b0, borrow}: 
-                {9'b0, e_val[7:0]} - {9'b0, g_val[7:0]} - {16'b0, borrow};
-        aux_flag = e_val[4] ^ g_val[4] ^ diff[4];
-        overflow_flag = width ? (e_val[15] != g_val[15] && e_val[15] != diff[15]) :
-                                (e_val[7] != g_val[7] && e_val[7] != diff[7]);
-        if (DEBUG) $display("e_is_op1: e_val: %h, g_val: %h, diff: %h, aux_flag: %b, overflow_flag: %b", e_val, g_val, diff, aux_flag, overflow_flag);
-    end else begin     // G - E
-        diff = width ? {1'b0, g_val} - {1'b0, e_val} - {16'b0, borrow}: 
-                {9'b0, g_val[7:0]} - {9'b0, e_val[7:0]} - {16'b0, borrow};
-        aux_flag = g_val[4] ^ e_val[4] ^ diff[4];
-        overflow_flag = width ? (g_val[15] != e_val[15] && g_val[15] != diff[15]) :
-                                (g_val[7] != e_val[7] && g_val[7] != diff[7]);
-    end
+    // E - G or G - E: one subtractor on swapped operands (the two
+    // directions' aux/overflow terms are the same formula with the roles
+    // swapped).
+    op1 = e_is_op1 ? e_val : g_val;
+    op2 = e_is_op1 ? g_val : e_val;
+    // One 16-bit subtract for both widths: a byte subtract's borrow out of
+    // bit 7 is the borrow INTO bit 8 of the word subtract (all the flags
+    // read of a byte result's adder bits is [8]).
+    diff = {1'b0, op1} - {1'b0, op2} - {16'b0, borrow};
+    if (!width)
+        diff = {{8{op1[8] ^ op2[8] ^ diff[8]}}, op1[8] ^ op2[8] ^ diff[8], diff[7:0]};
+    aux_flag = op1[4] ^ op2[4] ^ diff[4];
+    overflow_flag = width ? (op1[15] != op2[15] && op1[15] != diff[15]) :
+                            (op1[7] != op2[7] && op1[7] != diff[7]);
     // $display("e_is_op1: %b", e_is_op1);
     
     result = width ? diff[15:0] : {8'h00, diff[7:0]};
