@@ -734,7 +734,7 @@ jobs:
             -Isim -I$S -I$S/common -Ifpga/apf \
             sim/tb_softcpu_trig.sv sim/stub_altsyncram.sv sim/stub_vhdl.sv \
             sim/stub_pll.sv fpga/apf/common.v \
-            $S/softcpu_subsystem.sv $S/picorv32.v $S/sprom.v \
+            $S/softcpu_subsystem.sv $S/pc98_gdc_line.sv $S/picorv32.v $S/sprom.v \
             $S/softcpu_fdd_bridge.sv -o st --Mdir obj_strig
           cd fpga && ../obj_strig/st | tee ../strig.log
           grep -q "RESULT: PASS" ../strig.log
@@ -752,10 +752,31 @@ jobs:
             -Isim -I$S -I$S/common -Ifpga/apf \
             sim/tb_softcpu_fw.sv sim/stub_altsyncram.sv sim/stub_vhdl.sv \
             sim/stub_pll.sv fpga/apf/common.v \
-            $S/softcpu_subsystem.sv $S/picorv32.v $S/sprom.v \
+            $S/softcpu_subsystem.sv $S/pc98_gdc_line.sv $S/picorv32.v $S/sprom.v \
             $S/softcpu_fdd_bridge.sv -o fw --Mdir obj_fw
           cd fpga && ../obj_fw/fw | tee ../fwtrig.log
           grep -q "RESULT: PASS" ../fwtrig.log
+
+      - name: the hardware LINE engine draws np21w's gdcsub_vectl dot for dot
+        # sim/host/gdc_line_host.cpp: the shipped gdc_service.c (host build,
+        # register proxies) driving the Verilated pc98_gdc_line, every line
+        # checked against np21w's vectl/gdcpset on a second VRAM -- plain,
+        # GRCG RMW/TDW and EGC, all octants, random patterns and clip.
+        # Then the real firmware.vh on picorv32 in softcpu_subsystem: random
+        # LINE commands through gdc_draw_*, VRAM against an SV port of np21w.
+        run: |
+          bash scripts/sim_gdc_line.sh 120000 1 | tee gdcline.log
+          grep -q "RESULT: PASS" gdcline.log
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style \
+            --top-module tb_softcpu_gdcline \
+            -Isim -I$S -I$S/common -Ifpga/apf \
+            sim/tb_softcpu_gdcline.sv sim/stub_altsyncram.sv sim/stub_vhdl.sv \
+            sim/stub_pll.sv fpga/apf/common.v \
+            $S/softcpu_subsystem.sv $S/pc98_gdc_line.sv $S/picorv32.v $S/sprom.v \
+            $S/softcpu_fdd_bridge.sv -o gl --Mdir obj_gdcline
+          cd fpga && ../obj_gdcline/gl +n=200 | grep -v LAUNCH | tee ../gdcline_fw.log
+          grep -q "RESULT: PASS" ../gdcline_fw.log
 
       - name: the hard disk mounts only on a slot-5 bind, re-mounts on a re-bind, and ejects from the OSD
         # Boots the REAL firmware.vh with slot 5's persisted pick in the
@@ -770,7 +791,7 @@ jobs:
             -Isim -I$S -I$S/common -Ifpga/apf \
             sim/tb_softcpu_hdd.sv sim/stub_altsyncram.sv sim/stub_vhdl.sv \
             sim/stub_pll.sv fpga/apf/common.v \
-            $S/softcpu_subsystem.sv $S/picorv32.v $S/sprom.v \
+            $S/softcpu_subsystem.sv $S/pc98_gdc_line.sv $S/picorv32.v $S/sprom.v \
             $S/softcpu_fdd_bridge.sv -o hd --Mdir obj_hdd
           cd fpga && ../obj_hdd/hd | tee ../hddbind.log
           grep -q "RESULT: PASS" ../hddbind.log
