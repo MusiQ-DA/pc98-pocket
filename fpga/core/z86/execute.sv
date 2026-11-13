@@ -337,6 +337,14 @@ divider u_div (
     .remainder  (div_rem)
 );
 
+// The relative branch target LOOP, JMP short/near and Jcc share: IP after
+// the instruction plus the sign-extended rel8 (or JMP near's rel16), and
+// its linear address. One 16-bit and one 24-bit adder instead of one pair
+// per instruction class.
+wire [15:0] rel_disp = (ex_opcode == 8'hE9) ? ex_imm : {{8{ex_imm[7]}}, ex_imm[7:0]};
+wire [15:0] rel_off  = ex_ip_after + rel_disp;
+wire [23:0] rel_lin  = base_CS + {8'h00, rel_off};
+
 // AAM's quotient and remainder: ONE divider with both outputs. Written as
 // al / imm and al % imm the two operators became two separate lpm_divide
 // arrays (~80 ALUTs each); a hand-written restoring loop that returned both
@@ -2262,8 +2270,8 @@ always @(posedge clk) begin
         br_taken       <= cond;
         // signed 8-bit displacement in imm8 is already sign-extended by decoder
         br_new_cs      <= seg_CS;
-        br_new_ip      <= ex_ip_after + {{12{ex_imm[7]}}, ex_imm[7:0]};   // TODO: Move to decode
-        br_target      <= base_CS + {8'h00, ex_ip_after + {{8{ex_imm[7]}}, ex_imm[7:0]}};
+        br_new_ip      <= rel_off;    // ex_ip_after + sext(rel8)
+        br_target      <= rel_lin;
     end
 
 
@@ -2282,17 +2290,17 @@ always @(posedge clk) begin
         if (ex_valid) begin
             // 1) Resolve new IP / CS
             if (is_jmp_short) begin
-                target_off = ex_ip_after + {{8{ex_imm[7]}}, ex_imm[7:0]};
+                target_off = rel_off;                // ex_ip_after + sext(rel8)
                 target_seg = seg_CS;
             end else if (is_jmp_near) begin
-                target_off = ex_ip_after + ex_imm;   // 16-bit signed add
+                target_off = rel_off;                // ex_ip_after + rel16
                 target_seg = seg_CS;
             end else if (is_jmp_far) begin
                 target_off = ex_disp[15:0];          // low 16 bits already latched
                 target_seg = ex_disp[31:16];         // upper word came in disp field
             end
             br_taken   <= 1'b1;
-            br_target  <= (is_jmp_far ? {4'h0, target_seg, 4'b0} : base_CS) + {8'h00, target_off};
+            br_target  <= is_jmp_far ? {4'h0, target_seg, 4'b0} + {8'h00, target_off} : rel_lin;
             br_new_cs  <= target_seg;
             br_new_ip  <= target_off;
         end
@@ -2369,10 +2377,10 @@ always @(posedge clk) begin
         end
 
         // -------------------------------- 2) Branch target
-        target_off  = ex_ip_after + {{8{ex_imm[7]}}, ex_imm[7:0]}; // sign-extend disp
+        target_off  = rel_off;   // ex_ip_after + sext(rel8)
 
         br_taken    <= cond;
-        br_target   <= base_CS + {8'h00, target_off};
+        br_target   <= rel_lin;
         br_new_cs   <= seg_CS;
         br_new_ip   <= target_off;
         /* No flag change, no register/memory write */
