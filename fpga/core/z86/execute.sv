@@ -2016,12 +2016,11 @@ always @(posedge clk) begin
         logic is_dec;
 
         is_dec = ex_opcode[7] ? ex_modrm[3] : ex_opcode[3];
-        if (ii.w) begin
-            alu_result = is_dec ? ex_e_val - 16'd1 : ex_e_val + 16'd1;
-        end else begin
-            alu_result[7:0] = is_dec ? ex_e_val[7:0] - 8'd1 : ex_e_val[7:0] + 8'd1;
+        // One 16-bit adder for INC and DEC at either width: -1 is +FFFFh,
+        // and a byte result is the word result's low byte.
+        alu_result = ex_e_val + (is_dec ? 16'hFFFF : 16'h0001);
+        if (!ii.w)
             alu_result[15:8] = 0;
-        end
 
         if (ii.e_is_m) begin
             wr_valid <= 1;
