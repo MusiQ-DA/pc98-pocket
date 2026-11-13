@@ -241,7 +241,10 @@ module softcpu_subsystem (
         // nothing, and rdcycle in vkb_ui.c reads only the low word.
         .CATCH_MISALIGN(0),
         .CATCH_ILLINSN(0),
-        .ENABLE_COUNTERS64(0)
+        .ENABLE_COUNTERS64(0),
+        // ... and rdcycle is the only counter it reads (objdump: no
+        // rdinstret), so the 32-bit instret counter and its adder go.
+        .ENABLE_COUNTERS_INSTR(0)
     ) pico (
         .clk       (clk_pico),
         .resetn    (~reset),
