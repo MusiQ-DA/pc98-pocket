@@ -4186,14 +4186,21 @@ module core_top #(
     localparam       comp_x2 = ((32767 * (comp_f2 - 1)) / ((comp_f2 * comp_a2) - 1)) + 1; // +1 to make sure it won't overflow
     localparam       comp_b2 = comp_x2 * comp_a2;
 
+    // Both curves share one compare/subtract/add: boost_cfg[1] picks the
+    // curve's constants (x, b) and shifts (a and f are powers of two) before
+    // the arithmetic instead of computing both curves and picking after.
+    // Bit-identical to v = boost_cfg[1] ? v2 : v1 of the two full curves.
+    wire        comp_sel = boost_cfg[1];
+    wire [15:0] comp_x   = comp_sel ? comp_x2[15:0] : comp_x1[15:0];
+    wire [15:0] comp_b   = comp_sel ? comp_b2[15:0] : comp_b1[15:0];
     function [15:0] compr;
         input [15:0] inp;
-        reg [15:0] v, v1, v2;
+        reg [15:0] v, d;
         begin
             v  = inp[15] ? (~inp) + 1'd1 : inp;
-            v1 = (v < comp_x1[15:0]) ? (v * comp_a1) : (((v - comp_x1[15:0])/comp_f1) + comp_b1[15:0]);
-            v2 = (v < comp_x2[15:0]) ? (v * comp_a2) : (((v - comp_x2[15:0])/comp_f2) + comp_b2[15:0]);
-            v  = boost_cfg[1] ? v2 : v1;
+            d  = v - comp_x;
+            v  = (v < comp_x) ? (comp_sel ? (v * comp_a2) : (v * comp_a1))
+                              : ((comp_sel ? (d / comp_f2) : (d / comp_f1)) + comp_b);
             compr = inp[15] ? ~(v-1'd1) : v;
         end
     endfunction
@@ -4209,7 +4216,6 @@ module core_top #(
         // clamp the output
         out_l <= (^tmp_l[16:15]) ? {tmp_l[16], {15{tmp_l[15]}}} : tmp_l[15:0];
 
-        cmp_l <= compr(out_l);
     end
 
     reg [15:0] cmp_r;
@@ -4223,7 +4229,19 @@ module core_top #(
         // clamp the output
         out_r <= (^tmp_r[16:15]) ? {tmp_r[16], {15{tmp_r[15]}}} : tmp_r[15:0];
 
-        cmp_r <= compr(out_r);
+    end
+
+    // One compressor for both channels, alternating clocks: L on one
+    // clk_chipset edge, R on the next. The samples it compresses change at
+    // the OPNA's ~55 kHz output rate, so the extra clock of latency (23 ns)
+    // is far below one audio sample; two full compr() copies were ~190 ALMs
+    // standalone, the shared one ~80.
+    reg         cmp_ph = 1'b0;
+    wire [15:0] cmp_q  = compr(cmp_ph ? out_r : out_l);
+    always @(posedge clk_chipset) begin
+        cmp_ph <= ~cmp_ph;
+        if (cmp_ph) cmp_r <= cmp_q;
+        else        cmp_l <= cmp_q;
     end
 
     // Audio out: audio_mixer runs the crossfeed mix and drives the codec
