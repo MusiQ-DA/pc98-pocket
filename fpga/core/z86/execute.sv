@@ -337,6 +337,34 @@ divider u_div (
     .remainder  (div_rem)
 );
 
+// AAM's quotient and remainder: ONE divider with both outputs. Written as
+// al / imm and al % imm the two operators became two separate lpm_divide
+// arrays (~80 ALUTs each); a hand-written restoring loop that returned both
+// came out larger than either. Same operands as the adjust FSM below reads
+// (ex_e_addr_val[7:0] = AL, ex_imm[7:0]); imm == 0 is overridden there.
+logic [7:0] aam_q, aam_r;
+`ifdef VERILATOR
+assign aam_q = ex_e_addr_val[7:0] / ex_imm[7:0];
+assign aam_r = ex_e_addr_val[7:0] % ex_imm[7:0];
+`else
+lpm_divide #(
+    .lpm_widthn          (8),
+    .lpm_widthd          (8),
+    .lpm_nrepresentation ("UNSIGNED"),
+    .lpm_drepresentation ("UNSIGNED"),
+    .lpm_pipeline        (0),
+    .lpm_hint            ("LPM_REMAINDERPOSITIVE=TRUE")
+) u_aam_div (
+    .numer    (ex_e_addr_val[7:0]),
+    .denom    (ex_imm[7:0]),
+    .quotient (aam_q),
+    .remain   (aam_r),
+    .aclr     (1'b0),
+    .clock    (1'b0),
+    .clken    (1'b1)
+);
+`endif
+
 // BCD / ASCII Adjustment helper
 logic adj_req;
 logic [1:0] adj_state;
@@ -430,8 +458,8 @@ always @(posedge clk) begin
             end
             // ---------- AAM D4 ------------------------------------------------
             3'd4: begin
-                ah_n =  al / imm;
-                al_n =  al % imm;
+                ah_n =  aam_q;      // al / imm (u_aam_div above)
+                al_n =  aam_r;      // al % imm
                 af_n = 1'b0;
                 if (imm == 8'h00) begin
                     adj_cond <= 1'b1;
