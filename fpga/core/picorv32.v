@@ -62,6 +62,9 @@
 module picorv32 #(
 	parameter [ 0:0] ENABLE_COUNTERS = 1,
 	parameter [ 0:0] ENABLE_COUNTERS64 = 1,
+	// PC-98 Pocket: 0 drops instret (rdinstr/rdinstrh then decode as no
+	// counter read). The firmware reads only rdcycle's low word.
+	parameter [ 0:0] ENABLE_COUNTERS_INSTR = 1,
 	parameter [ 0:0] ENABLE_REGS_16_31 = 1,
 	parameter [ 0:0] ENABLE_REGS_DUALPORT = 1,
 	parameter [ 0:0] LATCHED_MEM_RDATA = 0,
@@ -1080,8 +1083,8 @@ module picorv32 #(
 			                   (mem_rdata_q[6:0] == 7'b1110011 && mem_rdata_q[31:12] == 'b11000000000100000010)) && ENABLE_COUNTERS;
 			instr_rdcycleh <= ((mem_rdata_q[6:0] == 7'b1110011 && mem_rdata_q[31:12] == 'b11001000000000000010) ||
 			                   (mem_rdata_q[6:0] == 7'b1110011 && mem_rdata_q[31:12] == 'b11001000000100000010)) && ENABLE_COUNTERS && ENABLE_COUNTERS64;
-			instr_rdinstr  <=  (mem_rdata_q[6:0] == 7'b1110011 && mem_rdata_q[31:12] == 'b11000000001000000010) && ENABLE_COUNTERS;
-			instr_rdinstrh <=  (mem_rdata_q[6:0] == 7'b1110011 && mem_rdata_q[31:12] == 'b11001000001000000010) && ENABLE_COUNTERS && ENABLE_COUNTERS64;
+			instr_rdinstr  <=  (mem_rdata_q[6:0] == 7'b1110011 && mem_rdata_q[31:12] == 'b11000000001000000010) && ENABLE_COUNTERS && ENABLE_COUNTERS_INSTR;
+			instr_rdinstrh <=  (mem_rdata_q[6:0] == 7'b1110011 && mem_rdata_q[31:12] == 'b11001000001000000010) && ENABLE_COUNTERS && ENABLE_COUNTERS64 && ENABLE_COUNTERS_INSTR;
 
 			instr_ecall_ebreak <= ((mem_rdata_q[6:0] == 7'b1110011 && !mem_rdata_q[31:21] && !mem_rdata_q[19:7]) ||
 					(COMPRESSED_ISA && mem_rdata_q[15:0] == 16'h9002));
@@ -1560,7 +1563,7 @@ module picorv32 #(
 					reg_next_pc <= current_pc + (compressed_instr ? 2 : 4);
 					if (ENABLE_TRACE)
 						latched_trace <= 1;
-					if (ENABLE_COUNTERS) begin
+					if (ENABLE_COUNTERS && ENABLE_COUNTERS_INSTR) begin
 						count_instr <= count_instr + 1;
 						if (!ENABLE_COUNTERS64) count_instr[63:32] <= 0;
 					end
