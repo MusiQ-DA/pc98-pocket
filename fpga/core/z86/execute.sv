@@ -337,11 +337,12 @@ divider u_div (
     .remainder  (div_rem)
 );
 
-// The relative branch target LOOP, JMP short/near and Jcc share: IP after
-// the instruction plus the sign-extended rel8 (or JMP near's rel16), and
-// its linear address. One 16-bit and one 24-bit adder instead of one pair
-// per instruction class.
-wire [15:0] rel_disp = (ex_opcode == 8'hE9) ? ex_imm : {{8{ex_imm[7]}}, ex_imm[7:0]};
+// The relative branch target LOOP, JMP short/near, Jcc and CALL near's
+// BR_REL16 share: IP after the instruction plus the sign-extended rel8
+// (or JMP/CALL near's rel16), and its linear address. One 16-bit and one
+// 24-bit adder instead of one pair per instruction class.
+wire [15:0] rel_disp = (ex_opcode == 8'hE9 || ex_opcode == 8'hE8) ? ex_imm
+                     : {{8{ex_imm[7]}}, ex_imm[7:0]};
 wire [15:0] rel_off  = ex_ip_after + rel_disp;
 wire [23:0] rel_lin  = base_CS + {8'h00, rel_off};
 
@@ -945,7 +946,9 @@ always @* begin
             mc_valid     = 1'b1;
             mc_load_cs_ip   = 1'b1;
             mc_new_cs       = seg_CS;
-            mc_new_ip       = ex_ip_after + ex_imm;        // disp already sign-extended
+            // ex_ip_after + ex_imm: BR_REL16 is CALL near's (E8) alone
+            // (ucode.asm), so rel_off holds exactly that sum.
+            mc_new_ip       = rel_off;
         end
 
         //==================================================================
