@@ -499,6 +499,21 @@ jobs:
           ./obj_gdc_s/g | tee gdc_s.log
           grep -q "PASS tb_pc98_gdc" gdc_s.log
 
+      - name: the draw snapshot latches the bytes np21w's readers use
+        run: |
+          # The engine benches write draw_snap directly, so a wrong snap_src
+          # maps the engine perfectly while the machine ships the wrong PRAM
+          # bytes (TEXTW[2..7] rode para[26..31] while every bench stayed
+          # green). Drive the slave GDC's guest port, fill every PRAM field,
+          # drop a VECTE and check all 32 snapshot bytes through the real
+          # latch -- then retire and check the vectreset constants ride into
+          # the second VECTE (np21w gdc.c vectdraw's epilogue).
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_pc98_gdc_snap \
+            -Isim -I$S sim/tb_pc98_gdc_snap.sv $S/pc98_gdc.sv -o sn --Mdir obj_gdcsnap
+          ./obj_gdcsnap/sn | tee gdcsnap.log
+          grep -q "PASS tb_pc98_gdc_snap" gdcsnap.log
+
       - name: a stopped master GDC hides the text plane (INT 18h AH=0Dh)
         run: |
           # Dynamo's title: np21w gdc_work clears GDCSCRN_ENABLE on STOP,

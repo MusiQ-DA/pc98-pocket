@@ -225,7 +225,8 @@ module pc98_gdc #(
         else if (k == 18) snap_src = 6'(P_WRITE);          // 53: the op byte
         else if (k <= 20) snap_src = 6'(P_MASK + k - 19);  // 46..47
         else if (k <= 22) snap_src = 6'(P_CODE + k - 21);  // 54..55
-        else if (k <= 29) snap_src = 6'(20 + k - 18);      // TEXTW 22..27
+        else if (k == 23) snap_src = 6'd0;             // pad: no figure reads it
+        else if (k <= 29) snap_src = 6'(20 + k - 22);  // TEXTW 22..27 (pat[2..7])
         else              snap_src = 6'd0;                 // 30-31: pad
     endfunction
 
