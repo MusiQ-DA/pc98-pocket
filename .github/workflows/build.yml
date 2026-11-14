@@ -42,7 +42,10 @@ jobs:
     # RTL that passes 5.020 (this image) and 5.052 alike.  The benches are
     # calibrated against 5.020; bump deliberately, not by runner drift.
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # 45 was too tight: the same tree ranged 39m44s..45m16s across runners
+    # and the slow draw hit the ceiling (run 43557054807).  60 gives the
+    # observed +/-15% runner spread room without masking real hangs.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
