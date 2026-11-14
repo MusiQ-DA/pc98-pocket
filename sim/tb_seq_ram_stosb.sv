@@ -43,7 +43,6 @@ module tb_seq_ram_stosb;
     wire        initilized_sdram;
     wire        memory_access_ready, access_complete, ram_address_select_n;
 
-    logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
 
     // ---- display fetch on port D (gv_rd_req) -------------------------
     // +gvf=N: issue an 8-word gv read every N cycles, 0 = off. Models the
@@ -78,6 +77,8 @@ module tb_seq_ram_stosb;
 
     pc98_gvram_seq #(.EGC(1'b0)) seq (
         .rmwbuf_off(1'b0),
+        .dx_seq(2'b00),
+        .disp_page(1'b0),
         .clk(clock), .reset(reset),
         .cpu_gvram(cpu_gvram), .cpu_rd(cpu_rd), .cpu_wr(cpu_wr),
         .cpu_pf_len(4'd0),
@@ -124,8 +125,7 @@ module tb_seq_ram_stosb;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
-        .ems98_map(ems98_unused),
-        .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
+        .ems_map(40'd0), .bios_protect_flag(2'b00), .bios_shadow_flag(1'b0),
         .font_bank_flag(1'b0),
         .font_rd_req(1'b0), .font_rd_addr(24'd0), .font_rd_len(4'd0),
         .font_rd_ack(), .font_rd_valid(), .font_rd_data(), .font_rd_done(),

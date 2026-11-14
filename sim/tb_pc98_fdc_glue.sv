@@ -43,6 +43,7 @@ module tb_pc98_fdc_glue;
     // The first half of this bench drives fd_irq by hand, to check the routing
     // in isolation. The second half hands the wire to the real floppy.v.
     logic loop_mode = 1'b0;      // 1 = floppy.v owns fd_irq
+    logic mgmt_fddn = 1'b0;      // which drive a mgmt write lands on
     logic fd_irq_force = 1'b0;
     wire  fd_irq = loop_mode ? fdd_irq : fd_irq_force;
     wire  fd_busy = loop_mode ? fdd_busy : 1'b0;
@@ -57,6 +58,7 @@ module tb_pc98_fdc_glue;
     wire       irq_2hd;
     wire       irq_2dd;
     wire       dma_enable;
+    wire       force_ready;
 
     pc98_fdc_glue dut (
         .clk(clk), .rst(rst),
@@ -68,7 +70,7 @@ module tb_pc98_fdc_glue;
         .ctrl_readback(ctrl_readback), .mode_readback(mode_readback),
         .reg144_readback(),
         .group_live(group_live), .irq_2hd(irq_2hd), .irq_2dd(irq_2dd),
-        .dma_enable(dma_enable)
+        .dma_enable(dma_enable), .force_ready(force_ready)
     );
 
     // THE REAL CONTROLLER, behind the glue. The interrupt contract is a loop --
@@ -176,7 +178,7 @@ module tb_pc98_fdc_glue;
         .io_writedata   (fd_wdata),
         .fdd0_inserted  (),
         .mgmt_address   (mgmt_addr_m),
-        .mgmt_fddn      (1'b0),
+        .mgmt_fddn      (mgmt_fddn),
         .mgmt_write     (mgmt_wr_m),
         .mgmt_writedata (mgmt_wdata_m),
         .mgmt_read      (feed_rd_m),
@@ -189,8 +191,8 @@ module tb_pc98_fdc_glue;
         // shift shows as a real ratio rather than the two-cycle floor.
         .clock_rate     (clk_rate_r),
         .turbo          (turbo_r),
-        .request        (fdd_request),
-        .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()
+        .force_ready    (force_ready),
+        .request        (fdd_request)
     );
 
     logic [27:0] clk_rate_r = 28'd2000;
@@ -1216,7 +1218,7 @@ module tb_pc98_fdc_glue;
             want("MSR idle after the result", msr, 8'h80);
 
             // ---- a READ ID on the same media reports ITS N as 3 -----------
-            wr(1, 8'h0A); wr(1, 8'h00);   // READ ID, head 0 unit 0
+            wr(1, 8'h4A); wr(1, 8'h00);   // READ ID, head 0 unit 0
             guard = 0;
             while (!fd_irq && guard < 10_000) begin
                 @(negedge clk); guard++;
@@ -1230,6 +1232,42 @@ module tb_pc98_fdc_glue;
             want("READ ID reports N=3 for 2HD", b0, 8'h03);
             rd(0, msr);
             want("MSR idle after READ ID", msr, 8'h80);
+
+            // ---- FM (MF clear) finds no address marks on MFM media ---------
+            // np21w fddfile.c fails !fdc.mf; io/fdc.c answers IC0|ND. The
+            // BIOS boot (FFD6A) tries FM READ ID first: a success there made
+            // it read 512 bytes FM to 1FE0:0000 and run a 1 KB 2HD IPL cut
+            // in half (Lord Monarch).
+            wr(1, 8'h0A); wr(1, 8'h00);   // READ ID, FM
+            guard = 0;
+            while (!fd_irq && guard < 10_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("FM READ ID interrupts", fd_irq, 1'b1);
+            rd(1, st0);
+            want("FM READ ID ST0 = IC abnormal", st0, 8'h40);
+            rd(1, b0);
+            want("FM READ ID ST1 = ND", b0, 8'h04);
+            rd(1, msr); rd(1, msr); rd(1, msr); rd(1, msr); rd(1, msr);
+            rd(0, msr);
+            want("MSR idle after FM READ ID", msr, 8'h80);
+            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);   // READ DATA, FM
+            wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h01); wr(1, 8'h1B);
+            wr(1, 8'hFF);
+            guard = 0;
+            while (!fd_irq && guard < 10_000) begin
+                @(negedge clk); guard++;
+            end
+            #1;
+            want1("FM READ DATA interrupts", fd_irq, 1'b1);
+            rd(1, st0);
+            want("FM READ DATA ST0 = IC abnormal", st0, 8'h40);
+            rd(1, b0);
+            want("FM READ DATA ST1 = ND", b0, 8'h04);
+            rd(1, msr); rd(1, msr); rd(1, msr); rd(1, msr); rd(1, msr);
+            rd(0, msr);
+            want("MSR idle after FM READ DATA", msr, 8'h80);
 
             // ---- and the WRONG N is an answer, not a hang ------------------
             wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
@@ -1331,7 +1369,7 @@ module tb_pc98_fdc_glue;
             dma_wr(8'h0B, 8'hFF); dma_wr(8'h0B, 8'h03);
             dma_wr(8'h15, 8'h02);
 
-            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'hFF);
 
@@ -1363,7 +1401,7 @@ module tb_pc98_fdc_glue;
             dma_wr(8'h0B, 8'hFF); dma_wr(8'h0B, 8'h01);    // 512 bytes
             dma_wr(8'h15, 8'h02);
 
-            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'hFF);
 
@@ -1526,7 +1564,7 @@ module tb_pc98_fdc_glue;
             // floppy.v is in the loop with the 2HD disk still mounted and
             // the 2HD window live. READ ID gives a seven-byte result phase.
             window(1'b0);
-            wr(1, 8'h0A); wr(1, 8'h00);
+            wr(1, 8'h4A); wr(1, 8'h00);
             guard = 0;
             while (!fd_irq && guard < 10_000) begin
                 @(negedge clk); guard++;
@@ -1564,7 +1602,7 @@ module tb_pc98_fdc_glue;
             window(1'b0);
             // Park the chip in the fill-wait: READ DATA on the still-mounted
             // media, and let the request prove the state was reached.
-            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'hFF);
             guard = 0;
@@ -1585,7 +1623,7 @@ module tb_pc98_fdc_glue;
             // in S_SD_READ_WAIT_FOR_DATA with pending_command zeroed: the
             // request stayed low and nothing ever ran again.
             wr(2, 8'h0D);                // bit 7 back down, IRQ re-armed
-            wr(1, 8'h06); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
+            wr(1, 8'h46); wr(1, 8'h00); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'h01); wr(1, 8'h03); wr(1, 8'h00); wr(1, 8'h00);
             wr(1, 8'hFF);
             guard = 0;
@@ -1668,6 +1706,92 @@ module tb_pc98_fdc_glue;
             want1("and the line still drops on the result read", fd_irq, 1'b0);
             turbo_r = 1'b0;
             clk_rate_r = 28'd2000;
+        end
+
+        // ======== THE EQUIPMENT SWEEP SEES TWO DRIVES, ONE OF THEM EMPTY ====
+        //
+        // BIOS FF1E0 writes 0x94 = C8 then 48 (bit 6: the adapter forces
+        // READY), recalibrates units 0-3 and, at FF61D, marks a unit present
+        // in DISK_EQUIP (0:055C) when its ST0 & 0xC0 is 0. A PC-98 has two
+        // internal drives, so an EMPTY drive 1 must come back with IC clear
+        // (np21w FDC_Recalibrate: equipped + forced ready = SE alone) -- the
+        // 0x69 this used to send left 055C at 01, and JDOS(98) 3.02's INT 21h
+        // AH=47h then failed getcwd on A: (it compares the 1-based drive
+        // against its drive count), so The Incredible Machine 2's START.EXE
+        // could not find CSUM.EXE and exited silently. Units 2/3 do not exist.
+        $display("--- equipment sweep: drive 1 empty but equipped ---");
+        begin
+            logic [7:0] st0, pcn, st3;
+            logic [7:0] st0_of [0:3];
+            int         guard;
+
+            rst = 1'b1;
+            repeat (4) @(posedge clk);
+            rst = 1'b0;
+            repeat (2) @(posedge clk);
+            loop_mode = 1'b1;
+            window(1'b0);
+            // drive 0 has a disk, drive 1 none
+            @(negedge clk);
+            mgmt_fddn = 1'b0;
+            mgmt_address = 4'd0; mgmt_writedata = 16'h0001; mgmt_write = 1'b1;
+            @(negedge clk);
+            mgmt_fddn = 1'b1; mgmt_writedata = 16'h0000;
+            @(negedge clk);
+            mgmt_write = 1'b0; mgmt_fddn = 1'b0;
+            #1;
+            wr(2, 8'hC8);           // FF1E8: reset edge + motor
+            repeat (20) @(negedge clk);
+            wr(2, 8'h48);           // FF1F3: forced READY on
+            repeat (20) @(negedge clk);
+            want1("0x94 bit 6 forces READY", force_ready, 1'b1);
+            // drain whatever the reset queued
+            for (int i = 0; i < 8; i++) begin
+                wr(1, 8'h08); rd(1, st0);
+                if (st0 == 8'h80) break;
+                rd(1, pcn);
+            end
+            wr(1, 8'h03); wr(1, 8'hBF); wr(1, 8'h32);
+            wr(1, 8'h07); wr(1, 8'h00);
+            wr(1, 8'h07); wr(1, 8'h01);
+            wr(1, 8'h07); wr(1, 8'h02);
+            wr(1, 8'h07); wr(1, 8'h03);
+            guard = 0;
+            while (!fd_irq && guard < 4000) begin @(negedge clk); guard++; end
+            for (int u = 0; u < 4; u++) st0_of[u] = 8'hFF;
+            for (int i = 0; i < 8; i++) begin
+                wr(1, 8'h08); rd(1, st0);
+                if (st0 == 8'h80) break;
+                rd(1, pcn);
+                st0_of[st0[1:0]] = st0;
+                $display("    sweep sense: st0 %02X", st0);
+            end
+            want("unit 0 (disk) present", st0_of[0] & 8'hC0, 8'h00);
+            want("unit 1 (empty) present", st0_of[1] & 8'hC0, 8'h00);
+            want("unit 1 under forced READY: SE alone", st0_of[1], 8'h21);
+            want("unit 2 absent", st0_of[2] & 8'hC0, 8'h40);
+            want("unit 3 absent", st0_of[3] & 8'hC0, 8'h40);
+            // SENSE DRIVE STATUS is deliberately left as it was (empty = the
+            // FAULT reply, READY down): the BIOS's ready tests (FE5B, F72D)
+            // read RY only, and 9e41562 traced a boot hang to this reply.
+            wr(1, 8'h04); wr(1, 8'h01);
+            repeat (10) @(negedge clk); #1;
+            rd(1, st3);
+            want("ST3 unit 1 empty: READY down", st3 & 8'h20, 8'h00);
+            // FF638: 0x94 = 18, READY no longer forced
+            wr(2, 8'h18);
+            repeat (5) @(negedge clk);
+            want1("0x94 = 18 drops forced READY", force_ready, 1'b0);
+            wr(1, 8'h07); wr(1, 8'h01);
+            guard = 0;
+            while (!fd_irq && guard < 4000) begin @(negedge clk); guard++; end
+            wr(1, 8'h08); rd(1, st0); rd(1, pcn);
+            want("recal unit 1 empty: SE|NR, IC clear", st0, 8'h29);
+            wr(1, 8'h0F); wr(1, 8'h01); wr(1, 8'h05);
+            guard = 0;
+            while (!fd_irq && guard < 4000) begin @(negedge clk); guard++; end
+            wr(1, 8'h08); rd(1, st0); rd(1, pcn);
+            want("seek unit 1 empty: still IC0|NR", st0, 8'h69);
         end
 
         $display("\n  errors: %0d", errors);

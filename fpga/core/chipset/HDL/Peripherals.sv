@@ -6,7 +6,8 @@
 //
 
 module PERIPHERALS #(
-		parameter clk_rate = 28'd50000000
+		parameter clk_rate = 28'd50000000,
+		parameter bit CPU_286 = 0      // port 0x42 bit 1 clear (see sysport_data)
     ) (
         input   logic           clock,
         // Sixteen-colour mode, out to the memory path: it decides whether
@@ -138,7 +139,7 @@ module PERIPHERALS #(
     output  logic   [1:0]   gdc_draw_req,
     output  logic   [1:0]   gdc_draw_busy,
     output  logic  [15:0]   gdc_draw_ops,
-    output  logic [383:0]   gdc_draw_snaps,
+    output  logic [511:0]  gdc_draw_snaps,
     input   logic   [1:0]   gdc_srv_done_levels,
     // Watchdog pulses {slave, master}: a draw the server never answered.
     // Probe-only plumbing -- the pulses are latched in core_top's JTAG
@@ -1009,8 +1010,8 @@ module PERIPHERALS #(
     wire        gdc_s_draw_req, gdc_s_draw_busy, gdc_s_done_stb;
     wire        gdc_m_draw_to,  gdc_s_draw_to;
     wire [7:0]  gdc_m_draw_op,  gdc_s_draw_op;
-    wire [31:0] gdc_m_draw_snap [0:5];
-    wire [31:0] gdc_s_draw_snap [0:5];
+    wire [31:0] gdc_m_draw_snap [0:7];
+    wire [31:0] gdc_s_draw_snap [0:7];
 
     logic [1:0] srv_done_s1 = 2'b00, srv_done_s2 = 2'b00, srv_done_s3 = 2'b00;
     always_ff @(posedge clock) begin
@@ -1026,9 +1027,9 @@ module PERIPHERALS #(
     assign gdc_s_done_stb = srv_done_s2[1] & ~srv_done_s3[1];
     genvar dsg;
     generate
-        for (dsg = 0; dsg < 6; dsg = dsg + 1) begin : g_dsnap
+        for (dsg = 0; dsg < 8; dsg = dsg + 1) begin : g_dsnap
             assign gdc_draw_snaps[dsg*32 +: 32]      = gdc_m_draw_snap[dsg];
-            assign gdc_draw_snaps[192 + dsg*32 +: 32] = gdc_s_draw_snap[dsg];
+            assign gdc_draw_snaps[256 + dsg*32 +: 32] = gdc_s_draw_snap[dsg];
         end
     endgenerate
 
@@ -1325,8 +1326,32 @@ module PERIPHERALS #(
     // "640KB OK" then a boot loop). The 0F 01 NOP-consume microcode stays
     // (dead on the V30 path, harmless); a genuine 286 instruction still
     // traps through INVOP/INTD and the pc_hist freeze names it.
-    // The BIOS never looks at bit 1 -- it tests bits
-    // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
+    //
+    // CPU_286 (core_top, with z86's PM286 protected mode) answers 8'h00:
+    // the 286 class. The ITF's self-test at F8B9E is skipped by core_top's
+    // loader patch (jz F8B9E -> jz +0, into the jmp F8FA2 the V30 path
+    // takes), and F8FA2's protected-mode memory check then counts the
+    // extended memory. The BIOS DOES read bit 1 (the old note here said it
+    // did not): FD8B1 points vector 10h at 0936h for a 286, FDA21/FDC4A let
+    // INT 1Fh AH=90h/91h (the protected-mode block move) run instead of
+    // returning CF=1, and FFEBD scans 04D0h for D7/D9 boards with a delay.
+    //
+    // The other bits are np21w's (io/printif.c prt_i42, lines 118-154):
+    //   0x84 always -- bit 7, and bit 2 = printer not BUSY (it only drops
+    //        for a moment after a strobe);
+    //   0x20 CPUMODE_8MHZ -- clear: this machine is the 2.4576 MHz / 10 MHz
+    //        line (the ARTIC runs at 307.2 kHz);
+    //   0x10 dipsw[0] bit 2 (SW1-3) -- np21w's default DIP SW1 is 3Eh, so
+    //        set; clear makes the ITF switch the display to plasma (F824E:
+    //        OUT 6Ah,41h) and Lord Monarch default to its 8-tone LCD palette;
+    //   0x08 dipsw[0] bit 7 (SW1-8) -- clear (3Eh);
+    //   0x02 V30 only.
+    // So 94h for the 286, which np21w answers too. The BIOS/ITF readers of
+    // bits other than 1: F8170/F82B0 (bit 3), F8569/F864E/F92D7 (bit 5),
+    // F949B (bits 7, 6 -> 0501h bits 5, 4: 0501h = 20h as np21w's own BIOS
+    // writes it), FD8FF (bit 3), FD94D/FF42F (bit 0), FE03C (bit 2, the
+    // printer status). It answered 00h before, so 0501h bit 5, the printer
+    // "ready" bit and the plasma OUT are what changed.
     // 0x31 = 0xE3. The detour through 0x12 is worth recording.
     //
     // When 0xE3 first went in, the Pocket's screen went completely blank and
@@ -1348,7 +1373,7 @@ module PERIPHERALS #(
     wire [7:0] sysport_data = sysport_35_select ? pc98_sysport_c
                             : sysport_31_select ? cfg_dipsw2
                             : sysport_33_select ? (8'h08 | {7'd0, upd4990_cdat})
-                            : sysport_42_select ? 8'h02
+                            : sysport_42_select ? (CPU_286 ? 8'h94 : 8'h96)
                             :                     8'h00;
 
     // ------------------------------------------------- keyboard 8251
@@ -2028,6 +2053,16 @@ module PERIPHERALS #(
         .row(pc98_ank_row)
     );
 
+    // A stopped master GDC shows no text (INT 18h AH=0Dh, np21w gdc_work's
+    // STOP clearing GDCSCRN_ENABLE) -- see pc98_text_gate for the reading.
+    wire txt_pixel;
+    pc98_text_gate u_pc98_text_gate (
+        .clk(clock), .reset(reset), .disp_on(gdc_m_disp_on),
+        .clk_dot(clk_pc98_dot), .disp_on_dot(gdc_on_px),
+        .pixel_in(pc98_pixel),
+        .pixel_out(txt_pixel), .text_off()
+    );
+
     // The attribute's colour field is G R B, so it maps to the output that way
     // round. Full intensity: PC-98 text has no half-bright. The pixel is
     // delayed one dot clock to line up with the graphics plane's own +1
@@ -2036,7 +2071,7 @@ module PERIPHERALS #(
     logic       t_pix_q;
     logic [2:0] t_grb_q;
     always_ff @(posedge clk_pc98_dot) begin
-        t_pix_q <= pc98_pixel;
+        t_pix_q <= txt_pixel;
         t_grb_q <= pc98_grb;
     end
 
@@ -2319,13 +2354,12 @@ module PERIPHERALS #(
     wire [23:0]  opna_adpcmb_addr;
     wire         opna_adpcmb_roe_n;
 
-    // USE_ADPCM=1 restores the ADPCM-A block (rhythm voices, the drive-
-    // sound kit): the EGC raster engine was dropped, so the LABs it paid
-    // for are free again -- the 1848-ALM device cannot carry both. The
+    // USE_ADPCM=1 restores the ADPCM-A block (the rhythm voices): the EGC
+    // raster engine was dropped, so the LABs it paid for are free again -- the 1848-ALM device cannot carry both. The
     // guest's rhythm writes now reach a chip with ADPCM blocks; the
     // firmware fills the 32 KB rhythm store at boot when rhythm.bin is
     // present. OMGMT_CAPS (mg_reg 8) bit0 reads 1, which is what tells
-    // rhythm.c and drive_sound.c to run their loads. USE_PCM stays 1:
+    // rhythm.c to run its load. USE_PCM stays 1:
     // it is the only stereo FM path jt12 has (use_pcm=0 falls back to
     // the YM2203 mono accumulator), and the OPNA is a stereo chip.
     // DELTA-T stays dark either way (pc98_opna wires use_adpcmb=0 -- its
@@ -2379,6 +2413,7 @@ module PERIPHERALS #(
     logic   [7:0]   fdd_readdata;
     logic           fdd_dma_req_wire;
     logic           fdc_dma_enable;   // 0x94 bit 4 (DMAE), the DRQ/DACK gate
+    logic           fdc_force_ready;  // 0x94 bit 6, the adapter's forced READY
     logic           fdd_dma_read;
     logic           prev_fdd_dma_ack;
     logic           fdd_dma_rw_ack;
@@ -2502,7 +2537,8 @@ module PERIPHERALS #(
         .group_live    (fdc_group_live),
         .irq_2hd       (fdc_glue_irq_2hd),
         .irq_2dd       (fdc_glue_irq_2dd),
-        .dma_enable    (fdc_dma_enable)
+        .dma_enable    (fdc_dma_enable),
+        .force_ready   (fdc_force_ready)
     );
 
     always_ff @(posedge clock)
@@ -2595,6 +2631,7 @@ module PERIPHERALS #(
                                      clk_select[0] == 1'b0 ? {1'b0, clk_rate[27:1]} : {2'b00, clk_rate[27:2]}),
 
         .turbo                      (fdd_turbo),
+        .force_ready                (fdc_force_ready),
         .request                    (fdd_request),
 
         .dbg_cmd_accepts            (fdc_dbg_accepts),
@@ -2603,12 +2640,7 @@ module PERIPHERALS #(
         .dbg_xfer                   (fdc_dbg_xfer),
         .dbg_command                (fdc_dbg_command),
         .dbg_sector_info            (fdc_dbg_sector_info),
-        .dbg2                       (fdc_dbg2),
-
-        .snd_step                   (fdd_snd_step),
-        .snd_head                   (fdd_snd_head),
-        .snd_xfer                   (fdd_snd_xfer),
-        .snd_motor                  (fdd_snd_motor)
+        .dbg2                       (fdc_dbg2)
     );
 
     logic   [7:0]   fdc_dbg_accepts;
@@ -2676,26 +2708,15 @@ module PERIPHERALS #(
     //
     // mgmt_readdata
     //
-    // Drive-noise taps as a polled event channel. The fdd_sound sample player
-    // is gone; the softcore plays mechanism noise through the OPNA's ADPCM-A
-    // voices, so what it needs is the edge/level picture, not an audio
-    // stream. Reg 0xE: an 8-bit step counter (firmware takes deltas, so it
-    // never misses a burst of steps) plus the live head/xfer/motor levels.
-    logic fdd_snd_step, fdd_snd_head, fdd_snd_xfer, fdd_snd_motor;
-    logic [7:0] snd_step_cnt;
-    always_ff @(posedge clock) begin
-        if (reset)           snd_step_cnt <= 8'd0;
-        else if (fdd_snd_step) snd_step_cnt <= snd_step_cnt + 8'd1;
-    end
-
-    wire [15:0] sndev_readdata = {snd_step_cnt, 5'd0, fdd_snd_head,
-                                  fdd_snd_xfer, fdd_snd_motor};
-    wire        sndev_cs = mgmt_fdd_cs && (mgmt_address[3:0] == 4'hE);
+    // Reg 0xE of the floppy window used to carry the drive-noise event taps;
+    // that feature is gone and the address now reads 0 (floppy.v itself
+    // would answer 1 for it).
+    wire        fdd_rsvd_e_cs = mgmt_fdd_cs && (mgmt_address[3:0] == 4'hE);
 
 `ifdef ENABLE_OPNA
     assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
                          : mgmt_opna_cs ? mgmt_opna_readdata
-                         : sndev_cs ? sndev_readdata : mgmt_fdd_readdata;
+                         : fdd_rsvd_e_cs ? 16'h0000 : mgmt_fdd_readdata;
 `else
     // OPNA parked: its mgmt window must answer ABSENT, not alias onto the
     // floppy readback -- a stray 1 in OMGMT_CAPS's bit0 convinces the
@@ -2703,7 +2724,7 @@ module PERIPHERALS #(
     // DISK_SPIN_LIMIT wait on a busy flag that never clears.
     assign mgmt_readdata = mgmt_scsi_cs ? mgmt_scsi_readdata
                          : mgmt_opna_cs ? 16'h0000
-                         : sndev_cs ? sndev_readdata : mgmt_fdd_readdata;
+                         : fdd_rsvd_e_cs ? 16'h0000 : mgmt_fdd_readdata;
 `endif
 
 

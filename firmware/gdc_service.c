@@ -16,12 +16,16 @@
 // gdc_pset.c's withtdw/withrmw/withegc -- the pattern bit gates the dot and
 // the hardware does the plane expansion. Reads through the channel always
 // come back raw (the GDC's own bus view); writes are what the charger
-// transforms. TEXTE currently draws the 16-bit TEXTW pattern rather than
-// the full 8-byte PRAM pattern; the snapshot widens when a title proves it
-// matters.
+// transforms. TEXTE draws the FULL 8-byte TEXTW pattern area (np21w's
+// textdraw: pat[patnum & 7] over para[20..27], and para[27] doubled as
+// the pattern of the other figures), carried in snapshot bytes 15-16 and
+// 24-29.
 
 #include "softcpu_regs.h"
 
+// sim/host/gdc_draw_host.cpp compiles this file for the host with its own
+// models of these registers (GDC_HOST_REGS).
+#ifndef GDC_HOST_REGS
 // The self-test master: one trigger, then poll the request level down.
 #define ST_ADDR   ((volatile uint32_t *) 0x50000000)
 #define ST_WDATA  ((volatile uint32_t *) 0x50000004)
@@ -32,21 +36,26 @@
 #define ST_ACCEL  ((volatile uint32_t *) 0x50000010)
 
 // The two channels' register windows. The 0x140 block is the master, 0x180
-// the slave: {status, snap0..snap4} then the done register at +0x1C.
+// the slave: {status, snap0..snap5} then the done register at +0x1C. The
+// snapshot's words 6 and 7 (TEXTW[2..7] and padding) sit past the done
+// register, at +0x20/+0x24.
 #define GDCD_STATUS(ch) ((volatile uint32_t *) (0x50000140u + (ch) * 0x40u))
 #define GDCD_SNAPW(ch)  ((volatile uint32_t *) (0x50000144u + (ch) * 0x40u))
 #define GDCD_DONE(ch)   ((volatile uint32_t *) (0x5000015Cu + (ch) * 0x40u))
+#define GDCD_SNAPW2(ch) ((volatile uint32_t *) (0x50000160u + (ch) * 0x40u))
+#endif
 
 #define GDC_CH_MASTER 0
 #define GDC_CH_SLAVE  1
 #define GDC_OP_VECTE  0x6Cu
 #define GDC_OP_TEXTE  0x68u
 
-// The snapshot, twenty-three bytes in the order the RTL packs them: VECTW's
+// The snapshot, twenty-nine bytes in the order the RTL packs them: VECTW's
 // eleven, CSRW's four (np21w reads a dword -- the fourth byte's high nibble
 // is the dot address), TEXTW's two, ZOOM, the WRITE-mode byte, then MASK's
-// two and the CODE parameter pair -- the last four exist for WDAT, whose
-// draw needs what np21w's gdcsub_write reads (io/gdc_sub.c).
+// two and the CODE parameter pair -- those four exist for WDAT, whose
+// draw needs what np21w's gdcsub_write reads (io/gdc_sub.c) -- and TEXTW's
+// bytes 2..7, the rest of the 8-byte pattern area np21w's textdraw reads.
 struct gdc_snap {
     uint8_t ope;
     uint8_t dc_lo, dc_hi;
@@ -60,72 +69,49 @@ struct gdc_snap {
     uint8_t write_mode;
     uint8_t mask[2];
     uint8_t code[2];
-};
-
-// np21w's direction table: {x, y, x2, y2} steps for octants 0-7 and the
-// SL-flavoured 8-15 (io/gdc_sub.c vectdir).
-static const int8_t vectdir[16][4] = {
-    { 0, 1, 1, 0 },
-    { 1, 1, 1, -1 },
-    { 1, 0, 0, -1 },
-    { 1, -1, -1, -1 },
-    { 0, -1, -1, 0 },
-    { -1, -1, -1, 1 },
-    { -1, 0, 0, 1 },
-    { -1, 1, 1, 1 },
-    { 0, 1, 1, 1 },
-    { 1, 1, 1, 0 },
-    { 1, 0, 1, -1 },
-    { 1, -1, 0, -1 },
-    { 0, -1, -1, -1 },
-    { -1, -1, -1, 0 },
-    { -1, 0, -1, 1 },
-    { -1, 1, 0, 1 },
+    uint8_t textw6[6];
 };
 
 // np21w's gdcplaneseg order: EAD bits 15-14 select the plane; the bases are
 // the hardware windows (A8000=B, B0000=R, B8000=G, E at E0000).
 static const uint32_t plane_base[4] = { 0xE0000, 0xA8000, 0xB0000, 0xB8000 };
 
-// np21w's gdcbitreverse, built at boot: a table would cost 256 ROM bytes.
-static uint8_t bitreverse[256];
-static int gdc_inited = 0;
 
 // The softcore has no divider (nodiv-verify gates it), so every division
-// here goes through a restoring long divide.
+// here goes through a shift-and-subtract long divide. It starts from the
+// divisor aligned under the dividend's top bit, so it runs one step per
+// QUOTIENT bit, not 32: the softcore spends ~25 clocks an instruction, and
+// a fixed 32-step loop cost about a millisecond per call.
 static uint32_t udiv32(uint32_t n, uint32_t d, uint32_t *rem)
 {
-    uint32_t q = 0u, r = 0u;
+    uint32_t q = 0u;
     if (d == 0u) {
         if (rem) {
             *rem = 0u;
         }
         return 0u;
     }
-    for (int i = 31; i >= 0; i--) {
-        r = (r << 1) | ((n >> i) & 1u);
-        if (r >= d) {
-            r -= d;
-            q |= 1u << i;
+    if (n >= d) {
+        uint32_t dd = d, bit = 1u;
+        while (!(dd & 0x80000000u) && (dd << 1) <= n) {
+            dd <<= 1;
+            bit <<= 1;
+        }
+        while (bit) {
+            if (n >= dd) {
+                n -= dd;
+                q |= bit;
+            }
+            dd >>= 1;
+            bit >>= 1;
         }
     }
     if (rem) {
-        *rem = r;
+        *rem = n;
     }
     return q;
 }
 
-static void init_bitreverse(void)
-{
-    for (int i = 0; i < 256; i++) {
-        uint8_t r = 0, v = (uint8_t) i;
-        for (int b = 0; b < 8; b++) {
-            r = (uint8_t) ((r << 1) | (v & 1u));
-            v >>= 1;
-        }
-        bitreverse[i] = r;
-    }
-}
 
 // One guest byte through the self-test master: bounded, so a wedged bus
 // degrades to a wrong pixel rather than a hang.
@@ -180,9 +166,12 @@ static void pset_prepare(uint32_t csrw, uint16_t pat, uint8_t ope)
     pset.egc   = (uint8_t) ((accel & 4u) != 0u);
     pset.rmw   = (uint8_t) ((accel & 2u) != 0u);
     // np21w hardcodes forty words per drawing line (640 dots); PITCH unused.
-    uint32_t rem;
-    pset.y = (uint16_t) udiv32(csrw & 0x3FFFu, 40u, &rem);
-    pset.x = (uint16_t) ((rem << 4) + ((csrw >> 20) & 0x0Fu));
+    // ead / 40 = (ead / 8) / 5, and x / 5 == (x * 52429) >> 18 for every
+    // 16-bit x: a multiply where the long divide cost ~100 us a command.
+    uint32_t ead = csrw & 0x3FFFu;
+    uint32_t q40 = ((ead >> 3) * 52429u) >> 18;
+    pset.y = (uint16_t) q40;
+    pset.x = (uint16_t) (((ead - q40 * 40u) << 4) + ((csrw >> 20) & 0x0Fu));
 }
 
 static void pset_at(int x, int y)
@@ -239,128 +228,66 @@ static void pset_at(int x, int y)
     vr_write8(addr, v);
 }
 
+// ---- LINE (and the single dot) in hardware ---------------------------------
+// pc98_gdc_draw runs np21w's gdcsub_vectl loop on the service channel
+// itself, latching DC, D1, the octant, TEXTW, the WRITE mode and the plane
+// out of the slave's snapshot; this side only supplies what needs the
+// divide by 40 and the charger state -- the softcore runs about a
+// microsecond an instruction, and the guest's DRAWING bit waits on every
+// one of them. Window: {y, x} at +0, the launch word {dot_only[9],
+// mode[8:7]} at +0xC (read back: bit 0 busy); a bit-31 store aborts.
+#ifndef GDC_HOST_REGS
+#define LN_XY  ((volatile uint32_t *) 0x50000020)
+#define LN_GO  ((volatile uint32_t *) 0x5000002C)
+#endif
+#define LN_MODE_PLAIN 0u
+#define LN_MODE_RMW   1u
+#define LN_MODE_WORD  2u
+#define LN_DOT_ONLY   (1u << 9)
+#define LN_FIG_LINE   (0u << 10)
+#define LN_FIG_RECT   (1u << 10)
+#define LN_FIG_VECTT  (2u << 10)
+#define LN_FIG_TEXT   (3u << 10)
+#define LN_TEXT_CMD   (1u << 13)
+
+// LN_DOT_ONLY is np21w's vectp: a lone gdcpset(x, y), which is also the
+// vectl loop's first dot (step 0) -- the engine runs it with DC forced 0.
+// The write path is pset_prepare's choice: no charger -> the plane byte's
+// read-modify-write, GRCG RMW -> the dot-mask write, TDW/EGC -> the word.
+static void draw_hw(uint32_t csrw, uint32_t go)
+{
+    uint32_t ead = csrw & 0x3FFFu;
+    uint32_t y = ((ead >> 3) * 52429u) >> 18; // ead / 40, see pset_prepare
+    uint32_t x = ((ead - y * 40u) << 4) + ((csrw >> 20) & 0x0Fu);
+    uint32_t accel = *ST_ACCEL; // {page, egc, rmw, grcg}
+    uint32_t mode = !(accel & 5u) ? LN_MODE_PLAIN
+                  : ((accel & 6u) == 2u) ? LN_MODE_RMW : LN_MODE_WORD;
+    *LN_XY = x | (y << 16);
+    *LN_GO = (mode << 7) | go;
+    for (uint32_t i = 0; i < (1u << 22); i++) {
+        if (!(*LN_GO & 1u)) {
+            return;
+        }
+    }
+    *LN_GO = 1u << 31;
+}
+
 // ---- the primitives, np21w's algorithms verbatim ---------------------------
 
-static void vectl(const struct gdc_snap *g)
+
+// Circles: np21w io/gdc_sub.c gdcsub_vectc, with its own 4097-entry table
+// (gdc_rt.h, generated from np21w's formula; 8 KB of the ROM's spare room).
+// The previous stand-in, a half-angle sine with a Newton square root, put
+// the arc at r*0.85 instead of np21w's r*0.29 at the octant end -- the
+// ball markers came out misshapen -- and spent three long divides a dot.
+// The index (i << 12) / m is stepped like vectl's quotient.
+#include "gdc_rt.h"
+
+static uint32_t gdc_rt(uint32_t k)
 {
-    uint32_t dc = (g->dc_lo | ((uint32_t) g->dc_hi << 8)) & 0x3FFFu;
-    if (dc == 0) {
-        pset_at(pset.x, pset.y);
-        return;
-    }
-    uint32_t d1 = g->d1_lo | ((uint32_t) g->d1_hi << 8);
-    int x = pset.x, y = pset.y;
-    switch (g->ope & 7) {
-    case 0:
-        for (uint32_t i = 0; i <= dc; i++) {
-            pset_at(x + (int) ((udiv32(d1 * i, dc, 0) + 1) >> 1), y++);
-        }
-        break;
-    case 1:
-        for (uint32_t i = 0; i <= dc; i++) {
-            pset_at(x++, y + (int) ((udiv32(d1 * i, dc, 0) + 1) >> 1));
-        }
-        break;
-    case 2:
-        for (uint32_t i = 0; i <= dc; i++) {
-            pset_at(x++, y - (int) ((udiv32(d1 * i, dc, 0) + 1) >> 1));
-        }
-        break;
-    case 3:
-        for (uint32_t i = 0; i <= dc; i++) {
-            pset_at(x + (int) ((udiv32(d1 * i, dc, 0) + 1) >> 1), y--);
-        }
-        break;
-    case 4:
-        for (uint32_t i = 0; i <= dc; i++) {
-            pset_at(x - (int) ((udiv32(d1 * i, dc, 0) + 1) >> 1), y--);
-        }
-        break;
-    case 5:
-        for (uint32_t i = 0; i <= dc; i++) {
-            pset_at(x--, y - (int) ((udiv32(d1 * i, dc, 0) + 1) >> 1));
-        }
-        break;
-    case 6:
-        for (uint32_t i = 0; i <= dc; i++) {
-            pset_at(x--, y + (int) ((udiv32(d1 * i, dc, 0) + 1) >> 1));
-        }
-        break;
-    default:
-        for (uint32_t i = 0; i <= dc; i++) {
-            pset_at(x - (int) ((udiv32(d1 * i, dc, 0) + 1) >> 1), y++);
-        }
-        break;
-    }
+    return gdc_rt_tab[k > 4096u ? 4096u : k];
 }
 
-static void vectt(const struct gdc_snap *g, uint16_t pat)
-{
-    if (g->ope & 0x80) { // SL: the pattern runs backwards
-        pat = (uint16_t) (((uint16_t) bitreverse[pat & 0xFF] << 8) | bitreverse[pat >> 8]);
-    }
-    uint8_t multiple = (uint8_t) ((g->zoom & 15u) + 1u);
-    uint32_t sx = (((uint32_t) g->d_lo | ((uint32_t) g->d_hi << 8)) - 1u) & 0x3FFFu;
-    sx += 1u;
-    if (sx >= 768u) {
-        sx = 768u;
-    }
-    const int8_t *dir = vectdir[g->ope & 7];
-    for (uint8_t muly = multiple; muly; muly--) {
-        int cx = pset.x, cy = pset.y;
-        for (uint32_t xrem = sx; xrem; xrem--) {
-            uint8_t mulx = multiple;
-            if (pat & 1u) {
-                pat = (uint16_t) ((pat >> 1) | 0x8000u);
-                while (mulx--) {
-                    pset_at(cx, cy);
-                    cx += dir[0];
-                    cy += dir[1];
-                }
-            } else {
-                pat >>= 1;
-                while (mulx--) {
-                    cx += dir[0];
-                    cy += dir[1];
-                }
-            }
-        }
-        pset.x = (uint16_t) (pset.x + dir[2]);
-        pset.y = (uint16_t) (pset.y + dir[3]);
-    }
-}
-
-static void vectr(const struct gdc_snap *g)
-{
-    uint32_t d = ((uint32_t) g->d_lo | ((uint32_t) g->d_hi << 8)) & 0x3FFFu;
-    uint32_t d2 = ((uint32_t) g->d2_lo | ((uint32_t) g->d2_hi << 8)) & 0x3FFFu;
-    int x = pset.x, y = pset.y;
-    const int8_t *dir = vectdir[g->ope & 7];
-    for (uint32_t i = 0; i < d; i++) {
-        pset_at(x, y);
-        x += dir[0];
-        y += dir[1];
-    }
-    for (uint32_t i = 0; i < d2; i++) {
-        pset_at(x, y);
-        x += dir[2];
-        y += dir[3];
-    }
-    for (uint32_t i = 0; i < d; i++) {
-        pset_at(x, y);
-        x -= dir[0];
-        y -= dir[1];
-    }
-    for (uint32_t i = 0; i < d2; i++) {
-        pset_at(x, y);
-        x -= dir[2];
-        y -= dir[3];
-    }
-}
-
-// Circles: np21w interpolates off a 4097-entry sqrt table (8 KB); the same
-// curve comes from s = 32768*sin(pi/4 * i/m), computed with one Newton step
-// on the half-angle identity -- close to a dot at r = 2047.
 static void vectc(const struct gdc_snap *g)
 {
     uint32_t r = ((uint32_t) g->d_lo | ((uint32_t) g->d_hi << 8)) & 0x3FFFu;
@@ -369,23 +296,19 @@ static void vectc(const struct gdc_snap *g)
         pset_at(pset.x, pset.y);
         return;
     }
-    uint32_t i0 = ((uint32_t) g->dm_lo | ((uint32_t) g->dm_hi << 8)) & 0x3FFFu;
+    uint32_t i = ((uint32_t) g->dm_lo | ((uint32_t) g->dm_hi << 8)) & 0x3FFFu;
     uint32_t t = ((uint32_t) g->dc_lo | ((uint32_t) g->dc_hi << 8)) & 0x3FFFu;
     int x = pset.x, y = pset.y;
     if (t > m) {
         t = m;
     }
-    for (uint32_t i = i0; i <= t; i++) {
-        // All 32-bit: the softcore has no divider, and 64-bit division
-        // pulls in __udivdi3 the nodiv gate exists to forbid.
-        uint32_t a = udiv32(i * 32768u, m, 0); // Q15, <= 32768
-        uint32_t b = udiv32(i * 23170u, m, 0); // Q15, <= 23170
-        uint32_t k = a * b;                    // Q30, <= 7.6e8
-        uint32_t s = b;                        // one Newton step on sqrt(k)
-        if (s) {
-            s = (s + udiv32(k, s, 0)) / 2u; // Q30/Q15 = Q15
-        }
-        uint32_t dx = (s * r + 16384u) >> 15;
+    // k = (i << 12) / m, carried: 4096 = kq*m + kr
+    uint32_t kr;
+    uint32_t kq = udiv32(4096u, m, &kr);
+    uint32_t krem;
+    uint32_t k = udiv32(i << 12, m, &krem);
+    for (; i <= t; i++) {
+        uint32_t dx = (gdc_rt(k) * r + 16384u) >> 15;
         switch (g->ope & 7) {
         case 0:
             pset_at(x + (int) dx, y + (int) i);
@@ -412,56 +335,11 @@ static void vectc(const struct gdc_snap *g)
             pset_at(x - (int) dx, y + (int) i);
             break;
         }
-    }
-}
-
-// TEXTE: DC/D are the cell size in dots; the octant plus the SL bit choose
-// the text-flavoured direction. The pattern is the 16-bit TEXTW stand-in
-// until the snapshot widens (see the header note).
-static void gdc_text(const struct gdc_snap *g)
-{
-    uint8_t multiple = (uint8_t) ((g->zoom & 15u) + 1u);
-    uint32_t sy = (((uint32_t) g->dc_lo | ((uint32_t) g->dc_hi << 8)) & 0x3FFFu) + 1u;
-    uint32_t sx = (((uint32_t) g->d_lo | ((uint32_t) g->d_hi << 8)) - 1u) & 0x3FFFu;
-    sx += 1u;
-    if (sx >= 768u) {
-        sx = 768u;
-    }
-    if (sy >= 768u) {
-        sy = 768u;
-    }
-    uint8_t pat[8];
-    pat[0] = g->textw[0];
-    pat[1] = g->textw[1];
-    for (int i = 2; i < 8; i++) {
-        pat[i] = pat[i & 1];
-    }
-    const int8_t *dir = vectdir[((g->ope & 0x80) >> 4) + (g->ope & 7)];
-    int patnum = 0;
-    while (sy--) {
-        for (uint8_t muly = multiple; muly; muly--) {
-            int cx = pset.x, cy = pset.y;
-            patnum--;
-            uint8_t bit = pat[patnum & 7];
-            for (uint32_t xrem = sx; xrem; xrem--) {
-                uint8_t mulx = multiple;
-                if (bit & 1u) {
-                    bit = (uint8_t) ((bit >> 1) | 0x80u);
-                    while (mulx--) {
-                        pset_at(cx, cy);
-                        cx += dir[0];
-                        cy += dir[1];
-                    }
-                } else {
-                    bit >>= 1;
-                    while (mulx--) {
-                        cx += dir[0];
-                        cy += dir[1];
-                    }
-                }
-            }
-            pset.x = (uint16_t) (pset.x + dir[2]);
-            pset.y = (uint16_t) (pset.y + dir[3]);
+        k += kq;
+        krem += kr;
+        if (krem >= m) {
+            krem -= m;
+            k++;
         }
     }
 }
@@ -537,72 +415,129 @@ static void gdc_wdat(const struct gdc_snap *g)
 
 // The done protocol: level 1, then 0. Peripherals edge-detects the rise and
 // retires the EXECUTE, running the 7220's vector reset in the GDC itself.
+// The level stays up until the request is seen to drop (the GDC cleared
+// draw_pending on the synchronised edge), so the linger below can never
+// re-serve the same command off a stale request; the bound keeps a lost
+// edge from wedging the loop. A fixed 20-pass spin used to cost ~100 us a
+// command at the softcore's ~1 MIPS.
 static void retire(int ch)
 {
     *GDCD_DONE(ch) = 1u;
-    for (volatile int i = 0; i < 20; i++) {
+    for (uint32_t i = 0; i < 64u; i++) {
+        if (!(*GDCD_STATUS(ch) & (1u << 9))) {
+            break;
+        }
     }
     *GDCD_DONE(ch) = 0u;
 }
+
+// One slave request: the snapshot, then np21w's dispatch.
+static void serve_slave(uint32_t st)
+{
+    struct gdc_snap g;
+    const volatile uint32_t *w0 = GDCD_SNAPW(GDC_CH_SLAVE);
+    if ((st & 0xFFu) == GDC_OP_VECTE || (st & 0xFFu) == GDC_OP_TEXTE) {
+        // Everything but a circle: the engine reads the snapshot itself,
+        // so only CSRW (bytes 11-14) is needed here -- the byte-by-byte
+        // unpack below costs ~250 instructions, a quarter of a millisecond
+        // at the softcore's pace. np21w's vectdraw / textdraw order; bit
+        // 0x10 is VECTT under VECTE and the character figure under TEXTE.
+        uint32_t s0 = w0[0];
+        // np21w's textdraw hands the dot/line/rect figures para[27]
+        // doubled as their pattern; the engine's TEXT_CMD flavour does it.
+        uint32_t tx = ((st & 0xFFu) == GDC_OP_TEXTE) ? LN_TEXT_CMD : 0u;
+        if (!(s0 & 0x20u)) {
+            uint32_t csrw = (w0[2] >> 24) | (w0[3] << 8);
+            if (!(s0 & 0x78u)) {
+                draw_hw(csrw, LN_DOT_ONLY | tx);
+            }
+            if (s0 & 0x08u) {
+                draw_hw(csrw, LN_FIG_LINE | tx);
+            }
+            if (s0 & 0x10u) {
+                draw_hw(csrw, ((st & 0xFFu) == GDC_OP_TEXTE) ? LN_FIG_TEXT : LN_FIG_VECTT);
+            }
+            if (s0 & 0x40u) {
+                draw_hw(csrw, LN_FIG_RECT | tx);
+            }
+            return;
+        }
+    }
+    uint32_t w[8];
+    for (int i = 0; i < 6; i++) {
+        w[i] = w0[i];
+    }
+    w[6] = GDCD_SNAPW2(GDC_CH_SLAVE)[0];   // bytes 24-27: para[22..25]
+    w[7] = GDCD_SNAPW2(GDC_CH_SLAVE)[1];   // bytes 28-29: para[26..27]
+    uint8_t *b = (uint8_t *) &g;
+    for (int i = 0; i < 29; i++) {
+        b[i] = (uint8_t) (w[i >> 2] >> ((i & 3) * 8));
+    }
+    uint32_t csrw = g.csrw[0] | ((uint32_t) g.csrw[1] << 8) | ((uint32_t) g.csrw[2] << 16) |
+                    ((uint32_t) g.csrw[3] << 24);
+    // np21w: vectdraw's vectt/vectc read the TEXTW word (para[20..21]);
+    // textdraw hands its figures para[27] doubled instead.
+    uint16_t textw = ((st & 0xFFu) == GDC_OP_TEXTE)
+                   ? (uint16_t) ((uint16_t) g.textw6[5] * 0x0101u)
+                   : g.textw[0] | ((uint16_t) g.textw[1] << 8);
+    uint32_t tx = ((st & 0xFFu) == GDC_OP_TEXTE) ? LN_TEXT_CMD : 0u;
+    HB_MARK(0x50 | ((st >> 2) & 0x0F)); // claimed: opcode family visible
+    if ((st & 0xE4u) == 0x20u) {
+        // A completed WDAT run: gdcsub_write, np21w io/gdc_sub.c.
+        gdc_wdat(&g);
+        HB_MARK(0x5E); // wdat returned
+    } else {
+        // np21w's vectdraw/textdraw: every figure starts from its own
+        // gdcpset_prepare (pattern, x and y afresh from CSRW).
+        if (!(g.ope & 0x78u)) {
+            draw_hw(csrw, LN_DOT_ONLY | tx); // vectp: a single dot
+        }
+        if (g.ope & 0x08u) {
+            draw_hw(csrw, LN_FIG_LINE | tx);
+        }
+        if (g.ope & 0x10u) {
+            draw_hw(csrw, ((st & 0xFFu) == GDC_OP_TEXTE) ? LN_FIG_TEXT : LN_FIG_VECTT);
+        }
+        if (g.ope & 0x20u) {
+            pset_prepare(csrw, textw, g.write_mode);
+            vectc(&g);
+        }
+        if (g.ope & 0x40u) {
+            draw_hw(csrw, LN_FIG_RECT | tx);
+        }
+    }
+}
+
+// After a slave draw the guest usually sends the next one within tens of
+// microseconds (3D Golf's ball flight: 480 arcs back to back). Going round
+// the whole main loop first cost ~1 ms a command on the bench; linger on
+// the slave's request line for a while instead. ~2000 polls is a few
+// hundred microseconds of the softcore's time -- far below anything the
+// other services (sector drains, OSD) need to be answered within.
+#define GDC_LINGER 2000u
 
 // Called from the main loop. np21w draws only on the slave; the master's
 // EXECUTEs still retire so its throttle releases.
 void gdc_poll(void)
 {
-    if (!gdc_inited) {
-        init_bitreverse();
-        gdc_inited = 1;
+    // Status word is {.., draw_req bit9, draw_busy bit8, opcode[7:0]}:
+    // the request flag sits ABOVE the opcode -- testing bit 1 only ever
+    // saw an opcode bit, so opcodes with it clear (WDAT 20h, VECTE 6Ch,
+    // TEXTE 68h) went undispatched to the watchdog.
+    uint32_t st = *GDCD_STATUS(GDC_CH_SLAVE);
+    while (st & (1u << 9)) {
+        serve_slave(st);
+        retire(GDC_CH_SLAVE);
+        st = 0u;
+        for (uint32_t i = 0; i < GDC_LINGER; i++) {
+            uint32_t s2 = *GDCD_STATUS(GDC_CH_SLAVE);
+            if (s2 & (1u << 9)) {
+                st = s2;
+                break;
+            }
+        }
     }
-    for (int ch = GDC_CH_SLAVE; ch >= GDC_CH_MASTER; ch--) {
-        uint32_t st = *GDCD_STATUS(ch);
-        // Status word is {.., draw_req bit9, draw_busy bit8, opcode[7:0]}:
-        // the request flag sits ABOVE the opcode -- testing bit 1 only ever
-        // saw an opcode bit, so opcodes with it clear (WDAT 20h, VECTE 6Ch,
-        // TEXTE 68h) went undispatched to the watchdog.
-        if (!(st & (1u << 9))) { // no request pending
-            continue;
-        }
-        if (ch == GDC_CH_SLAVE) {
-            struct gdc_snap g;
-            const volatile uint32_t *w0 = GDCD_SNAPW(ch);
-            uint32_t w[6];
-            for (int i = 0; i < 6; i++) {
-                w[i] = w0[i];
-            }
-            uint8_t *b = (uint8_t *) &g;
-            for (int i = 0; i < 23; i++) {
-                b[i] = (uint8_t) (w[i >> 2] >> ((i & 3) * 8));
-            }
-            uint32_t csrw = g.csrw[0] | ((uint32_t) g.csrw[1] << 8) | ((uint32_t) g.csrw[2] << 16) |
-                            ((uint32_t) g.csrw[3] << 24);
-            uint16_t textw = g.textw[0] | ((uint16_t) g.textw[1] << 8);
-            HB_MARK(0x50 | ((st >> 2) & 0x0F)); // claimed: opcode family visible
-            if ((st & 0xE4u) == 0x20u) {
-                // A completed WDAT run: gdcsub_write, np21w io/gdc_sub.c.
-                gdc_wdat(&g);
-                HB_MARK(0x5E); // wdat returned
-            } else {
-                pset_prepare(csrw, textw, g.write_mode);
-                if (!(g.ope & 0x78u)) {
-                    pset_at(pset.x, pset.y); // vectp: a single dot
-                }
-                if (g.ope & 0x08u) {
-                    vectl(&g);
-                }
-                if (g.ope & 0x10u) {
-                    vectt(&g, textw);
-                }
-                if (g.ope & 0x20u) {
-                    vectc(&g);
-                }
-                if (g.ope & 0x40u) {
-                    vectr(&g);
-                }
-                if ((st & 0xFFu) == GDC_OP_TEXTE) {
-                    gdc_text(&g);
-                }
-            }
-        }
-        retire(ch);
+    if (*GDCD_STATUS(GDC_CH_MASTER) & (1u << 9)) {
+        retire(GDC_CH_MASTER);
     }
 }

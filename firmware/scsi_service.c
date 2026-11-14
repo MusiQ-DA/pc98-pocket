@@ -60,6 +60,7 @@ static uint8_t  scsi_asc;          // additional sense code
 static int      scsi_ack;          // our copy of the request toggle
 static uint32_t scsi_bytes;        // the mounted file's size, for the re-probe
 static int      scsi_reprobe;      // mount-time classification is provisional
+static volatile int scsi_eject_req; // OSD eject, taken up by the next scsi_poll
 
 static void scsi_mgmt_write(uint32_t reg, uint32_t data)
 {
@@ -594,6 +595,36 @@ int scsi_mount(uint32_t bytes)
     return 1;
 }
 
+// Eject: the slot was re-bound, so the classification of the old file is void
+// until the new one mounts. TEST UNIT READY answers NOT READY meanwhile (and
+// stays there if the re-bind carried no file).
+void scsi_unmount(void)
+{
+    scsi_sectors = 0;
+    scsi_bytes = 0;
+    scsi_reprobe = 0;
+    scsi_eject_req = 0;
+    *SOFT_SCSI_MEDIA = 0;
+}
+
+// OSD eject (the Hard Disk row, settings_ui.c). That row runs in the timer
+// IRQ, which can land in the middle of a scsi_poll transfer, so it only posts
+// the request: the main loop's next scsi_poll unmounts between commands.
+// main.c's mounted_hdd stays set, so nothing re-mounts the image -- the drive
+// answers NOT READY until a Pocket-menu pick toggles the slot-5 re-bind.
+void scsi_eject(void)
+{
+    if (scsi_sectors)
+        scsi_eject_req = 1;
+}
+
+// The mounted image's 512-byte block count for the OSD, 0 when there is none
+// or an eject is already on its way.
+uint32_t scsi_mounted_sectors(void)
+{
+    return scsi_eject_req ? 0 : scsi_sectors;
+}
+
 void scsi_init(void)
 {
     scsi_sectors = 0;
@@ -609,6 +640,8 @@ void scsi_init(void)
 // command is a level we can poll and clear rather than a pulse we can miss.
 void scsi_poll(void)
 {
+    if (scsi_eject_req)
+        scsi_unmount();
     uint32_t ctrl = scsi_mgmt_read(SMGMT_CTRL);
     if (!(ctrl & 1))
         return;

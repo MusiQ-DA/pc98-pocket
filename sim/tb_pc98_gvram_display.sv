@@ -1,9 +1,11 @@
 `default_nettype none
 // tb_pc98_gvram_display -- pixel check of the graphics display fetch.
 //
-// A fake SDRAM port answers every burst with a byte that names its plane
-// and its offset, then every dot of several frames is compared against the
-// address the slave GDC's SAD/PITCH/partition registers imply. Phases:
+// A fake SDRAM port answers every burst with GV_IL words -- each 16-bit
+// word at {7'h30, page, off, odd} carrying the two plane bytes the
+// interleave says live there -- then every dot of several frames is
+// compared against the address the slave GDC's SAD/PITCH/partition
+// registers imply. Phases:
 // A BIOS-linear, B scrolled (SAD), C split screen (two partitions),
 // D short pitch, E page one, F digital mode (no plane E).
 module tb_pc98_gvram_display;
@@ -47,14 +49,20 @@ module tb_pc98_gvram_display;
         else h <= h + 10'd1;
     end
 
-    // port model: byte = plane_tag*0x40 + byte-offset-in-plane.
-    function automatic [7:0] pbyte(input int a);
-        int pl;
-        if (a >= 24'h600000)         pl = 4;
-        else if (a[19:15] == 5'b10101) pl = 0;
-        else if (a[19:15] == 5'b11100) pl = 3;
-        else pl = a[15] ? 2 : 1;
-        return 8'(pl * 8'h40) + 8'(a & 24'h7FFF);
+    // Port model, GV_IL interleave: the DUT reads 16-bit words at
+    // {7'h30, page, off[14:0], odd}; plane p's byte sits in word odd=p[1],
+    // byte lane p[0] (upper/lower).  A plane byte names its plane, page and
+    // offset: page0 plane p -> p*0x40 + off, page1 -> 0x10 + p*0x40 + off
+    // (mod 256), so swapped planes or the wrong page read as wrong dots.
+    function automatic [7:0] gbyte(input int pl, input int pg, input int off);
+        return 8'(((pl << 6) + (pg << 4)) + (off & 32'h7FFF));
+    endfunction
+    function automatic [15:0] pword(input int a);
+        int off;
+        if ((a >> 17) != 7'h30) return 16'hDEAD;   // outside the interleave
+        off = (a >> 1) & 32'h7FFF;
+        if (a[0]) return {gbyte(3, a[16], off), gbyte(2, a[16], off)};
+        return    {gbyte(1, a[16], off), gbyte(0, a[16], off)};
     endfunction
 
     int burst_addr, burst_len, beat;
@@ -66,7 +74,7 @@ module tb_pc98_gvram_display;
             burst_addr <= p_addr; burst_len <= p_len + 1; in_burst <= 1;
         end else if (in_burst) begin
             p_rvalid <= 1;
-            p_rdata  <= {8'h00, pbyte(burst_addr + beat)};
+            p_rdata  <= pword(burst_addr + beat);
             if (beat == burst_len - 1) begin
                 p_done <= 1; in_burst <= 0; beat <= 0;
             end else beat <= beat + 1;
@@ -120,29 +128,17 @@ module tb_pc98_gvram_display;
     // lines carry nothing at all (np21w zero-fills that surface band).
     function automatic logic [3:0] exp_dot(input int L, input int d, input int pg);
         int i, base;
+        logic [3:0] dd;
         i = d / 8;
         if (L < int'(vshift)) return 4'd0;
         base = line_base(L - int'(vshift));
-        begin
-            logic [3:0] dd;
-            for (int pl = 0; pl < 4; pl++) begin
-                logic [23:0] pa;
-                if (pg) pa = 24'h600000 + 24'(pl) * 24'h8000 + 24'(base + i);
-                else case (pl)
-                    0: pa = 24'hA8000 + 24'(base + i);
-                    1: pa = 24'hB0000 + 24'(base + i);
-                    2: pa = 24'hB8000 + 24'(base + i);
-                    default: pa = 24'hE0000 + 24'(base + i);
-                endcase
-                begin
-                    logic [7:0] pb;
-                    pb = pbyte(int'(pa));
-                    dd[pl] = pb[7 - (d % 8)];
-                end
-            end
-            // palette index is {E,G,R,B}: plane1=R -> bit1, plane2=G -> bit2
-            return {dd[3] & 1'(analog_m), dd[2], dd[1], dd[0]};
+        for (int pl = 0; pl < 4; pl++) begin
+            logic [7:0] pb;
+            pb = gbyte(pl, pg, base + i);
+            dd[pl] = pb[7 - (d % 8)];
         end
+        // palette index is {E,G,R,B}: plane1=R -> bit1, plane2=G -> bit2
+        return {dd[3] & 1'(analog_m), dd[2], dd[1], dd[0]};
     endfunction
 
     int errors = 0, checked = 0;

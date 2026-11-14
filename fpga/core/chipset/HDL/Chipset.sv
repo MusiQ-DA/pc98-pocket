@@ -5,7 +5,10 @@
 // Based on chipset written by @kitune-san
 //
 module CHIPSET #(
-        parameter clk_rate = 28'd50000000)
+        parameter clk_rate = 28'd50000000,
+        // The CPU core is z86 with its 80286 protected mode (PM286): port
+        // 0x42 bit 1 then reports a 286-class CPU (PERIPHERALS).
+        parameter bit CPU_286 = 0)
         (
         input   logic           clock,
         input   logic           cpu_ce_posedge,
@@ -57,7 +60,7 @@ module CHIPSET #(
         output  logic   [1:0]   gdc_draw_req,
         output  logic   [1:0]   gdc_draw_busy,
         output  logic  [15:0]   gdc_draw_ops,
-        output  logic [383:0]   gdc_draw_snaps,
+        output  logic [511:0]  gdc_draw_snaps,
         input   logic   [1:0]   gdc_srv_done_levels,
         // Probe plumbing for the drawing server: {slave, master} watchdog
         // pulses, and the sticky 0000:054D-bit6 (EGC flag) write witness.
@@ -180,9 +183,10 @@ module CHIPSET #(
         output  logic           sdram_dq_io,
         output  logic           sdram_ldqm,
         output  logic           sdram_udqm,
-        // EMS board (pc98_ems98): how many megabytes it reports fitted --
-        // the OSD's extended-memory capacity.
-        input   logic   [3:0]   ems98_maxmem,
+        // EMS bank registers (pc98_ems98, np21w io/emsio.c): emsio.maxmem,
+        // the extended-memory size in MB -- core_top's EXT_MB with the OSD's
+        // Ext Memory on, 0 with it None.
+        input   logic   [3:0]   ems_maxmem,
         // BIOS
         input  logic    [1:0]   bios_protect_flag,
         // FDD
@@ -293,6 +297,10 @@ module CHIPSET #(
         // which still carries residue from legs and DMA drains -- can
         // pace the accept but never invent one.
         output  logic           sdram_rd_ready,
+        // The graphics sequencer would take a GVRAM word write whole now
+        // (pc98_gvram_seq gv_word_ok) -- cpu_bus_bridge drains a queued
+        // GVRAM word as one pair while it is high.
+        output  logic           gv_word_ok,
         // fdd_ramimg's SDRAM carve-out port, straight through to u_RAM's port E.
         input   logic           ramimg_req,
         input   logic           ramimg_we,
@@ -323,10 +331,15 @@ module CHIPSET #(
         // off too, slot bit 24, that is the old VRAM timing).
         input   logic           dx_rmwbuf_off,
         input   logic           dx_vramwait,
+        // slot 0x09 [30:29]: gvram_seq run-time A/B (no prefetch / write-back now)
+        input   logic    [1:0]  dx_seq,
         output  logic    [4:0]  cachef_wcnt,
         output  logic           ram_wr_snoop_v,
         output  logic   [23:0]  ram_wr_snoop_addr,
-        output  logic   [3:0]   ram_wr_snoop_len
+        output  logic   [3:0]   ram_wr_snoop_len,
+        // RAM.sv's gv_a_quiet, for z86_cache: an EMS window store has
+        // committed once port A is quiet again.
+        output  logic           ram_a_quiet
 
     );
 
@@ -357,12 +370,11 @@ module CHIPSET #(
     // address the BIOS left in the channel, landing on guest memory.
     wire            DRQ0 = 1'b0;
 
-    // The EMS board (pc98_ems98): ports 08E1h-08E9h bank four 16 KB
-    // windows at C0000-CFFFF into the SDRAM pool at 0x800000-0xFFFFFF.
-    // On a V30 this banking is the only way past the 20-bit bus, so this is
-    // what "extended memory" means here -- details in pc98_ems98.sv.
-    logic   [10:0]  ems98_map[0:3];
-    logic   [7:0]   ems98_status;
+    // EMS (pc98_ems98): ports 08E1h-08E9h bank four 16 KB windows at
+    // C0000-CFFFF onto the 286's own extended memory (SDRAM 0x800000 up,
+    // the same words z86_cache maps linear 100000h onto).
+    logic   [39:0]  ems_map;
+    logic   [7:0]   ems_status;
     logic           fdd_dma_req;
 
 
@@ -458,7 +470,7 @@ module CHIPSET #(
     wire  [3:0] gv_rd_len;
     wire [15:0] gv_rd_data;
 
-    PERIPHERALS #(.clk_rate(clk_rate)) u_PERIPHERALS 
+    PERIPHERALS #(.clk_rate(clk_rate), .CPU_286(CPU_286)) u_PERIPHERALS 
     (
         .font_rd_req                        (font_rd_req),
         .font_rd_addr                       (font_rd_addr),
@@ -655,12 +667,22 @@ module CHIPSET #(
     logic ram_pf_beat_v, seq_pf_beat;
     // the sequencer's write-back port (RAM.sv port G)
     logic gvwb_req, gvwb_ack, gvwb_done, gvwb_we, gvwb_rvalid, gv_a_quiet;
-    logic [7:0]  gvwb_rdata;
+    logic [15:0] gvwb_rdata;
     logic [23:0] gvwb_addr;
-    logic [7:0]  gvwb_wdata;
+    logic [15:0] gvwb_wdata;
+    // Port G's write lanes (the interleave's byte-lane writes).
+    logic [1:0]  gvwb_wmask;
+    logic [3:0]  gvwb_len;
     assign pf_beat_v = ram_pf_beat_v & ~seq_pf_beat;
-    pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1)) u_gvram_seq (
+    pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_gvram_seq (
+        // GV_IL stage 2 (docs/GVRAM_PLANE_INTERLEAVE.md): the RMW line
+        // buffer is back, filling and writing back through port G with
+        // the interleaved layout (two 16-word bursts per line, byte-lane
+        // DQM on write-back). The stage-1 force-off is lifted; slot 0x09
+        // [27] once again disables the buffer on request.
         .rmwbuf_off(dx_rmwbuf_off),
+        .dx_seq(dx_seq),
+        .disp_page(gvram_disp_page_w),
         .clk(sdram_clock), .reset(sdram_reset),
         .cpu_gvram(gvram_sel),
         .cpu_rd(~memory_read_n), .cpu_wr(~memory_write_n),
@@ -703,6 +725,8 @@ module CHIPSET #(
         .pf_beat_v(ram_pf_beat_v), .pf_beat_dat(pf_beat_dat),
         .pf_beat_seq(seq_pf_beat),
         .gvwb_req(gvwb_req), .gvwb_addr(gvwb_addr), .gvwb_wdata(gvwb_wdata),
+        .gvwb_wmask(gvwb_wmask), .gvwb_len(gvwb_len),
+        .gv_word_ok(gv_word_ok),
         .gvwb_ack(gvwb_ack), .gvwb_done(gvwb_done), .gvwb_wcnt(cachef_wcnt),
         .gvwb_we(gvwb_we), .gvwb_rvalid(gvwb_rvalid), .gvwb_rdata(gvwb_rdata),
         .gv_a_quiet(gv_a_quiet),
@@ -712,7 +736,13 @@ module CHIPSET #(
 
     // What the firmware asks about the charger state before its writes:
     // bit0 GRCG armed, bit1 RMW mode, bit2 EGC armed, bit3 access page.
-    assign accel_status = {4'b0000, gvram_access_page_w, egc_active_w,
+    // The EGC is not fitted (pc98_gvram_seq .EGC(1'b0)): mode2's EGC bits
+    // still latch for read-back, but nothing downstream may act on them --
+    // the firmware's pset path, the VRAM pricing and the RMW split all see
+    // a GRCG-only machine, which is what the sequencer actually runs.
+    wire egc_live = 1'b0;
+    wire _unused_egc = &{1'b0, egc_active_w};
+    assign accel_status = {4'b0000, gvram_access_page_w, egc_live,
                            grcg_rmw, grcg_active};
 
     // The ROM loader's per-access done pulse still comes from RAM.sv itself:
@@ -737,7 +767,7 @@ module CHIPSET #(
     // the guest's address, before the sequencer's plane remap. An RMW-class
     // guest write runs through the sequencer as a read+write pair, so it
     // takes half the charge on each leg and still pays eight in total.
-    wire accel_hit = grcg_active | egc_active_w;
+    wire accel_hit = grcg_active | egc_live;
     // The wait is now charged by the CPU, once per guest access and
     // overlapped with the access itself (z86_cache's pdebt, which also
     // decodes the window): counting it in RAM.sv's COMPLETE state ADDED it
@@ -758,21 +788,43 @@ module CHIPSET #(
     // on the bridge turnaround. With z86's per-iteration REP STOS charge
     // (execute rep_x) the cycle table measured (rep stosw 256 RMW, ratio
     // at 8/10 MHz) 0..2 -> 0.91/1.06, 3 -> 0.95/1.06, 4 -> 1.02/1.13;
-    // 3 is the largest that leaves 10 and 12 MHz untouched. TDW writes
-    // are posted too now and take 4 (rep stosw 256 TDW 8/10 MHz: 0 ->
-    // 0.79/0.88, 4 -> 0.94/0.98, 5 -> 1.04/1.08). The EGC is not posted
+    // 3 is the largest that leaves 10 and 12 MHz untouched. With the
+    // line buffer's next-line prefetch (RB_PF) the walk got ~15% faster
+    // and the wait is 5: 8/10/12 MHz 0.89/0.99/1.12 (3 -> 0.80/0.90/1.18,
+    // 7 -> 1.01/1.09/1.21; 12 MHz is port-G bound, ~40 clocks a word at
+    // every speed, and a little CPU-side debt eases the contention). TDW
+    // writes are posted too and take 4. After the RMW-line-buffer bug
+    // fixes the posted-write queue and the bridge's backpressure stalls
+    // absorb the CPU-side debt almost entirely: sweeping the waits left
+    // the rep-loop cpu counts bit-identical at 10/12 MHz (RMW 5->0,
+    // plain VRAM 6->0) and unchanged at 8 MHz in the cycle-table script
+    // path (the sweeps that showed 8 MHz TDW moving were run from another
+    // cwd and are a sim artifact), so those ratios are engine-bound --
+    // RMW 1.25/1.41, TDW 1.26/1.41, plain VRAM 1.33/1.43 of the np21w
+    // reference -- and no CPU-side wait can pull them into the 0.95-1.05
+    // band. The nominal np21w-derived values stay. The EGC is not posted
     // and stays at 0.
-    wire grcg_rmw_only = grcg_active & grcg_rmw & ~egc_active_w;
-    wire grcg_tdw_only = grcg_active & ~grcg_rmw & ~egc_active_w;
+    // gvram-il-speed: GVRAM writes now post in cpu_bus_bridge, a plain or
+    // TDW word drains as ONE pair (RAM.sv's three-beat interleaved word,
+    // the sequencer's port-G tile burst), so plain VRAM and TDW are CPU-
+    // priced again and the wait is what sets them: plain 6 -> 1.00 at
+    // 8/10/12 MHz; TDW takes 7, np21w's MEMWAIT_GRCG 8/1 averaged over the
+    // frame as the cycle table's reference does (4 measured 0.71, 7 1.00,
+    // 8 1.10 at 8/10 MHz). RMW still drains as byte pairs (the sequencer's
+    // word batch is not trusted on the line buffer) and stays at 5:
+    // 0.99/1.05/1.17 -- 12 MHz is the bridge's byte-pair rate, and a
+    // larger wait only moves 8/10 MHz (8 -> 1.10/1.10/1.17).
+    wire grcg_rmw_only = grcg_active & grcg_rmw & ~egc_live;
+    wire grcg_tdw_only = grcg_active & ~grcg_rmw & ~egc_live;
     assign vram_wait_now = {pc98_analog,
-                            grcg_rmw_only ? (VID_VBlank ? 4'd1 : 4'd3)
-                          : grcg_tdw_only ? (VID_VBlank ? 4'd1 : 4'd4)
+                            grcg_rmw_only ? (VID_VBlank ? 4'd1 : 4'd5)
+                          : grcg_tdw_only ? (VID_VBlank ? 4'd1 : 4'd7)
                           : accel_hit     ? 4'd0
                           : VID_VBlank    ? 4'd1 : 4'd6};
     wire vram_hit = (address[19:16] == 4'hA && address[15])   // A8000-AFFFF
                   | (address[19:16] == 4'hB)                  // B0000-BFFFF
                   | (pc98_analog & (address[19:15] == 5'b11100)); // E0000-E7FFF
-    wire rmw_guest_wr = accel_hit & ~memory_write_n & (grcg_rmw | egc_active_w);
+    wire rmw_guest_wr = accel_hit & ~memory_write_n & (grcg_rmw | egc_live);
     wire [3:0] vram_old_wait = !dx_vramwait || !vram_wait_en || !vram_hit ? 4'd0
                              : VID_VBlank                   ? 4'd1
                              : rmw_guest_wr                 ? 4'd4
@@ -828,6 +880,8 @@ module CHIPSET #(
         .gvwb_req                           (gvwb_req),
         .gvwb_addr                          (gvwb_addr),
         .gvwb_wdata                         (gvwb_wdata),
+        .gvwb_wmask                         (gvwb_wmask),
+        .gvwb_len                           (gvwb_len),
         .gvwb_ack                           (gvwb_ack),
         .gvwb_done                          (gvwb_done),
         .gvwb_we                            (gvwb_we),
@@ -871,7 +925,7 @@ module CHIPSET #(
         .sdram_dq_io                        (sdram_dq_io),
         .sdram_ldqm                         (sdram_ldqm),
         .sdram_udqm                         (sdram_udqm),
-        .ems98_map                          (ems98_map),
+        .ems_map                            (ems_map),
         .bios_protect_flag                  (bios_protect_flag),
         .wait_count_clk_en                  (wait_count_clk_en),
         .ram_read_wait_cycle                (ram_read_wait_cycle),
@@ -902,23 +956,23 @@ module CHIPSET #(
     assign  dbg_chipset2 = {processor_ready, memory_access_ready, dma_ready,
                             dma_acknowledge_n[3:0], no_command_state};
 
-    // The NEC EMS board's register half. Its port decode sits on the live
-    // bus (same convention as PERIPHERALS); the window state it produces is
-    // consumed inside RAM.sv's address latch. SDRAM_CLK == clock, so there
-    // is no domain crossing on ems98_map.
-    pc98_ems98 u_ems98 (
+    // The EMS register half. Its port decode sits on the live bus (the
+    // PERIPHERALS convention); the window state is consumed inside RAM.sv's
+    // address latch, same clock.
+    pc98_ems98 u_ems (
         .clock                              (clock),
         .reset                              (reset),
-        .address                            (address),
+        .address                            (address[15:0]),
         .internal_data_bus                  (internal_data_bus),
         .io_write_n                         (io_write_n),
         .address_enable_n                   (address_enable_n),
-        .maxmem                             (ems98_maxmem),
-        .map                                (ems98_map),
-        .status                             (ems98_status)
+        .maxmem                             (ems_maxmem),
+        .map                                (ems_map),
+        .status                             (ems_status)
     );
 
     assign  data_bus = internal_data_bus;
+    assign  ram_a_quiet = gv_a_quiet;
 
 
 
@@ -1013,13 +1067,13 @@ module CHIPSET #(
             internal_data_bus_ext = xrom_q;
             data_bus_direction    = 1'b0;
         end
-        // IN 08E9h: the NEC EMS board answers "is this megabyte fitted".
-        // Its window reads never reach here -- a mapped window is claimed
-        // by the SDRAM branch above, an unmapped one by the hole below.
+        // IN 08E9h: "is EMS megabyte t there". A mapped window's reads never
+        // reach here -- RAM.sv claims them (the SDRAM branch above), an
+        // unmapped one falls to the hole below.
         else if ((~io_read_n) && (~address_enable_n)
                  && (address[15:0] == 16'h08E9))
         begin
-            internal_data_bus_ext = ems98_status;
+            internal_data_bus_ext = ems_status;
             data_bus_direction    = 1'b0;
         end
         // The empty option-ROM window. C0000-E7FFF is deliberately not

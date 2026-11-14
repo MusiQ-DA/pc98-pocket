@@ -356,6 +356,33 @@ static int selftest()
         mount(v);
         expect_geometry("flat, HDI-looking zeros", {0, 5, 8, 25, 1000});
     }
+    // OSD eject (settings_ui.c's Hard Disk row): the request is posted, the
+    // next poll drops the image, and TUR/READ answer NOT READY (ASC 3A) until
+    // a re-bind mounts again -- main.c's scsi_unmount + scsi_mount pair.
+    {
+        std::vector<uint8_t> v(4096 * 512);
+        fill(v, 0, 4096);
+        mount(v);
+        uint8_t tur[6] = {0x00};
+        CHECK(guest_cmd(tur, 6) == 0, "eject: TUR before");
+        CHECK(scsi_mounted_sectors() == 4096, "eject: OSD sees the disk");
+        scsi_eject();
+        CHECK(scsi_mounted_sectors() == 0, "eject: OSD shows Ejected at once");
+        CHECK(guest_cmd(tur, 6) == 2, "eject: TUR should be CHECK CONDITION");
+        CHECK(mock::media == 0, "eject: media lamp still set");
+        uint8_t rs[6] = {0x03, 0, 0, 0, 18, 0};
+        CHECK(guest_cmd(rs, 6) == 0 && rd(2) == 2 && rd(12) == 0x3A,
+              "eject: sense %02x/%02x, want 02/3A", rd(2), rd(12));
+        uint8_t r10[10] = {0x28, 0, 0, 0, 0, 0, 0, 0, 1, 0};
+        CHECK(guest_cmd(r10, 10) == 2, "eject: READ10 should fail");
+        scsi_eject(); // nothing mounted: a no-op, not a stale request
+        CHECK(guest_cmd(tur, 6) == 2, "eject: still NOT READY");
+        scsi_unmount();
+        scsi_mount((uint32_t) v.size());
+        CHECK(guest_cmd(tur, 6) == 0, "eject: TUR after the re-bind");
+        CHECK(scsi_mounted_sectors() == 4096 && mock::media == 1, "eject: re-mounted");
+        printf("%-28s ok\n", "OSD eject / re-bind");
+    }
     printf(fails ? "SELFTEST FAIL (%d)\n" : "SELFTEST PASS\n", fails);
     return fails ? 1 : 0;
 }

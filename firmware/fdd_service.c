@@ -198,7 +198,13 @@ static void fdd_probe_d88(uint32_t drive, uint32_t sectors)
                 return;
             }
             populated++;
-            last = i - 8;
+            // Entries 120-163 were walked first (the 0x200 window), so a
+            // plain `last = i - 8` here would cap a 77-cylinder 2HD at
+            // track 119 = 60 cylinders, and floppy.v hangs any READ of
+            // C >= media_cylinders (MS-DOS: read error on drive A: at C60).
+            if (i - 8 > last) {
+                last = i - 8;
+            }
             odd |= (i - 8) & 1;
         }
     }

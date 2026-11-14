@@ -58,9 +58,21 @@ module pc98_upd4990
     logic [3:0] cmd;
     assign cmd = (parallel == 3'd7) ? serial[3:0] : {1'b0, parallel};
 
-    // cdat's new value on a CLK edge, from the CURRENT pos before it moves.
+    // np21w's CLK: pos steps FIRST, then cdat takes the bit at the NEW pos
+    // ("pos--; cdat = reg[pos/8] >> (~pos & 7)"). The BIOS reader (FD80:0523)
+    // samples port 0x33 and then pulses CLK, so each sample sees the bit the
+    // previous CLK fetched; and its DATA write right after the CLK clears the
+    // bit at the new pos -- harmless only because that bit is already in
+    // cdat. This module used to fetch from the OLD pos, so every sample after
+    // the first read a bit the DATA write had just cleared: INT 1Ch AH=0
+    // returned {0,0,0,0,0, s&1}-like garbage, and MS-DOS 6.2's two-second
+    // F5/F8 wait (seconds - start >= 2) never ended whenever the start
+    // second read as 0 -- the "frozen at the MS-DOS banner" boots.
+    wire [$clog2(REGLEN*8)-1:0] pos_clk = (regsft && pos != '0) ? pos - 1'b1 : pos;
+    wire [$clog2(REGLEN)-1:0] pos_rd_byte = pos_clk[$clog2(REGLEN*8)-1:3];
+    wire [2:0] pos_rd_bit = ~pos_clk[2:0];
+    // A DATA write lands at the CURRENT pos (np21w: reg[pos/8] |= 0x80 >> (pos&7)).
     wire [$clog2(REGLEN)-1:0] pos_byte = pos[$clog2(REGLEN*8)-1:3];
-    wire [2:0] pos_rd_bit = ~pos[2:0];
 
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -102,13 +114,15 @@ module pc98_upd4990
                 if (mod[4]) begin
                     if (parallel == 3'd7)
                         serial <= serial >> 1;
-                    if (regsft && pos != '0)
-                        pos <= pos - 1'b1;
-                    cdat <= regs[pos_byte][pos_rd_bit];
+                    pos  <= pos_clk;
+                    cdat <= regs[pos_rd_byte][pos_rd_bit];
                 end
             end else begin                                     // DATA
+                // np21w sets parallel and THEN tests it: the bit shifts in on
+                // the very write that selects serial mode (the old test of
+                // the previous parallel lost the first command's first bit).
                 parallel <= wr_data[2:0];
-                if (parallel == 3'd7)
+                if (wr_data[2:0] == 3'd7)
                     serial <= {wr_data[5], serial[3:0]};
                 if (wr_data[5])
                     regs[pos_byte][~pos[2:0]] <= 1'b1;         // 0x80 >> (pos&7)

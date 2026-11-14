@@ -37,9 +37,12 @@ module softcpu_subsystem (
     // Mounted floppy image size in sectors, per drive (from the dataslot-update event).
     input [31:0] fdd0_disk_size,
     input [31:0] fdd1_disk_size,
+    // Hard-disk image size in BYTES (the SCSI mount parses the file's header against it),
+    // from the slot-5 dataslot-update event; 0 until the host binds an image.
+    input [31:0] hdd0_disk_bytes,
 
     // Datatable port A, routed on to the disk bridge (softcpu_fdd_bridge) where the
-    // firmware reads the HDD and Settings slot sizes by id.
+    // firmware reads the Settings (and rhythm) slot sizes by id.
     output  [9:0] datatable_addr,
     output [31:0] datatable_data,
     output        datatable_wren,
@@ -49,6 +52,7 @@ module softcpu_subsystem (
     // firmware re-mounts a swapped image even at an unchanged size.
     input        fdd0_rebind,
     input        fdd1_rebind,
+    input        hdd0_rebind,     // the same toggle for the hard disk (slot 5)
 
     // Management-bus master to floppy.v via CHIPSET
     output [15:0] mgmt_addr,
@@ -101,7 +105,7 @@ module softcpu_subsystem (
     input   [1:0]  gdc_draw_req,
     input   [1:0]  gdc_draw_busy,
     input  [15:0]  gdc_draw_ops,
-    input [383:0]  gdc_draw_snaps,
+    input [511:0]  gdc_draw_snaps,
     output  [1:0]  gdc_srv_done_levels,
 
     // The guest-VRAM service channel: the firmware's vr_read8/vr_write8
@@ -152,8 +156,12 @@ module softcpu_subsystem (
     output  [1:0] osd_gamepad,
 
     // Per-control key config {ext, Set-2 code}, one 9-bit entry per D-pad direction and button,
-    // driven out to pocket_keyboard via core_top. Slot ids are documented at KEYCFG_REG.
-    output [16*9-1:0] key_cfg_flat,
+    // read out by pocket_keyboard one entry at a time (key_cfg_idx -> key_cfg_q, one clk_sys of
+    // latency). key_cfg_diag: a diagonal D-pad preset is loaded (ids 11-14 not all unmapped).
+    // Slot ids are documented at KEYCFG_REG.
+    input   [3:0] key_cfg_idx,
+    output  [8:0] key_cfg_q,
+    output        key_cfg_diag,
 
     // JTAG-probe window into this domain (core_top slot 0x2A): fetch/poll
     // counters plus the OSD-request and trap flags -- the only way to tell a
@@ -168,6 +176,31 @@ module softcpu_subsystem (
     always @(posedge clk_sys) begin
         clk_div  <= (clk_div == 3'd5) ? 3'd0 : clk_div + 3'd1;
         clk_pico <= (clk_div == 3'd0);
+    end
+
+    //
+    // The 0x2000_0000 status word (buttons, the docked-key picker tap, the
+    // OSD request, dataslots_ready) comes from clk_sys registers that change
+    // whenever their own logic says -- pocket_keyboard's kbd_code/kbd_ext/
+    // kbd_stb on any USB make. Read raw, a change on the clk_sys edge that
+    // IS the clk_pico edge races the capture: clk_pico leaves a fabric
+    // register, so it reaches the softcore ~6 ns after clk_sys, and that
+    // skew is the -2.2 ns clk_pico hold violation CI #1121 reported
+    // (kbd_code[3] -> picorv32 decoded_imm_j/reg_out); a fit that pads it
+    // still lets one read see a new kbd_stb beside the old kbd_code.
+    //
+    // So the word is re-registered on clk_sys at ONE fixed phase of clk_div,
+    // all 32 bits on the same edge. clk_pico rises on the clk_sys edge that
+    // takes clk_div 0 -> 1; cont1_word updates on the 2 -> 3 edge, two
+    // clk_sys cycles after one clk_pico edge and four before the next. Every
+    // read therefore sees one coherent snapshot (stb and code from the same
+    // instant), and core_constraints.sdc times these registers against
+    // clk_pico with the real 4-cycle setup / 2-cycle hold window.
+    reg [31:0] cont1_word;
+    always @(posedge clk_sys) begin
+        if (clk_div == 3'd2)
+            cont1_word <= {3'd0, dock_key_stb, dock_key_ext, dataslots_ready,
+                           osd_open_req, 1'b0, dock_key_code, cont1_key};
     end
 
     //
@@ -332,11 +365,38 @@ module softcpu_subsystem (
             end
         end
     end
-    assign st_req   = st_req_r;
-    assign st_we    = st_we_r;
-    assign st_raw   = st_raw_r;
-    assign st_addr  = st_addr_r;
-    assign st_wdata = st_wdata_r;
+    // The LINE engine (pc98_gdc_draw): np21w's gdcsub_vectl in hardware.
+    // The firmware still decodes the slave's command, stores np21w's x/y at
+    // 0x5000_0020 and the launch word at 0x5000_002C (the engine takes the
+    // rest from the slave's snapshot, static until the retire) and polls
+    // 0x5000_002C until it drops; meanwhile the engine owns the service
+    // channel and issues the same byte ops vr_read8/vr_write8 did.
+    // Ready-qualified so the two-cycle store fires once.
+    wire        ln_busy, ln_req, ln_we;
+    wire [19:0] ln_addr;
+    wire  [7:0] ln_wdata;
+    pc98_gdc_draw u_gdc_draw (
+        .clk      (clk_pico),
+        .reset    (reset),
+        .wr       (cpu_mem_valid && cpu_mem_ready && cpu_mem_wstrb[0] &&
+                   (cpu_mem_addr[31:4] == 28'h5000_002)),
+        .wr_sel   (cpu_mem_addr[3:2]),
+        .wr_data  (cpu_mem_wdata),
+        .snap     (gdc_draw_snaps[511:256]),
+        .busy     (ln_busy),
+        .st_req   (ln_req),
+        .st_we    (ln_we),
+        .st_addr  (ln_addr),
+        .st_wdata (ln_wdata),
+        .st_done  (st_done),
+        .st_rdata (st_rdata)
+    );
+
+    assign st_req   = st_req_r | ln_req;
+    assign st_we    = ln_busy ? ln_we    : st_we_r;
+    assign st_raw   = ~ln_busy & st_raw_r;
+    assign st_addr  = ln_busy ? ln_addr  : st_addr_r;
+    assign st_wdata = ln_busy ? ln_wdata : st_wdata_r;
 
     // OSD control at 0x20000004: bit0 = overlay shown.
     reg osd_active_r = 1'b0;
@@ -446,10 +506,9 @@ module softcpu_subsystem (
     localparam SET_IDX_FDD_TURBO = 5'd6;   // Hardware: floppy seek/sector pacing
     localparam SET_IDX_MODE200   = 5'd7;   // 200-line presentation: 0 = double, 1 = skip
     localparam SET_IDX_DISK_LED  = 5'd10;  // on-screen access lamp
-    localparam SET_IDX_EXTMEM    = 5'd11;  // EMS board's fitted size
-    // Index 12 is the firmware's Drive Sound row; the RTL no longer reads
-    // it (mechanism noise is firmware-driven) but the slot stays reserved
-    // so the persisted indices below do not move.
+    localparam SET_IDX_EXTMEM    = 5'd11;  // Ext Memory: 0 = none, else 8 MB above 1 MB (z86_cache ext_en)
+    // Index 12 was the firmware's Drive Sound row, now retired; the slot
+    // stays reserved (SET_RSVD_12) so the persisted indices below do not move.
     localparam SET_IDX_TXT_LINES = 5'd13;  // 0 = 25 rows / 1 = 20 rows (dipsw2 bit 3)
     localparam SET_IDX_TXT_COLS  = 5'd14;  // 0 = 80 cols / 1 = 40 cols (dipsw2 bit 2)
     localparam SET_IDX_BOOT_BSC  = 5'd15;  // 0 = disks first / 1 = ROM BASIC (inverted dipsw2 bit 0)
@@ -501,7 +560,7 @@ module softcpu_subsystem (
         if (sel_status && cpu_mem_ready && (cpu_mem_addr == 32'h2000_0000)
             && (cpu_mem_wstrb == 4'b0000))
             pico_poll_cnt <= pico_poll_cnt + 8'd1;
-        pico_osd_seen  <= pico_osd_seen  | osd_open_req;
+        pico_osd_seen  <= pico_osd_seen  | cont1_word[25];   // osd_open_req, staged
         pico_trap_seen <= pico_trap_seen | cpu_trap;
     end
     assign dbg_pico = {pico_fetch_cnt, pico_poll_cnt,
@@ -546,18 +605,23 @@ module softcpu_subsystem (
     // pocket_keyboard reads one 9-bit {ext, code} per D-pad direction (ids 0-3) and button (ids 4-10);
     // the firmware key-binding and D-pad-preset code fill it. Separate from osd_settings so a scancode
     // never shares a byte with an option value.
-    reg [8:0] key_cfg [0:15];
+    // A 16x9 block RAM, not 144 flops and a 16:1 mux: the keyboard scan reads one id per clock.
+    (* ramstyle = "M10K" *) reg [8:0] key_cfg [0:15];
+    reg  [8:0] key_cfg_q_r = 9'd0;
+    reg  [3:0] key_diag_nz = 4'd0;
     wire keycfg_wr = sel_status && cpu_mem_wstrb[0] && cpu_mem_addr[5:2] == 4'd8;
+    wire [3:0] keycfg_id = cpu_mem_wdata[12:9];
     always @(posedge clk_pico) begin
-        if (keycfg_wr)
-            key_cfg[cpu_mem_wdata[12:9]] <= cpu_mem_wdata[8:0];
-    end
-    genvar ki;
-    generate
-        for (ki = 0; ki < 16; ki = ki + 1) begin : g_key_cfg
-            assign key_cfg_flat[ki*9 +: 9] = key_cfg[ki];
+        if (keycfg_wr) begin
+            key_cfg[keycfg_id] <= cpu_mem_wdata[8:0];
+            if (keycfg_id >= 4'd11 && keycfg_id <= 4'd14)
+                key_diag_nz[2'(keycfg_id - 4'd11)] <= |cpu_mem_wdata[7:0];
         end
-    endgenerate
+    end
+    always @(posedge clk_sys)
+        key_cfg_q_r <= key_cfg[key_cfg_idx];
+    assign key_cfg_q    = key_cfg_q_r;
+    assign key_cfg_diag = |key_diag_nz;
 
     //
     // Memory ready. The ROM read is registered, so it needs two clk_pico cycles;
@@ -605,7 +669,7 @@ module softcpu_subsystem (
         .aw(14),
         .dw(32),
         // 12288 words = 48 KB. OPNA brought the rhythm loader, the ADPCM-A
-        // encoder and the drive-noise service, which the 32 KB image no
+        // encoder (and, once, the drive-noise service), which the 32 KB image no
         // longer held; the M10K budget (~70 blocks free) has the room and
         // the data_loader's fw_word widens the same way.
         .numwords(12288),
@@ -1104,12 +1168,14 @@ module softcpu_subsystem (
         .fdd_request(fdd_request),
         .fdd0_disk_size(fdd0_disk_size),
         .fdd1_disk_size(fdd1_disk_size),
+        .hdd0_disk_bytes(hdd0_disk_bytes),
         .datatable_addr(datatable_addr),
         .datatable_data(datatable_data),
         .datatable_wren(datatable_wren),
         .datatable_q(datatable_q),
         .fdd0_rebind(fdd0_rebind),
         .fdd1_rebind(fdd1_rebind),
+        .hdd0_rebind(hdd0_rebind),
         .mgmt_addr  (mgmt_addr),
         .mgmt_dout  (mgmt_dout),
         .mgmt_wr    (mgmt_wr),
@@ -1140,7 +1206,7 @@ module softcpu_subsystem (
         casez (cpu_mem_addr)
             32'h0???_????: cpu_mem_rdata = rom_rdata;
             32'h1???_????: cpu_mem_rdata = ram_rdata;
-            32'h2000_0000: cpu_mem_rdata = {3'd0, dock_key_stb, dock_key_ext, dataslots_ready, osd_open_req, 1'b0, dock_key_code, cont1_key};
+            32'h2000_0000: cpu_mem_rdata = cont1_word;   // staged above
             32'h2000_0018: cpu_mem_rdata = {6'd0, raster_h, 6'd0, raster_w};
 
             32'h3???_????: cpu_mem_rdata = fdd_rdata;
@@ -1150,11 +1216,13 @@ module softcpu_subsystem (
             // Pending bit + the byte the sequencer's svc port last returned.
             32'h5000_000C: cpu_mem_rdata = {23'd0, st_req, st_rdata};
             32'h5000_0010: cpu_mem_rdata = {24'd0, accel_status};
+            32'h5000_002C: cpu_mem_rdata = {31'd0, ln_busy};
             // ---- the drawing server --------------------------------------
-            // 0x140/0x180: {busy, req, opcode} for master/slave; +4..+0x14:
-            // the five snapshot words. 0x15C/0x19C (writes): the done LEVEL
-            // -- the engine writes 1 then 0, whose rising edge retires the
-            // EXECUTE in the GDC's own domain.
+            // 0x140/0x180: {busy, req, opcode} for master/slave; +4..+0x18:
+            // the seven snapshot words (the last two carry TEXTW[2..7],
+            // the bytes np21w's textdraw reads). 0x15C/0x19C (writes): the
+            // done LEVEL -- the engine writes 1 then 0, whose rising edge
+            // retires the EXECUTE in the GDC's own domain.
             32'h5000_0140: cpu_mem_rdata = {22'd0, draw_req_s[0],
                                             draw_busy_s[0], gdc_draw_ops[7:0]};
             32'h5000_0144: cpu_mem_rdata = gdc_draw_snaps[31:0];
@@ -1163,14 +1231,18 @@ module softcpu_subsystem (
             32'h5000_0150: cpu_mem_rdata = gdc_draw_snaps[127:96];
             32'h5000_0154: cpu_mem_rdata = gdc_draw_snaps[159:128];
             32'h5000_0158: cpu_mem_rdata = gdc_draw_snaps[191:160];
+            32'h5000_0160: cpu_mem_rdata = gdc_draw_snaps[223:192];
+            32'h5000_0164: cpu_mem_rdata = gdc_draw_snaps[255:224];
             32'h5000_0180: cpu_mem_rdata = {22'd0, draw_req_s[1],
                                             draw_busy_s[1], gdc_draw_ops[15:8]};
-            32'h5000_0184: cpu_mem_rdata = gdc_draw_snaps[223:192];
-            32'h5000_0188: cpu_mem_rdata = gdc_draw_snaps[255:224];
-            32'h5000_018C: cpu_mem_rdata = gdc_draw_snaps[287:256];
-            32'h5000_0190: cpu_mem_rdata = gdc_draw_snaps[319:288];
-            32'h5000_0194: cpu_mem_rdata = gdc_draw_snaps[351:320];
-            32'h5000_0198: cpu_mem_rdata = gdc_draw_snaps[383:352];
+            32'h5000_0184: cpu_mem_rdata = gdc_draw_snaps[287:256];
+            32'h5000_0188: cpu_mem_rdata = gdc_draw_snaps[319:288];
+            32'h5000_018C: cpu_mem_rdata = gdc_draw_snaps[351:320];
+            32'h5000_0190: cpu_mem_rdata = gdc_draw_snaps[383:352];
+            32'h5000_0194: cpu_mem_rdata = gdc_draw_snaps[415:384];
+            32'h5000_0198: cpu_mem_rdata = gdc_draw_snaps[447:416];
+            32'h5000_01A0: cpu_mem_rdata = gdc_draw_snaps[479:448];
+            32'h5000_01A4: cpu_mem_rdata = gdc_draw_snaps[511:480];
             default:       cpu_mem_rdata = 32'd0;
         endcase
     end

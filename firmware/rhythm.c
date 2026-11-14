@@ -40,10 +40,12 @@
 
 #define RHYTHM_MAGIC 0x31415952u // 'RYA1' little-endian
 #define RHYTHM_HDR_WORDS 8
-// Drums pack under the drive-noise kit: the hardware store is 32 KB, the
-// upper half belongs to drive_sound.c's mechanism samples, so a voice's own
-// data may not run past 16 KB.
-#define RHY_STORE_BYTES 16384u
+// The drum kit owns pc98_opna's whole 32 KB rhythm store (RHY_BYTES).
+#define RHY_STORE_BYTES 32768u
+
+// The start/end each voice was last programmed with, in 256-byte units. A
+// channel with no kit voice reads {0,0}, which plays silence.
+static uint16_t rhythm_start[6], rhythm_end[6];
 
 #define RIFF_RIFF 0x46464952u // 'RIFF'
 #define RIFF_WAVE 0x45564157u // 'WAVE'
@@ -104,16 +106,16 @@ static int bin_load(void)
         uint32_t w = *FDD_BRAM_RDATA;
         rhythm_start[i] = w & 0xFFFF;
         rhythm_end[i]   = w >> 16;
-        // Pairs naming bytes at or past the drum region's top would point a
-        // voice into the drive-noise half; clamp them inside.
+        // Pairs naming bytes at or past the store's top would wrap a voice's
+        // address; clamp them inside.
         if (rhythm_start[i] >= (RHY_STORE_BYTES >> 8))
             rhythm_start[i] = 0;
         if (rhythm_end[i] >= (RHY_STORE_BYTES >> 8))
             rhythm_end[i] = (RHY_STORE_BYTES >> 8) - 1;
     }
 
-    // Payload lands at store offset 0; cap it at the drum region so an
-    // oversized pack can never bleed into the drive-noise half.
+    // Payload lands at store offset 0; cap it at the store's size so an
+    // oversized pack cannot wrap around onto its own start.
     uint32_t payload_bytes = total - payload;
     if (payload_bytes > RHY_STORE_BYTES)
         payload_bytes = RHY_STORE_BYTES;
@@ -150,11 +152,6 @@ static int bin_load(void)
 static uint32_t wav_voice;     // channel being attempted
 static uint32_t wav_cursor;    // next free store byte (always 256-aligned)
 static uint8_t  wav_done[6];   // channel resolved (loaded, skipped, failed)
-
-// The start/end each voice was last programmed with, in 256-byte units --
-// drive_sound.c restores these after borrowing a channel for a mechanism
-// sample. A channel with no kit voice reads {0,0}, which plays silence.
-uint16_t rhythm_start[6], rhythm_end[6];
 
 // In-flight voice state.
 static adpcm_enc wav_enc;
@@ -268,9 +265,8 @@ static int wav_step(void)
     if (wav_cursor + wav_written >= RHY_STORE_BYTES)
         wav_left = 0;
 
-    // Re-arm the auto-increment every call: drive_sound.c writes its own
-    // region through the same address register between calls, so the
-    // continuation address has to be re-latched rather than assumed.
+    // Re-arm the auto-increment every call so the continuation address is
+    // re-latched rather than assumed to have survived the call boundary.
     opna_mgmt_write(OMGMT_RHYADDR, wav_cursor + wav_written);
 
     // One 512-byte source chunk per call.

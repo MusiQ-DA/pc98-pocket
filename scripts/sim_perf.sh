@@ -29,7 +29,7 @@ docker run --rm -v "$PWD":/work -w /work pc98-sim bash -lc "
     sim/tb_mem_perf.sv \
     \$K/RAM.sv \$K/Ready.sv \$K/ce_generator.sv \$K/i8288/HDL/i8288.sv \
     \$S/sdram_shim.sv \$S/sdram_mp.sv \
-    \$S/pc98_gvram_seq.sv \$S/pc98_grcg.sv \$S/pc98_egc.sv \
+    \$S/pc98_gvram_seq.sv \$S/pc98_grcg.sv \$S/pc98_egc.sv \$S/pc98_ems98.sv \
     \$S/pc98_gdc_mode2.sv \
     \$S/pc98_gvram_display.sv \$S/pc98_video_timing.sv \
     sim/sdram_board_model.sv sim/sdram_model.sv \

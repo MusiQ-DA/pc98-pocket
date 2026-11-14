@@ -310,6 +310,22 @@ module tb_pc98_opna;
         repeat (8) @(posedge clk);
         io_rd(2'b01, got);
         want("IOB bit 6 clear restores it", got, 8'hC3);
+
+        // np21w fmboard_getjoy's fold: the triggers (bits 7:6) land on the
+        // button pair (5:4) software reads, and 7:6 answer the INT5 jumper
+        // (0xC0). Dynamo's title only looks at 0x10/0x20.
+        joy = 8'h3F;                    // both triggers, nothing else
+        repeat (8) @(posedge clk);
+        io_rd(2'b01, got);
+        want("triggers fold onto bits 5:4, 7:6 read the INT jumper", got, 8'hCF);
+        joy = 8'h7F;                    // BTN2 (bit 7) alone -> bit 5
+        repeat (8) @(posedge clk);
+        io_rd(2'b01, got);
+        want("BTN2 folds onto bit 5", got, 8'hDF);
+        joy = 8'hBF;                    // BTN1 (bit 6) alone -> bit 4
+        repeat (8) @(posedge clk);
+        io_rd(2'b01, got);
+        want("BTN1 folds onto bit 4", got, 8'hEF);
         joy = 8'hFF;
 
         // A neighbouring SSG register still reads the chip, not the port.

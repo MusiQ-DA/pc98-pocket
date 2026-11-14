@@ -24,7 +24,15 @@
 `ifndef CHIPSET_HZ
 `define CHIPSET_HZ 42954545
 `endif
-module core_top (
+module core_top #(
+    // z86's minimal 80286 protected mode, the 286-class port 0x42 and the
+    // ITF self-test skip (see z86.sv PM286); EXT_MB megabytes of extended
+    // memory at 1 MB (z86_cache's map: linear 100000h up at SDRAM 0x800000,
+    // at most 8), switched off by the OSD's Ext Memory row. 0 builds the
+    // 20-bit core.
+    parameter bit PM286  = 1,
+    parameter int EXT_MB = 8
+) (
 
     //
     // physical connections
@@ -307,6 +315,9 @@ module core_top (
     //   [28] RAM.sv VRAM waits back (integ-1034's; pair with [24])
     // e.g. P=0x1F00005: 10 MHz with all of them reverted.
     logic  [8:0] jtag_dx = 9'd0;
+    // [30:29] gvram_seq A/B: [29] no RMW line prefetch, [30] dirty lines
+    // written back at once (lodemnc's map-scroll flashes)
+    logic  [1:0] jtag_seq_dx = 2'd0;
     // Per-mechanism prefetch kills, for bisecting which half of the
     // engine a failure lives in without a rebuild:
     //   [4] pf_nofill  -- pure (idle-gap) fills never run
@@ -343,6 +354,7 @@ module core_top (
     wire         jtag_cache_dis = 1'b0;
     wire   [7:0] jtag_thr_num = 8'd0;
     wire   [8:0] jtag_dx = 9'd0;
+    wire   [1:0] jtag_seq_dx = 2'd0;
     wire         jtag_pf_nofill  = 1'b0;
     wire         jtag_pf_nofillm = 1'b0;
     wire         jtag_pf_nohit   = 1'b0;
@@ -1048,6 +1060,7 @@ module core_top (
     wire        ram_wr_snoop_v;
     wire [23:0] ram_wr_snoop_addr;
     wire  [3:0] ram_wr_snoop_len;
+    wire        ram_a_quiet;            // RAM.sv: port A idle (EMS window order)
     // Driven by z86's cache (z86_cache, in u_cpu).
     wire  [1:0] fdd_req_fw;
 `ifdef PC98_JTAG
@@ -1078,17 +1091,24 @@ module core_top (
     assign fdd_req_fw   = mgmt_req[7:6];
 `endif
 
-    // Floppy image size arrives in the dataslot-update event (bytes); latch it per drive.
-    // A hot-swapped floppy delivers its new size in the same event, so it is race-free with
-    // the media-change edge below. HDD and Settings sizes instead come from the datatable
-    // by id in firmware (they load only at boot / core restart).
+    // Disk image size arrives in the dataslot-update event (bytes); latch it per drive.
+    // A hot-swapped image delivers its new size in the same event, so it is race-free with
+    // the rebind edge below. The hard disk (slot 5) takes the same path as the floppies:
+    // its datatable entry is NOT a bind -- with data.json bit9 the Pocket persists the
+    // last pick and writes that file's size into the datatable at every core launch, but
+    // sends no update, so a datatable read mounted a disk the user never picked this
+    // session. Only the update event (a real pick in the menu) mounts. Settings still
+    // reads its size from the datatable by id in firmware.
     reg [31:0] fdd0_slot_bytes_74a = 32'd0;
     reg [31:0] fdd1_slot_bytes_74a = 32'd0;
+    reg [31:0] hdd0_slot_bytes_74a = 32'd0;
     always @(posedge clk_74a) begin
         if (dataslot_update && dataslot_update_id == 16'd3)
             fdd0_slot_bytes_74a <= dataslot_update_size;
         if (dataslot_update && dataslot_update_id == 16'd4)
             fdd1_slot_bytes_74a <= dataslot_update_size;
+        if (dataslot_update && dataslot_update_id == 16'd5)
+            hdd0_slot_bytes_74a <= dataslot_update_size;
     end
 
     // A floppy (re)bind arrives as a dataslot update (fires even on a same-size swap).
@@ -1096,12 +1116,14 @@ module core_top (
     // re-asserts media-change (edge, not level: the pulse spans several cycles).
     reg        fdd0_rebind_74a   = 1'b0;
     reg        fdd1_rebind_74a   = 1'b0;
+    reg        hdd0_rebind_74a   = 1'b0;
     reg        dataslot_update_d = 1'b0;
     always @(posedge clk_74a) begin
         dataslot_update_d <= dataslot_update;
         if (dataslot_update && !dataslot_update_d) begin
             if (dataslot_update_id == 16'd3) fdd0_rebind_74a <= ~fdd0_rebind_74a;
             if (dataslot_update_id == 16'd4) fdd1_rebind_74a <= ~fdd1_rebind_74a;
+            if (dataslot_update_id == 16'd5) hdd0_rebind_74a <= ~hdd0_rebind_74a;
         end
     end
 
@@ -1117,6 +1139,12 @@ module core_top (
         .o   (fdd1_slot_bytes),
         .clk (clk_chipset)
     );
+    wire [31:0] hdd0_slot_bytes;
+    synch_3 #(.WIDTH(32)) s_hdd0_size (
+        .i   (hdd0_slot_bytes_74a),
+        .o   (hdd0_slot_bytes),
+        .clk (clk_chipset)
+    );
     wire [31:0] fdd0_disk_sectors = fdd0_slot_bytes >> 9;   // bytes / 512
     wire [31:0] fdd1_disk_sectors = fdd1_slot_bytes >> 9;   // bytes / 512
 
@@ -1130,6 +1158,12 @@ module core_top (
     synch_3 s_fdd1_rebind (
         .i   (fdd1_rebind_74a),
         .o   (fdd1_rebind),
+        .clk (clk_chipset)
+    );
+    wire hdd0_rebind;
+    synch_3 s_hdd0_rebind (
+        .i   (hdd0_rebind_74a),
+        .o   (hdd0_rebind),
         .clk (clk_chipset)
     );
 
@@ -1162,7 +1196,9 @@ module core_top (
     wire [7:0] osd_a3fee;
     wire [7:0] osd_a3ff2;
     wire [1:0] osd_gamepad;
-    wire [16*9-1:0] key_cfg;   // per-control {ext, Set-2 code} file from the softcore
+    wire  [3:0] key_cfg_idx;   // per-control {ext, Set-2 code} file in the softcore: the scan's id,
+    wire  [8:0] key_cfg_q;     //   its entry (one clock later),
+    wire        key_cfg_diag;  //   and whether the D-pad preset is diagonal
 
     // Last docked-keyboard make, tapped for the softcore key picker (pocket_keyboard -> softcpu).
     wire [7:0] dock_key_code;
@@ -1177,7 +1213,7 @@ module core_top (
     wire [19:0] st_addr_w;
     wire  [7:0] st_wdata_w, st_rdata_w, accel_status_w;
     wire [15:0] gdc_draw_ops;
-    wire [383:0] gdc_draw_snaps;
+    wire [511:0] gdc_draw_snaps;
 
 `ifdef PC98_JTAG
     // How far does a key get? key_count counts pc98_key_stb pulses and
@@ -1201,12 +1237,14 @@ module core_top (
         .fdd_request                (fdd_req_fw),
         .fdd0_disk_size             (fdd0_disk_sectors),
         .fdd1_disk_size             (fdd1_disk_sectors),
+        .hdd0_disk_bytes            (hdd0_slot_bytes),
         .datatable_addr             (datatable_addr),
         .datatable_data             (datatable_data),
         .datatable_wren             (datatable_wren),
         .datatable_q                (datatable_q),
         .fdd0_rebind                (fdd0_rebind),
         .fdd1_rebind                (fdd1_rebind),
+        .hdd0_rebind                (hdd0_rebind),
         .mgmt_addr                  (mgmt_addr),
         .mgmt_dout                  (mgmt_dout),
         .mgmt_wr                    (mgmt_wr),
@@ -1267,7 +1305,9 @@ module core_top (
         .osd_a3fea                  (osd_a3fea),
         .osd_a3fee                  (osd_a3fee),
         .osd_a3ff2                  (osd_a3ff2),
-        .key_cfg_flat               (key_cfg),
+        .key_cfg_idx                (key_cfg_idx),
+        .key_cfg_q                  (key_cfg_q),
+        .key_cfg_diag               (key_cfg_diag),
         .gdc_draw_req               (gdc_draw_req),
         .gdc_draw_busy              (gdc_draw_busy),
         .gdc_draw_ops               (gdc_draw_ops),
@@ -1714,7 +1754,12 @@ module core_top (
                            (pc_now >= 20'hE0000 && pc_now < 20'hE8000) ||   // (D0000: SCSI ROM)
                            (z86_halted && !z86_dbg_regs[217]) ||           // HLT, IF=0
                            f0_port_write;
-    wire         tlog_ev = tlog_all ? (pc_now != tlog_pc_d) : (trig_hit && !trig_hit_d);
+    // The trigger log, the address trigger and the JTAG debug stop are
+    // parked (TLOG_ON=0): the stage-2 speed check and jtag_superdepth's
+    // PLAY mode were their only users, and the device is out of LABs.
+    // Their probe slots (0x06/0x0e/0x60-0x68) read the default now.
+    localparam bit TLOG_ON = 1'b0;
+    wire         tlog_ev = TLOG_ON & (tlog_all ? (pc_now != tlog_pc_d) : (trig_hit && !trig_hit_d));
     always_ff @(posedge clk_chipset) begin
         trig_hit_d <= trig_hit;
         tlog_pc_d  <= pc_now;
@@ -1755,9 +1800,9 @@ module core_top (
             jtag_dbg_arm  <= probe_wdata_c[31];
             jtag_dbg_ax   <= probe_wdata_c[15:0];
             jtag_dbg_stop <= 1'b0;
-        end else if ((jtag_dbg_arm && trig_hit && !trig_hit_d &&
+        end else if (TLOG_ON && ((jtag_dbg_arm && trig_hit && !trig_hit_d &&
                       z86_dbg_regs[15:0] == jtag_dbg_ax) ||
-                     (tlog_trap && pc_wild && !tlog_frozen)) begin
+                     (tlog_trap && pc_wild && !tlog_frozen))) begin
             jtag_dbg_stop <= 1'b1;
             jtag_dbg_arm  <= 1'b0;
         end
@@ -2103,19 +2148,12 @@ module core_top (
             // carry z86's register view, latched; slot 0x18 (zet_pc) is the
             // live PC.
             8'h18:   probe_data_c = {12'h000, zet_pc};      // current bus cycle
-            8'h60:   probe_data_c = tlog_q[31:0];           // trigger log, see tlog
-            8'h61:   probe_data_c = tlog_q[63:32];
-            8'h62:   probe_data_c = tlog_q[95:64];
-            8'h63:   probe_data_c = tlog_q[127:96];
-            8'h64:   probe_data_c = tlog_q[159:128];
-            8'h65:   probe_data_c = tlog_q[191:160];
-            8'h68:   probe_data_c = {16'h0, tlog_q[207:192]};
+            8'h36:   probe_data_c = {8'h00, tvram_dbg_word}; // screen readback (jtag_screen.tcl)
             // 0x6c-0x6f: the port-A write-commit snoop witnesses -- RETIRED
             // with the counter block by ce_count (the LAB wall); these
             // slots now read the default 0xDEADxx. 0x70 keeps the cache's
             // watched-line kill count (line of slot-0x06's trig_addr,
             // registered at this boundary).
-            8'h67:   probe_data_c = {tlog_frozen, 15'h0, tlog_n};
             // 0x06/0x0e: echo the live trigger and tlog-mode words, in the
             // exact layout of their write slots.  A write scan needs addr
             // bit 7 set (0x86/0x8e, see pc98_jtag_probe.sv); the bare slot
@@ -2124,11 +2162,6 @@ module core_top (
             // while the positive control wrote away.  Reading the word
             // back is the one-scan proof an arm actually took (0xDEAD00xx
             // = a bitstream without these readback slots).
-            8'h06:   probe_data_c = {trig_en, trig_freeze, trig_delay,
-                                     trig_bus, trig_wronly, trig_ds,
-                                     6'b0, trig_addr};
-            8'h0e:   probe_data_c = {22'b0, tlog_trap, tlog_all,
-                                     2'b0, tlog_ri};
             // 0x19: {arbiter hold/DRQ, RAM FSM state} -- names WHY a fetch
             // never completes; 0x1a: the ready chain the CPU waits on.
             // 0x31: the GVRAM sequencer -- {svc_req, svc_done, svc_hold,
@@ -2188,9 +2221,6 @@ module core_top (
             //      longest black run of the last finished frame.
             // 0x86 {7'0, worst_start[8:0], 7'0, worst_max[8:0]} -- the
             //      longest black run of any frame since power-up.
-            8'h84:   probe_data_c = dbg_gvband[95:64];
-            8'h85:   probe_data_c = dbg_gvband[63:32];
-            8'h86:   probe_data_c = dbg_gvband[31:0];
             // 0x35: BIOS-side milestones + the 0x43D write tally
             // {bios_branch[7:0], in42_count, last_42_rdata,
             //  w43d_10_count[3:0], w43d_12_count[3:0]}
@@ -2553,7 +2583,9 @@ module core_top (
         .osd_active   (osd_active),
         .vkb_key      (vkb_key),
         .vkb_stb      (vkb_stb),
-        .key_cfg      (key_cfg),
+        .key_idx      (key_cfg_idx),
+        .key_q        (key_cfg_q),
+        .key_diag     (key_cfg_diag),
         .cont3_joy    (cont3_joy),
         .cont3_trig   (cont3_trig),
         .cont3_key    (cont3_key),
@@ -2726,8 +2758,11 @@ module core_top (
             jtag_pf_bkill <= probe_wdata_c[10];
             jtag_cache_dis <= probe_wdata_c[11];
             jtag_thr_num  <= probe_wdata_c[19:12];
-            // jtag_dx (the #1047 bisect's revert bits) stays 0: the bug
-            // is fixed (fix-1050) and the reverts' muxes cost the fit.
+            // jtag_dx: only [7] (bit 27, GRCG RMW line buffer + write-back
+            // off) is live again -- the A/B for cursor-save corruption; the
+            // other reverts stay 0 (their muxes cost the fit).
+            jtag_dx[7]    <= probe_wdata_c[27];
+            jtag_seq_dx   <= probe_wdata_c[30:29];
         end
         // Slot 0x0a: the reset-source witness clear -- wdata[0] wipes the
         // sticky rise map, the last-source index and its tick (the write
@@ -2978,18 +3013,14 @@ module core_top (
 
     // ANK font load, straight off data_loader rather than through the ROM FIFO
     // and the ext port. It is a 6 KB BRAM with no handshake, so queueing it
-    // behind the BIOS load would buy nothing.
-    //
-    // data.json puts font.rom at bridge 0x10100000. The BRAM keeps the file's
-    // ANK sets: the 8x16 half (file 0x0800-0x17FF) at words 0x000-0x7FF and,
-    // for the mode1-bit-3-clear case, the 8x8 half (file 0x0000-0x07FF) at
-    // words 0x800-0xBFF (np21w font/fontv98.c). So the window is the whole
-    // dl_addr 0x100000-0x1017FF.
-    wire        font_dl_hit  = dl_wr && (dl_addr[27:16] == 12'h010)
-                                     && (dl_addr[15:0] <  16'h1800);
-    wire [11:0] font_dl_addr = (dl_addr[15:0] >= 16'h0800)
-                             ? ({1'b0, dl_addr[11:1]} - 12'h400)   // 8x16 bank
-                             :  (dl_addr[11:1] + 12'h800);        // 8x8 bank
+    // behind the BIOS load would buy nothing. pc98_font_dlmap holds the window
+    // and the file-offset-to-word remap (both ANK sets, 0x100000-0x1017FF).
+    wire        font_dl_hit;
+    wire [11:0] font_dl_addr;
+    pc98_font_dlmap u_font_dlmap (
+        .dl_wr(dl_wr), .dl_addr(dl_addr),
+        .hit(font_dl_hit), .word(font_dl_addr)
+    );
 
     // ---------------------------------------------------------- firmware slot
     //
@@ -3094,7 +3125,31 @@ module core_top (
     // Only the word at FFFF0 differs, so one address needs intercepting.
     wire        rom_patch_reset = select_bios
                                 & (bios_access_address_wire == 20'hFFFF0);
-    wire [15:0] rom_data_in     = rom_patch_reset ? 16'h00EA : ioctl_data;
+    // PM286: the ITF's 80286 self-test is skipped. With port 0x42 bit 1
+    // clear (a 286) the ITF runs F8B9E -- exceptions through the IDT, call
+    // gates, VERR/VERW, LAR/LSL, LTR, BOUND, ARPL, #GP -- before its
+    // protected-mode memory count at F8FA2. z86's protected mode is np21w
+    // i286c's minimal one (bases from descriptors, nothing checked, no
+    // exceptions), so the self-test cannot pass; the count can. F8B99's
+    // `jz F8B9E` (74 03) becomes `jz $+2` (74 00) and falls into the
+    // `jmp F8FA2` at F8B9B that the V30 path takes. Word F8B9A holds 03 and
+    // the jmp's E9; only that exact pair is touched, so a different ITF
+    // image loads unpatched.
+    wire        rom_patch_itf   = PM286 & select_itf
+                                & (bios_access_address_wire == 20'hF8B9A)
+                                & (ioctl_data == 16'hE903);
+    // The ITF sums its own 32 KB (F8539: lodsw/add dl,al/add dh,ah, then
+    // `or dx,dx; jnz $` at F8543) and hangs at F8545 when the sum is not
+    // zero -- which the self-test patch above makes it (the even-byte sum
+    // drops by 3). On hardware that hang was the first thing PM286 hit
+    // (pc stuck at F8545, 0401 = 0). The `jnz $` (75 FE) becomes `jnz $+2`
+    // (75 00): word F8546 holds the FE and the next instruction's 33.
+    wire        rom_patch_isum  = PM286 & select_itf
+                                & (bios_access_address_wire == 20'hF8546)
+                                & (ioctl_data == 16'h33FE);
+    wire [15:0] rom_data_in     = rom_patch_reset ? 16'h00EA
+                                : rom_patch_itf   ? 16'hE900
+                                : rom_patch_isum  ? 16'h3300 : ioctl_data;
 
     wire bios_load_n = ~(ioctl_download & (select_bios | select_itf | select_font));
 
@@ -3616,8 +3671,15 @@ module core_top (
     // Only ever set during a loader write: the guest has no font bank to see.
     wire font_bank_load  = ~bios_write_n & font_bank_write;
 
-    // The EMS board's fitted size from the OSD: None/2/4/8 MB -> 0/2/4/8.
-    wire [3:0] ems98_maxmem = (osd_extmem == 2'd3) ? 4'd8 : {osd_extmem, 1'b0};
+    // The OSD's Ext Memory row: index 0 is None, anything else the full
+    // EXT_MB (an older blob's 2/4/8 MB EMS indices all read as fitted). A
+    // clk_pico register, so -- like fdd_turbo below -- a plain wire: the
+    // pico -> chipset crossing is timed (core_constraints.sdc).
+    wire ext_mem_en = (osd_extmem != 2'd0);
+    // The EMS bank registers' emsio.maxmem: np21w io/emsio.c emsio_reset
+    // takes pccore.extmem, the extended-memory size, so it is EXT_MB with
+    // Ext Memory on and 0 (ports inert, 08E9h reads FFh) with it None.
+    wire [3:0] ems_maxmem = (PM286 && ext_mem_en) ? 4'(EXT_MB) : 4'd0;
 
     always @(posedge clk_chipset)
     begin
@@ -3627,7 +3689,7 @@ module core_top (
             cpu_address <= cpu_address;
     end
 
-    CHIPSET #(.clk_rate(cur_rate)) u_CHIPSET
+    CHIPSET #(.clk_rate(cur_rate), .CPU_286(PM286)) u_CHIPSET
     (
         .clock                              (clk_chipset),
         .cpu_ce_posedge                     (cpu_ce_posedge),
@@ -3754,7 +3816,7 @@ module core_top (
         .sdram_dq_io                        (SDRAM_DQ_IO),
         .sdram_ldqm                         (SDRAM_DQML),
         .sdram_udqm                         (SDRAM_DQMH),
-        .ems98_maxmem                       (ems98_maxmem),
+        .ems_maxmem                         (ems_maxmem),
         .bios_protect_flag                  (bios_protect_flag),
         .mgmt_readdata                      (mgmt_din),
         .mgmt_writedata                     (cs_mgmt_dout),
@@ -3763,7 +3825,7 @@ module core_top (
         .mgmt_read                          (cs_mgmt_rd),
         .floppy_wp                          (wp_cfg),
         // The FDC's domain IS clk_chipset, so the setting bit arrives on a
-        // plain wire, the way osd_extmem reaches the EMS board below it.
+        // plain wire, the way osd_extmem reaches the CPU's ext_en.
         .fdd_turbo                          (osd_fdd_turbo),
         .cfg_dipsw2                         (osd_dipsw2),
         .cfg_a3fea                          (osd_a3fea),
@@ -3791,6 +3853,7 @@ module core_top (
         .ram_rw_complete                    (ram_rw_complete)
         ,.sdram_wr_taken                   (sdram_wr_taken)
         ,.sdram_rd_ready                   (sdram_rd_ready)
+        ,.gv_word_ok                       (gv_word_ok)
         ,.pc98_key_stb                      (pc98_key_stb)
         ,.pc98_key_byte                     (pc98_key_code)
         ,.mouse_dx                          (mouse_dx)
@@ -3821,9 +3884,11 @@ module core_top (
         ,.vram_wait_now                     (vram_wait_now)
         ,.dx_rmwbuf_off                     (jtag_dx[7])
         ,.dx_vramwait                       (jtag_dx[8])
+        ,.dx_seq                            (jtag_seq_dx)
         ,.ram_wr_snoop_v                    (ram_wr_snoop_v)
         ,.ram_wr_snoop_addr                 (ram_wr_snoop_addr)
         ,.ram_wr_snoop_len                  (ram_wr_snoop_len)
+        ,.ram_a_quiet                       (ram_a_quiet)
     );
 
 `ifdef PC98_JTAG
@@ -3870,6 +3935,7 @@ module core_top (
     // holds each queued write strobe until this says it is durably held.
     wire        sdram_wr_taken;
     wire        sdram_rd_ready;
+    wire        gv_word_ok;
 
     // ---- SDRAM boundary: chipset controller -> Pocket dram_* pins ----
     // CHIPSET drives these; pass straight through.
@@ -3959,6 +4025,7 @@ module core_top (
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
         .analog_mode       (pc98_analog),
+        .gv_word_ok        (gv_word_ok),
         .word_access       (cpu_word_access),
         .pf_req_len        (cpu_pf_len),
         .pf_beat_v         (pf_beat_v),
@@ -4022,7 +4089,7 @@ module core_top (
     // cache is write-through no-allocate, uncached writes ride the
     // port-A commits whose snoop clears lines, and clk_select latches
     // on biu_done.
-    z86 #(.WCOMB(1'b1)) u_cpu (
+    z86 #(.WCOMB(1'b1), .PM286(PM286), .EXT_MB(EXT_MB)) u_cpu (
         .clk       (zet_clk),
         .reset     (reset_cpu),
         .clk_free  (clk_chipset),
@@ -4036,6 +4103,8 @@ module core_top (
         .dx           (jtag_dx[6:0]),
         .bios_shadow  (bios_shadow_flag),
         .bios_protect (bios_protect_flag[1]),
+        .ext_en       (ext_mem_en),
+        .a_quiet      (ram_a_quiet),
         .f_req     (cachef_req),
         .f_we      (cachef_we),
         .f_addr    (cachef_addr),
@@ -4163,9 +4232,6 @@ module core_top (
     wire [15:0] audio_l = pause_core ? 16'd0 : (boost_cfg ? cmp_l : out_l);
     wire [15:0] audio_r = pause_core ? 16'd0 : (boost_cfg ? cmp_r : out_r);
 
-    // Drive noise lives in the OPNA's ADPCM-A voices now: the softcore polls
-    // floppy's taps over mgmt reg 0xE and keys its own samples, so it arrives
-    // inside core_l/core_r already mixed.
     audio_mixer #(.DW(16), .STEREO(1)) audio_mixer (
         .clk_74b    (clk_74b),
         .clk_audio  (clk_chipset),

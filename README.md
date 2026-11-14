@@ -15,18 +15,21 @@ A V30-class PC-9801: the VX/UV-era machine, not a 9821. Concretely:
 - **Memory**: 640 KB conventional (00000h-9FFFFh backed by SDRAM), text
   VRAM A0000h-A3FFFh, the CG window A4000h-A4FFFh, graphics VRAM
   (analog GVRAM for 16-colour modes) and the BIOS shadow in the SDRAM map.
-- **Extended memory**: an EMS board in the PC-98 style -- page registers
-  at 08E1h/08E3h/08E5h/08E7h bank four 16 KB windows at C0000h-CFFFFh into
-  an SDRAM pool (0x800000-0xFFFFFF), with the fitted size reported through
-  08E9h. Capacity is a Settings option: None / 2 / 4 / 8 MB (default 8 MB).
-  On a V30 banked EMS is the only kind of extended memory that exists, so
-  this is what PC-98 software that wants "extended memory" actually uses.
+- **Extended memory**: 8 MB of 80286 memory above 1 MB (100000h-8FFFFFh,
+  in SDRAM at 0x800000-0xFFFFFF) behind the A20 gate (OUT F2h/F0h), which
+  the ITF counts into 0:0401h and HIMEM/XMS drivers and DOS=HIGH use. The
+  Hardware menu's Ext Memory row picks None or 8 MB (default 8 MB); None
+  leaves everything above 1 MB empty (reads FFh, writes dropped). EMS is
+  np21w's (io/emsio.c): page registers at 08E1h/08E3h/08E5h/08E7h bank four
+  16 KB windows at C0000h-CFFFFh onto that same extended memory (megabyte t
+  = linear t MB), 08E9h selects t and reads 00h for t = 1..8, FFh otherwise
+  (FFh for every t with Ext Memory None).
 - **Video**: the μPD7220 GDC pair -- master for text, slave for graphics --
   with GRCG, the EGC raster-op engine, and 8-/16-colour modes. Output is
   a fixed 640x400 panel: 200-line graphics modes are line-doubled to
   fill it.
 - **Sound**: OPNA (YM2608, the PC-9801-86 board): FM + SSG. The ADPCM-A
-  rhythm voices (and the drive mechanism noise that borrowed them) are
+  rhythm voices are
   parked in this build -- `USE_ADPCM(0)` in `Peripherals.sv` brings the
   room the EGC costs back.
 - **Floppy**: two drives, images mounted from Pocket dataslots, with a
@@ -84,8 +87,7 @@ from a NEC dump.
 - The Settings overlay (per-gamepad button) configures CPU speed, BIOS
   write protection, sound/stereo, display colour set, the 200-line
   presentation (Double or hardware-style line Skip), FDD Turbo
-  (authentic seek/sector pacing or ~8x), the drive-mechanism sound
-  (Off, 5.25" or 3.5"), EMS capacity, the disk-access lamp, the machine
+  (authentic seek/sector pacing or ~8x), EMS capacity, the disk-access lamp, the machine
   configuration (text rows/cols, boot order and device, RAM size, DEL
   as BS, ext ROM at D0000) and the controller bindings, and persists
   them per mounted image.

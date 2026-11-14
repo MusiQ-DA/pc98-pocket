@@ -28,6 +28,7 @@ Writes fpga/core/z86/eu_cost.hex (one 2-digit hex word per line, 4096 lines).
 import os
 
 TAKEN = 5  # fetch.sv adds this on br_taken (keep the two in step)
+FAR_RELOAD = 2  # INT/IRET only, see the table
 
 def cost(op, mem, reg):
     alu = {0, 1, 2, 3, 4, 5, 7}          # ADD OR ADC SBB AND SUB XOR (row)
@@ -84,8 +85,12 @@ def cost(op, mem, reg):
          0xC4: 7, 0xC5: 7,                              # LES LDS
          0xC8: 11, 0xC9: 5,                             # ENTER LEAVE
          0xCA: 15 + 1 - TAKEN, 0xCB: 15 + 1 - TAKEN,    # RET far
-         0xCC: 23 + 1 - TAKEN, 0xCD: 23 + 1 - TAKEN,    # INT
-         0xCE: 4, 0xCF: 17 + 1 - TAKEN,                 # INTO IRET
+         # INT / IRET: +FAR_RELOAD -- they always reload CS:IP and the
+         # stack frame (3 words each way) also holds the prefetch back, so
+         # the near-transfer split (the reload's first word priced by the
+         # cache) left them short (int n + iret x4 at 0.91 of the sheet).
+         0xCC: 23 + 1 - TAKEN + FAR_RELOAD, 0xCD: 23 + 1 - TAKEN + FAR_RELOAD,
+         0xCE: 4, 0xCF: 17 + 1 - TAKEN + FAR_RELOAD,    # INTO IRET
          0xD4: 16, 0xD5: 14, 0xD6: 2, 0xD7: 5}          # AAM AAD SALC XLAT
     if op in t: return t[op]
     if op in (0xC6, 0xC7): return 3 if mem else 2       # MOV r/m,imm

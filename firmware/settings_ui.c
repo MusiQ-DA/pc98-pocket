@@ -81,11 +81,16 @@ enum {
     SET_GAMEPAD,
     // OSD
     SET_DISK_LED,
+    // Ext Memory: the 80286's memory above 1 MB (z86_cache, 8 MB at SDRAM
+    // 0x800000). The slot is the retired NEC EMS row's, whose {None, 2, 4,
+    // 8 MB} indices block_apply folds onto {None, 8 MB}.
     SET_EXTMEM,
-    // Hardware -- appended above SET_COUNT, so a version-7 blob simply has no
-    // byte for this index and it keeps its compiled default on load. The menu
-    // row itself is in items_hw, right after FDD Turbo.
-    SET_DRV_SOUND,
+    // Reserved: this index was the Drive Sound row's (appended in version 8).
+    // The row and the drive-noise service are gone; the slot stays so the
+    // packed blob and the per-disk table keep their layout, and every later
+    // index (the SET_IDX_* decode softcpu_subsystem composes from) keeps its
+    // position. A stored value outside the one-entry table is dropped on load.
+    SET_RSVD_12,
     // Machine -- appended above SET_COUNT, so a version-8 blob has no bytes
     // for these indices and they keep their compiled defaults on load. The
     // menu rows live in items_machine; the index order is the SET_IDX_*
@@ -114,9 +119,9 @@ static const char *const opt_boost[] = { "None", "2x", "4x" };
 static const char *const opt_level4[] = { "1", "2", "3", "4" };
 static const char *const opt_stereo[] = { "None", "25%", "50%", "100%" };
 static const char *const opt_dis_en[] = { "Disabled", "Enabled" };
-// NEC-style EMS board (ports 08E1h-08E9h): megabytes reported fitted. The
-// values must match core_top's osd_extmem decode {0, 2, 4, 8}.
-static const char *const opt_extmem[] = { "None", "2 MB", "4 MB", "8 MB" };
+// Extended memory above 1 MB (HIMEM/XMS, HMA). core_top's decode is
+// "index != 0 is fitted", so index 0 must stay None.
+static const char *const opt_extmem[] = { "None", "8 MB" };
 static const char *const opt_display[] = { "Full Color", "Green", "Amber", "B&W", "Red", "Blue",
     "Fuchsia", "Purple" };
 // 200-line presentation on the fixed 400-line raster: Double serves each guest
@@ -129,11 +134,8 @@ static const char *const opt_mode200[] = { "Double", "Skip" };
 // purpose -- blob slot 6's resting value is 1 (see the enum), which has to
 // mean Off -- and the softcore register inverts the index into the bit.
 static const char *const opt_fdd_turbo[] = { "On", "Off" };
-// Drive-mechanism noise: drive_sound.c reads the mode as the raw index -- 0
-// off, 1 the 5.25-inch cabinet, 2 the quieter 3.5-inch -- so the option order
-// maps straight onto the playback level. 5.25 is the default: the louder
-// mechanism the sample pack is built around.
-static const char *const opt_drv_sound[] = { "Off", "5.25\"", "3.5\"" };
+// SET_RSVD_12's placeholder: one entry, never shown.
+static const char *const opt_reserved[] = { "-" };
 
 // The machine-config rows drive the dipsw2 / A3FE* compose bytes in
 // softcpu_subsystem, where the option index IS the decoded value: Boot
@@ -183,8 +185,8 @@ static setting_t settings[SET_COUNT] = {
     SETTING_D(opt_dpad, DPAD_ARROWS), // SET_DPAD
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
     SETTING_D(opt_dis_en, 1), // SET_DISK_LED (default on)
-    SETTING_D(opt_extmem, 3), // SET_EXTMEM (default 8 MB: the full SDRAM pool)
-    SETTING_D(opt_drv_sound, 1), // SET_DRV_SOUND -- the appended index; default 5.25"
+    SETTING_D(opt_extmem, 1), // SET_EXTMEM (default 8 MB)
+    SETTING(opt_reserved),    // SET_RSVD_12 -- the retired Drive Sound slot
     // The v9-appended indices. Everything defaults to option 0 except Ext
     // ROM: the SCSI option ROM at D2000 is always fitted, so the window
     // ships Present.
@@ -213,7 +215,7 @@ static uint32_t reset_ticks;
 // A menu row is a submenu link, an editable option, a controller-button binding, an action, or a
 // blank grouping spacer; `arg` selects the target menu, the setting id, the BIND_* button, or the
 // action respectively (unused for a spacer).
-enum { IT_SUBMENU, IT_OPTION, IT_KEYBIND, IT_ACTION, IT_SPACER, IT_FDD };
+enum { IT_SUBMENU, IT_OPTION, IT_KEYBIND, IT_ACTION, IT_SPACER, IT_FDD, IT_HDD };
 
 typedef struct {
     const char *label;
@@ -261,15 +263,18 @@ static const item_t items_av[] = {
 // The two Floppy rows are NOT stored settings: the drives' media lives in
 // fdd_service, the Pocket menu's data slots are the only way an image gets
 // in, and these rows show the live state and eject/re-insert it (A button).
+// Hard Disk is the same kind of live row for the SCSI image (scsi_service):
+// A ejects it, and it stays out until a new pick in the Pocket menu re-binds
+// slot 5 -- there is no remembered image to put back.
 // SET_EMS's slot was reclaimed for SET_FDD_TURBO and SET_EMS_FRAME's for
 // SET_MODE200 -- the enum comments say why the blob layout is unchanged.
 static const item_t items_hw[] = {
     { "Floppy A", IT_FDD, 0 },
     { "Floppy B", IT_FDD, 1 },
+    { "Hard Disk", IT_HDD, 0 },
     { "FDD Turbo", IT_OPTION, SET_FDD_TURBO },
-    { "Drive Sound", IT_OPTION, SET_DRV_SOUND },
     { "", IT_SPACER, 0 },
-    { "EMS", IT_OPTION, SET_EXTMEM },
+    { "Ext Memory", IT_OPTION, SET_EXTMEM },
     { "", IT_SPACER, 0 },
     { "Disk LED", IT_OPTION, SET_DISK_LED },
 };
@@ -526,6 +531,31 @@ static void keybind_sync(void)
     }
 }
 
+// Value-text builders for the live media rows. No / and no %: clang 23 turns
+// a % /= pair into a divu/mul/sub sequence, and the softcore has no divider,
+// so that pair is an illegal instruction on hardware (the Makefile's
+// nodiv-verify is the gate). Decimal is by repeated subtraction of the place
+// values, clamped to five digits -- a floppy is four at most, an HDD's MB
+// count five.
+static int put_word(char *buf, int n, const char *w)
+{
+    while (*w) buf[n++] = *w++;
+    return n;
+}
+
+static int put_dec(char *buf, int n, uint32_t v)
+{
+    static const uint16_t place[] = { 10000, 1000, 100, 10, 1 };
+    int lead = 1;
+    if (v > 99999) v = 99999;
+    for (unsigned p = 0; p < sizeof(place) / sizeof(place[0]); p++) {
+        int d = 0;
+        while (v >= place[p]) { v -= place[p]; d++; }
+        if (!lead || d || place[p] == 1) { buf[n++] = (char) ('0' + d); lead = 0; }
+    }
+    return n;
+}
+
 // Repaint one menu row: erase its interior (the frame columns stay), then the cursor, label, and
 // either the current value (option/binding) or a submenu marker.
 static void draw_row(int i)
@@ -543,14 +573,7 @@ static void draw_row(int i)
     osd_draw_string16(&panel, COL_LABEL * 8, y, it->label, OSD_LABEL);
     if (it->type == IT_OPTION) {
         const setting_t *s = &settings[it->arg];
-        // Drive Sound has no hardware on a slim-OPNA build (OMGMT_CAPS
-        // bit0): the stored choice keeps its blob slot for the build that
-        // has the voices, but here the row reads N/A and cannot cycle.
-        if (it->arg == SET_DRV_SOUND && !drive_sound_present()) {
-            osd_draw_string16(&panel, COL_VALUE * 8, y, "N/A", OSD_DISABLED);
-        } else {
-            osd_draw_string16(&panel, COL_VALUE * 8, y, s->opts[s->value], OSD_LABEL);
-        }
+        osd_draw_string16(&panel, COL_VALUE * 8, y, s->opts[s->value], OSD_LABEL);
     } else if (it->type == IT_KEYBIND) {
         int on_key = keybind_cycle[keybind_sel[it->arg]].code == BIND_KEY_SLOT;
         const char *val = (on_key && !keybind_is_key(it->arg)) ? "[Set key]" : bind_name(it->arg);
@@ -560,34 +583,35 @@ static void draw_row(int i)
     } else if (it->type == IT_FDD) {
         // Live state, formatted here: "Inserted 1232K" or "Ejected". The size
         // is sectors/2 in KB (512-byte sectors), which is what every PC-98
-        // format's label quotes.
-        //
-        // No / and no %: clang 23 turns the % /= pair this used to carry into
-        // a divu/mul/sub sequence, and the softcore has no divider, so that
-        // pair is an illegal instruction on hardware (the Makefile's
-        // nodiv-verify is the gate). Decimal by repeated subtraction of the
-        // place values -- a floppy is four digits at the very most -- and the
-        // /2 is a shift, sectors being 512 bytes.
+        // format's label quotes (the /2 is a shift; put_dec says why).
         char buf[18];
         int n = 0;
         if (fdd_is_inserted(it->arg)) {
-            static const char word[] = "Inserted ";
-            for (int k = 0; word[k]; k++) buf[n++] = word[k];
-            uint32_t v = fdd_mounted_sectors(it->arg) >> 1;
-            static const uint16_t place[] = { 1000, 100, 10, 1 };
-            char digs[4];
-            int nd = 0, lead = 1;
-            if (v > 9999) v = 9999;
-            for (unsigned p = 0; p < sizeof(place) / sizeof(place[0]); p++) {
-                int d = 0;
-                while (v >= place[p]) { v -= place[p]; d++; }
-                if (!lead || d || place[p] == 1) { digs[nd++] = (char) ('0' + d); lead = 0; }
-            }
-            for (int i = 0; i < nd; i++) buf[n++] = digs[i];
+            n = put_word(buf, n, "Inserted ");
+            n = put_dec(buf, n, fdd_mounted_sectors(it->arg) >> 1);
             buf[n++] = 'K';
         } else {
-            static const char word[] = "Ejected";
-            for (int k = 0; word[k]; k++) buf[n++] = word[k];
+            n = put_word(buf, n, "Ejected");
+        }
+        buf[n] = 0;
+        osd_draw_string16(&panel, COL_VALUE * 8, y, buf, OSD_LABEL);
+    } else if (it->type == IT_HDD) {
+        // "Mounted 40M" (or "Mounted 512K" under a megabyte) or "Ejected".
+        // 512-byte blocks: >>11 is MB, >>1 is KB -- shifts, no divider.
+        char buf[18];
+        int n = 0;
+        uint32_t sectors = scsi_mounted_sectors();
+        if (sectors) {
+            n = put_word(buf, n, "Mounted ");
+            if (sectors >= 2048) {
+                n = put_dec(buf, n, sectors >> 11);
+                buf[n++] = 'M';
+            } else {
+                n = put_dec(buf, n, sectors >> 1);
+                buf[n++] = 'K';
+            }
+        } else {
+            n = put_word(buf, n, "Ejected");
         }
         buf[n] = 0;
         osd_draw_string16(&panel, COL_VALUE * 8, y, buf, OSD_LABEL);
@@ -704,10 +728,7 @@ int settings_input(uint16_t pressed)
         // instructions in this firmware, on a device that is 97 per cent full
         // with the GDC still to come -- and a menu index is always already
         // inside its range, so one compare does what a modulo did.
-        // (No ADPCM-A voices on this build -> Drive Sound is display-only.)
-        if (it->arg == SET_DRV_SOUND && !drive_sound_present()) {
-            changed = 0;
-        } else if (pressed & BTN_RIGHT) {
+        if (pressed & BTN_RIGHT) {
             uint8_t v = (uint8_t) (s->value + 1u);
             s->value = (v >= s->count) ? 0u : v;
         } else if (pressed & BTN_LEFT) {
@@ -772,6 +793,14 @@ int settings_input(uint16_t pressed)
             }
             draw_row(cur_row);
         }
+    } else if (it->type == IT_HDD) {
+        // A (or an arrow) ejects a mounted disk. An ejected one has nothing
+        // to re-insert: the next image comes from a Pocket-menu pick, whose
+        // slot-5 re-bind main.c mounts.
+        if ((pressed & (BTN_A | BTN_LEFT | BTN_RIGHT)) && scsi_mounted_sectors()) {
+            scsi_eject();
+            draw_row(cur_row);
+        }
     } else if (it->type == IT_ACTION) {
         if (pressed & BTN_A) {
             if (it->arg == ACT_RESET_PC) {
@@ -830,7 +859,8 @@ void settings_reset_tick(void)
 // the same values+bindings packing the blob uses. While a disk is mounted saves go to its entry
 // and mounting applies it; with no disk mounted, saves and the live set are global.
 //
-// VERSION 8 APPENDS ONE SETTING (index 12, drive sound), and a thirteenth
+// VERSION 8 APPENDS ONE SETTING (index 12, drive sound -- since retired to
+// the reserved SET_RSVD_12, its slot kept), and a thirteenth
 // value crosses a word boundary: the block grows to six words, the global
 // blob to eight, and the table shifts up a word -- word 136, eight-word
 // entries, fourteen of which fit (136 + 1 + 14*8 = 249; version 7's table
@@ -946,6 +976,10 @@ static void block_apply(uint32_t addr, uint32_t count)
             word = *FDD_BRAM_RDATA;
         }
         uint8_t v = (word >> ((i & 3) * 8)) & 0xFF;
+        // The EMS row's 2/4/8 MB (indices 1-3) all mean "fitted" now.
+        if (i == SET_EXTMEM && v != 0) {
+            v = 1;
+        }
         if (i < SET_COUNT && v < settings[i].count) {
             settings[i].value = v;
         }
@@ -1218,11 +1252,6 @@ void settings_load(void)
     // the per-disk entries mean anything at all.
     *FDD_BRAM_ADDR = TABLE_WORD;
     have_table = (uint8_t) (*FDD_BRAM_RDATA == TABLE_MAGIC);
-}
-
-uint8_t settings_drive_sound(void)
-{
-    return settings[SET_DRV_SOUND].value;
 }
 
 void settings_mark_dirty(void)

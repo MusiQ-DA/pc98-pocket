@@ -26,7 +26,7 @@ at all — only the beeper**; the OPNA material below describes what
 | ROM | 96 KB BIOS + ITF | 96 KB at E8000-FFFFF; ships **the PC-9801UX ITF** + PC-9801VM BIOS (`config.tcl:25-37`) — the UX BIOS is not usable on a V30 (PUSHA/SMSW at FDA35+) |
 | Graphics | 2× μPD7220A, GVRAM 256 KB, **EGC present** | 2× `pc98_gdc`, 3+1 planes, second 640×400 page → total 256 KB (`pc98_sdram_map.svh:51-71`, `Chipset.sv`), EGC fitted (`pc98_egc.sv`, `.EGC(1'b1)` on `pc98_gvram_seq` — room came from parking OPNA's ADPCM-A) |
 | Display | 640×400 and 640×200 | 640×400 fixed; 200-line modes via line-doubling |
-| Sound | onboard FM source: FM×3 + SSG×3 (YM2203/OPN class) (man:270, 1349-1373) | OPNA (YM2608, the -86 board), FM+SSG only — ADPCM-A rhythm and the drive noise that borrowed it parked (`USE_ADPCM(0)` in `Peripherals.sv`; `firmware/drive_sound.c` sleeps on `OMGMT_CAPS` bit0) |
+| Sound | onboard FM source: FM×3 + SSG×3 (YM2203/OPN class) (man:270, 1349-1373) | OPNA (YM2608, the -86 board), FM+SSG only — ADPCM-A rhythm parked (`USE_ADPCM(0)` in `Peripherals.sv`; `firmware/rhythm.c` sleeps on `OMGMT_CAPS` bit0) |
 | FDC | μPD765A, 1MB(2HD) and 640KB(2DD) interfaces | μPD765 model + PC-98 glue, both interfaces |
 | HDD | UX41 only: internal HDD via μPD7261 HDC | none; a PC-9801-55-class SCSI board instead |
 | Misc | PIC 2× PD71059C, DMA PD8237A-5, PIT PD8253-5, RTC uPD4990A, kbd/RS-232C PD8251A, printer PD8255A-5 | see below |
@@ -169,7 +169,7 @@ SCSI board serves the same role through its own BIOS.
 |---|---|---|---|
 | RS-232C USART | PD8251A 0x30/0x32 (man row 6), modem lines on 0x33 bits 7-5, baud = PIT ch2, master IRQ4 (np21w `io/serial.c` `pic_setirq(4)`) | **no UART at all** — 0x30/0x32 unclaimed; 0x33 modem bits read 0 (:1043); PIT ch2 runs but nothing consumes it | **M** |
 | RS-232C extension | 0xB0-0xBF (man row 22) | absent | **M** |
-| Printer I/F | PD8255A-5 0x40-0x47 even (man row 8): 0x40 data, 0x44 control, 0x46 status | only **0x42** answered, constant 0x02 (:933, 1044) | **M** (stub only — no data/control/status ports) |
+| Printer I/F | PD8255A-5 0x40-0x47 even (man row 8): 0x40 data, 0x44 control, 0x46 status | only **0x42** answered: 0x94 (286; np21w `io/printif.c` prt_i42 = 0x84 \| SW1-3 0x10, bit1 = 0 for the 286, 0x96 on the V30 build) | **M** (stub only — no data/control/status ports) |
 | CMT (cassette) | PD8251A 0x91-0x99 odd (man row 17) | absent | **M** |
 
 ## 10. Sound
@@ -268,7 +268,7 @@ Correctly absent (the manual doesn't have them): NMI ports, NDP/A20 ports
 | 0x20 | RTC cmd | :950, 968-974 |
 | 0x31/0x33/0x35/0x37 odd | DIP/sysport | :907-945, 1041-1045 |
 | 0x41/0x43 | kbd 8251 | :1056-1073 |
-| 0x42 | printer stub (0x02) | :933, 1044 |
+| 0x42 | printer stub (0x94, np21w prt_i42) | Peripherals.sv sysport_data |
 | 0x5C-0x5F | ARTIC | :1003-1006, 2313-2316 |
 | 0x60/0x62, 0xA0/0xA2 | GDC×2 | :774-775 |
 | 0x68, 0x6A | GDC mode regs | :1291-1330 |

@@ -19,6 +19,8 @@ captured session replays verbatim through `sim_egc_golden.sh +stream=...`.
 | `R16 <a> <v>` | word read, expected value                                |
 | `F <a> <vv>`  | flat poke -- seed VRAM without driving the access path   |
 | `X`           | compare the whole VRAM image now                         |
+| `PH <n>`      | (ops2prog only) open tb_mem_perf phase n (OUT 88FEh,n),  |
+|               | closing the previous one; the bench prints its clocks    |
 | `# P <v>`     | (comment) page marker the recorder emits for readability |
 
 ## Semantics notes

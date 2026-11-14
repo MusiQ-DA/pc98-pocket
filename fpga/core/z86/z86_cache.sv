@@ -13,7 +13,8 @@
 //     line is updated on a hit and the store goes out on port F through a
 //     one-entry write buffer, acknowledged to the core as soon as it is
 //     buffered.
-//   * UNCACHED: I/O, VRAM, the CG window, option ROMs, EMS -- everything
+//   * UNCACHED: I/O, VRAM, the CG window, option ROMs, the EMS windows
+//     (their alias in extended memory is ordered by win_wr) -- everything
 //     else -- runs as Wishbone cycles through cpu_bus_bridge. The write
 //     buffer is drained before any
 //     of them starts, so an OUT that starts a DMA never passes the store
@@ -94,7 +95,13 @@ module z86_cache #(
     // Clocks an idle combine buffer waits before it writes itself out.
     parameter int CB_AGE   = 32,
     // Paced stores answered before their bus time is paid (see wr_owed).
-    parameter bit STORE_POST = 1
+    parameter bit STORE_POST = 1,
+    // PC-98 port: 24-bit linear addresses from z86's 80286 protected mode,
+    // and up to EXT_MB megabytes of extended memory at 100000h (see
+    // "Extended memory" below; at most 8, ext_en switches it at run time).
+    // 0: the 20-bit cache, unchanged.
+    parameter bit PM286    = 0,
+    parameter int EXT_MB   = 8
 ) (
     input  wire         clk,            // free clk_chipset
     input  wire         ce,             // the gated CPU clock ticks this edge
@@ -124,7 +131,17 @@ module z86_cache #(
     input  wire         bios_protect,   // RAM.sv bios_protect_flag[1]
 
     // ---- z86 side: the `cache` module's ports ---------------------------
-    input  wire [19:0]  ld_addr,
+    // PM286: the A20 gate. Closed, only a[19:0] is decoded (np21w's
+    // CPU_ADRSMASK = FFFFF): the upper bits are ignored, not added.
+    input  wire         a20,
+    // The OSD's "Ext Memory" (clk-synchronous level): 0 makes the whole of
+    // extended memory the hole, so the ITF's count and HIMEM find none.
+    input  wire         ext_en,
+    // RAM.sv's gv_a_quiet: nothing of port A pending or in flight. A store
+    // through an EMS window (C0000-CFFFF, pc98_ems98) reaches extended
+    // memory on port A, behind this cache's back (see win_wr).
+    input  wire         a_quiet,
+    input  wire [23:0]  ld_addr,
     input  wire         ld_req,         // toggle
     output reg          ld_ack,         // toggle, follows ld_req when done
     output reg [127:0]  ld_data,
@@ -133,14 +150,15 @@ module z86_cache #(
     // the bus instead of fetching the rest of a line nobody will use.
     input  wire         ld_drop,
 
-    input  wire [19:0]  rd_addr,
+    input  wire [23:0]  rd_addr,
     input  wire         rd,             // pulse
-    output reg          rd_ready,       // idle or data ready
-    output reg [15:0]   rd_data,
+    output reg          rd_ready /*verilator public*/,
+                           // idle or data ready
+    output reg [15:0]   rd_data /*verilator public*/,
     input  wire         rd_io,
     input  wire         rd_word,
 
-    input  wire [19:0]  wr_addr,
+    input  wire [23:0]  wr_addr,
     input  wire         wr_valid,       // held until wr_ready
     output reg          wr_ready,       // pulse (held until a ce edge)
     input  wire [15:0]  wr_data,
@@ -206,27 +224,59 @@ module z86_cache #(
     assign wb_cyc_o = wb_stb_o;
 
     localparam int LINES = 1 << IDX_BITS;
-    localparam int TAG_BITS = 21 - 4 - IDX_BITS;
+    // Physical (SDRAM word) address width the cache tags: 21 bits cover
+    // the guest megabyte and the ITF shadow, 24 the extended memory.
+    localparam int PW = PM286 ? 24 : 21;
+    localparam int TAG_BITS = PW - 4 - IDX_BITS;
 
     // ------------------------------------------------------------------
     // Map
     // ------------------------------------------------------------------
-    function automatic logic cacheable_a(input logic [19:0] a);
-        cacheable_a = (a[19:16] < 4'hA) || (a[19:15] >= 5'b11101);
+    // Extended memory (PM286). Linear 100000h up is the 80286's memory
+    // above the first megabyte, EXT_MB megabytes of it (at most 8), in one
+    // linear run of SDRAM words: linear 100000h-8FFFFFh is SDRAM
+    // 0x800000-0xFFFFFF, i.e. word = linear + 0x700000. Nothing else in the
+    // map reaches 0x800000 (the guest megabyte and the ITF shadow end at
+    // 0x1FFFFF, the font bank is 0x400000, GVRAM and the FDD carve-out sit
+    // at 0x600000-0x753FFF; RAM.sv, pc98_sdram_map.svh and fdd_ramimg.sv
+    // draw the same map). It is only ever the CPU's, so it is always cached
+    // -- cache_en, which the ITF bank drops, covers only the chipset-visible
+    // megabyte. Above EXT_MB, and all of it with ext_en low, is a hole:
+    // reads FF, writes vanish, nothing aliases into the low megabyte (the
+    // ITF and HIMEM size memory by exactly that miscompare).
+    //
+    // ext_en is used live, not latched at reset: a store into the hole
+    // touches neither the SDRAM nor a cache line, so the lines a switch
+    // leaves behind still match the SDRAM when it is switched back.
+    function automatic logic ext_a(input logic [23:0] a);
+        ext_a = PM286 && a20 && (a[23:20] != 4'h0);
     endfunction
-    function automatic logic rom_a(input logic [19:0] a);
-        rom_a = (a[19:16] == 4'hF) || (a[19:15] == 5'b11101);
+    function automatic logic hole_a(input logic [23:0] a);
+        hole_a = ext_a(a) && (!ext_en || (a[23:20] > 4'(EXT_MB)));
+    endfunction
+    function automatic logic cacheable_a(input logic [23:0] a);
+        cacheable_a = ext_a(a) ? !hole_a(a)
+                    : cache_en && ((a[19:16] < 4'hA) || (a[19:15] >= 5'b11101));
+    endfunction
+    function automatic logic rom_a(input logic [23:0] a);
+        rom_a = !ext_a(a) && ((a[19:16] == 4'hF) || (a[19:15] == 5'b11101));
     endfunction
     // RAM.sv's latch_address for the cached ranges: the shadow bit only
-    // ever applies to F8000-FFFFF.
-    function automatic logic [20:0] phys_of(input logic [19:0] a, input logic sh);
-        phys_of = {sh & (a[19:15] == 5'b11111), a};
+    // ever applies to F8000-FFFFF. Extended memory per the map above: its
+    // megabyte number plus seven (only 1-8 are ever cached or filled; the
+    // hole's addresses never reach here as a port-F access).
+    function automatic logic [PW-1:0] phys_of(input logic [23:0] a, input logic sh);
+        logic [23:0] p;
+        p = {3'b000, sh & (a[19:15] == 5'b11111), a[19:0]};
+        if (ext_a(a))
+            p[23:20] = a[23:20] + 4'h7;
+        phys_of = p[PW-1:0];
     endfunction
-    function automatic logic [IDX_BITS-1:0] idx_of(input logic [20:0] p);
+    function automatic logic [IDX_BITS-1:0] idx_of(input logic [PW-1:0] p);
         idx_of = p[4 +: IDX_BITS];
     endfunction
-    function automatic logic [TAG_BITS-1:0] tag_of(input logic [20:0] p);
-        tag_of = p[20 -: TAG_BITS];
+    function automatic logic [TAG_BITS-1:0] tag_of(input logic [PW-1:0] p);
+        tag_of = p[PW-1 -: TAG_BITS];
     endfunction
     function automatic logic pit_port(input logic [15:0] a);
         pit_port = ((a & 16'hFFF9) == 16'h0071)
@@ -234,11 +284,22 @@ module z86_cache #(
     endfunction
 
     // An access is cached when every byte of it is.
-    wire [19:0] wr_a1 = wr_addr + 20'd1;
-    wire [19:0] rd_a1 = rd_addr + 20'd1;
-    wire [19:0] ld_a1 = ld_addr;
-    wire wr_cached = cache_en && !wr_io && cacheable_a(wr_addr)
-                  && (!wr_word || cacheable_a(wr_a1));
+    wire [23:0] wr_a1 = wr_addr + 24'd1;
+    // The second byte's MAP class without the 24-bit carry chain: every
+    // map boundary is 32 KB aligned, so a+1 is in a's region unless
+    // a[14:0] = 7FFF, and then in the region starting at a[23:15] + 1.
+    // (The full a+1 sat on the CPU clock's critical path, microcode ->
+    // execute's address add -> this -> the combine-buffer enables.)
+    function automatic logic [23:0] reg1_of(input logic [23:0] a);
+        reg1_of = (a[14:0] == 15'h7FFF) ? {a[23:15] + 9'd1, 15'h0000} : a;
+    endfunction
+    wire [23:0] rd_a1 = rd_addr + 24'd1;
+    wire [23:0] ld_a1 = ld_addr;
+    wire wr_cached = !wr_io && cacheable_a(wr_addr)
+                  && (!wr_word || cacheable_a(reg1_of(wr_addr)));
+    // A store that touches the hole goes nowhere (a word straddling into it
+    // is dropped whole: its low byte would land in another page's SDRAM).
+    wire wr_hole   = !wr_io && (hole_a(wr_addr) || (wr_word && hole_a(reg1_of(wr_addr))));
 
     // ------------------------------------------------------------------
     // Tag and data RAM (M10K): one read port each for the lookup, one write
@@ -256,9 +317,16 @@ module z86_cache #(
     reg  [127:0]         d_wd;
     reg  [IDX_BITS-1:0]  look_idx;      // combinational: what to read this edge
 
-    z86_cache_ram #(.AW(IDX_BITS), .BYTES(1), .BW(TAG_BITS + 1)) u_tags (
-        .clk(clk), .we(t_we), .waddr(t_wa), .be(1'b1), .wdata(t_wd),
-        .raddr(look_idx), .q(t_q));
+    // The tag RAM's byte lanes are 8 bits (altsyncram's byte_size takes 8
+    // or 9 here, and the 21-bit map's {valid, tag} is exactly 8). The 24-bit
+    // PM286 map's 11-bit {valid, tag} rides two lanes, zero-padded to 16.
+    localparam int TLANES = (TAG_BITS + 1 > 8) ? 2 : 1;
+    wire [8*TLANES-1:0] t_q_w;
+    z86_cache_ram #(.AW(IDX_BITS), .BYTES(TLANES), .BW(8)) u_tags (
+        .clk(clk), .we(t_we), .waddr(t_wa), .be({TLANES{1'b1}}),
+        .wdata((8*TLANES)'(t_wd)),
+        .raddr(look_idx), .q(t_q_w));
+    assign t_q = t_q_w[TAG_BITS:0];
     z86_cache_ram #(.AW(IDX_BITS), .BYTES(16), .BW(8)) u_data (
         .clk(clk), .we(d_we), .waddr(d_wa), .be(d_be), .wdata(d_wd),
         .raddr(look_idx), .q(d_q));
@@ -278,7 +346,7 @@ module z86_cache #(
                      S_WWR2  = 4'd9,
                      S_W5F   = 4'd10,   // OUT 5Fh delay
                      S_PACE  = 4'd11;   // paced hit: result held, bus time owed
-    reg  [3:0]  st;
+    reg  [3:0]  st /* verilator public */;
 
     // ---- Paced hits -----------------------------------------------------
     // At the 286 settings the cache is a latency hider, not a speedup: a
@@ -296,7 +364,7 @@ module z86_cache #(
     // line's end (what the uncached S_WLD fetches), each a full cycle.
     reg  [5:0]  pdebt;
     reg         wr_owed;                // paced store buffered, wr_ready owed
-    reg  [1:0]  pk;                     // what S_PACE completes (K_LD/K_RD)
+    reg  [1:0]  pk /* verilator public */;              // what S_PACE completes (K_LD/K_RD)
     // Line loads deliver critical word first: the fetch gets the line once
     // its FIRST word's cycle is paid, and the rest of the line's words are
     // owed afterwards as a prefetch tail (ld_tail) -- the bus stays busy
@@ -312,8 +380,26 @@ module z86_cache #(
     wire [2:0]  p_wcyc = 3'd2 + {1'b0, pace_wr_wait};
     reg  [3:0]  xdebt;                  // REP iteration clocks beyond the bus (rep_x)
     wire        p_busy = pace && (pdebt != 6'd0 || xdebt != 4'd0);
-    function automatic logic vram_a(input logic [19:0] a);
-        vram_a = !dx[3] && ((a[19:15] == 5'b10101) || (a[19:16] == 4'hB)
+    // p_rcyc - 1, registered (it only moves with the speed setting): the
+    // subtract inside S_IDLE's decision is the cone shape Quartus' S2T died
+    // on (CI 42049924286).
+    reg  [5:0]  p_yld;
+    // Inside a REP string loop the 286's BIU runs its bus cycles back to
+    // back; here the core's own turnaround (the read's data to the store's
+    // request, ~3 chipset clocks) leaves the bus idle between them, and at
+    // 12 MHz that is most of a 286 clock per access (rep movsw 1.21x). A
+    // CPU clock that ticked while the bus sat idle is paid off the next
+    // access's bus time -- the bus is taken to have carried on from where
+    // the last access ended. Outside REP loops the issue gate times the
+    // instructions and nothing changes.
+    reg         idle_pce;
+    wire        rep_cr = rep_on & !p_busy & (idle_pce | pace_ce);
+    always @(posedge clk)
+        if (!pace || p_busy || !rep_on) idle_pce <= 1'b0;
+        else if (pace_ce)               idle_pce <= 1'b1;
+    always @(posedge clk) p_yld <= {3'd0, p_rcyc} - 6'd1;
+    function automatic logic vram_a(input logic [23:0] a);
+        vram_a = !dx[3] && !ext_a(a) && ((a[19:15] == 5'b10101) || (a[19:16] == 4'hB)
                             || (pace_vwait[4] && a[19:15] == 5'b11100));
     endfunction
     wire [5:0]  p_vw = {2'd0, pace_vwait[3:0]};
@@ -321,15 +407,15 @@ module z86_cache #(
     localparam [1:0] K_LD = 2'd0, K_RD = 2'd1, K_WR = 2'd2;
     reg  [1:0]  k;                      // what the lookup is for
     reg         part;                   // 0: byte at a, 1: byte at a+1 (straddle)
-    reg  [19:0] c_a;                    // the access's address
+    reg  [23:0] c_a;                    // the access's address
     reg         c_word;
     reg  [15:0] c_wd;                   // write data
     reg  [7:0]  lo_byte;                // first half of a straddled read
     reg  [IDX_BITS-1:0] flush_i;
 
     // A read pulse is captured: rd may land while something else runs.
-    reg         rd_pend;
-    reg  [19:0] rd_a;
+    reg         rd_pend /* verilator public */;
+    reg  [23:0] rd_a;
     reg         rd_isio, rd_isw;
 
     reg  [2:0]  ld_i;
@@ -366,7 +452,7 @@ module z86_cache #(
 
     // ---- write buffer and port F --------------------------------------
     reg         wb_full;                // a store waits for port F
-    reg  [20:0] wb_p0, wb_p1;           // physical address of each byte
+    reg  [PW-1:0] wb_p0, wb_p1;         // physical address of each byte
     reg  [7:0]  wb_b0, wb_b1;
     reg         wb_two;                 // a word (two bytes)
     localparam [1:0] F_IDLE = 2'd0, F_REQ = 2'd1, F_RUN = 2'd2;
@@ -376,7 +462,7 @@ module z86_cache #(
     reg  [3:0]  f_beat;
     reg  [127:0] lb;                    // the line being filled
     reg         fill_req;               // the FSM wants a fill of fill_p
-    reg  [20:0] fill_p;
+    reg  [PW-1:0] fill_p;
     reg         fill_live;              // its result is still wanted
     reg         fill_done;              // lb holds fill_p's line
 
@@ -402,7 +488,7 @@ module z86_cache #(
     reg  [1:0]  cb_v;                   // the buffer holds a range
     reg  [1:0]  cb_fl;                  // ... and is being written out
     reg  [1:0]  cb_want;                // it should leave now
-    reg  [16:0] cb_ln  [0:1];           // physical line, phys[20:4]
+    reg  [PW-5:0] cb_ln [0:1];          // physical line, phys[PW-1:4]
     reg  [127:0] cb_d  [0:1];
     reg  [3:0]  cb_lo  [0:1];
     reg  [3:0]  cb_hi  [0:1];
@@ -430,8 +516,8 @@ module z86_cache #(
     assign busy = wb_full || (WCOMB && cb_v != 2'b00) || (fs != F_IDLE) || wb_stb_o;
 
     // Current lookup's address (the byte this part touches) and line.
-    wire [19:0] c_ab  = part ? c_a + 20'd1 : c_a;
-    wire [20:0] c_p   = phys_of(c_ab, bios_shadow);
+    wire [23:0] c_ab  = part ? c_a + 24'd1 : c_a;
+    wire [PW-1:0] c_p = phys_of(c_ab, bios_shadow);
     wire [3:0]  c_off = c_ab[3:0];
     // A word whose second byte is in the next line.
     wire        c_straddle = c_word && (c_a[3:0] == 4'hF);
@@ -445,12 +531,15 @@ module z86_cache #(
     wire ld_pend   = (ld_req ^ ld_ack);
     wire rd_now    = rd && ce;
     wire rd_any    = rd_pend || rd_now;
-    wire [19:0] rd_cur_a  = rd_now ? rd_addr : rd_a;
+    wire [23:0] rd_cur_a  = rd_now ? rd_addr : rd_a;
     wire        rd_cur_io = rd_now ? rd_io   : rd_isio;
     wire        rd_cur_w  = rd_now ? rd_word : rd_isw;
-    wire rd_cached = cache_en && !rd_cur_io && cacheable_a(rd_cur_a)
-                  && (!rd_cur_w || cacheable_a(rd_cur_a + 20'd1));
-    wire ld_cached = cache_en && cacheable_a(ld_addr);
+    wire rd_cached = !rd_cur_io && cacheable_a(rd_cur_a)
+                  && (!rd_cur_w || cacheable_a(reg1_of(rd_cur_a)));
+    wire rd_hole   = !rd_cur_io && (hole_a(rd_cur_a)
+                  || (rd_cur_w && hole_a(reg1_of(rd_cur_a))));
+    wire ld_cached = cacheable_a(ld_addr);
+    wire ld_hole   = hole_a(ld_addr);
 
     always @* begin
         look_idx = idx_of(c_p);
@@ -460,23 +549,55 @@ module z86_cache #(
             else if (rd_any)   look_idx = idx_of(phys_of(rd_cur_a, bios_shadow));
             else if (ld_pend)  look_idx = idx_of(phys_of(ld_addr, bios_shadow));
         end else if ((st == S_CMP || st == S_SERVE) && c_straddle && !part)
-            look_idx = idx_of(phys_of(c_a + 20'd1, bios_shadow));
+            look_idx = idx_of(phys_of(c_a + 24'd1, bios_shadow));
     end
+
+    // ---- EMS window stores ----------------------------------------------
+    // The EMS windows (pc98_ems98, np21w io/emsio.c) bank C0000-CFFFF onto
+    // extended memory, which this cache holds as port-F lines. A window
+    // store is an uncached port-A write: the bridge acks it once RAM.sv has
+    // taken it, but it commits (and its snoop kills the aliased line) only
+    // some clocks later -- a cached read of the alias in between hit the
+    // old byte, and a port-F store to it could commit first and then be
+    // overwritten (sim/z86_tests/ems_np21w.asm, r3). So after one, every
+    // extended-memory access waits until port A has been quiet for two
+    // edges: the write committed (a_wr_v is its completion) and the kill
+    // register has written the tag. An unmapped window never selects the
+    // SDRAM, so port A is quiet at once. The other way round needs nothing:
+    // a port-F store drains (busy) before any uncached access starts.
+    reg        win_wr = 1'b0;
+    reg  [1:0] aq_q   = 2'b00;
+    wire win_st = PM286 && (EXT_MB != 0) && wb_stb_o && wb_we_o && !wb_tga_o
+               && (wb_adr_o[19:16] == 4'hC);
+    always @(posedge clk) begin
+        aq_q <= {aq_q[0], a_quiet};
+        if (reset)            win_wr <= 1'b0;
+        else if (win_st)      win_wr <= 1'b1;
+        else if (!wb_stb_o && a_quiet && (aq_q == 2'b11)) win_wr <= 1'b0;
+    end
+    wire ext_wait = win_wr && ((wr_pend && ext_a(wr_addr))
+                            || (rd_any && !rd_cur_io && ext_a(rd_cur_a))
+                            || (ld_pend && ext_a(ld_addr)));
 
     // ---- snoop: clear the line(s) a port A write lands in ---------------
     // A two-word write can end in the next line; that one is cleared on the
     // following edge.
     reg         sn2_v;
     reg  [IDX_BITS-1:0] sn2_i;
-    wire        sn_ours  = sn_v && (sn_addr[23:21] == 3'b000);
+    // The guest megabyte and the ITF shadow (0x000000-0x1FFFFF), and under
+    // PM286 the extended memory (0x800000 up): the EMS windows at C0000
+    // (RAM.sv, pc98_ems98) write it through port A. The kill is by index,
+    // so it is conservative for any line sharing it.
+    wire        sn_ours  = sn_v && ((sn_addr[23:21] == 3'b000)
+                                    || (PM286 && (EXT_MB != 0) && sn_addr[23]));
     wire [20:0] sn_end   = sn_addr[20:0] + {17'd0, sn_len};
-    wire [IDX_BITS-1:0] sn_i0 = idx_of(sn_addr[20:0]);
-    wire [IDX_BITS-1:0] sn_i1 = idx_of(sn_end);
+    wire [IDX_BITS-1:0] sn_i0 = idx_of(PW'(sn_addr[20:0]));
+    wire [IDX_BITS-1:0] sn_i1 = idx_of(PW'(sn_end));
     // The watched line, in the same physical terms the kill uses. phys_of
     // only ever touches bit 20 and idx_of reads [13:4], so this is a pure
     // bit-slice of dbg_watch_a -- but kept as the functions so the two
     // cannot drift apart.
-    wire [IDX_BITS-1:0] sn_wp_i = idx_of(phys_of(dbg_watch_a, bios_shadow));
+    wire [IDX_BITS-1:0] sn_wp_i = idx_of(phys_of({4'h0, dbg_watch_a}, bios_shadow));
 
     // Probe witness, STAGED and fully isolated from the coherence cone:
     // stage 1 registers the facts of each tag write the kill path issues
@@ -528,16 +649,22 @@ module z86_cache #(
         sel_of = word ? 2'b11 : (a0 ? 2'b10 : 2'b01);
     endfunction
 
-    wire [20:0] wp0 = phys_of(wr_addr, bios_shadow);
-    wire [20:0] wp1 = phys_of(wr_a1, bios_shadow);
-    wire        cb_shape = WCOMB && !dx[1] && (!wr_word || (wp1 == wp0 + 21'd1 && wp0[3:0] != 4'hF));
+    wire [PW-1:0] wp0 = phys_of(wr_addr, bios_shadow);
+    wire [PW-1:0] wp1 = phys_of(wr_a1, bios_shadow);
+    wire        cb_shape = WCOMB && !dx[1] && (!wr_word || (wp1 == wp0 + PW'(1) && wp0[3:0] != 4'hF));
     wire [4:0]  w_lo = {1'b0, wp0[3:0]};
     wire [4:0]  w_hi = w_lo + (wr_word ? 5'd1 : 5'd0);
     // An uncached access waiting in S_IDLE: busy holds it until the
     // combine buffer has gone out, and this makes the buffer go now.
-    wire        unc_want = (st == S_IDLE)
-                        && ((wr_pend && !wr_cached) || (rd_any && !rd_cached)
-                            || (ld_pend && !ld_cached));
+    // Registered: busy holds the access anyway, so the flush may start a
+    // clock later, and the live form put the gated clock's run_arm -> rd ->
+    // the access's map class -> the combine-buffer enables on the CPU
+    // clock's critical path (CI 42206255920, -0.009 ns).
+    reg         unc_want = 1'b0;
+    always @(posedge clk)
+        unc_want <= (st == S_IDLE)
+                 && ((wr_pend && !wr_cached) || (rd_any && !rd_cached)
+                     || (ld_pend && !ld_cached));
     // The flush launch, as F_IDLE below decides it. A merge on the launch
     // edge would widen the range after f_addr/f_len latched the old one,
     // and the done that follows clears the buffer: the merged bytes were
@@ -551,11 +678,11 @@ module z86_cache #(
     wire        cb_go    = cb_due_b || cb_due_a;
     wire        cb_gi    = cb_due_b ? cb_b : cb_a;
     // the other buffer still holds this store's line: wait for it to leave
-    wire        cb_clash = cb_v[cb_b] && (cb_ln[cb_b] == wp0[20:4]);
+    wire        cb_clash = cb_v[cb_b] && (cb_ln[cb_b] == wp0[PW-1:4]);
     // a merge on the active buffer's flush-launch edge would widen the
     // range after f_len latched (the merged bytes were lost)
     wire        cb_merge = cb_v[cb_a] && !cb_fl[cb_a] && !(cb_go && cb_gi == cb_a)
-                        && !cb_clash && (cb_ln[cb_a] == wp0[20:4])
+                        && !cb_clash && (cb_ln[cb_a] == wp0[PW-1:4])
                         && (w_lo <= {1'b0, cb_hi[cb_a]} + 5'd1)
                         && (w_hi + 5'd1 >= {1'b0, cb_lo[cb_a]});
     wire        cb_new_a = !cb_v[cb_a] && !cb_clash;
@@ -655,7 +782,7 @@ module z86_cache #(
                 f_req    <= 1'b1;
                 f_we     <= 1'b1;
                 f_isfill <= 1'b0;
-                f_addr   <= {3'b000, cb_ln[cb_gi], cb_lo[cb_gi]};
+                f_addr   <= 24'({cb_ln[cb_gi], cb_lo[cb_gi]});
                 f_len    <= cb_hi[cb_gi] - cb_lo[cb_gi];
                 cb_fl[cb_gi] <= 1'b1;
                 cb_fli   <= cb_gi;
@@ -667,13 +794,13 @@ module z86_cache #(
                 // A word goes as one two-word burst unless its halves are
                 // not adjacent words in the same SDRAM column.
                 if (!f_wpart) begin
-                    f_addr   <= {3'b000, wb_p0};
+                    f_addr   <= 24'(wb_p0);
                     f_wdata0_r <= {8'h00, wb_b0};
                     f_wdata1_r <= {8'h00, wb_b1};
-                    f_len    <= (wb_two && wb_p1 == wb_p0 + 21'd1 && wb_p0[8:0] != 9'h1FF)
+                    f_len    <= (wb_two && wb_p1 == wb_p0 + PW'(1) && wb_p0[8:0] != 9'h1FF)
                               ? 4'd1 : 4'd0;
                 end else begin
-                    f_addr   <= {3'b000, wb_p1};
+                    f_addr   <= 24'(wb_p1);
                     f_wdata0_r <= {8'h00, wb_b1};
                     f_len    <= 4'd0;
                 end
@@ -682,7 +809,7 @@ module z86_cache #(
                 f_req    <= 1'b1;
                 f_we     <= 1'b0;
                 f_isfill <= 1'b1;
-                f_addr   <= {3'b000, fill_p[20:4], 4'h0};
+                f_addr   <= 24'({fill_p[PW-1:4], 4'h0});
                 f_len    <= 4'd15;
                 f_beat   <= 4'd0;
                 fill_req <= 1'b0;
@@ -766,13 +893,20 @@ module z86_cache #(
                 // a line patch lands this edge, or the last paced access
                 // still owes bus time -- a prefetch tail yields to an EU
                 // access or an out-of-line (branch) load after its word
-                if (ld_tail && pdebt > {3'd0, p_rcyc}
+                // (the yield waits out the prefetch cycle in flight, which
+                // is half done on average: p_rcyc - 1)
+                if (ld_tail && pdebt > p_yld
                     && (wr_pend || rd_any
                         || (ld_pend && ld_addr[19:4] != ld_next)))
-                    pdebt <= {3'd0, p_rcyc};
+                    pdebt <= p_yld;
                 // a line patch lands this edge: look it up on the next
+            end else if (ext_wait) begin
+                // an EMS window store is still on its way to the SDRAM
             end else if (wr_pend) begin
-                if (wr_cached) begin
+                if (wr_hole) begin
+                    // above extended memory: the store vanishes
+                    wr_ready <= 1'b1;
+                end else if (wr_cached) begin
                     if (bios_protect && rom_a(wr_addr)) begin
                         // A protected ROM write goes nowhere -- but its
                         // bus cycle still runs.
@@ -788,7 +922,7 @@ module z86_cache #(
                             // leaves at once)
                             automatic logic t = cb_swap ? cb_b : cb_a;
                             cb_v[t]   <= 1'b1;
-                            cb_ln[t]  <= wp0[20:4];
+                            cb_ln[t]  <= wp0[PW-1:4];
                             if (!cb_merge) cb_kill[t] <= 1'b0;
                             cb_lo[t]  <= cb_merge ? ((w_lo[3:0] < cb_lo[t]) ? w_lo[3:0] : cb_lo[t])
                                                   : w_lo[3:0];
@@ -808,7 +942,7 @@ module z86_cache #(
                                 // older bytes back over it under a valid
                                 // tag. Memory ends right (this bank goes
                                 // out after it); the cache must not.
-                                if (cb_ln[cb_a] == wp0[20:4]) cb_kill[cb_a] <= 1'b1;
+                                if (cb_ln[cb_a] == wp0[PW-1:4]) cb_kill[cb_a] <= 1'b1;
                                 if (!cb_fl[cb_a]) cb_want[cb_a] <= 1'b1;
                             end
                         end else begin
@@ -822,15 +956,15 @@ module z86_cache #(
                         end
                         if (pace) begin
                             wr_owed <= 1'b1;
-                            pdebt   <= (wr_word && wr_addr[0])
+                            pdebt   <= ((wr_word && wr_addr[0])
                                      ? {2'd0, p_wcyc, 1'b0}
-                                     : {3'd0, p_wcyc};
+                                     : {3'd0, p_wcyc}) - {5'd0, rep_cr};
                         end else
                             wr_ready <= 1'b1;
                         // Watchpoint witness: this store now owns the
                         // port-F buffer and will reach the SDRAM.
                         dbg_wr_v   <= 1'b1;
-                        dbg_wr_a0  <= wr_addr;
+                        dbg_wr_a0  <= wr_addr[19:0];
                         dbg_wr_two <= wr_word;
                         // ...and update the line if it is cached.
                         k      <= K_WR;
@@ -871,9 +1005,15 @@ module z86_cache #(
             // never queues behind a code line. With uncached fetch at the
             // paced settings that wait was a whole line load per access.
             end else if (ld_pend && !rd_any) begin
-                if (ld_cached) begin
+                if (ld_hole) begin
+                    ld_data <= '1;
+                    ld_ack  <= ~ld_ack;
+                end else if (ld_cached) begin
                     k    <= K_LD;
-                    c_a  <= {ld_addr[19:4], 4'h0};
+                    // all 24 bits: a line load from extended memory (HMA
+                    // code under DOS=HIGH) looked up the low megabyte's
+                    // line and ran its bytes (sim/z86_tests/raw_hma.asm)
+                    c_a  <= {ld_addr[23:4], 4'h0};
                     c_word <= 1'b0;
                     st   <= S_CMP;
                     // the requested word now, the rest of the line as a
@@ -908,11 +1048,16 @@ module z86_cache #(
                     st       <= S_WLD;
                 end
             end else if (rd_any) begin
-                if (rd_cached) begin
+                if (rd_hole) begin
+                    // above extended memory: open bus
+                    rd_data  <= 16'hFFFF;
+                    rd_pend  <= 1'b0;
+                    rd_ready <= 1'b1;
+                end else if (rd_cached) begin
                     k      <= K_RD;
                     pdebt  <= !pace ? 6'd0
-                            : (rd_cur_w && rd_cur_a[0]) ? {2'd0, p_rcyc, 1'b0}
-                            : {3'd0, p_rcyc};
+                            : ((rd_cur_w && rd_cur_a[0]) ? {2'd0, p_rcyc, 1'b0}
+                            : {3'd0, p_rcyc}) - {5'd0, rep_cr};
                     c_a    <= rd_cur_a;
                     c_word <= rd_cur_w;
                     rd_a   <= rd_cur_a;
@@ -923,7 +1068,7 @@ module z86_cache #(
                              && !(rd_cur_io && pit_port(rd_cur_a[15:0]) && io_rec < PIT_GAP[7:0])) begin
                     // rd may be this very edge's pulse: take its operands
                     // live, the capture above lands at the same edge.
-                    wb_adr_o <= rd_cur_a >> 1;
+                    wb_adr_o <= rd_cur_a[19:1];
                     wb_sel_o <= sel_of(rd_cur_a[0], rd_cur_w && !rd_cur_a[0]);
                     wb_we_o  <= 1'b0;
                     wb_tga_o <= rd_cur_io;

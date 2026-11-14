@@ -776,8 +776,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_gvram_seq.sv"
 # The EGC's blitter, instantiated by the sequencer above. Landed with the
 # sequencer but never added here, so every build after it failed to elaborate.
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_egc.sv"
-# The NEC-style EMS board's bank registers at 0x08E1-0x08E9: the V30's only
-# route past its 20-bit bus. RAM.sv holds the window remap half.
+# The EMS bank registers at 0x08E1-0x08E9 (np21w io/emsio.c): windows at
+# C0000-CFFFF onto the 286's extended memory. RAM.sv holds the remap half.
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_ems98.sv"
 # The PC-9801-55 SCSI board's register window at 0x0CC0-0x0CC7.
 set_global_assignment -name SYSTEMVERILOG_FILE "core/pc98_scsi.sv"
@@ -810,6 +810,7 @@ set_global_assignment -name VERILOG_FILE core/audio_pll.v
 set_global_assignment -name VERILOG_FILE core/picorv32.v
 set_global_assignment -name VERILOG_FILE core/sprom.v
 set_global_assignment -name SYSTEMVERILOG_FILE core/softcpu_subsystem.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_gdc_draw.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/softcpu_fdd_bridge.sv
 # core_constraints.sdc is pulled in by apf_constraints.sdc via read_sdc
 # (after derive_pll_clocks); do not add it as an SDC_FILE here too.
@@ -852,8 +853,10 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/sdram_mp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_tvram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_kbd8251.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_font_ank.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_font_dlmap.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_text_render.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_text_rowbase.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_text_gate.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_video_timing.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_glyph_addr.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/pc98_gdc_mode1.sv
@@ -947,7 +950,7 @@ set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_
 # (bisect z86-fit-bisect: retirement alone crashes at 22 too, and the
 # trap-only netlist RAN at 21 -- 1854 LABs, 6 over).  Ring restored; 22
 # now dials the ~6 LABs the stub window itself needs.
-set_global_assignment -name SEED 28
+set_global_assignment -name SEED 30
 # clk_pico is u_softcpu's fabric-generated clk_sys/6 pulse train (~7 MHz) and
 # it drives the whole PicoRV32 + OSD domain (~1.5k loads). Left on LAB
 # routing it accumulates enough skew for intra-domain hold violations -- the

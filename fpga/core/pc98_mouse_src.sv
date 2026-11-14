@@ -32,25 +32,28 @@ module pc98_mouse_src #(
     // inside its poll period): each snapshot is then one complete report,
     // consumed once when its counter changes.
     //
-    reg [31:0] joy_s0, joy_s1, joy_s;
-    reg [15:0] key_s0, key_s1, key_s;
-    reg [15:0] trig_s0, trig_s1, trig_s;
+    // Only the report bits the decode below reads are synchronised (joy
+    // 17:0 = buttons + dx), and there is no third "snapshot" copy: the
+    // stage-1 words are consumed directly, and only while they have held
+    // (rpt_ok) -- the same report the snapshot used to capture.
+    reg [17:0] joy_s0, joy_s1;
+    reg [15:0] key_s0, key_s1;
+    reg [15:0] trig_s0, trig_s1;
     reg [12:0] rpt_stable;
     wire       rpt_steady = (joy_s0 == joy_s1) && (key_s0 == key_s1) && (trig_s0 == trig_s1);
+    wire       rpt_ok     = rpt_steady && (&rpt_stable);
+    wire [17:0] joy_s  = joy_s1;
+    wire [15:0] key_s  = key_s1;
+    wire [15:0] trig_s = trig_s1;
 
     always @(posedge clk) begin
-        joy_s0  <= cont4_joy;  joy_s1  <= joy_s0;
+        joy_s0  <= cont4_joy[17:0]; joy_s1  <= joy_s0;
         key_s0  <= cont4_key;  key_s1  <= key_s0;
         trig_s0 <= cont4_trig; trig_s1 <= trig_s0;
         if (!rpt_steady)
             rpt_stable <= 13'd0;
         else if (!(&rpt_stable))
             rpt_stable <= rpt_stable + 13'd1;
-        else begin
-            joy_s  <= joy_s1;
-            key_s  <= key_s1;
-            trig_s <= trig_s1;
-        end
     end
 
     // Report fields, little endian; deltas signed, Y positive downward.
@@ -79,7 +82,7 @@ module pc98_mouse_src #(
     reg  [15:0] rpt_count = 16'd0;   // counter of the last consumed report
     reg  [1:0]  btn_q = 2'd0;        // last report's buttons
 
-    wire rpt_new = (key_s != rpt_count);
+    wire rpt_new = rpt_ok && (key_s != rpt_count);
 
     //
     // Gamepad mouse: while a D-pad direction is held, step once per pad tick

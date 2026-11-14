@@ -4,7 +4,9 @@
 // hardwired instruction class decoding, register reads and memory load launches.
 import z86_package::*;
 
-module decode (
+module decode #(
+    parameter bit PM286 = 0             // minimal 80286 protected mode (z86.sv)
+) (
     input             clk,
     input             reset,
 
@@ -45,8 +47,8 @@ module decode (
     output reg [31:0] ex_disp,
     output reg        ex_mem_rd,            // 1: memory read is ongoing for hardwired instruction
     output reg [15:0] ex_e_addr_val,        // E: effective address, or register value
-    output reg [19:0] ex_e_fulladdr,        // E: full address
-    output reg [15:0] ex_e_segment,
+    output reg [23:0] ex_e_fulladdr,        // E: full (linear) address
+    output reg [23:0] ex_e_base,            // E: its segment's base
     output reg [15:0] ex_g_val,             // G: register value
     output reg        ex_ucode_valid,       // This instruction uses microcode
     output id_instruction ex_inst,
@@ -64,12 +66,17 @@ module decode (
     input      [15:0] seg_SS,
     input      [15:0] seg_DS,
     input      [15:0] seg_ES,
+    input      [23:0] base_CS,              // hidden segment bases (write-back)
+    input      [23:0] base_SS,
+    input      [23:0] base_DS,
+    input      [23:0] base_ES,
+    input             pe,                   // PM286: MSW.PE (execute)
     input      [15:0] reg_f,
     input      [15:0] reg_ip,
 
     // memory read interface
     output reg        rd,
-    output reg [19:0] rd_addr,
+    output reg [23:0] rd_addr,
     output reg        rd_io,
     output reg        rd_word,
     input      [15:0] rd_data,
@@ -189,6 +196,15 @@ assign inta_req = int_sample & intr & reg_f[9];
 // left the pipeline and the bus is quiet.
 assign rep_int = (nmi_latched | intr_latched) & ~int_shadow;
 
+// PM286: one-byte opcodes that load a segment register, with PE set
+// routed through a descriptor read (FF only for /3 CALL Ep and /5 JMP Ep).
+wire pm_route = ~id_two_byte & (
+        (id_opcode == 8'h8E) || (id_opcode == 8'h07) || (id_opcode == 8'h17) ||
+        (id_opcode == 8'h1F) || (id_opcode == 8'hC4) || (id_opcode == 8'hC5) ||
+        (id_opcode == 8'hEA) || (id_opcode == 8'h9A) || (id_opcode == 8'hCA) ||
+        (id_opcode == 8'hCB) || (id_opcode == 8'hCF) ||
+        (id_opcode == 8'hFF && (id_modrm[5:3] == 3'd3 || id_modrm[5:3] == 3'd5)));
+
 // recognize simple POP (no ModR/M)
 wire id_pop_r16 = (id_opcode >= 8'h58) && (id_opcode <= 8'h5F);
 wire id_pop_seg = (id_opcode == 8'h07) || (id_opcode == 8'h17) || (id_opcode == 8'h1F);
@@ -196,6 +212,7 @@ wire id_pop_rm = (id_opcode == 8'h8F);
 
 // ---- segment selection ------------------------------------
 reg [15:0] id_e_segment;
+reg [23:0] id_e_base;
 // 1) recognise an explicit segment-override prefix
 wire seg_ovr_cs = id_prefix[PREFIX_CS];
 wire seg_ovr_ss = id_prefix[PREFIX_SS];
@@ -363,6 +380,38 @@ always @* begin
             id_ucode_valid_op = 1'b0;                           // Other instructions hardwired in EXECUTE2
         end
     endcase
+
+    // PM286: the 80286 system instructions, and the segment loads that read
+    // a descriptor once MSW.PE is set (ucode.asm _PM entries). Any other
+    // 0F opcode runs as a NOP of its decoded length.
+    if (PM286 && id_two_byte) begin
+        id_ucode_valid_op = 1'b1;
+        id_ucode_entry_op = UENTRY_NOP;
+        if (id_opcode == 8'h01)
+            case (id_modrm[5:3])
+            3'd0: id_ucode_entry_op = UENTRY_SGDT;
+            3'd1: id_ucode_entry_op = UENTRY_SIDT;
+            3'd2: id_ucode_entry_op = UENTRY_LGDT;
+            3'd3: id_ucode_entry_op = UENTRY_LIDT;
+            3'd4, 3'd5: id_ucode_entry_op = UENTRY_SMSW;
+            default:    id_ucode_entry_op = UENTRY_LMSW;
+            endcase
+    end else if (PM286 && pe && pm_route) begin
+        id_ucode_valid_op = 1'b1;
+        case (id_opcode)
+        8'h8E:             id_ucode_entry_op = UENTRY_MOV_SREG_PM;
+        8'h07,8'h17,8'h1F: id_ucode_entry_op = UENTRY_POP_SREG_PM;
+        8'hC4:             id_ucode_entry_op = UENTRY_LES_PM;
+        8'hC5:             id_ucode_entry_op = UENTRY_LDS_PM;
+        8'hEA:             id_ucode_entry_op = UENTRY_JMP_FAR_PM;
+        8'h9A:             id_ucode_entry_op = UENTRY_CALL_FAR_PM;
+        8'hCA:             id_ucode_entry_op = UENTRY_RET_FAR_IMM_PM;
+        8'hCB:             id_ucode_entry_op = UENTRY_RET_FAR_PM;
+        8'hCF:             id_ucode_entry_op = UENTRY_IRET_PM;
+        default:           id_ucode_entry_op = id_modrm[3] ? UENTRY_JMP_EP_PM   // FF.5
+                                                           : UENTRY_CALL_EP_PM; // FF.3
+        endcase
+    end
 
     if (id_prefix[PREFIX_REP_REPZ_REPE] | id_prefix[PREFIX_REPNE_REPNZ]) begin  // REP/REPE/REPZ/REPNE/REPNZ entries
         unique case (id_opcode)
@@ -582,6 +631,11 @@ always @* begin
             seg_ovr_cs ? seg_CS :
             seg_ovr_ss ? seg_SS :
                          seg_DS;   // explicit DS override (3Eh)
+        id_e_base =
+            seg_ovr_es ? base_ES :
+            seg_ovr_cs ? base_CS :
+            seg_ovr_ss ? base_SS :
+                         base_DS;
         seg_sel = seg_ovr_es ? 2'd0 :
                   seg_ovr_cs ? 2'd1 :
                   seg_ovr_ss ? 2'd2 :
@@ -589,9 +643,11 @@ always @* begin
         if (DEBUG) $display("Segment override ES=%x, CS=%x, SS=%x", seg_ovr_es, seg_ovr_cs, seg_ovr_ss);
     end else if (ea_uses_bp) begin
         id_e_segment = seg_SS;
+        id_e_base = base_SS;
         seg_sel = 2'd2;
     end else begin
         id_e_segment = seg_DS;
+        id_e_base = base_DS;
         seg_sel = 2'd3;
         // $display("Segment = DS");
     end
@@ -610,20 +666,20 @@ always @* begin
     if (id_opcode == 8'hD7) 
         id_mem_rd  = 1'b1;
 
-    rd_addr = {id_e_segment, 4'b0} + id_e_addr_val;     // critical path: id_e_addr_val
+    rd_addr = id_e_base + {8'h00, id_e_addr_val};       // critical path: id_e_addr_val
     rd_io = is_io_in;
     rd_word = 1'b1;
 
     // POP reg/seg is hardwired and we issue memory read here
     if (id_pop_r16 | id_pop_seg | id_pop_rm) begin
         id_mem_rd = 1;
-        rd_addr = {seg_SS, 4'b0} + reg1_rdata;   // stack instructions are all Gsp
+        rd_addr = base_SS + {8'h00, reg1_rdata};   // stack instructions are all Gsp
     end            
 
     // IN (E4/E5/EC/ED)
     if (is_io_in) begin
         id_mem_rd = 1'b1;
-        rd_addr = id_opcode[3] ? ex_g_val_next : id_imm[7:0];
+        rd_addr = id_opcode[3] ? {8'h00, ex_g_val_next} : {16'h0000, id_imm[7:0]};
         rd_word = ii.w;
     end
 
@@ -644,7 +700,7 @@ always @(posedge clk) begin
         ex_valid <= 0;
         ex_mem_rd <= 0;
         ex_e_addr_val <= 0;
-        ex_e_segment <= 0;
+        ex_e_base <= 0;
         ex_g_val <= 0;
         ex_ucode_valid <= 0;
     end else begin
@@ -666,10 +722,10 @@ always @(posedge clk) begin
 
             ex_g_val <= ex_g_val_next;
             ex_e_addr_val <= id_e_addr_val;
-            ex_e_fulladdr <= {id_e_segment, 4'b0} + id_e_addr_val;
+            ex_e_fulladdr <= id_e_base + {8'h00, id_e_addr_val};
             ex_mem_rd <= id_mem_rd;
 
-            ex_e_segment <= id_e_segment;
+            ex_e_base <= id_e_base;
 
             // Forward microcode entry
             // ex_ucode_entry <= id_ucode_entry;
@@ -679,7 +735,7 @@ always @(posedge clk) begin
 
             if (id_opcode != 8'h90)
                 if (DEBUG) $display("DECODE: e_addr_val=%x, e_fulladdr=%x, g_val=%x, mem_rd=%x, rd_addr=%x", 
-                    id_e_addr_val, {id_e_segment, 4'b0} + id_e_addr_val,
+                    id_e_addr_val, id_e_base + {8'h00, id_e_addr_val},
                     ex_g_val_next, id_mem_rd, rd_addr);
         end
 
@@ -749,6 +805,11 @@ always @(posedge clk) begin
         if (int_pipeline_inject) begin
             ex_iclass <= I_IDLE;      // executed by microcode
         end
+        // PM286: 0F opcodes and the protected-mode segment loads are
+        // microcode (the hardwired MOV Sw / POP sreg / JMP far would write
+        // the segment without its descriptor)
+        if (PM286 && (id_two_byte || (pe && pm_route)))
+            ex_iclass <= I_IDLE;
     end
 end
 
@@ -908,6 +969,8 @@ function automatic reg_mask_t build_rd_mask();
     if ((id_opcode==8'hE4 || id_opcode==8'hE5 || id_opcode==8'hEC || id_opcode==8'hED || id_opcode==8'h6C || id_opcode==8'h6D)) begin   // IN/INS
         m.io = 1'b1;
     end
+    // PM286: LMSW r16 reads its register (execute's MC_LMSW)
+    if (PM286 && id_two_byte && id_modrm[7:6] == 2'b11) m.gpr[id_modrm[2:0]] = 1'b1;
 
     return m;
 endfunction
@@ -994,13 +1057,31 @@ function automatic reg_mask_t build_wr_mask();
     if (id_opcode == 8'hC4) m.seg[0] = 1'b1;
     if (id_opcode == 8'hC5) m.seg[3] = 1'b1;
 
+    // PM286: SMSW r16 writes its register
+    if (PM286 && id_two_byte && id_modrm[7:6] == 2'b11) m.gpr[id_modrm[2:0]] = 1'b1;
+
     // Stack operations sets stackop bit at write time
     m.stackop = ii.is_stack_op;
 
-    if ((id_opcode==8'hE7 || id_opcode==8'hE8 || id_opcode==8'hEE || id_opcode==8'hEF || id_opcode==8'h6E || id_opcode==8'h6F) ||  // OUT/OUTS
+    if ((id_opcode==8'hE6 || id_opcode==8'hE7 || id_opcode==8'hEE || id_opcode==8'hEF || id_opcode==8'h6E || id_opcode==8'h6F) ||  // OUT/OUTS
         id_opcode[7:4]=='h7 || (id_opcode==8'hE8 || id_opcode==8'hE9 || id_opcode==8'hEA || id_opcode==8'hEB)) begin       // JMP/CALL, TODO: also need RET and 0xFF
         m.io = 1'b1;
     end
+    // PC-98 port: an OUT also holds back the next decode-time MEMORY read.
+    // The OUT's bus write only leaves from EX, one clock after decode has
+    // already issued the following instruction's operand read, so without
+    // this the read went out on the bus FIRST -- and on the PC-98 an OUT
+    // routinely changes what a memory read returns: the GRCG mode/tiles
+    // (0x7C/0x7E) decide a TCR read's answer, 0xA6 picks the GVRAM page a
+    // read lands on, 0xA1/0xA3 the CG window's glyph. 3D Golf Simulation's
+    // POLYSYS loads the tiles and then reads TCR masks with LODSW: the first
+    // mask byte came back against the previous tile (sim: tb_mem_perf
+    // +cursor, tiles-then-TCR stream, ~half the reads wrong). E6 (OUT
+    // imm8,AL, the commonest form) was missing from the list above too
+    // (E8 stood in its place, which is CALL and is covered below anyway).
+    if (id_opcode==8'hE6 || id_opcode==8'hE7 || id_opcode==8'hEE || id_opcode==8'hEF ||
+        id_opcode==8'h6E || id_opcode==8'h6F)
+        m.mem = 1'b1;
 
     return m;
 endfunction

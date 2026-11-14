@@ -410,11 +410,13 @@
     JT       1              ;
     .end
 ; trigger INT0 on overflow
+    PUSH  FLAGS              ; BEFORE GETVEC: it clears IF/TF, and the handler's
+                             ; IRET must restore the interrupted IF (as INT does)
     GETVEC_OFF      0        ; vector 0, division trap
     GETVEC_SEG      0        ; then get segment
-    PUSH  FLAGS
     PUSH  CS
-    PUSH  IP_AFTER           ; for both 8086/80186, IP_AFTER is pushed. 80286 pushes IP_THIS
+    PUSH  IP_THIS            ; #DE is a FAULT on the 80286: the pushed IP is the DIV's own
+                             ; (prefixes included), not the next instruction's as on 8086/V30
     BR_FAR     0             ; cs:ip ← tmp_hi:tmp_lo
     .end
 
@@ -424,11 +426,12 @@
     JT       1              ;
     .end
 ; trigger INT0 on overflow
+    PUSH  FLAGS              ; BEFORE GETVEC: it clears IF/TF, and the handler's
+                             ; IRET must restore the interrupted IF (as INT does)
     GETVEC_OFF      0        ; vector 0, division trap
     GETVEC_SEG      0        ; then get segment
-    PUSH  FLAGS
     PUSH  CS
-    PUSH  IP_AFTER           
+    PUSH  IP_THIS            
     BR_FAR     0             ; cs:ip ← tmp_hi:tmp_lo
     .end
 
@@ -438,11 +441,12 @@
     JT       1              ;
     .end
 ; trigger INT0 on overflow
+    PUSH  FLAGS              ; BEFORE GETVEC: it clears IF/TF, and the handler's
+                             ; IRET must restore the interrupted IF (as INT does)
     GETVEC_OFF      0        ; vector 0, division trap
     GETVEC_SEG      0        ; then get segment
-    PUSH  FLAGS
     PUSH  CS
-    PUSH  IP_AFTER           
+    PUSH  IP_THIS            
     BR_FAR     0             ; cs:ip ← tmp_hi:tmp_lo
     .end
 
@@ -452,11 +456,12 @@
     JT       1              ;
     .end
 ; trigger INT0 on overflow
+    PUSH  FLAGS              ; BEFORE GETVEC: it clears IF/TF, and the handler's
+                             ; IRET must restore the interrupted IF (as INT does)
     GETVEC_OFF      0        ; vector 0, division trap
     GETVEC_SEG      0        ; then get segment
-    PUSH  FLAGS
     PUSH  CS
-    PUSH  IP_AFTER
+    PUSH  IP_THIS 
     BR_FAR     0             ; cs:ip ← tmp_hi:tmp_lo
     .end
 
@@ -485,11 +490,12 @@
     ADJ       4 
     JT       1              ; ADJ sets cond if divide-by-0
     .end
+    PUSH  FLAGS              ; BEFORE GETVEC: it clears IF/TF, and the handler's
+                             ; IRET must restore the interrupted IF (as INT does)
     GETVEC_OFF      0        ; vector 0, division trap
     GETVEC_SEG      0        ; then get segment
-    PUSH  FLAGS
     PUSH  CS
-    PUSH  IP_AFTER           
+    PUSH  IP_THIS            
     BR_FAR     0             ; cs:ip ← tmp_hi:tmp_lo
     .end
 
@@ -538,12 +544,16 @@
     LOAD   0                 ; lower bound  → tmp_lo
     LOAD   1                 ; upper bound  → tmp_hi
     IN_RANGE                 ; sets cond = (tmp_lo <= Gv <= tmp_hi)
-    JT     5                 ; in range → .end
+    JT     6                 ; in range → .end
 ; --- fault path ---------------------------------------------------
+; A fault on the 80286: FLAGS, CS and the BOUND's own IP (prefixes
+; included), so the handler's IRET re-executes it. FLAGS goes first,
+; before GETVEC clears IF/TF.
+    PUSH     FLAGS
     GETVEC_OFF 5             ; vector 5  (bound-range exceeded)
     GETVEC_SEG 5
     PUSH     CS
-    PUSH     IP_AFTER
+    PUSH     IP_THIS
     BR_FAR   0
     .end
 
@@ -672,3 +682,122 @@
     POP      BP
     .end
 
+
+
+;;; ─────────────────────── 80286 protected mode (PM286) ────────────────
+; The minimal subset np21w's i286c gives a PC-9801's ITF and BIOS: GDT
+; descriptors supply segment bases, nothing is checked. Decode picks the
+; _PM entries for the segment loads once MSW.PE is set (execute.sv DESC).
+
+@SGDT                       ; 0F 01 /0
+    STDT     0
+    STDT     1
+    STDT     2
+    .end
+
+@SIDT                       ; 0F 01 /1
+    STDT     4
+    STDT     5
+    STDT     6
+    .end
+
+@LGDT                       ; 0F 01 /2
+    LOAD     0              ; limit   -> tmp_lo
+    LOAD     1              ; base lo -> tmp_hi
+    LDDT     GDTR           ; base hi from EA+4
+    .end
+
+@LIDT                       ; 0F 01 /3
+    LOAD     0
+    LOAD     1
+    LDDT     IDTR
+    .end
+
+@SMSW                       ; 0F 01 /4
+    SMSW
+    .end
+
+@LMSW                       ; 0F 01 /6
+    LOAD     0              ; r/m -> tmp_lo
+    LMSW                    ; and branch to the next instruction
+    .end
+
+@MOV_SREG_PM                ; 8E with PE
+    LOAD     0              ; Ew -> tmp_lo
+    DESC     TMP_LO
+    WR_SEG   MODRM
+    .end
+
+@POP_SREG_PM                ; 07/17/1F with PE
+    POP      1              ; -> tmp_hi
+    DESC     TMP_HI
+    WR_SEG   OPCODE
+    .end
+
+@LES_PM
+    LOAD      0
+    LOAD      1
+    DESC      TMP_HI
+    WR_REG    REG
+    WR_SEG    0
+    .end
+
+@LDS_PM
+    LOAD      0
+    LOAD      1
+    DESC      TMP_HI
+    WR_REG    REG
+    WR_SEG    3
+    .end
+
+@JMP_FAR_PM                 ; EA with PE
+    DESC     DISP
+    BR_FAR   1
+    .end
+
+@CALL_FAR_PM                ; 9A with PE
+    PUSH     CS
+    PUSH     IP_AFTER
+    DESC     DISP
+    BR_FAR   1
+    .end
+
+@CALL_EP_PM                 ; FF.3 with PE
+    PUSH     CS
+    PUSH     IP_AFTER
+    LOAD     0
+    LOAD     1
+    DESC     TMP_HI
+    BR_FAR   0
+    .end
+
+@JMP_EP_PM                  ; FF.5 with PE
+    LOAD     0
+    LOAD     1
+    DESC     TMP_HI
+    BR_FAR   0
+    .end
+
+@RET_FAR_PM
+    POP      0
+    POP      1
+    DESC     TMP_HI
+    BR_FAR   0
+    .end
+
+@RET_FAR_IMM_PM
+    POP      0
+    POP      1
+    ADJSP    0
+    DESC     TMP_HI
+    BR_FAR   0
+    .end
+
+@IRET_PM
+    POP      0
+    POP      1
+    POP      2
+    WR_FLAGS                ; before DESC: its second read passes through tmp_flags
+    DESC     TMP_HI
+    BR_FAR   0
+    .end

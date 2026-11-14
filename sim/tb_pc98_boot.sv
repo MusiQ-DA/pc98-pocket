@@ -175,6 +175,7 @@ module tb_pc98_boot;
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (lock_n),
         .analog_mode       (1'b0),
+        .gv_word_ok        (1'b0),
         .word_access       (cpu_word_access),
         // pf_* live outside the REALMEM block: the bridge always has the
         // ports; only the real RAM.sv path drives the beat stream.
@@ -204,7 +205,16 @@ module tb_pc98_boot;
         .dbg               (zbridge_dbg)
     );
 
+    // +extoff: the OSD's Ext Memory = None (z86_cache ext_en low).
+    logic ext_en_r = 1'b1;
+    initial if ($test$plusargs("extoff")) ext_en_r = 1'b0;
+`ifdef PM286
+    // +define+PM286 (needs REALMEM: extended memory lives on port F): the
+    // 80286 protected-mode core, as core_top builds it.
+    z86 #(.PM286(1'b1), .EXT_MB(`ifdef EXT_MB `EXT_MB `else 8 `endif)) u_cpu (
+`else
     z86 u_cpu (
+`endif
         .clk       (zet_clk),
         .reset     (cpu_reset_w),
         .clk_free  (clk_chipset),
@@ -215,7 +225,7 @@ module tb_pc98_boot;
         .cache_en  (1'b0), .pace(1'b0), .pace_ce(1'b0), .pace_rd_wait(2'd0), .pace_wr_wait(2'd0), .pace_vwait(5'd0),
 `endif
         .bios_shadow  (itf_bank),
-        .bios_protect (1'b1), .dx (7'd0),
+        .bios_protect (1'b1), .ext_en (ext_en_r), .a_quiet (1'b1), .dx (7'd0),
         .f_req (cf_req), .f_we (cf_we), .f_addr (cf_addr), .f_len (cf_len),
         .f_wdata0 (cf_wd0), .f_wdata1 (cf_wd1), .f_ack (cf_ack),
         .f_rvalid (cf_rvalid), .f_rdata (cf_rdata), .f_done (cf_done),
@@ -585,7 +595,6 @@ module tb_pc98_boot;
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
-    logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
 
     // ---- the graphics path, as core_top wires it --------------------------
     //
@@ -629,6 +638,8 @@ module tb_pc98_boot;
     wire [7:0]  dbg_gvram;
     pc98_gvram_seq #(.EGC(1'b1)) u_gvram_seq (
         .rmwbuf_off(1'b0),
+        .dx_seq(2'b00),
+        .disp_page(1'b0),
         .clk(clk_chipset), .reset(reset),
         .cpu_gvram(~ram_address_select_n),
         .cpu_rd(~mem_rd_n), .cpu_wr(~mem_wr_n),
@@ -683,12 +694,11 @@ module tb_pc98_boot;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
-        .ems98_map(ems98_unused),
         // The ITF window is the SHADOW, the way RAM.sv does it on hardware:
         // F8000-FFFFF redirected to 1F8000 while the flag is set. itf_bank is
         // this bench's copy of core_top's, so the images are loaded once and
         // the switch is an address bit, not a copy.
-        .bios_protect_flag(2'b10), .bios_shadow_flag(itf_bank),
+        .ems_map(40'd0), .bios_protect_flag(2'b10), .bios_shadow_flag(itf_bank),
         .font_bank_flag(1'b0),
         .font_rd_req(fontb_req), .font_rd_addr(fontb_addr),
         .font_rd_len(fontb_len),
@@ -1103,8 +1113,19 @@ module tb_pc98_boot;
     wire sysport_33_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0033);
     wire sysport_35_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0035);
     wire sysport_42_sel = ~io_rd_n & (cpu_address[15:0] == 16'h0042);
+`ifdef PM286
+    // The 286 machine answers two more the PM path reads, as core_top does:
+    // IN 0F0h (cpuio_if0, 00) and the bus mouse's port C at 7FDDh, whose
+    // bit 2 is DIP 3-8 (np21w mouseif.c: 08, "memory check on").
+    wire sysport_f0_sel = ~io_rd_n & (cpu_address[15:0] == 16'h00F0);
+    wire sysport_7fdd_sel = ~io_rd_n & (cpu_address[15:0] == 16'h7FDD);
+`else
+    wire sysport_f0_sel = 1'b0;
+    wire sysport_7fdd_sel = 1'b0;
+`endif
     wire sysport_sel    = sysport_31_sel | sysport_33_sel
-                        | sysport_35_sel | sysport_42_sel;
+                        | sysport_35_sel | sysport_42_sel
+                        | sysport_f0_sel | sysport_7fdd_sel;
     // 0x33 is 8255 port B, an INPUT on a PC-98: bit 3 a DIP switch inverted,
     // bits 7-5 the RS-232C modem status, bit 0 the calendar clock, and the
     // rest zero. Bit 2 is one of the zeroes, and the UX ITF reads it at F889C
@@ -1314,8 +1335,27 @@ module tb_pc98_boot;
     // way around the symptom. The BIOS never looks at bit 1 -- it tests bits
     // 0, 3, 4, 5 and 6 of the same port -- so nothing else changes.
                             : sysport_33_sel ? 8'h00
-                            : sysport_42_sel ? 8'h02
+`ifdef PM286
+                            // the 286 class: bit 1 clear (core_top PM286),
+                            // the rest np21w's prt_i42 (Peripherals.sv): 94h
+                            : sysport_42_sel ? 8'h94
+                            : sysport_7fdd_sel ? 8'h08
+`else
+                            : sysport_42_sel ? 8'h96
+`endif
                             :                  8'h00;
+
+    // Every IN 42h the ROMs make, with the answer and the reading PC.
+    logic in42_d = 1'b1;
+    int   in42_n = 0;
+    always @(posedge clk_chipset) begin
+        in42_d <= ~sysport_42_sel;
+        if (sysport_42_sel && in42_d) begin
+            in42_n <= in42_n + 1;
+            if (in42_n < 40)
+                $display("IN 42h -> %02X  pc=%05X  (#%0d)", sysport_data, zet_pc, in42_n + 1);
+        end
+    end
 
     logic saw_high_write = 1'b0;
     logic din_default_q = 1'b0;
@@ -1731,6 +1771,7 @@ module tb_pc98_boot;
     // feeder inside it is fdd_poll()/push_sector() in miniature.
     wire       fdc_dreq_w, fdc_ack_p, fdc_tc_p;
     wire       fdc_dmae_w;   // the glue's 0x94 bit-4 (DMAE) DRQ gate
+    wire       fdc_force_ready_w;   // 0x94 bit 6, forced READY
     wire [7:0] fdc_dma_w, fdc_dma_r;
     wire [1:0] fdd_req_w;
     wire [15:0] fdd_mgmt_rdata;
@@ -2143,7 +2184,8 @@ module tb_pc98_boot;
         .group_live    (fdc_group_live),
         .irq_2hd       (fdc_irq3),
         .irq_2dd       (fdc_irq2),
-        .dma_enable    (fdc_dmae_w)
+        .dma_enable    (fdc_dmae_w),
+        .force_ready   (fdc_force_ready_w)
     );
 
     // Read side follows the glue combinationally and the held byte is the
@@ -2223,6 +2265,7 @@ module tb_pc98_boot;
         .wp             (2'b00),
         .clock_rate     (28'd42_954_545),
         .turbo          (1'b0),
+        .force_ready    (fdc_force_ready_w),
         .request        (fdd_req_w),
         .dbg_cmd_accepts(), .dbg_cmd_drops (), .dbg_reply_left (), .dbg_xfer ()
     );
@@ -2272,6 +2315,51 @@ module tb_pc98_boot;
     // core's fetch-stream PC pin (it moves on branches).
     wire [15:0] eu_cs = zet_pc[19:4];   // for the CS-change trace only
     wire [19:0] eu_pc = zet_pc;
+`ifdef PM286
+    // PM286: the ITF's protected-mode count has stored 0401 (F9437, the
+    // straight line after the RETF to F942C that ends its OUT 0F0h) --
+    // report the count and the screen, and stop (+pm_stop, implied by
+    // +pmshort).
+    logic pm_stop = 1'b0;
+    initial pm_stop = $test$plusargs("pm_stop") || $test$plusargs("pmshort");
+    // +pmtrace: every store and segment load the CPU makes while PE is set
+    // (the first 400), as z86 sees them -- linear address, data.
+    int pm_tr_n = 0;
+    logic pm_trace = 1'b0;
+    initial pm_trace = $test$plusargs("pmtrace");
+    always @(posedge zet_clk) if (pm_trace && u_cpu.pe && pm_tr_n < 400) begin
+        // (the memory test's own fills above 1 MB are left out)
+        if (u_cpu.wr_valid && u_cpu.wr_ready && u_cpu.wr_addr[23:20] == 4'h0) begin
+            pm_tr_n <= pm_tr_n + 1;
+            $display("  %8t  PM %s %06X <- %04X w%0d (pc %05X)", $time,
+                     u_cpu.wr_io ? "OUT" : "WR ", u_cpu.wr_addr, u_cpu.wr_data,
+                     u_cpu.wr_word, eu_pc);
+        end
+        if (u_cpu.wb_seg_valid) begin
+            pm_tr_n <= pm_tr_n + 1;
+            $display("  %8t  PM SEG%0d <- %04X base %06X pm %0d (pc %05X)", $time,
+                     u_cpu.wb_seg, u_cpu.wb_seg_data, u_cpu.wb_seg_base,
+                     u_cpu.wb_seg_pm, eu_pc);
+        end
+    end
+    always @(posedge clk_chipset)
+        if (pm_stop && mem_wr_n && ~mem_wr_d && cpu_address == 20'h00401
+            && eu_pc == 20'hF942C) begin
+        repeat (2000) @(posedge clk_chipset);
+        $display("PM286 stop after F9437, %0t: [0401]=%02X (%0d KB above 1 MB)  [8044]=%02X",
+                 $time, ram[20'h00401], ram[20'h00401] * 128, ram[20'h08044]);
+        for (int row = 0; row < 25; row++) begin
+            $write("SCREEN row %0d: |", row);
+            for (int col = 0; col < 80; col++) begin
+                logic [7:0] ch;
+                ch = tvram_code[(row*80 + col)*2];
+                $write("%s", (ch >= 8'h20 && ch < 8'h7f) ? ch : 8'h2e);
+            end
+            $display("|");
+        end
+        $finish;
+    end
+`endif
 
     // First-cycles bus trace: what the CPU actually asked for and got.
     int zet_tr_n = 0;
@@ -2530,6 +2618,40 @@ module tb_pc98_boot;
         // intent; a NOP in its place runs the intended stream. Only patch
         // if present, so a fixed ROM needs no bench edit.
         if (bios[1] == 8'h66) bios[1] = 8'h90;
+        // core_top's loader patch (PM286): the ITF's 80286 self-test at
+        // F8B9E is skipped -- jz F8B9E (74 03) becomes jz +0, falling into
+        // the jmp F8FA2 the V30 path takes.
+        if (itf[16'h0B99] == 8'h74 && itf[16'h0B9A] == 8'h03) itf[16'h0B9A] = 8'h00;
+`ifdef PM286
+        // +pmshort: the cold-boot branch at F806A jumps straight to the
+        // protected-mode memory count at F8FA2 (jmp near, E9 35 0F), so a
+        // run reaches it in a second of guest time instead of the whole
+        // POST. The count's OUT 0F0h comes back through F805B's resume
+        // path (port 35h bit 7 clear) to F942C, as on a full boot.
+        if ($test$plusargs("pmshort")) begin
+            itf[16'h006A] = 8'hE9; itf[16'h006B] = 8'h35; itf[16'h006C] = 8'h0F;
+            // the line the count prints on (A3FE0, the ITF's row counter,
+            // which the skipped POST would have advanced): row 2
+            ram[20'hA3FE0] = 8'h03;
+            $display("PM286 +pmshort: F806A -> jmp F8FA2");
+        end
+        // +pmfast: the count's fill/compare legs (F8FFD/F9018, two 64 KB
+        // segments per 128 KB step) touch ONE word per segment instead of
+        // 32 K -- `mov cx,8000h` -> `mov cx,1` at F9005/F9011/F9020/F9030 --
+        // so an 8 MB count finishes in minutes. The loop, its descriptor
+        // walk and the miscompare that ends it (the hole above EXT_MB) are
+        // the ITF's own; only the per-step coverage shrinks.
+        if ($test$plusargs("pmfast")) begin
+            for (int k = 0; k < 4; k++) begin
+                automatic int o = (k == 0) ? 16'h1005 : (k == 1) ? 16'h1011
+                                : (k == 2) ? 16'h1020 : 16'h1030;
+                if (itf[o] == 8'hB9 && itf[o + 2] == 8'h80) begin
+                    itf[o + 1] = 8'h01; itf[o + 2] = 8'h00;
+                end
+            end
+            $display("PM286 +pmfast: count legs cx=1");
+        end
+`endif
 
         $display("ITF  reset vector F8000+7FF0: %02X %02X %02X %02X %02X",
                  itf[16'h7FF0], itf[16'h7FF1], itf[16'h7FF2],
@@ -2668,6 +2790,9 @@ module tb_pc98_boot;
         end
 
         $display("--- done ---");
+        // The ITF's protected-mode memory count (F942C): 0401 = 128 KB units
+        // above 1 MB, from the last good base at 0:8044.
+        $display("PM count: [0401]=%02X  [8044]=%02X", ram[20'h00401], ram[20'h08044]);
         $display("E2E ack reads %0d mismatches (last bad %05X)", ack_rd_mismatches, ack_bad_addr);
         $display("ZET faults    %0d", zet_fault_count);
 `ifdef REALMEM

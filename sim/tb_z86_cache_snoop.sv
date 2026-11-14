@@ -86,7 +86,7 @@ module tb_z86_cache_snoop;
         .sn_v(sn_v), .sn_addr(sn_addr), .sn_len(sn_len),
         .dbg_watch_a(dbg_watch_a), .dbg_sn_kills(dbg_sn_kills),
         .busy(busy),
-        .ld_addr(ld_addr), .ld_req(ld_req), .ld_ack(ld_ack), .ld_data(ld_data),
+        .a20(1'b0), .ld_addr({4'h0, ld_addr}), .ld_req(ld_req), .ld_ack(ld_ack), .ld_data(ld_data),
         .rd_addr(rd_addr), .rd(rd), .rd_ready(rd_ready), .rd_data(rd_data),
         .rd_io(rd_io), .rd_word(rd_word),
         .wr_addr(wr_addr), .wr_valid(wr_valid), .wr_ready(wr_ready),

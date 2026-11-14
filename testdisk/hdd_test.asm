@@ -14,7 +14,9 @@
 ;   3. the same sector through an LBA read (DA 20, DL:CX)
 ;   4. a write/read-back of scratch LBA 2, then the original put back
 ; and checks DISK_EQUIPS [0:0482] bit 0 (the "SCSI unit 0 fitted" bit DOS
-; reads).
+; reads) and the NEC scsiinf record at [0:0460] -- {spt, heads, cylinders |
+; 0x9000} for a 512-byte disk -- which the DOS IPL's boot menu reads
+; directly: with it empty the menu maps its device list onto SASI and fails.
 ;
 ; Screen, text VRAM rows 0-2 (hex values):
 ;   SCSI HDD IPL OK
@@ -25,6 +27,7 @@
 ;   +00 "SCSI HDD IPL OK",0      +10 entry AX BX CX DX BP ES DS (words)
 ;   +1E [0584] [0482]            +20 sense: DX CX BX, AH, CF
 ;   +28 chs st/match  +2A lba st/match  +2C wr st/match  +2E 'P'/'F'  +2F A5
+;   +30 [0:0460..0463], the scsiinf record
 ; then it parks (JMP $) so the screen outlives the boot; RESET to leave.
 ;
 ; Must fit the two sectors the ROM loads (1024 bytes); the stamp the image
@@ -66,9 +69,13 @@ start:
         mov     ds, ax
         mov     al, [0x0584]
         mov     ah, [0x0482]
+        mov     bx, [0x0460]
+        mov     dx, [0x0462]
         push    cs
         pop     ds
         mov     [es:0x1E], ax
+        mov     [es:0x30], bx
+        mov     [es:0x32], dx
 
         mov     di, 0                   ; row 0
         mov     si, banner
@@ -164,6 +171,13 @@ start:
         cmp     word [es:0x2A], 0x0100
         jne     .v
         cmp     word [es:0x2C], 0x0100
+        jne     .v
+        mov     bx, [es:0x20]           ; scsiinf {spt, heads} = sense DL/DH
+        cmp     [es:0x30], bx
+        jne     .v
+        mov     bx, [es:0x22]           ; {cyl lo, hwsec | 512 class | cyl hi}
+        or      bh, 0x90
+        cmp     [es:0x32], bx
         jne     .v
         mov     al, 'P'
 .v:     mov     [es:0x2E], al

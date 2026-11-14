@@ -24,7 +24,7 @@ static uint8_t hb_tog;
 extern void timer_start(uint32_t cycles);
 extern void irq_mask(uint32_t mask);
 
-// Read a floppy-size register twice and return it only if the samples agree, else 0. The
+// Read a disk-size register twice and return it only if the samples agree, else 0. The
 // size crosses clock domains per-bit and can tear as it changes from 0 to the image size;
 // two matching reads reject a half-updated value, and the caller retries on the next poll.
 #define HDD_MOUNT_TRIES 16u
@@ -67,9 +67,6 @@ int main(void)
     // build has no voices to fill, so it compiles no loader at all.
 #ifdef ENABLE_OPNA
     uint32_t rhythm_done = rhythm_load();
-    // The drive-noise kit encodes into the rhythm store's upper half; same
-    // chunked loader, retried in the loop for late-bound fddsnd.bin.
-    uint32_t drive_done  = drive_sound_load();
 #endif
 
     scsi_init();
@@ -83,9 +80,12 @@ int main(void)
     irq_mask(0xFFFFFFFEu);
 
     // Images are deferload (optional, menu-picked at will), so mount lazily on a drive's
-    // first non-zero size, and for a floppy again on each rebind-toggle flip: fdd_mount's
-    // eject/insert re-arms floppy.v's media-change line, the only signal a same-size swap
-    // gives (hard disks reload the core, so they mount once).
+    // first non-zero size, and again on each rebind-toggle flip: fdd_mount's eject/insert
+    // re-arms floppy.v's media-change line, the only signal a same-size swap gives. All
+    // three sizes come from the dataslot-update event (core_top latches it per slot), so
+    // a drive stays empty until the user picks an image in the menu this session -- the
+    // datatable's entry for a disk slot is the Pocket's persisted last pick, refilled at
+    // every launch with no bind behind it, and must not mount anything.
     uint32_t mounted_a = 0;
     uint32_t mounted_b = 0;
     uint32_t mounted_hdd = 0;
@@ -104,9 +104,6 @@ int main(void)
 #ifdef ENABLE_OPNA
         if (!rhythm_done) {
             rhythm_done = rhythm_load();
-        }
-        if (!drive_done) {
-            drive_done = drive_sound_load();
         }
 #endif
 
@@ -129,13 +126,20 @@ int main(void)
                 HB_MARK(0x76);
             }
         }
+        if ((rebind ^ rebind_seen) & HDD0_REBIND_BIT) {
+            // A re-bind (a swap, or a pick of nothing): drop the old image now
+            // and mount the new one below once its size reads stable.
+            scsi_unmount();
+            mounted_hdd = 0;
+            hdd_tries = 0;
+        }
         rebind_seen = rebind;
 
         if (!mounted_hdd) {
             HB_MARK(0x7C);
             // The whole file: scsi_mount reads an NHD/HDI/VHD header off its
             // front and checks the header's arithmetic against the size.
-            uint32_t bytes = slot_bytes(HDD0_SLOT_ID);
+            uint32_t bytes = stable_size(HDD0_DISK_SIZE);
             if (bytes >= SECTOR_BYTES) {
                 HB_MARK(0x49);
                 // A failed header read is retried on later passes rather
@@ -154,11 +158,6 @@ int main(void)
         // and a diskless boot runs with the guest bus entirely its own.
         if (mounted_a || mounted_b) {
             fdd_poll();
-#ifdef ENABLE_OPNA
-            // Mechanism noise follows the drives' event taps; nothing to
-            // poll while nothing is mounted.
-            drive_sound_poll();
-#endif
         }
         gdc_poll();
         // scsi_poll stays unconditional: the option ROM posts TEST UNIT READY

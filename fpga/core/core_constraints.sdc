@@ -209,3 +209,43 @@ if {[llength $pit_counts] > 0 && [llength $pit_outs] > 0} {
 # single-cycle as before: a bridge register's change can still be sampled
 # by the very next delivered edge, and a core register's change reaches the
 # clk-domain bridge one clk later.
+
+# ---------------------------------------------------------------------------
+# clk_chipset -> clk_pico INPUTS (added 2026-11-12, CI #1121 hold -2.239)
+# ---------------------------------------------------------------------------
+# clk_pico is a fabric register (softcpu_subsystem's clk_div compare) put on
+# a clock network, so its edges reach the softcore ~6 ns after the clk_sys
+# edge they stand for (#1121 path report: clock skew 6.212 ns). A clk_sys
+# register read raw by the softcore therefore races every clk_pico capture
+# that coincides with its own update, and the fit has to pad >6 ns into
+# each such path. #1121 failed it on two families:
+#
+#   * pocket_keyboard kbd_code[3] -> picorv32 decoded_imm_j/reg_out
+#     (-2.239 Slow 0C) -- the 0x2000_0000 status word, NOT synchronised by
+#     protocol (kbd_stb and kbd_code change on the same edge and the
+#     firmware reads them in one load). Fixed in RTL: softcpu_subsystem
+#     re-registers the whole word as cont1_word on the clk_sys edge that
+#     takes clk_div 2 -> 3. clk_pico rises on the 0 -> 1 edge, so the word
+#     is stable from 2 clk_sys cycles after one clk_pico edge to 4 cycles
+#     before the next: setup gets 4 cycles, and the next change lands 2
+#     cycles after the capture edge (a hold relationship of -2 cycles). The
+#     explicit delays below are exactly that window (T = 23.281 ns), clock
+#     skew still counted.
+#
+#   * pc98_gdc u_gdc_s snap[*] / draw_op_r -> picorv32 (-0.265) -- the
+#     drawing server's snapshot, synchronised by protocol: the GDC writes
+#     it in the same clock it raises draw_pending, the firmware sees that
+#     request only through the draw_req_s two-flop synchroniser, reads the
+#     snapshot afterwards, and the GDC cannot rewrite it until the firmware
+#     retires the draw (snap/draw_op_r load only while !draw_pending &&
+#     !draw_busy_r -- pc98_gdc.sv). Whenever the softcore's read mux selects
+#     it the value is static, so the crossing is cut.
+set c1w [get_keepers -nocase {*softcpu_subsystem:u_softcpu|cont1_word[*}]
+if {[get_collection_size $c1w] > 0} {
+    set_max_delay -from $c1w -to [get_clocks {clk_pico}] 93.0
+    set_min_delay -from $c1w -to [get_clocks {clk_pico}] -46.0
+}
+set gdcsnap [get_keepers -nocase {*pc98_gdc:u_gdc_s|snap[* *pc98_gdc:u_gdc_s|draw_op_r[*}]
+if {[get_collection_size $gdcsnap] > 0} {
+    set_false_path -from $gdcsnap -to [get_clocks {clk_pico}]
+}

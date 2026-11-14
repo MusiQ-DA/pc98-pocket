@@ -300,8 +300,8 @@ module tb_ramimg_fdc;
         .wp             (2'b00),
         .clock_rate     (28'd2000),
         .turbo          (1'b0),
-        .request        (fdd_request),
-        .snd_step(), .snd_head(), .snd_xfer(), .snd_motor()
+        .force_ready    (1'b0),
+        .request        (fdd_request)
     );
 
     // ------------------------------------------------------------------

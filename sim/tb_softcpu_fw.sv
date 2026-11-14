@@ -77,12 +77,14 @@ module tb_softcpu_fw;
         .fdd_request   (2'b00),
         .fdd0_disk_size(32'd0),
         .fdd1_disk_size(32'd0),
+        .hdd0_disk_bytes(32'd0),
         .datatable_addr (),
         .datatable_data (),
         .datatable_wren (),
         .datatable_q    (32'd0),
         .fdd0_rebind (1'b0),
         .fdd1_rebind (1'b0),
+        .hdd0_rebind (1'b0),
         .mgmt_addr (), .mgmt_dout (), .mgmt_wr (), .mgmt_rd (),
         .mgmt_din  (16'd0),
         .bridge_wr      (1'b0),
@@ -137,7 +139,7 @@ module tb_softcpu_fw;
         .osd_palette  (), .osd_cpu_speed (), .osd_bios_wr (),
         .osd_boost    (), .osd_spk_vol   (), .osd_stereo (),
         .osd_gamepad  (),
-        .key_cfg_flat ()
+        .key_cfg_idx (4'd0), .key_cfg_q (), .key_cfg_diag ()
     );
 
     // Slave-channel (ch1) WDAT snapshot; snap byte i sits at

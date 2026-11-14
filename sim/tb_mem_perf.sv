@@ -102,9 +102,17 @@ module tb_mem_perf;
 
     wire        seq_pf_beat_w;      // the sequencer's own line-buffer burst
     wire        gvwb_req_w, gvwb_ack_w, gvwb_done_w, gvwb_we_w, gvwb_rvalid_w, gv_a_quiet_w;
-    wire [7:0]  gvwb_rdata_w;
+    // Stage 2 (GV_IL): the port-G data path is a full 16-bit SDRAM word
+    // ({hi lane, lo lane}); an 8-bit wire here silently zeroes the hi plane
+    // bytes of every write-back and leaves gvwb_wmask dangling at 0 (DQM
+    // masks the whole burst) — the cursor golden stream fails with stale
+    // SDRAM bytes everywhere the buffer wrote.
+    wire [1:0]  gvwb_wmask_w;
+    wire [3:0]  gvwb_len_w;
+    wire        gv_word_ok_w;
+    wire [15:0] gvwb_rdata_w;
     wire [23:0] gvwb_addr_w;
-    wire [7:0]  gvwb_wdata_w;
+    wire [15:0] gvwb_wdata_w;
     cpu_bus_bridge u_bridge (
         .clk               (clk),
         .cpu_ce_posedge    (ce_pos),
@@ -128,6 +136,7 @@ module tb_mem_perf;
         .cpu_data_bus      (cpu_data_bus),
         .lock_n            (),
         .analog_mode       (pc98_analog_w),
+        .gv_word_ok        (gv_word_ok_w),
         .word_access       (cpu_word_access),
         .pf_req_len        (cpu_pf_len_w),
         .pf_beat_v         (pf_beat_v_w & ~seq_pf_beat_w),
@@ -175,7 +184,11 @@ module tb_mem_perf;
     initial cache_r = $test$plusargs("cache");
     // +dx=<hex>: the hardware-bisect reverts (core_top slot 0x09 [27:20]
     // shifted down: [6:0] z86.sv dx, [7] the sequencer's RMW buffer off).
-    logic [7:0] dx_r = 8'd0;
+    // GV_IL stage 2: port G speaks the interleaved layout and Chipset no
+    // longer forces the buffer off, so the RMW line buffer / WBACK / RB_PF
+    // path is live again -- default the bench to buffer ON (bit 7 clear),
+    // matching shipped silicon behavior.
+    logic [7:0] dx_r = 8'h00;
     initial begin int v; if ($value$plusargs("dx=%h", v)) dx_r = 8'(v); end
     reg         nopace_r = 1'b0;
     initial nopace_r = $test$plusargs("nopace");
@@ -183,7 +196,17 @@ module tb_mem_perf;
     initial nvw_r = $test$plusargs("novwait");
     assign zwb_nmia = 1'b0;
 
+    // +define+TB_PM286: the shipping CPU -- 80286 protected mode and the
+    // 8 MB of extended memory (core_top PM286=1, EXT_MB=8) -- for the EMS
+    // test (+ems=, scripts/sim_ems.sh). +extoff is the OSD's Ext Memory =
+    // None: z86_cache's ext_en low and the EMS registers' maxmem 0.
+    logic ext_en_r = 1'b1;
+    initial if ($test$plusargs("extoff")) ext_en_r = 1'b0;
+`ifdef TB_PM286
+    z86 #(.WCOMB(1'b1), .PM286(1'b1), .EXT_MB(8)) u_cpu (
+`else
     z86 #(.WCOMB(1'b1)) u_cpu (
+`endif
         .clk       (zet_clk),
         .reset     (cpu_reset_w),
         .clk_free  (clk),
@@ -198,10 +221,12 @@ module tb_mem_perf;
                                      : (grcg_active & grcg_rmw & ~egc_active_w) ? (vid_vb ? 4'd1 : 4'(tb_gw))
                                      : (grcg_active & ~grcg_rmw & ~egc_active_w) ? (vid_vb ? 4'd1 : 4'(tb_gwt))
                                      : (grcg_active | egc_active_w) ? 4'd0
-                                     : vid_vb ? 4'd1 : 4'd6}),
+                                     : vid_vb ? 4'd1 : 4'(tb_vw)}),
         .dx           (dx_r[6:0]),
         .bios_shadow  (shadow_flag_r),
         .bios_protect (1'b0),
+        .ext_en       (ext_en_r),
+        .a_quiet      (gv_a_quiet_w),
         .f_req     (zf_req),
         .f_we      (zf_we),
         .f_addr    (zf_addr),
@@ -472,8 +497,21 @@ module tb_mem_perf;
     wire [7:0]  pf_beat_dat_w;
     wire [4:0]  cpu_pf_len_w;
 
-    pc98_gvram_seq #(.EGC(1'b1), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1)) u_seq (
+    // +seqdx=N: the sequencer's run-time A/B bits (core_top slot 0x09 [30:29])
+    logic [1:0] seq_dx = 2'b00;
+    // +seqdisp=1: the sequencer is told page 1 is on screen (the guest
+    // draws page 0, the display model still shows page 0) -- the
+    // hidden-page case of the displayed-page prefetch gate
+    logic seq_disp = 1'b0;
+    initial begin int v; if ($value$plusargs("seqdisp=%d", v)) seq_disp = (v != 0); end
+    initial begin int v; if ($value$plusargs("seqdx=%d", v)) seq_dx = 2'(v); end
+    // EGC is not fitted on the board (Chipset.sv wires .EGC(1'b0)); this
+    // bench matches production. EGC has its own benches (tb_pc98_egc,
+    // tb_pc98_egc_golden) that still build with EGC=1.
+    pc98_gvram_seq #(.EGC(1'b0), .RMWBUF(1'b1), .PWPOST(1'b1), .WBACK(1'b1), .RB_PF(1'b1)) u_seq (
         .rmwbuf_off(dx_r[7]),
+        .dx_seq(seq_dx),
+        .disp_page(seq_disp),
         .clk(clk), .reset(reset),
         .cpu_gvram(~ram_sel_n),
         .cpu_rd(seq_rd), .cpu_wr(seq_wr),
@@ -507,6 +545,8 @@ module tb_mem_perf;
         .gvwb_req(gvwb_req_w), .gvwb_addr(gvwb_addr_w), .gvwb_wdata(gvwb_wdata_w),
         .gvwb_ack(gvwb_ack_w), .gvwb_done(gvwb_done_w), .gvwb_wcnt(zf_wcnt),
         .gvwb_we(gvwb_we_w), .gvwb_rvalid(gvwb_rvalid_w), .gvwb_rdata(gvwb_rdata_w),
+        .gvwb_wmask(gvwb_wmask_w), .gvwb_len(gvwb_len_w),
+        .gv_word_ok(gv_word_ok_w),
         .gv_a_quiet(gv_a_quiet_w),
         .cpu_wr_taken(seq_wr_taken_w),
         .cpu_rd_own(seq_rd_own_w)
@@ -519,7 +559,6 @@ module tb_mem_perf;
     wire [12:0] s_a;  wire [1:0] s_ba;
     wire        s_cke, s_cs, s_ras, s_cas, s_we, s_dq_io, s_ldqm, s_udqm;
     wire [15:0] s_dq_out, s_dq_in;
-    logic [10:0] ems98_unused [0:3] = '{11'h0, 11'h0, 11'h0, 11'h0};
 
     RAM u_ram (
         .dma_hold(1'b0),
@@ -549,7 +588,7 @@ module tb_mem_perf;
         .sdram_ras(s_ras), .sdram_cas(s_cas), .sdram_we(s_we), .sdram_ba(s_ba),
         .sdram_dq_in(s_dq_in), .sdram_dq_out(s_dq_out), .sdram_dq_io(s_dq_io),
         .sdram_ldqm(s_ldqm), .sdram_udqm(s_udqm),
-        .ems98_map(ems98_unused),
+        .ems_map(ems_map_w),
         .bios_protect_flag(2'b00), .bios_shadow_flag(shadow_flag_r),
         .font_bank_flag(1'b0),
         .font_rd_req(1'b0), .font_rd_addr(24'd0), .font_rd_len(4'd0),
@@ -572,6 +611,7 @@ module tb_mem_perf;
         .gvwb_req(gvwb_req_w), .gvwb_addr(gvwb_addr_w), .gvwb_wdata(gvwb_wdata_w),
         .gvwb_ack(gvwb_ack_w), .gvwb_done(gvwb_done_w),
         .gvwb_we(gvwb_we_w), .gvwb_rvalid(gvwb_rvalid_w), .gvwb_rdata(gvwb_rdata_w),
+        .gvwb_wmask(gvwb_wmask_w), .gvwb_len(gvwb_len_w),
         .gv_a_quiet(gv_a_quiet_w),
         .ram_wr_snoop_v(ram_sn_v), .ram_wr_snoop_addr(ram_sn_addr),
         .ram_wr_snoop_len(ram_sn_len)
@@ -643,8 +683,24 @@ module tb_mem_perf;
         .address_enable_n    (aen)
     );
 
+    // ---- EMS bank registers (08E1h-08E9h), as Chipset.sv wires them -------
+    wire [39:0] ems_map_w;
+    wire [7:0]  ems_status_w;
+`ifdef TB_PM286
+    wire [3:0]  ems_maxmem_w = ext_en_r ? 4'd8 : 4'd0;
+`else
+    wire [3:0]  ems_maxmem_w = 4'd0;
+`endif
+    pc98_ems98 u_ems (
+        .clock(clk), .reset(reset),
+        .address(cpu_address[15:0]), .internal_data_bus(cpu_data_bus),
+        .io_write_n(io_wr_n), .address_enable_n(aen),
+        .maxmem(ems_maxmem_w), .map(ems_map_w), .status(ems_status_w)
+    );
+
     // ---- the data bus back to the CPU --------------------------------------
     wire [7:0] din    = ~mem_rd_n ? (~ram_sel_n ? seq_cpu_rdata : 8'hFF)
+                      : (~io_rd_n && cpu_address[15:0] == 16'h08E9) ? ems_status_w
                       :             8'hFF;
     wire [7:0] din_hi = ~mem_rd_n ? (~ram_sel_n ? seq_cpu_rdata_hi : 8'hFF)
                       :             8'hFF;
@@ -666,6 +722,8 @@ module tb_mem_perf;
     //   08  byte-writes loop   @ A000 (TVRAM is not RAM -- open bus, skipped)
     //
     logic [7:0] prog [0:8191];
+    string cur_file = "";
+    string ems_file = "";
     int prog_len = 0;
     task emit(input logic [7:0] b);
         prog[prog_len] = b; prog_len++;
@@ -811,19 +869,9 @@ module tb_mem_perf;
         outport(16'h007C, 8'h00);           // GRCG off
         marker(8'h92);
 
-        // ---- phase 6: EGC write rep stosb at A800:4000 ----
-        marker(8'h06);
-        outport(16'h007C, 8'h80);           // GRCG mode keeps the engine on
-        outport(16'h006A, 8'h05);           // mode2 bit2 <- 1
-        outport(16'h006A, 8'h07);           // mode2 bit3 <- 1 (EGC on)
-        outport(16'h006A, 8'h01);           // mode2 bit0 <- 1 (analog)
-        outport(16'h04A8, 8'hFF);           // egc mask lo
-        outport(16'h04A9, 8'hFF);           // egc mask hi
-        emit(8'hBF); emitw(16'h4000);       // MOV DI,4000
-        emit(8'hB9); emitw(16'h0200);       // MOV CX,0200 (512B -- 8 legs each)
-        emit(8'hB0); emit(8'h3C);           // AL
-        emit(8'hF3); emit(8'hAA);           // REP STOSB
-        marker(8'h86);
+        // ---- phase 6: removed -- the EGC is not fitted on the board and
+        // this bench now builds the seq with EGC=0 to match production. The
+        // EGC engines keep their own benches (tb_pc98_egc_golden). ----
 
         // ---- phase 7: plain rep stosb on the window (charger off) ----
         marker(8'h07);
@@ -1552,6 +1600,44 @@ module tb_mem_perf;
         // +itfonly starts the machine at the phase-0F loop instead, so the
         // ITF timing probe can be run in seconds rather than through the
         // whole 14-minute phase set.
+        // +cursor=<hex>: a captured guest VRAM op stream compiled to code
+        // (tools/ops2prog.py) at 1000:0000; reset jumps straight to it.
+        if ($value$plusargs("ems=%s", ems_file)) begin
+            int fd, c, n;
+            fd = $fopen(ems_file, "r");
+            n = 0;
+            while (!$feof(fd)) begin
+                if ($fscanf(fd, "%h", c) == 1) begin
+                    ram_seed(32'(20'h10000 + n), {8'h00, 8'(c)});
+                    n++;
+                end
+            end
+            $fclose(fd);
+            $display("ems program %s: %0d bytes at 1000:0000", ems_file, n);
+            ram_seed(32'h0FFFF0, 16'h00EA);
+            ram_seed(32'h0FFFF1, 16'h0000);
+            ram_seed(32'h0FFFF2, 16'h0000);
+            ram_seed(32'h0FFFF3, 16'h0000);
+            ram_seed(32'h0FFFF4, 16'h0010);
+        end else
+        if ($value$plusargs("cursor=%s", cur_file)) begin
+            int fd, c, n;
+            fd = $fopen(cur_file, "r");
+            n = 0;
+            while (!$feof(fd)) begin
+                if ($fscanf(fd, "%h", c) == 1) begin
+                    ram_seed(32'(20'h10000 + n), {8'h00, 8'(c)});
+                    n++;
+                end
+            end
+            $fclose(fd);
+            $display("cursor program %s: %0d bytes at 1000:0000", cur_file, n);
+            ram_seed(32'h0FFFF0, 16'h00EA);
+            ram_seed(32'h0FFFF1, 16'h0000);
+            ram_seed(32'h0FFFF2, 16'h0000);
+            ram_seed(32'h0FFFF3, 16'h0000);
+            ram_seed(32'h0FFFF4, 16'h0010);
+        end else
         begin
             automatic int  jip = $test$plusargs("itfonly") ? lf_enter
                                : $test$plusargs("aluonly") ? alu_enter
@@ -1593,7 +1679,9 @@ module tb_mem_perf;
     int ro_bad = 0; int ro_pend = 0;
     logic [15:0] ro_w; logic [19:0] ro_a; logic ro_ube;
     logic [7:0] ro_want0, ro_want1, ro_got0, ro_got1;
-    always_ff @(posedge clk) if (sdram_up && !reset) begin
+    // (Off under +ems: a remapped EMS window legitimately changes what a
+    // C0000 address reads.)
+    always_ff @(posedge clk) if (sdram_up && !reset && ems_file == "") begin
         if (ro_pend) begin
             ro_pend <= 1'b0;
             ro_want0 = written.exists(int'(ro_a))    ? shadow[int'(ro_a)]    : 8'h00;
@@ -1617,6 +1705,31 @@ module tb_mem_perf;
             ro_ube  <= u_bridge.srv_ube;
             ro_pend <= 1'b1;
         end
+    end
+
+    // +fintrace: dump every GVRAM-window read ack late in the stream (the
+    // FIN phase) -- id2195 returned a phantom 0x10 for page-1 B[0x3104]
+    // while SDRAM holds zeros in both pages, so the serve path fabricated
+    // it. The seq fields show whether the walk engine (cpu_ready) served
+    // the read or the bridge did (hit/fill-release/forward).
+    // NOTE: a raw `$time >` threshold never fires in this bench (unit
+    // mismatch, bit the FX window too) -- match the address exactly
+    // instead.  The FIN sweep reads B,R,G,E windows back-to-back per
+    // offset (0xAB046B, 0xB046B, 0xB846B, 0xE846B); print the R and G
+    // window bands so the ack interleaving around the failing G read is
+    // fully visible (which address carried the stale 0x10 beat).
+    // Dump EVERY GVRAM-window read ack (no band/time filter -- raw $time
+    // compares never fire in this bench). Post-filter by timestamp in the
+    // shell (perl 11-digit); the counter cap keeps the log bounded.
+    bit fin_tr = $test$plusargs("fintrace");
+    int finrd_cnt = 0;
+    always_ff @(posedge clk) if (fin_tr && sdram_up && !reset
+            && zwb_ack && zwb_cyc && !zwb_we && !zwb_tga
+            && u_bridge.srv_addr[19:16] >= 4'hA && finrd_cnt < 30000) begin
+        finrd_cnt <= finrd_cnt + 1;
+        $display("FINRD %0t a=%05x got=%04x ube=%b seq_rdy=%b seq_st=%0d exp=%b fin=%b",
+                 $time, u_bridge.srv_addr, u_bridge.rd_word, u_bridge.srv_ube,
+                 u_seq.cpu_ready, u_seq.st, u_seq.expand, u_seq.fin_read);
     end
 
 
@@ -1690,6 +1803,9 @@ module tb_mem_perf;
     wire [7:0]   svc_rdata_w;
     int          svc_timer   = 0;
     longint      svc_ops     = 0;
+    longint      svc_lat_sum = 0;   // clk from a request's rise to its done
+    int          svc_lat_max = 0;
+    int          svc_lat_cur = 0;
 
     initial void'($value$plusargs("svc=%d", svc_period));
 
@@ -1708,7 +1824,10 @@ module tb_mem_perf;
                 end
             end else if (svc_done_w) begin
                 svc_req_r <= 1'b0;
+                svc_lat_sum <= svc_lat_sum + svc_lat_cur + 1;
+                if (svc_lat_cur + 1 > svc_lat_max) svc_lat_max <= svc_lat_cur + 1;
             end
+            svc_lat_cur <= (svc_req_r && !svc_done_w) ? svc_lat_cur + 1 : 0;
         end
     end
 
@@ -2083,7 +2202,7 @@ module tb_mem_perf;
         phase_name[8'h03] = "REP MOVSW 1024W main RAM";
         phase_name[8'h04] = "REP STOSB 2048B GRCG TDW";
         phase_name[8'h05] = "REP STOSB 2048B GRCG RMW";
-        phase_name[8'h06] = "REP STOSB  512B EGC";
+        phase_name[8'h06] = "removed (EGC not fitted)";
         phase_name[8'h07] = "REP STOSB 2048B window plain";
         phase_name[8'h08] = "CALL/RET x500 stack";
         phase_name[8'h09] = "SMC trampoline x128";
@@ -2156,7 +2275,7 @@ module tb_mem_perf;
 `ifdef MOVPROF
     longint mv_st[0:15]; longint mv_cyc=0, mv_fill=0, mv_wrw=0, mv_ldw=0, mv_rdw=0, mv_pbusy=0, mv_cbv=0, mv_inst=0, mv_hitm=0;
     initial foreach (mv_st[i]) mv_st[i]=0;
-    always @(posedge clk) if (cur_phase == 8'h2E) begin
+    always @(posedge clk) if (cur_phase == 8'h33) begin
         mv_cyc++; mv_st[u_cpu.u_cache.st]++;
         if (u_cpu.u_cache.fill_req && u_cpu.u_cache.fs == 0) mv_fill++;
         if (u_cpu.u_cache.wr_pend) mv_wrw++;
@@ -2165,7 +2284,7 @@ module tb_mem_perf;
         if (u_cpu.u_cache.p_busy) mv_pbusy++;
         if (u_cpu.u_cache.cb_v != 0) mv_cbv++;
         if (u_cpu.u_cache.cb_inst) mv_inst++;
-        if (mv_cyc > 3000 && mv_cyc < 3130)
+        if (mv_cyc > 20000 && mv_cyc < 20060)
             $display("MVT %0d eud=%0d eup=%b idv=%b st=%0d rd=%b rdp=%b rdy=%b wrv=%b wrr=%b wa=%05x pdebt=%0d pce=%b ldp=%b cbv=%b fs=%0d",
                 mv_cyc, u_cpu.u_fetch_decode1.eu_debt, u_cpu.u_fetch_decode1.eu_pend, u_cpu.u_fetch_decode1.id_valid, u_cpu.u_cache.st, u_cpu.u_cache.rd, u_cpu.u_cache.rd_pend, u_cpu.u_cache.rd_ready,
                 u_cpu.u_cache.wr_valid, u_cpu.u_cache.wr_ready, u_cpu.u_cache.wr_addr, u_cpu.u_cache.pdebt, u_cpu.u_cache.pace_ce,
@@ -2176,10 +2295,12 @@ module tb_mem_perf;
     final $display("MOVPROF cyc=%0d st0-11: %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d fills=%0d wr_pend=%0d rd_pend=%0d ld_pend=%0d p_busy=%0d cb_v=%0d inst=%0d",
         mv_cyc, mv_st[0],mv_st[1],mv_st[2],mv_st[3],mv_st[4],mv_st[5],mv_st[6],mv_st[7],mv_st[8],mv_st[9],mv_st[10],mv_st[11], mv_fill, mv_wrw, mv_rdw, mv_ldw, mv_pbusy, mv_cbv, mv_inst);
 `endif
-    int tb_gwt = 4;  // TDW: Chipset.sv charges 4 (see vram_wait_now)
+    int tb_gwt = 7;  // TDW: Chipset.sv charges 7 (see vram_wait_now)
     initial void'($value$plusargs("gwt=%d", tb_gwt));
-    int tb_gw = 3;   // Chipset.sv charges 3 (see vram_wait_now)
+    int tb_gw = 5;   // Chipset.sv charges 5 (see vram_wait_now)
     initial void'($value$plusargs("gw=%d", tb_gw));
+    int tb_vw = 6;   // Chipset.sv charges 6 (see vram_wait_now)
+    initial void'($value$plusargs("vw=%d", tb_vw));
 `ifdef PWTRACE
     int pwt = 0; logic pwt_on = 0; logic [3:0] pwt_prev = 0;
     always @(posedge clk) begin
@@ -2276,7 +2397,7 @@ module tb_mem_perf;
             if (zwb_we) begin
                 if (zwb_sel[0]) begin shadow[a]   = zwb_dat_o[7:0];  written[a]   = 1'b1; end
                 if (zwb_sel[1]) begin shadow[a+1] = zwb_dat_o[15:8]; written[a+1] = 1'b1; end
-            end else if (a < 32'hA0000) begin
+            end else if (a < 32'hA0000 && ems_file == "") begin
                 if (zwb_sel[0] && written.exists(a) && shadow[a] !== zwb_dat_i[7:0]) begin
                     if (c_stale < 16)
                         $display("  STALE t=%0t a=%05x got=%02x want=%02x ph=%0d pc=%05x w0=%05x/%0d-%0d w1=%05x/%0d-%0d live=%b",
@@ -2450,18 +2571,25 @@ module tb_mem_perf;
             // phase's data region is untouched: the phase-verify peeks have
             // nothing to say in that mode. The probe prints its own verdict.
             if ($test$plusargs("cyconly")) begin
-                // phase 38: every plane byte the RMW REP STOSW touched
+                // phase 38: every plane byte the RMW REP STOSW touched.
+                // GV_IL (docs/GVRAM_PLANE_INTERLEAVE.md): plane p of guest
+                // offset o lives at SDRAM word 0x600000 + o*2 + p[1], byte
+                // lane p[0] -- the window address A8000+p*0x8000 the old
+                // peek used is plain main RAM now and always reads 00.
                 automatic logic [7:0] pf [0:2] = '{8'h0F, 8'h33, 8'h55};
                 automatic logic [7:0] tl [0:2] = '{8'hAA, 8'hBB, 8'hCC};
                 for (int p = 0; p < 3; p++)
                     for (int i = 0; i < 512; i++) begin
-                        automatic int a = 20'hA8000 + p * 20'h8000 + 20'h7000 + i;
+                        automatic int a = 32'h600000 + ((32'h7000 + i) << 1) + p[1];
                         automatic logic [7:0] d = i[0] ? 8'h5A : 8'hC3;
                         automatic logic [7:0] want = (pf[p] & ~d) | (d & tl[p]);
+                        automatic logic [7:0] got;
                         w = sdr.u_part.peek(a);
-                        if (w[7:0] !== want) begin
+                        got = p[0] ? w[15:8] : w[7:0];
+                        if (got !== want) begin
                             if (bad < 12) $display("  BAD rmw plane %0d %05x=%02x want %02x",
-                                                   p, a, w[7:0], want);
+                                                   p, 20'hA8000 + p * 20'h8000 + 20'h7000 + i,
+                                                   got, want);
                             bad++;
                         end
                     end
@@ -2471,6 +2599,52 @@ module tb_mem_perf;
             end
             if ($test$plusargs("itfonly") || $test$plusargs("aluonly")) begin
                 $display("(itfonly: phase verification skipped)");
+                return;
+            end
+            if (ems_file != "") begin
+                // The log stream, then the SDRAM word the t=2 store hit:
+                // linear 200000h = word 0x900000.
+                w = sdr.u_part.peek(32'h900000);
+                $write("EMS:");
+                foreach (ems_log[i]) $write(" %02x", ems_log[i]);
+                $display("");
+                $display("EMS PEEK 900000=%02x", w[7:0]);
+                return;
+            end
+            if (cur_file != "") begin
+                $display("CURSOR CHECK: %0d mismatches (longest dirty line %0d clk)", cur_bad, wbd_max);
+                if (cur_bad) begin
+                    // GV_IL stage-2 debug: dump the failing line's SDRAM words
+                    // (0x618480 = page-1 tag 0x1AC24, 32 words = 16-byte line).
+                    $display("PEEK 618480..61849F:");
+                    for (int a = 0; a < 32; a++)
+                        $display("  %05x=%04x", 32'h618480 + a, sdr.u_part.peek(32'h618480 + a));
+                    // FIN id2195: guest 0xAB0C4 = page-1 B offset 0x30C4
+                    // -> word = 0x610000 + 0x30C4*2 = 0x616188, lane0 (lower).
+                    // Dump the whole line neighborhood both pages.
+                    $display("PEEK 616180..61619F:");
+                    for (int a = 0; a < 32; a++)
+                        $display("  %05x=%04x", 32'h616180 + a, sdr.u_part.peek(32'h616180 + a));
+                    $display("PEEK 606180..60619F:");
+                    for (int a = 0; a < 32; a++)
+                        $display("  %05x=%04x", 32'h606180 + a, sdr.u_part.peek(32'h606180 + a));
+                    // GV_IL stage-2 FIN data bug: the failing B-window bytes
+                    // 0x3D0..0x3DF (want 1F FF .. FE). Dump every page
+                    // candidate: word = 0x600000+pg*0x10000 + byteoff*2.
+                    for (int pg = 0; pg < 4; pg++)
+                        for (int a = 0; a < 16; a++)
+                            $display("  FK pg=%0d %05x=%04x", pg,
+                                     32'h600000 + pg*32'h10000 + 32'h7A0 + a,
+                                     sdr.u_part.peek(32'h600000 + pg*32'h10000 + 32'h7A0 + a));
+                    $display("=== FAIL tb_mem_perf ===");
+                end else begin
+                    for (int pg = 0; pg < 4; pg++)
+                        for (int a = 0; a < 16; a++)
+                            $display("  FK pg=%0d %05x=%04x", pg,
+                                     32'h600000 + pg*32'h10000 + 32'h7A0 + a,
+                                     sdr.u_part.peek(32'h600000 + pg*32'h10000 + 32'h7A0 + a));
+                    $display("=== PASS tb_mem_perf ===");
+                end
                 return;
             end
             for (int a = 20'h2000; a < 20'h2800; a++) begin
@@ -2547,6 +2721,9 @@ module tb_mem_perf;
             $display("VERIFY: bad=%0d diverged=%0d stray=%0d grants=%0d midcmd=%0d dma_bytes=%0d pfbad=%0d pforeign=%0d porphan=%0d rdfor=%0d svc_ops=%0d stale=%0d",
                      bad, diverged, stray, grants, grants_midcmd, dma_seen,
                      c_pbad, c_pforeign, c_porphan, c_rd_foreign, svc_ops, c_stale);
+            if (svc_ops != 0)
+                $display("SVC: %0d raw reads, latency avg %0d.%02d max %0d clk (req rise to done)",
+                         svc_ops, svc_lat_sum / svc_ops, (svc_lat_sum * 100 / svc_ops) % 100, svc_lat_max);
             // queue occupancy at verify: if a bad write is still parked it is
             // wedged, not dropped.
             $display("  RAM queue @verify: st=%0d pend=%b%b%b cap=%b inflight(wr=%b rd=%b)",
@@ -2573,6 +2750,285 @@ module tb_mem_perf;
                 $display("=== PASS tb_mem_perf ===");
         end
     endtask
+
+    // +cursor mismatch reports: OUT 88FCh x4 = id lo, id hi, got lo, got hi
+    int    cur_bad = 0;
+    logic  [7:0] cur_b [0:3];
+    int    cur_k = 0;
+    logic  io_cur_d = 1'b1;
+    // ack ring: last 32 bus acks, dumped on the first cursor mismatch
+    logic [63:0] ring_t   [0:31];
+    logic [19:0] ring_a   [0:31];
+    logic [15:0] ring_w   [0:31];
+    logic        ring_we  [0:31];
+    logic        ring_tga [0:31];
+    int          ring_rp  = 0;
+    always_ff @(posedge clk) begin
+        if (zwb_ack && zwb_cyc) begin
+            ring_t[ring_rp]   <= $time;
+            ring_a[ring_rp]   <= u_bridge.srv_addr;
+            ring_w[ring_rp]   <= u_bridge.rd_word;
+            ring_we[ring_rp]  <= zwb_we;
+            ring_tga[ring_rp] <= zwb_tga;
+            ring_rp           <= (ring_rp + 1) % 32;
+        end
+    end
+    // stb ring: last 64 read strobes the z86 core itself put on the bus
+    // (before the bridge's serve engines can swallow them) -- if the failing
+    // check read never appears here the core never issued it.
+    logic [63:0] sring_t [0:63];
+    logic [19:0] sring_a [0:63];
+    logic [1:0]  sring_s [0:63];
+    int          sring_rp = 0;
+    always_ff @(posedge clk) begin
+        if (zwb_stb && zwb_cyc && !zwb_we) begin
+            sring_t[sring_rp] <= $time;
+            sring_a[sring_rp] <= zwb_adr;
+            sring_s[sring_rp] <= zwb_sel;
+            sring_rp          <= (sring_rp + 1) % 64;
+        end
+    end
+    // z86 cycle ring: every cycle where the core's read handshake moves
+    // (rd pulse, rd_pend, rd_ready) -- captures the issue -> completion ->
+    // next-issue sequence around the FIN stalls so a mis-consumed word can
+    // be traced cycle by cycle (neon dx=00 id4440: 0x3CB's mov completed
+    // with 0x3D2's data).
+    logic [63:0] zring_t [0:255];
+    logic        zring_rd [0:255];
+    logic [23:0] zring_a  [0:255];
+    logic        zring_im [0:255];
+    logic        zring_pp [0:255];
+    logic        zring_ry [0:255];
+    logic [15:0] zring_d  [0:255];
+    logic        zring_ev [0:255];
+    logic        zring_er [0:255];
+    logic [3:0] zring_st [0:255];
+    logic [1:0] zring_pk [0:255];
+    logic       zring_pb [0:255];
+    logic       zring_ce [0:255];
+    logic       zring_bs [0:255];
+    logic       zring_ba [0:255];
+    logic       zring_wv [0:255];
+    logic       zring_wr [0:255];
+    logic       zring_bt [0:255];
+    logic       zring_db [0:255];
+    int          zring_rp = 0;
+    logic zr_rd_d, zr_pp_d, zr_ry_d, zr_wv_d, zr_wr_d, zr_bt_d;
+    always_ff @(posedge clk) begin
+        zr_rd_d <= u_cpu.u_decode2.rd;
+        zr_pp_d <= u_cpu.u_cache.rd_pend;
+        zr_ry_d <= u_cpu.u_cache.rd_ready;
+        zr_wv_d <= u_cpu.u_execute.wr_valid;
+        zr_wr_d <= u_cpu.u_execute.wr_ready;
+        zr_bt_d <= u_cpu.u_execute.br_taken;
+        if ((u_cpu.u_decode2.rd != zr_rd_d)
+            || (u_cpu.u_cache.rd_pend != zr_pp_d)
+            || (u_cpu.u_cache.rd_ready != zr_ry_d)
+            || (u_cpu.u_execute.wr_valid != zr_wv_d)
+            || (u_cpu.u_execute.wr_ready != zr_wr_d)
+            || (u_cpu.u_execute.br_taken != zr_bt_d)) begin
+            zring_t[zring_rp]  <= $time;
+            zring_rd[zring_rp] <= u_cpu.u_decode2.rd;
+            zring_a[zring_rp]  <= u_cpu.u_decode2.rd_addr;
+            zring_im[zring_rp] <= u_cpu.u_decode2.id_mem_rd;
+            zring_pp[zring_rp] <= u_cpu.u_cache.rd_pend;
+            zring_ry[zring_rp] <= u_cpu.u_cache.rd_ready;
+            zring_d[zring_rp]  <= u_cpu.u_cache.rd_data;
+            zring_ev[zring_rp] <= u_cpu.ex_valid;
+            zring_er[zring_rp] <= u_cpu.ex_ready;
+            zring_st[zring_rp] <= u_cpu.u_cache.st;
+            zring_pk[zring_rp] <= u_cpu.u_cache.pk;
+            zring_pb[zring_rp] <= u_cpu.u_cache.p_busy;
+            zring_ce[zring_rp] <= u_cpu.u_cache.ce;
+            zring_bs[zring_rp] <= u_cpu.u_cache.wb_stb_o;
+            zring_ba[zring_rp] <= u_cpu.u_cache.wb_ack_i;
+            zring_wv[zring_rp] <= u_cpu.u_execute.wr_valid;
+            zring_wr[zring_rp] <= u_cpu.u_execute.wr_ready;
+            zring_bt[zring_rp] <= u_cpu.u_execute.br_taken;
+            zring_db[zring_rp] <= u_cpu.u_execute.div_busy;
+            zring_rp           <= (zring_rp + 1) % 256;
+        end
+    end
+    always_ff @(posedge clk) begin
+        io_cur_d <= io_wr_n;
+        if (~io_wr_n & io_cur_d & (cpu_address == 16'h88FC)) begin
+            cur_b[cur_k] = cpu_data_bus;
+            if (cur_k == 3) begin
+                if (cur_bad < 64)
+                    $display("  CURSOR MISMATCH id=%0d got=%02x%02x t=%0t",
+                             {cur_b[1], cur_b[0]}, cur_b[3], cur_b[2], $time);
+                if (cur_bad == 0) begin
+                    $display("  ACK RING at first mismatch (oldest first):");
+                    for (int i = 0; i < 32; i++) begin
+                        automatic int idx = (ring_rp + i) % 32;
+                        $display("   RING[%0d] t=%0d a=%05x w=%04x we=%b tga=%b",
+                                 i, ring_t[idx], ring_a[idx], ring_w[idx],
+                                 ring_we[idx], ring_tga[idx]);
+                    end
+                    $display("  STB RING (z86 read strobes, oldest first):");
+                    for (int i = 0; i < 64; i++) begin
+                        automatic int sidx = (sring_rp + i) % 64;
+                        $display("   SRING[%0d] t=%0d a=%05x sel=%b",
+                                 i, sring_t[sidx], sring_a[sidx], sring_s[sidx]);
+                    end
+                    $display("  Z86 RING (rd handshake, oldest first):");
+                    for (int i = 0; i < 256; i++) begin
+                        automatic int zidx = (zring_rp + i) % 256;
+                        $display("   ZRING[%0d] t=%0d rd=%b a=%06x im=%b pp=%b ry=%b d=%04x ev=%b er=%b st=%0d pk=%0d pb=%b ce=%b bs=%b ba=%b wv=%b wr=%b bt=%b db=%b",
+                                 i, zring_t[zidx], zring_rd[zidx], zring_a[zidx],
+                                 zring_im[zidx], zring_pp[zidx], zring_ry[zidx],
+                                 zring_d[zidx], zring_ev[zidx], zring_er[zidx],
+                                 zring_st[zidx], zring_pk[zidx], zring_pb[zidx],
+                                 zring_ce[zidx], zring_bs[zidx], zring_ba[zidx],
+                                 zring_wv[zidx], zring_wr[zidx], zring_bt[zidx],
+                                 zring_db[zidx]);
+                    end
+                end
+                cur_bad++;
+                cur_k = 0;
+            end else cur_k++;
+        end
+    end
+
+    // +lodetr=<hex line tag {page,addr[19:4]}>: trace the GRCG RMW line
+    // buffer's traffic for one line (lodemnc cursor investigation).
+    int    lt_tag = -1;
+    bit    fltrace_on;
+    initial begin
+        int v;
+        if ($value$plusargs("lodetr=%h", v)) lt_tag = v;
+        fltrace_on = $test$plusargs("fltrace");
+    end
+    logic  lt_req_d = 1'b0;
+    logic [23:0] lt_ga;
+    always_ff @(posedge clk) if (lt_tag >= 0) begin
+        lt_req_d <= u_seq.gvwb_req;
+        if (u_seq.gvwb_req & ~lt_req_d) begin
+            lt_ga = u_seq.gvwb_addr;
+            // GV_IL: port G traffic lives at {7'h30, page, line[10:0], 5'h0}(+h*16)
+            if (lt_ga[23:17] == 7'h30 && lt_ga[16] == lt_tag[16] && lt_ga[15:5] == lt_tag[10:0])
+                $display("LT %0t GVWB we=%b addr=%06x fl_busy=%b fl_s=%b fl_h=%b pf_busy=%b pf_s=%b pf_h=%b pf_tag=%05x ws=%b tag0=%05x tag1=%05x v0=%h v1=%h d0=%h d1=%h mru=%b",
+                    $time, u_seq.gvwb_we, lt_ga, u_seq.fl_busy, u_seq.fl_s, u_seq.fl_h,
+                    u_seq.pf_busy, u_seq.pf_s, u_seq.pf_h, u_seq.pf_tag, u_seq.ws,
+                    u_seq.rb_tag[0], u_seq.rb_tag[1], u_seq.rb_v[0], u_seq.rb_v[1],
+                    u_seq.rb_d[0], u_seq.rb_d[1], u_seq.mru);
+        end
+        if (u_seq.gvwb_req & ~lt_req_d & u_seq.gvwb_we
+            && (u_seq.gvwb_addr[23:17] == 7'h30) && (u_seq.gvwb_addr[16] == lt_tag[16])
+            && (u_seq.gvwb_addr[15:5] == lt_tag[10:0]))
+            $display("LT    stg %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                u_seq.stg[0], u_seq.stg[1], u_seq.stg[2], u_seq.stg[3], u_seq.stg[4], u_seq.stg[5], u_seq.stg[6], u_seq.stg[7],
+                u_seq.stg[8], u_seq.stg[9], u_seq.stg[10], u_seq.stg[11], u_seq.stg[12], u_seq.stg[13], u_seq.stg[14], u_seq.stg[15]);
+        if (u_seq.gvwb_rvalid & ~u_seq.gvwb_we
+            && (lt_ga[23:17] == 7'h30) && (lt_ga[16] == lt_tag[16]) && (lt_ga[15:5] == lt_tag[10:0]))
+            $display("LT    beat %04x pf_bw=%b", u_seq.gvwb_rdata, u_seq.pf_bw);
+        if (u_seq.st == 4'd2 && u_seq.leg_done && u_seq.mem_page1 == lt_tag[16]
+            && u_seq.mem_addr[14:4] == lt_tag[10:0])
+            $display("LT %0t RDW mem_addr=%05x pg1=%b rdata=%02x/%02x rb_leg=%b gf_h=%b is_read=%b gp=%0d fl_busy=%b pf_busy=%b grant=%0d",
+                $time, u_seq.mem_addr, u_seq.mem_page1, u_seq.mem_rdata, u_seq.mem_rdata_hi, u_seq.rb_leg, u_seq.gf_h,
+                u_seq.is_read, u_seq.gp, u_seq.fl_busy, u_seq.pf_busy, mp_grant);
+        if (u_seq.cpu_rd && u_seq.cpu_ready && u_seq.window && {u_seq.access_page, u_seq.cpu_addr[19:4]} == 17'(lt_tag))
+            $display("LT %0t RDY a=%05x rdata=%02x st=%0d fin=%b exp=%b", $time, u_seq.cpu_addr, u_seq.cpu_rdata, u_seq.st, u_seq.fin_read, u_seq.expand);
+        if (u_ram.read_request & ~u_ram.read_flag & ~u_ram.write_flag && u_ram.access_address[14:4] == lt_tag[10:0])
+            $display("LT %0t RAMRD acc=%07x pg1flag=%b addr=%05x seq_mem_addr=%05x seq_pg1=%b st=%0d", $time,
+                u_ram.access_address, seq_mem_page1, u_ram.address, u_seq.mem_addr, u_seq.mem_page1, u_ram.state);
+        if (u_ram.write_request & ~u_ram.read_flag & ~u_ram.write_flag && u_ram.access_address[14:4] == lt_tag[10:0])
+            $display("LT %0t RAMWR acc=%07x d=%02x/%02x num=%0d st=%0d", $time,
+                u_ram.access_address, u_ram.access_data_in[7:0], u_ram.access_data_in_hi[7:0], u_ram.access_num, u_ram.state);
+        if (u_seq.rb_upd_w && u_seq.rb_line == 17'(lt_tag))
+            $display("LT %0t UPD gp=%0d off=%h wr=%02x ws=%b g_page=%b", $time, u_seq.gp, u_seq.rb_off,
+                     u_seq.wr_byte, u_seq.ws, u_seq.g_page);
+        if ((u_seq.cpu_rd | u_seq.cpu_wr) && u_seq.window && {u_seq.access_page, u_seq.cpu_addr[19:4]} == 17'(lt_tag) && u_seq.st == 0)
+            $display("LT %0t CPU %s a=%05x wd=%02x st=%0d pw_ack=%b fl_hold=%b", $time, u_seq.cpu_rd ? "RD" : "WR",
+                     u_seq.cpu_addr, u_seq.cpu_wdata, u_seq.st, u_seq.pw_ack, u_seq.fl_hold);
+    end
+
+    // +fltrace: cycle-by-cycle view of the fl copy engine and the banks --
+    // what rb_ra/rbq the copy sees, and every bank write (mw merge / fb fill)
+    // around it. Used to pin the "stg captured foreign data" poison on the
+    // FIN line (word 0x616188 got B=0x10 from nowhere).
+    always @(negedge clk) if (fltrace_on) begin
+        if (u_seq.fl_busy)
+            $display("FLT %0t ph=%0d i=%0d c=%0d cpown=%b cpq=%b cpw=%02x rb_ra=%02x rbq=%04x/%04x st=%0d gp=%0d rb_leg=%b gf_s=%b h=%b s=%b",
+                $time, u_seq.fl_ph, u_seq.fl_i, u_seq.fl_c, u_seq.cp_own, u_seq.cp_q, u_seq.cp_w,
+                u_seq.rb_ra, u_seq.rbq0, u_seq.rbq1, u_seq.st, u_seq.gp, u_seq.rb_leg, u_seq.gf_sent, u_seq.fl_h, u_seq.fl_s);
+        if (u_seq.b0_we) $display("FLT   b0_wa=%02x wd=%04x", u_seq.b0_wa, u_seq.b0_wd);
+        if (u_seq.b1_we) $display("FLT   b1_wa=%02x wd=%04x", u_seq.b1_wa, u_seq.b1_wd);
+        // x2-merge window dump (poison entry 0x14): every input of the merge
+        // path, cycle by cycle, to see who carried the 0x10 byte in. The
+        // $time window compare never fired (unit quirk); gate on walk/merge
+        // activity instead so the x2 merge cycles print regardless of fl_busy.
+        if (u_seq.rb_upd_w || u_seq.fb_v || u_seq.pf_bw || u_seq.st == 3'd2 || u_seq.st == 3'd3 || u_seq.st == 3'd7)
+            $display("FX %0t st=%0d gp=%0d off=%h upd=%b pfbw=%b pf=%b ph=%0d bi=%0d pfs=%b fbv=%b rbbi=%0d mw0=%b mw1=%b mwd0=%04x mwd1=%04x b0=%b/%02x/%04x b1=%b/%02x/%04x ra=%02x q0=%04x q1=%04x wr=%02x w14=%04x w15=%04x wdl=%02x tl=%02x pw=%b pwwd=%02x",
+                $time, u_seq.st, u_seq.gp, u_seq.rb_off, u_seq.rb_upd_w, u_seq.pf_bw, u_seq.pf_busy, u_seq.pf_ph,
+                u_seq.pf_bi, u_seq.pf_s, u_seq.fb_v, u_seq.rb_bi, u_seq.mw0, u_seq.mw1, u_seq.mw_d0, u_seq.mw_d1,
+                u_seq.b0_we, u_seq.b0_wa, u_seq.b0_wd, u_seq.b1_we, u_seq.b1_wa, u_seq.b1_wd,
+                u_seq.rb_ra, u_seq.rbq0, u_seq.rbq1, u_seq.wr_byte, u_seq.rbW0[5'h14], u_seq.rbW0[5'h15],
+                u_seq.cur_wdata, u_seq.cur_tile[u_seq.gp], u_seq.pw_hold, u_seq.pw_wd);
+    end
+
+    // +alltr: every walk arm (S_IDLE -> walk) and every fill entry, so a
+    // lost GRCG write shows up as an ARM with no FILL/UPD behind it.
+    bit alltr = $test$plusargs("alltr");
+    logic [3:0] wt_st_d;
+    always_ff @(posedge clk) begin
+        wt_st_d <= u_seq.st;
+        if (alltr && u_seq.expand) begin
+            if (wt_st_d == 4'd0 && u_seq.st != 4'd0)
+                $display("WT %0t ARM a=%05x %s d=%02x w=%b rmw=%b gact=%b egh=%b pwh=%b tag0=%05x v0=%h tag1=%05x v1=%h mru=%b d0=%h d1=%h flb=%b pfb=%b",
+                    $time, u_seq.cpu_addr, u_seq.is_read ? "RD" : "WR", u_seq.cur_wdata, u_seq.cpu_word,
+                    u_seq.g_rmw, u_seq.g_active, u_seq.egc_here, u_seq.pw_hold,
+                    u_seq.rb_tag[0], u_seq.rb_v[0], u_seq.rb_tag[1], u_seq.rb_v[1],
+                    u_seq.mru, u_seq.rb_d[0], u_seq.rb_d[1], u_seq.fl_busy, u_seq.pf_busy);
+            if (wt_st_d != 4'd2 && u_seq.st == 4'd2)
+                $display("WT %0t S_RDW leg=%b tag=%05x ws=%b rd=%b quiet=%b flb=%b pfb=%b",
+                    $time, u_seq.rb_leg, u_seq.rb_line, u_seq.ws, u_seq.mem_rd,
+                    u_seq.gv_a_quiet, u_seq.fl_busy, u_seq.pf_busy);
+        end
+    end
+
+    // How long a buffered line stays dirty (the display reads SDRAM, so
+    // this is how far behind the screen can run): per slot, clocks from
+    // its first dirty plane to its last write-back.
+    longint wbd_t0 [0:7];
+    longint wbd_max = 0;
+    logic [7:0] wbd_on = 8'h00;
+    longint c_cyc = 0;
+    always_ff @(posedge clk) begin
+        c_cyc <= c_cyc + 1;
+        // per slot x plane: from the plane going dirty to its write-back
+        // clearing it -- the longest the display can see that plane stale
+        for (int k = 0; k < 8; k++) begin
+            if (u_seq.rb_d[k / 4][k % 4] && !wbd_on[k]) begin
+                wbd_on[k] <= 1'b1; wbd_t0[k] <= c_cyc;
+            end else if (!u_seq.rb_d[k / 4][k % 4] && wbd_on[k]) begin
+                wbd_on[k] <= 1'b0;
+                if (c_cyc - wbd_t0[k] > wbd_max) wbd_max <= c_cyc - wbd_t0[k];
+            end
+        end
+    end
+
+    // +ems: the program's result log, OUT 88FCh,AL (first strobe edge)
+    logic [7:0] ems_log [$];
+    logic       io_log_d = 1'b1;
+    always_ff @(posedge clk) begin
+        io_log_d <= io_wr_n;
+        if (~io_wr_n & io_log_d & (cpu_address == 20'h088FC))
+            ems_log.push_back(cpu_data_bus);
+    end
+
+    // +emstrace: every bus strobe, port-F request and snoop while +ems runs
+    bit ems_tr = $test$plusargs("emstrace");
+    logic mrd_d = 1'b1, mwr_d = 1'b1, iow_d2 = 1'b1, ior_d2 = 1'b1;
+    always_ff @(posedge clk) if (ems_tr && !reset) begin
+        mrd_d <= mem_rd_n; mwr_d <= mem_wr_n; iow_d2 <= io_wr_n; ior_d2 <= io_rd_n;
+        if (mem_rd_n & ~mrd_d) $display("T%0t MRD %05x -> %02x sel_n=%b map=%010x", $time, cpu_address, din, ram_sel_n, ems_map_w);
+        if (mem_wr_n & ~mwr_d) $display("T%0t MWR %05x <- %02x sel_n=%b", $time, cpu_address, cpu_data_bus, ram_sel_n);
+        if (~io_wr_n & iow_d2) $display("T%0t IOW %04x <- %02x", $time, cpu_address[15:0], cpu_data_bus);
+        if (io_rd_n & ~ior_d2) $display("T%0t IOR %04x -> %02x", $time, cpu_address[15:0], din);
+        if (zf_req && zf_ack) $display("T%0t PORTF %s %06x len %0d", $time, zf_we ? "W" : "R", zf_addr, zf_len);
+        if (ram_sn_v) $display("T%0t SNOOP %06x len %0d", $time, ram_sn_addr, ram_sn_len);
+    end
 
     // marker decode on the IO-write strobe
     logic io_marker_d = 1'b1;
@@ -3088,7 +3544,6 @@ module tb_mem_perf;
         $fflush;
         $finish;
     end
-
 endmodule
 
 `default_nettype wire

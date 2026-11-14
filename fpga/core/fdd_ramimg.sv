@@ -20,9 +20,9 @@
 // 1024-byte sectors = 1232 sectors = 1,261,568 words. The base is 0x620000,
 // the first word nothing else can reach: the guest's megabyte plus the ITF
 // shadow end at 0x1FFFFF, the font bank owns 0x400000-0x4FFFFF, GVRAM page
-// one ends at 0x61FFFF (RAM.sv's 0x600000 + 0x1FFFF), and the EMS pool
-// (pc98_ems98.sv) starts at 0x800000 -- "nothing else in the map reaches past
-// 0x61FFFF". 0x620000-0x753FFF holds the whole disk.
+// one ends at 0x61FFFF (RAM.sv's 0x600000 + 0x1FFFF), and the 286's extended
+// memory (z86_cache: linear 100000h-8FFFFFh) starts at 0x800000.
+// 0x620000-0x753FFF holds the whole disk, clear of both.
 //
 // THE JTAG SIDE -- two halves.
 //

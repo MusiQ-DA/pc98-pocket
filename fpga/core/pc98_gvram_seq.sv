@@ -66,20 +66,22 @@ module pc98_gvram_seq #(
     // access is GRCG or plain. The engine stays in the tree (tb_pc98_egc and
     // this module's own bench still build with EGC=1).
     parameter bit EGC = 1,
-    // The RMW plane-line buffer (below). Needs a memory that answers a
-    // prefetch_len read with pf_beat_* beats -- RAM.sv does; the benches'
-    // behavioural memories do not, and leave it off.
+    // The RMW plane-line buffer (below). Needs port G -- RAM.sv's gvwb_*
+    // burst port -- for its line fills and write-backs; the benches whose
+    // behavioural memories have no port G leave it off.
     parameter bit RMWBUF = 0,
     // Posted GRCG RMW writes (see "POSTED GRCG RMW WRITE"); needs RMWBUF's
     // core_top shape, and rmwbuf_off (slot 0x09 [27]) turns it off too.
     parameter bit PWPOST = 0,
-    // Write-back RMW line buffer (see "WRITE-BACK"): RMW results stay in
-    // the buffer and each dirty plane line leaves as ONE 16-word burst on
-    // controller port G. Needs RMWBUF.
+    // Obsolete since GV_IL: a buffered line's only drain is the port-G
+    // write-back, so the buffer always writes back (wb_on = RMWBUF). The
+    // parameter stays for source compatibility.
     parameter bit WBACK  = 0,
     // Clocks a dirty line may sit with the FSM idle before it is written
     // out anyway (the display reads SDRAM directly).
-    parameter int WB_AGE = 64
+    parameter int WB_AGE = 64,
+    // Next-line prefetch into the clean slot (WBACK): see "PREFETCH".
+    parameter bit RB_PF  = 0
 ) (
     input  wire        clk,
     input  wire        reset,
@@ -156,8 +158,9 @@ module pc98_gvram_seq #(
     // RAM.sv's write_taken: the write strobe on the memory pins is durably
     // captured (or can never become a command). See cpu_wr_taken below.
     input  wire        mem_wr_taken,
-    // RAM.sv's burst-read beat stream (prefetch_len reads): the RMW line
-    // buffer below fills from it.
+    // RAM.sv's burst-read beat stream (prefetch_len reads). Historically the
+    // RMW line buffer filled from it; under GV_IL the buffer fills through
+    // port G instead and this stream is unused (kept for the port contract).
     input  wire        pf_beat_v,
     input  wire [7:0]  pf_beat_dat,
     // The beat stream is this module's own line-buffer burst: whoever else
@@ -169,22 +172,41 @@ module pc98_gvram_seq #(
     output reg         gvwb_req,
     output reg         gvwb_we,          // 0: the line fill
     input  wire        gvwb_rvalid,
-    input  wire [7:0]  gvwb_rdata,
+    input  wire [15:0] gvwb_rdata,
     input  wire        gv_a_quiet,       // RAM.sv: nothing of port A pending
     output reg  [23:0] gvwb_addr,
-    output wire [7:0]  gvwb_wdata,
+    // Port G's burst length, words - 1: 15 for the line fills, prefetches
+    // and write-backs, 1 / 3 for a TDW tile burst (S_TG).
+    output wire [3:0]  gvwb_len,
+    output wire [15:0] gvwb_wdata,
+    // Write lanes for the port-G write-back, driven combinationally per
+    // beat on gvwb_wcnt like gvwb_wdata: a beat writes the lanes of the
+    // plane pair its word carries ({B,R} even words, {G,E} odd) whose
+    // planes are dirty.
+    output wire [1:0]  gvwb_wmask,
     input  wire        gvwb_ack,
     input  wire        gvwb_done,
     input  wire [4:0]  gvwb_wcnt,
     // Hardware bisect (core_top JTAG slot 0x09 [27]; 0 in release): the
     // RMW line buffer off at run time, its lines dropped while off.
     input  wire        rmwbuf_off,
+    // Run-time A/B (core_top slot 0x09 [30:29], 0 in release):
+    //   [0] no line prefetch (RB_PF)
+    //   [1] write every dirty line back at the first chance (the buffer
+    //       still batches reads, but the display never runs behind)
+    input  wire  [1:0] dx_seq,
+    // Port 0xA4's displayed page. No line prefetch into the page on
+    // screen: the prefetch holds write-backs off, and the display reads
+    // SDRAM, so a line drawn there stays visibly stale (lodemnc's map
+    // scroll; hardware: gone with the prefetch off, slot 0x09 [29]).
+    // Drawing on the hidden page keeps it.
+    input  wire        disp_page,
 
     // ---- the access page (port 0xA6 bit 0) -------------------------------
     // Rebanks every plane window between the two 640x400 pages, np21w's
     // gdcs.access. When set, this module addresses planes through
     // pc98_gvram_plane1 and asserts mem_page1 so RAM.sv banks the byte at
-    // 0x600000, past the guest's map and EMS alike.
+    // 0x600000, past the guest's map and the 286's extended memory alike.
     input  wire        access_page,
     output reg         mem_page1,
 
@@ -229,6 +251,15 @@ module pc98_gvram_seq #(
     // a raw request, or the EGC stealing it -- and every-else-set-but-here
     // means egc_on fired on egc_active (slot 0x32's accel view).
     output wire [7:0]  dbg,
+    // A GVRAM word write arriving now would be taken whole: plain page-0
+    // VRAM passes through to RAM.sv (its interleaved three-beat word), and
+    // a GRCG TDW goes out as one port-G tile burst (S_TG) that lays both
+    // offsets at once. RMW, the EGC, page-1 plain walks and the buffer-off
+    // A/B (whose TDW walk would take the long-dead word batch) all still
+    // want byte cycles. cpu_bus_bridge drains a queued GVRAM word as one
+    // pair while this is high; it is live register state, and every input
+    // that moves it is an OUT the bridge serialises behind its queue.
+    output wire        gv_word_ok,
     // JTAG probe (PC98_JTAG): the wedge tap's sequencer view --
     //   [15] expand -- the access on the pins is being walked (or a svc op
     //         owns the FSM), so a guest pass-through strobe is parked
@@ -261,7 +292,9 @@ module pc98_gvram_seq #(
                      S_WRW  = 4'd4,   // wait for it
                      S_DONE = 4'd5,
                      S_EVT2 = 4'd6,   // a word read's second lane event
-                     S_RBH  = 4'd7;   // RMW line-buffer hit: its M10K word lands
+                     S_RBH  = 4'd7,   // RMW line-buffer hit: its M10K word lands
+                     S_TG   = 4'd8,   // TDW tile burst: wait for port G
+                     S_TGW  = 4'd9;   // ... and for its completion
 
     reg [3:0] st;
     reg [1:0] gp;             // which plane
@@ -422,7 +455,8 @@ module pc98_gvram_seq #(
     // Same rule as mem_word: the prefetch length belongs to the guest's own
     // pass-through strobe. A sequencer leg (svc or expanded) must never run
     // as a multi-word burst -- its reads expect one byte at a time.
-    // (mem_pf_len is assigned below the RMW line buffer, which also uses it)
+    // (GV_IL: the RMW line buffer no longer borrows the prefetch path; it
+    // fills through port G instead, so mem_pf_len is a pure pass-through.)
 
     // The EGC engine's registers and datapath live one module down; the load
     // strobes and the plane walk are this FSM's business.
@@ -652,9 +686,9 @@ module pc98_gvram_seq #(
     // (~29 chipset clocks, half of it waiting out the display port) --
     // three of them serially per word, ~2.8x np21w's MEMWAIT_GRCG price.
     // Runs of RMW writes walk along a line (REP STOSW, a sprite row), so a
-    // read miss now fetches the plane's whole 16-byte line as ONE burst
-    // (RAM.sv's prefetch_len read, beats on pf_beat_*), and the next words'
-    // reads of that plane come out of the buffer with no leg at all.
+    // read miss now fetches the line's whole 32-word GV_IL footprint as TWO
+    // port-G bursts (see the GV_IL GEOMETRY note below), and the next words'
+    // reads of every plane come out of the buffer with no leg at all.
     //
     // Coherence is kept by keeping the buffer's life short: it is only
     // ever filled and consulted by guest GRCG RMW writes, every one of
@@ -666,25 +700,37 @@ module pc98_gvram_seq #(
     // a DMA or loader write into graphics VRAM between two RMW writes to
     // the same line (no PC-98 software path does that).
     // ------------------------------------------------------------------
-    // The bytes live in two M10K banks, even and odd (a GRCG word batch's
-    // pair is one word of each), 32 x 8 apiece: {plane, word-in-line}. In
-    // flip-flops the 512 bits and their any-plane/any-offset ports cost the
-    // fit ~1.5k ALMs over the device. The read is registered, so a hit
-    // spends one clock in S_RBH; a burst's operand bytes are taken off the
+    // GV_IL GEOMETRY. A 16-byte guest line at offset L (16-aligned; the
+    // tag is the guest line address {page, addr[19:4]}) occupies the 32
+    // SDRAM words 2L .. 2L+31: word 2L+2o+par carries guest offset L+o's
+    // four plane bytes as two byte lanes -- plane pair par (0: {B,R},
+    // 1: {G,E}), lane p[0]. The line therefore fills as TWO 16-word
+    // bursts (halves: guest offsets L..L+7, then L+8..L+15), each
+    // covering all four planes of eight guest bytes -- and a burst never
+    // crosses a 512-word SDRAM column (2L is 32-word aligned).
+    //
+    // The banks hold the line's own SDRAM words, two M10K banks of
+    // 32 x 16: bank = guest offset bit 0, address {slot, off[3:1], pair}.
+    // In flip-flops the 1024 bits and their any-pair/any-offset ports cost
+    // the fit ~2k ALMs over the device. The read is registered, so a hit
+    // spends one clock in S_RBH; a fill's operand bytes are taken off the
     // beat stream as they pass instead.
-    // TWO lines (slots) of four planes: {slot, plane, word-in-line}. The
-    // walk uses the slot holding its line (ws); a new line takes the slot
-    // used less recently (~mru). With WBACK that lets the older line's
-    // write-back run on port G while the walk carries on in the newer one.
-    (* ramstyle = "M10K" *) reg [7:0] rbE [0:63];
-    (* ramstyle = "M10K" *) reg [7:0] rbO [0:63];
-    reg  [7:0]  rbq_e, rbq_o;
+    // TWO lines (slots): {slot, off[3:1], pair}. The walk uses the slot
+    // holding its line (ws); a new line takes the slot used less recently
+    // (~mru). That lets the older line's write-back run on port G while
+    // the walk carries on in the newer one. Validity is whole-line
+    // (rb_v = 4'hF): a fill or prefetch installs all four planes at once.
+    (* ramstyle = "M10K, no_rw_check" *) reg [15:0] rbW0 [0:31];
+    (* ramstyle = "M10K, no_rw_check" *) reg [15:0] rbW1 [0:31];
+    reg  [15:0] rbq0, rbq1;
     reg  [3:0]  rb_v   [0:1];
     reg  [16:0] rb_tag [0:1];
-    reg  [3:0]  rb_d   [0:1];            // dirty planes (WBACK)
+    reg  [3:0]  rb_d   [0:1];            // dirty planes (write-back lanes)
     reg         mru;                     // the slot the last buffered write used
-    reg         rb_leg;                  // the read leg in flight is a burst
-    reg  [3:0]  rb_bi;
+    reg         rb_leg;                  // the line fill's bursts are in flight
+    reg         fws;                     // PC-98 port: slot the in-flight fill targets (ws is live)
+    reg  [3:0]  rb_bi;                   // beat within the current burst
+    reg         gf_h;                    // which half of the 32-word line
     wire        rmw_guest = RMWBUF & ~rmwbuf_off & grcg_here & g_rmw & ~egc_here & ~in_svc
                           & ~is_read;
     wire [16:0] rb_line   = {g_page, op_addr[19:4]};
@@ -698,37 +744,76 @@ module pc98_gvram_seq #(
     wire [3:0]  ws_v      = rb_v[ws];
     wire        rb_hit_c  = rmw_guest & rb_fits & ws_m & ws_v[gp];
     wire        rb_hit_n  = rmw_guest & rb_fits & ws_m & ws_v[gp_nx];
-    wire [19:0] rb_base_c = plane_addr({op_addr[19:4], 4'h0}, gp);
-    wire [19:0] rb_base_n = plane_addr({op_addr[19:4], 4'h0}, gp_nx);
-    // Bank ports. Writes: the burst's beats in line order, or an RMW write's
-    // result bytes (lo to its own bank, a batch's hi to the odd one) -- the
-    // two never share a clock (S_RDW vs S_WR). Reads: the plane the hit is
-    // about to use (gp_nx on the chain edge in S_WRW, gp otherwise), or the
-    // write-back's copy while the FSM leaves the port alone.
-    // With WBACK the fill is a port-G read too (rb_g): no RAM.sv round
-    // trip, and it waits for gv_a_quiet so it cannot pass a parked write.
-    reg         rb_g, gf_sent;
-    reg  [23:0] gf_addr;
-    wire        rb_bv     = rb_g ? gvwb_rvalid : pf_beat_v;
-    wire [7:0]  rb_bd     = rb_g ? gvwb_rdata  : pf_beat_dat;
-    function automatic logic [23:0] g_sdram(input logic pg, input logic [19:0] pa);
-        g_sdram = pg ? (24'h600000 + {7'h00, pa[16:0]}) : {4'h0, pa};
+    // GV_IL: the half-h burst base of a 16-byte guest line. tag[10:0] is
+    // the guest offset's bits [14:4]; the line's first word is 2*line and
+    // half h's burst sits at +16h.
+    function automatic logic [23:0] g_il(input logic pg,
+                                         input logic [16:0] line,
+                                         input logic h);
+        g_il = {7'h30, pg, line[10:0], 5'h0} + (h ? 24'd16 : 24'd0);
     endfunction
-    wire        rb_beat_w = rb_leg & rb_bv;
+    // The fill is always a pair of port-G reads (no RAM.sv round trip);
+    // it waits for gv_a_quiet so it cannot pass a parked write.
+    reg         gf_sent;
+    reg  [23:0] gf_addr;
+    // Only beats of the fill THIS leg sent are its own. While the leg waits
+    // to send (gf_sent low) port G can still be streaming the prefetch's
+    // burst (RB_PF, pf_bw): counting those beats advanced rb_bi, and the
+    // real fill then landed shifted in the bank -- the write-back carried
+    // the shifted line to SDRAM (lodemnc's mouse cursor: plane B of the
+    // page it restored came back with its bytes moved up the line).
+    wire        fb_v      = rb_leg & gvwb_rvalid & gf_sent;
     wire        rb_upd_w  = (st == S_WR) & cur_live & rmw_guest & rb_fits
                           & ws_m & ws_v[gp];
-    wire [5:0]  rb_wa     = rb_beat_w ? {ws, gp, rb_bi[3:1]} : {ws, gp, rb_off[3:1]};
-    wire        rb_we_e   = rb_beat_w ? ~rb_bi[0] : (rb_upd_w & ~rb_off[0]);
-    wire        rb_we_o   = rb_beat_w ?  rb_bi[0] : (rb_upd_w & (rb_off[0] | grcg_wbatch));
-    wire [7:0]  rb_wd_e   = rb_beat_w ? rb_bd : wr_byte;
-    wire [7:0]  rb_wd_o   = rb_beat_w ? rb_bd : (rb_off[0] ? wr_byte : wr_byte_hi);
     // ------------------------------------------------------------------
-    // WRITE-BACK (WBACK). A buffered RMW write no longer writes its plane
-    // byte through RAM.sv at all: the result is already in the bank (the
-    // rb_upd_w write above), so the plane is only marked dirty and the walk
-    // moves on. A dirty plane line leaves as one sixteen-word burst on
-    // port G -- three plane writes per word through RAM.sv (each its own
-    // SDRAM transaction, ~8 clocks) become three bursts per eight words.
+    // PREFETCH (RB_PF). The walk otherwise stops at every new line for its
+    // two-burst fill. Once the older slot is clean, the next line (tag+1,
+    // same page) is fetched into it in the background, whole. The prefetch
+    // owns port G like the write-back does (one user at a time); its beats
+    // take the bank write port first and an RMW write in S_WR waits that
+    // clock out. Coherence is the write-back's: a walk into the slot being
+    // prefetched waits for it (lv_wait), any other window access waits for
+    // it and then drops both slots (fl_all), and its read waits for
+    // gv_a_quiet so it cannot pass a parked write.
+    // ------------------------------------------------------------------
+    reg         pf_busy, pf_s, pf_h;
+    reg  [1:0]  pf_ph;
+    reg  [3:0]  pf_bi;
+    reg  [16:0] pf_tag;
+    wire        pf_bw     = pf_busy & (pf_ph == 2'd2) & gvwb_rvalid;
+    // Bank ports. One write port per bank; three sources, which never share
+    // a clock (port G is serial): a prefetch beat (bank j[1] at
+    // {pf_s, pf_h, j[3:2], j[0]}), a fill beat (same shape on ws/gf_h), or
+    // an RMW write's merged word in S_WR. The merge is a LANE merge, not a
+    // byte replace: both planes of a pair share the bank word, and the
+    // other lane must survive (the merge source is the registered rbq of
+    // the very same address).
+    wire [4:0]  fb_wa = {fws, gf_h,  rb_bi[3:2],  rb_bi[0]};
+    wire [4:0]  pb_wa = {pf_s, pf_h, pf_bi[3:2], pf_bi[0]};
+    wire [4:0]  mw_a  = {ws, rb_off[3:1], gp[1]};
+    wire [7:0]  b1_by = grcg_wbatch ? wr_byte_hi : wr_byte;
+    wire [15:0] mw_d0 = gp[0] ? {wr_byte, rbq0[7:0]} : {rbq0[15:8], wr_byte};
+    wire [15:0] mw_d1 = gp[0] ? {b1_by,  rbq1[7:0]} : {rbq1[15:8], b1_by};
+    wire        mw0   = rb_upd_w & ~pf_bw & (~rb_off[0] | grcg_wbatch);
+    wire        mw1   = rb_upd_w & ~pf_bw & ( rb_off[0] | grcg_wbatch);
+    wire        pb0   = pf_bw & ~pf_bi[1];
+    wire        pb1   = pf_bw &  pf_bi[1];
+    wire        fb0   = fb_v & ~rb_bi[1];
+    wire        fb1   = fb_v &  rb_bi[1];
+    wire        b0_we = pb0 | fb0 | mw0;
+    wire        b1_we = pb1 | fb1 | mw1;
+    wire [4:0]  b0_wa = pb0 ? pb_wa : fb0 ? fb_wa : mw_a;
+    wire [4:0]  b1_wa = pb1 ? pb_wa : fb1 ? fb_wa : mw_a;
+    wire [15:0] b0_wd = (pb0 | fb0) ? gvwb_rdata : mw_d0;
+    wire [15:0] b1_wd = (pb1 | fb1) ? gvwb_rdata : mw_d1;
+    // ------------------------------------------------------------------
+    // WRITE-BACK. A buffered RMW write no longer writes its plane byte
+    // through RAM.sv at all: the result is already in the bank (the lane
+    // merge above), so the plane is only marked dirty and the walk moves
+    // on. A dirty line leaves as two 16-word bursts on port G -- one per
+    // half of the line -- with per-beat DQM lanes, so only the dirty
+    // planes' bytes are written and clean planes of a partially-dirty
+    // line keep their SDRAM bytes.
     //
     // The engine writes back the OLDER slot as soon as it is dirty (the walk
     // has moved to a new line), in the background: its copy out of the
@@ -755,12 +840,20 @@ module pc98_gvram_seq #(
     // ------------------------------------------------------------------
     reg         fl_busy, fl_hold_q, fl_s, cp_q;
     reg  [1:0]  fl_ph;                   // 0 copy, 1 request, 2 burst
-    reg  [1:0]  fl_p;
-    reg  [3:0]  fl_i, fl_c;              // copy: words issued, words landed
-    reg  [2:0]  cp_w;                    // the word the landing read was for
-    reg  [7:0]  stg [0:15];
+    reg         fl_h;                    // which half of the line
+    reg  [4:0]  fl_i, fl_c;              // copy: words issued, words landed
+    reg  [3:0]  cp_w;                    // the word the landing read was for
+    reg  [15:0] stg [0:15];
+    reg  [3:0]  fl_d;                    // dirty planes at fl_start
     reg  [6:0]  wb_age;
-    wire        wb_on    = RMWBUF & WBACK;
+    // A display-page flip (port 0xA4) puts the hidden page's still-dirty
+    // lines on screen: write everything back now (lodemnc flips every 16
+    // frames; the rest of the scroll flicker).
+    reg         disp_q, flip_pend;
+    // GV_IL: a buffered line's only drain is the port-G write-back, so the
+    // buffer always writes back (the WBACK parameter is obsolete and stays
+    // only for source compatibility).
+    wire        wb_on    = RMWBUF;
     wire [3:0]  rd0      = wb_on ? rb_d[0] : 4'h0;
     wire [3:0]  rd1      = wb_on ? rb_d[1] : 4'h0;
     wire        rb_dirty = (rd0 != 4'h0) | (rd1 != 4'h0);
@@ -776,7 +869,7 @@ module pc98_gvram_seq #(
     wire [3:0]  lslot_d  = lslot ? rd1 : rd0;
     // its slot is being written back, or it is a new line whose victim is
     // still dirty: wait (the engine is on it)
-    wire        lv_wait  = lv_shape & ((fl_busy & (fl_s == lslot))
+    wire        lv_wait  = lv_shape & ((fl_busy & (fl_s == lslot)) | (pf_busy & (pf_s == lslot))
                                      | (~(lm0 | lm1) & (lslot_d != 4'h0)));
     wire        strobe_new = (cpu_rd | cpu_wr) & ~pw_ack;
     // A svc op only has to wait when it touches a buffered line in some
@@ -787,47 +880,136 @@ module pc98_gvram_seq #(
     wire        svc_l1   = (svc_addr[14:4] == rb_tag[1][10:0]) & (access_page == rb_tag[1][16]);
     wire        fl_want_all = (strobe_new & window & ~lv_shape)
                          | (svc_req_s & ~svc_done & ~svc_hold
-                            & ((svc_l0 & (rd0 != 4'h0)) | (svc_l1 & (rd1 != 4'h0))))
+                            & ((svc_l0 & ((rd0 != 4'h0) | (pf_busy & ~pf_s)))
+                             | (svc_l1 & ((rd1 != 4'h0) | (pf_busy &  pf_s)))))
                          | rmwbuf_off;
     // everything out first: no window access while any line is dirty or
     // a burst is still on its way
-    wire        fl_all   = fl_want_all & (rb_dirty | fl_busy);
+    wire        fl_all   = fl_want_all & (rb_dirty | fl_busy | pf_busy);
     wire [3:0]  rdo      = mru ? rd0 : rd1;       // the older slot
     wire [3:0]  rdn      = mru ? rd1 : rd0;       // the newer one
-    wire        fl_start = rb_dirty & ~fl_busy & ~rb_leg
-                         & ((st == S_IDLE) | (st == S_RDW & rb_g & ~gf_sent))
-                         & ((rdo != 4'h0) | fl_all | (wb_age >= 7'(WB_AGE)));
+    // The S_RDW arm: a fill waiting for the port may have picked a victim
+    // slot that is still dirty (back-to-back posted walks can leave S_IDLE
+    // before fl_start ever fires there). Flushing it now is the only thing
+    // that stops the fill from clobbering the un-written merge — the fill
+    // request below waits for !fl_start/!fl_busy, so the victim goes back
+    // to SDRAM first (lodemnc: stale even-offset bytes, RMW result lost).
+    wire        fl_start = rb_dirty & ~fl_busy & ~pf_busy
+                         & ((st == S_IDLE & ~rb_leg) | (st == S_RDW & rb_leg & ~gf_sent))
+                         & ((rdo != 4'h0) | fl_all | (wb_age >= 7'(WB_AGE)) | flip_pend | dx_seq[1]);
     wire        fl_sel   = (rdo != 4'h0) ? ~mru : mru;
-    wire [3:0]  fl_sd    = fl_sel ? rd1 : rd0;
+    // a prefetch between planes gives the port up to a wanted write-back
+    // (see the prefetch FSM below)
+    wire        pf_yield = ~gvwb_req & ((rdo != 4'h0) | fl_all | (wb_age >= 7'(WB_AGE)));
+    // the prefetch: the line after the newer slot's, into the older slot
+    wire [16:0] pf_cur   = rb_tag[mru];
+    wire [16:0] pf_nxt   = {pf_cur[16], pf_cur[15:0] + 16'd1};
+    wire        pf_ready = (rb_tag[~mru] == pf_nxt) & (rb_v[~mru] == 4'hF);
+    wire        pf_go    = RB_PF & wb_on & ~dx_seq[0] & (pf_cur[16] != disp_page) & ~flip_pend & ~pf_busy & ~fl_busy & ~fl_start & ~rb_leg
+                         & (st == S_IDLE) & grcg_active & grcg_rmw & ~egc_arm & ~rmwbuf_off
+                         & (rb_v[mru] != 4'h0) & (pf_cur[10:0] != 11'h7FF)
+                         & ((mru ? rd0 : rd1) == 4'h0)
+                         & ~pf_ready & ~fl_want_all
+                         // Never on the clock S_IDLE takes a guest (or svc)
+                         // access: lv_wait only sees a prefetch once pf_busy
+                         // is up, so a write accepted on pf_go's own clock
+                         // went to RAM.sv (TDW-shape 0xFF RMW, miss) while
+                         // the burst read the line's OLD bytes -- installed
+                         // valid, then written back over the write (NEON3/4
+                         // line noise; lodemnc).
+                         & ~strobe_new & ~(svc_req_s & ~svc_done);
     wire        fl_hold  = fl_all | lv_wait;
     // the pass-through's ready waits one clock longer than its strobes, so
     // the access released from the hold is on the pins before ready counts
     wire        pt_blk   = (fl_hold | fl_hold_q) & window;
     wire        wb_skip  = wb_on & rb_upd_w & ~rmwbuf_off;
-    wire [3:0]  fl_cur   = fl_s ? rd1 : rd0;
-    wire [1:0]  fl_first = fl_sd[0] ? 2'd0 : fl_sd[1] ? 2'd1 : fl_sd[2] ? 2'd2 : 2'd3;
-    wire [3:0]  fl_rest  = fl_cur & ~(4'b0001 << fl_p);
-    wire [1:0]  fl_next  = fl_rest[0] ? 2'd0 : fl_rest[1] ? 2'd1 : fl_rest[2] ? 2'd2 : 2'd3;
     wire [16:0] fl_tag   = rb_tag[fl_s];
-    wire [19:0] fl_pa    = fl_tag[16] ? {3'b000, pc98_gvram_plane1({fl_tag[15:0], 4'h0}, fl_p)}
-                                      : pc98_gvram_plane({fl_tag[15:0], 4'h0}, fl_p);
-    assign gvwb_wdata = stg[gvwb_wcnt[3:0]];
+    // ------------------------------------------------------------------
+    // TDW TILE BURST (S_TG). Under GV_IL a guest offset's four plane bytes
+    // are two adjacent SDRAM words ({R,B}, {G,E}), so a GRCG TDW write --
+    // every unmasked plane takes its tile, nothing is read -- is ONE
+    // port-G write burst: two beats for a byte, four for a word (offsets
+    // n, n+1), the masked planes' lanes DQM-closed. The plane walk did a
+    // port-A write per plane (three to four arbitrations per byte, ~24
+    // clocks a byte at 12 MHz: TDW 1.26-1.41x np21w). The data and lanes
+    // are registered at the issue (tg_w*/tg_m*) and held for the burst.
+    // Ordering is the line fill's: issue waits for gv_a_quiet (no older
+    // port-A write can land after it) and for port G to be free, and the
+    // FSM holds every later access -- posted (pw_hold) or not -- until
+    // gvwb_done, so nothing behind it can pass it either. The line buffer
+    // was emptied by the TDW strobe itself (fl_want_all, then rb_v cleared
+    // at the arm). Buffer-off (slot 0x09 [27]) keeps the plane walk.
+    // ------------------------------------------------------------------
+    reg         tg_busy;
+    reg         tg_len3;
+    reg  [15:0] tg_w0, tg_w1;
+    reg  [1:0]  tg_m0, tg_m1;
+    wire        tg_arm = RMWBUF & ~rmwbuf_off & cpu_wr & ~cpu_rd & grcg_here
+                       & ~grcg_rmw & ~egc_here & ~(cpu_word & cpu_addr[0]);
+    wire        tg_go  = gv_a_quiet & ~gvwb_req & ~fl_busy & ~pf_busy & ~rb_leg;
+    assign gvwb_len   = tg_busy ? (tg_len3 ? 4'd3 : 4'd1) : 4'd15;
+    assign gv_word_ok = ~(EGC & egc_active)
+                      & (grcg_active ? (~grcg_rmw & RMWBUF & ~rmwbuf_off)
+                                     : ~access_page);
+    assign gvwb_wdata = tg_busy ? (gvwb_wcnt[0] ? tg_w1 : tg_w0)
+                                : stg[gvwb_wcnt[3:0]];
+    // Per-beat write lanes for the port-G write-back: even beats carry the
+    // {B,R} pair (planes 0,1), odd beats {G,E} (planes 2,3); a lane is
+    // written only when its plane was dirty when the engine started (fl_d),
+    // so clean planes of a partially-dirty line keep their SDRAM bytes.
+    assign gvwb_wmask = !gvwb_we ? 2'b11
+        : tg_busy ? (gvwb_wcnt[0] ? tg_m1 : tg_m0)
+        : (gvwb_wcnt[0] ? {fl_d[3], fl_d[2]} : {fl_d[1], fl_d[0]});
     // the copy owns the read port on clocks the FSM does not read the banks
-    wire        cp_own   = fl_busy & (fl_ph == 2'd0) & (fl_i != 4'd8)
-                         & ((st == S_IDLE) | (st == S_RDW & rb_g & ~gf_sent));
-    wire [5:0]  rb_ra     = cp_own ? {fl_s, fl_p, fl_i[2:0]}
-                          : {ws, ((st == S_WRW) || (WBACK && st == S_WR)) ? gp_nx : gp,
-                             rb_off[3:1]};
+    wire        cp_own   = fl_busy & (fl_ph == 2'd0) & (fl_i != 5'd16)
+                         & ((st == S_IDLE) | (st == S_RDW & rb_leg & ~gf_sent));
+    // GV_IL fix: while a merge write is STALLED (rb_upd_w && pf_bw) the read
+    // address must stay on the CURRENT plane's entry -- the retry would
+    // otherwise merge with the previewed neighbour word (lodemnc wrote
+    // B=0x10 into 0x616188 from the adjacent 0x2710 this way).  Once the
+    // merge actually fires (!pf_bw) the read must move to the NEXT plane's
+    // entry: the rbq latch at this edge feeds the chained S_RBH, and a chain
+    // that crosses a pair boundary (gp=1 -> gp=2) needs the OTHER word --
+    // neon's line sweep read plane 2's byte from the pair-0 word this way
+    // (0x3D2 handed 0x00 where the buffer held 0x1f, TRC+FB same-run).
+    wire [4:0]  rb_ra    = cp_own ? {fl_s, fl_h, fl_i[3:2], fl_i[0]}
+                         : {ws, rb_off[3:1],
+                            ((st == S_WRW) || (wb_on && st == S_WR
+                             && (!rb_upd_w || !pf_bw))) ? gp_nx[1] : gp[1]};
+    // write-forward: a merge and the next plane's read name the SAME
+    // bank word when a chain pairs planes (B then R, G then E) --
+    // M10K same-address reads land as OLD data, so feed the written
+    // word straight into the register instead (NEON's red ghost,
+    // buffer edition).
+    //
+    // The forward is kept OUTSIDE the RAM's read register: the read itself
+    // is the plain `q <= mem[ra]` the M10K inference wants, and the
+    // collision select lives in two flops beside it (fwd*/fwd_d*), muxed
+    // after. Same value on every clock as the old
+    // `rbq <= collide ? wd : mem[ra]` -- which Quartus rejected as
+    // "asynchronous read logic" and built as 1024 flip-flops with their
+    // any-address read muxes instead (~500 ALMs).
+    reg  [15:0] rbm0, rbm1, fwd_d0, fwd_d1;
+    reg         fwd0, fwd1;
     always @(posedge clk) begin
-        if (rb_we_e) rbE[rb_wa] <= rb_wd_e;
-        if (rb_we_o) rbO[rb_wa] <= rb_wd_o;
-        rbq_e <= rbE[rb_ra];
-        rbq_o <= rbO[rb_ra];
+        if (b0_we) rbW0[b0_wa] <= b0_wd;
+        if (b1_we) rbW1[b1_wa] <= b1_wd;
+        rbm0   <= rbW0[rb_ra];
+        rbm1   <= rbW1[rb_ra];
+        fwd0   <= b0_we && (b0_wa == rb_ra);
+        fwd1   <= b1_we && (b1_wa == rb_ra);
+        fwd_d0 <= b0_wd;
+        fwd_d1 <= b1_wd;
+    end
+    always_comb begin
+        rbq0 = fwd0 ? fwd_d0 : rbm0;
+        rbq1 = fwd1 ? fwd_d1 : rbm1;
     end
 
-    // A buffer burst leg asks RAM.sv for the plane's 16-byte line.
-    assign mem_pf_len = rb_leg ? 5'd16 : (cpu_pf_len & {5{~expand}});
-    assign pf_beat_seq = rb_leg & ~rb_g;
+    // A buffer fill is a pair of port-G bursts; pass-through keeps the
+    // guest's own prefetch window shape (the seq no longer drives beats).
+    assign mem_pf_len = cpu_pf_len & {5{~expand}};
+    assign pf_beat_seq = 1'b0;
 
     // Ready lands on the FINAL byte's walk: a word access's first S_DONE
     // only starts the odd half. svc_hold forces expand high, which parks
@@ -945,54 +1127,128 @@ module pc98_gvram_seq #(
             pw_ack    <= 1'b0;
             rb_d[0]   <= 4'h0;
             rb_d[1]   <= 4'h0;
+            gf_h      <= 1'b0;
             fl_busy   <= 1'b0;
+            pf_busy   <= 1'b0;
             cp_q      <= 1'b0;
             fl_hold_q <= 1'b0;
+            fl_h      <= 1'b0;
+            fl_d      <= 4'h0;
             gvwb_req  <= 1'b0;
             gvwb_we   <= 1'b0;
+            tg_busy   <= 1'b0;
             wb_age    <= 7'd0;
-            rb_g      <= 1'b0;
+            disp_q    <= 1'b0;
+            flip_pend <= 1'b0;
         end else begin
             // ---- write-back engine (WBACK) ------------------------------
             fl_hold_q <= fl_hold;
             if (!rb_dirty || st != S_IDLE || fl_busy) wb_age <= 7'd0;
             else if (wb_age != 7'h7F) wb_age <= wb_age + 7'd1;
+            disp_q <= disp_page;
+            if (disp_q != disp_page)            flip_pend <= 1'b1;
+            else if (!rb_dirty && !fl_busy)     flip_pend <= 1'b0;
             if (gvwb_req && gvwb_ack) gvwb_req <= 1'b0;
             cp_q <= cp_own;
-            cp_w <= fl_i[2:0];
+            cp_w <= fl_i[3:0];
             if (fl_start) begin
                 fl_busy <= 1'b1;
                 fl_s    <= fl_sel;
-                fl_p    <= fl_first;
-                fl_i    <= 4'd0;
-                fl_c    <= 4'd0;
+                fl_d    <= fl_sel ? rd1 : rd0;
+                // PC-98 port: consume the dirty bitmap AT THE LATCH. The old
+                // code cleared rb_d[fl_s] at flush completion, which also
+                // destroyed marks a concurrent walk had merged into the slot
+                // while the flush ran -- under the immediate-writeback mode
+                // (+seqdx=2) a flush chases every walk, so the second of two
+                // back-to-back W8s on one line (neon id=2076: W8 aa4d3 then
+                // W8 aa4d4) had its plane-0 mark wiped by the previous
+                // flush's clear; the next flush then latched fl_d without
+                // the B lane and masked the merged 0x80 out of the writeback
+                // (WATCH: word 0x6049A8 dq=8180 dqm=01 -> SDRAM kept 0100).
+                // Clearing here instead means any mark that lands after the
+                // latch survives for the next flush to write; the lanes
+                // latched into fl_d are consumed by this one (the bank copy
+                // starts only after this edge, so their data is included).
+                rb_d[fl_sel] <= 4'h0;
+                fl_h    <= 1'b0;
+                fl_i    <= 5'd0;
+                fl_c    <= 5'd0;
                 fl_ph   <= 2'd0;
             end
             if (fl_busy) case (fl_ph)
-              2'd0: begin                      // copy the plane line out
-                if (cp_own) fl_i <= fl_i + 4'd1;
+              2'd0: begin                      // copy the half's words out
+                if (cp_own) fl_i <= fl_i + 5'd1;
                 if (cp_q) begin
-                    stg[{cp_w, 1'b0}] <= rbq_e;
-                    stg[{cp_w, 1'b1}] <= rbq_o;
-                    fl_c <= fl_c + 4'd1;
-                    if (fl_c == 4'd7) begin
+                    stg[cp_w] <= cp_w[1] ? rbq1 : rbq0;
+                    fl_c <= fl_c + 5'd1;
+                    if (fl_c == 5'd15) begin
                         gvwb_req  <= 1'b1;
                         gvwb_we   <= 1'b1;
-                        gvwb_addr <= g_sdram(fl_tag[16], fl_pa);
+                        gvwb_addr <= g_il(fl_tag[16], fl_tag, fl_h);
                         fl_ph     <= 2'd1;
                     end
                 end
               end
               2'd1: if (gvwb_ack) fl_ph <= 2'd2;
               default: if (gvwb_done) begin
-                rb_d[fl_s][fl_p] <= 1'b0;
-                if (fl_rest != 4'h0) begin
-                    fl_p  <= fl_next;
-                    fl_i  <= 4'd0;
-                    fl_c  <= 4'd0;
+                if (!fl_h) begin               // the line's second half next
+                    fl_h  <= 1'b1;
+                    fl_i  <= 5'd0;
+                    fl_c  <= 5'd0;
                     fl_ph <= 2'd0;
-                end else
-                    fl_busy <= 1'b0;
+                end else begin
+                    // rb_d[fl_s] is no longer cleared here: the bitmap was
+                    // consumed at the fl_start latch (see there). Clearing
+                    // here destroyed marks merged by a concurrent walk
+                    // during the flush (neon id=2076, +seqdx=2).
+                    fl_busy    <= 1'b0;
+                end
+              end
+            endcase
+            // ---- prefetch (RB_PF) ----------------------------------------
+            if (pf_go) begin
+                pf_busy <= 1'b1;
+                pf_s    <= ~mru;
+                pf_tag  <= pf_nxt;
+                pf_h    <= 1'b0;
+                pf_ph   <= 2'd0;
+                rb_v[~mru]  <= 4'h0;
+                rb_tag[~mru] <= pf_nxt;
+            end
+            // Between planes (no request out) a prefetch yields to a
+            // write-back that wants the port: it waits for port A to go quiet
+            // and can sit there for long, holding fl_start off while a line
+            // stays dirty -- and the display, which reads SDRAM, behind
+            // (lodemnc's map scroll flashed short horizontal lines; hardware
+            // A/B: gone with the prefetch off). The words already fetched
+            // stay banked under the slot's new tag.
+            if (pf_busy) case (pf_ph)
+              2'd0: if (pf_yield) begin
+                pf_busy <= 1'b0;
+              end else if (gv_a_quiet && !gvwb_req) begin
+                gvwb_req  <= 1'b1;
+                gvwb_we   <= 1'b0;
+                gvwb_addr <= g_il(pf_tag[16], pf_tag, pf_h);
+                pf_ph     <= 2'd1;
+              end
+              2'd1: if (gvwb_ack) begin pf_ph <= 2'd2; pf_bi <= 4'd0; end
+              default: begin
+                if (gvwb_rvalid) pf_bi <= pf_bi + 4'd1;
+                if (gvwb_done) begin
+                    if (!pf_h) begin
+                        pf_h  <= 1'b1;
+                        pf_ph <= 2'd0;
+                    end else begin
+                        // PC-98 port: same duplicate-tag guard as a walk
+                        // fill -- a prefetch that completes a line the other
+                        // slot still holds leaves the twin's banks stale
+                        // (written back and re-fetched since); neon's sweep
+                        // hit the stale twin (TRC 0x3D2, ws=1).
+                        if (rb_tag[~pf_s] == pf_tag) rb_v[~pf_s] <= 4'h0;
+                        rb_v[pf_s] <= 4'hF;
+                        pf_busy    <= 1'b0;
+                    end
+                end
               end
             endcase
             // The posting strobe has its ready; it is gone once it drops --
@@ -1005,11 +1261,15 @@ module pc98_gvram_seq #(
                 || (cpu_word && cpu_wdata_hi != pw_wdhi) || cpu_word != is_word)
                 pw_ack <= 1'b0;
             if (rmwbuf_off && !rb_leg && !rb_dirty) begin rb_v[0] <= 4'h0; rb_v[1] <= 4'h0; end
-            // the line buffer's burst beats, in order from the line head
-            if (rb_leg && rb_bv) begin
-                // the operand bytes, off the stream as they pass
-                if (rb_bi == rb_off) rd_hold <= rb_bd;
-                if (grcg_wbatch && rb_bi == (rb_off | 4'd1)) rd_hold_hi <= rb_bd;
+            // the line fill's beats, in order: beat rb_bi of half gf_h is
+            // guest offset {gf_h, rb_bi[3:1]} of the plane pair rb_bi[0]
+            // (0: {B,R} = even SDRAM words, 1: {G,E} = odd)
+            if (fb_v) begin
+                if ({gf_h, rb_bi[3:1]} == rb_off && rb_bi[0] == gp[1])
+                    rd_hold <= gp[0] ? gvwb_rdata[15:8] : gvwb_rdata[7:0];
+                if (grcg_wbatch && {gf_h, rb_bi[3:1]} == (rb_off | 4'd1)
+                    && rb_bi[0] == gp[1])
+                    rd_hold_hi <= gp[0] ? gvwb_rdata[15:8] : gvwb_rdata[7:0];
                 rb_bi <= rb_bi + 4'd1;
             end
             // The EGC's pattern-load strobe is combinational now (see the
@@ -1104,6 +1364,8 @@ module pc98_gvram_seq #(
                     else if (grcg_rmw && cur_wdata == 8'h00
                              && (!cpu_word || cpu_wdata_hi == 8'h00))
                         st <= S_DONE;
+                    else if (tg_arm)
+                        st <= S_TG;
                     else
                         st <= grcg_rmw ? S_RD : S_WR;
                 end else if (svc_req_s && !svc_done && !fl_hold) begin
@@ -1177,67 +1439,103 @@ module pc98_gvram_seq #(
                     st         <= S_RBH;
                 end else begin
                     if (rmw_guest & rb_fits) begin
-                        // miss: fetch the plane's whole line in one burst
-                        mem_addr <= rb_base_c;
+                        // miss: fetch the whole 16-byte line -- all four
+                        // planes -- as two 16-word port-G bursts
+                        mem_addr <= {op_addr[19:4], 4'h0};
                         rb_leg   <= 1'b1;
+                        // PC-98 port: pin the slot this fill targets. ws is
+                        // a live wire (m0 ? 0 : m1 ? 1 : ~mru); if it flips
+                        // between the beats and the completion (mru moved),
+                        // the beats land in one slot's banks while rb_tag/
+                        // rb_v name the other -- the walk then hits a
+                        // "valid" slot holding the previous line's words.
+                        // neon's line sweep read p2=00 (0x874-era) from a
+                        // slot whose fill had just banked 0x1f for word
+                        // 0x7A5 in the twin (FB/TRC traces).
+                        fws      <= ws;
                         rb_bi    <= 4'd0;
-                        rb_g     <= WBACK;
+                        gf_h     <= 1'b0;
                         gf_sent  <= 1'b0;
-                        gf_addr  <= g_sdram(g_page, rb_base_c);
+                        gf_addr  <= g_il(g_page, rb_line, 1'b0);
                     end else
                         mem_addr <= plane_addr(op_addr, gp);
                     mem_page1 <= g_page;
-                    mem_rd    <= ~(WBACK & rmw_guest & rb_fits);
+                    mem_rd    <= ~(rmw_guest & rb_fits);
                     st        <= S_RDW;
                 end
               end
 
               S_RDW: begin
-                if (rb_g && !gf_sent && gv_a_quiet && !fl_busy && !fl_start) begin
+                if (rb_leg && !gf_sent && gv_a_quiet && !fl_busy && !fl_start
+                    && !pf_busy && !pf_go) begin
                     gvwb_req  <= 1'b1;
                     gvwb_we   <= 1'b0;
                     gvwb_addr <= gf_addr;
                     gf_sent   <= 1'b1;
                 end
-                if (rb_g ? (gf_sent & gvwb_done) : leg_done) begin
-                rb_g    <= 1'b0;
-                mem_rd  <= 1'b0;
-                if (!rb_leg) begin
+                if (rb_leg) begin
+                    if (gf_sent && gvwb_done && !gf_h) begin
+                        // the line's first 16 words are banked; the second
+                        // half's burst takes the port next
+                        gf_h    <= 1'b1;
+                        gf_sent <= 1'b0;
+                        rb_bi   <= 4'd0;
+                        gf_addr <= gf_addr + 24'd16;
+                    end
+                    if (gf_sent && gvwb_done && gf_h) begin
+                        // the whole 32-word line is banked; this leg's
+                        // operand bytes came off the beat stream
+                        rb_leg      <= 1'b0;
+                        gf_sent     <= 1'b0;
+                        // PC-98 port: the beats went through fb_wa which is
+                        // indexed by the pinned fws (latched at fill start);
+                        // the completion must name the same slot or a ws
+                        // flip between the last beat and here splits the
+                        // fill: banks in one slot, tag/valid on the other
+                        // (neon read the previous line's words this way).
+                        rb_v[fws]   <= ((rb_tag[fws] == rb_line) ? rb_v[fws] : 4'h0)
+                                     | 4'hF;
+                        rb_tag[fws] <= rb_line;
+                        // PC-98 port: a fill may target a line whose tag the
+                        // other slot still holds from an older residency --
+                        // that copy's banks are stale relative to SDRAM (the
+                        // line was written back and re-fetched), and a later
+                        // walk hitting it reads pre-writeback bytes. neon's
+                        // line sweep read rh=00 (23.9-era) where SDRAM held
+                        // 0x1f this way (TRC: 0x3D2 pass 2, ws flipped).
+                        // Kill the duplicate so the next walk re-fills.
+                        if (rb_tag[~fws] == rb_line) rb_v[~fws] <= 4'h0;
+                        mru         <= fws;
+                        st          <= S_WR;
+                    end
+                end
+                else if (leg_done) begin
+                    mem_rd     <= 1'b0;
                     rd_hold    <= mem_rdata;
                     rd_hold_hi <= mem_rdata_hi;
+                    if (egc_here && !svc_raw_rd) begin
+                        // Each plane byte that lands goes into the shift
+                        // pipeline's queue (egc_sf_push is combinational over
+                        // this same cycle); the pattern registers take them when
+                        // ope asks, on either direction -- egc_pat_ld is
+                        // combinational for exactly this cycle too.
+                        if (is_read & (gp == egc_rd_plane))
+                            egc_rd_q <= mem_rdata;
+                        if (is_read & (gp == own))
+                            egc_own_q <= mem_rdata;
+                    end else if (is_read) begin
+                        // A GRCG read accumulates the match mask.
+                        tcr <= tcr | (mem_rdata ^ cur_tile);
+                    end
+                    if (is_read) begin
+                        if (is_word & half & egc_here & egc_rd_shift
+                          & ~svc_raw_rd & egc_rd_last)
+                            st <= S_EVT2;
+                        else if (last_gp) st <= S_DONE;
+                        else begin gp <= gp + 2'd1; st <= S_RD; end
+                    end else
+                        st <= S_WR;
                 end
-                if (rb_leg) begin
-                    // the burst landed: the plane's line is buffered, and
-                    // this leg's operand bytes come out of it
-                    rb_leg     <= 1'b0;
-                    rb_v[ws]   <= ((rb_tag[ws] == rb_line) ? rb_v[ws] : 4'h0)
-                                | (4'b0001 << gp);
-                    rb_tag[ws] <= rb_line;
-                    mru        <= ws;
-                end
-                if (egc_here && !svc_raw_rd) begin
-                    // Each plane byte that lands goes into the shift
-                    // pipeline's queue (egc_sf_push is combinational over
-                    // this same cycle); the pattern registers take them when
-                    // ope asks, on either direction -- egc_pat_ld is
-                    // combinational for exactly this cycle too.
-                    if (is_read & (gp == egc_rd_plane))
-                        egc_rd_q <= mem_rdata;
-                    if (is_read & (gp == own))
-                        egc_own_q <= mem_rdata;
-                end else if (is_read) begin
-                    // A GRCG read accumulates the match mask.
-                    tcr <= tcr | (mem_rdata ^ cur_tile);
-                end
-                if (is_read) begin
-                    if (is_word & half & egc_here & egc_rd_shift
-                      & ~svc_raw_rd & egc_rd_last)
-                        st <= S_EVT2;
-                    else if (last_gp) st <= S_DONE;
-                    else begin gp <= gp + 2'd1; st <= S_RD; end
-                end else
-                    st <= S_WR;
-              end
               end
 
               // ---- a word read's second lane ----------------------------
@@ -1248,13 +1546,16 @@ module pc98_gvram_seq #(
 
               // ---- RMW line-buffer hit: the bank word has landed ---------
               S_RBH: begin
-                rd_hold    <= rb_off[0] ? rbq_o : rbq_e;
-                rd_hold_hi <= rbq_o;
+                rd_hold    <= rb_off[0]
+                                ? (gp[0] ? rbq1[15:8] : rbq1[7:0])
+                                : (gp[0] ? rbq0[15:8] : rbq0[7:0]);
+                // a batch's odd byte is the OTHER bank's word, same lanes
+                rd_hold_hi <= gp[0] ? rbq1[15:8] : rbq1[7:0];
                 st         <= S_WR;
               end
 
               // ---- write this plane -----------------------------------
-              S_WR: begin
+              S_WR: if (!pf_bw) begin
                 if (!cur_live) begin
                     if (last_gp) st <= S_DONE;
                     else begin
@@ -1266,6 +1567,10 @@ module pc98_gvram_seq #(
                     // only mark it dirty. rb_ra has the next plane's word.
                     rb_d[ws][gp] <= 1'b1;
                     mru          <= ws;
+                    // PC-98 port: same duplicate-tag guard as the fill --
+                    // a merge into ws makes any same-tag copy in the other
+                    // slot stale (neon's 0x3D2 sweep hit the stale twin).
+                    if (rb_tag[~ws] == rb_line) rb_v[~ws] <= 4'h0;
                     if (last_gp) st <= S_DONE;
                     else if (chain_ok & rd_live_f(gp_nx) & rb_hit_n) begin
                         gp <= gp_nx;
@@ -1316,15 +1621,17 @@ module pc98_gvram_seq #(
                 end
                 else if (chain_ok & g_rmw & rd_live_f(gp_nx)) begin
                     mem_wr    <= 1'b0;
-                    mem_rd    <= ~(WBACK & rmw_guest & rb_fits);
+                    mem_rd    <= ~(rmw_guest & rb_fits);
                     gp        <= gp_nx;
                     if (rmw_guest & rb_fits) begin
-                        mem_addr <= rb_base_n;
+                        // the next plane's line, whole: two port-G bursts
+                        mem_addr <= {op_addr[19:4], 4'h0};
                         rb_leg   <= 1'b1;
+                        fws      <= ws; // see S_RD: pin the fill slot
                         rb_bi    <= 4'd0;
-                        rb_g     <= WBACK;
+                        gf_h     <= 1'b0;
                         gf_sent  <= 1'b0;
-                        gf_addr  <= g_sdram(g_page, rb_base_n);
+                        gf_addr  <= g_il(g_page, rb_line, 1'b0);
                     end else
                         mem_addr <= nx_addr;
                     mem_page1 <= g_page;
@@ -1396,6 +1703,24 @@ module pc98_gvram_seq #(
                 end else if (!(cpu_rd | cpu_wr)) st <= S_IDLE;
               end
 
+              // ---- TDW tile burst (see TDW TILE BURST) ------------------
+              S_TG: if (tg_go) begin
+                gvwb_req  <= 1'b1;
+                gvwb_we   <= 1'b1;
+                gvwb_addr <= {7'h30, g_page, op_addr[14:0], 1'b0};
+                tg_busy   <= 1'b1;
+                tg_len3   <= is_word;
+                tg_w0     <= {g_tile[1], g_tile[0]};
+                tg_w1     <= {g_tile[3], g_tile[2]};
+                tg_m0     <= {~g_mask[1], ~g_mask[0]};
+                tg_m1     <= {~g_mask[3] & analog_mode, ~g_mask[2]};
+                st        <= S_TGW;
+              end
+              S_TGW: if (gvwb_done) begin
+                tg_busy <= 1'b0;
+                st      <= S_DONE;
+              end
+
               default: st <= S_IDLE;
             endcase
             end
@@ -1429,7 +1754,91 @@ module pc98_gvram_seq #(
     // cpu_gvram was the window qualifier until `window` moved onto the
     // address alone (see above); it stays on the port list because Chipset
     // still produces it and a future build may want the select again.
-    wire _unused = &{1'b0, cpu_gvram, 1'b0};
+    wire _unused = &{1'b0, cpu_gvram, pf_beat_v, pf_beat_dat, 1'b0};
+
+`ifdef VERILATOR
+    // sim-only: +trace_line=1 dumps every RMW walk merge (S_RBH read / S_WR
+    // write) inside a time window, address-labelled. Hunt for the neon dx=00
+    // corruption (0x3D2 line: 1f written correctly, later passes degrade it
+    // 18->10 while np21w keeps 1f) -- shows whether rd_hold (old) reads
+    // stale or the operands (data/tile/live) diverge per pass.
+    int trace_line = -1;
+    int trc_cnt = 0;
+    int trcfl_cnt = 0;
+    initial if (!$value$plusargs("trace_line=%d", trace_line)) trace_line = -1;
+    // sim-only: +trace_line=4 dumps every active cycle (merge pending, flush
+    // busy, or a dirty slot present) inside a hardcoded time window covering
+    // the seqdx=2 neon id=2076 incident: walk W8 aa4d3 ff then W8 aa4d4 80,
+    // flush#1 ends ~25.870e9, flush#2 writes 0x6049A6/A8 at 25.8759e9 with
+    // fl_d=1110 (B lane clean = the 0x80 was masked out). Hunt: which cycle
+    // loses/never sets the B dirty mark (candidates: flush-end full clear,
+    // fill-on-the-fly not marking, merge marking rb_d[ws] while the fill
+    // tagged rb_d[fws]).
+    int cyct = 0;
+    initial if (!$value$plusargs("cyct=%d", cyct)) cyct = 0;
+    always @(posedge clk) begin
+        if (cyct != 0
+            && ((rb_upd_w && rb_line[15:0] == 16'hAA4D)
+                || (mem_wr   && rb_line[15:0] == 16'hAA4D)
+                || (fl_busy  && fl_tag[15:0] == 16'hAA4D)
+                || (pf_busy  && pf_tag[15:0] == 16'hAA4D)))
+            $display("CY %0t st=%0d ws=%b fws=%b gp=%0d off=%h upw=%b pbw=%b mw=%b%b mwa=%05x d0=%b d1=%b fb=%b ph=%0d fi=%0d fs=%b fd=%b v0=%b v1=%b t0=%h t1=%h mru=%b rbl=%h ftg=%h",
+                     $time, st, ws, fws, gp, rb_off, rb_upd_w, pf_bw,
+                     mw1, mw0, mw_a, rb_d[0], rb_d[1],
+                     fl_busy, fl_ph, fl_i, fl_s, fl_d,
+                     rb_v[0], rb_v[1], rb_tag[0], rb_tag[1], mru,
+                     rb_line[15:0], fl_tag[15:0]);
+    end
+    // sim-only: +trace_line=3 dumps the fill beats for one line (neon 0xA83D
+    // -> SDRAM words 0x6007A0-0x7BF). FBREQ prints each port-G read request,
+    // FB every accepted beat with the bank word it lands as. A complete fill
+    // is 2 requests x 16 beats; fewer FB lines or a bad bi sequence means
+    // beats were dropped and the bank kept the previous line's words (the
+    // neon stale-read: pass-2 fill handed the walk p2=00 where SDRAM had
+    // 0x1f, SLOTEV showed the fill ran with no pf/WB in flight).
+    always @(posedge clk) begin
+        if (trace_line == 3 || trace_line == 1) begin
+            if (rb_leg && !gf_sent && gvwb_req && (gf_addr[23:5] == 19'h3003D))
+                $display("FBREQ %0t addr=%06x st=%0d", $time, gf_addr, st);
+            if (rb_leg && gf_sent && gvwb_rvalid && (gf_addr[23:5] == 19'h3003D))
+                $display("FB %0t bi=%0d h=%b wa=%05x wd=%04x", $time, rb_bi, gf_h,
+                         rb_bi[1] ? b1_wa : b0_wa, rb_bi[1] ? b1_wd : b0_wd);
+        end
+    end
+    // sim-only: +trace_line=2 additionally dumps every slot-state transition
+    // (walk fill complete / prefetch start-complete-yield / pass-through,
+    // rmwbuf_off and odd-word drops / write-back complete) whose target or
+    // either resident tag matches the failing line's tag (0x3D low bits, both
+    // encodings). Locates which path gave slot1 v=F with stale banks (TRC:
+    // corrupt pass hit ws=1 reading 23.9-era bytes while SDRAM held 0x1f).
+    wire slotev_hit = (rb_tag[0][15:0] == 16'hA83D) || (rb_tag[1][15:0] == 16'hA83D)
+                   || (rb_line[15:0] == 16'hA83D) || (pf_tag[15:0] == 16'hA83D);
+    always @(posedge clk) begin
+        if (trace_line == 2 && slotev_hit)
+            $display("SLOTEV %0t tag0=%05x v0=%x d0=%x tag1=%05x v1=%x d1=%x mru=%b leg=%b flb=%b pfb=%b pfph=%0d addr=%04x pwh=%b",
+                     $time, rb_tag[0], rb_v[0], rb_d[0], rb_tag[1], rb_v[1], rb_d[1],
+                     mru, rb_leg, fl_busy, pf_busy, pf_ph, op_addr[13:0], pw_hold);
+    end
+    always @(posedge clk) begin
+        if (trace_line == 1) begin
+            // Direct address filter: only the failing guest offset 0x3D2 (all
+            // passes, planes, both walk states) -- a few dozen lines total.
+            if (rmw_guest && (st == S_RBH || st == S_WR)
+                && op_addr[13:0] == 14'h03d2) begin
+                trc_cnt <= trc_cnt + 1;
+                $display("TRC %0t st=%0d gp=%0d addr=%04x hit=%b ws=%0d off=%02x rh=%02x rhh=%02x wd=%02x tile=%02x wb=%02x wbg=%02x live=%b v=%h d=%h pw=%b tag0=%05x tag1=%05x rbl=%05x pft=%05x",
+                         $time, st, gp, op_addr[13:0], rb_hit_c, ws, rb_off, rd_hold, rd_hold_hi,
+                         cur_wdata, cur_tile, wr_byte, wr_byte_hi, cur_live, rb_v[ws], rb_d[ws], pw_hold,
+                         rb_tag[0], rb_tag[1], rb_line, pf_tag);
+            end
+            if (fl_busy && $time >= 64'd32 && trcfl_cnt < 200) begin
+                trcfl_cnt <= trcfl_cnt + 1;
+                $display("TRCFL %0t ph=%0d s=%0d d=%h i=%0d h=%b tag=%h",
+                         $time, fl_ph, fl_s, fl_d, fl_i, fl_h, fl_tag);
+            end
+        end
+    end
+`endif
 
 endmodule
 

@@ -148,10 +148,11 @@ module pc98_gdc #(
     output wire        draw_timeout,   // pulse: the watchdog retired this draw
     input  wire        srv_done_stb,   // the engine finished this draw
     // The snapshot the engine reads, latched the moment the draw lands so
-    // the guest cannot race it: 23 bytes = VECTW (11), CSRW (4), TEXTW (2),
-    // ZOOM (1), the WRITE-mode byte (1), MASK (2), CODE (2). Served a word
-    // at a time.
-    output wire [31:0] draw_snap [0:5]
+    // the guest cannot race it: 29 bytes = VECTW (11), CSRW (4), TEXTW (2),
+    // ZOOM (1), the WRITE-mode byte (1), MASK (2), CODE (2), TEXTW[2..7]
+    // (6) -- the whole 8-byte TEXTW area np21w's textdraw reads. Served a
+    // word at a time.
+    output wire [31:0] draw_snap [0:7]
 );
 
     // ------------------------------------------------------------------
@@ -193,23 +194,29 @@ module pc98_gdc #(
     reg        draw_pending;
     reg [7:0]  draw_op_r;
     reg        draw_busy_r;
-    // 23 bytes of snapshot in 24 slots: draw_snap packs four to a word, so
-    // the last byte of word 5 is padding. It has to exist, or the pack below
-    // indexes past the array -- which Verilator allows and Quartus rejects.
-    reg [7:0]  snap [0:23];
+    // 29 bytes of snapshot in 32 slots: draw_snap packs four to a word, so
+    // the last word's top two bytes are padding. They have to exist, or
+    // the pack below indexes past the array -- which Verilator allows and
+    // Quartus rejects.
+    reg [7:0]  snap [0:31];
     assign draw_req     = draw_pending;
     assign draw_timeout = draw_timeouts;
     assign draw_op      = draw_op_r;
     assign draw_busy    = draw_busy_r;
     genvar sk;
     generate
-        for (sk = 0; sk < 6; sk = sk + 1) begin : g_snap
-            assign draw_snap[sk] = {snap[4*sk+3], snap[4*sk+2], snap[4*sk+1], snap[4*sk]};
+        for (sk = 0; sk < 8; sk = sk + 1) begin : g_snap
+            assign draw_snap[sk] = MASTER ? 32'h0
+                                 : {snap[4*sk+3], snap[4*sk+2], snap[4*sk+1], snap[4*sk]};
         end
     endgenerate
 
     // Where each snapshot byte comes from. The last four exist for the WDAT
     // family: MASK and the CODE parameter bytes np21w's gdcsub_write reads.
+    // Bytes 24-29 carry TEXTW[2..7]: np21w's textdraw indexes the FULL
+    // 8-byte pattern area (para[20..27], written by the 0x78-0x7F PRAM
+    // commands), with pat[7] = para[27] drawn first and para[27] doubled
+    // as the pattern of the vectp/vectl/vectc/vectr figures a TEXTE runs.
     function automatic logic [5:0] snap_src(input int k);
         if (k <= 10)     snap_src = 6'(P_VECTW + k);       // 32..42
         else if (k <= 14) snap_src = 6'(P_CSRW + k - 11);  // 43..46
@@ -218,7 +225,9 @@ module pc98_gdc #(
         else if (k == 18) snap_src = 6'(P_WRITE);          // 53: the op byte
         else if (k <= 20) snap_src = 6'(P_MASK + k - 19);  // 46..47
         else if (k <= 22) snap_src = 6'(P_CODE + k - 21);  // 54..55
-        else              snap_src = 6'd0;                 // 23: the pad slot
+        else if (k == 23) snap_src = 6'd0;             // pad: no figure reads it
+        else if (k <= 29) snap_src = 6'(20 + k - 22);  // TEXTW 22..27 (pat[2..7])
+        else              snap_src = 6'd0;                 // 30-31: pad
     endfunction
 
     wire exec_cmd = (wr_d == 8'h6C)   // VECTE
@@ -330,7 +339,7 @@ module pc98_gdc #(
             draw_pending <= 1'b0;
             draw_op_r    <= 8'h00;
             draw_busy_r  <= 1'b0;
-            for (i = 0; i <= 23; i = i + 1) snap[i] <= 8'h00;
+            for (i = 0; i <= 31; i = i + 1) snap[i] <= 8'h00;
             for (i = 0; i <= P_LAST; i = i + 1) para[i] <= 8'h00;
             // np21w gdc_biosreset's other power-on seeds. SYNC is the 24 kHz
             // table this machine's raster runs (the ITF trace's SYNC_OFF
@@ -439,12 +448,17 @@ module pc98_gdc #(
                 // lands with the latch; further EXECUTEs while pending are
                 // dropped (the FIFO-empty bit is already clear, so software
                 // that polls waits) -- the scope guard, sharpened.
-                if (exec_cmd && !draw_pending && !draw_busy_r) begin
+                // Slave only: np21w gdc_work runs vectdraw/textdraw only
+                // when id != GDCWORK_MASTER, so a master EXECUTE is absorbed
+                // like its WDAT run below -- and the master's snapshot,
+                // watchdog and vector parameters fold away with it.
+                if (exec_cmd && !MASTER && !draw_pending && !draw_busy_r) begin
                     draw_pending <= 1'b1;
                     draw_op_r    <= wr_d;
-                    for (i = 0; i <= 22; i = i + 1)
+                    for (i = 0; i <= 29; i = i + 1)
                         snap[i] <= para[snap_src(i)];
-                    snap[23] <= 8'h00;                 // the pad byte
+                    snap[30] <= 8'h00;                 // pad bytes
+                    snap[31] <= 8'h00;
                 end
 
                 // The read-back pair, np21w's `item->snd = indatas` /
@@ -497,10 +511,11 @@ module pc98_gdc #(
                         && !draw_pending && !draw_busy_r) begin
                         draw_pending <= 1'b1;
                         draw_op_r    <= para[P_WRITE];
-                        for (i = 0; i <= 22; i = i + 1)
+                        for (i = 0; i <= 29; i = i + 1)
                             snap[i] <= (snap_src(i) == p_dst)
                                      ? wr_d : para[snap_src(i)];
-                        snap[23] <= 8'h00;
+                        snap[30] <= 8'h00;
+                        snap[31] <= 8'h00;
                     end
                 end
             end

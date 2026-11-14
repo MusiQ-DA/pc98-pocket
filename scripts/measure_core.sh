@@ -29,6 +29,8 @@ rm -rf "$OUT"; mkdir -p "$OUT"
     echo "set_global_assignment -name TOP_LEVEL_ENTITY $TOP"
     for d in $DEFS;   do echo "set_global_assignment -name VERILOG_MACRO \"$d\""; done
     for p in $SEARCH; do echo "set_global_assignment -name SEARCH_PATH \"$p\""; done
+    # MEASURE_PARAMS="PM286=1 EXT_MB=3": the top's parameters
+    for p in ${MEASURE_PARAMS:-}; do echo "set_parameter -name ${p%%=*} ${p#*=}"; done
     for f in "$@"; do
         case "$f" in
             *.vhd) echo "set_global_assignment -name VHDL_FILE \"$f\"" ;;

@@ -163,7 +163,12 @@ module sdram_mp #(
         have_req = 1'b0;
         // Scan from rr_ptr downward so the lowest i (nearest rr_ptr) wins.
         for (i = PORTS-1; i >= 0; i = i - 1) begin
-            idx = (rr_ptr + i) % PORTS;
+            // (rr_ptr + i) mod PORTS without a divider: both terms are
+            // below PORTS (rr_ptr is GRANT_BITS wide, i < PORTS), so one
+            // conditional subtract wraps it -- seven % PORTS cones cost
+            // ~40 ALMs for a non-power-of-two PORTS.
+            idx = int'(rr_ptr) + i;
+            if (idx >= PORTS) idx = idx - PORTS;
             if (p_req[idx]) begin
                 winner   = GRANT_BITS'(idx);
                 have_req = 1'b1;

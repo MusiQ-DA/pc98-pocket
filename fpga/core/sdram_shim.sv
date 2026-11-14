@@ -28,6 +28,7 @@ module sdram_shim #(
     // the same values as localparams.
     parameter int ADDR_BITS_PUB    = 24,
     parameter int LEN_BITS_PUB     = 4,
+    parameter int MASK_BITS_PUB    = sdram_data_width/8,
     parameter int sdram_col_width  = 9,
     parameter int sdram_row_width  = 13,
     parameter int sdram_bank_width = 2,
@@ -73,6 +74,22 @@ module sdram_shim #(
     // word_access is up -- a guest word at an address the SDRAM serves.
     input  wire  [sdram_data_width-1:0]       data_in_hi,
     output logic [sdram_data_width-1:0]       data_out_hi,
+    // Port A's write byte lanes, one mask per burst beat (beat 0 = the
+    // addressed word, beat 1 = its word-access twin), active high. A
+    // THREE-word port-A write is an interleaved GVRAM word (RAM.sv
+    // wr_words_*: offsets n and n+1 of one plane are words W and W+2):
+    // its middle beat belongs to the other plane pair and is always
+    // written with every lane closed; beat 2 takes a_wmask1 and the
+    // data_in_hi word. The
+    // interleaved GVRAM packs TWO guest bytes per SDRAM word (plane pair
+    // B:R / G:E), so a byte write must mask the lane it does not own --
+    // the neighbour plane's byte lives there. Held for the whole
+    // transaction like data_in; sampled at the WRITE beats via the same
+    // p_wcnt select the write data uses. Full mask (all ones) gives the
+    // old behaviour: main RAM stores one guest byte per word with the
+    // spare lane zero-filled and writes it whole.
+    input  wire  [MASK_BITS_PUB-1:0]          a_wmask0,
+    input  wire  [MASK_BITS_PUB-1:0]          a_wmask1,
     // Per-beat read taps for the prefetch engine: a_rvalid pulses the cycle
     // AFTER each p_rvalid, so a_beat already holds that beat's word. Only
     // port A produces them; a burst's beats arrive in address order.
@@ -93,6 +110,11 @@ module sdram_shim #(
     output logic                              sdram_cas,
     output logic                              sdram_we,
     output logic [sdram_bank_width-1:0]       sdram_ba,
+    // The DQM the controller derived from the granted port's p_wmask. This
+    // used to be discarded and the pins driven "always open" from RAM.sv's
+    // state outputs -- harmless while every write was a full 16-bit word,
+    // wrong the moment the interleave packed two guest bytes per word.
+    output logic [MASK_BITS_PUB-1:0]          sdram_dqm,
     input  wire  [sdram_data_width-1:0]       sdram_dq_in,
     output logic [sdram_data_width-1:0]       sdram_dq_out,
     output logic                              sdram_dq_io,
@@ -195,6 +217,10 @@ module sdram_shim #(
     input  wire  [ADDR_BITS_PUB-1:0]          g_addr,
     input  wire  [LEN_BITS_PUB-1:0]           g_len,
     input  wire  [sdram_data_width-1:0]       g_wdata,
+    // Port G's write lanes, consumed combinationally per WRITE beat (the
+    // caller sees the beat index on f_wcnt and drives this like g_wdata).
+    // Full mask keeps the old whole-word write-back.
+    input  wire  [MASK_BITS_PUB-1:0]          g_wmask,
     output logic                              g_ack,
     output logic                              g_done,
 
@@ -377,7 +403,6 @@ module sdram_shim #(
     // Far end: sdram_mp, the six-port controller.
     // ---------------------------------------------------------------------
     logic init_done;
-    logic [MASK_BITS-1:0] dqm_unused;
 
     // Port A is the guest (the request/flag handshake, one word at a time),
     // port B the font fetch, C the CG window, D the display fetch, E the
@@ -402,8 +427,12 @@ module sdram_shim #(
          {sdram_data_width{1'b0}},
          (mp_wcnt == LEN_BITS'(0)) ? wdata_r : wdata_hi_r};
     wire [PORTS-1:0][MASK_BITS-1:0] mp_wmask =
-        {{MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}},
-         {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}};
+         {g_wmask,
+          {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}},
+          {MASK_BITS{1'b1}}, {MASK_BITS{1'b1}},
+          (mp_wcnt == LEN_BITS'(0)) ? a_wmask0
+        : ((len_r == LEN_BITS'(2)) && (mp_wcnt == LEN_BITS'(1)))
+                                     ? {MASK_BITS{1'b0}} : a_wmask1};
     wire [PORTS-1:0] mp_ack, mp_done;
     wire [$clog2(PORTS)-1:0] mp_grant;
 
@@ -511,7 +540,7 @@ module sdram_shim #(
         .sdram_ras_n  (sdram_ras),
         .sdram_cas_n  (sdram_cas),
         .sdram_we_n   (sdram_we),
-        .sdram_dqm    (dqm_unused),
+        .sdram_dqm    (sdram_dqm),
         .sdram_dq_in  (sdram_dq_in),
         .sdram_dq_out (sdram_dq_out),
         .sdram_dq_io  (sdram_dq_io)

@@ -37,9 +37,24 @@ module tb_z86_loop;
     logic [4:0] f_wcnt = 0;
     logic sn_v = 0; logic [23:0] sn_addr = 0; logic [3:0] sn_len = 0;
     int f_rd_n = 0, f_wr_n = 0;
+    // The extended-memory SDRAM words port F touched (core_top's map: linear
+    // 100000h-8FFFFFh at 0x800000-0xFFFFFF), and any port-F access above the
+    // guest's 2 MB that falls outside that pool -- GVRAM, the font bank and
+    // the FDD carve-out live there.
+    logic [23:0] xw_lo = 24'hFFFFFF, xw_hi = 24'h000000;
+    int f_bad_n = 0;
     always @(posedge clk) begin : port_f
         f_ack <= 0; f_rvalid <= 0; f_done <= 0;
         if (f_req && !f_ack) begin
+            if (f_addr[23:21] != 3'd0 && f_addr < 24'h800000) begin
+                f_bad_n++;
+                $display("FAIL port F %s at %06x: outside the 0x800000 pool",
+                         f_we ? "write" : "fill", f_addr);
+            end
+            if (f_we && f_addr[23:21] != 3'd0) begin
+                if (f_addr < xw_lo) xw_lo = f_addr;
+                if (f_addr + 24'(f_len) > xw_hi) xw_hi = f_addr + 24'(f_len);
+            end
             // arbitration + ACTIVATE: 3..(3+lat) clocks
             repeat (3 + (latrand ? ($urandom % (lat + 1)) : lat)) @(posedge clk);
             f_ack <= 1;
@@ -50,7 +65,10 @@ module tb_z86_loop;
                 for (int i = 0; i <= f_len; i++) begin
                     f_wcnt = 5'(i);
                     #1;
-                    mem[f_addr[19:0] + 20'(i)] = (i == 0) ? f_wd0[7:0] : f_wd1[7:0];
+                    if (f_addr[23:21] != 3'd0)      // PM286 extended memory pages
+                        xmem[f_addr + 24'(i)] = (i == 0) ? f_wd0[7:0] : f_wd1[7:0];
+                    else
+                        mem[f_addr[19:0] + 20'(i)] = (i == 0) ? f_wd0[7:0] : f_wd1[7:0];
                     if (wlog != 0) $fdisplay(wlog, "%05x %02x", f_addr[19:0] + 20'(i),
                                              (i == 0) ? f_wd0[7:0] : f_wd1[7:0]);
                     @(posedge clk);
@@ -59,7 +77,10 @@ module tb_z86_loop;
             end else begin
                 f_rd_n++;
                 for (int i = 0; i <= f_len; i++) begin
-                    f_rvalid <= 1; f_rdata <= {8'h00, mem[f_addr[19:0] + 20'(i)]};
+                    f_rvalid <= 1;
+                    f_rdata <= {8'h00, (f_addr[23:21] != 3'd0)
+                                ? (xmem.exists(f_addr + 24'(i)) ? xmem[f_addr + 24'(i)] : 8'h00)
+                                : mem[f_addr[19:0] + 20'(i)]};
                     @(posedge clk);
                 end
                 f_rvalid <= 0;
@@ -87,8 +108,20 @@ module tb_z86_loop;
         pace_ce_r <= (pace_div == 2'd3);
     end
 
-    z86 #(.WCOMB(1'b1)) u (.clk(zclk), .reset(reset), .clk_free(clk), .ce(zce), .cache_en(nocache == 0), .pace(pace_r), .pace_ce(pace_ce_r), .pace_rd_wait(pace_w), .pace_wr_wait(pace_w), .pace_vwait(5'd0), .dx(dx_r),
-           .bios_shadow(1'b0), .bios_protect(1'b0),
+    // +extoff: the OSD's Ext Memory = None (z86_cache ext_en low): the
+    // whole of extended memory is the hole.
+    logic ext_en_r = 1'b1;
+    initial if ($test$plusargs("extoff")) ext_en_r = 1'b0;
+`ifdef PM286
+    // +define+EXT_MB=N: the fitted size (the PM suite runs 2 and 8).
+`ifndef EXT_MB
+`define EXT_MB 2
+`endif
+    z86 #(.WCOMB(1'b1), .PM286(1'b1), .EXT_MB(`EXT_MB)) u (
+`else
+    z86 #(.WCOMB(1'b1)) u (
+`endif.clk(zclk), .reset(reset), .clk_free(clk), .ce(zce), .cache_en(nocache == 0), .pace(pace_r), .pace_ce(pace_ce_r), .pace_rd_wait(pace_w), .pace_wr_wait(pace_w), .pace_vwait(5'd0), .dx(dx_r),
+           .bios_shadow(1'b0), .bios_protect(1'b0), .ext_en(ext_en_r), .a_quiet(1'b1),
            .f_req(f_req), .f_we(f_we), .f_addr(f_addr), .f_len(f_len),
            .f_wdata0(f_wd0), .f_wdata1(f_wd1), .f_ack(f_ack), .f_rvalid(f_rvalid),
            .f_rdata(f_rdata), .f_done(f_done), .f_wcnt(f_wcnt), .sn_v(sn_v), .sn_addr(sn_addr), .sn_len(sn_len),
@@ -100,6 +133,7 @@ module tb_z86_loop;
            .dbg_halted(halted));
 
     logic [7:0] mem [0:1048575];
+    logic [7:0] xmem [logic [23:0]];     // port F above the guest megabyte
     int lat = 4, n = 1000, cur_lat = 4, latrand = 0;
     // +maxcyc=N: the runaway bound (paced runs take ~4x the clocks)
     longint maxcyc = 10_000_000;
@@ -308,6 +342,7 @@ module tb_z86_loop;
             $display("n=%0d lat=%0d: %0d clocks, %0d reads, %0d writes -> %0.1f clk/iter",
                      n, lat, cyc_n, rd_n, wr_n, real'(cyc_n) / n);
             $display("port F: %0d fills, %0d writes", f_rd_n, f_wr_n);
+            if (xw_hi != 24'h0) $display("port F ext writes: %06x-%06x", xw_lo, xw_hi);
             for (int a = 0; a < 20'h20000; a += 2)
                 if ({mem[a+1], mem[a]} == 16'hA000)
                     $display("A000 found at %05x", a);

@@ -177,7 +177,7 @@ module tb_ramimg_write;
         else       fifo_readdata <= fifo_q;
 
     // floppy.v:152 -- combinational, routed straight back (Peripherals mux:
-    // not SCSI/OPNA/sndev -> mgmt_fdd_readdata).
+    // not SCSI/OPNA/reg 0xE -> mgmt_fdd_readdata).
     always_comb
         mgmt_din = (f_addr == 4'd0) ? {sel_drive, sd_sector}
                  : (&f_addr)        ? {8'h00, fifo_readdata}

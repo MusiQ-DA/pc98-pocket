@@ -15,7 +15,15 @@
 // - nand2mario, 7/2025
 
 module z86 #(
-    parameter bit WCOMB = 0             // z86_cache store combining
+    parameter bit WCOMB = 0,            // z86_cache store combining
+    // PC-98 port: the minimal 80286 protected mode np21w's i286c gives the
+    // PC-9801 ITF and BIOS -- hidden 24-bit segment bases, GDTR/IDTR,
+    // LGDT/LIDT/SGDT/SIDT, LMSW/SMSW, descriptor-loading segment loads with
+    // PE set, the A20 gate, extended memory on port F (z86_cache EXT_MB).
+    // No limit/type checks, no exceptions, no task switch; only a CPU
+    // reset (OUT 0F0h) leaves protected mode. 0 builds the 20-bit core.
+    parameter bit PM286 = 0,
+    parameter int EXT_MB = 8            // extended memory at 1 MB (PM286, at most 8)
 ) (
     input               clk,            // the bridge's gated CPU clock
     input               reset,
@@ -35,6 +43,8 @@ module z86 #(
     input       [6:0]   dx,
     input               bios_shadow,    // RAM.sv bios_shadow_flag
     input               bios_protect,   // RAM.sv bios_protect_flag[1]
+    input               ext_en,         // PM286: extended memory fitted (z86_cache)
+    input               a_quiet,        // RAM.sv gv_a_quiet (z86_cache's EMS window order)
 
     // ---- sdram_mp port F (see z86_cache) --------------------------------
     output              f_req,
@@ -132,7 +142,7 @@ always @(posedge clk) begin
 end
 
 // cache interface 
-wire [19:0] ld_addr;
+wire [23:0] ld_addr;
 wire [127:0] ld_data;
 wire ld_req, ld_ack;
 wire ld_drop;          // fetch no longer wants the line load in flight
@@ -142,15 +152,15 @@ wire [15:0] rd_data;
 
 wire ex_rd;      // read from EXECUTE
 wire ex_rd_io;
-wire [19:0] ex_rd_addr;  
+wire [23:0] ex_rd_addr;  
 wire ex_rd_word;
 
 wire id_rd;      // read from DECODE
 wire id_rd_io;
-wire [19:0] id_rd_addr;
+wire [23:0] id_rd_addr;
 wire id_rd_word;
 
-wire [19:0] wr_addr;   // write from EXECUTE
+wire [23:0] wr_addr;   // write from EXECUTE
 wire [15:0] wr_data;
 wire wr_word;
 wire wr_valid, wr_ready;
@@ -181,8 +191,8 @@ wire ex_ready /* verilator public */, ex_valid /* verilator public */;
 wire [15:0] ex_ip_after /* verilator public */;
 wire ex_mem_rd;
 wire [15:0] ex_e_addr_val;
-wire [19:0] ex_e_fulladdr;
-wire [15:0] ex_e_segment;
+wire [23:0] ex_e_fulladdr;
+wire [23:0] ex_e_base;
 wire [15:0] ex_g_val;
 wire [7:0] ex_opcode /* verilator public */;
 wire [16:0] ex_iclass;
@@ -212,11 +222,13 @@ wire [15:0] wb_flags;
 wire wb_seg_valid;
 wire [1:0] wb_seg;
 wire [15:0] wb_seg_data;
+wire wb_seg_pm;
+wire [23:0] wb_seg_base;
 wire br_taken;
 wire [2:0] rep_x;             // REP iteration surcharge for the paced cache
 wire       rep_on;            // a REP string loop is running
 wire [4:0] sh_extra;          // shift count n for the paced issue gate
-wire [19:0] br_target;
+wire [23:0] br_target;
 wire [15:0] br_new_cs;
 wire [15:0] br_new_ip;
 
@@ -239,6 +251,21 @@ wire [15:0] seg_ES;
 wire [15:0] seg_CS;
 wire [15:0] seg_SS;
 wire [15:0] seg_DS;
+wire [23:0] base_ES, base_CS, base_SS, base_DS;
+wire        pe;
+
+// PC-98 port (PM286): the A20 gate. OUT 0F2h opens it, OUT 0F0h closes it
+// and resets the CPU (np21w io/cpuio.c); Peripherals.sv keeps the copy IN
+// 0F2h reports. Closed, every linear address is masked to 20 bits as
+// np21w's CPU_ADRSMASK does, so real mode wraps at 1 MB; open, the HMA
+// and everything protected mode addresses reach z86_cache. The mask is
+// z86_cache's (its a20 input): with the gate closed it decodes a[19:0]
+// only, so no AND sits on the CPU's address-to-cache critical path.
+reg a20 = 1'b0;
+always @(posedge clk)
+    if (reset) a20 <= 1'b0;
+    else if (PM286 && wr_valid && wr_ready && wr_io && wr_addr[15:0] == 16'h00F2) a20 <= 1'b1;
+    else if (wr_valid && wr_ready && wr_io && wr_addr[15:0] == 16'h00F0) a20 <= 1'b0;
 
 reg [19:0] dbg_set_addr_val;
 reg [15:0] dbg_set_ip_val;
@@ -246,7 +273,7 @@ reg dbg_set_addr;
 
 // cache and memory interface serves FETCH (instruction loads), EXECUTE (memory read) and WRITE-BACK (memory write)
 wire cache_busy;
-z86_cache #(.WCOMB(WCOMB)) u_cache (
+z86_cache #(.WCOMB(WCOMB), .PM286(PM286), .EXT_MB(EXT_MB)) u_cache (
     .clk                (clk_free),
     .ce                 (ce),
     .reset              (reset),
@@ -278,6 +305,9 @@ z86_cache #(.WCOMB(WCOMB)) u_cache (
     .dbg_watch_a        (dbg_watch_a),
     .dbg_sn_kills       (dbg_sn_kills),
     .busy               (cache_busy),
+    .a20                (PM286 && a20),
+    .ext_en             (ext_en),
+    .a_quiet            (a_quiet),
     .ld_addr            (ld_addr),
     .ld_req             (ld_req),
     .ld_ack             (ld_ack),
@@ -339,7 +369,7 @@ regfile u_regfile (
 
 // FETCH: 32-byte instruction fetch buffer that does 16-byte loads from the cache. 
 // DECODE1: calculate instruction length and decode into prefix, opcode, modrm, displacement, immediate
-fetch u_fetch_decode1 (
+fetch #(.PM286(PM286)) u_fetch_decode1 (
     .clk                (clk), 
     .reset              (cpu_reset), 
     .reset_addr         (dbg_reset_addr),  // physical address to load after reset
@@ -386,7 +416,7 @@ fetch u_fetch_decode1 (
 );
 
 // DECODE2: calculate effective address
-decode u_decode2 (
+decode #(.PM286(PM286)) u_decode2 (
     .clk                (clk), 
     .reset              (cpu_reset),
 
@@ -415,7 +445,7 @@ decode u_decode2 (
     .ex_ready           (ex_ready), 
     .ex_valid           (ex_valid), 
     .ex_ip_after        (ex_ip_after), 
-    .ex_e_segment       (ex_e_segment),
+    .ex_e_base          (ex_e_base),
     .ex_mem_rd          (ex_mem_rd), 
     .ex_e_addr_val      (ex_e_addr_val), 
     .ex_e_fulladdr      (ex_e_fulladdr), 
@@ -428,6 +458,12 @@ decode u_decode2 (
     .ex_ucode_entry_next(ex_ucode_entry_next), 
     .ex_ucode_valid     (ex_ucode_valid), 
     .ex_inst            (ex_inst),
+
+    .base_CS            (base_CS),
+    .base_SS            (base_SS),
+    .base_DS            (base_DS),
+    .base_ES            (base_ES),
+    .pe                 (pe),
 
     .reg1_raddr         (reg1_raddr), 
     .reg1_rdata         (reg1_rdata),
@@ -467,7 +503,7 @@ decode u_decode2 (
 );
 
 // EXECUTE: execute the instruction, with hardwired logic as fast path and microcode for complex instructions
-execute u_execute (
+execute #(.PM286(PM286)) u_execute (
     .hlt_wake           (wb_tgc_i),
     .rep_int            (rep_int),
     .sh_extra           (sh_extra),
@@ -480,7 +516,7 @@ execute u_execute (
     .ex_ready           (ex_ready), 
     .ex_valid           (ex_valid), 
     .ex_ip_after        (ex_ip_after), 
-    .ex_e_segment       (ex_e_segment),
+    .ex_e_base          (ex_e_base),
     .ex_mem_rd          (ex_mem_rd), 
     .ex_e_addr_val      (ex_e_addr_val), 
     .ex_e_fulladdr      (ex_e_fulladdr),
@@ -513,6 +549,8 @@ execute u_execute (
     .wb_seg_valid       (wb_seg_valid), 
     .wb_seg             (wb_seg), 
     .wb_seg_data        (wb_seg_data),
+    .wb_seg_pm          (wb_seg_pm),
+    .wb_seg_base        (wb_seg_base),
 
     .ex_reg             (ex_reg), 
     .reg1_raddr         (ex_reg1_raddr), 
@@ -525,6 +563,10 @@ execute u_execute (
     .seg_CS             (seg_CS), 
     .seg_SS             (seg_SS), 
     .seg_DS             (seg_DS),
+    .base_CS            (base_CS),
+    .base_SS            (base_SS),
+    .base_ES            (base_ES),
+    .pe                 (pe),
 
     .rd                 (ex_rd), 
     .rd_ready           (rd_ready), 
@@ -545,7 +587,7 @@ execute u_execute (
 );
 
 // WRITE-BACK: write the result to the register file or memory
-write_back u_write_back (
+write_back #(.PM286(PM286)) u_write_back (
     .clk                (clk), 
     .reset              (cpu_reset),
 
@@ -563,6 +605,8 @@ write_back u_write_back (
     .wb_seg_valid       (wb_seg_valid), 
     .wb_seg             (wb_seg), 
     .wb_seg_data        (wb_seg_data),
+    .wb_seg_pm          (wb_seg_pm),
+    .wb_seg_base        (wb_seg_base),
 
     .br_taken           (br_taken), 
     .br_target          (br_target), 
@@ -581,6 +625,10 @@ write_back u_write_back (
     .seg_CS             (seg_CS), 
     .seg_SS             (seg_SS), 
     .seg_DS             (seg_DS),
+    .base_ES            (base_ES),
+    .base_CS            (base_CS),
+    .base_SS            (base_SS),
+    .base_DS            (base_DS),
     
     .reg_wr             (dbg_reg_wr), 
     .reg_addr           (dbg_reg_addr), 
@@ -588,7 +636,8 @@ write_back u_write_back (
 );
 
 
-assign pc     = {seg_CS, 4'h0} + reg_ip;
+wire [23:0] pc_lin = base_CS + {8'h00, reg_ip};
+assign pc     = pc_lin[19:0];
 assign dbg_ds = seg_DS;
 assign dbg_regs = {reg_f, reg_ip, seg_DS, seg_SS, seg_CS, seg_ES, dbg_gpr};
 

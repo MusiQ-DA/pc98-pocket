@@ -86,14 +86,15 @@ module tb_gvram_depth_wipe;
         else h <= h + 10'd1;
     end
 
-    // Port model: plane B (A8000 / page one plane 0) answers 0x81 for every
+    // Port model, GV_IL interleave: plane B's byte lives in the even word's
+    // low lane ({R,B} packed per the interleave); it answers 0x81 for every
     // byte of VRAM lines 0..399 and 0x00 past them; R/G/E answer zero.
-    function automatic [7:0] pbyte(input int a);
+    function automatic [15:0] pword(input int a);
         int off;
-        off = a & 32'h7FFF;
-        if (a >= 24'h600000) return (((a >> 15) & 3) == 0 && off < 32000) ? 8'h81 : 8'h00;
-        if (a[19:15] == 5'b10101) return (off < 32000) ? 8'h81 : 8'h00;
-        return 8'h00;
+        if ((a >> 17) != 7'h30) return 16'hDEAD;   // outside the interleave
+        off = (a >> 1) & 32'h7FFF;
+        if (a[0]) return 16'h0000;                      // {E,G}
+        return {8'h00, (off < 32000) ? 8'h81 : 8'h00};  // {R,B}
     endfunction
 
     int burst_addr, burst_len, beat;
@@ -105,7 +106,7 @@ module tb_gvram_depth_wipe;
             burst_addr <= p_addr; burst_len <= p_len + 1; in_burst <= 1;
         end else if (in_burst) begin
             p_rvalid <= 1;
-            p_rdata  <= {8'h00, pbyte(burst_addr + beat)};
+            p_rdata  <= pword(burst_addr + beat);
             if (beat == burst_len - 1) begin
                 p_done <= 1; in_burst <= 0; beat <= 0;
             end else beat <= beat + 1;
