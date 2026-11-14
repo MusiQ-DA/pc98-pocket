@@ -49,3 +49,4 @@ tools/np2run/np2run
 sim/obj_*/
 # verilator --Mdir build trees (CI and local sims)
 obj_*/
+.m_meas/
