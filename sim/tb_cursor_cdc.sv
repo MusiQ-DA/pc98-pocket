@@ -39,7 +39,7 @@ module tb_cursor_cdc;
     wire [1:0]  zoom_disp;
     wire        draw_req, draw_busy;
     wire [7:0]  draw_op;
-    wire [31:0] draw_snap [0:5];
+    wire [31:0] draw_snap [0:7];
 
     pc98_gdc #(.MASTER(1'b1)) gdc (
         .clk(clk), .reset(reset),

@@ -45,7 +45,7 @@ module tb_pc98_text_gate;
     wire [5:0]  cursor_rate;
     wire        draw_req, draw_busy;
     wire [7:0]  draw_op;
-    wire [31:0] draw_snap [0:5];
+    wire [31:0] draw_snap [0:7];
     wire [1:0]  zoom_disp;
     wire [9:0]  vlines;
 
