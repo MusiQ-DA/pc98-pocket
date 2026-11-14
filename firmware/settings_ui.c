@@ -248,7 +248,9 @@ static const item_t items_system[] = {
 
 static const item_t items_av[] = {
     { "Audio Boost", IT_OPTION, SET_BOOST },
-    { "Speaker Volume", IT_OPTION, SET_SPK_VOL },
+    // "Beep": the PC-9801's internal piezo buzzer only -- the OPNA board
+    // mixes in at fixed gain, so this row has no effect on FM/SSG/rhythm.
+    { "Beep Volume", IT_OPTION, SET_SPK_VOL },
     { "Stereo Mix", IT_OPTION, SET_STEREO },
     // "Display" (the monochrome-monitor tints) went with the RTL tint:
     // the setting keeps its blob slot, nothing reads it.
