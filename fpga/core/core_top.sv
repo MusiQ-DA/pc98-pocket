@@ -1213,7 +1213,7 @@ module core_top #(
     wire [19:0] st_addr_w;
     wire  [7:0] st_wdata_w, st_rdata_w, accel_status_w;
     wire [15:0] gdc_draw_ops;
-    wire [383:0] gdc_draw_snaps;
+    wire [511:0] gdc_draw_snaps;
 
 `ifdef PC98_JTAG
     // How far does a key get? key_count counts pc98_key_stb pulses and

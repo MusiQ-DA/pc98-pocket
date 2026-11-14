@@ -16,9 +16,10 @@
 // gdc_pset.c's withtdw/withrmw/withegc -- the pattern bit gates the dot and
 // the hardware does the plane expansion. Reads through the channel always
 // come back raw (the GDC's own bus view); writes are what the charger
-// transforms. TEXTE currently draws the 16-bit TEXTW pattern rather than
-// the full 8-byte PRAM pattern; the snapshot widens when a title proves it
-// matters.
+// transforms. TEXTE draws the FULL 8-byte TEXTW pattern area (np21w's
+// textdraw: pat[patnum & 7] over para[20..27], and para[27] doubled as
+// the pattern of the other figures), carried in snapshot bytes 15-16 and
+// 24-29.
 
 #include "softcpu_regs.h"
 
@@ -35,10 +36,13 @@
 #define ST_ACCEL  ((volatile uint32_t *) 0x50000010)
 
 // The two channels' register windows. The 0x140 block is the master, 0x180
-// the slave: {status, snap0..snap4} then the done register at +0x1C.
+// the slave: {status, snap0..snap5} then the done register at +0x1C. The
+// snapshot's words 6 and 7 (TEXTW[2..7] and padding) sit past the done
+// register, at +0x20/+0x24.
 #define GDCD_STATUS(ch) ((volatile uint32_t *) (0x50000140u + (ch) * 0x40u))
 #define GDCD_SNAPW(ch)  ((volatile uint32_t *) (0x50000144u + (ch) * 0x40u))
 #define GDCD_DONE(ch)   ((volatile uint32_t *) (0x5000015Cu + (ch) * 0x40u))
+#define GDCD_SNAPW2(ch) ((volatile uint32_t *) (0x50000160u + (ch) * 0x40u))
 #endif
 
 #define GDC_CH_MASTER 0
@@ -46,11 +50,12 @@
 #define GDC_OP_VECTE  0x6Cu
 #define GDC_OP_TEXTE  0x68u
 
-// The snapshot, twenty-three bytes in the order the RTL packs them: VECTW's
+// The snapshot, twenty-nine bytes in the order the RTL packs them: VECTW's
 // eleven, CSRW's four (np21w reads a dword -- the fourth byte's high nibble
 // is the dot address), TEXTW's two, ZOOM, the WRITE-mode byte, then MASK's
-// two and the CODE parameter pair -- the last four exist for WDAT, whose
-// draw needs what np21w's gdcsub_write reads (io/gdc_sub.c).
+// two and the CODE parameter pair -- those four exist for WDAT, whose
+// draw needs what np21w's gdcsub_write reads (io/gdc_sub.c) -- and TEXTW's
+// bytes 2..7, the rest of the 8-byte pattern area np21w's textdraw reads.
 struct gdc_snap {
     uint8_t ope;
     uint8_t dc_lo, dc_hi;
@@ -64,36 +69,13 @@ struct gdc_snap {
     uint8_t write_mode;
     uint8_t mask[2];
     uint8_t code[2];
-};
-
-// np21w's direction table: {x, y, x2, y2} steps for octants 0-7 and the
-// SL-flavoured 8-15 (io/gdc_sub.c vectdir).
-static const int8_t vectdir[16][4] = {
-    { 0, 1, 1, 0 },
-    { 1, 1, 1, -1 },
-    { 1, 0, 0, -1 },
-    { 1, -1, -1, -1 },
-    { 0, -1, -1, 0 },
-    { -1, -1, -1, 1 },
-    { -1, 0, 0, 1 },
-    { -1, 1, 1, 1 },
-    { 0, 1, 1, 1 },
-    { 1, 1, 1, 0 },
-    { 1, 0, 1, -1 },
-    { 1, -1, 0, -1 },
-    { 0, -1, -1, -1 },
-    { -1, -1, -1, 0 },
-    { -1, 0, -1, 1 },
-    { -1, 1, 0, 1 },
+    uint8_t textw6[6];
 };
 
 // np21w's gdcplaneseg order: EAD bits 15-14 select the plane; the bases are
 // the hardware windows (A8000=B, B0000=R, B8000=G, E at E0000).
 static const uint32_t plane_base[4] = { 0xE0000, 0xA8000, 0xB0000, 0xB8000 };
 
-// np21w's gdcbitreverse, built at boot: a table would cost 256 ROM bytes.
-static uint8_t bitreverse[256];
-static int gdc_inited = 0;
 
 // The softcore has no divider (nodiv-verify gates it), so every division
 // here goes through a shift-and-subtract long divide. It starts from the
@@ -130,17 +112,6 @@ static uint32_t udiv32(uint32_t n, uint32_t d, uint32_t *rem)
     return q;
 }
 
-static void init_bitreverse(void)
-{
-    for (int i = 0; i < 256; i++) {
-        uint8_t r = 0, v = (uint8_t) i;
-        for (int b = 0; b < 8; b++) {
-            r = (uint8_t) ((r << 1) | (v & 1u));
-            v >>= 1;
-        }
-        bitreverse[i] = r;
-    }
-}
 
 // One guest byte through the self-test master: bounded, so a wedged bus
 // degrades to a wrong pixel rather than a hang.
@@ -275,6 +246,9 @@ static void pset_at(int x, int y)
 #define LN_DOT_ONLY   (1u << 9)
 #define LN_FIG_LINE   (0u << 10)
 #define LN_FIG_RECT   (1u << 10)
+#define LN_FIG_VECTT  (2u << 10)
+#define LN_FIG_TEXT   (3u << 10)
+#define LN_TEXT_CMD   (1u << 13)
 
 // LN_DOT_ONLY is np21w's vectp: a lone gdcpset(x, y), which is also the
 // vectl loop's first dot (step 0) -- the engine runs it with DC forced 0.
@@ -300,41 +274,6 @@ static void draw_hw(uint32_t csrw, uint32_t go)
 
 // ---- the primitives, np21w's algorithms verbatim ---------------------------
 
-static void vectt(const struct gdc_snap *g, uint16_t pat)
-{
-    if (g->ope & 0x80) { // SL: the pattern runs backwards
-        pat = (uint16_t) (((uint16_t) bitreverse[pat & 0xFF] << 8) | bitreverse[pat >> 8]);
-    }
-    uint8_t multiple = (uint8_t) ((g->zoom & 15u) + 1u);
-    uint32_t sx = (((uint32_t) g->d_lo | ((uint32_t) g->d_hi << 8)) - 1u) & 0x3FFFu;
-    sx += 1u;
-    if (sx >= 768u) {
-        sx = 768u;
-    }
-    const int8_t *dir = vectdir[g->ope & 7];
-    for (uint8_t muly = multiple; muly; muly--) {
-        int cx = pset.x, cy = pset.y;
-        for (uint32_t xrem = sx; xrem; xrem--) {
-            uint8_t mulx = multiple;
-            if (pat & 1u) {
-                pat = (uint16_t) ((pat >> 1) | 0x8000u);
-                while (mulx--) {
-                    pset_at(cx, cy);
-                    cx += dir[0];
-                    cy += dir[1];
-                }
-            } else {
-                pat >>= 1;
-                while (mulx--) {
-                    cx += dir[0];
-                    cy += dir[1];
-                }
-            }
-        }
-        pset.x = (uint16_t) (pset.x + dir[2]);
-        pset.y = (uint16_t) (pset.y + dir[3]);
-    }
-}
 
 // Circles: np21w io/gdc_sub.c gdcsub_vectc, with its own 4097-entry table
 // (gdc_rt.h, generated from np21w's formula; 8 KB of the ROM's spare room).
@@ -401,57 +340,6 @@ static void vectc(const struct gdc_snap *g)
         if (krem >= m) {
             krem -= m;
             k++;
-        }
-    }
-}
-
-// TEXTE: DC/D are the cell size in dots; the octant plus the SL bit choose
-// the text-flavoured direction. The pattern is the 16-bit TEXTW stand-in
-// until the snapshot widens (see the header note).
-static void gdc_text(const struct gdc_snap *g)
-{
-    uint8_t multiple = (uint8_t) ((g->zoom & 15u) + 1u);
-    uint32_t sy = (((uint32_t) g->dc_lo | ((uint32_t) g->dc_hi << 8)) & 0x3FFFu) + 1u;
-    uint32_t sx = (((uint32_t) g->d_lo | ((uint32_t) g->d_hi << 8)) - 1u) & 0x3FFFu;
-    sx += 1u;
-    if (sx >= 768u) {
-        sx = 768u;
-    }
-    if (sy >= 768u) {
-        sy = 768u;
-    }
-    uint8_t pat[8];
-    pat[0] = g->textw[0];
-    pat[1] = g->textw[1];
-    for (int i = 2; i < 8; i++) {
-        pat[i] = pat[i & 1];
-    }
-    const int8_t *dir = vectdir[((g->ope & 0x80) >> 4) + (g->ope & 7)];
-    int patnum = 0;
-    while (sy--) {
-        for (uint8_t muly = multiple; muly; muly--) {
-            int cx = pset.x, cy = pset.y;
-            patnum--;
-            uint8_t bit = pat[patnum & 7];
-            for (uint32_t xrem = sx; xrem; xrem--) {
-                uint8_t mulx = multiple;
-                if (bit & 1u) {
-                    bit = (uint8_t) ((bit >> 1) | 0x80u);
-                    while (mulx--) {
-                        pset_at(cx, cy);
-                        cx += dir[0];
-                        cy += dir[1];
-                    }
-                } else {
-                    bit >>= 1;
-                    while (mulx--) {
-                        cx += dir[0];
-                        cy += dir[1];
-                    }
-                }
-            }
-            pset.x = (uint16_t) (pset.x + dir[2]);
-            pset.y = (uint16_t) (pset.y + dir[3]);
         }
     }
 }
@@ -548,38 +436,51 @@ static void serve_slave(uint32_t st)
 {
     struct gdc_snap g;
     const volatile uint32_t *w0 = GDCD_SNAPW(GDC_CH_SLAVE);
-    if ((st & 0xFFu) == GDC_OP_VECTE) {
-        // The common case, a LINE (or a lone dot) and nothing else: the
-        // engine reads the snapshot itself, so only CSRW (bytes 11-14) is
-        // needed here -- the byte-by-byte unpack below costs ~250
-        // instructions, a quarter of a millisecond at the softcore's pace.
+    if ((st & 0xFFu) == GDC_OP_VECTE || (st & 0xFFu) == GDC_OP_TEXTE) {
+        // Everything but a circle: the engine reads the snapshot itself,
+        // so only CSRW (bytes 11-14) is needed here -- the byte-by-byte
+        // unpack below costs ~250 instructions, a quarter of a millisecond
+        // at the softcore's pace. np21w's vectdraw / textdraw order; bit
+        // 0x10 is VECTT under VECTE and the character figure under TEXTE.
         uint32_t s0 = w0[0];
-        if (!(s0 & 0x30u)) {
-            // vectp / vectl / vectr in np21w's vectdraw order
+        // np21w's textdraw hands the dot/line/rect figures para[27]
+        // doubled as their pattern; the engine's TEXT_CMD flavour does it.
+        uint32_t tx = ((st & 0xFFu) == GDC_OP_TEXTE) ? LN_TEXT_CMD : 0u;
+        if (!(s0 & 0x20u)) {
             uint32_t csrw = (w0[2] >> 24) | (w0[3] << 8);
-            if (!(s0 & 0x48u)) {
-                draw_hw(csrw, LN_DOT_ONLY);
+            if (!(s0 & 0x78u)) {
+                draw_hw(csrw, LN_DOT_ONLY | tx);
             }
             if (s0 & 0x08u) {
-                draw_hw(csrw, LN_FIG_LINE);
+                draw_hw(csrw, LN_FIG_LINE | tx);
+            }
+            if (s0 & 0x10u) {
+                draw_hw(csrw, ((st & 0xFFu) == GDC_OP_TEXTE) ? LN_FIG_TEXT : LN_FIG_VECTT);
             }
             if (s0 & 0x40u) {
-                draw_hw(csrw, LN_FIG_RECT);
+                draw_hw(csrw, LN_FIG_RECT | tx);
             }
             return;
         }
     }
-    uint32_t w[6];
+    uint32_t w[8];
     for (int i = 0; i < 6; i++) {
         w[i] = w0[i];
     }
+    w[6] = GDCD_SNAPW2(GDC_CH_SLAVE)[0];   // bytes 24-27: para[22..25]
+    w[7] = GDCD_SNAPW2(GDC_CH_SLAVE)[1];   // bytes 28-29: para[26..27]
     uint8_t *b = (uint8_t *) &g;
-    for (int i = 0; i < 23; i++) {
+    for (int i = 0; i < 29; i++) {
         b[i] = (uint8_t) (w[i >> 2] >> ((i & 3) * 8));
     }
     uint32_t csrw = g.csrw[0] | ((uint32_t) g.csrw[1] << 8) | ((uint32_t) g.csrw[2] << 16) |
                     ((uint32_t) g.csrw[3] << 24);
-    uint16_t textw = g.textw[0] | ((uint16_t) g.textw[1] << 8);
+    // np21w: vectdraw's vectt/vectc read the TEXTW word (para[20..21]);
+    // textdraw hands its figures para[27] doubled instead.
+    uint16_t textw = ((st & 0xFFu) == GDC_OP_TEXTE)
+                   ? (uint16_t) ((uint16_t) g.textw6[5] * 0x0101u)
+                   : g.textw[0] | ((uint16_t) g.textw[1] << 8);
+    uint32_t tx = ((st & 0xFFu) == GDC_OP_TEXTE) ? LN_TEXT_CMD : 0u;
     HB_MARK(0x50 | ((st >> 2) & 0x0F)); // claimed: opcode family visible
     if ((st & 0xE4u) == 0x20u) {
         // A completed WDAT run: gdcsub_write, np21w io/gdc_sub.c.
@@ -589,25 +490,20 @@ static void serve_slave(uint32_t st)
         // np21w's vectdraw/textdraw: every figure starts from its own
         // gdcpset_prepare (pattern, x and y afresh from CSRW).
         if (!(g.ope & 0x78u)) {
-            draw_hw(csrw, LN_DOT_ONLY); // vectp: a single dot
+            draw_hw(csrw, LN_DOT_ONLY | tx); // vectp: a single dot
         }
         if (g.ope & 0x08u) {
-            draw_hw(csrw, LN_FIG_LINE);
+            draw_hw(csrw, LN_FIG_LINE | tx);
         }
         if (g.ope & 0x10u) {
-            pset_prepare(csrw, textw, g.write_mode);
-            vectt(&g, textw);
+            draw_hw(csrw, ((st & 0xFFu) == GDC_OP_TEXTE) ? LN_FIG_TEXT : LN_FIG_VECTT);
         }
         if (g.ope & 0x20u) {
             pset_prepare(csrw, textw, g.write_mode);
             vectc(&g);
         }
         if (g.ope & 0x40u) {
-            draw_hw(csrw, LN_FIG_RECT);
-        }
-        if ((st & 0xFFu) == GDC_OP_TEXTE) {
-            pset_prepare(csrw, textw, g.write_mode);
-            gdc_text(&g);
+            draw_hw(csrw, LN_FIG_RECT | tx);
         }
     }
 }
@@ -624,10 +520,6 @@ static void serve_slave(uint32_t st)
 // EXECUTEs still retire so its throttle releases.
 void gdc_poll(void)
 {
-    if (!gdc_inited) {
-        init_bitreverse();
-        gdc_inited = 1;
-    }
     // Status word is {.., draw_req bit9, draw_busy bit8, opcode[7:0]}:
     // the request flag sits ABOVE the opcode -- testing bit 1 only ever
     // saw an opcode bit, so opcodes with it clear (WDAT 20h, VECTE 6Ch,

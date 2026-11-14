@@ -1,17 +1,20 @@
 // tb_softcpu_gdcdraw -- the REAL firmware.vh on the real picorv32 inside the
 // real softcpu_subsystem (and with it pc98_gdc_draw), fed random slave-GDC
-// LINE commands through the gdc_draw_* handshake. A GVRAM model answers the
-// service channel the way pc98_gvram_seq does (own-plane raw reads; plain,
-// GRCG RMW and GRCG TDW writes) after a clk_sys latency per op kind, and
-// np21w's gdcsub_vectl + gdcpset (io/gdc_sub.c, io/gdc_pset.c), written out
-// below on a second VRAM copy, is the reference: after every line the four
-// planes must match byte for byte.
+// drawing commands (LINE / dot / RECT / VECTT / TEXTE) through the
+// gdc_draw_* handshake. A GVRAM model answers the service channel the way
+// pc98_gvram_seq does (own-plane raw reads; plain, GRCG RMW and GRCG TDW
+// writes) after a clk_sys latency per op kind, and np21w's vectdraw /
+// textdraw (io/gdc_sub.c, io/gdc_pset.c), written out below on a second
+// VRAM copy, is the reference: after every draw the four planes must match
+// byte for byte. TEXTE's snapshot carries the full 8-byte TEXTW area
+// (bytes 15-16 and 24-29); np21w's textdraw doubles para[27] for its
+// vectp/vectl/vectr figures.
 //
 // It also times each command from the request to the retire pulse -- the
 // whole firmware + engine path the guest's DRAWING bit waits on -- and
-// prints the per-line / per-dot means.
+// prints the per-draw / per-dot means.
 //
-//   +n=<lines> (default 300)  +seed=<n>  +sane (D1 <= 2*DC, for timing)
+//   +n=<draws> (default 300)  +seed=<n>  +sane (D1 <= 2*DC, for timing)
 `timescale 1ns/1ps
 
 module tb_softcpu_gdcdraw;
@@ -31,7 +34,7 @@ module tb_softcpu_gdcdraw;
     reg  [1:0]   draw_req  = 2'b00;
     reg  [1:0]   draw_busy = 2'b00;
     reg  [15:0]  draw_ops  = 16'h0000;
-    reg  [383:0] draw_snap = 384'd0;
+    reg  [511:0] draw_snap = 512'd0;
 
     // Boot-time dataslot model: the firmware polls TDS_STATUS for
     // done/ack around every transfer (font load, mounts). Answer every
@@ -152,6 +155,11 @@ module tb_softcpu_gdcdraw;
 
     integer errors = 0;
     integer lat_plain = 12, lat_rmw = 80, lat_tdw = 40;
+    integer dbg_trace = 0;
+    initial void'($value$plusargs("trace=%d", dbg_trace));
+    reg trace_en = 0;   // high while the draw indexed by dbg_trace runs
+    reg fixmode = 0;    // +fix: replay docker's failing draw 39 verbatim
+    initial fixmode = $test$plusargs("fix");
     integer sv_cnt = 0;
     reg     sv_busy = 0;
     reg     req_s = 0;
@@ -171,6 +179,9 @@ module tb_softcpu_gdcdraw;
             sv_cnt  <= lat;
         end else if (sv_busy) begin
             if (sv_cnt == 0) begin
+                if (trace_en)
+                    $display("SVC %0t we=%0d raw=%0d addr=%05x data=%02x accel=%02x",
+                             $time, st_we, st_raw, st_addr, st_wdata, accel);
                 sv_busy   <= 1'b0;
                 st_done_r <= 1'b1;
                 n_ops     <= n_ops + 1;
@@ -262,8 +273,161 @@ module tb_softcpu_gdcdraw;
         end
     endtask
 
+    // np21w's vectdir[16]: {x, y} walks the column, {x2, y2} the row
+    task automatic r_dir(input integer sel, output integer dx, output integer dy,
+                         output integer dx2, output integer dy2);
+        case (sel & 15)
+            0: begin dx = 0; dy = 1; dx2 = 1; dy2 = 0; end
+            1: begin dx = 1; dy = 1; dx2 = 1; dy2 = -1; end
+            2: begin dx = 1; dy = 0; dx2 = 0; dy2 = -1; end
+            3: begin dx = 1; dy = -1; dx2 = -1; dy2 = -1; end
+            4: begin dx = 0; dy = -1; dx2 = -1; dy2 = 0; end
+            5: begin dx = -1; dy = -1; dx2 = -1; dy2 = 1; end
+            6: begin dx = -1; dy = 0; dx2 = 0; dy2 = 1; end
+            7: begin dx = -1; dy = 1; dx2 = 1; dy2 = 1; end
+            8: begin dx = 0; dy = 1; dx2 = 1; dy2 = 1; end
+            9: begin dx = 1; dy = 1; dx2 = 1; dy2 = 0; end
+            10: begin dx = 1; dy = 0; dx2 = 1; dy2 = -1; end
+            11: begin dx = 1; dy = -1; dx2 = 0; dy2 = -1; end
+            12: begin dx = 0; dy = -1; dx2 = -1; dy2 = -1; end
+            13: begin dx = -1; dy = -1; dx2 = -1; dy2 = 0; end
+            14: begin dx = -1; dy = 0; dx2 = -1; dy2 = 1; end
+            default: begin dx = -1; dy = 1; dx2 = 0; dy2 = 1; end
+        endcase
+    endtask
+
+    function automatic [7:0] bitrev8(input [7:0] v);
+        reg [7:0] r;
+        integer i;
+        for (i = 0; i < 8; i = i + 1) r[i] = v[7 - i];
+        bitrev8 = r;
+    endfunction
+
+    reg [15:0] r_px0, r_py0;
+    task automatic r_prepare(input [31:0] csrw, input [15:0] pat);
+        begin
+            r_pat  = pat;
+            r_px0 = 16'((((csrw & 32'h3fff) % 40) << 4) + ((csrw >> 20) & 32'h0f));
+            r_py0 = 16'((csrw & 32'h3fff) / 40);
+        end
+    endtask
+
+    // gdcsub_vectr: RECT walks dir, dir2, -dir, -dir2 with D / D2 dots
+    task automatic r_vectr(input [31:0] csrw, input [15:0] D, input [15:0] D2,
+                           input [2:0] oct, input [15:0] pat);
+        integer d, d2, i, dx, dy, dx2, dy2;
+        reg [15:0] x, y;
+        begin
+            r_prepare(csrw, pat);
+            r_dir(oct, dx, dy, dx2, dy2);
+            d = D & 16'h3fff; d2 = D2 & 16'h3fff;
+            x = r_px0; y = r_py0;
+            for (i = 0; i < d; i = i + 1)  begin r_pset(x, y); x = x + dx;  y = y + dy; end
+            for (i = 0; i < d2; i = i + 1) begin r_pset(x, y); x = x + dx2; y = y + dy2; end
+            for (i = 0; i < d; i = i + 1)  begin r_pset(x, y); x = x - dx;  y = y - dy; end
+            for (i = 0; i < d2; i = i + 1) begin r_pset(x, y); x = x - dx2; y = y - dy2; end
+        end
+    endtask
+
+    // gdcsub_vectt: SL reverses the pattern bytewise (GDCPATREVERSE),
+    // pattern FFFF, dir = vectdir[ope & 7]; the pattern runs continuously
+    // across rows. Rows = multiple (ZOOM & 15 + 1), columns = sx.
+    task automatic r_vectt(input [31:0] csrw, input [15:0] D,
+                           input [2:0] oct, input integer sl, input [7:0] zoom,
+                           input [15:0] patin);
+        integer multiple, muly, xrem, mulx, dx, dy, dx2, dy2;
+        integer sx;
+        reg [15:0] lpat;
+        reg [15:0] cx, cy;
+        begin
+            lpat = sl ? {bitrev8(patin[7:0]), bitrev8(patin[15:8])} : patin;
+            r_prepare(csrw, 16'hFFFF);
+            r_dir(oct, dx, dy, dx2, dy2);
+            multiple = (zoom & 15) + 1;
+            sx = (D - 1) & 16'h3fff;
+            sx = sx + 1;
+            if (sx >= 768) sx = 768;
+            muly = multiple;
+            while (muly > 0) begin
+                muly = muly - 1;
+                cx = r_px0; cy = r_py0;
+                xrem = sx;
+                while (xrem > 0) begin
+                    xrem = xrem - 1;
+                    mulx = multiple;
+                    if (lpat[0]) begin
+                        lpat = {lpat[0], lpat[15:1]};
+                        while (mulx > 0) begin
+                            mulx = mulx - 1;
+                            r_pset(cx, cy); cx = cx + dx; cy = cy + dy;
+                        end
+                    end else begin
+                        lpat = {lpat[0], lpat[15:1]};
+                        while (mulx > 0) begin
+                            mulx = mulx - 1;
+                            cx = cx + dx; cy = cy + dy;
+                        end
+                    end
+                end
+                r_px0 = r_px0 + dx2; r_py0 = r_py0 + dy2;
+            end
+        end
+    endtask
+
+    // gdcsub_text: the 8-byte TEXTW pattern (snapshot bytes 15-16 and
+    // 24-29), rows pat[7] down to pat[0] wrapping (patnum-- from 0),
+    // sy rows (DC + 1, clamp 768) of muly repeats each, dir with the
+    // SL offset: vectdir[((ope & 0x80) >> 4) + (ope & 7)].
+    task automatic r_text(input [31:0] csrw, input [15:0] DC, input [15:0] D,
+                          input [7:0] ope, input [7:0] zoom, input [7:0] pat8[0:7]);
+        integer multiple, sy, sx, muly, xrem, mulx, dx, dy, dx2, dy2;
+        integer patnum;
+        reg [7:0] pbit;  // not "bit": that is a SystemVerilog keyword
+        reg [15:0] cx, cy;
+        begin
+            r_prepare(csrw, 16'hFFFF);
+            r_dir(((ope & 8'h80) >> 4) + (ope & 7), dx, dy, dx2, dy2);
+            multiple = (zoom & 15) + 1;
+            sy = (DC & 16'h3fff) + 1;
+            if (sy >= 768) sy = 768;
+            sx = (D - 1) & 16'h3fff;
+            sx = sx + 1;
+            if (sx >= 768) sx = 768;
+            patnum = 0;
+            while (sy > 0) begin
+                sy = sy - 1;
+                muly = multiple;
+                patnum = patnum - 1;
+                while (muly > 0) begin
+                    muly = muly - 1;
+                    cx = r_px0; cy = r_py0;
+                    pbit = pat8[patnum & 7];
+                    xrem = sx;
+                    while (xrem > 0) begin
+                        xrem = xrem - 1;
+                        mulx = multiple;
+                        if (pbit[0]) begin
+                            pbit = {pbit[0], pbit[7:1]};
+                            while (mulx > 0) begin
+                                mulx = mulx - 1;
+                                r_pset(cx, cy); cx = cx + dx; cy = cy + dy;
+                            end
+                        end else begin
+                            pbit = {pbit[0], pbit[7:1]};
+                            while (mulx > 0) begin
+                                mulx = mulx - 1;
+                                cx = cx + dx; cy = cy + dy;
+                            end
+                        end
+                    end
+                    r_px0 = r_px0 + dx2; r_py0 = r_py0 + dy2;
+                end
+            end
+        end
+    endtask
+
     task set_snap(input integer i, input [7:0] b);
-        draw_snap[192 + i*8 +: 8] = b;
+        draw_snap[256 + i*8 +: 8] = b;
     endtask
 
     integer seed = 1, n = 300, verbose = 0, sane = 0;
@@ -279,15 +443,30 @@ module tb_softcpu_gdcdraw;
         end
         if (verbose && 0 && dut.cpu_mem_valid && dut.cpu_mem_ready && !dut.cpu_mem_instr && dut.cpu_mem_addr[31:28] == 4'h5)
             $display("  cpu %s %08x at %0d ns", |dut.cpu_mem_wstrb ? "W" : "R", dut.cpu_mem_addr, ($time - t_req) * 50 / 43);
-        if (verbose && dut.u_gdc_draw.wr && 0) $display("  wr%0d at %0d ns", dut.u_gdc_draw.wr_sel, ($time - t_req) * 50 / 43);
+        if (trace_en && dut.u_gdc_draw.wr)
+            $display("ENGWR %0t sel=%0d data=%08x", $time, dut.u_gdc_draw.wr_sel, dut.u_gdc_draw.wr_data);
+        if (trace_en && dut.u_gdc_draw.wr && dut.u_gdc_draw.wr_sel == 2'd3 && !dut.u_gdc_draw.busy)
+            $display("ENGSX %0t D=%04x DC=%04x tw=%04x oct=%0d zm=%0d fig=%0d b29=%02x p8hi=%02x",
+                     $time, dut.u_gdc_draw.snap[37:24], dut.u_gdc_draw.snap[21:8],
+                     dut.u_gdc_draw.tw, dut.u_gdc_draw.snap[2:0],
+                     dut.u_gdc_draw.snap[139:136], dut.u_gdc_draw.wr_data[12:10],
+                     dut.u_gdc_draw.snap[239:232], dut.u_gdc_draw.pat8[63:56]);
+        if (trace_en && dut.u_gdc_draw.adv && dut.u_gdc_draw.f_char && dut.u_gdc_draw.mcnt == 4'd0)
+            $display("PAT %0t pat=%04x tb=%02x cnt=%0d rcnt=%0d x=%0d y=%0d pn=%0d",
+                     $time, dut.u_gdc_draw.pat, dut.u_gdc_draw.tb, dut.u_gdc_draw.cnt,
+                     dut.u_gdc_draw.rcnt, dut.u_gdc_draw.x, dut.u_gdc_draw.y, dut.u_gdc_draw.pn);
         if (!dut.ln_busy && lnb_q) a_eng = a_eng + ($time - t_go);
     end
 `endif
     longint t_sum = 0, d_sum = 0, t_long = 0, d_long = 0;
     initial begin
-        integer i, k, l, dc, d1, oct, wm, mode, dots, mism;
+        integer i, k, l, dc, d1, d, d2, oct, wm, mode, dots, mism;
+        integer zoom, texte, kind, sl, m, sx, sy;
         reg [31:0] csrw;
         reg [15:0] pat;
+        reg [15:0] fpat;
+        reg [7:0]  pat8[0:7];
+        reg [7:0]  zoomb;
         longint t0;
         void'($value$plusargs("seed=%d", seed));
         void'($value$plusargs("n=%d", n));
@@ -304,9 +483,11 @@ module tb_softcpu_gdcdraw;
         $display("%0t boot runway done, pc=%08x", $time, dut.pico.reg_pc);
 
         for (l = 0; l < n; l = l + 1) begin
-            k = $urandom % 10;
-            dc = (k < 6) ? $urandom % 48 : (k < 9) ? $urandom % 400 : $urandom % 2000;
-            d1 = ((sane || ($urandom % 8) != 0) && dc != 0) ? $urandom % (2 * dc + 1) : $urandom % 65536;
+            // the kinds: l line, p lone dot, r rect, t VECTT, x TEXTE
+            k = $urandom % 20;
+            kind = (k < 8) ? "l" : (k < 11) ? "p" : (k < 15) ? "r" : (k < 18) ? "t" : "x";
+            texte = (kind == "x");
+            sl = $urandom % 2;
             oct = $urandom % 8;
             wm = $urandom % 4;
             k = $urandom % 10;
@@ -315,52 +496,137 @@ module tb_softcpu_gdcdraw;
             for (i = 0; i < 4; i = i + 1) tile[i] = 8'($urandom);
             pat = (($urandom % 4) != 0) ? 16'($urandom) : 16'hFFFF;
             csrw = ($urandom % 16000) | (($urandom % 4) << 14) | (($urandom % 16) << 20);
-            for (i = 0; i < 24; i = i + 1) set_snap(i, 8'($urandom));
-            set_snap(0, 8'(8'h08 | oct | (($urandom % 2) << 7)));
+            // the parameter spreads, np21w-style: mostly small, sometimes
+            // the 14-bit clamps
+            k = $urandom % 10;
+            d  = (k < 6) ? $urandom % 48 : (k < 9) ? $urandom % 400 : $urandom % 2000;
+            k = $urandom % 10;
+            d2 = (k < 6) ? $urandom % 48 : (k < 9) ? $urandom % 400 : $urandom % 2000;
+            k = $urandom % 10;
+            dc = (k < 6) ? $urandom % 48 : (k < 9) ? $urandom % 400 : $urandom % 2000;
+            d1 = ((sane || ($urandom % 8) != 0) && dc != 0) ? $urandom % (2 * dc + 1) : $urandom % 65536;
+            zoomb = 8'(($urandom & 8'hF0) | (($urandom % 4) ? $urandom % 3 : $urandom % 16));
+            case (kind)
+                "p": ;
+                "t", "x": begin
+                    d  = ($urandom % 10) ? $urandom % 33 : $urandom % 16384;  // sx
+                    dc = ($urandom % 10) ? $urandom % 24 : $urandom % 16384;  // sy
+                    d1 = $urandom % (2 * dc + 1);
+                end
+                default: ;   // 'l'/'r' keep the line/rect spreads
+            endcase
+            // keep a walk inside the firmware's poll bound: shrink ZOOM
+            if (kind == "t" || kind == "x") begin
+                sx = ((d - 1) & 16'h3fff) + 1; if (sx > 768) sx = 768;
+                sy = (dc & 16'h3fff) + 1;      if (sy > 768) sy = 768;
+                if (kind == "t") sy = 1;
+                m = (zoomb & 15) + 1;
+                while (sx * sy * m * m > 600000 && (zoomb & 15) != 0) begin
+                    zoomb = zoomb - 1;
+                    m = (zoomb & 15) + 1;
+                end
+            end
+
+            for (i = 0; i < 30; i = i + 1) set_snap(i, 8'($urandom));
+            set_snap(23, 8'h00);
+            k = (kind == "l") ? 8'h08 :
+                (kind == "p") ? 8'h00 :
+                (kind == "r") ? (8'h40 | ((($urandom % 8) == 0) ? 8'h08 : 8'h00)) :
+                (8'h10 | ((($urandom % 10) == 0) ? 8'h48 : 8'h00));
+            set_snap(0, 8'(k | oct | (sl << 7)));
             set_snap(1, 8'(dc)); set_snap(2, 8'((dc >> 8) | (($urandom % 4) << 6)));
+            set_snap(3, 8'(d));  set_snap(4, 8'((d >> 8) | (($urandom % 4) << 6)));
+            set_snap(5, 8'(d2)); set_snap(6, 8'((d2 >> 8) | (($urandom % 4) << 6)));
             set_snap(7, 8'(d1)); set_snap(8, 8'(d1 >> 8));
             for (i = 0; i < 4; i = i + 1) set_snap(11 + i, 8'(csrw >> (8 * i)));
             set_snap(15, pat[7:0]); set_snap(16, pat[15:8]);
+            set_snap(17, zoomb);
             set_snap(18, 8'(wm));
 
+            if (fixmode) begin : fix_params
+                // docker 5.020's failing draw 39, verbatim: kind=t (VECTT)
+                kind = "t"; texte = 0; sl = 0; oct = 2; wm = 1;
+                mode = 1; accel = 8'h03; pat = 16'h8054;
+                csrw = 32'h050427f; d = 17; d2 = 131; dc = 4; d1 = 0; zoomb = 8'h11;
+                set_snap(0,  8'h12); set_snap(1,  8'h04); set_snap(2,  8'h00); set_snap(3,  8'h11);
+                set_snap(4,  8'h80); set_snap(5,  8'h83); set_snap(6,  8'h40); set_snap(7,  8'h00);
+                set_snap(8,  8'h00); set_snap(9,  8'h64); set_snap(10, 8'h2d); set_snap(11, 8'h7f);
+                set_snap(12, 8'h42); set_snap(13, 8'h50); set_snap(14, 8'h00); set_snap(15, 8'h54);
+                set_snap(16, 8'h80); set_snap(17, 8'h11); set_snap(18, 8'h01); set_snap(19, 8'he0);
+                set_snap(20, 8'hba); set_snap(21, 8'h2b); set_snap(22, 8'h3f); set_snap(23, 8'h00);
+                set_snap(24, 8'he7); set_snap(25, 8'hd6); set_snap(26, 8'h2f); set_snap(27, 8'h07);
+                set_snap(28, 8'he6); set_snap(29, 8'h6c);
+            end
+
             t0 = $time; t_req = $time;
-            draw_ops <= 16'h6C00;
+            trace_en <= (dbg_trace == l + 1);
+            draw_ops <= texte ? 16'h6800 : 16'h6C00;
             draw_req <= 2'b10;
             for (i = 0; i < 50000000 && !done_lv[1]; i = i + 1) @(posedge clk_sys);
             if (!done_lv[1]) begin
                 errors = errors + 1;
-                $display("line %0d: never retired", l);
+                $display("draw %0d: never retired", l);
             end
             draw_req <= 2'b00;
+            trace_en <= 0;
             // time in ns at 42.95 MHz: the bench clock is 50 MHz
             t0 = ($time - t0) * 50 / 43;
             while (done_lv[1]) @(posedge clk_sys);
 
+            // ---- np21w's vectdraw / textdraw over the same snapshot ----
             r_mode = mode; r_plane = (csrw >> 14) & 3; r_op = wm; r_drawn = 0;
-            r_vectl(csrw, {draw_snap[192+16 +: 8], draw_snap[192+8 +: 8]}, d1[15:0], oct[2:0], pat);
-            dots = dc + 1;
+            // textdraw hands its figures para[27] doubled; vectdraw the
+            // TEXTW word
+            fpat = texte ? {2{draw_snap[256 + 29*8 +: 8]}} : pat;
+            k = draw_snap[256 +: 8];   // VECTW's ope
+            if ((k & 8'h78) == 0) begin
+                r_prepare(csrw, fpat);
+                r_pset(r_px0, r_py0);   // vectp
+            end
+            if (k & 8'h08) r_vectl(csrw, {draw_snap[256+16 +: 8], draw_snap[256+8 +: 8]},
+                                   d1[15:0], oct[2:0], fpat);
+            if (k & 8'h10) begin
+                if (texte) begin
+                    for (i = 0; i < 8; i = i + 1)
+                        pat8[i] = (i < 2) ? draw_snap[256 + (15+i)*8 +: 8]
+                                          : draw_snap[256 + (22+i)*8 +: 8];
+                    r_text(csrw, {draw_snap[256+16 +: 8], draw_snap[256+8 +: 8]},
+                           {draw_snap[256+32 +: 8], draw_snap[256+24 +: 8]},
+                           draw_snap[256 +: 8], zoomb, pat8);
+                end else begin
+                    r_vectt(csrw, {draw_snap[256+32 +: 8], draw_snap[256+24 +: 8]},
+                            oct[2:0], sl, zoomb, pat);
+                end
+            end
+            if (k & 8'h40) r_vectr(csrw, {draw_snap[256+32 +: 8], draw_snap[256+24 +: 8]},
+                                   {draw_snap[256+48 +: 8], draw_snap[256+40 +: 8]},
+                                   oct[2:0], fpat);
+            dots = r_drawn;
             t_sum = t_sum + t0; d_sum = d_sum + dots;
             if (dots >= 100) begin t_long = t_long + t0; d_long = d_long + dots; end
             mism = 0;
             for (i = 0; i < 4*32768; i = i + 1)
                 if (vram[i] !== rvram[i]) begin
                     if (mism < 4)
-                        $display("  line %0d MISMATCH plane %0d +%04x: np21w %02x got %02x", l,
+                        $display("  draw %0d MISMATCH plane %0d +%04x: np21w %02x got %02x", l,
                                  i / 32768, i % 32768, rvram[i], vram[i]);
                     mism = mism + 1;
                     rvram[i] = vram[i];
                 end
             if (mism) begin
                 errors = errors + 1;
-                $display("line %0d: csrw=%07x dc=%0d d1=%0d oct=%0d wm=%0d mode=%0d pat=%04x: %0d bytes differ",
-                         l, csrw, dc, d1, oct, wm, mode, pat, mism);
+                $display("draw %0d: kind=%c csrw=%07x dc=%0d d=%0d d2=%0d d1=%0d oct=%0d wm=%0d mode=%0d pat=%04x: %0d bytes differ",
+                         l, kind, csrw, dc, d, d2, d1, oct, wm, mode, pat, mism);
+                $write("  snap:");
+                for (i = 0; i < 30; i = i + 1) $write(" %02x", draw_snap[256 + i*8 +: 8]);
+                $write(" sl=%0d zoom=%02x\n", sl, zoomb);
             end
             repeat (200) @(posedge clk_sys);
         end
-        $display("TIMING: %0d lines, %0d dots, %0d us total; %0.2f us/line, %0.3f us/dot (lines >= 100 dots: %0.3f us/dot)",
+        $display("TIMING: %0d draws, %0d dots, %0d us total; %0.2f us/draw, %0.3f us/dot (draws >= 100 dots: %0.3f us/dot)",
                  n, d_sum, t_sum / 1000, real'(t_sum) / 1000.0 / n, real'(t_sum) / 1000.0 / d_sum,
                  d_long ? real'(t_long) / 1000.0 / d_long : 0.0);
-        $display("SPLIT: request->engine start %0.2f us/line, engine %0.2f us/line",
+        $display("SPLIT: request->engine start %0.2f us/draw, engine %0.2f us/draw",
                  real'(a_pre) * 50 / 43 / 1000.0 / n, real'(a_eng) * 50 / 43 / 1000.0 / n);
         $display("DONE: %0d svc ops, %0d errors", n_ops, errors);
         if (errors) $display("RESULT: FAIL"); else $display("RESULT: PASS");

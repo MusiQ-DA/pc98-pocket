@@ -59,7 +59,7 @@ module pc98_gdc_draw (
     input  wire        wr,        // one-cycle store into the window
     input  wire [1:0]  wr_sel,    // word index
     input  wire [31:0] wr_data,
-    input  wire [191:0] snap,     // the slave's drawing snapshot, byte i at [8i +: 8]
+    input  wire [255:0] snap,     // the slave's drawing snapshot, byte i at [8i +: 8]
     output wire        busy,
 
     output reg         st_req,
@@ -70,7 +70,9 @@ module pc98_gdc_draw (
     input  wire [7:0]  st_rdata
 );
     localparam MODE_PLAIN = 2'd0, MODE_RMW = 2'd1, MODE_WORD = 2'd2;
-    localparam FIG_LINE = 3'd0, FIG_RECT = 3'd1;
+    localparam FIG_LINE = 3'd0, FIG_RECT = 3'd1, FIG_VECTT = 3'd2, FIG_TEXT = 3'd3;
+    localparam BIT_TEXT_CMD = 13;  // go word: the TEXTE flavour -- dot/line/
+                                   // rect draw with para[27] doubled
 
     localparam S_IDLE = 3'd0, S_DOT = 3'd1, S_RD = 3'd2, S_FL = 3'd3,
                S_W2A = 3'd4, S_W2B = 3'd5, S_W2C = 3'd6;
@@ -83,6 +85,12 @@ module pc98_gdc_draw (
     reg [2:0]  oct;
     reg [2:0]  fig;
     reg [1:0]  ph;                // RECT: the side being drawn
+    reg        sl;                // TEXT: VECTW's SL bit picks vectdir[8..15]
+    reg        tx;                // TEXTE flavour: figures draw with para[27] doubled
+    reg [15:0] ox, oy;            // VECTT/TEXT: the row's origin (np21w pset.x/y)
+    reg [3:0]  zm, mcnt, rcnt;    // ZOOM, and the mulx / muly counters
+    reg [7:0]  tb;                // TEXT: this row's pattern byte
+    reg [2:0]  pn;                // TEXT: patnum[2:0] -- np21w's pat[patnum & 7]
     reg [1:0]  op, plane, mode;
     reg        last;              // every dot evaluated; only the flush left
     reg        hold;              // the write-back byte is live
@@ -100,24 +108,36 @@ module pc98_gdc_draw (
     wire [15:0] mbase = maj_y ? x : y;
     wire [15:0] mstep = s_sub ? (mbase - step) : (mbase + step);
     wire        f_line = (fig == FIG_LINE);
+    wire        f_rect = (fig == FIG_RECT);
+    wire        f_char = (fig == FIG_VECTT) | (fig == FIG_TEXT);   // the 2-D walkers
     wire [15:0] px    = (f_line & maj_y) ? mstep : x;
     wire [15:0] py    = (f_line & ~maj_y) ? mstep : y;
 
     // np21w's vectdir[oct]: {x, y} then {x2, y2}, each -1/0/+1 (2-bit
     // two's complement). RECT walks side ph: dir, dir2, -dir, -dir2.
     reg  [7:0]  vdir;
-    always @* case (oct)
-        3'd0: vdir = {2'b00, 2'b01, 2'b01, 2'b00};
-        3'd1: vdir = {2'b01, 2'b01, 2'b01, 2'b11};
-        3'd2: vdir = {2'b01, 2'b00, 2'b00, 2'b11};
-        3'd3: vdir = {2'b01, 2'b11, 2'b11, 2'b11};
-        3'd4: vdir = {2'b00, 2'b11, 2'b11, 2'b00};
-        3'd5: vdir = {2'b11, 2'b11, 2'b11, 2'b01};
-        3'd6: vdir = {2'b11, 2'b00, 2'b00, 2'b01};
-        default: vdir = {2'b11, 2'b01, 2'b01, 2'b01};
+    always @* case ({sl, oct})
+        4'd0:  vdir = {2'b00, 2'b01, 2'b01, 2'b00};
+        4'd1:  vdir = {2'b01, 2'b01, 2'b01, 2'b11};
+        4'd2:  vdir = {2'b01, 2'b00, 2'b00, 2'b11};
+        4'd3:  vdir = {2'b01, 2'b11, 2'b11, 2'b11};
+        4'd4:  vdir = {2'b00, 2'b11, 2'b11, 2'b00};
+        4'd5:  vdir = {2'b11, 2'b11, 2'b11, 2'b01};
+        4'd6:  vdir = {2'b11, 2'b00, 2'b00, 2'b01};
+        4'd7:  vdir = {2'b11, 2'b01, 2'b01, 2'b01};
+        4'd8:  vdir = {2'b00, 2'b01, 2'b01, 2'b01};   // SL
+        4'd9:  vdir = {2'b01, 2'b01, 2'b01, 2'b00};
+        4'd10: vdir = {2'b01, 2'b00, 2'b01, 2'b11};
+        4'd11: vdir = {2'b01, 2'b11, 2'b00, 2'b11};
+        4'd12: vdir = {2'b00, 2'b11, 2'b11, 2'b11};
+        4'd13: vdir = {2'b11, 2'b11, 2'b11, 2'b00};
+        4'd14: vdir = {2'b11, 2'b00, 2'b11, 2'b01};
+        default: vdir = {2'b11, 2'b01, 2'b00, 2'b01};
     endcase
-    wire [1:0]  rdx0  = ph[0] ? vdir[3:2] : vdir[7:6];
-    wire [1:0]  rdy0  = ph[0] ? vdir[1:0] : vdir[5:4];
+    // VECTT/TEXT: a row ends (cnt = 0) by stepping the origin along (x2, y2)
+    wire        rowchg = f_char & (cnt == 14'd0);
+    wire [1:0]  rdx0  = (ph[0] | rowchg) ? vdir[3:2] : vdir[7:6];
+    wire [1:0]  rdy0  = (ph[0] | rowchg) ? vdir[1:0] : vdir[5:4];
     // negate a -1/0/+1: 11 <-> 01, 00 stays
     wire [1:0]  rdx   = ph[1] ? {rdx0[0] & ~rdx0[1], rdx0[0]} : rdx0;
     wire [1:0]  rdy   = ph[1] ? {rdy0[0] & ~rdy0[1], rdy0[0]} : rdy0;
@@ -136,8 +156,12 @@ module pc98_gdc_draw (
     wire [7:0]  bitm  = 8'h80 >> px[2:0];
     wire [4:0]  ptop  = (plane == 2'd0) ? 5'b11100 : (plane == 2'd1) ? 5'b10101
                       : (plane == 2'd2) ? 5'b10110 : 5'b10111;
-    wire        dot   = pat[0];
-    wire        eff   = ~clip & (dot | ((mode == MODE_PLAIN) & (op == 2'd0)));
+    // VECTT/TEXT prepare the pset with pattern FFFF (every gdcpset is an on
+    // dot) and draw only where the figure's own pattern bit is set.
+    wire        cbit  = (fig == FIG_TEXT) ? tb[0] : pat[0];
+    wire        dot   = f_char | pat[0];
+    wire        want  = ~f_char | cbit;
+    wire        eff   = want & ~clip & (dot | ((mode == MODE_PLAIN) & (op == 2'd0)));
     wire        hit   = hold & (haddr == off);
 
     // The byte after this dot: np21w's psettbl[op][dot], or the RMW mask.
@@ -168,9 +192,36 @@ module pc98_gdc_draw (
     // np21w's next-dot bookkeeping: pattern rotates every dot, the major
     // axis steps, the carried quotient moves on.
     wire [17:0] rsd   = {1'b0, r} - {4'd0, dc};
-    // A step that is not a dot: LINE's quotient catching up (r >= dc), or
-    // RECT moving on to its next side when this one is spent.
+    // A step that is not a dot: LINE's quotient catching up (r >= dc), RECT
+    // moving on to its next side when this one is spent, VECTT/TEXT moving
+    // on to the next row.
     wire        norm  = ~last & (f_line ? ~rsd[17] : (cnt == 14'd0));
+    // the walk's next position: from the row origin on a row change
+    wire [15:0] xn    = (rowchg ? ox : x) + {{14{ddx[1]}}, ddx};
+    wire [15:0] yn    = (rowchg ? oy : y) + {{14{ddy[1]}}, ddy};
+    // VECTT/TEXT's D: sx = min(D, 768), with D == 0 wrapping round to 768
+    // (np21w: ((D - 1) & 3FFF) + 1, at most 768); TEXT's DC:
+    // sy = min(DC, 767) (np21w: (DC & 3FFF) + 1, at most 768, kept as sy - 1
+    // in r). Both are folded into the GO edge below: Verilator 5.020 (the CI
+    // sim's pinned version) fails to re-evaluate derived combinational blocks
+    // -- always @* regs and concatenation assigns -- after the snapshot input
+    // changes, so every value read out of snap is read directly inside the
+    // clocked block, the way the RECT/LINE paths already did.
+    wire [15:0] tw    = snap[135:120];
+    wire [15:0] twrev;
+    genvar gi;
+    generate for (gi = 0; gi < 16; gi = gi + 1) begin : g_rev
+        assign twrev[gi] = tw[15 - gi];
+    end endgenerate
+    // np21w's textdraw reads the FULL 8-byte TEXTW area: pat[i] =
+    // para[20 + i], so the pattern register is snapshot bytes 15..16
+    // (para[20..21]) and 24..29 (para[22..27]) stitched big-endian by
+    // pattern index, pat[7] first (patnum starts at 0 and pre-decrements).
+    // Loaded on the GO edge (see above): byte-select muxes fed from a wire
+    // concatenation of snap part-selects keep their time-zero value under
+    // the CI sim's pinned verilator 5.020; here pat8[63:56] is pat[7] =
+    // para[27] = snap byte 29.
+    reg  [63:0] pat8;
     wire        done_op = st_req & st_done;
     reg         adv;
     always @* begin
@@ -204,7 +255,35 @@ module pc98_gdc_draw (
                         oct   <= snap[2:0];
                         fig   <= wr_data[12:10];
                         ph    <= 2'd0;
-                        if (wr_data[12:10] == FIG_RECT) begin
+                        sl    <= (wr_data[12:10] == FIG_TEXT) & snap[7];
+                        tx    <= wr_data[BIT_TEXT_CMD];
+                        zm    <= snap[139:136];
+                        mcnt  <= snap[139:136];
+                        rcnt  <= snap[139:136];
+                        ox    <= x;
+                        oy    <= y;
+                        pn    <= 3'd7;           // np21w patnum-- from 0: pat[7]
+                        // pat8: one assignment per byte -- a single
+                        // concatenation of snap part-selects here kept its
+                        // time-zero value under Verilator 5.020
+                        pat8[63:56] <= snap[239:232];
+                        pat8[55:48] <= snap[231:224];
+                        pat8[47:40] <= snap[223:216];
+                        pat8[39:32] <= snap[215:208];
+                        pat8[31:24] <= snap[207:200];
+                        pat8[23:16] <= snap[199:192];
+                        pat8[15:8]  <= snap[135:128];
+                        pat8[7:0]   <= snap[127:120];
+                        tb    <= snap[239:232];  // pat[7] -- pat8 lands next edge
+                        if (wr_data[12:10] == FIG_VECTT || wr_data[12:10] == FIG_TEXT) begin
+                            // sx = min(D, 768), D == 0 -> 768; sy1 = min(DC, 767)
+                            dc  <= (snap[37:24] == 14'd0 || snap[37:24] >= 14'd768)
+                                 ? 14'd768 : snap[37:24];
+                            cnt <= (snap[37:24] == 14'd0 || snap[37:24] >= 14'd768)
+                                 ? 14'd768 : snap[37:24];
+                            r   <= {7'd0, (snap[21:8] >= 14'd767)
+                                 ? 10'd767 : snap[17:8]};
+                        end else if (wr_data[12:10] == FIG_RECT) begin
                             // D in dc, D2 in d1 (VECTW bytes 3-4, 5-6)
                             dc  <= snap[37:24];
                             cnt <= snap[37:24];
@@ -218,11 +297,16 @@ module pc98_gdc_draw (
                             d1  <= snap[71:56];
                         end
                         plane <= snap[103:102];
-                        pat   <= snap[135:120];
+                        // VECTT's SL runs the pattern backwards (GDCPATREVERSE);
+                        // TEXTE's figures run with para[27] doubled instead
+                        // (np21w textdraw's textw) -- read straight from snap
+                        pat   <= wr_data[BIT_TEXT_CMD] ? {snap[239:232], snap[239:232]}
+                               : ((wr_data[12:10] == FIG_VECTT) & snap[7]) ? twrev : tw;
                         op    <= snap[145:144];
                         mode  <= wr_data[8:7];
                         q1    <= 17'd1;
-                        r     <= 17'd0;
+                        if (wr_data[12:10] != FIG_VECTT && wr_data[12:10] != FIG_TEXT)
+                            r <= 17'd0;
                         hold  <= 1'b0;
                         last  <= 1'b0;
                         s     <= S_DOT;
@@ -242,6 +326,25 @@ module pc98_gdc_draw (
                         if (norm && f_line) begin
                             r  <= rsd[16:0];
                             q1 <= q1 + 17'd1;
+                        end else if (norm && f_char) begin
+                            // the next row: origin += (x2, y2), back to its
+                            // first column; muly rows, TEXT's sy of them
+                            x    <= xn;  y  <= yn;
+                            ox   <= xn;  oy <= yn;
+                            cnt  <= dc;
+                            mcnt <= zm;
+                            if (rcnt != 4'd0) begin
+                                rcnt <= rcnt - 4'd1;
+                                tb   <= pat8[{pn, 3'b000} +: 8];
+                            end else if (fig == FIG_TEXT && r[9:0] != 10'd0) begin
+                                // np21w's patnum--: the next row's byte,
+                                // wrapping mod 8 back to pat[7]
+                                r    <= r - 17'd1;
+                                rcnt <= zm;
+                                pn   <= pn - 3'd1;
+                                tb   <= pat8[{pn - 3'd1, 3'b000} +: 8];
+                            end else
+                                last <= 1'b1;
                         end else if (norm) begin
                             // RECT: the next side (D, D2, D, D2), then done
                             ph  <= ph + 2'd1;
@@ -285,14 +388,26 @@ module pc98_gdc_draw (
                     default: ;
                 endcase
                 if (adv) begin
-                    pat <= {pat[0], pat[15:1]};
-                    x   <= x + {{14{ddx[1]}}, ddx};
-                    y   <= y + {{14{ddy[1]}}, ddy};
-                    r   <= r + {1'b0, d1};
-                    if (cnt == 14'd0)
-                        last <= 1'b1;     // LINE: the dc + 1'th dot
-                    else
-                        cnt <= cnt - 14'd1;
+                    x   <= xn;
+                    y   <= yn;
+                    if (f_char) begin
+                        // one mulx step; the column's last one moves the
+                        // figure pattern on (np21w rotates it per column)
+                        if (mcnt == 4'd0) begin
+                            mcnt <= zm;
+                            cnt  <= cnt - 14'd1;
+                            if (fig == FIG_TEXT) tb  <= {tb[0], tb[7:1]};
+                            else                 pat <= {pat[0], pat[15:1]};
+                        end else
+                            mcnt <= mcnt - 4'd1;
+                    end else begin
+                        pat <= {pat[0], pat[15:1]};
+                        r   <= r + {1'b0, d1};
+                        if (cnt == 14'd0)
+                            last <= 1'b1;     // LINE: the dc + 1'th dot
+                        else
+                            cnt <= cnt - 14'd1;
+                    end
                 end
             end
         end

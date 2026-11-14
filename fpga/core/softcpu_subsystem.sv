@@ -105,7 +105,7 @@ module softcpu_subsystem (
     input   [1:0]  gdc_draw_req,
     input   [1:0]  gdc_draw_busy,
     input  [15:0]  gdc_draw_ops,
-    input [383:0]  gdc_draw_snaps,
+    input [511:0]  gdc_draw_snaps,
     output  [1:0]  gdc_srv_done_levels,
 
     // The guest-VRAM service channel: the firmware's vr_read8/vr_write8
@@ -382,7 +382,7 @@ module softcpu_subsystem (
                    (cpu_mem_addr[31:4] == 28'h5000_002)),
         .wr_sel   (cpu_mem_addr[3:2]),
         .wr_data  (cpu_mem_wdata),
-        .snap     (gdc_draw_snaps[383:192]),
+        .snap     (gdc_draw_snaps[511:256]),
         .busy     (ln_busy),
         .st_req   (ln_req),
         .st_we    (ln_we),
@@ -1218,10 +1218,11 @@ module softcpu_subsystem (
             32'h5000_0010: cpu_mem_rdata = {24'd0, accel_status};
             32'h5000_002C: cpu_mem_rdata = {31'd0, ln_busy};
             // ---- the drawing server --------------------------------------
-            // 0x140/0x180: {busy, req, opcode} for master/slave; +4..+0x14:
-            // the five snapshot words. 0x15C/0x19C (writes): the done LEVEL
-            // -- the engine writes 1 then 0, whose rising edge retires the
-            // EXECUTE in the GDC's own domain.
+            // 0x140/0x180: {busy, req, opcode} for master/slave; +4..+0x18:
+            // the seven snapshot words (the last two carry TEXTW[2..7],
+            // the bytes np21w's textdraw reads). 0x15C/0x19C (writes): the
+            // done LEVEL -- the engine writes 1 then 0, whose rising edge
+            // retires the EXECUTE in the GDC's own domain.
             32'h5000_0140: cpu_mem_rdata = {22'd0, draw_req_s[0],
                                             draw_busy_s[0], gdc_draw_ops[7:0]};
             32'h5000_0144: cpu_mem_rdata = gdc_draw_snaps[31:0];
@@ -1230,14 +1231,18 @@ module softcpu_subsystem (
             32'h5000_0150: cpu_mem_rdata = gdc_draw_snaps[127:96];
             32'h5000_0154: cpu_mem_rdata = gdc_draw_snaps[159:128];
             32'h5000_0158: cpu_mem_rdata = gdc_draw_snaps[191:160];
+            32'h5000_0160: cpu_mem_rdata = gdc_draw_snaps[223:192];
+            32'h5000_0164: cpu_mem_rdata = gdc_draw_snaps[255:224];
             32'h5000_0180: cpu_mem_rdata = {22'd0, draw_req_s[1],
                                             draw_busy_s[1], gdc_draw_ops[15:8]};
-            32'h5000_0184: cpu_mem_rdata = gdc_draw_snaps[223:192];
-            32'h5000_0188: cpu_mem_rdata = gdc_draw_snaps[255:224];
-            32'h5000_018C: cpu_mem_rdata = gdc_draw_snaps[287:256];
-            32'h5000_0190: cpu_mem_rdata = gdc_draw_snaps[319:288];
-            32'h5000_0194: cpu_mem_rdata = gdc_draw_snaps[351:320];
-            32'h5000_0198: cpu_mem_rdata = gdc_draw_snaps[383:352];
+            32'h5000_0184: cpu_mem_rdata = gdc_draw_snaps[287:256];
+            32'h5000_0188: cpu_mem_rdata = gdc_draw_snaps[319:288];
+            32'h5000_018C: cpu_mem_rdata = gdc_draw_snaps[351:320];
+            32'h5000_0190: cpu_mem_rdata = gdc_draw_snaps[383:352];
+            32'h5000_0194: cpu_mem_rdata = gdc_draw_snaps[415:384];
+            32'h5000_0198: cpu_mem_rdata = gdc_draw_snaps[447:416];
+            32'h5000_01A0: cpu_mem_rdata = gdc_draw_snaps[479:448];
+            32'h5000_01A4: cpu_mem_rdata = gdc_draw_snaps[511:480];
             default:       cpu_mem_rdata = 32'd0;
         endcase
     end

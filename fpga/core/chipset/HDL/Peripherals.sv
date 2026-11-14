@@ -139,7 +139,7 @@ module PERIPHERALS #(
     output  logic   [1:0]   gdc_draw_req,
     output  logic   [1:0]   gdc_draw_busy,
     output  logic  [15:0]   gdc_draw_ops,
-    output  logic [383:0]   gdc_draw_snaps,
+    output  logic [511:0]  gdc_draw_snaps,
     input   logic   [1:0]   gdc_srv_done_levels,
     // Watchdog pulses {slave, master}: a draw the server never answered.
     // Probe-only plumbing -- the pulses are latched in core_top's JTAG
@@ -1010,8 +1010,8 @@ module PERIPHERALS #(
     wire        gdc_s_draw_req, gdc_s_draw_busy, gdc_s_done_stb;
     wire        gdc_m_draw_to,  gdc_s_draw_to;
     wire [7:0]  gdc_m_draw_op,  gdc_s_draw_op;
-    wire [31:0] gdc_m_draw_snap [0:5];
-    wire [31:0] gdc_s_draw_snap [0:5];
+    wire [31:0] gdc_m_draw_snap [0:7];
+    wire [31:0] gdc_s_draw_snap [0:7];
 
     logic [1:0] srv_done_s1 = 2'b00, srv_done_s2 = 2'b00, srv_done_s3 = 2'b00;
     always_ff @(posedge clock) begin
@@ -1027,9 +1027,9 @@ module PERIPHERALS #(
     assign gdc_s_done_stb = srv_done_s2[1] & ~srv_done_s3[1];
     genvar dsg;
     generate
-        for (dsg = 0; dsg < 6; dsg = dsg + 1) begin : g_dsnap
+        for (dsg = 0; dsg < 8; dsg = dsg + 1) begin : g_dsnap
             assign gdc_draw_snaps[dsg*32 +: 32]      = gdc_m_draw_snap[dsg];
-            assign gdc_draw_snaps[192 + dsg*32 +: 32] = gdc_s_draw_snap[dsg];
+            assign gdc_draw_snaps[256 + dsg*32 +: 32] = gdc_s_draw_snap[dsg];
         end
     endgenerate
 

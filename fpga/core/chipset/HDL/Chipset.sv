@@ -60,7 +60,7 @@ module CHIPSET #(
         output  logic   [1:0]   gdc_draw_req,
         output  logic   [1:0]   gdc_draw_busy,
         output  logic  [15:0]   gdc_draw_ops,
-        output  logic [383:0]   gdc_draw_snaps,
+        output  logic [511:0]  gdc_draw_snaps,
         input   logic   [1:0]   gdc_srv_done_levels,
         // Probe plumbing for the drawing server: {slave, master} watchdog
         // pulses, and the sticky 0000:054D-bit6 (EGC flag) write witness.

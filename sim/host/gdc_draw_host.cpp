@@ -19,7 +19,7 @@
 // trace must also equal the dot-by-dot (addr & ~1, addr | 1) pairs np21w's
 // withtdw/withegc imply, so every lit dot's position is checked one by one.
 //
-//   gdc_draw_host [n] [seed] [kinds]    kinds: l line, p dot, r rect (default lpr)
+//   gdc_draw_host [n] [seed] [kinds]    kinds: l line, p dot, r rect, t VECTT, x TEXTE
 //   gdc_draw_host bench [lat_rd [lat_rmw [lat_tdw]]]
 //
 // Build: scripts/sim_gdc_draw.sh (needs Verilator; no --timing).
@@ -61,6 +61,8 @@ int plane_of(uint32_t a)
 
 uint8_t svc_op(bool we, uint32_t a, uint8_t d)
 {
+    if (getenv("SNAP"))
+        printf("SVC we=%d addr=%05x data=%02x accel=%02x\n", we, a, d, accel);
     int p = plane_of(a);
     uint32_t o = a & 0x7FFF;
     if (!we)
@@ -120,14 +122,16 @@ void tick()
 enum RegId { R_LN0, R_LN1, R_LN2, R_LN3, R_ACCEL, R_ST_ADDR, R_ST_WDATA, R_ST_TRIG,
              R_ST_STATUS, R_GDCD_STATUS, R_GDCD_DONE, R_OTHER };
 uint32_t st_addr, st_wdata, st_rd;
-uint32_t snapw[6];
+uint32_t snapw[8];
+long aborts;     // the firmware gave up polling (bit-31 launch store)
 
 void reg_write(int id, uint32_t v)
 {
+    if (id == R_LN3 && (v >> 31)) aborts++;
     if (id <= R_LN3) {
         eng->wr = 1;
         eng->wr_sel = (uint8_t) id;
-        for (int i = 0; i < 6; i++) eng->snap[i] = snapw[i];
+        for (int i = 0; i < 8; i++) eng->snap[i] = snapw[i];
         eng->wr_data = v;
         tick();
         return;
@@ -145,7 +149,7 @@ uint32_t reg_read(int id)
 {
     switch (id) {
     case R_LN3: {
-        int k = 1 + (int) (rnd() % 4);
+        int k = 20 + (int) (rnd() % 20);   // a poll pass is ~30 clk_pico of softcore
         while (k--) tick();
         return eng->busy;
     }
@@ -180,6 +184,7 @@ struct RegPtr {
 #define ST_ACCEL  (mock::RegPtr{mock::R_ACCEL})
 #define GDCD_STATUS(ch) (mock::RegPtr{mock::R_GDCD_STATUS})
 #define GDCD_SNAPW(ch)  ((volatile uint32_t *) mock::snapw)
+#define GDCD_SNAPW2(ch) ((volatile uint32_t *) (mock::snapw + 6))
 #define GDCD_DONE(ch)   (mock::RegPtr{mock::R_GDCD_DONE})
 #define LN_XY  (mock::RegPtr{mock::R_LN0})
 #define LN_GO  (mock::RegPtr{mock::R_LN3})
@@ -291,15 +296,86 @@ void vectr(const uint8_t *b, uint32_t csrw, uint16_t pat)
     for (i = 0; i < d2; i++) { gdcpset(x, y); x -= dir->x2; y -= dir->y2; }
 }
 
-// gdc.c vectdraw: each figure from its own gdcpset_prepare
-void vectdraw(const uint8_t *b)
+uint8_t bitrev8(uint8_t v) { uint8_t r = 0; for (int i = 0; i < 8; i++) r = (uint8_t) ((r << 1) | ((v >> i) & 1)); return r; }
+
+void vectt(const uint8_t *b, uint32_t csrw, uint16_t pat)
+{
+    if (b[0] & 0x80) pat = (uint16_t) ((bitrev8((uint8_t) pat) << 8) + bitrev8((uint8_t) (pat >> 8)));
+    prepare(csrw, 0xffff);
+    uint8_t multiple = (uint8_t) ((b[17] & 15) + 1);
+    unsigned sx = w16(b, 3);
+    sx = ((sx - 1) & 0x3fff) + 1;
+    if (sx >= 768) sx = 768;
+    const VD *dir = vectdir + (b[0] & 7);
+    uint8_t muly = multiple;
+    while (muly--) {
+        REG16 cx = px0, cy = py0;
+        unsigned xrem = sx;
+        while (xrem--) {
+            uint8_t mulx = multiple;
+            if (pat & 1) {
+                pat >>= 1; pat |= 0x8000;
+                while (mulx--) { gdcpset(cx, cy); cx += dir->x; cy += dir->y; }
+            } else {
+                pat >>= 1;
+                while (mulx--) { cx += dir->x; cy += dir->y; }
+            }
+        }
+        px0 += dir->x2; py0 += dir->y2;
+    }
+}
+
+void text(const uint8_t *b, uint32_t csrw, const uint8_t *pat)
+{
+    prepare(csrw, 0xffff);
+    uint8_t multiple = (uint8_t) ((b[17] & 15) + 1);
+    unsigned sy = w16(b, 1);
+    sy = (sy & 0x3fff) + 1;
+    unsigned sx = w16(b, 3);
+    sx = ((sx - 1) & 0x3fff) + 1;
+    if (sx >= 768) sx = 768;
+    if (sy >= 768) sy = 768;
+    const VD *dir = vectdir + (((b[0] & 0x80) >> 4) + (b[0] & 7));
+    unsigned patnum = 0;
+    while (sy--) {
+        uint8_t muly = multiple;
+        patnum--;
+        while (muly--) {
+            REG16 cx = px0, cy = py0;
+            uint8_t bit = pat[patnum & 7];
+            unsigned xrem = sx;
+            while (xrem--) {
+                uint8_t mulx = multiple;
+                if (bit & 1) {
+                    bit >>= 1; bit |= 0x80;
+                    while (mulx--) { gdcpset(cx, cy); cx += dir->x; cy += dir->y; }
+                } else {
+                    bit >>= 1;
+                    while (mulx--) { cx += dir->x; cy += dir->y; }
+                }
+            }
+            px0 += dir->x2; py0 += dir->y2;
+        }
+    }
+}
+
+// gdc.c vectdraw / textdraw: each figure from its own gdcpset_prepare.
+// vectdraw hands its figures the TEXTW word (para[20..21]); textdraw
+// hands them para[27] doubled, and the character figure the full 8-byte
+// TEXTW area (snapshot bytes 15-16 and 24-29).
+void vectdraw(const uint8_t *b, bool texte)
 {
     uint32_t csrw = b[11] | (b[12] << 8) | (b[13] << 16) | ((uint32_t) b[14] << 24);
     uint16_t textw = (uint16_t) w16(b, 15);
+    uint16_t tpat = (uint16_t) ((b[29] << 8) | b[29]);
     uint8_t vope = b[0];
-    if (!(vope & 0x78)) vectp(b, csrw, textw);
-    if (vope & 0x08) vectl(b, csrw, textw);
-    if (vope & 0x40) vectr(b, csrw, textw);
+    uint8_t pram[8];
+    for (int i = 0; i < 8; i++) pram[i] = (i < 2) ? b[15 + i] : b[22 + i];
+    uint16_t pat = texte ? tpat : textw;
+    if (!(vope & 0x78)) vectp(b, csrw, pat);
+    if (vope & 0x08) vectl(b, csrw, pat);
+    if (vope & 0x10) { if (texte) text(b, csrw, pram); else vectt(b, csrw, textw); }
+    if (vope & 0x40) vectr(b, csrw, pat);
 }
 
 } // namespace ref
@@ -315,8 +391,8 @@ static uint32_t rnd14()
 
 static void make_snap(char kind, uint8_t *b)
 {
-    for (int i = 0; i < 24; i++) b[i] = (uint8_t) rnd();
-    b[23] = 0;
+    for (int i = 0; i < 32; i++) b[i] = (uint8_t) rnd();
+    b[23] = 0; b[30] = 0; b[31] = 0;
     uint8_t oct = (uint8_t) (rnd() & 7);
     uint8_t sl = (uint8_t) ((rnd() & 1) << 7);
     uint32_t dc = rnd14(), d = rnd14(), d2 = rnd14(), d1;
@@ -325,6 +401,13 @@ static void make_snap(char kind, uint8_t *b)
     switch (kind) {
     case 'p': b[0] = (uint8_t) (oct | sl); break;
     case 'r': b[0] = (uint8_t) (0x40 | oct | sl | ((rnd() % 8 == 0) ? 0x08 : 0)); break; // sometimes + LINE
+    case 't': case 'x':
+        b[0] = (uint8_t) (0x10 | oct | sl | ((rnd() % 10 == 0) ? 0x48 : 0));
+        // cells: mostly character-sized, sometimes the 768 clamp
+        d  = (rnd() % 10) ? rnd() % 33 : rnd() % 16384;
+        dc = (rnd() % 10) ? rnd() % 24 : rnd() % 16384;
+        d1 = rnd() % (2 * dc + 1);
+        break;
     default:  b[0] = (uint8_t) (0x08 | oct | sl); break;
     }
     uint32_t junk = (rnd() & 3) << 14;   // VECTW's top bits are junk to np21w
@@ -340,6 +423,21 @@ static void make_snap(char kind, uint8_t *b)
     uint16_t pat = (uint16_t) ((rnd() & 3) ? rnd() : ((rnd() & 1) ? 0xFFFF : 0x0000));
     b[15] = (uint8_t) pat; b[16] = (uint8_t) (pat >> 8);
     b[18] = (uint8_t) (rnd() & 3);
+    b[17] = (uint8_t) ((rnd() & 0xF0) | ((rnd() % 4) ? rnd() % 3 : rnd() % 16)); // ZOOM: mostly x1-x3
+    if (kind == 't' || kind == 'x') {
+        // keep a draw inside the firmware's poll bound (a few million engine
+        // clocks; hardware takes seconds over such a figure, and so would
+        // np21w's DRAWING): shrink ZOOM until the walk fits
+        unsigned sx = ((ref::w16(b, 3) - 1) & 0x3fff) + 1, sy = (ref::w16(b, 1) & 0x3fff) + 1;
+        if (sx > 768) sx = 768;
+        if (sy > 768) sy = 768;
+        if (kind == 't') sy = 1;
+        for (;;) {
+            unsigned m = (b[17] & 15) + 1;
+            if ((uint64_t) sx * sy * m * m <= 600000 || !(b[17] & 15)) break;
+            b[17]--;
+        }
+    }
 }
 
 int main(int argc, char **argv)
@@ -347,7 +445,7 @@ int main(int argc, char **argv)
     Verilated::commandArgs(argc, argv);
     long n = argc > 1 ? atol(argv[1]) : 100000;
     if (argc > 2 && strcmp(argv[1], "bench")) mock::rs ^= strtoull(argv[2], 0, 0) * 0x9E3779B97F4A7C15ull;
-    const char *kinds = argc > 3 ? argv[3] : "lpr";
+    const char *kinds = argc > 3 ? argv[3] : "lprtx";
     mock::eng = new Vpc98_gdc_draw;
     mock::eng->reset = 1;
     mock::tick(); mock::tick();
@@ -377,14 +475,14 @@ int main(int argc, char **argv)
         for (int a = 0; a < 3; a++)
             for (const L &l : ls) {
                 mock::accel = accs[a];
-                uint8_t b[24] = {0};
+                uint8_t b[32] = {0};
                 b[0] = (uint8_t) (0x08 | l.oct);
                 b[1] = (uint8_t) l.dc; b[2] = (uint8_t) (l.dc >> 8);
                 b[7] = (uint8_t) l.d1; b[8] = (uint8_t) (l.d1 >> 8);
                 for (int i = 0; i < 4; i++) b[11 + i] = (uint8_t) (l.csrw >> (8 * i));
                 b[15] = 0xFF; b[16] = 0xFF;
                 b[18] = 0;
-                for (int i = 0; i < 6; i++)
+                for (int i = 0; i < 8; i++)
                     mock::snapw[i] = b[4 * i] | (b[4 * i + 1] << 8) | (b[4 * i + 2] << 16) | ((uint32_t) b[4 * i + 3] << 24);
                 uint64_t c0 = mock::busy_cycles, o0 = mock::n_ops;
                 serve_slave(0x200u | GDC_OP_VECTE);
@@ -397,25 +495,61 @@ int main(int argc, char **argv)
     }
 
     long fails = 0;
+    // SNAP="<30 hex bytes> <kind> <mode>": replay one fixed case (debug aid)
+    if (const char *fs = getenv("SNAP")) {
+        uint8_t b[32] = {0};
+        char kind = 't'; int fmode = 1;
+        int nb = sscanf(fs, "%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx"
+                          "%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx"
+                          "%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx %c %d",
+                          &b[0],&b[1],&b[2],&b[3],&b[4],&b[5],&b[6],&b[7],&b[8],&b[9],
+                          &b[10],&b[11],&b[12],&b[13],&b[14],&b[15],&b[16],&b[17],&b[18],&b[19],
+                          &b[20],&b[21],&b[22],&b[23],&b[24],&b[25],&b[26],&b[27],&b[28],&b[29],
+                          &kind, &fmode);
+        printf("replay: %d fields kind %c mode %d\n", nb, kind, fmode);
+        static const uint32_t accel_of[4] = { 0x0, 0x3, 0x1, 0x5 };
+        mock::accel = accel_of[fmode & 3];
+        for (auto &tl : mock::tile) tl = (uint8_t) rnd();
+        for (int i = 0; i < 8; i++)
+            mock::snapw[i] = b[4 * i] | (b[4 * i + 1] << 8) | (b[4 * i + 2] << 16) | ((uint32_t) b[4 * i + 3] << 24);
+        mock::trace.clear();
+        serve_slave(0x200u | (kind == 'x' ? GDC_OP_TEXTE : GDC_OP_VECTE));
+        ref::trace.clear();
+        ref::mode = fmode & 3; ref::plane = (int) ((b[12] >> 6) & 3); ref::op = b[18] & 3;
+        ref::drawn = 0;
+        ref::vectdraw(b, kind == 'x');
+        bool bad = memcmp(ref::vram, mock::vram, sizeof ref::vram) != 0;
+        printf("replay verdict: %s (%d ref dots)\n", bad ? "MISMATCH" : "match", ref::drawn);
+        int shown = 0;
+        for (int q = 0; q < 4 && shown < 16; q++)
+            for (int o = 0; o < 0x8000 && shown < 16; o++)
+                if (ref::vram[q][o] != mock::vram[q][o]) {
+                    printf("  plane %d +%04x (y %d xb %d): np21w %02x engine %02x\n", q, o, o / 80, o % 80,
+                           ref::vram[q][o], mock::vram[q][o]);
+                    shown++;
+                }
+        return bad ? 1 : 0;
+    }
     uint64_t kdots[128] = {0}, kcyc[128] = {0}, kops[128] = {0}, kn[128] = {0};
     size_t nk = strlen(kinds);
     for (long t = 0; t < n; t++) {
         char kind = kinds[rnd() % nk];
-        uint8_t b[24];
+        uint8_t b[32];
         make_snap(kind, b);
         int mode = (int) (rnd() % 10);
         mode = mode < 4 ? 0 : mode < 7 ? 1 : mode < 9 ? 2 : 3;
         static const uint32_t accel_of[4] = { 0x0, 0x3, 0x1, 0x5 };
         mock::accel = accel_of[mode] | ((rnd() & 1) ? 0 : (mode == 3 ? 2 : 0)); // EGC overrides RMW
         for (auto &tl : mock::tile) tl = (uint8_t) rnd();
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 8; i++)
             mock::snapw[i] = b[4 * i] | (b[4 * i + 1] << 8) | (b[4 * i + 2] << 16) | ((uint32_t) b[4 * i + 3] << 24);
 
         // ---- engine, through the firmware ----
         mock::trace.clear();
         uint64_t c0 = mock::busy_cycles, o0 = mock::n_ops;
-        serve_slave(0x200u | GDC_OP_VECTE);
-        if (mock::eng->busy) { printf("draw %ld: engine still busy after the firmware returned\n", t); fails++; }
+        serve_slave(0x200u | (kind == 'x' ? GDC_OP_TEXTE : GDC_OP_VECTE));
+        if (mock::aborts) { printf("draw %ld: the firmware aborted the engine\n", t); fails++; mock::aborts = 0; }
+        if (mock::eng->busy) { printf("draw %ld: engine still busy after the firmware returned (abort)\n", t); fails++; }
 
         // ---- np21w ----
         ref::trace.clear();
@@ -423,7 +557,7 @@ int main(int argc, char **argv)
         ref::plane = (int) ((b[12] >> 6) & 3);
         ref::op = b[18] & 3;
         ref::drawn = 0;
-        ref::vectdraw(b);
+        ref::vectdraw(b, kind == 'x');
         kn[(int) kind]++;
         kdots[(int) kind] += ref::drawn;
         kcyc[(int) kind] += mock::busy_cycles - c0;
