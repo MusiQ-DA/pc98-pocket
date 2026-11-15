@@ -260,6 +260,16 @@ module tb_pc98_opna;
         repeat (256) @(posedge clk);
 
         // ================================================================
+        // 0. gw_seen starts clear: the firmware's rhythm load gates on
+        //    OMGMT_CAPS bit1, and a boot that has not touched 0x188 must
+        //    read it 0 (reads -- including the presence probe below --
+        //    must never set it).
+        // ================================================================
+        mg2_reg = 4'd8;
+        repeat (2) @(posedge clk);
+        want("gw_seen clear before any guest write", mg2_rdata[1], 1'b0);
+
+        // ================================================================
         // 1. The SSG is the one block with a real read-back, so it proves
         //    the whole path: guest port -> router -> jt12 part 0 -> jt49,
         //    and jt12_dout's view 1 back out through the shadow.
@@ -502,10 +512,13 @@ module tb_pc98_opna;
         // ================================================================
         mg2_reg = 4'd8;
         repeat (2) @(posedge clk);
-        want("ADPCM build reports caps bit0", mg2_rdata[7:0], 8'h01);
+        // The window has been written by now (the router tests above), so
+        // bit1 (gw_seen) is set alongside bit0: the firmware's rhythm load
+        // waits on it, and it must only ever follow a guest WRITE.
+        want("ADPCM build reports caps bit0 + gw_seen", mg2_rdata[7:0], 8'h03);
         mg_reg = 4'd8;
         repeat (2) @(posedge clk);
-        want("slim build reports caps bit0 clear", mg_rdata[7:0], 8'h00);
+        want("slim build reports caps bit0 clear, gw_seen set", mg_rdata[7:0], 8'h02);
 
         mgmt_wr2(4'd0, 16'h0000);               // store address 0
         mgmt_wr2(4'd1, 16'h00AB);               // byte -> mem[0], addr++
