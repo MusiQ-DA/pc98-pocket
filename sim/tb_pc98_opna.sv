@@ -550,6 +550,28 @@ module tb_pc98_opna;
         end else
             $display("  ok   store write honours a non-zero base");
 
+        // ================================================================
+        // 9. The load sequence itself must be inaudible. One theory for the
+        //    boot crackle was the chip speaking while its store fills and
+        //    the start/end pairs land; this replays that exact mg traffic
+        //    (fill + inject) and watches both instances' sample outputs.
+        //    The chip stayed silent -- the crackle was the data-slot card
+        //    traffic coupling into the platform's analog audio, which is
+        //    why the fix schedules the load rather than muting a line.
+        // ================================================================
+        snd_any = 1'b0;
+        mgmt_wr2(4'd0, 16'h0000);
+        for (int i = 0; i < 2048; i++)
+            mgmt_wr2(4'd1, 16'h0055);
+        for (int p = 0; p < 6; p++) begin
+            mgmt_wr2(4'd3, {8'h10 + p[3:0], 8'h00});     // start lo
+            mgmt_wr2(4'd3, {8'h18 + p[3:0], 8'h00});     // start hi
+            mgmt_wr2(4'd3, {8'h20 + p[3:0], 8'hFF});     // end lo
+            mgmt_wr2(4'd3, {8'h28 + p[3:0], 8'hFF});     // end hi
+        end
+        repeat (256) @(posedge clk);
+        want("chip stays silent through the load sequence", snd_any, 1'b0);
+
         $display("");
         if (errors == 0)
             $display("PASS tb_pc98_opna");
@@ -557,6 +579,14 @@ module tb_pc98_opna;
             $display("FAIL tb_pc98_opna (%0d errors)", errors);
         $finish;
     end
+
+    // Sticky sample monitor: any nonzero (or X) sample on either instance
+    // latches on, and section 9 checks it after the load traffic.
+    logic snd_any = 1'b0;
+    always @(posedge clk)
+        if (snd_l !== 16'sd0 || snd_r !== 16'sd0 ||
+            snd2_l !== 16'sd0 || snd2_r !== 16'sd0)
+            snd_any <= 1'b1;
 
 endmodule
 
