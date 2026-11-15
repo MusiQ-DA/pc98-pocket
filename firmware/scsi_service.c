@@ -17,6 +17,7 @@
 // never affordable on a device at 91% ALM.
 #include <stddef.h>
 #include "softcpu_regs.h"
+#include "svc.h"
 
 // SCSI-1 group 0 and group 1 opcodes this target answers. Anything else gets
 // CHECK CONDITION with ILLEGAL REQUEST, which is what a real target does and
@@ -180,6 +181,10 @@ static void scsi_do_read(uint32_t lba, uint32_t blocks)
             return;
         }
         HB_MARK(0x31);  // block pushed
+        // Between blocks the bridge RAM and the dataslot engine are free and
+        // nothing of ours is half-latched but the buffer pointer, which only
+        // this service moves: let a waiting GDC draw or floppy sector in.
+        svc_maybe_yield(SVC_SCSI);
     }
     scsi_rewind_read();
     scsi_ok();
@@ -200,6 +205,7 @@ static void scsi_do_write(uint32_t lba, uint32_t blocks)
             scsi_fail(SENSE_NOT_READY, 0x0C); // write error
             return;
         }
+        svc_maybe_yield(SVC_SCSI); // between blocks, as the read does
     }
     scsi_rewind_write();
     scsi_ok();
@@ -634,6 +640,13 @@ void scsi_init(void)
     scsi_ack = 0;
     scsi_mgmt_write(SMGMT_AUXSTAT, 0x00);
     scsi_mgmt_write(SMGMT_STATUS, SCSI_GOOD);
+}
+
+// Nonzero when scsi_poll has something to do: svc_yield asks first, so an
+// idle yield costs one register read instead of scsi_poll's whole frame.
+int scsi_pending(void)
+{
+    return scsi_eject_req || (scsi_mgmt_read(SMGMT_CTRL) & 1);
 }
 
 // Called from the main loop. Register 0 bit 0 is (cmd_req != our ack), so a

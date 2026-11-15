@@ -286,6 +286,16 @@ module pc98_opna #(
     wire [7:0]  gw_reg     = wr_port_q[1] ? addrh : addrl;
     wire        gw_allowed = ~wr_port_q[1] | ext_enable;
 
+    // Sticky "the guest has written a register VALUE". The rhythm load's
+    // data-slot traffic ticks the platform's audio chain, so the firmware
+    // waits for this bit before it streams (mg reg 8, CAPS bit 1). Only
+    // data-port writes (0x189/0x18B/0x18D/0x18F) set it: the BIOS's boot-time
+    // board detect touches the address latches alone (bios.rom FD8E9: OUT
+    // 0x188,0x27 then OUT 0x18A,0x0F -- it never writes data), and that probe
+    // must not arm the load during the memory check. Reads never set it
+    // either -- a BIOS presence probe must not arm the load.
+    logic gw_seen;
+
     always_ff @(posedge clk) begin
         if (rst) begin
             addrl      <= 8'h00;
@@ -296,6 +306,7 @@ module pc98_opna #(
             rq_reg     <= 8'h00;
             rq_data    <= 8'h00;
             joy_blk    <= 1'b0;
+            gw_seen    <= 1'b0;
         end else begin
             // The FSM consumes the request on the way out of idle; a new one
             // is only taken once that has happened. Two clk cycles at
@@ -307,6 +318,8 @@ module pc98_opna #(
 
             if (wr_commit && gw_allowed) begin
                 data_latch <= wr_data_q;
+                if (gw_is_data)
+                    gw_seen <= 1'b1;
                 if (!gw_is_data) begin
                     if (gw_part) addrh <= wr_data_q;
                     else         addrl <= wr_data_q;
@@ -506,8 +519,9 @@ module pc98_opna #(
             4'd6:    mg_rdata = {8'd0, status1};
             4'd7:    mg_rdata = {2'd0, rhy_tl, rhy_kon};
             // Capability word: bit0 = the rhythm store and ADPCM-A exist, so
-            // the firmware knows whether a rhythm.bin load can land.
-            4'd8:    mg_rdata = {15'd0, USE_ADPCM};
+            // the firmware knows whether a rhythm.bin load can land; bit1 =
+            // the guest has written a register value (see gw_seen).
+            4'd8:    mg_rdata = {14'd0, gw_seen, USE_ADPCM};
             // 9..14 carried the guest's LR+AL per voice for the retired
             // drive-noise service; they read 0 now, like every unused reg.
             default: mg_rdata = 16'h0000;

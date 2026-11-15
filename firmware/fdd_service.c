@@ -16,6 +16,7 @@
 
 #include "settings_ui.h"
 #include "softcpu_regs.h"
+#include "svc.h"
 
 // One management-bus write: latch drive + register + 16-bit data, then trigger.
 static void mgmt_write(uint32_t drive, uint32_t reg, uint32_t data)
@@ -311,11 +312,21 @@ static uint32_t d88_offset(uint32_t drive, uint32_t lba)
 // the earlier file byte. The FIFO register address is set once for the whole run.
 // The length is the mounted media's sector width -- 512 bytes for every format
 // but a PC-98 2HD, whose sectors are 1024.
+// A 1024-byte sector takes ~8.5 ms to stream, so it yields (svc.h) every 32
+// words -- but only when it is staged at word 256 or above: SCSI's sectors
+// land in words 0-127, and a 512-byte sector staged there could be
+// overwritten under it. The two pointers the other services also drive are
+// re-latched after a yield.
 static void push_sector(uint32_t drive, uint32_t woff)
 {
     *FDD_BRAM_ADDR = woff;
     *FDD_MGMT_ADDR = (drive << 4) | FMGMT_FIFO;
     for (int i = 0; i < (int) fdd_sector_words[drive]; i++) {
+        if (woff >= 256u && i && !(i & 31)) {
+            svc_maybe_yield(SVC_FDD);
+            *FDD_BRAM_ADDR = woff + (uint32_t) i;
+            *FDD_MGMT_ADDR = (drive << 4) | FMGMT_FIFO;
+        }
         uint32_t w = *FDD_BRAM_RDATA;
         for (int b = 0; b < 4; b++) {
             *FDD_MGMT_PUSH = (w >> (b * 8)) & 0xFF;

@@ -5,6 +5,7 @@
 #include "key_bind.h"
 #include "settings_ui.h"
 #include "softcpu_regs.h"
+#include "svc.h"
 
 void gdc_poll(void);
 #include "osd_font.h"
@@ -34,6 +35,40 @@ static uint32_t stable_size(volatile uint32_t *reg)
     uint32_t a = *reg;
     uint32_t b = *reg;
     return (a == b) ? a : 0;
+}
+
+// The floppy drives the loop has mounted; file scope so svc_yield gates
+// fdd_poll on them the same way the loop does.
+static uint32_t mounted_a;
+static uint32_t mounted_b;
+
+// Cooperative yield (svc.h): a long service gives the others a pass about
+// once a millisecond. ~1 ms of softcore cycles; an idle pass of the three
+// polls costs a few tens of microseconds, so the yields take a few percent
+// of a long draw or transfer and cut the others' wait from tens of
+// milliseconds to about one.
+#define SVC_YIELD_CYCLES (CHIPSET_HZ / 6u / 1000u)
+uint32_t svc_yield_due;
+static uint8_t svc_in_yield;
+
+// Each poll is entered only when its request is up, so an idle yield is a
+// few register reads rather than three function frames.
+void svc_yield(uint32_t self)
+{
+    if (!svc_in_yield) { // one level: a service run from a yield finishes in one go
+        svc_in_yield = 1;
+        if (!(self & SVC_FDD) && (mounted_a || mounted_b) && *FDD_REQUEST) {
+            fdd_poll();
+        }
+        if (!(self & SVC_GDC)) {
+            gdc_poll();
+        }
+        if (!(self & SVC_SCSI) && scsi_pending()) {
+            scsi_poll();
+        }
+        svc_in_yield = 0;
+    }
+    svc_yield_due = svc_rdcycle() + SVC_YIELD_CYCLES;
 }
 
 int main(void)
@@ -76,6 +111,7 @@ int main(void)
 
     // Arm the timer and enable only its interrupt (bit 0); the fault interrupts stay
     // masked so an illegal instruction still traps rather than looping in irq().
+    vkb_irq_fast[3] = TIMER_PERIOD; // the fast path re-arms with this
     timer_start(TIMER_PERIOD);
     irq_mask(0xFFFFFFFEu);
 
@@ -86,8 +122,6 @@ int main(void)
     // a drive stays empty until the user picks an image in the menu this session -- the
     // datatable's entry for a disk slot is the Pocket's persisted last pick, refilled at
     // every launch with no bind behind it, and must not mount anything.
-    uint32_t mounted_a = 0;
-    uint32_t mounted_b = 0;
     uint32_t mounted_hdd = 0;
     uint32_t hdd_tries = 0;
     uint32_t settings_sized = 0;        // Settings size declared in the datatable yet
@@ -156,6 +190,8 @@ int main(void)
         // models it (the benches have no softcore). With nothing mounted
         // there is nothing to poll: gate the traffic on a disk being present,
         // and a diskless boot runs with the guest bus entirely its own.
+        // This pass polls everyone, so the next yield is a millisecond out.
+        svc_yield_due = svc_rdcycle() + SVC_YIELD_CYCLES;
         if (mounted_a || mounted_b) {
             fdd_poll();
         }

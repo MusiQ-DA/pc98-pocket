@@ -337,6 +337,43 @@ divider u_div (
     .remainder  (div_rem)
 );
 
+// The relative branch target LOOP, JMP short/near, Jcc and CALL near's
+// BR_REL16 share: IP after the instruction plus the sign-extended rel8
+// (or JMP/CALL near's rel16), and its linear address. One 16-bit and one
+// 24-bit adder instead of one pair per instruction class.
+wire [15:0] rel_disp = (ex_opcode == 8'hE9 || ex_opcode == 8'hE8) ? ex_imm
+                     : {{8{ex_imm[7]}}, ex_imm[7:0]};
+wire [15:0] rel_off  = ex_ip_after + rel_disp;
+wire [23:0] rel_lin  = base_CS + {8'h00, rel_off};
+
+// AAM's quotient and remainder: ONE divider with both outputs. Written as
+// al / imm and al % imm the two operators became two separate lpm_divide
+// arrays (~80 ALUTs each); a hand-written restoring loop that returned both
+// came out larger than either. Same operands as the adjust FSM below reads
+// (ex_e_addr_val[7:0] = AL, ex_imm[7:0]); imm == 0 is overridden there.
+logic [7:0] aam_q, aam_r;
+`ifdef VERILATOR
+assign aam_q = ex_e_addr_val[7:0] / ex_imm[7:0];
+assign aam_r = ex_e_addr_val[7:0] % ex_imm[7:0];
+`else
+lpm_divide #(
+    .lpm_widthn          (8),
+    .lpm_widthd          (8),
+    .lpm_nrepresentation ("UNSIGNED"),
+    .lpm_drepresentation ("UNSIGNED"),
+    .lpm_pipeline        (0),
+    .lpm_hint            ("LPM_REMAINDERPOSITIVE=TRUE")
+) u_aam_div (
+    .numer    (ex_e_addr_val[7:0]),
+    .denom    (ex_imm[7:0]),
+    .quotient (aam_q),
+    .remain   (aam_r),
+    .aclr     (1'b0),
+    .clock    (1'b0),
+    .clken    (1'b1)
+);
+`endif
+
 // BCD / ASCII Adjustment helper
 logic adj_req;
 logic [1:0] adj_state;
@@ -430,8 +467,8 @@ always @(posedge clk) begin
             end
             // ---------- AAM D4 ------------------------------------------------
             3'd4: begin
-                ah_n =  al / imm;
-                al_n =  al % imm;
+                ah_n =  aam_q;      // al / imm (u_aam_div above)
+                al_n =  aam_r;      // al % imm
                 af_n = 1'b0;
                 if (imm == 8'h00) begin
                     adj_cond <= 1'b1;
@@ -800,8 +837,11 @@ always @* begin
             rd   = 1;
             // reg1_raddr = mc_cur.arg[0] ? R_DI : R_SI;
             case (mc_cur.arg[1:0]) 
-            2'd0: rd_addr = ex_e_base + {8'h00, ex_e_addr_val};
-            2'd1: rd_addr = ex_e_base + {8'h00, ex_e_addr_val} + 24'd2;
+            // decode latches ex_e_fulladdr = ex_e_base + {8'h00,
+            // ex_e_addr_val} on the same edge as both operands, so the
+            // sum is already there.
+            2'd0: rd_addr = ex_e_fulladdr;
+            2'd1: rd_addr = ex_e_fulladdr + 24'd2;
             2'd2: rd_addr = ex_e_base + {8'h00, reg1_rdata};
             2'd3: rd_addr = base_ES + {8'h00, reg1_rdata};
             endcase
@@ -909,7 +949,9 @@ always @* begin
             mc_valid     = 1'b1;
             mc_load_cs_ip   = 1'b1;
             mc_new_cs       = seg_CS;
-            mc_new_ip       = ex_ip_after + ex_imm;        // disp already sign-extended
+            // ex_ip_after + ex_imm: BR_REL16 is CALL near's (E8) alone
+            // (ucode.asm), so rel_off holds exactly that sum.
+            mc_new_ip       = rel_off;
         end
 
         //==================================================================
@@ -1711,19 +1753,19 @@ always @(posedge clk) begin
         is_cmp = ex_arith_op[7];
         hw_flags_update_mask = 2'b11;   // default: update OF/CF
         unique case (ex_arith_op)
-        8'h01: // add
-            {alu_result,flags} = execute_add(ex_e_val, ex_g_val, 1'b0, ex_w);
+        // One adder for ADD/ADC and one subtractor for SUB/SBB/CMP: the
+        // carry-in is ex_arith_carry only for ADC/SBB.
+        8'h01, // add
+        8'h04: // adc
+            {alu_result,flags} = execute_add(ex_e_val, ex_g_val, ex_arith_op[2] & ex_arith_carry, ex_w);
         8'h02: // or
             alu_result = ex_e_val | ex_g_val;
-        8'h04: // adc
-            {alu_result,flags} = execute_add(ex_e_val, ex_g_val, ex_arith_carry, ex_w);
-        8'h08: // sbb
-            {alu_result,flags} = execute_sub(ex_e_val, ex_g_val, ex_arith_carry, ex_w, ex_arith_e_is_opt1);
-        8'h10: // and
-            alu_result = ex_e_val & ex_g_val;
+        8'h08, // sbb
         8'h20, // sub
         8'h80: // cmp
-            {alu_result,flags} = execute_sub(ex_e_val, ex_g_val, 1'b0, ex_w, ex_arith_e_is_opt1);
+            {alu_result,flags} = execute_sub(ex_e_val, ex_g_val, ex_arith_op[3] & ex_arith_carry, ex_w, ex_arith_e_is_opt1);
+        8'h10: // and
+            alu_result = ex_e_val & ex_g_val;
         8'h40: // xor
             alu_result = ex_e_val ^ ex_g_val;
         default: begin
@@ -1839,6 +1881,7 @@ always @(posedge clk) begin
         logic new_cf;
         logic new_of;
         logic new_af;
+        logic [16:0] sh_fo;
         
         bits = ex_w ? 16 : 8;          // operand width in bits
         use_cl = ex_opcode[1];           // /2 variant
@@ -1849,6 +1892,11 @@ always @(posedge clk) begin
         cnt_raw =   use_cl  ? ex_g_val[4:0] : 
                     use_imm ? ex_imm[4:0]   : 5'd1;
         sh_extra <= (use_cl | use_imm) ? cnt_raw[4:0] : 5'd0;
+        // Every result below comes out of one funnel (shrot_funnel) rather
+        // than a barrel shifter per operation.
+        sh_fo = shrot_funnel(ex_modrm[5:3], ex_w, ex_e_val, CF,
+                             shift_cnt(cnt_raw, bits),
+                             rotate_cnt(cnt_raw, bits, ex_modrm[4]));
 
         // $display("I_SHIFT: cnt_raw: %d, ex_e_val: %h", cnt_raw, ex_e_val);
 
@@ -1871,7 +1919,7 @@ always @(posedge clk) begin
                 //--------------------------------------------------------
                 3'b100,        // SHL / SAL   (identical)
                 3'b110: begin
-                    res      = src << cnt;
+                    res      = sh_fo[15:0];               // src << cnt
                     new_cf   = saturated ? 1'b0 : src[bits-cnt];
                     // OF defined only when cnt==1
                     new_of   = (cnt==1) ? (res[bits-1] ^ new_cf) : /*reg_f[11]*/1'b0;
@@ -1879,14 +1927,14 @@ always @(posedge clk) begin
                 end
                 //--------------------------------------------------------
                 3'b101: begin  // SHR (logical right)
-                    res      = src >> cnt;
+                    res      = sh_fo[15:0];               // src >> cnt
                     new_cf   = saturated ? 1'b0 : src[cnt-1];
                     new_of   = (cnt==1) ? src[bits-1] : /*reg_f[11]*/1'b0;
                     new_af   = 1'b0;
                 end
                 //--------------------------------------------------------
                 3'b111: begin  // SAR (arithmetic right)
-                    res      = ex_w ? $signed(src) >>> cnt : $signed(src[7:0]) >>> cnt;   // sign-extend
+                    res      = sh_fo[15:0];               // sign-extending >>> cnt
                     new_cf   = saturated ? (ex_w ? src[15] : src[7]) : src[cnt-1];
                     new_of   = 1'b0;                   // always cleared
                     new_af   = 1'b0;
@@ -1930,25 +1978,25 @@ always @(posedge clk) begin
             res = ex_e_val;
             if (cnt_raw) unique case (ex_modrm[5:3])
             3'b000: begin                       // ---------- ROL
-                res    = rol(ex_e_val, cnt, ex_w);
+                res    = ex_w ? sh_fo[15:0] : {8'h00, sh_fo[7:0]};   // rol
                 new_cf = res[0];
                 new_of = (cnt==1) ? (res[bits-1] ^ new_cf) : reg_f[11];
             end
             3'b001: begin                       // ---------- ROR
-                res    = ror(ex_e_val, cnt, ex_w);
+                res    = ex_w ? sh_fo[15:0] : {8'h00, sh_fo[7:0]};   // ror
                 new_cf = res[bits-1];
                 new_of = (cnt==1) ? (res[bits-1] ^ res[bits-2]) : reg_f[11];
             end
             3'b010: begin                       // ---------- RCL
                 logic [16:0] rot;
-                rot = rcl_thru_cf(ex_e_val, CF, cnt, ex_w);
+                rot = ex_w ? sh_fo : {8'h00, sh_fo[8:0]};          // rcl_thru_cf
                 res    = ex_w ? rot[15:0] : rot[7:0];
                 new_cf = rot[bits];
                 new_of = (cnt==1) ? (res[bits-1] ^ new_cf) : reg_f[11];
             end
             3'b011: begin                       // ---------- RCR
                 logic [16:0] rot;
-                rot = rcr_thru_cf(ex_e_val, CF, cnt, ex_w);
+                rot = ex_w ? sh_fo : {8'h00, sh_fo[8:0]};          // rcr_thru_cf
                 res    = ex_w ? rot[15:0] : rot[7:0];
                 new_cf = rot[bits];
                 new_of = (cnt==1) ? (res[bits-1] ^ res[bits-2]) : reg_f[11];
@@ -1982,12 +2030,11 @@ always @(posedge clk) begin
         logic is_dec;
 
         is_dec = ex_opcode[7] ? ex_modrm[3] : ex_opcode[3];
-        if (ii.w) begin
-            alu_result = is_dec ? ex_e_val - 16'd1 : ex_e_val + 16'd1;
-        end else begin
-            alu_result[7:0] = is_dec ? ex_e_val[7:0] - 8'd1 : ex_e_val[7:0] + 8'd1;
+        // One 16-bit adder for INC and DEC at either width: -1 is +FFFFh,
+        // and a byte result is the word result's low byte.
+        alu_result = ex_e_val + (is_dec ? 16'hFFFF : 16'h0001);
+        if (!ii.w)
             alu_result[15:8] = 0;
-        end
 
         if (ii.e_is_m) begin
             wr_valid <= 1;
@@ -2229,8 +2276,8 @@ always @(posedge clk) begin
         br_taken       <= cond;
         // signed 8-bit displacement in imm8 is already sign-extended by decoder
         br_new_cs      <= seg_CS;
-        br_new_ip      <= ex_ip_after + {{12{ex_imm[7]}}, ex_imm[7:0]};   // TODO: Move to decode
-        br_target      <= base_CS + {8'h00, ex_ip_after + {{8{ex_imm[7]}}, ex_imm[7:0]}};
+        br_new_ip      <= rel_off;    // ex_ip_after + sext(rel8)
+        br_target      <= rel_lin;
     end
 
 
@@ -2249,17 +2296,17 @@ always @(posedge clk) begin
         if (ex_valid) begin
             // 1) Resolve new IP / CS
             if (is_jmp_short) begin
-                target_off = ex_ip_after + {{8{ex_imm[7]}}, ex_imm[7:0]};
+                target_off = rel_off;                // ex_ip_after + sext(rel8)
                 target_seg = seg_CS;
             end else if (is_jmp_near) begin
-                target_off = ex_ip_after + ex_imm;   // 16-bit signed add
+                target_off = rel_off;                // ex_ip_after + rel16
                 target_seg = seg_CS;
             end else if (is_jmp_far) begin
                 target_off = ex_disp[15:0];          // low 16 bits already latched
                 target_seg = ex_disp[31:16];         // upper word came in disp field
             end
             br_taken   <= 1'b1;
-            br_target  <= (is_jmp_far ? {4'h0, target_seg, 4'b0} : base_CS) + {8'h00, target_off};
+            br_target  <= is_jmp_far ? {4'h0, target_seg, 4'b0} + {8'h00, target_off} : rel_lin;
             br_new_cs  <= target_seg;
             br_new_ip  <= target_off;
         end
@@ -2336,10 +2383,10 @@ always @(posedge clk) begin
         end
 
         // -------------------------------- 2) Branch target
-        target_off  = ex_ip_after + {{8{ex_imm[7]}}, ex_imm[7:0]}; // sign-extend disp
+        target_off  = rel_off;   // ex_ip_after + sext(rel8)
 
         br_taken    <= cond;
-        br_target   <= base_CS + {8'h00, target_off};
+        br_target   <= rel_lin;
         br_new_cs   <= seg_CS;
         br_new_ip   <= target_off;
         /* No flag change, no register/memory write */
@@ -2590,8 +2637,11 @@ function automatic [31:0] execute_add(
     reg aux_flag, overflow_flag;
     
     flags = reg_f;
-    sum = width ? {1'b0, e_val} + {1'b0, g_val} + {16'b0, carry}: 
-            {9'b0, e_val[7:0]} + {9'b0, g_val[7:0]} + {16'b0, carry};
+    // One 16-bit add for both widths: a byte add's carry out of bit 7 is
+    // the carry INTO bit 8 of the word add, e[8] ^ g[8] ^ sum[8].
+    sum = {1'b0, e_val} + {1'b0, g_val} + {16'b0, carry};
+    if (!width)
+        sum = {8'b0, e_val[8] ^ g_val[8] ^ sum[8], sum[7:0]};
     aux_flag = e_val[4] ^ g_val[4] ^ sum[4];
     overflow_flag = width ? (e_val[15] == g_val[15] && e_val[15] != sum[15]) :
                             (e_val[7] == g_val[7] && e_val[7] != sum[7]);
@@ -2618,21 +2668,23 @@ function automatic [31:0] execute_sub(
     reg aux_flag;
     reg overflow_flag;
 
+    logic [15:0] op1, op2;
+
     flags = reg_f;
-    if (e_is_op1) begin // E - G
-        diff = width ? {1'b0, e_val} - {1'b0, g_val} - {16'b0, borrow}: 
-                {9'b0, e_val[7:0]} - {9'b0, g_val[7:0]} - {16'b0, borrow};
-        aux_flag = e_val[4] ^ g_val[4] ^ diff[4];
-        overflow_flag = width ? (e_val[15] != g_val[15] && e_val[15] != diff[15]) :
-                                (e_val[7] != g_val[7] && e_val[7] != diff[7]);
-        if (DEBUG) $display("e_is_op1: e_val: %h, g_val: %h, diff: %h, aux_flag: %b, overflow_flag: %b", e_val, g_val, diff, aux_flag, overflow_flag);
-    end else begin     // G - E
-        diff = width ? {1'b0, g_val} - {1'b0, e_val} - {16'b0, borrow}: 
-                {9'b0, g_val[7:0]} - {9'b0, e_val[7:0]} - {16'b0, borrow};
-        aux_flag = g_val[4] ^ e_val[4] ^ diff[4];
-        overflow_flag = width ? (g_val[15] != e_val[15] && g_val[15] != diff[15]) :
-                                (g_val[7] != e_val[7] && g_val[7] != diff[7]);
-    end
+    // E - G or G - E: one subtractor on swapped operands (the two
+    // directions' aux/overflow terms are the same formula with the roles
+    // swapped).
+    op1 = e_is_op1 ? e_val : g_val;
+    op2 = e_is_op1 ? g_val : e_val;
+    // One 16-bit subtract for both widths: a byte subtract's borrow out of
+    // bit 7 is the borrow INTO bit 8 of the word subtract (all the flags
+    // read of a byte result's adder bits is [8]).
+    diff = {1'b0, op1} - {1'b0, op2} - {16'b0, borrow};
+    if (!width)
+        diff = {{8{op1[8] ^ op2[8] ^ diff[8]}}, op1[8] ^ op2[8] ^ diff[8], diff[7:0]};
+    aux_flag = op1[4] ^ op2[4] ^ diff[4];
+    overflow_flag = width ? (op1[15] != op2[15] && op1[15] != diff[15]) :
+                            (op1[7] != op2[7] && op1[7] != diff[7]);
     // $display("e_is_op1: %b", e_is_op1);
     
     result = width ? diff[15:0] : {8'h00, diff[7:0]};
@@ -2681,6 +2733,47 @@ function automatic [15:0] logic_src();
                 ex_modrm[5:3]==3'b001 ? ex_g_val :
                 ex_modrm[5:3]==3'b010 ? ex_imm :
                 16'hXXXX;
+endfunction
+
+// One right funnel for every SHIFT/ROTATE result (see I_SHIFT): the
+// operand laid out as the op needs it, then a single 34 -> 17 bit shift.
+// sc = shift_cnt (shifts, 1..bits when used), rc = rotate_cnt (rotates).
+function automatic [16:0] shrot_funnel
+(
+    input [2:0]  op,      // ex_modrm[5:3]
+    input        w,
+    input [15:0] d,       // ex_e_val
+    input        cf,
+    input [4:0]  sc,
+    input [4:0]  rc
+);
+    logic [33:0] fv;
+    logic [4:0]  fa;
+    logic [15:0] src;
+    src = w ? d : {8'h0, d[7:0]};
+    unique case (op)
+    3'b000, 3'b001: begin                       // ROL / ROR
+        fv = w ? {2'b00, d, d} : {18'd0, d[7:0], d[7:0]};
+        fa = op[0] ? rc : (w ? 5'd16 : 5'd8) - rc;
+    end
+    3'b010, 3'b011: begin                       // RCL / RCR
+        fv = w ? {cf, d, cf, d} : {16'd0, cf, d[7:0], cf, d[7:0]};
+        fa = op[0] ? rc : (w ? 5'd17 : 5'd9) - rc;
+    end
+    3'b101: begin                               // SHR
+        fv = {18'd0, src};
+        fa = sc;
+    end
+    3'b111: begin                               // SAR
+        fv = w ? {{18{d[15]}}, d} : {{26{d[7]}}, d[7:0]};
+        fa = sc;
+    end
+    default: begin                              // SHL / SAL (100, 110)
+        fv = {2'b00, src, 16'd0};
+        fa = 5'd16 - sc;
+    end
+    endcase
+    shrot_funnel = fv[fa +: 17];
 endfunction
 
 // width  = 8 or 16

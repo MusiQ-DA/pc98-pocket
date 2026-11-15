@@ -2627,8 +2627,12 @@ module PERIPHERALS #(
 
         .wp                         (floppy_wp),
 
-        .clock_rate                 (clk_select[1] == 1'b0 ? clk_rate :
-                                     clk_select[0] == 1'b0 ? {1'b0, clk_rate[27:1]} : {2'b00, clk_rate[27:2]}),
+        // floppy.v runs on `clock` (clk_chipset, fixed), so its step timer
+        // must count that clock's real rate whatever the CPU setting. The
+        // PCXT base divided it by the CPU speed select, which made a seek
+        // 2x fast at 12 MHz and 4x at Turbo; FDD Turbo is the one switch
+        // that is meant to shorten the mechanics.
+        .clock_rate                 (clk_rate),
 
         .turbo                      (fdd_turbo),
         .force_ready                (fdc_force_ready),

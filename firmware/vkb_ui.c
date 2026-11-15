@@ -49,6 +49,7 @@ static uint8_t dock_stb_prev;     // last docked-key change toggle seen, to catc
 static uint32_t latch_bits[3];    // one bit per key index: latched keys stay down
 static uint32_t ui_repeat_timer;  // cycle deadline for the next auto-repeat
 static uint16_t ui_repeat_btn;    // dpad direction(s) held for repeat
+volatile uint32_t vkb_irq_fast[4]; // see vkb_ui.h; ok starts 0, so the first ticks run in full
 
 // Push one make/break event to pocket_keyboard's event queue. The register
 // strobe toggles per write, so each call is exactly one queued key event.
@@ -541,6 +542,18 @@ void vkb_ui_tick(void)
         osd_origin_write();
         *VKB_CTRL = 1u;
     }
+
+    // With no overlay up, the button word adopted and no reset walk, the next
+    // tick can only act if CONT1_KEY or the raster changes: every press,
+    // release, interact opener and docked key is in the first, and the
+    // settle timer only runs while the raw buttons differ from the adopted
+    // ones. So irq_vec compares those two words and skips the whole tick --
+    // the context save and this function were ~313 us of every 1 ms with the
+    // OSD closed. Any difference runs the tick in full, as before.
+    vkb_irq_fast[1] = raw;
+    vkb_irq_fast[2] = raster;
+    vkb_irq_fast[0] = (ui_mode == OSD_NONE && (raw & 0xFFFFu) == ui_prev
+                       && !settings_reset_active());
 }
 
 void vkb_ui_open_picker(int btn)

@@ -73,3 +73,18 @@ the identical files pass in CI. For an authoritative local run of a
 `--timing` bench, use the `pc98-sim` docker image (`docker build -t pc98-sim
 sim/`, then the CI invocation from `.github/workflows/build.yml`). Lint and
 non-`--timing` benches are unaffected.
+
+### Removed: the EGC golden differential bench (2026-11-15)
+
+`scripts/sim_egc_golden.sh`, `sim/tb_pc98_egc_golden.sv` and the np21w
+golden model under `sim/golden/` (`np21w/`, `np21w_inc/`, `golden_egc.c`)
+are DELETED — do not recreate them. Running it cost a fresh Verilator build
+per invocation and hung indefinitely on half the streams (Verilator 5.020
+scheduling), and no active task line touches the EGC RTL, so it gated
+nothing. The EGC coverage that remains, and all that is ever needed, is
+CI's own `tb_pc98_egc` + `scripts/sim_egc_iow.sh` (both fast, both green).
+`sim/golden/streams/` STAYS: CI converts three of those streams into CPU
+test programs via `tools/ops2prog.py` (build.yml). If EGC RTL work ever
+returns and a differential reference is wanted, re-derive it from
+np21w `io/egc.c` deliberately — not by resurrecting this harness.
+

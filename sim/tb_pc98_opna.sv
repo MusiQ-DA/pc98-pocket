@@ -260,6 +260,24 @@ module tb_pc98_opna;
         repeat (256) @(posedge clk);
 
         // ================================================================
+        // 0. gw_seen starts clear: the firmware's rhythm load gates on
+        //    OMGMT_CAPS bit1, and a boot that has not touched 0x188 must
+        //    read it 0. The BIOS's board detect -- the only writer during
+        //    a plain boot (bios.rom FD8E9, right around the memory check)
+        //    -- touches the two ADDRESS latches alone (OUT 0x188,0x27 then
+        //    OUT 0x18A,0x0F, np21w cbus/board86.c opna_o188/opna_o18a) and
+        //    must not arm the load either; reads never set it.
+        // ================================================================
+        mg2_reg = 4'd8;
+        repeat (2) @(posedge clk);
+        want("gw_seen clear before any guest write", mg2_rdata[1], 1'b0);
+        io_wr(2'b00, 8'h27);            // the BIOS's own board-detect probe
+        repeat (8) @(posedge clk);
+        io_wr(2'b10, 8'h0F);            // address latch of part 1, not data
+        repeat (8) @(posedge clk);
+        want("gw_seen clear after the BIOS address-only probe", mg2_rdata[1], 1'b0);
+
+        // ================================================================
         // 1. The SSG is the one block with a real read-back, so it proves
         //    the whole path: guest port -> router -> jt12 part 0 -> jt49,
         //    and jt12_dout's view 1 back out through the shadow.
@@ -502,10 +520,13 @@ module tb_pc98_opna;
         // ================================================================
         mg2_reg = 4'd8;
         repeat (2) @(posedge clk);
-        want("ADPCM build reports caps bit0", mg2_rdata[7:0], 8'h01);
+        // The window has seen a DATA write by now (chip_wr in the router
+        // tests), so bit1 (gw_seen) is set alongside bit0: the firmware's
+        // rhythm load waits on it, and only a data-port write may set it.
+        want("ADPCM build reports caps bit0 + gw_seen", mg2_rdata[7:0], 8'h03);
         mg_reg = 4'd8;
         repeat (2) @(posedge clk);
-        want("slim build reports caps bit0 clear", mg_rdata[7:0], 8'h00);
+        want("slim build reports caps bit0 clear, gw_seen set", mg_rdata[7:0], 8'h02);
 
         mgmt_wr2(4'd0, 16'h0000);               // store address 0
         mgmt_wr2(4'd1, 16'h00AB);               // byte -> mem[0], addr++
@@ -537,6 +558,28 @@ module tb_pc98_opna;
         end else
             $display("  ok   store write honours a non-zero base");
 
+        // ================================================================
+        // 9. The load sequence itself must be inaudible. One theory for the
+        //    boot crackle was the chip speaking while its store fills and
+        //    the start/end pairs land; this replays that exact mg traffic
+        //    (fill + inject) and watches both instances' sample outputs.
+        //    The chip stayed silent -- the crackle was the data-slot card
+        //    traffic coupling into the platform's analog audio, which is
+        //    why the fix schedules the load rather than muting a line.
+        // ================================================================
+        snd_any = 1'b0;
+        mgmt_wr2(4'd0, 16'h0000);
+        for (int i = 0; i < 2048; i++)
+            mgmt_wr2(4'd1, 16'h0055);
+        for (int p = 0; p < 6; p++) begin
+            mgmt_wr2(4'd3, {8'h10 + p[3:0], 8'h00});     // start lo
+            mgmt_wr2(4'd3, {8'h18 + p[3:0], 8'h00});     // start hi
+            mgmt_wr2(4'd3, {8'h20 + p[3:0], 8'hFF});     // end lo
+            mgmt_wr2(4'd3, {8'h28 + p[3:0], 8'hFF});     // end hi
+        end
+        repeat (256) @(posedge clk);
+        want("chip stays silent through the load sequence", snd_any, 1'b0);
+
         $display("");
         if (errors == 0)
             $display("PASS tb_pc98_opna");
@@ -544,6 +587,14 @@ module tb_pc98_opna;
             $display("FAIL tb_pc98_opna (%0d errors)", errors);
         $finish;
     end
+
+    // Sticky sample monitor: any nonzero (or X) sample on either instance
+    // latches on, and section 9 checks it after the load traffic.
+    logic snd_any = 1'b0;
+    always @(posedge clk)
+        if (snd_l !== 16'sd0 || snd_r !== 16'sd0 ||
+            snd2_l !== 16'sd0 || snd2_r !== 16'sd0)
+            snd_any <= 1'b1;
 
 endmodule
 
