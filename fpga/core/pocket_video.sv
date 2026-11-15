@@ -22,6 +22,10 @@ module pocket_video (
     input             VBlank,
     // Config / clock-mux state
     input      [2:0]  palette_cfg,
+    // The Pocket's Display Mode is a grayscale LCD (OS Notify 00B8 bit0,
+    // clk_pix-synchronised): the whole presented picture, OSD included,
+    // goes out as luma on all three channels.
+    input             grayscale,
     input             disk_led,   // on-screen disk-access lamp (stretched level)
     input             vid_blank,
     // The "Skip" 200-line presentation ANDed with CHIPSET's doubled-mode flag
@@ -254,9 +258,19 @@ module pocket_video (
                            : lamp_in       ? 24'hE0A020
                            : thin_line     ? 24'd0
                            :                 {tr, tg, tb};
+    // Luma for the grayscale LCD modes: (5R + 9G + 2B) / 16, i.e. weights
+    // 0.3125/0.5625/0.125 against BT.601's 0.299/0.587/0.114 -- shifts and
+    // three adds, no multipliers (the tint removal above is why). 255 in
+    // all channels sums to 4080, so the top byte of the 12-bit sum is the
+    // full 0..255 range.
+    wire [11:0] luma_sum = {4'd0, overlay[23:16]} + {2'd0, overlay[23:16], 2'd0}
+                         + {4'd0, overlay[15:8]}  + {1'd0, overlay[15:8],  3'd0}
+                         + {3'd0, overlay[7:0],  1'd0};
+    wire [7:0]  luma     = luma_sum[11:4];
+    wire [23:0] pix_out  = grayscale ? {luma, luma, luma} : overlay;
     always @(posedge clk_pix) begin
         vid_de  <= vid_de_now;
-        vid_rgb <= vid_de_now ? overlay : {8'd0, vid_slot, 13'd0};
+        vid_rgb <= vid_de_now ? pix_out : {8'd0, vid_slot, 13'd0};
         vid_hs  <= sel_hs_d1;
         vid_vs  <= sel_vs_d1;
     end

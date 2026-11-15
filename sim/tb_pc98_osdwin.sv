@@ -51,6 +51,7 @@ module tb_pc98_osdwin;
         .HBlank          (hb),
         .VBlank          (vb),
         .palette_cfg     (3'd0),
+        .grayscale       (1'b0),
         .disk_led        (1'b0),
         .vid_blank       (1'b0),
         .dbl_skip        (1'b0),

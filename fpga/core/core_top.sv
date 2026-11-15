@@ -760,6 +760,7 @@ module core_top #(
     // reset without relaunching the core on the Pocket.
     reg         jtag_slots_ok = 1'b0;
     wire        osnotify_inmenu;
+    wire        osnotify_grayscale;   // Display Mode is a grayscale LCD (00B8 bit0)
 
     // The Pocket's real clock, packed for the uPD4990. The bridge hands over
     // BCD bytes -- date {day [23:16], month [15:8], year [7:0]}, time {hour
@@ -972,6 +973,7 @@ module core_top #(
         .savestate_maxloadsize     (32'd0),
 
         .osnotify_inmenu           (osnotify_inmenu),
+        .osnotify_grayscale        (osnotify_grayscale),
 
         .savestate_start           (),
         .savestate_start_ack       (1'b0),
@@ -2509,6 +2511,8 @@ module core_top #(
     synch_3 #(.WIDTH(16)) s_cont1_chip    (cont1_key_eff,     cont1_key_chip, clk_chipset);
     synch_3 #(.WIDTH(16)) s_cont2_chip    (cont2_key_eff,     cont2_key_chip, clk_chipset);
     synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
+    wire       grayscale_pix;
+    synch_3              s_grayscale      (osnotify_grayscale, grayscale_pix, clk_pix);
     // The 200-line skip's two terms are both chipset-domain: the OSD bit and
     // CHIPSET's doubled-mode flag. Their product crosses to clk_pix once --
     // a quasi-static pair, so tearing between them is at most one frame.
@@ -4317,6 +4321,7 @@ module core_top #(
         .HBlank             (HBlank),
         .VBlank             (VBlank),
         .palette_cfg        (palette_cfg),
+        .grayscale          (grayscale_pix),
         .disk_led           (disk_led_on),
         .vid_blank          (vid_blank),
         .dbl_skip           (dbl_skip_pix),
