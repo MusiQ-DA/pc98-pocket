@@ -363,6 +363,15 @@ int rhythm_load(void)
     if (!(opna_mgmt_read(OMGMT_CAPS) & 1))
         return rhythm_later();
 
+    // The load's own data-slot traffic ticks the platform's audio chain --
+    // that was the crackle over every boot -- and the boot ROMs never write
+    // 0x188-0x18F, so nothing sounds until a program touches the board.
+    // CAPS bit1 (gw_seen) is that first touch: hold the stream until then,
+    // and the ticks land under the program's own disk noise instead of a
+    // silent POST screen.
+    if (!(opna_mgmt_read(OMGMT_CAPS) & 2))
+        return rhythm_later();
+
     // WAV mode wins when any per-voice slot is bound.
     static uint32_t mode;
     if (!mode) {

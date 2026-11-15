@@ -168,6 +168,7 @@
 #define OMGMT_STATUS0  0x5     // R: jt12 status0 {busy,5'd0,flag_B,flag_A}
 #define OMGMT_STATUS1  0x6     // R: jt12 status1 {adpcmb_flag,1'b0,adpcma_flags[5:0]}
 #define OMGMT_CAPS     0x8     // R: bit0 = ADPCM-A store present (USE_ADPCM build)
+                               //    bit1 = the guest has written the 0x188 window (gw_seen)
 
 // pc98_scsi management registers (mgmt_address[3:0]). See PERIPHERALS.
 #define SMGMT_CTRL    0x0      // R: {cmd_byte, req != ack}  W: bit0 acknowledges
