@@ -262,12 +262,20 @@ module tb_pc98_opna;
         // ================================================================
         // 0. gw_seen starts clear: the firmware's rhythm load gates on
         //    OMGMT_CAPS bit1, and a boot that has not touched 0x188 must
-        //    read it 0 (reads -- including the presence probe below --
-        //    must never set it).
+        //    read it 0. The BIOS's board detect -- the only writer during
+        //    a plain boot (bios.rom FD8E9, right around the memory check)
+        //    -- touches the two ADDRESS latches alone (OUT 0x188,0x27 then
+        //    OUT 0x18A,0x0F, np21w cbus/board86.c opna_o188/opna_o18a) and
+        //    must not arm the load either; reads never set it.
         // ================================================================
         mg2_reg = 4'd8;
         repeat (2) @(posedge clk);
         want("gw_seen clear before any guest write", mg2_rdata[1], 1'b0);
+        io_wr(2'b00, 8'h27);            // the BIOS's own board-detect probe
+        repeat (8) @(posedge clk);
+        io_wr(2'b10, 8'h0F);            // address latch of part 1, not data
+        repeat (8) @(posedge clk);
+        want("gw_seen clear after the BIOS address-only probe", mg2_rdata[1], 1'b0);
 
         // ================================================================
         // 1. The SSG is the one block with a real read-back, so it proves
@@ -512,9 +520,9 @@ module tb_pc98_opna;
         // ================================================================
         mg2_reg = 4'd8;
         repeat (2) @(posedge clk);
-        // The window has been written by now (the router tests above), so
-        // bit1 (gw_seen) is set alongside bit0: the firmware's rhythm load
-        // waits on it, and it must only ever follow a guest WRITE.
+        // The window has seen a DATA write by now (chip_wr in the router
+        // tests), so bit1 (gw_seen) is set alongside bit0: the firmware's
+        // rhythm load waits on it, and only a data-port write may set it.
         want("ADPCM build reports caps bit0 + gw_seen", mg2_rdata[7:0], 8'h03);
         mg_reg = 4'd8;
         repeat (2) @(posedge clk);
