@@ -244,7 +244,12 @@ module softcpu_subsystem (
         .ENABLE_COUNTERS64(0),
         // ... and rdcycle is the only counter it reads (objdump: no
         // rdinstret), so the 32-bit instret counter and its adder go.
-        .ENABLE_COUNTERS_INSTR(0)
+        .ENABLE_COUNTERS_INSTR(0),
+        // One shift step per cycle instead of two: shifts >=4 bits take up
+        // to 31 cycles instead of 16. The firmware's hot loops barely shift
+        // (udiv32's restoring-divide loop shifts 1 bit and is not a hot
+        // path), so this trades a little softcore speed for ~20-40 ALMs.
+        .TWO_STAGE_SHIFT(0)
     ) pico (
         .clk       (clk_pico),
         .resetn    (~reset),
