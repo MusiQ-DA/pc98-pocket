@@ -33,16 +33,17 @@ start:
         mov ss, ax
         mov sp, 0x0400
 
-        mov dx, EXTGATE
-        mov al, 0x01
-        out dx, al              ; extended register pair on
-
         mov ax, 0xA000
         mov es, ax
         mov ah, 0xE1
         mov si, str_title
         mov bx, 0
         call putstr
+
+        ; v2: no 0xA460 write here -- FM and SSG run entirely on part0 so
+        ; the extended pair gate (and the busy-poll reads it went with) is
+        ; deferred to the rhythm section, exactly one change-set away if
+        ; the disk still plays silent.
 
         ; ---- one-time voice setup: single init table (reg,data, 0xFF ends)
         ; FM ch1-3 voices (ALG=0 2-op, TL/AR/RR per slot) are table entries
@@ -59,21 +60,11 @@ start:
         call wr0
         jmp .itab
 .idone:
-        ; rhythm: total level max, per-voice pan centre + level max
+        ; rhythm total level max (part0); the per-voice pan/level setup is
+        ; part1 and waits with the gate until the rhythm section below.
         mov al, 0x11
         mov ah, 0x3F
         call wr0
-        xor cl, cl
-.pan:   mov al, cl
-        mov ah, 0xC0
-        call wr1
-        mov al, cl
-        add al, 6
-        mov ah, 0x3F
-        call wr1
-        inc cl
-        cmp cl, 6
-        jb .pan
 
         ; ---- section loop --------------------------------------------------
 .main:  ; 1) FM only
@@ -94,9 +85,24 @@ start:
         call wait4
         call ssg_off
 
-        ; 3) Rhythm only
+        ; 3) Rhythm only -- part1 comes alive here: open the extended pair
+        ; gate, then set per-voice pan centre + level max
         mov si, str_rhy
         call status
+        mov dx, EXTGATE
+        mov al, 0x01
+        out dx, al
+        xor cl, cl
+.pan:   mov al, cl
+        mov ah, 0xC0
+        call wr1
+        mov al, cl
+        add al, 6
+        mov ah, 0x3F
+        call wr1
+        inc cl
+        cmp cl, 6
+        jb .pan
         mov bp, 3
 .rhy:   mov si, rhy_seq
         mov cx, 6
@@ -129,13 +135,15 @@ start:
         jmp .main
 
 ; ---------------------------------------------------------------------------
-; wr0: AL = part0 reg, AH = data (ports > 0xFF, so DX-form I/O)
+; wr0: AL = part0 reg, AH = data (ports > 0xFF, so DX-form I/O).
+; v2: fixed delay between address and data instead of the status busy poll
+; -- the poll's read-between-writes pattern is the one thing a game driver
+; never does, and the Pocket played this disk silent while the same register
+; stream speaks in sim (tb_fm_replay), so match the game-style access.
 wr0:    mov dx, OPNA_A0
         out dx, al
         jmp short $+2
-.p0:    in  al, dx
-        test al, 0x80
-        jnz .p0
+        jmp short $+2
         mov al, ah
         inc dx
         out dx, al
@@ -144,9 +152,7 @@ wr0:    mov dx, OPNA_A0
 wr1:    mov dx, OPNA_A1
         out dx, al
         jmp short $+2
-.p1:    in  al, dx
-        test al, 0x80
-        jnz .p1
+        jmp short $+2
         mov al, ah
         inc dx
         out dx, al
