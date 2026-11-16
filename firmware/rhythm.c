@@ -251,15 +251,27 @@ static int wav_step(void)
     return 0;
 }
 
-// The kit probe and stream both run at firmware start (the normal load
-// timing); nothing here defers to the guest anymore, so there is no retry
-// backoff to space either -- a load in progress is simply one chunk of
-// real work per call.
+// The work starts on the FIRST SERVICE-LOOP call, not the boot call: the
+// boot call happens before scsi_init(), and an OPNA mg read that early
+// destabilized the hdd re-bind bench (tb_softcpu_hdd section C -- the
+// re-bind edge missed its window). One no-op boot pass costs a few loop
+// iterations, far below anything audible, so "load at firmware start"
+// keeps its meaning: the stream begins right after the guest is released,
+// long before any music. A load in progress is simply one chunk of real
+// work per call.
 
 // Returns 1 once the kit is in place and every bound WAV voice is resolved;
 // 0 while work remains -- the caller retries cheaply.
 int rhythm_load(void)
 {
+    // The boot call (before scsi_init) must touch no bus: just arm the
+    // real start and let the service loop's first call do the work.
+    static uint8_t booted;
+    if (!booted) {
+        booted = 1;
+        return 0;
+    }
+
     // Slim builds have no store and no drvA; OMGMT_CAPS bit0 tells us. There
     // is nothing to wait for in that case -- done, terminal, no retries.
     if (!(opna_mgmt_read(OMGMT_CAPS) & 1))
