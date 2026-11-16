@@ -31,10 +31,9 @@ HW_CONFIG   = ../fpga/config.tcl
 HW_DEFINES := $(addprefix -D,$(shell sed -n 's/^[[:space:]]*set_global_assignment.*VERILOG_MACRO "\(.*\)"/\1/p' $(HW_CONFIG)))
 
 # OPNA-only objects: the rhythm pair injection exists for jt12, which a build
-# without ENABLE_OPNA does not contain. (The default kit's sample bytes are
-# baked into rhy_mem at synthesis -- fpga/core/rhy_rom.hex -- and rhythm.o
-# only injects the voice pairs, then streams the optional user WAV override
-# kit, encoding it on the fly with adpcma_enc.)
+# without ENABLE_OPNA does not contain. (rhythm.o waits for the guest's first
+# OPNA write, then streams the user-bound WAV kit if there is one, encoding
+# it on the fly with adpcma_enc; with no WAVs bound the rhythm stays silent.)
 ifneq ($(findstring ENABLE_OPNA,$(HW_DEFINES)),)
 OBJS += rhythm.o adpcma_enc.o
 DEPS += rhythm.d adpcma_enc.d

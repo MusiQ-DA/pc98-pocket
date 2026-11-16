@@ -109,8 +109,8 @@ def data(j):
     #    selectable while it sat seventh.
     #  * deferload slots are BOUND, not streamed: filename + size land in
     #    the datatable and the firmware pulls bytes with tds_transfer (the
-    #    2608_*.wav voices; rhythm.bin is gone, its samples are baked into
-    #    the bitstream). An `address` on a deferload slot is dead weight -- it
+    #    2608_*.wav voices -- the only rhythm source now: rhythm.bin and
+    #    the baked ROM are both gone). An `address` on a deferload slot is dead weight -- it
     #    streamed to 0x10200000 once, an address nothing in core_top
     #    decodes -- and a non-deferload slot without one has nowhere to go.
     #  * Bit 1 of parameters resolves a pinned filename in the core's own

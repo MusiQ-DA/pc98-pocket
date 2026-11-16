@@ -1,44 +1,33 @@
-// OPNA rhythm store -- instant baked kit, optional per-voice WAV override.
+// OPNA rhythm store -- user-supplied WAV kit or nothing.
 //
 // The PC-9801-86's rhythm section is six ADPCM-A voices against a fixed ROM.
-// This core keeps that sample data in pc98_opna.sv's rhy_mem, and as of the
-// bake commit that store powers up already holding the YM2608's drum kit
-// ($readmemh rhy_rom.hex -- see the git history for where those bytes came
-// from and the licensing conversation around them). The board's pairs are
-// injected below on the very first call, so rhythm sounds from power-on with
-// no card traffic at all -- which also removed the deferred load whose
-// data-slot reads used to tick the platform's audio chain.
+// This core does not ship that ROM: the sample bytes are a Yamaha dump, and
+// the licensing call (2026-11-16) was to keep them out of the repo and the
+// bitstream. The store powers up empty, so with no WAV dataslot bound a
+// program that keys rhythm voices gets silence -- the FM and SSG sections
+// are unaffected.
 //
-// One override path remains, kept for licensing reasons: if any of the six
-// per-voice WAV dataslots (ids 14-19, "Rhythm BD" ... "RIM") is bound, the
-// bound voices are re-packed from user-supplied PCM. Each bound slot's file
-// is parsed (RIFF, 8/16-bit PCM, mono/stereo, any sane rate), resampled to
-// the ~18.5 kHz ADPCM-A rate and encoded on the fly by adpcma_enc.c into the
-// store, overwriting the baked voice with its own start/end pair. Unbound
-// voices keep the baked sample. The stream still waits for CAPS bit1
-// (gw_seen -- the guest's first data-port write to the board): its card
-// reads are audible, so they are parked under the program's own sound
-// instead of a silent POST screen, and a program that only plays FM never
-// pays for them.
+// The one path that fills the store is the per-voice WAV dataslots (ids
+// 14-19, "Rhythm BD" ... "RIM"): each bound slot's file is parsed (RIFF,
+// 8/16-bit PCM, mono/stereo, any sane rate), resampled to the ~18.5 kHz
+// ADPCM-A rate and encoded on the fly by adpcma_enc.c into the store, and
+// the voice gets its own start/end pair. Unbound voices stay at their reset
+// pair {0,0}, which plays silence. The stream waits for CAPS bit1 (gw_seen
+// -- the guest's first data-port write to the board): its card reads are
+// audible, so they are parked under the program's own sound instead of a
+// silent POST screen, and a program that only plays FM never pays for them.
 //
-// Slim builds (capability flag 0) have no store at all: the kit inject is
-// skipped and this reports done immediately -- no retry loop, silent boot.
-//
-// The rhythm.bin container path (mode 1) is gone: the container, its packer
-// (scripts/rhythm_pack.py) and its dataslot (id 13) were removed with the
-// bake. WAV mode still packs bound voices sequentially from store offset 0,
-// exactly as before; an unbound voice's baked bytes simply sit untouched.
+// Slim builds (capability flag 0) have no store at all and report done
+// immediately -- no retry loop, silent boot. The rhythm.bin container path
+// (mode 1) is gone for good: container, packer (scripts/rhythm_pack.py)
+// and dataslot (id 13) were removed; if none of slots 14-19 is bound the
+// load is terminal, not retried.
 
 #include "softcpu_regs.h"
 #include "adpcma_enc.h"
 
 // The drum kit owns pc98_opna's whole 32 KB rhythm store (RHY_BYTES).
 #define RHY_STORE_BYTES 32768u
-
-// The baked kit's layout, in the 256-byte units jt10_adpcm_cnt addresses.
-// Voice order matches the original ROM: BD, SD, TOP, HH, TOM, RIM.
-static const uint16_t baked_start[6] = { 0, 3, 6, 0x1e, 0x20, 0x26 };
-static const uint16_t baked_end[6]   = { 2, 5, 0x1d, 0x1f, 0x25, 0x26 };
 
 // The start/end each voice was last programmed with, in 256-byte units. A
 // channel with no kit voice reads {0,0}, which plays silence.
@@ -182,7 +171,7 @@ static int wav_step(void)
             (wav_ch != 1 && wav_ch != 2) ||
             (wav_bits != 16 && wav_bits != 8) ||
             rate < 4000 || rate > 192000 || data_len == 0) {
-            wav_done[wav_voice] = 1;         // unbound or unusable: baked kit
+            wav_done[wav_voice] = 1;         // unbound or unusable: silence
             wav_voice++;
             return 0;
         }
@@ -303,18 +292,6 @@ int rhythm_load(void)
     if (!(opna_mgmt_read(OMGMT_CAPS) & 1))
         return 1;
 
-    // The baked kit: pairs land once, on the first call, from ROM contents
-    // that powered up with the store. No card traffic, nothing to defer.
-    static uint8_t kit_injected;
-    if (!kit_injected) {
-        for (uint32_t ch = 0; ch < 6; ch++) {
-            rhythm_start[ch] = baked_start[ch];
-            rhythm_end[ch]   = baked_end[ch];
-            inject_pair(ch, baked_start[ch], baked_end[ch]);
-        }
-        kit_injected = 1;
-    }
-
     // The WAV probe's data-slot traffic ticks the platform's audio chain,
     // and the boot ROMs never write 0x188-0x18F, so nothing sounds until a
     // program touches the board. CAPS bit1 (gw_seen) is that first touch:
@@ -323,8 +300,8 @@ int rhythm_load(void)
     if (!(opna_mgmt_read(OMGMT_CAPS) & 2))
         return rhythm_later();
 
-    // One probe decides whether the override run happens at all; it is not
-    // repeated later, matching the old bind-at-boot semantics.
+    // One probe decides whether a kit exists at all; it is not repeated
+    // later, matching the old bind-at-boot semantics.
     if (!wav_active) {
         for (uint32_t v = 0; v < 6; v++)
             if (slot_bytes(RHY_WAV_SLOT_BASE + v)) {
@@ -332,7 +309,7 @@ int rhythm_load(void)
                 break;
             }
         if (!wav_active)
-            return 1;               // baked kit stands, no override
+            return 1;               // no kit bound: rhythm stays silent
     }
 
     return wav_step();
