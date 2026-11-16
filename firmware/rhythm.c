@@ -1,56 +1,26 @@
-// OPNA rhythm store loader -- fills pc98_opna's ADPCM-A sample store at boot.
+// OPNA rhythm store -- the samples are baked into the bitstream.
 //
-// The PC-9801-86's rhythm section is six ADPCM-A voices against a fixed ROM.
-// This core keeps that sample data in a small firmware-filled store
-// (pc98_opna.sv's rhy_mem): the guest's 0x10/0x11/0x18-0x1D writes already
-// drive the real jt12 ADPCM-A engine, so what the guest can never reach --
-// the sample bytes and the YM2610-style start/end pairs -- arrives here
-// through the management window instead.
+// The PC-9801-86's rhythm section is six ADPCM-A voices against a fixed ROM,
+// and the real YM2608 carries that ROM inside the chip. This core now does
+// the same: pc98_opna.sv preloads its 32 KB store (rhy_mem) from
+// fpga/core/rhy_rom.hex at synthesis -- the payload of the retired card-side
+// rhythm.bin -- so there is nothing to stream and nothing to wait for. The
+// old deferred load (rhythm.bin plus the per-voice 2608_*.wav dataslots,
+// held back until the guest's first board write) is gone with it: its
+// data-slot traffic ticked the platform's analog audio chain mid-music,
+// which is what crackled over FM playback.
 //
-// Two source paths, mutually exclusive:
-//
-//  * Any of the six per-voice WAV dataslots (ids 14-19, "Rhythm BD" ... "RIM")
-//    bound -> WAV mode. Each bound slot's file is parsed (RIFF, 8/16-bit PCM,
-//    mono/stereo, any sane rate), resampled to the ~18.5 kHz ADPCM-A rate and
-//    encoded on the fly by adpcma_enc.c into the store. Voices pack
-//    sequentially from store offset 0; an unbound voice is skipped and its
-//    channel just never gets a start/end pair, so it decodes silence.
-//
-//  * Otherwise the deferload "Rhythm PCM" dataslot (rhythm.bin on the card),
-//    produced by scripts/rhythm_pack.py from the six 2608_*.wav files:
-//
-//      word 0    u32 magic 'RYA1'
-//      word 1    u32 payload offset in the file (the voice table sits at +8)
-//      word 2..7 six u16 pairs packed little-endian: voice i = {start256,
-//                end256}, already in the 256-byte units jt10_adpcm_cnt works in
-//      payload   ADPCM-A nibbles, two samples per byte, high nibble first,
-//                each voice 256-byte aligned
-//
-// WAV mode wins whenever a WAV slot is bound: mixing the two would corrupt
-// region offsets, since each path packs its own sequential layout.
-//
-// Nothing is required to be present: no bound slots, a slim-OPNA build (the
-// capability flag reads 0) or unreadable files all just leave the store
-// empty, and rhythm key-on writes then decode silence -- the same as before.
-// A slot bound after the first complete pass is ignored, matching the bin
-// path's semantics.
+// What the guest can never program remains this file's one job: the six
+// YM2610-style start/end pairs that match the baked layout, injected once
+// at boot through the management window. The pairs are in 256-byte units,
+// copied from the 'RYA1' header they used to be parsed out of.
 
 #include "softcpu_regs.h"
-#include "adpcma_enc.h"
 
-#define RHYTHM_MAGIC 0x31415952u // 'RYA1' little-endian
-#define RHYTHM_HDR_WORDS 8
-// The drum kit owns pc98_opna's whole 32 KB rhythm store (RHY_BYTES).
-#define RHY_STORE_BYTES 32768u
-
-// The start/end each voice was last programmed with, in 256-byte units. A
-// channel with no kit voice reads {0,0}, which plays silence.
-static uint16_t rhythm_start[6], rhythm_end[6];
-
-#define RIFF_RIFF 0x46464952u // 'RIFF'
-#define RIFF_WAVE 0x45564157u // 'WAVE'
-#define RIFF_FMT  0x20746D66u // 'fmt '
-#define RIFF_DATA 0x61746164u // 'data'
+// Voice i = {start256, end256}, inclusive end, against rhy_rom.hex's
+// sequential six-voice packing.
+static const uint16_t rhy_start[6] = { 0x00, 0x03, 0x06, 0x1e, 0x20, 0x26 };
+static const uint16_t rhy_end[6]   = { 0x02, 0x05, 0x1d, 0x1f, 0x25, 0x26 };
 
 void opna_mgmt_write(uint32_t reg, uint32_t data)
 {
@@ -85,305 +55,15 @@ static void inject_pair(uint32_t ch, uint32_t start256, uint32_t end256)
     }
 }
 
-// ------------------------- rhythm.bin path ---------------------------------
-
-static int bin_load(void)
-{
-    uint32_t total = slot_bytes(RHYTHM_SLOT_ID);
-    if (total < RHYTHM_HDR_WORDS * 4 + 256)
-        return 0;
-
-    // Header: magic, payload offset, six {start256,end256} pairs.
-    if (!tds_transfer(RHYTHM_SLOT_ID, 0, FDD_TDS_READ, RHYTHM_HDR_WORDS * 4))
-        return 0;
-    *FDD_BRAM_ADDR = 0;
-    if (*FDD_BRAM_RDATA != RHYTHM_MAGIC)
-        return 0;
-    uint32_t payload = *FDD_BRAM_RDATA;
-    if (payload < RHYTHM_HDR_WORDS * 4 || payload >= total)
-        return 0;
-    for (uint32_t i = 0; i < 6; i++) {
-        uint32_t w = *FDD_BRAM_RDATA;
-        rhythm_start[i] = w & 0xFFFF;
-        rhythm_end[i]   = w >> 16;
-        // Pairs naming bytes at or past the store's top would wrap a voice's
-        // address; clamp them inside.
-        if (rhythm_start[i] >= (RHY_STORE_BYTES >> 8))
-            rhythm_start[i] = 0;
-        if (rhythm_end[i] >= (RHY_STORE_BYTES >> 8))
-            rhythm_end[i] = (RHY_STORE_BYTES >> 8) - 1;
-    }
-
-    // Payload lands at store offset 0; cap it at the store's size so an
-    // oversized pack cannot wrap around onto its own start.
-    uint32_t payload_bytes = total - payload;
-    if (payload_bytes > RHY_STORE_BYTES)
-        payload_bytes = RHY_STORE_BYTES;
-
-    // Stream the payload into the store. The BRAM window is 1 KB but the low
-    // 512 bytes are the disk sector buffer and word 128 up is the settings
-    // blob, so chunks stay inside the first 128 words.
-    opna_mgmt_write(OMGMT_RHYADDR, 0);
-    for (uint32_t off = 0; off < payload_bytes; off += SECTOR_BYTES) {
-        uint32_t n = payload_bytes - off;
-        if (n > SECTOR_BYTES)
-            n = SECTOR_BYTES;
-        if (!tds_transfer(RHYTHM_SLOT_ID, payload + off, FDD_TDS_READ, n))
-            return 0;
-        *FDD_BRAM_ADDR = 0;
-        for (uint32_t w_i = 0; w_i < (n + 3) / 4; w_i++) {
-            uint32_t w = *FDD_BRAM_RDATA;
-            for (uint32_t b = 0; b < 4 && w_i * 4 + b < n; b++)
-                opna_mgmt_write(OMGMT_RHYDATA, (w >> (b * 8)) & 0xFF);
-        }
-    }
-
-    for (uint32_t ch = 0; ch < 6; ch++)
-        inject_pair(ch, rhythm_start[ch], rhythm_end[ch]);
-    return 1;
-}
-
-// --------------------------- per-voice WAV path -----------------------------
-//
-// Voices are processed strictly in channel order, at most one 512-byte chunk
-// of source data per call, so the service loop keeps its latency. The state
-// below is what survives between calls.
-
-static uint32_t wav_voice;     // channel being attempted
-static uint32_t wav_cursor;    // next free store byte (always 256-aligned)
-static uint8_t  wav_done[6];   // channel resolved (loaded, skipped, failed)
-
-// In-flight voice state.
-static adpcm_enc wav_enc;
-static uint32_t  wav_slot;
-static uint32_t  wav_pos;      // next source byte offset inside the WAV
-static uint32_t  wav_left;     // source bytes left in the data chunk
-static uint32_t  wav_written;  // store bytes emitted for this voice
-static uint16_t  wav_ch;
-static uint16_t  wav_bits;
-static uint8_t   wav_open;     // a voice stream is in progress
-static uint8_t   wav_failed;
-
-// Reads `n` bytes of slot data into the BRAM window and returns the word
-// count the caller may consume (n rounded up to whole words).
-static uint32_t wav_read(uint32_t slot, uint32_t off, uint32_t n)
-{
-    if (!tds_transfer(slot, off, FDD_TDS_READ, n))
-        return 0;
-    *FDD_BRAM_ADDR = 0;
-    return (n + 3) / 4;
-}
-
-// Walk the RIFF chunk list for fmt + data; returns 0 on success.
-static int wav_probe(uint32_t slot, uint32_t *data_off, uint32_t *data_len,
-                     uint32_t *rate)
-{
-    if (!wav_read(slot, 0, 12))
-        return -1;
-    if (*FDD_BRAM_RDATA != RIFF_RIFF)
-        return -1;
-    *FDD_BRAM_ADDR = 2;         // word address: bytes 8-11 hold 'WAVE'
-    if (*FDD_BRAM_RDATA != RIFF_WAVE)
-        return -1;
-
-    uint32_t off = 12, end = slot_bytes(slot);
-    int got_fmt = 0;
-    while (off + 8 <= end && off < 4096) {
-        if (!wav_read(slot, off, 8))
-            return -1;
-        uint32_t id = *FDD_BRAM_RDATA;
-        uint32_t sz = *FDD_BRAM_RDATA;
-        if (id == RIFF_FMT && sz >= 16) {
-            if (!wav_read(slot, off + 8, 16))
-                return -1;
-            uint32_t w0 = *FDD_BRAM_RDATA;   // tag[15:0] | channels[31:16]
-            *rate = *FDD_BRAM_RDATA;
-            (void)*FDD_BRAM_RDATA;           // byte rate
-            uint32_t w3 = *FDD_BRAM_RDATA;   // blockalign | bits<<16
-            if ((w0 & 0xFFFF) != 1)          // integer PCM only
-                return -1;
-            wav_ch = (uint16_t)(w0 >> 16);
-            wav_bits = (uint16_t)(w3 >> 16);
-            got_fmt = 1;
-        } else if (id == RIFF_DATA) {
-            *data_off = off + 8;
-            *data_len = (sz <= end - off - 8) ? sz : end - off - 8;
-            return got_fmt ? 0 : -1;
-        }
-        off += 8 + sz + (sz & 1);            // RIFF chunks are word-padded
-    }
-    return -1;
-}
-
-// Emit encoded bytes to the store, respecting both the store size and the
-// current write cursor.
-static void wav_emit_bytes(void)
-{
-    for (uint32_t i = 0; i < wav_enc.out_n; i++) {
-        if (wav_cursor + wav_written < RHY_STORE_BYTES) {
-            opna_mgmt_write(OMGMT_RHYDATA, wav_enc.out[i]);
-            wav_written++;
-        }
-    }
-}
-
-static int wav_step(void)
-{
-    while (wav_voice < 6 && wav_done[wav_voice])
-        wav_voice++;
-    if (wav_voice >= 6)
-        return 1;
-
-    if (!wav_open) {
-        wav_slot = RHY_WAV_SLOT_BASE + wav_voice;
-        uint32_t rate = 0, data_off = 0, data_len = 0;
-        if (!slot_bytes(wav_slot) ||
-            wav_probe(wav_slot, &data_off, &data_len, &rate) ||
-            (wav_ch != 1 && wav_ch != 2) ||
-            (wav_bits != 16 && wav_bits != 8) ||
-            rate < 4000 || rate > 192000 || data_len == 0) {
-            wav_done[wav_voice] = 1;         // unbound or unusable: silent
-            wav_voice++;
-            return 0;
-        }
-        adpcm_enc_init(&wav_enc, rate);
-        opna_mgmt_write(OMGMT_RHYADDR, wav_cursor);
-        wav_pos = data_off;
-        // Whole frames only: a tail shorter than a frame is dropped here so
-        // the chunk loop below never hits a zero-length iteration. A frame
-        // is 1, 2 or 4 bytes (the probe above rejects any other channel/bit
-        // mix), so a mask stands in for % -- the softcore has no divider.
-        wav_left = data_len & ~(((uint32_t)wav_ch *
-                                 (wav_bits == 16 ? 2u : 1u)) - 1u);
-        wav_written = 0;
-        wav_failed = 0;
-        wav_open = 1;
-    }
-
-    // A file longer than the store's remaining room is truncated at the wall;
-    // stop pulling source bytes once no more output can land.
-    if (wav_cursor + wav_written >= RHY_STORE_BYTES)
-        wav_left = 0;
-
-    // Re-arm the auto-increment every call so the continuation address is
-    // re-latched rather than assumed to have survived the call boundary.
-    opna_mgmt_write(OMGMT_RHYADDR, wav_cursor + wav_written);
-
-    // One 512-byte source chunk per call.
-    uint32_t n = wav_left > SECTOR_BYTES ? SECTOR_BYTES : wav_left;
-    uint32_t frame = (uint32_t)wav_ch * (wav_bits == 16 ? 2u : 1u);
-    n -= n & (frame - 1);
-    if (n && !wav_read(wav_slot, wav_pos, n)) {
-        wav_failed = 1;
-    } else if (n) {
-        wav_pos += n;
-        wav_left -= n;
-        uint32_t words = (n + 3) / 4;
-        for (uint32_t wi = 0; wi < words; wi++) {
-            uint32_t w = *FDD_BRAM_RDATA;
-            for (uint32_t b = 0; b < 4; b++) {
-                uint32_t byte_i = wi * 4 + b;
-                if ((byte_i & (frame - 1)) || byte_i >= n)
-                    continue;               // keep only frame-leading bytes
-                int32_t s;
-                // Stereo pairs average with a shift: >>1 floors exactly like
-                // the Python packer's //2, where /2 truncates -- and the
-                // softcore has no divider for it anyway.
-                if (wav_bits == 16) {
-                    s = (int16_t)((w >> (b * 8)) & 0xFFFF);
-                    if (wav_ch == 2)
-                        s = (s + (int16_t)((w >> (b * 8 + 16)) & 0xFFFF)) >> 1;
-                } else {
-                    s = (int32_t)((w >> (b * 8)) & 0xFF);
-                    if (wav_ch == 2)
-                        s = (s + (int32_t)((w >> (b * 8 + 8)) & 0xFF)) >> 1;
-                    s = (s - 128) << 8;
-                }
-                if (adpcm_enc_push(&wav_enc, (int16_t)s))
-                    wav_emit_bytes();
-            }
-        }
-    }
-
-    if (wav_failed || wav_left == 0) {
-        while (adpcm_enc_flush(&wav_enc))
-            wav_emit_bytes();
-        if (!wav_failed && wav_written) {
-            uint32_t start256 = wav_cursor >> 8;
-            uint32_t end256 = (wav_cursor + wav_written - 1) >> 8;
-            inject_pair(wav_voice, start256, end256);
-            rhythm_start[wav_voice] = start256;
-            rhythm_end[wav_voice]   = end256;
-            wav_cursor += wav_written;
-        }
-        wav_done[wav_voice] = 1;
-        wav_open = 0;
-        wav_voice++;
-    }
-    return 0;
-}
-
-// A retry that found nothing to load (no slot bound yet, a slim build, a
-// rhythm.bin that would not read) waits this long before the next look: the
-// look is seven datatable walks -- ~2.1 ms of the main loop, which used to
-// pay it on every pass for as long as rhythm.bin was missing. A deferload
-// bind that lands late is still picked up within a quarter second. A WAV
-// load in progress is not spaced: each call is one chunk of real work.
-#ifndef CHIPSET_HZ
-#define CHIPSET_HZ 42954545u
-#endif
-#define RHYTHM_RETRY_CYCLES (CHIPSET_HZ / 6u / 4u)
-
-static inline uint32_t rhythm_rdcycle(void)
-{
-    uint32_t c;
-    __asm__ volatile("rdcycle %0" : "=r"(c));
-    return c;
-}
-
-static uint32_t rhythm_retry_at;
-static uint8_t  rhythm_backoff;
-
-static int rhythm_later(void)
-{
-    rhythm_retry_at = rhythm_rdcycle() + RHYTHM_RETRY_CYCLES;
-    rhythm_backoff = 1;
-    return 0;
-}
-
-// Returns 1 once every bound source is resolved; 0 while work remains --
-// the caller retries cheaply.
+// The store is in the image and the pairs are constants, so this resolves on
+// its first call and returns 1 forever after; the main loop's retry never
+// fires. Slim builds (no store, no drvA) have nothing to inject: CAPS bit0
+// says so, and done is still done.
 int rhythm_load(void)
 {
-    if (rhythm_backoff && (int32_t) (rhythm_rdcycle() - rhythm_retry_at) < 0)
-        return 0;
-    rhythm_backoff = 0;
-
-    // Slim builds have no store and no drvA; OMGMT_CAPS bit0 tells us.
     if (!(opna_mgmt_read(OMGMT_CAPS) & 1))
-        return rhythm_later();
-
-    // The load's own data-slot traffic ticks the platform's audio chain --
-    // that was the crackle over every boot -- and the boot ROMs never write
-    // 0x188-0x18F, so nothing sounds until a program touches the board.
-    // CAPS bit1 (gw_seen) is that first touch: hold the stream until then,
-    // and the ticks land under the program's own disk noise instead of a
-    // silent POST screen.
-    if (!(opna_mgmt_read(OMGMT_CAPS) & 2))
-        return rhythm_later();
-
-    // WAV mode wins when any per-voice slot is bound.
-    static uint32_t mode;
-    if (!mode) {
-        for (uint32_t v = 0; v < 6; v++)
-            if (slot_bytes(RHY_WAV_SLOT_BASE + v))
-                mode = 2;
-        if (!mode)
-            mode = slot_bytes(RHYTHM_SLOT_ID) ? 1 : 0;
-        if (!mode)
-            return rhythm_later();
-    }
-    if (mode == 1)
-        return bin_load() ? 1 : rhythm_later();
-    return wav_step();
+        return 1;
+    for (uint32_t ch = 0; ch < 6; ch++)
+        inject_pair(ch, rhy_start[ch], rhy_end[ch]);
+    return 1;
 }

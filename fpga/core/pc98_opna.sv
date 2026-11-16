@@ -482,6 +482,24 @@ module pc98_opna #(
         (* ramstyle = "M10K" *) logic [7:0] rhy_mem [0:RHY_BYTES-1];
         logic [RHY_AW-1:0] mg_rhy_addr_q;
 
+        // The rhythm samples ship inside the image: the real YM2608 carries
+        // them in an internal ROM, and this store now does the same.
+        // rhy_rom.hex is the 9,984-byte payload of the retired card-side
+        // rhythm.bin (the 'RYA1' pack of the 2608_*.wav kit); the firmware
+        // no longer streams anything, it only injects the six start/end
+        // pairs that match this layout (firmware/rhythm.c). The mg fill
+        // window stays: tests still write the store through it. The tool
+        // paths fork on VERILATOR: the synthesizer resolves $readmemh
+        // against the project directory (fpga/), the simulator against
+        // its own CWD (the repo root).
+        initial begin
+`ifdef VERILATOR
+            $readmemh("fpga/core/rhy_rom.hex", rhy_mem);
+`else
+            $readmemh("core/rhy_rom.hex", rhy_mem);
+`endif
+        end
+
         always_ff @(posedge clk) begin
             if (rst)
                 mg_rhy_addr_q <= '0;

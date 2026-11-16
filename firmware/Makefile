@@ -30,12 +30,13 @@ HW_CONFIG   = ../fpga/config.tcl
 # Anchored at the start of the line so a COMMENTED-OUT macro is not picked up.
 HW_DEFINES := $(addprefix -D,$(shell sed -n 's/^[[:space:]]*set_global_assignment.*VERILOG_MACRO "\(.*\)"/\1/p' $(HW_CONFIG)))
 
-# OPNA-only objects: rhythm.bin loading and its WAV->ADPCM-A encoder exist for
-# jt12, which a build without ENABLE_OPNA does not contain. Linking them
-# anyway spent ~2.5 KB of ROM.
+# OPNA-only object: the rhythm pair injection exists for jt12, which a build
+# without ENABLE_OPNA does not contain. (The sample bytes themselves are baked
+# into rhy_mem at synthesis -- fpga/core/rhy_rom.hex -- and the old WAV
+# encoder left with the card-side load.)
 ifneq ($(findstring ENABLE_OPNA,$(HW_DEFINES)),)
-OBJS += rhythm.o adpcma_enc.o
-DEPS += rhythm.d adpcma_enc.d
+OBJS += rhythm.o
+DEPS += rhythm.d
 endif
 
 # -MMD -MP write per-object header dependencies (.d), pulled in by -include below, so
