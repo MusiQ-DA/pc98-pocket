@@ -2513,16 +2513,19 @@ module core_top #(
     synch_3 #(.WIDTH(3)) s_palette_cfg    (osd_palette,       palette_cfg,   clk_pix);
     wire       grayscale_pix;
     synch_3              s_grayscale      (osnotify_grayscale, grayscale_pix, clk_pix);
-    // The 200-line skip's two terms are both chipset-domain: the OSD bit and
-    // CHIPSET's doubled-mode flag. Their product crosses to clk_pix once --
-    // a quasi-static pair, so tearing between them is at most one frame.
+    // The 200-line skip's term is chipset-domain: CHIPSET's doubled-mode
+    // flag (plus the machine's own mabiki). It crosses to clk_pix once --
+    // quasi-static, so tearing is at most one frame.
     wire       dbl200;                  // CHIPSET video: a doubled 200-line mode is up
     wire       mabiki;                  // mode1[4]: odd rasterlines stay dark
     wire       dbl_skip_pix;
-    // The odd-line skip fires for the machine's own mabiki flag (mode1[4] --
-    // software's 200-line display bit, np21w makegrph) OR when the user
-    // asked for the "Skip" presentation of a doubled mode.
-    synch_3              s_dbl_skip_pix ((osd_dbl_skip & dbl200) | mabiki,
+    // Always thin a doubled mode (real hardware: a 200-line picture on the
+    // 24 kHz raster carries black between the source lines -- each VRAM row
+    // lands on one rasterline, the pair's second line stays dark regardless
+    // of mode1[4]). The former OSD "200-Line Mode" Double/Skip choice is
+    // retired with this; mode1[4] still adds thinning of its own in 400-line
+    // modes (np21w makegrph: !(liney & 1) || !(mode1 & 0x10)).
+    synch_3              s_dbl_skip_pix (dbl200 | mabiki,
                                          dbl_skip_pix, clk_pix);
     wire       vid_txt;                 // CHIPSET video: the composited dot is text's
     wire pause_core = pause_core_chipset;

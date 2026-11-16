@@ -124,10 +124,9 @@ static const char *const opt_dis_en[] = { "Disabled", "Enabled" };
 static const char *const opt_extmem[] = { "None", "8 MB" };
 static const char *const opt_display[] = { "Full Color", "Green", "Amber", "B&W", "Red", "Blue",
     "Fuchsia", "Purple" };
-// 200-line presentation on the fixed 400-line raster: Double serves each guest
-// line to a pair of rasterlines (today's picture); Skip blacks the second of
-// the pair -- the mabiki look a real 200-line program has on a 400-line field.
-// The values must match pocket_video's dbl_skip decode.
+// 200-Line Mode is retired (the RTL now always thins a doubled mode, the
+// way the 24 kHz raster carries a 200-line picture): the option list stays
+// so the blob slot keeps decoding, but no row shows it.
 static const char *const opt_mode200[] = { "Double", "Skip" };
 // FDD pacing: floppy.v's turbo relaxes the SRT step-train delay and the fixed
 // per-sector wait eightfold when the bit is set. The order is On-then-Off on
@@ -181,7 +180,7 @@ static setting_t settings[SET_COUNT] = {
     SETTING(opt_stereo),      // SET_STEREO
     SETTING(opt_display),     // SET_DISPLAY
     SETTING_D(opt_fdd_turbo, 1), // SET_FDD_TURBO -- the reused slot; index 1 (Off) is its resting value
-    SETTING(opt_mode200),     // SET_MODE200 -- the reused slot; default Double
+    SETTING(opt_mode200),     // SET_MODE200 -- retired slot; RTL always thins now
     SETTING_D(opt_dpad, DPAD_ARROWS), // SET_DPAD
     SETTING(opt_gamepad),     // SET_GAMEPAD (default Keyboard)
     SETTING_D(opt_dis_en, 1), // SET_DISK_LED (default on)
@@ -252,9 +251,9 @@ static const item_t items_av[] = {
     // mixes in at fixed gain, so this row has no effect on FM/SSG/rhythm.
     { "Beep Volume", IT_OPTION, SET_SPK_VOL },
     { "Stereo Mix", IT_OPTION, SET_STEREO },
-    // "Display" (the monochrome-monitor tints) went with the RTL tint:
-    // the setting keeps its blob slot, nothing reads it.
-    { "200-Line Mode", IT_OPTION, SET_MODE200 },
+    // "200-Line Mode" went with the presentation choice: the RTL now always
+    // thins a doubled mode (the 24 kHz raster look), so there is nothing
+    // left to pick. The setting keeps its blob slot, same as "Display".
 };
 
 // The four joystick rows are gone with the game port: Peripherals answers
