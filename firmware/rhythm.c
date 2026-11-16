@@ -12,10 +12,9 @@
 // 8/16-bit PCM, mono/stereo, any sane rate), resampled to the ~18.5 kHz
 // ADPCM-A rate and encoded on the fly by adpcma_enc.c into the store, and
 // the voice gets its own start/end pair. Unbound voices stay at their reset
-// pair {0,0}, which plays silence. The stream waits for CAPS bit1 (gw_seen
-// -- the guest's first data-port write to the board): its card reads are
-// audible, so they are parked under the program's own sound instead of a
-// silent POST screen, and a program that only plays FM never pays for them.
+// pair {0,0}, which plays silence. The stream runs at firmware start (the
+// normal load timing): its card reads are audible as quiet ticks during
+// boot, the price of streaming a user kit off the card.
 //
 // Slim builds (capability flag 0) have no store at all and report done
 // immediately -- no retry loop, silent boot. The rhythm.bin container path
@@ -252,53 +251,19 @@ static int wav_step(void)
     return 0;
 }
 
-// A retry that is still waiting for the guest's first OPNA write spaces
-// itself by this much: the wait itself is one mg read, but the WAV-mode
-// probe behind it is six datatable walks, and those reads are what the
-// platform's audio chain hears. A load in progress is not spaced: each
-// call is one chunk of real work.
-#ifndef CHIPSET_HZ
-#define CHIPSET_HZ 42954545u
-#endif
-#define RHYTHM_RETRY_CYCLES (CHIPSET_HZ / 6u / 4u)
-
-static inline uint32_t rhythm_rdcycle(void)
-{
-    uint32_t c;
-    __asm__ volatile("rdcycle %0" : "=r"(c));
-    return c;
-}
-
-static uint32_t rhythm_retry_at;
-static uint8_t  rhythm_backoff;
-
-static int rhythm_later(void)
-{
-    rhythm_retry_at = rhythm_rdcycle() + RHYTHM_RETRY_CYCLES;
-    rhythm_backoff = 1;
-    return 0;
-}
+// The kit probe and stream both run at firmware start (the normal load
+// timing); nothing here defers to the guest anymore, so there is no retry
+// backoff to space either -- a load in progress is simply one chunk of
+// real work per call.
 
 // Returns 1 once the kit is in place and every bound WAV voice is resolved;
 // 0 while work remains -- the caller retries cheaply.
 int rhythm_load(void)
 {
-    if (rhythm_backoff && (int32_t) (rhythm_rdcycle() - rhythm_retry_at) < 0)
-        return 0;
-    rhythm_backoff = 0;
-
     // Slim builds have no store and no drvA; OMGMT_CAPS bit0 tells us. There
     // is nothing to wait for in that case -- done, terminal, no retries.
     if (!(opna_mgmt_read(OMGMT_CAPS) & 1))
         return 1;
-
-    // The WAV probe's data-slot traffic ticks the platform's audio chain,
-    // and the boot ROMs never write 0x188-0x18F, so nothing sounds until a
-    // program touches the board. CAPS bit1 (gw_seen) is that first touch:
-    // hold the probe until then, and its reads land under the program's own
-    // disk noise instead of a silent POST screen.
-    if (!(opna_mgmt_read(OMGMT_CAPS) & 2))
-        return rhythm_later();
 
     // One probe decides whether a kit exists at all; it is not repeated
     // later, matching the old bind-at-boot semantics.
