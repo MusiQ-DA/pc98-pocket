@@ -843,6 +843,11 @@ module pc98_gvram_seq #(
     reg         fl_h;                    // which half of the line
     reg  [4:0]  fl_i, fl_c;              // copy: words issued, words landed
     reg  [3:0]  cp_w;                    // the word the landing read was for
+    // no_rw_check: the copy phase fills all 16 words (fl_ph 0) before
+    // gvwb_req rises, and the write-back that reads stg cannot overlap a
+    // fill (tg_go waits out gvwb_req/fl_busy) -- write and read phases are
+    // disjoint (A4 in docs/ALM_INVENTORY.md).
+    (* ramstyle = "no_rw_check" *)
     reg  [15:0] stg [0:15];
     reg  [3:0]  fl_d;                    // dirty planes at fl_start
     reg  [6:0]  wb_age;

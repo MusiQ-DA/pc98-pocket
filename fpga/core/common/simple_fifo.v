@@ -45,6 +45,11 @@ module simple_fifo
 );
 
 
+// no_rw_check: same-address (rd_index==wr_index) only at the empty/full
+// corners; every consumer of q is state-gated on usedw-registered emptiness
+// that settles a cycle after the write, so a bypass value is never taken
+// (A4 in docs/ALM_INVENTORY.md).
+(* ramstyle = "no_rw_check" *)
 reg [width-1:0] mem [(2**widthu)-1:0];
 
 reg [widthu-1:0] rd_index = 0;

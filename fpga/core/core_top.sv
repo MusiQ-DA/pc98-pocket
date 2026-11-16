@@ -2945,6 +2945,10 @@ module core_top #(
     // 2048 x 42 bits is about nine M10K blocks, which this design can afford far
     // more easily than it can afford a corrupted BIOS.
     localparam RLF_AW = 11;
+    // no_rw_check: the array is a FIFO -- the read tap only consumes a word
+    // one cycle AFTER ~rlf_empty (registered state), so the empty-instant
+    // same-address read never feeds a consumer (A4 in docs/ALM_INVENTORY.md).
+    (* ramstyle = "no_rw_check" *)
     reg  [41:0]     romfifo [0:(1<<RLF_AW)-1];
     reg  [RLF_AW:0] rlf_wptr = 0;
     reg  [RLF_AW:0] rlf_rptr = 0;

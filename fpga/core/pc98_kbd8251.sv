@@ -109,6 +109,10 @@ module pc98_kbd8251 (
     logic       data_rd_level_q;
     // The injection side's delayed strobe copy and its one-deep queue.
     logic       key_stb_q;
+    // no_rw_check: the write branch (key_stb edge) and the read branch
+    // (no edge, queue drains) are the two arms of one if/else-if -- they
+    // never fire the same cycle (A4 in docs/ALM_INVENTORY.md).
+    (* ramstyle = "no_rw_check" *)
     logic [7:0] kq [16];
     logic [3:0] kq_rd, kq_wr;
     logic [4:0] kq_n;

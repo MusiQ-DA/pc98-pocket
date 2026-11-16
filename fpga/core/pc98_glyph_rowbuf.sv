@@ -118,6 +118,10 @@ module pc98_glyph_rowbuf #(
     logic [3:0] beat;
     logic       pair_second;       // this col is a kanji's right half
     logic [7:0] hold_lo, hold_hi;
+    // no_rw_check: hold8 is written only in S_GAIJI_W/S_STREAM (beat 0-7 of
+    // the capture) and read only in S_EXPAND/S_EXPAND_W -- disjoint FSM
+    // states, never the same cycle (A4 in docs/ALM_INVENTORY.md).
+    (* ramstyle = "no_rw_check" *)
     logic [7:0] hold8 [0:7];
 
     // The column step: 40-column mode strides the cell space by two

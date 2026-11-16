@@ -217,6 +217,11 @@ module pocket_keyboard #(
     // for queue room.
     //
     localparam QW = 4;
+    // no_rw_check: q_wr == q_rd (the only same-address case) means empty,
+    // and the pop side consumes q_head only under !q_empty -- which reads
+    // the pre-write pointers, so a bypass value is never consumed that
+    // cycle (A4 in docs/ALM_INVENTORY.md).
+    (* ramstyle = "no_rw_check" *)
     reg  [9:0]    queue [0:(1<<QW)-1];   // {ext, make, code[7:0]}
     reg  [QW-1:0] q_wr, q_rd;
     wire          q_empty = (q_wr == q_rd);
