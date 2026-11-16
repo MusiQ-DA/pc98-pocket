@@ -108,10 +108,9 @@ def data(j):
     #    the Pocket browse the first four only, and .hdm was never
     #    selectable while it sat seventh.
     #  * deferload slots are BOUND, not streamed: filename + size land in
-    #    the datatable and the firmware pulls bytes with tds_transfer. (The
-    #    rhythm.bin / 2608_*.wav deferload slots are gone -- the samples are
-    #    baked into the bitstream -- but the rule stands for any future
-    #    one.) An `address` on a deferload slot is dead weight -- it
+    #    the datatable and the firmware pulls bytes with tds_transfer (the
+    #    2608_*.wav voices; rhythm.bin is gone, its samples are baked into
+    #    the bitstream). An `address` on a deferload slot is dead weight -- it
     #    streamed to 0x10200000 once, an address nothing in core_top
     #    decodes -- and a non-deferload slot without one has nowhere to go.
     #  * Bit 1 of parameters resolves a pinned filename in the core's own
@@ -120,7 +119,7 @@ def data(j):
     #    framework refuses the file outright when it does not.
     slots = j['data']['data_slots']
     by_id = {s['id']: s for s in slots}
-    want = {1, 2, 3, 4, 5, 7, 11, 12}
+    want = {1, 2, 3, 4, 5, 7, 11, 12, 14, 15, 16, 17, 18, 19}
     missing = sorted(want - by_id.keys())
     assert not missing, f"data_slots is missing ids {missing}"
 
@@ -146,10 +145,13 @@ def data(j):
             "address -- exactly one of the two"
 
     # Files this repo ships must fit their declared cap, checked against the
-    # real file rather than a remembered number.
+    # real file rather than a remembered number. Optional assets are checked
+    # only when present -- the 2608 WAVs live on the card, not in the repo.
     shipped = {
         'firmware.bin': 'firmware/firmware.bin',
     }
+    for v in ('bd', 'sd', 'top', 'hh', 'tom', 'rim'):
+        shipped[f'2608_{v}.wav'] = f'assets/wavs/2608_{v}.wav'
     for s in slots:
         fn, mx = s.get('filename'), smax(s)
         p = shipped.get(fn or '')

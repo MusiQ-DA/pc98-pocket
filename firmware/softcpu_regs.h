@@ -199,9 +199,9 @@
 #define HDD0_SLOT_ID     5
 #define HDD1_SLOT_ID     6
 #define SETTINGS_SLOT_ID 7
-// (ids 13-19 were the rhythm.bin / per-voice WAV deferload slots; the samples
-// are baked into the bitstream now -- fpga/core/rhy_rom.hex -- and the slots
-// went away with the card-side load.)
+// Per-voice rhythm WAV override slots (the user-supplied kit that replaces
+// the baked rhy_rom.hex voices; rhythm.bin's slot 13 is gone for good).
+#define RHY_WAV_SLOT_BASE 14
 // Bytes to declare for the nonvolatile Settings slot so it flushes on first boot.
 // Words 128-255 of the bridge RAM (bytes 512-1023): the global settings blob plus
 // the per-disk profile table (settings_ui.c).
