@@ -504,6 +504,29 @@ end else begin : gen_nolfo
 end
 endgenerate
 
+// pc98-pocket local: saturating output mix. Upstream sums FM (signed 16),
+// SSG ({1'b0,psg,5'd0}: UNSIGNED, 0..32736 -- jt49 is unipolar, so a channel
+// with its tone bit off but a volume set sits at a DC level) and the ADPCM
+// accumulator in plain 16-bit arithmetic. Any SSG DC plus an FM peak, or
+// the 7.25x ADPCM-A rhythm on top of FM, overflowed and WRAPPED: a +32k
+// sample came out as -32k, the hard crackle heard over FM music on the
+// Pocket (and why every source sounded off against np21w, which sums in
+// 32 bits and clamps once at the end -- np21w common/parts.c satuation_s16).
+// Sum in 18
+// bits and clamp to 16 instead; core_top's own clamp downstream was too
+// late to catch a wrap that happened here.
+function signed [15:0] mix_sat;
+    input signed [15:0] fm;
+    input        [ 9:0] psg;
+    input signed [15:0] pcm;
+    reg   signed [17:0] t;
+    begin
+        t = {{2{fm[15]}}, fm} + {3'b0, psg, 5'd0} + {{2{pcm[15]}}, pcm};
+        mix_sat = (t[17:15] == 3'b000 || t[17:15] == 3'b111) ? t[15:0]
+                : {t[17], {15{~t[17]}}};
+    end
+endfunction
+
 // YM2203/YM2610 have a PSG
 
 `ifndef NOSSG
@@ -533,12 +556,12 @@ generate
             // Unused:
             .sample     (           )
         );
-        assign snd_left  = fm_snd_left  + { 1'b0, psg_snd[9:0],5'd0} + adpcm_snd_l;
-        assign snd_right = fm_snd_right + { 1'b0, psg_snd[9:0],5'd0} + adpcm_snd_r;
+        assign snd_left  = mix_sat(fm_snd_left,  psg_snd[9:0], adpcm_snd_l);
+        assign snd_right = mix_sat(fm_snd_right, psg_snd[9:0], adpcm_snd_r);
     end else begin : gen_nossg
         assign psg_snd  = 10'd0;
-        assign snd_left = fm_snd_left  + adpcm_snd_l;
-        assign snd_right= fm_snd_right + adpcm_snd_r;
+        assign snd_left = mix_sat(fm_snd_left,  10'd0, adpcm_snd_l);
+        assign snd_right= mix_sat(fm_snd_right, 10'd0, adpcm_snd_r);
         assign psg_dout = 8'd0;
         assign psg_A    = 8'd0;
         assign psg_B    = 8'd0;
@@ -551,8 +574,8 @@ generate
 endgenerate
 `else
     assign psg_snd  = 10'd0;
-    assign snd_left = fm_snd_left  + adpcm_snd_l;
-    assign snd_right= fm_snd_right + adpcm_snd_r;
+    assign snd_left = mix_sat(fm_snd_left,  10'd0, adpcm_snd_l);
+    assign snd_right= mix_sat(fm_snd_right, 10'd0, adpcm_snd_r);
     assign psg_dout = 8'd0;
 `endif
 

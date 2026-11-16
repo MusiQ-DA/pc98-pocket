@@ -712,6 +712,16 @@ jobs:
           ./obj_opna/op | tee opna.log
           grep -q "PASS tb_pc98_opna" opna.log
 
+      - name: the OPNA output is silent after reset, pitched right and never wraps
+        run: |
+          S=fpga/core
+          verilator --binary --timing -Wno-fatal --top-module tb_fm_replay \
+            -Isim -I$S -I$S/sound/jt12/hdl -I$S/sound/jt12/hdl/adpcm \
+            -I$S/sound/jt12/jt49/hdl \
+            sim/tb_fm_replay.sv $S/pc98_opna.sv -o fr --Mdir obj_fr
+          ./obj_fr/fr | tee fr.log
+          grep -q "PASS tb_fm_replay" fr.log
+
       - name: the GRCG's three operations match np21w's expressions
         run: |
           S=fpga/core

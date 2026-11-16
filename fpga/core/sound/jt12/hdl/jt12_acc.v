@@ -100,9 +100,17 @@ jt12_single_acc #(.win(9),.wout(12)) u_right(
 
 // Output can be amplied by 8/6=1.33 to use full range
 // an easy alternative is to add 1/4th and get 1.25 amplification
+// pc98-pocket local: the 1.25x gain is taken in 13 bits and clamped.
+// Upstream adds in 12 bits, so any pre_* above 1638 (80% of the limiter's
+// own +-2047 ceiling) wrapped to the opposite rail -- loud FM passages
+// crackled on the Pocket. The limiter above stops overflow in the channel
+// sum; this stops the gain stage from reintroducing it.
+wire signed [12:0] amp_left  = {pre_left [11], pre_left } + { {3{pre_left [11]}}, pre_left [11:2] };
+wire signed [12:0] amp_right = {pre_right[11], pre_right} + { {3{pre_right[11]}}, pre_right[11:2] };
+
 always @(posedge clk) if(clk_en) begin
-    left  <= pre_left  + { {2{pre_left [11]}}, pre_left [11:2] };
-    right <= pre_right + { {2{pre_right[11]}}, pre_right[11:2] };
+    left  <= (amp_left [12] == amp_left [11]) ? amp_left [11:0] : {amp_left [12], {11{~amp_left [12]}}};
+    right <= (amp_right[12] == amp_right[11]) ? amp_right[11:0] : {amp_right[12], {11{~amp_right[12]}}};
 end
 
 endmodule

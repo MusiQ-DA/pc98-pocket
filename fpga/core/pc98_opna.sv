@@ -156,12 +156,29 @@ module pc98_opna #(
     // ------------------------------------------------------------------
     // Chip clock enable
     // ------------------------------------------------------------------
-    logic [16:0] cen_acc;
+    // Free-running, NOT held in reset: every jt12 state shift register
+    // (jt12_sh_rst -- EG level, EG state, key-on, phase...) loads its reset
+    // value only on a clk_en beat, and clk_en is derived from this cen. With
+    // cen frozen through rst the chip's reset never landed, the EG kept its
+    // power-up 0 (= no attenuation), and every idle operator sat at a fixed
+    // full-scale value: -30720 of DC on the FM output from power-on until a
+    // driver keyed each slot off with a release rate, eating half the
+    // headroom and pushing every FM peak into the clamp. Just like the real
+    // YM2608, which keeps clocking while /IC is low.
+    logic [16:0] cen_acc = 17'd0;
     wire         cen = cen_acc[16];
-    always_ff @(posedge clk) begin
-        if (rst) cen_acc <= 17'd0;
-        else     cen_acc <= {1'b0, cen_acc[15:0]} + 17'(CEN_INC);
-    end
+    always_ff @(posedge clk)
+        cen_acc <= {1'b0, cen_acc[15:0]} + 17'(CEN_INC);
+
+    // ...and the reset jt12 sees is stretched to 2048 clk (48 us), so it
+    // spans at least two full 24-slot pipeline turns (24 slots x 6 cen per
+    // clk_en / 7.9872 MHz = 18 us each) however short the chipset's own
+    // reset pulse is. Guest writes cannot arrive inside that window.
+    logic [10:0] jt_rst_cnt = 11'd0;
+    wire         jt_rst = rst | (jt_rst_cnt != 11'd0);
+    always_ff @(posedge clk)
+        if (rst)                    jt_rst_cnt <= 11'h7FF;
+        else if (jt_rst_cnt != 0)   jt_rst_cnt <= jt_rst_cnt - 11'd1;
 
     // ------------------------------------------------------------------
     // Guest bus: commit on the trailing edge of the strobe
@@ -214,7 +231,10 @@ module pc98_opna #(
 
     localparam logic [1:0] RTR_IDLE = 2'd0, RTR_ADDR = 2'd1, RTR_DATA = 2'd2;
 
-    wire rtr_busy = rq_pend | (rtr_state != RTR_IDLE);
+    // jt_rst counts as busy: the firmware's injects poll OMGMT_BUSY before
+    // each write (rhythm.c inject_pair), so they wait out the reset stretch
+    // instead of landing on a chip that is still in reset.
+    wire rtr_busy = rq_pend | (rtr_state != RTR_IDLE) | jt_rst;
 
     // Rhythm shadow, readable by the firmware through mg_reg 7. jt12 has no
     // read-back for its ADPCM-A control registers and a YM2608 has none for
@@ -289,7 +309,7 @@ module pc98_opna #(
     // Sticky "the guest has written a register VALUE". The rhythm load's
     // data-slot traffic ticks the platform's audio chain, so the firmware
     // waits for this bit before it streams (mg reg 8, CAPS bit 1). Only
-    // data-port writes (0x189/0x18B/0x18D/0x18F) set it: the BIOS's boot-time
+    // data-port writes (0x18A/0x18E) set it: the BIOS's boot-time
     // board detect touches the address latches alone (bios.rom FD8E9: OUT
     // 0x188,0x27 then OUT 0x18A,0x0F -- it never writes data), and that probe
     // must not arm the load during the memory check. Reads never set it
@@ -550,7 +570,7 @@ module pc98_opna #(
         .use_adpcmb(0),
         .mask_div  (0)
     ) u_opna (
-        .rst          (rst),
+        .rst          (jt_rst),
         .clk          (clk),
         .cen          (cen),
         .din          (jt_din),

@@ -257,7 +257,7 @@ module tb_pc98_opna;
         // 256 clocks is comfortably past that.
         repeat (256) @(posedge clk);
         rst = 1'b0;
-        repeat (256) @(posedge clk);
+        repeat (2304) @(posedge clk);   // past pc98_opna's 2048-clk jt12 reset stretch
 
         // ================================================================
         // 0. gw_seen starts clear: the firmware's rhythm load gates on

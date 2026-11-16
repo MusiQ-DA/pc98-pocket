@@ -9,16 +9,30 @@
 // writes the disk issues -- address latch then data, exactly like the
 // board sees them -- and watch snd_l/snd_r.
 //
+// LIMIT: this drives pc98_opna's a2a1 port select directly, below the
+// Peripherals.sv opna_cs decode, so it can NOT see a wrong guest port
+// number. That is exactly how fm_test v1/v2 hid: the disk wrote its data
+// bytes to 0x189/0x18B (inc dx), which opna_cs (~address[0]) never selects,
+// while this bench used the correct 0x18A/0x18E and played. v3 of the disk
+// writes 0x188/0x18A; keep the two in step by hand.
+//
 // Sections mirrored from testdisk/fm_test.asm:
-//   1. FM ch1-3: ALG=0 2-op voices, TL=0x20 AR=0x1F RR=0x0F, FNUM triad,
-//      key-on 0x28 <- 03/13/23      -> expect sound within ~200 us
+//   1. FM ch1-3: ALG=7, OP1+OP2 at TL=0x20 AR=0x1F RR=0x0F, OP3/OP4
+//      muted (TL=0x7F), FNUM triad high byte first, key-on 0x28 <-
+//      F0/F1/F2 (slots in the high nibble, channel in the low bits)
 //   2. SSG: periods 0x0888/0x09B0/0x0AC8, mixer 0x38, vol 0x0B -> sound
 //   (rhythm needs a filled store; out of scope here -- the WAV kit does
 //    that on hardware, and tb_pc98_opna section 9 already covers the
 //    silent-until-keyed behaviour)
 //
-// Not a CI gate: a diagnostic bench. Run from the repo root with the
-//   usual binary+timing flow: --top-module tb_fm_replay -Isim ...
+// CI gate (build.yml, beside tb_pc98_opna). Besides the per-section
+// checks it pins three output-stage bugs that made the Pocket's FM sound
+// noisy / off against np21w:
+//   - idle silence right after a SHORT reset pulse (cen was frozen in reset,
+//     so jt12's clk_en-gated reset never landed: -30720 of DC from power-on)
+//   - FM ch1 pitch (catches a reversed A4/A0 FNUM order)
+//   - no two's-complement wrap anywhere in the run (jt12_acc's 1.25x gain
+//     and jt12_top's FM+SSG+ADPCM sum both overflowed 16 bits)
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
@@ -70,16 +84,20 @@ module tb_fm_replay;
     int errors = 0;
 
     // ---- bus helpers: one guest OUT as the bridge delivers it -----------
-    // Address-latch write (0x188 part0 / 0x18A part1) then data-port write
-    // (0x189 / 0x18B), with a status poll between like fm_test's wr0/wr1.
+    // Address-latch write (0x188 part0 / 0x18C part1) then data-port write
+    // (0x18A / 0x18E): a2a1 = address[2:1].
     task io_wr(input [1:0] port, input [7:0] v);
         begin
             @(negedge clk);
             a2a1 = port; data_in = v; cs = 1'b1; io_write_n = 1'b0;
             @(negedge clk);
             io_write_n = 1'b1; cs = 1'b0;
-            // settle: two clk is the router's worst case
-            repeat (4) @(negedge clk);
+            // ~2.3 us between OUTs: a guest's pace, not the router's two-clk
+            // worst case. jt12_reg_ch applies an A0-A2 write with the
+            // latch_fnum current when that channel's slot comes round, so
+            // back-to-back writes let a LATER A4 leak into an earlier A0 and
+            // would hide a reversed FNUM order.
+            repeat (100) @(negedge clk);
         end
     endtask
 
@@ -96,6 +114,20 @@ module tb_fm_replay;
             io_wr(2'b11, reg_d);
         end
     endtask
+
+    // Wrap detector, always on: a jump of more than 3/4 full scale between two
+    // consecutive output samples is a two's-complement wrap in the mix (FM +
+    // unipolar SSG DC + ADPCM summed in 16 bits), not a waveform -- the FM
+    // noise on hardware. jt12 updates snd_* once per output sample, so a
+    // legit waveform moves far less than that per step.
+    int wraps = 0;
+    logic signed [15:0] prev_l = 0, prev_r = 0;
+    always @(posedge clk) if (!rst) begin
+        if ((32'(snd_l) - 32'(prev_l) > 49152) || (32'(prev_l) - 32'(snd_l) > 49152) ||
+            (32'(snd_r) - 32'(prev_r) > 49152) || (32'(prev_r) - 32'(snd_r) > 49152))
+            wraps++;
+        prev_l <= snd_l; prev_r <= snd_r;
+    end
 
     // peak tracker: watch snd_l/snd_r for 'us' microseconds
     task peak_over(input int us, output int signed peak);
@@ -115,51 +147,93 @@ module tb_fm_replay;
         end
     endtask
 
-    int pk;
+    // crossings of snd_l through its own mean over 'us' microseconds: a
+    // pitch estimate that the SSG's unipolar DC (volume set, tone bit off)
+    // cannot hide. First pass takes the mean, second counts.
+    task xings_over(input int us, output int n);
+        longint sum;
+        int     mid;
+        logic   last;
+        begin
+            sum = 0;
+            repeat (us * 43) begin @(negedge clk); sum += longint'(snd_l); end
+            mid = int'(sum / (us * 43));
+            n = 0; last = (int'(snd_l) >= mid);
+            repeat (us * 43) begin
+                @(negedge clk);
+                if ((int'(snd_l) >= mid) != last) begin n++; last = ~last; end
+            end
+        end
+    endtask
+
+    int pk, xn;
 
     initial begin
+        // A deliberately short reset pulse: pc98_opna must stretch it for
+        // jt12 itself (jt_rst) and keep cen running through it, or the EG
+        // never leaves its power-up 0 and every idle slot sits at full scale.
         repeat (10) @(negedge clk);
         rst = 1'b0;
-        repeat (10) @(negedge clk);
+        repeat (3000) @(negedge clk);   // past the 2048-clk jt12 reset stretch
+
+        // ---- section -1: idle after reset must be silent ----------------
+        peak_over(2000, pk);
+        $display("idle peak after reset %0d", pk);
+        if (pk > 64) begin errors++; $display("FAIL: output not silent after reset (EG reset never landed?)"); end
+        else $display("ok idle silent after reset");
 
         // ---- voice setup: exactly fm_test's tables ----------------------
-        // ALG=0 / pan C0 on ch1-3
-        wr0(8'hB0, 8'h00); wr0(8'hB1, 8'h00); wr0(8'hB2, 8'h00);
+        // ALG=7 / pan C0 on ch1-3
+        wr0(8'hB0, 8'h07); wr0(8'hB1, 8'h07); wr0(8'hB2, 8'h07);
         wr0(8'hB4, 8'hC0); wr0(8'hB5, 8'hC0); wr0(8'hB6, 8'hC0);
         // slots 0/8 per channel: TL 0x20, AR 0x1F, RR 0x0F
         wr0(8'h40, 8'h20); wr0(8'h48, 8'h20);
         wr0(8'h41, 8'h20); wr0(8'h49, 8'h20);
         wr0(8'h42, 8'h20); wr0(8'h4A, 8'h20);
+        // slots 4/C muted
+        wr0(8'h44, 8'h7F); wr0(8'h4C, 8'h7F);
+        wr0(8'h45, 8'h7F); wr0(8'h4D, 8'h7F);
+        wr0(8'h46, 8'h7F); wr0(8'h4E, 8'h7F);
         wr0(8'h50, 8'h1F); wr0(8'h58, 8'h1F);
         wr0(8'h51, 8'h1F); wr0(8'h59, 8'h1F);
         wr0(8'h52, 8'h1F); wr0(8'h5A, 8'h1F);
         wr0(8'h80, 8'h0F); wr0(8'h88, 8'h0F);
         wr0(8'h81, 8'h0F); wr0(8'h89, 8'h0F);
         wr0(8'h82, 8'h0F); wr0(8'h8A, 8'h0F);
-        // FNUM triad, block 4
-        wr0(8'hA0, 8'h4D); wr0(8'hA4, 8'h22);
-        wr0(8'hA1, 8'h66); wr0(8'hA5, 8'h22);
-        wr0(8'hA2, 8'h80); wr0(8'hA6, 8'h22);
+        // FNUM triad, block 4 -- high byte (latch) first, low byte commits
+        wr0(8'hA4, 8'h22); wr0(8'hA0, 8'h4D);
+        wr0(8'hA5, 8'h22); wr0(8'hA1, 8'h66);
+        wr0(8'hA6, 8'h22); wr0(8'hA2, 8'h80);
         // SSG periods / mixer off / volumes
         wr0(8'h00, 8'h88); wr0(8'h01, 8'h08);
         wr0(8'h02, 8'hB0); wr0(8'h03, 8'h09);
         wr0(8'h04, 8'hC8); wr0(8'h05, 8'h0A);
         wr0(8'h07, 8'h3F);
         wr0(8'h08, 8'h0B); wr0(8'h09, 8'h0B); wr0(8'h0A, 8'h0B);
-        // rhythm total level + per-voice pan/level (part1)
+        // rhythm total level + per-voice {L,R,IL} (YM2608 part0 map)
         wr0(8'h11, 8'h3F);
-        wr1(8'h00, 8'hC0); wr1(8'h01, 8'hC0); wr1(8'h02, 8'hC0);
-        wr1(8'h03, 8'hC0); wr1(8'h04, 8'hC0); wr1(8'h05, 8'hC0);
-        wr1(8'h06, 8'h3F); wr1(8'h07, 8'h3F); wr1(8'h08, 8'h3F);
-        wr1(8'h09, 8'h3F); wr1(8'h0A, 8'h3F); wr1(8'h0B, 8'h3F);
+        wr0(8'h18, 8'hDF); wr0(8'h19, 8'hDF); wr0(8'h1A, 8'hDF);
+        wr0(8'h1B, 8'hDF); wr0(8'h1C, 8'hDF); wr0(8'h1D, 8'hDF);
+
+        // ---- section 0: FM ch1 alone -- catches a reversed FNUM order.
+        // A4 only latches and A0 commits, so A0-before-A4 leaves ch1 at
+        // block 0 / fnum 0x04D (~2 Hz: a DC drift, still a big peak) instead
+        // of block 4 / 0x24D (~124 Hz). Count sign changes, not the peak.
+        wr0(8'h28, 8'hF0);
+        xings_over(40000, xn);
+        $display("FM ch1 sign changes in 40 ms: %0d (~10 expected at 124 Hz)", xn);
+        if (xn < 6) begin errors++; $display("FAIL: FM ch1 pitch wrong (FNUM order?)"); end
+        else $display("ok FM ch1 pitch");
+        wr0(8'h28, 8'h00);
+        peak_over(200, pk);
 
         // ---- section 1: FM only -----------------------------------------
-        wr0(8'h28, 8'h03); wr0(8'h28, 8'h13); wr0(8'h28, 8'h23);
+        wr0(8'h28, 8'hF0); wr0(8'h28, 8'hF1); wr0(8'h28, 8'hF2);
         peak_over(400, pk);
         $display("FM  peak %0d", pk);
         if (pk == 0) begin errors++; $display("FAIL: FM section silent"); end
         else $display("ok FM section speaks");
-        wr0(8'h28, 8'h00); wr0(8'h28, 8'h10); wr0(8'h28, 8'h20);
+        wr0(8'h28, 8'h00); wr0(8'h28, 8'h01); wr0(8'h28, 8'h02);
 
         // ---- section 2: SSG only ----------------------------------------
         wr0(8'h07, 8'h38);
@@ -168,6 +242,18 @@ module tb_fm_replay;
         if (pk == 0) begin errors++; $display("FAIL: SSG section silent"); end
         else $display("ok SSG section speaks");
         wr0(8'h07, 8'h3F);
+
+        // ---- section 4: FM + SSG together, 20 ms -- the loudest mix --------
+        wr0(8'h28, 8'hF0); wr0(8'h28, 8'hF1); wr0(8'h28, 8'hF2);
+        wr0(8'h07, 8'h38);
+        peak_over(20000, pk);
+        $display("ALL peak %0d", pk);
+        wr0(8'h28, 8'h00); wr0(8'h28, 8'h01); wr0(8'h28, 8'h02);
+        wr0(8'h07, 8'h3F);
+
+        $display("output wraps over the whole run: %0d", wraps);
+        if (wraps != 0) begin errors++; $display("FAIL: the output mix wrapped (16-bit overflow)"); end
+        else $display("ok no output wrap");
 
         if (errors == 0)
             $display("PASS tb_fm_replay");
