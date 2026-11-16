@@ -145,6 +145,23 @@ debug 既定）のため OPNA なしで合成されている** — モジュー�
   B 系の判断（B1 が一括 559 + M10K 38）に早めに移るか、の再判断が要る。
 - 変更自体は正しい（lint / tb_softcpu_fw PASS、CI 全緑）なので alm-trim1 はそのまま残す。
 
+### 0.5.2 A 梯子の閉鎖と円弧の決定（2026-11-16）
+
+| 段項 | 実測・判定 | 備考 |
+|---|---|---|
+| A4（RAM 迂回除去） | **不発** — Quartus 18.1.1 Lite は `ramstyle`/`syn_ramstyle = "no_rw_check"` を無視（map.rpt に言及ゼロ、276020 残存）。小 RAM のレジスタ化は kq +74 / hold8 +31 と**純損**（hold8・kq は既存 M10K に相乗りで個数も解放されず） | @b336@ @b337@ の実験 |
+| A6（uPD71071 base→MLAB） | **ceiling 40 ALM**（stub 188 vs baseline 228、単体 quartus_map）。MLAB 化の実費（master_clear の 4 語書込み FSM + byte-write mux RAM 化 + MLAB 1 LAB）が ceiling に張り付く上、DMA は FDD/HDD の生命線 → **見送り** | |
+| A2（RTC→FW） | 実勢 40〜70 と読むが、core_top 内部で単体測定不可・RTL+FW の日スケール作業 → **見送り** | |
+| **A 系の現実的な合計** | **≈ +18〜70 ALM**（段 1 の 18 は実測、残りは未実施分） | 推定 600〜970 の 1/10 以下 |
+
+**決定（2026-11-16、ユーザー）: 円弧 vectc と WDAT はソフト描画のまま。B1（ADPCM-A 削除）も見送り。**
+GDC HW エンジンは第 1 段（LINE/RECT/VECTT/TEXTE）で完成形。LAB は 1,848/1,848 のまま、
+今後 RTL を足す案件が出たときの大口ドナーは引き続き B1（559 ALM + M10K 38、実測）が定位置。
+
+- 段 1（A3+A8、+18 ALM）と A4 の属性 6 件（Quartus 18.1 では効かないが安全根拠の記録として無害、
+  Quartus を上げれば効くはず）は alm-trim1 → release7 に取り込み済み。
+- main への統合は実機確認後（音声経路の共有化を含むため）。
+
 ---
 
 ## 1. 前提: 空きの数え方
