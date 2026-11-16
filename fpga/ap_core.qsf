@@ -801,6 +801,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE core/pocket_video.sv
 # Audio back end: audio_mixer (lightweight crossfeed/attenuation + I2S; the
 # MiSTer IIR/DC-blocker chain was retired for fit headroom) and the codec PLL.
 set_global_assignment -name SYSTEMVERILOG_FILE core/audio/audio_mixer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE core/audio/filters/audio_mix.sv
 set_global_assignment -name SYSTEMVERILOG_FILE core/audio/sound_i2s.sv
 set_global_assignment -name VERILOG_FILE core/audio_pll.v
 

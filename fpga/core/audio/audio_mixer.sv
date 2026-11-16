@@ -123,66 +123,41 @@ module audio_mixer #(
 
   //! ------------------------------------------------------------------------
   //! Crossfeed + attenuation (was the tail of audio_filters)
-  //!
-  //! One mix step shared by both channels on alternating clk edges -- the
-  //! same time-sharing the compressor in core_top uses. The arithmetic
-  //! (sign-extend, crossfeed add/sub, attenuate, clamp) exists once; the
-  //! pipeline state (a1/a2/a3/pre/out) is per channel. Audio is a 48 kHz
-  //! stream on a 12.288 MHz clock, so the one-cycle inter-channel skew is
-  //! inaudible; each channel still consumes its own state on its phase, and
-  //! the crossfeed still reads the other channel's pre_out as it stood at
-  //! the previous edge, exactly like the two-instance version did.
   //! ------------------------------------------------------------------------
-  logic        mix_ph = 1'b0;
   logic [15:0] audio_l, audio_r;
 
   wire [15:0] din_l = {~is_signed ^ core_al_s[15], core_al_s[14:0]};
   wire [15:0] din_r = {~is_signed ^ core_ar_s[15], core_ar_s[14:0]};
 
-  // din[0]/din[1] = left/right; the phase picks which channel steps.
-  wire [15:0] din_act = mix_ph ? din_r : din_l;
-  wire [15:0] pre_oth = mix_ph ? mix_pre[0] : mix_pre[1];
-  wire [4:0]  att_act = {1'b0, vol_att};
+  wire [15:0] audio_l_pre;
+  audio_mix audmix_l
+            (
+                .clk         ( audio_mclk  ),
+                .ce          ( 1'b1        ),
+                .att         ( {1'b0, vol_att} ),
+                .mix         ( mix         ),
 
-  logic signed [16:0] mix_a1 [0:1];
-  logic signed [16:0] mix_a2 [0:1];
-  logic signed [16:0] mix_a3 [0:1];
-  logic [15:0]       mix_pre [0:1];
-  logic [15:0]       mix_out [0:1];
+                .core_audio  ( din_l       ),
+                .pre_in      ( audio_r_pre ),
 
-  always @(posedge audio_mclk) begin
-    logic signed [16:0] a1_next;
-    logic signed [16:0] a2_next;
-    logic signed [16:0] a3_next;
+                .pre_out     ( audio_l_pre ),
+                .out         ( audio_l     )
+            );
 
-    mix_ph <= ~mix_ph;
+  wire [15:0] audio_r_pre;
+  audio_mix audmix_r
+            (
+                .clk         ( audio_mclk  ),
+                .ce          ( 1'b1        ),
+                .att         ( {1'b0, vol_att} ),
+                .mix         ( mix         ),
 
-    // stage 1: sign-extend the incoming sample
-    a1_next = {din_act[15], din_act};
+                .core_audio  ( din_r       ),
+                .pre_in      ( audio_l_pre ),
 
-    // stage 2: crossfeed mix against the other channel's pre_out
-    case (mix)
-      2'd0: a2_next = a1_next;
-      2'd1: a2_next = $signed(a1_next) - $signed(a1_next[16:3]) + $signed(pre_oth[15:2]);
-      2'd2: a2_next = $signed(a1_next) - $signed(a1_next[16:2]) + $signed(pre_oth[15:1]);
-      2'd3: a2_next = {a1_next[16], a1_next[16:1]} + {pre_oth[15], pre_oth};
-    endcase
-
-    // stage 3: attenuate (att[4] = mute)
-    a3_next = att_act[4] ? 17'sd0 : mix_a2[mix_ph] >>> att_act[3:0];
-
-    // write this channel's state. pre/out lag a1/a2 by one stage, same
-    // pipeline depth as the original audio_mix instances.
-    mix_a1[mix_ph] <= a1_next;
-    mix_a2[mix_ph] <= a2_next;
-    mix_a3[mix_ph] <= a3_next;
-    mix_pre[mix_ph] <= mix_a1[mix_ph][16:1];
-    mix_out[mix_ph] <= ^mix_a3[mix_ph][16:15] ? {mix_a3[mix_ph][16], {15{mix_a3[mix_ph][15]}}}
-                                              : mix_a3[mix_ph][15:0];
-  end
-
-  assign audio_l = mix_out[0];
-  assign audio_r = mix_out[1];
+                .pre_out     ( audio_r_pre ),
+                .out         ( audio_r     )
+            );
 
   //! ------------------------------------------------------------------------
   //! Pocket I2S Output
