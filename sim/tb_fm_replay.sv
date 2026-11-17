@@ -69,7 +69,7 @@ module tb_fm_replay;
 
     // Production instantiation: ADPCM-A on (rhythm store exists, unused
     // here), PCM on -- the same u_pc98_opna Peripherals.sv builds.
-    pc98_opna #(.USE_ADPCM(1), .USE_PCM(1)) dut (
+    pc98_opna #(.USE_ADPCM(1), .USE_PCM(0)) dut (
         .clk(clk), .rst(rst),
         .cs(cs), .a2a1(a2a1),
         .io_read_n(io_read_n), .io_write_n(io_write_n),
@@ -88,7 +88,12 @@ module tb_fm_replay;
     // (0x18A / 0x18E): a2a1 = address[2:1].
     task io_wr(input [1:0] port, input [7:0] v);
         begin
+            // Poll status bit 7 like a driver (and fm_test v3's wr0) does:
+            // jt12 holds ONE pending operator-register update until its
+            // slot comes round (up to 24 clk_en, ~18 us), so un-paced
+            // writes silently drop TL/AR/... values. Busy covers that.
             @(negedge clk);
+            while (dut.status0_out[7]) @(negedge clk);
             a2a1 = port; data_in = v; cs = 1'b1; io_write_n = 1'b0;
             @(negedge clk);
             io_write_n = 1'b1; cs = 1'b0;

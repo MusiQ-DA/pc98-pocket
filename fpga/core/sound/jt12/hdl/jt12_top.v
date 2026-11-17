@@ -268,7 +268,7 @@ if( use_adpcm==1 ) begin: gen_adpcm
         assign adpcmb_roe_n = 1'b1;
     end
 
-    if( use_pcm==0 ) begin : gen_full_acc
+    if( use_pcm==0 && FULLFM==0 ) begin : gen_full_acc
         assign snd_sample   = zero;
         assign adpcm_snd_l  = 16'sd0;
         assign adpcm_snd_r  = 16'sd0;
@@ -294,9 +294,10 @@ if( use_adpcm==1 ) begin: gen_adpcm
             .right      ( fm_snd_right  )
         );
     end else begin : gen_adpcm_only_acc
-        // pc98-pocket local: with use_pcm==1 the YM2612 accumulator below
-        // owns fm_snd -- it alone carries the ch6 PCM-DAC path a YM2608
-        // needs. This accumulator runs rl=00 so its FM slots never
+        // pc98-pocket local: with use_pcm==1 (the YM2612 accumulator) or
+        // FULLFM (gen_hires_acc, all six FM channels at full resolution)
+        // something else owns fm_snd and every FM slot, so the ADPCM voices
+        // get their own accumulator. This one runs rl=00 so its FM slots never
         // accumulate (acc_en gates on rl); the ADPCM-A slot forces acc_en
         // anyway, so it produces the scaled rhythm sum alone. That sum is
         // added at the snd_* mix stage, keeping the FM/PCM path identical
@@ -738,6 +739,35 @@ generate
             // combined output
             .left       ( fm_snd_left [15:4]  ),
             .right      ( fm_snd_right[15:4]  )
+        );
+    end
+    // pc98-pocket local: a YM2608's FM at full resolution. jt12_acc above is
+    // the YM2612's 9-bit-per-operator DAC path (op_result is op_result_hd
+    // [13:5]): quiet notes keep only a few bits and sound gritty next to
+    // np21w/fmgen. This sums the 14-bit operator output of all six channels
+    // (jt10_acc FULLFM: no slot is given up to ADPCM, whose voices go
+    // through gen_adpcm_only_acc instead) with jt12_single_acc's limiter.
+    if( use_pcm==0 && use_adpcm==1 && FULLFM==1 ) begin : gen_hires_acc
+        assign snd_sample = zero;
+        jt10_acc #(.FULLFM(1)) u_acc(
+            .clk        ( clk           ),
+            .clk_en     ( clk_en        ),
+            .op_result  ( op_result_hd  ),
+            .rl         ( rl            ),
+            .zero       ( zero          ),
+            .s1_enters  ( s2_enters     ),
+            .s2_enters  ( s1_enters     ),
+            .s3_enters  ( s4_enters     ),
+            .s4_enters  ( s3_enters     ),
+            .cur_ch     ( cur_ch        ),
+            .cur_op     ( cur_op        ),
+            .alg        ( alg_I         ),
+            .adpcmA_l   ( 16'sd0        ),
+            .adpcmA_r   ( 16'sd0        ),
+            .adpcmB_l   ( 16'sd0        ),
+            .adpcmB_r   ( 16'sd0        ),
+            .left       ( fm_snd_left   ),
+            .right      ( fm_snd_right  )
         );
     end
     if( use_pcm==0 && use_adpcm==0 ) begin : gen_2203_acc // YM2203 accumulator

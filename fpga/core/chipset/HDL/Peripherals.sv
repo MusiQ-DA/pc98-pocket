@@ -2359,12 +2359,14 @@ module PERIPHERALS #(
     // guest's rhythm writes now reach a chip with ADPCM blocks; the
     // firmware fills the 32 KB rhythm store at boot when rhythm.bin is
     // present. OMGMT_CAPS (mg_reg 8) bit0 reads 1, which is what tells
-    // rhythm.c to run its load. USE_PCM stays 1:
-    // it is the only stereo FM path jt12 has (use_pcm=0 falls back to
-    // the YM2203 mono accumulator), and the OPNA is a stereo chip.
+    // rhythm.c to run its load. USE_PCM=0: with ADPCM on that is the
+    // full-resolution stereo FM path (jt10_acc FULLFM, 14 bits per
+    // operator) rather than the YM2612's 9-bit one, whose quantisation made
+    // quiet FM gritty next to np21w. (The YM2203 mono fallback only applies
+    // to a USE_ADPCM=0 build.)
     // DELTA-T stays dark either way (pc98_opna wires use_adpcmb=0 -- its
     // 256 KB SDRAM window is a known gap).
-    pc98_opna #(.USE_ADPCM(1), .USE_PCM(1)) u_pc98_opna (
+    pc98_opna #(.USE_ADPCM(1), .USE_PCM(0)) u_pc98_opna (
         .clk          (clock),
         .rst          (reset),
         .cs           (opna_cs),

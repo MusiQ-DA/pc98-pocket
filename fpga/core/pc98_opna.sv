@@ -87,8 +87,12 @@ module pc98_opna #(
     // writes still route, they just reach a chip with no ADPCM blocks, so
     // rhythm and ADPCM-B are silent while FM and SSG keep working. The
     // trade-off is floor space -- the ADPCM engines are the expensive half.
-    // USE_PCM picks the stereo accumulator when ADPCM is off: jt12's
-    // no-ADPCM default is the YM2203 mono path, and OPNA is stereo.
+    // USE_PCM picks jt12's YM2612 accumulator: 9 bits per operator, the
+    // only stereo FM path when ADPCM is off (jt12's no-ADPCM default is the
+    // YM2203 mono path). With ADPCM on, USE_PCM=0 selects FULLFM instead:
+    // jt10_acc summing the full 14-bit operator output of all six
+    // channels, the YM2608's resolution, with the rhythm voices on their
+    // own accumulator (jt12_top gen_hires_acc / gen_adpcm_only_acc).
     parameter bit USE_ADPCM = 1,
     parameter bit USE_PCM   = 0,
     // 32 KB: the six-voice rhythm kit's store (rhythm.c RHY_STORE_BYTES).
@@ -563,6 +567,7 @@ module pc98_opna #(
         .use_ssg   (1),
         .num_ch    (6),
         .use_pcm   (USE_PCM),
+        .FULLFM    (USE_ADPCM && !USE_PCM),
         .use_adpcm (USE_ADPCM),
         // DELTA-T stays dark even in the ADPCM build: it wants a 256 KB
         // SDRAM window this core does not have, so drvB (~200 ALM) is left

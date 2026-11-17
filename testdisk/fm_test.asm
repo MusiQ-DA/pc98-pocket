@@ -135,8 +135,15 @@ start:
 ; ---------------------------------------------------------------------------
 ; wr0: AL = part0 reg, AH = data (ports > 0xFF, so DX-form I/O).
 ; Address to 0x188, data to 0x18A -- the data port is +2, not +1.
-; Fixed delay between the two, the access pattern game drivers use.
+; Waits for status bit 7 (busy) first, as drivers do: the chip needs time to
+; apply each write (jt12 keeps ONE pending operator update until its slot
+; comes round, ~18 us), and an unpaced burst silently drops TL/AR values.
 wr0:    mov dx, OPNA_A0
+        push ax
+.bz:    in al, dx
+        test al, 0x80
+        jnz .bz
+        pop ax
         out dx, al
         jmp short $+2
         jmp short $+2
