@@ -103,7 +103,7 @@ module tb_fm_replay;
             // latch_fnum current when that channel's slot comes round, so
             // back-to-back writes let a LATER A4 leak into an earlier A0 and
             // would hide a reversed FNUM order.
-            repeat (100) @(negedge clk);
+            repeat (poll ? 100 : 10) @(negedge clk);   // un-polled: ~0.25 us
         end
     endtask
 
@@ -185,6 +185,12 @@ module tb_fm_replay;
         end
     endtask
     int qmax = 0;
+    int qmax2 = 0;
+    logic qfull = 1'b0;
+    always @(posedge clk) begin
+        if (dut.wq_full && dut.wq_push) qfull <= 1'b1;
+        if (!poll && int'(dut.wq_cnt) > qmax2) qmax2 = int'(dut.wq_cnt);
+    end
     always @(posedge clk) if (int'(dut.wq_cnt) > qmax) qmax = int'(dut.wq_cnt);
 
     initial begin
@@ -319,6 +325,39 @@ module tb_fm_replay;
         $display("rhythm BD peak %0d", fm_peak);
         if (fm_peak == 0) begin errors++; $display("FAIL: rhythm voice silent"); end
         else $display("ok rhythm reaches the mix");
+
+        // ---- section 7: an exit-time register-clear burst, un-polled -----
+        // A driver quitting (NEON) zeroes every register of both parts and
+        // then silences the SSG, back to back at CPU speed without reading
+        // busy. With every write paced at jt12's ~24 us busy the 256-entry
+        // queue overflowed and dropped the trailing SSG writes: a tone stayed
+        // on. Every write must land and every SSG level must end at 0.
+        wr0(8'h00, 8'h00); wr0(8'h01, 8'h01); wr0(8'h08, 8'h0F); wr0(8'h07, 8'h3E);
+        while (dut.rtr_busy) @(negedge clk);
+        poll = 1'b0;
+        for (int p = 0; p < 2; p++)
+            for (int r = 8'h00; r <= 8'hFF; r++)
+                if (r != 8'h07 && !(r >= 8'h08 && r <= 8'h0A && p == 0)) begin
+                    if (p == 0) wr0(r[7:0], 8'h00); else wr1(r[7:0], 8'h00);
+                end
+        wr0(8'h07, 8'h3F); wr0(8'h08, 8'h00); wr0(8'h09, 8'h00); wr0(8'h0A, 8'h00);
+        poll = 1'b1;
+        $display("exit burst: queue peak %0d, full seen %0d", qmax2, qfull);
+        if (qfull) begin errors++; $display("FAIL: the write queue overflowed (writes dropped)"); end
+        while (dut.rtr_busy) @(negedge clk);
+        repeat (2000 * 43) @(negedge clk);
+        begin
+            int mn, mx;
+            mn = 9999; mx = -1;
+            repeat (5000 * 43) begin
+                @(negedge clk);
+                if (int'(dut.u_opna.psg_snd) < mn) mn = int'(dut.u_opna.psg_snd);
+                if (int'(dut.u_opna.psg_snd) > mx) mx = int'(dut.u_opna.psg_snd);
+            end
+            $display("SSG after the burst: psg_snd %0d..%0d", mn, mx);
+            if (mx > 2) begin errors++; $display("FAIL: SSG left on after the exit burst (writes dropped)"); end
+            else $display("ok exit burst silenced the SSG");
+        end
 
         $display("output wraps over the whole run: %0d", wraps);
         if (wraps != 0) begin errors++; $display("FAIL: the output mix wrapped (16-bit overflow)"); end

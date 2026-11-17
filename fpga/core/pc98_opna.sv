@@ -363,17 +363,29 @@ module pc98_opna #(
     // through this FIFO, and the drain below hands jt12 the next one only
     // once jt12's own busy (32 clk_en, a full slot turn) has cleared.
     //
-    // 256 x {part, reg, data} = one M10K. A fixed-delay driver writing a
-    // 150-register burst at ~10 us outruns the ~24 us drain by roughly 90
-    // entries, so 256 is ample; a full queue drops (counted nowhere -- a
-    // driver that fast would have lost far more without the queue).
-    localparam int WQ_AW = 8;
-    (* ramstyle = "M10K", no_rw_check *) logic [16:0] wq_mem [0:(1<<WQ_AW)-1];
+    // Only two kinds of write leave jt12 holding a pending update that the
+    // next data write would cancel: operator registers (0x30-0x9F, either
+    // part: up_opreg/op_din, applied when the slot comes round) and key-on
+    // (part 0 0x28: up_keyon, cleared by the next data write). Those wait
+    // for jt12's busy. Everything else -- SSG, channel registers A0-B6
+    // (jt12_reg_ch stores them on the clk they arrive), timers, LFO,
+    // rhythm/ADPCM -- lands at once, so it only gets a ~3 us guard. Without
+    // that split a register-clear burst at exit (NEON) overran the queue at
+    // ~24 us a write and its trailing SSG silencing writes were dropped,
+    // leaving a tone stuck on.
+    //
+    // 1024 x {part, reg, data} = two M10K. There is no wait-state path
+    // back to the guest, so a full queue still drops. Sized on the worst
+    // case tb_fm_replay drives: every register of both parts (512 writes)
+    // at a write per ~0.25 us peaks at ~410 entries with this pacing.
+    localparam int WQ_AW = 10;
+    (* ramstyle = "M10K, no_rw_check" *) logic [16:0] wq_mem [0:(1<<WQ_AW)-1];
     logic [WQ_AW-1:0] wq_wp, wq_rp;
     logic [WQ_AW:0]   wq_cnt;
     logic [16:0]      wq_head;
     logic [1:0]       wq_ready;      // count has been non-zero for 2 clk
-    logic [4:0]       wq_pace;       // guard until jt12's busy is visible
+    logic [6:0]       wq_pace;       // post-write guard (and until busy is visible)
+    logic             wq_slow;       // the last write left jt12 an update pending
     logic             mg_hold;       // a firmware inject that met a guest push
     logic [16:0]      mg_hold_d;
 
@@ -391,7 +403,11 @@ module pc98_opna #(
     // run out, and jt12 itself no longer busy (status0 bit 7 is jt12's own
     // busy, shadowed below).
     wire wq_pop = (rtr_state == RTR_IDLE) && !rq_pend && wq_ready[1] &&
-                  (wq_cnt != 0) && (wq_pace == 0) && !sh_busy && !jt_rst;
+                  (wq_cnt != 0) && (wq_pace == 0) && !(wq_slow && sh_busy) &&
+                  !jt_rst;
+    // jt12-side register (after the router): operator block or key-on.
+    wire rq_is_slow = ((rq_reg >= 8'h30) && (rq_reg <= 8'h9F)) ||
+                      (!rq_part && (rq_reg == 8'h28));
 
     assign wq_nonempty = (wq_cnt != 0);
 
@@ -407,6 +423,7 @@ module pc98_opna #(
             wq_cnt    <= '0;
             wq_ready  <= 2'b00;
             wq_pace   <= '0;
+            wq_slow   <= 1'b0;
             mg_hold   <= 1'b0;
             mg_hold_d <= '0;
             rq_pend   <= 1'b0;
@@ -433,10 +450,16 @@ module pc98_opna #(
                 {rq_part, rq_reg, rq_data} <= wq_head;
             end
 
-            // jt12 raises busy on the data beat; the status shadow sees it
-            // a few clk later, so hold the drain off until it can.
-            if (rtr_state == RTR_DATA) wq_pace <= 5'd31;
-            else if (wq_pace != 0)     wq_pace <= wq_pace - 1'b1;
+            // jt12 raises busy on the data beat and the status shadow sees
+            // it a few clk later: a slow write holds the drain 31 clk and
+            // then until busy drops; any other write just ~3 us (127 clk,
+            // two clk_en for the once-only strobes -- psg_wr_n, up_aon --
+            // to clear).
+            if (rtr_state == RTR_DATA) begin
+                wq_pace <= rq_is_slow ? 7'd31 : 7'd127;
+                wq_slow <= rq_is_slow;
+            end else if (wq_pace != 0)
+                wq_pace <= wq_pace - 1'b1;
         end
     end
 
