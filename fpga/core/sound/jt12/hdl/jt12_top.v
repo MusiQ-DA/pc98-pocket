@@ -526,7 +526,12 @@ function signed [15:0] mix_sat;
     input signed [15:0] pcm;
     reg   signed [17:0] t;
     begin
-        t = {{2{fm[15]}}, fm} + {3'b0, psg, 5'd0} + {{2{pcm[15]}}, pcm};
+        // SSG x20 (= x16 + x4): a full-volume SSG channel swings +-2550
+        // against a TL 0 FM slot's +-8191, i.e. FM:SSG = 3.2 -- np21w's
+        // defaults (vol_fm = vol_ssg = 64) give opngen +-10240 against
+        // psggen +-3072, 3.33. Upstream's x32 put SSG ~4.5 dB over that.
+        t = {{2{fm[15]}}, fm} + {4'b0, psg, 4'd0} + {6'b0, psg, 2'd0}
+          + {{2{pcm[15]}}, pcm};
         mix_sat = (t[17:15] == 3'b000 || t[17:15] == 3'b111) ? t[15:0]
                 : {t[17], {15{~t[17]}}};
     end
@@ -537,7 +542,12 @@ endfunction
 `ifndef NOSSG
 generate
     if( use_ssg==1 ) begin : gen_ssg
-        jt49 #(.COMP(3'b01), .CLKDIV(JT49_DIV), .YM2203_LUMPED(YM2203_LUMPED))
+        // pc98-pocket local: COMP 0, the uncompressed table -- 3 dB per
+        // volume step (lut[{vol,1}]: 255, 180, 127, ...), which is the
+        // YM2608 SSG and np21w's psggen (voltbl[i] = voltbl[i+1] / 1.41492).
+        // Upstream's COMP 1 squeezes the range to ~2 dB a step, so every
+        // SSG volume below 15 came out several dB (vol 9: +6 dB) too loud.
+        jt49 #(.COMP(3'b00), .CLKDIV(JT49_DIV), .YM2203_LUMPED(YM2203_LUMPED))
             u_psg( // note that input ports are not multiplexed
             .rst_n      ( ~rst      ),
             .clk        ( clk       ),    // signal on positive edge
