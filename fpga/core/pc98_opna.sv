@@ -235,10 +235,15 @@ module pc98_opna #(
 
     localparam logic [1:0] RTR_IDLE = 2'd0, RTR_ADDR = 2'd1, RTR_DATA = 2'd2;
 
-    // jt_rst counts as busy: the firmware's injects poll OMGMT_BUSY before
-    // each write (rhythm.c inject_pair), so they wait out the reset stretch
-    // instead of landing on a chip that is still in reset.
-    wire rtr_busy = rq_pend | (rtr_state != RTR_IDLE) | jt_rst;
+    // Busy while anything is queued or in flight, and through the jt12 reset
+    // stretch. Guest status bit 7 and the firmware's OMGMT_BUSY both read
+    // it, so a driver that polls busy paces itself exactly as it did before
+    // the queue existed (it never builds the queue up); only drivers that
+    // write on fixed delays fill it. The firmware's injects poll it before
+    // each write (rhythm.c inject_pair) and so also wait out the reset.
+    logic       wq_nonempty;
+    logic       sh_busy;            // jt12's own busy, from the status shadow
+    wire rtr_busy = rq_pend | (rtr_state != RTR_IDLE) | jt_rst | wq_nonempty;
 
     // Rhythm shadow, readable by the firmware through mg_reg 7. jt12 has no
     // read-back for its ADPCM-A control registers and a YM2608 has none for
@@ -332,14 +337,6 @@ module pc98_opna #(
             joy_blk    <= 1'b0;
             gw_seen    <= 1'b0;
         end else begin
-            // The FSM consumes the request on the way out of idle; a new one
-            // is only taken once that has happened. Two clk cycles at
-            // 42.95 MHz is far inside one guest OUT, and status bit 7 reads
-            // back busy for the whole of it (status0_out below), so a driver
-            // that polls before writing can never see the window.
-            if (rtr_state == RTR_IDLE && rq_pend)
-                rq_pend <= 1'b0;
-
             if (wr_commit && gw_allowed) begin
                 data_latch <= wr_data_q;
                 if (gw_is_data)
@@ -351,24 +348,99 @@ module pc98_opna #(
                     if (!gw_part) begin
                         if (gw_reg == 8'h0F) joy_blk <= wr_data_q[6];
                     end
-                    if (route_fwd(gw_part, gw_reg) && !rtr_busy) begin
-                        rq_pend <= 1'b1;
-                        rq_part <= route_part(gw_part, gw_reg);
-                        rq_reg  <= route_reg (gw_part, gw_reg);
-                        rq_data <= wr_data_q;
-                    end
                 end
-            end else if (USE_ADPCM && mg_wr && (mg_reg == 4'd2 || mg_reg == 4'd3) && !rtr_busy) begin
-                // The firmware's raw injection path. It is how the six
-                // ADPCM-A start/end pairs (jt12 part 1, 0x110-0x12D) get
-                // programmed after the rhythm store is filled -- registers the
-                // router deliberately refuses to let the guest reach. The
-                // firmware polls mg_reg 4 before each one.
-                rq_pend <= 1'b1;
-                rq_part <= (mg_reg == 4'd3);
-                rq_reg  <= mg_wdata[15:8];
-                rq_data <= mg_wdata[7:0];
             end
+        end
+    end
+
+    // ------------------------------------------------------------------
+    // The write queue
+    // ------------------------------------------------------------------
+    // jt12 is not a register file: jt12_mmr keeps ONE pending operator /
+    // channel update ({up_opreg, up_ch, up_op, op_din}) that jt12_reg applies
+    // when that slot comes round in the 24-slot pipeline -- up to 24 clk_en,
+    // ~18 us at the reset /6 prescaler -- and any later data write replaces
+    // it (even an SSG or timer write clears up_opreg). A real YM2608 takes a
+    // data write every ~10 us; drivers that pace on fixed delays tuned to
+    // that, rather than polling busy, had their TL/AR/FNUM writes silently
+    // dropped. Every routed write (guest and firmware inject alike) now goes
+    // through this FIFO, and the drain below hands jt12 the next one only
+    // once jt12's own busy (32 clk_en, a full slot turn) has cleared.
+    //
+    // 256 x {part, reg, data} = one M10K. A fixed-delay driver writing a
+    // 150-register burst at ~10 us outruns the ~24 us drain by roughly 90
+    // entries, so 256 is ample; a full queue drops (counted nowhere -- a
+    // driver that fast would have lost far more without the queue).
+    localparam int WQ_AW = 8;
+    (* ramstyle = "M10K", no_rw_check *) logic [16:0] wq_mem [0:(1<<WQ_AW)-1];
+    logic [WQ_AW-1:0] wq_wp, wq_rp;
+    logic [WQ_AW:0]   wq_cnt;
+    logic [16:0]      wq_head;
+    logic [1:0]       wq_ready;      // count has been non-zero for 2 clk
+    logic [4:0]       wq_pace;       // guard until jt12's busy is visible
+    logic             mg_hold;       // a firmware inject that met a guest push
+    logic [16:0]      mg_hold_d;
+
+    wire g_push = wr_commit && gw_allowed && gw_is_data && route_fwd(gw_part, gw_reg);
+    wire m_req  = USE_ADPCM && mg_wr && (mg_reg == 4'd2 || mg_reg == 4'd3);
+    wire [16:0] g_word = {route_part(gw_part, gw_reg), route_reg(gw_part, gw_reg), wr_data_q};
+    wire [16:0] m_word = {mg_reg == 4'd3, mg_wdata[15:8], mg_wdata[7:0]};
+
+    // Guest first; a firmware inject in the same clk waits one in mg_hold.
+    wire        wq_push  = g_push | m_req | mg_hold;
+    wire [16:0] wq_wdata = g_push ? g_word : mg_hold ? mg_hold_d : m_word;
+    wire        wq_full  = wq_cnt[WQ_AW];
+
+    // Drain: router idle, nothing staged, head stable, the post-write guard
+    // run out, and jt12 itself no longer busy (status0 bit 7 is jt12's own
+    // busy, shadowed below).
+    wire wq_pop = (rtr_state == RTR_IDLE) && !rq_pend && wq_ready[1] &&
+                  (wq_cnt != 0) && (wq_pace == 0) && !sh_busy && !jt_rst;
+
+    assign wq_nonempty = (wq_cnt != 0);
+
+    always_ff @(posedge clk) begin
+        if (wq_push && !wq_full) wq_mem[wq_wp] <= wq_wdata;
+        wq_head <= wq_mem[wq_rp];
+    end
+
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            wq_wp     <= '0;
+            wq_rp     <= '0;
+            wq_cnt    <= '0;
+            wq_ready  <= 2'b00;
+            wq_pace   <= '0;
+            mg_hold   <= 1'b0;
+            mg_hold_d <= '0;
+            rq_pend   <= 1'b0;
+            rq_part   <= 1'b0;
+            rq_reg    <= 8'h00;
+            rq_data   <= 8'h00;
+        end else begin
+            mg_hold <= g_push && m_req;
+            if (g_push && m_req) mg_hold_d <= m_word;
+
+            if (wq_push && !wq_full) wq_wp <= wq_wp + 1'b1;
+            if (wq_pop)              wq_rp <= wq_rp + 1'b1;
+            wq_cnt <= wq_cnt + {{WQ_AW{1'b0}}, wq_push && !wq_full}
+                             - {{WQ_AW{1'b0}}, wq_pop};
+            // wq_head is the M10K's registered read of wq_rp: it trails a
+            // push into an empty queue, or a pop, by two clk.
+            wq_ready <= wq_pop ? 2'b00 : {wq_ready[0], wq_cnt != 0};
+
+            // The FSM consumes the request on the way out of idle.
+            if (rtr_state == RTR_IDLE && rq_pend)
+                rq_pend <= 1'b0;
+            if (wq_pop) begin
+                rq_pend <= 1'b1;
+                {rq_part, rq_reg, rq_data} <= wq_head;
+            end
+
+            // jt12 raises busy on the data beat; the status shadow sees it
+            // a few clk later, so hold the drain off until it can.
+            if (rtr_state == RTR_DATA) wq_pace <= 5'd31;
+            else if (wq_pace != 0)     wq_pace <= wq_pace - 1'b1;
         end
     end
 
@@ -445,7 +517,7 @@ module pc98_opna #(
     end
 
     wire [7:0] status0 = sh[2'b00];   // {busy, 5'd0, flag_B, flag_A}
-    wire [7:0] ssg_rd  = sh[2'b01];
+    assign sh_busy = status0[7];
     wire [7:0] status1 = sh[2'b10];   // {adpcmb_flag, 1'b0, adpcma_flags}
 
     // The board-level view of IOA: np21w fmboard_getjoy returns the joystick
@@ -460,6 +532,28 @@ module pc98_opna #(
     // held buttons.)
     wire [7:0] joy_fold = {2'b11, joy[5:4] & joy[7:6], joy[3:0]};
     wire [7:0] joy_rd = joy_blk ? 8'hFF : joy_fold;
+
+    // SSG register read-back from a guest-side shadow, not jt49: with the
+    // write queue a driver's read-modify-write of the mixer (reg 7 -- PMD and
+    // friends do this constantly) could otherwise read a value whose write is
+    // still queued. np21w (board86.c opna_i18a -> the psg register array)
+    // returns the raw byte last written, which is what this holds. Reset
+    // values follow np21w sound/psggenc.c psggen_deftbl (reg 7 = 0xBF,
+    // IOA/IOB = 0xFF); after a guest reset the shadow keeps its old bytes
+    // until rewritten, as it has no reset port.
+    (* ramstyle = "M10K, no_rw_check" *) logic [7:0] ssg_sh [0:15];
+    logic [7:0] ssg_q;
+    initial begin
+        for (int i = 0; i < 16; i++) ssg_sh[i] = 8'h00;
+        ssg_sh[7]  = 8'hBF;
+        ssg_sh[14] = 8'hFF;
+        ssg_sh[15] = 8'hFF;
+    end
+    always_ff @(posedge clk) begin
+        if (wr_commit && gw_allowed && gw_is_data && !gw_part && (gw_reg[7:4] == 4'h0))
+            ssg_sh[gw_reg[3:0]] <= wr_data_q;
+        ssg_q <= ssg_sh[addrl[3:0]];
+    end
 
     // The router adds its own latency on top of jt12's busy, and a driver that
     // polls bit 7 and then writes immediately must not outrun it.
@@ -476,7 +570,7 @@ module pc98_opna #(
             // for the other indexes < 0x10, 0x01 for index 0xFF (the "is there
             // a chip here" probe), and the data latch otherwise.
             2'b01: data_out = (addrl == 8'h0E) ? joy_rd
-                            : (addrl < 8'h10) ? ssg_rd
+                            : (addrl < 8'h10) ? ssg_q
                             : (addrl == 8'hFF) ? 8'h01
                             : data_latch;
             // 0x18C/0x18E are open bus unless the board is extended

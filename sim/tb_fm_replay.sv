@@ -86,6 +86,7 @@ module tb_fm_replay;
     // ---- bus helpers: one guest OUT as the bridge delivers it -----------
     // Address-latch write (0x188 part0 / 0x18C part1) then data-port write
     // (0x18A / 0x18E): a2a1 = address[2:1].
+    logic poll = 1'b1;   // 0: a fixed-delay driver that never reads busy
     task io_wr(input [1:0] port, input [7:0] v);
         begin
             // Poll status bit 7 like a driver (and fm_test v3's wr0) does:
@@ -93,7 +94,7 @@ module tb_fm_replay;
             // slot comes round (up to 24 clk_en, ~18 us), so un-paced
             // writes silently drop TL/AR/... values. Busy covers that.
             @(negedge clk);
-            while (dut.status0_out[7]) @(negedge clk);
+            if (poll) while (dut.status0_out[7]) @(negedge clk);
             a2a1 = port; data_in = v; cs = 1'b1; io_write_n = 1'b0;
             @(negedge clk);
             io_write_n = 1'b1; cs = 1'b0;
@@ -171,7 +172,9 @@ module tb_fm_replay;
         end
     endtask
 
-    int pk, xn;
+    int pk, xn, fm_peak;
+    int qmax = 0;
+    always @(posedge clk) if (int'(dut.wq_cnt) > qmax) qmax = int'(dut.wq_cnt);
 
     initial begin
         // A deliberately short reset pulse: pc98_opna must stretch it for
@@ -255,6 +258,33 @@ module tb_fm_replay;
         $display("ALL peak %0d", pk);
         wr0(8'h28, 8'h00); wr0(8'h28, 8'h01); wr0(8'h28, 8'h02);
         wr0(8'h07, 8'h3F);
+
+        // ---- section 5: a driver that does NOT poll busy ------------------
+        // Six TL/AR writes ~2.3 us apart, far inside jt12's ~18 us slot turn.
+        // Without the write queue each overwrote the previous pending
+        // operator update and only the last landed; ch1 then kept TL=0x20 and
+        // spoke. With the queue all six land: TL=0x7F on both sounding slots
+        // means silence.
+        poll = 1'b0;
+        wr0(8'h40, 8'h7F); wr0(8'h48, 8'h7F);
+        wr0(8'h50, 8'h1F); wr0(8'h58, 8'h1F);
+        wr0(8'h80, 8'h0F); wr0(8'h88, 8'h0F);
+        poll = 1'b1;
+        $display("queue depth seen: %0d", qmax);
+        if (qmax < 3) begin errors++; $display("FAIL: the burst never queued"); end
+        while (dut.rtr_busy) @(negedge clk);
+        peak_over(10000, pk);           // let section 4's release tail die
+        wr0(8'h28, 8'hF0);
+        fm_peak = 0;
+        repeat (2000 * 43) begin
+            @(negedge clk);
+            if ($signed(dut.u_opna.fm_snd_left) > fm_peak) fm_peak = $signed(dut.u_opna.fm_snd_left);
+            if (-$signed(dut.u_opna.fm_snd_left) > fm_peak) fm_peak = -$signed(dut.u_opna.fm_snd_left);
+        end
+        wr0(8'h28, 8'h00);
+        $display("unpolled-burst FM peak %0d (TL 0x7F everywhere -> ~0)", fm_peak);
+        if (fm_peak > 64) begin errors++; $display("FAIL: un-polled writes were dropped (no write queue?)"); end
+        else $display("ok un-polled burst landed in full");
 
         $display("output wraps over the whole run: %0d", wraps);
         if (wraps != 0) begin errors++; $display("FAIL: the output mix wrapped (16-bit overflow)"); end

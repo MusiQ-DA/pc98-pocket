@@ -85,11 +85,25 @@ module tb_pc98_opna;
         .snd_l(snd2_l), .snd_r(snd2_r)
     );
 
+    // pc98_opna queues every routed write and hands jt12 the next one only
+    // after jt12's busy clears (~24 us), so a request reaches the router some
+    // time after the bus write. Wait for both instances to go idle, like a
+    // driver polling status bit 7.
+    task automatic drain();
+        int n;
+        n = 0;
+        @(posedge clk);
+        while ((dut.rtr_busy || dut_adpcm.rtr_busy) && n < 20000) begin
+            @(posedge clk); n++;
+        end
+    endtask
+
     task automatic mgmt_wr2(input [3:0] r, input [15:0] v);
         mg2_reg = r; mg2_wdata = v; mg2_wr = 1'b1;
         @(posedge clk);
         mg2_wr = 1'b0;
         repeat (4) @(posedge clk);
+        drain();
     endtask
 
     int errors = 0;
@@ -149,6 +163,7 @@ module tb_pc98_opna;
         @(posedge clk);
         mg_wr = 1'b0;
         repeat (4) @(posedge clk);
+        drain();
     endtask
 
     // ------------------------------------------------------------------
@@ -222,6 +237,7 @@ module tb_pc98_opna;
         io_wr({part, 1'b0}, r);
         io_wr({part, 1'b1}, v);
         repeat (8) @(posedge clk);
+        drain();
     endtask
 
     task automatic want_route(input string what, input logic part,
