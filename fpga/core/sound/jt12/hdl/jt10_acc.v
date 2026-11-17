@@ -98,8 +98,15 @@ always @(*) begin
     if( !FULLFM ) begin
         case( {cur_op,cur_ch} )
             {2'd0,3'd0}: begin // ADPCM-A:
-                acc_input_l = (adpcmA_l <<< 2) + (adpcmA_l <<< 1) + adpcmA_l + (adpcmA_l >>> 2); // amplify by 7.25x to match AES channel balance
-                acc_input_r = (adpcmA_r <<< 2) + (adpcmA_r <<< 1) + adpcmA_r + (adpcmA_r >>> 2);
+                // pc98-pocket local: x6, not upstream's x7.25 (the Neo Geo
+                // AES balance). np21w's rhythm (rhythmc.c: voltbl[0] 32768 x
+                // vol 64 >> 10, then pcmmix >> 12) plays a full-level voice
+                // at half the WAV's sample value; against this core's FM
+                // (0.8 x opngen's) that is 0.4 x the WAV. A +-16384 sine
+                // through the firmware's ADPCM-A encoder measured 7722 at
+                // x7.25 -- x6 lands at ~6390 against a 6554 target.
+                acc_input_l = (adpcmA_l <<< 2) + (adpcmA_l <<< 1);
+                acc_input_r = (adpcmA_r <<< 2) + (adpcmA_r <<< 1);
                 `ifndef NOMIX
                 acc_en_l    = 1'b1;
                 acc_en_r    = 1'b1;
