@@ -330,10 +330,6 @@ module pc98_opna #(
             addrl      <= 8'h00;
             addrh      <= 8'h00;
             data_latch <= 8'h00;
-            rq_pend    <= 1'b0;
-            rq_part    <= 1'b0;
-            rq_reg     <= 8'h00;
-            rq_data    <= 8'h00;
             joy_blk    <= 1'b0;
             gw_seen    <= 1'b0;
         end else begin
