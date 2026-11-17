@@ -9,7 +9,7 @@
 ;   part1 = 0x18C addr / 0x18E data   (ch4-6; needs 0xA460 bit0 = 1)
 ;   key-on 0x28 (part0 only): {slots[7:4], 0, ch[2:0]}, ch = 0,1,2,4,5,6
 ;
-; Voice: ALG=7, S1 carrier at TL 0x10, S2-S4 muted (TL 0x7F), AR 31,
+; Voice: ALG=7, S1 carrier at TL 0 (full scale), S2-S4 muted (TL 0x7F), AR 31,
 ; RR 15, pan L+R, block 4 / fnum 0x24D. Every write polls busy first.
 ;
 ; Assemble: nasm -f bin -o fmch_test.bin fmch_test.asm   (<= 512 B)
@@ -128,7 +128,7 @@ wdly:   push cx
 ; S1 = +0x00, S3 = +0x04, S2 = +0x08, S4 = +0x0C.
 voice:  db 0xB0, 0x07           ; FB 0, ALG 7
         db 0xB4, 0xC0           ; L+R
-        db 0x40, 0x10           ; S1 TL
+        db 0x40, 0x00           ; S1 TL 0: full scale, so quiet-vs-silent is unambiguous
         db 0x44, 0x7F           ; S3 muted
         db 0x48, 0x7F           ; S2 muted
         db 0x4C, 0x7F           ; S4 muted
