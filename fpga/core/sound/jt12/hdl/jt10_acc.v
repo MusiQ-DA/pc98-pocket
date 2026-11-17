@@ -86,8 +86,13 @@ always @(*) begin
     // channels and made this arrangement
     // I suppose ADPCM-A would saturate if taken up a factor of 8 instead of 4
     // I'll leave it as it is but I think it is worth revisiting this:
-    acc_input_l = opext >>> 1;
-    acc_input_r = opext >>> 1;
+    // pc98-pocket local: FULLFM (the YM2608's six FM channels) takes the
+    // operator at full scale, +-8191 per slot like fmgen (np21w's OPNA:
+    // cltable peaks at 2^13, mixed 1:1 into 16 bits). The >>1 is the
+    // YM2610 balance against its ADPCM, and left the OPNA's FM 6 dB under
+    // np21w's FM:SSG ratio.
+    acc_input_l = FULLFM ? opext : (opext >>> 1);
+    acc_input_r = FULLFM ? opext : (opext >>> 1);
     acc_en_l    = sum_en & left_en;
     acc_en_r    = sum_en & right_en;
     if( !FULLFM ) begin

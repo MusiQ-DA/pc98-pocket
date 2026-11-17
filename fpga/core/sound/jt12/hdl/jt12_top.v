@@ -302,7 +302,11 @@ if( use_adpcm==1 ) begin: gen_adpcm
         // anyway, so it produces the scaled rhythm sum alone. That sum is
         // added at the snd_* mix stage, keeping the FM/PCM path identical
         // to a use_adpcm=0 build. snd_sample is owned by gen_pcm_acc here.
-        jt10_acc #(.FULLFM(FULLFM)) u_acc_adpcm(
+        // FULLFM must stay 0 HERE whatever the chip's FULLFM is: this
+        // instance exists only for the {op0,ch0}/{op0,ch4} slot injection
+        // of ADPCM-A/B, which jt10_acc compiles out under FULLFM -- passing
+        // FULLFM through silenced the rhythm voices.
+        jt10_acc #(.FULLFM(0)) u_acc_adpcm(
             .clk        ( clk           ),
             .clk_en     ( clk_en        ),
             .op_result  ( op_result_hd  ),

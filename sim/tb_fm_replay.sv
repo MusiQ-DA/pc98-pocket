@@ -173,6 +173,17 @@ module tb_fm_replay;
     endtask
 
     int pk, xn, fm_peak;
+    // firmware mg write, polling OMGMT_BUSY (reg 4) first like rhythm.c
+    task mgw(input [3:0] r, input [15:0] v);
+        begin
+            @(negedge clk);
+            while (dut.rtr_busy) @(negedge clk);
+            mg_reg = r; mg_wdata = v; mg_wr = 1'b1;
+            @(negedge clk);
+            mg_wr = 1'b0;
+            repeat (2) @(negedge clk);
+        end
+    endtask
     int qmax = 0;
     always @(posedge clk) if (int'(dut.wq_cnt) > qmax) qmax = int'(dut.wq_cnt);
 
@@ -285,6 +296,29 @@ module tb_fm_replay;
         $display("unpolled-burst FM peak %0d (TL 0x7F everywhere -> ~0)", fm_peak);
         if (fm_peak > 64) begin errors++; $display("FAIL: un-polled writes were dropped (no write queue?)"); end
         else $display("ok un-polled burst landed in full");
+
+        // ---- section 6: rhythm (ADPCM-A) reaches the output -------------
+        // The firmware's path: fill the store over mg (reg 0 address, reg 1
+        // data), inject voice 0's start/end into jt12 part 1 (mg reg 3),
+        // then the guest keys BD on through the YM2608 rhythm registers.
+        // Pins the gen_adpcm_only_acc instance: built with FULLFM it
+        // compiled the ADPCM slot injection out and rhythm went silent.
+        mgw(4'd0, 16'h0000);
+        for (int b = 0; b < 512; b++) mgw(4'd1, (b & 1) ? 16'h0088 : 16'h0077);
+        mgw(4'd3, 16'h1000); mgw(4'd3, 16'h1800);      // start = 0
+        mgw(4'd3, 16'h2001); mgw(4'd3, 16'h2800);      // end   = 1 (x256)
+        wr0(8'h11, 8'h3F);                              // rhythm TL max
+        wr0(8'h18, 8'hDF);                              // BD: L+R, level 31
+        wr0(8'h10, 8'h01);                              // BD key on
+        fm_peak = 0;
+        repeat (5000 * 43) begin
+            @(negedge clk);
+            if ($signed(dut.u_opna.adpcm_snd_l) > fm_peak) fm_peak = $signed(dut.u_opna.adpcm_snd_l);
+            if (-$signed(dut.u_opna.adpcm_snd_l) > fm_peak) fm_peak = -$signed(dut.u_opna.adpcm_snd_l);
+        end
+        $display("rhythm BD peak %0d", fm_peak);
+        if (fm_peak == 0) begin errors++; $display("FAIL: rhythm voice silent"); end
+        else $display("ok rhythm reaches the mix");
 
         $display("output wraps over the whole run: %0d", wraps);
         if (wraps != 0) begin errors++; $display("FAIL: the output mix wrapped (16-bit overflow)"); end
