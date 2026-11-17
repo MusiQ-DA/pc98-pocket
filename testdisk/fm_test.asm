@@ -242,13 +242,14 @@ init_tab:                       ; (reg,data), 0xFF ends
         db 0x46, 0x7F, 0x4E, 0x7F
         db 0x52, 0x1F, 0x5A, 0x1F
         db 0x82, 0x0F, 0x8A, 0x0F
-        ; FNUM triad (block 4). A4-A6 only latch; A0-A2 commits the
+        ; FNUM triad, block 7 (~1 kHz with MUL=0): block 4 put a pure
+        ; ~124 Hz sine below what the Pocket's speaker can reproduce. A4-A6 only latch; A0-A2 commits the
         ; latched high byte, so the high byte MUST be written first.
-        db 0xA4, (4 << 3) | 0x02 ; ch1
+        db 0xA4, (7 << 3) | 0x02 ; ch1
         db 0xA0, 0x4D
-        db 0xA5, (4 << 3) | 0x02 ; ch2
+        db 0xA5, (7 << 3) | 0x02 ; ch2
         db 0xA1, 0x66
-        db 0xA6, (4 << 3) | 0x02 ; ch3
+        db 0xA6, (7 << 3) | 0x02 ; ch3
         db 0xA2, 0x80
         ; SSG periods A/B/C, mixer off, volumes 11
         db 0x00, 0x88

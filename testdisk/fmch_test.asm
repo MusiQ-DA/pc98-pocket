@@ -10,7 +10,7 @@
 ;   key-on 0x28 (part0 only): {slots[7:4], 0, ch[2:0]}, ch = 0,1,2,4,5,6
 ;
 ; Voice: ALG=7, S1 carrier at TL 0 (full scale), S2-S4 muted (TL 0x7F), AR 31,
-; RR 15, pan L+R, block 4 / fnum 0x24D. Every write polls busy first.
+; RR 15, pan L+R, block 7 / fnum 0x24D (~1 kHz). Every write polls busy first.
 ;
 ; Assemble: nasm -f bin -o fmch_test.bin fmch_test.asm   (<= 512 B)
 ; ============================================================================
@@ -136,6 +136,7 @@ voice:  db 0xB0, 0x07           ; FB 0, ALG 7
         db 0x60, 0x00
         db 0x70, 0x00
         db 0x80, 0x0F           ; S1 SL 0 / RR 15
-        db 0xA4, (4 << 3) | 0x02 ; block 4, fnum hi -- latch first
+        db 0xA4, (7 << 3) | 0x02 ; block 7 (~1 kHz; block 4 was a ~124 Hz sine the
+                                 ; Pocket's speaker cannot reproduce), fnum hi first
         db 0xA0, 0x4D           ; fnum lo commits
         db 0xFF
