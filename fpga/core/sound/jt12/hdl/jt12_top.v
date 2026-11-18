@@ -295,38 +295,22 @@ if( use_adpcm==1 ) begin: gen_adpcm
         );
     end else begin : gen_adpcm_only_acc
         // pc98-pocket local: with use_pcm==1 (the YM2612 accumulator) or
-        // FULLFM (gen_hires_acc, all six FM channels at full resolution)
-        // something else owns fm_snd and every FM slot, so the ADPCM voices
-        // get their own accumulator. This one runs rl=00 so its FM slots never
-        // accumulate (acc_en gates on rl); the ADPCM-A slot forces acc_en
-        // anyway, so it produces the scaled rhythm sum alone. That sum is
-        // added at the snd_* mix stage, keeping the FM/PCM path identical
-        // to a use_adpcm=0 build. snd_sample is owned by gen_pcm_acc here.
-        // FULLFM must stay 0 HERE whatever the chip's FULLFM is: this
-        // instance exists only for the {op0,ch0}/{op0,ch4} slot injection
-        // of ADPCM-A/B, which jt10_acc compiles out under FULLFM -- passing
-        // FULLFM through silenced the rhythm voices.
-        jt10_acc #(.FULLFM(0)) u_acc_adpcm(
-            .clk        ( clk           ),
-            .clk_en     ( clk_en        ),
-            .op_result  ( op_result_hd  ),
-            .rl         ( 2'b00         ),
-            .zero       ( zero          ),
-            .s1_enters  ( s2_enters     ),
-            .s2_enters  ( s1_enters     ),
-            .s3_enters  ( s4_enters     ),
-            .s4_enters  ( s3_enters     ),
-            .cur_ch     ( cur_ch        ),
-            .cur_op     ( cur_op        ),
-            .alg        ( alg_I         ),
-            .adpcmA_l   ( adpcmA_l      ),
-            .adpcmA_r   ( adpcmA_r      ),
-            .adpcmB_l   ( adpcmB_l      ),
-            .adpcmB_r   ( adpcmB_r      ),
-            // combined output
-            .left       ( adpcm_snd_l   ),
-            .right      ( adpcm_snd_r   )
-        );
+        // FULLFM (gen_hires_acc, all six FM channels) something else owns
+        // fm_snd and every FM slot, so the ADPCM voices are mixed here.
+        // This used to be a second jt10_acc (FULLFM 0, rl 00) whose only
+        // live work was injecting adpcmA x6 / adpcmB >>1 into one slot per
+        // sample through a 16-bit limiting accumulator. adpcmA_l/B_l are
+        // already one per-sample sum each, so the same value is a scale and
+        // a clamp -- without the accumulator's registers, freed for fit
+        // (the design sits at 99% of the ALMs and was failing timing).
+        wire signed [18:0] ad_l = {adpcmA_l, 2'b0} + {adpcmA_l[15], adpcmA_l, 1'b0}
+                                + {{4{adpcmB_l[15]}}, adpcmB_l[15:1]};
+        wire signed [18:0] ad_r = {adpcmA_r, 2'b0} + {adpcmA_r[15], adpcmA_r, 1'b0}
+                                + {{4{adpcmB_r[15]}}, adpcmB_r[15:1]};
+        assign adpcm_snd_l = (ad_l[18:15] == 4'b0000 || ad_l[18:15] == 4'b1111) ? ad_l[15:0]
+                           : {ad_l[18], {15{~ad_l[18]}}};
+        assign adpcm_snd_r = (ad_r[18:15] == 4'b0000 || ad_r[18:15] == 4'b1111) ? ad_r[15:0]
+                           : {ad_r[18], {15{~ad_r[18]}}};
     end
 end else begin : gen_adpcm_no
     assign adpcmA_l     = 'd0;
