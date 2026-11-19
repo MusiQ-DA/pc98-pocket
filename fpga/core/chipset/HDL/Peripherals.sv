@@ -2345,6 +2345,16 @@ module PERIPHERALS #(
         else if (opna_a460_wr) opna_extend <= internal_data_bus[0];
     end
 
+    // Reading 0xA460 answers the board's ID and the extend bit: np21w
+    // cbus/pcm86io.c pcm86_ia460 returns soundflags, which pcm86io_setopt
+    // builds as ((~snd86opt) >> 1) & 0x70 | extend -- 0x40 for the default
+    // dip setting (snd86opt 0x7F: ID 4, ports at 0x188), the value this
+    // core's port map matches. Drivers (and demos like NEON) read it to find
+    // the -86 and save/restore it around their run; unimplemented it read
+    // open bus, so they saw no board ID and restored 0xFF on exit.
+    wire opna_a460_rd = iorq & ~address_enable_n & ~io_read_n
+                      & (address[15:0] == 16'hA460);
+
     wire         mgmt_opna_wr = mgmt_write & mgmt_opna_cs;
     wire  [3:0]  mgmt_opna_reg = mgmt_address[3:0];
     wire [15:0]  mgmt_opna_readdata;
@@ -2835,6 +2845,11 @@ module PERIPHERALS #(
         begin
             data_bus_out_from_chipset_q <= 1'b1;
             data_bus_out_q <= opna_data_out;
+        end
+        else if (opna_a460_rd)
+        begin
+            data_bus_out_from_chipset_q <= 1'b1;
+            data_bus_out_q <= {7'b0100_000, opna_extend};
         end
 `endif
         else if (grcg_mode_cs & ~io_read_n)
